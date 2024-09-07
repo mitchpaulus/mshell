@@ -1,0 +1,2 @@
+[ls --color=auto] ;
+[echo hello-world] ;

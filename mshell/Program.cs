@@ -1,19 +1,27 @@
-﻿namespace mshell;
+﻿using System.Collections.ObjectModel;
+using System.Diagnostics;
+using System.Text;
+using OneOf;
+
+namespace mshell;
 
 class Program
 {
     static void Main(string[] args)
     {
-        string input = Console.In.ReadToEnd();
+        string input = args.Length > 0 ? File.ReadAllText(args[0], Encoding.UTF8) : Console.In.ReadToEnd();
 
         Lexer l = new Lexer(input);
 
         var tokens = l.Tokenize();
 
-        foreach (var t in tokens)
-        {
-            Console.Write($"{t.TokenType()}: {t.Print()}\n");
-        }
+        Evaluator e = new Evaluator(tokens);
+
+        e.Evaluate();
+        // foreach (var t in tokens)
+        // {
+        //     Console.Write($"{t.TokenType()}: {t.Print()}\n");
+        // }
 
         // Console.WriteLine("Hello, World!");
     }
@@ -75,7 +83,7 @@ public class Lexer
         while (true)
         {
             char c = Peek();
-            if (!char.IsWhiteSpace(c)) Advance();
+            if (!char.IsWhiteSpace(c) && c != ']') Advance();
             else break;
         }
 
@@ -128,6 +136,139 @@ public class Lexer
     }
 }
 
+public class Evaluator
+{
+    private readonly List<Token> _tokens;
+
+    private int _index = 0;
+
+    public Evaluator(List<Token> tokens)
+    {
+        _tokens = tokens;
+    }
+
+    public void Evaluate()
+    {
+        _index = 0;
+
+        Stack<Stack<MShellObject>> stack = new();
+        stack.Push(new Stack<MShellObject>());
+
+        while (_index <= _tokens.Count)
+        {
+            Token t = _tokens[_index];
+            if (t is Eof) return;
+
+            if (t is LiteralToken lt)
+            {
+                stack.Peek().Push(lt);
+                _index++;
+            }
+            else if (t is LeftBrace)
+            {
+                stack.Push(new Stack<MShellObject>());
+                _index++;
+            }
+            else if (t is RightBrace)
+            {
+                if (stack.TryPop(out var outerStack))
+                {
+                    var list = new MShellList(outerStack.Reverse());
+
+                    if (stack.TryPeek(out var currentStack))
+                    {
+                        currentStack.Push(list);
+                    }
+                    else
+                    {
+                        Console.Error.Write("Found unbalanced list.\n");
+                    }
+                }
+                else
+                {
+                    Console.Error.Write($"Found Unbalanced list.");
+                }
+                _index++;
+            }
+            else if (t is Execute)
+            {
+                if (stack.Peek().TryPeek(out var arg))
+                {
+                    arg.Switch(
+                        literalToken =>
+                        {
+                            RunProcess(new MShellList(new List<MShellObject>(1) { literalToken }));
+                        },
+                        RunProcess
+                    );
+                }
+                _index++;
+            }
+            else
+            {
+                Console.Error.Write($"Token type {t.TokenType()} not implemented yet.\n");
+                return;
+                // throw new NotImplementedException($"Token type {t.TokenType()} not implemented yet.");
+            }
+        }
+    }
+
+    public void RunProcess(MShellList list)
+    {
+        if (list.Items.Any(o => !o.IsT0))
+        {
+            throw new NotImplementedException("Can't handle a process with anything but literals as arguments for now.");
+        }
+        else
+        {
+            List<string> arguments = list.Items.Select(o => o.AsT0.Print()).ToList();
+
+            if (arguments.Count == 0)
+            {
+                throw new ArgumentException("Cannot execute an empty list");
+            }
+
+            ProcessStartInfo info = new ProcessStartInfo()
+            {
+                FileName = arguments[0],
+                UseShellExecute = false,
+                RedirectStandardError = false,
+                RedirectStandardInput = false,
+                RedirectStandardOutput = false,
+                CreateNoWindow = true,
+            };
+            foreach (string arg in arguments.Skip(1)) info.ArgumentList.Add(arg);
+
+            Process p = new Process()
+            {
+                StartInfo = info
+            };
+
+            try
+            {
+                using (p)
+                {
+                    p.Start();
+
+                    // string stdout = p.StandardOutput.ReadToEnd();
+                    // string stderr = p.StandardError.ReadToEnd();
+                    p.WaitForExit();
+
+                    // Console.Out.Write(stdout);
+                    // Console.Error.Write(stderr);
+                }
+            }
+            catch (Exception e)
+            {
+                Console.Error.Write(e.Message);
+                throw new Exception("There was an exception running process.");
+
+            }
+        }
+    }
+}
+
+
 public class Execute : Token
 {
     public override string Print() => ";";
@@ -163,6 +304,16 @@ public class Minus : Token
 {
     public override string Print() => "-";
     public override string TokenType() => "Minus";
+}
+
+public class Plus : Token
+{
+    public override string Print() => "+";
+
+    public override string TokenType()
+    {
+        return "Plus";
+    }
 }
 
 public class ErrorToken : Token
@@ -245,5 +396,29 @@ public class LiteralToken : Token
     public override string TokenType()
     {
         return "Literal";
+    }
+}
+
+public class MShellObject : OneOfBase<LiteralToken, MShellList>
+{
+    protected MShellObject(OneOf<LiteralToken, MShellList> input) : base(input)
+    {
+    }
+
+    public static implicit operator MShellObject(LiteralToken t) => new(t);
+    public static explicit operator LiteralToken(MShellObject t) => t.AsT0;
+
+    public static implicit operator MShellObject(MShellList t) => new(t);
+    public static explicit operator MShellList(MShellObject t) => t.AsT1;
+
+}
+
+public class MShellList
+{
+    public readonly List<MShellObject> Items;
+
+    public MShellList(IEnumerable<MShellObject> items)
+    {
+        Items = items.ToList();
     }
 }
