@@ -8,7 +8,7 @@ namespace mshell;
 
 class Program
 {
-    static void Main(string[] args)
+    static int Main(string[] args)
     {
         string input = args.Length > 0 ? File.ReadAllText(args[0], Encoding.UTF8) : Console.In.ReadToEnd();
 
@@ -17,7 +17,9 @@ class Program
         var tokens = l.Tokenize();
 
         Evaluator e = new(false);
-        e.Evaluate(tokens, new Stack<MShellObject>());
+        bool success = e.Evaluate(tokens, new Stack<MShellObject>());
+
+        return success ? 0 : 1;
 
         // foreach (var t in tokens)
         // {
@@ -169,7 +171,7 @@ public class Evaluator
 
     private void PushNoDebug(MShellObject o, Stack<MShellObject> stack) => stack.Push(o);
 
-    public void Evaluate(List<Token> tokens, Stack<MShellObject> stack)
+    public bool Evaluate(List<Token> tokens, Stack<MShellObject> stack)
     {
         int index = 0;
 
@@ -180,7 +182,7 @@ public class Evaluator
         while (index < tokens.Count)
         {
             Token t = tokens[index];
-            if (t is Eof) return;
+            if (t is Eof) return true;
 
             if (t is LiteralToken lt)
             {
@@ -199,7 +201,7 @@ public class Evaluator
                     if (index >= tokens.Count || tokens[index] is Eof)
                     {
                         Console.Error.Write($"{currToken.Line}:{currToken.Column}: Found unbalanced bracket.\n");
-                        return;
+                        return false;
                     }
 
                     if (tokens[index] is LeftBrace)
@@ -227,7 +229,7 @@ public class Evaluator
                         else
                         {
                             Console.Error.Write($"{currToken.Line}:{currToken.Column}: Found unbalanced square bracket.\n");
-                            return;
+                            return false;
                         }
 
                     }
@@ -243,7 +245,7 @@ public class Evaluator
             else if (t is RightBrace)
             {
                 Console.Error.Write("Found unbalanced list.\n");
-                return;
+                return false;
             }
             else if (t is LeftParen)
             {
@@ -255,7 +257,7 @@ public class Evaluator
                     if (index >= tokens.Count || tokens[index] is Eof)
                     {
                         Console.Error.Write("Found unbalanced bracket.\n");
-                        return;
+                        return false;
                     }
 
                     if (tokens[index] is LeftParen)
@@ -278,7 +280,7 @@ public class Evaluator
                         else
                         {
                             Console.Error.Write("Found unbalanced quotation.\n");
-                            return;
+                            return false;
                         }
 
                         break;
@@ -296,7 +298,7 @@ public class Evaluator
             else if (t is RightParen)
             {
                 Console.Error.Write("Unbalanced parenthesis found.\n");
-                return;
+                return false;
             }
             else if (t is IfToken)
             {
@@ -306,8 +308,8 @@ public class Evaluator
                     {
                         if (qList.Items.Count < 2)
                         {
-                            Console.Error.Write("Quotation list for if should have a minimum of 2 elements.");
-                            return;
+                            Console.Error.Write("Quotation list for if should have a minimum of 2 elements.\n");
+                            return false;
                         }
 
                         if (qList.Items.Any(i => !i.IsQuotation))
@@ -319,7 +321,7 @@ public class Evaluator
                                 Console.Error.Write('\n');
                             }
 
-                            return;
+                            return false;
                         }
 
                         // Loop through the even index quotations, looking for the first one that has a true condition.
@@ -346,7 +348,7 @@ public class Evaluator
                             else
                             {
                                 Console.Error.Write("Evaluation of condition quotation removed all stacks.");
-                                return;
+                                return false;
                             }
                         }
 
@@ -356,7 +358,7 @@ public class Evaluator
                             if (!qList.Items[trueIndex + 1].IsQuotation)
                             {
                                 Console.Error.Write($"True branch of if statement must be quotation. Received a {qList.Items[trueIndex + 1].TypeName()}");
-                                return;
+                                return false;
                             }
 
                             MShellQuotation q = qList.Items[trueIndex + 1].AsQuotation;
@@ -368,7 +370,7 @@ public class Evaluator
                             if (!qList.Items[^1].IsQuotation)
                             {
                                 Console.Error.Write($"Else branch of if statement must be quotation. Received a {qList.Items[^1].TypeName()}");
-                                return;
+                                return false;
                             }
 
                             MShellQuotation q = qList.Items[^1].AsQuotation;
@@ -378,13 +380,13 @@ public class Evaluator
                     else
                     {
                         Console.Error.Write("Argument for if expected to be a list of quotations.\n");
-                        return;
+                        return false;
                     }
                 }
                 else
                 {
                      Console.Error.Write("Nothing on stack for if.\n");
-                     return;
+                     return false;
                 }
 
                 index++;
@@ -407,7 +409,7 @@ public class Evaluator
                 else
                 {
                     Console.Error.Write("Nothing on stack to execute.\n");
-                    return;
+                    return false;
                 }
                 index++;
             }
@@ -420,10 +422,12 @@ public class Evaluator
             else
             {
                 Console.Error.Write($"Token type {t.TokenType()} not implemented yet.\n");
-                return;
+                return false;
                 // throw new NotImplementedException($"Token type {t.TokenType()} not implemented yet.");
             }
         }
+
+        return true;
     }
 
     private void ExecuteQuotation(MShellQuotation q)
