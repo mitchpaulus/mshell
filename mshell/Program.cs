@@ -355,7 +355,7 @@ public class Evaluator
                             // Run the quotation on the index after the true index
                             if (!qList.Items[trueIndex + 1].IsQuotation)
                             {
-                                Console.Error.Write("True branch of if statement must be quotation.");
+                                Console.Error.Write($"True branch of if statement must be quotation. Received a {qList.Items[trueIndex + 1].TypeName()}");
                                 return;
                             }
 
@@ -367,24 +367,23 @@ public class Evaluator
                             // Run the last quotation if there was no true condition.
                             if (!qList.Items[^1].IsQuotation)
                             {
-                                Console.Error.Write("Else branch of if statement must be quotation.");
+                                Console.Error.Write($"Else branch of if statement must be quotation. Received a {qList.Items[^1].TypeName()}");
                                 return;
                             }
 
                             MShellQuotation q = qList.Items[^1].AsQuotation;
                             Evaluate(q.Tokens, stack);
                         }
-
                     }
                     else
                     {
-                        Console.Error.Write("Argument for if expected to be a list of quotations.");
+                        Console.Error.Write("Argument for if expected to be a list of quotations.\n");
                         return;
                     }
                 }
                 else
                 {
-                     Console.Error.Write("Nothing on stack for if.");
+                     Console.Error.Write("Nothing on stack for if.\n");
                      return;
                 }
 
