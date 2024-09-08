@@ -48,6 +48,8 @@ public class Lexer
         _input = input;
     }
 
+    private TokenNew MakeToken(TokenType tokenType) => new(_line, _col, _start, _input.Substring(_start, _current - _start), tokenType);
+
     private char Advance()
     {
         _col++;
@@ -60,32 +62,32 @@ public class Lexer
 
     private char PeekNext() => AtEnd() ? '\0' : _input[_current + 1];
 
-    private Token ScanToken()
+    private TokenNew ScanToken()
     {
         EatWhitespace();
         _start = _current;
-        if (AtEnd()) return new Eof(_line, _col);
+        if (AtEnd()) return MakeToken(TokenType.EOF);
 
         char c = Advance();
 
         switch (c)
         {
             case '[':
-                return new LeftBrace(_line, _col);
+                return MakeToken(TokenType.LEFT_SQUARE_BRACKET);
             case ']':
-                return new RightBrace(_line, _col);
+                return MakeToken(TokenType.RIGHT_SQUARE_BRACKET);
             case '(':
-                return new LeftParen(_line, _col);
+                return MakeToken(TokenType.LEFT_PAREN);
             case ')':
-                return new RightParen(_line, _col);
+                return MakeToken(TokenType.RIGHT_PAREN);
             case ';':
-                return new Execute(_line, _col);
+                return MakeToken(TokenType.EXECUTE);
             default:
                 return ParseLiteralOrNumber();
         }
     }
 
-    private Token ParseLiteralOrNumber()
+    private TokenNew ParseLiteralOrNumber()
     {
         while (true)
         {
@@ -96,22 +98,22 @@ public class Lexer
 
         string literal = _input.Substring(_start, _current - _start);
 
-        if (literal == "-") return new Minus(_line, _col);
-        if (literal == "if") return new IfToken(_line, _col);
+        if (literal == "-") return MakeToken(TokenType.MINUS);
+        if (literal == "if") return MakeToken(TokenType.IF);
 
-        if (int.TryParse(literal, out int i)) return new IntToken(literal, i, _line, _col);
-        if (double.TryParse(literal, out double d)) return new DoubleToken(literal, d, _line, _col);
-        return new LiteralToken(literal, _line, _col);
+        if (int.TryParse(literal, out int i)) return MakeToken(TokenType.INTEGER);
+        if (double.TryParse(literal, out double d)) return MakeToken(TokenType.DOUBLE);
+        return MakeToken(TokenType.LITERAL);
     }
 
-    public List<Token> Tokenize()
+    public List<TokenNew> Tokenize()
     {
-        List<Token> tokens = new();
+        List<TokenNew> tokens = new();
         while (true)
         {
             var t = ScanToken();
             tokens.Add(t);
-            if (t is ErrorToken or Eof) break;
+            if (t.TokenType is TokenType.ERROR or TokenType.EOF) break;
         }
 
         return tokens;
@@ -147,17 +149,13 @@ public class Lexer
 
 public class Evaluator
 {
-    private readonly bool _debug;
-    private readonly List<Token> _tokens;
-
     private readonly Action<MShellObject, Stack<MShellObject>> _push;
 
     // private Stack<Stack<MShellObject>> _stack = new();
 
     public Evaluator(bool debug)
     {
-        _debug = debug;
-        _push = _debug ? PushWithDebug : PushNoDebug;
+        _push = debug ? PushWithDebug : PushNoDebug;
         // _tokens = tokens;
         // Stack<Stack<MShellObject>> stack = new();
         // _stack.Push(new Stack<MShellObject>());
@@ -171,7 +169,7 @@ public class Evaluator
 
     private void PushNoDebug(MShellObject o, Stack<MShellObject> stack) => stack.Push(o);
 
-    public bool Evaluate(List<Token> tokens, Stack<MShellObject> stack)
+    public bool Evaluate(List<TokenNew> tokens, Stack<MShellObject> stack)
     {
         int index = 0;
 
@@ -181,16 +179,16 @@ public class Evaluator
 
         while (index < tokens.Count)
         {
-            Token t = tokens[index];
-            if (t is Eof) return true;
+            TokenNew t = tokens[index];
+            if (t.TokenType == TokenType.EOF) return true;
 
-            if (t is LiteralToken lt)
+            if (t.TokenType == TokenType.LITERAL)
             {
-                _push(lt, stack);
+                _push(new LiteralToken(t), stack);
                 // stack.Push(lt);
                 index++;
             }
-            else if (t is LeftBrace)
+            else if (t.TokenType == TokenType.LEFT_SQUARE_BRACKET)
             {
                 leftSquareBracketStack.Push(index);
                 // Search for balancing right bracket
@@ -198,18 +196,18 @@ public class Evaluator
                 while (true)
                 {
                     var currToken = tokens[index];
-                    if (index >= tokens.Count || tokens[index] is Eof)
+                    if (index >= tokens.Count || tokens[index].TokenType == TokenType.EOF)
                     {
                         Console.Error.Write($"{currToken.Line}:{currToken.Column}: Found unbalanced bracket.\n");
                         return false;
                     }
 
-                    if (tokens[index] is LeftBrace)
+                    if (tokens[index].TokenType == TokenType.LEFT_SQUARE_BRACKET)
                     {
                         leftSquareBracketStack.Push(index);
                         index++;
                     }
-                    else if (tokens[index] is RightBrace)
+                    else if (tokens[index].TokenType == TokenType.RIGHT_SQUARE_BRACKET)
                     {
                         if (leftSquareBracketStack.TryPop(out var leftIndex) )
                         {
@@ -242,30 +240,30 @@ public class Evaluator
                 index++;
                 // stack.Push(new Stack<MShellObject>());
             }
-            else if (t is RightBrace)
+            else if (t.TokenType == TokenType.RIGHT_SQUARE_BRACKET)
             {
                 Console.Error.Write("Found unbalanced list.\n");
                 return false;
             }
-            else if (t is LeftParen)
+            else if (t.TokenType == TokenType.LEFT_PAREN)
             {
                 quotationStack.Push(index);
                 index++;
 
                 while (true)
                 {
-                    if (index >= tokens.Count || tokens[index] is Eof)
+                    if (index >= tokens.Count || tokens[index].TokenType == TokenType.EOF)
                     {
                         Console.Error.Write("Found unbalanced bracket.\n");
                         return false;
                     }
 
-                    if (tokens[index] is LeftParen)
+                    if (tokens[index].TokenType == TokenType.LEFT_PAREN)
                     {
                         quotationStack.Push(index);
                         index++;
                     }
-                    else if (tokens[index] is RightParen)
+                    else if (tokens[index].TokenType == TokenType.RIGHT_PAREN)
                     {
                         if (quotationStack.TryPop(out var leftIndex))
                         {
@@ -295,12 +293,12 @@ public class Evaluator
 
                 index++;
             }
-            else if (t is RightParen)
+            else if (t.TokenType == TokenType.RIGHT_PAREN)
             {
                 Console.Error.Write("Unbalanced parenthesis found.\n");
                 return false;
             }
-            else if (t is IfToken)
+            else if (t.TokenType == TokenType.IF)
             {
                 if (stack.TryPop(out var o))
                 {
@@ -391,7 +389,7 @@ public class Evaluator
 
                 index++;
             }
-            else if (t is Execute)
+            else if (t.TokenType == TokenType.EXECUTE)
             {
                 if (stack.TryPop(out var arg))
                 {
@@ -413,15 +411,15 @@ public class Evaluator
                 }
                 index++;
             }
-            else if (t is IntToken iToken)
+            else if (t.TokenType == TokenType.INTEGER)
             {
-                _push(iToken, stack);
+                _push(new IntToken(t), stack);
                 // stack.Push(iToken);
                 index++;
             }
             else
             {
-                Console.Error.Write($"Token type {t.TokenType()} not implemented yet.\n");
+                Console.Error.Write($"Token type '{t.TokenType}' not implemented yet.\n");
                 return false;
                 // throw new NotImplementedException($"Token type {t.TokenType()} not implemented yet.");
             }
@@ -449,7 +447,7 @@ public class Evaluator
         }
         else
         {
-            List<string> arguments = list.Items.Select(o => o.AsT0.Print()).ToList();
+            List<string> arguments = list.Items.Select(o => o.AsT0.Text()).ToList();
 
             if (arguments.Count == 0)
             {
@@ -506,6 +504,40 @@ public class Execute : Token
     public override string Print() => ";";
 
     public override string TokenType() => "Execute";
+}
+
+public enum TokenType
+{
+    LEFT_SQUARE_BRACKET = 0,
+    RIGHT_SQUARE_BRACKET = 1,
+    EOF,
+    LEFT_PAREN,
+    RIGHT_PAREN,
+    EXECUTE,
+    MINUS,
+    IF,
+    INTEGER,
+    DOUBLE,
+    LITERAL,
+    ERROR
+}
+
+public class TokenNew
+{
+    public int Line { get; }
+    public int Column { get; }
+    public int Start { get; }
+    public string RawText { get; }
+    public TokenType TokenType { get; }
+
+    public TokenNew(int line, int column, int start, string rawText, TokenType tokenType)
+    {
+        Line = line;
+        Column = column;
+        Start = start;
+        RawText = rawText;
+        TokenType = tokenType;
+    }
 }
 
 public abstract class Token
@@ -619,25 +651,15 @@ public class ErrorToken : Token
     }
 }
 
-public class IntToken : Token
+public class IntToken
 {
-    private readonly string _token;
+    private readonly TokenNew _token;
     public readonly int IntVal;
 
-    public IntToken(string token, int intVal, int line, int col) : base(line, col)
+    public IntToken(TokenNew token)
     {
         _token = token;
-        IntVal = intVal;
-    }
-
-    public override string Print()
-    {
-        return _token;
-    }
-
-    public override string TokenType()
-    {
-        return "Integer";
+        IntVal = int.Parse(token.RawText);
     }
 }
 
@@ -662,24 +684,16 @@ public class DoubleToken : Token
     }
 }
 
-public class LiteralToken : Token
+public class LiteralToken
 {
-    private readonly string _token;
+    private readonly TokenNew _literal;
 
-    public LiteralToken(string token, int line, int col) : base(line, col)
+    public LiteralToken(TokenNew literal)
     {
-        _token = token;
+        _literal = literal;
     }
 
-    public override string Print()
-    {
-        return _token;
-    }
-
-    public override string TokenType()
-    {
-        return "Literal";
-    }
+    public string Text() => _literal.RawText;
 }
 
 public class IfToken : Token
@@ -690,6 +704,18 @@ public class IfToken : Token
 
     public override string Print() => "if";
     public override string TokenType() => "if";
+}
+
+public class LoopToken : Token
+{
+    public LoopToken(int line, int col) : base(line, col)
+    {
+        
+    }
+
+    public override string Print() => "loop";
+
+    public override string TokenType() => "loop";
 }
 
 public class MShellObject : OneOfBase<LiteralToken, MShellList, MShellQuotation, IntToken>
@@ -749,9 +775,9 @@ public class MShellQuotation
 {
     private int StartIndex { get; }
     private int EndIndexExc { get; }
-    public List<Token> Tokens { get; }
+    public List<TokenNew> Tokens { get; }
 
-    public MShellQuotation(List<Token> tokens, int startIndex, int endIndexExc)
+    public MShellQuotation(List<TokenNew> tokens, int startIndex, int endIndexExc)
     {
         StartIndex = startIndex;
         EndIndexExc = endIndexExc;
