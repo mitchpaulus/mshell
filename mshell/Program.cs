@@ -348,9 +348,18 @@ public class Evaluator
 
                             if (stack.TryPop(out var condition))
                             {
-                                if (condition.TryPickIntToken(out var intVal))
+                                if (condition.TryPickIntToken(out var intVal, out var remainder))
                                 {
+                                    // 0 is used here for successful process exit codes.
                                     if (intVal.IntVal == 0)
+                                    {
+                                        trueIndex = i;
+                                        break;
+                                    }
+                                }
+                                else if (remainder.TryPickT3(out MShellBool booleanVal, out var remainder2))
+                                {
+                                    if (booleanVal.Value)
                                     {
                                         trueIndex = i;
                                         break;
@@ -424,7 +433,8 @@ public class Evaluator
                         },
                         RunProcess,
                         _ => { Console.Error.Write("Cannot execute a quotation.\n"); },
-                        _ => { Console.Error.Write("Cannot execute an integer.\n"); }
+                        _ => { Console.Error.Write("Cannot execute an integer.\n"); },
+                        _ => { Console.Error.Write("Cannot execute a boolean.\n"); }
 
                     );
                 }
@@ -497,8 +507,7 @@ public class Evaluator
 
                 if (arg1.IsIntToken && arg2.IsIntToken)
                 {
-                    if (arg1.AsIntToken.IntVal == arg2.AsIntToken.IntVal) stack.Push(new IntToken(new TokenNew(t.Line, t.Column, t.Start, "0", TokenType.INTEGER)));
-                    else stack.Push(new IntToken(new TokenNew(t.Line, t.Column, t.Start, "1", TokenType.INTEGER)));
+                    stack.Push(arg1.AsIntToken.IntVal == arg2.AsIntToken.IntVal ? new MShellBool(true) : new MShellBool(false));
                 }
                 else
                 {
@@ -804,7 +813,7 @@ public class LoopToken : Token
 {
     public LoopToken(int line, int col) : base(line, col)
     {
-        
+
     }
 
     public override string Print() => "loop";
@@ -812,9 +821,9 @@ public class LoopToken : Token
     public override string TokenType() => "loop";
 }
 
-public class MShellObject : OneOfBase<LiteralToken, MShellList, MShellQuotation, IntToken>
+public class MShellObject : OneOfBase<LiteralToken, MShellList, MShellQuotation, IntToken, MShellBool>
 {
-    protected MShellObject(OneOf<LiteralToken, MShellList, MShellQuotation, IntToken> input) : base(input)
+    protected MShellObject(OneOf<LiteralToken, MShellList, MShellQuotation, IntToken, MShellBool> input) : base(input)
     {
     }
 
@@ -824,7 +833,8 @@ public class MShellObject : OneOfBase<LiteralToken, MShellList, MShellQuotation,
             literalToken => "Literal",
             list => "List",
             quotation => "Quotation",
-            token => "Integer"
+            token => "Integer",
+            boolVal => "Boolean"
         );
     }
 
@@ -832,36 +842,45 @@ public class MShellObject : OneOfBase<LiteralToken, MShellList, MShellQuotation,
     public bool IsList => IsT1;
     public bool IsQuotation => IsT2;
     public bool IsIntToken => IsT3;
+    public bool IsBool => IsT4;
 
     public LiteralToken AsLiteralToken => AsT0;
     public MShellList AsList => AsT1;
     public MShellQuotation AsQuotation => AsT2;
     public IntToken AsIntToken => AsT3;
+    public MShellBool AsMShellBool => AsT4;
 
 
     public static implicit operator MShellObject(LiteralToken t) => new(t);
     public static explicit operator LiteralToken(MShellObject t) => t.AsT0;
 
     public bool TryPickLiteral(out LiteralToken l) => TryPickT0(out l, out _);
-    public bool TryPickLiteral(out LiteralToken l, out OneOf<MShellList, MShellQuotation, IntToken> remainder) => TryPickT0(out l, out remainder);
+    public bool TryPickLiteral(out LiteralToken l, out OneOf<MShellList, MShellQuotation, IntToken, MShellBool> remainder) => TryPickT0(out l, out remainder);
 
     public static implicit operator MShellObject(MShellList t) => new(t);
     public static explicit operator MShellList(MShellObject t) => t.AsT1;
 
     public bool TryPickList(out MShellList l) => TryPickT1(out l, out _);
-    public bool TryPickList(out MShellList l, out OneOf<LiteralToken, MShellQuotation, IntToken> remainder) => TryPickT1(out l, out remainder);
+    public bool TryPickList(out MShellList l, out OneOf<LiteralToken, MShellQuotation, IntToken, MShellBool> remainder) => TryPickT1(out l, out remainder);
 
     public static implicit operator MShellObject(MShellQuotation t) => new(t);
     public static explicit operator MShellQuotation(MShellObject t) => t.AsT2;
 
     public bool TryPickQuotation(out MShellQuotation l) => TryPickT2(out l, out _);
-    public bool TryPickQuotation(out MShellQuotation l, out OneOf<LiteralToken, MShellList, IntToken> remainder) => TryPickT2(out l, out remainder);
+    public bool TryPickQuotation(out MShellQuotation l, out OneOf<LiteralToken, MShellList, IntToken, MShellBool> remainder) => TryPickT2(out l, out remainder);
 
     public static implicit operator MShellObject(IntToken t) => new(t);
     public static explicit operator IntToken(MShellObject t) => t.AsT3;
 
     public bool TryPickIntToken(out IntToken l) => TryPickT3(out l, out _);
-    public bool TryPickIntToken(out IntToken l, out OneOf<LiteralToken, MShellList, MShellQuotation> remainder) => TryPickT3(out l, out remainder);
+    public bool TryPickIntToken(out IntToken l, out OneOf<LiteralToken, MShellList, MShellQuotation, MShellBool> remainder) => TryPickT3(out l, out remainder);
+
+    public static implicit operator MShellObject(MShellBool t) => new(t);
+    public static explicit operator MShellBool(MShellObject t) => t.AsT4;
+
+    public bool TryPickBool(out MShellBool l) => TryPickT4(out l, out _);
+    public bool TryPickBool(out MShellBool l, out OneOf<LiteralToken, MShellList, MShellQuotation, IntToken> remainder) => TryPickT4(out l, out remainder);
+
 
     public string DebugString()
     {
@@ -869,10 +888,21 @@ public class MShellObject : OneOfBase<LiteralToken, MShellList, MShellQuotation,
             token => token.Text(),
             list => "[" + string.Join(", ", list.Items.Select(o => o.DebugString())) + "]",
             quotation => "(" + string.Join(" ", quotation.Tokens.Select(o => o.RawText)) + ")",
-            token => token.IntVal.ToString()
+            token => token.IntVal.ToString(),
+            boolVal => boolVal.Value.ToString()
         );
     }
 
+}
+
+public class MShellBool
+{
+    public bool Value { get; }
+
+    public MShellBool(bool value)
+    {
+        Value = value;
+    }
 }
 
 public class MShellQuotation
