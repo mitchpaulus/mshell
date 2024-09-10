@@ -17,9 +17,9 @@ class Program
         var tokens = l.Tokenize();
 
         Evaluator e = new(false);
-        bool success = e.Evaluate(tokens, new Stack<MShellObject>());
+        EvalResult result = e.Evaluate(tokens, new Stack<MShellObject>());
 
-        return success ? 0 : 1;
+        return result.Success ? 0 : 1;
 
         // foreach (var t in tokens)
         // {
@@ -29,7 +29,6 @@ class Program
         // Console.WriteLine("Hello, World!");
     }
 }
-
 
 
 public class Lexer
@@ -99,7 +98,10 @@ public class Lexer
         string literal = _input.Substring(_start, _current - _start);
 
         if (literal == "-") return MakeToken(TokenType.MINUS);
+        if (literal == "=") return MakeToken(TokenType.EQUALS);
         if (literal == "if") return MakeToken(TokenType.IF);
+        if (literal == "loop") return MakeToken(TokenType.LOOP);
+        if (literal == "break") return MakeToken(TokenType.BREAK);
 
         if (int.TryParse(literal, out int i)) return MakeToken(TokenType.INTEGER);
         if (double.TryParse(literal, out double d)) return MakeToken(TokenType.DOUBLE);
@@ -150,6 +152,7 @@ public class Lexer
 public class Evaluator
 {
     private readonly Action<MShellObject, Stack<MShellObject>> _push;
+    private int _loopDepth = 0;
 
     // private Stack<Stack<MShellObject>> _stack = new();
 
@@ -169,7 +172,9 @@ public class Evaluator
 
     private void PushNoDebug(MShellObject o, Stack<MShellObject> stack) => stack.Push(o);
 
-    public bool Evaluate(List<TokenNew> tokens, Stack<MShellObject> stack)
+    private EvalResult FailResult() => new EvalResult(false, -1);
+
+    public EvalResult Evaluate(List<TokenNew> tokens, Stack<MShellObject> stack)
     {
         int index = 0;
 
@@ -180,7 +185,7 @@ public class Evaluator
         while (index < tokens.Count)
         {
             TokenNew t = tokens[index];
-            if (t.TokenType == TokenType.EOF) return true;
+            if (t.TokenType == TokenType.EOF) return new EvalResult(true, -1);
 
             if (t.TokenType == TokenType.LITERAL)
             {
@@ -199,7 +204,7 @@ public class Evaluator
                     if (index >= tokens.Count || tokens[index].TokenType == TokenType.EOF)
                     {
                         Console.Error.Write($"{currToken.Line}:{currToken.Column}: Found unbalanced bracket.\n");
-                        return false;
+                        return FailResult();
                     }
 
                     if (tokens[index].TokenType == TokenType.LEFT_SQUARE_BRACKET)
@@ -215,7 +220,14 @@ public class Evaluator
                             {
                                 Stack<MShellObject> listStack = new();
                                 var tokensWithinList = tokens.GetRange(leftIndex + 1, index - leftIndex - 1).ToList();
-                                Evaluate(tokensWithinList, listStack);
+                                var result = Evaluate(tokensWithinList, listStack);
+                                if (!result.Success) return result;
+                                if (result.BreakNum > 0)
+                                {
+                                    Console.Error.Write("Encountered break within list.\n");
+                                    return FailResult();
+                                }
+
                                 MShellList l = new(listStack.Reverse());
                                 _push(l, stack);
                                 // stack.Push(l);
@@ -227,7 +239,7 @@ public class Evaluator
                         else
                         {
                             Console.Error.Write($"{currToken.Line}:{currToken.Column}: Found unbalanced square bracket.\n");
-                            return false;
+                            return FailResult();
                         }
 
                     }
@@ -242,8 +254,8 @@ public class Evaluator
             }
             else if (t.TokenType == TokenType.RIGHT_SQUARE_BRACKET)
             {
-                Console.Error.Write("Found unbalanced list.\n");
-                return false;
+                Console.Error.Write($"{t.Line}:{t.Column}: Found unbalanced list.\n");
+                return FailResult();
             }
             else if (t.TokenType == TokenType.LEFT_PAREN)
             {
@@ -255,7 +267,7 @@ public class Evaluator
                     if (index >= tokens.Count || tokens[index].TokenType == TokenType.EOF)
                     {
                         Console.Error.Write("Found unbalanced bracket.\n");
-                        return false;
+                        return FailResult();
                     }
 
                     if (tokens[index].TokenType == TokenType.LEFT_PAREN)
@@ -273,15 +285,16 @@ public class Evaluator
                                 MShellQuotation q = new (tokensWithinList, leftIndex + 1, index);
                                 _push(q, stack);
                                 // stack.Push(q);
+                                break;
                             }
+
+                            index++;
                         }
                         else
                         {
                             Console.Error.Write("Found unbalanced quotation.\n");
-                            return false;
+                            return FailResult();
                         }
-
-                        break;
                     }
                     else
                     {
@@ -289,14 +302,12 @@ public class Evaluator
                     }
                 }
 
-
-
                 index++;
             }
             else if (t.TokenType == TokenType.RIGHT_PAREN)
             {
                 Console.Error.Write("Unbalanced parenthesis found.\n");
-                return false;
+                return FailResult();
             }
             else if (t.TokenType == TokenType.IF)
             {
@@ -307,7 +318,7 @@ public class Evaluator
                         if (qList.Items.Count < 2)
                         {
                             Console.Error.Write("Quotation list for if should have a minimum of 2 elements.\n");
-                            return false;
+                            return FailResult();
                         }
 
                         if (qList.Items.Any(i => !i.IsQuotation))
@@ -319,7 +330,7 @@ public class Evaluator
                                 Console.Error.Write('\n');
                             }
 
-                            return false;
+                            return FailResult();
                         }
 
                         // Loop through the even index quotations, looking for the first one that has a true condition.
@@ -327,7 +338,14 @@ public class Evaluator
                         for (int i = 0; i < qList.Items.Count - 1; i += 2)
                         {
                             MShellQuotation q = qList.Items[i].AsT2;
-                            Evaluate(q.Tokens, stack);
+                            var result = Evaluate(q.Tokens, stack);
+                            if (!result.Success) return FailResult();
+                            if (result.BreakNum > 0)
+                            {
+                                Console.Error.Write("Found break during evaluation of if condition.\n");
+                                return FailResult();
+                            }
+
                             if (stack.TryPop(out var condition))
                             {
                                 if (condition.TryPickIntToken(out var intVal))
@@ -346,7 +364,7 @@ public class Evaluator
                             else
                             {
                                 Console.Error.Write("Evaluation of condition quotation removed all stacks.");
-                                return false;
+                                return FailResult();
                             }
                         }
 
@@ -356,11 +374,14 @@ public class Evaluator
                             if (!qList.Items[trueIndex + 1].IsQuotation)
                             {
                                 Console.Error.Write($"True branch of if statement must be quotation. Received a {qList.Items[trueIndex + 1].TypeName()}");
-                                return false;
+                                return FailResult();
                             }
 
                             MShellQuotation q = qList.Items[trueIndex + 1].AsQuotation;
-                            Evaluate(q.Tokens, stack);
+                            var result = Evaluate(q.Tokens, stack);
+                            if (!result.Success) return FailResult();
+                            // If we broke during the evaluation, pass it up the eval stack
+                            if (result.BreakNum != -1) return result;
                         }
                         else if (qList.Items.Count % 2 == 1)
                         {
@@ -368,23 +389,26 @@ public class Evaluator
                             if (!qList.Items[^1].IsQuotation)
                             {
                                 Console.Error.Write($"Else branch of if statement must be quotation. Received a {qList.Items[^1].TypeName()}");
-                                return false;
+                                return FailResult();
                             }
 
                             MShellQuotation q = qList.Items[^1].AsQuotation;
-                            Evaluate(q.Tokens, stack);
+                            var result = Evaluate(q.Tokens, stack);
+                            if (!result.Success) return FailResult();
+                            // If we broke during the evaluation, pass it up the eval stack
+                            if (result.BreakNum != -1) return result;
                         }
                     }
                     else
                     {
                         Console.Error.Write("Argument for if expected to be a list of quotations.\n");
-                        return false;
+                        return FailResult();
                     }
                 }
                 else
                 {
                      Console.Error.Write("Nothing on stack for if.\n");
-                     return false;
+                     return FailResult();
                 }
 
                 index++;
@@ -407,7 +431,7 @@ public class Evaluator
                 else
                 {
                     Console.Error.Write("Nothing on stack to execute.\n");
-                    return false;
+                    return FailResult();
                 }
                 index++;
             }
@@ -417,15 +441,82 @@ public class Evaluator
                 // stack.Push(iToken);
                 index++;
             }
+            else if (t.TokenType == TokenType.LOOP)
+            {
+                if (stack.TryPop(out var o))
+                {
+                    if (o.IsQuotation)
+                    {
+                        _loopDepth++;
+                        int thisLoopDepth = _loopDepth;
+                        int loopCount = 1;
+                        while (loopCount < 15000)
+                        {
+                            EvalResult result = Evaluate(o.AsQuotation.Tokens, stack);
+                            if (!result.Success) return FailResult();
+
+                            if ((_loopDepth + 1) - result.BreakNum <= thisLoopDepth) break;
+                            loopCount++;
+                        }
+
+                        if (loopCount >= 15000)
+                        {
+                            Console.Error.Write("Looks like infinite loop.\n");
+                            return FailResult();
+                        }
+
+                        index++;
+                    }
+                    else
+                    {
+                        Console.Error.Write($"{t.Line}:{t.Column}: Expected quotation on top of stack for 'loop'.\n");
+                        return FailResult();
+                    }
+                }
+                else
+                {
+                    Console.Error.Write($"{t.Line}:{t.Column}: Quotations expected on stack for 'loop'.\n");
+                    return FailResult();
+                }
+            }
+            else if (t.TokenType == TokenType.BREAK)
+            {
+                index++;
+                return new EvalResult(true, 1);
+            }
+            else if (t.TokenType == TokenType.EQUALS)
+            {
+                if (stack.Count < 2)
+                {
+                    Console.Error.Write($"{stack} tokens on the stack are not enough for the '=' operator.\n");
+                    return FailResult();
+                }
+
+                var arg1 = stack.Pop();
+                var arg2 = stack.Pop();
+
+                if (arg1.IsIntToken && arg2.IsIntToken)
+                {
+                    if (arg1.AsIntToken.IntVal == arg2.AsIntToken.IntVal) stack.Push(new IntToken(new TokenNew(t.Line, t.Column, t.Start, "0", TokenType.INTEGER)));
+                    else stack.Push(new IntToken(new TokenNew(t.Line, t.Column, t.Start, "1", TokenType.INTEGER)));
+                }
+                else
+                {
+                    Console.Error.Write($"'=' is only currently implemented for integers. Received a {arg1.TypeName()} {arg1.DebugString()} {arg2.TypeName()} {arg2.DebugString()}\n");
+                    return FailResult();
+                }
+
+                index++;
+            }
             else
             {
                 Console.Error.Write($"Token type '{t.TokenType}' not implemented yet.\n");
-                return false;
+                return FailResult();
                 // throw new NotImplementedException($"Token type {t.TokenType()} not implemented yet.");
             }
         }
 
-        return true;
+        return new EvalResult(true, -1);
     }
 
     private void ExecuteQuotation(MShellQuotation q)
@@ -519,7 +610,10 @@ public enum TokenType
     INTEGER,
     DOUBLE,
     LITERAL,
-    ERROR
+    ERROR,
+    LOOP,
+    BREAK,
+    EQUALS
 }
 
 public class TokenNew
@@ -769,6 +863,16 @@ public class MShellObject : OneOfBase<LiteralToken, MShellList, MShellQuotation,
     public bool TryPickIntToken(out IntToken l) => TryPickT3(out l, out _);
     public bool TryPickIntToken(out IntToken l, out OneOf<LiteralToken, MShellList, MShellQuotation> remainder) => TryPickT3(out l, out remainder);
 
+    public string DebugString()
+    {
+        return Match(
+            token => token.Text(),
+            list => "[" + string.Join(", ", list.Items.Select(o => o.DebugString())) + "]",
+            quotation => "(" + string.Join(" ", quotation.Tokens.Select(o => o.RawText)) + ")",
+            token => token.IntVal.ToString()
+        );
+    }
+
 }
 
 public class MShellQuotation
@@ -792,5 +896,19 @@ public class MShellList
     public MShellList(IEnumerable<MShellObject> items)
     {
         Items = items.ToList();
+    }
+}
+
+public class EvalResult
+{
+    public bool Success {get;}
+
+    // -1 for no break encountered
+    public int BreakNum { get; }
+
+    public EvalResult(bool success, int breakNum)
+    {
+        Success = success;
+        BreakNum = breakNum;
     }
 }

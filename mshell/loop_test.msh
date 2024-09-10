@@ -1,6 +1,0 @@
-1
-(
-    dup 10 >= (break) if
-    1 +
-) loop
-[echo] + ;

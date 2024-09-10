@@ -1,0 +1,7 @@
+[
+    echo
+    (
+        hello world
+        [ (10 10 =) (break)] if
+    ) loop
+] ;
