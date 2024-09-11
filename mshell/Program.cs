@@ -15,10 +15,8 @@ class Program
         bool printLex = false;
         string? input = null;
 
-
         while (i < args.Length)
         {
-
             if (args[i] == "--lex")
             {
                 printLex = true;
@@ -31,15 +29,7 @@ class Program
             i++;
         }
 
-        if (input == null && Console.IsInputRedirected)
-        {
-            input = Console.In.ReadToEnd();
-        }
-        else
-        {
-            Console.Error.Write($"No input provided.\n");
-            return 1;
-        }
+        input ??= Console.In.ReadToEnd();
 
         // input = args.Length > 0 ? File.ReadAllText(args[0], Encoding.UTF8) : Console.In.ReadToEnd();
 
@@ -183,6 +173,9 @@ public class Lexer
         if (literal == "true") return MakeToken(TokenType.TRUE);
         if (literal == "false") return MakeToken(TokenType.FALSE);
 
+        if (literal.EndsWith("!")) return MakeToken(TokenType.VARRETRIEVE);
+        if (literal.StartsWith("@")) return MakeToken(TokenType.VARSTORE);
+
         if (int.TryParse(literal, out int i)) return MakeToken(TokenType.INTEGER);
         if (double.TryParse(literal, out double d)) return MakeToken(TokenType.DOUBLE);
         return MakeToken(TokenType.LITERAL);
@@ -233,6 +226,8 @@ public class Evaluator
 {
     private readonly Action<MShellObject, Stack<MShellObject>> _push;
     private int _loopDepth = 0;
+
+    private Dictionary<string, MShellObject> _variables = new();
 
     // private Stack<Stack<MShellObject>> _stack = new();
 
@@ -676,6 +671,42 @@ public class Evaluator
                 stack.Push(new MShellString(t));
                 index++;
             }
+            else if (t.TokenType == TokenType.VARSTORE)
+            {
+                if (stack.TryPop(out var o))
+                {
+                    _variables[t.RawText.Substring(1, t.RawText.Length - 1)] = o;
+                }
+                else
+                {
+                    Console.Error.Write($"Nothing on stack to store into variable '{t.RawText.Substring(1, t.RawText.Length - 1)}'.\n");
+                    return FailResult();
+                }
+
+                index++;
+            }
+            else if (t.TokenType == TokenType.VARRETRIEVE)
+            {
+                var name = t.RawText.Substring(0, t.RawText.Length - 1);
+                if (_variables.TryGetValue(name, out var o))
+                {
+                    stack.Push(o);
+                }
+                else
+                {
+                    StringBuilder message = new();
+                    message.Append($"Variable '{name}' not found. Variables available:\n");
+                    foreach (var n in _variables.Keys)
+                    {
+                        message.Append(n);
+                        message.Append('\n');
+                    }
+
+                    return FailWithMessage(message.ToString());
+                }
+
+                index++;
+            }
             else
             {
                 Console.Error.Write($"Token type '{t.TokenType}' not implemented yet.\n");
@@ -685,6 +716,12 @@ public class Evaluator
         }
 
         return new EvalResult(true, -1);
+    }
+
+    private EvalResult FailWithMessage(string message)
+    {
+        Console.Error.Write(message);
+        return FailResult();
     }
 
     private void ExecuteQuotation(MShellQuotation q)
@@ -789,7 +826,9 @@ public enum TokenType
     GREATERTHANOREQUAL,
     TRUE,
     FALSE,
-    STRING
+    STRING,
+    VARRETRIEVE,
+    VARSTORE
 }
 
 public class TokenNew
