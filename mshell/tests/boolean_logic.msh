@@ -1,0 +1,16 @@
+[echo [(true false and) (truey) (falsey)] if];
+[echo [(true true and) (truey) (falsey)] if];
+[echo [(false false and) (truey) (falsey)] if];
+[echo [(true false or) (truey) (falsey)] if];
+[echo [(true true or) (truey) (falsey)] if];
+[echo [(false false or) (truey) (falsey)] if];
+
+[echo];
+[echo Nots];
+[echo ========];
+[echo [(true false and not) (truey) (falsey)] if];
+[echo [(true true and not) (truey) (falsey)] if];
+[echo [(false false and not) (truey) (falsey)] if];
+[echo [(true false or not) (truey) (falsey)] if];
+[echo [(true true or not) (truey) (falsey)] if];
+[echo [(false false or not) (truey) (falsey)] if];

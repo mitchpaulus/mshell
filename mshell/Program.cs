@@ -10,11 +10,52 @@ class Program
 {
     static int Main(string[] args)
     {
-        string input = args.Length > 0 ? File.ReadAllText(args[0], Encoding.UTF8) : Console.In.ReadToEnd();
+        int i = 0;
+
+        bool printLex = false;
+        string? input = null;
+
+
+        while (i < args.Length)
+        {
+
+            if (args[i] == "--lex")
+            {
+                printLex = true;
+            }
+            else
+            {
+                input = File.ReadAllText(args[i]);
+            }
+
+            i++;
+        }
+
+        if (input == null && Console.IsInputRedirected)
+        {
+            input = Console.In.ReadToEnd();
+        }
+        else
+        {
+            Console.Error.Write($"No input provided.\n");
+            return 1;
+        }
+
+        // input = args.Length > 0 ? File.ReadAllText(args[0], Encoding.UTF8) : Console.In.ReadToEnd();
 
         Lexer l = new Lexer(input);
 
         var tokens = l.Tokenize();
+
+        if (printLex)
+        {
+            foreach (var t in tokens)
+            {
+                Console.Write($"{t.Line}:{t.Column}:{t.TokenType} {t.RawText}\n");
+            }
+
+            return 0;
+        }
 
         Evaluator e = new(false);
         EvalResult result = e.Evaluate(tokens, new Stack<MShellObject>());
@@ -69,6 +110,8 @@ public class Lexer
 
         char c = Advance();
 
+        if (c == '"') return ParseString();
+
         switch (c)
         {
             case '[':
@@ -84,6 +127,37 @@ public class Lexer
             default:
                 return ParseLiteralOrNumber();
         }
+    }
+
+    private TokenNew ParseString()
+    {
+        // When this is called, we've already consumed a single double quote.
+        bool inEscape = false;
+        while (true)
+        {
+            if (AtEnd())
+            {
+                Console.Error.Write($"{_line}:{_col}: Unterminated string.\n");
+                return MakeToken(TokenType.ERROR);
+            }
+
+            char c = Advance();
+            if (inEscape)
+            {
+                if (c != 'n' && c != 't' && c != 'r' && c != '\\' && c != '"')
+                {
+                    Console.Error.Write($"{_line}:{_col}: Invalid escape character '{c}'.\n");
+                    return MakeToken(TokenType.ERROR);
+                }
+                inEscape = false;
+            }
+            else {
+                if (c == '"') break;
+                if (c == '\\') inEscape = true;
+            }
+        }
+
+        return MakeToken(TokenType.STRING);
     }
 
     private TokenNew ParseLiteralOrNumber()
@@ -102,6 +176,12 @@ public class Lexer
         if (literal == "if") return MakeToken(TokenType.IF);
         if (literal == "loop") return MakeToken(TokenType.LOOP);
         if (literal == "break") return MakeToken(TokenType.BREAK);
+        if (literal == "not") return MakeToken(TokenType.NOT);
+        if (literal == "and") return MakeToken(TokenType.AND);
+        if (literal == "or") return MakeToken(TokenType.OR);
+        if (literal == ">=") return MakeToken(TokenType.GREATERTHANOREQUAL);
+        if (literal == "true") return MakeToken(TokenType.TRUE);
+        if (literal == "false") return MakeToken(TokenType.FALSE);
 
         if (int.TryParse(literal, out int i)) return MakeToken(TokenType.INTEGER);
         if (double.TryParse(literal, out double d)) return MakeToken(TokenType.DOUBLE);
@@ -434,8 +514,8 @@ public class Evaluator
                         RunProcess,
                         _ => { Console.Error.Write("Cannot execute a quotation.\n"); },
                         _ => { Console.Error.Write("Cannot execute an integer.\n"); },
-                        _ => { Console.Error.Write("Cannot execute a boolean.\n"); }
-
+                        _ => { Console.Error.Write("Cannot execute a boolean.\n"); },
+                        _ => { Console.Error.Write("Cannot execute a string.\n"); }
                     );
                 }
                 else
@@ -517,6 +597,85 @@ public class Evaluator
 
                 index++;
             }
+            else if (t.TokenType == TokenType.NOT)
+            {
+                if (stack.Count < 1)
+                {
+                    Console.Error.Write($"No tokens found on the stack for the 'not' operator.\n");
+                    return FailResult();
+                }
+
+                var arg = stack.Pop();
+                if (arg.TryPickBool(out var b))
+                {
+                    stack.Push(new MShellBool(!b.Value));
+                }
+                else
+                {
+                    Console.Error.Write($"Not operator only implemented for boolean variables. Found a {arg.TypeName()} on top of the stack..\n");
+                    return FailResult();
+                }
+                index++;
+            }
+            else if (t.TokenType == TokenType.AND)
+            {
+                if (stack.Count < 2)
+                {
+                    Console.Error.Write($"Not enough tokens on the stack for the 'and' operator.\n");
+                    return FailResult();
+                }
+
+                var arg1 = stack.Pop();
+                var arg2 = stack.Pop();
+
+                if (arg1.TryPickBool(out var b1) && arg2.TryPickBool(out var b2))
+                {
+                    stack.Push(new MShellBool(b1.Value && b2.Value));
+                }
+                else
+                {
+                    Console.Error.Write($"'and' operator only implemented for boolean variables. Found a {arg1.TypeName()} and a {arg2.TypeName()} on top of the stack.\n");
+                    return FailResult();
+                }
+                index++;
+            }
+            else if (t.TokenType == TokenType.OR)
+            {
+                if (stack.Count < 2)
+                {
+                    Console.Error.Write($"Not enough tokens on the stack for the 'or' operator.\n");
+                    return FailResult();
+                }
+
+                var arg1 = stack.Pop();
+                var arg2 = stack.Pop();
+
+                if (arg1.TryPickBool(out var b1) && arg2.TryPickBool(out var b2))
+                {
+                    stack.Push(new MShellBool(b1.Value || b2.Value));
+                }
+                else
+                {
+                    Console.Error.Write($"'or' operator only implemented for boolean variables. Found a {arg1.TypeName()} and a {arg2.TypeName()} on top of the stack.\n");
+                    return FailResult();
+                }
+                index++;
+            }
+            else if (t.TokenType == TokenType.TRUE)
+            {
+                stack.Push(new MShellBool(true));
+                index++;
+            }
+            else if (t.TokenType == TokenType.FALSE)
+            {
+                stack.Push(new MShellBool(false));
+                index++;
+            }
+            else if (t.TokenType == TokenType.STRING)
+            {
+                stack.Push(new MShellString(t));
+                index++;
+            }
             else
             {
                 Console.Error.Write($"Token type '{t.TokenType}' not implemented yet.\n");
@@ -541,13 +700,14 @@ public class Evaluator
 
     public void RunProcess(MShellList list)
     {
-        if (list.Items.Any(o => !o.IsT0))
+        if (list.Items.Any(o => !o.IsCommandLineable()))
         {
-            throw new NotImplementedException("Can't handle a process with anything but literals as arguments for now.");
+            var badTypes = list.Items.Where(o => !o.IsCommandLineable());
+            throw new NotImplementedException($"Can't handle a process argument of type {string.Join(", ", badTypes.Select(o => o.TypeName()))}.");
         }
         else
         {
-            List<string> arguments = list.Items.Select(o => o.AsT0.Text()).ToList();
+            List<string> arguments = list.Items.Select(o => o.CommandLine()).ToList();
 
             if (arguments.Count == 0)
             {
@@ -622,7 +782,14 @@ public enum TokenType
     ERROR,
     LOOP,
     BREAK,
-    EQUALS
+    EQUALS,
+    NOT,
+    AND,
+    OR,
+    GREATERTHANOREQUAL,
+    TRUE,
+    FALSE,
+    STRING
 }
 
 public class TokenNew
@@ -821,9 +988,9 @@ public class LoopToken : Token
     public override string TokenType() => "loop";
 }
 
-public class MShellObject : OneOfBase<LiteralToken, MShellList, MShellQuotation, IntToken, MShellBool>
+public class MShellObject : OneOfBase<LiteralToken, MShellList, MShellQuotation, IntToken, MShellBool, MShellString>
 {
-    protected MShellObject(OneOf<LiteralToken, MShellList, MShellQuotation, IntToken, MShellBool> input) : base(input)
+    protected MShellObject(OneOf<LiteralToken, MShellList, MShellQuotation, IntToken, MShellBool, MShellString> input) : base(input)
     {
     }
 
@@ -834,7 +1001,32 @@ public class MShellObject : OneOfBase<LiteralToken, MShellList, MShellQuotation,
             list => "List",
             quotation => "Quotation",
             token => "Integer",
-            boolVal => "Boolean"
+            boolVal => "Boolean",
+            stringVal => "String"
+        );
+    }
+
+    public bool IsCommandLineable()
+    {
+        return Match(
+            token => true,
+            list => false,
+            quotation => false,
+            intToken => true,
+            boolVal => false,
+            stringVal => true
+        );
+    }
+
+    public string CommandLine()
+    {
+        return Match(
+            token => token.Text(),
+            list => throw new NotImplementedException(),
+            quotation => throw new NotImplementedException(),
+            intToken => intToken.IntVal.ToString(),
+            boolVal => throw new NotImplementedException(),
+            stringVal => stringVal.Content
         );
     }
 
@@ -843,43 +1035,51 @@ public class MShellObject : OneOfBase<LiteralToken, MShellList, MShellQuotation,
     public bool IsQuotation => IsT2;
     public bool IsIntToken => IsT3;
     public bool IsBool => IsT4;
+    public bool IsString => IsT5;
 
     public LiteralToken AsLiteralToken => AsT0;
     public MShellList AsList => AsT1;
     public MShellQuotation AsQuotation => AsT2;
     public IntToken AsIntToken => AsT3;
     public MShellBool AsMShellBool => AsT4;
+    public MShellString AsMShellString => AsT5;
 
 
     public static implicit operator MShellObject(LiteralToken t) => new(t);
     public static explicit operator LiteralToken(MShellObject t) => t.AsT0;
 
     public bool TryPickLiteral(out LiteralToken l) => TryPickT0(out l, out _);
-    public bool TryPickLiteral(out LiteralToken l, out OneOf<MShellList, MShellQuotation, IntToken, MShellBool> remainder) => TryPickT0(out l, out remainder);
+    public bool TryPickLiteral(out LiteralToken l, out OneOf<MShellList, MShellQuotation, IntToken, MShellBool, MShellString> remainder) => TryPickT0(out l, out remainder);
 
     public static implicit operator MShellObject(MShellList t) => new(t);
     public static explicit operator MShellList(MShellObject t) => t.AsT1;
 
     public bool TryPickList(out MShellList l) => TryPickT1(out l, out _);
-    public bool TryPickList(out MShellList l, out OneOf<LiteralToken, MShellQuotation, IntToken, MShellBool> remainder) => TryPickT1(out l, out remainder);
+    public bool TryPickList(out MShellList l, out OneOf<LiteralToken, MShellQuotation, IntToken, MShellBool, MShellString> remainder) => TryPickT1(out l, out remainder);
 
     public static implicit operator MShellObject(MShellQuotation t) => new(t);
     public static explicit operator MShellQuotation(MShellObject t) => t.AsT2;
 
     public bool TryPickQuotation(out MShellQuotation l) => TryPickT2(out l, out _);
-    public bool TryPickQuotation(out MShellQuotation l, out OneOf<LiteralToken, MShellList, IntToken, MShellBool> remainder) => TryPickT2(out l, out remainder);
+    public bool TryPickQuotation(out MShellQuotation l, out OneOf<LiteralToken, MShellList, IntToken, MShellBool, MShellString> remainder) => TryPickT2(out l, out remainder);
 
     public static implicit operator MShellObject(IntToken t) => new(t);
     public static explicit operator IntToken(MShellObject t) => t.AsT3;
 
     public bool TryPickIntToken(out IntToken l) => TryPickT3(out l, out _);
-    public bool TryPickIntToken(out IntToken l, out OneOf<LiteralToken, MShellList, MShellQuotation, MShellBool> remainder) => TryPickT3(out l, out remainder);
+    public bool TryPickIntToken(out IntToken l, out OneOf<LiteralToken, MShellList, MShellQuotation, MShellBool, MShellString> remainder) => TryPickT3(out l, out remainder);
 
     public static implicit operator MShellObject(MShellBool t) => new(t);
     public static explicit operator MShellBool(MShellObject t) => t.AsT4;
 
     public bool TryPickBool(out MShellBool l) => TryPickT4(out l, out _);
-    public bool TryPickBool(out MShellBool l, out OneOf<LiteralToken, MShellList, MShellQuotation, IntToken> remainder) => TryPickT4(out l, out remainder);
+    public bool TryPickBool(out MShellBool l, out OneOf<LiteralToken, MShellList, MShellQuotation, IntToken, MShellString> remainder) => TryPickT4(out l, out remainder);
+
+    public static implicit operator MShellObject(MShellString t) => new(t);
+    public static explicit operator MShellString(MShellObject t) => t.AsT5;
+
+    public bool TryPickString(out MShellString l) => TryPickT5(out l, out _);
+    public bool TryPickString(out MShellString l, out OneOf<LiteralToken, MShellList, MShellQuotation, IntToken, MShellBool> remainder) => TryPickT5(out l, out remainder);
 
 
     public string DebugString()
@@ -889,7 +1089,8 @@ public class MShellObject : OneOfBase<LiteralToken, MShellList, MShellQuotation,
             list => "[" + string.Join(", ", list.Items.Select(o => o.DebugString())) + "]",
             quotation => "(" + string.Join(" ", quotation.Tokens.Select(o => o.RawText)) + ")",
             token => token.IntVal.ToString(),
-            boolVal => boolVal.Value.ToString()
+            boolVal => boolVal.Value.ToString(),
+            stringVal => stringVal.RawString
         );
     }
 
@@ -926,6 +1127,58 @@ public class MShellList
     public MShellList(IEnumerable<MShellObject> items)
     {
         Items = items.ToList();
+    }
+}
+
+public class MShellString
+{
+    public string Content { get; }
+    public string RawString { get; }
+
+    public MShellString(TokenNew stringToken)
+    {
+        string rawText = stringToken.RawText;
+        RawString = rawText;
+        Content = ParseRawToken(rawText);
+    }
+
+    private string ParseRawToken(string inputString)
+    {
+        if (inputString.Length < 2)
+        {
+            throw new ArgumentException($"Input string should have minimum length of 2 for surrounding double quotes\n");
+        }
+
+        StringBuilder b = new();
+        int index = 1;
+
+        bool inEscape = false;
+        while (index < inputString.Length - 1)
+        {
+            if (inEscape)
+            {
+                char c = inputString[index];
+                if (c == 'n') b.Append('\n');
+                else if (c == 't') b.Append('\t');
+                else if (c == 'r') b.Append('\r');
+                else if (c == '\\') b.Append('\\');
+                else if (c == '"') b.Append('"');
+                else
+                {
+                    throw new ArgumentException($"Invalid escape character '{c}'\n");
+                }
+                inEscape = false;
+            }
+            else {
+                char c = inputString[index];
+                if (c == '\\') inEscape = true;
+                else b.Append(c);
+            }
+
+            index++;
+        }
+
+        return b.ToString();
     }
 }
 
