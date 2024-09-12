@@ -155,7 +155,7 @@ public class Lexer
         while (true)
         {
             char c = Peek();
-            if (!char.IsWhiteSpace(c) && c != ']' && c != ')') Advance();
+            if (!char.IsWhiteSpace(c) && c != ']' && c != ')' && c != '<' && c != '>' && c != ';') Advance();
             else break;
         }
 
@@ -789,6 +789,27 @@ public class Evaluator
                      return FailWithMessage($"Currently only support integers for '{t.RawText}' operator.\n");
                  }
             }
+            else if (t.TokenType == TokenType.GREATERTHAN)
+            {
+                // This can either be normal comparison for numbers, or it's a redirect on a list.
+                index++;
+                if (stack.Count < 2) return FailWithMessage($"'{t.RawText}' operator requires at least two objects on the stack. Found {stack.Count} object.\n");
+
+                var arg1 = stack.Pop();
+                var arg2 = stack.Pop();
+
+                if (arg1.TryPickString(out var s) && arg2.TryPickList(out var list))
+                {
+                    list.StandardOutFile = s.Content;
+                }
+                else
+                {
+                     return FailWithMessage($"Currently only implemented redirection for '{t.RawText}' operator.\n");
+                }
+
+                // Push the list back on the stack
+                _push(list, stack);
+            }
             else
             {
                 Console.Error.Write($"Token type '{t.TokenType}' (Raw Token: '{t.RawText}') not implemented yet.\n");
@@ -839,7 +860,7 @@ public class Evaluator
                 UseShellExecute = false,
                 RedirectStandardError = false,
                 RedirectStandardInput = false,
-                RedirectStandardOutput = false,
+                RedirectStandardOutput = list.StandardOutFile is not null,
                 CreateNoWindow = true,
             };
             foreach (string arg in arguments.Skip(1)) info.ArgumentList.Add(arg);
@@ -855,8 +876,16 @@ public class Evaluator
                 {
                     p.Start();
 
-                    // string stdout = p.StandardOutput.ReadToEnd();
                     // string stderr = p.StandardError.ReadToEnd();
+
+                    if (list.StandardOutFile is not null)
+                    {
+                        // TODO: Use the BeginOutputReadLine methods instead to not have to have the entire thing in memory.
+                        using StreamWriter w = new StreamWriter(list.StandardOutFile);
+                        string content = p.StandardOutput.ReadToEnd();
+                        w.Write(content);
+                    }
+
                     p.WaitForExit();
 
                     // Console.Out.Write(stdout);
@@ -1271,10 +1300,12 @@ public class MShellQuotation
 
 public class MShellList
 {
+    public string? StandardOutFile { get; set; }
     public readonly List<MShellObject> Items;
 
-    public MShellList(IEnumerable<MShellObject> items)
+    public MShellList(IEnumerable<MShellObject> items, string? standardOutFile = null)
     {
+        StandardOutFile = standardOutFile;
         Items = items.ToList();
     }
 }

@@ -23,5 +23,21 @@ else
         exit 1
     fi
 fi
+
+# Check for lines with '# FILE:<filename>' and check that the file exists and matches contents of <filename>.expected
+# This is to test redirections
+grep -E '^# FILE:.+$' "$1" | while read -r line; do
+    filename="$(echo "$line" | cut -d: -f2)"
+    diff_output="$(diff "$filename" "$filename".expected)"
+    if test "$?" -eq 0; then
+        printf "  %s redirect to '%s' passed\n" "$1" "$filename"
+    else
+        printf "  %s redirect to '%s' FAILED\n" "$1" "$filename"
+        printf "==================\n"
+        printf "%s\n" "$diff_output"
+        exit 1
+    fi
+done
+
 rm "$TMP_FILE"
 rm "$TMP_ERR"
