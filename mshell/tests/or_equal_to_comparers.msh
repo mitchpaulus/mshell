@@ -1,0 +1,15 @@
+0
+(
+    [(dup 10 >=) (break)] if
+    dup @a
+    [echo a!];
+    1 +
+) loop
+
+[echo "Now go backwards"];
+(
+    [(dup 0 <=) (break)] if
+    dup @a
+    [echo a!];
+    1 -
+) loop

@@ -162,6 +162,7 @@ public class Lexer
         string literal = _input.Substring(_start, _current - _start);
 
         if (literal == "-") return MakeToken(TokenType.MINUS);
+        if (literal == "+") return MakeToken(TokenType.PLUS);
         if (literal == "=") return MakeToken(TokenType.EQUALS);
         if (literal == "if") return MakeToken(TokenType.IF);
         if (literal == "loop") return MakeToken(TokenType.LOOP);
@@ -170,6 +171,9 @@ public class Lexer
         if (literal == "and") return MakeToken(TokenType.AND);
         if (literal == "or") return MakeToken(TokenType.OR);
         if (literal == ">=") return MakeToken(TokenType.GREATERTHANOREQUAL);
+        if (literal == "<=") return MakeToken(TokenType.LESSTHANOREQUAL);
+        if (literal == "<") return MakeToken(TokenType.LESSTHAN);
+        if (literal == ">") return MakeToken(TokenType.GREATERTHAN);
         if (literal == "true") return MakeToken(TokenType.TRUE);
         if (literal == "false") return MakeToken(TokenType.FALSE);
 
@@ -264,8 +268,19 @@ public class Evaluator
 
             if (t.TokenType == TokenType.LITERAL)
             {
-                _push(new LiteralToken(t), stack);
-                // stack.Push(lt);
+                if (t.RawText == "dup")
+                {
+                    if (stack.TryPeek(out var o))
+                    {
+                        _push(o, stack);
+                    }
+                    else return FailWithMessage($"Nothing on stack to duplicate for 'dup'.\n");
+                }
+                else
+                {
+                    _push(new LiteralToken(t), stack);
+                }
+
                 index++;
             }
             else if (t.TokenType == TokenType.LEFT_SQUARE_BRACKET)
@@ -582,7 +597,7 @@ public class Evaluator
 
                 if (arg1.IsIntToken && arg2.IsIntToken)
                 {
-                    stack.Push(arg1.AsIntToken.IntVal == arg2.AsIntToken.IntVal ? new MShellBool(true) : new MShellBool(false));
+                    _push(arg1.AsIntToken.IntVal == arg2.AsIntToken.IntVal ? new MShellBool(true) : new MShellBool(false), stack);
                 }
                 else
                 {
@@ -603,7 +618,7 @@ public class Evaluator
                 var arg = stack.Pop();
                 if (arg.TryPickBool(out var b))
                 {
-                    stack.Push(new MShellBool(!b.Value));
+                    _push(new MShellBool(!b.Value), stack);
                 }
                 else
                 {
@@ -625,7 +640,7 @@ public class Evaluator
 
                 if (arg1.TryPickBool(out var b1) && arg2.TryPickBool(out var b2))
                 {
-                    stack.Push(new MShellBool(b1.Value && b2.Value));
+                    _push(new MShellBool(b1.Value && b2.Value), stack);
                 }
                 else
                 {
@@ -647,7 +662,7 @@ public class Evaluator
 
                 if (arg1.TryPickBool(out var b1) && arg2.TryPickBool(out var b2))
                 {
-                    stack.Push(new MShellBool(b1.Value || b2.Value));
+                    _push(new MShellBool(b1.Value || b2.Value), stack);
                 }
                 else
                 {
@@ -658,17 +673,17 @@ public class Evaluator
             }
             else if (t.TokenType == TokenType.TRUE)
             {
-                stack.Push(new MShellBool(true));
+                _push(new MShellBool(true), stack);
                 index++;
             }
             else if (t.TokenType == TokenType.FALSE)
             {
-                stack.Push(new MShellBool(false));
+                _push(new MShellBool(false), stack);
                 index++;
             }
             else if (t.TokenType == TokenType.STRING)
             {
-                stack.Push(new MShellString(t));
+                _push(new MShellString(t), stack);
                 index++;
             }
             else if (t.TokenType == TokenType.VARSTORE)
@@ -690,7 +705,7 @@ public class Evaluator
                 var name = t.RawText.Substring(0, t.RawText.Length - 1);
                 if (_variables.TryGetValue(name, out var o))
                 {
-                    stack.Push(o);
+                    _push(o, stack);
                 }
                 else
                 {
@@ -707,9 +722,76 @@ public class Evaluator
 
                 index++;
             }
+            else if (t.TokenType == TokenType.GREATERTHANOREQUAL || t.TokenType == TokenType.LESSTHANOREQUAL)
+            {
+                index++;
+                if (stack.Count < 2) return FailWithMessage($"'{t.RawText}' operator requires at least two objects on the stack. Found {stack.Count} objects.\n");
+
+                var arg1 = stack.Pop();
+                var arg2 = stack.Pop();
+
+                if (!arg1.IsNumeric()) return FailWithMessage($"Argument {arg1.DebugString()} is not a numeric value that can be compared in {t.RawText} operation.\n");
+                if (!arg2.IsNumeric()) return FailWithMessage($"Argument {arg2.DebugString()} is not a numeric value that can be compared in {t.RawText} operation.\n");
+
+                MShellBool b;
+                if (t.TokenType == TokenType.GREATERTHANOREQUAL)
+                {
+                    b = new MShellBool(arg2.FloatNumeric() >= arg1.FloatNumeric());
+                }
+                else if (t.TokenType == TokenType.LESSTHANOREQUAL)
+                {
+                    b = new MShellBool(arg2.FloatNumeric() <= arg1.FloatNumeric());
+                }
+                else
+                {
+                    // Should never reach.
+                    throw new Exception();
+                }
+
+                _push(b, stack);
+            }
+            else if (t.TokenType == TokenType.MINUS)
+            {
+                index++;
+                if (stack.Count < 2) return FailWithMessage($"'{t.RawText}' operator requires at least two objects on the stack. Found {stack.Count} objects.\n");
+
+                var arg1 = stack.Pop();
+                var arg2 = stack.Pop();
+
+                if (!arg1.IsNumeric()) return FailWithMessage($"Argument {arg1.DebugString()} is not a numeric value that can be compared in {t.RawText} operation.\n");
+                if (!arg2.IsNumeric()) return FailWithMessage($"Argument {arg2.DebugString()} is not a numeric value that can be compared in {t.RawText} operation.\n");
+
+                if (arg1.TryPickIntToken(out var int1) && arg2.TryPickIntToken(out var int2))
+                {
+                    int newInt = int2.IntVal - int1.IntVal;
+                    _push(new IntToken(new TokenNew(t.Line, t.Column, t.Start, newInt.ToString(), TokenType.INTEGER)), stack);
+                }
+                else
+                {
+                    return FailWithMessage($"Currently only support integers for '{t.RawText}' operator.\n");
+                }
+            }
+            else if (t.TokenType == TokenType.PLUS)
+            {
+                 index++;
+                 if (stack.Count < 2) return FailWithMessage($"'{t.RawText}' operator requires at least two objects on the stack. Found {stack.Count} object.\n");
+
+                 var arg1 = stack.Pop();
+                 var arg2 = stack.Pop();
+
+                 if (arg1.TryPickIntToken(out var int1) && arg2.TryPickIntToken(out var int2))
+                 {
+                     int newInt = int2.IntVal + int1.IntVal;
+                     _push(new IntToken(new TokenNew(t.Line, t.Column, t.Start, newInt.ToString(), TokenType.INTEGER)), stack);
+                 }
+                 else
+                 {
+                     return FailWithMessage($"Currently only support integers for '{t.RawText}' operator.\n");
+                 }
+            }
             else
             {
-                Console.Error.Write($"Token type '{t.TokenType}' not implemented yet.\n");
+                Console.Error.Write($"Token type '{t.TokenType}' (Raw Token: '{t.RawText}') not implemented yet.\n");
                 return FailResult();
                 // throw new NotImplementedException($"Token type {t.TokenType()} not implemented yet.");
             }
@@ -828,7 +910,11 @@ public enum TokenType
     FALSE,
     STRING,
     VARRETRIEVE,
-    VARSTORE
+    VARSTORE,
+    LESSTHANOREQUAL,
+    LESSTHAN,
+    GREATERTHAN,
+    PLUS
 }
 
 public class TokenNew
@@ -1054,6 +1140,30 @@ public class MShellObject : OneOfBase<LiteralToken, MShellList, MShellQuotation,
             intToken => true,
             boolVal => false,
             stringVal => true
+        );
+    }
+
+    public bool IsNumeric()
+    {
+         return Match(
+             token => false,
+             list => false,
+             quotation => false,
+             intToken => true,
+             boolVal => false,
+             stringVal => false
+         );
+    }
+
+    public double FloatNumeric()
+    {
+        return Match(
+            token => throw new NotImplementedException(),
+            list => throw new NotImplementedException(),
+            quotation => throw new NotImplementedException(),
+            intToken => (double)intToken.IntVal,
+            boolVal => throw new NotImplementedException(),
+            stringVal => throw new NotImplementedException()
         );
     }
 

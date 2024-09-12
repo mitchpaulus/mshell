@@ -1,9 +1,8 @@
 # TODO
 
-- strings
+- Floating point numbers
 - redirections
 - pipes
 - globbing
-- variables
 - dictionaries
 - function definition
