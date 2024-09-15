@@ -933,6 +933,8 @@ public class Evaluator
 
     public void RunProcess(MShellPipe pipe)
     {
+        if (pipe.List.Items.Count == 0) return;
+
         List<MShellList> listItems = new List<MShellList>();
         foreach (var i in pipe.List.Items)
         {
@@ -946,10 +948,93 @@ public class Evaluator
             }
         }
 
+        if (listItems.Count == 1)
+        {
+            RunProcess(listItems[0]);
+            return;
+        }
+
+        // Minimum of two here
         List<Process> processes = new();
+        var firstList = listItems[0];
 
+        if (firstList.Items.Any(i => !i.IsCommandLineable()))
+        {
+            throw new Exception("Not all elements in list are valid for command.\n");
+        }
 
-        throw new NotImplementedException();
+        var firstProcessStartInfo = new ProcessStartInfo()
+           {
+               FileName = listItems[0].Items[0].CommandLine(),
+               RedirectStandardInput = firstList.StandardInputFile is not null,
+               RedirectStandardOutput = true,
+               UseShellExecute = false,
+               CreateNoWindow = true,
+           };
+        foreach (var arg in listItems[0].Items.Skip(1)) { firstProcessStartInfo.ArgumentList.Add(arg.CommandLine()); }
+
+        var firstProcess = new Process() { StartInfo = firstProcessStartInfo, };
+        processes.Add(firstProcess);
+
+        // Middle pipe items
+        for (int i = 1; i < listItems.Count - 1; i++)
+        {
+            var startInfo = new ProcessStartInfo()
+            {
+                FileName = listItems[i].Items[0].CommandLine(),
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            foreach (var arg in listItems[i].Items.Skip(1))
+            {
+                startInfo.ArgumentList.Add(arg.CommandLine());
+            }
+            processes.Add(new Process() { StartInfo = startInfo });
+        }
+
+        // Final pipe item
+        var lastStartInfo = new ProcessStartInfo()
+        {
+            FileName = listItems[^1].Items[0].CommandLine(),
+            RedirectStandardInput = true,
+            RedirectStandardOutput = listItems[^1].StandardOutFile is not null,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        foreach (var arg in listItems[^1].Items.Skip(1))
+        {
+            lastStartInfo.ArgumentList.Add(arg.CommandLine());
+        }
+        processes.Add(new Process() { StartInfo = lastStartInfo}) ;
+
+        foreach (var p in processes) p.Start();
+
+        string? stdinFile = firstList.StandardInputFile;
+
+        if (stdinFile is not null)
+        {
+            using FileStream s = new(stdinFile, FileMode.Open);
+            processes[0].StandardInput.BaseStream.Write(ReadAllBytesFromStream(s));
+        }
+
+        for (int i = 0; i < processes.Count - 1; i++)
+        {
+            using var output = processes[i].StandardOutput.BaseStream;
+            using var input = processes[i + 1].StandardInput.BaseStream;
+            processes[i].StandardOutput.BaseStream.CopyTo(processes[i + 1].StandardInput.BaseStream);
+        }
+
+        string? stdoutFile = listItems[^1].StandardOutFile;
+        if (stdoutFile is not null)
+        {
+            using FileStream s = new(stdoutFile, FileMode.Truncate);
+            var content = ReadAllBytesFromStream(processes[^1].StandardOutput.BaseStream);
+            s.Write(content);
+        }
+
+        foreach (var p in processes) p.WaitForExit();
 
         // if (list.Items.Any(o => !o.IsCommandLineable()))
         // {
@@ -1012,6 +1097,12 @@ public class Evaluator
         // }
     }
 
+    public byte[] ReadAllBytesFromStream(Stream stream)
+    {
+        using MemoryStream ms = new();
+        stream.CopyTo(ms);
+        return ms.ToArray();
+    }
 }
 
 
