@@ -518,18 +518,17 @@ public class Evaluator
             {
                 if (stack.TryPop(out var arg))
                 {
-                    arg.Switch(
-                        literalToken =>
-                        {
-                            RunProcess(new MShellList(new List<MShellObject>(1) { literalToken }));
-                        },
+                    EvalResult result = arg.Match(
+                        literalToken => RunProcess(new MShellList(new List<MShellObject>(1) { literalToken })),
                         RunProcess,
-                        _ => { Console.Error.Write("Cannot execute a quotation.\n"); },
-                        _ => { Console.Error.Write("Cannot execute an integer.\n"); },
-                        _ => { Console.Error.Write("Cannot execute a boolean.\n"); },
-                        _ => { Console.Error.Write("Cannot execute a string.\n"); },
+                        _ => FailWithMessage("Cannot execute a quotation.\n"),
+                        _ => FailWithMessage("Cannot execute an integer.\n"),
+                        _ => FailWithMessage("Cannot execute a boolean.\n"),
+                        _ => FailWithMessage("Cannot execute a string.\n"),
                         RunProcess
                     );
+
+                    if (!result.Success) return result;
                 }
                 else
                 {
@@ -862,78 +861,73 @@ public class Evaluator
         }
     }
 
-    public void RunProcess(MShellList list)
+    public EvalResult RunProcess(MShellList list)
     {
         if (list.Items.Any(o => !o.IsCommandLineable()))
         {
             var badTypes = list.Items.Where(o => !o.IsCommandLineable());
-            throw new NotImplementedException($"Can't handle a process argument of type {string.Join(", ", badTypes.Select(o => o.TypeName()))}.");
+            return FailWithMessage($"Can't handle a process argument of type {string.Join(", ", badTypes.Select(o => o.TypeName()))}.");
         }
-        else
+
+        List<string> arguments = list.Items.Select(o => o.CommandLine()).ToList();
+
+        if (arguments.Count == 0) return FailWithMessage("Cannot execute an empty list");
+
+        ProcessStartInfo info = new()
         {
-            List<string> arguments = list.Items.Select(o => o.CommandLine()).ToList();
+            FileName = arguments[0],
+            UseShellExecute = false,
+            RedirectStandardError = false,
+            RedirectStandardInput = list.StandardInputFile is not null,
+            RedirectStandardOutput = list.StandardOutFile is not null,
+            CreateNoWindow = true,
+        };
+        foreach (string arg in arguments.Skip(1)) info.ArgumentList.Add(arg);
 
-            if (arguments.Count == 0)
-            {
-                throw new ArgumentException("Cannot execute an empty list");
-            }
+        Process p = new Process()
+        {
+            StartInfo = info
+        };
 
-            ProcessStartInfo info = new ProcessStartInfo()
+        try
+        {
+            using (p)
             {
-                FileName = arguments[0],
-                UseShellExecute = false,
-                RedirectStandardError = false,
-                RedirectStandardInput = list.StandardInputFile is not null,
-                RedirectStandardOutput = list.StandardOutFile is not null,
-                CreateNoWindow = true,
-            };
-            foreach (string arg in arguments.Skip(1)) info.ArgumentList.Add(arg);
+                p.Start();
 
-            Process p = new Process()
-            {
-                StartInfo = info
-            };
+                // string stderr = p.StandardError.ReadToEnd();
 
-            try
-            {
-                using (p)
+                if (list.StandardOutFile is not null)
                 {
-                    p.Start();
-
-                    // string stderr = p.StandardError.ReadToEnd();
-
-                    if (list.StandardOutFile is not null)
-                    {
-                        // TODO: Use the BeginOutputReadLine methods instead to not have to have the entire thing in memory.
-                        using StreamWriter w = new StreamWriter(list.StandardOutFile);
-                        string content = p.StandardOutput.ReadToEnd();
-                        w.Write(content);
-                    }
-
-                    if (list.StandardInputFile is not null)
-                    {
-                        using StreamWriter w = p.StandardInput;
-                        w.Write(File.ReadAllBytes(list.StandardInputFile));
-                    }
-
-                    p.WaitForExit();
-
-                    // Console.Out.Write(stdout);
-                    // Console.Error.Write(stderr);
+                    // TODO: Use the BeginOutputReadLine methods instead to not have to have the entire thing in memory.
+                    using StreamWriter w = new StreamWriter(list.StandardOutFile);
+                    string content = p.StandardOutput.ReadToEnd();
+                    w.Write(content);
                 }
-            }
-            catch (Exception e)
-            {
-                Console.Error.Write(e.Message);
-                throw new Exception("There was an exception running process.");
 
+                if (list.StandardInputFile is not null)
+                {
+                    using StreamWriter w = p.StandardInput;
+                    w.Write(File.ReadAllBytes(list.StandardInputFile));
+                }
+
+                p.WaitForExit();
+
+                // Console.Out.Write(stdout);
+                // Console.Error.Write(stderr);
             }
         }
+        catch (Exception e)
+        {
+            return FailWithMessage($"There was an exception running process with args { string.Join(", ", arguments.Select(s => $"'{s}'"))  }.\n");
+        }
+
+        return new EvalResult(true, -1);
     }
 
-    public void RunProcess(MShellPipe pipe)
+    public EvalResult RunProcess(MShellPipe pipe)
     {
-        if (pipe.List.Items.Count == 0) return;
+        if (pipe.List.Items.Count == 0) return new EvalResult(true, -1);
 
         List<MShellList> listItems = new List<MShellList>();
         foreach (var i in pipe.List.Items)
@@ -944,15 +938,11 @@ public class Evaluator
             }
             else
             {
-                throw new Exception($"Pipelines are only supported with list items currently.\n");
+                return FailWithMessage($"Pipelines are only supported with list items currently.\n");
             }
         }
 
-        if (listItems.Count == 1)
-        {
-            RunProcess(listItems[0]);
-            return;
-        }
+        if (listItems.Count == 1) return RunProcess(listItems[0]);
 
         // Minimum of two here
         List<Process> processes = new();
@@ -960,7 +950,7 @@ public class Evaluator
 
         if (firstList.Items.Any(i => !i.IsCommandLineable()))
         {
-            throw new Exception("Not all elements in list are valid for command.\n");
+            return FailWithMessage("Not all elements in list are valid for command.\n");
         }
 
         var firstProcessStartInfo = new ProcessStartInfo()
@@ -991,11 +981,11 @@ public class Evaluator
             {
                 startInfo.ArgumentList.Add(arg.CommandLine());
             }
-            processes.Add(new Process() { StartInfo = startInfo });
+            processes.Add(new Process { StartInfo = startInfo });
         }
 
         // Final pipe item
-        var lastStartInfo = new ProcessStartInfo()
+        var lastStartInfo = new ProcessStartInfo
         {
             FileName = listItems[^1].Items[0].CommandLine(),
             RedirectStandardInput = true,
@@ -1036,65 +1026,7 @@ public class Evaluator
 
         foreach (var p in processes) p.WaitForExit();
 
-        // if (list.Items.Any(o => !o.IsCommandLineable()))
-        // {
-        //     var badTypes = list.Items.Where(o => !o.IsCommandLineable());
-        //     throw new NotImplementedException($"Can't handle a process argument of type {string.Join(", ", badTypes.Select(o => o.TypeName()))}.");
-        // }
-        // else
-        // {
-        //     List<string> arguments = list.Items.Select(o => o.CommandLine()).ToList();
-        //
-        //     if (arguments.Count == 0)
-        //     {
-        //         throw new ArgumentException("Cannot execute an empty list");
-        //     }
-        //
-        //     ProcessStartInfo info = new ProcessStartInfo()
-        //     {
-        //         FileName = arguments[0],
-        //         UseShellExecute = false,
-        //         RedirectStandardError = false,
-        //         RedirectStandardInput = false,
-        //         RedirectStandardOutput = list.StandardOutFile is not null,
-        //         CreateNoWindow = true,
-        //     };
-        //     foreach (string arg in arguments.Skip(1)) info.ArgumentList.Add(arg);
-        //
-        //     Process p = new Process()
-        //     {
-        //         StartInfo = info
-        //     };
-        //
-        //     try
-        //     {
-        //         using (p)
-        //         {
-        //             p.Start();
-        //
-        //             // string stderr = p.StandardError.ReadToEnd();
-        //
-        //             if (list.StandardOutFile is not null)
-        //             {
-        //                 // TODO: Use the BeginOutputReadLine methods instead to not have to have the entire thing in memory.
-        //                 using StreamWriter w = new StreamWriter(list.StandardOutFile);
-        //                 string content = p.StandardOutput.ReadToEnd();
-        //                 w.Write(content);
-        //             }
-        //
-        //             p.WaitForExit();
-        //
-        //             // Console.Out.Write(stdout);
-        //             // Console.Error.Write(stderr);
-        //         }
-        //     }
-        //     catch (Exception e)
-        //     {
-        //         Console.Error.Write(e.Message);
-        //         throw new Exception("There was an exception running process.");
-        //
-        //     }
-        // }
+        return new EvalResult(true, -1);
     }
 
     public byte[] ReadAllBytesFromStream(Stream stream)
