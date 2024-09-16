@@ -1,0 +1,5 @@
+[
+    [printf "hello\\nEarth!\\n"]
+    [sed "s/Earth/World/"]
+    [grep World]
+] |;

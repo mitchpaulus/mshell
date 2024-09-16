@@ -114,6 +114,8 @@ public class Lexer
                 return MakeToken(TokenType.RIGHT_PAREN);
             case ';':
                 return MakeToken(TokenType.EXECUTE);
+            case '|':
+                return MakeToken(TokenType.PIPE);
             default:
                 return ParseLiteralOrNumber();
         }
@@ -516,17 +518,17 @@ public class Evaluator
             {
                 if (stack.TryPop(out var arg))
                 {
-                    arg.Switch(
-                        literalToken =>
-                        {
-                            RunProcess(new MShellList(new List<MShellObject>(1) { literalToken }));
-                        },
+                    EvalResult result = arg.Match(
+                        literalToken => RunProcess(new MShellList(new List<MShellObject>(1) { literalToken })),
                         RunProcess,
-                        _ => { Console.Error.Write("Cannot execute a quotation.\n"); },
-                        _ => { Console.Error.Write("Cannot execute an integer.\n"); },
-                        _ => { Console.Error.Write("Cannot execute a boolean.\n"); },
-                        _ => { Console.Error.Write("Cannot execute a string.\n"); }
+                        _ => FailWithMessage("Cannot execute a quotation.\n"),
+                        _ => FailWithMessage("Cannot execute an integer.\n"),
+                        _ => FailWithMessage("Cannot execute a boolean.\n"),
+                        _ => FailWithMessage("Cannot execute a string.\n"),
+                        RunProcess
                     );
+
+                    if (!result.Success) return result;
                 }
                 else
                 {
@@ -810,6 +812,27 @@ public class Evaluator
                 // Push the list back on the stack
                 _push(list, stack);
             }
+            else if (t.TokenType == TokenType.PIPE)
+            {
+                index++;
+
+                if (stack.TryPop(out var o))
+                {
+                    if (o.TryPickList(out var list))
+                    {
+                        MShellPipe p = new(list);
+                        _push(p, stack);
+                    }
+                    else
+                    {
+                        return FailWithMessage($"'{t.RawText}' operator requires a list on top of the stack. Found a {o.TypeName()}.\n");
+                    }
+                }
+                else
+                {
+                    return FailWithMessage($"'{t.RawText}' operator requires at least one object on the stack.\n");
+                }
+            }
             else
             {
                 Console.Error.Write($"Token type '{t.TokenType}' (Raw Token: '{t.RawText}') not implemented yet.\n");
@@ -838,67 +861,179 @@ public class Evaluator
         }
     }
 
-    public void RunProcess(MShellList list)
+    public EvalResult RunProcess(MShellList list)
     {
         if (list.Items.Any(o => !o.IsCommandLineable()))
         {
             var badTypes = list.Items.Where(o => !o.IsCommandLineable());
-            throw new NotImplementedException($"Can't handle a process argument of type {string.Join(", ", badTypes.Select(o => o.TypeName()))}.");
+            return FailWithMessage($"Can't handle a process argument of type {string.Join(", ", badTypes.Select(o => o.TypeName()))}.");
         }
-        else
+
+        List<string> arguments = list.Items.Select(o => o.CommandLine()).ToList();
+
+        if (arguments.Count == 0) return FailWithMessage("Cannot execute an empty list");
+
+        ProcessStartInfo info = new()
         {
-            List<string> arguments = list.Items.Select(o => o.CommandLine()).ToList();
+            FileName = arguments[0],
+            UseShellExecute = false,
+            RedirectStandardError = false,
+            RedirectStandardInput = list.StandardInputFile is not null,
+            RedirectStandardOutput = list.StandardOutFile is not null,
+            CreateNoWindow = true,
+        };
+        foreach (string arg in arguments.Skip(1)) info.ArgumentList.Add(arg);
 
-            if (arguments.Count == 0)
+        Process p = new Process()
+        {
+            StartInfo = info
+        };
+
+        try
+        {
+            using (p)
             {
-                throw new ArgumentException("Cannot execute an empty list");
+                p.Start();
+
+                // string stderr = p.StandardError.ReadToEnd();
+
+                if (list.StandardOutFile is not null)
+                {
+                    // TODO: Use the BeginOutputReadLine methods instead to not have to have the entire thing in memory.
+                    using StreamWriter w = new StreamWriter(list.StandardOutFile);
+                    string content = p.StandardOutput.ReadToEnd();
+                    w.Write(content);
+                }
+
+                if (list.StandardInputFile is not null)
+                {
+                    using StreamWriter w = p.StandardInput;
+                    w.Write(File.ReadAllBytes(list.StandardInputFile));
+                }
+
+                p.WaitForExit();
+
+                // Console.Out.Write(stdout);
+                // Console.Error.Write(stderr);
             }
+        }
+        catch (Exception e)
+        {
+            return FailWithMessage($"There was an exception running process with args { string.Join(", ", arguments.Select(s => $"'{s}'"))  }.\n");
+        }
 
-            ProcessStartInfo info = new ProcessStartInfo()
+        return new EvalResult(true, -1);
+    }
+
+    public EvalResult RunProcess(MShellPipe pipe)
+    {
+        if (pipe.List.Items.Count == 0) return new EvalResult(true, -1);
+
+        List<MShellList> listItems = new List<MShellList>();
+        foreach (var i in pipe.List.Items)
+        {
+            if (i.TryPickList(out var l))
             {
-                FileName = arguments[0],
+                listItems.Add(l);
+            }
+            else
+            {
+                return FailWithMessage($"Pipelines are only supported with list items currently.\n");
+            }
+        }
+
+        if (listItems.Count == 1) return RunProcess(listItems[0]);
+
+        // Minimum of two here
+        List<Process> processes = new();
+        var firstList = listItems[0];
+
+        if (firstList.Items.Any(i => !i.IsCommandLineable()))
+        {
+            return FailWithMessage("Not all elements in list are valid for command.\n");
+        }
+
+        var firstProcessStartInfo = new ProcessStartInfo()
+           {
+               FileName = listItems[0].Items[0].CommandLine(),
+               RedirectStandardInput = firstList.StandardInputFile is not null,
+               RedirectStandardOutput = true,
+               UseShellExecute = false,
+               CreateNoWindow = true,
+           };
+        foreach (var arg in listItems[0].Items.Skip(1)) { firstProcessStartInfo.ArgumentList.Add(arg.CommandLine()); }
+
+        var firstProcess = new Process() { StartInfo = firstProcessStartInfo, };
+        processes.Add(firstProcess);
+
+        // Middle pipe items
+        for (int i = 1; i < listItems.Count - 1; i++)
+        {
+            var startInfo = new ProcessStartInfo()
+            {
+                FileName = listItems[i].Items[0].CommandLine(),
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
                 UseShellExecute = false,
-                RedirectStandardError = false,
-                RedirectStandardInput = false,
-                RedirectStandardOutput = list.StandardOutFile is not null,
                 CreateNoWindow = true,
             };
-            foreach (string arg in arguments.Skip(1)) info.ArgumentList.Add(arg);
-
-            Process p = new Process()
+            foreach (var arg in listItems[i].Items.Skip(1))
             {
-                StartInfo = info
-            };
-
-            try
-            {
-                using (p)
-                {
-                    p.Start();
-
-                    // string stderr = p.StandardError.ReadToEnd();
-
-                    if (list.StandardOutFile is not null)
-                    {
-                        // TODO: Use the BeginOutputReadLine methods instead to not have to have the entire thing in memory.
-                        using StreamWriter w = new StreamWriter(list.StandardOutFile);
-                        string content = p.StandardOutput.ReadToEnd();
-                        w.Write(content);
-                    }
-
-                    p.WaitForExit();
-
-                    // Console.Out.Write(stdout);
-                    // Console.Error.Write(stderr);
-                }
+                startInfo.ArgumentList.Add(arg.CommandLine());
             }
-            catch (Exception e)
-            {
-                Console.Error.Write(e.Message);
-                throw new Exception("There was an exception running process.");
-
-            }
+            processes.Add(new Process { StartInfo = startInfo });
         }
+
+        // Final pipe item
+        var lastStartInfo = new ProcessStartInfo
+        {
+            FileName = listItems[^1].Items[0].CommandLine(),
+            RedirectStandardInput = true,
+            RedirectStandardOutput = listItems[^1].StandardOutFile is not null,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        foreach (var arg in listItems[^1].Items.Skip(1))
+        {
+            lastStartInfo.ArgumentList.Add(arg.CommandLine());
+        }
+        processes.Add(new Process() { StartInfo = lastStartInfo}) ;
+
+        foreach (var p in processes) p.Start();
+
+        string? stdinFile = firstList.StandardInputFile;
+
+        if (stdinFile is not null)
+        {
+            using FileStream s = new(stdinFile, FileMode.Open);
+            processes[0].StandardInput.BaseStream.Write(ReadAllBytesFromStream(s));
+        }
+
+        for (int i = 0; i < processes.Count - 1; i++)
+        {
+            using var output = processes[i].StandardOutput.BaseStream;
+            using var input = processes[i + 1].StandardInput.BaseStream;
+            processes[i].StandardOutput.BaseStream.CopyTo(processes[i + 1].StandardInput.BaseStream);
+        }
+
+        string? stdoutFile = listItems[^1].StandardOutFile;
+        if (stdoutFile is not null)
+        {
+            using FileStream s = new(stdoutFile, FileMode.Truncate);
+            var content = ReadAllBytesFromStream(processes[^1].StandardOutput.BaseStream);
+            s.Write(content);
+        }
+
+        foreach (var p in processes) p.WaitForExit();
+
+        return new EvalResult(true, -1);
+    }
+
+    public byte[] ReadAllBytesFromStream(Stream stream)
+    {
+        using MemoryStream ms = new();
+        stream.CopyTo(ms);
+        return ms.ToArray();
     }
 }
 
@@ -943,7 +1078,8 @@ public enum TokenType
     LESSTHANOREQUAL,
     LESSTHAN,
     GREATERTHAN,
-    PLUS
+    PLUS,
+    PIPE
 }
 
 public class TokenNew
@@ -1142,9 +1278,9 @@ public class LoopToken : Token
     public override string TokenType() => "loop";
 }
 
-public class MShellObject : OneOfBase<LiteralToken, MShellList, MShellQuotation, IntToken, MShellBool, MShellString>
+public class MShellObject : OneOfBase<LiteralToken, MShellList, MShellQuotation, IntToken, MShellBool, MShellString, MShellPipe>
 {
-    protected MShellObject(OneOf<LiteralToken, MShellList, MShellQuotation, IntToken, MShellBool, MShellString> input) : base(input)
+    protected MShellObject(OneOf<LiteralToken, MShellList, MShellQuotation, IntToken, MShellBool, MShellString, MShellPipe> input) : base(input)
     {
     }
 
@@ -1156,7 +1292,9 @@ public class MShellObject : OneOfBase<LiteralToken, MShellList, MShellQuotation,
             quotation => "Quotation",
             token => "Integer",
             boolVal => "Boolean",
-            stringVal => "String"
+            stringVal => "String",
+            pipe => "Pipeline"
+
         );
     }
 
@@ -1168,7 +1306,8 @@ public class MShellObject : OneOfBase<LiteralToken, MShellList, MShellQuotation,
             quotation => false,
             intToken => true,
             boolVal => false,
-            stringVal => true
+            stringVal => true,
+            pipe => false
         );
     }
 
@@ -1180,7 +1319,8 @@ public class MShellObject : OneOfBase<LiteralToken, MShellList, MShellQuotation,
              quotation => false,
              intToken => true,
              boolVal => false,
-             stringVal => false
+             stringVal => false,
+             pipe => false
          );
     }
 
@@ -1192,7 +1332,8 @@ public class MShellObject : OneOfBase<LiteralToken, MShellList, MShellQuotation,
             quotation => throw new NotImplementedException(),
             intToken => (double)intToken.IntVal,
             boolVal => throw new NotImplementedException(),
-            stringVal => throw new NotImplementedException()
+            stringVal => throw new NotImplementedException(),
+            pipe => throw new NotImplementedException()
         );
     }
 
@@ -1204,7 +1345,8 @@ public class MShellObject : OneOfBase<LiteralToken, MShellList, MShellQuotation,
             quotation => throw new NotImplementedException(),
             intToken => intToken.IntVal.ToString(),
             boolVal => throw new NotImplementedException(),
-            stringVal => stringVal.Content
+            stringVal => stringVal.Content,
+            pipe => throw new NotImplementedException()
         );
     }
 
@@ -1227,37 +1369,43 @@ public class MShellObject : OneOfBase<LiteralToken, MShellList, MShellQuotation,
     public static explicit operator LiteralToken(MShellObject t) => t.AsT0;
 
     public bool TryPickLiteral(out LiteralToken l) => TryPickT0(out l, out _);
-    public bool TryPickLiteral(out LiteralToken l, out OneOf<MShellList, MShellQuotation, IntToken, MShellBool, MShellString> remainder) => TryPickT0(out l, out remainder);
+    public bool TryPickLiteral(out LiteralToken l, out OneOf<MShellList, MShellQuotation, IntToken, MShellBool, MShellString, MShellPipe> remainder) => TryPickT0(out l, out remainder);
 
     public static implicit operator MShellObject(MShellList t) => new(t);
     public static explicit operator MShellList(MShellObject t) => t.AsT1;
 
     public bool TryPickList(out MShellList l) => TryPickT1(out l, out _);
-    public bool TryPickList(out MShellList l, out OneOf<LiteralToken, MShellQuotation, IntToken, MShellBool, MShellString> remainder) => TryPickT1(out l, out remainder);
+    public bool TryPickList(out MShellList l, out OneOf<LiteralToken, MShellQuotation, IntToken, MShellBool, MShellString, MShellPipe> remainder) => TryPickT1(out l, out remainder);
 
     public static implicit operator MShellObject(MShellQuotation t) => new(t);
     public static explicit operator MShellQuotation(MShellObject t) => t.AsT2;
 
     public bool TryPickQuotation(out MShellQuotation l) => TryPickT2(out l, out _);
-    public bool TryPickQuotation(out MShellQuotation l, out OneOf<LiteralToken, MShellList, IntToken, MShellBool, MShellString> remainder) => TryPickT2(out l, out remainder);
+    public bool TryPickQuotation(out MShellQuotation l, out OneOf<LiteralToken, MShellList, IntToken, MShellBool, MShellString, MShellPipe> remainder) => TryPickT2(out l, out remainder);
 
     public static implicit operator MShellObject(IntToken t) => new(t);
     public static explicit operator IntToken(MShellObject t) => t.AsT3;
 
     public bool TryPickIntToken(out IntToken l) => TryPickT3(out l, out _);
-    public bool TryPickIntToken(out IntToken l, out OneOf<LiteralToken, MShellList, MShellQuotation, MShellBool, MShellString> remainder) => TryPickT3(out l, out remainder);
+    public bool TryPickIntToken(out IntToken l, out OneOf<LiteralToken, MShellList, MShellQuotation, MShellBool, MShellString, MShellPipe> remainder) => TryPickT3(out l, out remainder);
 
     public static implicit operator MShellObject(MShellBool t) => new(t);
     public static explicit operator MShellBool(MShellObject t) => t.AsT4;
 
     public bool TryPickBool(out MShellBool l) => TryPickT4(out l, out _);
-    public bool TryPickBool(out MShellBool l, out OneOf<LiteralToken, MShellList, MShellQuotation, IntToken, MShellString> remainder) => TryPickT4(out l, out remainder);
+    public bool TryPickBool(out MShellBool l, out OneOf<LiteralToken, MShellList, MShellQuotation, IntToken, MShellString, MShellPipe> remainder) => TryPickT4(out l, out remainder);
 
     public static implicit operator MShellObject(MShellString t) => new(t);
     public static explicit operator MShellString(MShellObject t) => t.AsT5;
 
     public bool TryPickString(out MShellString l) => TryPickT5(out l, out _);
-    public bool TryPickString(out MShellString l, out OneOf<LiteralToken, MShellList, MShellQuotation, IntToken, MShellBool> remainder) => TryPickT5(out l, out remainder);
+    public bool TryPickString(out MShellString l, out OneOf<LiteralToken, MShellList, MShellQuotation, IntToken, MShellBool, MShellPipe> remainder) => TryPickT5(out l, out remainder);
+
+    public static implicit operator MShellObject(MShellPipe t) => new(t);
+    public static explicit operator MShellPipe(MShellObject t) => t.AsT6;
+
+    public bool TryPickPipe(out MShellPipe l) => TryPickT6(out l, out _);
+    public bool TryPickPipe(out MShellPipe l, out OneOf<LiteralToken, MShellList, MShellQuotation, IntToken, MShellBool, MShellString> remainder) => TryPickT6(out l, out remainder);
 
 
     public string DebugString()
@@ -1268,7 +1416,8 @@ public class MShellObject : OneOfBase<LiteralToken, MShellList, MShellQuotation,
             quotation => "(" + string.Join(" ", quotation.Tokens.Select(o => o.RawText)) + ")",
             token => token.IntVal.ToString(),
             boolVal => boolVal.Value.ToString(),
-            stringVal => stringVal.RawString
+            stringVal => stringVal.RawString,
+            pipeline => string.Join(" | ", pipeline.List.Items.Select(o => o.DebugString()))
         );
     }
 
@@ -1301,11 +1450,11 @@ public class MShellQuotation
 public class MShellList
 {
     public string? StandardOutFile { get; set; }
+    public string? StandardInputFile { get; set; }
     public readonly List<MShellObject> Items;
 
-    public MShellList(IEnumerable<MShellObject> items, string? standardOutFile = null)
+    public MShellList(IEnumerable<MShellObject> items)
     {
-        StandardOutFile = standardOutFile;
         Items = items.ToList();
     }
 }
@@ -1359,6 +1508,16 @@ public class MShellString
         }
 
         return b.ToString();
+    }
+}
+
+public class MShellPipe
+{
+    public MShellList List { get; }
+
+    public MShellPipe(MShellList list)
+    {
+        List = list;
     }
 }
 
