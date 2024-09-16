@@ -14,8 +14,6 @@ jobs:
       uses: actions/setup-dotnet@v4
       with:
         dotnet-version: 8
-    - name: Install GNU Parallel
-      run: sudo apt-get install parallel
     - name: Build
       run: dotnet build
     - name: Set PATH
