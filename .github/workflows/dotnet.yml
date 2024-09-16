@@ -21,4 +21,4 @@ jobs:
     - name: Set PATH
       run: realpath ./mshell/bin/Debug/net8.0 > "$GITHUB_PATH"
     - name: Test Files
-      run: cd mshell/test && ./test.sh
+      run: cd mshell/tests && ./test.sh
