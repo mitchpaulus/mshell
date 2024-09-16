@@ -48,7 +48,7 @@ class Program
         }
 
         Evaluator e = new(false);
-        EvalResult result = e.Evaluate(tokens, new Stack<MShellObject>());
+        EvalResult result = e.Evaluate(tokens, new Stack<MShellObject>(), new EvaluateContext());
 
         return result.Success ? 0 : 1;
 
@@ -166,6 +166,7 @@ public class Lexer
         if (literal == "-") return MakeToken(TokenType.MINUS);
         if (literal == "+") return MakeToken(TokenType.PLUS);
         if (literal == "=") return MakeToken(TokenType.EQUALS);
+        if (literal == "x") return MakeToken(TokenType.INTERPRET);
         if (literal == "if") return MakeToken(TokenType.IF);
         if (literal == "loop") return MakeToken(TokenType.LOOP);
         if (literal == "break") return MakeToken(TokenType.BREAK);
@@ -255,7 +256,7 @@ public class Evaluator
 
     private EvalResult FailResult() => new EvalResult(false, -1);
 
-    public EvalResult Evaluate(List<TokenNew> tokens, Stack<MShellObject> stack)
+    public EvalResult Evaluate(List<TokenNew> tokens, Stack<MShellObject> stack, EvaluateContext context)
     {
         int index = 0;
 
@@ -312,7 +313,7 @@ public class Evaluator
                             {
                                 Stack<MShellObject> listStack = new();
                                 var tokensWithinList = tokens.GetRange(leftIndex + 1, index - leftIndex - 1).ToList();
-                                var result = Evaluate(tokensWithinList, listStack);
+                                var result = Evaluate(tokensWithinList, listStack, context);
                                 if (!result.Success) return result;
                                 if (result.BreakNum > 0)
                                 {
@@ -430,7 +431,7 @@ public class Evaluator
                         for (int i = 0; i < qList.Items.Count - 1; i += 2)
                         {
                             MShellQuotation q = qList.Items[i].AsT2;
-                            var result = Evaluate(q.Tokens, stack);
+                            var result = Evaluate(q.Tokens, stack, context);
                             if (!result.Success) return FailResult();
                             if (result.BreakNum > 0)
                             {
@@ -479,7 +480,7 @@ public class Evaluator
                             }
 
                             MShellQuotation q = qList.Items[trueIndex + 1].AsQuotation;
-                            var result = Evaluate(q.Tokens, stack);
+                            var result = Evaluate(q.Tokens, stack, context);
                             if (!result.Success) return FailResult();
                             // If we broke during the evaluation, pass it up the eval stack
                             if (result.BreakNum != -1) return result;
@@ -494,7 +495,7 @@ public class Evaluator
                             }
 
                             MShellQuotation q = qList.Items[^1].AsQuotation;
-                            var result = Evaluate(q.Tokens, stack);
+                            var result = Evaluate(q.Tokens, stack, context);
                             if (!result.Success) return FailResult();
                             // If we broke during the evaluation, pass it up the eval stack
                             if (result.BreakNum != -1) return result;
@@ -524,7 +525,7 @@ public class Evaluator
                         _ => FailWithMessage("Cannot execute a quotation.\n"),
                         _ => FailWithMessage("Cannot execute an integer.\n"),
                         _ => FailWithMessage("Cannot execute a boolean.\n"),
-                        _ => FailWithMessage("Cannot execute a string.\n"),
+                        str => RunProcess(new MShellList(new List<MShellObject>(1) { str })),
                         RunProcess
                     );
 
@@ -532,8 +533,7 @@ public class Evaluator
                 }
                 else
                 {
-                    Console.Error.Write("Nothing on stack to execute.\n");
-                    return FailResult();
+                    return FailWithMessage("Nothing on stack to execute.\n");
                 }
                 index++;
             }
@@ -554,7 +554,7 @@ public class Evaluator
                         int loopCount = 1;
                         while (loopCount < 15000)
                         {
-                            EvalResult result = Evaluate(o.AsQuotation.Tokens, stack);
+                            EvalResult result = Evaluate(o.AsQuotation.Tokens, stack, context);
                             if (!result.Success) return FailResult();
 
                             if ((_loopDepth + 1) - result.BreakNum <= thisLoopDepth) break;
@@ -1079,7 +1079,8 @@ public enum TokenType
     LESSTHAN,
     GREATERTHAN,
     PLUS,
-    PIPE
+    PIPE,
+    INTERPRET,
 }
 
 public class TokenNew
@@ -1533,4 +1534,9 @@ public class EvalResult
         Success = success;
         BreakNum = breakNum;
     }
+}
+public class EvaluateContext()
+{
+    public string? StandardInput { get; set; } = null;
+    public string? StandardOutput { get; set; } = null;
 }
