@@ -48,7 +48,7 @@ class Program
         }
 
         Evaluator e = new(false);
-        EvalResult result = e.Evaluate(tokens, new Stack<MShellObject>());
+        EvalResult result = e.Evaluate(tokens, new Stack<MShellObject>(), new ExecuteContext());
 
         return result.Success ? 0 : 1;
 
@@ -166,6 +166,7 @@ public class Lexer
         if (literal == "-") return MakeToken(TokenType.MINUS);
         if (literal == "+") return MakeToken(TokenType.PLUS);
         if (literal == "=") return MakeToken(TokenType.EQUALS);
+        if (literal == "x") return MakeToken(TokenType.INTERPRET);
         if (literal == "if") return MakeToken(TokenType.IF);
         if (literal == "loop") return MakeToken(TokenType.LOOP);
         if (literal == "break") return MakeToken(TokenType.BREAK);
@@ -255,7 +256,7 @@ public class Evaluator
 
     private EvalResult FailResult() => new EvalResult(false, -1);
 
-    public EvalResult Evaluate(List<TokenNew> tokens, Stack<MShellObject> stack)
+    public EvalResult Evaluate(List<TokenNew> tokens, Stack<MShellObject> stack, ExecuteContext context)
     {
         int index = 0;
 
@@ -312,7 +313,7 @@ public class Evaluator
                             {
                                 Stack<MShellObject> listStack = new();
                                 var tokensWithinList = tokens.GetRange(leftIndex + 1, index - leftIndex - 1).ToList();
-                                var result = Evaluate(tokensWithinList, listStack);
+                                var result = Evaluate(tokensWithinList, listStack, context);
                                 if (!result.Success) return result;
                                 if (result.BreakNum > 0)
                                 {
@@ -430,7 +431,7 @@ public class Evaluator
                         for (int i = 0; i < qList.Items.Count - 1; i += 2)
                         {
                             MShellQuotation q = qList.Items[i].AsT2;
-                            var result = Evaluate(q.Tokens, stack);
+                            var result = Evaluate(q.Tokens, stack, context);
                             if (!result.Success) return FailResult();
                             if (result.BreakNum > 0)
                             {
@@ -479,7 +480,7 @@ public class Evaluator
                             }
 
                             MShellQuotation q = qList.Items[trueIndex + 1].AsQuotation;
-                            var result = Evaluate(q.Tokens, stack);
+                            var result = Evaluate(q.Tokens, stack, context);
                             if (!result.Success) return FailResult();
                             // If we broke during the evaluation, pass it up the eval stack
                             if (result.BreakNum != -1) return result;
@@ -494,7 +495,7 @@ public class Evaluator
                             }
 
                             MShellQuotation q = qList.Items[^1].AsQuotation;
-                            var result = Evaluate(q.Tokens, stack);
+                            var result = Evaluate(q.Tokens, stack, context);
                             if (!result.Success) return FailResult();
                             // If we broke during the evaluation, pass it up the eval stack
                             if (result.BreakNum != -1) return result;
@@ -519,21 +520,20 @@ public class Evaluator
                 if (stack.TryPop(out var arg))
                 {
                     EvalResult result = arg.Match(
-                        literalToken => RunProcess(new MShellList(new List<MShellObject>(1) { literalToken })),
-                        RunProcess,
+                        literalToken => RunProcess(new MShellList(new List<MShellObject>(1) { literalToken }), context),
+                        list => RunProcess(list, context),
                         _ => FailWithMessage("Cannot execute a quotation.\n"),
                         _ => FailWithMessage("Cannot execute an integer.\n"),
                         _ => FailWithMessage("Cannot execute a boolean.\n"),
-                        _ => FailWithMessage("Cannot execute a string.\n"),
-                        RunProcess
+                        str => RunProcess(new MShellList(new List<MShellObject>(1) { str }), context),
+                        pipe => RunProcess(pipe, context)
                     );
 
                     if (!result.Success) return result;
                 }
                 else
                 {
-                    Console.Error.Write("Nothing on stack to execute.\n");
-                    return FailResult();
+                    return FailWithMessage("Nothing on stack to execute.\n");
                 }
                 index++;
             }
@@ -554,7 +554,7 @@ public class Evaluator
                         int loopCount = 1;
                         while (loopCount < 15000)
                         {
-                            EvalResult result = Evaluate(o.AsQuotation.Tokens, stack);
+                            EvalResult result = Evaluate(o.AsQuotation.Tokens, stack, context);
                             if (!result.Success) return FailResult();
 
                             if ((_loopDepth + 1) - result.BreakNum <= thisLoopDepth) break;
@@ -800,17 +800,29 @@ public class Evaluator
                 var arg1 = stack.Pop();
                 var arg2 = stack.Pop();
 
-                if (arg1.TryPickString(out var s) && arg2.TryPickList(out var list))
+                if (arg1.IsNumeric() && arg2.IsNumeric())
+                {
+                    _push(new MShellBool(arg2.FloatNumeric() > arg1.FloatNumeric()), stack);
+                }
+                else if (arg1.TryPickString(out var s) && arg2.TryPickList(out var list))
                 {
                     list.StandardOutFile = s.Content;
+                    // Push the list back on the stack
+                    _push(list, stack);
+                }
+                else if (arg1.TryPickString(out s) && arg2.TryPickQuotation(out var quotation))
+                {
+                    using FileStream stream = new FileStream(s.Content, FileMode.OpenOrCreate);
+                    // Truncate file, so all other operations can be a Append.
+                    stream.SetLength(0);
+                    quotation.StandardOutputFile = s.Content;
+                    _push(quotation, stack);
                 }
                 else
                 {
-                     return FailWithMessage($"Currently only implemented redirection for '{t.RawText}' operator.\n");
+                     return FailWithMessage($"Currently only implemented redirection for '{t.RawText}' operator or numerics.\n");
                 }
 
-                // Push the list back on the stack
-                _push(list, stack);
             }
             else if (t.TokenType == TokenType.PIPE)
             {
@@ -831,6 +843,19 @@ public class Evaluator
                 else
                 {
                     return FailWithMessage($"'{t.RawText}' operator requires at least one object on the stack.\n");
+                }
+            }
+            else if (t.TokenType == TokenType.INTERPRET)
+            {
+                index++;
+                if (stack.TryPop(out var o))
+                {
+                    if (o.TryPickQuotation(out var quotation))
+                    {
+                        var evalResult = Evaluate(quotation.Tokens, stack, quotation.Context);
+                        if (!evalResult.Success) return evalResult;
+                        if (evalResult.BreakNum != -1) return evalResult;
+                    }
                 }
             }
             else
@@ -861,7 +886,7 @@ public class Evaluator
         }
     }
 
-    public EvalResult RunProcess(MShellList list)
+    public EvalResult RunProcess(MShellList list, ExecuteContext context)
     {
         if (list.Items.Any(o => !o.IsCommandLineable()))
         {
@@ -873,13 +898,15 @@ public class Evaluator
 
         if (arguments.Count == 0) return FailWithMessage("Cannot execute an empty list");
 
+        // Console.Write(context);
+
         ProcessStartInfo info = new()
         {
             FileName = arguments[0],
             UseShellExecute = false,
             RedirectStandardError = false,
             RedirectStandardInput = list.StandardInputFile is not null,
-            RedirectStandardOutput = list.StandardOutFile is not null,
+            RedirectStandardOutput = list.StandardOutFile is not null || context.StandardOutput is not null,
             CreateNoWindow = true,
         };
         foreach (string arg in arguments.Skip(1)) info.ArgumentList.Add(arg);
@@ -904,6 +931,12 @@ public class Evaluator
                     string content = p.StandardOutput.ReadToEnd();
                     w.Write(content);
                 }
+                else if (context.StandardOutput is not null)
+                {
+                    // TODO: Use the BeginOutputReadLine methods instead to not have to have the entire thing in memory.
+                    using FileStream stream = new FileStream(context.StandardOutput, FileMode.Append);
+                    p.StandardOutput.BaseStream.CopyTo(stream);
+                }
 
                 if (list.StandardInputFile is not null)
                 {
@@ -919,13 +952,13 @@ public class Evaluator
         }
         catch (Exception e)
         {
-            return FailWithMessage($"There was an exception running process with args { string.Join(", ", arguments.Select(s => $"'{s}'"))  }.\n");
+            return FailWithMessage($"There was an exception running process with args { string.Join(", ", arguments.Select(s => $"'{s}'"))  }.\n{e.Message}\n");
         }
 
         return new EvalResult(true, -1);
     }
 
-    public EvalResult RunProcess(MShellPipe pipe)
+    public EvalResult RunProcess(MShellPipe pipe, ExecuteContext context)
     {
         if (pipe.List.Items.Count == 0) return new EvalResult(true, -1);
 
@@ -942,7 +975,7 @@ public class Evaluator
             }
         }
 
-        if (listItems.Count == 1) return RunProcess(listItems[0]);
+        if (listItems.Count == 1) return RunProcess(listItems[0], context);
 
         // Minimum of two here
         List<Process> processes = new();
@@ -989,7 +1022,7 @@ public class Evaluator
         {
             FileName = listItems[^1].Items[0].CommandLine(),
             RedirectStandardInput = true,
-            RedirectStandardOutput = listItems[^1].StandardOutFile is not null,
+            RedirectStandardOutput = listItems[^1].StandardOutFile is not null || context.StandardOutput is not null,
             UseShellExecute = false,
             CreateNoWindow = true,
         };
@@ -1006,7 +1039,7 @@ public class Evaluator
         if (stdinFile is not null)
         {
             using FileStream s = new(stdinFile, FileMode.Open);
-            processes[0].StandardInput.BaseStream.Write(ReadAllBytesFromStream(s));
+            s.CopyTo(processes[0].StandardInput.BaseStream);
         }
 
         for (int i = 0; i < processes.Count - 1; i++)
@@ -1020,8 +1053,12 @@ public class Evaluator
         if (stdoutFile is not null)
         {
             using FileStream s = new(stdoutFile, FileMode.Truncate);
-            var content = ReadAllBytesFromStream(processes[^1].StandardOutput.BaseStream);
-            s.Write(content);
+            processes[^1].StandardOutput.BaseStream.CopyTo(s);
+        }
+        else if (context.StandardOutput is not null)
+        {
+            using FileStream s = new(context.StandardOutput, FileMode.Append);
+            processes[^1].StandardOutput.BaseStream.CopyTo(s);
         }
 
         foreach (var p in processes) p.WaitForExit();
@@ -1079,7 +1116,8 @@ public enum TokenType
     LESSTHAN,
     GREATERTHAN,
     PLUS,
-    PIPE
+    PIPE,
+    INTERPRET,
 }
 
 public class TokenNew
@@ -1439,6 +1477,15 @@ public class MShellQuotation
     private int EndIndexExc { get; }
     public List<TokenNew> Tokens { get; }
 
+    public string? StandardInputFile { get; set; } = null;
+    public string? StandardOutputFile { get; set; }= null;
+
+    public ExecuteContext Context => new()
+    {
+        StandardOutput = StandardOutputFile,
+        StandardInput = StandardInputFile,
+    };
+
     public MShellQuotation(List<TokenNew> tokens, int startIndex, int endIndexExc)
     {
         StartIndex = startIndex;
@@ -1533,4 +1580,11 @@ public class EvalResult
         Success = success;
         BreakNum = breakNum;
     }
+}
+public class ExecuteContext()
+{
+    public string? StandardInput { get; set; } = null;
+    public string? StandardOutput { get; set; } = null;
+
+    public override string ToString() => $"stdin: '{StandardInput}'\nstdout: '{StandardOutput}'\n";
 }

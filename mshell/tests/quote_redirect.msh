@@ -1,0 +1,8 @@
+# FILE:hello_world_quote_redirect.txt
+[echo "Something in original file, to be truncated below."] "hello_world_quote_redirect.txt" >;
+
+(
+
+    [echo "Hello,"];
+    [echo "World!"];
+) "hello_world_quote_redirect.txt" > x
