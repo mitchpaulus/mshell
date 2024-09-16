@@ -519,17 +519,19 @@ public class Evaluator
             {
                 if (stack.TryPop(out var arg))
                 {
-                    EvalResult result = arg.Match(
+                    (EvalResult result, int exitCode) = arg.Match(
                         literalToken => RunProcess(new MShellList(new List<MShellObject>(1) { literalToken }), context),
                         list => RunProcess(list, context),
-                        _ => FailWithMessage("Cannot execute a quotation.\n"),
-                        _ => FailWithMessage("Cannot execute an integer.\n"),
-                        _ => FailWithMessage("Cannot execute a boolean.\n"),
+                        _ => (FailWithMessage("Cannot execute a quotation.\n"), 1),
+                        _ => (FailWithMessage("Cannot execute an integer.\n"), 1),
+                        _ => (FailWithMessage("Cannot execute a boolean.\n"), 1),
                         str => RunProcess(new MShellList(new List<MShellObject>(1) { str }), context),
                         pipe => RunProcess(pipe, context)
                     );
 
                     if (!result.Success) return result;
+
+                    _push(new IntToken(new TokenNew(t.Line, t.Column, t.Start, exitCode.ToString(), TokenType.INTEGER)), stack);
                 }
                 else
                 {
@@ -886,17 +888,17 @@ public class Evaluator
         }
     }
 
-    public EvalResult RunProcess(MShellList list, ExecuteContext context)
+    public (EvalResult, int) RunProcess(MShellList list, ExecuteContext context)
     {
         if (list.Items.Any(o => !o.IsCommandLineable()))
         {
             var badTypes = list.Items.Where(o => !o.IsCommandLineable());
-            return FailWithMessage($"Can't handle a process argument of type {string.Join(", ", badTypes.Select(o => o.TypeName()))}.");
+            return (FailWithMessage($"Can't handle a process argument of type {string.Join(", ", badTypes.Select(o => o.TypeName()))}."), 1);
         }
 
         List<string> arguments = list.Items.Select(o => o.CommandLine()).ToList();
 
-        if (arguments.Count == 0) return FailWithMessage("Cannot execute an empty list");
+        if (arguments.Count == 0) return (FailWithMessage("Cannot execute an empty list"), 1);
 
         // Console.Write(context);
 
@@ -952,15 +954,15 @@ public class Evaluator
         }
         catch (Exception e)
         {
-            return FailWithMessage($"There was an exception running process with args { string.Join(", ", arguments.Select(s => $"'{s}'"))  }.\n{e.Message}\n");
+            return (FailWithMessage($"There was an exception running process with args { string.Join(", ", arguments.Select(s => $"'{s}'"))  }.\n{e.Message}\n"), 1);
         }
 
-        return new EvalResult(true, -1);
+        return (new EvalResult(true, -1), p.ExitCode);
     }
 
-    public EvalResult RunProcess(MShellPipe pipe, ExecuteContext context)
+    public (EvalResult, int) RunProcess(MShellPipe pipe, ExecuteContext context)
     {
-        if (pipe.List.Items.Count == 0) return new EvalResult(true, -1);
+        if (pipe.List.Items.Count == 0) return (new EvalResult(true, -1), 1);
 
         List<MShellList> listItems = new List<MShellList>();
         foreach (var i in pipe.List.Items)
@@ -971,7 +973,7 @@ public class Evaluator
             }
             else
             {
-                return FailWithMessage($"Pipelines are only supported with list items currently.\n");
+                return (FailWithMessage($"Pipelines are only supported with list items currently.\n"), 1);
             }
         }
 
@@ -983,7 +985,7 @@ public class Evaluator
 
         if (firstList.Items.Any(i => !i.IsCommandLineable()))
         {
-            return FailWithMessage("Not all elements in list are valid for command.\n");
+            return (FailWithMessage("Not all elements in list are valid for command.\n"), 1);
         }
 
         var firstProcessStartInfo = new ProcessStartInfo()
@@ -1063,7 +1065,7 @@ public class Evaluator
 
         foreach (var p in processes) p.WaitForExit();
 
-        return new EvalResult(true, -1);
+        return (new EvalResult(true, -1), 1);
     }
 
     public byte[] ReadAllBytesFromStream(Stream stream)
