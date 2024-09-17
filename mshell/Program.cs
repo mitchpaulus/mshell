@@ -116,6 +116,8 @@ public class Lexer
                 return MakeToken(TokenType.EXECUTE);
             case '|':
                 return MakeToken(TokenType.PIPE);
+            case '?':
+                return MakeToken(TokenType.QUESTION);
             default:
                 return ParseLiteralOrNumber();
         }
@@ -157,7 +159,7 @@ public class Lexer
         while (true)
         {
             char c = Peek();
-            if (!char.IsWhiteSpace(c) && c != ']' && c != ')' && c != '<' && c != '>' && c != ';') Advance();
+            if (!char.IsWhiteSpace(c) && c != ']' && c != ')' && c != '<' && c != '>' && c != ';' && c != '?') Advance();
             else break;
         }
 
@@ -278,6 +280,23 @@ public class Evaluator
                         _push(o, stack);
                     }
                     else return FailWithMessage($"Nothing on stack to duplicate for 'dup'.\n");
+                }
+                else if (t.RawText == "drop")
+                {
+                    if (!stack.TryPop(out MShellObject? _))
+                    {
+                        return FailWithMessage($"Nothing on stack to drop.\n");
+                    }
+                }
+                else if (t.RawText == ".s")
+                {
+                    Console.Error.Write("Current stack:");
+
+                    foreach (var v in stack)
+                    {
+                        Console.Error.Write(v.DebugString());
+                        Console.Error.Write('\n');
+                    }
                 }
                 else
                 {
@@ -460,7 +479,7 @@ public class Evaluator
                                 }
                                 else
                                 {
-                                    Console.Error.Write($"Can't evaluate condition for type.\n");
+                                    return FailWithMessage($"Can't evaluate condition for type {condition.TypeName()}.\n");
                                 }
                             }
                             else
@@ -515,7 +534,7 @@ public class Evaluator
 
                 index++;
             }
-            else if (t.TokenType == TokenType.EXECUTE)
+            else if (t.TokenType == TokenType.EXECUTE || t.TokenType == TokenType.QUESTION)
             {
                 if (stack.TryPop(out var arg))
                 {
@@ -531,7 +550,10 @@ public class Evaluator
 
                     if (!result.Success) return result;
 
-                    _push(new IntToken(new TokenNew(t.Line, t.Column, t.Start, exitCode.ToString(), TokenType.INTEGER)), stack);
+                    if (t.TokenType == TokenType.QUESTION)
+                    {
+                        _push(new IntToken(new TokenNew(t.Line, t.Column, t.Start, exitCode.ToString(), TokenType.INTEGER)), stack);
+                    }
                 }
                 else
                 {
@@ -918,6 +940,7 @@ public class Evaluator
             StartInfo = info
         };
 
+        int exitCode;
         try
         {
             using (p)
@@ -947,9 +970,9 @@ public class Evaluator
                 }
 
                 p.WaitForExit();
-
                 // Console.Out.Write(stdout);
                 // Console.Error.Write(stderr);
+                exitCode = p.ExitCode;
             }
         }
         catch (Exception e)
@@ -957,7 +980,7 @@ public class Evaluator
             return (FailWithMessage($"There was an exception running process with args { string.Join(", ", arguments.Select(s => $"'{s}'"))  }.\n{e.Message}\n"), 1);
         }
 
-        return (new EvalResult(true, -1), p.ExitCode);
+        return (new EvalResult(true, -1), exitCode);
     }
 
     public (EvalResult, int) RunProcess(MShellPipe pipe, ExecuteContext context)
@@ -1064,8 +1087,10 @@ public class Evaluator
         }
 
         foreach (var p in processes) p.WaitForExit();
+        var exitCodes = processes.Select(process => process.ExitCode).ToList();
+        foreach (var p in processes) p.Dispose();
 
-        return (new EvalResult(true, -1), 1);
+        return (new EvalResult(true, -1), exitCodes.Last());
     }
 
     public byte[] ReadAllBytesFromStream(Stream stream)
@@ -1120,6 +1145,7 @@ public enum TokenType
     PLUS,
     PIPE,
     INTERPRET,
+    QUESTION
 }
 
 public class TokenNew

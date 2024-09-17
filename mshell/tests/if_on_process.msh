@@ -1,0 +1,7 @@
+[
+    # This is running the process command false. The '?' pushes the exit code on the stack when finished.
+    # 0 results in the true branch in mshell.
+    (["false"]?)
+    ([echo "The command run had a successful exit code"];)
+    ([echo "The command run had an unsuccessful code"];)
+] if
