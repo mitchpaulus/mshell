@@ -315,8 +315,7 @@ public class Evaluator
                     var currToken = tokens[index];
                     if (index >= tokens.Count || tokens[index].TokenType == TokenType.EOF)
                     {
-                        Console.Error.Write($"{currToken.Line}:{currToken.Column}: Found unbalanced bracket.\n");
-                        return FailResult();
+                        return FailWithMessage($"{currToken.Line}:{currToken.Column}: Found unbalanced bracket.\n");
                     }
 
                     if (tokens[index].TokenType == TokenType.LEFT_SQUARE_BRACKET)
@@ -336,8 +335,7 @@ public class Evaluator
                                 if (!result.Success) return result;
                                 if (result.BreakNum > 0)
                                 {
-                                    Console.Error.Write("Encountered break within list.\n");
-                                    return FailResult();
+                                    return FailWithMessage("Encountered break within list.\n");
                                 }
 
                                 MShellList l = new(listStack.Reverse());
@@ -350,8 +348,7 @@ public class Evaluator
                         }
                         else
                         {
-                            Console.Error.Write($"{currToken.Line}:{currToken.Column}: Found unbalanced square bracket.\n");
-                            return FailResult();
+                            return FailWithMessage($"{currToken.Line}:{currToken.Column}: Found unbalanced square bracket.\n");
                         }
 
                     }
@@ -366,8 +363,7 @@ public class Evaluator
             }
             else if (t.TokenType == TokenType.RIGHT_SQUARE_BRACKET)
             {
-                Console.Error.Write($"{t.Line}:{t.Column}: Found unbalanced list.\n");
-                return FailResult();
+                return FailWithMessage($"{t.Line}:{t.Column}: Found unbalanced list.\n");
             }
             else if (t.TokenType == TokenType.LEFT_PAREN)
             {
@@ -378,8 +374,7 @@ public class Evaluator
                 {
                     if (index >= tokens.Count || tokens[index].TokenType == TokenType.EOF)
                     {
-                        Console.Error.Write("Found unbalanced bracket.\n");
-                        return FailResult();
+                        return FailWithMessage("Found unbalanced bracket.\n");
                     }
 
                     if (tokens[index].TokenType == TokenType.LEFT_PAREN)
@@ -404,8 +399,7 @@ public class Evaluator
                         }
                         else
                         {
-                            Console.Error.Write("Found unbalanced quotation.\n");
-                            return FailResult();
+                            return FailWithMessage("Found unbalanced quotation.\n");
                         }
                     }
                     else
@@ -418,8 +412,7 @@ public class Evaluator
             }
             else if (t.TokenType == TokenType.RIGHT_PAREN)
             {
-                Console.Error.Write("Unbalanced parenthesis found.\n");
-                return FailResult();
+                return FailWithMessage("Unbalanced parenthesis found.\n");
             }
             else if (t.TokenType == TokenType.IF)
             {
@@ -429,8 +422,7 @@ public class Evaluator
                     {
                         if (qList.Items.Count < 2)
                         {
-                            Console.Error.Write("Quotation list for if should have a minimum of 2 elements.\n");
-                            return FailResult();
+                            return FailWithMessage("Quotation list for if should have a minimum of 2 elements.\n");
                         }
 
                         if (qList.Items.Any(i => !i.IsQuotation))
@@ -441,7 +433,6 @@ public class Evaluator
                                 Console.Error.Write(i.TypeName());
                                 Console.Error.Write('\n');
                             }
-
                             return FailResult();
                         }
 
@@ -454,8 +445,7 @@ public class Evaluator
                             if (!result.Success) return FailResult();
                             if (result.BreakNum > 0)
                             {
-                                Console.Error.Write("Found break during evaluation of if condition.\n");
-                                return FailResult();
+                                return FailWithMessage("Found break during evaluation of if condition.\n");
                             }
 
                             if (stack.TryPop(out var condition))
@@ -484,8 +474,7 @@ public class Evaluator
                             }
                             else
                             {
-                                Console.Error.Write("Evaluation of condition quotation removed all stacks.");
-                                return FailResult();
+                                return FailWithMessage("Evaluation of condition quotation removed all stacks.");
                             }
                         }
 
@@ -494,8 +483,7 @@ public class Evaluator
                             // Run the quotation on the index after the true index
                             if (!qList.Items[trueIndex + 1].IsQuotation)
                             {
-                                Console.Error.Write($"True branch of if statement must be quotation. Received a {qList.Items[trueIndex + 1].TypeName()}");
-                                return FailResult();
+                                return FailWithMessage($"True branch of if statement must be quotation. Received a {qList.Items[trueIndex + 1].TypeName()}.\n");
                             }
 
                             MShellQuotation q = qList.Items[trueIndex + 1].AsQuotation;
@@ -509,8 +497,7 @@ public class Evaluator
                             // Run the last quotation if there was no true condition.
                             if (!qList.Items[^1].IsQuotation)
                             {
-                                Console.Error.Write($"Else branch of if statement must be quotation. Received a {qList.Items[^1].TypeName()}");
-                                return FailResult();
+                                return FailWithMessage($"Else branch of if statement must be quotation. Received a {qList.Items[^1].TypeName()}.\n");
                             }
 
                             MShellQuotation q = qList.Items[^1].AsQuotation;
@@ -522,14 +509,12 @@ public class Evaluator
                     }
                     else
                     {
-                        Console.Error.Write("Argument for if expected to be a list of quotations.\n");
-                        return FailResult();
+                        return FailWithMessage("Argument for if expected to be a list of quotations.\n");
                     }
                 }
                 else
                 {
-                     Console.Error.Write("Nothing on stack for if.\n");
-                     return FailResult();
+                     return FailWithMessage("Nothing on stack for if.\n");
                 }
 
                 index++;
@@ -587,22 +572,19 @@ public class Evaluator
 
                         if (loopCount >= 15000)
                         {
-                            Console.Error.Write("Looks like infinite loop.\n");
-                            return FailResult();
+                            return FailWithMessage("Looks like infinite loop.\n");
                         }
 
                         index++;
                     }
                     else
                     {
-                        Console.Error.Write($"{t.Line}:{t.Column}: Expected quotation on top of stack for 'loop'.\n");
-                        return FailResult();
+                        return FailWithMessage($"{t.Line}:{t.Column}: Expected quotation on top of stack for 'loop'.\n");
                     }
                 }
                 else
                 {
-                    Console.Error.Write($"{t.Line}:{t.Column}: Quotations expected on stack for 'loop'.\n");
-                    return FailResult();
+                    return FailWithMessage($"{t.Line}:{t.Column}: Quotations expected on stack for 'loop'.\n");
                 }
             }
             else if (t.TokenType == TokenType.BREAK)
@@ -614,8 +596,7 @@ public class Evaluator
             {
                 if (stack.Count < 2)
                 {
-                    Console.Error.Write($"{stack} tokens on the stack are not enough for the '=' operator.\n");
-                    return FailResult();
+                    return FailWithMessage($"{stack} tokens on the stack are not enough for the '=' operator.\n");
                 }
 
                 var arg1 = stack.Pop();
@@ -627,8 +608,7 @@ public class Evaluator
                 }
                 else
                 {
-                    Console.Error.Write($"'=' is only currently implemented for integers. Received a {arg1.TypeName()} {arg1.DebugString()} {arg2.TypeName()} {arg2.DebugString()}\n");
-                    return FailResult();
+                    return FailWithMessage($"'=' is only currently implemented for integers. Received a {arg1.TypeName()} {arg1.DebugString()} {arg2.TypeName()} {arg2.DebugString()}\n");
                 }
 
                 index++;
@@ -637,8 +617,7 @@ public class Evaluator
             {
                 if (stack.Count < 1)
                 {
-                    Console.Error.Write($"No tokens found on the stack for the 'not' operator.\n");
-                    return FailResult();
+                    return FailWithMessage($"No tokens found on the stack for the 'not' operator.\n");
                 }
 
                 var arg = stack.Pop();
@@ -648,8 +627,7 @@ public class Evaluator
                 }
                 else
                 {
-                    Console.Error.Write($"Not operator only implemented for boolean variables. Found a {arg.TypeName()} on top of the stack..\n");
-                    return FailResult();
+                    return FailWithMessage($"Not operator only implemented for boolean variables. Found a {arg.TypeName()} on top of the stack..\n");
                 }
                 index++;
             }
@@ -657,8 +635,7 @@ public class Evaluator
             {
                 if (stack.Count < 2)
                 {
-                    Console.Error.Write($"Not enough tokens on the stack for the 'and' operator.\n");
-                    return FailResult();
+                   return FailWithMessage($"Not enough tokens on the stack for the 'and' operator.\n");
                 }
 
                 var arg1 = stack.Pop();
@@ -670,8 +647,7 @@ public class Evaluator
                 }
                 else
                 {
-                    Console.Error.Write($"'and' operator only implemented for boolean variables. Found a {arg1.TypeName()} and a {arg2.TypeName()} on top of the stack.\n");
-                    return FailResult();
+                    return FailWithMessage($"'and' operator only implemented for boolean variables. Found a {arg1.TypeName()} and a {arg2.TypeName()} on top of the stack.\n");
                 }
                 index++;
             }
@@ -679,8 +655,7 @@ public class Evaluator
             {
                 if (stack.Count < 2)
                 {
-                    Console.Error.Write($"Not enough tokens on the stack for the 'or' operator.\n");
-                    return FailResult();
+                    return FailWithMessage($"Not enough tokens on the stack for the 'or' operator.\n");
                 }
 
                 var arg1 = stack.Pop();
@@ -692,8 +667,7 @@ public class Evaluator
                 }
                 else
                 {
-                    Console.Error.Write($"'or' operator only implemented for boolean variables. Found a {arg1.TypeName()} and a {arg2.TypeName()} on top of the stack.\n");
-                    return FailResult();
+                    return FailWithMessage($"'or' operator only implemented for boolean variables. Found a {arg1.TypeName()} and a {arg2.TypeName()} on top of the stack.\n");
                 }
                 index++;
             }
@@ -720,8 +694,7 @@ public class Evaluator
                 }
                 else
                 {
-                    Console.Error.Write($"Nothing on stack to store into variable '{t.RawText.Substring(1, t.RawText.Length - 1)}'.\n");
-                    return FailResult();
+                    return FailWithMessage($"Nothing on stack to store into variable '{t.RawText.Substring(1, t.RawText.Length - 1)}'.\n");
                 }
 
                 index++;
@@ -884,8 +857,7 @@ public class Evaluator
             }
             else
             {
-                Console.Error.Write($"Token type '{t.TokenType}' (Raw Token: '{t.RawText}') not implemented yet.\n");
-                return FailResult();
+                return FailWithMessage($"Token type '{t.TokenType}' (Raw Token: '{t.RawText}') not implemented yet.\n");
                 // throw new NotImplementedException($"Token type {t.TokenType()} not implemented yet.");
             }
         }
