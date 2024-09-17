@@ -1,10 +1,16 @@
 # TODO
 
 - Floating point numbers
-- redirections
-- pipes
-- globbing
-- dictionaries
-- function definition
-- string slicing, string concatenation, other string/path operations
+- More redirections
+- Additional pipe syntax
+- Globbing
+- Dictionaries
+- Function definition
+- String/list slicing, other string/path operations
 - Arguments from outer CLI
+- Tilde Expansion
+- Command substitution
+- Process substitution
+- For loop construction
+- While read construction
+- Functional operators like `map`, `fold`, `filter`, etc.
