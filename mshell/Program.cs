@@ -300,7 +300,7 @@ public class Evaluator
                 }
                 else
                 {
-                    _push(new LiteralToken(t), stack);
+                    _push(new LiteralToken(t.RawText), stack);
                 }
 
                 index++;
@@ -783,9 +783,26 @@ public class Evaluator
                      int newInt = int2.IntVal + int1.IntVal;
                      _push(new IntToken(new TokenNew(t.Line, t.Column, t.Start, newInt.ToString(), TokenType.INTEGER)), stack);
                  }
+                 else if (arg1.TryPickString(out var string1) && arg2.TryPickString(out var string2))
+                 {
+                     string newString = string2.Content + string1.Content;
+                     _push(new MShellString(newString), stack);
+                 }
+                 else if (arg1.TryPickLiteral(out var literal1) && arg2.TryPickLiteral(out var literal2))
+                 {
+                     _push(new LiteralToken(literal2.Text() + literal1.Text()), stack);
+                 }
+                 else if (arg1.TryPickString(out string1) && arg2.TryPickLiteral(out literal2))
+                 {
+                     _push(new MShellString(literal2.Text() + string1.Content), stack);
+                 }
+                 else if (arg1.TryPickLiteral(out literal1) && arg2.TryPickString(out string2))
+                 {
+                     _push(new MShellString(string2.Content + literal1.Text()), stack);
+                 }
                  else
                  {
-                     return FailWithMessage($"Currently only support integers for '{t.RawText}' operator.\n");
+                     return FailWithMessage($"Currently only support integers for '{t.RawText}' operator. Top of stack was {arg1.TypeName()} and second to top was {arg2.TypeName()}.\n");
                  }
             }
             else if (t.TokenType == TokenType.GREATERTHAN)
@@ -1284,14 +1301,14 @@ public class DoubleToken : Token
 
 public class LiteralToken
 {
-    private readonly TokenNew _literal;
+    private readonly string _text;
 
-    public LiteralToken(TokenNew literal)
+    public LiteralToken(string text)
     {
-        _literal = literal;
+        _text = text;
     }
 
-    public string Text() => _literal.RawText;
+    public string Text() => _text;
 }
 
 public class IfToken : Token
@@ -1516,6 +1533,12 @@ public class MShellString
         string rawText = stringToken.RawText;
         RawString = rawText;
         Content = ParseRawToken(rawText);
+    }
+
+    public MShellString(string inputStr)
+    {
+        Content = inputStr;
+        RawString = inputStr;
     }
 
     private string ParseRawToken(string inputString)
