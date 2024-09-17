@@ -838,6 +838,35 @@ public class Evaluator
                 }
 
             }
+            else if (t.TokenType == TokenType.LESSTHAN)
+            {
+                // This can either be normal comparison for numbers, or it's a redirect on a list.
+                index++;
+                if (stack.Count < 2) return FailWithMessage($"'{t.RawText}' operator requires at least two objects on the stack. Found {stack.Count} object.\n");
+
+                var arg1 = stack.Pop();
+                var arg2 = stack.Pop();
+
+                if (arg1.IsNumeric() && arg2.IsNumeric())
+                {
+                    _push(new MShellBool(arg2.FloatNumeric() < arg1.FloatNumeric()), stack);
+                }
+                else if (arg1.TryPickString(out var s) && arg2.TryPickList(out var list))
+                {
+                    list.StandardInputFile = s.Content;
+                    // Push the list back on the stack
+                    _push(list, stack);
+                }
+                else if (arg1.TryPickString(out s) && arg2.TryPickQuotation(out var quotation))
+                {
+                    quotation.StandardInputFile = s.Content;
+                    _push(quotation, stack);
+                }
+                else
+                {
+                     return FailWithMessage($"Currently only implemented redirection for '{t.RawText}' operator or numerics.\n");
+                }
+            }
             else if (t.TokenType == TokenType.PIPE)
             {
                 index++;
@@ -867,6 +896,8 @@ public class Evaluator
                     if (o.TryPickQuotation(out var quotation))
                     {
                         var evalResult = Evaluate(quotation.Tokens, stack, quotation.Context);
+                        if (quotation.Context.StandardInput is not null) quotation.Context.StandardInput.Dispose();
+
                         if (!evalResult.Success) return evalResult;
                         if (evalResult.BreakNum != -1) return evalResult;
                     }
@@ -901,6 +932,7 @@ public class Evaluator
 
     public (EvalResult, int) RunProcess(MShellList list, ExecuteContext context)
     {
+
         if (list.Items.Any(o => !o.IsCommandLineable()))
         {
             var badTypes = list.Items.Where(o => !o.IsCommandLineable());
@@ -918,7 +950,7 @@ public class Evaluator
             FileName = arguments[0],
             UseShellExecute = false,
             RedirectStandardError = false,
-            RedirectStandardInput = list.StandardInputFile is not null,
+            RedirectStandardInput = list.StandardInputFile is not null || context.StandardInput is not null,
             RedirectStandardOutput = list.StandardOutFile is not null || context.StandardOutput is not null,
             CreateNoWindow = true,
         };
@@ -954,8 +986,14 @@ public class Evaluator
 
                 if (list.StandardInputFile is not null)
                 {
-                    using StreamWriter w = p.StandardInput;
-                    w.Write(File.ReadAllBytes(list.StandardInputFile));
+                    using FileStream s = new FileStream(list.StandardInputFile, FileMode.Open);
+                    s.CopyTo(p.StandardInput.BaseStream);
+                    p.StandardInput.Close();
+                }
+                else if (context.StandardInput is not null)
+                {
+                    context.StandardInput.CopyTo(p.StandardInput.BaseStream);
+                    p.StandardInput.Close();
                 }
 
                 p.WaitForExit();
@@ -1003,7 +1041,7 @@ public class Evaluator
         var firstProcessStartInfo = new ProcessStartInfo()
            {
                FileName = listItems[0].Items[0].CommandLine(),
-               RedirectStandardInput = firstList.StandardInputFile is not null,
+               RedirectStandardInput = firstList.StandardInputFile is not null || context.StandardInput is not null,
                RedirectStandardOutput = true,
                UseShellExecute = false,
                CreateNoWindow = true,
@@ -1054,6 +1092,13 @@ public class Evaluator
         {
             using FileStream s = new(stdinFile, FileMode.Open);
             s.CopyTo(processes[0].StandardInput.BaseStream);
+            processes[0].StandardInput.BaseStream.Close();
+        }
+        else if (context.StandardInput is not null)
+        {
+            // using FileStream fs = new(context.StandardInput, FileMode.Open);
+            context.StandardInput.CopyTo(processes[0].StandardInput.BaseStream);
+            processes[0].StandardInput.BaseStream.Close();
         }
 
         for (int i = 0; i < processes.Count - 1; i++)
@@ -1497,11 +1542,18 @@ public class MShellQuotation
     public string? StandardInputFile { get; set; } = null;
     public string? StandardOutputFile { get; set; }= null;
 
-    public ExecuteContext Context => new()
+    public ExecuteContext Context
     {
-        StandardOutput = StandardOutputFile,
-        StandardInput = StandardInputFile,
-    };
+        get
+        {
+            Stream? stdIn = (StandardInputFile is null) ? null : new FileStream(StandardInputFile, FileMode.Open);
+            return new ExecuteContext
+            {
+                StandardOutput = StandardOutputFile,
+                StandardInput = stdIn,
+            };
+        }
+    }
 
     public MShellQuotation(List<TokenNew> tokens, int startIndex, int endIndexExc)
     {
@@ -1606,7 +1658,7 @@ public class EvalResult
 }
 public class ExecuteContext()
 {
-    public string? StandardInput { get; set; } = null;
+    public Stream? StandardInput { get; set; } = null;
     public string? StandardOutput { get; set; } = null;
 
     public override string ToString() => $"stdin: '{StandardInput}'\nstdout: '{StandardOutput}'\n";
