@@ -15,18 +15,23 @@ class Program
         bool printLex = false;
         string? input = null;
 
+        List<string> positionalArgs = new List<string>();
         while (i < args.Length)
         {
-            if (args[i] == "--lex")
+            var arg = args[i];
+            i++;
+            if (arg == "--lex")
             {
                 printLex = true;
             }
+            else if (input is not null)
+            {
+                positionalArgs.Add(arg);
+            }
             else
             {
-                input = File.ReadAllText(args[i]);
+                input = File.ReadAllText(arg);
             }
-
-            i++;
         }
 
         input ??= Console.In.ReadToEnd();
@@ -47,7 +52,7 @@ class Program
             return 0;
         }
 
-        Evaluator e = new(false);
+        Evaluator e = new(false, positionalArgs);
         EvalResult result = e.Evaluate(tokens, new Stack<MShellObject>(), new ExecuteContext());
 
         return result.Success ? 0 : 1;
@@ -118,9 +123,23 @@ public class Lexer
                 return MakeToken(TokenType.PIPE);
             case '?':
                 return MakeToken(TokenType.QUESTION);
+            case '$':
+                return char.IsDigit(Peek()) ? ParsePositional() : ParseLiteralOrNumber();
             default:
                 return ParseLiteralOrNumber();
         }
+    }
+
+    private TokenNew ParsePositional()
+    {
+        while (true)
+        {
+            if (AtEnd()) break;
+            var c = Advance();
+            if (!char.IsDigit(c)) break;
+        }
+
+        return MakeToken(TokenType.POSITIONAL);
     }
 
     private TokenNew ParseString()
@@ -233,6 +252,7 @@ public class Lexer
 
 public class Evaluator
 {
+    private readonly List<string> _positionalArgs;
     private readonly Action<MShellObject, Stack<MShellObject>> _push;
     private int _loopDepth = 0;
 
@@ -240,8 +260,9 @@ public class Evaluator
 
     // private Stack<Stack<MShellObject>> _stack = new();
 
-    public Evaluator(bool debug)
+    public Evaluator(bool debug, List<string> positionalArgs)
     {
+        _positionalArgs = positionalArgs;
         _push = debug ? PushWithDebug : PushNoDebug;
         // _tokens = tokens;
         // Stack<Stack<MShellObject>> stack = new();
@@ -903,6 +924,23 @@ public class Evaluator
                     }
                 }
             }
+            else if (t.TokenType == TokenType.POSITIONAL)
+            {
+                int positionalNum = int.Parse(t.RawText[1..]);
+                if (positionalNum < 1)
+                {
+                    return FailWithMessage($"Found positional argument less than 1 ({t.RawText}). Positional arguments start at 1.\n");
+                }
+
+                if (positionalNum > _positionalArgs.Count)
+                {
+                    return FailWithMessage($"Found positional argument greater than total supplied ({t.RawText}, {_positionalArgs.Count} supplied).\n");
+                }
+
+                MShellString s = new MShellString(_positionalArgs[positionalNum - 1]);
+                _push(s, stack);
+                index++;
+            }
             else
             {
                 return FailWithMessage($"Token type '{t.TokenType}' (Raw Token: '{t.RawText}') not implemented yet.\n");
@@ -1179,7 +1217,8 @@ public enum TokenType
     PLUS,
     PIPE,
     INTERPRET,
-    QUESTION
+    QUESTION,
+    POSITIONAL
 }
 
 public class TokenNew

@@ -1,0 +1,2 @@
+[echo "Number 1: " $1 +];
+[echo "Number 2: " $2 +];
