@@ -1,7 +1,13 @@
 #!/bin/bash
 TMP_FILE="$(mktemp)"
 TMP_ERR="$(mktemp)"
-mshell < "$1" > "$TMP_FILE" 2>"$TMP_ERR"
+
+if printf %s "$1" | grep -q 'positional'; then
+    mshell "$1" Hello World > "$TMP_FILE" 2>"$TMP_ERR"
+else
+    mshell < "$1" > "$TMP_FILE" 2>"$TMP_ERR"
+fi
+
 if test "$?" -eq 0; then
     diff_output="$(diff "$TMP_FILE" "$1".stdout)"
     if test "$?" -eq 0; then
