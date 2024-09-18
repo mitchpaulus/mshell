@@ -36,6 +36,12 @@ class Program
 
         input ??= Console.In.ReadToEnd();
 
+        // string line = Console.ReadLine();
+        // Console.Error.Write($"First line: {line}\n");
+        // line = Console.ReadLine();
+        // Console.Error.Write($"Second line: {line}\n");
+
+
         // input = args.Length > 0 ? File.ReadAllText(args[0], Encoding.UTF8) : Console.In.ReadToEnd();
 
         Lexer l = new Lexer(input);
@@ -190,6 +196,8 @@ public class Lexer
         if (literal == "x") return MakeToken(TokenType.INTERPRET);
         if (literal == "if") return MakeToken(TokenType.IF);
         if (literal == "loop") return MakeToken(TokenType.LOOP);
+        if (literal == "read") return MakeToken(TokenType.READ);
+        if (literal == "str") return MakeToken(TokenType.STR);
         if (literal == "break") return MakeToken(TokenType.BREAK);
         if (literal == "not") return MakeToken(TokenType.NOT);
         if (literal == "and") return MakeToken(TokenType.AND);
@@ -264,6 +272,12 @@ public class Evaluator
     {
         _positionalArgs = positionalArgs;
         _push = debug ? PushWithDebug : PushNoDebug;
+
+        /*
+        string line = Console.ReadLine();
+        Console.Error.Write($"Second line: {line}.\n");
+        */
+
         // _tokens = tokens;
         // Stack<Stack<MShellObject>> stack = new();
         // _stack.Push(new Stack<MShellObject>());
@@ -311,12 +325,39 @@ public class Evaluator
                 }
                 else if (t.RawText == ".s")
                 {
-                    Console.Error.Write("Current stack:");
+                    Console.Error.Write("Current stack:\n");
 
                     foreach (var v in stack)
                     {
                         Console.Error.Write(v.DebugString());
                         Console.Error.Write('\n');
+                    }
+                    Console.Error.Write("END stack:\n");
+                }
+                else if (t.RawText == "append")
+                {
+                    if (stack.Count < 2) return FailWithMessage("Found less than 2 items on stack when trying to append.\n");
+                    var arg1 = stack.Pop();
+                    var arg2 = stack.Pop();
+
+                    if (arg1.IsList && !arg2.IsList)
+                    {
+                        arg1.AsList.Items.Add(arg2);
+                        _push(arg1, stack);
+                    }
+                    else if (!arg1.IsList && arg2.IsList)
+                    {
+                        arg2.AsList.Items.Add(arg1);
+                        _push(arg2, stack);
+                    }
+                    else if (arg1.IsList && arg2.IsList)
+                    {
+                        arg2.AsList.Items.Add(arg1);
+                        _push(arg2, stack);
+                    }
+                    else
+                    {
+                        return FailWithMessage($"Neither of the top two stack elements for append are lists. Found a {arg1.TypeName()} ({arg1.DebugString()} on top, followed by a {arg2.TypeName()} ({arg2.DebugString}).\n");
                     }
                 }
                 else
@@ -490,7 +531,7 @@ public class Evaluator
                                 }
                                 else
                                 {
-                                    return FailWithMessage($"Can't evaluate condition for type {condition.TypeName()}.\n");
+                                    return FailWithMessage($"Can't evaluate condition for type {condition.TypeName()} ({condition.DebugString()}).\n");
                                 }
                             }
                             else
@@ -577,21 +618,24 @@ public class Evaluator
             {
                 if (stack.TryPop(out var o))
                 {
+                    int maxLoops = 15000;
                     if (o.IsQuotation)
                     {
                         _loopDepth++;
                         int thisLoopDepth = _loopDepth;
                         int loopCount = 1;
-                        while (loopCount < 15000)
+                        var loopContext = o.AsQuotation.Context;
+                        while (loopCount < maxLoops)
                         {
-                            EvalResult result = Evaluate(o.AsQuotation.Tokens, stack, context);
+                            EvalResult result = Evaluate(o.AsQuotation.Tokens, stack, loopContext);
                             if (!result.Success) return FailResult();
 
                             if ((_loopDepth + 1) - result.BreakNum <= thisLoopDepth) break;
                             loopCount++;
                         }
+                        if (loopContext.StandardInput is not null) loopContext.StandardInput.Dispose();
 
-                        if (loopCount >= 15000)
+                        if (loopCount >= maxLoops)
                         {
                             return FailWithMessage("Looks like infinite loop.\n");
                         }
@@ -941,6 +985,43 @@ public class Evaluator
                 _push(s, stack);
                 index++;
             }
+            else if (t.TokenType == TokenType.READ)
+            {
+                // string? line = Console.In.ReadLine();
+                // Console.Error.Write($"Line {line}\n");
+                // int peek = Console.In.Peek();
+                // Console.Error.Write($"Peek {peek}\n");
+                string? line = null;
+                if (context.StandardInput is not null)
+                {
+                    StreamReader r = new(context.StandardInput, Encoding.UTF8);
+                    line = r.ReadLine();
+                }
+                else
+                {
+                    Console.Error.Write($"Read {line is null}\n");
+                    line = Console.In.ReadLine();
+                }
+
+                if (line is null)
+                {
+                    _push(new MShellString(""), stack);
+                    _push(new MShellBool(true), stack);
+                }
+                else
+                {
+                    _push(new MShellString(line), stack);
+                    _push(new MShellBool(false), stack);
+                }
+
+                index++;
+            }
+            else if (t.RawText == "str")
+            {
+                if (stack.TryPop(out var o)) _push(new MShellString(o.DebugString()), stack);
+                else return FailWithMessage($"Nothing on stack for {t.RawText}.\n");
+                index++;
+            }
             else
             {
                 return FailWithMessage($"Token type '{t.TokenType}' (Raw Token: '{t.RawText}') not implemented yet.\n");
@@ -1218,7 +1299,9 @@ public enum TokenType
     PIPE,
     INTERPRET,
     QUESTION,
-    POSITIONAL
+    POSITIONAL,
+    READ,
+    STR
 }
 
 public class TokenNew
@@ -1553,7 +1636,7 @@ public class MShellObject : OneOfBase<LiteralToken, MShellList, MShellQuotation,
             token => token.Text(),
             list => "[" + string.Join(", ", list.Items.Select(o => o.DebugString())) + "]",
             quotation => "(" + string.Join(" ", quotation.Tokens.Select(o => o.RawText)) + ")",
-            token => token.IntVal.ToString(),
+            intToken => intToken.IntVal.ToString(),
             boolVal => boolVal.Value.ToString(),
             stringVal => stringVal.RawString,
             pipeline => string.Join(" | ", pipeline.List.Items.Select(o => o.DebugString()))
