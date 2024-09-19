@@ -336,11 +336,7 @@ func RunProcess(list MShellList, context ExecuteContext) (EvalResult, int) {
     // No redirection for stderr currently, just use the stderr of this process
     cmd.Stderr = os.Stderr
 
-    err := cmd.Run()
-    if err != nil {
-        return FailWithMessage(fmt.Sprintf("Error running command: %s\n", err.Error())), -1
-    }
-
+    cmd.Run() // Manually deal with the exit code upstream
     exitCode := cmd.ProcessState.ExitCode()
 
     return SimpleSuccess(), exitCode
