@@ -1657,8 +1657,6 @@ public class MShellBool
 
 public class MShellQuotation
 {
-    private int StartIndex { get; }
-    private int EndIndexExc { get; }
     public List<TokenNew> Tokens { get; }
 
     public string? StandardInputFile { get; set; } = null;
@@ -1679,8 +1677,6 @@ public class MShellQuotation
 
     public MShellQuotation(List<TokenNew> tokens, int startIndex, int endIndexExc)
     {
-        StartIndex = startIndex;
-        EndIndexExc = endIndexExc;
         Tokens = tokens;
     }
 }
