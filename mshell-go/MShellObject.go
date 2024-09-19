@@ -4,6 +4,7 @@ import (
     "io"
     "strconv"
     "strings"
+    "fmt"
 )
 
 type MShellObject interface {
@@ -239,4 +240,47 @@ func (obj *MShellPipe) DebugString() string {
 
 func (obj *MShellInt) DebugString() string {
     return strconv.Itoa(obj.Value)
+}
+
+func ParseRawString(inputString string) (string, error) {
+    // Purpose of this function is to remove outer quotes, handle escape characters
+    if len(inputString) < 2 {
+        return "", fmt.Errorf("input string should have a minimum length of 2 for surrounding double quotes")
+    }
+
+    var b strings.Builder
+	index := 1
+	inEscape := false
+
+	for index < len(inputString) - 1 {
+		c := inputString[index]
+
+		if inEscape {
+			switch c {
+			case 'n':
+				b.WriteRune('\n')
+			case 't':
+				b.WriteRune('\t')
+			case 'r':
+				b.WriteRune('\r')
+			case '\\':
+				b.WriteRune('\\')
+			case '"':
+				b.WriteRune('"')
+			default:
+				return "", fmt.Errorf("invalid escape character '%c'", c)
+			}
+			inEscape = false
+		} else {
+			if c == '\\' {
+				inEscape = true
+			} else {
+				b.WriteRune(rune(c))
+			}
+		}
+
+		index++
+	}
+
+	return b.String(), nil
 }

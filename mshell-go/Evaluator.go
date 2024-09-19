@@ -148,6 +148,16 @@ func (state EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exec
             if t.Type == QUESTION {
                 stack.Push(&MShellInt { exitCode })
             }
+        } else if t.Type == TRUE {
+            stack.Push(&MShellBool { true })
+        } else if t.Type == FALSE {
+            stack.Push(&MShellBool { false })
+        } else if t.Type == STRING {
+            parsedString, err := ParseRawString(t.Lexeme)
+            if err != nil {
+                return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing string: %s\n", t.Line, t.Column, err.Error()))
+            }
+            stack.Push(&MShellString { parsedString })
         } else {
             return FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Type))
         }
