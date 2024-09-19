@@ -53,10 +53,10 @@ func main() {
         input = string(inputBytes)
     }
 
-    if printLex {
-        l := NewLexer(input)
-        tokens := l.Tokenize()
+    l := NewLexer(input)
+    tokens := l.Tokenize()
 
+    if printLex {
         fmt.Println("Tokens:")
         for _, t := range tokens {
             //                 Console.Write($"{t.Line}:{t.Column}:{t.TokenType} {t.RawText}\n");
@@ -64,4 +64,23 @@ func main() {
         }
         return
     }
+
+    state := EvalState {
+        PositionalArgs: positionalArgs,
+        LoopDepth: 0,
+        Variables: make(map[string]MShellObject),
+    }
+
+    var stack MShellStack
+    stack = []MShellObject{}
+    context := ExecuteContext {
+        StandardInput: os.Stdin,
+        StandardOutput: os.Stdout,
+    }
+
+    result := state.Evaluate(tokens, &stack, context)
+
+    if !result.Success {
+        os.Exit(1)
+    } 
 }

@@ -31,8 +31,8 @@ type MShellQuotation struct {
 
 type MShellList struct {
     Items []MShellObject
-    StandardInputFile io.Reader
-    StandardOutputFile io.Writer
+    StandardInputFile string
+    StandardOutputFile string
 }
 
 type MShellString struct {
@@ -44,7 +44,7 @@ type MShellPipe struct {
 }
 
 type MShellInt struct {
-    Value int64
+    Value int
 }
 
 // TypeNames
@@ -190,7 +190,7 @@ func (obj *MShellPipe) CommandLine() string {
 }
 
 func (obj *MShellInt) CommandLine() string {
-    return strconv.FormatInt(obj.Value, 10)
+    return strconv.Itoa(obj.Value)
 }
 
 // DebugString
@@ -235,4 +235,8 @@ func (obj *MShellString) DebugString() string {
 func (obj *MShellPipe) DebugString() string {
     // Join each item with a ' | '
     return strings.Join(DebugStrs(obj.List.Items), " | ")
+}
+
+func (obj *MShellInt) DebugString() string {
+    return strconv.Itoa(obj.Value)
 }
