@@ -273,6 +273,46 @@ func (state EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exec
                     return result
                 }
             }
+        } else if t.Type == PLUS {
+            obj1, err := stack.Pop()
+            if err != nil {
+                return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '+' operation on an empty stack.\n", t.Line, t.Column))
+            }
+
+            obj2, err := stack.Pop()
+            if err != nil {
+                return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '+' operation on a stack with only one item.\n", t.Line, t.Column))
+            }
+
+            switch obj1.(type) {
+            case *MShellInt:
+                switch obj2.(type) {
+                case *MShellInt:
+                    stack.Push(&MShellInt { obj2.(*MShellInt).Value + obj1.(*MShellInt).Value })
+                default:
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Cannot add an integer to a %s.\n", t.Line, t.Column, obj2.TypeName()))
+                }
+            case *MShellString:
+                switch obj2.(type) {
+                case *MShellString:
+                    stack.Push(&MShellString { obj2.(*MShellString).Content + obj1.(*MShellString).Content })
+                case *MShellLiteral:
+                    stack.Push(&MShellString { obj2.(*MShellLiteral).LiteralText + obj1.(*MShellString).Content })
+                default:
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Cannot add a string to a %s.\n", t.Line, t.Column, obj2.TypeName()))
+                }
+            case *MShellLiteral:
+                switch obj2.(type) {
+                case *MShellString:
+                    stack.Push(&MShellString { obj2.(*MShellString).Content + obj1.(*MShellLiteral).LiteralText })
+                case *MShellLiteral:
+                    stack.Push(&MShellString { obj2.(*MShellLiteral).LiteralText + obj1.(*MShellLiteral).LiteralText })
+                default:
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Cannot add a literal to a %s.\n", t.Line, t.Column, obj2.TypeName()))
+                }
+            default:
+                return FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '+' to a %s to a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
+            }
         } else {
             return FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Type))
         }
