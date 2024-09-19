@@ -127,7 +127,7 @@ type Token struct {
     Column    int
     Start     int
     Lexeme    string
-    TokenType TokenType
+    Type TokenType
 }
 
 type Lexer struct {
@@ -156,7 +156,7 @@ func (l *Lexer) makeToken(tokenType TokenType) Token {
         Column:    l.col,
         Start:     l.start,
         Lexeme:    lexeme,
-        TokenType: tokenType,
+        Type: tokenType,
     }
 }
 
@@ -333,7 +333,7 @@ func (l *Lexer) Tokenize() []Token {
     for {
         t := l.scanToken()
         tokens = append(tokens, t)
-        if t.TokenType == ERROR || t.TokenType == EOF {
+        if t.Type == ERROR || t.Type == EOF {
             break
         }
     }

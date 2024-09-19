@@ -60,7 +60,7 @@ func main() {
         fmt.Println("Tokens:")
         for _, t := range tokens {
             //                 Console.Write($"{t.Line}:{t.Column}:{t.TokenType} {t.RawText}\n");
-            fmt.Printf("%d:%d:%s %s\n", t.Line, t.Column, t.TokenType, t.Lexeme)
+            fmt.Printf("%d:%d:%s %s\n", t.Line, t.Column, t.Type, t.Lexeme)
         }
         return
     }

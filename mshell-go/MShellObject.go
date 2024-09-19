@@ -236,4 +236,3 @@ func (obj *MShellPipe) DebugString() string {
     // Join each item with a ' | '
     return strings.Join(DebugStrs(obj.List.Items), " | ")
 }
-
