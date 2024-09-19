@@ -5,6 +5,7 @@ import (
     "fmt"
     "os"
     "os/exec"
+    "strconv"
 )
 
 type MShellStack []MShellObject
@@ -69,7 +70,7 @@ func (state EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exec
     index := 0
 
     // Need a stack of integers
-    // quotationStack := []int32{}
+    quotationStack := []int{}
     leftSquareBracketStack := []int{}
 
     for index < len(tokens) {
@@ -123,6 +124,37 @@ func (state EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exec
                     }
                 } 
             }
+        } else if t.Type == LEFT_PAREN {
+            quotationStack = append(quotationStack, index - 1)
+
+            for {
+                currentToken := tokens[index]
+                index++
+
+                if currentToken.Type == EOF {
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Found unbalanced parenthesis.\n", currentToken.Line, currentToken.Column))
+                }
+
+                if currentToken.Type == LEFT_PAREN {
+                    quotationStack = append(quotationStack, index - 1)
+                } else if currentToken.Type == RIGHT_PAREN {
+                    if len(quotationStack) > 0 {
+                        leftIndex := quotationStack[len(quotationStack) - 1]
+                        quotationStack = quotationStack[:len(quotationStack) - 1]
+
+                        if len(quotationStack) == 0 {
+                            tokensWithinQuotation := tokens[leftIndex + 1:index - 1]
+                            q := &MShellQuotation { tokensWithinQuotation, nil, nil }
+                            stack.Push(q)
+
+                            break
+                        }
+
+                    } else {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Found unbalanced parenthesis.\n", currentToken.Line, currentToken.Column))
+                    }
+                } 
+            }
         } else if t.Type == EXECUTE || t.Type == QUESTION {
             top, err := stack.Pop()
             if err != nil {
@@ -152,12 +184,95 @@ func (state EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exec
             stack.Push(&MShellBool { true })
         } else if t.Type == FALSE {
             stack.Push(&MShellBool { false })
+        } else if t.Type == INTEGER {
+            intVal, err := strconv.Atoi(t.Lexeme)
+            if err != nil {
+                return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing integer: %s\n", t.Line, t.Column, err.Error()))
+            }
+
+            stack.Push(&MShellInt { intVal})
         } else if t.Type == STRING {
             parsedString, err := ParseRawString(t.Lexeme)
             if err != nil {
                 return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing string: %s\n", t.Line, t.Column, err.Error()))
             }
             stack.Push(&MShellString { parsedString })
+        } else if t.Type == IF {
+            obj, err := stack.Pop()
+            if err != nil {
+                return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do an 'if' on an empty stack.\n", t.Line, t.Column))
+            }
+
+            list, ok := obj.(*MShellList)
+            if !ok {
+                return FailWithMessage(fmt.Sprintf("%d:%d: Argument for if expected to be a list of quoations, received a %s\n", t.Line, t.Column, obj.TypeName()))
+            }
+
+            if len(list.Items) < 2 {
+                return FailWithMessage(fmt.Sprintf("%d:%d: If statement requires at least two arguments. Found %d.\n", t.Line, t.Column, len(list.Items)))
+            }
+
+            // Check that all items are quotations
+            for i, item := range list.Items {
+                if _, ok := item.(*MShellQuotation); !ok {
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Item %d in if statement is not a quotation.\n", t.Line, t.Column, i))
+                }
+            }
+
+            trueIndex := -1
+
+            ListLoop:
+            for i := 0; i < len(list.Items) - 1; i += 2 {
+                quotation := list.Items[i].(*MShellQuotation)
+                result := state.Evaluate(quotation.Tokens, stack, context)
+
+                if !result.Success {
+                    return result
+                }
+
+                if result.BreakNum > 0 {
+                    return FailWithMessage("Encountered break within if statement.\n")
+                }
+
+                top, err := stack.Pop()
+                if err != nil {
+                    conditionNum := i / 2 + 1
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Found an empty stack when evaluating condition #%d .\n", t.Line, t.Column, conditionNum))
+                }
+
+                // Check for either integer or boolean
+                switch top.(type) {
+                case *MShellInt:
+                    if top.(*MShellInt).Value == 0 {
+                        trueIndex = i
+                        break ListLoop
+                    }
+                case *MShellBool:
+                    if top.(*MShellBool).Value {
+                        trueIndex = i
+                        break ListLoop
+                    }
+                default:
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Expected an integer or boolean for condition #%d, received a %s.\n", t.Line, t.Column, i / 2 + 1, top.TypeName()))
+                }
+            }
+
+            if trueIndex > -1 {
+                quotation := list.Items[trueIndex + 1].(*MShellQuotation)
+                result := state.Evaluate(quotation.Tokens, stack, context)
+
+                // If we encounter a break, we should return it up the stack
+                if !result.Success || result.BreakNum != -1 {
+                    return result
+                }
+            } else if len(list.Items) % 2 == 1 { // Try to find a final else statement, will be the last item in the list if odd number of items
+                quotation := list.Items[len(list.Items) - 1].(*MShellQuotation)
+                result := state.Evaluate(quotation.Tokens, stack, context)
+
+                if !result.Success || result.BreakNum != -1 {
+                    return result
+                }
+            }
         } else {
             return FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Type))
         }
