@@ -8,6 +8,7 @@ import (
     "strconv"
     "strings"
     "sync"
+    "bufio"
 )
 
 type MShellStack []MShellObject
@@ -98,6 +99,37 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
                 _, err := stack.Pop()
                 if err != nil {
                     return FailWithMessage(fmt.Sprintf("%d:%d: Cannot drop an empty stack.\n", t.Line, t.Column))
+                }
+            } else if t.Lexeme == "append" {
+                obj1, err := stack.Pop()
+                if err != nil {
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'append' operation on an empty stack.\n", t.Line, t.Column))
+                }
+
+                obj2, err := stack.Pop()
+                if err != nil {
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'append' operation on a stack with only one item.\n", t.Line, t.Column))
+                }
+
+                // Can do append with list and object in either order. If two lists, append obj1 into obj2
+                switch obj1.(type) {
+                case *MShellList:
+                    switch obj2.(type) {
+                    case *MShellList:
+                        obj2.(*MShellList).Items = append(obj2.(*MShellList).Items, obj1)
+                        stack.Push(obj2)
+                    default:
+                        obj1.(*MShellList).Items = append(obj1.(*MShellList).Items, obj2)
+                        stack.Push(obj1)
+                    }
+                default:
+                    switch obj2.(type) {
+                    case *MShellList:
+                        obj2.(*MShellList).Items = append(obj2.(*MShellList).Items, obj1)
+                        stack.Push(obj2)
+                    default:
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot append a %s to a %s.\n", t.Line, t.Column, obj1.TypeName(), obj2.TypeName()))
+                    }
                 }
             } else {
                 stack.Push(&MShellLiteral { t.Lexeme })
@@ -192,7 +224,7 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
             case *MShellPipe:
                 result, exitCode = state.RunPipeline(*top.(*MShellPipe), context, stack)
             default:
-                return FailWithMessage(fmt.Sprintf("%d:%d: Cannot execute a non-list object.\n", t.Line, t.Column))
+                return FailWithMessage(fmt.Sprintf("%d:%d: Cannot execute a non-list object. Found %s %s\n", t.Line, t.Column, top.TypeName(), top.DebugString()))
             }
 
             if !result.Success {
@@ -659,6 +691,128 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
             }
 
             stack.Push( &MShellPipe { *list } )
+        } else if t.Type == READ {
+            var reader io.Reader
+            // Check if what we are reading from is seekable. If so, we can do a buffered read and reset the position.
+            // Else, we have to read byte by byte.
+
+            isSeekable := false
+
+            if context.StandardInput == nil {
+                reader = os.Stdin
+                _, err := reader.(*os.File).Seek(0, io.SeekCurrent)
+                isSeekable = err == nil
+
+            } else {
+                reader = context.StandardInput
+                _, err := reader.(*os.File).Seek(0, io.SeekCurrent)
+                isSeekable = err == nil
+            }
+
+            if isSeekable {
+                // Do a buffered read
+                bufferedReader := bufio.NewReader(reader)
+                line, err := bufferedReader.ReadString('\n')
+                if err != nil {
+                    if err == io.EOF {
+                        stack.Push(&MShellString { "" })
+                        stack.Push(&MShellBool { false })
+                    } else {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Error reading from stdin: %s\n", t.Line, t.Column, err.Error()))
+                    }
+                } else {
+                    // Check if the last character is a '\r' and remove it if it is. Also remove the '\n' itself
+                    if len(line) > 0 && line[len(line) - 1] == '\n' {
+                        line = line[:len(line) - 1]
+                    }
+                    if len(line) > 0 && line[len(line) - 1] == '\r' {
+                        line = line[:len(line) - 1]
+                    }
+
+                    stack.Push(&MShellString { line })
+                    stack.Push(&MShellBool { true })
+                }
+
+                // Reset the position of the reader to the position after the read
+                offset, err := reader.(*os.File).Seek(0, io.SeekCurrent)
+                if err != nil {
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Error resetting position of reader: %s\n", t.Line, t.Column, err.Error()))
+                }
+                remainingInBuffer := bufferedReader.Buffered()
+                // fmt.Fprintf(os.Stderr, "Offset: %d, Remaining in buffer: %d\n", offset, remainingInBuffer)
+                newPosition := offset - int64(remainingInBuffer)
+                // fmt.Fprintf(os.Stderr, "New position: %d\n", newPosition)
+                _, err = reader.(*os.File).Seek(newPosition, io.SeekStart)
+            } else {
+                // Do a byte by byte read
+                var line strings.Builder
+                for {
+                    b := make([]byte, 1)
+                    _, err := reader.Read(b)
+                    if err != nil {
+                        if err == io.EOF {
+                            // If nothing in line, then this was the end of the file
+                            if line.Len() == 0 {
+                                stack.Push(&MShellString { "" })
+                                stack.Push(&MShellBool { false })
+                            } else {
+                                // Else, we have a final that wasn't terminated by a newline. Still try to remove '\r' if it's there
+                                builderStr := line.String()
+                                if len(builderStr) > 0 && builderStr[len(builderStr) - 1] == '\r' {
+                                    builderStr = builderStr[:len(builderStr) - 1]
+                                }
+                                stack.Push(&MShellString { builderStr })
+                                stack.Push(&MShellBool { true })
+                            }
+                            break
+                        } else {
+                            return FailWithMessage(fmt.Sprintf("%d:%d: Error reading from stdin: %s\n", t.Line, t.Column, err.Error()))
+                        }
+                    }
+
+                    if b[0] == '\n' {
+
+                        builderStr := line.String()
+
+                        // Check if the last character is a '\r' and remove it if it is
+                        if len(builderStr) > 0 && builderStr[len(builderStr) - 1] == '\r' {
+                            builderStr = builderStr[:len(builderStr) - 1]
+                        }
+
+                        stack.Push(&MShellString { builderStr })
+                        stack.Push(&MShellBool { true })
+                        break
+                    } else {
+                        line.WriteByte(b[0])
+                    }
+                }
+            }
+
+
+
+
+
+
+            // if hasLine {
+                // line := readScanner.Text()
+                // stack.Push(&MShellString { line })
+                // stack.Push(&MShellBool { true })
+            // } else {
+                // // Check if there was an error that wasn't EOF
+                // err := readScanner.Err()
+                // if err != nil {
+                    // return FailWithMessage(fmt.Sprintf("%d:%d: Error reading from stdin: %s\n", t.Line, t.Column, err.Error()))
+                // }
+                // stack.Push(&MShellString { "" })
+                // stack.Push(&MShellBool { false })
+            // }
+        } else if t.Type == STR {
+            obj, err := stack.Pop()
+            if err != nil {
+                return FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert an empty stack to a string.\n", t.Line, t.Column))
+            }
+
+            stack.Push(&MShellString { obj.DebugString() })
         } else {
             return FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Type))
         }
@@ -764,6 +918,13 @@ func RunProcess(list MShellList, context ExecuteContext) (EvalResult, int) {
         defer file.Close()
     } else if context.StandardInput != nil {
         cmd.Stdin = context.StandardInput
+
+        // Print position of reader
+        // position, err := cmd.Stdin.(*os.File).Seek(0, io.SeekCurrent)
+        // if err != nil {
+            // return FailWithMessage(fmt.Sprintf("Error getting position of reader: %s\n", err.Error())), 1
+        // }
+        // fmt.Fprintf(os.Stderr, "Position of reader: %d\n", position)
     } else {
         // Default to stdin of this process itself
         cmd.Stdin = os.Stdin
