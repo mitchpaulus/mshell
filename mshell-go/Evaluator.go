@@ -41,7 +41,7 @@ func (objList *MShellStack) String() {
 
 type EvalState  struct {
     PositionalArgs[] string
-    LoopDepth int32
+    LoopDepth int
 
     // private Dictionary<string, MShellObject> _variables = new();
     Variables map[string]MShellObject
@@ -49,7 +49,7 @@ type EvalState  struct {
 
 type EvalResult struct {
     Success bool
-    BreakNum int32
+    BreakNum int
 }
 
 type ExecuteContext struct {
@@ -67,7 +67,7 @@ func FailWithMessage(message string) EvalResult {
     return EvalResult { false, -1 }
 }
 
-func (state EvalState) Evaluate(tokens []Token, stack *MShellStack, context ExecuteContext) EvalResult { 
+func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context ExecuteContext) EvalResult { 
     index := 0
 
     // Need a stack of integers
@@ -416,10 +416,104 @@ func (state EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exec
             }
 
             stack.Push(obj)
+        } else if t.Type == LOOP {
+            obj, err := stack.Pop()
+            if err != nil {
+                return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do a loop on an empty stack.\n", t.Line, t.Column))
+            }
+
+            quotation, ok := obj.(*MShellQuotation)
+            if !ok {
+                return FailWithMessage(fmt.Sprintf("%d:%d: Argument for loop expected to be a quotation, received a %s\n", t.Line, t.Column, obj.TypeName()))
+            }
+
+            if len(quotation.Tokens) == 0 {
+                return FailWithMessage(fmt.Sprintf("%d:%d: Loop quotation needs a minimum of one token.\n", t.Line, t.Column))
+            }
+
+
+            context := ExecuteContext {
+                StandardInput: nil,
+                StandardOutput: nil,
+            }
+
+            if quotation.StandardInputFile != "" {
+                file, err := os.Open(quotation.StandardInputFile)
+                if err != nil {
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Error opening file %s for reading: %s\n", t.Line, t.Column, quotation.StandardInputFile, err.Error()))
+                }
+                context.StandardInput = file
+                defer file.Close()
+            }
+
+            if quotation.StandardOutputFile != "" {
+                file, err := os.Create(quotation.StandardOutputFile)
+                if err != nil {
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Error opening file %s for writing: %s\n", t.Line, t.Column, quotation.StandardOutputFile, err.Error()))
+                }
+                context.StandardOutput = file
+                defer file.Close()
+            }
+
+            maxLoops := 15000
+            loopCount := 0
+            state.LoopDepth++
+
+            breakDiff := 0 
+
+            for loopCount < maxLoops {
+                result := state.Evaluate(quotation.Tokens, stack, context)
+
+                if !result.Success {
+                    return result
+                }
+
+                breakDiff = state.LoopDepth - result.BreakNum
+
+                if breakDiff >= 0 {
+                    break
+                }
+
+                loopCount++
+            }
+
+            if loopCount == maxLoops {
+                return FailWithMessage(fmt.Sprintf("%d:%d: Loop exceeded maximum number of iterations.\n", t.Line, t.Column))
+            }
+
+            state.LoopDepth--
+
+            if breakDiff > 0 {
+                return EvalResult { true, breakDiff - 1 }
+            }
+        } else if t.Type == BREAK {
+            return EvalResult { true, 1 }
+        } else if t.Type == EQUALS {
+            obj1, err := stack.Pop()
+            if err != nil {
+                return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '=' operation on an empty stack.\n", t.Line, t.Column))
+            }
+            obj2, err := stack.Pop()
+            if err != nil {
+                return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '=' operation on a stack with only one item.\n", t.Line, t.Column))
+            }
+
+            // Implement for integers right now.
+            switch obj1.(type) {
+            case *MShellInt:
+                switch obj2.(type) {
+                case *MShellInt:
+                    stack.Push(&MShellBool { obj2.(*MShellInt).Value == obj1.(*MShellInt).Value })
+                default:
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Cannot compare an integer to a %s.\n", t.Line, t.Column, obj2.TypeName()))
+                }
+            default:
+                return FailWithMessage(fmt.Sprintf("%d:%d: Cannot complete %s with a %s to a %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
+            }
         } else {
             return FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Type))
         }
-    }
+    } 
 
     return EvalResult { true, -1 }
 }
