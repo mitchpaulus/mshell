@@ -614,6 +614,26 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
             if result.BreakNum > 0 {
                 return result
             }
+        } else if t.Type == POSITIONAL {
+            posNum := t.Lexeme[1:]
+            posIndex, err := strconv.Atoi(posNum)
+            if err != nil {
+                return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing positional argument number: %s\n", t.Line, t.Column, err.Error()))
+            }
+
+            if posIndex == 0 {
+                return FailWithMessage(fmt.Sprintf("%d:%d: Positional argument are 1-based, first argument is $1, not $0.\n", t.Line, t.Column))
+            }
+
+            if posIndex < 0 { 
+                return FailWithMessage(fmt.Sprintf("%d:%d: Positional argument numbers must be positive.\n", t.Line, t.Column))
+            }
+
+            if posIndex > len(state.PositionalArgs) {
+                return FailWithMessage(fmt.Sprintf("%d:%d: Positional argument %s is greater than the number of arguments provided.\n", t.Line, t.Column, t.Lexeme))
+            }
+
+            stack.Push(&MShellString { state.PositionalArgs[posIndex - 1] })
         } else {
             return FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Type))
         }
