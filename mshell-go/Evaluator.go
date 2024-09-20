@@ -144,7 +144,7 @@ func (state EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exec
 
                         if len(quotationStack) == 0 {
                             tokensWithinQuotation := tokens[leftIndex + 1:index - 1]
-                            q := &MShellQuotation { tokensWithinQuotation, nil, nil }
+                            q := &MShellQuotation { tokensWithinQuotation, "", "" }
                             stack.Push(q)
 
                             break
@@ -312,6 +312,75 @@ func (state EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exec
                 }
             default:
                 return FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '+' to a %s to a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
+            }
+        } else if t.Type == AND || t.Type == OR {
+            obj1, err := stack.Pop()
+            if err != nil {
+                return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
+            }
+
+            obj2, err := stack.Pop()
+            if err != nil {
+                return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on a stack with only one item.\n", t.Line, t.Column, t.Lexeme))
+            }
+
+            switch obj1.(type) {
+            case *MShellBool:
+                switch obj2.(type) {
+                case *MShellBool:
+                    if t.Type == AND {
+                        stack.Push(&MShellBool { obj2.(*MShellBool).Value && obj1.(*MShellBool).Value })
+                    } else {
+                        stack.Push(&MShellBool { obj2.(*MShellBool).Value || obj1.(*MShellBool).Value })
+                    }
+                default:
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s and %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
+                }
+            default:
+                return FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s and %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
+            }
+        } else if t.Type == NOT {
+            obj, err := stack.Pop()
+            if err != nil {
+                return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
+            }
+
+            switch obj.(type) {
+            case *MShellBool:
+                stack.Push(&MShellBool { !obj.(*MShellBool).Value })
+            default:
+                return FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s.\n", t.Line, t.Column, t.Lexeme, obj.TypeName()))
+            }
+        } else if t.Type == GREATERTHAN {
+            // This can either be normal comparison for numerics, or it's a redirect on a list or quotation.
+            obj1, err := stack.Pop()
+            if err != nil {
+                return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
+            }
+
+            obj2, err := stack.Pop()
+            if err != nil {
+                return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on a stack with only one item.\n", t.Line, t.Column, t.Lexeme))
+            }
+
+            if obj1.IsNumeric() && obj2.IsNumeric() {
+                stack.Push(&MShellBool { obj2.FloatNumeric() > obj1.FloatNumeric() })
+            } else {
+                switch obj1.(type) {
+                case *MShellString:
+                    switch obj2.(type) {
+                    case *MShellList:
+                        obj2.(*MShellList).StandardOutputFile = obj1.(*MShellString).Content
+                        stack.Push(obj2)
+                    case *MShellQuotation:
+                        obj2.(*MShellQuotation).StandardOutputFile = obj1.(*MShellString).Content
+                        stack.Push(obj2)
+                    default:
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a string to a %s.\n", t.Line, t.Column, obj2.TypeName()))
+                    }
+                default:
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a %s to a %s.\n", t.Line, t.Column, obj1.TypeName(), obj2.TypeName()))
+                }
             }
         } else {
             return FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Type))

@@ -1,7 +1,7 @@
 package main
 
 import (
-    "io"
+    // "io"
     "strconv"
     "strings"
     "fmt"
@@ -26,8 +26,8 @@ type MShellBool struct {
 
 type MShellQuotation struct {
     Tokens []Token
-    StandardInputFile io.Reader
-    StandardOutputFile io.Writer
+    StandardInputFile string
+    StandardOutputFile string
 }
 
 type MShellList struct {
