@@ -1,1 +1,2 @@
-Something in original file, to be truncated below.
+Hello,
+World!

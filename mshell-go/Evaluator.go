@@ -31,12 +31,14 @@ func (objList *MShellStack) Push(obj MShellObject) {
     *objList = append(*objList, obj)
 }
 
-func (objList *MShellStack) String() {
-    fmt.Fprintf(os.Stderr, "Stack contents:\n")
+func (objList *MShellStack) String() string {
+    var builder strings.Builder
+    builder.WriteString("Stack contents:\n")
     for i, obj := range *objList {
-        fmt.Fprintf(os.Stderr, "%d: %s\n", i, obj.DebugString())
+        builder.WriteString(fmt.Sprintf("%d: %s\n", i, obj.DebugString()))
     }
-    fmt.Fprintf(os.Stderr, "End of stack contents\n")
+    builder.WriteString("End of stack contents\n")
+    return builder.String()
 }
 
 type EvalState  struct {
@@ -81,7 +83,24 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
         if t.Type == EOF {
             return SimpleSuccess()
         } else if t.Type == LITERAL {
-            stack.Push(&MShellLiteral { t.Lexeme })
+
+            if t.Lexeme == ".s" {
+                // Print current stack
+                fmt.Fprintf(os.Stderr, stack.String())
+            } else if t.Lexeme == "dup" {
+                top, err := stack.Peek()
+                if err != nil {
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Cannot duplicate an empty stack.\n", t.Line, t.Column))
+                }
+                stack.Push(top)
+            } else if t.Lexeme == "drop" {
+                _, err := stack.Pop()
+                if err != nil {
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Cannot drop an empty stack.\n", t.Line, t.Column))
+                }
+            } else {
+                stack.Push(&MShellLiteral { t.Lexeme })
+            }
         } else if t.Type == LEFT_SQUARE_BRACKET {
             leftSquareBracketStack = append(leftSquareBracketStack, index - 1)
 
@@ -314,6 +333,28 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
             default:
                 return FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '+' to a %s to a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
             }
+        } else if t.Type == MINUS {
+            obj1, err := stack.Pop()
+            if err != nil {
+                return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '-' operation on an empty stack.\n", t.Line, t.Column))
+            }
+
+            obj2, err := stack.Pop()
+            if err != nil {
+                return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '-' operation on a stack with only one item.\n", t.Line, t.Column))
+            }
+
+            switch obj1.(type) {
+            case *MShellInt:
+                switch obj2.(type) {
+                case *MShellInt:
+                    stack.Push(&MShellInt { obj2.(*MShellInt).Value - obj1.(*MShellInt).Value })
+                default:
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Cannot subtract an integer from a %s.\n", t.Line, t.Column, obj2.TypeName()))
+                }
+            default:
+                return FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '-' to a %s and %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
+            }
         } else if t.Type == AND || t.Type == OR {
             obj1, err := stack.Pop()
             if err != nil {
@@ -351,6 +392,26 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
                 stack.Push(&MShellBool { !obj.(*MShellBool).Value })
             default:
                 return FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s.\n", t.Line, t.Column, t.Lexeme, obj.TypeName()))
+            }
+        } else if t.Type == GREATERTHANOREQUAL || t.Type == LESSTHANOREQUAL {
+            obj1, err := stack.Pop()
+            if err != nil {
+                return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
+            }
+
+            obj2, err := stack.Pop()
+            if err != nil {
+                return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on a stack with only one item.\n", t.Line, t.Column, t.Lexeme))
+            }
+
+            if obj1.IsNumeric() && obj2.IsNumeric() {
+                if t.Type == GREATERTHANOREQUAL {
+                    stack.Push(&MShellBool { obj2.FloatNumeric() >= obj1.FloatNumeric() })
+                } else {
+                    stack.Push(&MShellBool { obj2.FloatNumeric() <= obj1.FloatNumeric() })
+                }
+            } else {
+                return FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s and a %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
             }
         } else if t.Type == GREATERTHAN || t.Type == LESSTHAN {
             // This can either be normal comparison for numerics, or it's a redirect on a list or quotation.
@@ -468,10 +529,11 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
                     return result
                 }
 
-                breakDiff = state.LoopDepth - result.BreakNum
-
-                if breakDiff >= 0 {
-                    break
+                if result.BreakNum >= 0 {
+                    breakDiff = state.LoopDepth - result.BreakNum
+                    if breakDiff >= 0 {
+                        break
+                    }
                 }
 
                 loopCount++
@@ -509,6 +571,48 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
                 }
             default:
                 return FailWithMessage(fmt.Sprintf("%d:%d: Cannot complete %s with a %s to a %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
+            }
+        } else if t.Type == INTERPRET {
+            obj, err := stack.Pop()
+            if err != nil {
+                return FailWithMessage(fmt.Sprintf("%d:%d: Cannot interpret an empty stack.\n", t.Line, t.Column))
+            }
+
+            quotation, ok := obj.(*MShellQuotation)
+            if !ok {
+                return FailWithMessage(fmt.Sprintf("%d:%d: Argument for interpret expected to be a quotation, received a %s\n", t.Line, t.Column, obj.TypeName()))
+            }
+
+            quoteContext := ExecuteContext {
+                StandardInput: nil,
+                StandardOutput: nil,
+            }
+
+            if quotation.StandardInputFile != "" {
+                file, err := os.Open(quotation.StandardInputFile)
+                if err != nil {
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Error opening file %s for reading: %s\n", t.Line, t.Column, quotation.StandardInputFile, err.Error()))
+                }
+                quoteContext.StandardInput = file
+                defer file.Close()
+            }
+
+            if quotation.StandardOutputFile != "" {
+                file, err := os.Create(quotation.StandardOutputFile)
+                if err != nil {
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Error opening file %s for writing: %s\n", t.Line, t.Column, quotation.StandardOutputFile, err.Error()))
+                }
+                quoteContext.StandardOutput = file
+                defer file.Close()
+            }
+
+            result := state.Evaluate(quotation.Tokens, stack, quoteContext)
+            if !result.Success {
+                return result
+            }
+
+            if result.BreakNum > 0 {
+                return result
             }
         } else {
             return FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Type))

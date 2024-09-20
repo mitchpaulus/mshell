@@ -1,7 +1,6 @@
 package main
 
 import (
-    // "io"
     "strconv"
     "strings"
     "fmt"
@@ -220,7 +219,16 @@ func (obj *MShellQuotation) DebugString() string {
         debugStrs[i] = token.Lexeme
     }
 
-    return "(" + strings.Join(debugStrs, " ") + ")"
+    message := "(" + strings.Join(debugStrs, " ") + ")"
+    if obj.StandardInputFile != "" {
+        message += " < " + obj.StandardInputFile
+    }
+
+    if obj.StandardOutputFile != "" {
+        message += " > " + obj.StandardOutputFile
+    }
+
+    return message
 }
 
 func (obj *MShellList) DebugString() string {
