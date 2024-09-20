@@ -771,7 +771,6 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
                     }
 
                     if b[0] == '\n' {
-
                         builderStr := line.String()
 
                         // Check if the last character is a '\r' and remove it if it is
@@ -787,25 +786,6 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
                     }
                 }
             }
-
-
-
-
-
-
-            // if hasLine {
-                // line := readScanner.Text()
-                // stack.Push(&MShellString { line })
-                // stack.Push(&MShellBool { true })
-            // } else {
-                // // Check if there was an error that wasn't EOF
-                // err := readScanner.Err()
-                // if err != nil {
-                    // return FailWithMessage(fmt.Sprintf("%d:%d: Error reading from stdin: %s\n", t.Line, t.Column, err.Error()))
-                // }
-                // stack.Push(&MShellString { "" })
-                // stack.Push(&MShellBool { false })
-            // }
         } else if t.Type == STR {
             obj, err := stack.Pop()
             if err != nil {
