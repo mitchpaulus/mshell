@@ -484,7 +484,7 @@ public class Evaluator
                     {
                         if (qList.Items.Count < 2)
                         {
-                            return FailWithMessage("Quotation list for if should have a minimum of 2 elements.\n");
+                            return FailWithMessage($"{t.Line}:{t.Column}: If statement requires at least two arguments. Found {qList.Items.Count}.\n");
                         }
 
                         if (qList.Items.Any(i => !i.IsQuotation))
