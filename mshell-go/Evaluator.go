@@ -6,6 +6,7 @@ import (
     "os"
     "os/exec"
     "strconv"
+    "strings"
 )
 
 type MShellStack []MShellObject
@@ -351,7 +352,7 @@ func (state EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exec
             default:
                 return FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s.\n", t.Line, t.Column, t.Lexeme, obj.TypeName()))
             }
-        } else if t.Type == GREATERTHAN {
+        } else if t.Type == GREATERTHAN || t.Type == LESSTHAN {
             // This can either be normal comparison for numerics, or it's a redirect on a list or quotation.
             obj1, err := stack.Pop()
             if err != nil {
@@ -364,16 +365,28 @@ func (state EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exec
             }
 
             if obj1.IsNumeric() && obj2.IsNumeric() {
-                stack.Push(&MShellBool { obj2.FloatNumeric() > obj1.FloatNumeric() })
+                if t.Type == GREATERTHAN {
+                    stack.Push(&MShellBool { obj2.FloatNumeric() > obj1.FloatNumeric() })
+                } else {
+                    stack.Push(&MShellBool { obj2.FloatNumeric() < obj1.FloatNumeric() })
+                }
             } else {
                 switch obj1.(type) {
                 case *MShellString:
                     switch obj2.(type) {
                     case *MShellList:
-                        obj2.(*MShellList).StandardOutputFile = obj1.(*MShellString).Content
+                        if t.Type == GREATERTHAN {
+                            obj2.(*MShellList).StandardOutputFile = obj1.(*MShellString).Content
+                        } else {
+                            obj2.(*MShellList).StandardInputFile = obj1.(*MShellString).Content
+                        }
                         stack.Push(obj2)
                     case *MShellQuotation:
-                        obj2.(*MShellQuotation).StandardOutputFile = obj1.(*MShellString).Content
+                        if t.Type == GREATERTHAN {
+                            obj2.(*MShellQuotation).StandardOutputFile = obj1.(*MShellString).Content
+                        } else {
+                            obj2.(*MShellQuotation).StandardInputFile = obj1.(*MShellString).Content
+                        }
                         stack.Push(obj2)
                     default:
                         return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a string to a %s.\n", t.Line, t.Column, obj2.TypeName()))
@@ -382,6 +395,27 @@ func (state EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exec
                     return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a %s to a %s.\n", t.Line, t.Column, obj1.TypeName(), obj2.TypeName()))
                 }
             }
+        } else if t.Type == VARSTORE {
+            obj, err := stack.Pop()
+            if err != nil {
+                return FailWithMessage(fmt.Sprintf("%d:%d: Nothing on stack to store into variable %s.\n", t.Line, t.Column, t.Lexeme[1:]))
+            }
+
+            state.Variables[t.Lexeme[1:]] = obj
+        } else if t.Type == VARRETRIEVE {
+            name := t.Lexeme[:len(t.Lexeme) - 1]
+            obj, ok := state.Variables[name]
+            if !ok {
+                var message strings.Builder
+                message.WriteString(fmt.Sprintf("%d:%d: Variable %s not found.\n", t.Line, t.Column, name))
+                message.WriteString("Variables:\n")
+                for key, _ := range state.Variables {
+                    message.WriteString(fmt.Sprintf("  %s\n", key))
+                }
+                return FailWithMessage(message.String())
+            }
+
+            stack.Push(obj)
         } else {
             return FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Type))
         }

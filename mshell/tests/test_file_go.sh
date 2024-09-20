@@ -19,14 +19,22 @@ if test "$?" -eq 0; then
         exit 1
     fi
 else
-    diff_output="$(diff "$TMP_ERR" "$1".stderr)"
-    if test "$?" -eq 0; then
-        printf "%s passed\n" "$1"
-    else
+    if test ! -f "$1".stderr; then
         printf "%s FAILED\n" "$1"
         printf "==================\n"
-        printf "%s\n" "$diff_output"
+        printf "Expected success but got failure.\n"
+        cat "$TMP_ERR"
         exit 1
+    else
+        diff_output="$(diff "$TMP_ERR" "$1".stderr)"
+        if test "$?" -eq 0; then
+            printf "%s passed\n" "$1"
+        else
+            printf "%s FAILED\n" "$1"
+            printf "==================\n"
+            printf "%s\n" "$diff_output"
+            exit 1
+        fi
     fi
 fi
 
