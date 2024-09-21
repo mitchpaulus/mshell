@@ -46,6 +46,8 @@ const (
     DOUBLE
     LITERAL
     INDEXER
+    ENDINDEXER
+    STARTINDEXER
 )
 
 func (t TokenType) String() string {
@@ -120,6 +122,10 @@ func (t TokenType) String() string {
         return "LITERAL"
     case INDEXER:
         return "INDEXER"
+    case ENDINDEXER:
+        return "ENDINDEXER"
+    case STARTINDEXER:
+        return "STARTINDEXER"
     default:
         return "UNKNOWN"
     }
@@ -197,6 +203,8 @@ func (l *Lexer) scanToken() Token {
         return l.parseString()
     }
 
+    if unicode.IsDigit(c) { return l.parseNumberOrStartIndexer() }
+
     switch c {
     case '[':
         return l.makeToken(LEFT_SQUARE_BRACKET)
@@ -239,6 +247,27 @@ func (l *Lexer) consumeLiteral() Token {
     return l.makeToken(LITERAL)
 }
 
+func (l *Lexer) parseNumberOrStartIndexer() Token {
+    // Read all the digits
+    for {
+        if l.atEnd() { break }
+        if !unicode.IsDigit(l.peek()) { break }
+        l.advance()
+    }
+
+    peek := l.peek()
+    if peek == ':' {
+        l.advance()
+        return l.makeToken(STARTINDEXER)
+    }
+
+    if unicode.IsSpace(peek) || peek == ']' || peek == ')' || peek == '<' || peek == '>' || peek == ';' || peek == '?' {
+        return l.makeToken(INTEGER)
+    } else {
+        return l.consumeLiteral()
+    }
+}
+
 func (l *Lexer) parseIndexerOrLiteral() Token {
     c := l.advance()
 
@@ -250,23 +279,19 @@ func (l *Lexer) parseIndexerOrLiteral() Token {
     if unicode.IsDigit(c) {
         // Read all the digits
         for {
+            if l.atEnd() { break }
+            if !unicode.IsDigit(l.peek()) { break }
             c = l.advance()
-
-            if l.atEnd() {
-                break
-            }
-            if !unicode.IsDigit(l.peek()) {
-                break
-            }
         }
     } else {
         return l.consumeLiteral()
     }
 
-    if c == ':' {
+    if l.peek() == ':' {
+        l.advance()
         return l.makeToken(INDEXER)
     } else {
-        return l.consumeLiteral()
+        return l.makeToken(ENDINDEXER)
     }
 }
 

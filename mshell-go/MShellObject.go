@@ -13,6 +13,9 @@ type MShellObject interface {
     FloatNumeric() float64
     CommandLine() string
     DebugString() string
+    Index(index int) (MShellObject, error)
+    SliceStart(start int) (MShellObject, error)
+    SliceEnd(end int) (MShellObject, error)
 }
 
 type MShellLiteral struct {
@@ -250,10 +253,99 @@ func (obj *MShellInt) DebugString() string {
     return strconv.Itoa(obj.Value)
 }
 
+// IsIndexable
+
+func CheckRangeInclusive(index int, length int, obj MShellObject, toReturn MShellObject) (MShellObject, error) {
+    if index < 0 || index >= length {
+        return nil, fmt.Errorf("Index %d out of range for %s with length %d.\n", index, obj.TypeName(), length)
+    } else { return toReturn, nil }
+}
+func CheckRangeExclusive(index int, length int, obj MShellObject, toReturn MShellObject) (MShellObject, error) {
+    if index < 0 || index > length {
+        return nil, fmt.Errorf("Index %d out of range for %s with length %d.\n", index, obj.TypeName(), length)
+    } else { return toReturn, nil }
+}
+
+// Index
+func (obj *MShellLiteral) Index(index int) (MShellObject, error) {
+    return CheckRangeInclusive(index, len(obj.LiteralText), obj, &MShellLiteral{LiteralText: string(obj.LiteralText[index])})
+}
+
+func (obj *MShellBool) Index(index int) (MShellObject, error) { return nil, fmt.Errorf("Cannot index into a boolean.\n") }
+
+func (obj *MShellQuotation) Index(index int) (MShellObject, error) {
+    return CheckRangeInclusive(index, len(obj.Tokens), obj, &MShellQuotation{Tokens: []Token{obj.Tokens[index]}})
+}
+
+func (obj *MShellList) Index(index int) (MShellObject, error) {
+    return CheckRangeInclusive(index, len(obj.Items), obj, obj.Items[index])
+}
+
+func (obj *MShellString) Index(index int) (MShellObject, error) {
+    return CheckRangeInclusive(index, len(obj.Content), obj, &MShellString{Content: string(obj.Content[index])})
+}
+
+func (obj *MShellPipe) Index(index int) (MShellObject, error) {
+    return CheckRangeInclusive(index, len(obj.List.Items), obj, obj.List.Items[index])
+}
+
+func (obj *MShellInt) Index(index int) (MShellObject, error) { return nil, fmt.Errorf("Cannot index into an integer.\n") }
+
+// SliceStart
+func (obj *MShellLiteral) SliceStart(start int) (MShellObject, error) {
+    return CheckRangeInclusive(start, len(obj.LiteralText), obj, &MShellLiteral{LiteralText: obj.LiteralText[start:]})
+}
+
+func (obj *MShellBool) SliceStart(start int) (MShellObject, error) { return nil, fmt.Errorf("Cannot slice a boolean.\n") }
+
+func (obj *MShellQuotation) SliceStart(start int) (MShellObject, error) {
+    return CheckRangeInclusive(start, len(obj.Tokens), obj, &MShellQuotation{Tokens: obj.Tokens[start:]})
+}
+
+func (obj *MShellList) SliceStart(start int) (MShellObject, error) {
+    return CheckRangeInclusive(start, len(obj.Items), obj, &MShellList{Items: obj.Items[start:]})
+}
+
+func (obj *MShellString) SliceStart(start int) (MShellObject, error) {
+    return CheckRangeInclusive(start, len(obj.Content), obj, &MShellString{Content: obj.Content[start:]})
+}
+
+func (obj *MShellPipe) SliceStart(start int) (MShellObject, error) {
+    return CheckRangeInclusive(start, len(obj.List.Items), obj, &MShellPipe{List: MShellList{Items: obj.List.Items[start:]}})
+}
+
+func (obj *MShellInt) SliceStart(start int) (MShellObject, error) { return nil, fmt.Errorf("cannot slice an integer.\n") }
+
+// SliceEnd
+func (obj *MShellLiteral) SliceEnd(end int) (MShellObject, error) {
+    return CheckRangeExclusive(end, len(obj.LiteralText), obj, &MShellLiteral{LiteralText: obj.LiteralText[:end]})
+}
+
+func (obj *MShellBool) SliceEnd(end int) (MShellObject, error) { return nil, fmt.Errorf("cannot slice a boolean.\n") }
+
+func (obj *MShellQuotation) SliceEnd(end int) (MShellObject, error) {
+    return CheckRangeExclusive(end, len(obj.Tokens), obj, &MShellQuotation{Tokens: obj.Tokens[:end]})
+}
+
+func (obj *MShellList) SliceEnd(end int) (MShellObject, error) {
+    return CheckRangeExclusive(end, len(obj.Items), obj, &MShellList{Items: obj.Items[:end]})
+}
+
+func (obj *MShellString) SliceEnd(end int) (MShellObject, error) {
+    return CheckRangeExclusive(end, len(obj.Content), obj, &MShellString{Content: obj.Content[:end]})
+}
+
+func (obj *MShellPipe) SliceEnd(end int) (MShellObject, error) {
+    return CheckRangeExclusive(end, len(obj.List.Items), obj, &MShellPipe{List: MShellList{Items: obj.List.Items[:end]}})
+}
+
+func (obj *MShellInt) SliceEnd(end int) (MShellObject, error) { return nil, fmt.Errorf("Cannot slice an integer.\n") }
+
+
 func ParseRawString(inputString string) (string, error) {
     // Purpose of this function is to remove outer quotes, handle escape characters
     if len(inputString) < 2 {
-        return "", fmt.Errorf("input string should have a minimum length of 2 for surrounding double quotes")
+        return "", fmt.Errorf("input string should have a minimum length of 2 for surrounding double quotes.\n")
     }
 
     var b strings.Builder

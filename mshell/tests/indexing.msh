@@ -4,3 +4,10 @@ echo
 "My string" :3:
 myliteral :4:
 ];
+
+[
+echo
+"My string" :5
+] ;
+
+[ echo "Another" 3: ];

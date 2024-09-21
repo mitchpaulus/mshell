@@ -806,29 +806,29 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
                 return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", t.Line, t.Column, err.Error()))
             }
 
-            // Check if obj1 is a list, string, or literal
-            switch obj1.(type) {
-            case *MShellList:
-                if index < 0 || index >= len(obj1.(*MShellList).Items) {
-                    return FailWithMessage(fmt.Sprintf("%d:%d: Index %d out of range for list of length %d.\n", t.Line, t.Column, index, len(obj1.(*MShellList).Items)))
-                } else {
-                    stack.Push(obj1.(*MShellList).Items[index])
-                }
-            case *MShellString:
-                if index < 0 || index >= len(obj1.(*MShellString).Content) {
-                    return FailWithMessage(fmt.Sprintf("%d:%d: Index %d out of range for string of length %d.\n", t.Line, t.Column, index, len(obj1.(*MShellString).Content)))
-                } else {
-                    stack.Push(&MShellString { string(obj1.(*MShellString).Content[index]) })
-                }
-            case *MShellLiteral:
-                if index < 0 || index >= len(obj1.(*MShellLiteral).LiteralText) {
-                    return FailWithMessage(fmt.Sprintf("%d:%d: Index %d out of range for literal of length %d.\n", t.Line, t.Column, index, len(obj1.(*MShellLiteral).LiteralText)))
-                } else {
-                    stack.Push(&MShellString { string(obj1.(*MShellLiteral).LiteralText[index]) })
-                }
-            default:
-                return FailWithMessage(fmt.Sprintf("%d:%d: Cannot index a %s.\n", t.Line, t.Column, obj1.TypeName()))
-            }
+            result, err := obj1.Index(index)
+            if err != nil { return FailWithMessage(fmt.Sprintf("%d:%d: %s", t.Line, t.Column, err.Error())) }
+            stack.Push(result)
+        } else if t.Type == ENDINDEXER || t.Type == STARTINDEXER {
+            obj1, err := stack.Pop()
+            if err != nil { return FailWithMessage(fmt.Sprintf("%d:%d: Cannot end index an empty stack.\n", t.Line, t.Column)) }
+
+            var indexStr string
+            // Parse the index value
+            if t.Type == ENDINDEXER { 
+                indexStr = t.Lexeme[1:] 
+            } else { indexStr = t.Lexeme[:len(t.Lexeme) - 1] }
+
+            index, err := strconv.Atoi(indexStr)
+            if err != nil { return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", t.Line, t.Column, err.Error())) }
+
+            var result MShellObject
+            if t.Type == ENDINDEXER { 
+                result, err = obj1.SliceEnd(index) 
+            } else { result, err = obj1.SliceStart(index) }
+
+            if err != nil { return FailWithMessage(fmt.Sprintf("%d:%d: %s", t.Line, t.Column, err.Error())) }
+            stack.Push(result)
         } else {
             return FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Type))
         }
