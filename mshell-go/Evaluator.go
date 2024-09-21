@@ -793,6 +793,42 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
             }
 
             stack.Push(&MShellString { obj.DebugString() })
+        } else if t.Type == INDEXER {
+            obj1, err := stack.Pop()
+            if err != nil {
+                return FailWithMessage(fmt.Sprintf("%d:%d: Cannot index an empty stack.\n", t.Line, t.Column))
+            }
+
+            // Indexer is a digit between ':' and ':'. Remove ends and parse the number
+            indexStr := t.Lexeme[1:len(t.Lexeme) - 1]
+            index, err := strconv.Atoi(indexStr)
+            if err != nil {
+                return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", t.Line, t.Column, err.Error()))
+            }
+
+            // Check if obj1 is a list, string, or literal
+            switch obj1.(type) {
+            case *MShellList:
+                if index < 0 || index >= len(obj1.(*MShellList).Items) {
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Index %d out of range for list of length %d.\n", t.Line, t.Column, index, len(obj1.(*MShellList).Items)))
+                } else {
+                    stack.Push(obj1.(*MShellList).Items[index])
+                }
+            case *MShellString:
+                if index < 0 || index >= len(obj1.(*MShellString).Content) {
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Index %d out of range for string of length %d.\n", t.Line, t.Column, index, len(obj1.(*MShellString).Content)))
+                } else {
+                    stack.Push(&MShellString { string(obj1.(*MShellString).Content[index]) })
+                }
+            case *MShellLiteral:
+                if index < 0 || index >= len(obj1.(*MShellLiteral).LiteralText) {
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Index %d out of range for literal of length %d.\n", t.Line, t.Column, index, len(obj1.(*MShellLiteral).LiteralText)))
+                } else {
+                    stack.Push(&MShellString { string(obj1.(*MShellLiteral).LiteralText[index]) })
+                }
+            default:
+                return FailWithMessage(fmt.Sprintf("%d:%d: Cannot index a %s.\n", t.Line, t.Column, obj1.TypeName()))
+            }
         } else {
             return FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Type))
         }

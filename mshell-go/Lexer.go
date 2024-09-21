@@ -45,6 +45,7 @@ const (
     INTEGER
     DOUBLE
     LITERAL
+    INDEXER
 )
 
 func (t TokenType) String() string {
@@ -117,6 +118,8 @@ func (t TokenType) String() string {
         return "DOUBLE"
     case LITERAL:
         return "LITERAL"
+    case INDEXER:
+        return "INDEXER"
     default:
         return "UNKNOWN"
     }
@@ -214,8 +217,56 @@ func (l *Lexer) scanToken() Token {
             return l.parsePositional()
         }
         return l.parseLiteralOrNumber()
+    case ':':
+        return l.parseIndexerOrLiteral()
     default:
         return l.parseLiteralOrNumber()
+    }
+}
+
+func (l *Lexer) consumeLiteral() Token {
+    for {
+        if l.atEnd() {
+            break
+        }
+        c := l.peek()
+        if !unicode.IsSpace(c) && c != ']' && c != ')' && c != '<' && c != '>' && c != ';' && c != '?' {
+            l.advance()
+        } else {
+            break
+        }
+    }
+    return l.makeToken(LITERAL)
+}
+
+func (l *Lexer) parseIndexerOrLiteral() Token {
+    c := l.advance()
+
+    // Return literal if at end
+    if l.atEnd() {
+        return l.makeToken(LITERAL)
+    }
+
+    if unicode.IsDigit(c) {
+        // Read all the digits
+        for {
+            c = l.advance()
+
+            if l.atEnd() {
+                break
+            }
+            if !unicode.IsDigit(l.peek()) {
+                break
+            }
+        }
+    } else {
+        return l.consumeLiteral()
+    }
+
+    if c == ':' {
+        return l.makeToken(INDEXER)
+    } else {
+        return l.consumeLiteral()
     }
 }
 
