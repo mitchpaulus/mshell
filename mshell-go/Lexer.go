@@ -190,6 +190,23 @@ func (l *Lexer) peekNext() rune {
     return l.input[l.current+1]
 }
 
+var notAllowedLiteralChars = map[rune]bool{
+    '[': true,
+    ']': true,
+    '(': true,
+    ')': true,
+    '<': true,
+    '>': true,
+    ';': true,
+    '?': true,
+}
+
+func isAllowedLiteral(r rune) bool {
+    if unicode.IsSpace(r) { return false }
+    _, ok := notAllowedLiteralChars[r]
+    return !ok
+}
+
 func (l *Lexer) scanToken() Token {
     l.eatWhitespace()
     l.start = l.current
@@ -238,7 +255,7 @@ func (l *Lexer) consumeLiteral() Token {
             break
         }
         c := l.peek()
-        if !unicode.IsSpace(c) && c != ']' && c != ')' && c != '<' && c != '>' && c != ';' && c != '?' {
+        if isAllowedLiteral(c) {
             l.advance()
         } else {
             break
@@ -261,7 +278,7 @@ func (l *Lexer) parseNumberOrStartIndexer() Token {
         return l.makeToken(STARTINDEXER)
     }
 
-    if unicode.IsSpace(peek) || peek == ']' || peek == ')' || peek == '<' || peek == '>' || peek == ';' || peek == '?' {
+    if !isAllowedLiteral(peek) {
         return l.makeToken(INTEGER)
     } else {
         return l.consumeLiteral()
@@ -341,7 +358,7 @@ func (l *Lexer) parseLiteralOrNumber() Token {
             break
         }
         c := l.peek()
-        if !unicode.IsSpace(c) && c != ']' && c != ')' && c != '<' && c != '>' && c != ';' && c != '?' {
+        if isAllowedLiteral(c) {
             l.advance()
         } else {
             break
