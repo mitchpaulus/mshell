@@ -8,7 +8,6 @@
 - Function definition
 - String/list slicing, other string/path operations
 - Tilde Expansion
-- Command substitution
 - Process substitution
 - For loop construction
 - Functional operators like `map`, `fold`, `filter`, etc.
