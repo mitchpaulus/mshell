@@ -85,7 +85,6 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
         if t.Type == EOF {
             return SimpleSuccess()
         } else if t.Type == LITERAL {
-
             if t.Lexeme == ".s" {
                 // Print current stack
                 fmt.Fprintf(os.Stderr, stack.String())
@@ -130,6 +129,26 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
                     default:
                         return FailWithMessage(fmt.Sprintf("%d:%d: Cannot append a %s to a %s.\n", t.Line, t.Column, obj1.TypeName(), obj2.TypeName()))
                     }
+                }
+            } else if t.Lexeme == "w" || t.Lexeme == "wl" {
+                // Print the top of the stack to the console.
+                top, err := stack.Peek()
+                if err != nil {
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Cannot write an empty stack.\n", t.Line, t.Column))
+                }
+
+                switch top.(type) {
+                case *MShellLiteral:
+                    fmt.Fprintf(os.Stdout, "%s", top.(*MShellLiteral).LiteralText)
+                case *MShellString:
+                    fmt.Fprintf(os.Stdout, "%s", top.(*MShellString).Content)
+                case *MShellInt:
+                    fmt.Fprintf(os.Stdout, "%d", top.(*MShellInt).Value)
+                default:
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Cannot write a %s.\n", t.Line, t.Column, top.TypeName()))
+                }
+                if t.Lexeme == "wl" {
+                    fmt.Fprintf(os.Stdout, "\n")
                 }
             } else {
                 stack.Push(&MShellLiteral { t.Lexeme })
