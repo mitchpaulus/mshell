@@ -9,6 +9,7 @@ import (
     "strings"
     "sync"
     "bufio"
+    "bytes"
 )
 
 type MShellStack []MShellObject
@@ -132,7 +133,7 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
                 }
             } else if t.Lexeme == "w" || t.Lexeme == "wl" {
                 // Print the top of the stack to the console.
-                top, err := stack.Peek()
+                top, err := stack.Pop()
                 if err != nil {
                     return FailWithMessage(fmt.Sprintf("%d:%d: Cannot write an empty stack.\n", t.Line, t.Column))
                 }
@@ -185,7 +186,7 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
                                 return FailWithMessage("Encountered break within list.\n")
                             }
 
-                            l := &MShellList { listStack, "", "" }
+                            l := &MShellList { listStack, "", "", STDOUT_NONE }
                             stack.Push(l)
 
                             break
@@ -236,10 +237,11 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
             // Switch on type
             var result EvalResult
             var exitCode int
+            var stdout string
 
             switch top.(type) {
             case *MShellList:
-                result, exitCode = RunProcess(*top.(*MShellList), context)
+                result, exitCode, stdout = RunProcess(*top.(*MShellList), context)
             case *MShellPipe:
                 result, exitCode = state.RunPipeline(*top.(*MShellPipe), context, stack)
             default:
@@ -248,6 +250,24 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
 
             if !result.Success {
                 return result
+            }
+
+            asList, ok := top.(*MShellList)
+            if ok {
+                if asList.StdoutBehavior == STDOUT_LINES {
+                    newMShellList := &MShellList { Items: []MShellObject{}, StandardInputFile: "", StandardOutputFile: "", StdoutBehavior: STDOUT_NONE } 
+                    var scanner *bufio.Scanner
+                    scanner = bufio.NewScanner(strings.NewReader(stdout))
+                    for scanner.Scan() {
+                        newMShellList.Items = append(newMShellList.Items, &MShellString { scanner.Text() })
+                    }
+                    stack.Push(newMShellList)
+                } else if asList.StdoutBehavior == STDOUT_STRIPPED {
+                    stripped := strings.TrimSpace(stdout)
+                    stack.Push(&MShellString { stripped })
+                } else if asList.StdoutBehavior == STDOUT_COMPLETE {
+                    stack.Push(&MShellString { stdout })
+                }
             }
 
             // Push the exit code onto the stack if a question was used to execute
@@ -848,6 +868,27 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
 
             if err != nil { return FailWithMessage(fmt.Sprintf("%d:%d: %s", t.Line, t.Column, err.Error())) }
             stack.Push(result)
+        } else if t.Type == STDOUTLINES || t.Type == STDOUTSTRIPPED || t.Type == STDOUTCOMPLETE {
+            obj, err := stack.Pop()
+            if err != nil {
+                return FailWithMessage(fmt.Sprintf("%d:%d: Cannot set stdout behavior to lines on an empty stack.\n", t.Line, t.Column))
+            }
+
+            list, ok := obj.(*MShellList)
+            if !ok {
+                return FailWithMessage(fmt.Sprintf("%d:%d: Cannot set stdout behavior to lines on a %s.\n", t.Line, t.Column, obj.TypeName()))
+            }
+
+            if t.Type == STDOUTLINES {
+                list.StdoutBehavior = STDOUT_LINES
+            } else if t.Type == STDOUTSTRIPPED {
+                list.StdoutBehavior = STDOUT_STRIPPED
+            } else if t.Type == STDOUTCOMPLETE {
+                list.StdoutBehavior = STDOUT_COMPLETE
+            } else {
+                return FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Type))
+            }
+            stack.Push(list)
         } else {
             return FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Type))
         }
@@ -862,7 +903,8 @@ type Executable interface {
 
 
 func (list *MShellList) Execute(state *EvalState, context ExecuteContext, stack *MShellStack) (EvalResult, int) {
-    return RunProcess(*list, context)
+    result, exitCode, _ := RunProcess(*list, context)
+    return result, exitCode
 }
 
 func (quotation *MShellQuotation) Execute(state *EvalState, context ExecuteContext, stack *MShellStack) (EvalResult, int) {
@@ -908,16 +950,16 @@ func (quotation *MShellQuotation) Execute(state *EvalState, context ExecuteConte
 }
 
 
-func RunProcess(list MShellList, context ExecuteContext) (EvalResult, int) {
+func RunProcess(list MShellList, context ExecuteContext) (EvalResult, int, string) {
     // Check for empty list
     if len(list.Items) == 0 {
-        return FailWithMessage("Cannot execute an empty list.\n"), 1
+        return FailWithMessage("Cannot execute an empty list.\n"), 1, ""
     }
 
     // Check that all list items are commandlineable
     for i, item := range list.Items {
         if !item.IsCommandLineable() {
-            return FailWithMessage(fmt.Sprintf("Item %d (%s) cannot be used as a command line argument.\n", i, item.DebugString())), 1
+            return FailWithMessage(fmt.Sprintf("Item %d (%s) cannot be used as a command line argument.\n", i, item.DebugString())), 1, ""
         }
     }
 
@@ -928,11 +970,16 @@ func RunProcess(list MShellList, context ExecuteContext) (EvalResult, int) {
 
     cmd := exec.Command(commandLineArguments[0], commandLineArguments[1:]...)
 
-    if list.StandardOutputFile != "" {
+    var commandSubWriter bytes.Buffer
+    // TBD: Should we allow command substituation and redirection at the same time?
+    // Probably more hassle than worth including, with probable workarounds for that rare case.
+    if list.StdoutBehavior != STDOUT_NONE {
+        cmd.Stdout = &commandSubWriter
+    } else if list.StandardOutputFile != "" {
         // Open the file for writing
         file, err := os.Create(list.StandardOutputFile)
         if err != nil {
-            return FailWithMessage(fmt.Sprintf("Error opening file %s for writing: %s\n", list.StandardOutputFile, err.Error())), 1
+            return FailWithMessage(fmt.Sprintf("Error opening file %s for writing: %s\n", list.StandardOutputFile, err.Error())), 1, ""
         }
         cmd.Stdout = file
         defer file.Close()
@@ -947,7 +994,7 @@ func RunProcess(list MShellList, context ExecuteContext) (EvalResult, int) {
         // Open the file for reading
         file, err := os.Open(list.StandardInputFile)
         if err != nil {
-            return FailWithMessage(fmt.Sprintf("Error opening file %s for reading: %s\n", list.StandardInputFile, err.Error())), 1
+            return FailWithMessage(fmt.Sprintf("Error opening file %s for reading: %s\n", list.StandardInputFile, err.Error())), 1, ""
         }
         cmd.Stdin = file
         defer file.Close()
@@ -973,7 +1020,11 @@ func RunProcess(list MShellList, context ExecuteContext) (EvalResult, int) {
     // fmt.Fprintf(os.Stderr, "Command finished\n")
     exitCode := cmd.ProcessState.ExitCode()
 
-    return SimpleSuccess(), exitCode
+    if list.StdoutBehavior != STDOUT_NONE {
+        return SimpleSuccess(), exitCode, commandSubWriter.String()
+    } else {
+        return SimpleSuccess(), exitCode, ""
+    }
 }
 
 func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContext, stack *MShellStack) (EvalResult, int) {

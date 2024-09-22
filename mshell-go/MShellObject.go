@@ -32,10 +32,20 @@ type MShellQuotation struct {
     StandardOutputFile string
 }
 
+type StdoutBehavior int
+
+const (
+    STDOUT_NONE = iota
+    STDOUT_LINES
+    STDOUT_STRIPPED
+    STDOUT_COMPLETE
+)
+
 type MShellList struct {
     Items []MShellObject
     StandardInputFile string
     StandardOutputFile string
+    StdoutBehavior StdoutBehavior
 }
 
 type MShellString struct {

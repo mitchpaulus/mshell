@@ -48,6 +48,9 @@ const (
     INDEXER
     ENDINDEXER
     STARTINDEXER
+    STDOUTLINES
+    STDOUTSTRIPPED
+    STDOUTCOMPLETE
 )
 
 func (t TokenType) String() string {
@@ -126,6 +129,12 @@ func (t TokenType) String() string {
         return "ENDINDEXER"
     case STARTINDEXER:
         return "STARTINDEXER"
+    case STDOUTLINES:
+        return "STDOUTLINES"
+    case STDOUTSTRIPPED:
+        return "STDOUTSTRIPPED"
+    case STDOUTCOMPLETE:
+        return "STDOUTCOMPLETE"
     default:
         return "UNKNOWN"
     }
@@ -244,6 +253,34 @@ func (l *Lexer) scanToken() Token {
         return l.parseLiteralOrNumber()
     case ':':
         return l.parseIndexerOrLiteral()
+    case 'o':
+        peek := l.peek()
+        if peek == 's' {
+            l.advance()
+            if isAllowedLiteral(l.peek()) {
+                return l.consumeLiteral()
+            } else {
+                return l.makeToken(STDOUTSTRIPPED)
+            }
+        } else if peek == 'c' {
+            l.advance()
+            if isAllowedLiteral(l.peek()) {
+                return l.consumeLiteral()
+            } else {
+                return l.makeToken(STDOUTCOMPLETE)
+            }
+        } else if peek == 'r' {
+            l.advance()
+            if isAllowedLiteral(l.peek()) {
+                return l.consumeLiteral()
+            } else {
+                return l.makeToken(OR)
+            }
+        } else if isAllowedLiteral(peek) {
+            return l.consumeLiteral()
+        } else {
+            return l.makeToken(STDOUTLINES)
+        }
     default:
         return l.parseLiteralOrNumber()
     }
@@ -390,8 +427,6 @@ func (l *Lexer) parseLiteralOrNumber() Token {
         return l.makeToken(NOT)
     case "and":
         return l.makeToken(AND)
-    case "or":
-        return l.makeToken(OR)
     case ">=":
         return l.makeToken(GREATERTHANOREQUAL)
     case "<=":
