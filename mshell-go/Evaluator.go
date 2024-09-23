@@ -956,19 +956,26 @@ func RunProcess(list MShellList, context ExecuteContext) (EvalResult, int, strin
         return FailWithMessage("Cannot execute an empty list.\n"), 1, ""
     }
 
-    // Check that all list items are commandlineable
-    for i, item := range list.Items {
-        if !item.IsCommandLineable() {
-            return FailWithMessage(fmt.Sprintf("Item %d (%s) cannot be used as a command line argument.\n", i, item.DebugString())), 1, ""
+
+    commandLineArgs := make([]string, 0)
+    var commandLineQueue []MShellObject
+    commandLineQueue = append(commandLineQueue, list.Items...)
+
+    for len(commandLineQueue) > 0 {
+        item := commandLineQueue[0]
+        commandLineQueue = commandLineQueue[1:]
+
+        if innerList, ok := item.(*MShellList); ok {
+            // Add to queue
+            commandLineQueue = append(commandLineQueue, innerList.Items...)
+        } else if !item.IsCommandLineable() {
+            return FailWithMessage(fmt.Sprintf("Item (%s) cannot be used as a command line argument.\n", item.DebugString())), 1, ""
+        } else {
+            commandLineArgs = append(commandLineArgs, item.CommandLine())
         }
     }
 
-    commandLineArguments := make([]string, len(list.Items))
-    for i, item := range list.Items {
-        commandLineArguments[i] = item.CommandLine()
-    }
-
-    cmd := exec.Command(commandLineArguments[0], commandLineArguments[1:]...)
+    cmd := exec.Command(commandLineArgs[0], commandLineArgs[1:]...)
 
     var commandSubWriter bytes.Buffer
     // TBD: Should we allow command substituation and redirection at the same time?
