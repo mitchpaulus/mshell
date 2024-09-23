@@ -51,6 +51,7 @@ const (
     STDOUTLINES
     STDOUTSTRIPPED
     STDOUTCOMPLETE
+    EXPORT
 )
 
 func (t TokenType) String() string {
@@ -135,6 +136,8 @@ func (t TokenType) String() string {
         return "STDOUTSTRIPPED"
     case STDOUTCOMPLETE:
         return "STDOUTCOMPLETE"
+    case EXPORT:
+        return "EXPORT"
     default:
         return "UNKNOWN"
     }
@@ -413,6 +416,8 @@ func (l *Lexer) parseLiteralOrNumber() Token {
         return l.makeToken(EQUALS)
     case "x":
         return l.makeToken(INTERPRET)
+    case "export":
+        return l.makeToken(EXPORT)
     case "if":
         return l.makeToken(IF)
     case "loop":

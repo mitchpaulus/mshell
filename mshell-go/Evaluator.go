@@ -48,6 +48,8 @@ type EvalState  struct {
     PositionalArgs[] string
     LoopDepth int
 
+    ExportedVariables map[string]struct{}
+
     // private Dictionary<string, MShellObject> _variables = new();
     Variables map[string]MShellObject
 }
@@ -241,7 +243,7 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
 
             switch top.(type) {
             case *MShellList:
-                result, exitCode, stdout = RunProcess(*top.(*MShellList), context)
+                result, exitCode, stdout = RunProcess(*top.(*MShellList), context, state)
             case *MShellPipe:
                 result, exitCode = state.RunPipeline(*top.(*MShellPipe), context, stack)
             default:
@@ -540,17 +542,23 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
         } else if t.Type == VARRETRIEVE {
             name := t.Lexeme[:len(t.Lexeme) - 1]
             obj, ok := state.Variables[name]
-            if !ok {
-                var message strings.Builder
-                message.WriteString(fmt.Sprintf("%d:%d: Variable %s not found.\n", t.Line, t.Column, name))
-                message.WriteString("Variables:\n")
-                for key, _ := range state.Variables {
-                    message.WriteString(fmt.Sprintf("  %s\n", key))
+            if ok {
+                stack.Push(obj)
+            } else {
+                // Check current environment variables
+                envValue, ok := os.LookupEnv(name)
+                if ok {
+                    stack.Push(&MShellString { envValue })
+                } else {
+                    var message strings.Builder
+                    message.WriteString(fmt.Sprintf("%d:%d: Variable %s not found.\n", t.Line, t.Column, name))
+                    message.WriteString("Variables:\n")
+                    for key, _ := range state.Variables {
+                        message.WriteString(fmt.Sprintf("  %s\n", key))
+                    }
+                    return FailWithMessage(message.String())
                 }
-                return FailWithMessage(message.String())
             }
-
-            stack.Push(obj)
         } else if t.Type == LOOP {
             obj, err := stack.Pop()
             if err != nil {
@@ -889,6 +897,24 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
                 return FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Type))
             }
             stack.Push(list)
+        } else if t.Type == EXPORT {
+            obj, err := stack.Pop()
+            if err != nil {
+                return FailWithMessage(fmt.Sprintf("%d:%d: Cannot export an empty stack.\n", t.Line, t.Column))
+            }
+
+            var varName string
+            switch obj.(type) {
+            case *MShellString:
+                varName = obj.(*MShellString).Content
+            case *MShellLiteral:
+                varName = obj.(*MShellLiteral).LiteralText
+            default:
+                return FailWithMessage(fmt.Sprintf("%d:%d: Cannot export a %s.\n", t.Line, t.Column, obj.TypeName()))
+            }
+
+            state.ExportedVariables[varName] = struct{}{}
+
         } else {
             return FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Type))
         }
@@ -903,7 +929,7 @@ type Executable interface {
 
 
 func (list *MShellList) Execute(state *EvalState, context ExecuteContext, stack *MShellStack) (EvalResult, int) {
-    result, exitCode, _ := RunProcess(*list, context)
+    result, exitCode, _ := RunProcess(*list, context, state)
     return result, exitCode
 }
 
@@ -950,12 +976,11 @@ func (quotation *MShellQuotation) Execute(state *EvalState, context ExecuteConte
 }
 
 
-func RunProcess(list MShellList, context ExecuteContext) (EvalResult, int, string) {
+func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (EvalResult, int, string) {
     // Check for empty list
     if len(list.Items) == 0 {
         return FailWithMessage("Cannot execute an empty list.\n"), 1, ""
     }
-
 
     commandLineArgs := make([]string, 0)
     var commandLineQueue []MShellObject
@@ -976,6 +1001,22 @@ func RunProcess(list MShellList, context ExecuteContext) (EvalResult, int, strin
     }
 
     cmd := exec.Command(commandLineArgs[0], commandLineArgs[1:]...)
+    cmd.Env = os.Environ()
+
+    for key, _ := range state.ExportedVariables {
+        // Loopup key in state.Variables
+        value, ok := state.Variables[key]
+        if ok {
+            switch value.(type) {
+            case *MShellString:
+                cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", key, value.(*MShellString).Content))
+            case *MShellLiteral:
+                cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", key, value.(*MShellLiteral).LiteralText))
+            default:
+                return FailWithMessage(fmt.Sprintf("Cannot export a %s as an environment variable.\n", value.TypeName())), 1, ""
+            }
+        }
+    }
 
     var commandSubWriter bytes.Buffer
     // TBD: Should we allow command substituation and redirection at the same time?
@@ -1023,9 +1064,22 @@ func RunProcess(list MShellList, context ExecuteContext) (EvalResult, int, strin
     cmd.Stderr = os.Stderr
 
     // fmt.Fprintf(os.Stderr, "Running command: %s\n", cmd.String())
-    cmd.Run() // Manually deal with the exit code upstream
+    err := cmd.Run() // Manually deal with the exit code upstream
     // fmt.Fprintf(os.Stderr, "Command finished\n")
-    exitCode := cmd.ProcessState.ExitCode()
+    var exitCode int
+    if err != nil {
+        if _, ok := err.(*exec.ExitError); !ok {
+            fmt.Fprintf(os.Stderr, "Error running command: %s\n", err.Error()) 
+            exitCode = 1
+        } else {
+            // Command exited with non-zero exit code
+            exitCode = err.(*exec.ExitError).ExitCode()
+        }
+    } else {
+        exitCode = cmd.ProcessState.ExitCode()
+    }
+
+    // fmt.Fprintf(os.Stderr, "Exit code: %d\n", exitCode)
 
     if list.StdoutBehavior != STDOUT_NONE {
         return SimpleSuccess(), exitCode, commandSubWriter.String()
