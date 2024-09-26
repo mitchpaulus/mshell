@@ -11,3 +11,5 @@ echo
 ] ;
 
 [ echo "Another" 3: ];
+
+[ echo "Full Range" 1:3];

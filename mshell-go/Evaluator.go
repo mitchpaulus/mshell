@@ -153,6 +153,40 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
                 if t.Lexeme == "wl" {
                     fmt.Fprintf(os.Stdout, "\n")
                 }
+            } else if t.Lexeme == "find-replace" {
+                // Do simple find replace with the top three strings on stack
+                obj1, err := stack.Pop()
+                if err != nil {
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'find-replace' operation on an empty stack.\n", t.Line, t.Column))
+                }
+
+                obj2, err := stack.Pop()
+                if err != nil {
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'find-replace' operation on a stack with only one item.\n", t.Line, t.Column))
+                }
+
+                obj3, err := stack.Pop()
+                if err != nil {
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'find-replace' operation on a stack with only two items.\n", t.Line, t.Column))
+                }
+
+                switch obj1.(type) {
+                case *MShellString:
+                    switch obj2.(type) {
+                    case *MShellString:
+                        switch obj3.(type) {
+                        case *MShellString:
+                            stack.Push(&MShellString { strings.Replace(obj3.(*MShellString).Content, obj2.(*MShellString).Content, obj1.(*MShellString).Content, -1) })
+                        default:
+                            return FailWithMessage(fmt.Sprintf("%d:%d: Cannot find-replace a %s.\n", t.Line, t.Column, obj3.TypeName()))
+                        }
+                    default:
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot find-replace a %s.\n", t.Line, t.Column, obj2.TypeName()))
+                    }
+                default:
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Cannot find-replace a %s.\n", t.Line, t.Column, obj1.TypeName()))
+                }
+
             } else {
                 stack.Push(&MShellLiteral { t.Lexeme })
             }
@@ -875,6 +909,21 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
             } else { result, err = obj1.SliceStart(index) }
 
             if err != nil { return FailWithMessage(fmt.Sprintf("%d:%d: %s", t.Line, t.Column, err.Error())) }
+            stack.Push(result)
+        } else if t.Type == SLICEINDEXER {
+            obj1, err := stack.Pop()
+            if err != nil { return FailWithMessage(fmt.Sprintf("%d:%d: Cannot slice index an empty stack.\n", t.Line, t.Column)) }
+
+            // StartInc:EndExc
+            parts := strings.Split(t.Lexeme, ":")
+            startInt, err := strconv.Atoi(parts[0])
+            endInt, err2 := strconv.Atoi(parts[1])
+
+            if err != nil || err2 != nil { return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing slice indexes: %s\n", t.Line, t.Column, err.Error())) }
+
+            result, err := obj1.Slice(startInt, endInt)
+            if err != nil { return FailWithMessage(fmt.Sprintf("%d:%d: Cannot slice index a %s.\n", t.Line, t.Column, obj1.TypeName())) }
+
             stack.Push(result)
         } else if t.Type == STDOUTLINES || t.Type == STDOUTSTRIPPED || t.Type == STDOUTCOMPLETE {
             obj, err := stack.Pop()

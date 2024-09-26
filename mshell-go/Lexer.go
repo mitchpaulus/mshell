@@ -48,6 +48,7 @@ const (
     INDEXER
     ENDINDEXER
     STARTINDEXER
+    SLICEINDEXER
     STDOUTLINES
     STDOUTSTRIPPED
     STDOUTCOMPLETE
@@ -130,6 +131,8 @@ func (t TokenType) String() string {
         return "ENDINDEXER"
     case STARTINDEXER:
         return "STARTINDEXER"
+    case SLICEINDEXER:
+        return "SLICEINDEXER"
     case STDOUTLINES:
         return "STDOUTLINES"
     case STDOUTSTRIPPED:
@@ -315,7 +318,19 @@ func (l *Lexer) parseNumberOrStartIndexer() Token {
     peek := l.peek()
     if peek == ':' {
         l.advance()
-        return l.makeToken(STARTINDEXER)
+
+        c := l.peek()
+        if unicode.IsDigit(c) {
+            // Read all the digits
+            for {
+                if l.atEnd() { break }
+                if !unicode.IsDigit(l.peek()) { break } 
+                l.advance()
+            }
+            return l.makeToken(SLICEINDEXER)
+        } else {
+            return l.makeToken(STARTINDEXER)
+        }
     }
 
     if !isAllowedLiteral(peek) {

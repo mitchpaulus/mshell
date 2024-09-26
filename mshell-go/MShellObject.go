@@ -16,6 +16,7 @@ type MShellObject interface {
     Index(index int) (MShellObject, error)
     SliceStart(start int) (MShellObject, error)
     SliceEnd(end int) (MShellObject, error)
+    Slice(startInc int, endExc int) (MShellObject, error)
 }
 
 type MShellLiteral struct {
@@ -350,6 +351,30 @@ func (obj *MShellPipe) SliceEnd(end int) (MShellObject, error) {
 }
 
 func (obj *MShellInt) SliceEnd(end int) (MShellObject, error) { return nil, fmt.Errorf("Cannot slice an integer.\n") }
+
+func (obj *MShellLiteral) Slice(startInc int, endExc int) (MShellObject, error) {
+    return CheckRangeExclusive(startInc, len(obj.LiteralText), obj, &MShellLiteral{LiteralText: obj.LiteralText[startInc:endExc]})
+}
+
+func (obj *MShellBool) Slice(startInc int, endExc int) (MShellObject, error) { return nil, fmt.Errorf("Cannot slice a boolean.\n") }
+
+func (obj *MShellQuotation) Slice(startInc int, endExc int) (MShellObject, error) {
+    return CheckRangeExclusive(startInc, len(obj.Tokens), obj, &MShellQuotation{Tokens: obj.Tokens[startInc:endExc]})
+}
+
+func (obj *MShellList) Slice(startInc int, endExc int) (MShellObject, error) {
+    return CheckRangeExclusive(startInc, len(obj.Items), obj, &MShellList{Items: obj.Items[startInc:endExc]})
+}
+
+func (obj *MShellString) Slice(startInc int, endExc int) (MShellObject, error) {
+    return CheckRangeExclusive(startInc, len(obj.Content), obj, &MShellString{Content: obj.Content[startInc:endExc]})
+}
+
+func (obj *MShellPipe) Slice(startInc int, endExc int) (MShellObject, error) {
+    return CheckRangeExclusive(startInc, len(obj.List.Items), obj, &MShellPipe{List: MShellList{Items: obj.List.Items[startInc:endExc]}})
+}
+
+func (obj *MShellInt) Slice(startInc int, endExc int) (MShellObject, error) { return nil, fmt.Errorf("Cannot slice an integer.\n") }
 
 
 func ParseRawString(inputString string) (string, error) {
