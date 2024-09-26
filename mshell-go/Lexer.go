@@ -22,6 +22,7 @@ const (
     QUESTION
     POSITIONAL
     STRING
+    SINGLEQUOTESTRING
     MINUS
     PLUS
     EQUALS
@@ -79,6 +80,8 @@ func (t TokenType) String() string {
         return "POSITIONAL"
     case STRING:
         return "STRING"
+    case SINGLEQUOTESTRING:
+        return "SINGLEQUOTESTRING"
     case MINUS:
         return "MINUS"
     case PLUS:
@@ -233,11 +236,13 @@ func (l *Lexer) scanToken() Token {
 
     if c == '"' {
         return l.parseString()
-    }
+    } 
 
     if unicode.IsDigit(c) { return l.parseNumberOrStartIndexer() }
 
     switch c {
+    case '\'':
+        return l.parseSingleQuoteString()
     case '[':
         return l.makeToken(LEFT_SQUARE_BRACKET)
     case ']':
@@ -290,6 +295,23 @@ func (l *Lexer) scanToken() Token {
     default:
         return l.parseLiteralOrNumber()
     }
+}
+
+func (l *Lexer) parseSingleQuoteString() Token {
+    // When this is called, we've already consumed a single quote.
+    for {
+        if l.atEnd() {
+            fmt.Fprintf(os.Stderr, "%d:%d: Unterminated string.\n", l.line, l.col)
+            return l.makeToken(ERROR)
+        }
+
+        c := l.advance()
+        if c == '\'' {
+            break
+        }
+    }
+
+    return l.makeToken(SINGLEQUOTESTRING)
 }
 
 func (l *Lexer) consumeLiteral() Token {

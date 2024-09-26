@@ -327,6 +327,8 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
                 return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing string: %s\n", t.Line, t.Column, err.Error()))
             }
             stack.Push(&MShellString { parsedString })
+        } else if t.Type == SINGLEQUOTESTRING {
+            stack.Push(&MShellString { t.Lexeme[1:len(t.Lexeme) - 1] })
         } else if t.Type == IF {
             obj, err := stack.Pop()
             if err != nil {
@@ -561,6 +563,22 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
                         stack.Push(obj2)
                     default:
                         return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a string to a %s.\n", t.Line, t.Column, obj2.TypeName()))
+                    }
+                case *MShellLiteral:
+                    switch obj2.(type) {
+                    case *MShellList:
+                        if t.Type == GREATERTHAN {
+                            obj2.(*MShellList).StandardOutputFile = obj1.(*MShellLiteral).LiteralText
+                        } else {
+                            obj2.(*MShellList).StandardInputFile = obj1.(*MShellLiteral).LiteralText
+                        }
+                        stack.Push(obj2)
+                    case *MShellQuotation:
+                        if t.Type == GREATERTHAN {
+                            obj2.(*MShellQuotation).StandardOutputFile = obj1.(*MShellLiteral).LiteralText
+                        } else {
+                            obj2.(*MShellQuotation).StandardInputFile = obj1.(*MShellLiteral).LiteralText
+                        }
                     }
                 default:
                     return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a %s to a %s.\n", t.Line, t.Column, obj1.TypeName(), obj2.TypeName()))
@@ -974,6 +992,8 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
 
 type Executable interface {
     Execute(state *EvalState, context ExecuteContext, stack *MShellStack) (EvalResult, int) 
+    GetStandardInputFile() string
+    GetStandardOutputFile() string
 }
 
 
@@ -1022,6 +1042,22 @@ func (quotation *MShellQuotation) Execute(state *EvalState, context ExecuteConte
     } else {
         return SimpleSuccess(), 0
     }
+}
+
+func (list *MShellList) GetStandardInputFile() string {
+    return list.StandardInputFile
+}
+
+func (list *MShellList) GetStandardOutputFile() string {
+    return list.StandardOutputFile
+}
+
+func (quotation *MShellQuotation) GetStandardInputFile() string {
+    return quotation.StandardInputFile
+}
+
+func (quotation *MShellQuotation) GetStandardOutputFile() string {
+    return quotation.StandardOutputFile
 }
 
 
@@ -1178,8 +1214,23 @@ func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContex
         }
 
         if i == 0 {
-            // Stdin should use the context of this function
-            newContext.StandardInput = context.StandardInput
+            // Stdin should use the context of this function, or the file marked on the initial object
+            executableStdinFile := MShellPipe.List.Items[i].(Executable).GetStandardInputFile()
+
+            if executableStdinFile != ""{
+                file, err := os.Open(executableStdinFile)
+                if err != nil {
+                    return FailWithMessage(fmt.Sprintf("Error opening file %s for reading: %s\n", executableStdinFile, err.Error())), 1
+                }
+                newContext.StandardInput = file
+                defer file.Close()
+            } else if context.StandardInput != nil {
+                newContext.StandardInput = context.StandardInput
+            } else {
+                // Default to stdin of this process itself
+                newContext.StandardInput = os.Stdin
+            }
+
             newContext.StandardOutput = pipeWriters[0]
         } else if  i == len(MShellPipe.List.Items) - 1 {
             // Stdout should use the context of this function
