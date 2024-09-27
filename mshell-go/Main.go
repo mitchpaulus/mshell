@@ -69,7 +69,6 @@ func main() {
         PositionalArgs: positionalArgs,
         LoopDepth: 0,
         Variables: make(map[string]MShellObject),
-        ExportedVariables: make(map[string]struct{}),
     }
 
     var stack MShellStack

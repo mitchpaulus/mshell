@@ -54,6 +54,7 @@ const (
     STDOUTSTRIPPED
     STDOUTCOMPLETE
     EXPORT
+    TILDEEXPANSION
 )
 
 func (t TokenType) String() string {

@@ -48,10 +48,6 @@ func (objList *MShellStack) String() string {
 type EvalState  struct {
     PositionalArgs[] string
     LoopDepth int
-
-    ExportedVariables map[string]struct{}
-
-    // private Dictionary<string, MShellObject> _variables = new();
     Variables map[string]MShellObject
 }
 
@@ -89,20 +85,7 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
         if t.Type == EOF {
             return SimpleSuccess()
         } else if t.Type == LITERAL {
-            // Check if Lexeme contains '*', then it's a glob.
-            if strings.Contains(t.Lexeme, "*") || strings.Contains(t.Lexeme, "?")  || strings.Contains(t.Lexeme, "[") {
-                // Glob
-                files, err := filepath.Glob(t.Lexeme)
-                if err != nil {
-                    return FailWithMessage(fmt.Sprintf("%d:%d: Malformed glob pattern: %s\n", t.Line, t.Column, err.Error()))
-                }
-
-                newList := &MShellList { Items: []MShellObject{}, StandardInputFile: "", StandardOutputFile: "", StdoutBehavior: STDOUT_NONE }
-                for _, file := range files {
-                    newList.Items = append(newList.Items, &MShellString { file })
-                }
-                stack.Push(newList)
-            } else if t.Lexeme == ".s" {
+            if t.Lexeme == ".s" {
                 // Print current stack
                 fmt.Fprintf(os.Stderr, stack.String())
             } else if t.Lexeme == "dup" {
@@ -116,6 +99,33 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
                 if err != nil {
                     return FailWithMessage(fmt.Sprintf("%d:%d: Cannot drop an empty stack.\n", t.Line, t.Column))
                 }
+            } else if t.Lexeme == "glob" {
+                obj1, err := stack.Pop()
+                if err != nil {
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'glob' operation on an empty stack.\n", t.Line, t.Column))
+                }
+
+                // Can be a string or literal
+                var globStr string
+                switch obj1.(type) {
+                case *MShellString:
+                    globStr = obj1.(*MShellString).Content
+                case *MShellLiteral:
+                    globStr = obj1.(*MShellLiteral).LiteralText
+                default:
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Cannot glob a %s.\n", t.Line, t.Column, obj1.TypeName()))
+                }
+
+                files, err := filepath.Glob(globStr)
+                if err != nil {
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Malformed glob pattern: %s\n", t.Line, t.Column, err.Error()))
+                }
+
+                newList := &MShellList { Items: []MShellObject{}, StandardInputFile: "", StandardOutputFile: "", StdoutBehavior: STDOUT_NONE }
+                for _, file := range files {
+                    newList.Items = append(newList.Items, &MShellString { file })
+                }
+                stack.Push(newList)
             } else if t.Lexeme == "append" {
                 obj1, err := stack.Pop()
                 if err != nil {
@@ -201,6 +211,21 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
                     return FailWithMessage(fmt.Sprintf("%d:%d: Cannot find-replace a %s.\n", t.Line, t.Column, obj1.TypeName()))
                 }
 
+            } else if t.Lexeme == "~" || strings.HasPrefix(t.Lexeme, "~/") {
+                // Only do tilde expansion
+                homeDir, err := os.UserHomeDir()
+                if err != nil {
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Error expanding ~: %s\n", t.Line, t.Column, err.Error()))
+                }
+                
+                var tildeExpanded string
+                if t.Lexeme == "~" {
+                    tildeExpanded = homeDir
+                } else {
+                    tildeExpanded = filepath.Join(homeDir, t.Lexeme[2:])
+                }
+
+                stack.Push(&MShellString { tildeExpanded })
             } else {
                 stack.Push(&MShellLiteral { t.Lexeme })
             }
@@ -607,8 +632,8 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
             state.Variables[t.Lexeme[1:]] = obj
         } else if t.Type == VARRETRIEVE {
             name := t.Lexeme[:len(t.Lexeme) - 1]
-            obj, ok := state.Variables[name]
-            if ok {
+            obj, found_mshell_variable := state.Variables[name]
+            if found_mshell_variable {
                 stack.Push(obj)
             } else {
                 // Check current environment variables
@@ -994,8 +1019,20 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
                 return FailWithMessage(fmt.Sprintf("%d:%d: Cannot export a %s.\n", t.Line, t.Column, obj.TypeName()))
             }
 
-            state.ExportedVariables[varName] = struct{}{}
+            // Check that varName is in state.Variables, and varName is string or literal
+            varValue, ok := state.Variables[varName]
+            if !ok {
+                return FailWithMessage(fmt.Sprintf("%d:%d: Variable %s not found in state.Variables.\n", t.Line, t.Column, varName))
+            }
 
+            switch varValue.(type) {
+            case *MShellString:
+                os.Setenv(varName, varValue.(*MShellString).Content)
+            case *MShellLiteral:
+                os.Setenv(varName, varValue.(*MShellLiteral).LiteralText)
+            default:
+                return FailWithMessage(fmt.Sprintf("%d:%d: Cannot export a %s as an environment variable.\n", t.Line, t.Column, varValue.TypeName()))
+            }
         } else {
             return FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Type))
         }
@@ -1101,21 +1138,6 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 
     cmd := exec.Command(commandLineArgs[0], commandLineArgs[1:]...)
     cmd.Env = os.Environ()
-
-    for key, _ := range state.ExportedVariables {
-        // Loopup key in state.Variables
-        value, ok := state.Variables[key]
-        if ok {
-            switch value.(type) {
-            case *MShellString:
-                cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", key, value.(*MShellString).Content))
-            case *MShellLiteral:
-                cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", key, value.(*MShellLiteral).LiteralText))
-            default:
-                return FailWithMessage(fmt.Sprintf("Cannot export a %s as an environment variable.\n", value.TypeName())), 1, ""
-            }
-        }
-    }
 
     var commandSubWriter bytes.Buffer
     // TBD: Should we allow command substituation and redirection at the same time?
