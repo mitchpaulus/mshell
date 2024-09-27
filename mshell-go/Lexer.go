@@ -178,6 +178,7 @@ func (l *Lexer) atEnd() bool {
 
 func (l *Lexer) makeToken(tokenType TokenType) Token {
     lexeme := string(l.input[l.start:l.current])
+
     return Token{
         Line:      l.line,
         Column:    l.col,
@@ -326,6 +327,7 @@ func (l *Lexer) consumeLiteral() Token {
             break
         }
     }
+
     return l.makeToken(LITERAL)
 }
 

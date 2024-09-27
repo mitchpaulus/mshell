@@ -10,6 +10,7 @@ import (
     "sync"
     "bufio"
     "bytes"
+    "path/filepath"
 )
 
 type MShellStack []MShellObject
@@ -88,7 +89,20 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
         if t.Type == EOF {
             return SimpleSuccess()
         } else if t.Type == LITERAL {
-            if t.Lexeme == ".s" {
+            // Check if Lexeme contains '*', then it's a glob.
+            if strings.Contains(t.Lexeme, "*") || strings.Contains(t.Lexeme, "?")  || strings.Contains(t.Lexeme, "[") {
+                // Glob
+                files, err := filepath.Glob(t.Lexeme)
+                if err != nil {
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Malformed glob pattern: %s\n", t.Line, t.Column, err.Error()))
+                }
+
+                newList := &MShellList { Items: []MShellObject{}, StandardInputFile: "", StandardOutputFile: "", StdoutBehavior: STDOUT_NONE }
+                for _, file := range files {
+                    newList.Items = append(newList.Items, &MShellString { file })
+                }
+                stack.Push(newList)
+            } else if t.Lexeme == ".s" {
                 // Print current stack
                 fmt.Fprintf(os.Stderr, stack.String())
             } else if t.Lexeme == "dup" {
