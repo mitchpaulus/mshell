@@ -6,6 +6,5 @@
 - Dictionaries
 - Function definition
 - String/list slicing, other string/path operations
-- Tilde Expansion
 - For loop construction
 - Functional operators like `map`, `fold`, `filter`, etc.

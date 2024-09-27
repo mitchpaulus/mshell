@@ -4,6 +4,8 @@ TMP_ERR="$(mktemp)"
 
 if printf %s "$1" | grep -q 'positional'; then
     mshell-go "$1" Hello World > "$TMP_FILE" 2>"$TMP_ERR"
+elif test "$1" = "args.msh"; then
+    mshell-go "$1" Hello World > "$TMP_FILE" 2>"$TMP_ERR"
 else
     mshell-go < "$1" > "$TMP_FILE" 2>"$TMP_ERR"
 fi

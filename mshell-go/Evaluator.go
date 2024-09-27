@@ -157,6 +157,59 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
                         return FailWithMessage(fmt.Sprintf("%d:%d: Cannot append a %s to a %s.\n", t.Line, t.Column, obj1.TypeName(), obj2.TypeName()))
                     }
                 }
+            } else if t.Lexeme == "args" {
+                // Dump the positional arguments onto the stack as a list of strings
+                newList := &MShellList { Items: make([]MShellObject, len(state.PositionalArgs)), StandardInputFile: "", StandardOutputFile: "", StdoutBehavior: STDOUT_NONE }
+                for i, arg := range state.PositionalArgs {
+                    newList.Items[i] = &MShellString { arg }
+                }
+                stack.Push(newList)
+            } else if t.Lexeme == "len" {
+                obj, err := stack.Pop()
+                if err != nil {
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'len' operation on an empty stack.\n", t.Line, t.Column))
+                }
+
+                switch obj.(type) {
+                case *MShellList:
+                    stack.Push(&MShellInt { len(obj.(*MShellList).Items) })
+                case *MShellString:
+                    stack.Push(&MShellInt { len(obj.(*MShellString).Content) })
+                case *MShellLiteral:
+                    stack.Push(&MShellInt { len(obj.(*MShellLiteral).LiteralText) })
+                default:
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Cannot get length of a %s.\n", t.Line, t.Column, obj.TypeName()))
+                }
+            } else if t.Lexeme == "nth" {
+                obj1, err := stack.Pop()
+                if err != nil {
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'nth' operation on an empty stack.\n", t.Line, t.Column))
+                }
+
+                obj2, err := stack.Pop()
+                if err != nil {
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'nth' operation on a stack with only one item.\n", t.Line, t.Column))
+                }
+
+                int1, ok := obj1.(*MShellInt)
+                if ok {
+                    result, err := obj2.Index(int1.Value)
+                    if err != nil {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
+                    }
+                    stack.Push(result)
+                } else {
+                    int2, ok := obj2.(*MShellInt)
+                    if ok {
+                        result, err := obj1.Index(int2.Value)
+                        if err != nil {
+                            return FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
+                        }
+                        stack.Push(result)
+                    } else {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'nth' with a %s and a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
+                    }
+                }
             } else if t.Lexeme == "w" || t.Lexeme == "wl" {
                 // Print the top of the stack to the console.
                 top, err := stack.Pop()
@@ -1120,15 +1173,21 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 
     commandLineArgs := make([]string, 0)
     var commandLineQueue []MShellObject
-    commandLineQueue = append(commandLineQueue, list.Items...)
+
+    // Add all items to the queue, first in is the end of the slice, so add in reverse order
+    for i := len(list.Items) - 1; i >= 0; i-- {
+        commandLineQueue = append(commandLineQueue, list.Items[i])
+    }
 
     for len(commandLineQueue) > 0 {
-        item := commandLineQueue[0]
-        commandLineQueue = commandLineQueue[1:]
+        item := commandLineQueue[len(commandLineQueue) - 1]
+        commandLineQueue = commandLineQueue[:len(commandLineQueue) - 1]
 
         if innerList, ok := item.(*MShellList); ok {
-            // Add to queue
-            commandLineQueue = append(commandLineQueue, innerList.Items...)
+            // Add to queue, first in is the end of the slice, so add in reverse order
+            for i := len(innerList.Items) - 1; i >= 0; i-- {
+                commandLineQueue = append(commandLineQueue, innerList.Items[i])
+            }
         } else if !item.IsCommandLineable() {
             return FailWithMessage(fmt.Sprintf("Item (%s) cannot be used as a command line argument.\n", item.DebugString())), 1, ""
         } else {
