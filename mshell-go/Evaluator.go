@@ -94,6 +94,19 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
                     return FailWithMessage(fmt.Sprintf("%d:%d: Cannot duplicate an empty stack.\n", t.Line, t.Column))
                 }
                 stack.Push(top)
+            } else if t.Lexeme == "swap" {
+                obj1, err := stack.Pop()
+                if err != nil {
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'swap' operation on an empty stack.\n", t.Line, t.Column))
+                }
+
+                obj2, err := stack.Pop()
+                if err != nil {
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'swap' operation on a stack with only one item.\n", t.Line, t.Column))
+                }
+
+                stack.Push(obj1)
+                stack.Push(obj2)
             } else if t.Lexeme == "drop" {
                 _, err := stack.Pop()
                 if err != nil {
