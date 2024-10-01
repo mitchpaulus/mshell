@@ -1,0 +1,9 @@
+# Set stop on error to be true.
+soe 
+'Starting with true' wle
+['true'];
+"First true goes through" wle
+['false'];
+"Second false stops the script" wle
+['true'];
+"Third true is not executed" wle

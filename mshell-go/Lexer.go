@@ -55,6 +55,7 @@ const (
     STDOUTCOMPLETE
     EXPORT
     TILDEEXPANSION
+    STOP_ON_ERROR
 )
 
 func (t TokenType) String() string {
@@ -466,6 +467,8 @@ func (l *Lexer) parseLiteralOrNumber() Token {
         return l.makeToken(READ)
     case "str":
         return l.makeToken(STR)
+    case "soe":
+        return l.makeToken(STOP_ON_ERROR)
     case "break":
         return l.makeToken(BREAK)
     case "not":

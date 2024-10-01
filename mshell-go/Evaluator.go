@@ -49,11 +49,14 @@ type EvalState  struct {
     PositionalArgs[] string
     LoopDepth int
     Variables map[string]MShellObject
+
+    StopOnError bool
 }
 
 type EvalResult struct {
     Success bool
     BreakNum int
+    ExitCode int
 }
 
 type ExecuteContext struct {
@@ -62,13 +65,13 @@ type ExecuteContext struct {
 }
 
 func SimpleSuccess() EvalResult {
-    return EvalResult { true, -1 }
+    return EvalResult { true, -1, 0 }
 }
 
 func FailWithMessage(message string) EvalResult {
     // Log message to stderr
     fmt.Fprintf(os.Stderr, message)
-    return EvalResult { false, -1 }
+    return EvalResult { false, -1, 1 }
 }
 
 func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context ExecuteContext) EvalResult { 
@@ -223,25 +226,33 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
                         return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'nth' with a %s and a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
                     }
                 }
-            } else if t.Lexeme == "w" || t.Lexeme == "wl" {
+            } else if t.Lexeme == "w" || t.Lexeme == "wl" || t.Lexeme == "we" || t.Lexeme == "wle" {
                 // Print the top of the stack to the console.
                 top, err := stack.Pop()
                 if err != nil {
                     return FailWithMessage(fmt.Sprintf("%d:%d: Cannot write an empty stack.\n", t.Line, t.Column))
                 }
 
+                var writer io.Writer
+                if t.Lexeme == "we" || t.Lexeme == "wle" {
+                    writer = os.Stderr
+                } else {
+                    writer = os.Stdout
+                }
+
                 switch top.(type) {
                 case *MShellLiteral:
-                    fmt.Fprintf(os.Stdout, "%s", top.(*MShellLiteral).LiteralText)
+                    fmt.Fprintf(writer, "%s", top.(*MShellLiteral).LiteralText)
                 case *MShellString:
-                    fmt.Fprintf(os.Stdout, "%s", top.(*MShellString).Content)
+                    fmt.Fprintf(writer, "%s", top.(*MShellString).Content)
                 case *MShellInt:
-                    fmt.Fprintf(os.Stdout, "%d", top.(*MShellInt).Value)
+                    fmt.Fprintf(writer, "%d", top.(*MShellInt).Value)
                 default:
                     return FailWithMessage(fmt.Sprintf("%d:%d: Cannot write a %s.\n", t.Line, t.Column, top.TypeName()))
                 }
-                if t.Lexeme == "wl" {
-                    fmt.Fprintf(os.Stdout, "\n")
+
+                if t.Lexeme == "wl" || t.Lexeme == "wle" {
+                    fmt.Fprintf(writer, "\n")
                 }
             } else if t.Lexeme == "find-replace" {
                 // Do simple find replace with the top three strings on stack
@@ -387,6 +398,11 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
                 result, exitCode = state.RunPipeline(*top.(*MShellPipe), context, stack)
             default:
                 return FailWithMessage(fmt.Sprintf("%d:%d: Cannot execute a non-list object. Found %s %s\n", t.Line, t.Column, top.TypeName(), top.DebugString()))
+            }
+
+            if state.StopOnError && exitCode != 0 {
+                // Exit completely, with that exit code, don't need to print a different message. Usually the command itself will have printed an error.
+                return EvalResult { false, -1, exitCode }
             }
 
             if !result.Success {
@@ -784,10 +800,10 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
             state.LoopDepth--
 
             if breakDiff > 0 {
-                return EvalResult { true, breakDiff - 1 }
+                return EvalResult { true, breakDiff - 1, 0 }
             }
         } else if t.Type == BREAK {
-            return EvalResult { true, 1 }
+            return EvalResult { true, 1, 0 }
         } else if t.Type == EQUALS {
             obj1, err := stack.Pop()
             if err != nil {
@@ -1099,12 +1115,14 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
             default:
                 return FailWithMessage(fmt.Sprintf("%d:%d: Cannot export a %s as an environment variable.\n", t.Line, t.Column, varValue.TypeName()))
             }
+        } else if t.Type == STOP_ON_ERROR {
+            state.StopOnError = true
         } else {
             return FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Type))
         }
     } 
 
-    return EvalResult { true, -1 }
+    return EvalResult { true, -1, 0 }
 }
 
 type Executable interface {
@@ -1160,6 +1178,7 @@ func (quotation *MShellQuotation) Execute(state *EvalState, context ExecuteConte
         return SimpleSuccess(), 0
     }
 }
+
 
 func (list *MShellList) GetStandardInputFile() string {
     return list.StandardInputFile
