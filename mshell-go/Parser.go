@@ -40,6 +40,15 @@ func (parser *MShellParser) ParseFile() (MShellFile, error) {
 
     for parser.curr.Type != EOF {
         switch parser.curr.Type {
+        case RIGHT_SQUARE_BRACKET, RIGHT_PAREN, END :
+            message := fmt.Sprintf("Unexpected token %s while parsing file", parser.curr.Type)
+            return file, errors.New(message)
+        case LEFT_SQUARE_BRACKET:
+            list, error := parser.ParseList()
+            if error != nil {
+                return file, error
+            }
+            file.items = append(file.items, list)
         case DEF:
             // parser.ParseDefinition()
         // case 
@@ -50,5 +59,57 @@ func (parser *MShellParser) ParseFile() (MShellFile, error) {
         }
     }
     return file, nil
+}
 
+func (parser *MShellParser) ParseList() (*MShellList, error) {
+    list := &MShellList{}
+    err := parser.Match(parser.curr, LEFT_SQUARE_BRACKET)
+    if err != nil {
+        return list, err
+    }
+    for parser.curr.Type != RIGHT_SQUARE_BRACKET {
+        item, err := parser.ParseItem()
+        if err != nil {
+            return list, err
+        }
+        list.Items = append(list.Items, item)
+    }
+    err = parser.Match(parser.curr, RIGHT_SQUARE_BRACKET)
+    if err != nil {
+        return list, err
+    }
+    return list, nil
+}
+
+func (parser *MShellParser) ParseItem() (MShellObject, error) {
+    switch parser.curr.Type {
+    case LEFT_SQUARE_BRACKET:
+        return parser.ParseList()
+    case LEFT_PAREN:
+        return parser.ParseQuote()
+    default:
+        return parser.ParseLiteral()
+    }
+}
+
+func (parser *MShellParser) ParseLiteral() (*MShellLiteral, error) {
+    literal := &MShellLiteral{LiteralText: parser.curr.Lexeme}
+    parser.NextToken()
+    return literal, nil
+}
+
+func (parser *MShellParser) ParseQuote() (*MShellQuotation, error) {
+    quote := &MShellQuotation{}
+    err := parser.Match(parser.curr, LEFT_PAREN)
+    if err != nil {
+        return quote, err
+    }
+    for parser.curr.Type != RIGHT_PAREN {
+        quote.Tokens = append(quote.Tokens, parser.curr)
+    }
+    err = parser.Match(parser.curr, RIGHT_PAREN)
+    if err != nil {
+        return quote, err
+    }
+    return quote, nil
 }
