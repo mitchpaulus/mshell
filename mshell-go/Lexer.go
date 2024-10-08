@@ -56,6 +56,8 @@ const (
     EXPORT
     TILDEEXPANSION
     STOP_ON_ERROR
+    DEF
+    END
 )
 
 func (t TokenType) String() string {
@@ -146,6 +148,14 @@ func (t TokenType) String() string {
         return "STDOUTCOMPLETE"
     case EXPORT:
         return "EXPORT"
+    case TILDEEXPANSION:
+        return "TILDEEXPANSION"
+    case STOP_ON_ERROR:
+        return "STOP_ON_ERROR"
+    case DEF:
+        return "DEF"
+    case END:
+        return "END"
     default:
         return "UNKNOWN"
     }

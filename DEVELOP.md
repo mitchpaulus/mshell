@@ -3,8 +3,8 @@ Grammar:
 ```
 file : (token | definition)* ;
 token : simple | list | quote ;
-simple : DOUBLE_QUOTE_STRING | SINGLE_QUOTE_STRING | LITERAL ;
+simple : DOUBLE_QUOTE_STRING | SINGLE_QUOTE_STRING | NUMERIC | LITERAL ;
 list : '[' token* ']' ;
 quote : '(' token* ')' ;
-definition : 'def' file 'end' ;
+definition : 'def' literal file 'end' ;
 ```
