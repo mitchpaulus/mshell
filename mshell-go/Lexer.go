@@ -162,6 +162,7 @@ func (t TokenType) String() string {
 }
 
 type Token struct {
+    // One-based line number.
     Line      int
     Column    int
     Start     int
