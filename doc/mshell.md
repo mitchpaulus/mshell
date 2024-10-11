@@ -34,3 +34,11 @@ es: List[string], Standard error, stripped
 
 When encountering a literal token that begins with `~/` or is `~` alone,
 the token will be replaced with the user's home directory.
+
+## Environment Variables
+
+Environment variables are accessed like other variables.
+
+```
+[cd HOME!];
+```
