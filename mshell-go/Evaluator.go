@@ -338,7 +338,7 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
                                 return FailWithMessage("Encountered break within list.\n")
                             }
 
-                            l := &MShellList { listStack, "", "", STDOUT_NONE }
+                            l := &MShellList { listStack, "", "", "", STDOUT_NONE }
                             stack.Push(l)
 
                             break
@@ -369,7 +369,7 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
 
                         if len(quotationStack) == 0 {
                             tokensWithinQuotation := tokens[leftIndex + 1:index - 1]
-                            q := &MShellQuotation { tokensWithinQuotation, "", "" }
+                            q := &MShellQuotation { tokensWithinQuotation, "", "", "" }
                             stack.Push(q)
 
                             break
@@ -704,6 +704,42 @@ func (state *EvalState) Evaluate(tokens []Token, stack *MShellStack, context Exe
                 default:
                     return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a %s to a %s.\n", t.Line, t.Column, obj1.TypeName(), obj2.TypeName()))
                 }
+            }
+        } else if t.Type == STDERRREDIRECT {
+            obj1, err := stack.Pop()
+            if err != nil {
+                return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect stderr on an empty stack.\n", t.Line, t.Column))
+            }
+            obj2, err := stack.Pop()
+            if err != nil {
+                return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect stderr on a stack with only one item.\n", t.Line, t.Column))
+            }
+
+            switch obj1.(type) {
+            case *MShellString:
+                switch obj2.(type) {
+                case *MShellList:
+                    obj2.(*MShellList).StandardErrorFile = obj1.(*MShellString).Content
+                    stack.Push(obj2)
+                case *MShellQuotation:
+                    obj2.(*MShellQuotation).StandardErrorFile = obj1.(*MShellString).Content
+                    stack.Push(obj2)
+                default:
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect stderr to a %s.\n", t.Line, t.Column, obj2.TypeName()))
+                }
+            case *MShellLiteral:
+                switch obj2.(type) {
+                case *MShellList:
+                    obj2.(*MShellList).StandardErrorFile = obj1.(*MShellLiteral).LiteralText
+                    stack.Push(obj2)
+                case *MShellQuotation:
+                    obj2.(*MShellQuotation).StandardErrorFile = obj1.(*MShellLiteral).LiteralText
+                    stack.Push(obj2)
+                default:
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect stderr to a %s.\n", t.Line, t.Column, obj2.TypeName()))
+                }
+            default:
+                return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect stderr to a %s.\n", t.Line, t.Column, obj1.TypeName()))
             }
         } else if t.Type == VARSTORE {
             obj, err := stack.Pop()
@@ -1272,8 +1308,17 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
         cmd.Stdin = os.Stdin
     }
 
-    // No redirection for stderr currently, just use the stderr of this process
-    cmd.Stderr = os.Stderr
+    if list.StandardErrorFile != "" {
+        // Open the file for writing
+        file, err := os.Create(list.StandardErrorFile)
+        if err != nil {
+            return FailWithMessage(fmt.Sprintf("Error opening file %s for writing: %s\n", list.StandardErrorFile, err.Error())), 1, ""
+        }
+        cmd.Stderr = file
+        defer file.Close()
+    } else {
+        cmd.Stderr = os.Stderr
+    }
 
     // fmt.Fprintf(os.Stderr, "Running command: %s\n", cmd.String())
     err := cmd.Run() // Manually deal with the exit code upstream

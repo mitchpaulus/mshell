@@ -58,6 +58,7 @@ const (
     STOP_ON_ERROR
     DEF
     END
+    STDERRREDIRECT
 )
 
 func (t TokenType) String() string {
@@ -156,6 +157,8 @@ func (t TokenType) String() string {
         return "DEF"
     case END:
         return "END"
+    case STDERRREDIRECT:
+        return "STDERRREDIRECT"
     default:
         return "UNKNOWN"
     }
@@ -368,6 +371,9 @@ func (l *Lexer) parseNumberOrStartIndexer() Token {
         } else {
             return l.makeToken(STARTINDEXER)
         }
+    } else if peek == '>' {
+        l.advance()
+        return l.makeToken(STDERRREDIRECT)
     }
 
     if !isAllowedLiteral(peek) {

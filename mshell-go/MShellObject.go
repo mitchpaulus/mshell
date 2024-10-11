@@ -31,6 +31,7 @@ type MShellQuotation struct {
     Tokens []Token
     StandardInputFile string
     StandardOutputFile string
+    StandardErrorFile string
 }
 
 type StdoutBehavior int
@@ -46,6 +47,7 @@ type MShellList struct {
     Items []MShellObject
     StandardInputFile string
     StandardOutputFile string
+    StandardErrorFile string
     StdoutBehavior StdoutBehavior
 }
 
