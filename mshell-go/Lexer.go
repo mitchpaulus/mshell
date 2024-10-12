@@ -173,6 +173,10 @@ type Token struct {
     Type TokenType
 }
 
+func (t Token) ToJson() string {
+    return fmt.Sprintf("{\"line\": %d, \"column\": %d, \"start\": %d, \"lexeme\": \"%s\", \"type\": \"%s\"}", t.Line, t.Column, t.Start, t.Lexeme, t.Type)
+}
+
 type Lexer struct {
     start   int
     current int
@@ -474,6 +478,10 @@ func (l *Lexer) parseLiteralOrNumber() Token {
         return l.makeToken(EQUALS)
     case "x":
         return l.makeToken(INTERPRET)
+    case "def":
+        return l.makeToken(DEF)
+    case "end":
+        return l.makeToken(END)
     case "export":
         return l.makeToken(EXPORT)
     case "if":

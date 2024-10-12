@@ -9,6 +9,7 @@ import (
 func main() {
 
     printLex := false
+    printParse := false
     i := 1
 
     input := ""
@@ -20,11 +21,14 @@ func main() {
         i++
         if arg == "--lex" {
             printLex = true
+        } else if arg == "--parse" {
+            printParse = true
         } else if arg == "-h" || arg == "--help" {
             fmt.Println("Usage: mshell [options] INPUT")
             fmt.Println("Usage: mshell [options] < INPUT")
             fmt.Println("Options:")
             fmt.Println("  --lex      Print the tokens of the input")
+            fmt.Println("  --parse    Print the parsed Abstract Syntax Tree")
             fmt.Println("  -h, --help Print this help message")
             os.Exit(0)
             return
@@ -54,17 +58,30 @@ func main() {
     }
 
     l := NewLexer(input)
-    tokens := l.Tokenize()
 
     if printLex {
+        tokens := l.Tokenize()
         fmt.Println("Tokens:")
         for _, t := range tokens {
             //                 Console.Write($"{t.Line}:{t.Column}:{t.TokenType} {t.RawText}\n");
             fmt.Printf("%d:%d:%s %s\n", t.Line, t.Column, t.Type, t.Lexeme)
         }
         return
+    } else if printParse {
+        p := MShellParser{ lexer: l }
+        p.NextToken()
+        file, err := p.ParseFile()
+        if err != nil {
+            fmt.Fprintf(os.Stderr, "Error parsing file %s: %s\n", input, err)
+            os.Exit(1)
+            return
+        }
+            
+        fmt.Println(file.ToJson())
+        return
     }
 
+    tokens := l.Tokenize()
     state := EvalState {
         PositionalArgs: positionalArgs,
         LoopDepth: 0,
