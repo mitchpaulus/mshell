@@ -177,6 +177,10 @@ func (t Token) ToJson() string {
     return fmt.Sprintf("{\"line\": %d, \"column\": %d, \"start\": %d, \"lexeme\": \"%s\", \"type\": \"%s\"}", t.Line, t.Column, t.Start, t.Lexeme, t.Type)
 }
 
+func (t Token) DebugString() string {
+    return fmt.Sprintf("%d:%d: %s %s", t.Line, t.Column, t.Type, t.Lexeme)
+}
+
 type Lexer struct {
     start   int
     current int

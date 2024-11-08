@@ -44,7 +44,7 @@ type MShellQuotation struct {
 }
 
 type MShellQuotation2 struct {
-    Objects []MShellObject
+    Objects []MShellParseItem
     StandardInputFile string
     StandardOutputFile string
     StandardErrorFile string
@@ -64,6 +64,7 @@ type MShellList struct {
     StandardInputFile string
     StandardOutputFile string
     StandardErrorFile string
+    // This sets how stdout is handled, whether it's broken up into lines, stripped of trailing newline, or left as is
     StdoutBehavior StdoutBehavior
 }
 
@@ -362,7 +363,7 @@ func (obj *MShellQuotation) Index(index int) (MShellObject, error) {
 }
 
 func (obj *MShellQuotation2) Index(index int) (MShellObject, error) {
-    return CheckRangeInclusive(index, len(obj.Objects), obj, obj.Objects[index])
+    return nil, fmt.Errorf("Cannot index into a quotation.\n")
 }
 
 func (obj *MShellList) Index(index int) (MShellObject, error) {

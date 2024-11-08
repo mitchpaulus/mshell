@@ -7,23 +7,73 @@ import (
     "os"
 )
 
-type MShellItem interface { }
+type JsonableList []Jsonable
 
-type MShellFile struct {
-    definitions []MShellDefinition
-    items []MShellObject
+type MShellParseItem interface {
+    ToJson() string
+    DebugString() string
 }
 
+type MShellFile struct {
+    Definitions []MShellDefinition
+    Items []MShellParseItem
+}
+
+type MShellParseList struct {
+    Items []MShellParseItem
+}
+
+func (list *MShellParseList) ToJson() string {
+    return ToJson(list.Items)
+}
+
+func (list *MShellParseList) DebugString() string {
+    builder := strings.Builder{}
+    builder.WriteString("[")
+    if len(list.Items) > 0 {
+        builder.WriteString(list.Items[0].DebugString())
+        for i := 1; i < len(list.Items); i++ {
+            builder.WriteString(", ")
+            builder.WriteString(list.Items[i].DebugString())
+        }
+    }
+    builder.WriteString("]")
+    return builder.String()
+}
+
+type MShellParseQuote struct {
+    Items []MShellParseItem
+}
+
+func (quote *MShellParseQuote) ToJson() string {
+    return ToJson(quote.Items)
+}
+
+func (quote *MShellParseQuote) DebugString() string {
+    builder := strings.Builder{}
+    builder.WriteString("(")
+    if len(quote.Items) > 0 {
+        builder.WriteString(quote.Items[0].DebugString())
+        for i := 1; i < len(quote.Items); i++ {
+            builder.WriteString(", ")
+            builder.WriteString(quote.Items[i].DebugString())
+        }
+    }
+    builder.WriteString(")")
+    return builder.String()
+}
+
+
 type MShellDefinition struct {
-    name string
-    items []MShellObject
+    Name string
+    Items []MShellParseItem
 }
 
 func (def *MShellDefinition) ToJson() string {
-    return fmt.Sprintf("{\"name\": \"%s\", \"items\": %s}", def.name, ToJson(def.items))
+    return fmt.Sprintf("{\"name\": \"%s\", \"items\": %s}", def.Name, ToJson(def.Items))
 }
 
-func ToJson(objList []MShellObject) string {
+func ToJson(objList []MShellParseItem) string {
     builder := strings.Builder{}
     builder.WriteString("[")
     if len(objList) > 0 {
@@ -41,9 +91,9 @@ func (file *MShellFile) ToJson() string {
     // Start builder for definitions
     definitions := strings.Builder{}
     definitions.WriteString("[")
-    for i, def := range file.definitions {
+    for i, def := range file.Definitions {
         definitions.WriteString(def.ToJson())
-        if i != len(file.definitions) - 1 {
+        if i != len(file.Definitions) - 1 {
             definitions.WriteString(", ")
         }
     }
@@ -52,9 +102,9 @@ func (file *MShellFile) ToJson() string {
     // Start builder for items
     items := strings.Builder{}
     items.WriteString("[")
-    for i, item := range file.items {
+    for i, item := range file.Items {
         items.WriteString(item.ToJson())
-        if i != len(file.items) - 1 {
+        if i != len(file.Items) - 1 {
             items.WriteString(", ")
         }
     }
@@ -95,31 +145,31 @@ func (parser *MShellParser) ParseFile() (*MShellFile, error) {
                 return file, err
             }
             fmt.Fprintf(os.Stderr, "List: %s\n", list.ToJson())
-            file.items = append(file.items, list)
+            file.Items = append(file.Items, list)
         case DEF:
             _ = parser.Match(parser.curr, DEF)
             if parser.curr.Type != LITERAL {
                 return file, errors.New(fmt.Sprintf("Expected LITERAL, got %s", parser.curr.Type))
             }
 
-            def := MShellDefinition{name: parser.curr.Lexeme, items: []MShellObject{}}
+            def := MShellDefinition{Name: parser.curr.Lexeme, Items: []MShellParseItem{}}
             _ = parser.Match(parser.curr, LITERAL)
 
             for {
                 if parser.curr.Type == END {
                     break
                 } else if parser.curr.Type == EOF {
-                    return file, errors.New(fmt.Sprintf("Unexpected EOF while parsing definition %s", def.name))
+                    return file, errors.New(fmt.Sprintf("Unexpected EOF while parsing definition %s", def.Name))
                 } else {
                     item, err := parser.ParseItem()
                     if err != nil {
                         return file, err
                     }
-                    def.items = append(def.items, item)
+                    def.Items = append(def.Items, item)
                 }
             }
 
-            file.definitions = append(file.definitions, def)
+            file.Definitions = append(file.Definitions, def)
             _ = parser.Match(parser.curr, END)
             // return file, errors.New("DEF Not implemented")
             // parser.ParseDefinition()
@@ -130,14 +180,14 @@ func (parser *MShellParser) ParseFile() (*MShellFile, error) {
             if err != nil {
                 return file, err
             }
-            file.items = append(file.items, item)
+            file.Items = append(file.Items, item)
         }
     }
     return file, nil
 }
 
-func (parser *MShellParser) ParseList() (*MShellList, error) {
-    list := &MShellList{}
+func (parser *MShellParser) ParseList() (*MShellParseList, error) {
+    list := &MShellParseList{}
     err := parser.Match(parser.curr, LEFT_SQUARE_BRACKET)
     if err != nil {
         return list, err
@@ -156,7 +206,7 @@ func (parser *MShellParser) ParseList() (*MShellList, error) {
     return list, nil
 }
 
-func (parser *MShellParser) ParseItem() (MShellObject, error) {
+func (parser *MShellParser) ParseItem() (MShellParseItem, error) {
     switch parser.curr.Type {
     case LEFT_SQUARE_BRACKET:
         return parser.ParseList()
@@ -167,8 +217,8 @@ func (parser *MShellParser) ParseItem() (MShellObject, error) {
     }
 }
 
-func (parser *MShellParser) ParseSimple() (*MShellSimple) {
-    s := &MShellSimple { Token: parser.curr }
+func (parser *MShellParser) ParseSimple() (Token) {
+    s := parser.curr
     parser.NextToken()
     return s
 }
