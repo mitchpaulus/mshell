@@ -1,0 +1,18 @@
+# Standard library for mshell
+
+# each (list quote --)
+def each 
+    over len # Get total length
+    0 # index
+    (
+        [(over over <=) (break)] if
+        # list quote len index index  
+        dup 5 pick nth 
+        # list quote len index item
+        4 pick x
+        drop
+        1 + # inc index
+    ) loop
+end
+
+[seq 1 1000]o; ("Line #" over str + wl) each

@@ -4,9 +4,33 @@ import (
     "os"
     "fmt"
     "io"
+    // "runtime/pprof"
+    // "runtime/trace"
+    // "runtime"
 )
 
 func main() {
+    // Enable profiling
+    // runtime.SetCPUProfileRate(1000)
+    // f, err := os.Create("mshell.prof")
+    // if err != nil {
+        // fmt.Println(err)
+        // os.Exit(1)
+        // return
+    // }
+    // pprof.StartCPUProfile(f)
+    // defer pprof.StopCPUProfile()
+
+    // Enable tracing
+    // f, err := os.Create("mshell.trace")
+    // if err != nil {
+        // fmt.Println(err)
+        // os.Exit(1)
+        // return
+    // }
+
+    // trace.Start(f)
+    // defer trace.Stop()
 
     printLex := false
     printParse := false

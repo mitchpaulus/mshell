@@ -6,6 +6,7 @@
 `append`: Append
 `.s`: Print stack at current location
 `over`: Over, copy second element to top
+`pick`: Pick, copy nth element to top
 
 `w`: Write
 `wl`: Write line
@@ -17,6 +18,11 @@
 `nth`: Nth element of list (0-based)
 
 `glob`: Run glob against string/literal on top of the stack. Leaves list of strings on the stack.
+
+`x`: Interpret/execute quotation
+
+`str`: Convert to string
+
 
 ## Process Substitution
 
@@ -54,3 +60,8 @@ If the indexing is fixed, there is dedicated syntax for it.
 [ 4 3 2 1 ] :3   # [ 4 3 2 ]
 [ 4 3 2 1 ] 2:   # [ 2 1 ]
 ```
+
+## Error Handling
+
+By default, executing a process that returns with a non-zero exit code does not stop the execution of the script.
+If the desired behavior is to stop the execution on any non-zero exit code, the keyword `soe` can be used.

@@ -22,6 +22,7 @@ type MShellObject interface {
     SliceEnd(end int) (MShellObject, error)
     Slice(startInc int, endExc int) (MShellObject, error)
     ToJson() string
+    ToString() string
 }
 
 type MShellSimple struct {
@@ -79,6 +80,40 @@ type MShellPipe struct {
 type MShellInt struct {
     Value int
 }
+
+// ToString
+func (obj *MShellLiteral) ToString() string {
+    return obj.LiteralText
+}
+
+func (obj *MShellBool) ToString() string {
+    return strconv.FormatBool(obj.Value)
+}
+
+func (obj *MShellQuotation) ToString() string {
+    return obj.DebugString()
+}
+
+func (obj *MShellList) ToString() string {
+    return obj.DebugString()
+}
+
+func (obj *MShellString) ToString() string {
+    return obj.Content
+}
+
+func (obj *MShellPipe) ToString() string {
+    return obj.DebugString()
+}
+
+func (obj *MShellInt) ToString() string {
+    return strconv.Itoa(obj.Value)
+}
+
+func (obj *MShellSimple) ToString() string {
+    return obj.Token.Lexeme
+}
+
 
 // TypeNames
 func (obj *MShellLiteral) TypeName() string {

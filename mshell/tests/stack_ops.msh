@@ -1,3 +1,4 @@
 [echo 1 2 over];
 [echo 1 2 swap];
 [echo 1 2 drop];
+[echo 1 2 3 3 pick];
