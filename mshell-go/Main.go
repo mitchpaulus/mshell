@@ -81,7 +81,16 @@ func main() {
         return
     }
 
-    tokens := l.Tokenize()
+    p := MShellParser{ lexer: l }
+    p.NextToken()
+    file, err := p.ParseFile()
+    if err != nil {
+        fmt.Fprintf(os.Stderr, "Error parsing file %s: %s\n", input, err)
+        os.Exit(1)
+        return
+    }
+
+    // tokens := l.Tokenize()
     state := EvalState {
         PositionalArgs: positionalArgs,
         LoopDepth: 0,
@@ -95,7 +104,7 @@ func main() {
         StandardOutput: os.Stdout,
     }
 
-    result := state.Evaluate(tokens, &stack, context)
+    result := state.Evaluate(file.Items, &stack, context, file.Definitions)
 
     if !result.Success {
         os.Exit(1)

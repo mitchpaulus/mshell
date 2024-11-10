@@ -1,1 +1,1 @@
-1:8: If statement requires at least two arguments. Found 1.
+1:8: If statement requires a list with at least 2 items. Found 1.

@@ -37,18 +37,18 @@ type MShellBool struct {
 }
 
 type MShellQuotation struct {
-    Tokens []Token
+    Tokens []MShellParseItem
     StandardInputFile string
     StandardOutputFile string
     StandardErrorFile string
 }
 
-type MShellQuotation2 struct {
-    Objects []MShellParseItem
-    StandardInputFile string
-    StandardOutputFile string
-    StandardErrorFile string
-}
+// type MShellQuotation2 struct {
+    // Objects []MShellParseItem
+    // StandardInputFile string
+    // StandardOutputFile string
+    // StandardErrorFile string
+// }
 
 type StdoutBehavior int
 
@@ -93,10 +93,6 @@ func (obj *MShellQuotation) TypeName() string {
     return "Quotation"
 }
 
-func (obj *MShellQuotation2) TypeName() string {
-    return "Quotation"
-}
-
 func (obj *MShellList) TypeName() string {
     return "List"
 }
@@ -131,8 +127,6 @@ func (obj *MShellQuotation) IsCommandLineable() bool {
     return false
 }
 
-func (obj *MShellQuotation2) IsCommandLineable() bool { return false }
-
 func (obj *MShellList) IsCommandLineable() bool {
     return false
 }
@@ -165,8 +159,6 @@ func (obj *MShellBool) IsNumeric() bool {
 func (obj *MShellQuotation) IsNumeric() bool {
     return false
 }
-
-func (obj *MShellQuotation2) IsNumeric() bool { return false }
 
 func (obj *MShellList) IsNumeric() bool {
     return false
@@ -201,8 +193,6 @@ func (obj *MShellQuotation) FloatNumeric() float64 {
     return 0
 }
 
-func (obj *MShellQuotation2) FloatNumeric() float64 { return 0 }
-
 func (obj *MShellList) FloatNumeric() float64 {
     return 0
 }
@@ -235,8 +225,6 @@ func (obj *MShellBool) CommandLine() string {
 func (obj *MShellQuotation) CommandLine() string {
     return ""
 }
-
-func (obj *MShellQuotation2) CommandLine() string { return "" }
 
 func (obj *MShellList) CommandLine() string {
     return "" 
@@ -281,26 +269,7 @@ func (obj *MShellQuotation) DebugString() string {
     // Join the tokens with a space, surrounded by '(' and ')'
     debugStrs := make([]string, len(obj.Tokens))
     for i, token := range obj.Tokens {
-        debugStrs[i] = token.Lexeme
-    }
-
-    message := "(" + strings.Join(debugStrs, " ") + ")"
-    if obj.StandardInputFile != "" {
-        message += " < " + obj.StandardInputFile
-    }
-
-    if obj.StandardOutputFile != "" {
-        message += " > " + obj.StandardOutputFile
-    }
-
-    return message
-}
-
-func (obj *MShellQuotation2) DebugString() string {
-    // Join the tokens with a space, surrounded by '(' and ')'
-    debugStrs := make([]string, len(obj.Objects))
-    for i, item := range obj.Objects {
-        debugStrs[i] = item.DebugString()
+        debugStrs[i] = token.DebugString()
     }
 
     message := "(" + strings.Join(debugStrs, " ") + ")"
@@ -359,12 +328,9 @@ func (obj *MShellLiteral) Index(index int) (MShellObject, error) {
 func (obj *MShellBool) Index(index int) (MShellObject, error) { return nil, fmt.Errorf("Cannot index into a boolean.\n") }
 
 func (obj *MShellQuotation) Index(index int) (MShellObject, error) {
-    return CheckRangeInclusive(index, len(obj.Tokens), obj, &MShellQuotation{Tokens: []Token{obj.Tokens[index]}})
+    return CheckRangeInclusive(index, len(obj.Tokens), obj, &MShellQuotation{Tokens: []MShellParseItem{obj.Tokens[index]}})
 }
 
-func (obj *MShellQuotation2) Index(index int) (MShellObject, error) {
-    return nil, fmt.Errorf("Cannot index into a quotation.\n")
-}
 
 func (obj *MShellList) Index(index int) (MShellObject, error) {
     return CheckRangeInclusive(index, len(obj.Items), obj, obj.Items[index])
@@ -393,10 +359,6 @@ func (obj *MShellQuotation) SliceStart(start int) (MShellObject, error) {
     return CheckRangeInclusive(start, len(obj.Tokens), obj, &MShellQuotation{Tokens: obj.Tokens[start:]})
 }
 
-func (obj *MShellQuotation2) SliceStart(start int) (MShellObject, error) {
-    return CheckRangeInclusive(start, len(obj.Objects), obj, &MShellQuotation2{Objects: obj.Objects[start:]})
-}
-
 func (obj *MShellList) SliceStart(start int) (MShellObject, error) {
     return CheckRangeInclusive(start, len(obj.Items), obj, &MShellList{Items: obj.Items[start:]})
 }
@@ -422,10 +384,6 @@ func (obj *MShellBool) SliceEnd(end int) (MShellObject, error) { return nil, fmt
 
 func (obj *MShellQuotation) SliceEnd(end int) (MShellObject, error) {
     return CheckRangeExclusive(end, len(obj.Tokens), obj, &MShellQuotation{Tokens: obj.Tokens[:end]})
-}
-
-func (obj *MShellQuotation2) SliceEnd(end int) (MShellObject, error) {
-    return CheckRangeExclusive(end, len(obj.Objects), obj, &MShellQuotation2{Objects: obj.Objects[:end]})
 }
 
 func (obj *MShellList) SliceEnd(end int) (MShellObject, error) {
@@ -456,9 +414,6 @@ func (obj *MShellQuotation) Slice(startInc int, endExc int) (MShellObject, error
     return CheckRangeExclusive(startInc, len(obj.Tokens), obj, &MShellQuotation{Tokens: obj.Tokens[startInc:endExc]})
 }
 
-func (obj *MShellQuotation2) Slice(startInc int, endExc int) (MShellObject, error) {
-    return CheckRangeExclusive(startInc, len(obj.Objects), obj, &MShellQuotation2{Objects: obj.Objects[startInc:endExc]})
-}
 
 func (obj *MShellList) Slice(startInc int, endExc int) (MShellObject, error) {
     return CheckRangeExclusive(startInc, len(obj.Items), obj, &MShellList{Items: obj.Items[startInc:endExc]})
@@ -494,20 +449,6 @@ func (obj *MShellQuotation) ToJson() string {
         for _, token := range obj.Tokens[1:] {
             builder.WriteString(", ")
             builder.WriteString(token.ToJson())
-        }
-    }
-    builder.WriteString("]}")
-    return builder.String()
-}
-
-func (obj *MShellQuotation2) ToJson() string {
-    builder := strings.Builder{}
-    builder.WriteString("{\"type\": \"Quotation\", \"objects\": [")
-    if len(obj.Objects) > 0 {
-        builder.WriteString(obj.Objects[0].ToJson())
-        for _, item := range obj.Objects[1:] {
-            builder.WriteString(", ")
-            builder.WriteString(item.ToJson())
         }
     }
     builder.WriteString("]}")

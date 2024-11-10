@@ -4,7 +4,7 @@ import (
     "errors"
     "fmt"
     "strings"
-    "os"
+    // "os"
 )
 
 type JsonableList []Jsonable
@@ -144,7 +144,7 @@ func (parser *MShellParser) ParseFile() (*MShellFile, error) {
             if err != nil {
                 return file, err
             }
-            fmt.Fprintf(os.Stderr, "List: %s\n", list.ToJson())
+            // fmt.Fprintf(os.Stderr, "List: %s\n", list.ToJson())
             file.Items = append(file.Items, list)
         case DEF:
             _ = parser.Match(parser.curr, DEF)
@@ -223,8 +223,8 @@ func (parser *MShellParser) ParseSimple() (Token) {
     return s
 }
 
-func (parser *MShellParser) ParseQuote() (*MShellQuotation2, error) {
-    quote := &MShellQuotation2{}
+func (parser *MShellParser) ParseQuote() (*MShellParseQuote, error) {
+    quote := &MShellParseQuote{}
     err := parser.Match(parser.curr, LEFT_PAREN)
     if err != nil {
         return quote, err
@@ -234,7 +234,7 @@ func (parser *MShellParser) ParseQuote() (*MShellQuotation2, error) {
         if err != nil {
             return quote, err
         }
-        quote.Objects = append(quote.Objects, item)
+        quote.Items = append(quote.Items, item)
     }
     err = parser.Match(parser.curr, RIGHT_PAREN)
     if err != nil {
