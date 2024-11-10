@@ -1,3 +1,8 @@
 def square dup + end
 
 [echo 7 square];
+
+[echo "Hello," addWorld];
+
+# All definitions are lifted
+def addWorld " World!" + end

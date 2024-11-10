@@ -21,7 +21,7 @@
 
 With a list on the stack, the following operators will leave output content on the stack after execution:
 
-```
+```mshell
 o: List[string], Stadard output, split by lines
 oc: string, Standard output, complete untouched
 os: List[string]: Standard output, stripped
@@ -39,6 +39,17 @@ the token will be replaced with the user's home directory.
 
 Environment variables are accessed like other variables.
 
-```
+```mshell
 [cd HOME!];
+```
+
+## Indexing
+
+If the indexing is fixed, there is dedicated syntax for it.
+
+```mshell
+[ 4 3 2 1 ] :1:  # 3
+[ 4 3 2 1 ] 1:3  # [ 3 2 ]
+[ 4 3 2 1 ] :3   # [ 4 3 2 ]
+[ 4 3 2 1 ] 2:   # [ 2 1 ]
 ```
