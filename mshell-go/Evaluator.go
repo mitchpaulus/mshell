@@ -77,6 +77,7 @@ func FailWithMessage(message string) EvalResult {
 func (state *EvalState) Evaluate(objects []MShellParseItem, stack *MShellStack, context ExecuteContext, definitions []MShellDefinition) EvalResult {
     index := 0
 
+    MainLoop:
     for index < len(objects) {
         t := objects[index]
         index++
@@ -110,6 +111,19 @@ func (state *EvalState) Evaluate(objects []MShellParseItem, stack *MShellStack, 
             if t.Type == EOF {
                 return SimpleSuccess()
             } else if t.Type == LITERAL {
+
+                // Check for definitions
+                for _, definition := range definitions {
+                    if definition.Name == t.Lexeme {
+                        // Evaluate the definition
+                        result := state.Evaluate(definition.Items, stack, context, definitions)
+                        if !result.Success || result.BreakNum > 0 {
+                            return result
+                        }
+                        continue MainLoop
+                    }
+                }
+
                 if t.Lexeme == ".s" {
                     // Print current stack
                     fmt.Fprintf(os.Stderr, stack.String())
