@@ -133,6 +133,14 @@ func (state *EvalState) Evaluate(objects []MShellParseItem, stack *MShellStack, 
                         return FailWithMessage(fmt.Sprintf("%d:%d: Cannot duplicate an empty stack.\n", t.Line, t.Column))
                     }
                     stack.Push(top)
+                } else if t.Lexeme == "over" {
+                    stackLen := len(*stack)
+                    if stackLen < 2 {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'over' operation on a stack with less than two items.\n", t.Line, t.Column))
+                    }
+
+                    obj := (*stack)[stackLen - 2]
+                    stack.Push(obj)
                 } else if t.Lexeme == "swap" {
                     obj1, err := stack.Pop()
                     if err != nil {
@@ -290,7 +298,7 @@ func (state *EvalState) Evaluate(objects []MShellParseItem, stack *MShellStack, 
                     if t.Lexeme == "wl" || t.Lexeme == "wle" {
                         fmt.Fprintf(writer, "\n")
                     }
-                } else if t.Lexeme == "find-replace" {
+                } else if t.Lexeme == "findReplace" {
                     // Do simple find replace with the top three strings on stack
                     obj1, err := stack.Pop()
                     if err != nil {

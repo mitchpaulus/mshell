@@ -1,0 +1,3 @@
+[echo 1 2 over];
+[echo 1 2 swap];
+[echo 1 2 drop];

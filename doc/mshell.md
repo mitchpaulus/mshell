@@ -5,6 +5,7 @@
 `drop`: Drop
 `append`: Append
 `.s`: Print stack at current location
+`over`: Over, copy second element to top
 
 `w`: Write
 `wl`: Write line
