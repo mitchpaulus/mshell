@@ -13,6 +13,30 @@ def each
         drop
         1 + # inc index
     ) loop
+
+    # Drop list and quote, total length, index
+    drop drop drop drop
 end
 
-[seq 1 1000]o; ("Line #" over str + wl) each
+# map (list quote -- list)
+def map 
+    over len @map-len # Get total length
+    0 @map-idx # Index
+    [] @map-accum # Accumulator
+    (
+        [(map-idx! map-len! >=) (break)] if
+        over map-idx! nth
+        over x
+        # list quote new-item
+        map-accum! append drop
+
+        map-idx! 1 + @map-idx # inc index
+    ) loop
+
+    # Drop list and quote, push accumulator
+    drop drop map-accum!
+end
+
+# map (list quote -- list)
+# [seq 1 1000]o; ("Line #" over str + wl) each
+# [1 2 3] (2 +) map .s

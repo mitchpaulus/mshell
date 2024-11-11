@@ -171,6 +171,17 @@ func (state *EvalState) Evaluate(objects []MShellParseItem, stack *MShellStack, 
                     stack.Push(second)
                     stack.Push(top)
                     stack.Push(third)
+                } else if t.Lexeme == "-rot" {
+                    // Check that there are at least 3 items on the stack
+                    if len(*stack) < 3 {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'rot' operation on a stack with less than three items.\n", t.Line, t.Column))
+                    }
+                    top, _ := stack.Pop()
+                    second, _ := stack.Pop()
+                    third, _ := stack.Pop()
+                    stack.Push(top)
+                    stack.Push(third)
+                    stack.Push(second)
                 } else if t.Lexeme == "nip" {
                     if len(*stack) < 2 {
                         return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'nip' operation on a stack with less than two items.\n", t.Line, t.Column))

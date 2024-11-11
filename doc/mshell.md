@@ -1,12 +1,12 @@
 ## Built-ins
 
+`.s`: Print stack at current location
 `dup`: Duplicate
 `swap`: Swap
 `drop`: Drop
-`append`: Append
-`.s`: Print stack at current location
+`append`: Append, `(list item -- list)`
 `over`: Over, copy second element to top
-`pick`: Pick, copy nth element to top
+`pick`: Pick, copy nth element to top, `(a b c n pick` -- `a b c [a | b | c])`
 `rot`: Rotate the top three items, `( a b c -- b c a )`
 `nip`: Remove second item, `( a b -- b )`
 
@@ -29,6 +29,19 @@
 `findReplace`: Find and replace in string. `findReplace (string string, string find, string replace -- string)`
 `lines`: Split string into list of string lines
 
+### List Functions
+
+`map`: Map a quotation over a list, `(list quote -- list)`
+`each`: Execute a quotation for each element in a list, `(list quote -- )`
+
+## Variables
+
+```mshell
+# Storing
+10 @a
+# Retrieving
+a!
+```
 
 ## Process Substitution
 
