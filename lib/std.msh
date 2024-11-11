@@ -25,11 +25,11 @@ def map
     [] @map-accum # Accumulator
     (
         [(map-idx! map-len! >=) (break)] if
-        over map-idx! nth
-        over x
-        # list quote new-item
-        map-accum! append drop
+        over map-idx! nth # Get current item
+        over x # Copy over quote, execute
 
+        # list quote new-item
+        map-accum! append drop # Append to accumulator
         map-idx! 1 + @map-idx # inc index
     ) loop
 
