@@ -386,6 +386,85 @@ func (state *EvalState) Evaluate(objects []MShellParseItem, stack *MShellStack, 
                         return FailWithMessage(fmt.Sprintf("%d:%d: Cannot find-replace a %s.\n", t.Line, t.Column, obj1.TypeName()))
                     }
 
+                } else if t.Lexeme == "split" {
+                    delimiter, err := stack.Pop()
+                    if err != nil {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'split' operation on an empty stack.\n", t.Line, t.Column))
+                    }
+
+                    strLiteral, err := stack.Pop()
+                    if err != nil {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'split' operation on a stack with only one item.\n", t.Line, t.Column))
+                    }
+
+
+                    var delimiterStr string
+                    var strToSplit string
+
+                    switch delimiter.(type) {
+                    case *MShellString:
+                        delimiterStr = delimiter.(*MShellString).Content
+                    case *MShellLiteral:
+                        delimiterStr = delimiter.(*MShellLiteral).LiteralText
+                    default:
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot split with a %s.\n", t.Line, t.Column, delimiter.TypeName()))
+                    }
+
+                    switch strLiteral.(type) {
+                    case *MShellString:
+                        strToSplit = strLiteral.(*MShellString).Content
+                    case *MShellLiteral:
+                        strToSplit = strLiteral.(*MShellLiteral).LiteralText
+                    default:
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot split a %s.\n", t.Line, t.Column, strLiteral.TypeName()))
+                    }
+
+                    split := strings.Split(strToSplit, delimiterStr)
+                    newList := &MShellList { Items: make([]MShellObject, len(split)), StandardInputFile: "", StandardOutputFile: "", StdoutBehavior: STDOUT_NONE }
+                    for i, item := range split {
+                        newList.Items[i] = &MShellString { item }
+                    }
+                    stack.Push(newList)
+                } else if t.Lexeme == "join" {
+                    delimiter, err := stack.Pop()
+                    if err != nil {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'join' operation on an empty stack.\n", t.Line, t.Column))
+                    }
+
+                    list, err := stack.Pop()
+                    if err != nil {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'join' operation on a stack with only one item.\n", t.Line, t.Column))
+                    }
+
+                    var delimiterStr string
+                    var listItems []string
+
+                    switch delimiter.(type) {
+                    case *MShellString:
+                        delimiterStr = delimiter.(*MShellString).Content
+                    case *MShellLiteral:
+                        delimiterStr = delimiter.(*MShellLiteral).LiteralText
+                    default:
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot join with a %s.\n", t.Line, t.Column, delimiter.TypeName()))
+                    }
+
+                    switch list.(type) {
+                    case *MShellList:
+                        for _, item := range list.(*MShellList).Items {
+                            switch item.(type) {
+                            case *MShellString:
+                                listItems = append(listItems, item.(*MShellString).Content)
+                            case *MShellLiteral:
+                                listItems = append(listItems, item.(*MShellLiteral).LiteralText)
+                            default:
+                                return FailWithMessage(fmt.Sprintf("%d:%d: Cannot join a list with a %s inside (%s).\n", t.Line, t.Column, item.TypeName(), item.DebugString()))
+                            }
+                        }
+                    default:
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot join a %s.\n", t.Line, t.Column, list.TypeName()))
+                    }
+
+                    stack.Push(&MShellString { strings.Join(listItems, delimiterStr) })
                 } else if t.Lexeme == "lines" {
                     obj, err := stack.Pop()
                     if err != nil {

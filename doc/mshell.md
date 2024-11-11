@@ -28,6 +28,8 @@
 `str`: Convert to string
 `findReplace`: Find and replace in string. `findReplace (string string, string find, string replace -- string)`
 `lines`: Split string into list of string lines
+`split`: Split string into list of strings by delimiter, use `ws` literal or `"ws"` for whitespace. (string delimiter -- list)
+`join`: Join list of strings into a single string, (list delimiter -- string)
 
 ### List Functions
 
@@ -38,9 +40,9 @@
 
 ```mshell
 # Storing
-10 @a
+10 my_var!
 # Retrieving
-a!
+@my_var
 ```
 
 ## Process Substitution
