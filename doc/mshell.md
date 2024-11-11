@@ -21,7 +21,11 @@
 
 `x`: Interpret/execute quotation
 
+### String Functions
+
 `str`: Convert to string
+`findReplace`: Find and replace in string. `findReplace (string string, string find, string replace -- string)`
+`lines`: Split string into list of string lines
 
 
 ## Process Substitution

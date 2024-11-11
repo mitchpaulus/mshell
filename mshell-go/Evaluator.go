@@ -356,6 +356,25 @@ func (state *EvalState) Evaluate(objects []MShellParseItem, stack *MShellStack, 
                         return FailWithMessage(fmt.Sprintf("%d:%d: Cannot find-replace a %s.\n", t.Line, t.Column, obj1.TypeName()))
                     }
 
+                } else if t.Lexeme == "lines" {
+                    obj, err := stack.Pop()
+                    if err != nil {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot evaluate 'lines' on an empty stack.\n", t.Line, t.Column))
+                    }
+
+                    s1, ok := obj.(*MShellString)
+                    if !ok {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot evaluate 'lines' on a %s.\n", t.Line, t.Column, obj.TypeName()))
+                    }
+
+                    // TODO: Maybe reuse a scanner?
+                    scanner := bufio.NewScanner(strings.NewReader(s1.Content))
+                    newList := &MShellList { Items: []MShellObject{}, StandardInputFile: "", StandardOutputFile: "", StdoutBehavior: STDOUT_NONE }
+                    for scanner.Scan() {
+                        newList.Items = append(newList.Items, &MShellString { scanner.Text() })
+                    }
+
+                    stack.Push(newList)
                 } else if t.Lexeme == "~" || strings.HasPrefix(t.Lexeme, "~/") {
                     // Only do tilde expansion
                     homeDir, err := os.UserHomeDir()
