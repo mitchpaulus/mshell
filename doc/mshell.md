@@ -7,6 +7,8 @@
 `.s`: Print stack at current location
 `over`: Over, copy second element to top
 `pick`: Pick, copy nth element to top
+`rot`: Rotate the top three items, `( a b c -- b c a )`
+`nip`: Remove second item, `( a b -- b )`
 
 `w`: Write
 `wl`: Write line
