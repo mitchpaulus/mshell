@@ -216,6 +216,14 @@ func (state *EvalState) Evaluate(objects []MShellParseItem, stack *MShellStack, 
                         newList.Items = append(newList.Items, &MShellString { file })
                     }
                     stack.Push(newList)
+                } else if t.Lexeme == "stdin" {
+                    // Dump all of current stdin onto the stack as a string
+                    var buffer bytes.Buffer
+                    _, err := buffer.ReadFrom(context.StandardInput)
+                    if err != nil {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Error reading from stdin: %s\n", t.Line, t.Column, err.Error()))
+                    }
+                    stack.Push(&MShellString { buffer.String() })
                 } else if t.Lexeme == "append" {
                     obj1, err := stack.Pop()
                     if err != nil {
