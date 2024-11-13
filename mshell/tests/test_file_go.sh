@@ -2,6 +2,9 @@
 TMP_FILE="$(mktemp)"
 TMP_ERR="$(mktemp)"
 
+MSHSTDLIB="$(realpath ../../lib/std.msh)"
+export MSHSTDLIB
+
 if printf %s "$1" | grep -q 'positional'; then
     mshell-go "$1" Hello World > "$TMP_FILE" 2>"$TMP_ERR"
 elif test "$(basename "$1")" = "args.msh"; then

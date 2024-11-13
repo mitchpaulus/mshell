@@ -469,7 +469,7 @@ func (state *EvalState) Evaluate(objects []MShellParseItem, stack *MShellStack, 
                             }
                         }
                     default:
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot join a %s.\n", t.Line, t.Column, list.TypeName()))
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot join a %s (%s).\n", t.Line, t.Column, list.TypeName(), list.DebugString()))
                     }
 
                     stack.Push(&MShellString { strings.Join(listItems, delimiterStr) })

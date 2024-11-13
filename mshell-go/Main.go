@@ -105,16 +105,6 @@ func main() {
         return
     }
 
-    p := MShellParser{ lexer: l }
-    p.NextToken()
-    file, err := p.ParseFile()
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Error parsing file %s: %s\n", input, err)
-        os.Exit(1)
-        return
-    }
-
-    // tokens := l.Tokenize()
     state := EvalState {
         PositionalArgs: positionalArgs,
         LoopDepth: 0,
@@ -128,7 +118,48 @@ func main() {
         StandardOutput: os.Stdout,
     }
 
-    result := state.Evaluate(file.Items, &stack, context, file.Definitions)
+    var allDefinitions []MShellDefinition
+
+    // Check for environment variable MSHSTDLIB and load that file. Read as UTF-8
+    stdlibPath, stdlibSet := os.LookupEnv("MSHSTDLIB")
+    if stdlibSet {
+        stdlibBytes, err := os.ReadFile(stdlibPath)
+        if err != nil {
+            fmt.Fprintf(os.Stderr, "Error reading file %s: %s\n", stdlibPath, err)
+            os.Exit(1)
+            return
+        }
+        stdlibLexer := NewLexer(string(stdlibBytes))
+        stdlibParser := MShellParser{ lexer: stdlibLexer }
+        stdlibParser.NextToken()
+        stdlibFile, err := stdlibParser.ParseFile()
+        if err != nil {
+            fmt.Fprintf(os.Stderr, "Error parsing file %s: %s\n", stdlibPath, err)
+            os.Exit(1)
+            return
+        }
+
+        allDefinitions = append(allDefinitions, stdlibFile.Definitions...)
+        result := state.Evaluate(stdlibFile.Items, &stack, context, allDefinitions)
+
+        if !result.Success {
+            fmt.Fprintf(os.Stderr, "Error evaluating MSHSTDLIB file %s.\n", stdlibPath)
+            os.Exit(1)
+            return
+        }
+    }
+
+    p := MShellParser{ lexer: l }
+    p.NextToken()
+    file, err := p.ParseFile()
+    if err != nil {
+        fmt.Fprintf(os.Stderr, "Error parsing file %s: %s\n", input, err)
+        os.Exit(1)
+        return
+    }
+
+    allDefinitions = append(allDefinitions, file.Definitions...)
+    result := state.Evaluate(file.Items, &stack, context, allDefinitions)
 
     if !result.Success {
         os.Exit(1)

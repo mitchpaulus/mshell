@@ -2,20 +2,17 @@
 
 # each (list quote --)
 def each 
-    over len # Get total length
-    0 # index
+    over len @each-len # Get total length
+    0 @each-idx # index
     (
-        [(over over <=) (break)] if
-        # list quote len index index  
-        dup 5 pick nth 
-        # list quote len index item
-        4 pick x
-        drop
-        1 + # inc index
+        [(each-idx! each-len! >=) (break)] if
+        over each-idx! nth # Get current item
+        over x # Copy over quote, execute
+        each-idx! 1 + @each-idx # inc index
     ) loop
 
     # Drop list and quote, total length, index
-    drop drop drop drop
+    drop drop
 end
 
 # map (list quote -- list)
@@ -36,6 +33,12 @@ def map
     # Drop list and quote, push accumulator
     drop drop map-accum!
 end
+
+# .. (-- str)
+def .. stdin end
+
+# tt = Tab separated Table (-- list[list[str]])
+def tt stdin lines ("	" split) map end
 
 # map (list quote -- list)
 # [seq 1 1000]o; ("Line #" over str + wl) each
