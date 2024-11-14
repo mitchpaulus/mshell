@@ -34,8 +34,9 @@ def map
     drop drop map-accum!
 end
 
-# .. (-- str)
-def .. stdin end
+
+# .. (-- list[str]), equals kinda looks like lines.
+def .. stdin lines end
 
 # tt = Tab separated Table (-- list[list[str]])
 def tt stdin lines ("	" split) map end
