@@ -27,8 +27,8 @@ Best way to understand purpose and syntax of `mshell` is to see it in action. He
 
 | Objective | `sh` | `mshell` |
 |-----------|-----|----------|
-| Print the number of files in the current directory | `ls | wc -l`                                                | `* glob len wl` |
-| `find`/`xargs`                                     |  `find . -t x -name '*.sh' -print0 |  xargs -0 mycommand`   | `[mycommand [find . -t x -name "*.sh"]]o;` |
+| Print the number of files in the current directory | `ls \| wc -l`                                                | `* glob len wl` |
+| `find`/`xargs`                                     |  `find . -t x -name '*.sh' -print0 \|  xargs -0 mycommand`   | `[mycommand [find . -t x -name "*.sh"]]o;` |
 
 # TODO
 
