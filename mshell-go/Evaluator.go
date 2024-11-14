@@ -876,13 +876,14 @@ MainLoop:
 				}
 			} else if t.Type == VARSTORE {
 				obj, err := stack.Pop()
+                varName := t.Lexeme[0:len(t.Lexeme)-1] // Remove the trailing !
 				if err != nil {
-					return FailWithMessage(fmt.Sprintf("%d:%d: Nothing on stack to store into variable %s.\n", t.Line, t.Column, t.Lexeme[1:]))
+					return FailWithMessage(fmt.Sprintf("%d:%d: Nothing on stack to store into variable %s.\n", t.Line, t.Column, varName))
 				}
 
-				state.Variables[t.Lexeme[1:]] = obj
+				state.Variables[varName] = obj
 			} else if t.Type == VARRETRIEVE {
-				name := t.Lexeme[:len(t.Lexeme)-1]
+				name := t.Lexeme[1:] // Remove the leading @
 				obj, found_mshell_variable := state.Variables[name]
 				if found_mshell_variable {
 					stack.Push(obj)

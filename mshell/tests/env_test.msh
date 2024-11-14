@@ -1,2 +1,2 @@
-"Hello, World!" @MSHELL_VAR MSHELL_VAR export
+"Hello, World!" MSHELL_VAR! MSHELL_VAR export
 [./env_test.sh];

@@ -534,10 +534,10 @@ func (l *Lexer) parseLiteralOrNumber() Token {
 		return l.makeToken(FALSE)
 	default:
 		if strings.HasSuffix(literal, "!") {
-			return l.makeToken(VARRETRIEVE)
+			return l.makeToken(VARSTORE)
 		}
 		if strings.HasPrefix(literal, "@") {
-			return l.makeToken(VARSTORE)
+			return l.makeToken(VARRETRIEVE)
 		}
 		if _, err := strconv.Atoi(literal); err == nil {
 			return l.makeToken(INTEGER)

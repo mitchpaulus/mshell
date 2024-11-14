@@ -2,13 +2,13 @@
 
 # each (list quote --)
 def each 
-    over len @each-len # Get total length
-    0 @each-idx # index
+    over len each-len! # Get total length
+    0 each-idx! # index
     (
-        [(each-idx! each-len! >=) (break)] if
-        over each-idx! nth # Get current item
+        [(@each-idx @each-len >=) (break)] if
+        over @each-idx nth # Get current item
         over x # Copy over quote, execute
-        each-idx! 1 + @each-idx # inc index
+        @each-idx 1 + each-idx! # inc index
     ) loop
 
     # Drop list and quote, total length, index
@@ -17,21 +17,21 @@ end
 
 # map (list quote -- list)
 def map 
-    over len @map-len # Get total length
-    0 @map-idx # Index
-    [] @map-accum # Accumulator
+    over len map-len! # Get total length
+    0 map-idx! # Index
+    [] map-accum! # Accumulator
     (
-        [(map-idx! map-len! >=) (break)] if
-        over map-idx! nth # Get current item
+        [(@map-idx @map-len >=) (break)] if
+        over @map-idx nth # Get current item
         over x # Copy over quote, execute
 
         # list quote new-item
-        map-accum! append drop # Append to accumulator
-        map-idx! 1 + @map-idx # inc index
+        @map-accum append drop # Append to accumulator
+        @map-idx 1 + map-idx! # inc index
     ) loop
 
     # Drop list and quote, push accumulator
-    drop drop map-accum!
+    drop drop @map-accum
 end
 
 
