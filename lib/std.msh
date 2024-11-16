@@ -22,7 +22,7 @@ def map
     [] map-accum! # Accumulator
     (
         [(@map-idx @map-len >=) (break)] if
-        over @map-idx nth # Get current item
+        over @map-idx nth # Get current item  list quote item
         over x # Copy over quote, execute
 
         # list quote new-item
@@ -32,6 +32,25 @@ def map
 
     # Drop list and quote, push accumulator
     drop drop @map-accum
+end
+
+# filter (list quote -- list)
+def filter
+    over len filter-len! # Get total length
+    0 filter-idx! # Index
+    [] filter-accum! # Accumulator
+    (
+        [(@filter-idx @filter-len >=) (break)] if
+        over over # list quote list quote
+        over @filter-idx nth # Get current item
+        dup rot # Get to item item quote
+        x # Execute quote
+        [() (@filter-accum append filter-accum!) (drop)] if
+        drop @filter-idx 1 + filter-idx! # inc index
+    ) loop
+
+    # Drop list and quote, push accumulator
+    drop drop @filter-accum
 end
 
 
