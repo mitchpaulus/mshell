@@ -1,6 +1,0 @@
-1 -
-[  # Comment
-] - -abc
-[
-    [ ls -al arg1 ];
-] |
