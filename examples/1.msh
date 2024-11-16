@@ -1,0 +1,23 @@
+#!/usr/bin/env mshell
+
+# TODO: something like 'stoponerror' for 'set -e'
+(
+    [echo "Starting at " [date]o; +];
+    "/home/azureuser/deltek" @dir
+    [(dir! isdir not) ("Directory not found: " dir! + wl 1 exit)] if
+    dir! "/" [date "+%Y-%m-%d"].; @outfile
+
+    # Add minutes and hours if file already exists
+    [(outfile! isfile) (dir! "/" [date "+%Y-%m-%d %H%M%S"].; @outfile)] if
+
+    [~/.local/bin/ccllc-deltek projDump] /tmp/deltek.tsv > ;
+
+    "Dump finished. Cleaning and writing to Excel." wl
+
+    [python3 dir! "/" clean.py + +] /tmp/deltek.tsv < tmp > ?
+    [(not) ("Error cleaning file." wl 1 exit)] if
+    [mv tmp /tmp/deltek.xlsx];
+
+    [HOME env "/.local/bin/xlwrite" + -e block A1 /tmp/deltek.tsv outfile!]
+
+) "/tmp/deltek_project.log" >
