@@ -10,21 +10,9 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    
-    # - name: Setup .NET
-      # uses: actions/setup-dotnet@v4
-      # with:
-        # dotnet-version: 8
-    # - name: Build
-      # run: dotnet build
-    # - name: Set PATH
-      # run: realpath ./mshell/bin/Debug/net8.0 > "$GITHUB_PATH"
 
     - name: Set up Go
       uses: actions/setup-go@v5
-
-    # - name: Test Files
-      # run: cd mshell/tests && ./test.sh
 
     - name: Build go
       run: cd mshell && go build -o mshell
