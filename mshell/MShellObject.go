@@ -387,6 +387,10 @@ func IndexCheckExc(index int, length int, obj MShellObject) error {
 
 // Index
 func (obj *MShellLiteral) Index(index int) (MShellObject, error) {
+    if index < 0 {
+        index = len(obj.LiteralText) + index
+    }
+
 	if err := IndexCheck(index, len(obj.LiteralText), obj); err != nil {
 		return nil, err
 	}
@@ -398,6 +402,9 @@ func (obj *MShellBool) Index(index int) (MShellObject, error) {
 }
 
 func (obj *MShellQuotation) Index(index int) (MShellObject, error) {
+    if index < 0 {
+        index = len(obj.Tokens) + index
+    }
 	if err := IndexCheck(index, len(obj.Tokens), obj); err != nil {
 		return nil, err
 	}
@@ -405,6 +412,10 @@ func (obj *MShellQuotation) Index(index int) (MShellObject, error) {
 }
 
 func (obj *MShellList) Index(index int) (MShellObject, error) {
+    if index < 0 {
+        index = len(obj.Items) + index
+    }
+
 	if err := IndexCheck(index, len(obj.Items), obj); err != nil {
 		return nil, err
 	}
@@ -412,6 +423,10 @@ func (obj *MShellList) Index(index int) (MShellObject, error) {
 }
 
 func (obj *MShellString) Index(index int) (MShellObject, error) {
+    if index < 0 {
+        index = len(obj.Content) + index
+    }
+
 	if err := IndexCheck(index, len(obj.Content), obj); err != nil {
 		return nil, err
 	}
@@ -419,6 +434,10 @@ func (obj *MShellString) Index(index int) (MShellObject, error) {
 }
 
 func (obj *MShellPipe) Index(index int) (MShellObject, error) {
+    if index < 0 {
+        index = len(obj.List.Items) + index
+    }
+
 	if err := IndexCheck(index, len(obj.List.Items), obj); err != nil {
 		return nil, err
 	}
@@ -435,6 +454,10 @@ func (obj *MShellSimple) Index(index int) (MShellObject, error) {
 
 // SliceStart
 func (obj *MShellLiteral) SliceStart(start int) (MShellObject, error) {
+    if start < 0 {
+        start = len(obj.LiteralText) + start
+    }
+
 	if err := IndexCheck(start, len(obj.LiteralText), obj); err != nil {
 		return nil, err
 	}
@@ -446,6 +469,9 @@ func (obj *MShellBool) SliceStart(start int) (MShellObject, error) {
 }
 
 func (obj *MShellQuotation) SliceStart(start int) (MShellObject, error) {
+    if start < 0 {
+        start = len(obj.Tokens) + start
+    }
 	if err := IndexCheck(start, len(obj.Tokens), obj); err != nil {
 		return nil, err
 	}
@@ -453,6 +479,9 @@ func (obj *MShellQuotation) SliceStart(start int) (MShellObject, error) {
 }
 
 func (obj *MShellList) SliceStart(start int) (MShellObject, error) {
+    if start < 0 {
+        start = len(obj.Items) + start
+    }
 	if err := IndexCheck(start, len(obj.Items), obj); err != nil {
 		return nil, err
 	}
@@ -460,6 +489,9 @@ func (obj *MShellList) SliceStart(start int) (MShellObject, error) {
 }
 
 func (obj *MShellString) SliceStart(start int) (MShellObject, error) {
+    if start < 0 {
+        start = len(obj.Content) + start
+    }
 	if err := IndexCheck(start, len(obj.Content), obj); err != nil {
 		return nil, err
 	}
@@ -467,6 +499,9 @@ func (obj *MShellString) SliceStart(start int) (MShellObject, error) {
 }
 
 func (obj *MShellPipe) SliceStart(start int) (MShellObject, error) {
+    if start < 0 {
+        start = len(obj.List.Items) + start
+    }
 	if err := IndexCheck(start, len(obj.List.Items), obj); err != nil {
 		return nil, err
 	}
@@ -483,6 +518,10 @@ func (obj *MShellSimple) SliceStart(start int) (MShellObject, error) {
 
 // SliceEnd
 func (obj *MShellLiteral) SliceEnd(end int) (MShellObject, error) {
+    if end < 0 {
+        end = len(obj.LiteralText) + end
+    }
+
 	if err := IndexCheckExc(end, len(obj.LiteralText), obj); err != nil {
 		return nil, err
 	}
@@ -494,6 +533,9 @@ func (obj *MShellBool) SliceEnd(end int) (MShellObject, error) {
 }
 
 func (obj *MShellQuotation) SliceEnd(end int) (MShellObject, error) {
+    if end < 0 {
+        end = len(obj.Tokens) + end
+    }
 	if err := IndexCheckExc(end, len(obj.Tokens), obj); err != nil {
 		return nil, err
 	}
@@ -501,6 +543,9 @@ func (obj *MShellQuotation) SliceEnd(end int) (MShellObject, error) {
 }
 
 func (obj *MShellList) SliceEnd(end int) (MShellObject, error) {
+    if end < 0 {
+        end = len(obj.Items) + end
+    }
 	if err := IndexCheckExc(end, len(obj.Items), obj); err != nil {
 		return nil, err
 	}
@@ -508,6 +553,9 @@ func (obj *MShellList) SliceEnd(end int) (MShellObject, error) {
 }
 
 func (obj *MShellString) SliceEnd(end int) (MShellObject, error) {
+    if end < 0 {
+        end = len(obj.Content) + end
+    }
 	if err := IndexCheckExc(end, len(obj.Content), obj); err != nil {
 		return nil, err
 	}
@@ -515,6 +563,9 @@ func (obj *MShellString) SliceEnd(end int) (MShellObject, error) {
 }
 
 func (obj *MShellPipe) SliceEnd(end int) (MShellObject, error) {
+    if end < 0 {
+        end = len(obj.List.Items) + end
+    }
 	if err := IndexCheckExc(end, len(obj.List.Items), obj); err != nil {
 		return nil, err
 	}
@@ -530,8 +581,15 @@ func (obj *MShellSimple) SliceEnd(end int) (MShellObject, error) {
 }
 
 // Slice
-
 func SliceIndexCheck(startInc int, endExc int, length int, obj MShellObject) error {
+    if startInc < 0 {
+        startInc = length + startInc
+    }
+
+    if endExc < 0 {
+        endExc = length + endExc
+    }
+
 	if startInc < 0 || startInc > endExc || endExc > length {
 		return fmt.Errorf("Invalid slice range [%d:%d) for %s with length %d.\n", startInc, endExc, obj.TypeName(), length)
 	} else {
@@ -540,6 +598,14 @@ func SliceIndexCheck(startInc int, endExc int, length int, obj MShellObject) err
 }
 
 func (obj *MShellLiteral) Slice(startInc int, endExc int) (MShellObject, error) {
+    if startInc < 0 {
+        startInc = len(obj.LiteralText) + startInc
+    }
+
+    if endExc < 0 {
+        endExc = len(obj.LiteralText) + endExc
+    }
+
 	if err := SliceIndexCheck(startInc, endExc, len(obj.LiteralText), obj); err != nil {
 		return nil, err
 	}
@@ -551,6 +617,14 @@ func (obj *MShellBool) Slice(startInc int, endExc int) (MShellObject, error) {
 }
 
 func (obj *MShellQuotation) Slice(startInc int, endExc int) (MShellObject, error) {
+    if startInc < 0 {
+        startInc = len(obj.Tokens) + startInc
+    }
+
+    if endExc < 0 {
+        endExc = len(obj.Tokens) + endExc
+    }
+
 	if err := SliceIndexCheck(startInc, endExc, len(obj.Tokens), obj); err != nil {
 		return nil, err
 	}
@@ -558,6 +632,14 @@ func (obj *MShellQuotation) Slice(startInc int, endExc int) (MShellObject, error
 }
 
 func (obj *MShellList) Slice(startInc int, endExc int) (MShellObject, error) {
+    if startInc < 0 {
+        startInc = len(obj.Items) + startInc
+    }
+
+    if endExc < 0 {
+        endExc = len(obj.Items) + endExc
+    }
+
 	if err := SliceIndexCheck(startInc, endExc, len(obj.Items), obj); err != nil {
 		return nil, err
 	}
@@ -565,6 +647,14 @@ func (obj *MShellList) Slice(startInc int, endExc int) (MShellObject, error) {
 }
 
 func (obj *MShellString) Slice(startInc int, endExc int) (MShellObject, error) {
+    if startInc < 0 {
+        startInc = len(obj.Content) + startInc
+    }
+
+    if endExc < 0 {
+        endExc = len(obj.Content) + endExc
+    }
+
 	if err := SliceIndexCheck(startInc, endExc, len(obj.Content), obj); err != nil {
 		return nil, err
 	}
@@ -572,6 +662,14 @@ func (obj *MShellString) Slice(startInc int, endExc int) (MShellObject, error) {
 }
 
 func (obj *MShellPipe) Slice(startInc int, endExc int) (MShellObject, error) {
+    if startInc < 0 {
+        startInc = len(obj.List.Items) + startInc
+    }
+
+    if endExc < 0 {
+        endExc = len(obj.List.Items) + endExc
+    }
+
 	if err := SliceIndexCheck(startInc, endExc, len(obj.List.Items), obj); err != nil {
 		return nil, err
 	}

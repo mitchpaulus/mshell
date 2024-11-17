@@ -321,6 +321,16 @@ func (l *Lexer) scanToken() Token {
 		} else {
 			return l.makeToken(STDOUTLINES)
 		}
+    case '-':
+        if unicode.IsDigit(l.peek()) {
+            // Consume the hyphen and parse the number
+            l.advance()
+            return l.parseNumberOrStartIndexer()
+        } else if unicode.IsSpace(l.peek()) {
+            return l.makeToken(MINUS)
+        } else {
+            return l.consumeLiteral()
+        }
 	default:
 		return l.parseLiteralOrNumber()
 	}
@@ -376,7 +386,20 @@ func (l *Lexer) parseNumberOrStartIndexer() Token {
 		l.advance()
 
 		c := l.peek()
-		if unicode.IsDigit(c) {
+        if c == '-' {
+            if unicode.IsDigit(l.peekNext()) {
+                l.advance() // Consume the hyphen
+                for {
+                    if !unicode.IsDigit(l.peek()) {
+                        break
+                    }
+                    l.advance()
+                }
+                return l.makeToken(SLICEINDEXER)
+            } else {
+                return l.makeToken(STARTINDEXER)
+            }
+        } else if unicode.IsDigit(c) {
 			// Read all the digits
 			for {
 				if l.atEnd() {
@@ -411,7 +434,7 @@ func (l *Lexer) parseIndexerOrLiteral() Token {
 		return l.makeToken(LITERAL)
 	}
 
-	if unicode.IsDigit(c) {
+	if unicode.IsDigit(c) || c == '-' {
 		// Read all the digits
 		for {
 			if l.atEnd() {
@@ -539,6 +562,12 @@ func (l *Lexer) parseLiteralOrNumber() Token {
 		if strings.HasPrefix(literal, "@") {
 			return l.makeToken(VARRETRIEVE)
 		}
+        // Currently here to handle the negative start indexer case. '-3:'
+        if strings.HasSuffix(literal, ":") {
+            if _, err := strconv.Atoi(literal[:len(literal)-1]); err == nil {
+                return l.makeToken(STARTINDEXER)
+            }
+        }
 		if _, err := strconv.Atoi(literal); err == nil {
 			return l.makeToken(INTEGER)
 		}
@@ -568,7 +597,7 @@ func (l *Lexer) eatWhitespace() {
 		}
 		c := l.peek()
 		switch c {
-		case ' ', '\t', '\r':
+        case ' ', '\t', '\r', '\v', '\f':
 			l.advance()
 		case '#':
 			for !l.atEnd() && l.peek() != '\n' {

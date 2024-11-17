@@ -13,3 +13,9 @@ echo
 [ echo "Another" 3: ];
 
 [ echo "Full Range" 1:3];
+
+# Negative indexing
+"12345" :-1: wl  # 5
+"12345" -3: wl   # 345
+"12345" :-4 wl   # 1
+"12345" -4:-2 wl # 23
