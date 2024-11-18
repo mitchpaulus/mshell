@@ -1,6 +1,6 @@
 # Standard library for mshell
 
-# each (list quote --)
+# each (list quote: (item --) --)
 def each 
     over len each-len! # Get total length
     0 each-idx! # index
@@ -59,6 +59,17 @@ def .. stdin lines end
 
 # tt = Tab separated Table (-- list[list[str]])
 def tt stdin lines ("	" split) map end
+
+# unlines (list[str] -- str)
+def unlines 
+    [] unlines-accum! # Accumulator
+    (
+        @unlines-accum append
+       "\n" append
+       drop
+    ) each
+    @unlines-accum "" join
+end
 
 # map (list quote -- list)
 # [seq 1 1000]o; ("Line #" over str + wl) each

@@ -2,15 +2,15 @@
 
 # 1. Print the total nubmer of input lines:
 # END { print NR }
-stdin lines len wl
+.. len wl
 
 # 2. Print the 10th input line:
 # NR == 10
-stdin lines :10: wl
+.. :10: wl
 
 # 3. Print the last field of every input line:
 # { print $NF }
-stdin lines (" " split :-1: wl) each
+.. (" " split :-1: wl) each
 
 # 4. Print the last field of the last input line:
 #     { field = $NF }
@@ -19,7 +19,7 @@ stdin lines :-1: " " split :-1: wl
 
 # 5. Print every input line with more than four fields
 # NF > 4
-stdin lines (" " split) map (len 4 >) filter unlines wl
+.. (dup " " split len [(4 >) (wl) (drop)] if) each
 
 # 6. Print every input line in which the last field is more than 4
 # $NF > 4
