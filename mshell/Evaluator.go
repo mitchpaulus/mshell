@@ -491,7 +491,53 @@ MainLoop:
 					}
 
 					stack.Push(newList)
-				} else if t.Lexeme == "~" || strings.HasPrefix(t.Lexeme, "~/") {
+				} else if t.Lexeme == "del" {
+                    obj1, err := stack.Pop()
+                    if err != nil {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'del' operation on an empty stack.\n", t.Line, t.Column))
+                    }
+
+                    obj2, err := stack.Pop()
+                    if err != nil {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'del' operation on a stack with only one item.\n", t.Line, t.Column))
+                    }
+
+                    switch obj1.(type) {
+                    case *MShellInt:
+                        switch obj2.(type) {
+                        case *MShellList:
+                            index := obj1.(*MShellInt).Value
+                            if index < 0 {
+                                index = len(obj2.(*MShellList).Items) + index
+                            }
+
+                            if index < 0 || index >= len(obj2.(*MShellList).Items) {
+                                return FailWithMessage(fmt.Sprintf("%d:%d: Index out of range for 'del'.\n", t.Line, t.Column))
+                            }
+                            obj2.(*MShellList).Items = append(obj2.(*MShellList).Items[:index], obj2.(*MShellList).Items[index+1:]...)
+                            stack.Push(obj2)
+                        default:
+                            return FailWithMessage(fmt.Sprintf("%d:%d: Cannot delete from a %s.\n", t.Line, t.Column, obj2.TypeName()))
+                        }
+                    case *MShellList:
+                        switch obj2.(type) {
+                        case *MShellInt:
+                            index := obj2.(*MShellInt).Value
+                            if index < 0 {
+                                index = len(obj1.(*MShellList).Items) + index
+                            }
+                            if index < 0 || index >= len(obj1.(*MShellList).Items) {
+                                return FailWithMessage(fmt.Sprintf("%d:%d: Index out of range for 'del'.\n", t.Line, t.Column))
+                            }
+                            obj1.(*MShellList).Items = append(obj1.(*MShellList).Items[:index], obj1.(*MShellList).Items[index+1:]...)
+                            stack.Push(obj1)
+                        default:
+                            return FailWithMessage(fmt.Sprintf("%d:%d: Cannot delete from a %s.\n", t.Line, t.Column, obj2.TypeName()))
+                        }
+                    default:
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot delete from a %s.\n", t.Line, t.Column, obj1.TypeName()))
+                    }
+                } else if t.Lexeme == "~" || strings.HasPrefix(t.Lexeme, "~/") {
 					// Only do tilde expansion
 					homeDir, err := os.UserHomeDir()
 					if err != nil {

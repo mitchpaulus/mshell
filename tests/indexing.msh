@@ -19,3 +19,11 @@ echo
 "12345" -3: wl   # 345
 "12345" :-4 wl   # 1
 "12345" -4:-2 wl # 23
+
+def cjoin ", " join wl end
+
+# Test deletion at index
+["a" "b" "c" "d"] 2 del cjoin
+1 ["a" "b" "c" "d"] del cjoin
+["a" "b" "c" "d"] -1 del cjoin
+-1 ["a" "b" "c" "d"] del cjoin
