@@ -510,7 +510,46 @@ MainLoop:
 					}
 
 					stack.Push(newList)
-				} else if t.Lexeme == "del" {
+				} else if t.Lexeme == "insert" {
+                    // Expected stack:
+                    // List item index
+                    // Index 0 based, negative indexes allowed
+                    obj1, err := stack.Pop()
+                    if err != nil {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'insert' operation on an empty stack.\n", t.Line, t.Column))
+                    }
+
+                    obj2, err := stack.Pop()
+                    if err != nil {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'insert' operation on a stack with only one item.\n", t.Line, t.Column))
+                    }
+
+                    obj3, err := stack.Pop()
+                    if err != nil {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'insert' operation on a stack with only two items.\n", t.Line, t.Column))
+                    }
+
+                    obj1Index, ok := obj1.(*MShellInt)
+                    if !ok {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot insert at a non-integer index.\n", t.Line, t.Column))
+                    }
+
+                    obj3List, ok := obj3.(*MShellList)
+                    if !ok {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot insert into a non-list.\n", t.Line, t.Column))
+                    }
+
+                    if obj1Index.Value < 0 {
+                        obj1Index.Value = len(obj3List.Items) + obj1Index.Value
+                    }
+
+                    if obj1Index.Value < 0 || obj1Index.Value > len(obj3List.Items) {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Index out of range for 'insert'.\n", t.Line, t.Column))
+                    }
+
+                    obj3List.Items = append(obj3List.Items[:obj1Index.Value], append([]MShellObject{obj2}, obj3List.Items[obj1Index.Value:]...)...)
+                    stack.Push(obj3List)
+                } else if t.Lexeme == "del" {
                     obj1, err := stack.Pop()
                     if err != nil {
                         return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'del' operation on an empty stack.\n", t.Line, t.Column))

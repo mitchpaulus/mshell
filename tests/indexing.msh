@@ -27,3 +27,7 @@ def cjoin ", " join wl end
 1 ["a" "b" "c" "d"] del cjoin
 ["a" "b" "c" "d"] -1 del cjoin
 -1 ["a" "b" "c" "d"] del cjoin
+
+# Test insertion at index
+["a" "b" "c" "d"] "x" 2 insert cjoin
+["a" "b" "c" "d"] "x" -1 insert cjoin

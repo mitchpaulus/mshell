@@ -10,3 +10,5 @@ a, b, d
 a, c, d
 a, b, c
 a, b, c
+a, b, x, c, d
+a, b, c, x, d

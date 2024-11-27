@@ -37,6 +37,7 @@
 `map`: Map a quotation over a list, `(list quote -- list)`
 `each`: Execute a quotation for each element in a list, `(list quote -- )`
 `del`: Delete element from list, `(list index -- list)` or `(index list -- list)`
+`insert`: Insert element into list, `(list element index -- list)`
 
 ## Variables
 
