@@ -28,13 +28,15 @@
 `str`: Convert to string
 `findReplace`: Find and replace in string. `findReplace (string string, string find, string replace -- string)`
 `lines`: Split string into list of string lines
-`split`: Split string into list of strings by delimiter, use `ws` literal or `"ws"` for whitespace. (string delimiter -- list)
+`split`: Split string into list of strings by delimiter. (string delimiter -- list[string])
+`wsplit`: Split string into list of strings by runs of whitespace. (string -- list[string])
 `join`: Join list of strings into a single string, (list delimiter -- string)
 
 ### List Functions
 
 `map`: Map a quotation over a list, `(list quote -- list)`
 `each`: Execute a quotation for each element in a list, `(list quote -- )`
+`del`: Delete element from list, `(list index -- list)` or `(index list -- list)`
 
 ## Variables
 

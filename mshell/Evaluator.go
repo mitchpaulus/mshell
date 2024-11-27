@@ -432,6 +432,25 @@ MainLoop:
 						newList.Items[i] = &MShellString{item}
 					}
 					stack.Push(newList)
+                } else if t.Lexeme == "wsplit" {
+                    // Split on whitespace
+                    obj, err := stack.Pop()
+                    if err != nil {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'wsplit' operation on an empty stack.\n", t.Line, t.Column))
+                    }
+
+                    switch obj.(type) {
+                    case *MShellString:
+                        split := strings.Fields(obj.(*MShellString).Content)
+                        newList := &MShellList{Items: make([]MShellObject, len(split)), StandardInputFile: "", StandardOutputFile: "", StdoutBehavior: STDOUT_NONE}
+                        for i, item := range split {
+                            newList.Items[i] = &MShellString{item}
+                        }
+
+                        stack.Push(newList)
+                    default:
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot split a %s.\n", t.Line, t.Column, obj.TypeName()))
+                    }
 				} else if t.Lexeme == "join" {
 					delimiter, err := stack.Pop()
 					if err != nil {

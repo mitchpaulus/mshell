@@ -10,12 +10,12 @@
 
 # 3. Print the last field of every input line:
 # { print $NF }
-.. (" " split :-1: wl) each
+wt (:-1: wl) each
 
 # 4. Print the last field of the last input line:
 #     { field = $NF }
 # END { print field }
-stdin lines :-1: " " split :-1: wl
+.. :-1: wsplit :-1: wl
 
 # 5. Print every input line with more than four fields
 # NF > 4
@@ -39,9 +39,9 @@ stdin lines ("Beth" in) filter len wl
 # $1 > max { max = $1; line = $0 }
 # END      { print max, line }
 
-0 @max 
-stdin lines 
-# line first 
+0 @max
+stdin lines
+# line first
 (dup " " split :1: toFloat [(dup max! >) (@max @line)] if)
 each max! w " " w line! w
 
@@ -73,11 +73,11 @@ stdin lines (" " split :1: :2: w w) each
 
 # 16. Print every line after erasing the second field
 # { $2 = ""; print }
-# Need a way to delete at an index.
+.. (ws split 1 del " " join wl) each
 
 # 17. Print in reverse order the fields of every line
 # { for (i = NF; i > 0; i = i - 1) printf "%s ", $i
-# printf "\n" 
+# printf "\n"
 # }
 stdin lines (" " split reverse " " join wl) each
 

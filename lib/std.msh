@@ -1,7 +1,7 @@
 # Standard library for mshell
 
 # each (list quote: (item --) --)
-def each 
+def each
     over len each-len! # Get total length
     0 each-idx! # index
     (
@@ -16,7 +16,7 @@ def each
 end
 
 # map (list quote -- list)
-def map 
+def map
     over len map-len! # Get total length
     0 map-idx! # Index
     [] map-accum! # Accumulator
@@ -58,10 +58,13 @@ end
 def .. stdin lines end
 
 # tt = Tab separated Table (-- list[list[str]])
-def tt stdin lines ("	" split) map end
+def tt .. ("	" split) map end
+
+# wt = Whitespace separated Table (-- list[list[str]])
+def wt .. (wsplit) map end
 
 # unlines (list[str] -- str)
-def unlines 
+def unlines
     [] unlines-accum! # Accumulator
     (
         @unlines-accum append
