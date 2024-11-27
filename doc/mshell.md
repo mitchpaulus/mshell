@@ -89,3 +89,15 @@ If the indexing is fixed, there is dedicated syntax for it.
 
 By default, executing a process that returns with a non-zero exit code does not stop the execution of the script.
 If the desired behavior is to stop the execution on any non-zero exit code, the keyword `soe` can be used.
+
+## Object Types
+
+The current object types supported by `mshell` are:
+
+1. Literal
+2. Bool
+3. Quotation
+4. List
+5. String
+6. Pipe
+7. Integer
