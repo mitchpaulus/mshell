@@ -23,6 +23,8 @@
 
 `x`: Interpret/execute quotation
 
+`cd`: Change directory `(string -- )`
+
 ### String Functions
 
 `str`: Convert to string
@@ -50,15 +52,15 @@
 
 ## Process Substitution
 
-With a list on the stack, the following operators will leave output content on the stack after execution:
+With a list on the stack, the following operators will leave output content on the stack after process execution:
 
 ```mshell
 o: List[string], Stadard output, split by lines
 oc: string, Standard output, complete untouched
-os: List[string]: Standard output, stripped
+os: string: Standard output, stripped
 e: List[string], Standard error, split by lines
 ec: string, Standard error, complete untouched
-es: List[string], Standard error, stripped
+es: string, Standard error, stripped
 ```
 
 ## Tilde Substitution
@@ -69,10 +71,16 @@ the token will be replaced with the user's home directory.
 ## Environment Variables
 
 Environment variables are accessed like other variables.
+`export` is used to export a variable to the environment for subprocesses.
 
 ```mshell
-[cd HOME!];
+@HOME cd
+
+# Exporting for subprocesses
+"Hello, World!" MSHELL_VAR! MSHELL_VAR export
 ```
+
+
 
 ## Indexing
 
