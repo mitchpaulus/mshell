@@ -26,7 +26,7 @@ def map
         over x # Copy over quote, execute
 
         # list quote new-item
-        @map-accum append drop # Append to accumulator
+        @map-accum swap append drop # Append to accumulator
         @map-idx 1 + map-idx! # inc index
     ) loop
 
@@ -61,7 +61,7 @@ def .. stdin lines end
 def tt .. ("	" split) map end
 
 # wt = Whitespace separated Table (-- list[list[str]])
-def wt .. (wsplit) map end
+def wt .. (wsplit) map  end
 
 # unlines (list[str] -- str)
 def unlines
