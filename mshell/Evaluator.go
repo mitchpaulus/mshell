@@ -595,6 +595,53 @@ MainLoop:
                     default:
                         return FailWithMessage(fmt.Sprintf("%d:%d: Cannot delete from a %s.\n", t.Line, t.Column, obj1.TypeName()))
                     }
+                } else if t.Lexeme == "cd" {
+                    obj, err := stack.Pop()
+                    if err != nil {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'cd' operation on an empty stack.\n", t.Line, t.Column))
+                    }
+
+                    var dir string
+
+                    switch obj.(type) {
+                    case *MShellString:
+                        dir = obj.(*MShellString).Content
+                    case *MShellLiteral:
+                        dir = obj.(*MShellLiteral).LiteralText
+                    default:
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot cd to a %s.\n", t.Line, t.Column, obj.TypeName()))
+                    }
+
+                    // Update the OLDPWD variable
+                    oldPwd, err := os.Getwd()
+                    if err != nil {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Error getting current directory: %s\n", t.Line, t.Column, err.Error()))
+                    }
+
+                    err = os.Setenv("OLDPWD", oldPwd)
+                    if err != nil {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Error setting OLDPWD: %s\n", t.Line, t.Column, err.Error()))
+                    }
+
+                    state.Variables["OLDPWD"] = &MShellString{oldPwd}
+
+                    err = os.Chdir(dir)
+                    if err != nil {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Error changing directory: %s\n", t.Line, t.Column, err.Error()))
+                    }
+
+                    // Update the PWD variable
+                    pwd, err := os.Getwd()
+                    if err != nil {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Error getting current directory: %s\n", t.Line, t.Column, err.Error()))
+                    }
+
+                    err = os.Setenv("PWD", pwd)
+                    if err != nil {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Error setting PWD: %s\n", t.Line, t.Column, err.Error()))
+                    }
+
+                    state.Variables["PWD"] = &MShellString{pwd}
                 } else if t.Lexeme == "~" || strings.HasPrefix(t.Lexeme, "~/") {
 					// Only do tilde expansion
 					homeDir, err := os.UserHomeDir()
@@ -1088,15 +1135,22 @@ MainLoop:
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '=' operation on a stack with only one item.\n", t.Line, t.Column))
 				}
 
-				// Implement for integers right now.
+				// Implement for integers and strings right now.
 				switch obj1.(type) {
 				case *MShellInt:
 					switch obj2.(type) {
 					case *MShellInt:
 						stack.Push(&MShellBool{obj2.(*MShellInt).Value == obj1.(*MShellInt).Value})
 					default:
-						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot compare an integer to a %s.\n", t.Line, t.Column, obj2.TypeName()))
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot compare equality from an integer to a %s.\n", t.Line, t.Column, obj2.TypeName()))
 					}
+                case *MShellString:
+                    switch obj2.(type) {
+                    case *MShellString:
+                        stack.Push(&MShellBool{obj2.(*MShellString).Content == obj1.(*MShellString).Content})
+                    default:
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot compare equality from a string to a %s.\n", t.Line, t.Column, obj2.TypeName()))
+                    }
 				default:
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot complete %s with a %s to a %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
 				}
