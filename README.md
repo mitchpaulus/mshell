@@ -15,17 +15,17 @@ Best way to understand purpose and syntax of `mshell` is to see it in action. He
 *Better Awk One-liners*. Examples from the `awk` book, translated to `mshell`
 
 ```sh
-# 1. Print the total nubmer of input lines:
+# 1. Print the total number of input lines:
 # END { print NR }
 .. len wl
 
 # 2. Print the 10th input line:
 # NR == 10
-.. :10: wl
+.. :9: wl
 
 # 3. Print the last field of every input line:
 # { print $NF }
-.. (ws split :-1: wl) each
+wt (:-1: wl) each
 
 # 4. Print the last field of the last input line:
 #     { field = $NF }
