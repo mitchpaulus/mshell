@@ -15,11 +15,11 @@ wt (:-1: wl) each
 # 4. Print the last field of the last input line:
 #     { field = $NF }
 # END { print field }
-.. :-1: wsplit :-1: wl
+wt :-1: :-1: wl
 
 # 5. Print every input line with more than four fields
 # NF > 4
-.. (dup " " split len [(4 >) (wl) (drop)] if) each
+.. (wsplit len 4 >) filter (wl) each
 
 # 6. Print every input line in which the last field is more than 4
 # $NF > 4

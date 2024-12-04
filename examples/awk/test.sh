@@ -21,5 +21,14 @@ else
 fi
 
 emp_test 3
+emp_test 4
+
+
+if diff <(awk -f '5.awk' < 5.data) <(mshell 5.msh < 5.data); then
+    printf "5. pass\n"
+else
+    printf "5. fail\n"
+    FAIL=1
+fi
 
 exit "$FAIL"
