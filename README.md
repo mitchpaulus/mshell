@@ -38,12 +38,12 @@ wt :-1: :-1: wl
 
 # 6. Print every input line in which the last field is more than 4
 # $NF > 4
-.. (ws split) map (:-1: toFloat 4 >) filter unlines wl
+.. (wsplit :-1: toFloat 4 >) filter (wl) each
 
 # 7. Print the total number of fields in all input lines
 #     { nf = nf + $NF }
 # END { print nf }
-.. (ws split len) map sum wl
+.. (wsplit len) map sum wl
 
 # 8. Print the total number of lines that contain 'Beth'
 # /Beth/ { nlines = nlines + 1 }
@@ -57,7 +57,7 @@ wt :-1: :-1: wl
 0 @max
 ..
 # line first
-(dup " " split :1: toFloat [(dup max! >) (@max @line)] if)
+(dup wsplit :1: toFloat [(dup max! >) (@max @line)] if)
 each max! w " " w line! w
 
 # 10. Print every line that has at least one field
@@ -70,16 +70,16 @@ each max! w " " w line! w
 
 # 12. Print the number of fields in every line followed by the line itself
 # { print NF, $0 }
-.. (dup " " split len w " " w wl) each
+.. (dup wsplit len w " " w wl) each
 
 # 13. Print the first two fields in opposite order, of every line
 # { print $2, $1 }
-.. (" " split :1: :2: w w) each
+.. (wsplit :1: :2: w w) each
 
 # 14. Exchange the first two fields of every line and then print the line
 # { temp = $1; $1 = $2; $2 = temp; print }
 # Need a way to write value into an index.
-# .. (dup " " split :1: :2: swap w w) each
+# .. (dup wsplit :1: :2: swap w w) each
 
 # 15. Print every line with the first field replaced by the line number
 # { $1 = NR; print }
@@ -94,23 +94,23 @@ each max! w " " w line! w
 # { for (i = NF; i > 0; i = i - 1) printf "%s ", $i
 # printf "\n"
 # }
-.. (" " split reverse " " join wl) each
+.. (wsplit reverse " " join wl) each
 
 # 18. Print the sums of the fields of every line
 # { sum = 0
 #   for (i = 1; i <= NF; i = i + 1) sum = sum + $i
 #   print sum
 # }
-.. (" " split (toFloat) map sum wl) each
+.. (wsplit (toFloat) map sum wl) each
 
 # 19. Add up all fields in all lines and print the sum
 # { for (i = 1; i <= NF; i = i + 1) sum = sum + $i }
 # END { print sum }
-.. (" " split (toFloat) map sum) map sum wl
+.. (wsplit (toFloat) map sum) map sum wl
 
 # 20. Print every line after replacing each field by its absolute value
 # { for (i = 1; i <= NF; i = i + 1) $i = ($i < 0) ? -$i : $i; print }
-.. (" " split (toFloat abs) map " " join wl) each
+.. (wsplit (toFloat abs) map " " join wl) each
 
 ```
 
