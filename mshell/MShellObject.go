@@ -82,6 +82,10 @@ type MShellInt struct {
 	Value int
 }
 
+type MShellFloat struct {
+    Value float64
+}
+
 // ToString
 func (obj *MShellLiteral) ToString() string {
 	return obj.LiteralText
@@ -109,6 +113,10 @@ func (obj *MShellPipe) ToString() string {
 
 func (obj *MShellInt) ToString() string {
 	return strconv.Itoa(obj.Value)
+}
+
+func (obj *MShellFloat) ToString() string {
+    return strconv.FormatFloat(obj.Value, 'f', -1, 64)
 }
 
 func (obj *MShellSimple) ToString() string {
@@ -142,6 +150,10 @@ func (obj *MShellPipe) TypeName() string {
 
 func (obj *MShellInt) TypeName() string {
 	return "Integer"
+}
+
+func (obj *MShellFloat) TypeName() string {
+    return "Float"
 }
 
 func (obj *MShellSimple) TypeName() string {
@@ -182,6 +194,10 @@ func (obj *MShellSimple) IsCommandLineable() bool {
 	return false
 }
 
+func (obj *MShellFloat) IsCommandLineable() bool {
+    return true
+}
+
 // IsNumeric
 func (obj *MShellLiteral) IsNumeric() bool {
 	return false
@@ -209,6 +225,10 @@ func (obj *MShellPipe) IsNumeric() bool {
 
 func (obj *MShellInt) IsNumeric() bool {
 	return true
+}
+
+func (obj *MShellFloat) IsNumeric() bool {
+    return true
 }
 
 func (obj *MShellSimple) IsNumeric() bool {
@@ -242,6 +262,10 @@ func (obj *MShellPipe) FloatNumeric() float64 {
 
 func (obj *MShellInt) FloatNumeric() float64 {
 	return float64(obj.Value)
+}
+
+func (obj *MShellFloat) FloatNumeric() float64 {
+    return obj.Value
 }
 
 func (obj *MShellSimple) FloatNumeric() float64 {
@@ -279,6 +303,10 @@ func (obj *MShellInt) CommandLine() string {
 
 func (obj *MShellSimple) CommandLine() string {
 	return ""
+}
+
+func (obj *MShellFloat) CommandLine() string {
+    return strconv.FormatFloat(obj.Value, 'f', -1, 64)
 }
 
 // DebugString
@@ -337,6 +365,10 @@ func (obj *MShellInt) DebugString() string {
 	return strconv.Itoa(obj.Value)
 }
 
+func (obj *MShellFloat) DebugString() string {
+    return strconv.FormatFloat(obj.Value, 'f', -1, 64)
+}
+
 func (obj *MShellSimple) DebugString() string {
 	return obj.Token.Lexeme
 }
@@ -367,6 +399,10 @@ func (obj *MShellPipe) IndexErrStr() string {
 
 func (obj *MShellInt) IndexErrStr() string {
 	return ""
+}
+
+func (obj *MShellFloat) IndexErrStr() string {
+    return ""
 }
 
 func IndexCheck(index int, length int, obj MShellObject) error {
@@ -448,6 +484,10 @@ func (obj *MShellInt) Index(index int) (MShellObject, error) {
 	return nil, fmt.Errorf("Cannot index into an integer.\n")
 }
 
+func (obj *MShellFloat) Index(index int) (MShellObject, error) {
+    return nil, fmt.Errorf("Cannot index into a float.\n")
+}
+
 func (obj *MShellSimple) Index(index int) (MShellObject, error) {
 	return nil, fmt.Errorf("Cannot index into a simple token.\n")
 }
@@ -512,6 +552,10 @@ func (obj *MShellInt) SliceStart(start int) (MShellObject, error) {
 	return nil, fmt.Errorf("cannot slice an integer.\n")
 }
 
+func (obj* MShellFloat) SliceStart(start int) (MShellObject, error) {
+    return nil, fmt.Errorf("cannot slice a float.\n")
+}
+
 func (obj *MShellSimple) SliceStart(start int) (MShellObject, error) {
 	return nil, fmt.Errorf("cannot slice a simple token.\n")
 }
@@ -574,6 +618,10 @@ func (obj *MShellPipe) SliceEnd(end int) (MShellObject, error) {
 
 func (obj *MShellInt) SliceEnd(end int) (MShellObject, error) {
 	return nil, fmt.Errorf("Cannot slice an integer.\n")
+}
+
+func (obj *MShellFloat) SliceEnd(end int) (MShellObject, error) {
+    return nil, fmt.Errorf("Cannot slice a float.\n")
 }
 
 func (obj *MShellSimple) SliceEnd(end int) (MShellObject, error) {
@@ -680,6 +728,10 @@ func (obj *MShellInt) Slice(startInc int, endExc int) (MShellObject, error) {
 	return nil, fmt.Errorf("Cannot slice an integer.\n")
 }
 
+func (obj *MShellFloat) Slice(startInc int, endExc int) (MShellObject, error) {
+    return nil, fmt.Errorf("Cannot slice a float.\n")
+}
+
 func (obj *MShellSimple) Slice(startInc int, endExc int) (MShellObject, error) {
 	return nil, fmt.Errorf("Cannot slice a simple token.\n")
 }
@@ -731,6 +783,10 @@ func (obj *MShellPipe) ToJson() string {
 
 func (obj *MShellInt) ToJson() string {
 	return fmt.Sprintf("{\"type\": \"Integer\", \"value\": %d}", obj.Value)
+}
+
+func (obj *MShellFloat) ToJson() string {
+    return fmt.Sprintf("{\"type\": \"Float\", \"value\": %f}", obj.Value)
 }
 
 func (obj *MShellSimple) ToJson() string {

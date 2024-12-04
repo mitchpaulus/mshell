@@ -31,4 +31,6 @@ else
     FAIL=1
 fi
 
+emp_test 6
+
 exit "$FAIL"

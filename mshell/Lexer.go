@@ -44,6 +44,7 @@ const (
 	VARRETRIEVE
 	VARSTORE
 	INTEGER
+    FLOAT
 	DOUBLE
 	LITERAL
 	INDEXER
@@ -129,6 +130,8 @@ func (t TokenType) String() string {
 		return "VARSTORE"
 	case INTEGER:
 		return "INTEGER"
+    case FLOAT:
+        return "FLOAT"
 	case DOUBLE:
 		return "DOUBLE"
 	case LITERAL:
@@ -417,7 +420,21 @@ func (l *Lexer) parseNumberOrStartIndexer() Token {
 	} else if peek == '>' {
 		l.advance()
 		return l.makeToken(STDERRREDIRECT)
-	}
+	} else if peek == '.' {
+        l.advance()
+
+        for {
+            if l.atEnd() {
+                break
+            }
+            if !unicode.IsDigit(l.peek()) {
+                break
+            }
+            l.advance()
+        }
+
+        return l.makeToken(FLOAT)
+    }
 
 	if !isAllowedLiteral(peek) {
 		return l.makeToken(INTEGER)

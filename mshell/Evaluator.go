@@ -642,6 +642,25 @@ MainLoop:
                     }
 
                     state.Variables["PWD"] = &MShellString{pwd}
+                } else if t.Lexeme == "toFloat" {
+                    obj, err := stack.Pop()
+                    if err != nil {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'toFloat' operation on an empty stack.\n", t.Line, t.Column))
+                    }
+
+                    switch obj.(type) {
+                    case *MShellString:
+                        floatVal, err := strconv.ParseFloat(obj.(*MShellString).Content, 64)
+                        if err != nil {
+                            return FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert %s to float: %s\n", t.Line, t.Column, obj.(*MShellString).Content, err.Error()))
+                        }
+                        stack.Push(&MShellFloat{floatVal})
+                        // I don't believe checking for literal is required, because it should have been parsed as a float to start with?
+                    case *MShellInt:
+                        stack.Push(&MShellFloat{float64(obj.(*MShellInt).Value)})
+                    default:
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert a %s to a float.\n", t.Line, t.Column, obj.TypeName()))
+                    }
                 } else if t.Lexeme == "~" || strings.HasPrefix(t.Lexeme, "~/") {
 					// Only do tilde expansion
 					homeDir, err := os.UserHomeDir()
@@ -1463,10 +1482,15 @@ MainLoop:
 				}
 			} else if t.Type == STOP_ON_ERROR {
 				state.StopOnError = true
+            } else if t.Type == FLOAT {
+                floatVal, err := strconv.ParseFloat(t.Lexeme, 64)
+                if err != nil {
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing float: %s\n", t.Line, t.Column, err.Error()))
+                }
+                stack.Push(&MShellFloat{floatVal})
 			} else {
 				return FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Type))
 			}
-
 		default:
 			return FailWithMessage(fmt.Sprintf("We haven't implemented the type '%T' yet.\n", t))
 		}

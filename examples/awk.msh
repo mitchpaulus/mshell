@@ -23,7 +23,7 @@ wt :-1: :-1: wl
 
 # 6. Print every input line in which the last field is more than 4
 # $NF > 4
-stdin lines (" " split) map (:-1: toFloat 4 >) filter unlines wl
+.. (wsplit :-1: toFloat 4 >) filter (wl) each
 
 # 7. Print the total number of fields in all input lines
 #     { nf = nf + $NF }
