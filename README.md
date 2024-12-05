@@ -41,7 +41,7 @@ wt :-1: :-1: wl
 .. (wsplit :-1: toFloat 4 >) filter (wl) each
 
 # 7. Print the total number of fields in all input lines
-#     { nf = nf + $NF }
+#     { nf = nf + NF }
 # END { print nf }
 .. (wsplit len) map sum wl
 

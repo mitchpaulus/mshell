@@ -53,6 +53,26 @@ def filter
     drop drop @filter-accum
 end
 
+# foldl (quote initial list -- result)
+def foldl
+    #  quote initial list
+    swap foldl-accum!  # Accumulator,
+    # quote list
+    swap foldl-quote! # Quote
+    # list
+    (
+        @foldl-accum swap # Accumulator item
+        @foldl-quote x # Execute quote
+        foldl-accum! # Update accumulator
+    ) each
+
+    @foldl-accum
+end
+
+# sum (list -- value)
+def sum
+    (+) 0 rot foldl
+end
 
 # .. (-- list[str]), equals kinda looks like lines.
 def .. stdin lines end
