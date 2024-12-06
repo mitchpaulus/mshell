@@ -245,6 +245,8 @@ var notAllowedLiteralChars = map[rune]bool{
 	'>': true,
 	';': true,
 	'?': true,
+    '!': true,
+    '@': true,
 }
 
 func isAllowedLiteral(r rune) bool {
@@ -334,6 +336,20 @@ func (l *Lexer) scanToken() Token {
         } else {
             return l.consumeLiteral()
         }
+    case '@':
+        for {
+            if l.atEnd() {
+                break
+            }
+            c := l.peek()
+            if isAllowedLiteral(c) {
+                l.advance()
+            } else {
+                break
+            }
+        }
+        // TODO: if empty at end, need better error.
+        return l.makeToken(VARRETRIEVE)
 	default:
 		return l.parseLiteralOrNumber()
 	}
@@ -368,6 +384,11 @@ func (l *Lexer) consumeLiteral() Token {
 			break
 		}
 	}
+
+    if l.peek() == '!' {
+        l.advance()
+        return l.makeToken(VARSTORE)
+    }
 
 	return l.makeToken(LITERAL)
 }
@@ -573,12 +594,12 @@ func (l *Lexer) parseLiteralOrNumber() Token {
 	case "false":
 		return l.makeToken(FALSE)
 	default:
-		if strings.HasSuffix(literal, "!") {
-			return l.makeToken(VARSTORE)
-		}
-		if strings.HasPrefix(literal, "@") {
-			return l.makeToken(VARRETRIEVE)
-		}
+        // Still a hack, but better than before.
+        if l.peek() == '!' {
+            l.advance()
+            return l.makeToken(VARSTORE)
+        }
+
         // Currently here to handle the negative start indexer case. '-3:'
         if strings.HasSuffix(literal, ":") {
             if _, err := strconv.Atoi(literal[:len(literal)-1]); err == nil {
