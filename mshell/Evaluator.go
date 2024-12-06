@@ -1019,7 +1019,7 @@ MainLoop:
 							}
 							stack.Push(obj2)
 						default:
-							return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a string to a %s.\n", t.Line, t.Column, obj2.TypeName()))
+							return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a string (%s) to a %s (%s).\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
 						}
 					case *MShellLiteral:
 						switch obj2.(type) {
@@ -1038,7 +1038,7 @@ MainLoop:
 							}
 						}
 					default:
-						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a %s to a %s.\n", t.Line, t.Column, obj1.TypeName(), obj2.TypeName()))
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a %s (%s) to a %s (%s).\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
 					}
 				}
 			} else if t.Type == STDERRREDIRECT {

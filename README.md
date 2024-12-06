@@ -53,16 +53,18 @@ wt :-1: :-1: wl
 # 9. Print the largest first field and the line that contains it (assumes some $1 is positive):
 # $1 > max { max = $1; line = $0 }
 # END      { print max, line }
-
-0 @max
+-99999999 max! "" max-line!
 ..
-# line first
-(dup wsplit :1: toFloat [(dup max! >) (@max @line)] if)
-each max! w " " w line! w
+(
+    dup line! # Store line
+    wsplit :0: toFloat dup first-item! # Store first item
+    [(@max >) (@first-item max! @line max-line!)] if
+) each
+@max str w " " w @max-line wl
 
 # 10. Print every line that has at least one field
 # NF > 0
-.. (len 0 >) filter (wl) each
+.. (wsplit len 0 >) filter (wl) each
 
 # 11. Print every line longer than 80 characters
 # length($0) > 80

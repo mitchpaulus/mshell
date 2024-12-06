@@ -1,0 +1,8 @@
+-99999999 max! "" max-line!
+..
+(
+    dup line! # Store line
+    wsplit :0: toFloat dup first-item! # Store first item
+    [(@max >) (@first-item max! @line max-line!)] if
+) each
+@max str w " " w @max-line wl

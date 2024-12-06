@@ -9,6 +9,15 @@ emp_test() {
     fi
 }
 
+data_test() {
+    if diff <(awk -f "$1".awk "$1".data) <(mshell "$1".msh < "$1".data); then
+        printf "%s. pass\n" "$1"
+    else
+        printf "%s. fail\n" "$1"
+        FAIL=1
+    fi
+}
+
 FAIL=0
 
 emp_test 1
@@ -22,17 +31,11 @@ fi
 
 emp_test 3
 emp_test 4
-
-
-if diff <(awk -f '5.awk' < 5.data) <(mshell 5.msh < 5.data); then
-    printf "5. pass\n"
-else
-    printf "5. fail\n"
-    FAIL=1
-fi
-
+data_test 5
 emp_test 6
 emp_test 7
 emp_test 8
+data_test 9
+data_test 10
 
 exit "$FAIL"
