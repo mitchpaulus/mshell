@@ -28,19 +28,19 @@ wt :-1: :-1: wl
 # 7. Print the total number of fields in all input lines
 #     { nf = nf + $NF }
 # END { print nf }
-stdin lines (" " split len) map sum wl
+.. (wsplit len) map sum wl
 
 # 8. Print the total number of lines that contain 'Beth'
 # /Beth/ { nlines = nlines + 1 }
 # END { print nlines }
-stdin lines ("Beth" in) filter len wl
+.. ("Beth" in) filter len wl
 
 # 9. Print the largest first field and the line that contains it (assumes some $1 is positive):
 # $1 > max { max = $1; line = $0 }
 # END      { print max, line }
 
 0 @max
-stdin lines
+..
 # line first
 (dup " " split :1: toFloat [(dup max! >) (@max @line)] if)
 each max! w " " w line! w

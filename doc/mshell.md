@@ -25,6 +25,8 @@
 
 `cd`: Change directory `(string -- )`
 
+`toFloat`: Convert to float. `(numeric -- float)`
+
 ### String Functions
 
 `str`: Convert to string
@@ -33,6 +35,7 @@
 `split`: Split string into list of strings by delimiter. (string delimiter -- list[string])
 `wsplit`: Split string into list of strings by runs of whitespace. (string -- list[string])
 `join`: Join list of strings into a single string, (list delimiter -- string)
+`in`: Check for substring in string. (totalString subString -- bool)
 
 ### List Functions
 

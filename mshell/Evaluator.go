@@ -642,6 +642,39 @@ MainLoop:
                     }
 
                     state.Variables["PWD"] = &MShellString{pwd}
+                } else if t.Lexeme == "in" {
+                    substring, err := stack.Pop()
+                    if err != nil {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'in' operation on an empty stack.\n", t.Line, t.Column))
+                    }
+
+                    totalString, err := stack.Pop()
+                    if err != nil {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'in' operation on a stack with only one item.\n", t.Line, t.Column))
+                    }
+
+                    var substringText string
+                    var totalStringText string
+
+                    switch substring.(type) {
+                    case *MShellString:
+                        substringText = substring.(*MShellString).Content
+                    case *MShellLiteral:
+                        substringText = substring.(*MShellLiteral).LiteralText
+                    default:
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot search for a %s.\n", t.Line, t.Column, substring.TypeName()))
+                    }
+
+                    switch totalString.(type) {
+                    case *MShellString:
+                        totalStringText = totalString.(*MShellString).Content
+                    case *MShellLiteral:
+                        totalStringText = totalString.(*MShellLiteral).LiteralText
+                    default:
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot search in a %s.\n", t.Line, t.Column, totalString.TypeName()))
+                    }
+
+                    stack.Push(&MShellBool{strings.Contains(totalStringText, substringText)})
                 } else if t.Lexeme == "toFloat" {
                     obj, err := stack.Pop()
                     if err != nil {

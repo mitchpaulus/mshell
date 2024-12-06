@@ -33,5 +33,6 @@ fi
 
 emp_test 6
 emp_test 7
+emp_test 8
 
 exit "$FAIL"
