@@ -38,5 +38,7 @@ emp_test 8
 data_test 9
 data_test 10
 data_test 11
+emp_test 12
+emp_test 13
 
 exit "$FAIL"
