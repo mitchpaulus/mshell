@@ -1,0 +1,8 @@
+wt
+(
+    []
+    over :1: append
+    over :0: append
+    swap 2: +
+    " " join wl
+) each
