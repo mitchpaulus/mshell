@@ -80,8 +80,14 @@ wt :-1: :-1: wl
 
 # 14. Exchange the first two fields of every line and then print the line
 # { temp = $1; $1 = $2; $2 = temp; print }
-# Need a way to write value into an index.
-# .. (dup wsplit :1: :2: swap w w) each
+wt
+(
+    []
+    over :1: append
+    over :0: append
+    swap 2: +
+    " " join wl
+) each
 
 # 15. Print every line with the first field replaced by the line number
 # { $1 = NR; print }

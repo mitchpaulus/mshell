@@ -43,6 +43,7 @@
 `each`: Execute a quotation for each element in a list, `(list quote -- )`
 `del`: Delete element from list, `(list index -- list)` or `(index list -- list)`
 `insert`: Insert element into list, `(list element index -- list)`
+`setAt`: Set element at index, `(list element index -- list)`
 
 ## Variables
 

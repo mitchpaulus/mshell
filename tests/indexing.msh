@@ -31,3 +31,7 @@ def cjoin ", " join wl end
 # Test insertion at index
 ["a" "b" "c" "d"] "x" 2 insert cjoin
 ["a" "b" "c" "d"] "x" -1 insert cjoin
+
+# Test updating at index
+["a" "b" "c" "d"] "x" 2 setAt cjoin
+["a" "b" "c" "d"] "x" -1 setAt cjoin

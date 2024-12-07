@@ -510,6 +510,44 @@ MainLoop:
 					}
 
 					stack.Push(newList)
+                } else if t.Lexeme == "setAt" {
+                    // Expected stack:
+                    // List item index
+                    // Index 0 based, negative indexes allowed
+                    obj1, err := stack.Pop()
+                    if err != nil {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'setAt' operation on an empty stack.\n", t.Line, t.Column))
+                    }
+
+                    obj2, err := stack.Pop()
+                    if err != nil {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'setAt' operation on a stack with only one item.\n", t.Line, t.Column))
+                    }
+
+                    obj3, err := stack.Peek()
+                    if err != nil {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'setAt' operation on a stack with only two items.\n", t.Line, t.Column))
+                    }
+                    
+                    obj1Index, ok := obj1.(*MShellInt)
+                    if !ok {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot set at a non-integer index.\n", t.Line, t.Column))
+                    }
+
+                    obj3List, ok := obj3.(*MShellList)
+                    if !ok {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot set into a non-list.\n", t.Line, t.Column))
+                    }
+
+                    if obj1Index.Value < 0 {
+                        obj1Index.Value = len(obj3List.Items) + obj1Index.Value
+                    }
+
+                    if obj1Index.Value < 0 || obj1Index.Value >= len(obj3List.Items) {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Index out of range for 'setAt'.\n", t.Line, t.Column))
+                    }
+
+                    obj3List.Items[obj1Index.Value] = obj2
 				} else if t.Lexeme == "insert" {
                     // Expected stack:
                     // List item index
@@ -899,6 +937,14 @@ MainLoop:
 					default:
 						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot add a literal to a %s.\n", t.Line, t.Column, obj2.TypeName()))
 					}
+                case *MShellList:
+                    switch obj2.(type) {
+                    case *MShellList:
+                        newList := &MShellList{Items: make([]MShellObject, len(obj2.(*MShellList).Items) + len(obj1.(*MShellList).Items)), StandardInputFile: "", StandardOutputFile: "", StdoutBehavior: STDOUT_NONE}
+                        copy(newList.Items, obj2.(*MShellList).Items)
+                        copy(newList.Items[len(obj2.(*MShellList).Items):], obj1.(*MShellList).Items)
+                        stack.Push(newList)
+                    }
 				default:
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '+' to a %s to a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
 				}
