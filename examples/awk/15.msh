@@ -1,0 +1,6 @@
+wt 1 lineNum!
+(
+    @lineNum str 0 setAt
+    " " join wl
+    @lineNum 1 + lineNum!
+) each

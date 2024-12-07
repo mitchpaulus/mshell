@@ -91,8 +91,12 @@ wt
 
 # 15. Print every line with the first field replaced by the line number
 # { $1 = NR; print }
-# Need a way to write value into an index.
-# .. (dup w 1 w w) each
+wt 1 lineNum!
+(
+    @lineNum str 0 setAt
+    " " join wl
+    @lineNum 1 + lineNum!
+) each
 
 # 16. Print every line after erasing the second field
 # { $2 = ""; print }
