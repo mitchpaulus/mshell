@@ -83,6 +83,9 @@ def tt .. ("	" split) map end
 # wt = Whitespace separated Table (-- list[list[str]])
 def wt .. (wsplit) map  end
 
+# wjoin = Whitespace join (list -- str)
+def wjoin " " join end
+
 # unlines (list[str] -- str)
 def unlines
     [] unlines-accum! # Accumulator
@@ -94,6 +97,14 @@ def unlines
     @unlines-accum "" join
 end
 
-# map (list quote -- list)
-# [seq 1 1000]o; ("Line #" over str + wl) each
-# [1 2 3] (2 +) map .s
+# reverse (list|string -- list)
+def reverse
+    dup len 1 - reverse-idx! # Set Idx
+    [] # list accum
+    (
+        [(@reverse-idx 0 <) (break)] if
+        over @reverse-idx nth append # Get current item
+        @reverse-idx 1 - reverse-idx! # dec index
+    ) loop
+    nip # Drop original list
+end

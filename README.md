@@ -86,7 +86,7 @@ wt
     over :1: append
     over :0: append
     swap 2: +
-    " " join wl
+    wjoin wl
 ) each
 
 # 15. Print every line with the first field replaced by the line number
@@ -94,19 +94,19 @@ wt
 wt 1 lineNum!
 (
     @lineNum str 0 setAt
-    " " join wl
+    wjoin wl
     @lineNum 1 + lineNum!
 ) each
 
 # 16. Print every line after erasing the second field
 # { $2 = ""; print }
-# Need a way to delete at an index.
+wt ("" 1 setAt wjoin wl) each
 
 # 17. Print in reverse order the fields of every line
-# { for (i = NF; i > 0; i = i - 1) printf "%s ", $i
+# { for (i = NF; i > 0; i = i - 1) printf (i == 1 ? "%s" : "%s "), $i
 # printf "\n"
 # }
-.. (wsplit reverse " " join wl) each
+wt (reverse wjoin wl) each
 
 # 18. Print the sums of the fields of every line
 # { sum = 0
@@ -122,7 +122,7 @@ wt 1 lineNum!
 
 # 20. Print every line after replacing each field by its absolute value
 # { for (i = 1; i <= NF; i = i + 1) $i = ($i < 0) ? -$i : $i; print }
-.. (wsplit (toFloat abs) map " " join wl) each
+.. (wsplit (toFloat abs) map wjoin wl) each
 
 ```
 

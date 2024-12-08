@@ -35,3 +35,5 @@ def cjoin ", " join wl end
 # Test updating at index
 ["a" "b" "c" "d"] "x" 2 setAt cjoin
 ["a" "b" "c" "d"] "x" -1 setAt cjoin
+
+["a" "b" "c" "d"] reverse cjoin

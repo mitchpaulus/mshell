@@ -1218,7 +1218,9 @@ MainLoop:
 
 				state.LoopDepth--
 
-				if breakDiff > 0 {
+                // If we are breaking out of an inner loop to an outer loop (breakDiff - 1 > 0), then we need to return an go up the call stack.
+                // Else just continue on with tokens after the loop.
+				if breakDiff - 1 > 0 {
 					return EvalResult{true, breakDiff - 1, 0}
 				}
 			} else if t.Type == BREAK {
@@ -1260,7 +1262,7 @@ MainLoop:
 
 				quotation, ok := obj.(*MShellQuotation)
 				if !ok {
-					return FailWithMessage(fmt.Sprintf("%d:%d: Argument for interpret expected to be a quotation, received a %s\n", t.Line, t.Column, obj.TypeName()))
+					return FailWithMessage(fmt.Sprintf("%d:%d: Argument for interpret expected to be a quotation, received a %s (%s)\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
 				}
 
 				quoteContext := ExecuteContext{
