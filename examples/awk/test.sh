@@ -44,5 +44,6 @@ emp_test 14
 emp_test 15
 emp_test 16
 emp_test 17
+data_test 18
 
 exit "$FAIL"

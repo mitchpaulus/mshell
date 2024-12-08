@@ -916,9 +916,20 @@ MainLoop:
 					switch obj2.(type) {
 					case *MShellInt:
 						stack.Push(&MShellInt{obj2.(*MShellInt).Value + obj1.(*MShellInt).Value})
+                    case *MShellFloat:
+                        stack.Push(&MShellFloat{float64(obj2.(*MShellFloat).Value) + float64(obj1.(*MShellInt).Value)})
 					default:
 						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot add an integer to a %s.\n", t.Line, t.Column, obj2.TypeName()))
 					}
+                case *MShellFloat:
+                    switch obj2.(type) {
+                    case *MShellFloat:
+                        stack.Push(&MShellFloat{obj2.(*MShellFloat).Value + obj1.(*MShellFloat).Value})
+                    case *MShellInt:
+                        stack.Push(&MShellFloat{float64(obj2.(*MShellInt).Value) + obj1.(*MShellFloat).Value})
+                    default:
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot add a float to a %s.\n", t.Line, t.Column, obj2.TypeName()))
+                    }
 				case *MShellString:
 					switch obj2.(type) {
 					case *MShellString:
@@ -946,7 +957,7 @@ MainLoop:
                         stack.Push(newList)
                     }
 				default:
-					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '+' to a %s to a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
+					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '+' between a %s and a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
 				}
 			} else if t.Type == MINUS {
 				obj1, err := stack.Pop()
