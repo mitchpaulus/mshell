@@ -17,10 +17,12 @@ jobs:
     - name: Build go
       run: cd mshell && go build -o mshell
 
-    - name: Set Go PATH
-      run: realpath ./mshell > "$GITHUB_PATH"
+    - name: Set Go PATH, MSHSTDLIB
+      run: |
+        realpath ./mshell > "$GITHUB_PATH"
+        realpath ./lib/std.msh > "$MSHSTDLIB"
 
-    - name: Test mshell-go
+    - name: Test mshell
       run:  cd tests && ./test.sh
 
     - name: Run awk example tests
