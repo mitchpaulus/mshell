@@ -113,16 +113,16 @@ wt (reverse wjoin wl) each
 #   for (i = 1; i <= NF; i = i + 1) sum = sum + $i
 #   print sum
 # }
-.. (wsplit (toFloat) map sum wl) each
+wt ((toFloat) map sum str wl) each
 
 # 19. Add up all fields in all lines and print the sum
 # { for (i = 1; i <= NF; i = i + 1) sum = sum + $i }
 # END { print sum }
-.. (wsplit (toFloat) map sum) map sum wl
+wt ((toFloat) map sum) sum wl
 
 # 20. Print every line after replacing each field by its absolute value
 # { for (i = 1; i <= NF; i = i + 1) $i = ($i < 0) ? -$i : $i; print }
-.. (wsplit (toFloat abs) map wjoin wl) each
+wt ((toFloat abs) map wjoin wl) each
 
 ```
 

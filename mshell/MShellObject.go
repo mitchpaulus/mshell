@@ -43,6 +43,7 @@ type MShellQuotation struct {
 	StandardInputFile  string
 	StandardOutputFile string
 	StandardErrorFile  string
+    Variables          map[string]MShellObject
 }
 
 // type MShellQuotation2 struct {

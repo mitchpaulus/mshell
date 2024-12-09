@@ -108,7 +108,6 @@ func main() {
 	state := EvalState{
 		PositionalArgs: positionalArgs,
 		LoopDepth:      0,
-		Variables:      make(map[string]MShellObject),
 	}
 
 	var stack MShellStack
@@ -116,6 +115,7 @@ func main() {
 	context := ExecuteContext{
 		StandardInput:  os.Stdin,
 		StandardOutput: os.Stdout,
+        Variables: map[string]MShellObject{},
 	}
 
 	var allDefinitions []MShellDefinition
