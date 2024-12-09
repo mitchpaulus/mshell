@@ -118,11 +118,11 @@ wt ((toFloat) map sum str wl) each
 # 19. Add up all fields in all lines and print the sum
 # { for (i = 1; i <= NF; i = i + 1) sum = sum + $i }
 # END { print sum }
-wt ((toFloat) map sum) sum wl
+wt ((toFloat) map sum) sum str wl
 
 # 20. Print every line after replacing each field by its absolute value
 # { for (i = 1; i <= NF; i = i + 1) $i = ($i < 0) ? -$i : $i; print }
-wt ((toFloat abs) map wjoin wl) each
+wt ((toFloat abs str) map wjoin wl) each
 
 ```
 
@@ -139,10 +139,11 @@ wt ((toFloat abs) map wjoin wl) each
 
 | Objective | `sh` | `mshell` |
 |-----------|-----|----------|
-| Print the number of files in the current directory | `ls \| wc -l`                                                | `* glob len wl` |
+| Print the number of files in the current directory | `ls \| wc -l`                                                | `"*" glob len wl` |
 | `find`/`xargs`                                     |  `find . -t x -name '*.sh' -print0 \|  xargs -0 mycommand`   | `[mycommand [find . -t x -name "*.sh"]]o;` |
 
 # TODO
 
-- Floating point numbers
+- Type checking
+- Improved error messages
 - Dictionaries

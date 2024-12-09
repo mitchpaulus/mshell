@@ -21,14 +21,7 @@ data_test() {
 FAIL=0
 
 emp_test 1
-
-if diff <(seq 1 20 | awk -f '2.awk' ) <(seq 1 20 | mshell 2.msh); then
-    printf "2. pass\n"
-else
-    printf "2. fail\n"
-    FAIL=1
-fi
-
+data_test 2
 emp_test 3
 emp_test 4
 data_test 5
@@ -45,5 +38,7 @@ emp_test 15
 emp_test 16
 emp_test 17
 data_test 18
+data_test 19
+data_test 20
 
 exit "$FAIL"

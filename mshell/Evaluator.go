@@ -719,6 +719,75 @@ MainLoop:
                     }
 
                     stack.Push(&MShellBool{strings.Contains(totalStringText, substringText)})
+                } else if t.Lexeme == "/" {
+                    obj1, err := stack.Pop()
+                    if err != nil {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '/' operation on an empty stack.\n", t.Line, t.Column))
+                    }
+
+                    obj2, err := stack.Pop()
+                    if err != nil {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '/' operation on a stack with only one item.\n", t.Line, t.Column))
+                    }
+
+                    if !obj1.IsNumeric() || !obj2.IsNumeric() {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot divide a %s and a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
+                    }
+
+                    switch obj1.(type) {
+                    case *MShellInt:
+                        if obj1.(*MShellInt).Value == 0 {
+                            return FailWithMessage(fmt.Sprintf("%d:%d: Cannot divide by zero.\n", t.Line, t.Column))
+                        }
+                        switch obj2.(type) {
+                        case *MShellInt:
+                            stack.Push(&MShellInt{obj2.(*MShellInt).Value / obj1.(*MShellInt).Value})
+                        case *MShellFloat:
+                            stack.Push(&MShellFloat{float64(obj2.(*MShellFloat).Value) / float64(obj1.(*MShellInt).Value)})
+                        }
+                    case *MShellFloat:
+                        if obj1.(*MShellFloat).Value == 0 {
+                            return FailWithMessage(fmt.Sprintf("%d:%d: Cannot divide by zero.\n", t.Line, t.Column))
+                        }
+
+                        switch obj2.(type) {
+                        case *MShellInt:
+                            stack.Push(&MShellFloat{float64(obj2.(*MShellInt).Value) / obj1.(*MShellFloat).Value})
+                        case *MShellFloat:
+                            stack.Push(&MShellFloat{obj2.(*MShellFloat).Value / obj1.(*MShellFloat).Value})
+                        }
+                    }
+                } else if t.Lexeme == "*" {
+                    obj1, err := stack.Pop()
+                    if err != nil {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '*' operation on an empty stack.\n", t.Line, t.Column))
+                    }
+
+                    obj2, err := stack.Pop()
+                    if err != nil {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '*' operation on a stack with only one item.\n", t.Line, t.Column))
+                    }
+
+                    if !obj1.IsNumeric() || !obj2.IsNumeric() {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot multiply a %s and a %s. If you are looking for wildcard glob, you want `\"*\" glob`.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
+                    }
+
+                    switch obj1.(type) {
+                    case *MShellInt:
+                        switch obj2.(type) {
+                        case *MShellInt:
+                            stack.Push(&MShellInt{obj2.(*MShellInt).Value * obj1.(*MShellInt).Value})
+                        case *MShellFloat:
+                            stack.Push(&MShellFloat{obj2.(*MShellFloat).Value * float64(obj1.(*MShellInt).Value)})
+                        }
+                    case *MShellFloat:
+                        switch obj2.(type) {
+                        case *MShellInt:
+                            stack.Push(&MShellFloat{float64(obj2.(*MShellInt).Value) * float64(obj1.(*MShellFloat).Value)})
+                        case *MShellFloat:
+                            stack.Push(&MShellFloat{obj2.(*MShellFloat).Value * obj1.(*MShellFloat).Value})
+                        }
+                    }
                 } else if t.Lexeme == "toFloat" {
                     obj, err := stack.Pop()
                     if err != nil {

@@ -22,3 +22,6 @@ jobs:
 
     - name: Test mshell-go
       run:  cd tests && ./test.sh
+
+    - name: Run awk example tests
+      run: cd examples/awk && ./test.sh

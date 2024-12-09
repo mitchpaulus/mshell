@@ -1,0 +1,1 @@
+wt ((toFloat) map sum) map sum str wl

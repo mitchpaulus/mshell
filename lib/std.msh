@@ -110,3 +110,8 @@ def reverse
     ) loop
     nip # Drop original list
 end
+
+# abs (int|float -- int|float)
+def abs
+    [(dup 0 <) (-1 *)] if
+end
