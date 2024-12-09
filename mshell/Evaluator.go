@@ -48,7 +48,6 @@ func (objList *MShellStack) String() string {
 type EvalState struct {
 	PositionalArgs []string
 	LoopDepth      int
-	Variables      map[string]MShellObject
 
 	StopOnError bool
 }
@@ -62,6 +61,7 @@ type EvalResult struct {
 type ExecuteContext struct {
 	StandardInput  io.Reader
 	StandardOutput io.Writer
+    Variables      map[string]MShellObject
 }
 
 func SimpleSuccess() EvalResult {
@@ -103,7 +103,7 @@ MainLoop:
 			stack.Push(&MShellList{Items: listStack, StandardInputFile: "", StandardOutputFile: "", StdoutBehavior: STDOUT_NONE})
 		case *MShellParseQuote:
 			parseQuote := t.(*MShellParseQuote)
-			q := MShellQuotation{Tokens: parseQuote.Items, StandardInputFile: "", StandardOutputFile: "", StandardErrorFile: ""}
+            q := MShellQuotation{Tokens: parseQuote.Items, StandardInputFile: "", StandardOutputFile: "", StandardErrorFile: "", Variables: context.Variables}
 			stack.Push(&q)
 		case Token:
 			t := t.(Token)
@@ -116,7 +116,13 @@ MainLoop:
 				for _, definition := range definitions {
 					if definition.Name == t.Lexeme {
 						// Evaluate the definition
-						result := state.Evaluate(definition.Items, stack, context, definitions)
+
+                        var newContext ExecuteContext
+                        newContext.Variables = make(map[string]MShellObject)
+                        newContext.StandardInput = context.StandardInput
+                        newContext.StandardOutput = context.StandardOutput
+
+						result := state.Evaluate(definition.Items, stack, newContext, definitions)
 						if !result.Success || result.BreakNum > 0 {
 							return result
 						}
@@ -661,7 +667,7 @@ MainLoop:
                         return FailWithMessage(fmt.Sprintf("%d:%d: Error setting OLDPWD: %s\n", t.Line, t.Column, err.Error()))
                     }
 
-                    state.Variables["OLDPWD"] = &MShellString{oldPwd}
+                    context.Variables["OLDPWD"] = &MShellString{oldPwd}
 
                     err = os.Chdir(dir)
                     if err != nil {
@@ -679,7 +685,7 @@ MainLoop:
                         return FailWithMessage(fmt.Sprintf("%d:%d: Error setting PWD: %s\n", t.Line, t.Column, err.Error()))
                     }
 
-                    state.Variables["PWD"] = &MShellString{pwd}
+                    context.Variables["PWD"] = &MShellString{pwd}
                 } else if t.Lexeme == "in" {
                     substring, err := stack.Pop()
                     if err != nil {
@@ -1141,10 +1147,10 @@ MainLoop:
 					return FailWithMessage(fmt.Sprintf("%d:%d: Nothing on stack to store into variable %s.\n", t.Line, t.Column, varName))
 				}
 
-				state.Variables[varName] = obj
+				context.Variables[varName] = obj
 			} else if t.Type == VARRETRIEVE {
 				name := t.Lexeme[1:] // Remove the leading @
-				obj, found_mshell_variable := state.Variables[name]
+				obj, found_mshell_variable := context.Variables[name]
 				if found_mshell_variable {
 					stack.Push(obj)
 				} else {
@@ -1156,7 +1162,7 @@ MainLoop:
 						var message strings.Builder
 						message.WriteString(fmt.Sprintf("%d:%d: Variable %s not found.\n", t.Line, t.Column, name))
 						message.WriteString("Variables:\n")
-						for key := range state.Variables {
+						for key := range context.Variables {
 							message.WriteString(fmt.Sprintf("  %s\n", key))
 						}
 						return FailWithMessage(message.String())
@@ -1177,9 +1183,10 @@ MainLoop:
 					return FailWithMessage(fmt.Sprintf("%d:%d: Loop quotation needs a minimum of one token.\n", t.Line, t.Column))
 				}
 
-				context := ExecuteContext{
+				loopContext := ExecuteContext{
 					StandardInput:  nil,
 					StandardOutput: nil,
+                    Variables: context.Variables,
 				}
 
 				if quotation.StandardInputFile != "" {
@@ -1187,7 +1194,7 @@ MainLoop:
 					if err != nil {
 						return FailWithMessage(fmt.Sprintf("%d:%d: Error opening file %s for reading: %s\n", t.Line, t.Column, quotation.StandardInputFile, err.Error()))
 					}
-					context.StandardInput = file
+					loopContext.StandardInput = file
 					defer file.Close()
 				}
 
@@ -1196,7 +1203,7 @@ MainLoop:
 					if err != nil {
 						return FailWithMessage(fmt.Sprintf("%d:%d: Error opening file %s for writing: %s\n", t.Line, t.Column, quotation.StandardOutputFile, err.Error()))
 					}
-					context.StandardOutput = file
+					loopContext.StandardOutput = file
 					defer file.Close()
 				}
 
@@ -1207,7 +1214,7 @@ MainLoop:
 				breakDiff := 0
 
 				for loopCount < maxLoops {
-					result := state.Evaluate(quotation.Tokens, stack, context, definitions)
+					result := state.Evaluate(quotation.Tokens, stack, loopContext, definitions)
 
 					if !result.Success {
 						return result
@@ -1308,6 +1315,7 @@ MainLoop:
 					// Default to stdout of this process itself
 					quoteContext.StandardOutput = os.Stdout
 				}
+                quoteContext.Variables = quotation.Variables
 
 				result := state.Evaluate(quotation.Tokens, stack, quoteContext, definitions)
 				if !result.Success {
@@ -1559,9 +1567,9 @@ MainLoop:
 				}
 
 				// Check that varName is in state.Variables, and varName is string or literal
-				varValue, ok := state.Variables[varName]
+				varValue, ok := context.Variables[varName]
 				if !ok {
-					return FailWithMessage(fmt.Sprintf("%d:%d: Variable %s not found in state.Variables.\n", t.Line, t.Column, varName))
+					return FailWithMessage(fmt.Sprintf("%d:%d: Variable %s not found in available variables.\n", t.Line, t.Column, varName))
 				}
 
 				switch varValue.(type) {
@@ -1607,6 +1615,7 @@ func (quotation *MShellQuotation) Execute(state *EvalState, context ExecuteConte
 	quotationContext := ExecuteContext{
 		StandardInput:  nil,
 		StandardOutput: nil,
+        Variables:      quotation.Variables,
 	}
 
 	if quotation.StandardInputFile != "" {
@@ -1811,6 +1820,7 @@ func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContex
 		newContext := ExecuteContext{
 			StandardInput:  nil,
 			StandardOutput: nil,
+            Variables:      context.Variables,
 		}
 
 		if i == 0 {

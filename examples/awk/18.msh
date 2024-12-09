@@ -1,1 +1,1 @@
-wt ((toFloat) map sum .s str wl) each
+wt ((toFloat) map sum str wl) each
