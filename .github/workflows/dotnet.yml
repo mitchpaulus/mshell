@@ -20,7 +20,8 @@ jobs:
     - name: Set Go PATH, MSHSTDLIB
       run: |
         realpath ./mshell > "$GITHUB_PATH"
-        realpath ./lib/std.msh > "$MSHSTDLIB"
+        find
+        # realpath ./lib/std.msh > "$MSHSTDLIB"
 
     - name: Test mshell
       run:  cd tests && ./test.sh
