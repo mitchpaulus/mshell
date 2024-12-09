@@ -1298,7 +1298,7 @@ MainLoop:
 					defer file.Close()
 				}
 
-				maxLoops := 15000
+				maxLoops := 150000
 				loopCount := 0
 				state.LoopDepth++
 
@@ -1322,7 +1322,7 @@ MainLoop:
 				}
 
 				if loopCount == maxLoops {
-					return FailWithMessage(fmt.Sprintf("%d:%d: Loop exceeded maximum number of iterations.\n", t.Line, t.Column))
+					return FailWithMessage(fmt.Sprintf("%d:%d: Loop exceeded maximum number of iterations (%d).\n", t.Line, t.Column, maxLoops))
 				}
 
 				state.LoopDepth--
