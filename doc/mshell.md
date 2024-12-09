@@ -1,49 +1,58 @@
 ## Built-ins
 
-`.s`: Print stack at current location
-`dup`: Duplicate
-`swap`: Swap
-`drop`: Drop
-`append`: Append, `(list item -- list)`
-`over`: Over, copy second element to top
-`pick`: Pick, copy nth element to top, `(a b c n pick` -- `a b c [a | b | c])`
-`rot`: Rotate the top three items, `( a b c -- b c a )`
-`nip`: Remove second item, `( a b -- b )`
+- `.s`: Print stack at current location
+- `dup`: Duplicate
+- `swap`: Swap
+- `drop`: Drop
+- `append`: Append, `(list item -- list)`
+- `over`: Over, copy second element to top
+- `pick`: Pick, copy nth element to top, `(a b c n pick` -- `a b c [a | b | c])`
+- `rot`: Rotate the top three items, `( a b c -- b c a )`
+- `nip`: Remove second item, `( a b -- b )`
+- `w`: Write
+- `wl`: Write line
+- `we`: Write error
+- `wle`: Write error line
+- `len`: Length of string/list
+- `args`: List of string arguments
+- `nth`: Nth element of list (0-based)
+- `glob`: Run glob against string/literal on top of the stack. Leaves list of strings on the stack.
+- `x`: Interpret/execute quotation
+- `cd`: Change directory `(string -- )`
+- `toFloat`: Convert to float. `(numeric -- float)`
+- `readFile`: Read file into string. `(string -- string)`
+- `stdin`: Drop stdin onto the stack `( -- string)`
+- `..`: Drop stdin onto the stack and split by lines `( -- list[string])`
+- `foldl`: Fold left. `(quote initial list -- result)`
+- `wt`: "Whitespace table", puts stdin split by lines and whitespace on the stack. `( -- list[list[string]])`
+- `tt`: "Tab table", puts stdin split by lines and tabs on the stack. `( -- list[list[string]])`
 
-`w`: Write
-`wl`: Write line
-`we`: Write error
-`wle`: Write error line
+## Math Functions
 
-`len`: Length of string/list
-`args`: List of string arguments
-`nth`: Nth element of list (0-based)
-
-`glob`: Run glob against string/literal on top of the stack. Leaves list of strings on the stack.
-
-`x`: Interpret/execute quotation
-
-`cd`: Change directory `(string -- )`
-
-`toFloat`: Convert to float. `(numeric -- float)`
+- `abs`: Absolute value `(numeric -- numeric)`
 
 ### String Functions
 
-`str`: Convert to string
-`findReplace`: Find and replace in string. `findReplace (string string, string find, string replace -- string)`
-`lines`: Split string into list of string lines
-`split`: Split string into list of strings by delimiter. (string delimiter -- list[string])
-`wsplit`: Split string into list of strings by runs of whitespace. (string -- list[string])
-`join`: Join list of strings into a single string, (list delimiter -- string)
-`in`: Check for substring in string. (totalString subString -- bool)
+- `str`: Convert to string
+- `findReplace`: Find and replace in string. `findReplace (string string, string find, string replace -- string)`
+- `lines`: Split string into list of string lines
+- `split`: Split string into list of strings by delimiter. (string delimiter -- list[string])
+- `wsplit`: Split string into list of strings by runs of whitespace. (string -- list[string])
+- `join`: Join list of strings into a single string, (list delimiter -- string)
+- `in`: Check for substring in string. (totalString subString -- bool)
+- `tab`: Puts a tab character on the stack `( -- string)`
+- `tsplit`: Split string into list of strings by tabs. `(string -- list[string])`
 
 ### List Functions
 
-`map`: Map a quotation over a list, `(list quote -- list)`
-`each`: Execute a quotation for each element in a list, `(list quote -- )`
-`del`: Delete element from list, `(list index -- list)` or `(index list -- list)`
-`insert`: Insert element into list, `(list element index -- list)`
-`setAt`: Set element at index, `(list element index -- list)`
+- `map`: Map a quotation over a list, `(list quote -- list)`
+- `each`: Execute a quotation for each element in a list, `(list quote -- )`
+- `del`: Delete element from list, `(list index -- list)` or `(index list -- list)`
+- `insert`: Insert element into list, `(list element index -- list)`
+- `setAt`: Set element at index, `(list element index -- list)`
+- `reverse`: Reverse list, `(list -- list)`
+- `sum`: Sum of list, `(list[numeric] -- numeric)`
+- `filter`: Filter list, `(list quote -- list)`
 
 ## Variables
 

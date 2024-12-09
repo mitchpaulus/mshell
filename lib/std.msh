@@ -115,3 +115,6 @@ end
 def abs
     [(dup 0 <) (-1 *)] if
 end
+
+def tab "	" end
+def tsplit tab split end

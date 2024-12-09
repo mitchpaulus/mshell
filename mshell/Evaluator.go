@@ -639,6 +639,28 @@ MainLoop:
                     default:
                         return FailWithMessage(fmt.Sprintf("%d:%d: Cannot delete from a %s.\n", t.Line, t.Column, obj1.TypeName()))
                     }
+                } else if t.Lexeme == "readFile" {
+                    obj1, err := stack.Pop()
+                    if err != nil {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'readFile' operation on an empty stack.\n", t.Line, t.Column))
+                    }
+
+                    switch obj1.(type) {
+                    case *MShellString:
+                        content, err := os.ReadFile(obj1.(*MShellString).Content)
+                        if err != nil {
+                            return FailWithMessage(fmt.Sprintf("%d:%d: Error reading file: %s\n", t.Line, t.Column, err.Error()))
+                        }
+                        stack.Push(&MShellString{string(content)})
+                    case *MShellLiteral:
+                        content, err := os.ReadFile(obj1.(*MShellLiteral).LiteralText)
+                        if err != nil {
+                            return FailWithMessage(fmt.Sprintf("%d:%d: Error reading file: %s\n", t.Line, t.Column, err.Error()))
+                        }
+                        stack.Push(&MShellString{string(content)})
+                    default:
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot read from a %s.\n", t.Line, t.Column, obj1.TypeName()))
+                    }
                 } else if t.Lexeme == "cd" {
                     obj, err := stack.Pop()
                     if err != nil {
