@@ -118,3 +118,4 @@ end
 
 def tab "	" end
 def tsplit tab split end
+def uw unlines w end

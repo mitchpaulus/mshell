@@ -353,7 +353,11 @@ func (obj *MShellList) DebugString() string {
 }
 
 func (obj *MShellString) DebugString() string {
-	// Surround the string with double quotes
+	// Surround the string with double quotes, keep just the first 15 and last 15 characters
+    if len(obj.Content) > 30 {
+        return "\"" + obj.Content[:15] + "..." + obj.Content[len(obj.Content)-15:] + "\""
+    }
+
 	return "\"" + obj.Content + "\""
 }
 

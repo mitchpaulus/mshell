@@ -126,14 +126,6 @@ wt ((toFloat abs str) map wjoin wl) each
 
 ```
 
-<!-- | Objective | `awk` | `mshell` | -->
-<!-- |-----------|-------|----------| -->
-<!-- | Print the total number of input lines             | `END { print NR }`                    | `.. len wl` | -->
-<!-- | Print the 10th input line                         | `NR == 10`                            | `.. :10: wl` (Failure if < 10 lines) | -->
-<!-- | Print the last field of every input line          | `{ print $NF }`                       | `.. (ws split :-1: wl) each` | -->
-<!-- | Print the last field of the last input line       | `{ field = $NF } END { print field }` | `.. :-1: (ws split :-1: wl)` | -->
-<!-- | Print every input line with more than four fields | `NF > 4`                              | `.. (dup ws split len [(4 >) (wl) (drop)] if) each`  | -->
-
 
 *Simpler execution of common shell idioms*
 
@@ -141,9 +133,16 @@ wt ((toFloat abs str) map wjoin wl) each
 |-----------|-----|----------|
 | Print the number of files in the current directory | `ls \| wc -l`                                                | `"*" glob len wl` |
 | `find`/`xargs`                                     |  `find . -t x -name '*.sh' -print0 \|  xargs -0 mycommand`   | `[mycommand [find . -t x -name "*.sh"]]o;` |
+| `head` | `head -n 10` | .. :10 uw |
+| `tail` | `tail -n 10` | .. :-10 uw |
+| `wc` | `wc -l` | .. len wl |
+| `grep` | `grep 'pattern'` | .. ("pattern" in) filter uw |
+| `cut` | `cut -d ';' -f 2` | .. (";" split :1: wl) each |
+
 
 # TODO
 
 - Type checking
 - Improved error messages
 - Dictionaries
+- Built-in coreuitls, `cp`, `mv`, `rm`, `mkdir`
