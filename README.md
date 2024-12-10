@@ -133,11 +133,11 @@ wt ((toFloat abs str) map wjoin wl) each
 |-----------|-----|----------|
 | Print the number of files in the current directory | `ls \| wc -l`                                                | `"*" glob len wl` |
 | `find`/`xargs`                                     |  `find . -t x -name '*.sh' -print0 \|  xargs -0 mycommand`   | `[mycommand [find . -t x -name "*.sh"]]o;` |
-| `head` | `head -n 10` | .. :10 uw |
-| `tail` | `tail -n 10` | .. :-10 uw |
-| `wc` | `wc -l` | .. len wl |
-| `grep` | `grep 'pattern'` | .. ("pattern" in) filter uw |
-| `cut` | `cut -d ';' -f 2` | .. (";" split :1: wl) each |
+| `head` | `head -n 10` | `.. :10 uw` |
+| `tail` | `tail -n 10` | `.. :-10 uw` |
+| `wc` | `wc -l` | `.. len wl` |
+| `grep` | `grep 'pattern'` | `.. ("pattern" in) filter uw` |
+| `cut` | `cut -d ';' -f 2` | `.. (";" split :1: wl) each` |
 
 
 # TODO
