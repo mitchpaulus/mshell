@@ -387,10 +387,16 @@ func (obj *MShellBool) IndexErrStr() string {
 }
 
 func (obj *MShellQuotation) IndexErrStr() string {
+    if len(obj.Tokens) == 0 {
+        return ""
+    }
 	return fmt.Sprintf(" Last item: %s", obj.Tokens[len(obj.Tokens)-1].DebugString())
 }
 
 func (obj *MShellList) IndexErrStr() string {
+    if len(obj.Items) == 0 {
+        return ""
+    }
 	return fmt.Sprintf(" Last item: %s", obj.Items[len(obj.Items)-1].DebugString())
 }
 
@@ -399,6 +405,9 @@ func (obj *MShellString) IndexErrStr() string {
 }
 
 func (obj *MShellPipe) IndexErrStr() string {
+    if len(obj.List.Items) == 0 {
+        return ""
+    }
 	return fmt.Sprintf(" Last item: %s", obj.List.Items[len(obj.List.Items)-1].DebugString())
 }
 
