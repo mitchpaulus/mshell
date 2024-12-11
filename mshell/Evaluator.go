@@ -779,6 +779,26 @@ MainLoop:
                             stack.Push(&MShellFloat{obj2.(*MShellFloat).Value / obj1.(*MShellFloat).Value})
                         }
                     }
+                } else if t.Lexeme == "exit" {
+                    exitCode, err := stack.Pop()
+                    if err != nil {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'exit' operation on an empty stack.\n", t.Line, t.Column))
+                    }
+
+                    exitInt, ok := exitCode.(*MShellInt)
+                    if !ok {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot exit with a %s.\n", t.Line, t.Column, exitCode.TypeName()))
+                    }
+
+                    if exitInt.Value < 0 || exitInt.Value > 255 {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot exit with a value outside of 0-255.\n", t.Line, t.Column))
+                    }
+
+                    if exitInt.Value == 0 {
+                        return EvalResult{true, -1, 0}
+                    } else {
+                        return EvalResult{false, -1, exitInt.Value}
+                    }
                 } else if t.Lexeme == "*" {
                     obj1, err := stack.Pop()
                     if err != nil {
