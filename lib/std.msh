@@ -116,6 +116,12 @@ def abs
     [(dup 0 <) (-1 *)] if
 end
 
+
 def tab "	" end
 def tsplit tab split end
 def uw unlines w end
+
+# readTsvFile (str -- list[list[str]])
+def readTsvFile
+    readFile lines (tsplit) map end
+end

@@ -21,6 +21,7 @@
 - `cd`: Change directory `(string -- )`
 - `toFloat`: Convert to float. `(numeric -- float)`
 - `readFile`: Read file into string. `(string -- string)`
+- `readTsvFile`: Read a TSV file into list of list of strings. `(string -- list[list[string]])`
 - `stdin`: Drop stdin onto the stack `( -- string)`
 - `..`: Drop stdin onto the stack and split by lines `( -- list[string])`
 - `foldl`: Fold left. `(quote initial list -- result)`
