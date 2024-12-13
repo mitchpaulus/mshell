@@ -1,5 +1,7 @@
 # Standard library for mshell
 
+type numeric int | float
+
 # each (list quote: (item --) --)
 def each
     over len each-len! # Get total length
@@ -19,6 +21,12 @@ end
 
 # map (list quote -- list)
 def map
+(
+    [T*]: list
+    (T -- U): q
+    --
+    [U*]
+)
     over len map-len! # Get total length
     0 map-idx! # Index
     [] map-accum! # Accumulator

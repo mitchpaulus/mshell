@@ -54,6 +54,23 @@ simple
     | END
     | STDERRREDIRECT
     ;
+
+type : typeItem ('|' typeItem)* ;
+
+typeItem
+    : 'int'
+    | 'float'
+    | 'string'
+    | 'bool'
+    | typeList
+    | typeQuote
+    | genericType
+    ;
+
+typeQuote : '(' type* -- type* ')' ;
+typeList : homogeneousList | heterogeneousList ;
+homogeneousList : '[' type '*' ']' ;
+heterogeneousList : '[' type+ ']' ;
 ```
 
 Key Types:
@@ -65,7 +82,7 @@ MShellObject
     MShellBool
     MShellQuotation
     MShellString
-
+    MShellFloat
 ```
 
 ## References
