@@ -7,7 +7,7 @@
 
 [echo];
 [echo Nots];
-[echo ========];
+[echo "========"];
 [echo [(true false and not) (truey) (falsey)] if];
 [echo [(true true and not) (truey) (falsey)] if];
 [echo [(false false and not) (truey) (falsey)] if];

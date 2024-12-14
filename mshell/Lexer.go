@@ -3,8 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"strconv"
-	"strings"
 	"unicode"
 )
 
@@ -45,7 +43,6 @@ const (
 	VARSTORE
 	INTEGER
     FLOAT
-	DOUBLE
 	LITERAL
 	INDEXER
 	ENDINDEXER
@@ -60,6 +57,11 @@ const (
 	DEF
 	END
 	STDERRREDIRECT
+    TYPEINT
+    TYPEFLOAT
+    // TYPESTRING, using str token instead
+    TYPEBOOL
+    DOUBLEDASH
 )
 
 func (t TokenType) String() string {
@@ -132,8 +134,6 @@ func (t TokenType) String() string {
 		return "INTEGER"
     case FLOAT:
         return "FLOAT"
-	case DOUBLE:
-		return "DOUBLE"
 	case LITERAL:
 		return "LITERAL"
 	case INDEXER:
@@ -162,6 +162,14 @@ func (t TokenType) String() string {
 		return "END"
 	case STDERRREDIRECT:
 		return "STDERRREDIRECT"
+    case TYPEINT:
+        return "TYPEINT"
+    case TYPEFLOAT:
+        return "TYPEFLOAT"
+    case TYPEBOOL:
+        return "TYPEBOOL"
+    case DOUBLEDASH:
+        return "DOUBLEDASH"
 	default:
 		return "UNKNOWN"
 	}
@@ -192,6 +200,10 @@ type Lexer struct {
 	input   []rune
 }
 
+func (l *Lexer) DebugStr() {
+    fmt.Fprintf(os.Stderr, "start: %d, current: %d, col: %d, line: %d, cur lexeme: %s\n", l.start, l.current, l.col, l.line, l.curLexeme())
+}
+
 func NewLexer(input string) *Lexer {
 	return &Lexer{
 		input: []rune(input),
@@ -203,8 +215,16 @@ func (l *Lexer) atEnd() bool {
 	return l.current >= len(l.input)
 }
 
+func (l *Lexer) curLen() int {
+    return l.current - l.start
+}
+
+func (l *Lexer) curLexeme() string {
+    return string(l.input[l.start:l.current])
+}
+
 func (l *Lexer) makeToken(tokenType TokenType) Token {
-	lexeme := string(l.input[l.start:l.current])
+	lexeme := l.curLexeme()
 
 	return Token{
 		Line:   l.line,
@@ -247,6 +267,7 @@ var notAllowedLiteralChars = map[rune]bool{
 	'?': true,
     '!': true,
     '@': true,
+    '=': true,
 }
 
 func isAllowedLiteral(r rune) bool {
@@ -255,6 +276,135 @@ func isAllowedLiteral(r rune) bool {
 	}
 	_, ok := notAllowedLiteralChars[r]
 	return !ok
+}
+
+func (l *Lexer) parseLiteralOrKeyword() Token {
+    for {
+        if l.atEnd() {
+            break
+        }
+        c := l.peek()
+        if isAllowedLiteral(c) {
+            l.advance()
+        } else {
+            break
+        }
+    }
+
+    tokenType := l.literalOrKeywordType()
+    return l.makeToken(tokenType)
+}
+
+func (l *Lexer) literalOrKeywordType() TokenType {
+    switch l.input[l.start] {
+    case '-':
+        if l.curLen() > 1 {
+            return l.checkKeyword(1, "-", DOUBLEDASH)
+        }
+    case '+':
+        return l.checkKeyword(1, "", PLUS)
+    case 'a':
+        return l.checkKeyword(1, "nd", AND)
+    case 'b':
+        if l.curLen() > 1 {
+            c := l.input[l.start+1]
+            switch c {
+            case 'r':
+                return l.checkKeyword(2, "eak", BREAK)
+            case 'o':
+                return l.checkKeyword(2, "ol", TYPEBOOL)
+            }
+        }
+    case 'd':
+        return l.checkKeyword(1, "ef", DEF)
+    case 'e':
+        if l.curLen() > 1 {
+            c := l.input[l.start+1]
+            switch c {
+            case 'n':
+                return l.checkKeyword(2, "d", END)
+            case 'x':
+                return l.checkKeyword(2, "port", EXPORT)
+            }
+        }
+    case 'f':
+        if l.curLen() > 1 {
+            c := l.input[l.start+1]
+            switch c {
+            case 'a':
+                return l.checkKeyword(2, "lse", FALSE)
+            case 'l':
+                return l.checkKeyword(2, "oat", TYPEFLOAT)
+            }
+        }
+    case 'i':
+        if l.curLen() > 1 {
+            c := l.input[l.start+1]
+            if c == 'f' {
+                return l.checkKeyword(2, "", IF)
+            } else if c == 'n' {
+                return l.checkKeyword(2, "t", TYPEINT)
+            }
+        }
+    case 'l':
+        return l.checkKeyword(1, "oop", LOOP)
+    case 'n':
+        return l.checkKeyword(1, "ot", NOT)
+    case 'o':
+        if l.curLen() == 1 {
+            return STDOUTLINES
+        }
+
+        c := l.input[l.start+1]
+        switch c {
+        case 'c':
+            return l.checkKeyword(2, "", STDOUTCOMPLETE)
+        case 'r':
+            return l.checkKeyword(2, "", OR)
+        case 's':
+            return l.checkKeyword(2, "", STDOUTSTRIPPED)
+        }
+    case 'r':
+        return l.checkKeyword(1, "ead", READ)
+    case 's':
+        if l.curLen() > 1 {
+            c := l.input[l.start+1]
+            switch c {
+            case 'o':
+                return l.checkKeyword(2, "e", STOP_ON_ERROR)
+            case 't':
+                return l.checkKeyword(2, "r", STR)
+            }
+        }
+    case 't':
+        return l.checkKeyword(1, "rue", TRUE)
+    case 'x':
+        if l.curLen() == 1 {
+            return INTERPRET
+        }
+    }
+
+    if l.peek() == '!' {
+        l.advance()
+        return VARSTORE
+    }
+
+    return LITERAL
+}
+    
+
+func (l *Lexer) checkKeyword(start int, rest string, tokenType TokenType) TokenType {
+    lengthMatch := l.current - l.start ==  start + len(rest)
+    restMatch := string(l.input[l.start + start:l.current]) == rest
+    if lengthMatch && restMatch {
+        return tokenType
+    }
+
+    if l.peek() == '!' {
+        l.advance()
+        return VARSTORE
+    }
+    return LITERAL
 }
 
 func (l *Lexer) scanToken() Token {
@@ -295,37 +445,25 @@ func (l *Lexer) scanToken() Token {
 		if unicode.IsDigit(l.peek()) {
 			return l.parsePositional()
 		}
-		return l.parseLiteralOrNumber()
+		return l.parseLiteralOrKeyword()
+    case '=':
+        return l.makeToken(EQUALS)
+    case '<':
+        if l.peek() == '=' {
+            l.advance()
+            return l.makeToken(LESSTHANOREQUAL)
+        } else {
+            return l.makeToken(LESSTHAN)
+        }
+    case '>':
+        if l.peek() == '=' {
+            l.advance()
+            return l.makeToken(GREATERTHANOREQUAL)
+        } else {
+            return l.makeToken(GREATERTHAN)
+        }
 	case ':':
 		return l.parseIndexerOrLiteral()
-	case 'o':
-		peek := l.peek()
-		if peek == 's' {
-			l.advance()
-			if isAllowedLiteral(l.peek()) {
-				return l.consumeLiteral()
-			} else {
-				return l.makeToken(STDOUTSTRIPPED)
-			}
-		} else if peek == 'c' {
-			l.advance()
-			if isAllowedLiteral(l.peek()) {
-				return l.consumeLiteral()
-			} else {
-				return l.makeToken(STDOUTCOMPLETE)
-			}
-		} else if peek == 'r' {
-			l.advance()
-			if isAllowedLiteral(l.peek()) {
-				return l.consumeLiteral()
-			} else {
-				return l.makeToken(OR)
-			}
-		} else if isAllowedLiteral(peek) {
-			return l.consumeLiteral()
-		} else {
-			return l.makeToken(STDOUTLINES)
-		}
     case '-':
         if unicode.IsDigit(l.peek()) {
             // Consume the hyphen and parse the number
@@ -334,7 +472,7 @@ func (l *Lexer) scanToken() Token {
         } else if unicode.IsSpace(l.peek()) {
             return l.makeToken(MINUS)
         } else {
-            return l.consumeLiteral()
+            return l.parseLiteralOrKeyword()
         }
     case '@':
         for {
@@ -351,7 +489,8 @@ func (l *Lexer) scanToken() Token {
         // TODO: if empty at end, need better error.
         return l.makeToken(VARRETRIEVE)
 	default:
-		return l.parseLiteralOrNumber()
+		// return l.parseLiteralOrNumber()
+        return l.parseLiteralOrKeyword()
 	}
 }
 
@@ -533,87 +672,6 @@ func (l *Lexer) parseString() Token {
 		}
 	}
 	return l.makeToken(STRING)
-}
-
-func (l *Lexer) parseLiteralOrNumber() Token {
-	for {
-		if l.atEnd() {
-			break
-		}
-		c := l.peek()
-		if isAllowedLiteral(c) {
-			l.advance()
-		} else {
-			break
-		}
-	}
-
-	literal := string(l.input[l.start:l.current])
-
-	switch literal {
-	case "-":
-		return l.makeToken(MINUS)
-	case "+":
-		return l.makeToken(PLUS)
-	case "=":
-		return l.makeToken(EQUALS)
-	case "x":
-		return l.makeToken(INTERPRET)
-	case "def":
-		return l.makeToken(DEF)
-	case "end":
-		return l.makeToken(END)
-	case "export":
-		return l.makeToken(EXPORT)
-	case "if":
-		return l.makeToken(IF)
-	case "loop":
-		return l.makeToken(LOOP)
-	case "read":
-		return l.makeToken(READ)
-	case "str":
-		return l.makeToken(STR)
-	case "soe":
-		return l.makeToken(STOP_ON_ERROR)
-	case "break":
-		return l.makeToken(BREAK)
-	case "not":
-		return l.makeToken(NOT)
-	case "and":
-		return l.makeToken(AND)
-	case ">=":
-		return l.makeToken(GREATERTHANOREQUAL)
-	case "<=":
-		return l.makeToken(LESSTHANOREQUAL)
-	case "<":
-		return l.makeToken(LESSTHAN)
-	case ">":
-		return l.makeToken(GREATERTHAN)
-	case "true":
-		return l.makeToken(TRUE)
-	case "false":
-		return l.makeToken(FALSE)
-	default:
-        // Still a hack, but better than before.
-        if l.peek() == '!' {
-            l.advance()
-            return l.makeToken(VARSTORE)
-        }
-
-        // Currently here to handle the negative start indexer case. '-3:'
-        if strings.HasSuffix(literal, ":") {
-            if _, err := strconv.Atoi(literal[:len(literal)-1]); err == nil {
-                return l.makeToken(STARTINDEXER)
-            }
-        }
-		if _, err := strconv.Atoi(literal); err == nil {
-			return l.makeToken(INTEGER)
-		}
-		if _, err := strconv.ParseFloat(literal, 64); err == nil {
-			return l.makeToken(DOUBLE)
-		}
-		return l.makeToken(LITERAL)
-	}
 }
 
 func (l *Lexer) Tokenize() []Token {
