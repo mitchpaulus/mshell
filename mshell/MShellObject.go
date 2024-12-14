@@ -43,7 +43,7 @@ type MShellQuotation struct {
 	StandardInputFile  string
 	StandardOutputFile string
 	StandardErrorFile  string
-    Variables          map[string]MShellObject
+	Variables          map[string]MShellObject
 }
 
 // type MShellQuotation2 struct {
@@ -84,7 +84,7 @@ type MShellInt struct {
 }
 
 type MShellFloat struct {
-    Value float64
+	Value float64
 }
 
 // ToString
@@ -117,7 +117,7 @@ func (obj *MShellInt) ToString() string {
 }
 
 func (obj *MShellFloat) ToString() string {
-    return strconv.FormatFloat(obj.Value, 'f', -1, 64)
+	return strconv.FormatFloat(obj.Value, 'f', -1, 64)
 }
 
 func (obj *MShellSimple) ToString() string {
@@ -154,7 +154,7 @@ func (obj *MShellInt) TypeName() string {
 }
 
 func (obj *MShellFloat) TypeName() string {
-    return "Float"
+	return "Float"
 }
 
 func (obj *MShellSimple) TypeName() string {
@@ -196,7 +196,7 @@ func (obj *MShellSimple) IsCommandLineable() bool {
 }
 
 func (obj *MShellFloat) IsCommandLineable() bool {
-    return true
+	return true
 }
 
 // IsNumeric
@@ -229,7 +229,7 @@ func (obj *MShellInt) IsNumeric() bool {
 }
 
 func (obj *MShellFloat) IsNumeric() bool {
-    return true
+	return true
 }
 
 func (obj *MShellSimple) IsNumeric() bool {
@@ -266,7 +266,7 @@ func (obj *MShellInt) FloatNumeric() float64 {
 }
 
 func (obj *MShellFloat) FloatNumeric() float64 {
-    return obj.Value
+	return obj.Value
 }
 
 func (obj *MShellSimple) FloatNumeric() float64 {
@@ -307,7 +307,7 @@ func (obj *MShellSimple) CommandLine() string {
 }
 
 func (obj *MShellFloat) CommandLine() string {
-    return strconv.FormatFloat(obj.Value, 'f', -1, 64)
+	return strconv.FormatFloat(obj.Value, 'f', -1, 64)
 }
 
 // DebugString
@@ -354,9 +354,9 @@ func (obj *MShellList) DebugString() string {
 
 func (obj *MShellString) DebugString() string {
 	// Surround the string with double quotes, keep just the first 15 and last 15 characters
-    if len(obj.Content) > 30 {
-        return "\"" + obj.Content[:15] + "..." + obj.Content[len(obj.Content)-15:] + "\""
-    }
+	if len(obj.Content) > 30 {
+		return "\"" + obj.Content[:15] + "..." + obj.Content[len(obj.Content)-15:] + "\""
+	}
 
 	return "\"" + obj.Content + "\""
 }
@@ -371,7 +371,7 @@ func (obj *MShellInt) DebugString() string {
 }
 
 func (obj *MShellFloat) DebugString() string {
-    return strconv.FormatFloat(obj.Value, 'f', -1, 64)
+	return strconv.FormatFloat(obj.Value, 'f', -1, 64)
 }
 
 func (obj *MShellSimple) DebugString() string {
@@ -387,16 +387,16 @@ func (obj *MShellBool) IndexErrStr() string {
 }
 
 func (obj *MShellQuotation) IndexErrStr() string {
-    if len(obj.Tokens) == 0 {
-        return ""
-    }
+	if len(obj.Tokens) == 0 {
+		return ""
+	}
 	return fmt.Sprintf(" Last item: %s", obj.Tokens[len(obj.Tokens)-1].DebugString())
 }
 
 func (obj *MShellList) IndexErrStr() string {
-    if len(obj.Items) == 0 {
-        return ""
-    }
+	if len(obj.Items) == 0 {
+		return ""
+	}
 	return fmt.Sprintf(" Last item: %s", obj.Items[len(obj.Items)-1].DebugString())
 }
 
@@ -405,9 +405,9 @@ func (obj *MShellString) IndexErrStr() string {
 }
 
 func (obj *MShellPipe) IndexErrStr() string {
-    if len(obj.List.Items) == 0 {
-        return ""
-    }
+	if len(obj.List.Items) == 0 {
+		return ""
+	}
 	return fmt.Sprintf(" Last item: %s", obj.List.Items[len(obj.List.Items)-1].DebugString())
 }
 
@@ -416,7 +416,7 @@ func (obj *MShellInt) IndexErrStr() string {
 }
 
 func (obj *MShellFloat) IndexErrStr() string {
-    return ""
+	return ""
 }
 
 func IndexCheck(index int, length int, obj MShellObject) error {
@@ -437,9 +437,9 @@ func IndexCheckExc(index int, length int, obj MShellObject) error {
 
 // Index
 func (obj *MShellLiteral) Index(index int) (MShellObject, error) {
-    if index < 0 {
-        index = len(obj.LiteralText) + index
-    }
+	if index < 0 {
+		index = len(obj.LiteralText) + index
+	}
 
 	if err := IndexCheck(index, len(obj.LiteralText), obj); err != nil {
 		return nil, err
@@ -452,9 +452,9 @@ func (obj *MShellBool) Index(index int) (MShellObject, error) {
 }
 
 func (obj *MShellQuotation) Index(index int) (MShellObject, error) {
-    if index < 0 {
-        index = len(obj.Tokens) + index
-    }
+	if index < 0 {
+		index = len(obj.Tokens) + index
+	}
 	if err := IndexCheck(index, len(obj.Tokens), obj); err != nil {
 		return nil, err
 	}
@@ -462,9 +462,9 @@ func (obj *MShellQuotation) Index(index int) (MShellObject, error) {
 }
 
 func (obj *MShellList) Index(index int) (MShellObject, error) {
-    if index < 0 {
-        index = len(obj.Items) + index
-    }
+	if index < 0 {
+		index = len(obj.Items) + index
+	}
 
 	if err := IndexCheck(index, len(obj.Items), obj); err != nil {
 		return nil, err
@@ -473,9 +473,9 @@ func (obj *MShellList) Index(index int) (MShellObject, error) {
 }
 
 func (obj *MShellString) Index(index int) (MShellObject, error) {
-    if index < 0 {
-        index = len(obj.Content) + index
-    }
+	if index < 0 {
+		index = len(obj.Content) + index
+	}
 
 	if err := IndexCheck(index, len(obj.Content), obj); err != nil {
 		return nil, err
@@ -484,9 +484,9 @@ func (obj *MShellString) Index(index int) (MShellObject, error) {
 }
 
 func (obj *MShellPipe) Index(index int) (MShellObject, error) {
-    if index < 0 {
-        index = len(obj.List.Items) + index
-    }
+	if index < 0 {
+		index = len(obj.List.Items) + index
+	}
 
 	if err := IndexCheck(index, len(obj.List.Items), obj); err != nil {
 		return nil, err
@@ -499,7 +499,7 @@ func (obj *MShellInt) Index(index int) (MShellObject, error) {
 }
 
 func (obj *MShellFloat) Index(index int) (MShellObject, error) {
-    return nil, fmt.Errorf("Cannot index into a float.\n")
+	return nil, fmt.Errorf("Cannot index into a float.\n")
 }
 
 func (obj *MShellSimple) Index(index int) (MShellObject, error) {
@@ -508,9 +508,9 @@ func (obj *MShellSimple) Index(index int) (MShellObject, error) {
 
 // SliceStart
 func (obj *MShellLiteral) SliceStart(start int) (MShellObject, error) {
-    if start < 0 {
-        start = len(obj.LiteralText) + start
-    }
+	if start < 0 {
+		start = len(obj.LiteralText) + start
+	}
 
 	if err := IndexCheck(start, len(obj.LiteralText), obj); err != nil {
 		return nil, err
@@ -523,9 +523,9 @@ func (obj *MShellBool) SliceStart(start int) (MShellObject, error) {
 }
 
 func (obj *MShellQuotation) SliceStart(start int) (MShellObject, error) {
-    if start < 0 {
-        start = len(obj.Tokens) + start
-    }
+	if start < 0 {
+		start = len(obj.Tokens) + start
+	}
 	if err := IndexCheck(start, len(obj.Tokens), obj); err != nil {
 		return nil, err
 	}
@@ -533,9 +533,9 @@ func (obj *MShellQuotation) SliceStart(start int) (MShellObject, error) {
 }
 
 func (obj *MShellList) SliceStart(start int) (MShellObject, error) {
-    if start < 0 {
-        start = len(obj.Items) + start
-    }
+	if start < 0 {
+		start = len(obj.Items) + start
+	}
 	if err := IndexCheck(start, len(obj.Items), obj); err != nil {
 		return nil, err
 	}
@@ -543,9 +543,9 @@ func (obj *MShellList) SliceStart(start int) (MShellObject, error) {
 }
 
 func (obj *MShellString) SliceStart(start int) (MShellObject, error) {
-    if start < 0 {
-        start = len(obj.Content) + start
-    }
+	if start < 0 {
+		start = len(obj.Content) + start
+	}
 	if err := IndexCheck(start, len(obj.Content), obj); err != nil {
 		return nil, err
 	}
@@ -553,9 +553,9 @@ func (obj *MShellString) SliceStart(start int) (MShellObject, error) {
 }
 
 func (obj *MShellPipe) SliceStart(start int) (MShellObject, error) {
-    if start < 0 {
-        start = len(obj.List.Items) + start
-    }
+	if start < 0 {
+		start = len(obj.List.Items) + start
+	}
 	if err := IndexCheck(start, len(obj.List.Items), obj); err != nil {
 		return nil, err
 	}
@@ -566,8 +566,8 @@ func (obj *MShellInt) SliceStart(start int) (MShellObject, error) {
 	return nil, fmt.Errorf("cannot slice an integer.\n")
 }
 
-func (obj* MShellFloat) SliceStart(start int) (MShellObject, error) {
-    return nil, fmt.Errorf("cannot slice a float.\n")
+func (obj *MShellFloat) SliceStart(start int) (MShellObject, error) {
+	return nil, fmt.Errorf("cannot slice a float.\n")
 }
 
 func (obj *MShellSimple) SliceStart(start int) (MShellObject, error) {
@@ -576,9 +576,9 @@ func (obj *MShellSimple) SliceStart(start int) (MShellObject, error) {
 
 // SliceEnd
 func (obj *MShellLiteral) SliceEnd(end int) (MShellObject, error) {
-    if end < 0 {
-        end = len(obj.LiteralText) + end
-    }
+	if end < 0 {
+		end = len(obj.LiteralText) + end
+	}
 
 	if err := IndexCheckExc(end, len(obj.LiteralText), obj); err != nil {
 		return nil, err
@@ -591,9 +591,9 @@ func (obj *MShellBool) SliceEnd(end int) (MShellObject, error) {
 }
 
 func (obj *MShellQuotation) SliceEnd(end int) (MShellObject, error) {
-    if end < 0 {
-        end = len(obj.Tokens) + end
-    }
+	if end < 0 {
+		end = len(obj.Tokens) + end
+	}
 	if err := IndexCheckExc(end, len(obj.Tokens), obj); err != nil {
 		return nil, err
 	}
@@ -601,9 +601,9 @@ func (obj *MShellQuotation) SliceEnd(end int) (MShellObject, error) {
 }
 
 func (obj *MShellList) SliceEnd(end int) (MShellObject, error) {
-    if end < 0 {
-        end = len(obj.Items) + end
-    }
+	if end < 0 {
+		end = len(obj.Items) + end
+	}
 	if err := IndexCheckExc(end, len(obj.Items), obj); err != nil {
 		return nil, err
 	}
@@ -611,9 +611,9 @@ func (obj *MShellList) SliceEnd(end int) (MShellObject, error) {
 }
 
 func (obj *MShellString) SliceEnd(end int) (MShellObject, error) {
-    if end < 0 {
-        end = len(obj.Content) + end
-    }
+	if end < 0 {
+		end = len(obj.Content) + end
+	}
 	if err := IndexCheckExc(end, len(obj.Content), obj); err != nil {
 		return nil, err
 	}
@@ -621,9 +621,9 @@ func (obj *MShellString) SliceEnd(end int) (MShellObject, error) {
 }
 
 func (obj *MShellPipe) SliceEnd(end int) (MShellObject, error) {
-    if end < 0 {
-        end = len(obj.List.Items) + end
-    }
+	if end < 0 {
+		end = len(obj.List.Items) + end
+	}
 	if err := IndexCheckExc(end, len(obj.List.Items), obj); err != nil {
 		return nil, err
 	}
@@ -635,7 +635,7 @@ func (obj *MShellInt) SliceEnd(end int) (MShellObject, error) {
 }
 
 func (obj *MShellFloat) SliceEnd(end int) (MShellObject, error) {
-    return nil, fmt.Errorf("Cannot slice a float.\n")
+	return nil, fmt.Errorf("Cannot slice a float.\n")
 }
 
 func (obj *MShellSimple) SliceEnd(end int) (MShellObject, error) {
@@ -644,13 +644,13 @@ func (obj *MShellSimple) SliceEnd(end int) (MShellObject, error) {
 
 // Slice
 func SliceIndexCheck(startInc int, endExc int, length int, obj MShellObject) error {
-    if startInc < 0 {
-        startInc = length + startInc
-    }
+	if startInc < 0 {
+		startInc = length + startInc
+	}
 
-    if endExc < 0 {
-        endExc = length + endExc
-    }
+	if endExc < 0 {
+		endExc = length + endExc
+	}
 
 	if startInc < 0 || startInc > endExc || endExc > length {
 		return fmt.Errorf("Invalid slice range [%d:%d) for %s with length %d.\n", startInc, endExc, obj.TypeName(), length)
@@ -660,13 +660,13 @@ func SliceIndexCheck(startInc int, endExc int, length int, obj MShellObject) err
 }
 
 func (obj *MShellLiteral) Slice(startInc int, endExc int) (MShellObject, error) {
-    if startInc < 0 {
-        startInc = len(obj.LiteralText) + startInc
-    }
+	if startInc < 0 {
+		startInc = len(obj.LiteralText) + startInc
+	}
 
-    if endExc < 0 {
-        endExc = len(obj.LiteralText) + endExc
-    }
+	if endExc < 0 {
+		endExc = len(obj.LiteralText) + endExc
+	}
 
 	if err := SliceIndexCheck(startInc, endExc, len(obj.LiteralText), obj); err != nil {
 		return nil, err
@@ -679,13 +679,13 @@ func (obj *MShellBool) Slice(startInc int, endExc int) (MShellObject, error) {
 }
 
 func (obj *MShellQuotation) Slice(startInc int, endExc int) (MShellObject, error) {
-    if startInc < 0 {
-        startInc = len(obj.Tokens) + startInc
-    }
+	if startInc < 0 {
+		startInc = len(obj.Tokens) + startInc
+	}
 
-    if endExc < 0 {
-        endExc = len(obj.Tokens) + endExc
-    }
+	if endExc < 0 {
+		endExc = len(obj.Tokens) + endExc
+	}
 
 	if err := SliceIndexCheck(startInc, endExc, len(obj.Tokens), obj); err != nil {
 		return nil, err
@@ -694,13 +694,13 @@ func (obj *MShellQuotation) Slice(startInc int, endExc int) (MShellObject, error
 }
 
 func (obj *MShellList) Slice(startInc int, endExc int) (MShellObject, error) {
-    if startInc < 0 {
-        startInc = len(obj.Items) + startInc
-    }
+	if startInc < 0 {
+		startInc = len(obj.Items) + startInc
+	}
 
-    if endExc < 0 {
-        endExc = len(obj.Items) + endExc
-    }
+	if endExc < 0 {
+		endExc = len(obj.Items) + endExc
+	}
 
 	if err := SliceIndexCheck(startInc, endExc, len(obj.Items), obj); err != nil {
 		return nil, err
@@ -709,13 +709,13 @@ func (obj *MShellList) Slice(startInc int, endExc int) (MShellObject, error) {
 }
 
 func (obj *MShellString) Slice(startInc int, endExc int) (MShellObject, error) {
-    if startInc < 0 {
-        startInc = len(obj.Content) + startInc
-    }
+	if startInc < 0 {
+		startInc = len(obj.Content) + startInc
+	}
 
-    if endExc < 0 {
-        endExc = len(obj.Content) + endExc
-    }
+	if endExc < 0 {
+		endExc = len(obj.Content) + endExc
+	}
 
 	if err := SliceIndexCheck(startInc, endExc, len(obj.Content), obj); err != nil {
 		return nil, err
@@ -724,13 +724,13 @@ func (obj *MShellString) Slice(startInc int, endExc int) (MShellObject, error) {
 }
 
 func (obj *MShellPipe) Slice(startInc int, endExc int) (MShellObject, error) {
-    if startInc < 0 {
-        startInc = len(obj.List.Items) + startInc
-    }
+	if startInc < 0 {
+		startInc = len(obj.List.Items) + startInc
+	}
 
-    if endExc < 0 {
-        endExc = len(obj.List.Items) + endExc
-    }
+	if endExc < 0 {
+		endExc = len(obj.List.Items) + endExc
+	}
 
 	if err := SliceIndexCheck(startInc, endExc, len(obj.List.Items), obj); err != nil {
 		return nil, err
@@ -743,7 +743,7 @@ func (obj *MShellInt) Slice(startInc int, endExc int) (MShellObject, error) {
 }
 
 func (obj *MShellFloat) Slice(startInc int, endExc int) (MShellObject, error) {
-    return nil, fmt.Errorf("Cannot slice a float.\n")
+	return nil, fmt.Errorf("Cannot slice a float.\n")
 }
 
 func (obj *MShellSimple) Slice(startInc int, endExc int) (MShellObject, error) {
@@ -800,7 +800,7 @@ func (obj *MShellInt) ToJson() string {
 }
 
 func (obj *MShellFloat) ToJson() string {
-    return fmt.Sprintf("{\"type\": \"Float\", \"value\": %f}", obj.Value)
+	return fmt.Sprintf("{\"type\": \"Float\", \"value\": %f}", obj.Value)
 }
 
 func (obj *MShellSimple) ToJson() string {

@@ -42,7 +42,7 @@ const (
 	VARRETRIEVE
 	VARSTORE
 	INTEGER
-    FLOAT
+	FLOAT
 	LITERAL
 	INDEXER
 	ENDINDEXER
@@ -57,11 +57,11 @@ const (
 	DEF
 	END
 	STDERRREDIRECT
-    TYPEINT
-    TYPEFLOAT
-    // TYPESTRING, using str token instead
-    TYPEBOOL
-    DOUBLEDASH
+	TYPEINT
+	TYPEFLOAT
+	// TYPESTRING, using str token instead
+	TYPEBOOL
+	DOUBLEDASH
 )
 
 func (t TokenType) String() string {
@@ -132,8 +132,8 @@ func (t TokenType) String() string {
 		return "VARSTORE"
 	case INTEGER:
 		return "INTEGER"
-    case FLOAT:
-        return "FLOAT"
+	case FLOAT:
+		return "FLOAT"
 	case LITERAL:
 		return "LITERAL"
 	case INDEXER:
@@ -162,14 +162,14 @@ func (t TokenType) String() string {
 		return "END"
 	case STDERRREDIRECT:
 		return "STDERRREDIRECT"
-    case TYPEINT:
-        return "TYPEINT"
-    case TYPEFLOAT:
-        return "TYPEFLOAT"
-    case TYPEBOOL:
-        return "TYPEBOOL"
-    case DOUBLEDASH:
-        return "DOUBLEDASH"
+	case TYPEINT:
+		return "TYPEINT"
+	case TYPEFLOAT:
+		return "TYPEFLOAT"
+	case TYPEBOOL:
+		return "TYPEBOOL"
+	case DOUBLEDASH:
+		return "DOUBLEDASH"
 	default:
 		return "UNKNOWN"
 	}
@@ -201,7 +201,7 @@ type Lexer struct {
 }
 
 func (l *Lexer) DebugStr() {
-    fmt.Fprintf(os.Stderr, "start: %d, current: %d, col: %d, line: %d, cur lexeme: %s\n", l.start, l.current, l.col, l.line, l.curLexeme())
+	fmt.Fprintf(os.Stderr, "start: %d, current: %d, col: %d, line: %d, cur lexeme: %s\n", l.start, l.current, l.col, l.line, l.curLexeme())
 }
 
 func NewLexer(input string) *Lexer {
@@ -216,11 +216,11 @@ func (l *Lexer) atEnd() bool {
 }
 
 func (l *Lexer) curLen() int {
-    return l.current - l.start
+	return l.current - l.start
 }
 
 func (l *Lexer) curLexeme() string {
-    return string(l.input[l.start:l.current])
+	return string(l.input[l.start:l.current])
 }
 
 func (l *Lexer) makeToken(tokenType TokenType) Token {
@@ -265,9 +265,9 @@ var notAllowedLiteralChars = map[rune]bool{
 	'>': true,
 	';': true,
 	'?': true,
-    '!': true,
-    '@': true,
-    '=': true,
+	'!': true,
+	'@': true,
+	'=': true,
 }
 
 func isAllowedLiteral(r rune) bool {
@@ -279,132 +279,131 @@ func isAllowedLiteral(r rune) bool {
 }
 
 func (l *Lexer) parseLiteralOrKeyword() Token {
-    for {
-        if l.atEnd() {
-            break
-        }
-        c := l.peek()
-        if isAllowedLiteral(c) {
-            l.advance()
-        } else {
-            break
-        }
-    }
+	for {
+		if l.atEnd() {
+			break
+		}
+		c := l.peek()
+		if isAllowedLiteral(c) {
+			l.advance()
+		} else {
+			break
+		}
+	}
 
-    tokenType := l.literalOrKeywordType()
-    return l.makeToken(tokenType)
+	tokenType := l.literalOrKeywordType()
+	return l.makeToken(tokenType)
 }
 
 func (l *Lexer) literalOrKeywordType() TokenType {
-    switch l.input[l.start] {
-    case '-':
-        if l.curLen() > 1 {
-            return l.checkKeyword(1, "-", DOUBLEDASH)
-        }
-    case '+':
-        return l.checkKeyword(1, "", PLUS)
-    case 'a':
-        return l.checkKeyword(1, "nd", AND)
-    case 'b':
-        if l.curLen() > 1 {
-            c := l.input[l.start+1]
-            switch c {
-            case 'r':
-                return l.checkKeyword(2, "eak", BREAK)
-            case 'o':
-                return l.checkKeyword(2, "ol", TYPEBOOL)
-            }
-        }
-    case 'd':
-        return l.checkKeyword(1, "ef", DEF)
-    case 'e':
-        if l.curLen() > 1 {
-            c := l.input[l.start+1]
-            switch c {
-            case 'n':
-                return l.checkKeyword(2, "d", END)
-            case 'x':
-                return l.checkKeyword(2, "port", EXPORT)
-            }
-        }
-    case 'f':
-        if l.curLen() > 1 {
-            c := l.input[l.start+1]
-            switch c {
-            case 'a':
-                return l.checkKeyword(2, "lse", FALSE)
-            case 'l':
-                return l.checkKeyword(2, "oat", TYPEFLOAT)
-            }
-        }
-    case 'i':
-        if l.curLen() > 1 {
-            c := l.input[l.start+1]
-            if c == 'f' {
-                return l.checkKeyword(2, "", IF)
-            } else if c == 'n' {
-                return l.checkKeyword(2, "t", TYPEINT)
-            }
-        }
-    case 'l':
-        return l.checkKeyword(1, "oop", LOOP)
-    case 'n':
-        return l.checkKeyword(1, "ot", NOT)
-    case 'o':
-        if l.curLen() == 1 {
-            return STDOUTLINES
-        }
+	switch l.input[l.start] {
+	case '-':
+		if l.curLen() > 1 {
+			return l.checkKeyword(1, "-", DOUBLEDASH)
+		}
+	case '+':
+		return l.checkKeyword(1, "", PLUS)
+	case 'a':
+		return l.checkKeyword(1, "nd", AND)
+	case 'b':
+		if l.curLen() > 1 {
+			c := l.input[l.start+1]
+			switch c {
+			case 'r':
+				return l.checkKeyword(2, "eak", BREAK)
+			case 'o':
+				return l.checkKeyword(2, "ol", TYPEBOOL)
+			}
+		}
+	case 'd':
+		return l.checkKeyword(1, "ef", DEF)
+	case 'e':
+		if l.curLen() > 1 {
+			c := l.input[l.start+1]
+			switch c {
+			case 'n':
+				return l.checkKeyword(2, "d", END)
+			case 'x':
+				return l.checkKeyword(2, "port", EXPORT)
+			}
+		}
+	case 'f':
+		if l.curLen() > 1 {
+			c := l.input[l.start+1]
+			switch c {
+			case 'a':
+				return l.checkKeyword(2, "lse", FALSE)
+			case 'l':
+				return l.checkKeyword(2, "oat", TYPEFLOAT)
+			}
+		}
+	case 'i':
+		if l.curLen() > 1 {
+			c := l.input[l.start+1]
+			if c == 'f' {
+				return l.checkKeyword(2, "", IF)
+			} else if c == 'n' {
+				return l.checkKeyword(2, "t", TYPEINT)
+			}
+		}
+	case 'l':
+		return l.checkKeyword(1, "oop", LOOP)
+	case 'n':
+		return l.checkKeyword(1, "ot", NOT)
+	case 'o':
+		if l.curLen() == 1 {
+			return STDOUTLINES
+		}
 
-        c := l.input[l.start+1]
-        switch c {
-        case 'c':
-            return l.checkKeyword(2, "", STDOUTCOMPLETE)
-        case 'r':
-            return l.checkKeyword(2, "", OR)
-        case 's':
-            return l.checkKeyword(2, "", STDOUTSTRIPPED)
-        }
-    case 'r':
-        return l.checkKeyword(1, "ead", READ)
-    case 's':
-        if l.curLen() > 1 {
-            c := l.input[l.start+1]
-            switch c {
-            case 'o':
-                return l.checkKeyword(2, "e", STOP_ON_ERROR)
-            case 't':
-                return l.checkKeyword(2, "r", STR)
-            }
-        }
-    case 't':
-        return l.checkKeyword(1, "rue", TRUE)
-    case 'x':
-        if l.curLen() == 1 {
-            return INTERPRET
-        }
-    }
+		c := l.input[l.start+1]
+		switch c {
+		case 'c':
+			return l.checkKeyword(2, "", STDOUTCOMPLETE)
+		case 'r':
+			return l.checkKeyword(2, "", OR)
+		case 's':
+			return l.checkKeyword(2, "", STDOUTSTRIPPED)
+		}
+	case 'r':
+		return l.checkKeyword(1, "ead", READ)
+	case 's':
+		if l.curLen() > 1 {
+			c := l.input[l.start+1]
+			switch c {
+			case 'o':
+				return l.checkKeyword(2, "e", STOP_ON_ERROR)
+			case 't':
+				return l.checkKeyword(2, "r", STR)
+			}
+		}
+	case 't':
+		return l.checkKeyword(1, "rue", TRUE)
+	case 'x':
+		if l.curLen() == 1 {
+			return INTERPRET
+		}
+	}
 
-    if l.peek() == '!' {
-        l.advance()
-        return VARSTORE
-    }
+	if l.peek() == '!' {
+		l.advance()
+		return VARSTORE
+	}
 
-    return LITERAL
+	return LITERAL
 }
-    
 
 func (l *Lexer) checkKeyword(start int, rest string, tokenType TokenType) TokenType {
-    lengthMatch := l.current - l.start ==  start + len(rest)
-    restMatch := string(l.input[l.start + start:l.current]) == rest
-    if lengthMatch && restMatch {
-        return tokenType
-    }
+	lengthMatch := l.current-l.start == start+len(rest)
+	restMatch := string(l.input[l.start+start:l.current]) == rest
+	if lengthMatch && restMatch {
+		return tokenType
+	}
 
-    if l.peek() == '!' {
-        l.advance()
-        return VARSTORE
-    }
-    return LITERAL
+	if l.peek() == '!' {
+		l.advance()
+		return VARSTORE
+	}
+	return LITERAL
 }
 
 func (l *Lexer) scanToken() Token {
@@ -446,51 +445,51 @@ func (l *Lexer) scanToken() Token {
 			return l.parsePositional()
 		}
 		return l.parseLiteralOrKeyword()
-    case '=':
-        return l.makeToken(EQUALS)
-    case '<':
-        if l.peek() == '=' {
-            l.advance()
-            return l.makeToken(LESSTHANOREQUAL)
-        } else {
-            return l.makeToken(LESSTHAN)
-        }
-    case '>':
-        if l.peek() == '=' {
-            l.advance()
-            return l.makeToken(GREATERTHANOREQUAL)
-        } else {
-            return l.makeToken(GREATERTHAN)
-        }
+	case '=':
+		return l.makeToken(EQUALS)
+	case '<':
+		if l.peek() == '=' {
+			l.advance()
+			return l.makeToken(LESSTHANOREQUAL)
+		} else {
+			return l.makeToken(LESSTHAN)
+		}
+	case '>':
+		if l.peek() == '=' {
+			l.advance()
+			return l.makeToken(GREATERTHANOREQUAL)
+		} else {
+			return l.makeToken(GREATERTHAN)
+		}
 	case ':':
 		return l.parseIndexerOrLiteral()
-    case '-':
-        if unicode.IsDigit(l.peek()) {
-            // Consume the hyphen and parse the number
-            l.advance()
-            return l.parseNumberOrStartIndexer()
-        } else if unicode.IsSpace(l.peek()) {
-            return l.makeToken(MINUS)
-        } else {
-            return l.parseLiteralOrKeyword()
-        }
-    case '@':
-        for {
-            if l.atEnd() {
-                break
-            }
-            c := l.peek()
-            if isAllowedLiteral(c) {
-                l.advance()
-            } else {
-                break
-            }
-        }
-        // TODO: if empty at end, need better error.
-        return l.makeToken(VARRETRIEVE)
+	case '-':
+		if unicode.IsDigit(l.peek()) {
+			// Consume the hyphen and parse the number
+			l.advance()
+			return l.parseNumberOrStartIndexer()
+		} else if unicode.IsSpace(l.peek()) {
+			return l.makeToken(MINUS)
+		} else {
+			return l.parseLiteralOrKeyword()
+		}
+	case '@':
+		for {
+			if l.atEnd() {
+				break
+			}
+			c := l.peek()
+			if isAllowedLiteral(c) {
+				l.advance()
+			} else {
+				break
+			}
+		}
+		// TODO: if empty at end, need better error.
+		return l.makeToken(VARRETRIEVE)
 	default:
 		// return l.parseLiteralOrNumber()
-        return l.parseLiteralOrKeyword()
+		return l.parseLiteralOrKeyword()
 	}
 }
 
@@ -524,10 +523,10 @@ func (l *Lexer) consumeLiteral() Token {
 		}
 	}
 
-    if l.peek() == '!' {
-        l.advance()
-        return l.makeToken(VARSTORE)
-    }
+	if l.peek() == '!' {
+		l.advance()
+		return l.makeToken(VARSTORE)
+	}
 
 	return l.makeToken(LITERAL)
 }
@@ -549,20 +548,20 @@ func (l *Lexer) parseNumberOrStartIndexer() Token {
 		l.advance()
 
 		c := l.peek()
-        if c == '-' {
-            if unicode.IsDigit(l.peekNext()) {
-                l.advance() // Consume the hyphen
-                for {
-                    if !unicode.IsDigit(l.peek()) {
-                        break
-                    }
-                    l.advance()
-                }
-                return l.makeToken(SLICEINDEXER)
-            } else {
-                return l.makeToken(STARTINDEXER)
-            }
-        } else if unicode.IsDigit(c) {
+		if c == '-' {
+			if unicode.IsDigit(l.peekNext()) {
+				l.advance() // Consume the hyphen
+				for {
+					if !unicode.IsDigit(l.peek()) {
+						break
+					}
+					l.advance()
+				}
+				return l.makeToken(SLICEINDEXER)
+			} else {
+				return l.makeToken(STARTINDEXER)
+			}
+		} else if unicode.IsDigit(c) {
 			// Read all the digits
 			for {
 				if l.atEnd() {
@@ -581,20 +580,20 @@ func (l *Lexer) parseNumberOrStartIndexer() Token {
 		l.advance()
 		return l.makeToken(STDERRREDIRECT)
 	} else if peek == '.' {
-        l.advance()
+		l.advance()
 
-        for {
-            if l.atEnd() {
-                break
-            }
-            if !unicode.IsDigit(l.peek()) {
-                break
-            }
-            l.advance()
-        }
+		for {
+			if l.atEnd() {
+				break
+			}
+			if !unicode.IsDigit(l.peek()) {
+				break
+			}
+			l.advance()
+		}
 
-        return l.makeToken(FLOAT)
-    }
+		return l.makeToken(FLOAT)
+	}
 
 	if !isAllowedLiteral(peek) {
 		return l.makeToken(INTEGER)
@@ -693,7 +692,7 @@ func (l *Lexer) eatWhitespace() {
 		}
 		c := l.peek()
 		switch c {
-        case ' ', '\t', '\r', '\v', '\f':
+		case ' ', '\t', '\r', '\v', '\f':
 			l.advance()
 		case '#':
 			for !l.atEnd() && l.peek() != '\n' {

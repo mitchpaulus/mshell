@@ -115,7 +115,7 @@ func main() {
 	context := ExecuteContext{
 		StandardInput:  os.Stdin,
 		StandardOutput: os.Stdout,
-        Variables: map[string]MShellObject{},
+		Variables:      map[string]MShellObject{},
 	}
 
 	var allDefinitions []MShellDefinition

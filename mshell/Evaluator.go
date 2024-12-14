@@ -61,7 +61,7 @@ type EvalResult struct {
 type ExecuteContext struct {
 	StandardInput  io.Reader
 	StandardOutput io.Writer
-    Variables      map[string]MShellObject
+	Variables      map[string]MShellObject
 }
 
 func SimpleSuccess() EvalResult {
@@ -103,7 +103,7 @@ MainLoop:
 			stack.Push(&MShellList{Items: listStack, StandardInputFile: "", StandardOutputFile: "", StdoutBehavior: STDOUT_NONE})
 		case *MShellParseQuote:
 			parseQuote := t.(*MShellParseQuote)
-            q := MShellQuotation{Tokens: parseQuote.Items, StandardInputFile: "", StandardOutputFile: "", StandardErrorFile: "", Variables: context.Variables}
+			q := MShellQuotation{Tokens: parseQuote.Items, StandardInputFile: "", StandardOutputFile: "", StandardErrorFile: "", Variables: context.Variables}
 			stack.Push(&q)
 		case Token:
 			t := t.(Token)
@@ -117,10 +117,10 @@ MainLoop:
 					if definition.Name == t.Lexeme {
 						// Evaluate the definition
 
-                        var newContext ExecuteContext
-                        newContext.Variables = make(map[string]MShellObject)
-                        newContext.StandardInput = context.StandardInput
-                        newContext.StandardOutput = context.StandardOutput
+						var newContext ExecuteContext
+						newContext.Variables = make(map[string]MShellObject)
+						newContext.StandardInput = context.StandardInput
+						newContext.StandardOutput = context.StandardOutput
 
 						result := state.Evaluate(definition.Items, stack, newContext, definitions)
 						if !result.Success || result.BreakNum > 0 {
@@ -438,25 +438,25 @@ MainLoop:
 						newList.Items[i] = &MShellString{item}
 					}
 					stack.Push(newList)
-                } else if t.Lexeme == "wsplit" {
-                    // Split on whitespace
-                    obj, err := stack.Pop()
-                    if err != nil {
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'wsplit' operation on an empty stack.\n", t.Line, t.Column))
-                    }
+				} else if t.Lexeme == "wsplit" {
+					// Split on whitespace
+					obj, err := stack.Pop()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'wsplit' operation on an empty stack.\n", t.Line, t.Column))
+					}
 
-                    switch obj.(type) {
-                    case *MShellString:
-                        split := strings.Fields(obj.(*MShellString).Content)
-                        newList := &MShellList{Items: make([]MShellObject, len(split)), StandardInputFile: "", StandardOutputFile: "", StdoutBehavior: STDOUT_NONE}
-                        for i, item := range split {
-                            newList.Items[i] = &MShellString{item}
-                        }
+					switch obj.(type) {
+					case *MShellString:
+						split := strings.Fields(obj.(*MShellString).Content)
+						newList := &MShellList{Items: make([]MShellObject, len(split)), StandardInputFile: "", StandardOutputFile: "", StdoutBehavior: STDOUT_NONE}
+						for i, item := range split {
+							newList.Items[i] = &MShellString{item}
+						}
 
-                        stack.Push(newList)
-                    default:
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot split a %s.\n", t.Line, t.Column, obj.TypeName()))
-                    }
+						stack.Push(newList)
+					default:
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot split a %s.\n", t.Line, t.Column, obj.TypeName()))
+					}
 				} else if t.Lexeme == "join" {
 					delimiter, err := stack.Pop()
 					if err != nil {
@@ -516,340 +516,340 @@ MainLoop:
 					}
 
 					stack.Push(newList)
-                } else if t.Lexeme == "setAt" {
-                    // Expected stack:
-                    // List item index
-                    // Index 0 based, negative indexes allowed
-                    obj1, err := stack.Pop()
-                    if err != nil {
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'setAt' operation on an empty stack.\n", t.Line, t.Column))
-                    }
+				} else if t.Lexeme == "setAt" {
+					// Expected stack:
+					// List item index
+					// Index 0 based, negative indexes allowed
+					obj1, err := stack.Pop()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'setAt' operation on an empty stack.\n", t.Line, t.Column))
+					}
 
-                    obj2, err := stack.Pop()
-                    if err != nil {
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'setAt' operation on a stack with only one item.\n", t.Line, t.Column))
-                    }
+					obj2, err := stack.Pop()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'setAt' operation on a stack with only one item.\n", t.Line, t.Column))
+					}
 
-                    obj3, err := stack.Peek()
-                    if err != nil {
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'setAt' operation on a stack with only two items.\n", t.Line, t.Column))
-                    }
-                    
-                    obj1Index, ok := obj1.(*MShellInt)
-                    if !ok {
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot set at a non-integer index.\n", t.Line, t.Column))
-                    }
+					obj3, err := stack.Peek()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'setAt' operation on a stack with only two items.\n", t.Line, t.Column))
+					}
 
-                    obj3List, ok := obj3.(*MShellList)
-                    if !ok {
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot set into a non-list.\n", t.Line, t.Column))
-                    }
+					obj1Index, ok := obj1.(*MShellInt)
+					if !ok {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot set at a non-integer index.\n", t.Line, t.Column))
+					}
 
-                    if obj1Index.Value < 0 {
-                        obj1Index.Value = len(obj3List.Items) + obj1Index.Value
-                    }
+					obj3List, ok := obj3.(*MShellList)
+					if !ok {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot set into a non-list.\n", t.Line, t.Column))
+					}
 
-                    if obj1Index.Value < 0 || obj1Index.Value >= len(obj3List.Items) {
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Index out of range for 'setAt'.\n", t.Line, t.Column))
-                    }
+					if obj1Index.Value < 0 {
+						obj1Index.Value = len(obj3List.Items) + obj1Index.Value
+					}
 
-                    obj3List.Items[obj1Index.Value] = obj2
+					if obj1Index.Value < 0 || obj1Index.Value >= len(obj3List.Items) {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Index out of range for 'setAt'.\n", t.Line, t.Column))
+					}
+
+					obj3List.Items[obj1Index.Value] = obj2
 				} else if t.Lexeme == "insert" {
-                    // Expected stack:
-                    // List item index
-                    // Index 0 based, negative indexes allowed
-                    obj1, err := stack.Pop()
-                    if err != nil {
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'insert' operation on an empty stack.\n", t.Line, t.Column))
-                    }
+					// Expected stack:
+					// List item index
+					// Index 0 based, negative indexes allowed
+					obj1, err := stack.Pop()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'insert' operation on an empty stack.\n", t.Line, t.Column))
+					}
 
-                    obj2, err := stack.Pop()
-                    if err != nil {
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'insert' operation on a stack with only one item.\n", t.Line, t.Column))
-                    }
+					obj2, err := stack.Pop()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'insert' operation on a stack with only one item.\n", t.Line, t.Column))
+					}
 
-                    obj3, err := stack.Pop()
-                    if err != nil {
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'insert' operation on a stack with only two items.\n", t.Line, t.Column))
-                    }
+					obj3, err := stack.Pop()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'insert' operation on a stack with only two items.\n", t.Line, t.Column))
+					}
 
-                    obj1Index, ok := obj1.(*MShellInt)
-                    if !ok {
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot insert at a non-integer index.\n", t.Line, t.Column))
-                    }
+					obj1Index, ok := obj1.(*MShellInt)
+					if !ok {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot insert at a non-integer index.\n", t.Line, t.Column))
+					}
 
-                    obj3List, ok := obj3.(*MShellList)
-                    if !ok {
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot insert into a non-list.\n", t.Line, t.Column))
-                    }
+					obj3List, ok := obj3.(*MShellList)
+					if !ok {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot insert into a non-list.\n", t.Line, t.Column))
+					}
 
-                    if obj1Index.Value < 0 {
-                        obj1Index.Value = len(obj3List.Items) + obj1Index.Value
-                    }
+					if obj1Index.Value < 0 {
+						obj1Index.Value = len(obj3List.Items) + obj1Index.Value
+					}
 
-                    if obj1Index.Value < 0 || obj1Index.Value > len(obj3List.Items) {
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Index out of range for 'insert'.\n", t.Line, t.Column))
-                    }
+					if obj1Index.Value < 0 || obj1Index.Value > len(obj3List.Items) {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Index out of range for 'insert'.\n", t.Line, t.Column))
+					}
 
-                    obj3List.Items = append(obj3List.Items[:obj1Index.Value], append([]MShellObject{obj2}, obj3List.Items[obj1Index.Value:]...)...)
-                    stack.Push(obj3List)
-                } else if t.Lexeme == "del" {
-                    obj1, err := stack.Pop()
-                    if err != nil {
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'del' operation on an empty stack.\n", t.Line, t.Column))
-                    }
+					obj3List.Items = append(obj3List.Items[:obj1Index.Value], append([]MShellObject{obj2}, obj3List.Items[obj1Index.Value:]...)...)
+					stack.Push(obj3List)
+				} else if t.Lexeme == "del" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'del' operation on an empty stack.\n", t.Line, t.Column))
+					}
 
-                    obj2, err := stack.Pop()
-                    if err != nil {
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'del' operation on a stack with only one item.\n", t.Line, t.Column))
-                    }
+					obj2, err := stack.Pop()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'del' operation on a stack with only one item.\n", t.Line, t.Column))
+					}
 
-                    switch obj1.(type) {
-                    case *MShellInt:
-                        switch obj2.(type) {
-                        case *MShellList:
-                            index := obj1.(*MShellInt).Value
-                            if index < 0 {
-                                index = len(obj2.(*MShellList).Items) + index
-                            }
+					switch obj1.(type) {
+					case *MShellInt:
+						switch obj2.(type) {
+						case *MShellList:
+							index := obj1.(*MShellInt).Value
+							if index < 0 {
+								index = len(obj2.(*MShellList).Items) + index
+							}
 
-                            if index < 0 || index >= len(obj2.(*MShellList).Items) {
-                                return FailWithMessage(fmt.Sprintf("%d:%d: Index out of range for 'del'.\n", t.Line, t.Column))
-                            }
-                            obj2.(*MShellList).Items = append(obj2.(*MShellList).Items[:index], obj2.(*MShellList).Items[index+1:]...)
-                            stack.Push(obj2)
-                        default:
-                            return FailWithMessage(fmt.Sprintf("%d:%d: Cannot delete from a %s.\n", t.Line, t.Column, obj2.TypeName()))
-                        }
-                    case *MShellList:
-                        switch obj2.(type) {
-                        case *MShellInt:
-                            index := obj2.(*MShellInt).Value
-                            if index < 0 {
-                                index = len(obj1.(*MShellList).Items) + index
-                            }
-                            if index < 0 || index >= len(obj1.(*MShellList).Items) {
-                                return FailWithMessage(fmt.Sprintf("%d:%d: Index out of range for 'del'.\n", t.Line, t.Column))
-                            }
-                            obj1.(*MShellList).Items = append(obj1.(*MShellList).Items[:index], obj1.(*MShellList).Items[index+1:]...)
-                            stack.Push(obj1)
-                        default:
-                            return FailWithMessage(fmt.Sprintf("%d:%d: Cannot delete from a %s.\n", t.Line, t.Column, obj2.TypeName()))
-                        }
-                    default:
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot delete from a %s.\n", t.Line, t.Column, obj1.TypeName()))
-                    }
-                } else if t.Lexeme == "readFile" {
-                    obj1, err := stack.Pop()
-                    if err != nil {
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'readFile' operation on an empty stack.\n", t.Line, t.Column))
-                    }
+							if index < 0 || index >= len(obj2.(*MShellList).Items) {
+								return FailWithMessage(fmt.Sprintf("%d:%d: Index out of range for 'del'.\n", t.Line, t.Column))
+							}
+							obj2.(*MShellList).Items = append(obj2.(*MShellList).Items[:index], obj2.(*MShellList).Items[index+1:]...)
+							stack.Push(obj2)
+						default:
+							return FailWithMessage(fmt.Sprintf("%d:%d: Cannot delete from a %s.\n", t.Line, t.Column, obj2.TypeName()))
+						}
+					case *MShellList:
+						switch obj2.(type) {
+						case *MShellInt:
+							index := obj2.(*MShellInt).Value
+							if index < 0 {
+								index = len(obj1.(*MShellList).Items) + index
+							}
+							if index < 0 || index >= len(obj1.(*MShellList).Items) {
+								return FailWithMessage(fmt.Sprintf("%d:%d: Index out of range for 'del'.\n", t.Line, t.Column))
+							}
+							obj1.(*MShellList).Items = append(obj1.(*MShellList).Items[:index], obj1.(*MShellList).Items[index+1:]...)
+							stack.Push(obj1)
+						default:
+							return FailWithMessage(fmt.Sprintf("%d:%d: Cannot delete from a %s.\n", t.Line, t.Column, obj2.TypeName()))
+						}
+					default:
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot delete from a %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+				} else if t.Lexeme == "readFile" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'readFile' operation on an empty stack.\n", t.Line, t.Column))
+					}
 
-                    switch obj1.(type) {
-                    case *MShellString:
-                        content, err := os.ReadFile(obj1.(*MShellString).Content)
-                        if err != nil {
-                            return FailWithMessage(fmt.Sprintf("%d:%d: Error reading file: %s\n", t.Line, t.Column, err.Error()))
-                        }
-                        stack.Push(&MShellString{string(content)})
-                    case *MShellLiteral:
-                        content, err := os.ReadFile(obj1.(*MShellLiteral).LiteralText)
-                        if err != nil {
-                            return FailWithMessage(fmt.Sprintf("%d:%d: Error reading file: %s\n", t.Line, t.Column, err.Error()))
-                        }
-                        stack.Push(&MShellString{string(content)})
-                    default:
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot read from a %s.\n", t.Line, t.Column, obj1.TypeName()))
-                    }
-                } else if t.Lexeme == "cd" {
-                    obj, err := stack.Pop()
-                    if err != nil {
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'cd' operation on an empty stack.\n", t.Line, t.Column))
-                    }
+					switch obj1.(type) {
+					case *MShellString:
+						content, err := os.ReadFile(obj1.(*MShellString).Content)
+						if err != nil {
+							return FailWithMessage(fmt.Sprintf("%d:%d: Error reading file: %s\n", t.Line, t.Column, err.Error()))
+						}
+						stack.Push(&MShellString{string(content)})
+					case *MShellLiteral:
+						content, err := os.ReadFile(obj1.(*MShellLiteral).LiteralText)
+						if err != nil {
+							return FailWithMessage(fmt.Sprintf("%d:%d: Error reading file: %s\n", t.Line, t.Column, err.Error()))
+						}
+						stack.Push(&MShellString{string(content)})
+					default:
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot read from a %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+				} else if t.Lexeme == "cd" {
+					obj, err := stack.Pop()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'cd' operation on an empty stack.\n", t.Line, t.Column))
+					}
 
-                    var dir string
+					var dir string
 
-                    switch obj.(type) {
-                    case *MShellString:
-                        dir = obj.(*MShellString).Content
-                    case *MShellLiteral:
-                        dir = obj.(*MShellLiteral).LiteralText
-                    default:
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot cd to a %s.\n", t.Line, t.Column, obj.TypeName()))
-                    }
+					switch obj.(type) {
+					case *MShellString:
+						dir = obj.(*MShellString).Content
+					case *MShellLiteral:
+						dir = obj.(*MShellLiteral).LiteralText
+					default:
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot cd to a %s.\n", t.Line, t.Column, obj.TypeName()))
+					}
 
-                    // Update the OLDPWD variable
-                    oldPwd, err := os.Getwd()
-                    if err != nil {
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Error getting current directory: %s\n", t.Line, t.Column, err.Error()))
-                    }
+					// Update the OLDPWD variable
+					oldPwd, err := os.Getwd()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Error getting current directory: %s\n", t.Line, t.Column, err.Error()))
+					}
 
-                    err = os.Setenv("OLDPWD", oldPwd)
-                    if err != nil {
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Error setting OLDPWD: %s\n", t.Line, t.Column, err.Error()))
-                    }
+					err = os.Setenv("OLDPWD", oldPwd)
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Error setting OLDPWD: %s\n", t.Line, t.Column, err.Error()))
+					}
 
-                    context.Variables["OLDPWD"] = &MShellString{oldPwd}
+					context.Variables["OLDPWD"] = &MShellString{oldPwd}
 
-                    err = os.Chdir(dir)
-                    if err != nil {
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Error changing directory: %s\n", t.Line, t.Column, err.Error()))
-                    }
+					err = os.Chdir(dir)
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Error changing directory: %s\n", t.Line, t.Column, err.Error()))
+					}
 
-                    // Update the PWD variable
-                    pwd, err := os.Getwd()
-                    if err != nil {
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Error getting current directory: %s\n", t.Line, t.Column, err.Error()))
-                    }
+					// Update the PWD variable
+					pwd, err := os.Getwd()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Error getting current directory: %s\n", t.Line, t.Column, err.Error()))
+					}
 
-                    err = os.Setenv("PWD", pwd)
-                    if err != nil {
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Error setting PWD: %s\n", t.Line, t.Column, err.Error()))
-                    }
+					err = os.Setenv("PWD", pwd)
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Error setting PWD: %s\n", t.Line, t.Column, err.Error()))
+					}
 
-                    context.Variables["PWD"] = &MShellString{pwd}
-                } else if t.Lexeme == "in" {
-                    substring, err := stack.Pop()
-                    if err != nil {
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'in' operation on an empty stack.\n", t.Line, t.Column))
-                    }
+					context.Variables["PWD"] = &MShellString{pwd}
+				} else if t.Lexeme == "in" {
+					substring, err := stack.Pop()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'in' operation on an empty stack.\n", t.Line, t.Column))
+					}
 
-                    totalString, err := stack.Pop()
-                    if err != nil {
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'in' operation on a stack with only one item.\n", t.Line, t.Column))
-                    }
+					totalString, err := stack.Pop()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'in' operation on a stack with only one item.\n", t.Line, t.Column))
+					}
 
-                    var substringText string
-                    var totalStringText string
+					var substringText string
+					var totalStringText string
 
-                    switch substring.(type) {
-                    case *MShellString:
-                        substringText = substring.(*MShellString).Content
-                    case *MShellLiteral:
-                        substringText = substring.(*MShellLiteral).LiteralText
-                    default:
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot search for a %s.\n", t.Line, t.Column, substring.TypeName()))
-                    }
+					switch substring.(type) {
+					case *MShellString:
+						substringText = substring.(*MShellString).Content
+					case *MShellLiteral:
+						substringText = substring.(*MShellLiteral).LiteralText
+					default:
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot search for a %s.\n", t.Line, t.Column, substring.TypeName()))
+					}
 
-                    switch totalString.(type) {
-                    case *MShellString:
-                        totalStringText = totalString.(*MShellString).Content
-                    case *MShellLiteral:
-                        totalStringText = totalString.(*MShellLiteral).LiteralText
-                    default:
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot search in a %s.\n", t.Line, t.Column, totalString.TypeName()))
-                    }
+					switch totalString.(type) {
+					case *MShellString:
+						totalStringText = totalString.(*MShellString).Content
+					case *MShellLiteral:
+						totalStringText = totalString.(*MShellLiteral).LiteralText
+					default:
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot search in a %s.\n", t.Line, t.Column, totalString.TypeName()))
+					}
 
-                    stack.Push(&MShellBool{strings.Contains(totalStringText, substringText)})
-                } else if t.Lexeme == "/" {
-                    obj1, err := stack.Pop()
-                    if err != nil {
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '/' operation on an empty stack.\n", t.Line, t.Column))
-                    }
+					stack.Push(&MShellBool{strings.Contains(totalStringText, substringText)})
+				} else if t.Lexeme == "/" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '/' operation on an empty stack.\n", t.Line, t.Column))
+					}
 
-                    obj2, err := stack.Pop()
-                    if err != nil {
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '/' operation on a stack with only one item.\n", t.Line, t.Column))
-                    }
+					obj2, err := stack.Pop()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '/' operation on a stack with only one item.\n", t.Line, t.Column))
+					}
 
-                    if !obj1.IsNumeric() || !obj2.IsNumeric() {
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot divide a %s and a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
-                    }
+					if !obj1.IsNumeric() || !obj2.IsNumeric() {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot divide a %s and a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
+					}
 
-                    switch obj1.(type) {
-                    case *MShellInt:
-                        if obj1.(*MShellInt).Value == 0 {
-                            return FailWithMessage(fmt.Sprintf("%d:%d: Cannot divide by zero.\n", t.Line, t.Column))
-                        }
-                        switch obj2.(type) {
-                        case *MShellInt:
-                            stack.Push(&MShellInt{obj2.(*MShellInt).Value / obj1.(*MShellInt).Value})
-                        case *MShellFloat:
-                            stack.Push(&MShellFloat{float64(obj2.(*MShellFloat).Value) / float64(obj1.(*MShellInt).Value)})
-                        }
-                    case *MShellFloat:
-                        if obj1.(*MShellFloat).Value == 0 {
-                            return FailWithMessage(fmt.Sprintf("%d:%d: Cannot divide by zero.\n", t.Line, t.Column))
-                        }
+					switch obj1.(type) {
+					case *MShellInt:
+						if obj1.(*MShellInt).Value == 0 {
+							return FailWithMessage(fmt.Sprintf("%d:%d: Cannot divide by zero.\n", t.Line, t.Column))
+						}
+						switch obj2.(type) {
+						case *MShellInt:
+							stack.Push(&MShellInt{obj2.(*MShellInt).Value / obj1.(*MShellInt).Value})
+						case *MShellFloat:
+							stack.Push(&MShellFloat{float64(obj2.(*MShellFloat).Value) / float64(obj1.(*MShellInt).Value)})
+						}
+					case *MShellFloat:
+						if obj1.(*MShellFloat).Value == 0 {
+							return FailWithMessage(fmt.Sprintf("%d:%d: Cannot divide by zero.\n", t.Line, t.Column))
+						}
 
-                        switch obj2.(type) {
-                        case *MShellInt:
-                            stack.Push(&MShellFloat{float64(obj2.(*MShellInt).Value) / obj1.(*MShellFloat).Value})
-                        case *MShellFloat:
-                            stack.Push(&MShellFloat{obj2.(*MShellFloat).Value / obj1.(*MShellFloat).Value})
-                        }
-                    }
-                } else if t.Lexeme == "exit" {
-                    exitCode, err := stack.Pop()
-                    if err != nil {
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'exit' operation on an empty stack.\n", t.Line, t.Column))
-                    }
+						switch obj2.(type) {
+						case *MShellInt:
+							stack.Push(&MShellFloat{float64(obj2.(*MShellInt).Value) / obj1.(*MShellFloat).Value})
+						case *MShellFloat:
+							stack.Push(&MShellFloat{obj2.(*MShellFloat).Value / obj1.(*MShellFloat).Value})
+						}
+					}
+				} else if t.Lexeme == "exit" {
+					exitCode, err := stack.Pop()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'exit' operation on an empty stack.\n", t.Line, t.Column))
+					}
 
-                    exitInt, ok := exitCode.(*MShellInt)
-                    if !ok {
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot exit with a %s.\n", t.Line, t.Column, exitCode.TypeName()))
-                    }
+					exitInt, ok := exitCode.(*MShellInt)
+					if !ok {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot exit with a %s.\n", t.Line, t.Column, exitCode.TypeName()))
+					}
 
-                    if exitInt.Value < 0 || exitInt.Value > 255 {
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot exit with a value outside of 0-255.\n", t.Line, t.Column))
-                    }
+					if exitInt.Value < 0 || exitInt.Value > 255 {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot exit with a value outside of 0-255.\n", t.Line, t.Column))
+					}
 
-                    if exitInt.Value == 0 {
-                        return EvalResult{true, -1, 0}
-                    } else {
-                        return EvalResult{false, -1, exitInt.Value}
-                    }
-                } else if t.Lexeme == "*" {
-                    obj1, err := stack.Pop()
-                    if err != nil {
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '*' operation on an empty stack.\n", t.Line, t.Column))
-                    }
+					if exitInt.Value == 0 {
+						return EvalResult{true, -1, 0}
+					} else {
+						return EvalResult{false, -1, exitInt.Value}
+					}
+				} else if t.Lexeme == "*" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '*' operation on an empty stack.\n", t.Line, t.Column))
+					}
 
-                    obj2, err := stack.Pop()
-                    if err != nil {
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '*' operation on a stack with only one item.\n", t.Line, t.Column))
-                    }
+					obj2, err := stack.Pop()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '*' operation on a stack with only one item.\n", t.Line, t.Column))
+					}
 
-                    if !obj1.IsNumeric() || !obj2.IsNumeric() {
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot multiply a %s and a %s. If you are looking for wildcard glob, you want `\"*\" glob`.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
-                    }
+					if !obj1.IsNumeric() || !obj2.IsNumeric() {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot multiply a %s and a %s. If you are looking for wildcard glob, you want `\"*\" glob`.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
+					}
 
-                    switch obj1.(type) {
-                    case *MShellInt:
-                        switch obj2.(type) {
-                        case *MShellInt:
-                            stack.Push(&MShellInt{obj2.(*MShellInt).Value * obj1.(*MShellInt).Value})
-                        case *MShellFloat:
-                            stack.Push(&MShellFloat{obj2.(*MShellFloat).Value * float64(obj1.(*MShellInt).Value)})
-                        }
-                    case *MShellFloat:
-                        switch obj2.(type) {
-                        case *MShellInt:
-                            stack.Push(&MShellFloat{float64(obj2.(*MShellInt).Value) * float64(obj1.(*MShellFloat).Value)})
-                        case *MShellFloat:
-                            stack.Push(&MShellFloat{obj2.(*MShellFloat).Value * obj1.(*MShellFloat).Value})
-                        }
-                    }
-                } else if t.Lexeme == "toFloat" {
-                    obj, err := stack.Pop()
-                    if err != nil {
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'toFloat' operation on an empty stack.\n", t.Line, t.Column))
-                    }
+					switch obj1.(type) {
+					case *MShellInt:
+						switch obj2.(type) {
+						case *MShellInt:
+							stack.Push(&MShellInt{obj2.(*MShellInt).Value * obj1.(*MShellInt).Value})
+						case *MShellFloat:
+							stack.Push(&MShellFloat{obj2.(*MShellFloat).Value * float64(obj1.(*MShellInt).Value)})
+						}
+					case *MShellFloat:
+						switch obj2.(type) {
+						case *MShellInt:
+							stack.Push(&MShellFloat{float64(obj2.(*MShellInt).Value) * float64(obj1.(*MShellFloat).Value)})
+						case *MShellFloat:
+							stack.Push(&MShellFloat{obj2.(*MShellFloat).Value * obj1.(*MShellFloat).Value})
+						}
+					}
+				} else if t.Lexeme == "toFloat" {
+					obj, err := stack.Pop()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'toFloat' operation on an empty stack.\n", t.Line, t.Column))
+					}
 
-                    switch obj.(type) {
-                    case *MShellString:
-                        floatVal, err := strconv.ParseFloat(obj.(*MShellString).Content, 64)
-                        if err != nil {
-                            return FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert %s to float: %s\n", t.Line, t.Column, obj.(*MShellString).Content, err.Error()))
-                        }
-                        stack.Push(&MShellFloat{floatVal})
-                        // I don't believe checking for literal is required, because it should have been parsed as a float to start with?
-                    case *MShellInt:
-                        stack.Push(&MShellFloat{float64(obj.(*MShellInt).Value)})
-                    default:
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert a %s to a float.\n", t.Line, t.Column, obj.TypeName()))
-                    }
-                } else if t.Lexeme == "~" || strings.HasPrefix(t.Lexeme, "~/") {
+					switch obj.(type) {
+					case *MShellString:
+						floatVal, err := strconv.ParseFloat(obj.(*MShellString).Content, 64)
+						if err != nil {
+							return FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert %s to float: %s\n", t.Line, t.Column, obj.(*MShellString).Content, err.Error()))
+						}
+						stack.Push(&MShellFloat{floatVal})
+						// I don't believe checking for literal is required, because it should have been parsed as a float to start with?
+					case *MShellInt:
+						stack.Push(&MShellFloat{float64(obj.(*MShellInt).Value)})
+					default:
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert a %s to a float.\n", t.Line, t.Column, obj.TypeName()))
+					}
+				} else if t.Lexeme == "~" || strings.HasPrefix(t.Lexeme, "~/") {
 					// Only do tilde expansion
 					homeDir, err := os.UserHomeDir()
 					if err != nil {
@@ -1033,20 +1033,20 @@ MainLoop:
 					switch obj2.(type) {
 					case *MShellInt:
 						stack.Push(&MShellInt{obj2.(*MShellInt).Value + obj1.(*MShellInt).Value})
-                    case *MShellFloat:
-                        stack.Push(&MShellFloat{float64(obj2.(*MShellFloat).Value) + float64(obj1.(*MShellInt).Value)})
+					case *MShellFloat:
+						stack.Push(&MShellFloat{float64(obj2.(*MShellFloat).Value) + float64(obj1.(*MShellInt).Value)})
 					default:
 						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot add an integer to a %s.\n", t.Line, t.Column, obj2.TypeName()))
 					}
-                case *MShellFloat:
-                    switch obj2.(type) {
-                    case *MShellFloat:
-                        stack.Push(&MShellFloat{obj2.(*MShellFloat).Value + obj1.(*MShellFloat).Value})
-                    case *MShellInt:
-                        stack.Push(&MShellFloat{float64(obj2.(*MShellInt).Value) + obj1.(*MShellFloat).Value})
-                    default:
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot add a float to a %s.\n", t.Line, t.Column, obj2.TypeName()))
-                    }
+				case *MShellFloat:
+					switch obj2.(type) {
+					case *MShellFloat:
+						stack.Push(&MShellFloat{obj2.(*MShellFloat).Value + obj1.(*MShellFloat).Value})
+					case *MShellInt:
+						stack.Push(&MShellFloat{float64(obj2.(*MShellInt).Value) + obj1.(*MShellFloat).Value})
+					default:
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot add a float to a %s.\n", t.Line, t.Column, obj2.TypeName()))
+					}
 				case *MShellString:
 					switch obj2.(type) {
 					case *MShellString:
@@ -1065,14 +1065,14 @@ MainLoop:
 					default:
 						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot add a literal to a %s.\n", t.Line, t.Column, obj2.TypeName()))
 					}
-                case *MShellList:
-                    switch obj2.(type) {
-                    case *MShellList:
-                        newList := &MShellList{Items: make([]MShellObject, len(obj2.(*MShellList).Items) + len(obj1.(*MShellList).Items)), StandardInputFile: "", StandardOutputFile: "", StdoutBehavior: STDOUT_NONE}
-                        copy(newList.Items, obj2.(*MShellList).Items)
-                        copy(newList.Items[len(obj2.(*MShellList).Items):], obj1.(*MShellList).Items)
-                        stack.Push(newList)
-                    }
+				case *MShellList:
+					switch obj2.(type) {
+					case *MShellList:
+						newList := &MShellList{Items: make([]MShellObject, len(obj2.(*MShellList).Items)+len(obj1.(*MShellList).Items)), StandardInputFile: "", StandardOutputFile: "", StdoutBehavior: STDOUT_NONE}
+						copy(newList.Items, obj2.(*MShellList).Items)
+						copy(newList.Items[len(obj2.(*MShellList).Items):], obj1.(*MShellList).Items)
+						stack.Push(newList)
+					}
 				default:
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '+' between a %s and a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
 				}
@@ -1253,7 +1253,7 @@ MainLoop:
 				}
 			} else if t.Type == VARSTORE {
 				obj, err := stack.Pop()
-                varName := t.Lexeme[0:len(t.Lexeme)-1] // Remove the trailing !
+				varName := t.Lexeme[0 : len(t.Lexeme)-1] // Remove the trailing !
 				if err != nil {
 					return FailWithMessage(fmt.Sprintf("%d:%d: Nothing on stack to store into variable %s.\n", t.Line, t.Column, varName))
 				}
@@ -1297,7 +1297,7 @@ MainLoop:
 				loopContext := ExecuteContext{
 					StandardInput:  nil,
 					StandardOutput: nil,
-                    Variables: context.Variables,
+					Variables:      context.Variables,
 				}
 
 				if quotation.StandardInputFile != "" {
@@ -1347,9 +1347,9 @@ MainLoop:
 
 				state.LoopDepth--
 
-                // If we are breaking out of an inner loop to an outer loop (breakDiff - 1 > 0), then we need to return an go up the call stack.
-                // Else just continue on with tokens after the loop.
-				if breakDiff - 1 > 0 {
+				// If we are breaking out of an inner loop to an outer loop (breakDiff - 1 > 0), then we need to return an go up the call stack.
+				// Else just continue on with tokens after the loop.
+				if breakDiff-1 > 0 {
 					return EvalResult{true, breakDiff - 1, 0}
 				}
 			} else if t.Type == BREAK {
@@ -1373,13 +1373,13 @@ MainLoop:
 					default:
 						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot compare equality from an integer to a %s.\n", t.Line, t.Column, obj2.TypeName()))
 					}
-                case *MShellString:
-                    switch obj2.(type) {
-                    case *MShellString:
-                        stack.Push(&MShellBool{obj2.(*MShellString).Content == obj1.(*MShellString).Content})
-                    default:
-                        return FailWithMessage(fmt.Sprintf("%d:%d: Cannot compare equality from a string to a %s.\n", t.Line, t.Column, obj2.TypeName()))
-                    }
+				case *MShellString:
+					switch obj2.(type) {
+					case *MShellString:
+						stack.Push(&MShellBool{obj2.(*MShellString).Content == obj1.(*MShellString).Content})
+					default:
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot compare equality from a string to a %s.\n", t.Line, t.Column, obj2.TypeName()))
+					}
 				default:
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot complete %s with a %s to a %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
 				}
@@ -1426,7 +1426,7 @@ MainLoop:
 					// Default to stdout of this process itself
 					quoteContext.StandardOutput = os.Stdout
 				}
-                quoteContext.Variables = quotation.Variables
+				quoteContext.Variables = quotation.Variables
 
 				result := state.Evaluate(quotation.Tokens, stack, quoteContext, definitions)
 				if !result.Success {
@@ -1693,12 +1693,12 @@ MainLoop:
 				}
 			} else if t.Type == STOP_ON_ERROR {
 				state.StopOnError = true
-            } else if t.Type == FLOAT {
-                floatVal, err := strconv.ParseFloat(t.Lexeme, 64)
-                if err != nil {
-                    return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing float: %s\n", t.Line, t.Column, err.Error()))
-                }
-                stack.Push(&MShellFloat{floatVal})
+			} else if t.Type == FLOAT {
+				floatVal, err := strconv.ParseFloat(t.Lexeme, 64)
+				if err != nil {
+					return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing float: %s\n", t.Line, t.Column, err.Error()))
+				}
+				stack.Push(&MShellFloat{floatVal})
 			} else {
 				return FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Type))
 			}
@@ -1726,7 +1726,7 @@ func (quotation *MShellQuotation) Execute(state *EvalState, context ExecuteConte
 	quotationContext := ExecuteContext{
 		StandardInput:  nil,
 		StandardOutput: nil,
-        Variables:      quotation.Variables,
+		Variables:      quotation.Variables,
 	}
 
 	if quotation.StandardInputFile != "" {
@@ -1931,7 +1931,7 @@ func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContex
 		newContext := ExecuteContext{
 			StandardInput:  nil,
 			StandardOutput: nil,
-            Variables:      context.Variables,
+			Variables:      context.Variables,
 		}
 
 		if i == 0 {
