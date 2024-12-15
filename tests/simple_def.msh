@@ -1,8 +1,8 @@
-def square dup + end
+def square (int -- int) dup + end
 
 [echo 7 square];
 
 [echo "Hello," addWorld];
 
 # All definitions are lifted
-def addWorld " World!" + end
+def addWorld (str -- str) " World!" + end

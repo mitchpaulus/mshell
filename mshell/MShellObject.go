@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"encoding/json"
 )
 
 type Jsonable interface {
@@ -752,7 +753,8 @@ func (obj *MShellSimple) Slice(startInc int, endExc int) (MShellObject, error) {
 
 // ToJson
 func (obj *MShellLiteral) ToJson() string {
-	return fmt.Sprintf("{\"type\": \"Literal\", \"value\": \"%s\"}", obj.LiteralText)
+	escBytes, _ := json.Marshal(obj.LiteralText)
+	return fmt.Sprintf("{\"type\": \"Literal\", \"value\": \"%s\"}", string(escBytes))
 }
 
 func (obj *MShellBool) ToJson() string {
@@ -788,7 +790,9 @@ func (obj *MShellList) ToJson() string {
 }
 
 func (obj *MShellString) ToJson() string {
-	return fmt.Sprintf("{\"type\": \"String\", \"content\": \"%s\"}", obj.Content)
+	// Escape the content
+	escBytes, _ := json.Marshal(obj.Content)
+	return fmt.Sprintf("{\"type\": \"String\", \"content\": %s}", string(escBytes))
 }
 
 func (obj *MShellPipe) ToJson() string {

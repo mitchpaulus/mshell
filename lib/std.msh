@@ -2,8 +2,7 @@
 
 # type numeric int | float
 
-# each (list quote: (item --) --)
-def each
+def each ([T] (T --) --)
     over len each-len! # Get total length
     0 each-idx! # index
     (
@@ -20,13 +19,7 @@ def each
 end
 
 # map (list quote -- list)
-def map
-# (
-#     [T*]: list
-#     (T -- U): q
-#     --
-#     [U*]
-# )
+def map ([T] (T -- U) -- [U])
     over len map-len! # Get total length
     0 map-idx! # Index
     [] map-accum! # Accumulator
@@ -45,7 +38,7 @@ def map
 end
 
 # filter (list quote -- list)
-def filter
+def filter ([T] (T -- bool) -- [T])
     over len filter-len! # Get total length
     0 filter-idx! # Index
     [] filter-accum! # Accumulator
@@ -64,7 +57,7 @@ def filter
 end
 
 # foldl (quote initial list -- result)
-def foldl
+def foldl ((T T -- T) T [T] -- T)
     #  quote initial list
     swap foldl-accum!  # Accumulator,
     # quote list
@@ -80,24 +73,24 @@ def foldl
 end
 
 # sum (list -- value)
-def sum
+def sum ([float] -- float)
     (+) 0 rot foldl
 end
 
 # .. (-- list[str]), equals kinda looks like lines.
-def .. stdin lines end
+def .. (-- [str]) stdin lines end
 
 # tt = Tab separated Table (-- list[list[str]])
-def tt .. ("	" split) map end
+def tt (-- [[str]]) ..  ("	" split) map end
 
-# wt = Whitespace separated Table (-- list[list[str]])
-def wt .. (wsplit) map  end
+# wt = Whitespace separated Table (-- [[str*]*])
+def wt (-- [[str]]) .. (wsplit) map  end
 
-# wjoin = Whitespace join (list -- str)
-def wjoin " " join end
+# wjoin = Whitespace join ([str*] -- str)
+def wjoin ([str] -- str) " " join end
 
 # unlines (list[str] -- str)
-def unlines
+def unlines ([str] -- str)
     [] unlines-accum! # Accumulator
     (
         @unlines-accum append
@@ -107,8 +100,8 @@ def unlines
     @unlines-accum "" join
 end
 
-# reverse (list|string -- list)
-def reverse
+# reverse ([T*]|str -- [T*]|str)
+def reverse ([T] -- [T])
     dup len 1 - reverse-idx! # Set Idx
     [] # list accum
     (
@@ -120,16 +113,15 @@ def reverse
 end
 
 # abs (int|float -- int|float)
-def abs
+def abs (float -- float)
     [(dup 0 <) (-1 *)] if
 end
 
 
-def tab "	" end
-def tsplit tab split end
-def uw unlines w end
+def tab (-- str) "	" end
+def tsplit (str -- [str])  tab split end
+def uw ([str] --) unlines w end
 
-# readTsvFile (str -- list[list[str]])
-def readTsvFile
+def readTsvFile (str -- [[str]])
     readFile lines (tsplit) map end
 end
