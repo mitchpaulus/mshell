@@ -221,6 +221,8 @@ func (parser *MShellParser) ParseFile() (*MShellFile, error) {
 
 type MShellType interface {
 	ToJson() string
+	Equals(other MShellType) bool
+	String() string
 }
 
 type TypeDefinition struct {
@@ -240,10 +242,30 @@ func (generic TypeGeneric) ToJson() string {
 	return fmt.Sprintf("{ \"generic\": \"%s\" }", generic.Name)
 }
 
+func (generic TypeGeneric) Equals(other MShellType) bool {
+	if otherGeneric, ok := other.(TypeGeneric); ok {
+		return generic.Name == otherGeneric.Name
+	}
+	return false
+}
+
+func (generic TypeGeneric) String() string {
+	return generic.Name
+}
+
 type TypeInt struct { }
 
 func (t TypeInt) ToJson() string {
 	return "\"int\""
+}
+
+func (t TypeInt) Equals(other MShellType) bool {
+	_, ok := other.(TypeInt)
+	return ok
+}
+
+func (t TypeInt) String() string {
+	return "int"
 }
 
 type TypeFloat struct { }
@@ -252,16 +274,44 @@ func (t TypeFloat) ToJson() string {
 	return "\"float\""
 }
 
+func (t TypeFloat) Equals(other MShellType) bool {
+	_, ok := other.(TypeFloat)
+	return ok
+}
+
+func (t TypeFloat) String() string {
+	return "float"
+}
+
+
 type TypeString struct { }
 
 func (t TypeString) ToJson() string {
 	return "\"string\""
 }
 
+func (t TypeString) Equals(other MShellType) bool {
+	_, ok := other.(TypeString)
+	return ok
+}
+
+func (t TypeString) String() string {
+	return "string"
+}
+
 type TypeBool struct { }
 
 func (t TypeBool) ToJson() string {
 	return "\"bool\""
+}
+
+func (t TypeBool) Equals(other MShellType) bool {
+	_, ok := other.(TypeBool)
+	return ok
+}
+
+func (t TypeBool) String() string {
+	return "bool"
 }
 
 type TypeList struct {
@@ -272,12 +322,77 @@ func (list *TypeList) ToJson() string {
 	return fmt.Sprintf("{\"list\": %s}", list.ListType.ToJson())
 }
 
+func (list *TypeList) Equals(other MShellType) bool {
+	if otherList, ok := other.(*TypeList); ok {
+		return list.ListType.Equals(otherList.ListType)
+	}
+
+	// If other is a TypeTuple, and all elements are of the same type as list.ListType,
+	// then we can consider them equal
+	if otherTuple, ok := other.(*TypeTuple); ok {
+		for _, t := range otherTuple.Types {
+			if !list.ListType.Equals(t) {
+				return false
+			}
+		}
+		return true
+	}
+
+	return false
+}
+
+func (list *TypeList) String() string {
+	return fmt.Sprintf("[%s]", list.ListType.String())
+}
+
 type TypeTuple struct {
 	Types []MShellType
 }
 
 func (tuple *TypeTuple) ToJson() string {
 	return fmt.Sprintf("{\"tuple\": %s}", TypeListToJson(tuple.Types))
+}
+
+func (tuple *TypeTuple) Equals(other MShellType) bool {
+	if otherTuple, ok := other.(*TypeTuple); ok {
+		if len(tuple.Types) != len(otherTuple.Types) {
+			return false
+		}
+		for i, t := range tuple.Types {
+			if !t.Equals(otherTuple.Types[i]) {
+				return false
+			}
+		}
+		return true
+	}
+
+	// If the other is a TypeList, and all elements are of the same type as tuple.Types,
+	// then we can consider them equal
+	// If we are empty, then we can consider them equal
+	if otherList, ok := other.(*TypeList); ok {
+		for _, t := range tuple.Types {
+			if !t.Equals(otherList.ListType) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func (tuple *TypeTuple) String() string {
+	if len(tuple.Types) == 0 {
+		return "[]"
+	}
+	builder := strings.Builder{}
+	builder.WriteString("[")
+	builder.WriteString(tuple.Types[0].String())
+	for i := 1; i < len(tuple.Types); i++ {
+		builder.WriteString(", ")
+		builder.WriteString(tuple.Types[i].String())
+	}
+	builder.WriteString("]")
+	return builder.String()
 }
 
 type TypeQuote struct {
@@ -288,6 +403,51 @@ type TypeQuote struct {
 func (quote *TypeQuote) ToJson() string {
 	return fmt.Sprintf("{\"input\": %s, \"output\": %s}", TypeListToJson(quote.InputTypes), TypeListToJson(quote.OutputTypes))
 }
+
+func (quote *TypeQuote) Equals(other MShellType) bool {
+	if otherQuote, ok := other.(*TypeQuote); ok {
+		if len(quote.InputTypes) != len(otherQuote.InputTypes) || len(quote.OutputTypes) != len(otherQuote.OutputTypes) {
+			return false
+		}
+		for i, t := range quote.InputTypes {
+			if !t.Equals(otherQuote.InputTypes[i]) {
+				return false
+			}
+		}
+
+		for i, t := range quote.OutputTypes {
+			if !t.Equals(otherQuote.OutputTypes[i]) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func (quote *TypeQuote) String() string {
+	builder := strings.Builder{}
+	builder.WriteString("(")
+
+	inputTypes := []string{}
+	for _, t := range quote.InputTypes {
+		inputTypes = append(inputTypes, t.String())
+	}
+
+	outputTypes := []string{}
+	for _, t := range quote.OutputTypes {
+		outputTypes = append(outputTypes, t.String())
+	}
+
+	// Write input types space separated
+	builder.WriteString(strings.Join(inputTypes, " "))
+	builder.WriteString(" -- ")
+	// Write output types space separated
+	builder.WriteString(strings.Join(outputTypes, " "))
+	builder.WriteString(")")
+	return builder.String()
+}
+
 
 func (parser *MShellParser) ParseTypeDefinition() (*TypeDefinition, error) {
 	err := parser.MatchWithMessage(parser.curr, LEFT_PAREN, "Expected '(' to start type definition.")
