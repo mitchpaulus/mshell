@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"unicode"
+	"encoding/json"
 )
 
 type TokenType int
@@ -62,6 +63,7 @@ const (
 	// TYPESTRING, using str token instead
 	TYPEBOOL
 	DOUBLEDASH
+	AMPERSAND
 )
 
 func (t TokenType) String() string {
@@ -170,6 +172,8 @@ func (t TokenType) String() string {
 		return "TYPEBOOL"
 	case DOUBLEDASH:
 		return "DOUBLEDASH"
+	case AMPERSAND:
+		return "AMPERSAND"
 	default:
 		return "UNKNOWN"
 	}
@@ -185,7 +189,8 @@ type Token struct {
 }
 
 func (t Token) ToJson() string {
-	return fmt.Sprintf("{\"line\": %d, \"column\": %d, \"start\": %d, \"lexeme\": \"%s\", \"type\": \"%s\"}", t.Line, t.Column, t.Start, t.Lexeme, t.Type)
+	escaped, _ := json.Marshal(t.Lexeme)
+	return fmt.Sprintf("{\"line\": %d, \"column\": %d, \"start\": %d, \"lexeme\": %s, \"type\": \"%s\"}", t.Line, t.Column, t.Start, string(escaped), t.Type)
 }
 
 func (t Token) DebugString() string {
@@ -268,6 +273,8 @@ var notAllowedLiteralChars = map[rune]bool{
 	'!': true,
 	'@': true,
 	'=': true,
+	'&': true,
+	'|': true,
 }
 
 func isAllowedLiteral(r rune) bool {
@@ -447,6 +454,8 @@ func (l *Lexer) scanToken() Token {
 		return l.parseLiteralOrKeyword()
 	case '=':
 		return l.makeToken(EQUALS)
+	case '&':
+		return l.makeToken(AMPERSAND)
 	case '<':
 		if l.peek() == '=' {
 			l.advance()

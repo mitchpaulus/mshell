@@ -66,10 +66,11 @@ func (quote *MShellParseQuote) DebugString() string {
 type MShellDefinition struct {
 	Name  string
 	Items []MShellParseItem
+	TypeDef TypeDefinition
 }
 
 func (def *MShellDefinition) ToJson() string {
-	return fmt.Sprintf("{\"name\": \"%s\", \"items\": %s}", def.Name, ToJson(def.Items))
+	return fmt.Sprintf("{\"name\": \"%s\", \"items\": %s, \"type\": %s }", def.Name, ToJson(def.Items), def.TypeDef.ToJson())
 }
 
 func ToJson(objList []MShellParseItem) string {
@@ -85,6 +86,23 @@ func ToJson(objList []MShellParseItem) string {
 	builder.WriteString("]")
 	return builder.String()
 }
+
+func TypeListToJson(typeList []MShellType) string {
+	if len(typeList) == 0 {
+		return "[]"
+	}
+
+	builder := strings.Builder{}
+	builder.WriteString("[")
+	builder.WriteString(typeList[0].ToJson())
+	for i := 1; i < len(typeList); i++ {
+		builder.WriteString(", ")
+		builder.WriteString(typeList[i].ToJson())
+	}
+	builder.WriteString("]")
+	return builder.String()
+}
+
 
 func (file *MShellFile) ToJson() string {
 	// Start builder for definitions
@@ -123,12 +141,22 @@ func (parser *MShellParser) NextToken() {
 
 func (parser *MShellParser) Match(token Token, tokenType TokenType) error {
 	if token.Type != tokenType {
-		message := fmt.Sprintf("Expected %s, got %s", tokenType, token.Type)
+		message := fmt.Sprintf("%d:%d: Expected %s, got %s", token.Line, token.Column, tokenType, token.Type)
 		return errors.New(message)
 	}
 	parser.NextToken()
 	return nil
 }
+
+func (parser *MShellParser) MatchWithMessage(token Token, tokenType TokenType, message string) error {
+	if token.Type != tokenType {
+		message := fmt.Sprintf("%d:%d: %s", token.Line, token.Column, message)
+		return errors.New(message)
+	}
+	parser.NextToken()
+	return nil
+}
+
 
 func (parser *MShellParser) ParseFile() (*MShellFile, error) {
 	file := &MShellFile{}
@@ -148,11 +176,17 @@ func (parser *MShellParser) ParseFile() (*MShellFile, error) {
 		case DEF:
 			_ = parser.Match(parser.curr, DEF)
 			if parser.curr.Type != LITERAL {
-				return file, errors.New(fmt.Sprintf("Expected LITERAL, got %s", parser.curr.Type))
+				return file, errors.New(fmt.Sprintf("Expected a name for the definition, got %s", parser.curr.Type))
 			}
 
-			def := MShellDefinition{Name: parser.curr.Lexeme, Items: []MShellParseItem{}}
+			def := MShellDefinition{Name: parser.curr.Lexeme, Items: []MShellParseItem{}, TypeDef: TypeDefinition{}}
 			_ = parser.Match(parser.curr, LITERAL)
+
+			typeDef, err := parser.ParseTypeDefinition()
+			if err != nil {
+				return file, err
+			}
+			def.TypeDef = *typeDef
 
 			for {
 				if parser.curr.Type == END {
@@ -184,6 +218,267 @@ func (parser *MShellParser) ParseFile() (*MShellFile, error) {
 	}
 	return file, nil
 }
+
+type MShellType interface {
+	ToJson() string
+}
+
+type TypeDefinition struct {
+	InputTypes []MShellType
+	OutputTypes []MShellType
+}
+
+func (def *TypeDefinition) ToJson() string {
+	return fmt.Sprintf("{\"input\": %s, \"output\": %s}", TypeListToJson(def.InputTypes), TypeListToJson(def.OutputTypes))
+}
+
+type TypeGeneric struct {
+	Name string
+}
+
+func (generic TypeGeneric) ToJson() string {
+	return fmt.Sprintf("{ \"generic\": \"%s\" }", generic.Name)
+}
+
+type TypeInt struct { }
+
+func (t TypeInt) ToJson() string {
+	return "\"int\""
+}
+
+type TypeFloat struct { }
+
+func (t TypeFloat) ToJson() string {
+	return "\"float\""
+}
+
+type TypeString struct { }
+
+func (t TypeString) ToJson() string {
+	return "\"string\""
+}
+
+type TypeBool struct { }
+
+func (t TypeBool) ToJson() string {
+	return "\"bool\""
+}
+
+type TypeList struct {
+	ListType MShellType
+}
+
+func (list *TypeList) ToJson() string {
+	return fmt.Sprintf("{\"list\": %s}", list.ListType.ToJson())
+}
+
+type TypeTuple struct {
+	Types []MShellType
+}
+
+func (tuple *TypeTuple) ToJson() string {
+	return fmt.Sprintf("{\"tuple\": %s}", TypeListToJson(tuple.Types))
+}
+
+type TypeQuote struct {
+	InputTypes []MShellType
+	OutputTypes []MShellType
+}
+
+func (quote *TypeQuote) ToJson() string {
+	return fmt.Sprintf("{\"input\": %s, \"output\": %s}", TypeListToJson(quote.InputTypes), TypeListToJson(quote.OutputTypes))
+}
+
+func (parser *MShellParser) ParseTypeDefinition() (*TypeDefinition, error) {
+	err := parser.MatchWithMessage(parser.curr, LEFT_PAREN, "Expected '(' to start type definition.")
+	if err != nil {
+		return nil, err
+	}
+
+	// Parse first type
+	inputTypes, err := parser.ParseTypeItems()
+	if err != nil {
+		return nil, err
+	}
+
+	err = parser.Match(parser.curr, DOUBLEDASH)
+	if err != nil {
+		return nil, err
+	}
+
+	outputTypes, err := parser.ParseTypeItems()
+	if err != nil {
+		return nil, err
+	}
+
+	err = parser.Match(parser.curr, RIGHT_PAREN)
+
+	typeDef := TypeDefinition{InputTypes: inputTypes, OutputTypes: outputTypes}
+	return &typeDef, nil
+}
+
+func (parser *MShellParser) ParseTypeItems() ([]MShellType, error) {
+	types := []MShellType{}
+
+	forLoop:
+	for {
+		switch parser.curr.Type {
+		case TYPEINT:
+			types = append(types, TypeInt{})
+			parser.NextToken()
+		case TYPEFLOAT:
+			types = append(types, TypeInt{})
+			parser.NextToken()
+		case STR:
+			types = append(types, TypeString{})
+			parser.NextToken()
+		case TYPEBOOL:
+			types = append(types, TypeBool{})
+			parser.NextToken()
+		case AMPERSAND:
+			// Parse tuple/heterogeneous list
+			typeTuple, err := parser.ParseTypeTuple()
+			if err != nil {
+				return nil, err
+			}
+			types = append(types, typeTuple)
+		case LEFT_SQUARE_BRACKET:
+			// Parse list
+			typeList, err := parser.ParseTypeList()
+			if err != nil {
+				return nil, err
+			}
+			types = append(types, typeList)
+		case LEFT_PAREN:
+			// Parse quote
+			typeQuote, err := parser.ParseTypeQuote()
+			if err != nil {
+				return nil, err
+			}
+			types = append(types, typeQuote)
+		case LITERAL:
+			// Parse generic
+			genericType := TypeGeneric{Name: parser.curr.Lexeme}
+			types = append(types, genericType)
+			parser.NextToken()
+		default:
+			break forLoop
+		}
+	}
+
+	return types, nil
+}
+
+func (parser *MShellParser) ParseTypeTuple() (*TypeTuple, error) {
+
+	err := parser.Match(parser.curr, AMPERSAND)
+	if err != nil {
+		return nil, err
+	}
+
+	err = parser.Match(parser.curr, LEFT_SQUARE_BRACKET)
+	if err != nil {
+		return nil, err
+	}
+
+	types := []MShellType{}
+	for parser.curr.Type != RIGHT_SQUARE_BRACKET {
+		// Parse type
+	}
+
+	parser.Match(parser.curr, RIGHT_SQUARE_BRACKET)
+	typeTuple := TypeTuple{Types: types}
+	return &typeTuple, nil
+}
+
+func (parser *MShellParser) ParseTypeQuote() (*TypeQuote, error) {
+	err := parser.Match(parser.curr, LEFT_PAREN)
+	if err != nil {
+		return nil, err
+	}
+
+	// Parse input types
+	inputTypes, err := parser.ParseTypeItems()
+	if err != nil {
+		return nil, err
+	}
+
+	err = parser.Match(parser.curr, DOUBLEDASH)
+
+	// Parse output types
+	outputTypes, err := parser.ParseTypeItems()
+	if err != nil {
+		return nil, err
+	}
+
+	err = parser.Match(parser.curr, RIGHT_PAREN)
+
+	typeQuote := TypeQuote{InputTypes: inputTypes, OutputTypes: outputTypes}
+	return &typeQuote, nil
+}
+
+func (parser *MShellParser) ParseTypeList() (*TypeList, error) {
+	err := parser.Match(parser.curr, LEFT_SQUARE_BRACKET)
+	if err != nil {
+		return nil, err
+	}
+
+	// Single type list
+	var listType MShellType
+
+	// Parse type
+	switch parser.curr.Type {
+	case TYPEINT:
+		listType = TypeInt{}
+		parser.NextToken()
+	case TYPEFLOAT:
+		listType = TypeInt{}
+		parser.NextToken()
+	case STR:
+		listType = TypeString{}
+		parser.NextToken()
+	case TYPEBOOL:
+		listType = TypeBool{}
+		parser.NextToken()
+	case AMPERSAND:
+		// Parse tuple/heterogeneous list
+		typeTuple, err := parser.ParseTypeTuple()
+		if err != nil {
+			return nil, err
+		}
+		listType = typeTuple
+	case LEFT_SQUARE_BRACKET:
+		// Parse list
+		typeList, err := parser.ParseTypeList()
+		if err != nil {
+			return nil, err
+		}
+		listType = typeList
+	case LEFT_PAREN:
+		// Parse quote
+		typeQuote, err := parser.ParseTypeQuote()
+		if err != nil {
+			return nil, err
+		}
+		listType = typeQuote
+	case LITERAL:
+		// Parse generic
+		genericType := TypeGeneric{Name: parser.curr.Lexeme}
+		listType = genericType
+		parser.NextToken()
+	default:
+		return nil, errors.New(fmt.Sprintf("Unexpected token %s while parsing type list", parser.curr.Type))
+	}
+
+	err = parser.Match(parser.curr, RIGHT_SQUARE_BRACKET)
+	if err != nil {
+		return nil, err
+	}
+
+	typeList := TypeList{ListType: listType}
+	return &typeList, nil
+}
+
 
 func (parser *MShellParser) ParseList() (*MShellParseList, error) {
 	list := &MShellParseList{}

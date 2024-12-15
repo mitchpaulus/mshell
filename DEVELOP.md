@@ -69,8 +69,8 @@ typeItem
 
 typeQuote : '(' type* -- type* ')' ;
 typeList : homogeneousList | heterogeneousList ;
-homogeneousList : '[' type '*' ']' ;
-heterogeneousList : '[' type+ ']' ;
+homogeneousList : '[' type  ']' ;
+heterogeneousList : '&' '[' type* ']' ;
 ```
 
 Key Types:
