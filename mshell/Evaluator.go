@@ -1324,8 +1324,15 @@ MainLoop:
 
 				breakDiff := 0
 
+				initialStackSize := len(*stack)
+
 				for loopCount < maxLoops {
 					result := state.Evaluate(quotation.Tokens, stack, loopContext, definitions)
+
+					if len(*stack) != initialStackSize {
+						// If the stack size changed, we have an error.
+						return FailWithMessage(fmt.Sprintf("%d:%d: Stack size changed from %d to %d in loop.\n", t.Line, t.Column, initialStackSize, len(*stack)))
+					}
 
 					if !result.Success {
 						return result

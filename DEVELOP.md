@@ -89,3 +89,4 @@ MShellObject
 
 [fish shell built in](https://github.com/fish-shell/fish-shell/tree/master/src/builtins)
 [Stroustrop's Rule](https://buttondown.com/hillelwayne/archive/stroustrops-rule/)
+[WebAssembly Type Checking](https://binji.github.io/posts/webassembly-type-checking/)

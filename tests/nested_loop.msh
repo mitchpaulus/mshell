@@ -1,6 +1,6 @@
 0 outer-inc!
 (
-    "Outer: " @outer-inc str wl
+    "Outer: " @outer-inc str + wl
     0 inner-inc!
     (
         " Inner: " w @inner-inc str wl
