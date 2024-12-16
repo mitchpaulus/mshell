@@ -1,3 +1,17 @@
+## Data Types
+
+### `str` String
+
+Double quoted strings have the following escape sequences:
+
+- `\n`: Newline
+- `\t`: Tab
+- `\r`: Carriage return
+- `\"`: Double quote
+- `\\`: Tab
+
+No escaping is done within single quoted strings.
+
 ## Built-ins
 
 - `.s`: Print stack at current location

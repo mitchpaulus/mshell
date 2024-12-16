@@ -886,7 +886,7 @@ MainLoop:
 				case *MShellList:
 					result, exitCode, stdout = RunProcess(*top.(*MShellList), context, state)
 				case *MShellPipe:
-					result, exitCode = state.RunPipeline(*top.(*MShellPipe), context, stack)
+					result, exitCode, stdout = state.RunPipeline(*top.(*MShellPipe), context, stack)
 				default:
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot execute a non-list object. Found %s %s\n", t.Line, t.Column, top.TypeName(), top.DebugString()))
 				}
@@ -1475,7 +1475,7 @@ MainLoop:
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot pipe a %s.\n", t.Line, t.Column, obj1.TypeName()))
 				}
 
-				stack.Push(&MShellPipe{*list})
+				stack.Push(&MShellPipe{*list, STDOUT_NONE})
 			} else if t.Type == READ {
 				var reader io.Reader
 				// Check if what we are reading from is seekable. If so, we can do a buffered read and reset the position.
@@ -1653,21 +1653,34 @@ MainLoop:
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot set stdout behavior to lines on an empty stack.\n", t.Line, t.Column))
 				}
 
-				list, ok := obj.(*MShellList)
-				if !ok {
-					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot set stdout behavior to lines on a %s.\n", t.Line, t.Column, obj.TypeName()))
-				}
-
-				if t.Type == STDOUTLINES {
-					list.StdoutBehavior = STDOUT_LINES
-				} else if t.Type == STDOUTSTRIPPED {
-					list.StdoutBehavior = STDOUT_STRIPPED
-				} else if t.Type == STDOUTCOMPLETE {
-					list.StdoutBehavior = STDOUT_COMPLETE
-				} else {
-					return FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Type))
-				}
-				stack.Push(list)
+                switch obj.(type) {
+                case *MShellList:
+                    list := obj.(*MShellList)
+                    if t.Type == STDOUTLINES {
+                        list.StdoutBehavior = STDOUT_LINES
+                    } else if t.Type == STDOUTSTRIPPED {
+                        list.StdoutBehavior = STDOUT_STRIPPED
+                    } else if t.Type == STDOUTCOMPLETE {
+                        list.StdoutBehavior = STDOUT_COMPLETE
+                    } else {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Type))
+                    }
+                    stack.Push(list)
+                case *MShellPipe:
+                    pipe := obj.(*MShellPipe)
+                    if t.Type == STDOUTLINES {
+                        pipe.StdoutBehavior = STDOUT_LINES
+                    } else if t.Type == STDOUTSTRIPPED {
+                        pipe.StdoutBehavior = STDOUT_STRIPPED
+                    } else if t.Type == STDOUTCOMPLETE {
+                        pipe.StdoutBehavior = STDOUT_COMPLETE
+                    } else {
+                        return FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Type))
+                    }
+                    stack.Push(pipe)
+                default:
+                    return FailWithMessage(fmt.Sprintf("%d:%d: Cannot set stdout behavior on a %s.\n", t.Line, t.Column, obj.TypeName()))
+                }
 			} else if t.Type == EXPORT {
 				obj, err := stack.Pop()
 				if err != nil {
@@ -1719,14 +1732,14 @@ MainLoop:
 }
 
 type Executable interface {
-	Execute(state *EvalState, context ExecuteContext, stack *MShellStack) (EvalResult, int)
+	Execute(state *EvalState, context ExecuteContext, stack *MShellStack) (EvalResult, int, string)
 	GetStandardInputFile() string
 	GetStandardOutputFile() string
 }
 
-func (list *MShellList) Execute(state *EvalState, context ExecuteContext, stack *MShellStack) (EvalResult, int) {
-	result, exitCode, _ := RunProcess(*list, context, state)
-	return result, exitCode
+func (list *MShellList) Execute(state *EvalState, context ExecuteContext, stack *MShellStack) (EvalResult, int, string) {
+	result, exitCode, stdoutResult := RunProcess(*list, context, state)
+	return result, exitCode, stdoutResult
 }
 
 func (quotation *MShellQuotation) Execute(state *EvalState, context ExecuteContext, stack *MShellStack, definitions []MShellDefinition) (EvalResult, int) {
@@ -1900,15 +1913,15 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 	}
 }
 
-func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContext, stack *MShellStack) (EvalResult, int) {
+func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContext, stack *MShellStack) (EvalResult, int, string) {
 	if len(MShellPipe.List.Items) == 0 {
-		return FailWithMessage("Cannot execute an empty pipe.\n"), 1
+		return FailWithMessage("Cannot execute an empty pipe.\n"), 1, ""
 	}
 
 	// Check that all list items are Executables
 	for i, item := range MShellPipe.List.Items {
 		if _, ok := item.(Executable); !ok {
-			return FailWithMessage(fmt.Sprintf("Item %d (%s) in pipe is not a list or a quotation.\n", i, item.DebugString())), 1
+			return FailWithMessage(fmt.Sprintf("Item %d (%s) in pipe is not a list or a quotation.\n", i, item.DebugString())), 1, ""
 		}
 	}
 
@@ -1928,12 +1941,13 @@ func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContex
 	for i := 0; i < len(MShellPipe.List.Items)-1; i++ {
 		pipeReader, pipeWriter, err := os.Pipe()
 		if err != nil {
-			return FailWithMessage(fmt.Sprintf("Error creating pipe: %s\n", err.Error())), 1
+			return FailWithMessage(fmt.Sprintf("Error creating pipe: %s\n", err.Error())), 1, ""
 		}
 		pipeReaders[i] = pipeReader
 		pipeWriters[i] = pipeWriter
 	}
 
+    var buf bytes.Buffer
 	for i := 0; i < len(MShellPipe.List.Items); i++ {
 		newContext := ExecuteContext{
 			StandardInput:  nil,
@@ -1948,7 +1962,7 @@ func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContex
 			if executableStdinFile != "" {
 				file, err := os.Open(executableStdinFile)
 				if err != nil {
-					return FailWithMessage(fmt.Sprintf("Error opening file %s for reading: %s\n", executableStdinFile, err.Error())), 1
+					return FailWithMessage(fmt.Sprintf("Error opening file %s for reading: %s\n", executableStdinFile, err.Error())), 1, ""
 				}
 				newContext.StandardInput = file
 				defer file.Close()
@@ -1961,9 +1975,14 @@ func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContex
 
 			newContext.StandardOutput = pipeWriters[0]
 		} else if i == len(MShellPipe.List.Items)-1 {
+            newContext.StandardInput = pipeReaders[len(pipeReaders)-1]
+
 			// Stdout should use the context of this function
-			newContext.StandardInput = pipeReaders[len(pipeReaders)-1]
-			newContext.StandardOutput = context.StandardOutput
+            if MShellPipe.StdoutBehavior != STDOUT_NONE {
+                newContext.StandardOutput = &buf
+            } else {
+                newContext.StandardOutput = context.StandardOutput
+            }
 		} else {
 			newContext.StandardInput = pipeReaders[i-1]
 			newContext.StandardOutput = pipeWriters[i]
@@ -1982,7 +2001,7 @@ func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContex
 		go func(i int, item Executable) {
 			defer wg.Done()
 			// fmt.Fprintf(os.Stderr, "Running item %d\n", i)
-			results[i], exitCodes[i] = item.Execute(state, contexts[i], stack)
+			results[i], exitCodes[i], _ = item.Execute(state, contexts[i], stack)
 
 			// Close pipe ends that are no longer needed
 			if i > 0 {
@@ -2000,10 +2019,19 @@ func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContex
 	// Check for errors
 	for i, result := range results {
 		if !result.Success {
-			return result, exitCodes[i]
+
+            if MShellPipe.StdoutBehavior == STDOUT_NONE {
+                return result, exitCodes[i], ""
+            } else {
+                return result, exitCodes[i], buf.String()
+            }
 		}
 	}
 
-	// Return the exit code of the last item
-	return SimpleSuccess(), exitCodes[len(exitCodes)-1]
+    if MShellPipe.StdoutBehavior == STDOUT_NONE {
+        // Return the exit code of the last item
+        return SimpleSuccess(), exitCodes[len(exitCodes)-1], ""
+    } else {
+        return SimpleSuccess(), exitCodes[len(exitCodes)-1], buf.String()
+    }
 }

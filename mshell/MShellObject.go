@@ -78,6 +78,7 @@ type MShellString struct {
 
 type MShellPipe struct {
 	List MShellList
+    StdoutBehavior StdoutBehavior
 }
 
 type MShellInt struct {
