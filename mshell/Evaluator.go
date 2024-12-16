@@ -1192,6 +1192,8 @@ MainLoop:
 								obj2.(*MShellQuotation).StandardInputFile = obj1.(*MShellString).Content
 							}
 							stack.Push(obj2)
+                        case *MShellPipe:
+                            return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a string (%s) to a Pipe (%s). Add the redirection to the final item in the pipeline.\n", t.Line, t.Column, obj1.DebugString(), obj2.DebugString()))
 						default:
 							return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a string (%s) to a %s (%s).\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
 						}
