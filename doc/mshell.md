@@ -15,6 +15,7 @@ No escaping is done within single quoted strings.
 ## Built-ins
 
 - `.s`: Print stack at current location
+- `.def`: Print available definitions at current location
 - `dup`: Duplicate
 - `swap`: Swap
 - `drop`: Drop
@@ -45,6 +46,11 @@ No escaping is done within single quoted strings.
 ## Math Functions
 
 - `abs`: Absolute value `(numeric -- numeric)`
+- `max2`: Maximum of two numbers `(numeric numeric -- numeric)`
+- `max`: Maximum of list of numbers `([numeric] -- numeric)`
+- `transpose`: Transpose list of lists `([[a]] -- [[a]])`
+- `min2`: Minimum of two numbers `(numeric numeric -- numeric)`
+- `min`: Minimum of list of numbers `([numeric] -- numeric)`
 
 ### String Functions
 
