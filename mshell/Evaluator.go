@@ -900,22 +900,27 @@ MainLoop:
 					return result
 				}
 
-				asList, ok := top.(*MShellList)
-				if ok {
-					if asList.StdoutBehavior == STDOUT_LINES {
-						newMShellList := &MShellList{Items: []MShellObject{}, StandardInputFile: "", StandardOutputFile: "", StdoutBehavior: STDOUT_NONE}
-						var scanner *bufio.Scanner
-						scanner = bufio.NewScanner(strings.NewReader(stdout))
-						for scanner.Scan() {
-							newMShellList.Items = append(newMShellList.Items, &MShellString{scanner.Text()})
-						}
-						stack.Push(newMShellList)
-					} else if asList.StdoutBehavior == STDOUT_STRIPPED {
-						stripped := strings.TrimSpace(stdout)
-						stack.Push(&MShellString{stripped})
-					} else if asList.StdoutBehavior == STDOUT_COMPLETE {
-						stack.Push(&MShellString{stdout})
+				var stdoutBehavior StdoutBehavior
+				switch top.(type) {
+				case *MShellList:
+					stdoutBehavior = top.(*MShellList).StdoutBehavior
+				case *MShellPipe:
+					stdoutBehavior = top.(*MShellPipe).StdoutBehavior
+				}
+
+				if stdoutBehavior == STDOUT_LINES {
+					newMShellList := &MShellList{Items: []MShellObject{}, StandardInputFile: "", StandardOutputFile: "", StdoutBehavior: STDOUT_NONE}
+					var scanner *bufio.Scanner
+					scanner = bufio.NewScanner(strings.NewReader(stdout))
+					for scanner.Scan() {
+						newMShellList.Items = append(newMShellList.Items, &MShellString{scanner.Text()})
 					}
+					stack.Push(newMShellList)
+				} else if stdoutBehavior == STDOUT_STRIPPED {
+					stripped := strings.TrimSpace(stdout)
+					stack.Push(&MShellString{stripped})
+				} else if stdoutBehavior == STDOUT_COMPLETE {
+					stack.Push(&MShellString{stdout})
 				}
 
 				// Push the exit code onto the stack if a question was used to execute
@@ -1477,7 +1482,7 @@ MainLoop:
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot pipe a %s.\n", t.Line, t.Column, obj1.TypeName()))
 				}
 
-				stack.Push(&MShellPipe{*list, STDOUT_NONE})
+				stack.Push(&MShellPipe{*list, list.StdoutBehavior})
 			} else if t.Type == READ {
 				var reader io.Reader
 				// Check if what we are reading from is seekable. If so, we can do a buffered read and reset the position.
