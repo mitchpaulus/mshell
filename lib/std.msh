@@ -48,7 +48,7 @@ def filter ([T] (T -- bool) -- [T])
         over @filter-idx nth # Get current item
         dup rot # Get to item item quote
         x # Execute quote
-        [() (@filter-accum append filter-accum!) (drop)] if
+        [() (@filter-accum swap append filter-accum!) (drop)] if
         drop @filter-idx 1 + filter-idx! # inc index
     ) loop
 

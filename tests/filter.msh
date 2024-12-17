@@ -1,1 +1,4 @@
 [1 2 3 4 5] (3 >) filter (str) map ", " join wl
+
+# Test filtering list of lists, this caught a bug with the order of the internal append in filter
+[[1 2] [] [3 4 5]] (len 1 >) filter ((str) map ", " join) map uw
