@@ -161,7 +161,7 @@ func (parser *MShellParser) MatchWithMessage(token Token, tokenType TokenType, m
 func (parser *MShellParser) ParseFile() (*MShellFile, error) {
 	file := &MShellFile{}
 
-	for parser.curr.Type != EOF && parser.curr.Type != END {
+	for parser.curr.Type != EOF  {
 		switch parser.curr.Type {
 		case RIGHT_SQUARE_BRACKET, RIGHT_PAREN:
 			message := fmt.Sprintf("Unexpected token %s while parsing file", parser.curr.Type)

@@ -56,6 +56,7 @@ type EvalResult struct {
 	Success  bool
 	BreakNum int
 	ExitCode int
+	ExitCalled bool
 }
 
 type ExecuteContext struct {
@@ -65,13 +66,13 @@ type ExecuteContext struct {
 }
 
 func SimpleSuccess() EvalResult {
-	return EvalResult{true, -1, 0}
+	return EvalResult{true, -1, 0, false}
 }
 
 func FailWithMessage(message string) EvalResult {
 	// Log message to stderr
 	fmt.Fprintf(os.Stderr, message)
-	return EvalResult{false, -1, 1}
+	return EvalResult{false, -1, 1, false}
 }
 
 func (state *EvalState) Evaluate(objects []MShellParseItem, stack *MShellStack, context ExecuteContext, definitions []MShellDefinition) EvalResult {
@@ -93,6 +94,10 @@ MainLoop:
 
 			if !result.Success {
 				fmt.Fprintf(os.Stderr, "Failed to evaluate list.\n")
+				return result
+			}
+
+			if result.ExitCalled {
 				return result
 			}
 
@@ -123,9 +128,10 @@ MainLoop:
 						newContext.StandardOutput = context.StandardOutput
 
 						result := state.Evaluate(definition.Items, stack, newContext, definitions)
-						if !result.Success || result.BreakNum > 0 {
+						if !result.Success || result.BreakNum > 0  || result.ExitCalled {
 							return result
 						}
+
 						continue MainLoop
 					}
 				}
@@ -133,6 +139,12 @@ MainLoop:
 				if t.Lexeme == ".s" {
 					// Print current stack
 					fmt.Fprintf(os.Stderr, stack.String())
+				} else if t.Lexeme == ".def" {
+					// Print out available definitions
+					fmt.Fprintf(os.Stderr, "Available definitions:\n")
+					for _, definition := range definitions {
+						fmt.Fprintf(os.Stderr, "%s\n", definition.Name)
+					}
 				} else if t.Lexeme == "dup" {
 					top, err := stack.Peek()
 					if err != nil {
@@ -795,9 +807,9 @@ MainLoop:
 					}
 
 					if exitInt.Value == 0 {
-						return EvalResult{true, -1, 0}
+						return EvalResult{true, -1, 0, true}
 					} else {
-						return EvalResult{false, -1, exitInt.Value}
+						return EvalResult{false, -1, exitInt.Value, true}
 					}
 				} else if t.Lexeme == "*" {
 					obj1, err := stack.Pop()
@@ -893,7 +905,7 @@ MainLoop:
 
 				if state.StopOnError && exitCode != 0 {
 					// Exit completely, with that exit code, don't need to print a different message. Usually the command itself will have printed an error.
-					return EvalResult{false, -1, exitCode}
+					return EvalResult{false, -1, exitCode, false}
 				}
 
 				if !result.Success {
@@ -975,7 +987,7 @@ MainLoop:
 					quotation := list.Items[i].(*MShellQuotation)
 					result := state.Evaluate(quotation.Tokens, stack, context, definitions)
 
-					if !result.Success {
+					if !result.Success || result.ExitCalled {
 						return result
 					}
 
@@ -1011,14 +1023,14 @@ MainLoop:
 					result := state.Evaluate(quotation.Tokens, stack, context, definitions)
 
 					// If we encounter a break, we should return it up the stack
-					if !result.Success || result.BreakNum != -1 {
+					if !result.Success || result.BreakNum != -1 || result.ExitCalled {
 						return result
 					}
 				} else if len(list.Items)%2 == 1 { // Try to find a final else statement, will be the last item in the list if odd number of items
 					quotation := list.Items[len(list.Items)-1].(*MShellQuotation)
 					result := state.Evaluate(quotation.Tokens, stack, context, definitions)
 
-					if !result.Success || result.BreakNum != -1 {
+					if !result.Success || result.BreakNum != -1 || result.ExitCalled {
 						return result
 					}
 				}
@@ -1341,7 +1353,7 @@ MainLoop:
 						return FailWithMessage(fmt.Sprintf("%d:%d: Stack size changed from %d to %d in loop.\n", t.Line, t.Column, initialStackSize, len(*stack)))
 					}
 
-					if !result.Success {
+					if !result.Success || result.ExitCalled {
 						return result
 					}
 
@@ -1364,10 +1376,10 @@ MainLoop:
 				// If we are breaking out of an inner loop to an outer loop (breakDiff - 1 > 0), then we need to return an go up the call stack.
 				// Else just continue on with tokens after the loop.
 				if breakDiff-1 > 0 {
-					return EvalResult{true, breakDiff - 1, 0}
+					return EvalResult{true, breakDiff - 1, 0, false}
 				}
 			} else if t.Type == BREAK {
-				return EvalResult{true, 1, 0}
+				return EvalResult{true, 1, 0, false}
 			} else if t.Type == EQUALS {
 				obj1, err := stack.Pop()
 				if err != nil {
@@ -1443,11 +1455,7 @@ MainLoop:
 				quoteContext.Variables = quotation.Variables
 
 				result := state.Evaluate(quotation.Tokens, stack, quoteContext, definitions)
-				if !result.Success {
-					return result
-				}
-
-				if result.BreakNum > 0 {
+				if !result.Success || result.ExitCalled || result.BreakNum > 0 {
 					return result
 				}
 			} else if t.Type == POSITIONAL {
@@ -1735,7 +1743,7 @@ MainLoop:
 
 	}
 
-	return EvalResult{true, -1, 0}
+	return EvalResult{true, -1, 0, false}
 }
 
 type Executable interface {
@@ -1785,8 +1793,8 @@ func (quotation *MShellQuotation) Execute(state *EvalState, context ExecuteConte
 	}
 
 	result := state.Evaluate(quotation.Tokens, stack, quotationContext, definitions)
-	if !result.Success {
-		return result, 1
+	if !result.Success || result.ExitCalled {
+		return result, result.ExitCode
 	} else {
 		return SimpleSuccess(), 0
 	}

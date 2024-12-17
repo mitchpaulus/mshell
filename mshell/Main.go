@@ -162,6 +162,10 @@ func main() {
 	result := state.Evaluate(file.Items, &stack, context, allDefinitions)
 
 	if !result.Success {
-		os.Exit(1)
+		if result.ExitCode != 0 {
+			os.Exit(result.ExitCode)
+		} else {
+			os.Exit(1)
+		}
 	}
 }
