@@ -53,7 +53,7 @@ type TypeCheckContext struct {
 	InQuote bool
 }
 
-func TypeCheck(objects []MShellParseItem, stack *MShellTypeStack, definitions []MShellDefinition, inQuote bool) TypeCheckResult {
+func TypeCheck(objects []MShellParseItem, stack MShellTypeStack, definitions []MShellDefinition, inQuote bool) TypeCheckResult {
 	// Short circuit if there are no objects to type check
 	if len(objects) == 0 {
 		return TypeCheckResult{
@@ -85,14 +85,13 @@ MainLoop:
 			var listStack MShellTypeStack
 			listStack = []MShellType{}
 
-			result := TypeCheck(list.Items, &listStack, definitions, false)
+			result := TypeCheck(list.Items, listStack, definitions, false)
 
 			// if result.BreakNum > 0 {
 				// return FailWithMessage("Encountered break within list.\n")
 			// }
 
 			// stack.Push(&MShellList{Items: listStack, StandardInputFile: "", StandardOutputFile: "", StdoutBehavior: STDOUT_NONE})
-
 			typeCheckResult.Errors = append(typeCheckResult.Errors, result.Errors...)
 
 			typeTuple := TypeTuple{
@@ -111,7 +110,7 @@ MainLoop:
 			var quoteStack MShellTypeStack
 			quoteStack = []MShellType{}
 
-			quoteResult := TypeCheck(quote.Items, &quoteStack, definitions, true)
+			quoteResult := TypeCheck(quote.Items, quoteStack, definitions, true)
 
 			typeQuote.InputTypes = quoteResult.InputTypes
 			typeQuote.OutputTypes = quoteResult.OutputTypes
@@ -177,8 +176,84 @@ MainLoop:
 				stack.Push(TypeInt{})
 			} else if t.Type == STRING || t.Type == SINGLEQUOTESTRING {
 				stack.Push(TypeString{})
-			}
+			} else if t.Type == IF {
+				obj, err := stack.Pop()
+				if err != nil {
+					typeCheckResult.Errors = append(typeCheckResult.Errors, TypeCheckError{Token: t, Message: "Expected a list on the stack, but found none.\n"})
+					continue MainLoop
+				}
 
+				// Check the type of the object
+				switch obj.(type) {
+				case *TypeTuple:
+					tuple := obj.(*TypeTuple)
+					// Check that all elements are of type quote
+					for idx, obj := range tuple.Types {
+						if _, ok := obj.(*TypeQuote); !ok {
+							typeCheckResult.Errors = append(typeCheckResult.Errors, TypeCheckError{Token: t, Message: fmt.Sprintf("Expected a quote at index %d, but found %s.\n", idx, obj.String())})
+							continue MainLoop
+						}
+					}
+
+					for i := 0; i < len(tuple.Types) - 1; i += 2 {
+						// Check that the final element is a boolean
+						outputTypes = tuple.Types[i].(*TypeQuote).OutputTypes
+
+						if len(outputTypes) == 0 {
+							typeCheckResult.Errors = append(typeCheckResult.Errors, TypeCheckError{Token: t, Message: "Expected a quote to have an output with a boolean on the top of the stack, but found no outputs.\n"})
+							continue MainLoop
+						}
+
+						if _, ok := outputTypes[len(outputTypes) - 1].(*TypeBool); !ok {
+							badType := outputTypes[len(outputTypes) - 1].String()
+							typeCheckResult.Errors = append(typeCheckResult.Errors, TypeCheckError{Token: t, Message: fmt.Sprintf("Expected a quote to have an output with a boolean on the top of the stack, but found a %s.\n", badType)})
+							continue MainLoop
+						}
+
+						// If the condition takes anything off the stack, it needs to match the current stack, and it needs to put it back.
+						inputTypes := tuple.Types[i].(*TypeQuote).InputTypes
+						outputTypes := tuple.Types[i].(*TypeQuote).OutputTypes
+
+						if len(inputTypes) > stack.Len() {
+							typeCheckResult.Errors = append(typeCheckResult.Errors, TypeCheckError{Token: t, Message: fmt.Sprintf("Quote for condition takes %d arguments, but only %d items are on the stack.\n", len(inputTypes), stack.Len())})
+							continue MainLoop
+						}
+
+						for i := 0; i < len(inputTypes); i++ {
+							stackIndex := len(stack) - len(inputTypes) + i
+							stackType := stack[stackIndex]
+							if !stackType.Equals(inputTypes[i]) {
+								typeCheckResult.Errors = append(typeCheckResult.Errors, TypeCheckError{Token: t, Message: fmt.Sprintf("Expected type %s at stack index %d, but found type %s.\n", inputTypes[i].String(), stackIndex, stackType.String())})
+								continue MainLoop
+							}
+
+							if !inputTypes[i].Equals(outputTypes[i]) {
+								typeCheckResult.Errors = append(typeCheckResult.Errors, TypeCheckError{Token: t, Message: fmt.Sprintf("Expected input/output types at index %d to match for quote, but found input type %s and output type %s.\n", i, inputTypes[i].String(), outputTypes[i].String())})
+								continue MainLoop
+							}
+						}
+
+						// Check that the input and output types match, except for the boolean
+					}
+				case *TypeList:
+					list := obj.(*TypeList)
+
+					if _, ok := list.ListType.(*TypeQuote); !ok {
+						typeCheckResult.Errors = append(typeCheckResult.Errors, TypeCheckError{Token: t, Message: fmt.Sprintf("Expected a list of quotes, but found a list of %s.\n", list.ListType.String())})
+					} else {
+						// Check that we have a known number of quotes
+						if list.Count < 0 {
+							typeCheckResult.Errors = append(typeCheckResult.Errors, TypeCheckError{Token: t, Message: "Can not type check an unbounded list.\n"})
+						}
+					}
+				default:
+					typeCheckResult.Errors = append(typeCheckResult.Errors, TypeCheckError{Token: t, Message: fmt.Sprintf("Expected a list on the stack, but found %s.\n", obj.String())})
+				}
+
+				// The the types of the quotes for the conditions:
+				// They should all be of the same type, and if they consume anything on the stack, they should put it back.
+				// The top of the stack should be a boolean.
+			}
 		}
 	}
 

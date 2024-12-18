@@ -316,6 +316,7 @@ func (t TypeBool) String() string {
 
 type TypeList struct {
 	ListType MShellType
+	Count int // This is < 0 if the Count is not known
 }
 
 func (list *TypeList) ToJson() string {
