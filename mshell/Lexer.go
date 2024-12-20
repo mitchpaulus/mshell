@@ -197,6 +197,14 @@ func (t Token) DebugString() string {
 	return fmt.Sprintf("'%s'", t.Lexeme)
 }
 
+func (t Token) GetStartToken() Token {
+	return t
+}
+
+func (t Token) GetEndToken() Token {
+	return t
+}
+
 type Lexer struct {
 	start   int
 	current int

@@ -120,6 +120,9 @@ func main() {
 
 	var allDefinitions []MShellDefinition
 
+	var callStack CallStack
+	callStack = make([]CallStackItem, 10)
+
 	// Check for environment variable MSHSTDLIB and load that file. Read as UTF-8
 	stdlibPath, stdlibSet := os.LookupEnv("MSHSTDLIB")
 	if stdlibSet {
@@ -140,7 +143,7 @@ func main() {
 		}
 
 		allDefinitions = append(allDefinitions, stdlibFile.Definitions...)
-		result := state.Evaluate(stdlibFile.Items, &stack, context, allDefinitions)
+		result := state.Evaluate(stdlibFile.Items, &stack, context, allDefinitions, callStack)
 
 		if !result.Success {
 			fmt.Fprintf(os.Stderr, "Error evaluating MSHSTDLIB file %s.\n", stdlibPath)
@@ -159,7 +162,7 @@ func main() {
 	}
 
 	allDefinitions = append(allDefinitions, file.Definitions...)
-	result := state.Evaluate(file.Items, &stack, context, allDefinitions)
+	result := state.Evaluate(file.Items, &stack, context, allDefinitions, callStack)
 
 	if !result.Success {
 		if result.ExitCode != 0 {

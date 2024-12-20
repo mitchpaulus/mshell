@@ -12,6 +12,8 @@ type JsonableList []Jsonable
 type MShellParseItem interface {
 	ToJson() string
 	DebugString() string
+	GetStartToken() Token
+	GetEndToken() Token
 }
 
 type MShellFile struct {
@@ -21,6 +23,16 @@ type MShellFile struct {
 
 type MShellParseList struct {
 	Items []MShellParseItem
+	StartToken Token
+	EndToken Token
+}
+
+func (list *MShellParseList) GetStartToken() Token {
+	return list.StartToken
+}
+
+func (list *MShellParseList) GetEndToken() Token {
+	return list.EndToken
 }
 
 func (list *MShellParseList) ToJson() string {
@@ -43,6 +55,16 @@ func (list *MShellParseList) DebugString() string {
 
 type MShellParseQuote struct {
 	Items []MShellParseItem
+	StartToken Token
+	EndToken Token
+}
+
+func (quote *MShellParseQuote) GetStartToken() Token {
+	return quote.StartToken
+}
+
+func (quote *MShellParseQuote) GetEndToken() Token {
+	return quote.EndToken
 }
 
 func (quote *MShellParseQuote) ToJson() string {
@@ -643,6 +665,7 @@ func (parser *MShellParser) ParseTypeList() (*TypeList, error) {
 
 func (parser *MShellParser) ParseList() (*MShellParseList, error) {
 	list := &MShellParseList{}
+	list.StartToken = parser.curr
 	err := parser.Match(parser.curr, LEFT_SQUARE_BRACKET)
 	if err != nil {
 		return list, err
@@ -654,6 +677,7 @@ func (parser *MShellParser) ParseList() (*MShellParseList, error) {
 		}
 		list.Items = append(list.Items, item)
 	}
+	list.EndToken = parser.curr
 	err = parser.Match(parser.curr, RIGHT_SQUARE_BRACKET)
 	if err != nil {
 		return list, err
@@ -679,11 +703,12 @@ func (parser *MShellParser) ParseSimple() Token {
 }
 
 func (parser *MShellParser) ParseQuote() (*MShellParseQuote, error) {
-	quote := &MShellParseQuote{}
+	quote := &MShellParseQuote{ StartToken: parser.curr }
 	err := parser.Match(parser.curr, LEFT_PAREN)
 	if err != nil {
 		return quote, err
 	}
+
 	for parser.curr.Type != RIGHT_PAREN {
 		item, err := parser.ParseItem()
 		if err != nil {
@@ -691,7 +716,9 @@ func (parser *MShellParser) ParseQuote() (*MShellParseQuote, error) {
 		}
 		quote.Items = append(quote.Items, item)
 	}
+	quote.EndToken = parser.curr
 	err = parser.Match(parser.curr, RIGHT_PAREN)
+
 	if err != nil {
 		return quote, err
 	}

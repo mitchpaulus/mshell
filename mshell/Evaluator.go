@@ -75,7 +75,37 @@ func FailWithMessage(message string) EvalResult {
 	return EvalResult{false, -1, 1, false}
 }
 
-func (state *EvalState) Evaluate(objects []MShellParseItem, stack *MShellStack, context ExecuteContext, definitions []MShellDefinition) EvalResult {
+type CallStackType int
+
+const (
+	CALLSTACKFILE CallStackType = iota
+	CALLSTACKLIST
+	CALLSTACKQUOTE
+	CALLSTACKDEF
+)
+
+type CallStackItem struct {
+	MShellParseItem MShellParseItem
+	Name      string
+	CallStackType    CallStackType
+}
+
+type CallStack []CallStackItem
+
+func (stack *CallStack) Push(item CallStackItem) {
+	*stack = append(*stack, item)
+}
+
+func (stack *CallStack) Pop() (CallStackItem, error) {
+	if len(*stack) == 0 {
+		return CallStackItem{}, fmt.Errorf("Empty stack")
+	}
+	popped := (*stack)[len(*stack)-1]
+	*stack = (*stack)[:len(*stack)-1]
+	return popped, nil
+}
+
+func (state *EvalState) Evaluate(objects []MShellParseItem, stack *MShellStack, context ExecuteContext, definitions []MShellDefinition, callStack CallStack) EvalResult {
 	index := 0
 
 MainLoop:
@@ -90,7 +120,10 @@ MainLoop:
 			var listStack MShellStack
 			listStack = []MShellObject{}
 
-			result := state.Evaluate(list.Items, &listStack, context, definitions)
+			callStackItem := CallStackItem{MShellParseItem: list, Name: "list", CallStackType: CALLSTACKLIST}
+			callStack.Push(callStackItem)
+			result := state.Evaluate(list.Items, &listStack, context, definitions, callStack)
+			callStack.Pop()
 
 			if !result.Success {
 				fmt.Fprintf(os.Stderr, "Failed to evaluate list.\n")
@@ -108,7 +141,7 @@ MainLoop:
 			stack.Push(&MShellList{Items: listStack, StandardInputFile: "", StandardOutputFile: "", StdoutBehavior: STDOUT_NONE})
 		case *MShellParseQuote:
 			parseQuote := t.(*MShellParseQuote)
-			q := MShellQuotation{Tokens: parseQuote.Items, StandardInputFile: "", StandardOutputFile: "", StandardErrorFile: "", Variables: context.Variables}
+			q := MShellQuotation{Tokens: parseQuote.Items, StandardInputFile: "", StandardOutputFile: "", StandardErrorFile: "", Variables: context.Variables, MShellParseQuote: parseQuote}
 			stack.Push(&q)
 		case Token:
 			t := t.(Token)
@@ -127,7 +160,11 @@ MainLoop:
 						newContext.StandardInput = context.StandardInput
 						newContext.StandardOutput = context.StandardOutput
 
-						result := state.Evaluate(definition.Items, stack, newContext, definitions)
+						callStackItem := CallStackItem{MShellParseItem: t, Name: definition.Name, CallStackType: CALLSTACKDEF}
+						callStack.Push(callStackItem)
+						result := state.Evaluate(definition.Items, stack, newContext, definitions, callStack)
+						callStack.Pop()
+
 						if !result.Success || result.BreakNum > 0  || result.ExitCalled {
 							return result
 						}
@@ -985,7 +1022,10 @@ MainLoop:
 			ListLoop:
 				for i := 0; i < len(list.Items)-1; i += 2 {
 					quotation := list.Items[i].(*MShellQuotation)
-					result := state.Evaluate(quotation.Tokens, stack, context, definitions)
+
+					callStack.Push(CallStackItem{quotation, "quote", CALLSTACKQUOTE } )
+					result := state.Evaluate(quotation.Tokens, stack, context, definitions, callStack)
+					callStack.Pop()
 
 					if !result.Success || result.ExitCalled {
 						return result
@@ -1020,7 +1060,10 @@ MainLoop:
 
 				if trueIndex > -1 {
 					quotation := list.Items[trueIndex+1].(*MShellQuotation)
-					result := state.Evaluate(quotation.Tokens, stack, context, definitions)
+
+					callStack.Push(CallStackItem{quotation, "quote", CALLSTACKQUOTE } )
+					result := state.Evaluate(quotation.Tokens, stack, context, definitions, callStack)
+					callStack.Pop()
 
 					// If we encounter a break, we should return it up the stack
 					if !result.Success || result.BreakNum != -1 || result.ExitCalled {
@@ -1028,7 +1071,10 @@ MainLoop:
 					}
 				} else if len(list.Items)%2 == 1 { // Try to find a final else statement, will be the last item in the list if odd number of items
 					quotation := list.Items[len(list.Items)-1].(*MShellQuotation)
-					result := state.Evaluate(quotation.Tokens, stack, context, definitions)
+
+					callStack.Push(CallStackItem{quotation, "quote", CALLSTACKQUOTE } )
+					result := state.Evaluate(quotation.Tokens, stack, context, definitions, callStack)
+					callStack.Pop()
 
 					if !result.Success || result.BreakNum != -1 || result.ExitCalled {
 						return result
@@ -1346,7 +1392,9 @@ MainLoop:
 				initialStackSize := len(*stack)
 
 				for loopCount < maxLoops {
-					result := state.Evaluate(quotation.Tokens, stack, loopContext, definitions)
+					callStack.Push(CallStackItem{quotation, "quote", CALLSTACKQUOTE } )
+					result := state.Evaluate(quotation.Tokens, stack, loopContext, definitions, callStack)
+					callStack.Pop()
 
 					if len(*stack) != initialStackSize {
 						// If the stack size changed, we have an error.
@@ -1454,7 +1502,10 @@ MainLoop:
 				}
 				quoteContext.Variables = quotation.Variables
 
-				result := state.Evaluate(quotation.Tokens, stack, quoteContext, definitions)
+				callStack.Push(CallStackItem{quotation, "quote", CALLSTACKQUOTE } )
+				result := state.Evaluate(quotation.Tokens, stack, quoteContext, definitions, callStack)
+				callStack.Pop()
+
 				if !result.Success || result.ExitCalled || result.BreakNum > 0 {
 					return result
 				}
@@ -1757,7 +1808,7 @@ func (list *MShellList) Execute(state *EvalState, context ExecuteContext, stack 
 	return result, exitCode, stdoutResult
 }
 
-func (quotation *MShellQuotation) Execute(state *EvalState, context ExecuteContext, stack *MShellStack, definitions []MShellDefinition) (EvalResult, int) {
+func (quotation *MShellQuotation) Execute(state *EvalState, context ExecuteContext, stack *MShellStack, definitions []MShellDefinition, callStack CallStack) (EvalResult, int) {
 	quotationContext := ExecuteContext{
 		StandardInput:  nil,
 		StandardOutput: nil,
@@ -1792,7 +1843,10 @@ func (quotation *MShellQuotation) Execute(state *EvalState, context ExecuteConte
 		quotationContext.StandardOutput = os.Stdout
 	}
 
-	result := state.Evaluate(quotation.Tokens, stack, quotationContext, definitions)
+	callStack.Push(CallStackItem{quotation, "quote", CALLSTACKQUOTE } )
+	result := state.Evaluate(quotation.Tokens, stack, quotationContext, definitions, callStack)
+	callStack.Pop()
+
 	if !result.Success || result.ExitCalled {
 		return result, result.ExitCode
 	} else {

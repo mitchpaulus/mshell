@@ -40,11 +40,20 @@ type MShellBool struct {
 }
 
 type MShellQuotation struct {
+	MShellParseQuote   *MShellParseQuote
 	Tokens             []MShellParseItem
 	StandardInputFile  string
 	StandardOutputFile string
 	StandardErrorFile  string
 	Variables          map[string]MShellObject
+}
+
+func (q *MShellQuotation) GetStartToken() Token {
+	return q.MShellParseQuote.StartToken
+}
+
+func (q *MShellQuotation) GetEndToken() Token {
+	return q.MShellParseQuote.EndToken
 }
 
 // type MShellQuotation2 struct {
