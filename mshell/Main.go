@@ -9,6 +9,15 @@ import (
 	// "runtime"
 )
 
+type CliCommand int
+
+const (
+	CLILEX CliCommand = iota
+	CLIPARSE
+	CLITYPECHECK
+	CLIEXECUTE
+)
+
 func main() {
 	// Enable profiling
 	// runtime.SetCPUProfileRate(1000)
@@ -32,8 +41,11 @@ func main() {
 	// trace.Start(f)
 	// defer trace.Stop()
 
-	printLex := false
-	printParse := false
+	command := CLIEXECUTE
+
+	// printLex := false
+	// printParse := false
+
 	i := 1
 
 	input := ""
@@ -44,9 +56,13 @@ func main() {
 		arg := os.Args[i]
 		i++
 		if arg == "--lex" {
-			printLex = true
+			command = CLILEX
+			// printLex = true
+		} else if arg == "--typecheck" {
+			command = CLITYPECHECK
 		} else if arg == "--parse" {
-			printParse = true
+			command = CLIPARSE
+			// printParse = true
 		} else if arg == "-h" || arg == "--help" {
 			fmt.Println("Usage: mshell [options] INPUT")
 			fmt.Println("Usage: mshell [options] < INPUT")
@@ -83,7 +99,7 @@ func main() {
 
 	l := NewLexer(input)
 
-	if printLex {
+	if command == CLILEX {
 		tokens := l.Tokenize()
 		fmt.Println("Tokens:")
 		for _, t := range tokens {
@@ -91,7 +107,7 @@ func main() {
 			fmt.Printf("%d:%d:%s %s\n", t.Line, t.Column, t.Type, t.Lexeme)
 		}
 		return
-	} else if printParse {
+	} else if command == CLIPARSE {
 		p := MShellParser{lexer: l}
 		p.NextToken()
 		file, err := p.ParseFile()
@@ -103,7 +119,7 @@ func main() {
 
 		fmt.Println(file.ToJson())
 		return
-	}
+	} 
 
 	state := EvalState{
 		PositionalArgs: positionalArgs,
@@ -162,6 +178,23 @@ func main() {
 	}
 
 	allDefinitions = append(allDefinitions, file.Definitions...)
+
+	if command == CLITYPECHECK {
+		var typeStack MShellTypeStack
+		typeStack = make([]MShellType, 0)
+		typeCheckResult := TypeCheck(file.Items, typeStack, allDefinitions, false)
+
+		for _, typeError := range typeCheckResult.Errors {
+			fmt.Fprintf(os.Stderr, "%s", typeError)
+		}
+
+		if len(typeCheckResult.Errors) > 0 {
+			os.Exit(1)
+		} else {
+			os.Exit(0)
+		}
+	} 
+
 	result := state.Evaluate(file.Items, &stack, context, allDefinitions, callStack)
 
 	if !result.Success {

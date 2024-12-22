@@ -2,11 +2,31 @@ package main
 
 import (
 	"fmt"
+	"strings"
 )
+
+var typeDefAdd = []TypeDefinition {
+	{
+		InputTypes: []MShellType{TypeInt{}, TypeInt{}},
+		OutputTypes: []MShellType{TypeInt{}},
+	},
+	{
+		InputTypes: []MShellType{TypeString{}, TypeString{}},
+		OutputTypes: []MShellType{TypeString{}},
+	},
+	{
+		InputTypes: []MShellType{TypeFloat{}, TypeFloat{}},
+		OutputTypes: []MShellType{TypeFloat{}},
+	},
+}
 
 type TypeCheckError struct {
 	Token Token
 	Message string
+}
+
+func (err TypeCheckError) String() string {
+	return fmt.Sprintf("%d:%d: %s", err.Token.Line, err.Token.Column, err.Message)
 }
 
 type TypeCheckResult struct {
@@ -51,6 +71,65 @@ func (stack *MShellTypeStack) Clear() {
 
 type TypeCheckContext struct {
 	InQuote bool
+}
+
+func TypeCheckTypeDef(stack MShellTypeStack, typeDef TypeDefinition) bool {
+	if (len(typeDef.InputTypes) > stack.Len()) {
+		return false
+	}
+
+	for i := 0; i < len(typeDef.InputTypes); i++ {
+		stackIndex := len(stack) - len(typeDef.InputTypes) + i
+		stackType := stack[stackIndex]
+		if !stackType.Equals(typeDef.InputTypes[i]) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func TypeCheckStack(stack MShellTypeStack, typeDefs []TypeDefinition) (int) {
+	for idx, typeDef := range typeDefs {
+		if TypeCheckTypeDef(stack, typeDef) {
+			return idx
+		}
+	}
+
+	return -1
+}
+
+func TypeCheckErrorMessage(stack MShellTypeStack, typeDefs []TypeDefinition, tokenName string) (string) {
+	// First check for a length mismatch
+	minInputLength := 10000
+	maxInputLength := 0
+	for _, typeDef := range typeDefs {
+		if len(typeDef.InputTypes) < minInputLength {
+			minInputLength = len(typeDef.InputTypes)
+		}
+
+		if len(typeDef.InputTypes) > maxInputLength {
+			maxInputLength = len(typeDef.InputTypes)
+		}
+	}
+
+	if minInputLength > stack.Len() {
+		return fmt.Sprintf("Expected at least %d arguments on the stack for %s, but found %d.\n", minInputLength, tokenName, stack.Len())
+	}
+
+	// Start a builder for the error message
+	var builder strings.Builder
+	builder.WriteString(fmt.Sprintf("Could not find a matching type definition for %s.\n", tokenName))
+	builder.WriteString(fmt.Sprintf("Current stack:\n"))
+	for i := stack.Len() - maxInputLength; i < stack.Len(); i++ {
+		builder.WriteString(fmt.Sprintf("  %s\n", stack[i].ToMshell()))
+	}
+	builder.WriteString(fmt.Sprintf("Expected types:\n"))
+	for _, typeDef := range typeDefs {
+		builder.WriteString(fmt.Sprintf("  %s\n", typeDef.ToMshell()))
+	}
+
+	return builder.String()
 }
 
 func TypeCheck(objects []MShellParseItem, stack MShellTypeStack, definitions []MShellDefinition, inQuote bool) TypeCheckResult {
@@ -137,6 +216,11 @@ MainLoop:
 					// Search built-in definitions
 				}
 
+				if typeDef == nil {
+					stack.Push(&TypeString{})
+					continue MainLoop
+				}
+
 				if inQuote {
 					if len(typeDef.InputTypes) > stack.Len() {
 						// For the difference, add the types to the input stack
@@ -176,6 +260,15 @@ MainLoop:
 				stack.Push(TypeInt{})
 			} else if t.Type == STRING || t.Type == SINGLEQUOTESTRING {
 				stack.Push(TypeString{})
+			} else if t.Type == PLUS {
+				idx := TypeCheckStack(stack, typeDefAdd)
+				if idx == -1 {
+					message := TypeCheckErrorMessage(stack, typeDefAdd, "+")
+
+					typeCheckResult.Errors = append(typeCheckResult.Errors, TypeCheckError{Token: t, Message: message})
+					return typeCheckResult
+					// continue MainLoop
+				}
 			} else if t.Type == IF {
 				obj, err := stack.Pop()
 				if err != nil {
@@ -253,6 +346,8 @@ MainLoop:
 				// The the types of the quotes for the conditions:
 				// They should all be of the same type, and if they consume anything on the stack, they should put it back.
 				// The top of the stack should be a boolean.
+			} else {
+				typeCheckResult.Errors = append(typeCheckResult.Errors, TypeCheckError{Token: t, Message: fmt.Sprintf("Unexpected token %s.\n", t.Lexeme)})
 			}
 		}
 	}

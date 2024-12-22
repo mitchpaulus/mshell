@@ -245,11 +245,24 @@ type MShellType interface {
 	ToJson() string
 	Equals(other MShellType) bool
 	String() string
+	ToMshell() string
 }
 
 type TypeDefinition struct {
 	InputTypes []MShellType
 	OutputTypes []MShellType
+}
+
+func (def *TypeDefinition) ToMshell() string {
+	inputMshellCode := make([]string, len(def.InputTypes))
+	for i, t := range def.InputTypes {
+		inputMshellCode[i] = t.ToMshell()
+	}
+	outputMshellCode := make([]string, len(def.OutputTypes))
+	for i, t := range def.OutputTypes {
+		outputMshellCode[i] = t.ToMshell()
+	}
+	return fmt.Sprintf("%s -- %s", strings.Join(inputMshellCode, " "), strings.Join(outputMshellCode, " "))
 }
 
 func (def *TypeDefinition) ToJson() string {
@@ -258,6 +271,10 @@ func (def *TypeDefinition) ToJson() string {
 
 type TypeGeneric struct {
 	Name string
+}
+
+func (generic TypeGeneric) ToMshell() string {
+	return generic.Name
 }
 
 func (generic TypeGeneric) ToJson() string {
@@ -277,6 +294,10 @@ func (generic TypeGeneric) String() string {
 
 type TypeInt struct { }
 
+func (t TypeInt) ToMshell() string {
+	return "int"
+}
+
 func (t TypeInt) ToJson() string {
 	return "\"int\""
 }
@@ -291,6 +312,10 @@ func (t TypeInt) String() string {
 }
 
 type TypeFloat struct { }
+
+func (t TypeFloat) ToMshell() string {
+	return "float"
+}
 
 func (t TypeFloat) ToJson() string {
 	return "\"float\""
@@ -308,6 +333,10 @@ func (t TypeFloat) String() string {
 
 type TypeString struct { }
 
+func (t TypeString) ToMshell() string {
+	return "str"
+}
+
 func (t TypeString) ToJson() string {
 	return "\"string\""
 }
@@ -322,6 +351,10 @@ func (t TypeString) String() string {
 }
 
 type TypeBool struct { }
+
+func (t TypeBool) ToMshell() string {
+	return "bool"
+}
 
 func (t TypeBool) ToJson() string {
 	return "\"bool\""
@@ -339,6 +372,10 @@ func (t TypeBool) String() string {
 type TypeList struct {
 	ListType MShellType
 	Count int // This is < 0 if the Count is not known
+}
+
+func (list *TypeList) ToMshell() string {
+	return fmt.Sprintf("[%s]", list.ListType.ToMshell())
 }
 
 func (list *TypeList) ToJson() string {
@@ -370,6 +407,18 @@ func (list *TypeList) String() string {
 
 type TypeTuple struct {
 	Types []MShellType
+}
+
+func (tuple *TypeTuple) ToMshell() string {
+	builder := strings.Builder{}
+	builder.WriteString("[")
+	builder.WriteString(tuple.Types[0].ToMshell())
+	for i := 1; i < len(tuple.Types); i++ {
+		builder.WriteString(" ")
+		builder.WriteString(tuple.Types[i].ToMshell())
+	}
+	builder.WriteString("]")
+	return builder.String()
 }
 
 func (tuple *TypeTuple) ToJson() string {
@@ -421,6 +470,29 @@ func (tuple *TypeTuple) String() string {
 type TypeQuote struct {
 	InputTypes []MShellType
 	OutputTypes []MShellType
+}
+
+func (quote *TypeQuote) ToMshell() string {
+	builder := strings.Builder{}
+	builder.WriteString("(")
+
+	inputTypes := []string{}
+	for _, t := range quote.InputTypes {
+		inputTypes = append(inputTypes, t.ToMshell())
+	}
+
+	outputTypes := []string{}
+	for _, t := range quote.OutputTypes {
+		outputTypes = append(outputTypes, t.ToMshell())
+	}
+
+	// Write input types space separated
+	builder.WriteString(strings.Join(inputTypes, " "))
+	builder.WriteString(" -- ")
+	// Write output types space separated
+	builder.WriteString(strings.Join(outputTypes, " "))
+	builder.WriteString(")")
+	return builder.String()
 }
 
 func (quote *TypeQuote) ToJson() string {
