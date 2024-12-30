@@ -22,7 +22,10 @@ jobs:
         realpath ./mshell >> "$GITHUB_PATH"
         printf "MSHSTDLIB=%s\n" "$(realpath ./lib/std.msh)" >> "$GITHUB_ENV"
 
-    - name: Test mshell
+    - name: Run Go unit tests
+      run: cd mshell && go test -v
+
+    - name: Test mshell end-to-end
       run:  cd tests && ./test.sh
 
     - name: Run awk example tests

@@ -246,11 +246,17 @@ type MShellType interface {
 	Equals(other MShellType) bool
 	String() string
 	ToMshell() string
+	Bind(otherType MShellType) ([]BoundType, error)
 }
 
 type TypeDefinition struct {
 	InputTypes []MShellType
 	OutputTypes []MShellType
+}
+
+type BoundType struct {
+	GenericName string
+	Type MShellType
 }
 
 func (def *TypeDefinition) ToMshell() string {
@@ -271,6 +277,10 @@ func (def *TypeDefinition) ToJson() string {
 
 type TypeGeneric struct {
 	Name string
+}
+
+func (generic TypeGeneric) Bind(otherType MShellType) ([]BoundType, error) {
+	return []BoundType{{GenericName: generic.Name, Type: otherType}}, nil
 }
 
 func (generic TypeGeneric) ToMshell() string {
@@ -294,6 +304,10 @@ func (generic TypeGeneric) String() string {
 
 type TypeInt struct { }
 
+func (t TypeInt) Bind(otherType MShellType) ([]BoundType, error) {
+	return make([]BoundType, 0), nil
+}
+
 func (t TypeInt) ToMshell() string {
 	return "int"
 }
@@ -312,6 +326,10 @@ func (t TypeInt) String() string {
 }
 
 type TypeFloat struct { }
+
+func (t TypeFloat) Bind(otherType MShellType) ([]BoundType, error) {
+	return make([]BoundType, 0), nil
+}
 
 func (t TypeFloat) ToMshell() string {
 	return "float"
@@ -333,6 +351,10 @@ func (t TypeFloat) String() string {
 
 type TypeString struct { }
 
+func (t TypeString) Bind(otherType MShellType) ([]BoundType, error) {
+	return make([]BoundType, 0), nil
+}
+
 func (t TypeString) ToMshell() string {
 	return "str"
 }
@@ -351,6 +373,10 @@ func (t TypeString) String() string {
 }
 
 type TypeBool struct { }
+
+func (t TypeBool) Bind(otherType MShellType) ([]BoundType, error) {
+	return make([]BoundType, 0), nil
+}
 
 func (t TypeBool) ToMshell() string {
 	return "bool"
@@ -373,6 +399,16 @@ type TypeList struct {
 	ListType MShellType
 	Count int // This is < 0 if the Count is not known
 }
+
+func (list *TypeList) Bind(otherType MShellType) ([]BoundType, error) {
+	asListType, ok := otherType.(*TypeList)
+	if !ok {
+		return []BoundType{}, errors.New("Cannot bind a list to a non-list type")
+	}
+	// Recursively select all the bound types in the list.
+	return list.ListType.Bind(asListType.ListType)
+}
+
 
 func (list *TypeList) ToMshell() string {
 	return fmt.Sprintf("[%s]", list.ListType.ToMshell())
@@ -408,6 +444,28 @@ func (list *TypeList) String() string {
 type TypeTuple struct {
 	Types []MShellType
 }
+
+func (tuple *TypeTuple) Bind(otherType MShellType) ([]BoundType, error) {
+	asTuple, ok := otherType.(*TypeTuple)
+	if !ok {
+		return []BoundType{}, errors.New("Cannot bind a tuple to a non-tuple type")
+	}
+
+	if len(tuple.Types) != len(asTuple.Types) {
+		return []BoundType{}, errors.New("Cannot bind tuples of different lengths")
+	}
+
+	boundTypes := make([]BoundType, 0)
+	for i, t := range tuple.Types {
+		bound, err := t.Bind(asTuple.Types[i])
+		if err != nil {
+			return boundTypes, err
+		}
+		boundTypes = append(boundTypes, bound...)
+	}
+	return boundTypes, nil
+}
+
 
 func (tuple *TypeTuple) ToMshell() string {
 	builder := strings.Builder{}
@@ -470,6 +528,36 @@ func (tuple *TypeTuple) String() string {
 type TypeQuote struct {
 	InputTypes []MShellType
 	OutputTypes []MShellType
+}
+
+func (quote *TypeQuote) Bind(otherType MShellType) ([]BoundType, error) {
+	asQuote, ok := otherType.(*TypeQuote)
+	if !ok {
+		return []BoundType{}, errors.New("Cannot bind a quote to a non-quote type")
+	}
+
+	if len(quote.InputTypes) != len(asQuote.InputTypes) || len(quote.OutputTypes) != len(asQuote.OutputTypes) {
+		return []BoundType{}, errors.New("Cannot bind quotes of different lengths")
+	}
+
+	boundTypes := make([]BoundType, 0)
+	for i, t := range quote.InputTypes {
+		bound, err := t.Bind(asQuote.InputTypes[i])
+		if err != nil {
+			return boundTypes, err
+		}
+		boundTypes = append(boundTypes, bound...)
+	}
+
+	for i, t := range quote.OutputTypes {
+		bound, err := t.Bind(asQuote.OutputTypes[i])
+		if err != nil {
+			return boundTypes, err
+		}
+		boundTypes = append(boundTypes, bound...)
+	}
+
+	return boundTypes, nil
 }
 
 func (quote *TypeQuote) ToMshell() string {
