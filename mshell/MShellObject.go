@@ -1,10 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
-	"encoding/json"
 )
 
 type Jsonable interface {
@@ -86,8 +86,8 @@ type MShellString struct {
 }
 
 type MShellPipe struct {
-	List MShellList
-    StdoutBehavior StdoutBehavior
+	List           MShellList
+	StdoutBehavior StdoutBehavior
 }
 
 type MShellInt struct {

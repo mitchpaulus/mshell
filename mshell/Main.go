@@ -119,7 +119,7 @@ func main() {
 
 		fmt.Println(file.ToJson())
 		return
-	} 
+	}
 
 	state := EvalState{
 		PositionalArgs: positionalArgs,
@@ -193,7 +193,7 @@ func main() {
 		} else {
 			os.Exit(0)
 		}
-	} 
+	}
 
 	result := state.Evaluate(file.Items, &stack, context, allDefinitions, callStack)
 

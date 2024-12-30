@@ -1,10 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"unicode"
-	"encoding/json"
 )
 
 type TokenType int

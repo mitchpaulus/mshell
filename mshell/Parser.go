@@ -22,9 +22,9 @@ type MShellFile struct {
 }
 
 type MShellParseList struct {
-	Items []MShellParseItem
+	Items      []MShellParseItem
 	StartToken Token
-	EndToken Token
+	EndToken   Token
 }
 
 func (list *MShellParseList) GetStartToken() Token {
@@ -54,9 +54,9 @@ func (list *MShellParseList) DebugString() string {
 }
 
 type MShellParseQuote struct {
-	Items []MShellParseItem
+	Items      []MShellParseItem
 	StartToken Token
-	EndToken Token
+	EndToken   Token
 }
 
 func (quote *MShellParseQuote) GetStartToken() Token {
@@ -86,8 +86,8 @@ func (quote *MShellParseQuote) DebugString() string {
 }
 
 type MShellDefinition struct {
-	Name  string
-	Items []MShellParseItem
+	Name    string
+	Items   []MShellParseItem
 	TypeDef TypeDefinition
 }
 
@@ -124,7 +124,6 @@ func TypeListToJson(typeList []MShellType) string {
 	builder.WriteString("]")
 	return builder.String()
 }
-
 
 func (file *MShellFile) ToJson() string {
 	// Start builder for definitions
@@ -179,11 +178,10 @@ func (parser *MShellParser) MatchWithMessage(token Token, tokenType TokenType, m
 	return nil
 }
 
-
 func (parser *MShellParser) ParseFile() (*MShellFile, error) {
 	file := &MShellFile{}
 
-	for parser.curr.Type != EOF  {
+	for parser.curr.Type != EOF {
 		switch parser.curr.Type {
 		case RIGHT_SQUARE_BRACKET, RIGHT_PAREN:
 			message := fmt.Sprintf("Unexpected token %s while parsing file", parser.curr.Type)
@@ -247,16 +245,17 @@ type MShellType interface {
 	String() string
 	ToMshell() string
 	Bind(otherType MShellType) ([]BoundType, error)
+	Replace(boundTypes []BoundType) MShellType
 }
 
 type TypeDefinition struct {
-	InputTypes []MShellType
+	InputTypes  []MShellType
 	OutputTypes []MShellType
 }
 
 type BoundType struct {
 	GenericName string
-	Type MShellType
+	Type        MShellType
 }
 
 func (def *TypeDefinition) ToMshell() string {
@@ -283,6 +282,15 @@ func (generic TypeGeneric) Bind(otherType MShellType) ([]BoundType, error) {
 	return []BoundType{{GenericName: generic.Name, Type: otherType}}, nil
 }
 
+func (generic TypeGeneric) Replace(boundTypes []BoundType) MShellType {
+	for _, bound := range boundTypes {
+		if bound.GenericName == generic.Name {
+			return bound.Type
+		}
+	}
+	return generic
+}
+
 func (generic TypeGeneric) ToMshell() string {
 	return generic.Name
 }
@@ -292,20 +300,25 @@ func (generic TypeGeneric) ToJson() string {
 }
 
 func (generic TypeGeneric) Equals(other MShellType) bool {
-	if otherGeneric, ok := other.(TypeGeneric); ok {
-		return generic.Name == otherGeneric.Name
-	}
-	return false
+	return true
+	// if otherGeneric, ok := other.(TypeGeneric); ok {
+	// return generic.Name == otherGeneric.Name
+	// }
+	// return false
 }
 
 func (generic TypeGeneric) String() string {
 	return generic.Name
 }
 
-type TypeInt struct { }
+type TypeInt struct{}
 
 func (t TypeInt) Bind(otherType MShellType) ([]BoundType, error) {
 	return make([]BoundType, 0), nil
+}
+
+func (t TypeInt) Replace(boundTypes []BoundType) MShellType {
+	return t
 }
 
 func (t TypeInt) ToMshell() string {
@@ -325,10 +338,14 @@ func (t TypeInt) String() string {
 	return "int"
 }
 
-type TypeFloat struct { }
+type TypeFloat struct{}
 
 func (t TypeFloat) Bind(otherType MShellType) ([]BoundType, error) {
 	return make([]BoundType, 0), nil
+}
+
+func (t TypeFloat) Replace(boundTypes []BoundType) MShellType {
+	return t
 }
 
 func (t TypeFloat) ToMshell() string {
@@ -348,11 +365,14 @@ func (t TypeFloat) String() string {
 	return "float"
 }
 
-
-type TypeString struct { }
+type TypeString struct{}
 
 func (t TypeString) Bind(otherType MShellType) ([]BoundType, error) {
 	return make([]BoundType, 0), nil
+}
+
+func (t TypeString) Replace(boundTypes []BoundType) MShellType {
+	return t
 }
 
 func (t TypeString) ToMshell() string {
@@ -372,10 +392,14 @@ func (t TypeString) String() string {
 	return "string"
 }
 
-type TypeBool struct { }
+type TypeBool struct{}
 
 func (t TypeBool) Bind(otherType MShellType) ([]BoundType, error) {
 	return make([]BoundType, 0), nil
+}
+
+func (t TypeBool) Replace(boundTypes []BoundType) MShellType {
+	return t
 }
 
 func (t TypeBool) ToMshell() string {
@@ -396,8 +420,8 @@ func (t TypeBool) String() string {
 }
 
 type TypeList struct {
-	ListType MShellType
-	Count int // This is < 0 if the Count is not known
+	ListType       MShellType
+	Count          int // This is < 0 if the Count is not known
 	StdoutBehavior StdoutBehavior
 }
 
@@ -410,6 +434,11 @@ func (list *TypeList) Bind(otherType MShellType) ([]BoundType, error) {
 	return list.ListType.Bind(asListType.ListType)
 }
 
+func (list *TypeList) Replace(boundTypes []BoundType) MShellType {
+	// Replace the list type with the bound type
+	newListType := list.ListType.Replace(boundTypes)
+	return &TypeList{ListType: newListType, Count: list.Count, StdoutBehavior: list.StdoutBehavior}
+}
 
 func (list *TypeList) ToMshell() string {
 	return fmt.Sprintf("[%s]", list.ListType.ToMshell())
@@ -443,7 +472,7 @@ func (list *TypeList) String() string {
 }
 
 type TypeTuple struct {
-	Types []MShellType
+	Types          []MShellType
 	StdoutBehavior StdoutBehavior
 }
 
@@ -468,6 +497,13 @@ func (tuple *TypeTuple) Bind(otherType MShellType) ([]BoundType, error) {
 	return boundTypes, nil
 }
 
+func (tuple *TypeTuple) Replace(boundTypes []BoundType) MShellType {
+	newTypes := make([]MShellType, len(tuple.Types))
+	for i, t := range tuple.Types {
+		newTypes[i] = t.Replace(boundTypes)
+	}
+	return &TypeTuple{Types: newTypes, StdoutBehavior: tuple.StdoutBehavior}
+}
 
 func (tuple *TypeTuple) ToMshell() string {
 	builder := strings.Builder{}
@@ -528,7 +564,7 @@ func (tuple *TypeTuple) String() string {
 }
 
 type TypeQuote struct {
-	InputTypes []MShellType
+	InputTypes  []MShellType
 	OutputTypes []MShellType
 }
 
@@ -560,6 +596,20 @@ func (quote *TypeQuote) Bind(otherType MShellType) ([]BoundType, error) {
 	}
 
 	return boundTypes, nil
+}
+
+func (quote *TypeQuote) Replace(boundTypes []BoundType) MShellType {
+	newInputTypes := make([]MShellType, len(quote.InputTypes))
+	for i, t := range quote.InputTypes {
+		newInputTypes[i] = t.Replace(boundTypes)
+	}
+
+	newOutputTypes := make([]MShellType, len(quote.OutputTypes))
+	for i, t := range quote.OutputTypes {
+		newOutputTypes[i] = t.Replace(boundTypes)
+	}
+
+	return &TypeQuote{InputTypes: newInputTypes, OutputTypes: newOutputTypes}
 }
 
 func (quote *TypeQuote) ToMshell() string {
@@ -633,7 +683,6 @@ func (quote *TypeQuote) String() string {
 	return builder.String()
 }
 
-
 func (parser *MShellParser) ParseTypeDefinition() (*TypeDefinition, error) {
 	err := parser.MatchWithMessage(parser.curr, LEFT_PAREN, "Expected '(' to start type definition.")
 	if err != nil {
@@ -665,7 +714,7 @@ func (parser *MShellParser) ParseTypeDefinition() (*TypeDefinition, error) {
 func (parser *MShellParser) ParseTypeItems() ([]MShellType, error) {
 	types := []MShellType{}
 
-	forLoop:
+forLoop:
 	for {
 		switch parser.curr.Type {
 		case TYPEINT:
@@ -824,7 +873,6 @@ func (parser *MShellParser) ParseTypeList() (*TypeList, error) {
 	return &typeList, nil
 }
 
-
 func (parser *MShellParser) ParseList() (*MShellParseList, error) {
 	list := &MShellParseList{}
 	list.StartToken = parser.curr
@@ -865,7 +913,7 @@ func (parser *MShellParser) ParseSimple() Token {
 }
 
 func (parser *MShellParser) ParseQuote() (*MShellParseQuote, error) {
-	quote := &MShellParseQuote{ StartToken: parser.curr }
+	quote := &MShellParseQuote{StartToken: parser.curr}
 	err := parser.Match(parser.curr, LEFT_PAREN)
 	if err != nil {
 		return quote, err

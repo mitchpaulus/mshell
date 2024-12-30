@@ -53,9 +53,9 @@ type EvalState struct {
 }
 
 type EvalResult struct {
-	Success  bool
-	BreakNum int
-	ExitCode int
+	Success    bool
+	BreakNum   int
+	ExitCode   int
 	ExitCalled bool
 }
 
@@ -86,8 +86,8 @@ const (
 
 type CallStackItem struct {
 	MShellParseItem MShellParseItem
-	Name      string
-	CallStackType    CallStackType
+	Name            string
+	CallStackType   CallStackType
 }
 
 type CallStack []CallStackItem
@@ -165,7 +165,7 @@ MainLoop:
 						result := state.Evaluate(definition.Items, stack, newContext, definitions, callStack)
 						callStack.Pop()
 
-						if !result.Success || result.BreakNum > 0  || result.ExitCalled {
+						if !result.Success || result.BreakNum > 0 || result.ExitCalled {
 							return result
 						}
 
@@ -1023,7 +1023,7 @@ MainLoop:
 				for i := 0; i < len(list.Items)-1; i += 2 {
 					quotation := list.Items[i].(*MShellQuotation)
 
-					callStack.Push(CallStackItem{quotation, "quote", CALLSTACKQUOTE } )
+					callStack.Push(CallStackItem{quotation, "quote", CALLSTACKQUOTE})
 					result := state.Evaluate(quotation.Tokens, stack, context, definitions, callStack)
 					callStack.Pop()
 
@@ -1061,7 +1061,7 @@ MainLoop:
 				if trueIndex > -1 {
 					quotation := list.Items[trueIndex+1].(*MShellQuotation)
 
-					callStack.Push(CallStackItem{quotation, "quote", CALLSTACKQUOTE } )
+					callStack.Push(CallStackItem{quotation, "quote", CALLSTACKQUOTE})
 					result := state.Evaluate(quotation.Tokens, stack, context, definitions, callStack)
 					callStack.Pop()
 
@@ -1072,7 +1072,7 @@ MainLoop:
 				} else if len(list.Items)%2 == 1 { // Try to find a final else statement, will be the last item in the list if odd number of items
 					quotation := list.Items[len(list.Items)-1].(*MShellQuotation)
 
-					callStack.Push(CallStackItem{quotation, "quote", CALLSTACKQUOTE } )
+					callStack.Push(CallStackItem{quotation, "quote", CALLSTACKQUOTE})
 					result := state.Evaluate(quotation.Tokens, stack, context, definitions, callStack)
 					callStack.Pop()
 
@@ -1255,8 +1255,8 @@ MainLoop:
 								obj2.(*MShellQuotation).StandardInputFile = obj1.(*MShellString).Content
 							}
 							stack.Push(obj2)
-                        case *MShellPipe:
-                            return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a string (%s) to a Pipe (%s). Add the redirection to the final item in the pipeline.\n", t.Line, t.Column, obj1.DebugString(), obj2.DebugString()))
+						case *MShellPipe:
+							return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a string (%s) to a Pipe (%s). Add the redirection to the final item in the pipeline.\n", t.Line, t.Column, obj1.DebugString(), obj2.DebugString()))
 						default:
 							return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a string (%s) to a %s (%s).\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
 						}
@@ -1392,7 +1392,7 @@ MainLoop:
 				initialStackSize := len(*stack)
 
 				for loopCount < maxLoops {
-					callStack.Push(CallStackItem{quotation, "quote", CALLSTACKQUOTE } )
+					callStack.Push(CallStackItem{quotation, "quote", CALLSTACKQUOTE})
 					result := state.Evaluate(quotation.Tokens, stack, loopContext, definitions, callStack)
 					callStack.Pop()
 
@@ -1502,7 +1502,7 @@ MainLoop:
 				}
 				quoteContext.Variables = quotation.Variables
 
-				callStack.Push(CallStackItem{quotation, "quote", CALLSTACKQUOTE } )
+				callStack.Push(CallStackItem{quotation, "quote", CALLSTACKQUOTE})
 				result := state.Evaluate(quotation.Tokens, stack, quoteContext, definitions, callStack)
 				callStack.Pop()
 
@@ -1719,34 +1719,34 @@ MainLoop:
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot set stdout behavior to lines on an empty stack.\n", t.Line, t.Column))
 				}
 
-                switch obj.(type) {
-                case *MShellList:
-                    list := obj.(*MShellList)
-                    if t.Type == STDOUTLINES {
-                        list.StdoutBehavior = STDOUT_LINES
-                    } else if t.Type == STDOUTSTRIPPED {
-                        list.StdoutBehavior = STDOUT_STRIPPED
-                    } else if t.Type == STDOUTCOMPLETE {
-                        list.StdoutBehavior = STDOUT_COMPLETE
-                    } else {
-                        return FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Type))
-                    }
-                    stack.Push(list)
-                case *MShellPipe:
-                    pipe := obj.(*MShellPipe)
-                    if t.Type == STDOUTLINES {
-                        pipe.StdoutBehavior = STDOUT_LINES
-                    } else if t.Type == STDOUTSTRIPPED {
-                        pipe.StdoutBehavior = STDOUT_STRIPPED
-                    } else if t.Type == STDOUTCOMPLETE {
-                        pipe.StdoutBehavior = STDOUT_COMPLETE
-                    } else {
-                        return FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Type))
-                    }
-                    stack.Push(pipe)
-                default:
-                    return FailWithMessage(fmt.Sprintf("%d:%d: Cannot set stdout behavior on a %s.\n", t.Line, t.Column, obj.TypeName()))
-                }
+				switch obj.(type) {
+				case *MShellList:
+					list := obj.(*MShellList)
+					if t.Type == STDOUTLINES {
+						list.StdoutBehavior = STDOUT_LINES
+					} else if t.Type == STDOUTSTRIPPED {
+						list.StdoutBehavior = STDOUT_STRIPPED
+					} else if t.Type == STDOUTCOMPLETE {
+						list.StdoutBehavior = STDOUT_COMPLETE
+					} else {
+						return FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Type))
+					}
+					stack.Push(list)
+				case *MShellPipe:
+					pipe := obj.(*MShellPipe)
+					if t.Type == STDOUTLINES {
+						pipe.StdoutBehavior = STDOUT_LINES
+					} else if t.Type == STDOUTSTRIPPED {
+						pipe.StdoutBehavior = STDOUT_STRIPPED
+					} else if t.Type == STDOUTCOMPLETE {
+						pipe.StdoutBehavior = STDOUT_COMPLETE
+					} else {
+						return FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Type))
+					}
+					stack.Push(pipe)
+				default:
+					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot set stdout behavior on a %s.\n", t.Line, t.Column, obj.TypeName()))
+				}
 			} else if t.Type == EXPORT {
 				obj, err := stack.Pop()
 				if err != nil {
@@ -1843,7 +1843,7 @@ func (quotation *MShellQuotation) Execute(state *EvalState, context ExecuteConte
 		quotationContext.StandardOutput = os.Stdout
 	}
 
-	callStack.Push(CallStackItem{quotation, "quote", CALLSTACKQUOTE } )
+	callStack.Push(CallStackItem{quotation, "quote", CALLSTACKQUOTE})
 	result := state.Evaluate(quotation.Tokens, stack, quotationContext, definitions, callStack)
 	callStack.Pop()
 
@@ -2016,7 +2016,7 @@ func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContex
 		pipeWriters[i] = pipeWriter
 	}
 
-    var buf bytes.Buffer
+	var buf bytes.Buffer
 	for i := 0; i < len(MShellPipe.List.Items); i++ {
 		newContext := ExecuteContext{
 			StandardInput:  nil,
@@ -2044,14 +2044,14 @@ func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContex
 
 			newContext.StandardOutput = pipeWriters[0]
 		} else if i == len(MShellPipe.List.Items)-1 {
-            newContext.StandardInput = pipeReaders[len(pipeReaders)-1]
+			newContext.StandardInput = pipeReaders[len(pipeReaders)-1]
 
 			// Stdout should use the context of this function
-            if MShellPipe.StdoutBehavior != STDOUT_NONE {
-                newContext.StandardOutput = &buf
-            } else {
-                newContext.StandardOutput = context.StandardOutput
-            }
+			if MShellPipe.StdoutBehavior != STDOUT_NONE {
+				newContext.StandardOutput = &buf
+			} else {
+				newContext.StandardOutput = context.StandardOutput
+			}
 		} else {
 			newContext.StandardInput = pipeReaders[i-1]
 			newContext.StandardOutput = pipeWriters[i]
@@ -2089,18 +2089,18 @@ func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContex
 	for i, result := range results {
 		if !result.Success {
 
-            if MShellPipe.StdoutBehavior == STDOUT_NONE {
-                return result, exitCodes[i], ""
-            } else {
-                return result, exitCodes[i], buf.String()
-            }
+			if MShellPipe.StdoutBehavior == STDOUT_NONE {
+				return result, exitCodes[i], ""
+			} else {
+				return result, exitCodes[i], buf.String()
+			}
 		}
 	}
 
-    if MShellPipe.StdoutBehavior == STDOUT_NONE {
-        // Return the exit code of the last item
-        return SimpleSuccess(), exitCodes[len(exitCodes)-1], ""
-    } else {
-        return SimpleSuccess(), exitCodes[len(exitCodes)-1], buf.String()
-    }
+	if MShellPipe.StdoutBehavior == STDOUT_NONE {
+		// Return the exit code of the last item
+		return SimpleSuccess(), exitCodes[len(exitCodes)-1], ""
+	} else {
+		return SimpleSuccess(), exitCodes[len(exitCodes)-1], buf.String()
+	}
 }

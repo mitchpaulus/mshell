@@ -7,7 +7,7 @@ import (
 )
 
 func TestSimpleBinding(t *testing.T) {
-	generic := TypeGeneric{ "a" }
+	generic := TypeGeneric{"a"}
 	concrete := TypeInt{}
 
 	binding, err := generic.Bind(concrete)
@@ -25,10 +25,10 @@ func TestSimpleBinding(t *testing.T) {
 }
 
 func TestRecursiveBinding(t *testing.T) {
-	generic := &TypeList{ 
-		ListType: &TypeList {
-			ListType: TypeGeneric{ "a" },
-			Count: -1,
+	generic := &TypeList{
+		ListType: &TypeList{
+			ListType: TypeGeneric{"a"},
+			Count:    -1,
 		},
 		Count: -1,
 	}
@@ -36,7 +36,7 @@ func TestRecursiveBinding(t *testing.T) {
 	concrete := &TypeList{
 		ListType: &TypeList{
 			ListType: TypeInt{},
-			Count: -1,
+			Count:    -1,
 		},
 		Count: -1,
 	}
