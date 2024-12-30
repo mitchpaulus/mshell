@@ -1,6 +1,7 @@
 package main
 
 import (
+	// "os"
 	"fmt"
 	"strings"
 )
@@ -34,6 +35,30 @@ var builtInDefs = map[string][]TypeDefinition {
 		{
 			InputTypes: []MShellType { &TypeQuote{} },
 			OutputTypes: []MShellType { TypeString{} },
+		},
+	},
+	"*": {
+		{
+			InputTypes: []MShellType { TypeInt{}, TypeInt{} },
+			OutputTypes: []MShellType { TypeInt{} },
+		},
+		{
+			InputTypes: []MShellType { TypeFloat{}, TypeFloat{} },
+			OutputTypes: []MShellType { TypeFloat{} },
+		},
+		{
+			InputTypes: []MShellType { TypeInt{}, TypeFloat{} },
+			OutputTypes: []MShellType { TypeFloat{} },
+		},
+		{
+			InputTypes: []MShellType { TypeFloat{}, TypeInt{} },
+			OutputTypes: []MShellType { TypeFloat{} },
+		},
+	},
+	"wl": {
+		{
+			InputTypes: []MShellType { TypeString{} },
+			OutputTypes: []MShellType {},
 		},
 	},
 }
@@ -114,6 +139,7 @@ func TypeCheckTypeDef(stack MShellTypeStack, typeDef TypeDefinition) bool {
 	for i := 0; i < len(typeDef.InputTypes); i++ {
 		stackIndex := len(stack) - len(typeDef.InputTypes) + i
 		stackType := stack[stackIndex]
+		// fmt.Fprintf(os.Stderr, "Checking type %s against %s\n", stackType.String(), typeDef.InputTypes[i].String())
 		if !stackType.Equals(typeDef.InputTypes[i]) {
 			return false
 		}
@@ -277,10 +303,37 @@ MainLoop:
 				}
 
 				// Check the stack for a matching type definition
+				// fmt.Fprintf(os.Stderr, "Checking stack for %s\n", t.Lexeme)
 				idx := TypeCheckStack(stack, builtInTypeSlice)
+				// fmt.Fprintf(os.Stderr, "Index: %d\n", idx)
 				if idx == -1 {
 					message := TypeCheckErrorMessage(stack, builtInTypeSlice, t.Lexeme)
 					typeCheckResult.Errors = append(typeCheckResult.Errors, TypeCheckError{Token: t, Message: message})
+
+					// Pop off the stack the number of input types from first definition
+					for range builtInTypeSlice[0].InputTypes {
+						stack.Pop()
+					}
+
+					// For now, if all the output types are the same, push the output types from the first def
+					// Else, totally fail and return.
+					if len(builtInTypeSlice) == 1 {
+						for _, outputType := range builtInTypeSlice[0].OutputTypes {
+							stack.Push(outputType)
+						}
+					} else {
+
+						for i := 1; i < len(builtInTypeSlice); i++ {
+							if !builtInTypeSlice[i].OutputTypes[0].Equals(builtInTypeSlice[0].OutputTypes[0]) {
+								return typeCheckResult
+							}
+						}
+
+						for _, outputType := range builtInTypeSlice[0].OutputTypes {
+							stack.Push(outputType)
+						}
+					}
+
 					continue MainLoop
 				}
 
@@ -444,6 +497,8 @@ MainLoop:
 				if t.Type == QUESTION {
 					stack.Push(TypeInt{})
 				}
+			} else if t.Type == FLOAT {
+				stack.Push(TypeFloat{})
 			} else if t.Type == STR {
 				idx := TypeCheckStack(stack, builtInDefs["str"])
 				// This should only happen for length mismatch.
@@ -455,7 +510,8 @@ MainLoop:
 				stack.Pop()
 				stack.Push(TypeString{})
 			} else {
-				typeCheckResult.Errors = append(typeCheckResult.Errors, TypeCheckError{Token: t, Message: fmt.Sprintf("Unexpected token %s.\n", t.Lexeme)})
+				typeCheckResult.Errors = append(typeCheckResult.Errors, TypeCheckError{Token: t, Message: fmt.Sprintf("Unexpected token '%s' (%v).\n", t.Lexeme, t.Type)})
+				return typeCheckResult
 			}
 		}
 	}
