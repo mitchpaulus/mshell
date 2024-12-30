@@ -5,6 +5,39 @@ import (
 	"strings"
 )
 
+var builtInDefs = map[string][]TypeDefinition {
+	"str": {
+		{
+			InputTypes: []MShellType { TypeInt{} },
+			OutputTypes: []MShellType { TypeString{} },
+		},
+		{
+			InputTypes: []MShellType { TypeFloat{} },
+			OutputTypes: []MShellType { TypeString{} },
+		},
+		{
+			InputTypes: []MShellType { TypeString{} },
+			OutputTypes: []MShellType { TypeString{} },
+		},
+		{
+			InputTypes: []MShellType { TypeBool{} },
+			OutputTypes: []MShellType { TypeString{} },
+		},
+		{
+			InputTypes: []MShellType { &TypeList{} },
+			OutputTypes: []MShellType { TypeString{} },
+		},
+		{
+			InputTypes: []MShellType { &TypeTuple{} },
+			OutputTypes: []MShellType { TypeString{} },
+		},
+		{
+			InputTypes: []MShellType { &TypeQuote{} },
+			OutputTypes: []MShellType { TypeString{} },
+		},
+	},
+}
+
 var typeDefAdd = []TypeDefinition {
 	{
 		InputTypes: []MShellType{TypeInt{}, TypeInt{}},
@@ -132,6 +165,20 @@ func TypeCheckErrorMessage(stack MShellTypeStack, typeDefs []TypeDefinition, tok
 	return builder.String()
 }
 
+func CheckKeyword(slice1 []string, slice2 []string) bool {
+	if len(slice1) != len(slice2) {
+		return false
+	}
+
+	for idx, item := range slice1 {
+		if slice2[idx] != item {
+			return false
+		}
+	}
+
+	return true
+}
+
 func TypeCheck(objects []MShellParseItem, stack MShellTypeStack, definitions []MShellDefinition, inQuote bool) TypeCheckResult {
 	// Short circuit if there are no objects to type check
 	if len(objects) == 0 {
@@ -152,6 +199,8 @@ func TypeCheck(objects []MShellParseItem, stack MShellTypeStack, definitions []M
 		InputTypes: inputTypes,
 		OutputTypes: outputTypes,
 	}
+
+	builtInTypeSlice := make([]TypeDefinition, 0)
 
 MainLoop:
 	for index < len(objects) {
@@ -203,24 +252,39 @@ MainLoop:
 			if t.Type == EOF {
 				return typeCheckResult
 			} else if t.Type == LITERAL {
-				var typeDef *TypeDefinition = nil
+				// var typeDef *TypeDefinition = nil
+				builtInTypeSlice = builtInTypeSlice[:0]
 
 				// Check for definitions
 				for _, definition := range definitions {
 					if definition.Name == t.Lexeme {
 						// Evaluate the definition
-						typeDef = &definition.TypeDef
+						builtInTypeSlice = append(builtInTypeSlice, definition.TypeDef)
+						// typeDef = &definition.TypeDef
 					}
 				}
 
-				if typeDef == nil {
+				if len(builtInTypeSlice) == 0 {
 					// Search built-in definitions
+					if defs, ok := builtInDefs[t.Lexeme]; ok {
+						builtInTypeSlice = append(builtInTypeSlice, defs...)
+					}
 				}
 
-				if typeDef == nil {
+				if len(builtInTypeSlice) == 0 {
 					stack.Push(&TypeString{})
 					continue MainLoop
 				}
+
+				// Check the stack for a matching type definition
+				idx := TypeCheckStack(stack, builtInTypeSlice)
+				if idx == -1 {
+					message := TypeCheckErrorMessage(stack, builtInTypeSlice, t.Lexeme)
+					typeCheckResult.Errors = append(typeCheckResult.Errors, TypeCheckError{Token: t, Message: message})
+					continue MainLoop
+				}
+
+				typeDef := builtInTypeSlice[idx]
 
 				if inQuote {
 					if len(typeDef.InputTypes) > stack.Len() {
@@ -380,6 +444,16 @@ MainLoop:
 				if t.Type == QUESTION {
 					stack.Push(TypeInt{})
 				}
+			} else if t.Type == STR {
+				idx := TypeCheckStack(stack, builtInDefs["str"])
+				// This should only happen for length mismatch.
+				if idx == -1 {
+					message := TypeCheckErrorMessage(stack, builtInDefs["str"], "str")
+					typeCheckResult.Errors = append(typeCheckResult.Errors, TypeCheckError{Token: t, Message: message})
+				}
+
+				stack.Pop()
+				stack.Push(TypeString{})
 			} else {
 				typeCheckResult.Errors = append(typeCheckResult.Errors, TypeCheckError{Token: t, Message: fmt.Sprintf("Unexpected token %s.\n", t.Lexeme)})
 			}
