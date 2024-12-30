@@ -398,6 +398,7 @@ func (t TypeBool) String() string {
 type TypeList struct {
 	ListType MShellType
 	Count int // This is < 0 if the Count is not known
+	StdoutBehavior StdoutBehavior
 }
 
 func (list *TypeList) Bind(otherType MShellType) ([]BoundType, error) {
@@ -443,6 +444,7 @@ func (list *TypeList) String() string {
 
 type TypeTuple struct {
 	Types []MShellType
+	StdoutBehavior StdoutBehavior
 }
 
 func (tuple *TypeTuple) Bind(otherType MShellType) ([]BoundType, error) {
@@ -730,7 +732,7 @@ func (parser *MShellParser) ParseTypeTuple() (*TypeTuple, error) {
 	}
 
 	parser.Match(parser.curr, RIGHT_SQUARE_BRACKET)
-	typeTuple := TypeTuple{Types: types}
+	typeTuple := TypeTuple{Types: types, StdoutBehavior: STDOUT_NONE}
 	return &typeTuple, nil
 }
 

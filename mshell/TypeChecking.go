@@ -175,6 +175,7 @@ MainLoop:
 
 			typeTuple := TypeTuple{
 				Types: listStack,
+				StdoutBehavior: STDOUT_NONE,
 			}
 
 			stack.Push(&typeTuple)
@@ -346,6 +347,39 @@ MainLoop:
 				// The the types of the quotes for the conditions:
 				// They should all be of the same type, and if they consume anything on the stack, they should put it back.
 				// The top of the stack should be a boolean.
+			} else if t.Type == EXECUTE || t.Type == QUESTION {
+				obj, err := stack.Pop()
+				if err != nil {
+					typeCheckResult.Errors = append(typeCheckResult.Errors, TypeCheckError{Token: t, Message: "Expected a list on the stack, but found none.\n"})
+					continue MainLoop
+				}
+
+				switch obj.(type) {
+				case *TypeTuple:
+					tuple := obj.(*TypeTuple)
+					stdoutBehavior := tuple.StdoutBehavior
+					if stdoutBehavior == STDOUT_LINES {
+						stack.Push(&TypeList{ListType: TypeString{}, Count: -1})
+					} else if stdoutBehavior == STDOUT_STRIPPED || stdoutBehavior == STDOUT_COMPLETE {
+						stack.Push(TypeString{})
+					} else if stdoutBehavior != STDOUT_NONE {
+						typeCheckResult.Errors = append(typeCheckResult.Errors, TypeCheckError{Token: t, Message: fmt.Sprintf("Expected a tuple with a known stdout behavior, but found %d.\n", stdoutBehavior)})
+					}
+				case *TypeList:
+					list := obj.(*TypeList)
+					stdoutBehavior := list.StdoutBehavior
+					if stdoutBehavior == STDOUT_LINES {
+						stack.Push(&TypeList{ListType: TypeString{}, Count: -1})
+					} else if stdoutBehavior == STDOUT_STRIPPED || stdoutBehavior == STDOUT_COMPLETE {
+						stack.Push(TypeString{})
+					} else if stdoutBehavior != STDOUT_NONE {
+						typeCheckResult.Errors = append(typeCheckResult.Errors, TypeCheckError{Token: t, Message: fmt.Sprintf("Expected a tuple with a known stdout behavior, but found %d.\n", stdoutBehavior)})
+					}
+				}
+
+				if t.Type == QUESTION {
+					stack.Push(TypeInt{})
+				}
 			} else {
 				typeCheckResult.Errors = append(typeCheckResult.Errors, TypeCheckError{Token: t, Message: fmt.Sprintf("Unexpected token %s.\n", t.Lexeme)})
 			}

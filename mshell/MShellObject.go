@@ -66,7 +66,7 @@ func (q *MShellQuotation) GetEndToken() Token {
 type StdoutBehavior int
 
 const (
-	STDOUT_NONE = iota
+	STDOUT_NONE StdoutBehavior = iota
 	STDOUT_LINES
 	STDOUT_STRIPPED
 	STDOUT_COMPLETE
