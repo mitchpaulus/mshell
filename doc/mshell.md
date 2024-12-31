@@ -34,6 +34,7 @@ No escaping is done within single quoted strings.
 - `glob`: Run glob against string/literal on top of the stack. Leaves list of strings on the stack.
 - `x`: Interpret/execute quotation
 - `cd`: Change directory `(string -- )`
+- `pwd`: Get current working directory `( -- string)`
 - `toFloat`: Convert to float. `(numeric -- float)`
 - `readFile`: Read file into string. `(string -- string)`
 - `readTsvFile`: Read a TSV file into list of list of strings. `(string -- list[list[string]])`

@@ -15,7 +15,7 @@ import (
 
 type MShellStack []MShellObject
 
-func (objList *MShellStack) Peek() (MShellObject, error) {
+func (objList *MShellStack) Peek() (MShellObject, error)            {
 	if len(*objList) == 0 {
 		return nil, fmt.Errorf("Empty stack")
 	}
@@ -913,6 +913,12 @@ MainLoop:
 					}
 
 					stack.Push(&MShellString{tildeExpanded})
+				} else if t.Lexeme == "pwd" {
+					pwd, err := os.Getwd()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Error getting current directory: %s\n", t.Line, t.Column, err.Error()))
+					}
+					stack.Push(&MShellString{pwd})
 				} else {
 					stack.Push(&MShellLiteral{t.Lexeme})
 				}

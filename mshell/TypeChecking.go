@@ -227,6 +227,12 @@ var builtInDefs = map[string][]TypeDefinition{
 		},
 	},
 	// ~ and ~/ probably have to be handled specially.
+	"pwd": {
+		{
+			InputTypes:  []MShellType{},
+			OutputTypes: []MShellType{TypeString{}},
+		},
+	},
 	"str": {
 		{
 			InputTypes:  []MShellType{TypeInt{}},
