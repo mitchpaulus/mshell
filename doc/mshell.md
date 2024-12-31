@@ -90,7 +90,7 @@ No escaping is done within single quoted strings.
 With a list on the stack, the following operators will leave output content on the stack after process execution:
 
 ```mshell
-o: [str], Stadard output, split by lines
+o: [str], Standard output, split by lines
 oc: str, Standard output, complete untouched
 os: str: Standard output, stripped
 e: [str], Standard error, split by lines
