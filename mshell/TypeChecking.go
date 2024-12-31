@@ -6,157 +6,157 @@ import (
 	"strings"
 )
 
-var builtInDefs = map[string][]TypeDefinition {
+var builtInDefs = map[string][]TypeDefinition{
 	".s": {
 		{
-			InputTypes: []MShellType {},
-			OutputTypes: []MShellType {},
+			InputTypes:  []MShellType{},
+			OutputTypes: []MShellType{},
 		},
 	},
 	".def": {
 		{
-			InputTypes: []MShellType {},
-			OutputTypes: []MShellType {},
+			InputTypes:  []MShellType{},
+			OutputTypes: []MShellType{},
 		},
 	},
 	"dup": {
 		{
-			InputTypes: []MShellType {TypeGeneric{ "a" }},
-			OutputTypes: []MShellType {TypeGeneric{ "a" }, TypeGeneric { "a" }},
+			InputTypes:  []MShellType{TypeGeneric{"a"}},
+			OutputTypes: []MShellType{TypeGeneric{"a"}, TypeGeneric{"a"}},
 		},
 	},
 	"over": {
 		{
-			InputTypes: []MShellType {TypeGeneric{ "a" }, TypeGeneric { "b" }},
-			OutputTypes: []MShellType {TypeGeneric{ "a" }, TypeGeneric { "b" }, TypeGeneric { "a" }},
+			InputTypes:  []MShellType{TypeGeneric{"a"}, TypeGeneric{"b"}},
+			OutputTypes: []MShellType{TypeGeneric{"a"}, TypeGeneric{"b"}, TypeGeneric{"a"}},
 		},
 	},
 	"swap": {
 		{
-			InputTypes: []MShellType {TypeGeneric{ "a" }, TypeGeneric { "b" }},
-			OutputTypes: []MShellType {TypeGeneric{ "b" }, TypeGeneric { "a" }},
+			InputTypes:  []MShellType{TypeGeneric{"a"}, TypeGeneric{"b"}},
+			OutputTypes: []MShellType{TypeGeneric{"b"}, TypeGeneric{"a"}},
 		},
 	},
 	"drop": {
 		{
-			InputTypes: []MShellType {TypeGeneric{ "a" }},
-			OutputTypes: []MShellType {},
+			InputTypes:  []MShellType{TypeGeneric{"a"}},
+			OutputTypes: []MShellType{},
 		},
 	},
 	"rot": {
 		{
-			InputTypes: []MShellType {TypeGeneric{ "a" }, TypeGeneric { "b" }, TypeGeneric { "c" }},
-			OutputTypes: []MShellType {TypeGeneric{ "b" }, TypeGeneric { "c" }, TypeGeneric { "a" }},
+			InputTypes:  []MShellType{TypeGeneric{"a"}, TypeGeneric{"b"}, TypeGeneric{"c"}},
+			OutputTypes: []MShellType{TypeGeneric{"b"}, TypeGeneric{"c"}, TypeGeneric{"a"}},
 		},
 	},
 	"-rot": {
 		{
-			InputTypes: []MShellType {TypeGeneric{ "a" }, TypeGeneric { "b" }, TypeGeneric { "c" }},
-			OutputTypes: []MShellType {TypeGeneric{ "c" }, TypeGeneric { "a" }, TypeGeneric { "b" }},
+			InputTypes:  []MShellType{TypeGeneric{"a"}, TypeGeneric{"b"}, TypeGeneric{"c"}},
+			OutputTypes: []MShellType{TypeGeneric{"c"}, TypeGeneric{"a"}, TypeGeneric{"b"}},
 		},
 	},
 	"nip": {
 		{
-			InputTypes: []MShellType {TypeGeneric{ "a" }, TypeGeneric { "b" }},
-			OutputTypes: []MShellType {TypeGeneric{ "b" }},
+			InputTypes:  []MShellType{TypeGeneric{"a"}, TypeGeneric{"b"}},
+			OutputTypes: []MShellType{TypeGeneric{"b"}},
 		},
 	},
 	"glob": {
 		{
-			InputTypes: []MShellType {TypeString{}},
-			OutputTypes: []MShellType {&TypeList{ListType: TypeString{}, Count: -1}},
+			InputTypes:  []MShellType{TypeString{}},
+			OutputTypes: []MShellType{&TypeList{ListType: TypeString{}, Count: -1}},
 		},
 	},
 	"stdin": {
 		{
-			InputTypes: []MShellType {},
-			OutputTypes: []MShellType {TypeString{}},
+			InputTypes:  []MShellType{},
+			OutputTypes: []MShellType{TypeString{}},
 		},
 	},
 	// Append probably has to be handled specially.
 	// "append": {
-		// {
-			// InputTypes: []MShellType {&TypeList{ListType: TypeGeneric{ "a" }, Count: -1}, TypeGeneric{ "a" }},
-			// OutputTypes: []MShellType {&TypeList{ListType: TypeGeneric{ "a" }, Count: -1}},
-		// },
+	// {
+	// InputTypes: []MShellType {&TypeList{ListType: TypeGeneric{ "a" }, Count: -1}, TypeGeneric{ "a" }},
+	// OutputTypes: []MShellType {&TypeList{ListType: TypeGeneric{ "a" }, Count: -1}},
+	// },
 
 	// },
 	"args": {
 		{
-			InputTypes: []MShellType {},
-			OutputTypes: []MShellType {&TypeList{ListType: TypeString{}, Count: -1}},
+			InputTypes:  []MShellType{},
+			OutputTypes: []MShellType{&TypeList{ListType: TypeString{}, Count: -1}},
 		},
 	},
 	"len": {
 		{
-			InputTypes: []MShellType {&TypeList{ListType: TypeGeneric{ "a" }, Count: -1}},
-			OutputTypes: []MShellType {TypeInt{}},
+			InputTypes:  []MShellType{&TypeList{ListType: TypeGeneric{"a"}, Count: -1}},
+			OutputTypes: []MShellType{TypeInt{}},
 		},
 		{
-			InputTypes: []MShellType {TypeString{}},
-			OutputTypes: []MShellType {TypeInt{}},
+			InputTypes:  []MShellType{TypeString{}},
+			OutputTypes: []MShellType{TypeInt{}},
 		},
 	},
 	// nth probably has to be handled specially.
 	// "nth": {
-		// {
-			// InputTypes: []MShellType {&TypeList{ListType: TypeGeneric{ "a" }, Count: -1}, TypeInt{}},
-			// OutputTypes: []MShellType {TypeGeneric{ "a" }},
-		// },
+	// {
+	// InputTypes: []MShellType {&TypeList{ListType: TypeGeneric{ "a" }, Count: -1}, TypeInt{}},
+	// OutputTypes: []MShellType {TypeGeneric{ "a" }},
+	// },
 	// },
 	// pick probably has to be handled specially.
 	"w": {
 		{
-			InputTypes: []MShellType { TypeString{} },
-			OutputTypes: []MShellType {},
+			InputTypes:  []MShellType{TypeString{}},
+			OutputTypes: []MShellType{},
 		},
 	},
 	"wl": {
 		{
-			InputTypes: []MShellType { TypeString{} },
-			OutputTypes: []MShellType {},
+			InputTypes:  []MShellType{TypeString{}},
+			OutputTypes: []MShellType{},
 		},
 	},
 	"we": {
 		{
-			InputTypes: []MShellType { TypeString{} },
-			OutputTypes: []MShellType {},
+			InputTypes:  []MShellType{TypeString{}},
+			OutputTypes: []MShellType{},
 		},
 	},
 	"wle": {
 		{
-			InputTypes: []MShellType { TypeString{} },
-			OutputTypes: []MShellType {},
+			InputTypes:  []MShellType{TypeString{}},
+			OutputTypes: []MShellType{},
 		},
 	},
 	"findReplace": {
 		{
-			InputTypes: []MShellType { TypeString{}, TypeString{}, TypeString{} },
-			OutputTypes: []MShellType { TypeString{} },
+			InputTypes:  []MShellType{TypeString{}, TypeString{}, TypeString{}},
+			OutputTypes: []MShellType{TypeString{}},
 		},
 	},
 	"split": {
 		{
-			InputTypes: []MShellType { TypeString{}, TypeString{} },
-			OutputTypes: []MShellType { &TypeList{ListType: TypeString{}, Count: -1} },
+			InputTypes:  []MShellType{TypeString{}, TypeString{}},
+			OutputTypes: []MShellType{&TypeList{ListType: TypeString{}, Count: -1}},
 		},
 	},
 	"wsplit": {
 		{
-			InputTypes: []MShellType { TypeString{} },
-			OutputTypes: []MShellType { &TypeList{ListType: TypeString{}, Count: -1} },
+			InputTypes:  []MShellType{TypeString{}},
+			OutputTypes: []MShellType{&TypeList{ListType: TypeString{}, Count: -1}},
 		},
 	},
 	"join": {
 		{
-			InputTypes: []MShellType { &TypeList{ListType: TypeString{}, Count: -1}, TypeString{} },
-			OutputTypes: []MShellType { TypeString{} },
+			InputTypes:  []MShellType{&TypeList{ListType: TypeString{}, Count: -1}, TypeString{}},
+			OutputTypes: []MShellType{TypeString{}},
 		},
 	},
 	"lines": {
 		{
-			InputTypes: []MShellType { TypeString{} },
-			OutputTypes: []MShellType { &TypeList{ListType: TypeString{}, Count: -1} },
+			InputTypes:  []MShellType{TypeString{}},
+			OutputTypes: []MShellType{&TypeList{ListType: TypeString{}, Count: -1}},
 		},
 	},
 	// setAt probably has to be handled specially.
@@ -164,118 +164,170 @@ var builtInDefs = map[string][]TypeDefinition {
 	// del probably has to be handled specially.
 	"readFile": {
 		{
-			InputTypes: []MShellType { TypeString{} },
-			OutputTypes: []MShellType { TypeString{} },
+			InputTypes:  []MShellType{TypeString{}},
+			OutputTypes: []MShellType{TypeString{}},
 		},
 	},
 	"cd": {
 		{
-			InputTypes: []MShellType { TypeString{} },
-			OutputTypes: []MShellType {},
+			InputTypes:  []MShellType{TypeString{}},
+			OutputTypes: []MShellType{},
 		},
 	},
 	// in probably has to be handled specially.
 	"/": {
 		{
-			InputTypes: []MShellType { TypeInt{}, TypeInt{} },
-			OutputTypes: []MShellType { TypeInt{} },
+			InputTypes:  []MShellType{TypeInt{}, TypeInt{}},
+			OutputTypes: []MShellType{TypeInt{}},
 		},
 		{
-			InputTypes: []MShellType { TypeFloat{}, TypeFloat{} },
-			OutputTypes: []MShellType { TypeFloat{} },
+			InputTypes:  []MShellType{TypeFloat{}, TypeFloat{}},
+			OutputTypes: []MShellType{TypeFloat{}},
 		},
 		{
-			InputTypes: []MShellType { TypeInt{}, TypeFloat{} },
-			OutputTypes: []MShellType { TypeFloat{} },
+			InputTypes:  []MShellType{TypeInt{}, TypeFloat{}},
+			OutputTypes: []MShellType{TypeFloat{}},
 		},
 		{
-			InputTypes: []MShellType { TypeFloat{}, TypeInt{} },
-			OutputTypes: []MShellType { TypeFloat{} },
+			InputTypes:  []MShellType{TypeFloat{}, TypeInt{}},
+			OutputTypes: []MShellType{TypeFloat{}},
 		},
 	},
 	// exit needs to be handled specially.
 	"*": {
 		{
-			InputTypes: []MShellType { TypeInt{}, TypeInt{} },
-			OutputTypes: []MShellType { TypeInt{} },
+			InputTypes:  []MShellType{TypeInt{}, TypeInt{}},
+			OutputTypes: []MShellType{TypeInt{}},
 		},
 		{
-			InputTypes: []MShellType { TypeFloat{}, TypeFloat{} },
-			OutputTypes: []MShellType { TypeFloat{} },
+			InputTypes:  []MShellType{TypeFloat{}, TypeFloat{}},
+			OutputTypes: []MShellType{TypeFloat{}},
 		},
 		{
-			InputTypes: []MShellType { TypeInt{}, TypeFloat{} },
-			OutputTypes: []MShellType { TypeFloat{} },
+			InputTypes:  []MShellType{TypeInt{}, TypeFloat{}},
+			OutputTypes: []MShellType{TypeFloat{}},
 		},
 		{
-			InputTypes: []MShellType { TypeFloat{}, TypeInt{} },
-			OutputTypes: []MShellType { TypeFloat{} },
+			InputTypes:  []MShellType{TypeFloat{}, TypeInt{}},
+			OutputTypes: []MShellType{TypeFloat{}},
 		},
 	},
 	"toFloat": {
 		{
-			InputTypes: []MShellType { TypeInt{} },
-			OutputTypes: []MShellType { TypeFloat{} },
+			InputTypes:  []MShellType{TypeInt{}},
+			OutputTypes: []MShellType{TypeFloat{}},
 		},
 		{
-			InputTypes: []MShellType { TypeFloat{} },
-			OutputTypes: []MShellType { TypeFloat{} },
+			InputTypes:  []MShellType{TypeFloat{}},
+			OutputTypes: []MShellType{TypeFloat{}},
 		},
 		{
-			InputTypes: []MShellType { TypeString{} },
-			OutputTypes: []MShellType { TypeFloat{} },
+			InputTypes:  []MShellType{TypeString{}},
+			OutputTypes: []MShellType{TypeFloat{}},
 		},
 	},
 	// ~ and ~/ probably have to be handled specially.
 	"str": {
 		{
-			InputTypes: []MShellType { TypeInt{} },
-			OutputTypes: []MShellType { TypeString{} },
+			InputTypes:  []MShellType{TypeInt{}},
+			OutputTypes: []MShellType{TypeString{}},
 		},
 		{
-			InputTypes: []MShellType { TypeFloat{} },
-			OutputTypes: []MShellType { TypeString{} },
+			InputTypes:  []MShellType{TypeFloat{}},
+			OutputTypes: []MShellType{TypeString{}},
 		},
 		{
-			InputTypes: []MShellType { TypeString{} },
-			OutputTypes: []MShellType { TypeString{} },
+			InputTypes:  []MShellType{TypeString{}},
+			OutputTypes: []MShellType{TypeString{}},
 		},
 		{
-			InputTypes: []MShellType { TypeBool{} },
-			OutputTypes: []MShellType { TypeString{} },
+			InputTypes:  []MShellType{TypeBool{}},
+			OutputTypes: []MShellType{TypeString{}},
 		},
 		{
-			InputTypes: []MShellType { &TypeList{} },
-			OutputTypes: []MShellType { TypeString{} },
+			InputTypes:  []MShellType{&TypeList{}},
+			OutputTypes: []MShellType{TypeString{}},
 		},
 		{
-			InputTypes: []MShellType { &TypeTuple{} },
-			OutputTypes: []MShellType { TypeString{} },
+			InputTypes:  []MShellType{&TypeTuple{}},
+			OutputTypes: []MShellType{TypeString{}},
 		},
 		{
-			InputTypes: []MShellType { &TypeQuote{} },
-			OutputTypes: []MShellType { TypeString{} },
+			InputTypes:  []MShellType{&TypeQuote{}},
+			OutputTypes: []MShellType{TypeString{}},
 		},
 	},
 }
 
-var typeDefAdd = []TypeDefinition {
+var typeDefAdd = []TypeDefinition{
 	{
-		InputTypes: []MShellType{TypeInt{}, TypeInt{}},
+		InputTypes:  []MShellType{TypeInt{}, TypeInt{}},
 		OutputTypes: []MShellType{TypeInt{}},
 	},
 	{
-		InputTypes: []MShellType{TypeString{}, TypeString{}},
+		InputTypes:  []MShellType{TypeString{}, TypeString{}},
 		OutputTypes: []MShellType{TypeString{}},
 	},
 	{
-		InputTypes: []MShellType{TypeFloat{}, TypeFloat{}},
+		InputTypes:  []MShellType{TypeFloat{}, TypeFloat{}},
 		OutputTypes: []MShellType{TypeFloat{}},
 	},
 }
 
+var typeDefMinus = []TypeDefinition{
+	{
+		InputTypes:  []MShellType{TypeInt{}, TypeInt{}},
+		OutputTypes: []MShellType{TypeInt{}},
+	},
+	{
+		InputTypes:  []MShellType{TypeFloat{}, TypeFloat{}},
+		OutputTypes: []MShellType{TypeFloat{}},
+	},
+	{
+		InputTypes:  []MShellType{TypeInt{}, TypeFloat{}},
+		OutputTypes: []MShellType{TypeFloat{}},
+	},
+	{
+		InputTypes:  []MShellType{TypeFloat{}, TypeInt{}},
+		OutputTypes: []MShellType{TypeFloat{}},
+	},
+}
+
+var typeDefAndOr = []TypeDefinition{
+	{
+		InputTypes:  []MShellType{TypeBool{}, TypeBool{}},
+		OutputTypes: []MShellType{TypeBool{}},
+	},
+}
+
+var typeDefNot = []TypeDefinition{
+	{
+		InputTypes:  []MShellType{TypeBool{}},
+		OutputTypes: []MShellType{TypeBool{}},
+	},
+}
+
+var typeDefComparerEqual = []TypeDefinition{
+	{
+		InputTypes:  []MShellType{TypeInt{}, TypeInt{}},
+		OutputTypes: []MShellType{TypeBool{}},
+	},
+	{
+		InputTypes:  []MShellType{TypeFloat{}, TypeFloat{}},
+		OutputTypes: []MShellType{TypeBool{}},
+	},
+	{
+		InputTypes:  []MShellType{TypeInt{}, TypeFloat{}},
+		OutputTypes: []MShellType{TypeBool{}},
+	},
+	{
+		InputTypes:  []MShellType{TypeFloat{}, TypeInt{}},
+		OutputTypes: []MShellType{TypeBool{}},
+	},
+}
+
 type TypeCheckError struct {
-	Token Token
+	Token   Token
 	Message string
 }
 
@@ -284,8 +336,8 @@ func (err TypeCheckError) String() string {
 }
 
 type TypeCheckResult struct {
-	Errors []TypeCheckError
-	InputTypes []MShellType
+	Errors      []TypeCheckError
+	InputTypes  []MShellType
 	OutputTypes []MShellType
 }
 
@@ -327,8 +379,22 @@ type TypeCheckContext struct {
 	InQuote bool
 }
 
+func TypeCheckNonGenericAndPush(typeDefs []TypeDefinition, stack MShellTypeStack, typeCheckResult *TypeCheckResult, t Token) {
+	idx := TypeCheckStack(stack, typeDefs)
+	if idx == -1 {
+		message := TypeCheckErrorMessage(stack, typeDefs, t.Lexeme)
+		typeCheckResult.Errors = append(typeCheckResult.Errors, TypeCheckError{Token: t, Message: message})
+	}
+	for range typeDefs[idx].InputTypes {
+		stack.Pop()
+	}
+	for _, outputType := range typeDefs[idx].OutputTypes {
+		stack.Push(outputType)
+	}
+}
+
 func TypeCheckTypeDef(stack MShellTypeStack, typeDef TypeDefinition) bool {
-	if (len(typeDef.InputTypes) > stack.Len()) {
+	if len(typeDef.InputTypes) > stack.Len() {
 		return false
 	}
 
@@ -346,7 +412,7 @@ func TypeCheckTypeDef(stack MShellTypeStack, typeDef TypeDefinition) bool {
 	return true
 }
 
-func TypeCheckStack(stack MShellTypeStack, typeDefs []TypeDefinition) (int) {
+func TypeCheckStack(stack MShellTypeStack, typeDefs []TypeDefinition) int {
 	for idx, typeDef := range typeDefs {
 		if TypeCheckTypeDef(stack, typeDef) {
 			return idx
@@ -356,7 +422,7 @@ func TypeCheckStack(stack MShellTypeStack, typeDefs []TypeDefinition) (int) {
 	return -1
 }
 
-func TypeCheckErrorMessage(stack MShellTypeStack, typeDefs []TypeDefinition, tokenName string) (string) {
+func TypeCheckErrorMessage(stack MShellTypeStack, typeDefs []TypeDefinition, tokenName string) string {
 	// First check for a length mismatch
 	minInputLength := 10000
 	maxInputLength := 0
@@ -407,8 +473,8 @@ func TypeCheck(objects []MShellParseItem, stack MShellTypeStack, definitions []M
 	// Short circuit if there are no objects to type check
 	if len(objects) == 0 {
 		return TypeCheckResult{
-			Errors: make([]TypeCheckError, 0),
-			InputTypes: make([]MShellType, 0),
+			Errors:      make([]TypeCheckError, 0),
+			InputTypes:  make([]MShellType, 0),
 			OutputTypes: make([]MShellType, 0),
 		}
 	}
@@ -419,8 +485,8 @@ func TypeCheck(objects []MShellParseItem, stack MShellTypeStack, definitions []M
 	index := 0
 
 	typeCheckResult := TypeCheckResult{
-		Errors: make([]TypeCheckError, 0),
-		InputTypes: inputTypes,
+		Errors:      make([]TypeCheckError, 0),
+		InputTypes:  inputTypes,
 		OutputTypes: outputTypes,
 	}
 
@@ -440,14 +506,14 @@ MainLoop:
 			result := TypeCheck(list.Items, listStack, definitions, false)
 
 			// if result.BreakNum > 0 {
-				// return FailWithMessage("Encountered break within list.\n")
+			// return FailWithMessage("Encountered break within list.\n")
 			// }
 
 			// stack.Push(&MShellList{Items: listStack, StandardInputFile: "", StandardOutputFile: "", StdoutBehavior: STDOUT_NONE})
 			typeCheckResult.Errors = append(typeCheckResult.Errors, result.Errors...)
 
 			typeTuple := TypeTuple{
-				Types: listStack,
+				Types:          listStack,
 				StdoutBehavior: STDOUT_NONE,
 			}
 
@@ -455,7 +521,7 @@ MainLoop:
 		case *MShellParseQuote:
 			quote := t.(*MShellParseQuote)
 			typeQuote := TypeQuote{
-				InputTypes: make([]MShellType, 0),
+				InputTypes:  make([]MShellType, 0),
 				OutputTypes: make([]MShellType, 0),
 			}
 
@@ -588,7 +654,6 @@ MainLoop:
 					allBindingSlice = append(allBindingSlice, BoundType{GenericName: key, Type: types[0]})
 				}
 
-
 				// Check the input types
 				for i := 0; i < len(inputTypes); i++ {
 					stackType, _ := stack.Pop()
@@ -610,14 +675,17 @@ MainLoop:
 			} else if t.Type == STRING || t.Type == SINGLEQUOTESTRING {
 				stack.Push(TypeString{})
 			} else if t.Type == PLUS {
-				idx := TypeCheckStack(stack, typeDefAdd)
-				if idx == -1 {
-					message := TypeCheckErrorMessage(stack, typeDefAdd, "+")
-
-					typeCheckResult.Errors = append(typeCheckResult.Errors, TypeCheckError{Token: t, Message: message})
-					return typeCheckResult
-					// continue MainLoop
-				}
+				TypeCheckNonGenericAndPush(typeDefAdd, stack, &typeCheckResult, t)
+			} else if t.Type == MINUS {
+				TypeCheckNonGenericAndPush(typeDefMinus, stack, &typeCheckResult, t)
+			} else if t.Type == AND || t.Type == OR {
+				TypeCheckNonGenericAndPush(typeDefAndOr, stack, &typeCheckResult, t)
+			} else if t.Type == NOT {
+				TypeCheckNonGenericAndPush(typeDefNot, stack, &typeCheckResult, t)
+			} else if t.Type == GREATERTHANOREQUAL || t.Type == LESSTHANOREQUAL {
+				TypeCheckNonGenericAndPush(typeDefComparerEqual, stack, &typeCheckResult, t)
+			} else if t.Type == GREATERTHAN || t.Type == LESSTHAN {
+				// TODO: Need to handle special
 			} else if t.Type == IF {
 				obj, err := stack.Pop()
 				if err != nil {
@@ -637,7 +705,7 @@ MainLoop:
 						}
 					}
 
-					for i := 0; i < len(tuple.Types) - 1; i += 2 {
+					for i := 0; i < len(tuple.Types)-1; i += 2 {
 						// Check that the final element is a boolean
 						outputTypes = tuple.Types[i].(*TypeQuote).OutputTypes
 
@@ -646,8 +714,8 @@ MainLoop:
 							continue MainLoop
 						}
 
-						if _, ok := outputTypes[len(outputTypes) - 1].(*TypeBool); !ok {
-							badType := outputTypes[len(outputTypes) - 1].String()
+						if _, ok := outputTypes[len(outputTypes)-1].(*TypeBool); !ok {
+							badType := outputTypes[len(outputTypes)-1].String()
 							typeCheckResult.Errors = append(typeCheckResult.Errors, TypeCheckError{Token: t, Message: fmt.Sprintf("Expected a quote to have an output with a boolean on the top of the stack, but found a %s.\n", badType)})
 							continue MainLoop
 						}
@@ -750,12 +818,11 @@ MainLoop:
 	return typeCheckResult
 }
 
-
 func BuiltInDefs(name string) (*TypeDefinition, error) {
 	switch name {
 	case ".s":
 		return &TypeDefinition{
-			InputTypes: make([]MShellType, 0),
+			InputTypes:  make([]MShellType, 0),
 			OutputTypes: make([]MShellType, 0),
 		}, nil
 
