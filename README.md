@@ -146,3 +146,9 @@ wt ((toFloat abs str) map wjoin wl) each
 - Improved error messages
 - Dictionaries
 - Built-in coreuitls, `cp`, `mv`, `rm`, `mkdir`
+
+# References/Inspirations
+
+- [Porth](https://gitlab.com/tsoding/porth)
+- [Factor](https://factorcode.org/)
+- [`dt`](https://dt.plumbing/)
