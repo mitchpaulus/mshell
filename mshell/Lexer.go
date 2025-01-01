@@ -485,7 +485,7 @@ func (l *Lexer) scanToken() Token {
 			// Consume the hyphen and parse the number
 			l.advance()
 			return l.parseNumberOrStartIndexer()
-		} else if unicode.IsSpace(l.peek()) {
+		} else if unicode.IsSpace(l.peek()) || !isAllowedLiteral(l.peek()) {
 			return l.makeToken(MINUS)
 		} else {
 			return l.parseLiteralOrKeyword()
