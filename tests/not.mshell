@@ -1,1 +1,1 @@
-[(false not) ([echo "Got a true"];) ([echo "Got a false" ];)] if
+[(false not) ("Got a true" wl) ("Got a false" wl)] if

@@ -6,6 +6,10 @@ import (
 	"strings"
 )
 
+var genericA = TypeGeneric{"a", 1}
+var genericB = TypeGeneric{"b", 1}
+var genericC = TypeGeneric{"c", 1}
+
 var builtInDefs = map[string][]TypeDefinition{
 	".s": {
 		{
@@ -21,44 +25,44 @@ var builtInDefs = map[string][]TypeDefinition{
 	},
 	"dup": {
 		{
-			InputTypes:  []MShellType{TypeGeneric{"a"}},
-			OutputTypes: []MShellType{TypeGeneric{"a"}, TypeGeneric{"a"}},
+			InputTypes:  []MShellType{genericA},
+			OutputTypes: []MShellType{genericA, genericA},
 		},
 	},
 	"over": {
 		{
-			InputTypes:  []MShellType{TypeGeneric{"a"}, TypeGeneric{"b"}},
-			OutputTypes: []MShellType{TypeGeneric{"a"}, TypeGeneric{"b"}, TypeGeneric{"a"}},
+			InputTypes:  []MShellType{genericA, genericB},
+			OutputTypes: []MShellType{genericA, genericB, genericA},
 		},
 	},
 	"swap": {
 		{
-			InputTypes:  []MShellType{TypeGeneric{"a"}, TypeGeneric{"b"}},
-			OutputTypes: []MShellType{TypeGeneric{"b"}, TypeGeneric{"a"}},
+			InputTypes:  []MShellType{genericA, genericB},
+			OutputTypes: []MShellType{genericB, genericA},
 		},
 	},
 	"drop": {
 		{
-			InputTypes:  []MShellType{TypeGeneric{"a"}},
+			InputTypes:  []MShellType{genericA},
 			OutputTypes: []MShellType{},
 		},
 	},
 	"rot": {
 		{
-			InputTypes:  []MShellType{TypeGeneric{"a"}, TypeGeneric{"b"}, TypeGeneric{"c"}},
-			OutputTypes: []MShellType{TypeGeneric{"b"}, TypeGeneric{"c"}, TypeGeneric{"a"}},
+			InputTypes:  []MShellType{genericA, genericB, genericC},
+			OutputTypes: []MShellType{genericB, genericC, genericA},
 		},
 	},
 	"-rot": {
 		{
-			InputTypes:  []MShellType{TypeGeneric{"a"}, TypeGeneric{"b"}, TypeGeneric{"c"}},
-			OutputTypes: []MShellType{TypeGeneric{"c"}, TypeGeneric{"a"}, TypeGeneric{"b"}},
+			InputTypes:  []MShellType{genericA, genericB, genericC},
+			OutputTypes: []MShellType{genericC, genericA, genericB},
 		},
 	},
 	"nip": {
 		{
-			InputTypes:  []MShellType{TypeGeneric{"a"}, TypeGeneric{"b"}},
-			OutputTypes: []MShellType{TypeGeneric{"b"}},
+			InputTypes:  []MShellType{genericA, genericB},
+			OutputTypes: []MShellType{genericB},
 		},
 	},
 	"glob": {
@@ -89,7 +93,7 @@ var builtInDefs = map[string][]TypeDefinition{
 	},
 	"len": {
 		{
-			InputTypes:  []MShellType{&TypeList{ListType: TypeGeneric{"a"}, Count: -1}},
+			InputTypes:  []MShellType{&TypeList{ListType: genericA, Count: -1}},
 			OutputTypes: []MShellType{TypeInt{}},
 		},
 		{
@@ -329,6 +333,13 @@ var typeDefComparerEqual = []TypeDefinition{
 	{
 		InputTypes:  []MShellType{TypeFloat{}, TypeInt{}},
 		OutputTypes: []MShellType{TypeBool{}},
+	},
+}
+
+var typeDefStdErrRedirect = []TypeDefinition{
+	{
+		InputTypes:  []MShellType{&TypeList{ListType: TypeGeneric{"a", -1}, Count: -1}, TypeString{}},
+		OutputTypes: []MShellType{&TypeList{ListType: TypeGeneric{"a", -1}, Count: -1}},
 	},
 }
 
@@ -674,25 +685,58 @@ MainLoop:
 					outputType := typeDef.OutputTypes[i].Replace(allBindingSlice)
 					stack.Push(outputType)
 				}
-			} else if t.Type == TRUE || t.Type == FALSE {
+			} else if t.Type == EXECUTE || t.Type == QUESTION { // Token Type
+				obj, err := stack.Pop()
+				if err != nil {
+					typeCheckResult.Errors = append(typeCheckResult.Errors, TypeCheckError{Token: t, Message: "Expected a list on the stack, but found none.\n"})
+					continue MainLoop
+				}
+
+				switch obj.(type) {
+				case *TypeTuple:
+					tuple := obj.(*TypeTuple)
+					stdoutBehavior := tuple.StdoutBehavior
+					if stdoutBehavior == STDOUT_LINES {
+						stack.Push(&TypeList{ListType: TypeString{}, Count: -1})
+					} else if stdoutBehavior == STDOUT_STRIPPED || stdoutBehavior == STDOUT_COMPLETE {
+						stack.Push(TypeString{})
+					} else if stdoutBehavior != STDOUT_NONE {
+						typeCheckResult.Errors = append(typeCheckResult.Errors, TypeCheckError{Token: t, Message: fmt.Sprintf("Expected a tuple with a known stdout behavior, but found %d.\n", stdoutBehavior)})
+					}
+				case *TypeList:
+					list := obj.(*TypeList)
+					stdoutBehavior := list.StdoutBehavior
+					if stdoutBehavior == STDOUT_LINES {
+						stack.Push(&TypeList{ListType: TypeString{}, Count: -1})
+					} else if stdoutBehavior == STDOUT_STRIPPED || stdoutBehavior == STDOUT_COMPLETE {
+						stack.Push(TypeString{})
+					} else if stdoutBehavior != STDOUT_NONE {
+						typeCheckResult.Errors = append(typeCheckResult.Errors, TypeCheckError{Token: t, Message: fmt.Sprintf("Expected a tuple with a known stdout behavior, but found %d.\n", stdoutBehavior)})
+					}
+				}
+
+				if t.Type == QUESTION {
+					stack.Push(TypeInt{})
+				}
+			} else if t.Type == TRUE || t.Type == FALSE { // Token Type
 				stack.Push(TypeBool{})
-			} else if t.Type == INTEGER {
+			} else if t.Type == INTEGER { // Token Type
 				stack.Push(TypeInt{})
-			} else if t.Type == STRING || t.Type == SINGLEQUOTESTRING {
+			} else if t.Type == STRING || t.Type == SINGLEQUOTESTRING { // Token Type
 				stack.Push(TypeString{})
-			} else if t.Type == PLUS {
+			} else if t.Type == PLUS { // Token Type
 				TypeCheckNonGenericAndPush(typeDefAdd, stack, &typeCheckResult, t)
-			} else if t.Type == MINUS {
+			} else if t.Type == MINUS { // Token Type
 				TypeCheckNonGenericAndPush(typeDefMinus, stack, &typeCheckResult, t)
-			} else if t.Type == AND || t.Type == OR {
+			} else if t.Type == AND || t.Type == OR { // Token Type
 				TypeCheckNonGenericAndPush(typeDefAndOr, stack, &typeCheckResult, t)
-			} else if t.Type == NOT {
+			} else if t.Type == NOT { // Token Type
 				TypeCheckNonGenericAndPush(typeDefNot, stack, &typeCheckResult, t)
-			} else if t.Type == GREATERTHANOREQUAL || t.Type == LESSTHANOREQUAL {
+			} else if t.Type == GREATERTHANOREQUAL || t.Type == LESSTHANOREQUAL { // Token Type
 				TypeCheckNonGenericAndPush(typeDefComparerEqual, stack, &typeCheckResult, t)
-			} else if t.Type == GREATERTHAN || t.Type == LESSTHAN {
+			} else if t.Type == GREATERTHAN || t.Type == LESSTHAN { // Token Type
 				// TODO: Need to handle special
-			} else if t.Type == IF {
+			} else if t.Type == IF { // Token Type
 				obj, err := stack.Pop()
 				if err != nil {
 					typeCheckResult.Errors = append(typeCheckResult.Errors, TypeCheckError{Token: t, Message: "Expected a list on the stack, but found none.\n"})
@@ -769,42 +813,9 @@ MainLoop:
 				// The the types of the quotes for the conditions:
 				// They should all be of the same type, and if they consume anything on the stack, they should put it back.
 				// The top of the stack should be a boolean.
-			} else if t.Type == EXECUTE || t.Type == QUESTION {
-				obj, err := stack.Pop()
-				if err != nil {
-					typeCheckResult.Errors = append(typeCheckResult.Errors, TypeCheckError{Token: t, Message: "Expected a list on the stack, but found none.\n"})
-					continue MainLoop
-				}
-
-				switch obj.(type) {
-				case *TypeTuple:
-					tuple := obj.(*TypeTuple)
-					stdoutBehavior := tuple.StdoutBehavior
-					if stdoutBehavior == STDOUT_LINES {
-						stack.Push(&TypeList{ListType: TypeString{}, Count: -1})
-					} else if stdoutBehavior == STDOUT_STRIPPED || stdoutBehavior == STDOUT_COMPLETE {
-						stack.Push(TypeString{})
-					} else if stdoutBehavior != STDOUT_NONE {
-						typeCheckResult.Errors = append(typeCheckResult.Errors, TypeCheckError{Token: t, Message: fmt.Sprintf("Expected a tuple with a known stdout behavior, but found %d.\n", stdoutBehavior)})
-					}
-				case *TypeList:
-					list := obj.(*TypeList)
-					stdoutBehavior := list.StdoutBehavior
-					if stdoutBehavior == STDOUT_LINES {
-						stack.Push(&TypeList{ListType: TypeString{}, Count: -1})
-					} else if stdoutBehavior == STDOUT_STRIPPED || stdoutBehavior == STDOUT_COMPLETE {
-						stack.Push(TypeString{})
-					} else if stdoutBehavior != STDOUT_NONE {
-						typeCheckResult.Errors = append(typeCheckResult.Errors, TypeCheckError{Token: t, Message: fmt.Sprintf("Expected a tuple with a known stdout behavior, but found %d.\n", stdoutBehavior)})
-					}
-				}
-
-				if t.Type == QUESTION {
-					stack.Push(TypeInt{})
-				}
-			} else if t.Type == FLOAT {
+			} else if t.Type == FLOAT { // Token Type
 				stack.Push(TypeFloat{})
-			} else if t.Type == STR {
+			} else if t.Type == STR { // Token Type
 				idx := TypeCheckStack(stack, builtInDefs["str"])
 				// This should only happen for length mismatch.
 				if idx == -1 {
@@ -814,6 +825,15 @@ MainLoop:
 
 				stack.Pop()
 				stack.Push(TypeString{})
+			} else if t.Type == STDERRREDIRECT { // Token Type
+				if len(stack) < 2 && inQuote {
+					typeCheckResult.Errors = append(typeCheckResult.Errors, TypeCheckError{Token: t, Message: "Expected a list and a string on the stack, but found less than two items. Redirect cannot be at the beginning of quote.\n"})
+				}
+				// idx := TypeCheckNonGenericAndPush(typeDefStdErrRedirect, stack, &typeCheckResult, t)
+				// if idx == -1 {
+					// message := TypeCheckErrorMessage(stack, typeDefStdErrRedirect, "stderrRedirect")
+					// typeCheckResult.Errors = append(typeCheckResult.Errors, TypeCheckError{Token: t, Message: message})
+				// }
 			} else {
 				typeCheckResult.Errors = append(typeCheckResult.Errors, TypeCheckError{Token: t, Message: fmt.Sprintf("Unexpected token '%s' (%v).\n", t.Lexeme, t.Type)})
 				return typeCheckResult

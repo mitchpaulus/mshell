@@ -275,7 +275,8 @@ func (def *TypeDefinition) ToJson() string {
 }
 
 type TypeGeneric struct {
-	Name string
+	Name  string
+	Count int // -1 if the generic is variadic.
 }
 
 func (generic TypeGeneric) Bind(otherType MShellType) ([]BoundType, error) {

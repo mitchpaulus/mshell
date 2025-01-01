@@ -1,16 +1,16 @@
-[echo [(true false and) (truey) (falsey)] if];
-[echo [(true true and) (truey) (falsey)] if];
-[echo [(false false and) (truey) (falsey)] if];
-[echo [(true false or) (truey) (falsey)] if];
-[echo [(true true or) (truey) (falsey)] if];
-[echo [(false false or) (truey) (falsey)] if];
+[(true false and) ("truey") ("falsey")] if wl
+[(true true and) ("truey") ("falsey")] if wl
+[(false false and) ("truey") ("falsey")] if wl
+[(true false or) ("truey") ("falsey")] if wl
+[(true true or) ("truey") ("falsey")] if wl
+[(false false or) ("truey") ("falsey")] if wl
 
-[echo];
-[echo Nots];
-[echo "========"];
-[echo [(true false and not) (truey) (falsey)] if];
-[echo [(true true and not) (truey) (falsey)] if];
-[echo [(false false and not) (truey) (falsey)] if];
-[echo [(true false or not) (truey) (falsey)] if];
-[echo [(true true or not) (truey) (falsey)] if];
-[echo [(false false or not) (truey) (falsey)] if];
+"" wl
+"Nots" wl
+"========" wl
+[(true false and not) ("truey") ("falsey")] if wl
+[(true true and not) ("truey") ("falsey")] if wl
+[(false false and not) ("truey") ("falsey")] if wl
+[(true false or not) ("truey") ("falsey")] if wl
+[(true true or not) ("truey") ("falsey")] if wl
+[(false false or not) ("truey") ("falsey")] if wl

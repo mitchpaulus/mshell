@@ -922,11 +922,11 @@ MainLoop:
 				} else {
 					stack.Push(&MShellLiteral{t.Lexeme})
 				}
-			} else if t.Type == LEFT_SQUARE_BRACKET {
+			} else if t.Type == LEFT_SQUARE_BRACKET { // Token Type
 				return FailWithMessage(fmt.Sprintf("%d:%d: Found unexpected left square bracket.\n", t.Line, t.Column))
-			} else if t.Type == LEFT_PAREN {
+			} else if t.Type == LEFT_PAREN { // Token Type
 				return FailWithMessage(fmt.Sprintf("%d:%d: Found unexpected left parenthesis.\n", t.Line, t.Column))
-			} else if t.Type == EXECUTE || t.Type == QUESTION {
+			} else if t.Type == EXECUTE || t.Type == QUESTION { // Token Type
 				top, err := stack.Pop()
 				if err != nil {
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot execute an empty stack.\n", t.Line, t.Column))
@@ -982,26 +982,26 @@ MainLoop:
 				if t.Type == QUESTION {
 					stack.Push(&MShellInt{exitCode})
 				}
-			} else if t.Type == TRUE {
+			} else if t.Type == TRUE { // Token Type
 				stack.Push(&MShellBool{true})
-			} else if t.Type == FALSE {
+			} else if t.Type == FALSE { // Token Type
 				stack.Push(&MShellBool{false})
-			} else if t.Type == INTEGER {
+			} else if t.Type == INTEGER { // Token Type
 				intVal, err := strconv.Atoi(t.Lexeme)
 				if err != nil {
 					return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing integer: %s\n", t.Line, t.Column, err.Error()))
 				}
 
 				stack.Push(&MShellInt{intVal})
-			} else if t.Type == STRING {
+			} else if t.Type == STRING { // Token Type
 				parsedString, err := ParseRawString(t.Lexeme)
 				if err != nil {
 					return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing string: %s\n", t.Line, t.Column, err.Error()))
 				}
 				stack.Push(&MShellString{parsedString})
-			} else if t.Type == SINGLEQUOTESTRING {
+			} else if t.Type == SINGLEQUOTESTRING { // Token Type
 				stack.Push(&MShellString{t.Lexeme[1 : len(t.Lexeme)-1]})
-			} else if t.Type == IF {
+			} else if t.Type == IF { // Token Type
 				obj, err := stack.Pop()
 				if err != nil {
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do an 'if' on an empty stack.\n", t.Line, t.Column))
@@ -1086,7 +1086,7 @@ MainLoop:
 						return result
 					}
 				}
-			} else if t.Type == PLUS {
+			} else if t.Type == PLUS { // Token Type
 				obj1, err := stack.Pop()
 				if err != nil {
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '+' operation on an empty stack.\n", t.Line, t.Column))
@@ -1145,7 +1145,7 @@ MainLoop:
 				default:
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '+' between a %s and a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
 				}
-			} else if t.Type == MINUS {
+			} else if t.Type == MINUS { // Token Type
 				obj1, err := stack.Pop()
 				if err != nil {
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '-' operation on an empty stack.\n", t.Line, t.Column))
@@ -1167,7 +1167,7 @@ MainLoop:
 				default:
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '-' to a %s and %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
 				}
-			} else if t.Type == AND || t.Type == OR {
+			} else if t.Type == AND || t.Type == OR { // Token Type
 				obj1, err := stack.Pop()
 				if err != nil {
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
@@ -1193,7 +1193,7 @@ MainLoop:
 				default:
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s and %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
 				}
-			} else if t.Type == NOT {
+			} else if t.Type == NOT { // Token Type
 				obj, err := stack.Pop()
 				if err != nil {
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
@@ -1205,7 +1205,7 @@ MainLoop:
 				default:
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s.\n", t.Line, t.Column, t.Lexeme, obj.TypeName()))
 				}
-			} else if t.Type == GREATERTHANOREQUAL || t.Type == LESSTHANOREQUAL {
+			} else if t.Type == GREATERTHANOREQUAL || t.Type == LESSTHANOREQUAL { // Token Type
 				obj1, err := stack.Pop()
 				if err != nil {
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
@@ -1225,7 +1225,7 @@ MainLoop:
 				} else {
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s and a %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
 				}
-			} else if t.Type == GREATERTHAN || t.Type == LESSTHAN {
+			} else if t.Type == GREATERTHAN || t.Type == LESSTHAN { // Token Type
 				// This can either be normal comparison for numerics, or it's a redirect on a list or quotation.
 				obj1, err := stack.Pop()
 				if err != nil {
@@ -1286,7 +1286,7 @@ MainLoop:
 						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a %s (%s) to a %s (%s).\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
 					}
 				}
-			} else if t.Type == STDERRREDIRECT {
+			} else if t.Type == STDERRREDIRECT { // Token Type
 				obj1, err := stack.Pop()
 				if err != nil {
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect stderr on an empty stack.\n", t.Line, t.Column))
@@ -1322,7 +1322,7 @@ MainLoop:
 				default:
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect stderr to a %s.\n", t.Line, t.Column, obj1.TypeName()))
 				}
-			} else if t.Type == VARSTORE {
+			} else if t.Type == VARSTORE { // Token Type
 				obj, err := stack.Pop()
 				varName := t.Lexeme[0 : len(t.Lexeme)-1] // Remove the trailing !
 				if err != nil {
@@ -1330,7 +1330,7 @@ MainLoop:
 				}
 
 				context.Variables[varName] = obj
-			} else if t.Type == VARRETRIEVE {
+			} else if t.Type == VARRETRIEVE { // Token Type
 				name := t.Lexeme[1:] // Remove the leading @
 				obj, found_mshell_variable := context.Variables[name]
 				if found_mshell_variable {
@@ -1350,7 +1350,7 @@ MainLoop:
 						return FailWithMessage(message.String())
 					}
 				}
-			} else if t.Type == LOOP {
+			} else if t.Type == LOOP { // Token Type
 				obj, err := stack.Pop()
 				if err != nil {
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do a loop on an empty stack.\n", t.Line, t.Column))
@@ -1432,9 +1432,9 @@ MainLoop:
 				if breakDiff-1 > 0 {
 					return EvalResult{true, breakDiff - 1, 0, false}
 				}
-			} else if t.Type == BREAK {
+			} else if t.Type == BREAK { // Token Type
 				return EvalResult{true, 1, 0, false}
-			} else if t.Type == EQUALS {
+			} else if t.Type == EQUALS { // Token Type
 				obj1, err := stack.Pop()
 				if err != nil {
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '=' operation on an empty stack.\n", t.Line, t.Column))
@@ -1463,7 +1463,7 @@ MainLoop:
 				default:
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot complete %s with a %s to a %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
 				}
-			} else if t.Type == INTERPRET {
+			} else if t.Type == INTERPRET { // Token Type
 				obj, err := stack.Pop()
 				if err != nil {
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot interpret an empty stack.\n", t.Line, t.Column))
@@ -1515,7 +1515,7 @@ MainLoop:
 				if !result.Success || result.ExitCalled || result.BreakNum > 0 {
 					return result
 				}
-			} else if t.Type == POSITIONAL {
+			} else if t.Type == POSITIONAL { // Token Type
 				posNum := t.Lexeme[1:]
 				posIndex, err := strconv.Atoi(posNum)
 				if err != nil {
@@ -1535,7 +1535,7 @@ MainLoop:
 				}
 
 				stack.Push(&MShellString{state.PositionalArgs[posIndex-1]})
-			} else if t.Type == PIPE {
+			} else if t.Type == PIPE { // Token Type
 				obj1, err := stack.Pop()
 				if err != nil {
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
@@ -1548,7 +1548,7 @@ MainLoop:
 				}
 
 				stack.Push(&MShellPipe{*list, list.StdoutBehavior})
-			} else if t.Type == READ {
+			} else if t.Type == READ { // Token Type
 				var reader io.Reader
 				// Check if what we are reading from is seekable. If so, we can do a buffered read and reset the position.
 				// Else, we have to read byte by byte.
@@ -1643,14 +1643,14 @@ MainLoop:
 						}
 					}
 				}
-			} else if t.Type == STR {
+			} else if t.Type == STR { // Token Type
 				obj, err := stack.Pop()
 				if err != nil {
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert an empty stack to a string.\n", t.Line, t.Column))
 				}
 
 				stack.Push(&MShellString{obj.ToString()})
-			} else if t.Type == INDEXER {
+			} else if t.Type == INDEXER { // Token Type
 				obj1, err := stack.Pop()
 				if err != nil {
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot index an empty stack.\n", t.Line, t.Column))
@@ -1668,7 +1668,7 @@ MainLoop:
 					return FailWithMessage(fmt.Sprintf("%d:%d: %s", t.Line, t.Column, err.Error()))
 				}
 				stack.Push(result)
-			} else if t.Type == ENDINDEXER || t.Type == STARTINDEXER {
+			} else if t.Type == ENDINDEXER || t.Type == STARTINDEXER { // Token Type
 				obj1, err := stack.Pop()
 				if err != nil {
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot end index an empty stack.\n", t.Line, t.Column))
@@ -1698,7 +1698,7 @@ MainLoop:
 					return FailWithMessage(fmt.Sprintf("%d:%d: %s", t.Line, t.Column, err.Error()))
 				}
 				stack.Push(result)
-			} else if t.Type == SLICEINDEXER {
+			} else if t.Type == SLICEINDEXER { // Token Type
 				obj1, err := stack.Pop()
 				if err != nil {
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot slice index an empty stack.\n", t.Line, t.Column))
@@ -1719,7 +1719,7 @@ MainLoop:
 				}
 
 				stack.Push(result)
-			} else if t.Type == STDOUTLINES || t.Type == STDOUTSTRIPPED || t.Type == STDOUTCOMPLETE {
+			} else if t.Type == STDOUTLINES || t.Type == STDOUTSTRIPPED || t.Type == STDOUTCOMPLETE { // Token Type
 				obj, err := stack.Pop()
 				if err != nil {
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot set stdout behavior to lines on an empty stack.\n", t.Line, t.Column))
@@ -1753,7 +1753,7 @@ MainLoop:
 				default:
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot set stdout behavior on a %s.\n", t.Line, t.Column, obj.TypeName()))
 				}
-			} else if t.Type == EXPORT {
+			} else if t.Type == EXPORT { // Token Type
 				obj, err := stack.Pop()
 				if err != nil {
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot export an empty stack.\n", t.Line, t.Column))
@@ -1783,9 +1783,9 @@ MainLoop:
 				default:
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot export a %s as an environment variable.\n", t.Line, t.Column, varValue.TypeName()))
 				}
-			} else if t.Type == STOP_ON_ERROR {
+			} else if t.Type == STOP_ON_ERROR { // Token Type
 				state.StopOnError = true
-			} else if t.Type == FLOAT {
+			} else if t.Type == FLOAT { // Token Type
 				floatVal, err := strconv.ParseFloat(t.Lexeme, 64)
 				if err != nil {
 					return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing float: %s\n", t.Line, t.Column, err.Error()))

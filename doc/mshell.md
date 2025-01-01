@@ -67,8 +67,8 @@ No escaping is done within single quoted strings.
 
 ### List Functions
 
-- `map`: Map a quotation over a list, `(list quote -- list)`
-- `each`: Execute a quotation for each element in a list, `(list quote -- )`
+- `map`: Map a quotation over a list, `([a] (a -- b) -- [b])`
+- `each`: Execute a quotation for each element in a list, `([a] (a -- ) -- )`
 - `del`: Delete element from list, `(list index -- list)` or `(index list -- list)`
 - `insert`: Insert element into list, `(list element index -- list)`
 - `setAt`: Set element at index, `(list element index -- list)`

@@ -1,18 +1,12 @@
 [
-echo
-1 [1 2 3] :2: +
+1 [1 2 3] :2: + str
 "My string" :3:
 myliteral :4:
-];
+] " " join wl
 
-[
-echo
-"My string" :5
-] ;
-
-[ echo "Another" 3: ];
-
-[ echo "Full Range" 1:3];
+"My string" :5 wl
+"Another" 3: wl
+"Full Range" 1:3 wl
 
 # Negative indexing
 "12345" :-1: wl  # 5
