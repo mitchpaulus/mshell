@@ -1,7 +1,7 @@
-[grep "World"] "stdin_for_test.txt" < ;
+[grep "World"] `stdin_for_test.txt` < ;
 
 (
     [grep "Hello"];
     # We shouldn't get a World because the first grep should have consumed all the stdin.
     [grep "World"];
-) "stdin_for_test.txt" < x
+) `stdin_for_test.txt` < x

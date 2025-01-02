@@ -7,6 +7,22 @@ import (
 	"strings"
 )
 
+// TruncateMiddle truncates a string to a maximum length, adding "..." in the middle if necessary.
+func TruncateMiddle(s string, maxLen int) string {
+	if len(s) <= maxLen || maxLen <= 3 {
+		// No truncation needed or maxLen too small to fit "..."
+		return s
+	}
+
+	// Calculate lengths of the parts around "..."
+	half := (maxLen - 3) / 2
+	remainder := (maxLen - 3) % 2
+	start := s[:half]                 // First part of the string
+	end := s[len(s)-half-remainder:]  // Last part of the string
+
+	return start + "..." + end
+}
+
 type Jsonable interface {
 	ToJson() string
 }
@@ -40,12 +56,14 @@ type MShellBool struct {
 }
 
 type MShellQuotation struct {
-	MShellParseQuote   *MShellParseQuote
-	Tokens             []MShellParseItem
-	StandardInputFile  string
-	StandardOutputFile string
-	StandardErrorFile  string
-	Variables          map[string]MShellObject
+	MShellParseQuote      *MShellParseQuote
+	Tokens                []MShellParseItem
+	StdinBehavior         StdinBehavior
+	StandardInputContents string
+	StandardInputFile     string
+	StandardOutputFile    string
+	StandardErrorFile     string
+	Variables             map[string]MShellObject
 }
 
 func (q *MShellQuotation) GetStartToken() Token {
@@ -72,17 +90,47 @@ const (
 	STDOUT_COMPLETE
 )
 
+type StdinBehavior int
+
+const (
+	STDIN_NONE StdinBehavior = iota
+	STDIN_FILE
+	STDIN_CONTENT
+)
+
 type MShellList struct {
-	Items              []MShellObject
-	StandardInputFile  string
-	StandardOutputFile string
-	StandardErrorFile  string
+	Items                 []MShellObject
+	StdinBehavior         StdinBehavior
+	StandardInputContents string
+	StandardInputFile     string
+	StandardOutputFile    string
+	StandardErrorFile     string
 	// This sets how stdout is handled, whether it's broken up into lines, stripped of trailing newline, or left as is
 	StdoutBehavior StdoutBehavior
 }
 
+func NewList(initLength int) *MShellList {
+	if initLength < 0 {
+		// panic
+		panic("Cannot create a list with a negative length.")
+	}
+	return &MShellList{
+		Items:                 make([]MShellObject, initLength),
+		StdinBehavior:         STDIN_NONE,
+		StandardInputContents: "",
+		StandardInputFile:     "",
+		StandardOutputFile:    "",
+		StandardErrorFile:     "",
+		StdoutBehavior:        STDOUT_NONE,
+	}
+}
+
 type MShellString struct {
 	Content string
+}
+
+type MShellPath struct {
+	Path string
 }
 
 type MShellPipe struct {
@@ -117,6 +165,10 @@ func (obj *MShellList) ToString() string {
 
 func (obj *MShellString) ToString() string {
 	return obj.Content
+}
+
+func (obj *MShellPath) ToString() string {
+	return obj.Path
 }
 
 func (obj *MShellPipe) ToString() string {
@@ -154,6 +206,10 @@ func (obj *MShellList) TypeName() string {
 
 func (obj *MShellString) TypeName() string {
 	return "String"
+}
+
+func (obj *MShellPath) TypeName() string {
+	return "Path"
 }
 
 func (obj *MShellPipe) TypeName() string {
@@ -194,6 +250,10 @@ func (obj *MShellString) IsCommandLineable() bool {
 	return true
 }
 
+func (obj *MShellPath) IsCommandLineable() bool {
+	return true
+}
+
 func (obj *MShellPipe) IsCommandLineable() bool {
 	return false
 }
@@ -228,6 +288,10 @@ func (obj *MShellList) IsNumeric() bool {
 }
 
 func (obj *MShellString) IsNumeric() bool {
+	return false
+}
+
+func (obj *MShellPath) IsNumeric() bool {
 	return false
 }
 
@@ -268,6 +332,10 @@ func (obj *MShellString) FloatNumeric() float64 {
 	return 0
 }
 
+func (obj *MShellPath) FloatNumeric() float64 {
+	return 0
+}
+
 func (obj *MShellPipe) FloatNumeric() float64 {
 	return 0
 }
@@ -303,6 +371,10 @@ func (obj *MShellList) CommandLine() string {
 
 func (obj *MShellString) CommandLine() string {
 	return obj.Content
+}
+
+func (obj *MShellPath) CommandLine() string {
+	return obj.Path
 }
 
 func (obj *MShellPipe) CommandLine() string {
@@ -347,7 +419,10 @@ func (obj *MShellQuotation) DebugString() string {
 	}
 
 	message := "(" + strings.Join(debugStrs, " ") + ")"
-	if obj.StandardInputFile != "" {
+
+	if obj.StdinBehavior == STDIN_CONTENT {
+		message += " < " + TruncateMiddle(obj.StandardInputContents, 30)
+	} else if obj.StdinBehavior == STDIN_FILE {
 		message += " < " + obj.StandardInputFile
 	}
 
@@ -370,6 +445,14 @@ func (obj *MShellString) DebugString() string {
 	}
 
 	return "\"" + obj.Content + "\""
+}
+
+func (obj *MShellPath) DebugString() string {
+	if len(obj.Path) > 30 {
+		return "`" + obj.Path[:15] + "..." + obj.Path[len(obj.Path)-15:] + "`"
+	}
+
+	return "`" + obj.Path + "`"
 }
 
 func (obj *MShellPipe) DebugString() string {
@@ -413,6 +496,10 @@ func (obj *MShellList) IndexErrStr() string {
 
 func (obj *MShellString) IndexErrStr() string {
 	return fmt.Sprintf(" '%s'", obj.Content)
+}
+
+func (obj *MShellPath) IndexErrStr() string {
+	return fmt.Sprintf(" `%s`", obj.Path)
 }
 
 func (obj *MShellPipe) IndexErrStr() string {
@@ -494,6 +581,17 @@ func (obj *MShellString) Index(index int) (MShellObject, error) {
 	return &MShellString{Content: string(obj.Content[index])}, nil
 }
 
+func (obj *MShellPath) Index(index int) (MShellObject, error) {
+	if index < 0 {
+		index = len(obj.Path) + index
+	}
+
+	if err := IndexCheck(index, len(obj.Path), obj); err != nil {
+		return nil, err
+	}
+	return &MShellPath{Path: string(obj.Path[index])}, nil
+}
+
 func (obj *MShellPipe) Index(index int) (MShellObject, error) {
 	if index < 0 {
 		index = len(obj.List.Items) + index
@@ -502,7 +600,9 @@ func (obj *MShellPipe) Index(index int) (MShellObject, error) {
 	if err := IndexCheck(index, len(obj.List.Items), obj); err != nil {
 		return nil, err
 	}
-	return &MShellPipe{List: MShellList{Items: []MShellObject{obj.List.Items[index]}}}, nil
+
+	newList := obj.List.Items[index]
+	return newList, nil
 }
 
 func (obj *MShellInt) Index(index int) (MShellObject, error) {
@@ -550,7 +650,10 @@ func (obj *MShellList) SliceStart(start int) (MShellObject, error) {
 	if err := IndexCheck(start, len(obj.Items), obj); err != nil {
 		return nil, err
 	}
-	return &MShellList{Items: obj.Items[start:]}, nil
+
+	newList := NewList(0)
+	newList.Items = obj.Items[start:]
+	return newList, nil
 }
 
 func (obj *MShellString) SliceStart(start int) (MShellObject, error) {
@@ -563,14 +666,29 @@ func (obj *MShellString) SliceStart(start int) (MShellObject, error) {
 	return &MShellString{Content: obj.Content[start:]}, nil
 }
 
+func (obj *MShellPath) SliceStart(start int) (MShellObject, error) {
+	if start < 0 {
+		start = len(obj.Path) + start
+	}
+	if err := IndexCheck(start, len(obj.Path), obj); err != nil {
+		return nil, err
+	}
+
+	return &MShellPath{Path: obj.Path[start:]}, nil
+}
+
 func (obj *MShellPipe) SliceStart(start int) (MShellObject, error) {
 	if start < 0 {
 		start = len(obj.List.Items) + start
 	}
+
 	if err := IndexCheck(start, len(obj.List.Items), obj); err != nil {
 		return nil, err
 	}
-	return &MShellPipe{List: MShellList{Items: obj.List.Items[start:]}}, nil
+
+	newList := NewList(0)
+	newList.Items = obj.List.Items[start:]
+	return newList, nil
 }
 
 func (obj *MShellInt) SliceStart(start int) (MShellObject, error) {
@@ -618,7 +736,9 @@ func (obj *MShellList) SliceEnd(end int) (MShellObject, error) {
 	if err := IndexCheckExc(end, len(obj.Items), obj); err != nil {
 		return nil, err
 	}
-	return &MShellList{Items: obj.Items[:end]}, nil
+	newList := NewList(0)
+	newList.Items = obj.Items[:end]
+	return newList, nil
 }
 
 func (obj *MShellString) SliceEnd(end int) (MShellObject, error) {
@@ -631,6 +751,17 @@ func (obj *MShellString) SliceEnd(end int) (MShellObject, error) {
 	return &MShellString{Content: obj.Content[:end]}, nil
 }
 
+func (obj *MShellPath) SliceEnd(end int) (MShellObject, error) {
+	if end < 0 {
+		end = len(obj.Path) + end
+	}
+	if err := IndexCheckExc(end, len(obj.Path), obj); err != nil {
+		return nil, err
+	}
+
+	return &MShellPath{Path: obj.Path[:end]}, nil
+}
+
 func (obj *MShellPipe) SliceEnd(end int) (MShellObject, error) {
 	if end < 0 {
 		end = len(obj.List.Items) + end
@@ -638,7 +769,9 @@ func (obj *MShellPipe) SliceEnd(end int) (MShellObject, error) {
 	if err := IndexCheckExc(end, len(obj.List.Items), obj); err != nil {
 		return nil, err
 	}
-	return &MShellPipe{List: MShellList{Items: obj.List.Items[:end]}}, nil
+	newList := NewList(0)
+	newList.Items = obj.List.Items[:end]
+	return newList, nil
 }
 
 func (obj *MShellInt) SliceEnd(end int) (MShellObject, error) {
@@ -716,7 +849,10 @@ func (obj *MShellList) Slice(startInc int, endExc int) (MShellObject, error) {
 	if err := SliceIndexCheck(startInc, endExc, len(obj.Items), obj); err != nil {
 		return nil, err
 	}
-	return &MShellList{Items: obj.Items[startInc:endExc]}, nil
+
+	newList := NewList(0)
+	newList.Items = obj.Items[startInc:endExc]
+	return newList, nil
 }
 
 func (obj *MShellString) Slice(startInc int, endExc int) (MShellObject, error) {
@@ -734,6 +870,22 @@ func (obj *MShellString) Slice(startInc int, endExc int) (MShellObject, error) {
 	return &MShellString{Content: obj.Content[startInc:endExc]}, nil
 }
 
+func (obj *MShellPath) Slice(startInc int, endExc int) (MShellObject, error) {
+	if startInc < 0 {
+		startInc = len(obj.Path) + startInc
+	}
+		
+	if endExc < 0 {
+		endExc = len(obj.Path) + endExc
+	}
+
+	if err := SliceIndexCheck(startInc, endExc, len(obj.Path), obj); err != nil {
+		return nil, err
+	}
+
+	return &MShellPath{Path: obj.Path[startInc:endExc]}, nil
+}
+
 func (obj *MShellPipe) Slice(startInc int, endExc int) (MShellObject, error) {
 	if startInc < 0 {
 		startInc = len(obj.List.Items) + startInc
@@ -746,7 +898,10 @@ func (obj *MShellPipe) Slice(startInc int, endExc int) (MShellObject, error) {
 	if err := SliceIndexCheck(startInc, endExc, len(obj.List.Items), obj); err != nil {
 		return nil, err
 	}
-	return &MShellPipe{List: MShellList{Items: obj.List.Items[startInc:endExc]}}, nil
+
+	newList := NewList(0)
+	newList.Items = obj.List.Items[startInc:endExc]
+	return newList, nil
 }
 
 func (obj *MShellInt) Slice(startInc int, endExc int) (MShellObject, error) {
@@ -805,6 +960,12 @@ func (obj *MShellString) ToJson() string {
 	return fmt.Sprintf("{\"type\": \"String\", \"content\": %s}", string(escBytes))
 }
 
+func (obj *MShellPath) ToJson() string {
+	// Escape the content
+	escBytes, _ := json.Marshal(obj.Path)
+	return fmt.Sprintf("{\"type\": \"Path\", \"path\": %s}", string(escBytes))
+}
+
 func (obj *MShellPipe) ToJson() string {
 	return fmt.Sprintf("{\"type\": \"Pipe\", \"list\": %s}", obj.List.ToJson())
 }
@@ -846,6 +1007,50 @@ func ParseRawString(inputString string) (string, error) {
 				b.WriteRune('\\')
 			case '"':
 				b.WriteRune('"')
+			default:
+				return "", fmt.Errorf("invalid escape character '%c'", c)
+			}
+			inEscape = false
+		} else {
+			if c == '\\' {
+				inEscape = true
+			} else {
+				b.WriteRune(rune(c))
+			}
+		}
+
+		index++
+	}
+
+	return b.String(), nil
+}
+
+
+func ParseRawPath(inputString string) (string, error) {
+	// Purpose of this function is to remove outer quotes, handle escape characters
+	if len(inputString) < 2 {
+		return "", fmt.Errorf("input string should have a minimum length of 2 for surrounding double quotes.\n")
+	}
+
+	var b strings.Builder
+	index := 1
+	inEscape := false
+
+	for index < len(inputString)-1 {
+		c := inputString[index]
+
+		if inEscape {
+			switch c {
+			case 'n':
+				b.WriteRune('\n')
+			case 't':
+				b.WriteRune('\t')
+			case 'r':
+				b.WriteRune('\r')
+			case '\\':
+				b.WriteRune('\\')
+			case '`':
+				b.WriteRune('`')
 			default:
 				return "", fmt.Errorf("invalid escape character '%c'", c)
 			}

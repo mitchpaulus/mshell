@@ -138,7 +138,11 @@ MainLoop:
 				return FailWithMessage("Encountered break within list.\n")
 			}
 
-			stack.Push(&MShellList{Items: listStack, StandardInputFile: "", StandardOutputFile: "", StdoutBehavior: STDOUT_NONE})
+			newList := NewList(len(listStack))
+			for i, item := range listStack {
+				newList.Items[i] = item
+			}
+			stack.Push(newList)
 		case *MShellParseQuote:
 			parseQuote := t.(*MShellParseQuote)
 			q := MShellQuotation{Tokens: parseQuote.Items, StandardInputFile: "", StandardOutputFile: "", StandardErrorFile: "", Variables: context.Variables, MShellParseQuote: parseQuote}
@@ -266,10 +270,11 @@ MainLoop:
 						return FailWithMessage(fmt.Sprintf("%d:%d: Malformed glob pattern: %s\n", t.Line, t.Column, err.Error()))
 					}
 
-					newList := &MShellList{Items: []MShellObject{}, StandardInputFile: "", StandardOutputFile: "", StdoutBehavior: STDOUT_NONE}
-					for _, file := range files {
-						newList.Items = append(newList.Items, &MShellString{file})
+					newList := NewList(len(files))
+					for i, file := range files {
+						newList.Items[i] = &MShellString{file}
 					}
+
 					stack.Push(newList)
 				} else if t.Lexeme == "stdin" {
 					// Dump all of current stdin onto the stack as a string
@@ -312,7 +317,7 @@ MainLoop:
 					}
 				} else if t.Lexeme == "args" {
 					// Dump the positional arguments onto the stack as a list of strings
-					newList := &MShellList{Items: make([]MShellObject, len(state.PositionalArgs)), StandardInputFile: "", StandardOutputFile: "", StdoutBehavior: STDOUT_NONE}
+					newList := NewList(len(state.PositionalArgs))
 					for i, arg := range state.PositionalArgs {
 						newList.Items[i] = &MShellString{arg}
 					}
@@ -482,7 +487,7 @@ MainLoop:
 					}
 
 					split := strings.Split(strToSplit, delimiterStr)
-					newList := &MShellList{Items: make([]MShellObject, len(split)), StandardInputFile: "", StandardOutputFile: "", StdoutBehavior: STDOUT_NONE}
+					newList := NewList(len(split))
 					for i, item := range split {
 						newList.Items[i] = &MShellString{item}
 					}
@@ -497,7 +502,7 @@ MainLoop:
 					switch obj.(type) {
 					case *MShellString:
 						split := strings.Fields(obj.(*MShellString).Content)
-						newList := &MShellList{Items: make([]MShellObject, len(split)), StandardInputFile: "", StandardOutputFile: "", StdoutBehavior: STDOUT_NONE}
+						newList := NewList(len(split))
 						for i, item := range split {
 							newList.Items[i] = &MShellString{item}
 						}
@@ -559,7 +564,7 @@ MainLoop:
 
 					// TODO: Maybe reuse a scanner?
 					scanner := bufio.NewScanner(strings.NewReader(s1.Content))
-					newList := &MShellList{Items: []MShellObject{}, StandardInputFile: "", StandardOutputFile: "", StdoutBehavior: STDOUT_NONE}
+					newList := NewList(0)
 					for scanner.Scan() {
 						newList.Items = append(newList.Items, &MShellString{scanner.Text()})
 					}
@@ -964,7 +969,7 @@ MainLoop:
 				}
 
 				if stdoutBehavior == STDOUT_LINES {
-					newMShellList := &MShellList{Items: []MShellObject{}, StandardInputFile: "", StandardOutputFile: "", StdoutBehavior: STDOUT_NONE}
+					newMShellList := NewList(0)
 					var scanner *bufio.Scanner
 					scanner = bufio.NewScanner(strings.NewReader(stdout))
 					for scanner.Scan() {
@@ -1137,7 +1142,7 @@ MainLoop:
 				case *MShellList:
 					switch obj2.(type) {
 					case *MShellList:
-						newList := &MShellList{Items: make([]MShellObject, len(obj2.(*MShellList).Items)+len(obj1.(*MShellList).Items)), StandardInputFile: "", StandardOutputFile: "", StdoutBehavior: STDOUT_NONE}
+						newList := NewList(len(obj2.(*MShellList).Items)+len(obj1.(*MShellList).Items))
 						copy(newList.Items, obj2.(*MShellList).Items)
 						copy(newList.Items[len(obj2.(*MShellList).Items):], obj1.(*MShellList).Items)
 						stack.Push(newList)
@@ -1249,16 +1254,19 @@ MainLoop:
 						switch obj2.(type) {
 						case *MShellList:
 							if t.Type == GREATERTHAN {
-								obj2.(*MShellList).StandardOutputFile = obj1.(*MShellString).Content
-							} else {
-								obj2.(*MShellList).StandardInputFile = obj1.(*MShellString).Content
+								// Fail, and tell user to use path literal instead of string.
+								return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a %s (%s) to a %s (%s). Use a path literal instead.\n", t.Line, t.Column, obj1.TypeName(), obj1.(*MShellString).Content, obj2.TypeName(), obj2.DebugString()))
+							} else { // LESSTHAN, input redirection
+								obj2.(*MShellList).StdinBehavior = STDIN_CONTENT
+								obj2.(*MShellList).StandardInputContents = obj1.(*MShellString).Content
 							}
 							stack.Push(obj2)
 						case *MShellQuotation:
 							if t.Type == GREATERTHAN {
-								obj2.(*MShellQuotation).StandardOutputFile = obj1.(*MShellString).Content
-							} else {
-								obj2.(*MShellQuotation).StandardInputFile = obj1.(*MShellString).Content
+								return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a %s (%s) to a %s (%s). Use a path literal instead.\n", t.Line, t.Column, obj1.TypeName(), obj1.(*MShellString).Content, obj2.TypeName(), obj2.DebugString()))
+							} else { // LESSTHAN, input redirection
+								obj2.(*MShellQuotation).StdinBehavior = STDIN_CONTENT
+								obj2.(*MShellQuotation).StandardInputContents = obj1.(*MShellString).Content
 							}
 							stack.Push(obj2)
 						case *MShellPipe:
@@ -1270,17 +1278,43 @@ MainLoop:
 						switch obj2.(type) {
 						case *MShellList:
 							if t.Type == GREATERTHAN {
-								obj2.(*MShellList).StandardOutputFile = obj1.(*MShellLiteral).LiteralText
-							} else {
+								return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a %s (%s) to a %s (%s). Use a path literal instead.\n", t.Line, t.Column, obj1.TypeName(), obj1.(*MShellString).Content, obj2.TypeName(), obj2.DebugString()))
+							} else { // LESSTHAN, input redirection
+								obj2.(*MShellList).StdinBehavior = STDIN_CONTENT
 								obj2.(*MShellList).StandardInputFile = obj1.(*MShellLiteral).LiteralText
 							}
 							stack.Push(obj2)
 						case *MShellQuotation:
 							if t.Type == GREATERTHAN {
-								obj2.(*MShellQuotation).StandardOutputFile = obj1.(*MShellLiteral).LiteralText
+								return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a %s (%s) to a %s (%s). Use a path literal instead.\n", t.Line, t.Column, obj1.TypeName(), obj1.(*MShellString).Content, obj2.TypeName(), obj2.DebugString()))
 							} else {
-								obj2.(*MShellQuotation).StandardInputFile = obj1.(*MShellLiteral).LiteralText
+								obj2.(*MShellQuotation).StdinBehavior = STDIN_CONTENT
+								obj2.(*MShellQuotation).StandardInputContents = obj1.(*MShellLiteral).LiteralText
 							}
+						default:
+							return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a %s (%s) to a %s (%s).\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
+						}
+
+					case *MShellPath:
+						switch obj2.(type) {
+						case *MShellList:
+							if t.Type == GREATERTHAN {
+								obj2.(*MShellList).StandardOutputFile = obj1.(*MShellPath).Path
+							} else { // LESSTHAN, input redirection
+								obj2.(*MShellList).StdinBehavior = STDIN_FILE
+								obj2.(*MShellList).StandardInputFile = obj1.(*MShellPath).Path
+							}
+							stack.Push(obj2)
+						case *MShellQuotation:
+							if t.Type == GREATERTHAN {
+								obj2.(*MShellQuotation).StandardOutputFile = obj1.(*MShellPath).Path
+							} else {
+								obj2.(*MShellQuotation).StdinBehavior = STDIN_FILE
+								obj2.(*MShellQuotation).StandardInputFile = obj1.(*MShellPath).Path
+							}
+							stack.Push(obj2)
+						default:
+							return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a path (%s) to a %s (%s).\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
 						}
 					default:
 						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a %s (%s) to a %s (%s).\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
@@ -1371,13 +1405,19 @@ MainLoop:
 					Variables:      context.Variables,
 				}
 
-				if quotation.StandardInputFile != "" {
-					file, err := os.Open(quotation.StandardInputFile)
-					if err != nil {
-						return FailWithMessage(fmt.Sprintf("%d:%d: Error opening file %s for reading: %s\n", t.Line, t.Column, quotation.StandardInputFile, err.Error()))
+				if quotation.StdinBehavior != STDIN_NONE {
+					if quotation.StdinBehavior == STDIN_CONTENT {
+						loopContext.StandardInput = strings.NewReader(quotation.StandardInputContents)
+					} else if quotation.StdinBehavior == STDIN_FILE {
+						file, err := os.Open(quotation.StandardInputFile)
+						if err != nil {
+							return FailWithMessage(fmt.Sprintf("%d:%d: Error opening file %s for reading: %s\n", t.Line, t.Column, quotation.StandardInputFile, err.Error()))
+						}
+						loopContext.StandardInput = file
+						defer file.Close()
+					} else {
+						panic("Unknown stdin behavior")
 					}
-					loopContext.StandardInput = file
-					defer file.Close()
 				}
 
 				if quotation.StandardOutputFile != "" {
@@ -1479,13 +1519,17 @@ MainLoop:
 					StandardOutput: nil,
 				}
 
-				if quotation.StandardInputFile != "" {
-					file, err := os.Open(quotation.StandardInputFile)
-					if err != nil {
-						return FailWithMessage(fmt.Sprintf("%d:%d: Error opening file %s for reading: %s\n", t.Line, t.Column, quotation.StandardInputFile, err.Error()))
+				if quotation.StdinBehavior != STDIN_NONE {
+					if quotation.StdinBehavior == STDIN_CONTENT {
+						quoteContext.StandardInput = strings.NewReader(quotation.StandardInputContents)
+					} else if quotation.StdinBehavior == STDIN_FILE {
+						file, err := os.Open(quotation.StandardInputFile)
+						if err != nil {
+							return FailWithMessage(fmt.Sprintf("%d:%d: Error opening file %s for reading: %s\n", t.Line, t.Column, quotation.StandardInputFile, err.Error()))
+						}
+						quoteContext.StandardInput = file
+						defer file.Close()
 					}
-					quoteContext.StandardInput = file
-					defer file.Close()
 				} else if context.StandardInput != nil {
 					quoteContext.StandardInput = context.StandardInput
 				} else {
@@ -1791,6 +1835,12 @@ MainLoop:
 					return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing float: %s\n", t.Line, t.Column, err.Error()))
 				}
 				stack.Push(&MShellFloat{floatVal})
+			} else if t.Type == PATH { // Token Type
+				parsed, err := ParseRawPath(t.Lexeme)
+				if err != nil {
+					return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing path: %s\n", t.Line, t.Column, err.Error()))
+				}
+				stack.Push(&MShellPath { parsed })
 			} else {
 				return FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Type))
 			}
@@ -1821,13 +1871,19 @@ func (quotation *MShellQuotation) Execute(state *EvalState, context ExecuteConte
 		Variables:      quotation.Variables,
 	}
 
-	if quotation.StandardInputFile != "" {
-		file, err := os.Open(quotation.StandardInputFile)
-		if err != nil {
-			return FailWithMessage(fmt.Sprintf("Error opening file %s for reading: %s\n", quotation.StandardInputFile, err.Error())), 1
+	if quotation.StdinBehavior != STDIN_NONE {
+		if quotation.StdinBehavior == STDIN_CONTENT {
+			quotationContext.StandardInput = strings.NewReader(quotation.StandardInputContents)
+		} else if quotation.StdinBehavior == STDIN_FILE {
+			file, err := os.Open(quotation.StandardInputFile)
+			if err != nil {
+				return FailWithMessage(fmt.Sprintf("Error opening file %s for reading: %s\n", quotation.StandardInputFile, err.Error())), 1
+			}
+			quotationContext.StandardInput = file
+			defer file.Close()
+		} else {
+			panic("Unknown stdin behavior")
 		}
-		quotationContext.StandardInput = file
-		defer file.Close()
 	} else if context.StandardInput != nil {
 		quotationContext.StandardInput = context.StandardInput
 	} else {
@@ -1929,14 +1985,21 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 		cmd.Stdout = os.Stdout
 	}
 
-	if list.StandardInputFile != "" {
-		// Open the file for reading
-		file, err := os.Open(list.StandardInputFile)
-		if err != nil {
-			return FailWithMessage(fmt.Sprintf("Error opening file %s for reading: %s\n", list.StandardInputFile, err.Error())), 1, ""
+	if list.StdinBehavior != STDIN_NONE {
+		if list.StdinBehavior == STDIN_CONTENT {
+			cmd.Stdin = strings.NewReader(list.StandardInputContents)
+		} else if list.StdinBehavior == STDIN_FILE {
+			// Open the file for reading
+			file, err := os.Open(list.StandardInputFile)
+			if err != nil {
+				return FailWithMessage(fmt.Sprintf("Error opening file %s for reading: %s\n", list.StandardInputFile, err.Error())), 1, ""
+			}
+			cmd.Stdin = file
+			defer file.Close()
+		} else {
+			panic("Unknown stdin behavior")
 		}
-		cmd.Stdin = file
-		defer file.Close()
+
 	} else if context.StandardInput != nil {
 		cmd.Stdin = context.StandardInput
 

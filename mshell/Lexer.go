@@ -64,6 +64,7 @@ const (
 	TYPEBOOL
 	DOUBLEDASH
 	AMPERSAND
+	PATH
 )
 
 func (t TokenType) String() string {
@@ -174,6 +175,8 @@ func (t TokenType) String() string {
 		return "DOUBLEDASH"
 	case AMPERSAND:
 		return "AMPERSAND"
+	case PATH:
+		return "PATH"
 	default:
 		return "UNKNOWN"
 	}
@@ -434,6 +437,10 @@ func (l *Lexer) scanToken() Token {
 		return l.parseString()
 	}
 
+	if c == '`' {
+		return l.parsePath()
+	}
+
 	if unicode.IsDigit(c) {
 		return l.parseNumberOrStartIndexer()
 	}
@@ -674,7 +681,7 @@ func (l *Lexer) parseString() Token {
 		c := l.advance()
 		if inEscape {
 			if c != 'n' && c != 't' && c != 'r' && c != '\\' && c != '"' {
-				fmt.Fprintf(os.Stderr, "%d:%d: Invalid escape character '%c'.\n", l.line, l.col, c)
+				fmt.Fprintf(os.Stderr, "%d:%d: Invalid escape character within string, '%c'. Expected 'n', 't', 'r', '\\', or '\"'.\n", l.line, l.col, c)
 				return l.makeToken(ERROR)
 			}
 			inEscape = false
@@ -688,6 +695,32 @@ func (l *Lexer) parseString() Token {
 		}
 	}
 	return l.makeToken(STRING)
+}
+
+func (l *Lexer) parsePath() Token {
+	inEscape := false
+	for {
+		if l.atEnd() {
+			fmt.Fprintf(os.Stderr, "%d:%d: Unterminated path.\n", l.line, l.col)
+			return l.makeToken(ERROR)
+		}
+		c := l.advance()
+		if inEscape {
+			if c != 'n' && c != 't' && c != 'r' && c != '\\' && c != '`' {
+				fmt.Fprintf(os.Stderr, "%d:%d: Invalid escape character within path, '%c'. Expected 'n', 't', 'r', '\\', or '`'.\n", l.line, l.col, c)
+				return l.makeToken(ERROR)
+			}
+			inEscape = false
+		} else {
+			if c == '`' {
+				break
+			}
+			if c == '\\' {
+				inEscape = true
+			}
+		}
+	}
+	return l.makeToken(PATH)
 }
 
 func (l *Lexer) Tokenize() []Token {

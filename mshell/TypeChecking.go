@@ -521,12 +521,6 @@ MainLoop:
 			listStack = []MShellType{}
 
 			result := TypeCheck(list.Items, listStack, definitions, false)
-
-			// if result.BreakNum > 0 {
-			// return FailWithMessage("Encountered break within list.\n")
-			// }
-
-			// stack.Push(&MShellList{Items: listStack, StandardInputFile: "", StandardOutputFile: "", StdoutBehavior: STDOUT_NONE})
 			typeCheckResult.Errors = append(typeCheckResult.Errors, result.Errors...)
 
 			typeTuple := TypeTuple{

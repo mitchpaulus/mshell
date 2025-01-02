@@ -1,2 +1,2 @@
 # FILE:hello_world.txt
-[echo "Hello, world!"] "hello_world.txt" >;
+[echo "Hello, world!"] `hello_world.txt` >;

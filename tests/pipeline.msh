@@ -7,7 +7,7 @@
 # FILE:pipeline.out
 [
     [printf "hello\\nEarth!\\n"]
-    [sed "s/Earth/World/"] "pipeline.out" >
+    [sed "s/Earth/World/"] `pipeline.out` >
 ] | ;
 
 [
