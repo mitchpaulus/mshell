@@ -76,18 +76,11 @@ wt :-1: :-1: wl
 
 # 13. Print the first two fields in opposite order, of every line
 # { print $2, $1 }
-.. (wsplit dup :0: swap :1: w " " w wl) each
+wt (:1:, :0: wjoin wl) each
 
 # 14. Exchange the first two fields of every line and then print the line
 # { temp = $1; $1 = $2; $2 = temp; print }
-wt
-(
-    []
-    over :1: append
-    over :0: append
-    swap 2: +
-    wjoin wl
-) each
+wt (:1:, :0:, 2: wjoin wl) each
 
 # 15. Print every line with the first field replaced by the line number
 # { $1 = NR; print }

@@ -44,3 +44,10 @@ def cjoin ([str] --) ", " join wl end
     [echo 2]
     [cat]
 ] | :0:, :2: ;
+
+# Came across parsing bug with indexing within quotation.
+[
+    ["a" "b" "c" "d"]
+    ["e" "f" "g" "h"]
+    ["i" "j" "k" "l"]
+] (:1:, :0:, 2:, cjoin) each

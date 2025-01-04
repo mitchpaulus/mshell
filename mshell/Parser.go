@@ -225,26 +225,7 @@ func (parser *MShellParser) ParseFile() (*MShellFile, error) {
 			// fmt.Fprintf(os.Stderr, "List: %s\n", list.ToJson())
 			file.Items = append(file.Items, list)
 		case INDEXER, ENDINDEXER, STARTINDEXER, SLICEINDEXER:
-			indexerList := &MShellIndexerList{}
-			indexerList.Indexers = []MShellParseItem{}
-			indexerList.Indexers = append(indexerList.Indexers, parser.curr)
-			parser.NextToken()
-
-			for {
-				if parser.curr.Type == COMMA {
-					parser.NextToken()
-					if parser.curr.Type == ENDINDEXER || parser.curr.Type == STARTINDEXER || parser.curr.Type == INDEXER || parser.curr.Type == SLICEINDEXER {
-						indexerList.Indexers = append(indexerList.Indexers, parser.curr)
-						parser.NextToken()
-					} else {
-						// No error here, just a trailing comma which is fine.
-						break
-					}
-				} else {
-					break
-				}
-			}
-
+			indexerList := parser.ParseIndexer()
 			file.Items = append(file.Items, indexerList)
 		case DEF:
 			_ = parser.Match(parser.curr, DEF)
@@ -290,6 +271,30 @@ func (parser *MShellParser) ParseFile() (*MShellFile, error) {
 		}
 	}
 	return file, nil
+}
+
+func (parser *MShellParser) ParseIndexer() (*MShellIndexerList) {
+	indexerList := &MShellIndexerList{}
+	indexerList.Indexers = []MShellParseItem{}
+	indexerList.Indexers = append(indexerList.Indexers, parser.curr)
+	parser.NextToken()
+
+	for {
+		if parser.curr.Type == COMMA {
+			parser.NextToken()
+			if parser.curr.Type == ENDINDEXER || parser.curr.Type == STARTINDEXER || parser.curr.Type == INDEXER || parser.curr.Type == SLICEINDEXER {
+				indexerList.Indexers = append(indexerList.Indexers, parser.curr)
+				parser.NextToken()
+			} else {
+				// No error here, just a trailing comma which is fine.
+				break
+			}
+		} else {
+			break
+		}
+	}
+
+	return indexerList
 }
 
 type MShellType interface {
@@ -955,6 +960,8 @@ func (parser *MShellParser) ParseItem() (MShellParseItem, error) {
 		return parser.ParseList()
 	case LEFT_PAREN:
 		return parser.ParseQuote()
+	case INDEXER, ENDINDEXER, STARTINDEXER, SLICEINDEXER:
+		return parser.ParseIndexer(), nil
 	default:
 		return parser.ParseSimple(), nil
 	}

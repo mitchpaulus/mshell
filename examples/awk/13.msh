@@ -1,1 +1,1 @@
-.. (wsplit dup :0: swap :1: w " " w wl) each
+wt (:1:, :0: wjoin wl) each
