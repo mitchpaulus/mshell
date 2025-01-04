@@ -41,6 +41,7 @@ type MShellObject interface {
 	ToJson() string
 	ToString() string
 	IndexErrStr() string
+	Concat(other MShellObject) (MShellObject, error)
 }
 
 type MShellSimple struct {
@@ -874,7 +875,7 @@ func (obj *MShellPath) Slice(startInc int, endExc int) (MShellObject, error) {
 	if startInc < 0 {
 		startInc = len(obj.Path) + startInc
 	}
-		
+
 	if endExc < 0 {
 		endExc = len(obj.Path) + endExc
 	}
@@ -980,6 +981,82 @@ func (obj *MShellFloat) ToJson() string {
 
 func (obj *MShellSimple) ToJson() string {
 	return fmt.Sprintf("{\"type\": \"Simple\", \"token\": %s}", obj.Token.ToJson())
+}
+
+// Concat
+func (obj *MShellLiteral) Concat(other MShellObject) (MShellObject, error) {
+	asLiteral, ok := other.(*MShellLiteral)
+	if !ok {
+		return nil, fmt.Errorf("Cannot concatenate a Literal with a %s.\n", other.TypeName())
+	}
+
+	return &MShellLiteral{LiteralText: obj.LiteralText + asLiteral.LiteralText}, nil
+}
+
+func (obj *MShellBool) Concat(other MShellObject) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot concatenate a boolean.\n")
+}
+
+func (obj *MShellQuotation) Concat(other MShellObject) (MShellObject, error) {
+	asQuotation, ok := other.(*MShellQuotation)
+	if !ok {
+		return nil, fmt.Errorf("Cannot concatenate a Quotation with a %s.\n", other.TypeName())
+	}
+
+	newTokens := make([]MShellParseItem, len(obj.Tokens)+len(asQuotation.Tokens))
+	copy(newTokens, obj.Tokens)
+	copy(newTokens[len(obj.Tokens):], asQuotation.Tokens)
+	return &MShellQuotation{Tokens: newTokens}, nil
+}
+
+func (obj *MShellList) Concat(other MShellObject) (MShellObject, error) {
+	asList, ok := other.(*MShellList)
+	if !ok {
+		return nil, fmt.Errorf("Cannot concatenate a List with a %s.\n", other.TypeName())
+	}
+
+	newItems := make([]MShellObject, len(obj.Items)+len(asList.Items))
+	copy(newItems, obj.Items)
+	copy(newItems[len(obj.Items):], asList.Items)
+	return &MShellList{Items: newItems}, nil
+}
+
+func (obj *MShellString) Concat(other MShellObject) (MShellObject, error) {
+	asString, ok := other.(*MShellString)
+	if !ok {
+		return nil, fmt.Errorf("Cannot concatenate a String with a %s.\n", other.TypeName())
+	}
+
+	return &MShellString{Content: obj.Content + asString.Content}, nil
+}
+
+func (obj *MShellPath) Concat(other MShellObject) (MShellObject, error) {
+	asPath, ok := other.(*MShellPath)
+	if !ok {
+		return nil, fmt.Errorf("Cannot concatenate a Path with a %s.\n", other.TypeName())
+	}
+
+	return &MShellPath{Path: obj.Path + asPath.Path}, nil
+}
+
+func (obj *MShellPipe) Concat(other MShellObject) (MShellObject, error) {
+	asPipe, ok := other.(*MShellPipe)
+	if !ok {
+		return nil, fmt.Errorf("Cannot concatenate a Pipe with a %s.\n", other.TypeName())
+	}
+
+	newItems := make([]MShellObject, len(obj.List.Items)+len(asPipe.List.Items))
+	copy(newItems, obj.List.Items)
+	copy(newItems[len(obj.List.Items):], asPipe.List.Items)
+	return &MShellPipe{List: MShellList{Items: newItems}}, nil
+}
+
+func (obj *MShellInt) Concat(other MShellObject) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot concatenate an integer.\n")
+}
+
+func (obj *MShellFloat) Concat(other MShellObject) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot concatenate a float.\n")
 }
 
 func ParseRawString(inputString string) (string, error) {

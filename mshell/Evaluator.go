@@ -147,6 +147,133 @@ MainLoop:
 			parseQuote := t.(*MShellParseQuote)
 			q := MShellQuotation{Tokens: parseQuote.Items, StandardInputFile: "", StandardOutputFile: "", StandardErrorFile: "", Variables: context.Variables, MShellParseQuote: parseQuote}
 			stack.Push(&q)
+		case *MShellIndexerList:
+			obj1, err := stack.Pop()
+			if err != nil {
+				startToken := t.GetStartToken()
+				return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'indexer' operation on an empty stack.\n", startToken.Line, startToken.Column))
+			}
+
+			indexerList := t.(*MShellIndexerList)
+			if len(indexerList.Indexers) == 1 && indexerList.Indexers[0].(Token).Type == INDEXER {
+				t := indexerList.Indexers[0].(Token)
+				// Indexer is a digit between ':' and ':'. Remove ends and parse the number
+				indexStr := t.Lexeme[1 : len(t.Lexeme)-1]
+				index, err := strconv.Atoi(indexStr)
+				if err != nil {
+					return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", t.Line, t.Column, err.Error()))
+				}
+
+				result, err := obj1.Index(index)
+				if err != nil {
+					return FailWithMessage(fmt.Sprintf("%d:%d: %s", t.Line, t.Column, err.Error()))
+				}
+				stack.Push(result)
+			} else {
+				var newObject MShellObject;
+				newObject = nil
+
+				for _, indexer := range indexerList.Indexers {
+					indexerToken := indexer.(Token)
+					switch indexerToken.Type {
+					case INDEXER:
+						indexStr := indexerToken.Lexeme[1 : len(indexerToken.Lexeme)-1]
+						index, err := strconv.Atoi(indexStr)
+						if err != nil {
+							return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", indexerToken.Line, indexerToken.Column, err.Error()))
+						}
+
+						result, err := obj1.Index(index)
+						if err != nil {
+							return FailWithMessage(fmt.Sprintf("%d:%d: %s", indexerToken.Line, indexerToken.Column, err.Error()))
+						}
+
+						var wrappedResult MShellObject
+						switch obj1.(type) {
+						case *MShellList:
+							wrappedResult = NewList(0)
+							wrappedResult.(*MShellList).Items = append(wrappedResult.(*MShellList).Items, result)
+						case *MShellQuotation:
+							wrappedResult = &MShellQuotation{Tokens: []MShellParseItem{result.(MShellParseItem)}, StandardInputFile: "", StandardOutputFile: "", StandardErrorFile: "", Variables: context.Variables, MShellParseQuote: nil}
+						case *MShellPipe:
+							newList := NewList(0)
+							wrappedResult = &MShellPipe{List: *newList, StdoutBehavior: STDOUT_NONE }
+							wrappedResult.(*MShellPipe).List.Items = append(wrappedResult.(*MShellPipe).List.Items, result)
+						default:
+							wrappedResult = result
+						}
+
+						if newObject == nil {
+							newObject = wrappedResult
+						} else {
+							newObject, err  = newObject.Concat(wrappedResult)
+							if err != nil {
+								return FailWithMessage(fmt.Sprintf("%d:%d: %s", indexerToken.Line, indexerToken.Column, err.Error()))
+							}
+						}
+					case STARTINDEXER, ENDINDEXER:
+						var indexStr string
+						// Parse the index value
+						if indexerToken.Type == ENDINDEXER {
+							indexStr = indexerToken.Lexeme[1:]
+						} else {
+							indexStr = indexerToken.Lexeme[:len(indexerToken.Lexeme)-1]
+						}
+
+						index, err := strconv.Atoi(indexStr)
+						if err != nil {
+							return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", indexerToken.Line, indexerToken.Column, err.Error()))
+						}
+
+						var result MShellObject
+						if indexerToken.Type == ENDINDEXER {
+							result, err = obj1.SliceEnd(index)
+						} else {
+							result, err = obj1.SliceStart(index)
+						}
+
+						if err != nil {
+							return FailWithMessage(fmt.Sprintf("%d:%d: %s", indexerToken.Line, indexerToken.Column, err.Error()))
+						}
+
+						if newObject == nil {
+							newObject = result
+						} else {
+							newObject, err  = newObject.Concat(result)
+							if err != nil {
+								return FailWithMessage(fmt.Sprintf("%d:%d: %s", indexerToken.Line, indexerToken.Column, err.Error()))
+							}
+						}
+
+					case SLICEINDEXER:
+						// StartInc:EndExc
+						parts := strings.Split(indexerToken.Lexeme, ":")
+						startInt, err := strconv.Atoi(parts[0])
+						endInt, err2 := strconv.Atoi(parts[1])
+
+						if err != nil || err2 != nil {
+							return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing slice indexes: %s\n", indexerToken.Line, indexerToken.Column, err.Error()))
+						}
+
+						result, err := obj1.Slice(startInt, endInt)
+						if err != nil {
+							return FailWithMessage(fmt.Sprintf("%d:%d: Cannot slice index a %s.\n", indexerToken.Line, indexerToken.Column, obj1.TypeName()))
+						}
+
+						if newObject == nil {
+							newObject = result
+						} else {
+							newObject, err  = newObject.Concat(result)
+							if err != nil {
+								return FailWithMessage(fmt.Sprintf("%d:%d: %s", indexerToken.Line, indexerToken.Column, err.Error()))
+							}
+						}
+
+					}
+				}
+
+				stack.Push(newObject)
+			}
 		case Token:
 			t := t.(Token)
 

@@ -65,6 +65,7 @@ const (
 	DOUBLEDASH
 	AMPERSAND
 	PATH
+	COMMA
 )
 
 func (t TokenType) String() string {
@@ -177,6 +178,8 @@ func (t TokenType) String() string {
 		return "AMPERSAND"
 	case PATH:
 		return "PATH"
+	case COMMA:
+		return "COMMA"
 	default:
 		return "UNKNOWN"
 	}
@@ -469,6 +472,8 @@ func (l *Lexer) scanToken() Token {
 		return l.parseLiteralOrKeyword()
 	case '=':
 		return l.makeToken(EQUALS)
+	case ',':
+		return l.makeToken(COMMA)
 	case '&':
 		return l.makeToken(AMPERSAND)
 	case '<':

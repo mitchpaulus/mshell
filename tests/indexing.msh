@@ -31,3 +31,16 @@ def cjoin ([str] --) ", " join wl end
 ["a" "b" "c" "d"] "x" -1 setAt cjoin
 
 ["a" "b" "c" "d"] reverse cjoin
+
+# Test multiple slices
+["0" "1" "2" "3" "4" "5" "6" "7" "8" "9"] testList!
+
+@testList    :2:, -1:, 3:5, :2, cjoin
+"0123456789" :2:, -1:, 3:5, :2, wl
+--0123456789 :2:, -1:, 3:5, :2, wl
+`0123456789` :2:, -1:, 3:5, :2, str wl
+[
+    [printf "1\n"]
+    [echo 2]
+    [cat]
+] | :0:, :2: ;

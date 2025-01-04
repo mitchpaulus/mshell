@@ -27,6 +27,37 @@ type MShellParseList struct {
 	EndToken   Token
 }
 
+type MShellIndexerList struct {
+	Indexers  []MShellParseItem
+}
+
+func (indexerList *MShellIndexerList) DebugString() string {
+	if len(indexerList.Indexers) == 0 {
+		return ""
+	}
+
+	builder := strings.Builder{}
+	builder.WriteString(indexerList.Indexers[0].DebugString())
+	for i := 1; i < len(indexerList.Indexers); i++ {
+		builder.WriteString(", ")
+		builder.WriteString(indexerList.Indexers[i].DebugString())
+	}
+	return builder.String()
+}
+
+func (indexerList *MShellIndexerList) ToJson() string {
+	return ToJson(indexerList.Indexers)
+}
+
+func (indexerList *MShellIndexerList) GetStartToken() Token {
+	return indexerList.Indexers[0].GetStartToken()
+}
+
+func (indexerList *MShellIndexerList) GetEndToken() Token {
+	return indexerList.Indexers[len(indexerList.Indexers)-1].GetEndToken()
+}
+
+
 func (list *MShellParseList) GetStartToken() Token {
 	return list.StartToken
 }
@@ -193,6 +224,28 @@ func (parser *MShellParser) ParseFile() (*MShellFile, error) {
 			}
 			// fmt.Fprintf(os.Stderr, "List: %s\n", list.ToJson())
 			file.Items = append(file.Items, list)
+		case INDEXER, ENDINDEXER, STARTINDEXER, SLICEINDEXER:
+			indexerList := &MShellIndexerList{}
+			indexerList.Indexers = []MShellParseItem{}
+			indexerList.Indexers = append(indexerList.Indexers, parser.curr)
+			parser.NextToken()
+
+			for {
+				if parser.curr.Type == COMMA {
+					parser.NextToken()
+					if parser.curr.Type == ENDINDEXER || parser.curr.Type == STARTINDEXER || parser.curr.Type == INDEXER || parser.curr.Type == SLICEINDEXER {
+						indexerList.Indexers = append(indexerList.Indexers, parser.curr)
+						parser.NextToken()
+					} else {
+						// No error here, just a trailing comma which is fine.
+						break
+					}
+				} else {
+					break
+				}
+			}
+
+			file.Items = append(file.Items, indexerList)
 		case DEF:
 			_ = parser.Match(parser.curr, DEF)
 			if parser.curr.Type != LITERAL {
