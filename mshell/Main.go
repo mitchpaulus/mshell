@@ -72,8 +72,6 @@ func main() {
 			fmt.Println("  -h, --help Print this help message")
 			os.Exit(0)
 			return
-		} else if input != "" {
-			positionalArgs = append(positionalArgs, arg)
 		} else {
 			inputSet = true
 			inputBytes, err := os.ReadFile(arg)
@@ -83,6 +81,9 @@ func main() {
 				return
 			}
 			input = string(inputBytes)
+			// If there are more arguments, add them to positionalArgs.
+			positionalArgs = append(positionalArgs, os.Args[i:]...)
+			break
 		}
 	}
 
