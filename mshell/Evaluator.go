@@ -1027,6 +1027,29 @@ MainLoop:
 						// I don't believe checking for literal is required, because it should have been parsed as a float to start with?
 					case *MShellInt:
 						stack.Push(&MShellFloat{float64(obj.(*MShellInt).Value)})
+					case *MShellFloat:
+						stack.Push(obj)
+					default:
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert a %s to a float.\n", t.Line, t.Column, obj.TypeName()))
+					}
+				} else if t.Lexeme == "toInt" {
+					obj, err := stack.Pop()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'toInt' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					switch obj.(type) {
+					case *MShellString:
+						intVal, err := strconv.Atoi(obj.(*MShellString).Content)
+						if err != nil {
+							return FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert %s to int %s\n", t.Line, t.Column, obj.(*MShellString).Content, err.Error()))
+						}
+						stack.Push(&MShellInt{intVal})
+						// I don't believe checking for literal is required, because it should have been parsed as a float to start with?
+					case *MShellInt:
+						stack.Push(obj)
+					case *MShellFloat:
+						stack.Push(&MShellInt{int(obj.(*MShellFloat).Value)})
 					default:
 						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert a %s to a float.\n", t.Line, t.Column, obj.TypeName()))
 					}

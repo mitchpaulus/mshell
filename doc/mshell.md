@@ -36,6 +36,7 @@ No escaping is done within single quoted strings.
 - `cd`: Change directory `(str -- )`
 - `pwd`: Get current working directory `( -- str)`
 - `toFloat`: Convert to float. `(numeric -- float)`
+- `toInt`: Convert to int. `(numeric -- int)`
 - `readFile`: Read file into string. `(str -- str)`
 - `readTsvFile`: Read a TSV file into list of list of strings. `(str -- [[str]])`
 - `stdin`: Drop stdin onto the stack `( -- str)`
