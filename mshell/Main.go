@@ -64,14 +64,26 @@ func main() {
 			command = CLIPARSE
 			// printParse = true
 		} else if arg == "-h" || arg == "--help" {
-			fmt.Println("Usage: mshell [options] INPUT")
-			fmt.Println("Usage: mshell [options] < INPUT")
+			fmt.Println("Usage: mshell [OPTION].. FILE [ARG]..")
+			fmt.Println("Usage: mshell [OPTION].. [ARG].. < FILE")
+			fmt.Println("Usage: mshell [OPTION].. -c INPUT [ARG]..")
 			fmt.Println("Options:")
 			fmt.Println("  --lex      Print the tokens of the input")
 			fmt.Println("  --parse    Print the parsed Abstract Syntax Tree")
 			fmt.Println("  -h, --help Print this help message")
 			os.Exit(0)
 			return
+		} else if arg == "-c" {
+			if i >= len(os.Args) {
+				fmt.Println("Error: -c requires an argument")
+				os.Exit(1)
+				return
+			}
+
+			input = os.Args[i]
+			inputSet = true
+			positionalArgs = append(positionalArgs, os.Args[i:]...)
+			break
 		} else {
 			inputSet = true
 			inputBytes, err := os.ReadFile(arg)
