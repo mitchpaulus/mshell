@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"bufio"
+	"golang.org/x/term"
 	// "runtime/pprof"
 	// "runtime/trace"
 	// "runtime"
@@ -52,6 +54,11 @@ func main() {
 	inputSet := false
 	positionalArgs := []string{}
 
+	if len(os.Args) == 1 {
+		// Enter interactive mode
+
+	}
+
 	for i < len(os.Args) {
 		arg := os.Args[i]
 		i++
@@ -99,6 +106,11 @@ func main() {
 		}
 	}
 
+	if len(input) == 0 && term.IsTerminal(0) {
+		InteractiveMode()
+		return
+	}
+
 	if !inputSet {
 		inputBytes, err := io.ReadAll(os.Stdin)
 		if err != nil {
@@ -109,6 +121,7 @@ func main() {
 		}
 		input = string(inputBytes)
 	}
+
 
 	l := NewLexer(input)
 
@@ -217,4 +230,99 @@ func main() {
 			os.Exit(1)
 		}
 	}
+}
+
+func InteractiveMode() {
+	l := NewLexer("")
+	p := MShellParser{lexer: l}
+
+	scanner := bufio.NewScanner(os.Stdin)
+
+	state := EvalState{
+		PositionalArgs: make([]string, 0),
+		LoopDepth:      0,
+		StopOnError:	false,
+	}
+
+	stack := make(MShellStack, 0)
+
+	context := ExecuteContext{
+		StandardInput:  os.Stdin,
+		StandardOutput: os.Stdout,
+		Variables:      map[string]MShellObject{},
+	}
+
+	callStack := make(CallStack, 10)
+
+	stdLibDefs, err := stdLibDefinitions(stack, context, state, callStack)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading standard library: %s\n", err)
+		os.Exit(1)
+		return
+	}
+
+	for {
+		// Print prompt
+		fmt.Print("mshell> ")
+		if !scanner.Scan() {
+			break
+		}
+
+		line := scanner.Text()
+		l.resetInput(line)
+
+		p.NextToken()
+
+		parsed, err := p.ParseFile()
+		if err != nil {
+			fmt.Println(err)
+			continue
+		}
+
+		result := state.Evaluate(parsed.Items, &stack, context, stdLibDefs, callStack)
+
+		if !result.Success {
+			fmt.Fprintf(os.Stderr, "Error evaluating input.\n")
+		}
+
+		if result.ExitCalled {
+			os.Exit(result.ExitCode)
+			break
+		}
+	}
+}
+
+func stdLibDefinitions(stack MShellStack, context ExecuteContext, state EvalState, callStack CallStack) ([]MShellDefinition, error) {
+	// Check for environment variable MSHSTDLIB and load that file. Read as UTF-8
+	stdlibPath, stdlibSet := os.LookupEnv("MSHSTDLIB")
+	if stdlibSet {
+		stdlibBytes, err := os.ReadFile(stdlibPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error reading file %s: %s\n", stdlibPath, err)
+			os.Exit(1)
+			return nil, err
+		}
+		stdlibLexer := NewLexer(string(stdlibBytes))
+		stdlibParser := MShellParser{lexer: stdlibLexer}
+		stdlibParser.NextToken()
+		stdlibFile, err := stdlibParser.ParseFile()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error parsing file %s: %s\n", stdlibPath, err)
+			os.Exit(1)
+			return nil, err
+		}
+
+		// allDefinitions = append(allDefinitions, stdlibFile.Definitions...)
+		result := state.Evaluate(stdlibFile.Items, &stack, context, stdlibFile.Definitions, callStack)
+
+		if !result.Success {
+			fmt.Fprintf(os.Stderr, "Error evaluating MSHSTDLIB file %s.\n", stdlibPath)
+			os.Exit(1)
+			return nil, err
+		}
+
+		return stdlibFile.Definitions, nil
+	}
+
+	return make([]MShellDefinition, 0), nil
 }

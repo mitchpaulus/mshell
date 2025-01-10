@@ -214,8 +214,8 @@ func (t Token) GetEndToken() Token {
 type Lexer struct {
 	start   int
 	current int
-	col     int
-	line    int
+	col     int // Zero-based column number.
+	line    int // One-based line number.
 	input   []rune
 }
 
@@ -227,7 +227,18 @@ func NewLexer(input string) *Lexer {
 	return &Lexer{
 		input: []rune(input),
 		line:  1,
+		start: 0,
+		current: 0,
+		col: 0,
 	}
+}
+
+func (l *Lexer) resetInput(input string) {
+	l.input = []rune(input)
+	l.line = 1
+	l.col = 0
+	l.start = 0
+	l.current = 0
 }
 
 func (l *Lexer) atEnd() bool {
@@ -289,6 +300,7 @@ var notAllowedLiteralChars = map[rune]bool{
 	'=': true,
 	'&': true,
 	'|': true,
+	0:  true, // Null, used for 'peek' at end of file.
 }
 
 func isAllowedLiteral(r rune) bool {
@@ -564,7 +576,7 @@ func (l *Lexer) parseNumberOrStartIndexer() Token {
 	// Read all the digits
 	for {
 		if l.atEnd() {
-			break
+
 		}
 		if !unicode.IsDigit(l.peek()) {
 			break
