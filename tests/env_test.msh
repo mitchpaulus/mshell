@@ -1,2 +1,2 @@
-"Hello, World!" MSHELL_VAR! MSHELL_VAR export
+"Hello, World!" $MSHELL_VAR! # MSHELL_VAR export was the old way
 [./env_test.sh];

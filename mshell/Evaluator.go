@@ -1506,9 +1506,48 @@ MainLoop:
 				default:
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect stderr to a %s.\n", t.Line, t.Column, obj1.TypeName()))
 				}
+			} else if t.Type == ENVSTORE { // Token Type
+				obj, err := stack.Pop()
+				if err != nil {
+					return FailWithMessage(fmt.Sprintf("%d:%d: Nothing on stack to set into %s environment variable.\n", t.Line, t.Column, t.Lexeme))
+				}
+
+				// Strip off the leading '$' and trailing '!' for the environment variable name
+				varName := t.Lexeme[1:len(t.Lexeme) - 1]
+
+				var varValue string
+				switch obj.(type) {
+				case *MShellString:
+					varValue = obj.(*MShellString).Content
+				case *MShellLiteral:
+					varValue = obj.(*MShellLiteral).LiteralText
+				default:
+					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot export a %s.\n", t.Line, t.Column, obj.TypeName()))
+				}
+
+				err = os.Setenv(varName, varValue)
+				if err != nil {
+					return FailWithMessage(fmt.Sprintf("%d:%d: Could not set the environment variable '%s' to '%s'.\n", t.Line, t.Column, varName, varValue))
+				}
+			} else if t.Type == ENVCHECK {
+				// Strip off the leading '$' and trailing '!' for the environment variable name
+				varName := t.Lexeme[1:len(t.Lexeme) - 1]
+				_, found := os.LookupEnv(varName)
+				stack.Push(&MShellBool{found})
+			} else if t.Type == ENVRETREIVE { // Token Type
+				envVarName := t.Lexeme[1:len(t.Lexeme)]
+				varValue, found := os.LookupEnv(envVarName)
+
+				if !found {
+					return FailWithMessage(fmt.Sprintf("%d:%d: Could not get the environment variable '%s'.\n", t.Line, t.Column, envVarName))
+				}
+
+				stack.Push(&MShellString{varValue})
+
 			} else if t.Type == VARSTORE { // Token Type
 				obj, err := stack.Pop()
 				varName := t.Lexeme[0 : len(t.Lexeme)-1] // Remove the trailing !
+
 				if err != nil {
 					return FailWithMessage(fmt.Sprintf("%d:%d: Nothing on stack to store into variable %s.\n", t.Line, t.Column, varName))
 				}
@@ -1946,36 +1985,6 @@ MainLoop:
 					stack.Push(pipe)
 				default:
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot set stdout behavior on a %s.\n", t.Line, t.Column, obj.TypeName()))
-				}
-			} else if t.Type == EXPORT { // Token Type
-				obj, err := stack.Pop()
-				if err != nil {
-					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot export an empty stack.\n", t.Line, t.Column))
-				}
-
-				var varName string
-				switch obj.(type) {
-				case *MShellString:
-					varName = obj.(*MShellString).Content
-				case *MShellLiteral:
-					varName = obj.(*MShellLiteral).LiteralText
-				default:
-					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot export a %s.\n", t.Line, t.Column, obj.TypeName()))
-				}
-
-				// Check that varName is in state.Variables, and varName is string or literal
-				varValue, ok := context.Variables[varName]
-				if !ok {
-					return FailWithMessage(fmt.Sprintf("%d:%d: Variable %s not found in available variables.\n", t.Line, t.Column, varName))
-				}
-
-				switch varValue.(type) {
-				case *MShellString:
-					os.Setenv(varName, varValue.(*MShellString).Content)
-				case *MShellLiteral:
-					os.Setenv(varName, varValue.(*MShellLiteral).LiteralText)
-				default:
-					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot export a %s as an environment variable.\n", t.Line, t.Column, varValue.TypeName()))
 				}
 			} else if t.Type == STOP_ON_ERROR { // Token Type
 				state.StopOnError = true

@@ -1,2 +1,2 @@
-"/home/myuser" HOME! HOME export
+"/home/myuser" $HOME! # HOME export
 [echo ~/repos/];

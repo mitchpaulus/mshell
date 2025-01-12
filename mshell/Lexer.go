@@ -42,6 +42,9 @@ const (
 	FALSE
 	VARRETRIEVE
 	VARSTORE
+	ENVRETREIVE
+	ENVSTORE
+	ENVCHECK
 	INTEGER
 	FLOAT
 	LITERAL
@@ -52,7 +55,6 @@ const (
 	STDOUTLINES
 	STDOUTSTRIPPED
 	STDOUTCOMPLETE
-	EXPORT
 	TILDEEXPANSION
 	STOP_ON_ERROR
 	DEF
@@ -134,6 +136,10 @@ func (t TokenType) String() string {
 		return "VARRETRIEVE"
 	case VARSTORE:
 		return "VARSTORE"
+	case ENVRETREIVE:
+		return "ENVRETREIVE"
+	case ENVSTORE:
+		return "ENVSTORE"
 	case INTEGER:
 		return "INTEGER"
 	case FLOAT:
@@ -154,8 +160,6 @@ func (t TokenType) String() string {
 		return "STDOUTSTRIPPED"
 	case STDOUTCOMPLETE:
 		return "STDOUTCOMPLETE"
-	case EXPORT:
-		return "EXPORT"
 	case TILDEEXPANSION:
 		return "TILDEEXPANSION"
 	case STOP_ON_ERROR:
@@ -351,15 +355,7 @@ func (l *Lexer) literalOrKeywordType() TokenType {
 	case 'd':
 		return l.checkKeyword(1, "ef", DEF)
 	case 'e':
-		if l.curLen() > 1 {
-			c := l.input[l.start+1]
-			switch c {
-			case 'n':
-				return l.checkKeyword(2, "d", END)
-			case 'x':
-				return l.checkKeyword(2, "port", EXPORT)
-			}
-		}
+		return l.checkKeyword(1, "nd", END)
 	case 'f':
 		if l.curLen() > 1 {
 			c := l.input[l.start+1]
@@ -480,8 +476,11 @@ func (l *Lexer) scanToken() Token {
 	case '$':
 		if unicode.IsDigit(l.peek()) {
 			return l.parsePositional()
+		} else if isAllowedLiteral(l.peek()) {
+			return l.parseEnvVar()
+		} else {
+			return l.parseLiteralOrKeyword()
 		}
-		return l.parseLiteralOrKeyword()
 	case '=':
 		return l.makeToken(EQUALS)
 	case ',':
@@ -570,6 +569,28 @@ func (l *Lexer) consumeLiteral() Token {
 	}
 
 	return l.makeToken(LITERAL)
+}
+
+func (l *Lexer) parseEnvVar() Token {
+	for {
+		if isAllowedLiteral(l.peek()) {
+			l.advance()
+		} else {
+			break
+		}
+	}
+
+	c := l.peek()
+
+	if c == '!' {
+		l.advance()
+		return l.makeToken(ENVSTORE)
+	} else if c == '?' {
+		l.advance()
+		return l.makeToken(ENVCHECK)
+	} else {
+		return l.makeToken(ENVRETREIVE)
+	}
 }
 
 func (l *Lexer) parseNumberOrStartIndexer() Token {

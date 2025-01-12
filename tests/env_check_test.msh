@@ -1,0 +1,3 @@
+[($asdfasdfasdf?) ("Found") ("Environment variable asdfasdfasdf not found")] if wl
+"My var value" $asdf!
+[($asdf?) ("Environment variable asdf Found") ("Environment variable asdfasdfasdf not found")] if wl

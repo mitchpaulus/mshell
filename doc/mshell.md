@@ -106,17 +106,21 @@ the token will be replaced with the user's home directory.
 
 ## Environment Variables
 
-Environment variables are accessed like other variables.
-`export` is used to export a variable to the environment for subprocesses.
+Environment variables are accessed and set using the `$` prefix.
+They can be set like a normal variable using the '!' suffix.
+Environment variables are always "exported" to subprocesses.
+
+The presence of an environment variable can be checked using the `?` suffix.
 
 ```mshell
 @HOME cd
 
-# Exporting for subprocesses
-"Hello, World!" MSHELL_VAR! MSHELL_VAR export
+# Setting and exporting for subprocesses
+"Hello, World!" $MSHELL_VAR!
+
+# Checking for variable existance
+[($MY_ENV_VAR?) ("MY_ENV_VAR exists") ("MY_ENV_VAR does not exist")] if wl
 ```
-
-
 
 ## Indexing
 
