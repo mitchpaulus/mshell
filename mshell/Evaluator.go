@@ -1428,7 +1428,7 @@ MainLoop:
 						switch obj2.(type) {
 						case *MShellList:
 							if t.Type == GREATERTHAN {
-								return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a %s (%s) to a %s (%s). Use a path literal instead.\n", t.Line, t.Column, obj1.TypeName(), obj1.(*MShellString).Content, obj2.TypeName(), obj2.DebugString()))
+								return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a %s (%s) to a %s (%s). Use a path literal instead.\n", t.Line, t.Column, obj1.TypeName(), obj1.(*MShellLiteral).LiteralText, obj2.TypeName(), obj2.DebugString()))
 							} else { // LESSTHAN, input redirection
 								obj2.(*MShellList).StdinBehavior = STDIN_CONTENT
 								obj2.(*MShellList).StandardInputFile = obj1.(*MShellLiteral).LiteralText
