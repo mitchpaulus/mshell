@@ -4,8 +4,9 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"bufio"
+	// "bufio"
 	"golang.org/x/term"
+	// "strings"
 	// "runtime/pprof"
 	// "runtime/trace"
 	// "runtime"
@@ -233,10 +234,19 @@ func main() {
 }
 
 func InteractiveMode() {
+	// Put terminal into raw mode
+	oldState, err := term.MakeRaw(0)
+
+	defer term.Restore(0, oldState)
+
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error setting terminal to raw mode: %s\n", err)
+		os.Exit(1)
+		return
+	}
+
 	l := NewLexer("")
 	p := MShellParser{lexer: l}
-
-	scanner := bufio.NewScanner(os.Stdin)
 
 	state := EvalState{
 		PositionalArgs: make([]string, 0),
@@ -256,39 +266,112 @@ func InteractiveMode() {
 
 	stdLibDefs, err := stdLibDefinitions(stack, context, state, callStack)
 	if err != nil {
+		term.Restore(0, oldState)
 		fmt.Fprintf(os.Stderr, "Error loading standard library: %s\n", err)
 		os.Exit(1)
 		return
 	}
 
+	history := make([]string, 0)
+	readBuffer := make([]byte, 3)
+	// currentCommand := strings.Builder{}
+	currentCommand := make([]rune, 100)
+
+	// For debugging, write number of bytes read and bytes to /tmp/mshell.log
+	// Open file for writing
+	f, err := os.OpenFile("/tmp/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error opening file /tmp/mshell.log: %s\n", err)
+		os.Exit(1)
+		return
+	}
+	defer f.Close()
+
+	// Print prompt
+	fmt.Print("mshell> ")
+	index := 0
+
 	for {
-		// Print prompt
-		fmt.Print("mshell> ")
-		if !scanner.Scan() {
-			break
-		}
-
-		line := scanner.Text()
-		l.resetInput(line)
-
-		p.NextToken()
-
-		parsed, err := p.ParseFile()
+		// Read char
+		n, err := os.Stdin.Read(readBuffer)
 		if err != nil {
-			fmt.Println(err)
-			continue
+			fmt.Fprintf(os.Stderr, "Error reading from stdin: %s\n", err)
+			os.Exit(1)
+			return
 		}
 
-		result := state.Evaluate(parsed.Items, &stack, context, stdLibDefs, callStack)
-
-		if !result.Success {
-			fmt.Fprintf(os.Stderr, "Error evaluating input.\n")
+		fmt.Fprintf(f, "%d\t", n)
+		for i := 0; i < n; i++ {
+			fmt.Fprintf(f, "%d ", readBuffer[i])
 		}
 
-		if result.ExitCalled {
-			os.Exit(result.ExitCode)
-			break
+		fmt.Fprintf(f, "\t%s\t%d", string(currentCommand), index)
+		fmt.Fprintf(f, "\n")
+
+		c := readBuffer[0]
+
+		if c == '\n' {
+			// Add command to history
+			currentCommandStr := string(currentCommand)
+			history = append(history, currentCommandStr)
+
+			// Reset current command
+			currentCommand = currentCommand[:0]
+
+			// Print newline
+			fmt.Println()
+
+			l.resetInput(currentCommandStr)
+
+			p.NextToken()
+
+			parsed, err := p.ParseFile()
+			if err != nil {
+				fmt.Println(err)
+				continue
+			}
+
+			result := state.Evaluate(parsed.Items, &stack, context, stdLibDefs, callStack)
+
+			if !result.Success {
+				fmt.Fprintf(os.Stderr, "Error evaluating input.\n")
+			}
+
+			if result.ExitCalled {
+				// Reset terminal to original state
+				os.Exit(result.ExitCode)
+				break
+			}
+
+		} else if c == 3 || c == 4 {
+			// Ctrl-C or Ctrl-D
+			os.Exit(0)
+		} else if c == 21 { // Ctrl-U
+			// Erase current line and reset
+			fmt.Fprintf(os.Stdout, "\033[2K\033[1G")
+			fmt.Fprintf(os.Stdout, "mshell> ")
+
+			// Remaining chars in current command
+			currentCommand = currentCommand[index:]
+
+			for i := 0; i < len(currentCommand); i++ {
+				fmt.Fprintf(os.Stdout, "%c", currentCommand[i])
+			}
+
+			index = 0
+		} else {
+			// Add chars to current command
+			for i := 0; i < n; i++ {
+				currentCommand = append(currentCommand, rune(readBuffer[i]))
+			}
+
+			fmt.Fprintf(os.Stdout, "%s", string(readBuffer[:n]))
+			index += n
 		}
+
+		// if !scanner.Scan() {
+			// break
+		// }
 	}
 }
 
