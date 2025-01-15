@@ -404,6 +404,24 @@ func InteractiveMode() {
 
 				fmt.Fprintf(os.Stdout, "\033[%dG", len(prompt)+1)
 				index = 0
+			} else if c == 23 { // Ctrl-W
+				// Erase last word
+				if index > 0 {
+					// First consume all whitespace
+					for index > 0 && currentCommand[index-1] == ' ' {
+						index--
+					}
+
+					// Then consume all non-whitespace
+					for index > 0 && currentCommand[index-1] != ' ' {
+						index--
+					}
+
+					// Erase the word
+					fmt.Fprintf(os.Stdout, "\033[%dG", len(prompt)+1+index)
+					fmt.Fprintf(os.Stdout, "\033[K")
+					currentCommand = currentCommand[:index]
+				}
 			} else if c == 27 && i < n {
 				c = readBuffer[i]
 				i++
