@@ -273,7 +273,7 @@ func InteractiveMode() {
 	}
 
 	history := make([]string, 0)
-	readBuffer := make([]byte, 5)
+	readBuffer := make([]byte, 1024)
 	// currentCommand := strings.Builder{}
 	currentCommand := make([]rune, 0, 100)
 
@@ -308,152 +308,165 @@ func InteractiveMode() {
 		}
 		fmt.Fprintf(f, "\n")
 
-		c := readBuffer[0]
+		i := 0
+		for i < n {
+			c := readBuffer[i]
+			i++
 
-		if c == 1 { // Ctrl-A
-			// Move cursor to beginning of line.
-			fmt.Fprintf(os.Stdout, "\033[%dG", len(prompt)+1)
-			index = 0
-		} else if c == 2 { // CTRL-B
-			// Move cursor left
-			if index > 0 {
-				index--
-				fmt.Fprintf(os.Stdout, "\033[D")
-			}
-		} else if c == 3 || c == 4 {
-			// Ctrl-C or Ctrl-D
-			os.Exit(0)
-		} else if c == 5 { // Ctrl-E
-			// Move cursor to end of line
-			fmt.Fprintf(os.Stdout, "\033[%dG", len(prompt)+1+len(currentCommand))
-			index = len(currentCommand)
-		} else if c == 6 { // Ctrl-F
-			// Move cursor right
-			if index < len(currentCommand) {
+			if c == 1 { // Ctrl-A
+				// Move cursor to beginning of line.
+				fmt.Fprintf(os.Stdout, "\033[%dG", len(prompt)+1)
+				index = 0
+			} else if c == 2 { // CTRL-B
+				// Move cursor left
+				if index > 0 {
+					index--
+					fmt.Fprintf(os.Stdout, "\033[D")
+				}
+			} else if c == 3 || c == 4 {
+				// Ctrl-C or Ctrl-D
+				os.Exit(0)
+			} else if c == 5 { // Ctrl-E
+				// Move cursor to end of line
+				fmt.Fprintf(os.Stdout, "\033[%dG", len(prompt)+1+len(currentCommand))
+				index = len(currentCommand)
+			} else if c == 6 { // Ctrl-F
+				// Move cursor right
+				if index < len(currentCommand) {
+					index++
+					fmt.Fprintf(os.Stdout, "\033[C")
+				}
+			} else if c == 11 { // Ctrl-K
+				// Erase to end of line
+				fmt.Fprintf(os.Stdout, "\033[K")
+				currentCommand = currentCommand[:index]
+			} else if c == 12 { // Ctrl-L
+				// Clear screen
+				fmt.Fprintf(os.Stdout, "\033[2J\033[1;1H")
+				fmt.Fprintf(os.Stdout, prompt)
+			} else if c == 13 { // Enter
+				// Add command to history
+				currentCommandStr := string(currentCommand)
+				history = append(history, currentCommandStr)
+
+				// Reset current command
+				currentCommand = currentCommand[:0]
+
+				l.resetInput(currentCommandStr)
+
+				p.NextToken()
+
+				term.Restore(0, oldState)
+				fmt.Fprintf(os.Stdout, "\n")
+
+				parsed, err := p.ParseFile()
+				if err != nil {
+					fmt.Println(err)
+					continue
+				}
+
+				result := state.Evaluate(parsed.Items, &stack, context, stdLibDefs, callStack)
+
+				if !result.Success {
+					fmt.Fprintf(os.Stderr, "Error evaluating input.\n")
+				}
+
+				if result.ExitCalled {
+					// Reset terminal to original state
+					os.Exit(result.ExitCode)
+					break
+				}
+
+				fmt.Fprintf(os.Stdout, "\033[1G")
+				fmt.Fprintf(os.Stdout, prompt)
+				index = 0
+
+				// Put terminal back into raw mode
+				oldState, err = term.MakeRaw(0)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Error setting terminal to raw mode: %s\n", err)
+					os.Exit(1)
+					return
+				}
+			} else if c == 21 { // Ctrl-U
+				// Erase current line and reset
+				fmt.Fprintf(os.Stdout, "\033[2K\033[1G")
+				fmt.Fprintf(os.Stdout, "mshell> ")
+
+				// // Remaining chars in current command
+				currentCommand = currentCommand[index:]
+				for i := 0; i < len(currentCommand); i++ {
+					fmt.Fprintf(os.Stdout, "%c", currentCommand[i])
+				}
+
+				fmt.Fprintf(os.Stdout, "\033[%dG", len(prompt)+1)
+				index = 0
+			} else if c == 27 && i < n {
+				c = readBuffer[i]
+				i++
+				// Arrow keys
+				if c == 91 && i < n {
+					c = readBuffer[i]
+					i++
+					if c == 51 && i < n {
+						c = readBuffer[i]
+						i++
+						if c == 126 {
+							// Delete
+							if index < len(currentCommand) {
+								fmt.Fprintf(os.Stdout, "\033[K")
+								fmt.Fprintf(os.Stdout, "%s", string(currentCommand[index+1:]))
+								currentCommand = append(currentCommand[:index], currentCommand[index+1:]...)
+								fmt.Fprintf(os.Stdout, "\033[%dG", len(prompt)+1+index)
+							}
+						}
+					} else if c == 65 {
+						// Up arrow
+					} else if c == 66 {
+						// Down arrow
+					} else if c == 67 {
+						// Right arrow
+						if index < len(currentCommand) {
+							index++
+							fmt.Fprintf(os.Stdout, "\033[C")
+						}
+					} else if c == 68 {
+						// Left arrow
+						if index > 0 {
+							index--
+							fmt.Fprintf(os.Stdout, "\033[D")
+						}
+					}
+				} else {
+					fmt.Fprintf(f, "Unknown sequence: %d %d %d\n", readBuffer[0], readBuffer[1], readBuffer[2])
+				}
+
+			} else if c >= 32 && c <= 126 {
+				// Add chars to current command at current index
+
+				fmt.Fprintf(os.Stdout, "\033[K")
+				fmt.Fprintf(os.Stdout, "%c", c)
+				fmt.Fprintf(os.Stdout, "%s", string(currentCommand[index:]))
+				fmt.Fprintf(os.Stdout, "\033[%dG", len(prompt)+1+index+1)
+
+				currentCommand = append(currentCommand[:index], append([]rune{rune(c)}, currentCommand[index:]...)...)
 				index++
-				fmt.Fprintf(os.Stdout, "\033[C")
-			}
-		} else if c == 11 { // Ctrl-K
-			// Erase to end of line
-			fmt.Fprintf(os.Stdout, "\033[K")
-			currentCommand = currentCommand[:index]
-		} else if c == 12 { // Ctrl-L
-			// Clear screen
-			fmt.Fprintf(os.Stdout, "\033[2J\033[1;1H")
-			fmt.Fprintf(os.Stdout, prompt)
-		} else if c == 13 { // Enter
-			// Add command to history
-			currentCommandStr := string(currentCommand)
-			history = append(history, currentCommandStr)
+			} else if c == 127 { // Backspace
+				// Erase last char
+				if index > 0 {
+					currentCommand = append(currentCommand[:index-1], currentCommand[index:]...)
+					index--
 
-			// Reset current command
-			currentCommand = currentCommand[:0]
-
-			l.resetInput(currentCommandStr)
-
-			p.NextToken()
-
-			term.Restore(0, oldState)
-			fmt.Fprintf(os.Stdout, "\n")
-
-			parsed, err := p.ParseFile()
-			if err != nil {
-				fmt.Println(err)
-				continue
-			}
-
-			result := state.Evaluate(parsed.Items, &stack, context, stdLibDefs, callStack)
-
-			if !result.Success {
-				fmt.Fprintf(os.Stderr, "Error evaluating input.\n")
-			}
-
-			if result.ExitCalled {
-				// Reset terminal to original state
-				os.Exit(result.ExitCode)
-				break
-			}
-
-			fmt.Fprintf(os.Stdout, "\033[1G")
-			fmt.Fprintf(os.Stdout, prompt)
-			index = 0
-
-			// Put terminal back into raw mode
-			oldState, err = term.MakeRaw(0)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error setting terminal to raw mode: %s\n", err)
-				os.Exit(1)
-				return
-			}
-		} else if c == 21 { // Ctrl-U
-			// Erase current line and reset
-			fmt.Fprintf(os.Stdout, "\033[2K\033[1G")
-			fmt.Fprintf(os.Stdout, "mshell> ")
-
-			// // Remaining chars in current command
-			currentCommand = currentCommand[index:]
-			for i := 0; i < len(currentCommand); i++ {
-				fmt.Fprintf(os.Stdout, "%c", currentCommand[i])
-			}
-
-			fmt.Fprintf(os.Stdout, "\033[%dG", len(prompt)+1)
-			index = 0
-		} else if c == 27 && n >= 3 {
-			// Arrow keys
-			if readBuffer[1] == 91 {
-				if readBuffer[2] == 51 && n >= 4 && readBuffer[3] == 126 {
-					// Delete
-					if index < len(currentCommand) {
-						fmt.Fprintf(os.Stdout, "\033[K")
-						fmt.Fprintf(os.Stdout, "%s", string(currentCommand[index+1:]))
-						currentCommand = append(currentCommand[:index], currentCommand[index+1:]...)
-						fmt.Fprintf(os.Stdout, "\033[%dG", len(prompt)+1+index)
-					}
-				} else if readBuffer[2] == 65 {
-					// Up arrow
-				} else if readBuffer[2] == 66 {
-					// Down arrow
-				} else if readBuffer[2] == 67 {
-					// Right arrow
-					if index < len(currentCommand) {
-						index++
-						fmt.Fprintf(os.Stdout, "\033[C")
-					}
-				} else if readBuffer[2] == 68 {
-					// Left arrow
-					if index > 0 {
-						index--
-						fmt.Fprintf(os.Stdout, "\033[D")
-					}
+					fmt.Fprintf(os.Stdout, "\033[D")
+					fmt.Fprintf(os.Stdout, "\033[K")
+					fmt.Fprintf(os.Stdout, "%s", string(currentCommand[index:]))
+					fmt.Fprintf(os.Stdout, "\033[%dG", len(prompt)+1+index)
 				}
 			} else {
-				fmt.Fprintf(f, "Unknown sequence: %d %d %d\n", readBuffer[0], readBuffer[1], readBuffer[2])
+				fmt.Fprintf(f, "Unknown character: %d\n", c)
 			}
-
-		} else if c >= 32 && c <= 126 {
-			// Add chars to current command at current index
-
-			fmt.Fprintf(os.Stdout, "\033[K")
-			fmt.Fprintf(os.Stdout, "%c", c)
-			fmt.Fprintf(os.Stdout, "%s", string(currentCommand[index:]))
-			fmt.Fprintf(os.Stdout, "\033[%dG", len(prompt)+1+index+1)
-
-			currentCommand = append(currentCommand[:index], append([]rune{rune(c)}, currentCommand[index:]...)...)
-			index += n
-		} else if c == 127 { // Backspace
-			// Erase last char
-			if index > 0 {
-				currentCommand = append(currentCommand[:index-1], currentCommand[index:]...)
-				index--
-
-				fmt.Fprintf(os.Stdout, "\033[D")
-				fmt.Fprintf(os.Stdout, "\033[K")
-				fmt.Fprintf(os.Stdout, "%s", string(currentCommand[index:]))
-				fmt.Fprintf(os.Stdout, "\033[%dG", len(prompt)+1+index)
-			}
-		} else {
-			fmt.Fprintf(f, "Unknown character: %d\n", c)
 		}
+
 
 		fmt.Fprintf(f, "%s\t%d\n", string(currentCommand), index)
 		// if !scanner.Scan() {
