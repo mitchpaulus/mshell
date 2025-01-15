@@ -273,6 +273,7 @@ func InteractiveMode() {
 	}
 
 	history := make([]string, 0)
+	historyIndex := 0
 	readBuffer := make([]byte, 1024)
 	// currentCommand := strings.Builder{}
 	currentCommand := make([]rune, 0, 100)
@@ -349,6 +350,7 @@ func InteractiveMode() {
 				// Add command to history
 				currentCommandStr := string(currentCommand)
 				history = append(history, currentCommandStr)
+				historyIndex = 0
 
 				// Reset current command
 				currentCommand = currentCommand[:0]
@@ -423,8 +425,37 @@ func InteractiveMode() {
 						}
 					} else if c == 65 {
 						// Up arrow
+						if historyIndex >= 0 && historyIndex < len(history) {
+							historyIndex++
+							fmt.Fprintf(os.Stdout, "\033[2K")
+							fmt.Fprintf(os.Stdout, "\033[1G")
+							reverseIndex := len(history) - historyIndex
+							fmt.Fprintf(os.Stdout, "mshell> %s", history[reverseIndex])
+							currentCommand = []rune(history[reverseIndex])
+							index = len(currentCommand)
+						}
 					} else if c == 66 {
 						// Down arrow
+						if historyIndex > 0 && historyIndex <= len(history) + 1 {
+							historyIndex--
+							fmt.Fprintf(os.Stdout, "\033[2K")
+							fmt.Fprintf(os.Stdout, "\033[1G")
+							if historyIndex == 0 {
+								fmt.Fprintf(os.Stdout, "mshell> ")
+								currentCommand = []rune{}
+								index = 0
+							} else {
+								reverseIndex := len(history) - historyIndex
+								fmt.Fprintf(os.Stdout, "mshell> %s", history[reverseIndex])
+								currentCommand = []rune(history[reverseIndex])
+								index = len(currentCommand)
+							}
+						} else if historyIndex <= 0 {
+							historyIndex = 0
+						} else if historyIndex > len(history) {
+							historyIndex = len(history)
+						}
+
 					} else if c == 67 {
 						// Right arrow
 						if index < len(currentCommand) {
