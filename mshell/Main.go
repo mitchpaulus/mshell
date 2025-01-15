@@ -325,6 +325,7 @@ func InteractiveMode() {
 				}
 			} else if c == 3 || c == 4 {
 				// Ctrl-C or Ctrl-D
+				fmt.Fprintf(os.Stdout, "\r\n") // Print a nice clean newline.
 				os.Exit(0)
 			} else if c == 5 { // Ctrl-E
 				// Move cursor to end of line
@@ -367,14 +368,14 @@ func InteractiveMode() {
 
 				result := state.Evaluate(parsed.Items, &stack, context, stdLibDefs, callStack)
 
-				if !result.Success {
-					fmt.Fprintf(os.Stderr, "Error evaluating input.\n")
-				}
-
 				if result.ExitCalled {
 					// Reset terminal to original state
 					os.Exit(result.ExitCode)
 					break
+				}
+
+				if !result.Success {
+					fmt.Fprintf(os.Stderr, "Error evaluating input.\n")
 				}
 
 				fmt.Fprintf(os.Stdout, "\033[1G")
@@ -443,7 +444,6 @@ func InteractiveMode() {
 
 			} else if c >= 32 && c <= 126 {
 				// Add chars to current command at current index
-
 				fmt.Fprintf(os.Stdout, "\033[K")
 				fmt.Fprintf(os.Stdout, "%c", c)
 				fmt.Fprintf(os.Stdout, "%s", string(currentCommand[index:]))
