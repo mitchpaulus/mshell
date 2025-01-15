@@ -234,10 +234,11 @@ func main() {
 }
 
 func InteractiveMode() {
+	// FUTURE: Maybe Check for CSI u?
+
 	// Put terminal into raw mode
 	oldState, err := term.MakeRaw(0)
 	defer term.Restore(0, oldState)
-
 
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error setting terminal to raw mode: %s\n", err)
