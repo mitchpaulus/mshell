@@ -488,6 +488,36 @@ func InteractiveMode() {
 							fmt.Fprintf(os.Stdout, "\033[D")
 						}
 					}
+				} else if c == 98 { // Alt-B
+					// Move cursor left by word
+					if index > 0 {
+						// First consume all whitespace
+						for index > 0 && currentCommand[index-1] == ' ' {
+							index--
+						}
+
+						// Then consume all non-whitespace
+						for index > 0 && currentCommand[index-1] != ' ' {
+							index--
+						}
+
+						fmt.Fprintf(os.Stdout, "\033[%dG", len(prompt)+1+index)
+					}
+				} else if c == 102 { // Alt-F
+					// Move cursor right by word
+					if index < len(currentCommand) {
+						// First consume all whitespace
+						for index < len(currentCommand) && currentCommand[index] == ' ' {
+							index++
+						}
+
+						// Then consume all non-whitespace
+						for index < len(currentCommand) && currentCommand[index] != ' ' {
+							index++
+						}
+					}
+
+					fmt.Fprintf(os.Stdout, "\033[%dG", len(prompt)+1+index)
 				} else {
 					fmt.Fprintf(f, "Unknown sequence: %d %d %d\n", readBuffer[0], readBuffer[1], readBuffer[2])
 				}
