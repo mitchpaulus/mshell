@@ -10,6 +10,7 @@ import (
 	// "runtime/pprof"
 	// "runtime/trace"
 	// "runtime"
+	"time"
 )
 
 type CliCommand int
@@ -293,6 +294,15 @@ func InteractiveMode() {
 
 	// Print prompt
 	fmt.Print(prompt)
+
+	_, curCol, err, _ := getCurrentPos()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error getting cursor position: %s\n", err)
+		os.Exit(1)
+	}
+
+	promptLength := curCol - 1
+
 	index := 0
 
 	for {
@@ -317,7 +327,7 @@ func InteractiveMode() {
 
 			if c == 1 { // Ctrl-A
 				// Move cursor to beginning of line.
-				fmt.Fprintf(os.Stdout, "\033[%dG", len(prompt)+1)
+				fmt.Fprintf(os.Stdout, "\033[%dG", promptLength + 1)
 				index = 0
 			} else if c == 2 { // CTRL-B
 				// Move cursor left
@@ -331,7 +341,7 @@ func InteractiveMode() {
 				os.Exit(0)
 			} else if c == 5 { // Ctrl-E
 				// Move cursor to end of line
-				fmt.Fprintf(os.Stdout, "\033[%dG", len(prompt)+1+len(currentCommand))
+				fmt.Fprintf(os.Stdout, "\033[%dG", promptLength + 1 + len(currentCommand))
 				index = len(currentCommand)
 			} else if c == 6 { // Ctrl-F
 				// Move cursor right
@@ -360,15 +370,28 @@ func InteractiveMode() {
 
 				p.NextToken()
 
-				term.Restore(0, oldState)
-				fmt.Fprintf(os.Stdout, "\n")
-
 				parsed, err := p.ParseFile()
 				if err != nil {
-					fmt.Println(err)
+					fmt.Fprintf(os.Stderr, "\r\nError parsing input: %s\n", err)
+					// Move to start
+					fmt.Fprintf(os.Stdout, "\033[1G")
+					fmt.Printf(prompt)
+					curRow, curCol, err, _ := getCurrentPos()
+					fmt.Fprintf(f, "Parsed row: %d, col: %d\n", curRow, curCol)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "Error getting cursor position: %s\n", err)
+						os.Exit(1)
+					}
+
+					promptLength = curCol - 1
+					index = 0
 					continue
 				}
 
+				// During evaluation, normal terminal output can happen, or TUI apps can be run.
+				// So want them to see non-raw mode terminal state.
+				term.Restore(0, oldState)
+				fmt.Fprintf(os.Stdout, "\n")
 				result := state.Evaluate(parsed.Items, &stack, context, stdLibDefs, callStack)
 
 				if result.ExitCalled {
@@ -403,7 +426,7 @@ func InteractiveMode() {
 					fmt.Fprintf(os.Stdout, "%c", currentCommand[i])
 				}
 
-				fmt.Fprintf(os.Stdout, "\033[%dG", len(prompt)+1)
+				fmt.Fprintf(os.Stdout, "\033[%dG", promptLength + 1)
 				index = 0
 			} else if c == 23 { // Ctrl-W
 				// Erase last word
@@ -419,7 +442,7 @@ func InteractiveMode() {
 					}
 
 					// Erase the word
-					fmt.Fprintf(os.Stdout, "\033[%dG", len(prompt)+1+index)
+					fmt.Fprintf(os.Stdout, "\033[%dG", promptLength + 1 + index)
 					fmt.Fprintf(os.Stdout, "\033[K")
 					currentCommand = currentCommand[:index]
 				}
@@ -439,7 +462,7 @@ func InteractiveMode() {
 								fmt.Fprintf(os.Stdout, "\033[K")
 								fmt.Fprintf(os.Stdout, "%s", string(currentCommand[index+1:]))
 								currentCommand = append(currentCommand[:index], currentCommand[index+1:]...)
-								fmt.Fprintf(os.Stdout, "\033[%dG", len(prompt)+1+index)
+								fmt.Fprintf(os.Stdout, "\033[%dG", promptLength+1+index)
 							}
 						}
 					} else if c == 65 {
@@ -501,7 +524,7 @@ func InteractiveMode() {
 							index--
 						}
 
-						fmt.Fprintf(os.Stdout, "\033[%dG", len(prompt)+1+index)
+						fmt.Fprintf(os.Stdout, "\033[%dG", promptLength+1+index)
 					}
 				} else if c == 102 { // Alt-F
 					// Move cursor right by word
@@ -517,7 +540,7 @@ func InteractiveMode() {
 						}
 					}
 
-					fmt.Fprintf(os.Stdout, "\033[%dG", len(prompt)+1+index)
+					fmt.Fprintf(os.Stdout, "\033[%dG", promptLength+1+index)
 				} else {
 					fmt.Fprintf(f, "Unknown sequence: %d %d %d\n", readBuffer[0], readBuffer[1], readBuffer[2])
 				}
@@ -527,7 +550,7 @@ func InteractiveMode() {
 				fmt.Fprintf(os.Stdout, "\033[K")
 				fmt.Fprintf(os.Stdout, "%c", c)
 				fmt.Fprintf(os.Stdout, "%s", string(currentCommand[index:]))
-				fmt.Fprintf(os.Stdout, "\033[%dG", len(prompt)+1+index+1)
+				fmt.Fprintf(os.Stdout, "\033[%dG", promptLength+1+index+1)
 
 				currentCommand = append(currentCommand[:index], append([]rune{rune(c)}, currentCommand[index:]...)...)
 				index++
@@ -540,7 +563,7 @@ func InteractiveMode() {
 					fmt.Fprintf(os.Stdout, "\033[D")
 					fmt.Fprintf(os.Stdout, "\033[K")
 					fmt.Fprintf(os.Stdout, "%s", string(currentCommand[index:]))
-					fmt.Fprintf(os.Stdout, "\033[%dG", len(prompt)+1+index)
+					fmt.Fprintf(os.Stdout, "\033[%dG", promptLength+1+index)
 				}
 			} else {
 				fmt.Fprintf(f, "Unknown character: %d\n", c)
@@ -553,6 +576,85 @@ func InteractiveMode() {
 			// break
 		// }
 	}
+}
+
+func getCurrentPos() (row int, col int, err error, extraBytes []byte) {
+	// Open log file
+	f, err := os.OpenFile("/tmp/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error opening file /tmp/mshell.log: %s\n", err)
+		os.Exit(1)
+		return
+	}
+	defer f.Close()
+
+	fmt.Fprintf(os.Stdout, "\033[6n")
+
+	// Read response
+	readBuffer := make([]byte, 1024)
+	os.Stdin.SetReadDeadline(time.Now().Add(1 * time.Second))
+
+	fmt.Fprintf(f, "Starting Reading cursor position\n")
+
+	n, err := os.Stdin.Read(readBuffer)
+	if err != nil {
+		return 0, 0, err, []byte{}
+	}
+	os.Stdin.SetReadDeadline(time.Time{})
+
+	fmt.Fprintf(f, "Read %d bytes\n", n)
+
+	// Parse response
+	if n < 4 {
+		return 0, 0, fmt.Errorf("Did not receive enough bytes for cursor position"), readBuffer[:n]
+	}
+
+	if readBuffer[0] != 27 || readBuffer[1] != 91 {
+		return 0, 0, fmt.Errorf("Invalid response for cursor position"), readBuffer[:n]
+	}
+
+	// Parse row
+	row = 0
+	i := 2
+
+	for i < n && readBuffer[i] != ';' {
+		digit := int(readBuffer[i] - '0')
+		if digit < 0 || digit > 9 {
+			return 0, 0, fmt.Errorf("Invalid response for cursor position"), readBuffer[:n]
+		}
+		row = row*10 + digit
+		i++
+	}
+
+	if i == n {
+		return 0, 0, fmt.Errorf("Invalid response for cursor position"), readBuffer[:n]
+	}
+	// Skip ;
+	i++
+
+	// Parse column
+	col = 0
+	for i < n && readBuffer[i] != 'R' {
+		digit := int(readBuffer[i] - '0')
+		if digit < 0 || digit > 9 {
+			return 0, 0, fmt.Errorf("Invalid response for cursor position"), readBuffer[:n]
+		}
+
+		col = col*10 + digit
+		i++
+	}
+
+	if i == n {
+		return 0, 0, fmt.Errorf("Invalid response for cursor position"), readBuffer[:n]
+	}
+
+	if readBuffer[i] != 'R' {
+		return 0, 0, fmt.Errorf("Invalid response for cursor position"), readBuffer[:n]
+	}
+
+	i++ // Consume R
+
+	return row, col, nil, readBuffer[i:]
 }
 
 func stdLibDefinitions(stack MShellStack, context ExecuteContext, state EvalState, callStack CallStack) ([]MShellDefinition, error) {
