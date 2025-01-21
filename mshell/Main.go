@@ -109,7 +109,22 @@ func main() {
 	}
 
 	if len(input) == 0 && term.IsTerminal(0) {
-		InteractiveMode()
+		numRows, numCols, err := term.GetSize(0)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error getting terminal size: %s\n", err)
+			os.Exit(1)
+		}
+
+		termState := TermState{
+			numRows:        numRows,
+			numCols:        numCols,
+			promptLength:   0,
+			currentCommand: make([]rune, 0, 100),
+			index:          0,
+			readBuffer:     make([]byte, 1024),
+		}
+
+		termState.InteractiveMode()
 		return
 	}
 
@@ -234,23 +249,33 @@ func main() {
 	}
 }
 
-func InteractiveMode() {
+type TermState struct {
+	numRows int
+	numCols int
+	promptLength int
+	currentCommand []rune
+	index int // index of cursor, starts at 0
+	readBuffer []byte
+	oldState *term.State
+}
+
+func (state *TermState) InteractiveMode() {
 	// FUTURE: Maybe Check for CSI u?
 
 	// Put terminal into raw mode
 	oldState, err := term.MakeRaw(0)
-	defer term.Restore(0, oldState)
-
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error setting terminal to raw mode: %s\n", err)
 		os.Exit(1)
 		return
 	}
+	state.oldState = oldState
+	defer term.Restore(0, oldState)
 
 	l := NewLexer("")
 	p := MShellParser{lexer: l}
 
-	state := EvalState{
+	evalState := EvalState{
 		PositionalArgs: make([]string, 0),
 		LoopDepth:      0,
 		StopOnError:	false,
@@ -266,7 +291,7 @@ func InteractiveMode() {
 
 	callStack := make(CallStack, 10)
 
-	stdLibDefs, err := stdLibDefinitions(stack, context, state, callStack)
+	stdLibDefs, err := stdLibDefinitions(stack, context, evalState, callStack)
 	if err != nil {
 		term.Restore(0, oldState)
 		fmt.Fprintf(os.Stderr, "Error loading standard library: %s\n", err)
@@ -276,9 +301,9 @@ func InteractiveMode() {
 
 	history := make([]string, 0)
 	historyIndex := 0
-	readBuffer := make([]byte, 1024)
+	// readBuffer := make([]byte, 1024)
 	// currentCommand := strings.Builder{}
-	currentCommand := make([]rune, 0, 100)
+	// currentCommand := make([]rune, 0, 100)
 
 	// For debugging, write number of bytes read and bytes to /tmp/mshell.log
 	// Open file for writing
@@ -290,24 +315,21 @@ func InteractiveMode() {
 	}
 	defer f.Close()
 
-	prompt := "mshell> "
+	state.printPrompt()
 
-	// Print prompt
-	fmt.Print(prompt)
+	// _, curCol, err, _ := getCurrentPos()
+	// if err != nil {
+		// fmt.Fprintf(os.Stderr, "Error getting cursor position: %s\n", err)
+		// os.Exit(1)
+	// }
 
-	_, curCol, err, _ := getCurrentPos()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error getting cursor position: %s\n", err)
-		os.Exit(1)
-	}
+	// promptLength := curCol - 1
 
-	promptLength := curCol - 1
-
-	index := 0
+	// index := 0
 
 	for {
 		// Read char
-		n, err := os.Stdin.Read(readBuffer)
+		n, err := os.Stdin.Read(state.readBuffer)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error reading from stdin: %s\n", err)
 			os.Exit(1)
@@ -316,23 +338,23 @@ func InteractiveMode() {
 
 		fmt.Fprintf(f, "%d\t", n)
 		for i := 0; i < n; i++ {
-			fmt.Fprintf(f, "%d ", readBuffer[i])
+			fmt.Fprintf(f, "%d ", state.readBuffer[i])
 		}
 		fmt.Fprintf(f, "\n")
 
 		i := 0
 		for i < n {
-			c := readBuffer[i]
+			c := state.readBuffer[i]
 			i++
 
 			if c == 1 { // Ctrl-A
 				// Move cursor to beginning of line.
-				fmt.Fprintf(os.Stdout, "\033[%dG", promptLength + 1)
-				index = 0
+				fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
+				state.index = 0
 			} else if c == 2 { // CTRL-B
 				// Move cursor left
-				if index > 0 {
-					index--
+				if state.index > 0 {
+					state.index--
 					fmt.Fprintf(os.Stdout, "\033[D")
 				}
 			} else if c == 3 || c == 4 {
@@ -341,30 +363,30 @@ func InteractiveMode() {
 				os.Exit(0)
 			} else if c == 5 { // Ctrl-E
 				// Move cursor to end of line
-				fmt.Fprintf(os.Stdout, "\033[%dG", promptLength + 1 + len(currentCommand))
-				index = len(currentCommand)
+				fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + len(state.currentCommand))
+				state.index = len(state.currentCommand)
 			} else if c == 6 { // Ctrl-F
 				// Move cursor right
-				if index < len(currentCommand) {
-					index++
+				if state.index < len(state.currentCommand) {
+					state.index++
 					fmt.Fprintf(os.Stdout, "\033[C")
 				}
 			} else if c == 11 { // Ctrl-K
 				// Erase to end of line
 				fmt.Fprintf(os.Stdout, "\033[K")
-				currentCommand = currentCommand[:index]
+				state.currentCommand = state.currentCommand[:state.index]
 			} else if c == 12 { // Ctrl-L
 				// Clear screen
 				fmt.Fprintf(os.Stdout, "\033[2J\033[1;1H")
-				fmt.Fprintf(os.Stdout, prompt)
+				state.printPrompt()
 			} else if c == 13 { // Enter
 				// Add command to history
-				currentCommandStr := string(currentCommand)
+				currentCommandStr := string(state.currentCommand)
 				history = append(history, currentCommandStr)
 				historyIndex = 0
 
 				// Reset current command
-				currentCommand = currentCommand[:0]
+				state.currentCommand = state.currentCommand[:0]
 
 				l.resetInput(currentCommandStr)
 
@@ -375,24 +397,16 @@ func InteractiveMode() {
 					fmt.Fprintf(os.Stderr, "\r\nError parsing input: %s\n", err)
 					// Move to start
 					fmt.Fprintf(os.Stdout, "\033[1G")
-					fmt.Printf(prompt)
-					curRow, curCol, err, _ := getCurrentPos()
-					fmt.Fprintf(f, "Parsed row: %d, col: %d\n", curRow, curCol)
-					if err != nil {
-						fmt.Fprintf(os.Stderr, "Error getting cursor position: %s\n", err)
-						os.Exit(1)
-					}
-
-					promptLength = curCol - 1
-					index = 0
+					state.printPrompt()
+					state.index = 0
 					continue
 				}
 
 				// During evaluation, normal terminal output can happen, or TUI apps can be run.
 				// So want them to see non-raw mode terminal state.
-				term.Restore(0, oldState)
+				term.Restore(0, state.oldState)
 				fmt.Fprintf(os.Stdout, "\n")
-				result := state.Evaluate(parsed.Items, &stack, context, stdLibDefs, callStack)
+				result := evalState.Evaluate(parsed.Items, &stack, context, stdLibDefs, callStack)
 
 				if result.ExitCalled {
 					// Reset terminal to original state
@@ -405,8 +419,8 @@ func InteractiveMode() {
 				}
 
 				fmt.Fprintf(os.Stdout, "\033[1G")
-				fmt.Fprintf(os.Stdout, prompt)
-				index = 0
+				state.printPrompt()
+				state.index = 0
 
 				// Put terminal back into raw mode
 				oldState, err = term.MakeRaw(0)
@@ -421,48 +435,48 @@ func InteractiveMode() {
 				fmt.Fprintf(os.Stdout, "mshell> ")
 
 				// // Remaining chars in current command
-				currentCommand = currentCommand[index:]
-				for i := 0; i < len(currentCommand); i++ {
-					fmt.Fprintf(os.Stdout, "%c", currentCommand[i])
+				state.currentCommand = state.currentCommand[state.index:]
+				for i := 0; i < len(state.currentCommand); i++ {
+					fmt.Fprintf(os.Stdout, "%c", state.currentCommand[i])
 				}
 
-				fmt.Fprintf(os.Stdout, "\033[%dG", promptLength + 1)
-				index = 0
+				fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
+				state.index = 0
 			} else if c == 23 { // Ctrl-W
 				// Erase last word
-				if index > 0 {
+				if state.index > 0 {
 					// First consume all whitespace
-					for index > 0 && currentCommand[index-1] == ' ' {
-						index--
+					for state.index > 0 && state.currentCommand[state.index-1] == ' ' {
+						state.index--
 					}
 
 					// Then consume all non-whitespace
-					for index > 0 && currentCommand[index-1] != ' ' {
-						index--
+					for state.index > 0 && state.currentCommand[state.index-1] != ' ' {
+						state.index--
 					}
 
 					// Erase the word
-					fmt.Fprintf(os.Stdout, "\033[%dG", promptLength + 1 + index)
+					fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + state.index)
 					fmt.Fprintf(os.Stdout, "\033[K")
-					currentCommand = currentCommand[:index]
+					state.currentCommand = state.currentCommand[:state.index]
 				}
 			} else if c == 27 && i < n {
-				c = readBuffer[i]
+				c = state.readBuffer[i]
 				i++
 				// Arrow keys
 				if c == 91 && i < n {
-					c = readBuffer[i]
+					c = state.readBuffer[i]
 					i++
 					if c == 51 && i < n {
-						c = readBuffer[i]
+						c = state.readBuffer[i]
 						i++
 						if c == 126 {
 							// Delete
-							if index < len(currentCommand) {
+							if state.index < len(state.currentCommand) {
 								fmt.Fprintf(os.Stdout, "\033[K")
-								fmt.Fprintf(os.Stdout, "%s", string(currentCommand[index+1:]))
-								currentCommand = append(currentCommand[:index], currentCommand[index+1:]...)
-								fmt.Fprintf(os.Stdout, "\033[%dG", promptLength+1+index)
+								fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index+1:]))
+								state.currentCommand = append(state.currentCommand[:state.index], state.currentCommand[state.index+1:]...)
+								fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index)
 							}
 						}
 					} else if c == 65 {
@@ -473,8 +487,8 @@ func InteractiveMode() {
 							fmt.Fprintf(os.Stdout, "\033[1G")
 							reverseIndex := len(history) - historyIndex
 							fmt.Fprintf(os.Stdout, "mshell> %s", history[reverseIndex])
-							currentCommand = []rune(history[reverseIndex])
-							index = len(currentCommand)
+							state.currentCommand = []rune(history[reverseIndex])
+							state.index = len(state.currentCommand)
 						}
 					} else if c == 66 {
 						// Down arrow
@@ -484,13 +498,13 @@ func InteractiveMode() {
 							fmt.Fprintf(os.Stdout, "\033[1G")
 							if historyIndex == 0 {
 								fmt.Fprintf(os.Stdout, "mshell> ")
-								currentCommand = []rune{}
-								index = 0
+								state.currentCommand = []rune{}
+								state.index = 0
 							} else {
 								reverseIndex := len(history) - historyIndex
 								fmt.Fprintf(os.Stdout, "mshell> %s", history[reverseIndex])
-								currentCommand = []rune(history[reverseIndex])
-								index = len(currentCommand)
+								state.currentCommand = []rune(history[reverseIndex])
+								state.index = len(state.currentCommand)
 							}
 						} else if historyIndex <= 0 {
 							historyIndex = 0
@@ -500,70 +514,70 @@ func InteractiveMode() {
 
 					} else if c == 67 {
 						// Right arrow
-						if index < len(currentCommand) {
-							index++
+						if state.index < len(state.currentCommand) {
+							state.index++
 							fmt.Fprintf(os.Stdout, "\033[C")
 						}
 					} else if c == 68 {
 						// Left arrow
-						if index > 0 {
-							index--
+						if state.index > 0 {
+							state.index--
 							fmt.Fprintf(os.Stdout, "\033[D")
 						}
 					}
 				} else if c == 98 { // Alt-B
 					// Move cursor left by word
-					if index > 0 {
+					if state.index > 0 {
 						// First consume all whitespace
-						for index > 0 && currentCommand[index-1] == ' ' {
-							index--
+						for state.index > 0 && state.currentCommand[state.index-1] == ' ' {
+							state.index--
 						}
 
 						// Then consume all non-whitespace
-						for index > 0 && currentCommand[index-1] != ' ' {
-							index--
+						for state.index > 0 && state.currentCommand[state.index-1] != ' ' {
+							state.index--
 						}
 
-						fmt.Fprintf(os.Stdout, "\033[%dG", promptLength+1+index)
+						fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index)
 					}
 				} else if c == 102 { // Alt-F
 					// Move cursor right by word
-					if index < len(currentCommand) {
+					if state.index < len(state.currentCommand) {
 						// First consume all whitespace
-						for index < len(currentCommand) && currentCommand[index] == ' ' {
-							index++
+						for state.index < len(state.currentCommand) && state.currentCommand[state.index] == ' ' {
+							state.index++
 						}
 
 						// Then consume all non-whitespace
-						for index < len(currentCommand) && currentCommand[index] != ' ' {
-							index++
+						for state.index < len(state.currentCommand) && state.currentCommand[state.index] != ' ' {
+							state.index++
 						}
 					}
 
-					fmt.Fprintf(os.Stdout, "\033[%dG", promptLength+1+index)
+					fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index)
 				} else {
-					fmt.Fprintf(f, "Unknown sequence: %d %d %d\n", readBuffer[0], readBuffer[1], readBuffer[2])
+					fmt.Fprintf(f, "Unknown sequence: %d %d %d\n", state.readBuffer[0], state.readBuffer[1], state.readBuffer[2])
 				}
 
 			} else if c >= 32 && c <= 126 {
 				// Add chars to current command at current index
 				fmt.Fprintf(os.Stdout, "\033[K")
 				fmt.Fprintf(os.Stdout, "%c", c)
-				fmt.Fprintf(os.Stdout, "%s", string(currentCommand[index:]))
-				fmt.Fprintf(os.Stdout, "\033[%dG", promptLength+1+index+1)
+				fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
+				fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index+1)
 
-				currentCommand = append(currentCommand[:index], append([]rune{rune(c)}, currentCommand[index:]...)...)
-				index++
+				state.currentCommand = append(state.currentCommand[:state.index], append([]rune{rune(c)}, state.currentCommand[state.index:]...)...)
+				state.index++
 			} else if c == 127 { // Backspace
 				// Erase last char
-				if index > 0 {
-					currentCommand = append(currentCommand[:index-1], currentCommand[index:]...)
-					index--
+				if state.index > 0 {
+					state.currentCommand = append(state.currentCommand[:state.index-1], state.currentCommand[state.index:]...)
+					state.index--
 
 					fmt.Fprintf(os.Stdout, "\033[D")
 					fmt.Fprintf(os.Stdout, "\033[K")
-					fmt.Fprintf(os.Stdout, "%s", string(currentCommand[index:]))
-					fmt.Fprintf(os.Stdout, "\033[%dG", promptLength+1+index)
+					fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
+					fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index)
 				}
 			} else {
 				fmt.Fprintf(f, "Unknown character: %d\n", c)
@@ -571,13 +585,40 @@ func InteractiveMode() {
 		}
 
 
-		fmt.Fprintf(f, "%s\t%d\n", string(currentCommand), index)
+		fmt.Fprintf(f, "%s\t%d\n", string(state.currentCommand), state.index)
 		// if !scanner.Scan() {
 			// break
 		// }
 	}
 }
 
+func (state *TermState) toCooked() {
+	term.Restore(0, state.oldState)
+}
+
+func (state *TermState) printPrompt() {
+	// Get out of raw mode
+	state.toCooked()
+	fmt.Fprintf(os.Stdout, "mshell> ")
+
+	_, err := term.MakeRaw(0)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error setting terminal to raw mode: %s\n", err)
+		os.Exit(1)
+	}
+
+	_, col, err, _ := getCurrentPos()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error getting cursor position: %s\n", err)
+		os.Exit(1)
+	}
+
+	state.promptLength = col - 1
+}
+
+// Returns the current cursor position as (row, col)
+// Row and col are 1-based.
+// Extra bytes are returned in case the response contains more than just the cursor position escape codes.
 func getCurrentPos() (row int, col int, err error, extraBytes []byte) {
 	// Open log file
 	f, err := os.OpenFile("/tmp/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
