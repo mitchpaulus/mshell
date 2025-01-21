@@ -22,6 +22,8 @@ const (
 	CLIEXECUTE
 )
 
+var tempFiles []string
+
 func main() {
 	// Enable profiling
 	// runtime.SetCPUProfileRate(1000)
@@ -44,6 +46,8 @@ func main() {
 
 	// trace.Start(f)
 	// defer trace.Stop()
+
+	defer cleanupTempFiles()
 
 	command := CLIEXECUTE
 
@@ -732,3 +736,17 @@ func stdLibDefinitions(stack MShellStack, context ExecuteContext, state EvalStat
 
 	return make([]MShellDefinition, 0), nil
 }
+
+func registerTempFileForCleanup(tempFileName string) {
+	tempFiles = append(tempFiles, tempFileName)
+}
+
+func cleanupTempFiles() {
+	for _, tempFile := range tempFiles {
+		err := os.Remove(tempFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error removing temp file '%s': %s\n", tempFile, err)
+		}
+	}
+}
+

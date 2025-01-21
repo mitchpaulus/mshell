@@ -1074,7 +1074,40 @@ MainLoop:
 						return FailWithMessage(fmt.Sprintf("%d:%d: Error getting current directory: %s\n", t.Line, t.Column, err.Error()))
 					}
 					stack.Push(&MShellString{pwd})
-				} else {
+				} else if t.Lexeme == "psub" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'psub' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					// Do process substitution with temporary files
+					// Create a temporary file
+					tmpfile, err := os.CreateTemp("", "msh-")
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Error creating temporary file: %s\n", t.Line, t.Column, err.Error()))
+					}
+					// Close the file
+					defer tmpfile.Close()
+					registerTempFileForCleanup(tmpfile.Name())
+
+					// Write the contents of the object to the temporary file
+					switch obj1.(type) {
+					case *MShellString:
+						_, err = tmpfile.WriteString(obj1.(*MShellString).Content)
+						if err != nil {
+							return FailWithMessage(fmt.Sprintf("%d:%d: Error writing to temporary file: %s\n", t.Line, t.Column, err.Error()))
+						}
+					case *MShellLiteral:
+						_, err = tmpfile.WriteString(obj1.(*MShellLiteral).LiteralText)
+						if err != nil {
+							return FailWithMessage(fmt.Sprintf("%d:%d: Error writing to temporary file: %s\n", t.Line, t.Column, err.Error()))
+						}
+					default:
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'psub' with a %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					stack.Push(&MShellString{tmpfile.Name()})
+				}  else {
 					stack.Push(&MShellLiteral{t.Lexeme})
 				}
 			} else if t.Type == LEFT_SQUARE_BRACKET { // Token Type
