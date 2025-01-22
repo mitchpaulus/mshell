@@ -436,7 +436,8 @@ func (state *TermState) InteractiveMode() {
 			} else if c == 21 { // Ctrl-U
 				// Erase current line and reset
 				fmt.Fprintf(os.Stdout, "\033[2K\033[1G")
-				fmt.Fprintf(os.Stdout, "mshell> ")
+				// fmt.Fprintf(os.Stdout, "mshell> ")
+				state.printPrompt()
 
 				// // Remaining chars in current command
 				state.currentCommand = state.currentCommand[state.index:]
@@ -490,7 +491,9 @@ func (state *TermState) InteractiveMode() {
 							fmt.Fprintf(os.Stdout, "\033[2K")
 							fmt.Fprintf(os.Stdout, "\033[1G")
 							reverseIndex := len(history) - historyIndex
-							fmt.Fprintf(os.Stdout, "mshell> %s", history[reverseIndex])
+							state.printPrompt()
+							fmt.Fprintf(os.Stdout, history[reverseIndex])
+							// fmt.Fprintf(os.Stdout, "mshell> %s", history[reverseIndex])
 							state.currentCommand = []rune(history[reverseIndex])
 							state.index = len(state.currentCommand)
 						}
@@ -501,12 +504,15 @@ func (state *TermState) InteractiveMode() {
 							fmt.Fprintf(os.Stdout, "\033[2K")
 							fmt.Fprintf(os.Stdout, "\033[1G")
 							if historyIndex == 0 {
-								fmt.Fprintf(os.Stdout, "mshell> ")
+								state.printPrompt()
+								// fmt.Fprintf(os.Stdout, "mshell> ")
 								state.currentCommand = []rune{}
 								state.index = 0
 							} else {
 								reverseIndex := len(history) - historyIndex
-								fmt.Fprintf(os.Stdout, "mshell> %s", history[reverseIndex])
+								// fmt.Fprintf(os.Stdout, "mshell> %s", history[reverseIndex])
+								state.printPrompt()
+								fmt.Fprintf(os.Stdout, history[reverseIndex])
 								state.currentCommand = []rune(history[reverseIndex])
 								state.index = len(state.currentCommand)
 							}
@@ -603,9 +609,20 @@ func (state *TermState) toCooked() {
 func (state *TermState) printPrompt() {
 	// Get out of raw mode
 	state.toCooked()
-	fmt.Fprintf(os.Stdout, "mshell> ")
 
-	_, err := term.MakeRaw(0)
+	fmt.Fprintf(os.Stdout, "\033[35m")
+	// Print PWD
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stdout, "??? >")
+	} else {
+		fmt.Fprintf(os.Stdout, "%s> ", cwd)
+	}
+	fmt.Fprintf(os.Stdout, "\033[0m")
+
+	// fmt.Fprintf(os.Stdout, "mshell> ")
+
+	_, err = term.MakeRaw(0)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error setting terminal to raw mode: %s\n", err)
 		os.Exit(1)
@@ -749,4 +766,3 @@ func cleanupTempFiles() {
 		}
 	}
 }
-
