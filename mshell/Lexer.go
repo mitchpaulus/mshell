@@ -27,6 +27,7 @@ const (
 	EQUALS
 	INTERPRET
 	IF
+	IFF // This is just temporary as I work to remove the old if.
 	LOOP
 	READ
 	STR
@@ -106,6 +107,8 @@ func (t TokenType) String() string {
 		return "INTERPRET"
 	case IF:
 		return "IF"
+	case IFF:
+		return "IFF"
 	case LOOP:
 		return "LOOP"
 	case READ:
@@ -370,6 +373,12 @@ func (l *Lexer) literalOrKeywordType() TokenType {
 		if l.curLen() > 1 {
 			c := l.input[l.start+1]
 			if c == 'f' {
+				if l.curLen() > 2 {
+					c = l.input[l.start+2]
+					if c == 'f' {
+						return l.checkKeyword(3, "", IFF)
+					}
+				}
 				return l.checkKeyword(2, "", IF)
 			} else if c == 'n' {
 				return l.checkKeyword(2, "t", TYPEINT)

@@ -63,6 +63,26 @@ type ExecuteContext struct {
 	StandardInput  io.Reader
 	StandardOutput io.Writer
 	Variables      map[string]MShellObject
+	ShouldCloseInput  bool
+	ShouldCloseOutput bool
+}
+
+func (context *ExecuteContext) Close() {
+	if context.ShouldCloseInput {
+		if context.StandardInput != nil {
+			if closer, ok := context.StandardInput.(io.Closer); ok {
+				closer.Close()
+			}
+		}
+	}
+
+	if context.ShouldCloseOutput {
+		if context.StandardOutput != nil {
+			if closer, ok := context.StandardOutput.(io.Closer); ok {
+				closer.Close()
+			}
+		}
+	}
 }
 
 func SimpleSuccess() EvalResult {
@@ -105,7 +125,13 @@ func (stack *CallStack) Pop() (CallStackItem, error) {
 	return popped, nil
 }
 
-func (state *EvalState) Evaluate(objects []MShellParseItem, stack *MShellStack, context ExecuteContext, definitions []MShellDefinition, callStack CallStack) EvalResult {
+func (state *EvalState) Evaluate(objects []MShellParseItem, stack *MShellStack, context ExecuteContext, definitions []MShellDefinition, callStack CallStack, callStackItem CallStackItem) EvalResult {
+	// Defer popping the call stack
+	callStack.Push(callStackItem)
+	defer func() {
+		callStack.Pop()
+	}()
+
 	index := 0
 
 MainLoop:
@@ -121,9 +147,7 @@ MainLoop:
 			listStack = []MShellObject{}
 
 			callStackItem := CallStackItem{MShellParseItem: list, Name: "list", CallStackType: CALLSTACKLIST}
-			callStack.Push(callStackItem)
-			result := state.Evaluate(list.Items, &listStack, context, definitions, callStack)
-			callStack.Pop()
+			result := state.Evaluate(list.Items, &listStack, context, definitions, callStack, callStackItem)
 
 			if !result.Success {
 				fmt.Fprintf(os.Stderr, "Failed to evaluate list.\n")
@@ -292,9 +316,7 @@ MainLoop:
 						newContext.StandardOutput = context.StandardOutput
 
 						callStackItem := CallStackItem{MShellParseItem: t, Name: definition.Name, CallStackType: CALLSTACKDEF}
-						callStack.Push(callStackItem)
-						result := state.Evaluate(definition.Items, stack, newContext, definitions, callStack)
-						callStack.Pop()
+						result := state.Evaluate(definition.Items, stack, newContext, definitions, callStack, callStackItem)
 
 						if !result.Success || result.BreakNum > 0 || result.ExitCalled {
 							return result
@@ -1189,6 +1211,56 @@ MainLoop:
 				stack.Push(&MShellString{parsedString})
 			} else if t.Type == SINGLEQUOTESTRING { // Token Type
 				stack.Push(&MShellString{t.Lexeme[1 : len(t.Lexeme)-1]})
+			} else if t.Type == IFF {
+				falseQuoteObj, err := stack.Pop()
+				if err != nil {
+					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do an 'iff' on a stack with only two items.\n", t.Line, t.Column))
+				}
+
+				trueQuoteObj, err := stack.Pop()
+				if err != nil {
+					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do an 'iff' on a stack with only one item.\n", t.Line, t.Column))
+				}
+
+				boolObj, err := stack.Pop()
+				if err != nil {
+					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do an 'iff' on an empty stack.\n", t.Line, t.Column))
+				}
+
+				boolVal, ok := boolObj.(*MShellBool)
+				if !ok {
+					return FailWithMessage(fmt.Sprintf("%d:%d: Expected a boolean for iff, received a %s.\n", t.Line, t.Column, boolObj.TypeName()))
+				}
+
+				trueQuote, ok := trueQuoteObj.(*MShellQuotation)
+				if !ok {
+					return FailWithMessage(fmt.Sprintf("%d:%d: Expected a quotation for iff, received a %s.\n", t.Line, t.Column, trueQuoteObj.TypeName()))
+				}
+
+				falseQuote, ok := falseQuoteObj.(*MShellQuotation)
+				if !ok {
+					return FailWithMessage(fmt.Sprintf("%d:%d: Expected a quotation for iff, received a %s.\n", t.Line, t.Column, falseQuoteObj.TypeName()))
+				}
+
+				var quoteToExecute *MShellQuotation
+				if boolVal.Value {
+					quoteToExecute = trueQuote
+				} else {
+					quoteToExecute = falseQuote
+				}
+
+				qContext, err := quoteToExecute.BuildExecutionContext(&context)
+				defer qContext.Close()
+				if err != nil {
+					return FailWithMessage(err.Error())
+				}
+
+				result := state.Evaluate(quoteToExecute.Tokens, stack, (*qContext), definitions, callStack, CallStackItem{trueQuote, "quote", CALLSTACKQUOTE})
+
+				if !result.Success || result.BreakNum != -1 || result.ExitCalled  {
+					return result
+				}
+
 			} else if t.Type == IF { // Token Type
 				obj, err := stack.Pop()
 				if err != nil {
@@ -1217,9 +1289,7 @@ MainLoop:
 				for i := 0; i < len(list.Items)-1; i += 2 {
 					quotation := list.Items[i].(*MShellQuotation)
 
-					callStack.Push(CallStackItem{quotation, "quote", CALLSTACKQUOTE})
-					result := state.Evaluate(quotation.Tokens, stack, context, definitions, callStack)
-					callStack.Pop()
+					result := state.Evaluate(quotation.Tokens, stack, context, definitions, callStack, CallStackItem{quotation, "quote", CALLSTACKQUOTE})
 
 					if !result.Success || result.ExitCalled {
 						return result
@@ -1255,9 +1325,7 @@ MainLoop:
 				if trueIndex > -1 {
 					quotation := list.Items[trueIndex+1].(*MShellQuotation)
 
-					callStack.Push(CallStackItem{quotation, "quote", CALLSTACKQUOTE})
-					result := state.Evaluate(quotation.Tokens, stack, context, definitions, callStack)
-					callStack.Pop()
+					result := state.Evaluate(quotation.Tokens, stack, context, definitions, callStack, CallStackItem{quotation, "quote", CALLSTACKQUOTE})
 
 					// If we encounter a break, we should return it up the stack
 					if !result.Success || result.BreakNum != -1 || result.ExitCalled {
@@ -1266,9 +1334,7 @@ MainLoop:
 				} else if len(list.Items)%2 == 1 { // Try to find a final else statement, will be the last item in the list if odd number of items
 					quotation := list.Items[len(list.Items)-1].(*MShellQuotation)
 
-					callStack.Push(CallStackItem{quotation, "quote", CALLSTACKQUOTE})
-					result := state.Evaluate(quotation.Tokens, stack, context, definitions, callStack)
-					callStack.Pop()
+					result := state.Evaluate(quotation.Tokens, stack, context, definitions, callStack, CallStackItem{quotation, "quote", CALLSTACKQUOTE})
 
 					if !result.Success || result.BreakNum != -1 || result.ExitCalled {
 						return result
@@ -1660,9 +1726,7 @@ MainLoop:
 				initialStackSize := len(*stack)
 
 				for loopCount < maxLoops {
-					callStack.Push(CallStackItem{quotation, "quote", CALLSTACKQUOTE})
-					result := state.Evaluate(quotation.Tokens, stack, loopContext, definitions, callStack)
-					callStack.Pop()
+					result := state.Evaluate(quotation.Tokens, stack, loopContext, definitions, callStack, CallStackItem{quotation, "quote", CALLSTACKQUOTE})
 
 					if len(*stack) != initialStackSize {
 						// If the stack size changed, we have an error.
@@ -1736,47 +1800,14 @@ MainLoop:
 					return FailWithMessage(fmt.Sprintf("%d:%d: Argument for interpret expected to be a quotation, received a %s (%s)\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
 				}
 
-				quoteContext := ExecuteContext{
-					StandardInput:  nil,
-					StandardOutput: nil,
+				quoteContext, err := quotation.BuildExecutionContext(&context)
+				defer quoteContext.Close()
+
+				if err != nil {
+					return FailWithMessage(err.Error())
 				}
 
-				if quotation.StdinBehavior != STDIN_NONE {
-					if quotation.StdinBehavior == STDIN_CONTENT {
-						quoteContext.StandardInput = strings.NewReader(quotation.StandardInputContents)
-					} else if quotation.StdinBehavior == STDIN_FILE {
-						file, err := os.Open(quotation.StandardInputFile)
-						if err != nil {
-							return FailWithMessage(fmt.Sprintf("%d:%d: Error opening file %s for reading: %s\n", t.Line, t.Column, quotation.StandardInputFile, err.Error()))
-						}
-						quoteContext.StandardInput = file
-						defer file.Close()
-					}
-				} else if context.StandardInput != nil {
-					quoteContext.StandardInput = context.StandardInput
-				} else {
-					// Default to stdin of this process itself
-					quoteContext.StandardInput = os.Stdin
-				}
-
-				if quotation.StandardOutputFile != "" {
-					file, err := os.Create(quotation.StandardOutputFile)
-					if err != nil {
-						return FailWithMessage(fmt.Sprintf("%d:%d: Error opening file %s for writing: %s\n", t.Line, t.Column, quotation.StandardOutputFile, err.Error()))
-					}
-					quoteContext.StandardOutput = file
-					defer file.Close()
-				} else if context.StandardOutput != nil {
-					quoteContext.StandardOutput = context.StandardOutput
-				} else {
-					// Default to stdout of this process itself
-					quoteContext.StandardOutput = os.Stdout
-				}
-				quoteContext.Variables = quotation.Variables
-
-				callStack.Push(CallStackItem{quotation, "quote", CALLSTACKQUOTE})
-				result := state.Evaluate(quotation.Tokens, stack, quoteContext, definitions, callStack)
-				callStack.Pop()
+				result := state.Evaluate(quotation.Tokens, stack, (*quoteContext), definitions, callStack,CallStackItem{quotation, "quote", CALLSTACKQUOTE})
 
 				if !result.Success || result.ExitCalled || result.BreakNum > 0 {
 					return result
@@ -2097,9 +2128,7 @@ func (quotation *MShellQuotation) Execute(state *EvalState, context ExecuteConte
 		quotationContext.StandardOutput = os.Stdout
 	}
 
-	callStack.Push(CallStackItem{quotation, "quote", CALLSTACKQUOTE})
-	result := state.Evaluate(quotation.Tokens, stack, quotationContext, definitions, callStack)
-	callStack.Pop()
+	result := state.Evaluate(quotation.Tokens, stack, quotationContext, definitions, callStack, CallStackItem{quotation, "quote", CALLSTACKQUOTE})
 
 	if !result.Success || result.ExitCalled {
 		return result, result.ExitCode

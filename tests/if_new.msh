@@ -1,0 +1,7 @@
+true  ("true branch") ("false branch") iff wl
+false ("true branch") ("false branch") iff wl
+
+false ("true branch")   (
+false ("first else if") (
+false ("second else if")
+      ("final else") iff) iff) iff wl

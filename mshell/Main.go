@@ -206,13 +206,24 @@ func main() {
 		}
 
 		allDefinitions = append(allDefinitions, stdlibFile.Definitions...)
-		result := state.Evaluate(stdlibFile.Items, &stack, context, allDefinitions, callStack)
 
-		if !result.Success {
-			fmt.Fprintf(os.Stderr, "Error evaluating MSHSTDLIB file %s.\n", stdlibPath)
-			os.Exit(1)
-			return
+		if len(stdlibFile.Items) > 0 {
+
+			callStackItem := CallStackItem{
+				MShellParseItem: stdlibFile.Items[0],
+				Name:  "MSHSTDLIB",
+				CallStackType: CALLSTACKFILE,
+			}
+
+			result := state.Evaluate(stdlibFile.Items, &stack, context, allDefinitions, callStack, callStackItem)
+			if !result.Success {
+				fmt.Fprintf(os.Stderr, "Error evaluating MSHSTDLIB file %s.\n", stdlibPath)
+				os.Exit(1)
+				return
+			}
 		}
+
+
 	}
 
 	p := MShellParser{lexer: l}
@@ -242,7 +253,17 @@ func main() {
 		}
 	}
 
-	result := state.Evaluate(file.Items, &stack, context, allDefinitions, callStack)
+	if len(file.Items) == 0 {
+		os.Exit(0)
+	}
+
+	callStackItem := CallStackItem{
+		MShellParseItem: file.Items[0],
+		Name:  "main",
+		CallStackType: CALLSTACKFILE,
+	}
+
+	result := state.Evaluate(file.Items, &stack, context, allDefinitions, callStack, callStackItem)
 
 	if !result.Success {
 		if result.ExitCode != 0 {
@@ -328,8 +349,13 @@ func (state *TermState) InteractiveMode() {
 	// }
 
 	// promptLength := curCol - 1
-
 	// index := 0
+
+	initCallStackItem := CallStackItem{
+		MShellParseItem: nil,
+		Name:  "main",
+		CallStackType: CALLSTACKFILE,
+	}
 
 	for {
 		// Read char
@@ -410,16 +436,20 @@ func (state *TermState) InteractiveMode() {
 				// So want them to see non-raw mode terminal state.
 				term.Restore(0, state.oldState)
 				fmt.Fprintf(os.Stdout, "\n")
-				result := evalState.Evaluate(parsed.Items, &stack, context, stdLibDefs, callStack)
 
-				if result.ExitCalled {
-					// Reset terminal to original state
-					os.Exit(result.ExitCode)
-					break
-				}
+				if len(parsed.Items) > 0 {
+					initCallStackItem.MShellParseItem = parsed.Items[0]
+					result := evalState.Evaluate(parsed.Items, &stack, context, stdLibDefs, callStack, initCallStackItem)
 
-				if !result.Success {
-					fmt.Fprintf(os.Stderr, "Error evaluating input.\n")
+					if result.ExitCalled {
+						// Reset terminal to original state
+						os.Exit(result.ExitCode)
+						break
+					}
+
+					if !result.Success {
+						fmt.Fprintf(os.Stderr, "Error evaluating input.\n")
+					}
 				}
 
 				fmt.Fprintf(os.Stdout, "\033[1G")
@@ -739,8 +769,14 @@ func stdLibDefinitions(stack MShellStack, context ExecuteContext, state EvalStat
 			return nil, err
 		}
 
+		callStackItem := CallStackItem{
+			MShellParseItem: stdlibFile.Items[0],
+			Name:  "MSHSTDLIB",
+			CallStackType: CALLSTACKFILE,
+		}
+
 		// allDefinitions = append(allDefinitions, stdlibFile.Definitions...)
-		result := state.Evaluate(stdlibFile.Items, &stack, context, stdlibFile.Definitions, callStack)
+		result := state.Evaluate(stdlibFile.Items, &stack, context, stdlibFile.Definitions, callStack, callStackItem)
 
 		if !result.Success {
 			fmt.Fprintf(os.Stderr, "Error evaluating MSHSTDLIB file %s.\n", stdlibPath)

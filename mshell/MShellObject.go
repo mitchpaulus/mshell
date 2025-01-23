@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"os"
 )
 
 // TruncateMiddle truncates a string to a maximum length, adding "..." in the middle if necessary.
@@ -73,6 +74,54 @@ func (q *MShellQuotation) GetStartToken() Token {
 
 func (q *MShellQuotation) GetEndToken() Token {
 	return q.MShellParseQuote.EndToken
+}
+
+func (q *MShellQuotation) BuildExecutionContext(context *ExecuteContext) (*ExecuteContext, error) {
+	quoteContext := ExecuteContext{
+		StandardInput:  nil,
+		StandardOutput: nil,
+		Variables: q.Variables,
+		ShouldCloseInput: false,
+		ShouldCloseOutput: false,
+	}
+
+	if q.StdinBehavior != STDIN_NONE {
+		if q.StdinBehavior == STDIN_CONTENT {
+			quoteContext.StandardInput = strings.NewReader(q.StandardInputContents)
+		} else if q.StdinBehavior == STDIN_FILE {
+			file, err := os.Open(q.StandardInputFile)
+			if err != nil {
+				t := q.GetStartToken()
+				return nil, fmt.Errorf("%d:%d: Error opening file %s for reading: %s\n", t.Line, t.Column, q.StandardInputFile, err.Error())
+			}
+			quoteContext.StandardInput = file
+			quoteContext.ShouldCloseInput = true
+			// defer file.Close()
+		}
+	} else if context.StandardInput != nil {
+		quoteContext.StandardInput = context.StandardInput
+	} else {
+		// Default to stdin of this process itself
+		quoteContext.StandardInput = os.Stdin
+	}
+
+	if q.StandardOutputFile != "" {
+		file, err := os.Create(q.StandardOutputFile)
+		if err != nil {
+			t := q.GetStartToken()
+			return nil, fmt.Errorf("%d:%d: Error opening file %s for writing: %s\n", t.Line, t.Column, q.StandardOutputFile, err.Error())
+		}
+		quoteContext.StandardOutput = file
+		quoteContext.ShouldCloseOutput = true
+		// defer file.Close()
+	} else if context.StandardOutput != nil {
+		quoteContext.StandardOutput = context.StandardOutput
+	} else {
+		// Default to stdout of this process itself
+		quoteContext.StandardOutput = os.Stdout
+	}
+
+	return &quoteContext, nil
 }
 
 // type MShellQuotation2 struct {
