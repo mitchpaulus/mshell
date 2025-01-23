@@ -1,5 +1,5 @@
 1
 (
-    read  [(not) (drop break)] if
+    read not (drop break) () iff
     linetext! num! "Line " @num str ": " + + @linetext + [echo] append ; @num 1 +
 ) `stdin_for_test.txt` < loop

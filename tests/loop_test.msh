@@ -3,6 +3,6 @@
 ]
 (
     hello append world append
-    [ (10 10 =) (break)] if
+    10 10 = (break) () iff
 ) loop
 ;

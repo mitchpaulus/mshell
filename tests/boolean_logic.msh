@@ -1,16 +1,16 @@
-[(true false and) ("truey") ("falsey")] if wl
-[(true true and) ("truey") ("falsey")] if wl
-[(false false and) ("truey") ("falsey")] if wl
-[(true false or) ("truey") ("falsey")] if wl
-[(true true or) ("truey") ("falsey")] if wl
-[(false false or) ("truey") ("falsey")] if wl
+true false and ("truey") ("falsey") iff wl
+true true and ("truey") ("falsey") iff wl
+false false and ("truey") ("falsey") iff wl
+true false or ("truey") ("falsey") iff wl
+true true or ("truey") ("falsey") iff wl
+false false or ("truey") ("falsey") iff wl
 
 "" wl
 "Nots" wl
 "========" wl
-[(true false and not) ("truey") ("falsey")] if wl
-[(true true and not) ("truey") ("falsey")] if wl
-[(false false and not) ("truey") ("falsey")] if wl
-[(true false or not) ("truey") ("falsey")] if wl
-[(true true or not) ("truey") ("falsey")] if wl
-[(false false or not) ("truey") ("falsey")] if wl
+true false and not ("truey") ("falsey") iff wl
+true true and not ("truey") ("falsey") iff wl
+false false and not ("truey") ("falsey") iff wl
+true false or not ("truey") ("falsey") iff wl
+true true or not ("truey") ("falsey") iff wl
+false false or not ("truey") ("falsey") iff wl

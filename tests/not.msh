@@ -1,1 +1,1 @@
-[(false not) ("Got a true" wl) ("Got a false" wl)] if
+false not ("Got a true" wl) ("Got a false" wl) iff

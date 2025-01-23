@@ -1227,10 +1227,6 @@ MainLoop:
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do an 'iff' on an empty stack.\n", t.Line, t.Column))
 				}
 
-				boolVal, ok := boolObj.(*MShellBool)
-				if !ok {
-					return FailWithMessage(fmt.Sprintf("%d:%d: Expected a boolean for iff, received a %s.\n", t.Line, t.Column, boolObj.TypeName()))
-				}
 
 				trueQuote, ok := trueQuoteObj.(*MShellQuotation)
 				if !ok {
@@ -1242,8 +1238,19 @@ MainLoop:
 					return FailWithMessage(fmt.Sprintf("%d:%d: Expected a quotation for iff, received a %s.\n", t.Line, t.Column, falseQuoteObj.TypeName()))
 				}
 
+				var condition bool
+				switch boolObj.(type) {
+				case *MShellInt:
+					intVal := boolObj.(*MShellInt)
+					condition = intVal.Value == 0
+				case *MShellBool:
+					condition = boolObj.(*MShellBool).Value
+				default:
+					return FailWithMessage(fmt.Sprintf("%d:%d: Expected an integer or boolean for iff, received a %s.\n", t.Line, t.Column, boolObj.TypeName()))
+				}
+
 				var quoteToExecute *MShellQuotation
-				if boolVal.Value {
+				if condition {
 					quoteToExecute = trueQuote
 				} else {
 					quoteToExecute = falseQuote

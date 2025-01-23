@@ -1,2 +1,2 @@
-[echo [(0) (true-branch) (false-branch)] if] ;
-[echo [(1) (true-branch) (false-branch)] if] ;
+[echo 0 (true-branch) (false-branch) iff] ;
+[echo 1 (true-branch) (false-branch) iff] ;

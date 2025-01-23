@@ -2,17 +2,17 @@
 # Should end with 'tests' for this test directory.
 args :0: pwd-from-shell!
 pwd pwd-from-mshell!
-[
-    (@pwd-from-shell @pwd-from-mshell =)
-    ("PWD is correct" wl)
-    ("PWD is not correct" wl)
-] if
+
+@pwd-from-shell @pwd-from-mshell =
+("PWD is correct" wl)
+("PWD is not correct" wl)
+iff
 
 '..' cd
 pwd new-pwd!
 @pwd-from-shell "/tests" "" findReplace expected-pwd!
-[
-    (@new-pwd @expected-pwd =)
-    ("New PWD is correct" wl)
-    ("New PWD is not correct" wl)
-] if
+
+@new-pwd @expected-pwd =
+("New PWD is correct" wl)
+("New PWD is not correct" wl)
+ iff
