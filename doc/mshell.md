@@ -76,6 +76,8 @@ No escaping is done within single quoted strings.
 - `reverse`: Reverse list, `(list -- list)`
 - `sum`: Sum of list, `([numeric] -- numeric)`
 - `filter`: Filter list, `(list quote -- list)`
+- `any`: Check if any element in list satisfies a condition, `([a] (a -- bool) -- bool)`
+- `all`: Check if all elements in list satisfy a condition, `([a] (a -- bool) -- bool)`
 
 ## Variables
 

@@ -1,0 +1,16 @@
+"Anys" wl
+[] (3 <) any str wl
+[1 2 3] (3 <) any str wl
+[1 2 3] (0 <) any str wl
+[false false true] () any str wl
+[false false false] () any str wl
+[true true true] () any str wl
+
+# Now do alls
+"Alls" wl
+[] (3 <) all str wl
+[1 2 3] (3 <) all str wl
+[1 2 3] (0 <) all str wl
+[false false true] () all str wl
+[false false false] () all str wl
+[true true true] () all str wl

@@ -120,6 +120,7 @@ end
 
 def tab (-- str) "	" end
 def tsplit (str -- [str])  tab split end
+def tjoin ([str] -- str)  tab join end
 def uw ([str] --) unlines w end
 
 def readTsvFile (str -- [[str]])
@@ -170,4 +171,28 @@ def transpose ([[a]] -- [[a]])
     ) loop
 
     @transpose-accum
+end
+
+def any ([T] (T -- bool) -- bool)
+    quote! list!
+    0 index!
+    @list len listLength!
+    false result!
+    (
+        @index @listLength >=
+        (break)
+        (
+            @list @index nth @quote x
+            (true result! break)
+            ()
+            iff
+        )
+        iff
+        @index 1 + index!
+    ) loop
+    @result
+end
+
+def all ([T] (T -- bool) -- bool)
+    quote! (@quote x not) any not
 end
