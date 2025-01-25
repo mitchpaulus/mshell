@@ -985,7 +985,7 @@ MainLoop:
 				} else if t.Lexeme == "exit" {
 					exitCode, err := stack.Pop()
 					if err != nil {
-						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'exit' operation on an empty stack.\n", t.Line, t.Column))
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'exit' operation on an empty stack. If you are trying to exit out of the interactive shell, you are probably looking to do `0 exit`.\n", t.Line, t.Column))
 					}
 
 					exitInt, ok := exitCode.(*MShellInt)
