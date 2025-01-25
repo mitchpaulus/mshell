@@ -208,7 +208,6 @@ func main() {
 		allDefinitions = append(allDefinitions, stdlibFile.Definitions...)
 
 		if len(stdlibFile.Items) > 0 {
-
 			callStackItem := CallStackItem{
 				MShellParseItem: stdlibFile.Items[0],
 				Name:  "MSHSTDLIB",
@@ -222,8 +221,6 @@ func main() {
 				return
 			}
 		}
-
-
 	}
 
 	p := MShellParser{lexer: l}
@@ -769,19 +766,21 @@ func stdLibDefinitions(stack MShellStack, context ExecuteContext, state EvalStat
 			return nil, err
 		}
 
-		callStackItem := CallStackItem{
-			MShellParseItem: stdlibFile.Items[0],
-			Name:  "MSHSTDLIB",
-			CallStackType: CALLSTACKFILE,
-		}
+		if len(stdlibFile.Items) > 0 {
+			callStackItem := CallStackItem{
+				MShellParseItem: stdlibFile.Items[0],
+				Name:  "MSHSTDLIB",
+				CallStackType: CALLSTACKFILE,
+			}
 
-		// allDefinitions = append(allDefinitions, stdlibFile.Definitions...)
-		result := state.Evaluate(stdlibFile.Items, &stack, context, stdlibFile.Definitions, callStack, callStackItem)
+			// allDefinitions = append(allDefinitions, stdlibFile.Definitions...)
+			result := state.Evaluate(stdlibFile.Items, &stack, context, stdlibFile.Definitions, callStack, callStackItem)
 
-		if !result.Success {
-			fmt.Fprintf(os.Stderr, "Error evaluating MSHSTDLIB file %s.\n", stdlibPath)
-			os.Exit(1)
-			return nil, err
+			if !result.Success {
+				fmt.Fprintf(os.Stderr, "Error evaluating MSHSTDLIB file %s.\n", stdlibPath)
+				os.Exit(1)
+				return nil, err
+			}
 		}
 
 		return stdlibFile.Definitions, nil
