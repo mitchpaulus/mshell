@@ -2,14 +2,28 @@ package main
 
 import (
 	"unicode"
-	// "strings"
+	"fmt"
+	"time"
+	"strconv"
+	"strings"
 )
 
 type DateTokenType int
 
 const (
 	DATEINT = iota
-	DATEMONTH
+	DATEJAN // 1, rest of months aligned, so don't change that.
+	DATEFEB
+	DATEMAR
+	DATEAPR
+	DATEMAY
+	DATEJUN
+	DATEJUL
+	DATEAUG
+	DATESEPT
+	DATEOCT
+	DATENOV
+	DATEDEC
 	DATEDOW
 	DATESEP
 	DATEEOF
@@ -19,6 +33,38 @@ type DateToken struct {
 	Start  int
 	Lexeme string
 	Type   DateTokenType
+}
+
+func (token DateToken) IsMonth() bool {
+	return token.Type >= 1 && token.Type <= 12
+}
+
+func (token DateToken) Month() time.Month {
+	return time.Month(token.Type)
+}
+
+func (token DateToken) ParseDay() (int, error) {
+	dayInt, err := strconv.Atoi(token.Lexeme)
+	if err != nil {
+		return -1, err
+	}
+
+	if dayInt < 0 || dayInt > 31 {
+		return -1, fmt.Errorf("Day integer found to be '%d'", dayInt)
+	}
+	return dayInt, nil
+}
+
+func (token DateToken) ParseYear() (int) {
+	yearInt, _ := strconv.Atoi(token.Lexeme)
+	if len(token.Lexeme) == 2 {
+		yearInt += 2000
+	}
+	return yearInt
+}
+
+func (token DateToken) String() string {
+	return fmt.Sprintf("'%s' %v", token.Lexeme, token.Type)
 }
 
 type DateLexer struct {
@@ -33,6 +79,14 @@ func NewDateLexer(input string) *DateLexer {
 
 func (l *DateLexer) atEnd() bool {
 	return l.current >= len(l.input)
+}
+
+func (l *DateLexer) charFromStart(index int) rune {
+	if l.start + index < len(l.input) {
+		return l.input[l.start + index]
+	} else {
+		return 0
+	}
 }
 
 func (l *DateLexer) curLen() int {
@@ -90,40 +144,41 @@ func (l *DateLexer) checkMonthDowType(start int, rest string, tokenType DateToke
 func (l *DateLexer) MonthDowType() DateTokenType {
 	c := l.input[l.start]
 	length := l.Length()
-	lexemeLowered := l.curLexeme()
+	lexemeLowered := strings.ToLower(l.curLexeme())
 
 	switch c {
 	case 'j', 'J':
-		peek := l.peek()
+		peek := l.charFromStart(1)
 		switch peek {
 		case 'u', 'U':
 			if length == 3 && lexemeLowered == "jun" {
-				return DATEMONTH
+				return DATEJUN
 			} else if length == 4 && lexemeLowered == "june" {
-				return DATEMONTH
+				return DATEJUN
 			} else if length == 3 && lexemeLowered == "jul" {
-				return DATEMONTH
+				return DATEJUL
 			} else if length == 4 && lexemeLowered == "july" {
-				return DATEMONTH
+				return DATEJUL
 			} else {
 				return DATESEP
 			}
 		case 'a', 'A':
 			if length == 7 && lexemeLowered == "january" {
-				return DATEMONTH
+				return DATEJAN
 			} else if length == 3 && lexemeLowered == "jan" {
-				return DATEMONTH
+				return DATEJAN
 			} else {
 				return DATESEP
 			}
 		default:
 			return DATESEP
 		}
+
 	case 'f', 'F':
 		if length == 8 && lexemeLowered == "february" {
-			return DATEMONTH
+			return DATEFEB
 		} else if length == 3 && lexemeLowered == "feb" {
-			return DATEMONTH
+			return DATEFEB
 		} else if length == 3 && lexemeLowered == "fri" {
 			return DATEDOW
 		} else if length == 6 && lexemeLowered == "friday" {
@@ -132,15 +187,15 @@ func (l *DateLexer) MonthDowType() DateTokenType {
 			return DATESEP
 		}
 	case 'm', 'M':
-		peek := l.peek()
+		peek := l.charFromStart(1)
 		switch peek {
 		case 'a', 'A':
 			if length == 3 && lexemeLowered == "mar" {
-				return DATEMONTH
+				return DATEMAR
 			} else if length == 5 && lexemeLowered == "march" {
-				return DATEMONTH
+				return DATEMAR
 			} else if length == 3 && lexemeLowered == "may" {
-				return DATEMONTH
+				return DATEMAY
 			} else {
 				return DATESEP
 			}
@@ -156,27 +211,27 @@ func (l *DateLexer) MonthDowType() DateTokenType {
 			return DATESEP
 		}
 	case 'a', 'A':
-		peek := l.peek()
+		peek := l.charFromStart(1)
 		switch peek {
 		case 'p', 'P':
 			if length == 3 && lexemeLowered == "apr" {
-				return DATEMONTH
+				return DATEAPR
 			} else if length == 5 && lexemeLowered == "april" {
-				return DATEMONTH
+				return DATEAPR
 			} else {
 				return DATESEP
 			}
 		case 'u', 'U':
 			if length == 3 && lexemeLowered == "aug" {
-				return DATEMONTH
+				return DATEAUG
 			} else if length == 6 && lexemeLowered == "august" {
-				return DATEMONTH
+				return DATEAUG
 			} else {
 				return DATESEP
 			}
 		}
 	case 's', 'S':
-		peek := l.peek()
+		peek := l.charFromStart(1)
 		switch peek {
 		case 'a', 'A':
 			if length == 3 && lexemeLowered == "sat" {
@@ -188,9 +243,9 @@ func (l *DateLexer) MonthDowType() DateTokenType {
 			}
 		case 'e', 'E':
 			if length == 3 && lexemeLowered == "sep" {
-				return DATEMONTH
+				return DATESEPT
 			} else if length == 9 && lexemeLowered == "september" {
-				return DATEMONTH
+				return DATESEPT
 			} else {
 				return DATESEP
 			}
@@ -205,25 +260,25 @@ func (l *DateLexer) MonthDowType() DateTokenType {
 		}
 	case 'o', 'O':
 		if length == 3 && lexemeLowered == "oct" {
-			return DATEMONTH
+			return DATEOCT
 		} else if length == 7 && lexemeLowered == "october" {
-			return DATEMONTH
+			return DATEOCT
 		} else {
 			return DATESEP
 		}
 	case 'n', 'N':
 		if length == 3 && lexemeLowered == "nov" {
-			return DATEMONTH
+			return DATENOV
 		} else if length == 8 && lexemeLowered == "november" {
-			return DATEMONTH
+			return DATENOV
 		} else {
 			return DATESEP
 		}
 	case 'd', 'D':
 		if length == 3 && lexemeLowered == "dec" {
-			return DATEMONTH
+			return DATEDEC
 		} else if length == 8 && lexemeLowered == "december" {
-			return DATEMONTH
+			return DATEDEC
 		} else {
 			return DATESEP
 		}
@@ -255,7 +310,6 @@ func (l *DateLexer) MonthDowType() DateTokenType {
 }
 
 func (l *DateLexer) scanToken() DateToken {
-
 	l.start = l.current
 
 	if l.atEnd() {
@@ -276,6 +330,92 @@ func (l *DateLexer) scanToken() DateToken {
 		return l.makeToken(l.MonthDowType())
 	} else {
 		// TODO: Implement the rest of the lexer
-		return l.makeToken(DATEEOF)
+		return l.makeToken(DATESEP)
 	}
+}
+
+func ParseDateTime(dateTimeStr string) (time.Time, error) {
+	l := NewDateLexer(dateTimeStr)
+	tokens := make([]DateToken, 0)
+
+	for {
+		token := l.scanToken()
+		if token.Type == DATEEOF {
+			break
+		}
+
+		tokens = append(tokens, token)
+	}
+
+	time, err := ParseDateTimeTokens(tokens)
+	return time, err
+}
+
+func ParseDateTimeTokens(dateTimeTokens []DateToken) (time.Time, error) {
+	nonSepTokens := make([]DateToken, 0, len(dateTimeTokens))
+	counts := make([]int, 16)
+
+	dateMonthToken := -1
+
+	for _, token := range dateTimeTokens {
+		if token.Type != DATESEP && token.Type != DATEEOF {
+			nonSepTokens = append(nonSepTokens, token)
+			counts[token.Type] = counts[token.Type] + 1
+		}
+
+		if token.Type >= 1 && token.Type <= 12 {
+			dateMonthToken = int(token.Type)
+		}
+	}
+
+	if len(nonSepTokens) == 3 && counts[DATEINT] == 3 {
+		// We are dealing with a date.
+		if len(nonSepTokens[0].Lexeme) == 4 {
+			yearInt, err := strconv.Atoi(nonSepTokens[0].Lexeme)
+			// Assume this is a YYYY-MM-DD
+			monthInt, err := strconv.Atoi(nonSepTokens[1].Lexeme)
+			if err != nil {
+				return time.Time{}, err
+			}
+
+			if monthInt < 1 || monthInt > 12 {
+				return time.Time{}, fmt.Errorf("Month integer found to be '%d'", monthInt)
+			}
+
+			dayInt, err := strconv.Atoi(nonSepTokens[2].Lexeme)
+			if err != nil {
+				return time.Time{}, err
+			}
+
+			if dayInt < 0 || dayInt > 31 {
+				return time.Time{}, fmt.Errorf("Day integer found to be '%d'", dayInt)
+			}
+
+			month := time.Month(monthInt)
+			return time.Date(yearInt, month, dayInt, 0, 0, 0, 0, time.UTC), nil
+		}
+	} else if len(nonSepTokens) == 3 && counts[DATEINT] == 2 && dateMonthToken != -1 {
+		if nonSepTokens[0].IsMonth() {
+			// Assume 1 is day, and 2 is year
+			dayInt, err := nonSepTokens[1].ParseDay()
+			if err != nil {
+				return time.Time{}, err
+			}
+
+			yearInt := nonSepTokens[2].ParseYear()
+			return time.Date(yearInt, nonSepTokens[0].Month(), dayInt, 0, 0, 0, 0, time.UTC), nil
+
+		} else if nonSepTokens[1].IsMonth() {
+			// Assume 0 is year, 2 in day
+			dayInt, err := nonSepTokens[2].ParseDay()
+			if err != nil {
+				return time.Time{}, err
+			}
+
+			yearInt := nonSepTokens[0].ParseYear()
+			return time.Date(yearInt, nonSepTokens[1].Month(), dayInt, 0, 0, 0, 0, time.UTC), nil
+		}
+	}
+
+	return time.Time{}, fmt.Errorf("Could not parse datetime %d %d", len(nonSepTokens), len(dateTimeTokens))
 }
