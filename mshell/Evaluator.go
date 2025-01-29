@@ -1133,6 +1133,32 @@ MainLoop:
 						}
 					}
 					stack.Push(newList)
+				} else if t.Lexeme == "mkdir" || t.Lexeme == "mkdirp" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'mkdir' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					var dirPath string
+					switch obj1.(type) {
+					case *MShellString:
+						dirPath = obj1.(*MShellString).Content
+					case *MShellLiteral:
+						dirPath = obj1.(*MShellLiteral).LiteralText
+					case *MShellPath:
+						dirPath = obj1.(*MShellPath).Path
+					default:
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot make a directory with a %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					if t.Lexeme == "mkdir" {
+						err = os.Mkdir(dirPath, 0755)
+					} else if t.Lexeme == "mkdirp" {
+						err = os.MkdirAll(dirPath, 0755)
+					}
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Error creating directory: %s\n", t.Line, t.Column, err.Error()))
+					}
 				} else if t.Lexeme == "~" || strings.HasPrefix(t.Lexeme, "~/") {
 					// Only do tilde expansion
 					homeDir, err := os.UserHomeDir()
