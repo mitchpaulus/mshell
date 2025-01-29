@@ -281,6 +281,11 @@ type TermState struct {
 	oldState *term.State
 }
 
+func (state *TermState) clearToPrompt() {
+	fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
+	fmt.Fprintf(os.Stdout, "\033[K")
+}
+
 func (state *TermState) InteractiveMode() {
 	// FUTURE: Maybe Check for CSI u?
 
@@ -406,6 +411,11 @@ func (state *TermState) InteractiveMode() {
 				// Clear screen
 				fmt.Fprintf(os.Stdout, "\033[2J\033[1;1H")
 				state.printPrompt()
+				// Print current command
+				fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand))
+
+				// Set cursor to current index, relative to new prompt length
+				fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + state.index)
 			} else if c == 13 { // Enter
 				// Add command to history
 				currentCommandStr := string(state.currentCommand)
@@ -461,10 +471,12 @@ func (state *TermState) InteractiveMode() {
 					return
 				}
 			} else if c == 21 { // Ctrl-U
-				// Erase current line and reset
-				fmt.Fprintf(os.Stdout, "\033[2K\033[1G")
+				// Erase back to prompt start
+				fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
+				fmt.Fprintf(os.Stdout, "\033[K")
+				// fmt.Fprintf(os.Stdout, "\033[2K\033[1G")
 				// fmt.Fprintf(os.Stdout, "mshell> ")
-				state.printPrompt()
+				// state.printPrompt()
 
 				// // Remaining chars in current command
 				state.currentCommand = state.currentCommand[state.index:]
@@ -515,10 +527,10 @@ func (state *TermState) InteractiveMode() {
 						// Up arrow
 						if historyIndex >= 0 && historyIndex < len(history) {
 							historyIndex++
-							fmt.Fprintf(os.Stdout, "\033[2K")
-							fmt.Fprintf(os.Stdout, "\033[1G")
+							// Clear back to prompt
+							state.clearToPrompt()
 							reverseIndex := len(history) - historyIndex
-							state.printPrompt()
+							// state.printPrompt()
 							fmt.Fprintf(os.Stdout, history[reverseIndex])
 							// fmt.Fprintf(os.Stdout, "mshell> %s", history[reverseIndex])
 							state.currentCommand = []rune(history[reverseIndex])
@@ -528,17 +540,16 @@ func (state *TermState) InteractiveMode() {
 						// Down arrow
 						if historyIndex > 0 && historyIndex <= len(history) + 1 {
 							historyIndex--
-							fmt.Fprintf(os.Stdout, "\033[2K")
-							fmt.Fprintf(os.Stdout, "\033[1G")
+							state.clearToPrompt()
 							if historyIndex == 0 {
-								state.printPrompt()
+								// state.printPrompt()
 								// fmt.Fprintf(os.Stdout, "mshell> ")
 								state.currentCommand = []rune{}
 								state.index = 0
 							} else {
 								reverseIndex := len(history) - historyIndex
 								// fmt.Fprintf(os.Stdout, "mshell> %s", history[reverseIndex])
-								state.printPrompt()
+								// state.printPrompt()
 								fmt.Fprintf(os.Stdout, history[reverseIndex])
 								state.currentCommand = []rune(history[reverseIndex])
 								state.index = len(state.currentCommand)
@@ -643,7 +654,7 @@ func (state *TermState) printPrompt() {
 	if err != nil {
 		fmt.Fprintf(os.Stdout, "??? >")
 	} else {
-		fmt.Fprintf(os.Stdout, "%s> ", cwd)
+		fmt.Fprintf(os.Stdout, "%s> \n:: ", cwd)
 	}
 	fmt.Fprintf(os.Stdout, "\033[0m")
 
