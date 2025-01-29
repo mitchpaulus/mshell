@@ -73,7 +73,7 @@ func (obj *MShellDateTime) FloatNumeric() float64 {
 }
 
 func (obj *MShellDateTime) CommandLine() string {
-	return obj.Token.Lexeme
+	return obj.ToString()
 }
 
 func (obj *MShellDateTime) DebugString() string {
@@ -97,11 +97,21 @@ func (obj *MShellDateTime) Slice(startInc int, endExc int) (MShellObject, error)
 }
 
 func (obj *MShellDateTime) ToJson() string {
-	return fmt.Sprintf("{\"type\": \"DateTime\", \"value\": \"%s\"}", obj.Token.Lexeme)
+	return fmt.Sprintf("{\"type\": \"DateTime\", \"value\": \"%s\"}", obj.Iso8601())
 }
 
 func (obj *MShellDateTime) ToString() string {
-	return obj.Token.Lexeme
+	if obj.Token.Type == DATETIME {
+		return obj.Token.Lexeme
+	} else {
+		return obj.Iso8601()
+	}
+}
+
+func (obj *MShellDateTime) Iso8601() string {
+	year, month, day := obj.Time.Date()
+	hour, min, sec := obj.Time.Clock()
+	return fmt.Sprintf("%d-%02d-%02dT%02d:%02d:%02d", year, month, day, hour, min, sec)
 }
 
 func (obj *MShellDateTime) IndexErrStr() string {

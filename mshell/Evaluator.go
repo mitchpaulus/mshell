@@ -1076,6 +1076,32 @@ MainLoop:
 					default:
 						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert a %s to a float.\n", t.Line, t.Column, obj.TypeName()))
 					}
+				} else if t.Lexeme == "toDt" {
+					dateStrObj, err := stack.Pop()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'toDt' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					var dateStr string
+					switch dateStrObj.(type) {
+					case *MShellString:
+						dateStr = dateStrObj.(*MShellString).Content
+					case *MShellLiteral:
+						dateStr = dateStrObj.(*MShellLiteral).LiteralText
+					case *MShellDateTime:
+						stack.Push(dateStrObj)
+						continue MainLoop
+					default:
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert a %s to a datetime.\n", t.Line, t.Column, dateStrObj.TypeName()))
+					}
+
+					// TODO: Don't make a new lexer object each time.
+					parsedTime, err := ParseDateTime(dateStr)
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing date time: %s\n", t.Line, t.Column, err.Error()))
+					}
+
+					stack.Push(&MShellDateTime{Time: parsedTime, Token: t})
 				} else if t.Lexeme == "~" || strings.HasPrefix(t.Lexeme, "~/") {
 					// Only do tilde expansion
 					homeDir, err := os.UserHomeDir()
@@ -1778,7 +1804,7 @@ MainLoop:
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '=' operation on a stack with only one item.\n", t.Line, t.Column))
 				}
 
-				// Implement for integers and strings right now.
+				// Implement for integers, strings, datetimes, and bools
 				switch obj1.(type) {
 				case *MShellInt:
 					switch obj2.(type) {
@@ -1793,6 +1819,20 @@ MainLoop:
 						stack.Push(&MShellBool{obj2.(*MShellString).Content == obj1.(*MShellString).Content})
 					default:
 						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot compare equality from a string to a %s.\n", t.Line, t.Column, obj2.TypeName()))
+					}
+				case *MShellDateTime:
+					switch obj2.(type) {
+					case *MShellDateTime:
+						stack.Push(&MShellBool{obj2.(*MShellDateTime).Time.Equal(obj1.(*MShellDateTime).Time)})
+					default:
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot compare equality from a datetime to a %s.\n", t.Line, t.Column, obj2.TypeName()))
+					}
+				case *MShellBool:
+					switch obj2.(type) {
+					case *MShellBool:
+						stack.Push(&MShellBool{obj2.(*MShellBool).Value == obj1.(*MShellBool).Value})
+					default:
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot compare equality from a bool to a %s.\n", t.Line, t.Column, obj2.TypeName()))
 					}
 				default:
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot complete %s with a %s to a %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
