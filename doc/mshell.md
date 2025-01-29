@@ -40,7 +40,7 @@ No escaping is done within single quoted strings.
 - `readFile`: Read file into string. `(str -- str)`
 - `readTsvFile`: Read a TSV file into list of list of strings. `(str -- [[str]])`
 - `stdin`: Drop stdin onto the stack `( -- str)`
-- `..`: Drop stdin onto the stack and split by lines `( -- [str])`
+- `::`: Drop stdin onto the stack and split by lines `( -- [str])`. This is a shorthand for `stdin lines`.
 - `foldl`: Fold left. `(quote initial list -- result)`
 - `wt`: "Whitespace table", puts stdin split by lines and whitespace on the stack. `( -- [[str]])`
 - `tt`: "Tab table", puts stdin split by lines and tabs on the stack. `( -- [[str]])`

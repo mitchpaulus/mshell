@@ -1,1 +1,1 @@
-.. (wsplit :-1: toFloat 4 >) filter (wl) each
+:: (wsplit :-1: toFloat 4 >) filter (wl) each

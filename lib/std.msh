@@ -77,14 +77,14 @@ def sum ([float] -- float)
     (+) 0 rot foldl
 end
 
-# .. (-- list[str]), equals kinda looks like lines.
-def .. (-- [str]) stdin lines end
+# :: (-- list[str]), equals kinda looks like lines.
+def :: (-- [str]) stdin lines end
 
 # tt = Tab separated Table (-- list[list[str]])
-def tt (-- [[str]]) ..  ("	" split) map end
+def tt (-- [[str]]) ::  ("	" split) map end
 
 # wt = Whitespace separated Table (-- [[str*]*])
-def wt (-- [[str]]) .. (wsplit) map  end
+def wt (-- [[str]]) :: (wsplit) map  end
 
 # wjoin = Whitespace join ([str*] -- str)
 def wjoin ([str] -- str) " " join end
