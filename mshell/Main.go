@@ -126,6 +126,7 @@ func main() {
 			currentCommand: make([]rune, 0, 100),
 			index:          0,
 			readBuffer:     make([]byte, 1024),
+			homeDir:        os.Getenv("HOME"),
 		}
 
 		termState.InteractiveMode()
@@ -280,6 +281,7 @@ type TermState struct {
 	index int // index of cursor, starts at 0
 	readBuffer []byte
 	oldState *term.State
+	homeDir string
 }
 
 func (state *TermState) clearToPrompt() {
@@ -661,6 +663,11 @@ func (state *TermState) printPrompt() {
 	fmt.Fprintf(os.Stdout, "\033[35m")
 	// Print PWD
 	cwd, err := os.Getwd()
+
+	if len(state.homeDir) > 0 && strings.HasPrefix(cwd, state.homeDir) {
+		cwd = "~" + cwd[len(state.homeDir):]
+	}
+
 	var promptText string
 	if err != nil {
 		promptText = "??? >"
