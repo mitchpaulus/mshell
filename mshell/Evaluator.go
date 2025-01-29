@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 type MShellStack []MShellObject
@@ -2071,6 +2072,28 @@ MainLoop:
 					return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing path: %s\n", t.Line, t.Column, err.Error()))
 				}
 				stack.Push(&MShellPath { parsed })
+			} else if t.Type == DATETIME {
+				year, _ := strconv.Atoi(t.Lexeme[0:4])
+				month, _ := strconv.Atoi(t.Lexeme[5:7])
+				day, _ := strconv.Atoi(t.Lexeme[8:10])
+
+				hour := 0
+				minute := 0
+				second := 0
+				if len(t.Lexeme) >= 13 {
+					hour, _ = strconv.Atoi(t.Lexeme[11:13])
+				}
+
+				if len(t.Lexeme) >= 16 {
+					minute, _ = strconv.Atoi(t.Lexeme[14:16])
+				}
+
+				if len(t.Lexeme) >= 19 {
+					second, _ = strconv.Atoi(t.Lexeme[17:19])
+				}
+
+				dt := time.Date(year, time.Month(month), day, hour, minute, second, 0, time.UTC)
+				stack.Push(&MShellDateTime{Time: dt, Token: t})
 			} else {
 				return FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Type))
 			}

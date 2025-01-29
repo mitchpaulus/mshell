@@ -1,0 +1,6 @@
+2025-01-29 str wl
+2025-01-29T10 str wl
+2025-01-29T10:13 str wl
+2025-01-29T10:13:16 str wl
+2025-01-asdfasdff # This should be single token
+2025-01-13asdfasdf # This should be two tokens

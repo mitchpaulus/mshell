@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"os"
+	"time"
 )
 
 // TruncateMiddle truncates a string to a maximum length, adding "..." in the middle if necessary.
@@ -47,6 +48,68 @@ type MShellObject interface {
 
 type MShellSimple struct {
 	Token Token
+}
+
+type MShellDateTime struct {
+	// TODO: replace with my own simpler int64 based on the Calendrical Calculation book.
+	Time time.Time
+	Token Token
+}
+
+func (obj *MShellDateTime) TypeName() string {
+	return "DateTime"
+}
+
+func (obj *MShellDateTime) IsCommandLineable() bool {
+	return true
+}
+
+func (obj *MShellDateTime) IsNumeric() bool {
+	return false
+}
+
+func (obj *MShellDateTime) FloatNumeric() float64 {
+	return 0
+}
+
+func (obj *MShellDateTime) CommandLine() string {
+	return obj.Token.Lexeme
+}
+
+func (obj *MShellDateTime) DebugString() string {
+	return obj.Token.Lexeme
+}
+
+func (obj *MShellDateTime) Index(index int) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot index into a DateTime.\n")
+}
+
+func (obj *MShellDateTime) SliceStart(start int) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot slice a DateTime.\n")
+}
+
+func (obj *MShellDateTime) SliceEnd(end int) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot slice a DateTime.\n")
+}
+
+func (obj *MShellDateTime) Slice(startInc int, endExc int) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot slice a DateTime.\n")
+}
+
+func (obj *MShellDateTime) ToJson() string {
+	return fmt.Sprintf("{\"type\": \"DateTime\", \"value\": \"%s\"}", obj.Token.Lexeme)
+}
+
+func (obj *MShellDateTime) ToString() string {
+	return obj.Token.Lexeme
+}
+
+func (obj *MShellDateTime) IndexErrStr() string {
+	return ""
+}
+
+func (obj *MShellDateTime) Concat(other MShellObject) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot concatenate a DateTime.\n")
 }
 
 type MShellLiteral struct {

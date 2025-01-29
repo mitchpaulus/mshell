@@ -69,6 +69,7 @@ const (
 	AMPERSAND
 	PATH
 	COMMA
+	DATETIME
 )
 
 func (t TokenType) String() string {
@@ -187,6 +188,8 @@ func (t TokenType) String() string {
 		return "PATH"
 	case COMMA:
 		return "COMMA"
+	case DATETIME:
+		return "DATETIME"
 	default:
 		return "UNKNOWN"
 	}
@@ -604,13 +607,7 @@ func (l *Lexer) parseEnvVar() Token {
 
 func (l *Lexer) parseNumberOrStartIndexer() Token {
 	// Read all the digits
-	for {
-		if l.atEnd() {
-
-		}
-		if !unicode.IsDigit(l.peek()) {
-			break
-		}
+	for unicode.IsDigit(l.peek()) {
 		l.advance()
 	}
 
@@ -652,18 +649,73 @@ func (l *Lexer) parseNumberOrStartIndexer() Token {
 		return l.makeToken(STDERRREDIRECT)
 	} else if peek == '.' {
 		l.advance()
-
-		for {
-			if l.atEnd() {
-				break
-			}
+		for unicode.IsDigit(l.peek()) {
+			l.advance()
+		}
+		return l.makeToken(FLOAT)
+	} else if l.curLen() == 4 && peek == '-' {
+		l.advance()
+		// Month
+		for i := 0; i < 2; i++ {
 			if !unicode.IsDigit(l.peek()) {
-				break
+				return l.consumeLiteral()
+			}
+			l.advance()
+		}
+		if l.peek() != '-' {
+			return l.consumeLiteral()
+		}
+		l.advance()
+
+		// Day
+		for i := 0; i < 2; i++ {
+			if !unicode.IsDigit(l.peek()) {
+				return l.consumeLiteral()
 			}
 			l.advance()
 		}
 
-		return l.makeToken(FLOAT)
+		if l.peek() != 'T' {
+			return l.makeToken(DATETIME)
+		} else {
+			l.advance()
+		}
+
+		// Hour
+		for i := 0; i < 2; i++ {
+			if !unicode.IsDigit(l.peek()) {
+				return l.consumeLiteral()
+			}
+			l.advance()
+		}
+
+		if l.peek() != ':' {
+			return l.makeToken(DATETIME)
+		}
+		l.advance()
+
+		// Minute
+		for i := 0; i < 2; i++ {
+			if !unicode.IsDigit(l.peek()) {
+				return l.consumeLiteral()
+			}
+			l.advance()
+		}
+
+		// Second
+		if l.peek() != ':' {
+			return l.makeToken(DATETIME)
+		}
+		l.advance()
+
+		for i := 0; i < 2; i++ {
+			if !unicode.IsDigit(l.peek()) {
+				return l.consumeLiteral()
+			}
+			l.advance()
+		}
+
+		return l.makeToken(DATETIME)
 	}
 
 	if !isAllowedLiteral(peek) {
