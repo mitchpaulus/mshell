@@ -6,7 +6,7 @@ import (
 	"os"
 	// "bufio"
 	"golang.org/x/term"
-	// "strings"
+	"strings"
 	// "runtime/pprof"
 	// "runtime/trace"
 	// "runtime"
@@ -275,6 +275,7 @@ type TermState struct {
 	numRows int
 	numCols int
 	promptLength int
+	numPromptLines int
 	currentCommand []rune
 	index int // index of cursor, starts at 0
 	readBuffer []byte
@@ -408,14 +409,23 @@ func (state *TermState) InteractiveMode() {
 				fmt.Fprintf(os.Stdout, "\033[K")
 				state.currentCommand = state.currentCommand[:state.index]
 			} else if c == 12 { // Ctrl-L
-				// Clear screen
-				fmt.Fprintf(os.Stdout, "\033[2J\033[1;1H")
-				state.printPrompt()
-				// Print current command
-				fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand))
+				// Implement using scroll \e[nS
+				curRow, curCol, err, _ := getCurrentPos()
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Error getting cursor position: %s\n", err)
+					os.Exit(1)
+				}
 
-				// Set cursor to current index, relative to new prompt length
-				fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + state.index)
+				rowsToScroll := curRow - state.numPromptLines
+				fmt.Fprintf(f, "%d %d %d\n", curRow, state.numPromptLines, rowsToScroll)
+				if rowsToScroll > 0 {
+					fmt.Fprintf(os.Stdout, "\033[%dS", rowsToScroll)
+				} else if rowsToScroll < 0 { // This is for when we have a multi line prompt, and we've used the mouse scroll to go all the way to the bottom.
+					fmt.Fprintf(os.Stdout, "\033[%dT", -rowsToScroll)
+				}
+
+				// Move cursor
+				fmt.Fprintf(os.Stdout, "\033[%d;%dH", state.numPromptLines, curCol)
 			} else if c == 13 { // Enter
 				// Add command to history
 				currentCommandStr := string(state.currentCommand)
@@ -651,11 +661,14 @@ func (state *TermState) printPrompt() {
 	fmt.Fprintf(os.Stdout, "\033[35m")
 	// Print PWD
 	cwd, err := os.Getwd()
+	var promptText string
 	if err != nil {
-		fmt.Fprintf(os.Stdout, "??? >")
+		promptText = "??? >"
 	} else {
-		fmt.Fprintf(os.Stdout, "%s> \n:: ", cwd)
+		promptText = fmt.Sprintf("%s > \n:: ", cwd)
 	}
+	fmt.Fprintf(os.Stdout, promptText)
+	state.numPromptLines = strings.Count(promptText, "\n") + 1
 	fmt.Fprintf(os.Stdout, "\033[0m")
 
 	// fmt.Fprintf(os.Stdout, "mshell> ")

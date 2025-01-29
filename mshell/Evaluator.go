@@ -1102,6 +1102,37 @@ MainLoop:
 					}
 
 					stack.Push(&MShellDateTime{Time: parsedTime, Token: t})
+				} else if t.Lexeme == "files" || t.Lexeme == "dirs" {
+					// Dump all the files in the current directory to the stack. No sub-directories.
+					files, err := os.ReadDir(".")
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Error reading current directory: %s\n", t.Line, t.Column, err.Error()))
+					}
+
+					newList := 	&MShellList{
+						Items:                 make([]MShellObject, 0, len(files)),
+						StdinBehavior:         STDIN_NONE,
+						StandardInputContents: "",
+						StandardInputFile:     "",
+						StandardOutputFile:    "",
+						StandardErrorFile:     "",
+						StdoutBehavior:        STDOUT_NONE,
+					}
+
+					if t.Lexeme == "files" {
+						for _, file := range files {
+							if !file.IsDir() {
+								newList.Items = append(newList.Items, &MShellPath{file.Name()})
+							}
+						}
+					} else {
+						for _, file := range files {
+							if file.IsDir() {
+								newList.Items = append(newList.Items, &MShellPath{file.Name()})
+							}
+						}
+					}
+					stack.Push(newList)
 				} else if t.Lexeme == "~" || strings.HasPrefix(t.Lexeme, "~/") {
 					// Only do tilde expansion
 					homeDir, err := os.UserHomeDir()
