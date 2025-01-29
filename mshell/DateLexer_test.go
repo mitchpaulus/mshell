@@ -41,4 +41,7 @@ func TestIsoDate(t *testing.T) {
 func TestDate2(t *testing.T) {
 	HelpTestDate("Jun 5, 2027", 2027, time.June, 5, t)
 	HelpTestDate("2025 March 3", 2025, time.March, 3, t)
+	HelpTestDate("1 august 23", 2023, time.August, 1, t)
+	HelpTestDate("24 Sep. 23", 2023, time.September, 24, t)
+	HelpTestDate("10/2/2022", 2022, time.October, 2, t)
 }

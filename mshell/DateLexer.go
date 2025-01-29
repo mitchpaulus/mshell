@@ -11,8 +11,7 @@ import (
 type DateTokenType int
 
 const (
-	DATEINT = iota
-	DATEJAN // 1, rest of months aligned, so don't change that.
+	DATEJAN = iota + 1 // 1, rest of months aligned, so don't change that.
 	DATEFEB
 	DATEMAR
 	DATEAPR
@@ -26,6 +25,11 @@ const (
 	DATEDEC
 	DATEDOW
 	DATESEP
+	DATEAM
+	DATEPM
+	DATEINT4
+	DATEINT2
+	DATEINT1
 	DATEEOF
 )
 
@@ -310,6 +314,7 @@ func (l *DateLexer) MonthDowType() DateTokenType {
 }
 
 func (l *DateLexer) scanToken() DateToken {
+	// https://en.wikipedia.org/wiki/List_of_time_zone_abbreviations
 	l.start = l.current
 
 	if l.atEnd() {
@@ -322,16 +327,79 @@ func (l *DateLexer) scanToken() DateToken {
 		for unicode.IsDigit(l.peek()) {
 			l.advance()
 		}
-		return l.makeToken(DATEINT)
-	} else if c == 'j' || c == 'J' || c == 'f' || c == 'F' || c == 'm' || c == 'M' || c == 'a' || c == 'A' || c == 's' || c == 'S' || c == 'o' || c == 'O' || c == 'n' || c == 'N' || c == 'd' || c == 'D' || c == 't' || c == 'T' || c == 'w' || c == 'W' {
+		if l.Length() == 4 {
+			return l.makeToken(DATEINT4)
+		} else if l.Length() == 2 {
+			return l.makeToken(DATEINT2)
+		} else if l.Length() == 1 {
+			return l.makeToken(DATEINT1)
+		} else { // TODO: Handle 8 and 6 digit numbers
+			return l.makeToken(DATESEP)
+		}
+	} else if c == 'a' || c == 'A' {
+		l.advance()
+		if l.peek() == 'm' || l.peek() == 'M' {
+			l.advance()
+
+			// Check for AMST or AMT for Amazon summer time or Armenia time
+			if l.peek() == 's' || l.peek() == 'S' || l.peek() == 'T' {
+				return l.consumeAlpha()
+			}
+
+			if l.peek() == '.' {
+				l.advance()
+			}
+			return l.makeToken(DATEAM)
+		} else if l.peek() == '.' {
+			l.advance()
+			if l.peek() == 'm' || l.peek() == 'M' {
+				l.advance()
+				if l.peek() == '.' {
+					l.advance()
+				}
+				return l.makeToken(DATEAM)
+			}
+		}
+
 		for unicode.IsLetter(l.peek()) {
 			l.advance()
 		}
 		return l.makeToken(l.MonthDowType())
+	} else if c == 'j' || c == 'J' || c == 'f' || c == 'F' || c == 'm' || c == 'M' || c == 's' || c == 'S' || c == 'o' || c == 'O' || c == 'n' || c == 'N' || c == 'd' || c == 'D' || c == 't' || c == 'T' || c == 'w' || c == 'W' {
+		for unicode.IsLetter(l.peek()) {
+			l.advance()
+		}
+		return l.makeToken(l.MonthDowType())
+	} else if c == 'p' || c == 'P' {
+		if l.peek() == 'm' || l.peek() == 'M' {
+			l.advance()
+			// Checking for PMDT or PMST or Saint Pierre and Miquelon Daylight/Standard Time
+			if l.peek() == 's' || l.peek() == 'S' || l.peek() == 'D' || l.peek() == 'd' {
+				return l.consumeAlpha()
+			}
+			return l.makeToken(DATEPM)
+		} else if l.peek() == '.' {
+			l.advance()
+			if l.peek() == 'm' || l.peek() == 'M' {
+				l.advance()
+				if l.peek() == '.' {
+					l.advance()
+				}
+				return l.makeToken(DATEPM)
+			}
+		}
+		return l.consumeAlpha()
 	} else {
 		// TODO: Implement the rest of the lexer
 		return l.makeToken(DATESEP)
 	}
+}
+
+func (l *DateLexer) consumeAlpha() DateToken {
+	for unicode.IsLetter(l.peek()) {
+		l.advance()
+	}
+	return l.makeToken(DATESEP)
 }
 
 func ParseDateTime(dateTimeStr string) (time.Time, error) {
@@ -351,71 +419,201 @@ func ParseDateTime(dateTimeStr string) (time.Time, error) {
 	return time, err
 }
 
+type DateParser struct {
+	Tokens []DateToken
+	Current int
+	Error error
+}
+
+func (p *DateParser) CurrentToken() DateToken {
+	if p.Current >= len(p.Tokens) {
+		return DateToken{Type: DATEEOF, Lexeme: "", Start: -1}
+	}
+	return p.Tokens[p.Current]
+}
+
+func (p *DateParser) Peek() DateToken {
+	if p.Current + 1 >= len(p.Tokens) {
+		return DateToken{Type: DATEEOF, Lexeme: "", Start: -1}
+	}
+	return p.Tokens[p.Current + 1]
+}
+
+func (p *DateParser) Peek2() DateToken {
+	if p.Current + 2 >= len(p.Tokens) {
+		return DateToken{Type: DATEEOF, Lexeme: "", Start: -1}
+	}
+	return p.Tokens[p.Current + 2]
+}
+
+func (p *DateParser) ParseDate() (year int, month int, day int, err error) {
+	if p.CurrentToken().Type == DATEINT4 {
+		year, _ = p.ParseYear()
+
+		month, err = p.ParseMonth()
+		if err != nil {
+			return 0, 0, 0, err
+		}
+
+		day, err = p.ParseDay()
+		if err != nil {
+			return 0, 0, 0, err
+		}
+
+		return year, month, day, nil
+	} else if p.CurrentToken().IsMonth() {
+		month, _ = p.ParseMonth()
+
+		day, err = p.ParseDay()
+		if err != nil {
+			return 0, 0, 0, err
+		}
+
+		year, err = p.ParseYear()
+		if err != nil {
+			return 0, 0, 0, err
+		}
+
+		return year, month, day, nil
+	} else if p.CurrentToken().Type == DATEINT2 {
+		// Here we get some ambiguity.
+		if p.Peek().IsMonth() {
+			day, _ = p.ParseDay()
+			month, err = p.ParseMonth()
+			if err != nil {
+				return 0, 0, 0, err
+			}
+			year, err = p.ParseYear()
+			if err != nil {
+				return 0, 0, 0, err
+			}
+			return year, month, day, nil
+		} else if p.Peek2().Type == DATEINT4 {
+			// month, day, year
+			month, err = p.ParseMonth()
+			if err != nil {
+				return 0, 0, 0, err
+			}
+
+			day, err = p.ParseDay()
+			if err != nil {
+				return 0, 0, 0, err
+			}
+
+			year, err = p.ParseYear()
+			if err != nil {
+				return 0, 0, 0, err
+			}
+			return year, month, day, nil
+		} else {
+			// year, month, day
+			year, err = p.ParseYear()
+			if err != nil {
+				return 0, 0, 0, err
+			}
+
+			month, err = p.ParseMonth()
+			if err != nil {
+				return 0, 0, 0, err
+			}
+
+			day, err = p.ParseDay()
+			if err != nil {
+				return 0, 0, 0, err
+			}
+			return year, month, day, nil
+		}
+	} else if p.CurrentToken().Type == DATEINT1 {
+		day, _ = p.ParseDay()
+		month, err = p.ParseMonth()
+		if err != nil {
+			return 0, 0, 0, err
+		}
+		year, err = p.ParseYear()
+		if err != nil {
+			return 0, 0, 0, err
+		}
+		return year, month, day, nil
+	} else {
+		err = fmt.Errorf("Expected 4 digit year or month name")
+		return 0, 0, 0, err
+	}
+}
+
+func (p *DateParser) ParseYear() (int, error) {
+	if p.CurrentToken().Type == DATEINT4 {
+		year, err := strconv.Atoi(p.CurrentToken().Lexeme)
+		if err != nil {
+			return 0, err
+		}
+		p.Current++
+		return year, nil
+	} else if p.CurrentToken().Type == DATEINT2 {
+		year, err := strconv.Atoi(p.CurrentToken().Lexeme)
+		if err != nil {
+			return 0, err
+		}
+		p.Current++
+		return year + 2000, nil
+	} else {
+		return 0, fmt.Errorf("Expected 4 or 2 digit year, received '%s' (%d)", p.CurrentToken().Lexeme, p.CurrentToken().Type)
+	}
+}
+
+func (p *DateParser) ParseMonth() (int, error) {
+	if p.CurrentToken().IsMonth() {
+		month := int(p.CurrentToken().Type)
+		p.Current++
+		return month, nil
+	} else if p.CurrentToken().Type == DATEINT2 {
+		month, err := strconv.Atoi(p.CurrentToken().Lexeme)
+		if err != nil {
+			return 0, err
+		}
+		p.Current++
+		return month, nil
+	} else if  p.CurrentToken().Type == DATEINT1 {
+		month, _ := strconv.Atoi(p.CurrentToken().Lexeme)
+		p.Current++
+		return month, nil
+	} else {
+		return 0, fmt.Errorf("Expected 2 digit month or month name")
+	}
+}
+
+func (p *DateParser) ParseDay() (int, error) {
+	if p.CurrentToken().Type == DATEINT2 {
+		day, err := strconv.Atoi(p.CurrentToken().Lexeme)
+		if err != nil {
+			return 0, err
+		}
+		p.Current++
+		return day, nil
+	} else if p.CurrentToken().Type == DATEINT1 {
+		day, _ := strconv.Atoi(p.CurrentToken().Lexeme)
+		p.Current++
+		return day, nil
+	} else {
+		return 0, fmt.Errorf("Expected 2 or 1 digit day")
+	}
+}
+
+
 func ParseDateTimeTokens(dateTimeTokens []DateToken) (time.Time, error) {
 	nonSepTokens := make([]DateToken, 0, len(dateTimeTokens))
-	counts := make([]int, 16)
-
-	dateMonthToken := -1
 
 	for _, token := range dateTimeTokens {
-		if token.Type != DATESEP && token.Type != DATEEOF {
+		if token.Type != DATESEP && token.Type != DATEDOW {
 			nonSepTokens = append(nonSepTokens, token)
-			counts[token.Type] = counts[token.Type] + 1
-		}
-
-		if token.Type >= 1 && token.Type <= 12 {
-			dateMonthToken = int(token.Type)
 		}
 	}
 
-	if len(nonSepTokens) == 3 && counts[DATEINT] == 3 {
-		// We are dealing with a date.
-		if len(nonSepTokens[0].Lexeme) == 4 {
-			yearInt, err := strconv.Atoi(nonSepTokens[0].Lexeme)
-			// Assume this is a YYYY-MM-DD
-			monthInt, err := strconv.Atoi(nonSepTokens[1].Lexeme)
-			if err != nil {
-				return time.Time{}, err
-			}
+	parser := DateParser{Tokens: nonSepTokens, Current: 0}
 
-			if monthInt < 1 || monthInt > 12 {
-				return time.Time{}, fmt.Errorf("Month integer found to be '%d'", monthInt)
-			}
-
-			dayInt, err := strconv.Atoi(nonSepTokens[2].Lexeme)
-			if err != nil {
-				return time.Time{}, err
-			}
-
-			if dayInt < 0 || dayInt > 31 {
-				return time.Time{}, fmt.Errorf("Day integer found to be '%d'", dayInt)
-			}
-
-			month := time.Month(monthInt)
-			return time.Date(yearInt, month, dayInt, 0, 0, 0, 0, time.UTC), nil
-		}
-	} else if len(nonSepTokens) == 3 && counts[DATEINT] == 2 && dateMonthToken != -1 {
-		if nonSepTokens[0].IsMonth() {
-			// Assume 1 is day, and 2 is year
-			dayInt, err := nonSepTokens[1].ParseDay()
-			if err != nil {
-				return time.Time{}, err
-			}
-
-			yearInt := nonSepTokens[2].ParseYear()
-			return time.Date(yearInt, nonSepTokens[0].Month(), dayInt, 0, 0, 0, 0, time.UTC), nil
-
-		} else if nonSepTokens[1].IsMonth() {
-			// Assume 0 is year, 2 in day
-			dayInt, err := nonSepTokens[2].ParseDay()
-			if err != nil {
-				return time.Time{}, err
-			}
-
-			yearInt := nonSepTokens[0].ParseYear()
-			return time.Date(yearInt, nonSepTokens[1].Month(), dayInt, 0, 0, 0, 0, time.UTC), nil
-		}
+	year, month, day, err := parser.ParseDate()
+	if err != nil {
+		return time.Time{}, err
 	}
 
-	return time.Time{}, fmt.Errorf("Could not parse datetime %d %d", len(nonSepTokens), len(dateTimeTokens))
+	return time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.UTC), nil
 }
