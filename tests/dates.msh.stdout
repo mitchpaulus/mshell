@@ -5,3 +5,23 @@
 2025-12-23T00:00:00
 true
 false
+
+Comparing >=
+2025-01-29 >= Jan 29, 2025: true
+2025-02-01 >= Jan 29, 2025: true
+2025-01-10 >= Jan 29, 2025: false
+
+Comparing <=
+2025-01-29 <= Jan 29, 2025: true
+2025-02-01 <= Jan 29, 2025: false
+2025-01-10 <= Jan 29, 2025: true
+
+Comparing >
+2025-01-29 > Jan 29, 2025: false
+2025-02-01 > Jan 29, 2025: true
+2025-01-10 > Jan 29, 2025: false
+
+Comparing <
+2025-01-29 < Jan 29, 2025: false
+2025-02-01 < Jan 29, 2025: false
+2025-01-10 < Jan 29, 2025: true

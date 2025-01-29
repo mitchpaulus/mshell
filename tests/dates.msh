@@ -10,3 +10,28 @@
 # Test parsing and comparison
 2025-01-29 "Jan 29, 2025" toDt = str wl
 2025-01-29 "Jan 28, 2025" toDt = str wl
+
+def testType (--)
+    operator! opStr!
+    over over swap str w @opStr w w ": " w toDt @operator x str wl
+end
+
+"\nComparing >=" wl
+2025-01-29 "Jan 29, 2025" " >= " (>=) testType
+2025-02-01 "Jan 29, 2025" " >= " (>=) testType
+2025-01-10 "Jan 29, 2025" " >= " (>=) testType
+
+"\nComparing <=" wl
+2025-01-29 "Jan 29, 2025" " <= " (<=) testType
+2025-02-01 "Jan 29, 2025" " <= " (<=) testType
+2025-01-10 "Jan 29, 2025" " <= " (<=) testType
+
+"\nComparing >" wl
+2025-01-29 "Jan 29, 2025" " > " (>) testType
+2025-02-01 "Jan 29, 2025" " > " (>) testType
+2025-01-10 "Jan 29, 2025" " > " (>) testType
+
+"\nComparing <" wl
+2025-01-29 "Jan 29, 2025" " < " (<) testType
+2025-02-01 "Jan 29, 2025" " < " (<) testType
+2025-01-10 "Jan 29, 2025" " < " (<) testType

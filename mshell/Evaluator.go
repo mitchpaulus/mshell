@@ -1542,7 +1542,19 @@ MainLoop:
 						stack.Push(&MShellBool{obj2.FloatNumeric() <= obj1.FloatNumeric()})
 					}
 				} else {
-					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s and a %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
+
+					obj1Date, ok1 := obj1.(*MShellDateTime)
+					obj2Date, ok2 := obj2.(*MShellDateTime)
+
+					if ok1 && ok2 {
+						if t.Type == GREATERTHANOREQUAL {
+							stack.Push(&MShellBool{obj2Date.Time.After(obj1Date.Time) || obj2Date.Time.Equal(obj1Date.Time)})
+						} else {
+							stack.Push(&MShellBool{obj2Date.Time.Before(obj1Date.Time) || obj2Date.Time.Equal(obj1Date.Time)})
+						}
+					} else {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s and a %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
+					}
 				}
 			} else if t.Type == GREATERTHAN || t.Type == LESSTHAN { // Token Type
 				// This can either be normal comparison for numerics, or it's a redirect on a list or quotation.
@@ -1629,6 +1641,17 @@ MainLoop:
 							stack.Push(obj2)
 						default:
 							return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a path (%s) to a %s (%s).\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
+						}
+					case *MShellDateTime:
+						switch obj2.(type) {
+						case *MShellDateTime:
+							if t.Type == GREATERTHAN {
+								stack.Push(&MShellBool{obj2.(*MShellDateTime).Time.After(obj1.(*MShellDateTime).Time)})
+							} else {
+								stack.Push(&MShellBool{obj2.(*MShellDateTime).Time.Before(obj1.(*MShellDateTime).Time)})
+							}
+						default:
+							return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a datetime (%s) to a %s (%s).\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
 						}
 					default:
 						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a %s (%s) to a %s (%s).\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
