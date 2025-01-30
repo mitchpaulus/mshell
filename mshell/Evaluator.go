@@ -572,37 +572,59 @@ MainLoop:
 					}
 				} else if t.Lexeme == "findReplace" {
 					// Do simple find replace with the top three strings on stack
-					obj1, err := stack.Pop()
+					obj1, err := stack.Pop() // Replacement
 					if err != nil {
 						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'find-replace' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
-					obj2, err := stack.Pop()
+					obj2, err := stack.Pop() // Find
 					if err != nil {
 						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'find-replace' operation on a stack with only one item.\n", t.Line, t.Column))
 					}
 
-					obj3, err := stack.Pop()
+					obj3, err := stack.Pop() // Original string
 					if err != nil {
 						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'find-replace' operation on a stack with only two items.\n", t.Line, t.Column))
 					}
 
+					var replacementStr string
+					var findStr string
+					var originalStr string
+
 					switch obj1.(type) {
 					case *MShellString:
-						switch obj2.(type) {
-						case *MShellString:
-							switch obj3.(type) {
-							case *MShellString:
-								stack.Push(&MShellString{strings.Replace(obj3.(*MShellString).Content, obj2.(*MShellString).Content, obj1.(*MShellString).Content, -1)})
-							default:
-								return FailWithMessage(fmt.Sprintf("%d:%d: Cannot find-replace a %s.\n", t.Line, t.Column, obj3.TypeName()))
-							}
-						default:
-							return FailWithMessage(fmt.Sprintf("%d:%d: Cannot find-replace a %s.\n", t.Line, t.Column, obj2.TypeName()))
-						}
+						replacementStr = obj1.(*MShellString).Content
+					case *MShellLiteral:
+						replacementStr = obj1.(*MShellLiteral).LiteralText
+					case *MShellPath:
+						replacementStr = obj1.(*MShellPath).Path
 					default:
-						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot find-replace a %s.\n", t.Line, t.Column, obj1.TypeName()))
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot find-replace with a %s as the replacement string.\n", t.Line, t.Column, obj1.TypeName()))
 					}
+
+					switch obj2.(type) {
+					case *MShellString:
+						findStr = obj2.(*MShellString).Content
+					case *MShellLiteral:
+						findStr = obj2.(*MShellLiteral).LiteralText
+					case *MShellPath:
+						findStr = obj2.(*MShellPath).Path
+					default:
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot find-replace with a %s as the find string.\n", t.Line, t.Column, obj2.TypeName()))
+					}
+
+					switch obj3.(type) {
+					case *MShellString:
+						originalStr = obj3.(*MShellString).Content
+					case *MShellLiteral:
+						originalStr = obj3.(*MShellLiteral).LiteralText
+					case *MShellPath:
+						originalStr = obj3.(*MShellPath).Path
+					default:
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot find-replace with a %s as the original string.\n", t.Line, t.Column, obj3.TypeName()))
+					}
+
+					stack.Push(&MShellString{strings.Replace(originalStr, findStr, replacementStr, -1)})
 
 				} else if t.Lexeme == "split" {
 					delimiter, err := stack.Pop()
