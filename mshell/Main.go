@@ -292,6 +292,24 @@ func (state *TermState) clearToPrompt() {
 func (state *TermState) InteractiveMode() {
 	// FUTURE: Maybe Check for CSI u?
 
+	// TODO: Read from file? Something like a snippet engine?
+	aliases := map[string]string{
+		"s": "[git status -u];",
+		"v": "nvim",
+		"mk": "mkdir",
+		"ls": "['ls' -al --color];",
+		"gi": "[nvim .gitignore];",
+		"a": "[git add",
+		"d": "[git diff -w];",
+		"dc": "[git diff -w --cached];",
+		"c": "[git commit];",
+		"p": "[git push];",
+		"u": ".. cd",
+		"gu": "[git add -u]? ([git status -u];) () iff",
+		"ga": "[git add -A]? ([git status -u];) () iff",
+		"fp": "[git fetch --prune];",
+	}
+
 	// Put terminal into raw mode
 	oldState, err := term.MakeRaw(0)
 	if err != nil {
@@ -411,7 +429,11 @@ func (state *TermState) InteractiveMode() {
 				fmt.Fprintf(os.Stdout, "\033[K")
 				state.currentCommand = state.currentCommand[:state.index]
 			} else if c == 12 { // Ctrl-L
-				// Implement using scroll \e[nS
+				// See https://github.com/microsoft/terminal/issues/17320
+				// and https://github.com/microsoft/terminal/issues/11078
+				// Some terminals are erasing text in scrollback buffer using the \e[nS escape sequence.
+
+				// Implement using \n's instead.
 				curRow, curCol, err, _ := getCurrentPos()
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "Error getting cursor position: %s\n", err)
@@ -420,10 +442,12 @@ func (state *TermState) InteractiveMode() {
 
 				rowsToScroll := curRow - state.numPromptLines
 				fmt.Fprintf(f, "%d %d %d\n", curRow, state.numPromptLines, rowsToScroll)
-				if rowsToScroll > 0 {
-					fmt.Fprintf(os.Stdout, "\033[%dS", rowsToScroll)
-				} else if rowsToScroll < 0 { // This is for when we have a multi line prompt, and we've used the mouse scroll to go all the way to the bottom.
-					fmt.Fprintf(os.Stdout, "\033[%dT", -rowsToScroll)
+
+				// Move cursor to bottom of terminal, if you have a terminal that has over 10000 lines, I'm sorry.
+				fmt.Fprintf(os.Stdout, "\033[10000B")
+				// print out rowsToScroll newlines
+				for i := 0; i < rowsToScroll; i++ {
+					fmt.Fprintf(os.Stdout, "\n")
 				}
 
 				// Move cursor
@@ -431,6 +455,32 @@ func (state *TermState) InteractiveMode() {
 			} else if c == 13 { // Enter
 				// Add command to history
 				currentCommandStr := string(state.currentCommand)
+
+				if state.index == len(state.currentCommand) {
+					// Walk back to last whitespace, check if final element is an alias.
+					i := state.index
+					for {
+						if i == 0 || state.currentCommand[i-1] == ' ' || state.currentCommand[i-1] == '[' {
+							break
+						}
+						i--
+					}
+
+					lastWord := string(state.currentCommand[i:state.index])
+					alias, aliasSet := aliases[lastWord]
+					if aliasSet {
+						currentCommandStr = currentCommandStr[:i] + alias
+					}
+
+					// Update the UI.
+					state.clearToPrompt()
+					fmt.Fprintf(os.Stdout, "%s", currentCommandStr)
+					state.index = len(state.currentCommand)
+					state.currentCommand = []rune(currentCommandStr)
+					// Move cursor to end
+					fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index+1)
+				}
+
 				history = append(history, currentCommandStr)
 				historyIndex = 0
 
@@ -618,8 +668,65 @@ func (state *TermState) InteractiveMode() {
 				} else {
 					fmt.Fprintf(f, "Unknown sequence: %d %d %d\n", state.readBuffer[0], state.readBuffer[1], state.readBuffer[2])
 				}
+			} else if c == 32 { // Space
+				// Check for aliases. Split current command by whitespace, and check if last word is in aliases.
+				// If it is, replace last word with alias value.
 
-			} else if c >= 32 && c <= 126 {
+				i := state.index - 1
+				for {
+					if i < 0 || state.currentCommand[i] == ' ' || state.currentCommand[i] == '[' {
+						break
+					}
+					i--
+				}
+
+				lastWord := string(state.currentCommand[i+1:state.index])
+
+				aliasValue, aliasSet := aliases[lastWord]
+				if aliasSet {
+					// Erase starting at beginning of last word
+					fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+i+1)
+					fmt.Fprintf(os.Stdout, "\033[K")
+
+					// Print alias value
+					fmt.Fprintf(os.Stdout, aliasValue)
+
+					// Print the space
+					fmt.Fprintf(os.Stdout, " ")
+
+					// Print the rest of the command
+					fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
+
+					// Update current command
+					startText := state.currentCommand[:i+1]
+					endText := state.currentCommand[state.index:]
+
+					state.currentCommand = state.currentCommand[:0]
+
+					state.currentCommand = append(state.currentCommand, startText...)
+					state.currentCommand = append(state.currentCommand, []rune(aliasValue)...)
+					state.currentCommand = append(state.currentCommand, ' ')
+					state.currentCommand = append(state.currentCommand, endText...)
+
+					// state.currentCommand = append(state.currentCommand, ' ')
+					// state.currentCommand = append(state.currentCommand, state.currentCommand[state.index:]...)
+
+					fmt.Fprintf(f, "Alias: %s -> %s\n", lastWord, aliasValue)
+					fmt.Fprintf(f, "Current command: %s\n", string(state.currentCommand))
+
+					// Move cursor to end of the alias
+					state.index = i + 1 + len(aliasValue) + 1
+					fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index)
+				} else {
+					fmt.Fprintf(os.Stdout, "\033[K")
+					fmt.Fprintf(os.Stdout, "%c", c)
+					fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
+					fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index+1)
+
+					state.currentCommand = append(state.currentCommand[:state.index], append([]rune{rune(c)}, state.currentCommand[state.index:]...)...)
+					state.index++
+				}
+			} else if c > 32 && c <= 126 {
 				// Add chars to current command at current index
 				fmt.Fprintf(os.Stdout, "\033[K")
 				fmt.Fprintf(os.Stdout, "%c", c)
