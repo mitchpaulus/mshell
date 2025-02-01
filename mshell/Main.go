@@ -481,7 +481,10 @@ func (state *TermState) InteractiveMode() {
 					fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index+1)
 				}
 
-				history = append(history, currentCommandStr)
+				if len(currentCommandStr) > 0 {
+					history = append(history, currentCommandStr)
+				}
+
 				historyIndex = 0
 
 				// Reset current command
