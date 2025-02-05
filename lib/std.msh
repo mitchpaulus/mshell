@@ -83,6 +83,10 @@ def :: (-- [str]) stdin lines end
 # tt = Tab separated Table (-- list[list[str]])
 def tt (-- [[str]]) ::  ("	" split) map end
 
+def ttFile (str -- [[str]])
+    readFile (tab split) map
+end
+
 # wt = Whitespace separated Table (-- [[str*]*])
 def wt (-- [[str]]) :: (wsplit) map  end
 
