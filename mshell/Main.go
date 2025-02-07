@@ -190,36 +190,42 @@ func main() {
 	// Check for environment variable MSHSTDLIB and load that file. Read as UTF-8
 	stdlibPath, stdlibSet := os.LookupEnv("MSHSTDLIB")
 	if stdlibSet {
-		stdlibBytes, err := os.ReadFile(stdlibPath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error reading file %s: %s\n", stdlibPath, err)
-			os.Exit(1)
-			return
-		}
-		stdlibLexer := NewLexer(string(stdlibBytes))
-		stdlibParser := MShellParser{lexer: stdlibLexer}
-		stdlibParser.NextToken()
-		stdlibFile, err := stdlibParser.ParseFile()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error parsing file %s: %s\n", stdlibPath, err)
-			os.Exit(1)
-			return
-		}
+		// Split the path by :
+		// If there are multiple paths, load each one.
+		rcPaths := strings.Split(stdlibPath, ":")
 
-		allDefinitions = append(allDefinitions, stdlibFile.Definitions...)
-
-		if len(stdlibFile.Items) > 0 {
-			callStackItem := CallStackItem{
-				MShellParseItem: stdlibFile.Items[0],
-				Name:  "MSHSTDLIB",
-				CallStackType: CALLSTACKFILE,
-			}
-
-			result := state.Evaluate(stdlibFile.Items, &stack, context, allDefinitions, callStack, callStackItem)
-			if !result.Success {
-				fmt.Fprintf(os.Stderr, "Error evaluating MSHSTDLIB file %s.\n", stdlibPath)
+		for _, stdlibPath := range rcPaths {
+			stdlibBytes, err := os.ReadFile(stdlibPath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error reading file %s: %s\n", stdlibPath, err)
 				os.Exit(1)
 				return
+			}
+			stdlibLexer := NewLexer(string(stdlibBytes))
+			stdlibParser := MShellParser{lexer: stdlibLexer}
+			stdlibParser.NextToken()
+			stdlibFile, err := stdlibParser.ParseFile()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error parsing file %s: %s\n", stdlibPath, err)
+				os.Exit(1)
+				return
+			}
+
+			allDefinitions = append(allDefinitions, stdlibFile.Definitions...)
+
+			if len(stdlibFile.Items) > 0 {
+				callStackItem := CallStackItem{
+					MShellParseItem: stdlibFile.Items[0],
+					Name:  stdlibPath,
+					CallStackType: CALLSTACKFILE,
+				}
+
+				result := state.Evaluate(stdlibFile.Items, &stack, context, allDefinitions, callStack, callStackItem)
+				if !result.Success {
+					fmt.Fprintf(os.Stderr, "Error evaluating MSHSTDLIB file %s.\n", stdlibPath)
+					os.Exit(1)
+					return
+				}
 			}
 		}
 	}
