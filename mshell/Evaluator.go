@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"math"
 )
 
 type MShellStack []MShellObject
@@ -1235,7 +1236,115 @@ MainLoop:
 					}
 
 					stack.Push(&MShellString{tmpfile.Name()})
-				}  else {
+				} else if t.Lexeme == "date" {
+					// Drop current local date time onto the stack
+					stack.Push(&MShellDateTime{Time: time.Now(), Token: t})
+				} else if t.Lexeme == "day" {
+					dateTimeObj, err := stack.Pop()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'day' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					dateTime, ok := dateTimeObj.(*MShellDateTime)
+					if !ok {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot get the day of a %s.\n", t.Line, t.Column, dateTimeObj.TypeName()))
+					}
+
+					stack.Push(&MShellInt{dateTime.Time.Day()})
+				} else if t.Lexeme == "month" {
+					dateTimeObj, err := stack.Pop()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'month' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					dateTime, ok := dateTimeObj.(*MShellDateTime)
+					if !ok {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot get the month of a %s.\n", t.Line, t.Column, dateTimeObj.TypeName()))
+					}
+
+					stack.Push(&MShellInt{int(dateTime.Time.Month())})
+
+				} else if t.Lexeme == "year" {
+					dateTimeObj, err := stack.Pop()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'year' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					dateTime, ok := dateTimeObj.(*MShellDateTime)
+					if !ok {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot get the year of a %s.\n", t.Line, t.Column, dateTimeObj.TypeName()))
+					}
+
+					stack.Push(&MShellInt{dateTime.Time.Year()})
+				} else if t.Lexeme == "hour" {
+					dateTimeObj, err := stack.Pop()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'hour' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					dateTime, ok := dateTimeObj.(*MShellDateTime)
+					if !ok {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot get the hour of a %s.\n", t.Line, t.Column, dateTimeObj.TypeName()))
+					}
+
+					stack.Push(&MShellInt{dateTime.Time.Hour()})
+				} else if t.Lexeme == "minute" {
+					dateTimeObj, err := stack.Pop()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'minute' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					dateTime, ok := dateTimeObj.(*MShellDateTime)
+					if !ok {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot get the minute of a %s.\n", t.Line, t.Column, dateTimeObj.TypeName()))
+					}
+
+					stack.Push(&MShellInt{dateTime.Time.Minute()})
+				} else if t.Lexeme == "mod" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'mod' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					obj2, err := stack.Pop()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'mod' operation on a stack with only one item.\n", t.Line, t.Column))
+					}
+
+					switch obj1.(type) {
+					case *MShellInt:
+						switch obj2.(type) {
+						case *MShellInt:
+							if obj1.(*MShellInt).Value == 0 {
+								return FailWithMessage(fmt.Sprintf("%d:%d: Cannot mod by zero.\n", t.Line, t.Column))
+							}
+
+							stack.Push(&MShellInt{obj2.(*MShellInt).Value % obj1.(*MShellInt).Value})
+						case *MShellFloat:
+							if obj1.(*MShellInt).Value == 0 {
+								return FailWithMessage(fmt.Sprintf("%d:%d: Cannot mod by zero.\n", t.Line, t.Column))
+							}
+
+							stack.Push(&MShellFloat{math.Mod(obj2.(*MShellFloat).Value, float64(obj1.(*MShellInt).Value))})
+						}
+
+					case *MShellFloat:
+						switch obj2.(type) {
+						case *MShellInt:
+							if obj1.(*MShellFloat).Value == 0 {
+								return FailWithMessage(fmt.Sprintf("%d:%d: Cannot mod by zero.\n", t.Line, t.Column))
+							}
+
+							stack.Push(&MShellFloat{math.Mod(float64(obj2.(*MShellInt).Value), obj1.(*MShellFloat).Value)})
+						case *MShellFloat:
+							if obj1.(*MShellFloat).Value == 0 {
+								return FailWithMessage(fmt.Sprintf("%d:%d: Cannot mod by zero.\n", t.Line, t.Column))
+							}
+
+							stack.Push(&MShellFloat{math.Mod(obj2.(*MShellFloat).Value, obj1.(*MShellFloat).Value)})
+						}
+					}
+				} else { // newfunc
 					stack.Push(&MShellLiteral{t.Lexeme})
 				}
 			} else if t.Type == LEFT_SQUARE_BRACKET { // Token Type

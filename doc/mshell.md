@@ -54,6 +54,7 @@ No escaping is done within single quoted strings.
 - `transpose`: Transpose list of lists `([[a]] -- [[a]])`
 - `min2`: Minimum of two numbers `(numeric numeric -- numeric)`
 - `min`: Minimum of list of numbers `([numeric] -- numeric)`
+- `mod`: Modulus `(numeric numeric -- numeric)`
 
 ### String Functions
 
@@ -79,6 +80,15 @@ No escaping is done within single quoted strings.
 - `filter`: Filter list, `(list quote -- list)`
 - `any`: Check if any element in list satisfies a condition, `([a] (a -- bool) -- bool)`
 - `all`: Check if all elements in list satisfy a condition, `([a] (a -- bool) -- bool)`
+
+## Date Functions
+
+- `date`: Push current date/time onto the stack `( -- date)`
+- `year`: Get year from date `(date -- int)`
+- `month`: Get month from date (1-12) `(date -- int)`
+- `day`: Get day from date (1-31) `(date -- int)`
+- `hour`: Get hour from date (0-23) `(date -- int)`
+- `minute`: Get minute from date (0-59) `(date -- int)`
 
 ## Variables
 
