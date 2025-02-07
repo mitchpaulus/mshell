@@ -337,9 +337,9 @@ func (l *DateLexer) scanToken() DateToken {
 			return l.makeToken(DATESEP)
 		}
 	} else if c == 'a' || c == 'A' {
-		l.advance()
+
 		if l.peek() == 'm' || l.peek() == 'M' {
-			l.advance()
+			c = l.advance()
 
 			// Check for AMST or AMT for Amazon summer time or Armenia time
 			if l.peek() == 's' || l.peek() == 'S' || l.peek() == 'T' {
@@ -430,6 +430,10 @@ func (p *DateParser) CurrentToken() DateToken {
 		return DateToken{Type: DATEEOF, Lexeme: "", Start: -1}
 	}
 	return p.Tokens[p.Current]
+}
+
+func (p *DateParser) AtEnd() bool {
+	return p.CurrentToken().Type == DATEEOF
 }
 
 func (p *DateParser) Peek() DateToken {
@@ -524,16 +528,37 @@ func (p *DateParser) ParseDate() (year int, month int, day int, err error) {
 			return year, month, day, nil
 		}
 	} else if p.CurrentToken().Type == DATEINT1 {
-		day, _ = p.ParseDay()
-		month, err = p.ParseMonth()
-		if err != nil {
-			return 0, 0, 0, err
+		// Here we get some ambiguity.
+		if p.Peek().IsMonth() {
+			day, _ = p.ParseDay()
+			month, err = p.ParseMonth()
+			if err != nil {
+				return 0, 0, 0, err
+			}
+			year, err = p.ParseYear()
+			if err != nil {
+				return 0, 0, 0, err
+			}
+			return year, month, day, nil
+		} else {
+			// month, day, year
+			month, err = p.ParseMonth()
+			if err != nil {
+				return 0, 0, 0, err
+			}
+
+			day, err = p.ParseDay()
+			if err != nil {
+				return 0, 0, 0, err
+			}
+
+			year, err = p.ParseYear()
+			if err != nil {
+				return 0, 0, 0, err
+			}
+
+			return year, month, day, nil
 		}
-		year, err = p.ParseYear()
-		if err != nil {
-			return 0, 0, 0, err
-		}
-		return year, month, day, nil
 	} else {
 		err = fmt.Errorf("Expected 4 digit year or month name")
 		return 0, 0, 0, err
@@ -598,6 +623,102 @@ func (p *DateParser) ParseDay() (int, error) {
 	}
 }
 
+func (p *DateParser) ParseTime() (int, int, int, error) {
+	hour, minute, second := 0, 0, 0
+
+	if !(p.CurrentToken().Type == DATEINT1 || p.CurrentToken().Type == DATEINT2) {
+		return 0, 0, 0, fmt.Errorf("Expected time")
+	}
+	hour, err := p.ParseHour()
+	if err != nil {
+		return 0, 0, 0, err
+	}
+
+	if p.CurrentToken().Type == DATEEOF {
+		return hour, 0, 0, nil
+	}
+	minute, err = p.ParseMinute()
+	if err != nil {
+		return 0, 0, 0, nil
+	}
+
+	if p.CurrentToken().Type == DATEEOF {
+		return hour, minute, 0, nil
+	} else if p.CurrentToken().Type == DATEAM || p.CurrentToken().Type == DATEPM {
+		if p.CurrentToken().Type == DATEAM {
+			if hour == 12 {
+				hour = 0
+			}
+		} else {
+			if hour < 12 {
+				hour += 12
+			}
+		}
+
+		p.Current++
+	} else {
+		second, err = p.ParseSecond()
+		if err != nil {
+			return 0, 0, 0, err
+		}
+	}
+
+	if p.CurrentToken().Type == DATEAM || p.CurrentToken().Type == DATEPM {
+		if p.CurrentToken().Type == DATEAM {
+			if hour == 12 {
+				hour = 0
+			}
+		} else {
+			if hour < 12 {
+				hour += 12
+			}
+		}
+
+		p.Current++
+	}
+
+	return hour, minute, second, nil
+}
+
+func (p *DateParser) ParseHour() (int, error) {
+	if p.CurrentToken().Type == DATEINT2 || p.CurrentToken().Type == DATEINT1 {
+		hour, err := strconv.Atoi(p.CurrentToken().Lexeme)
+		if err != nil {
+			return 0, err
+		}
+		p.Current++
+		return hour, nil
+	} else {
+		return 0, fmt.Errorf("Expected 2 or 1 digit hour")
+	}
+}
+
+func (p *DateParser) ParseMinute() (int, error) {
+	if p.CurrentToken().Type == DATEINT2 || p.CurrentToken().Type == DATEINT1 {
+		minute, err := strconv.Atoi(p.CurrentToken().Lexeme)
+		if err != nil {
+			return 0, err
+		}
+		p.Current++
+		return minute, nil
+	} else {
+		return 0, fmt.Errorf("Expected 2 or 1 digit minute")
+	}
+}
+
+func (p *DateParser) ParseSecond() (int, error) {
+	if p.CurrentToken().Type == DATEINT2 || p.CurrentToken().Type == DATEINT1 {
+		second, err := strconv.Atoi(p.CurrentToken().Lexeme)
+		if err != nil {
+			return 0, err
+		}
+		p.Current++
+		return second, nil
+	} else {
+		return 0, fmt.Errorf("Expected 2 or 1 digit second")
+	}
+}
+
 
 func ParseDateTimeTokens(dateTimeTokens []DateToken) (time.Time, error) {
 	nonSepTokens := make([]DateToken, 0, len(dateTimeTokens))
@@ -613,6 +734,15 @@ func ParseDateTimeTokens(dateTimeTokens []DateToken) (time.Time, error) {
 	year, month, day, err := parser.ParseDate()
 	if err != nil {
 		return time.Time{}, err
+	}
+
+	if !parser.AtEnd() {
+		hour, minute, second, err := parser.ParseTime()
+		if err != nil {
+			return time.Time{}, err
+		}
+
+		return time.Date(year, time.Month(month), day, hour, minute, second, 0, time.UTC), nil
 	}
 
 	return time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.UTC), nil
