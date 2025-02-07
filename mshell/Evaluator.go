@@ -901,6 +901,8 @@ MainLoop:
 						dir = obj.(*MShellString).Content
 					case *MShellLiteral:
 						dir = obj.(*MShellLiteral).LiteralText
+					case *MShellPath:
+						dir = obj.(*MShellPath).Path
 					default:
 						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot cd to a %s.\n", t.Line, t.Column, obj.TypeName()))
 					}
