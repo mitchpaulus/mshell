@@ -90,6 +90,10 @@ end
 # wt = Whitespace separated Table (-- [[str*]*])
 def wt (-- [[str]]) :: (wsplit) map  end
 
+def wtFile (str -- [[str]])
+    readFile lines (wsplit) map
+end
+
 # wjoin = Whitespace join ([str*] -- str)
 def wjoin ([str] -- str) " " join end
 

@@ -890,44 +890,54 @@ func getCurrentPos() (row int, col int, err error, extraBytes []byte) {
 func stdLibDefinitions(stack MShellStack, context ExecuteContext, state EvalState, callStack CallStack) ([]MShellDefinition, error) {
 	// Check for environment variable MSHSTDLIB and load that file. Read as UTF-8
 	stdlibPath, stdlibSet := os.LookupEnv("MSHSTDLIB")
+	definitions := make([]MShellDefinition, 0)
+
 	if stdlibSet {
-		stdlibBytes, err := os.ReadFile(stdlibPath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error reading file %s: %s\n", stdlibPath, err)
-			os.Exit(1)
-			return nil, err
-		}
-		stdlibLexer := NewLexer(string(stdlibBytes))
-		stdlibParser := MShellParser{lexer: stdlibLexer}
-		stdlibParser.NextToken()
-		stdlibFile, err := stdlibParser.ParseFile()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error parsing file %s: %s\n", stdlibPath, err)
-			os.Exit(1)
-			return nil, err
-		}
+		// Split the path by :
+		// If there are multiple paths, load each one.
+		rcPaths := strings.Split(stdlibPath, ":")
 
-		if len(stdlibFile.Items) > 0 {
-			callStackItem := CallStackItem{
-				MShellParseItem: stdlibFile.Items[0],
-				Name:  "MSHSTDLIB",
-				CallStackType: CALLSTACKFILE,
-			}
-
-			// allDefinitions = append(allDefinitions, stdlibFile.Definitions...)
-			result := state.Evaluate(stdlibFile.Items, &stack, context, stdlibFile.Definitions, callStack, callStackItem)
-
-			if !result.Success {
-				fmt.Fprintf(os.Stderr, "Error evaluating MSHSTDLIB file %s.\n", stdlibPath)
+		for _, rcPath := range rcPaths {
+			stdlibBytes, err := os.ReadFile(rcPath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error reading file %s: %s\n", rcPath, err)
 				os.Exit(1)
 				return nil, err
 			}
-		}
 
-		return stdlibFile.Definitions, nil
+			stdlibLexer := NewLexer(string(stdlibBytes))
+			stdlibParser := MShellParser{lexer: stdlibLexer}
+			stdlibParser.NextToken()
+			stdlibFile, err := stdlibParser.ParseFile()
+
+			definitions = append(definitions, stdlibFile.Definitions...)
+
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error parsing file %s: %s\n", rcPath, err)
+				os.Exit(1)
+				return nil, err
+			}
+
+			if len(stdlibFile.Items) > 0 {
+				callStackItem := CallStackItem{
+					MShellParseItem: stdlibFile.Items[0],
+					Name:  rcPath,
+					CallStackType: CALLSTACKFILE,
+				}
+
+				// allDefinitions = append(allDefinitions, stdlibFile.Definitions...)
+				result := state.Evaluate(stdlibFile.Items, &stack, context, stdlibFile.Definitions, callStack, callStackItem)
+
+				if !result.Success {
+					fmt.Fprintf(os.Stderr, "Error evaluating MSHSTDLIB file %s.\n", rcPath)
+					os.Exit(1)
+					return nil, err
+				}
+			}
+		}
 	}
 
-	return make([]MShellDefinition, 0), nil
+	return definitions, nil
 }
 
 func registerTempFileForCleanup(tempFileName string) {
