@@ -1346,7 +1346,32 @@ MainLoop:
 							stack.Push(&MShellFloat{math.Mod(obj2.(*MShellFloat).Value, obj1.(*MShellFloat).Value)})
 						}
 					}
-				} else { // newfunc
+				} else if t.Lexeme == "basename" || t.Lexeme == "dirname" || t.Lexeme == "ext" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
+					}
+
+					var path string
+					switch obj1.(type) {
+					case *MShellString:
+						path = obj1.(*MShellString).Content
+					case *MShellLiteral:
+						path = obj1.(*MShellLiteral).LiteralText
+					case *MShellPath:
+						path = obj1.(*MShellPath).Path
+					default:
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot get the %s of a %s.\n", t.Line, t.Column, t.Lexeme, obj1.TypeName()))
+					}
+
+					if t.Lexeme == "basename" {
+						stack.Push(&MShellString{filepath.Base(path)})
+					} else if t.Lexeme == "dirname" {
+						stack.Push(&MShellString{filepath.Dir(path)})
+					} else if t.Lexeme == "ext" {
+						stack.Push(&MShellString{filepath.Ext(path)})
+					}
+				} else { // last new function
 					stack.Push(&MShellLiteral{t.Lexeme})
 				}
 			} else if t.Type == LEFT_SQUARE_BRACKET { // Token Type
