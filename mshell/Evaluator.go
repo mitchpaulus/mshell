@@ -1705,6 +1705,12 @@ MainLoop:
 				switch obj.(type) {
 				case *MShellBool:
 					stack.Push(&MShellBool{!obj.(*MShellBool).Value})
+				case *MShellInt:
+					if obj.(*MShellInt).Value == 0 {
+						stack.Push(&MShellBool{false})
+					} else {
+						stack.Push(&MShellBool{true})
+					}
 				default:
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s.\n", t.Line, t.Column, t.Lexeme, obj.TypeName()))
 				}
