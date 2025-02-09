@@ -1,0 +1,4 @@
+"Hello" hello!
+"World" world!
+$"{@hello}, {@world}!" wl
+$"{10 20 + str}" wl

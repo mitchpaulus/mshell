@@ -30,7 +30,7 @@ const (
 	IFF // This is just temporary as I work to remove the old if.
 	LOOP
 	READ
-	STR
+	STR // This is like the command str that convert to string.
 	BREAK
 	NOT
 	AND
@@ -70,6 +70,7 @@ const (
 	PATH
 	COMMA
 	DATETIME
+	FORMATSTRING
 )
 
 func (t TokenType) String() string {
@@ -190,6 +191,8 @@ func (t TokenType) String() string {
 		return "COMMA"
 	case DATETIME:
 		return "DATETIME"
+	case FORMATSTRING:
+		return "FORMATSTRING"
 	default:
 		return "UNKNOWN"
 	}
@@ -488,6 +491,10 @@ func (l *Lexer) scanToken() Token {
 	case '$':
 		if unicode.IsDigit(l.peek()) {
 			return l.parsePositional()
+		} else if l.peek() == '"' { // This must be before the 'isAllowedLiteral' check.
+			l.advance()
+			l.consumeString()
+			return l.makeToken(FORMATSTRING)
 		} else if isAllowedLiteral(l.peek()) {
 			return l.parseEnvVar()
 		} else {
@@ -769,19 +776,21 @@ func (l *Lexer) parsePositional() Token {
 	return l.makeToken(POSITIONAL)
 }
 
-func (l *Lexer) parseString() Token {
+func (l *Lexer) consumeString() error {
 	// When this is called, we've already consumed a single double quote.
 	inEscape := false
 	for {
 		if l.atEnd() {
-			fmt.Fprintf(os.Stderr, "%d:%d: Unterminated string.\n", l.line, l.col)
-			return l.makeToken(ERROR)
+			// fmt.Fprintf(os.Stderr, "%d:%d: Unterminated string.\n", l.line, l.col)
+			return fmt.Errorf( "%d:%d: Unterminated string.\n", l.line, l.col)
+
 		}
 		c := l.advance()
 		if inEscape {
 			if c != 'n' && c != 't' && c != 'r' && c != '\\' && c != '"' {
-				fmt.Fprintf(os.Stderr, "%d:%d: Invalid escape character within string, '%c'. Expected 'n', 't', 'r', '\\', or '\"'.\n", l.line, l.col, c)
-				return l.makeToken(ERROR)
+				// fmt.Fprintf(os.Stderr, "%d:%d: Invalid escape character within string, '%c'. Expected 'n', 't', 'r', '\\', or '\"'.\n", l.line, l.col, c)
+				return fmt.Errorf("%d:%d: Invalid escape character within string, '%c'. Expected 'n', 't', 'r', '\\', or '\"'.\n", l.line, l.col, c)
+				// return l.makeToken(ERROR)
 			}
 			inEscape = false
 		} else {
@@ -793,6 +802,17 @@ func (l *Lexer) parseString() Token {
 			}
 		}
 	}
+
+	return nil
+}
+
+func (l *Lexer) parseString() Token {
+	err := l.consumeString()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s", err)
+		return l.makeToken(ERROR)
+	}
+
 	return l.makeToken(STRING)
 }
 

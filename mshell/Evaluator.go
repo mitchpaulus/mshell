@@ -206,7 +206,7 @@ MainLoop:
 						indexStr := indexerToken.Lexeme[1 : len(indexerToken.Lexeme)-1]
 						index, err := strconv.Atoi(indexStr)
 						if err != nil {
-							return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", indexerToken.Line, indexerToken.Column, err.Error()))
+return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", indexerToken.Line, indexerToken.Column, err.Error()))
 						}
 
 						result, err := obj1.Index(index)
@@ -2356,7 +2356,7 @@ MainLoop:
 					return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing path: %s\n", t.Line, t.Column, err.Error()))
 				}
 				stack.Push(&MShellPath { parsed })
-			} else if t.Type == DATETIME {
+			} else if t.Type == DATETIME { // Token Type
 				year, _ := strconv.Atoi(t.Lexeme[0:4])
 				month, _ := strconv.Atoi(t.Lexeme[5:7])
 				day, _ := strconv.Atoi(t.Lexeme[8:10])
@@ -2378,6 +2378,13 @@ MainLoop:
 
 				dt := time.Date(year, time.Month(month), day, hour, minute, second, 0, time.UTC)
 				stack.Push(&MShellDateTime{Time: dt, Token: t})
+			} else if t.Type == FORMATSTRING { // Token Type
+				parsedString, err := state.EvaluateFormatString(t.Lexeme, context, definitions, callStack, callStackItem)
+				if err != nil {
+					return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing format string '%s': %s\n", t.Line, t.Column, t.Lexeme, err.Error()))
+				}
+
+				stack.Push(parsedString)
 			} else {
 				return FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Type))
 			}
@@ -2389,6 +2396,109 @@ MainLoop:
 
 	return EvalResult{true, -1, 0, false}
 }
+
+const (
+	FORMATMODENORMAL = iota
+	FORMATMODEESCAPE
+	FORMATMODEFORMAT
+)
+
+func (state *EvalState) EvaluateFormatString(lexeme string, context ExecuteContext, definitions []MShellDefinition, callStack CallStack, callStackItem CallStackItem) (*MShellString, error) {
+	if len(lexeme) < 3 {
+		return nil, fmt.Errorf("Found format string with less than 3 characters: %s", lexeme)
+	}
+
+	var b strings.Builder
+
+	index := 2
+	mode := FORMATMODENORMAL
+
+	formatStrStartIndex := -1
+	formatStrEndIndex := -1
+
+	lexer := NewLexer("")
+	parser := MShellParser{ lexer: lexer }
+
+	for index < len(lexeme)-1 {
+		c := lexeme[index]
+		index++
+
+		if mode == FORMATMODEESCAPE {
+			switch c {
+			case 'n':
+				b.WriteRune('\n')
+			case 't':
+				b.WriteRune('\t')
+			case 'r':
+				b.WriteRune('\r')
+			case '\\':
+				b.WriteRune('\\')
+			case '"':
+				b.WriteRune('"')
+			case '{':
+				b.WriteRune('{') // This is a literal '{' in the format string
+			default:
+				return nil, fmt.Errorf("invalid escape character '%c'", c)
+			}
+			mode = FORMATMODENORMAL
+		} else if mode == FORMATMODENORMAL {
+			if c == '\\' {
+				mode = FORMATMODEESCAPE
+			} else if c == '{' {
+				formatStrStartIndex = index - 1
+				mode = FORMATMODEFORMAT
+			} else {
+				b.WriteRune(rune(c))
+			}
+		} else if mode == FORMATMODEFORMAT {
+			if c == '}' {
+				formatStrEndIndex = index - 1
+				formatStr := lexeme[formatStrStartIndex+1:formatStrEndIndex]
+
+				// Evaluate the format string
+				lexer.resetInput(formatStr)
+				parser.NextToken()
+				contents, err := parser.ParseFile()
+				if err != nil {
+					return nil, fmt.Errorf("Error parsing format string %s: %s", formatStr, err)
+				}
+
+				// Evaluate the format string contents
+				var stack MShellStack
+				stack = []MShellObject{}
+				result := state.Evaluate(contents.Items, &stack, context, definitions, callStack, callStackItem)
+				if !result.Success {
+					return nil, fmt.Errorf("Error evaluating format string %s", formatStr)
+				}
+
+				if len(stack) != 1 {
+					return nil, fmt.Errorf("Format string %s did not evaluate to a single value", formatStr)
+				}
+
+				// Get the string representation of the result
+				resultStr, ok := stack[0].(*MShellString)
+				if !ok {
+					return nil, fmt.Errorf("Format string contents %s did not evaluate to a string", formatStr)
+				}
+
+				b.WriteString(resultStr.Content)
+
+				formatStrStartIndex = -1
+				formatStrEndIndex = -1
+				mode = FORMATMODENORMAL
+			}
+		} else {
+			panic("Unknown format mode")
+		}
+	}
+
+	if mode != FORMATMODENORMAL {
+		return nil, fmt.Errorf("Format string ended in an invalid state")
+	}
+
+	return &MShellString{b.String()}, nil
+}
+
 
 type Executable interface {
 	Execute(state *EvalState, context ExecuteContext, stack *MShellStack) (EvalResult, int, string)
