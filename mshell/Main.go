@@ -497,8 +497,18 @@ func (state *TermState) InteractiveMode() {
 				state.currentCommand = state.currentCommand[:0]
 
 				l.resetInput(currentCommandStr)
-
 				p.NextToken()
+
+				if p.curr.Type == LITERAL {
+					// Check for known commands. If so, we'll essentially wrap the entire command in a list to execute
+					literalStr := p.curr.Lexeme
+
+					if literalStr == "sudo" {
+						currentCommandStr = fmt.Sprintf("[%s];", currentCommandStr)
+						l.resetInput(currentCommandStr)
+						p.NextToken()
+					}
+				}
 
 				parsed, err := p.ParseFile()
 				if err != nil {
@@ -575,11 +585,24 @@ func (state *TermState) InteractiveMode() {
 					fmt.Fprintf(os.Stdout, "\033[K")
 					state.currentCommand = state.currentCommand[:state.index]
 				}
-			} else if c == 27 && i < n {
+			} else if c == 27 && i < n { // 27 = Escape
 				c = state.readBuffer[i]
 				i++
-				// Arrow keys
-				if c == 91 && i < n {
+
+				if c == 79 && i < n {
+					c = state.readBuffer[i]
+					i++
+
+					if c == 80 { // F1
+
+					} else if c == 81 { // F2
+
+					} else if c == 82 { // F3
+
+					} else if c == 83 { // F4
+
+					}
+				} else if c == 91 && i < n { // 91 = [
 					c = state.readBuffer[i]
 					i++
 					if c == 51 && i < n {
