@@ -88,6 +88,7 @@ func (context *ExecuteContext) Close() {
 }
 
 func SimpleSuccess() EvalResult {
+	// Return Eval result with success, 0 exit code, and no break statement
 	return EvalResult{true, -1, 0, false}
 }
 
@@ -907,36 +908,10 @@ return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", indexerTo
 						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot cd to a %s.\n", t.Line, t.Column, obj.TypeName()))
 					}
 
-					// Update the OLDPWD variable
-					oldPwd, err := os.Getwd()
-					if err != nil {
-						return FailWithMessage(fmt.Sprintf("%d:%d: Error getting current directory: %s\n", t.Line, t.Column, err.Error()))
+					result, _, _ := ChangeDirectory(dir)
+					if !result.Success {
+						return result
 					}
-
-					err = os.Setenv("OLDPWD", oldPwd)
-					if err != nil {
-						return FailWithMessage(fmt.Sprintf("%d:%d: Error setting OLDPWD: %s\n", t.Line, t.Column, err.Error()))
-					}
-
-					context.Variables["OLDPWD"] = &MShellString{oldPwd}
-
-					err = os.Chdir(dir)
-					if err != nil {
-						return FailWithMessage(fmt.Sprintf("%d:%d: Error changing directory: %s\n", t.Line, t.Column, err.Error()))
-					}
-
-					// Update the PWD variable
-					pwd, err := os.Getwd()
-					if err != nil {
-						return FailWithMessage(fmt.Sprintf("%d:%d: Error getting current directory: %s\n", t.Line, t.Column, err.Error()))
-					}
-
-					err = os.Setenv("PWD", pwd)
-					if err != nil {
-						return FailWithMessage(fmt.Sprintf("%d:%d: Error setting PWD: %s\n", t.Line, t.Column, err.Error()))
-					}
-
-					context.Variables["PWD"] = &MShellString{pwd}
 				} else if t.Lexeme == "in" {
 					substring, err := stack.Pop()
 					if err != nil {
@@ -2577,7 +2552,35 @@ func (quotation *MShellQuotation) GetStandardOutputFile() string {
 	return quotation.StandardOutputFile
 }
 
+func ChangeDirectory(dir string) (EvalResult, int, string) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return FailWithMessage(fmt.Sprintf("Error getting current directory: %s\n", err.Error())), 1, ""
+	}
+
+	err = os.Chdir(dir)
+	if err != nil {
+		return FailWithMessage(fmt.Sprintf("Error changing directory to %s: %s\n", dir, err.Error())), 1, ""
+	}
+
+	// Update OLDPWD and PWD
+	err = os.Setenv("OLDPWD", cwd)
+	if err != nil {
+		return FailWithMessage(fmt.Sprintf("Error setting OLDPWD: %s\n", err.Error())), 1, ""
+	}
+
+	err = os.Setenv("PWD", dir)
+	if err != nil {
+		return FailWithMessage(fmt.Sprintf("Error setting PWD: %s\n", err.Error())), 1, ""
+	}
+
+	return SimpleSuccess(), 0, ""
+
+}
+
 func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (EvalResult, int, string) {
+	// Returns the result of running the process, the exit code, and the stdout result
+
 	// Check for empty list
 	if len(list.Items) == 0 {
 		return FailWithMessage("Cannot execute an empty list.\n"), 1, ""
@@ -2605,6 +2608,31 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 		} else {
 			commandLineArgs = append(commandLineArgs, item.CommandLine())
 		}
+	}
+
+	// Handle cd command specially
+	if commandLineArgs[0] == "cd" {
+		if len(commandLineArgs) > 3 {
+			fmt.Fprintf(os.Stderr, "cd command only takes one argument.\n")
+		} else if len(commandLineArgs) == 2 {
+			// Check for -h or --help
+			if commandLineArgs[1] == "-h" || commandLineArgs[1] == "--help" {
+				fmt.Fprintf(os.Stderr, "cd: cd [dir]\nChange the shell working directory.\n")
+				return SimpleSuccess(), 0, ""
+			} else {
+				return ChangeDirectory(commandLineArgs[1])
+			}
+		} else {
+			// else cd to home directory
+			homeDir, err := os.UserHomeDir()
+			if err != nil {
+				return FailWithMessage(fmt.Sprintf("Error getting home directory: %s\n", err.Error())), 1, ""
+			}
+
+			return ChangeDirectory(homeDir)
+		}
+
+		return SimpleSuccess(), 0, ""
 	}
 
 	cmd := exec.Command(commandLineArgs[0], commandLineArgs[1:]...)

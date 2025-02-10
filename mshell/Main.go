@@ -119,6 +119,16 @@ func main() {
 			os.Exit(1)
 		}
 
+		// For debugging, write number of bytes read and bytes to /tmp/mshell.log
+		// Open file for writing
+		f, err := os.OpenFile("/tmp/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error opening file /tmp/mshell.log: %s\n", err)
+			os.Exit(1)
+			return
+		}
+		defer f.Close()
+
 		termState := TermState{
 			numRows:        numRows,
 			numCols:        numCols,
@@ -127,6 +137,27 @@ func main() {
 			index:          0,
 			readBuffer:     make([]byte, 1024),
 			homeDir:        os.Getenv("HOME"),
+
+			stack : make(MShellStack, 0),
+
+			context : ExecuteContext{
+				StandardInput:  os.Stdin,
+				StandardOutput: os.Stdout,
+				Variables:      map[string]MShellObject{},
+			},
+
+			callStack : make(CallStack, 10),
+			f: f,
+			evalState : EvalState{
+				PositionalArgs: make([]string, 0),
+				LoopDepth:      0,
+				StopOnError:	false,
+			},
+			initCallStackItem : CallStackItem{
+				MShellParseItem: nil,
+				Name:  "main",
+				CallStackType: CALLSTACKFILE,
+			},
 		}
 
 		termState.InteractiveMode()
@@ -288,6 +319,17 @@ type TermState struct {
 	readBuffer []byte
 	oldState *term.State
 	homeDir string
+	l *Lexer
+	p *MShellParser
+	historyIndex int
+	f *os.File
+
+	stack MShellStack
+	context ExecuteContext
+	evalState EvalState
+	callStack CallStack
+	stdLibDefs []MShellDefinition
+	initCallStackItem CallStackItem
 }
 
 func (state *TermState) clearToPrompt() {
@@ -295,11 +337,16 @@ func (state *TermState) clearToPrompt() {
 	fmt.Fprintf(os.Stdout, "\033[K")
 }
 
+var tokenBuf []Token
+var tokenBufBuilder strings.Builder
+var aliases map[string]string
+var history []string
+
 func (state *TermState) InteractiveMode() {
 	// FUTURE: Maybe Check for CSI u?
 
 	// TODO: Read from file? Something like a snippet engine?
-	aliases := map[string]string{
+	aliases = map[string]string{
 		"s": "[git status -u];",
 		"v": "nvim",
 		"mk": "mkdir",
@@ -326,48 +373,23 @@ func (state *TermState) InteractiveMode() {
 	state.oldState = oldState
 	defer term.Restore(0, oldState)
 
-	l := NewLexer("")
-	p := MShellParser{lexer: l}
+	state.l = NewLexer("")
+	state.p = &MShellParser{lexer: state.l}
 
-	evalState := EvalState{
-		PositionalArgs: make([]string, 0),
-		LoopDepth:      0,
-		StopOnError:	false,
-	}
-
-	stack := make(MShellStack, 0)
-
-	context := ExecuteContext{
-		StandardInput:  os.Stdin,
-		StandardOutput: os.Stdout,
-		Variables:      map[string]MShellObject{},
-	}
-
-	callStack := make(CallStack, 10)
-
-	stdLibDefs, err := stdLibDefinitions(stack, context, evalState, callStack)
+	stdLibDefs, err := stdLibDefinitions(state.stack, state.context, state.evalState, state.callStack)
 	if err != nil {
 		term.Restore(0, oldState)
 		fmt.Fprintf(os.Stderr, "Error loading standard library: %s\n", err)
 		os.Exit(1)
 		return
 	}
+	state.stdLibDefs = stdLibDefs
 
-	history := make([]string, 0)
+	history = make([]string, 0)
 	historyIndex := 0
 	// readBuffer := make([]byte, 1024)
 	// currentCommand := strings.Builder{}
 	// currentCommand := make([]rune, 0, 100)
-
-	// For debugging, write number of bytes read and bytes to /tmp/mshell.log
-	// Open file for writing
-	f, err := os.OpenFile("/tmp/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error opening file /tmp/mshell.log: %s\n", err)
-		os.Exit(1)
-		return
-	}
-	defer f.Close()
 
 	state.printPrompt()
 
@@ -380,11 +402,6 @@ func (state *TermState) InteractiveMode() {
 	// promptLength := curCol - 1
 	// index := 0
 
-	initCallStackItem := CallStackItem{
-		MShellParseItem: nil,
-		Name:  "main",
-		CallStackType: CALLSTACKFILE,
-	}
 
 	for {
 		// Read char
@@ -395,11 +412,11 @@ func (state *TermState) InteractiveMode() {
 			return
 		}
 
-		fmt.Fprintf(f, "%d\t", n)
+		fmt.Fprintf(state.f, "%d\t", n)
 		for i := 0; i < n; i++ {
-			fmt.Fprintf(f, "%d ", state.readBuffer[i])
+			fmt.Fprintf(state.f, "%d ", state.readBuffer[i])
 		}
-		fmt.Fprintf(f, "\n")
+		fmt.Fprintf(state.f, "\n")
 
 		i := 0
 		for i < n {
@@ -447,7 +464,7 @@ func (state *TermState) InteractiveMode() {
 				}
 
 				rowsToScroll := curRow - state.numPromptLines
-				fmt.Fprintf(f, "%d %d %d\n", curRow, state.numPromptLines, rowsToScroll)
+				fmt.Fprintf(state.f, "%d %d %d\n", curRow, state.numPromptLines, rowsToScroll)
 
 				// Move cursor to bottom of terminal, if you have a terminal that has over 10000 lines, I'm sorry.
 				fmt.Fprintf(os.Stdout, "\033[10000B")
@@ -496,15 +513,38 @@ func (state *TermState) InteractiveMode() {
 				// Reset current command
 				state.currentCommand = state.currentCommand[:0]
 
-				l.resetInput(currentCommandStr)
-				p.NextToken()
+				p := state.p
+				l := state.l
+
+				state.l.resetInput(currentCommandStr)
+				state.p.NextToken()
 
 				if p.curr.Type == LITERAL {
 					// Check for known commands. If so, we'll essentially wrap the entire command in a list to execute
 					literalStr := p.curr.Lexeme
 
-					if literalStr == "sudo" {
-						currentCommandStr = fmt.Sprintf("[%s];", currentCommandStr)
+					if literalStr == "sudo" || literalStr == "git" || literalStr == "cd" {
+						tokenBufBuilder.Reset()
+						tokenBufBuilder.WriteString("[")
+
+						tokenBufBuilder.WriteString("'" + literalStr + "'")
+
+						// Clear token buffer
+						tokenBuf = tokenBuf[:0]
+
+						// Consume all tokens
+						for p.NextToken(); p.curr.Type != EOF; p.NextToken() {
+							tokenBuf = append(tokenBuf, p.curr)
+						}
+
+						for _, t := range tokenBuf {
+							tokenBufBuilder.WriteString(" ")
+							tokenBufBuilder.WriteString(t.Lexeme)
+						}
+
+						tokenBufBuilder.WriteString("];")
+						currentCommandStr = tokenBufBuilder.String()
+						fmt.Fprintf(state.f, "Command: %s\n", currentCommandStr)
 						l.resetInput(currentCommandStr)
 						p.NextToken()
 					}
@@ -526,8 +566,8 @@ func (state *TermState) InteractiveMode() {
 				fmt.Fprintf(os.Stdout, "\n")
 
 				if len(parsed.Items) > 0 {
-					initCallStackItem.MShellParseItem = parsed.Items[0]
-					result := evalState.Evaluate(parsed.Items, &stack, context, stdLibDefs, callStack, initCallStackItem)
+					state.initCallStackItem.MShellParseItem = parsed.Items[0]
+					result := state.evalState.Evaluate(parsed.Items, &state.stack, state.context, stdLibDefs, state.callStack, state.initCallStackItem)
 
 					if result.ExitCalled {
 						// Reset terminal to original state
@@ -594,7 +634,9 @@ func (state *TermState) InteractiveMode() {
 					i++
 
 					if c == 80 { // F1
-
+						// Set state.currentCommand to "lf"
+						state.currentCommand = []rune{'l', 'f'}
+						state.ExecuteCurrentCommand()
 					} else if c == 81 { // F2
 
 					} else if c == 82 { // F3
@@ -698,7 +740,7 @@ func (state *TermState) InteractiveMode() {
 
 					fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index)
 				} else {
-					fmt.Fprintf(f, "Unknown sequence: %d %d %d\n", state.readBuffer[0], state.readBuffer[1], state.readBuffer[2])
+					fmt.Fprintf(state.f, "Unknown sequence: %d %d %d\n", state.readBuffer[0], state.readBuffer[1], state.readBuffer[2])
 				}
 			} else if c == 32 { // Space
 				// Check for aliases. Split current command by whitespace, and check if last word is in aliases.
@@ -743,8 +785,8 @@ func (state *TermState) InteractiveMode() {
 					// state.currentCommand = append(state.currentCommand, ' ')
 					// state.currentCommand = append(state.currentCommand, state.currentCommand[state.index:]...)
 
-					fmt.Fprintf(f, "Alias: %s -> %s\n", lastWord, aliasValue)
-					fmt.Fprintf(f, "Current command: %s\n", string(state.currentCommand))
+					fmt.Fprintf(state.f, "Alias: %s -> %s\n", lastWord, aliasValue)
+					fmt.Fprintf(state.f, "Current command: %s\n", string(state.currentCommand))
 
 					// Move cursor to end of the alias
 					state.index = i + 1 + len(aliasValue) + 1
@@ -779,15 +821,133 @@ func (state *TermState) InteractiveMode() {
 					fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index)
 				}
 			} else {
-				fmt.Fprintf(f, "Unknown character: %d\n", c)
+				fmt.Fprintf(state.f, "Unknown character: %d\n", c)
 			}
 		}
 
 
-		fmt.Fprintf(f, "%s\t%d\n", string(state.currentCommand), state.index)
+		fmt.Fprintf(state.f, "%s\t%d\n", string(state.currentCommand), state.index)
 		// if !scanner.Scan() {
 			// break
 		// }
+	}
+}
+
+func (state *TermState) ExecuteCurrentCommand() {
+	// Add command to history
+	currentCommandStr := string(state.currentCommand)
+
+	if state.index == len(state.currentCommand) {
+		// Walk back to last whitespace, check if final element is an alias.
+		i := state.index
+		for {
+			if i == 0 || state.currentCommand[i-1] == ' ' || state.currentCommand[i-1] == '[' {
+				break
+			}
+			i--
+		}
+
+		lastWord := string(state.currentCommand[i:state.index])
+		alias, aliasSet := aliases[lastWord]
+		if aliasSet {
+			currentCommandStr = currentCommandStr[:i] + alias
+		}
+
+		// Update the UI.
+		state.clearToPrompt()
+		fmt.Fprintf(os.Stdout, "%s", currentCommandStr)
+		state.index = len(state.currentCommand)
+		state.currentCommand = []rune(currentCommandStr)
+		// Move cursor to end
+		fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index+1)
+	}
+
+	if len(currentCommandStr) > 0 {
+		history = append(history, currentCommandStr)
+	}
+
+	state.historyIndex = 0
+
+	// Reset current command
+	state.currentCommand = state.currentCommand[:0]
+
+	p := state.p
+	l := state.l
+
+	fmt.Fprintf(state.f, "Executing Command: '%s'\n", currentCommandStr)
+	state.l.resetInput(currentCommandStr)
+	state.p.NextToken()
+
+	if p.curr.Type == LITERAL {
+		// Check for known commands. If so, we'll essentially wrap the entire command in a list to execute
+		literalStr := p.curr.Lexeme
+
+		if literalStr == "sudo" || literalStr == "git" || literalStr == "cd" {
+			tokenBufBuilder.Reset()
+			tokenBufBuilder.WriteString("[")
+
+			tokenBufBuilder.WriteString("'" + literalStr + "'")
+
+			// Clear token buffer
+			tokenBuf = tokenBuf[:0]
+
+			// Consume all tokens
+			for p.NextToken(); p.curr.Type != EOF; p.NextToken() {
+				tokenBuf = append(tokenBuf, p.curr)
+			}
+
+			for _, t := range tokenBuf {
+				tokenBufBuilder.WriteString(" ")
+				tokenBufBuilder.WriteString(t.Lexeme)
+			}
+
+			tokenBufBuilder.WriteString("];")
+			currentCommandStr = tokenBufBuilder.String()
+			fmt.Fprintf(state.f, "Command: %s\n", currentCommandStr)
+			l.resetInput(currentCommandStr)
+			p.NextToken()
+		}
+	}
+
+	parsed, err := p.ParseFile()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "\r\nError parsing input: %s\n", err)
+		// Move to start
+		fmt.Fprintf(os.Stdout, "\033[1G")
+		state.printPrompt()
+		state.index = 0
+		return
+	}
+
+	// During evaluation, normal terminal output can happen, or TUI apps can be run.
+	// So want them to see non-raw mode terminal state.
+	term.Restore(0, state.oldState)
+	fmt.Fprintf(os.Stdout, "\n")
+
+	if len(parsed.Items) > 0 {
+		state.initCallStackItem.MShellParseItem = parsed.Items[0]
+		result := state.evalState.Evaluate(parsed.Items, &state.stack, state.context, state.stdLibDefs, state.callStack, state.initCallStackItem)
+
+		if result.ExitCalled {
+			// Reset terminal to original state
+			os.Exit(result.ExitCode)
+		}
+
+		if !result.Success {
+			fmt.Fprintf(os.Stderr, "Error evaluating input.\n")
+		}
+	}
+
+	fmt.Fprintf(os.Stdout, "\033[1G")
+	state.printPrompt()
+	state.index = 0
+
+	// Put terminal back into raw mode
+	_, err = term.MakeRaw(0)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error setting terminal to raw mode: %s\n", err)
+		os.Exit(1)
+		return
 	}
 }
 
