@@ -129,6 +129,9 @@ end
 def tab (-- str) "	" end
 def tsplit (str -- [str])  tab split end
 def tjoin ([str] -- str)  tab join end
+
+def cjoin ([str] -- str) "," join end
+
 def uw ([str] --) unlines w end
 
 def readTsvFile (str -- [[str]])
