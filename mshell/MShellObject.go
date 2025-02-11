@@ -7,6 +7,7 @@ import (
 	"strings"
 	"os"
 	"time"
+	"regexp"
 )
 
 // TruncateMiddle truncates a string to a maximum length, adding "..." in the middle if necessary.
@@ -561,13 +562,36 @@ func (obj *MShellList) DebugString() string {
 	return "[" + strings.Join(DebugStrs(obj.Items), " ") + "]"
 }
 
+func cleanStringForTerminal(input string) string {
+	var builder strings.Builder
+	builder.Grow(len(input) * 2) // Allocate efficiently
+
+	length := len(input)
+	for i := 0; i < length; i++ {
+		if input[i] == '\r' {
+			// If "\r\n" (Windows line ending), consume both
+			if i+1 < length && input[i+1] == '\n' {
+				i++ // Skip the '\n'
+			}
+			builder.WriteRune('↵') // Replace with ↵
+		} else if input[i] == '\n' {
+			builder.WriteRune('↵') // Replace standalone '\n' with ↵
+		} else {
+			builder.WriteByte(input[i]) // Keep other characters unchanged
+		}
+	}
+
+	return builder.String()
+}
+
+var newlineCharRegex = regexp.MustCompile(`\r|\n`)
 func (obj *MShellString) DebugString() string {
 	// Surround the string with double quotes, keep just the first 15 and last 15 characters
 	if len(obj.Content) > 30 {
-		return "\"" + obj.Content[:15] + "..." + obj.Content[len(obj.Content)-15:] + "\""
+		return "\"" + cleanStringForTerminal(obj.Content[:15])  + "..." + cleanStringForTerminal(obj.Content[len(obj.Content)-15:]) + "\""
 	}
 
-	return "\"" + obj.Content + "\""
+	return "\"" + cleanStringForTerminal(obj.Content) + "\""
 }
 
 func (obj *MShellPath) DebugString() string {
