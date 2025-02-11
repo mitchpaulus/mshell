@@ -873,22 +873,24 @@ return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", indexerTo
 						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'readFile' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
+					var filePath string
 					switch obj1.(type) {
 					case *MShellString:
-						content, err := os.ReadFile(obj1.(*MShellString).Content)
-						if err != nil {
-							return FailWithMessage(fmt.Sprintf("%d:%d: Error reading file: %s\n", t.Line, t.Column, err.Error()))
-						}
-						stack.Push(&MShellString{string(content)})
+						filePath = obj1.(*MShellString).Content
 					case *MShellLiteral:
-						content, err := os.ReadFile(obj1.(*MShellLiteral).LiteralText)
-						if err != nil {
-							return FailWithMessage(fmt.Sprintf("%d:%d: Error reading file: %s\n", t.Line, t.Column, err.Error()))
-						}
-						stack.Push(&MShellString{string(content)})
+						filePath = obj1.(*MShellLiteral).LiteralText
+					case *MShellPath:
+						filePath = obj1.(*MShellPath).Path
 					default:
 						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot read from a %s.\n", t.Line, t.Column, obj1.TypeName()))
 					}
+
+					content, err := os.ReadFile(filePath)
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Error reading file: %s\n", t.Line, t.Column, err.Error()))
+					}
+
+					stack.Push(&MShellString{string(content)})
 				} else if t.Lexeme == "cd" {
 					obj, err := stack.Pop()
 					if err != nil {
