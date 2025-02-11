@@ -523,7 +523,7 @@ func (state *TermState) InteractiveMode() {
 					// Check for known commands. If so, we'll essentially wrap the entire command in a list to execute
 					literalStr := p.curr.Lexeme
 
-					if literalStr == "sudo" || literalStr == "git" || literalStr == "cd" {
+					if literalStr == "sudo" || literalStr == "git" || literalStr == "cd" || literalStr == "nvim" {
 						tokenBufBuilder.Reset()
 						tokenBufBuilder.WriteString("[")
 
