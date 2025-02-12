@@ -1348,6 +1348,47 @@ return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", indexerTo
 					} else if t.Lexeme == "ext" {
 						stack.Push(&MShellString{filepath.Ext(path)})
 					}
+				} else if t.Lexeme == "toPath" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'toPath' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					var path string
+					switch obj1.(type) {
+					case *MShellString:
+						path = obj1.(*MShellString).Content
+					case *MShellLiteral:
+						path = obj1.(*MShellLiteral).LiteralText
+					case *MShellPath:
+						path = obj1.(*MShellPath).Path
+					}
+
+					stack.Push(&MShellPath{path})
+				} else if t.Lexeme == "dateFmt" { // last new function
+					obj1, err := stack.Pop()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'dateFmt' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					obj2, err := stack.Pop()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'dateFmt' operation on a stack with only one item.\n", t.Line, t.Column))
+					}
+
+					// Obj1 should be the format string, obj2 should be the date time object
+					formatString, ok := obj1.(*MShellString)
+					if !ok {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot format a date with a %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					dateTime, ok := obj2.(*MShellDateTime)
+					if !ok {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot format a %s.\n", t.Line, t.Column, obj2.TypeName()))
+					}
+
+					newStr := dateTime.Time.Format(formatString.Content)
+					stack.Push(&MShellString{newStr})
 				} else { // last new function
 					stack.Push(&MShellLiteral{t.Lexeme})
 				}
@@ -1621,6 +1662,16 @@ return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", indexerTo
 						copy(newList.Items, obj2.(*MShellList).Items)
 						copy(newList.Items[len(obj2.(*MShellList).Items):], obj1.(*MShellList).Items)
 						stack.Push(newList)
+					default:
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot add a list to a %s.\n", t.Line, t.Column, obj2.TypeName()))
+					}
+				case *MShellPath:
+					switch obj2.(type) {
+					case *MShellPath:
+						// Do string join, not path join. Concat the strings
+						stack.Push(&MShellPath{obj2.(*MShellPath).Path + obj1.(*MShellPath).Path})
+					default:
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot add a path to a %s.\n", t.Line, t.Column, obj2.TypeName()))
 					}
 				default:
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '+' between a %s and a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))

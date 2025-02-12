@@ -37,6 +37,7 @@ No escaping is done within single quoted strings.
 - `pwd`: Get current working directory `( -- str)`
 - `toFloat`: Convert to float. `(numeric -- float)`
 - `toInt`: Convert to int. `(numeric -- int)`
+- `toPath`: Convert to path. `(str -- path)`
 - `readFile`: Read file into string. `(str -- str)`
 - `readTsvFile`: Read a TSV file into list of list of strings. `(str -- [[str]])`
 - `stdin`: Drop stdin onto the stack `( -- str)`
@@ -89,6 +90,7 @@ No escaping is done within single quoted strings.
 - `day`: Get day from date (1-31) `(date -- int)`
 - `hour`: Get hour from date (0-23) `(date -- int)`
 - `minute`: Get minute from date (0-59) `(date -- int)`
+- `dateFmt`: Format a date using the [golang format string](https://pkg.go.dev/time#Time.Format) `(date str -- str)`
 
 ## Variables
 
