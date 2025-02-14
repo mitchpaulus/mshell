@@ -1,6 +1,6 @@
 ## Data Types
 
-### `str` String
+### `str` Strings
 
 Double quoted strings have the following escape sequences:
 
@@ -11,6 +11,27 @@ Double quoted strings have the following escape sequences:
 - `\\`: Tab
 
 No escaping is done within single quoted strings.
+
+### `bool` Booleans
+
+Booleans are represented by `true` and `false`.
+
+### `quote` Quotations
+
+Quotations are blocks of code that can be executed. They are created by wrapping code in parentheses.
+
+```mshell
+(1 2 +)
+```
+
+### `list` Lists
+
+Lists are created by wrapping elements in square brackets.
+No commas are required between elements.
+
+```mshell
+[1 2 3]
+```
 
 ## Built-ins
 

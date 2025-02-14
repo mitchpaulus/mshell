@@ -1365,7 +1365,7 @@ return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", indexerTo
 					}
 
 					stack.Push(&MShellPath{path})
-				} else if t.Lexeme == "dateFmt" { // last new function
+				} else if t.Lexeme == "dateFmt" {
 					obj1, err := stack.Pop()
 					if err != nil {
 						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'dateFmt' operation on an empty stack.\n", t.Line, t.Column))
@@ -1389,6 +1389,23 @@ return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", indexerTo
 
 					newStr := dateTime.Time.Format(formatString.Content)
 					stack.Push(&MShellString{newStr})
+				} else if t.Lexeme == "!=" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '!=' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					obj2, err := stack.Pop()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '!=' operation on a stack with only one item.\n", t.Line, t.Column))
+					}
+
+					doesEqual, err := obj1.Equals(obj2)
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot compare '!=' between %s and %s: %s\n", t.Line, t.Column, obj1.TypeName(), obj2.TypeName(), err.Error()))
+					}
+
+					stack.Push(&MShellBool{!doesEqual})
 				} else { // last new function
 					stack.Push(&MShellLiteral{t.Lexeme})
 				}
@@ -2076,39 +2093,12 @@ return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", indexerTo
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '=' operation on a stack with only one item.\n", t.Line, t.Column))
 				}
 
-				// Implement for integers, strings, datetimes, and bools
-				switch obj1.(type) {
-				case *MShellInt:
-					switch obj2.(type) {
-					case *MShellInt:
-						stack.Push(&MShellBool{obj2.(*MShellInt).Value == obj1.(*MShellInt).Value})
-					default:
-						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot compare equality from an integer to a %s.\n", t.Line, t.Column, obj2.TypeName()))
-					}
-				case *MShellString:
-					switch obj2.(type) {
-					case *MShellString:
-						stack.Push(&MShellBool{obj2.(*MShellString).Content == obj1.(*MShellString).Content})
-					default:
-						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot compare equality from a string to a %s.\n", t.Line, t.Column, obj2.TypeName()))
-					}
-				case *MShellDateTime:
-					switch obj2.(type) {
-					case *MShellDateTime:
-						stack.Push(&MShellBool{obj2.(*MShellDateTime).Time.Equal(obj1.(*MShellDateTime).Time)})
-					default:
-						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot compare equality from a datetime to a %s.\n", t.Line, t.Column, obj2.TypeName()))
-					}
-				case *MShellBool:
-					switch obj2.(type) {
-					case *MShellBool:
-						stack.Push(&MShellBool{obj2.(*MShellBool).Value == obj1.(*MShellBool).Value})
-					default:
-						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot compare equality from a bool to a %s.\n", t.Line, t.Column, obj2.TypeName()))
-					}
-				default:
-					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot complete %s with a %s to a %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
+				doesEqual, err := obj1.Equals(obj2)
+				if err != nil {
+					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot compare '=' between %s and %s: %s\n", t.Line, t.Column, obj1.TypeName(), obj2.TypeName(), err.Error()))
 				}
+
+				stack.Push(&MShellBool{doesEqual})
 			} else if t.Type == INTERPRET { // Token Type
 				obj, err := stack.Pop()
 				if err != nil {

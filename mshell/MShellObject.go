@@ -45,11 +45,14 @@ type MShellObject interface {
 	ToString() string
 	IndexErrStr() string
 	Concat(other MShellObject) (MShellObject, error)
+	Equals(other MShellObject) (bool, error)
 }
 
 type MShellSimple struct {
 	Token Token
 }
+
+// Date time {{{
 
 type MShellDateTime struct {
 	// TODO: replace with my own simpler int64 based on the Calendrical Calculation book.
@@ -122,6 +125,18 @@ func (obj *MShellDateTime) IndexErrStr() string {
 func (obj *MShellDateTime) Concat(other MShellObject) (MShellObject, error) {
 	return nil, fmt.Errorf("Cannot concatenate a DateTime.\n")
 }
+
+func (obj *MShellDateTime) Equals(other MShellObject) (bool, error) {
+	asDateTime, ok := other.(*MShellDateTime)
+	if !ok {
+		return false, nil
+	}
+
+	return obj.Time.Equal(asDateTime.Time), nil
+}
+
+// }}}
+
 
 type MShellLiteral struct {
 	LiteralText string
@@ -1291,3 +1306,99 @@ func ParseRawPath(inputString string) (string, error) {
 
 	return b.String(), nil
 }
+
+// Equals {{{
+// MShellLiteral struct {
+// MShellBool struct {
+// MShellQuotation struct {
+// MShellList struct {
+// MShellString struct {
+// MShellPath struct {
+// MShellPipe struct {
+// MShellInt struct {
+// MShellFloat struct {
+
+
+func (obj *MShellLiteral) Equals(other MShellObject) (bool, error) {
+	// Define equality for other as string or as literal or path.
+	switch other.(type) {
+	case *MShellLiteral:
+		asLiteral, _ := other.(*MShellLiteral)
+		return obj.LiteralText == asLiteral.LiteralText, nil
+	case *MShellString:
+		asString, _ := other.(*MShellString)
+		return obj.LiteralText == asString.Content, nil
+	case *MShellPath:
+		asPath, _ := other.(*MShellPath)
+		return obj.LiteralText == asPath.Path, nil
+	default:
+		return false, fmt.Errorf("Cannot compare a literal with a %s.\n", other.TypeName())
+	}
+}
+
+func (obj *MShellBool) Equals(other MShellObject) (bool, error) {
+	asBool, ok := other.(*MShellBool)
+	if !ok {
+		return false, fmt.Errorf("Cannot compare a boolean with a %s.\n", other.TypeName())
+	}
+	return obj.Value == asBool.Value, nil
+}
+
+func (obj *MShellQuotation) Equals(other MShellObject) (bool, error) {
+	return false, fmt.Errorf("Equality currently not defined for quotations.\n")
+}
+
+func (obj *MShellList) Equals(other MShellObject) (bool, error) {
+	return false, fmt.Errorf("Equality currently not defined for lists.\n")
+}
+
+func (obj *MShellString) Equals(other MShellObject) (bool, error) {
+	// Define equality for other as string or as literal.
+	switch other.(type) {
+	case *MShellString:
+		asString, _ := other.(*MShellString)
+		return obj.Content == asString.Content, nil
+	case *MShellLiteral:
+		asLiteral, _ := other.(*MShellLiteral)
+		return obj.Content == asLiteral.LiteralText, nil
+	default:
+		return false, fmt.Errorf("Cannot compare a string with a %s.\n", other.TypeName())
+	}
+}
+
+func (obj *MShellPath) Equals(other MShellObject) (bool, error) {
+	// Define equality for other as string or as literal.
+	switch other.(type) {
+	case *MShellPath:
+		asPath, _ := other.(*MShellPath)
+		return obj.Path == asPath.Path, nil
+	case *MShellLiteral:
+		asLiteral, _ := other.(*MShellLiteral)
+		return obj.Path == asLiteral.LiteralText, nil
+	default:
+		return false, fmt.Errorf("Cannot compare a path with a %s.\n", other.TypeName())
+	}
+}
+
+func (obj *MShellPipe) Equals(other MShellObject) (bool, error) {
+	return false, fmt.Errorf("Equality currently not defined for pipes.\n")
+}
+
+func (obj *MShellInt) Equals(other MShellObject) (bool, error) {
+	asInt, ok := other.(*MShellInt)
+	if !ok {
+		return false, fmt.Errorf("Cannot compare an integer with a %s.\n", other.TypeName())
+	}
+	return obj.Value == asInt.Value, nil
+}
+
+func (obj *MShellFloat) Equals(other MShellObject) (bool, error) {
+	asFloat, ok := other.(*MShellFloat)
+	if !ok {
+		return false, fmt.Errorf("Cannot compare a float with a %s.\n", other.TypeName())
+	}
+	return obj.Value == asFloat.Value, nil
+}
+
+
+// }}}

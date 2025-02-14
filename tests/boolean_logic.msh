@@ -1,3 +1,11 @@
+def header (--)
+    "" wl wl "========" wl
+end
+
+def result (--)
+    ("truey") ("falsey") iff wl
+end
+
 true false and ("truey") ("falsey") iff wl
 true true and ("truey") ("falsey") iff wl
 false false and ("truey") ("falsey") iff wl
@@ -14,3 +22,16 @@ false false and not ("truey") ("falsey") iff wl
 true false or not ("truey") ("falsey") iff wl
 true true or not ("truey") ("falsey") iff wl
 false false or not ("truey") ("falsey") iff wl
+
+# Not Equals, TODO: do all combinations
+"Not Equals" header
+"Trues" header
+
+1 2 != result
+"hello" "world" != result
+
+"Falses" header
+1 1 != result
+"hello" hello != result
+`path` path != result
+2025-02-14 2025-02-14 != result
