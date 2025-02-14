@@ -310,7 +310,7 @@ var notAllowedLiteralChars = map[rune]bool{
 	'?': true,
 	'!': true,
 	'@': true,
-	'=': true,
+	// '=': true, Removed because it's often used in CLI options like --option=value
 	'&': true,
 	'|': true,
 	0:  true, // Null, used for 'peek' at end of file.
