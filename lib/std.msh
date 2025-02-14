@@ -84,7 +84,7 @@ def :: (-- [str]) stdin lines end
 def tt (-- [[str]]) ::  ("	" split) map end
 
 def ttFile (str -- [[str]])
-    readFile (tab split) map
+    readFile lines (tab split) map
 end
 
 # wt = Whitespace separated Table (-- [[str*]*])
