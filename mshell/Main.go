@@ -141,8 +141,8 @@ func main() {
 			stack : make(MShellStack, 0),
 
 			context : ExecuteContext{
-				StandardInput:  os.Stdin,
-				StandardOutput: os.Stdout,
+				StandardInput:  nil, // These should be nil as that represents using a "default", not os.Stdin/os.Stdout
+				StandardOutput: nil,
 				Variables:      map[string]MShellObject{},
 			},
 
@@ -208,8 +208,8 @@ func main() {
 	var stack MShellStack
 	stack = []MShellObject{}
 	context := ExecuteContext{
-		StandardInput:  os.Stdin,
-		StandardOutput: os.Stdout,
+		StandardInput:  nil,
+		StandardOutput: nil,
 		Variables:      map[string]MShellObject{},
 	}
 

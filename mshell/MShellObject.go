@@ -246,6 +246,7 @@ type MShellList struct {
 	StandardErrorFile     string
 	// This sets how stdout is handled, whether it's broken up into lines, stripped of trailing newline, or left as is
 	StdoutBehavior StdoutBehavior
+	RunInBackground bool
 }
 
 func NewList(initLength int) *MShellList {
@@ -261,6 +262,7 @@ func NewList(initLength int) *MShellList {
 		StandardOutputFile:    "",
 		StandardErrorFile:     "",
 		StdoutBehavior:        STDOUT_NONE,
+		RunInBackground:       false,
 	}
 }
 

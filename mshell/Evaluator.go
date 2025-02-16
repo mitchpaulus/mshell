@@ -2409,6 +2409,19 @@ return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", indexerTo
 				}
 
 				stack.Push(parsedString)
+			} else if t.Type == AMPERSAND { // Token Type
+				obj, err := stack.Pop()
+				if err != nil {
+					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot get the address of an empty stack.\n", t.Line, t.Column))
+				}
+				// Obj should be a list for now.
+				list, ok := obj.(*MShellList)
+				if !ok {
+					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot execute '&' on a %s.\n", t.Line, t.Column, obj.TypeName()))
+				}
+
+				list.RunInBackground = true
+				stack.Push(list)
 			} else {
 				return FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Type))
 			}
@@ -2703,8 +2716,12 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 	} else if context.StandardOutput != nil {
 		cmd.Stdout = context.StandardOutput
 	} else {
-		// Default to stdout of this process itself
-		cmd.Stdout = os.Stdout
+		if list.RunInBackground {
+			cmd.Stdout = nil
+		} else {
+			// Default to stdout of this process itself
+			cmd.Stdout = os.Stdout
+		}
 	}
 
 	if list.StdinBehavior != STDIN_NONE {
@@ -2744,25 +2761,44 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 		}
 		cmd.Stderr = file
 		defer file.Close()
-	} else {
-		cmd.Stderr = os.Stderr
+	} else { // Haven't implemented standard error yet on context
+		if list.RunInBackground {
+			// Redirect stderr to /dev/null
+			cmd.Stderr = nil
+		} else {
+			// Default to stderr of this process itself
+			cmd.Stderr = os.Stderr
+		}
 	}
 
 	// fmt.Fprintf(os.Stderr, "Running command: %s\n", cmd.String())
-	err := cmd.Run() // Manually deal with the exit code upstream
-	// fmt.Fprintf(os.Stderr, "Command finished\n")
+	var startErr error
 	var exitCode int
-	if err != nil {
-		if _, ok := err.(*exec.ExitError); !ok {
-			fmt.Fprintf(os.Stderr, "Error running command: %s\n", err.Error())
+
+	if list.RunInBackground {
+		// Print out current stdout and stderr
+		startErr = cmd.Start()
+
+		if startErr != nil {
+			fmt.Fprintf(os.Stderr, "Error starting command: %s\n", startErr.Error())
 			exitCode = 1
-		} else {
-			// Command exited with non-zero exit code
-			exitCode = err.(*exec.ExitError).ExitCode()
 		}
+		exitCode = 0 // TODO: What to set here?
 	} else {
-		exitCode = cmd.ProcessState.ExitCode()
+		startErr := cmd.Run() // Manually deal with the exit code upstream
+		if startErr != nil {
+			if _, ok := startErr.(*exec.ExitError); !ok {
+				fmt.Fprintf(os.Stderr, "Error running command: %s\n", startErr.Error())
+				exitCode = 1
+			} else {
+				// Command exited with non-zero exit code
+				exitCode = startErr.(*exec.ExitError).ExitCode()
+			}
+		} else {
+			exitCode = cmd.ProcessState.ExitCode()
+		}
 	}
+	// fmt.Fprintf(os.Stderr, "Command finished\n")
 
 	// fmt.Fprintf(os.Stderr, "Exit code: %d\n", exitCode)
 
