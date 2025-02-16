@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 	"math"
+	"slices"
 )
 
 type MShellStack []MShellObject
@@ -337,6 +338,14 @@ return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", indexerTo
 					fmt.Fprintf(os.Stderr, "Available definitions:\n")
 					for _, definition := range definitions {
 						fmt.Fprintf(os.Stderr, "%s\n", definition.Name)
+					}
+				} else if t.Lexeme == ".env" {
+					// Print a list of all environment variables, sorted by key
+					envVars := os.Environ()
+					slices.Sort(envVars)
+
+					for _, envVar := range envVars {
+						fmt.Fprintf(os.Stderr, "%s\n", envVar)
 					}
 				} else if t.Lexeme == "dup" {
 					top, err := stack.Peek()
