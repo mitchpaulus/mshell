@@ -1911,31 +1911,28 @@ return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", indexerTo
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect stderr on a stack with only one item.\n", t.Line, t.Column))
 				}
 
+				var redirectFile string
+
 				switch obj1.(type) {
 				case *MShellString:
-					switch obj2.(type) {
-					case *MShellList:
-						obj2.(*MShellList).StandardErrorFile = obj1.(*MShellString).Content
-						stack.Push(obj2)
-					case *MShellQuotation:
-						obj2.(*MShellQuotation).StandardErrorFile = obj1.(*MShellString).Content
-						stack.Push(obj2)
-					default:
-						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect stderr to a %s.\n", t.Line, t.Column, obj2.TypeName()))
-					}
+					redirectFile = obj1.(*MShellString).Content
 				case *MShellLiteral:
-					switch obj2.(type) {
-					case *MShellList:
-						obj2.(*MShellList).StandardErrorFile = obj1.(*MShellLiteral).LiteralText
-						stack.Push(obj2)
-					case *MShellQuotation:
-						obj2.(*MShellQuotation).StandardErrorFile = obj1.(*MShellLiteral).LiteralText
-						stack.Push(obj2)
-					default:
-						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect stderr to a %s.\n", t.Line, t.Column, obj2.TypeName()))
-					}
+					redirectFile = obj1.(*MShellLiteral).LiteralText
+				case *MShellPath:
+					redirectFile = obj1.(*MShellPath).Path
 				default:
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect stderr to a %s.\n", t.Line, t.Column, obj1.TypeName()))
+				}
+
+				switch obj2.(type) {
+				case *MShellList:
+					obj2.(*MShellList).StandardErrorFile = redirectFile
+					stack.Push(obj2)
+				case *MShellQuotation:
+					obj2.(*MShellQuotation).StandardErrorFile = redirectFile
+					stack.Push(obj2)
+				default:
+					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect stderr to a %s.\n", t.Line, t.Column, obj2.TypeName()))
 				}
 			} else if t.Type == ENVSTORE { // Token Type
 				obj, err := stack.Pop()
