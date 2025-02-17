@@ -440,7 +440,13 @@ return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", indexerTo
 				} else if t.Lexeme == "stdin" {
 					// Dump all of current stdin onto the stack as a string
 					var buffer bytes.Buffer
-					_, err := buffer.ReadFrom(context.StandardInput)
+					var reader io.Reader
+					if context.StandardInput == nil {
+						reader = os.Stdin
+					} else {
+						reader = context.StandardInput
+					}
+					_, err := buffer.ReadFrom(reader)
 					if err != nil {
 						return FailWithMessage(fmt.Sprintf("%d:%d: Error reading from stdin: %s\n", t.Line, t.Column, err.Error()))
 					}
