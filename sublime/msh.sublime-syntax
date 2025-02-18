@@ -1,0 +1,29 @@
+%YAML 1.2
+---
+name: msh
+file_extensions: [msh, mshell]
+scope: source.msh
+
+contexts:
+  main:
+    - match: '"'
+      push: double_quoted_string
+
+    - match: "'"
+      push: single_quoted_string
+
+    - match: '#.*$'
+      scope: comment.line.msh
+
+    - match: '\b(def|end)\b'
+      scope: keyword.control.msh
+
+  double_quoted_string:
+    - meta_scope: string.quoted.double.msh
+    - match: '"'
+      pop: true
+
+  single_quoted_string:
+    - meta_scope: string.quoted.single.msh
+    - match: "'"
+      pop: true
