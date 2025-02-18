@@ -1,0 +1,33 @@
+name: release
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+
+    - name: Build go with all different os and arch
+      run: cd mshell && go build -o mshell
+
+    - name: Set Go PATH, MSHSTDLIB
+      run: |
+        realpath ./mshell >> "$GITHUB_PATH"
+        printf "MSHSTDLIB=%s\n" "$(realpath ./lib/std.msh)" >> "$GITHUB_ENV"
+
+    - name: Build mshells for all different os and arch
+      run: cd mshell && mshell build_for_release.msh
+
+    - name: GH Release
+      uses: softprops/action-gh-release@v0.1.15
+      with:
+        fail_on_unmatched_files: true
+        files: |
+          mshell/bin/*tar.gz
