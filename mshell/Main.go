@@ -342,6 +342,8 @@ var tokenBufBuilder strings.Builder
 var aliases map[string]string
 var history []string
 
+var knownCommands = map[string]struct{}{ "sudo": {}, "git": {}, "cd": {}, "nvim": {}, "en": {} }
+
 func (state *TermState) InteractiveMode() {
 	// FUTURE: Maybe Check for CSI u?
 
@@ -523,7 +525,7 @@ func (state *TermState) InteractiveMode() {
 					// Check for known commands. If so, we'll essentially wrap the entire command in a list to execute
 					literalStr := p.curr.Lexeme
 
-					if literalStr == "sudo" || literalStr == "git" || literalStr == "cd" || literalStr == "nvim" {
+					if _, ok := knownCommands[literalStr]; ok {
 						tokenBufBuilder.Reset()
 						tokenBufBuilder.WriteString("[")
 
@@ -886,7 +888,7 @@ func (state *TermState) ExecuteCurrentCommand() {
 		// Check for known commands. If so, we'll essentially wrap the entire command in a list to execute
 		literalStr := p.curr.Lexeme
 
-		if literalStr == "sudo" || literalStr == "git" || literalStr == "cd" {
+		if _, ok := knownCommands[literalStr]; ok {
 			tokenBufBuilder.Reset()
 			tokenBufBuilder.WriteString("[")
 
