@@ -739,6 +739,10 @@ func (state *TermState) InteractiveMode() {
 					}
 
 					fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index)
+				} else if c == 111 { // Alt-O
+					// Quit
+					fmt.Fprintf(os.Stdout, "\r\n")
+					os.Exit(0)
 				} else {
 					fmt.Fprintf(state.f, "Unknown sequence: %d %d %d\n", state.readBuffer[0], state.readBuffer[1], state.readBuffer[2])
 				}
