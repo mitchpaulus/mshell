@@ -35,3 +35,10 @@ false false or not ("truey") ("falsey") iff wl
 "hello" hello != result
 `path` path != result
 2025-02-14 2025-02-14 != result
+
+# Test short-circuit style and/ors
+"Short-circuiting" header
+true ("Should print" wl false) and result
+false ("Should not print" wl true) and result
+true ("Should not print" wl true) or result
+false ("Should print" wl false) or result

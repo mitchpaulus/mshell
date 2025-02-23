@@ -1753,6 +1753,64 @@ return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", indexerTo
 					default:
 						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s and %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
 					}
+				case *MShellQuotation:
+					if t.Type == AND {
+						if obj2.(*MShellBool).Value {
+							qContext, err := obj1.(*MShellQuotation).BuildExecutionContext(&context)
+							defer qContext.Close()
+							if err != nil {
+								return FailWithMessage(err.Error())
+							}
+
+							result := state.Evaluate(obj1.(*MShellQuotation).Tokens, stack, (*qContext), definitions, callStack, CallStackItem{obj1.(*MShellQuotation), t.Lexeme, CALLSTACKQUOTE})
+							// Pop the top off the stack
+							secondObj, err := stack.Pop()
+							if err != nil {
+								return FailWithMessage(fmt.Sprintf("%d:%d: After executing the quotation in %s, the stack was empty.\n", t.Line, t.Column, t.Lexeme))
+							}
+
+							if !result.Success || result.BreakNum != -1 || result.ExitCalled {
+								return result
+							}
+
+							seconObjBool, ok := secondObj.(*MShellBool)
+							if !ok {
+								return FailWithMessage(fmt.Sprintf("%d:%d: Expected a boolean after executing the quotation in %s, received a %s.\n", t.Line, t.Column, t.Lexeme, secondObj.TypeName()))
+							}
+
+							stack.Push(&MShellBool{seconObjBool.Value})
+						} else {
+							stack.Push(&MShellBool{false})
+						}
+					} else {
+						if obj2.(*MShellBool).Value {
+							stack.Push(&MShellBool{true})
+						} else {
+							qContext, err := obj1.(*MShellQuotation).BuildExecutionContext(&context)
+							defer qContext.Close()
+							if err != nil {
+								return FailWithMessage(err.Error())
+							}
+
+							result := state.Evaluate(obj1.(*MShellQuotation).Tokens, stack, (*qContext), definitions, callStack, CallStackItem{obj1.(*MShellQuotation), t.Lexeme, CALLSTACKQUOTE})
+							// Pop the top off the stack
+							secondObj, err := stack.Pop()
+							if err != nil {
+								return FailWithMessage(fmt.Sprintf("%d:%d: After executing the quotation in %s, the stack was empty.\n", t.Line, t.Column, t.Lexeme))
+							}
+
+							if !result.Success || result.BreakNum != -1 || result.ExitCalled {
+								return result
+							}
+
+							seconObjBool, ok := secondObj.(*MShellBool)
+							if !ok {
+								return FailWithMessage(fmt.Sprintf("%d:%d: Expected a boolean after executing the quotation in %s, received a %s.\n", t.Line, t.Column, t.Lexeme, secondObj.TypeName()))
+							}
+
+							stack.Push(&MShellBool{seconObjBool.Value})
+						}
+					}
 				default:
 					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s and %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
 				}

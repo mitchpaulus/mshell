@@ -28,3 +28,12 @@ falsey
 falsey
 falsey
 falsey
+
+Short-circuiting
+========
+Should print
+falsey
+falsey
+truey
+Should print
+falsey
