@@ -105,6 +105,7 @@ No commas are required between elements.
 
 ## Date Functions
 
+- `toDt`: Convert to date `(str -- date)`
 - `date`: Push current date/time onto the stack `( -- date)`
 - `year`: Get year from date `(date -- int)`
 - `month`: Get month from date (1-12) `(date -- int)`

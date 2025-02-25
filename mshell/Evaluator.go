@@ -1115,7 +1115,7 @@ return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", indexerTo
 					// TODO: Don't make a new lexer object each time.
 					parsedTime, err := ParseDateTime(dateStr)
 					if err != nil {
-						return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing date time: %s\n", t.Line, t.Column, err.Error()))
+						return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing date time '%s': %s\n", t.Line, t.Column, dateStr, err.Error()))
 					}
 
 					stack.Push(&MShellDateTime{Time: parsedTime, Token: t})

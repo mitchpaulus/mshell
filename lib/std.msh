@@ -133,6 +133,8 @@ def tjoin ([str] -- str)  tab join end
 def cjoin ([str] -- str) "," join end
 
 def uw ([str] --) unlines w end
+# tuw = tab unlines write
+def tuw ([[str]] -- ) (tjoin) map uw end
 
 def readTsvFile (str -- [[str]])
     readFile lines (tsplit) map
