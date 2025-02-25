@@ -5,3 +5,9 @@ false ("true branch")   (
 false ("first else if") (
 false ("second else if")
       ("final else") iff) iff) iff wl
+
+# Test true only branch logic
+true  ("Got true\n" w) iff
+false ("Should not get true\n" w) iff
+0 ("Got true\n" w) iff
+123 ("Should not get true\n" w) iff

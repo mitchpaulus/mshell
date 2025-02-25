@@ -1504,41 +1504,54 @@ return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", indexerTo
 			} else if t.Type == SINGLEQUOTESTRING { // Token Type
 				stack.Push(&MShellString{t.Lexeme[1 : len(t.Lexeme)-1]})
 			} else if t.Type == IFF {
-				falseQuoteObj, err := stack.Pop()
+				iff_name := "iff"
+				firstObj, err := stack.Pop()
 				if err != nil {
-					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do an 'iff' on a stack with only two items.\n", t.Line, t.Column))
+					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do an '%s' on a stack with only two items.\n", t.Line, t.Column, iff_name))
 				}
 
-				trueQuoteObj, err := stack.Pop()
-				if err != nil {
-					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do an 'iff' on a stack with only one item.\n", t.Line, t.Column))
-				}
-
-				boolObj, err := stack.Pop()
-				if err != nil {
-					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do an 'iff' on an empty stack.\n", t.Line, t.Column))
-				}
-
-
-				trueQuote, ok := trueQuoteObj.(*MShellQuotation)
+				// Check that first obj is a quotation
+				firstQuote, ok := firstObj.(*MShellQuotation)
 				if !ok {
-					return FailWithMessage(fmt.Sprintf("%d:%d: Expected a quotation for iff, received a %s.\n", t.Line, t.Column, trueQuoteObj.TypeName()))
+					return FailWithMessage(fmt.Sprintf("%d:%d: Expected a quotation on top of stack for %s, received a %s.\n", t.Line, t.Column, iff_name, firstObj.TypeName()))
 				}
 
-				falseQuote, ok := falseQuoteObj.(*MShellQuotation)
-				if !ok {
-					return FailWithMessage(fmt.Sprintf("%d:%d: Expected a quotation for iff, received a %s.\n", t.Line, t.Column, falseQuoteObj.TypeName()))
+				secondObj, err := stack.Pop()
+				if err != nil {
+					return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do an '%s' on a stack with only one item.\n", t.Line, t.Column, iff_name))
 				}
 
+				var trueQuote *MShellQuotation
+				var falseQuote *MShellQuotation
 				var condition bool
-				switch boolObj.(type) {
-				case *MShellInt:
-					intVal := boolObj.(*MShellInt)
-					condition = intVal.Value == 0
+
+				// Check that second obj is a quotation, boolean, or integer
+				switch secondObj.(type) {
+				case *MShellQuotation:
+					falseQuote = firstQuote
+
+					trueQuote = secondObj.(*MShellQuotation)
+
+					// Read the next object, should be bool or integer
+					thrirdObj, err := stack.Pop()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do an '%s' on a stack with only two quotes.\n", t.Line, t.Column, iff_name))
+					}
+
+					switch thrirdObj.(type) {
+					case *MShellBool:
+						condition = thrirdObj.(*MShellBool).Value
+					case *MShellInt:
+						condition = thrirdObj.(*MShellInt).Value == 0
+					}
 				case *MShellBool:
-					condition = boolObj.(*MShellBool).Value
+					trueQuote = firstQuote
+					condition = secondObj.(*MShellBool).Value
+				case *MShellInt:
+					trueQuote = firstQuote
+					condition = secondObj.(*MShellInt).Value == 0
 				default:
-					return FailWithMessage(fmt.Sprintf("%d:%d: Expected an integer or boolean for iff, received a %s.\n", t.Line, t.Column, boolObj.TypeName()))
+					return FailWithMessage(fmt.Sprintf("%d:%d: Expected a quotation or boolean for %s, received a %s.\n", t.Line, t.Column, iff_name, secondObj.TypeName()))
 				}
 
 				var quoteToExecute *MShellQuotation
@@ -1548,16 +1561,19 @@ return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", indexerTo
 					quoteToExecute = falseQuote
 				}
 
-				qContext, err := quoteToExecute.BuildExecutionContext(&context)
-				defer qContext.Close()
-				if err != nil {
-					return FailWithMessage(err.Error())
-				}
+				// False quote could be nil in the true only style of iff
+				if quoteToExecute != nil {
+					qContext, err := quoteToExecute.BuildExecutionContext(&context)
+					defer qContext.Close()
+					if err != nil {
+						return FailWithMessage(err.Error())
+					}
 
-				result := state.Evaluate(quoteToExecute.Tokens, stack, (*qContext), definitions, callStack, CallStackItem{trueQuote, "quote", CALLSTACKQUOTE})
+					result := state.Evaluate(quoteToExecute.Tokens, stack, (*qContext), definitions, callStack, CallStackItem{trueQuote, "quote", CALLSTACKQUOTE})
 
-				if !result.Success || result.BreakNum != -1 || result.ExitCalled  {
-					return result
+					if !result.Success || result.BreakNum != -1 || result.ExitCalled  {
+						return result
+					}
 				}
 
 			} else if t.Type == IF { // Token Type

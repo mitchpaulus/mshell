@@ -1,1 +1,1 @@
-1:5: Cannot do an 'iff' on a stack with only one item.
+1:5: Expected a quotation on top of stack for iff, received a Integer.
