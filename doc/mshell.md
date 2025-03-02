@@ -67,6 +67,8 @@ No commas are required between elements.
 - `wt`: "Whitespace table", puts stdin split by lines and whitespace on the stack. `( -- [[str]])`
 - `tt`: "Tab table", puts stdin split by lines and tabs on the stack. `( -- [[str]])`
 - `ttFile`: "Tab table" from file, puts content from file name split by lines and tabs on the stack. `(str -- [[str]])`
+- `isDir`: Check if path is a directory. `(path -- bool)`
+- `isFile`: Check if path is a file. `(path -- bool)`
 
 ## Math Functions
 

@@ -14,6 +14,7 @@ import (
 	"time"
 	"math"
 	"slices"
+	"errors"
 )
 
 type MShellStack []MShellObject
@@ -1150,6 +1151,40 @@ return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", indexerTo
 						}
 					}
 					stack.Push(newList)
+				} else if t.Lexeme == "isDir" || t.Lexeme == "isFile" {
+					obj, err := stack.Pop()
+					if err != nil {
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'isDir' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					var path string
+					switch obj.(type) {
+					case *MShellString:
+						path = obj.(*MShellString).Content
+					case *MShellLiteral:
+						path = obj.(*MShellLiteral).LiteralText
+					case *MShellPath:
+						path = obj.(*MShellPath).Path
+					default:
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot check if a %s is a directory.\n", t.Line, t.Column, obj.TypeName()))
+					}
+
+					fileInfo, err := os.Stat(path)
+					if err != nil {
+						if errors.Is(err, os.ErrNotExist) {
+							stack.Push(&MShellBool{false})
+						} else {
+							return FailWithMessage(fmt.Sprintf("%d:%d: Error checking if %s is a directory: %s\n", t.Line, t.Column, path, err.Error()))
+						}
+					} else {
+						if t.Lexeme == "isDir" {
+							stack.Push(&MShellBool{fileInfo.IsDir()})
+						} else if t.Lexeme == "isFile" {
+							stack.Push(&MShellBool{!fileInfo.IsDir()})
+						} else {
+							return FailWithMessage(fmt.Sprintf("%d:%d: Unknown operation: %s\n", t.Line, t.Column, t.Lexeme))
+						}
+					}
 				} else if t.Lexeme == "mkdir" || t.Lexeme == "mkdirp" {
 					obj1, err := stack.Pop()
 					if err != nil {
