@@ -34,11 +34,11 @@ wt :-1: :-1: wl
 
 # 5. Print every input line with more than four fields
 # NF > 4
-:: (wsplit len 4 >) filter (wl) each
+:: (wsplit len 4 >) filter uw
 
 # 6. Print every input line in which the last field is more than 4
 # $NF > 4
-:: (wsplit :-1: toFloat 4 >) filter (wl) each
+:: (wsplit :-1: toFloat 4 >) filter uw
 
 # 7. Print the total number of fields in all input lines
 #     { nf = nf + NF }
@@ -64,11 +64,11 @@ wt :-1: :-1: wl
 
 # 10. Print every line that has at least one field
 # NF > 0
-:: (wsplit len 0 >) filter (wl) each
+:: (wsplit len 0 >) filter uw
 
 # 11. Print every line longer than 80 characters
 # length($0) > 80
-:: (len 80 >) filter (wl) each
+:: (len 80 >) filter uw
 
 # 12. Print the number of fields in every line followed by the line itself
 # { print NF, $0 }
