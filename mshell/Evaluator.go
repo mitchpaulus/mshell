@@ -1060,7 +1060,7 @@ return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", indexerTo
 
 					switch obj.(type) {
 					case *MShellString:
-						floatVal, err := strconv.ParseFloat(obj.(*MShellString).Content, 64)
+						floatVal, err := strconv.ParseFloat(strings.TrimSpace(obj.(*MShellString).Content), 64)
 						if err != nil {
 							return FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert %s to float: %s\n", t.Line, t.Column, obj.(*MShellString).Content, err.Error()))
 						}
@@ -1081,7 +1081,7 @@ return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", indexerTo
 
 					switch obj.(type) {
 					case *MShellString:
-						intVal, err := strconv.Atoi(obj.(*MShellString).Content)
+						intVal, err := strconv.Atoi(strings.TrimSpace(obj.(*MShellString).Content))
 						if err != nil {
 							return FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert %s to int %s\n", t.Line, t.Column, obj.(*MShellString).Content, err.Error()))
 						}
@@ -1092,7 +1092,7 @@ return FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", indexerTo
 					case *MShellFloat:
 						stack.Push(&MShellInt{int(obj.(*MShellFloat).Value)})
 					default:
-						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert a %s to a float.\n", t.Line, t.Column, obj.TypeName()))
+						return FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert a %s to an int.\n", t.Line, t.Column, obj.TypeName()))
 					}
 				} else if t.Lexeme == "toDt" {
 					dateStrObj, err := stack.Pop()
