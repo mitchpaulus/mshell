@@ -45,10 +45,10 @@ No commas are required between elements.
 - `pick`: Pick, copy nth element to top, `(a b c int pick` -- `a b c [a | b | c])`
 - `rot`: Rotate the top three items, `( a b c -- b c a )`
 - `nip`: Remove second item, `( a b -- b )`
-- `w`: Write (str -- )
-- `wl`: Write line (str -- )
-- `we`: Write error (str -- )
-- `wle`: Write error line (str -- )
+- `w`: Write to stdout (str -- )
+- `wl`: Write line to stdout (str -- )
+- `we`: Write error to stderr (str -- )
+- `wle`: Write error line stderr (str -- )
 - `len`: Length of string/list `([a] -- int | str -- int)`
 - `args`: List of string arguments `( -- [str])`
 - `nth`: Nth element of list (0-based) `([a] int -- a)`
@@ -107,14 +107,15 @@ No commas are required between elements.
 
 ## Date Functions
 
-- `toDt`: Convert to date `(str -- date)`
+- `toDt`: Convert to date/time `(str -- date)`
 - `date`: Push current date/time onto the stack `( -- date)`
 - `year`: Get year from date `(date -- int)`
 - `month`: Get month from date (1-12) `(date -- int)`
 - `day`: Get day from date (1-31) `(date -- int)`
 - `hour`: Get hour from date (0-23) `(date -- int)`
 - `minute`: Get minute from date (0-59) `(date -- int)`
-- `dateFmt`: Format a date using the [golang format string](https://pkg.go.dev/time#Time.Format) `(date str -- str)`
+- `dateFmt`: Format a date using the [golang format string](https://pkg.go.dev/time#Layout) `(date str -- str)`. Jan 2, 2006 at 3:04pm (MST) is the reference time.
+- `isoDateFmt`: Format a date using the ISO 8601 format YYYY-MM-DD `(date -- str)`
 
 ## Variables
 

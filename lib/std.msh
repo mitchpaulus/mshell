@@ -209,3 +209,7 @@ end
 def all ([T] (T -- bool) -- bool)
     quote! (@quote x not) any not
 end
+
+def isoDateFmt (date -- str)
+    "2006-01-02" dateFmt
+end
