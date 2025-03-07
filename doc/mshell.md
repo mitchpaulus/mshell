@@ -123,6 +123,11 @@ No commas are required between elements.
 - `basename`: Get base name from path `(path -- path)`
 - `ext`: Get extension from path `(path -- path)`
 
+## Shell Utilities
+
+- `mkdir`: Make directory `(str -- )`
+- `mkdirp`: Make directory and required parents `(str -- )`
+
 ## Variables
 
 ```mshell
