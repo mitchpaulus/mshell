@@ -117,6 +117,12 @@ No commas are required between elements.
 - `dateFmt`: Format a date using the [golang format string](https://pkg.go.dev/time#Layout) `(date str -- str)`. Jan 2, 2006 at 3:04pm (MST) is the reference time.
 - `isoDateFmt`: Format a date using the ISO 8601 format YYYY-MM-DD `(date -- str)`
 
+## Paths
+
+- `dirname`: Get directory name from path `(path -- path)`
+- `basename`: Get base name from path `(path -- path)`
+- `ext`: Get extension from path `(path -- path)`
+
 ## Variables
 
 ```mshell
