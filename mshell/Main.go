@@ -129,6 +129,9 @@ func main() {
 		}
 		defer f.Close()
 
+
+		callStack := make(CallStack, 0, 10)
+
 		termState := TermState{
 			numRows:        numRows,
 			numCols:        numCols,
@@ -146,12 +149,13 @@ func main() {
 				Variables:      map[string]MShellObject{},
 			},
 
-			callStack : make(CallStack, 10),
+			callStack : callStack,
 			f: f,
 			evalState : EvalState{
 				PositionalArgs: make([]string, 0),
 				LoopDepth:      0,
 				StopOnError:	false,
+				CallStack: callStack,
 			},
 			initCallStackItem : CallStackItem{
 				MShellParseItem: nil,
@@ -200,9 +204,13 @@ func main() {
 		return
 	}
 
+	var callStack CallStack
+	callStack = make([]CallStackItem, 0, 10)
+
 	state := EvalState{
 		PositionalArgs: positionalArgs,
 		LoopDepth:      0,
+		CallStack: callStack,
 	}
 
 	var stack MShellStack
@@ -215,8 +223,6 @@ func main() {
 
 	var allDefinitions []MShellDefinition
 
-	var callStack CallStack
-	callStack = make([]CallStackItem, 10)
 
 	// Check for environment variable MSHSTDLIB and load that file. Read as UTF-8
 	stdlibPath, stdlibSet := os.LookupEnv("MSHSTDLIB")
@@ -246,12 +252,12 @@ func main() {
 
 			if len(stdlibFile.Items) > 0 {
 				callStackItem := CallStackItem{
-					MShellParseItem: stdlibFile.Items[0],
+					MShellParseItem: nil,
 					Name:  stdlibPath,
 					CallStackType: CALLSTACKFILE,
 				}
 
-				result := state.Evaluate(stdlibFile.Items, &stack, context, allDefinitions, callStack, callStackItem)
+				result := state.Evaluate(stdlibFile.Items, &stack, context, allDefinitions, callStackItem)
 				if !result.Success {
 					fmt.Fprintf(os.Stderr, "Error evaluating MSHSTDLIB file %s.\n", stdlibPath)
 					os.Exit(1)
@@ -293,12 +299,12 @@ func main() {
 	}
 
 	callStackItem := CallStackItem{
-		MShellParseItem: file.Items[0],
+		MShellParseItem: nil,
 		Name:  "main",
 		CallStackType: CALLSTACKFILE,
 	}
 
-	result := state.Evaluate(file.Items, &stack, context, allDefinitions, callStack, callStackItem)
+	result := state.Evaluate(file.Items, &stack, context, allDefinitions, callStackItem)
 
 	if !result.Success {
 		if result.ExitCode != 0 {
@@ -378,7 +384,7 @@ func (state *TermState) InteractiveMode() {
 	state.l = NewLexer("")
 	state.p = &MShellParser{lexer: state.l}
 
-	stdLibDefs, err := stdLibDefinitions(state.stack, state.context, state.evalState, state.callStack)
+	stdLibDefs, err := stdLibDefinitions(state.stack, state.context, state.evalState)
 	if err != nil {
 		term.Restore(0, oldState)
 		fmt.Fprintf(os.Stderr, "Error loading standard library: %s\n", err)
@@ -569,7 +575,7 @@ func (state *TermState) InteractiveMode() {
 
 				if len(parsed.Items) > 0 {
 					state.initCallStackItem.MShellParseItem = parsed.Items[0]
-					result := state.evalState.Evaluate(parsed.Items, &state.stack, state.context, stdLibDefs, state.callStack, state.initCallStackItem)
+					result := state.evalState.Evaluate(parsed.Items, &state.stack, state.context, stdLibDefs, state.initCallStackItem)
 
 					if result.ExitCalled {
 						// Reset terminal to original state
@@ -932,7 +938,7 @@ func (state *TermState) ExecuteCurrentCommand() {
 
 	if len(parsed.Items) > 0 {
 		state.initCallStackItem.MShellParseItem = parsed.Items[0]
-		result := state.evalState.Evaluate(parsed.Items, &state.stack, state.context, state.stdLibDefs, state.callStack, state.initCallStackItem)
+		result := state.evalState.Evaluate(parsed.Items, &state.stack, state.context, state.stdLibDefs, state.initCallStackItem)
 
 		if result.ExitCalled {
 			// Reset terminal to original state
@@ -1082,7 +1088,7 @@ func getCurrentPos() (row int, col int, err error, extraBytes []byte) {
 	return row, col, nil, readBuffer[i:]
 }
 
-func stdLibDefinitions(stack MShellStack, context ExecuteContext, state EvalState, callStack CallStack) ([]MShellDefinition, error) {
+func stdLibDefinitions(stack MShellStack, context ExecuteContext, state EvalState) ([]MShellDefinition, error) {
 	// Check for environment variable MSHSTDLIB and load that file. Read as UTF-8
 	stdlibPath, stdlibSet := os.LookupEnv("MSHSTDLIB")
 	definitions := make([]MShellDefinition, 0)
@@ -1121,7 +1127,7 @@ func stdLibDefinitions(stack MShellStack, context ExecuteContext, state EvalStat
 				}
 
 				// allDefinitions = append(allDefinitions, stdlibFile.Definitions...)
-				result := state.Evaluate(stdlibFile.Items, &stack, context, stdlibFile.Definitions, callStack, callStackItem)
+				result := state.Evaluate(stdlibFile.Items, &stack, context, stdlibFile.Definitions, callStackItem)
 
 				if !result.Success {
 					fmt.Fprintf(os.Stderr, "Error evaluating MSHSTDLIB file %s.\n", rcPath)

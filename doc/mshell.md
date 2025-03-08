@@ -200,3 +200,4 @@ The current object types supported by `mshell` are:
 5. String
 6. Pipe
 7. Integer
+8. Path

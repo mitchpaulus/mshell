@@ -40,8 +40,9 @@ else
             printf "%s passed\n" "$1"
         else
             printf "%s FAILED\n" "$1"
-            printf "==================\n"
+            printf "\n"
             printf "%s\n" "$diff_output"
+            printf "\n"
             exit 1
         fi
     fi
