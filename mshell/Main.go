@@ -115,8 +115,8 @@ func main() {
 	// The Windows fd is not 0. Seen stuff like 124.
 	fd := int(os.Stdout.Fd())
 
-	isTerminal := term.IsTerminal(fd)
-	fmt.Fprintf(os.Stdout, "Is terminal: %t %d\n", isTerminal, fd)
+	// isTerminal := term.IsTerminal(fd)
+	// fmt.Fprintf(os.Stdout, "Is terminal: %t %d\n", isTerminal, fd)
 
 	if len(input) == 0 && term.IsTerminal(fd) {
 		fmt.Fprintf(os.Stdout, "Got here\n")
