@@ -112,14 +112,23 @@ func main() {
 		}
 	}
 
-	if len(input) == 0 && term.IsTerminal(0) {
-		numRows, numCols, err := term.GetSize(0)
+	// The Windows fd is not 0. Seen stuff like 124.
+	fd := int(os.Stdout.Fd())
+
+	isTerminal := term.IsTerminal(fd)
+	fmt.Fprintf(os.Stdout, "Is terminal: %t %d\n", isTerminal, fd)
+
+	if len(input) == 0 && term.IsTerminal(fd) {
+		fmt.Fprintf(os.Stdout, "Got here\n")
+		numRows, numCols, err := term.GetSize(fd)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error getting terminal size: %s\n", err)
 			os.Exit(1)
 		}
 
 		// For debugging, write number of bytes read and bytes to /tmp/mshell.log
+		// If on Windows
+
 		// Open file for writing
 		f, err := os.OpenFile("/tmp/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		if err != nil {
