@@ -9,7 +9,7 @@ import (
 	"strings"
 	// "runtime/pprof"
 	// "runtime/trace"
-	// "runtime"
+	"runtime"
 	"time"
 )
 
@@ -112,15 +112,15 @@ func main() {
 		}
 	}
 
-	// The Windows fd is not 0. Seen stuff like 124.
-	fd := int(os.Stdout.Fd())
+	// The Windows stdOutFd is not 0. Seen stuff like 124.
+	stdOutFd := int(os.Stdout.Fd())
 
 	// isTerminal := term.IsTerminal(fd)
 	// fmt.Fprintf(os.Stdout, "Is terminal: %t %d\n", isTerminal, fd)
 
-	if len(input) == 0 && term.IsTerminal(fd) {
-		fmt.Fprintf(os.Stdout, "Got here\n")
-		numRows, numCols, err := term.GetSize(fd)
+	if len(input) == 0 && term.IsTerminal(stdOutFd) {
+		// fmt.Fprintf(os.Stdout, "Got here\n")
+		numRows, numCols, err := term.GetSize(stdOutFd)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error getting terminal size: %s\n", err)
 			os.Exit(1)
@@ -128,20 +128,47 @@ func main() {
 
 		// For debugging, write number of bytes read and bytes to /tmp/mshell.log
 		// If on Windows
+		var f *os.File
+		if runtime.GOOS == "windows" {
+			local_app_data, ok := os.LookupEnv("LOCALAPPDATA")
+			if !ok {
+				fmt.Fprintf(os.Stderr, "Error getting LOCALAPPDATA environment variable\n")
+				os.Exit(1)
+				return
+			}
 
-		// Open file for writing
-		f, err := os.OpenFile("/tmp/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error opening file /tmp/mshell.log: %s\n", err)
-			os.Exit(1)
-			return
+			// Make dir LOCALAPPDATA/mshell if it doesn't exist
+			err := os.MkdirAll(local_app_data + "/mshell", 0755)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error creating directory %s/mshell: %s\n", local_app_data, err)
+				os.Exit(1)
+				return
+			}
+
+			// Open file for writing
+			f, err := os.OpenFile(local_app_data + "/mshell/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error opening file %s/mshell/mshell.log: %s\n", local_app_data, err)
+				os.Exit(1)
+				return
+			}
+			defer f.Close()
+		} else {
+			// Open file for writing
+			f, err := os.OpenFile("/tmp/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error opening file /tmp/mshell.log: %s\n", err)
+				os.Exit(1)
+				return
+			}
+			defer f.Close()
 		}
-		defer f.Close()
-
 
 		callStack := make(CallStack, 0, 10)
 
+		stdInFd := int(os.Stdin.Fd())
 		termState := TermState{
+			stdInFd:        stdInFd,
 			numRows:        numRows,
 			numCols:        numCols,
 			promptLength:   0,
@@ -325,6 +352,7 @@ func main() {
 }
 
 type TermState struct {
+	stdInFd int
 	numRows int
 	numCols int
 	promptLength int
@@ -381,21 +409,21 @@ func (state *TermState) InteractiveMode() {
 	}
 
 	// Put terminal into raw mode
-	oldState, err := term.MakeRaw(0)
+	oldState, err := term.MakeRaw(state.stdInFd)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error setting terminal to raw mode: %s\n", err)
+		fmt.Fprintf(os.Stderr, "Error setting terminal to raw mode at beginning of interactive mode: %s\n", err)
 		os.Exit(1)
 		return
 	}
 	state.oldState = oldState
-	defer term.Restore(0, oldState)
+	defer term.Restore(state.stdInFd, oldState)
 
 	state.l = NewLexer("")
 	state.p = &MShellParser{lexer: state.l}
 
 	stdLibDefs, err := stdLibDefinitions(state.stack, state.context, state.evalState)
 	if err != nil {
-		term.Restore(0, oldState)
+		term.Restore(state.stdInFd, oldState)
 		fmt.Fprintf(os.Stderr, "Error loading standard library: %s\n", err)
 		os.Exit(1)
 		return
@@ -579,7 +607,7 @@ func (state *TermState) InteractiveMode() {
 
 				// During evaluation, normal terminal output can happen, or TUI apps can be run.
 				// So want them to see non-raw mode terminal state.
-				term.Restore(0, state.oldState)
+				term.Restore(state.stdInFd, state.oldState)
 				fmt.Fprintf(os.Stdout, "\n")
 
 				if len(parsed.Items) > 0 {
@@ -602,7 +630,7 @@ func (state *TermState) InteractiveMode() {
 				state.index = 0
 
 				// Put terminal back into raw mode
-				oldState, err = term.MakeRaw(0)
+				oldState, err = term.MakeRaw(state.stdInFd)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "Error setting terminal to raw mode: %s\n", err)
 					os.Exit(1)
@@ -942,7 +970,7 @@ func (state *TermState) ExecuteCurrentCommand() {
 
 	// During evaluation, normal terminal output can happen, or TUI apps can be run.
 	// So want them to see non-raw mode terminal state.
-	term.Restore(0, state.oldState)
+	term.Restore(state.stdInFd, state.oldState)
 	fmt.Fprintf(os.Stdout, "\n")
 
 	if len(parsed.Items) > 0 {
@@ -964,7 +992,7 @@ func (state *TermState) ExecuteCurrentCommand() {
 	state.index = 0
 
 	// Put terminal back into raw mode
-	_, err = term.MakeRaw(0)
+	_, err = term.MakeRaw(state.stdInFd)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error setting terminal to raw mode: %s\n", err)
 		os.Exit(1)
@@ -973,7 +1001,7 @@ func (state *TermState) ExecuteCurrentCommand() {
 }
 
 func (state *TermState) toCooked() {
-	term.Restore(0, state.oldState)
+	term.Restore(state.stdInFd, state.oldState)
 }
 
 func (state *TermState) printPrompt() {
@@ -1000,7 +1028,7 @@ func (state *TermState) printPrompt() {
 
 	// fmt.Fprintf(os.Stdout, "mshell> ")
 
-	_, err = term.MakeRaw(0)
+	_, err = term.MakeRaw(state.stdInFd)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error setting terminal to raw mode: %s\n", err)
 		os.Exit(1)
@@ -1018,15 +1046,51 @@ func (state *TermState) printPrompt() {
 // Returns the current cursor position as (row, col)
 // Row and col are 1-based.
 // Extra bytes are returned in case the response contains more than just the cursor position escape codes.
-func getCurrentPos() (row int, col int, err error, extraBytes []byte) {
-	// Open log file
-	f, err := os.OpenFile("/tmp/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error opening file /tmp/mshell.log: %s\n", err)
-		os.Exit(1)
-		return
+// Returns row, col, err, extraBytes
+func getCurrentPos() (int, int, error, []byte) {
+
+	var f *os.File
+	if runtime.GOOS == "windows" {
+		local_app_data, ok := os.LookupEnv("LOCALAPPDATA")
+		if !ok {
+			return 0, 0, fmt.Errorf("Error getting LOCALAPPDATA environment variable"), []byte{}
+		}
+
+		// Make dir LOCALAPPDATA/mshell if it doesn't exist
+		err := os.MkdirAll(local_app_data + "/mshell", 0755)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error creating directory %s/mshell: %s\n", local_app_data, err)
+			os.Exit(1)
+			return 0, 0, err, []byte{}
+		}
+
+		// Open file for writing
+		f, err := os.OpenFile(local_app_data + "/mshell/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error opening file %s/mshell/mshell.log: %s\n", local_app_data, err)
+			os.Exit(1)
+			return 0, 0, err, []byte{}
+		}
+		defer f.Close()
+	} else {
+		// Open file for writing
+		f, err := os.OpenFile("/tmp/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error opening file /tmp/mshell.log: %s\n", err)
+			os.Exit(1)
+			return 0, 0, err, []byte{}
+		}
+		defer f.Close()
 	}
-	defer f.Close()
+
+	// // Open log file
+	// f, err := os.OpenFile("/tmp/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	// if err != nil {
+		// fmt.Fprintf(os.Stderr, "Error opening file /tmp/mshell.log: %s\n", err)
+		// os.Exit(1)
+		// return
+	// }
+	// defer f.Close()
 
 	fmt.Fprintf(os.Stdout, "\033[6n")
 
@@ -1054,7 +1118,7 @@ func getCurrentPos() (row int, col int, err error, extraBytes []byte) {
 	}
 
 	// Parse row
-	row = 0
+	row := 0
 	i := 2
 
 	for i < n && readBuffer[i] != ';' {
@@ -1073,7 +1137,7 @@ func getCurrentPos() (row int, col int, err error, extraBytes []byte) {
 	i++
 
 	// Parse column
-	col = 0
+	col := 0
 	for i < n && readBuffer[i] != 'R' {
 		digit := int(readBuffer[i] - '0')
 		if digit < 0 || digit > 9 {
