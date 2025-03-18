@@ -48,6 +48,7 @@ func main() {
 	// defer trace.Stop()
 
 	defer cleanupTempFiles()
+	var err error
 
 	command := CLIEXECUTE
 
@@ -138,7 +139,7 @@ func main() {
 			}
 
 			// Make dir LOCALAPPDATA/mshell if it doesn't exist
-			err := os.MkdirAll(local_app_data + "/mshell", 0755)
+			err = os.MkdirAll(local_app_data + "/mshell", 0755)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error creating directory %s/mshell: %s\n", local_app_data, err)
 				os.Exit(1)
@@ -146,7 +147,7 @@ func main() {
 			}
 
 			// Open file for writing
-			f, err := os.OpenFile(local_app_data + "/mshell/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			f, err = os.OpenFile(local_app_data + "/mshell/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error opening file %s/mshell/mshell.log: %s\n", local_app_data, err)
 				os.Exit(1)
@@ -155,7 +156,7 @@ func main() {
 			defer f.Close()
 		} else {
 			// Open file for writing
-			f, err := os.OpenFile("/tmp/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			f, err = os.OpenFile("/tmp/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error opening file /tmp/mshell.log: %s\n", err)
 				os.Exit(1)
