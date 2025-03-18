@@ -2808,6 +2808,12 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 		}
 	}
 
+	// Need to check length here. You could have had a list of empty lists like:
+	// [[] [] [] []]
+	if len(commandLineArgs) == 0 {
+		return state.FailWithMessage("After list flattening, there still were no arguments to execute.\n"), 1, ""
+	}
+
 	// Handle cd command specially
 	if commandLineArgs[0] == "cd" {
 		if len(commandLineArgs) > 3 {
