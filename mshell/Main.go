@@ -11,6 +11,8 @@ import (
 	// "runtime/trace"
 	"runtime"
 	"time"
+	"unicode"
+	"sort"
 )
 
 type CliCommand int
@@ -23,6 +25,31 @@ const (
 )
 
 var tempFiles []string
+
+
+func longestCommonPrefix(strs []string) string {
+	if len(strs) == 0 {
+		return ""
+	} else if len(strs) == 1 {
+		return strs[0]
+	}
+
+	sort.Strings(strs)
+
+	first := strs[0]
+	last := strs[len(strs)-1]
+	b := strings.Builder{}
+
+	for i := 0; i < min(len(first), len(last)); i++ {
+		if first[i] == last[i] {
+			b.WriteByte(first[i])
+		} else {
+			return b.String()
+		}
+	}
+
+	return b.String()
+}
 
 func main() {
 	// Enable profiling
@@ -388,6 +415,16 @@ var history []string
 
 var knownCommands = map[string]struct{}{ "sudo": {}, "git": {}, "cd": {}, "nvim": {}, "en": {} }
 
+func (state *TermState) printText(text string) {
+	fmt.Fprintf(os.Stdout, "\033[K") // Delete to end of line
+	fmt.Fprintf(os.Stdout, "%s", text)
+	fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
+	fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + state.index + len(text))
+
+	state.currentCommand = append(state.currentCommand[:state.index], append([]rune(text), state.currentCommand[state.index:]...)...)
+	state.index = state.index + len(text)
+}
+
 func (state *TermState) InteractiveMode() {
 	// FUTURE: Maybe Check for CSI u?
 
@@ -492,6 +529,58 @@ func (state *TermState) InteractiveMode() {
 				if state.index < len(state.currentCommand) {
 					state.index++
 					fmt.Fprintf(os.Stdout, "\033[C")
+				}
+			} else if c == 9 { // Tab
+				// Get all files in the current directory
+				files, err := os.ReadDir(".")
+				if err != nil {
+					fmt.Fprintf(os.Stdout, "\a")
+				}
+
+				var prefix string
+
+				if state.index == 0 {
+					prefix = ""
+				} else if unicode.IsSpace(state.currentCommand[state.index - 1]) {
+					prefix = ""
+				} else {
+					i := state.index - 1
+					for {
+						if i == 0 {
+							prefix = string(state.currentCommand[:state.index])
+							break
+						}
+
+						if unicode.IsSpace(state.currentCommand[i]) {
+							prefix = string(state.currentCommand[i+1:state.index])
+							break
+						}
+						i = i - 1
+					}
+				}
+
+				// Find all files that start with prefix
+				var matches []string
+				for _, file := range files {
+					if strings.HasPrefix(file.Name(), prefix) {
+						matches = append(matches, file.Name())
+					}
+				}
+
+				if len(matches) == 0 {
+					fmt.Fprintf(os.Stdout, "\a")
+				} else if len(matches) == 1 {
+					state.printText(matches[0][len(prefix):])
+				} else {
+					// Print out the longest common prefix
+					longestCommonPrefix := longestCommonPrefix(matches)
+
+					if len(longestCommonPrefix) == len(prefix) {
+						// Print bell
+						fmt.Fprintf(os.Stdout, "\a")
+					} else {
+						state.printText(longestCommonPrefix[len(prefix):])
+					}
 				}
 			} else if c == 11 { // Ctrl-K
 				// Erase to end of line
