@@ -1796,8 +1796,19 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					switch obj2.(type) {
 					case *MShellInt:
 						stack.Push(&MShellInt{obj2.(*MShellInt).Value - obj1.(*MShellInt).Value})
+					case *MShellFloat:
+						stack.Push(&MShellFloat{obj2.(*MShellFloat).Value - float64(obj1.(*MShellInt).Value)})
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot subtract an integer from a %s.\n", t.Line, t.Column, obj2.TypeName()))
+					}
+				case *MShellFloat:
+					switch obj2.(type) {
+					case *MShellFloat:
+						stack.Push(&MShellFloat{obj2.(*MShellFloat).Value - obj1.(*MShellFloat).Value})
+					case *MShellInt:
+						stack.Push(&MShellFloat{float64(obj2.(*MShellInt).Value) - obj1.(*MShellFloat).Value})
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot subtract a float from a %s.\n", t.Line, t.Column, obj2.TypeName()))
 					}
 				default:
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '-' to a %s and %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
