@@ -91,6 +91,9 @@ No commas are required between elements.
 - `in`: Check for substring in string. (totalString subString -- bool)
 - `tab`: Puts a tab character on the stack `( -- str)`
 - `tsplit`: Split string into list of strings by tabs. `(str -- [str])`
+- `trim`: Trim whitespace from string. `(str -- str)`
+- `trimStart`: Trim whitespace from start of string. `(str -- str)`
+- `trimEnd`: Trim whitespace from end of string. `(str -- str)`
 
 ### List Functions
 

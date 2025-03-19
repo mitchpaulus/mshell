@@ -1477,6 +1477,31 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 
 					stack.Push(&MShellBool{!doesEqual})
+				} else if t.Lexeme == "trim" || t.Lexeme == "trimStart" || t.Lexeme == "trimEnd" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'trim' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					var str string
+					switch obj1.(type) {
+					case *MShellString:
+						str = obj1.(*MShellString).Content
+					case *MShellLiteral:
+						str = obj1.(*MShellLiteral).LiteralText
+					case *MShellPath:
+						str = obj1.(*MShellPath).Path
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot trim a %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					if t.Lexeme == "trim" {
+						stack.Push(&MShellString{strings.TrimSpace(str)})
+					} else if t.Lexeme == "trimStart" {
+						stack.Push(&MShellString{strings.TrimLeft(str, " \t\n")})
+					} else if t.Lexeme == "trimEnd" {
+						stack.Push(&MShellString{strings.TrimRight(str, " \t\n")})
+					}
 				} else { // last new function
 					stack.Push(&MShellLiteral{t.Lexeme})
 				}
