@@ -1502,6 +1502,45 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					} else if t.Lexeme == "trimEnd" {
 						stack.Push(&MShellString{strings.TrimRight(str, " \t\n")})
 					}
+				} else if t.Lexeme == "upper" || t.Lexeme == "lower" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
+					}
+
+					if t.Lexeme == "upper" {
+						var str string
+						switch obj1.(type) {
+						case *MShellString:
+							str = obj1.(*MShellString).Content
+							stack.Push(&MShellString{strings.ToUpper(str)})
+						case *MShellLiteral:
+							str = obj1.(*MShellLiteral).LiteralText
+							stack.Push(&MShellString{strings.ToUpper(str)})
+						case *MShellPath:
+							str = obj1.(*MShellPath).Path
+							// Leave as path type
+							stack.Push(&MShellPath{strings.ToUpper(str)})
+						default:
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot %s a %s.\n", t.Line, t.Column, t.Lexeme, obj1.TypeName()))
+						}
+					} else if t.Lexeme == "lower" {
+						var str string
+						switch obj1.(type) {
+						case *MShellString:
+							str = obj1.(*MShellString).Content
+							stack.Push(&MShellString{strings.ToLower(str)})
+						case *MShellLiteral:
+							str = obj1.(*MShellLiteral).LiteralText
+							stack.Push(&MShellString{strings.ToLower(str)})
+						case *MShellPath:
+							str = obj1.(*MShellPath).Path
+							// Leave as path type
+							stack.Push(&MShellPath{strings.ToLower(str)})
+						default:
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot %s a %s.\n", t.Line, t.Column, t.Lexeme, obj1.TypeName()))
+						}
+					}
 				} else { // last new function
 					stack.Push(&MShellLiteral{t.Lexeme})
 				}

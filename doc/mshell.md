@@ -140,7 +140,7 @@ No commas are required between elements.
 @my_var
 ```
 
-## Process Substitution
+## Command Substitution
 
 With a list on the stack, the following operators will leave output content on the stack after process execution:
 
@@ -151,6 +151,14 @@ os: str: Standard output, stripped
 e: [str], Standard error, split by lines
 ec: str, Standard error, complete untouched
 es: str, Standard error, stripped
+```
+
+## Process Substitution
+
+Process substitution is done using the `psub` operator.
+
+```mshell
+[my_command_needing_file "my test" psub];
 ```
 
 ## Tilde Substitution
