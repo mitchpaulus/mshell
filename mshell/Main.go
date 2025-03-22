@@ -413,7 +413,7 @@ var tokenBufBuilder strings.Builder
 var aliases map[string]string
 var history []string
 
-var knownCommands = map[string]struct{}{ "sudo": {}, "git": {}, "cd": {}, "nvim": {}, "en": {} }
+var knownCommands = map[string]struct{}{ "sudo": {}, "git": {}, "cd": {}, "nvim": {}, "en": {}, "ls": {} }
 
 func (state *TermState) printText(text string) {
 	fmt.Fprintf(os.Stdout, "\033[K") // Delete to end of line
@@ -430,20 +430,20 @@ func (state *TermState) InteractiveMode() {
 
 	// TODO: Read from file? Something like a snippet engine?
 	aliases = map[string]string{
-		"s": "[git status -u];",
+		"s": "git status -u",
 		"v": "nvim",
 		"mk": "mkdir",
-		"ls": "['ls' -al --color];",
-		"gi": "[nvim .gitignore];",
-		"a": "[git add",
-		"d": "[git diff -w];",
-		"dc": "[git diff -w --cached];",
-		"c": "[git commit];",
-		"p": "[git push];",
+		"ls": "ls -al --color",
+		"gi": "nvim .gitignore",
+		"a": "git add",
+		"d": "git diff -w",
+		"dc": "git diff -w --cached",
+		"c": "git commit",
+		"p": "git push",
 		"u": ".. cd",
 		"gu": "[git add -u]? ([git status -u];) () iff",
 		"ga": "[git add -A]? ([git status -u];) () iff",
-		"fp": "[git fetch --prune];",
+		"fp": "git fetch --prune",
 	}
 
 	// Put terminal into raw mode
