@@ -441,8 +441,8 @@ func (state *TermState) InteractiveMode() {
 		"c": "git commit",
 		"p": "git push",
 		"u": ".. cd",
-		"gu": "[git add -u]? ([git status -u];) () iff",
-		"ga": "[git add -A]? ([git status -u];) () iff",
+		"gu": "[git add -u]? ([git status -u];) iff",
+		"ga": "[git add -A]? ([git status -u];) iff",
 		"fp": "git fetch --prune",
 	}
 
