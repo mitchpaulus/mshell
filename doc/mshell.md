@@ -61,6 +61,7 @@ No commas are required between elements.
 - `toPath`: Convert to path. `(str -- path)`
 - `readFile`: Read file into string. `(str -- str)`
 - `readTsvFile`: Read a TSV file into list of list of strings. `(str -- [[str]])`
+- `read`: Read a line from stdin. Puts a str and bool of whether the read was successful on the stack. `( -- str bool)`
 - `stdin`: Drop stdin onto the stack `( -- str)`
 - `::`: Drop stdin onto the stack and split by lines `( -- [str])`. This is a shorthand for `stdin lines`.
 - `foldl`: Fold left. `(quote initial list -- result)`
