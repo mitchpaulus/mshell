@@ -289,16 +289,22 @@ func main() {
 
 
 	// Check for environment variable MSHSTDLIB and load that file. Read as UTF-8
-	stdlibPath, stdlibSet := os.LookupEnv("MSHSTDLIB")
+	stdlibPathVar, stdlibSet := os.LookupEnv("MSHSTDLIB")
 	if stdlibSet {
-		// Split the path by :
+		// Split the path by :, except on Windows where it's ;
 		// If there are multiple paths, load each one.
-		rcPaths := strings.Split(stdlibPath, ":")
+		var rcPaths []string
+		if runtime.GOOS == "windows" {
+			rcPaths = strings.Split(stdlibPathVar, ";")
+			fmt.Fprintf(os.Stderr, "Windows: %s\n", stdlibPathVar)
+		} else {
+			rcPaths = strings.Split(stdlibPathVar, ":")
+		}
 
 		for _, stdlibPath := range rcPaths {
 			stdlibBytes, err := os.ReadFile(stdlibPath)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error reading file %s: %s\n", stdlibPath, err)
+				fmt.Fprintf(os.Stderr, "Error reading file '%s': %s\n", stdlibPath, err)
 				os.Exit(1)
 				return
 			}
@@ -1257,9 +1263,14 @@ func stdLibDefinitions(stack MShellStack, context ExecuteContext, state EvalStat
 	definitions := make([]MShellDefinition, 0)
 
 	if stdlibSet {
-		// Split the path by :
+		// Split the path by :, except for Windows, where it's split by ;
 		// If there are multiple paths, load each one.
-		rcPaths := strings.Split(stdlibPath, ":")
+		var rcPaths []string
+		if runtime.GOOS == "windows" {
+			rcPaths = strings.Split(stdlibPath, ";")
+		} else {
+			rcPaths = strings.Split(stdlibPath, ":")
+		}
 
 		for _, rcPath := range rcPaths {
 			stdlibBytes, err := os.ReadFile(rcPath)
