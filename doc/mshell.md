@@ -69,6 +69,7 @@ No commas are required between elements.
 - `ttFile`: "Tab table" from file, puts content from file name split by lines and tabs on the stack. `(str -- [[str]])`
 - `isDir`: Check if path is a directory. `(path -- bool)`
 - `isFile`: Check if path is a file. `(path -- bool)`
+- `hardlink`: Create a hard link. `(existingSourcePath newTargetPath -- )`
 
 ## Math Functions
 
