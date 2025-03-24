@@ -1541,6 +1541,45 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot %s a %s.\n", t.Line, t.Column, t.Lexeme, obj1.TypeName()))
 						}
 					}
+				} else if t.Lexeme == "hardlink" {
+					newTarget, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'hardlink' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					existingSource, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'hardlink' operation on a stack with only one item.\n", t.Line, t.Column))
+					}
+
+					var sourcePath string
+					switch existingSource.(type) {
+					case *MShellString:
+						sourcePath = existingSource.(*MShellString).Content
+					case *MShellLiteral:
+						sourcePath = existingSource.(*MShellLiteral).LiteralText
+					case *MShellPath:
+						sourcePath = existingSource.(*MShellPath).Path
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot hardlink a %s.\n", t.Line, t.Column, existingSource.TypeName()))
+					}
+
+					var targetPath string
+					switch newTarget.(type) {
+					case *MShellString:
+						targetPath = newTarget.(*MShellString).Content
+					case *MShellLiteral:
+						targetPath = newTarget.(*MShellLiteral).LiteralText
+					case *MShellPath:
+						targetPath = newTarget.(*MShellPath).Path
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot hardlink to a %s.\n", t.Line, t.Column, newTarget.TypeName()))
+					}
+
+					err = os.Link(sourcePath, targetPath)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error hardlinking %s to %s: %s\n", t.Line, t.Column, sourcePath, targetPath, err.Error()))
+					}
 				} else { // last new function
 					stack.Push(&MShellLiteral{t.Lexeme})
 				}
