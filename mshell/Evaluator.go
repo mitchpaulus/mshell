@@ -1394,7 +1394,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 							stack.Push(&MShellFloat{math.Mod(obj2.(*MShellFloat).Value, obj1.(*MShellFloat).Value)})
 						}
 					}
-				} else if t.Lexeme == "basename" || t.Lexeme == "dirname" || t.Lexeme == "ext" {
+				} else if t.Lexeme == "basename" || t.Lexeme == "dirname" || t.Lexeme == "ext" || t.Lexeme == "stem" {
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
@@ -1418,6 +1418,8 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						stack.Push(&MShellString{filepath.Dir(path)})
 					} else if t.Lexeme == "ext" {
 						stack.Push(&MShellString{filepath.Ext(path)})
+					} else if t.Lexeme == "stem" {
+						stack.Push(&MShellString{strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))})
 					}
 				} else if t.Lexeme == "toPath" {
 					obj1, err := stack.Pop()
