@@ -2765,12 +2765,19 @@ func (state *EvalState) EvaluateFormatString(lexeme string, context ExecuteConte
 				}
 
 				// Get the string representation of the result
-				resultStr, ok := stack[0].(*MShellString)
-				if !ok {
-					return nil, fmt.Errorf("Format string contents %s did not evaluate to a string", formatStr)
+				var resultStr string
+				switch stack[0].(type) {
+				case *MShellString:
+					resultStr = stack[0].(*MShellString).Content
+				case *MShellLiteral:
+					resultStr = stack[0].(*MShellLiteral).LiteralText
+				case *MShellPath:
+					resultStr = stack[0].(*MShellPath).Path
+				default:
+					return nil, fmt.Errorf("Format string contents %s did not evaluate to a stringable value", formatStr)
 				}
 
-				b.WriteString(resultStr.Content)
+				b.WriteString(resultStr)
 
 				formatStrStartIndex = -1
 				formatStrEndIndex = -1
