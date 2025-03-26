@@ -590,9 +590,13 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 
 					var writer io.Writer
 					if t.Lexeme == "we" || t.Lexeme == "wle" {
-						writer = os.Stderr
+						writer = os.Stderr // TODO: Update like below for stdout.
 					} else {
-						writer = os.Stdout
+						if context.StandardOutput == nil {
+							writer = os.Stdout
+						} else {
+							writer = context.StandardOutput
+						}
 					}
 
 					switch top.(type) {
