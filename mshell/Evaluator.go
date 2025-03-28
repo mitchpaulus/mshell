@@ -983,6 +983,8 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						totalStringText = totalString.(*MShellString).Content
 					case *MShellLiteral:
 						totalStringText = totalString.(*MShellLiteral).LiteralText
+					case *MShellPath:
+						totalStringText = totalString.(*MShellPath).Path
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot search in a %s.\n", t.Line, t.Column, totalString.TypeName()))
 					}
