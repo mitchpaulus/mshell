@@ -634,41 +634,22 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					var findStr string
 					var originalStr string
 
-					switch obj1.(type) {
-					case *MShellString:
-						replacementStr = obj1.(*MShellString).Content
-					case *MShellLiteral:
-						replacementStr = obj1.(*MShellLiteral).LiteralText
-					case *MShellPath:
-						replacementStr = obj1.(*MShellPath).Path
-					default:
+					replacementStr, err = obj1.CastString()
+					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot find-replace with a %s as the replacement string.\n", t.Line, t.Column, obj1.TypeName()))
 					}
 
-					switch obj2.(type) {
-					case *MShellString:
-						findStr = obj2.(*MShellString).Content
-					case *MShellLiteral:
-						findStr = obj2.(*MShellLiteral).LiteralText
-					case *MShellPath:
-						findStr = obj2.(*MShellPath).Path
-					default:
+					findStr, err = obj2.CastString()
+					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot find-replace with a %s as the find string.\n", t.Line, t.Column, obj2.TypeName()))
 					}
 
-					switch obj3.(type) {
-					case *MShellString:
-						originalStr = obj3.(*MShellString).Content
-					case *MShellLiteral:
-						originalStr = obj3.(*MShellLiteral).LiteralText
-					case *MShellPath:
-						originalStr = obj3.(*MShellPath).Path
-					default:
+					originalStr, err = obj3.CastString()
+					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot find-replace with a %s as the original string.\n", t.Line, t.Column, obj3.TypeName()))
 					}
 
 					stack.Push(&MShellString{strings.Replace(originalStr, findStr, replacementStr, -1)})
-
 				} else if t.Lexeme == "split" {
 					delimiter, err := stack.Pop()
 					if err != nil {
@@ -914,15 +895,8 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'readFile' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
-					var filePath string
-					switch obj1.(type) {
-					case *MShellString:
-						filePath = obj1.(*MShellString).Content
-					case *MShellLiteral:
-						filePath = obj1.(*MShellLiteral).LiteralText
-					case *MShellPath:
-						filePath = obj1.(*MShellPath).Path
-					default:
+					filePath, err := obj1.CastString()
+					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot read from a %s.\n", t.Line, t.Column, obj1.TypeName()))
 					}
 
@@ -938,16 +912,8 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'cd' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
-					var dir string
-
-					switch obj.(type) {
-					case *MShellString:
-						dir = obj.(*MShellString).Content
-					case *MShellLiteral:
-						dir = obj.(*MShellLiteral).LiteralText
-					case *MShellPath:
-						dir = obj.(*MShellPath).Path
-					default:
+					dir, err := obj.CastString()
+					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot cd to a %s.\n", t.Line, t.Column, obj.TypeName()))
 					}
 
@@ -966,26 +932,13 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'in' operation on a stack with only one item.\n", t.Line, t.Column))
 					}
 
-					var substringText string
-					var totalStringText string
-
-					switch substring.(type) {
-					case *MShellString:
-						substringText = substring.(*MShellString).Content
-					case *MShellLiteral:
-						substringText = substring.(*MShellLiteral).LiteralText
-					default:
+					substringText, err := substring.CastString()
+					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot search for a %s.\n", t.Line, t.Column, substring.TypeName()))
 					}
 
-					switch totalString.(type) {
-					case *MShellString:
-						totalStringText = totalString.(*MShellString).Content
-					case *MShellLiteral:
-						totalStringText = totalString.(*MShellLiteral).LiteralText
-					case *MShellPath:
-						totalStringText = totalString.(*MShellPath).Path
-					default:
+					totalStringText, err := totalString.CastString()
+					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot search in a %s.\n", t.Line, t.Column, totalString.TypeName()))
 					}
 
@@ -1184,15 +1137,8 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'isDir' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
-					var path string
-					switch obj.(type) {
-					case *MShellString:
-						path = obj.(*MShellString).Content
-					case *MShellLiteral:
-						path = obj.(*MShellLiteral).LiteralText
-					case *MShellPath:
-						path = obj.(*MShellPath).Path
-					default:
+					path, err := obj.CastString()
+					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot check if a %s is a directory.\n", t.Line, t.Column, obj.TypeName()))
 					}
 
@@ -1218,15 +1164,8 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'mkdir' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
-					var dirPath string
-					switch obj1.(type) {
-					case *MShellString:
-						dirPath = obj1.(*MShellString).Content
-					case *MShellLiteral:
-						dirPath = obj1.(*MShellLiteral).LiteralText
-					case *MShellPath:
-						dirPath = obj1.(*MShellPath).Path
-					default:
+					dirPath, err := obj1.CastString()
+					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot make a directory with a %s.\n", t.Line, t.Column, obj1.TypeName()))
 					}
 
@@ -1406,15 +1345,8 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
 					}
 
-					var path string
-					switch obj1.(type) {
-					case *MShellString:
-						path = obj1.(*MShellString).Content
-					case *MShellLiteral:
-						path = obj1.(*MShellLiteral).LiteralText
-					case *MShellPath:
-						path = obj1.(*MShellPath).Path
-					default:
+					path, err := obj1.CastString()
+					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot get the %s of a %s.\n", t.Line, t.Column, t.Lexeme, obj1.TypeName()))
 					}
 
@@ -1433,14 +1365,9 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'toPath' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
-					var path string
-					switch obj1.(type) {
-					case *MShellString:
-						path = obj1.(*MShellString).Content
-					case *MShellLiteral:
-						path = obj1.(*MShellLiteral).LiteralText
-					case *MShellPath:
-						path = obj1.(*MShellPath).Path
+					path, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert a %s to a path.\n", t.Line, t.Column, obj1.TypeName()))
 					}
 
 					stack.Push(&MShellPath{path})
@@ -1491,15 +1418,9 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'trim' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
-					var str string
-					switch obj1.(type) {
-					case *MShellString:
-						str = obj1.(*MShellString).Content
-					case *MShellLiteral:
-						str = obj1.(*MShellLiteral).LiteralText
-					case *MShellPath:
-						str = obj1.(*MShellPath).Path
-					default:
+
+					str, err := obj1.CastString()
+					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot trim a %s.\n", t.Line, t.Column, obj1.TypeName()))
 					}
 
@@ -1516,38 +1437,15 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
 					}
 
+					str, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot %s a %s.\n", t.Line, t.Column, t.Lexeme, obj1.TypeName()))
+					}
+
 					if t.Lexeme == "upper" {
-						var str string
-						switch obj1.(type) {
-						case *MShellString:
-							str = obj1.(*MShellString).Content
-							stack.Push(&MShellString{strings.ToUpper(str)})
-						case *MShellLiteral:
-							str = obj1.(*MShellLiteral).LiteralText
-							stack.Push(&MShellString{strings.ToUpper(str)})
-						case *MShellPath:
-							str = obj1.(*MShellPath).Path
-							// Leave as path type
-							stack.Push(&MShellPath{strings.ToUpper(str)})
-						default:
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot %s a %s.\n", t.Line, t.Column, t.Lexeme, obj1.TypeName()))
-						}
+						stack.Push(&MShellPath{strings.ToUpper(str)})
 					} else if t.Lexeme == "lower" {
-						var str string
-						switch obj1.(type) {
-						case *MShellString:
-							str = obj1.(*MShellString).Content
-							stack.Push(&MShellString{strings.ToLower(str)})
-						case *MShellLiteral:
-							str = obj1.(*MShellLiteral).LiteralText
-							stack.Push(&MShellString{strings.ToLower(str)})
-						case *MShellPath:
-							str = obj1.(*MShellPath).Path
-							// Leave as path type
-							stack.Push(&MShellPath{strings.ToLower(str)})
-						default:
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot %s a %s.\n", t.Line, t.Column, t.Lexeme, obj1.TypeName()))
-						}
+						stack.Push(&MShellPath{strings.ToLower(str)})
 					}
 				} else if t.Lexeme == "hardlink" {
 					newTarget, err := stack.Pop()
@@ -1560,27 +1458,14 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'hardlink' operation on a stack with only one item.\n", t.Line, t.Column))
 					}
 
-					var sourcePath string
-					switch existingSource.(type) {
-					case *MShellString:
-						sourcePath = existingSource.(*MShellString).Content
-					case *MShellLiteral:
-						sourcePath = existingSource.(*MShellLiteral).LiteralText
-					case *MShellPath:
-						sourcePath = existingSource.(*MShellPath).Path
-					default:
+					sourcePath, err := existingSource.CastString()
+					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot hardlink a %s.\n", t.Line, t.Column, existingSource.TypeName()))
 					}
 
-					var targetPath string
-					switch newTarget.(type) {
-					case *MShellString:
-						targetPath = newTarget.(*MShellString).Content
-					case *MShellLiteral:
-						targetPath = newTarget.(*MShellLiteral).LiteralText
-					case *MShellPath:
-						targetPath = newTarget.(*MShellPath).Path
-					default:
+					targetPath, err := newTarget.CastString()
+					if err != nil {
+
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot hardlink to a %s.\n", t.Line, t.Column, newTarget.TypeName()))
 					}
 
@@ -2169,16 +2054,8 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect stderr on a stack with only one item.\n", t.Line, t.Column))
 				}
 
-				var redirectFile string
-
-				switch obj1.(type) {
-				case *MShellString:
-					redirectFile = obj1.(*MShellString).Content
-				case *MShellLiteral:
-					redirectFile = obj1.(*MShellLiteral).LiteralText
-				case *MShellPath:
-					redirectFile = obj1.(*MShellPath).Path
-				default:
+				redirectFile, err := obj1.CastString()
+				if err != nil {
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect stderr to a %s.\n", t.Line, t.Column, obj1.TypeName()))
 				}
 
@@ -2201,13 +2078,8 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 				// Strip off the leading '$' and trailing '!' for the environment variable name
 				varName := t.Lexeme[1:len(t.Lexeme) - 1]
 
-				var varValue string
-				switch obj.(type) {
-				case *MShellString:
-					varValue = obj.(*MShellString).Content
-				case *MShellLiteral:
-					varValue = obj.(*MShellLiteral).LiteralText
-				default:
+				varValue, err := obj.CastString()
+				if err != nil {
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot export a %s.\n", t.Line, t.Column, obj.TypeName()))
 				}
 
@@ -2771,15 +2643,8 @@ func (state *EvalState) EvaluateFormatString(lexeme string, context ExecuteConte
 				}
 
 				// Get the string representation of the result
-				var resultStr string
-				switch stack[0].(type) {
-				case *MShellString:
-					resultStr = stack[0].(*MShellString).Content
-				case *MShellLiteral:
-					resultStr = stack[0].(*MShellLiteral).LiteralText
-				case *MShellPath:
-					resultStr = stack[0].(*MShellPath).Path
-				default:
+				resultStr, err := stack[0].CastString()
+				if err != nil {
 					return nil, fmt.Errorf("Format string contents %s did not evaluate to a stringable value", formatStr)
 				}
 

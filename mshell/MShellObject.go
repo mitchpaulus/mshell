@@ -42,10 +42,11 @@ type MShellObject interface {
 	SliceEnd(end int) (MShellObject, error)
 	Slice(startInc int, endExc int) (MShellObject, error)
 	ToJson() string
-	ToString() string
+	ToString() string // This is what is used with 'str' command
 	IndexErrStr() string
 	Concat(other MShellObject) (MShellObject, error)
 	Equals(other MShellObject) (bool, error)
+	CastString() (string, error) // This is meant for completely unambiougous conversion to a string value.
 }
 
 type MShellSimple struct {
@@ -133,6 +134,10 @@ func (obj *MShellDateTime) Equals(other MShellObject) (bool, error) {
 	}
 
 	return obj.Time.Equal(asDateTime.Time), nil
+}
+
+func (obj *MShellDateTime) CastString() (string, error) {
+	return "", fmt.Errorf("Cannot cast a DateTime to a string.\n")
 }
 
 // }}}
@@ -1402,5 +1407,45 @@ func (obj *MShellFloat) Equals(other MShellObject) (bool, error) {
 	return obj.Value == asFloat.Value, nil
 }
 
+
+// }}}
+
+// CastString {{{
+
+func (obj *MShellLiteral) CastString() (string, error) {
+	return obj.LiteralText, nil
+}
+
+func (obj *MShellBool) CastString() (string, error) {
+	return "", fmt.Errorf("Cannot cast a boolean to a string.\n")
+}
+
+func (obj *MShellQuotation) CastString() (string, error) {
+	return "", fmt.Errorf("Cannot cast a quotation to a string.\n")
+}
+
+func (obj *MShellList) CastString() (string, error) {
+	return "", fmt.Errorf("Cannot cast a list to a string.\n")
+}
+
+func (obj *MShellString) CastString() (string, error) {
+	return obj.Content, nil
+}
+
+func (obj *MShellPath) CastString() (string, error) {
+	return obj.Path, nil
+}
+
+func (obj *MShellPipe) CastString() (string, error) {
+	return "", fmt.Errorf("Cannot cast a pipe to a string.\n")
+}
+
+func (obj *MShellInt) CastString() (string, error) {
+	return strconv.Itoa(obj.Value), nil
+}
+
+func (obj *MShellFloat) CastString() (string, error) {
+	return "", fmt.Errorf("Cannot cast a float to a string.\n")
+}
 
 // }}}
