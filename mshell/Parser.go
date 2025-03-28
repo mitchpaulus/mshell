@@ -191,6 +191,7 @@ func (parser *MShellParser) NextToken() {
 	parser.curr = parser.lexer.scanToken()
 }
 
+// Checks for the desired match, and then advances the parser.
 func (parser *MShellParser) Match(token Token, tokenType TokenType) error {
 	if token.Type != tokenType {
 		message := fmt.Sprintf("%d:%d: Expected %s, got %s", token.Line, token.Column, tokenType, token.Type)
@@ -939,12 +940,18 @@ func (parser *MShellParser) ParseList() (*MShellParseList, error) {
 	if err != nil {
 		return list, err
 	}
-	for parser.curr.Type != RIGHT_SQUARE_BRACKET {
-		item, err := parser.ParseItem()
-		if err != nil {
-			return list, err
+	for  {
+		if parser.curr.Type == RIGHT_SQUARE_BRACKET {
+			break
+		} else if parser.curr.Type == EOF {
+			return list, errors.New(fmt.Sprintf("Did not find closing ']' for list beginning at line %d, column %d.", list.StartToken.Line, list.StartToken.Column))
+		} else {
+			item, err := parser.ParseItem()
+			if err != nil {
+				return list, err
+			}
+			list.Items = append(list.Items, item)
 		}
-		list.Items = append(list.Items, item)
 	}
 	list.EndToken = parser.curr
 	err = parser.Match(parser.curr, RIGHT_SQUARE_BRACKET)
@@ -962,6 +969,8 @@ func (parser *MShellParser) ParseItem() (MShellParseItem, error) {
 		return parser.ParseQuote()
 	case INDEXER, ENDINDEXER, STARTINDEXER, SLICEINDEXER:
 		return parser.ParseIndexer(), nil
+	case EOF:
+		return nil, errors.New("Unexpected EOF while parsing item")
 	default:
 		return parser.ParseSimple(), nil
 	}
@@ -980,12 +989,18 @@ func (parser *MShellParser) ParseQuote() (*MShellParseQuote, error) {
 		return quote, err
 	}
 
-	for parser.curr.Type != RIGHT_PAREN {
-		item, err := parser.ParseItem()
-		if err != nil {
-			return quote, err
+	for  {
+		if parser.curr.Type == RIGHT_PAREN {
+			break
+		} else if parser.curr.Type == EOF {
+			return quote, errors.New(fmt.Sprintf("Did not find closing ')' for quote beginning at line %d, column %d.", quote.StartToken.Line, quote.StartToken.Column))
+		} else {
+			item, err := parser.ParseItem()
+			if err != nil {
+				return quote, err
+			}
+			quote.Items = append(quote.Items, item)
 		}
-		quote.Items = append(quote.Items, item)
 	}
 	quote.EndToken = parser.curr
 	err = parser.Match(parser.curr, RIGHT_PAREN)
