@@ -1473,6 +1473,13 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error hardlinking %s to %s: %s\n", t.Line, t.Column, sourcePath, targetPath, err.Error()))
 					}
+				} else if t.Lexeme == "tempFile" {
+					tmpfile, err := os.CreateTemp("", "msh-")
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error creating temporary file: %s\n", t.Line, t.Column, err.Error()))
+					}
+					// Dump the full path to the stack
+					stack.Push(&MShellString{tmpfile.Name()})
 				} else { // last new function
 					stack.Push(&MShellLiteral{t.Lexeme})
 				}

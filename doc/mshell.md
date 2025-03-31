@@ -71,6 +71,7 @@ No commas are required between elements.
 - `isDir`: Check if path is a directory. `(path -- bool)`
 - `isFile`: Check if path is a file. `(path -- bool)`
 - `hardlink`: Create a hard link. `(existingSourcePath newTargetPath -- )`
+- `tempFile`: Create a temporary file, and put the full path on the stack. `( -- str)`
 
 ## Math Functions
 
