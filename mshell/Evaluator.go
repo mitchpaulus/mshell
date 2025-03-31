@@ -1357,7 +1357,9 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					} else if t.Lexeme == "ext" {
 						stack.Push(&MShellString{filepath.Ext(path)})
 					} else if t.Lexeme == "stem" {
-						stack.Push(&MShellString{strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))})
+						// This should include previous dir if it exists
+
+						stack.Push(&MShellString{strings.TrimSuffix(path, filepath.Ext(path))})
 					}
 				} else if t.Lexeme == "toPath" {
 					obj1, err := stack.Pop()
