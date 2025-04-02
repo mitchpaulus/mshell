@@ -97,6 +97,8 @@ No commas are required between elements.
 - `trim`: Trim whitespace from string. `(str -- str)`
 - `trimStart`: Trim whitespace from start of string. `(str -- str)`
 - `trimEnd`: Trim whitespace from end of string. `(str -- str)`
+- `startsWith`: Check if string starts with substring. `(str str -- bool)`
+- `endsWith`: Check if string ends with substring. `(str str -- bool)`
 
 ### List Functions
 
