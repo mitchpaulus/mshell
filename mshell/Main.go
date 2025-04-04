@@ -10,9 +10,11 @@ import (
 	// "runtime/pprof"
 	// "runtime/trace"
 	"runtime"
-	"time"
+	// "time"
 	"unicode"
 	"sort"
+	"strconv"
+	// "runtime/debug"
 )
 
 type CliCommand int
@@ -394,12 +396,14 @@ type TermState struct {
 	currentCommand []rune
 	index int // index of cursor, starts at 0
 	readBuffer []byte
-	oldState *term.State
+	oldState term.State
 	homeDir string
 	l *Lexer
 	p *MShellParser
 	historyIndex int
 	f *os.File
+	// tokenChan chan TerminalToken
+	stdInState *StdinReaderState
 
 	stack MShellStack
 	context ExecuteContext
@@ -431,8 +435,263 @@ func (state *TermState) printText(text string) {
 	state.index = state.index + len(text)
 }
 
+type TerminalToken interface {}
+
+type AsciiToken struct {
+	Char byte
+}
+
+type CsiToken struct {
+	FinalChar byte
+	Params []byte
+}
+
+type UnknownToken struct { }
+
+type SpecialKey int
+
+const (
+	KEY_F1 SpecialKey = iota
+	KEY_F2
+	KEY_F3
+	KEY_F4
+	KEY_F5
+	KEY_F6
+	KEY_F7
+	KEY_F8
+	KEY_F9
+	KEY_F10
+	KEY_F11
+	KEY_F12
+
+	KEY_UP
+	KEY_DOWN
+	KEY_LEFT
+	KEY_RIGHT
+
+	KEY_DELETE
+
+	KEY_ALT_B
+	KEY_ALT_F
+	KEY_ALT_O
+)
+
+type StdinReaderState struct {
+	array []byte
+	i int
+	n int
+}
+
+func (state *StdinReaderState) ReadByte() (byte) {
+	// f, err := os.OpenFile("/tmp/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	// if err != nil {
+		// fmt.Fprintf(os.Stderr, "Error opening file /tmp/mshell.log: %s\n", err)
+		// os.Exit(1)
+	// }
+
+	if state.i >= state.n {
+		// Do fresh read
+		// fmt.Fprintf(f, "Reading from stdin...\n")
+		// fmt.Fprintf(f, "%s", debug.Stack())
+		n, err := os.Stdin.Read(state.array)
+		// fmt.Fprintf(f, "Read %d from stdin...\n", n)
+
+		if err != nil {
+			if err == io.EOF {
+				os.Exit(0)
+			} else {
+				fmt.Fprintf(os.Stderr, "Error reading from stdin: %s\n", err)
+				os.Exit(1)
+			}
+		}
+
+		state.n = n
+		state.i = 0
+
+		b := state.array[state.i]
+		state.i++
+		return b
+	} else {
+		// fmt.Fprintf(f, "Reading from buffer at %d..\n", state.i)
+		b := state.array[state.i]
+		state.i++
+		return b
+	}
+}
+
+func StdinReader(stdInChan chan byte, pauseChan chan bool) {
+	readBuffer := make([]byte, 1024)
+
+	// Open /tmp/mshell.log for writing
+	f, err := os.OpenFile("/tmp/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error opening file /tmp/mshell.log: %s\n", err)
+		os.Exit(1)
+		return
+	}
+
+	for {
+		select {
+		case shouldPause := <- pauseChan:
+			if shouldPause {
+				// Pause reading from stdin
+				fmt.Fprintf(f, "Pausing stdin reader\n")
+				for {
+					// Wait for unpause
+					shouldUnpause := <- pauseChan
+					if !shouldUnpause {
+						break
+					}
+				}
+				fmt.Fprintf(f, "Unpausing stdin reader\n")
+			}
+		default:
+			// Read char
+			n, err := os.Stdin.Read(readBuffer)
+			if err != nil {
+				if err == io.EOF {
+					os.Exit(0)
+					return
+				} else {
+					fmt.Fprintf(os.Stderr, "Error reading from stdin: %s\n", err)
+					os.Exit(1)
+					return
+				}
+			}
+
+			for i := 0; i < n; i++ {
+				b := readBuffer[i]
+
+				if b > 32 && b < 127 {
+					fmt.Fprintf(f, "Sending %c..\n", b)
+					stdInChan <- readBuffer[i]
+					fmt.Fprintf(f, "Sent %c..\n", b)
+				} else {
+					fmt.Fprintf(f, "Sending %d..\n", b)
+					stdInChan <- readBuffer[i]
+					fmt.Fprintf(f, "Sent %d..\n", b)
+				}
+				// fmt.Fprintf(f, "Sending %d..\n", readBuffer[i])
+			}
+		}
+	}
+}
+
+func InteractiveLexerGoroutine(stdinReaderState *StdinReaderState, outputChan chan TerminalToken) {
+	outputChan <- InteractiveLexer(stdinReaderState)
+}
+
+// This is intended to a be a lexer for the interactive mode.
+// It should be operating in a goroutine.
+func InteractiveLexer(stdinReaderState *StdinReaderState) (TerminalToken)  {
+	// Open /tmp/mshell.log for writing
+	f, err := os.OpenFile("/tmp/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error opening file /tmp/mshell.log: %s\n", err)
+		os.Exit(1)
+	}
+
+	var c byte
+
+	for {
+		// Read char
+		// c := <-inputChan
+		c = stdinReaderState.ReadByte()
+		if c < 128 && c != 27 {
+			// If the character is a printable ASCII character, send it to the channel.
+			return AsciiToken{Char: c}
+		} else if c == 27 { // ESC
+			// c = <-inputChan
+			c := stdinReaderState.ReadByte()
+			if c == 79 {
+				// c = <- inputChan
+				c = stdinReaderState.ReadByte()
+				if c == 80 { // F1
+					return KEY_F1
+				} else if c == 81 { // F2
+					return KEY_F2
+				} else if c == 82 { // F3
+					return KEY_F3
+				} else if c == 83 { // F4
+					return KEY_F4
+				}
+			} else if c == 91 { // 91 = [, CSI
+				// read until we get a final char, @ to ~, or 0x40 to 0x7E
+				// c = <-inputChan
+				c = stdinReaderState.ReadByte()
+				if c >= 64 && c <= 126 {
+					if c == 51  {
+						// c = <-inputChan
+						c = stdinReaderState.ReadByte()
+						if c == 126 {
+							return KEY_DELETE
+							// Delete
+						}
+					} else if c == 65 {
+						// Up arrow
+						return KEY_UP
+					} else if c == 66 {
+						// Down arrow
+						return KEY_DOWN
+					} else if c == 67 {
+						// Right arrow
+						return KEY_RIGHT
+					} else if c == 68 {
+						// Left arrow
+						return KEY_LEFT
+					}
+				} else { // else read until we get a final char, @ to ~, or 0x40 to 0x7E
+					byteArray := make([]byte, 0)
+					byteArray = append(byteArray, c)
+					for {
+						// c = <-inputChan
+						// fmt.Fprintf(f, "Reading byte for CSI...\n")
+						c = stdinReaderState.ReadByte()
+						if c >= 64 && c <= 126 {
+							// fmt.Fprintf(f, "Sent CSI token: %d %d\n", c, byteArray)
+							return CsiToken{FinalChar: c, Params: byteArray}
+						}
+						byteArray = append(byteArray, c)
+					}
+				}
+			} else if c == 98 { // Alt-B
+				// Move cursor left by word
+				return KEY_ALT_B
+			} else if c == 102 { // Alt-F
+				// Move cursor right by word
+				return KEY_ALT_F
+			} else if c == 111 { // Alt-O
+				return KEY_ALT_O
+				// Quit
+			} else {
+				// Unknown escape sequence
+				fmt.Fprintf(f, "Unknown escape sequence: ESC %d\n", c)
+				return UnknownToken{}
+				// return AsciiToken{Char: 27}
+				// return AsciiToken{Char: c}
+			}
+		}
+	}
+}
+
 func (state *TermState) InteractiveMode() {
 	// FUTURE: Maybe Check for CSI u?
+
+	// Open /tmp/mshell.log for writing
+	f, err := os.OpenFile("/tmp/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error opening file /tmp/mshell.log: %s\n", err)
+		os.Exit(1)
+		return
+	}
+
+	stdInState := &StdinReaderState{
+		array: make([]byte, 1024),
+		i: 0,
+		n: 0,
+	}
+
+	state.stdInState = stdInState
 
 	// TODO: Read from file? Something like a snippet engine?
 	aliases = map[string]string{
@@ -459,15 +718,17 @@ func (state *TermState) InteractiveMode() {
 		os.Exit(1)
 		return
 	}
-	state.oldState = oldState
-	defer term.Restore(state.stdInFd, oldState)
+	state.oldState = *oldState
+	fmt.Fprintf(state.f, "Old state: %v\n", state.oldState)
+
+	defer term.Restore(state.stdInFd, &state.oldState)
 
 	state.l = NewLexer("")
 	state.p = &MShellParser{lexer: state.l}
 
 	stdLibDefs, err := stdLibDefinitions(state.stack, state.context, state.evalState)
 	if err != nil {
-		term.Restore(state.stdInFd, oldState)
+		term.Restore(state.stdInFd, &state.oldState)
 		fmt.Fprintf(os.Stderr, "Error loading standard library: %s\n", err)
 		os.Exit(1)
 		return
@@ -475,506 +736,18 @@ func (state *TermState) InteractiveMode() {
 	state.stdLibDefs = stdLibDefs
 
 	history = make([]string, 0)
-	historyIndex := 0
-	// readBuffer := make([]byte, 1024)
-	// currentCommand := strings.Builder{}
-	// currentCommand := make([]rune, 0, 100)
+	state.historyIndex = 0
 
 	state.printPrompt()
 
-	// _, curCol, err, _ := getCurrentPos()
-	// if err != nil {
-		// fmt.Fprintf(os.Stderr, "Error getting cursor position: %s\n", err)
-		// os.Exit(1)
-	// }
-
-	// promptLength := curCol - 1
-	// index := 0
-
-
+	var token TerminalToken
 	for {
-		// Read char
-		n, err := os.Stdin.Read(state.readBuffer)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error reading from stdin: %s\n", err)
-			os.Exit(1)
-			return
-		}
 
-		fmt.Fprintf(state.f, "%d\t", n)
-		for i := 0; i < n; i++ {
-			fmt.Fprintf(state.f, "%d ", state.readBuffer[i])
-		}
-		fmt.Fprintf(state.f, "\n")
+		fmt.Fprintf(f, "Waiting for token...\n")
+		token = InteractiveLexer(stdInState) // token = <- tokenChan
+		fmt.Fprintf(f, "Got token: %v\n", token)
 
-		i := 0
-		for i < n {
-			c := state.readBuffer[i]
-			i++
-
-			if c == 1 { // Ctrl-A
-				// Move cursor to beginning of line.
-				fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
-				state.index = 0
-			} else if c == 2 { // CTRL-B
-				// Move cursor left
-				if state.index > 0 {
-					state.index--
-					fmt.Fprintf(os.Stdout, "\033[D")
-				}
-			} else if c == 3 || c == 4 {
-				// Ctrl-C or Ctrl-D
-				fmt.Fprintf(os.Stdout, "\r\n") // Print a nice clean newline.
-				os.Exit(0)
-			} else if c == 5 { // Ctrl-E
-				// Move cursor to end of line
-				fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + len(state.currentCommand))
-				state.index = len(state.currentCommand)
-			} else if c == 6 { // Ctrl-F
-				// Move cursor right
-				if state.index < len(state.currentCommand) {
-					state.index++
-					fmt.Fprintf(os.Stdout, "\033[C")
-				}
-			} else if c == 9 { // Tab
-				// Get all files in the current directory
-				files, err := os.ReadDir(".")
-				if err != nil {
-					fmt.Fprintf(os.Stdout, "\a")
-				}
-
-				var prefix string
-
-				if state.index == 0 {
-					prefix = ""
-				} else if unicode.IsSpace(state.currentCommand[state.index - 1]) {
-					prefix = ""
-				} else {
-					i := state.index - 1
-					for {
-						if i == 0 {
-							prefix = string(state.currentCommand[:state.index])
-							break
-						}
-
-						if unicode.IsSpace(state.currentCommand[i]) {
-							prefix = string(state.currentCommand[i+1:state.index])
-							break
-						}
-						i = i - 1
-					}
-				}
-
-				// Find all files that start with prefix
-				var matches []string
-				for _, file := range files {
-					if strings.HasPrefix(file.Name(), prefix) {
-						matches = append(matches, file.Name())
-					}
-				}
-
-				if len(matches) == 0 {
-					fmt.Fprintf(os.Stdout, "\a")
-				} else if len(matches) == 1 {
-					state.printText(matches[0][len(prefix):])
-				} else {
-					// Print out the longest common prefix
-					longestCommonPrefix := longestCommonPrefix(matches)
-
-					if len(longestCommonPrefix) == len(prefix) {
-						// Print bell
-						fmt.Fprintf(os.Stdout, "\a")
-					} else {
-						state.printText(longestCommonPrefix[len(prefix):])
-					}
-				}
-			} else if c == 11 { // Ctrl-K
-				// Erase to end of line
-				fmt.Fprintf(os.Stdout, "\033[K")
-				state.currentCommand = state.currentCommand[:state.index]
-			} else if c == 12 { // Ctrl-L
-				// See https://github.com/microsoft/terminal/issues/17320
-				// and https://github.com/microsoft/terminal/issues/11078
-				// Some terminals are erasing text in scrollback buffer using the \e[nS escape sequence.
-
-				// Implement using \n's instead.
-				curRow, curCol, err, _ := getCurrentPos()
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "Error getting cursor position: %s\n", err)
-					os.Exit(1)
-				}
-
-				rowsToScroll := curRow - state.numPromptLines
-				fmt.Fprintf(state.f, "%d %d %d\n", curRow, state.numPromptLines, rowsToScroll)
-
-				// Move cursor to bottom of terminal, if you have a terminal that has over 10000 lines, I'm sorry.
-				fmt.Fprintf(os.Stdout, "\033[10000B")
-				// print out rowsToScroll newlines
-				for i := 0; i < rowsToScroll; i++ {
-					fmt.Fprintf(os.Stdout, "\n")
-				}
-
-				// Move cursor
-				fmt.Fprintf(os.Stdout, "\033[%d;%dH", state.numPromptLines, curCol)
-			} else if c == 13 { // Enter
-				// Add command to history
-				currentCommandStr := string(state.currentCommand)
-
-				if state.index == len(state.currentCommand) {
-					// Walk back to last whitespace, check if final element is an alias.
-					i := state.index
-					for {
-						if i == 0 || state.currentCommand[i-1] == ' ' || state.currentCommand[i-1] == '[' {
-							break
-						}
-						i--
-					}
-
-					lastWord := string(state.currentCommand[i:state.index])
-					alias, aliasSet := aliases[lastWord]
-					if aliasSet {
-						currentCommandStr = currentCommandStr[:i] + alias
-					}
-
-					// Update the UI.
-					state.clearToPrompt()
-					fmt.Fprintf(os.Stdout, "%s", currentCommandStr)
-					state.index = len(state.currentCommand)
-					state.currentCommand = []rune(currentCommandStr)
-					// Move cursor to end
-					fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index+1)
-				}
-
-				if len(currentCommandStr) > 0 {
-					history = append(history, currentCommandStr)
-				}
-
-				historyIndex = 0
-
-				// Reset current command
-				state.currentCommand = state.currentCommand[:0]
-
-				p := state.p
-				l := state.l
-
-				state.l.resetInput(currentCommandStr)
-				state.p.NextToken()
-
-				if p.curr.Type == LITERAL {
-					// Check for known commands. If so, we'll essentially wrap the entire command in a list to execute
-					literalStr := p.curr.Lexeme
-
-					if _, ok := knownCommands[literalStr]; ok {
-						tokenBufBuilder.Reset()
-						tokenBufBuilder.WriteString("[")
-
-						tokenBufBuilder.WriteString("'" + literalStr + "'")
-
-						// Clear token buffer
-						tokenBuf = tokenBuf[:0]
-
-						// Consume all tokens
-						for p.NextToken(); p.curr.Type != EOF; p.NextToken() {
-							tokenBuf = append(tokenBuf, p.curr)
-						}
-
-						for _, t := range tokenBuf {
-							tokenBufBuilder.WriteString(" ")
-							tokenBufBuilder.WriteString(t.Lexeme)
-						}
-
-						tokenBufBuilder.WriteString("];")
-						currentCommandStr = tokenBufBuilder.String()
-						fmt.Fprintf(state.f, "Command: %s\n", currentCommandStr)
-						l.resetInput(currentCommandStr)
-						p.NextToken()
-					}
-				}
-
-				parsed, err := p.ParseFile()
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "\r\nError parsing input: %s\n", err)
-					// Move to start
-					fmt.Fprintf(os.Stdout, "\033[1G")
-					state.printPrompt()
-					state.index = 0
-					continue
-				}
-
-				// During evaluation, normal terminal output can happen, or TUI apps can be run.
-				// So want them to see non-raw mode terminal state.
-				term.Restore(state.stdInFd, state.oldState)
-				fmt.Fprintf(os.Stdout, "\n")
-
-				if len(parsed.Items) > 0 {
-					state.initCallStackItem.MShellParseItem = parsed.Items[0]
-					result := state.evalState.Evaluate(parsed.Items, &state.stack, state.context, stdLibDefs, state.initCallStackItem)
-
-					if result.ExitCalled {
-						// Reset terminal to original state
-						os.Exit(result.ExitCode)
-						break
-					}
-
-					if !result.Success {
-						fmt.Fprintf(os.Stderr, "Error evaluating input.\n")
-					}
-				}
-
-				fmt.Fprintf(os.Stdout, "\033[1G")
-				state.printPrompt()
-				state.index = 0
-
-				// Put terminal back into raw mode
-				oldState, err = term.MakeRaw(state.stdInFd)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "Error setting terminal to raw mode: %s\n", err)
-					os.Exit(1)
-					return
-				}
-			} else if c == 21 { // Ctrl-U
-				// Erase back to prompt start
-				fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
-				fmt.Fprintf(os.Stdout, "\033[K")
-				// fmt.Fprintf(os.Stdout, "\033[2K\033[1G")
-				// fmt.Fprintf(os.Stdout, "mshell> ")
-				// state.printPrompt()
-
-				// // Remaining chars in current command
-				state.currentCommand = state.currentCommand[state.index:]
-				for i := 0; i < len(state.currentCommand); i++ {
-					fmt.Fprintf(os.Stdout, "%c", state.currentCommand[i])
-				}
-
-				fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
-				state.index = 0
-			} else if c == 23 { // Ctrl-W
-				// Erase last word
-				if state.index > 0 {
-					// First consume all whitespace
-					for state.index > 0 && state.currentCommand[state.index-1] == ' ' {
-						state.index--
-					}
-
-					// Then consume all non-whitespace
-					for state.index > 0 && state.currentCommand[state.index-1] != ' ' {
-						state.index--
-					}
-
-					// Erase the word
-					fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + state.index)
-					fmt.Fprintf(os.Stdout, "\033[K")
-					state.currentCommand = state.currentCommand[:state.index]
-				}
-			} else if c == 27 && i < n { // 27 = Escape
-				c = state.readBuffer[i]
-				i++
-
-				if c == 79 && i < n {
-					c = state.readBuffer[i]
-					i++
-
-					if c == 80 { // F1
-						// Set state.currentCommand to "lf"
-						state.currentCommand = []rune{'l', 'f'}
-						state.ExecuteCurrentCommand()
-					} else if c == 81 { // F2
-
-					} else if c == 82 { // F3
-
-					} else if c == 83 { // F4
-
-					}
-				} else if c == 91 && i < n { // 91 = [
-					c = state.readBuffer[i]
-					i++
-					if c == 51 && i < n {
-						c = state.readBuffer[i]
-						i++
-						if c == 126 {
-							// Delete
-							if state.index < len(state.currentCommand) {
-								fmt.Fprintf(os.Stdout, "\033[K")
-								fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index+1:]))
-								state.currentCommand = append(state.currentCommand[:state.index], state.currentCommand[state.index+1:]...)
-								fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index)
-							}
-						}
-					} else if c == 65 {
-						// Up arrow
-						if historyIndex >= 0 && historyIndex < len(history) {
-							historyIndex++
-							// Clear back to prompt
-							state.clearToPrompt()
-							reverseIndex := len(history) - historyIndex
-							// state.printPrompt()
-							fmt.Fprintf(os.Stdout, history[reverseIndex])
-							// fmt.Fprintf(os.Stdout, "mshell> %s", history[reverseIndex])
-							state.currentCommand = []rune(history[reverseIndex])
-							state.index = len(state.currentCommand)
-						}
-					} else if c == 66 {
-						// Down arrow
-						if historyIndex > 0 && historyIndex <= len(history) + 1 {
-							historyIndex--
-							state.clearToPrompt()
-							if historyIndex == 0 {
-								// state.printPrompt()
-								// fmt.Fprintf(os.Stdout, "mshell> ")
-								state.currentCommand = []rune{}
-								state.index = 0
-							} else {
-								reverseIndex := len(history) - historyIndex
-								// fmt.Fprintf(os.Stdout, "mshell> %s", history[reverseIndex])
-								// state.printPrompt()
-								fmt.Fprintf(os.Stdout, history[reverseIndex])
-								state.currentCommand = []rune(history[reverseIndex])
-								state.index = len(state.currentCommand)
-							}
-						} else if historyIndex <= 0 {
-							historyIndex = 0
-						} else if historyIndex > len(history) {
-							historyIndex = len(history)
-						}
-
-					} else if c == 67 {
-						// Right arrow
-						if state.index < len(state.currentCommand) {
-							state.index++
-							fmt.Fprintf(os.Stdout, "\033[C")
-						}
-					} else if c == 68 {
-						// Left arrow
-						if state.index > 0 {
-							state.index--
-							fmt.Fprintf(os.Stdout, "\033[D")
-						}
-					}
-				} else if c == 98 { // Alt-B
-					// Move cursor left by word
-					if state.index > 0 {
-						// First consume all whitespace
-						for state.index > 0 && state.currentCommand[state.index-1] == ' ' {
-							state.index--
-						}
-
-						// Then consume all non-whitespace
-						for state.index > 0 && state.currentCommand[state.index-1] != ' ' {
-							state.index--
-						}
-
-						fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index)
-					}
-				} else if c == 102 { // Alt-F
-					// Move cursor right by word
-					if state.index < len(state.currentCommand) {
-						// First consume all whitespace
-						for state.index < len(state.currentCommand) && state.currentCommand[state.index] == ' ' {
-							state.index++
-						}
-
-						// Then consume all non-whitespace
-						for state.index < len(state.currentCommand) && state.currentCommand[state.index] != ' ' {
-							state.index++
-						}
-					}
-
-					fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index)
-				} else if c == 111 { // Alt-O
-					// Quit
-					fmt.Fprintf(os.Stdout, "\r\n")
-					os.Exit(0)
-				} else {
-					fmt.Fprintf(state.f, "Unknown sequence: %d %d %d\n", state.readBuffer[0], state.readBuffer[1], state.readBuffer[2])
-				}
-			} else if c == 32 { // Space
-				// Check for aliases. Split current command by whitespace, and check if last word is in aliases.
-				// If it is, replace last word with alias value.
-
-				i := state.index - 1
-				for {
-					if i < 0 || state.currentCommand[i] == ' ' || state.currentCommand[i] == '[' {
-						break
-					}
-					i--
-				}
-
-				lastWord := string(state.currentCommand[i+1:state.index])
-
-				aliasValue, aliasSet := aliases[lastWord]
-				if aliasSet {
-					// Erase starting at beginning of last word
-					fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+i+1)
-					fmt.Fprintf(os.Stdout, "\033[K")
-
-					// Print alias value
-					fmt.Fprintf(os.Stdout, aliasValue)
-
-					// Print the space
-					fmt.Fprintf(os.Stdout, " ")
-
-					// Print the rest of the command
-					fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
-
-					// Update current command
-					startText := state.currentCommand[:i+1]
-					endText := state.currentCommand[state.index:]
-
-					state.currentCommand = state.currentCommand[:0]
-
-					state.currentCommand = append(state.currentCommand, startText...)
-					state.currentCommand = append(state.currentCommand, []rune(aliasValue)...)
-					state.currentCommand = append(state.currentCommand, ' ')
-					state.currentCommand = append(state.currentCommand, endText...)
-
-					// state.currentCommand = append(state.currentCommand, ' ')
-					// state.currentCommand = append(state.currentCommand, state.currentCommand[state.index:]...)
-
-					fmt.Fprintf(state.f, "Alias: %s -> %s\n", lastWord, aliasValue)
-					fmt.Fprintf(state.f, "Current command: %s\n", string(state.currentCommand))
-
-					// Move cursor to end of the alias
-					state.index = i + 1 + len(aliasValue) + 1
-					fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index)
-				} else {
-					fmt.Fprintf(os.Stdout, "\033[K")
-					fmt.Fprintf(os.Stdout, "%c", c)
-					fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
-					fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index+1)
-
-					state.currentCommand = append(state.currentCommand[:state.index], append([]rune{rune(c)}, state.currentCommand[state.index:]...)...)
-					state.index++
-				}
-			} else if c > 32 && c <= 126 {
-				// Add chars to current command at current index
-				fmt.Fprintf(os.Stdout, "\033[K")
-				fmt.Fprintf(os.Stdout, "%c", c)
-				fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
-				fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index+1)
-
-				state.currentCommand = append(state.currentCommand[:state.index], append([]rune{rune(c)}, state.currentCommand[state.index:]...)...)
-				state.index++
-			} else if c == 127 { // Backspace
-				// Erase last char
-				if state.index > 0 {
-					state.currentCommand = append(state.currentCommand[:state.index-1], state.currentCommand[state.index:]...)
-					state.index--
-
-					fmt.Fprintf(os.Stdout, "\033[D")
-					fmt.Fprintf(os.Stdout, "\033[K")
-					fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
-					fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index)
-				}
-			} else {
-				fmt.Fprintf(state.f, "Unknown character: %d\n", c)
-			}
-		}
-
-
-		fmt.Fprintf(state.f, "%s\t%d\n", string(state.currentCommand), state.index)
-		// if !scanner.Scan() {
-			// break
-		// }
+		state.HandleToken(token)
 	}
 }
 
@@ -1066,7 +839,7 @@ func (state *TermState) ExecuteCurrentCommand() {
 
 	// During evaluation, normal terminal output can happen, or TUI apps can be run.
 	// So want them to see non-raw mode terminal state.
-	term.Restore(state.stdInFd, state.oldState)
+	term.Restore(state.stdInFd, &state.oldState)
 	fmt.Fprintf(os.Stdout, "\n")
 
 	if len(parsed.Items) > 0 {
@@ -1097,7 +870,7 @@ func (state *TermState) ExecuteCurrentCommand() {
 }
 
 func (state *TermState) toCooked() {
-	term.Restore(state.stdInFd, state.oldState)
+	term.Restore(state.stdInFd, &state.oldState)
 }
 
 func (state *TermState) printPrompt() {
@@ -1118,6 +891,7 @@ func (state *TermState) printPrompt() {
 	} else {
 		promptText = fmt.Sprintf("%s > \n:: ", cwd)
 	}
+
 	fmt.Fprintf(os.Stdout, promptText)
 	state.numPromptLines = strings.Count(promptText, "\n") + 1
 	fmt.Fprintf(os.Stdout, "\033[0m")
@@ -1130,26 +904,26 @@ func (state *TermState) printPrompt() {
 		os.Exit(1)
 	}
 
-	_, col, err, _ := getCurrentPos()
+	_, col, err := state.getCurrentPos()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error getting cursor position: %s\n", err)
 		os.Exit(1)
 	}
 
-	state.promptLength = col - 1
+	state.promptLength =  col - 1
 }
 
 // Returns the current cursor position as (row, col)
 // Row and col are 1-based.
 // Extra bytes are returned in case the response contains more than just the cursor position escape codes.
 // Returns row, col, err, extraBytes
-func getCurrentPos() (int, int, error, []byte) {
+func (state *TermState) getCurrentPos() (int, int, error) {
 
-	var f *os.File
+	// var f *os.File
 	if runtime.GOOS == "windows" {
 		local_app_data, ok := os.LookupEnv("LOCALAPPDATA")
 		if !ok {
-			return 0, 0, fmt.Errorf("Error getting LOCALAPPDATA environment variable"), []byte{}
+			return 0, 0, fmt.Errorf("Error getting LOCALAPPDATA environment variable")
 		}
 
 		// Make dir LOCALAPPDATA/mshell if it doesn't exist
@@ -1157,7 +931,7 @@ func getCurrentPos() (int, int, error, []byte) {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error creating directory %s/mshell: %s\n", local_app_data, err)
 			os.Exit(1)
-			return 0, 0, err, []byte{}
+			return 0, 0, err
 		}
 
 		// Open file for writing
@@ -1165,7 +939,7 @@ func getCurrentPos() (int, int, error, []byte) {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error opening file %s/mshell/mshell.log: %s\n", local_app_data, err)
 			os.Exit(1)
-			return 0, 0, err, []byte{}
+			return 0, 0, err
 		}
 		defer f.Close()
 	} else {
@@ -1174,87 +948,43 @@ func getCurrentPos() (int, int, error, []byte) {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error opening file /tmp/mshell.log: %s\n", err)
 			os.Exit(1)
-			return 0, 0, err, []byte{}
+			return 0, 0, err
 		}
 		defer f.Close()
 	}
 
-	// // Open log file
-	// f, err := os.OpenFile("/tmp/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	// if err != nil {
-		// fmt.Fprintf(os.Stderr, "Error opening file /tmp/mshell.log: %s\n", err)
-		// os.Exit(1)
-		// return
-	// }
-	// defer f.Close()
-
 	fmt.Fprintf(os.Stdout, "\033[6n")
 
-	// Read response
-	readBuffer := make([]byte, 1024)
-	os.Stdin.SetReadDeadline(time.Now().Add(1 * time.Second))
+	for {
+		// TODO: This needs to handle case where terminal doesn't respond.
+		token := InteractiveLexer(state.stdInState) // token = <- tokenChan
+		switch t := token.(type) {
+		case CsiToken:
+			if t.FinalChar == 'R' {
+				parsedStr := string(t.Params)
+				// Split on semicolon or colon
+				parts := strings.Split(parsedStr, ";")
+				if len(parts) != 2 {
+					return 0, 0, fmt.Errorf("Invalid response for cursor position")
+				}
+				// Parse row
+				row, err := strconv.Atoi(parts[0])
+				if err != nil {
+					return 0, 0, fmt.Errorf("Invalid response for cursor position")
+				}
+				// Parse column
+				col, err := strconv.Atoi(parts[1])
+				if err != nil {
+					return 0, 0, fmt.Errorf("Invalid response for cursor position")
+				}
 
-	fmt.Fprintf(f, "Starting Reading cursor position\n")
-
-	n, err := os.Stdin.Read(readBuffer)
-	if err != nil {
-		return 0, 0, err, []byte{}
-	}
-	os.Stdin.SetReadDeadline(time.Time{})
-
-	fmt.Fprintf(f, "Read %d bytes\n", n)
-
-	// Parse response
-	if n < 4 {
-		return 0, 0, fmt.Errorf("Did not receive enough bytes for cursor position"), readBuffer[:n]
-	}
-
-	if readBuffer[0] != 27 || readBuffer[1] != 91 {
-		return 0, 0, fmt.Errorf("Invalid response for cursor position"), readBuffer[:n]
-	}
-
-	// Parse row
-	row := 0
-	i := 2
-
-	for i < n && readBuffer[i] != ';' {
-		digit := int(readBuffer[i] - '0')
-		if digit < 0 || digit > 9 {
-			return 0, 0, fmt.Errorf("Invalid response for cursor position"), readBuffer[:n]
+				return row, col, nil
+			}
+		default:
+			fmt.Fprintf(state.f, "Got other token: %v\n", t)
+			state.HandleToken(t)
 		}
-		row = row*10 + digit
-		i++
 	}
-
-	if i == n {
-		return 0, 0, fmt.Errorf("Invalid response for cursor position"), readBuffer[:n]
-	}
-	// Skip ;
-	i++
-
-	// Parse column
-	col := 0
-	for i < n && readBuffer[i] != 'R' {
-		digit := int(readBuffer[i] - '0')
-		if digit < 0 || digit > 9 {
-			return 0, 0, fmt.Errorf("Invalid response for cursor position"), readBuffer[:n]
-		}
-
-		col = col*10 + digit
-		i++
-	}
-
-	if i == n {
-		return 0, 0, fmt.Errorf("Invalid response for cursor position"), readBuffer[:n]
-	}
-
-	if readBuffer[i] != 'R' {
-		return 0, 0, fmt.Errorf("Invalid response for cursor position"), readBuffer[:n]
-	}
-
-	i++ // Consume R
-
-	return row, col, nil, readBuffer[i:]
 }
 
 func stdLibDefinitions(stack MShellStack, context ExecuteContext, state EvalState) ([]MShellDefinition, error) {
@@ -1324,6 +1054,449 @@ func cleanupTempFiles() {
 		err := os.Remove(tempFile)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error removing temp file '%s': %s\n", tempFile, err)
+		}
+	}
+}
+
+func (state *TermState) HandleToken(token TerminalToken) {
+	switch t := token.(type) {
+	case AsciiToken:
+		// If the character is a printable ASCII character, handle it.
+		if t.Char > 32 && t.Char < 127 {
+			// Add chars to current command at current index
+			// fmt.Fprintf(state.f, "AsciiToken: %d\n", t.Char)
+			fmt.Fprintf(os.Stdout, "\033[K")
+			fmt.Fprintf(os.Stdout, "%c", t.Char)
+			fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
+			fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index+1)
+
+			state.currentCommand = append(state.currentCommand[:state.index], append([]rune{rune(t.Char)}, state.currentCommand[state.index:]...)...)
+			state.index++
+		} else if t.Char == 32 {
+			// Space
+			// Check for aliases. Split current command by whitespace, and check if last word is in aliases.
+			// If it is, replace last word with alias value.
+
+			i := state.index - 1
+			for {
+				if i < 0 || state.currentCommand[i] == ' ' || state.currentCommand[i] == '[' {
+					break
+				}
+				i--
+			}
+
+			lastWord := string(state.currentCommand[i+1:state.index])
+
+			aliasValue, aliasSet := aliases[lastWord]
+			if aliasSet {
+				// Erase starting at beginning of last word
+				fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+i+1)
+				fmt.Fprintf(os.Stdout, "\033[K")
+
+				// Print alias value
+				fmt.Fprintf(os.Stdout, aliasValue)
+
+				// Print the space
+				fmt.Fprintf(os.Stdout, " ")
+
+				// Print the rest of the command
+				fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
+
+				// Update current command
+				startText := state.currentCommand[:i+1]
+				endText := state.currentCommand[state.index:]
+
+				state.currentCommand = state.currentCommand[:0]
+
+				state.currentCommand = append(state.currentCommand, startText...)
+				state.currentCommand = append(state.currentCommand, []rune(aliasValue)...)
+				state.currentCommand = append(state.currentCommand, ' ')
+				state.currentCommand = append(state.currentCommand, endText...)
+
+				// state.currentCommand = append(state.currentCommand, ' ')
+				// state.currentCommand = append(state.currentCommand, state.currentCommand[state.index:]...)
+
+				fmt.Fprintf(state.f, "Alias: %s -> %s\n", lastWord, aliasValue)
+				fmt.Fprintf(state.f, "Current command: %s\n", string(state.currentCommand))
+
+				// Move cursor to end of the alias
+				state.index = i + 1 + len(aliasValue) + 1
+				fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index)
+			} else {
+				fmt.Fprintf(os.Stdout, "\033[K")
+				fmt.Fprintf(os.Stdout, "%c", t.Char)
+				fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
+				fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index+1)
+
+				state.currentCommand = append(state.currentCommand[:state.index], append([]rune{rune(t.Char)}, state.currentCommand[state.index:]...)...)
+				state.index++
+			}
+
+
+		} else if t.Char == 1 { // Ctrl-A
+			// Move cursor to beginning of line.
+			fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
+			state.index = 0
+		} else if t.Char == 2 { // CTRL-B
+			// Move cursor left
+			if state.index > 0 {
+				state.index--
+				fmt.Fprintf(os.Stdout, "\033[D")
+			}
+		} else if t.Char == 3 || t.Char == 4 {
+			// Ctrl-C or Ctrl-D
+			fmt.Fprintf(os.Stdout, "\r\n") // Print a nice clean newline.
+			os.Exit(0)
+		} else if t.Char == 5 { // Ctrl-E
+			// Move cursor to end of line
+			fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + len(state.currentCommand))
+			state.index = len(state.currentCommand)
+		} else if t.Char == 6 { // Ctrl-F
+			// Move cursor right
+			if state.index < len(state.currentCommand) {
+				state.index++
+				fmt.Fprintf(os.Stdout, "\033[C")
+			}
+		} else if t.Char == 9 { // Tab
+			// Get all files in the current directory
+			files, err := os.ReadDir(".")
+			if err != nil {
+				fmt.Fprintf(os.Stdout, "\a")
+			}
+
+			var prefix string
+
+			if state.index == 0 {
+				prefix = ""
+			} else if unicode.IsSpace(state.currentCommand[state.index - 1]) {
+				prefix = ""
+			} else {
+				i := state.index - 1
+				for {
+					if i == 0 {
+						prefix = string(state.currentCommand[:state.index])
+						break
+					}
+
+					if unicode.IsSpace(state.currentCommand[i]) {
+						prefix = string(state.currentCommand[i+1:state.index])
+						break
+					}
+					i = i - 1
+				}
+			}
+
+			// Find all files that start with prefix
+			var matches []string
+			for _, file := range files {
+				if strings.HasPrefix(file.Name(), prefix) {
+					matches = append(matches, file.Name())
+				}
+			}
+
+			if len(matches) == 0 {
+				fmt.Fprintf(os.Stdout, "\a")
+			} else if len(matches) == 1 {
+				state.printText(matches[0][len(prefix):])
+			} else {
+				// Print out the longest common prefix
+				longestCommonPrefix := longestCommonPrefix(matches)
+
+				if len(longestCommonPrefix) == len(prefix) {
+					// Print bell
+					fmt.Fprintf(os.Stdout, "\a")
+				} else {
+					state.printText(longestCommonPrefix[len(prefix):])
+				}
+			}
+		} else if t.Char == 11 { // Ctrl-K
+			// Erase to end of line
+			fmt.Fprintf(os.Stdout, "\033[K")
+			state.currentCommand = state.currentCommand[:state.index]
+		} else if t.Char == 12 { // Ctrl-L
+			// See https://github.com/microsoft/terminal/issues/17320
+			// and https://github.com/microsoft/terminal/issues/11078
+			// Some terminals are erasing text in scrollback buffer using the \e[nS escape sequence.
+
+			// Implement using \n's instead.
+
+			// Send off cursor position request
+			curRow, curCol, err := state.getCurrentPos()
+			if err != nil {
+				fmt.Fprintf(state.f, "Error getting cursor position: %s\n", err)
+				return
+				// os.Exit(1)
+			}
+
+			rowsToScroll := curRow - state.numPromptLines
+			fmt.Fprintf(state.f, "%d %d %d\n", curRow, state.numPromptLines, rowsToScroll)
+
+			// Move cursor to bottom of terminal, if you have a terminal that has over 10000 lines, I'm sorry.
+			fmt.Fprintf(os.Stdout, "\033[10000B")
+			// print out rowsToScroll newlines
+			for i := 0; i < rowsToScroll; i++ {
+				fmt.Fprintf(os.Stdout, "\n")
+			}
+
+			// Move cursor
+			fmt.Fprintf(os.Stdout, "\033[%d;%dH", state.numPromptLines, curCol)
+		} else if t.Char == 13 { // Enter
+			// Add command to history
+			currentCommandStr := string(state.currentCommand)
+
+			if state.index == len(state.currentCommand) {
+				// Walk back to last whitespace, check if final element is an alias.
+				i := state.index
+				for {
+					if i == 0 || state.currentCommand[i-1] == ' ' || state.currentCommand[i-1] == '[' {
+						break
+					}
+					i--
+				}
+
+				lastWord := string(state.currentCommand[i:state.index])
+				alias, aliasSet := aliases[lastWord]
+				if aliasSet {
+					currentCommandStr = currentCommandStr[:i] + alias
+				}
+
+				// Update the UI.
+				state.clearToPrompt()
+				fmt.Fprintf(os.Stdout, "%s", currentCommandStr)
+				state.index = len(state.currentCommand)
+				state.currentCommand = []rune(currentCommandStr)
+				// Move cursor to end
+				fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index+1)
+			}
+
+			if len(currentCommandStr) > 0 {
+				history = append(history, currentCommandStr)
+			}
+
+			state.historyIndex = 0
+
+			// Reset current command
+			state.currentCommand = state.currentCommand[:0]
+
+			p := state.p
+			l := state.l
+
+			state.l.resetInput(currentCommandStr)
+			state.p.NextToken()
+
+			if p.curr.Type == LITERAL {
+				// Check for known commands. If so, we'll essentially wrap the entire command in a list to execute
+				literalStr := p.curr.Lexeme
+
+				if _, ok := knownCommands[literalStr]; ok {
+					tokenBufBuilder.Reset()
+					tokenBufBuilder.WriteString("[")
+
+					tokenBufBuilder.WriteString("'" + literalStr + "'")
+
+					// Clear token buffer
+					tokenBuf = tokenBuf[:0]
+
+					// Consume all tokens
+					for p.NextToken(); p.curr.Type != EOF; p.NextToken() {
+						tokenBuf = append(tokenBuf, p.curr)
+					}
+
+					for _, t := range tokenBuf {
+						tokenBufBuilder.WriteString(" ")
+						tokenBufBuilder.WriteString(t.Lexeme)
+					}
+
+					tokenBufBuilder.WriteString("];")
+					currentCommandStr = tokenBufBuilder.String()
+					fmt.Fprintf(state.f, "Command: %s\n", currentCommandStr)
+					l.resetInput(currentCommandStr)
+					p.NextToken()
+				}
+			}
+
+			parsed, err := p.ParseFile()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "\r\nError parsing input: %s\n", err)
+				// Move to start
+				fmt.Fprintf(os.Stdout, "\033[1G")
+				state.printPrompt()
+				state.index = 0
+				return
+			}
+
+			// During evaluation, normal terminal output can happen, or TUI apps can be run.
+			// So want them to see non-raw mode terminal state.
+			// fmt.Fprintf(state.f, "Pausing..\n")
+			// state.pauseChan <- true
+
+			term.Restore(state.stdInFd, &state.oldState)
+			fmt.Fprintf(os.Stdout, "\n")
+
+			if len(parsed.Items) > 0 {
+				state.initCallStackItem.MShellParseItem = parsed.Items[0]
+
+				// fmt.Fprintf(state.f, "Evaluating..\n")
+				result := state.evalState.Evaluate(parsed.Items, &state.stack, state.context, state.stdLibDefs, state.initCallStackItem)
+				// fmt.Fprintf(state.f, "Done Evaluating..\n")
+				// state.pauseChan <- false
+				// fmt.Fprintf(state.f, "Unpause..\n")
+
+				if result.ExitCalled {
+					// Reset terminal to original state
+					os.Exit(result.ExitCode)
+					break
+				}
+
+				if !result.Success {
+					fmt.Fprintf(os.Stderr, "Error evaluating input.\n")
+				}
+			}
+
+			fmt.Fprintf(os.Stdout, "\033[1G")
+			state.printPrompt()
+			state.index = 0
+
+			// Put terminal back into raw mode
+			_, err = term.MakeRaw(state.stdInFd)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error setting terminal to raw mode: %s\n", err)
+				os.Exit(1)
+				return
+			}
+		} else if t.Char == 21 { // Ctrl-U
+			// Erase back to prompt start
+			fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
+			fmt.Fprintf(os.Stdout, "\033[K")
+			// fmt.Fprintf(os.Stdout, "\033[2K\033[1G")
+			// fmt.Fprintf(os.Stdout, "mshell> ")
+			// state.printPrompt()
+
+			// // Remaining chars in current command
+			state.currentCommand = state.currentCommand[state.index:]
+			for i := 0; i < len(state.currentCommand); i++ {
+				fmt.Fprintf(os.Stdout, "%c", state.currentCommand[i])
+			}
+
+			fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
+			state.index = 0
+		} else if t.Char == 23 { // Ctrl-W
+			// Erase last word
+			if state.index > 0 {
+				// First consume all whitespace
+				for state.index > 0 && state.currentCommand[state.index-1] == ' ' {
+					state.index--
+				}
+
+				// Then consume all non-whitespace
+				for state.index > 0 && state.currentCommand[state.index-1] != ' ' {
+					state.index--
+				}
+
+				// Erase the word
+				fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + state.index)
+				fmt.Fprintf(os.Stdout, "\033[K")
+				state.currentCommand = state.currentCommand[:state.index]
+			}
+		} else if t.Char == 127 { // Backspace
+			// Erase last char
+			if state.index > 0 {
+				state.currentCommand = append(state.currentCommand[:state.index-1], state.currentCommand[state.index:]...)
+				state.index--
+
+				fmt.Fprintf(os.Stdout, "\033[D")
+				fmt.Fprintf(os.Stdout, "\033[K")
+				fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
+				fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index)
+			}
+		}
+	case SpecialKey:
+		if t == KEY_F1 {
+			// Set state.currentCommand to "lf"
+			state.currentCommand = []rune{'l', 'f'}
+			state.ExecuteCurrentCommand()
+		} else if t == KEY_ALT_B {
+			// Move cursor left by word
+			if state.index > 0 {
+				// First consume all whitespace
+				for state.index > 0 && state.currentCommand[state.index-1] == ' ' {
+					state.index--
+				}
+
+				// Then consume all non-whitespace
+				for state.index > 0 && state.currentCommand[state.index-1] != ' ' {
+					state.index--
+				}
+
+				fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index)
+			}
+		} else if t == KEY_ALT_F { // Alt-F
+			// Move cursor right by word
+			if state.index < len(state.currentCommand) {
+				// First consume all whitespace
+				for state.index < len(state.currentCommand) && state.currentCommand[state.index] == ' ' {
+					state.index++
+				}
+
+				// Then consume all non-whitespace
+				for state.index < len(state.currentCommand) && state.currentCommand[state.index] != ' ' {
+					state.index++
+				}
+			}
+
+			fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index)
+		} else if t == KEY_ALT_O { // Alt-O
+			// Quit
+			fmt.Fprintf(os.Stdout, "\r\n")
+			os.Exit(0)
+		} else if t == KEY_UP {
+			// Up arrow
+			if state.historyIndex >= 0 && state.historyIndex < len(history) {
+				state.historyIndex++
+				// Clear back to prompt
+				state.clearToPrompt()
+				reverseIndex := len(history) - state.historyIndex
+				// state.printPrompt()
+				fmt.Fprintf(os.Stdout, history[reverseIndex])
+				// fmt.Fprintf(os.Stdout, "mshell> %s", history[reverseIndex])
+				state.currentCommand = []rune(history[reverseIndex])
+				state.index = len(state.currentCommand)
+			}
+		} else if t == KEY_DOWN {
+			// Down arrow
+			if state.historyIndex > 0 && state.historyIndex <= len(history) + 1 {
+				state.historyIndex--
+				state.clearToPrompt()
+				if state.historyIndex == 0 {
+					// state.printPrompt()
+					// fmt.Fprintf(os.Stdout, "mshell> ")
+					state.currentCommand = []rune{}
+					state.index = 0
+				} else {
+					reverseIndex := len(history) - state.historyIndex
+					// fmt.Fprintf(os.Stdout, "mshell> %s", history[reverseIndex])
+					// state.printPrompt()
+					fmt.Fprintf(os.Stdout, history[reverseIndex])
+					state.currentCommand = []rune(history[reverseIndex])
+					state.index = len(state.currentCommand)
+				}
+			} else if state.historyIndex <= 0 {
+				state.historyIndex = 0
+			} else if state.historyIndex > len(history) {
+				state.historyIndex = len(history)
+			}
+		} else if t == KEY_RIGHT {
+			// Right arrow
+			if state.index < len(state.currentCommand) {
+				state.index++
+				fmt.Fprintf(os.Stdout, "\033[C")
+			}
+		} else if t == KEY_LEFT {
+			// Left arrow
+			if state.index > 0 {
+				state.index--
+				fmt.Fprintf(os.Stdout, "\033[D")
+			}
 		}
 	}
 }
