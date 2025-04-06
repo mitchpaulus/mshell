@@ -415,7 +415,41 @@ type TermState struct {
 
 func (state *TermState) clearToPrompt() {
 	fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
+	state.index = 0
+	ClearToEnd()
+}
+
+func ClearToEnd() {
 	fmt.Fprintf(os.Stdout, "\033[K")
+}
+
+func (state *TermState) ClearScreen() {
+	// See https://github.com/microsoft/terminal/issues/17320
+	// and https://github.com/microsoft/terminal/issues/11078
+	// Some terminals are erasing text in scrollback buffer using the \e[nS escape sequence.
+
+	// Implement using \n's instead.
+
+	// Send off cursor position request
+	curRow, curCol, err := state.getCurrentPos()
+	if err != nil {
+		fmt.Fprintf(state.f, "Error getting cursor position: %s\n", err)
+		return
+		// os.Exit(1)
+	}
+
+	rowsToScroll := curRow - state.numPromptLines
+	fmt.Fprintf(state.f, "%d %d %d\n", curRow, state.numPromptLines, rowsToScroll)
+
+	// Move cursor to bottom of terminal, if you have a terminal that has over 10000 lines, I'm sorry.
+	fmt.Fprintf(os.Stdout, "\033[10000B")
+	// print out rowsToScroll newlines
+	for i := 0; i < rowsToScroll; i++ {
+		fmt.Fprintf(os.Stdout, "\n")
+	}
+
+	// Move cursor
+	fmt.Fprintf(os.Stdout, "\033[%d;%dH", state.numPromptLines, curCol)
 }
 
 var tokenBuf []Token
@@ -1058,20 +1092,93 @@ func cleanupTempFiles() {
 	}
 }
 
+// This function pushes characters to the terminal and to the backing command.
+func (state *TermState) PushChars(chars []rune) {
+	// Push chars to current command
+	ClearToEnd()
+	fmt.Fprintf(os.Stdout, "%s", string(chars))
+	// Add back what may have been deleted.
+	fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
+	fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index+len(chars))
+
+	state.currentCommand = append(state.currentCommand[:state.index], append(chars, state.currentCommand[state.index:]...)...)
+	state.index = state.index + len(chars)
+}
+
 func (state *TermState) HandleToken(token TerminalToken) {
 	switch t := token.(type) {
 	case AsciiToken:
 		// If the character is a printable ASCII character, handle it.
 		if t.Char > 32 && t.Char < 127 {
-			// Add chars to current command at current index
-			// fmt.Fprintf(state.f, "AsciiToken: %d\n", t.Char)
-			fmt.Fprintf(os.Stdout, "\033[K")
-			fmt.Fprintf(os.Stdout, "%c", t.Char)
-			fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
-			fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index+1)
 
-			state.currentCommand = append(state.currentCommand[:state.index], append([]rune{rune(t.Char)}, state.currentCommand[state.index:]...)...)
-			state.index++
+			if t.Char == ';' {
+				// Check next token, if it's a 'r', open REPOs with lf
+				token = InteractiveLexer(state.stdInState)
+				if t, ok := token.(AsciiToken); ok {
+					if t.Char == 'r' {
+						// Open REPOs with lf
+						// fmt.Fprintf(state.f, "Opening REPOs with lf...\n")
+						state.clearToPrompt()
+						state.currentCommand = state.currentCommand[:0]
+						state.PushChars([]rune{'r'})
+						state.ExecuteCurrentCommand()
+					} else {
+						// Push both tokens
+						state.PushChars([]rune{';', rune(t.Char)})
+					}
+				} else {
+					// Push just the semicolon
+					state.PushChars([]rune{';'})
+					state.HandleToken(token)
+				}
+			} else if t.Char == 'v' {
+				// Check if next token is 'l', then clear screen
+				token = InteractiveLexer(state.stdInState)
+				if t, ok := token.(AsciiToken); ok {
+					if t.Char == 'l' {
+						// Clear screen
+						state.ClearScreen()
+					} else {
+						// Push both tokens
+						state.PushChars([]rune{'v', rune(t.Char)})
+					}
+				} else {
+					// Push just the 'v'
+					state.PushChars([]rune{'v'})
+					state.HandleToken(token)
+				}
+			} else if t.Char == 'q' {
+				// Check if next token is 'l', then clear screen
+				token = InteractiveLexer(state.stdInState)
+				if t, ok := token.(AsciiToken); ok {
+					if t.Char == 'q' {
+						state.clearToPrompt()
+						state.currentCommand = state.currentCommand[:0]
+						state.PushChars([]rune("0 exit"))
+						state.ExecuteCurrentCommand()
+					} else {
+						// Push both tokens
+						state.PushChars([]rune{'v', rune(t.Char)})
+					}
+				} else {
+					// Push just the 'q'
+					state.PushChars([]rune{'q'})
+					state.HandleToken(token)
+				}
+			} else {
+				state.PushChars([]rune{rune(t.Char)})
+			}
+
+
+			// // Add chars to current command at current index
+			// // fmt.Fprintf(state.f, "AsciiToken: %d\n", t.Char)
+			// fmt.Fprintf(os.Stdout, "\033[K")
+			// fmt.Fprintf(os.Stdout, "%c", t.Char)
+			// fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
+			// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index+1)
+
+			// state.currentCommand = append(state.currentCommand[:state.index], append([]rune{rune(t.Char)}, state.currentCommand[state.index:]...)...)
+			// state.index++
 		} else if t.Char == 32 {
 			// Space
 			// Check for aliases. Split current command by whitespace, and check if last word is in aliases.
@@ -1123,16 +1230,8 @@ func (state *TermState) HandleToken(token TerminalToken) {
 				state.index = i + 1 + len(aliasValue) + 1
 				fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index)
 			} else {
-				fmt.Fprintf(os.Stdout, "\033[K")
-				fmt.Fprintf(os.Stdout, "%c", t.Char)
-				fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
-				fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index+1)
-
-				state.currentCommand = append(state.currentCommand[:state.index], append([]rune{rune(t.Char)}, state.currentCommand[state.index:]...)...)
-				state.index++
+				state.PushChars([]rune{rune(t.Char)})
 			}
-
-
 		} else if t.Char == 1 { // Ctrl-A
 			// Move cursor to beginning of line.
 			fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
@@ -1214,32 +1313,7 @@ func (state *TermState) HandleToken(token TerminalToken) {
 			fmt.Fprintf(os.Stdout, "\033[K")
 			state.currentCommand = state.currentCommand[:state.index]
 		} else if t.Char == 12 { // Ctrl-L
-			// See https://github.com/microsoft/terminal/issues/17320
-			// and https://github.com/microsoft/terminal/issues/11078
-			// Some terminals are erasing text in scrollback buffer using the \e[nS escape sequence.
-
-			// Implement using \n's instead.
-
-			// Send off cursor position request
-			curRow, curCol, err := state.getCurrentPos()
-			if err != nil {
-				fmt.Fprintf(state.f, "Error getting cursor position: %s\n", err)
-				return
-				// os.Exit(1)
-			}
-
-			rowsToScroll := curRow - state.numPromptLines
-			fmt.Fprintf(state.f, "%d %d %d\n", curRow, state.numPromptLines, rowsToScroll)
-
-			// Move cursor to bottom of terminal, if you have a terminal that has over 10000 lines, I'm sorry.
-			fmt.Fprintf(os.Stdout, "\033[10000B")
-			// print out rowsToScroll newlines
-			for i := 0; i < rowsToScroll; i++ {
-				fmt.Fprintf(os.Stdout, "\n")
-			}
-
-			// Move cursor
-			fmt.Fprintf(os.Stdout, "\033[%d;%dH", state.numPromptLines, curCol)
+			state.ClearScreen()
 		} else if t.Char == 13 { // Enter
 			// Add command to history
 			currentCommandStr := string(state.currentCommand)
