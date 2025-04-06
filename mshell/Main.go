@@ -1199,11 +1199,27 @@ func (state *TermState) HandleToken(token TerminalToken) {
 						state.ExecuteCurrentCommand()
 					} else {
 						// Push both tokens
-						state.PushChars([]rune{';', rune(t.Char)})
+						state.PushChars([]rune{';'})
+						state.HandleToken(token)
 					}
 				} else {
 					// Push just the semicolon
 					state.PushChars([]rune{';'})
+					state.HandleToken(token)
+				}
+			} else if t.Char == 'j' {
+				token = InteractiveLexer(state.stdInState)
+				if t, ok := token.(AsciiToken); ok {
+					if t.Char == 'f' {
+						state.HandleToken(AsciiToken{Char: 13})
+					} else {
+						// Push both tokens
+						state.PushChars([]rune{'j'})
+						state.HandleToken(token)
+					}
+				} else {
+					// Push just the semicolon
+					state.PushChars([]rune{'j'})
 					state.HandleToken(token)
 				}
 			} else if t.Char == 'v' {
@@ -1215,7 +1231,8 @@ func (state *TermState) HandleToken(token TerminalToken) {
 						state.ClearScreen()
 					} else {
 						// Push both tokens
-						state.PushChars([]rune{'v', rune(t.Char)})
+						state.PushChars([]rune{'v'})
+						state.HandleToken(token)
 					}
 				} else {
 					// Push just the 'v'
