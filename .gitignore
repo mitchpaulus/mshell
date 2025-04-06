@@ -3,6 +3,8 @@ copy.msh
 .redo/
 mshell/bin
 
+*.mshell_history
+
 # REDOGI
 mshell/msh.exe
 mshell/mshell

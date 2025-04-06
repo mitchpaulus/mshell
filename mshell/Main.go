@@ -15,6 +15,10 @@ import (
 	"sort"
 	"strconv"
 	// "runtime/debug"
+	"path/filepath"
+	"crypto/sha256"
+	"time"
+	"encoding/binary"
 )
 
 type CliCommand int
@@ -704,6 +708,10 @@ func InteractiveLexer(stdinReaderState *StdinReaderState) (TerminalToken)  {
 				// return AsciiToken{Char: 27}
 				// return AsciiToken{Char: c}
 			}
+		} else {
+			fmt.Fprintf(f, "Unknown start byte: %d\n", c)
+			// return AsciiToken{Char: c}
+			return UnknownToken{}
 		}
 	}
 }
@@ -1103,6 +1111,73 @@ func (state *TermState) PushChars(chars []rune) {
 
 	state.currentCommand = append(state.currentCommand[:state.index], append(chars, state.currentCommand[state.index:]...)...)
 	state.index = state.index + len(chars)
+}
+
+func WriteToHistory(command string, directory string, historyFilePath string) {
+	// Each entry is fixed width:
+	// 256 bit (32 byte) SHA hash of full directory path where command was run
+	// 256 bit (32 byte) SHA hash of command
+	// 64 bit (8 byte) timestamp
+
+	// File is ~/.local/share/mshell/.mshell_history or $LOCALAPPDATA/mshell/.mshell_history depending on OS
+	// If the file doesn't exist, create it.
+
+	// var path string
+	// if runtime.GOOS == "windows" {
+		// localAppData, ok := os.LookupEnv("LOCALAPPDATA")
+		// if !ok {
+			// fmt.Fprintf(os.Stderr, "Error getting LOCALAPPDATA environment variable\n")
+			// os.Exit(1)
+		// }
+		// path = localAppData + "/mshell/.mshell_history"
+	// } else {
+		// home, ok := os.LookupEnv("HOME")
+		// if !ok {
+			// fmt.Fprintf(os.Stderr, "Error getting HOME environment variable\n")
+			// os.Exit(1)
+		// }
+
+		// path = home + "/.local/share/mshell/.mshell_history"
+	// }
+
+	// Check if the directory exists, if not, create it.
+	dir := filepath.Dir(historyFilePath)
+	err := os.MkdirAll(dir, 0755)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating directory %s: %s\n", dir, err)
+		os.Exit(1)
+	}
+
+	// Open file for appending
+	file, err := os.OpenFile(historyFilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error opening file %s: %s\n", historyFilePath, err)
+		os.Exit(1)
+	}
+	defer file.Close()
+
+	// Get SHA hash of directory
+	dirHash := sha256.Sum256([]byte(directory))
+
+	// Get SHA hash of command
+	commandHash := sha256.Sum256([]byte(command))
+
+	// Get current timestamp
+	timestamp := time.Now().Unix()
+
+	var recordSlice [72]byte
+
+	// Add directory hash
+	copy(recordSlice[0:32], dirHash[:])
+	copy(recordSlice[32:64], commandHash[:])
+	binary.BigEndian.PutUint64(recordSlice[64:72], uint64(timestamp))
+
+	// Write to file, atomically with entire record
+	_, err = file.Write(recordSlice[:])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing to file %s: %s\n", historyFilePath, err)
+		os.Exit(1)
+	}
 }
 
 func (state *TermState) HandleToken(token TerminalToken) {
