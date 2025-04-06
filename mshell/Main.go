@@ -1158,7 +1158,8 @@ func (state *TermState) HandleToken(token TerminalToken) {
 						state.ExecuteCurrentCommand()
 					} else {
 						// Push both tokens
-						state.PushChars([]rune{'v', rune(t.Char)})
+						state.PushChars([]rune{'q'})
+						state.HandleToken(token)
 					}
 				} else {
 					// Push just the 'q'
