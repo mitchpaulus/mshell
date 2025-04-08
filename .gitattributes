@@ -1,0 +1,18 @@
+*.awk text eol=lf
+*.data text eol=lf
+*.do text eol=lf
+*.expected text eol=lf
+*.go text eol=lf
+*.md text eol=lf
+*.mod text eol=lf
+*.msh text eol=lf
+*.out text eol=lf
+*.sh text eol=lf
+*.stderr text eol=lf
+*.stdout text eol=lf
+*.sublime-syntax text eol=lf
+*.sum text eol=lf
+*.txt text eol=lf
+LICENSE text eol=lf
+numargs text eol=lf
+
