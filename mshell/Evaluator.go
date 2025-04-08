@@ -1450,31 +1450,31 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					} else if t.Lexeme == "lower" {
 						stack.Push(&MShellPath{strings.ToLower(str)})
 					}
-				} else if t.Lexeme == "hardlink" {
+				} else if t.Lexeme == "hardLink" {
 					newTarget, err := stack.Pop()
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'hardlink' operation on an empty stack.\n", t.Line, t.Column))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'hardLink' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
 					existingSource, err := stack.Pop()
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'hardlink' operation on a stack with only one item.\n", t.Line, t.Column))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'hardLink' operation on a stack with only one item.\n", t.Line, t.Column))
 					}
 
 					sourcePath, err := existingSource.CastString()
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot hardlink a %s.\n", t.Line, t.Column, existingSource.TypeName()))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot hardLink a %s.\n", t.Line, t.Column, existingSource.TypeName()))
 					}
 
 					targetPath, err := newTarget.CastString()
 					if err != nil {
 
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot hardlink to a %s.\n", t.Line, t.Column, newTarget.TypeName()))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot hardLink to a %s.\n", t.Line, t.Column, newTarget.TypeName()))
 					}
 
 					err = os.Link(sourcePath, targetPath)
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error hardlinking %s to %s: %s\n", t.Line, t.Column, sourcePath, targetPath, err.Error()))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error hardLinking %s to %s: %s\n", t.Line, t.Column, sourcePath, targetPath, err.Error()))
 					}
 				} else if t.Lexeme == "tempFile" {
 					tmpfile, err := os.CreateTemp("", "msh-")

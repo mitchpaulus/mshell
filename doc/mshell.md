@@ -70,7 +70,7 @@ No commas are required between elements.
 - `ttFile`: "Tab table" from file, puts content from file name split by lines and tabs on the stack. `(str -- [[str]])`
 - `isDir`: Check if path is a directory. `(path -- bool)`
 - `isFile`: Check if path is a file. `(path -- bool)`
-- `hardlink`: Create a hard link. `(existingSourcePath newTargetPath -- )`
+- `hardLink`: Create a hard link. `(existingSourcePath newTargetPath -- )`
 - `tempFile`: Create a temporary file, and put the full path on the stack. `( -- str)`
 - `tempDir`: Return path to the OS specific temporary directory. No checks on permission or existence, so never fails.`( -- str)`
 
