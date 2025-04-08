@@ -2958,13 +2958,6 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 		}
 		exitCode = 0 // TODO: What to set here?
 	} else {
-		// Open /tmp/mshell.log append mode
-		file, err := os.OpenFile("/tmp/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			return state.FailWithMessage(fmt.Sprintf("Error opening file /tmp/mshell.log for writing: %s\n", err.Error())), 1, ""
-		}
-		defer file.Close()
-
 		startErr := cmd.Run() // Manually deal with the exit code upstream
 		if startErr != nil {
 			if _, ok := startErr.(*exec.ExitError); !ok {

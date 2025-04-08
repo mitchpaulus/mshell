@@ -521,12 +521,6 @@ type StdinReaderState struct {
 }
 
 func (state *StdinReaderState) ReadByte() (byte) {
-	// f, err := os.OpenFile("/tmp/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	// if err != nil {
-		// fmt.Fprintf(os.Stderr, "Error opening file /tmp/mshell.log: %s\n", err)
-		// os.Exit(1)
-	// }
-
 	if state.i >= state.n {
 		// Do fresh read
 		// fmt.Fprintf(f, "Reading from stdin...\n")
@@ -557,23 +551,15 @@ func (state *StdinReaderState) ReadByte() (byte) {
 	}
 }
 
-func StdinReader(stdInChan chan byte, pauseChan chan bool) {
+func (state *TermState) StdinReader(stdInChan chan byte, pauseChan chan bool) {
 	readBuffer := make([]byte, 1024)
-
-	// Open /tmp/mshell.log for writing
-	f, err := os.OpenFile("/tmp/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error opening file /tmp/mshell.log: %s\n", err)
-		os.Exit(1)
-		return
-	}
 
 	for {
 		select {
 		case shouldPause := <- pauseChan:
 			if shouldPause {
 				// Pause reading from stdin
-				fmt.Fprintf(f, "Pausing stdin reader\n")
+				fmt.Fprintf(state.f, "Pausing stdin reader\n")
 				for {
 					// Wait for unpause
 					shouldUnpause := <- pauseChan
@@ -581,7 +567,7 @@ func StdinReader(stdInChan chan byte, pauseChan chan bool) {
 						break
 					}
 				}
-				fmt.Fprintf(f, "Unpausing stdin reader\n")
+				fmt.Fprintf(state.f, "Unpausing stdin reader\n")
 			}
 		default:
 			// Read char
@@ -601,13 +587,13 @@ func StdinReader(stdInChan chan byte, pauseChan chan bool) {
 				b := readBuffer[i]
 
 				if b > 32 && b < 127 {
-					fmt.Fprintf(f, "Sending %c..\n", b)
+					fmt.Fprintf(state.f, "Sending %c..\n", b)
 					stdInChan <- readBuffer[i]
-					fmt.Fprintf(f, "Sent %c..\n", b)
+					fmt.Fprintf(state.f, "Sent %c..\n", b)
 				} else {
-					fmt.Fprintf(f, "Sending %d..\n", b)
+					fmt.Fprintf(state.f, "Sending %d..\n", b)
 					stdInChan <- readBuffer[i]
-					fmt.Fprintf(f, "Sent %d..\n", b)
+					fmt.Fprintf(state.f, "Sent %d..\n", b)
 				}
 				// fmt.Fprintf(f, "Sending %d..\n", readBuffer[i])
 			}
@@ -615,20 +601,10 @@ func StdinReader(stdInChan chan byte, pauseChan chan bool) {
 	}
 }
 
-func InteractiveLexerGoroutine(stdinReaderState *StdinReaderState, outputChan chan TerminalToken) {
-	outputChan <- InteractiveLexer(stdinReaderState)
-}
 
 // This is intended to a be a lexer for the interactive mode.
 // It should be operating in a goroutine.
-func InteractiveLexer(stdinReaderState *StdinReaderState) (TerminalToken)  {
-	// Open /tmp/mshell.log for writing
-	f, err := os.OpenFile("/tmp/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error opening file /tmp/mshell.log: %s\n", err)
-		os.Exit(1)
-	}
-
+func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (TerminalToken)  {
 	var c byte
 
 	for {
@@ -703,13 +679,13 @@ func InteractiveLexer(stdinReaderState *StdinReaderState) (TerminalToken)  {
 				// Quit
 			} else {
 				// Unknown escape sequence
-				fmt.Fprintf(f, "Unknown escape sequence: ESC %d\n", c)
+				fmt.Fprintf(state.f, "Unknown escape sequence: ESC %d\n", c)
 				return UnknownToken{}
 				// return AsciiToken{Char: 27}
 				// return AsciiToken{Char: c}
 			}
 		} else {
-			fmt.Fprintf(f, "Unknown start byte: %d\n", c)
+			fmt.Fprintf(state.f, "Unknown start byte: %d\n", c)
 			// return AsciiToken{Char: c}
 			return UnknownToken{}
 		}
@@ -718,15 +694,6 @@ func InteractiveLexer(stdinReaderState *StdinReaderState) (TerminalToken)  {
 
 func (state *TermState) InteractiveMode() {
 	// FUTURE: Maybe Check for CSI u?
-
-	// Open /tmp/mshell.log for writing
-	f, err := os.OpenFile("/tmp/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error opening file /tmp/mshell.log: %s\n", err)
-		os.Exit(1)
-		return
-	}
-
 	stdInState := &StdinReaderState{
 		array: make([]byte, 1024),
 		i: 0,
@@ -785,9 +752,9 @@ func (state *TermState) InteractiveMode() {
 	var token TerminalToken
 	for {
 
-		fmt.Fprintf(f, "Waiting for token...\n")
-		token = InteractiveLexer(stdInState) // token = <- tokenChan
-		fmt.Fprintf(f, "Got token: %v\n", token)
+		fmt.Fprintf(state.f, "Waiting for token...\n")
+		token = state.InteractiveLexer(stdInState) // token = <- tokenChan
+		fmt.Fprintf(state.f, "Got token: %v\n", token)
 
 		state.HandleToken(token)
 	}
@@ -961,45 +928,45 @@ func (state *TermState) printPrompt() {
 // Returns row, col, err, extraBytes
 func (state *TermState) getCurrentPos() (int, int, error) {
 
-	// var f *os.File
-	if runtime.GOOS == "windows" {
-		local_app_data, ok := os.LookupEnv("LOCALAPPDATA")
-		if !ok {
-			return 0, 0, fmt.Errorf("Error getting LOCALAPPDATA environment variable")
-		}
+	// // var f *os.File
+	// if runtime.GOOS == "windows" {
+		// local_app_data, ok := os.LookupEnv("LOCALAPPDATA")
+		// if !ok {
+			// return 0, 0, fmt.Errorf("Error getting LOCALAPPDATA environment variable")
+		// }
 
-		// Make dir LOCALAPPDATA/mshell if it doesn't exist
-		err := os.MkdirAll(local_app_data + "/mshell", 0755)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error creating directory %s/mshell: %s\n", local_app_data, err)
-			os.Exit(1)
-			return 0, 0, err
-		}
+		// // Make dir LOCALAPPDATA/mshell if it doesn't exist
+		// err := os.MkdirAll(local_app_data + "/mshell", 0755)
+		// if err != nil {
+			// fmt.Fprintf(os.Stderr, "Error creating directory %s/mshell: %s\n", local_app_data, err)
+			// os.Exit(1)
+			// return 0, 0, err
+		// }
 
-		// Open file for writing
-		f, err := os.OpenFile(local_app_data + "/mshell/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error opening file %s/mshell/mshell.log: %s\n", local_app_data, err)
-			os.Exit(1)
-			return 0, 0, err
-		}
-		defer f.Close()
-	} else {
-		// Open file for writing
-		f, err := os.OpenFile("/tmp/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error opening file /tmp/mshell.log: %s\n", err)
-			os.Exit(1)
-			return 0, 0, err
-		}
-		defer f.Close()
-	}
+		// // Open file for writing
+		// f, err := os.OpenFile(local_app_data + "/mshell/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		// if err != nil {
+			// fmt.Fprintf(os.Stderr, "Error opening file %s/mshell/mshell.log: %s\n", local_app_data, err)
+			// os.Exit(1)
+			// return 0, 0, err
+		// }
+		// defer f.Close()
+	// } else {
+		// // Open file for writing
+		// f, err := os.OpenFile("/tmp/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		// if err != nil {
+			// fmt.Fprintf(os.Stderr, "Error opening file /tmp/mshell.log: %s\n", err)
+			// os.Exit(1)
+			// return 0, 0, err
+		// }
+		// defer f.Close()
+	// }
 
 	fmt.Fprintf(os.Stdout, "\033[6n")
 
 	for {
 		// TODO: This needs to handle case where terminal doesn't respond.
-		token := InteractiveLexer(state.stdInState) // token = <- tokenChan
+		token := state.InteractiveLexer(state.stdInState) // token = <- tokenChan
 		switch t := token.(type) {
 		case CsiToken:
 			if t.FinalChar == 'R' {
@@ -1188,7 +1155,7 @@ func (state *TermState) HandleToken(token TerminalToken) {
 
 			if t.Char == ';' {
 				// Check next token, if it's a 'r', open REPOs with lf
-				token = InteractiveLexer(state.stdInState)
+				token = state.InteractiveLexer(state.stdInState)
 				if t, ok := token.(AsciiToken); ok {
 					if t.Char == 'r' {
 						// Open REPOs with lf
@@ -1208,7 +1175,7 @@ func (state *TermState) HandleToken(token TerminalToken) {
 					state.HandleToken(token)
 				}
 			} else if t.Char == 'j' {
-				token = InteractiveLexer(state.stdInState)
+				token = state.InteractiveLexer(state.stdInState)
 				if t, ok := token.(AsciiToken); ok {
 					if t.Char == 'f' {
 						state.HandleToken(AsciiToken{Char: 13})
@@ -1224,7 +1191,7 @@ func (state *TermState) HandleToken(token TerminalToken) {
 				}
 			} else if t.Char == 'v' {
 				// Check if next token is 'l', then clear screen
-				token = InteractiveLexer(state.stdInState)
+				token = state.InteractiveLexer(state.stdInState)
 				if t, ok := token.(AsciiToken); ok {
 					if t.Char == 'l' {
 						// Clear screen
@@ -1241,7 +1208,7 @@ func (state *TermState) HandleToken(token TerminalToken) {
 				}
 			} else if t.Char == 'q' {
 				// Check if next token is 'l', then clear screen
-				token = InteractiveLexer(state.stdInState)
+				token = state.InteractiveLexer(state.stdInState)
 				if t, ok := token.(AsciiToken); ok {
 					if t.Char == 'q' {
 						state.clearToPrompt()
