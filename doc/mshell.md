@@ -72,6 +72,7 @@ No commas are required between elements.
 - `isFile`: Check if path is a file. `(path -- bool)`
 - `hardlink`: Create a hard link. `(existingSourcePath newTargetPath -- )`
 - `tempFile`: Create a temporary file, and put the full path on the stack. `( -- str)`
+- `tempDir`: Return path to the OS specific temporary directory. No checks on permission or existence, so never fails.`( -- str)`
 
 ## Math Functions
 
