@@ -125,6 +125,9 @@ No commas are required between elements.
 - `minute`: Get minute from date (0-59) `(date -- int)`
 - `dateFmt`: Format a date using the [golang format string](https://pkg.go.dev/time#Layout) `(date str -- str)`. Jan 2, 2006 at 3:04pm (MST) is the reference time.
 - `isoDateFmt`: Format a date using the ISO 8601 format YYYY-MM-DD `(date -- str)`
+- `isWeekend`: Check if date is a weekend `(date -- bool)`
+- `isWeekday`: Check if date is a weekday `(date -- bool)`
+- `dow`: Get day of week from date (0-6). Sunday = 0, .., Saturday = 6 `(date -- int)`
 
 ## Paths
 

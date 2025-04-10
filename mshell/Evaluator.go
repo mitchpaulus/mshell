@@ -1512,6 +1512,25 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					} else if t.Lexeme == "startsWith" {
 						stack.Push(&MShellBool{strings.HasPrefix(str2, str1)})
 					}
+				} else if t.Lexeme == "isWeekend" || t.Lexeme == "isWeekday" || t.Lexeme == "dow" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
+					}
+
+					dateTimeObj, ok := obj1.(*MShellDateTime)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot check if a %s is a weekend.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					dayOfWeek := int(dateTimeObj.Time.Weekday())
+					if t.Lexeme == "isWeekend" {
+						stack.Push(&MShellBool{dayOfWeek == 0 || dayOfWeek == 6})
+					} else if t.Lexeme == "isWeekday" {
+						stack.Push(&MShellBool{dayOfWeek != 0 && dayOfWeek != 6})
+					} else if t.Lexeme == "dow" {
+						stack.Push(&MShellInt{dayOfWeek})
+					}
 				} else { // last new function
 					stack.Push(&MShellLiteral{t.Lexeme})
 				}
