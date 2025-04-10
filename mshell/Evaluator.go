@@ -1531,6 +1531,17 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					} else if t.Lexeme == "dow" {
 						stack.Push(&MShellInt{dayOfWeek})
 					}
+				} else if t.Lexeme == "unixTime" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'unixTime' operation on an empty stack.\n", t.Line, t.Column))
+					}
+					dateTimeObj, ok := obj1.(*MShellDateTime)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot get the unix time of a %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					stack.Push(&MShellInt{int(dateTimeObj.Time.Unix())})
 				} else { // last new function
 					stack.Push(&MShellLiteral{t.Lexeme})
 				}
@@ -1863,6 +1874,15 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						stack.Push(&MShellFloat{float64(obj2.(*MShellInt).Value) - obj1.(*MShellFloat).Value})
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot subtract a float from a %s.\n", t.Line, t.Column, obj2.TypeName()))
+					}
+				case *MShellDateTime:
+					switch obj2.(type) {
+					case *MShellDateTime:
+						// Return a float with the difference in days.
+						days := obj2.(*MShellDateTime).Time.Sub(obj1.(*MShellDateTime).Time).Hours() / 24
+						stack.Push(&MShellFloat{days})
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot subtract a %s from a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
 					}
 				default:
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '-' to a %s and %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))

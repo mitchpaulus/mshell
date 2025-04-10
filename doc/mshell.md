@@ -33,6 +33,24 @@ No commas are required between elements.
 [1 2 3]
 ```
 
+### Date/Times
+
+Date/times can be entered using a literal syntax, in ISO-8601 format.
+
+```mshell
+# All are valid
+2023-10-01
+2023-10-01T13
+2023-10-01T13:01
+2023-10-01T13:01:30
+```
+
+Dates can be subtracted from each other, and the result is a float number of days.
+
+```mshell
+2023-10-02 2023-10-01 - # 1.0
+```
+
 ## Built-ins
 
 - `.s`: Print stack at current location (--)
@@ -130,6 +148,7 @@ No commas are required between elements.
 - `isWeekend`: Check if date is a weekend `(date -- bool)`
 - `isWeekday`: Check if date is a weekday `(date -- bool)`
 - `dow`: Get day of week from date (0-6). Sunday = 0, .., Saturday = 6 `(date -- int)`
+- `unixTime`: Get unix time from date `(date -- int)`
 
 ## Paths
 
