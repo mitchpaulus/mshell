@@ -509,6 +509,9 @@ const (
 
 	KEY_DELETE
 
+	KEY_HOME
+	KEY_END
+
 	KEY_ALT_B
 	KEY_ALT_F
 	KEY_ALT_O
@@ -617,7 +620,7 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 		} else if c == 27 { // ESC
 			// c = <-inputChan
 			c := stdinReaderState.ReadByte()
-			if c == 79 {
+			if c == 79 { // 79 = O
 				// c = <- inputChan
 				c = stdinReaderState.ReadByte()
 				if c == 80 { // F1
@@ -628,6 +631,10 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 					return KEY_F3
 				} else if c == 83 { // F4
 					return KEY_F4
+				} else {
+					// Unknown escape sequence
+					fmt.Fprintf(state.f, "Unknown escape sequence: ESC O %d\n", c)
+					return UnknownToken{}
 				}
 			} else if c == 91 { // 91 = [, CSI
 				// read until we get a final char, @ to ~, or 0x40 to 0x7E
@@ -653,6 +660,14 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 					} else if c == 68 {
 						// Left arrow
 						return KEY_LEFT
+					} else if c == 70 {
+						return KEY_END
+					} else if c == 72 {
+						return KEY_HOME
+					} else {
+						// Unknown escape sequence
+						fmt.Fprintf(state.f, "Unknown escape sequence: ESC [ %d\n", c)
+						return UnknownToken{}
 					}
 				} else { // else read until we get a final char, @ to ~, or 0x40 to 0x7E
 					byteArray := make([]byte, 0)
@@ -1631,6 +1646,14 @@ func (state *TermState) HandleToken(token TerminalToken) {
 				state.index--
 				fmt.Fprintf(os.Stdout, "\033[D")
 			}
+		} else if t == KEY_HOME {
+			// Move cursor to beginning of line.
+			fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
+			state.index = 0
+		} else if t == KEY_END {
+			// Move cursor to end of line
+			fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + len(state.currentCommand))
+			state.index = len(state.currentCommand)
 		}
 	}
 }
