@@ -2708,6 +2708,8 @@ func (state *EvalState) EvaluateFormatString(lexeme string, context ExecuteConte
 
 		if mode == FORMATMODEESCAPE {
 			switch c {
+			case 'e':
+				b.WriteRune('\033')
 			case 'n':
 				b.WriteRune('\n')
 			case 't':

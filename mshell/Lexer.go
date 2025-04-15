@@ -787,9 +787,8 @@ func (l *Lexer) consumeString() error {
 		}
 		c := l.advance()
 		if inEscape {
-			if c != 'n' && c != 't' && c != 'r' && c != '\\' && c != '"' {
-				// fmt.Fprintf(os.Stderr, "%d:%d: Invalid escape character within string, '%c'. Expected 'n', 't', 'r', '\\', or '\"'.\n", l.line, l.col, c)
-				return fmt.Errorf("%d:%d: Invalid escape character within string, '%c'. Expected 'n', 't', 'r', '\\', or '\"'.\n", l.line, l.col, c)
+			if c != 'e' && c != 'n' && c != 't' && c != 'r' && c != '\\' && c != '"' {
+				return fmt.Errorf("%d:%d: Invalid escape character within string, '%c'. Expected 'e', 'n', 't', 'r', '\\', or '\"'.\n", l.line, l.col, c)
 				// return l.makeToken(ERROR)
 			}
 			inEscape = false
@@ -825,7 +824,7 @@ func (l *Lexer) parsePath() Token {
 		}
 		c := l.advance()
 		if inEscape {
-			if c != 'n' && c != 't' && c != 'r' && c != '\\' && c != '`' {
+			if c != 'e' && c != 'n' && c != 't' && c != 'r' && c != '\\' && c != '`' {
 				fmt.Fprintf(os.Stderr, "%d:%d: Invalid escape character within path, '%c'. Expected 'n', 't', 'r', '\\', or '`'.\n", l.line, l.col, c)
 				return l.makeToken(ERROR)
 			}

@@ -1242,6 +1242,8 @@ func ParseRawString(inputString string) (string, error) {
 
 		if inEscape {
 			switch c {
+			case 'e':
+				b.WriteRune('\033') // Escape character
 			case 'n':
 				b.WriteRune('\n')
 			case 't':

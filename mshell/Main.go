@@ -302,7 +302,7 @@ func main() {
 		var rcPaths []string
 		if runtime.GOOS == "windows" {
 			rcPaths = strings.Split(stdlibPathVar, ";")
-			fmt.Fprintf(os.Stderr, "Windows: %s\n", stdlibPathVar)
+			// fmt.Fprintf(os.Stderr, "Windows: %s\n", stdlibPathVar)
 		} else {
 			rcPaths = strings.Split(stdlibPathVar, ":")
 		}
