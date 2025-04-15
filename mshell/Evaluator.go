@@ -1542,6 +1542,44 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 
 					stack.Push(&MShellInt{int(dateTimeObj.Time.Unix())})
+				} else if t.Lexeme == "writeFile" || t.Lexeme == "appendFile" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
+					}
+
+					obj2, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on a stack with only one item.\n", t.Line, t.Column, t.Lexeme))
+					}
+
+					path, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot write to a %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					content, err := obj2.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot write a %s to a file.\n", t.Line, t.Column, obj2.TypeName()))
+					}
+
+					var file *os.File
+					if t.Lexeme == "writeFile" {
+						file, err = os.Create(path)
+					} else if t.Lexeme == "appendFile" {
+						file, err = os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
+					}
+					defer file.Close()
+
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error opening file %s: %s\n", t.Line, t.Column, path, err.Error()))
+					}
+
+					_, err = file.WriteString(content)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error writing to file %s: %s\n", t.Line, t.Column, path, err.Error()))
+					}
+
 				} else { // last new function
 					stack.Push(&MShellLiteral{t.Lexeme})
 				}

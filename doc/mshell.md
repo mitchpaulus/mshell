@@ -93,6 +93,8 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `tempDir`: Return path to the OS specific temporary directory. No checks on permission or existence, so never fails.`( -- str)`
 - `uw`: Shorthand for `unlines w` `([str] -- )`
 - `tuw`: Shorthand for `(tjoin) map uw` `([[str]] -- )`
+- `writeFile`: Write string to file (UTF-8). `(str content str file -- )`
+- `appendFile`: Append string to file (UTF-8). `(str content str file -- )`
 
 ## Math Functions
 
