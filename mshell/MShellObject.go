@@ -1286,6 +1286,8 @@ func ParseRawPath(inputString string) (string, error) {
 
 		if inEscape {
 			switch c {
+			case 'e':
+				b.WriteRune('\033')
 			case 'n':
 				b.WriteRune('\n')
 			case 't':
