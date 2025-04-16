@@ -709,6 +709,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot split a %s.\n", t.Line, t.Column, obj.TypeName()))
 					}
 				} else if t.Lexeme == "join" {
+					// This is a string join function
 					delimiter, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'join' operation on an empty stack.\n", t.Line, t.Column))
@@ -1579,7 +1580,46 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error writing to file %s: %s\n", t.Line, t.Column, path, err.Error()))
 					}
+				} else if t.Lexeme == "rm" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'rm' operation on an empty stack.\n", t.Line, t.Column))
+					}
 
+					path, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot remove a %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					err = os.Remove(path)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error removing file %s: %s\n", t.Line, t.Column, path, err.Error()))
+					}
+				} else if t.Lexeme == "mv" || t.Lexeme == "cp" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
+					}
+
+					obj2, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on a stack with only one item.\n", t.Line, t.Column, t.Lexeme))
+					}
+
+					destination, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot %s to a %s.\n", t.Line, t.Column, t.Lexeme, obj1.TypeName()))
+					}
+
+					source, err := obj2.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot %s from a %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName()))
+					}
+
+					err = os.Rename(source, destination)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error in %s from '%s' to '%s': %s\n", t.Line, t.Column, t.Lexeme, source, destination, err.Error()))
+					}
 				} else { // last new function
 					stack.Push(&MShellLiteral{t.Lexeme})
 				}

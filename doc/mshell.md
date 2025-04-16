@@ -95,6 +95,9 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `tuw`: Shorthand for `(tjoin) map uw` `([[str]] -- )`
 - `writeFile`: Write string to file (UTF-8). `(str content str file -- )`
 - `appendFile`: Append string to file (UTF-8). `(str content str file -- )`
+- `rm`: Remove file or directory. `(str -- )`
+- `cp`: Copy file or directory. `(str source str dest -- )`
+- `mv`: Move file or directory. `(str source str dest -- )`
 
 ## Math Functions
 
