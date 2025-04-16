@@ -1331,6 +1331,31 @@ func (state *TermState) HandleToken(token TerminalToken) {
 				state.index++
 				fmt.Fprintf(os.Stdout, "\033[C")
 			}
+		} else if t.Char == 8 { // Backspace (or more typically CTRL-Backspace)
+			// Do same as CTRL-W
+			// Erase last word
+			if state.index > 0 {
+				origIndex := state.index
+				// First consume all whitespace
+				for state.index > 0 && state.currentCommand[state.index-1] == ' ' {
+					state.index--
+				}
+
+				// Then consume all non-whitespace
+				for state.index > 0 && state.currentCommand[state.index-1] != ' ' {
+					state.index--
+				}
+
+				state.currentCommand = append(state.currentCommand[:state.index], state.currentCommand[origIndex:]...)
+
+				// Erase the word
+				fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + state.index)
+				fmt.Fprintf(os.Stdout, "\033[K")
+
+				// Print the rest of the command
+				fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
+				fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + state.index)
+			}
 		} else if t.Char == 9 { // Tab
 			// Get all files in the current directory
 			files, err := os.ReadDir(".")
@@ -1532,6 +1557,7 @@ func (state *TermState) HandleToken(token TerminalToken) {
 		} else if t.Char == 23 { // Ctrl-W
 			// Erase last word
 			if state.index > 0 {
+				origIndex := state.index
 				// First consume all whitespace
 				for state.index > 0 && state.currentCommand[state.index-1] == ' ' {
 					state.index--
@@ -1542,10 +1568,15 @@ func (state *TermState) HandleToken(token TerminalToken) {
 					state.index--
 				}
 
+				state.currentCommand = append(state.currentCommand[:state.index], state.currentCommand[origIndex:]...)
+
 				// Erase the word
 				fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + state.index)
 				fmt.Fprintf(os.Stdout, "\033[K")
-				state.currentCommand = state.currentCommand[:state.index]
+
+				// Print the rest of the command
+				fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
+				fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + state.index)
 			}
 		} else if t.Char == 127 { // Backspace
 			// Erase last char
