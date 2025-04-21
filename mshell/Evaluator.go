@@ -450,7 +450,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 
 					newList := NewList(len(files))
 					for i, file := range files {
-						newList.Items[i] = &MShellString{file}
+						newList.Items[i] = &MShellPath{file}
 					}
 
 					stack.Push(newList)
