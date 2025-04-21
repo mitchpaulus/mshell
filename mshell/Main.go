@@ -461,7 +461,7 @@ var tokenBufBuilder strings.Builder
 var aliases map[string]string
 var history []string
 
-var knownCommands = map[string]struct{}{ "sudo": {}, "git": {}, "cd": {}, "nvim": {}, "en": {}, "ls": {} }
+var knownCommands = map[string]struct{}{ "sudo": {}, "git": {}, "cd": {}, "nvim": {}, "en": {}, "ls": {}, "fd": {}, "rg": {} }
 
 func (state *TermState) printText(text string) {
 	fmt.Fprintf(os.Stdout, "\033[K") // Delete to end of line
@@ -904,6 +904,9 @@ func (state *TermState) printPrompt() {
 	fmt.Fprintf(os.Stdout, "\033[35m")
 	// Print PWD
 	cwd, err := os.Getwd()
+
+	// Print out escape sequence for Windows Terminal/others.
+	fmt.Fprintf(os.Stdout, "\033]9;9;%s\033\\", cwd)
 
 	if len(state.homeDir) > 0 && strings.HasPrefix(cwd, state.homeDir) {
 		cwd = "~" + cwd[len(state.homeDir):]
