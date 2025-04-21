@@ -36,7 +36,7 @@ type MShellObject interface {
 	IsNumeric() bool
 	FloatNumeric() float64
 	CommandLine() string
-	DebugString() string
+	DebugString() string // This is meant for things like error messages, should be limited in length to 30 chars or so.
 	Index(index int) (MShellObject, error)
 	SliceStart(start int) (MShellObject, error)
 	SliceEnd(end int) (MShellObject, error)

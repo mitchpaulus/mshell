@@ -438,15 +438,9 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'glob' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
-					// Can be a string or literal
-					var globStr string
-					switch obj1.(type) {
-					case *MShellString:
-						globStr = obj1.(*MShellString).Content
-					case *MShellLiteral:
-						globStr = obj1.(*MShellLiteral).LiteralText
-					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot glob a %s.\n", t.Line, t.Column, obj1.TypeName()))
+					globStr, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot glob a %s (%s).\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
 					}
 
 					files, err := filepath.Glob(globStr)
@@ -662,25 +656,14 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'split' operation on a stack with only one item.\n", t.Line, t.Column))
 					}
 
-					var delimiterStr string
-					var strToSplit string
-
-					switch delimiter.(type) {
-					case *MShellString:
-						delimiterStr = delimiter.(*MShellString).Content
-					case *MShellLiteral:
-						delimiterStr = delimiter.(*MShellLiteral).LiteralText
-					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot split with a %s.\n", t.Line, t.Column, delimiter.TypeName()))
+					delimiterStr, err := delimiter.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot split with a %s (%s).\n", t.Line, t.Column, delimiter.TypeName(), delimiter.DebugString()))
 					}
 
-					switch strLiteral.(type) {
-					case *MShellString:
-						strToSplit = strLiteral.(*MShellString).Content
-					case *MShellLiteral:
-						strToSplit = strLiteral.(*MShellLiteral).LiteralText
-					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot split a %s.\n", t.Line, t.Column, strLiteral.TypeName()))
+					strToSplit, err := strLiteral.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot split a %s (%s).\n", t.Line, t.Column, strLiteral.TypeName(), strLiteral.DebugString()))
 					}
 
 					split := strings.Split(strToSplit, delimiterStr)
@@ -1441,15 +1424,22 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
 					}
 
-					str, err := obj1.CastString()
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot %s a %s.\n", t.Line, t.Column, t.Lexeme, obj1.TypeName()))
+					var f func(string) string
+					if t.Lexeme == "upper" {
+						f = strings.ToUpper
+					} else if t.Lexeme == "lower" {
+						f = strings.ToLower
 					}
 
-					if t.Lexeme == "upper" {
-						stack.Push(&MShellPath{strings.ToUpper(str)})
-					} else if t.Lexeme == "lower" {
-						stack.Push(&MShellPath{strings.ToLower(str)})
+					switch obj1.(type) {
+					case *MShellString:
+						stack.Push(&MShellString{f(obj1.(*MShellString).Content)})
+					case *MShellLiteral:
+						stack.Push(&MShellLiteral{f(obj1.(*MShellLiteral).LiteralText)})
+					case *MShellPath:
+						stack.Push(&MShellPath{f(obj1.(*MShellPath).Path)})
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot %s a %s (%s).\n", t.Line, t.Column, t.Lexeme, obj1.TypeName(), obj1.DebugString()))
 					}
 				} else if t.Lexeme == "hardLink" {
 					newTarget, err := stack.Pop()
@@ -2387,7 +2377,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 
 				doesEqual, err := obj1.Equals(obj2)
 				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot compare '=' between %s and %s: %s\n", t.Line, t.Column, obj1.TypeName(), obj2.TypeName(), err.Error()))
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot compare '=' between %s (%s) and %s (%s): %s\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString(), obj2.TypeName(), obj2.DebugString(), err.Error()))
 				}
 
 				stack.Push(&MShellBool{doesEqual})
