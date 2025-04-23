@@ -21,7 +21,9 @@ const (
 	QUESTION
 	POSITIONAL
 	STRING
+	UNFINISHEDSTRING
 	SINGLEQUOTESTRING
+	UNFINISHEDSINGLEQUOTESTRING
 	MINUS
 	PLUS
 	EQUALS
@@ -97,8 +99,12 @@ func (t TokenType) String() string {
 		return "POSITIONAL"
 	case STRING:
 		return "STRING"
+	case UNFINISHEDSTRING:
+		return "UNFINISHEDSTRING"
 	case SINGLEQUOTESTRING:
 		return "SINGLEQUOTESTRING"
+	case UNFINISHEDSINGLEQUOTESTRING:
+		return "UNFINISHEDSINGLEQUOTESTRING"
 	case MINUS:
 		return "MINUS"
 	case PLUS:
@@ -230,6 +236,7 @@ type Lexer struct {
 	col     int // Zero-based column number.
 	line    int // One-based line number.
 	input   []rune
+	allowUnterminatedString bool
 }
 
 func (l *Lexer) DebugStr() {
@@ -243,6 +250,7 @@ func NewLexer(input string) *Lexer {
 		start: 0,
 		current: 0,
 		col: 0,
+		allowUnterminatedString: false,
 	}
 }
 
@@ -493,8 +501,23 @@ func (l *Lexer) scanToken() Token {
 			return l.parsePositional()
 		} else if l.peek() == '"' { // This must be before the 'isAllowedLiteral' check.
 			l.advance()
-			l.consumeString()
-			return l.makeToken(FORMATSTRING)
+			err := l.consumeString()
+			if err != nil {
+				if l.allowUnterminatedString {
+					_, ok := err.(ConsumeStringErrorUnterminated)
+					if ok {
+						return l.makeToken(UNFINISHEDSTRING)
+					} else {
+						fmt.Fprintf(os.Stderr, "%s", err)
+						return l.makeToken(ERROR)
+					}
+				} else {
+					fmt.Fprintf(os.Stderr, "%s", err)
+					return l.makeToken(ERROR)
+				}
+			} else {
+				return l.makeToken(FORMATSTRING)
+			}
 		} else if isAllowedLiteral(l.peek()) {
 			return l.parseEnvVar()
 		} else {
@@ -556,8 +579,12 @@ func (l *Lexer) parseSingleQuoteString() Token {
 	// When this is called, we've already consumed a single quote.
 	for {
 		if l.atEnd() {
-			fmt.Fprintf(os.Stderr, "%d:%d: Unterminated string.\n", l.line, l.col)
-			return l.makeToken(ERROR)
+			if l.allowUnterminatedString {
+				return l.makeToken(UNFINISHEDSINGLEQUOTESTRING)
+			} else {
+				fmt.Fprintf(os.Stderr, "%d:%d: Unterminated string.\n", l.line, l.col)
+				return l.makeToken(ERROR)
+			}
 		}
 
 		c := l.advance()
@@ -776,14 +803,32 @@ func (l *Lexer) parsePositional() Token {
 	return l.makeToken(POSITIONAL)
 }
 
-func (l *Lexer) consumeString() error {
+type ConsumeStringError interface {
+	Error() string
+}
+
+type ConsumeStringErrorUnterminated struct {
+	ErrorString string
+}
+
+func (e ConsumeStringErrorUnterminated) Error() string {
+	return e.ErrorString
+}
+
+type ConsumeStringErrorInvalidEscape struct {
+	ErrorString string
+}
+
+func (e ConsumeStringErrorInvalidEscape) Error() string {
+	return e.ErrorString
+}
+
+func (l *Lexer) consumeString() ConsumeStringError {
 	// When this is called, we've already consumed a single double quote.
 	inEscape := false
 	for {
 		if l.atEnd() {
-			// fmt.Fprintf(os.Stderr, "%d:%d: Unterminated string.\n", l.line, l.col)
-			return fmt.Errorf( "%d:%d: Unterminated string.\n", l.line, l.col)
-
+			return ConsumeStringErrorUnterminated{ErrorString: fmt.Sprintf("%d:%d: Unterminated string.\n", l.line, l.col)}
 		}
 		c := l.advance()
 		if inEscape {
@@ -808,8 +853,19 @@ func (l *Lexer) consumeString() error {
 func (l *Lexer) parseString() Token {
 	err := l.consumeString()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%s", err)
-		return l.makeToken(ERROR)
+
+		if l.allowUnterminatedString {
+			_, ok := err.(ConsumeStringErrorUnterminated)
+			if ok {
+				return l.makeToken(UNFINISHEDSTRING)
+			} else {
+				fmt.Fprintf(os.Stderr, "%s", err)
+				return l.makeToken(ERROR)
+			}
+		} else {
+			fmt.Fprintf(os.Stderr, "%s", err)
+			return l.makeToken(ERROR)
+		}
 	}
 
 	return l.makeToken(STRING)
