@@ -2113,8 +2113,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						switch obj2.(type) {
 						case *MShellList:
 							if t.Type == GREATERTHAN {
-								// Fail, and tell user to use path literal instead of string.
-								return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a %s (%s) to a %s (%s). Use a path literal instead.\n", t.Line, t.Column, obj1.TypeName(), obj1.(*MShellString).Content, obj2.TypeName(), obj2.DebugString()))
+								obj2.(*MShellList).StandardOutputFile = obj1.(*MShellString).Content
 							} else { // LESSTHAN, input redirection
 								obj2.(*MShellList).StdinBehavior = STDIN_CONTENT
 								obj2.(*MShellList).StandardInputContents = obj1.(*MShellString).Content
@@ -2122,7 +2121,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 							stack.Push(obj2)
 						case *MShellQuotation:
 							if t.Type == GREATERTHAN {
-								return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a %s (%s) to a %s (%s). Use a path literal instead.\n", t.Line, t.Column, obj1.TypeName(), obj1.(*MShellString).Content, obj2.TypeName(), obj2.DebugString()))
+								obj2.(*MShellQuotation).StandardOutputFile = obj1.(*MShellString).Content
 							} else { // LESSTHAN, input redirection
 								obj2.(*MShellQuotation).StdinBehavior = STDIN_CONTENT
 								obj2.(*MShellQuotation).StandardInputContents = obj1.(*MShellString).Content
@@ -2137,7 +2136,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						switch obj2.(type) {
 						case *MShellList:
 							if t.Type == GREATERTHAN {
-								return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a %s (%s) to a %s (%s). Use a path literal instead.\n", t.Line, t.Column, obj1.TypeName(), obj1.(*MShellLiteral).LiteralText, obj2.TypeName(), obj2.DebugString()))
+								obj2.(*MShellList).StandardOutputFile = obj1.(*MShellLiteral).LiteralText
 							} else { // LESSTHAN, input redirection
 								obj2.(*MShellList).StdinBehavior = STDIN_CONTENT
 								obj2.(*MShellList).StandardInputFile = obj1.(*MShellLiteral).LiteralText
@@ -2145,7 +2144,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 							stack.Push(obj2)
 						case *MShellQuotation:
 							if t.Type == GREATERTHAN {
-								return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a %s (%s) to a %s (%s). Use a path literal instead.\n", t.Line, t.Column, obj1.TypeName(), obj1.(*MShellString).Content, obj2.TypeName(), obj2.DebugString()))
+								obj2.(*MShellQuotation).StandardOutputFile = obj1.(*MShellLiteral).LiteralText
 							} else {
 								obj2.(*MShellQuotation).StdinBehavior = STDIN_CONTENT
 								obj2.(*MShellQuotation).StandardInputContents = obj1.(*MShellLiteral).LiteralText
@@ -3074,6 +3073,10 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 		if startErr != nil {
 			if _, ok := startErr.(*exec.ExitError); !ok {
 				fmt.Fprintf(os.Stderr, "Error running command: %s\n", startErr.Error())
+				fmt.Fprintf(os.Stderr, "Command: '%s'\n", cmd.Path)
+				for i, arg := range cmd.Args {
+					fmt.Fprintf(os.Stderr, "Arg %d: '%s'\n", i, arg)
+				}
 				exitCode = 1
 			} else {
 				// Command exited with non-zero exit code
