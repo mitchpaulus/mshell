@@ -405,7 +405,7 @@ type TermState struct {
 	l *Lexer
 	p *MShellParser
 	historyIndex int
-	f *os.File
+	f *os.File // This is log file.
 	// tokenChan chan TerminalToken
 	stdInState *StdinReaderState
 
@@ -473,10 +473,16 @@ func (state *TermState) printText(text string) {
 	state.index = state.index + len(text)
 }
 
-type TerminalToken interface {}
+type TerminalToken interface {
+	String() string
+}
 
 type AsciiToken struct {
 	Char byte
+}
+
+func (t AsciiToken) String() string {
+	return fmt.Sprintf("AsciiToken: %d %c", t.Char, t.Char)
 }
 
 type CsiToken struct {
@@ -484,9 +490,46 @@ type CsiToken struct {
 	Params []byte
 }
 
+func (t CsiToken) String() string {
+	return fmt.Sprintf("CsiToken: %d %c %s", t.FinalChar, t.FinalChar, string(t.Params))
+}
+
 type UnknownToken struct { }
+func (t UnknownToken) String() string {
+	return fmt.Sprintf("UnknownToken")
+}
 
 type SpecialKey int
+
+func (t SpecialKey) String() string {
+	return fmt.Sprintf("SpecialKey: %d %s", t, SpecialKeyName[t])
+}
+
+var SpecialKeyName = []string{
+    "KEY_F1",
+    "KEY_F2",
+    "KEY_F3",
+    "KEY_F4",
+    "KEY_F5",
+    "KEY_F6",
+    "KEY_F7",
+    "KEY_F8",
+    "KEY_F9",
+    "KEY_F10",
+    "KEY_F11",
+    "KEY_F12",
+    "KEY_UP",
+    "KEY_DOWN",
+    "KEY_LEFT",
+    "KEY_RIGHT",
+    "KEY_DELETE",
+    "KEY_HOME",
+    "KEY_END",
+    "KEY_ALT_B",
+    "KEY_ALT_F",
+    "KEY_ALT_O",
+    "KEY_CTRL_DELETE",
+}
 
 const (
 	KEY_F1 SpecialKey = iota
@@ -515,6 +558,8 @@ const (
 	KEY_ALT_B
 	KEY_ALT_F
 	KEY_ALT_O
+
+	KEY_CTRL_DELETE
 )
 
 type StdinReaderState struct {
@@ -604,6 +649,37 @@ func (state *TermState) StdinReader(stdInChan chan byte, pauseChan chan bool) {
 	}
 }
 
+// Common Pn Values for ESC [ Pn ~:
+// Pn Value	Key	Notes
+// 1	Home	Sometimes ESC [ H or ESC [ 7 ~
+// 2	Insert
+// 3	Delete	The key often labeled "Del" or "Delete
+// 4	End	Sometimes ESC [ F or ESC [ 8 ~
+// 5	Page Up (PgUp)
+// 6	Page Down (PgDn)
+// 7	Home	Alternative mapping seen on some terminals
+// 8	End	Alternative mapping seen on some terminals
+// 11	F1	Often ESC O P in application mode
+// 12	F2	Often ESC O Q in application mode
+// 13	F3	Often ESC O R in application mode
+// 14	F4	Often ESC O S in application mode
+// 15	F5
+// 17	F6	Note the gap (16 is sometimes used, often not)
+// 18	F7
+// 19	F8
+// 20	F9
+// 21	F10
+// 23	F11	Note the gap (22 is sometimes used, often not)
+// 24	F12
+// 25	F13 (Shift+F1)	Sometimes, varies
+// 26	F14 (Shift+F2)	Sometimes, varies
+// 28	F15 (Shift+F3)	Sometimes, varies
+// 29	F16 (Shift+F4)	Sometimes, varies
+// 31	F17 (Shift+F5)	Sometimes, varies
+// 32	F18 (Shift+F6)	Sometimes, varies
+// 33	F19 (Shift+F7)	Sometimes, varies
+// 34	F20 (Shift+F8)	Sometimes, varies
+
 
 // This is intended to a be a lexer for the interactive mode.
 // It should be operating in a goroutine.
@@ -677,8 +753,12 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 						// fmt.Fprintf(f, "Reading byte for CSI...\n")
 						c = stdinReaderState.ReadByte()
 						if c >= 64 && c <= 126 {
-							// fmt.Fprintf(f, "Sent CSI token: %d %d\n", c, byteArray)
-							return CsiToken{FinalChar: c, Params: byteArray}
+							if len(byteArray) == 3 && byteArray[0] == 51 && byteArray[1] == 59 && byteArray[2] == 53 {
+								return KEY_CTRL_DELETE
+							} else {
+								// fmt.Fprintf(f, "Sent CSI token: %d %d\n", c, byteArray)
+								return CsiToken{FinalChar: c, Params: byteArray}
+							}
 						}
 						byteArray = append(byteArray, c)
 					}
@@ -767,9 +847,10 @@ func (state *TermState) InteractiveMode() {
 	var token TerminalToken
 	for {
 
-		fmt.Fprintf(state.f, "Waiting for token...\n")
+		fmt.Fprintf(state.f, "Waiting for token... ")
+		state.f.Sync()
 		token = state.InteractiveLexer(stdInState) // token = <- tokenChan
-		fmt.Fprintf(state.f, "Got token: %v\n", token)
+		fmt.Fprintf(state.f, "Got token: %s\n", token)
 
 		state.HandleToken(token)
 	}
