@@ -504,7 +504,17 @@ type CsiToken struct {
 }
 
 func (t CsiToken) String() string {
-	return fmt.Sprintf("CsiToken: %d %c %s", t.FinalChar, t.FinalChar, string(t.Params))
+	chars := make([]string, len(t.Params))
+	for i, b := range t.Params {
+		chars[i] = fmt.Sprintf("%c", b)
+	}
+
+	bytes := make([]string, len(t.Params))
+	for i, b := range t.Params {
+		bytes[i] = fmt.Sprintf("%d", b)
+	}
+
+	return fmt.Sprintf("CsiToken %s %c [%s]", strings.Join(chars, " "), t.FinalChar, strings.Join(bytes, " "))
 }
 
 type UnknownToken struct { }
@@ -768,6 +778,8 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 						if c >= 64 && c <= 126 {
 							if len(byteArray) == 3 && byteArray[0] == 51 && byteArray[1] == 59 && byteArray[2] == 53 {
 								return KEY_CTRL_DELETE
+							} else if len(byteArray) == 1 && byteArray[0] == 51 {
+								return KEY_DELETE
 							} else {
 								// fmt.Fprintf(f, "Sent CSI token: %d %d\n", c, byteArray)
 								return CsiToken{FinalChar: c, Params: byteArray}
@@ -1810,6 +1822,14 @@ func (state *TermState) HandleToken(token TerminalToken) {
 			// Move cursor to end of line
 			fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + len(state.currentCommand))
 			state.index = len(state.currentCommand)
+		} else if t == KEY_DELETE {
+			if state.index < len(state.currentCommand) {
+				fmt.Fprintf(os.Stdout, "\033[K")
+				fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index + 1:]))
+				fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index)
+
+				state.currentCommand = append(state.currentCommand[:state.index], state.currentCommand[state.index+1:]...)
+			}
 		}
 	}
 }
