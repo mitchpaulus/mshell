@@ -1485,21 +1485,23 @@ func (state *TermState) HandleToken(token TerminalToken) {
 				lastToken := tokens[len(tokens)-2]
 				fmt.Fprintf(state.f, "Last token: %s\n", lastToken)
 
-				zeroBasedEndOfToken := lastToken.Column - 1
+				zeroBasedStartOfToken := lastToken.Column - 1
 
-				if state.index > zeroBasedEndOfToken - + len(lastToken.Lexeme) {
+				if state.index > zeroBasedStartOfToken + len(lastToken.Lexeme) {
 					prefix = ""
 				} else {
 
 					lastTokenLength = len(lastToken.Lexeme)
 
 					if lastToken.Type == UNFINISHEDSTRING || lastToken.Type == UNFINISHEDSINGLEQUOTESTRING {
-						prefix = string(state.currentCommand[zeroBasedEndOfToken + 1:state.index])
+						prefix = string(state.currentCommand[zeroBasedStartOfToken + 1:state.index])
 					} else {
-						prefix = string(state.currentCommand[zeroBasedEndOfToken:state.index])
+						prefix = string(state.currentCommand[zeroBasedStartOfToken:state.index])
 					}
 				}
 			}
+
+			fmt.Fprintf(state.f, "Prefix: %s\n", prefix)
 
 			// Find all files that start with prefix
 			var matches []string
