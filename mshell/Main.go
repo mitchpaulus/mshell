@@ -1485,16 +1485,18 @@ func (state *TermState) HandleToken(token TerminalToken) {
 				lastToken := tokens[len(tokens)-2]
 				fmt.Fprintf(state.f, "Last token: %s\n", lastToken)
 
-				if state.index > lastToken.Column + len(lastToken.Lexeme) {
+				zeroBasedEndOfToken := lastToken.Column - 1
+
+				if state.index > zeroBasedEndOfToken - + len(lastToken.Lexeme) {
 					prefix = ""
 				} else {
 
 					lastTokenLength = len(lastToken.Lexeme)
 
 					if lastToken.Type == UNFINISHEDSTRING || lastToken.Type == UNFINISHEDSINGLEQUOTESTRING {
-						prefix = string(state.currentCommand[lastToken.Column + 1:state.index])
+						prefix = string(state.currentCommand[zeroBasedEndOfToken + 1:state.index])
 					} else {
-						prefix = string(state.currentCommand[lastToken.Column:state.index])
+						prefix = string(state.currentCommand[zeroBasedEndOfToken:state.index])
 					}
 				}
 			}

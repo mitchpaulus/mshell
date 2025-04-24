@@ -206,7 +206,7 @@ func (t TokenType) String() string {
 
 type Token struct {
 	Line   int // One-based line number.
-	Column int // Zero-based column number.
+	Column int // One-based column number.
 	Start  int // Zero-based index into the entire input string
 	Lexeme string
 	Type   TokenType
@@ -282,7 +282,7 @@ func (l *Lexer) makeToken(tokenType TokenType) Token {
 
 	return Token{
 		Line:   l.line,
-		Column: l.col - l.curLen(),
+		Column: l.col - l.curLen() + 1,
 		Start:  l.start,
 		Lexeme: lexeme,
 		Type:   tokenType,
