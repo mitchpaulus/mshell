@@ -205,12 +205,15 @@ func (t TokenType) String() string {
 }
 
 type Token struct {
-	// One-based line number.
-	Line   int
-	Column int
-	Start  int
+	Line   int // One-based line number.
+	Column int // Zero-based column number.
+	Start  int // Zero-based index into the entire input string
 	Lexeme string
 	Type   TokenType
+}
+
+func (t Token) String() string {
+	return fmt.Sprintf("Token{line: %d, column: %d, start: %d, lexeme: '%s', type: %s}", t.Line, t.Column, t.Start, t.Lexeme, t.Type)
 }
 
 func (t Token) ToJson() string {
@@ -279,7 +282,7 @@ func (l *Lexer) makeToken(tokenType TokenType) Token {
 
 	return Token{
 		Line:   l.line,
-		Column: l.col,
+		Column: l.col - l.curLen(),
 		Start:  l.start,
 		Lexeme: lexeme,
 		Type:   tokenType,

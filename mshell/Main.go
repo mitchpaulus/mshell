@@ -11,7 +11,7 @@ import (
 	// "runtime/trace"
 	"runtime"
 	// "time"
-	"unicode"
+	// "unicode"
 	"sort"
 	"strconv"
 	// "runtime/debug"
@@ -463,6 +463,7 @@ var history []string
 
 var knownCommands = map[string]struct{}{ "sudo": {}, "git": {}, "cd": {}, "nvim": {}, "en": {}, "ls": {}, "fd": {}, "rg": {} }
 
+// printText prints the text at the current cursor position, moving existing text to the right.
 func (state *TermState) printText(text string) {
 	fmt.Fprintf(os.Stdout, "\033[K") // Delete to end of line
 	fmt.Fprintf(os.Stdout, "%s", text)
@@ -472,6 +473,18 @@ func (state *TermState) printText(text string) {
 	state.currentCommand = append(state.currentCommand[:state.index], append([]rune(text), state.currentCommand[state.index:]...)...)
 	state.index = state.index + len(text)
 }
+
+func (state *TermState) replaceText(newText string, replaceStart int, replaceEnd int) {
+	fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + replaceStart)
+	fmt.Fprintf(os.Stdout, "\033[K") // Delete to end of line
+	fmt.Fprintf(os.Stdout, "%s", newText)
+	fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[replaceEnd:]))
+	fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + replaceStart + len(newText))
+
+	state.currentCommand = append(state.currentCommand[:replaceStart], append([]rune(newText), state.currentCommand[replaceEnd:]...)...)
+	state.index = replaceStart + len(newText)
+}
+
 
 type TerminalToken interface {
 	String() string
@@ -1448,24 +1461,29 @@ func (state *TermState) HandleToken(token TerminalToken) {
 			}
 
 			var prefix string
+			state.l.allowUnterminatedString = true
 
-			if state.index == 0 {
-				prefix = ""
-			} else if unicode.IsSpace(state.currentCommand[state.index - 1]) {
+			state.l.resetInput(string(state.currentCommand[0:state.index]))
+			tokens := state.l.Tokenize()
+
+			lastTokenLength := 0
+			if len(tokens) == 1 { // 1 token = EOF
 				prefix = ""
 			} else {
-				i := state.index - 1
-				for {
-					if i == 0 {
-						prefix = string(state.currentCommand[:state.index])
-						break
-					}
+				lastToken := tokens[len(tokens)-2]
+				fmt.Fprintf(state.f, "Last token: %s\n", lastToken)
 
-					if unicode.IsSpace(state.currentCommand[i]) {
-						prefix = string(state.currentCommand[i+1:state.index])
-						break
+				if state.index > lastToken.Column + len(lastToken.Lexeme) {
+					prefix = ""
+				} else {
+
+					lastTokenLength = len(lastToken.Lexeme)
+
+					if lastToken.Type == UNFINISHEDSTRING || lastToken.Type == UNFINISHEDSINGLEQUOTESTRING {
+						prefix = string(state.currentCommand[lastToken.Column + 1:state.index])
+					} else {
+						prefix = string(state.currentCommand[lastToken.Column:state.index])
 					}
-					i = i - 1
 				}
 			}
 
@@ -1477,10 +1495,22 @@ func (state *TermState) HandleToken(token TerminalToken) {
 				}
 			}
 
+			var insertString string
 			if len(matches) == 0 {
 				fmt.Fprintf(os.Stdout, "\a")
 			} else if len(matches) == 1 {
-				state.printText(matches[0][len(prefix):])
+				// Lex the match and check if we have to quote around it
+				state.l.resetInput(matches[0])
+				tokens := state.l.Tokenize()
+				if len(tokens) > 2 {
+					// We have to quote around it
+					insertString = "'" + matches[0] + "'"
+				} else {
+					insertString = matches[0]
+				}
+
+				// Replace the prefex
+				state.replaceText(insertString, state.index - lastTokenLength, state.index)
 			} else {
 				// Print out the longest common prefix
 				longestCommonPrefix := longestCommonPrefix(matches)
@@ -1489,9 +1519,20 @@ func (state *TermState) HandleToken(token TerminalToken) {
 					// Print bell
 					fmt.Fprintf(os.Stdout, "\a")
 				} else {
-					state.printText(longestCommonPrefix[len(prefix):])
+
+					state.l.resetInput(longestCommonPrefix)
+					tokens := state.l.Tokenize()
+					if len(tokens) > 2 {
+						// We have to put start quote around it, but don't put end quote, wait for more input
+						longestCommonPrefix = "'" + longestCommonPrefix
+					}
+
+					// Replace the prefix
+					state.replaceText(longestCommonPrefix, state.index - lastTokenLength, state.index)
 				}
 			}
+
+			state.l.allowUnterminatedString = false
 		} else if t.Char == 11 { // Ctrl-K
 			// Erase to end of line
 			fmt.Fprintf(os.Stdout, "\033[K")
