@@ -217,6 +217,7 @@ func main() {
 				StandardInput:  nil, // These should be nil as that represents using a "default", not os.Stdin/os.Stdout
 				StandardOutput: nil,
 				Variables:      map[string]MShellObject{},
+				Pbm: NewPathBinManager(),
 			},
 
 			callStack : callStack,
@@ -232,6 +233,7 @@ func main() {
 				Name:  "main",
 				CallStackType: CALLSTACKFILE,
 			},
+			pathBinManager: NewPathBinManager(),
 		}
 
 		termState.InteractiveMode()
@@ -289,6 +291,7 @@ func main() {
 		StandardInput:  nil,
 		StandardOutput: nil,
 		Variables:      map[string]MShellObject{},
+		Pbm: NewPathBinManager(),
 	}
 
 	var allDefinitions []MShellDefinition
@@ -415,6 +418,16 @@ type TermState struct {
 	callStack CallStack
 	stdLibDefs []MShellDefinition
 	initCallStackItem CallStackItem
+	pathBinManager IPathBinManager
+}
+
+func IsDefinitionDefined(name string, definitions []MShellDefinition) bool {
+	for _, def := range definitions {
+		if def.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func (state *TermState) clearToPrompt() {
@@ -461,7 +474,7 @@ var tokenBufBuilder strings.Builder
 var aliases map[string]string
 var history []string
 
-var knownCommands = map[string]struct{}{ "sudo": {}, "git": {}, "cd": {}, "nvim": {}, "en": {}, "ls": {}, "fd": {}, "rg": {} }
+var knownCommands = map[string]struct{}{ "cd": {} }
 
 // printText prints the text at the current cursor position, moving existing text to the right.
 func (state *TermState) printText(text string) {
@@ -930,7 +943,15 @@ func (state *TermState) ExecuteCurrentCommand() {
 		// Check for known commands. If so, we'll essentially wrap the entire command in a list to execute
 		literalStr := p.curr.Lexeme
 
-		if _, ok := knownCommands[literalStr]; ok {
+		firstTokenIsCmd := false
+		_, isInPath := state.pathBinManager.Lookup(literalStr);
+		if isInPath {
+			firstTokenIsCmd = true
+		} else {
+			_, firstTokenIsCmd = knownCommands[literalStr]
+		}
+
+		if firstTokenIsCmd && !IsDefinitionDefined(literalStr, state.stdLibDefs) {
 			tokenBufBuilder.Reset()
 			tokenBufBuilder.WriteString("[")
 
@@ -1557,128 +1578,7 @@ func (state *TermState) HandleToken(token TerminalToken) {
 			state.ClearScreen()
 		} else if t.Char == 13 { // Enter
 			// Add command to history
-			currentCommandStr := string(state.currentCommand)
-
-			if state.index == len(state.currentCommand) {
-				// Walk back to last whitespace, check if final element is an alias.
-				i := state.index
-				for {
-					if i == 0 || state.currentCommand[i-1] == ' ' || state.currentCommand[i-1] == '[' {
-						break
-					}
-					i--
-				}
-
-				lastWord := string(state.currentCommand[i:state.index])
-				alias, aliasSet := aliases[lastWord]
-				if aliasSet {
-					currentCommandStr = currentCommandStr[:i] + alias
-				}
-
-				// Update the UI.
-				state.clearToPrompt()
-				fmt.Fprintf(os.Stdout, "%s", currentCommandStr)
-				state.index = len(state.currentCommand)
-				state.currentCommand = []rune(currentCommandStr)
-				// Move cursor to end
-				fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index+1)
-			}
-
-			if len(currentCommandStr) > 0 {
-				history = append(history, currentCommandStr)
-			}
-
-			state.historyIndex = 0
-
-			// Reset current command
-			state.currentCommand = state.currentCommand[:0]
-
-			p := state.p
-			l := state.l
-
-			state.l.resetInput(currentCommandStr)
-			state.p.NextToken()
-
-			if p.curr.Type == LITERAL {
-				// Check for known commands. If so, we'll essentially wrap the entire command in a list to execute
-				literalStr := p.curr.Lexeme
-
-				if _, ok := knownCommands[literalStr]; ok {
-					tokenBufBuilder.Reset()
-					tokenBufBuilder.WriteString("[")
-
-					tokenBufBuilder.WriteString("'" + literalStr + "'")
-
-					// Clear token buffer
-					tokenBuf = tokenBuf[:0]
-
-					// Consume all tokens
-					for p.NextToken(); p.curr.Type != EOF; p.NextToken() {
-						tokenBuf = append(tokenBuf, p.curr)
-					}
-
-					for _, t := range tokenBuf {
-						tokenBufBuilder.WriteString(" ")
-						tokenBufBuilder.WriteString(t.Lexeme)
-					}
-
-					tokenBufBuilder.WriteString("];")
-					currentCommandStr = tokenBufBuilder.String()
-					fmt.Fprintf(state.f, "Command: %s\n", currentCommandStr)
-					l.resetInput(currentCommandStr)
-					p.NextToken()
-				}
-			}
-
-			parsed, err := p.ParseFile()
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "\r\nError parsing input: %s\n", err)
-				// Move to start
-				fmt.Fprintf(os.Stdout, "\033[1G")
-				state.printPrompt()
-				state.index = 0
-				return
-			}
-
-			// During evaluation, normal terminal output can happen, or TUI apps can be run.
-			// So want them to see non-raw mode terminal state.
-			// fmt.Fprintf(state.f, "Pausing..\n")
-			// state.pauseChan <- true
-
-			term.Restore(state.stdInFd, &state.oldState)
-			fmt.Fprintf(os.Stdout, "\n")
-
-			if len(parsed.Items) > 0 {
-				state.initCallStackItem.MShellParseItem = parsed.Items[0]
-
-				// fmt.Fprintf(state.f, "Evaluating..\n")
-				result := state.evalState.Evaluate(parsed.Items, &state.stack, state.context, state.stdLibDefs, state.initCallStackItem)
-				// fmt.Fprintf(state.f, "Done Evaluating..\n")
-				// state.pauseChan <- false
-				// fmt.Fprintf(state.f, "Unpause..\n")
-
-				if result.ExitCalled {
-					// Reset terminal to original state
-					os.Exit(result.ExitCode)
-					break
-				}
-
-				if !result.Success {
-					fmt.Fprintf(os.Stderr, "Error evaluating input.\n")
-				}
-			}
-
-			fmt.Fprintf(os.Stdout, "\033[1G")
-			state.printPrompt()
-			state.index = 0
-
-			// Put terminal back into raw mode
-			_, err = term.MakeRaw(state.stdInFd)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error setting terminal to raw mode: %s\n", err)
-				os.Exit(1)
-				return
-			}
+			state.ExecuteCurrentCommand()
 		} else if t.Char == 21 { // Ctrl-U
 			// Erase back to prompt start
 			fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)

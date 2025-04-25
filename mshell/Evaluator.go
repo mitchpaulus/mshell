@@ -71,6 +71,7 @@ type ExecuteContext struct {
 	Variables      map[string]MShellObject
 	ShouldCloseInput  bool
 	ShouldCloseOutput bool
+	Pbm IPathBinManager
 }
 
 func (context *ExecuteContext) Close() {
@@ -356,6 +357,9 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 				if t.Lexeme == ".s" {
 					// Print current stack
 					fmt.Fprintf(os.Stderr, stack.String())
+				} else if t.Lexeme == ".b" {
+					// Print known binaries
+					fmt.Fprintf(os.Stderr, context.Pbm.DebugList())
 				} else if t.Lexeme == ".def" {
 					// Print out available definitions
 					fmt.Fprintf(os.Stderr, "Available definitions:\n")
@@ -2295,6 +2299,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					StandardInput:  nil,
 					StandardOutput: nil,
 					Variables:      context.Variables,
+					Pbm: 		context.Pbm,
 				}
 
 				if quotation.StdinBehavior != STDIN_NONE {
@@ -2830,6 +2835,7 @@ func (quotation *MShellQuotation) Execute(state *EvalState, context ExecuteConte
 		StandardInput:  nil,
 		StandardOutput: nil,
 		Variables:      quotation.Variables,
+		Pbm: 		context.Pbm,
 	}
 
 	if quotation.StdinBehavior != STDIN_NONE {
@@ -3137,6 +3143,7 @@ func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContex
 			StandardInput:  nil,
 			StandardOutput: nil,
 			Variables:      context.Variables,
+			Pbm:           context.Pbm,
 		}
 
 		if i == 0 {
