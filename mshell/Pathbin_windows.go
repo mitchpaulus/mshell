@@ -29,6 +29,26 @@ func (pbm *PathBinManager) Lookup(binName string) (string, bool) {
 	return "", false
 }
 
+func (pbm *PathBinManager) IsExecutableFile(path string) bool {
+	fileInfo, err := os.Stat(path)
+
+	if err != nil {
+		return false
+	}
+
+	// Check if the file is executable, based on the file extensions
+	for _, ext := range pbm.pathExts {
+		if strings.HasSuffix(strings.ToUpper(fileInfo.Name()), ext) {
+			return true
+		}
+	}
+
+	return false
+}
+
+
+
+
 func (pbm *PathBinManager) ExecuteArgs(execPath string) ([]string, error) {
 	// Check extension
 	if strings.HasSuffix(strings.ToUpper(execPath), ".EXE") {

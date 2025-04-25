@@ -342,6 +342,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						newContext.Variables = make(map[string]MShellObject)
 						newContext.StandardInput = context.StandardInput
 						newContext.StandardOutput = context.StandardOutput
+						newContext.Pbm = context.Pbm
 
 						callStackItem := CallStackItem{MShellParseItem: t, Name: definition.Name, CallStackType: CALLSTACKDEF}
 						result := state.Evaluate(definition.Items, stack, newContext, definitions, callStackItem)
@@ -2986,7 +2987,39 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 		return SimpleSuccess(), 0, ""
 	}
 
-	cmd := exec.Command(commandLineArgs[0], commandLineArgs[1:]...)
+	// Check that we find the command in the path
+
+	var allArgs []string
+	var cmdPath string
+
+	// Check if there is a directory separator in the name of the command trying to execute
+	if strings.Contains(commandLineArgs[0], string(os.PathSeparator)) {
+		cmdPath = commandLineArgs[0]
+	} else {
+		var found bool
+		if context.Pbm == nil {
+			fmt.Fprintf(os.Stderr, "No context found.\n")
+			return state.FailWithMessage(fmt.Sprintf("Command '%s' not found in path.\n", commandLineArgs[0])), 1, ""
+		}
+
+		cmdPath, found = context.Pbm.Lookup(commandLineArgs[0])
+		if !found {
+			return state.FailWithMessage(fmt.Sprintf("Command '%s' not found in path.\n", commandLineArgs[0])), 1, ""
+		}
+	}
+
+	// For interpreted files on Windows, we need to essentially do what a shebang on Linux does
+	cmdItems, err := context.Pbm.ExecuteArgs(cmdPath)
+	if err != nil {
+		return state.FailWithMessage(fmt.Sprintf("On Windows, we currently don't handle this file/extension: %s\n", cmdPath)), 1, ""
+	}
+
+	allArgs = make([]string, 0, len(cmdItems)+len(commandLineArgs))
+	allArgs = append(allArgs, cmdItems...)
+	allArgs = append(allArgs, commandLineArgs[1:]...)
+
+	cmd := exec.Command(allArgs[0], allArgs[1:]...)
+	// cmd := exec.Command(commandLineArgs[0], commandLineArgs[1:]...)
 	cmd.Env = os.Environ()
 
 	var commandSubWriter bytes.Buffer

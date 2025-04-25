@@ -89,6 +89,14 @@ func (pbm *PathBinManager) ExecuteArgs(execPath string) ([]string, error) {
 	return []string{execPath}, nil
 }
 
+func (pbm *PathBinManager) IsExecutableFile(path string) bool {
+	fileInfo, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return (fileInfo.Mode() & 0111) != 0
+}
+
 
 func (pbm *PathBinManager) Lookup(binName string) (string, bool) {
 	path, exists := pbm.binaryPaths[binName]

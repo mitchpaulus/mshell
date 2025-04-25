@@ -951,7 +951,7 @@ func (state *TermState) ExecuteCurrentCommand() {
 			_, firstTokenIsCmd = knownCommands[literalStr]
 		}
 
-		if firstTokenIsCmd && !IsDefinitionDefined(literalStr, state.stdLibDefs) {
+		if ((strings.Contains(literalStr, string(os.PathSeparator)) &&  state.pathBinManager.IsExecutableFile(literalStr)) || firstTokenIsCmd) && !IsDefinitionDefined(literalStr, state.stdLibDefs) {
 			tokenBufBuilder.Reset()
 			tokenBufBuilder.WriteString("[")
 

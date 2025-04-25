@@ -177,6 +177,7 @@ func (q *MShellQuotation) BuildExecutionContext(context *ExecuteContext) (*Execu
 		Variables: q.Variables,
 		ShouldCloseInput: false,
 		ShouldCloseOutput: false,
+		Pbm: context.Pbm,
 	}
 
 	if q.StdinBehavior != STDIN_NONE {
