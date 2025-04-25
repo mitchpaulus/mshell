@@ -1309,6 +1309,11 @@ func (state *TermState) HandleToken(token TerminalToken) {
 						state.currentCommand = state.currentCommand[:0]
 						state.PushChars([]rune{'r'})
 						state.ExecuteCurrentCommand()
+					} else if t.Char == 'j' {
+						state.clearToPrompt()
+						state.currentCommand = state.currentCommand[:0]
+						state.PushChars([]rune{'j'})
+						state.ExecuteCurrentCommand()
 					} else {
 						// Push both tokens
 						state.PushChars([]rune{';'})
