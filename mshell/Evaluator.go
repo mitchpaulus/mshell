@@ -2327,7 +2327,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					defer file.Close()
 				}
 
-				maxLoops := 150000
+				maxLoops := 1500000
 				loopCount := 0
 				state.LoopDepth++
 
@@ -2340,7 +2340,15 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 
 					if len(*stack) != initialStackSize {
 						// If the stack size changed, we have an error.
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Stack size changed from %d to %d in loop.\n", t.Line, t.Column, initialStackSize, len(*stack)))
+						var errorMessage strings.Builder
+						errorMessage.WriteString(fmt.Sprintf("%d:%d: Stack size changed from %d to %d in loop.\n", t.Line, t.Column, initialStackSize, len(*stack)))
+
+						errorMessage.WriteString("Stack:\n")
+						for i, item := range *stack {
+							errorMessage.WriteString(fmt.Sprintf("  %d: %s\n", i, item.DebugString()))
+						}
+
+						return state.FailWithMessage(errorMessage.String())
 					}
 
 					if !result.Success || result.ExitCalled {
