@@ -1563,7 +1563,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					if t.Lexeme == "writeFile" {
 						file, err = os.Create(path)
 					} else if t.Lexeme == "appendFile" {
-						file, err = os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
+						file, err = os.OpenFile(path, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
 					}
 					defer file.Close()
 
