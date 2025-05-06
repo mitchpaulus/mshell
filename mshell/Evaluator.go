@@ -1615,6 +1615,29 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error in %s from '%s' to '%s': %s\n", t.Line, t.Column, t.Lexeme, source, destination, err.Error()))
 					}
+				} else if t.Lexeme == "skip" {
+					// Skip like C# LINQ
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'skip' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					obj2, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'skip' operation on a stack with only one item.\n", t.Line, t.Column))
+					}
+
+					intVal, ok := obj1.(*MShellInt)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot skip a %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					newObj, err := obj2.SliceStart(intVal.Value)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
+					}
+
+					stack.Push(newObj)
 				} else { // last new function
 					stack.Push(&MShellLiteral{t.Lexeme})
 				}

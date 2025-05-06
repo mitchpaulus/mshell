@@ -38,7 +38,7 @@ type MShellObject interface {
 	CommandLine() string
 	DebugString() string // This is meant for things like error messages, should be limited in length to 30 chars or so.
 	Index(index int) (MShellObject, error)
-	SliceStart(start int) (MShellObject, error)
+	SliceStart(startInclusive int) (MShellObject, error)
 	SliceEnd(end int) (MShellObject, error)
 	Slice(startInc int, endExc int) (MShellObject, error)
 	ToJson() string
@@ -793,7 +793,7 @@ func (obj *MShellLiteral) SliceStart(start int) (MShellObject, error) {
 		start = len(obj.LiteralText) + start
 	}
 
-	if err := IndexCheck(start, len(obj.LiteralText), obj); err != nil {
+	if err := IndexCheckExc(start, len(obj.LiteralText), obj); err != nil {
 		return nil, err
 	}
 	return &MShellLiteral{LiteralText: obj.LiteralText[start:]}, nil
@@ -807,7 +807,7 @@ func (obj *MShellQuotation) SliceStart(start int) (MShellObject, error) {
 	if start < 0 {
 		start = len(obj.Tokens) + start
 	}
-	if err := IndexCheck(start, len(obj.Tokens), obj); err != nil {
+	if err := IndexCheckExc(start, len(obj.Tokens), obj); err != nil {
 		return nil, err
 	}
 	return &MShellQuotation{Tokens: obj.Tokens[start:]}, nil
@@ -817,7 +817,7 @@ func (obj *MShellList) SliceStart(start int) (MShellObject, error) {
 	if start < 0 {
 		start = len(obj.Items) + start
 	}
-	if err := IndexCheck(start, len(obj.Items), obj); err != nil {
+	if err := IndexCheckExc(start, len(obj.Items), obj); err != nil {
 		return nil, err
 	}
 
@@ -830,7 +830,7 @@ func (obj *MShellString) SliceStart(start int) (MShellObject, error) {
 	if start < 0 {
 		start = len(obj.Content) + start
 	}
-	if err := IndexCheck(start, len(obj.Content), obj); err != nil {
+	if err := IndexCheckExc(start, len(obj.Content), obj); err != nil {
 		return nil, err
 	}
 	return &MShellString{Content: obj.Content[start:]}, nil
@@ -840,7 +840,7 @@ func (obj *MShellPath) SliceStart(start int) (MShellObject, error) {
 	if start < 0 {
 		start = len(obj.Path) + start
 	}
-	if err := IndexCheck(start, len(obj.Path), obj); err != nil {
+	if err := IndexCheckExc(start, len(obj.Path), obj); err != nil {
 		return nil, err
 	}
 
@@ -852,7 +852,7 @@ func (obj *MShellPipe) SliceStart(start int) (MShellObject, error) {
 		start = len(obj.List.Items) + start
 	}
 
-	if err := IndexCheck(start, len(obj.List.Items), obj); err != nil {
+	if err := IndexCheckExc(start, len(obj.List.Items), obj); err != nil {
 		return nil, err
 	}
 

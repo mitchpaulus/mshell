@@ -4,11 +4,12 @@
 
 Double quoted strings have the following escape sequences:
 
+- `\e`: Escape
 - `\n`: Newline
 - `\t`: Tab
 - `\r`: Carriage return
+- `\\`: Backslash
 - `\"`: Double quote
-- `\\`: Tab
 
 No escaping is done within single quoted strings.
 
@@ -58,7 +59,6 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `dup`: Duplicate (a -- a a)
 - `swap`: Swap (a b -- b a)
 - `drop`: Drop (a -- )
-- `append`: Append, `([a] a -- [a])`
 - `over`: Over, copy second element to top `(a b -- a b a)`
 - `pick`: Pick, copy nth element to top, `(a b c int pick` -- `a b c [a | b | c])`
 - `rot`: Rotate the top three items, `( a b c -- b c a )`
@@ -69,7 +69,6 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `wle`: Write error line stderr (str -- )
 - `len`: Length of string/list `([a] -- int | str -- int)`
 - `args`: List of string arguments `( -- [str])`
-- `nth`: Nth element of list (0-based) `([a] int -- a)`
 - `glob`: Run glob against string/literal on top of the stack. Leaves list of strings on the stack. `(str -- [str])`
 - `x`: Interpret/execute quotation `(quote -- )`
 - `cd`: Change directory `(str -- )`
@@ -130,16 +129,19 @@ Dates can be subtracted from each other, and the result is a float number of day
 
 ### List Functions
 
+- `append`: Append, `([a] a -- [a])`
 - `map`: Map a quotation over a list, `([a] (a -- b) -- [b])`
 - `each`: Execute a quotation for each element in a list, `([a] (a -- ) -- )`
 - `del`: Delete element from list, `(list index -- list)` or `(index list -- list)`
 - `insert`: Insert element into list, `(list element index -- list)`
 - `setAt`: Set element at index, `(list element index -- list)`
+- `nth`: Nth element of list (0-based) `([a] int -- a)`
 - `reverse`: Reverse list, `(list -- list)`
 - `sum`: Sum of list, `([numeric] -- numeric)`
 - `filter`: Filter list, `(list quote -- list)`
 - `any`: Check if any element in list satisfies a condition, `([a] (a -- bool) -- bool)`
 - `all`: Check if all elements in list satisfy a condition, `([a] (a -- bool) -- bool)`
+- `skip`: Skip first n elements of list, `(list int -- list)`
 
 ## Date Functions
 
