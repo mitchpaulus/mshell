@@ -121,6 +121,12 @@ func NewPathBinManager() IPathBinManager {
 				continue
 			}
 			fileName := file.Name()
+
+			// Check if already exists
+			if _, exists := binaryPaths[strings.ToUpper(fileName)]; exists {
+				continue
+			}
+
 			// Check if the file has a valid extension
 			for _, ext := range pathExtsSlice {
 				if strings.HasSuffix(strings.ToUpper(fileName), ext) {
