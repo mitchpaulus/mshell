@@ -1594,7 +1594,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 				} else if t.Lexeme == "mv" || t.Lexeme == "cp" {
 					obj1, err := stack.Pop()
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack. If you did this within a list expecting to use the command as a process, make sure to quote.\n", t.Line, t.Column, t.Lexeme))
 					}
 
 					obj2, err := stack.Pop()
