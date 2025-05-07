@@ -68,6 +68,7 @@ type EvalResult struct {
 type ExecuteContext struct {
 	StandardInput  io.Reader
 	StandardOutput io.Writer
+	StandardError  io.Writer
 	Variables      map[string]MShellObject
 	ShouldCloseInput  bool
 	ShouldCloseOutput bool
@@ -907,7 +908,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot cd to a %s.\n", t.Line, t.Column, obj.TypeName()))
 					}
 
-					result, _, _ := state.ChangeDirectory(dir)
+					result, _, _, _ := state.ChangeDirectory(dir)
 					if !result.Success {
 						return result
 					}
@@ -1638,6 +1639,59 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 
 					stack.Push(newObj)
+				} else if t.Lexeme == "e" || t.Lexeme == "ec" || t.Lexeme == "es" {
+					// Token Type
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot set stderr behavior to lines on an empty stack.\n", t.Line, t.Column))
+					}
+
+					switch obj.(type) {
+					case *MShellList:
+						list := obj.(*MShellList)
+						if t.Lexeme == "e" {
+							list.StderrBehavior = STDERR_LINES
+						} else if t.Lexeme == "es" {
+							list.StderrBehavior = STDERR_STRIPPED
+						} else if t.Lexeme == "ec" {
+							list.StderrBehavior = STDERR_COMPLETE
+						} else {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Type))
+						}
+						stack.Push(list)
+					case *MShellPipe:
+						pipe := obj.(*MShellPipe)
+						if t.Lexeme == "e" {
+							pipe.StderrBehavior = STDERR_LINES
+						} else if t.Lexeme == "es" {
+							pipe.StderrBehavior = STDERR_STRIPPED
+						} else if t.Lexeme == "ec" {
+							pipe.StderrBehavior = STDERR_COMPLETE
+						} else {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Type))
+						}
+						stack.Push(pipe)
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot set stdout behavior on a %s.\n", t.Line, t.Column, obj.TypeName()))
+					}
+				} else if t.Lexeme == "fileSize" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'fileSize' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					path, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot get the file size of a %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					var fileInfo os.FileInfo
+					fileInfo, err = os.Stat(path)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error getting file size of %s: %s\n", t.Line, t.Column, path, err.Error()))
+					}
+
+					stack.Push(&MShellInt{int(fileInfo.Size())})
 				} else { // last new function
 					stack.Push(&MShellLiteral{t.Lexeme})
 				}
@@ -1655,12 +1709,13 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 				var result EvalResult
 				var exitCode int
 				var stdout string
+				var stderr string
 
 				switch top.(type) {
 				case *MShellList:
-					result, exitCode, stdout = RunProcess(*top.(*MShellList), context, state)
+					result, exitCode, stdout, stderr = RunProcess(*top.(*MShellList), context, state)
 				case *MShellPipe:
-					result, exitCode, stdout = state.RunPipeline(*top.(*MShellPipe), context, stack)
+					result, exitCode, stdout, stderr = state.RunPipeline(*top.(*MShellPipe), context, stack)
 				default:
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot execute a non-list object. Found %s %s\n", t.Line, t.Column, top.TypeName(), top.DebugString()))
 				}
@@ -1682,6 +1737,14 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					stdoutBehavior = top.(*MShellPipe).StdoutBehavior
 				}
 
+				var stderrBehavior StderrBehavior
+				switch top.(type) {
+				case *MShellList:
+					stderrBehavior = top.(*MShellList).StderrBehavior
+				case *MShellPipe:
+					stderrBehavior = top.(*MShellPipe).StderrBehavior
+				}
+
 				if stdoutBehavior == STDOUT_LINES {
 					newMShellList := NewList(0)
 					var scanner *bufio.Scanner
@@ -1695,6 +1758,21 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					stack.Push(&MShellString{stripped})
 				} else if stdoutBehavior == STDOUT_COMPLETE {
 					stack.Push(&MShellString{stdout})
+				}
+
+				if stderrBehavior == STDERR_LINES {
+					newMShellList := NewList(0)
+					var scanner *bufio.Scanner
+					scanner = bufio.NewScanner(strings.NewReader(stderr))
+					for scanner.Scan() {
+						newMShellList.Items = append(newMShellList.Items, &MShellString{scanner.Text()})
+					}
+					stack.Push(newMShellList)
+				} else if stderrBehavior == STDERR_STRIPPED {
+					stripped := strings.TrimSpace(stderr)
+					stack.Push(&MShellString{stripped})
+				} else if stderrBehavior == STDERR_COMPLETE {
+					stack.Push(&MShellString{stderr})
 				}
 
 				// Push the exit code onto the stack if a question was used to execute
@@ -2472,7 +2550,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot pipe a %s.\n", t.Line, t.Column, obj1.TypeName()))
 				}
 
-				stack.Push(&MShellPipe{*list, list.StdoutBehavior})
+				stack.Push(&MShellPipe{*list, list.StdoutBehavior, list.StderrBehavior})
 			} else if t.Type == READ { // Token Type
 				var reader io.Reader
 				// Check if what we are reading from is seekable. If so, we can do a buffered read and reset the position.
@@ -2852,14 +2930,14 @@ func (state *EvalState) EvaluateFormatString(lexeme string, context ExecuteConte
 
 
 type Executable interface {
-	Execute(state *EvalState, context ExecuteContext, stack *MShellStack) (EvalResult, int, string)
+	Execute(state *EvalState, context ExecuteContext, stack *MShellStack) (EvalResult, int, string, string)
 	GetStandardInputFile() string
 	GetStandardOutputFile() string
 }
 
-func (list *MShellList) Execute(state *EvalState, context ExecuteContext, stack *MShellStack) (EvalResult, int, string) {
-	result, exitCode, stdoutResult := RunProcess(*list, context, state)
-	return result, exitCode, stdoutResult
+func (list *MShellList) Execute(state *EvalState, context ExecuteContext, stack *MShellStack) (EvalResult, int, string, string) {
+	result, exitCode, stdoutResult, stderrResult := RunProcess(*list, context, state)
+	return result, exitCode, stdoutResult, stderrResult
 }
 
 func (quotation *MShellQuotation) Execute(state *EvalState, context ExecuteContext, stack *MShellStack, definitions []MShellDefinition, callStack CallStack) (EvalResult, int) {
@@ -2929,38 +3007,38 @@ func (quotation *MShellQuotation) GetStandardOutputFile() string {
 	return quotation.StandardOutputFile
 }
 
-func (state *EvalState) ChangeDirectory(dir string) (EvalResult, int, string) {
+func (state *EvalState) ChangeDirectory(dir string) (EvalResult, int, string, string) {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return state.FailWithMessage(fmt.Sprintf("Error getting current directory: %s\n", err.Error())), 1, ""
+		return state.FailWithMessage(fmt.Sprintf("Error getting current directory: %s\n", err.Error())), 1, "", ""
 	}
 
 	err = os.Chdir(dir)
 	if err != nil {
-		return state.FailWithMessage(fmt.Sprintf("Error changing directory to %s: %s\n", dir, err.Error())), 1, ""
+		return state.FailWithMessage(fmt.Sprintf("Error changing directory to %s: %s\n", dir, err.Error())), 1, "", ""
 	}
 
 	// Update OLDPWD and PWD
 	err = os.Setenv("OLDPWD", cwd)
 	if err != nil {
-		return state.FailWithMessage(fmt.Sprintf("Error setting OLDPWD: %s\n", err.Error())), 1, ""
+		return state.FailWithMessage(fmt.Sprintf("Error setting OLDPWD: %s\n", err.Error())), 1, "", ""
 	}
 
 	err = os.Setenv("PWD", dir)
 	if err != nil {
-		return state.FailWithMessage(fmt.Sprintf("Error setting PWD: %s\n", err.Error())), 1, ""
+		return state.FailWithMessage(fmt.Sprintf("Error setting PWD: %s\n", err.Error())), 1, "", ""
 	}
 
-	return SimpleSuccess(), 0, ""
+	return SimpleSuccess(), 0, "", ""
 
 }
 
-func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (EvalResult, int, string) {
+func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (EvalResult, int, string, string) {
 	// Returns the result of running the process, the exit code, and the stdout result
 
 	// Check for empty list
 	if len(list.Items) == 0 {
-		return state.FailWithMessage("Cannot execute an empty list.\n"), 1, ""
+		return state.FailWithMessage("Cannot execute an empty list.\n"), 1, "", ""
 	}
 
 	commandLineArgs := make([]string, 0)
@@ -2981,7 +3059,7 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 				commandLineQueue = append(commandLineQueue, innerList.Items[i])
 			}
 		} else if !item.IsCommandLineable() {
-			return state.FailWithMessage(fmt.Sprintf("Item (%s) cannot be used as a command line argument.\n", item.DebugString())), 1, ""
+			return state.FailWithMessage(fmt.Sprintf("Item (%s) cannot be used as a command line argument.\n", item.DebugString())), 1, "", ""
 		} else {
 			commandLineArgs = append(commandLineArgs, item.CommandLine())
 		}
@@ -2990,7 +3068,7 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 	// Need to check length here. You could have had a list of empty lists like:
 	// [[] [] [] []]
 	if len(commandLineArgs) == 0 {
-		return state.FailWithMessage("After list flattening, there still were no arguments to execute.\n"), 1, ""
+		return state.FailWithMessage("After list flattening, there still were no arguments to execute.\n"), 1, "", ""
 	}
 
 	// Handle cd command specially
@@ -3001,7 +3079,7 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 			// Check for -h or --help
 			if commandLineArgs[1] == "-h" || commandLineArgs[1] == "--help" {
 				fmt.Fprintf(os.Stderr, "cd: cd [dir]\nChange the shell working directory.\n")
-				return SimpleSuccess(), 0, ""
+				return SimpleSuccess(), 0, "", ""
 			} else {
 				return state.ChangeDirectory(commandLineArgs[1])
 			}
@@ -3009,13 +3087,13 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 			// else cd to home directory
 			homeDir, err := os.UserHomeDir()
 			if err != nil {
-				return state.FailWithMessage(fmt.Sprintf("Error getting home directory: %s\n", err.Error())), 1, ""
+				return state.FailWithMessage(fmt.Sprintf("Error getting home directory: %s\n", err.Error())), 1, "", ""
 			}
 
 			return state.ChangeDirectory(homeDir)
 		}
 
-		return SimpleSuccess(), 0, ""
+		return SimpleSuccess(), 0, "", ""
 	}
 
 	// Check that we find the command in the path
@@ -3030,19 +3108,19 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 		var found bool
 		if context.Pbm == nil {
 			fmt.Fprintf(os.Stderr, "No context found.\n")
-			return state.FailWithMessage(fmt.Sprintf("Command '%s' not found in path.\n", commandLineArgs[0])), 1, ""
+			return state.FailWithMessage(fmt.Sprintf("Command '%s' not found in path.\n", commandLineArgs[0])), 1, "", ""
 		}
 
 		cmdPath, found = context.Pbm.Lookup(commandLineArgs[0])
 		if !found {
-			return state.FailWithMessage(fmt.Sprintf("Command '%s' not found in path.\n", commandLineArgs[0])), 1, ""
+			return state.FailWithMessage(fmt.Sprintf("Command '%s' not found in path.\n", commandLineArgs[0])), 1, "", ""
 		}
 	}
 
 	// For interpreted files on Windows, we need to essentially do what a shebang on Linux does
 	cmdItems, err := context.Pbm.ExecuteArgs(cmdPath)
 	if err != nil {
-		return state.FailWithMessage(fmt.Sprintf("On Windows, we currently don't handle this file/extension: %s\n", cmdPath)), 1, ""
+		return state.FailWithMessage(fmt.Sprintf("On Windows, we currently don't handle this file/extension: %s\n", cmdPath)), 1, "", ""
 	}
 
 	allArgs = make([]string, 0, len(cmdItems)+len(commandLineArgs))
@@ -3053,6 +3131,7 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 	// cmd := exec.Command(commandLineArgs[0], commandLineArgs[1:]...)
 	cmd.Env = os.Environ()
 
+	// STDOUT HANDLING
 	var commandSubWriter bytes.Buffer
 	// TBD: Should we allow command substituation and redirection at the same time?
 	// Probably more hassle than worth including, with probable workarounds for that rare case.
@@ -3062,7 +3141,7 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 		// Open the file for writing
 		file, err := os.Create(list.StandardOutputFile)
 		if err != nil {
-			return state.FailWithMessage(fmt.Sprintf("Error opening file %s for writing: %s\n", list.StandardOutputFile, err.Error())), 1, ""
+			return state.FailWithMessage(fmt.Sprintf("Error opening file %s for writing: %s\n", list.StandardOutputFile, err.Error())), 1, "", ""
 		}
 		cmd.Stdout = file
 		defer file.Close()
@@ -3078,6 +3157,7 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 		}
 	}
 
+	// STDIN HANDLING
 	if list.StdinBehavior != STDIN_NONE {
 		if list.StdinBehavior == STDIN_CONTENT {
 			cmd.Stdin = strings.NewReader(list.StandardInputContents)
@@ -3085,7 +3165,7 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 			// Open the file for reading
 			file, err := os.Open(list.StandardInputFile)
 			if err != nil {
-				return state.FailWithMessage(fmt.Sprintf("Error opening file %s for reading: %s\n", list.StandardInputFile, err.Error())), 1, ""
+				return state.FailWithMessage(fmt.Sprintf("Error opening file %s for reading: %s\n", list.StandardInputFile, err.Error())), 1, "", ""
 			}
 			cmd.Stdin = file
 			defer file.Close()
@@ -3107,21 +3187,28 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 		cmd.Stdin = os.Stdin
 	}
 
-	if list.StandardErrorFile != "" {
+	// STDERR HANDLING
+	var stderrBuffer bytes.Buffer
+
+	if list.StderrBehavior != STDERR_NONE {
+		cmd.Stderr = &stderrBuffer
+	} else if list.StandardErrorFile != "" {
 		// Open the file for writing
 		file, err := os.Create(list.StandardErrorFile)
 		if err != nil {
-			return state.FailWithMessage(fmt.Sprintf("Error opening file %s for writing: %s\n", list.StandardErrorFile, err.Error())), 1, ""
+			return state.FailWithMessage(fmt.Sprintf("Error opening file %s for writing: %s\n", list.StandardErrorFile, err.Error())), 1, "", ""
 		}
 		cmd.Stderr = file
 		defer file.Close()
-	} else { // Haven't implemented standard error yet on context
+	// } else if context.Stand != nil {
+	// cmd.Stderr = context.StandardError  // TBD: Implement this
+	} else {
 		if list.RunInBackground {
-			// Redirect stderr to /dev/null
 			cmd.Stderr = nil
 		} else {
-			// Default to stderr of this process itself
+			// Default to stdout of this process itself
 			cmd.Stderr = os.Stderr
+			// cmd.Stdout = nil
 		}
 	}
 
@@ -3160,22 +3247,33 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 
 	// fmt.Fprintf(os.Stderr, "Exit code: %d\n", exitCode)
 
+	var stdoutStr string
+	var stderrStr string
+
 	if list.StdoutBehavior != STDOUT_NONE {
-		return SimpleSuccess(), exitCode, commandSubWriter.String()
+		stdoutStr = commandSubWriter.String()
 	} else {
-		return SimpleSuccess(), exitCode, ""
+		stdoutStr = ""
 	}
+
+	if list.StderrBehavior != STDERR_NONE {
+		stderrStr = stderrBuffer.String()
+	} else {
+		stderrStr = ""
+	}
+
+	return SimpleSuccess(), exitCode, stdoutStr, stderrStr
 }
 
-func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContext, stack *MShellStack) (EvalResult, int, string) {
+func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContext, stack *MShellStack) (EvalResult, int, string, string) {
 	if len(MShellPipe.List.Items) == 0 {
-		return state.FailWithMessage("Cannot execute an empty pipe.\n"), 1, ""
+		return state.FailWithMessage("Cannot execute an empty pipe.\n"), 1, "", ""
 	}
 
 	// Check that all list items are Executables
 	for i, item := range MShellPipe.List.Items {
 		if _, ok := item.(Executable); !ok {
-			return state.FailWithMessage(fmt.Sprintf("Item %d (%s) in pipe is not a list or a quotation.\n", i, item.DebugString())), 1, ""
+			return state.FailWithMessage(fmt.Sprintf("Item %d (%s) in pipe is not a list or a quotation.\n", i, item.DebugString())), 1, "", ""
 		}
 	}
 
@@ -3195,13 +3293,14 @@ func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContex
 	for i := 0; i < len(MShellPipe.List.Items)-1; i++ {
 		pipeReader, pipeWriter, err := os.Pipe()
 		if err != nil {
-			return state.FailWithMessage(fmt.Sprintf("Error creating pipe: %s\n", err.Error())), 1, ""
+			return state.FailWithMessage(fmt.Sprintf("Error creating pipe: %s\n", err.Error())), 1, "", ""
 		}
 		pipeReaders[i] = pipeReader
 		pipeWriters[i] = pipeWriter
 	}
 
 	var buf bytes.Buffer
+	var stdErrBuf bytes.Buffer
 	for i := 0; i < len(MShellPipe.List.Items); i++ {
 		newContext := ExecuteContext{
 			StandardInput:  nil,
@@ -3217,7 +3316,7 @@ func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContex
 			if executableStdinFile != "" {
 				file, err := os.Open(executableStdinFile)
 				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("Error opening file %s for reading: %s\n", executableStdinFile, err.Error())), 1, ""
+					return state.FailWithMessage(fmt.Sprintf("Error opening file %s for reading: %s\n", executableStdinFile, err.Error())), 1, "", ""
 				}
 				newContext.StandardInput = file
 				defer file.Close()
@@ -3238,6 +3337,13 @@ func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContex
 			} else {
 				newContext.StandardOutput = context.StandardOutput
 			}
+
+			// Handle the stderr behavior
+			if MShellPipe.StderrBehavior != STDERR_NONE {
+				newContext.StandardError = &stdErrBuf
+			} else {
+				newContext.StandardError = context.StandardError
+			}
 		} else {
 			newContext.StandardInput = pipeReaders[i-1]
 			newContext.StandardOutput = pipeWriters[i]
@@ -3256,7 +3362,7 @@ func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContex
 		go func(i int, item Executable) {
 			defer wg.Done()
 			// fmt.Fprintf(os.Stderr, "Running item %d\n", i)
-			results[i], exitCodes[i], _ = item.Execute(state, contexts[i], stack)
+			results[i], exitCodes[i], _, _ = item.Execute(state, contexts[i], stack)
 
 			// Close pipe ends that are no longer needed
 			if i > 0 {
@@ -3271,22 +3377,27 @@ func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContex
 	// Wait for all processes to complete
 	wg.Wait()
 
+	var stdoutStr string
+	var stderrStr string
+
+	if MShellPipe.StdoutBehavior != STDOUT_NONE {
+		stdoutStr = buf.String()
+	} else {
+		stdoutStr = ""
+	}
+
+	if MShellPipe.StderrBehavior != STDERR_NONE {
+		stderrStr = stdErrBuf.String()
+	} else {
+		stderrStr = ""
+	}
+
 	// Check for errors
 	for i, result := range results {
 		if !result.Success {
-
-			if MShellPipe.StdoutBehavior == STDOUT_NONE {
-				return result, exitCodes[i], ""
-			} else {
-				return result, exitCodes[i], buf.String()
-			}
+			return result, exitCodes[i], stdoutStr, stderrStr
 		}
 	}
 
-	if MShellPipe.StdoutBehavior == STDOUT_NONE {
-		// Return the exit code of the last item
-		return SimpleSuccess(), exitCodes[len(exitCodes)-1], ""
-	} else {
-		return SimpleSuccess(), exitCodes[len(exitCodes)-1], buf.String()
-	}
+	return SimpleSuccess(), exitCodes[len(exitCodes)-1], stdoutStr, stderrStr
 }

@@ -1,2 +1,2 @@
 ["ec" "ho" + "Hello, World!"];
-[ec ho + Hello, " World!" +];
+['ec' ho + Hello, " World!" +];

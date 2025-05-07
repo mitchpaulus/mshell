@@ -243,6 +243,15 @@ const (
 	STDIN_CONTENT
 )
 
+type StderrBehavior int
+
+const (
+	STDERR_NONE StderrBehavior = iota
+	STDERR_LINES
+	STDERR_STRIPPED
+	STDERR_COMPLETE
+)
+
 type MShellList struct {
 	Items                 []MShellObject
 	StdinBehavior         StdinBehavior
@@ -252,6 +261,7 @@ type MShellList struct {
 	StandardErrorFile     string
 	// This sets how stdout is handled, whether it's broken up into lines, stripped of trailing newline, or left as is
 	StdoutBehavior StdoutBehavior
+	StderrBehavior StderrBehavior
 	RunInBackground bool
 }
 
@@ -268,6 +278,7 @@ func NewList(initLength int) *MShellList {
 		StandardOutputFile:    "",
 		StandardErrorFile:     "",
 		StdoutBehavior:        STDOUT_NONE,
+		StderrBehavior:        STDERR_NONE,
 		RunInBackground:       false,
 	}
 }
@@ -283,6 +294,7 @@ type MShellPath struct {
 type MShellPipe struct {
 	List           MShellList
 	StdoutBehavior StdoutBehavior
+	StderrBehavior StderrBehavior
 }
 
 type MShellInt struct {

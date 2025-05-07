@@ -1218,10 +1218,11 @@ func (state *TermState) PushChars(chars []rune) {
 	ClearToEnd()
 	fmt.Fprintf(os.Stdout, "%s", string(chars))
 	// Add back what may have been deleted.
-	fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
-	fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index+len(chars))
-
-	state.currentCommand = append(state.currentCommand[:state.index], append(chars, state.currentCommand[state.index:]...)...)
+	if state.index <= len(state.currentCommand) {
+		fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
+		fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index+len(chars))
+		state.currentCommand = append(state.currentCommand[:state.index], append(chars, state.currentCommand[state.index:]...)...)
+	}
 	state.index = state.index + len(chars)
 }
 

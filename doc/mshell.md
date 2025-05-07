@@ -71,13 +71,8 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `args`: List of string arguments `( -- [str])`
 - `glob`: Run glob against string/literal on top of the stack. Leaves list of strings on the stack. `(str -- [str])`
 - `x`: Interpret/execute quotation `(quote -- )`
-- `cd`: Change directory `(str -- )`
-- `pwd`: Get current working directory `( -- str)`
 - `toFloat`: Convert to float. `(numeric -- float)`
 - `toInt`: Convert to int. `(numeric -- int)`
-- `toPath`: Convert to path. `(str -- path)`
-- `readFile`: Read file into string. `(str -- str)`
-- `readTsvFile`: Read a TSV file into list of list of strings. `(str -- [[str]])`
 - `read`: Read a line from stdin. Puts a str and bool of whether the read was successful on the stack. `( -- str bool)`
 - `stdin`: Drop stdin onto the stack `( -- str)`
 - `::`: Drop stdin onto the stack and split by lines `( -- [str])`. This is a shorthand for `stdin lines`.
@@ -85,18 +80,28 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `wt`: "Whitespace table", puts stdin split by lines and whitespace on the stack. `( -- [[str]])`
 - `tt`: "Tab table", puts stdin split by lines and tabs on the stack. `( -- [[str]])`
 - `ttFile`: "Tab table" from file, puts content from file name split by lines and tabs on the stack. `(str -- [[str]])`
+- `uw`: Shorthand for `unlines w` `([str] -- )`
+- `tuw`: Shorthand for `(tjoin) map uw` `([[str]] -- )`
+
+
+## File/Directory Functions
+
+- `toPath`: Convert to path. `(str -- path)`
 - `isDir`: Check if path is a directory. `(path -- bool)`
 - `isFile`: Check if path is a file. `(path -- bool)`
 - `hardLink`: Create a hard link. `(existingSourcePath newTargetPath -- )`
 - `tempFile`: Create a temporary file, and put the full path on the stack. `( -- str)`
 - `tempDir`: Return path to the OS specific temporary directory. No checks on permission or existence, so never fails.`( -- str)`
-- `uw`: Shorthand for `unlines w` `([str] -- )`
-- `tuw`: Shorthand for `(tjoin) map uw` `([[str]] -- )`
-- `writeFile`: Write string to file (UTF-8). `(str content str file -- )`
-- `appendFile`: Append string to file (UTF-8). `(str content str file -- )`
 - `rm`: Remove file or directory. `(str -- )`
 - `cp`: Copy file or directory. `(str source str dest -- )`
 - `mv`: Move file or directory. `(str source str dest -- )`
+- `readFile`: Read file into string. `(str -- str)`
+- `readTsvFile`: Read a TSV file into list of list of strings. `(str -- [[str]])`
+- `cd`: Change directory `(str -- )`
+- `pwd`: Get current working directory `( -- str)`
+- `writeFile`: Write string to file (UTF-8). `(str content str file -- )`
+- `appendFile`: Append string to file (UTF-8). `(str content str file -- )`
+- `fileSize`: Get size of file in bytes. `(str -- int)`
 
 ## Math Functions
 
