@@ -2432,7 +2432,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 				loopCount := 0
 				state.LoopDepth++
 
-				breakDiff := 0
+				// breakDiff := 0
 
 				initialStackSize := len(*stack)
 
@@ -2457,10 +2457,10 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 
 					if result.BreakNum >= 0 {
-						breakDiff = state.LoopDepth - result.BreakNum
-						if breakDiff >= 0 {
-							break
-						}
+						// breakDiff = state.LoopDepth - result.BreakNum
+						// if breakDiff >= 0 {
+						break
+						// }
 					}
 
 					loopCount++
@@ -2471,12 +2471,12 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 				}
 
 				state.LoopDepth--
-
-				// If we are breaking out of an inner loop to an outer loop (breakDiff - 1 > 0), then we need to return an go up the call stack.
-				// Else just continue on with tokens after the loop.
-				if breakDiff-1 > 0 {
-					return EvalResult{true, breakDiff - 1, 0, false}
-				}
+				// // If we are breaking out of an inner loop to an outer loop (breakDiff - 1 > 0), then we need to return and go up the call stack.
+				// // Else just continue on with tokens after the loop.
+				// if breakDiff-1 > 0 {
+					// fmt.Fprintf(os.Stderr, "Breaking out of loop %d, loop depth %d\n", breakDiff-1, state.LoopDepth)
+					// return EvalResult{true, breakDiff - 1, 0, false}
+				// }
 			} else if t.Type == BREAK { // Token Type
 				return EvalResult{true, 1, 0, false}
 			} else if t.Type == EQUALS { // Token Type

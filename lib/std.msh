@@ -39,21 +39,20 @@ end
 
 # filter (list quote -- list)
 def filter ([T] (T -- bool) -- [T])
-    over len filter-len! # Get total length
+    quote! list!
+    @list len filter-len! # Get total length
     0 filter-idx! # Index
     [] filter-accum! # Accumulator
     (
-        [(@filter-idx @filter-len >=) (break)] if
-        over over # list quote list quote
-        over @filter-idx nth # Get current item
-        dup rot # Get to item item quote
-        x # Execute quote
-        [() (@filter-accum swap append filter-accum!) (drop)] if
-        drop @filter-idx 1 + filter-idx! # inc index
+        @filter-idx @filter-len >= (break) iff
+        @list @filter-idx nth item!
+        # $"Item: {@item str}" wl
+        @item @quote x  result!
+        # $"Result: {@result str}" wl
+        @result ( @filter-accum @item append drop ) iff
+        @filter-idx 1 + filter-idx! # inc index
     ) loop
-
-    # Drop list and quote, push accumulator
-    drop drop @filter-accum
+    @filter-accum
 end
 
 # foldl (quote initial list -- result)

@@ -167,7 +167,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 ## Paths
 
 - `dirname`: Get directory name from path `(path -- path)`
-- `basename`: Get base name from path `(path -- path)`
+- `basename`: Get base name (aka file name or not directory portion) from path `(path -- path)`
 - `ext`: Get extension from path, includes period. `(path -- path)`
 
 ## Shell Utilities
