@@ -1,5 +1,9 @@
 # `mshell`
 
+> [!WARNING]
+> This is still very much an experiment.
+> I still am changing significant parts of the syntax and semantics.
+
 `mshell` is my personal scripting language, meant to replace short shell scripts (< ~100 LOC) and other shell one-liners.
 A concatenative language is a good fit for this purpose, as it allows for easy composition of simple functions and pipelines.
 
@@ -135,10 +139,9 @@ wt ((toFloat abs str) map wjoin wl) each
 
 # TODO
 
-- Type checking
-- Improved error messages
 - Dictionaries
-- Built-in coreuitls, `cp`, `mv`, `rm`, `mkdir`
+- Improved error messages
+- Type checking
 
 # References/Inspirations
 
