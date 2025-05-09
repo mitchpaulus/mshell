@@ -1612,9 +1612,16 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot %s from a %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName()))
 					}
 
-					err = os.Rename(source, destination)
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error in %s from '%s' to '%s': %s\n", t.Line, t.Column, t.Lexeme, source, destination, err.Error()))
+					if t.Lexeme == "mv" {
+						err = os.Rename(source, destination)
+						if err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error in %s from '%s' to '%s': %s\n", t.Line, t.Column, t.Lexeme, source, destination, err.Error()))
+						}
+					} else if t.Lexeme == "cp" {
+						err = CopyFile(source, destination)
+						if err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error in %s from '%s' to '%s': %s\n", t.Line, t.Column, t.Lexeme, source, destination, err.Error()))
+						}
 					}
 				} else if t.Lexeme == "skip" {
 					// Skip like C# LINQ
@@ -3400,4 +3407,27 @@ func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContex
 	}
 
 	return SimpleSuccess(), exitCodes[len(exitCodes)-1], stdoutStr, stderrStr
+}
+
+func CopyFile(source string, dest string) error {
+	// TODO: Fix this dumb copy code.
+	// Copy the file
+	input, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer input.Close()
+
+	output, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+	defer output.Close()
+
+	_, err = io.Copy(output, input)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
