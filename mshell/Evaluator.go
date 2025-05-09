@@ -15,6 +15,7 @@ import (
 	"math"
 	"slices"
 	"errors"
+	"runtime"
 	// "golang.org/x/term"
 )
 
@@ -1722,6 +1723,9 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 
 					stack.Push(newList)
+				} else if t.Lexeme == "runtime" {
+					// Place the name of the current OS runtime on the stack
+					stack.Push(&MShellString{runtime.GOOS})
 				} else { // last new function
 					stack.Push(&MShellLiteral{t.Lexeme})
 				}

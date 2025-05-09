@@ -82,6 +82,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `ttFile`: "Tab table" from file, puts content from file name split by lines and tabs on the stack. `(str -- [[str]])`
 - `uw`: Shorthand for `unlines w` `([str] -- )`
 - `tuw`: Shorthand for `(tjoin) map uw` `([[str]] -- )`
+- `runtime`: Get the current OS runtime. This is the output of the GOOS environment variable. Common possible values are `linux`, `windows`, and `darwin`. `( -- str)`
 
 
 ## File/Directory Functions
