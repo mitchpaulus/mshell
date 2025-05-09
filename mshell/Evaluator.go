@@ -1699,6 +1699,29 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 
 					stack.Push(&MShellInt{int(fileInfo.Size())})
+				} else if t.Lexeme == "filesIn" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'filesIn' operation on an empty stack.\n", t.Line, t.Column))
+					}
+					path, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot get the files in a %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					// Get the files in the directory
+					files, err := os.ReadDir(path)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error getting files in directory %s: %s\n", t.Line, t.Column, path, err.Error()))
+					}
+
+					// Create a new list and add the files to it, full paths
+					newList := NewList(0)
+					for _, file := range files {
+						newList.Items = append(newList.Items, &MShellString{filepath.Join(path, file.Name())})
+					}
+
+					stack.Push(newList)
 				} else { // last new function
 					stack.Push(&MShellLiteral{t.Lexeme})
 				}

@@ -102,6 +102,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `writeFile`: Write string to file (UTF-8). `(str content str file -- )`
 - `appendFile`: Append string to file (UTF-8). `(str content str file -- )`
 - `fileSize`: Get size of file in bytes. `(str -- int)`
+- `filesIn`: Get list of files in directory. `(str -- [str])`
 
 ## Math Functions
 
@@ -237,6 +238,12 @@ If the indexing is fixed, there is dedicated syntax for it.
 [ 4 3 2 1 ] 1:3  # [ 3 2 ]
 [ 4 3 2 1 ] :3   # [ 4 3 2 ]
 [ 4 3 2 1 ] 2:   # [ 2 1 ]
+```
+
+For non-fixed indexing, you have the `nth` operator.
+
+```mshell
+[ 4 3 2 1 ] 2 nth # 2
 ```
 
 ## Error Handling
