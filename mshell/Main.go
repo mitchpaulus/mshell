@@ -19,6 +19,9 @@ import (
 	"crypto/sha256"
 	"time"
 	"encoding/binary"
+	"os/signal"
+	"syscall"
+	"sync"
 )
 
 type CliCommand int
@@ -832,6 +835,8 @@ func (state *TermState) InteractiveMode() {
 		i: 0,
 		n: 0,
 	}
+
+	setupSignalHandling()
 
 	state.stdInState = stdInState
 
@@ -1742,4 +1747,43 @@ func (state *TermState) HandleToken(token TerminalToken) {
 			}
 		}
 	}
+}
+
+type RunningProcesses struct {
+	Processes []*os.Process
+	Mutex     sync.Mutex
+}
+
+var runningProcesses RunningProcesses = RunningProcesses{
+	Processes: make([]*os.Process, 0),
+	Mutex:     sync.Mutex{},
+}
+
+func setupSignalHandling() {
+    sigs := make(chan os.Signal, 1)
+    signal.Notify(sigs, syscall.SIGINT)
+
+	fmt.Fprintf(os.Stdout, "SETUP\n")
+    go func() {
+        for _ = range sigs {
+			fmt.Fprintf(os.Stdout, "Received SIGINT\n")
+			runningProcesses.Mutex.Lock()
+			for _, proc := range runningProcesses.Processes {
+				if proc == nil {
+					fmt.Fprintf(os.Stdout, "Process is nil\n")
+					fmt.Fprintf(os.Stdout, "Processes: %v\n", runningProcesses.Processes)
+					continue
+				}
+				//_ = proc.Signal(sig)
+				err := SigIntHandler(proc.Pid)
+				if err != nil {
+					fmt.Fprintf(os.Stdout, "Error sending signal to process %d: %s\n", proc.Pid, err)
+				}
+			}
+			runningProcesses.Mutex.Unlock()
+            // if sig == syscall.SIGINT {
+				// fmt.Fprintf(os.Stdout, "SIGINT\n")
+            // }
+        }
+    }()
 }

@@ -17,6 +17,7 @@ import (
 	"errors"
 	"runtime"
 	// "golang.org/x/term"
+	// "syscall"
 )
 
 type MShellStack []MShellObject
@@ -3250,6 +3251,19 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 	var startErr error
 	var exitCode int
 
+	cmd.SysProcAttr = cmdSysProcAttr
+
+	// // Set process group based on platform
+	// if runtime.GOOS == "windows" {
+		// cmd.SysProcAttr = &syscall.SysProcAttr{
+			// CreationFlags: CREATE_NEW_PROCESS_GROUP,
+		// }
+	// } else {
+		// cmd.SysProcAttr = &syscall.SysProcAttr{
+			// Setpgid: true,
+		// }
+	// }
+
 	if list.RunInBackground {
 		// Print out current stdout and stderr
 		startErr = cmd.Start()
@@ -3260,8 +3274,38 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 		}
 		exitCode = 0 // TODO: What to set here?
 	} else {
-		startErr := cmd.Run() // Manually deal with the exit code upstream
+
+
+		startErr := cmd.Start() // Manually deal with the exit code upstream
 		if startErr != nil {
+			// if _, ok := startErr.(*exec.ExitError); !ok {
+			fmt.Fprintf(os.Stderr, "Error starting command: %s\n", startErr.Error())
+			fmt.Fprintf(os.Stderr, "Command: '%s'\n", cmd.Path)
+			for i, arg := range cmd.Args {
+				fmt.Fprintf(os.Stderr, "Arg %d: '%s'\n", i, arg)
+			}
+			exitCode = 1
+			return SimpleSuccess(), exitCode, "", ""
+		}
+
+		runningProcesses.Mutex.Lock()
+		runningProcesses.Processes = append(runningProcesses.Processes, cmd.Process)
+		runningProcesses.Mutex.Unlock()
+
+		// Wait for the command to finish
+		waitErr := cmd.Wait()
+
+		runningProcesses.Mutex.Lock()
+		// Remove the process from the list of running processes
+		for i, proc := range runningProcesses.Processes {
+			if proc == cmd.Process {
+				runningProcesses.Processes = append(runningProcesses.Processes[:i], runningProcesses.Processes[i+1:]...)
+				break
+			}
+		}
+		runningProcesses.Mutex.Unlock()
+
+		if waitErr != nil {
 			if _, ok := startErr.(*exec.ExitError); !ok {
 				fmt.Fprintf(os.Stderr, "Error running command: %s\n", startErr.Error())
 				fmt.Fprintf(os.Stderr, "Command: '%s'\n", cmd.Path)
@@ -3280,7 +3324,6 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 	// fmt.Fprintf(os.Stderr, "Command finished\n")
 
 	// fmt.Fprintf(os.Stderr, "Exit code: %d\n", exitCode)
-
 	var stdoutStr string
 	var stderrStr string
 
