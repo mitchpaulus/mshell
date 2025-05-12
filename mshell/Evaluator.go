@@ -3306,8 +3306,8 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 		runningProcesses.Mutex.Unlock()
 
 		if waitErr != nil {
-			if _, ok := startErr.(*exec.ExitError); !ok {
-				fmt.Fprintf(os.Stderr, "Error running command: %s\n", startErr.Error())
+			if _, ok := waitErr.(*exec.ExitError); !ok {
+				fmt.Fprintf(os.Stderr, "Error running command: %s\n", waitErr.Error())
 				fmt.Fprintf(os.Stderr, "Command: '%s'\n", cmd.Path)
 				for i, arg := range cmd.Args {
 					fmt.Fprintf(os.Stderr, "Arg %d: '%s'\n", i, arg)
@@ -3315,7 +3315,7 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 				exitCode = 1
 			} else {
 				// Command exited with non-zero exit code
-				exitCode = startErr.(*exec.ExitError).ExitCode()
+				exitCode = waitErr.(*exec.ExitError).ExitCode()
 			}
 		} else {
 			exitCode = cmd.ProcessState.ExitCode()

@@ -61,6 +61,11 @@ func longestCommonPrefix(strs []string) string {
 }
 
 func main() {
+	exitCode := cliMain()
+	os.Exit(exitCode)
+}
+
+func cliMain() int {
 	// Enable profiling
 	// runtime.SetCPUProfileRate(1000)
 	// f, err := os.Create("mshell.prof")
@@ -121,13 +126,11 @@ func main() {
 			fmt.Println("  --lex      Print the tokens of the input")
 			fmt.Println("  --parse    Print the parsed Abstract Syntax Tree")
 			fmt.Println("  -h, --help Print this help message")
-			os.Exit(0)
-			return
+			return 0
 		} else if arg == "-c" {
 			if i >= len(os.Args) {
 				fmt.Println("Error: -c requires an argument")
-				os.Exit(1)
-				return
+				return 1
 			}
 
 			input = os.Args[i]
@@ -139,8 +142,7 @@ func main() {
 			inputBytes, err := os.ReadFile(arg)
 			if err != nil {
 				fmt.Println(err)
-				os.Exit(1)
-				return
+				return 1
 			}
 			input = string(inputBytes)
 			// If there are more arguments, add them to positionalArgs.
@@ -170,24 +172,21 @@ func main() {
 			local_app_data, ok := os.LookupEnv("LOCALAPPDATA")
 			if !ok {
 				fmt.Fprintf(os.Stderr, "Error getting LOCALAPPDATA environment variable\n")
-				os.Exit(1)
-				return
+				return 1
 			}
 
 			// Make dir LOCALAPPDATA/mshell if it doesn't exist
 			err = os.MkdirAll(local_app_data + "/mshell", 0755)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error creating directory %s/mshell: %s\n", local_app_data, err)
-				os.Exit(1)
-				return
+				return 1
 			}
 
 			// Open file for writing
 			f, err = os.OpenFile(local_app_data + "/mshell/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error opening file %s/mshell/mshell.log: %s\n", local_app_data, err)
-				os.Exit(1)
-				return
+				return 1
 			}
 			defer f.Close()
 		} else {
@@ -195,8 +194,7 @@ func main() {
 			f, err = os.OpenFile("/tmp/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error opening file /tmp/mshell.log: %s\n", err)
-				os.Exit(1)
-				return
+				return 1
 			}
 			defer f.Close()
 		}
@@ -239,8 +237,8 @@ func main() {
 			pathBinManager: NewPathBinManager(),
 		}
 
-		termState.InteractiveMode()
-		return
+		exitCode := termState.InteractiveMode()
+		return exitCode
 	}
 
 	if !inputSet {
@@ -248,8 +246,7 @@ func main() {
 		if err != nil {
 			fmt.Println(err)
 			// Set exit code to 1
-			os.Exit(1)
-			return
+			return 1
 		}
 		input = string(inputBytes)
 	}
@@ -264,19 +261,18 @@ func main() {
 			//                 Console.Write($"{t.Line}:{t.Column}:{t.TokenType} {t.RawText}\n");
 			fmt.Printf("%d:%d:%s %s\n", t.Line, t.Column, t.Type, t.Lexeme)
 		}
-		return
+		return 0
 	} else if command == CLIPARSE {
 		p := MShellParser{lexer: l}
 		p.NextToken()
 		file, err := p.ParseFile()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error parsing file %s: %s\n", input, err)
-			os.Exit(1)
-			return
+			return 1
 		}
 
 		fmt.Println(file.ToJson())
-		return
+		return 0
 	}
 
 	var callStack CallStack
@@ -317,8 +313,7 @@ func main() {
 			stdlibBytes, err := os.ReadFile(stdlibPath)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error reading file '%s': %s\n", stdlibPath, err)
-				os.Exit(1)
-				return
+				return 1
 			}
 			stdlibLexer := NewLexer(string(stdlibBytes))
 			stdlibParser := MShellParser{lexer: stdlibLexer}
@@ -326,8 +321,7 @@ func main() {
 			stdlibFile, err := stdlibParser.ParseFile()
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error parsing file %s: %s\n", stdlibPath, err)
-				os.Exit(1)
-				return
+				return 1
 			}
 
 			allDefinitions = append(allDefinitions, stdlibFile.Definitions...)
@@ -342,8 +336,7 @@ func main() {
 				result := state.Evaluate(stdlibFile.Items, &stack, context, allDefinitions, callStackItem)
 				if !result.Success {
 					fmt.Fprintf(os.Stderr, "Error evaluating MSHSTDLIB file %s.\n", stdlibPath)
-					os.Exit(1)
-					return
+					return 1
 				}
 			}
 		}
@@ -354,8 +347,7 @@ func main() {
 	file, err := p.ParseFile()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error parsing file %s: %s\n", input, err)
-		os.Exit(1)
-		return
+		return 1
 	}
 
 	allDefinitions = append(allDefinitions, file.Definitions...)
@@ -370,14 +362,14 @@ func main() {
 		}
 
 		if len(typeCheckResult.Errors) > 0 {
-			os.Exit(1)
+			return 1
 		} else {
-			os.Exit(0)
+			return 0
 		}
 	}
 
 	if len(file.Items) == 0 {
-		os.Exit(0)
+		return 0
 	}
 
 	callStackItem := CallStackItem{
@@ -390,11 +382,13 @@ func main() {
 
 	if !result.Success {
 		if result.ExitCode != 0 {
-			os.Exit(result.ExitCode)
+			return result.ExitCode
 		} else {
-			os.Exit(1)
+			return 1
 		}
 	}
+
+	return 0
 }
 
 type TermState struct {
@@ -455,7 +449,6 @@ func (state *TermState) ClearScreen() {
 	if err != nil {
 		fmt.Fprintf(state.f, "Error getting cursor position: %s\n", err)
 		return
-		// os.Exit(1)
 	}
 
 	rowsToScroll := curRow - state.numPromptLines
@@ -601,13 +594,18 @@ const (
 	KEY_CTRL_DELETE
 )
 
+type EofTerminalToken struct { }
+func (t EofTerminalToken) String() string {
+	return fmt.Sprintf("EOF")
+}
+
 type StdinReaderState struct {
 	array []byte
 	i int
 	n int
 }
 
-func (state *StdinReaderState) ReadByte() (byte) {
+func (state *StdinReaderState) ReadByte() (byte, bool, error) {
 	if state.i >= state.n {
 		// Do fresh read
 		// fmt.Fprintf(f, "Reading from stdin...\n")
@@ -617,10 +615,10 @@ func (state *StdinReaderState) ReadByte() (byte) {
 
 		if err != nil {
 			if err == io.EOF {
-				os.Exit(0)
+				return 0, true, nil
 			} else {
-				fmt.Fprintf(os.Stderr, "Error reading from stdin: %s\n", err)
-				os.Exit(1)
+				return 0, true, fmt.Errorf("Error reading from stdin: %s\n", err)
+				// fmt.Fprintf(os.Stderr, "Error reading from stdin: %s\n", err)
 			}
 		}
 
@@ -629,12 +627,12 @@ func (state *StdinReaderState) ReadByte() (byte) {
 
 		b := state.array[state.i]
 		state.i++
-		return b
+		return b, false, nil
 	} else {
 		// fmt.Fprintf(f, "Reading from buffer at %d..\n", state.i)
 		b := state.array[state.i]
 		state.i++
-		return b
+		return b, false, nil
 	}
 }
 
@@ -721,68 +719,85 @@ func (state *TermState) StdinReader(stdInChan chan byte, pauseChan chan bool) {
 
 
 // This is intended to a be a lexer for the interactive mode.
-// It should be operating in a goroutine.
-func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (TerminalToken)  {
+func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (TerminalToken, bool, error)  {
 	var c byte
+	var shouldExit bool
+	var err error
 
 	for {
 		// Read char
 		// c := <-inputChan
-		c = stdinReaderState.ReadByte()
+		c, shouldExit, err = stdinReaderState.ReadByte()
+		if shouldExit {
+			return UnknownToken{}, true, err
+		}
 		if c < 128 && c != 27 {
 			// If the character is a printable ASCII character, send it to the channel.
-			return AsciiToken{Char: c}
+			return AsciiToken{Char: c}, false, nil
 		} else if c == 27 { // ESC
 			// c = <-inputChan
-			c := stdinReaderState.ReadByte()
+			c, shouldExit, err = stdinReaderState.ReadByte()
+			if shouldExit {
+				return UnknownToken{}, true, err
+			}
+
 			if c == 79 { // 79 = O
 				// c = <- inputChan
-				c = stdinReaderState.ReadByte()
+				c, shouldExit, err = stdinReaderState.ReadByte()
+				if shouldExit {
+					return UnknownToken{}, true, err
+				}
 				if c == 80 { // F1
-					return KEY_F1
+					return KEY_F1, false, nil
 				} else if c == 81 { // F2
-					return KEY_F2
+					return KEY_F2, false, nil
 				} else if c == 82 { // F3
-					return KEY_F3
+					return KEY_F3, false, nil
 				} else if c == 83 { // F4
-					return KEY_F4
+					return KEY_F4, false, nil
 				} else {
 					// Unknown escape sequence
 					fmt.Fprintf(state.f, "Unknown escape sequence: ESC O %d\n", c)
-					return UnknownToken{}
+					return UnknownToken{}, false, nil
 				}
 			} else if c == 91 { // 91 = [, CSI
 				// read until we get a final char, @ to ~, or 0x40 to 0x7E
 				// c = <-inputChan
-				c = stdinReaderState.ReadByte()
+				c, shouldExit, err = stdinReaderState.ReadByte()
+				if shouldExit {
+					return UnknownToken{}, true, err
+				}
 				if c >= 64 && c <= 126 {
 					if c == 51  {
 						// c = <-inputChan
-						c = stdinReaderState.ReadByte()
+						c, shouldExit, err = stdinReaderState.ReadByte()
+						if shouldExit {
+							return UnknownToken{}, true, err
+						}
 						if c == 126 {
-							return KEY_DELETE
+							return KEY_DELETE, false, nil
 							// Delete
 						}
 					} else if c == 65 {
 						// Up arrow
-						return KEY_UP
+						return KEY_UP, false, nil
 					} else if c == 66 {
 						// Down arrow
-						return KEY_DOWN
+						return KEY_DOWN, false, nil
 					} else if c == 67 {
 						// Right arrow
-						return KEY_RIGHT
+						return KEY_RIGHT, false, nil
 					} else if c == 68 {
 						// Left arrow
-						return KEY_LEFT
+						return KEY_LEFT, false, nil
 					} else if c == 70 {
-						return KEY_END
+						return KEY_END, false, nil
 					} else if c == 72 {
-						return KEY_HOME
+						return KEY_HOME, false, nil
 					} else {
 						// Unknown escape sequence
 						fmt.Fprintf(state.f, "Unknown escape sequence: ESC [ %d\n", c)
-						return UnknownToken{}
+						return UnknownToken{}, false, nil
 					}
 				} else { // else read until we get a final char, @ to ~, or 0x40 to 0x7E
 					byteArray := make([]byte, 0)
@@ -790,15 +805,19 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 					for {
 						// c = <-inputChan
 						// fmt.Fprintf(f, "Reading byte for CSI...\n")
-						c = stdinReaderState.ReadByte()
+						c, shouldExit, err = stdinReaderState.ReadByte()
+						if shouldExit {
+							return UnknownToken{}, true, err
+						}
+
 						if c >= 64 && c <= 126 {
 							if len(byteArray) == 3 && byteArray[0] == 51 && byteArray[1] == 59 && byteArray[2] == 53 {
-								return KEY_CTRL_DELETE
+								return KEY_CTRL_DELETE, false, nil
 							} else if len(byteArray) == 1 && byteArray[0] == 51 {
-								return KEY_DELETE
+								return KEY_DELETE, false, nil
 							} else {
 								// fmt.Fprintf(f, "Sent CSI token: %d %d\n", c, byteArray)
-								return CsiToken{FinalChar: c, Params: byteArray}
+								return CsiToken{FinalChar: c, Params: byteArray}, false, nil
 							}
 						}
 						byteArray = append(byteArray, c)
@@ -806,29 +825,29 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 				}
 			} else if c == 98 { // Alt-B
 				// Move cursor left by word
-				return KEY_ALT_B
+				return KEY_ALT_B, false, nil
 			} else if c == 102 { // Alt-F
 				// Move cursor right by word
-				return KEY_ALT_F
+				return KEY_ALT_F, false, nil
 			} else if c == 111 { // Alt-O
-				return KEY_ALT_O
+				return KEY_ALT_O, false, nil
 				// Quit
 			} else {
 				// Unknown escape sequence
 				fmt.Fprintf(state.f, "Unknown escape sequence: ESC %d\n", c)
-				return UnknownToken{}
+				return UnknownToken{}, false, nil
 				// return AsciiToken{Char: 27}
 				// return AsciiToken{Char: c}
 			}
 		} else {
 			fmt.Fprintf(state.f, "Unknown start byte: %d\n", c)
 			// return AsciiToken{Char: c}
-			return UnknownToken{}
+			return UnknownToken{}, false, nil
 		}
 	}
 }
 
-func (state *TermState) InteractiveMode() {
+func (state *TermState) InteractiveMode() int {
 	// FUTURE: Maybe Check for CSI u?
 	stdInState := &StdinReaderState{
 		array: make([]byte, 1024),
@@ -862,13 +881,15 @@ func (state *TermState) InteractiveMode() {
 	oldState, err := term.MakeRaw(state.stdInFd)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error setting terminal to raw mode at beginning of interactive mode: %s\n", err)
-		os.Exit(1)
-		return
+		return 1
 	}
 	state.oldState = *oldState
 	fmt.Fprintf(state.f, "Old state: %v\n", state.oldState)
 
-	defer term.Restore(state.stdInFd, &state.oldState)
+	defer func() {
+		term.Restore(state.stdInFd, &state.oldState)
+		fmt.Fprintf(state.f, "Restoring terminal to original state...\n")
+	}()
 
 	state.l = NewLexer("")
 	state.p = &MShellParser{lexer: state.l}
@@ -877,8 +898,7 @@ func (state *TermState) InteractiveMode() {
 	if err != nil {
 		term.Restore(state.stdInFd, &state.oldState)
 		fmt.Fprintf(os.Stderr, "Error loading standard library: %s\n", err)
-		os.Exit(1)
-		return
+		return 1
 	}
 	state.stdLibDefs = stdLibDefs
 
@@ -888,18 +908,38 @@ func (state *TermState) InteractiveMode() {
 	state.printPrompt()
 
 	var token TerminalToken
+	var shouldExit bool
 	for {
-
 		fmt.Fprintf(state.f, "Waiting for token... ")
 		state.f.Sync()
-		token = state.InteractiveLexer(stdInState) // token = <- tokenChan
+		token, shouldExit, err = state.InteractiveLexer(stdInState) // token = <- tokenChan
+		if shouldExit {
+			if err != nil {
+				fmt.Fprintf(os.Stderr, err.Error())
+				return 1
+			} else {
+				return 0
+			}
+		}
+
 		fmt.Fprintf(state.f, "Got token: %s\n", token)
 
-		state.HandleToken(token)
+		shouldExit, exitCode, err := state.HandleToken(token)
+		if shouldExit {
+			if err != nil {
+				fmt.Fprintf(os.Stderr, err.Error())
+				return exitCode
+			} else {
+				return exitCode
+			}
+		}
 	}
 }
 
-func (state *TermState) ExecuteCurrentCommand() {
+// Returns:
+// shouldExit bool
+// exitCode int
+func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 	// Add command to history
 	currentCommandStr := string(state.currentCommand)
 
@@ -990,13 +1030,21 @@ func (state *TermState) ExecuteCurrentCommand() {
 		fmt.Fprintf(os.Stdout, "\033[1G")
 		state.printPrompt()
 		state.index = 0
-		return
+		return false, 0
 	}
 
 	// During evaluation, normal terminal output can happen, or TUI apps can be run.
 	// So want them to see non-raw mode terminal state.
 	term.Restore(state.stdInFd, &state.oldState)
 	fmt.Fprintf(os.Stdout, "\n")
+	defer func() {
+		// Put terminal back into raw mode
+		_, err = term.MakeRaw(state.stdInFd)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error setting terminal to raw mode: %s\n", err)
+			return
+		}
+	}()
 
 	if len(parsed.Items) > 0 {
 		state.initCallStackItem.MShellParseItem = parsed.Items[0]
@@ -1004,7 +1052,7 @@ func (state *TermState) ExecuteCurrentCommand() {
 
 		if result.ExitCalled {
 			// Reset terminal to original state
-			os.Exit(result.ExitCode)
+			return true, result.ExitCode
 		}
 
 		if !result.Success {
@@ -1016,13 +1064,7 @@ func (state *TermState) ExecuteCurrentCommand() {
 	state.printPrompt()
 	state.index = 0
 
-	// Put terminal back into raw mode
-	_, err = term.MakeRaw(state.stdInFd)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error setting terminal to raw mode: %s\n", err)
-		os.Exit(1)
-		return
-	}
+	return false, 0
 }
 
 func (state *TermState) toCooked() {
@@ -1116,7 +1158,11 @@ func (state *TermState) getCurrentPos() (int, int, error) {
 
 	for {
 		// TODO: This needs to handle case where terminal doesn't respond.
-		token := state.InteractiveLexer(state.stdInState) // token = <- tokenChan
+		token, shouldExit, err := state.InteractiveLexer(state.stdInState) // token = <- tokenChan
+		if shouldExit {
+			return 0, 0, err
+		}
+
 		switch t := token.(type) {
 		case CsiToken:
 			if t.FinalChar == 'R' {
@@ -1298,28 +1344,48 @@ func WriteToHistory(command string, directory string, historyFilePath string) {
 	}
 }
 
-func (state *TermState) HandleToken(token TerminalToken) {
+// Returns:
+// bool shouldExit
+// int exitCode
+// error err
+func (state *TermState) HandleToken(token TerminalToken) (bool, int, error) {
+	var shouldExit bool
+	var exitCode int
+	var err error
+
 	switch t := token.(type) {
 	case AsciiToken:
 		// If the character is a printable ASCII character, handle it.
 		if t.Char > 32 && t.Char < 127 {
-
 			if t.Char == ';' {
 				// Check next token, if it's a 'r', open REPOs with lf
-				token = state.InteractiveLexer(state.stdInState)
+				token, shouldExit, err = state.InteractiveLexer(state.stdInState)
+				if shouldExit {
+					if err != nil {
+						return shouldExit, 1, err
+					} else {
+						return shouldExit, 0, nil
+					}
+				}
 				if t, ok := token.(AsciiToken); ok {
 					if t.Char == 'r' {
-						// Open REPOs with lf
+						// Open REPOs with if
 						// fmt.Fprintf(state.f, "Opening REPOs with lf...\n")
 						state.clearToPrompt()
 						state.currentCommand = state.currentCommand[:0]
 						state.PushChars([]rune{'r'})
-						state.ExecuteCurrentCommand()
+						shouldExit, exitCode = state.ExecuteCurrentCommand()
+						if shouldExit {
+							return shouldExit, exitCode, nil
+						}
 					} else if t.Char == 'j' {
 						state.clearToPrompt()
 						state.currentCommand = state.currentCommand[:0]
 						state.PushChars([]rune{'j'})
-						state.ExecuteCurrentCommand()
+						shouldExit, exitCode = state.ExecuteCurrentCommand()
+						if shouldExit {
+							return shouldExit, exitCode, nil
+						}
 					} else {
 						// Push both tokens
 						state.PushChars([]rune{';'})
@@ -1331,7 +1397,15 @@ func (state *TermState) HandleToken(token TerminalToken) {
 					state.HandleToken(token)
 				}
 			} else if t.Char == 'j' {
-				token = state.InteractiveLexer(state.stdInState)
+				token, shouldExit, err  = state.InteractiveLexer(state.stdInState)
+				if shouldExit {
+					if err != nil {
+						return shouldExit, 1, err
+					} else {
+						return shouldExit, 0, nil
+					}
+				}
+
 				if t, ok := token.(AsciiToken); ok {
 					if t.Char == 'f' {
 						state.HandleToken(AsciiToken{Char: 13})
@@ -1347,7 +1421,15 @@ func (state *TermState) HandleToken(token TerminalToken) {
 				}
 			} else if t.Char == 'v' {
 				// Check if next token is 'l', then clear screen
-				token = state.InteractiveLexer(state.stdInState)
+				token, shouldExit, err = state.InteractiveLexer(state.stdInState)
+				if shouldExit {
+					if err != nil {
+						return shouldExit, 1, err
+					} else {
+						return shouldExit, 0, nil
+					}
+				}
+
 				if t, ok := token.(AsciiToken); ok {
 					if t.Char == 'l' {
 						// Clear screen
@@ -1364,13 +1446,22 @@ func (state *TermState) HandleToken(token TerminalToken) {
 				}
 			} else if t.Char == 'q' {
 				// Check if next token is 'l', then clear screen
-				token = state.InteractiveLexer(state.stdInState)
+				token, shouldExit, err = state.InteractiveLexer(state.stdInState)
+				if shouldExit {
+					if err != nil {
+						return shouldExit, 1, err
+					} else {
+						return shouldExit, 0, nil
+					}
+				}
+
+
 				if t, ok := token.(AsciiToken); ok {
 					if t.Char == 'q' {
 						state.clearToPrompt()
 						state.currentCommand = state.currentCommand[:0]
 						state.PushChars([]rune("0 exit"))
-						state.ExecuteCurrentCommand()
+						shouldExit, exitCode = state.ExecuteCurrentCommand()
 					} else {
 						// Push both tokens
 						state.PushChars([]rune{'q'})
@@ -1589,7 +1680,7 @@ func (state *TermState) HandleToken(token TerminalToken) {
 			state.ClearScreen()
 		} else if t.Char == 13 { // Enter
 			// Add command to history
-			state.ExecuteCurrentCommand()
+			shouldExit, exitCode = state.ExecuteCurrentCommand()
 		} else if t.Char == 21 { // Ctrl-U
 			// Erase back to prompt start
 			fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
@@ -1646,7 +1737,7 @@ func (state *TermState) HandleToken(token TerminalToken) {
 		if t == KEY_F1 {
 			// Set state.currentCommand to "lf"
 			state.currentCommand = []rune{'l', 'f'}
-			state.ExecuteCurrentCommand()
+			shouldExit, exitCode = state.ExecuteCurrentCommand()
 		} else if t == KEY_ALT_B {
 			// Move cursor left by word
 			if state.index > 0 {
@@ -1747,6 +1838,8 @@ func (state *TermState) HandleToken(token TerminalToken) {
 			}
 		}
 	}
+
+	return false, 0, nil
 }
 
 type RunningProcesses struct {
