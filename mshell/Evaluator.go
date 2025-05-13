@@ -3250,6 +3250,10 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 	var startErr error
 	var exitCode int
 
+	// See https://github.com/junegunn/fzf/issues/3646
+	// Can't just do Setpgid: true, otherwise stdin just blocks.
+	cmd.SysProcAttr = cmdSysProcAttr
+
 	if list.RunInBackground {
 		// Print out current stdout and stderr
 		startErr = cmd.Start()
@@ -3260,7 +3264,30 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 		}
 		exitCode = 0 // TODO: What to set here?
 	} else {
-		startErr := cmd.Run() // Manually deal with the exit code upstream
+		var startErr error
+		startErr = cmd.Start()
+		if startErr != nil {
+			fmt.Fprintf(os.Stderr, "Error starting command: %s\n", startErr.Error())
+			exitCode = 1
+			return SimpleSuccess(), exitCode, "", ""
+		}
+
+		runningProcesses.Mutex.Lock()
+		runningProcesses.Processes = append(runningProcesses.Processes, cmd.Process)
+		runningProcesses.Mutex.Unlock()
+
+		startErr = cmd.Wait() // Wait for the command to finish
+
+		runningProcesses.Mutex.Lock()
+		for i, process := range runningProcesses.Processes {
+			if process == cmd.Process {
+				runningProcesses.Processes = append(runningProcesses.Processes[:i], runningProcesses.Processes[i+1:]...)
+				break
+			}
+		}
+		runningProcesses.Mutex.Unlock()
+
+		// startErr := cmd.Run() // Manually deal with the exit code upstream
 		if startErr != nil {
 			if _, ok := startErr.(*exec.ExitError); !ok {
 				fmt.Fprintf(os.Stderr, "Error running command: %s\n", startErr.Error())
