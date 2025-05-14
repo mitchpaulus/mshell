@@ -598,13 +598,18 @@ const (
 	KEY_CTRL_DELETE
 )
 
+type EofTerminalToken struct { }
+func (t EofTerminalToken) String() string {
+	return fmt.Sprintf("EOF")
+}
+
 type StdinReaderState struct {
 	array []byte
 	i int
 	n int
 }
 
-func (state *StdinReaderState) ReadByte() (byte) {
+func (state *StdinReaderState) ReadByte() (byte, error) {
 	if state.i >= state.n {
 		// Do fresh read
 		// fmt.Fprintf(f, "Reading from stdin...\n")
@@ -613,12 +618,7 @@ func (state *StdinReaderState) ReadByte() (byte) {
 		// fmt.Fprintf(f, "Read %d from stdin...\n", n)
 
 		if err != nil {
-			if err == io.EOF {
-				os.Exit(0)
-			} else {
-				fmt.Fprintf(os.Stderr, "Error reading from stdin: %s\n", err)
-				os.Exit(1)
-			}
+			return 0, err
 		}
 
 		state.n = n
@@ -626,12 +626,12 @@ func (state *StdinReaderState) ReadByte() (byte) {
 
 		b := state.array[state.i]
 		state.i++
-		return b
+		return b, nil
 	} else {
 		// fmt.Fprintf(f, "Reading from buffer at %d..\n", state.i)
 		b := state.array[state.i]
 		state.i++
-		return b
+		return b, nil
 	}
 }
 
@@ -721,20 +721,48 @@ func (state *TermState) StdinReader(stdInChan chan byte, pauseChan chan bool) {
 // It should be operating in a goroutine.
 func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (TerminalToken)  {
 	var c byte
+	var err error
 
 	for {
 		// Read char
 		// c := <-inputChan
-		c = stdinReaderState.ReadByte()
+		c, err = stdinReaderState.ReadByte()
+		if err != nil {
+			if err == io.EOF {
+				return EofTerminalToken{}
+			} else {
+				fmt.Fprintf(state.f, "Error reading from stdin: %s\n", err)
+				os.Exit(1)
+			}
+		}
+
 		if c < 128 && c != 27 {
 			// If the character is a printable ASCII character, send it to the channel.
 			return AsciiToken{Char: c}
 		} else if c == 27 { // ESC
 			// c = <-inputChan
-			c := stdinReaderState.ReadByte()
+			c, err = stdinReaderState.ReadByte()
+			if err != nil {
+				if err == io.EOF {
+					return EofTerminalToken{}
+				} else {
+					fmt.Fprintf(state.f, "Error reading from stdin: %s\n", err)
+					os.Exit(1)
+				}
+			}
+
 			if c == 79 { // 79 = O
 				// c = <- inputChan
-				c = stdinReaderState.ReadByte()
+				c, err = stdinReaderState.ReadByte()
+				if err != nil {
+					if err == io.EOF {
+						return EofTerminalToken{}
+					} else {
+						fmt.Fprintf(state.f, "Error reading from stdin: %s\n", err)
+						os.Exit(1)
+					}
+				}
+
 				if c == 80 { // F1
 					return KEY_F1
 				} else if c == 81 { // F2
@@ -751,11 +779,29 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 			} else if c == 91 { // 91 = [, CSI
 				// read until we get a final char, @ to ~, or 0x40 to 0x7E
 				// c = <-inputChan
-				c = stdinReaderState.ReadByte()
+				c, err = stdinReaderState.ReadByte()
+				if err != nil {
+					if err == io.EOF {
+						return EofTerminalToken{}
+					} else {
+						fmt.Fprintf(state.f, "Error reading from stdin: %s\n", err)
+						os.Exit(1)
+					}
+				}
+
 				if c >= 64 && c <= 126 {
 					if c == 51  {
 						// c = <-inputChan
-						c = stdinReaderState.ReadByte()
+						c, err = stdinReaderState.ReadByte()
+						if err != nil {
+							if err == io.EOF {
+								return EofTerminalToken{}
+							} else {
+								fmt.Fprintf(state.f, "Error reading from stdin: %s\n", err)
+								os.Exit(1)
+							}
+						}
+
 						if c == 126 {
 							return KEY_DELETE
 							// Delete
@@ -787,7 +833,16 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 					for {
 						// c = <-inputChan
 						// fmt.Fprintf(f, "Reading byte for CSI...\n")
-						c = stdinReaderState.ReadByte()
+						c, err = stdinReaderState.ReadByte()
+						if err != nil {
+							if err == io.EOF {
+								return EofTerminalToken{}
+							} else {
+								fmt.Fprintf(state.f, "Error reading from stdin: %s\n", err)
+								os.Exit(1)
+							}
+						}
+
 						if c >= 64 && c <= 126 {
 							if len(byteArray) == 3 && byteArray[0] == 51 && byteArray[1] == 59 && byteArray[2] == 53 {
 								return KEY_CTRL_DELETE
@@ -889,6 +944,10 @@ func (state *TermState) InteractiveMode() {
 		state.f.Sync()
 		token = state.InteractiveLexer(stdInState) // token = <- tokenChan
 		fmt.Fprintf(state.f, "Got token: %s\n", token)
+
+		if _, ok := token.(EofTerminalToken); ok {
+			return
+		}
 
 		state.HandleToken(token)
 	}
@@ -1301,6 +1360,7 @@ func (state *TermState) HandleToken(token TerminalToken) {
 
 			if t.Char == ';' {
 				// Check next token, if it's a 'r', open REPOs with lf
+				// TODO: Handle EOF token case
 				token = state.InteractiveLexer(state.stdInState)
 				if t, ok := token.(AsciiToken); ok {
 					if t.Char == 'r' {
