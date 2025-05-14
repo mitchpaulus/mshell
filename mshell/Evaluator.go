@@ -1726,6 +1726,41 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 				} else if t.Lexeme == "runtime" {
 					// Place the name of the current OS runtime on the stack
 					stack.Push(&MShellString{runtime.GOOS})
+				} else if t.Lexeme == "sort" || t.Lexeme == "sortu" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'sort' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					// Check that obj1 is a list
+					list, ok := obj1.(*MShellList)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot sort a %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					sortedList, err := SortList(list)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					if t.Lexeme == "sortu" {
+						// Remove duplicates, already sorted so we can just iterate and remove duplicates
+						for i := len(sortedList.Items) - 1; i > 0; i-- {
+							doesEqual, err := sortedList.Items[i].Equals(sortedList.Items[i-1])
+							if err != nil {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: Error comparing items in list: %s\n", t.Line, t.Column, err.Error()))
+							}
+							if doesEqual {
+								sortedList.Items = append(sortedList.Items[:i], sortedList.Items[i+1:]...)
+							}
+						}
+					}
+
+					stack.Push(sortedList)
+				} else if t.Lexeme == "sortu" {
+					// Sort the list, remove duplicates
+
+
 				} else { // last new function
 					stack.Push(&MShellLiteral{t.Lexeme})
 				}

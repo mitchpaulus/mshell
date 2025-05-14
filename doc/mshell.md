@@ -149,6 +149,8 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `any`: Check if any element in list satisfies a condition, `([a] (a -- bool) -- bool)`
 - `all`: Check if all elements in list satisfy a condition, `([a] (a -- bool) -- bool)`
 - `skip`: Skip first n elements of list, `(list int -- list)`
+- `sort`: Sort list. Converts all items to strings, then sorts using go's `sort.Strings` `(list -- list)`
+- `sortu`: Sort list and remove duplicates. Converts all items to strings, then sorts using go's `sort.Strings` and removes duplicates `(list -- list)`
 
 ## Date Functions
 
