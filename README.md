@@ -16,7 +16,17 @@ Future goals are to even add some type safety.
 
 Best way to understand purpose and syntax of `mshell` is to see it in action. Here are some examples.
 
-*Better Awk One-liners*. Examples from the `awk` book, translated to `mshell`
+*Better Awk One-liners*. Examples from the `awk` book, translated to `mshell`. You can run these examples like:
+
+```sh
+msh file_with_contents.msh < input_file_to_process.txt
+awk -f file_with_contents.awk < input_file_to_process.txt
+# OR (using 1st example)
+msh -c ':: len wl' < input_file_to_process.txt
+awk 'END { print NR }' < input_file_to_process.txt
+```
+
+Note that you'll also need the environment variable `MSHSTDLIB` pointing to the file at `lib/std.msh`.
 
 ```sh
 # 1. Print the total number of input lines:
