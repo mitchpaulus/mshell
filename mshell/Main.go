@@ -929,7 +929,11 @@ func (state *TermState) InteractiveMode() {
 	history = make([]string, 0)
 	state.historyIndex = 0
 
-	state.printPrompt()
+	err = state.printPrompt()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, err.Error())
+		os.Exit(1)
+	}
 
 	var token TerminalToken
 	for {
@@ -1041,7 +1045,13 @@ func (state *TermState) ExecuteCurrentCommand() {
 		fmt.Fprintf(os.Stderr, "\r\nError parsing input: %s\n", err)
 		// Move to start
 		fmt.Fprintf(os.Stdout, "\033[1G")
-		state.printPrompt()
+
+		err = state.printPrompt()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, err.Error())
+			os.Exit(1)
+		}
+
 		state.index = 0
 		return
 	}
@@ -1066,7 +1076,12 @@ func (state *TermState) ExecuteCurrentCommand() {
 	}
 
 	fmt.Fprintf(os.Stdout, "\033[1G")
-	state.printPrompt()
+	err = state.printPrompt()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, err.Error())
+		os.Exit(1)
+	}
+
 	state.index = 0
 
 	// Put terminal back into raw mode
@@ -1082,7 +1097,7 @@ func (state *TermState) toCooked() {
 	term.Restore(state.stdInFd, &state.oldState)
 }
 
-func (state *TermState) printPrompt() {
+func (state *TermState) printPrompt() error {
 	// Get out of raw mode
 	state.toCooked()
 
@@ -1112,17 +1127,16 @@ func (state *TermState) printPrompt() {
 
 	_, err = term.MakeRaw(state.stdInFd)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error setting terminal to raw mode: %s\n", err)
-		os.Exit(1)
+		return fmt.Errorf("Error setting terminal to raw mode: %s", err)
 	}
 
 	_, col, err := state.getCurrentPos()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error getting cursor position: %s\n", err)
-		os.Exit(1)
+		return fmt.Errorf("Error getting cursor position: %s", err)
 	}
 
 	state.promptLength =  col - 1
+	return nil
 }
 
 // Returns the current cursor position as (row, col)
