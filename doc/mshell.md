@@ -104,6 +104,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `appendFile`: Append string to file (UTF-8). `(str content str file -- )`
 - `fileSize`: Get size of file in bytes. `(str -- int)`
 - `filesIn`: Get list of files in directory. `(str -- [str])`
+- `sha256sum`: Get SHA256 checksum of file. `(path -- str)`
 
 ## Math Functions
 

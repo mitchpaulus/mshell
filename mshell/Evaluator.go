@@ -16,6 +16,8 @@ import (
 	"slices"
 	"errors"
 	"runtime"
+	"crypto/sha256"
+	"encoding/hex"
 	// "golang.org/x/term"
 )
 
@@ -1757,10 +1759,39 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 
 					stack.Push(sortedList)
-				} else if t.Lexeme == "sortu" {
-					// Sort the list, remove duplicates
+				} else if t.Lexeme == "sha256sum" {
+					// Get the SHA256 hash of a file
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'sha256sumfile' operation on an empty stack.\n", t.Line, t.Column))
+					}
 
+					path, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot get the SHA256 hash of a %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
 
+					// Open the file
+					file, err := os.Open(path)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error opening file %s: %s\n", t.Line, t.Column, path, err.Error()))
+					}
+					defer file.Close()
+
+					// Create a new SHA256 hash
+					h := sha256.New()
+					// Read the file and write it to the hash
+					_, err = io.Copy(h, file)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error hashing file %s: %s\n", t.Line, t.Column, path, err.Error()))
+					}
+
+					// Get the hash sum
+					sum := h.Sum(nil)
+					// Convert to hex string
+					hash := hex.EncodeToString(sum)
+					// Push the hash onto the stack
+					stack.Push(&MShellString{hash})
 				} else { // last new function
 					stack.Push(&MShellLiteral{t.Lexeme})
 				}
