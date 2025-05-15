@@ -7,5 +7,5 @@ import (
 
 func TestHistory(t *testing.T) {
 	path := "test.mshell_history"
-	WriteToHistory(os.Getenv("HOME"), "echo hello", path)
+	err := WriteToHistory(os.Getenv("HOME"), "echo hello", path)
 }

@@ -936,6 +936,7 @@ func (state *TermState) InteractiveMode() {
 	}
 
 	var token TerminalToken
+	var end bool
 	for {
 
 		fmt.Fprintf(state.f, "Waiting for token... ")
@@ -952,7 +953,16 @@ func (state *TermState) InteractiveMode() {
 			return
 		}
 
-		state.HandleToken(token)
+		end, err = state.HandleToken(token)
+
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error handling token: %s\n", err)
+			os.Exit(1)
+		}
+
+		if end {
+			break
+		}
 	}
 }
 
@@ -1212,7 +1222,11 @@ func (state *TermState) getCurrentPos() (int, int, error) {
 			}
 		default:
 			fmt.Fprintf(state.f, "Got other token: %v\n", t)
-			state.HandleToken(t)
+			// Ignore getting a token that ends the program for now.
+			_, err = state.HandleToken(t)
+			if err != nil {
+				return 0, 0, err
+			}
 		}
 	}
 }
@@ -1236,7 +1250,6 @@ func stdLibDefinitions(stack MShellStack, context ExecuteContext, state EvalStat
 			stdlibBytes, err := os.ReadFile(rcPath)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error reading file %s: %s\n", rcPath, err)
-				os.Exit(1)
 				return nil, err
 			}
 
@@ -1249,7 +1262,6 @@ func stdLibDefinitions(stack MShellStack, context ExecuteContext, state EvalStat
 
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error parsing file %s: %s\n", rcPath, err)
-				os.Exit(1)
 				return nil, err
 			}
 
@@ -1265,7 +1277,6 @@ func stdLibDefinitions(stack MShellStack, context ExecuteContext, state EvalStat
 
 				if !result.Success {
 					fmt.Fprintf(os.Stderr, "Error evaluating MSHSTDLIB file %s.\n", rcPath)
-					os.Exit(1)
 					return nil, err
 				}
 			}
@@ -1302,7 +1313,7 @@ func (state *TermState) PushChars(chars []rune) {
 	state.index = state.index + len(chars)
 }
 
-func WriteToHistory(command string, directory string, historyFilePath string) {
+func WriteToHistory(command string, directory string, historyFilePath string) error {
 	// Each entry is fixed width:
 	// 256 bit (32 byte) SHA hash of full directory path where command was run
 	// 256 bit (32 byte) SHA hash of command
@@ -1333,15 +1344,13 @@ func WriteToHistory(command string, directory string, historyFilePath string) {
 	dir := filepath.Dir(historyFilePath)
 	err := os.MkdirAll(dir, 0755)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error creating directory %s: %s\n", dir, err)
-		os.Exit(1)
+		return fmt.Errorf("Error creating directory %s: %s\n", dir, err)
 	}
 
 	// Open file for appending
 	file, err := os.OpenFile(historyFilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error opening file %s: %s\n", historyFilePath, err)
-		os.Exit(1)
+		return fmt.Errorf("Error opening file %s: %s\n", historyFilePath, err)
 	}
 	defer file.Close()
 
@@ -1364,12 +1373,12 @@ func WriteToHistory(command string, directory string, historyFilePath string) {
 	// Write to file, atomically with entire record
 	_, err = file.Write(recordSlice[:])
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error writing to file %s: %s\n", historyFilePath, err)
-		os.Exit(1)
+		return fmt.Errorf("Error writing to file %s: %s\n", historyFilePath, err)
 	}
+	return nil
 }
 
-func (state *TermState) HandleToken(token TerminalToken) {
+func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 	var err error
 
 	switch t := token.(type) {
@@ -1382,8 +1391,7 @@ func (state *TermState) HandleToken(token TerminalToken) {
 				// TODO: Handle EOF token case
 				token, err = state.InteractiveLexer(state.stdInState)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, err.Error())
-					os.Exit(1)
+					return false, err
 				}
 
 				if t, ok := token.(AsciiToken); ok {
@@ -1407,35 +1415,32 @@ func (state *TermState) HandleToken(token TerminalToken) {
 				} else {
 					// Push just the semicolon
 					state.PushChars([]rune{';'})
-					state.HandleToken(token)
+					return state.HandleToken(token)
 				}
 			} else if t.Char == 'j' {
 				token, err = state.InteractiveLexer(state.stdInState)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, err.Error())
-					os.Exit(1)
+					return false, err
 				}
-
 
 				if t, ok := token.(AsciiToken); ok {
 					if t.Char == 'f' {
-						state.HandleToken(AsciiToken{Char: 13})
+						return state.HandleToken(AsciiToken{Char: 13})
 					} else {
 						// Push both tokens
 						state.PushChars([]rune{'j'})
-						state.HandleToken(token)
+						return state.HandleToken(token)
 					}
 				} else {
 					// Push just the semicolon
 					state.PushChars([]rune{'j'})
-					state.HandleToken(token)
+					return state.HandleToken(token)
 				}
 			} else if t.Char == 'v' {
 				// Check if next token is 'l', then clear screen
 				token, err = state.InteractiveLexer(state.stdInState)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, err.Error())
-					os.Exit(1)
+					return false, err
 				}
 
 				if t, ok := token.(AsciiToken); ok {
@@ -1445,19 +1450,18 @@ func (state *TermState) HandleToken(token TerminalToken) {
 					} else {
 						// Push both tokens
 						state.PushChars([]rune{'v'})
-						state.HandleToken(token)
+						return state.HandleToken(token)
 					}
 				} else {
 					// Push just the 'v'
 					state.PushChars([]rune{'v'})
-					state.HandleToken(token)
+					return state.HandleToken(token)
 				}
 			} else if t.Char == 'q' {
 				// Check if next token is 'l', then clear screen
 				token, err = state.InteractiveLexer(state.stdInState)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, err.Error())
-					os.Exit(1)
+					return false, err
 				}
 
 				if t, ok := token.(AsciiToken); ok {
@@ -1469,12 +1473,12 @@ func (state *TermState) HandleToken(token TerminalToken) {
 					} else {
 						// Push both tokens
 						state.PushChars([]rune{'q'})
-						state.HandleToken(token)
+						return state.HandleToken(token)
 					}
 				} else {
 					// Push just the 'q'
 					state.PushChars([]rune{'q'})
-					state.HandleToken(token)
+					return state.HandleToken(token)
 				}
 			} else {
 				state.PushChars([]rune{rune(t.Char)})
@@ -1556,7 +1560,7 @@ func (state *TermState) HandleToken(token TerminalToken) {
 		} else if t.Char == 3 || t.Char == 4 {
 			// Ctrl-C or Ctrl-D
 			fmt.Fprintf(os.Stdout, "\r\n") // Print a nice clean newline.
-			os.Exit(0)
+			return true, nil
 		} else if t.Char == 5 { // Ctrl-E
 			// Move cursor to end of line
 			fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + len(state.currentCommand))
@@ -1775,7 +1779,7 @@ func (state *TermState) HandleToken(token TerminalToken) {
 		} else if t == KEY_ALT_O { // Alt-O
 			// Quit
 			fmt.Fprintf(os.Stdout, "\r\n")
-			os.Exit(0)
+			return true, nil
 		} else if t == KEY_UP {
 			// Up arrow
 			if state.historyIndex >= 0 && state.historyIndex < len(history) {
@@ -1842,4 +1846,6 @@ func (state *TermState) HandleToken(token TerminalToken) {
 			}
 		}
 	}
+
+	return false, nil
 }
