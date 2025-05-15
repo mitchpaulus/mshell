@@ -1,0 +1,29 @@
+<h1>Empty glob behavior in filename expansion</h1>
+
+<p> 
+In traditional POSIX shells, if a glob doesn't match, you might get an error.
+There is also configuration that affects the behavior. 
+
+The following parameters all affect the behavior of globs:
+</p>
+
+<p>
+<ul>
+    <li> <code>nocaseglob</code> </li>
+    <li> <code>globskipdots</code> </li>
+    <li> <code>nullglob</code> </li>
+    <li> <code>failglob</code> </li>
+    <li> <code>dotglob</code> </li>
+    <li> <code>$GLOBIGNORE</code> </li>
+</ul>
+</p>
+
+<p>
+Do you know what all of these do? I certainly don't.
+</p>
+
+<p>
+<code>mshell</code> is much simpler.
+<code>glob</code> is a function that takes a string and returns a list of strings.
+If there are no matches, you always still get a list, it is just empty.
+</p>

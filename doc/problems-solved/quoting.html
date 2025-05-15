@@ -1,0 +1,68 @@
+<h1>Quoting</h1>
+
+<p>
+Anyone who has programmed in shell has to come to terms with quoting.
+Quoting is pretty much required everywhere.
+</p>
+
+<p>
+<code>mshell</code> does not have any concept of quoting.
+There is no <i>expansion</i> phase of evaluation.
+There is only forward evaluation of the code and updates to the stack environment.
+Strings are just strings and they can be concatenated or modified via functions.
+</p>
+
+<p>
+<code>mshell</code> also has string interpolation with the <code>$"{ }"</code> form.
+</p>
+
+<p>
+This is literally example #1 of <a href="https://mywiki.wooledge.org/BashPitfalls#for_f_in_.24.28ls_.2A.mp3.29">Bash Pitfalls</a>.
+</p>
+
+<pre>
+<code>
+for f in $(ls *.mp3); do    # Wrong!
+    some command $f         # Wrong!
+done
+
+for f in $(ls)              # Wrong!
+for f in `ls`               # Wrong!
+
+for f in $(find . -type f)  # Wrong!
+for f in `find . -type f`   # Wrong!
+
+files=($(find . -type f))   # Wrong!
+for f in ${files[@]}        # Wrong!
+</code>
+</pre>
+
+<p>
+You can accomplish what you want in <code>mshell</code> like:
+</p>
+
+<pre>
+<code>
+[command *.mp3 glob];
+</code>
+</pre>
+
+<p>
+Other examples from <a href="https://mywiki.wooledge.org/BashPitfalls">Bash Pitfalls</a>
+</p>
+
+<pre>
+<code>
+cp $file $target
+</code>
+</pre>
+
+<p>No problems here:</p>
+
+<pre>
+<code>
+'my path with spaces.txt' file!
+'~!@# $$ $%^^' target!
+@file @target cp
+</code>
+</pre>
