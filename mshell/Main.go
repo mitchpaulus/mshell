@@ -236,7 +236,14 @@ func main() {
 			pathBinManager: NewPathBinManager(),
 		}
 
-		termState.InteractiveMode()
+		err = termState.InteractiveMode()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, err.Error())
+			os.Exit(1)
+		} else {
+			os.Exit(0)
+		}
+
 		return
 	}
 
@@ -874,7 +881,7 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 	}
 }
 
-func (state *TermState) InteractiveMode() {
+func (state *TermState) InteractiveMode() error {
 	// FUTURE: Maybe Check for CSI u?
 	stdInState := &StdinReaderState{
 		array: make([]byte, 1024),
@@ -905,9 +912,7 @@ func (state *TermState) InteractiveMode() {
 	// Put terminal into raw mode
 	oldState, err := term.MakeRaw(state.stdInFd)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error setting terminal to raw mode at beginning of interactive mode: %s\n", err)
-		os.Exit(1)
-		return
+		return fmt.Errorf("Error setting terminal to raw mode at beginning of interactive mode: %s", err)
 	}
 	state.oldState = *oldState
 	fmt.Fprintf(state.f, "Old state: %v\n", state.oldState)
@@ -919,11 +924,9 @@ func (state *TermState) InteractiveMode() {
 
 	stdLibDefs, err := stdLibDefinitions(state.stack, state.context, state.evalState)
 	if err != nil {
-		term.Restore(state.stdInFd, &state.oldState)
-		fmt.Fprintf(os.Stderr, "Error loading standard library: %s\n", err)
-		os.Exit(1)
-		return
+		return fmt.Errorf("Error loading standard library: %s\n", err)
 	}
+
 	state.stdLibDefs = stdLibDefs
 
 	history = make([]string, 0)
@@ -931,8 +934,7 @@ func (state *TermState) InteractiveMode() {
 
 	err = state.printPrompt()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, err.Error())
-		os.Exit(1)
+		return fmt.Errorf("Error printing prompt: %s\n", err)
 	}
 
 	var token TerminalToken
@@ -943,27 +945,27 @@ func (state *TermState) InteractiveMode() {
 		state.f.Sync()
 		token, err = state.InteractiveLexer(stdInState) // token = <- tokenChan
 		if err != nil {
-			fmt.Fprintf(os.Stderr, err.Error())
-			os.Exit(1)
+			return err
 		}
 
 		fmt.Fprintf(state.f, "Got token: %s\n", token)
 
 		if _, ok := token.(EofTerminalToken); ok {
-			return
+			return nil
 		}
 
 		end, err = state.HandleToken(token)
 
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error handling token: %s\n", err)
-			os.Exit(1)
+			return err
 		}
 
 		if end {
 			break
 		}
 	}
+
+	return nil
 }
 
 func (state *TermState) ExecuteCurrentCommand() {
