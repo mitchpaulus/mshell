@@ -2555,6 +2555,9 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 
 				for loopCount < maxLoops {
 					result := state.Evaluate(quotation.Tokens, stack, loopContext, definitions, CallStackItem{quotation, "quote", CALLSTACKQUOTE})
+					if !result.Success || result.ExitCalled {
+						return result
+					}
 
 					if len(*stack) != initialStackSize {
 						// If the stack size changed, we have an error.
@@ -2569,9 +2572,6 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(errorMessage.String())
 					}
 
-					if !result.Success || result.ExitCalled {
-						return result
-					}
 
 					// Assert that we never get into state in which we have a breakNum > 0 and continue == true
 					if result.BreakNum > 0 && result.Continue {
