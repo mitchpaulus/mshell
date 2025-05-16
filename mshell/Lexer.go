@@ -34,6 +34,7 @@ const (
 	READ
 	STR // This is like the command str that convert to string.
 	BREAK
+	CONTINUE
 	NOT
 	AND
 	OR
@@ -125,6 +126,8 @@ func (t TokenType) String() string {
 		return "STR"
 	case BREAK:
 		return "BREAK"
+	case CONTINUE:
+		return "CONTINUE"
 	case NOT:
 		return "NOT"
 	case AND:
@@ -372,6 +375,8 @@ func (l *Lexer) literalOrKeywordType() TokenType {
 				return l.checkKeyword(2, "ol", TYPEBOOL)
 			}
 		}
+	case 'c':
+		return l.checkKeyword(1, "ontinue", CONTINUE)
 	case 'd':
 		return l.checkKeyword(1, "ef", DEF)
 	case 'e':

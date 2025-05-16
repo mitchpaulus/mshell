@@ -1,0 +1,7 @@
+-1 i!
+(
+    @i 1 + i!
+    @i 50 > (break) iff
+    @i 2 mod 0 != (continue) iff
+    @i str wl
+) loop

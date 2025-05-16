@@ -63,9 +63,18 @@ type EvalState struct {
 
 type EvalResult struct {
 	Success    bool
+	Continue   bool
 	BreakNum   int
 	ExitCode   int
 	ExitCalled bool
+}
+
+func (result EvalResult) ShouldPassResultUpStack() bool {
+	return !result.Success || result.BreakNum > 0 || result.ExitCalled || result.Continue
+}
+
+func (result EvalResult) String() string {
+	return fmt.Sprintf("EvalResult: Success: %t, Continue: %t, BreakNum: %d, ExitCode: %d, ExitCalled: %t", result.Success, result.Continue, result.BreakNum, result.ExitCode, result.ExitCalled)
 }
 
 type ExecuteContext struct {
@@ -98,7 +107,7 @@ func (context *ExecuteContext) Close() {
 
 func SimpleSuccess() EvalResult {
 	// Return Eval result with success, 0 exit code, and no break statement
-	return EvalResult{true, -1, 0, false}
+	return EvalResult{true, false, -1, 0, false}
 }
 
 func (state *EvalState) FailWithMessage(message string)  EvalResult {
@@ -106,7 +115,7 @@ func (state *EvalState) FailWithMessage(message string)  EvalResult {
 	if state.CallStack == nil {
 		fmt.Fprintf(os.Stderr, "No call stack available.\n")
 		fmt.Fprintf(os.Stderr, message)
-		return EvalResult{false, -1, 1, false}
+		return EvalResult{false, false, -1, 1, false}
 	}
 
 	// fmt.Fprintf(os.Stderr, "Call stack (%d):\n", len(state.CallStack))
@@ -122,7 +131,7 @@ func (state *EvalState) FailWithMessage(message string)  EvalResult {
 	}
 
 	fmt.Fprintf(os.Stderr, message)
-	return EvalResult{false, -1, 1, false}
+	return EvalResult{false, false, -1, 1, false}
 }
 
 type CallStackType int
@@ -192,6 +201,10 @@ MainLoop:
 
 			if result.BreakNum > 0 {
 				return state.FailWithMessage("Encountered break within list.\n")
+			}
+
+			if result.Continue {
+				return state.FailWithMessage("Encountered continue within list.\n")
 			}
 
 			newList := NewList(len(listStack))
@@ -351,7 +364,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						callStackItem := CallStackItem{MShellParseItem: t, Name: definition.Name, CallStackType: CALLSTACKDEF}
 						result := state.Evaluate(definition.Items, stack, newContext, definitions, callStackItem)
 
-						if !result.Success || result.BreakNum > 0 || result.ExitCalled {
+						if result.ShouldPassResultUpStack() {
 							return result
 						}
 
@@ -991,9 +1004,9 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 
 					if exitInt.Value == 0 {
-						return EvalResult{true, -1, 0, true}
+						return EvalResult{true, false, -1, 0, true}
 					} else {
-						return EvalResult{false, -1, exitInt.Value, true}
+						return EvalResult{false, false, -1, exitInt.Value, true}
 					}
 				} else if t.Lexeme == "*" {
 					obj1, err := stack.Pop()
@@ -1822,7 +1835,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 
 				if state.StopOnError && exitCode != 0 {
 					// Exit completely, with that exit code, don't need to print a different message. Usually the command itself will have printed an error.
-					return EvalResult{false, -1, exitCode, false}
+					return EvalResult{false, false, -1, exitCode, false}
 				}
 
 				if !result.Success {
@@ -1966,7 +1979,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 
 					result := state.Evaluate(quoteToExecute.Tokens, stack, (*qContext), definitions, CallStackItem{trueQuote, "quote", CALLSTACKQUOTE})
 
-					if !result.Success || result.BreakNum != -1 || result.ExitCalled  {
+					if result.ShouldPassResultUpStack() {
 						return result
 					}
 				}
@@ -2009,6 +2022,10 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage("Encountered break within if statement.\n")
 					}
 
+					if result.Continue {
+						return state.FailWithMessage("Encountered continue within if statement.\n")
+					}
+
 					top, err := stack.Pop()
 					if err != nil {
 						conditionNum := i/2 + 1
@@ -2038,7 +2055,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					result := state.Evaluate(quotation.Tokens, stack, context, definitions, CallStackItem{quotation, "quote", CALLSTACKQUOTE})
 
 					// If we encounter a break, we should return it up the stack
-					if !result.Success || result.BreakNum != -1 || result.ExitCalled {
+					if result.ShouldPassResultUpStack() {
 						return result
 					}
 				} else if len(list.Items)%2 == 1 { // Try to find a final else statement, will be the last item in the list if odd number of items
@@ -2046,7 +2063,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 
 					result := state.Evaluate(quotation.Tokens, stack, context, definitions, CallStackItem{quotation, "quote", CALLSTACKQUOTE})
 
-					if !result.Success || result.BreakNum != -1 || result.ExitCalled {
+					if result.ShouldPassResultUpStack() {
 						return result
 					}
 				}
@@ -2200,7 +2217,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 								return state.FailWithMessage(fmt.Sprintf("%d:%d: After executing the quotation in %s, the stack was empty.\n", t.Line, t.Column, t.Lexeme))
 							}
 
-							if !result.Success || result.BreakNum != -1 || result.ExitCalled {
+							if result.ShouldPassResultUpStack() {
 								return result
 							}
 
@@ -2230,7 +2247,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 								return state.FailWithMessage(fmt.Sprintf("%d:%d: After executing the quotation in %s, the stack was empty.\n", t.Line, t.Column, t.Lexeme))
 							}
 
-							if !result.Success || result.BreakNum != -1 || result.ExitCalled {
+							if result.ShouldPassResultUpStack() {
 								return result
 							}
 
@@ -2556,11 +2573,20 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return result
 					}
 
-					if result.BreakNum >= 0 {
+					// Assert that we never get into state in which we have a breakNum > 0 and continue == true
+					if result.BreakNum > 0 && result.Continue {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot have both break and continue in the same loop.\n", t.Line, t.Column))
+					}
+
+					if result.BreakNum > 0 {
 						// breakDiff = state.LoopDepth - result.BreakNum
 						// if breakDiff >= 0 {
 						break
 						// }
+					}
+
+					if result.Continue {
+						continue
 					}
 
 					loopCount++
@@ -2578,7 +2604,9 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					// return EvalResult{true, breakDiff - 1, 0, false}
 				// }
 			} else if t.Type == BREAK { // Token Type
-				return EvalResult{true, 1, 0, false}
+				return EvalResult{true, false, 1, 0, false}
+			} else if t.Type == CONTINUE { // Token Type
+				return EvalResult{true, true, 0, 0, false}
 			} else if t.Type == EQUALS { // Token Type
 				obj1, err := stack.Pop()
 				if err != nil {
@@ -2615,7 +2643,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 
 				result := state.Evaluate(quotation.Tokens, stack, (*quoteContext), definitions, CallStackItem{quotation, "quote", CALLSTACKQUOTE})
 
-				if !result.Success || result.ExitCalled || result.BreakNum > 0 {
+				if result.ShouldPassResultUpStack() {
 					return result
 				}
 			} else if t.Type == POSITIONAL { // Token Type
@@ -2921,7 +2949,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 
 	}
 
-	return EvalResult{true, -1, 0, false}
+	return EvalResult{true, false, -1, 0, false}
 }
 
 const (

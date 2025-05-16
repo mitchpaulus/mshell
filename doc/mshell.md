@@ -92,7 +92,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `isFile`: Check if path is a file. `(path -- bool)`
 - `hardLink`: Create a hard link. `(existingSourcePath newTargetPath -- )`
 - `tempFile`: Create a temporary file, and put the full path on the stack. `( -- str)`
-- `tempDir`: Return path to the OS specific temporary directory. No checks on permission or existence, so never fails.`( -- str)`
+- `tempDir`: Return path to the OS specific temporary directory. No checks on permission or existence, so never fails. See [`os.TempDir`](https://pkg.go.dev/os#TempDir) in golang. `$TMPDIR` or `/tmp` for Unix, `%TMP%`, `%TEMP%, %USERPROFILE%`, or the Windows directory (`C:\Windows`). `( -- str)`
 - `rm`: Remove file or directory. `(str -- )`
 - `cp`: Copy file or directory. `(str source str dest -- )`
 - `mv`: Move file or directory. `(str source str dest -- )`
