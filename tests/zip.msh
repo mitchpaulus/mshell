@@ -1,0 +1,5 @@
+[1 2 3] [4 5 6] (+) zip (str) map uw
+[1 2] [3 4 5 6 7 8] (+) zip (str) map uw
+[3 4 5 6 7 8] [1 2] (+) zip (str) map uw
+
+["a" "b"] ["c" "d"] (b! a! [] @a append @b append tjoin) zip uw

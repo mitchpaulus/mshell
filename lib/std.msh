@@ -212,3 +212,21 @@ end
 def isoDateFmt (date -- str)
     "2006-01-02" dateFmt
 end
+
+def zip ([a] [b] (a b -- c) -- [c])
+    quote! list2! list1!
+    @list1 len @list2 len min2 length!
+    0 index!
+    [] accum!
+    (
+        @index @length >= (break) iff
+        @accum
+        @list1 @index nth
+        @list2 @index nth
+        @quote x
+        append
+        drop
+        @index 1 + index!
+    ) loop
+    @accum
+end

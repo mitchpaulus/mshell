@@ -153,6 +153,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `skip`: Skip first n elements of list, `(list int -- list)`
 - `sort`: Sort list. Converts all items to strings, then sorts using go's `sort.Strings` `(list -- list)`
 - `sortu`: Sort list and remove duplicates. Converts all items to strings, then sorts using go's `sort.Strings` and removes duplicates `(list -- list)`
+- `zip`: Zip two lists together. If the two list are different lengths, resulting list will be the same length as the shorter of the two lists. `([a] [b] (a b -- c) -- [c])`
 
 ## Date Functions
 
@@ -268,3 +269,4 @@ The current object types supported by `mshell` are:
 6. Pipe
 7. Integer
 8. Path
+9. Date/Times
