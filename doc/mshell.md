@@ -34,6 +34,22 @@ No commas are required between elements.
 [1 2 3]
 ```
 
+### Dictionaries/Associative Arrays
+
+mshell has the concept of dictionaries or associative arrays, but only with string keys.
+
+Dictionaries can be instantiated using dictionary literals, like:
+
+```
+{ "key": 1 }
+```
+
+Be careful with some of the lexing around the colon, as it's used with indexing.
+
+```
+{ "key":1 } # Bad because ':1' is treated as index
+```
+
 ### Date/Times
 
 Date/times can be entered using a literal syntax, in ISO-8601 format.
@@ -117,7 +133,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `min`: Minimum of list of numbers `([numeric] -- numeric)`
 - `mod`: Modulus `(numeric numeric -- numeric)`
 
-### String Functions
+## String Functions
 
 - `str`: Convert to string
 - `findReplace`: Find and replace in string. `findReplace (str str, str find, str replace -- str)`
@@ -136,7 +152,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `lower`: Convert string to lowercase. `(str -- str)`
 - `upper`: Convert string to uppercase. `(str -- str)`
 
-### List Functions
+## List Functions
 
 - `append`: Append, `([a] a -- [a])`
 - `map`: Map a quotation over a list, `([a] (a -- b) -- [b])`
@@ -154,6 +170,14 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `sort`: Sort list. Converts all items to strings, then sorts using go's `sort.Strings` `(list -- list)`
 - `sortu`: Sort list and remove duplicates. Converts all items to strings, then sorts using go's `sort.Strings` and removes duplicates `(list -- list)`
 - `zip`: Zip two lists together. If the two list are different lengths, resulting list will be the same length as the shorter of the two lists. `([a] [b] (a b -- c) -- [c])`
+
+## Dictionary Functions
+
+- `get`: Get value from dictionary by key. Errors if the key not found. `(dict str -- a)`
+- `set`: Set value in dictionary by key. `(dict str a -- dict)`
+- `setd`: Set value in dictionary by key. Drop dict after. `(dict str a --)`
+- `keys`: Get keys from dictionary. `(dict -- [str])`
+- `in`: Check if key exists in dictionary. `(dict str -- bool)`
 
 ## Date Functions
 

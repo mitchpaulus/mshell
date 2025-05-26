@@ -1,8 +1,7 @@
--99999999 max! "" max-line!
-::
 (
-    dup line! # Store line
-    wsplit :0: toFloat dup first-item! # Store first item
-    [(@max >) (@first-item max! @line max-line!)] if
-) each
-@max str w " " w @max-line wl
+ line! prev!
+ @line wsplit :0: toFloat new!
+ @new @prev :0: > ([@new @line]) (@prev) iff
+)
+[-99999999  ""] sl foldl
+dup :0: max! :1: maxLine! $"{@max str} {@maxLine}" wl

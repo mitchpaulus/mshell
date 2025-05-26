@@ -1,1 +1,1 @@
-:: (wsplit len) map sum wl
+sl (wsplit len) map sum wl

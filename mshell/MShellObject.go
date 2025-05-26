@@ -144,6 +144,151 @@ func (obj *MShellDateTime) CastString() (string, error) {
 // }}}
 
 
+// MShellDict {{{
+type MShellDict struct {
+	Items map[string]MShellObject
+}
+
+func (*MShellDict) TypeName() string {
+	return "Dictionary"
+}
+func (*MShellDict) IsCommandLineable() bool {
+	return false
+}
+func (*MShellDict) IsNumeric() bool {
+	return false
+}
+func (*MShellDict) FloatNumeric() float64 {
+	return 0
+}
+func (*MShellDict) CommandLine() string {
+	return ""
+}
+
+// This is meant for things like error messages, should be limited in length to 30 chars or so.
+func (*MShellDict) DebugString() string {
+	// TODO: implement this
+	return ""
+}
+func (*MShellDict) Index(index int) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot index into a dictionary.\n")
+}
+
+func (*MShellDict) SliceStart(startInclusive int) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot slice a dictionary.\n")
+}
+func (*MShellDict) SliceEnd(end int) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot slice a dictionary.\n")
+}
+func (*MShellDict) Slice(startInc int, endExc int) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot slice a dictionary.\n")
+}
+func (d *MShellDict) ToJson() string {
+	var sb strings.Builder
+
+	if len(d.Items) == 0 {
+		return "{}"
+	}
+
+	if len(d.Items) == 1 {
+		for key, value := range d.Items {
+			return fmt.Sprintf("{\"%s\": %s}", key, value.ToJson())
+		}
+	}
+
+	keys := make([]string, 0, len(d.Items))
+	for key := range d.Items {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	sb.WriteString("{")
+
+	// Write the first key-value pair
+	firstKey := keys[0]
+	firstValue := d.Items[firstKey]
+
+	sb.WriteString(fmt.Sprintf("\"%s\": %s", firstKey, firstValue.ToJson()))
+
+	for _, key := range keys[1:] {
+		value := d.Items[key]
+		sb.WriteString(fmt.Sprintf(", \"%s\": %s", key, value.ToJson()))
+	}
+
+	sb.WriteString("}")
+
+	return sb.String()
+}
+
+func (d *MShellDict) ToString() string { // This is what is used with 'str' command
+	return d.ToJson()
+}
+
+func (*MShellDict) IndexErrStr() string {
+	return ""
+}
+
+func (*MShellDict) Concat(other MShellObject) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot concatenate a dictionary.\n")
+}
+
+func (thisDict *MShellDict) Equals(other MShellObject) (bool, error) {
+	thisKeys := make([]string, 0, len(thisDict.Items))
+	for key := range thisDict.Items {
+		thisKeys = append(thisKeys, key)
+	}
+	sort.Strings(thisKeys)
+
+	otherDict, ok := other.(*MShellDict)
+	if !ok {
+		return false, nil
+	}
+
+	otherKeys := make([]string, 0, len(otherDict.Items))
+	for key := range otherDict.Items {
+		otherKeys = append(otherKeys, key)
+	}
+	sort.Strings(otherKeys)
+
+	if len(thisKeys) != len(otherKeys) {
+		return false, nil
+	}
+
+	for i, key := range thisKeys {
+		if key != otherKeys[i] {
+			return false, nil
+		}
+	}
+
+	for _, key := range thisKeys {
+		thisValue := thisDict.Items[key]
+		otherValue := otherDict.Items[key]
+
+		if thisValue.TypeName() != otherValue.TypeName() {
+			return false, nil
+		}
+
+		equal, err := thisValue.Equals(otherValue)
+		if err != nil {
+			return false, err
+		}
+		if !equal {
+			return false, nil
+		}
+	}
+
+	return true, nil
+}
+
+// This is meant for completely unambiougous conversion to a string value.
+func (*MShellDict) CastString() (string, error) {
+	return "", fmt.Errorf("Cannot cast a dictionary to a string.\n")
+}
+
+
+// }}}
+
+
 type MShellLiteral struct {
 	LiteralText string
 }

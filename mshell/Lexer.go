@@ -20,9 +20,9 @@ const (
 	PIPE
 	QUESTION
 	POSITIONAL
-	STRING
+	STRING // Normal string like "hello world"
 	UNFINISHEDSTRING
-	SINGLEQUOTESTRING
+	SINGLEQUOTESTRING // Single quoted string like 'hello world'
 	UNFINISHEDSINGLEQUOTESTRING
 	MINUS
 	PLUS
@@ -74,6 +74,9 @@ const (
 	COMMA
 	DATETIME
 	FORMATSTRING
+	LEFT_CURLY
+	RIGHT_CURLY
+	COLON
 )
 
 func (t TokenType) String() string {
@@ -202,6 +205,12 @@ func (t TokenType) String() string {
 		return "DATETIME"
 	case FORMATSTRING:
 		return "FORMATSTRING"
+	case LEFT_CURLY:
+		return "LEFT_CURLY"
+	case RIGHT_CURLY:
+		return "RIGHT_CURLY"
+	case COLON:
+		return "COLON"
 	default:
 		return "UNKNOWN"
 	}
@@ -318,12 +327,16 @@ var notAllowedLiteralChars = map[rune]bool{
 	']': true,
 	'(': true,
 	')': true,
+	'{': true,
+	'}': true,
 	'<': true,
 	'>': true,
+	':': true,
 	';': true,
 	'?': true,
 	'!': true,
 	'@': true,
+	',': true,
 	// '=': true, Removed because it's often used in CLI options like --option=value
 	'&': true,
 	'|': true,
@@ -498,6 +511,10 @@ func (l *Lexer) scanToken() Token {
 		return l.makeToken(LEFT_PAREN)
 	case ')':
 		return l.makeToken(RIGHT_PAREN)
+	case '{':
+		return l.makeToken(LEFT_CURLY)
+	case '}':
+		return l.makeToken(RIGHT_CURLY)
 	case ';':
 		return l.makeToken(EXECUTE)
 	case '|':
@@ -552,7 +569,7 @@ func (l *Lexer) scanToken() Token {
 			return l.makeToken(GREATERTHAN)
 		}
 	case ':':
-		return l.parseIndexerOrLiteral()
+		return l.parseIndexerOrColon()
 	case '-':
 		if unicode.IsDigit(l.peek()) {
 			// Consume the hyphen and parse the number
@@ -767,16 +784,17 @@ func (l *Lexer) parseNumberOrStartIndexer() Token {
 	}
 }
 
-func (l *Lexer) parseIndexerOrLiteral() Token {
-	c := l.advance()
+func (l *Lexer) parseIndexerOrColon() Token {
+	c := l.peek()
 
 	// Return literal if at end
-	if l.atEnd() {
-		return l.makeToken(LITERAL)
+	if c == 0 {
+		return l.makeToken(COLON)
 	}
 
 	if unicode.IsDigit(c) || c == '-' {
 		// Read all the digits
+		l.advance()
 		for {
 			if l.atEnd() {
 				break
@@ -787,7 +805,7 @@ func (l *Lexer) parseIndexerOrLiteral() Token {
 			c = l.advance()
 		}
 	} else {
-		return l.consumeLiteral()
+		return l.makeToken(COLON)
 	}
 
 	if l.peek() == ':' {

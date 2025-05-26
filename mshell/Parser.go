@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	// "os"
+	"sort"
 )
 
 type JsonableList []Jsonable
@@ -27,6 +28,82 @@ type MShellParseList struct {
 	EndToken   Token
 }
 
+type MShellParseDictKeyValue struct {
+	Key   string
+	Value []MShellParseItem
+}
+
+func (kv *MShellParseDictKeyValue) ToJson() string {
+	if len(kv.Value) == 0 {
+		return fmt.Sprintf("\"%s\": []", kv.Key)
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("\"%s\": [", kv.Key))
+	sb.WriteString(kv.Value[0].ToJson())
+
+	for i := 1; i < len(kv.Value); i++ {
+		sb.WriteString(", ")
+		sb.WriteString(kv.Value[i].ToJson())
+	}
+	sb.WriteString("]")
+	return sb.String()
+}
+
+func (kv *MShellParseDictKeyValue) DebugString() string {
+	return kv.ToJson()
+}
+
+
+type MShellParseDict struct {
+	Items      []MShellParseDictKeyValue
+	StartToken Token
+	EndToken   Token
+}
+
+func (d *MShellParseDict) DebugString() string {
+	if len(d.Items) == 0 {
+		return "{}"
+	}
+
+	builder := strings.Builder{}
+	builder.WriteString("{")
+
+	builder.WriteString(d.Items[0].DebugString())
+
+	for i := 1; i < len(d.Items); i++ {
+		builder.WriteString(fmt.Sprintf(", %s", d.Items[i].DebugString()))
+	}
+	builder.WriteString("}")
+	return builder.String()
+}
+
+func (d *MShellParseDict) ToJson() string {
+	if len(d.Items) == 0 {
+		return "{}"
+	}
+
+	var sb strings.Builder
+	sb.WriteString("{")
+	sb.WriteString(d.Items[0].ToJson())
+
+	for i := 1; i < len(d.Items); i++ {
+		sb.WriteString(", ")
+		sb.WriteString(d.Items[i].ToJson())
+	}
+	sb.WriteString("}")
+	return sb.String()
+}
+
+func (d *MShellParseDict) GetStartToken() Token {
+	return d.StartToken
+}
+
+func (d *MShellParseDict) GetEndToken() Token {
+	return d.EndToken
+}
+
+// This is a comma separated list of indexers, which can be used to index into a list or dict.
 type MShellIndexerList struct {
 	Indexers  []MShellParseItem
 }
@@ -218,6 +295,8 @@ func (parser *MShellParser) ParseFile() (*MShellFile, error) {
 		case RIGHT_SQUARE_BRACKET, RIGHT_PAREN:
 			message := fmt.Sprintf("Unexpected token %s while parsing file", parser.curr.Type)
 			return file, errors.New(message)
+		case RIGHT_CURLY:
+			return file, fmt.Errorf("Unexpected '}' while parsing file at line %d, column %d", parser.curr.Line, parser.curr.Column)
 		case LEFT_SQUARE_BRACKET:
 			list, err := parser.ParseList()
 			if err != nil {
@@ -225,13 +304,19 @@ func (parser *MShellParser) ParseFile() (*MShellFile, error) {
 			}
 			// fmt.Fprintf(os.Stderr, "List: %s\n", list.ToJson())
 			file.Items = append(file.Items, list)
+		case LEFT_CURLY:
+			dict, err := parser.ParseDict()
+			if err != nil {
+				return file, err
+			}
+			file.Items = append(file.Items, dict)
 		case INDEXER, ENDINDEXER, STARTINDEXER, SLICEINDEXER:
 			indexerList := parser.ParseIndexer()
 			file.Items = append(file.Items, indexerList)
 		case DEF:
 			_ = parser.Match(parser.curr, DEF)
 			if parser.curr.Type != LITERAL {
-				return file, errors.New(fmt.Sprintf("Expected a name for the definition, got %s", parser.curr.Type))
+				return file, errors.New(fmt.Sprintf("%d: %d: Expected a name for the definition, got %s", parser.curr.Line, parser.curr.Column, parser.curr.Type))
 			}
 
 			def := MShellDefinition{Name: parser.curr.Lexeme, Items: []MShellParseItem{}, TypeDef: TypeDefinition{}}
@@ -931,6 +1016,95 @@ func (parser *MShellParser) ParseTypeList() (*TypeList, error) {
 
 	typeList := TypeList{ListType: listType}
 	return &typeList, nil
+}
+
+func (parser *MShellParser) ParseDict() (*MShellParseDict, error) {
+	dict := &MShellParseDict{}
+	dict.StartToken = parser.curr
+	err := parser.Match(parser.curr, LEFT_CURLY)
+	if err != nil {
+		return dict, err
+	}
+
+	dict.Items = []MShellParseDictKeyValue{}
+	for {
+		if parser.curr.Type == RIGHT_CURLY {
+			break
+		} else if parser.curr.Type == EOF {
+			return dict, errors.New(fmt.Sprintf("Did not find closing '}' for dict beginning at line %d, column %d.", dict.StartToken.Line, dict.StartToken.Column))
+		}
+
+		// Else expect a literal or string key.
+		if parser.curr.Type != LITERAL && parser.curr.Type != STRING {
+			return dict, errors.New(fmt.Sprintf("Expected a key for dict, got %s at line %d, column %d.", parser.curr.Type, parser.curr.Line, parser.curr.Column))
+		}
+
+		// key := parser.curr
+		var key string
+		if parser.curr.Type == STRING {
+			key, err = ParseRawString(parser.curr.Lexeme)
+			if err != nil {
+				return dict, errors.New(fmt.Sprintf("Error parsing string key: %s at line %d, column %d.", err.Error(), parser.curr.Line, parser.curr.Column))
+			}
+		} else if parser.curr.Type == LITERAL {
+			key = parser.curr.Lexeme
+		} else {
+			return dict, errors.New(fmt.Sprintf("Expected a key for dict, got %s at line %d, column %d.", parser.curr.Type, parser.curr.Line, parser.curr.Column))
+		}
+
+		parser.NextToken()
+
+		err = parser.MatchWithMessage(parser.curr, COLON, fmt.Sprintf("Expected ':' after key %s at line %d, column %d.", key, parser.curr.Line, parser.curr.Column))
+		if err != nil {
+			return dict, err
+		}
+
+		// Parse the value for the key.
+		var valueItems []MShellParseItem
+		for {
+			item, err := parser.ParseItem()
+			if err != nil {
+				return dict, err
+			}
+
+			valueItems = append(valueItems, item)
+
+			if parser.curr.Type == COMMA {
+				parser.NextToken()
+				if parser.curr.Type == RIGHT_CURLY {
+					break
+				}
+			} else if parser.curr.Type == RIGHT_CURLY {
+				break
+			} else if parser.curr.Type == EOF {
+				return dict, errors.New(fmt.Sprintf("Unexpected EOF while parsing dict at line %d, column %d.", parser.curr.Line, parser.curr.Column))
+			}
+		}
+
+		// Add the key-value pair to the dict. Error on duplicate keys.
+		dict.Items = append(dict.Items, MShellParseDictKeyValue{Key: key, Value: valueItems})
+	}
+
+	// Match the closing curly brace.
+	dict.EndToken = parser.curr
+	err = parser.Match(parser.curr, RIGHT_CURLY)
+	if err != nil {
+		return dict, err
+	}
+
+	// Check for dups, use sorted list
+	keys := make([]string, 0, len(dict.Items))
+	for _, item := range dict.Items {
+		keys = append(keys, item.Key)
+	}
+	sort.Strings(keys)
+	for i := 1; i < len(keys); i++ {
+		if keys[i] == keys[i-1] {
+			return dict, errors.New(fmt.Sprintf("Duplicate key '%s' found in dict at line %d, column %d.", keys[i], dict.StartToken.Line, dict.StartToken.Column))
+		}
+	}
+
+	return dict, nil
 }
 
 func (parser *MShellParser) ParseList() (*MShellParseList, error) {

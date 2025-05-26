@@ -1,1 +1,1 @@
-:: (dup wsplit len w " " w wl) each
+sl (dup wsplit len w " " w wl) each
