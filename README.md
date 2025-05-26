@@ -67,11 +67,13 @@ sl ("Beth" in) filter len wl
 # 9. Print the largest first field and the line that contains it (assumes some $1 is positive):
 # $1 > max { max = $1; line = $0 }
 # END      { print max, line }
--99999999 max! "" maxLine! sl
 (
-    line! @line wsplit :0: toFloat firstField!
-    @firstField @max > (@firstField max! @line maxLine!) iff
-) each $"{@max str} {@maxLine}" wl
+ line! prev!
+ @line wsplit :0: toFloat new!
+ @new @prev :0: > ([@new @line]) (@prev) iff
+)
+[-99999999  ""] sl foldl
+dup :0: max! :1: maxLine! $"{@max str} {@maxLine}" wl
 
 # 10. Print every line that has at least one field
 # NF > 0
