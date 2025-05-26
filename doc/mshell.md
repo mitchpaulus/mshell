@@ -195,6 +195,14 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `dow`: Get day of week from date (0-6). Sunday = 0, .., Saturday = 6 `(date -- int)`
 - `unixTime`: Get unix time from date `(date -- int)`
 
+## Regular Expression Functions
+
+All regular expression functions use the [Go regular expression syntax](https://pkg.go.dev/regexp/syntax).
+See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syntax.
+
+- `reMatch`: Match a regular expression against a string. Returns boolean true/false. `(str re -- bool)`
+- `reReplace`: Replace all occurrences of a regular expression in a string with a replacement string. `(str re str -- str)`
+
 ## Paths
 
 - `dirname`: Get directory name from path `(path -- path)`

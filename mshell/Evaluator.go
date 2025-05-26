@@ -18,6 +18,7 @@ import (
 	"runtime"
 	"crypto/sha256"
 	"encoding/hex"
+	"regexp"
 	// "golang.org/x/term"
 )
 
@@ -1936,6 +1937,78 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 
 					stack.Push(newList)
+				} else if t.Lexeme == "reMatch" {
+					// Match a regex against a string
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'reMatch' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					obj2, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'reMatch' operation on a stack with only one item.\n", t.Line, t.Column))
+					}
+
+					regexStr, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot match a regex against a %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					str, err := obj2.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot match a regex against a %s.\n", t.Line, t.Column, obj2.TypeName()))
+					}
+
+					re, err := regexp.Compile(regexStr)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error compiling regex '%s': %s\n", t.Line, t.Column, regexStr, err.Error()))
+					}
+
+					matches := re.FindStringSubmatch(str)
+					if matches == nil {
+						stack.Push(&MShellBool{false})
+					} else {
+						stack.Push(&MShellBool{true})
+					}
+				} else if t.Lexeme == "reReplace" {
+					// Replace a regex in a string, fullString regex replacement
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'reReplace' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					obj2, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'reReplace' operation on a stack with only one item.\n", t.Line, t.Column))
+					}
+
+					obj3, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'reReplace' operation on a stack with only two items.\n", t.Line, t.Column))
+					}
+
+					replacement, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot use a %s as a replacement string.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					regexStr, err := obj2.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot use a %s as a regex.\n", t.Line, t.Column, obj2.TypeName()))
+					}
+
+					str, err := obj3.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot use a %s as a string to replace in.\n", t.Line, t.Column, obj3.TypeName()))
+					}
+
+					re, err := regexp.Compile(regexStr)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error compiling regex '%s': %s\n", t.Line, t.Column, regexStr, err.Error()))
+					}
+
+					newStr := re.ReplaceAllString(str, replacement)
+					stack.Push(&MShellString{newStr})
 				} else { // last new function
 					stack.Push(&MShellLiteral{t.Lexeme})
 				}

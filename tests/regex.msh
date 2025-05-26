@@ -1,0 +1,8 @@
+"hello, world world" '^h' reMatch ('Found match') ('No match') iff wl
+"hello, world world" '^a' reMatch ('Found match') ('No match') iff wl
+
+# Examples from: https://pkg.go.dev/regexp#example-Regexp.ReplaceAllString
+"-ab-axxb-" 'a(x*)b' 'T' reReplace wl
+"-ab-axxb-" 'a(x*)b' '$1' reReplace wl
+"-ab-axxb-" 'a(x*)b' '$1W' reReplace wl
+"-ab-axxb-" 'a(x*)b' '${1}W' reReplace wl
