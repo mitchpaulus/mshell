@@ -139,6 +139,7 @@ type CallStackType int
 const (
 	CALLSTACKFILE CallStackType = iota
 	CALLSTACKLIST
+	CALLSTACKDICT
 	CALLSTACKQUOTE
 	CALLSTACKDEF
 )
@@ -212,6 +213,43 @@ MainLoop:
 				newList.Items[i] = item
 			}
 			stack.Push(newList)
+		case *MShellParseDict:
+			// Evaluate the dictionary
+			parseDict := t.(*MShellParseDict)
+			dict := MShellDict{Items: make(map[string]MShellObject)}
+
+			for _, keyValue := range parseDict.Items {
+				key := keyValue.Key
+
+				var dictStack MShellStack
+				dictStack = []MShellObject{}
+				callStackItem := CallStackItem{MShellParseItem: parseDict, Name: "dict", CallStackType: CALLSTACKDICT}
+				result := state.Evaluate(keyValue.Value, &dictStack, context, definitions, callStackItem)
+				if !result.Success {
+					fmt.Fprintf(os.Stderr, "Failed to evaluate dictionary.\n")
+					return result
+				}
+				if result.ExitCalled {
+					return result
+				}
+				if result.BreakNum > 0 {
+					return state.FailWithMessage("Encountered break within dictionary.\n")
+				}
+				if result.Continue {
+					return state.FailWithMessage("Encountered continue within dictionary.\n")
+				}
+				if len(dictStack) == 0 {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Dictionary key '%s' evaluated to an empty stack.\n", keyValue.Value[0].GetStartToken().Line, keyValue.Value[0].GetStartToken().Column, key))
+				}
+
+				if len(dictStack) > 1 {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Dictionary key '%s' evaluated to a stack with more than one item.\n", keyValue.Value[0].GetStartToken().Line, keyValue.Value[0].GetStartToken().Column, key))
+				}
+
+				dict.Items[keyValue.Key] = dictStack[0]
+			}
+
+			stack.Push(&dict)
 		case *MShellParseQuote:
 			parseQuote := t.(*MShellParseQuote)
 			q := MShellQuotation{Tokens: parseQuote.Items, StandardInputFile: "", StandardOutputFile: "", StandardErrorFile: "", Variables: context.Variables, MShellParseQuote: parseQuote}
@@ -934,7 +972,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'in' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
-					totalString, err := stack.Pop()
+					stringOrDict, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'in' operation on a stack with only one item.\n", t.Line, t.Column))
 					}
@@ -944,12 +982,18 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot search for a %s.\n", t.Line, t.Column, substring.TypeName()))
 					}
 
-					totalStringText, err := totalString.CastString()
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot search in a %s.\n", t.Line, t.Column, totalString.TypeName()))
-					}
+					if dict, ok := stringOrDict.(*MShellDict); ok {
+						// Check if the substring is a key in the dictionary
+						_, exists := dict.Items[substringText]
+						stack.Push(&MShellBool{exists})
+					} else {
+						totalStringText, err := stringOrDict.CastString()
+						if err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot search in a %s.\n", t.Line, t.Column, stringOrDict.TypeName()))
+						}
 
-					stack.Push(&MShellBool{strings.Contains(totalStringText, substringText)})
+						stack.Push(&MShellBool{strings.Contains(totalStringText, substringText)})
+					}
 				} else if t.Lexeme == "/" {
 					obj1, err := stack.Pop()
 					if err != nil {
@@ -1805,6 +1849,93 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					hash := hex.EncodeToString(sum)
 					// Push the hash onto the stack
 					stack.Push(&MShellString{hash})
+				} else if t.Lexeme == "get" {
+					// Get a value from string key for a dictionary.
+					// dict "key" get
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'get' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					obj2, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'get' operation on a stack with only one item.\n", t.Line, t.Column))
+					}
+
+					keyStr, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot get a value from a %s with a key %s.\n", t.Line, t.Column, obj1.TypeName(), keyStr))
+					}
+
+					dict, ok := obj2.(*MShellDict)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot get a value from a %s with a key %s.\n", t.Line, t.Column, obj2.TypeName(), keyStr))
+					}
+
+					value, ok := dict.Items[keyStr]
+					if !ok {
+						var sb strings.Builder
+						sb.WriteString(fmt.Sprintf("%d:%d: Key '%s' not found in dictionary.\n", t.Line, t.Column, keyStr))
+						sb.WriteString("Available keys:\n")
+						for k := range dict.Items {
+							// TODO: Escape
+							sb.WriteString(fmt.Sprintf("  - '%s'\n", k))
+						}
+						return state.FailWithMessage(sb.String())
+					}
+
+					stack.Push(value)
+				} else if t.Lexeme == "set" || t.Lexeme == "setd" {
+					// Set a value in a dictionary with a string key.
+					// dict "key" value set
+					value, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'set' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					key, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'set' operation on a stack with only one item.\n", t.Line, t.Column))
+					}
+
+					dict, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'set' operation on a stack with only two items.\n", t.Line, t.Column))
+					}
+
+					keyStr, err := key.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot set a value in a %s with a key %s.\n", t.Line, t.Column, dict.TypeName(), keyStr))
+					}
+
+					dictObj, ok := dict.(*MShellDict)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot set a value in a %s with a key %s.\n", t.Line, t.Column, dict.TypeName(), keyStr))
+					}
+
+					dictObj.Items[keyStr] = value
+					if t.Lexeme == "set" {
+						stack.Push(dictObj)
+					}
+				} else if t.Lexeme == "keys" {
+					// Get the keys of a dictionary.
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'keys' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					dict, ok := obj1.(*MShellDict)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot get the keys of a %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					// Create a new list and add the keys to it
+					newList := NewList(len(dict.Items))
+					for key := range dict.Items {
+						newList.Items = append(newList.Items, &MShellString{key})
+					}
+
+					stack.Push(newList)
 				} else { // last new function
 					stack.Push(&MShellLiteral{t.Lexeme})
 				}

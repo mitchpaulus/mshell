@@ -1,0 +1,13 @@
+{
+    "hello": "world",
+} str wl
+
+{ "key": 1 2 + } dict2! @dict2 str wl
+
+@dict2 "key" get 3 + str wl
+
+@dict2 "key" 5 setd
+@dict2 "key" get 3 + str wl
+
+@dict2 "key"       in ("key found in dict") ("key not found in dict") iff wl
+@dict2 "other key" in ("key found in dict") ("key not found in dict") iff wl
