@@ -120,6 +120,9 @@ func main() {
 			fmt.Println("  -h, --help Print this help message")
 			os.Exit(0)
 			return
+		} else if arg == "--version" {
+			fmt.Fprintf(os.Stdout, "0.4.0\n")
+			os.Exit(0)
 		} else if arg == "-c" {
 			if i >= len(os.Args) {
 				fmt.Println("Error: -c requires an argument")

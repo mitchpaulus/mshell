@@ -85,7 +85,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `we`: Write error to stderr (str -- )
 - `wle`: Write error line stderr (str -- )
 - `len`: Length of string/list `([a] -- int | str -- int)`
-- `args`: List of string arguments `( -- [str])`
+- `args`: List of string arguments. Does not include the name of the executing file. `( -- [str])`
 - `glob`: Run glob against string/literal on top of the stack. Leaves list of strings on the stack. `(str -- [str])`
 - `x`: Interpret/execute quotation `(quote -- )`
 - `toFloat`: Convert to float. `(numeric -- float)`
