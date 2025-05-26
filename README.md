@@ -148,7 +148,6 @@ wt ((toFloat abs str) map wjoin wl) each
 
 # TODO
 
-- Dictionaries
 - Improved error messages
 - Type checking
 
