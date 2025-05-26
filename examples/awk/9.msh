@@ -1,5 +1,5 @@
 -99999999 max! "" max-line!
-::
+sl
 (
     dup line! # Store line
     wsplit :0: toFloat dup first-item! # Store first item
