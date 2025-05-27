@@ -9,6 +9,7 @@ import (
 	"time"
 	"regexp"
 	"sort"
+	"slices"
 )
 
 // TruncateMiddle truncates a string to a maximum length, adding "..." in the middle if necessary.
@@ -443,6 +444,30 @@ func SortList(list *MShellList) (*MShellList, error) {
 
 	// Sort the strings
 	sort.Strings(stringsToSort)
+
+	// Create a new list and add the sorted strings to it
+	newList := NewList(0)
+	for _, str := range stringsToSort {
+		newList.Items = append(newList.Items, &MShellString{str})
+	}
+	CopyListParams(list, newList)
+	return newList, nil
+}
+
+func SortListFunc(list *MShellList, cmp func(a string, b string) int) (*MShellList, error) {
+	// Sort the list. First verify that all items are string castable
+	stringsToSort := make([]string, len(list.Items))
+	for i, item := range list.Items {
+		str, err := item.CastString()
+		if err != nil {
+			message := fmt.Sprintf("Cannot sort a list with a %s inside (%s).\n", item.TypeName(), item.DebugString())
+			return nil, fmt.Errorf(message)
+		}
+		stringsToSort[i] = str
+	}
+
+	// Sort the strings to function
+	slices.SortFunc(stringsToSort, cmp)
 
 	// Create a new list and add the sorted strings to it
 	newList := NewList(0)

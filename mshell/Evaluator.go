@@ -21,6 +21,7 @@ import (
 	"encoding/csv"
 	"regexp"
 	// "golang.org/x/term"
+	"unicode"
 )
 
 type MShellStack []MShellObject
@@ -1787,7 +1788,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 				} else if t.Lexeme == "runtime" {
 					// Place the name of the current OS runtime on the stack
 					stack.Push(&MShellString{runtime.GOOS})
-				} else if t.Lexeme == "sort" || t.Lexeme == "sortu" {
+				} else if t.Lexeme == "sort" || t.Lexeme == "sortu" || t.Lexeme == "sortV" || t.Lexeme == "sortVu" {
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'sort' operation on an empty stack.\n", t.Line, t.Column))
@@ -1799,12 +1800,19 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot sort a %s.\n", t.Line, t.Column, obj1.TypeName()))
 					}
 
-					sortedList, err := SortList(list)
+					var sortedList *MShellList
+
+					if t.Lexeme == "sortV" || t.Lexeme == "sortVu" {
+						sortedList, err = SortListFunc(list, VersionSortComparer)
+					} else {
+						sortedList, err = SortList(list)
+					}
+
 					if err != nil {
 						return state.FailWithMessage(err.Error())
 					}
 
-					if t.Lexeme == "sortu" {
+					if t.Lexeme == "sortu" || t.Lexeme == "sortVu" {
 						// Remove duplicates, already sorted so we can just iterate and remove duplicates
 						for i := len(sortedList.Items) - 1; i > 0; i-- {
 							doesEqual, err := sortedList.Items[i].Equals(sortedList.Items[i-1])
@@ -3800,4 +3808,83 @@ func CopyFile(source string, dest string) error {
 	}
 
 	return nil
+}
+
+func VersionSortComparer(a_str string, b_str string) int {
+	a := []rune(a_str)
+	b := []rune(b_str)
+
+	a_index := 0
+	b_index := 0
+
+	a_end_index := 0
+	b_end_index := 0
+
+	for {
+		if a_index >= len(a) {
+			if b_index >= len(b) {
+				return 0 // Both strings are equal
+			} else {
+				return -1 // a is shorter than b
+			}
+		}
+
+		if b_index >= len(b) {
+			return 1 // b is shorter than a
+		}
+
+		cur_a := a[a_index]
+		cur_b := b[b_index]
+
+		if unicode.IsDigit(cur_a) && unicode.IsDigit(cur_b) {
+			a_end_index = a_index
+			b_end_index = b_index
+
+			// Find the end of the digit sequence in a
+			for a_end_index < len(a) && unicode.IsDigit(a[a_end_index]) {
+				a_end_index++
+			}
+
+			a_int, _ := strconv.Atoi(string(a[a_index:a_end_index]))
+
+			// Find the end of the digit sequence in b
+			for b_end_index < len(b) && unicode.IsDigit(b[b_end_index]) {
+				b_end_index++
+			}
+
+			b_int, _ := strconv.Atoi(string(b[b_index:b_end_index]))
+
+			if a_int < b_int {
+				return -1
+			} else if a_int > b_int {
+				return 1
+			} else {
+				a_index = a_end_index
+				b_index = b_end_index
+			}
+		} else if unicode.IsDigit(cur_a) {
+			// Check is b is less than 0
+			if cur_b < '0' {
+				return 1
+			} else {
+				return -1
+			}
+		} else if unicode.IsDigit(cur_b) {
+			// Check is a is less than 0
+			if cur_a < '0' {
+				return -1
+			} else {
+				return 1
+			}
+		} else {
+			if cur_a < cur_b {
+				return -1
+			} else if cur_a > cur_b {
+				return 1
+			} else {
+				a_index++
+				b_index++
+			}
+		}
+	}
 }

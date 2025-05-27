@@ -170,6 +170,8 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `skip`: Skip first n elements of list, `(list int -- list)`
 - `sort`: Sort list. Converts all items to strings, then sorts using go's `sort.Strings` `(list -- list)`
 - `sortu`: Sort list and remove duplicates. Converts all items to strings, then sorts using go's `sort.Strings` and removes duplicates `(list -- list)`
+- `sortV`: Version sort list. Converts all items to strings, then sorts like GNU `sort -V` (`list -- list`)
+- `sortVu`: Version sort list and remove duplicates. Converts all items to strings, then sorts like GNU `sort -Vu` (`list -- list`)
 - `zip`: Zip two lists together. If the two list are different lengths, resulting list will be the same length as the shorter of the two lists. `([a] [b] (a b -- c) -- [c])`
 
 ## Dictionary Functions
@@ -182,7 +184,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 
 ## Date Functions
 
-- `toDt`: Convert to date/time `(str -- date)`
+- `toDt`: Convert string to date/time `(str -- date)`
 - `date`: Push current date/time onto the stack `( -- date)`
 - `year`: Get year from date `(date -- int)`
 - `month`: Get month from date (1-12) `(date -- int)`
@@ -303,3 +305,4 @@ The current object types supported by `mshell` are:
 7. Integer
 8. Path
 9. Date/Times
+10. Dictionary
