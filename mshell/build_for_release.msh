@@ -35,20 +35,20 @@
 soe
 
 def build_os_arch (--)
-    dup :0: $GOOS! :1: $GOARCH!
+    list! @list :0: $GOOS! @list :1: $GOARCH! @list :2: $BIN_NAME!
     $"Working on {$GOOS} {$GOARCH}" wl
-    [go build -o $"bin/{$GOOS}_{$GOARCH}/msh"];
-    [tar -C $"bin/{$GOOS}_{$GOARCH}" -czf $"bin/{$GOOS}_{$GOARCH}.tar.gz" "msh"];
+    [go build -o $"bin/{$GOOS}_{$GOARCH}/{$BIN_NAME}"];
+    [tar -C $"bin/{$GOOS}_{$GOARCH}" -czf $"bin/{$GOOS}_{$GOARCH}.tar.gz" $"{$BIN_NAME}"];
 end
 
 [
-    ['linux' 'amd64']
-    ['linux' 'arm']
-    ['linux' 'arm64']
-    ['linux' '386']
-    ['windows' 'amd64']
-    ['darwin' 'amd64']
-    ['darwin' 'arm64']
+    ['linux' 'amd64' 'msh']
+    ['linux' 'arm' 'msh']
+    ['linux' 'arm64' 'msh']
+    ['linux' '386' 'msh']
+    ['windows' 'amd64' 'msh.exe']
+    ['darwin' 'amd64' 'msh']
+    ['darwin' 'arm64' 'msh']
 ]
 
 (build_os_arch) each
