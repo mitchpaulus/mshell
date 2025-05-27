@@ -18,6 +18,7 @@ import (
 	"runtime"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/csv"
 	"regexp"
 	// "golang.org/x/term"
 )
@@ -2009,6 +2010,50 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 
 					newStr := re.ReplaceAllString(str, replacement)
 					stack.Push(&MShellString{newStr})
+				} else if t.Lexeme == "parseCsv" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'parseCsv' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					// If a path or literal, read the file as UTF-8. Else, read the string as the contents directly.
+					var reader *csv.Reader
+					switch obj1.(type) {
+					case *MShellPath, *MShellLiteral:
+						path, _ := obj1.CastString()
+						file, err := os.Open(path)
+						if err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error opening file %s: %s\n", t.Line, t.Column, path, err.Error()))
+						}
+						defer file.Close()
+						reader = csv.NewReader(file)
+					case *MShellString:
+						// Create a new CSV reader directly from the string contents
+						reader = csv.NewReader(strings.NewReader(obj1.(*MShellString).Content))
+					}
+					reader.FieldsPerRecord = -1
+
+					// Create a new list and add the records to it
+					newOuterList := NewList(0)
+
+					// TODO: They are going to force me to roll my own CSV parser.
+					// For now, going to have to deal with the skipped empty lines.
+					for {
+						record, err := reader.Read()
+						if err == io.EOF {
+							break
+						} else if err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error reading CSV: %s\n", t.Line, t.Column, err.Error()))
+						}
+						// Turn record into MShellList of strings
+						newInnerList := NewList(len(record))
+						for i, val := range record {
+							newInnerList.Items[i] = &MShellString{val}
+						}
+
+						newOuterList.Items = append(newOuterList.Items, newInnerList)
+					}
+					stack.Push(newOuterList)
 				} else { // last new function
 					stack.Push(&MShellLiteral{t.Lexeme})
 				}

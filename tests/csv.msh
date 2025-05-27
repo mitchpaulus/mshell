@@ -1,0 +1,23 @@
+# Simple
+"a,b,c,d\ne,f,g,h\n" parseCsv str wl
+
+# Escaped commas
+"a,\"b, c\",d\n" parseCsv str wl
+
+# Escaped newlines
+"a,\"b\nc\",d\n" parseCsv str wl
+
+# CSV without newline at the end
+"a,b,c,d\ne,f,g,h" parseCsv str wl
+
+# CSV with empty lines, TODO, fix this.
+"\n\na,b,c,d\n\ne,f,g,h\n" parseCsv str wl
+
+# CSV with different number of columns
+"a,b,c,d\ne,f,g\n" parseCsv str wl
+
+# Parse from file
+`csv.csv` parseCsv str wl
+
+# Parse from file, but as literal
+csv.csv parseCsv str wl
