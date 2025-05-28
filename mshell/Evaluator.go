@@ -1542,7 +1542,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error creating temporary file: %s\n", t.Line, t.Column, err.Error()))
 					}
 					// Dump the full path to the stack
-					stack.Push(&MShellString{tmpfile.Name()})
+					stack.Push(&MShellPath{tmpfile.Name()})
 				} else if t.Lexeme == "tempDir" {
 					tmpdir := os.TempDir()
 					stack.Push(&MShellString{tmpdir})
