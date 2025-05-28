@@ -100,7 +100,7 @@ def wjoin ([str] -- str) " " join end
 def unlines ([str] -- str)
     [] unlines-accum! # Accumulator
     (
-        @unlines-accum append
+       @unlines-accum swap append
        "\n" append
        drop
     ) each
