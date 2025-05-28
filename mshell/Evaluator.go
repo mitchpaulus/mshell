@@ -2063,6 +2063,12 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 					stack.Push(newOuterList)
 				} else { // last new function
+					// If we aren't in a list context, throw an error.
+					// Nearly always this is unintended.
+					if callStackItem.CallStackType != CALLSTACKLIST {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Found literal token '%s' outside of a list context. Normally this is unintended. Either make it a string literal or path, or ensure the definition is available.\n", t.Line, t.Column, t.Lexeme))
+					}
+
 					stack.Push(&MShellLiteral{t.Lexeme})
 				}
 			} else if t.Type == LEFT_SQUARE_BRACKET { // Token Type

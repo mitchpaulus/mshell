@@ -2,8 +2,8 @@
 2025-01-29T10 str wl
 2025-01-29T10:13 str wl
 2025-01-29T10:13:16 str wl
-2025-01-asdfasdff # This should be single token
-2025-01-13asdfasdf # This should be two tokens
+# 2025-01-asdfasdff # This should be single token  Update: we no longer allow literals outside of lists, so these examples are not valid anymore and would be caught by that check.
+# 2025-01-13asdfasdf # This should be two tokens
 
 "2025_12_23" toDt str wl # Should write out in ISO format '2025-12-23T00:00:00'
 

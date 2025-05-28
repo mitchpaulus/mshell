@@ -32,8 +32,7 @@ false false or not ("truey") ("falsey") iff wl
 
 "Falses" header
 1 1 != result
-"hello" hello != result
-`path` path != result
+"hello" 'hello' != result
 2025-02-14 2025-02-14 != result
 
 # Test short-circuit style and/ors

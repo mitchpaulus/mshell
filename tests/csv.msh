@@ -18,6 +18,3 @@
 
 # Parse from file
 `csv.csv` parseCsv str wl
-
-# Parse from file, but as literal
-csv.csv parseCsv str wl
