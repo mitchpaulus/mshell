@@ -2143,7 +2143,71 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 
 					stack.Push(&MShellString{obj1.TypeName()})
 
-				} else { // last new function
+				} else if t.Lexeme == "utcToCst" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'toCst' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					// Convert the datetime to CST from assumed UTC
+					dateTimeObj, ok := obj1.(*MShellDateTime)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert a %s to CST.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					// Convert to CST
+					cstLocation, err := time.LoadLocation("America/Chicago")
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error loading CST location: %s\n", t.Line, t.Column, err.Error()))
+					}
+
+					dateTimeObj.Time = dateTimeObj.Time.In(cstLocation)
+					dateTimeObj.Token = t
+					stack.Push(dateTimeObj)
+				} else if t.Lexeme == "round" {
+					// Round a float to the nearest integer
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'round' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					if obj1.IsNumeric() {
+						floatVal := obj1.FloatNumeric()
+						if err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot round a %s.\n", t.Line, t.Column, obj1.TypeName()))
+						}
+
+						rounded := int(math.Round(floatVal))
+						stack.Push(&MShellInt{rounded})
+					} else {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot round a %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+				} else if t.Lexeme == "toFixed" {
+					obj1, err := stack.Pop()
+
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'toFixed' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					obj2, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'toFixed' operation on a stack with only one item.\n", t.Line, t.Column))
+					}
+
+					obj1Int, ok := obj1.(*MShellInt)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The number of decimal places parameter in toFixed is not an integer. Found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
+					}
+
+
+					if !obj2.IsNumeric() {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert a %s (%s) to a number.\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
+					}
+
+					floatVal := obj2.FloatNumeric()
+
+					stack.Push(&MShellString{fmt.Sprintf("%.*f", obj1Int.Value, floatVal)})
+				}  else { // last new function
 					// If we aren't in a list context, throw an error.
 					// Nearly always this is unintended.
 					if callStackItem.CallStackType != CALLSTACKLIST {

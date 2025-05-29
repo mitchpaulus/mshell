@@ -112,8 +112,8 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `tempFile`: Create a temporary file, and put the full path on the stack. `( -- str)`
 - `tempDir`: Return path to the OS specific temporary directory. No checks on permission or existence, so never fails. See [`os.TempDir`](https://pkg.go.dev/os#TempDir) in golang. `$TMPDIR` or `/tmp` for Unix, `%TMP%`, `%TEMP%, %USERPROFILE%`, or the Windows directory (`C:\Windows`). `( -- str)`
 - `rm`: Remove file or directory. `(str -- )`
-- `cp`: Copy file or directory. `(str source str dest -- )`
-- `mv`: Move file or directory. `(str source str dest -- )`
+- `cp`: Copy file or directory. `(str:source str:dest -- )`
+- `mv`: Move file or directory. `(str:source str:dest -- )`
 - `readFile`: Read file into string. `(str -- str)`
 - `readTsvFile`: Read a TSV file into list of list of strings. `(str -- [[str]])`
 - `cd`: Change directory `(str -- )`
@@ -135,6 +135,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `min2`: Minimum of two numbers `(numeric numeric -- numeric)`
 - `min`: Minimum of list of numbers `([numeric] -- numeric)`
 - `mod`: Modulus `(numeric numeric -- numeric)`
+- `round`: Round to nearest integer. Rounds half-way away from zero. `(numeric -- int)`
 
 ## String Functions
 
@@ -154,6 +155,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `endsWith`: Check if string ends with substring. `(str str -- bool)`
 - `lower`: Convert string to lowercase. `(str -- str)`
 - `upper`: Convert string to uppercase. `(str -- str)`
+- `toFixed`: Convert number to string with fixed number of decimal places. `(numeric int -- str)`
 
 ## List Functions
 
@@ -188,7 +190,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 ## Date Functions
 
 - `toDt`: Convert string to date/time `(str -- date)`
-- `date`: Push current date/time onto the stack `( -- date)`
+- `date`: Push current local date/time onto the stack `( -- date)`
 - `year`: Get year from date `(date -- int)`
 - `month`: Get month from date (1-12) `(date -- int)`
 - `day`: Get day from date (1-31) `(date -- int)`
