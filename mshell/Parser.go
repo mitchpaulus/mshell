@@ -1166,6 +1166,14 @@ func (parser *MShellParser) ParseQuote() (*MShellParseQuote, error) {
 	for  {
 		if parser.curr.Type == RIGHT_PAREN {
 			break
+		} else if parser.curr.Type == RIGHT_CURLY {
+			return quote, fmt.Errorf("Unexpected '}' while parsing file at line %d, column %d", parser.curr.Line, parser.curr.Column)
+		} else if parser.curr.Type == LEFT_CURLY {
+			dict, err := parser.ParseDict()
+			if err != nil {
+				return quote, err
+			}
+			quote.Items = append(quote.Items, dict)
 		} else if parser.curr.Type == EOF {
 			return quote, errors.New(fmt.Sprintf("Did not find closing ')' for quote beginning at line %d, column %d.", quote.StartToken.Line, quote.StartToken.Column))
 		} else {
