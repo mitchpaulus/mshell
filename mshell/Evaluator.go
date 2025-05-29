@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"regexp"
 	// "golang.org/x/term"
+	_ "time/tzdata"
 	"unicode"
 )
 
