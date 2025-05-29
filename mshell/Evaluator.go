@@ -19,6 +19,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/csv"
+	"encoding/json"
 	"regexp"
 	// "golang.org/x/term"
 	"unicode"
@@ -219,7 +220,7 @@ MainLoop:
 		case *MShellParseDict:
 			// Evaluate the dictionary
 			parseDict := t.(*MShellParseDict)
-			dict := MShellDict{Items: make(map[string]MShellObject)}
+			dict := NewDict()
 
 			for _, keyValue := range parseDict.Items {
 				key := keyValue.Key
@@ -252,7 +253,7 @@ MainLoop:
 				dict.Items[keyValue.Key] = dictStack[0]
 			}
 
-			stack.Push(&dict)
+			stack.Push(dict)
 		case *MShellParseQuote:
 			parseQuote := t.(*MShellParseQuote)
 			q := MShellQuotation{Tokens: parseQuote.Items, StandardInputFile: "", StandardOutputFile: "", StandardErrorFile: "", Variables: context.Variables, MShellParseQuote: parseQuote}
@@ -1864,22 +1865,22 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					// dict "key" get
 					obj1, err := stack.Pop()
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'get' operation on an empty stack.\n", t.Line, t.Column))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
 					}
 
 					obj2, err := stack.Pop()
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'get' operation on a stack with only one item.\n", t.Line, t.Column))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on a stack with only one item.\n", t.Line, t.Column, t.Lexeme))
 					}
 
 					keyStr, err := obj1.CastString()
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot get a value from a %s with a key %s.\n", t.Line, t.Column, obj1.TypeName(), keyStr))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The stack parameter for the dictionary key is not a string. Found a %s (%s).\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
 					}
 
 					dict, ok := obj2.(*MShellDict)
 					if !ok {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot get a value from a %s with a key %s.\n", t.Line, t.Column, obj2.TypeName(), keyStr))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The stack parameter for the dictionary in 'get' is not a dictionary. Found a %s (%s). Key: %s\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString(), keyStr))
 					}
 
 					value, ok := dict.Items[keyStr]
@@ -1895,6 +1896,40 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 
 					stack.Push(value)
+				} else if t.Lexeme == "getDef" {
+					// Get a value from string key for a dictionary.
+					// dict "key" default getDef
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
+					}
+
+					obj2, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on a stack with only one item.\n", t.Line, t.Column, t.Lexeme))
+					}
+
+					obj3, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on a stack with only two items.\n", t.Line, t.Column, t.Lexeme))
+					}
+
+					keyStr, err := obj2.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The stack parameter for the dictionary key is not a string. Found a %s (%s).\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
+					}
+
+					dict, ok := obj3.(*MShellDict)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The stack parameter for the dictionary in '%s' is not a dictionary. Found a %s (%s). Key: %s\n, Default: %s\n", t.Line, t.Column, t.Lexeme, obj3.TypeName(), obj3.DebugString(), keyStr, obj1.DebugString()))
+					}
+
+					value, ok := dict.Items[keyStr]
+					if !ok {
+						stack.Push(obj1) // Push the default value
+					} else {
+						stack.Push(value)
+					}
 				} else if t.Lexeme == "set" || t.Lexeme == "setd" {
 					// Set a value in a dictionary with a string key.
 					// dict "key" value set
@@ -2062,6 +2097,52 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						newOuterList.Items = append(newOuterList.Items, newInnerList)
 					}
 					stack.Push(newOuterList)
+				} else if t.Lexeme == "parseJson" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'parseJson' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					// If a path or literal, read the file as UTF-8. Else, read the string as the contents directly.
+					var jsonData []byte
+					switch obj1.(type) {
+					case *MShellPath, *MShellLiteral:
+						path, _ := obj1.CastString()
+						file, err := os.Open(path)
+						if err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error opening file %s: %s\n", t.Line, t.Column, path, err.Error()))
+						}
+
+						defer file.Close()
+						jsonData, err = io.ReadAll(file)
+						if err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error reading file %s: %s\n", t.Line, t.Column, path, err.Error()))
+						}
+
+					case *MShellString:
+						// Create a new JSON reader directly from the string contents
+						jsonData = []byte(obj1.(*MShellString).Content)
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot parse a %s as JSON.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					var parsedData interface{}
+					err = json.Unmarshal(jsonData, &parsedData)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing JSON: %s\n", t.Line, t.Column, err.Error()))
+					}
+
+					// Convert the parsed data to analgous MShell types
+					resultObj := ParseJsonObjToMshell(parsedData)
+					stack.Push(resultObj)
+				} else if t.Lexeme == "type" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'type' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					stack.Push(&MShellString{obj1.TypeName()})
+
 				} else { // last new function
 					// If we aren't in a list context, throw an error.
 					// Nearly always this is unintended.
@@ -3892,5 +3973,42 @@ func VersionSortComparer(a_str string, b_str string) int {
 				b_index++
 			}
 		}
+	}
+}
+
+func ParseJsonObjToMshell(jsonObj interface{}) MShellObject {
+	// See https://pkg.go.dev/encoding/json#Unmarshal
+	switch o := jsonObj.(type) {
+	case []interface{}:
+		list := NewList(0)
+		for _, item := range o {
+			parsedItem := ParseJsonObjToMshell(item)
+			list.Items = append(list.Items, parsedItem)
+		}
+		return list
+
+	case map[string]interface{}:
+		dict := NewDict()
+		// TODO: decide and document how to handle duplicate keys in JSON objects
+		for key, value := range o {
+			dict.Items[key] = ParseJsonObjToMshell(value)
+		}
+		return dict
+
+	case string:
+		return &MShellString{o}
+	case float64:
+		return &MShellFloat{o}
+	case bool:
+		if o {
+			return &MShellBool{true}
+		} else {
+			return &MShellBool{false}
+		}
+	case nil:
+		return &MShellInt{0}
+	default:
+		panic(fmt.Sprintf("Unknown JSON object type: %T", jsonObj))
+		// There should be no other types in JSON, but if there are, we can handle them here
 	}
 }

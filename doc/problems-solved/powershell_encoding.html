@@ -1,0 +1,16 @@
+<h1>PowerShell default redirection encoding</h1>
+
+<p>
+If you're not on the latest PowerShell core, if you do something like:
+</p>
+
+<pre>
+<code>
+MyCommand &gt; out.txt
+</code>
+</pre>
+
+<p>
+The encoding of <code>out.txt</code> is not UTF-8. This breaks many tools.
+Unless otherwise noted, everything in <code>mshell</code> is UTF-8 unless told otherwise.
+</p>

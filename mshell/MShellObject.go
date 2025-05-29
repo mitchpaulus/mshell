@@ -150,6 +150,12 @@ type MShellDict struct {
 	Items map[string]MShellObject
 }
 
+func NewDict() *MShellDict {
+	return &MShellDict{
+		Items: make(map[string]MShellObject),
+	}
+}
+
 func (*MShellDict) TypeName() string {
 	return "Dictionary"
 }
@@ -167,9 +173,17 @@ func (*MShellDict) CommandLine() string {
 }
 
 // This is meant for things like error messages, should be limited in length to 30 chars or so.
-func (*MShellDict) DebugString() string {
+func (d *MShellDict) DebugString() string {
 	// TODO: implement this
-	return ""
+
+	sb := strings.Builder{}
+	sb.WriteString("Dictionary{")
+	for key, value := range d.Items {
+		sb.WriteString(fmt.Sprintf("%s: %s, ", key, value.DebugString()))
+	}
+	sb.WriteString("}")
+	return sb.String()
+
 }
 func (*MShellDict) Index(index int) (MShellObject, error) {
 	return nil, fmt.Errorf("Cannot index into a dictionary.\n")

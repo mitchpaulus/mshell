@@ -4,6 +4,7 @@ import (
 	"testing"
 	"fmt"
 	"time"
+	"os"
 )
 
 func TestDateLexing(t *testing.T) {
@@ -64,7 +65,8 @@ func HelpTestDateTime(dateStr string, expectedYear int, expectedMonth time.Month
 		t.Errorf("Parsed second %d, expected %d", parsedTime.Second(), expectedSecond)
 	}
 
-	fmt.Println(parsedTime)
+	fmt.Fprintf(os.Stderr, "'%s' = %s\n", dateStr, parsedTime)
+	// fmt.Println(parsedTime)
 }
 
 
@@ -82,4 +84,9 @@ func TestDate2(t *testing.T) {
 	HelpTestDateTime("1/12/2025 12:56:13 AM", 2025, time.January, 12, 0, 56, 13, t)
 	HelpTestDateTime("1/12/2025 12:56:13 PM", 2025, time.January, 12, 12, 56, 13, t)
 	HelpTestDateTime("1/12/2025 2:56:13 PM", 2025, time.January, 12, 14, 56, 13, t)
+}
+
+func TestIsoDateFromMsGraph(t *testing.T) {
+	// This is the format used by MS Graph API
+	HelpTestDateTime("2025-04-30T17:58:18.5467067Z", 2025, time.April, 30, 17, 58, 18, t)
 }

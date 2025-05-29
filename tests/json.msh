@@ -1,0 +1,11 @@
+'[1, 2, 3]' parseJson str wl
+
+'{
+    "name": "John",
+    "age": 30,
+    "city": "New York",
+    "hasPets": true,
+    "isBad": null
+}' parseJson str wl
+
+`json.json` parseJson str wl
