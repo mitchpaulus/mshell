@@ -906,7 +906,7 @@ func (state *TermState) InteractiveMode() error {
 		"dc": "git diff -w --cached",
 		"c": "git commit",
 		"p": "git push",
-		"u": ".. cd",
+		"u": "'..' cd",
 		"gu": "[git add -u]? ([git status -u];) iff",
 		"ga": "[git add -A]? ([git status -u];) iff",
 		"fp": "git fetch --prune",
