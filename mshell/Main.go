@@ -1384,6 +1384,7 @@ func WriteToHistory(command string, directory string, historyFilePath string) er
 }
 
 func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
+	// Returns boolean on whether to end the CLI. Think CTRL-c/d or other exit command.
 	var err error
 
 	switch t := token.(type) {
@@ -1601,19 +1602,17 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
 				fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + state.index)
 			}
-		} else if t.Char == 9 { // Tab
+		} else if t.Char == 9 { // Tab complete
 			// Get all files in the current directory
-			files, err := os.ReadDir(".")
-			if err != nil {
-				fmt.Fprintf(os.Stdout, "\a")
-			}
 
 			var prefix string
 			state.l.allowUnterminatedString = true
+			defer func() {
+				state.l.allowUnterminatedString = false
+			}()
 
 			state.l.resetInput(string(state.currentCommand[0:state.index]))
 			tokens := state.l.Tokenize()
-
 			lastTokenLength := 0
 			if len(tokens) == 1 { // 1 token = EOF
 				prefix = ""
@@ -1638,12 +1637,42 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			}
 
 			fmt.Fprintf(state.f, "Prefix: %s\n", prefix)
+			var matches []string
+
+			if len(prefix) > 0 && prefix[0] == '$' {
+				// Environment variable completion
+				vars := os.Environ()
+				for _, envVar := range vars {
+					// state.f.Write([]byte(fmt.Sprintf("Checking env var: '%s'\n", envVar)))
+					if strings.HasPrefix(envVar, prefix[1:]) {
+						// Split on '=' and take the first part
+						parts := strings.SplitN(envVar, "=", 2)
+						if len(parts) > 0 {
+							matches = append(matches, "$" + parts[0])
+						}
+					}
+				}
+			}
+
+			cleanPath := filepath.Clean(prefix)
+			dir := filepath.Dir(cleanPath)
+			filename := filepath.Base(cleanPath)
+
+			files, err := os.ReadDir(dir)
+			if err != nil {
+				fmt.Fprintf(os.Stdout, "\a")
+				return false, nil
+			}
 
 			// Find all files that start with prefix
-			var matches []string
 			for _, file := range files {
-				if strings.HasPrefix(file.Name(), prefix) {
-					matches = append(matches, file.Name())
+				if strings.HasPrefix(file.Name(), filename) {
+					// Rejoin the directory and filename. If a directory, end with a path separator.
+					if file.IsDir() {
+						matches = append(matches, filepath.Join(dir, file.Name()) + string(os.PathSeparator))
+					} else {
+						matches = append(matches, filepath.Join(dir, file.Name()))
+					}
 				}
 			}
 
@@ -1684,7 +1713,6 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				}
 			}
 
-			state.l.allowUnterminatedString = false
 		} else if t.Char == 11 { // Ctrl-K
 			// Erase to end of line
 			fmt.Fprintf(os.Stdout, "\033[K")
