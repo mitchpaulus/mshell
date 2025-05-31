@@ -38,12 +38,23 @@ for f in ${files[@]}        # Wrong!
 </pre>
 
 <p>
-You can accomplish what you want in <code>mshell</code> like:
+You can accomplish that first for loop in <code>mshell</code> like:
 </p>
 
 <pre>
 <code>
-[command *.mp3 glob];
+*.mp3 glob (f! [command @f];) each
+</code>
+</pre>
+
+<p>
+The examples with <code>find</code> look like:
+</p>
+
+
+<pre>
+<code>
+[find . -type f]o; (f! [command @f];) each
 </code>
 </pre>
 
