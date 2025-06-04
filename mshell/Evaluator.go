@@ -369,7 +369,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 
 						result, err := obj1.Slice(startInt, endInt)
 						if err != nil {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot slice index a %s.\n", indexerToken.Line, indexerToken.Column, obj1.TypeName()))
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: %s.\n", indexerToken.Line, indexerToken.Column, err.Error()))
 						}
 
 						if newObject == nil {
@@ -793,7 +793,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 							}
 						}
 					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot join a %s (%s).\n", t.Line, t.Column, list.TypeName(), list.DebugString()))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a list as the second item on stack for join, received a %s (%s).\n", t.Line, t.Column, list.TypeName(), list.DebugString()))
 					}
 
 					stack.Push(&MShellString{strings.Join(listItems, delimiterStr)})
