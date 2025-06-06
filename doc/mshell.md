@@ -101,6 +101,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `tuw`: Shorthand for `(tjoin) map uw` `([[str]] -- )`
 - `runtime`: Get the current OS runtime. This is the output of the GOOS environment variable. Common possible values are `linux`, `windows`, and `darwin`. `( -- str)`
 - `parseCsv`: Parse a CSV file into a list of lists of strings. Input can be a path/literal file name, or the string contents itself. (`path|str -- [[str]])`
+- `seq`: Generate a list of integers, starting from 0. Exclusive end to integer on stack. `2 seq` produces `[0 1]`. `(int -- [int])`
 
 
 ## File/Directory Functions

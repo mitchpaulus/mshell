@@ -230,3 +230,16 @@ def zip ([a] [b] (a b -- c) -- [c])
     ) loop
     @accum
 end
+
+def seq (int -- [int])
+    max!
+    0 current!
+    [] seq-accum! # Accumulator
+    (
+        @current @max >= (break) iff
+        @seq-accum @current append drop
+        @current 1 + current!
+    ) loop
+
+    @seq-accum
+end
