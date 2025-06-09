@@ -340,6 +340,8 @@ var notAllowedLiteralChars = map[rune]bool{
 	// '=': true, Removed because it's often used in CLI options like --option=value
 	'&': true,
 	'|': true,
+	'"': true, // Double quote, used for strings.
+	'\'': true, // Single quote, used for single quoted strings.
 	0:  true, // Null, used for 'peek' at end of file.
 }
 
