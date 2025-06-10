@@ -778,6 +778,14 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 					return KEY_F3, nil
 				} else if c == 83 { // F4
 					return KEY_F4, nil
+				} else if c == 65 { // Up arrow
+					return KEY_UP, nil
+				} else if c == 66 { // Down arrow
+					return KEY_DOWN, nil
+				} else if c == 67 { // Right arrow
+					return KEY_RIGHT, nil
+				} else if c == 68 { // Left arrow
+					return KEY_LEFT, nil
 				} else {
 					// Unknown escape sequence
 					fmt.Fprintf(state.f, "Unknown escape sequence: ESC O %d\n", c)
