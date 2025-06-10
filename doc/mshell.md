@@ -122,7 +122,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `writeFile`: Write string to file (UTF-8). `(str content str file -- )`
 - `appendFile`: Append string to file (UTF-8). `(str content str file -- )`
 - `fileSize`: Get size of file in bytes. `(str -- int)`
-- `filesIn`: Get list of files in directory. `(str -- [str])`
+- `lsDir`: Get list of all items (files and directories) in directory. Full paths to the items. `(str -- [str])`
 - `sha256sum`: Get SHA256 checksum of file. `(path -- str)`
 - `files`: Get list of files in current directory. Not recursive. `(str -- [str])`
 - `dirs`: Get list of directories in current directory. Not recursive. `(str -- [str])`

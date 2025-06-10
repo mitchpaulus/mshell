@@ -793,7 +793,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 							}
 						}
 					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a list as the second item on stack for join, received a %s (%s).\n", t.Line, t.Column, list.TypeName(), list.DebugString()))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a list as the second item on stack for join, received a %s (%s). The delimiter was '%s'\n", t.Line, t.Column, list.TypeName(), list.DebugString(), delimiterStr))
 					}
 
 					stack.Push(&MShellString{strings.Join(listItems, delimiterStr)})
@@ -1764,10 +1764,10 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 
 					stack.Push(&MShellInt{int(fileInfo.Size())})
-				} else if t.Lexeme == "filesIn" {
+				} else if t.Lexeme == "lsDir" {
 					obj1, err := stack.Pop()
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'filesIn' operation on an empty stack.\n", t.Line, t.Column))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'lsDir' operation on an empty stack.\n", t.Line, t.Column))
 					}
 					path, err := obj1.CastString()
 					if err != nil {
@@ -1777,13 +1777,13 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					// Get the files in the directory
 					files, err := os.ReadDir(path)
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error getting files in directory %s: %s\n", t.Line, t.Column, path, err.Error()))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error getting items in directory %s: %s\n", t.Line, t.Column, path, err.Error()))
 					}
 
 					// Create a new list and add the files to it, full paths
 					newList := NewList(0)
 					for _, file := range files {
-						newList.Items = append(newList.Items, &MShellString{filepath.Join(path, file.Name())})
+						newList.Items = append(newList.Items, &MShellPath{filepath.Join(path, file.Name())})
 					}
 
 					stack.Push(newList)
