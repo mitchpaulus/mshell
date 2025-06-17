@@ -1774,7 +1774,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot get the files in a %s.\n", t.Line, t.Column, obj1.TypeName()))
 					}
 
-					// Get the files in the directory
+					// Get all the items in the directory
 					files, err := os.ReadDir(path)
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error getting items in directory %s: %s\n", t.Line, t.Column, path, err.Error()))
