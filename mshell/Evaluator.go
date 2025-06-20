@@ -52,7 +52,8 @@ func (objList *MShellStack) String() string {
 	var builder strings.Builder
 	builder.WriteString("Stack contents:\n")
 	for i, obj := range *objList {
-		builder.WriteString(fmt.Sprintf("%d: %s\n", i, obj.DebugString()))
+		strToWrite := fmt.Sprintf("%d: %s\n", i, obj.DebugString())
+		builder.WriteString(strToWrite)
 	}
 	builder.WriteString("End of stack contents\n")
 	return builder.String()
@@ -119,7 +120,7 @@ func (state *EvalState) FailWithMessage(message string)  EvalResult {
 	// Log message to stderr
 	if state.CallStack == nil {
 		fmt.Fprintf(os.Stderr, "No call stack available.\n")
-		fmt.Fprintf(os.Stderr, message)
+		fmt.Fprint(os.Stderr, message)
 		return EvalResult{false, false, -1, 1, false}
 	}
 
@@ -135,7 +136,7 @@ func (state *EvalState) FailWithMessage(message string)  EvalResult {
 		}
 	}
 
-	fmt.Fprintf(os.Stderr, message)
+	fmt.Fprint(os.Stderr, message)
 	return EvalResult{false, false, -1, 1, false}
 }
 
@@ -197,7 +198,7 @@ MainLoop:
 			result := state.Evaluate(list.Items, &listStack, context, definitions, callStackItem)
 
 			if !result.Success {
-				fmt.Fprintf(os.Stderr, "Failed to evaluate list.\n")
+				fmt.Fprint(os.Stderr, "Failed to evaluate list.\n")
 				return result
 			}
 
@@ -231,7 +232,7 @@ MainLoop:
 				callStackItem := CallStackItem{MShellParseItem: parseDict, Name: "dict", CallStackType: CALLSTACKDICT}
 				result := state.Evaluate(keyValue.Value, &dictStack, context, definitions, callStackItem)
 				if !result.Success {
-					fmt.Fprintf(os.Stderr, "Failed to evaluate dictionary.\n")
+					fmt.Fprint(os.Stderr, "Failed to evaluate dictionary.\n")
 					return result
 				}
 				if result.ExitCalled {
@@ -417,13 +418,14 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 
 				if t.Lexeme == ".s" {
 					// Print current stack
-					fmt.Fprintf(os.Stderr, stack.String())
+					fmt.Fprint(os.Stderr, stack.String())
 				} else if t.Lexeme == ".b" {
 					// Print known binaries
-					fmt.Fprintf(os.Stderr, context.Pbm.DebugList())
+					debugStr := context.Pbm.DebugList()
+					fmt.Fprint(os.Stderr, debugStr)
 				} else if t.Lexeme == ".def" {
 					// Print out available definitions
-					fmt.Fprintf(os.Stderr, "Available definitions:\n")
+					fmt.Fprint(os.Stderr, "Available definitions:\n")
 					for _, definition := range definitions {
 						fmt.Fprintf(os.Stderr, "%s\n", definition.Name)
 					}
@@ -514,8 +516,10 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 
 					newList := NewList(len(files))
-					for i, file := range files {
-						newList.Items[i] = &MShellPath{file}
+					if files != nil {
+						for i, file := range files {
+							newList.Items[i] = &MShellPath{file}
+						}
 					}
 
 					stack.Push(newList)
@@ -661,17 +665,17 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 
 					switch top.(type) {
 					case *MShellLiteral:
-						fmt.Fprintf(writer, "%s", top.(*MShellLiteral).LiteralText)
+						fmt.Fprint(writer, top.(*MShellLiteral).LiteralText)
 					case *MShellString:
-						fmt.Fprintf(writer, "%s", top.(*MShellString).Content)
+						fmt.Fprint(writer, top.(*MShellString).Content)
 					case *MShellInt:
-						fmt.Fprintf(writer, "%d", top.(*MShellInt).Value)
+						fmt.Fprint(writer, top.(*MShellInt).Value)
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot write a %s.\n", t.Line, t.Column, top.TypeName()))
 					}
 
 					if t.Lexeme == "wl" || t.Lexeme == "wle" {
-						fmt.Fprintf(writer, "\n")
+						fmt.Fprint(writer, "\n")
 					}
 				} else if t.Lexeme == "findReplace" {
 					// Do simple find replace with the top three strings on stack
@@ -3611,11 +3615,11 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 	// Handle cd command specially
 	if commandLineArgs[0] == "cd" {
 		if len(commandLineArgs) > 3 {
-			fmt.Fprintf(os.Stderr, "cd command only takes one argument.\n")
+			fmt.Fprint(os.Stderr, "cd command only takes one argument.\n")
 		} else if len(commandLineArgs) == 2 {
 			// Check for -h or --help
 			if commandLineArgs[1] == "-h" || commandLineArgs[1] == "--help" {
-				fmt.Fprintf(os.Stderr, "cd: cd [dir]\nChange the shell working directory.\n")
+				fmt.Fprint(os.Stderr, "cd: cd [dir]\nChange the shell working directory.\n")
 				return SimpleSuccess(), 0, "", ""
 			} else {
 				return state.ChangeDirectory(commandLineArgs[1])
@@ -3644,7 +3648,7 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 	} else {
 		var found bool
 		if context.Pbm == nil {
-			fmt.Fprintf(os.Stderr, "No context found.\n")
+			fmt.Fprint(os.Stderr, "No context found.\n")
 			return state.FailWithMessage(fmt.Sprintf("Command '%s' not found in path.\n", commandLineArgs[0])), 1, "", ""
 		}
 

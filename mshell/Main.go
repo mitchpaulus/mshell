@@ -1071,7 +1071,7 @@ func (state *TermState) ExecuteCurrentCommand() {
 
 		err = state.printPrompt()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, err.Error())
+			fmt.Fprint(os.Stderr, err.Error())
 			os.Exit(1)
 		}
 
@@ -1101,7 +1101,7 @@ func (state *TermState) ExecuteCurrentCommand() {
 	fmt.Fprintf(os.Stdout, "\033[1G")
 	err = state.printPrompt()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, err.Error())
+		fmt.Fprint(os.Stderr, err.Error())
 		os.Exit(1)
 	}
 
@@ -1142,7 +1142,7 @@ func (state *TermState) printPrompt() error {
 		promptText = fmt.Sprintf("%s > \n:: ", cwd)
 	}
 
-	fmt.Fprintf(os.Stdout, promptText)
+	fmt.Fprint(os.Stdout, promptText)
 	state.numPromptLines = strings.Count(promptText, "\n") + 1
 	fmt.Fprintf(os.Stdout, "\033[0m")
 
@@ -1530,7 +1530,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				fmt.Fprintf(os.Stdout, "\033[K")
 
 				// Print alias value
-				fmt.Fprintf(os.Stdout, aliasValue)
+				fmt.Fprint(os.Stdout, aliasValue)
 
 				// Print the space
 				fmt.Fprintf(os.Stdout, " ")
@@ -1829,7 +1829,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				state.clearToPrompt()
 				reverseIndex := len(history) - state.historyIndex
 				// state.printPrompt()
-				fmt.Fprintf(os.Stdout, history[reverseIndex])
+				fmt.Fprint(os.Stdout, history[reverseIndex])
 				// fmt.Fprintf(os.Stdout, "mshell> %s", history[reverseIndex])
 				state.currentCommand = []rune(history[reverseIndex])
 				state.index = len(state.currentCommand)
@@ -1848,7 +1848,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 					reverseIndex := len(history) - state.historyIndex
 					// fmt.Fprintf(os.Stdout, "mshell> %s", history[reverseIndex])
 					// state.printPrompt()
-					fmt.Fprintf(os.Stdout, history[reverseIndex])
+					fmt.Fprint(os.Stdout, history[reverseIndex])
 					state.currentCommand = []rune(history[reverseIndex])
 					state.index = len(state.currentCommand)
 				}

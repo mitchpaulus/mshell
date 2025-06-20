@@ -854,6 +854,8 @@ func (obj *MShellPath) DebugString() string {
 		return "`" + obj.Path[:15] + "..." + obj.Path[len(obj.Path)-15:] + "`"
 	}
 
+	fmt.Fprintf(os.Stderr, "DebugString called on MShellPath: %s\n", obj.Path)
+
 	return "`" + obj.Path + "`"
 }
 
