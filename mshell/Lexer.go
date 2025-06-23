@@ -7,6 +7,9 @@ import (
 	"unicode"
 )
 
+
+// See scanToken for main token scanning entry point.
+
 type TokenType int
 
 const (
@@ -77,6 +80,8 @@ const (
 	LEFT_CURLY
 	RIGHT_CURLY
 	COLON
+	NOTEQUAL // !=
+	BANG // !
 )
 
 func (t TokenType) String() string {
@@ -211,6 +216,10 @@ func (t TokenType) String() string {
 		return "RIGHT_CURLY"
 	case COLON:
 		return "COLON"
+	case NOTEQUAL:
+		return "NOTEQUAL"
+	case BANG:
+		return "BANG"
 	default:
 		return "UNKNOWN"
 	}
@@ -596,6 +605,13 @@ func (l *Lexer) scanToken() Token {
 		}
 		// TODO: if empty at end, need better error.
 		return l.makeToken(VARRETRIEVE)
+	case '!':
+		if l.peek() == '=' {
+			l.advance()
+			return l.makeToken(NOTEQUAL)
+		} else {
+			return l.makeToken(BANG)
+		}
 	default:
 		// return l.parseLiteralOrNumber()
 		return l.parseLiteralOrKeyword()

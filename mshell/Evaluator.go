@@ -1167,16 +1167,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error reading current directory: %s\n", t.Line, t.Column, err.Error()))
 					}
 
-					newList := 	&MShellList{
-						Items:                 make([]MShellObject, 0, len(files)),
-						StdinBehavior:         STDIN_NONE,
-						StandardInputContents: "",
-						StandardInputFile:     "",
-						StandardOutputFile:    "",
-						StandardErrorFile:     "",
-						StdoutBehavior:        STDOUT_NONE,
-					}
-
+					newList := 	NewList(0)
 					if t.Lexeme == "files" {
 						for _, file := range files {
 							if !file.IsDir() {
@@ -1457,23 +1448,6 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 
 					newStr := dateTime.Time.Format(formatString.Content)
 					stack.Push(&MShellString{newStr})
-				} else if t.Lexeme == "!=" {
-					obj1, err := stack.Pop()
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '!=' operation on an empty stack.\n", t.Line, t.Column))
-					}
-
-					obj2, err := stack.Pop()
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '!=' operation on a stack with only one item.\n", t.Line, t.Column))
-					}
-
-					doesEqual, err := obj1.Equals(obj2)
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot compare '!=' between %s and %s: %s\n", t.Line, t.Column, obj1.TypeName(), obj2.TypeName(), err.Error()))
-					}
-
-					stack.Push(&MShellBool{!doesEqual})
 				} else if t.Lexeme == "trim" || t.Lexeme == "trimStart" || t.Lexeme == "trimEnd" {
 					obj1, err := stack.Pop()
 					if err != nil {
@@ -2225,7 +2199,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 				return state.FailWithMessage(fmt.Sprintf("%d:%d: Found unexpected left square bracket.\n", t.Line, t.Column))
 			} else if t.Type == LEFT_PAREN { // Token Type
 				return state.FailWithMessage(fmt.Sprintf("%d:%d: Found unexpected left parenthesis.\n", t.Line, t.Column))
-			} else if t.Type == EXECUTE || t.Type == QUESTION { // Token Type
+			} else if t.Type == EXECUTE || t.Type == QUESTION || t.Type == BANG { // Token Type
 				top, err := stack.Pop()
 				if err != nil {
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot execute an empty stack.\n", t.Line, t.Column))
@@ -2246,7 +2220,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot execute a non-list object. Found %s %s\n", t.Line, t.Column, top.TypeName(), top.DebugString()))
 				}
 
-				if state.StopOnError && exitCode != 0 {
+				if (state.StopOnError || (t.Type == BANG)) && exitCode != 0 {
 					// Exit completely, with that exit code, don't need to print a different message. Usually the command itself will have printed an error.
 					return EvalResult{false, false, -1, exitCode, false}
 				}
@@ -3353,6 +3327,25 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 
 				list.RunInBackground = true
 				stack.Push(list)
+			} else if t.Type == NOTEQUAL { // Token Type
+				obj1, err := stack.Pop()
+				if err != nil {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '!=' operation on an empty stack.\n", t.Line, t.Column))
+				}
+
+				obj2, err := stack.Pop()
+				if err != nil {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '!=' operation on a stack with only one item.\n", t.Line, t.Column))
+				}
+
+				doesEqual, err := obj1.Equals(obj2)
+				if err != nil {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot compare '!=' between %s and %s: %s\n", t.Line, t.Column, obj1.TypeName(), obj2.TypeName(), err.Error()))
+				}
+
+				stack.Push(&MShellBool{!doesEqual})
+			} else if t.Type == BANG { // Token Type
+
 			} else {
 				return state.FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Type))
 			}
