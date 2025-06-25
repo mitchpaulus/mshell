@@ -1129,7 +1129,16 @@ func (state *TermState) printPrompt() error {
 	cwd, err := os.Getwd()
 
 	// Print out escape sequence for Windows Terminal/others.
-	fmt.Fprintf(os.Stdout, "\033]9;9;%s\033\\", cwd)
+	// Check if we are in windows terminal by looking for WT_SESSION env variable.
+	if wtSession, ok := os.LookupEnv("WT_SESSION"); ok && len(wtSession) > 0 {
+		fmt.Fprintf(os.Stdout, "\033]9;9;%s\033\\", cwd)
+	} else {
+		// Print using OSC 7
+		hostname, err := os.Hostname()
+		if err != nil {
+			fmt.Fprintf(os.Stdout, "\033]7;file://%s%s\033\\", hostname, cwd)
+		}
+	}
 
 	if len(state.homeDir) > 0 && strings.HasPrefix(cwd, state.homeDir) {
 		cwd = "~" + cwd[len(state.homeDir):]
