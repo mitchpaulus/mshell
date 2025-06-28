@@ -19,6 +19,7 @@ import (
 	"crypto/sha256"
 	"time"
 	"encoding/binary"
+	"github.com/cespare/xxhash"
 )
 
 type CliCommand int
@@ -431,6 +432,12 @@ type TermState struct {
 	pathBinManager IPathBinManager
 }
 
+type HistoryItem struct {
+	UnixTimeUtc int64
+	Directory string
+	Command string
+}
+
 func IsDefinitionDefined(name string, definitions []MShellDefinition) bool {
 	for _, def := range definitions {
 		if def.Name == name {
@@ -482,6 +489,8 @@ var tokenBuf []Token
 var tokenBufBuilder strings.Builder
 var aliases map[string]string
 var history []string
+
+var historyToSave []HistoryItem
 
 var knownCommands = map[string]struct{}{ "cd": {} }
 
@@ -948,6 +957,8 @@ func (state *TermState) InteractiveMode() error {
 		return fmt.Errorf("Error printing prompt: %s\n", err)
 	}
 
+	defer TrySaveHistory()
+
 	var token TerminalToken
 	var end bool
 	for {
@@ -967,11 +978,13 @@ func (state *TermState) InteractiveMode() error {
 
 		end, err = state.HandleToken(token)
 
+
 		if err != nil {
 			return err
 		}
 
 		if end {
+			fmt.Fprintf(state.f, "Ending normally\n", end)
 			break
 		}
 	}
@@ -979,9 +992,97 @@ func (state *TermState) InteractiveMode() error {
 	return nil
 }
 
-func (state *TermState) ExecuteCurrentCommand() {
+func TrySaveHistory() {
+	fmt.Fprintf(os.Stderr, "Saving history...\n")
+	if len(historyToSave) == 0 {
+		fmt.Fprintf(os.Stderr, "No history...\n")
+		return
+	}
+
+
+	historyDir, err := GetHistoryDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error getting history directory: %s\n", err)
+		return
+	}
+
+	// We are going to save 3 files.
+	// File 1: Main history made up of records of
+	//   1. 8 byte unix timestamp in UTC
+	//   2. 8 byte xxHash of the command
+	//   3. 8 byte xxHash of the directory
+	// File 2: Unique Commands, only escape would be '\n'
+	// File 3: Unique Directories, only escape would be '\n'
+	// We leave it to the user to clean up duplicates in the commands and directories files.
+	historyFile := historyDir + "/msh_history"
+	commandFile := historyDir + "/msh_commands"
+	directoryFile := historyDir + "/msh_dirs"
+
+	// Open history file for appending
+	historyF, err := os.OpenFile(historyFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error opening history file %s: %s\n", historyFile, err)
+		return
+	}
+	defer historyF.Close()
+
+	// Open command file for appending
+	commandF, err := os.OpenFile(commandFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error opening command file %s: %s\n", commandFile, err)
+		return
+	}
+	defer commandF.Close()
+
+	// Open directory file for appending
+	directoryF, err := os.OpenFile(directoryFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error opening directory file %s: %s\n", directoryFile, err)
+		return
+	}
+	defer directoryF.Close()
+
+	for _, item := range historyToSave {
+		// Hash command
+		commandHash := xxhash.Sum64String(item.Command)
+		directoryHash := xxhash.Sum64String(item.Directory)
+
+		// Write to history file, directly as binary.
+		bytes := make([]byte, 8 + 8 + 8)
+		binary.BigEndian.PutUint64(bytes[0:8], uint64(item.UnixTimeUtc))
+		binary.BigEndian.PutUint64(bytes[8:16], commandHash)
+		binary.BigEndian.PutUint64(bytes[16:24], directoryHash)
+
+		_, err = historyF.Write(bytes)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing to history file %s: %s\n", historyFile, err)
+			return
+		}
+
+		// Write command to command file, escape any newlines.
+		_, err = commandF.WriteString(strings.ReplaceAll(item.Command, "\n", "\\n") + "\n")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing to command file %s: %s\n", commandFile, err)
+			return
+		}
+
+		// Write directory to directory file, escape any newlines.
+		_, err = directoryF.WriteString(strings.ReplaceAll(item.Directory, "\n", "\\n") + "\n")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing to directory file %s: %s\n", directoryFile, err)
+			return
+		}
+	}
+	fmt.Fprintf(os.Stderr, "Saved history...\n")
+
+	// Clear history to save
+	historyToSave = historyToSave[:0]
+	return
+}
+
+func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 	// Add command to history
-	currentCommandStr := string(state.currentCommand)
+	currentCommandStr := strings.TrimSpace(string(state.currentCommand), )
 
 	if state.index == len(state.currentCommand) {
 		// Walk back to last whitespace, check if final element is an alias.
@@ -1010,6 +1111,15 @@ func (state *TermState) ExecuteCurrentCommand() {
 
 	if len(currentCommandStr) > 0 {
 		history = append(history, currentCommandStr)
+
+		currentDir, err := os.Getwd()
+		if err == nil {
+			historyToSave = append(historyToSave, HistoryItem{
+				UnixTimeUtc: time.Now().Unix(),
+				Directory: currentDir,
+				Command: currentCommandStr,
+			})
+		}
 	}
 
 	state.historyIndex = 0
@@ -1072,11 +1182,11 @@ func (state *TermState) ExecuteCurrentCommand() {
 		err = state.printPrompt()
 		if err != nil {
 			fmt.Fprint(os.Stderr, err.Error())
-			os.Exit(1)
+			return true, 1
 		}
 
 		state.index = 0
-		return
+		return false, 0
 	}
 
 	// During evaluation, normal terminal output can happen, or TUI apps can be run.
@@ -1089,8 +1199,7 @@ func (state *TermState) ExecuteCurrentCommand() {
 		result := state.evalState.Evaluate(parsed.Items, &state.stack, state.context, state.stdLibDefs, state.initCallStackItem)
 
 		if result.ExitCalled {
-			// Reset terminal to original state
-			os.Exit(result.ExitCode)
+			return true, result.ExitCode
 		}
 
 		if !result.Success {
@@ -1102,7 +1211,7 @@ func (state *TermState) ExecuteCurrentCommand() {
 	err = state.printPrompt()
 	if err != nil {
 		fmt.Fprint(os.Stderr, err.Error())
-		os.Exit(1)
+		return true, 1
 	}
 
 	state.index = 0
@@ -1111,9 +1220,10 @@ func (state *TermState) ExecuteCurrentCommand() {
 	_, err = term.MakeRaw(state.stdInFd)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error setting terminal to raw mode: %s\n", err)
-		os.Exit(1)
-		return
+		return true, 1
 	}
+
+	return false, 0
 }
 
 func (state *TermState) toCooked() {
@@ -1424,12 +1534,14 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 						state.clearToPrompt()
 						state.currentCommand = state.currentCommand[:0]
 						state.PushChars([]rune{'r'})
-						state.ExecuteCurrentCommand()
+						shouldExit, _ := state.ExecuteCurrentCommand()
+						return shouldExit, nil
 					} else if t.Char == 'j' {
 						state.clearToPrompt()
 						state.currentCommand = state.currentCommand[:0]
 						state.PushChars([]rune{'j'})
-						state.ExecuteCurrentCommand()
+						shouldExit, _ := state.ExecuteCurrentCommand()
+						return shouldExit, nil
 					} else {
 						// Push both tokens
 						state.PushChars([]rune{';'})
@@ -1492,7 +1604,8 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 						state.clearToPrompt()
 						state.currentCommand = state.currentCommand[:0]
 						state.PushChars([]rune("0 exit"))
-						state.ExecuteCurrentCommand()
+						shouldExit, _ := state.ExecuteCurrentCommand()
+						return shouldExit, nil
 					} else {
 						// Push both tokens
 						state.PushChars([]rune{'q'})
@@ -1738,7 +1851,10 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			state.ClearScreen()
 		} else if t.Char == 13 { // Enter
 			// Add command to history
-			state.ExecuteCurrentCommand()
+			shouldExit, _ := state.ExecuteCurrentCommand()
+			if shouldExit {
+				return true, nil
+			}
 		} else if t.Char == 21 { // Ctrl-U
 			// Erase back to prompt start
 			fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
@@ -1795,7 +1911,10 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 		if t == KEY_F1 {
 			// Set state.currentCommand to "lf"
 			state.currentCommand = []rune{'l', 'f'}
-			state.ExecuteCurrentCommand()
+			shouldExit, _ := state.ExecuteCurrentCommand()
+			if shouldExit {
+				return true, nil
+			}
 		} else if t == KEY_ALT_B {
 			// Move cursor left by word
 			if state.index > 0 {
