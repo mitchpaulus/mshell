@@ -984,7 +984,6 @@ func (state *TermState) InteractiveMode() error {
 		}
 
 		if end {
-			fmt.Fprintf(state.f, "Ending normally\n", end)
 			break
 		}
 	}
@@ -993,9 +992,7 @@ func (state *TermState) InteractiveMode() error {
 }
 
 func TrySaveHistory() {
-	fmt.Fprintf(os.Stderr, "Saving history...\n")
 	if len(historyToSave) == 0 {
-		fmt.Fprintf(os.Stderr, "No history...\n")
 		return
 	}
 
@@ -1073,7 +1070,6 @@ func TrySaveHistory() {
 			return
 		}
 	}
-	fmt.Fprintf(os.Stderr, "Saved history...\n")
 
 	// Clear history to save
 	historyToSave = historyToSave[:0]
