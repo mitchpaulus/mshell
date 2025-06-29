@@ -13,6 +13,8 @@ jobs:
 
     - name: Set up Go
       uses: actions/setup-go@v5
+      with:
+        cache-dependency-path: mshell/go.sum
 
     - name: Build go
       run: cd mshell && go build -o mshell
