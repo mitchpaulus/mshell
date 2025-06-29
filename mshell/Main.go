@@ -1964,39 +1964,52 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			return true, nil
 		} else if t == KEY_UP {
 			// Up arrow
-			if state.historyIndex >= 0 && state.historyIndex < len(history) {
+			for state.historyIndex >= 0 && state.historyIndex < len(history) {
 				state.historyIndex++
+				reverseIndex := len(history) - state.historyIndex
+				// Compare current command to history, if the same, skip and continue to search
+				if string(state.currentCommand) == string(history[reverseIndex]) {
+					continue
+				}
+
 				// Clear back to prompt
 				state.clearToPrompt()
-				reverseIndex := len(history) - state.historyIndex
 				// state.printPrompt()
 				fmt.Fprint(os.Stdout, history[reverseIndex])
 				// fmt.Fprintf(os.Stdout, "mshell> %s", history[reverseIndex])
 				state.currentCommand = []rune(history[reverseIndex])
 				state.index = len(state.currentCommand)
+				break
 			}
 		} else if t == KEY_DOWN {
-			// Down arrow
-			if state.historyIndex > 0 && state.historyIndex <= len(history) + 1 {
-				state.historyIndex--
-				state.clearToPrompt()
-				if state.historyIndex == 0 {
-					// state.printPrompt()
-					// fmt.Fprintf(os.Stdout, "mshell> ")
-					state.currentCommand = []rune{}
-					state.index = 0
-				} else {
-					reverseIndex := len(history) - state.historyIndex
-					// fmt.Fprintf(os.Stdout, "mshell> %s", history[reverseIndex])
-					// state.printPrompt()
-					fmt.Fprint(os.Stdout, history[reverseIndex])
-					state.currentCommand = []rune(history[reverseIndex])
-					state.index = len(state.currentCommand)
-				}
-			} else if state.historyIndex <= 0 {
+			if state.historyIndex <= 0 {
 				state.historyIndex = 0
 			} else if state.historyIndex > len(history) {
 				state.historyIndex = len(history)
+			} else {
+				// Down arrow
+				for state.historyIndex > 0 && state.historyIndex <= len(history) + 1 {
+					state.historyIndex--
+					state.clearToPrompt()
+					if state.historyIndex == 0 {
+						// state.printPrompt()
+						// fmt.Fprintf(os.Stdout, "mshell> ")
+						state.currentCommand = []rune{}
+						state.index = 0
+					} else {
+						reverseIndex := len(history) - state.historyIndex
+						// Compare current command to history, if the same, skip and continue to search
+						if string(state.currentCommand) == string(history[reverseIndex]) {
+							continue
+						}
+						// fmt.Fprintf(os.Stdout, "mshell> %s", history[reverseIndex])
+						// state.printPrompt()
+						fmt.Fprint(os.Stdout, history[reverseIndex])
+						state.currentCommand = []rune(history[reverseIndex])
+						state.index = len(state.currentCommand)
+					}
+					break
+				}
 			}
 		} else if t == KEY_RIGHT {
 			// Right arrow
