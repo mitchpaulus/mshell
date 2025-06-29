@@ -952,6 +952,23 @@ func (state *TermState) InteractiveMode() error {
 	history = make([]string, 0)
 	state.historyIndex = 0
 
+	// Fill history
+	historyDir, err := GetHistoryDir()
+	if err == nil {
+		historyFileItems, err := ReadHistory(historyDir)
+		if err == nil {
+			for _, item := range historyFileItems {
+				// Add to history
+				history = append(history, item.Command)
+			}
+		} else {
+			fmt.Fprintf(state.f, "Error reading history file %s: %s\n", historyDir + "/msh_history", err)
+		}
+		fmt.Fprintf(state.f, "%d items loaded from history file %s\n", len(historyFileItems), historyDir + "/msh_history")
+	} else {
+		fmt.Fprintf(state.f, "Error getting history directory: %s\n", err)
+	}
+
 	err = state.printPrompt()
 	if err != nil {
 		return fmt.Errorf("Error printing prompt: %s\n", err)
