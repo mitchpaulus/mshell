@@ -962,7 +962,7 @@ func (state *TermState) InteractiveMode() error {
 				history = append(history, item.Command)
 			}
 		} else {
-			fmt.Fprintf(state.f, "Error reading history file %s: %s\n", filepath.Join(historyDir, "msh_history", err)
+			fmt.Fprintf(state.f, "Error reading history file %s: %s\n", filepath.Join(historyDir, "msh_history"), err)
 		}
 		fmt.Fprintf(state.f, "%d items loaded from history file %s\n", len(historyFileItems), filepath.Join(historyDir, "msh_history"))
 	} else {
