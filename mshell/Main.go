@@ -962,9 +962,9 @@ func (state *TermState) InteractiveMode() error {
 				history = append(history, item.Command)
 			}
 		} else {
-			fmt.Fprintf(state.f, "Error reading history file %s: %s\n", historyDir + "/msh_history", err)
+			fmt.Fprintf(state.f, "Error reading history file %s: %s\n", filepath.Join(historyDir, "msh_history", err)
 		}
-		fmt.Fprintf(state.f, "%d items loaded from history file %s\n", len(historyFileItems), historyDir + "/msh_history")
+		fmt.Fprintf(state.f, "%d items loaded from history file %s\n", len(historyFileItems), filepath.Join(historyDir, "msh_history"))
 	} else {
 		fmt.Fprintf(state.f, "Error getting history directory: %s\n", err)
 	}
@@ -1028,9 +1028,9 @@ func TrySaveHistory() {
 	// File 2: Unique Commands, only escape would be '\n'
 	// File 3: Unique Directories, only escape would be '\n'
 	// We leave it to the user to clean up duplicates in the commands and directories files.
-	historyFile := historyDir + "/msh_history"
-	commandFile := historyDir + "/msh_commands"
-	directoryFile := historyDir + "/msh_dirs"
+	historyFile := filepath.Join(historyDir, "msh_history")
+	commandFile := filepath.Join(historyDir, "msh_commands")
+	directoryFile := filepath.Join(historyDir, "msh_dirs")
 
 	// Open history file for appending
 	historyF, err := os.OpenFile(historyFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
