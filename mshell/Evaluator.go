@@ -1941,22 +1941,34 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					if t.Lexeme == "set" {
 						stack.Push(dictObj)
 					}
-				} else if t.Lexeme == "keys" {
+				} else if t.Lexeme == "keys" || t.Lexeme == "values" {
 					// Get the keys of a dictionary.
 					obj1, err := stack.Pop()
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'keys' operation on an empty stack.\n", t.Line, t.Column))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
 					}
 
 					dict, ok := obj1.(*MShellDict)
 					if !ok {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot get the keys of a %s.\n", t.Line, t.Column, obj1.TypeName()))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot get the %s of a %s.\n", t.Line, t.Column, t.Lexeme, obj1.TypeName()))
 					}
 
 					// Create a new list and add the keys to it
 					newList := NewList(len(dict.Items))
-					for key := range dict.Items {
-						newList.Items = append(newList.Items, &MShellString{key})
+					i := 0
+
+					if t.Lexeme == "keys" {
+						for key := range dict.Items {
+							newList.Items[i] = &MShellString{key}
+							i++
+						}
+					} else if t.Lexeme == "values" {
+						for _, value := range dict.Items {
+							newList.Items[i] = value
+							i++
+						}
+					} else {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Lexeme))
 					}
 
 					stack.Push(newList)

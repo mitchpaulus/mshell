@@ -1032,57 +1032,15 @@ func (parser *MShellParser) ParseDict() (*MShellParseDict, error) {
 			break
 		} else if parser.curr.Type == EOF {
 			return dict, errors.New(fmt.Sprintf("Did not find closing '}' for dict beginning at line %d, column %d.", dict.StartToken.Line, dict.StartToken.Column))
-		}
-
-		// Else expect a literal or string key.
-		if parser.curr.Type != LITERAL && parser.curr.Type != STRING {
-			return dict, errors.New(fmt.Sprintf("Expected a key for dict, got %s at line %d, column %d.", parser.curr.Type, parser.curr.Line, parser.curr.Column))
-		}
-
-		// key := parser.curr
-		var key string
-		if parser.curr.Type == STRING {
-			key, err = ParseRawString(parser.curr.Lexeme)
-			if err != nil {
-				return dict, errors.New(fmt.Sprintf("Error parsing string key: %s at line %d, column %d.", err.Error(), parser.curr.Line, parser.curr.Column))
-			}
-		} else if parser.curr.Type == LITERAL {
-			key = parser.curr.Lexeme
 		} else {
-			return dict, errors.New(fmt.Sprintf("Expected a key for dict, got %s at line %d, column %d.", parser.curr.Type, parser.curr.Line, parser.curr.Column))
-		}
-
-		parser.NextToken()
-
-		err = parser.MatchWithMessage(parser.curr, COLON, fmt.Sprintf("Expected ':' after key %s at line %d, column %d.", key, parser.curr.Line, parser.curr.Column))
-		if err != nil {
-			return dict, err
-		}
-
-		// Parse the value for the key.
-		var valueItems []MShellParseItem
-		for {
-			item, err := parser.ParseItem()
+			keyValue, err := parser.parseDictKeyValue()
 			if err != nil {
 				return dict, err
 			}
 
-			valueItems = append(valueItems, item)
-
-			if parser.curr.Type == COMMA {
-				parser.NextToken()
-				if parser.curr.Type == RIGHT_CURLY {
-					break
-				}
-			} else if parser.curr.Type == RIGHT_CURLY {
-				break
-			} else if parser.curr.Type == EOF {
-				return dict, errors.New(fmt.Sprintf("Unexpected EOF while parsing dict at line %d, column %d.", parser.curr.Line, parser.curr.Column))
-			}
+			// Add the key-value pair to the dict. TBD: Error on duplicate keys?
+			dict.Items = append(dict.Items, keyValue)
 		}
-
-		// Add the key-value pair to the dict. Error on duplicate keys.
-		dict.Items = append(dict.Items, MShellParseDictKeyValue{Key: key, Value: valueItems})
 	}
 
 	// Match the closing curly brace.
@@ -1106,6 +1064,57 @@ func (parser *MShellParser) ParseDict() (*MShellParseDict, error) {
 
 	return dict, nil
 }
+
+func (parser *MShellParser) parseDictKeyValue() (MShellParseDictKeyValue, error) {
+	// Else expect a literal or string key.
+	if parser.curr.Type != LITERAL && parser.curr.Type != STRING {
+		return MShellParseDictKeyValue{}, errors.New(fmt.Sprintf("Expected a key for dict, got %s at line %d, column %d.", parser.curr.Type, parser.curr.Line, parser.curr.Column))
+	}
+
+	// key := parser.curr
+	var key string
+	var err error
+	if parser.curr.Type == STRING {
+		key, err = ParseRawString(parser.curr.Lexeme)
+		if err != nil {
+			return MShellParseDictKeyValue{}, errors.New(fmt.Sprintf("Error parsing string key: %s at line %d, column %d.", err.Error(), parser.curr.Line, parser.curr.Column))
+		}
+	} else if parser.curr.Type == LITERAL {
+		key = parser.curr.Lexeme
+	} else {
+		return MShellParseDictKeyValue{}, errors.New(fmt.Sprintf("Expected a key for dict, got %s at line %d, column %d.", parser.curr.Type, parser.curr.Line, parser.curr.Column))
+	}
+
+	parser.NextToken()
+
+	err = parser.MatchWithMessage(parser.curr, COLON, fmt.Sprintf("Expected ':' after key %s at line %d, column %d.", key, parser.curr.Line, parser.curr.Column))
+	if err != nil {
+		return MShellParseDictKeyValue{}, err
+	}
+
+	// Parse the value for the key.
+	var valueItems []MShellParseItem
+	for {
+		if parser.curr.Type == COMMA {
+			parser.NextToken()
+			break
+		} else if parser.curr.Type == RIGHT_CURLY {
+			break
+		} else if parser.curr.Type == EOF {
+			return MShellParseDictKeyValue{}, errors.New(fmt.Sprintf("Unexpected EOF while parsing dict at line %d, column %d.", parser.curr.Line, parser.curr.Column))
+		} else {
+			item, err := parser.ParseItem()
+			if err != nil {
+				return MShellParseDictKeyValue{}, err
+			}
+
+			valueItems = append(valueItems, item)
+		}
+	}
+
+	return MShellParseDictKeyValue{Key: key, Value: valueItems}, nil
+}
+
 
 func (parser *MShellParser) ParseList() (*MShellParseList, error) {
 	list := &MShellParseList{}

@@ -1,6 +1,14 @@
 {"hello": {"type": "String", "content": "world"}}
+{"key": {"type": "Integer", "value": 1}, "other key": {"type": "Integer", "value": 2}}
+{"key": {"type": "Integer", "value": 1}, "other key": {"type": "Integer", "value": 5}}
 {"key": {"type": "Integer", "value": 3}}
 6
 8
 key found in dict
 key not found in dict
+10
+{"key": {"type": "Integer", "value": 10}}
+["key1" "key2" "key3"]
+[1 2 3]
+[]
+[]
