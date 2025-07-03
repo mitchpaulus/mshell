@@ -2,6 +2,15 @@
     "hello": "world",
 } str wl
 
+{
+    "key": 1,
+    "other key": 2,
+} str wl
+
+# Test not ending with comma
+{ "key": 1, "other key": 2 3 +} str wl
+
+
 { "key": 1 2 + } dict2! @dict2 str wl
 
 @dict2 "key" get 3 + str wl
@@ -11,3 +20,16 @@
 
 @dict2 "key"       in ("key found in dict") ("key not found in dict") iff wl
 @dict2 "other key" in ("key found in dict") ("key not found in dict") iff wl
+
+# getDef
+{} "should not be found" 10 getDef str wl
+
+# Test set leaves dict on stack
+{} "key" 10 set str wl
+
+# 'keys' and 'values'
+{ "key1": 1, "key2": 2, "key3": 3 } keys str wl
+{ "key1": 1, "key2": 2, "key3": 3 } values str wl
+
+{} keys str wl
+{} values str wl
