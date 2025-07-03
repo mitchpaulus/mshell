@@ -773,11 +773,14 @@ func (obj *MShellFloat) CommandLine() string {
 }
 
 // DebugString
-
 func DebugStrs(objs []MShellObject) []string {
 	debugStrs := make([]string, len(objs))
 	for i, obj := range objs {
-		debugStrs[i] = obj.DebugString()
+		if obj == nil {
+			debugStrs[i] = "nil"
+		} else {
+			debugStrs[i] = obj.DebugString()
+		}
 	}
 	return debugStrs
 }

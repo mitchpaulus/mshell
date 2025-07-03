@@ -44,6 +44,40 @@ func (objList *MShellStack) Pop() (MShellObject, error) {
 	return popped, nil
 }
 
+func (objList *MShellStack) Pop1(t Token) (MShellObject, error) {
+	obj1, err := objList.Pop()
+	if err != nil {
+		return nil, fmt.Errorf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme)
+	}
+	return obj1, nil
+}
+
+func (objList *MShellStack) Pop2(t Token) (MShellObject, MShellObject, error) {
+	obj1, err := objList.Pop1(t)
+	if err != nil {
+		return nil, nil, err
+	}
+	obj2, err := objList.Pop()
+	if err != nil {
+		return nil, nil, fmt.Errorf("%d:%d: Cannot do '%s' operation on a stack with only one item.\n", t.Line, t.Column, t.Lexeme)
+	}
+
+	return obj1, obj2, nil
+}
+
+func (objList *MShellStack) Pop3(t Token) (MShellObject, MShellObject, MShellObject, error) {
+	obj1, obj2, err := objList.Pop2(t)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	obj3, err := objList.Pop()
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("%d:%d: Cannot do '%s' operation on a stack with only two items.\n", t.Line, t.Column, t.Lexeme)
+	}
+	return obj1, obj2, obj3, nil
+}
+
 func (objList *MShellStack) Push(obj MShellObject) {
 	*objList = append(*objList, obj)
 }
@@ -452,14 +486,9 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					obj := (*stack)[stackLen-2]
 					stack.Push(obj)
 				} else if t.Lexeme == "swap" {
-					obj1, err := stack.Pop()
+					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'swap' operation on an empty stack.\n", t.Line, t.Column))
-					}
-
-					obj2, err := stack.Pop()
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'swap' operation on a stack with only one item.\n", t.Line, t.Column))
+						return state.FailWithMessage(err.Error())
 					}
 
 					stack.Push(obj1)
@@ -679,19 +708,9 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 				} else if t.Lexeme == "findReplace" {
 					// Do simple find replace with the top three strings on stack
-					obj1, err := stack.Pop() // Replacement
+					obj1, obj2, obj3, err := stack.Pop3(t)
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'find-replace' operation on an empty stack.\n", t.Line, t.Column))
-					}
-
-					obj2, err := stack.Pop() // Find
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'find-replace' operation on a stack with only one item.\n", t.Line, t.Column))
-					}
-
-					obj3, err := stack.Pop() // Original string
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'find-replace' operation on a stack with only two items.\n", t.Line, t.Column))
+						return state.FailWithMessage(err.Error())
 					}
 
 					var replacementStr string
@@ -715,14 +734,9 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 
 					stack.Push(&MShellString{strings.Replace(originalStr, findStr, replacementStr, -1)})
 				} else if t.Lexeme == "split" {
-					delimiter, err := stack.Pop()
+					delimiter, strLiteral, err := stack.Pop2(t)
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'split' operation on an empty stack.\n", t.Line, t.Column))
-					}
-
-					strLiteral, err := stack.Pop()
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'split' operation on a stack with only one item.\n", t.Line, t.Column))
+						return state.FailWithMessage(err.Error())
 					}
 
 					delimiterStr, err := delimiter.CastString()
@@ -824,19 +838,9 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					// Expected stack:
 					// List item index
 					// Index 0 based, negative indexes allowed
-					obj1, err := stack.Pop()
+					obj1, obj2, obj3, err := stack.Pop3(t)
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'setAt' operation on an empty stack.\n", t.Line, t.Column))
-					}
-
-					obj2, err := stack.Pop()
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'setAt' operation on a stack with only one item.\n", t.Line, t.Column))
-					}
-
-					obj3, err := stack.Peek()
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'setAt' operation on a stack with only two items.\n", t.Line, t.Column))
+						return state.FailWithMessage(err.Error())
 					}
 
 					obj1Index, ok := obj1.(*MShellInt)
@@ -858,23 +862,14 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 
 					obj3List.Items[obj1Index.Value] = obj2
+					stack.Push(obj3List)
 				} else if t.Lexeme == "insert" {
 					// Expected stack:
 					// List item index
 					// Index 0 based, negative indexes allowed
-					obj1, err := stack.Pop()
+					obj1, obj2, obj3, err := stack.Pop3(t)
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'insert' operation on an empty stack.\n", t.Line, t.Column))
-					}
-
-					obj2, err := stack.Pop()
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'insert' operation on a stack with only one item.\n", t.Line, t.Column))
-					}
-
-					obj3, err := stack.Pop()
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'insert' operation on a stack with only two items.\n", t.Line, t.Column))
+						return state.FailWithMessage(err.Error())
 					}
 
 					obj1Index, ok := obj1.(*MShellInt)
@@ -898,14 +893,9 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					obj3List.Items = append(obj3List.Items[:obj1Index.Value], append([]MShellObject{obj2}, obj3List.Items[obj1Index.Value:]...)...)
 					stack.Push(obj3List)
 				} else if t.Lexeme == "del" {
-					obj1, err := stack.Pop()
+					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'del' operation on an empty stack.\n", t.Line, t.Column))
-					}
-
-					obj2, err := stack.Pop()
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'del' operation on a stack with only one item.\n", t.Line, t.Column))
+						return state.FailWithMessage(err.Error())
 					}
 
 					switch obj1.(type) {
@@ -976,14 +966,9 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return result
 					}
 				} else if t.Lexeme == "in" {
-					substring, err := stack.Pop()
+					substring, stringOrDict, err := stack.Pop2(t)
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'in' operation on an empty stack.\n", t.Line, t.Column))
-					}
-
-					stringOrDict, err := stack.Pop()
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'in' operation on a stack with only one item.\n", t.Line, t.Column))
+						return state.FailWithMessage(err.Error())
 					}
 
 					substringText, err := substring.CastString()
@@ -1004,14 +989,9 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						stack.Push(&MShellBool{strings.Contains(totalStringText, substringText)})
 					}
 				} else if t.Lexeme == "/" {
-					obj1, err := stack.Pop()
+					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '/' operation on an empty stack.\n", t.Line, t.Column))
-					}
-
-					obj2, err := stack.Pop()
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '/' operation on a stack with only one item.\n", t.Line, t.Column))
+						return state.FailWithMessage(err.Error())
 					}
 
 					if !obj1.IsNumeric() || !obj2.IsNumeric() {
@@ -1527,14 +1507,9 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					tmpdir := os.TempDir()
 					stack.Push(&MShellString{tmpdir})
 				} else if t.Lexeme == "endsWith" || t.Lexeme == "startsWith" {
-					obj1, err := stack.Pop()
+					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
-					}
-
-					obj2, err := stack.Pop()
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on a stack with only one item.\n", t.Line, t.Column, t.Lexeme))
+						return state.FailWithMessage(err.Error())
 					}
 
 					str1, err := obj1.CastString()
@@ -1583,14 +1558,9 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 
 					stack.Push(&MShellInt{int(dateTimeObj.Time.Unix())})
 				} else if t.Lexeme == "writeFile" || t.Lexeme == "appendFile" {
-					obj1, err := stack.Pop()
+					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
-					}
-
-					obj2, err := stack.Pop()
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on a stack with only one item.\n", t.Line, t.Column, t.Lexeme))
+						return state.FailWithMessage(err.Error())
 					}
 
 					path, err := obj1.CastString()
@@ -1635,14 +1605,9 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error removing file %s: %s\n", t.Line, t.Column, path, err.Error()))
 					}
 				} else if t.Lexeme == "mv" || t.Lexeme == "cp" {
-					obj1, err := stack.Pop()
+					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack. If you did this within a list expecting to use the command as a process, make sure to quote.\n", t.Line, t.Column, t.Lexeme))
-					}
-
-					obj2, err := stack.Pop()
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on a stack with only one item.\n", t.Line, t.Column, t.Lexeme))
+						return state.FailWithMessage(err.Error())
 					}
 
 					destination, err := obj1.CastString()
@@ -1668,14 +1633,9 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 				} else if t.Lexeme == "skip" {
 					// Skip like C# LINQ
-					obj1, err := stack.Pop()
+					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'skip' operation on an empty stack.\n", t.Line, t.Column))
-					}
-
-					obj2, err := stack.Pop()
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'skip' operation on a stack with only one item.\n", t.Line, t.Column))
+						return state.FailWithMessage(err.Error())
 					}
 
 					intVal, ok := obj1.(*MShellInt)
@@ -1842,14 +1802,9 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 				} else if t.Lexeme == "get" {
 					// Get a value from string key for a dictionary.
 					// dict "key" get
-					obj1, err := stack.Pop()
+					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
-					}
-
-					obj2, err := stack.Pop()
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on a stack with only one item.\n", t.Line, t.Column, t.Lexeme))
+						return state.FailWithMessage(err.Error())
 					}
 
 					keyStr, err := obj1.CastString()
@@ -1878,19 +1833,9 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 				} else if t.Lexeme == "getDef" {
 					// Get a value from string key for a dictionary.
 					// dict "key" default getDef
-					obj1, err := stack.Pop()
+					obj1, obj2, obj3, err := stack.Pop3(t)
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
-					}
-
-					obj2, err := stack.Pop()
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on a stack with only one item.\n", t.Line, t.Column, t.Lexeme))
-					}
-
-					obj3, err := stack.Pop()
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on a stack with only two items.\n", t.Line, t.Column, t.Lexeme))
+						return state.FailWithMessage(err.Error())
 					}
 
 					keyStr, err := obj2.CastString()
@@ -1912,19 +1857,9 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 				} else if t.Lexeme == "set" || t.Lexeme == "setd" {
 					// Set a value in a dictionary with a string key.
 					// dict "key" value set
-					value, err := stack.Pop()
+					value, key, dict, err := stack.Pop3(t)
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'set' operation on an empty stack.\n", t.Line, t.Column))
-					}
-
-					key, err := stack.Pop()
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'set' operation on a stack with only one item.\n", t.Line, t.Column))
-					}
-
-					dict, err := stack.Pop()
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'set' operation on a stack with only two items.\n", t.Line, t.Column))
+						return state.FailWithMessage(err.Error())
 					}
 
 					keyStr, err := key.CastString()
@@ -1974,14 +1909,9 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					stack.Push(newList)
 				} else if t.Lexeme == "reMatch" {
 					// Match a regex against a string
-					obj1, err := stack.Pop()
+					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'reMatch' operation on an empty stack.\n", t.Line, t.Column))
-					}
-
-					obj2, err := stack.Pop()
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'reMatch' operation on a stack with only one item.\n", t.Line, t.Column))
+						return state.FailWithMessage(err.Error())
 					}
 
 					regexStr, err := obj1.CastString()
@@ -2007,19 +1937,9 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 				} else if t.Lexeme == "reReplace" {
 					// Replace a regex in a string, fullString regex replacement
-					obj1, err := stack.Pop()
+					obj1, obj2, obj3, err := stack.Pop3(t)
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'reReplace' operation on an empty stack.\n", t.Line, t.Column))
-					}
-
-					obj2, err := stack.Pop()
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'reReplace' operation on a stack with only one item.\n", t.Line, t.Column))
-					}
-
-					obj3, err := stack.Pop()
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'reReplace' operation on a stack with only two items.\n", t.Line, t.Column))
+						return state.FailWithMessage(err.Error())
 					}
 
 					replacement, err := obj1.CastString()
@@ -2174,15 +2094,9 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot round a %s.\n", t.Line, t.Column, obj1.TypeName()))
 					}
 				} else if t.Lexeme == "toFixed" {
-					obj1, err := stack.Pop()
-
+					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'toFixed' operation on an empty stack.\n", t.Line, t.Column))
-					}
-
-					obj2, err := stack.Pop()
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'toFixed' operation on a stack with only one item.\n", t.Line, t.Column))
+						return state.FailWithMessage(err.Error())
 					}
 
 					obj1Int, ok := obj1.(*MShellInt)
