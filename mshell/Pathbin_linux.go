@@ -9,9 +9,20 @@ import (
 type PathBinManager struct {
 	currPath []string
 	index int
-	binaryPaths map[string]string
+	binaryPaths map[string]string // Maps binary name to its full path
 }
 
+func (pbm *PathBinManager) Matches(search string) ([]string) {
+	var matches []string
+	for binName := range pbm.binaryPaths {
+		// Do case-insensitive search prefix match
+		if strings.HasPrefix(strings.ToLower(binName), strings.ToLower(search)) {
+			matches = append(matches, binName)
+		}
+	}
+	sort.Strings(matches)
+	return matches
+}
 
 func NewPathBinManager() IPathBinManager {
 	// Get the current path from the environment

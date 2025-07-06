@@ -12,6 +12,23 @@ type PathBinManager struct {
 	binaryPaths map[string]string
 }
 
+func (pbm *PathBinManager) Matches(search string) []string {
+	var matches []string
+
+	// Iterate over the binaryPaths map and find matches
+	for binName := range pbm.binaryPaths {
+		// Case insensitive search
+		if strings.HasPrefix(strings.ToLower(binName), strings.ToLower(search)) {
+			matches = append(matches, binName)
+		}
+	}
+
+	// Sort the matches
+	sort.Strings(matches)
+
+	return matches
+}
+
 
 func NewPathBinManager() IPathBinManager {
 	// Get the current path from the environment

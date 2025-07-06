@@ -7,4 +7,5 @@ type IPathBinManager interface {
 	ExecuteArgs(execPath string) ([]string, error)
 	DebugList() string
 	IsExecutableFile(path string) bool
+	Matches(search string) ([]string)
 }

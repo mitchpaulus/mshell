@@ -12,6 +12,17 @@ type PathBinManager struct {
 	pathExts []string
 }
 
+func (pbm *PathBinManager) Matches(search string) ([]string) {
+	var matches []string
+	for binName := range pbm.binaryPaths {
+		if strings.HasPrefix(strings.ToLower(binName), strings.ToLower(search)) {
+			matches = append(matches, binName)
+		}
+	}
+	sort.Strings(matches)
+	return matches
+}
+
 func (pbm *PathBinManager) Lookup(binName string) (string, bool) {
 
 	// Check if the binary name is already in the map

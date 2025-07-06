@@ -12,7 +12,7 @@ import (
 	"runtime"
 	// "time"
 	// "unicode"
-	"sort"
+	// "sort"
 	"strconv"
 	// "runtime/debug"
 	"path/filepath"
@@ -34,25 +34,51 @@ const (
 var tempFiles []string
 
 
-func longestCommonPrefix(strs []string) string {
+func getLongestCommonPrefix(strs []string) string {
 	if len(strs) == 0 {
 		return ""
 	} else if len(strs) == 1 {
 		return strs[0]
 	}
 
-	sort.Strings(strs)
+	// sort.Strings(strs)
 
-	first := strs[0]
-	last := strs[len(strs)-1]
+	// first := strs[0]
+	// last := strs[len(strs)-1]
 	b := strings.Builder{}
 
-	for i := 0; i < min(len(first), len(last)); i++ {
-		if first[i] == last[i] {
-			b.WriteByte(first[i])
-		} else {
-			return b.String()
+	// Max int
+	minLen := int(^uint(0) >> 1)
+
+	if len(strs[0]) == 0 {
+		return ""
+	}
+
+	first_byte_of_first := strs[0][0]
+
+	for _, str := range strs {
+		if len(str) == 0 {
+			return ""
 		}
+		l := len(str)
+		if l < minLen {
+			minLen = l
+		}
+		if str[0] != first_byte_of_first {
+			return ""
+		}
+	}
+
+	b.WriteByte(first_byte_of_first)
+
+	for i := 1; i < minLen; i++ {
+		first_byte := strs[0][i]
+		for _, str := range strs {
+			if str[i] != first_byte {
+				return b.String()
+			}
+		}
+		b.WriteByte(first_byte)
 	}
 
 	return b.String()
@@ -1797,6 +1823,14 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				}
 			}
 
+			if len(tokens) == 2 {
+				// Try to complete on command names
+				binMatches := state.pathBinManager.Matches(prefix)
+				for _, match := range binMatches {
+					matches = append(matches, match)
+				}
+			}
+
 			cleanPath := filepath.Clean(prefix)
 			dir := filepath.Dir(cleanPath)
 			filename := filepath.Base(cleanPath)
@@ -1820,6 +1854,13 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			}
 
 			var insertString string
+			fmt.Fprintf(state.f, "Len matches: '%d'\n", len(matches))
+
+			if len(matches) < 5 {
+				// Print matches
+				fmt.Fprintf(state.f, "Matches: %s\n", strings.Join(matches, ", "))
+			}
+
 			if len(matches) == 0 {
 				fmt.Fprintf(os.Stdout, "\a")
 			} else if len(matches) == 1 {
@@ -1836,14 +1877,15 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				// Replace the prefex
 				state.replaceText(insertString, state.index - lastTokenLength, state.index)
 			} else {
-				// Print out the longest common prefix
-				longestCommonPrefix := longestCommonPrefix(matches)
 
-				if len(longestCommonPrefix) == len(prefix) {
+				// Print out the longest common prefix
+				longestCommonPrefix := getLongestCommonPrefix(matches)
+				fmt.Fprintf(state.f, "Longest common prefix: '%s'\n", longestCommonPrefix)
+
+				if len(longestCommonPrefix) <= len(prefix) {
 					// Print bell
 					fmt.Fprintf(os.Stdout, "\a")
 				} else {
-
 					state.l.resetInput(longestCommonPrefix)
 					tokens := state.l.Tokenize()
 					if len(tokens) > 2 {
@@ -1855,7 +1897,6 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 					state.replaceText(longestCommonPrefix, state.index - lastTokenLength, state.index)
 				}
 			}
-
 		} else if t.Char == 11 { // Ctrl-K
 			// Erase to end of line
 			fmt.Fprintf(os.Stdout, "\033[K")
