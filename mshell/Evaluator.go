@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1897,11 +1898,17 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 							newList.Items[i] = &MShellString{key}
 							i++
 						}
+						sort.Slice(newList.Items, func(a, b int) bool {
+							return newList.Items[a].(*MShellString).Content < newList.Items[b].(*MShellString).Content
+						})
 					} else if t.Lexeme == "values" {
 						for _, value := range dict.Items {
 							newList.Items[i] = value
 							i++
 						}
+						sort.Slice(newList.Items, func(a, b int) bool {
+							return newList.Items[a].DebugString() < newList.Items[b].DebugString()
+						})
 					} else {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Lexeme))
 					}
