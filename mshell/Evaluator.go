@@ -2147,6 +2147,26 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 
 					stack.Push(&MShellLiteral{t.Lexeme})
 				}
+			} else if t.Type == STDAPPEND {
+				redirectPath, obj2, err := stack.Pop2(t)
+				if err != nil {
+					return state.FailWithMessage(err.Error())
+				}
+
+				path, err := redirectPath.CastString()
+				if err != nil {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot append to a %s.\n", t.Line, t.Column, redirectPath.TypeName()))
+				}
+
+				var listObj *MShellList
+				var ok bool
+				if listObj, ok = obj2.(*MShellList); !ok {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Second item on stack for %s should be a list, found a %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName()))
+				}
+
+				listObj.StandardOutputFile = path
+				listObj.AppendOutput = true
+				stack.Push(listObj)
 			} else if t.Type == LEFT_SQUARE_BRACKET { // Token Type
 				return state.FailWithMessage(fmt.Sprintf("%d:%d: Found unexpected left square bracket.\n", t.Line, t.Column))
 			} else if t.Type == LEFT_PAREN { // Token Type
@@ -3296,10 +3316,8 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 				}
 
 				stack.Push(&MShellBool{!doesEqual})
-			} else if t.Type == BANG { // Token Type
-
-			} else {
-				return state.FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Type))
+			}  else {
+				return state.FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' ('%s') yet.\n", t.Line, t.Column, t.Type, t.Lexeme))
 			}
 		default:
 			return state.FailWithMessage(fmt.Sprintf("We haven't implemented the type '%T' yet.\n", t))
@@ -3625,7 +3643,13 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 		cmd.Stdout = &commandSubWriter
 	} else if list.StandardOutputFile != "" {
 		// Open the file for writing
-		file, err := os.Create(list.StandardOutputFile)
+		var file *os.File
+		if list.AppendOutput {
+			file, err = os.OpenFile(list.StandardOutputFile, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+		} else {
+			file, err = os.Create(list.StandardOutputFile)
+		}
+
 		if err != nil {
 			return state.FailWithMessage(fmt.Sprintf("Error opening file %s for writing: %s\n", list.StandardOutputFile, err.Error())), 1, "", ""
 		}

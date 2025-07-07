@@ -82,6 +82,7 @@ const (
 	COLON
 	NOTEQUAL // !=
 	BANG // !
+	STDAPPEND // >>
 )
 
 func (t TokenType) String() string {
@@ -220,6 +221,8 @@ func (t TokenType) String() string {
 		return "NOTEQUAL"
 	case BANG:
 		return "BANG"
+	case STDAPPEND:
+		return "STDAPPEND"
 	default:
 		return "UNKNOWN"
 	}
@@ -576,6 +579,9 @@ func (l *Lexer) scanToken() Token {
 		if l.peek() == '=' {
 			l.advance()
 			return l.makeToken(GREATERTHANOREQUAL)
+		} else if l.peek() == '>' {
+			l.advance()
+			return l.makeToken(STDAPPEND)
 		} else {
 			return l.makeToken(GREATERTHAN)
 		}

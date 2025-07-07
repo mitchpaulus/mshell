@@ -1,0 +1,4 @@
+#!/usr/bin/env mshell
+# FILE:redirect_append.txt
+[printf "Hello, World!\n"] `redirect_append.txt` >!
+[printf "Hello, World again!\n"] `redirect_append.txt` >>!

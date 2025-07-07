@@ -419,6 +419,7 @@ type MShellList struct {
 	StandardInputContents string
 	StandardInputFile     string
 	StandardOutputFile    string
+	AppendOutput bool
 	StandardErrorFile     string
 	// This sets how stdout is handled, whether it's broken up into lines, stripped of trailing newline, or left as is
 	StdoutBehavior StdoutBehavior
@@ -437,6 +438,7 @@ func NewList(initLength int) *MShellList {
 		StandardInputContents: "",
 		StandardInputFile:     "",
 		StandardOutputFile:    "",
+		AppendOutput:          false,
 		StandardErrorFile:     "",
 		StdoutBehavior:        STDOUT_NONE,
 		StderrBehavior:        STDERR_NONE,
@@ -856,8 +858,6 @@ func (obj *MShellPath) DebugString() string {
 	if len(obj.Path) > 30 {
 		return "`" + obj.Path[:15] + "..." + obj.Path[len(obj.Path)-15:] + "`"
 	}
-
-	fmt.Fprintf(os.Stderr, "DebugString called on MShellPath: %s\n", obj.Path)
 
 	return "`" + obj.Path + "`"
 }
