@@ -13,11 +13,11 @@ Double quoted strings have the following escape sequences:
 
 No escaping is done within single quoted strings.
 
-### `bool` Booleans
+### Booleans
 
 Booleans are represented by `true` and `false`.
 
-### `quote` Quotations
+### Quotations
 
 Quotations are blocks of code that can be executed. They are created by wrapping code in parentheses.
 
@@ -25,7 +25,7 @@ Quotations are blocks of code that can be executed. They are created by wrapping
 (1 2 +)
 ```
 
-### `list` Lists
+### Lists
 
 Lists are created by wrapping elements in square brackets.
 No commas are required between elements.
