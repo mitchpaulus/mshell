@@ -1823,6 +1823,24 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				}
 			}
 
+			if len(prefix) > 0 && prefix[0] == '@' {
+				// Variable completion
+				searchPrefix := prefix[1:]
+				for v, _ := range state.context.Variables {
+					if strings.HasPrefix(v, searchPrefix) {
+						matches = append(matches, "@" + v)
+					}
+				}
+			} else {
+				// Completion on variables, since you could always end with !
+				for v, _ := range state.context.Variables {
+					if strings.HasPrefix(v, prefix) {
+						matches = append(matches, v + "!")
+					}
+				}
+			}
+
+
 			if len(tokens) == 2 {
 				// Try to complete on command names
 				binMatches := state.pathBinManager.Matches(prefix)

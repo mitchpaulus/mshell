@@ -122,7 +122,7 @@ type ExecuteContext struct {
 	StandardInput  io.Reader
 	StandardOutput io.Writer
 	StandardError  io.Writer
-	Variables      map[string]MShellObject
+	Variables      map[string]MShellObject // Mapping from variable name without leading '@' or trailing '!' to object.
 	ShouldCloseInput  bool
 	ShouldCloseOutput bool
 	Pbm IPathBinManager
