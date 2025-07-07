@@ -157,6 +157,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `lower`: Convert string to lowercase. `(str -- str)`
 - `upper`: Convert string to uppercase. `(str -- str)`
 - `toFixed`: Convert number to string with fixed number of decimal places. `(numeric int -- str)`
+- `countSubStr`: Count occurrences of substring in string. `(str str -- int)`
 
 ## List Functions
 

@@ -2119,6 +2119,25 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					floatVal := obj2.FloatNumeric()
 
 					stack.Push(&MShellString{fmt.Sprintf("%.*f", obj1Int.Value, floatVal)})
+				} else if t.Lexeme == "countSubStr" {
+					// Count the number of times a substring appears in a string
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					subStr, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The first parameter in countSubStr is expected to be stringable, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
+					}
+
+					str, err := obj2.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second parameter in countSubStr is expected to be stringable, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
+					}
+
+					count := strings.Count(str, subStr)
+					stack.Push(&MShellInt{count})
 				}  else { // last new function
 					// If we aren't in a list context, throw an error.
 					// Nearly always this is unintended.
