@@ -86,7 +86,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `wle`: Write error line stderr (str -- )
 - `len`: Length of string/list `([a] -- int | str -- int)`
 - `args`: List of string arguments. Does not include the name of the executing file. `( -- [str])`
-- `glob`: Run glob against string/literal on top of the stack. Leaves list of strings on the stack. `(str -- [str])`
+- `glob`: Run glob against string/literal on top of the stack. Leaves list of strings on the stack. Relies on golang's [filepath.Glob](https://pkg.go.dev/path/filepath#Glob), which in the current implementation, the response is sorted. `(str -- [str])`
 - `x`: Interpret/execute quotation `(quote -- )`
 - `toFloat`: Convert to float. `(numeric -- float)`
 - `toInt`: Convert to int. `(numeric -- int)`
@@ -175,9 +175,8 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `all`: Check if all elements in list satisfy a condition, `([a] (a -- bool) -- bool)`
 - `skip`: Skip first n elements of list, `(list int -- list)`
 - `sort`: Sort list. Converts all items to strings, then sorts using go's `sort.Strings` `(list -- list)`
-- `sortu`: Sort list and remove duplicates. Converts all items to strings, then sorts using go's `sort.Strings` and removes duplicates `(list -- list)`
 - `sortV`: Version sort list. Converts all items to strings, then sorts like GNU `sort -V` (`list -- list`)
-- `sortVu`: Version sort list and remove duplicates. Converts all items to strings, then sorts like GNU `sort -Vu` (`list -- list`)
+- `uniq`: Remove duplicate elements from list. Works for all non-compound types. `([a] -- [a])`
 - `zip`: Zip two lists together. If the two list are different lengths, resulting list will be the same length as the shorter of the two lists. `([a] [b] (a b -- c) -- [c])`
 
 ## Dictionary Functions

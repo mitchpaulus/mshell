@@ -1729,7 +1729,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 				} else if t.Lexeme == "runtime" {
 					// Place the name of the current OS runtime on the stack
 					stack.Push(&MShellString{runtime.GOOS})
-				} else if t.Lexeme == "sort" || t.Lexeme == "sortu" || t.Lexeme == "sortV" || t.Lexeme == "sortVu" {
+				} else if t.Lexeme == "sort" ||  t.Lexeme == "sortV" {
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'sort' operation on an empty stack.\n", t.Line, t.Column))
@@ -1751,19 +1751,6 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 
 					if err != nil {
 						return state.FailWithMessage(err.Error())
-					}
-
-					if t.Lexeme == "sortu" || t.Lexeme == "sortVu" {
-						// Remove duplicates, already sorted so we can just iterate and remove duplicates
-						for i := len(sortedList.Items) - 1; i > 0; i-- {
-							doesEqual, err := sortedList.Items[i].Equals(sortedList.Items[i-1])
-							if err != nil {
-								return state.FailWithMessage(fmt.Sprintf("%d:%d: Error comparing items in list: %s\n", t.Line, t.Column, err.Error()))
-							}
-							if doesEqual {
-								sortedList.Items = append(sortedList.Items[:i], sortedList.Items[i+1:]...)
-							}
-						}
 					}
 
 					stack.Push(sortedList)
@@ -2138,6 +2125,72 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 
 					count := strings.Count(str, subStr)
 					stack.Push(&MShellInt{count})
+				} else if t.Lexeme == "uniq" {
+					// Remove duplicates from a list
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'uniq' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					if _, ok := obj1.(*MShellList); !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot remove duplicates from a %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					listObj := obj1.(*MShellList)
+
+					newList := NewList(0)
+					stringsSeen := make(map[string]interface{})
+					pathsSeen := make(map[string]interface{})
+					intsSeen := make(map[int]interface{})
+					floatsSeen := make(map[float64]interface{})
+					dateTimesSeen := make(map[time.Time]interface{})
+
+					for i, item := range listObj.Items {
+						switch item.(type) {
+						case *MShellString:
+							strItem := item.(*MShellString)
+							if _, ok := stringsSeen[strItem.Content]; !ok {
+								newList.Items = append(newList.Items, strItem)
+								stringsSeen[strItem.Content] = nil
+							}
+						case *MShellPath:
+							pathItem := item.(*MShellPath)
+							if _, ok := pathsSeen[pathItem.Path]; !ok {
+								newList.Items = append(newList.Items, pathItem)
+								pathsSeen[pathItem.Path] = nil
+							}
+						case *MShellInt:
+							intItem := item.(*MShellInt)
+							if _, ok := intsSeen[intItem.Value]; !ok {
+								newList.Items = append(newList.Items, intItem)
+								intsSeen[intItem.Value] = nil
+							}
+						case *MShellFloat:
+							floatItem := item.(*MShellFloat)
+							if _, ok := floatsSeen[floatItem.Value]; !ok {
+								newList.Items = append(newList.Items, floatItem)
+								floatsSeen[floatItem.Value] = nil
+							}
+						case *MShellDateTime:
+							dateTimeItem := item.(*MShellDateTime)
+							if _, ok := dateTimesSeen[dateTimeItem.Time]; !ok {
+								newList.Items = append(newList.Items, dateTimeItem)
+								dateTimesSeen[dateTimeItem.Time] = nil
+							}
+						case *MShellLiteral:
+							// Treat like strings
+							literalItem := item.(*MShellLiteral)
+							if _, ok := stringsSeen[literalItem.LiteralText]; !ok {
+								// Convert to a string
+								newList.Items = append(newList.Items, &MShellString{literalItem.LiteralText})
+								stringsSeen[literalItem.LiteralText] = nil
+							}
+						default:
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot remove duplicates from a list with a %s at index %d (%s).\n", t.Line, t.Column, item.TypeName(), i, item.DebugString()))
+						}
+					}
+
+					stack.Push(newList)
 				}  else { // last new function
 					// If we aren't in a list context, throw an error.
 					// Nearly always this is unintended.

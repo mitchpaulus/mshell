@@ -2,4 +2,4 @@
 [hello 1 'c' 'A'] sort uw
 
 "# Unique sort test" wl
-[z y 'x' y z] sortu uw
+[z y 'x' y z] uniq sort uw

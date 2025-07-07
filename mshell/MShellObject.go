@@ -446,8 +446,8 @@ func NewList(initLength int) *MShellList {
 	}
 }
 
+// Sort the list. Returns an error if any item cannot be cast to a string.
 func SortList(list *MShellList) (*MShellList, error) {
-	// Sort the list. First verify that all items are string castable
 	stringsToSort := make([]string, len(list.Items))
 	for i, item := range list.Items {
 		str, err := item.CastString()
@@ -470,8 +470,8 @@ func SortList(list *MShellList) (*MShellList, error) {
 	return newList, nil
 }
 
+// Sort the list. Returns an error if any item cannot be cast to a string.
 func SortListFunc(list *MShellList, cmp func(a string, b string) int) (*MShellList, error) {
-	// Sort the list. First verify that all items are string castable
 	stringsToSort := make([]string, len(list.Items))
 	for i, item := range list.Items {
 		str, err := item.CastString()

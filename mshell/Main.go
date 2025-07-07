@@ -1297,7 +1297,7 @@ func (state *TermState) printPrompt() error {
 	if err != nil {
 		promptText = "??? >"
 	} else {
-		promptText = fmt.Sprintf("%s > \n:: ", cwd)
+		promptText = fmt.Sprintf("%s (%d)> \n:: ", cwd, len(state.stack))
 	}
 
 	fmt.Fprint(os.Stdout, promptText)
