@@ -13,5 +13,7 @@
 *.sublime-syntax text eol=lf
 *.sum text eol=lf
 *.txt text eol=lf
+*.html text eol=lf
+*json text eol=lf
 LICENSE text eol=lf
 numargs text eol=lf
