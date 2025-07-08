@@ -191,6 +191,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 ## Date Functions
 
 - `toDt`: Convert string to date/time `(str -- date)`
+- `canParseDt`: Check if string can be parsed as date/time using `toDt` `(str -- bool)`
 - `date`: Push current local date/time onto the stack `( -- date)`
 - `year`: Get year from date `(date -- int)`
 - `month`: Get month from date (1-12) `(date -- int)`

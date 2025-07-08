@@ -2191,6 +2191,21 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 
 					stack.Push(newList)
+				} else if t.Lexeme == "canParseDt" {
+					// Check if a string can be parsed as a date time
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'canParseDt' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					str, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot check if a %s can be parsed as a date time.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					// Try to parse the string as a date time
+					_, err = ParseDateTime(str)
+					stack.Push(&MShellBool{err == nil})
 				}  else { // last new function
 					// If we aren't in a list context, throw an error.
 					// Nearly always this is unintended.
