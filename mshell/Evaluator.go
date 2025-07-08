@@ -846,12 +846,12 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 
 					obj1Index, ok := obj1.(*MShellInt)
 					if !ok {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot set at a non-integer index.\n", t.Line, t.Column))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot set at a non-integer index at top of stack, found a %s (%s).\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
 					}
 
 					obj3List, ok := obj3.(*MShellList)
 					if !ok {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot set into a non-list.\n", t.Line, t.Column))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot set into a non-list as third item on stack, found a %s (%s).\n", t.Line, t.Column, obj3.TypeName(), obj3.DebugString()))
 					}
 
 					if obj1Index.Value < 0 {
