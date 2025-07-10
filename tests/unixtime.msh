@@ -1,0 +1,6 @@
+2025-07-10 orig!
+@orig toUnixTime u!
+@u str wl
+@u fromUnixTime d!
+@d "2006-01-02 15:04:05" dateFmt wl
+@orig @d = str wl

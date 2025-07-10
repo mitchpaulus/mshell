@@ -1547,17 +1547,29 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					} else if t.Lexeme == "dow" {
 						stack.Push(&MShellInt{dayOfWeek})
 					}
-				} else if t.Lexeme == "unixTime" {
+				} else if t.Lexeme == "toUnixTime" {
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'unixTime' operation on an empty stack.\n", t.Line, t.Column))
 					}
 					dateTimeObj, ok := obj1.(*MShellDateTime)
 					if !ok {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot get the unix time of a %s.\n", t.Line, t.Column, obj1.TypeName()))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot get the unix time of a %s (%s).\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
 					}
 
 					stack.Push(&MShellInt{int(dateTimeObj.Time.Unix())})
+				} else if t.Lexeme == "fromUnixTime" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Lexeme, t.Line, t.Column))
+					}
+
+					intVal, ok := obj1.(*MShellInt)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert a %s (%s) to a datetime.\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
+					}
+
+					stack.Push(&MShellDateTime{Time: time.Unix(int64(intVal.Value), 0).UTC(), Token: t})
 				} else if t.Lexeme == "writeFile" || t.Lexeme == "appendFile" {
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
