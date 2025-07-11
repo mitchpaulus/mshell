@@ -1150,6 +1150,12 @@ func (parser *MShellParser) ParseItem() (MShellParseItem, error) {
 		return parser.ParseList()
 	case LEFT_PAREN:
 		return parser.ParseQuote()
+	case LEFT_CURLY:
+		dict, err := parser.ParseDict()
+		if err != nil {
+			return nil, err
+		}
+		return dict, nil
 	case INDEXER, ENDINDEXER, STARTINDEXER, SLICEINDEXER:
 		return parser.ParseIndexer(), nil
 	case EOF:
