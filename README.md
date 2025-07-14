@@ -97,12 +97,9 @@ wt (:1:, :0:, 2: wjoin wl) each
 
 # 15. Print every line with the first field replaced by the line number
 # { $1 = NR; print }
-wt 1 lineNum!
-(
-    @lineNum str 0 setAt
-    wjoin wl
-    @lineNum 1 + lineNum!
-) each
+wt d!
+@d len seq (1 + str) map
+@d (line! lineNum! [@lineNum] @line 1: + " " join) zip uw
 
 # 16. Print every line after erasing the second field
 # { $2 = ""; print }

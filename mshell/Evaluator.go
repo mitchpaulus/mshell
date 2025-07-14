@@ -2543,7 +2543,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					case *MShellLiteral:
 						stack.Push(&MShellString{obj2.(*MShellLiteral).LiteralText + obj1.(*MShellString).Content})
 					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot add a string to a %s.\n", t.Line, t.Column, obj2.TypeName()))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot add a string ('%s') to a %s (%s).\n", t.Line, t.Column, obj1.(*MShellString).Content, obj2.TypeName(), obj2.DebugString()))
 					}
 				case *MShellLiteral:
 					switch obj2.(type) {
