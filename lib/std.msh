@@ -79,9 +79,6 @@ end
 # [s]tdin [l]ines
 def sl (-- [str]) stdin lines end
 
-# tt = Tab separated Table (-- list[list[str]])
-def tt (-- [[str]]) sl  ("	" split) map end
-
 def ttFile (str -- [[str]])
     readFile lines (tab split) map
 end
