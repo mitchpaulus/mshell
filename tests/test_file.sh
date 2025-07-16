@@ -20,7 +20,7 @@ fi
 if test "$?" -eq 0; then
     diff_output="$(diff "$TMP_FILE" "$1".stdout)"
     if test "$?" -eq 0; then
-        printf "%s passed\n" "$1"
+        printf "%s %spassed%s\n" "$1" "${GREEN}" "${NC}"
     else
         printf "%s FAILED\n" "$1"
         printf "==================\n"

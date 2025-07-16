@@ -55,6 +55,99 @@ type MShellSimple struct {
 	Token Token
 }
 
+// Maybe {{{
+type Maybe struct {
+	obj MShellObject // If nil, the Maybe is None.
+}
+
+func (m Maybe) TypeName() string {
+	return "Maybe"
+}
+
+func (m Maybe) IsCommandLineable() bool {
+	return false
+}
+
+func (m Maybe) IsNumeric() bool {
+	return false
+}
+
+func (m Maybe) FloatNumeric() float64 {
+	return 0
+}
+func (m Maybe) CommandLine() string {
+	return ""
+}
+
+// This is meant for things like error messages, should be limited in length to 30 chars or so.
+func (m Maybe) DebugString() string {
+	if m.obj == nil {
+		return "None"
+	}
+	return fmt.Sprintf("Maybe(%s)", m.obj.DebugString())
+}
+func (m Maybe) Index(index int) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot index into a Maybe.\n")
+}
+
+func (m Maybe) SliceStart(startInclusive int) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot slice a Maybe.\n")
+}
+
+func (m Maybe) SliceEnd(end int) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot slice a Maybe.\n")
+}
+
+func (m Maybe) Slice(startInc int, endExc int) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot slice a Maybe.\n")
+}
+
+func (m Maybe) ToJson() string {
+	if m.obj == nil {
+		return "{\"type\": \"Maybe\", \"value\": null}"
+	}
+	return fmt.Sprintf("{\"type\": \"Maybe\", \"value\": %s}", m.obj.ToJson())
+}
+
+func (m Maybe) ToString() string {
+	if m.obj == nil {
+		return "None"
+	}
+	return fmt.Sprintf("Just(%s)", m.obj.ToString())
+}
+
+func (m Maybe) IndexErrStr() string {
+	return ""
+}
+
+func (m Maybe) Concat(other MShellObject) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot concatenate a Maybe.\n")
+}
+
+func (m Maybe) Equals(other MShellObject) (bool, error) {
+	otherMaybe, ok := other.(Maybe)
+	if !ok {
+		return false, nil
+	}
+
+	if m.obj == nil && otherMaybe.obj == nil {
+		return true, nil
+	}
+
+	if m.obj == nil || otherMaybe.obj == nil {
+		return false, nil
+	}
+
+	equal, err := m.obj.Equals(otherMaybe.obj)
+	return equal, err
+}
+
+func (m Maybe) CastString() (string, error) {
+	return "", fmt.Errorf("Cannot cast a Maybe to a string.\n")
+}
+
+// }}}
+
 // Date time {{{
 
 type MShellDateTime struct {

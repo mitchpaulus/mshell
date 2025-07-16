@@ -53,6 +53,9 @@ func (objList *MShellStack) Pop1(t Token) (MShellObject, error) {
 	return obj1, nil
 }
 
+// Returns two objects from the stack.
+// obj1, obj2 := stack.Pop2(t)
+// obj1 was on top of the stack, obj2 was below it.
 func (objList *MShellStack) Pop2(t Token) (MShellObject, MShellObject, error) {
 	obj1, err := objList.Pop1(t)
 	if err != nil {
@@ -2110,7 +2113,6 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: The number of decimal places parameter in toFixed is not an integer. Found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
 					}
 
-
 					if !obj2.IsNumeric() {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert a %s (%s) to a number.\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
 					}
@@ -2218,6 +2220,74 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					// Try to parse the string as a date time
 					_, err = ParseDateTime(str)
 					stack.Push(&MShellBool{err == nil})
+				} else if t.Lexeme == "none" {
+					stack.Push(&Maybe{obj: nil})
+				} else if t.Lexeme == "just" {
+					o, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'just' operation on an empty stack.\n", t.Line, t.Column))
+					}
+					stack.Push(&Maybe{obj: o})
+				} else if t.Lexeme == "map" {
+					// Map a function over a list, or a Maybe
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					// Check if obj1 is a function
+					fn, ok := obj1.(*MShellQuotation)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The first parameter in 'map' is expected to be a function, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
+					}
+
+					qContext, err := fn.BuildExecutionContext(&context)
+					defer qContext.Close()
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					// Check if obj2 is a list or a Maybe
+					switch obj2.(type) {
+					case *MShellList:
+
+						listObj := obj2.(*MShellList)
+						newList := NewList(len(listObj.Items))
+
+						var mapStack MShellStack
+						mapStack = []MShellObject{}
+
+						for i, item := range listObj.Items {
+							mapStack.Push(item)
+							result := state.Evaluate(fn.Tokens, &mapStack, (*qContext), definitions, CallStackItem{fn, "quote", CALLSTACKQUOTE})
+							if result.ShouldPassResultUpStack() {
+								return result
+							}
+							if len(mapStack) != 1 {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: The function in 'map' did not return a single value, found %d values.\n", t.Line, t.Column, len(mapStack)))
+							}
+							mapResult, _ := mapStack.Pop()
+							newList.Items[i] = mapResult
+						}
+						stack.Push(newList)
+					case *Maybe:
+						maybe := obj2.(*Maybe)
+						if maybe.obj == nil {
+							stack.Push(maybe)
+						} else {
+							stack.Push(maybe.obj) // Push the object inside the Maybe
+							preStackLen := len(*stack)
+							result := state.Evaluate(fn.Tokens, stack, (*qContext), definitions, CallStackItem{fn, "quote", CALLSTACKQUOTE})
+							if result.ShouldPassResultUpStack() {
+								return result
+							}
+							if len(*stack) != preStackLen {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: The function in 'map' did not return a single value, found %d values.\n", t.Line, t.Column, len(*stack) - preStackLen))
+							}
+							mapResult, _ := stack.Pop()
+							stack.Push(&Maybe{obj: mapResult}) // Wrap the result back in a Maybe
+						}
+					}
 				}  else { // last new function
 					// If we aren't in a list context, throw an error.
 					// Nearly always this is unintended.

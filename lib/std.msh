@@ -18,25 +18,6 @@ def each ([T] (T --) --)
     drop drop
 end
 
-# map (list quote -- list)
-def map ([T] (T -- U) -- [U])
-    over len map-len! # Get total length
-    0 map-idx! # Index
-    [] map-accum! # Accumulator
-    (
-        [(@map-idx @map-len >=) (break)] if
-        over @map-idx nth # Get current item  list quote item
-        over x # Copy over quote, execute
-
-        # list quote new-item
-        @map-accum swap append drop # Append to accumulator
-        @map-idx 1 + map-idx! # inc index
-    ) loop
-
-    # Drop list and quote, push accumulator
-    drop drop @map-accum
-end
-
 # filter (list quote -- list)
 def filter ([T] (T -- bool) -- [T])
     quote! list!
