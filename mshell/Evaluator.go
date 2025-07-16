@@ -2324,7 +2324,17 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 			} else if t.Type == EXECUTE || t.Type == QUESTION || t.Type == BANG { // Token Type
 				top, err := stack.Pop()
 				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot execute an empty stack.\n", t.Line, t.Column))
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation an empty stack.\n", t.Line, t.Column, t.Lexeme))
+				}
+
+				if maybe, ok := top.(*Maybe); ok {
+					// If none, we fail and return all the way up the stack.
+					if maybe.obj == nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Failed on '?' with None value.\n", t.Line, t.Column))
+					} else {
+						stack.Push(maybe.obj) // Push the object inside the Maybe
+					}
+					continue MainLoop
 				}
 
 				// Switch on type
