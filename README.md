@@ -52,7 +52,7 @@ sl (wsplit len 4 >) filter uw
 
 # 6. Print every input line in which the last field is more than 4
 # $NF > 4
-sl (wsplit :-1: toFloat 4 >) filter uw
+sl (wsplit :-1: toFloat? 4 >) filter uw
 
 # 7. Print the total number of fields in all input lines
 #     { nf = nf + NF }
@@ -69,7 +69,7 @@ sl ("Beth" in) filter len wl
 # END      { print max, line }
 (
  line! prev!
- @line wsplit :0: toFloat new!
+ @line wsplit :0: toFloat? new!
  @new @prev :0: > ([@new @line]) (@prev) iff
 )
 [-99999999  ""] sl foldl
@@ -116,16 +116,16 @@ wt (reverse wjoin wl) each
 #   for (i = 1; i <= NF; i = i + 1) sum = sum + $i
 #   print sum
 # }
-wt ((toFloat) map sum str wl) each
+wt ((toFloat?) map sum str wl) each
 
 # 19. Add up all fields in all lines and print the sum
 # { for (i = 1; i <= NF; i = i + 1) sum = sum + $i }
 # END { print sum }
-wt ((toFloat) map sum) sum str wl
+wt ((toFloat?) map sum) sum str wl
 
 # 20. Print every line after replacing each field by its absolute value
 # { for (i = 1; i <= NF; i = i + 1) $i = ($i < 0) ? -$i : $i; print }
-wt ((toFloat abs str) map wjoin wl) each
+wt ((toFloat? abs str) map wjoin wl) each
 
 ```
 

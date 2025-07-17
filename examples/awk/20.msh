@@ -1,1 +1,1 @@
-wt ((toFloat abs str) map wjoin wl) each
+wt ((toFloat? abs str) map wjoin wl) each

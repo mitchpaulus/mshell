@@ -1,6 +1,6 @@
 (
  line! prev!
- @line wsplit :0: toFloat new!
+ @line wsplit :0: toFloat? new!
  @new @prev :0: > ([@new @line]) (@prev) iff
 )
 [-99999999  ""] sl foldl
