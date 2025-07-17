@@ -148,7 +148,7 @@ func main() {
 			os.Exit(0)
 			return
 		} else if arg == "--version" {
-			fmt.Fprintf(os.Stdout, "0.5.0\n")
+			fmt.Fprintf(os.Stdout, "0.6.0\n")
 			os.Exit(0)
 		} else if arg == "-c" {
 			if i >= len(os.Args) {
