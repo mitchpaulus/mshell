@@ -5,15 +5,16 @@
 # 2025-01-asdfasdff # This should be single token  Update: we no longer allow literals outside of lists, so these examples are not valid anymore and would be caught by that check.
 # 2025-01-13asdfasdf # This should be two tokens
 
-"2025_12_23" toDt str wl # Should write out in ISO format '2025-12-23T00:00:00'
+"2025_12_23" toDt? str wl # Should write out in ISO format '2025-12-23T00:00:00'
 
 # Test parsing and comparison
-2025-01-29 "Jan 29, 2025" toDt = str wl
-2025-01-29 "Jan 28, 2025" toDt = str wl
+2025-01-29 "Jan 29, 2025" toDt? = str wl
+2025-01-29 "Jan 28, 2025" toDt? = str wl
 
 def testType (--)
-    operator! opStr!
-    over over swap str w @opStr w w ": " w toDt @operator x str wl
+    operator! opStr! date2! date!
+    @date @date2 toDt? @operator x str result!
+    $"{@date str}{@opStr}{@date2}: {@result}" wl
 end
 
 "\nComparing >=" wl

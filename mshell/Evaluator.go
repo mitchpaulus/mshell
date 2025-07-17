@@ -1086,9 +1086,10 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					case *MShellString:
 						floatVal, err := strconv.ParseFloat(strings.TrimSpace(obj.(*MShellString).Content), 64)
 						if err != nil {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert %s to float: %s\n", t.Line, t.Column, obj.(*MShellString).Content, err.Error()))
+							stack.Push(&Maybe{ obj: nil })
+						} else {
+							stack.Push(&Maybe{ obj: &MShellFloat{floatVal} })
 						}
-						stack.Push(&MShellFloat{floatVal})
 						// I don't believe checking for literal is required, because it should have been parsed as a float to start with?
 					case *MShellInt:
 						stack.Push(&MShellFloat{float64(obj.(*MShellInt).Value)})
@@ -1107,9 +1108,10 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					case *MShellString:
 						intVal, err := strconv.Atoi(strings.TrimSpace(obj.(*MShellString).Content))
 						if err != nil {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert %s to int %s\n", t.Line, t.Column, obj.(*MShellString).Content, err.Error()))
+							stack.Push(&Maybe{ obj: nil })
+						} else {
+							stack.Push(&Maybe{ obj: &MShellInt{intVal} })
 						}
-						stack.Push(&MShellInt{intVal})
 						// I don't believe checking for literal is required, because it should have been parsed as a float to start with?
 					case *MShellInt:
 						stack.Push(obj)
@@ -1140,10 +1142,12 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					// TODO: Don't make a new lexer object each time.
 					parsedTime, err := ParseDateTime(dateStr)
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing date time '%s': %s\n", t.Line, t.Column, dateStr, err.Error()))
+						stack.Push(&Maybe{ obj: nil })
+						// return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing date time '%s': %s\n", t.Line, t.Column, dateStr, err.Error()))
+					} else {
+						dt := MShellDateTime{Time: parsedTime, Token: t}
+						stack.Push(&Maybe{ obj: &dt })
 					}
-
-					stack.Push(&MShellDateTime{Time: parsedTime, Token: t})
 				} else if t.Lexeme == "files" || t.Lexeme == "dirs" {
 					// Dump all the files in the current directory to the stack. No sub-directories.
 					files, err := os.ReadDir(".")
@@ -2114,7 +2118,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 
 					if !obj2.IsNumeric() {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert a %s (%s) to a number.\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: For '%s', cannot convert a %s (%s) to a number.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj2.DebugString()))
 					}
 
 					floatVal := obj2.FloatNumeric()
@@ -2205,21 +2209,6 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 
 					stack.Push(newList)
-				} else if t.Lexeme == "canParseDt" {
-					// Check if a string can be parsed as a date time
-					obj1, err := stack.Pop()
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'canParseDt' operation on an empty stack.\n", t.Line, t.Column))
-					}
-
-					str, err := obj1.CastString()
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot check if a %s can be parsed as a date time.\n", t.Line, t.Column, obj1.TypeName()))
-					}
-
-					// Try to parse the string as a date time
-					_, err = ParseDateTime(str)
-					stack.Push(&MShellBool{err == nil})
 				} else if t.Lexeme == "none" {
 					stack.Push(&Maybe{obj: nil})
 				} else if t.Lexeme == "just" {
@@ -2287,6 +2276,17 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 							mapResult, _ := stack.Pop()
 							stack.Push(&Maybe{obj: mapResult}) // Wrap the result back in a Maybe
 						}
+					}
+				} else if t.Lexeme == "isNone" {
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
+					}
+
+					if maybeObj, ok := obj.(*Maybe); ok {
+						stack.Push(&MShellBool{ maybeObj.IsNone() })
+					} else {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot check if a %s is None.\n", t.Line, t.Column, obj.TypeName()))
 					}
 				}  else { // last new function
 					// If we aren't in a list context, throw an error.

@@ -60,6 +60,10 @@ type Maybe struct {
 	obj MShellObject // If nil, the Maybe is None.
 }
 
+func (m Maybe) IsNone() bool {
+	return m.obj == nil
+}
+
 func (m Maybe) TypeName() string {
 	return "Maybe"
 }

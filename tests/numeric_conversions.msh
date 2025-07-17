@@ -1,0 +1,10 @@
+"9.999" toFloat? 2 toFixed wl
+"10e8" toFloat? str wl
+"1e-8" toFloat? str wl
+"1.234e4" toFloat? str wl
+"1.234E4" toFloat? str wl
+
+"basd" toFloat str wl # Should be None
+
+"0001" toInt? 1 = str wl
+"1.1" toInt str wl # Should be None
