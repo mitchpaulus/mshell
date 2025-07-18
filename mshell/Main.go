@@ -20,6 +20,7 @@ import (
 	"time"
 	"encoding/binary"
 	"github.com/cespare/xxhash"
+	"unicode/utf8"
 )
 
 type CliCommand int
@@ -435,7 +436,7 @@ type TermState struct {
 	stdInFd int
 	numRows int
 	numCols int
-	promptLength int
+	promptLength int // Length of
 	numPromptLines int
 	currentCommand []rune
 	index int // index of cursor, starts at 0
@@ -449,6 +450,13 @@ type TermState struct {
 	// tokenChan chan TerminalToken
 	stdInState *StdinReaderState
 
+	previousHistory []HistoryItem // Previous history items loaded from file
+
+	historyComplete []rune
+	completeHistory bool
+
+	renderBuffer []byte // Buffer for rendering the current command
+
 	stack MShellStack
 	context ExecuteContext
 	evalState EvalState
@@ -456,6 +464,46 @@ type TermState struct {
 	stdLibDefs []MShellDefinition
 	initCallStackItem CallStackItem
 	pathBinManager IPathBinManager
+}
+
+func (s *TermState) Render() {
+	s.renderBuffer = s.renderBuffer[:0] // Clear the buffer
+	// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
+	// state.index = 0
+	// ClearToEnd()
+	s.renderBuffer = append(s.renderBuffer, fmt.Sprintf("\033[%dG", s.promptLength + 1)...)
+	s.renderBuffer = append(s.renderBuffer, "\033[K"...)
+	// Print the current command
+	for _, r := range s.currentCommand {
+		s.renderBuffer = utf8.AppendRune(s.renderBuffer, r)
+	}
+
+	// Search for history
+	historySearch := SearchHistory(string(s.currentCommand), s.previousHistory)
+	s.historyComplete = []rune(historySearch)
+	numToAdd := len(s.historyComplete) - len(s.currentCommand)
+
+	// Print escape code for light gray
+	s.renderBuffer = append(s.renderBuffer, "\033[90m"...)
+	for i := 0; i < numToAdd; i++ {
+		s.renderBuffer = utf8.AppendRune(s.renderBuffer, s.historyComplete[len(s.currentCommand) + i])
+	}
+	// Reset color
+	s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
+
+	// Move cursor to correct position. This often will backtrack because of history completion.
+	pos := s.promptLength + 1 + s.index
+	s.renderBuffer = append(s.renderBuffer, fmt.Sprintf("\033[%dG", pos)...)
+
+	fmt.Fprintf(s.f, "Term index: %d, command length: %d\n", s.index, len(s.currentCommand))
+
+	// Push the buffer to stdout
+	// fmt.Fprintf(s.f, "Rendering buffer: %s\n", string(s.renderBuffer))
+	os.Stdout.Write(s.renderBuffer)
+
+	// Move cursor back to the beginning of the line.
+	// s.clearToPrompt()
+	// fmt.Fprintf(os.Stdout, "%s", string(s.currentCommand))
 }
 
 type HistoryItem struct {
@@ -475,7 +523,7 @@ func IsDefinitionDefined(name string, definitions []MShellDefinition) bool {
 
 func (state *TermState) clearToPrompt() {
 	fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
-	state.index = 0
+	// state.index = 0
 	ClearToEnd()
 }
 
@@ -520,23 +568,23 @@ var historyToSave []HistoryItem
 
 var knownCommands = map[string]struct{}{ "cd": {} }
 
-// printText prints the text at the current cursor position, moving existing text to the right.
-func (state *TermState) printText(text string) {
-	fmt.Fprintf(os.Stdout, "\033[K") // Delete to end of line
-	fmt.Fprintf(os.Stdout, "%s", text)
-	fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
-	fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + state.index + len(text))
+// // printText prints the text at the current cursor position, moving existing text to the right.
+// func (state *TermState) printText(text string) {
+	// fmt.Fprintf(os.Stdout, "\033[K") // Delete to end of line
+	// fmt.Fprintf(os.Stdout, "%s", text)
+	// fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
+	// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + state.index + len(text))
 
-	state.currentCommand = append(state.currentCommand[:state.index], append([]rune(text), state.currentCommand[state.index:]...)...)
-	state.index = state.index + len(text)
-}
+	// state.currentCommand = append(state.currentCommand[:state.index], append([]rune(text), state.currentCommand[state.index:]...)...)
+	// state.index = state.index + len(text)
+// }
 
 func (state *TermState) replaceText(newText string, replaceStart int, replaceEnd int) {
-	fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + replaceStart)
-	fmt.Fprintf(os.Stdout, "\033[K") // Delete to end of line
-	fmt.Fprintf(os.Stdout, "%s", newText)
-	fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[replaceEnd:]))
-	fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + replaceStart + len(newText))
+	// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + replaceStart)
+	// fmt.Fprintf(os.Stdout, "\033[K") // Delete to end of line
+	// fmt.Fprintf(os.Stdout, "%s", newText)
+	// fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[replaceEnd:]))
+	// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + replaceStart + len(newText))
 
 	state.currentCommand = append(state.currentCommand[:replaceStart], append([]rune(newText), state.currentCommand[replaceEnd:]...)...)
 	state.index = replaceStart + len(newText)
@@ -981,16 +1029,16 @@ func (state *TermState) InteractiveMode() error {
 	// Fill history
 	historyDir, err := GetHistoryDir()
 	if err == nil {
-		historyFileItems, err := ReadHistory(historyDir)
+		state.previousHistory, err = ReadHistory(historyDir)
 		if err == nil {
-			for _, item := range historyFileItems {
+			for _, item := range state.previousHistory {
 				// Add to history
 				history = append(history, item.Command)
 			}
 		} else {
 			fmt.Fprintf(state.f, "Error reading history file %s: %s\n", filepath.Join(historyDir, "msh_history"), err)
 		}
-		fmt.Fprintf(state.f, "%d items loaded from history file %s\n", len(historyFileItems), filepath.Join(historyDir, "msh_history"))
+		fmt.Fprintf(state.f, "%d items loaded from history file %s\n", len(state.previousHistory), filepath.Join(historyDir, "msh_history"))
 	} else {
 		fmt.Fprintf(state.f, "Error getting history directory: %s\n", err)
 	}
@@ -1020,8 +1068,6 @@ func (state *TermState) InteractiveMode() error {
 		}
 
 		end, err = state.HandleToken(token)
-
-
 		if err != nil {
 			return err
 		}
@@ -1029,6 +1075,7 @@ func (state *TermState) InteractiveMode() error {
 		if end {
 			break
 		}
+		state.Render()
 	}
 
 	return nil
@@ -1472,16 +1519,20 @@ func cleanupTempFiles() {
 
 // This function pushes characters to the terminal and to the backing command.
 func (state *TermState) PushChars(chars []rune) {
-	// Push chars to current command
-	ClearToEnd()
-	fmt.Fprintf(os.Stdout, "%s", string(chars))
-	// Add back what may have been deleted.
-	if state.index <= len(state.currentCommand) {
-		fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
-		fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index+len(chars))
-		state.currentCommand = append(state.currentCommand[:state.index], append(chars, state.currentCommand[state.index:]...)...)
-	}
-	state.index = state.index + len(chars)
+	// Push at the correct index
+	state.currentCommand = append(state.currentCommand[:state.index], append(chars, state.currentCommand[state.index:]...)...)
+	state.index += len(chars)
+
+	// // Push chars to current command
+	// ClearToEnd()
+	// fmt.Fprintf(os.Stdout, "%s", string(chars))
+	// // Add back what may have been deleted.
+	// if state.index <= len(state.currentCommand) {
+		// fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
+		// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index+len(chars))
+		// state.currentCommand = append(state.currentCommand[:state.index], append(chars, state.currentCommand[state.index:]...)...)
+	// }
+	// state.index = state.index + len(chars)
 }
 
 func WriteToHistory(command string, directory string, historyFilePath string) error {
@@ -1657,8 +1708,8 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				}
 			} else {
 				state.PushChars([]rune{rune(t.Char)})
+				// state.currentCommand = append(state.currentCommand, rune(t.Char))
 			}
-
 
 			// // Add chars to current command at current index
 			// // fmt.Fprintf(state.f, "AsciiToken: %d\n", t.Char)
@@ -1687,17 +1738,17 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			aliasValue, aliasSet := aliases[lastWord]
 			if aliasSet {
 				// Erase starting at beginning of last word
-				fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+i+1)
-				fmt.Fprintf(os.Stdout, "\033[K")
+				// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+i+1)
+				// fmt.Fprintf(os.Stdout, "\033[K")
 
 				// Print alias value
-				fmt.Fprint(os.Stdout, aliasValue)
+				// fmt.Fprint(os.Stdout, aliasValue)
 
 				// Print the space
-				fmt.Fprintf(os.Stdout, " ")
+				// fmt.Fprintf(os.Stdout, " ")
 
 				// Print the rest of the command
-				fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
+				// fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
 
 				// Update current command
 				startText := state.currentCommand[:i+1]
@@ -1718,19 +1769,19 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 
 				// Move cursor to end of the alias
 				state.index = i + 1 + len(aliasValue) + 1
-				fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index)
+				// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index)
 			} else {
 				state.PushChars([]rune{rune(t.Char)})
 			}
 		} else if t.Char == 1 { // Ctrl-A
 			// Move cursor to beginning of line.
-			fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
+			// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
 			state.index = 0
 		} else if t.Char == 2 { // CTRL-B
 			// Move cursor left
 			if state.index > 0 {
 				state.index--
-				fmt.Fprintf(os.Stdout, "\033[D")
+				// fmt.Fprintf(os.Stdout, "\033[D")
 			}
 		} else if t.Char == 3 || t.Char == 4 {
 			// Ctrl-C or Ctrl-D
@@ -1738,13 +1789,13 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			return true, nil
 		} else if t.Char == 5 { // Ctrl-E
 			// Move cursor to end of line
-			fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + len(state.currentCommand))
+			// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + len(state.currentCommand))
 			state.index = len(state.currentCommand)
 		} else if t.Char == 6 { // Ctrl-F
 			// Move cursor right
 			if state.index < len(state.currentCommand) {
 				state.index++
-				fmt.Fprintf(os.Stdout, "\033[C")
+				// fmt.Fprintf(os.Stdout, "\033[C")
 			}
 		} else if t.Char == 8 { // Backspace (or more typically CTRL-Backspace)
 			// Do same as CTRL-W
@@ -1764,12 +1815,12 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				state.currentCommand = append(state.currentCommand[:state.index], state.currentCommand[origIndex:]...)
 
 				// Erase the word
-				fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + state.index)
-				fmt.Fprintf(os.Stdout, "\033[K")
+				// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + state.index)
+				// fmt.Fprintf(os.Stdout, "\033[K")
 
-				// Print the rest of the command
-				fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
-				fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + state.index)
+				// // Print the rest of the command
+				// fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
+				// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + state.index)
 			}
 		} else if t.Char == 9 { // Tab complete
 			// Get all files in the current directory
@@ -1917,7 +1968,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			}
 		} else if t.Char == 11 { // Ctrl-K
 			// Erase to end of line
-			fmt.Fprintf(os.Stdout, "\033[K")
+			// fmt.Fprintf(os.Stdout, "\033[K")
 			state.currentCommand = state.currentCommand[:state.index]
 		} else if t.Char == 12 { // Ctrl-L
 			state.ClearScreen()
@@ -1929,19 +1980,19 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			}
 		} else if t.Char == 21 { // Ctrl-U
 			// Erase back to prompt start
-			fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
-			fmt.Fprintf(os.Stdout, "\033[K")
+			// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
+			// fmt.Fprintf(os.Stdout, "\033[K")
 			// fmt.Fprintf(os.Stdout, "\033[2K\033[1G")
 			// fmt.Fprintf(os.Stdout, "mshell> ")
 			// state.printPrompt()
 
 			// // Remaining chars in current command
 			state.currentCommand = state.currentCommand[state.index:]
-			for i := 0; i < len(state.currentCommand); i++ {
-				fmt.Fprintf(os.Stdout, "%c", state.currentCommand[i])
-			}
+			// for i := 0; i < len(state.currentCommand); i++ {
+				// fmt.Fprintf(os.Stdout, "%c", state.currentCommand[i])
+			// }
 
-			fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
+			// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
 			state.index = 0
 		} else if t.Char == 23 { // Ctrl-W
 			// Erase last word
@@ -1959,13 +2010,26 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 
 				state.currentCommand = append(state.currentCommand[:state.index], state.currentCommand[origIndex:]...)
 
-				// Erase the word
-				fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + state.index)
-				fmt.Fprintf(os.Stdout, "\033[K")
+				// // Erase the word
+				// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + state.index)
+				// fmt.Fprintf(os.Stdout, "\033[K")
 
 				// Print the rest of the command
-				fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
-				fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + state.index)
+				// fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
+				// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + state.index)
+			}
+		} else if t.Char == 25 { // Ctrl-Y
+			// Ctrl-y to complete history
+			if len(state.historyComplete) >= len(state.currentCommand) {
+				fmt.Fprintf(state.f, "History complete: %s\n", string(state.historyComplete))
+				if cap(state.currentCommand) < cap(state.historyComplete) {
+					state.currentCommand = make([]rune, len(state.historyComplete), cap(state.historyComplete))
+				} else {
+					state.currentCommand = state.currentCommand[:len(state.historyComplete)]
+				}
+
+				copy(state.currentCommand, state.historyComplete)
+			 	state.index = len(state.currentCommand)
 			}
 		} else if t.Char == 127 { // Backspace
 			// Erase last char
@@ -1973,10 +2037,10 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				state.currentCommand = append(state.currentCommand[:state.index-1], state.currentCommand[state.index:]...)
 				state.index--
 
-				fmt.Fprintf(os.Stdout, "\033[D")
-				fmt.Fprintf(os.Stdout, "\033[K")
-				fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
-				fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index)
+				// fmt.Fprintf(os.Stdout, "\033[D")
+				// fmt.Fprintf(os.Stdout, "\033[K")
+				// fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
+				// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index)
 			}
 		}
 	case SpecialKey:
@@ -2000,7 +2064,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 					state.index--
 				}
 
-				fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index)
+				// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index)
 			}
 		} else if t == KEY_ALT_F { // Alt-F
 			// Move cursor right by word
@@ -2016,7 +2080,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				}
 			}
 
-			fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index)
+			// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index)
 		} else if t == KEY_ALT_O { // Alt-O
 			// Quit
 			fmt.Fprintf(os.Stdout, "\r\n")
@@ -2032,9 +2096,9 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				}
 
 				// Clear back to prompt
-				state.clearToPrompt()
+				// state.clearToPrompt()
 				// state.printPrompt()
-				fmt.Fprint(os.Stdout, history[reverseIndex])
+				// fmt.Fprint(os.Stdout, history[reverseIndex])
 				// fmt.Fprintf(os.Stdout, "mshell> %s", history[reverseIndex])
 				state.currentCommand = []rune(history[reverseIndex])
 				state.index = len(state.currentCommand)
@@ -2049,7 +2113,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				// Down arrow
 				for state.historyIndex > 0 && state.historyIndex <= len(history) + 1 {
 					state.historyIndex--
-					state.clearToPrompt()
+					// state.clearToPrompt()
 					if state.historyIndex == 0 {
 						// state.printPrompt()
 						// fmt.Fprintf(os.Stdout, "mshell> ")
@@ -2063,7 +2127,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 						}
 						// fmt.Fprintf(os.Stdout, "mshell> %s", history[reverseIndex])
 						// state.printPrompt()
-						fmt.Fprint(os.Stdout, history[reverseIndex])
+						// fmt.Fprint(os.Stdout, history[reverseIndex])
 						state.currentCommand = []rune(history[reverseIndex])
 						state.index = len(state.currentCommand)
 					}
@@ -2074,27 +2138,27 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			// Right arrow
 			if state.index < len(state.currentCommand) {
 				state.index++
-				fmt.Fprintf(os.Stdout, "\033[C")
+				// fmt.Fprintf(os.Stdout, "\033[C")
 			}
 		} else if t == KEY_LEFT {
 			// Left arrow
 			if state.index > 0 {
 				state.index--
-				fmt.Fprintf(os.Stdout, "\033[D")
+				// fmt.Fprintf(os.Stdout, "\033[D")
 			}
 		} else if t == KEY_HOME {
 			// Move cursor to beginning of line.
-			fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
+			// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
 			state.index = 0
 		} else if t == KEY_END {
 			// Move cursor to end of line
-			fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + len(state.currentCommand))
+			// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + len(state.currentCommand))
 			state.index = len(state.currentCommand)
 		} else if t == KEY_DELETE {
 			if state.index < len(state.currentCommand) {
-				fmt.Fprintf(os.Stdout, "\033[K")
-				fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index + 1:]))
-				fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index)
+				// fmt.Fprintf(os.Stdout, "\033[K")
+				// fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index + 1:]))
+				// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index)
 
 				state.currentCommand = append(state.currentCommand[:state.index], state.currentCommand[state.index+1:]...)
 			}
