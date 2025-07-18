@@ -7,6 +7,7 @@ import (
 	"bufio"
 )
 
+// Returns slice of HistoryItem data, last item is the most recent
 func ReadHistory(historyDir string) ([]HistoryItem, error) {
 	historyFile := historyDir + "/msh_history"
 	history, err := ReadHistoryFile(historyFile)
@@ -44,6 +45,16 @@ func ReadHistory(historyDir string) ([]HistoryItem, error) {
 		items[i] = historyItem
 	}
 	return items, nil
+}
+
+func SearchHistory(current string, historyData []HistoryItem) string {
+	// Loop through backwards, looking for first item with prefix
+	for i := len(historyData) - 1; i >= 0; i-- {
+		if len(historyData[i].Command) >= len(current) && historyData[i].Command[:len(current)] == current {
+			return historyData[i].Command
+		}
+	}
+	return ""
 }
 
 type HistoryFileItem struct {
