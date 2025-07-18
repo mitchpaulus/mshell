@@ -48,6 +48,10 @@ func ReadHistory(historyDir string) ([]HistoryItem, error) {
 }
 
 func SearchHistory(current string, historyData []HistoryItem) string {
+	if len(current) == 0 {
+		return ""
+	}
+
 	// Loop through backwards, looking for first item with prefix
 	for i := len(historyData) - 1; i >= 0; i-- {
 		if len(historyData[i].Command) >= len(current) && historyData[i].Command[:len(current)] == current {

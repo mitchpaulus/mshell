@@ -450,6 +450,8 @@ type TermState struct {
 	// tokenChan chan TerminalToken
 	stdInState *StdinReaderState
 
+	previousHistory []HistoryItem // Previous history items loaded from file
+
 	historyComplete []rune
 	completeHistory bool
 
@@ -476,15 +478,27 @@ func (s *TermState) Render() {
 		s.renderBuffer = utf8.AppendRune(s.renderBuffer, r)
 	}
 
-	// Move cursor to correct position
-	if s.index < len(s.currentCommand) {
-		pos := s.promptLength + 1 + s.index
-		s.renderBuffer = append(s.renderBuffer, fmt.Sprintf("\033[%dG", pos)...)
+	// Search for history
+	historySearch := SearchHistory(string(s.currentCommand), s.previousHistory)
+	s.historyComplete = []rune(historySearch)
+	numToAdd := len(s.historyComplete) - len(s.currentCommand)
+
+	// Print escape code for light gray
+	s.renderBuffer = append(s.renderBuffer, "\033[90m"...)
+	for i := 0; i < numToAdd; i++ {
+		s.renderBuffer = utf8.AppendRune(s.renderBuffer, s.historyComplete[len(s.currentCommand) + i])
 	}
+	// Reset color
+	s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
+
+	// Move cursor to correct position. This often will backtrack because of history completion.
+	pos := s.promptLength + 1 + s.index
+	s.renderBuffer = append(s.renderBuffer, fmt.Sprintf("\033[%dG", pos)...)
 
 	fmt.Fprintf(s.f, "Term index: %d, command length: %d\n", s.index, len(s.currentCommand))
 
 	// Push the buffer to stdout
+	// fmt.Fprintf(s.f, "Rendering buffer: %s\n", string(s.renderBuffer))
 	os.Stdout.Write(s.renderBuffer)
 
 	// Move cursor back to the beginning of the line.
@@ -1015,16 +1029,16 @@ func (state *TermState) InteractiveMode() error {
 	// Fill history
 	historyDir, err := GetHistoryDir()
 	if err == nil {
-		historyFileItems, err := ReadHistory(historyDir)
+		state.previousHistory, err = ReadHistory(historyDir)
 		if err == nil {
-			for _, item := range historyFileItems {
+			for _, item := range state.previousHistory {
 				// Add to history
 				history = append(history, item.Command)
 			}
 		} else {
 			fmt.Fprintf(state.f, "Error reading history file %s: %s\n", filepath.Join(historyDir, "msh_history"), err)
 		}
-		fmt.Fprintf(state.f, "%d items loaded from history file %s\n", len(historyFileItems), filepath.Join(historyDir, "msh_history"))
+		fmt.Fprintf(state.f, "%d items loaded from history file %s\n", len(state.previousHistory), filepath.Join(historyDir, "msh_history"))
 	} else {
 		fmt.Fprintf(state.f, "Error getting history directory: %s\n", err)
 	}
@@ -1054,9 +1068,6 @@ func (state *TermState) InteractiveMode() error {
 		}
 
 		end, err = state.HandleToken(token)
-
-		state.Render()
-
 		if err != nil {
 			return err
 		}
@@ -1064,6 +1075,7 @@ func (state *TermState) InteractiveMode() error {
 		if end {
 			break
 		}
+		state.Render()
 	}
 
 	return nil
@@ -2005,6 +2017,19 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				// Print the rest of the command
 				// fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
 				// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + state.index)
+			}
+		} else if t.Char == 25 { // Ctrl-Y
+			// Ctrl-y to complete history
+			if len(state.historyComplete) >= len(state.currentCommand) {
+				fmt.Fprintf(state.f, "History complete: %s\n", string(state.historyComplete))
+				if cap(state.currentCommand) < cap(state.historyComplete) {
+					state.currentCommand = make([]rune, len(state.historyComplete), cap(state.historyComplete))
+				} else {
+					state.currentCommand = state.currentCommand[:len(state.historyComplete)]
+				}
+
+				copy(state.currentCommand, state.historyComplete)
+			 	state.index = len(state.currentCommand)
 			}
 		} else if t.Char == 127 { // Backspace
 			// Erase last char
