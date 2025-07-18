@@ -3,6 +3,9 @@ import (
 	"os"
 	"strings"
 	"sort"
+	"os/exec"
+	"path/filepath"
+	"syscall"
 )
 
 type PathBinManager struct {
@@ -57,9 +60,6 @@ func (pbm *PathBinManager) IsExecutableFile(path string) bool {
 	return false
 }
 
-
-
-
 func (pbm *PathBinManager) ExecuteArgs(execPath string) ([]string, error) {
 	// Check extension
 	if strings.HasSuffix(strings.ToUpper(execPath), ".EXE") {
@@ -67,11 +67,11 @@ func (pbm *PathBinManager) ExecuteArgs(execPath string) ([]string, error) {
 	}
 
 	if strings.HasSuffix(strings.ToUpper(execPath), ".CMD") {
-		return []string{execPath}, nil
+		return []string{"CMD.EXE", "/C", execPath}, nil
 	}
 
 	if strings.HasSuffix(strings.ToUpper(execPath), ".BAT") {
-		return []string{execPath}, nil
+		return []string{"CMD.EXE", "/C", execPath}, nil
 	}
 
 	if strings.HasSuffix(strings.ToUpper(execPath), ".COM") {
@@ -176,4 +176,55 @@ func (pbm *PathBinManager) DebugList() string {
 	}
 
 	return sb.String()
+}
+
+func EscapeArgForCmd(arg string) string {
+	// For simplicity, just wrap anything that isn't alphanumeric in quotes.
+	needsQuotes := false
+	for _, r := range arg {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')) {
+			needsQuotes = true
+			break
+		}
+	}
+
+	if needsQuotes {
+		return "\"" + strings.ReplaceAll(arg, "\"", "\"\"") + "\""
+	}
+
+	return arg
+}
+
+func EscapeForCmd(allArgs []string) string {
+	if len(allArgs) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString(EscapeArgForCmd(allArgs[0]))
+	for _, arg := range allArgs[1:] {
+		sb.WriteString(" ")
+		sb.WriteString(EscapeArgForCmd(arg))
+	}
+	return sb.String()
+}
+
+func (pbm *PathBinManager) SetupCommand(allArgs []string) (*exec.Cmd) {
+	// Get basename of the command
+	if len(allArgs) == 0 {
+		return nil
+	}
+
+	execName := filepath.Base(allArgs[0])
+	if strings.ToUpper(execName) == "CMD.EXE" {
+		// If the command is CMD.EXE, we need to escape the arguments properly
+		cmdStr := EscapeForCmd(allArgs)
+
+		cmd := exec.Command("CMD.EXE")
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			CmdLine: cmdStr,
+		}
+		return cmd
+	} else {
+		return exec.Command(allArgs[0], allArgs[1:]...)
+	}
 }

@@ -1,5 +1,6 @@
 package main
 import (
+	"os/exec"
 )
 
 type IPathBinManager interface {
@@ -8,4 +9,5 @@ type IPathBinManager interface {
 	DebugList() string
 	IsExecutableFile(path string) bool
 	Matches(search string) ([]string)
+	SetupCommand(allArgs []string) *exec.Cmd
 }

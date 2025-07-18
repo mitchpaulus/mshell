@@ -3791,7 +3791,8 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 	allArgs = append(allArgs, cmdItems...)
 	allArgs = append(allArgs, commandLineArgs[1:]...)
 
-	cmd := exec.Command(allArgs[0], allArgs[1:]...)
+	cmd := context.Pbm.SetupCommand(allArgs)
+	// cmd := exec.Command(allArgs[0], allArgs[1:]...)
 	// cmd := exec.Command(commandLineArgs[0], commandLineArgs[1:]...)
 	cmd.Env = os.Environ()
 
@@ -3882,7 +3883,6 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 		}
 	}
 
-	// fmt.Fprintf(os.Stderr, "Running command: %s\n", cmd.String())
 	var startErr error
 	var exitCode int
 

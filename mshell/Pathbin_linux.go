@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"sort"
+	"os/exec"
 )
 
 type PathBinManager struct {
@@ -163,4 +164,9 @@ func (pbm *PathBinManager) Lookup(binName string) (string, bool) {
 	// }
 
 	// return "", false
+}
+
+func (pbm *PathBinManager) SetupCommand(allArgs []string) (*exec.Cmd) {
+	// No-op for Linux, as we don't need to set the PATH
+	return exec.Command(allArgs[0], allArgs[1:]...)
 }
