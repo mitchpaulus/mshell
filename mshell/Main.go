@@ -452,7 +452,7 @@ type TermState struct {
 
 	previousHistory []HistoryItem // Previous history items loaded from file
 
-	historyComplete []rune
+	historyComplete []rune // Completed history search for current command
 	completeHistory bool
 
 	renderBuffer []byte // Buffer for rendering the current command
@@ -479,9 +479,14 @@ func (s *TermState) Render() {
 	}
 
 	// Search for history
-	historySearch := SearchHistory(string(s.currentCommand), s.previousHistory)
-	s.historyComplete = []rune(historySearch)
+	historySearchNew := SearchHistory(string(s.currentCommand), historyToSave)
+	s.historyComplete = []rune(historySearchNew)
 	numToAdd := len(s.historyComplete) - len(s.currentCommand)
+	if numToAdd < 0 {
+		historySearch := SearchHistory(string(s.currentCommand), s.previousHistory)
+		s.historyComplete = []rune(historySearch)
+		numToAdd = len(s.historyComplete) - len(s.currentCommand)
+	}
 
 	// Print escape code for light gray
 	s.renderBuffer = append(s.renderBuffer, "\033[90m"...)
