@@ -1528,7 +1528,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					stack.Push(&MShellPath{tmpfile.Name()})
 				} else if t.Lexeme == "tempDir" {
 					tmpdir := os.TempDir()
-					stack.Push(&MShellString{tmpdir})
+					stack.Push(&MShellPath{tmpdir})
 				} else if t.Lexeme == "endsWith" || t.Lexeme == "startsWith" {
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
