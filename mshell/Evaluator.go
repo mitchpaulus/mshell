@@ -998,31 +998,46 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(err.Error())
 					}
 
-					if !obj1.IsNumeric() || !obj2.IsNumeric() {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot divide a %s and a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
-					}
-
-					switch obj1.(type) {
-					case *MShellInt:
-						if obj1.(*MShellInt).Value == 0 {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot divide by zero.\n", t.Line, t.Column))
-						}
-						switch obj2.(type) {
+					if obj1.IsNumeric() && obj2.IsNumeric() {
+						switch obj1.(type) {
 						case *MShellInt:
-							stack.Push(&MShellInt{obj2.(*MShellInt).Value / obj1.(*MShellInt).Value})
+							if obj1.(*MShellInt).Value == 0 {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot divide by zero.\n", t.Line, t.Column))
+							}
+							switch obj2.(type) {
+							case *MShellInt:
+								stack.Push(&MShellInt{obj2.(*MShellInt).Value / obj1.(*MShellInt).Value})
+							case *MShellFloat:
+								stack.Push(&MShellFloat{float64(obj2.(*MShellFloat).Value) / float64(obj1.(*MShellInt).Value)})
+							}
 						case *MShellFloat:
-							stack.Push(&MShellFloat{float64(obj2.(*MShellFloat).Value) / float64(obj1.(*MShellInt).Value)})
-						}
-					case *MShellFloat:
-						if obj1.(*MShellFloat).Value == 0 {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot divide by zero.\n", t.Line, t.Column))
-						}
+							if obj1.(*MShellFloat).Value == 0 {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot divide by zero.\n", t.Line, t.Column))
+							}
 
-						switch obj2.(type) {
-						case *MShellInt:
-							stack.Push(&MShellFloat{float64(obj2.(*MShellInt).Value) / obj1.(*MShellFloat).Value})
-						case *MShellFloat:
-							stack.Push(&MShellFloat{obj2.(*MShellFloat).Value / obj1.(*MShellFloat).Value})
+							switch obj2.(type) {
+							case *MShellInt:
+								stack.Push(&MShellFloat{float64(obj2.(*MShellInt).Value) / obj1.(*MShellFloat).Value})
+							case *MShellFloat:
+								stack.Push(&MShellFloat{obj2.(*MShellFloat).Value / obj1.(*MShellFloat).Value})
+							}
+						default:
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot divide a %s and a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
+						}
+					} else {
+						// Check if both are paths
+						switch obj1.(type) {
+						case *MShellPath:
+							switch obj2.(type) {
+							case *MShellPath:
+								// This is a path join operation
+								newPath := filepath.Join(obj2.(*MShellPath).Path, obj1.(*MShellPath).Path)
+								stack.Push(&MShellPath{newPath})
+							default:
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do a join between a %s and a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
+							}
+						default:
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot divide a %s and a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
 						}
 					}
 				} else if t.Lexeme == "exit" {
