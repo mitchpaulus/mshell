@@ -242,6 +242,10 @@ func main() {
 			readBuffer:     make([]byte, 1024),
 			homeDir:        os.Getenv("HOME"),
 
+			tabCompletions0: make([]string, 0, 10),
+			tabCompletions1: make([]string, 0, 10),
+			currentTabComplete: 0,
+
 			stack : make(MShellStack, 0),
 
 			context : ExecuteContext{
@@ -457,6 +461,10 @@ type TermState struct {
 
 	renderBuffer []byte // Buffer for rendering the current command
 
+	tabCompletions0 []string // Tab completions for the current command
+	tabCompletions1 []string // Tab completions for the current command
+	currentTabComplete int
+
 	stack MShellStack
 	context ExecuteContext
 	evalState EvalState
@@ -495,6 +503,41 @@ func (s *TermState) Render() {
 	}
 	// Reset color
 	s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
+
+	var currentTabCompletion []string
+	var previousTabCompletion []string
+	if s.currentTabComplete == 0 {
+		currentTabCompletion = s.tabCompletions0
+		previousTabCompletion = s.tabCompletions1
+	} else {
+		currentTabCompletion = s.tabCompletions1
+		previousTabCompletion = s.tabCompletions0
+	}
+
+	limit := 10
+
+	// Clean previous tab completions
+	for i := 0; i < min(len(previousTabCompletion), limit); i++ {
+		// Do \n to move to the next line
+		s.renderBuffer = append(s.renderBuffer, "\n"...)
+		s.renderBuffer = append(s.renderBuffer, "\033[2K"...)
+	}
+	// Move back up number of completion lines
+	for i := 0; i < min(len(previousTabCompletion), limit); i++ {
+		s.renderBuffer = append(s.renderBuffer, "\033[A"...)
+	}
+
+	// Do current completions, up to 10
+	for i := 0; i < min(len(currentTabCompletion), limit); i++ {
+		// // Do \r\n to move to the next line
+		s.renderBuffer = append(s.renderBuffer, "\r\n"...)
+		s.renderBuffer = append(s.renderBuffer, []byte(currentTabCompletion[i])...)
+	}
+
+	// Move back up number of completion lines
+	for i := 0; i < min(len(currentTabCompletion), limit); i++ {
+		s.renderBuffer = append(s.renderBuffer, "\033[A"...)
+	}
 
 	// Move cursor to correct position. This often will backtrack because of history completion.
 	pos := s.promptLength + 1 + s.index
@@ -1057,7 +1100,13 @@ func (state *TermState) InteractiveMode() error {
 
 	var token TerminalToken
 	var end bool
+
 	for {
+		if (state.currentTabComplete == 0) {
+			state.tabCompletions0 = state.tabCompletions0[:0]
+		} else {
+			state.tabCompletions1 = state.tabCompletions1[:0]
+		}
 
 		fmt.Fprintf(state.f, "Waiting for token... ")
 		state.f.Sync()
@@ -1081,6 +1130,9 @@ func (state *TermState) InteractiveMode() error {
 			break
 		}
 		state.Render()
+
+		// Swap tab completions
+		state.currentTabComplete = 1 - state.currentTabComplete
 	}
 
 	return nil
@@ -1969,6 +2021,12 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 
 					// Replace the prefix
 					state.replaceText(longestCommonPrefix, state.index - lastTokenLength, state.index)
+				}
+
+				if state.currentTabComplete == 0 {
+					state.tabCompletions0 = append(state.tabCompletions0, matches...)
+				} else {
+					state.tabCompletions1 = append(state.tabCompletions1, matches...)
 				}
 			}
 		} else if t.Char == 11 { // Ctrl-K
