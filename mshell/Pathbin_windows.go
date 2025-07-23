@@ -11,15 +11,20 @@ import (
 type PathBinManager struct {
 	currPath []string
 	index int
-	binaryPaths map[string]string
+	binaryPaths map[string]WinBinaryPath // Key here is uppercase binary name
 	pathExts []string
+}
+
+type WinBinaryPath struct {
+	OriginalFileName string
+	FullPath string
 }
 
 func (pbm *PathBinManager) Matches(search string) ([]string) {
 	var matches []string
-	for binName := range pbm.binaryPaths {
-		if strings.HasPrefix(strings.ToLower(binName), strings.ToLower(search)) {
-			matches = append(matches, binName)
+	for binName, winBinaryPath := range pbm.binaryPaths {
+		if strings.HasPrefix(binName, strings.ToUpper(search)) {
+			matches = append(matches, winBinaryPath.OriginalFileName)
 		}
 	}
 	sort.Strings(matches)
@@ -30,13 +35,13 @@ func (pbm *PathBinManager) Lookup(binName string) (string, bool) {
 
 	// Check if the binary name is already in the map
 	if path, exists := pbm.binaryPaths[strings.ToUpper(binName)]; exists {
-		return path, true
+		return path.FullPath, true
 	}
 
 	// Loop through extensions and check if the binary name with each extension exists
 	for _, ext := range pbm.pathExts {
 		if path, exists := pbm.binaryPaths[strings.ToUpper(binName+ext)]; exists {
-			return path, true
+			return path.FullPath, true
 		}
 	}
 
@@ -118,7 +123,7 @@ func NewPathBinManager() IPathBinManager {
 		}
 	}
 
-	binaryPaths := make(map[string]string)
+	binaryPaths := make(map[string]WinBinaryPath)
 
 	for _, path := range currPathSlice {
 		// Look for executables in the current path
@@ -142,7 +147,7 @@ func NewPathBinManager() IPathBinManager {
 			for _, ext := range pathExtsSlice {
 				if strings.HasSuffix(strings.ToUpper(fileName), ext) {
 					// Add the file to the binary paths map
-					binaryPaths[strings.ToUpper(fileName)] = path + "\\" + fileName
+					binaryPaths[strings.ToUpper(fileName)] = WinBinaryPath{ FullPath: path + "\\" + fileName, OriginalFileName: fileName }
 					break
 				}
 			}
@@ -171,7 +176,7 @@ func (pbm *PathBinManager) DebugList() string {
 	for _, key := range keys {
 		sb.WriteString(key)
 		sb.WriteString("\t")
-		sb.WriteString(pbm.binaryPaths[key])
+		sb.WriteString(pbm.binaryPaths[key].FullPath)
 		sb.WriteString("\n")
 	}
 
