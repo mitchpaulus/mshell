@@ -88,8 +88,8 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `args`: List of string arguments. Does not include the name of the executing file. `( -- [str])`
 - `glob`: Run glob against string/literal on top of the stack. Leaves list of strings on the stack. Relies on golang's [filepath.Glob](https://pkg.go.dev/path/filepath#Glob), which in the current implementation, the response is sorted. `(str -- [str])`
 - `x`: Interpret/execute quotation `(quote -- )`
-- `toFloat`: Convert to float. `(numeric -- float)`
-- `toInt`: Convert to int. `(numeric -- int)`
+- `toFloat`: Convert to float. `(numeric -- Maybe[float])`
+- `toInt`: Convert to int. `(numeric -- Mabye[int])`
 - `read`: Read a line from stdin. Puts a str and bool of whether the read was successful on the stack. `( -- str bool)`
 - `stdin`: Drop stdin onto the stack `( -- str)`
 - `::`: Drop stdin onto the stack and split by lines `( -- [str])`. This is a shorthand for `stdin lines`.
@@ -190,8 +190,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 
 ## Date Functions
 
-- `toDt`: Convert string to date/time `(str -- date)`
-- `canParseDt`: Check if string can be parsed as date/time using `toDt` `(str -- bool)`
+- `toDt`: Convert string to date/time `(str -- Maybe[date])`
 - `date`: Push current local date/time onto the stack `( -- date)`
 - `year`: Get year from date `(date -- int)`
 - `month`: Get month from date (1-12) `(date -- int)`
@@ -224,6 +223,13 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
 
 - `mkdir`: Make directory `(str -- )`
 - `mkdirp`: Make directory and required parents `(str -- )`
+
+## Maybe
+
+- `isNone`: Check if Maybe is None. `(Maybe[a] -- bool)`
+- `just`: Wrap value in Maybe. `(a -- Maybe[a])`
+- `none`: Create a None Maybe. `( -- Maybe[a])`
+- `?`: If Maybe is None, fail immediately. If it is Just, unwrap and continue. `(Maybe[a] -- a)`
 
 ## Variables
 
@@ -314,3 +320,4 @@ The current object types supported by `mshell` are:
 8. Path
 9. Date/Times
 10. Dictionary
+11. Maybe

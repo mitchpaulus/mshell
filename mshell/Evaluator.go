@@ -1841,17 +1841,19 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 
 					value, ok := dict.Items[keyStr]
 					if !ok {
-						var sb strings.Builder
-						sb.WriteString(fmt.Sprintf("%d:%d: Key '%s' not found in dictionary.\n", t.Line, t.Column, keyStr))
-						sb.WriteString("Available keys:\n")
-						for k := range dict.Items {
-							// TODO: Escape
-							sb.WriteString(fmt.Sprintf("  - '%s'\n", k))
-						}
-						return state.FailWithMessage(sb.String())
+						// var sb strings.Builder
+						// sb.WriteString(fmt.Sprintf("%d:%d: Key '%s' not found in dictionary.\n", t.Line, t.Column, keyStr))
+						// sb.WriteString("Available keys:\n")
+						// for k := range dict.Items {
+							// // TODO: Escape
+							// sb.WriteString(fmt.Sprintf("  - '%s'\n", k))
+						// }
+						// return state.FailWithMessage(sb.String())
+						stack.Push(Maybe{ obj: nil })
+					} else {
+						maybe := Maybe{ obj: value }
+						stack.Push( &maybe )
 					}
-
-					stack.Push(value)
 				} else if t.Lexeme == "getDef" {
 					// Get a value from string key for a dictionary.
 					// dict "key" default getDef
@@ -2302,6 +2304,24 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						stack.Push(&MShellBool{ maybeObj.IsNone() })
 					} else {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot check if a %s is None.\n", t.Line, t.Column, obj.TypeName()))
+					}
+				} else if t.Lexeme == "maybe" {
+					// [Maybe] [default value]
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					// Check that obj2 is a Maybe
+					maybeObj, ok := obj2.(*Maybe)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second parameter in 'maybe' is expected to be a Maybe, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
+					}
+
+					if maybeObj.obj == nil {
+						stack.Push(obj1) // Push the default value
+					} else {
+						stack.Push(maybeObj.obj)
 					}
 				}  else { // last new function
 					// If we aren't in a list context, throw an error.

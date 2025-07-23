@@ -13,10 +13,10 @@
 
 { "key": 1 2 + } dict2! @dict2 str wl
 
-@dict2 "key" get 3 + str wl
+@dict2 "key" get? 3 + str wl
 
 @dict2 "key" 5 setd
-@dict2 "key" get 3 + str wl
+@dict2 "key" get? 3 + str wl
 
 @dict2 "key"       in ("key found in dict") ("key not found in dict") iff wl
 @dict2 "other key" in ("key found in dict") ("key not found in dict") iff wl
@@ -34,4 +34,4 @@
 {} keys str wl
 {} values str wl
 
-[{"a": 1} {"a": 2}] ("a" get str wl) each
+[{"a": 1} {"a": 2}] ("a" get? str wl) each
