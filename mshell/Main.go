@@ -1916,8 +1916,8 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			fmt.Fprintf(state.f, "Prefix: %s\n", prefix)
 			var matches []string
 
+			// Environment variable completion
 			if len(prefix) > 0 && prefix[0] == '$' {
-				// Environment variable completion
 				vars := os.Environ()
 				for _, envVar := range vars {
 					// state.f.Write([]byte(fmt.Sprintf("Checking env var: '%s'\n", envVar)))
@@ -1931,8 +1931,8 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				}
 			}
 
+			// Variable completion
 			if len(prefix) > 0 && prefix[0] == '@' {
-				// Variable completion
 				searchPrefix := prefix[1:]
 				for v, _ := range state.context.Variables {
 					if strings.HasPrefix(v, searchPrefix) {
@@ -1949,7 +1949,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			}
 
 
-			if len(tokens) == 2 {
+			if len(tokens) == 2 && len(prefix) > 0 {
 				// Try to complete on command names
 				binMatches := state.pathBinManager.Matches(prefix)
 				for _, match := range binMatches {
