@@ -1096,7 +1096,7 @@ func (state *TermState) InteractiveMode() error {
 		return fmt.Errorf("Error printing prompt: %s\n", err)
 	}
 
-	defer TrySaveHistory()
+	defer state.TrySaveHistory()
 
 	var token TerminalToken
 	var end bool
@@ -1112,6 +1112,7 @@ func (state *TermState) InteractiveMode() error {
 		state.f.Sync()
 		token, err = state.InteractiveLexer(stdInState) // token = <- tokenChan
 		if err != nil {
+			fmt.Fprintf(state.f, "Got err from interactive lexer: %s\n", err)
 			return err
 		}
 
@@ -1138,11 +1139,11 @@ func (state *TermState) InteractiveMode() error {
 	return nil
 }
 
-func TrySaveHistory() {
+func (state *TermState) TrySaveHistory() {
 	if len(historyToSave) == 0 {
+		fmt.Fprintf(state.f, "No history to save.\n")
 		return
 	}
-
 
 	historyDir, err := GetHistoryDir()
 	if err != nil {
@@ -1217,6 +1218,8 @@ func TrySaveHistory() {
 			return
 		}
 	}
+
+	fmt.Fprintf(state.f, "Saved %d history items to %s\n", len(historyToSave), historyFile)
 
 	// Clear history to save
 	historyToSave = historyToSave[:0]
@@ -1657,8 +1660,8 @@ func WriteToHistory(command string, directory string, historyFilePath string) er
 	return nil
 }
 
+// Returns boolean on whether to end the CLI. Think CTRL-c/d or other exit command.
 func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
-	// Returns boolean on whether to end the CLI. Think CTRL-c/d or other exit command.
 	var err error
 
 	switch t := token.(type) {
@@ -2147,6 +2150,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 		} else if t == KEY_ALT_O { // Alt-O
 			// Quit
 			fmt.Fprintf(os.Stdout, "\r\n")
+			fmt.Fprintf(state.f, "Exiting mshell using ALT-o...\n")
 			return true, nil
 		} else if t == KEY_UP {
 			// Up arrow
