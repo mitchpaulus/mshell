@@ -1034,7 +1034,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 								newPath := filepath.Join(obj2.(*MShellPath).Path, obj1.(*MShellPath).Path)
 								stack.Push(&MShellPath{newPath})
 							default:
-								return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do a join between a %s and a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do a join between a %s (%s) and a %s (%s).\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString(), obj1.TypeName(), obj1.DebugString()))
 							}
 						default:
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot divide a %s and a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
