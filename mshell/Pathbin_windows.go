@@ -233,3 +233,8 @@ func (pbm *PathBinManager) SetupCommand(allArgs []string) (*exec.Cmd) {
 		return exec.Command(allArgs[0], allArgs[1:]...)
 	}
 }
+
+func IsPathSeparator(c uint8) bool {
+	// Windows uses backslash as path separator
+	return c == '\\' || c == '/'
+}

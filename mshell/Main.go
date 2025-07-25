@@ -438,11 +438,11 @@ func main() {
 
 type TermState struct {
 	stdInFd int
-	numRows int
-	numCols int
+	numRows int // Number of rows in the terminal
+	numCols int // Number of columns in the terminal
 	promptRow int // Row where the prompt ends, 1-based
 	promptLength int // Length of
-	numPromptLines int
+	numPromptLines int // Number of lines the prompt takes up
 	currentCommand []rune
 	index int // index of cursor, starts at 0
 	readBuffer []byte
@@ -521,6 +521,13 @@ func (s *TermState) Render() {
 
 	// Do current completions, up to 10
 	limit := s.numRows - s.promptRow
+	if len(currentTabCompletion) > limit {
+		linesPossible := max(0, s.promptRow - s.numPromptLines)
+		fmt.Fprintf(s.f, "Lines possible: %d\n", linesPossible)
+		diff := len(currentTabCompletion) - limit
+		s.ScrollDown(min(diff, linesPossible))
+		limit = s.numRows - s.promptRow
+	}
 
 	// Clean previous tab completions
 	for i := 0; i < min(len(previousTabCompletion), limit); i++ {
@@ -584,7 +591,7 @@ func ClearToEnd() {
 	fmt.Fprintf(os.Stdout, "\033[K")
 }
 
-func (state *TermState) ClearScreen() {
+func (state *TermState) ScrollDown(numLines int) {
 	// See https://github.com/microsoft/terminal/issues/17320
 	// and https://github.com/microsoft/terminal/issues/11078
 	// Some terminals are erasing text in scrollback buffer using the \e[nS escape sequence.
@@ -599,19 +606,54 @@ func (state *TermState) ClearScreen() {
 		return
 	}
 
-	rowsToScroll := curRow - state.numPromptLines
-	fmt.Fprintf(state.f, "%d %d %d\n", curRow, state.numPromptLines, rowsToScroll)
+	// TODO: Limit to current size of the terminal.
+
+	// rowsToScroll := curRow - state.numPromptLines
+	fmt.Fprintf(state.f, "Cur Row: %d, Lines to scroll: %d", curRow, numLines)
 
 	// Move cursor to bottom of terminal, if you have a terminal that has over 10000 lines, I'm sorry.
 	fmt.Fprintf(os.Stdout, "\033[10000B")
 	// print out rowsToScroll newlines
-	for i := 0; i < rowsToScroll; i++ {
+	for i := 0; i < numLines; i++ {
 		fmt.Fprintf(os.Stdout, "\n")
 	}
 
 	// Move cursor
-	fmt.Fprintf(os.Stdout, "\033[%d;%dH", state.numPromptLines, curCol)
-	state.promptRow = state.numPromptLines
+	fmt.Fprintf(os.Stdout, "\033[%d;%dH", curRow - numLines, curCol)
+	state.promptRow = state.promptRow - numLines
+}
+
+
+
+func (state *TermState) ClearScreen() {
+	// See https://github.com/microsoft/terminal/issues/17320
+	// and https://github.com/microsoft/terminal/issues/11078
+	// Some terminals are erasing text in scrollback buffer using the \e[nS escape sequence.
+
+	// Implement using \n's instead.
+
+	// Send off cursor position request
+	state.UpdateSize()
+	curRow, _, err := state.getCurrentPos()
+	if err != nil {
+		fmt.Fprintf(state.f, "Error getting cursor position: %s\n", err)
+		return
+	}
+
+	rowsToScroll := curRow - state.numPromptLines
+	state.ScrollDown(rowsToScroll)
+	// fmt.Fprintf(state.f, "%d %d %d\n", curRow, state.numPromptLines, rowsToScroll)
+
+	// // Move cursor to bottom of terminal, if you have a terminal that has over 10000 lines, I'm sorry.
+	// fmt.Fprintf(os.Stdout, "\033[10000B")
+	// // print out rowsToScroll newlines
+	// for i := 0; i < rowsToScroll; i++ {
+		// fmt.Fprintf(os.Stdout, "\n")
+	// }
+
+	// // Move cursor
+	// fmt.Fprintf(os.Stdout, "\033[%d;%dH", state.numPromptLines, curCol)
+	// state.promptRow = state.numPromptLines
 }
 
 var tokenBuf []Token
@@ -1970,24 +2012,61 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				}
 			}
 
-			cleanPath := filepath.Clean(prefix)
-			dir := filepath.Dir(cleanPath)
-			filename := filepath.Base(cleanPath)
 
-			files, err := os.ReadDir(dir)
-			if err != nil {
-				fmt.Fprintf(os.Stdout, "\a")
-				return false, nil
-			}
+			if prefix == "" {
+				// Dump everything in the current directory
+				cwd, err := os.Getwd()
+				if err == nil {
+					files, err := os.ReadDir(cwd)
+					if err == nil {
+						for _, file := range files {
+							if file.IsDir() {
+								matches = append(matches, file.Name() + string(os.PathSeparator))
+							} else {
+								matches = append(matches, file.Name())
+							}
+						}
+					}
+				}
+			} else {
+				// Split on last path separator
+				indexOfLastSeparator := -1
+				for i := len(prefix) - 1; i >= 0; i-- {
+					if IsPathSeparator(prefix[i]) {
+						// Found a path separator, split here
+						indexOfLastSeparator = i
+					}
+				}
 
-			// Find all files that start with prefix
-			for _, file := range files {
-				if strings.HasPrefix(file.Name(), filename) {
-					// Rejoin the directory and filename. If a directory, end with a path separator.
-					if file.IsDir() {
-						matches = append(matches, filepath.Join(dir, file.Name()) + string(os.PathSeparator))
-					} else {
-						matches = append(matches, filepath.Join(dir, file.Name()))
+				dir := prefix[0:indexOfLastSeparator + 1]
+				filename := prefix[indexOfLastSeparator + 1:]
+
+				// cleanPath := filepath.Clean(prefix)
+				// dir := filepath.Dir(cleanPath)
+				// filename := filepath.Base(prefix)
+				// dir := UnmodifiedDir(prefix)
+
+				fmt.Fprintf(state.f, "Dir: '%s', Filename: '%s'\n", dir, filename)
+
+				var searchDir string
+				if len(dir) == 0 {
+					searchDir = "."
+				} else {
+					searchDir = dir
+				}
+
+				files, err := os.ReadDir(searchDir)
+				if err == nil {
+					// Find all files that start with prefix
+					for _, file := range files {
+						if strings.HasPrefix(file.Name(), filename) {
+							// Rejoin the directory and filename. If a directory, end with a path separator.
+							if file.IsDir() {
+								matches = append(matches, dir + file.Name() + string(os.PathSeparator))
+							} else {
+								matches = append(matches, dir + file.Name())
+							}
+						}
 					}
 				}
 			}
@@ -2243,4 +2322,13 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 	}
 
 	return false, nil
+}
+
+func UnmodifiedDir(path string) string {
+	for i := len(path) - 1; i >= 0; i-- {
+		if IsPathSeparator(path[i]) {
+			return path[0:i + 1]
+		}
+	}
+	return ""
 }
