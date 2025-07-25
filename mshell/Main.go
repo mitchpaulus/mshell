@@ -440,6 +440,7 @@ type TermState struct {
 	stdInFd int
 	numRows int
 	numCols int
+	promptRow int // Row where the prompt ends, 1-based
 	promptLength int // Length of
 	numPromptLines int
 	currentCommand []rune
@@ -472,6 +473,10 @@ type TermState struct {
 	stdLibDefs []MShellDefinition
 	initCallStackItem CallStackItem
 	pathBinManager IPathBinManager
+}
+
+func (s *TermState) UpdateSize() {
+	s.numCols, s.numRows, _ = term.GetSize(s.stdInFd)
 }
 
 func (s *TermState) Render() {
@@ -514,7 +519,8 @@ func (s *TermState) Render() {
 		previousTabCompletion = s.tabCompletions0
 	}
 
-	limit := 10
+	// Do current completions, up to 10
+	limit := s.numRows - s.promptRow
 
 	// Clean previous tab completions
 	for i := 0; i < min(len(previousTabCompletion), limit); i++ {
@@ -527,7 +533,6 @@ func (s *TermState) Render() {
 		s.renderBuffer = append(s.renderBuffer, "\033[A"...)
 	}
 
-	// Do current completions, up to 10
 	for i := 0; i < min(len(currentTabCompletion), limit); i++ {
 		// // Do \r\n to move to the next line
 		s.renderBuffer = append(s.renderBuffer, "\r\n"...)
@@ -543,7 +548,7 @@ func (s *TermState) Render() {
 	pos := s.promptLength + 1 + s.index
 	s.renderBuffer = append(s.renderBuffer, fmt.Sprintf("\033[%dG", pos)...)
 
-	fmt.Fprintf(s.f, "Term index: %d, command length: %d\n", s.index, len(s.currentCommand))
+	fmt.Fprintf(s.f, "Term index: %d, command length: %d, num completions: %d, limit: %d\n, prompt row: %d, numRows: %d", s.index, len(s.currentCommand), len(currentTabCompletion), limit, s.promptRow, s.numRows)
 
 	// Push the buffer to stdout
 	// fmt.Fprintf(s.f, "Rendering buffer: %s\n", string(s.renderBuffer))
@@ -587,6 +592,7 @@ func (state *TermState) ClearScreen() {
 	// Implement using \n's instead.
 
 	// Send off cursor position request
+	state.UpdateSize()
 	curRow, curCol, err := state.getCurrentPos()
 	if err != nil {
 		fmt.Fprintf(state.f, "Error getting cursor position: %s\n", err)
@@ -605,6 +611,7 @@ func (state *TermState) ClearScreen() {
 
 	// Move cursor
 	fmt.Fprintf(os.Stdout, "\033[%d;%dH", state.numPromptLines, curCol)
+	state.promptRow = state.numPromptLines
 }
 
 var tokenBuf []Token
@@ -1418,10 +1425,13 @@ func (state *TermState) printPrompt() error {
 		return fmt.Errorf("Error setting terminal to raw mode: %s", err)
 	}
 
-	_, col, err := state.getCurrentPos()
+	var col int
+	state.promptRow, col, err = state.getCurrentPos()
 	if err != nil {
 		return fmt.Errorf("Error getting cursor position: %s", err)
 	}
+
+	state.UpdateSize()
 
 	state.promptLength =  col - 1
 	return nil
