@@ -475,10 +475,6 @@ type TermState struct {
 	pathBinManager IPathBinManager
 }
 
-func (s *TermState) UpdateSize() {
-	s.numCols, s.numRows, _ = term.GetSize(s.stdInFd)
-}
-
 func (s *TermState) Render() {
 	s.renderBuffer = s.renderBuffer[:0] // Clear the buffer
 	// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
@@ -642,6 +638,7 @@ func (state *TermState) ClearScreen() {
 
 	rowsToScroll := curRow - state.numPromptLines
 	state.ScrollDown(rowsToScroll)
+	fmt.Fprintf(state.f, "Cleared screen, scrolled %d rows\n", rowsToScroll)
 	// fmt.Fprintf(state.f, "%d %d %d\n", curRow, state.numPromptLines, rowsToScroll)
 
 	// // Move cursor to bottom of terminal, if you have a terminal that has over 10000 lines, I'm sorry.

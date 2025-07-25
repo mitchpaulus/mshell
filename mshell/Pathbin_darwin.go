@@ -5,6 +5,8 @@ import (
 	"strings"
 	"sort"
 	"os/exec"
+	"fmt"
+	"golang.org/x/term"
 )
 
 type PathBinManager struct {
@@ -179,4 +181,12 @@ func (pbm *PathBinManager) SetupCommand(allArgs []string) (*exec.Cmd) {
 
 func IsPathSeparator(c uint8) bool {
 	return c == '/'
+}
+
+func (s *TermState) UpdateSize() {
+	var err error
+	s.numCols, s.numRows, err = term.GetSize(s.stdInFd)
+	if err != nil {
+		fmt.Fprintf(s.f, "Error getting terminal size for FD %d: %s\n", s.stdOutFd, err)
+	}
 }

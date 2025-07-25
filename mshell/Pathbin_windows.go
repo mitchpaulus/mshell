@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"syscall"
+	"golang.org/x/sys/windows"
+	"fmt"
 )
 
 type PathBinManager struct {
@@ -237,4 +239,17 @@ func (pbm *PathBinManager) SetupCommand(allArgs []string) (*exec.Cmd) {
 func IsPathSeparator(c uint8) bool {
 	// Windows uses backslash as path separator
 	return c == '\\' || c == '/'
+}
+
+
+func (s *TermState) UpdateSize() {
+	stdout := windows.Handle(os.Stdout.Fd())
+	var info windows.ConsoleScreenBufferInfo
+	var err error
+	err = windows.GetConsoleScreenBufferInfo(stdout, &info)
+	if err != nil {
+		fmt.Fprintf(s.f, "Error getting console screen buffer info for FD %d: %s\n", stdout, err)
+	}
+	s.numCols = int(info.Window.Right - info.Window.Left + 1)
+	s.numRows = int(info.Window.Bottom - info.Window.Top + 1)
 }
