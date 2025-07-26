@@ -74,6 +74,7 @@ const (
 	DOUBLEDASH
 	AMPERSAND
 	PATH
+	UNFINISHEDPATH
 	COMMA
 	DATETIME
 	FORMATSTRING
@@ -205,6 +206,8 @@ func (t TokenType) String() string {
 		return "AMPERSAND"
 	case PATH:
 		return "PATH"
+	case UNFINISHEDPATH:
+		return "UNFINISHEDPATH"
 	case COMMA:
 		return "COMMA"
 	case DATETIME:
@@ -925,8 +928,12 @@ func (l *Lexer) parsePath() Token {
 	inEscape := false
 	for {
 		if l.atEnd() {
-			fmt.Fprintf(os.Stderr, "%d:%d: Unterminated path.\n", l.line, l.col)
-			return l.makeToken(ERROR)
+			if l.allowUnterminatedString {
+				return l.makeToken(UNFINISHEDPATH)
+			} else {
+				fmt.Fprintf(os.Stderr, "%d:%d: Unterminated path.\n", l.line, l.col)
+				return l.makeToken(ERROR)
+			}
 		}
 		c := l.advance()
 		if inEscape {

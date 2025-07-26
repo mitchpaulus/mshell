@@ -1957,7 +1957,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 
 					lastTokenLength = len(lastToken.Lexeme)
 
-					if lastToken.Type == UNFINISHEDSTRING || lastToken.Type == UNFINISHEDSINGLEQUOTESTRING {
+					if lastToken.Type == UNFINISHEDSTRING || lastToken.Type == UNFINISHEDSINGLEQUOTESTRING || lastToken.Type == UNFINISHEDPATH {
 						prefix = string(state.currentCommand[zeroBasedStartOfToken + 1:state.index])
 					} else {
 						prefix = string(state.currentCommand[zeroBasedStartOfToken:state.index])
@@ -2092,7 +2092,6 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				// Replace the prefex
 				state.replaceText(insertString, state.index - lastTokenLength, state.index)
 			} else {
-
 				// Print out the longest common prefix
 				longestCommonPrefix := getLongestCommonPrefix(matches)
 				fmt.Fprintf(state.f, "Longest common prefix: '%s'\n", longestCommonPrefix)
