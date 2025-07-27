@@ -693,6 +693,14 @@ type AsciiToken struct {
 	Char byte
 }
 
+type MutliByteToken struct {
+	Char rune
+}
+
+func (t MutliByteToken) String() string {
+	return fmt.Sprintf("MultiByteToken: %d %s", t.Char, string(t.Char))
+}
+
 func (t AsciiToken) String() string {
 	return fmt.Sprintf("AsciiToken: %d %c", t.Char, t.Char)
 }
@@ -1061,6 +1069,107 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 				// return AsciiToken{Char: 27}
 				// return AsciiToken{Char: c}
 			}
+		} else if c >= 192 && c <= 223 { // 192-223 are the first byte of a 2-byte UTF-8 character{
+			// Read the next byte
+			var b2 byte
+			b2, err = stdinReaderState.ReadByte()
+			if err != nil {
+				if err == io.EOF {
+					return EofTerminalToken{}, nil
+				} else {
+					return nil, fmt.Errorf("Error reading from stdin: %s", err)
+				}
+			}
+
+			if b2 >= 128 && b2 <= 191 { // 128-191 are the second byte of a 2-byte UTF-8 character
+				fmt.Fprintf(state.f, "Got 2-byte UTF-8 character: %d %d\n", c, b2)
+				// Return the 2-byte UTF-8 character as a single token
+				// Convert to rune
+				r := rune((int32(b2) & 0x3F) | ((int32(c) & 0x1F) << 6))
+				return MutliByteToken{Char: r}, nil
+			}
+		} else if c >= 224 && c <= 239 { // 224-239 are the first byte of a 3-byte UTF-8 character
+			// Read the next two bytes
+			var b2, b3 byte
+			b2, err = stdinReaderState.ReadByte()
+			if err != nil {
+				if err == io.EOF {
+					return EofTerminalToken{}, nil
+				} else {
+					return nil, fmt.Errorf("Error reading from stdin: %s", err)
+				}
+			}
+			if b2 >= 128 && b2 <= 191 { // 128-191 are the second byte of a 2-byte UTF-8 character
+				b3, err = stdinReaderState.ReadByte()
+				if err != nil {
+					if err == io.EOF {
+						return EofTerminalToken{}, nil
+					} else {
+						return nil, fmt.Errorf("Error reading from stdin: %s", err)
+					}
+				}
+
+				if b3 >= 128 && b3 <= 191 { // 128-191 are the third byte of a 3-byte UTF-8 character
+					fmt.Fprintf(state.f, "Got 3-byte UTF-8 character: %d %d %d (%x %x %x)\n", c, b2, b3, c, b2, b3)
+					// Return the 3-byte UTF-8 character as a single token
+					// Convert to rune
+					r := rune((int32(c & 0x0F)<<12) | (int32(b2&0x3F)<<6) | int32(b3&0x3F))
+					return MutliByteToken{Char: r}, nil
+				} else {
+					fmt.Fprintf(state.f, "Unknown second byte for 3-byte UTF-8 character: %d\n", b2)
+					// return AsciiToken{Char: c}
+					return UnknownToken{}, nil
+				}
+			}
+		} else if c >= 240 && c <= 247 { // 240-247 are the first byte of a 4-byte UTF-8 character
+			// Read the next three bytes
+			var b2, b3, b4 byte
+			b2, err = stdinReaderState.ReadByte()
+			if err != nil {
+				if err == io.EOF {
+					return EofTerminalToken{}, nil
+				} else {
+					return nil, fmt.Errorf("Error reading from stdin: %s", err)
+				}
+			}
+			if b2 >= 128 && b2 <= 191 { // 128-191 are the second byte of a 2-byte UTF-8 character
+				b3, err = stdinReaderState.ReadByte()
+				if err != nil {
+					if err == io.EOF {
+						return EofTerminalToken{}, nil
+					} else {
+						return nil, fmt.Errorf("Error reading from stdin: %s", err)
+					}
+				}
+
+				if b3 >= 128 && b3 <= 191 { // 128-191 are the third byte of a 3-byte UTF-8 character
+					b4, err = stdinReaderState.ReadByte()
+					if err != nil {
+						if err == io.EOF {
+							return EofTerminalToken{}, nil
+						} else {
+							return nil, fmt.Errorf("Error reading from stdin: %s", err)
+						}
+					}
+
+					if b4 >= 128 && b4 <= 191 { // 128-191 are the fourth byte of a 4-byte UTF-8 character
+						fmt.Fprintf(state.f, "Got 4-byte UTF-8 character: %d %d %d %d\n", c, b2, b3, b4)
+						// Return the 4-byte UTF-8 character as a single token
+						// Convert to rune
+						r := rune((int32(c & 0x07) << 18) | (int32(b2 & 0x3F) << 12) | (int32(b3 & 0x3F) << 6) | int32(b4 & 0x3F))
+						return MutliByteToken{Char: r}, nil
+					} else {
+						fmt.Fprintf(state.f, "Unknown third byte for 4-byte UTF-8 character: %d\n", b3)
+						// return AsciiToken{Char: c}
+						return UnknownToken{}, nil
+					}
+				} else {
+					fmt.Fprintf(state.f, "Unknown second byte for 3-byte UTF-8 character: %d\n", b2)
+					// return AsciiToken{Char: c}
+					return UnknownToken{}, nil
+				}
+			}
+
 		} else {
 			fmt.Fprintf(state.f, "Unknown start byte: %d\n", c)
 			// return AsciiToken{Char: c}
@@ -1626,6 +1735,7 @@ func cleanupTempFiles() {
 	}
 }
 
+
 // This function pushes characters to the terminal and to the backing command.
 func (state *TermState) PushChars(chars []rune) {
 	// Push at the correct index
@@ -1714,10 +1824,11 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 	var err error
 
 	switch t := token.(type) {
+	case MutliByteToken:
+		state.PushChars([]rune{t.Char})
 	case AsciiToken:
 		// If the character is a printable ASCII character, handle it.
 		if t.Char > 32 && t.Char < 127 {
-
 			if t.Char == ';' {
 				// Check next token, if it's a 'r', open REPOs with lf
 				// TODO: Handle EOF token case
