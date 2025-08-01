@@ -11,7 +11,17 @@ Double quoted strings have the following escape sequences:
 - `\\`: Backslash
 - `\"`: Double quote
 
-No escaping is done within single quoted strings.
+No escaping is done within single quoted strings or paths.
+
+### Paths
+
+Since paths are such a common object to deal with in shell scripts, mshell has a dedicated type for paths.
+
+Paths are created by wrapping a string in backticks. No escaping is done. If you need to escape, then use string interpolation and `toPath`.
+
+```mshell
+`/path/to/file`
+```
 
 ### Booleans
 

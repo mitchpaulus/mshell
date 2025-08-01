@@ -3447,11 +3447,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 				}
 				stack.Push(&MShellFloat{floatVal})
 			} else if t.Type == PATH { // Token Type
-				parsed, err := ParseRawPath(t.Lexeme)
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing path: %s\n", t.Line, t.Column, err.Error()))
-				}
-				stack.Push(&MShellPath { parsed })
+				stack.Push(&MShellPath { t.Lexeme[1:len(t.Lexeme)-1] })
 			} else if t.Type == DATETIME { // Token Type
 				year, _ := strconv.Atoi(t.Lexeme[0:4])
 				month, _ := strconv.Atoi(t.Lexeme[5:7])
