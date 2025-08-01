@@ -157,7 +157,7 @@ func (m Maybe) CastString() (string, error) {
 type MShellDateTime struct {
 	// TODO: replace with my own simpler int64 based on the Calendrical Calculation book.
 	Time time.Time
-	Token Token
+	OriginalString string
 }
 
 func (obj *MShellDateTime) TypeName() string {
@@ -181,7 +181,11 @@ func (obj *MShellDateTime) CommandLine() string {
 }
 
 func (obj *MShellDateTime) DebugString() string {
-	return obj.Token.Lexeme
+	if len(obj.OriginalString) > 0 {
+		return obj.OriginalString
+	} else {
+		return obj.Iso8601()
+	}
 }
 
 func (obj *MShellDateTime) Index(index int) (MShellObject, error) {
@@ -205,8 +209,8 @@ func (obj *MShellDateTime) ToJson() string {
 }
 
 func (obj *MShellDateTime) ToString() string {
-	if obj.Token.Type == DATETIME {
-		return obj.Token.Lexeme
+	if len(obj.OriginalString) > 0 {
+		return obj.OriginalString
 	} else {
 		return obj.Iso8601()
 	}

@@ -214,6 +214,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `dow`: Get day of week from date (0-6). Sunday = 0, .., Saturday = 6 `(date -- int)`
 - `toUnixTime`: Get unix time from date `(date -- int)`
 - `fromUnixTime`: Get date from unix time int `(date -- int)`
+- `addDays`: Add days to date `(date numeric -- date)`
 
 ## Regular Expression Functions
 

@@ -36,3 +36,7 @@ end
 2025-01-29 "Jan 29, 2025" " < " (<) testType
 2025-02-01 "Jan 29, 2025" " < " (<) testType
 2025-01-10 "Jan 29, 2025" " < " (<) testType
+
+2025-08-01 1 addDays isoDateFmt wl
+2025-08-31 1 addDays isoDateFmt wl
+2025-12-31 1 addDays isoDateFmt wl

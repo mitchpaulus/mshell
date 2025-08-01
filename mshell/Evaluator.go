@@ -1160,7 +1160,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						stack.Push(&Maybe{ obj: nil })
 						// return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing date time '%s': %s\n", t.Line, t.Column, dateStr, err.Error()))
 					} else {
-						dt := MShellDateTime{Time: parsedTime, Token: t}
+						dt := MShellDateTime{Time: parsedTime, OriginalString: t.Lexeme}
 						stack.Push(&Maybe{ obj: &dt })
 					}
 				} else if t.Lexeme == "files" || t.Lexeme == "dirs" {
@@ -1287,7 +1287,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					stack.Push(&MShellString{tmpfile.Name()})
 				} else if t.Lexeme == "date" {
 					// Drop current local date time onto the stack
-					stack.Push(&MShellDateTime{Time: time.Now(), Token: t})
+					stack.Push(&MShellDateTime{Time: time.Now(), OriginalString: t.Lexeme})
 				} else if t.Lexeme == "day" {
 					dateTimeObj, err := stack.Pop()
 					if err != nil {
@@ -1591,7 +1591,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert a %s (%s) to a datetime.\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
 					}
 
-					stack.Push(&MShellDateTime{Time: time.Unix(int64(intVal.Value), 0).UTC(), Token: t})
+					stack.Push(&MShellDateTime{Time: time.Unix(int64(intVal.Value), 0).UTC(), OriginalString: t.Lexeme})
 				} else if t.Lexeme == "writeFile" || t.Lexeme == "appendFile" {
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
@@ -2103,7 +2103,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 
 					dateTimeObj.Time = dateTimeObj.Time.In(cstLocation)
-					dateTimeObj.Token = t
+					dateTimeObj.OriginalString = ""
 					stack.Push(dateTimeObj)
 				} else if t.Lexeme == "round" {
 					// Round a float to the nearest integer
@@ -2322,6 +2322,26 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						stack.Push(obj1) // Push the default value
 					} else {
 						stack.Push(maybeObj.obj)
+					}
+				} else if t.Lexeme == "addDays" {
+					// Add days to a date
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					if !obj1.IsNumeric() {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The first parameter in 'addDays' is expected to be numeric, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
+					}
+
+					if dt, ok := obj2.(*MShellDateTime); !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second parameter in 'addDays' is expected to be a date, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
+					} else {
+						// Add the days to the date
+						daysToAdd := obj1.FloatNumeric()
+						newTime := dt.Time.Add(time.Duration(daysToAdd * float64(24 * time.Hour)))
+						newDateTime := &MShellDateTime{Time: newTime, OriginalString: ""}
+						stack.Push(newDateTime)
 					}
 				}  else { // last new function
 					// If we aren't in a list context, throw an error.
@@ -3469,7 +3489,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 				}
 
 				dt := time.Date(year, time.Month(month), day, hour, minute, second, 0, time.UTC)
-				stack.Push(&MShellDateTime{Time: dt, Token: t})
+				stack.Push(&MShellDateTime{Time: dt, OriginalString: t.Lexeme})
 			} else if t.Type == FORMATSTRING { // Token Type
 				parsedString, err := state.EvaluateFormatString(t.Lexeme, context, definitions, callStackItem)
 				if err != nil {
