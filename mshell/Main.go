@@ -2054,11 +2054,15 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			state.l.resetInput(string(state.currentCommand[0:state.index]))
 			tokens := state.l.Tokenize()
 			lastTokenLength := 0
+
+			var lastToken Token
+
 			if len(tokens) == 1 { // 1 token = EOF
 				prefix = ""
+				lastToken = tokens[0]
 			} else {
-				lastToken := tokens[len(tokens)-2]
 				fmt.Fprintf(state.f, "Last token: %s\n", lastToken)
+				lastToken := tokens[len(tokens)-2]
 
 				zeroBasedStartOfToken := lastToken.Column - 1
 

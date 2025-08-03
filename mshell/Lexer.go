@@ -284,6 +284,7 @@ func NewLexer(input string) *Lexer {
 	}
 }
 
+// Resets lexer with new input string.
 func (l *Lexer) resetInput(input string) {
 	l.input = []rune(input)
 	l.line = 1

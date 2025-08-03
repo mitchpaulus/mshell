@@ -136,6 +136,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `sha256sum`: Get SHA256 checksum of file. `(path -- str)`
 - `files`: Get list of files in current directory. Not recursive. `(str -- [str])`
 - `dirs`: Get list of directories in current directory. Not recursive. `(str -- [str])`
+- `isCmd`: Check whether item is a command that can be found in PATH. `(str -- bool)`
 
 ## Math Functions
 

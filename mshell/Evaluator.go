@@ -2343,7 +2343,22 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						newDateTime := &MShellDateTime{Time: newTime, OriginalString: ""}
 						stack.Push(newDateTime)
 					}
-				}  else { // last new function
+				} else if t.Lexeme == "isCmd" {
+					// Check if the top of the stack is a known command in the PATH
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
+					}
+
+					objStr, err := obj.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot check if a %s is a command.\n", t.Line, t.Column, obj.TypeName()))
+					}
+
+					// Check if the command is in the PATH
+					_, found := context.Pbm.Lookup(objStr)
+					stack.Push(&MShellBool{found})
+				} else { // last new function
 					// If we aren't in a list context, throw an error.
 					// Nearly always this is unintended.
 					if callStackItem.CallStackType != CALLSTACKLIST {
