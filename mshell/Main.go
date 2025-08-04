@@ -1444,29 +1444,53 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 		if isInPath {
 			firstTokenIsCmd = true
 		} else {
+			// This is a secondary check to capture things like 'cd'.
 			_, firstTokenIsCmd = knownCommands[literalStr]
 		}
 
-		if ((strings.Contains(literalStr, string(os.PathSeparator)) &&  state.pathBinManager.IsExecutableFile(literalStr)) || firstTokenIsCmd) && !IsDefinitionDefined(literalStr, state.stdLibDefs) {
+		hasPipe := false
+		if ((strings.Contains(literalStr, string(os.PathSeparator)) && state.pathBinManager.IsExecutableFile(literalStr)) || firstTokenIsCmd) && !IsDefinitionDefined(literalStr, state.stdLibDefs) {
 			tokenBufBuilder.Reset()
-			tokenBufBuilder.WriteString("[")
-
-			tokenBufBuilder.WriteString("'" + literalStr + "'")
-
 			// Clear token buffer
 			tokenBuf = tokenBuf[:0]
-
-			// Consume all tokens
+			tokenBuf = append(tokenBuf, p.curr)
+			// Consume all tokens up until EOF or PIPE
 			for p.NextToken(); p.curr.Type != EOF; p.NextToken() {
+				if p.curr.Type == PIPE {
+					hasPipe = true
+				}
 				tokenBuf = append(tokenBuf, p.curr)
 			}
 
-			for _, t := range tokenBuf {
-				tokenBufBuilder.WriteString(" ")
-				tokenBufBuilder.WriteString(t.Lexeme)
+			tokenBufBuilder.WriteString("[")
+			if hasPipe {
+				// If we have a PIPE, we need to split the command into multiple commands.
+				tokenBufBuilder.WriteString("[")
+				tokenBufBuilder.WriteString("'" + literalStr + "'")
+				for _, t := range tokenBuf[1:] {
+					if t.Type == PIPE {
+						tokenBufBuilder.WriteString("] [")
+					} else {
+						tokenBufBuilder.WriteString(" ")
+						tokenBufBuilder.WriteString(t.Lexeme)
+					}
+				}
+				tokenBufBuilder.WriteString("]")
+			} else {
+				tokenBufBuilder.WriteString("'" + literalStr + "'")
+				for _, t := range tokenBuf[1:] {
+					tokenBufBuilder.WriteString(" ")
+					tokenBufBuilder.WriteString(t.Lexeme)
+				}
+			}
+			tokenBufBuilder.WriteString("]")
+
+			if hasPipe {
+				tokenBufBuilder.WriteString("|;")
+			} else {
+				tokenBufBuilder.WriteString(";")
 			}
 
-			tokenBufBuilder.WriteString("];")
 			currentCommandStr = tokenBufBuilder.String()
 			fmt.Fprintf(state.f, "Command: %s\n", currentCommandStr)
 			l.resetInput(currentCommandStr)
