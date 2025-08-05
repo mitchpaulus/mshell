@@ -14,3 +14,6 @@
 @head "children" get? :0: title!
 @title "tag" get? wl
 @title "text" get? wl
+
+"Testing descendents.." wl
+@html htmlDescendents ("tag" get? wl) each

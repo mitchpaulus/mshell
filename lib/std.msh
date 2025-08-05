@@ -221,3 +221,14 @@ def seq (int -- [int])
 
     @seq-accum
 end
+
+def htmlDescendents (dict -- [dict])
+    [] htmlDescendentsAcc
+end
+
+# Accumulator version
+def htmlDescendentsAcc (dict [dict] -- [dict])
+    accum! node!
+    @node "children" get? (c! @c @accum htmlDescendentsAcc drop) each
+    @accum @node append
+end
