@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"sort"
 	"slices"
+	"golang.org/x/net/html"
 )
 
 // TruncateMiddle truncates a string to a maximum length, adding "..." in the middle if necessary.
@@ -1792,3 +1793,38 @@ func (obj *MShellFloat) CastString() (string, error) {
 }
 
 // }}}
+
+type NodeDict struct {
+    Tag      string                 `json:"tag"`
+    Attrs    map[string]string      `json:"attrs"`
+    Children []NodeDict             `json:"children"`
+    Text     string                 `json:"text"`
+}
+
+func nodeToDict(n *html.Node) *MShellDict {
+    d := NewDict()
+	attrDict := NewDict()
+	childList := NewList(0)
+
+	d.Items["attr"] = attrDict
+	d.Items["tag"] = &MShellString{Content: n.Data}
+	d.Items["children"] = childList
+
+	for _, attr := range n.Attr {
+		attrDict.Items[attr.Key] = &MShellString{Content: attr.Val}
+    }
+
+	textBuilder := strings.Builder{}
+
+    for c := n.FirstChild; c != nil; c = c.NextSibling {
+        if c.Type == html.TextNode {
+			textBuilder.WriteString(strings.TrimSpace(c.Data))
+            // d.Text += strings.TrimSpace(c.Data)
+        } else if c.Type == html.ElementNode {
+            d.Items["children"].(*MShellList).Items = append(childList.Items, nodeToDict(c))
+        }
+    }
+
+	d.Items["text"] = &MShellString{Content: textBuilder.String()}
+    return d
+}

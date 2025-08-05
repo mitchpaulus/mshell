@@ -1,0 +1,16 @@
+"<html name=\"html-name\">
+<head>
+    <title>My HTML Document</title>
+</head>
+<body>
+    <p>This is a simple HTML document.</p>
+</body>
+</html>" parseHtml html!
+
+# @html str wl
+@html "children" get? :0: # HTML tag
+"children" get? :0: head! @head "tag" get? wl # head
+
+@head "children" get? :0: title!
+@title "tag" get? wl
+@title "text" get? wl

@@ -25,6 +25,7 @@ import (
 	// "golang.org/x/term"
 	_ "time/tzdata"
 	"unicode"
+	"golang.org/x/net/html"
 )
 
 type MShellStack []MShellObject
@@ -2358,6 +2359,38 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					// Check if the command is in the PATH
 					_, found := context.Pbm.Lookup(objStr)
 					stack.Push(&MShellBool{found})
+				} else if t.Lexeme == "parseHtml" {
+					// Parse HTML from a string or file
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'parseHtml' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					var reader io.Reader
+					switch obj1.(type) {
+					case *MShellPath, *MShellLiteral:
+						path, _ := obj1.CastString()
+						file, err := os.Open(path)
+						if err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error opening file %s: %s\n", t.Line, t.Column, path, err.Error()))
+						}
+						defer file.Close()
+
+						reader = file
+					case *MShellString:
+						// Create a new HTML reader directly from the string contents
+						reader = strings.NewReader(obj1.(*MShellString).Content)
+					}
+
+					// Parse file with html.Parse
+					doc, err := html.Parse(reader)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing HTML %s: %s\n", t.Line, t.Column, err.Error()))
+					}
+
+					// Convert the parsed HTML document to a dictionary
+					d := nodeToDict(doc)
+					stack.Push(d)
 				} else { // last new function
 					// If we aren't in a list context, throw an error.
 					// Nearly always this is unintended.
