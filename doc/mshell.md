@@ -196,7 +196,9 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `getDef`: Get value from dictionary by key. Returns default value if key not found. `(dict str a -- a)`
 - `set`: Set value in dictionary by key. `(dict str a -- dict)`
 - `setd`: Set value in dictionary by key. Drop dict after. `(dict str a --)`
-- `keys`: Get keys from dictionary. `(dict -- [str])`
+- `keys`: Get keys from dictionary. Sorted. `(dict -- [str])`
+- `values`: Get values from dictionary. Sorted. `(dict -- [str])`
+- `keyValues`: Get key/value pairs from dictionary as a list of lists. Each inner list is a two-element list with the key and value. Sorted by key. `(dict -- [[str a]])`
 - `in`: Check if key exists in dictionary. `(dict str -- bool)`
 
 ## Date Functions

@@ -2391,6 +2391,54 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					// Convert the parsed HTML document to a dictionary
 					d := nodeToDict(doc)
 					stack.Push(d)
+				} else if t.Lexeme == "inc" {
+					// Increment an integer on the top of the stack, but do it as a reference.
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'inc' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					intObj, ok := obj.(*MShellInt)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot increment a %s.\n", t.Line, t.Column, obj.TypeName()))
+					}
+
+					// Increment the integer
+					intObj.Value++
+					stack.Push(intObj)
+				} else if t.Lexeme == "keyValues" {
+					// Get the keys and values of a dictionary as a list of lists
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'keyValues' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					dict, ok := obj.(*MShellDict)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot get the key-values of a %s.\n", t.Line, t.Column, obj.TypeName()))
+					}
+
+					// Create a new list and add the key-value pairs to it
+					newList := NewList(len(dict.Items))
+
+					// Get keys and sort them
+					keys := make([]string, 0, len(dict.Items))
+					for key := range dict.Items {
+						keys = append(keys, key)
+					}
+
+					sort.Strings(keys)
+
+					// Add each key-value pair as a list
+					for i, key := range keys {
+						// Create a new list for the key-value pair
+						pairList := NewList(2)
+						pairList.Items[0] = &MShellString{key} // Key
+						pairList.Items[1] = dict.Items[key]    // Value
+						newList.Items[i] = pairList
+					}
+
+					stack.Push(newList)
 				} else { // last new function
 					// If we aren't in a list context, throw an error.
 					// Nearly always this is unintended.
