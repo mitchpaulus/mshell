@@ -2385,7 +2385,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					// Parse file with html.Parse
 					doc, err := html.Parse(reader)
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing HTML %s: %s\n", t.Line, t.Column, err.Error()))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing HTML: %s\n", t.Line, t.Column, err.Error()))
 					}
 
 					// Convert the parsed HTML document to a dictionary
