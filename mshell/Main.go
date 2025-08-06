@@ -21,6 +21,7 @@ import (
 	"encoding/binary"
 	"github.com/cespare/xxhash"
 	"unicode/utf8"
+	"html"
 )
 
 type CliCommand int
@@ -30,6 +31,7 @@ const (
 	CLIPARSE
 	CLITYPECHECK
 	CLIEXECUTE
+	CLIHTML
 )
 
 var tempFiles []string
@@ -138,11 +140,14 @@ func main() {
 		} else if arg == "--parse" {
 			command = CLIPARSE
 			// printParse = true
+		} else if arg == "--html" {
+			command = CLIHTML
 		} else if arg == "-h" || arg == "--help" {
 			fmt.Println("Usage: mshell [OPTION].. FILE [ARG]..")
 			fmt.Println("Usage: mshell [OPTION].. [ARG].. < FILE")
 			fmt.Println("Usage: mshell [OPTION].. -c INPUT [ARG]..")
 			fmt.Println("Options:")
+			fmt.Println("  --html     Print HTML representation of the input")
 			fmt.Println("  --lex      Print the tokens of the input")
 			fmt.Println("  --parse    Print the parsed Abstract Syntax Tree")
 			fmt.Println("  -h, --help Print this help message")
@@ -182,6 +187,22 @@ func main() {
 
 	// isTerminal := term.IsTerminal(fd)
 	// fmt.Fprintf(os.Stdout, "Is terminal: %t %d\n", isTerminal, fd)
+	if command == CLIHTML {
+		if !inputSet {
+			inputBytes, err := io.ReadAll(os.Stdin)
+			if err != nil {
+				fmt.Println(err)
+				// Set exit code to 1
+				os.Exit(1)
+				return
+			}
+			input = string(inputBytes)
+		}
+
+		html := HtmlFromInput(input)
+		fmt.Fprintf(os.Stdout, "%s", html)
+		return
+	}
 
 	if len(input) == 0 && term.IsTerminal(stdOutFd) {
 		// fmt.Fprintf(os.Stdout, "Got here\n")
@@ -2466,4 +2487,27 @@ func UnmodifiedDir(path string) string {
 		}
 	}
 	return ""
+}
+
+func HtmlFromInput(input string) string {
+	l := NewLexer(input)
+	l.emitWhitespace = true
+
+	tokens := l.Tokenize()
+
+	sb := strings.Builder{}
+	sb.WriteString("<code>")
+	for _, t := range tokens {
+		if t.Type == WHITESPACE {
+			sb.WriteString(t.Lexeme)
+		} else {
+			sb.WriteString("<span class=\"mshell")
+			sb.WriteString(t.Type.String())
+			sb.WriteString("\">")
+			sb.WriteString(html.EscapeString(t.Lexeme))
+			sb.WriteString("</span>")
+		}
+	}
+	sb.WriteString("</code>")
+	return sb.String()
 }

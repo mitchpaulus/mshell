@@ -84,6 +84,7 @@ const (
 	NOTEQUAL // !=
 	BANG // !
 	STDAPPEND // >>
+	WHITESPACE
 )
 
 func (t TokenType) String() string {
@@ -226,6 +227,8 @@ func (t TokenType) String() string {
 		return "BANG"
 	case STDAPPEND:
 		return "STDAPPEND"
+	case WHITESPACE:
+		return "WHITESPACE"
 	default:
 		return "UNKNOWN"
 	}
@@ -267,6 +270,7 @@ type Lexer struct {
 	line    int // One-based line number.
 	input   []rune
 	allowUnterminatedString bool
+	emitWhitespace bool // If true, will emit whitespace tokens.
 }
 
 func (l *Lexer) DebugStr() {
@@ -281,6 +285,7 @@ func NewLexer(input string) *Lexer {
 		current: 0,
 		col: 0,
 		allowUnterminatedString: false,
+		emitWhitespace: false,
 	}
 }
 
@@ -498,7 +503,12 @@ func (l *Lexer) checkKeyword(start int, rest string, tokenType TokenType) TokenT
 }
 
 func (l *Lexer) scanToken() Token {
+	l.start = l.current
 	l.eatWhitespace()
+	if l.emitWhitespace && l.curLen() > 0 {
+		return l.makeToken(WHITESPACE)
+	}
+
 	l.start = l.current
 	if l.atEnd() {
 		return l.makeToken(EOF)
