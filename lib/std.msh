@@ -191,6 +191,10 @@ def isoDateFmt (date -- str)
     "2006-01-02" dateFmt
 end
 
+def isoDateTimeFmt (date -- str)
+    "2006-01-02T15:04" dateFmt
+end
+
 def zip ([a] [b] (a b -- c) -- [c])
     quote! list2! list1!
     @list1 len @list2 len min2 length!
