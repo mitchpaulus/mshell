@@ -44,6 +44,12 @@ No commas are required between elements.
 [1 2 3]
 ```
 
+Lists can be added together with the `+` operator. The result is a new list object.
+
+```mshell
+[1 2] [3 4] + # [1 2 3 4]
+```
+
 ### Dictionaries/Associative Arrays
 
 mshell has the concept of dictionaries or associative arrays, but only with string keys.
@@ -158,6 +164,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `wsplit`: Split string into list of strings by runs of whitespace. (str -- [str])
 - `join`: Join list of strings into a single string, (list delimiter -- str)
 - `in`: Check for substring in string. (totalString subString -- bool)
+- `index`: Get index of first occurrence of substring in string. Returns Maybe[int] with None for the substring not being found. `(str str -- Maybe[int])`
 - `tab`: Puts a tab character on the stack `( -- str)`
 - `tsplit`: Split string into list of strings by tabs. `(str -- [str])`
 - `trim`: Trim whitespace from string. `(str -- str)`
@@ -176,6 +183,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `map`: Map a quotation over a list, `([a] (a -- b) -- [b])`
 - `each`: Execute a quotation for each element in a list, `([a] (a -- ) -- )`
 - `del`: Delete element from list, `(list index -- list)` or `(index list -- list)`
+- `extend`: Extends an existing list with items from another list. Difference between this and `+` is that it modifies the original list in-place. `(originalList toAddList -- list)`
 - `insert`: Insert element into list, `(list element index -- list)`
 - `setAt`: Set element at index, `(list element index -- list)`
 - `nth`: Nth element of list (0-based) `([a] int -- a)`

@@ -2439,6 +2439,50 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 
 					stack.Push(newList)
+				} else if t.Lexeme == "extend" {
+					// Extend a list with another list in place, create new list object
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					listObj, ok := obj1.(*MShellList)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The first parameter in 'extend' is expected to be a list, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
+					}
+
+					extendListObj, ok := obj2.(*MShellList)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second parameter in 'extend' is expected to be a list, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
+					}
+
+					for _, item := range listObj.Items {
+						extendListObj.Items = append(extendListObj.Items, item)
+					}
+					stack.Push(extendListObj)
+				} else if t.Lexeme == "index" {
+					// Find the index of a substring in a string
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					subStr, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The first parameter in 'indexOf' is expected to be stringable, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
+					}
+
+					str, err := obj2.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second parameter in 'indexOf' is expected to be stringable, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
+					}
+
+					index := strings.Index(str, subStr)
+					if index == -1 {
+						stack.Push(&Maybe{obj: nil}) // No match found
+					} else {
+						stack.Push(&Maybe{obj: &MShellInt{Value: index}})
+					}
 				} else { // last new function
 					// If we aren't in a list context, throw an error.
 					// Nearly always this is unintended.
