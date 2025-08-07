@@ -1161,7 +1161,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						stack.Push(&Maybe{ obj: nil })
 						// return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing date time '%s': %s\n", t.Line, t.Column, dateStr, err.Error()))
 					} else {
-						dt := MShellDateTime{Time: parsedTime, OriginalString: t.Lexeme}
+						dt := MShellDateTime{Time: parsedTime, OriginalString: dateStr}
 						stack.Push(&Maybe{ obj: &dt })
 					}
 				} else if t.Lexeme == "files" || t.Lexeme == "dirs" {
