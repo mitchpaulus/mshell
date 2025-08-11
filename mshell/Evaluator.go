@@ -620,6 +620,8 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						stack.Push(&MShellInt{len(obj.(*MShellList).Items)})
 					case *MShellString:
 						stack.Push(&MShellInt{len(obj.(*MShellString).Content)})
+					case *MShellPath:
+						stack.Push(&MShellInt{len(obj.(*MShellPath).Path)})
 					case *MShellLiteral:
 						stack.Push(&MShellInt{len(obj.(*MShellLiteral).LiteralText)})
 					default:
@@ -1850,7 +1852,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 							// sb.WriteString(fmt.Sprintf("  - '%s'\n", k))
 						// }
 						// return state.FailWithMessage(sb.String())
-						stack.Push(Maybe{ obj: nil })
+						stack.Push(&Maybe{ obj: nil })
 					} else {
 						maybe := Maybe{ obj: value }
 						stack.Push( &maybe )
@@ -2482,6 +2484,69 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						stack.Push(&Maybe{obj: nil}) // No match found
 					} else {
 						stack.Push(&Maybe{obj: &MShellInt{Value: index}})
+					}
+				} else if t.Lexeme == "absPath" {
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'absPath' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					pathStr, err := obj.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert a %s to a path.\n", t.Line, t.Column, obj.TypeName()))
+					}
+
+					// Convert to absolute path
+					absPath, err := filepath.Abs(pathStr)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error converting path '%s' to absolute path: %s\n", t.Line, t.Column, pathStr, err.Error()))
+					}
+
+					stack.Push(&MShellPath{Path: absPath})
+				} else if t.Lexeme == "bind" {
+					// Maybe monad bind
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					// Check if obj1 is a function
+					fn, ok := obj1.(*MShellQuotation)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The first parameter in 'bind' is expected to be a function, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
+					}
+
+					qContext, err := fn.BuildExecutionContext(&context)
+					defer qContext.Close()
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					// Check if obj2 is a Maybe
+					maybeObj, ok := obj2.(*Maybe)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second parameter in 'bind' is expected to be a Maybe, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
+					}
+
+					if maybeObj.obj == nil {
+						stack.Push(maybeObj) // Push the Maybe as is
+					} else {
+						stack.Push(maybeObj.obj) // Push the object inside the Maybe
+						preStackLen := len(*stack)
+						result := state.Evaluate(fn.Tokens, stack, (*qContext), definitions, CallStackItem{fn, "quote", CALLSTACKQUOTE})
+						if result.ShouldPassResultUpStack() {
+							return result
+						}
+						if len(*stack) != preStackLen {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: The function in 'bind' did not return a single value, found %d values.\n", t.Line, t.Column, len(*stack) - preStackLen))
+						}
+						mapResult, _ := stack.Pop()
+
+						mapResultMaybe, ok := mapResult.(*Maybe)
+						if !ok {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: The function in 'bind' did not return a Maybe, found a %s (%s).\n", t.Line, t.Column, mapResult.TypeName(), mapResult.DebugString()))
+						}
+						stack.Push(mapResultMaybe)
 					}
 				} else { // last new function
 					// If we aren't in a list context, throw an error.

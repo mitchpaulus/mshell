@@ -123,6 +123,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 ## File/Directory Functions
 
 - `toPath`: Convert to path. `(str -- path)`
+- `absPath`: Convert to absolute path. `(str|path -- path)`
 - `isDir`: Check if path is a directory. `(path -- bool)`
 - `isFile`: Check if path is a file. `(path -- bool)`
 - `hardLink`: Create a hard link. `(existingSourcePath newTargetPath -- )`
@@ -252,11 +253,15 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
 - `just`: Wrap value in Maybe. `(a -- Maybe[a])`
 - `none`: Create a None Maybe. `( -- Maybe[a])`
 - `?`: If Maybe is None, fail immediately. If it is Just, unwrap and continue. `(Maybe[a] -- a)`
+- `maybe`: Unwrap a Maybe, returning a default value if it is None. `(Maybe[a] a -- a)`
+- `bind`: This is a monadic bind operation. Allows for chaining operations on Maybe values with functions that themselves return Maybe values. `(Maybe[a] (a -- Maybe[b]) -- Maybe[b])`
+- `map`: Map a function over a Maybe value. If the Maybe is None, it returns None. If it is Just, it applies the function to the value. `(Maybe[a] (a -- b) -- Maybe[b])`
 
 ## HTML
 
 - `parseHtml`: Parse HTML from string or file. Returns a dictionary of node data. The dictionaries have keys `tag`, `attr`, `children`, and `text`. `(str | path -- dict)`
 - `htmlDescendents`: Get all descendants of a node. Returns a list of dictionaries with the same keys as `parseHtml`. Includes the starting node.  `(dict -- [dict])`
+- `findByTag`: Find all nodes with a given tag name. `(dict str -- [dict])`
 
 ## Variables
 

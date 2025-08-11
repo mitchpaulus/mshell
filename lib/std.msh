@@ -236,3 +236,7 @@ def htmlDescendentsAcc (dict [dict] -- [dict])
     @node "children" get? (c! @c @accum htmlDescendentsAcc drop) each
     @accum @node append
 end
+
+def findByTag (dict str -- [dict])
+  tag! htmlDescendents ("tag" get (@tag =) map false maybe) filter
+end
