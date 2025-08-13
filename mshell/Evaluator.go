@@ -1594,7 +1594,9 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert a %s (%s) to a datetime.\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
 					}
 
-					stack.Push(&MShellDateTime{Time: time.Unix(int64(intVal.Value), 0).UTC(), OriginalString: t.Lexeme})
+					newTime := time.Unix(int64(intVal.Value), 0).UTC()
+
+					stack.Push(&MShellDateTime{Time: newTime, OriginalString:  newTime.Format("2006-01-02T15:04") })
 				} else if t.Lexeme == "writeFile" || t.Lexeme == "appendFile" {
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
