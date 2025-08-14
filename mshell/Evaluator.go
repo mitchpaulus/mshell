@@ -4462,7 +4462,7 @@ func ParseJsonObjToMshell(jsonObj interface{}) MShellObject {
 			return &MShellBool{false}
 		}
 	case nil:
-		return &MShellInt{0}
+		return &Maybe{obj: nil}
 	default:
 		panic(fmt.Sprintf("Unknown JSON object type: %T", jsonObj))
 		// There should be no other types in JSON, but if there are, we can handle them here
