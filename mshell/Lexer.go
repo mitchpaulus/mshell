@@ -85,6 +85,7 @@ const (
 	BANG // !
 	STDAPPEND // >>
 	WHITESPACE
+	LINECOMMENT
 )
 
 func (t TokenType) String() string {
@@ -229,6 +230,8 @@ func (t TokenType) String() string {
 		return "STDAPPEND"
 	case WHITESPACE:
 		return "WHITESPACE"
+	case LINECOMMENT:
+		return "LINECOMMENT"
 	default:
 		return "UNKNOWN"
 	}
@@ -271,6 +274,7 @@ type Lexer struct {
 	input   []rune
 	allowUnterminatedString bool
 	emitWhitespace bool // If true, will emit whitespace tokens.
+	emitComments bool // If true, will emit comments as tokens.
 }
 
 func (l *Lexer) DebugStr() {
@@ -286,6 +290,7 @@ func NewLexer(input string) *Lexer {
 		col: 0,
 		allowUnterminatedString: false,
 		emitWhitespace: false,
+		emitComments: false,
 	}
 }
 
@@ -503,12 +508,24 @@ func (l *Lexer) checkKeyword(start int, rest string, tokenType TokenType) TokenT
 }
 
 func (l *Lexer) scanToken() Token {
-	l.start = l.current
-	l.eatWhitespace()
-	if l.emitWhitespace && l.curLen() > 0 {
-		return l.makeToken(WHITESPACE)
-	}
+	for {
+		t := l.scanTokenAll()
 
+		if t.Type != WHITESPACE && t.Type != LINECOMMENT {
+			return t
+		}
+
+		if t.Type == WHITESPACE && l.emitWhitespace {
+			return t
+		}
+
+		if t.Type == LINECOMMENT && l.emitComments {
+			return t
+		}
+	}
+}
+
+func (l *Lexer) scanTokenAll() Token {
 	l.start = l.current
 	if l.atEnd() {
 		return l.makeToken(EOF)
@@ -516,19 +533,36 @@ func (l *Lexer) scanToken() Token {
 
 	c := l.advance()
 
-	if c == '"' {
-		return l.parseString()
-	}
-
-	if c == '`' {
-		return l.parsePath()
-	}
-
-	if unicode.IsDigit(c) {
-		return l.parseNumberOrStartIndexer()
-	}
-
 	switch c {
+	case ' ', '\t', '\r', '\v', '\f', 0x85, 0xA0, '\n':
+		for {
+			c := l.peek()
+			switch c {
+			case  ' ', '\t', '\r', '\v', '\f', 0x85, 0xA0:
+				l.advance()
+			// case '#':
+				// for !l.atEnd() && l.peek() != '\n' {
+					// l.advance()
+				// }
+			case '\n':
+				l.line++
+				l.col = 0
+				l.advance()
+			default:
+				return l.makeToken(WHITESPACE)
+			}
+		}
+	case '"':
+		return l.parseString()
+	case '`':
+		return l.parsePath()
+	case '#':
+		for !l.atEnd() && l.peek() != '\n' {
+			l.advance()
+		}
+		return l.makeToken(LINECOMMENT)
+	case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+		return l.parseNumberOrStartIndexer()
 	case '\'':
 		return l.parseSingleQuoteString()
 	case '[':
@@ -975,27 +1009,4 @@ func (l *Lexer) Tokenize() []Token {
 		}
 	}
 	return tokens
-}
-
-func (l *Lexer) eatWhitespace() {
-	for {
-		if l.atEnd() {
-			return
-		}
-		c := l.peek()
-		switch c {
-		case ' ', '\t', '\r', '\v', '\f':
-			l.advance()
-		case '#':
-			for !l.atEnd() && l.peek() != '\n' {
-				l.advance()
-			}
-		case '\n':
-			l.line++
-			l.col = 0
-			l.advance()
-		default:
-			return
-		}
-	}
 }

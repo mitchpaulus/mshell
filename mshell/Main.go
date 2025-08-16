@@ -2492,6 +2492,7 @@ func UnmodifiedDir(path string) string {
 func HtmlFromInput(input string) string {
 	l := NewLexer(input)
 	l.emitWhitespace = true
+	l.emitComments = true
 
 	tokens := l.Tokenize()
 
