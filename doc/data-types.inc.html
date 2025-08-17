@@ -1,0 +1,147 @@
+<p><code>msh</code> has a fixed number of built in data types</p>
+
+<ul>
+    <li><a href="#data-type-literal">Literal</a></li>
+    <li><a href="#data-type-bool">Bool</a></li>
+    <li><a href="#data-type-quotation">Quotation</a></li>
+    <li>List</li>
+    <li>String</li>
+    <li>Integer</li>
+    <li>Float</li>
+    <li>Path</li>
+    <li>Date/Times</li>
+    <li>Dictionary</li>
+    <li>Maybe</li>
+    <li>Pipe</li>
+</ul>
+
+<h1 id="data-type-literal">Literal</h1>
+
+<p>
+Since brevity is a strong design goal, like most shells, many basic tokens can be written as-is.
+But unlike in most shells, we limit where the number of places literal tokens can be used.
+They can only be used in list literals, because that's how commands are input.
+Outside of lists, it will result in a error.
+</p>
+
+<h1 id="data-type-bool">Bool</h1>
+
+<p>Bools are represented by 
+<code><span class="mshellTRUE">true</span></code>
+ and 
+ <code><span class="mshellFALSE">false</span></code>.</p>
+
+
+<h1 id="data-type-quotation">Quotation</h1>
+
+<p>
+Quotations are blocks of code that can be executed.
+They are created by wrapping code in parentheses.
+</p>
+
+<pre>
+<code><span class="mshellLEFT_PAREN">(</span><span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span> <span class="mshellPLUS">+</span><span class="mshellRIGHT_PAREN">)</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+
+<h1 id="data-type-list">List</h1>
+
+<p>
+Lists are created by wrapping elements in square brackets.
+No commas are required between elements.
+</p>
+
+<pre>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span> <span class="mshellINTEGER">3</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+<p>Lists can be added together with the <code>+</code> operator. The result is a new list object.</p>
+
+<pre>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">3</span> <span class="mshellINTEGER">4</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPLUS">+</span> <span class="mshellLINECOMMENT"># [1 2 3 4]</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+
+<h1 id="data-type-string">String</h1>
+
+<p>
+<code>msh</code> has double quotes and single quotes. 
+Double quoted strings have the following escape sequences:
+</p>
+
+<ul>
+  <li> <code>\e</code>: Escape </li>
+  <li> <code>\n</code>: Newline </li>
+  <li> <code>\t</code>: Tab </li>
+  <li> <code>\r</code>: Carriage return </li>
+  <li> <code>\\</code>: Backslash </li>
+  <li> <code>\"</code>: Double quote </li>
+</ul>
+
+<p> No escaping is done within single quoted strings or paths. </p>
+
+<h1 id="data-type-path">Path</h1>
+<p>
+Since paths are such a common object to deal with in shell scripts, mshell has a dedicated type for paths.
+</p>
+<p>
+Paths are created by wrapping the path in backticks. No escaping is done.
+If you need to escape or use string interpolation, then use double quotes and <code>toPath</code>.
+</p>
+
+<pre>
+<code><span class="mshellPATH">`path/to/file`</span>
+<span class="mshellFORMATSTRING">$&#34;my/path/is/built/from/{variable}&#34;</span> <span class="mshellLITERAL">toPath</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+<h1>Dictionary</h1>
+
+<p>
+mshell has the concept of dictionaries or associative arrays, but only with string keys (like <code>awk</code>).
+</p>
+<p>
+Dictionaries can be instantiated using dictionary literals, like:
+</p>
+
+<pre>
+<code><span class="mshellLEFT_CURLY">{</span> <span class="mshellSTRING">&#34;key&#34;</span><span class="mshellCOLON">:</span> <span class="mshellINTEGER">1</span> <span class="mshellRIGHT_CURLY">}</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+<p>
+Be careful with some of the lexing around the colon, as it's used with indexing.
+</p>
+
+<pre>
+<code><span class="mshellLEFT_CURLY">{</span> <span class="mshellSTRING">&#34;key&#34;</span><span class="mshellENDINDEXER">:1</span> <span class="mshellRIGHT_CURLY">}</span> <span class="mshellLINECOMMENT"># Bad because &#39;:1&#39; is treated as index</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+<h1>Date/Time</h1>
+
+<p>
+Date/times can be entered using a literal syntax, in ISO-8601 format.
+</p>
+
+<pre>
+<code><span class="mshellLINECOMMENT"># All are valid</span>
+<span class="mshellDATETIME">2023-10-01</span>
+<span class="mshellDATETIME">2023-10-01T13</span>
+<span class="mshellDATETIME">2023-10-01T13:01</span>
+<span class="mshellDATETIME">2023-10-01T13:01:30</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+
+<p>
+Dates can be subtracted from each other, and the result is a float number of days.
+</p>
+
+<pre>
+<code><span class="mshellDATETIME">2023-10-02</span> <span class="mshellDATETIME">2023-10-01</span> <span class="mshellMINUS">-</span> <span class="mshellLINECOMMENT"># 1.0</span>
+<span class="mshellEOF"></span></code>
+</pre>
