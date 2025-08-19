@@ -4,6 +4,9 @@
   <meta charset="utf-8">
   <title>mshell</title>
   <style>
+    body {
+        margin: 0;
+    }
     .mshellLINECOMMENT {
         color: #008000;
     }
@@ -46,7 +49,8 @@
     }
 
     #content-div {
-        width: 60em;
+        width: 45em;
+        margin-bottom: 10em;
     }
 
     code {
@@ -59,7 +63,22 @@
         <h1>mshell</h1>
         <ul>
           <li><a href="basics.html">Basics</a></li>
-          <li><a href="data-types.html">Data Types</a></li>
+          <li><a href="data-types.html">Data Types</a>
+              <ul>
+                  <li><a href="#data-type-literal">Literal</a></li>
+                  <li><a href="#data-type-bool">Bool</a></li>
+                  <li><a href="#data-type-quotation">Quotation</a></li>
+                  <li><a href="#data-type-list">List</a></li>
+                  <li><a href="#data-type-string">String</a></li>
+                  <li><a href="#data-type-int-and-float">Integer</a></li>
+                  <li><a href="#data-type-int-and-float">Float</a></li>
+                  <li><a href="#data-type-path">Path</a></li>
+                  <li><a href="#data-type-dictionary">Dictionary</a></li>
+                  <li><a href="#data-type-datetime">Date/Time</a></li>
+                  <li><a href="#data-type-maybe">Maybe</a></li>
+                  <li><a href="#data-type-pipe">Pipe</a></li>
+              </ul>
+          </li>
           <li>Executing External Executables</li>
           <li>Functions</li>
         </ul>

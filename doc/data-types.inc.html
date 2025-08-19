@@ -4,16 +4,20 @@
     <li><a href="#data-type-literal">Literal</a></li>
     <li><a href="#data-type-bool">Bool</a></li>
     <li><a href="#data-type-quotation">Quotation</a></li>
-    <li>List</li>
-    <li>String</li>
-    <li>Integer</li>
-    <li>Float</li>
-    <li>Path</li>
-    <li>Date/Times</li>
-    <li>Dictionary</li>
-    <li>Maybe</li>
-    <li>Pipe</li>
+    <li><a href="#data-type-list">List</a></li>
+    <li><a href="#data-type-string">String</a></li>
+    <li><a href="#data-type-int-and-float">Integer</a></li>
+    <li><a href="#data-type-int-and-float">Float</a></li>
+    <li><a href="#data-type-path">Path</a></li>
+    <li><a href="#data-type-dictionary">Dictionary</a></li>
+    <li><a href="#data-type-datetime">Date/Time</a></li>
+    <li><a href="#data-type-maybe">Maybe</a></li>
+    <li><a href="#data-type-pipe">Pipe</a></li>
 </ul>
+
+<p>
+The source code for all these types is in a single file at: <a href="https://github.com/mitchpaulus/mshell/blob/main/mshell/MShellObject.go" target="_blank" rel="noopener noreferrer">mshell/MShellObject.go</a>.
+</p>
 
 <h1 id="data-type-literal">Literal</h1>
 
@@ -84,9 +88,8 @@ Double quoted strings have the following escape sequences:
 <p> No escaping is done within single quoted strings or paths. </p>
 
 <h1 id="data-type-path">Path</h1>
-<p>
-Since paths are such a common object to deal with in shell scripts, mshell has a dedicated type for paths.
-</p>
+<p> Since paths are such a common object to deal with in shell scripts, mshell has a dedicated type. </p>
+
 <p>
 Paths are created by wrapping the path in backticks. No escaping is done.
 If you need to escape or use string interpolation, then use double quotes and <code>toPath</code>.
@@ -98,7 +101,25 @@ If you need to escape or use string interpolation, then use double quotes and <c
 <span class="mshellEOF"></span></code>
 </pre>
 
-<h1>Dictionary</h1>
+<p>
+Because paths are fundamentally different than strings, many functions change their behavior on whether the input is a path or a string.
+For example, for a function like <code>parseJson</code>, if the input is a path, it will read the file at that path and parse the contents as JSON.
+Otherwise, it will parse the string as JSON directly.
+</p>
+
+<p>
+The other place this is important is in command input redirection.
+You often want to pipe input into a command, but sometimes it's from a file, and sometimes it's from a string.
+In <code>msh</code>, this choice can be made by using the appropriate type.
+</p>
+
+<pre>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">wc</span> <span class="mshellLITERAL">-l</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`myfile.txt`</span> <span class="mshellLESSTHAN">&lt;</span> <span class="mshellEXECUTE">;</span> <span class="mshellLINECOMMENT"># Counts the number of lines in myfile.txt</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">wc</span> <span class="mshellLITERAL">-l</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellSTRING">&#34;line 1\nline 2\n&#34;</span> <span class="mshellLESSTHAN">&lt;</span> <span class="mshellEXECUTE">;</span> <span class="mshellLINECOMMENT"># Counts the number of lines in the string &#34;line 1\nline 2\n&#34; (2)</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+<h1 id="data-type-dictionary">Dictionary</h1>
 
 <p>
 mshell has the concept of dictionaries or associative arrays, but only with string keys (like <code>awk</code>).
@@ -114,6 +135,7 @@ Dictionaries can be instantiated using dictionary literals, like:
 
 <p>
 Be careful with some of the lexing around the colon, as it's used with indexing.
+Best practice is a space between the colon and the value.
 </p>
 
 <pre>
@@ -121,7 +143,7 @@ Be careful with some of the lexing around the colon, as it's used with indexing.
 <span class="mshellEOF"></span></code>
 </pre>
 
-<h1>Date/Time</h1>
+<h1 id="data-type-datetime">Date/Time</h1>
 
 <p>
 Date/times can be entered using a literal syntax, in ISO-8601 format.
@@ -145,3 +167,65 @@ Dates can be subtracted from each other, and the result is a float number of day
 <code><span class="mshellDATETIME">2023-10-02</span> <span class="mshellDATETIME">2023-10-01</span> <span class="mshellMINUS">-</span> <span class="mshellLINECOMMENT"># 1.0</span>
 <span class="mshellEOF"></span></code>
 </pre>
+
+<h1 id="data-type-int-and-float">Float and Integer</h1>
+
+<p>
+mshell makes a distinction between integers and floats.
+Any literal number with a decimal will be lexed as a float, otherwise it will be an integer.
+</p>
+
+<pre>
+<code><span class="mshellINTEGER">1</span>   <span class="mshellLINECOMMENT"># This is a integer literal</span>
+<span class="mshellFLOAT">1.0</span> <span class="mshellLINECOMMENT"># This is a float literal</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+
+<h1 id="data-type-maybe">Maybe</h1>
+
+<p>
+The <code>Maybe</code> type is a way to represent a value that may or may not exist.
+It's like a better, strongly typed null value.
+It's a value that can either be <code>none</code> or a <code>just[type]</code> value.
+</p>
+
+<p>
+They can be instantiated using:
+</p>
+
+<pre>
+<code><span class="mshellLITERAL">none</span> <span class="mshellLINECOMMENT"># None value</span>
+<span class="mshellSTRING">&#34;my string&#34;</span> <span class="mshellLITERAL">just</span> <span class="mshellLINECOMMENT"># Just value of a string</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+<p>
+There are several functions with a Maybe type, but perhaps the most important is to just unwrap the value and fail entirely if it is <code>none</code>.
+This is done with the <code>?</code> operator.
+</p>
+
+<pre>
+<code><span class="mshellSTRING">&#34;1&#34;</span> <span class="mshellLITERAL">toFloat</span><span class="mshellQUESTION">?</span> <span class="mshellLINECOMMENT"># This will result in 1.0 being on the stack (Not wrapped)</span>
+<span class="mshellSTRING">&#34;bad string&#34;</span> <span class="mshellLITERAL">toFloat</span><span class="mshellQUESTION">?</span> <span class="mshellLINECOMMENT"># This will result in failure and execution will stop.</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+<h1 id="data-type-pipe">Pipe</h1>
+
+<p>
+A <code>pipe</code> is really a special list (and it's type may get consumed by <code>list</code> in the future).
+</p>
+
+<p>
+It's created by the <code>|</code> operator.
+</p>
+
+<pre>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span>
+  <span class="mshellLEFT_SQUARE_BRACKET">[</span> <span class="mshellLITERAL">myCommand</span> <span class="mshellRIGHT_SQUARE_BRACKET">]</span>
+  <span class="mshellLEFT_SQUARE_BRACKET">[</span> <span class="mshellLITERAL">wc</span> <span class="mshellLITERAL">-l</span> <span class="mshellRIGHT_SQUARE_BRACKET">]</span>
+<span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPIPE">|</span> <span class="mshellEXECUTE">;</span>  <span class="mshellLINECOMMENT"># Counting the number of lines of output from myCommand</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
