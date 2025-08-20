@@ -12,3 +12,19 @@ Other players in this arena would be projects like:
   <li>elvish</li>
   <li>oil</li>
 </ul>
+
+<p>
+What's unique about <code>mshell</code> is that it is a <i>Concatenative, stack-based</i> programming language.
+</p>
+
+<p> 
+The key property of a programming language like this is that there is an implicit stack of data being transformed throughout the entire execution. 
+For example, to add two numbers, you push both arguments onto the stack and then <code>+</code> pops the top two arguments off the top and leaves the result.
+</p>
+
+<pre>
+<code><span class="mshellINTEGER">1</span> <span class="mshellLINECOMMENT"># Push 1 on the stack [1]</span>
+<span class="mshellINTEGER">2</span> <span class="mshellLINECOMMENT"># Push 2 on the stack [1 2]</span>
+<span class="mshellPLUS">+</span> <span class="mshellLINECOMMENT"># Add them together [3]</span>
+<span class="mshellEOF"></span></code>
+</pre>
