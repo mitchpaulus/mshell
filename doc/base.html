@@ -56,15 +56,21 @@
     code {
         font-size: 1.2em;
     }
+
+    .nav-ul {
+        list-style-type: none;
+        padding-inline-start: 0.5em;
+    }
+
   </style>
 </head>
-<body style="display: flex">
+<body style="display: flex; gap: 10em">
     <nav>
         <h1>mshell</h1>
-        <ul>
+        <ul class="nav-ul">
           <li><a href="basics.html">Basics</a></li>
           <li><a href="data-types.html">Data Types</a>
-              <ul>
+              <ul class="nav-ul">
                   <li><a href="#data-type-literal">Literal</a></li>
                   <li><a href="#data-type-bool">Bool</a></li>
                   <li><a href="#data-type-quotation">Quotation</a></li>

@@ -6,7 +6,9 @@ mshell/bin
 *.mshell_history
 
 # REDOGI
+doc/all
 doc/build/**/*.html
+doc/mshell.html
 mshell/all
-mshell/mshell
 mshell/msh.exe
+mshell/mshell

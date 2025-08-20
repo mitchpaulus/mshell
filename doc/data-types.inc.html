@@ -85,6 +85,8 @@ Double quoted strings have the following escape sequences:
   <li> <code>\"</code>: Double quote </li>
 </ul>
 
+<p> If you have a backslash, and it isn't followed by one of the escape characters above, <code>msh</code> will throw an error. </p>
+
 <p> No escaping is done within single quoted strings or paths. </p>
 
 <h1 id="data-type-path">Path</h1>
@@ -228,4 +230,3 @@ It's created by the <code>|</code> operator.
 <span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPIPE">|</span> <span class="mshellEXECUTE">;</span>  <span class="mshellLINECOMMENT"># Counting the number of lines of output from myCommand</span>
 <span class="mshellEOF"></span></code>
 </pre>
-

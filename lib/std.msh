@@ -213,6 +213,7 @@ def zip ([a] [b] (a b -- c) -- [c])
     @accum
 end
 
+# Builds a sequence of length of input, starting at 0.
 def seq (int -- [int])
     max!
     0 current!
