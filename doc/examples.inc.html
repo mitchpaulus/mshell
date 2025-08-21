@@ -1,0 +1,36 @@
+<h2>Versus Awk</h2>
+
+<p>
+Some key definitions that are part of the standard library here:
+</p>
+
+<ul>
+  <li><code>w</code> and <code>wl</code>: Writes a string to standard output. <code>wl</code> adds a newline.</li>
+  <li><code>sl</code>: Definition for <code>stdin lines</code>. Gets the standard input, splits by lines into list.</li>
+  <li><code>uw</code>: Definition for <code>unlines w</code>. Takes a list of lines, concatenates them with newlines, and prints to standard output.</li>
+  <li><code>wt</code>: Definition for <code>sl (wsplit) map</code>. Takes standard input and turns it into a list of list of strings, spliting lines on whitespace, essentially what awk does by default.</li>
+</ul>
+
+<p> The other functions should be more or less self explanatory. </p>
+
+
+<table>
+    <thead> 
+        <tr> <th> Num </th> <th> Description </th> <th> awk </th> <th> mshell </th>          </tr>
+    </thead>
+
+    <tbody>
+        <tr> 
+            <td> 1 </td> 
+            <td> Print the total number of input lines</td> 
+            <td> <code>END { print $NR }</code> </td>
+            <td><code><span class="mshellLITERAL">sl</span> <span class="mshellLITERAL">len</span> <span class="mshellLITERAL">wl</span></code> </td>
+        </tr>
+        <tr> 
+            <td> 2 </td> 
+            <td>Print the 10th input line</td> 
+            <td> <code>NR == 10</code> </td>
+            <td> <code><span class="mshellLITERAL">sl</span> <span class="mshellINDEXER">:9:</span> <span class="mshellLITERAL">wl</span></code> </td>
+        </tr>
+    </tbody>
+</table>

@@ -40,6 +40,7 @@ sl :9: wl
 # 3. Print the last field of every input line:
 # { print $NF }
 wt (:-1: wl) each
+wt (:-1:) map uw
 
 # 4. Print the last field of the last input line:
 #     { field = $NF }
