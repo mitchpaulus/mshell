@@ -14,7 +14,13 @@ Some key definitions that are part of the standard library here:
 <p> The other functions should be more or less self explanatory. </p>
 
 
-<table>
+<table id="awk-table" style="table-layout: fixed; width: 1000px;">
+    <colgroup> 
+        <col style="width: 10%; ">
+        <col style="width: 30%;">
+        <col style="width: 30%;">
+        <col style="width: 30%;">
+    </colgroup>
     <thead> 
         <tr> <th> Num </th> <th> Description </th> <th> awk </th> <th> mshell </th>          </tr>
     </thead>
@@ -23,7 +29,7 @@ Some key definitions that are part of the standard library here:
         <tr> 
             <td> 1 </td> 
             <td> Print the total number of input lines</td> 
-            <td> <code>END { print $NR }</code> </td>
+            <td><code><span class="awk-keyword">END</span> { <span class="awk-function">print</span> $NR }</code> </td>
             <td><code><span class="mshellLITERAL">sl</span> <span class="mshellLITERAL">len</span> <span class="mshellLITERAL">wl</span></code> </td>
         </tr>
         <tr> 
@@ -32,5 +38,235 @@ Some key definitions that are part of the standard library here:
             <td> <code>NR == 10</code> </td>
             <td> <code><span class="mshellLITERAL">sl</span> <span class="mshellINDEXER">:9:</span> <span class="mshellLITERAL">wl</span></code> </td>
         </tr>
+
+        <tr> 
+            <td> 3 </td>
+            <td> Print the last field of every input line </td>
+            <td> <code>{ <span class="awk-function">print</span> $NF }</code> </td>
+            <td> 
+<code><span class="mshellLITERAL">wt</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellINDEXER">:-1:</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">map</span> <span class="mshellLITERAL">uw</span>
+<span class="mshellEOF"></span></code>
+            </td>
+        </tr>
+
+        <tr> 
+            <td> 4 </td>
+            <td> Print the last field of the last input line </td>
+            <td>
+<pre><code>    
+    { field = $NF }
+<span class="awk-keyword">END</span> { <span class="awk-function">print</span> field }
+</code></pre>
+            </td>
+            <td> 
+<code><span class="mshellLITERAL">wt</span> <span class="mshellINDEXER">:-1:</span> <span class="mshellINDEXER">:-1:</span> <span class="mshellLITERAL">wl</span>
+<span class="mshellEOF"></span></code>
+            </td>
+
+        </tr>
+
+        <!-- # 5. Print every input line with more than four fields -->
+<!-- # NF > 4 -->
+<!-- sl (wsplit len 4 >) filter uw -->
+
+<!-- # 6. Print every input line in which the last field is more than 4 -->
+<!-- # $NF > 4 -->
+<!-- sl (wsplit :-1: toFloat? 4 >) filter uw -->
+
+<!-- # 7. Print the total number of fields in all input lines -->
+<!-- #     { nf = nf + NF } -->
+<!-- # END { print nf } -->
+<!-- sl (wsplit len) map sum wl -->
+
+<!-- # 8. Print the total number of lines that contain 'Beth' -->
+<!-- # /Beth/ { nlines = nlines + 1 } -->
+<!-- # END { print nlines } -->
+<!-- sl ("Beth" in) filter len wl -->
+
+<!-- # 9. Print the largest first field and the line that contains it (assumes some $1 is positive): -->
+<!-- # $1 > max { max = $1; line = $0 } -->
+<!-- # END      { print max, line } -->
+<!-- ( -->
+ <!-- line! prev! -->
+ <!-- @line wsplit :0: toFloat? new! -->
+ <!-- @new @prev :0: > ([@new @line]) (@prev) iff -->
+<!-- ) -->
+<!-- [-99999999  ""] sl foldl -->
+<!-- dup :0: max! :1: maxLine! $"{@max str} {@maxLine}" wl -->
+
+<!-- # 10. Print every line that has at least one field -->
+<!-- # NF > 0 -->
+<!-- sl (wsplit len 0 >) filter uw -->
+
+<!-- # 11. Print every line longer than 80 characters -->
+<!-- # length($0) > 80 -->
+<!-- sl (len 80 >) filter uw -->
+
+<!-- # 12. Print the number of fields in every line followed by the line itself -->
+<!-- # { print NF, $0 } -->
+<!-- sl (dup wsplit len w " " w wl) each -->
+
+<!-- # 13. Print the first two fields in opposite order, of every line -->
+<!-- # { print $2, $1 } -->
+<!-- wt (:1:, :0: wjoin wl) each -->
+
+<!-- # 14. Exchange the first two fields of every line and then print the line -->
+<!-- # { temp = $1; $1 = $2; $2 = temp; print } -->
+<!-- wt (:1:, :0:, 2: wjoin wl) each -->
+
+<!-- # 15. Print every line with the first field replaced by the line number -->
+<!-- # { $1 = NR; print } -->
+<!-- wt d! -->
+<!-- @d len seq (1 + str) map -->
+<!-- @d (line! lineNum! [@lineNum] @line 1: + " " join) zip uw -->
+
+<!-- # 16. Print every line after erasing the second field -->
+<!-- # { $2 = ""; print } -->
+<!-- wt ("" 1 setAt wjoin wl) each -->
+
+<!-- # 17. Print in reverse order the fields of every line -->
+<!-- # { for (i = NF; i > 0; i = i - 1) printf (i == 1 ? "%s" : "%s "), $i -->
+<!-- # printf "\n" -->
+<!-- # } -->
+<!-- wt (reverse wjoin wl) each -->
+
+<!-- # 18. Print the sums of the fields of every line -->
+<!-- # { sum = 0 -->
+<!-- #   for (i = 1; i <= NF; i = i + 1) sum = sum + $i -->
+<!-- #   print sum -->
+<!-- # } -->
+<!-- wt ((toFloat?) map sum str wl) each -->
+
+<!-- # 19. Add up all fields in all lines and print the sum -->
+<!-- # { for (i = 1; i <= NF; i = i + 1) sum = sum + $i } -->
+<!-- # END { print sum } -->
+<!-- wt ((toFloat?) map sum) sum str wl -->
+
+<!-- # 20. Print every line after replacing each field by its absolute value -->
+<!-- # { for (i = 1; i <= NF; i = i + 1) $i = ($i < 0) ? -$i : $i; print } -->
+<!-- wt ((toFloat? abs str) map wjoin wl) each -->
+
+        <tr> 
+            <td> 5 </td>
+            <td> Print every input line with more than four fields </td>
+            <td> <code>NF > 4</code> </td>
+            <td>
+<pre>
+<code><span class="mshellLITERAL">sl</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">wsplit</span> <span class="mshellLITERAL">len</span> <span class="mshellINTEGER">4</span> <span class="mshellGREATERTHAN">&gt;</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">filter</span> <span class="mshellLITERAL">uw</span>
+<span class="mshellEOF"></span></code>
+</pre>
+            </td>
+        </tr>
+
+        <tr> 
+            <td> 6 </td>
+            <td> Print every input line in which the last field is more than 4 </td>
+            <td> <code>$NF > 4</code> </td>
+            <td> <code><span class="mshellLITERAL">sl</span> <span class="mshellLITERAL">wt</span> <span class="mshellINDEXER">:-1:</span> <span class="mshellLITERAL">toFloat?</span> <span class="mshellLITERAL">4</span> <span class="mshellLITERAL">></span> <span class="mshellLITERAL">filter</span> <span class="mshellLITERAL">uw</span></code></td>
+        </tr>
+
+        <tr>
+            <td> 7 </td>
+            <td> Print the total number of fields in all input lines </td>
+            <td><code>{ nf = nf + NF }</code><br><code><span class="awk-keyword">END</span> { <span class="awk-function">print</span> nf }</code></td>
+            <td><code><span class="mshellLITERAL">sl</span> (<span class="mshellLITERAL">wsplit</span> len) map sum wl</code></td>
+        </tr>
+
+        <tr>
+            <td> 8 </td>
+            <td> Print the total number of lines that contain 'Beth' </td>
+            <td><code>/Beth/ { nlines = nlines + 1 }</code><br><code><span class="awk-keyword">END</span> { <span class="awk-function">print</span> nlines }</code></td>
+            <td><code><span class="
+                                   mshellLITERAL">sl</span> ("Beth" <span class="mshellLITERAL">in</span>) filter len wl</code></td>
+        </tr>
+
+        <tr>
+            <td> 9 </td>
+            <td> Print the largest first field and the line that contains it (assumes some $1 is positive) </td>
+            <td><code>$1 > max { max = $1; line = $0 }</code><br><code><span class="awk-keyword">END</span> { <span class="awk-function">print</span> max, line }</code></td>
+            <td><code>(<br>
+                line! prev!<br>
+                @line wsplit :0: toFloat? new!<br>
+                @new @prev :0: > ([@new @line]) (@prev) iff<br>
+                )<br>
+                [-99999999 ""] sl foldl<br>
+                dup :0: max! :1: maxLine! $"{@max str} {@maxLine}" wl</code></td>
+        </tr>
+        <tr>
+            <td> 10 </td>
+            <td> Print every line that has at least one field </td>
+            <td><code>NF > 0</code></td>
+            <td><code><span class="mshellLITERAL">sl</span> (<span class="mshellLITERAL">wsplit</span> len 0 <span class="mshellLITERAL">></span>) filter uw</code></td>
+        </tr>
+        <tr>
+            <td> 11 </td>
+            <td> Print every line longer than 80 characters </td>
+            <td><code>length($0) > 80</code></td>
+            <td><code><span class="mshellLITERAL">sl</span> (len 80 <span class="mshellLITERAL">></span>) filter uw</code></td>
+        </tr>
+        <tr>
+            <td> 12 </td>
+            <td> Print the number of fields in every line followed by the line itself </td>
+            <td><code>{ <span class="awk-function">print</span> NF, $0 }</code></td>
+            <td><code><span class="mshellLITERAL">sl</span> (dup wsplit len w " " w wl) each</code></td>
+        </tr>
+        <tr>
+            <td> 13 </td>
+            <td> Print the first two fields in opposite order, of every line </td>
+            <td><code>{ <span class="awk-function">print</span> $2, $1 }</code></td>
+            <td><code><span class="mshellLITERAL">wt</span> (:1:, :0: wjoin wl) each</code></td>
+        </tr>
+        <tr>
+            <td> 14 </td>
+            <td> Exchange the first two fields of every line and then print the line </td>
+            <td><code>{ temp = $1; $1 = $2; $2 = temp; <span class="awk-function">print</span> }</code></td>
+            <td><code><span class="mshellLITERAL">wt</span> (:1:, :0:, 2: wjoin wl) each</code></td>
+        </tr>
+        <tr>
+            <td> 15 </td>
+            <td> Print every line with the first field replaced by the line number </td>
+            <td><code>{ $1 = NR; <span class="awk-function">print</span> }</code></td>
+            <td><code><span class="mshellLITERAL">wt</span> d!<br>
+                @d len seq (1 + str) map<br>
+                @d (line! lineNum! [@lineNum] @line 1: + " " join) zip uw</code></td>
+        </tr>
+        <tr>
+            <td> 16 </td>
+            <td> Print every line after erasing the second field </td>
+            <td><code>{ $2 = ""; <span class="awk-function">print</span> }</code></td>
+            <td><code><span class="mshellLITERAL">wt</span> ("" 1 setAt wjoin wl) each</code></td>
+        </tr>
+        <tr>
+            <td> 17 </td>
+            <td> Print in reverse order the fields of every line </td>
+            <td><code>{ for (i = NF; i > 0; i = i - 1) <span class="awk-function">printf</span> (i == 1 ? "%s" : "%s "), $i; <span class="awk-function">printf</span> "\n" }</code></td>
+            <td><code><span class="mshellLITERAL">wt</span> (reverse wjoin wl) each</code></td>
+        </tr>
+        <tr>
+            <td> 18 </td>
+            <td> Print the sums of the fields of every line </td>
+            <td><code>{ sum = 0; for (i = 1; i <= NF; i = i + 1) sum = sum + $i; <span class="awk-function">print</span> sum }</code></td>
+            <td><code><span class="mshellLITERAL">wt</span> ((toFloat?) map sum str wl) each</code></td>
+        </tr>
+        <tr>
+            <td> 19 </td>
+            <td> Add up all fields in all lines and print the sum </td>
+            <td>
+                <pre><code>
+{ 
+    for (i = 1; i <= NF; i = i + 1) sum = sum + $i 
+}
+<span class="awk-keyword">END</span> { <span class="awk-function">print</span> sum }
+</code></pre>
+            </td>
+            <td><code><span class="mshellLITERAL">wt</span> ((toFloat?) map sum) sum str wl</code></td>
+        </tr>
+        <tr>
+            <td> 20 </td>
+            <td> Print every line after replacing each field by its absolute value </td>
+            <td><code>{ for (i = 1; i <= NF; i = i + 1) $i = ($i < 0) ? -$i : $i; <span class="awk-function">print</span> }</code></td>
+            <td><code><span class="mshellLITERAL">wt</span> ((toFloat? abs str) map wjoin wl) each</code></td>
+        </tr>
+
     </tbody>
 </table>
