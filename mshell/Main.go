@@ -34,6 +34,28 @@ const (
 	CLIHTML
 )
 
+type TabMatch struct {
+	TabMatchType TabMatchType
+	Match string
+}
+
+func GetMatchTexts(matches []TabMatch) []string {
+	matchText := make([]string, 0, len(matches))
+	for i, m := range matches {
+		matchText[i] = m.Match
+	}
+	return matchText
+}
+
+type TabMatchType int
+
+const (
+	TABMATCHFILE TabMatchType = iota
+	TABMATCHENVVAR
+	TABMATCHVAR
+	TABMATCHCMD
+)
+
 var tempFiles []string
 
 
@@ -2126,7 +2148,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			}
 
 			fmt.Fprintf(state.f, "Prefix: %s\n", prefix)
-			var matches []string
+			var matches []TabMatch
 
 			// Environment variable completion
 			if len(prefix) > 0 && prefix[0] == '$' {
@@ -2137,7 +2159,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 						// Split on '=' and take the first part
 						parts := strings.SplitN(envVar, "=", 2)
 						if len(parts) > 0 {
-							matches = append(matches, "$" + parts[0])
+							matches = append(matches, TabMatch{ TABMATCHENVVAR,  "$" + parts[0]})
 						}
 					}
 				}
@@ -2148,14 +2170,14 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				searchPrefix := prefix[1:]
 				for v, _ := range state.context.Variables {
 					if strings.HasPrefix(v, searchPrefix) {
-						matches = append(matches, "@" + v)
+						matches = append(matches, TabMatch {TABMATCHVAR,  "@" + v})
 					}
 				}
 			} else {
 				// Completion on variables, since you could always end with !
 				for v, _ := range state.context.Variables {
 					if strings.HasPrefix(v, prefix) {
-						matches = append(matches, v + "!")
+						matches = append(matches, TabMatch {TABMATCHVAR, v + "!"})
 					}
 				}
 			}
@@ -2165,7 +2187,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				// Try to complete on command names
 				binMatches := state.pathBinManager.Matches(prefix)
 				for _, match := range binMatches {
-					matches = append(matches, match)
+					matches = append(matches, TabMatch { TABMATCHCMD, match})
 				}
 			}
 
@@ -2178,9 +2200,9 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 					if err == nil {
 						for _, file := range files {
 							if file.IsDir() {
-								matches = append(matches, file.Name() + string(os.PathSeparator))
+								matches = append(matches, TabMatch { TABMATCHFILE, file.Name() + string(os.PathSeparator)})
 							} else {
-								matches = append(matches, file.Name())
+								matches = append(matches, TabMatch { TABMATCHFILE, file.Name()} )
 							}
 						}
 					}
@@ -2219,9 +2241,9 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 						if strings.HasPrefix(file.Name(), filename) {
 							// Rejoin the directory and filename. If a directory, end with a path separator.
 							if file.IsDir() {
-								matches = append(matches, dir + file.Name() + string(os.PathSeparator))
+								matches = append(matches, TabMatch {TABMATCHFILE, dir + file.Name() + string(os.PathSeparator)})
 							} else {
-								matches = append(matches, dir + file.Name())
+								matches = append(matches, TabMatch {TABMATCHFILE, dir + file.Name()})
 							}
 						}
 					}
@@ -2233,27 +2255,27 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 
 			if len(matches) < 5 {
 				// Print matches
-				fmt.Fprintf(state.f, "Matches: %s\n", strings.Join(matches, ", "))
+				fmt.Fprintf(state.f, "Matches: %s\n", strings.Join(GetMatchTexts(matches), ", "))
 			}
 
 			if len(matches) == 0 {
 				fmt.Fprintf(os.Stdout, "\a")
 			} else if len(matches) == 1 {
 				// Lex the match and check if we have to quote around it
-				state.l.resetInput(matches[0])
+				state.l.resetInput(matches[0].Match)
 				tokens := state.l.Tokenize()
 				if len(tokens) > 2 {
 					// We have to quote around it
-					insertString = "'" + matches[0] + "'"
+					insertString = "'" + matches[0].Match + "'"
 				} else {
-					insertString = matches[0]
+					insertString = matches[0].Match
 				}
 
 				// Replace the prefex
 				state.replaceText(insertString, state.index - lastTokenLength, state.index)
 			} else {
 				// Print out the longest common prefix
-				longestCommonPrefix := getLongestCommonPrefix(matches)
+				longestCommonPrefix := getLongestCommonPrefix(GetMatchTexts(matches))
 				fmt.Fprintf(state.f, "Longest common prefix: '%s'\n", longestCommonPrefix)
 
 				if len(longestCommonPrefix) <= len(prefix) {
@@ -2272,9 +2294,9 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				}
 
 				if state.currentTabComplete == 0 {
-					state.tabCompletions0 = append(state.tabCompletions0, matches...)
+					state.tabCompletions0 = append(state.tabCompletions0, GetMatchTexts(matches)...)
 				} else {
-					state.tabCompletions1 = append(state.tabCompletions1, matches...)
+					state.tabCompletions1 = append(state.tabCompletions1, GetMatchTexts(matches)...)
 				}
 			}
 		} else if t.Char == 11 { // Ctrl-K
