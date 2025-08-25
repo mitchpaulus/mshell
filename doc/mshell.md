@@ -87,7 +87,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 ## Built-ins
 
 - `.s`: Print stack at current location (--)
-- `.b`: Prints paths to all know binaries (--)
+- `.b`: Prints paths to all known binaries (--)
 - `.def`: Print available definitions at current location (--)
 - `dup`: Duplicate (a -- a a)
 - `swap`: Swap (a b -- b a)
