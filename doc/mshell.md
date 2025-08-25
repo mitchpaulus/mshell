@@ -198,6 +198,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `sortV`: Version sort list. Converts all items to strings, then sorts like GNU `sort -V` (`list -- list`)
 - `uniq`: Remove duplicate elements from list. Works for all non-compound types. `([a] -- [a])`
 - `zip`: Zip two lists together. If the two list are different lengths, resulting list will be the same length as the shorter of the two lists. `([a] [b] (a b -- c) -- [c])`
+- `concat`: Flatten list of lists one level. Useful for things like a `flatMap`, which can be defined like `map concat`. `([[a]] -- [a])`
 
 ## Dictionary Functions
 

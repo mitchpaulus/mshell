@@ -241,3 +241,7 @@ end
 def findByTag (dict str -- [dict])
   tag! htmlDescendents ("tag" get (@tag =) map false maybe) filter
 end
+
+def concat (--)
+    l! (+) [] @l foldl
+end
