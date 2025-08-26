@@ -28,6 +28,13 @@ import (
 	"golang.org/x/net/html"
 )
 
+type MShellFunction struct {
+	Name string
+	Evaluate func(stack MShellStack, Context ExecuteContext)
+	InputTypes []MShellType
+}
+
+
 type MShellStack []MShellObject
 
 func (objList *MShellStack) Peek() (MShellObject, error)            {

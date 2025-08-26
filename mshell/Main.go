@@ -40,7 +40,7 @@ type TabMatch struct {
 }
 
 func GetMatchTexts(matches []TabMatch) []string {
-	matchText := make([]string, 0, len(matches))
+	matchText := make([]string, len(matches))
 	for i, m := range matches {
 		matchText[i] = m.Match
 	}
