@@ -199,6 +199,8 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `uniq`: Remove duplicate elements from list. Works for all non-compound types. `([a] -- [a])`
 - `zip`: Zip two lists together. If the two list are different lengths, resulting list will be the same length as the shorter of the two lists. `([a] [b] (a b -- c) -- [c])`
 - `concat`: Flatten list of lists one level. Useful for things like a `flatMap`, which can be defined like `map concat`. `([[a]] -- [a])`
+- `cartesian`: Produces the Cartesian product between two lists. Output is a list of lists, in which the inner list has two elements. `([a] [a] -- [[a]])`
+- `groupBy`: Groups items of a list into a dictionary based on a key function. The key function should take each item as input and produce a string. The output is a dictionary with the unique keys and values that are lists of the corresponding items. `[a] (a -- str) -- dict [a])`
 
 ## Dictionary Functions
 

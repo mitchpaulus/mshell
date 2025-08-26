@@ -245,3 +245,20 @@ end
 def concat (--)
     l! (+) [] @l foldl
 end
+
+def cartesian ([a] [b] -- [a])
+    listB! listA! @listA (a! @listB (b! [@a @b]) map) map concat
+end
+
+# groupBy list (a -- str) -- dict
+def groupBy (--)
+    q! list! @list @q map uniq keys!
+    {} d! @keys (@d swap [] set drop) each
+    @list
+    (
+       i! @i @q x key!
+       @d @key get? @i append drop
+    )
+    each
+    @d
+end
