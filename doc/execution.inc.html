@@ -1,0 +1,32 @@
+<p>
+Execution of external commands or binaries is different in <code>mshell</code>. Instead of it being the main syntactical construct, in <code>mshell</code> you build up a list of arguments, and then at a time of your choosing, you execute it.
+For example:
+</p>
+
+<pre>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;my-program&#39;</span> <span class="mshellSINGLEQUOTESTRING">&#39;arg1&#39;</span> <span class="mshellSINGLEQUOTESTRING">&#39;arg2&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellEXECUTE">;</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+<p>
+Often there are different things you want out of your execution, or a different handling of exit codes.
+<code>mshell</code> gives you full flexibility.
+</p>
+
+<p>
+To initiate execution, you use one of 3 operators:
+</p>
+
+<ul>
+  <li><code>;</code>: Execute command, always continue. Don't provide any information on the exit code.</li>
+  <li><code>!</code>: Execute command, but stop the running script execution on any non-zero exit code.</li>
+  <li><code>?</code>: Execute command, leaving the exit code integer on the stack.</li>
+</ul>
+
+<pre>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;false&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellEXECUTE">;</span> <span class="mshellLINECOMMENT"># mshell will continue past this point</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;true&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Will execute and continue because of 0 exit code</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;my-command&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellQUESTION">?</span> <span class="mshellVARSTORE">exitCode!</span>
+<span class="mshellFORMATSTRING">$&#34;Exit code was {@exitCode}&#34;</span> <span class="mshellLITERAL">wl</span>
+<span class="mshellEOF"></span></code>
+</pre>

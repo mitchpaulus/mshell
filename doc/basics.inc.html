@@ -6,12 +6,11 @@ Other players in this arena would be projects like:
 </p>
 
 <ul>
-  <li>bash/sh</li>
-  <li>zsh</li>
-  <li>fish</li>
-  <li>elvish</li>
-  <li>oil</li>
-  <li>Nushell</li>
+  <li>POSIX-y bash/sh/zsh</li>
+  <li><a href="https://fishshell.com/">fish</a></li>
+  <li><a href="https://elv.sh/">Elvish</a></li>
+  <li><a href="https://oils.pub/">Oils (OSH/YSH)</a></li>
+  <li><a href="https://www.nushell.sh/">Nushell</a></li>
 </ul>
 
 <p>
@@ -29,3 +28,12 @@ For example, to add two numbers, you push both arguments onto the stack and then
 <span class="mshellPLUS">+</span> <span class="mshellLINECOMMENT"># Add them together [3]</span>
 <span class="mshellEOF"></span></code>
 </pre>
+
+<p>
+Unlike most shells, <code>mshell</code> is <i>strongly typed</i>. This provides additional safety and precision for your scripts.
+</p>
+
+<p>
+Most shells also focus the syntax on the construction of the <i>command line</i>. 
+In <code>mshell</code>, building up a command line is equivalent to building up a list of strings, because ultimately that is what is executed.
+</p>
