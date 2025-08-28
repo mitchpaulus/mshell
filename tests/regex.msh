@@ -6,3 +6,9 @@
 "-ab-axxb-" 'a(x*)b' '$1' reReplace wl
 "-ab-axxb-" 'a(x*)b' '$1W' reReplace wl
 "-ab-axxb-" 'a(x*)b' '${1}W' reReplace wl
+
+# Functions that return matches
+"my str1 my str2" 'str[0-9]' reFindAll str wl
+"my str1 my str2" 'str([0-9])' reFindAll str wl
+"my str1 my str2" 'str[0-9]' reFindAllIndex str wl
+"my str1 my str2" 'str([0-9])' reFindAllIndex str wl

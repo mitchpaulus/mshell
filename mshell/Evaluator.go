@@ -2006,6 +2006,72 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 
 					newStr := re.ReplaceAllString(str, replacement)
 					stack.Push(&MShellString{newStr})
+				} else if t.Lexeme == "reFindAll" {
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+					regexStr, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot use a %s as a regex.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					str, err := obj2.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot use a %s as a string to find all in.\n", t.Line, t.Column, obj2.TypeName()))
+					}
+
+					re, err := regexp.Compile(regexStr)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error compiling regex '%s': %s\n", t.Line, t.Column, regexStr, err.Error()))
+					}
+
+					matches := re.FindAllStringSubmatch(str, -1)
+					matchList := NewList(0)
+					if matches != nil {
+						for _, groupMatches := range matches {
+							innerList := NewList(0)
+							for _, groupMatch := range groupMatches {
+								innerList.Items = append(innerList.Items, &MShellString{groupMatch})
+							}
+							matchList.Items = append(matchList.Items, innerList)
+						}
+					}
+
+					stack.Push(matchList)
+				} else if t.Lexeme == "reFindAllIndex" {
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+					regexStr, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot use a %s as a regex.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					str, err := obj2.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot use a %s as a string to find all in.\n", t.Line, t.Column, obj2.TypeName()))
+					}
+
+					re, err := regexp.Compile(regexStr)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error compiling regex '%s': %s\n", t.Line, t.Column, regexStr, err.Error()))
+					}
+
+					matches := re.FindAllStringSubmatchIndex(str, -1)
+					matchList := NewList(0)
+					if matches != nil {
+						for _, groupMatches := range matches {
+							innerList := NewList(0)
+							for _, groupMatch := range groupMatches {
+								innerList.Items = append(innerList.Items, &MShellInt{groupMatch})
+							}
+							matchList.Items = append(matchList.Items, innerList)
+						}
+					}
+
+					stack.Push(matchList)
 				} else if t.Lexeme == "parseCsv" {
 					obj1, err := stack.Pop()
 					if err != nil {
