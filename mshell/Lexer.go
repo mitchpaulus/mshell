@@ -970,7 +970,6 @@ func (l *Lexer) parseString() Token {
 }
 
 func (l *Lexer) parsePath() Token {
-	inEscape := false
 	for {
 		if l.atEnd() {
 			if l.allowUnterminatedString {
@@ -981,19 +980,8 @@ func (l *Lexer) parsePath() Token {
 			}
 		}
 		c := l.advance()
-		if inEscape {
-			if c != 'e' && c != 'n' && c != 't' && c != 'r' && c != '\\' && c != '`' {
-				fmt.Fprintf(os.Stderr, "%d:%d: Invalid escape character within path, '%c'. Expected 'n', 't', 'r', '\\', or '`'.\n", l.line, l.col, c)
-				return l.makeToken(ERROR)
-			}
-			inEscape = false
-		} else {
-			if c == '`' {
-				break
-			}
-			if c == '\\' {
-				inEscape = true
-			}
+		if c == '`' {
+			break
 		}
 	}
 	return l.makeToken(PATH)
