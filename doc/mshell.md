@@ -141,6 +141,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `fileSize`: Get size of file in bytes. `(str -- int)`
 - `lsDir`: Get list of all items (files and directories) in directory. Full paths to the items. `(str -- [str])`
 - `sha256sum`: Get SHA256 checksum of file. `(path -- str)`
+- `md5`: Get md5 checksum of file or string. `(path|str -- str)`
 - `files`: Get list of files in current directory. Not recursive. `(str -- [str])`
 - `dirs`: Get list of directories in current directory. Not recursive. `(str -- [str])`
 - `isCmd`: Check whether item is a command that can be found in PATH. `(str -- bool)`
