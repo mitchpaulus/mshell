@@ -26,6 +26,7 @@ import (
 	_ "time/tzdata"
 	"unicode"
 	"golang.org/x/net/html"
+	"crypto/md5"
 )
 
 type MShellFunction struct {
@@ -2623,6 +2624,41 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						}
 						stack.Push(mapResultMaybe)
 					}
+				} else if t.Lexeme == "md5" {
+					// Calculate the MD5 hash of a string
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'md5' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					// Work either on string or path
+					var data []byte
+					switch obj.(type) {
+					case *MShellString:
+						data = []byte(obj.(*MShellString).Content)
+					case *MShellPath:
+						pathStr, err := obj.CastString()
+						if err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert a %s to a string for MD5 hashing.\n", t.Line, t.Column, obj.TypeName()))
+						}
+						file, err := os.Open(pathStr)
+						if err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error opening file %s for MD5 hashing: %s\n", t.Line, t.Column, pathStr, err.Error()))
+						}
+
+						defer file.Close()
+						data, err = io.ReadAll(file)
+						if err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error reading file %s for MD5 hashing: %s\n", t.Line, t.Column, pathStr, err.Error()))
+						}
+
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot calculate MD5 hash of a %s.\n", t.Line, t.Column, obj.TypeName()))
+					}
+
+					hash := md5.Sum(data)
+					hashStr := hex.EncodeToString(hash[:])
+					stack.Push(&MShellString{hashStr})
 				} else { // last new function
 					// If we aren't in a list context, throw an error.
 					// Nearly always this is unintended.
