@@ -1746,10 +1746,10 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					var fileInfo os.FileInfo
 					fileInfo, err = os.Stat(path)
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error getting file size of %s: %s\n", t.Line, t.Column, path, err.Error()))
+						stack.Push(&Maybe{ obj: nil })
+					} else {
+						stack.Push(&Maybe{ obj: &MShellInt{int(fileInfo.Size())} })
 					}
-
-					stack.Push(&MShellInt{int(fileInfo.Size())})
 				} else if t.Lexeme == "lsDir" {
 					obj1, err := stack.Pop()
 					if err != nil {

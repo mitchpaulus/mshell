@@ -129,7 +129,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `hardLink`: Create a hard link. `(existingSourcePath newTargetPath -- )`
 - `tempFile`: Create a temporary file, and put the full path on the stack. `( -- str)`
 - `tempDir`: Return path to the OS specific temporary directory. No checks on permission or existence, so never fails. See [`os.TempDir`](https://pkg.go.dev/os#TempDir) in golang. `$TMPDIR` or `/tmp` for Unix, `%TMP%`, `%TEMP%, %USERPROFILE%`, or the Windows directory (`C:\Windows`). `( -- str)`
-- `rm`: Remove file or directory. `(str -- )`
+- `rm`: Remove file or directory. Will stop execution on IO error, including file not found. `(str -- )`
 - `cp`: Copy file or directory. `(str:source str:dest -- )`
 - `mv`: Move file or directory. `(str:source str:dest -- )`
 - `readFile`: Read file into string. `(str -- str)`
@@ -138,7 +138,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `pwd`: Get current working directory `( -- str)`
 - `writeFile`: Write string to file (UTF-8). `(str content str file -- )`
 - `appendFile`: Append string to file (UTF-8). `(str content str file -- )`
-- `fileSize`: Get size of file in bytes. `(str -- int)`
+- `fileSize`: Get size of file in bytes. Returns a Maybe in case file doesn't exist or other IO error. `(str -- Maybe int)`
 - `lsDir`: Get list of all items (files and directories) in directory. Full paths to the items. `(str -- [str])`
 - `sha256sum`: Get SHA256 checksum of file. `(path -- str)`
 - `md5`: Get md5 checksum of file or string. `(path|str -- str)`
