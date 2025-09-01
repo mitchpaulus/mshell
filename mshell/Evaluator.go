@@ -1637,7 +1637,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error writing to file %s: %s\n", t.Line, t.Column, path, err.Error()))
 					}
-				} else if t.Lexeme == "rm" {
+				} else if t.Lexeme == "rm" || t.Lexeme == "rmf" {
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'rm' operation on an empty stack.\n", t.Line, t.Column))
@@ -1648,8 +1648,13 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot remove a %s.\n", t.Line, t.Column, obj1.TypeName()))
 					}
 
+					// Check if the path is '/'. Refuse to remove it.
+					if path == "/" {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: I'm sorry, I'm going to refuse to delete your root directory. Find another way.\n", t.Line, t.Column))
+					}
+
 					err = os.Remove(path)
-					if err != nil {
+					if err != nil && t.Lexeme == "rm" {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error removing file %s: %s\n", t.Line, t.Column, path, err.Error()))
 					}
 				} else if t.Lexeme == "mv" || t.Lexeme == "cp" {
