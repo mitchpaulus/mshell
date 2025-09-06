@@ -1204,7 +1204,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 
 					path, err := obj.CastString()
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot check if a %s is a directory.\n", t.Line, t.Column, obj.TypeName()))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot check if a %s for %s.\n", t.Line, t.Column, obj.TypeName(), t.Lexeme))
 					}
 
 					fileInfo, err := os.Stat(path)
@@ -1416,15 +1416,15 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 
 					if t.Lexeme == "basename" {
-						stack.Push(&MShellString{filepath.Base(path)})
+						stack.Push(&MShellPath{filepath.Base(path)})
 					} else if t.Lexeme == "dirname" {
-						stack.Push(&MShellString{filepath.Dir(path)})
+						stack.Push(&MShellPath{filepath.Dir(path)})
 					} else if t.Lexeme == "ext" {
 						stack.Push(&MShellString{filepath.Ext(path)})
 					} else if t.Lexeme == "stem" {
 						// This should include previous dir if it exists
 
-						stack.Push(&MShellString{strings.TrimSuffix(path, filepath.Ext(path))})
+						stack.Push(&MShellPath{strings.TrimSuffix(path, filepath.Ext(path))})
 					}
 				} else if t.Lexeme == "toPath" {
 					obj1, err := stack.Pop()
@@ -2664,6 +2664,87 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					hash := md5.Sum(data)
 					hashStr := hex.EncodeToString(hash[:])
 					stack.Push(&MShellString{hashStr})
+				} else if t.Lexeme == "take" {
+					// Take the first n items from a list
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					// obj1 should be an integer
+					intObj, ok := obj1.(*MShellInt)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The first parameter in 'take' is expected to be an integer, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
+					}
+
+					if intObj.Value < 0 {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot take a negative number of items from a list.\n", t.Line, t.Column))
+					}
+
+					// obj2 should be a list or string
+					switch obj2.(type) {
+					case *MShellList:
+						listObj := obj2.(*MShellList)
+						length := intObj.Value
+						if intObj.Value > len(listObj.Items) {
+							length = len(listObj.Items) // Adjust to max length
+						}
+
+						newList := NewList(length)
+						for i := 0; i < length; i++ {
+							newList.Items[i] = listObj.Items[i]
+						}
+
+						stack.Push(newList)
+					case *MShellString:
+						strObj := obj2.(*MShellString)
+
+						length := intObj.Value
+						if intObj.Value > len(strObj.Content) {
+							length = len(strObj.Content) // Adjust to max length
+						}
+
+						newStr := strObj.Content[:length]
+						stack.Push(&MShellString{newStr})
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second parameter in 'take' is expected to be a list or string, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
+					}
+				} else if t.Lexeme == "skip" {
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					// obj1 should be an integer
+					intObj, ok := obj1.(*MShellInt)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The first parameter in 'skip' is expected to be an integer, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
+					}
+
+					if intObj.Value < 0 {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot skip a negative number of items.\n", t.Line, t.Column))
+					}
+
+					// obj2 should be a list or string
+					switch obj2.(type) {
+					case *MShellList:
+						listObj := obj2.(*MShellList)
+						length := max(0, len(listObj.Items)-intObj.Value)
+
+						newList := NewList(length)
+						for i := range length {
+							newList.Items[i] = listObj.Items[i+intObj.Value]
+						}
+
+						stack.Push(newList)
+					case *MShellString:
+						strObj := obj2.(*MShellString)
+						length := max(0, len(strObj.Content)-intObj.Value)
+						newStr := strObj.Content[length:]
+						stack.Push(&MShellString{newStr})
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second parameter in 'skip' is expected to be a list or string, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
+					}
 				} else { // last new function
 					// If we aren't in a list context, throw an error.
 					// Nearly always this is unintended.
