@@ -268,7 +268,7 @@ def cartesian ([a] [b] -- [a])
 end
 
 # groupBy list (a -- str) -- dict
-def groupBy (--)
+def groupBy ((a -- str) -- dict)
     q! list! @list @q map uniq keys!
     {} d! @keys (@d swap [] set drop) each
     @list

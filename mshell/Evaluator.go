@@ -776,19 +776,18 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'wsplit' operation on an empty stack.\n", t.Line, t.Column))
 					}
-
-					switch obj.(type) {
-					case *MShellString:
-						split := strings.Fields(obj.(*MShellString).Content)
-						newList := NewList(len(split))
-						for i, item := range split {
-							newList.Items[i] = &MShellString{item}
-						}
-
-						stack.Push(newList)
-					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot split a %s.\n", t.Line, t.Column, obj.TypeName()))
+					strToSplit, err := obj.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'wsplit' operation on a %s (%s).\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
 					}
+
+					split := strings.Fields(strToSplit)
+					newList := NewList(len(split))
+					for i, item := range split {
+						newList.Items[i] = &MShellString{item}
+					}
+
+					stack.Push(newList)
 				} else if t.Lexeme == "join" {
 					// This is a string join function
 					delimiter, err := stack.Pop()
@@ -3382,10 +3381,10 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 								stack.Push(&MShellBool{obj2.(*MShellDateTime).Time.Before(obj1.(*MShellDateTime).Time)})
 							}
 						default:
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a datetime (%s) to a %s (%s).\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot %s a datetime (%s) to a %s (%s).\n", t.Line, t.Column, t.Lexeme, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
 						}
 					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a %s (%s) to a %s (%s).\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do a %s operation with a %s (%s) and a %s (%s).\n", t.Line, t.Column, t.Lexeme, obj1.TypeName(), obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
 					}
 				}
 			} else if t.Type == STDERRREDIRECT { // Token Type
