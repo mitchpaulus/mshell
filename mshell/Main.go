@@ -2128,8 +2128,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				prefix = ""
 				lastToken = tokens[0]
 			} else {
-				fmt.Fprintf(state.f, "Last token: %s\n", lastToken)
-				lastToken := tokens[len(tokens)-2]
+				lastToken = tokens[len(tokens)-2]
 
 				zeroBasedStartOfToken := lastToken.Column - 1
 
@@ -2147,7 +2146,9 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				}
 			}
 
+			fmt.Fprintf(state.f, "Last token: %s %d\n", lastToken, len(tokens))
 			fmt.Fprintf(state.f, "Prefix: %s\n", prefix)
+
 			var matches []TabMatch
 
 			// Environment variable completion
@@ -2214,6 +2215,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 					if IsPathSeparator(prefix[i]) {
 						// Found a path separator, split here
 						indexOfLastSeparator = i
+						break
 					}
 				}
 
@@ -2262,13 +2264,20 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				fmt.Fprintf(os.Stdout, "\a")
 			} else if len(matches) == 1 {
 				// Lex the match and check if we have to quote around it
-				state.l.resetInput(matches[0].Match)
-				tokens := state.l.Tokenize()
-				if len(tokens) > 2 {
-					// We have to quote around it
-					insertString = "'" + matches[0].Match + "'"
+				if lastToken.Type == UNFINISHEDSINGLEQUOTESTRING {
+					insertString = "'" + matches[0].Match
+				} else if lastToken.Type == UNFINISHEDPATH {
+					insertString = "`" + matches[0].Match
 				} else {
-					insertString = matches[0].Match
+					state.l.resetInput(matches[0].Match)
+					tokens := state.l.Tokenize()
+					if len(tokens) > 2 {
+						// We have to quote around it
+						// TODO: Deal with case when the match itself has a single quote.
+						insertString = "'" + matches[0].Match + "'"
+					} else {
+						insertString = matches[0].Match
+					}
 				}
 
 				// Replace the prefex
@@ -2282,11 +2291,17 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 					// Print bell
 					fmt.Fprintf(os.Stdout, "\a")
 				} else {
-					state.l.resetInput(longestCommonPrefix)
-					tokens := state.l.Tokenize()
-					if len(tokens) > 2 {
-						// We have to put start quote around it, but don't put end quote, wait for more input
+					if lastToken.Type == UNFINISHEDSINGLEQUOTESTRING {
 						longestCommonPrefix = "'" + longestCommonPrefix
+					} else if lastToken.Type == UNFINISHEDPATH {
+						longestCommonPrefix = "`" + longestCommonPrefix
+					} else {
+						state.l.resetInput(longestCommonPrefix)
+						tokens := state.l.Tokenize()
+						if len(tokens) > 2 {
+							// We have to put start quote around it, but don't put end quote, wait for more input
+							longestCommonPrefix = "'" + longestCommonPrefix
+						}
 					}
 
 					// Replace the prefix
