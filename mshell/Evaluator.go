@@ -1626,8 +1626,6 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					} else if t.Lexeme == "appendFile" {
 						file, err = os.OpenFile(path, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
 					}
-					defer file.Close()
-
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error opening file %s: %s\n", t.Line, t.Column, path, err.Error()))
 					}
@@ -1635,6 +1633,10 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					_, err = file.WriteString(content)
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error writing to file %s: %s\n", t.Line, t.Column, path, err.Error()))
+					}
+					err = file.Close()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error closing file %s: %s\n", t.Line, t.Column, path, err.Error()))
 					}
 				} else if t.Lexeme == "rm" || t.Lexeme == "rmf" {
 					obj1, err := stack.Pop()
