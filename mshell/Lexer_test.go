@@ -6,7 +6,7 @@ import (
 
 func TestUnterminatedString(t *testing.T) {
 	input := `"Hello, world!`
-	l := NewLexer(input)
+	l := NewLexer(input, nil)
 	l.allowUnterminatedString = true
 
 	tokens := l.Tokenize()
@@ -26,7 +26,7 @@ func TestUnterminatedString(t *testing.T) {
 
 func TestUnterminatedSingleQuoteString(t *testing.T) {
 	input := `'Hello, world!`
-	l := NewLexer(input)
+	l := NewLexer(input, nil)
 	l.allowUnterminatedString = true
 
 	tokens := l.Tokenize()

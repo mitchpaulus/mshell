@@ -179,7 +179,11 @@ func (state *EvalState) FailWithMessage(message string)  EvalResult {
 			fmt.Fprintf(os.Stderr, "%s\n", callStackItem.Name)
 		} else {
 			startToken := callStackItem.MShellParseItem.GetStartToken()
-			fmt.Fprintf(os.Stderr, "%d:%d %s\n", startToken.Line, startToken.Column, callStackItem.Name)
+			if startToken.TokenFile != nil {
+				fmt.Fprintf(os.Stderr, "%s:%d:%d %s\n", startToken.TokenFile.Path, startToken.Line, startToken.Column, callStackItem.Name)
+			} else {
+				fmt.Fprintf(os.Stderr, "%d:%d %s\n", startToken.Line, startToken.Column, callStackItem.Name)
+			}
 		}
 	}
 
@@ -4005,7 +4009,7 @@ func (state *EvalState) EvaluateFormatString(lexeme string, context ExecuteConte
 	formatStrStartIndex := -1
 	formatStrEndIndex := -1
 
-	lexer := NewLexer("")
+	lexer := NewLexer("", nil)
 	parser := MShellParser{ lexer: lexer }
 
 	for index < len(lexeme)-1 {
@@ -4707,4 +4711,41 @@ func ParseJsonObjToMshell(jsonObj interface{}) MShellObject {
 		panic(fmt.Sprintf("Unknown JSON object type: %T", jsonObj))
 		// There should be no other types in JSON, but if there are, we can handle them here
 	}
+}
+
+// These 2 are courtesy of GPT-5.
+// Don't make me regret this.
+
+// StripVolumePrefix removes the Windows volume prefix from p (e.g. "C:",
+// "\\server\\share", "\\\\?\\C:", "\\\\?\\UNC\\server\\share", "\\\\.\\COM1",
+// "\\\\?\\Volume{GUID}") and returns the remainder. The result is guaranteed
+// NOT to start with '\' or '/'.
+//
+// Examples (on Windows):
+//   "C:\\foo\\bar"                         -> "foo\\bar"
+//   "C:relative\\path"                     -> "relative\\path"
+//   "\\\\server\\share\\dir\\file"         -> "dir\\file"
+//   "\\\\?\\C:\\path\\to\\file"            -> "path\\to\\file"
+//   "\\\\?\\UNC\\server\\share\\dir"       -> "dir"
+//   "\\\\?\\Volume{GUID}\\Windows\\Temp"   -> "Windows\\Temp"
+//   "\\\\.\\COM1"                          -> ""  (device path, no remainder)
+func StripVolumePrefix(p string) string {
+	if runtime.GOOS != "windows" {
+		return p
+	}
+	vol := filepath.VolumeName(p)
+	rest := strings.TrimPrefix(p, vol)
+	// Remove any leading separators so it doesn't begin with "\" or "/".
+	rest = strings.TrimLeft(rest, `\/`)
+	return rest
+}
+
+// DirNoVolume is a convenience wrapper that returns the directory of p
+// with any Windows volume removed and no leading separator.
+func DirNoVolume(p string) string {
+	if runtime.GOOS != "windows" {
+		return filepath.Dir(p)
+	}
+	dir := filepath.Dir(p)
+	return StripVolumePrefix(dir)
 }

@@ -237,12 +237,17 @@ func (t TokenType) String() string {
 	}
 }
 
+type TokenFile struct {
+	Path string
+}
+
 type Token struct {
 	Line   int // One-based line number.
 	Column int // One-based column number.
 	Start  int // Zero-based index into the entire input string
 	Lexeme string
 	Type   TokenType
+	TokenFile *TokenFile
 }
 
 func (t Token) String() string {
@@ -275,13 +280,14 @@ type Lexer struct {
 	allowUnterminatedString bool
 	emitWhitespace bool // If true, will emit whitespace tokens.
 	emitComments bool // If true, will emit comments as tokens.
+	tokenFile *TokenFile
 }
 
 func (l *Lexer) DebugStr() {
 	fmt.Fprintf(os.Stderr, "start: %d, current: %d, col: %d, line: %d, cur lexeme: %s\n", l.start, l.current, l.col, l.line, l.curLexeme())
 }
 
-func NewLexer(input string) *Lexer {
+func NewLexer(input string, tokenFile *TokenFile) *Lexer {
 	return &Lexer{
 		input: []rune(input),
 		line:  1,
@@ -291,6 +297,7 @@ func NewLexer(input string) *Lexer {
 		allowUnterminatedString: false,
 		emitWhitespace: false,
 		emitComments: false,
+		tokenFile: tokenFile,
 	}
 }
 

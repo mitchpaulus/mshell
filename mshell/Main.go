@@ -145,6 +145,8 @@ func main() {
 	input := ""
 	inputSet := false
 	positionalArgs := []string{}
+	var inputFile *TokenFile
+	inputFile = nil
 
 	if len(os.Args) == 1 {
 		// Enter interactive mode
@@ -335,8 +337,7 @@ func main() {
 		input = string(inputBytes)
 	}
 
-
-	l := NewLexer(input)
+	l := NewLexer(input, inputFile)
 
 	if command == CLILEX {
 		tokens := l.Tokenize()
@@ -401,7 +402,7 @@ func main() {
 				os.Exit(1)
 				return
 			}
-			stdlibLexer := NewLexer(string(stdlibBytes))
+			stdlibLexer := NewLexer(string(stdlibBytes), &TokenFile{stdlibPath})
 			stdlibParser := MShellParser{lexer: stdlibLexer}
 			stdlibParser.NextToken()
 			stdlibFile, err := stdlibParser.ParseFile()
@@ -1258,7 +1259,7 @@ func (state *TermState) InteractiveMode() error {
 
 	defer term.Restore(state.stdInFd, &state.oldState)
 
-	state.l = NewLexer("")
+	state.l = NewLexer("", nil)
 	state.p = &MShellParser{lexer: state.l}
 
 	stdLibDefs, err := stdLibDefinitions(state.stack, state.context, state.evalState)
@@ -1755,7 +1756,7 @@ func stdLibDefinitions(stack MShellStack, context ExecuteContext, state EvalStat
 				return nil, err
 			}
 
-			stdlibLexer := NewLexer(string(stdlibBytes))
+			stdlibLexer := NewLexer(string(stdlibBytes), &TokenFile{rcPath})
 			stdlibParser := MShellParser{lexer: stdlibLexer}
 			stdlibParser.NextToken()
 			stdlibFile, err := stdlibParser.ParseFile()
@@ -2526,7 +2527,7 @@ func UnmodifiedDir(path string) string {
 }
 
 func HtmlFromInput(input string) string {
-	l := NewLexer(input)
+	l := NewLexer(input, nil)
 	l.emitWhitespace = true
 	l.emitComments = true
 
