@@ -11,7 +11,6 @@ import (
 
 type PathBinManager struct {
 	currPath []string
-	index int
 	binaryPaths map[string]string // Maps binary name to its full path
 }
 
@@ -28,6 +27,12 @@ func (pbm *PathBinManager) Matches(search string) ([]string) {
 }
 
 func NewPathBinManager() IPathBinManager {
+	pbm := PathBinManager{}
+	pbm.Update()
+	return &pbm
+}
+
+func (pbm *PathBinManager) Update() {
 	// Get the current path from the environment
 	currPath, exists := os.LookupEnv("PATH")
 	var currPathSlice []string
@@ -71,11 +76,9 @@ func NewPathBinManager() IPathBinManager {
 		}
 	}
 
-	return &PathBinManager{
-		currPath: currPathSlice,
-		index: 0,
-		binaryPaths: binaryPaths,
-	}
+	pbm.currPath = currPathSlice
+	pbm.binaryPaths = binaryPaths
+
 }
 
 func (pbm *PathBinManager) DebugList() string {

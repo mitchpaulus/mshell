@@ -12,7 +12,6 @@ import (
 
 type PathBinManager struct {
 	currPath []string
-	index int
 	binaryPaths map[string]WinBinaryPath // Key here is uppercase binary name
 	pathExts []string
 }
@@ -99,6 +98,12 @@ func (pbm *PathBinManager) ExecuteArgs(execPath string) ([]string, error) {
 }
 
 func NewPathBinManager() IPathBinManager {
+	pbm := PathBinManager {}
+	pbm.Update()
+	return &pbm
+}
+
+func (pbm *PathBinManager) Update() {
 	// Get the current path from the environment
 	currPath, exists := os.LookupEnv("PATH")
 	var currPathSlice []string
@@ -156,12 +161,9 @@ func NewPathBinManager() IPathBinManager {
 		}
 	}
 
-	return &PathBinManager{
-		currPath: currPathSlice,
-		index: 0,
-		binaryPaths: binaryPaths,
-		pathExts: pathExtsSlice,
-	}
+	pbm.currPath = currPathSlice
+	pbm.binaryPaths = binaryPaths
+	pbm.pathExts = pathExtsSlice
 }
 
 func (pbm *PathBinManager) DebugList() string {

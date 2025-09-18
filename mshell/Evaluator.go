@@ -3432,6 +3432,11 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 				if err != nil {
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Could not set the environment variable '%s' to '%s'.\n", t.Line, t.Column, varName, varValue))
 				}
+
+				// If it was the PATH, refresh all the binaries
+				if varName == "PATH" {
+					context.Pbm.Update()
+				}
 			} else if t.Type == ENVCHECK {
 				// Strip off the leading '$' and trailing '!' for the environment variable name
 				varName := t.Lexeme[1:len(t.Lexeme) - 1]

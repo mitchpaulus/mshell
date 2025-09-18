@@ -311,7 +311,6 @@ func main() {
 				Name:  "main",
 				CallStackType: CALLSTACKFILE,
 			},
-			pathBinManager: NewPathBinManager(),
 		}
 
 		err = termState.InteractiveMode()
@@ -515,7 +514,7 @@ type TermState struct {
 	callStack CallStack
 	stdLibDefs []MShellDefinition
 	initCallStackItem CallStackItem
-	pathBinManager IPathBinManager
+	// pathBinManager IPathBinManager
 }
 
 func (s *TermState) Render() {
@@ -1483,7 +1482,7 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 		literalStr := p.curr.Lexeme
 
 		firstTokenIsCmd := false
-		_, isInPath := state.pathBinManager.Lookup(literalStr);
+		_, isInPath := state.context.Pbm.Lookup(literalStr);
 		if isInPath {
 			firstTokenIsCmd = true
 		} else {
@@ -1492,7 +1491,7 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 		}
 
 		hasPipe := false
-		if ((strings.Contains(literalStr, string(os.PathSeparator)) && state.pathBinManager.IsExecutableFile(literalStr)) || firstTokenIsCmd) && !IsDefinitionDefined(literalStr, state.stdLibDefs) {
+		if ((strings.Contains(literalStr, string(os.PathSeparator)) && state.context.Pbm.IsExecutableFile(literalStr)) || firstTokenIsCmd) && !IsDefinitionDefined(literalStr, state.stdLibDefs) {
 			tokenBufBuilder.Reset()
 			// Clear token buffer
 			tokenBuf = tokenBuf[:0]
@@ -2186,7 +2185,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 
 			if len(tokens) == 2 && len(prefix) > 0 {
 				// Try to complete on command names
-				binMatches := state.pathBinManager.Matches(prefix)
+				binMatches := state.context.Pbm.Matches(prefix)
 				for _, match := range binMatches {
 					matches = append(matches, TabMatch { TABMATCHCMD, match})
 				}

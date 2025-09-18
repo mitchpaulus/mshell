@@ -10,4 +10,5 @@ type IPathBinManager interface {
 	IsExecutableFile(path string) bool
 	Matches(search string) ([]string)
 	SetupCommand(allArgs []string) *exec.Cmd
+	Update()
 }
