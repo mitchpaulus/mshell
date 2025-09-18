@@ -2769,6 +2769,22 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					} else {
 						stack.Push(&MShellString{host})
 					}
+				} else if t.Lexeme == "removeWindowsVolumePrefix" {
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'removeWindowsVolumePrefix' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					asStr, err := obj.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert a %s to a string for removing Windows volume prefix.\n", t.Line, t.Column, obj.TypeName()))
+					}
+
+					if runtime.GOOS == "windows" {
+						stack.Push(&MShellString{ StripVolumePrefix(asStr) })
+					} else {
+						stack.Push(&MShellString{asStr})
+					}
 				} else { // last new function
 					// If we aren't in a list context, throw an error.
 					// Nearly always this is unintended.
