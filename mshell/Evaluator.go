@@ -1680,7 +1680,18 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 
 					if t.Lexeme == "mv" {
-						err = os.Rename(source, destination)
+						const tries = 5
+						var mvErr error
+						mvErr = nil
+						for mvTryCount := 0; mvTryCount < tries; mvTryCount++ {
+							mvErr = os.Rename(source, destination)
+							if mvErr == nil {
+								continue
+							} else {
+								time.Sleep(time.Duration(25*(mvTryCount+1)) * time.Millisecond) // linear backoff
+							}
+						}
+
 						if err != nil {
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error in %s from '%s' to '%s': %s\n", t.Line, t.Column, t.Lexeme, source, destination, err.Error()))
 						}
