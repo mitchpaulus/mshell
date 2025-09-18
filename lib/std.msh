@@ -279,3 +279,17 @@ def groupBy ((a -- str) -- dict)
     each
     @d
 end
+
+def listToDict ([a] (a -- str) (a -- b) -- c)
+    valFunc! keyFunc! l!
+    {} d!
+    @l
+    (
+        item!
+        @item @keyFunc x key!
+        @item @valFunc x value!
+        @d @key @value set drop
+    )
+    each
+    @d
+end

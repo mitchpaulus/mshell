@@ -194,7 +194,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `nth`: Nth element of list (0-based) `([a] int -- a)`
 - `reverse`: Reverse list, `(list -- list)`
 - `sum`: Sum of list, `([numeric] -- numeric)`
-- `filter`: Filter list, `(list quote -- list)`
+- `filter`: Filter list, `([a] (a -- bool) -- [a])`
 - `any`: Check if any element in list satisfies a condition, `([a] (a -- bool) -- bool)`
 - `all`: Check if all elements in list satisfy a condition, `([a] (a -- bool) -- bool)`
 - `skip`: Skip first n elements of list, `(list int -- list)`
@@ -205,6 +205,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `concat`: Flatten list of lists one level. Useful for things like a `flatMap`, which can be defined like `map concat`. `([[a]] -- [a])`
 - `cartesian`: Produces the Cartesian product between two lists. Output is a list of lists, in which the inner list has two elements. `([a] [a] -- [[a]])`
 - `groupBy`: Groups items of a list into a dictionary based on a key function. The key function should take each item as input and produce a string. The output is a dictionary with the unique keys and values that are lists of the corresponding items. `[a] (a -- str) -- dict [a])`
+- `listToDict`: Transform a list into a dictionary with a key and value selector function. `([a] (a -- b) (a -- c) -- { b: c })`
 
 ## Dictionary Functions
 
