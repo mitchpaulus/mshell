@@ -2746,6 +2746,13 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second parameter in 'skip' is expected to be a list or string, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
 					}
+				} else if t.Lexeme == "hostname" {
+					host, err := os.Hostname()
+					if err != nil {
+						stack.Push(&MShellString{"unknown"})
+					} else {
+						stack.Push(&MShellString{host})
+					}
 				} else { // last new function
 					// If we aren't in a list context, throw an error.
 					// Nearly always this is unintended.
