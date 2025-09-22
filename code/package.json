@@ -1,0 +1,34 @@
+{
+    "name": "mshell",
+    "displayName": "mshell",
+    "publisher": "MitchellPaulus",              
+    "version": "0.6.4",
+    "engines": { "vscode": "^1.90.0" },         
+    "categories": ["Programming Languages"],
+    "contributes": {
+        "languages": [
+            {
+                "id": "mshell",
+                "aliases": ["msh"],
+                "extensions": [".msh", ".mshell"],
+                "firstLine": "^#!.*\\b(mshell|msh)\\b"
+            }
+        ],
+        "grammars": [
+            {
+                "language": "mshell",
+                "scopeName": "source.mshell",  
+                "path": "./syntaxes/mshell.textmate.json"
+            }
+        ],
+        "configurationDefaults": {
+            "[mshell]": {
+                "editor.insertSpaces": true,
+                "editor.tabSize": 2
+            }
+        }
+    },
+    "repository": { "type": "git", "url": "https://github.com/mitchpaulus/mshell" },
+    "bugs": { "url": "https://github.com/mitchpaulus/mshell" },
+    "license": "MIT"
+}

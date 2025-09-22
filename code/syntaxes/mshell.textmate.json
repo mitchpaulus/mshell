@@ -1,0 +1,60 @@
+{
+    "scopeName": "source.mshell",
+    "fileTypes": [
+        "mshell"
+    ],
+    "patterns": [
+        {
+            "name": "comment.line.number-sign",
+            "match": "#.*$"
+        },
+        {
+            "name": "constant.language.bool",
+            "match": "\b(true|false)\b"
+        },
+        {
+            "name": "string.quoted.single.mshell",
+            "begin": "'",
+            "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.mshell" } },
+            "end": "'",
+            "endCaptures": { "0": { "name": "punctuation.definition.string.end.mshell" } }
+        },
+        {
+            "name": "string.quoted.other.path.mshell",
+            "begin": "`",
+            "end": "`"
+        },
+        {
+            "name": "variable.other.set",
+            "match": "\\$[a-zA-Z0-9_]+!"
+        },
+        {
+            "name": "variable.other.envretrieve",
+            "match": "\\$[a-zA-Z0-9_]+"
+        },
+        {
+            "name": "variable.other.retreive.mshell",
+            "match": "[a-zA-Z0-9_]+!"
+        },
+        {
+            "name": "variable.other.set.mshell",
+            "match": "@[a-zA-Z0-9_]+"
+        }
+    ],
+    "repository": {
+        "string_double": {
+            "name": "string.quoted.double.mshell",
+            "begin": "\"",
+            "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.mshell" } },
+            "end": "\"",
+            "endCaptures": { "0": { "name": "punctuation.definition.string.end.mshell" } },
+            "patterns": [
+                { "include": "#escape_simple" }
+            ]
+        },
+        "escape_simple": {
+            "name": "constant.character.escape.mshell",
+            "match": "\\\\(e|n|t|r|\"|\\\\)"
+        }
+    }
+}

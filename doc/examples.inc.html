@@ -14,7 +14,7 @@ Some key definitions that are part of the standard library here:
 <p> The other functions should be more or less self explanatory. </p>
 
 
-<table id="awk-table" style="table-layout: fixed; width: 1000px;">
+<table id="awk-table" style="table-layout: fixed; width: 1200px;">
     <colgroup> 
         <col style="width: 10%; ">
         <col style="width: 30%;">
@@ -22,7 +22,7 @@ Some key definitions that are part of the standard library here:
         <col style="width: 30%;">
     </colgroup>
     <thead> 
-        <tr> <th> Num </th> <th> Description </th> <th> awk </th> <th> mshell </th>          </tr>
+        <tr> <th> Num </th> <th> Description </th> <th> awk </th> <th> mshell </th>  </tr>
     </thead>
 
     <tbody>
@@ -175,7 +175,7 @@ Some key definitions that are part of the standard library here:
         <tr>
             <td> 8 </td>
             <td> Print the total number of lines that contain 'Beth' </td>
-            <td><code>/Beth/ { nlines = nlines + 1 }</code><br><code><span class="awk-keyword">END</span> { <span class="awk-function">print</span> nlines }</code></td>
+            <td><code><span class="awk-regex">/Beth/</span> { nlines = nlines + 1 }</code><br><code><span class="awk-keyword">END</span> { <span class="awk-function">print</span> nlines }</code></td>
             <td><code><span class="
                                    mshellLITERAL">sl</span> ("Beth" <span class="mshellLITERAL">in</span>) filter len wl</code></td>
         </tr>
@@ -239,7 +239,7 @@ Some key definitions that are part of the standard library here:
         <tr>
             <td> 17 </td>
             <td> Print in reverse order the fields of every line </td>
-            <td><code>{ for (i = NF; i > 0; i = i - 1) <span class="awk-function">printf</span> (i == 1 ? "%s" : "%s "), $i; <span class="awk-function">printf</span> "\n" }</code></td>
+            <td><code>{ for (i = NF; i > 0; i = i - 1) <span class="awk-function">printf</span> (i == 1 ? <span class="mshellSTRING">"%s"</span> : <span class="mshellSTRING">"%s "</span>), $i; <span class="awk-function">printf</span> "\n" }</code></td>
             <td><code><span class="mshellLITERAL">wt</span> (reverse wjoin wl) each</code></td>
         </tr>
         <tr>
