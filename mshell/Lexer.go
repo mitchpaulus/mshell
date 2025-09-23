@@ -86,6 +86,7 @@ const (
 	STDAPPEND // >>
 	WHITESPACE
 	LINECOMMENT
+	ASTERISK
 )
 
 func (t TokenType) String() string {
@@ -232,6 +233,8 @@ func (t TokenType) String() string {
 		return "WHITESPACE"
 	case LINECOMMENT:
 		return "LINECOMMENT"
+	case ASTERISK:
+		return "ASTERISK"
 	default:
 		return "UNKNOWN"
 	}
@@ -371,6 +374,7 @@ var notAllowedLiteralChars = map[rune]bool{
 	'@': true,
 	',': true,
 	// '=': true, Removed because it's often used in CLI options like --option=value
+	'*': true, // Need this so [command]*! is parsed without *! becoming a variable store.
 	'&': true,
 	'|': true,
 	'"': true, // Double quote, used for strings.
@@ -673,6 +677,8 @@ func (l *Lexer) scanTokenAll() Token {
 		} else {
 			return l.makeToken(BANG)
 		}
+	case '*':
+		return l.makeToken(ASTERISK)
 	default:
 		// return l.parseLiteralOrNumber()
 		return l.parseLiteralOrKeyword()

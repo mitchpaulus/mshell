@@ -181,6 +181,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `upper`: Convert string to uppercase. `(str -- str)`
 - `toFixed`: Convert number to string with fixed number of decimal places. `(numeric int -- str)`
 - `countSubStr`: Count occurrences of substring in string. `(str str -- int)`
+- `take`: Take first n characters from string. `(str int -- str)`
 
 ## List Functions
 
@@ -207,6 +208,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `cartesian`: Produces the Cartesian product between two lists. Output is a list of lists, in which the inner list has two elements. `([a] [a] -- [[a]])`
 - `groupBy`: Groups items of a list into a dictionary based on a key function. The key function should take each item as input and produce a string. The output is a dictionary with the unique keys and values that are lists of the corresponding items. `[a] (a -- str) -- dict [a])`
 - `listToDict`: Transform a list into a dictionary with a key and value selector function. `([a] (a -- b) (a -- c) -- { b: c })`
+- `take`: Take the first `n` number of elements from list. `([a] int -- [a])`
 
 ## Dictionary Functions
 

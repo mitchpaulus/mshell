@@ -1074,42 +1074,6 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					} else {
 						return EvalResult{false, false, -1, exitInt.Value, true}
 					}
-				} else if t.Lexeme == "*" {
-					obj1, err := stack.Pop()
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '*' operation on an empty stack.\n", t.Line, t.Column))
-					}
-
-					if asList, ok := obj1.(*MShellList); ok {
-						asList.StdoutBehavior = STDOUT_COMPLETE
-						stack.Push(asList)
-					} else {
-						obj2, err := stack.Pop()
-						if err != nil {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '*' operation on a stack with only one item.\n", t.Line, t.Column))
-						}
-
-						if !obj1.IsNumeric() || !obj2.IsNumeric() {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot multiply a %s and a %s. If you are looking for wildcard glob, you want `\"*\" glob`.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
-						}
-
-						switch obj1.(type) {
-						case *MShellInt:
-							switch obj2.(type) {
-							case *MShellInt:
-								stack.Push(&MShellInt{obj2.(*MShellInt).Value * obj1.(*MShellInt).Value})
-							case *MShellFloat:
-								stack.Push(&MShellFloat{obj2.(*MShellFloat).Value * float64(obj1.(*MShellInt).Value)})
-							}
-						case *MShellFloat:
-							switch obj2.(type) {
-							case *MShellInt:
-								stack.Push(&MShellFloat{float64(obj2.(*MShellInt).Value) * float64(obj1.(*MShellFloat).Value)})
-							case *MShellFloat:
-								stack.Push(&MShellFloat{obj2.(*MShellFloat).Value * obj1.(*MShellFloat).Value})
-							}
-						}
-					}
 				} else if t.Lexeme == "toFloat" {
 					obj, err := stack.Pop()
 					if err != nil {
@@ -2798,6 +2762,43 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 
 					stack.Push(&MShellLiteral{t.Lexeme})
 				}
+			} else if t.Type == ASTERISK {
+				obj1, err := stack.Pop()
+				if err != nil {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
+				}
+
+				if asList, ok := obj1.(*MShellList); ok {
+					asList.StdoutBehavior = STDOUT_COMPLETE
+					stack.Push(asList)
+				} else {
+					obj2, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on a stack with only one item.\n", t.Line, t.Column, t.Lexeme))
+					}
+
+					if !obj1.IsNumeric() || !obj2.IsNumeric() {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot multiply a %s and a %s. If you are looking for wildcard glob, you want `\"*\" glob`.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
+					}
+
+					switch obj1.(type) {
+					case *MShellInt:
+						switch obj2.(type) {
+						case *MShellInt:
+							stack.Push(&MShellInt{obj2.(*MShellInt).Value * obj1.(*MShellInt).Value})
+						case *MShellFloat:
+							stack.Push(&MShellFloat{obj2.(*MShellFloat).Value * float64(obj1.(*MShellInt).Value)})
+						}
+					case *MShellFloat:
+						switch obj2.(type) {
+						case *MShellInt:
+							stack.Push(&MShellFloat{float64(obj2.(*MShellInt).Value) * float64(obj1.(*MShellFloat).Value)})
+						case *MShellFloat:
+							stack.Push(&MShellFloat{obj2.(*MShellFloat).Value * obj1.(*MShellFloat).Value})
+						}
+					}
+				}
+
 			} else if t.Type == STDAPPEND {
 				redirectPath, obj2, err := stack.Pop2(t)
 				if err != nil {
