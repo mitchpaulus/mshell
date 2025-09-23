@@ -113,22 +113,30 @@ func (pbm *PathBinManager) Update() {
 		currPathSlice = strings.Split(currPath, ";")
 	}
 
-	pathExts, exists := os.LookupEnv("PATHEXT")
-	var pathExtsSlice []string
-	if !exists {
-		pathExtsSlice = []string{".EXE", ".CMD", ".BAT", ".COM"}
-	} else {
-		rawExts := strings.Split(pathExts, ";")
-		pathExtsSlice = make([]string, 0, len(rawExts))
-		for _, ext := range rawExts {
-			// Check that the extension starts with a dot and has a minimum length of 2
-			if len(ext) < 2 || ext[0] != '.' {
-				continue
-			}
-			// Convert to uppercase and add to the slice
-			pathExtsSlice = append(pathExtsSlice, strings.ToUpper(ext))
-		}
-	}
+
+	// We don't really use the PATHEXT as intended by Windows.
+	// So going to hardcode in the extensions we handle above.
+	// The other reason to not rely on PATHEXT is that will usually require administrator privelages,
+	// and there is some part of mshell existenance that is because I needed programming power
+	// without having to call my IT department.
+	pathExtsSlice := []string{".EXE", ".CMD", ".BAT", ".COM", ".MSH"}
+
+	// pathExts, exists := os.LookupEnv("PATHEXT")
+	// var pathExtsSlice []string
+	// if !exists {
+		// pathExtsSlice = []string{".EXE", ".CMD", ".BAT", ".COM"}
+	// } else {
+		// rawExts := strings.Split(pathExts, ";")
+		// pathExtsSlice = make([]string, 0, len(rawExts))
+		// for _, ext := range rawExts {
+			// // Check that the extension starts with a dot and has a minimum length of 2
+			// if len(ext) < 2 || ext[0] != '.' {
+				// continue
+			// }
+			// // Convert to uppercase and add to the slice
+			// pathExtsSlice = append(pathExtsSlice, strings.ToUpper(ext))
+		// }
+	// }
 
 	binaryPaths := make(map[string]WinBinaryPath)
 
