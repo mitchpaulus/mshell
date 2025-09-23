@@ -1,1 +1,1 @@
-[cat unique_file_* glob];
+[cat 'unique_file_*' glob];
