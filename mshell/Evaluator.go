@@ -472,8 +472,15 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					fmt.Fprint(os.Stderr, stack.String())
 				} else if t.Lexeme == ".b" {
 					// Print known binaries
-					debugStr := context.Pbm.DebugList()
-					fmt.Fprint(os.Stderr, debugStr)
+					debugList := context.Pbm.DebugList()
+					for _, item := range debugList.Items {
+						fmt.Fprintf(os.Stderr, "%s\t%s\n", item.(*MShellList).Items[0].(*MShellString).Content, item.(*MShellList).Items[1].(*MShellString).Content)
+					}
+
+					// fmt.Fprint(os.Stderr, debugStr)
+				} else if t.Lexeme == "binPaths" {
+					stack.Push(context.Pbm.DebugList())
+
 				} else if t.Lexeme == ".def" {
 					// Print out available definitions
 					fmt.Fprint(os.Stderr, "Available definitions:\n")

@@ -529,6 +529,11 @@ type MShellList struct {
 	RunInBackground bool
 }
 
+// initLength creates list like: make([]MShellObject, initLength)
+// meaning the list would normally then be populated using
+// list[n] = value
+// not
+// append(list, ..)
 func NewList(initLength int) *MShellList {
 	if initLength < 0 {
 		// panic

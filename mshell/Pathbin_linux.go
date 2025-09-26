@@ -81,10 +81,7 @@ func (pbm *PathBinManager) Update() {
 
 }
 
-func (pbm *PathBinManager) DebugList() string {
-	var sb strings.Builder
-
-	// Write tab separated key -> value pairs, sorted by key
+func (pbm *PathBinManager) DebugList() *MShellList {
 	keys := make([]string, 0, len(pbm.binaryPaths))
 	for key := range pbm.binaryPaths {
 		keys = append(keys, key)
@@ -92,14 +89,16 @@ func (pbm *PathBinManager) DebugList() string {
 
 	sort.Strings(keys)
 
-	for _, key := range keys {
-		sb.WriteString(key)
-		sb.WriteString("\t")
-		sb.WriteString(pbm.binaryPaths[key])
-		sb.WriteString("\n")
+	l := NewList(len(keys))
+
+	for i, key := range keys {
+		innerList := NewList(2)
+		innerList.Items[0] = &MShellString {key}
+		innerList.Items[1] = &MShellString {pbm.binaryPaths[key]}
+		l.Items[i] = innerList
 	}
 
-	return sb.String()
+	return l
 }
 
 func (pbm *PathBinManager) ExecuteArgs(execPath string) ([]string, error) {

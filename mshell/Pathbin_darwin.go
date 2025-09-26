@@ -84,10 +84,7 @@ func NewPathBinManager() IPathBinManager {
 	}
 }
 
-func (pbm *PathBinManager) DebugList() string {
-	var sb strings.Builder
-
-	// Write tab separated key -> value pairs, sorted by key
+func (pbm *PathBinManager) DebugList() *MShellList {
 	keys := make([]string, 0, len(pbm.binaryPaths))
 	for key := range pbm.binaryPaths {
 		keys = append(keys, key)
@@ -95,14 +92,16 @@ func (pbm *PathBinManager) DebugList() string {
 
 	sort.Strings(keys)
 
-	for _, key := range keys {
-		sb.WriteString(key)
-		sb.WriteString("\t")
-		sb.WriteString(pbm.binaryPaths[key])
-		sb.WriteString("\n")
+	l := NewList(len(keys))
+
+	for i, key := range keys {
+		innerList := NewList(2)
+		innerList.Items[0] = &MShellString {key}
+		innerList.Items[1] = &MShellString {pbm.binaryPaths[key]}
+		l.Items[i] = innerList
 	}
 
-	return sb.String()
+	return l
 }
 
 func (pbm *PathBinManager) ExecuteArgs(execPath string) ([]string, error) {
@@ -174,6 +173,56 @@ func (pbm *PathBinManager) Lookup(binName string) (string, bool) {
 	// return "", false
 }
 
+func (pbm *PathBinManager) Update() {
+	// Get the current path from the environment
+	currPath, exists := os.LookupEnv("PATH")
+	var currPathSlice []string
+	if !exists {
+		currPathSlice = make([]string, 0)
+	} else {
+		currPathSlice = strings.Split(currPath, ":")
+	}
+
+	var binaryPaths = make(map[string]string)
+
+	for _, pathItem := range currPathSlice {
+		// Stat the directory, look for executables
+		// dir, err := os.Open(pathItem)
+		// if err != nil {
+			// continue
+		// }
+		files, err := os.ReadDir(pathItem)
+		if err != nil {
+			continue
+		}
+
+		// First add all the executables to the binaryPaths map
+		// If already exists, skip
+		for _, file := range files {
+			if file.IsDir() {
+				continue
+			}
+
+			fileInfo, err := file.Info()
+			if err != nil {
+				continue
+			}
+
+			if fileInfo.Mode() & 0111 != 0 {
+				_, exists := binaryPaths[file.Name()]
+				if !exists {
+					binaryPaths[file.Name()] = pathItem + "/" + file.Name()
+				}
+			}
+		}
+	}
+
+	pbm.currPath = currPathSlice
+	pbm.binaryPaths = binaryPaths
+
+}
+
+
 func (pbm *PathBinManager) SetupCommand(allArgs []string) (*exec.Cmd) {
 	// No-op for Linux, as we don't need to set the PATH
 	return exec.Command(allArgs[0], allArgs[1:]...)
@@ -187,6 +236,6 @@ func (s *TermState) UpdateSize() {
 	var err error
 	s.numCols, s.numRows, err = term.GetSize(s.stdInFd)
 	if err != nil {
-		fmt.Fprintf(s.f, "Error getting terminal size for FD %d: %s\n", s.stdOutFd, err)
+		fmt.Fprintf(s.f, "Error getting terminal size for FD %d: %s\n", s.stdInFd, err)
 	}
 }

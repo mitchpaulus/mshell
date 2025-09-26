@@ -174,10 +174,8 @@ func (pbm *PathBinManager) Update() {
 	pbm.pathExts = pathExtsSlice
 }
 
-func (pbm *PathBinManager) DebugList() string {
-	var sb strings.Builder
+func (pbm *PathBinManager) DebugList() *MShellList {
 
-	// Write tab separated key -> value pairs, sorted by key
 	keys := make([]string, 0, len(pbm.binaryPaths))
 	for key := range pbm.binaryPaths {
 		keys = append(keys, key)
@@ -185,14 +183,16 @@ func (pbm *PathBinManager) DebugList() string {
 
 	sort.Strings(keys)
 
-	for _, key := range keys {
-		sb.WriteString(key)
-		sb.WriteString("\t")
-		sb.WriteString(pbm.binaryPaths[key].FullPath)
-		sb.WriteString("\n")
+	l := NewList(len(keys))
+
+	for i, key := range keys {
+		innerList := NewList(2)
+		innerList.Items[0] = &MShellString {key}
+		innerList.Items[1] = &MShellString { pbm.binaryPaths[key].FullPath }
+		l.Items[i] = innerList
 	}
 
-	return sb.String()
+	return l
 }
 
 func EscapeArgForCmd(arg string) string {

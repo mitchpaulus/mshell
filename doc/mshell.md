@@ -119,6 +119,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `hostname`: Get the current OS hostname. On failure to get, puts 'unknown' on the stack. `( -- str)`
 - `parseCsv`: Parse a CSV file into a list of lists of strings. Input can be a path/literal file name, or the string contents itself. (`path|str -- [[str]])`
 - `seq`: Generate a list of integers, starting from 0. Exclusive end to integer on stack. `2 seq` produces `[0 1]`. `(int -- [int])`
+- `binPaths`: Puts a list of lists with 2 items, first is the executable name, second is the full path to the executable. `(-- [[str]])`
 
 
 ## File/Directory Functions

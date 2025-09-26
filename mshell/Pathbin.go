@@ -6,7 +6,7 @@ import (
 type IPathBinManager interface {
 	Lookup(binName string) (string, bool)
 	ExecuteArgs(execPath string) ([]string, error)
-	DebugList() string
+	DebugList() *MShellList
 	IsExecutableFile(path string) bool
 	Matches(search string) ([]string)
 	SetupCommand(allArgs []string) *exec.Cmd
