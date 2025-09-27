@@ -4,7 +4,7 @@ false anyFail!
     f!
     $"{@f}.stdout" isFile
     (
-        ['msh' '--lex' @f] * ; output!
+        ['mshell' '--lex' @f] * ; output!
         @output $"{@f}.stdout" readFile =
         ( $"{@f}: PASS" wl )
         (
