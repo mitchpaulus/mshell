@@ -31,7 +31,7 @@ jobs:
       run:  cd tests && ./test.sh
 
     - name: Run lex test
-      run: cd tests/lex-check && msh test.msh
+      run: cd tests/lex-check && mshell test.msh
 
     - name: Run awk example tests
       run: cd examples/awk && ./test.sh
