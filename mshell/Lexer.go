@@ -278,7 +278,9 @@ type Lexer struct {
 	start   int
 	current int
 	col     int // Zero-based column number.
+	startCol int // Zero-based column number of the start of the token.
 	line    int // One-based line number.
+	startLine int // One-based line number of the start of the token.
 	input   []rune
 	allowUnterminatedString bool
 	emitWhitespace bool // If true, will emit whitespace tokens.
@@ -294,9 +296,11 @@ func NewLexer(input string, tokenFile *TokenFile) *Lexer {
 	return &Lexer{
 		input: []rune(input),
 		line:  1,
+		startLine: 1,
 		start: 0,
 		current: 0,
 		col: 0,
+		startCol: 0,
 		allowUnterminatedString: false,
 		emitWhitespace: false,
 		emitComments: false,
@@ -308,6 +312,8 @@ func NewLexer(input string, tokenFile *TokenFile) *Lexer {
 func (l *Lexer) resetInput(input string) {
 	l.input = []rune(input)
 	l.line = 1
+	l.startLine = 1
+	l.startCol = 0
 	l.col = 0
 	l.start = 0
 	l.current = 0
@@ -329,8 +335,8 @@ func (l *Lexer) makeToken(tokenType TokenType) Token {
 	lexeme := l.curLexeme()
 
 	return Token{
-		Line:   l.line,
-		Column: l.col - l.curLen() + 1,
+		Line:   l.startLine,
+		Column: l.startCol + 1,
 		Start:  l.start,
 		Lexeme: lexeme,
 		Type:   tokenType,
@@ -356,6 +362,13 @@ func (l *Lexer) peekNext() rune {
 		return 0
 	}
 	return l.input[l.current+1]
+}
+
+// Increments line, resets col. Make sure this is called after the newline has been consumed.
+// Otherwise, when the newline is consumed, the column will be incremented to 2 on the l.Advance()
+func (l *Lexer) handleNewline() {
+	l.line++
+	l.col = 0
 }
 
 var notAllowedLiteralChars = map[rune]bool{
@@ -538,6 +551,9 @@ func (l *Lexer) scanToken() Token {
 
 func (l *Lexer) scanTokenAll() Token {
 	l.start = l.current
+	l.startLine = l.line
+	l.startCol = l.col
+
 	if l.atEnd() {
 		return l.makeToken(EOF)
 	}
@@ -546,6 +562,10 @@ func (l *Lexer) scanTokenAll() Token {
 
 	switch c {
 	case ' ', '\t', '\r', '\v', '\f', 0x85, 0xA0, '\n':
+		if c == '\n' {
+			l.handleNewline()
+		}
+
 		for {
 			c := l.peek()
 			switch c {
@@ -556,9 +576,8 @@ func (l *Lexer) scanTokenAll() Token {
 					// l.advance()
 				// }
 			case '\n':
-				l.line++
-				l.col = 0
 				l.advance()
+				l.handleNewline()
 			default:
 				return l.makeToken(WHITESPACE)
 			}
@@ -698,7 +717,9 @@ func (l *Lexer) parseSingleQuoteString() Token {
 		}
 
 		c := l.advance()
-		if c == '\'' {
+		if c == '\n' {
+			l.handleNewline()
+		} else if c == '\'' {
 			break
 		}
 	}
@@ -954,6 +975,8 @@ func (l *Lexer) consumeString() ConsumeStringError {
 			}
 			if c == '\\' {
 				inEscape = true
+			} else if c == '\n' {
+				l.handleNewline()
 			}
 		}
 	}
@@ -995,6 +1018,8 @@ func (l *Lexer) parsePath() Token {
 		c := l.advance()
 		if c == '`' {
 			break
+		} else if c == '\n' {
+			l.handleNewline()
 		}
 	}
 	return l.makeToken(PATH)
