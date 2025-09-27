@@ -1,0 +1,15 @@
+Tokens:
+2:1:SINGLEQUOTESTRING 'asdfa
+
+asdfasdf
+
+asdfas'
+8:1:STRING "another
+multi line"
+11:1:PATH `multi
+line path`
+14:1:SINGLEQUOTESTRING 'asdfasdf'
+14:12:LITERAL toInt
+14:18:INTEGER 9
+14:20:PLUS +
+15:1:EOF 

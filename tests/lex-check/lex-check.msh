@@ -1,0 +1,14 @@
+# A multi line comment
+'asdfa
+
+asdfasdf
+
+asdfas'
+
+"another
+multi line"
+
+`multi
+line path`
+
+'asdfasdf' toInt 9 +
