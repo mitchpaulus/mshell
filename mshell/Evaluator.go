@@ -2760,6 +2760,24 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					} else {
 						stack.Push(&MShellString{asStr})
 					}
+				} else if t.Lexeme == "pop" {
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'pop' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					if listObj, ok := obj.(*MShellList); ok {
+						stack.Push(listObj)
+						if len(listObj.Items) == 0 {
+							stack.Push(&Maybe {obj: nil}) // No items to pop
+						} else {
+							item := listObj.Items[len(listObj.Items)-1]
+							listObj.Items = listObj.Items[:len(listObj.Items)-1]
+							stack.Push(&Maybe{ obj: item }) // Push the popped item
+						}
+					} else {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot pop from a %s.\n", t.Line, t.Column, obj.TypeName()))
+					}
 				} else { // last new function
 					// If we aren't in a list context, throw an error.
 					// Nearly always this is unintended.
