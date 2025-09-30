@@ -9,7 +9,7 @@ func TestUnterminatedString(t *testing.T) {
 	l := NewLexer(input, nil)
 	l.allowUnterminatedString = true
 
-	tokens := l.Tokenize()
+	tokens, _ := l.Tokenize()
 
 	if len(tokens) != 2 {
 		t.Logf("Expected 1 token, got %d", len(tokens))
@@ -29,7 +29,7 @@ func TestUnterminatedSingleQuoteString(t *testing.T) {
 	l := NewLexer(input, nil)
 	l.allowUnterminatedString = true
 
-	tokens := l.Tokenize()
+	tokens, _ := l.Tokenize()
 
 	if len(tokens) != 2 {
 		t.Logf("Expected 1 token, got %d", len(tokens))

@@ -340,7 +340,7 @@ func main() {
 	l := NewLexer(input, inputFile)
 
 	if command == CLILEX {
-		tokens := l.Tokenize()
+		tokens, _ := l.Tokenize()
 		fmt.Println("Tokens:")
 		for _, t := range tokens {
 			//                 Console.Write($"{t.Line}:{t.Column}:{t.TokenType} {t.RawText}\n");
@@ -525,10 +525,67 @@ func (s *TermState) Render() {
 	// ClearToEnd()
 	s.renderBuffer = append(s.renderBuffer, fmt.Sprintf("\033[%dG", s.promptLength + 1)...)
 	s.renderBuffer = append(s.renderBuffer, "\033[K"...)
-	// Print the current command
-	for _, r := range s.currentCommand {
-		s.renderBuffer = utf8.AppendRune(s.renderBuffer, r)
+
+	// Lex current command
+	s.l.allowUnterminatedString = true
+	s.l.emitWhitespace = true
+	s.l.emitComments = true
+	s.l.resetInput(string(s.currentCommand))
+	defer func(){
+		s.l.allowUnterminatedString = false
+		s.l.emitWhitespace = false
+		s.l.emitComments = false
+	}()
+
+	tokens, err := s.l.Tokenize()
+	if err != nil {
+		for _, r := range s.currentCommand {
+			s.renderBuffer = utf8.AppendRune(s.renderBuffer, r)
+		}
+	} else {
+		for _, t := range tokens {
+			if t.Type == STRING || t.Type == SINGLEQUOTESTRING || t.Type == FORMATSTRING {
+				s.renderBuffer = append(s.renderBuffer, "\033[31m"...)
+				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
+				s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
+			} else if t.Type == UNFINISHEDSTRING || t.Type == UNFINISHEDSINGLEQUOTESTRING {
+				s.renderBuffer = append(s.renderBuffer, "\033[91m"...)
+				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
+				s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
+			} else if t.Type == UNFINISHEDPATH {
+				s.renderBuffer = append(s.renderBuffer, "\033[95m"...)
+				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
+				s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
+			} else if t.Type == PATH {
+				s.renderBuffer = append(s.renderBuffer, "\033[35m"...)
+				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
+				s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
+			} else if t.Type == DATETIME {
+				s.renderBuffer = append(s.renderBuffer, "\033[36m"...)
+				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
+				s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
+			} else if t.Type == TRUE || t.Type == FALSE {
+				s.renderBuffer = append(s.renderBuffer, "\033[34m"...)
+				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
+				s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
+			} else if t.Type == VARSTORE {
+				s.renderBuffer = append(s.renderBuffer, "\033[32m"...)
+				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
+				s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
+			} else if t.Type == VARRETRIEVE {
+				s.renderBuffer = append(s.renderBuffer, "\033[33m"...)
+				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
+				s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
+			} else {
+				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
+			}
+		}
 	}
+
+	// Print the current command
+	// for _, r := range s.currentCommand {
+		// s.renderBuffer = utf8.AppendRune(s.renderBuffer, r)
+	// }
 
 	// Search for history
 	historySearchNew := SearchHistory(string(s.currentCommand), historyToSave)
@@ -594,7 +651,7 @@ func (s *TermState) Render() {
 	pos := s.promptLength + 1 + s.index
 	s.renderBuffer = append(s.renderBuffer, fmt.Sprintf("\033[%dG", pos)...)
 
-	fmt.Fprintf(s.f, "Term index: %d, command length: %d, num completions: %d, limit: %d\n, prompt row: %d, numRows: %d", s.index, len(s.currentCommand), len(currentTabCompletion), limit, s.promptRow, s.numRows)
+	fmt.Fprintf(s.f, "Term index: %d, command length: %d, num completions: %d, limit: %d\n, prompt row: %d, numRows: %d\n", s.index, len(s.currentCommand), len(currentTabCompletion), limit, s.promptRow, s.numRows)
 
 	// Push the buffer to stdout
 	// fmt.Fprintf(s.f, "Rendering buffer: %s\n", string(s.renderBuffer))
@@ -1442,15 +1499,17 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 		alias, aliasSet := aliases[lastWord]
 		if aliasSet {
 			currentCommandStr = currentCommandStr[:i] + alias
+			state.currentCommand = []rune(currentCommandStr)
+			state.index = len(state.currentCommand)
+			state.Render()
 		}
 
-		// Update the UI.
-		state.clearToPrompt()
-		fmt.Fprintf(os.Stdout, "%s", currentCommandStr)
-		state.index = len(state.currentCommand)
-		state.currentCommand = []rune(currentCommandStr)
-		// Move cursor to end
-		fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index+1)
+		// // Update the UI.
+		// state.clearToPrompt()
+		// fmt.Fprintf(os.Stdout, "%s", currentCommandStr)
+		// state.currentCommand = []rune(currentCommandStr)
+		// // Move cursor to end
+		// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index+1)
 	}
 
 	if len(currentCommandStr) > 0 {
@@ -2119,7 +2178,10 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			}()
 
 			state.l.resetInput(string(state.currentCommand[0:state.index]))
-			tokens := state.l.Tokenize()
+			tokens, err := state.l.Tokenize()
+			if err != nil {
+				return false, nil
+			}
 			lastTokenLength := 0
 
 			var lastToken Token
@@ -2270,8 +2332,8 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 					insertString = "`" + matches[0].Match
 				} else {
 					state.l.resetInput(matches[0].Match)
-					tokens := state.l.Tokenize()
-					if len(tokens) > 2 {
+					tokens, err := state.l.Tokenize()
+					if len(tokens) > 2 && err == nil {
 						// We have to quote around it
 						// TODO: Deal with case when the match itself has a single quote.
 						insertString = "'" + matches[0].Match + "'"
@@ -2297,8 +2359,8 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 						longestCommonPrefix = "`" + longestCommonPrefix
 					} else {
 						state.l.resetInput(longestCommonPrefix)
-						tokens := state.l.Tokenize()
-						if len(tokens) > 2 {
+						tokens, err := state.l.Tokenize()
+						if len(tokens) > 2 && err == nil {
 							// We have to put start quote around it, but don't put end quote, wait for more input
 							longestCommonPrefix = "'" + longestCommonPrefix
 						}
@@ -2531,7 +2593,7 @@ func HtmlFromInput(input string) string {
 	l.emitWhitespace = true
 	l.emitComments = true
 
-	tokens := l.Tokenize()
+	tokens, _ := l.Tokenize()
 
 	sb := strings.Builder{}
 	sb.WriteString("<code>")

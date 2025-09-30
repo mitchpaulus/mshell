@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"unicode"
+	"errors"
 )
 
 
@@ -1025,14 +1026,15 @@ func (l *Lexer) parsePath() Token {
 	return l.makeToken(PATH)
 }
 
-func (l *Lexer) Tokenize() []Token {
+func (l *Lexer) Tokenize() ([]Token, error) {
 	var tokens []Token
 	for {
 		t := l.scanToken()
 		tokens = append(tokens, t)
-		if t.Type == ERROR || t.Type == EOF {
-			break
+		if t.Type == ERROR {
+			return tokens, errors.New(t.Lexeme)
+		} else if t.Type == EOF {
+			return tokens, nil
 		}
 	}
-	return tokens
 }
