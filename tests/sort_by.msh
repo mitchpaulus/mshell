@@ -1,0 +1,33 @@
+[3 1 2 0] (> (-1) (1) iff) sortByCmp str wl
+[3 1 2 0] (<= (-1) (1) iff) sortByCmp str wl
+[] (> (-1) (1) iff) sortByCmp str wl
+
+# Test multiple levels of sorting
+[
+    [1 6]
+    [0 5]
+    [2 4]
+    [0 3]
+]
+(b! a! @a :1: @b :1: <= (-1) (1) iff) sortByCmp
+(b! a! @a :0: @b :0: <= (-1) (1) iff) sortByCmp
+str wl
+
+
+# Test version sorting
+
+def compareAndWrite (int str str -- )
+    b! a! $"'{@a}' '{@b}' " w @a @b versionSortCmp = str wl
+end
+
+0 "a" "a" compareAndWrite
+0 "" ""  compareAndWrite
+-1 "" "a"  compareAndWrite
+1 "a" "" compareAndWrite
+-1 "a" "b"  compareAndWrite
+1 "b" "a" compareAndWrite
+-1 "A" "a" compareAndWrite
+1 "a" "A" compareAndWrite
+-1 "1" "02" compareAndWrite
+1 "02" "2" compareAndWrite
+1 "10" "2" compareAndWrite

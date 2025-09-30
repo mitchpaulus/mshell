@@ -1,0 +1,15 @@
+[3 2 1 0]
+[0 1 2 3]
+[]
+[[0 3] [0 5] [1 6] [2 4]]
+'a' 'a' true
+'' '' true
+'' 'a' true
+'a' '' true
+'a' 'b' true
+'b' 'a' true
+'A' 'a' true
+'a' 'A' true
+'1' '02' true
+'02' '2' true
+'10' '2' true

@@ -120,6 +120,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `parseCsv`: Parse a CSV file into a list of lists of strings. Input can be a path/literal file name, or the string contents itself. (`path|str -- [[str]])`
 - `seq`: Generate a list of integers, starting from 0. Exclusive end to integer on stack. `2 seq` produces `[0 1]`. `(int -- [int])`
 - `binPaths`: Puts a list of lists with 2 items, first is the executable name, second is the full path to the executable. `(-- [[str]])`
+- `versionSortCmp`: A comparison function for use with `sortByCmp`. Used to implement "version sort" or "natural sort". `(str str -- int)`
 
 
 ## File/Directory Functions
@@ -211,6 +212,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `listToDict`: Transform a list into a dictionary with a key and value selector function. `([a] (a -- b) (a -- c) -- { b: c })`
 - `take`: Take the first `n` number of elements from list. `([a] int -- [a])`
 - `pop`: Pop the final element off the list. Returns a Maybe, `none` for the empty list. Leaves the modified list on the stack. `([a] -- [a] a)`
+- `sortByCmp`: Sort a list by a comparison function. The function/quotation should return -1 when a < b, 0 when a = b, or 1 when a > b. `[a] (a a -- int) -- [a]`
 
 ## Dictionary Functions
 

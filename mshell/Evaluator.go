@@ -45,6 +45,10 @@ func (objList *MShellStack) Peek() (MShellObject, error)            {
 	return (*objList)[len(*objList)-1], nil
 }
 
+func (objList *MShellStack) Clear() {
+	*objList = (*objList)[:0]
+}
+
 func (objList *MShellStack) Pop() (MShellObject, error) {
 	if len(*objList) == 0 {
 		return nil, fmt.Errorf("Empty stack")
@@ -2778,6 +2782,127 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					} else {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot pop from a %s.\n", t.Line, t.Column, obj.TypeName()))
 					}
+				} else if t.Lexeme == "sortByCmp" {
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					// Obj2 should be list
+					listToBeSorted, ok := obj2.(*MShellList)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The 2nd from top of stack in 'sortByCmp' is expected to be a list, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
+					}
+					// Obj1 should be a quotation
+					quotation, ok := obj1.(*MShellQuotation)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The top of stack for 'sortByCmp' is expected to be a function, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
+					}
+
+					// Using merge sort below because it is stable which allows for multiple levels of sorting, like "then by".
+					// Merge sort generally also has good enough performance for now.
+					n := len(obj2.(*MShellList).Items)
+					array1 := obj2.(*MShellList).Items
+					array2 := make([]MShellObject, n)
+
+					curr_array := 0
+
+					sorted_array := array1
+					work_array := array2
+
+					cmpStack := MShellStack{}
+
+					for width := 1; width < n; width = 2 * width {
+						for i := 0; i < n; i = i + 2 * width {
+							iLeftStart := i // Inclusive left start
+							iRightStart := min(i + width, n) // Inclusive right start, exclusive left end
+							iEnd := min(i + 2 * width, n) // Exclusive End
+
+							leftIndex := iLeftStart
+							rightIndex := iRightStart
+
+							for k := iLeftStart; k < iEnd; k++ {
+								if leftIndex < iRightStart {
+									if rightIndex >= iEnd {
+										work_array[k] = sorted_array[leftIndex]
+										leftIndex++
+									} else {
+										// Do comparison
+										// Clear stack
+										cmpStack.Clear()
+										cmpStack.Push(sorted_array[leftIndex])
+										cmpStack.Push(sorted_array[rightIndex])
+
+										quoteContext, err := quotation.BuildExecutionContext(&context)
+										defer quoteContext.Close()
+
+										if err != nil {
+											return state.FailWithMessage(err.Error())
+										}
+
+										result := state.Evaluate(quotation.Tokens, &cmpStack, (*quoteContext), definitions, CallStackItem{quotation, "quote", CALLSTACKQUOTE})
+										if result.ShouldPassResultUpStack() {
+											return result
+										}
+
+										// Check that an integer is on top of the stack.
+										cmpResult, err := cmpStack.Pop()
+										if err != nil {
+											return state.FailWithMessage(fmt.Sprintf("%d:%d: The function in 'sortByCmp' did not return a value, found an empty stack.\n", t.Line, t.Column))
+										}
+
+										cmpInt, ok := cmpResult.(*MShellInt)
+										if !ok {
+											return state.FailWithMessage(fmt.Sprintf("%d:%d: The function in 'sortByCmp' did not return an integer, found a %s (%s).\n", t.Line, t.Column, cmpResult.TypeName(), cmpResult.DebugString()))
+										}
+
+										// fmt.Fprintf(os.Stderr, "Comparing %s and %s: %d\n", sorted_array[leftIndex].DebugString(), sorted_array[rightIndex].DebugString(), cmpInt.Value)
+
+										if cmpInt.Value <= 0 { // left <= right
+											work_array[k] = sorted_array[leftIndex]
+											leftIndex++
+										} else { // left > right
+											work_array[k] = sorted_array[rightIndex]
+											rightIndex++
+										}
+									}
+								} else {
+									work_array[k] = sorted_array[rightIndex]
+									rightIndex++
+								}
+							}
+						}
+
+						curr_array = 1 - curr_array
+						if curr_array == 0 {
+							sorted_array = array1
+							work_array = array2
+						} else {
+							sorted_array = array2
+							work_array = array1
+						}
+					}
+
+					listToBeSorted.Items = sorted_array
+					stack.Push(listToBeSorted)
+				} else if t.Lexeme == "versionSortCmp" {
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					// objects should be castable as strings
+					str2, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The first parameter in 'versionSortCmp' is expected to be stringable, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
+					}
+
+					str1, err := obj2.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second parameter in 'versionSortCmp' is expected to be stringable, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
+					}
+
+					stack.Push(&MShellInt{Value: VersionSortCmp(str1, str2)})
 				} else { // last new function
 					// If we aren't in a list context, throw an error.
 					// Nearly always this is unintended.
@@ -4774,4 +4899,86 @@ func DirNoVolume(p string) string {
 	}
 	dir := filepath.Dir(p)
 	return StripVolumePrefix(dir)
+}
+
+func VersionSortCmp(s1 string, s2 string) int {
+	i := 0
+	j := 0
+
+	for {
+		if i >= len(s1) {
+			if j >= len(s2) {
+				return 0
+			}
+			return -1
+		}
+		if j >= len(s2) {
+			return 1
+		}
+
+		iStart := i
+		jStart := j
+
+		char1 := s1[i]
+		char2 := s2[j]
+		i++
+		j++
+		isDigit1 := false
+		isDigit2 := false
+
+		if char1 >= '0' && char1 <= '9' {
+			isDigit1 = true
+		}
+
+		if char2 >= '0' && char2 <= '9' {
+			isDigit2 = true
+		}
+
+		if isDigit1 && !isDigit2 {
+			return 1
+		}
+
+		if !isDigit1 && isDigit2 {
+			return -1
+		}
+
+		if !isDigit1 && !isDigit2 {
+			if char1 < char2 {
+				return -1
+			} else if char1 > char2 {
+				return 1
+			} else {
+				continue
+			}
+		}
+
+		// Both digits, read in all digits
+		for i < len(s1) {
+			if s1[i] >= '0' && s1[i] <= '9' {
+				i++
+			}
+		}
+
+		// Both digits, read in all digits
+		for j < len(s2) {
+			if s2[j] >= '0' && s2[j] <= '9' {
+				j++
+			}
+		}
+
+		// Get the integer representations
+		num1, _ := strconv.Atoi(s1[iStart:i])
+		num2, _ := strconv.Atoi(s2[jStart:j])
+
+		if num1 < num2 {
+			return -1
+		} else if num1 > num2 {
+			return 1
+		} else if (i - iStart) > (j - jStart) { // Sort more leading zeros after
+			return 1
+		} else if (i - iStart) < (j - jStart) {
+			return -1
+		}
+		// else continue because they are equal
+	}
 }
