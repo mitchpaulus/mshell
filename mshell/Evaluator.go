@@ -2771,7 +2771,6 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 
 					if listObj, ok := obj.(*MShellList); ok {
-						stack.Push(listObj)
 						if len(listObj.Items) == 0 {
 							stack.Push(&Maybe {obj: nil}) // No items to pop
 						} else {
