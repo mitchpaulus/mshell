@@ -4295,7 +4295,10 @@ const (
 )
 
 func (state *EvalState) EvaluateFormatString(lexeme string, context ExecuteContext, definitions []MShellDefinition, callStackItem CallStackItem) (*MShellString, error) {
-	if len(lexeme) < 3 {
+
+	allRunes := []rune(lexeme)
+
+	if len(allRunes) < 3 {
 		return nil, fmt.Errorf("Found format string with less than 3 characters: %s", lexeme)
 	}
 
@@ -4310,8 +4313,8 @@ func (state *EvalState) EvaluateFormatString(lexeme string, context ExecuteConte
 	lexer := NewLexer("", nil)
 	parser := MShellParser{ lexer: lexer }
 
-	for index < len(lexeme)-1 {
-		c := lexeme[index]
+	for index < len(allRunes)-1 {
+		c := allRunes[index]
 		index++
 
 		if mode == FORMATMODEESCAPE {
@@ -4346,10 +4349,10 @@ func (state *EvalState) EvaluateFormatString(lexeme string, context ExecuteConte
 		} else if mode == FORMATMODEFORMAT {
 			if c == '}' {
 				formatStrEndIndex = index - 1
-				formatStr := lexeme[formatStrStartIndex+1:formatStrEndIndex]
+				formatStr := allRunes[formatStrStartIndex+1:formatStrEndIndex]
 
 				// Evaluate the format string
-				lexer.resetInput(formatStr)
+				lexer.resetInput(string(formatStr))
 				parser.NextToken()
 				contents, err := parser.ParseFile()
 				if err != nil {

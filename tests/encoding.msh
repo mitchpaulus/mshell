@@ -1,1 +1,2 @@
 "°" wl
+$"°" wl # Format strings are lexed/parsed with some independent code so also need this test.
