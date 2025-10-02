@@ -28,6 +28,7 @@ import (
 	"golang.org/x/net/html"
 	"crypto/md5"
 	"net/http"
+	"net/url"
 )
 
 type MShellFunction struct {
@@ -2903,7 +2904,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 
 					stack.Push(&MShellInt{Value: VersionSortCmp(str1, str2)})
-				} else if t.Lexeme == "httpGet" {
+				} else if t.Lexeme == "httpGet" || t.Lexeme == "httpPost" {
 					// Expect a dictionary on the stack
 					obj, err := stack.Pop()
 					if err != nil {
@@ -2930,7 +2931,17 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					client.Timeout = 30 * time.Second
 
 					// Create request
-					req, err := http.NewRequest("GET", urlStrValue, nil)
+					var method string
+					switch t.Lexeme {
+					case "httpGet":
+						method = "GET"
+					case "httpPost":
+						method = "POST"
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Unknown HTTP method '%s'.\n", t.Line, t.Column, t.Lexeme))
+					}
+
+					req, err := http.NewRequest(method, urlStrValue, nil)
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error creating HTTP request for '%s': %s\n", t.Line, t.Column, t.Lexeme, err.Error()))
 					}
@@ -2958,9 +2969,20 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						req.Header = reqHeaders
 					}
 
+					// Doesn't make sense for GETs, but doesn't break anything?
+					bodyStr, ok := dict.Items["body"]
+					if ok {
+						// Body should be a string
+						bodyStrValue, err := bodyStr.CastString()
+						if err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: The 'body' value in '%s' must be stringable, found a %s (%s)\n", t.Line, t.Column, t.Lexeme, bodyStr.TypeName(), bodyStr.DebugString()))
+						}
+
+						// Set the request body
+						req.Body = io.NopCloser(strings.NewReader(bodyStrValue))
+					}
+
 					// Make request
-
-
 					resp, err := client.Do(req)
 					if err != nil {
 						stack.Push(&Maybe{obj: nil}) // No response
@@ -2991,6 +3013,43 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						// Push the response dictionary onto the stack
 						stack.Push(&Maybe{obj: responseDict})
 					}
+				} else if t.Lexeme == "urlEncode" {
+					// Top of stack should be dictionary or string.
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
+					}
+
+					var encodedStr string
+					switch typedObj := obj.(type) {
+					case *MShellString:
+						// URL encode the string
+						encodedStr = url.QueryEscape(typedObj.Content)
+					case *MShellDict:
+						// URL encode the dictionary
+						values := url.Values{}
+
+						for key, value := range typedObj.Items {
+							// If the value is a list, handle that case by duplicating
+							if list, ok := value.(*MShellList); ok {
+								for _, item := range list.Items {
+									strValue, err := item.CastString()
+									if err != nil {
+										return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot URL encode a %s in dictionary value for key '%s'.\n", t.Line, t.Column, item.TypeName(), key))
+									}
+									values.Add(key, strValue)
+								}
+							} else if strValue, err := value.CastString(); err != nil {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot URL encode a %s in dictionary value for key '%s'.\n", t.Line, t.Column, value.TypeName(), key))
+							} else {
+								values.Add(key, strValue)
+							}
+						}
+
+						encodedStr = values.Encode()
+					}
+
+					stack.Push(&MShellString{Content: encodedStr})
 				} else { // last new function
 					// If we aren't in a list context, throw an error.
 					// Nearly always this is unintended.

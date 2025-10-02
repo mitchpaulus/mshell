@@ -208,7 +208,9 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `zip`: Zip two lists together. If the two list are different lengths, resulting list will be the same length as the shorter of the two lists. `([a] [b] (a b -- c) -- [c])`
 - `concat`: Flatten list of lists one level. Useful for things like a `flatMap`, which can be defined like `map concat`. `([[a]] -- [a])`
 - `cartesian`: Produces the Cartesian product between two lists. Output is a list of lists, in which the inner list has two elements. `([a] [a] -- [[a]])`
-- `groupBy`: Groups items of a list into a dictionary based on a key function. The key function should take each item as input and produce a string. The output is a dictionary with the unique keys and values that are lists of the corresponding items. `[a] (a -- str) -- dict [a])`
+- `groupBy`: Groups items of a list into a dictionary based on a key function. The key function should take each item as input and produce a string.
+             The output is a dictionary with the unique keys and values that are lists of the corresponding items.
+             `[a] (a -- str) -- dict [a])`
 - `listToDict`: Transform a list into a dictionary with a key and value selector function. `([a] (a -- b) (a -- c) -- { b: c })`
 - `take`: Take the first `n` number of elements from list. `([a] int -- [a])`
 - `pop`: Pop the final element off the list. Returns a Maybe, `none` for the empty list. Leaves the modified list on the stack. `([a] -- [a] a)`
@@ -279,6 +281,24 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
 - `parseHtml`: Parse HTML from string or file. Returns a dictionary of node data. The dictionaries have keys `tag`, `attr`, `children`, and `text`. `(str | path -- dict)`
 - `htmlDescendents`: Get all descendants of a node. Returns a list of dictionaries with the same keys as `parseHtml`. Includes the starting node.  `(dict -- [dict])`
 - `findByTag`: Find all nodes with a given tag name. `(dict str -- [dict])`
+
+## HTTP Requests
+
+- `httpGet`: Make a HTTP GET request. Signature is `(dict -- dict)`. Takes the request information in a dictionary that should have the following keys:
+
+  - `url`: Full URL, including all the query parameters
+  - `headers`: A dictionary of key-value pairs for the request headers
+
+  Returns a Maybe wrapping a response dictionary.
+  The response is `none` is the web request totally fails, like hitting a timeout.
+  Otherwise a Just Dictionary is returned, with fields
+
+  - `status`: Integer status code
+  - `reason`: Full reason line, ex: `"200 OK"`
+  - `headers`: Dictionary of key-value header pairs
+  - `body`: Body of response, read as UTF-8 string.
+
+- `httpPost`: Make a HTTP POST request. Signature is `(dict -- dict)`. Only difference from `httpGet` is that on the request dictionary, you can also set the `body` field to a string.
 
 ## Variables
 
