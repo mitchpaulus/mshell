@@ -4349,10 +4349,10 @@ func (state *EvalState) EvaluateFormatString(lexeme string, context ExecuteConte
 		} else if mode == FORMATMODEFORMAT {
 			if c == '}' {
 				formatStrEndIndex = index - 1
-				formatStr := allRunes[formatStrStartIndex+1:formatStrEndIndex]
+				formatStr := string(allRunes[formatStrStartIndex+1:formatStrEndIndex])
 
 				// Evaluate the format string
-				lexer.resetInput(string(formatStr))
+				lexer.resetInput(formatStr)
 				parser.NextToken()
 				contents, err := parser.ParseFile()
 				if err != nil {
