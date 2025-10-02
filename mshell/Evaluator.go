@@ -27,6 +27,7 @@ import (
 	"unicode"
 	"golang.org/x/net/html"
 	"crypto/md5"
+	"net/http"
 )
 
 type MShellFunction struct {
@@ -2902,6 +2903,94 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 
 					stack.Push(&MShellInt{Value: VersionSortCmp(str1, str2)})
+				} else if t.Lexeme == "httpGet" {
+					// Expect a dictionary on the stack
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
+					}
+
+					dict, ok := obj.(*MShellDict)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The parameter in '%s' is expected to be a dictionary, found a %s (%s)\n", t.Line, t.Column, t.Lexeme, obj.TypeName(), obj.DebugString()))
+					}
+
+					urlStr, ok := dict.Items["url"]
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The dictionary in '%s' must contain a 'url' key.\n", t.Line, t.Column, t.Lexeme))
+					}
+
+					urlStrValue, err := urlStr.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The 'url' value in '%s' must be stringable, found a %s (%s)\n", t.Line, t.Column, t.Lexeme, urlStr.TypeName(), urlStr.DebugString()))
+					}
+
+					// Create HTTP client
+					client := &http.Client{}
+					client.Timeout = 30 * time.Second
+
+					// Create request
+					req, err := http.NewRequest("GET", urlStrValue, nil)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error creating HTTP request for '%s': %s\n", t.Line, t.Column, t.Lexeme, err.Error()))
+					}
+
+					headersList, ok := dict.Items["headers"]
+					if ok {
+						// Headers should be a dictionary of key-value pairs
+						headersDict, ok := headersList.(*MShellDict)
+						if !ok {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: The 'headers' value in '%s' must be a dictionary, found a %s (%s)\n", t.Line, t.Column, t.Lexeme, headersList.TypeName(), headersList.DebugString()))
+						}
+						// Create HTTP headers
+						reqHeaders := make(http.Header)
+						for key, value := range headersDict.Items {
+							strValue, err := value.CastString()
+							if err != nil {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: The header value '%s' in '%s' must be stringable, found a %s (%s)\n", t.Line, t.Column, key, t.Lexeme, value.TypeName(), value.DebugString()))
+							}
+
+							// Use CanonicalHeaderKey
+							reqHeaders.Add(http.CanonicalHeaderKey(key), strValue)
+						}
+
+						// Add headers to the request
+						req.Header = reqHeaders
+					}
+
+					// Make request
+
+
+					resp, err := client.Do(req)
+					if err != nil {
+						stack.Push(&Maybe{obj: nil}) // No response
+					} else {
+						responseDict := NewDict()
+						responseDict.Items["status"] = &MShellInt{Value: resp.StatusCode}
+						responseDict.Items["reason"] = &MShellString{Content: resp.Status}
+						responseHeaders := NewDict()
+						for key, values := range resp.Header {
+							valueList := NewList(len(values))
+							for i, value := range values {
+								valueList.Items[i] = &MShellString{Content: value}
+							}
+
+							responseHeaders.Items[key] = valueList
+						}
+						responseDict.Items["headers"] = responseHeaders
+
+						// Read body as a UTF-8 encoded string
+						bodyBytes, err := io.ReadAll(resp.Body)
+						if err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error reading response body in '%s': %s\n", t.Line, t.Column, t.Lexeme, err.Error()))
+						}
+						resp.Body.Close() // Close the response body
+
+						responseDict.Items["body"] = &MShellString{Content: string(bodyBytes)}
+
+						// Push the response dictionary onto the stack
+						stack.Push(&Maybe{obj: responseDict})
+					}
 				} else { // last new function
 					// If we aren't in a list context, throw an error.
 					// Nearly always this is unintended.

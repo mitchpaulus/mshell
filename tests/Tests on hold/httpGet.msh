@@ -1,0 +1,4 @@
+{ "url": "https://mitchellt.com" } httpGet? resp!
+@resp "status" get? wl
+@resp "reason" get? wl
+@resp "headers" get? str wl
