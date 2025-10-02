@@ -1578,12 +1578,14 @@ func ParseRawString(inputString string) (string, error) {
 		return "", fmt.Errorf("input string should have a minimum length of 2 for surrounding double quotes.\n")
 	}
 
+	allRunes := []rune(inputString)
+
 	var b strings.Builder
 	index := 1
 	inEscape := false
 
-	for index < len(inputString)-1 {
-		c := inputString[index]
+	for index < len(allRunes)-1 {
+		c := allRunes[index]
 
 		if inEscape {
 			switch c {
