@@ -7,7 +7,7 @@ curl -sL 'https://github.com/mitchpaulus/mshell/releases/latest/download/linux_a
 ln -s "$HOME"/.local/bin/msh "$HOME"/.local/bin/mshell 2>/dev/null
 
 mkdir -p "$HOME"/.local/share/mshell
-curl -sL 'https://raw.githubusercontent.com/mitchpaulus/mshell/refs/heads/main/lib/std.msh' > "$HOME"/.local/share/mshell/std.msh
+curl -sL 'https://raw.githubusercontent.com/mitchpaulus/mshell/v0.7.0/lib/std.msh' > "$HOME"/.local/share/mshell/std.msh
 # grep for 'export MSHSTDLIB' in .bashrc, if it doesn't exist, add it
 
 # shellcheck disable=SC2016
