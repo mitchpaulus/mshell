@@ -1,5 +1,8 @@
 #!/bin/sh
 
+# Can use this script like:
+# curl -sL https://raw.githubusercontent.com/mitchpaulus/mshell/refs/heads/main/install.sh | sh -
+
 mkdir -p "$HOME"/.local/bin
 curl -sL 'https://github.com/mitchpaulus/mshell/releases/latest/download/linux_amd64.tar.gz' | tar -xz -C "$HOME"/.local/bin
 
