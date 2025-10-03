@@ -5,6 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.7.0 - 2025-10-03
+
+### Added
+
+- Basic tab completion for the CLI
+- Basic HTML parsing
+- Start of VS code extension
+- `httpGet` and `httpPost` for making web requests.
+- Functions
+  - `isNone`
+  - `parseHtml`
+  - `absPath`
+  - `bind`
+  - `findByTag`
+  - `concat`
+  - `cartesian`
+  - `groupBy`
+  - `reFind`
+  - `reFindAllIndex`
+  - `md5`
+  - `eachWhile`
+  - `rmf`
+  - `take`
+  - `skip`
+
+
+### Fixed
+
+- Handling of `.cmd` and `.bat`
+- Now immediately close file when appending
+- `mv` made more robust
+- Fixed broken line/columns in lexing
+- Better handling of UTF-8 input
+
+### Changed
+
+- Now return Maybes for conversions
+- Removed `canParseDt`
+- `get` returns Maybe
+- No escaping in path literals
+- In JSON mappings, null now goes to `none`, not 0.
+- `fileSize` now returns Maybe
+
+
 ## 0.6.0 - 2025-07-17
 
 ### Added
