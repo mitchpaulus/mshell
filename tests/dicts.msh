@@ -15,6 +15,26 @@
 @d "1" get? wl
 @d "2" get? wl
 
+# Now try with negatives
+{
+    -1 : '-1',
+    -00002 : '-2' # This should get normalized to 2.
+} d!
+
+@d "-1" get? wl
+@d "-2" get? wl
+
+# Try again with no space around the colon. This is to test the handling of a STARTINDEXER token vs. a INTEGER token.
+{
+    -1:'-1',
+    -00002:'-2' # This should get normalized to 2.
+} d!
+
+@d "-1" get? wl
+@d "-2" get? wl
+
+
+
 {
     literalKey: 'Also should work'
 } str wl
