@@ -1067,7 +1067,7 @@ func (parser *MShellParser) ParseDict() (*MShellParseDict, error) {
 
 func (parser *MShellParser) parseDictKeyValue() (MShellParseDictKeyValue, error) {
 	// Else expect a literal or string key.
-	if parser.curr.Type != LITERAL && parser.curr.Type != STRING {
+	if parser.curr.Type != LITERAL && parser.curr.Type != STRING && parser.curr.Type != SINGLEQUOTESTRING {
 		return MShellParseDictKeyValue{}, errors.New(fmt.Sprintf("Expected a key for dict, got %s at line %d, column %d.", parser.curr.Type, parser.curr.Line, parser.curr.Column))
 	}
 
@@ -1079,6 +1079,8 @@ func (parser *MShellParser) parseDictKeyValue() (MShellParseDictKeyValue, error)
 		if err != nil {
 			return MShellParseDictKeyValue{}, errors.New(fmt.Sprintf("Error parsing string key: %s at line %d, column %d.", err.Error(), parser.curr.Line, parser.curr.Column))
 		}
+	} else if parser.curr.Type == SINGLEQUOTESTRING {
+		key = parser.curr.Lexeme[1 : len(parser.curr.Lexeme)-1]
 	} else if parser.curr.Type == LITERAL {
 		key = parser.curr.Lexeme
 	} else {

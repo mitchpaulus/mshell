@@ -1,4 +1,6 @@
-{"hello": {"type": "String", "content": "world"}}
+{"hello": {"type": "String", "content": "world"}, "single quote "" string": {"type": "String", "content": "should work"}}
+hello
+single quote "" string
 {"key": {"type": "Integer", "value": 1}, "other key": {"type": "Integer", "value": 2}}
 {"key": {"type": "Integer", "value": 1}, "other key": {"type": "Integer", "value": 5}}
 {"key": {"type": "Integer", "value": 3}}

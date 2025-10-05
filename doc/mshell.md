@@ -140,7 +140,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `readTsvFile`: Read a TSV file into list of list of strings. `(str -- [[str]])`
 - `cd`: Change directory `(str -- )`
 - `pwd`: Get current working directory `( -- str)`
-- `writeFile`: Write string to file (UTF-8). `(str content str file -- )`
+- `writeFile`: Write string to file (UTF-8). Overwrites file if it exists. `(str content str file -- )`
 - `appendFile`: Append string to file (UTF-8). `(str content str file -- )`
 - `fileSize`: Get size of file in bytes. Returns a Maybe in case file doesn't exist or other IO error. `(str -- Maybe int)`
 - `lsDir`: Get list of all items (files and directories) in directory. Full paths to the items. `(str -- [str])`

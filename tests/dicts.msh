@@ -1,6 +1,8 @@
 {
     "hello": "world",
-} str wl
+    'single quote "" string': 'should work'
+} d! @d str wl
+@d keys uw
 
 {
     "key": 1,
