@@ -1,3 +1,8 @@
+is here
+also here
+is here
+also here
+{"literalKey": {"type": "String", "content": "Also should work"}}
 {"hello": {"type": "String", "content": "world"}, "single quote "" string": {"type": "String", "content": "should work"}}
 hello
 single quote "" string

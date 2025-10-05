@@ -1,4 +1,25 @@
 {
+    1 : 'is here',
+    00002 : 'also here' # This should get normalized to 2.
+} d!
+
+@d "1" get? wl
+@d "2" get? wl
+
+# Try again with no space around the colon. This is to test the handling of a STARTINDEXER token vs. a INTEGER token.
+{
+    1:'is here',
+    00002:'also here' # This should get normalized to 2.
+} d!
+
+@d "1" get? wl
+@d "2" get? wl
+
+{
+    literalKey: 'Also should work'
+} str wl
+
+{
     "hello": "world",
     'single quote "" string': 'should work'
 } d! @d str wl

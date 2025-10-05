@@ -6,6 +6,7 @@ import (
 	"strings"
 	// "os"
 	"sort"
+	"strconv"
 )
 
 type JsonableList []Jsonable
@@ -1067,31 +1068,41 @@ func (parser *MShellParser) ParseDict() (*MShellParseDict, error) {
 
 func (parser *MShellParser) parseDictKeyValue() (MShellParseDictKeyValue, error) {
 	// Else expect a literal or string key.
-	if parser.curr.Type != LITERAL && parser.curr.Type != STRING && parser.curr.Type != SINGLEQUOTESTRING {
-		return MShellParseDictKeyValue{}, errors.New(fmt.Sprintf("Expected a key for dict, got %s at line %d, column %d.", parser.curr.Type, parser.curr.Line, parser.curr.Column))
+	keyToken := parser.curr.Type
+	if keyToken != LITERAL && keyToken != STRING && keyToken != SINGLEQUOTESTRING && keyToken != INTEGER && keyToken != STARTINDEXER {
+		return MShellParseDictKeyValue{}, errors.New(fmt.Sprintf("Expected a key for dict, got %s at line %d, column %d.", keyToken, parser.curr.Line, parser.curr.Column))
 	}
 
 	// key := parser.curr
 	var key string
 	var err error
-	if parser.curr.Type == STRING {
+	if keyToken == STRING {
 		key, err = ParseRawString(parser.curr.Lexeme)
 		if err != nil {
 			return MShellParseDictKeyValue{}, errors.New(fmt.Sprintf("Error parsing string key: %s at line %d, column %d.", err.Error(), parser.curr.Line, parser.curr.Column))
 		}
-	} else if parser.curr.Type == SINGLEQUOTESTRING {
+	} else if keyToken == SINGLEQUOTESTRING {
 		key = parser.curr.Lexeme[1 : len(parser.curr.Lexeme)-1]
-	} else if parser.curr.Type == LITERAL {
+	} else if keyToken == LITERAL {
 		key = parser.curr.Lexeme
+	} else if keyToken == INTEGER {
+		intVal, _ := strconv.Atoi(parser.curr.Lexeme) // This normalizes the integer to not have leading 0's etc.
+		key = strconv.Itoa(intVal)
+	} else if keyToken == STARTINDEXER {
+		indexStr := parser.curr.Lexeme[:len(parser.curr.Lexeme)-1]
+		intVal, _ := strconv.Atoi(indexStr) // This normalizes the integer to not have leading 0's etc.
+		key = strconv.Itoa(intVal)
 	} else {
-		return MShellParseDictKeyValue{}, errors.New(fmt.Sprintf("Expected a key for dict, got %s at line %d, column %d.", parser.curr.Type, parser.curr.Line, parser.curr.Column))
+		return MShellParseDictKeyValue{}, errors.New(fmt.Sprintf("Expected a key for dict, got %s at line %d, column %d.", keyToken, parser.curr.Line, parser.curr.Column))
 	}
 
 	parser.NextToken()
-
-	err = parser.MatchWithMessage(parser.curr, COLON, fmt.Sprintf("Expected ':' after key %s at line %d, column %d.", key, parser.curr.Line, parser.curr.Column))
-	if err != nil {
-		return MShellParseDictKeyValue{}, err
+	// Handle colon or skip if STARTINDEXER
+	if keyToken != STARTINDEXER {
+		err = parser.MatchWithMessage(parser.curr, COLON, fmt.Sprintf("Expected ':' after key %s at line %d, column %d.", key, parser.curr.Line, parser.curr.Column))
+		if err != nil {
+			return MShellParseDictKeyValue{}, err
+		}
 	}
 
 	// Parse the value for the key.
