@@ -89,12 +89,14 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `.s`: Print stack at current location (--)
 - `.b`: Prints paths to all known binaries (--)
 - `.def`: Print available definitions at current location (--)
+- `.env`: Print all environment variables to stderr in sorted order (--)
 - `dup`: Duplicate (a -- a a)
 - `swap`: Swap (a b -- b a)
 - `drop`: Drop (a -- )
 - `over`: Over, copy second element to top `(a b -- a b a)`
 - `pick`: Pick, copy nth element to top, `(a b c int pick` -- `a b c [a | b | c])`
 - `rot`: Rotate the top three items, `( a b c -- b c a )`
+- `-rot`: Rotate the top three items in the opposite direction `( a b c -- c a b )`
 - `nip`: Remove second item, `( a b -- b )`
 - `w`: Write to stdout (str -- )
 - `wl`: Write line to stdout (str -- )
@@ -103,9 +105,11 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `len`: Length of string/list `([a] -- int | str -- int)`
 - `args`: List of string arguments. Does not include the name of the executing file. `( -- [str])`
 - `glob`: Run glob against string/literal on top of the stack. Leaves list of strings on the stack. Relies on golang's [filepath.Glob](https://pkg.go.dev/path/filepath#Glob), which in the current implementation, the response is sorted. `(str -- [str])`
+- `/`: Divide numbers or join paths. `(numeric numeric -- numeric)` treats the top of stack as divisor. `(path path -- path)` joins the paths using the OS separator.
 - `x`: Interpret/execute quotation `(quote -- )`
 - `toFloat`: Convert to float. `(numeric -- Maybe[float])`
 - `toInt`: Convert to int. `(numeric -- Mabye[int])`
+- `exit`: Exit the current script with the provided exit code. `(int -- )`
 - `read`: Read a line from stdin. Puts a str and bool of whether the read was successful on the stack. `( -- str bool)`
 - `stdin`: Drop stdin onto the stack `( -- str)`
 - `::`: Drop stdin onto the stack and split by lines `( -- [str])`. This is a shorthand for `stdin lines`.
@@ -118,9 +122,12 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `runtime`: Get the current OS runtime. This is the output of the GOOS environment variable. Common possible values are `linux`, `windows`, and `darwin`. `( -- str)`
 - `hostname`: Get the current OS hostname. On failure to get, puts 'unknown' on the stack. `( -- str)`
 - `parseCsv`: Parse a CSV file into a list of lists of strings. Input can be a path/literal file name, or the string contents itself. (`path|str -- [[str]])`
+- `parseJson`: Parse JSON from a string or file path into mshell objects. (`path|str -- list|dict|numeric|str|bool`)
 - `seq`: Generate a list of integers, starting from 0. Exclusive end to integer on stack. `2 seq` produces `[0 1]`. `(int -- [int])`
 - `binPaths`: Puts a list of lists with 2 items, first is the executable name, second is the full path to the executable. `(-- [[str]])`
 - `versionSortCmp`: A comparison function for use with `sortByCmp`. Used to implement "version sort" or "natural sort". `(str str -- int)`
+- `urlEncode`: URL-encode a string or dictionary of parameters. `(str|dict -- str)`
+- `type`: Return the type name of the top stack item `(a -- str)`
 
 
 ## File/Directory Functions
@@ -137,6 +144,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `cp`: Copy file or directory. `(str:source str:dest -- )`
 - `mv`: Move file or directory. `(str:source str:dest -- )`
 - `readFile`: Read file into string. `(str -- str)`
+- `readFileBytes`: Read file into binary data. `(str -- binary)`
 - `readTsvFile`: Read a TSV file into list of list of strings. `(str -- [[str]])`
 - `cd`: Change directory `(str -- )`
 - `pwd`: Get current working directory `( -- str)`
@@ -154,6 +162,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 ## Math Functions
 
 - `abs`: Absolute value `(numeric -- numeric)`
+- `inc`: Increment integer value in place `(int -- int)`
 - `max2`: Maximum of two numbers `(numeric numeric -- numeric)`
 - `max`: Maximum of list of numbers `([numeric] -- numeric)`
 - `transpose`: Transpose list of lists `([[a]] -- [[a]])`
@@ -184,6 +193,8 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `toFixed`: Convert number to string with fixed number of decimal places. `(numeric int -- str)`
 - `countSubStr`: Count occurrences of substring in string. `(str str -- int)`
 - `take`: Take first n characters from string. `(str int -- str)`
+- `utf8Str`: Decode UTF-8 bytes into a string. `(binary -- str)`
+- `utf8Bytes`: Encode a string as UTF-8 bytes. `(str -- binary)`
 
 ## List Functions
 
@@ -204,6 +215,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `skip`: Skip first n elements of list, `(list int -- list)`
 - `sort`: Sort list. Converts all items to strings, then sorts using go's `sort.Strings` `(list -- list)`
 - `sortV`: Version sort list. Converts all items to strings, then sorts like GNU `sort -V` (`list -- list`)
+- `sortVu`: Alias for `sortV`. Version sort list and return the sorted results. (`list -- list`)
 - `uniq`: Remove duplicate elements from list. Works for all non-compound types. `([a] -- [a])`
 - `zip`: Zip two lists together. If the two list are different lengths, resulting list will be the same length as the shorter of the two lists. `([a] [b] (a b -- c) -- [c])`
 - `concat`: Flatten list of lists one level. Useful for things like a `flatMap`, which can be defined like `map concat`. `([[a]] -- [a])`
@@ -244,6 +256,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `toUnixTime`: Get unix time from date `(date -- int)`
 - `fromUnixTime`: Get date from unix time int `(date -- int)`
 - `addDays`: Add days to date `(date numeric -- date)`
+- `utcToCst`: Convert a UTC datetime to US Central Time `(date -- date)`
 
 ## Regular Expression Functions
 
@@ -252,7 +265,7 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
 
 - `reMatch`: Match a regular expression against a string. Returns boolean true/false. `(str re -- bool)`
 - `reFindAll`: Get all the matches of a regular expression. `(str re -- [[ str ]])`
-- `reFindAllInt`: Get all the match indices of a regular expression. `(str re -- [[ str ]])`
+- `reFindAllIndex`: Get all match index pairs (start and end offsets) for a regular expression, including capture groups. `(str re -- [[int]])`
 - `reReplace`: Replace all occurrences of a regular expression in a string with a replacement string. `(str:orig re str:replacement -- str)`
 
 ## Paths
@@ -260,6 +273,7 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
 - `dirname`: Get directory name from path `(path -- path)`
 - `basename`: Get base name (aka file name or not directory portion) from path `(path -- path)`
 - `ext`: Get extension from path, includes period. `(path -- path)`
+- `stem`: Get path without the final extension `(path -- path)`
 
 ## Shell Utilities
 
@@ -321,6 +335,13 @@ e: [str], Standard error, split by lines
 ec: str, Standard error, complete untouched
 es: str, Standard error, stripped
 ```
+
+- `o`: Collect stdout split into lines `([cmd] -- list)`
+- `oc`: Collect stdout as a single string `([cmd] -- str)`
+- `os`: Collect stdout as a single string with surrounding whitespace trimmed `([cmd] -- str)`
+- `e`: Collect stderr split into lines `([cmd] -- list)`
+- `ec`: Collect stderr as a single string `([cmd] -- str)`
+- `es`: Collect stderr as a single string with surrounding whitespace trimmed `([cmd] -- str)`
 
 ## Process Substitution
 
