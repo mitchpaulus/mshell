@@ -1,0 +1,3 @@
+`binary.txt` readFileBytes bytes!
+@bytes str wl
+@bytes utf8Str w

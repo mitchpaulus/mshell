@@ -11,6 +11,7 @@ import (
 	"sort"
 	"slices"
 	"golang.org/x/net/html"
+	"encoding/base64"
 )
 
 // TruncateMiddle truncates a string to a maximum length, adding "..." in the middle if necessary.
@@ -55,6 +56,119 @@ type MShellObject interface {
 type MShellSimple struct {
 	Token Token
 }
+
+// Binary {{{
+// Represents raw binary data
+type MShellBinary []byte
+
+func (b MShellBinary) TypeName() string {
+	return "Binary"
+}
+
+func (b MShellBinary) IsCommandLineable() bool {
+	return false
+}
+
+func (b MShellBinary) IsNumeric() bool {
+	return false
+}
+
+func (b MShellBinary) FloatNumeric() float64 {
+	return 0
+}
+
+func (b MShellBinary) CommandLine() string {
+	return ""
+}
+
+func (b MShellBinary) DebugString() string {
+	// Return a hex representation of the first 5 bytes, or the whole thing if it's shorter
+	if len(b) > 5 {
+		return fmt.Sprintf("Binary(%x...)", b[:5])
+	} else {
+		return fmt.Sprintf("Binary(%x)", b)
+	}
+}
+
+func (b MShellBinary) Index(index int) (MShellObject, error) {
+	if index < 0 || index >= len(b) {
+		return nil, fmt.Errorf("Index %d out of range for Binary with length %d.\n", index, len(b))
+	}
+
+	return MShellBinary{b[index]}, nil
+}
+
+func (b MShellBinary) SliceStart(startInclusive int) (MShellObject, error) {
+	if startInclusive < 0 || startInclusive >= len(b) {
+		return nil, fmt.Errorf("Start index %d out of range for Binary with length %d.\n", startInclusive, len(b))
+	}
+	return MShellBinary(b[startInclusive:]), nil
+}
+
+func (b MShellBinary) SliceEnd(end int) (MShellObject, error) {
+	if end < 0 || end > len(b) {
+		return nil, fmt.Errorf("End index %d out of range for Binary with length %d.\n", end, len(b))
+	}
+
+	return MShellBinary(b[:end]), nil
+}
+
+func (b MShellBinary) Slice(startInc int, endExc int) (MShellObject, error) {
+	if startInc < 0 || startInc >= len(b) || endExc < 0 || endExc > len(b) || startInc > endExc {
+		return nil, fmt.Errorf("Slice indices %d:%d out of range for Binary with length %d.\n", startInc, endExc, len(b))
+	}
+
+	return MShellBinary(b[startInc:endExc]), nil
+}
+
+func (b MShellBinary) ToJson() string {
+	// Convert the binary data to a base64 string for JSON representation
+	encoded := make([]byte, base64.StdEncoding.EncodedLen(len(b)))
+	base64.StdEncoding.Encode(encoded, b)
+	return fmt.Sprintf("{\"type\": \"Binary\", \"value\": \"%s\"}", string(encoded))
+}
+
+func (b MShellBinary) ToString() string {
+	// Convert the binary data to a hex string, the entire thing.
+	return fmt.Sprintf("%x", b)
+}
+
+func (b MShellBinary) IndexErrStr() string {
+	return fmt.Sprintf(" Indexing into Binary is not supported. Length: %d", len(b))
+}
+
+func (b MShellBinary) Concat(other MShellObject) (MShellObject, error) {
+	if otherBinary, ok := other.(MShellBinary); ok {
+		// Concatenate the two binary slices
+		return MShellBinary(append(b, otherBinary...)), nil
+	}
+	return nil, fmt.Errorf("Cannot concatenate Binary with %s.\n", other.TypeName())
+}
+
+func (b MShellBinary) Equals(other MShellObject) (bool, error) {
+	if otherBinary, ok := other.(MShellBinary); ok {
+		// Compare the two binary slices
+		if len(b) != len(otherBinary) {
+			return false, nil
+		} else {
+			for i := range b {
+				if b[i] != otherBinary[i] {
+					return false, nil
+				}
+			}
+			return true, nil
+		}
+	}
+	return false, fmt.Errorf("Cannot compare Binary with %s.\n", other.TypeName())
+}
+
+
+func (b MShellBinary) CastString() (string, error) {
+	return "", fmt.Errorf("Cannot cast Binary to a string.\n")
+}
+
+
+/// }}}
 
 // Maybe {{{
 type Maybe struct {

@@ -981,6 +981,23 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 
 					stack.Push(&MShellString{string(content)})
+				} else if t.Lexeme == "readFileBytes" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'readFileBytes' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					filePath, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot read from a %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					content, err := os.ReadFile(filePath)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error reading file: %s\n", t.Line, t.Column, err.Error()))
+					}
+
+					stack.Push(MShellBinary(content))
 				} else if t.Lexeme == "cd" {
 					obj, err := stack.Pop()
 					if err != nil {
@@ -1601,9 +1618,15 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot write to a %s.\n", t.Line, t.Column, obj1.TypeName()))
 					}
 
-					content, err := obj2.CastString()
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot write a %s to a file.\n", t.Line, t.Column, obj2.TypeName()))
+					var contentBytes []byte
+					if asBinary, ok := obj2.(MShellBinary); ok {
+						contentBytes = []byte(asBinary)
+					} else {
+						contentStr, err := obj2.CastString()
+						if err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot write a %s to a file.\n", t.Line, t.Column, obj2.TypeName()))
+						}
+						contentBytes = []byte(contentStr)
 					}
 
 					var file *os.File
@@ -1616,7 +1639,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error opening file %s: %s\n", t.Line, t.Column, path, err.Error()))
 					}
 
-					_, err = file.WriteString(content)
+					_, err = file.Write(contentBytes)
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error writing to file %s: %s\n", t.Line, t.Column, path, err.Error()))
 					}
@@ -3007,8 +3030,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error reading response body in '%s': %s\n", t.Line, t.Column, t.Lexeme, err.Error()))
 						}
 						resp.Body.Close() // Close the response body
-
-						responseDict.Items["body"] = &MShellString{Content: string(bodyBytes)}
+						responseDict.Items["body"] = MShellBinary(bodyBytes)
 
 						// Push the response dictionary onto the stack
 						stack.Push(&Maybe{obj: responseDict})
@@ -3050,6 +3072,36 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 
 					stack.Push(&MShellString{Content: encodedStr})
+				} else if t.Lexeme == "utf8Str" {
+					// Convert MShellBinary on the top of the stack to a UTF-8 string
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'utf8str' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					binaryObj, ok := obj.(MShellBinary)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The top of stack in 'utf8str' is expected to be a binary, found a %s (%s)\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
+					}
+
+					// Convert binary to string
+					strContent := string(binaryObj)
+					stack.Push(&MShellString{Content: strContent})
+				} else if t.Lexeme == "utf8Bytes" {
+					// Convert MShellString on the top of the stack to UTF-8 bytes
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'utf8bytes' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					strObj, ok := obj.(*MShellString)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The top of stack in 'utf8bytes' is expected to be a string, found a %s (%s)\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
+					}
+
+					// Convert string to bytes
+					bytesContent := []byte(strObj.Content)
+					stack.Push(MShellBinary(bytesContent))
 				} else { // last new function
 					// If we aren't in a list context, throw an error.
 					// Nearly always this is unintended.
