@@ -1,0 +1,2 @@
+#!/usr/bin/env mshell
+['rsync' '-a' "*.html" glob $MSH_DOC_DEPLOY]!
