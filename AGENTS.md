@@ -6,6 +6,7 @@ This repository is for a concatenative shell language.
 It is implemented in golang, with the go code in `mshell/`.
 User documentation is in `doc/`.
 The standard library for the language is in `lib/std.msh`.
+Always work in a separate feature branch.
 
 ## Testing instructions
 
