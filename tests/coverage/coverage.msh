@@ -1,0 +1,24 @@
+#!/usr/bin/env mshell
+
+pwd coverageDir!
+`all/` absPath $GOCOVERDIR!
+$"{$GOCOVERDIR}/*" glob (rm) each
+`merged` absPath mergePath!
+`merged/*` glob (rm) each
+
+".." cd
+files
+(".msh" endsWith) filter
+("positional" in not) filter
+(`args.msh` !=) filter
+(`stdin_keyword.msh` !=) filter
+(`pwd.msh` !=) filter
+(f! [`../mshell/msh-cover` @f];)
+each
+
+['go' 'tool' 'covdata' 'merge' $"-i={$GOCOVERDIR}" $"-o={@mergePath}"]!
+['go' 'tool' 'covdata' 'textfmt' $"-i={$GOCOVERDIR}" $"-o={@coverageDir}/cover.out"]!
+
+`../mshell` cd
+['go' 'tool' 'cover' $"-html={@coverageDir}/cover.out" $"-o={@coverageDir}/cover.html"]!
+['go' 'tool' 'cover' $"-func={@coverageDir}/cover.out" $"-o={@coverageDir}/cover_funcs.txt"]!

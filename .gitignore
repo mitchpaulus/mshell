@@ -6,11 +6,19 @@ mshell/bin
 *.mshell_history
 *.vsix
 
+covcounters.*
+covmeta.*
+
+cover.html
+cover.out
+cover_funcs.txt
+
 # REDOGI
 doc/all
 doc/build/**/*.html
 doc/mshell.html
 mshell/all
+mshell/msh-cover
 mshell/msh.exe
 mshell/mshell
 mshell/mshw.exe
