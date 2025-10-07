@@ -15,13 +15,13 @@ import (
 	// "sort"
 	"strconv"
 	// "runtime/debug"
-	"path/filepath"
 	"crypto/sha256"
-	"time"
 	"encoding/binary"
 	"github.com/cespare/xxhash"
-	"unicode/utf8"
 	"html"
+	"path/filepath"
+	"time"
+	"unicode/utf8"
 )
 
 type CliCommand int
@@ -34,9 +34,11 @@ const (
 	CLIHTML
 )
 
+const mshellVersion = "0.7.0"
+
 type TabMatch struct {
 	TabMatchType TabMatchType
-	Match string
+	Match        string
 }
 
 func GetMatchTexts(matches []TabMatch) []string {
@@ -57,7 +59,6 @@ const (
 )
 
 var tempFiles []string
-
 
 func getLongestCommonPrefix(strs []string) string {
 	if len(strs) == 0 {
@@ -170,15 +171,19 @@ func main() {
 			fmt.Println("Usage: mshell [OPTION].. FILE [ARG]..")
 			fmt.Println("Usage: mshell [OPTION].. [ARG].. < FILE")
 			fmt.Println("Usage: mshell [OPTION].. -c INPUT [ARG]..")
+			fmt.Println("")
 			fmt.Println("Options:")
-			fmt.Println("  --html     Print HTML representation of the input")
-			fmt.Println("  --lex      Print the tokens of the input")
-			fmt.Println("  --parse    Print the parsed Abstract Syntax Tree")
-			fmt.Println("  -h, --help Print this help message")
+			fmt.Println("  --html       Render the input as HTML")
+			fmt.Println("  --lex        Print the tokens lexed from the input")
+			fmt.Println("  --parse      Print the parsed Abstract Syntax Tree as JSON")
+			// fmt.Println("  --typecheck  Type check the input and report any errors") Ignore this for now.
+			fmt.Println("  --version    Print version information and exit")
+			fmt.Println("  -c INPUT     Execute INPUT as the program, before positional args")
+			fmt.Println("  -h, --help   Print this help message")
 			os.Exit(0)
 			return
 		} else if arg == "--version" {
-			fmt.Fprintf(os.Stdout, "0.7.0\n")
+			fmt.Fprintln(os.Stdout, mshellVersion)
 			os.Exit(0)
 		} else if arg == "-c" {
 			if i >= len(os.Args) {
@@ -248,7 +253,7 @@ func main() {
 			}
 
 			// Make dir LOCALAPPDATA/mshell if it doesn't exist
-			err = os.MkdirAll(local_app_data + "/mshell", 0755)
+			err = os.MkdirAll(local_app_data+"/mshell", 0755)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error creating directory %s/mshell: %s\n", local_app_data, err)
 				os.Exit(1)
@@ -256,7 +261,7 @@ func main() {
 			}
 
 			// Open file for writing
-			f, err = os.OpenFile(local_app_data + "/mshell/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			f, err = os.OpenFile(local_app_data+"/mshell/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error opening file %s/mshell/mshell.log: %s\n", local_app_data, err)
 				os.Exit(1)
@@ -287,31 +292,31 @@ func main() {
 			readBuffer:     make([]byte, 1024),
 			homeDir:        os.Getenv("HOME"),
 
-			tabCompletions0: make([]string, 0, 10),
-			tabCompletions1: make([]string, 0, 10),
+			tabCompletions0:    make([]string, 0, 10),
+			tabCompletions1:    make([]string, 0, 10),
 			currentTabComplete: 0,
 
-			stack : make(MShellStack, 0),
+			stack: make(MShellStack, 0),
 
-			context : ExecuteContext{
+			context: ExecuteContext{
 				StandardInput:  nil, // These should be nil as that represents using a "default", not os.Stdin/os.Stdout
 				StandardOutput: nil,
 				Variables:      map[string]MShellObject{},
-				Pbm: NewPathBinManager(),
+				Pbm:            NewPathBinManager(),
 			},
 
-			callStack : callStack,
-			f: f,
-			evalState : EvalState{
+			callStack: callStack,
+			f:         f,
+			evalState: EvalState{
 				PositionalArgs: make([]string, 0),
 				LoopDepth:      0,
-				StopOnError:	false,
-				CallStack: callStack,
+				StopOnError:    false,
+				CallStack:      callStack,
 			},
-			initCallStackItem : CallStackItem{
+			initCallStackItem: CallStackItem{
 				MShellParseItem: nil,
-				Name:  "main",
-				CallStackType: CALLSTACKFILE,
+				Name:            "main",
+				CallStackType:   CALLSTACKFILE,
 			},
 		}
 
@@ -367,7 +372,7 @@ func main() {
 	state := EvalState{
 		PositionalArgs: positionalArgs,
 		LoopDepth:      0,
-		CallStack: callStack,
+		CallStack:      callStack,
 	}
 
 	var stack MShellStack
@@ -376,11 +381,10 @@ func main() {
 		StandardInput:  nil,
 		StandardOutput: nil,
 		Variables:      map[string]MShellObject{},
-		Pbm: NewPathBinManager(),
+		Pbm:            NewPathBinManager(),
 	}
 
 	var allDefinitions []MShellDefinition
-
 
 	// Check for environment variable MSHSTDLIB and load that file. Read as UTF-8
 	stdlibPathVar, stdlibSet := os.LookupEnv("MSHSTDLIB")
@@ -417,8 +421,8 @@ func main() {
 			if len(stdlibFile.Items) > 0 {
 				callStackItem := CallStackItem{
 					MShellParseItem: nil,
-					Name:  stdlibPath,
-					CallStackType: CALLSTACKFILE,
+					Name:            stdlibPath,
+					CallStackType:   CALLSTACKFILE,
 				}
 
 				result := state.Evaluate(stdlibFile.Items, &stack, context, allDefinitions, callStackItem)
@@ -464,8 +468,8 @@ func main() {
 
 	callStackItem := CallStackItem{
 		MShellParseItem: nil,
-		Name:  "main",
-		CallStackType: CALLSTACKFILE,
+		Name:            "main",
+		CallStackType:   CALLSTACKFILE,
 	}
 
 	result := state.Evaluate(file.Items, &stack, context, allDefinitions, callStackItem)
@@ -480,21 +484,21 @@ func main() {
 }
 
 type TermState struct {
-	stdInFd int
-	numRows int // Number of rows in the terminal
-	numCols int // Number of columns in the terminal
-	promptRow int // Row where the prompt ends, 1-based
-	promptLength int // Length of
+	stdInFd        int
+	numRows        int // Number of rows in the terminal
+	numCols        int // Number of columns in the terminal
+	promptRow      int // Row where the prompt ends, 1-based
+	promptLength   int // Length of
 	numPromptLines int // Number of lines the prompt takes up
 	currentCommand []rune
-	index int // index of cursor, starts at 0
-	readBuffer []byte
-	oldState term.State
-	homeDir string
-	l *Lexer
-	p *MShellParser
-	historyIndex int
-	f *os.File // This is log file.
+	index          int // index of cursor, starts at 0
+	readBuffer     []byte
+	oldState       term.State
+	homeDir        string
+	l              *Lexer
+	p              *MShellParser
+	historyIndex   int
+	f              *os.File // This is log file.
 	// tokenChan chan TerminalToken
 	stdInState *StdinReaderState
 
@@ -505,15 +509,15 @@ type TermState struct {
 
 	renderBuffer []byte // Buffer for rendering the current command
 
-	tabCompletions0 []string // Tab completions for the current command
-	tabCompletions1 []string // Tab completions for the current command
+	tabCompletions0    []string // Tab completions for the current command
+	tabCompletions1    []string // Tab completions for the current command
 	currentTabComplete int
 
-	stack MShellStack
-	context ExecuteContext
-	evalState EvalState
-	callStack CallStack
-	stdLibDefs []MShellDefinition
+	stack             MShellStack
+	context           ExecuteContext
+	evalState         EvalState
+	callStack         CallStack
+	stdLibDefs        []MShellDefinition
 	initCallStackItem CallStackItem
 	// pathBinManager IPathBinManager
 }
@@ -523,7 +527,7 @@ func (s *TermState) Render() {
 	// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
 	// state.index = 0
 	// ClearToEnd()
-	s.renderBuffer = append(s.renderBuffer, fmt.Sprintf("\033[%dG", s.promptLength + 1)...)
+	s.renderBuffer = append(s.renderBuffer, fmt.Sprintf("\033[%dG", s.promptLength+1)...)
 	s.renderBuffer = append(s.renderBuffer, "\033[K"...)
 
 	// Lex current command
@@ -531,7 +535,7 @@ func (s *TermState) Render() {
 	s.l.emitWhitespace = true
 	s.l.emitComments = true
 	s.l.resetInput(string(s.currentCommand))
-	defer func(){
+	defer func() {
 		s.l.allowUnterminatedString = false
 		s.l.emitWhitespace = false
 		s.l.emitComments = false
@@ -584,7 +588,7 @@ func (s *TermState) Render() {
 
 	// Print the current command
 	// for _, r := range s.currentCommand {
-		// s.renderBuffer = utf8.AppendRune(s.renderBuffer, r)
+	// s.renderBuffer = utf8.AppendRune(s.renderBuffer, r)
 	// }
 
 	// Search for history
@@ -600,7 +604,7 @@ func (s *TermState) Render() {
 	// Print escape code for light gray
 	s.renderBuffer = append(s.renderBuffer, "\033[90m"...)
 	for i := 0; i < numToAdd; i++ {
-		s.renderBuffer = utf8.AppendRune(s.renderBuffer, s.historyComplete[len(s.currentCommand) + i])
+		s.renderBuffer = utf8.AppendRune(s.renderBuffer, s.historyComplete[len(s.currentCommand)+i])
 	}
 	// Reset color
 	s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
@@ -618,7 +622,7 @@ func (s *TermState) Render() {
 	// Do current completions, up to 10
 	limit := s.numRows - s.promptRow
 	if len(currentTabCompletion) > limit {
-		linesPossible := max(0, s.promptRow - s.numPromptLines)
+		linesPossible := max(0, s.promptRow-s.numPromptLines)
 		fmt.Fprintf(s.f, "Lines possible: %d\n", linesPossible)
 		diff := len(currentTabCompletion) - limit
 		s.ScrollDown(min(diff, linesPossible))
@@ -664,8 +668,8 @@ func (s *TermState) Render() {
 
 type HistoryItem struct {
 	UnixTimeUtc int64
-	Directory string
-	Command string
+	Directory   string
+	Command     string
 }
 
 func IsDefinitionDefined(name string, definitions []MShellDefinition) bool {
@@ -678,7 +682,7 @@ func IsDefinitionDefined(name string, definitions []MShellDefinition) bool {
 }
 
 func (state *TermState) clearToPrompt() {
-	fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
+	fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1)
 	// state.index = 0
 	ClearToEnd()
 }
@@ -715,11 +719,9 @@ func (state *TermState) ScrollDown(numLines int) {
 	}
 
 	// Move cursor
-	fmt.Fprintf(os.Stdout, "\033[%d;%dH", curRow - numLines, curCol)
+	fmt.Fprintf(os.Stdout, "\033[%d;%dH", curRow-numLines, curCol)
 	state.promptRow = state.promptRow - numLines
 }
-
-
 
 func (state *TermState) ClearScreen() {
 	// See https://github.com/microsoft/terminal/issues/17320
@@ -745,7 +747,7 @@ func (state *TermState) ClearScreen() {
 	// fmt.Fprintf(os.Stdout, "\033[10000B")
 	// // print out rowsToScroll newlines
 	// for i := 0; i < rowsToScroll; i++ {
-		// fmt.Fprintf(os.Stdout, "\n")
+	// fmt.Fprintf(os.Stdout, "\n")
 	// }
 
 	// // Move cursor
@@ -760,17 +762,17 @@ var history []string
 
 var historyToSave []HistoryItem
 
-var knownCommands = map[string]struct{}{ "cd": {} }
+var knownCommands = map[string]struct{}{"cd": {}}
 
 // // printText prints the text at the current cursor position, moving existing text to the right.
 // func (state *TermState) printText(text string) {
-	// fmt.Fprintf(os.Stdout, "\033[K") // Delete to end of line
-	// fmt.Fprintf(os.Stdout, "%s", text)
-	// fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
-	// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + state.index + len(text))
+// fmt.Fprintf(os.Stdout, "\033[K") // Delete to end of line
+// fmt.Fprintf(os.Stdout, "%s", text)
+// fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
+// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + state.index + len(text))
 
-	// state.currentCommand = append(state.currentCommand[:state.index], append([]rune(text), state.currentCommand[state.index:]...)...)
-	// state.index = state.index + len(text)
+// state.currentCommand = append(state.currentCommand[:state.index], append([]rune(text), state.currentCommand[state.index:]...)...)
+// state.index = state.index + len(text)
 // }
 
 func (state *TermState) replaceText(newText string, replaceStart int, replaceEnd int) {
@@ -783,7 +785,6 @@ func (state *TermState) replaceText(newText string, replaceStart int, replaceEnd
 	state.currentCommand = append(state.currentCommand[:replaceStart], append([]rune(newText), state.currentCommand[replaceEnd:]...)...)
 	state.index = replaceStart + len(newText)
 }
-
 
 type TerminalToken interface {
 	String() string
@@ -807,7 +808,7 @@ func (t AsciiToken) String() string {
 
 type CsiToken struct {
 	FinalChar byte
-	Params []byte
+	Params    []byte
 }
 
 func (t CsiToken) String() string {
@@ -824,7 +825,8 @@ func (t CsiToken) String() string {
 	return fmt.Sprintf("CsiToken %s %c [%s]", strings.Join(chars, " "), t.FinalChar, strings.Join(bytes, " "))
 }
 
-type UnknownToken struct { }
+type UnknownToken struct{}
+
 func (t UnknownToken) String() string {
 	return fmt.Sprintf("UnknownToken")
 }
@@ -836,29 +838,29 @@ func (t SpecialKey) String() string {
 }
 
 var SpecialKeyName = []string{
-    "KEY_F1",
-    "KEY_F2",
-    "KEY_F3",
-    "KEY_F4",
-    "KEY_F5",
-    "KEY_F6",
-    "KEY_F7",
-    "KEY_F8",
-    "KEY_F9",
-    "KEY_F10",
-    "KEY_F11",
-    "KEY_F12",
-    "KEY_UP",
-    "KEY_DOWN",
-    "KEY_LEFT",
-    "KEY_RIGHT",
-    "KEY_DELETE",
-    "KEY_HOME",
-    "KEY_END",
-    "KEY_ALT_B",
-    "KEY_ALT_F",
-    "KEY_ALT_O",
-    "KEY_CTRL_DELETE",
+	"KEY_F1",
+	"KEY_F2",
+	"KEY_F3",
+	"KEY_F4",
+	"KEY_F5",
+	"KEY_F6",
+	"KEY_F7",
+	"KEY_F8",
+	"KEY_F9",
+	"KEY_F10",
+	"KEY_F11",
+	"KEY_F12",
+	"KEY_UP",
+	"KEY_DOWN",
+	"KEY_LEFT",
+	"KEY_RIGHT",
+	"KEY_DELETE",
+	"KEY_HOME",
+	"KEY_END",
+	"KEY_ALT_B",
+	"KEY_ALT_F",
+	"KEY_ALT_O",
+	"KEY_CTRL_DELETE",
 }
 
 const (
@@ -892,15 +894,16 @@ const (
 	KEY_CTRL_DELETE
 )
 
-type EofTerminalToken struct { }
+type EofTerminalToken struct{}
+
 func (t EofTerminalToken) String() string {
 	return fmt.Sprintf("EOF")
 }
 
 type StdinReaderState struct {
 	array []byte
-	i int
-	n int
+	i     int
+	n     int
 }
 
 func (state *StdinReaderState) ReadByte() (byte, error) {
@@ -934,13 +937,13 @@ func (state *TermState) StdinReader(stdInChan chan byte, pauseChan chan bool) {
 
 	for {
 		select {
-		case shouldPause := <- pauseChan:
+		case shouldPause := <-pauseChan:
 			if shouldPause {
 				// Pause reading from stdin
 				fmt.Fprintf(state.f, "Pausing stdin reader\n")
 				for {
 					// Wait for unpause
-					shouldUnpause := <- pauseChan
+					shouldUnpause := <-pauseChan
 					if !shouldUnpause {
 						break
 					}
@@ -1010,10 +1013,9 @@ func (state *TermState) StdinReader(stdInChan chan byte, pauseChan chan bool) {
 // 33	F19 (Shift+F7)	Sometimes, varies
 // 34	F20 (Shift+F8)	Sometimes, varies
 
-
 // This is intended to a be a lexer for the interactive mode.
 // It should be operating in a goroutine.
-func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (TerminalToken, error)  {
+func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (TerminalToken, error) {
 	var c byte
 	var err error
 
@@ -1089,7 +1091,7 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 				}
 
 				if c >= 64 && c <= 126 {
-					if c == 51  {
+					if c == 51 {
 						// c = <-inputChan
 						c, err = stdinReaderState.ReadByte()
 						if err != nil {
@@ -1213,7 +1215,7 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 					fmt.Fprintf(state.f, "Got 3-byte UTF-8 character: %d %d %d (%x %x %x)\n", c, b2, b3, c, b2, b3)
 					// Return the 3-byte UTF-8 character as a single token
 					// Convert to rune
-					r := rune((int32(c & 0x0F)<<12) | (int32(b2&0x3F)<<6) | int32(b3&0x3F))
+					r := rune((int32(c&0x0F) << 12) | (int32(b2&0x3F) << 6) | int32(b3&0x3F))
 					return MutliByteToken{Char: r}, nil
 				} else {
 					fmt.Fprintf(state.f, "Unknown second byte for 3-byte UTF-8 character: %d\n", b2)
@@ -1256,7 +1258,7 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 						fmt.Fprintf(state.f, "Got 4-byte UTF-8 character: %d %d %d %d\n", c, b2, b3, b4)
 						// Return the 4-byte UTF-8 character as a single token
 						// Convert to rune
-						r := rune((int32(c & 0x07) << 18) | (int32(b2 & 0x3F) << 12) | (int32(b3 & 0x3F) << 6) | int32(b4 & 0x3F))
+						r := rune((int32(c&0x07) << 18) | (int32(b2&0x3F) << 12) | (int32(b3&0x3F) << 6) | int32(b4&0x3F))
 						return MutliByteToken{Char: r}, nil
 					} else {
 						fmt.Fprintf(state.f, "Unknown third byte for 4-byte UTF-8 character: %d\n", b3)
@@ -1282,25 +1284,25 @@ func (state *TermState) InteractiveMode() error {
 	// FUTURE: Maybe Check for CSI u?
 	stdInState := &StdinReaderState{
 		array: make([]byte, 1024),
-		i: 0,
-		n: 0,
+		i:     0,
+		n:     0,
 	}
 
 	state.stdInState = stdInState
 
 	// TODO: Read from file? Something like a snippet engine?
 	aliases = map[string]string{
-		"s": "git status -u",
-		"v": "nvim",
+		"s":  "git status -u",
+		"v":  "nvim",
 		"mk": "mkdir",
 		"ls": "ls -al --color",
 		"gi": "nvim .gitignore",
-		"a": "git add",
-		"d": "git diff -w",
+		"a":  "git add",
+		"d":  "git diff -w",
 		"dc": "git diff -w --cached",
-		"c": "git commit",
-		"p": "git push",
-		"u": "'..' cd",
+		"c":  "git commit",
+		"p":  "git push",
+		"u":  "'..' cd",
 		"gu": "[git add -u]? ([git status -u];) iff",
 		"ga": "[git add -A]? ([git status -u];) iff",
 		"fp": "git fetch --prune",
@@ -1357,7 +1359,7 @@ func (state *TermState) InteractiveMode() error {
 	var end bool
 
 	for {
-		if (state.currentTabComplete == 0) {
+		if state.currentTabComplete == 0 {
 			state.tabCompletions0 = state.tabCompletions0[:0]
 		} else {
 			state.tabCompletions1 = state.tabCompletions1[:0]
@@ -1448,7 +1450,7 @@ func (state *TermState) TrySaveHistory() {
 		directoryHash := xxhash.Sum64String(item.Directory)
 
 		// Write to history file, directly as binary.
-		bytes := make([]byte, 8 + 8 + 8)
+		bytes := make([]byte, 8+8+8)
 		binary.BigEndian.PutUint64(bytes[0:8], uint64(item.UnixTimeUtc))
 		binary.BigEndian.PutUint64(bytes[8:16], commandHash)
 		binary.BigEndian.PutUint64(bytes[16:24], directoryHash)
@@ -1483,7 +1485,7 @@ func (state *TermState) TrySaveHistory() {
 
 func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 	// Add command to history
-	currentCommandStr := strings.TrimSpace(string(state.currentCommand), )
+	currentCommandStr := strings.TrimSpace(string(state.currentCommand))
 
 	if state.index == len(state.currentCommand) {
 		// Walk back to last whitespace, check if final element is an alias.
@@ -1519,8 +1521,8 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 		if err == nil {
 			historyToSave = append(historyToSave, HistoryItem{
 				UnixTimeUtc: time.Now().Unix(),
-				Directory: currentDir,
-				Command: currentCommandStr,
+				Directory:   currentDir,
+				Command:     currentCommandStr,
 			})
 		}
 	}
@@ -1542,7 +1544,7 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 		literalStr := p.curr.Lexeme
 
 		firstTokenIsCmd := false
-		_, isInPath := state.context.Pbm.Lookup(literalStr);
+		_, isInPath := state.context.Pbm.Lookup(literalStr)
 		if isInPath {
 			firstTokenIsCmd = true
 		} else {
@@ -1707,7 +1709,7 @@ func (state *TermState) printPrompt() error {
 
 	state.UpdateSize()
 
-	state.promptLength =  col - 1
+	state.promptLength = col - 1
 	return nil
 }
 
@@ -1719,36 +1721,36 @@ func (state *TermState) getCurrentPos() (int, int, error) {
 
 	// // var f *os.File
 	// if runtime.GOOS == "windows" {
-		// local_app_data, ok := os.LookupEnv("LOCALAPPDATA")
-		// if !ok {
-			// return 0, 0, fmt.Errorf("Error getting LOCALAPPDATA environment variable")
-		// }
+	// local_app_data, ok := os.LookupEnv("LOCALAPPDATA")
+	// if !ok {
+	// return 0, 0, fmt.Errorf("Error getting LOCALAPPDATA environment variable")
+	// }
 
-		// // Make dir LOCALAPPDATA/mshell if it doesn't exist
-		// err := os.MkdirAll(local_app_data + "/mshell", 0755)
-		// if err != nil {
-			// fmt.Fprintf(os.Stderr, "Error creating directory %s/mshell: %s\n", local_app_data, err)
-			// os.Exit(1)
-			// return 0, 0, err
-		// }
+	// // Make dir LOCALAPPDATA/mshell if it doesn't exist
+	// err := os.MkdirAll(local_app_data + "/mshell", 0755)
+	// if err != nil {
+	// fmt.Fprintf(os.Stderr, "Error creating directory %s/mshell: %s\n", local_app_data, err)
+	// os.Exit(1)
+	// return 0, 0, err
+	// }
 
-		// // Open file for writing
-		// f, err := os.OpenFile(local_app_data + "/mshell/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		// if err != nil {
-			// fmt.Fprintf(os.Stderr, "Error opening file %s/mshell/mshell.log: %s\n", local_app_data, err)
-			// os.Exit(1)
-			// return 0, 0, err
-		// }
-		// defer f.Close()
+	// // Open file for writing
+	// f, err := os.OpenFile(local_app_data + "/mshell/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	// if err != nil {
+	// fmt.Fprintf(os.Stderr, "Error opening file %s/mshell/mshell.log: %s\n", local_app_data, err)
+	// os.Exit(1)
+	// return 0, 0, err
+	// }
+	// defer f.Close()
 	// } else {
-		// // Open file for writing
-		// f, err := os.OpenFile("/tmp/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		// if err != nil {
-			// fmt.Fprintf(os.Stderr, "Error opening file /tmp/mshell.log: %s\n", err)
-			// os.Exit(1)
-			// return 0, 0, err
-		// }
-		// defer f.Close()
+	// // Open file for writing
+	// f, err := os.OpenFile("/tmp/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	// if err != nil {
+	// fmt.Fprintf(os.Stderr, "Error opening file /tmp/mshell.log: %s\n", err)
+	// os.Exit(1)
+	// return 0, 0, err
+	// }
+	// defer f.Close()
 	// }
 
 	fmt.Fprintf(os.Stdout, "\033[6n")
@@ -1830,8 +1832,8 @@ func stdLibDefinitions(stack MShellStack, context ExecuteContext, state EvalStat
 			if len(stdlibFile.Items) > 0 {
 				callStackItem := CallStackItem{
 					MShellParseItem: stdlibFile.Items[0],
-					Name:  rcPath,
-					CallStackType: CALLSTACKFILE,
+					Name:            rcPath,
+					CallStackType:   CALLSTACKFILE,
 				}
 
 				// allDefinitions = append(allDefinitions, stdlibFile.Definitions...)
@@ -1861,7 +1863,6 @@ func cleanupTempFiles() {
 	}
 }
 
-
 // This function pushes characters to the terminal and to the backing command.
 func (state *TermState) PushChars(chars []rune) {
 	// Push at the correct index
@@ -1873,9 +1874,9 @@ func (state *TermState) PushChars(chars []rune) {
 	// fmt.Fprintf(os.Stdout, "%s", string(chars))
 	// // Add back what may have been deleted.
 	// if state.index <= len(state.currentCommand) {
-		// fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
-		// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index+len(chars))
-		// state.currentCommand = append(state.currentCommand[:state.index], append(chars, state.currentCommand[state.index:]...)...)
+	// fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
+	// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index+len(chars))
+	// state.currentCommand = append(state.currentCommand[:state.index], append(chars, state.currentCommand[state.index:]...)...)
 	// }
 	// state.index = state.index + len(chars)
 }
@@ -1891,20 +1892,20 @@ func WriteToHistory(command string, directory string, historyFilePath string) er
 
 	// var path string
 	// if runtime.GOOS == "windows" {
-		// localAppData, ok := os.LookupEnv("LOCALAPPDATA")
-		// if !ok {
-			// fmt.Fprintf(os.Stderr, "Error getting LOCALAPPDATA environment variable\n")
-			// os.Exit(1)
-		// }
-		// path = localAppData + "/mshell/.mshell_history"
+	// localAppData, ok := os.LookupEnv("LOCALAPPDATA")
+	// if !ok {
+	// fmt.Fprintf(os.Stderr, "Error getting LOCALAPPDATA environment variable\n")
+	// os.Exit(1)
+	// }
+	// path = localAppData + "/mshell/.mshell_history"
 	// } else {
-		// home, ok := os.LookupEnv("HOME")
-		// if !ok {
-			// fmt.Fprintf(os.Stderr, "Error getting HOME environment variable\n")
-			// os.Exit(1)
-		// }
+	// home, ok := os.LookupEnv("HOME")
+	// if !ok {
+	// fmt.Fprintf(os.Stderr, "Error getting HOME environment variable\n")
+	// os.Exit(1)
+	// }
 
-		// path = home + "/.local/share/mshell/.mshell_history"
+	// path = home + "/.local/share/mshell/.mshell_history"
 	// }
 
 	// Check if the directory exists, if not, create it.
@@ -2079,7 +2080,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				i--
 			}
 
-			lastWord := string(state.currentCommand[i+1:state.index])
+			lastWord := string(state.currentCommand[i+1 : state.index])
 
 			aliasValue, aliasSet := aliases[lastWord]
 			if aliasSet {
@@ -2194,14 +2195,14 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 
 				zeroBasedStartOfToken := lastToken.Column - 1
 
-				if state.index > zeroBasedStartOfToken + len(lastToken.Lexeme) {
+				if state.index > zeroBasedStartOfToken+len(lastToken.Lexeme) {
 					prefix = ""
 				} else {
 
 					lastTokenLength = len(lastToken.Lexeme)
 
 					if lastToken.Type == UNFINISHEDSTRING || lastToken.Type == UNFINISHEDSINGLEQUOTESTRING || lastToken.Type == UNFINISHEDPATH {
-						prefix = string(state.currentCommand[zeroBasedStartOfToken + 1:state.index])
+						prefix = string(state.currentCommand[zeroBasedStartOfToken+1 : state.index])
 					} else {
 						prefix = string(state.currentCommand[zeroBasedStartOfToken:state.index])
 					}
@@ -2222,7 +2223,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 						// Split on '=' and take the first part
 						parts := strings.SplitN(envVar, "=", 2)
 						if len(parts) > 0 {
-							matches = append(matches, TabMatch{ TABMATCHENVVAR,  "$" + parts[0]})
+							matches = append(matches, TabMatch{TABMATCHENVVAR, "$" + parts[0]})
 						}
 					}
 				}
@@ -2233,27 +2234,25 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				searchPrefix := prefix[1:]
 				for v, _ := range state.context.Variables {
 					if strings.HasPrefix(v, searchPrefix) {
-						matches = append(matches, TabMatch {TABMATCHVAR,  "@" + v})
+						matches = append(matches, TabMatch{TABMATCHVAR, "@" + v})
 					}
 				}
 			} else {
 				// Completion on variables, since you could always end with !
 				for v, _ := range state.context.Variables {
 					if strings.HasPrefix(v, prefix) {
-						matches = append(matches, TabMatch {TABMATCHVAR, v + "!"})
+						matches = append(matches, TabMatch{TABMATCHVAR, v + "!"})
 					}
 				}
 			}
-
 
 			if len(tokens) == 2 && len(prefix) > 0 {
 				// Try to complete on command names
 				binMatches := state.context.Pbm.Matches(prefix)
 				for _, match := range binMatches {
-					matches = append(matches, TabMatch { TABMATCHCMD, match})
+					matches = append(matches, TabMatch{TABMATCHCMD, match})
 				}
 			}
-
 
 			if prefix == "" {
 				// Dump everything in the current directory
@@ -2263,9 +2262,9 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 					if err == nil {
 						for _, file := range files {
 							if file.IsDir() {
-								matches = append(matches, TabMatch { TABMATCHFILE, file.Name() + string(os.PathSeparator)})
+								matches = append(matches, TabMatch{TABMATCHFILE, file.Name() + string(os.PathSeparator)})
 							} else {
-								matches = append(matches, TabMatch { TABMATCHFILE, file.Name()} )
+								matches = append(matches, TabMatch{TABMATCHFILE, file.Name()})
 							}
 						}
 					}
@@ -2281,8 +2280,8 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 					}
 				}
 
-				dir := prefix[0:indexOfLastSeparator + 1]
-				filename := prefix[indexOfLastSeparator + 1:]
+				dir := prefix[0 : indexOfLastSeparator+1]
+				filename := prefix[indexOfLastSeparator+1:]
 
 				// cleanPath := filepath.Clean(prefix)
 				// dir := filepath.Dir(cleanPath)
@@ -2305,9 +2304,9 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 						if strings.HasPrefix(file.Name(), filename) {
 							// Rejoin the directory and filename. If a directory, end with a path separator.
 							if file.IsDir() {
-								matches = append(matches, TabMatch {TABMATCHFILE, dir + file.Name() + string(os.PathSeparator)})
+								matches = append(matches, TabMatch{TABMATCHFILE, dir + file.Name() + string(os.PathSeparator)})
 							} else {
-								matches = append(matches, TabMatch {TABMATCHFILE, dir + file.Name()})
+								matches = append(matches, TabMatch{TABMATCHFILE, dir + file.Name()})
 							}
 						}
 					}
@@ -2343,7 +2342,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				}
 
 				// Replace the prefex
-				state.replaceText(insertString, state.index - lastTokenLength, state.index)
+				state.replaceText(insertString, state.index-lastTokenLength, state.index)
 			} else {
 				// Print out the longest common prefix
 				longestCommonPrefix := getLongestCommonPrefix(GetMatchTexts(matches))
@@ -2367,7 +2366,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 					}
 
 					// Replace the prefix
-					state.replaceText(longestCommonPrefix, state.index - lastTokenLength, state.index)
+					state.replaceText(longestCommonPrefix, state.index-lastTokenLength, state.index)
 				}
 
 				if state.currentTabComplete == 0 {
@@ -2399,7 +2398,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			// // Remaining chars in current command
 			state.currentCommand = state.currentCommand[state.index:]
 			// for i := 0; i < len(state.currentCommand); i++ {
-				// fmt.Fprintf(os.Stdout, "%c", state.currentCommand[i])
+			// fmt.Fprintf(os.Stdout, "%c", state.currentCommand[i])
 			// }
 
 			// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
@@ -2439,7 +2438,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				}
 
 				copy(state.currentCommand, state.historyComplete)
-			 	state.index = len(state.currentCommand)
+				state.index = len(state.currentCommand)
 			}
 		} else if t.Char == 127 { // Backspace
 			// Erase last char
@@ -2522,7 +2521,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				state.historyIndex = len(history)
 			} else {
 				// Down arrow
-				for state.historyIndex > 0 && state.historyIndex <= len(history) + 1 {
+				for state.historyIndex > 0 && state.historyIndex <= len(history)+1 {
 					state.historyIndex--
 					// state.clearToPrompt()
 					if state.historyIndex == 0 {
@@ -2582,7 +2581,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 func UnmodifiedDir(path string) string {
 	for i := len(path) - 1; i >= 0; i-- {
 		if IsPathSeparator(path[i]) {
-			return path[0:i + 1]
+			return path[0 : i+1]
 		}
 	}
 	return ""
