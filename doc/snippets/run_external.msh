@@ -1,0 +1,7 @@
+# Execute external commands and capture their results
+['uname' '-s'] oc ! kernel!
+@kernel trim kernel!
+$"Kernel: {@kernel}" wl
+
+['false'] ? exitCode!
+$"false exited with {@exitCode}" wl

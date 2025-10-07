@@ -1,0 +1,6 @@
+# Build command output into later expressions
+["date" "+%Y%m%d"] os ! buildDate!
+
+["git" "rev-parse" "--short" "HEAD"] os ! sha!
+
+$"Build tag: {@buildDate}-{@sha}" wl

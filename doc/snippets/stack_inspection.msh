@@ -1,0 +1,7 @@
+# Peek at the stack without disturbing it
+"alpha"
+"beta"
+.s
+"gamma"
+swap
+.s

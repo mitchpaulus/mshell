@@ -1,0 +1,5 @@
+# Fetch JSON data and extract fields
+{ "url": "https://jsonplaceholder.typicode.com/todos/1" } httpGet? resp!
+@resp "body" get? utf8Str parseJson todo!
+@todo "title" get? wl
+@todo "completed" get? str wl

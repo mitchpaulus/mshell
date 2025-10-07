@@ -1,0 +1,151 @@
+<h1 id="tutorial">Guided Tutorial</h1>
+
+<p>
+This walkthrough shows how to go from running a one-off command to writing a reusable script.
+It builds on the core ideas introduced elsewhere, so keep the <a href="basics.html">Basics</a>,
+<a href="data-types.html">Data Types</a>, and <a href="functions.html">standard library reference</a> nearby.
+</p>
+
+<h2 id="tutorial-setup">1. Set Up</h2>
+
+<p>
+All of the commands below are run from the repository root and assume the binary at <code>./mshell/msh</code> has been built (for example with <code>GOCACHE=/tmp/go-cache go build -o msh</code> inside <code>mshell/</code>).
+Point <code>MSHSTDLIB</code> at <code>lib/std.msh</code> so every example can find the standard library.
+</p>
+
+<pre><code>$ export MSHSTDLIB=$(pwd)/lib/std.msh
+$ ./mshell/msh -c '&quot;Hello from mshell&quot; wl'
+Hello from mshell
+</code></pre>
+
+<h2 id="tutorial-stack-basics">2. Simple Stack Manipulation</h2>
+
+<p>
+Push values, use stack combinators, and turn the result into a string. The highlighted snippet lives in <code>doc/snippets/stack_basics.msh</code> so you can tweak it freely.
+</p>
+
+<pre>
+<code><span class="mshellLINECOMMENT"># Demonstrate arithmetic with stack operators</span>
+<span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span> <span class="mshellINTEGER">3</span>
+<span class="mshellLITERAL">swap</span>
+<span class="mshellLITERAL">over</span>
+<span class="mshellPLUS">+</span>
+<span class="mshellLITERAL">rot</span>
+<span class="mshellASTERISK">*</span>
+<span class="mshellPLUS">+</span>
+<span class="mshellVARSTORE">result!</span>
+<span class="mshellFORMATSTRING">$&#34;Final total: {@result}&#34;</span> <span class="mshellLITERAL">wl</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+<pre><code>$ ./mshell/msh doc/snippets/stack_basics.msh
+Final total: 8
+</code></pre>
+
+<h2 id="tutorial-stack-inspection">3. Inspect the Stack</h2>
+
+<p>
+Use <code>.s</code> whenever you want to audit what is currently on the stack. It prints but does not consume the values, which makes it perfect for ad-hoc debugging.
+</p>
+
+<pre>
+<code><span class="mshellLINECOMMENT"># Peek at the stack without disturbing it</span>
+<span class="mshellSTRING">&#34;alpha&#34;</span>
+<span class="mshellSTRING">&#34;beta&#34;</span>
+<span class="mshellLITERAL">.s</span>
+<span class="mshellSTRING">&#34;gamma&#34;</span>
+<span class="mshellLITERAL">swap</span>
+<span class="mshellLITERAL">.s</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+<pre><code>$ ./mshell/msh doc/snippets/stack_inspection.msh
+Stack contents:
+0: &quot;alpha&quot;
+1: &quot;beta&quot;
+End of stack contents
+Stack contents:
+0: &quot;alpha&quot;
+1: &quot;gamma&quot;
+2: &quot;beta&quot;
+End of stack contents
+</code></pre>
+
+<h2 id="tutorial-external">4. Run External Commands</h2>
+
+<p>
+Other shells treat commands as syntax. In <code>mshell</code> you build a list of arguments, then decide how to execute it:
+<code>;</code> always continues, <code>!</code> stops on non-zero status, and <code>?</code> leaves the exit code on the stack. Tokens such as <code>oc</code>, <code>os</code>, and <code>o</code> control how stdout is captured (complete string, stripped string, or list of lines respectively).
+</p>
+
+<pre>
+<code><span class="mshellLINECOMMENT"># Execute external commands and capture their results</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;uname&#39;</span> <span class="mshellSINGLEQUOTESTRING">&#39;-s&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellSTDOUTCOMPLETE">oc</span> <span class="mshellBANG">!</span> <span class="mshellVARSTORE">kernel!</span>
+<span class="mshellVARRETRIEVE">@kernel</span> <span class="mshellLITERAL">trim</span> <span class="mshellVARSTORE">kernel!</span>
+<span class="mshellFORMATSTRING">$&#34;Kernel: {@kernel}&#34;</span> <span class="mshellLITERAL">wl</span>
+
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;false&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellQUESTION">?</span> <span class="mshellVARSTORE">exitCode!</span>
+<span class="mshellFORMATSTRING">$&#34;false exited with {@exitCode}&#34;</span> <span class="mshellLITERAL">wl</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+<pre><code>$ ./mshell/msh doc/snippets/run_external.msh
+Kernel: Linux
+false exited with 1
+</code></pre>
+
+<h2 id="tutorial-command-substitution">5. Command Substitution the mshell Way</h2>
+
+<p>
+The <code>$(...)</code> form in POSIX shells becomes a combination of stdout-behaviour tokens and string interpolation. Setting <code>os</code> (stdout stripped) before <code>!</code> leaves the command output on the stack so it can flow into later expressions, just like traditional command substitution.
+</p>
+
+<pre>
+<code><span class="mshellLINECOMMENT"># Build command output into later expressions</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSTRING">&#34;date&#34;</span> <span class="mshellSTRING">&#34;+%Y%m%d&#34;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellSTDOUTSTRIPPED">os</span> <span class="mshellBANG">!</span> <span class="mshellVARSTORE">buildDate!</span>
+
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSTRING">&#34;git&#34;</span> <span class="mshellSTRING">&#34;rev-parse&#34;</span> <span class="mshellSTRING">&#34;--short&#34;</span> <span class="mshellSTRING">&#34;HEAD&#34;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellSTDOUTSTRIPPED">os</span> <span class="mshellBANG">!</span> <span class="mshellVARSTORE">sha!</span>
+
+<span class="mshellFORMATSTRING">$&#34;Build tag: {@buildDate}-{@sha}&#34;</span> <span class="mshellLITERAL">wl</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+<pre><code>$ ./mshell/msh doc/snippets/command_substitution.msh
+Build tag: 20251007-a7ebaab
+</code></pre>
+
+<p>
+The same approach works for any command you would normally wrap in <code>$(...)</code>. Combine it with <code>o</code> when you need line-by-line output or with <code>psub</code> to emulate process substitution.
+</p>
+
+<h2 id="tutorial-http">6. Work with JSON APIs</h2>
+
+<p>
+Built-in HTTP helpers let you stay inside <code>mshell</code> while talking to web services. The response body arrives as binary data, so convert it with <code>utf8Str</code> before parsing JSON. Run the example with network access enabled so the request can reach the public endpoint.
+</p>
+
+<pre>
+<code><span class="mshellLINECOMMENT"># Fetch JSON data and extract fields</span>
+<span class="mshellLEFT_CURLY">{</span> <span class="mshellSTRING">&#34;url&#34;</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">&#34;https://jsonplaceholder.typicode.com/todos/1&#34;</span> <span class="mshellRIGHT_CURLY">}</span> <span class="mshellLITERAL">httpGet</span><span class="mshellQUESTION">?</span> <span class="mshellVARSTORE">resp!</span>
+<span class="mshellVARRETRIEVE">@resp</span> <span class="mshellSTRING">&#34;body&#34;</span> <span class="mshellLITERAL">get</span><span class="mshellQUESTION">?</span> <span class="mshellLITERAL">utf8Str</span> <span class="mshellLITERAL">parseJson</span> <span class="mshellVARSTORE">todo!</span>
+<span class="mshellVARRETRIEVE">@todo</span> <span class="mshellSTRING">&#34;title&#34;</span> <span class="mshellLITERAL">get</span><span class="mshellQUESTION">?</span> <span class="mshellLITERAL">wl</span>
+<span class="mshellVARRETRIEVE">@todo</span> <span class="mshellSTRING">&#34;completed&#34;</span> <span class="mshellLITERAL">get</span><span class="mshellQUESTION">?</span> <span class="mshellSTR">str</span> <span class="mshellLITERAL">wl</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+<pre><code>$ ./mshell/msh doc/snippets/http_json.msh
+delectus aut autem
+false
+</code></pre>
+
+<h2 id="tutorial-next">7. Keep Exploring</h2>
+
+<ul>
+  <li>Browse <code>lib/std.msh</code> for more helpers (grouping, Maybe utilities, CSV/JSON parsers, and more).</li>
+  <li>Read through <code>tests/</code> for focused examples that exercise language features.</li>
+  <li>Study scripts under <code>$REPOS/dotfiles/scripts</code> to see larger real-world automation written in <code>mshell</code>.</li>
+</ul>
+
+<p>
+Every value in <code>mshell</code> is just another stack entry, so once these building blocks feel natural you can keep layering them to match the workflows you already know from other shells—just with explicit data types and composable quotations.
+</p>

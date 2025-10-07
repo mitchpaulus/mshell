@@ -1,0 +1,10 @@
+# Demonstrate arithmetic with stack operators
+1 2 3
+swap
+over
++
+rot
+*
++
+result!
+$"Final total: {@result}" wl
