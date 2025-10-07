@@ -1690,14 +1690,14 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						for mvTryCount := 0; mvTryCount < tries; mvTryCount++ {
 							mvErr = os.Rename(source, destination)
 							if mvErr == nil {
-								continue
+								break
 							} else {
 								time.Sleep(time.Duration(25*(mvTryCount+1)) * time.Millisecond) // linear backoff
 							}
 						}
 
-						if err != nil {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error in %s from '%s' to '%s': %s\n", t.Line, t.Column, t.Lexeme, source, destination, err.Error()))
+						if mvErr != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error in %s from '%s' to '%s': %s\n", t.Line, t.Column, t.Lexeme, source, destination, mvErr.Error()))
 						}
 					} else if t.Lexeme == "cp" {
 						err = CopyFile(source, destination)
@@ -2671,9 +2671,10 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						if err != nil {
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error opening file %s for MD5 hashing: %s\n", t.Line, t.Column, pathStr, err.Error()))
 						}
-
-						defer file.Close()
 						data, err = io.ReadAll(file)
+						// Don't defer, do it now, because we don't really exit this loop until all tokens are consumed.
+						file.Close()
+
 						if err != nil {
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error reading file %s for MD5 hashing: %s\n", t.Line, t.Column, pathStr, err.Error()))
 						}
