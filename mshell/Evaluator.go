@@ -3103,6 +3103,25 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					// Convert string to bytes
 					bytesContent := []byte(strObj.Content)
 					stack.Push(MShellBinary(bytesContent))
+				} else if t.Lexeme == "sleep" {
+					// Sleep float number of seconds.
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'sleep' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					// Expect a float or int
+					if !obj.IsNumeric() {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot sleep for a %s.\n", t.Line, t.Column, obj.TypeName()))
+					}
+
+					secs := obj.FloatNumeric()
+					if secs < 0 {
+						// Ignore
+					} else {
+						// Sleep for the specified number of seconds
+						time.Sleep(time.Duration(secs * float64(time.Second)))
+					}
 				} else { // last new function
 					// If we aren't in a list context, throw an error.
 					// Nearly always this is unintended.
