@@ -12,9 +12,36 @@ while making calls to external programs and pipelines simple and easy.
 
 Future goals are to even add some type safety.
 
+# Documentation
+
+The beginnings of some documentation are for now located [here](https://mitchellt.com/msh/basics.html).
+
+# Installation
+
+`mshell` is compiled to a single executable binary, so installation is straightforward.
+First, download the executable from the [GitHub releases page](https://github.com/mitchpaulus/mshell/releases/latest).
+The assets are tar.gz files, so you would unpack them with:
+
+```sh
+tar -xvf linux_amd64.tar.gz
+```
+
+Put that file in a directory that is in your `$PATH` and make sure it is marked as executable on Linux.
+
+The other file to copy is the standard library, which is at `lib/std.msh` in this repo.
+Download that, put it somewhere. Then set the environment variable `$MSHSTDLIB` to point to that file location.
+
+An example install script is at [install.sh](https://github.com/mitchpaulus/mshell/blob/main/install.sh) in this repository.
+
 # Examples
 
-Best way to understand purpose and syntax of `mshell` is to see it in action. Here are some examples.
+Best way to understand purpose and syntax of `mshell` is to see it in action.
+I have ported over many of personal scripts that used to be done with `sh` or Python in my personal dotfiles.
+Take a look through this [script directory](https://github.com/mitchpaulus/dotfiles/tree/master/scripts) and you'll find many real life examples.
+
+Otherwise, there are some other examples [here](https://mitchellt.com/msh/examples.html)
+
+Here are some examples.
 
 *Better Awk One-liners*. Examples from the `awk` book, translated to `mshell`. You can run these examples like:
 
@@ -27,108 +54,6 @@ awk 'END { print NR }' < input_file_to_process.txt
 ```
 
 Note that you'll also need the environment variable `MSHSTDLIB` pointing to the file at `lib/std.msh`.
-
-```sh
-# 1. Print the total number of input lines:
-# END { print NR }
-sl len wl
-
-# 2. Print the 10th input line:
-# NR == 10
-sl :9: wl
-
-# 3. Print the last field of every input line:
-# { print $NF }
-wt (:-1: wl) each
-wt (:-1:) map uw
-
-# 4. Print the last field of the last input line:
-#     { field = $NF }
-# END { print field }
-wt :-1: :-1: wl
-
-# 5. Print every input line with more than four fields
-# NF > 4
-sl (wsplit len 4 >) filter uw
-
-# 6. Print every input line in which the last field is more than 4
-# $NF > 4
-sl (wsplit :-1: toFloat? 4 >) filter uw
-
-# 7. Print the total number of fields in all input lines
-#     { nf = nf + NF }
-# END { print nf }
-sl (wsplit len) map sum wl
-
-# 8. Print the total number of lines that contain 'Beth'
-# /Beth/ { nlines = nlines + 1 }
-# END { print nlines }
-sl ("Beth" in) filter len wl
-
-# 9. Print the largest first field and the line that contains it (assumes some $1 is positive):
-# $1 > max { max = $1; line = $0 }
-# END      { print max, line }
-(
- line! prev!
- @line wsplit :0: toFloat? new!
- @new @prev :0: > ([@new @line]) (@prev) iff
-)
-[-99999999  ""] sl foldl
-dup :0: max! :1: maxLine! $"{@max str} {@maxLine}" wl
-
-# 10. Print every line that has at least one field
-# NF > 0
-sl (wsplit len 0 >) filter uw
-
-# 11. Print every line longer than 80 characters
-# length($0) > 80
-sl (len 80 >) filter uw
-
-# 12. Print the number of fields in every line followed by the line itself
-# { print NF, $0 }
-sl (dup wsplit len w " " w wl) each
-
-# 13. Print the first two fields in opposite order, of every line
-# { print $2, $1 }
-wt (:1:, :0: wjoin wl) each
-
-# 14. Exchange the first two fields of every line and then print the line
-# { temp = $1; $1 = $2; $2 = temp; print }
-wt (:1:, :0:, 2: wjoin wl) each
-
-# 15. Print every line with the first field replaced by the line number
-# { $1 = NR; print }
-wt d!
-@d len seq (1 + str) map
-@d (line! lineNum! [@lineNum] @line 1: + " " join) zip uw
-
-# 16. Print every line after erasing the second field
-# { $2 = ""; print }
-wt ("" 1 setAt wjoin wl) each
-
-# 17. Print in reverse order the fields of every line
-# { for (i = NF; i > 0; i = i - 1) printf (i == 1 ? "%s" : "%s "), $i
-# printf "\n"
-# }
-wt (reverse wjoin wl) each
-
-# 18. Print the sums of the fields of every line
-# { sum = 0
-#   for (i = 1; i <= NF; i = i + 1) sum = sum + $i
-#   print sum
-# }
-wt ((toFloat?) map sum str wl) each
-
-# 19. Add up all fields in all lines and print the sum
-# { for (i = 1; i <= NF; i = i + 1) sum = sum + $i }
-# END { print sum }
-wt ((toFloat?) map sum) sum str wl
-
-# 20. Print every line after replacing each field by its absolute value
-# { for (i = 1; i <= NF; i = i + 1) $i = ($i < 0) ? -$i : $i; print }
-wt ((toFloat? abs str) map wjoin wl) each
-
-```
 
 
 *Simpler execution of common shell idioms*
@@ -143,11 +68,12 @@ wt ((toFloat? abs str) map wjoin wl) each
 | `grep` | `grep 'pattern'` | `sl ("pattern" in) filter uw` |
 | `cut` | `cut -d ';' -f 2` | `sl (";" split :1: wl) each` |
 
-
 # TODO
 
-- Improved error messages
-- Type checking
+- Job control. Right now, if you CTRL-c a long running process, it kills the entire shell.
+- Type checking.
+- Improved error messages.
+- Built in file manager (like [Elvish](https://elv.sh/)).
 
 # References/Inspirations
 

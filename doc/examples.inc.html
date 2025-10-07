@@ -13,6 +13,21 @@ Some key definitions that are part of the standard library here:
 
 <p> The other functions should be more or less self explanatory. </p>
 
+<p>
+You can run these examples in <code>sh</code> or <code>bash</code> like:
+</p>
+
+<pre>
+<code>
+msh file_with_contents.msh &lt; input_file_to_process.txt
+awk -f file_with_contents.awk &lt; input_file_to_process.txt
+<span class="mshellLINECOMMENT"># OR (using 1st example)</span>
+msh -c <span class="mshellSINGLEQUOTESTRING">'sl len wl'</span> &lt; input_file_to_process.txt
+awk <span class="mshellSINGLEQUOTESTRING">'END { print NR }'</span> &lt; input_file_to_process.txt
+</code>
+</pre>
+
+<p> Note that you'll also need the environment variable <code>MSHSTDLIB</code> pointing to the file at <code>lib/std.msh</code>. </p>
 
 <table id="awk-table" style="table-layout: fixed; width: 1200px;">
     <colgroup> 
