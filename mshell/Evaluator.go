@@ -1277,8 +1277,8 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error creating temporary file: %s\n", t.Line, t.Column, err.Error()))
 					}
-					// Close the file
-					defer tmpfile.Close()
+					// Close the file immediately
+				 	tmpfile.Close()
 					registerTempFileForCleanup(tmpfile.Name())
 
 					// Write the contents of the object to the temporary file
@@ -1844,12 +1844,12 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error opening file %s: %s\n", t.Line, t.Column, path, err.Error()))
 					}
-					defer file.Close()
 
 					// Create a new SHA256 hash
 					h := sha256.New()
 					// Read the file and write it to the hash
 					_, err = io.Copy(h, file)
+					file.Close()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error hashing file %s: %s\n", t.Line, t.Column, path, err.Error()))
 					}
@@ -2107,14 +2107,14 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 
 					// If a path or literal, read the file as UTF-8. Else, read the string as the contents directly.
 					var reader *csv.Reader
+					var file *os.File
 					switch obj1.(type) {
 					case *MShellPath, *MShellLiteral:
 						path, _ := obj1.CastString()
-						file, err := os.Open(path)
+						file, err = os.Open(path)
 						if err != nil {
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error opening file %s: %s\n", t.Line, t.Column, path, err.Error()))
 						}
-						defer file.Close()
 						reader = csv.NewReader(file)
 					case *MShellString:
 						// Create a new CSV reader directly from the string contents
@@ -2132,6 +2132,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						if err == io.EOF {
 							break
 						} else if err != nil {
+							file.Close()
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error reading CSV: %s\n", t.Line, t.Column, err.Error()))
 						}
 						// Turn record into MShellList of strings
@@ -2143,6 +2144,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						newOuterList.Items = append(newOuterList.Items, newInnerList)
 					}
 					stack.Push(newOuterList)
+					file.Close()
 				} else if t.Lexeme == "parseJson" {
 					obj1, err := stack.Pop()
 					if err != nil {
@@ -2159,8 +2161,8 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error opening file %s: %s\n", t.Line, t.Column, path, err.Error()))
 						}
 
-						defer file.Close()
 						jsonData, err = io.ReadAll(file)
+						file.Close()
 						if err != nil {
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error reading file %s: %s\n", t.Line, t.Column, path, err.Error()))
 						}
@@ -2471,14 +2473,14 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 
 					var reader io.Reader
+					var file *os.File
 					switch obj1.(type) {
 					case *MShellPath, *MShellLiteral:
 						path, _ := obj1.CastString()
-						file, err := os.Open(path)
+						file, err = os.Open(path)
 						if err != nil {
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error opening file %s: %s\n", t.Line, t.Column, path, err.Error()))
 						}
-						defer file.Close()
 
 						reader = file
 					case *MShellString:
@@ -2488,6 +2490,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 
 					// Parse file with html.Parse
 					doc, err := html.Parse(reader)
+					file.Close()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing HTML: %s\n", t.Line, t.Column, err.Error()))
 					}
@@ -3925,6 +3928,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error opening file %s for reading: %s\n", t.Line, t.Column, quotation.StandardInputFile, err.Error()))
 						}
 						loopContext.StandardInput = file
+						// TODO: This probably shouldn't be done here like this
 						defer file.Close()
 					} else {
 						panic("Unknown stdin behavior")
@@ -3937,6 +3941,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error opening file %s for writing: %s\n", t.Line, t.Column, quotation.StandardOutputFile, err.Error()))
 					}
 					loopContext.StandardOutput = file
+					// TODO: This probably shouldn't be done here like this
 					defer file.Close()
 				}
 
