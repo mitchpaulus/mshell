@@ -1277,8 +1277,6 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error creating temporary file: %s\n", t.Line, t.Column, err.Error()))
 					}
-					// Close the file immediately
-				 	tmpfile.Close()
 					registerTempFileForCleanup(tmpfile.Name())
 
 					// Write the contents of the object to the temporary file
@@ -1286,17 +1284,19 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					case *MShellString:
 						_, err = tmpfile.WriteString(obj1.(*MShellString).Content)
 						if err != nil {
+							tmpfile.Close()
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error writing to temporary file: %s\n", t.Line, t.Column, err.Error()))
 						}
 					case *MShellLiteral:
 						_, err = tmpfile.WriteString(obj1.(*MShellLiteral).LiteralText)
 						if err != nil {
+							tmpfile.Close()
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error writing to temporary file: %s\n", t.Line, t.Column, err.Error()))
 						}
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'psub' with a %s.\n", t.Line, t.Column, obj1.TypeName()))
 					}
-
+					tmpfile.Close()
 					stack.Push(&MShellString{tmpfile.Name()})
 				} else if t.Lexeme == "date" {
 					// Drop current local date time onto the stack
