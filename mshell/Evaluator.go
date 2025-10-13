@@ -3945,7 +3945,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					defer file.Close()
 				}
 
-				maxLoops := 1500000
+				maxLoops := 15000000
 				loopCount := 0
 				state.LoopDepth++
 
