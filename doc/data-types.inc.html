@@ -216,7 +216,7 @@ This is done with the <code>?</code> operator.
 <h1 id="data-type-pipe">Pipe</h1>
 
 <p>
-A <code>pipe</code> is really a special list (and it's type may get consumed by <code>list</code> in the future).
+A <code>pipe</code> is really a special list (and this type may get consumed by <code>list</code> in the future).
 </p>
 
 <p>
@@ -230,3 +230,13 @@ It's created by the <code>|</code> operator.
 <span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPIPE">|</span> <span class="mshellEXECUTE">;</span>  <span class="mshellLINECOMMENT"># Counting the number of lines of output from myCommand</span>
 <span class="mshellEOF"></span></code>
 </pre>
+
+<h1 id="data-type-binary">Binary</h1>
+
+<p>
+Many times in shell programs you need to deal directly with binary data.
+This type represents an array of bytes.
+Example functions that takes binary data as input and output is <a href="functions.html#func-utf8Str"><code>utf8Str</code></a> and <a href="functions.html#utf8Bytes"><code>utf8Bytes</code></a>.
+</p>
+
+
