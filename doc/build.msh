@@ -1,0 +1,25 @@
+`base.html` readFile lines baseLines!
+
+[
+    `basics.inc.html`
+    `data-types.inc.html`
+    `examples.inc.html`
+    `execution.inc.html`
+    `functions.inc.html`
+] files!
+
+@files
+(
+    f!
+    @baseLines (
+        l!
+        @l "CONTENTS" in
+            (@f readFile)
+            (@l)
+        iff
+    ) map
+    unlines
+    @f basename "." split :0: name! $"build/{@name}.html"
+    writeFile
+)
+each

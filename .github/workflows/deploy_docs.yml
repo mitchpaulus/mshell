@@ -1,0 +1,45 @@
+name: Deploy docs
+on:
+  push:
+    tags:
+      - 'doc_deploy*'
+
+jobs:
+  deploy_docs:
+    runs-on: ubuntu-latest
+
+    env:
+      MSH_DOC_HOST: ${{ secrets.MSH_DOC_HOST }}
+      MSH_DOC_KEY: ${{ secrets.MSH_DOC_KEY }}
+      MSH_DOC_PATH: ${{ secrets.MSH_DOC_PATH }}
+      MSH_DOC_USER: ${{ secrets.MSH_DOC_USER }}
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        cache-dependency-path: mshell/go.sum
+
+    - name: Setup SSH
+      run: |
+        install -m 700 -d ~/.ssh
+        printf '%s' "${{ secrets.MSH_DOC_KEY }}" > ~/.ssh/id_ed25519
+        chmod 600 ~/.ssh/id_ed25519
+        ssh-keyscan -H "${{ secrets.MSH_DOC_HOST }}" >> ~/.ssh/known_hosts
+
+    - name: Build go
+      run: cd mshell && go build -o mshell
+
+    - name: Set Go PATH, MSHSTDLIB
+      run: |
+        realpath ./mshell >> "$GITHUB_PATH"
+        printf "MSHSTDLIB=%s\n" "$(realpath ./lib/std.msh)" >> "$GITHUB_ENV"
+
+    - name: Build and deploy docs
+      run: |
+        cd doc/
+        mshell build.msh
+        cd build/
+        mshell deploy.msh
