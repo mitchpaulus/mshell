@@ -136,6 +136,17 @@ func main() {
 	defer cleanupTempFiles()
 	var err error
 
+	if len(os.Args) >= 2 && os.Args[1] == "lsp" {
+		if runErr := RunLSP(os.Args[2:], os.Stdin, os.Stdout); runErr != nil {
+			if runErr == errExitBeforeShutdown {
+				os.Exit(1)
+			}
+			fmt.Fprintf(os.Stderr, "LSP error: %v\n", runErr)
+			os.Exit(1)
+		}
+		return
+	}
+
 	command := CLIEXECUTE
 
 	// printLex := false
