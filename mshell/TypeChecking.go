@@ -68,7 +68,7 @@ var builtInDefs = map[string][]TypeDefinition{
 	"glob": {
 		{
 			InputTypes:  []MShellType{TypeString{}},
-			OutputTypes: []MShellType{&TypeList{ListType: TypeString{}, Count: -1}},
+			OutputTypes: []MShellType{&TypeHomogeneousList{ListType: TypeString{}, Count: -1}},
 		},
 	},
 	"stdin": {
@@ -88,12 +88,12 @@ var builtInDefs = map[string][]TypeDefinition{
 	"args": {
 		{
 			InputTypes:  []MShellType{},
-			OutputTypes: []MShellType{&TypeList{ListType: TypeString{}, Count: -1}},
+			OutputTypes: []MShellType{&TypeHomogeneousList{ListType: TypeString{}, Count: -1}},
 		},
 	},
 	"len": {
 		{
-			InputTypes:  []MShellType{&TypeList{ListType: genericA, Count: -1}},
+			InputTypes:  []MShellType{&TypeHomogeneousList{ListType: genericA, Count: -1}},
 			OutputTypes: []MShellType{TypeInt{}},
 		},
 		{
@@ -142,28 +142,39 @@ var builtInDefs = map[string][]TypeDefinition{
 	"split": {
 		{
 			InputTypes:  []MShellType{TypeString{}, TypeString{}},
-			OutputTypes: []MShellType{&TypeList{ListType: TypeString{}, Count: -1}},
+			OutputTypes: []MShellType{&TypeHomogeneousList{ListType: TypeString{}, Count: -1}},
 		},
 	},
 	"wsplit": {
 		{
 			InputTypes:  []MShellType{TypeString{}},
-			OutputTypes: []MShellType{&TypeList{ListType: TypeString{}, Count: -1}},
+			OutputTypes: []MShellType{&TypeHomogeneousList{ListType: TypeString{}, Count: -1}},
 		},
 	},
 	"join": {
 		{
-			InputTypes:  []MShellType{&TypeList{ListType: TypeString{}, Count: -1}, TypeString{}},
+			InputTypes:  []MShellType{&TypeHomogeneousList{ListType: TypeString{}, Count: -1}, TypeString{}},
 			OutputTypes: []MShellType{TypeString{}},
 		},
 	},
 	"lines": {
 		{
 			InputTypes:  []MShellType{TypeString{}},
-			OutputTypes: []MShellType{&TypeList{ListType: TypeString{}, Count: -1}},
+			OutputTypes: []MShellType{&TypeHomogeneousList{ListType: TypeString{}, Count: -1}},
 		},
 	},
-	// setAt probably has to be handled specially.
+	"setAt": {
+		{
+			InputTypes:  []MShellType{
+				&TypeHomogeneousList{ ListType: TypeGeneric{ Name: "a" }, Count: -1  },
+				TypeGeneric{ Name: "a" },
+				TypeInt{},
+			},
+			OutputTypes: []MShellType{
+				&TypeHomogeneousList{ ListType: TypeGeneric{ Name: "a" }, Count: -1  },
+			},
+		},
+	},
 	// insert probably has to be handled specially.
 	// del probably has to be handled specially.
 	"readFile": {
@@ -255,7 +266,7 @@ var builtInDefs = map[string][]TypeDefinition{
 			OutputTypes: []MShellType{TypeString{}},
 		},
 		{
-			InputTypes:  []MShellType{&TypeList{}},
+			InputTypes:  []MShellType{&TypeHomogeneousList{}},
 			OutputTypes: []MShellType{TypeString{}},
 		},
 		{
@@ -338,8 +349,8 @@ var typeDefComparerEqual = []TypeDefinition{
 
 var typeDefStdErrRedirect = []TypeDefinition{
 	{
-		InputTypes:  []MShellType{&TypeList{ListType: TypeGeneric{"a", -1}, Count: -1}, TypeString{}},
-		OutputTypes: []MShellType{&TypeList{ListType: TypeGeneric{"a", -1}, Count: -1}},
+		InputTypes:  []MShellType{&TypeHomogeneousList{ListType: TypeGeneric{"a", -1}, Count: -1}, TypeString{}},
+		OutputTypes: []MShellType{&TypeHomogeneousList{ListType: TypeGeneric{"a", -1}, Count: -1}},
 	},
 }
 
@@ -691,17 +702,17 @@ MainLoop:
 					tuple := obj.(*TypeTuple)
 					stdoutBehavior := tuple.StdoutBehavior
 					if stdoutBehavior == STDOUT_LINES {
-						stack.Push(&TypeList{ListType: TypeString{}, Count: -1})
+						stack.Push(&TypeHomogeneousList{ListType: TypeString{}, Count: -1})
 					} else if stdoutBehavior == STDOUT_STRIPPED || stdoutBehavior == STDOUT_COMPLETE {
 						stack.Push(TypeString{})
 					} else if stdoutBehavior != STDOUT_NONE {
 						typeCheckResult.Errors = append(typeCheckResult.Errors, TypeCheckError{Token: t, Message: fmt.Sprintf("Expected a tuple with a known stdout behavior, but found %d.\n", stdoutBehavior)})
 					}
-				case *TypeList:
-					list := obj.(*TypeList)
+				case *TypeHomogeneousList:
+					list := obj.(*TypeHomogeneousList)
 					stdoutBehavior := list.StdoutBehavior
 					if stdoutBehavior == STDOUT_LINES {
-						stack.Push(&TypeList{ListType: TypeString{}, Count: -1})
+						stack.Push(&TypeHomogeneousList{ListType: TypeString{}, Count: -1})
 					} else if stdoutBehavior == STDOUT_STRIPPED || stdoutBehavior == STDOUT_COMPLETE {
 						stack.Push(TypeString{})
 					} else if stdoutBehavior != STDOUT_NONE {
@@ -789,8 +800,8 @@ MainLoop:
 
 						// Check that the input and output types match, except for the boolean
 					}
-				case *TypeList:
-					list := obj.(*TypeList)
+				case *TypeHomogeneousList:
+					list := obj.(*TypeHomogeneousList)
 
 					if _, ok := list.ListType.(*TypeQuote); !ok {
 						typeCheckResult.Errors = append(typeCheckResult.Errors, TypeCheckError{Token: t, Message: fmt.Sprintf("Expected a list of quotes, but found a list of %s.\n", list.ListType.String())})

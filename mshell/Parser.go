@@ -566,13 +566,22 @@ func (t TypeBool) String() string {
 }
 
 type TypeList struct {
+
+}
+
+type TypeHomogeneousList struct {
 	ListType       MShellType
 	Count          int // This is < 0 if the Count is not known
 	StdoutBehavior StdoutBehavior
 }
 
-func (list *TypeList) Bind(otherType MShellType) ([]BoundType, error) {
-	asListType, ok := otherType.(*TypeList)
+type TypeHeterogenousList struct {
+	ListTypes       []MShellType
+	StdoutBehavior StdoutBehavior
+}
+
+func (list *TypeHomogeneousList) Bind(otherType MShellType) ([]BoundType, error) {
+	asListType, ok := otherType.(*TypeHomogeneousList)
 	if !ok {
 		return []BoundType{}, errors.New("Cannot bind a list to a non-list type")
 	}
@@ -580,22 +589,22 @@ func (list *TypeList) Bind(otherType MShellType) ([]BoundType, error) {
 	return list.ListType.Bind(asListType.ListType)
 }
 
-func (list *TypeList) Replace(boundTypes []BoundType) MShellType {
+func (list *TypeHomogeneousList) Replace(boundTypes []BoundType) MShellType {
 	// Replace the list type with the bound type
 	newListType := list.ListType.Replace(boundTypes)
-	return &TypeList{ListType: newListType, Count: list.Count, StdoutBehavior: list.StdoutBehavior}
+	return &TypeHomogeneousList{ListType: newListType, Count: list.Count, StdoutBehavior: list.StdoutBehavior}
 }
 
-func (list *TypeList) ToMshell() string {
+func (list *TypeHomogeneousList) ToMshell() string {
 	return fmt.Sprintf("[%s]", list.ListType.ToMshell())
 }
 
-func (list *TypeList) ToJson() string {
+func (list *TypeHomogeneousList) ToJson() string {
 	return fmt.Sprintf("{\"list\": %s}", list.ListType.ToJson())
 }
 
-func (list *TypeList) Equals(other MShellType) bool {
-	if otherList, ok := other.(*TypeList); ok {
+func (list *TypeHomogeneousList) Equals(other MShellType) bool {
+	if otherList, ok := other.(*TypeHomogeneousList); ok {
 		return list.ListType.Equals(otherList.ListType)
 	}
 
@@ -613,7 +622,7 @@ func (list *TypeList) Equals(other MShellType) bool {
 	return false
 }
 
-func (list *TypeList) String() string {
+func (list *TypeHomogeneousList) String() string {
 	return fmt.Sprintf("[%s]", list.ListType.String())
 }
 
@@ -683,7 +692,7 @@ func (tuple *TypeTuple) Equals(other MShellType) bool {
 	// If the other is a TypeList, and all elements are of the same type as tuple.Types,
 	// then we can consider them equal
 	// If we are empty, then we can consider them equal
-	if otherList, ok := other.(*TypeList); ok {
+	if otherList, ok := other.(*TypeHomogeneousList); ok {
 		for _, t := range tuple.Types {
 			if !t.Equals(otherList.ListType) {
 				return false
@@ -957,7 +966,7 @@ func (parser *MShellParser) ParseTypeQuote() (*TypeQuote, error) {
 	return &typeQuote, nil
 }
 
-func (parser *MShellParser) ParseTypeList() (*TypeList, error) {
+func (parser *MShellParser) ParseTypeList() (*TypeHomogeneousList, error) {
 	err := parser.Match(parser.curr, LEFT_SQUARE_BRACKET)
 	if err != nil {
 		return nil, err
@@ -1015,7 +1024,7 @@ func (parser *MShellParser) ParseTypeList() (*TypeList, error) {
 		return nil, err
 	}
 
-	typeList := TypeList{ListType: listType}
+	typeList := TypeHomogeneousList{ListType: listType}
 	return &typeList, nil
 }
 
