@@ -84,6 +84,9 @@ func (objList *MShellStack) Pop2(t Token) (MShellObject, MShellObject, error) {
 	return obj1, obj2, nil
 }
 
+// Returns three objects from the stack.
+// obj1, obj2, obj3 := stack.Pop3(t)
+// obj1 was on top of the stack, obj2 was below it, and obj3 was below that.
 func (objList *MShellStack) Pop3(t Token) (MShellObject, MShellObject, MShellObject, error) {
 	obj1, obj2, err := objList.Pop2(t)
 	if err != nil {
@@ -2400,6 +2403,54 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 							mapResult, _ := stack.Pop()
 							stack.Push(&Maybe{obj: mapResult}) // Wrap the result back in a Maybe
 						}
+					}
+				} else if t.Lexeme == "map2" {
+					// Allow a binary function over two maybes
+					obj1, obj2, obj3, err := stack.Pop3(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					// Check if obj1 is a function
+					fn, ok := obj1.(*MShellQuotation)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The first parameter in 'map2' is expected to be a quotation function, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
+					}
+
+					qContext, err := fn.BuildExecutionContext(&context)
+					defer qContext.Close()
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					// Check if obj2 and obj3 are Maybe objects
+					maybe1, ok1 := obj2.(*Maybe)
+					maybe2, ok2 := obj3.(*Maybe)
+
+					if !ok1 || !ok2 {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second and third parameters in 'map2' are expected to be Maybe objects, found a %s (%s) and a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString(), obj3.TypeName(), obj3.DebugString()))
+					}
+
+					if maybe1.obj == nil || maybe2.obj == nil {
+						stack.Push(&Maybe{obj: nil}) // Both are None
+					} else {
+						// Push the objects inside the Maybe onto the stack
+						preStackLen := len(*stack)
+
+						stack.Push(maybe2.obj)
+						stack.Push(maybe1.obj)
+
+						result := state.Evaluate(fn.Tokens, stack, (*qContext), definitions, CallStackItem{fn, "quote", CALLSTACKQUOTE})
+						if result.ShouldPassResultUpStack() {
+							return result
+						}
+
+						if len(*stack) != preStackLen + 1 {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: The function in 'map2' did not return a single value, found %d values.\n", t.Line, t.Column, len(*stack) - preStackLen))
+						}
+
+						mapResult, _ := stack.Pop()
+						stack.Push(&Maybe{obj: mapResult}) // Wrap the result back in a Maybe
 					}
 				} else if t.Lexeme == "isNone" {
 					obj, err := stack.Pop()

@@ -287,6 +287,7 @@
         <tr> <td><code>maybe</code></td> <td>Unwrap a <code><span class="sig-type sig-type-maybe">Maybe</span></code>, providing a default value.</td> <td><code>(<span class="sig-type sig-type-maybe">Maybe</span>[a] a -- a)</code></td> </tr>
         <tr> <td><code>bind</code></td> <td>Monadic bind for chaining <code><span class="sig-type sig-type-maybe">Maybe</span></code>-returning functions.</td> <td><code>(<span class="sig-type sig-type-maybe">Maybe</span>[a] (a -- <span class="sig-type sig-type-maybe">Maybe</span>[b]) -- <span class="sig-type sig-type-maybe">Maybe</span>[b])</code></td> </tr>
         <tr> <td><code>map</code></td> <td>Map a function over a <code><span class="sig-type sig-type-maybe">Maybe</span></code> value.</td> <td><code>(<span class="sig-type sig-type-maybe">Maybe</span>[a] (a -- b) -- <span class="sig-type sig-type-maybe">Maybe</span>[b])</code></td> </tr>
+        <tr> <td><code>map2</code></td> <td>Map a binary function over a pair of <code><span class="sig-type sig-type-maybe">Maybe</span></code> value.</td> <td><code>(<span class="sig-type sig-type-maybe">Maybe</span>[a] <span class="sig-type sig-type-maybe">Maybe</span>[b] (a b -- c) -- <span class="sig-type sig-type-maybe">Maybe</span>[c])</code></td> </tr>
     </tbody>
 </table>
 
