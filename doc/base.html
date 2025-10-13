@@ -62,6 +62,17 @@
         border: 1px solid black;
     }
 
+    #bash-table td, #bash-table th {
+        overflow: hidden;
+        border: 1px solid black;
+        padding: 1em;
+    }
+
+    #bash-table {
+        border-collapse: collapse;
+        border: 1px solid black;
+    }
+
 
     nav {
         flex-basis: 18rem;
@@ -96,12 +107,16 @@
     }
 
     #content-div {
-        width: 45em;
+        <!-- width: 45em; -->
         margin-bottom: 10em;
     }
 
     code {
         font-size: 1.2em;
+    }
+
+    p {
+        width: 45em;
     }
 
     .nav-ul {
@@ -210,6 +225,7 @@
             <a href="examples.html">Examples</a>
             <ul class="nav-ul nav-sub">
               <li><a href="examples.html#vs-awk">vs. awk</a></li>
+              <li><a href="examples.html#vs-bash">vs. bash</a></li>
             </ul>
           </li>
           <li>

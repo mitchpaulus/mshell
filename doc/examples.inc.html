@@ -285,3 +285,110 @@ awk <span class="mshellSINGLEQUOTESTRING">'END { print NR }'</span> &lt; input_f
 
     </tbody>
 </table>
+
+<h2 id="vs-bash">Versus Bash</h2>
+
+<p>
+Where <code>bash</code> relies on an expansion phase, <code>mshell</code> keeps data on the stack and uses explicit operators.
+The snippets below show how to approach familiar shell tasks.
+</p>
+
+<!-- <table id="bash-table" style="table-layout: fixed; width: 1200px;"> -->
+<table id="bash-table" >
+    <!-- <colgroup> -->
+        <!-- <col style="width: 15%;"> -->
+        <!-- <col style="width: 30%;"> -->
+        <!-- <col style="width: 35%;"> -->
+        <!-- <col style="width: 20%;"> -->
+    <!-- </colgroup> -->
+    <thead>
+        <tr> <th>Topic</th> <th>bash</th> <th>mshell</th> <th>Notes</th> </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>Brace expansion</td>
+            <td>
+<pre><code class="language-bash">touch backup_{1..3}.tar.gz</code></pre>
+            </td>
+            <td>
+<pre><code class="language-mshell">3 seq (
+    idx!
+    [ 'touch' $"backup_{@idx 1 + str}.tar.gz" ] ;
+) each</code></pre>
+            </td>
+            <td>Generate filenames explicitly, then run the command for each item.</td>
+        </tr>
+        <tr>
+            <td>Tilde expansion</td>
+            <td>
+<pre><code class="language-bash">grep -R "TODO" ~/projects</code></pre>
+            </td>
+            <td>
+<pre><code class="language-mshell">[ 'grep' '-R' 'TODO' ~/projects ] ;</code></pre>
+            </td>
+            <td>Tokens that begin with <code>~/</code> resolve to the user's home directory.</td>
+        </tr>
+        <tr>
+            <td>Parameter expansion</td>
+            <td>
+<pre><code class="language-bash">ls "${LOG_DIR:-/var/log}"</code></pre>
+            </td>
+            <td>
+<pre><code class="language-mshell">$LOG_DIR? ( $LOG_DIR ) ( '/var/log' ) iff logDir!
+[ 'ls' ] @logDir append ;</code></pre>
+            </td>
+            <td>Use <code>iff</code> (if/else) to choose defaults while keeping values on the stack.</td>
+        </tr>
+        <tr>
+            <td>Command substitution</td>
+            <td>
+<pre><code class="language-bash">files=$(find src -type f -name '*.msh')
+printf '%s\n' "$files"</code></pre>
+            </td>
+            <td>
+<pre><code class="language-mshell">[ 'find' 'src' '-type' 'f' '-name' '*.msh' ] * &gt; ; lines files!
+@files len count!
+$"Found {@count} source files" wl</code></pre>
+            </td>
+            <td><code>* &gt;</code> keeps stdout as a string; <code>lines</code> turns it into a list for further work.</td>
+        </tr>
+        <tr>
+            <td>Arithmetic expansion</td>
+            <td>
+<pre><code class="language-bash">truncate -s $((512 * 1024)) disk.img</code></pre>
+            </td>
+            <td>
+<pre><code class="language-mshell">512 1024 * size!
+@size str sizeStr!
+[ 'truncate' '-s' @sizeStr 'disk.img' ] ;</code></pre>
+            </td>
+            <td>Apply numeric operators directly, then convert to strings when composing arguments.</td>
+        </tr>
+        <tr>
+            <td>Process substitution</td>
+            <td>
+<pre><code class="language-bash">diff &lt;(sort errors.log) &lt;(sort errors.log.prev)</code></pre>
+            </td>
+            <td>
+<pre><code class="language-mshell">[ 'sort' 'errors.log' ] * &gt; ; psub left!
+[ 'sort' 'errors.log.prev' ] * &gt; ; psub right!
+[ 'diff' ] @left append @right append ;</code></pre>
+            </td>
+            <td><code>psub</code> writes captured output to a temporary file and returns the path.</td>
+        </tr>
+        <tr>
+            <td>Redirections</td>
+            <td>
+<pre><code class="language-bash">printf 'status\n' &gt; /tmp/report.txt
+grep status &lt; /tmp/report.txt</code></pre>
+            </td>
+            <td>
+<pre><code class="language-mshell">[ 'printf' 'status\n' ] `/tmp/report.txt` &gt; ;
+[ 'grep' 'status' ] `/tmp/report.txt` &lt; * &gt; ; lines matches!
+@matches len total!
+$"Matched {@total} lines" wl</code></pre>
+            </td>
+            <td>Use path literals with <code>&gt;</code>/<code>&lt;</code>; combine with <code>* &gt;</code> and <code>lines</code> when you want to reuse the output.</td>
+        </tr>
+    </tbody>
+</table>
