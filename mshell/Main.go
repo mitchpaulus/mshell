@@ -182,6 +182,7 @@ func main() {
 			fmt.Println("Usage: mshell [OPTION].. FILE [ARG]..")
 			fmt.Println("Usage: mshell [OPTION].. [ARG].. < FILE")
 			fmt.Println("Usage: mshell [OPTION].. -c INPUT [ARG]..")
+			fmt.Println("Usage: msh lsp")
 			fmt.Println("")
 			fmt.Println("Options:")
 			fmt.Println("  --html       Render the input as HTML")
