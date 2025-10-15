@@ -84,6 +84,9 @@ func (objList *MShellStack) Pop2(t Token) (MShellObject, MShellObject, error) {
 	return obj1, obj2, nil
 }
 
+// Returns three objects from the stack.
+// obj1, obj2, obj3 := stack.Pop3(t)
+// obj1 was on top of the stack, obj2 was below it, and obj3 was below that.
 func (objList *MShellStack) Pop3(t Token) (MShellObject, MShellObject, MShellObject, error) {
 	obj1, obj2, err := objList.Pop2(t)
 	if err != nil {
@@ -2401,6 +2404,54 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 							stack.Push(&Maybe{obj: mapResult}) // Wrap the result back in a Maybe
 						}
 					}
+				} else if t.Lexeme == "map2" {
+					// Allow a binary function over two maybes
+					obj1, obj2, obj3, err := stack.Pop3(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					// Check if obj1 is a function
+					fn, ok := obj1.(*MShellQuotation)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The first parameter in 'map2' is expected to be a quotation function, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
+					}
+
+					qContext, err := fn.BuildExecutionContext(&context)
+					defer qContext.Close()
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					// Check if obj2 and obj3 are Maybe objects
+					maybe1, ok1 := obj2.(*Maybe)
+					maybe2, ok2 := obj3.(*Maybe)
+
+					if !ok1 || !ok2 {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second and third parameters in 'map2' are expected to be Maybe objects, found a %s (%s) and a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString(), obj3.TypeName(), obj3.DebugString()))
+					}
+
+					if maybe1.obj == nil || maybe2.obj == nil {
+						stack.Push(&Maybe{obj: nil}) // Both are None
+					} else {
+						// Push the objects inside the Maybe onto the stack
+						preStackLen := len(*stack)
+
+						stack.Push(maybe2.obj)
+						stack.Push(maybe1.obj)
+
+						result := state.Evaluate(fn.Tokens, stack, (*qContext), definitions, CallStackItem{fn, "quote", CALLSTACKQUOTE})
+						if result.ShouldPassResultUpStack() {
+							return result
+						}
+
+						if len(*stack) != preStackLen + 1 {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: The function in 'map2' did not return a single value, found %d values.\n", t.Line, t.Column, len(*stack) - preStackLen))
+						}
+
+						mapResult, _ := stack.Pop()
+						stack.Push(&Maybe{obj: mapResult}) // Wrap the result back in a Maybe
+					}
 				} else if t.Lexeme == "isNone" {
 					obj, err := stack.Pop()
 					if err != nil {
@@ -3125,6 +3176,39 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						// Sleep for the specified number of seconds
 						time.Sleep(time.Duration(secs * float64(time.Second)))
 					}
+				} else if t.Lexeme == "parseLinkHeader" {
+					// Parse a string in the form of https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Link#specifications
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'parseLinkHeader' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					strObj, ok := obj.(*MShellString)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The top of stack in 'parseLinkHeader' is expected to be a string, found a %s (%s)\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
+					}
+
+					// Parse the link header
+					links, err := ParseLinkHeaders(strObj.Content)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing link header '%s': %s\n", t.Line, t.Column, strObj.Content, err.Error()))
+					}
+
+					// Create a new list to hold the parsed links
+					linksList := NewList(len(links))
+					for i, link := range links {
+						linkDict := NewDict()
+						linkDict.Items["url"] = &MShellString{Content: link.Uri}
+						linkDict.Items["rel"] = &MShellString{Content: link.Rel}
+						paramDict := NewDict()
+						for key, value := range link.Params {
+							paramDict.Items[key] = &MShellString{Content: value}
+						}
+						linkDict.Items["params"] = paramDict
+						linksList.Items[i] = linkDict
+					}
+
+					stack.Push(linksList)
 				} else { // last new function
 					// If we aren't in a list context, throw an error.
 					// Nearly always this is unintended.
@@ -3945,7 +4029,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					defer file.Close()
 				}
 
-				maxLoops := 1500000
+				maxLoops := 15000000
 				loopCount := 0
 				state.LoopDepth++
 
@@ -5208,4 +5292,217 @@ func VersionSortCmp(s1 string, s2 string) int {
 		}
 		// else continue because they are equal
 	}
+}
+
+type LinkHeader struct {
+	Uri string
+	Rel string
+	Params map[string]string
+}
+
+
+
+func EatLinkHeaderWhitespace(linkHeader string, i int) int {
+	for i < len(linkHeader) {
+		if unicode.IsSpace(rune(linkHeader[i])) {
+			i++
+		} else {
+			break
+		}
+	}
+	return i
+}
+
+
+// https://datatracker.ietf.org/doc/html/rfc8288
+
+// Link       = #link-value
+// link-value = "<" URI-Reference ">" *( OWS ";" OWS link-param )
+// link-param = token BWS [ "=" BWS ( token / quoted-string ) ]
+
+
+// https://datatracker.ietf.org/doc/html/rfc7230
+
+// token          = 1*tchar
+
+// tchar          = "!" / "#" / "$" / "%" / "&" / "'" / "*"
+// 					 / "+" / "-" / "." / "^" / "_" / "`" / "|" / "~"
+// 					/ DIGIT / ALPHA
+// 					; any VCHAR, except delimiters
+
+// quoted-string  = DQUOTE *( qdtext / quoted-pair ) DQUOTE
+// qdtext         = HTAB / SP / %x21 / %x23-5B / %x5D-7E / obs-text
+// obs-text       = %x80-FF
+// quoted-pair    = "\" ( HTAB / SP / VCHAR / obs-text )
+
+func IsTChar(char rune) bool {
+	return unicode.IsLetter(char) || unicode.IsDigit(char) || char == '!' || char == '#' || char == '$' || char == '%' ||
+		char == '&' || char == '\'' || char == '*' || char == '+' || char == '-' ||
+		char == '.' || char == '^' || char == '_' || char == '`' || char == '|' ||
+		char == '~'
+}
+
+func ParseLinkHeaders(linkHeader string) ([]LinkHeader, error) {
+	var headers []LinkHeader
+	i := 0
+
+	for {
+		i = EatLinkHeaderWhitespace(linkHeader, i)
+		if i >= len(linkHeader) {
+			break
+		}
+
+		header, nextIndex, err := ParseLinkHeader(linkHeader, i)
+		if err != nil {
+			return nil, fmt.Errorf("Error parsing link header at position %d: %s", i, err.Error())
+		}
+		headers = append(headers, header)
+		i = nextIndex
+
+		i = EatLinkHeaderWhitespace(linkHeader, i)
+		if i >= len(linkHeader) {
+			break
+		}
+
+		if linkHeader[i] != ',' {
+			return nil, fmt.Errorf("Expected ',' after link header at position %d, found '%c'", i, linkHeader[i])
+		}
+		i++
+	}
+
+	if len(headers) == 0 {
+		return nil, fmt.Errorf("Empty link header")
+	}
+
+	return headers, nil
+}
+
+func ParseLinkHeader(linkHeader string, i int) (LinkHeader, int, error) {
+	i = EatLinkHeaderWhitespace(linkHeader, i)
+	if i >= len(linkHeader) {
+		return LinkHeader{}, i, fmt.Errorf("Empty link header")
+	}
+
+	if linkHeader[i] != '<' {
+		return LinkHeader{}, i, fmt.Errorf("Link header does not start with '<': %s", linkHeader)
+	}
+	i++
+
+	uriStart := i
+	for i < len(linkHeader) && linkHeader[i] != '>' {
+		i++
+	}
+	if i >= len(linkHeader) {
+		return LinkHeader{}, i, fmt.Errorf("Empty link header")
+	}
+	uri := linkHeader[uriStart:i]
+	i++ // Skip '>'
+
+	params := make(map[string]string)
+	rel := ""
+
+	for {
+		i = EatLinkHeaderWhitespace(linkHeader, i)
+		if i >= len(linkHeader) || linkHeader[i] == ',' {
+			if len(rel) == 0 {
+				return LinkHeader{}, i, fmt.Errorf("Link header does not have a 'rel' parameter: %s", linkHeader)
+			}
+			return LinkHeader{Uri: uri, Rel: rel, Params: params}, i, nil
+		}
+
+		if linkHeader[i] != ';' {
+			return LinkHeader{}, i, fmt.Errorf("Expected ';' before link parameter at position %d: %s", i, linkHeader)
+		}
+		i++
+
+		paramName, paramValue, nextIndex, err := ParseLinkParam(linkHeader, i)
+		if err != nil {
+			return LinkHeader{}, i, fmt.Errorf("Error parsing link parameter: %s", err.Error())
+		}
+		i = nextIndex
+
+		if paramName == "" {
+			return LinkHeader{}, i, fmt.Errorf("Empty link parameter name")
+		}
+
+		if paramValue == "" {
+			return LinkHeader{}, i, fmt.Errorf("Empty link parameter value")
+		}
+
+		if paramName == "rel" {
+			rel = paramValue
+		} else {
+			params[paramName] = paramValue
+		}
+	}
+}
+
+func ParseLinkParam(linkHeader string, i int) (string, string, int, error) {
+	i = EatLinkHeaderWhitespace(linkHeader, i)
+	if i >= len(linkHeader) {
+		return "", "", i, fmt.Errorf("Empty link parameter")
+	}
+
+	paramStart := i
+	for i < len(linkHeader) && IsTChar(rune(linkHeader[i])) {
+		i++
+	}
+
+	if paramStart == i {
+		return "", "", i, fmt.Errorf("Empty link parameter name")
+	}
+
+	paramName := linkHeader[paramStart:i]
+
+	i = EatLinkHeaderWhitespace(linkHeader, i)
+	if i >= len(linkHeader) || linkHeader[i] != '=' {
+		return "", "", i, fmt.Errorf("Link parameter '%s' does not have a value", paramName)
+	}
+	i++
+
+	i = EatLinkHeaderWhitespace(linkHeader, i)
+	if i >= len(linkHeader) {
+		return "", "", i, fmt.Errorf("Link parameter '%s' does not have a value, expected value after '='", paramName)
+	}
+
+	var paramValue strings.Builder
+
+	if linkHeader[i] == '"' {
+		i++
+		for {
+			if i >= len(linkHeader) {
+				return "", "", i, fmt.Errorf("Unfinished quoted string for link parameter '%s'", paramName)
+			}
+
+			c := linkHeader[i]
+			i++
+
+			if c == '"' {
+				break
+			}
+
+			if c == '\\' {
+				if i >= len(linkHeader) {
+					return "", "", i, fmt.Errorf("Unfinished escape sequence in quoted string for link parameter '%s'", paramName)
+				}
+				paramValue.WriteByte(linkHeader[i])
+				i++
+				continue
+			}
+
+			paramValue.WriteByte(c)
+		}
+	} else {
+		valueStart := i
+		for i < len(linkHeader) && IsTChar(rune(linkHeader[i])) {
+			i++
+		}
+		if valueStart == i {
+			return "", "", i, fmt.Errorf("Link parameter '%s' does not have a value, expected value after '='", paramName)
+		}
+		paramValue.WriteString(linkHeader[valueStart:i])
+	}
+
+	i = EatLinkHeaderWhitespace(linkHeader, i)
+	return paramName, paramValue.String(), i, nil
 }

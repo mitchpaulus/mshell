@@ -1,0 +1,7 @@
+'<https://api.example.com/items?page=2>; rel="next"; type="application/json"; hreflang="en"' parseLinkHeader links!
+@links len wl
+@links :0: keys str wl
+@links :0: 'url' get? wl
+'<https://api.example.com/items?page=1>; rel=prev, <https://api.example.com/items?page=5>; rel="last"; title="Final \"page"' parseLinkHeader links!
+@links len wl
+@links :-1: 'params' get? 'title' get? wl

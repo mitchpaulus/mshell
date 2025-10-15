@@ -25,16 +25,16 @@ func TestSimpleBinding(t *testing.T) {
 }
 
 func TestRecursiveBinding(t *testing.T) {
-	generic := &TypeList{
-		ListType: &TypeList{
+	generic := &TypeHomogeneousList{
+		ListType: &TypeHomogeneousList{
 			ListType: TypeGeneric{"a", 1},
 			Count:    -1,
 		},
 		Count: -1,
 	}
 
-	concrete := &TypeList{
-		ListType: &TypeList{
+	concrete := &TypeHomogeneousList{
+		ListType: &TypeHomogeneousList{
 			ListType: TypeInt{},
 			Count:    -1,
 		},

@@ -287,6 +287,7 @@
         <tr> <td><code>maybe</code></td> <td>Unwrap a <code><span class="sig-type sig-type-maybe">Maybe</span></code>, providing a default value.</td> <td><code>(<span class="sig-type sig-type-maybe">Maybe</span>[a] a -- a)</code></td> </tr>
         <tr> <td><code>bind</code></td> <td>Monadic bind for chaining <code><span class="sig-type sig-type-maybe">Maybe</span></code>-returning functions.</td> <td><code>(<span class="sig-type sig-type-maybe">Maybe</span>[a] (a -- <span class="sig-type sig-type-maybe">Maybe</span>[b]) -- <span class="sig-type sig-type-maybe">Maybe</span>[b])</code></td> </tr>
         <tr> <td><code>map</code></td> <td>Map a function over a <code><span class="sig-type sig-type-maybe">Maybe</span></code> value.</td> <td><code>(<span class="sig-type sig-type-maybe">Maybe</span>[a] (a -- b) -- <span class="sig-type sig-type-maybe">Maybe</span>[b])</code></td> </tr>
+        <tr> <td><code>map2</code></td> <td>Map a binary function over a pair of <code><span class="sig-type sig-type-maybe">Maybe</span></code> value.</td> <td><code>(<span class="sig-type sig-type-maybe">Maybe</span>[a] <span class="sig-type sig-type-maybe">Maybe</span>[b] (a b -- c) -- <span class="sig-type sig-type-maybe">Maybe</span>[c])</code></td> </tr>
     </tbody>
 </table>
 
@@ -335,6 +336,12 @@
                 Make an HTTP POST request. Accepts the same request dictionary keys as <code>httpGet</code>, optionally a <code>body</code> string, and returns <code>none</code> on transport failures.
             </td>
             <td><code>(<span class="sig-type sig-type-dict">dict</span> -- <span class="sig-type sig-type-maybe">Maybe</span>[<span class="sig-type sig-type-dict">dict</span>])</code></td>
+        </tr>
+        <tr> <td><code>parseLinkHeader</code></td>
+            <td>
+                Parse an HTTP <code>Link</code> header string into a list of dictionaries. Each dictionary contains <code>url</code> and <code>rel</code> strings plus a <code>params</code> dictionary of additional attributes.
+            </td>
+            <td><code>(<span class="sig-type sig-type-str">str</span> -- [<span class="sig-type sig-type-dict">dict</span>])</code></td>
         </tr>
     </tbody>
 </table>
