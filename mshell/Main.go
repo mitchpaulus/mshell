@@ -136,6 +136,17 @@ func main() {
 	defer cleanupTempFiles()
 	var err error
 
+	if len(os.Args) >= 2 && os.Args[1] == "lsp" {
+		if runErr := RunLSP(os.Args[2:], os.Stdin, os.Stdout); runErr != nil {
+			if runErr == errExitBeforeShutdown {
+				os.Exit(1)
+			}
+			fmt.Fprintf(os.Stderr, "LSP error: %v\n", runErr)
+			os.Exit(1)
+		}
+		return
+	}
+
 	command := CLIEXECUTE
 
 	// printLex := false
@@ -171,6 +182,7 @@ func main() {
 			fmt.Println("Usage: mshell [OPTION].. FILE [ARG]..")
 			fmt.Println("Usage: mshell [OPTION].. [ARG].. < FILE")
 			fmt.Println("Usage: mshell [OPTION].. -c INPUT [ARG]..")
+			fmt.Println("Usage: msh lsp")
 			fmt.Println("")
 			fmt.Println("Options:")
 			fmt.Println("  --html       Render the input as HTML")

@@ -55,7 +55,6 @@ func (kv *MShellParseDictKeyValue) DebugString() string {
 	return kv.ToJson()
 }
 
-
 type MShellParseDict struct {
 	Items      []MShellParseDictKeyValue
 	StartToken Token
@@ -106,7 +105,7 @@ func (d *MShellParseDict) GetEndToken() Token {
 
 // This is a comma separated list of indexers, which can be used to index into a list or dict.
 type MShellIndexerList struct {
-	Indexers  []MShellParseItem
+	Indexers []MShellParseItem
 }
 
 func (indexerList *MShellIndexerList) DebugString() string {
@@ -134,7 +133,6 @@ func (indexerList *MShellIndexerList) GetStartToken() Token {
 func (indexerList *MShellIndexerList) GetEndToken() Token {
 	return indexerList.Indexers[len(indexerList.Indexers)-1].GetEndToken()
 }
-
 
 func (list *MShellParseList) GetStartToken() Token {
 	return list.StartToken
@@ -195,9 +193,10 @@ func (quote *MShellParseQuote) DebugString() string {
 }
 
 type MShellDefinition struct {
-	Name    string
-	Items   []MShellParseItem
-	TypeDef TypeDefinition
+	Name      string
+	NameToken Token
+	Items     []MShellParseItem
+	TypeDef   TypeDefinition
 }
 
 func (def *MShellDefinition) ToJson() string {
@@ -320,7 +319,8 @@ func (parser *MShellParser) ParseFile() (*MShellFile, error) {
 				return file, errors.New(fmt.Sprintf("%d: %d: Expected a name for the definition, got %s", parser.curr.Line, parser.curr.Column, parser.curr.Type))
 			}
 
-			def := MShellDefinition{Name: parser.curr.Lexeme, Items: []MShellParseItem{}, TypeDef: TypeDefinition{}}
+			nameToken := parser.curr
+			def := MShellDefinition{Name: parser.curr.Lexeme, NameToken: nameToken, Items: []MShellParseItem{}, TypeDef: TypeDefinition{}}
 			_ = parser.Match(parser.curr, LITERAL)
 
 			typeDef, err := parser.ParseTypeDefinition()
@@ -360,7 +360,7 @@ func (parser *MShellParser) ParseFile() (*MShellFile, error) {
 	return file, nil
 }
 
-func (parser *MShellParser) ParseIndexer() (*MShellIndexerList) {
+func (parser *MShellParser) ParseIndexer() *MShellIndexerList {
 	indexerList := &MShellIndexerList{}
 	indexerList.Indexers = []MShellParseItem{}
 	indexerList.Indexers = append(indexerList.Indexers, parser.curr)
@@ -1137,7 +1137,6 @@ func (parser *MShellParser) parseDictKeyValue() (MShellParseDictKeyValue, error)
 	return MShellParseDictKeyValue{Key: key, Value: valueItems}, nil
 }
 
-
 func (parser *MShellParser) ParseList() (*MShellParseList, error) {
 	list := &MShellParseList{}
 	list.StartToken = parser.curr
@@ -1145,7 +1144,7 @@ func (parser *MShellParser) ParseList() (*MShellParseList, error) {
 	if err != nil {
 		return list, err
 	}
-	for  {
+	for {
 		if parser.curr.Type == RIGHT_SQUARE_BRACKET {
 			break
 		} else if parser.curr.Type == EOF {
@@ -1200,7 +1199,7 @@ func (parser *MShellParser) ParseQuote() (*MShellParseQuote, error) {
 		return quote, err
 	}
 
-	for  {
+	for {
 		if parser.curr.Type == RIGHT_PAREN {
 			break
 		} else if parser.curr.Type == RIGHT_CURLY {

@@ -1,4 +1,5 @@
-
+swap
+dup
 a!b
 
 !hello
