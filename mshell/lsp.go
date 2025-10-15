@@ -9,12 +9,18 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	"go.lsp.dev/protocol"
 )
 
 const jsonrpcVersion = "2.0"
+
+const (
+	jsonrpcCodeParseError     = -32700
+	jsonrpcCodeMethodNotFound = -32601
+	jsonrpcCodeInvalidParams  = -32602
+	jsonrpcCodeInternalError  = -32603
+)
 
 var errExitBeforeShutdown = errors.New("exit received before shutdown")
 
@@ -23,18 +29,34 @@ type lspServer struct {
 	out       *bufio.Writer
 	documents map[protocol.DocumentURI]*lspDocument
 	shutdown  bool
+	builtins  map[string]*builtinInfo
 }
 
 type lspDocument struct {
-	Text        string
-	Lines       []string
-	Definitions map[string][]functionDefinition
+	Text  string
+	Lines []string
 }
 
-type functionDefinition struct {
-	Name      string
-	Signature string
-	NameRange protocol.Range
+func (d *lspDocument) setText(text string) {
+	d.Text = text
+	lines := d.Lines[:0]
+	start := 0
+	for i := 0; i < len(text); i++ {
+		if text[i] == '\n' {
+			lines = append(lines, text[start:i])
+			start = i + 1
+		}
+	}
+	if start <= len(text) {
+		lines = append(lines, text[start:])
+	}
+	d.Lines = lines
+}
+
+type builtinInfo struct {
+	Name        string
+	Description string
+	Signatures  []string
 }
 
 type jsonrpcMessage struct {
@@ -65,10 +87,16 @@ func RunLSP(args []string, in io.Reader, out io.Writer) error {
 		return fmt.Errorf("unsupported LSP option %q", arg)
 	}
 
+	builtins := defaultBuiltinInfo()
+	if len(builtins) == 0 {
+		logLSP("no builtin hover entries configured")
+	}
+
 	server := &lspServer{
 		in:        bufio.NewReader(in),
 		out:       bufio.NewWriter(out),
 		documents: make(map[protocol.DocumentURI]*lspDocument),
+		builtins:  builtins,
 	}
 
 	return server.run()
@@ -97,7 +125,7 @@ func (s *lspServer) run() error {
 		shouldExit, handleErr := s.handleMessage(&msg)
 		if handleErr != nil {
 			if msg.ID != nil {
-				_ = s.sendErrorResponse(msg.ID, -32603, handleErr.Error())
+				_ = s.sendErrorResponse(msg.ID, jsonrpcCodeInternalError, handleErr.Error())
 			} else {
 				logLSP(fmt.Sprintf("error handling %s: %v", msg.Method, handleErr))
 			}
@@ -160,7 +188,7 @@ func (s *lspServer) handleMessage(msg *jsonrpcMessage) (bool, error) {
 		}
 		var params protocol.InitializeParams
 		if err := json.Unmarshal(msg.Params, &params); err != nil {
-			_ = s.sendErrorResponse(msg.ID, -32602, fmt.Sprintf("invalid initialize params: %v", err))
+			_ = s.sendErrorResponse(msg.ID, jsonrpcCodeInvalidParams, fmt.Sprintf("invalid initialize params: %v", err))
 			return false, nil
 		}
 		result := protocol.InitializeResult{
@@ -224,7 +252,7 @@ func (s *lspServer) handleMessage(msg *jsonrpcMessage) (bool, error) {
 		}
 		var params protocol.HoverParams
 		if err := json.Unmarshal(msg.Params, &params); err != nil {
-			_ = s.sendErrorResponse(msg.ID, -32602, fmt.Sprintf("invalid hover params: %v", err))
+			_ = s.sendErrorResponse(msg.ID, jsonrpcCodeInvalidParams, fmt.Sprintf("invalid hover params: %v", err))
 			return false, nil
 		}
 		hover, ok := s.hover(params)
@@ -234,7 +262,7 @@ func (s *lspServer) handleMessage(msg *jsonrpcMessage) (bool, error) {
 		return false, s.sendResult(msg.ID, hover)
 	default:
 		if msg.ID != nil {
-			_ = s.sendErrorResponse(msg.ID, -32601, fmt.Sprintf("method %q not found", msg.Method))
+			_ = s.sendErrorResponse(msg.ID, jsonrpcCodeMethodNotFound, fmt.Sprintf("method %q not found", msg.Method))
 		}
 		return false, nil
 	}
@@ -273,7 +301,7 @@ func (s *lspServer) sendParseError(err error) error {
 		JSONRPC: jsonrpcVersion,
 		ID:      &id,
 		Error: &responseError{
-			Code:    -32700,
+			Code:    jsonrpcCodeParseError,
 			Message: fmt.Sprintf("invalid JSON: %v", err),
 		},
 	}
@@ -296,18 +324,12 @@ func (s *lspServer) writeMessage(resp responseMessage) error {
 }
 
 func (s *lspServer) updateDocument(uri protocol.DocumentURI, text string) {
-	defs, parseErr := parseFunctionDefinitions(text)
-
-	doc := &lspDocument{
-		Text:        text,
-		Lines:       strings.Split(text, "\n"),
-		Definitions: indexDefinitions(defs),
+	doc, exists := s.documents[uri]
+	if !exists {
+		doc = &lspDocument{}
+		s.documents[uri] = doc
 	}
-	s.documents[uri] = doc
-
-	if parseErr != nil {
-		logLSP(fmt.Sprintf("parse error for %s: %v", uri, parseErr))
-	}
+	doc.setText(text)
 }
 
 func (s *lspServer) hover(params protocol.HoverParams) (*protocol.Hover, bool) {
@@ -321,23 +343,20 @@ func (s *lspServer) hover(params protocol.HoverParams) (*protocol.Hover, bool) {
 		return nil, false
 	}
 
-	defs := doc.Definitions[word]
-	if len(defs) == 0 {
+	info := s.builtins[word]
+	if info == nil {
 		return nil, false
 	}
 
-	def := defs[0]
-
-	signature := strings.TrimSpace(def.Signature)
-	display := def.Name
-	if signature != "" {
-		display = fmt.Sprintf("%s :: %s", def.Name, signature)
+	content := buildHoverContent(info)
+	if content == "" {
+		return nil, false
 	}
 
 	hover := &protocol.Hover{
 		Contents: protocol.MarkupContent{
 			Kind:  protocol.Markdown,
-			Value: fmt.Sprintf("```mshell\n%s\n```", display),
+			Value: content,
 		},
 	}
 	rng := wordRange
@@ -397,85 +416,74 @@ func (d *lspDocument) wordAt(pos protocol.Position) (string, protocol.Range) {
 	return word, rng
 }
 
-func parseFunctionDefinitions(text string) ([]functionDefinition, error) {
-	lexer := NewLexer(text, nil)
-	parser := MShellParser{lexer: lexer}
-	parser.NextToken()
-
-	file, err := parser.ParseFile()
-	if err != nil {
-		fallback := scanDefinitionsLexically(text)
-		if len(fallback) > 0 {
-			return fallback, err
-		}
-		return nil, err
+func buildHoverContent(info *builtinInfo) string {
+	if info == nil {
+		return ""
 	}
 
-	defs := make([]functionDefinition, 0, len(file.Definitions))
-	for _, def := range file.Definitions {
-		token := def.NameToken
-		startLine := zeroBased(token.Line)
-		startChar := zeroBased(token.Column)
-		length := uint32(utf8.RuneCountInString(def.Name))
-		nameRange := protocol.Range{
-			Start: protocol.Position{Line: startLine, Character: startChar},
-			End:   protocol.Position{Line: startLine, Character: startChar + length},
-		}
-
-		defs = append(defs, functionDefinition{
-			Name:      def.Name,
-			Signature: def.TypeDef.ToMshell(),
-			NameRange: nameRange,
-		})
-	}
-
-	return defs, nil
-}
-
-func scanDefinitionsLexically(text string) []functionDefinition {
-	lexer := NewLexer(text, nil)
-	tokens, err := lexer.Tokenize()
-	if err != nil {
-		return nil
-	}
-
-	defs := []functionDefinition{}
-	for i := 0; i+1 < len(tokens); i++ {
-		if tokens[i].Type == DEF && tokens[i+1].Type == LITERAL {
-			nameTok := tokens[i+1]
-			startLine := zeroBased(nameTok.Line)
-			startChar := zeroBased(nameTok.Column)
-			length := uint32(utf8.RuneCountInString(nameTok.Lexeme))
-			nameRange := protocol.Range{
-				Start: protocol.Position{Line: startLine, Character: startChar},
-				End:   protocol.Position{Line: startLine, Character: startChar + length},
+	var builder strings.Builder
+	if len(info.Signatures) > 0 {
+		builder.WriteString("```mshell\n")
+		for idx, sig := range info.Signatures {
+			builder.WriteString(info.Name)
+			sig = strings.TrimSpace(sig)
+			if sig != "" {
+				builder.WriteString(" :: ")
+				builder.WriteString(sig)
 			}
-			defs = append(defs, functionDefinition{
-				Name:      nameTok.Lexeme,
-				NameRange: nameRange,
-			})
+			if idx+1 < len(info.Signatures) {
+				builder.WriteRune('\n')
+			}
 		}
+		builder.WriteString("\n```")
 	}
-	return defs
+
+	if info.Description != "" {
+		if builder.Len() > 0 {
+			builder.WriteString("\n\n")
+		}
+		builder.WriteString(info.Description)
+	}
+
+	return builder.String()
 }
 
-func indexDefinitions(defs []functionDefinition) map[string][]functionDefinition {
-	if len(defs) == 0 {
-		return map[string][]functionDefinition{}
+func defaultBuiltinInfo() map[string]*builtinInfo {
+	return map[string]*builtinInfo{
+		"dup": {
+			Name:        "dup",
+			Description: "Duplicate the top stack item.",
+			Signatures:  []string{"(a -- a a)"},
+		},
+		"swap": {
+			Name:        "swap",
+			Description: "Swap the top two stack items.",
+			Signatures:  []string{"(a b -- b a)"},
+		},
+		"len": {
+			Name:        "len",
+			Description: "Return the length of a string or list.",
+			Signatures: []string{
+				"([a] -- int)",
+				"(str -- int)",
+			},
+		},
+		"read": {
+			Name:        "read",
+			Description: "Read a line from stdin, leaving the line and success flag on the stack.",
+			Signatures:  []string{"(-- str bool)"},
+		},
+		"stdin": {
+			Name:        "stdin",
+			Description: "Read stdin into a string.",
+			Signatures:  []string{"(-- str)"},
+		},
+		".s": {
+			Name:        ".s",
+			Description: "Print the stack at the current location.",
+			Signatures:  []string{"(-- )"},
+		},
 	}
-
-	index := make(map[string][]functionDefinition, len(defs))
-	for _, def := range defs {
-		index[def.Name] = append(index[def.Name], def)
-	}
-	return index
-}
-
-func zeroBased(value int) uint32 {
-	if value <= 0 {
-		return 0
-	}
-	return uint32(value - 1)
 }
 
 func logLSP(message string) {

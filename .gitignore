@@ -2,6 +2,8 @@ copy.msh
 .idea/
 .redo/
 mshell/bin
+mshell/test.msh
+codex.log
 
 *.mshell_history
 *.vsix
