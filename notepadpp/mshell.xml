@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="Windows-1252" ?>
+<NotepadPlus>
+    <UserLang name="mshell" ext="msh mshell" udlVersion="2.1">
+        <Settings>
+            <Global caseIgnored="no" allowFoldOfComments="yes" allowFoldOfQuotes="yes" />
+            <TreatAsSymbol comment="no" commentLine="yes" />
+            <Prefix words1="no" words2="no" words3="no" words4="no" operators1="no" operators2="no" operators3="no" operators4="no" />
+        </Settings>
+        <KeywordLists>
+            <Keywords name="Comments">00# 01 02 03 04</Keywords>
+            <Keywords name="Numbers, prefix1" />
+            <Keywords name="Numbers, prefix2" />
+            <Keywords name="Numbers, extras1" />
+            <Keywords name="Numbers, extras2" />
+            <Keywords name="Numbers, suffix1" />
+            <Keywords name="Numbers, suffix2" />
+            <Keywords name="Operators1">+ - = -- !=</Keywords>
+            <Keywords name="Operators2">&amp; | ; , :</Keywords>
+            <Keywords name="Operators3">&lt; &lt;= &gt; &gt;= &gt;&gt; ! ? ~ @ $</Keywords>
+            <Keywords name="Operators4">[ ] ( ) { }</Keywords>
+            <Keywords name="Separators" />
+            <Keywords name="Folders in code1">def</Keywords>
+            <Keywords name="Folders in code2">end</Keywords>
+            <Keywords name="Folders in comment" />
+            <Keywords name="Keywords1">def end if iff loop read str break continue and or not x soe</Keywords>
+            <Keywords name="Keywords2">true false</Keywords>
+            <Keywords name="Keywords3">int float bool</Keywords>
+            <Keywords name="Keywords4">o oc os</Keywords>
+            <Keywords name="Keywords5" />
+            <Keywords name="Keywords6" />
+            <Keywords name="Keywords7" />
+            <Keywords name="Keywords8" />
+            <Keywords name="Delimiters">00" 01" 02\ 03' 04' 05\ 06` 07` 08\</Keywords>
+        </KeywordLists>
+        <Styles>
+            <WordsStyle name="DEFAULT" fgColor="000000" bgColor="FFFFFF" fontName="" fontStyle="0" fontSize="0" />
+            <WordsStyle name="COMMENTS" fgColor="008000" bgColor="FFFFFF" fontName="" fontStyle="0" fontSize="0" />
+            <WordsStyle name="LINE COMMENTS" fgColor="008000" bgColor="FFFFFF" fontName="" fontStyle="0" fontSize="0" />
+            <WordsStyle name="NUMBERS" fgColor="0000FF" bgColor="FFFFFF" fontName="" fontStyle="0" fontSize="0" />
+            <WordsStyle name="KEYWORDS1" fgColor="800000" bgColor="FFFFFF" fontName="" fontStyle="1" fontSize="0" />
+            <WordsStyle name="KEYWORDS2" fgColor="0000FF" bgColor="FFFFFF" fontName="" fontStyle="1" fontSize="0" />
+            <WordsStyle name="KEYWORDS3" fgColor="800080" bgColor="FFFFFF" fontName="" fontStyle="1" fontSize="0" />
+            <WordsStyle name="KEYWORDS4" fgColor="008080" bgColor="FFFFFF" fontName="" fontStyle="1" fontSize="0" />
+            <WordsStyle name="KEYWORDS5" fgColor="000000" bgColor="FFFFFF" fontName="" fontStyle="0" fontSize="0" />
+            <WordsStyle name="KEYWORDS6" fgColor="000000" bgColor="FFFFFF" fontName="" fontStyle="0" fontSize="0" />
+            <WordsStyle name="KEYWORDS7" fgColor="000000" bgColor="FFFFFF" fontName="" fontStyle="0" fontSize="0" />
+            <WordsStyle name="KEYWORDS8" fgColor="000000" bgColor="FFFFFF" fontName="" fontStyle="0" fontSize="0" />
+            <WordsStyle name="OPERATORS1" fgColor="000000" bgColor="FFFFFF" fontName="" fontStyle="1" fontSize="0" />
+            <WordsStyle name="OPERATORS2" fgColor="000000" bgColor="FFFFFF" fontName="" fontStyle="1" fontSize="0" />
+            <WordsStyle name="OPERATORS3" fgColor="000000" bgColor="FFFFFF" fontName="" fontStyle="1" fontSize="0" />
+            <WordsStyle name="OPERATORS4" fgColor="000000" bgColor="FFFFFF" fontName="" fontStyle="1" fontSize="0" />
+            <WordsStyle name="FOLDER IN CODE1" fgColor="800000" bgColor="FFFFFF" fontName="" fontStyle="1" fontSize="0" />
+            <WordsStyle name="FOLDER IN CODE2" fgColor="800000" bgColor="FFFFFF" fontName="" fontStyle="1" fontSize="0" />
+            <WordsStyle name="FOLDER IN COMMENT" fgColor="000000" bgColor="FFFFFF" fontName="" fontStyle="0" fontSize="0" />
+            <WordsStyle name="DELIMITERS1" fgColor="800000" bgColor="FFFFFF" fontName="" fontStyle="0" fontSize="0" />
+            <WordsStyle name="DELIMITERS2" fgColor="800000" bgColor="FFFFFF" fontName="" fontStyle="0" fontSize="0" />
+            <WordsStyle name="DELIMITERS3" fgColor="800000" bgColor="FFFFFF" fontName="" fontStyle="0" fontSize="0" />
+        </Styles>
+    </UserLang>
+</NotepadPlus>

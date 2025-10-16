@@ -68,6 +68,13 @@ Note that you'll also need the environment variable `MSHSTDLIB` pointing to the 
 | `grep` | `grep 'pattern'` | `sl ("pattern" in) filter uw` |
 | `cut` | `cut -d ';' -f 2` | `sl (";" split :1: wl) each` |
 
+# Editor Support
+
+- VS Code syntax highlighting is available in `code/`.
+- Sublime Text syntax highlighting is in `sublime/msh.sublime-syntax`.
+- Notepad++ syntax highlighting is provided at `notepadpp/mshell.xml`.
+
+
 # TODO
 
 - Job control. Right now, if you CTRL-c a long running process, it kills the entire shell.
