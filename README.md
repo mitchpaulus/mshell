@@ -68,6 +68,13 @@ Note that you'll also need the environment variable `MSHSTDLIB` pointing to the 
 | `grep` | `grep 'pattern'` | `sl ("pattern" in) filter uw` |
 | `cut` | `cut -d ';' -f 2` | `sl (";" split :1: wl) each` |
 
+# Editor Support
+
+- Sublime Text syntax highlighting is available in [`sublime/msh.sublime-syntax`](https://github.com/mitchpaulus/mshell/tree/main/sublime/msh.sublime-syntax).
+- Notepad++ light and dark user-defined language files are available in [`Notepad++/`](https://github.com/mitchpaulus/mshell/tree/main/Notepad++).
+- Vim/Neovim syntax highlighting is available via [`mshell-vim`](https://github.com/mitchpaulus/mshell-vim).
+
+
 # TODO
 
 - Job control. Right now, if you CTRL-c a long running process, it kills the entire shell.
