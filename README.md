@@ -72,7 +72,8 @@ Note that you'll also need the environment variable `MSHSTDLIB` pointing to the 
 
 - VS Code syntax highlighting is available in `code/`.
 - Sublime Text syntax highlighting is in `sublime/msh.sublime-syntax`.
-- Notepad++ syntax highlighting is provided at `notepadpp/mshell.xml`.
+- Notepad++ light and dark user-defined language files are in `Notepad++/`.
+- Vim/Neovim syntax highlighting is available via [`mshell-vim`](https://github.com/mitchpaulus/mshell-vim).
 
 
 # TODO
