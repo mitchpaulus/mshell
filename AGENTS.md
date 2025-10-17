@@ -14,6 +14,9 @@ New built in functions are in `mshell/Evaluator.go`.
 If it is a simple combination of other existing functions, it belongs in the standard library.
 Always make sure to update the documentation appropriately.
 
+In the `CHANGELOG.md` file, add the new function as a line under the ## Unreleased (create if necessary), ### Added heading.
+If there are multiple functions, group under a `- Functions` bullet.
+
 ## Testing instructions
 
 All test cases are in `tests`.
