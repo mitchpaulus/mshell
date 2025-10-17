@@ -184,6 +184,27 @@ Any literal number with a decimal will be lexed as a float, otherwise it will be
 <span class="mshellEOF"></span></code>
 </pre>
 
+<p>
+Division for integers will result in an integer without the remainder.
+</p>
+
+<pre>
+<code><span class="mshellINTEGER">5</span> <span class="mshellINTEGER">2</span> <span class="mshellLITERAL">/</span> <span class="mshellLINECOMMENT"># Integer 2, not float 2.5</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+<p>
+Division is only supported for similar types, it is a runtime error to divide with a float and an integer.
+For the other operations, if the types are mixed, the result is a float.
+</p>
+
+<pre>
+<code><span class="mshellINTEGER">2</span> <span class="mshellFLOAT">2.5</span> <span class="mshellASTERISK">*</span> <span class="mshellLINECOMMENT"># 5.0 float</span>
+<span class="mshellINTEGER">3</span> <span class="mshellFLOAT">2.5</span> <span class="mshellMINUS">-</span> <span class="mshellLINECOMMENT"># 0.5 float</span>
+<span class="mshellINTEGER">3</span> <span class="mshellFLOAT">2.5</span> <span class="mshellPLUS">+</span> <span class="mshellLINECOMMENT"># 5.5 float</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
 
 <h1 id="data-type-maybe">Maybe</h1>
 

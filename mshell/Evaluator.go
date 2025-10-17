@@ -1044,27 +1044,27 @@ MainLoop:
 					}
 
 					if obj1.IsNumeric() && obj2.IsNumeric() {
-						switch obj1.(type) {
+						switch obj1 := obj1.(type) {
 						case *MShellInt:
-							if obj1.(*MShellInt).Value == 0 {
+							if obj1.Value == 0 {
 								return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot divide by zero.\n", t.Line, t.Column))
 							}
-							switch obj2.(type) {
+							switch obj2 := obj2.(type) {
 							case *MShellInt:
-								stack.Push(&MShellInt{obj2.(*MShellInt).Value / obj1.(*MShellInt).Value})
+								stack.Push(&MShellInt{obj2.Value / obj1.Value})
 							case *MShellFloat:
-								stack.Push(&MShellFloat{float64(obj2.(*MShellFloat).Value) / float64(obj1.(*MShellInt).Value)})
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot divide a float by an int.\n", t.Line, t.Column))
 							}
 						case *MShellFloat:
-							if obj1.(*MShellFloat).Value == 0 {
+							if obj1.Value == 0 {
 								return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot divide by zero.\n", t.Line, t.Column))
 							}
 
-							switch obj2.(type) {
+							switch obj2 := obj2.(type) {
 							case *MShellInt:
-								stack.Push(&MShellFloat{float64(obj2.(*MShellInt).Value) / obj1.(*MShellFloat).Value})
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot divide an int by a float.\n", t.Line, t.Column))
 							case *MShellFloat:
-								stack.Push(&MShellFloat{obj2.(*MShellFloat).Value / obj1.(*MShellFloat).Value})
+								stack.Push(&MShellFloat{obj2.Value / obj1.Value})
 							}
 						default:
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot divide a %s and a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
@@ -1082,7 +1082,7 @@ MainLoop:
 								return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do a join between a %s (%s) and a %s (%s).\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString(), obj1.TypeName(), obj1.DebugString()))
 							}
 						default:
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot divide a %s and a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do a '%s' operation between a %s and a %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
 						}
 					}
 				} else if t.Lexeme == "exit" {

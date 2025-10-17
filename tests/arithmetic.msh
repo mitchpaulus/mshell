@@ -2,8 +2,8 @@
 1.5 2.5 * str wl
 5 2 / str wl
 5.0 2.0 / str wl
-5 2.0 / str wl
-5.0 2 / str wl
+# 5 2.0 / str wl # These are now errors
+# 5.0 2 / str wl
 
 -3 abs str wl
 
