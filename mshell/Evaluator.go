@@ -3209,6 +3209,27 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 
 					stack.Push(linksList)
+				} else if t.Lexeme == "fileExists" {
+					// Check if a file exists
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'fileExists' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					pathStr, err := obj.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert a %s to a string for checking file existence.\n", t.Line, t.Column, obj.TypeName()))
+					}
+
+					_, err = os.Stat(pathStr)
+					if err == nil {
+						stack.Push(&MShellBool{Value: true}) // File exists
+					} else if os.IsNotExist(err) {
+						stack.Push(&MShellBool{Value: false}) // File definitely does not exist
+					} else {
+						// Something else went wrong (permissions, I/O error, etc.)
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error checking file existence for '%s': %s\n", t.Line, t.Column, pathStr, err.Error()))
+					}
 				} else { // last new function
 					// If we aren't in a list context, throw an error.
 					// Nearly always this is unintended.
