@@ -3,44 +3,43 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
+	"encoding/csv"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
-	"math"
-	"slices"
-	"errors"
-	"runtime"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/csv"
-	"encoding/json"
-	"regexp"
 	// "golang.org/x/term"
-	_ "time/tzdata"
-	"unicode"
-	"golang.org/x/net/html"
 	"crypto/md5"
+	"golang.org/x/net/html"
 	"net/http"
 	"net/url"
+	_ "time/tzdata"
+	"unicode"
 )
 
 type MShellFunction struct {
-	Name string
-	Evaluate func(stack MShellStack, Context ExecuteContext)
+	Name       string
+	Evaluate   func(stack MShellStack, Context ExecuteContext)
 	InputTypes []MShellType
 }
 
-
 type MShellStack []MShellObject
 
-func (objList *MShellStack) Peek() (MShellObject, error)            {
+func (objList *MShellStack) Peek() (MShellObject, error) {
 	if len(*objList) == 0 {
 		return nil, fmt.Errorf("Empty stack")
 	}
@@ -120,7 +119,7 @@ type EvalState struct {
 	LoopDepth      int
 
 	StopOnError bool
-	CallStack  CallStack
+	CallStack   CallStack
 }
 
 type EvalResult struct {
@@ -140,13 +139,13 @@ func (result EvalResult) String() string {
 }
 
 type ExecuteContext struct {
-	StandardInput  io.Reader
-	StandardOutput io.Writer
-	StandardError  io.Writer
-	Variables      map[string]MShellObject // Mapping from variable name without leading '@' or trailing '!' to object.
+	StandardInput     io.Reader
+	StandardOutput    io.Writer
+	StandardError     io.Writer
+	Variables         map[string]MShellObject // Mapping from variable name without leading '@' or trailing '!' to object.
 	ShouldCloseInput  bool
 	ShouldCloseOutput bool
-	Pbm IPathBinManager
+	Pbm               IPathBinManager
 }
 
 func (context *ExecuteContext) Close() {
@@ -172,7 +171,7 @@ func SimpleSuccess() EvalResult {
 	return EvalResult{true, false, -1, 0, false}
 }
 
-func (state *EvalState) FailWithMessage(message string)  EvalResult {
+func (state *EvalState) FailWithMessage(message string) EvalResult {
 	// Log message to stderr
 	if state.CallStack == nil {
 		fmt.Fprintf(os.Stderr, "No call stack available.\n")
@@ -247,10 +246,10 @@ MainLoop:
 		t := objects[index]
 		index++
 
-		switch t.(type) {
+		switch t := t.(type) {
 		case *MShellParseList:
 			// Evaluate the list
-			list := t.(*MShellParseList)
+			list := t
 			var listStack MShellStack
 			listStack = []MShellObject{}
 
@@ -281,7 +280,7 @@ MainLoop:
 			stack.Push(newList)
 		case *MShellParseDict:
 			// Evaluate the dictionary
-			parseDict := t.(*MShellParseDict)
+			parseDict := t
 			dict := NewDict()
 
 			for _, keyValue := range parseDict.Items {
@@ -317,7 +316,7 @@ MainLoop:
 
 			stack.Push(dict)
 		case *MShellParseQuote:
-			parseQuote := t.(*MShellParseQuote)
+			parseQuote := t
 			q := MShellQuotation{Tokens: parseQuote.Items, StandardInputFile: "", StandardOutputFile: "", StandardErrorFile: "", Variables: context.Variables, MShellParseQuote: parseQuote}
 			stack.Push(&q)
 		case *MShellIndexerList:
@@ -327,7 +326,7 @@ MainLoop:
 				return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'indexer' operation on an empty stack.\n", startToken.Line, startToken.Column))
 			}
 
-			indexerList := t.(*MShellIndexerList)
+			indexerList := t
 			if len(indexerList.Indexers) == 1 && indexerList.Indexers[0].(Token).Type == INDEXER {
 				t := indexerList.Indexers[0].(Token)
 				// Indexer is a digit between ':' and ':'. Remove ends and parse the number
@@ -343,7 +342,7 @@ MainLoop:
 				}
 				stack.Push(result)
 			} else {
-				var newObject MShellObject;
+				var newObject MShellObject
 				newObject = nil
 
 				for _, indexer := range indexerList.Indexers {
@@ -353,7 +352,7 @@ MainLoop:
 						indexStr := indexerToken.Lexeme[1 : len(indexerToken.Lexeme)-1]
 						index, err := strconv.Atoi(indexStr)
 						if err != nil {
-return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", indexerToken.Line, indexerToken.Column, err.Error()))
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", indexerToken.Line, indexerToken.Column, err.Error()))
 						}
 
 						result, err := obj1.Index(index)
@@ -370,7 +369,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 							wrappedResult = &MShellQuotation{Tokens: []MShellParseItem{result.(MShellParseItem)}, StandardInputFile: "", StandardOutputFile: "", StandardErrorFile: "", Variables: context.Variables, MShellParseQuote: nil}
 						case *MShellPipe:
 							newList := NewList(0)
-							wrappedResult = &MShellPipe{List: *newList, StdoutBehavior: STDOUT_NONE }
+							wrappedResult = &MShellPipe{List: *newList, StdoutBehavior: STDOUT_NONE}
 							wrappedResult.(*MShellPipe).List.Items = append(wrappedResult.(*MShellPipe).List.Items, result)
 						default:
 							wrappedResult = result
@@ -379,7 +378,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						if newObject == nil {
 							newObject = wrappedResult
 						} else {
-							newObject, err  = newObject.Concat(wrappedResult)
+							newObject, err = newObject.Concat(wrappedResult)
 							if err != nil {
 								return state.FailWithMessage(fmt.Sprintf("%d:%d: %s", indexerToken.Line, indexerToken.Column, err.Error()))
 							}
@@ -412,7 +411,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						if newObject == nil {
 							newObject = result
 						} else {
-							newObject, err  = newObject.Concat(result)
+							newObject, err = newObject.Concat(result)
 							if err != nil {
 								return state.FailWithMessage(fmt.Sprintf("%d:%d: %s", indexerToken.Line, indexerToken.Column, err.Error()))
 							}
@@ -436,7 +435,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						if newObject == nil {
 							newObject = result
 						} else {
-							newObject, err  = newObject.Concat(result)
+							newObject, err = newObject.Concat(result)
 							if err != nil {
 								return state.FailWithMessage(fmt.Sprintf("%d:%d: %s", indexerToken.Line, indexerToken.Column, err.Error()))
 							}
@@ -448,7 +447,6 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 				stack.Push(newObject)
 			}
 		case Token:
-			t := t.(Token)
 
 			if t.Type == EOF {
 				return SimpleSuccess()
@@ -611,21 +609,21 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 
 					// Can do append with list and object in either order. If two lists, append obj1 into obj2
-					switch obj1.(type) {
+					switch obj1Typed := obj1.(type) {
 					case *MShellList:
-						switch obj2.(type) {
+						switch obj2Typed := obj2.(type) {
 						case *MShellList:
-							obj2.(*MShellList).Items = append(obj2.(*MShellList).Items, obj1)
-							stack.Push(obj2)
+							obj2Typed.Items = append(obj2Typed.Items, obj1)
+							stack.Push(obj2Typed)
 						default:
-							obj1.(*MShellList).Items = append(obj1.(*MShellList).Items, obj2)
-							stack.Push(obj1)
+							obj1Typed.Items = append(obj1Typed.Items, obj2)
+							stack.Push(obj1Typed)
 						}
 					default:
-						switch obj2.(type) {
+						switch obj2Typed := obj2.(type) {
 						case *MShellList:
-							obj2.(*MShellList).Items = append(obj2.(*MShellList).Items, obj1)
-							stack.Push(obj2)
+							obj2Typed.Items = append(obj2Typed.Items, obj1)
+							stack.Push(obj2Typed)
 						default:
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot append a %s to a %s.\n", t.Line, t.Column, obj1.TypeName(), obj2.TypeName()))
 						}
@@ -643,15 +641,15 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'len' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
-					switch obj.(type) {
+					switch objTyped := obj.(type) {
 					case *MShellList:
-						stack.Push(&MShellInt{len(obj.(*MShellList).Items)})
+						stack.Push(&MShellInt{len(objTyped.Items)})
 					case *MShellString:
-						stack.Push(&MShellInt{len(obj.(*MShellString).Content)})
+						stack.Push(&MShellInt{len(objTyped.Content)})
 					case *MShellPath:
-						stack.Push(&MShellInt{len(obj.(*MShellPath).Path)})
+						stack.Push(&MShellInt{len(objTyped.Path)})
 					case *MShellLiteral:
-						stack.Push(&MShellInt{len(obj.(*MShellLiteral).LiteralText)})
+						stack.Push(&MShellInt{len(objTyped.LiteralText)})
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot get length of a %s.\n", t.Line, t.Column, obj.TypeName()))
 					}
@@ -727,13 +725,13 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						}
 					}
 
-					switch top.(type) {
+					switch topTyped := top.(type) {
 					case *MShellLiteral:
-						fmt.Fprint(writer, top.(*MShellLiteral).LiteralText)
+						fmt.Fprint(writer, topTyped.LiteralText)
 					case *MShellString:
-						fmt.Fprint(writer, top.(*MShellString).Content)
+						fmt.Fprint(writer, topTyped.Content)
 					case *MShellInt:
-						fmt.Fprint(writer, top.(*MShellInt).Value)
+						fmt.Fprint(writer, topTyped.Value)
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot write a %s.\n", t.Line, t.Column, top.TypeName()))
 					}
@@ -823,23 +821,23 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					var delimiterStr string
 					var listItems []string
 
-					switch delimiter.(type) {
+					switch delimiterTyped := delimiter.(type) {
 					case *MShellString:
-						delimiterStr = delimiter.(*MShellString).Content
+						delimiterStr = delimiterTyped.Content
 					case *MShellLiteral:
-						delimiterStr = delimiter.(*MShellLiteral).LiteralText
+						delimiterStr = delimiterTyped.LiteralText
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot join with a %s.\n", t.Line, t.Column, delimiter.TypeName()))
 					}
 
-					switch list.(type) {
+					switch listTyped := list.(type) {
 					case *MShellList:
-						for _, item := range list.(*MShellList).Items {
-							switch item.(type) {
+						for _, item := range listTyped.Items {
+							switch itemTyped := item.(type) {
 							case *MShellString:
-								listItems = append(listItems, item.(*MShellString).Content)
+								listItems = append(listItems, itemTyped.Content)
 							case *MShellLiteral:
-								listItems = append(listItems, item.(*MShellLiteral).LiteralText)
+								listItems = append(listItems, itemTyped.LiteralText)
 							default:
 								return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot join a list with a %s inside (%s).\n", t.Line, t.Column, item.TypeName(), item.DebugString()))
 							}
@@ -1113,17 +1111,17 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'toFloat' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
-					switch obj.(type) {
+					switch objTyped := obj.(type) {
 					case *MShellString:
-						floatVal, err := strconv.ParseFloat(strings.TrimSpace(obj.(*MShellString).Content), 64)
+						floatVal, err := strconv.ParseFloat(strings.TrimSpace(objTyped.Content), 64)
 						if err != nil {
-							stack.Push(&Maybe{ obj: nil })
+							stack.Push(&Maybe{obj: nil})
 						} else {
-							stack.Push(&Maybe{ obj: &MShellFloat{floatVal} })
+							stack.Push(&Maybe{obj: &MShellFloat{floatVal}})
 						}
 						// I don't believe checking for literal is required, because it should have been parsed as a float to start with?
 					case *MShellInt:
-						stack.Push(&MShellFloat{float64(obj.(*MShellInt).Value)})
+						stack.Push(&MShellFloat{float64(objTyped.Value)})
 					case *MShellFloat:
 						stack.Push(obj)
 					default:
@@ -1135,19 +1133,19 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'toInt' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
-					switch obj.(type) {
+					switch objTyped := obj.(type) {
 					case *MShellString:
-						intVal, err := strconv.Atoi(strings.TrimSpace(obj.(*MShellString).Content))
+						intVal, err := strconv.Atoi(strings.TrimSpace(objTyped.Content))
 						if err != nil {
-							stack.Push(&Maybe{ obj: nil })
+							stack.Push(&Maybe{obj: nil})
 						} else {
-							stack.Push(&Maybe{ obj: &MShellInt{intVal} })
+							stack.Push(&Maybe{obj: &MShellInt{intVal}})
 						}
 						// I don't believe checking for literal is required, because it should have been parsed as a float to start with?
 					case *MShellInt:
 						stack.Push(obj)
 					case *MShellFloat:
-						stack.Push(&MShellInt{int(obj.(*MShellFloat).Value)})
+						stack.Push(&MShellInt{int(objTyped.Value)})
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert a %s to an int.\n", t.Line, t.Column, obj.TypeName()))
 					}
@@ -1158,11 +1156,11 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 
 					var dateStr string
-					switch dateStrObj.(type) {
+					switch dateStrTyped := dateStrObj.(type) {
 					case *MShellString:
-						dateStr = dateStrObj.(*MShellString).Content
+						dateStr = dateStrTyped.Content
 					case *MShellLiteral:
-						dateStr = dateStrObj.(*MShellLiteral).LiteralText
+						dateStr = dateStrTyped.LiteralText
 					case *MShellDateTime:
 						stack.Push(dateStrObj)
 						continue MainLoop
@@ -1173,11 +1171,11 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					// TODO: Don't make a new lexer object each time.
 					parsedTime, err := ParseDateTime(dateStr)
 					if err != nil {
-						stack.Push(&Maybe{ obj: nil })
+						stack.Push(&Maybe{obj: nil})
 						// return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing date time '%s': %s\n", t.Line, t.Column, dateStr, err.Error()))
 					} else {
 						dt := MShellDateTime{Time: parsedTime, OriginalString: dateStr}
-						stack.Push(&Maybe{ obj: &dt })
+						stack.Push(&Maybe{obj: &dt})
 					}
 				} else if t.Lexeme == "files" || t.Lexeme == "dirs" {
 					// Dump all the files in the current directory to the stack. No sub-directories.
@@ -1186,7 +1184,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error reading current directory: %s\n", t.Line, t.Column, err.Error()))
 					}
 
-					newList := 	NewList(0)
+					newList := NewList(0)
 					if t.Lexeme == "files" {
 						for _, file := range files {
 							if !file.IsDir() {
@@ -1283,15 +1281,15 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					registerTempFileForCleanup(tmpfile.Name())
 
 					// Write the contents of the object to the temporary file
-					switch obj1.(type) {
+					switch obj1Typed := obj1.(type) {
 					case *MShellString:
-						_, err = tmpfile.WriteString(obj1.(*MShellString).Content)
+						_, err = tmpfile.WriteString(obj1Typed.Content)
 						if err != nil {
 							tmpfile.Close()
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error writing to temporary file: %s\n", t.Line, t.Column, err.Error()))
 						}
 					case *MShellLiteral:
-						_, err = tmpfile.WriteString(obj1.(*MShellLiteral).LiteralText)
+						_, err = tmpfile.WriteString(obj1Typed.LiteralText)
 						if err != nil {
 							tmpfile.Close()
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error writing to temporary file: %s\n", t.Line, t.Column, err.Error()))
@@ -1473,7 +1471,6 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'trim' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
-
 					str, err := obj1.CastString()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot trim a %s.\n", t.Line, t.Column, obj1.TypeName()))
@@ -1499,13 +1496,13 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						f = strings.ToLower
 					}
 
-					switch obj1.(type) {
+					switch obj1Typed := obj1.(type) {
 					case *MShellString:
-						stack.Push(&MShellString{f(obj1.(*MShellString).Content)})
+						stack.Push(&MShellString{f(obj1Typed.Content)})
 					case *MShellLiteral:
-						stack.Push(&MShellLiteral{f(obj1.(*MShellLiteral).LiteralText)})
+						stack.Push(&MShellLiteral{f(obj1Typed.LiteralText)})
 					case *MShellPath:
-						stack.Push(&MShellPath{f(obj1.(*MShellPath).Path)})
+						stack.Push(&MShellPath{f(obj1Typed.Path)})
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot %s a %s (%s).\n", t.Line, t.Column, t.Lexeme, obj1.TypeName(), obj1.DebugString()))
 					}
@@ -1609,7 +1606,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 
 					newTime := time.Unix(int64(intVal.Value), 0).UTC()
 
-					stack.Push(&MShellDateTime{Time: newTime, OriginalString:  newTime.Format("2006-01-02T15:04") })
+					stack.Push(&MShellDateTime{Time: newTime, OriginalString: newTime.Format("2006-01-02T15:04")})
 				} else if t.Lexeme == "writeFile" || t.Lexeme == "appendFile" {
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
@@ -1733,9 +1730,9 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot set stderr behavior to lines on an empty stack.\n", t.Line, t.Column))
 					}
 
-					switch obj.(type) {
+					switch objTyped := obj.(type) {
 					case *MShellList:
-						list := obj.(*MShellList)
+						list := objTyped
 						if t.Lexeme == "e" {
 							list.StderrBehavior = STDERR_LINES
 						} else if t.Lexeme == "es" {
@@ -1747,7 +1744,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						}
 						stack.Push(list)
 					case *MShellPipe:
-						pipe := obj.(*MShellPipe)
+						pipe := objTyped
 						if t.Lexeme == "e" {
 							pipe.StderrBehavior = STDERR_LINES
 						} else if t.Lexeme == "es" {
@@ -1775,9 +1772,9 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					var fileInfo os.FileInfo
 					fileInfo, err = os.Stat(path)
 					if err != nil {
-						stack.Push(&Maybe{ obj: nil })
+						stack.Push(&Maybe{obj: nil})
 					} else {
-						stack.Push(&Maybe{ obj: &MShellInt{int(fileInfo.Size())} })
+						stack.Push(&Maybe{obj: &MShellInt{int(fileInfo.Size())}})
 					}
 				} else if t.Lexeme == "lsDir" {
 					obj1, err := stack.Pop()
@@ -1805,7 +1802,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 				} else if t.Lexeme == "runtime" {
 					// Place the name of the current OS runtime on the stack
 					stack.Push(&MShellString{runtime.GOOS})
-				} else if t.Lexeme == "sort" ||  t.Lexeme == "sortV" {
+				} else if t.Lexeme == "sort" || t.Lexeme == "sortV" {
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'sort' operation on an empty stack.\n", t.Line, t.Column))
@@ -1887,14 +1884,14 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						// sb.WriteString(fmt.Sprintf("%d:%d: Key '%s' not found in dictionary.\n", t.Line, t.Column, keyStr))
 						// sb.WriteString("Available keys:\n")
 						// for k := range dict.Items {
-							// // TODO: Escape
-							// sb.WriteString(fmt.Sprintf("  - '%s'\n", k))
+						// // TODO: Escape
+						// sb.WriteString(fmt.Sprintf("  - '%s'\n", k))
 						// }
 						// return state.FailWithMessage(sb.String())
-						stack.Push(&Maybe{ obj: nil })
+						stack.Push(&Maybe{obj: nil})
 					} else {
-						maybe := Maybe{ obj: value }
-						stack.Push( &maybe )
+						maybe := Maybe{obj: value}
+						stack.Push(&maybe)
 					}
 				} else if t.Lexeme == "getDef" {
 					// Get a value from string key for a dictionary.
@@ -2111,7 +2108,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					// If a path or literal, read the file as UTF-8. Else, read the string as the contents directly.
 					var reader *csv.Reader
 					var file *os.File
-					switch obj1.(type) {
+					switch obj1Typed := obj1.(type) {
 					case *MShellPath, *MShellLiteral:
 						path, _ := obj1.CastString()
 						file, err = os.Open(path)
@@ -2121,7 +2118,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						reader = csv.NewReader(file)
 					case *MShellString:
 						// Create a new CSV reader directly from the string contents
-						reader = csv.NewReader(strings.NewReader(obj1.(*MShellString).Content))
+						reader = csv.NewReader(strings.NewReader(obj1Typed.Content))
 					}
 					reader.FieldsPerRecord = -1
 
@@ -2156,7 +2153,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 
 					// If a path or literal, read the file as UTF-8. Else, read the string as the contents directly.
 					var jsonData []byte
-					switch obj1.(type) {
+					switch obj1Typed := obj1.(type) {
 					case *MShellPath, *MShellLiteral:
 						path, _ := obj1.CastString()
 						file, err := os.Open(path)
@@ -2172,7 +2169,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 
 					case *MShellString:
 						// Create a new JSON reader directly from the string contents
-						jsonData = []byte(obj1.(*MShellString).Content)
+						jsonData = []byte(obj1Typed.Content)
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot parse a %s as JSON.\n", t.Line, t.Column, obj1.TypeName()))
 					}
@@ -2291,40 +2288,40 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					dateTimesSeen := make(map[time.Time]interface{})
 
 					for i, item := range listObj.Items {
-						switch item.(type) {
+						switch itemTyped := item.(type) {
 						case *MShellString:
-							strItem := item.(*MShellString)
+							strItem := itemTyped
 							if _, ok := stringsSeen[strItem.Content]; !ok {
 								newList.Items = append(newList.Items, strItem)
 								stringsSeen[strItem.Content] = nil
 							}
 						case *MShellPath:
-							pathItem := item.(*MShellPath)
+							pathItem := itemTyped
 							if _, ok := pathsSeen[pathItem.Path]; !ok {
 								newList.Items = append(newList.Items, pathItem)
 								pathsSeen[pathItem.Path] = nil
 							}
 						case *MShellInt:
-							intItem := item.(*MShellInt)
+							intItem := itemTyped
 							if _, ok := intsSeen[intItem.Value]; !ok {
 								newList.Items = append(newList.Items, intItem)
 								intsSeen[intItem.Value] = nil
 							}
 						case *MShellFloat:
-							floatItem := item.(*MShellFloat)
+							floatItem := itemTyped
 							if _, ok := floatsSeen[floatItem.Value]; !ok {
 								newList.Items = append(newList.Items, floatItem)
 								floatsSeen[floatItem.Value] = nil
 							}
 						case *MShellDateTime:
-							dateTimeItem := item.(*MShellDateTime)
+							dateTimeItem := itemTyped
 							if _, ok := dateTimesSeen[dateTimeItem.Time]; !ok {
 								newList.Items = append(newList.Items, dateTimeItem)
 								dateTimesSeen[dateTimeItem.Time] = nil
 							}
 						case *MShellLiteral:
 							// Treat like strings
-							literalItem := item.(*MShellLiteral)
+							literalItem := itemTyped
 							if _, ok := stringsSeen[literalItem.LiteralText]; !ok {
 								// Convert to a string
 								newList.Items = append(newList.Items, &MShellString{literalItem.LiteralText})
@@ -2364,10 +2361,10 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 
 					// Check if obj2 is a list or a Maybe
-					switch obj2.(type) {
+					switch obj2Typed := obj2.(type) {
 					case *MShellList:
 
-						listObj := obj2.(*MShellList)
+						listObj := obj2Typed
 						newList := NewList(len(listObj.Items))
 
 						var mapStack MShellStack
@@ -2387,7 +2384,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						}
 						stack.Push(newList)
 					case *Maybe:
-						maybe := obj2.(*Maybe)
+						maybe := obj2Typed
 						if maybe.obj == nil {
 							stack.Push(maybe)
 						} else {
@@ -2398,7 +2395,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 								return result
 							}
 							if len(*stack) != preStackLen {
-								return state.FailWithMessage(fmt.Sprintf("%d:%d: The function in 'map' did not return a single value, found %d values.\n", t.Line, t.Column, len(*stack) - preStackLen))
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: The function in 'map' did not return a single value, found %d values.\n", t.Line, t.Column, len(*stack)-preStackLen))
 							}
 							mapResult, _ := stack.Pop()
 							stack.Push(&Maybe{obj: mapResult}) // Wrap the result back in a Maybe
@@ -2445,8 +2442,8 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 							return result
 						}
 
-						if len(*stack) != preStackLen + 1 {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: The function in 'map2' did not return a single value, found %d values.\n", t.Line, t.Column, len(*stack) - preStackLen))
+						if len(*stack) != preStackLen+1 {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: The function in 'map2' did not return a single value, found %d values.\n", t.Line, t.Column, len(*stack)-preStackLen))
 						}
 
 						mapResult, _ := stack.Pop()
@@ -2459,7 +2456,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 
 					if maybeObj, ok := obj.(*Maybe); ok {
-						stack.Push(&MShellBool{ maybeObj.IsNone() })
+						stack.Push(&MShellBool{maybeObj.IsNone()})
 					} else {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot check if a %s is None.\n", t.Line, t.Column, obj.TypeName()))
 					}
@@ -2497,7 +2494,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					} else {
 						// Add the days to the date
 						daysToAdd := obj1.FloatNumeric()
-						newTime := dt.Time.Add(time.Duration(daysToAdd * float64(24 * time.Hour)))
+						newTime := dt.Time.Add(time.Duration(daysToAdd * float64(24*time.Hour)))
 						newDateTime := &MShellDateTime{Time: newTime, OriginalString: ""}
 						stack.Push(newDateTime)
 					}
@@ -2525,7 +2522,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 
 					var reader io.Reader
 					var file *os.File
-					switch obj1.(type) {
+					switch obj1Typed := obj1.(type) {
 					case *MShellPath, *MShellLiteral:
 						path, _ := obj1.CastString()
 						file, err = os.Open(path)
@@ -2536,7 +2533,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						reader = file
 					case *MShellString:
 						// Create a new HTML reader directly from the string contents
-						reader = strings.NewReader(obj1.(*MShellString).Content)
+						reader = strings.NewReader(obj1Typed.Content)
 					}
 
 					// Parse file with html.Parse
@@ -2694,7 +2691,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 							return result
 						}
 						if len(*stack) != preStackLen {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: The function in 'bind' did not return a single value, found %d values.\n", t.Line, t.Column, len(*stack) - preStackLen))
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: The function in 'bind' did not return a single value, found %d values.\n", t.Line, t.Column, len(*stack)-preStackLen))
 						}
 						mapResult, _ := stack.Pop()
 
@@ -2713,9 +2710,9 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 
 					// Work either on string or path
 					var data []byte
-					switch obj.(type) {
+					switch objTyped := obj.(type) {
 					case *MShellString:
-						data = []byte(obj.(*MShellString).Content)
+						data = []byte(objTyped.Content)
 					case *MShellPath:
 						pathStr, err := obj.CastString()
 						if err != nil {
@@ -2758,9 +2755,9 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 
 					// obj2 should be a list or string
-					switch obj2.(type) {
+					switch obj2Typed := obj2.(type) {
 					case *MShellList:
-						listObj := obj2.(*MShellList)
+						listObj := obj2Typed
 						length := intObj.Value
 						if intObj.Value > len(listObj.Items) {
 							length = len(listObj.Items) // Adjust to max length
@@ -2773,7 +2770,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 
 						stack.Push(newList)
 					case *MShellString:
-						strObj := obj2.(*MShellString)
+						strObj := obj2Typed
 
 						length := intObj.Value
 						if intObj.Value > len(strObj.Content) {
@@ -2802,9 +2799,9 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 
 					// obj2 should be a list or string
-					switch obj2.(type) {
+					switch obj2Typed := obj2.(type) {
 					case *MShellList:
-						listObj := obj2.(*MShellList)
+						listObj := obj2Typed
 						length := max(0, len(listObj.Items)-intObj.Value)
 
 						newList := NewList(length)
@@ -2814,7 +2811,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 
 						stack.Push(newList)
 					case *MShellString:
-						strObj := obj2.(*MShellString)
+						strObj := obj2Typed
 						length := max(0, len(strObj.Content)-intObj.Value)
 						newStr := strObj.Content[length:]
 						stack.Push(&MShellString{newStr})
@@ -2840,7 +2837,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 
 					if runtime.GOOS == "windows" {
-						stack.Push(&MShellString{ StripVolumePrefix(asStr) })
+						stack.Push(&MShellString{StripVolumePrefix(asStr)})
 					} else {
 						stack.Push(&MShellString{asStr})
 					}
@@ -2852,11 +2849,11 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 
 					if listObj, ok := obj.(*MShellList); ok {
 						if len(listObj.Items) == 0 {
-							stack.Push(&Maybe {obj: nil}) // No items to pop
+							stack.Push(&Maybe{obj: nil}) // No items to pop
 						} else {
 							item := listObj.Items[len(listObj.Items)-1]
 							listObj.Items = listObj.Items[:len(listObj.Items)-1]
-							stack.Push(&Maybe{ obj: item }) // Push the popped item
+							stack.Push(&Maybe{obj: item}) // Push the popped item
 						}
 					} else {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot pop from a %s.\n", t.Line, t.Column, obj.TypeName()))
@@ -2892,10 +2889,10 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					cmpStack := MShellStack{}
 
 					for width := 1; width < n; width = 2 * width {
-						for i := 0; i < n; i = i + 2 * width {
-							iLeftStart := i // Inclusive left start
-							iRightStart := min(i + width, n) // Inclusive right start, exclusive left end
-							iEnd := min(i + 2 * width, n) // Exclusive End
+						for i := 0; i < n; i = i + 2*width {
+							iLeftStart := i                // Inclusive left start
+							iRightStart := min(i+width, n) // Inclusive right start, exclusive left end
+							iEnd := min(i+2*width, n)      // Exclusive End
 
 							leftIndex := iLeftStart
 							rightIndex := iRightStart
@@ -3321,12 +3318,18 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 				var exitCode int
 				var stdout string
 				var stderr string
+				var stdoutBehavior StdoutBehavior
+				var stderrBehavior StderrBehavior
 
-				switch top.(type) {
+				switch topTyped := top.(type) {
 				case *MShellList:
-					result, exitCode, stdout, stderr = RunProcess(*top.(*MShellList), context, state)
+					result, exitCode, stdout, stderr = RunProcess(*topTyped, context, state)
+					stdoutBehavior = topTyped.StdoutBehavior
+					stderrBehavior = topTyped.StderrBehavior
 				case *MShellPipe:
-					result, exitCode, stdout, stderr = state.RunPipeline(*top.(*MShellPipe), context, stack)
+					result, exitCode, stdout, stderr = state.RunPipeline(*topTyped, context, stack)
+					stdoutBehavior = topTyped.StdoutBehavior
+					stderrBehavior = topTyped.StderrBehavior
 				default:
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot execute a non-list object. Found %s %s\n", t.Line, t.Column, top.TypeName(), top.DebugString()))
 				}
@@ -3338,22 +3341,6 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 
 				if !result.Success {
 					return result
-				}
-
-				var stdoutBehavior StdoutBehavior
-				switch top.(type) {
-				case *MShellList:
-					stdoutBehavior = top.(*MShellList).StdoutBehavior
-				case *MShellPipe:
-					stdoutBehavior = top.(*MShellPipe).StdoutBehavior
-				}
-
-				var stderrBehavior StderrBehavior
-				switch top.(type) {
-				case *MShellList:
-					stderrBehavior = top.(*MShellList).StderrBehavior
-				case *MShellPipe:
-					stderrBehavior = top.(*MShellPipe).StderrBehavior
 				}
 
 				if stdoutBehavior == STDOUT_LINES {
@@ -3432,11 +3419,11 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 				var condition bool
 
 				// Check that second obj is a quotation, boolean, or integer
-				switch secondObj.(type) {
+				switch secondTyped := secondObj.(type) {
 				case *MShellQuotation:
 					falseQuote = firstQuote
 
-					trueQuote = secondObj.(*MShellQuotation)
+					trueQuote = secondTyped
 
 					// Read the next object, should be bool or integer
 					thrirdObj, err := stack.Pop()
@@ -3444,18 +3431,18 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do an '%s' on a stack with only two quotes.\n", t.Line, t.Column, iff_name))
 					}
 
-					switch thrirdObj.(type) {
+					switch thirdTyped := thrirdObj.(type) {
 					case *MShellBool:
-						condition = thrirdObj.(*MShellBool).Value
+						condition = thirdTyped.Value
 					case *MShellInt:
-						condition = thrirdObj.(*MShellInt).Value == 0
+						condition = thirdTyped.Value == 0
 					}
 				case *MShellBool:
 					trueQuote = firstQuote
-					condition = secondObj.(*MShellBool).Value
+					condition = secondTyped.Value
 				case *MShellInt:
 					trueQuote = firstQuote
-					condition = secondObj.(*MShellInt).Value == 0
+					condition = secondTyped.Value == 0
 				default:
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a quotation or boolean for %s, received a %s.\n", t.Line, t.Column, iff_name, secondObj.TypeName()))
 				}
@@ -3531,14 +3518,14 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 
 					// Check for either integer or boolean
-					switch top.(type) {
+					switch topTyped := top.(type) {
 					case *MShellInt:
-						if top.(*MShellInt).Value == 0 {
+						if topTyped.Value == 0 {
 							trueIndex = i
 							break ListLoop
 						}
 					case *MShellBool:
-						if top.(*MShellBool).Value {
+						if topTyped.Value {
 							trueIndex = i
 							break ListLoop
 						}
@@ -3616,7 +3603,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 				case *MShellList:
 					switch obj2.(type) {
 					case *MShellList:
-						newList := NewList(len(obj2.(*MShellList).Items)+len(obj1.(*MShellList).Items))
+						newList := NewList(len(obj2.(*MShellList).Items) + len(obj1.(*MShellList).Items))
 						copy(newList.Items, obj2.(*MShellList).Items)
 						copy(newList.Items[len(obj2.(*MShellList).Items):], obj1.(*MShellList).Items)
 						stack.Push(newList)
@@ -3766,11 +3753,11 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
 				}
 
-				switch obj.(type) {
+				switch objTyped := obj.(type) {
 				case *MShellBool:
-					stack.Push(&MShellBool{!obj.(*MShellBool).Value})
+					stack.Push(&MShellBool{!objTyped.Value})
 				case *MShellInt:
-					if obj.(*MShellInt).Value == 0 {
+					if objTyped.Value == 0 {
 						stack.Push(&MShellBool{false})
 					} else {
 						stack.Push(&MShellBool{true})
@@ -3925,13 +3912,13 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect stderr to a %s.\n", t.Line, t.Column, obj1.TypeName()))
 				}
 
-				switch obj2.(type) {
+				switch obj2Typed := obj2.(type) {
 				case *MShellList:
-					obj2.(*MShellList).StandardErrorFile = redirectFile
-					stack.Push(obj2)
+					obj2Typed.StandardErrorFile = redirectFile
+					stack.Push(obj2Typed)
 				case *MShellQuotation:
-					obj2.(*MShellQuotation).StandardErrorFile = redirectFile
-					stack.Push(obj2)
+					obj2Typed.StandardErrorFile = redirectFile
+					stack.Push(obj2Typed)
 				default:
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect stderr to a %s.\n", t.Line, t.Column, obj2.TypeName()))
 				}
@@ -3942,7 +3929,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 				}
 
 				// Strip off the leading '$' and trailing '!' for the environment variable name
-				varName := t.Lexeme[1:len(t.Lexeme) - 1]
+				varName := t.Lexeme[1 : len(t.Lexeme)-1]
 
 				varValue, err := obj.CastString()
 				if err != nil {
@@ -3960,7 +3947,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 				}
 			} else if t.Type == ENVCHECK {
 				// Strip off the leading '$' and trailing '!' for the environment variable name
-				varName := t.Lexeme[1:len(t.Lexeme) - 1]
+				varName := t.Lexeme[1 : len(t.Lexeme)-1]
 				_, found := os.LookupEnv(varName)
 				stack.Push(&MShellBool{found})
 			} else if t.Type == ENVRETREIVE { // Token Type
@@ -4021,7 +4008,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					StandardInput:  nil,
 					StandardOutput: nil,
 					Variables:      context.Variables,
-					Pbm: 		context.Pbm,
+					Pbm:            context.Pbm,
 				}
 
 				if quotation.StdinBehavior != STDIN_NONE {
@@ -4077,7 +4064,6 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(errorMessage.String())
 					}
 
-
 					// Assert that we never get into state in which we have a breakNum > 0 and continue == true
 					if result.BreakNum > 0 && result.Continue {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot have both break and continue in the same loop.\n", t.Line, t.Column))
@@ -4105,8 +4091,8 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 				// // If we are breaking out of an inner loop to an outer loop (breakDiff - 1 > 0), then we need to return and go up the call stack.
 				// // Else just continue on with tokens after the loop.
 				// if breakDiff-1 > 0 {
-					// fmt.Fprintf(os.Stderr, "Breaking out of loop %d, loop depth %d\n", breakDiff-1, state.LoopDepth)
-					// return EvalResult{true, breakDiff - 1, 0, false}
+				// fmt.Fprintf(os.Stderr, "Breaking out of loop %d, loop depth %d\n", breakDiff-1, state.LoopDepth)
+				// return EvalResult{true, breakDiff - 1, 0, false}
 				// }
 			} else if t.Type == BREAK { // Token Type
 				return EvalResult{true, false, 1, 0, false}
@@ -4361,9 +4347,9 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot set stdout behavior to lines on an empty stack.\n", t.Line, t.Column))
 				}
 
-				switch obj.(type) {
+				switch objTyped := obj.(type) {
 				case *MShellList:
-					list := obj.(*MShellList)
+					list := objTyped
 					if t.Type == STDOUTLINES {
 						list.StdoutBehavior = STDOUT_LINES
 					} else if t.Type == STDOUTSTRIPPED {
@@ -4375,7 +4361,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 					stack.Push(list)
 				case *MShellPipe:
-					pipe := obj.(*MShellPipe)
+					pipe := objTyped
 					if t.Type == STDOUTLINES {
 						pipe.StdoutBehavior = STDOUT_LINES
 					} else if t.Type == STDOUTSTRIPPED {
@@ -4398,7 +4384,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 				}
 				stack.Push(&MShellFloat{floatVal})
 			} else if t.Type == PATH { // Token Type
-				stack.Push(&MShellPath { t.Lexeme[1:len(t.Lexeme)-1] })
+				stack.Push(&MShellPath{t.Lexeme[1 : len(t.Lexeme)-1]})
 			} else if t.Type == DATETIME { // Token Type
 				year, _ := strconv.Atoi(t.Lexeme[0:4])
 				month, _ := strconv.Atoi(t.Lexeme[5:7])
@@ -4458,7 +4444,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 				}
 
 				stack.Push(&MShellBool{!doesEqual})
-			}  else {
+			} else {
 				return state.FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' ('%s') yet.\n", t.Line, t.Column, t.Type, t.Lexeme))
 			}
 		default:
@@ -4493,7 +4479,7 @@ func (state *EvalState) EvaluateFormatString(lexeme string, context ExecuteConte
 	formatStrEndIndex := -1
 
 	lexer := NewLexer("", nil)
-	parser := MShellParser{ lexer: lexer }
+	parser := MShellParser{lexer: lexer}
 
 	for index < len(allRunes)-1 {
 		c := allRunes[index]
@@ -4531,7 +4517,7 @@ func (state *EvalState) EvaluateFormatString(lexeme string, context ExecuteConte
 		} else if mode == FORMATMODEFORMAT {
 			if c == '}' {
 				formatStrEndIndex = index - 1
-				formatStr := string(allRunes[formatStrStartIndex+1:formatStrEndIndex])
+				formatStr := string(allRunes[formatStrStartIndex+1 : formatStrEndIndex])
 
 				// Evaluate the format string
 				lexer.resetInput(formatStr)
@@ -4577,7 +4563,6 @@ func (state *EvalState) EvaluateFormatString(lexeme string, context ExecuteConte
 	return &MShellString{b.String()}, nil
 }
 
-
 type Executable interface {
 	Execute(state *EvalState, context ExecuteContext, stack *MShellStack) (EvalResult, int, string, string)
 	GetStandardInputFile() string
@@ -4594,7 +4579,7 @@ func (quotation *MShellQuotation) Execute(state *EvalState, context ExecuteConte
 		StandardInput:  nil,
 		StandardOutput: nil,
 		Variables:      quotation.Variables,
-		Pbm: 		context.Pbm,
+		Pbm:            context.Pbm,
 	}
 
 	if quotation.StdinBehavior != STDIN_NONE {
@@ -4856,8 +4841,8 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 		}
 		cmd.Stderr = file
 		defer file.Close()
-	// } else if context.Stand != nil {
-	// cmd.Stderr = context.StandardError  // TBD: Implement this
+		// } else if context.Stand != nil {
+		// cmd.Stderr = context.StandardError  // TBD: Implement this
 	} else {
 		if list.RunInBackground {
 			cmd.Stderr = nil
@@ -4961,7 +4946,7 @@ func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContex
 			StandardInput:  nil,
 			StandardOutput: nil,
 			Variables:      context.Variables,
-			Pbm:           context.Pbm,
+			Pbm:            context.Pbm,
 		}
 
 		if i == 0 {
@@ -5205,13 +5190,14 @@ func ParseJsonObjToMshell(jsonObj interface{}) MShellObject {
 // NOT to start with '\' or '/'.
 //
 // Examples (on Windows):
-//   "C:\\foo\\bar"                         -> "foo\\bar"
-//   "C:relative\\path"                     -> "relative\\path"
-//   "\\\\server\\share\\dir\\file"         -> "dir\\file"
-//   "\\\\?\\C:\\path\\to\\file"            -> "path\\to\\file"
-//   "\\\\?\\UNC\\server\\share\\dir"       -> "dir"
-//   "\\\\?\\Volume{GUID}\\Windows\\Temp"   -> "Windows\\Temp"
-//   "\\\\.\\COM1"                          -> ""  (device path, no remainder)
+//
+//	"C:\\foo\\bar"                         -> "foo\\bar"
+//	"C:relative\\path"                     -> "relative\\path"
+//	"\\\\server\\share\\dir\\file"         -> "dir\\file"
+//	"\\\\?\\C:\\path\\to\\file"            -> "path\\to\\file"
+//	"\\\\?\\UNC\\server\\share\\dir"       -> "dir"
+//	"\\\\?\\Volume{GUID}\\Windows\\Temp"   -> "Windows\\Temp"
+//	"\\\\.\\COM1"                          -> ""  (device path, no remainder)
 func StripVolumePrefix(p string) string {
 	if runtime.GOOS != "windows" {
 		return p
@@ -5316,12 +5302,10 @@ func VersionSortCmp(s1 string, s2 string) int {
 }
 
 type LinkHeader struct {
-	Uri string
-	Rel string
+	Uri    string
+	Rel    string
 	Params map[string]string
 }
-
-
 
 func EatLinkHeaderWhitespace(linkHeader string, i int) int {
 	for i < len(linkHeader) {
@@ -5334,13 +5318,11 @@ func EatLinkHeaderWhitespace(linkHeader string, i int) int {
 	return i
 }
 
-
 // https://datatracker.ietf.org/doc/html/rfc8288
 
 // Link       = #link-value
 // link-value = "<" URI-Reference ">" *( OWS ";" OWS link-param )
 // link-param = token BWS [ "=" BWS ( token / quoted-string ) ]
-
 
 // https://datatracker.ietf.org/doc/html/rfc7230
 
