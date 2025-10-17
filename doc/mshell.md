@@ -176,6 +176,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 
 - `str`: Convert to string
 - `findReplace`: Find and replace in string. `findReplace (str str, str find, str replace -- str)`
+- `leftPad`: Pad the left side of a string to reach the requested length. `(str str int -- str)`
 - `lines`: Split string into list of string lines
 - `split`: Split string into list of strings by delimiter. (str delimiter -- [str])
 - `wsplit`: Split string into list of strings by runs of whitespace. (str -- [str])
