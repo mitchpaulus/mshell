@@ -1,2 +1,2 @@
 #!/usr/bin/env mshell
-date 'doc_deploy_2006-01-02T1504' tag! ['git' 'tag' @tag]! ['git' 'push' '--tags' 'origin' @tag]!
+date 'doc_deploy_2006-01-02T1504' dateFmt tag! ['git' 'tag' @tag]! ['git' 'push' '--tags' 'origin' @tag]!
