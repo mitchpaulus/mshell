@@ -3,44 +3,43 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
+	"encoding/csv"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
-	"math"
-	"slices"
-	"errors"
-	"runtime"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/csv"
-	"encoding/json"
-	"regexp"
 	// "golang.org/x/term"
-	_ "time/tzdata"
-	"unicode"
-	"golang.org/x/net/html"
 	"crypto/md5"
+	"golang.org/x/net/html"
 	"net/http"
 	"net/url"
+	_ "time/tzdata"
+	"unicode"
 )
 
 type MShellFunction struct {
-	Name string
-	Evaluate func(stack MShellStack, Context ExecuteContext)
+	Name       string
+	Evaluate   func(stack MShellStack, Context ExecuteContext)
 	InputTypes []MShellType
 }
 
-
 type MShellStack []MShellObject
 
-func (objList *MShellStack) Peek() (MShellObject, error)            {
+func (objList *MShellStack) Peek() (MShellObject, error) {
 	if len(*objList) == 0 {
 		return nil, fmt.Errorf("Empty stack")
 	}
@@ -120,7 +119,7 @@ type EvalState struct {
 	LoopDepth      int
 
 	StopOnError bool
-	CallStack  CallStack
+	CallStack   CallStack
 }
 
 type EvalResult struct {
@@ -140,13 +139,13 @@ func (result EvalResult) String() string {
 }
 
 type ExecuteContext struct {
-	StandardInput  io.Reader
-	StandardOutput io.Writer
-	StandardError  io.Writer
-	Variables      map[string]MShellObject // Mapping from variable name without leading '@' or trailing '!' to object.
+	StandardInput     io.Reader
+	StandardOutput    io.Writer
+	StandardError     io.Writer
+	Variables         map[string]MShellObject // Mapping from variable name without leading '@' or trailing '!' to object.
 	ShouldCloseInput  bool
 	ShouldCloseOutput bool
-	Pbm IPathBinManager
+	Pbm               IPathBinManager
 }
 
 func (context *ExecuteContext) Close() {
@@ -172,7 +171,7 @@ func SimpleSuccess() EvalResult {
 	return EvalResult{true, false, -1, 0, false}
 }
 
-func (state *EvalState) FailWithMessage(message string)  EvalResult {
+func (state *EvalState) FailWithMessage(message string) EvalResult {
 	// Log message to stderr
 	if state.CallStack == nil {
 		fmt.Fprintf(os.Stderr, "No call stack available.\n")
@@ -343,7 +342,7 @@ MainLoop:
 				}
 				stack.Push(result)
 			} else {
-				var newObject MShellObject;
+				var newObject MShellObject
 				newObject = nil
 
 				for _, indexer := range indexerList.Indexers {
@@ -353,7 +352,7 @@ MainLoop:
 						indexStr := indexerToken.Lexeme[1 : len(indexerToken.Lexeme)-1]
 						index, err := strconv.Atoi(indexStr)
 						if err != nil {
-return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", indexerToken.Line, indexerToken.Column, err.Error()))
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", indexerToken.Line, indexerToken.Column, err.Error()))
 						}
 
 						result, err := obj1.Index(index)
@@ -370,7 +369,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 							wrappedResult = &MShellQuotation{Tokens: []MShellParseItem{result.(MShellParseItem)}, StandardInputFile: "", StandardOutputFile: "", StandardErrorFile: "", Variables: context.Variables, MShellParseQuote: nil}
 						case *MShellPipe:
 							newList := NewList(0)
-							wrappedResult = &MShellPipe{List: *newList, StdoutBehavior: STDOUT_NONE }
+							wrappedResult = &MShellPipe{List: *newList, StdoutBehavior: STDOUT_NONE}
 							wrappedResult.(*MShellPipe).List.Items = append(wrappedResult.(*MShellPipe).List.Items, result)
 						default:
 							wrappedResult = result
@@ -379,7 +378,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						if newObject == nil {
 							newObject = wrappedResult
 						} else {
-							newObject, err  = newObject.Concat(wrappedResult)
+							newObject, err = newObject.Concat(wrappedResult)
 							if err != nil {
 								return state.FailWithMessage(fmt.Sprintf("%d:%d: %s", indexerToken.Line, indexerToken.Column, err.Error()))
 							}
@@ -412,7 +411,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						if newObject == nil {
 							newObject = result
 						} else {
-							newObject, err  = newObject.Concat(result)
+							newObject, err = newObject.Concat(result)
 							if err != nil {
 								return state.FailWithMessage(fmt.Sprintf("%d:%d: %s", indexerToken.Line, indexerToken.Column, err.Error()))
 							}
@@ -436,7 +435,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						if newObject == nil {
 							newObject = result
 						} else {
-							newObject, err  = newObject.Concat(result)
+							newObject, err = newObject.Concat(result)
 							if err != nil {
 								return state.FailWithMessage(fmt.Sprintf("%d:%d: %s", indexerToken.Line, indexerToken.Column, err.Error()))
 							}
@@ -1117,9 +1116,9 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					case *MShellString:
 						floatVal, err := strconv.ParseFloat(strings.TrimSpace(obj.(*MShellString).Content), 64)
 						if err != nil {
-							stack.Push(&Maybe{ obj: nil })
+							stack.Push(&Maybe{obj: nil})
 						} else {
-							stack.Push(&Maybe{ obj: &MShellFloat{floatVal} })
+							stack.Push(&Maybe{obj: &MShellFloat{floatVal}})
 						}
 						// I don't believe checking for literal is required, because it should have been parsed as a float to start with?
 					case *MShellInt:
@@ -1139,9 +1138,9 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					case *MShellString:
 						intVal, err := strconv.Atoi(strings.TrimSpace(obj.(*MShellString).Content))
 						if err != nil {
-							stack.Push(&Maybe{ obj: nil })
+							stack.Push(&Maybe{obj: nil})
 						} else {
-							stack.Push(&Maybe{ obj: &MShellInt{intVal} })
+							stack.Push(&Maybe{obj: &MShellInt{intVal}})
 						}
 						// I don't believe checking for literal is required, because it should have been parsed as a float to start with?
 					case *MShellInt:
@@ -1173,11 +1172,11 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					// TODO: Don't make a new lexer object each time.
 					parsedTime, err := ParseDateTime(dateStr)
 					if err != nil {
-						stack.Push(&Maybe{ obj: nil })
+						stack.Push(&Maybe{obj: nil})
 						// return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing date time '%s': %s\n", t.Line, t.Column, dateStr, err.Error()))
 					} else {
 						dt := MShellDateTime{Time: parsedTime, OriginalString: dateStr}
-						stack.Push(&Maybe{ obj: &dt })
+						stack.Push(&Maybe{obj: &dt})
 					}
 				} else if t.Lexeme == "files" || t.Lexeme == "dirs" {
 					// Dump all the files in the current directory to the stack. No sub-directories.
@@ -1186,7 +1185,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error reading current directory: %s\n", t.Line, t.Column, err.Error()))
 					}
 
-					newList := 	NewList(0)
+					newList := NewList(0)
 					if t.Lexeme == "files" {
 						for _, file := range files {
 							if !file.IsDir() {
@@ -1473,7 +1472,6 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'trim' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
-
 					str, err := obj1.CastString()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot trim a %s.\n", t.Line, t.Column, obj1.TypeName()))
@@ -1609,7 +1607,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 
 					newTime := time.Unix(int64(intVal.Value), 0).UTC()
 
-					stack.Push(&MShellDateTime{Time: newTime, OriginalString:  newTime.Format("2006-01-02T15:04") })
+					stack.Push(&MShellDateTime{Time: newTime, OriginalString: newTime.Format("2006-01-02T15:04")})
 				} else if t.Lexeme == "writeFile" || t.Lexeme == "appendFile" {
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
@@ -1775,9 +1773,9 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					var fileInfo os.FileInfo
 					fileInfo, err = os.Stat(path)
 					if err != nil {
-						stack.Push(&Maybe{ obj: nil })
+						stack.Push(&Maybe{obj: nil})
 					} else {
-						stack.Push(&Maybe{ obj: &MShellInt{int(fileInfo.Size())} })
+						stack.Push(&Maybe{obj: &MShellInt{int(fileInfo.Size())}})
 					}
 				} else if t.Lexeme == "lsDir" {
 					obj1, err := stack.Pop()
@@ -1805,7 +1803,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 				} else if t.Lexeme == "runtime" {
 					// Place the name of the current OS runtime on the stack
 					stack.Push(&MShellString{runtime.GOOS})
-				} else if t.Lexeme == "sort" ||  t.Lexeme == "sortV" {
+				} else if t.Lexeme == "sort" || t.Lexeme == "sortV" {
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'sort' operation on an empty stack.\n", t.Line, t.Column))
@@ -1887,14 +1885,14 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						// sb.WriteString(fmt.Sprintf("%d:%d: Key '%s' not found in dictionary.\n", t.Line, t.Column, keyStr))
 						// sb.WriteString("Available keys:\n")
 						// for k := range dict.Items {
-							// // TODO: Escape
-							// sb.WriteString(fmt.Sprintf("  - '%s'\n", k))
+						// // TODO: Escape
+						// sb.WriteString(fmt.Sprintf("  - '%s'\n", k))
 						// }
 						// return state.FailWithMessage(sb.String())
-						stack.Push(&Maybe{ obj: nil })
+						stack.Push(&Maybe{obj: nil})
 					} else {
-						maybe := Maybe{ obj: value }
-						stack.Push( &maybe )
+						maybe := Maybe{obj: value}
+						stack.Push(&maybe)
 					}
 				} else if t.Lexeme == "getDef" {
 					// Get a value from string key for a dictionary.
@@ -2398,7 +2396,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 								return result
 							}
 							if len(*stack) != preStackLen {
-								return state.FailWithMessage(fmt.Sprintf("%d:%d: The function in 'map' did not return a single value, found %d values.\n", t.Line, t.Column, len(*stack) - preStackLen))
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: The function in 'map' did not return a single value, found %d values.\n", t.Line, t.Column, len(*stack)-preStackLen))
 							}
 							mapResult, _ := stack.Pop()
 							stack.Push(&Maybe{obj: mapResult}) // Wrap the result back in a Maybe
@@ -2445,8 +2443,8 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 							return result
 						}
 
-						if len(*stack) != preStackLen + 1 {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: The function in 'map2' did not return a single value, found %d values.\n", t.Line, t.Column, len(*stack) - preStackLen))
+						if len(*stack) != preStackLen+1 {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: The function in 'map2' did not return a single value, found %d values.\n", t.Line, t.Column, len(*stack)-preStackLen))
 						}
 
 						mapResult, _ := stack.Pop()
@@ -2459,7 +2457,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 
 					if maybeObj, ok := obj.(*Maybe); ok {
-						stack.Push(&MShellBool{ maybeObj.IsNone() })
+						stack.Push(&MShellBool{maybeObj.IsNone()})
 					} else {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot check if a %s is None.\n", t.Line, t.Column, obj.TypeName()))
 					}
@@ -2497,7 +2495,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					} else {
 						// Add the days to the date
 						daysToAdd := obj1.FloatNumeric()
-						newTime := dt.Time.Add(time.Duration(daysToAdd * float64(24 * time.Hour)))
+						newTime := dt.Time.Add(time.Duration(daysToAdd * float64(24*time.Hour)))
 						newDateTime := &MShellDateTime{Time: newTime, OriginalString: ""}
 						stack.Push(newDateTime)
 					}
@@ -2694,7 +2692,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 							return result
 						}
 						if len(*stack) != preStackLen {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: The function in 'bind' did not return a single value, found %d values.\n", t.Line, t.Column, len(*stack) - preStackLen))
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: The function in 'bind' did not return a single value, found %d values.\n", t.Line, t.Column, len(*stack)-preStackLen))
 						}
 						mapResult, _ := stack.Pop()
 
@@ -2840,7 +2838,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					}
 
 					if runtime.GOOS == "windows" {
-						stack.Push(&MShellString{ StripVolumePrefix(asStr) })
+						stack.Push(&MShellString{StripVolumePrefix(asStr)})
 					} else {
 						stack.Push(&MShellString{asStr})
 					}
@@ -2852,11 +2850,11 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 
 					if listObj, ok := obj.(*MShellList); ok {
 						if len(listObj.Items) == 0 {
-							stack.Push(&Maybe {obj: nil}) // No items to pop
+							stack.Push(&Maybe{obj: nil}) // No items to pop
 						} else {
 							item := listObj.Items[len(listObj.Items)-1]
 							listObj.Items = listObj.Items[:len(listObj.Items)-1]
-							stack.Push(&Maybe{ obj: item }) // Push the popped item
+							stack.Push(&Maybe{obj: item}) // Push the popped item
 						}
 					} else {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot pop from a %s.\n", t.Line, t.Column, obj.TypeName()))
@@ -2892,10 +2890,10 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					cmpStack := MShellStack{}
 
 					for width := 1; width < n; width = 2 * width {
-						for i := 0; i < n; i = i + 2 * width {
-							iLeftStart := i // Inclusive left start
-							iRightStart := min(i + width, n) // Inclusive right start, exclusive left end
-							iEnd := min(i + 2 * width, n) // Exclusive End
+						for i := 0; i < n; i = i + 2*width {
+							iLeftStart := i                // Inclusive left start
+							iRightStart := min(i+width, n) // Inclusive right start, exclusive left end
+							iEnd := min(i+2*width, n)      // Exclusive End
 
 							leftIndex := iLeftStart
 							rightIndex := iRightStart
@@ -3616,7 +3614,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 				case *MShellList:
 					switch obj2.(type) {
 					case *MShellList:
-						newList := NewList(len(obj2.(*MShellList).Items)+len(obj1.(*MShellList).Items))
+						newList := NewList(len(obj2.(*MShellList).Items) + len(obj1.(*MShellList).Items))
 						copy(newList.Items, obj2.(*MShellList).Items)
 						copy(newList.Items[len(obj2.(*MShellList).Items):], obj1.(*MShellList).Items)
 						stack.Push(newList)
@@ -3942,7 +3940,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 				}
 
 				// Strip off the leading '$' and trailing '!' for the environment variable name
-				varName := t.Lexeme[1:len(t.Lexeme) - 1]
+				varName := t.Lexeme[1 : len(t.Lexeme)-1]
 
 				varValue, err := obj.CastString()
 				if err != nil {
@@ -3960,7 +3958,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 				}
 			} else if t.Type == ENVCHECK {
 				// Strip off the leading '$' and trailing '!' for the environment variable name
-				varName := t.Lexeme[1:len(t.Lexeme) - 1]
+				varName := t.Lexeme[1 : len(t.Lexeme)-1]
 				_, found := os.LookupEnv(varName)
 				stack.Push(&MShellBool{found})
 			} else if t.Type == ENVRETREIVE { // Token Type
@@ -4021,7 +4019,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 					StandardInput:  nil,
 					StandardOutput: nil,
 					Variables:      context.Variables,
-					Pbm: 		context.Pbm,
+					Pbm:            context.Pbm,
 				}
 
 				if quotation.StdinBehavior != STDIN_NONE {
@@ -4077,7 +4075,6 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 						return state.FailWithMessage(errorMessage.String())
 					}
 
-
 					// Assert that we never get into state in which we have a breakNum > 0 and continue == true
 					if result.BreakNum > 0 && result.Continue {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot have both break and continue in the same loop.\n", t.Line, t.Column))
@@ -4105,8 +4102,8 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 				// // If we are breaking out of an inner loop to an outer loop (breakDiff - 1 > 0), then we need to return and go up the call stack.
 				// // Else just continue on with tokens after the loop.
 				// if breakDiff-1 > 0 {
-					// fmt.Fprintf(os.Stderr, "Breaking out of loop %d, loop depth %d\n", breakDiff-1, state.LoopDepth)
-					// return EvalResult{true, breakDiff - 1, 0, false}
+				// fmt.Fprintf(os.Stderr, "Breaking out of loop %d, loop depth %d\n", breakDiff-1, state.LoopDepth)
+				// return EvalResult{true, breakDiff - 1, 0, false}
 				// }
 			} else if t.Type == BREAK { // Token Type
 				return EvalResult{true, false, 1, 0, false}
@@ -4398,7 +4395,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 				}
 				stack.Push(&MShellFloat{floatVal})
 			} else if t.Type == PATH { // Token Type
-				stack.Push(&MShellPath { t.Lexeme[1:len(t.Lexeme)-1] })
+				stack.Push(&MShellPath{t.Lexeme[1 : len(t.Lexeme)-1]})
 			} else if t.Type == DATETIME { // Token Type
 				year, _ := strconv.Atoi(t.Lexeme[0:4])
 				month, _ := strconv.Atoi(t.Lexeme[5:7])
@@ -4458,7 +4455,7 @@ return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", ind
 				}
 
 				stack.Push(&MShellBool{!doesEqual})
-			}  else {
+			} else {
 				return state.FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' ('%s') yet.\n", t.Line, t.Column, t.Type, t.Lexeme))
 			}
 		default:
@@ -4493,7 +4490,7 @@ func (state *EvalState) EvaluateFormatString(lexeme string, context ExecuteConte
 	formatStrEndIndex := -1
 
 	lexer := NewLexer("", nil)
-	parser := MShellParser{ lexer: lexer }
+	parser := MShellParser{lexer: lexer}
 
 	for index < len(allRunes)-1 {
 		c := allRunes[index]
@@ -4531,7 +4528,7 @@ func (state *EvalState) EvaluateFormatString(lexeme string, context ExecuteConte
 		} else if mode == FORMATMODEFORMAT {
 			if c == '}' {
 				formatStrEndIndex = index - 1
-				formatStr := string(allRunes[formatStrStartIndex+1:formatStrEndIndex])
+				formatStr := string(allRunes[formatStrStartIndex+1 : formatStrEndIndex])
 
 				// Evaluate the format string
 				lexer.resetInput(formatStr)
@@ -4577,7 +4574,6 @@ func (state *EvalState) EvaluateFormatString(lexeme string, context ExecuteConte
 	return &MShellString{b.String()}, nil
 }
 
-
 type Executable interface {
 	Execute(state *EvalState, context ExecuteContext, stack *MShellStack) (EvalResult, int, string, string)
 	GetStandardInputFile() string
@@ -4594,7 +4590,7 @@ func (quotation *MShellQuotation) Execute(state *EvalState, context ExecuteConte
 		StandardInput:  nil,
 		StandardOutput: nil,
 		Variables:      quotation.Variables,
-		Pbm: 		context.Pbm,
+		Pbm:            context.Pbm,
 	}
 
 	if quotation.StdinBehavior != STDIN_NONE {
@@ -4856,8 +4852,8 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 		}
 		cmd.Stderr = file
 		defer file.Close()
-	// } else if context.Stand != nil {
-	// cmd.Stderr = context.StandardError  // TBD: Implement this
+		// } else if context.Stand != nil {
+		// cmd.Stderr = context.StandardError  // TBD: Implement this
 	} else {
 		if list.RunInBackground {
 			cmd.Stderr = nil
@@ -4961,7 +4957,7 @@ func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContex
 			StandardInput:  nil,
 			StandardOutput: nil,
 			Variables:      context.Variables,
-			Pbm:           context.Pbm,
+			Pbm:            context.Pbm,
 		}
 
 		if i == 0 {
@@ -5205,13 +5201,14 @@ func ParseJsonObjToMshell(jsonObj interface{}) MShellObject {
 // NOT to start with '\' or '/'.
 //
 // Examples (on Windows):
-//   "C:\\foo\\bar"                         -> "foo\\bar"
-//   "C:relative\\path"                     -> "relative\\path"
-//   "\\\\server\\share\\dir\\file"         -> "dir\\file"
-//   "\\\\?\\C:\\path\\to\\file"            -> "path\\to\\file"
-//   "\\\\?\\UNC\\server\\share\\dir"       -> "dir"
-//   "\\\\?\\Volume{GUID}\\Windows\\Temp"   -> "Windows\\Temp"
-//   "\\\\.\\COM1"                          -> ""  (device path, no remainder)
+//
+//	"C:\\foo\\bar"                         -> "foo\\bar"
+//	"C:relative\\path"                     -> "relative\\path"
+//	"\\\\server\\share\\dir\\file"         -> "dir\\file"
+//	"\\\\?\\C:\\path\\to\\file"            -> "path\\to\\file"
+//	"\\\\?\\UNC\\server\\share\\dir"       -> "dir"
+//	"\\\\?\\Volume{GUID}\\Windows\\Temp"   -> "Windows\\Temp"
+//	"\\\\.\\COM1"                          -> ""  (device path, no remainder)
 func StripVolumePrefix(p string) string {
 	if runtime.GOOS != "windows" {
 		return p
@@ -5316,12 +5313,10 @@ func VersionSortCmp(s1 string, s2 string) int {
 }
 
 type LinkHeader struct {
-	Uri string
-	Rel string
+	Uri    string
+	Rel    string
 	Params map[string]string
 }
-
-
 
 func EatLinkHeaderWhitespace(linkHeader string, i int) int {
 	for i < len(linkHeader) {
@@ -5334,13 +5329,11 @@ func EatLinkHeaderWhitespace(linkHeader string, i int) int {
 	return i
 }
 
-
 // https://datatracker.ietf.org/doc/html/rfc8288
 
 // Link       = #link-value
 // link-value = "<" URI-Reference ">" *( OWS ";" OWS link-param )
 // link-param = token BWS [ "=" BWS ( token / quoted-string ) ]
-
 
 // https://datatracker.ietf.org/doc/html/rfc7230
 
