@@ -1,0 +1,3 @@
+"cat" "." 5 leftPad wl
+"cat" "ab" 8 leftPad wl
+"kittens" "." 3 leftPad wl

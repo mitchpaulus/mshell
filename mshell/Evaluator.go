@@ -1563,6 +1563,58 @@ MainLoop:
 					} else if t.Lexeme == "startsWith" {
 						stack.Push(&MShellBool{strings.HasPrefix(str2, str1)})
 					}
+				} else if t.Lexeme == "leftPad" {
+					obj1, obj2, obj3, err := stack.Pop3(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					totalLen, ok := obj1.(*MShellInt)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot leftPad with a %s as the total length.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					padStr, err := obj2.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot leftPad with a %s as the pad string.\n", t.Line, t.Column, obj2.TypeName()))
+					}
+
+					if padStr == "" {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot leftPad with an empty pad string.\n", t.Line, t.Column))
+					}
+
+					inputStr, err := obj3.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot leftPad a %s.\n", t.Line, t.Column, obj3.TypeName()))
+					}
+
+					if totalLen.Value < 0 {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot leftPad to a negative total length (%d).\n", t.Line, t.Column, totalLen.Value))
+					}
+
+					if len(inputStr) >= totalLen.Value {
+						stack.Push(&MShellString{inputStr})
+					} else {
+						needed := totalLen.Value - len(inputStr)
+						padLen := len(padStr)
+
+						repeatCount := needed / padLen
+						remainder := needed % padLen
+
+						var builder strings.Builder
+						builder.Grow(totalLen.Value)
+
+						for i := 0; i < repeatCount; i++ {
+							builder.WriteString(padStr)
+						}
+
+						if remainder > 0 {
+							builder.WriteString(padStr[:remainder])
+						}
+
+						builder.WriteString(inputStr)
+						stack.Push(&MShellString{builder.String()})
+					}
 				} else if t.Lexeme == "isWeekend" || t.Lexeme == "isWeekday" || t.Lexeme == "dow" {
 					obj1, err := stack.Pop()
 					if err != nil {
