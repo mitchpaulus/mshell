@@ -6,24 +6,123 @@ scope: source.msh
 
 contexts:
   main:
-    - match: '"'
-      push: double_quoted_string
+    - include: comments
+    - include: strings
+    - include: numbers
+    - include: keywords
+    - include: booleans
+    - include: types
+    - include: stdout_controls
+    - include: variables
+    - include: operators
+    - include: punctuation
 
-    - match: "'"
-      push: single_quoted_string
-
+  comments:
     - match: '#.*$'
-      scope: comment.line.msh
+      scope: comment.line.number-sign.msh
 
-    - match: '\b(def|end)\b'
+  keywords:
+    - match: '\\b(def|end|if|iff|loop|read|str|break|continue)\\b'
       scope: keyword.control.msh
+    - match: '\\b(and|or|not)\\b'
+      scope: keyword.operator.word.msh
+    - match: '\\bsoe\\b'
+      scope: keyword.other.msh
+
+  booleans:
+    - match: '\\b(true|false)\\b'
+      scope: constant.language.boolean.msh
+
+  types:
+    - match: '\\b(int|float|bool)\\b'
+      scope: storage.type.msh
+
+  stdout_controls:
+    - match: '\\b(oc|os|o)\\b'
+      scope: support.function.stdout.msh
+
+  numbers:
+    - match: '\\b0[xX][0-9A-Fa-f]+\\b'
+      scope: constant.numeric.integer.hex.msh
+    - match: '\\b\\d+\\.\\d*(?:[eE][+-]?\\d+)?\\b'
+      scope: constant.numeric.float.msh
+    - match: '\\b\\d+(?:[eE][+-]?\\d+)?\\b'
+      scope: constant.numeric.integer.msh
+
+  variables:
+    - match: '\\$[A-Za-z_][A-Za-z0-9_]*!'
+      scope: variable.other.environment.write.msh
+    - match: '\\$[A-Za-z_][A-Za-z0-9_]*'
+      scope: variable.other.environment.read.msh
+    - match: '\\$[0-9]+'
+      scope: variable.parameter.positional.msh
+    - match: '@[-A-Za-z_][-A-Za-z0-9_]*'
+      scope: variable.other.readwrite.msh
+    - match: '\\b[-A-Za-z_][-A-Za-z0-9_]*!'
+      scope: variable.other.assignment.msh
+
+  operators:
+    - match: '!=|<=|>=|>>|--'
+      scope: keyword.operator.msh
+    - match: "(?:\\+|-|=|\\*|&|\\||,|:|;|!|\\?|~|\\\\)"
+      scope: keyword.operator.msh
+
+  punctuation:
+    - match: '[\\[\\](){}]'
+      scope: punctuation.section.msh
+
+  strings:
+    - match: '\\$"'
+      scope: punctuation.definition.string.begin.msh
+      push: format_string
+    - match: '"'
+      scope: punctuation.definition.string.begin.msh
+      push: double_quoted_string
+    - match: "'"
+      scope: punctuation.definition.string.begin.msh
+      push: single_quoted_string
+    - match: '`'
+      scope: punctuation.definition.string.begin.msh
+      push: backtick_string
 
   double_quoted_string:
     - meta_scope: string.quoted.double.msh
+    - match: '\\(?:e|n|r|t|"|\\)'
+      scope: constant.character.escape.msh
+    - match: '\\.'
+      scope: invalid.illegal.escape.msh
     - match: '"'
+      scope: punctuation.definition.string.end.msh
       pop: true
 
   single_quoted_string:
     - meta_scope: string.quoted.single.msh
     - match: "'"
+      scope: punctuation.definition.string.end.msh
+      pop: true
+
+  format_string:
+    - meta_scope: string.quoted.double.interpolated.msh
+    - match: '\\(?:e|n|r|t|"|\\|\{)'
+      scope: constant.character.escape.msh
+    - match: '\\.'
+      scope: invalid.illegal.escape.msh
+    - match: '\\{'
+      scope: punctuation.section.interpolation.begin.msh
+      push: interpolation
+    - match: '"'
+      scope: punctuation.definition.string.end.msh
+      pop: true
+
+  interpolation:
+    - meta_scope: meta.interpolation.msh
+    - match: '\\}'
+      scope: punctuation.section.interpolation.end.msh
+      pop: true
+    - include: main
+
+  backtick_string:
+    - meta_scope: string.quoted.other.backtick.msh
+    - match: '`'
+      scope: punctuation.definition.string.end.msh
       pop: true
