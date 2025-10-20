@@ -1299,9 +1299,24 @@ MainLoop:
 					}
 					tmpfile.Close()
 					stack.Push(&MShellString{tmpfile.Name()})
-				} else if t.Lexeme == "date" {
+				} else if t.Lexeme == "now" {
 					// Drop current local date time onto the stack
-					stack.Push(&MShellDateTime{Time: time.Now(), OriginalString: t.Lexeme})
+					now := time.Now()
+					stack.Push(&MShellDateTime{Time: now, OriginalString: now.Format(time.RFC3339)})
+				} else if t.Lexeme == "date" {
+					dateTimeObj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'day' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					dateTime, ok := dateTimeObj.(*MShellDateTime)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot get the date component of a %s.\n", t.Line, t.Column, dateTimeObj.TypeName()))
+					}
+
+					datePortion := time.Date(dateTime.Time.Year(), dateTime.Time.Month(), dateTime.Time.Day(), 0, 0, 0, 0, dateTime.Time.Location())
+					// Original string is ISO 8601 format
+					stack.Push(&MShellDateTime { Time: datePortion, OriginalString: datePortion.Format(time.RFC3339) })
 				} else if t.Lexeme == "day" {
 					dateTimeObj, err := stack.Pop()
 					if err != nil {

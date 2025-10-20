@@ -243,7 +243,8 @@ Dates can be subtracted from each other, and the result is a float number of day
 ## Date Functions
 
 - `toDt`: Convert string to date/time `(str -- Maybe[date])`
-- `date`: Push current local date/time onto the stack `( -- date)`
+- `now`: Push current local date/time onto the stack `( -- date)`
+- `date`: Drop the time portion from a datetime `(date -- date)`
 - `year`: Get year from date `(date -- int)`
 - `month`: Get month from date (1-12) `(date -- int)`
 - `day`: Get day from date (1-31) `(date -- int)`
