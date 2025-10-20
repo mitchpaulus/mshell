@@ -23,3 +23,12 @@ All test cases are in `tests`.
 
 - cd to `tests/` and run `./test.sh`.
 - cd to `mshell/` and run `go test`.
+
+## Documentation
+
+You build the documentation using:
+
+```
+cd doc
+msh build.msh
+```

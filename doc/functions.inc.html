@@ -211,7 +211,8 @@
     </thead>
     <tbody>
         <tr> <td><code>toDt</code></td> <td>Parse a string into a date/time (<code><span class="sig-type sig-type-maybe">Maybe</span></code> result).</td> <td><code>(<span class="sig-type sig-type-str">str</span> -- <span class="sig-type sig-type-maybe">Maybe</span>[<span class="sig-type sig-type-date">date</span>])</code></td> </tr>
-        <tr> <td><code>date</code></td> <td>Push the current local date/time.</td> <td><code>(-- <span class="sig-type sig-type-date">date</span>)</code></td> </tr>
+        <tr> <td><code>now</code></td> <td>Push the current local date/time.</td> <td><code>(-- <span class="sig-type sig-type-date">date</span>)</code></td> </tr>
+        <tr> <td><code>date</code></td> <td>Drop the time portion from a datetime.</td> <td><code>(<span class="sig-type sig-type-date">date</span> -- <span class="sig-type sig-type-date">date</span>)</code></td> </tr>
         <tr> <td><code>year</code></td> <td>Get the year component.</td> <td><code>(<span class="sig-type sig-type-date">date</span> -- <span class="sig-type sig-type-int">int</span>)</code></td> </tr>
         <tr> <td><code>month</code></td> <td>Get the month (1-12).</td> <td><code>(<span class="sig-type sig-type-date">date</span> -- <span class="sig-type sig-type-int">int</span>)</code></td> </tr>
         <tr> <td><code>day</code></td> <td>Get the day of the month (1-31).</td> <td><code>(<span class="sig-type sig-type-date">date</span> -- <span class="sig-type sig-type-int">int</span>)</code></td> </tr>
