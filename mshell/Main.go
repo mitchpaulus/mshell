@@ -1878,6 +1878,8 @@ func cleanupTempFiles() {
 // This function pushes characters to the terminal and to the backing command.
 func (state *TermState) PushChars(chars []rune) {
 	// Push at the correct index
+	// TODO: Figure out why I need this.
+	state.index = min(state.index, len(state.currentCommand))
 	state.currentCommand = append(state.currentCommand[:state.index], append(chars, state.currentCommand[state.index:]...)...)
 	state.index += len(chars)
 
