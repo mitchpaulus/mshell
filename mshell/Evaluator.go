@@ -3294,6 +3294,31 @@ MainLoop:
 						// Something else went wrong (permissions, I/O error, etc.)
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error checking file existence for '%s': %s\n", t.Line, t.Column, pathStr, err.Error()))
 					}
+				} else if t.Lexeme == "floatCmp" {
+					// Implement compare function for floats
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					// Both objects should be floats
+					float1, ok := obj1.(*MShellFloat)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second parameter in 'floatCmp' is expected to be a float, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
+					}
+					float2, ok := obj2.(*MShellFloat)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The first parameter in 'floatCmp' is expected to be a float, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
+					}
+
+					// Compare the floats
+					if float1.Value < float2.Value {
+						stack.Push(&MShellInt{Value: -1})
+					} else if float1.Value > float2.Value {
+						stack.Push(&MShellInt{Value: 1})
+					} else {
+						stack.Push(&MShellInt{Value: 0})
+					}
 				} else { // last new function
 					// If we aren't in a list context, throw an error.
 					// Nearly always this is unintended.

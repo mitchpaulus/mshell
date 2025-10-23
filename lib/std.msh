@@ -2,6 +2,15 @@
 
 # type numeric int | float
 
+def 2each (T T (T -- b) -- b b)
+    dup # o1 o2 q1 q2
+    -rot # o1 q2 o2 q1
+    x # o1 q2 r2
+    -rot # r2 o1 q2
+    x # r2 r1
+    swap # r1 r2
+end
+
 def each ([T] (T --) --)
     over len each-len! # Get total length
     0 each-idx! # index
