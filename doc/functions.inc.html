@@ -1,8 +1,8 @@
 <h1 id="functions-built-ins">Built-ins</h1>
 
-<table>
+<table class="function-table">
     <thead>
-        <tr> <th>Name</th> <th style="max-width: 45em">Description</th> <th>Signature</th> </tr>
+        <tr> <th>Name</th> <th>Description</th> <th>Signature</th> </tr>
     </thead>
     <tbody>
         <tr> <td><code>.s</code></td> <td>Print the stack at the current location.</td> <td><code>(--)</code></td> </tr>
@@ -44,7 +44,6 @@
         <tr> <td><code>parseJson</code></td> <td>Parse JSON input (path or string) into mshell objects.</td> <td><code>(<span class="sig-type sig-type-path">path</span>|<span class="sig-type sig-type-str">str</span> -- <span class="sig-type sig-type-list">list</span>|<span class="sig-type sig-type-dict">dict</span>|<span class="sig-type sig-type-numeric">numeric</span>|<span class="sig-type sig-type-str">str</span>|<span class="sig-type sig-type-bool">bool</span>)</code></td> </tr>
         <tr> <td><code>seq</code></td> <td>Generate a list of integers starting from 0 (exclusive end).</td> <td><code>(<span class="sig-type sig-type-int">int</span> -- [<span class="sig-type sig-type-int">int</span>])</code></td> </tr>
         <tr> <td><code>binPaths</code></td> <td>List every known executable and its resolved path.</td> <td><code>(-- [[<span class="sig-type sig-type-str">str</span>]])</code></td> </tr>
-        <tr> <td><code>versionSortCmp</code></td> <td>Comparison function for version-aware sorting.</td> <td><code>(<span class="sig-type sig-type-str">str</span> <span class="sig-type sig-type-str">str</span> -- <span class="sig-type sig-type-int">int</span>)</code></td> </tr>
         <tr> <td><code>urlEncode</code></td> <td>URL encode a string or dictionary of parameters.</td> <td><code>(<span class="sig-type sig-type-str">str</span>|<span class="sig-type sig-type-dict">dict</span> -- <span class="sig-type sig-type-str">str</span>)</code></td> </tr>
         <tr> <td><code>type</code></td> <td>Return the type name of the top stack item.</td> <td><code>(a -- <span class="sig-type sig-type-str">str</span>)</code></td> </tr>
         <tr> <td> <code>sleep</code> </td> <td> Sleep a float number of seconds. </td> <td> <code>(<span class="sig-type sig-type-numeric">numeric</span> -- )</code> </td> </tr>
@@ -54,9 +53,9 @@
 
 <h1 id="functions-file-directory">File and Directory</h1>
 
-<table>
+<table class="function-table">
     <thead>
-        <tr> <th>Name</th> <th style="max-width: 45em">Description</th> <th>Signature</th> </tr>
+        <tr> <th>Name</th> <th >Description</th> <th>Signature</th> </tr>
     </thead>
     <tbody>
         <tr> <td><code>toPath</code></td> <td>Convert a string to a path.</td> <td><code>(<span class="sig-type sig-type-str">str</span> -- <span class="sig-type sig-type-path">path</span>)</code></td> </tr>
@@ -92,9 +91,9 @@
 
 <h1 id="functions-math">Math</h1>
 
-<table>
+<table class="function-table">
     <thead>
-        <tr> <th>Name</th> <th style="max-width: 45em">Description</th> <th>Signature</th> </tr>
+        <tr> <th>Name</th> <th>Description</th> <th>Signature</th> </tr>
     </thead>
     <tbody>
         <tr> <td><code>abs</code></td> <td>Absolute value.</td> <td><code>(<span class="sig-type sig-type-numeric">numeric</span> -- <span class="sig-type sig-type-numeric">numeric</span>)</code></td> </tr>
@@ -112,9 +111,9 @@
 
 <h1 id="functions-strings">Strings</h1>
 
-<table>
+<table class="function-table">
     <thead>
-        <tr> <th>Name</th> <th style="max-width: 45em">Description</th> <th>Signature</th> </tr>
+        <tr> <th>Name</th> <th>Description</th> <th>Signature</th> </tr>
     </thead>
     <tbody>
         <tr> <td><code>str</code></td> <td>Convert a value to its string representation.</td> <td><code>(a -- <span class="sig-type sig-type-str">str</span>)</code></td> </tr>
@@ -146,15 +145,16 @@
 
 <h1 id="functions-lists">Lists</h1>
 
-<table>
+<table class="function-table">
     <thead>
-        <tr> <th>Name</th> <th style="max-width: 45em">Description</th> <th>Signature</th> </tr>
+        <tr> <th>Name</th> <th>Description</th> <th>Signature</th> </tr>
     </thead>
     <tbody>
         <tr> <td><code>append</code></td> <td>Append an item to a list.</td> <td><code>([a] a -- [a])</code></td> </tr>
         <tr> <td><code>map</code></td> <td>Map a quotation over a list.</td> <td><code>([a] (a -- b) -- [b])</code></td> </tr>
         <tr> <td><code>each</code></td> <td>Execute a quotation for each element.</td> <td><code>([a] (a -- ) -- )</code></td> </tr>
         <tr> <td><code>eachWhile</code></td> <td>Iterate until a quotation leaves <code>false</code> on the stack.</td> <td><code>([a] (a -- <span class="sig-type sig-type-bool">bool</span>) -- )</code></td> </tr>
+        <tr> <td><code>2each</code></td> <td>Apply a quotation to the top two stack values individually.</td> <td><code>(a a (a -- c) -- c c)</code></td> </tr>
         <tr> <td><code>del</code></td> <td>Delete an element from a list.</td> <td><code>(<span class="sig-type sig-type-list">list</span> index -- <span class="sig-type sig-type-list">list</span>)</code>, <code>(index <span class="sig-type sig-type-list">list</span> -- <span class="sig-type sig-type-list">list</span>)</code></td> </tr>
         <tr> <td><code>extend</code></td> <td>Extend a list with the contents of another list in place.</td> <td><code>(<span class="sig-type sig-type-list">list</span> <span class="sig-type sig-type-list">list</span> -- <span class="sig-type sig-type-list">list</span>)</code></td> </tr>
         <tr> <td><code>insert</code></td> <td>Insert an element into a list at an index.</td> <td><code>(<span class="sig-type sig-type-list">list</span> element index -- <span class="sig-type sig-type-list">list</span>)</code></td> </tr>
@@ -166,8 +166,6 @@
         <tr> <td><code>any</code></td> <td>Return true if any element satisfies the predicate.</td> <td><code>([a] (a -- <span class="sig-type sig-type-bool">bool</span>) -- <span class="sig-type sig-type-bool">bool</span>)</code></td> </tr>
         <tr> <td><code>all</code></td> <td>Return true if all elements satisfy the predicate.</td> <td><code>([a] (a -- <span class="sig-type sig-type-bool">bool</span>) -- <span class="sig-type sig-type-bool">bool</span>)</code></td> </tr>
         <tr> <td><code>skip</code></td> <td>Skip the first <code>n</code> elements.</td> <td><code>(<span class="sig-type sig-type-list">list</span> <span class="sig-type sig-type-int">int</span> -- <span class="sig-type sig-type-list">list</span>)</code></td> </tr>
-        <tr> <td><code>sort</code></td> <td>Sort a list by string conversion using <code>sort.Strings</code>.</td> <td><code>(<span class="sig-type sig-type-list">list</span> -- <span class="sig-type sig-type-list">list</span>)</code></td> </tr>
-        <tr> <td><code>sortV</code></td> <td>Version-sort a list (like <code>sort -V</code>).</td> <td><code>(<span class="sig-type sig-type-list">list</span> -- <span class="sig-type sig-type-list">list</span>)</code></td> </tr>
         <tr> <td><code>uniq</code></td> <td>Remove duplicate elements.</td> <td><code>([a] -- [a])</code></td> </tr>
         <tr> <td><code>zip</code></td> <td>Zip two lists using a combining quotation. Result length matches the shorter input.</td> <td><code>([a] [b] (a b -- c) -- [c])</code></td> </tr>
         <tr> <td><code>concat</code></td> <td>Flatten a list of lists one level.</td> <td><code>([[a]] -- [a])</code></td> </tr>
@@ -179,16 +177,31 @@
         <tr> <td><code>listToDict</code></td> <td>Transform a list into a dictionary using key and value selectors.</td> <td><code>([a] (a -- b) (a -- c) -- {b: c})</code></td> </tr>
         <tr> <td><code>take</code></td> <td>Return the first <code>n</code> elements of a list.</td> <td><code>([a] <span class="sig-type sig-type-int">int</span> -- [a])</code></td> </tr>
         <tr> <td><code>pop</code></td> <td>Pop the final element off a list. Returns <code>none</code> when the list is empty and leaves the (possibly shortened) list on the stack.</td> <td><code>([a] -- [a] <span class="sig-type sig-type-maybe">Maybe</span>[a])</code></td> </tr>
-        <tr> <td><code>sortByCmp</code></td> <td>Sort a list using a custom comparison quotation that returns -1, 0, or 1.</td> <td><code>([a] (a a -- <span class="sig-type sig-type-int">int</span>) -- [a])</code></td> </tr>
+    </tbody>
+</table>
+
+
+<h1 id="functions-sorting">Sorting</h1>
+
+<table class="function-table">
+    <thead>
+        <tr> <th>Name</th> <th>Description</th> <th>Signature</th> </tr>
+    </thead>
+    <tbody>
+        <tr> <td><code>sort</code></td> <td>Sort a list by string conversion using <code>sort.Strings</code>.</td> <td><code>(<span class="sig-type sig-type-list">list</span> -- <span class="sig-type sig-type-list">list</span>)</code></td> </tr>
+        <tr> <td><code>sortV</code></td> <td>Version-sort a list (like <code>sort -V</code>).</td> <td><code>(<span class="sig-type sig-type-list">list</span> -- <span class="sig-type sig-type-list">list</span>)</code></td> </tr>
+        <tr> <td><code>sortByCmp</code></td> <td>Sort a list using a comparison quotation that returns -1, 0, or 1.</td> <td><code>([a] (a a -- <span class="sig-type sig-type-int">int</span>) -- [a])</code></td> </tr>
+        <tr> <td><code>versionSortCmp</code></td> <td>Comparison function for version-aware sorting (also known as natural sort). Useful with <code>sortByCmp</code>.</td> <td><code>(<span class="sig-type sig-type-str">str</span> <span class="sig-type sig-type-str">str</span> -- <span class="sig-type sig-type-int">int</span>)</code></td> </tr>
+        <tr> <td><code>floatCmp</code></td> <td>Compare two floats and return -1, 0, or 1; useful with <code>sortByCmp</code>.</td> <td><code>(<span class="sig-type sig-type-float">float</span> <span class="sig-type sig-type-float">float</span> -- <span class="sig-type sig-type-int">int</span>)</code></td> </tr>
     </tbody>
 </table>
 
 
 <h1 id="functions-dictionaries">Dictionaries</h1>
 
-<table>
+<table class="function-table">
     <thead>
-        <tr> <th>Name</th> <th style="max-width: 45em">Description</th> <th>Signature</th> </tr>
+        <tr> <th>Name</th> <th>Description</th> <th>Signature</th> </tr>
     </thead>
     <tbody>
         <tr> <td><code>get</code></td> <td>Get a value by key. Returns <code>none</code> when missing.</td> <td><code>(<span class="sig-type sig-type-dict">dict</span> <span class="sig-type sig-type-str">str</span> -- <span class="sig-type sig-type-maybe">Maybe</span>[a])</code></td> </tr>
@@ -205,9 +218,9 @@
 
 <h1 id="functions-dates">Dates</h1>
 
-<table>
+<table class="function-table">
     <thead>
-        <tr> <th>Name</th> <th style="max-width: 45em">Description</th> <th>Signature</th> </tr>
+        <tr> <th>Name</th> <th>Description</th> <th>Signature</th> </tr>
     </thead>
     <tbody>
         <tr> <td><code>toDt</code></td> <td>Parse a string into a date/time (<code><span class="sig-type sig-type-maybe">Maybe</span></code> result).</td> <td><code>(<span class="sig-type sig-type-str">str</span> -- <span class="sig-type sig-type-maybe">Maybe</span>[<span class="sig-type sig-type-date">date</span>])</code></td> </tr>
@@ -235,9 +248,9 @@
 
 <p>All regular expression functions use the <a href="https://pkg.go.dev/regexp/syntax" target="_blank" rel="noopener noreferrer">Go regular expression syntax</a>. See <a href="https://pkg.go.dev/regexp#Regexp.Expand" target="_blank" rel="noopener noreferrer">Regexp.Expand</a> for replacement details.</p>
 
-<table>
+<table class="function-table">
     <thead>
-        <tr> <th>Name</th> <th style="max-width: 45em">Description</th> <th>Signature</th> </tr>
+        <tr> <th>Name</th> <th>Description</th> <th>Signature</th> </tr>
     </thead>
     <tbody>
         <tr> <td><code>reMatch</code></td> <td>Test whether a string matches a regular expression.</td> <td><code>(<span class="sig-type sig-type-str">str</span> re -- <span class="sig-type sig-type-bool">bool</span>)</code></td> </tr>
@@ -250,9 +263,9 @@
 
 <h1 id="functions-paths">Paths</h1>
 
-<table>
+<table class="function-table">
     <thead>
-        <tr> <th>Name</th> <th style="max-width: 45em">Description</th> <th>Signature</th> </tr>
+        <tr> <th>Name</th> <th>Description</th> <th>Signature</th> </tr>
     </thead>
     <tbody>
         <tr> <td><code>dirname</code></td> <td>Return the directory portion of a path.</td> <td><code>(<span class="sig-type sig-type-path">path</span> -- <span class="sig-type sig-type-path">path</span>)</code></td> </tr>
@@ -265,9 +278,9 @@
 
 <h1 id="functions-shell">Shell Utilities</h1>
 
-<table>
+<table class="function-table">
     <thead>
-        <tr> <th>Name</th> <th style="max-width: 45em">Description</th> <th>Signature</th> </tr>
+        <tr> <th>Name</th> <th>Description</th> <th>Signature</th> </tr>
     </thead>
     <tbody>
         <tr> <td><code>mkdir</code></td> <td>Create a directory.</td> <td><code>(<span class="sig-type sig-type-str">str</span> -- )</code></td> </tr>
@@ -278,9 +291,9 @@
 
 <h1 id="functions-maybe">Maybe</h1>
 
-<table>
+<table class="function-table">
     <thead>
-        <tr> <th>Name</th> <th style="max-width: 45em">Description</th> <th>Signature</th> </tr>
+        <tr> <th>Name</th> <th>Description</th> <th>Signature</th> </tr>
     </thead>
     <tbody>
         <tr> <td><code>isNone</code></td> <td>Check whether a <code><span class="sig-type sig-type-maybe">Maybe</span></code> value is <code>none</code>.</td> <td><code>(<span class="sig-type sig-type-maybe">Maybe</span>[a] -- <span class="sig-type sig-type-bool">bool</span>)</code></td> </tr>
@@ -297,9 +310,9 @@
 
 <h1 id="functions-html">HTML</h1>
 
-<table>
+<table class="function-table">
     <thead>
-        <tr> <th>Name</th> <th style="max-width: 45em">Description</th> <th>Signature</th> </tr>
+        <tr> <th>Name</th> <th>Description</th> <th>Signature</th> </tr>
     </thead>
     <tbody>
         <tr> <td><code>parseHtml</code></td> <td>Parse HTML from a string or file into node dictionaries with <code>tag</code>, <code>attr</code>, <code>children</code>, and <code>text</code>.</td> <td><code>(<span class="sig-type sig-type-str">str</span>|<span class="sig-type sig-type-path">path</span> -- <span class="sig-type sig-type-dict">dict</span>)</code></td> </tr>
@@ -311,9 +324,9 @@
 
 <h1 id="functions-http">HTTP Requests</h1>
 
-<table>
+<table class="function-table">
     <thead>
-        <tr> <th>Name</th> <th style="max-width: 45em">Description</th> <th>Signature</th> </tr>
+        <tr> <th>Name</th> <th>Description</th> <th>Signature</th> </tr>
     </thead>
     <tbody>
         <tr> <td><code>httpGet</code></td>
