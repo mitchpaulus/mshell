@@ -154,7 +154,7 @@
         <tr> <td><code>map</code></td> <td>Map a quotation over a list.</td> <td><code>([a] (a -- b) -- [b])</code></td> </tr>
         <tr> <td><code>each</code></td> <td>Execute a quotation for each element.</td> <td><code>([a] (a -- ) -- )</code></td> </tr>
         <tr> <td><code>eachWhile</code></td> <td>Iterate until a quotation leaves <code>false</code> on the stack.</td> <td><code>([a] (a -- <span class="sig-type sig-type-bool">bool</span>) -- )</code></td> </tr>
-        <tr> <td><code>2each</code></td> <td>Apply a quotation to the top two stack values individually.</td> <td><code>(a b (a -- c) -- c c)</code></td> </tr>
+        <tr> <td><code>2each</code></td> <td>Apply a quotation to the top two stack values individually.</td> <td><code>(a a (a -- c) -- c c)</code></td> </tr>
         <tr> <td><code>del</code></td> <td>Delete an element from a list.</td> <td><code>(<span class="sig-type sig-type-list">list</span> index -- <span class="sig-type sig-type-list">list</span>)</code>, <code>(index <span class="sig-type sig-type-list">list</span> -- <span class="sig-type sig-type-list">list</span>)</code></td> </tr>
         <tr> <td><code>extend</code></td> <td>Extend a list with the contents of another list in place.</td> <td><code>(<span class="sig-type sig-type-list">list</span> <span class="sig-type sig-type-list">list</span> -- <span class="sig-type sig-type-list">list</span>)</code></td> </tr>
         <tr> <td><code>insert</code></td> <td>Insert an element into a list at an index.</td> <td><code>(<span class="sig-type sig-type-list">list</span> element index -- <span class="sig-type sig-type-list">list</span>)</code></td> </tr>
