@@ -2,6 +2,9 @@
 [3 1 2 0] (<= (-1) (1) iff) sortByCmp str wl
 [] (> (-1) (1) iff) sortByCmp str wl
 
+# Test sorting floats with floatCmp
+[3.14 2.71 2.71828 10.0 9.99] (floatCmp) sortByCmp str wl
+
 # Test multiple levels of sorting
 [
     [1 6]

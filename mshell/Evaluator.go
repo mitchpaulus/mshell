@@ -3312,9 +3312,9 @@ MainLoop:
 					}
 
 					// Compare the floats
-					if float1.Value < float2.Value {
+					if float2.Value < float1.Value {
 						stack.Push(&MShellInt{Value: -1})
-					} else if float1.Value > float2.Value {
+					} else if float2.Value > float1.Value {
 						stack.Push(&MShellInt{Value: 1})
 					} else {
 						stack.Push(&MShellInt{Value: 0})
