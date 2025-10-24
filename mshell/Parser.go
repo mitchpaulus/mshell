@@ -264,6 +264,17 @@ type MShellParser struct {
 	curr  Token
 }
 
+func NewMShellParser(lexer *Lexer) *MShellParser {
+	parser := &MShellParser{lexer: lexer}
+	parser.NextToken()
+	return parser
+}
+
+func (parser *MShellParser) ResetInput(input string) {
+	parser.lexer.resetInput(input)
+	parser.NextToken()
+}
+
 func (parser *MShellParser) NextToken() {
 	parser.curr = parser.lexer.scanToken()
 }
@@ -566,7 +577,6 @@ func (t TypeBool) String() string {
 }
 
 type TypeList struct {
-
 }
 
 type TypeHomogeneousList struct {
@@ -576,7 +586,7 @@ type TypeHomogeneousList struct {
 }
 
 type TypeHeterogenousList struct {
-	ListTypes       []MShellType
+	ListTypes      []MShellType
 	StdoutBehavior StdoutBehavior
 }
 

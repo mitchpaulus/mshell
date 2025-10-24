@@ -1,3 +1,8 @@
+def mydef (--)
+    newvar!
+    @newvar
+end
+
 swap
 dup
 a!b
@@ -7,3 +12,8 @@ a!b
 hello!
 
 @hello
+
+def mydef (--)
+    hello!
+    @hello
+end
