@@ -33,6 +33,7 @@ type lspServer struct {
 	shutdown  bool
 	builtins  map[string]*builtinInfo
 	lexer     *Lexer
+	parser    *MShellParser
 	varNames  map[string]struct{}
 	candsBuf  []string
 }
@@ -74,13 +75,26 @@ type jsonrpcMessage struct {
 type responseMessage struct {
 	JSONRPC string           `json:"jsonrpc"`
 	ID      *json.RawMessage `json:"id,omitempty"`
-	Result  any      `json:"result,omitempty"`
+	Result  any              `json:"result,omitempty"`
 	Error   *responseError   `json:"error,omitempty"`
 }
 
 type responseError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
+}
+
+type lspRequestError struct {
+	code    int
+	message string
+}
+
+func (e *lspRequestError) Error() string {
+	return e.message
+}
+
+func newLSPError(code int, format string, args ...any) *lspRequestError {
+	return &lspRequestError{code: code, message: fmt.Sprintf(format, args...)}
 }
 
 // RunLSP executes the language server using stdio transport.
@@ -97,12 +111,16 @@ func RunLSP(args []string, in io.Reader, out io.Writer) error {
 		logLSP("no builtin hover entries configured")
 	}
 
+	lexer := NewLexer("", nil)
+	parser := NewMShellParser(lexer)
+
 	server := &lspServer{
 		in:        bufio.NewReader(in),
 		out:       bufio.NewWriter(out),
 		documents: make(map[protocol.DocumentURI]*lspDocument),
 		builtins:  builtins,
-		lexer:     NewLexer("", nil),
+		lexer:     lexer,
+		parser:    parser,
 		varNames:  make(map[string]struct{}),
 	}
 
@@ -186,6 +204,9 @@ func (s *lspServer) readMessage() ([]byte, error) {
 	return payload, nil
 }
 
+// handleMessage routes a single JSON-RPC request/notification to the appropriate handler.
+// The bool return indicates whether the server should exit after processing the message.
+// The error return propagates any failure that should terminate the LSP event loop.
 func (s *lspServer) handleMessage(msg *jsonrpcMessage) (bool, error) {
 	switch msg.Method {
 	case "initialize":
@@ -205,6 +226,7 @@ func (s *lspServer) handleMessage(msg *jsonrpcMessage) (bool, error) {
 				CompletionProvider: &protocol.CompletionOptions{
 					TriggerCharacters: []string{"@"},
 				},
+				RenameProvider: &protocol.RenameOptions{PrepareProvider: true},
 			},
 			ServerInfo: &protocol.ServerInfo{
 				Name:    "mshell",
@@ -285,6 +307,44 @@ func (s *lspServer) handleMessage(msg *jsonrpcMessage) (bool, error) {
 			return false, s.sendResult(msg.ID, []protocol.CompletionItem{})
 		}
 		return false, s.sendResult(msg.ID, items)
+	case "textDocument/prepareRename":
+		if msg.ID == nil {
+			logLSP("prepareRename request missing id")
+			return false, nil
+		}
+		var params protocol.PrepareRenameParams
+		if err := json.Unmarshal(msg.Params, &params); err != nil {
+			_ = s.sendErrorResponse(msg.ID, jsonrpcCodeInvalidParams, fmt.Sprintf("invalid prepareRename params: %v", err))
+			return false, nil
+		}
+		rng, err := s.prepareRename(params)
+		if err != nil {
+			var lspErr *lspRequestError
+			if errors.As(err, &lspErr) {
+				return false, s.sendErrorResponse(msg.ID, lspErr.code, lspErr.message)
+			}
+			return false, s.sendErrorResponse(msg.ID, jsonrpcCodeInternalError, err.Error())
+		}
+		return false, s.sendResult(msg.ID, rng)
+	case "textDocument/rename":
+		if msg.ID == nil {
+			logLSP("rename request missing id")
+			return false, nil
+		}
+		var params protocol.RenameParams
+		if err := json.Unmarshal(msg.Params, &params); err != nil {
+			_ = s.sendErrorResponse(msg.ID, jsonrpcCodeInvalidParams, fmt.Sprintf("invalid rename params: %v", err))
+			return false, nil
+		}
+		edit, err := s.rename(params)
+		if err != nil {
+			var lspErr *lspRequestError
+			if errors.As(err, &lspErr) {
+				return false, s.sendErrorResponse(msg.ID, lspErr.code, lspErr.message)
+			}
+			return false, s.sendErrorResponse(msg.ID, jsonrpcCodeInternalError, err.Error())
+		}
+		return false, s.sendResult(msg.ID, edit)
 	default:
 		if msg.ID != nil {
 			_ = s.sendErrorResponse(msg.ID, jsonrpcCodeMethodNotFound, fmt.Sprintf("method %q not found", msg.Method))
@@ -485,6 +545,223 @@ func (s *lspServer) completion(params protocol.CompletionParams) ([]protocol.Com
 	s.candsBuf = candidates
 
 	return items, true
+}
+
+type renameTarget struct {
+	token Token
+	scope []Token
+	name  string
+}
+
+func (s *lspServer) findRenameTarget(doc *lspDocument, position protocol.Position) (*renameTarget, error) {
+	parser := s.parser
+	parser.ResetInput(doc.Text)
+
+	file, err := parser.ParseFile()
+	if err != nil {
+		return nil, newLSPError(jsonrpcCodeInternalError, "failed to parse document: %v", err)
+	}
+
+	scopes := make([][]Token, 0, len(file.Definitions)+1)
+	scopes = append(scopes, collectScopeTokens(file.Items))
+	for _, def := range file.Definitions {
+		scopes = append(scopes, collectScopeTokens(def.Items))
+	}
+
+	line := int(position.Line)
+	character := int(position.Character)
+
+	for _, scope := range scopes {
+		for _, tok := range scope {
+			if tok.Type != VARSTORE && tok.Type != VARRETRIEVE {
+				continue
+			}
+			if !tokenContainsPosition(tok, line, character) {
+				continue
+			}
+			name := variableNameFromToken(tok)
+			if name == "" {
+				return nil, newLSPError(jsonrpcCodeInternalError, "failed to determine variable name at %d:%d", tok.Line, tok.Column)
+			}
+			return &renameTarget{token: tok, scope: scope, name: name}, nil
+		}
+	}
+
+	return nil, newLSPError(jsonrpcCodeInvalidParams, "rename is only supported on variables")
+}
+
+func (s *lspServer) prepareRename(params protocol.PrepareRenameParams) (*protocol.Range, error) {
+	doc, ok := s.documents[params.TextDocument.URI]
+	if !ok {
+		return nil, newLSPError(jsonrpcCodeInvalidParams, "document not found")
+	}
+
+	target, err := s.findRenameTarget(doc, params.Position)
+	if err != nil {
+		return nil, err
+	}
+
+	startChar := uint32(target.token.Column - 1)
+	runeLen := uint32(utf8.RuneCountInString(target.token.Lexeme))
+	if runeLen == 0 {
+		return nil, newLSPError(jsonrpcCodeInternalError, "empty variable token at %d:%d", target.token.Line, target.token.Column)
+	}
+
+	switch target.token.Type {
+	case VARRETRIEVE:
+		if runeLen <= 1 {
+			return nil, newLSPError(jsonrpcCodeInternalError, "invalid variable retrieve token at %d:%d", target.token.Line, target.token.Column)
+		}
+		startChar++
+		runeLen--
+	case VARSTORE:
+		if runeLen <= 1 {
+			return nil, newLSPError(jsonrpcCodeInternalError, "invalid variable store token at %d:%d", target.token.Line, target.token.Column)
+		}
+		runeLen--
+	}
+
+	endChar := startChar + runeLen
+	rng := &protocol.Range{
+		Start: protocol.Position{Line: uint32(target.token.Line - 1), Character: startChar},
+		End:   protocol.Position{Line: uint32(target.token.Line - 1), Character: endChar},
+	}
+	return rng, nil
+}
+
+func (s *lspServer) rename(params protocol.RenameParams) (*protocol.WorkspaceEdit, error) {
+	doc, ok := s.documents[params.TextDocument.URI]
+	if !ok {
+		return nil, newLSPError(jsonrpcCodeInvalidParams, "document not found")
+	}
+
+	if !validVariableName(params.NewName) {
+		return nil, newLSPError(jsonrpcCodeInvalidParams, "new name %q is not a valid variable identifier", params.NewName)
+	}
+
+	target, err := s.findRenameTarget(doc, params.Position)
+	if err != nil {
+		return nil, err
+	}
+
+	newName := params.NewName
+	edits := make([]protocol.TextEdit, 0, len(target.scope))
+	for _, tok := range target.scope {
+		if tok.Type != VARSTORE && tok.Type != VARRETRIEVE {
+			continue
+		}
+		if variableNameFromToken(tok) != target.name {
+			continue
+		}
+
+		newText, ok := replacementTextForToken(tok, newName)
+		if !ok {
+			return nil, newLSPError(jsonrpcCodeInternalError, "unable to build replacement for token at %d:%d", tok.Line, tok.Column)
+		}
+
+		startChar := uint32(tok.Column - 1)
+		endChar := startChar + uint32(utf8.RuneCountInString(tok.Lexeme))
+
+		edits = append(edits, protocol.TextEdit{
+			Range: protocol.Range{
+				Start: protocol.Position{Line: uint32(tok.Line - 1), Character: startChar},
+				End:   protocol.Position{Line: uint32(tok.Line - 1), Character: endChar},
+			},
+			NewText: newText,
+		})
+	}
+
+	if len(edits) == 0 {
+		return nil, newLSPError(jsonrpcCodeInternalError, "no occurrences found to rename")
+	}
+
+	edit := &protocol.WorkspaceEdit{
+		Changes: map[protocol.DocumentURI][]protocol.TextEdit{
+			params.TextDocument.URI: edits,
+		},
+	}
+
+	return edit, nil
+}
+
+func collectScopeTokens(items []MShellParseItem) []Token {
+	tokens := make([]Token, 0)
+	collectTokensFromItems(&tokens, items)
+	return tokens
+}
+
+func collectTokensFromItems(dst *[]Token, items []MShellParseItem) {
+	for _, item := range items {
+		switch v := item.(type) {
+		case Token:
+			*dst = append(*dst, v)
+		case *MShellParseList:
+			collectTokensFromItems(dst, v.Items)
+		case *MShellParseDict:
+			for _, kv := range v.Items {
+				collectTokensFromItems(dst, kv.Value)
+			}
+		case *MShellParseQuote:
+			collectTokensFromItems(dst, v.Items)
+		case *MShellIndexerList:
+			collectTokensFromItems(dst, v.Indexers)
+			// Note: we intentionally do not descend into MShellDefinition here. Definitions are
+			// parsed at the top level and their bodies are collected separately to preserve scope
+			// boundaries when computing rename targets.
+		}
+	}
+}
+
+func tokenContainsPosition(tok Token, line, character int) bool {
+	if tok.Line-1 != line {
+		return false
+	}
+	start := tok.Column - 1
+	length := utf8.RuneCountInString(tok.Lexeme)
+	end := start + length
+	return character >= start && character <= end
+}
+
+func variableNameFromToken(tok Token) string {
+	switch tok.Type {
+	case VARSTORE:
+		runes := []rune(tok.Lexeme)
+		if len(runes) == 0 {
+			return ""
+		}
+		return string(runes[:len(runes)-1])
+	case VARRETRIEVE:
+		runes := []rune(tok.Lexeme)
+		if len(runes) == 0 {
+			return ""
+		}
+		return string(runes[1:])
+	default:
+		return ""
+	}
+}
+
+func replacementTextForToken(tok Token, name string) (string, bool) {
+	switch tok.Type {
+	case VARSTORE:
+		return name + "!", true
+	case VARRETRIEVE:
+		return "@" + name, true
+	default:
+		return "", false
+	}
+}
+
+func validVariableName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, r := range name {
+		if !isAllowedLiteral(r) {
+			return false
+		}
+	}
+	return true
 }
 
 func completionPrefix(token Token, positionChar int) string {

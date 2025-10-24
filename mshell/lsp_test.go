@@ -360,6 +360,539 @@ func TestCompletionForVarRetrieveBareAt(t *testing.T) {
 	}
 }
 
+func TestPrepareRenameVariable(t *testing.T) {
+	doc := "foo!\n@foo\n"
+	uri := protocol.DocumentURI("file:///prepare-rename.msh")
+
+	clientReader, clientWriter := io.Pipe()
+	serverReader, serverWriter := io.Pipe()
+
+	var wg sync.WaitGroup
+	var runErr error
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		runErr = RunLSP([]string{"--stdio"}, clientReader, serverWriter)
+		serverWriter.Close()
+	}()
+
+	output := bufio.NewReader(serverReader)
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "initialize",
+		"params": map[string]any{
+			"capabilities": map[string]any{},
+		},
+	})
+
+	initResp := readLSPResponse(t, output)
+	if initResp.Error != nil {
+		t.Fatalf("initialize returned error: %+v", initResp.Error)
+	}
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "textDocument/didOpen",
+		"params": map[string]any{
+			"textDocument": map[string]any{
+				"uri":        uri,
+				"languageId": "mshell",
+				"version":    1,
+				"text":       doc,
+			},
+		},
+	})
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      2,
+		"method":  "textDocument/prepareRename",
+		"params": map[string]any{
+			"textDocument": map[string]any{"uri": uri},
+			"position":     map[string]any{"line": 1, "character": 1},
+		},
+	})
+
+	prepareResp := readLSPResponse(t, output)
+	if prepareResp.Error != nil {
+		t.Fatalf("prepareRename returned error: %+v", prepareResp.Error)
+	}
+
+	payload, err := json.Marshal(prepareResp.Result)
+	if err != nil {
+		t.Fatalf("failed to marshal prepareRename result: %v", err)
+	}
+
+	var rng protocol.Range
+	if err := json.Unmarshal(payload, &rng); err != nil {
+		t.Fatalf("failed to unmarshal prepareRename result: %v", err)
+	}
+
+	if rng.Start.Line != 1 || rng.Start.Character != 1 {
+		t.Fatalf("unexpected range start: %+v", rng.Start)
+	}
+	if rng.End.Line != 1 || rng.End.Character != 4 {
+		t.Fatalf("unexpected range end: %+v", rng.End)
+	}
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      3,
+		"method":  "shutdown",
+	})
+
+	shutdownResp := readLSPResponse(t, output)
+	if shutdownResp.Error != nil {
+		t.Fatalf("shutdown returned error: %+v", shutdownResp.Error)
+	}
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "exit",
+	})
+
+	clientWriter.Close()
+	wg.Wait()
+	if runErr != nil {
+		t.Fatalf("RunLSP returned error: %v", runErr)
+	}
+}
+
+func TestPrepareRenameVariableStore(t *testing.T) {
+	doc := "foo!\n@foo\n"
+	uri := protocol.DocumentURI("file:///prepare-rename-store.msh")
+
+	clientReader, clientWriter := io.Pipe()
+	serverReader, serverWriter := io.Pipe()
+
+	var wg sync.WaitGroup
+	var runErr error
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		runErr = RunLSP([]string{"--stdio"}, clientReader, serverWriter)
+		serverWriter.Close()
+	}()
+
+	output := bufio.NewReader(serverReader)
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "initialize",
+		"params": map[string]any{
+			"capabilities": map[string]any{},
+		},
+	})
+
+	initResp := readLSPResponse(t, output)
+	if initResp.Error != nil {
+		t.Fatalf("initialize returned error: %+v", initResp.Error)
+	}
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "textDocument/didOpen",
+		"params": map[string]any{
+			"textDocument": map[string]any{
+				"uri":        uri,
+				"languageId": "mshell",
+				"version":    1,
+				"text":       doc,
+			},
+		},
+	})
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      2,
+		"method":  "textDocument/prepareRename",
+		"params": map[string]any{
+			"textDocument": map[string]any{"uri": uri},
+			"position":     map[string]any{"line": 0, "character": 1},
+		},
+	})
+
+	prepareResp := readLSPResponse(t, output)
+	if prepareResp.Error != nil {
+		t.Fatalf("prepareRename returned error: %+v", prepareResp.Error)
+	}
+
+	payload, err := json.Marshal(prepareResp.Result)
+	if err != nil {
+		t.Fatalf("failed to marshal prepareRename result: %v", err)
+	}
+
+	var rng protocol.Range
+	if err := json.Unmarshal(payload, &rng); err != nil {
+		t.Fatalf("failed to unmarshal prepareRename result: %v", err)
+	}
+
+	if rng.Start.Line != 0 || rng.Start.Character != 0 {
+		t.Fatalf("unexpected range start: %+v", rng.Start)
+	}
+	if rng.End.Line != 0 || rng.End.Character != 3 {
+		t.Fatalf("unexpected range end: %+v", rng.End)
+	}
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      3,
+		"method":  "shutdown",
+	})
+
+	shutdownResp := readLSPResponse(t, output)
+	if shutdownResp.Error != nil {
+		t.Fatalf("shutdown returned error: %+v", shutdownResp.Error)
+	}
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "exit",
+	})
+
+	clientWriter.Close()
+	wg.Wait()
+	if runErr != nil {
+		t.Fatalf("RunLSP returned error: %v", runErr)
+	}
+}
+
+func TestPrepareRenameRejectsNonVariable(t *testing.T) {
+	doc := "dup\n"
+	uri := protocol.DocumentURI("file:///prepare-rename-invalid.msh")
+
+	clientReader, clientWriter := io.Pipe()
+	serverReader, serverWriter := io.Pipe()
+
+	var wg sync.WaitGroup
+	var runErr error
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		runErr = RunLSP([]string{"--stdio"}, clientReader, serverWriter)
+		serverWriter.Close()
+	}()
+
+	output := bufio.NewReader(serverReader)
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "initialize",
+		"params": map[string]any{
+			"capabilities": map[string]any{},
+		},
+	})
+
+	initResp := readLSPResponse(t, output)
+	if initResp.Error != nil {
+		t.Fatalf("initialize returned error: %+v", initResp.Error)
+	}
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "textDocument/didOpen",
+		"params": map[string]any{
+			"textDocument": map[string]any{
+				"uri":        uri,
+				"languageId": "mshell",
+				"version":    1,
+				"text":       doc,
+			},
+		},
+	})
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      2,
+		"method":  "textDocument/prepareRename",
+		"params": map[string]any{
+			"textDocument": map[string]any{"uri": uri},
+			"position":     map[string]any{"line": 0, "character": 1},
+		},
+	})
+
+	prepareResp := readLSPResponse(t, output)
+	if prepareResp.Error == nil {
+		t.Fatalf("expected prepareRename to return error")
+	}
+	if prepareResp.Error.Code != jsonrpcCodeInvalidParams {
+		t.Fatalf("unexpected error code: %+v", prepareResp.Error)
+	}
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      3,
+		"method":  "shutdown",
+	})
+
+	shutdownResp := readLSPResponse(t, output)
+	if shutdownResp.Error != nil {
+		t.Fatalf("shutdown returned error: %+v", shutdownResp.Error)
+	}
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "exit",
+	})
+
+	clientWriter.Close()
+	wg.Wait()
+	if runErr != nil {
+		t.Fatalf("RunLSP returned error: %v", runErr)
+	}
+}
+
+func TestRenameGlobalVariable(t *testing.T) {
+	doc := "foo!\n@foo\n"
+	uri := protocol.DocumentURI("file:///rename-global.msh")
+
+	clientReader, clientWriter := io.Pipe()
+	serverReader, serverWriter := io.Pipe()
+
+	var wg sync.WaitGroup
+	var runErr error
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		runErr = RunLSP([]string{"--stdio"}, clientReader, serverWriter)
+		serverWriter.Close()
+	}()
+
+	output := bufio.NewReader(serverReader)
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "initialize",
+		"params": map[string]any{
+			"capabilities": map[string]any{},
+		},
+	})
+
+	initResp := readLSPResponse(t, output)
+	if initResp.Error != nil {
+		t.Fatalf("initialize returned error: %+v", initResp.Error)
+	}
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "textDocument/didOpen",
+		"params": map[string]any{
+			"textDocument": map[string]any{
+				"uri":        uri,
+				"languageId": "mshell",
+				"version":    1,
+				"text":       doc,
+			},
+		},
+	})
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      2,
+		"method":  "textDocument/rename",
+		"params": map[string]any{
+			"textDocument": map[string]any{"uri": uri},
+			"position":     map[string]any{"line": 1, "character": 2},
+			"newName":      "bar",
+		},
+	})
+
+	renameResp := readLSPResponse(t, output)
+	if renameResp.Error != nil {
+		t.Fatalf("rename returned error: %+v", renameResp.Error)
+	}
+
+	payload, err := json.Marshal(renameResp.Result)
+	if err != nil {
+		t.Fatalf("failed to marshal rename result: %v", err)
+	}
+
+	var edit protocol.WorkspaceEdit
+	if err := json.Unmarshal(payload, &edit); err != nil {
+		t.Fatalf("failed to unmarshal rename result: %v", err)
+	}
+
+	edits, ok := edit.Changes[uri]
+	if !ok {
+		t.Fatalf("expected edits for %s, got %#v", uri, edit.Changes)
+	}
+	if len(edits) != 2 {
+		t.Fatalf("expected 2 edits, got %d", len(edits))
+	}
+
+	var seenStore, seenRetrieve bool
+	for _, e := range edits {
+		switch e.Range.Start.Line {
+		case 0:
+			if e.Range.Start.Character != 0 || e.Range.End.Character != 4 {
+				t.Fatalf("unexpected range for store edit: %+v", e.Range)
+			}
+			if e.NewText != "bar!" {
+				t.Fatalf("unexpected new text for store edit: %q", e.NewText)
+			}
+			seenStore = true
+		case 1:
+			if e.Range.Start.Character != 0 || e.Range.End.Character != 4 {
+				t.Fatalf("unexpected range for retrieve edit: %+v", e.Range)
+			}
+			if e.NewText != "@bar" {
+				t.Fatalf("unexpected new text for retrieve edit: %q", e.NewText)
+			}
+			seenRetrieve = true
+		default:
+			t.Fatalf("unexpected edit line %d", e.Range.Start.Line)
+		}
+	}
+
+	if !seenStore || !seenRetrieve {
+		t.Fatalf("missing expected edits: store=%v retrieve=%v", seenStore, seenRetrieve)
+	}
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      3,
+		"method":  "shutdown",
+	})
+
+	shutdownResp := readLSPResponse(t, output)
+	if shutdownResp.Error != nil {
+		t.Fatalf("shutdown returned error: %+v", shutdownResp.Error)
+	}
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "exit",
+	})
+
+	clientWriter.Close()
+	wg.Wait()
+	if runErr != nil {
+		t.Fatalf("RunLSP returned error: %v", runErr)
+	}
+}
+
+func TestRenameVariableInsideDefinition(t *testing.T) {
+	doc := "foo!\ndef sample ( -- )\n  foo!\n  @foo\nend\n@foo\n"
+	uri := protocol.DocumentURI("file:///rename-def.msh")
+
+	clientReader, clientWriter := io.Pipe()
+	serverReader, serverWriter := io.Pipe()
+
+	var wg sync.WaitGroup
+	var runErr error
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		runErr = RunLSP([]string{"--stdio"}, clientReader, serverWriter)
+		serverWriter.Close()
+	}()
+
+	output := bufio.NewReader(serverReader)
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "initialize",
+		"params": map[string]any{
+			"capabilities": map[string]any{},
+		},
+	})
+
+	initResp := readLSPResponse(t, output)
+	if initResp.Error != nil {
+		t.Fatalf("initialize returned error: %+v", initResp.Error)
+	}
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "textDocument/didOpen",
+		"params": map[string]any{
+			"textDocument": map[string]any{
+				"uri":        uri,
+				"languageId": "mshell",
+				"version":    1,
+				"text":       doc,
+			},
+		},
+	})
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      2,
+		"method":  "textDocument/rename",
+		"params": map[string]any{
+			"textDocument": map[string]any{"uri": uri},
+			"position":     map[string]any{"line": 3, "character": 4},
+			"newName":      "baz",
+		},
+	})
+
+	renameResp := readLSPResponse(t, output)
+	if renameResp.Error != nil {
+		t.Fatalf("rename returned error: %+v", renameResp.Error)
+	}
+
+	payload, err := json.Marshal(renameResp.Result)
+	if err != nil {
+		t.Fatalf("failed to marshal rename result: %v", err)
+	}
+
+	var edit protocol.WorkspaceEdit
+	if err := json.Unmarshal(payload, &edit); err != nil {
+		t.Fatalf("failed to unmarshal rename result: %v", err)
+	}
+
+	edits, ok := edit.Changes[uri]
+	if !ok {
+		t.Fatalf("expected edits for %s, got %#v", uri, edit.Changes)
+	}
+	if len(edits) != 2 {
+		t.Fatalf("expected 2 edits, got %d", len(edits))
+	}
+
+	for _, e := range edits {
+		if e.Range.Start.Line != 2 && e.Range.Start.Line != 3 {
+			t.Fatalf("unexpected edit line %d", e.Range.Start.Line)
+		}
+		if e.Range.Start.Character != 2 || e.Range.End.Character != 6 {
+			t.Fatalf("unexpected edit range: %+v", e.Range)
+		}
+		if e.Range.Start.Line == 2 && e.NewText != "baz!" {
+			t.Fatalf("unexpected new text for store edit: %q", e.NewText)
+		}
+		if e.Range.Start.Line == 3 && e.NewText != "@baz" {
+			t.Fatalf("unexpected new text for retrieve edit: %q", e.NewText)
+		}
+	}
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      3,
+		"method":  "shutdown",
+	})
+
+	shutdownResp := readLSPResponse(t, output)
+	if shutdownResp.Error != nil {
+		t.Fatalf("shutdown returned error: %+v", shutdownResp.Error)
+	}
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "exit",
+	})
+
+	clientWriter.Close()
+	wg.Wait()
+	if runErr != nil {
+		t.Fatalf("RunLSP returned error: %v", runErr)
+	}
+}
+
 func sendLSPMessage(t *testing.T, w io.Writer, payload any) {
 	t.Helper()
 	data, err := json.Marshal(payload)
