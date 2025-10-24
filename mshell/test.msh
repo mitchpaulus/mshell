@@ -3,3 +3,7 @@ dup
 a!b
 
 !hello
+
+hello!
+
+@hello

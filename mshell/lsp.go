@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"go.lsp.dev/protocol"
 )
@@ -30,6 +32,9 @@ type lspServer struct {
 	documents map[protocol.DocumentURI]*lspDocument
 	shutdown  bool
 	builtins  map[string]*builtinInfo
+	lexer     *Lexer
+	varNames  map[string]struct{}
+	candsBuf  []string
 }
 
 type lspDocument struct {
@@ -69,7 +74,7 @@ type jsonrpcMessage struct {
 type responseMessage struct {
 	JSONRPC string           `json:"jsonrpc"`
 	ID      *json.RawMessage `json:"id,omitempty"`
-	Result  interface{}      `json:"result,omitempty"`
+	Result  any      `json:"result,omitempty"`
 	Error   *responseError   `json:"error,omitempty"`
 }
 
@@ -97,6 +102,8 @@ func RunLSP(args []string, in io.Reader, out io.Writer) error {
 		out:       bufio.NewWriter(out),
 		documents: make(map[protocol.DocumentURI]*lspDocument),
 		builtins:  builtins,
+		lexer:     NewLexer("", nil),
+		varNames:  make(map[string]struct{}),
 	}
 
 	return server.run()
@@ -195,6 +202,9 @@ func (s *lspServer) handleMessage(msg *jsonrpcMessage) (bool, error) {
 			Capabilities: protocol.ServerCapabilities{
 				TextDocumentSync: protocol.TextDocumentSyncKindFull,
 				HoverProvider:    true,
+				CompletionProvider: &protocol.CompletionOptions{
+					TriggerCharacters: []string{"@"},
+				},
 			},
 			ServerInfo: &protocol.ServerInfo{
 				Name:    "mshell",
@@ -260,6 +270,21 @@ func (s *lspServer) handleMessage(msg *jsonrpcMessage) (bool, error) {
 			return false, s.sendResult(msg.ID, nil)
 		}
 		return false, s.sendResult(msg.ID, hover)
+	case "textDocument/completion":
+		if msg.ID == nil {
+			logLSP("completion request missing id")
+			return false, nil
+		}
+		var params protocol.CompletionParams
+		if err := json.Unmarshal(msg.Params, &params); err != nil {
+			_ = s.sendErrorResponse(msg.ID, jsonrpcCodeInvalidParams, fmt.Sprintf("invalid completion params: %v", err))
+			return false, nil
+		}
+		items, ok := s.completion(params)
+		if !ok {
+			return false, s.sendResult(msg.ID, []protocol.CompletionItem{})
+		}
+		return false, s.sendResult(msg.ID, items)
 	default:
 		if msg.ID != nil {
 			_ = s.sendErrorResponse(msg.ID, jsonrpcCodeMethodNotFound, fmt.Sprintf("method %q not found", msg.Method))
@@ -268,7 +293,7 @@ func (s *lspServer) handleMessage(msg *jsonrpcMessage) (bool, error) {
 	}
 }
 
-func (s *lspServer) sendResult(id *json.RawMessage, result interface{}) error {
+func (s *lspServer) sendResult(id *json.RawMessage, result any) error {
 	if id == nil {
 		return nil
 	}
@@ -314,7 +339,7 @@ func (s *lspServer) writeMessage(resp responseMessage) error {
 		return err
 	}
 
-	if _, err := s.out.WriteString(fmt.Sprintf("Content-Length: %d\r\n\r\n", len(payload))); err != nil {
+	if _, err := fmt.Fprintf(s.out, "Content-Length: %d\r\n\r\n", len(payload)); err != nil {
 		return err
 	}
 	if _, err := s.out.Write(payload); err != nil {
@@ -364,6 +389,119 @@ func (s *lspServer) hover(params protocol.HoverParams) (*protocol.Hover, bool) {
 	return hover, true
 }
 
+func (s *lspServer) completion(params protocol.CompletionParams) ([]protocol.CompletionItem, bool) {
+	doc, ok := s.documents[params.TextDocument.URI]
+	if !ok {
+		return nil, false
+	}
+
+	lexer := s.lexer
+	lexer.resetInput(doc.Text)
+	prevAllow := lexer.allowUnterminatedString
+	lexer.allowUnterminatedString = true
+	defer func() {
+		lexer.allowUnterminatedString = prevAllow
+		lexer.emitWhitespace = false
+		lexer.emitComments = false
+		lexer.resetInput("")
+	}()
+
+	clear(s.varNames)
+	positionLine := int(params.Position.Line)
+	positionChar := int(params.Position.Character)
+	var (
+		prefix        string
+		found         bool
+		retrieveToken Token
+	)
+
+	for {
+		tok := lexer.scanToken()
+		if tok.Type == EOF {
+			break
+		}
+
+		if tok.Type == VARSTORE {
+			if len(tok.Lexeme) > 1 {
+				name := tok.Lexeme[:len(tok.Lexeme)-1]
+				s.varNames[name] = struct{}{}
+			}
+			continue
+		}
+
+		if tok.Type != VARRETRIEVE {
+			continue
+		}
+
+		tokenLine := tok.Line - 1
+		if tokenLine != positionLine {
+			continue
+		}
+
+		startChar := tok.Column - 1
+		length := utf8.RuneCountInString(tok.Lexeme)
+		endChar := startChar + length
+		if positionChar < startChar || positionChar > endChar {
+			continue
+		}
+
+		prefix = completionPrefix(tok, positionChar)
+		retrieveToken = tok
+		found = true
+	}
+
+	if !found {
+		return []protocol.CompletionItem{}, true
+	}
+
+	candidates := s.candsBuf[:0]
+	for name := range s.varNames {
+		if strings.HasPrefix(name, prefix) {
+			candidates = append(candidates, name)
+		}
+	}
+
+	sort.Strings(candidates)
+	line := uint32(retrieveToken.Line - 1)
+	startChar := uint32(retrieveToken.Column - 1)
+	endChar := startChar + uint32(utf8.RuneCountInString(retrieveToken.Lexeme))
+	editRange := protocol.Range{
+		Start: protocol.Position{Line: line, Character: startChar},
+		End:   protocol.Position{Line: line, Character: endChar},
+	}
+	items := make([]protocol.CompletionItem, 0, len(candidates))
+	for _, name := range candidates {
+		label := "@" + name
+		items = append(items, protocol.CompletionItem{
+			Label: label,
+			Kind:  protocol.CompletionItemKindVariable,
+			TextEdit: &protocol.TextEdit{
+				Range:   editRange,
+				NewText: label,
+			},
+		})
+	}
+
+	s.candsBuf = candidates
+
+	return items, true
+}
+
+func completionPrefix(token Token, positionChar int) string {
+	startChar := token.Column - 1
+	offset := positionChar - startChar
+	if offset <= 1 {
+		return ""
+	}
+
+	runes := []rune(token.Lexeme)
+	if offset > len(runes) {
+		offset = len(runes)
+	}
+
+	return string(runes[1:offset])
+}
+
 func (d *lspDocument) wordAt(pos protocol.Position) (string, protocol.Range) {
 	lineIdx := int(pos.Line)
 	if lineIdx < 0 || lineIdx >= len(d.Lines) {
@@ -376,10 +514,8 @@ func (d *lspDocument) wordAt(pos protocol.Position) (string, protocol.Range) {
 		return "", protocol.Range{}
 	}
 
-	col := int(pos.Character)
-	if col < 0 {
-		col = 0
-	}
+	col := max(0, int(pos.Character))
+
 	if col > len(runes) {
 		return "", protocol.Range{}
 	}
