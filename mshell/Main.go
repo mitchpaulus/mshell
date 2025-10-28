@@ -2087,11 +2087,13 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			// If it is, replace last word with alias value.
 
 			i := state.index - 1
-			for {
-				if i < 0 || state.currentCommand[i] == ' ' || state.currentCommand[i] == '[' {
-					break
+			if len(state.currentCommand) > 0 {
+				for {
+					if i < 0 || state.currentCommand[i] == ' ' || state.currentCommand[i] == '[' {
+						break
+					}
+					i--
 				}
-				i--
 			}
 
 			lastWord := string(state.currentCommand[i+1 : state.index])
