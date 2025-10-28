@@ -204,6 +204,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `each`: Execute a quotation for each element in a list, `([a] (a -- ) -- )`
 - `eachWhile`: Execute a quotation for each element in a list, stopping when a false is left on the stack `([a] (a -- bool) -- )`
 - `2each`: Apply a quotation to the two values on the stack individually, returning results in the original order. `(a b (a -- c) -- c c)`
+- `2tuple`: Pack the top two stack values into a new two-element list, `(a b -- [a])`
 - `del`: Delete element from list, `(list index -- list)` or `(index list -- list)`
 - `extend`: Extends an existing list with items from another list. Difference between this and `+` is that it modifies the original list in-place. `(originalList toAddList -- list)`
 - `insert`: Insert element into list, `(list element index -- list)`
