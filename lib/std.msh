@@ -302,3 +302,7 @@ def listToDict ([a] (a -- str) (a -- b) -- c)
     each
     @d
 end
+
+def 2tuple (a b -- [a])
+    [] rot append swap append
+end
