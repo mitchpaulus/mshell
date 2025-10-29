@@ -55,22 +55,31 @@ simple
     | STDERRREDIRECT
     ;
 
-type : typeItem ('|' typeItem)* ;
+type : typeItem ('|' typeItem)* ':' identifier;
 
 typeItem
     : 'int'
     | 'float'
-    | 'string'
+    | 'str'
     | 'bool'
+    | 'binary'
+    | 'path'
     | typeList
     | typeQuote
+    | typeMaybe
     | genericType
+    | typeDict
     ;
 
 typeQuote : '(' type* -- type* ')' ;
-typeList : homogeneousList | heterogeneousList ;
-homogeneousList : '[' type  ']' ;
-heterogeneousList : '&' '[' type* ']' ;
+typeDict : '{' keyPair (',' keyPair )* '}' | '{' type '}'
+typeMaybe : 'Maybe[' type ']'
+
+keyPair : string ':' type
+        | '*" ':' type
+
+typeList : '[' type+  ']'  # If just one item assume all in homogeneous list. Otherwise, assume tuple of exact length.
+
 ```
 
 Key Types:
