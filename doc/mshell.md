@@ -122,7 +122,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `runtime`: Get the current OS runtime. This is the output of the GOOS environment variable. Common possible values are `linux`, `windows`, and `darwin`. `( -- str)`
 - `hostname`: Get the current OS hostname. On failure to get, puts 'unknown' on the stack. `( -- str)`
 - `parseCsv`: Parse a CSV file into a list of lists of strings. Input can be a path/literal file name, or the string contents itself. (`path|str -- [[str]])`
-- `parseJson`: Parse JSON from a string or file path into mshell objects. (`path|str -- list|dict|numeric|str|bool`)
+- `parseJson`: Parse JSON from a string, binary, or file path into mshell objects. (`path|str|binary -- list|dict|numeric|str|bool`)
 - `seq`: Generate a list of integers, starting from 0. Exclusive end to integer on stack. `2 seq` produces `[0 1]`. `(int -- [int])`
 - `binPaths`: Puts a list of lists with 2 items, first is the executable name, second is the full path to the executable. `(-- [[str]])`
 - `urlEncode`: URL-encode a string or dictionary of parameters. `(str|dict -- str)`

@@ -29,6 +29,7 @@ import (
 	"net/url"
 	_ "time/tzdata"
 	"unicode"
+	"unicode/utf8"
 )
 
 type MShellFunction struct {
@@ -1316,7 +1317,7 @@ MainLoop:
 
 					datePortion := time.Date(dateTime.Time.Year(), dateTime.Time.Month(), dateTime.Time.Day(), 0, 0, 0, 0, dateTime.Time.Location())
 					// Original string is ISO 8601 format
-					stack.Push(&MShellDateTime { Time: datePortion, OriginalString: datePortion.Format(time.RFC3339) })
+					stack.Push(&MShellDateTime{Time: datePortion, OriginalString: datePortion.Format(time.RFC3339)})
 				} else if t.Lexeme == "day" {
 					dateTimeObj, err := stack.Pop()
 					if err != nil {
@@ -2237,6 +2238,12 @@ MainLoop:
 					case *MShellString:
 						// Create a new JSON reader directly from the string contents
 						jsonData = []byte(obj1Typed.Content)
+					case MShellBinary:
+						binaryData := []byte(obj1Typed)
+						if !utf8.Valid(binaryData) {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing JSON: input is not valid UTF-8.\n", t.Line, t.Column))
+						}
+						jsonData = binaryData
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot parse a %s as JSON.\n", t.Line, t.Column, obj1.TypeName()))
 					}

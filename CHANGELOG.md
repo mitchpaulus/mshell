@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Breaking change: renamed the builtin that returns the current datetime from `date` to `now`; `date` now truncates a datetime to its date-only component.
+- `parseJson` now accepts binary input and decodes it as UTF-8 before parsing.
 
 ## 0.7.0 - 2025-10-03
 
