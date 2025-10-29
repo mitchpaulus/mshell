@@ -107,6 +107,7 @@ If you need to escape or use string interpolation, then use double quotes and <c
 <p>
 Because paths are fundamentally different than strings, many functions change their behavior on whether the input is a path or a string.
 For example, for a function like <code>parseJson</code>, if the input is a path, it will read the file at that path and parse the contents as JSON.
+If the input is binary data, it first decodes the bytes as UTF-8.
 Otherwise, it will parse the string as JSON directly.
 </p>
 
