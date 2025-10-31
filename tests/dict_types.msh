@@ -1,0 +1,53 @@
+def homogenousDict ( { int } -- { "a": str })
+    drop {"a": "hello"}
+end
+
+def nonHomogenousDict ( -- { "a": int, "b": str, "c": { "d": int }})
+    {
+        "a": 1,
+        "b" : "hello",
+        "c": {
+            "d": 2
+        }
+    }
+end
+
+def trailingComma (  -- { 'a': str, })
+    {
+        "a": "hello"
+    }
+end
+
+def wildcardDict ( -- { *: int })
+    {
+        "x": 1,
+        "y": 2,
+    }
+end
+
+def mixedDict ( -- { "a": int, *: str })
+    {
+        "a": 1,
+        "b": "hello",
+    }
+end
+
+def emptyDict ( -- {} )
+    {}
+end
+
+def nestedDictList ( -- [ { *: int } ])
+    [
+        {"value": 1}
+    ]
+end
+
+def trailingCommaWildcard ( -- { "a": int, *: str, })
+    {
+        "a": 1,
+        "b": "hello"
+    }
+end
+
+# Just here to make the stdout file easier, otherwise you have to deal with potentially a file with just a newline on edit or something.
+"END OF TEST" wl
