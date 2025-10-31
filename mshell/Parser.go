@@ -430,6 +430,175 @@ func (def *TypeDefinition) ToJson() string {
 	return fmt.Sprintf("{\"input\": %s, \"output\": %s}", TypeListToJson(def.InputTypes), TypeListToJson(def.OutputTypes))
 }
 
+// TypeDictionary {{{
+type TypeDictionary struct {
+	TypeMap      map[string]MShellType
+	WildCardType MShellType
+}
+
+func (dict *TypeDictionary) Bind(otherType MShellType) ([]BoundType, error) {
+	if dict == nil {
+		return []BoundType{}, errors.New("Cannot bind a nil dictionary type")
+	}
+
+	otherDict, ok := otherType.(*TypeDictionary)
+	if !ok || otherDict == nil {
+		return []BoundType{}, errors.New("Cannot bind a dictionary to a non-dictionary type")
+	}
+
+	bound := make([]BoundType, 0)
+	for key, expectedType := range dict.TypeMap {
+		actualType, exists := otherDict.TypeMap[key]
+		if !exists {
+			if otherDict.WildCardType != nil {
+				actualType = otherDict.WildCardType
+			} else {
+				return bound, fmt.Errorf("Missing key '%s' when binding dictionary type", key)
+			}
+		}
+		b, err := expectedType.Bind(actualType)
+		if err != nil {
+			return bound, err
+		}
+		bound = append(bound, b...)
+	}
+
+	if dict.WildCardType != nil {
+		if otherDict.WildCardType != nil {
+			b, err := dict.WildCardType.Bind(otherDict.WildCardType)
+			if err != nil {
+				return bound, err
+			}
+			bound = append(bound, b...)
+		}
+		for key, actualType := range otherDict.TypeMap {
+			if _, exists := dict.TypeMap[key]; exists {
+				continue
+			}
+			b, err := dict.WildCardType.Bind(actualType)
+			if err != nil {
+				return bound, err
+			}
+			bound = append(bound, b...)
+		}
+	} else {
+		if otherDict.WildCardType != nil {
+			return bound, errors.New("Cannot bind dictionary without wildcard to dictionary with wildcard type")
+		}
+		for key := range otherDict.TypeMap {
+			if _, exists := dict.TypeMap[key]; !exists {
+				return bound, fmt.Errorf("Unexpected key '%s' when binding dictionary type", key)
+			}
+		}
+	}
+
+	return bound, nil
+}
+
+func (dict *TypeDictionary) Replace(boundTypes []BoundType) MShellType {
+	if dict == nil {
+		return nil
+	}
+
+	newMap := make(map[string]MShellType, len(dict.TypeMap))
+	for key, value := range dict.TypeMap {
+		newMap[key] = value.Replace(boundTypes)
+	}
+
+	var newWildCard MShellType
+	if dict.WildCardType != nil {
+		newWildCard = dict.WildCardType.Replace(boundTypes)
+	}
+
+	return &TypeDictionary{
+		TypeMap:      newMap,
+		WildCardType: newWildCard,
+	}
+}
+
+func (dict *TypeDictionary) ToMshell() string {
+	if dict == nil {
+		return "{}"
+	}
+
+	keys := make([]string, 0, len(dict.TypeMap))
+	for key := range dict.TypeMap {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	parts := make([]string, 0, len(keys)+1)
+	for _, key := range keys {
+		parts = append(parts, fmt.Sprintf("%s: %s", key, dict.TypeMap[key].ToMshell()))
+	}
+	if dict.WildCardType != nil {
+		parts = append(parts, fmt.Sprintf("*: %s", dict.WildCardType.ToMshell()))
+	}
+
+	return fmt.Sprintf("{%s}", strings.Join(parts, ", "))
+}
+
+func (dict *TypeDictionary) ToJson() string {
+	if dict == nil {
+		return "{\"dict\": {}}"
+	}
+
+	keys := make([]string, 0, len(dict.TypeMap))
+	for key := range dict.TypeMap {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	entries := make([]string, 0, len(keys)+1)
+	for _, key := range keys {
+		entries = append(entries, fmt.Sprintf("\"%s\": %s", key, dict.TypeMap[key].ToJson()))
+	}
+	if dict.WildCardType != nil {
+		entries = append(entries, fmt.Sprintf("\"*\": %s", dict.WildCardType.ToJson()))
+	}
+
+	return fmt.Sprintf("{\"dict\": {%s}}", strings.Join(entries, ", "))
+}
+
+func (dict *TypeDictionary) Equals(other MShellType) bool {
+	if dict == nil {
+		return other == nil
+	}
+
+	otherDict, ok := other.(*TypeDictionary)
+	if !ok || otherDict == nil {
+		return false
+	}
+
+	if (dict.WildCardType == nil) != (otherDict.WildCardType == nil) {
+		return false
+	}
+	if dict.WildCardType != nil && !dict.WildCardType.Equals(otherDict.WildCardType) {
+		return false
+	}
+
+	if len(dict.TypeMap) != len(otherDict.TypeMap) {
+		return false
+	}
+
+	for key, expectedType := range dict.TypeMap {
+		actualType, exists := otherDict.TypeMap[key]
+		if !exists || !expectedType.Equals(actualType) {
+			return false
+		}
+	}
+	return true
+}
+
+func (dict *TypeDictionary) String() string {
+	if dict == nil {
+		return "{}"
+	}
+	return dict.ToMshell()
+}
+
+// }}}
+
 type TypeGeneric struct {
 	Name  string
 	Count int // -1 if the generic is variadic.
@@ -915,11 +1084,18 @@ forLoop:
 				return nil, err
 			}
 			types = append(types, typeQuote)
+		case LEFT_CURLY:
+			typeDict, err := parser.ParseTypeDictionary()
+			if err != nil {
+				return nil, err
+			}
+			types = append(types, typeDict)
 		case LITERAL:
 			// Parse generic
 			genericType := TypeGeneric{Name: parser.curr.Lexeme}
 			types = append(types, genericType)
 			parser.NextToken()
+
 		default:
 			break forLoop
 		}
@@ -1020,6 +1196,13 @@ func (parser *MShellParser) ParseTypeList() (*TypeHomogeneousList, error) {
 			return nil, err
 		}
 		listType = typeQuote
+	case LEFT_CURLY:
+		// Parse dictionary
+		typeDict, err := parser.ParseTypeDictionary()
+		if err != nil {
+			return nil, err
+		}
+		listType = typeDict
 	case LITERAL:
 		// Parse generic
 		genericType := TypeGeneric{Name: parser.curr.Lexeme}
@@ -1036,6 +1219,141 @@ func (parser *MShellParser) ParseTypeList() (*TypeHomogeneousList, error) {
 
 	typeList := TypeHomogeneousList{ListType: listType}
 	return &typeList, nil
+}
+
+func (parser *MShellParser) ParseTypeDictionary() (*TypeDictionary, error) {
+	startToken := parser.curr
+	err := parser.Match(parser.curr, LEFT_CURLY)
+	if err != nil {
+		return nil, err
+	}
+
+	dictType := &TypeDictionary{
+		TypeMap:      make(map[string]MShellType),
+		WildCardType: nil,
+	}
+
+	if parser.curr.Type == RIGHT_CURLY {
+		parser.NextToken()
+		return dictType, nil
+	}
+
+	isKeyValue := parser.curr.Type == STRING || parser.curr.Type == SINGLEQUOTESTRING || parser.curr.Type == ASTERISK
+
+	if isKeyValue {
+		for {
+			if parser.curr.Type == ASTERISK {
+				if dictType.WildCardType != nil {
+					return nil, fmt.Errorf("Duplicate wildcard dictionary type at line %d, column %d.", parser.curr.Line, parser.curr.Column)
+				}
+				parser.NextToken()
+				err = parser.MatchWithMessage(parser.curr, COLON, "Expected ':' after '*' in dictionary type definition.")
+				if err != nil {
+					return nil, err
+				}
+				valueType, err := parser.parseSingleType("dictionary wildcard value")
+				if err != nil {
+					return nil, err
+				}
+				dictType.WildCardType = valueType
+			} else if parser.curr.Type == STRING || parser.curr.Type == SINGLEQUOTESTRING {
+				key, keyToken, err := parser.parseTypeDictionaryKey()
+				if err != nil {
+					return nil, err
+				}
+
+				err = parser.MatchWithMessage(parser.curr, COLON, fmt.Sprintf("Expected ':' after dictionary key %s.", key))
+				if err != nil {
+					return nil, err
+				}
+
+				valueType, err := parser.parseSingleType(fmt.Sprintf("dictionary value for key %s", key))
+				if err != nil {
+					return nil, err
+				}
+
+				if _, exists := dictType.TypeMap[key]; exists {
+					return nil, fmt.Errorf("Duplicate dictionary key '%s' in type definition at line %d, column %d.", key, keyToken.Line, keyToken.Column)
+				}
+
+				dictType.TypeMap[key] = valueType
+			} else {
+				return nil, fmt.Errorf("Expected dictionary key or '*' in type definition at line %d, column %d.", parser.curr.Line, parser.curr.Column)
+			}
+
+			if parser.curr.Type == COMMA {
+				parser.NextToken()
+				if parser.curr.Type == RIGHT_CURLY {
+					break
+				}
+				continue
+			}
+
+			break
+		}
+	} else {
+		valueType, err := parser.parseSingleType("dictionary value")
+		if err != nil {
+			return nil, err
+		}
+		dictType.WildCardType = valueType
+	}
+
+	err = parser.Match(parser.curr, RIGHT_CURLY)
+	if err != nil {
+		return nil, err
+	}
+
+	// If no key/value pairs or wildcard were provided, and the dictionary was empty ({}),
+	// we already returned above. At this point, we either have specific keys, a wildcard, or both.
+	// Ensure that an entirely empty dictionary type (with no wildcard and no keys) is not allowed
+	// unless it was explicitly {}.
+	if len(dictType.TypeMap) == 0 && dictType.WildCardType == nil {
+		return nil, fmt.Errorf("Dictionary type starting at line %d, column %d must specify a value type.", startToken.Line, startToken.Column)
+	}
+
+	return dictType, nil
+}
+
+func (parser *MShellParser) parseTypeDictionaryKey() (string, Token, error) {
+	token := parser.curr
+	switch token.Type {
+	case STRING:
+		key, err := ParseRawString(token.Lexeme)
+		if err != nil {
+			return "", token, fmt.Errorf("Error parsing dictionary key at line %d, column %d: %s.", token.Line, token.Column, err.Error())
+		}
+		parser.NextToken()
+		return key, token, nil
+	case SINGLEQUOTESTRING:
+		lexeme := token.Lexeme
+		if len(lexeme) < 2 {
+			return "", token, fmt.Errorf("Invalid single quoted dictionary key at line %d, column %d.", token.Line, token.Column)
+		}
+		key := lexeme[1 : len(lexeme)-1]
+		parser.NextToken()
+		return key, token, nil
+	default:
+		return "", token, fmt.Errorf("Expected string key in dictionary type at line %d, column %d, found %s.", token.Line, token.Column, token.Type)
+	}
+}
+
+func (parser *MShellParser) parseSingleType(context string) (MShellType, error) {
+	startToken := parser.curr
+	types, err := parser.ParseTypeItems()
+	if err != nil {
+		return nil, err
+	}
+
+	if len(types) == 0 {
+		return nil, fmt.Errorf("Expected %s but found no type at line %d, column %d.", context, startToken.Line, startToken.Column)
+	}
+
+	if len(types) > 1 {
+		return nil, fmt.Errorf("Expected single %s but parsed %d types starting at line %d, column %d.", context, len(types), startToken.Line, startToken.Column)
+	}
+
+	return types[0], nil
 }
 
 func (parser *MShellParser) ParseDict() (*MShellParseDict, error) {
