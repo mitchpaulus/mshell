@@ -3300,7 +3300,7 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert a %s to a string for checking file existence.\n", t.Line, t.Column, obj.TypeName()))
 					}
 
-					_, err = os.Stat(pathStr)
+					_, err = os.Lstat(pathStr)
 					if err == nil {
 						stack.Push(&MShellBool{Value: true}) // File exists
 					} else if os.IsNotExist(err) {
