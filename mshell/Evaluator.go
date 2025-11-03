@@ -149,6 +149,20 @@ type ExecuteContext struct {
 	Pbm               IPathBinManager
 }
 
+func (context *ExecuteContext) CloneLessVariables() *ExecuteContext {
+	newContext := &ExecuteContext{
+		StandardInput:     context.StandardInput,
+		StandardOutput:    context.StandardOutput,
+		StandardError:     context.StandardError,
+		ShouldCloseInput:  context.ShouldCloseInput,
+		ShouldCloseOutput: context.ShouldCloseOutput,
+		Pbm: context.Pbm,
+	}
+
+	newContext.Variables = make(map[string]MShellObject)
+	return newContext
+}
+
 func (context *ExecuteContext) Close() {
 	if context.ShouldCloseInput {
 		if context.StandardInput != nil {
@@ -457,15 +471,9 @@ MainLoop:
 				for _, definition := range definitions {
 					if definition.Name == t.Lexeme {
 						// Evaluate the definition
-
-						var newContext ExecuteContext
-						newContext.Variables = make(map[string]MShellObject)
-						newContext.StandardInput = context.StandardInput
-						newContext.StandardOutput = context.StandardOutput
-						newContext.Pbm = context.Pbm
-
+						newContext := context.CloneLessVariables()
 						callStackItem := CallStackItem{MShellParseItem: t, Name: definition.Name, CallStackType: CALLSTACKDEF}
-						result := state.Evaluate(definition.Items, stack, newContext, definitions, callStackItem)
+						result := state.Evaluate(definition.Items, stack, *newContext, definitions, callStackItem)
 
 						if result.ShouldPassResultUpStack() {
 							return result
@@ -4225,11 +4233,10 @@ MainLoop:
 				}
 
 				quoteContext, err := quotation.BuildExecutionContext(&context)
-				defer quoteContext.Close()
-
 				if err != nil {
 					return state.FailWithMessage(err.Error())
 				}
+				defer quoteContext.Close()
 
 				result := state.Evaluate(quotation.Tokens, stack, (*quoteContext), definitions, CallStackItem{quotation, "quote", CALLSTACKQUOTE})
 
