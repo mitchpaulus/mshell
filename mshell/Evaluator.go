@@ -3334,6 +3334,8 @@ MainLoop:
 					} else {
 						stack.Push(&MShellInt{Value: 0})
 					}
+				} else if t.Lexeme == "nullDevice" {
+					stack.Push(&MShellPath{Path: nullDevice})
 				} else { // last new function
 					// If we aren't in a list context, throw an error.
 					// Nearly always this is unintended.

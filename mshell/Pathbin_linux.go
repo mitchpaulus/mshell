@@ -9,6 +9,8 @@ import (
 	"golang.org/x/term"
 )
 
+const nullDevice = "/dev/null"
+
 type PathBinManager struct {
 	currPath []string
 	binaryPaths map[string]string // Maps binary name to its full path

@@ -10,6 +10,8 @@ import (
 	"fmt"
 )
 
+const nullDevice = "NUL"
+
 type PathBinManager struct {
 	currPath []string
 	binaryPaths map[string]WinBinaryPath // Key here is uppercase binary name
