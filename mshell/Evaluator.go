@@ -5382,6 +5382,8 @@ func VersionSortCmp(s1 string, s2 string) int {
 		for i < len(s1) {
 			if s1[i] >= '0' && s1[i] <= '9' {
 				i++
+			} else {
+				break
 			}
 		}
 
@@ -5389,6 +5391,8 @@ func VersionSortCmp(s1 string, s2 string) int {
 		for j < len(s2) {
 			if s2[j] >= '0' && s2[j] <= '9' {
 				j++
+			} else {
+				break
 			}
 		}
 

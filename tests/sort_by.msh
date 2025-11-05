@@ -34,3 +34,4 @@ end
 -1 "1" "02" compareAndWrite
 1 "02" "2" compareAndWrite
 1 "10" "2" compareAndWrite
+1 "10a" "2a" compareAndWrite
