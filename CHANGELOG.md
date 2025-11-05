@@ -26,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `parseJson` now accepts binary input and decodes it as UTF-8 before parsing.
 - `fileExists` now uses golang [os.Lstat](https://pkg.go.dev/os#Lstat) instead of [os.Stat](https://pkg.go.dev/os#Stat), meaning if you have a broken symlink in Linux, `fileExists` will now return `true` instead of `false`.
 
+### Fixed
+
+- Fixed infinite loop in `versionSortCmp` when non-digit after digit.
+
 ## 0.7.0 - 2025-10-03
 
 ### Added
