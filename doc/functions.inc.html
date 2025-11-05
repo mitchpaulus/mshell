@@ -153,6 +153,8 @@
     <tbody>
         <tr> <td><code>append</code></td> <td>Append an item to a list.</td> <td><code>([a] a -- [a])</code></td> </tr>
         <tr> <td><code>map</code></td> <td>Map a quotation over a list.</td> <td><code>([a] (a -- b) -- [b])</code></td> </tr>
+        <tr> <td><code>enumerate</code></td> <td>Pair each element with its zero-based index. Definition is <code>dup len seq (2tuple) zip</code>.</td> <td><code>([a] -- [[a <span class="sig-type sig-type-int">int</span>]])</code></td> </tr>
+        <tr> <td><code>enumerateN</code></td> <td>Pair elements with indices starting from the provided offset.</td> <td><code>([a] <span class="sig-type sig-type-int">int</span> -- [[a <span class="sig-type sig-type-int">int</span>]])</code></td> </tr>
         <tr> <td><code>each</code></td> <td>Execute a quotation for each element.</td> <td><code>([a] (a -- ) -- )</code></td> </tr>
         <tr> <td><code>eachWhile</code></td> <td>Iterate until a quotation leaves <code>false</code> on the stack.</td> <td><code>([a] (a -- <span class="sig-type sig-type-bool">bool</span>) -- )</code></td> </tr>
         <tr> <td><code>2each</code></td> <td>Apply a quotation to the top two stack values individually.</td> <td><code>(a a (a -- c) -- c c)</code></td> </tr>
