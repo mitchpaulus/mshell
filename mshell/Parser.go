@@ -103,7 +103,9 @@ func (d *MShellParseDict) GetEndToken() Token {
 	return d.EndToken
 }
 
+// MShellIndexerList {{{
 // This is a comma separated list of indexers, which can be used to index into a list or dict.
+
 type MShellIndexerList struct {
 	Indexers []MShellParseItem
 }
@@ -133,6 +135,51 @@ func (indexerList *MShellIndexerList) GetStartToken() Token {
 func (indexerList *MShellIndexerList) GetEndToken() Token {
 	return indexerList.Indexers[len(indexerList.Indexers)-1].GetEndToken()
 }
+
+// }}}
+
+// MShellVarstoreList {{{
+type MShellVarstoreList struct {
+	VarStores []Token
+}
+
+func (varstoreList MShellVarstoreList) DebugString() string {
+	builder := strings.Builder{}
+	builder.WriteString(varstoreList.VarStores[0].DebugString())
+	for i := 1; i < len(varstoreList.VarStores); i++ {
+		builder.WriteString(", ")
+		builder.WriteString(varstoreList.VarStores[i].DebugString())
+	}
+	return builder.String()
+}
+
+func (varstoreList MShellVarstoreList) ToJson() string {
+	// Basically return comma separated list of the tokens
+	if len(varstoreList.VarStores) == 1 {
+		return fmt.Sprintf("[\"%s\"]", varstoreList.VarStores[0].Lexeme)
+	}
+
+	builder := strings.Builder{}
+	builder.WriteString("[\"")
+	builder.WriteString(varstoreList.VarStores[0].Lexeme)
+	for i := 1; i < len(varstoreList.VarStores); i++ {
+		builder.WriteString("\", \"")
+		builder.WriteString(varstoreList.VarStores[i].Lexeme)
+	}
+	builder.WriteString("\"]")
+	return builder.String()
+}
+
+func (varstoreList MShellVarstoreList) GetStartToken() Token {
+	// We should never have an empty list
+	return varstoreList.VarStores[0]
+}
+
+func (varstoreList MShellVarstoreList) GetEndToken() Token {
+	// We should never have an empty list
+	return varstoreList.VarStores[len(varstoreList.VarStores)-1]
+}
+// }}}
 
 func (list *MShellParseList) GetStartToken() Token {
 	return list.StartToken
@@ -393,6 +440,30 @@ func (parser *MShellParser) ParseIndexer() *MShellIndexerList {
 	}
 
 	return indexerList
+}
+
+func (parser *MShellParser) ParseVarstoreList() (MShellVarstoreList) {
+	varStoreList := MShellVarstoreList{}
+	varStoreList.VarStores = []Token{}
+	varStoreList.VarStores = append(varStoreList.VarStores, parser.curr)
+	parser.NextToken()
+
+	for {
+		if parser.curr.Type == COMMA {
+			parser.NextToken()
+			if parser.curr.Type == VARSTORE {
+				varStoreList.VarStores = append(varStoreList.VarStores, parser.curr)
+				parser.NextToken()
+			} else {
+				// No error here, just a trailing comma which is fine.
+				break
+			}
+		} else {
+			break
+		}
+	}
+
+	return varStoreList
 }
 
 type MShellType interface {
@@ -1507,6 +1578,8 @@ func (parser *MShellParser) ParseItem() (MShellParseItem, error) {
 		return dict, nil
 	case INDEXER, ENDINDEXER, STARTINDEXER, SLICEINDEXER:
 		return parser.ParseIndexer(), nil
+	case VARSTORE:
+		return parser.ParseVarstoreList(), nil
 	case EOF:
 		return nil, errors.New("Unexpected EOF while parsing item")
 	default:

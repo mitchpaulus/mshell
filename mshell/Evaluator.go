@@ -156,7 +156,7 @@ func (context *ExecuteContext) CloneLessVariables() *ExecuteContext {
 		StandardError:     context.StandardError,
 		ShouldCloseInput:  context.ShouldCloseInput,
 		ShouldCloseOutput: context.ShouldCloseOutput,
-		Pbm: context.Pbm,
+		Pbm:               context.Pbm,
 	}
 
 	newContext.Variables = make(map[string]MShellObject)
@@ -460,6 +460,20 @@ MainLoop:
 				}
 
 				stack.Push(newObject)
+			}
+		case MShellVarstoreList:
+			varstoreList := t
+			// First check lengths
+			if len(varstoreList.VarStores) > len(*stack) {
+				return state.FailWithMessage(fmt.Sprintf("%d:%d: Not enough items on stack (%d) to store into %d variables.\n", varstoreList.GetStartToken().Line, varstoreList.GetStartToken().Column, len(*stack), len(varstoreList.VarStores)))
+			}
+
+			// Have to bind in revsere order
+			for i := len(varstoreList.VarStores) - 1; i >= 0; i-- {
+				varstoreToken := varstoreList.VarStores[i]
+				obj, _ := stack.Pop()
+				varName := varstoreToken.Lexeme[0 : len(varstoreToken.Lexeme)-1] // Remove the trailing !
+				context.Variables[varName] = obj
 			}
 		case Token:
 

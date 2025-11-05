@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `nullDevice`
   - `enumerate`
   - `enumerateN`
+- Support for comma-separated variable stores (e.g. `a!, b!, c!`)
 - LSP completion suggestions for `@` variable references
 - LSP rename support for variables scoped to definitions and globals
 
