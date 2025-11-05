@@ -2,6 +2,14 @@
 
 # type numeric int | float
 
+def enumerate ([a] -- )
+    dup len seq (2tuple) zip
+end
+
+def enumerateN ([a] int -- )
+    i! dup len seq (@i +) map (2tuple) zip
+end
+
 def 2each (T T (T -- b) -- b b)
     dup # o1 o2 q1 q2
     -rot # o1 q2 o2 q1
@@ -268,7 +276,7 @@ def findByTag (dict str -- [dict])
   tag! htmlDescendents ("tag" get (@tag =) map false maybe) filter
 end
 
-def concat (--)
+def concat ([[a]] -- [a])
     l! (+) [] @l foldl
 end
 

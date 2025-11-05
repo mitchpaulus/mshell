@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `now`
   - `date`
   - `nullDevice`
+  - `enumerate`
+  - `enumerateN`
 - LSP completion suggestions for `@` variable references
 - LSP rename support for variables scoped to definitions and globals
 
