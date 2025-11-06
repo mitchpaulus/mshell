@@ -206,6 +206,8 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `each`: Execute a quotation for each element in a list, `([a] (a -- ) -- )`
 - `eachWhile`: Execute a quotation for each element in a list, stopping when a false is left on the stack `([a] (a -- bool) -- )`
 - `takeWhile`: Return the leading elements of a list while the predicate remains true. `([a] (a -- bool) -- [a])`
+- `2unpack`: Unpack a two-element list onto the stack. `([a] -- a a)`
+- `2apply`: Apply a binary quotation to a two-element list. `([a] (a a -- c) -- c)`
 - `2each`: Apply a quotation to the two values on the stack individually, returning results in the original order. `(a b (a -- c) -- c c)`
 - `2tuple`: Pack the top two stack values into a new two-element list, `(a b -- [a])`
 - `del`: Delete element from list, `(list index -- list)` or `(index list -- list)`

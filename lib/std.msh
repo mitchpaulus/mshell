@@ -19,6 +19,14 @@ def 2each (T T (T -- b) -- b b)
     swap # r1 r2
 end
 
+def 2unpack ([a] -- a a)
+    dup :0: swap :1:
+end
+
+def 2apply ([a] (a a -- c) -- c)
+    swap 2unpack rot x
+end
+
 def each ([T] (T --) --)
     over len each-len! # Get total length
     0 each-idx! # index
