@@ -705,6 +705,10 @@ func collectTokensFromItems(dst *[]Token, items []MShellParseItem) {
 			collectTokensFromItems(dst, v.Items)
 		case *MShellIndexerList:
 			collectTokensFromItems(dst, v.Indexers)
+		case MShellVarstoreList:
+			for _, t := range v.VarStores {
+				*dst = append(*dst, t)
+			}
 			// Note: we intentionally do not descend into MShellDefinition here. Definitions are
 			// parsed at the top level and their bodies are collected separately to preserve scope
 			// boundaries when computing rename targets.
