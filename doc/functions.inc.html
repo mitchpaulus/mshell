@@ -157,6 +157,7 @@
         <tr> <td><code>enumerateN</code></td> <td>Pair elements with indices starting from the provided offset.</td> <td><code>([a] <span class="sig-type sig-type-int">int</span> -- [[a <span class="sig-type sig-type-int">int</span>]])</code></td> </tr>
         <tr> <td><code>each</code></td> <td>Execute a quotation for each element.</td> <td><code>([a] (a -- ) -- )</code></td> </tr>
         <tr> <td><code>eachWhile</code></td> <td>Iterate until a quotation leaves <code>false</code> on the stack.</td> <td><code>([a] (a -- <span class="sig-type sig-type-bool">bool</span>) -- )</code></td> </tr>
+        <tr> <td><code>takeWhile</code></td> <td>Return the leading elements that satisfy a predicate quotation.</td> <td><code>([a] (a -- <span class="sig-type sig-type-bool">bool</span>) -- [a])</code></td> </tr>
         <tr> <td><code>2each</code></td> <td>Apply a quotation to the top two stack values individually.</td> <td><code>(a a (a -- c) -- c c)</code></td> </tr>
         <tr> <td><code>2tuple</code></td> <td>Pack the top two stack values into a two-element list.</td> <td><code>(a b -- [a b])</code></td> </tr>
         <tr> <td><code>del</code></td> <td>Delete an element from a list.</td> <td><code>(<span class="sig-type sig-type-list">list</span> <span class="sig-type sig-type-int">int</span>:index -- <span class="sig-type sig-type-list">list</span>)</code>, <code>(<span class="sig-type sig-type-int">int</span>:index <span class="sig-type sig-type-list">list</span> -- <span class="sig-type sig-type-list">list</span>)</code></td> </tr>
