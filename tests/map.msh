@@ -1,0 +1,13 @@
+["a" "b" "c"] letter!
+[ 2 seq (str) map ]
+(
+    rec!
+    @letter
+    (
+        l!
+        @rec 0:1
+        [@l] extend
+    ) map
+)
+map concat
+tuw

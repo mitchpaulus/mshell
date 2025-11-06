@@ -2691,7 +2691,7 @@ MainLoop:
 
 					stack.Push(newList)
 				} else if t.Lexeme == "extend" {
-					// Extend a list with another list in place, create new list object
+					// Extend a list with another list in place
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -2699,12 +2699,12 @@ MainLoop:
 
 					listObj, ok := obj1.(*MShellList)
 					if !ok {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: The first parameter in 'extend' is expected to be a list, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The top of stack in 'extend' is expected to be a list, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
 					}
 
 					extendListObj, ok := obj2.(*MShellList)
 					if !ok {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second parameter in 'extend' is expected to be a list, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second item on stack in 'extend' is expected to be a list, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
 					}
 
 					for _, item := range listObj.Items {

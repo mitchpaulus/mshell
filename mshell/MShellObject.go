@@ -1279,8 +1279,11 @@ func (obj *MShellList) SliceStart(start int) (MShellObject, error) {
 		return nil, err
 	}
 
-	newList := NewList(0)
-	newList.Items = obj.Items[start:]
+	n := len(obj.Items) - start
+	newList := NewList(n)
+	for i := range n {
+		newList.Items[i] = obj.Items[start + i]
+	}
 	return newList, nil
 }
 
@@ -1364,8 +1367,11 @@ func (obj *MShellList) SliceEnd(end int) (MShellObject, error) {
 	if err := IndexCheckExc(end, len(obj.Items), obj); err != nil {
 		return nil, err
 	}
-	newList := NewList(0)
-	newList.Items = obj.Items[:end]
+	n := end
+	newList := NewList(n)
+	for i := range n {
+		newList.Items[i] = obj.Items[i]
+	}
 	return newList, nil
 }
 
@@ -1478,8 +1484,10 @@ func (obj *MShellList) Slice(startInc int, endExc int) (MShellObject, error) {
 		return nil, err
 	}
 
-	newList := NewList(0)
-	newList.Items = obj.Items[startInc:endExc]
+	newList := NewList(endExc - startInc)
+	for i := range endExc - startInc {
+		newList.Items[i] = obj.Items[startInc+i]
+	}
 	return newList, nil
 }
 
