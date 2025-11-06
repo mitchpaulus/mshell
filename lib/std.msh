@@ -54,7 +54,7 @@ end
 
 # filter (list quote -- list)
 def filter ([T] (T -- bool) -- [T])
-    quote! list!
+    list!, quote!
     @list len filter-len! # Get total length
     0 filter-idx! # Index
     [] filter-accum! # Accumulator
@@ -198,7 +198,7 @@ def transpose ([[a]] -- [[a]])
 end
 
 def any ([T] (T -- bool) -- bool)
-    quote! list!
+    list!, quote!
     0 index!
     @list len listLength!
     false result!
@@ -230,7 +230,7 @@ def isoDateTimeFmt (date -- str)
 end
 
 def zip ([a] [b] (a b -- c) -- [c])
-    quote! list2! list1!
+    list1!, list2!, quote!
     @list1 len @list2 len min2 length!
     0 index!
     [] accum!
@@ -267,7 +267,7 @@ end
 
 # Accumulator version
 def htmlDescendentsAcc (dict [dict] -- [dict])
-    accum! node!
+    node!, accum!
     @node "children" get? (c! @c @accum htmlDescendentsAcc drop) each
     @accum @node append
 end
@@ -281,7 +281,7 @@ def concat ([[a]] -- [a])
 end
 
 def cartesian ([a] [b] -- [a])
-    listB! listA! @listA (a! @listB (b! [@a @b]) map) map concat
+    listA!, listB! @listA (a! @listB (b! [@a @b]) map) map concat
 end
 
 # groupBy list (a -- str) -- dict
@@ -298,7 +298,7 @@ def groupBy ((a -- str) -- dict)
 end
 
 def listToDict ([a] (a -- str) (a -- b) -- c)
-    valFunc! keyFunc! l!
+    l!, keyFunc!, valFunc!
     {} d!
     @l
     (
