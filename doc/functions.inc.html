@@ -158,6 +158,7 @@
         <tr> <td><code>each</code></td> <td>Execute a quotation for each element.</td> <td><code>([a] (a -- ) -- )</code></td> </tr>
         <tr> <td><code>eachWhile</code></td> <td>Iterate until a quotation leaves <code>false</code> on the stack.</td> <td><code>([a] (a -- <span class="sig-type sig-type-bool">bool</span>) -- )</code></td> </tr>
         <tr> <td><code>takeWhile</code></td> <td>Return the leading elements that satisfy a predicate quotation.</td> <td><code>([a] (a -- <span class="sig-type sig-type-bool">bool</span>) -- [a])</code></td> </tr>
+        <tr> <td><code>dropWhile</code></td> <td>Drop leading elements while the predicate quotation returns <code>true</code>.</td> <td><code>([a] (a -- <span class="sig-type sig-type-bool">bool</span>) -- [a])</code></td> </tr>
         <tr> <td><code>2unpack</code></td> <td>Unpack a two-element list onto the stack.</td> <td><code>([a b] -- a b)</code></td> </tr>
         <tr> <td><code>2apply</code></td> <td>Apply a binary quotation to a two-element list.</td> <td><code>([a b] (a b -- c) -- c)</code></td> </tr>
         <tr> <td><code>2each</code></td> <td>Apply a quotation to the top two stack values individually.</td> <td><code>(a a (a -- c) -- c c)</code></td> </tr>

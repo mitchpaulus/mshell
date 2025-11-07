@@ -1,0 +1,4 @@
+[1 2 3 4 5] (3 <) dropWhile str wl
+[1 2 3 4 5] (0 <) dropWhile str wl
+[1 2 3 4 5] (10 <) dropWhile str wl
+["ant" "apple" "berry" "apex"] ("a" startsWith) dropWhile str wl

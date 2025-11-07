@@ -61,7 +61,7 @@ def eachWhile ([T] (T -- bool) --)
 end
 
 def takeWhile ([T] (T -- bool) -- [T])
-    quote! list!
+    list!, quote!
     [] takeWhile-result!
     0 takeWhile-idx!
     (
@@ -72,6 +72,18 @@ def takeWhile ([T] (T -- bool) -- [T])
         @takeWhile-idx 1 + takeWhile-idx!
     ) loop
     @takeWhile-result
+end
+
+def dropWhile ([T] (T -- bool) -- [T])
+    list!, quote!
+    0 dropWhile-idx!
+    (
+        @dropWhile-idx @list len >= (break) iff
+        @list @dropWhile-idx nth dropWhile-item!
+        @dropWhile-item @quote x not (break) iff
+        @dropWhile-idx 1 + dropWhile-idx!
+    ) loop
+    @list @dropWhile-idx skip
 end
 
 # filter (list quote -- list)
