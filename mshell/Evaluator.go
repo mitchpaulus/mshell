@@ -121,6 +121,7 @@ type EvalState struct {
 
 	StopOnError bool
 	CallStack   CallStack
+	VariableEnvironmentStack VariableEnvironmentStack
 }
 
 type EvalResult struct {
@@ -143,25 +144,25 @@ type ExecuteContext struct {
 	StandardInput     io.Reader
 	StandardOutput    io.Writer
 	StandardError     io.Writer
-	Variables         map[string]MShellObject // Mapping from variable name without leading '@' or trailing '!' to object.
+	// Variables         map[string]MShellObject // Mapping from variable name without leading '@' or trailing '!' to object.
 	ShouldCloseInput  bool
 	ShouldCloseOutput bool
 	Pbm               IPathBinManager
 }
 
-func (context *ExecuteContext) CloneLessVariables() *ExecuteContext {
-	newContext := &ExecuteContext{
-		StandardInput:     context.StandardInput,
-		StandardOutput:    context.StandardOutput,
-		StandardError:     context.StandardError,
-		ShouldCloseInput:  context.ShouldCloseInput,
-		ShouldCloseOutput: context.ShouldCloseOutput,
-		Pbm:               context.Pbm,
-	}
+// func (context *ExecuteContext) CloneLessVariables() *ExecuteContext {
+	// newContext := &ExecuteContext{
+		// StandardInput:     context.StandardInput,
+		// StandardOutput:    context.StandardOutput,
+		// StandardError:     context.StandardError,
+		// ShouldCloseInput:  context.ShouldCloseInput,
+		// ShouldCloseOutput: context.ShouldCloseOutput,
+		// Pbm:               context.Pbm,
+	// }
 
-	newContext.Variables = make(map[string]MShellObject)
-	return newContext
-}
+	// // newContext.Variables = make(map[string]MShellObject)
+	// return newContext
+// }
 
 func (context *ExecuteContext) Close() {
 	if context.ShouldCloseInput {
@@ -232,6 +233,7 @@ type CallStackItem struct {
 
 type CallStack []CallStackItem
 
+
 func (stack *CallStack) Push(item CallStackItem) {
 	*stack = append(*stack, item)
 }
@@ -245,7 +247,33 @@ func (stack *CallStack) Pop() (CallStackItem, error) {
 	return popped, nil
 }
 
-func (state *EvalState) Evaluate(objects []MShellParseItem, stack *MShellStack, context ExecuteContext, definitions []MShellDefinition, callStackItem CallStackItem) EvalResult {
+type VariableEnvironmentStack []map[string]MShellObject
+
+func (stack VariableEnvironmentStack) Push(env map[string]MShellObject) {
+	stack = append(stack, env)
+}
+
+func (stack VariableEnvironmentStack) Pop() (map[string]MShellObject, error) {
+	if len(stack) == 0 {
+		return nil, fmt.Errorf("Empty variable environment stack")
+	}
+
+	popped := stack[len(stack)-1]
+	stack = stack[:len(stack)-1]
+	return popped, nil
+}
+
+func (stack VariableEnvironmentStack) Peek() (map[string]MShellObject, error) {
+	if len(stack) == 0 {
+		return nil, fmt.Errorf("Empty variable environment stack")
+	}
+
+	popped := stack[len(stack)-1]
+	return popped, nil
+}
+
+
+func (state *EvalState) Evaluate(objects []MShellParseItem, stack *MShellStack, context ExecuteContext, definitions []MShellDefinition, callStackItem CallStackItem, variableMap map[string]MShellObject) EvalResult {
 	// Defer popping the call stack
 	if callStackItem.MShellParseItem != nil {
 		state.CallStack.Push(callStackItem)
@@ -269,7 +297,7 @@ MainLoop:
 			listStack = []MShellObject{}
 
 			callStackItem := CallStackItem{MShellParseItem: list, Name: "list", CallStackType: CALLSTACKLIST}
-			result := state.Evaluate(list.Items, &listStack, context, definitions, callStackItem)
+			result := state.Evaluate(list.Items, &listStack, context, definitions, callStackItem, variableMap)
 
 			if !result.Success {
 				fmt.Fprint(os.Stderr, "Failed to evaluate list.\n")
@@ -304,7 +332,7 @@ MainLoop:
 				var dictStack MShellStack
 				dictStack = []MShellObject{}
 				callStackItem := CallStackItem{MShellParseItem: parseDict, Name: "dict", CallStackType: CALLSTACKDICT}
-				result := state.Evaluate(keyValue.Value, &dictStack, context, definitions, callStackItem)
+				result := state.Evaluate(keyValue.Value, &dictStack, context, definitions, callStackItem, variableMap)
 				if !result.Success {
 					fmt.Fprint(os.Stderr, "Failed to evaluate dictionary.\n")
 					return result
@@ -332,7 +360,7 @@ MainLoop:
 			stack.Push(dict)
 		case *MShellParseQuote:
 			parseQuote := t
-			q := MShellQuotation{Tokens: parseQuote.Items, StandardInputFile: "", StandardOutputFile: "", StandardErrorFile: "", Variables: context.Variables, MShellParseQuote: parseQuote}
+			q := MShellQuotation{Tokens: parseQuote.Items, StandardInputFile: "", StandardOutputFile: "", StandardErrorFile: "", Variables: variableMap, MShellParseQuote: parseQuote}
 			stack.Push(&q)
 		case *MShellIndexerList:
 			obj1, err := stack.Pop()
@@ -381,7 +409,7 @@ MainLoop:
 							wrappedResult = NewList(0)
 							wrappedResult.(*MShellList).Items = append(wrappedResult.(*MShellList).Items, result)
 						case *MShellQuotation:
-							wrappedResult = &MShellQuotation{Tokens: []MShellParseItem{result.(MShellParseItem)}, StandardInputFile: "", StandardOutputFile: "", StandardErrorFile: "", Variables: context.Variables, MShellParseQuote: nil}
+							wrappedResult = &MShellQuotation{Tokens: []MShellParseItem{result.(MShellParseItem)}, StandardInputFile: "", StandardOutputFile: "", StandardErrorFile: "", Variables: variableMap, MShellParseQuote: nil}
 						case *MShellPipe:
 							newList := NewList(0)
 							wrappedResult = &MShellPipe{List: *newList, StdoutBehavior: STDOUT_NONE}
@@ -473,7 +501,8 @@ MainLoop:
 				varstoreToken := varstoreList.VarStores[i]
 				obj, _ := stack.Pop()
 				varName := varstoreToken.Lexeme[0 : len(varstoreToken.Lexeme)-1] // Remove the trailing !
-				context.Variables[varName] = obj
+				fmt.Fprintf(os.Stderr, "Storing %s\n", varName)
+				variableMap[varName] = obj
 			}
 		case Token:
 
@@ -485,13 +514,47 @@ MainLoop:
 				for _, definition := range definitions {
 					if definition.Name == t.Lexeme {
 						// Evaluate the definition
-						newContext := context.CloneLessVariables()
-						callStackItem := CallStackItem{MShellParseItem: t, Name: definition.Name, CallStackType: CALLSTACKDEF}
-						result := state.Evaluate(definition.Items, stack, *newContext, definitions, callStackItem)
+						// newContext := context.CloneLessVariables()
 
+						callStackItem := CallStackItem{MShellParseItem: t, Name: definition.Name, CallStackType: CALLSTACKDEF}
+						newVariableMap := make(map[string]MShellObject)
+						result := state.Evaluate(definition.Items, stack, context, definitions, callStackItem, newVariableMap)
 						if result.ShouldPassResultUpStack() {
 							return result
 						}
+
+
+
+						// fmt.Fprintf(os.Stderr, "Original items:\n")
+						// fmt.Fprintf(os.Stderr, "%s\n", definition.ToJson())
+
+						// // Tail Call Optimization
+						// if index >= len(objects) {
+							// fmt.Fprintf(os.Stderr, "%s\n", definition.ToJson())
+							// objects = append(objects[:0], definition.Items...)
+
+							// fmt.Fprintf(os.Stderr, "New items:\n")
+							// for _, iObject := range objects {
+								// fmt.Fprintf(os.Stderr, "%s\n", iObject.DebugString())
+							// }
+							// fmt.Fprintf(os.Stderr, "New items:\n")
+
+							// // copy(objects, definition.Items)
+							// index = 0
+							// // Clear and reuse existing variable map
+							// clear(variableMap)
+							// // callStackItem := CallStackItem{MShellParseItem: t, Name: definition.Name, CallStackType: CALLSTACKDEF}
+							// // result = state.Evaluate(objects, stack, *newContext, definitions, callStackItem)
+						// } else {
+							// fmt.Fprintf(os.Stderr, "non recursive items:\n")
+							// fmt.Fprintf(os.Stderr, "%s\n", definition.ToJson())
+							// callStackItem := CallStackItem{MShellParseItem: t, Name: definition.Name, CallStackType: CALLSTACKDEF}
+							// newVariableMap := make(map[string]MShellObject)
+							// result := state.Evaluate(definition.Items, stack, context, definitions, callStackItem, newVariableMap)
+							// if result.ShouldPassResultUpStack() {
+								// return result
+							// }
+						// }
 
 						continue MainLoop
 					}
@@ -2468,7 +2531,7 @@ MainLoop:
 
 						for i, item := range listObj.Items {
 							mapStack.Push(item)
-							result := state.Evaluate(fn.Tokens, &mapStack, (*qContext), definitions, CallStackItem{fn, "quote", CALLSTACKQUOTE})
+							result := state.Evaluate(fn.Tokens, &mapStack, (*qContext), definitions, CallStackItem{fn, "quote", CALLSTACKQUOTE}, variableMap)
 							if result.ShouldPassResultUpStack() {
 								return result
 							}
@@ -2486,7 +2549,7 @@ MainLoop:
 						} else {
 							stack.Push(maybe.obj) // Push the object inside the Maybe
 							preStackLen := len(*stack)
-							result := state.Evaluate(fn.Tokens, stack, (*qContext), definitions, CallStackItem{fn, "quote", CALLSTACKQUOTE})
+							result := state.Evaluate(fn.Tokens, stack, (*qContext), definitions, CallStackItem{fn, "quote", CALLSTACKQUOTE}, variableMap)
 							if result.ShouldPassResultUpStack() {
 								return result
 							}
@@ -2533,7 +2596,7 @@ MainLoop:
 						stack.Push(maybe2.obj)
 						stack.Push(maybe1.obj)
 
-						result := state.Evaluate(fn.Tokens, stack, (*qContext), definitions, CallStackItem{fn, "quote", CALLSTACKQUOTE})
+						result := state.Evaluate(fn.Tokens, stack, (*qContext), definitions, CallStackItem{fn, "quote", CALLSTACKQUOTE}, variableMap)
 						if result.ShouldPassResultUpStack() {
 							return result
 						}
@@ -2782,7 +2845,7 @@ MainLoop:
 					} else {
 						stack.Push(maybeObj.obj) // Push the object inside the Maybe
 						preStackLen := len(*stack)
-						result := state.Evaluate(fn.Tokens, stack, (*qContext), definitions, CallStackItem{fn, "quote", CALLSTACKQUOTE})
+						result := state.Evaluate(fn.Tokens, stack, (*qContext), definitions, CallStackItem{fn, "quote", CALLSTACKQUOTE}, variableMap)
 						if result.ShouldPassResultUpStack() {
 							return result
 						}
@@ -3012,7 +3075,7 @@ MainLoop:
 											return state.FailWithMessage(err.Error())
 										}
 
-										result := state.Evaluate(quotation.Tokens, &cmpStack, (*quoteContext), definitions, CallStackItem{quotation, "quote", CALLSTACKQUOTE})
+										result := state.Evaluate(quotation.Tokens, &cmpStack, (*quoteContext), definitions, CallStackItem{quotation, "quote", CALLSTACKQUOTE}, variableMap)
 										if result.ShouldPassResultUpStack() {
 											return result
 										}
@@ -3585,13 +3648,30 @@ MainLoop:
 						return state.FailWithMessage(err.Error())
 					}
 
-					result := state.Evaluate(quoteToExecute.Tokens, stack, (*qContext), definitions, CallStackItem{trueQuote, "quote", CALLSTACKQUOTE})
+					// result := state.Evaluate(quoteToExecute.Tokens, stack, (*qContext), definitions, CallStackItem{trueQuote, "quote", CALLSTACKQUOTE}, variableMap)
+					// if result.ShouldPassResultUpStack() {
+						// return result
+					// }
 
-					if result.ShouldPassResultUpStack() {
-						return result
+
+					// Tail-Call Optimization here:
+					if index >= len(objects) {
+						fmt.Fprintf(os.Stderr, "TCO quote\n")
+						objects = append(objects[:0], quoteToExecute.Tokens...)
+						index = 0
+						context = *qContext
+						fmt.Fprintf(os.Stderr, "New objects\n")
+						for _, o := range objects {
+							fmt.Fprintf(os.Stderr, o.DebugString())
+						}
+					} else {
+						result := state.Evaluate(quoteToExecute.Tokens, stack, (*qContext), definitions, CallStackItem{trueQuote, "quote", CALLSTACKQUOTE}, variableMap)
+						if result.ShouldPassResultUpStack() {
+							return result
+						}
 					}
+					continue MainLoop
 				}
-
 			} else if t.Type == IF { // Token Type
 				obj, err := stack.Pop()
 				if err != nil {
@@ -3620,7 +3700,7 @@ MainLoop:
 				for i := 0; i < len(list.Items)-1; i += 2 {
 					quotation := list.Items[i].(*MShellQuotation)
 
-					result := state.Evaluate(quotation.Tokens, stack, context, definitions, CallStackItem{quotation, "quote", CALLSTACKQUOTE})
+					result := state.Evaluate(quotation.Tokens, stack, context, definitions, CallStackItem{quotation, "quote", CALLSTACKQUOTE}, variableMap)
 
 					if !result.Success || result.ExitCalled {
 						return result
@@ -3660,7 +3740,7 @@ MainLoop:
 				if trueIndex > -1 {
 					quotation := list.Items[trueIndex+1].(*MShellQuotation)
 
-					result := state.Evaluate(quotation.Tokens, stack, context, definitions, CallStackItem{quotation, "quote", CALLSTACKQUOTE})
+					result := state.Evaluate(quotation.Tokens, stack, context, definitions, CallStackItem{quotation, "quote", CALLSTACKQUOTE}, variableMap)
 
 					// If we encounter a break, we should return it up the stack
 					if result.ShouldPassResultUpStack() {
@@ -3669,7 +3749,7 @@ MainLoop:
 				} else if len(list.Items)%2 == 1 { // Try to find a final else statement, will be the last item in the list if odd number of items
 					quotation := list.Items[len(list.Items)-1].(*MShellQuotation)
 
-					result := state.Evaluate(quotation.Tokens, stack, context, definitions, CallStackItem{quotation, "quote", CALLSTACKQUOTE})
+					result := state.Evaluate(quotation.Tokens, stack, context, definitions, CallStackItem{quotation, "quote", CALLSTACKQUOTE}, variableMap)
 
 					if result.ShouldPassResultUpStack() {
 						return result
@@ -3818,7 +3898,7 @@ MainLoop:
 								return state.FailWithMessage(err.Error())
 							}
 
-							result := state.Evaluate(obj1.(*MShellQuotation).Tokens, stack, (*qContext), definitions, CallStackItem{obj1.(*MShellQuotation), t.Lexeme, CALLSTACKQUOTE})
+							result := state.Evaluate(obj1.(*MShellQuotation).Tokens, stack, (*qContext), definitions, CallStackItem{obj1.(*MShellQuotation), t.Lexeme, CALLSTACKQUOTE}, variableMap)
 							// Pop the top off the stack
 							secondObj, err := stack.Pop()
 							if err != nil {
@@ -3848,7 +3928,7 @@ MainLoop:
 								return state.FailWithMessage(err.Error())
 							}
 
-							result := state.Evaluate(obj1.(*MShellQuotation).Tokens, stack, (*qContext), definitions, CallStackItem{obj1.(*MShellQuotation), t.Lexeme, CALLSTACKQUOTE})
+							result := state.Evaluate(obj1.(*MShellQuotation).Tokens, stack, (*qContext), definitions, CallStackItem{obj1.(*MShellQuotation), t.Lexeme, CALLSTACKQUOTE}, variableMap)
 							// Pop the top off the stack
 							secondObj, err := stack.Pop()
 							if err != nil {
@@ -4091,10 +4171,16 @@ MainLoop:
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Nothing on stack to store into variable %s.\n", t.Line, t.Column, varName))
 				}
 
-				context.Variables[varName] = obj
+				fmt.Fprintf(os.Stderr, "Storing %s\n", varName)
+
+				variableMap[varName] = obj
 			} else if t.Type == VARRETRIEVE { // Token Type
 				name := t.Lexeme[1:] // Remove the leading @
-				obj, found_mshell_variable := context.Variables[name]
+
+				fmt.Fprintf(os.Stderr, "Getting %s\n", name)
+
+
+				obj, found_mshell_variable := variableMap[name]
 				if found_mshell_variable {
 					stack.Push(obj)
 				} else {
@@ -4106,7 +4192,7 @@ MainLoop:
 						var message strings.Builder
 						message.WriteString(fmt.Sprintf("%d:%d: Variable %s not found.\n", t.Line, t.Column, name))
 						message.WriteString("Variables:\n")
-						for key := range context.Variables {
+						for key := range variableMap {
 							message.WriteString(fmt.Sprintf("  %s\n", key))
 						}
 						return state.FailWithMessage(message.String())
@@ -4130,7 +4216,7 @@ MainLoop:
 				loopContext := ExecuteContext{
 					StandardInput:  nil,
 					StandardOutput: nil,
-					Variables:      context.Variables,
+					// Variables:      context.Variables,
 					Pbm:            context.Pbm,
 				}
 
@@ -4169,7 +4255,7 @@ MainLoop:
 				initialStackSize := len(*stack)
 
 				for loopCount < maxLoops {
-					result := state.Evaluate(quotation.Tokens, stack, loopContext, definitions, CallStackItem{quotation, "quote", CALLSTACKQUOTE})
+					result := state.Evaluate(quotation.Tokens, stack, loopContext, definitions, CallStackItem{quotation, "quote", CALLSTACKQUOTE}, variableMap)
 					if !result.Success || result.ExitCalled {
 						return result
 					}
@@ -4254,7 +4340,7 @@ MainLoop:
 				}
 				defer quoteContext.Close()
 
-				result := state.Evaluate(quotation.Tokens, stack, (*quoteContext), definitions, CallStackItem{quotation, "quote", CALLSTACKQUOTE})
+				result := state.Evaluate(quotation.Tokens, stack, (*quoteContext), definitions, CallStackItem{quotation, "quote", CALLSTACKQUOTE}, variableMap)
 
 				if result.ShouldPassResultUpStack() {
 					return result
@@ -4530,7 +4616,7 @@ MainLoop:
 				dt := time.Date(year, time.Month(month), day, hour, minute, second, 0, time.UTC)
 				stack.Push(&MShellDateTime{Time: dt, OriginalString: t.Lexeme})
 			} else if t.Type == FORMATSTRING { // Token Type
-				parsedString, err := state.EvaluateFormatString(t.Lexeme, context, definitions, callStackItem)
+				parsedString, err := state.EvaluateFormatString(t.Lexeme, context, definitions, callStackItem, variableMap)
 				if err != nil {
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing format string '%s': %s\n", t.Line, t.Column, t.Lexeme, err.Error()))
 				}
@@ -4584,7 +4670,7 @@ const (
 	FORMATMODEFORMAT
 )
 
-func (state *EvalState) EvaluateFormatString(lexeme string, context ExecuteContext, definitions []MShellDefinition, callStackItem CallStackItem) (*MShellString, error) {
+func (state *EvalState) EvaluateFormatString(lexeme string, context ExecuteContext, definitions []MShellDefinition, callStackItem CallStackItem, variableMap map[string]MShellObject) (*MShellString, error) {
 
 	allRunes := []rune(lexeme)
 
@@ -4652,7 +4738,7 @@ func (state *EvalState) EvaluateFormatString(lexeme string, context ExecuteConte
 				// Evaluate the format string contents
 				var stack MShellStack
 				stack = []MShellObject{}
-				result := state.Evaluate(contents.Items, &stack, context, definitions, callStackItem)
+				result := state.Evaluate(contents.Items, &stack, context, definitions, callStackItem, variableMap)
 				if !result.Success {
 					return nil, fmt.Errorf("Error evaluating format string %s", formatStr)
 				}
@@ -4696,11 +4782,11 @@ func (list *MShellList) Execute(state *EvalState, context ExecuteContext, stack 
 	return result, exitCode, stdoutResult, stderrResult
 }
 
-func (quotation *MShellQuotation) Execute(state *EvalState, context ExecuteContext, stack *MShellStack, definitions []MShellDefinition, callStack CallStack) (EvalResult, int) {
+func (quotation *MShellQuotation) Execute(state *EvalState, context ExecuteContext, stack *MShellStack, definitions []MShellDefinition, callStack CallStack, variableMap map[string]MShellObject) (EvalResult, int) {
 	quotationContext := ExecuteContext{
 		StandardInput:  nil,
 		StandardOutput: nil,
-		Variables:      quotation.Variables,
+		// Variables:      quotation.Variables,
 		Pbm:            context.Pbm,
 	}
 
@@ -4738,7 +4824,7 @@ func (quotation *MShellQuotation) Execute(state *EvalState, context ExecuteConte
 		quotationContext.StandardOutput = os.Stdout
 	}
 
-	result := state.Evaluate(quotation.Tokens, stack, quotationContext, definitions, CallStackItem{quotation, "quote", CALLSTACKQUOTE})
+	result := state.Evaluate(quotation.Tokens, stack, quotationContext, definitions, CallStackItem{quotation, "quote", CALLSTACKQUOTE}, variableMap)
 
 	if !result.Success || result.ExitCalled {
 		return result, result.ExitCode
@@ -5067,7 +5153,7 @@ func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContex
 		newContext := ExecuteContext{
 			StandardInput:  nil,
 			StandardOutput: nil,
-			Variables:      context.Variables,
+			// Variables:      context.Variables,
 			Pbm:            context.Pbm,
 		}
 

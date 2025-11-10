@@ -313,7 +313,7 @@ func main() {
 			context: ExecuteContext{
 				StandardInput:  nil, // These should be nil as that represents using a "default", not os.Stdin/os.Stdout
 				StandardOutput: nil,
-				Variables:      map[string]MShellObject{},
+				// Variables:      map[string]MShellObject{},
 				Pbm:            NewPathBinManager(),
 			},
 
@@ -392,9 +392,10 @@ func main() {
 	context := ExecuteContext{
 		StandardInput:  nil,
 		StandardOutput: nil,
-		Variables:      map[string]MShellObject{},
+		// Variables:      map[string]MShellObject{},
 		Pbm:            NewPathBinManager(),
 	}
+	variableMap := make(map[string]MShellObject)
 
 	var allDefinitions []MShellDefinition
 
@@ -437,7 +438,7 @@ func main() {
 					CallStackType:   CALLSTACKFILE,
 				}
 
-				result := state.Evaluate(stdlibFile.Items, &stack, context, allDefinitions, callStackItem)
+				result := state.Evaluate(stdlibFile.Items, &stack, context, allDefinitions, callStackItem, variableMap)
 				if !result.Success {
 					fmt.Fprintf(os.Stderr, "Error evaluating MSHSTDLIB file %s.\n", stdlibPath)
 					os.Exit(1)
@@ -484,7 +485,7 @@ func main() {
 		CallStackType:   CALLSTACKFILE,
 	}
 
-	result := state.Evaluate(file.Items, &stack, context, allDefinitions, callStackItem)
+	result := state.Evaluate(file.Items, &stack, context, allDefinitions, callStackItem, variableMap)
 
 	if !result.Success {
 		if result.ExitCode != 0 {
@@ -531,6 +532,7 @@ type TermState struct {
 	callStack         CallStack
 	stdLibDefs        []MShellDefinition
 	initCallStackItem CallStackItem
+	variableMap       map[string]MShellObject // Map of variable names to MShellObjects
 	// pathBinManager IPathBinManager
 }
 
@@ -1333,7 +1335,7 @@ func (state *TermState) InteractiveMode() error {
 	state.l = NewLexer("", nil)
 	state.p = &MShellParser{lexer: state.l}
 
-	stdLibDefs, err := stdLibDefinitions(state.stack, state.context, state.evalState)
+	stdLibDefs, err := stdLibDefinitions(state.stack, state.context, state.evalState, state.variableMap)
 	if err != nil {
 		return fmt.Errorf("Error loading standard library: %s\n", err)
 	}
@@ -1637,7 +1639,7 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 
 	if len(parsed.Items) > 0 {
 		state.initCallStackItem.MShellParseItem = parsed.Items[0]
-		result := state.evalState.Evaluate(parsed.Items, &state.stack, state.context, state.stdLibDefs, state.initCallStackItem)
+		result := state.evalState.Evaluate(parsed.Items, &state.stack, state.context, state.stdLibDefs, state.initCallStackItem, state.variableMap)
 
 		if result.ExitCalled {
 			return true, result.ExitCode
@@ -1807,7 +1809,7 @@ func (state *TermState) getCurrentPos() (int, int, error) {
 	}
 }
 
-func stdLibDefinitions(stack MShellStack, context ExecuteContext, state EvalState) ([]MShellDefinition, error) {
+func stdLibDefinitions(stack MShellStack, context ExecuteContext, state EvalState, variableMap map[string]MShellObject) ([]MShellDefinition, error) {
 	// Check for environment variable MSHSTDLIB and load that file. Read as UTF-8
 	stdlibPath, stdlibSet := os.LookupEnv("MSHSTDLIB")
 	definitions := make([]MShellDefinition, 0)
@@ -1849,7 +1851,7 @@ func stdLibDefinitions(stack MShellStack, context ExecuteContext, state EvalStat
 				}
 
 				// allDefinitions = append(allDefinitions, stdlibFile.Definitions...)
-				result := state.Evaluate(stdlibFile.Items, &stack, context, stdlibFile.Definitions, callStackItem)
+				result := state.Evaluate(stdlibFile.Items, &stack, context, stdlibFile.Definitions, callStackItem, variableMap)
 
 				if !result.Success {
 					fmt.Fprintf(os.Stderr, "Error evaluating MSHSTDLIB file %s.\n", rcPath)
@@ -2248,14 +2250,14 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			// Variable completion
 			if len(prefix) > 0 && prefix[0] == '@' {
 				searchPrefix := prefix[1:]
-				for v, _ := range state.context.Variables {
+				for v, _ := range state.variableMap {
 					if strings.HasPrefix(v, searchPrefix) {
 						matches = append(matches, TabMatch{TABMATCHVAR, "@" + v})
 					}
 				}
 			} else {
 				// Completion on variables, since you could always end with !
-				for v, _ := range state.context.Variables {
+				for v, _ := range state.variableMap {
 					if strings.HasPrefix(v, prefix) {
 						matches = append(matches, TabMatch{TABMATCHVAR, v + "!"})
 					}

@@ -1,0 +1,5 @@
+def recursiveLoop (int -- int)
+    n! @n 0 = (0) (@n 1 - @n wl recursiveLoop) iff
+end
+
+5 recursiveLoop wl
