@@ -374,7 +374,7 @@ func (parser *MShellParser) ParseFile() (*MShellFile, error) {
 		case DEF:
 			_ = parser.Match(parser.curr, DEF)
 			if parser.curr.Type != LITERAL {
-				return file, errors.New(fmt.Sprintf("%d: %d: Expected a name for the definition, got %s", parser.curr.Line, parser.curr.Column, parser.curr.Type))
+				return file, fmt.Errorf("%d: %d: Expected a name for the definition, got %s", parser.curr.Line, parser.curr.Column, parser.curr.Type)
 			}
 
 			nameToken := parser.curr
@@ -391,7 +391,7 @@ func (parser *MShellParser) ParseFile() (*MShellFile, error) {
 				if parser.curr.Type == END {
 					break
 				} else if parser.curr.Type == EOF {
-					return file, errors.New(fmt.Sprintf("Unexpected EOF while parsing definition %s", def.Name))
+					return file, fmt.Errorf("Unexpected EOF while parsing definition %s", def.Name)
 				} else {
 					item, err := parser.ParseItem()
 					if err != nil {
@@ -1280,7 +1280,7 @@ func (parser *MShellParser) ParseTypeList() (*TypeHomogeneousList, error) {
 		listType = genericType
 		parser.NextToken()
 	default:
-		return nil, errors.New(fmt.Sprintf("Unexpected token %s while parsing type list", parser.curr.Type))
+		return nil, fmt.Errorf("Unexpected token %s while parsing type list", parser.curr.Type)
 	}
 
 	err = parser.Match(parser.curr, RIGHT_SQUARE_BRACKET)
@@ -1440,7 +1440,7 @@ func (parser *MShellParser) ParseDict() (*MShellParseDict, error) {
 		if parser.curr.Type == RIGHT_CURLY {
 			break
 		} else if parser.curr.Type == EOF {
-			return dict, errors.New(fmt.Sprintf("Did not find closing '}' for dict beginning at line %d, column %d.", dict.StartToken.Line, dict.StartToken.Column))
+			return dict, fmt.Errorf("Did not find closing '}' for dict beginning at line %d, column %d.", dict.StartToken.Line, dict.StartToken.Column)
 		} else {
 			keyValue, err := parser.parseDictKeyValue()
 			if err != nil {
@@ -1467,7 +1467,7 @@ func (parser *MShellParser) ParseDict() (*MShellParseDict, error) {
 	sort.Strings(keys)
 	for i := 1; i < len(keys); i++ {
 		if keys[i] == keys[i-1] {
-			return dict, errors.New(fmt.Sprintf("Duplicate key '%s' found in dict at line %d, column %d.", keys[i], dict.StartToken.Line, dict.StartToken.Column))
+			return dict, fmt.Errorf("Duplicate key '%s' found in dict at line %d, column %d.", keys[i], dict.StartToken.Line, dict.StartToken.Column)
 		}
 	}
 
@@ -1478,7 +1478,7 @@ func (parser *MShellParser) parseDictKeyValue() (MShellParseDictKeyValue, error)
 	// Else expect a literal or string key.
 	keyToken := parser.curr.Type
 	if keyToken != LITERAL && keyToken != STRING && keyToken != SINGLEQUOTESTRING && keyToken != INTEGER && keyToken != STARTINDEXER {
-		return MShellParseDictKeyValue{}, errors.New(fmt.Sprintf("Expected a key for dict, got %s at line %d, column %d.", keyToken, parser.curr.Line, parser.curr.Column))
+		return MShellParseDictKeyValue{}, fmt.Errorf("Expected a key for dict, got %s at line %d, column %d.", keyToken, parser.curr.Line, parser.curr.Column)
 	}
 
 	// key := parser.curr
@@ -1487,7 +1487,7 @@ func (parser *MShellParser) parseDictKeyValue() (MShellParseDictKeyValue, error)
 	if keyToken == STRING {
 		key, err = ParseRawString(parser.curr.Lexeme)
 		if err != nil {
-			return MShellParseDictKeyValue{}, errors.New(fmt.Sprintf("Error parsing string key: %s at line %d, column %d.", err.Error(), parser.curr.Line, parser.curr.Column))
+			return MShellParseDictKeyValue{}, fmt.Errorf("Error parsing string key: %s at line %d, column %d.", err.Error(), parser.curr.Line, parser.curr.Column)
 		}
 	} else if keyToken == SINGLEQUOTESTRING {
 		key = parser.curr.Lexeme[1 : len(parser.curr.Lexeme)-1]
@@ -1501,7 +1501,7 @@ func (parser *MShellParser) parseDictKeyValue() (MShellParseDictKeyValue, error)
 		intVal, _ := strconv.Atoi(indexStr) // This normalizes the integer to not have leading 0's etc.
 		key = strconv.Itoa(intVal)
 	} else {
-		return MShellParseDictKeyValue{}, errors.New(fmt.Sprintf("Expected a key for dict, got %s at line %d, column %d.", keyToken, parser.curr.Line, parser.curr.Column))
+		return MShellParseDictKeyValue{}, fmt.Errorf("Expected a key for dict, got %s at line %d, column %d.", keyToken, parser.curr.Line, parser.curr.Column)
 	}
 
 	parser.NextToken()
@@ -1522,7 +1522,7 @@ func (parser *MShellParser) parseDictKeyValue() (MShellParseDictKeyValue, error)
 		} else if parser.curr.Type == RIGHT_CURLY {
 			break
 		} else if parser.curr.Type == EOF {
-			return MShellParseDictKeyValue{}, errors.New(fmt.Sprintf("Unexpected EOF while parsing dict at line %d, column %d.", parser.curr.Line, parser.curr.Column))
+			return MShellParseDictKeyValue{}, fmt.Errorf("Unexpected EOF while parsing dict at line %d, column %d.", parser.curr.Line, parser.curr.Column)
 		} else {
 			item, err := parser.ParseItem()
 			if err != nil {
@@ -1547,7 +1547,7 @@ func (parser *MShellParser) ParseList() (*MShellParseList, error) {
 		if parser.curr.Type == RIGHT_SQUARE_BRACKET {
 			break
 		} else if parser.curr.Type == EOF {
-			return list, errors.New(fmt.Sprintf("Did not find closing ']' for list beginning at line %d, column %d.", list.StartToken.Line, list.StartToken.Column))
+			return list, fmt.Errorf("Did not find closing ']' for list beginning at line %d, column %d.", list.StartToken.Line, list.StartToken.Column)
 		} else {
 			item, err := parser.ParseItem()
 			if err != nil {
@@ -1612,7 +1612,7 @@ func (parser *MShellParser) ParseQuote() (*MShellParseQuote, error) {
 			}
 			quote.Items = append(quote.Items, dict)
 		} else if parser.curr.Type == EOF {
-			return quote, errors.New(fmt.Sprintf("Did not find closing ')' for quote beginning at line %d, column %d.", quote.StartToken.Line, quote.StartToken.Column))
+			return quote, fmt.Errorf("Did not find closing ')' for quote beginning at line %d, column %d.", quote.StartToken.Line, quote.StartToken.Column)
 		} else {
 			item, err := parser.ParseItem()
 			if err != nil {

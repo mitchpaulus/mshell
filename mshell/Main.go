@@ -726,7 +726,7 @@ func (state *TermState) ScrollDown(numLines int) {
 	// Move cursor to bottom of terminal, if you have a terminal that has over 10000 lines, I'm sorry.
 	fmt.Fprintf(os.Stdout, "\033[10000B")
 	// print out rowsToScroll newlines
-	for i := 0; i < numLines; i++ {
+	for range numLines {
 		fmt.Fprintf(os.Stdout, "\n")
 	}
 
@@ -840,7 +840,7 @@ func (t CsiToken) String() string {
 type UnknownToken struct{}
 
 func (t UnknownToken) String() string {
-	return fmt.Sprintf("UnknownToken")
+	return "UnknownToken"
 }
 
 type SpecialKey int
@@ -909,7 +909,7 @@ const (
 type EofTerminalToken struct{}
 
 func (t EofTerminalToken) String() string {
-	return fmt.Sprintf("EOF")
+	return "EOF"
 }
 
 type StdinReaderState struct {
@@ -976,7 +976,7 @@ func (state *TermState) StdinReader(stdInChan chan byte, pauseChan chan bool) {
 				}
 			}
 
-			for i := 0; i < n; i++ {
+			for i := range n {
 				b := readBuffer[i]
 
 				if b > 32 && b < 127 {
@@ -1492,7 +1492,6 @@ func (state *TermState) TrySaveHistory() {
 
 	// Clear history to save
 	historyToSave = historyToSave[:0]
-	return
 }
 
 func (state *TermState) ExecuteCurrentCommand() (bool, int) {
@@ -2248,14 +2247,14 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			// Variable completion
 			if len(prefix) > 0 && prefix[0] == '@' {
 				searchPrefix := prefix[1:]
-				for v, _ := range state.context.Variables {
+				for v := range state.context.Variables {
 					if strings.HasPrefix(v, searchPrefix) {
 						matches = append(matches, TabMatch{TABMATCHVAR, "@" + v})
 					}
 				}
 			} else {
 				// Completion on variables, since you could always end with !
-				for v, _ := range state.context.Variables {
+				for v := range state.context.Variables {
 					if strings.HasPrefix(v, prefix) {
 						matches = append(matches, TabMatch{TABMATCHVAR, v + "!"})
 					}

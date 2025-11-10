@@ -822,7 +822,7 @@ func (l *Lexer) parseNumberOrStartIndexer() Token {
 	} else if l.curLen() == 4 && peek == '-' {
 		l.advance()
 		// Month
-		for i := 0; i < 2; i++ {
+		for range 2 {
 			if !unicode.IsDigit(l.peek()) {
 				return l.consumeLiteral()
 			}
@@ -834,7 +834,7 @@ func (l *Lexer) parseNumberOrStartIndexer() Token {
 		l.advance()
 
 		// Day
-		for i := 0; i < 2; i++ {
+		for range 2 {
 			if !unicode.IsDigit(l.peek()) {
 				return l.consumeLiteral()
 			}
@@ -848,7 +848,7 @@ func (l *Lexer) parseNumberOrStartIndexer() Token {
 		}
 
 		// Hour
-		for i := 0; i < 2; i++ {
+		for range 2 {
 			if !unicode.IsDigit(l.peek()) {
 				return l.consumeLiteral()
 			}
@@ -861,7 +861,7 @@ func (l *Lexer) parseNumberOrStartIndexer() Token {
 		l.advance()
 
 		// Minute
-		for i := 0; i < 2; i++ {
+		for range 2 {
 			if !unicode.IsDigit(l.peek()) {
 				return l.consumeLiteral()
 			}
@@ -874,7 +874,7 @@ func (l *Lexer) parseNumberOrStartIndexer() Token {
 		}
 		l.advance()
 
-		for i := 0; i < 2; i++ {
+		for range 2 {
 			if !unicode.IsDigit(l.peek()) {
 				return l.consumeLiteral()
 			}

@@ -477,11 +477,11 @@ func TypeCheckErrorMessage(stack MShellTypeStack, typeDefs []TypeDefinition, tok
 	// Start a builder for the error message
 	var builder strings.Builder
 	builder.WriteString(fmt.Sprintf("Could not find a matching type definition for %s.\n", tokenName))
-	builder.WriteString(fmt.Sprintf("Current stack:\n"))
+	builder.WriteString("Current stack:\n")
 	for i := stack.Len() - maxInputLength; i < stack.Len(); i++ {
 		builder.WriteString(fmt.Sprintf("  %s\n", stack[i].ToMshell()))
 	}
-	builder.WriteString(fmt.Sprintf("Expected types:\n"))
+	builder.WriteString("Expected types:\n")
 	for _, typeDef := range typeDefs {
 		builder.WriteString(fmt.Sprintf("  %s\n", typeDef.ToMshell()))
 	}
@@ -683,7 +683,7 @@ MainLoop:
 				}
 
 				// Check the input types
-				for i := 0; i < len(inputTypes); i++ {
+				for i := range len(inputTypes) {
 					stackType, _ := stack.Pop()
 					inputTypeIndex := len(inputTypes) - i - 1
 					if stackType.Equals(inputTypes[inputTypeIndex]) {
@@ -790,7 +790,7 @@ MainLoop:
 							continue MainLoop
 						}
 
-						for i := 0; i < len(inputTypes); i++ {
+						for i := range len(inputTypes) {
 							stackIndex := len(stack) - len(inputTypes) + i
 							stackType := stack[stackIndex]
 							if !stackType.Equals(inputTypes[i]) {

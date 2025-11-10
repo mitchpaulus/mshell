@@ -289,9 +289,7 @@ MainLoop:
 			}
 
 			newList := NewList(len(listStack))
-			for i, item := range listStack {
-				newList.Items[i] = item
-			}
+			copy(newList.Items, listStack) // Copy the items from the stack to the new list
 			stack.Push(newList)
 		case *MShellParseDict:
 			// Evaluate the dictionary
@@ -599,10 +597,8 @@ MainLoop:
 					}
 
 					newList := NewList(len(files))
-					if files != nil {
-						for i, file := range files {
-							newList.Items[i] = &MShellPath{file}
-						}
+					for i, file := range files {
+						newList.Items[i] = &MShellPath{file}
 					}
 
 					stack.Push(newList)
@@ -788,7 +784,7 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot find-replace with a %s as the original string.\n", t.Line, t.Column, obj3.TypeName()))
 					}
 
-					stack.Push(&MShellString{strings.Replace(originalStr, findStr, replacementStr, -1)})
+					stack.Push(&MShellString{strings.ReplaceAll(originalStr, findStr, replacementStr)})
 				} else if t.Lexeme == "split" {
 					delimiter, strLiteral, err := stack.Pop2(t)
 					if err != nil {
@@ -1241,11 +1237,12 @@ MainLoop:
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error checking if %s is a directory: %s\n", t.Line, t.Column, path, err.Error()))
 						}
 					} else {
-						if t.Lexeme == "isDir" {
+						switch t.Lexeme {
+						case "isDir":
 							stack.Push(&MShellBool{fileInfo.IsDir()})
-						} else if t.Lexeme == "isFile" {
+						case "isFile":
 							stack.Push(&MShellBool{!fileInfo.IsDir()})
-						} else {
+						default:
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Unknown operation: %s\n", t.Line, t.Column, t.Lexeme))
 						}
 					}
@@ -1259,12 +1256,13 @@ MainLoop:
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot make a directory with a %s.\n", t.Line, t.Column, obj1.TypeName()))
 					}
-
-					if t.Lexeme == "mkdir" {
+					switch t.Lexeme {
+					case "mkdir":
 						err = os.Mkdir(dirPath, 0755)
-					} else if t.Lexeme == "mkdirp" {
+					case "mkdirp":
 						err = os.MkdirAll(dirPath, 0755)
 					}
+
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error creating directory: %s\n", t.Line, t.Column, err.Error()))
 					}
@@ -1642,7 +1640,7 @@ MainLoop:
 						var builder strings.Builder
 						builder.Grow(totalLen.Value)
 
-						for i := 0; i < repeatCount; i++ {
+						for range repeatCount {
 							builder.WriteString(padStr)
 						}
 
@@ -1777,7 +1775,7 @@ MainLoop:
 						const tries = 5
 						var mvErr error
 						mvErr = nil
-						for mvTryCount := 0; mvTryCount < tries; mvTryCount++ {
+						for mvTryCount := range tries {
 							mvErr = os.Rename(source, destination)
 							if mvErr == nil {
 								break
@@ -2145,14 +2143,12 @@ MainLoop:
 
 					matches := re.FindAllStringSubmatch(str, -1)
 					matchList := NewList(0)
-					if matches != nil {
-						for _, groupMatches := range matches {
-							innerList := NewList(0)
-							for _, groupMatch := range groupMatches {
-								innerList.Items = append(innerList.Items, &MShellString{groupMatch})
-							}
-							matchList.Items = append(matchList.Items, innerList)
+					for _, groupMatches := range matches {
+						innerList := NewList(0)
+						for _, groupMatch := range groupMatches {
+							innerList.Items = append(innerList.Items, &MShellString{groupMatch})
 						}
+						matchList.Items = append(matchList.Items, innerList)
 					}
 
 					stack.Push(matchList)
@@ -2178,14 +2174,12 @@ MainLoop:
 
 					matches := re.FindAllStringSubmatchIndex(str, -1)
 					matchList := NewList(0)
-					if matches != nil {
-						for _, groupMatches := range matches {
-							innerList := NewList(0)
-							for _, groupMatch := range groupMatches {
-								innerList.Items = append(innerList.Items, &MShellInt{groupMatch})
-							}
-							matchList.Items = append(matchList.Items, innerList)
+					for _, groupMatches := range matches {
+						innerList := NewList(0)
+						for _, groupMatch := range groupMatches {
+							innerList.Items = append(innerList.Items, &MShellInt{groupMatch})
 						}
+						matchList.Items = append(matchList.Items, innerList)
 					}
 
 					stack.Push(matchList)
@@ -2270,7 +2264,7 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot parse a %s as JSON.\n", t.Line, t.Column, obj1.TypeName()))
 					}
 
-					var parsedData interface{}
+					var parsedData any
 					err = json.Unmarshal(jsonData, &parsedData)
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing JSON: %s\n", t.Line, t.Column, err.Error()))
@@ -2317,10 +2311,6 @@ MainLoop:
 
 					if obj1.IsNumeric() {
 						floatVal := obj1.FloatNumeric()
-						if err != nil {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot round a %s.\n", t.Line, t.Column, obj1.TypeName()))
-						}
-
 						rounded := int(math.Round(floatVal))
 						stack.Push(&MShellInt{rounded})
 					} else {
@@ -2377,11 +2367,11 @@ MainLoop:
 					listObj := obj1.(*MShellList)
 
 					newList := NewList(0)
-					stringsSeen := make(map[string]interface{})
-					pathsSeen := make(map[string]interface{})
-					intsSeen := make(map[int]interface{})
-					floatsSeen := make(map[float64]interface{})
-					dateTimesSeen := make(map[time.Time]interface{})
+					stringsSeen := make(map[string]any)
+					pathsSeen := make(map[string]any)
+					intsSeen := make(map[int]any)
+					floatsSeen := make(map[float64]any)
+					dateTimesSeen := make(map[time.Time]any)
 
 					for i, item := range listObj.Items {
 						switch itemTyped := item.(type) {
@@ -2854,25 +2844,16 @@ MainLoop:
 					switch obj2Typed := obj2.(type) {
 					case *MShellList:
 						listObj := obj2Typed
-						length := intObj.Value
-						if intObj.Value > len(listObj.Items) {
-							length = len(listObj.Items) // Adjust to max length
-						}
-
+						length := min(intObj.Value, len(listObj.Items)) // Adjust to max length
 						newList := NewList(length)
-						for i := 0; i < length; i++ {
+						for i := range length {
 							newList.Items[i] = listObj.Items[i]
 						}
 
 						stack.Push(newList)
 					case *MShellString:
 						strObj := obj2Typed
-
-						length := intObj.Value
-						if intObj.Value > len(strObj.Content) {
-							length = len(strObj.Content) // Adjust to max length
-						}
-
+						length := min(intObj.Value, len(strObj.Content)) // Adjust to max length
 						newStr := strObj.Content[:length]
 						stack.Push(&MShellString{newStr})
 					default:
@@ -3132,8 +3113,7 @@ MainLoop:
 								return state.FailWithMessage(fmt.Sprintf("%d:%d: The header value '%s' in '%s' must be stringable, found a %s (%s)\n", t.Line, t.Column, key, t.Lexeme, value.TypeName(), value.DebugString()))
 							}
 
-							// Use CanonicalHeaderKey
-							reqHeaders.Add(http.CanonicalHeaderKey(key), strValue)
+							reqHeaders.Add(key, strValue)
 						}
 
 						// Add headers to the request
@@ -5266,10 +5246,10 @@ func VersionSortComparer(a_str string, b_str string) int {
 	}
 }
 
-func ParseJsonObjToMshell(jsonObj interface{}) MShellObject {
+func ParseJsonObjToMshell(jsonObj any) MShellObject {
 	// See https://pkg.go.dev/encoding/json#Unmarshal
 	switch o := jsonObj.(type) {
-	case []interface{}:
+	case []any:
 		list := NewList(0)
 		for _, item := range o {
 			parsedItem := ParseJsonObjToMshell(item)
@@ -5277,7 +5257,7 @@ func ParseJsonObjToMshell(jsonObj interface{}) MShellObject {
 		}
 		return list
 
-	case map[string]interface{}:
+	case map[string]any:
 		dict := NewDict()
 		// TODO: decide and document how to handle duplicate keys in JSON objects
 		for key, value := range o {

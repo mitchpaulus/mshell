@@ -1801,16 +1801,13 @@ func ParseRawPath(inputString string) (string, error) {
 
 func (obj *MShellLiteral) Equals(other MShellObject) (bool, error) {
 	// Define equality for other as string or as literal or path.
-	switch other.(type) {
+	switch o := other.(type) {
 	case *MShellLiteral:
-		asLiteral, _ := other.(*MShellLiteral)
-		return obj.LiteralText == asLiteral.LiteralText, nil
+		return obj.LiteralText == o.LiteralText, nil
 	case *MShellString:
-		asString, _ := other.(*MShellString)
-		return obj.LiteralText == asString.Content, nil
+		return obj.LiteralText == o.Content, nil
 	case *MShellPath:
-		asPath, _ := other.(*MShellPath)
-		return obj.LiteralText == asPath.Path, nil
+		return obj.LiteralText == o.Path, nil
 	default:
 		return false, fmt.Errorf("Cannot compare a literal with a %s.\n", other.TypeName())
 	}
