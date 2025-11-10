@@ -1771,6 +1771,12 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot %s from a %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName()))
 					}
 
+					// Check if destination is a directory
+					if fi, err := os.Stat(destination); err == nil && fi.IsDir() {
+						// If it is a directory, append the source file name to the destination
+						destination = filepath.Join(destination, filepath.Base(source))
+					}
+
 					if t.Lexeme == "mv" {
 						const tries = 5
 						var mvErr error
