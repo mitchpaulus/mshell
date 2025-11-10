@@ -1,0 +1,72 @@
+<h2 id="flow-overview">Flow Control</h2>
+<p>
+<code>mshell</code> keeps flow control primitives deliberately small: everything is built on top of quotations and a strongly typed stack.
+This section describes the two built-ins you will use most often when branching or looping and highlights the stack contracts they enforce.
+</p>
+
+<h3 id="flow-iff"><code>iff</code>: Typed conditionals</h3>
+<p>
+<code>iff</code> evaluates exactly one quotation based on a boolean that is already on the stack.
+The general stack effect is <code>(bool trueQuote falseQuote -- *)</code>, where <code>*</code> represents whatever the chosen quotation leaves on the stack.
+Push the condition first, then the quotation for the <em>true</em> branch, and finally the quotation for the <em>false</em> branch.
+Only booleans are required; integers are accepted for historical reasons with <code>0</code> treated as <code>true</code> and any other value treated as <code>false</code>.
+</p>
+
+<pre>
+<code><span class="mshellLINECOMMENT"># Print whether input equals &#34;ok&#34;</span>
+<span class="mshellLITERAL">stdin</span> <span class="mshellSTRING">&#34;ok&#34;</span> <span class="mshellEQUALS">=</span>                  <span class="mshellLINECOMMENT"># (bool)</span>
+<span class="mshellLEFT_PAREN">(</span><span class="mshellSTRING">&#34;Matched &#39;ok&#39;&#34;</span> <span class="mshellLITERAL">wl</span><span class="mshellRIGHT_PAREN">)</span>           <span class="mshellLINECOMMENT"># true branch</span>
+<span class="mshellLEFT_PAREN">(</span><span class="mshellSTRING">&#34;Unexpected input&#34;</span> <span class="mshellLITERAL">wl</span><span class="mshellRIGHT_PAREN">)</span>       <span class="mshellLINECOMMENT"># false branch</span>
+<span class="mshellIFF">iff</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+<p>
+You can also omit the false branch by pushing only <code>(bool trueQuote)</code> before <code>iff</code>; nothing runs when the condition is false.
+Because each branch is expressed as a quotation, you can capture and manipulate any values already on the stack without additional syntax.
+The quotations themselves must respect the stack discipline for whatever surrounding code expects.
+</p>
+
+<h3 id="flow-loop"><code>loop</code>: Stack-stable repetition</h3>
+<p>
+<code>loop</code> takes a single quotation from the stack and re-executes it until the quotation calls <code>break</code>.
+The signature is <code>(quote -- )</code>, but there is an extra semantic rule: the quotation must leave the stack exactly the way it found it after every iteration.
+If the stack height changes, evaluation stops with an error such as “Stack size changed from 1 to 2 in loop.”
+This requirement keeps loops predictable and forces you to express evolving state explicitly, typically through stored variables, dictionaries, or fixed-size tuples.
+</p>
+
+<pre>
+<code><span class="mshellINTEGER">0</span> <span class="mshellVARSTORE">count!</span>                        <span class="mshellLINECOMMENT"># Store accumulator outside the loop</span>
+<span class="mshellLEFT_PAREN">(</span>
+    <span class="mshellVARRETRIEVE">@count</span> <span class="mshellINTEGER">5</span> <span class="mshellGREATERTHANOREQUAL">&gt;=</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellBREAK">break</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellIFF">iff</span>  <span class="mshellLINECOMMENT"># Stop once count reaches 5</span>
+    <span class="mshellFORMATSTRING">$&#34;count = {@count}&#34;</span> <span class="mshellLITERAL">wl</span>
+    <span class="mshellVARRETRIEVE">@count</span> <span class="mshellINTEGER">1</span> <span class="mshellPLUS">+</span> <span class="mshellVARSTORE">count!</span>           <span class="mshellLINECOMMENT"># Update in-place so stack size stays constant</span>
+<span class="mshellRIGHT_PAREN">)</span> <span class="mshellLOOP">loop</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+<p>
+The quotation can call <code>continue</code> to skip to the next iteration, and it can read/write any variables or resources in scope.
+For situations where you need to walk collections, pair <code>loop</code> with explicit indices so the stack contract stays constant:
+</p>
+
+<pre>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">10</span> <span class="mshellINTEGER">20</span> <span class="mshellINTEGER">30</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellVARSTORE">items!</span>
+<span class="mshellINTEGER">0</span> <span class="mshellVARSTORE">idx!</span>
+<span class="mshellINTEGER">0</span> <span class="mshellVARSTORE">total!</span>
+<span class="mshellLEFT_PAREN">(</span>
+    <span class="mshellVARRETRIEVE">@idx</span> <span class="mshellVARRETRIEVE">@items</span> <span class="mshellLITERAL">len</span> <span class="mshellGREATERTHANOREQUAL">&gt;=</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellBREAK">break</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellIFF">iff</span>
+    <span class="mshellVARRETRIEVE">@items</span> <span class="mshellVARRETRIEVE">@idx</span> <span class="mshellCOLON">:</span>
+    <span class="mshellVARRETRIEVE">@total</span> <span class="mshellPLUS">+</span>
+    <span class="mshellVARSTORE">total!</span>
+    <span class="mshellVARRETRIEVE">@idx</span> <span class="mshellINTEGER">1</span> <span class="mshellPLUS">+</span> <span class="mshellVARSTORE">idx!</span>
+<span class="mshellRIGHT_PAREN">)</span> <span class="mshellLOOP">loop</span>
+
+<span class="mshellVARRETRIEVE">@total</span> <span class="mshellFORMATSTRING">$&#34;Total = {@total}&#34;</span> <span class="mshellLITERAL">wl</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+<p>
+Any helper quotations you call from inside the loop may change the stack, but the enclosing loop body must finish with the original depth.
+Whenever you need a loop that purposefully grows or shrinks the stack, prefer higher-level words such as <code>each</code>, <code>map</code>, or the folds in <code>lib/std.msh</code>.
+</p>

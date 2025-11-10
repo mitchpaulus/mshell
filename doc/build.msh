@@ -3,6 +3,7 @@
 [
     `basics.inc.html`
     `data-types.inc.html`
+    `flow-control.inc.html`
     `examples.inc.html`
     `execution.inc.html`
     `functions.inc.html`
