@@ -551,7 +551,7 @@ func (q *MShellQuotation) BuildExecutionContext(context *ExecuteContext) (*Execu
 	quoteContext := ExecuteContext{
 		StandardInput:  nil,
 		StandardOutput: nil,
-		Variables: q.Variables,
+		// Variables: q.Variables,
 		ShouldCloseInput: false,
 		ShouldCloseOutput: false,
 		Pbm: context.Pbm,
