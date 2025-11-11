@@ -547,6 +547,7 @@ func (q *MShellQuotation) GetEndToken() Token {
 	return q.MShellParseQuote.EndToken
 }
 
+// This function expects the caller to be the one to close the return context.
 func (q *MShellQuotation) BuildExecutionContext(context *ExecuteContext) (*ExecuteContext, error) {
 	quoteContext := ExecuteContext{
 		StandardInput:  nil,

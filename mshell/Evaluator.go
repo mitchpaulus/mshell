@@ -245,6 +245,16 @@ func (stack *CallStack) Pop() (CallStackItem, error) {
 	return popped, nil
 }
 
+func (state *EvalState) EvaluateQuote(quotation MShellQuotation, stack *MShellStack, outerContext ExecuteContext, definitions []MShellDefinition) (EvalResult, error) {
+	qContext, err := quotation.BuildExecutionContext(&outerContext)
+	defer qContext.Close()
+	if err != nil {
+		return EvalResult{}, err
+	}
+	callStackItem := CallStackItem{ MShellParseItem: &quotation, Name: "Quote", CallStackType: CALLSTACKQUOTE }
+	return state.Evaluate(quotation.Tokens, stack, (*qContext), definitions, callStackItem), nil
+}
+
 func (state *EvalState) Evaluate(objects []MShellParseItem, stack *MShellStack, context ExecuteContext, definitions []MShellDefinition, callStackItem CallStackItem) EvalResult {
 	// Defer popping the call stack
 	if callStackItem.MShellParseItem != nil {
@@ -2446,12 +2456,6 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: The first parameter in 'map' is expected to be a function, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
 					}
 
-					qContext, err := fn.BuildExecutionContext(&context)
-					defer qContext.Close()
-					if err != nil {
-						return state.FailWithMessage(err.Error())
-					}
-
 					// Check if obj2 is a list or a Maybe
 					switch obj2Typed := obj2.(type) {
 					case *MShellList:
@@ -2464,7 +2468,10 @@ MainLoop:
 
 						for i, item := range listObj.Items {
 							mapStack.Push(item)
-							result := state.Evaluate(fn.Tokens, &mapStack, (*qContext), definitions, CallStackItem{fn, "quote", CALLSTACKQUOTE})
+							result, err  := state.EvaluateQuote(*fn, &mapStack, context, definitions)
+							if err != nil {
+								return state.FailWithMessage(err.Error())
+							}
 							if result.ShouldPassResultUpStack() {
 								return result
 							}
@@ -2482,7 +2489,10 @@ MainLoop:
 						} else {
 							stack.Push(maybe.obj) // Push the object inside the Maybe
 							preStackLen := len(*stack)
-							result := state.Evaluate(fn.Tokens, stack, (*qContext), definitions, CallStackItem{fn, "quote", CALLSTACKQUOTE})
+							result, err := state.EvaluateQuote(*fn, stack, context, definitions)
+							if err != nil {
+								return state.FailWithMessage(err.Error())
+							}
 							if result.ShouldPassResultUpStack() {
 								return result
 							}
@@ -2506,12 +2516,6 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: The first parameter in 'map2' is expected to be a quotation function, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
 					}
 
-					qContext, err := fn.BuildExecutionContext(&context)
-					defer qContext.Close()
-					if err != nil {
-						return state.FailWithMessage(err.Error())
-					}
-
 					// Check if obj2 and obj3 are Maybe objects
 					maybe1, ok1 := obj2.(*Maybe)
 					maybe2, ok2 := obj3.(*Maybe)
@@ -2529,7 +2533,11 @@ MainLoop:
 						stack.Push(maybe2.obj)
 						stack.Push(maybe1.obj)
 
-						result := state.Evaluate(fn.Tokens, stack, (*qContext), definitions, CallStackItem{fn, "quote", CALLSTACKQUOTE})
+						result, err := state.EvaluateQuote(*fn, stack, context, definitions)
+						if err != nil {
+							return state.FailWithMessage(err.Error())
+						}
+
 						if result.ShouldPassResultUpStack() {
 							return result
 						}
@@ -2761,12 +2769,6 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: The first parameter in 'bind' is expected to be a function, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
 					}
 
-					qContext, err := fn.BuildExecutionContext(&context)
-					defer qContext.Close()
-					if err != nil {
-						return state.FailWithMessage(err.Error())
-					}
-
 					// Check if obj2 is a Maybe
 					maybeObj, ok := obj2.(*Maybe)
 					if !ok {
@@ -2778,7 +2780,11 @@ MainLoop:
 					} else {
 						stack.Push(maybeObj.obj) // Push the object inside the Maybe
 						preStackLen := len(*stack)
-						result := state.Evaluate(fn.Tokens, stack, (*qContext), definitions, CallStackItem{fn, "quote", CALLSTACKQUOTE})
+
+						result, err := state.EvaluateQuote(*fn, stack, context, definitions)
+						if err != nil {
+							return state.FailWithMessage(err.Error())
+						}
 						if result.ShouldPassResultUpStack() {
 							return result
 						}
@@ -2992,14 +2998,11 @@ MainLoop:
 										cmpStack.Push(sorted_array[leftIndex])
 										cmpStack.Push(sorted_array[rightIndex])
 
-										quoteContext, err := quotation.BuildExecutionContext(&context)
-										defer quoteContext.Close()
-
+										result, err := state.EvaluateQuote(*quotation, &cmpStack, context, definitions)
 										if err != nil {
 											return state.FailWithMessage(err.Error())
 										}
 
-										result := state.Evaluate(quotation.Tokens, &cmpStack, (*quoteContext), definitions, CallStackItem{quotation, "quote", CALLSTACKQUOTE})
 										if result.ShouldPassResultUpStack() {
 											return result
 										}
@@ -3565,13 +3568,10 @@ MainLoop:
 
 				// False quote could be nil in the true only style of iff
 				if quoteToExecute != nil {
-					qContext, err := quoteToExecute.BuildExecutionContext(&context)
-					defer qContext.Close()
+					result, err := state.EvaluateQuote(*quoteToExecute, stack, context, definitions)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
 					}
-
-					result := state.Evaluate(quoteToExecute.Tokens, stack, (*qContext), definitions, CallStackItem{trueQuote, "quote", CALLSTACKQUOTE})
 
 					if result.ShouldPassResultUpStack() {
 						return result
@@ -3606,7 +3606,10 @@ MainLoop:
 				for i := 0; i < len(list.Items)-1; i += 2 {
 					quotation := list.Items[i].(*MShellQuotation)
 
-					result := state.Evaluate(quotation.Tokens, stack, context, definitions, CallStackItem{quotation, "quote", CALLSTACKQUOTE})
+					result, err := state.EvaluateQuote(*quotation, stack, context, definitions)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
 
 					if !result.Success || result.ExitCalled {
 						return result
@@ -3646,7 +3649,10 @@ MainLoop:
 				if trueIndex > -1 {
 					quotation := list.Items[trueIndex+1].(*MShellQuotation)
 
-					result := state.Evaluate(quotation.Tokens, stack, context, definitions, CallStackItem{quotation, "quote", CALLSTACKQUOTE})
+					result, err := state.EvaluateQuote(*quotation, stack, context, definitions)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
 
 					// If we encounter a break, we should return it up the stack
 					if result.ShouldPassResultUpStack() {
@@ -3655,7 +3661,10 @@ MainLoop:
 				} else if len(list.Items)%2 == 1 { // Try to find a final else statement, will be the last item in the list if odd number of items
 					quotation := list.Items[len(list.Items)-1].(*MShellQuotation)
 
-					result := state.Evaluate(quotation.Tokens, stack, context, definitions, CallStackItem{quotation, "quote", CALLSTACKQUOTE})
+					result, err := state.EvaluateQuote(*quotation, stack, context, definitions)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
 
 					if result.ShouldPassResultUpStack() {
 						return result
@@ -3798,13 +3807,11 @@ MainLoop:
 				case *MShellQuotation:
 					if t.Type == AND {
 						if obj2.(*MShellBool).Value {
-							qContext, err := obj1.(*MShellQuotation).BuildExecutionContext(&context)
-							defer qContext.Close()
+							result, err := state.EvaluateQuote(*obj1.(*MShellQuotation), stack, context, definitions)
 							if err != nil {
 								return state.FailWithMessage(err.Error())
 							}
 
-							result := state.Evaluate(obj1.(*MShellQuotation).Tokens, stack, (*qContext), definitions, CallStackItem{obj1.(*MShellQuotation), t.Lexeme, CALLSTACKQUOTE})
 							// Pop the top off the stack
 							secondObj, err := stack.Pop()
 							if err != nil {
@@ -3828,13 +3835,12 @@ MainLoop:
 						if obj2.(*MShellBool).Value {
 							stack.Push(&MShellBool{true})
 						} else {
-							qContext, err := obj1.(*MShellQuotation).BuildExecutionContext(&context)
-							defer qContext.Close()
+
+							result, err := state.EvaluateQuote(*obj1.(*MShellQuotation), stack, context, definitions)
 							if err != nil {
 								return state.FailWithMessage(err.Error())
 							}
 
-							result := state.Evaluate(obj1.(*MShellQuotation).Tokens, stack, (*qContext), definitions, CallStackItem{obj1.(*MShellQuotation), t.Lexeme, CALLSTACKQUOTE})
 							// Pop the top off the stack
 							secondObj, err := stack.Pop()
 							if err != nil {
@@ -4234,13 +4240,10 @@ MainLoop:
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Argument for interpret expected to be a quotation, received a %s (%s)\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
 				}
 
-				quoteContext, err := quotation.BuildExecutionContext(&context)
+				result, err := state.EvaluateQuote(*quotation, stack, context, definitions)
 				if err != nil {
 					return state.FailWithMessage(err.Error())
 				}
-				defer quoteContext.Close()
-
-				result := state.Evaluate(quotation.Tokens, stack, (*quoteContext), definitions, CallStackItem{quotation, "quote", CALLSTACKQUOTE})
 
 				if result.ShouldPassResultUpStack() {
 					return result
@@ -4638,7 +4641,9 @@ func (state *EvalState) EvaluateFormatString(lexeme string, context ExecuteConte
 				// Evaluate the format string contents
 				var stack MShellStack
 				stack = []MShellObject{}
+
 				result := state.Evaluate(contents.Items, &stack, context, definitions, callStackItem)
+
 				if !result.Success {
 					return nil, fmt.Errorf("Error evaluating format string %s", formatStr)
 				}
@@ -5452,9 +5457,9 @@ func EatLinkHeaderWhitespace(linkHeader string, i int) int {
 
 func IsTChar(char rune) bool {
 	return unicode.IsLetter(char) || unicode.IsDigit(char) || char == '!' || char == '#' || char == '$' || char == '%' ||
-		char == '&' || char == '\'' || char == '*' || char == '+' || char == '-' ||
-		char == '.' || char == '^' || char == '_' || char == '`' || char == '|' ||
-		char == '~'
+	char == '&' || char == '\'' || char == '*' || char == '+' || char == '-' ||
+	char == '.' || char == '^' || char == '_' || char == '`' || char == '|' ||
+	char == '~'
 }
 
 func ParseLinkHeaders(linkHeader string) ([]LinkHeader, error) {
