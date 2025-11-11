@@ -32,3 +32,9 @@ You build the documentation using:
 cd doc
 msh build.msh
 ```
+
+When writing documentation, you can get syntax highlighted code sections by using `msh --html`:
+
+```
+printf '"Example string"' | msh --html
+```
