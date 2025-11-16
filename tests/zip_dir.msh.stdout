@@ -1,0 +1,7 @@
+zipDir entries
+["["alpha.txt" false]" "["nested/" true]" "["nested/bravo.txt" false]"]
+zipDir alpha
+ALPHA-DATA
+
+zipDir missing isNone
+true

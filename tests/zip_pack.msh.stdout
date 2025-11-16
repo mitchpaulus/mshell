@@ -1,0 +1,8 @@
+zipPack entries
+["["extras/extra.txt" 420]" "["packed/alpha.txt" 420]"]
+zipPack alpha
+ALPHA-DATA
+
+zipPack extra
+EXTRA-DATA
+

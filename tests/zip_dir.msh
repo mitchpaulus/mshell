@@ -1,0 +1,22 @@
+# zipDir basic coverage plus listing and zipRead.
+tempFile archive-path!
+@archive-path rmf
+@archive-path toPath archive!
+
+`zip/base` @archive zipDir
+
+"zipDir entries" wl
+@archive zipList (
+    dup "name" get?
+    swap
+    dup "isDir" get?
+    swap drop
+    2tuple
+    str
+) map sort str wl
+
+"zipDir alpha" wl
+@archive "alpha.txt" zipRead ? utf8Str wl
+
+"zipDir missing isNone" wl
+@archive "missing.txt" zipRead isNone str wl

@@ -1,0 +1,53 @@
+# zipExtract option coverage.
+tempFile archive-path!
+@archive-path rmf
+@archive-path toPath archive!
+
+`zip/base` @archive zipDir
+
+tempFile extract-root!
+@extract-root rmf
+@extract-root toPath extract-root!
+@extract-root mkdirp
+
+# stripComponents with glob pattern
+@extract-root `subset` / subset-dir!
+@subset-dir mkdirp
+
+@archive @subset-dir {
+    stripComponents: 1,
+    pattern: "nested/*",
+    overwrite: true
+} zipExtract
+
+"zipExtract subset read" wl
+@subset-dir `bravo.txt` / readFile wl
+
+"zipExtract subset alpha exists" wl
+@subset-dir `alpha.txt` / fileExists str wl
+
+# skipExisting keeps original content
+@extract-root `skip` / skip-dir!
+@skip-dir mkdirp
+@skip-dir `alpha.txt` / skip-file!
+"INITIAL" @skip-file writeFile
+
+@archive @skip-dir {
+    skipExisting: true
+} zipExtract
+
+"zipExtract skipExisting" wl
+@skip-file readFile wl
+
+# overwrite replaces existing data
+@extract-root `overwrite` / overwrite-dir!
+@overwrite-dir mkdirp
+@overwrite-dir `alpha.txt` / overwrite-file!
+"INITIAL" @overwrite-file writeFile
+
+@archive @overwrite-dir {
+    overwrite: true
+} zipExtract
+
+"zipExtract overwrite" wl
+@overwrite-file readFile wl
