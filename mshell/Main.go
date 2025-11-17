@@ -2252,7 +2252,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 						matches = append(matches, TabMatch{TABMATCHVAR, "@" + v})
 					}
 				}
-			} else {
+			} else if lastToken.Type == LITERAL {
 				// Completion on variables, since you could always end with !
 				for v := range state.context.Variables {
 					if strings.HasPrefix(v, prefix) {
@@ -2261,14 +2261,15 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				}
 			}
 
-			if len(tokens) == 2 && len(prefix) > 0 {
-				// Try to complete on command names
+			// Try to complete on command names
+			if len(tokens) == 2 && len(prefix) > 0 && lastToken.Type == LITERAL {
 				binMatches := state.context.Pbm.Matches(prefix)
 				for _, match := range binMatches {
 					matches = append(matches, TabMatch{TABMATCHCMD, match})
 				}
 			}
 
+			// FILE Path Completion
 			if prefix == "" {
 				// Dump everything in the current directory
 				cwd, err := os.Getwd()
@@ -2284,7 +2285,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 						}
 					}
 				}
-			} else {
+			} else if lastToken.Type != UNFINISHEDSTRING && lastToken.Type != UNFINISHEDSINGLEQUOTESTRING {
 				// Split on last path separator
 				indexOfLastSeparator := -1
 				for i := len(prefix) - 1; i >= 0; i-- {
@@ -2344,6 +2345,10 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 					insertString = "'" + matches[0].Match
 				} else if lastToken.Type == UNFINISHEDPATH {
 					insertString = "`" + matches[0].Match
+					// Add closing '`' if the item is not a directory. Just check if ends with path sep.
+					if !strings.HasSuffix(matches[0].Match, string(os.PathSeparator)) {
+						insertString += "` "
+					}
 				} else {
 					state.l.resetInput(matches[0].Match)
 					tokens, err := state.l.Tokenize()
