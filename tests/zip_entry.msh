@@ -1,14 +1,13 @@
 # zipExtractEntry behaviors for files and directories.
-tempFile archive-path!
-@archive-path rmf
-@archive-path toPath archive!
+tempFile archive!
 
 `zip/base` @archive zipDir
 
-tempFile entry-root!
-@entry-root rmf
-@entry-root toPath entry-root!
-@entry-root mkdirp
+tempDir tmpRoot!
+now toUnixTime str uniq!
+@tmpRoot toPath tmpRootPath!
+@uniq toPath uniqPath!
+@tmpRootPath `zip-entry` / @uniqPath / entry-root!
 
 # File extraction with mkdirs and overwrite
 @entry-root `single/alpha.txt` / single-file!

@@ -1,13 +1,13 @@
 # Additional coverage for the pattern option on zipExtract.
-tempFile archive-path!
-@archive-path rmf
-@archive-path toPath archive!
+tempFile archive!
 
 `zip/base` @archive zipDir
 
-tempFile dest-root!
-@dest-root rmf
-@dest-root toPath dest!
+tempDir tmpRoot!
+now toUnixTime str uniq!
+@tmpRoot toPath tmpRootPath!
+@uniq toPath uniqPath!
+@tmpRootPath `zip-extract-pattern` / @uniqPath / dest!
 @dest mkdirp
 
 @archive @dest {

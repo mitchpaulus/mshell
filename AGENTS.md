@@ -8,6 +8,11 @@ User documentation is in `doc/`.
 The standard library for the language is in `lib/std.msh`.
 Always work in a separate feature branch.
 
+## Building
+
+This project uses `redo` as the build system.
+In the `mshell` directory, you can run `redo` to rebuild the executables.
+
 ## New Functions
 
 New built in functions are in `mshell/Evaluator.go`.

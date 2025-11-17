@@ -1812,11 +1812,11 @@ MainLoop:
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error in %s from '%s' to '%s': %s\n", t.Line, t.Column, t.Lexeme, source, destination, err.Error()))
 						}
 					}
-				} else if t.Lexeme == "zipDir" {
-					obj1, obj2, err := stack.Pop2(t)
-					if err != nil {
-						return state.FailWithMessage(err.Error())
-					}
+					} else if t.Lexeme == "zipDirInc" || t.Lexeme == "zipDirExc" {
+						obj1, obj2, err := stack.Pop2(t)
+						if err != nil {
+							return state.FailWithMessage(err.Error())
+						}
 
 					zipPath, err := obj1.CastString()
 					if err != nil {
@@ -1825,13 +1825,14 @@ MainLoop:
 
 					sourceDir, err := obj2.CastString()
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot zip from a %s.\n", t.Line, t.Column, obj2.TypeName()))
-					}
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot zip from a %s.\n", t.Line, t.Column, obj2.TypeName()))
+						}
 
-					if err := zipDirectory(sourceDir, zipPath); err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
-					}
-				} else if t.Lexeme == "zipPack" {
+						preserveRoot := t.Lexeme == "zipDirExc"
+						if err := zipDirectory(sourceDir, zipPath, preserveRoot); err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
+						}
+					} else if t.Lexeme == "zipPack" {
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -5663,7 +5664,7 @@ type zipExtractEntryOptions struct {
 	mkdirs bool
 }
 
-func zipDirectory(sourceDir, zipPath string) error {
+func zipDirectory(sourceDir, zipPath string, preserveRoot bool) error {
 	info, err := os.Stat(sourceDir)
 	if err != nil {
 		return fmt.Errorf("Error stating %s: %w", sourceDir, err)
@@ -5682,7 +5683,7 @@ func zipDirectory(sourceDir, zipPath string) error {
 
 	packItem := zipPackItem{
 		SourcePath:   sourceDir,
-		PreserveRoot: false,
+		PreserveRoot: preserveRoot,
 	}
 	return buildZipFromEntries([]zipPackItem{packItem}, zipPath)
 }
@@ -5822,6 +5823,9 @@ func addFileToZip(zipWriter *zip.Writer, sourcePath, entryName string, info os.F
 	}
 	if modeOverride != nil {
 		header.SetMode(*modeOverride)
+	}
+	if !info.IsDir() {
+		header.Method = zip.Deflate
 	}
 
 	writer, err := zipWriter.CreateHeader(header)

@@ -1,13 +1,13 @@
 # zipExtract option coverage.
-tempFile archive-path!
-@archive-path rmf
-@archive-path toPath archive!
+tempFile archive!
 
 `zip/base` @archive zipDir
 
-tempFile extract-root!
-@extract-root rmf
-@extract-root toPath extract-root!
+tempDir tmpRoot!
+now toUnixTime str uniq!
+@tmpRoot toPath tmpRootPath!
+@uniq toPath uniqPath!
+@tmpRootPath `zip-extract` / @uniqPath / extract-root!
 @extract-root mkdirp
 
 # stripComponents with glob pattern

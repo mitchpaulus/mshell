@@ -1,7 +1,5 @@
 # zipPack custom entry coverage.
-tempFile pack-zip-path!
-@pack-zip-path rmf
-@pack-zip-path toPath pack-zip!
+tempFile pack-zip!
 
 [
     {

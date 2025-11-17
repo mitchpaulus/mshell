@@ -1,5 +1,9 @@
 zipDir entries
-["["alpha.txt" false]" "["nested/" true]" "["nested/bravo.txt" false]"]
+compressedSize	isDir	mode	modified	name	uncompressedSize
+17	false	420	2025-11-16T00:56:49	alpha.txt	11
+0	true	2147484141	2025-11-16T00:56:55	nested/	0
+17	false	420	2025-11-16T00:56:55	nested/bravo.txt	11
+14	false	420	2025-11-16T14:53:39	repeat.txt	60
 zipDir alpha
 ALPHA-DATA
 
