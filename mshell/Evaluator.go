@@ -1812,11 +1812,11 @@ MainLoop:
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error in %s from '%s' to '%s': %s\n", t.Line, t.Column, t.Lexeme, source, destination, err.Error()))
 						}
 					}
-					} else if t.Lexeme == "zipDirInc" || t.Lexeme == "zipDirExc" {
-						obj1, obj2, err := stack.Pop2(t)
-						if err != nil {
-							return state.FailWithMessage(err.Error())
-						}
+				} else if t.Lexeme == "zipDirInc" || t.Lexeme == "zipDirExc" {
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
 
 					zipPath, err := obj1.CastString()
 					if err != nil {
@@ -1911,7 +1911,8 @@ MainLoop:
 						dict.Items["compressedSize"] = &MShellInt{entry.CompressedSize}
 						dict.Items["uncompressedSize"] = &MShellInt{entry.UncompressedSize}
 						dict.Items["isDir"] = &MShellBool{entry.IsDir}
-						dict.Items["mode"] = &MShellInt{int(entry.Mode)}
+						dict.Items["perm"] = &MShellInt{int(entry.Mode.Perm())}
+						dict.Items["executable"] = &MShellBool{ !entry.IsDir && entry.Mode.Perm() & 0o111 != 0 }
 						dict.Items["modified"] = &MShellDateTime{Time: entry.Modified, OriginalString: entry.Modified.Format("2006-01-02T15:04:05")}
 						result.Items = append(result.Items, dict)
 					}

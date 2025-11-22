@@ -1,5 +1,7 @@
 zipPack entries
-["["extras/extra.txt" 420]" "["packed/alpha.txt" 420]"]
+extras/extra.txt	493	true
+packed/alpha.txt	420	false
+
 zipPack alpha
 ALPHA-DATA
 

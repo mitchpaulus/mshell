@@ -5,26 +5,20 @@ tempFile pack-zip!
     {
         path: `zip/base/alpha.txt`,
         archivePath: "packed/alpha.txt",
-        mode: 420
+        mode: 420 # '0b110100100'
     }
     {
         path: `zip/extra/extra.txt`,
         archivePath: "extras/extra.txt",
-        mode: 420
+        mode: 493
     }
 ] pack-items!
 
 @pack-items @pack-zip zipPack
 
 "zipPack entries" wl
-@pack-zip zipList (
-    dup "name" get?
-    swap
-    dup "mode" get?
-    swap drop
-    2tuple
-    str
-) map sort str wl
+@pack-zip zipList (i! [@i "name" get? @i "perm" get? str @i "executable" get? str] tjoin) map sortV uw
+'' wl
 
 "zipPack alpha" wl
 @pack-zip "packed/alpha.txt" zipRead ? utf8Str wl
