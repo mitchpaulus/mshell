@@ -1,7 +1,7 @@
 # Additional coverage for the pattern option on zipExtract.
 tempFile archive!
 
-`zip/base` @archive zipDir
+`zip/base` @archive zipDirExc
 
 tempDir tmpRoot!
 now toUnixTime str uniq!

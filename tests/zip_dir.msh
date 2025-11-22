@@ -1,6 +1,6 @@
 # zipDir basic coverage plus listing and zipRead.
 tempFile newZipName!
-`zip/base` @newZipName zipDir
+`zip/base` @newZipName zipDirExc
 
 "zipDir entries" wl
 @newZipName zipList zipEntries!
