@@ -1828,8 +1828,7 @@ MainLoop:
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot zip from a %s.\n", t.Line, t.Column, obj2.TypeName()))
 						}
 
-						preserveRoot := t.Lexeme == "zipDirInc"
-						if err := zipDirectory(sourceDir, zipPath, preserveRoot); err != nil {
+						preserveRoot := t.Lexeme == "zipDirInc" if err := zipDirectory(sourceDir, zipPath, preserveRoot); err != nil {
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
 						}
 					} else if t.Lexeme == "zipPack" {

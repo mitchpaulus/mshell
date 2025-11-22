@@ -1,9 +1,9 @@
 zipDir entries
-compressedSize	executable	isDir	modified	name	perm	uncompressedSize
-17	false	false	2025-11-22T13:32:06	alpha.txt	420	11
-0	false	true	2025-11-22T13:32:06	nested/	493	0
-17	false	false	2025-11-22T13:32:06	nested/bravo.txt	420	11
-14	false	false	2025-11-22T13:32:06	repeat.txt	420	60
+compressedSize	executable	isDir	name	perm	uncompressedSize
+17	false	false	alpha.txt	420	11
+0	false	true	nested/	493	0
+17	false	false	nested/bravo.txt	420	11
+14	false	false	repeat.txt	420	60
 zipDir alpha
 ALPHA-DATA
 
