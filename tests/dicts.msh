@@ -78,3 +78,7 @@
 {} values str wl
 
 [{"a": 1} {"a": 2}] ("a" get? str wl) each
+
+# Dict to List
+{ "a" : 1, "b": 2 } keyValues (2unpack key!, value! $"{@key} {@value 1 +}") map uw
+{ "b" : 1, "a": 2 } keyValues (2unpack key!, value! $"{@key} {@value 1 +}") map uw
