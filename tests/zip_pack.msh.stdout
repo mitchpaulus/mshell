@@ -1,0 +1,10 @@
+zipPack entries
+extras/extra.txt	493	true
+packed/alpha.txt	420	false
+
+zipPack alpha
+ALPHA-DATA
+
+zipPack extra
+EXTRA-DATA
+

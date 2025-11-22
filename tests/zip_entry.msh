@@ -1,0 +1,43 @@
+# zipExtractEntry behaviors for files and directories.
+tempFile archive!
+
+`zip/base` @archive zipDirExc
+
+tempDir tmpRoot!
+now toUnixTime str uniq!
+@tmpRoot toPath tmpRootPath!
+@uniq toPath uniqPath!
+@tmpRootPath `zip-entry` / @uniqPath / entry-root!
+
+# File extraction with mkdirs and overwrite
+@entry-root `single/alpha.txt` / single-file!
+@archive "alpha.txt" @single-file {
+    overwrite: true,
+    mkdirs: true
+} zipExtractEntry
+
+"zipExtractEntry file" wl
+@single-file readFile wl
+
+# skipExisting keeps prior contents
+@entry-root `skip` / skip-dir!
+@skip-dir mkdirp
+@skip-dir `alpha.txt` / skip-file!
+"ORIGINAL" @skip-file writeFile
+
+@archive "alpha.txt" @skip-file {
+    skipExisting: true,
+    mkdirs: true
+} zipExtractEntry
+
+"zipExtractEntry skipExisting" wl
+@skip-file readFile wl
+
+# Directory extraction recreates subtree
+@entry-root `nested` / nested-dir!
+@archive "nested" @nested-dir {
+    mkdirs: true
+} zipExtractEntry
+
+"zipExtractEntry nested" wl
+@nested-dir `bravo.txt` / readFile wl

@@ -1,0 +1,22 @@
+# Additional coverage for the pattern option on zipExtract.
+tempFile archive!
+
+`zip/base` @archive zipDirExc
+
+tempDir tmpRoot!
+now toUnixTime str uniq!
+@tmpRoot toPath tmpRootPath!
+@uniq toPath uniqPath!
+@tmpRootPath `zip-extract-pattern` / @uniqPath / dest!
+@dest mkdirp
+
+@archive @dest {
+    pattern: "nested/bravo.*",
+    overwrite: true
+} zipExtract
+
+"zipExtract pattern read" wl
+@dest `nested/bravo.txt` / readFile wl
+
+"zipExtract pattern alpha missing" wl
+@dest `alpha.txt` / fileExists str wl

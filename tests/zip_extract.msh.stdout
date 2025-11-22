@@ -1,0 +1,10 @@
+zipExtract subset read
+BRAVO-DATA
+
+zipExtract subset alpha exists
+false
+zipExtract skipExisting
+INITIAL
+zipExtract overwrite
+ALPHA-DATA
+

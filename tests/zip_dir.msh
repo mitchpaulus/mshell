@@ -1,0 +1,17 @@
+# zipDir basic coverage plus listing and zipRead.
+tempFile newZipName!
+`zip/base` @newZipName zipDirExc
+
+"zipDir entries" wl
+@newZipName zipList zipEntries!
+@zipEntries :0: keys ("modified" !=) filter keys! # Filter out modified because that breaks unit tests
+@keys tjoin wl
+@zipEntries (
+    entry! @keys (@entry swap get? str) map
+) map tuw
+
+"zipDir alpha" wl
+@newZipName "alpha.txt" zipRead ? utf8Str wl
+
+"zipDir missing isNone" wl
+@newZipName "missing.txt" zipRead isNone str wl

@@ -1,0 +1,5 @@
+zipExtract pattern read
+BRAVO-DATA
+
+zipExtract pattern alpha missing
+false

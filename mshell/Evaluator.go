@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/zip"
 	"bufio"
 	"bytes"
 	"crypto/sha256"
@@ -10,9 +11,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"math"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -251,7 +254,7 @@ func (state *EvalState) EvaluateQuote(quotation MShellQuotation, stack *MShellSt
 	if err != nil {
 		return EvalResult{}, err
 	}
-	callStackItem := CallStackItem{ MShellParseItem: &quotation, Name: "Quote", CallStackType: CALLSTACKQUOTE }
+	callStackItem := CallStackItem{MShellParseItem: &quotation, Name: "Quote", CallStackType: CALLSTACKQUOTE}
 	return state.Evaluate(quotation.Tokens, stack, (*qContext), definitions, callStackItem), nil
 }
 
@@ -1809,6 +1812,211 @@ MainLoop:
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error in %s from '%s' to '%s': %s\n", t.Line, t.Column, t.Lexeme, source, destination, err.Error()))
 						}
 					}
+				} else if t.Lexeme == "zipDirInc" || t.Lexeme == "zipDirExc" {
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					zipPath, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot zip into a %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					sourceDir, err := obj2.CastString()
+					if err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot zip from a %s.\n", t.Line, t.Column, obj2.TypeName()))
+						}
+
+						preserveRoot := t.Lexeme == "zipDirInc"
+						if err := zipDirectory(sourceDir, zipPath, preserveRoot); err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
+						}
+					} else if t.Lexeme == "zipPack" {
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					zipPath, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot zip into a %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					list, ok := obj2.(*MShellList)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: zipPack expects a list of dictionaries describing the entries to add. Found %s.\n", t.Line, t.Column, obj2.TypeName()))
+					}
+
+					entries := make([]zipPackItem, 0, len(list.Items))
+					for idx, item := range list.Items {
+						entryDict, ok := item.(*MShellDict)
+						if !ok {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: zipPack entry %d is not a dictionary. Found %s.\n", t.Line, t.Column, idx, item.TypeName()))
+						}
+
+						sourceObj, ok := entryDict.Items["path"]
+						if !ok {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: zipPack entry %d is missing required 'path'.\n", t.Line, t.Column, idx))
+						}
+
+						sourcePath, err := sourceObj.CastString()
+						if err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: zipPack entry %d had a non-string path (%s).\n", t.Line, t.Column, idx, sourceObj.TypeName()))
+						}
+
+						packItem := zipPackItem{SourcePath: sourcePath, PreserveRoot: true}
+						if archiveObj, ok := entryDict.Items["archivePath"]; ok {
+							archivePath, err := archiveObj.CastString()
+							if err != nil {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: zipPack entry %d had an invalid archivePath (%s).\n", t.Line, t.Column, idx, archiveObj.TypeName()))
+							}
+							packItem.ArchivePath = archivePath
+							packItem.PreserveRoot = false
+						}
+						if modeObj, ok := entryDict.Items["mode"]; ok {
+							modeInt, ok := modeObj.(*MShellInt)
+							if !ok {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: zipPack entry %d had a non-integer mode (%s).\n", t.Line, t.Column, idx, modeObj.TypeName()))
+							}
+							mode := os.FileMode(modeInt.Value)
+							packItem.ModeOverride = &mode
+						}
+						entries = append(entries, packItem)
+					}
+
+					if err := buildZipFromEntries(entries, zipPath); err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
+					}
+				} else if t.Lexeme == "zipList" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'zipList' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					zipPath, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot list entries in a %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					entries, err := collectZipMetadata(zipPath)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
+					}
+
+					result := NewList(0)
+					for _, entry := range entries {
+						dict := NewDict()
+						dict.Items["name"] = &MShellString{entry.Name}
+						dict.Items["compressedSize"] = &MShellInt{entry.CompressedSize}
+						dict.Items["uncompressedSize"] = &MShellInt{entry.UncompressedSize}
+						dict.Items["isDir"] = &MShellBool{entry.IsDir}
+						dict.Items["perm"] = &MShellInt{int(entry.Mode.Perm())}
+						dict.Items["executable"] = &MShellBool{ !entry.IsDir && entry.Mode.Perm() & 0o111 != 0 }
+						dict.Items["modified"] = &MShellDateTime{Time: entry.Modified, OriginalString: entry.Modified.Format("2006-01-02T15:04:05")}
+						result.Items = append(result.Items, dict)
+					}
+					stack.Push(result)
+				} else if t.Lexeme == "zipExtract" {
+					obj1, obj2, obj3, err := stack.Pop3(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					optionsDict, ok := obj1.(*MShellDict)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: zipExtract expects an options dictionary. Found %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					destDir, err := obj2.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: zipExtract destination must be a string/path. Found %s.\n", t.Line, t.Column, obj2.TypeName()))
+					}
+
+					zipPath, err := obj3.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: zipExtract source must be a string/path. Found %s.\n", t.Line, t.Column, obj3.TypeName()))
+					}
+
+					options, err := parseZipExtractOptions(optionsDict)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
+					}
+
+					if err := extractZipArchive(zipPath, destDir, options); err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
+					}
+				} else if t.Lexeme == "zipExtractEntry" {
+					optionsObj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'zipExtractEntry' operation on an empty stack.\n", t.Line, t.Column))
+					}
+					destObj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: zipExtractEntry requires four arguments.\n", t.Line, t.Column))
+					}
+					entryObj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: zipExtractEntry requires four arguments.\n", t.Line, t.Column))
+					}
+					zipObj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: zipExtractEntry requires four arguments.\n", t.Line, t.Column))
+					}
+
+					optionsDict, ok := optionsObj.(*MShellDict)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: zipExtractEntry expects an options dictionary. Found %s.\n", t.Line, t.Column, optionsObj.TypeName()))
+					}
+
+					destPath, err := destObj.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: zipExtractEntry destination must be a string/path. Found %s.\n", t.Line, t.Column, destObj.TypeName()))
+					}
+
+					entryPath, err := entryObj.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: zipExtractEntry entry name must be a string/path. Found %s.\n", t.Line, t.Column, entryObj.TypeName()))
+					}
+
+					zipPath, err := zipObj.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: zipExtractEntry source must be a string/path. Found %s.\n", t.Line, t.Column, zipObj.TypeName()))
+					}
+
+					options, err := parseZipExtractEntryOptions(optionsDict)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
+					}
+
+					if err := extractZipEntry(zipPath, entryPath, destPath, options); err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
+					}
+				} else if t.Lexeme == "zipRead" {
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					entryPath, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: zipRead entry name must be a string/path. Found %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					zipPath, err := obj2.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: zipRead archive path must be a string/path. Found %s.\n", t.Line, t.Column, obj2.TypeName()))
+					}
+
+					data, found, err := readZipEntry(zipPath, entryPath)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
+					}
+					if !found {
+						stack.Push(&Maybe{obj: nil})
+					} else {
+						stack.Push(&Maybe{obj: MShellBinary(data)})
+					}
 				} else if t.Lexeme == "skip" {
 					// Skip like C# LINQ
 					obj1, obj2, err := stack.Pop2(t)
@@ -2468,7 +2676,7 @@ MainLoop:
 
 						for i, item := range listObj.Items {
 							mapStack.Push(item)
-							result, err  := state.EvaluateQuote(*fn, &mapStack, context, definitions)
+							result, err := state.EvaluateQuote(*fn, &mapStack, context, definitions)
 							if err != nil {
 								return state.FailWithMessage(err.Error())
 							}
@@ -5424,6 +5632,735 @@ type LinkHeader struct {
 	Params map[string]string
 }
 
+type zipPackItem struct {
+	SourcePath   string
+	ArchivePath  string
+	ModeOverride *os.FileMode
+	PreserveRoot bool
+}
+
+type zipEntryMetadata struct {
+	Name             string
+	CompressedSize   int
+	UncompressedSize int
+	Modified         time.Time
+	IsDir            bool
+	Mode             os.FileMode
+}
+
+type zipWriteOptions struct {
+	overwrite           bool
+	skipExisting        bool
+	preservePermissions bool
+}
+
+type zipExtractOptions struct {
+	zipWriteOptions
+	stripComponents int
+	pattern         string
+}
+
+type zipExtractEntryOptions struct {
+	zipWriteOptions
+	mkdirs bool
+}
+
+func zipDirectory(sourceDir, zipPath string, preserveRoot bool) error {
+	info, err := os.Stat(sourceDir)
+	if err != nil {
+		return fmt.Errorf("Error stating %s: %w", sourceDir, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("zipDir expects a directory. %s is not a directory", sourceDir)
+	}
+
+	srcAbs, err := filepath.Abs(sourceDir)
+	if err != nil {
+		return fmt.Errorf("Error resolving %s: %w", sourceDir, err)
+	}
+	if err := ensureZipTargetNotInsideSource(srcAbs, zipPath); err != nil {
+		return err
+	}
+
+	packItem := zipPackItem{
+		SourcePath:   sourceDir,
+		PreserveRoot: preserveRoot,
+	}
+	return buildZipFromEntries([]zipPackItem{packItem}, zipPath)
+}
+
+func ensureZipTargetNotInsideSource(sourceAbs string, zipPath string) error {
+	zipAbs, err := filepath.Abs(zipPath)
+	if err != nil {
+		return fmt.Errorf("Error resolving destination %s: %w", zipPath, err)
+	}
+	sourceWithSep := ensureTrailingSeparator(sourceAbs)
+	if zipAbs == sourceAbs || strings.HasPrefix(zipAbs, sourceWithSep) {
+		return fmt.Errorf("Zip destination %s cannot be inside the source directory %s", zipPath, sourceAbs)
+	}
+	return nil
+}
+
+func buildZipFromEntries(items []zipPackItem, zipPath string) error {
+	if len(items) == 0 {
+		return fmt.Errorf("zipPack requires at least one entry")
+	}
+
+	if err := os.MkdirAll(filepath.Dir(zipPath), 0755); err != nil {
+		return fmt.Errorf("Error creating parent directory for %s: %w", zipPath, err)
+	}
+
+	output, err := os.Create(zipPath)
+	if err != nil {
+		return fmt.Errorf("Error creating %s: %w", zipPath, err)
+	}
+	defer output.Close()
+
+	zipWriter := zip.NewWriter(output)
+	defer zipWriter.Close()
+
+	zipAbs, err := filepath.Abs(zipPath)
+	if err != nil {
+		return fmt.Errorf("Error resolving %s: %w", zipPath, err)
+	}
+
+	for _, item := range items {
+		info, err := os.Stat(item.SourcePath)
+		if err != nil {
+			return fmt.Errorf("Error stating %s: %w", item.SourcePath, err)
+		}
+
+		sourceAbs, err := filepath.Abs(item.SourcePath)
+		if err != nil {
+			return fmt.Errorf("Error resolving %s: %w", item.SourcePath, err)
+		}
+		sourceAbsWithSep := ensureTrailingSeparator(sourceAbs)
+		if zipAbs == sourceAbs || strings.HasPrefix(zipAbs, sourceAbsWithSep) {
+			return fmt.Errorf("Zip destination %s cannot be inside the source path %s", zipPath, sourceAbs)
+		}
+
+		if info.IsDir() {
+			prefix := strings.Trim(item.ArchivePath, "/")
+			if prefix == "" && item.PreserveRoot {
+				prefix = filepath.Base(sourceAbs)
+			}
+			if err := addDirectoryToZip(zipWriter, item.SourcePath, prefix, item.ModeOverride); err != nil {
+				return err
+			}
+			continue
+		}
+
+		name := item.ArchivePath
+		if name == "" {
+			name = filepath.Base(item.SourcePath)
+		}
+		name = strings.Trim(name, "/")
+		if name == "" {
+			return fmt.Errorf("zipPack entry for %s produced an empty archive path", item.SourcePath)
+		}
+
+		if err := addFileToZip(zipWriter, item.SourcePath, name, info, item.ModeOverride); err != nil {
+			return err
+		}
+	}
+
+	if err := zipWriter.Close(); err != nil {
+		return fmt.Errorf("Error finalizing zip %s: %w", zipPath, err)
+	}
+	if err := output.Close(); err != nil {
+		return fmt.Errorf("Error closing %s: %w", zipPath, err)
+	}
+	return nil
+}
+
+func addDirectoryToZip(zipWriter *zip.Writer, sourcePath, archivePrefix string, modeOverride *os.FileMode) error {
+	cleanPrefix := strings.Trim(archivePrefix, "/")
+	return filepath.WalkDir(sourcePath, func(pathStr string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+
+		relPath, err := filepath.Rel(sourcePath, pathStr)
+		if err != nil {
+			return err
+		}
+		relPath = filepath.ToSlash(relPath)
+
+		var entryName string
+		if relPath == "." {
+			entryName = cleanPrefix
+		} else if cleanPrefix == "" {
+			entryName = relPath
+		} else {
+			entryName = path.Join(cleanPrefix, relPath)
+		}
+
+		entryName = strings.Trim(entryName, "/")
+		if entryName == "" {
+			// We skip the implicit root when no prefix is requested.
+			return nil
+		}
+		if info.IsDir() {
+			entryName += "/"
+		}
+
+		return addFileToZip(zipWriter, pathStr, entryName, info, modeOverride)
+	})
+}
+
+func addFileToZip(zipWriter *zip.Writer, sourcePath, entryName string, info os.FileInfo, modeOverride *os.FileMode) error {
+	header, err := zip.FileInfoHeader(info)
+	if err != nil {
+		return err
+	}
+	header.Name = path.Clean(strings.ReplaceAll(entryName, "\\", "/"))
+	if info.IsDir() && !strings.HasSuffix(header.Name, "/") {
+		header.Name += "/"
+	}
+	if modeOverride != nil {
+		header.SetMode(*modeOverride)
+	}
+	if !info.IsDir() {
+		header.Method = zip.Deflate
+	}
+
+	writer, err := zipWriter.CreateHeader(header)
+	if err != nil {
+		return err
+	}
+
+	if info.IsDir() {
+		return nil
+	}
+
+	file, err := os.Open(sourcePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	if _, err := io.Copy(writer, file); err != nil {
+		return err
+	}
+	return nil
+}
+
+func safeSizeToInt(size uint64) (int, error) {
+	if size > math.MaxInt {
+		return 0, fmt.Errorf("Zip entry size %d exceeds supported range", size)
+	}
+	return int(size), nil
+}
+
+func collectZipMetadata(zipPath string) ([]zipEntryMetadata, error) {
+	reader, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return nil, fmt.Errorf("Error opening %s: %w", zipPath, err)
+	}
+	defer reader.Close()
+
+	entries := make([]zipEntryMetadata, 0, len(reader.File))
+	for _, file := range reader.File {
+		compressed, err := safeSizeToInt(file.CompressedSize64)
+		if err != nil {
+			return nil, err
+		}
+		uncompressed, err := safeSizeToInt(file.UncompressedSize64)
+		if err != nil {
+			return nil, err
+		}
+		info := file.FileInfo()
+		entry := zipEntryMetadata{
+			Name:             file.Name,
+			CompressedSize:   compressed,
+			UncompressedSize: uncompressed,
+			Modified:         file.Modified,
+			IsDir:            info.IsDir(),
+			Mode:             info.Mode(),
+		}
+		entries = append(entries, entry)
+	}
+
+	return entries, nil
+}
+
+func parseZipExtractOptions(dict *MShellDict) (zipExtractOptions, error) {
+	options := zipExtractOptions{
+		zipWriteOptions: zipWriteOptions{
+			overwrite:           false,
+			skipExisting:        false,
+			preservePermissions: true,
+		},
+		stripComponents: 0,
+		pattern:         "",
+	}
+
+	if val, ok, err := boolOption(dict, "overwrite"); err != nil {
+		return options, err
+	} else if ok {
+		options.overwrite = val
+	}
+
+	if val, ok, err := boolOption(dict, "skipExisting"); err != nil {
+		return options, err
+	} else if ok {
+		options.skipExisting = val
+	}
+
+	if options.overwrite && options.skipExisting {
+		return options, fmt.Errorf("zipExtract options 'overwrite' and 'skipExisting' are mutually exclusive")
+	}
+
+	if val, ok, err := boolOption(dict, "preservePermissions"); err != nil {
+		return options, err
+	} else if ok {
+		options.preservePermissions = val
+	}
+
+	if val, ok, err := intOption(dict, "stripComponents"); err != nil {
+		return options, err
+	} else if ok {
+		if val < 0 {
+			return options, fmt.Errorf("zipExtract option 'stripComponents' must be >= 0")
+		}
+		options.stripComponents = val
+	}
+
+	if val, ok, err := stringOption(dict, "pattern"); err != nil {
+		return options, err
+	} else if ok {
+		options.pattern = val
+	}
+
+	return options, nil
+}
+
+func parseZipExtractEntryOptions(dict *MShellDict) (zipExtractEntryOptions, error) {
+	options := zipExtractEntryOptions{
+		zipWriteOptions: zipWriteOptions{
+			overwrite:           false,
+			skipExisting:        false,
+			preservePermissions: true,
+		},
+		mkdirs: true,
+	}
+
+	if val, ok, err := boolOption(dict, "overwrite"); err != nil {
+		return options, err
+	} else if ok {
+		options.overwrite = val
+	}
+
+	if val, ok, err := boolOption(dict, "skipExisting"); err != nil {
+		return options, err
+	} else if ok {
+		options.skipExisting = val
+	}
+
+	if options.overwrite && options.skipExisting {
+		return options, fmt.Errorf("zipExtractEntry options 'overwrite' and 'skipExisting' are mutually exclusive")
+	}
+
+	if val, ok, err := boolOption(dict, "preservePermissions"); err != nil {
+		return options, err
+	} else if ok {
+		options.preservePermissions = val
+	}
+
+	if val, ok, err := boolOption(dict, "mkdirs"); err != nil {
+		return options, err
+	} else if ok {
+		options.mkdirs = val
+	}
+
+	return options, nil
+}
+
+func boolOption(dict *MShellDict, key string) (bool, bool, error) {
+	item, ok := dict.Items[key]
+	if !ok {
+		return false, false, nil
+	}
+	boolVal, ok := item.(*MShellBool)
+	if !ok {
+		return false, true, fmt.Errorf("Option '%s' must be a bool, found %s", key, item.TypeName())
+	}
+	return boolVal.Value, true, nil
+}
+
+func intOption(dict *MShellDict, key string) (int, bool, error) {
+	item, ok := dict.Items[key]
+	if !ok {
+		return 0, false, nil
+	}
+	intVal, ok := item.(*MShellInt)
+	if !ok {
+		return 0, true, fmt.Errorf("Option '%s' must be an int, found %s", key, item.TypeName())
+	}
+	return intVal.Value, true, nil
+}
+
+func stringOption(dict *MShellDict, key string) (string, bool, error) {
+	item, ok := dict.Items[key]
+	if !ok {
+		return "", false, nil
+	}
+	val, err := item.CastString()
+	if err != nil {
+		return "", true, fmt.Errorf("Option '%s' must be a string/path, found %s", key, item.TypeName())
+	}
+	return val, true, nil
+}
+
+func extractZipArchive(zipPath, destDir string, options zipExtractOptions) error {
+	reader, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return fmt.Errorf("Error opening %s: %w", zipPath, err)
+	}
+	defer reader.Close()
+
+	absDest, err := filepath.Abs(destDir)
+	if err != nil {
+		return fmt.Errorf("Error resolving destination %s: %w", destDir, err)
+	}
+
+	if err := os.MkdirAll(absDest, 0755); err != nil {
+		return fmt.Errorf("Error creating destination %s: %w", absDest, err)
+	}
+	baseWithSep := ensureTrailingSeparator(absDest)
+
+	for _, file := range reader.File {
+		if file.FileInfo().Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("Refusing to extract symlink %s", file.Name)
+		}
+
+		entryName := normalizeZipEntryName(file.Name)
+		if entryName == "" {
+			continue
+		}
+
+		if options.pattern != "" {
+			match, err := path.Match(options.pattern, entryName)
+			if err != nil {
+				return fmt.Errorf("Invalid zipExtract pattern '%s': %w", options.pattern, err)
+			}
+			if !match {
+				continue
+			}
+		}
+
+		stripped, err := stripZipComponents(entryName, options.stripComponents, file.FileInfo().IsDir())
+		if err != nil {
+			return err
+		}
+		if stripped == "" {
+			continue
+		}
+
+		target := filepath.Join(absDest, filepath.FromSlash(stripped))
+		target = filepath.Clean(target)
+		if err := ensureWithinBase(target, absDest, baseWithSep); err != nil {
+			return err
+		}
+
+		if err := writeZipFileToDisk(file, target, options.zipWriteOptions, true); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func extractZipEntry(zipPath, entryPath, destPath string, options zipExtractEntryOptions) error {
+	reader, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return fmt.Errorf("Error opening %s: %w", zipPath, err)
+	}
+	defer reader.Close()
+
+	targetName := normalizeZipEntryName(entryPath)
+	if targetName == "" {
+		return fmt.Errorf("Entry path %s resolves to an empty name", entryPath)
+	}
+
+	var fileEntry *zip.File
+	dirExists := false
+
+	for _, file := range reader.File {
+		name := normalizeZipEntryName(file.Name)
+		if name != targetName {
+			continue
+		}
+
+		if file.FileInfo().IsDir() {
+			dirExists = true
+			break
+		}
+		fileEntry = file
+		break
+	}
+
+	if dirExists {
+		return extractZipDirectoryEntries(reader.File, targetName, destPath, options)
+	}
+
+	if fileEntry != nil {
+		return extractZipFileEntry(fileEntry, destPath, options)
+	}
+
+	prefix := targetName + "/"
+	for _, file := range reader.File {
+		name := normalizeZipEntryName(file.Name)
+		if strings.HasPrefix(name, prefix) {
+			dirExists = true
+			break
+		}
+	}
+
+	if dirExists {
+		return extractZipDirectoryEntries(reader.File, targetName, destPath, options)
+	}
+
+	return fmt.Errorf("Entry '%s' not found in %s", entryPath, zipPath)
+}
+
+func extractZipDirectoryEntries(files []*zip.File, targetName, destPath string, options zipExtractEntryOptions) error {
+	absDest, err := filepath.Abs(destPath)
+	if err != nil {
+		return fmt.Errorf("Error resolving destination %s: %w", destPath, err)
+	}
+
+	if options.mkdirs {
+		if err := os.MkdirAll(absDest, 0755); err != nil {
+			return fmt.Errorf("Error creating destination %s: %w", absDest, err)
+		}
+	} else {
+		info, err := os.Stat(absDest)
+		if err != nil {
+			return fmt.Errorf("Destination %s does not exist", absDest)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("Destination %s is not a directory", absDest)
+		}
+	}
+
+	baseWithSep := ensureTrailingSeparator(absDest)
+	prefix := targetName + "/"
+
+	for _, file := range files {
+		if file.FileInfo().Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("Refusing to extract symlink %s", file.Name)
+		}
+
+		name := normalizeZipEntryName(file.Name)
+		if name == targetName && file.FileInfo().IsDir() {
+			continue
+		}
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+
+		relative := strings.TrimPrefix(name, prefix)
+		if relative == "" {
+			continue
+		}
+
+		target := filepath.Join(absDest, filepath.FromSlash(relative))
+		target = filepath.Clean(target)
+		if err := ensureWithinBase(target, absDest, baseWithSep); err != nil {
+			return err
+		}
+
+		if err := writeZipFileToDisk(file, target, options.zipWriteOptions, true); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func extractZipFileEntry(file *zip.File, destPath string, options zipExtractEntryOptions) error {
+	if file.FileInfo().Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("Refusing to extract symlink %s", file.Name)
+	}
+
+	absDest, err := filepath.Abs(destPath)
+	if err != nil {
+		return fmt.Errorf("Error resolving destination %s: %w", destPath, err)
+	}
+
+	parent := filepath.Dir(absDest)
+	if options.mkdirs {
+		if err := os.MkdirAll(parent, 0755); err != nil {
+			return fmt.Errorf("Error creating parent directory %s: %w", parent, err)
+		}
+	} else {
+		if _, err := os.Stat(parent); err != nil {
+			return fmt.Errorf("Parent directory %s does not exist", parent)
+		}
+	}
+
+	return writeZipFileToDisk(file, absDest, options.zipWriteOptions, false)
+}
+
+func writeZipFileToDisk(file *zip.File, destPath string, options zipWriteOptions, ensureParents bool) error {
+	info := file.FileInfo()
+
+	if info.IsDir() {
+		if ensureParents {
+			if err := os.MkdirAll(destPath, 0755); err != nil {
+				return fmt.Errorf("Error creating directory %s: %w", destPath, err)
+			}
+		} else if err := os.Mkdir(destPath, 0755); err != nil && !errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("Error creating directory %s: %w", destPath, err)
+		}
+
+		if options.preservePermissions {
+			if err := os.Chmod(destPath, info.Mode()); err != nil && !errors.Is(err, os.ErrPermission) {
+				return fmt.Errorf("Error setting permissions on %s: %w", destPath, err)
+			}
+		}
+		return nil
+	}
+
+	parentDir := filepath.Dir(destPath)
+	if ensureParents {
+		if err := os.MkdirAll(parentDir, 0755); err != nil {
+			return fmt.Errorf("Error creating parent directory %s: %w", parentDir, err)
+		}
+	} else {
+		if _, err := os.Stat(parentDir); err != nil {
+			return fmt.Errorf("Parent directory %s does not exist", parentDir)
+		}
+	}
+
+	if options.skipExisting {
+		if _, err := os.Stat(destPath); err == nil {
+			return nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	} else {
+		if _, err := os.Stat(destPath); err == nil && !options.overwrite {
+			return fmt.Errorf("Destination %s already exists", destPath)
+		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+
+	reader, err := file.Open()
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+
+	outFile, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode().Perm())
+	if err != nil {
+		return err
+	}
+	defer outFile.Close()
+
+	if _, err := io.Copy(outFile, reader); err != nil {
+		return err
+	}
+
+	if options.preservePermissions {
+		if err := os.Chmod(destPath, info.Mode()); err != nil && !errors.Is(err, os.ErrPermission) {
+			return fmt.Errorf("Error setting permissions on %s: %w", destPath, err)
+		}
+	}
+	return nil
+}
+
+func readZipEntry(zipPath, entryPath string) ([]byte, bool, error) {
+	reader, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return nil, false, fmt.Errorf("Error opening %s: %w", zipPath, err)
+	}
+	defer reader.Close()
+
+	target := normalizeZipEntryName(entryPath)
+	if target == "" {
+		return nil, false, fmt.Errorf("Entry path %s resolves to an empty name", entryPath)
+	}
+
+	for _, file := range reader.File {
+		name := normalizeZipEntryName(file.Name)
+		if name != target {
+			continue
+		}
+
+		if file.FileInfo().IsDir() {
+			return nil, false, fmt.Errorf("zipRead cannot read directory entries (%s)", entryPath)
+		}
+
+		rc, err := file.Open()
+		if err != nil {
+			return nil, false, err
+		}
+		data, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			return nil, false, err
+		}
+		return data, true, nil
+	}
+
+	return nil, false, nil
+}
+
+func normalizeZipEntryName(name string) string {
+	cleaned := strings.ReplaceAll(name, "\\", "/")
+	for strings.HasPrefix(cleaned, "./") {
+		cleaned = strings.TrimPrefix(cleaned, "./")
+	}
+	cleaned = path.Clean(cleaned)
+	cleaned = strings.TrimPrefix(cleaned, "./")
+	cleaned = strings.TrimPrefix(cleaned, "/")
+	if cleaned == "." {
+		return ""
+	}
+	return cleaned
+}
+
+func stripZipComponents(name string, components int, isDir bool) (string, error) {
+	if components == 0 || name == "" {
+		return name, nil
+	}
+
+	parts := strings.Split(name, "/")
+	if len(parts) <= components {
+		if isDir {
+			return "", nil
+		}
+		return "", fmt.Errorf("Cannot strip %d components from entry %s", components, name)
+	}
+	return strings.Join(parts[components:], "/"), nil
+}
+
+func ensureWithinBase(candidate, base, baseWithSep string) error {
+	candidate = filepath.Clean(candidate)
+	if candidate == base {
+		return nil
+	}
+	if !strings.HasPrefix(candidate, baseWithSep) {
+		return fmt.Errorf("Refusing to write outside destination directory %s (attempted %s)", base, candidate)
+	}
+	return nil
+}
+
+func ensureTrailingSeparator(path string) string {
+	if strings.HasSuffix(path, string(os.PathSeparator)) {
+		return path
+	}
+	return path + string(os.PathSeparator)
+}
+
 func EatLinkHeaderWhitespace(linkHeader string, i int) int {
 	for i < len(linkHeader) {
 		if unicode.IsSpace(rune(linkHeader[i])) {
@@ -5457,9 +6394,9 @@ func EatLinkHeaderWhitespace(linkHeader string, i int) int {
 
 func IsTChar(char rune) bool {
 	return unicode.IsLetter(char) || unicode.IsDigit(char) || char == '!' || char == '#' || char == '$' || char == '%' ||
-	char == '&' || char == '\'' || char == '*' || char == '+' || char == '-' ||
-	char == '.' || char == '^' || char == '_' || char == '`' || char == '|' ||
-	char == '~'
+		char == '&' || char == '\'' || char == '*' || char == '+' || char == '-' ||
+		char == '.' || char == '^' || char == '_' || char == '`' || char == '|' ||
+		char == '~'
 }
 
 func ParseLinkHeaders(linkHeader string) ([]LinkHeader, error) {
