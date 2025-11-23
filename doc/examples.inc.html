@@ -29,12 +29,12 @@ awk <span class="mshellSINGLEQUOTESTRING">'END { print NR }'</span> &lt; input_f
 
 <p> Note that you'll also need the environment variable <code>MSHSTDLIB</code> pointing to the file at <code>lib/std.msh</code>. </p>
 
-<table id="awk-table" style="table-layout: fixed; width: 1200px;">
+<table id="awk-table" style="table-layout: fixed; width: 1400px;">
     <colgroup> 
-        <col style="width: 10%; ">
-        <col style="width: 30%;">
-        <col style="width: 30%;">
-        <col style="width: 30%;">
+        <col style="width: 5%; ">
+        <col style="width: 15%;">
+        <col style="width: 40%;">
+        <col style="width: 40%;">
     </colgroup>
     <thead> 
         <tr> <th> Num </th> <th> Description </th> <th> awk </th> <th> mshell </th>  </tr>
@@ -199,13 +199,11 @@ awk <span class="mshellSINGLEQUOTESTRING">'END { print NR }'</span> &lt; input_f
             <td> 9 </td>
             <td> Print the largest first field and the line that contains it (assumes some $1 is positive) </td>
             <td><code>$1 > max { max = $1; line = $0 }</code><br><code><span class="awk-keyword">END</span> { <span class="awk-function">print</span> max, line }</code></td>
-            <td><code>(<br>
-                line! prev!<br>
-                @line wsplit :0: toFloat? new!<br>
-                @new @prev :0: > ([@new @line]) (@prev) iff<br>
-                )<br>
-                [-99999999 ""] sl foldl<br>
-                dup :0: max! :1: maxLine! $"{@max str} {@maxLine}" wl</code></td>
+            <td>
+<pre><code><span class="mshellLITERAL">sl</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">wsplit</span> <span class="mshellINDEXER">:0:</span> <span class="mshellLITERAL">toFloat</span><span class="mshellQUESTION">?</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">2each</span> <span class="mshellLITERAL">floatCmp</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">sortByCmp</span> <span class="mshellINDEXER">:-1:</span> <span class="mshellVARSTORE">l!</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellVARRETRIEVE">@l</span> <span class="mshellLITERAL">wsplit</span> <span class="mshellINDEXER">:0:</span> <span class="mshellVARRETRIEVE">@l</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellSTRING">&#34; &#34;</span> <span class="mshellLITERAL">join</span> <span class="mshellLITERAL">wl</span>
+<span class="mshellEOF"></span></code></pre>
+            </td>
         </tr>
         <tr>
             <td> 10 </td>
@@ -241,9 +239,12 @@ awk <span class="mshellSINGLEQUOTESTRING">'END { print NR }'</span> &lt; input_f
             <td> 15 </td>
             <td> Print every line with the first field replaced by the line number </td>
             <td><code>{ $1 = NR; <span class="awk-function">print</span> }</code></td>
-            <td><code><span class="mshellLITERAL">wt</span> d!<br>
-                @d len seq (1 + str) map<br>
-                @d (line! lineNum! [@lineNum] @line 1: + " " join) zip uw</code></td>
+            <td>
+<code><span class="mshellLITERAL">wt</span> <span class="mshellINTEGER">1</span> <span class="mshellLITERAL">enumerateN</span>
+<span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">2unpack</span> <span class="mshellVARSTORE">fields!</span><span class="mshellCOMMA">,</span> <span class="mshellVARSTORE">row!</span> <span class="mshellVARRETRIEVE">@fields</span> <span class="mshellVARRETRIEVE">@row</span> <span class="mshellSTR">str</span> <span class="mshellINTEGER">0</span> <span class="mshellLITERAL">setAt</span> <span class="mshellLITERAL">wjoin</span><span class="mshellRIGHT_PAREN">)</span>
+<span class="mshellLITERAL">map</span> <span class="mshellLITERAL">uw</span>
+<span class="mshellEOF"></span></code>
+            </td>
         </tr>
         <tr>
             <td> 16 </td>

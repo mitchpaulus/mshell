@@ -1,7 +1,2 @@
-(
- line! prev!
- @line wsplit :0: toFloat? new!
- @new @prev :0: > ([@new @line]) (@prev) iff
-)
-[-99999999  ""] sl foldl
-dup :0: max! :1: maxLine! $"{@max str} {@maxLine}" wl
+sl ((wsplit :0: toFloat?) 2each floatCmp) sortByCmp :-1: l!
+[@l wsplit :0: @l] " " join wl
