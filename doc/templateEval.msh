@@ -1,0 +1,32 @@
+# Render a template from stdin, replacing ⟦ ... ⟧ with the stdout of executing the enclosed mshell code.
+def render (str -- str)
+    template!
+    @template "⟦" split parts!
+    @parts len 1 =
+    (
+        @template
+    )
+    (
+        @parts :0: prefix!
+        @parts 1 skip "⟦" join after-start!
+
+        @after-start "⟧" split end-parts!
+        @end-parts len 1 =
+        (
+            @template
+        )
+        (
+            @end-parts :0: code!
+            @end-parts 1 skip "⟧" join after!
+
+            [mshell "-c" @code] * ! code-out!
+            @after render tail!
+
+            @prefix @code-out + @tail +
+        )
+        iff
+    )
+    iff
+end
+
+stdin render w

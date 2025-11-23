@@ -11,10 +11,12 @@
 @files
 (
     f!
+    [msh templateEval.msh] @f < * ! stdout!
     @baseLines (
         l!
         @l "CONTENTS" in
-            (@f readFile)
+        # (@f readFile)
+            (@stdout)
             (@l)
         iff
     ) map
