@@ -169,6 +169,8 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `min2`: Minimum of two numbers `(numeric numeric -- numeric)`
 - `min`: Minimum of list of numbers `([numeric] -- numeric)`
 - `mod`: Modulus `(numeric numeric -- numeric)`
+- `floor`: Round a number down to the nearest integer. `(numeric -- int)`
+- `ceil`: Round a number up to the nearest integer. `(numeric -- int)`
 - `round`: Round to nearest integer. Rounds half-way away from zero. `(numeric -- int)`
 
 ## String Functions
