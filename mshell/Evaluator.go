@@ -1825,14 +1825,14 @@ MainLoop:
 
 					sourceDir, err := obj2.CastString()
 					if err != nil {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot zip from a %s.\n", t.Line, t.Column, obj2.TypeName()))
-						}
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot zip from a %s.\n", t.Line, t.Column, obj2.TypeName()))
+					}
 
-						preserveRoot := t.Lexeme == "zipDirInc"
-						if err := zipDirectory(sourceDir, zipPath, preserveRoot); err != nil {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
-						}
-					} else if t.Lexeme == "zipPack" {
+					preserveRoot := t.Lexeme == "zipDirInc"
+					if err := zipDirectory(sourceDir, zipPath, preserveRoot); err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
+					}
+				} else if t.Lexeme == "zipPack" {
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -1912,7 +1912,7 @@ MainLoop:
 						dict.Items["uncompressedSize"] = &MShellInt{entry.UncompressedSize}
 						dict.Items["isDir"] = &MShellBool{entry.IsDir}
 						dict.Items["perm"] = &MShellInt{int(entry.Mode.Perm())}
-						dict.Items["executable"] = &MShellBool{ !entry.IsDir && entry.Mode.Perm() & 0o111 != 0 }
+						dict.Items["executable"] = &MShellBool{!entry.IsDir && entry.Mode.Perm()&0o111 != 0}
 						dict.Items["modified"] = &MShellDateTime{Time: entry.Modified, OriginalString: entry.Modified.Format("2006-01-02T15:04:05")}
 						result.Items = append(result.Items, dict)
 					}
@@ -2526,6 +2526,46 @@ MainLoop:
 					dateTimeObj.Time = dateTimeObj.Time.In(cstLocation)
 					dateTimeObj.OriginalString = ""
 					stack.Push(dateTimeObj)
+				} else if t.Lexeme == "floor" {
+					// Round a number down to the nearest integer
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'floor' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					if obj1.IsNumeric() {
+						switch num := obj1.(type) {
+						case *MShellInt:
+							stack.Push(num)
+						case *MShellFloat:
+							stack.Push(&MShellInt{int(math.Floor(num.Value))})
+						default:
+							floatVal := obj1.FloatNumeric()
+							stack.Push(&MShellInt{int(math.Floor(floatVal))})
+						}
+					} else {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot floor a %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+				} else if t.Lexeme == "ceil" {
+					// Round a number up to the nearest integer
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'ceil' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					if obj1.IsNumeric() {
+						switch num := obj1.(type) {
+						case *MShellInt:
+							stack.Push(num)
+						case *MShellFloat:
+							stack.Push(&MShellInt{int(math.Ceil(num.Value))})
+						default:
+							floatVal := obj1.FloatNumeric()
+							stack.Push(&MShellInt{int(math.Ceil(floatVal))})
+						}
+					} else {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot ceil a %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
 				} else if t.Lexeme == "round" {
 					// Round a float to the nearest integer
 					obj1, err := stack.Pop()
