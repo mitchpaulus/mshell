@@ -193,6 +193,7 @@
         </td> <td><code>([a] (a -- <span class="sig-type sig-type-str">str</span>) -- <span class="sig-type sig-type-dict">dict</span>)</code></td> </tr>
         <tr> <td><code>listToDict</code></td> <td>Transform a list into a dictionary using key and value selectors.</td> <td><code>([a] (a -- b) (a -- c) -- {b: c})</code></td> </tr>
         <tr> <td><code>take</code></td> <td>Return the first <code>n</code> elements of a list. If <code>n</code> is negative, this will cause exception. If <code>n</code> is greater than length of the list, the full list will be returned as is.</td> <td><code>([a] <span class="sig-type sig-type-int">int</span> -- [a])</code></td> </tr>
+        <tr> <td><code>chunk</code></td> <td>Partition a list into consecutive sublists of size <code>n</code>. The final chunk may be smaller if the length is not divisible by <code>n</code>.</td> <td><code>([a] <span class="sig-type sig-type-int">int</span> -- [[a]])</code></td> </tr>
         <tr> <td><code>pop</code></td> <td>Pop the final element off a list. Returns <code>none</code> when the list is empty and leaves the (possibly shortened) list on the stack.</td> <td><code>([a] -- [a] <span class="sig-type sig-type-maybe">Maybe</span>[a])</code></td> </tr>
     </tbody>
 </table>
