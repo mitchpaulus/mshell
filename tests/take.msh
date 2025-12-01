@@ -1,0 +1,5 @@
+# [1 2 3] -1 take str wl # This is exception
+[1 2 3] 0 take str wl
+[1 2 3] 1 take str wl
+[1 2 3] 3 take str wl
+[1 2 3] 4 take str wl

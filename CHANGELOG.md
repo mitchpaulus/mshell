@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `zipExtract`
   - `zipExtractEntry`
   - `zipRead`
+  - `chunk`
 - Support for comma-separated variable stores (e.g. `a!, b!, c!`)
 - LSP completion suggestions for `@` variable references
 - LSP rename support for variables scoped to definitions and globals
@@ -43,6 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `fileExists` now uses golang [os.Lstat](https://pkg.go.dev/os#Lstat) instead of [os.Stat](https://pkg.go.dev/os#Stat), meaning if you have a broken symlink in Linux, `fileExists` will now return `true` instead of `false`.
 - Slice semantics are slightly different. You now get a new backing array guaranteed for slice. This would come up if you did a partial slice (`0:n`), and then extended that in a loop or map. You could then be "extending" into the same backing array, causing previous items in the loop to be overwritten.
 - `mv` will now allow moving a file path into a directory path. Previously had to be file to file.
+- `skip` and `take` no longer throw exception when `n` is greater than the length of the list.
 
 ### Fixed
 
