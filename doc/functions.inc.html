@@ -182,7 +182,7 @@
         <tr> <td><code>filter</code></td> <td>Filter a list by a predicate quotation.</td> <td><code>([a] (a -- <span class="sig-type sig-type-bool">bool</span>) -- [a])</code></td> </tr>
         <tr> <td><code>any</code></td> <td>Return true if any element satisfies the predicate.</td> <td><code>([a] (a -- <span class="sig-type sig-type-bool">bool</span>) -- <span class="sig-type sig-type-bool">bool</span>)</code></td> </tr>
         <tr> <td><code>all</code></td> <td>Return true if all elements satisfy the predicate.</td> <td><code>([a] (a -- <span class="sig-type sig-type-bool">bool</span>) -- <span class="sig-type sig-type-bool">bool</span>)</code></td> </tr>
-        <tr> <td><code>skip</code></td> <td>Skip the first <code>n</code> elements.</td> <td><code>(<span class="sig-type sig-type-list">list</span> <span class="sig-type sig-type-int">int</span> -- <span class="sig-type sig-type-list">list</span>)</code></td> </tr>
+        <tr> <td><code>skip</code></td> <td>Skip the first <code>n</code> elements. If <code>n</code> is negative, this will cause exception. If <code>n</code> is greater than length of the list, an empty list is returned.</td> <td><code>(<span class="sig-type sig-type-list">list</span> <span class="sig-type sig-type-int">int</span> -- <span class="sig-type sig-type-list">list</span>)</code></td> </tr>
         <tr> <td><code>uniq</code></td> <td>Remove duplicate elements.</td> <td><code>([a] -- [a])</code></td> </tr>
         <tr> <td><code>zip</code></td> <td>Zip two lists using a combining quotation. Result length matches the shorter input.</td> <td><code>([a] [b] (a b -- c) -- [c])</code></td> </tr>
         <tr> <td><code>concat</code></td> <td>Flatten a list of lists one level.</td> <td><code>([[a]] -- [a])</code></td> </tr>
@@ -192,7 +192,8 @@
             the resulting dictionary maps each key to the list of items that produced it.
         </td> <td><code>([a] (a -- <span class="sig-type sig-type-str">str</span>) -- <span class="sig-type sig-type-dict">dict</span>)</code></td> </tr>
         <tr> <td><code>listToDict</code></td> <td>Transform a list into a dictionary using key and value selectors.</td> <td><code>([a] (a -- b) (a -- c) -- {b: c})</code></td> </tr>
-        <tr> <td><code>take</code></td> <td>Return the first <code>n</code> elements of a list.</td> <td><code>([a] <span class="sig-type sig-type-int">int</span> -- [a])</code></td> </tr>
+        <tr> <td><code>take</code></td> <td>Return the first <code>n</code> elements of a list. If <code>n</code> is negative, this will cause exception. If <code>n</code> is greater than length of the list, the full list will be returned as is.</td> <td><code>([a] <span class="sig-type sig-type-int">int</span> -- [a])</code></td> </tr>
+        <tr> <td><code>chunk</code></td> <td>Partition a list into consecutive sublists of size <code>n</code>. The final chunk may be smaller if the length is not divisible by <code>n</code>.</td> <td><code>([a] <span class="sig-type sig-type-int">int</span> -- [[a]])</code></td> </tr>
         <tr> <td><code>pop</code></td> <td>Pop the final element off a list. Returns <code>none</code> when the list is empty and leaves the (possibly shortened) list on the stack.</td> <td><code>([a] -- [a] <span class="sig-type sig-type-maybe">Maybe</span>[a])</code></td> </tr>
     </tbody>
 </table>

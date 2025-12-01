@@ -2029,7 +2029,17 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot skip a %s.\n", t.Line, t.Column, obj1.TypeName()))
 					}
 
-					newObj, err := obj2.SliceStart(intVal.Value)
+					listVal, ok := obj2.(*MShellList)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot skip on a %s.\n", t.Line, t.Column, obj2.TypeName()))
+					}
+
+					if intVal.Value < 0 {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot skip a negative number of items (%d).\n", t.Line, t.Column, intVal.Value))
+					}
+
+					// Don't fail on n > len(list), just return empty
+					newObj, err := obj2.SliceStart(min(intVal.Value, len(listVal.Items)))
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
 					}

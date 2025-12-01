@@ -2,6 +2,25 @@
 
 # type numeric int | float
 
+def chunk ([a] int -- [[a]])
+    [] chunkAcc
+end
+
+def chunkAcc([a] int [[a]] -- [[a]])
+    list!, n!, acc!
+    @list len 0 <=
+    (
+        @acc
+    )
+    (
+        @list @n skip # new list
+        @n # chunk size
+        @acc @list @n take append # accumulator
+        chunkAcc
+    )
+    iff
+end
+
 def enumerate ([a] -- )
     dup len seq (2tuple) zip
 end
