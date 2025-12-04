@@ -314,6 +314,11 @@ def seq (int -- [int])
     @seq-accum
 end
 
+def repeat (a int -- [a])
+    item!, count!
+    @count seq (drop @item) map
+end
+
 def htmlDescendents (dict -- [dict])
     [] htmlDescendentsAcc
 end

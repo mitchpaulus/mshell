@@ -124,6 +124,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `parseCsv`: Parse a CSV file into a list of lists of strings. Input can be a path/literal file name, or the string contents itself. (`path|str -- [[str]])`
 - `parseJson`: Parse JSON from a string, binary, or file path into mshell objects. (`path|str|binary -- list|dict|numeric|str|bool`)
 - `seq`: Generate a list of integers, starting from 0. Exclusive end to integer on stack. `2 seq` produces `[0 1]`. `(int -- [int])`
+- `repeat`: Create a list containing the provided value repeated `n` times. `(a int -- [a])`
 - `binPaths`: Puts a list of lists with 2 items, first is the executable name, second is the full path to the executable. `(-- [[str]])`
 - `urlEncode`: URL-encode a string or dictionary of parameters. `(str|dict -- str)`
 - `type`: Return the type name of the top stack item `(a -- str)`
@@ -233,6 +234,7 @@ Dates can be subtracted from each other, and the result is a float number of day
              `[a] (a -- str) -- dict [a])`
 - `listToDict`: Transform a list into a dictionary with a key and value selector function. `([a] (a -- b) (a -- c) -- { b: c })`
 - `take`: Take the first `n` number of elements from list. `([a] int -- [a])`
+- `repeat`: Build a list by repeating the value the requested number of times. `(a int -- [a])`
 - `chunk`: Group a list into consecutive sublists of size `n`. The final chunk may be shorter if the list length isn't divisible by `n`. `([a] int -- [[a]])`
 - `pop`: Pop the final element off the list. Returns a Maybe, `none` for the empty list. Leaves the modified list on the stack. `([a] -- [a] a)`
 
