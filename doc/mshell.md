@@ -185,6 +185,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `join`: Join list of strings into a single string, (list delimiter -- str)
 - `in`: Check for substring in string. (totalString subString -- bool)
 - `index`: Get index of first occurrence of substring in string. Returns Maybe[int] with None for the substring not being found. `(str str -- Maybe[int])`
+- `lastIndexOf`: Get index of last occurrence of substring in string. Returns Maybe[int] with None for the substring not being found. `(str str -- Maybe[int])`
 - `tab`: Puts a tab character on the stack `( -- str)`
 - `tsplit`: Split string into list of strings by tabs. `(str -- [str])`
 - `trim`: Trim whitespace from string. `(str -- str)`
