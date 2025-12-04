@@ -1,0 +1,4 @@
+1 0 repeat str wl
+1 3 repeat str wl
+"hi" 2 repeat str wl
+[1 2] 2 repeat str wl
