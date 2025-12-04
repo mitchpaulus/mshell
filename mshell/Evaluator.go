@@ -2973,8 +2973,8 @@ MainLoop:
 						extendListObj.Items = append(extendListObj.Items, item)
 					}
 					stack.Push(extendListObj)
-				} else if t.Lexeme == "index" {
-					// Find the index of a substring in a string
+				} else if t.Lexeme == "index" || t.Lexeme == "lastIndexOf" {
+					// Find the first or last index of a substring in a string
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -2982,15 +2982,18 @@ MainLoop:
 
 					subStr, err := obj1.CastString()
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: The first parameter in 'indexOf' is expected to be stringable, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The first parameter in '%s' is expected to be stringable, found a %s (%s)\n", t.Line, t.Column, t.Lexeme, obj1.TypeName(), obj1.DebugString()))
 					}
 
 					str, err := obj2.CastString()
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second parameter in 'indexOf' is expected to be stringable, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second parameter in '%s' is expected to be stringable, found a %s (%s)\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj2.DebugString()))
 					}
 
 					index := strings.Index(str, subStr)
+					if t.Lexeme == "lastIndexOf" {
+						index = strings.LastIndex(str, subStr)
+					}
 					if index == -1 {
 						stack.Push(&Maybe{obj: nil}) // No match found
 					} else {
