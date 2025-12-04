@@ -120,6 +120,171 @@ func (objList *MShellStack) String() string {
 	return builder.String()
 }
 
+func getIntOption(dict *MShellDict, key string) (int, bool, error) {
+	if val, ok := dict.Items[key]; ok {
+		if intObj, ok := val.(*MShellInt); ok {
+			return intObj.Value, true, nil
+		}
+		return 0, true, fmt.Errorf("The '%s' option in 'numFmt' must be an int, found a %s (%s)", key, val.TypeName(), val.DebugString())
+	}
+	return 0, false, nil
+}
+
+func getStringOption(dict *MShellDict, key string) (string, bool, error) {
+	if val, ok := dict.Items[key]; ok {
+		str, err := val.CastString()
+		if err != nil {
+			return "", true, fmt.Errorf("The '%s' option in 'numFmt' must be a string, found a %s (%s)", key, val.TypeName(), val.DebugString())
+		}
+		return str, true, nil
+	}
+	return "", false, nil
+}
+
+func getBoolOption(dict *MShellDict, key string) (bool, bool, error) {
+	if val, ok := dict.Items[key]; ok {
+		boolObj, ok := val.(*MShellBool)
+		if !ok {
+			return false, true, fmt.Errorf("The '%s' option in 'numFmt' must be a bool, found a %s (%s)", key, val.TypeName(), val.DebugString())
+		}
+		return boolObj.Value, true, nil
+	}
+	return false, false, nil
+}
+
+func formatWithSigFigs(num float64, sigfigs int) string {
+	if num == 0 {
+		return fmt.Sprintf("0.%s", strings.Repeat("0", sigfigs))
+	}
+
+	sign := ""
+	if num < 0 {
+		sign = "-"
+		num = -num
+	}
+
+	exp := int(math.Floor(math.Log10(num)))
+	decimalsNeeded := sigfigs - (exp + 1)
+
+	var digits string
+	if decimalsNeeded >= 0 {
+		scale := math.Pow10(decimalsNeeded)
+		rounded := math.Round(num * scale)
+		intVal := int64(rounded)
+		digits = fmt.Sprintf("%d", intVal)
+		if len(digits) < decimalsNeeded+1 {
+			digits = strings.Repeat("0", decimalsNeeded+1-len(digits)) + digits
+		}
+		decimalPos := len(digits) - decimalsNeeded
+		if decimalPos == len(digits) {
+			return sign + digits
+		}
+		left := digits[:decimalPos]
+		right := digits[decimalPos:]
+		return sign + left + "." + right
+	}
+
+	// decimalsNeeded < 0 => round to whole number digits
+	roundPow := -decimalsNeeded
+	scale := math.Pow10(roundPow)
+	rounded := math.Round(num / scale)
+	intRounded := int64(rounded) * int64(scale)
+	digits = fmt.Sprintf("%d", intRounded)
+	return sign + digits
+}
+
+func formatWithDecimals(num float64, decimals int) string {
+	sign := ""
+	if num < 0 {
+		sign = "-"
+		num = -num
+	}
+
+	scale := math.Pow10(decimals)
+	rounded := math.Round(num * scale)
+	intPart := int64(rounded) / int64(scale)
+	fracPart := int64(math.Abs(rounded)) % int64(scale)
+
+	intStr := fmt.Sprintf("%d", intPart)
+	if decimals == 0 {
+		return sign + intStr
+	}
+
+	fracStr := fmt.Sprintf("%0*d", decimals, fracPart)
+	return sign + intStr + "." + fracStr
+}
+
+func getGroupingOption(dict *MShellDict, key string) ([]int, bool, error) {
+	val, ok := dict.Items[key]
+	if !ok {
+		return nil, false, nil
+	}
+
+	list, ok := val.(*MShellList)
+	if !ok {
+		return nil, true, fmt.Errorf("The '%s' option in 'numFmt' must be a list of ints, found a %s (%s)", key, val.TypeName(), val.DebugString())
+	}
+
+	grouping := make([]int, len(list.Items))
+	for i, item := range list.Items {
+		intItem, ok := item.(*MShellInt)
+		if !ok {
+			return nil, true, fmt.Errorf("The '%s' option in 'numFmt' must be a list of ints, found a %s (%s) at index %d", key, item.TypeName(), item.DebugString(), i)
+		}
+		if intItem.Value <= 0 {
+			return nil, true, fmt.Errorf("The '%s' option in 'numFmt' must contain positive integers, found %d at index %d", key, intItem.Value, i)
+		}
+		grouping[i] = intItem.Value
+	}
+
+	return grouping, true, nil
+}
+
+func groupIntPart(intPart string, sep string, grouping []int, hasSep bool, hasGrouping bool) string {
+	if !hasSep || sep == "" {
+		return intPart
+	}
+
+	if !hasGrouping {
+		grouping = []int{3}
+	}
+	if len(grouping) == 0 {
+		return intPart
+	}
+
+	if len(intPart) <= grouping[0] {
+		return intPart
+	}
+
+	var parts []string
+	remaining := intPart
+	groupIdx := 0
+	for len(remaining) > 0 {
+		size := grouping[groupIdx]
+		if size <= 0 {
+			size = grouping[len(grouping)-1]
+		}
+
+		if len(remaining) <= size {
+			parts = append(parts, remaining)
+			break
+		}
+
+		parts = append(parts, remaining[len(remaining)-size:])
+		remaining = remaining[:len(remaining)-size]
+
+		if groupIdx < len(grouping)-1 {
+			groupIdx++
+		}
+	}
+
+	for i, j := 0, len(parts)-1; i < j; i, j = i+1, j-1 {
+		parts[i], parts[j] = parts[j], parts[i]
+	}
+
+	return strings.Join(parts, sep)
+}
+
 type EvalState struct {
 	PositionalArgs []string
 	LoopDepth      int
@@ -1560,6 +1725,120 @@ MainLoop:
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot %s a %s (%s).\n", t.Line, t.Column, t.Lexeme, obj1.TypeName(), obj1.DebugString()))
 					}
+				} else if t.Lexeme == "numFmt" {
+					optionsObj, numberObj, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					optionsDict, ok := optionsObj.(*MShellDict)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The top of stack for 'numFmt' must be a dictionary, found a %s (%s)\n", t.Line, t.Column, optionsObj.TypeName(), optionsObj.DebugString()))
+					}
+
+					var num float64
+					switch n := numberObj.(type) {
+					case *MShellInt:
+						num = float64(n.Value)
+					case *MShellFloat:
+						num = n.Value
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second parameter in 'numFmt' must be numeric, found a %s (%s)\n", t.Line, t.Column, numberObj.TypeName(), numberObj.DebugString()))
+					}
+
+					decimals, hasDecimals, err := getIntOption(optionsDict, "decimals")
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
+					}
+					sigfigs, hasSigfigs, err := getIntOption(optionsDict, "sigfigs")
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
+					}
+					preserveInt, _, err := getBoolOption(optionsDict, "preserveInt")
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
+					}
+					thousandsSep, hasThousandsSep, err := getStringOption(optionsDict, "thousandsSep")
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
+					}
+					decimalPoint, hasDecimalPoint, err := getStringOption(optionsDict, "decimalPoint")
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
+					}
+					grouping, hasGrouping, err := getGroupingOption(optionsDict, "grouping")
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
+					}
+
+					if hasDecimals && decimals < 0 {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: 'decimals' in 'numFmt' must be non-negative, got %d\n", t.Line, t.Column, decimals))
+					}
+					if hasSigfigs && sigfigs <= 0 {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: 'sigfigs' in 'numFmt' must be positive, got %d\n", t.Line, t.Column, sigfigs))
+					}
+
+					if !hasDecimals && !hasSigfigs {
+						sigfigs = 3
+						hasSigfigs = true
+					}
+
+					if !hasDecimalPoint {
+						decimalPoint = "."
+					}
+
+					var formatted string
+					if hasDecimals {
+						formatted = fmt.Sprintf("%.*f", decimals, num)
+					} else if hasSigfigs {
+						if preserveInt {
+							if intObj, ok := numberObj.(*MShellInt); ok {
+								absStr := fmt.Sprintf("%d", int(math.Abs(float64(intObj.Value))))
+								if len(absStr) > sigfigs {
+									formatted = fmt.Sprintf("%d", intObj.Value)
+								}
+							}
+						}
+						if formatted == "" {
+							formatted = formatWithSigFigs(num, sigfigs)
+						}
+					} else {
+						switch n := numberObj.(type) {
+						case *MShellInt:
+							formatted = fmt.Sprintf("%d", n.Value)
+						case *MShellFloat:
+							formatted = strconv.FormatFloat(n.Value, 'f', -1, 64)
+						}
+					}
+
+					sign := ""
+					if strings.HasPrefix(formatted, "-") {
+						sign = "-"
+						formatted = formatted[1:]
+					}
+
+					intPart := formatted
+					fracPart := ""
+					if idx := strings.IndexByte(formatted, '.'); idx != -1 {
+						intPart = formatted[:idx]
+						fracPart = formatted[idx+1:]
+					}
+
+					intPart = groupIntPart(intPart, thousandsSep, grouping, hasThousandsSep, hasGrouping)
+
+					if fracPart != "" {
+						formatted = sign + intPart + "." + fracPart
+					} else {
+						formatted = sign + intPart
+					}
+
+					if decimalPoint != "." {
+						if idx := strings.IndexByte(formatted, '.'); idx != -1 {
+							formatted = formatted[:idx] + decimalPoint + formatted[idx+1:]
+						}
+					}
+
+					stack.Push(&MShellString{formatted})
 				} else if t.Lexeme == "hardLink" {
 					newTarget, err := stack.Pop()
 					if err != nil {

@@ -197,6 +197,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `lower`: Convert string to lowercase. `(str -- str)`
 - `upper`: Convert string to uppercase. `(str -- str)`
 - `toFixed`: Convert number to string with fixed number of decimal places. `(numeric int -- str)`
+- `numFmt`: Format numbers with options dictionary. Supports `decimals` (fixed decimal places), `sigfigs` (minimum significant digits, ignored when `decimals` is present; defaults to 3 when neither is set), `preserveInt` (when true, don't round integers longer than `sigfigs`), `decimalPoint` (string to use instead of `.`), `thousandsSep` (string separator), and `grouping` (list of ints in LC_NUMERIC style, reused from the end; defaults to `[3]` when `thousandsSep` is set without `grouping`). `(numeric dict -- str)`
 - `countSubStr`: Count occurrences of substring in string. `(str str -- int)`
 - `take`: Take first n characters from string. `(str int -- str)`
 - `utf8Str`: Decode UTF-8 bytes into a string. `(binary -- str)`
