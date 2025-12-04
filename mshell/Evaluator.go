@@ -28,6 +28,8 @@ import (
 	// "golang.org/x/term"
 	"crypto/md5"
 	"golang.org/x/net/html"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 	"net/http"
 	"net/url"
 	_ "time/tzdata"
@@ -1532,7 +1534,7 @@ MainLoop:
 					} else if t.Lexeme == "trimEnd" {
 						stack.Push(&MShellString{strings.TrimRight(str, " \t\n")})
 					}
-				} else if t.Lexeme == "upper" || t.Lexeme == "lower" {
+				} else if t.Lexeme == "upper" || t.Lexeme == "lower" || t.Lexeme == "title" {
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
@@ -1543,6 +1545,9 @@ MainLoop:
 						f = strings.ToUpper
 					} else if t.Lexeme == "lower" {
 						f = strings.ToLower
+					} else if t.Lexeme == "title" {
+						titleCaser := cases.Title(language.English)
+						f = titleCaser.String
 					}
 
 					switch obj1Typed := obj1.(type) {
