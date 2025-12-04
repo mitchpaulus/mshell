@@ -193,6 +193,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `trimEnd`: Trim whitespace from end of string. `(str -- str)`
 - `startsWith`: Check if string starts with substring. `(str str -- bool)`
 - `endsWith`: Check if string ends with substring. `(str str -- bool)`
+- `title`: Convert string to title case (English, uses [`cases.Title`](https://pkg.go.dev/golang.org/x/text/cases#Title)). `(str -- str)`
 - `lower`: Convert string to lowercase. `(str -- str)`
 - `upper`: Convert string to uppercase. `(str -- str)`
 - `toFixed`: Convert number to string with fixed number of decimal places. `(numeric int -- str)`

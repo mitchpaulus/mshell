@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `dropWhile`
   - `2unpack`
   - `2apply`
+  - `title`
   - `zipDirInc`
   - `zipDirExc`
   - `zipDir`
