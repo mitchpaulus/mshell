@@ -37,3 +37,6 @@ You build the documentation using:
 cd doc
 msh build.msh
 ```
+
+Files in `doc/build` are build artifacts. Do not edit these.
+There is a main base template at `doc/base.html`, which has most of the general purpose CSS and styles for code.

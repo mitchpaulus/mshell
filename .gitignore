@@ -4,6 +4,7 @@ copy.msh
 mshell/bin
 mshell/test.msh
 codex.log
+.gocache/
 
 *.mshell_history
 *.vsix

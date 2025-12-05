@@ -1,0 +1,17 @@
+10.2 { 'decimals': 2 } numFmt wl
+123456789 { 'thousandsSep': ',', 'grouping': [3], 'decimals': 2 } numFmt wl
+1.23456 { 'sigfigs': 3 } numFmt wl
+12.345 { 'decimals': 1, 'sigfigs': 2 } numFmt wl
+1234567 { 'thousandsSep': ' ', 'grouping': [3], 'decimals': 0 } numFmt wl
+1 { 'sigfigs': 4 } numFmt wl
+-12345.6 { 'thousandsSep': ',', 'grouping': [3], 'decimals': 1 } numFmt wl
+0 { 'sigfigs': 4 } numFmt wl
+1000 { 'thousandsSep': '.', 'grouping': [3], 'decimals': 0 } numFmt wl
+0.01 { 'sigfigs': 4 } numFmt wl
+9.1 { 'decimals': 0, 'sigfigs': 5 } numFmt wl
+0.00012 { 'sigfigs': 3 } numFmt wl
+123456789 { 'thousandsSep': ',', 'grouping': [3 2], 'decimals': 0 } numFmt wl
+98765 {} numFmt wl
+1234.5 { 'decimals': 1, 'decimalPoint': ',', 'thousandsSep': ' ', 'grouping': [3] } numFmt wl
+123456 { 'sigfigs': 3, 'preserveInt': true } numFmt wl
+1234 { 'thousandsSep': ',' } numFmt wl

@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `floor`
   - `leftPad`
   - `lastIndexOf`
+  - `numFmt`
+  - `preserveInt` option for `numFmt`
   - `now`
   - `date`
   - `nullDevice`
