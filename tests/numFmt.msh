@@ -15,3 +15,4 @@
 1234.5 { 'decimals': 1, 'decimalPoint': ',', 'thousandsSep': ' ', 'grouping': [3] } numFmt wl
 123456 { 'sigfigs': 3, 'preserveInt': true } numFmt wl
 1234 { 'thousandsSep': ',' } numFmt wl
+'6.954E+1' toFloat? { 'sigFigs': 5 } numFmt wl

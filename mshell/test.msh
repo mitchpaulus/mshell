@@ -3,6 +3,11 @@ def mydef (--)
     @newvar
 end
 
+a.b
+
+@item:'asdfbs'
+@item2:hello?:there?
+
 swap
 dup
 a!b

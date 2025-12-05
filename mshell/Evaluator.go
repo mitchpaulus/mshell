@@ -1750,7 +1750,10 @@ MainLoop:
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
 					}
-					sigfigs, hasSigfigs, err := getIntOption(optionsDict, "sigfigs")
+					sigfigs, hasSigfigs, err := getIntOption(optionsDict, "sigFigs")
+					if err == nil && !hasSigfigs {
+						sigfigs, hasSigfigs, err = getIntOption(optionsDict, "sigfigs")
+					}
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
 					}
