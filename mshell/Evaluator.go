@@ -1787,6 +1787,12 @@ MainLoop:
 						decimalPoint = "."
 					}
 
+					// I Basically hate all this codex generated code, but it works for now.
+					// Turns out formating a float isn't trivial.
+					// See:
+					// G. L. Steele and J. L. White. How to print floating-point numbers accurately. In PLDI, 1991.
+					// F. Loitsch. Printing floating-point numbers quickly and accurately with integers. In PLDI, 2010.
+					// Andrysco Jhala Lerner - Printing Floating-Point Numbers An Always Correct Method
 					var formatted string
 					if hasDecimals {
 						formatted = fmt.Sprintf("%.*f", decimals, num)
