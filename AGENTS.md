@@ -10,8 +10,14 @@ Always work in a separate feature branch.
 
 ## Building
 
-This project uses `redo` as the build system.
-In the `mshell` directory, you can run `redo` to rebuild the executables.
+In the `mshell` directory, there are several very simple build scripts that are one line `go build` commands.
+
+- `build.sh`
+- `build_win.sh`
+- `build_mshw_win.sh`
+
+In general, `go build -o <executable>` should work.
+You may need to build with cache within the repo if you don't have permissions for the golang cache outside.
 
 ## New Functions
 
