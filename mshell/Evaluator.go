@@ -2800,6 +2800,15 @@ MainLoop:
 					// Convert the parsed data to analgous MShell types
 					resultObj := ParseJsonObjToMshell(parsedData)
 					stack.Push(resultObj)
+				} else if t.Lexeme == "toJson" {
+					// Convert an object to JSON
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'toJson' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					jsonStr := obj1.ToJson()
+					stack.Push(&MShellString{jsonStr})
 				} else if t.Lexeme == "type" {
 					obj1, err := stack.Pop()
 					if err != nil {

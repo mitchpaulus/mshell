@@ -125,7 +125,7 @@ func (b MShellBinary) ToJson() string {
 	// Convert the binary data to a base64 string for JSON representation
 	encoded := make([]byte, base64.StdEncoding.EncodedLen(len(b)))
 	base64.StdEncoding.Encode(encoded, b)
-	return fmt.Sprintf("{\"type\": \"Binary\", \"value\": \"%s\"}", string(encoded))
+	return fmt.Sprintf("\"%s\"", string(encoded))
 }
 
 func (b MShellBinary) ToString() string {
@@ -223,9 +223,9 @@ func (m Maybe) Slice(startInc int, endExc int) (MShellObject, error) {
 
 func (m Maybe) ToJson() string {
 	if m.obj == nil {
-		return "{\"type\": \"Maybe\", \"value\": null}"
+		return "null"
 	}
-	return fmt.Sprintf("{\"type\": \"Maybe\", \"value\": %s}", m.obj.ToJson())
+	return m.obj.ToJson()
 }
 
 func (m Maybe) ToString() string {
@@ -320,7 +320,7 @@ func (obj *MShellDateTime) Slice(startInc int, endExc int) (MShellObject, error)
 }
 
 func (obj *MShellDateTime) ToJson() string {
-	return fmt.Sprintf("{\"type\": \"DateTime\", \"value\": \"%s\"}", obj.Iso8601())
+	return fmt.Sprintf("\"%s\"", obj.Iso8601())
 }
 
 func (obj *MShellDateTime) ToString() string {
@@ -423,7 +423,8 @@ func (d *MShellDict) ToJson() string {
 
 	if len(d.Items) == 1 {
 		for key, value := range d.Items {
-			return fmt.Sprintf("{\"%s\": %s}", key, value.ToJson())
+			keyEnc, _ := json.Marshal(key)
+			return fmt.Sprintf("{%s: %s}", string(keyEnc), value.ToJson())
 		}
 	}
 
@@ -439,11 +440,13 @@ func (d *MShellDict) ToJson() string {
 	firstKey := keys[0]
 	firstValue := d.Items[firstKey]
 
-	sb.WriteString(fmt.Sprintf("\"%s\": %s", firstKey, firstValue.ToJson()))
+	firstKeyEnc, _ := json.Marshal(firstKey)
+	sb.WriteString(fmt.Sprintf("%s: %s", string(firstKeyEnc), firstValue.ToJson()))
 
 	for _, key := range keys[1:] {
 		value := d.Items[key]
-		sb.WriteString(fmt.Sprintf(", \"%s\": %s", key, value.ToJson()))
+		keyEnc, _ := json.Marshal(key)
+		sb.WriteString(fmt.Sprintf(", %s: %s", string(keyEnc), value.ToJson()))
 	}
 
 	sb.WriteString("}")
@@ -1556,16 +1559,20 @@ func (obj *MShellSimple) Slice(startInc int, endExc int) (MShellObject, error) {
 // ToJson
 func (obj *MShellLiteral) ToJson() string {
 	escBytes, _ := json.Marshal(obj.LiteralText)
-	return fmt.Sprintf("{\"type\": \"Literal\", \"value\": \"%s\"}", string(escBytes))
+	return fmt.Sprintf("%s", string(escBytes))
 }
 
 func (obj *MShellBool) ToJson() string {
-	return fmt.Sprintf("{\"type\": \"Boolean\", \"value\": %t}", obj.Value)
+	if obj.Value {
+		return "true"
+	} else {
+		return "false"
+	}
 }
 
 func (obj *MShellQuotation) ToJson() string {
 	builder := strings.Builder{}
-	builder.WriteString("{\"type\": \"Quotation\", \"tokens\": [")
+	builder.WriteString("[")
 	if len(obj.Tokens) > 0 {
 		builder.WriteString(obj.Tokens[0].ToJson())
 		for _, token := range obj.Tokens[1:] {
@@ -1573,13 +1580,13 @@ func (obj *MShellQuotation) ToJson() string {
 			builder.WriteString(token.ToJson())
 		}
 	}
-	builder.WriteString("]}")
+	builder.WriteString("]")
 	return builder.String()
 }
 
 func (obj *MShellList) ToJson() string {
 	builder := strings.Builder{}
-	builder.WriteString("{\"type\": \"List\", \"items\": [")
+	builder.WriteString("[")
 	if len(obj.Items) > 0 {
 		builder.WriteString(obj.Items[0].ToJson())
 		for _, item := range obj.Items[1:] {
@@ -1587,36 +1594,37 @@ func (obj *MShellList) ToJson() string {
 			builder.WriteString(item.ToJson())
 		}
 	}
-	builder.WriteString("]}")
+	builder.WriteString("]")
 	return builder.String()
 }
 
 func (obj *MShellString) ToJson() string {
 	// Escape the content
 	escBytes, _ := json.Marshal(obj.Content)
-	return fmt.Sprintf("{\"type\": \"String\", \"content\": %s}", string(escBytes))
+	return fmt.Sprintf("%s", string(escBytes))
 }
 
 func (obj *MShellPath) ToJson() string {
 	// Escape the content
 	escBytes, _ := json.Marshal(obj.Path)
-	return fmt.Sprintf("{\"type\": \"Path\", \"path\": %s}", string(escBytes))
+	return fmt.Sprintf("%s", string(escBytes))
 }
 
 func (obj *MShellPipe) ToJson() string {
-	return fmt.Sprintf("{\"type\": \"Pipe\", \"list\": %s}", obj.List.ToJson())
+	return obj.List.ToJson()
 }
 
 func (obj *MShellInt) ToJson() string {
-	return fmt.Sprintf("{\"type\": \"Integer\", \"value\": %d}", obj.Value)
+	return fmt.Sprintf("%d", obj.Value)
 }
 
 func (obj *MShellFloat) ToJson() string {
-	return fmt.Sprintf("{\"type\": \"Float\", \"value\": %f}", obj.Value)
+	escBytes, _ := json.Marshal(obj.Value)
+	return fmt.Sprintf("%s", string(escBytes))
 }
 
 func (obj *MShellSimple) ToJson() string {
-	return fmt.Sprintf("{\"type\": \"Simple\", \"token\": %s}", obj.Token.ToJson())
+	return obj.Token.ToJson()
 }
 
 // Concat

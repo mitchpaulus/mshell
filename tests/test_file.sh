@@ -6,15 +6,15 @@ MSHSTDLIB="$(realpath ../lib/std.msh)"
 export MSHSTDLIB
 
 if printf %s "$1" | grep -q 'positional'; then
-    mshell "$1" Hello World > "$TMP_FILE" 2>"$TMP_ERR"
+    ../mshell/mshell "$1" Hello World > "$TMP_FILE" 2>"$TMP_ERR"
 elif test "$(basename "$1")" = "args.msh"; then
-    mshell "$1" Hello World > "$TMP_FILE" 2>"$TMP_ERR"
+    ../mshell/mshell "$1" Hello World > "$TMP_FILE" 2>"$TMP_ERR"
 elif test "$(basename "$1")" = "stdin_keyword.msh"; then
-    mshell stdin_keyword.msh < stdin_for_test.txt > "$TMP_FILE" 2>"$TMP_ERR"
+    ../mshell/mshell stdin_keyword.msh < stdin_for_test.txt > "$TMP_FILE" 2>"$TMP_ERR"
 elif test "$(basename "$1")" = "pwd.msh"; then
-    mshell "pwd.msh" "$(pwd)" > "$TMP_FILE" 2>"$TMP_ERR"
+    ../mshell/mshell "pwd.msh" "$(pwd)" > "$TMP_FILE" 2>"$TMP_ERR"
 else
-    mshell < "$1" > "$TMP_FILE" 2>"$TMP_ERR"
+    ../mshell/mshell < "$1" > "$TMP_FILE" 2>"$TMP_ERR"
 fi
 
 if test "$?" -eq 0; then

@@ -1,1 +1,1 @@
-{"my key": {"type": "Integer", "value": 10}, "my key 2": {"type": "Integer", "value": 30}}
+{"my key": 10, "my key 2": 30}

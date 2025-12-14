@@ -6,19 +6,19 @@ also here
 -2
 -1
 -2
-{"literalKey": {"type": "String", "content": "Also should work"}}
-{"hello": {"type": "String", "content": "world"}, "single quote "" string": {"type": "String", "content": "should work"}}
+{"literalKey": "Also should work"}
+{"hello": "world", "single quote \"\" string": "should work"}
 hello
 single quote "" string
-{"key": {"type": "Integer", "value": 1}, "other key": {"type": "Integer", "value": 2}}
-{"key": {"type": "Integer", "value": 1}, "other key": {"type": "Integer", "value": 5}}
-{"key": {"type": "Integer", "value": 3}}
+{"key": 1, "other key": 2}
+{"key": 1, "other key": 5}
+{"key": 3}
 6
 8
 key found in dict
 key not found in dict
 10
-{"key": {"type": "Integer", "value": 10}}
+{"key": 10}
 ["key1" "key2" "key3"]
 [1 2 3]
 []
