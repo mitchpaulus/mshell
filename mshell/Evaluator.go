@@ -3645,6 +3645,21 @@ MainLoop:
 					client := &http.Client{}
 					client.Timeout = 30 * time.Second
 
+					// Check for optional time out in seconds
+					timeoutValue, ok := dict.Items["timeout"]
+					if ok {
+						timeoutInt, ok := timeoutValue.(*MShellInt)
+						if !ok {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: The 'timeout' value in '%s' must be an integer, found a %s (%s)\n", t.Line, t.Column, t.Lexeme, timeoutValue.TypeName(), timeoutValue.DebugString()))
+						}
+
+						if timeoutInt.Value <= 0 {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: The 'timeout' value in '%s' must be a positive integer, found %d.\n", t.Line, t.Column, t.Lexeme, timeoutInt.Value))
+						}
+
+						client.Timeout = time.Duration(timeoutInt.Value) * time.Second
+					}
+
 					// Create request
 					var method string
 					switch t.Lexeme {

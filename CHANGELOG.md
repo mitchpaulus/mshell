@@ -38,6 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `zipRead`
   - `chunk`
   - `repeat`
+  - `toJson`
+- `timeout` option for `httpGet` and `httpPost`
 - Support for comma-separated variable stores (e.g. `a!, b!, c!`)
 - LSP completion suggestions for `@` variable references
 - LSP rename support for variables scoped to definitions and globals

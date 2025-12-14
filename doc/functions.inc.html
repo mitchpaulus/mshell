@@ -368,6 +368,7 @@
                 <ul>
                     <li><code>url</code>: full URL including query parameters.</li>
                     <li><code>headers</code>: dictionary of request headers.</li>
+                    <li><code>timeout</code>: Optional integer number of seconds before the request will timeout. Default is 30 seconds.</li>
                 </ul>
                 <p>The result is a <code><span class="sig-type sig-type-maybe">Maybe</span></code>; it is <code>none</code> when the request fails entirely (for example, a timeout). When successful it wraps a response dictionary with:</p>
                 <ul>
