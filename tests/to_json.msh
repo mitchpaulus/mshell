@@ -1,0 +1,28 @@
+"simple string" toJson wl
+"Control character\tTab" toJson wl
+'string with \"' toJson wl
+'Another
+One' toJson wl
+
+['my list' with_literal] toJson wl
+[] toJson wl
+{
+  'key1': 10,
+  'key2\t' : 0.1
+} toJson wl
+
+{
+    'single quote "" string': 'should work'
+} toJson wl
+
+[
+    [cmd1]
+    [cmd2]
+] | toJson wl
+
+2025-12-14T13:56 toJson wl
+
+`abs/mypath.txt` toJson wl
+('quote' 10) toJson wl
+true toJson wl
+false toJson wl
