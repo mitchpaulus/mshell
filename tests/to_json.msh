@@ -3,6 +3,7 @@
 'string with \"' toJson wl
 'Another
 One' toJson wl
+'\t' toJson wl
 
 ['my list' with_literal] toJson wl
 [] toJson wl
@@ -26,3 +27,15 @@ One' toJson wl
 ('quote' 10) toJson wl
 true toJson wl
 false toJson wl
+
+# Check round trip
+{
+    'key 1': [1 0.1],
+    'key\t2': true,
+    'key3': none,
+    'key4': { 'nested': false },
+} toJson json1!
+@json1 parseJson toJson json2!
+@json1 wl
+@json2 wl
+@json1 @json2 = str wl

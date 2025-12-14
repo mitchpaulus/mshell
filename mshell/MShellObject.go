@@ -440,11 +440,13 @@ func (d *MShellDict) ToJson() string {
 	firstKey := keys[0]
 	firstValue := d.Items[firstKey]
 
-	sb.WriteString(fmt.Sprintf("\"%s\": %s", firstKey, firstValue.ToJson()))
+	firstKeyEnc, _ := json.Marshal(firstKey)
+	sb.WriteString(fmt.Sprintf("%s: %s", string(firstKeyEnc), firstValue.ToJson()))
 
 	for _, key := range keys[1:] {
 		value := d.Items[key]
-		sb.WriteString(fmt.Sprintf(", \"%s\": %s", key, value.ToJson()))
+		keyEnc, _ := json.Marshal(key)
+		sb.WriteString(fmt.Sprintf(", %s: %s", string(keyEnc), value.ToJson()))
 	}
 
 	sb.WriteString("}")
