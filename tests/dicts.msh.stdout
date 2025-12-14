@@ -7,7 +7,7 @@ also here
 -1
 -2
 {"literalKey": "Also should work"}
-{"hello": "world", "single quote "" string": "should work"}
+{"hello": "world", "single quote \"\" string": "should work"}
 hello
 single quote "" string
 {"key": 1, "other key": 2}

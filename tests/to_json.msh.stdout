@@ -2,13 +2,17 @@
 "Control character\tTab"
 "string with \\\""
 "Another\nOne"
+"\\t"
 ["my list", "with_literal"]
 []
-{"key1": 10, "key2\t": 0.1}
+{"key1": 10, "key2\\t": 0.1}
 {"single quote \"\" string": "should work"}
 [["cmd1"], ["cmd2"]]
 "2025-12-14T13:56:00"
 "abs/mypath.txt"
-[{"line": 26, "column": 2, "start": 361, "lexeme": "'quote'", "type": "SINGLEQUOTESTRING"}, {"line": 26, "column": 10, "start": 369, "lexeme": "10", "type": "INTEGER"}]
+[{"line": 27, "column": 2, "start": 376, "lexeme": "'quote'", "type": "SINGLEQUOTESTRING"}, {"line": 27, "column": 10, "start": 384, "lexeme": "10", "type": "INTEGER"}]
 true
 false
+{"key 1": [1, 0.1], "key3": null, "key4": {"nested": false}, "key\\t2": true}
+{"key 1": [1, 0.1], "key3": null, "key4": {"nested": false}, "key\\t2": true}
+true
