@@ -3917,6 +3917,17 @@ MainLoop:
 					}
 				} else if t.Lexeme == "nullDevice" {
 					stack.Push(&MShellPath{Path: nullDevice})
+				} else if t.Lexeme == "return" {
+					// Return from the current function
+					return EvalResult{
+						Success: true,
+						Continue: false,
+						BreakNum: 0,
+						ExitCode: 0,
+						ExitCalled: false,
+					}
+
+
 				} else { // last new function
 					// If we aren't in a list context, throw an error.
 					// Nearly always this is unintended.

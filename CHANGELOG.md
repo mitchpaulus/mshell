@@ -38,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `zipRead`
   - `chunk`
   - `repeat`
+  - `return`
   - `toJson`
 - `timeout` option for `httpGet` and `httpPost`
 - Support for comma-separated variable stores (e.g. `a!, b!, c!`)
