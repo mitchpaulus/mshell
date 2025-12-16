@@ -46,7 +46,6 @@
         <tr> <td><code>toJson</code></td> <td>Serialize any value to a JSON string (binary is base64 encoded; typed wrappers like <span class="sig-type sig-type-path">path</span>, <span class="sig-type sig-type-date">date</span>, maybes, and pipes preserve their shape). Types that directly map to JSON types should "round-trip". Extended types (like <span class="sig-type sig-type-path">path</span> or <span class="sig-type sig-type-date">date</span>) will not.</td> <td><code>(a -- <span class="sig-type sig-type-str">str</span>)</code></td> </tr>
         <tr> <td><code>seq</code></td> <td>Generate a list of integers starting from 0 (exclusive end).</td> <td><code>(<span class="sig-type sig-type-int">int</span> -- [<span class="sig-type sig-type-int">int</span>])</code></td> </tr>
         <tr> <td><code>binPaths</code></td> <td>List every known executable and its resolved path.</td> <td><code>(-- [[<span class="sig-type sig-type-str">str</span>]])</code></td> </tr>
-        <tr> <td><code>urlEncode</code></td> <td>URL encode a string or dictionary of parameters.</td> <td><code>(<span class="sig-type sig-type-str">str</span>|<span class="sig-type sig-type-dict">dict</span> -- <span class="sig-type sig-type-str">str</span>)</code></td> </tr>
         <tr> <td><code>type</code></td> <td>Return the type name of the top stack item.</td> <td><code>(a -- <span class="sig-type sig-type-str">str</span>)</code></td> </tr>
         <tr> <td> <code>sleep</code> </td> <td> Sleep a float number of seconds. </td> <td> <code>(<span class="sig-type sig-type-numeric">numeric</span> -- )</code> </td> </tr>
     </tbody>
@@ -394,5 +393,21 @@
             </td>
             <td><code>(<span class="sig-type sig-type-str">str</span> -- [<span class="sig-type sig-type-dict">dict</span>])</code></td>
         </tr>
+
+        <tr> <td><code>urlEncode</code></td> 
+            <td>
+            <p> URL encode a string or dictionary of parameters. An example of using this in a POST request would be: </p>
+            <pre><code>
+<span class="mshellLEFT_CURLY">{</span> <span class="mshellSTRING">&#34;param1&#34;</span><span class="mshellCOLON">:</span> <span class="mshellINTEGER">10</span><span class="mshellCOMMA">,</span> <span class="mshellSTRING">&#34;param2&#34;</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">&#34;example&#34;</span><span class="mshellCOMMA">,</span> <span class="mshellRIGHT_CURLY">}</span> <span class="mshellVARSTORE">data!</span>
+<span class="mshellLEFT_CURLY">{</span>
+  <span class="mshellSINGLEQUOTESTRING">&#39;url&#39;</span><span class="mshellCOLON">:</span> <span class="mshellSINGLEQUOTESTRING">&#39;https://mywebsite.com/api&#39;</span>,
+  <span class="mshellSINGLEQUOTESTRING">&#39;headers&#39;</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_CURLY">{</span> <span class="mshellSINGLEQUOTESTRING">&#39;Content-Type&#39;</span><span class="mshellCOLON">:</span> <span class="mshellSINGLEQUOTESTRING">&#39;application/x-www-form-urlencoded&#39;</span> <span class="mshellRIGHT_CURLY">}</span><span class="mshellCOMMA">,</span>
+  <span class="mshellSINGLEQUOTESTRING">&#39;body&#39;</span><span class="mshellCOLON">:</span> <span class="mshellVARRETRIEVE">@data</span> <span class="mshellLITERAL">urlEncode</span>,
+<span class="mshellRIGHT_CURLY">}</span> <span class="mshellLITERAL">httpPost</span>
+<span class="mshellEOF"></span>
+</code></pre>
+
+            </td> <td><code>(<span class="sig-type sig-type-str">str</span>|<span class="sig-type sig-type-dict">dict</span> -- <span class="sig-type sig-type-str">str</span>)</code></td> </tr>
+
     </tbody>
 </table>

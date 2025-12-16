@@ -35,6 +35,8 @@ import (
 	_ "time/tzdata"
 	"unicode"
 	"unicode/utf8"
+
+	// "net/http/httputil"
 )
 
 type MShellFunction struct {
@@ -3680,7 +3682,24 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Unknown HTTP method '%s'.\n", t.Line, t.Column, t.Lexeme))
 					}
 
-					req, err := http.NewRequest(method, urlStrValue, nil)
+					var body io.Reader
+					// Doesn't make sense for GETs, but doesn't break anything?
+					bodyStr, ok := dict.Items["body"]
+					if ok {
+						// Body should be a string
+						bodyStrValue, err := bodyStr.CastString()
+						fmt.Fprintf(os.Stderr, "Body value in '%s': %s\n", t.Lexeme, bodyStrValue)
+						if err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: The 'body' value in '%s' must be stringable, found a %s (%s)\n", t.Line, t.Column, t.Lexeme, bodyStr.TypeName(), bodyStr.DebugString()))
+						}
+
+						// Set the request body
+						body = strings.NewReader(bodyStrValue)
+					} else {
+						body = nil
+					}
+
+					req, err := http.NewRequest(method, urlStrValue, body)
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error creating HTTP request for '%s': %s\n", t.Line, t.Column, t.Lexeme, err.Error()))
 					}
@@ -3693,35 +3712,24 @@ MainLoop:
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: The 'headers' value in '%s' must be a dictionary, found a %s (%s)\n", t.Line, t.Column, t.Lexeme, headersList.TypeName(), headersList.DebugString()))
 						}
 						// Create HTTP headers
-						reqHeaders := make(http.Header)
+						// reqHeaders := make(http.Header)
 						for key, value := range headersDict.Items {
 							strValue, err := value.CastString()
 							if err != nil {
 								return state.FailWithMessage(fmt.Sprintf("%d:%d: The header value '%s' in '%s' must be stringable, found a %s (%s)\n", t.Line, t.Column, key, t.Lexeme, value.TypeName(), value.DebugString()))
 							}
 
-							reqHeaders.Add(key, strValue)
+							req.Header.Add(key, strValue)
 						}
-
-						// Add headers to the request
-						req.Header = reqHeaders
 					}
 
-					// Doesn't make sense for GETs, but doesn't break anything?
-					bodyStr, ok := dict.Items["body"]
-					if ok {
-						// Body should be a string
-						bodyStrValue, err := bodyStr.CastString()
-						if err != nil {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: The 'body' value in '%s' must be stringable, found a %s (%s)\n", t.Line, t.Column, t.Lexeme, bodyStr.TypeName(), bodyStr.DebugString()))
-						}
-
-						// Set the request body
-						req.Body = io.NopCloser(strings.NewReader(bodyStrValue))
-					}
+					// Dump the request to stderr for debugging
+					// dump, _ := httputil.DumpRequestOut(req, true)
+					// fmt.Fprintf(os.Stderr, "HTTP Request:\n%s\n", dump)
 
 					// Make request
 					resp, err := client.Do(req)
+
 					if err != nil {
 						stack.Push(&Maybe{obj: nil}) // No response
 					} else {
@@ -3762,6 +3770,9 @@ MainLoop:
 					case *MShellString:
 						// URL encode the string
 						encodedStr = url.QueryEscape(typedObj.Content)
+					case *MShellLiteral:
+						// URL encode the literal string
+						encodedStr = url.QueryEscape(typedObj.LiteralText)
 					case *MShellDict:
 						// URL encode the dictionary
 						values := url.Values{}
@@ -3784,6 +3795,8 @@ MainLoop:
 						}
 
 						encodedStr = values.Encode()
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on a %s.\n", t.Line, t.Column, t.Lexeme, obj.TypeName()))
 					}
 
 					stack.Push(&MShellString{Content: encodedStr})
