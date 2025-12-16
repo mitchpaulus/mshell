@@ -279,7 +279,7 @@ def isoDateFmt (date -- str)
 end
 
 def isoDateTimeFmt (date -- str)
-    "2006-01-02T15:04" dateFmt
+    "2006-01-02T15:04:05" dateFmt
 end
 
 def zip ([a] [b] (a b -- c) -- [c])
