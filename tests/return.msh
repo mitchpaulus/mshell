@@ -1,0 +1,25 @@
+def returnTest (str -- str)
+    a!
+    @a "a" = ("Found a" return) iff
+    @a "b" = ("Found b" return) iff
+    @a "c" = ("Found c" return) iff
+end
+
+def skipAfterReturn (-- str)
+    "Early return"
+    return
+    "Should not see"
+end
+
+def stopBeforeError (-- str)
+    "Safe before error"
+    return
+    1 0 /
+end
+
+"a" returnTest wl
+"b" returnTest wl
+"c" returnTest wl
+
+skipAfterReturn wl
+stopBeforeError wl

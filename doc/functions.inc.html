@@ -29,6 +29,7 @@
         <tr> <td><code>toFloat</code></td> <td>Convert a numeric value to a float.</td> <td><code>(<span class="sig-type sig-type-numeric">numeric</span> -- <span class="sig-type sig-type-maybe">Maybe</span>[<span class="sig-type sig-type-float">float</span>])</code></td> </tr>
         <tr> <td><code>toInt</code></td> <td>Convert a numeric value to an int.</td> <td><code>(<span class="sig-type sig-type-numeric">numeric</span> -- <span class="sig-type sig-type-maybe">Maybe</span>[<span class="sig-type sig-type-int">int</span>])</code></td> </tr>
         <tr> <td><code>exit</code></td> <td>Exit the current script with the provided exit code.</td> <td><code>(<span class="sig-type sig-type-int">int</span> -- )</code></td> </tr>
+        <tr> <td><code>return</code></td> <td>Stop executing the current definition or quotation immediately, leaving the stack as-is for the caller.</td> <td><code>(--)</code></td> </tr>
         <tr> <td><code>read</code></td> <td>Read a line from stdin. Leaves the line and a success flag.</td> <td><code>(-- <span class="sig-type sig-type-str">str</span> <span class="sig-type sig-type-bool">bool</span>)</code></td> </tr>
         <tr> <td><code>stdin</code></td> <td>Read stdin into a string.</td> <td><code>(-- <span class="sig-type sig-type-str">str</span>)</code></td> </tr>
         <tr> <td><code>::</code></td> <td>Read stdin and split into lines (shorthand for <code>stdin lines</code>).</td> <td><code>(-- [<span class="sig-type sig-type-str">str</span>])</code></td> </tr>
