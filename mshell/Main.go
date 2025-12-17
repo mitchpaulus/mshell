@@ -1894,6 +1894,22 @@ func (state *TermState) PushChars(chars []rune) {
 	// state.index = state.index + len(chars)
 }
 
+func (state *TermState) acceptHistoryCompletion() {
+	if len(state.historyComplete) < len(state.currentCommand) {
+		return
+	}
+
+	fmt.Fprintf(state.f, "History complete: %s\n", string(state.historyComplete))
+	if cap(state.currentCommand) < cap(state.historyComplete) {
+		state.currentCommand = make([]rune, len(state.historyComplete), cap(state.historyComplete))
+	} else {
+		state.currentCommand = state.currentCommand[:len(state.historyComplete)]
+	}
+
+	copy(state.currentCommand, state.historyComplete)
+	state.index = len(state.currentCommand)
+}
+
 func WriteToHistory(command string, directory string, historyFilePath string) error {
 	// Each entry is fixed width:
 	// 256 bit (32 byte) SHA hash of full directory path where command was run
@@ -2154,8 +2170,10 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + len(state.currentCommand))
 			state.index = len(state.currentCommand)
 		} else if t.Char == 6 { // Ctrl-F
-			// Move cursor right
-			if state.index < len(state.currentCommand) {
+			if state.index == len(state.currentCommand) {
+				state.acceptHistoryCompletion()
+			} else if state.index < len(state.currentCommand) {
+				// Move cursor right
 				state.index++
 				// fmt.Fprintf(os.Stdout, "\033[C")
 			}
@@ -2449,17 +2467,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			}
 		} else if t.Char == 25 { // Ctrl-Y
 			// Ctrl-y to complete history
-			if len(state.historyComplete) >= len(state.currentCommand) {
-				fmt.Fprintf(state.f, "History complete: %s\n", string(state.historyComplete))
-				if cap(state.currentCommand) < cap(state.historyComplete) {
-					state.currentCommand = make([]rune, len(state.historyComplete), cap(state.historyComplete))
-				} else {
-					state.currentCommand = state.currentCommand[:len(state.historyComplete)]
-				}
-
-				copy(state.currentCommand, state.historyComplete)
-				state.index = len(state.currentCommand)
-			}
+			state.acceptHistoryCompletion()
 		} else if t.Char == 127 { // Backspace
 			// Erase last char
 			if state.index > 0 {
