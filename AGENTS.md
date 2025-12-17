@@ -28,6 +28,10 @@ Always make sure to update the documentation appropriately.
 In the `CHANGELOG.md` file, add the new function as a line under the ## Unreleased (create if necessary), ### Added heading.
 If there are multiple functions, group under a `- Functions` bullet.
 
+## CLI
+
+The CLI code is at `mshell/Main.go`.
+
 ## Testing instructions
 
 All test cases are in `tests`.
