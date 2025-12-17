@@ -3688,7 +3688,7 @@ MainLoop:
 					if ok {
 						// Body should be a string
 						bodyStrValue, err := bodyStr.CastString()
-						fmt.Fprintf(os.Stderr, "Body value in '%s': %s\n", t.Lexeme, bodyStrValue)
+						// fmt.Fprintf(os.Stderr, "Body value in '%s': %s\n", t.Lexeme, bodyStrValue)
 						if err != nil {
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: The 'body' value in '%s' must be stringable, found a %s (%s)\n", t.Line, t.Column, t.Lexeme, bodyStr.TypeName(), bodyStr.DebugString()))
 						}
