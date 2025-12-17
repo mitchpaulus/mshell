@@ -44,20 +44,20 @@ awk <span class="mshellSINGLEQUOTESTRING">'END { print NR }'</span> &lt; input_f
         <tr> 
             <td> 1 </td> 
             <td> Print the total number of input lines</td> 
-            <td><code><span class="awk-keyword">END</span> { <span class="awk-function">print</span> $NR }</code> </td>
+            <td><code><span class="awk-keyword">END</span> { <span class="awk-function">print</span> <span class="awk-builtin">NR</span> }</code> </td>
             <td><code><span class="mshellLITERAL">sl</span> <span class="mshellLITERAL">len</span> <span class="mshellLITERAL">wl</span></code> </td>
         </tr>
         <tr> 
             <td> 2 </td> 
             <td>Print the 10th input line</td> 
-            <td> <code>NR == 10</code> </td>
+            <td> <code><span class="awk-builtin">NR</span> == 10</code> </td>
             <td> <code><span class="mshellLITERAL">sl</span> <span class="mshellINDEXER">:9:</span> <span class="mshellLITERAL">wl</span></code> </td>
         </tr>
 
         <tr> 
             <td> 3 </td>
             <td> Print the last field of every input line </td>
-            <td> <code>{ <span class="awk-function">print</span> $NF }</code> </td>
+            <td> <code>{ <span class="awk-function">print</span> <span class="awk-field">$NF</span> }</code> </td>
             <td> 
 <code><span class="mshellLITERAL">wt</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellINDEXER">:-1:</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">map</span> <span class="mshellLITERAL">uw</span>
 <span class="mshellEOF"></span></code>
@@ -69,7 +69,7 @@ awk <span class="mshellSINGLEQUOTESTRING">'END { print NR }'</span> &lt; input_f
             <td> Print the last field of the last input line </td>
             <td>
 <pre><code>    
-    { field = $NF }
+    { field = <span class="awk-field">$NF</span> }
 <span class="awk-keyword">END</span> { <span class="awk-function">print</span> field }
 </code></pre>
             </td>
@@ -164,7 +164,7 @@ awk <span class="mshellSINGLEQUOTESTRING">'END { print NR }'</span> &lt; input_f
         <tr> 
             <td> 5 </td>
             <td> Print every input line with more than four fields </td>
-            <td> <code>NF > 4</code> </td>
+            <td> <code><span class="awk-builtin">NF</span> &gt; 4</code> </td>
             <td>
 <pre>
 <code><span class="mshellLITERAL">sl</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">wsplit</span> <span class="mshellLITERAL">len</span> <span class="mshellINTEGER">4</span> <span class="mshellGREATERTHAN">&gt;</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">filter</span> <span class="mshellLITERAL">uw</span>
@@ -176,14 +176,14 @@ awk <span class="mshellSINGLEQUOTESTRING">'END { print NR }'</span> &lt; input_f
         <tr> 
             <td> 6 </td>
             <td> Print every input line in which the last field is more than 4 </td>
-            <td> <code>$NF > 4</code> </td>
+            <td> <code><span class="awk-field">$NF</span> &gt; 4</code> </td>
             <td> <code><span class="mshellLITERAL">sl</span> <span class="mshellLITERAL">wt</span> <span class="mshellINDEXER">:-1:</span> <span class="mshellLITERAL">toFloat?</span> <span class="mshellLITERAL">4</span> <span class="mshellLITERAL">></span> <span class="mshellLITERAL">filter</span> <span class="mshellLITERAL">uw</span></code></td>
         </tr>
 
         <tr>
             <td> 7 </td>
             <td> Print the total number of fields in all input lines </td>
-            <td><code>{ nf = nf + NF }</code><br><code><span class="awk-keyword">END</span> { <span class="awk-function">print</span> nf }</code></td>
+            <td><code>{ nf = nf + <span class="awk-builtin">NF</span> }</code><br><code><span class="awk-keyword">END</span> { <span class="awk-function">print</span> nf }</code></td>
             <td><code><span class="mshellLITERAL">sl</span> (<span class="mshellLITERAL">wsplit</span> len) map sum wl</code></td>
         </tr>
 
@@ -198,7 +198,7 @@ awk <span class="mshellSINGLEQUOTESTRING">'END { print NR }'</span> &lt; input_f
         <tr>
             <td> 9 </td>
             <td> Print the largest first field and the line that contains it (assumes some $1 is positive) </td>
-            <td><code>$1 > max { max = $1; line = $0 }</code><br><code><span class="awk-keyword">END</span> { <span class="awk-function">print</span> max, line }</code></td>
+            <td><code><span class="awk-field">$1</span> &gt; max { max = <span class="awk-field">$1</span>; line = <span class="awk-field">$0</span> }</code><br><code><span class="awk-keyword">END</span> { <span class="awk-function">print</span> max, line }</code></td>
             <td>
 <pre><code><span class="mshellLITERAL">sl</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">wsplit</span> <span class="mshellINDEXER">:0:</span> <span class="mshellLITERAL">toFloat</span><span class="mshellQUESTION">?</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">2each</span> <span class="mshellLITERAL">floatCmp</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">sortByCmp</span> <span class="mshellINDEXER">:-1:</span> <span class="mshellVARSTORE">l!</span>
 <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellVARRETRIEVE">@l</span> <span class="mshellLITERAL">wsplit</span> <span class="mshellINDEXER">:0:</span> <span class="mshellVARRETRIEVE">@l</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellSTRING">&#34; &#34;</span> <span class="mshellLITERAL">join</span> <span class="mshellLITERAL">wl</span>
@@ -208,37 +208,37 @@ awk <span class="mshellSINGLEQUOTESTRING">'END { print NR }'</span> &lt; input_f
         <tr>
             <td> 10 </td>
             <td> Print every line that has at least one field </td>
-            <td><code>NF > 0</code></td>
+            <td><code><span class="awk-builtin">NF</span> &gt; 0</code></td>
             <td><code><span class="mshellLITERAL">sl</span> (<span class="mshellLITERAL">wsplit</span> len 0 <span class="mshellLITERAL">></span>) filter uw</code></td>
         </tr>
         <tr>
             <td> 11 </td>
             <td> Print every line longer than 80 characters </td>
-            <td><code>length($0) > 80</code></td>
+            <td><code><span class="awk-function">length</span>(<span class="awk-field">$0</span>) &gt; 80</code></td>
             <td><code><span class="mshellLITERAL">sl</span> (len 80 <span class="mshellLITERAL">></span>) filter uw</code></td>
         </tr>
         <tr>
             <td> 12 </td>
             <td> Print the number of fields in every line followed by the line itself </td>
-            <td><code>{ <span class="awk-function">print</span> NF, $0 }</code></td>
+            <td><code>{ <span class="awk-function">print</span> <span class="awk-builtin">NF</span>, <span class="awk-field">$0</span> }</code></td>
             <td><code><span class="mshellLITERAL">sl</span> (dup wsplit len w " " w wl) each</code></td>
         </tr>
         <tr>
             <td> 13 </td>
             <td> Print the first two fields in opposite order, of every line </td>
-            <td><code>{ <span class="awk-function">print</span> $2, $1 }</code></td>
+            <td><code>{ <span class="awk-function">print</span> <span class="awk-field">$2</span>, <span class="awk-field">$1</span> }</code></td>
             <td><code><span class="mshellLITERAL">wt</span> (:1:, :0: wjoin wl) each</code></td>
         </tr>
         <tr>
             <td> 14 </td>
             <td> Exchange the first two fields of every line and then print the line </td>
-            <td><code>{ temp = $1; $1 = $2; $2 = temp; <span class="awk-function">print</span> }</code></td>
+            <td><code>{ temp = <span class="awk-field">$1</span>; <span class="awk-field">$1</span> = <span class="awk-field">$2</span>; <span class="awk-field">$2</span> = temp; <span class="awk-function">print</span> }</code></td>
             <td><code><span class="mshellLITERAL">wt</span> (:1:, :0:, 2: wjoin wl) each</code></td>
         </tr>
         <tr>
             <td> 15 </td>
             <td> Print every line with the first field replaced by the line number </td>
-            <td><code>{ $1 = NR; <span class="awk-function">print</span> }</code></td>
+            <td><code>{ <span class="awk-field">$1</span> = <span class="awk-builtin">NR</span>; <span class="awk-function">print</span> }</code></td>
             <td>
 <code><span class="mshellLITERAL">wt</span> <span class="mshellINTEGER">1</span> <span class="mshellLITERAL">enumerateN</span>
 <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">2unpack</span> <span class="mshellVARSTORE">fields!</span><span class="mshellCOMMA">,</span> <span class="mshellVARSTORE">row!</span> <span class="mshellVARRETRIEVE">@fields</span> <span class="mshellVARRETRIEVE">@row</span> <span class="mshellSTR">str</span> <span class="mshellINTEGER">0</span> <span class="mshellLITERAL">setAt</span> <span class="mshellLITERAL">wjoin</span><span class="mshellRIGHT_PAREN">)</span>
@@ -249,19 +249,19 @@ awk <span class="mshellSINGLEQUOTESTRING">'END { print NR }'</span> &lt; input_f
         <tr>
             <td> 16 </td>
             <td> Print every line after erasing the second field </td>
-            <td><code>{ $2 = ""; <span class="awk-function">print</span> }</code></td>
+            <td><code>{ <span class="awk-field">$2</span> = <span class="awk-string">""</span>; <span class="awk-function">print</span> }</code></td>
             <td><code><span class="mshellLITERAL">wt</span> ("" 1 setAt wjoin wl) each</code></td>
         </tr>
         <tr>
             <td> 17 </td>
             <td> Print in reverse order the fields of every line </td>
-            <td><code>{ for (i = NF; i > 0; i = i - 1) <span class="awk-function">printf</span> (i == 1 ? <span class="mshellSTRING">"%s"</span> : <span class="mshellSTRING">"%s "</span>), $i; <span class="awk-function">printf</span> "\n" }</code></td>
+            <td><code>{ <span class="awk-keyword">for</span> (i = <span class="awk-builtin">NF</span>; i &gt; 0; i = i - 1) <span class="awk-function">printf</span> (i == 1 ? <span class="awk-string">"%s"</span> : <span class="awk-string">"%s "</span>), <span class="awk-field">$i</span>; <span class="awk-function">printf</span> <span class="awk-string">"\n"</span> }</code></td>
             <td><code><span class="mshellLITERAL">wt</span> (reverse wjoin wl) each</code></td>
         </tr>
         <tr>
             <td> 18 </td>
             <td> Print the sums of the fields of every line </td>
-            <td><code>{ sum = 0; for (i = 1; i <= NF; i = i + 1) sum = sum + $i; <span class="awk-function">print</span> sum }</code></td>
+            <td><code>{ sum = 0; <span class="awk-keyword">for</span> (i = 1; i &lt;= <span class="awk-builtin">NF</span>; i = i + 1) sum = sum + <span class="awk-field">$i</span>; <span class="awk-function">print</span> sum }</code></td>
             <td><code><span class="mshellLITERAL">wt</span> ((toFloat?) map sum str wl) each</code></td>
         </tr>
         <tr>
@@ -270,7 +270,7 @@ awk <span class="mshellSINGLEQUOTESTRING">'END { print NR }'</span> &lt; input_f
             <td>
                 <pre><code>
 { 
-    for (i = 1; i <= NF; i = i + 1) sum = sum + $i 
+    <span class="awk-keyword">for</span> (i = 1; i &lt;= <span class="awk-builtin">NF</span>; i = i + 1) sum = sum + <span class="awk-field">$i</span> 
 }
 <span class="awk-keyword">END</span> { <span class="awk-function">print</span> sum }
 </code></pre>
@@ -280,7 +280,7 @@ awk <span class="mshellSINGLEQUOTESTRING">'END { print NR }'</span> &lt; input_f
         <tr>
             <td> 20 </td>
             <td> Print every line after replacing each field by its absolute value </td>
-            <td><code>{ for (i = 1; i <= NF; i = i + 1) $i = ($i < 0) ? -$i : $i; <span class="awk-function">print</span> }</code></td>
+            <td><code>{ <span class="awk-keyword">for</span> (i = 1; i &lt;= <span class="awk-builtin">NF</span>; i = i + 1) <span class="awk-field">$i</span> = (<span class="awk-field">$i</span> &lt; 0) ? -<span class="awk-field">$i</span> : <span class="awk-field">$i</span>; <span class="awk-function">print</span> }</code></td>
             <td>
                 ⟦  [msh --html]  'wt ((toFloat? abs str) map wjoin wl) each' < ! ⟧
                 <!-- <code><span class="mshellLITERAL">wt</span> ((toFloat? abs str) map wjoin wl) each</code> -->
