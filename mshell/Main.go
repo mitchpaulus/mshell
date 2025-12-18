@@ -554,12 +554,15 @@ func (s *TermState) Render() {
 	}()
 
 	tokens, err := s.l.Tokenize()
+	commandLiteralIndex := -1
 	if err != nil {
 		for _, r := range s.currentCommand {
 			s.renderBuffer = utf8.AppendRune(s.renderBuffer, r)
 		}
 	} else {
-		for _, t := range tokens {
+		commandLiteralIndex = s.commandLiteralTokenIndex(tokens)
+
+		for i, t := range tokens {
 			if t.Type == STRING || t.Type == SINGLEQUOTESTRING || t.Type == FORMATSTRING {
 				s.renderBuffer = append(s.renderBuffer, "\033[31m"...)
 				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
@@ -593,7 +596,13 @@ func (s *TermState) Render() {
 				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
 				s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
 			} else {
+				if i == commandLiteralIndex {
+					s.renderBuffer = append(s.renderBuffer, "\033[4;34m"...)
+				}
 				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
+				if i == commandLiteralIndex {
+					s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
+				}
 			}
 		}
 	}
@@ -676,6 +685,36 @@ func (s *TermState) Render() {
 	// Move cursor back to the beginning of the line.
 	// s.clearToPrompt()
 	// fmt.Fprintf(os.Stdout, "%s", string(s.currentCommand))
+}
+
+func (s *TermState) commandLiteralTokenIndex(tokens []Token) int {
+	for i, t := range tokens {
+		if t.Type == WHITESPACE || t.Type == LINECOMMENT {
+			continue
+		}
+
+		if t.Type != LITERAL {
+			return -1
+		}
+
+		literalStr := t.Lexeme
+		firstTokenIsCmd := false
+		_, isInPath := s.context.Pbm.Lookup(literalStr)
+		if isInPath {
+			firstTokenIsCmd = true
+		} else {
+			_, firstTokenIsCmd = knownCommands[literalStr]
+		}
+
+		isExecutablePath := strings.Contains(literalStr, string(os.PathSeparator)) && s.context.Pbm.IsExecutableFile(literalStr)
+		if (isExecutablePath || firstTokenIsCmd) && !IsDefinitionDefined(literalStr, s.stdLibDefs) {
+			return i
+		}
+
+		return -1
+	}
+
+	return -1
 }
 
 type HistoryItem struct {
