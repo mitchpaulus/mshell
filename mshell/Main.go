@@ -1803,9 +1803,8 @@ func (state *TermState) getCurrentPos() (int, int, error) {
 	// defer f.Close()
 	// }
 
-	fmt.Fprintf(os.Stdout, "\033[6n")
-
 	for {
+		fmt.Fprintf(os.Stdout, "\033[6n")
 		// TODO: This needs to handle case where terminal doesn't respond.
 		token, err := state.InteractiveLexer(state.stdInState) // token = <- tokenChan
 		if err != nil {
