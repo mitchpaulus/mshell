@@ -789,6 +789,33 @@ func (t TypeString) String() string {
 	return "string"
 }
 
+type TypeBinary struct{}
+
+func (t TypeBinary) Bind(otherType MShellType) ([]BoundType, error) {
+	return make([]BoundType, 0), nil
+}
+
+func (t TypeBinary) Replace(boundTypes []BoundType) MShellType {
+	return t
+}
+
+func (t TypeBinary) ToMshell() string {
+	return "binary"
+}
+
+func (t TypeBinary) ToJson() string {
+	return "\"binary\""
+}
+
+func (t TypeBinary) Equals(other MShellType) bool {
+	_, ok := other.(TypeBinary)
+	return ok
+}
+
+func (t TypeBinary) String() string {
+	return "binary"
+}
+
 type TypeBool struct{}
 
 func (t TypeBool) Bind(otherType MShellType) ([]BoundType, error) {

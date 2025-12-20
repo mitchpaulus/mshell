@@ -46,6 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - LSP completion suggestions for `@` variable references
 - LSP rename support for variables scoped to definitions and globals
 - Default <kbd>CTRL</kbd>-<kbd>F</kbd> binding matching fish shell behavior
+- Execution operators for capturing stdout/stderr as strings or binary (`*b`, `^`, `^b`)
 
 ### Changed
 

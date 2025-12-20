@@ -613,6 +613,7 @@ const (
 	STDOUT_LINES
 	STDOUT_STRIPPED
 	STDOUT_COMPLETE
+	STDOUT_BINARY
 )
 
 type StdinBehavior int
@@ -631,6 +632,7 @@ const (
 	STDERR_LINES
 	STDERR_STRIPPED
 	STDERR_COMPLETE
+	STDERR_BINARY
 )
 
 type MShellList struct {

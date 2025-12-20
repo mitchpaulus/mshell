@@ -711,6 +711,8 @@ MainLoop:
 						stack.Push(&TypeHomogeneousList{ListType: TypeString{}, Count: -1})
 					} else if stdoutBehavior == STDOUT_STRIPPED || stdoutBehavior == STDOUT_COMPLETE {
 						stack.Push(TypeString{})
+					} else if stdoutBehavior == STDOUT_BINARY {
+						stack.Push(TypeBinary{})
 					} else if stdoutBehavior != STDOUT_NONE {
 						typeCheckResult.Errors = append(typeCheckResult.Errors, TypeCheckError{Token: t, Message: fmt.Sprintf("Expected a tuple with a known stdout behavior, but found %d.\n", stdoutBehavior)})
 					}
@@ -721,6 +723,8 @@ MainLoop:
 						stack.Push(&TypeHomogeneousList{ListType: TypeString{}, Count: -1})
 					} else if stdoutBehavior == STDOUT_STRIPPED || stdoutBehavior == STDOUT_COMPLETE {
 						stack.Push(TypeString{})
+					} else if stdoutBehavior == STDOUT_BINARY {
+						stack.Push(TypeBinary{})
 					} else if stdoutBehavior != STDOUT_NONE {
 						typeCheckResult.Errors = append(typeCheckResult.Errors, TypeCheckError{Token: t, Message: fmt.Sprintf("Expected a tuple with a known stdout behavior, but found %d.\n", stdoutBehavior)})
 					}

@@ -1,0 +1,5 @@
+[cat `stdin_redirect_binary.bin`] *b ; str wl
+[sh -c "printf err 1>&2"] ^ ; wl
+[sh -c "cat stdin_redirect_binary.bin 1>&2"] ^b ; str wl
+[sh -c "printf out; printf err 1>&2"] *b ^b ! str wl str wl
+[sh -c "printf out; printf err 1>&2"] ^b *b ! str wl str wl

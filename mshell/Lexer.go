@@ -88,6 +88,9 @@ const (
 	WHITESPACE
 	LINECOMMENT
 	ASTERISK
+	ASTERISKBINARY
+	CARET
+	CARETBINARY
 )
 
 func (t TokenType) String() string {
@@ -236,6 +239,12 @@ func (t TokenType) String() string {
 		return "LINECOMMENT"
 	case ASTERISK:
 		return "ASTERISK"
+	case ASTERISKBINARY:
+		return "ASTERISKBINARY"
+	case CARET:
+		return "CARET"
+	case CARETBINARY:
+		return "CARET BINARY"
 	default:
 		return "UNKNOWN"
 	}
@@ -394,6 +403,7 @@ var notAllowedLiteralChars = map[rune]bool{
 	'"': true, // Double quote, used for strings.
 	'\'': true, // Single quote, used for single quoted strings.
 	0:  true, // Null, used for 'peek' at end of file.
+	'^': true, // Used for stderr [command]^;
 }
 
 func isAllowedLiteral(r rune) bool {
@@ -698,7 +708,18 @@ func (l *Lexer) scanTokenAll() Token {
 			return l.makeToken(BANG)
 		}
 	case '*':
-		return l.makeToken(ASTERISK)
+		if l.peek() == 'b' {
+			l.advance()
+			return l.makeToken(ASTERISKBINARY)
+		} else {
+			return l.makeToken(ASTERISK)
+		}
+	case '^':
+		if l.peek() == 'b' {
+			l.advance()
+			return l.makeToken(CARETBINARY)
+		}
+		return l.makeToken(CARET)
 	default:
 		// return l.parseLiteralOrNumber()
 		return l.parseLiteralOrKeyword()
