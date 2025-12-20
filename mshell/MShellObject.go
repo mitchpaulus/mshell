@@ -1,17 +1,18 @@
 package main
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"golang.org/x/net/html"
+	"os"
+	"regexp"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
-	"os"
 	"time"
-	"regexp"
-	"sort"
-	"slices"
-	"golang.org/x/net/html"
-	"encoding/base64"
 )
 
 // TruncateMiddle truncates a string to a maximum length, adding "..." in the middle if necessary.
@@ -24,8 +25,8 @@ func TruncateMiddle(s string, maxLen int) string {
 	// Calculate lengths of the parts around "..."
 	half := (maxLen - 3) / 2
 	remainder := (maxLen - 3) % 2
-	start := s[:half]                 // First part of the string
-	end := s[len(s)-half-remainder:]  // Last part of the string
+	start := s[:half]                // First part of the string
+	end := s[len(s)-half-remainder:] // Last part of the string
 
 	return start + "..." + end
 }
@@ -162,11 +163,9 @@ func (b MShellBinary) Equals(other MShellObject) (bool, error) {
 	return false, fmt.Errorf("Cannot compare Binary with %s.\n", other.TypeName())
 }
 
-
 func (b MShellBinary) CastString() (string, error) {
 	return "", fmt.Errorf("Cannot cast Binary to a string.\n")
 }
-
 
 /// }}}
 
@@ -271,7 +270,7 @@ func (m Maybe) CastString() (string, error) {
 
 type MShellDateTime struct {
 	// TODO: replace with my own simpler int64 based on the Calendrical Calculation book.
-	Time time.Time
+	Time           time.Time
 	OriginalString string
 }
 
@@ -359,7 +358,6 @@ func (obj *MShellDateTime) CastString() (string, error) {
 }
 
 // }}}
-
 
 // MShellDict {{{
 type MShellDict struct {
@@ -519,9 +517,7 @@ func (*MShellDict) CastString() (string, error) {
 	return "", fmt.Errorf("Cannot cast a dictionary to a string.\n")
 }
 
-
 // }}}
-
 
 type MShellLiteral struct {
 	LiteralText string
@@ -536,6 +532,7 @@ type MShellQuotation struct {
 	Tokens                []MShellParseItem
 	StdinBehavior         StdinBehavior
 	StandardInputContents string
+	StandardInputBinary   []byte
 	StandardInputFile     string
 	StandardOutputFile    string
 	StandardErrorFile     string
@@ -553,17 +550,19 @@ func (q *MShellQuotation) GetEndToken() Token {
 // This function expects the caller to be the one to close the return context.
 func (q *MShellQuotation) BuildExecutionContext(context *ExecuteContext) (*ExecuteContext, error) {
 	quoteContext := ExecuteContext{
-		StandardInput:  nil,
-		StandardOutput: nil,
-		Variables: q.Variables,
-		ShouldCloseInput: false,
+		StandardInput:     nil,
+		StandardOutput:    nil,
+		Variables:         q.Variables,
+		ShouldCloseInput:  false,
 		ShouldCloseOutput: false,
-		Pbm: context.Pbm,
+		Pbm:               context.Pbm,
 	}
 
 	if q.StdinBehavior != STDIN_NONE {
 		if q.StdinBehavior == STDIN_CONTENT {
 			quoteContext.StandardInput = strings.NewReader(q.StandardInputContents)
+		} else if q.StdinBehavior == STDIN_BINARY {
+			quoteContext.StandardInput = bytes.NewReader(q.StandardInputBinary)
 		} else if q.StdinBehavior == STDIN_FILE {
 			file, err := os.Open(q.StandardInputFile)
 			if err != nil {
@@ -622,6 +621,7 @@ const (
 	STDIN_NONE StdinBehavior = iota
 	STDIN_FILE
 	STDIN_CONTENT
+	STDIN_BINARY
 )
 
 type StderrBehavior int
@@ -637,13 +637,14 @@ type MShellList struct {
 	Items                 []MShellObject
 	StdinBehavior         StdinBehavior
 	StandardInputContents string
+	StandardInputBinary   []byte
 	StandardInputFile     string
 	StandardOutputFile    string
-	AppendOutput bool
+	AppendOutput          bool
 	StandardErrorFile     string
 	// This sets how stdout is handled, whether it's broken up into lines, stripped of trailing newline, or left as is
-	StdoutBehavior StdoutBehavior
-	StderrBehavior StderrBehavior
+	StdoutBehavior  StdoutBehavior
+	StderrBehavior  StderrBehavior
 	RunInBackground bool
 }
 
@@ -661,6 +662,7 @@ func NewList(initLength int) *MShellList {
 		Items:                 make([]MShellObject, initLength),
 		StdinBehavior:         STDIN_NONE,
 		StandardInputContents: "",
+		StandardInputBinary:   nil,
 		StandardInputFile:     "",
 		StandardOutputFile:    "",
 		AppendOutput:          false,
@@ -719,10 +721,10 @@ func SortListFunc(list *MShellList, cmp func(a string, b string) int) (*MShellLi
 	return newList, nil
 }
 
-
 func CopyListParams(copyFromList *MShellList, copyToList *MShellList) {
 	copyToList.StdinBehavior = copyFromList.StdinBehavior
 	copyToList.StandardInputContents = copyFromList.StandardInputContents
+	copyToList.StandardInputBinary = copyFromList.StandardInputBinary
 	copyToList.StandardInputFile = copyFromList.StandardInputFile
 	copyToList.StandardOutputFile = copyFromList.StandardOutputFile
 	copyToList.StandardErrorFile = copyFromList.StandardErrorFile
@@ -1031,6 +1033,8 @@ func (obj *MShellQuotation) DebugString() string {
 
 	if obj.StdinBehavior == STDIN_CONTENT {
 		message += " < " + TruncateMiddle(obj.StandardInputContents, 30)
+	} else if obj.StdinBehavior == STDIN_BINARY {
+		message += fmt.Sprintf(" < <binary %d bytes>", len(obj.StandardInputBinary))
 	} else if obj.StdinBehavior == STDIN_FILE {
 		message += " < " + obj.StandardInputFile
 	}
@@ -1070,10 +1074,11 @@ func cleanStringForTerminal(input string) string {
 }
 
 var newlineCharRegex = regexp.MustCompile(`\r|\n`)
+
 func (obj *MShellString) DebugString() string {
 	// Surround the string with double quotes, keep just the first 15 and last 15 characters
 	if len(obj.Content) > 30 {
-		return "\"" + cleanStringForTerminal(obj.Content[:15])  + "..." + cleanStringForTerminal(obj.Content[len(obj.Content)-15:]) + "\""
+		return "\"" + cleanStringForTerminal(obj.Content[:15]) + "..." + cleanStringForTerminal(obj.Content[len(obj.Content)-15:]) + "\""
 	}
 
 	return "\"" + cleanStringForTerminal(obj.Content) + "\""
@@ -1286,7 +1291,7 @@ func (obj *MShellList) SliceStart(start int) (MShellObject, error) {
 	n := len(obj.Items) - start
 	newList := NewList(n)
 	for i := range n {
-		newList.Items[i] = obj.Items[start + i]
+		newList.Items[i] = obj.Items[start+i]
 	}
 	return newList, nil
 }
@@ -1750,7 +1755,6 @@ func ParseRawString(inputString string) (string, error) {
 	return b.String(), nil
 }
 
-
 func ParseRawPath(inputString string) (string, error) {
 	// Purpose of this function is to remove outer quotes, handle escape characters
 	if len(inputString) < 2 {
@@ -1806,7 +1810,6 @@ func ParseRawPath(inputString string) (string, error) {
 // MShellPipe struct {
 // MShellInt struct {
 // MShellFloat struct {
-
 
 func (obj *MShellLiteral) Equals(other MShellObject) (bool, error) {
 	// Define equality for other as string or as literal or path.
@@ -1886,7 +1889,6 @@ func (obj *MShellFloat) Equals(other MShellObject) (bool, error) {
 	return obj.Value == asFloat.Value, nil
 }
 
-
 // }}}
 
 // CastString {{{
@@ -1930,14 +1932,14 @@ func (obj *MShellFloat) CastString() (string, error) {
 // }}}
 
 type NodeDict struct {
-    Tag      string                 `json:"tag"`
-    Attrs    map[string]string      `json:"attrs"`
-    Children []NodeDict             `json:"children"`
-    Text     string                 `json:"text"`
+	Tag      string            `json:"tag"`
+	Attrs    map[string]string `json:"attrs"`
+	Children []NodeDict        `json:"children"`
+	Text     string            `json:"text"`
 }
 
 func nodeToDict(n *html.Node) *MShellDict {
-    d := NewDict()
+	d := NewDict()
 	attrDict := NewDict()
 	childList := NewList(0)
 
@@ -1947,19 +1949,19 @@ func nodeToDict(n *html.Node) *MShellDict {
 
 	for _, attr := range n.Attr {
 		attrDict.Items[attr.Key] = &MShellString{Content: attr.Val}
-    }
+	}
 
 	textBuilder := strings.Builder{}
 
-    for c := n.FirstChild; c != nil; c = c.NextSibling {
-        if c.Type == html.TextNode {
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		if c.Type == html.TextNode {
 			textBuilder.WriteString(strings.TrimSpace(c.Data))
-            // d.Text += strings.TrimSpace(c.Data)
-        } else if c.Type == html.ElementNode {
-            d.Items["children"].(*MShellList).Items = append(childList.Items, nodeToDict(c))
-        }
-    }
+			// d.Text += strings.TrimSpace(c.Data)
+		} else if c.Type == html.ElementNode {
+			d.Items["children"].(*MShellList).Items = append(childList.Items, nodeToDict(c))
+		}
+	}
 
 	d.Items["text"] = &MShellString{Content: textBuilder.String()}
-    return d
+	return d
 }

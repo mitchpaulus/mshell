@@ -35,7 +35,6 @@ import (
 	_ "time/tzdata"
 	"unicode"
 	"unicode/utf8"
-
 	// "net/http/httputil"
 )
 
@@ -3933,13 +3932,12 @@ MainLoop:
 				} else if t.Lexeme == "return" {
 					// Return from the current function
 					return EvalResult{
-						Success: true,
-						Continue: false,
-						BreakNum: 0,
-						ExitCode: 0,
+						Success:    true,
+						Continue:   false,
+						BreakNum:   0,
+						ExitCode:   0,
 						ExitCalled: false,
 					}
-
 
 				} else { // last new function
 					// If we aren't in a list context, throw an error.
@@ -4557,6 +4555,29 @@ MainLoop:
 						default:
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a string (%s) to a %s (%s).\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
 						}
+					case MShellBinary:
+						if t.Type == LESSTHAN {
+							switch obj2.(type) {
+							case *MShellList:
+								obj2.(*MShellList).StdinBehavior = STDIN_BINARY
+								obj2.(*MShellList).StandardInputBinary = obj1.(MShellBinary)
+								obj2.(*MShellList).StandardInputContents = ""
+								obj2.(*MShellList).StandardInputFile = ""
+								stack.Push(obj2)
+							case *MShellQuotation:
+								obj2.(*MShellQuotation).StdinBehavior = STDIN_BINARY
+								obj2.(*MShellQuotation).StandardInputBinary = obj1.(MShellBinary)
+								obj2.(*MShellQuotation).StandardInputContents = ""
+								obj2.(*MShellQuotation).StandardInputFile = ""
+								stack.Push(obj2)
+							case *MShellPipe:
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect binary data (%s) to a Pipe (%s). Add the redirection to the final item in the pipeline.\n", t.Line, t.Column, obj1.DebugString(), obj2.DebugString()))
+							default:
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect binary data (%s) to a %s (%s).\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
+							}
+						} else {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect binary data (%s) to a %s (%s). Use '<' for input redirection.\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
+						}
 					case *MShellLiteral:
 						switch obj2.(type) {
 						case *MShellList:
@@ -4731,6 +4752,8 @@ MainLoop:
 				if quotation.StdinBehavior != STDIN_NONE {
 					if quotation.StdinBehavior == STDIN_CONTENT {
 						loopContext.StandardInput = strings.NewReader(quotation.StandardInputContents)
+					} else if quotation.StdinBehavior == STDIN_BINARY {
+						loopContext.StandardInput = bytes.NewReader(quotation.StandardInputBinary)
 					} else if quotation.StdinBehavior == STDIN_FILE {
 						file, err := os.Open(quotation.StandardInputFile)
 						if err != nil {
@@ -5300,6 +5323,8 @@ func (quotation *MShellQuotation) Execute(state *EvalState, context ExecuteConte
 	if quotation.StdinBehavior != STDIN_NONE {
 		if quotation.StdinBehavior == STDIN_CONTENT {
 			quotationContext.StandardInput = strings.NewReader(quotation.StandardInputContents)
+		} else if quotation.StdinBehavior == STDIN_BINARY {
+			quotationContext.StandardInput = bytes.NewReader(quotation.StandardInputBinary)
 		} else if quotation.StdinBehavior == STDIN_FILE {
 			file, err := os.Open(quotation.StandardInputFile)
 			if err != nil {
@@ -5517,6 +5542,8 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 	if list.StdinBehavior != STDIN_NONE {
 		if list.StdinBehavior == STDIN_CONTENT {
 			cmd.Stdin = strings.NewReader(list.StandardInputContents)
+		} else if list.StdinBehavior == STDIN_BINARY {
+			cmd.Stdin = bytes.NewReader(list.StandardInputBinary)
 		} else if list.StdinBehavior == STDIN_FILE {
 			// Open the file for reading
 			file, err := os.Open(list.StandardInputFile)

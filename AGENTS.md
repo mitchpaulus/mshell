@@ -7,6 +7,7 @@ It is implemented in golang, with the go code in `mshell/`.
 User documentation is in `doc/`.
 The standard library for the language is in `lib/std.msh`.
 Always work in a separate feature branch.
+Do NOT run `gofmt` without my permission. I will tell you when it's allowed.
 
 ## Building
 
