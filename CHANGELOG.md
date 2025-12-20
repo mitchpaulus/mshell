@@ -1,4 +1,5 @@
 # Changelog
+
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
@@ -54,7 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Slice semantics are slightly different. You now get a new backing array guaranteed for slice. This would come up if you did a partial slice (`0:n`), and then extended that in a loop or map. You could then be "extending" into the same backing array, causing previous items in the loop to be overwritten.
 - `mv` will now allow moving a file path into a directory path. Previously had to be file to file.
 - `skip` and `take` no longer throw exception when `n` is greater than the length of the list.
-- Input redirection now accepts binary data directly and streams it to stdin without string conversion.
+- Input redirection can now accept binary data directly and stream it to stdin without string conversion.
 
 ### Fixed
 
