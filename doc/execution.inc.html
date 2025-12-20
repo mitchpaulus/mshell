@@ -43,3 +43,30 @@ For that, you use the <code>></code> and <code>*</code> operators.
 <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">*</span> <span class="mshellGREATERTHAN">&gt;</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Puts all of stdout on the stack as a string.</span>
 <span class="mshellEOF"></span></code>
 </pre>
+
+<h1 id="input-redirection">Input redirection</h1>
+
+<p>
+Use <code>&lt;</code> to feed data into stdin. The type of the value on top of the stack determines how the input is provided.
+</p>
+
+<p><code>String</code> values are encoded as UTF-8 and streamed as text.</p>
+
+<pre>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">wc</span> <span class="mshellLITERAL">-l</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellSTRING">&#34;line 1\nline 2\n&#34;</span> <span class="mshellLESSTHAN">&lt;</span> <span class="mshellEXECUTE">;</span> <span class="mshellLINECOMMENT"># Counts the lines from the provided string</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+<p><code>Path</code> values open the referenced file and stream its contents.</p>
+
+<pre>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">wc</span> <span class="mshellLITERAL">-l</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`myfile.txt`</span> <span class="mshellLESSTHAN">&lt;</span> <span class="mshellEXECUTE">;</span> <span class="mshellLINECOMMENT"># Equivalent to shell input redirection from a file</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+<p><code>Binary</code> values are written directly without any string conversion.</p>
+
+<pre>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">md5sum</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`binary_stdin.bin`</span> <span class="mshellLITERAL">readFileBytes</span> <span class="mshellLESSTHAN">&lt;</span> <span class="mshellEXECUTE">;</span> <span class="mshellLINECOMMENT"># Streams raw bytes into the command</span>
+<span class="mshellEOF"></span></code>
+</pre>

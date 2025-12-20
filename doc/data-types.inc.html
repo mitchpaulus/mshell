@@ -125,15 +125,6 @@ In <code>msh</code>, this choice can be made by using the appropriate type.
 <span class="mshellEOF"></span></code>
 </pre>
 
-<p>
-Binary data can be redirected to stdin in the same way. If you provide a <code>Binary</code> value (such as from <code>readFileBytes</code>), the raw bytes are streamed directly without converting to a string.
-</p>
-
-<pre>
-<code><span class="mshellPATH">`binary_stdin.bin`</span> <span class="mshellLITERAL">readFileBytes</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">md5sum</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLESSTHAN">&lt;</span> <span class="mshellEXECUTE">;</span> <span class="mshellLINECOMMENT"># Hash the raw bytes from binary_stdin.bin</span>
-<span class="mshellEOF"></span></code>
-</pre>
-
 <h1 id="data-type-dictionary">Dictionary</h1>
 
 <p>
