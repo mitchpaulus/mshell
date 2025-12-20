@@ -5,6 +5,7 @@ mshell/bin
 mshell/test.msh
 codex.log
 .gocache/
+.cache/
 
 *.mshell_history
 *.vsix

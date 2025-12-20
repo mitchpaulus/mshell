@@ -41,7 +41,31 @@ For that, you use the <code>></code> and <code>*</code> operators.
 <pre>
 <code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`fileToRedirectTo`</span> <span class="mshellGREATERTHAN">&gt;</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Redirects the output to the file.</span>
 <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellASTERISK">*</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Puts all of stdout on the stack as a string.</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellASTERISKBINARY">*b</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Puts all of stdout on the stack as a binary.</span>
+</code>
 </pre>
+
+<p> You can do similar things with standard error. </p>
+
+<pre>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellCARET">^</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Puts all of stderr on the stack as a string.</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellCARET BINARY">^b</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Puts all of stderr on the stack as a binary.</span>
+</code>
+</pre>
+
+<p>
+If you want to put both standard output and standard error onto the stack, you can do that.
+Standard output will always be pushed first, and then standard error.
+</p>
+<p> So the following are equivalent: </p>
+
+<pre>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellASTERISKBINARY">*b</span> <span class="mshellCARET BINARY">^b</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Order here does not matter</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellCARET BINARY">^b</span> <span class="mshellASTERISKBINARY">*b</span> <span class="mshellBANG">!</span> 
+</code>
+</pre>
+
+
 
 <h1 id="input-redirection">Input redirection</h1>
 
