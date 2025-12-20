@@ -1,1 +1,1 @@
-[md5sum] `binary_stdin.bin` readFileBytes < ;
+['sha256sum' '-'] `stdin_redirect_binary.bin` readFileBytes < ;
