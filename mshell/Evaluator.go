@@ -1058,11 +1058,16 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot evaluate 'lines' on a %s.\n", t.Line, t.Column, obj.TypeName()))
 					}
 
-					// TODO: Maybe reuse a scanner?
-					scanner := bufio.NewScanner(strings.NewReader(s1.Content))
 					newList := NewList(0)
-					for scanner.Scan() {
-						newList.Items = append(newList.Items, &MShellString{scanner.Text()})
+					for line := range strings.Lines(s1.Content) {
+						if len(line) > 0 && line[len(line)-1] == '\n' {
+							line = line[:len(line)-1]
+							if len(line) > 0 && line[len(line)-1] == '\r' {
+								line = line[:len(line)-1]
+							}
+						}
+
+						newList.Items = append(newList.Items, &MShellString{line})
 					}
 
 					stack.Push(newList)

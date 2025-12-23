@@ -681,8 +681,7 @@ func SortList(list *MShellList) (*MShellList, error) {
 	for i, item := range list.Items {
 		str, err := item.CastString()
 		if err != nil {
-			message := fmt.Sprintf("Cannot sort a list with a %s inside (%s).\n", item.TypeName(), item.DebugString())
-			return nil, fmt.Errorf(message)
+			return nil, fmt.Errorf("Cannot sort a list with a %s inside (%s).\n", item.TypeName(), item.DebugString())
 		}
 		stringsToSort[i] = str
 	}
@@ -705,8 +704,7 @@ func SortListFunc(list *MShellList, cmp func(a string, b string) int) (*MShellLi
 	for i, item := range list.Items {
 		str, err := item.CastString()
 		if err != nil {
-			message := fmt.Sprintf("Cannot sort a list with a %s inside (%s).\n", item.TypeName(), item.DebugString())
-			return nil, fmt.Errorf(message)
+			return nil, fmt.Errorf("Cannot sort a list with a %s inside (%s).\n", item.TypeName(), item.DebugString())
 		}
 		stringsToSort[i] = str
 	}

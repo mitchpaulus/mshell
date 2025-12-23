@@ -1,0 +1,3 @@
+"hello\nworld" lines str wl
+"hello\nworld\rweird" lines str wl
+"hello\r\nworld\rweird\nmore weird\rn" lines str wl
