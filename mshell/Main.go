@@ -334,7 +334,7 @@ func main() {
 
 		err = termState.InteractiveMode()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, err.Error())
+			fmt.Fprint(os.Stderr, err.Error())
 			os.Exit(1)
 		} else {
 			os.Exit(0)
