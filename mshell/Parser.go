@@ -1,5 +1,7 @@
 package main
 
+// Main parsing entry point ParseFile
+
 import (
 	"errors"
 	"fmt"
@@ -180,6 +182,12 @@ func (varstoreList MShellVarstoreList) GetEndToken() Token {
 	return varstoreList.VarStores[len(varstoreList.VarStores)-1]
 }
 // }}}
+
+type MShellGetter struct {
+	Token Token
+	String string
+}
+
 
 func (list *MShellParseList) GetStartToken() Token {
 	return list.StartToken
@@ -1609,8 +1617,22 @@ func (parser *MShellParser) ParseItem() (MShellParseItem, error) {
 		return parser.ParseVarstoreList(), nil
 	case EOF:
 		return nil, errors.New("Unexpected EOF while parsing item")
+	case COLON:
+		return parser.ParseGetter()
 	default:
 		return parser.ParseSimple(), nil
+	}
+}
+
+func (parser *MShellParser) ParseGetter() (MShellParseItem, error) {
+	parser.NextToken()
+	t := parser.curr
+
+	switch t.Type {
+	case STRING:
+
+
+
 	}
 }
 
