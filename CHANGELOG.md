@@ -43,6 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `toJson`
   - `base64encode`
   - `base64decode`
+  - `:` shorthand for `get`
 - `timeout` option for `httpGet` and `httpPost`
 - Support for comma-separated variable stores (e.g. `a!, b!, c!`)
 - LSP completion suggestions for `@` variable references
