@@ -259,7 +259,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 
 ## Dictionary Functions
 
-- `get`: Get value from dictionary by key. Returns a Maybe, with None representing a key not being found. `(dict str -- Maybe[a])`
+- `get`: Get value from dictionary by key. Returns a Maybe, with None representing a key not being found. Shorthand: `:key`, `:"key"`, or `:'key'`. `(dict str -- Maybe[a])`
 - `getDef`: Get value from dictionary by key. Returns default value if key not found. `(dict str a -- a)`
 - `set`: Set value in dictionary by key. `(dict str a -- dict)`
 - `setd`: Set value in dictionary by key. Drop dict after. `(dict str a --)`

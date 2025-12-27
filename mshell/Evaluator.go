@@ -655,6 +655,27 @@ MainLoop:
 				varName := varstoreToken.Lexeme[0 : len(varstoreToken.Lexeme)-1] // Remove the trailing !
 				context.Variables[varName] = obj
 			}
+		case *MShellGetter:
+			// Handle like 'get'
+			getter := t
+			obj, err := stack.Pop()
+			if err != nil {
+				return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do ':' operation on an empty stack.\n", getter.Token.Line, getter.Token.Column))
+			}
+
+			dict, ok := obj.(*MShellDict)
+			if !ok {
+				return state.FailWithMessage(fmt.Sprintf("%d:%d: The stack parameter for the dictionary in ':' is not a dictionary. Found a %s (%s). Key: %s\n", getter.Token.Line, getter.Token.Column, obj.TypeName(), obj.DebugString(), getter.String))
+			}
+
+			value, ok := dict.Items[getter.String]
+			if !ok {
+				stack.Push(&Maybe{obj: nil})
+			} else {
+				maybe := Maybe{obj: value}
+				stack.Push(&maybe)
+			}
+
 		case Token:
 
 			if t.Type == EOF {
