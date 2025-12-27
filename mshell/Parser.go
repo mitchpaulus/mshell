@@ -183,10 +183,28 @@ func (varstoreList MShellVarstoreList) GetEndToken() Token {
 }
 // }}}
 
+// MShellGetter {{{
 type MShellGetter struct {
 	Token Token
 	String string
 }
+
+func (getter *MShellGetter) ToJson() string {
+	return fmt.Sprintf("{\"getter\": %s}", getter.Token.ToJson())
+}
+
+func (getter *MShellGetter) DebugString() string {
+	return fmt.Sprintf(":%s", getter.Token.Lexeme)
+}
+
+func (getter *MShellGetter) GetStartToken() Token {
+	return getter.Token
+}
+
+func (getter *MShellGetter) GetEndToken() Token {
+	return getter.Token
+}
+// }}}
 
 
 func (list *MShellParseList) GetStartToken() Token {
@@ -1630,9 +1648,24 @@ func (parser *MShellParser) ParseGetter() (MShellParseItem, error) {
 
 	switch t.Type {
 	case STRING:
-
-
-
+		parsedStr, err := ParseRawString(t.Lexeme)
+		if err != nil {
+			return nil, fmt.Errorf("Error parsing getter string: %s at line %d, column %d.", err.Error(), t.Line, t.Column)
+		}
+		parser.NextToken()
+		return &MShellGetter{Token: t, String: parsedStr}, nil
+	case SINGLEQUOTESTRING:
+		if len(t.Lexeme) < 2 {
+			return nil, fmt.Errorf("Error parsing getter string: empty single-quoted string at line %d, column %d.", t.Line, t.Column)
+		}
+		parsedStr := t.Lexeme[1 : len(t.Lexeme)-1]
+		parser.NextToken()
+		return &MShellGetter{Token: t, String: parsedStr}, nil
+	case LITERAL:
+		parser.NextToken()
+		return &MShellGetter{Token: t, String: t.Lexeme}, nil
+	default:
+		return nil, fmt.Errorf("Expected a string or literal after ':' at line %d, column %d.", t.Line, t.Column)
 	}
 }
 

@@ -8,12 +8,12 @@
 </html>" parseHtml html!
 
 # @html str wl
-@html "children" get? :0: # HTML tag
-"children" get? :0: head! @head "tag" get? wl # head
+@html:children? :0: # HTML tag
+:children? :0: head! @head:tag? wl # head
 
-@head "children" get? :0: title!
-@title "tag" get? wl
-@title "text" get? wl
+@head:'children'? :0: title!
+@title:'tag'? wl
+@title:'text'? wl
 
 "Testing descendents.." wl
-@html htmlDescendents ("tag" get? wl) each
+@html htmlDescendents (:tag? wl) each
