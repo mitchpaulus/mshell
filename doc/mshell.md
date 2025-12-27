@@ -206,6 +206,8 @@ Dates can be subtracted from each other, and the result is a float number of day
   - `'grouping'` (list[int]): LC_NUMERIC-style group sizes (reused from the end); if `'thousandsSep'` is set without `'grouping'`, `[3]` is assumed.
 - `countSubStr`: Count occurrences of substring in string. `(str str -- int)`
 - `take`: Take first n characters from string. `(str int -- str)`
+- `base64encode`: Encode binary data as base64. `(binary -- str)`
+- `base64decode`: Decode base64 string into binary data. `(str -- binary)`
 - `utf8Str`: Decode UTF-8 bytes into a string. `(binary -- str)`
 - `utf8Bytes`: Encode a string as UTF-8 bytes. `(str -- binary)`
 
