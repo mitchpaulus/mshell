@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/csv"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -3804,6 +3805,38 @@ MainLoop:
 					}
 
 					stack.Push(&MShellString{Content: encodedStr})
+				} else if t.Lexeme == "base64encode" {
+					// Convert binary data to a base64 string.
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'base64encode' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					binaryObj, ok := obj.(MShellBinary)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The top of stack in 'base64encode' is expected to be a binary, found a %s (%s)\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
+					}
+
+					encoded := base64.StdEncoding.EncodeToString([]byte(binaryObj))
+					stack.Push(&MShellString{Content: encoded})
+				} else if t.Lexeme == "base64decode" {
+					// Convert a base64 string to binary data.
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'base64decode' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					strObj, ok := obj.(*MShellString)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The top of stack in 'base64decode' is expected to be a string, found a %s (%s)\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
+					}
+
+					decoded, err := base64.StdEncoding.DecodeString(strObj.Content)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error decoding base64 in 'base64decode': %s\n", t.Line, t.Column, err.Error()))
+					}
+
+					stack.Push(MShellBinary(decoded))
 				} else if t.Lexeme == "utf8Str" {
 					// Convert MShellBinary on the top of the stack to a UTF-8 string
 					obj, err := stack.Pop()
