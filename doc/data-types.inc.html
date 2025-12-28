@@ -1,3 +1,4 @@
+<div id="data-types-top"></div>
 <p><code>msh</code> has a fixed number of built in data types</p>
 
 <ul>
@@ -20,7 +21,7 @@
 The source code for all these types is in a single file at: <a href="https://github.com/mitchpaulus/mshell/blob/main/mshell/MShellObject.go" target="_blank" rel="noopener noreferrer">mshell/MShellObject.go</a>.
 </p>
 
-<h1 id="data-type-literal">Literal</h1>
+<h1 id="data-type-literal">Literal <a class="section-link" href="#data-type-literal" aria-label="Permalink">§</a> <a class="back-to-top" href="#data-types-top">Back to top</a></h1>
 
 <p>
 Since brevity is a strong design goal, like most shells, many basic tokens can be written as-is.
@@ -29,7 +30,7 @@ They can only be used in list literals, because that's how commands are input.
 Outside of lists, it will result in a error.
 </p>
 
-<h1 id="data-type-bool">Bool</h1>
+<h1 id="data-type-bool">Bool <a class="section-link" href="#data-type-bool" aria-label="Permalink">§</a> <a class="back-to-top" href="#data-types-top">Back to top</a></h1>
 
 <p>Bools are represented by 
 <code><span class="mshellTRUE">true</span></code>
@@ -37,7 +38,7 @@ Outside of lists, it will result in a error.
  <code><span class="mshellFALSE">false</span></code>.</p>
 
 
-<h1 id="data-type-quotation">Quotation</h1>
+<h1 id="data-type-quotation">Quotation <a class="section-link" href="#data-type-quotation" aria-label="Permalink">§</a> <a class="back-to-top" href="#data-types-top">Back to top</a></h1>
 
 <p>
 Quotations are blocks of code that can be executed.
@@ -52,7 +53,7 @@ For example, a quotation is used as an argument to the <code>map</code> function
 </pre>
 
 
-<h1 id="data-type-list">List</h1>
+<h1 id="data-type-list">List <a class="section-link" href="#data-type-list" aria-label="Permalink">§</a> <a class="back-to-top" href="#data-types-top">Back to top</a></h1>
 
 <p>
 Lists are created by wrapping elements in square brackets.
@@ -72,7 +73,7 @@ No commas are required between elements.
 </pre>
 
 
-<h1 id="data-type-string">String</h1>
+<h1 id="data-type-string">String <a class="section-link" href="#data-type-string" aria-label="Permalink">§</a> <a class="back-to-top" href="#data-types-top">Back to top</a></h1>
 
 <p>
 <code>msh</code> has double quotes and single quotes. 
@@ -92,7 +93,7 @@ Double quoted strings have the following escape sequences:
 
 <p> No escaping is done within single quoted strings or paths. </p>
 
-<h1 id="data-type-path">Path</h1>
+<h1 id="data-type-path">Path <a class="section-link" href="#data-type-path" aria-label="Permalink">§</a> <a class="back-to-top" href="#data-types-top">Back to top</a></h1>
 <p> Since paths are such a common object to deal with in shell scripts, mshell has a dedicated type. </p>
 
 <p>
@@ -125,7 +126,7 @@ In <code>msh</code>, this choice can be made by using the appropriate type.
 <span class="mshellEOF"></span></code>
 </pre>
 
-<h1 id="data-type-dictionary">Dictionary</h1>
+<h1 id="data-type-dictionary">Dictionary <a class="section-link" href="#data-type-dictionary" aria-label="Permalink">§</a> <a class="back-to-top" href="#data-types-top">Back to top</a></h1>
 
 <p>
 mshell has the concept of dictionaries or associative arrays, but only with string keys (like <code>awk</code>).
@@ -149,7 +150,7 @@ Best practice is a space between the colon and the value.
 <span class="mshellEOF"></span></code>
 </pre>
 
-<h1 id="data-type-datetime">Date/Time</h1>
+<h1 id="data-type-datetime">Date/Time <a class="section-link" href="#data-type-datetime" aria-label="Permalink">§</a> <a class="back-to-top" href="#data-types-top">Back to top</a></h1>
 
 <p>
 Date/times can be entered using a literal syntax, in ISO-8601 format.
@@ -174,7 +175,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 <span class="mshellEOF"></span></code>
 </pre>
 
-<h1 id="data-type-int-and-float">Float and Integer</h1>
+<h1 id="data-type-int-and-float">Float and Integer <a class="section-link" href="#data-type-int-and-float" aria-label="Permalink">§</a> <a class="back-to-top" href="#data-types-top">Back to top</a></h1>
 
 <p>
 mshell makes a distinction between integers and floats.
@@ -209,7 +210,7 @@ For the other operations, if the types are mixed, the result is a float.
 </pre>
 
 
-<h1 id="data-type-maybe">Maybe</h1>
+<h1 id="data-type-maybe">Maybe <a class="section-link" href="#data-type-maybe" aria-label="Permalink">§</a> <a class="back-to-top" href="#data-types-top">Back to top</a></h1>
 
 <p>
 The <code>Maybe</code> type is a way to represent a value that may or may not exist.
@@ -238,7 +239,7 @@ This is done with the <code>?</code> operator.
 <span class="mshellEOF"></span></code>
 </pre>
 
-<h1 id="data-type-pipe">Pipe</h1>
+<h1 id="data-type-pipe">Pipe <a class="section-link" href="#data-type-pipe" aria-label="Permalink">§</a> <a class="back-to-top" href="#data-types-top">Back to top</a></h1>
 
 <p>
 A <code>pipe</code> is really a special list (and this type may get consumed by <code>list</code> in the future).
@@ -256,7 +257,7 @@ It's created by the <code>|</code> operator.
 <span class="mshellEOF"></span></code>
 </pre>
 
-<h1 id="data-type-binary">Binary</h1>
+<h1 id="data-type-binary">Binary <a class="section-link" href="#data-type-binary" aria-label="Permalink">§</a> <a class="back-to-top" href="#data-types-top">Back to top</a></h1>
 
 <p>
 Many times in shell programs you need to deal directly with binary data.
