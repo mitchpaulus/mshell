@@ -1,3 +1,5 @@
+#!/usr/bin/env mshell
+
 `base.html` readFile lines baseLines!
 
 [
