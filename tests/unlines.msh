@@ -1,1 +1,3 @@
+[] unlines w
+["z"] unlines w
 ["a" "b" "c" "d"] unlines w
