@@ -692,7 +692,7 @@ func SortList(list *MShellList) (*MShellList, error) {
 	// Create a new list and add the sorted strings to it
 	newList := NewList(0)
 	for _, str := range stringsToSort {
-		newList.Items = append(newList.Items, &MShellString{str})
+		newList.Items = append(newList.Items, MShellString{str})
 	}
 	CopyListParams(list, newList)
 	return newList, nil
@@ -715,7 +715,7 @@ func SortListFunc(list *MShellList, cmp func(a string, b string) int) (*MShellLi
 	// Create a new list and add the sorted strings to it
 	newList := NewList(0)
 	for _, str := range stringsToSort {
-		newList.Items = append(newList.Items, &MShellString{str})
+		newList.Items = append(newList.Items, MShellString{str})
 	}
 	CopyListParams(list, newList)
 	return newList, nil
@@ -755,11 +755,11 @@ type MShellFloat struct {
 }
 
 // ToString
-func (obj *MShellLiteral) ToString() string {
+func (obj MShellLiteral) ToString() string {
 	return obj.LiteralText
 }
 
-func (obj *MShellBool) ToString() string {
+func (obj MShellBool) ToString() string {
 	return strconv.FormatBool(obj.Value)
 }
 
@@ -771,11 +771,11 @@ func (obj *MShellList) ToString() string {
 	return obj.DebugString()
 }
 
-func (obj *MShellString) ToString() string {
+func (obj MShellString) ToString() string {
 	return obj.Content
 }
 
-func (obj *MShellPath) ToString() string {
+func (obj MShellPath) ToString() string {
 	return obj.Path
 }
 
@@ -783,11 +783,11 @@ func (obj *MShellPipe) ToString() string {
 	return obj.DebugString()
 }
 
-func (obj *MShellInt) ToString() string {
+func (obj MShellInt) ToString() string {
 	return strconv.Itoa(obj.Value)
 }
 
-func (obj *MShellFloat) ToString() string {
+func (obj MShellFloat) ToString() string {
 	return strconv.FormatFloat(obj.Value, 'f', -1, 64)
 }
 
@@ -796,11 +796,11 @@ func (obj *MShellSimple) ToString() string {
 }
 
 // TypeNames
-func (obj *MShellLiteral) TypeName() string {
+func (obj MShellLiteral) TypeName() string {
 	return "Literal"
 }
 
-func (obj *MShellBool) TypeName() string {
+func (obj MShellBool) TypeName() string {
 	return "Boolean"
 }
 
@@ -812,11 +812,11 @@ func (obj *MShellList) TypeName() string {
 	return "List"
 }
 
-func (obj *MShellString) TypeName() string {
+func (obj MShellString) TypeName() string {
 	return "String"
 }
 
-func (obj *MShellPath) TypeName() string {
+func (obj MShellPath) TypeName() string {
 	return "Path"
 }
 
@@ -824,11 +824,11 @@ func (obj *MShellPipe) TypeName() string {
 	return "Pipe"
 }
 
-func (obj *MShellInt) TypeName() string {
+func (obj MShellInt) TypeName() string {
 	return "Integer"
 }
 
-func (obj *MShellFloat) TypeName() string {
+func (obj MShellFloat) TypeName() string {
 	return "Float"
 }
 
@@ -838,11 +838,11 @@ func (obj *MShellSimple) TypeName() string {
 
 // IsCommandLineable
 
-func (obj *MShellLiteral) IsCommandLineable() bool {
+func (obj MShellLiteral) IsCommandLineable() bool {
 	return true
 }
 
-func (obj *MShellBool) IsCommandLineable() bool {
+func (obj MShellBool) IsCommandLineable() bool {
 	return false
 }
 
@@ -854,11 +854,11 @@ func (obj *MShellList) IsCommandLineable() bool {
 	return false
 }
 
-func (obj *MShellString) IsCommandLineable() bool {
+func (obj MShellString) IsCommandLineable() bool {
 	return true
 }
 
-func (obj *MShellPath) IsCommandLineable() bool {
+func (obj MShellPath) IsCommandLineable() bool {
 	return true
 }
 
@@ -866,7 +866,7 @@ func (obj *MShellPipe) IsCommandLineable() bool {
 	return false
 }
 
-func (obj *MShellInt) IsCommandLineable() bool {
+func (obj MShellInt) IsCommandLineable() bool {
 	return true
 }
 
@@ -874,16 +874,16 @@ func (obj *MShellSimple) IsCommandLineable() bool {
 	return false
 }
 
-func (obj *MShellFloat) IsCommandLineable() bool {
+func (obj MShellFloat) IsCommandLineable() bool {
 	return true
 }
 
 // IsNumeric
-func (obj *MShellLiteral) IsNumeric() bool {
+func (obj MShellLiteral) IsNumeric() bool {
 	return false
 }
 
-func (obj *MShellBool) IsNumeric() bool {
+func (obj MShellBool) IsNumeric() bool {
 	return false
 }
 
@@ -895,11 +895,11 @@ func (obj *MShellList) IsNumeric() bool {
 	return false
 }
 
-func (obj *MShellString) IsNumeric() bool {
+func (obj MShellString) IsNumeric() bool {
 	return false
 }
 
-func (obj *MShellPath) IsNumeric() bool {
+func (obj MShellPath) IsNumeric() bool {
 	return false
 }
 
@@ -907,11 +907,11 @@ func (obj *MShellPipe) IsNumeric() bool {
 	return false
 }
 
-func (obj *MShellInt) IsNumeric() bool {
+func (obj MShellInt) IsNumeric() bool {
 	return true
 }
 
-func (obj *MShellFloat) IsNumeric() bool {
+func (obj MShellFloat) IsNumeric() bool {
 	return true
 }
 
@@ -920,11 +920,11 @@ func (obj *MShellSimple) IsNumeric() bool {
 }
 
 // FloatNumeric
-func (obj *MShellLiteral) FloatNumeric() float64 {
+func (obj MShellLiteral) FloatNumeric() float64 {
 	return 0
 }
 
-func (obj *MShellBool) FloatNumeric() float64 {
+func (obj MShellBool) FloatNumeric() float64 {
 	return 0
 }
 
@@ -936,11 +936,11 @@ func (obj *MShellList) FloatNumeric() float64 {
 	return 0
 }
 
-func (obj *MShellString) FloatNumeric() float64 {
+func (obj MShellString) FloatNumeric() float64 {
 	return 0
 }
 
-func (obj *MShellPath) FloatNumeric() float64 {
+func (obj MShellPath) FloatNumeric() float64 {
 	return 0
 }
 
@@ -948,11 +948,11 @@ func (obj *MShellPipe) FloatNumeric() float64 {
 	return 0
 }
 
-func (obj *MShellInt) FloatNumeric() float64 {
+func (obj MShellInt) FloatNumeric() float64 {
 	return float64(obj.Value)
 }
 
-func (obj *MShellFloat) FloatNumeric() float64 {
+func (obj MShellFloat) FloatNumeric() float64 {
 	return obj.Value
 }
 
@@ -961,11 +961,11 @@ func (obj *MShellSimple) FloatNumeric() float64 {
 }
 
 // CommandLine
-func (obj *MShellLiteral) CommandLine() string {
+func (obj MShellLiteral) CommandLine() string {
 	return obj.LiteralText
 }
 
-func (obj *MShellBool) CommandLine() string {
+func (obj MShellBool) CommandLine() string {
 	return ""
 }
 
@@ -977,11 +977,11 @@ func (obj *MShellList) CommandLine() string {
 	return ""
 }
 
-func (obj *MShellString) CommandLine() string {
+func (obj MShellString) CommandLine() string {
 	return obj.Content
 }
 
-func (obj *MShellPath) CommandLine() string {
+func (obj MShellPath) CommandLine() string {
 	return obj.Path
 }
 
@@ -989,7 +989,7 @@ func (obj *MShellPipe) CommandLine() string {
 	return ""
 }
 
-func (obj *MShellInt) CommandLine() string {
+func (obj MShellInt) CommandLine() string {
 	return strconv.Itoa(obj.Value)
 }
 
@@ -997,7 +997,7 @@ func (obj *MShellSimple) CommandLine() string {
 	return ""
 }
 
-func (obj *MShellFloat) CommandLine() string {
+func (obj MShellFloat) CommandLine() string {
 	return strconv.FormatFloat(obj.Value, 'f', -1, 64)
 }
 
@@ -1014,11 +1014,11 @@ func DebugStrs(objs []MShellObject) []string {
 	return debugStrs
 }
 
-func (obj *MShellLiteral) DebugString() string {
+func (obj MShellLiteral) DebugString() string {
 	return obj.LiteralText
 }
 
-func (obj *MShellBool) DebugString() string {
+func (obj MShellBool) DebugString() string {
 	return strconv.FormatBool(obj.Value)
 }
 
@@ -1075,7 +1075,7 @@ func cleanStringForTerminal(input string) string {
 
 var newlineCharRegex = regexp.MustCompile(`\r|\n`)
 
-func (obj *MShellString) DebugString() string {
+func (obj MShellString) DebugString() string {
 	// Surround the string with double quotes, keep just the first 15 and last 15 characters
 	if len(obj.Content) > 30 {
 		return "\"" + cleanStringForTerminal(obj.Content[:15]) + "..." + cleanStringForTerminal(obj.Content[len(obj.Content)-15:]) + "\""
@@ -1084,7 +1084,7 @@ func (obj *MShellString) DebugString() string {
 	return "\"" + cleanStringForTerminal(obj.Content) + "\""
 }
 
-func (obj *MShellPath) DebugString() string {
+func (obj MShellPath) DebugString() string {
 	if len(obj.Path) > 30 {
 		return "`" + obj.Path[:15] + "..." + obj.Path[len(obj.Path)-15:] + "`"
 	}
@@ -1097,11 +1097,11 @@ func (obj *MShellPipe) DebugString() string {
 	return strings.Join(DebugStrs(obj.List.Items), " | ")
 }
 
-func (obj *MShellInt) DebugString() string {
+func (obj MShellInt) DebugString() string {
 	return strconv.Itoa(obj.Value)
 }
 
-func (obj *MShellFloat) DebugString() string {
+func (obj MShellFloat) DebugString() string {
 	return strconv.FormatFloat(obj.Value, 'f', -1, 64)
 }
 
@@ -1109,11 +1109,11 @@ func (obj *MShellSimple) DebugString() string {
 	return obj.Token.Lexeme
 }
 
-func (obj *MShellLiteral) IndexErrStr() string {
+func (obj MShellLiteral) IndexErrStr() string {
 	return fmt.Sprintf(" (%s)", obj.LiteralText)
 }
 
-func (obj *MShellBool) IndexErrStr() string {
+func (obj MShellBool) IndexErrStr() string {
 	return ""
 }
 
@@ -1131,11 +1131,11 @@ func (obj *MShellList) IndexErrStr() string {
 	return fmt.Sprintf(" Last item: %s", obj.Items[len(obj.Items)-1].DebugString())
 }
 
-func (obj *MShellString) IndexErrStr() string {
+func (obj MShellString) IndexErrStr() string {
 	return fmt.Sprintf(" '%s'", obj.Content)
 }
 
-func (obj *MShellPath) IndexErrStr() string {
+func (obj MShellPath) IndexErrStr() string {
 	return fmt.Sprintf(" `%s`", obj.Path)
 }
 
@@ -1146,11 +1146,11 @@ func (obj *MShellPipe) IndexErrStr() string {
 	return fmt.Sprintf(" Last item: %s", obj.List.Items[len(obj.List.Items)-1].DebugString())
 }
 
-func (obj *MShellInt) IndexErrStr() string {
+func (obj MShellInt) IndexErrStr() string {
 	return ""
 }
 
-func (obj *MShellFloat) IndexErrStr() string {
+func (obj MShellFloat) IndexErrStr() string {
 	return ""
 }
 
@@ -1171,7 +1171,7 @@ func IndexCheckExc(index int, length int, obj MShellObject) error {
 }
 
 // Index
-func (obj *MShellLiteral) Index(index int) (MShellObject, error) {
+func (obj MShellLiteral) Index(index int) (MShellObject, error) {
 	if index < 0 {
 		index = len(obj.LiteralText) + index
 	}
@@ -1179,10 +1179,10 @@ func (obj *MShellLiteral) Index(index int) (MShellObject, error) {
 	if err := IndexCheck(index, len(obj.LiteralText), obj); err != nil {
 		return nil, err
 	}
-	return &MShellLiteral{LiteralText: string(obj.LiteralText[index])}, nil
+	return MShellLiteral{LiteralText: string(obj.LiteralText[index])}, nil
 }
 
-func (obj *MShellBool) Index(index int) (MShellObject, error) {
+func (obj MShellBool) Index(index int) (MShellObject, error) {
 	return nil, fmt.Errorf("Cannot index into a boolean.\n")
 }
 
@@ -1207,7 +1207,7 @@ func (obj *MShellList) Index(index int) (MShellObject, error) {
 	return obj.Items[index], nil
 }
 
-func (obj *MShellString) Index(index int) (MShellObject, error) {
+func (obj MShellString) Index(index int) (MShellObject, error) {
 	if index < 0 {
 		index = len(obj.Content) + index
 	}
@@ -1215,10 +1215,10 @@ func (obj *MShellString) Index(index int) (MShellObject, error) {
 	if err := IndexCheck(index, len(obj.Content), obj); err != nil {
 		return nil, err
 	}
-	return &MShellString{Content: string(obj.Content[index])}, nil
+	return MShellString{Content: string(obj.Content[index])}, nil
 }
 
-func (obj *MShellPath) Index(index int) (MShellObject, error) {
+func (obj MShellPath) Index(index int) (MShellObject, error) {
 	if index < 0 {
 		index = len(obj.Path) + index
 	}
@@ -1226,7 +1226,7 @@ func (obj *MShellPath) Index(index int) (MShellObject, error) {
 	if err := IndexCheck(index, len(obj.Path), obj); err != nil {
 		return nil, err
 	}
-	return &MShellPath{Path: string(obj.Path[index])}, nil
+	return MShellPath{Path: string(obj.Path[index])}, nil
 }
 
 func (obj *MShellPipe) Index(index int) (MShellObject, error) {
@@ -1242,11 +1242,11 @@ func (obj *MShellPipe) Index(index int) (MShellObject, error) {
 	return newList, nil
 }
 
-func (obj *MShellInt) Index(index int) (MShellObject, error) {
+func (obj MShellInt) Index(index int) (MShellObject, error) {
 	return nil, fmt.Errorf("Cannot index into an integer.\n")
 }
 
-func (obj *MShellFloat) Index(index int) (MShellObject, error) {
+func (obj MShellFloat) Index(index int) (MShellObject, error) {
 	return nil, fmt.Errorf("Cannot index into a float.\n")
 }
 
@@ -1255,7 +1255,7 @@ func (obj *MShellSimple) Index(index int) (MShellObject, error) {
 }
 
 // SliceStart
-func (obj *MShellLiteral) SliceStart(start int) (MShellObject, error) {
+func (obj MShellLiteral) SliceStart(start int) (MShellObject, error) {
 	if start < 0 {
 		start = len(obj.LiteralText) + start
 	}
@@ -1263,10 +1263,10 @@ func (obj *MShellLiteral) SliceStart(start int) (MShellObject, error) {
 	if err := IndexCheckExc(start, len(obj.LiteralText), obj); err != nil {
 		return nil, err
 	}
-	return &MShellLiteral{LiteralText: obj.LiteralText[start:]}, nil
+	return MShellLiteral{LiteralText: obj.LiteralText[start:]}, nil
 }
 
-func (obj *MShellBool) SliceStart(start int) (MShellObject, error) {
+func (obj MShellBool) SliceStart(start int) (MShellObject, error) {
 	return nil, fmt.Errorf("Cannot slice a boolean.\n")
 }
 
@@ -1296,17 +1296,17 @@ func (obj *MShellList) SliceStart(start int) (MShellObject, error) {
 	return newList, nil
 }
 
-func (obj *MShellString) SliceStart(start int) (MShellObject, error) {
+func (obj MShellString) SliceStart(start int) (MShellObject, error) {
 	if start < 0 {
 		start = len(obj.Content) + start
 	}
 	if err := IndexCheckExc(start, len(obj.Content), obj); err != nil {
 		return nil, err
 	}
-	return &MShellString{Content: obj.Content[start:]}, nil
+	return MShellString{Content: obj.Content[start:]}, nil
 }
 
-func (obj *MShellPath) SliceStart(start int) (MShellObject, error) {
+func (obj MShellPath) SliceStart(start int) (MShellObject, error) {
 	if start < 0 {
 		start = len(obj.Path) + start
 	}
@@ -1314,7 +1314,7 @@ func (obj *MShellPath) SliceStart(start int) (MShellObject, error) {
 		return nil, err
 	}
 
-	return &MShellPath{Path: obj.Path[start:]}, nil
+	return MShellPath{Path: obj.Path[start:]}, nil
 }
 
 func (obj *MShellPipe) SliceStart(start int) (MShellObject, error) {
@@ -1331,11 +1331,11 @@ func (obj *MShellPipe) SliceStart(start int) (MShellObject, error) {
 	return newList, nil
 }
 
-func (obj *MShellInt) SliceStart(start int) (MShellObject, error) {
+func (obj MShellInt) SliceStart(start int) (MShellObject, error) {
 	return nil, fmt.Errorf("cannot slice an integer.\n")
 }
 
-func (obj *MShellFloat) SliceStart(start int) (MShellObject, error) {
+func (obj MShellFloat) SliceStart(start int) (MShellObject, error) {
 	return nil, fmt.Errorf("cannot slice a float.\n")
 }
 
@@ -1344,7 +1344,7 @@ func (obj *MShellSimple) SliceStart(start int) (MShellObject, error) {
 }
 
 // SliceEnd
-func (obj *MShellLiteral) SliceEnd(end int) (MShellObject, error) {
+func (obj MShellLiteral) SliceEnd(end int) (MShellObject, error) {
 	if end < 0 {
 		end = len(obj.LiteralText) + end
 	}
@@ -1352,10 +1352,10 @@ func (obj *MShellLiteral) SliceEnd(end int) (MShellObject, error) {
 	if err := IndexCheckExc(end, len(obj.LiteralText), obj); err != nil {
 		return nil, err
 	}
-	return &MShellLiteral{LiteralText: obj.LiteralText[:end]}, nil
+	return MShellLiteral{LiteralText: obj.LiteralText[:end]}, nil
 }
 
-func (obj *MShellBool) SliceEnd(end int) (MShellObject, error) {
+func (obj MShellBool) SliceEnd(end int) (MShellObject, error) {
 	return nil, fmt.Errorf("cannot slice a boolean.\n")
 }
 
@@ -1384,17 +1384,17 @@ func (obj *MShellList) SliceEnd(end int) (MShellObject, error) {
 	return newList, nil
 }
 
-func (obj *MShellString) SliceEnd(end int) (MShellObject, error) {
+func (obj MShellString) SliceEnd(end int) (MShellObject, error) {
 	if end < 0 {
 		end = len(obj.Content) + end
 	}
 	if err := IndexCheckExc(end, len(obj.Content), obj); err != nil {
 		return nil, err
 	}
-	return &MShellString{Content: obj.Content[:end]}, nil
+	return MShellString{Content: obj.Content[:end]}, nil
 }
 
-func (obj *MShellPath) SliceEnd(end int) (MShellObject, error) {
+func (obj MShellPath) SliceEnd(end int) (MShellObject, error) {
 	if end < 0 {
 		end = len(obj.Path) + end
 	}
@@ -1402,7 +1402,7 @@ func (obj *MShellPath) SliceEnd(end int) (MShellObject, error) {
 		return nil, err
 	}
 
-	return &MShellPath{Path: obj.Path[:end]}, nil
+	return MShellPath{Path: obj.Path[:end]}, nil
 }
 
 func (obj *MShellPipe) SliceEnd(end int) (MShellObject, error) {
@@ -1417,11 +1417,11 @@ func (obj *MShellPipe) SliceEnd(end int) (MShellObject, error) {
 	return newList, nil
 }
 
-func (obj *MShellInt) SliceEnd(end int) (MShellObject, error) {
+func (obj MShellInt) SliceEnd(end int) (MShellObject, error) {
 	return nil, fmt.Errorf("Cannot slice an integer.\n")
 }
 
-func (obj *MShellFloat) SliceEnd(end int) (MShellObject, error) {
+func (obj MShellFloat) SliceEnd(end int) (MShellObject, error) {
 	return nil, fmt.Errorf("Cannot slice a float.\n")
 }
 
@@ -1446,7 +1446,7 @@ func SliceIndexCheck(startInc int, endExc int, length int, obj MShellObject) err
 	}
 }
 
-func (obj *MShellLiteral) Slice(startInc int, endExc int) (MShellObject, error) {
+func (obj MShellLiteral) Slice(startInc int, endExc int) (MShellObject, error) {
 	if startInc < 0 {
 		startInc = len(obj.LiteralText) + startInc
 	}
@@ -1458,10 +1458,10 @@ func (obj *MShellLiteral) Slice(startInc int, endExc int) (MShellObject, error) 
 	if err := SliceIndexCheck(startInc, endExc, len(obj.LiteralText), obj); err != nil {
 		return nil, err
 	}
-	return &MShellLiteral{LiteralText: obj.LiteralText[startInc:endExc]}, nil
+	return MShellLiteral{LiteralText: obj.LiteralText[startInc:endExc]}, nil
 }
 
-func (obj *MShellBool) Slice(startInc int, endExc int) (MShellObject, error) {
+func (obj MShellBool) Slice(startInc int, endExc int) (MShellObject, error) {
 	return nil, fmt.Errorf("Cannot slice a boolean.\n")
 }
 
@@ -1500,7 +1500,7 @@ func (obj *MShellList) Slice(startInc int, endExc int) (MShellObject, error) {
 	return newList, nil
 }
 
-func (obj *MShellString) Slice(startInc int, endExc int) (MShellObject, error) {
+func (obj MShellString) Slice(startInc int, endExc int) (MShellObject, error) {
 	if startInc < 0 {
 		startInc = len(obj.Content) + startInc
 	}
@@ -1512,10 +1512,10 @@ func (obj *MShellString) Slice(startInc int, endExc int) (MShellObject, error) {
 	if err := SliceIndexCheck(startInc, endExc, len(obj.Content), obj); err != nil {
 		return nil, err
 	}
-	return &MShellString{Content: obj.Content[startInc:endExc]}, nil
+	return MShellString{Content: obj.Content[startInc:endExc]}, nil
 }
 
-func (obj *MShellPath) Slice(startInc int, endExc int) (MShellObject, error) {
+func (obj MShellPath) Slice(startInc int, endExc int) (MShellObject, error) {
 	if startInc < 0 {
 		startInc = len(obj.Path) + startInc
 	}
@@ -1528,7 +1528,7 @@ func (obj *MShellPath) Slice(startInc int, endExc int) (MShellObject, error) {
 		return nil, err
 	}
 
-	return &MShellPath{Path: obj.Path[startInc:endExc]}, nil
+	return MShellPath{Path: obj.Path[startInc:endExc]}, nil
 }
 
 func (obj *MShellPipe) Slice(startInc int, endExc int) (MShellObject, error) {
@@ -1549,11 +1549,11 @@ func (obj *MShellPipe) Slice(startInc int, endExc int) (MShellObject, error) {
 	return newList, nil
 }
 
-func (obj *MShellInt) Slice(startInc int, endExc int) (MShellObject, error) {
+func (obj MShellInt) Slice(startInc int, endExc int) (MShellObject, error) {
 	return nil, fmt.Errorf("Cannot slice an integer.\n")
 }
 
-func (obj *MShellFloat) Slice(startInc int, endExc int) (MShellObject, error) {
+func (obj MShellFloat) Slice(startInc int, endExc int) (MShellObject, error) {
 	return nil, fmt.Errorf("Cannot slice a float.\n")
 }
 
@@ -1562,12 +1562,12 @@ func (obj *MShellSimple) Slice(startInc int, endExc int) (MShellObject, error) {
 }
 
 // ToJson
-func (obj *MShellLiteral) ToJson() string {
+func (obj MShellLiteral) ToJson() string {
 	escBytes, _ := json.Marshal(obj.LiteralText)
 	return fmt.Sprintf("%s", string(escBytes))
 }
 
-func (obj *MShellBool) ToJson() string {
+func (obj MShellBool) ToJson() string {
 	if obj.Value {
 		return "true"
 	} else {
@@ -1603,13 +1603,13 @@ func (obj *MShellList) ToJson() string {
 	return builder.String()
 }
 
-func (obj *MShellString) ToJson() string {
+func (obj MShellString) ToJson() string {
 	// Escape the content
 	escBytes, _ := json.Marshal(obj.Content)
 	return fmt.Sprintf("%s", string(escBytes))
 }
 
-func (obj *MShellPath) ToJson() string {
+func (obj MShellPath) ToJson() string {
 	// Escape the content
 	escBytes, _ := json.Marshal(obj.Path)
 	return fmt.Sprintf("%s", string(escBytes))
@@ -1619,11 +1619,11 @@ func (obj *MShellPipe) ToJson() string {
 	return obj.List.ToJson()
 }
 
-func (obj *MShellInt) ToJson() string {
+func (obj MShellInt) ToJson() string {
 	return fmt.Sprintf("%d", obj.Value)
 }
 
-func (obj *MShellFloat) ToJson() string {
+func (obj MShellFloat) ToJson() string {
 	escBytes, _ := json.Marshal(obj.Value)
 	return fmt.Sprintf("%s", string(escBytes))
 }
@@ -1633,16 +1633,16 @@ func (obj *MShellSimple) ToJson() string {
 }
 
 // Concat
-func (obj *MShellLiteral) Concat(other MShellObject) (MShellObject, error) {
-	asLiteral, ok := other.(*MShellLiteral)
+func (obj MShellLiteral) Concat(other MShellObject) (MShellObject, error) {
+	asLiteral, ok := other.(MShellLiteral)
 	if !ok {
 		return nil, fmt.Errorf("Cannot concatenate a Literal with a %s.\n", other.TypeName())
 	}
 
-	return &MShellLiteral{LiteralText: obj.LiteralText + asLiteral.LiteralText}, nil
+	return MShellLiteral{LiteralText: obj.LiteralText + asLiteral.LiteralText}, nil
 }
 
-func (obj *MShellBool) Concat(other MShellObject) (MShellObject, error) {
+func (obj MShellBool) Concat(other MShellObject) (MShellObject, error) {
 	return nil, fmt.Errorf("Cannot concatenate a boolean.\n")
 }
 
@@ -1670,22 +1670,22 @@ func (obj *MShellList) Concat(other MShellObject) (MShellObject, error) {
 	return &MShellList{Items: newItems}, nil
 }
 
-func (obj *MShellString) Concat(other MShellObject) (MShellObject, error) {
-	asString, ok := other.(*MShellString)
+func (obj MShellString) Concat(other MShellObject) (MShellObject, error) {
+	asString, ok := other.(MShellString)
 	if !ok {
 		return nil, fmt.Errorf("Cannot concatenate a String with a %s.\n", other.TypeName())
 	}
 
-	return &MShellString{Content: obj.Content + asString.Content}, nil
+	return MShellString{Content: obj.Content + asString.Content}, nil
 }
 
-func (obj *MShellPath) Concat(other MShellObject) (MShellObject, error) {
-	asPath, ok := other.(*MShellPath)
+func (obj MShellPath) Concat(other MShellObject) (MShellObject, error) {
+	asPath, ok := other.(MShellPath)
 	if !ok {
 		return nil, fmt.Errorf("Cannot concatenate a Path with a %s.\n", other.TypeName())
 	}
 
-	return &MShellPath{Path: obj.Path + asPath.Path}, nil
+	return MShellPath{Path: obj.Path + asPath.Path}, nil
 }
 
 func (obj *MShellPipe) Concat(other MShellObject) (MShellObject, error) {
@@ -1700,11 +1700,11 @@ func (obj *MShellPipe) Concat(other MShellObject) (MShellObject, error) {
 	return &MShellPipe{List: MShellList{Items: newItems}}, nil
 }
 
-func (obj *MShellInt) Concat(other MShellObject) (MShellObject, error) {
+func (obj MShellInt) Concat(other MShellObject) (MShellObject, error) {
 	return nil, fmt.Errorf("Cannot concatenate an integer.\n")
 }
 
-func (obj *MShellFloat) Concat(other MShellObject) (MShellObject, error) {
+func (obj MShellFloat) Concat(other MShellObject) (MShellObject, error) {
 	return nil, fmt.Errorf("Cannot concatenate a float.\n")
 }
 
@@ -1811,22 +1811,22 @@ func ParseRawPath(inputString string) (string, error) {
 // MShellInt struct {
 // MShellFloat struct {
 
-func (obj *MShellLiteral) Equals(other MShellObject) (bool, error) {
+func (obj MShellLiteral) Equals(other MShellObject) (bool, error) {
 	// Define equality for other as string or as literal or path.
 	switch o := other.(type) {
-	case *MShellLiteral:
+	case MShellLiteral:
 		return obj.LiteralText == o.LiteralText, nil
-	case *MShellString:
+	case MShellString:
 		return obj.LiteralText == o.Content, nil
-	case *MShellPath:
+	case MShellPath:
 		return obj.LiteralText == o.Path, nil
 	default:
 		return false, fmt.Errorf("Cannot compare a literal with a %s.\n", other.TypeName())
 	}
 }
 
-func (obj *MShellBool) Equals(other MShellObject) (bool, error) {
-	asBool, ok := other.(*MShellBool)
+func (obj MShellBool) Equals(other MShellObject) (bool, error) {
+	asBool, ok := other.(MShellBool)
 	if !ok {
 		return false, fmt.Errorf("Cannot compare a boolean with a %s.\n", other.TypeName())
 	}
@@ -1841,28 +1841,28 @@ func (obj *MShellList) Equals(other MShellObject) (bool, error) {
 	return false, fmt.Errorf("Equality currently not defined for lists.\n")
 }
 
-func (obj *MShellString) Equals(other MShellObject) (bool, error) {
+func (obj MShellString) Equals(other MShellObject) (bool, error) {
 	// Define equality for other as string or as literal.
 	switch other.(type) {
-	case *MShellString:
-		asString, _ := other.(*MShellString)
+	case MShellString:
+		asString, _ := other.(MShellString)
 		return obj.Content == asString.Content, nil
-	case *MShellLiteral:
-		asLiteral, _ := other.(*MShellLiteral)
+	case MShellLiteral:
+		asLiteral, _ := other.(MShellLiteral)
 		return obj.Content == asLiteral.LiteralText, nil
 	default:
 		return false, fmt.Errorf("Cannot compare a string with a %s.\n", other.TypeName())
 	}
 }
 
-func (obj *MShellPath) Equals(other MShellObject) (bool, error) {
+func (obj MShellPath) Equals(other MShellObject) (bool, error) {
 	// Define equality for other as string or as literal.
 	switch other.(type) {
-	case *MShellPath:
-		asPath, _ := other.(*MShellPath)
+	case MShellPath:
+		asPath, _ := other.(MShellPath)
 		return obj.Path == asPath.Path, nil
-	case *MShellLiteral:
-		asLiteral, _ := other.(*MShellLiteral)
+	case MShellLiteral:
+		asLiteral, _ := other.(MShellLiteral)
 		return obj.Path == asLiteral.LiteralText, nil
 	default:
 		return false, fmt.Errorf("Cannot compare a path with a %s.\n", other.TypeName())
@@ -1873,16 +1873,16 @@ func (obj *MShellPipe) Equals(other MShellObject) (bool, error) {
 	return false, fmt.Errorf("Equality currently not defined for pipes.\n")
 }
 
-func (obj *MShellInt) Equals(other MShellObject) (bool, error) {
-	asInt, ok := other.(*MShellInt)
+func (obj MShellInt) Equals(other MShellObject) (bool, error) {
+	asInt, ok := other.(MShellInt)
 	if !ok {
 		return false, fmt.Errorf("Cannot compare an integer with a %s.\n", other.TypeName())
 	}
 	return obj.Value == asInt.Value, nil
 }
 
-func (obj *MShellFloat) Equals(other MShellObject) (bool, error) {
-	asFloat, ok := other.(*MShellFloat)
+func (obj MShellFloat) Equals(other MShellObject) (bool, error) {
+	asFloat, ok := other.(MShellFloat)
 	if !ok {
 		return false, fmt.Errorf("Cannot compare a float with a %s.\n", other.TypeName())
 	}
@@ -1893,11 +1893,11 @@ func (obj *MShellFloat) Equals(other MShellObject) (bool, error) {
 
 // CastString {{{
 
-func (obj *MShellLiteral) CastString() (string, error) {
+func (obj MShellLiteral) CastString() (string, error) {
 	return obj.LiteralText, nil
 }
 
-func (obj *MShellBool) CastString() (string, error) {
+func (obj MShellBool) CastString() (string, error) {
 	return "", fmt.Errorf("Cannot cast a boolean to a string.\n")
 }
 
@@ -1909,11 +1909,11 @@ func (obj *MShellList) CastString() (string, error) {
 	return "", fmt.Errorf("Cannot cast a list to a string.\n")
 }
 
-func (obj *MShellString) CastString() (string, error) {
+func (obj MShellString) CastString() (string, error) {
 	return obj.Content, nil
 }
 
-func (obj *MShellPath) CastString() (string, error) {
+func (obj MShellPath) CastString() (string, error) {
 	return obj.Path, nil
 }
 
@@ -1921,11 +1921,11 @@ func (obj *MShellPipe) CastString() (string, error) {
 	return "", fmt.Errorf("Cannot cast a pipe to a string.\n")
 }
 
-func (obj *MShellInt) CastString() (string, error) {
+func (obj MShellInt) CastString() (string, error) {
 	return strconv.Itoa(obj.Value), nil
 }
 
-func (obj *MShellFloat) CastString() (string, error) {
+func (obj MShellFloat) CastString() (string, error) {
 	return "", fmt.Errorf("Cannot cast a float to a string.\n")
 }
 
@@ -1944,11 +1944,11 @@ func nodeToDict(n *html.Node) *MShellDict {
 	childList := NewList(0)
 
 	d.Items["attr"] = attrDict
-	d.Items["tag"] = &MShellString{Content: n.Data}
+	d.Items["tag"] = MShellString{Content: n.Data}
 	d.Items["children"] = childList
 
 	for _, attr := range n.Attr {
-		attrDict.Items[attr.Key] = &MShellString{Content: attr.Val}
+		attrDict.Items[attr.Key] = MShellString{Content: attr.Val}
 	}
 
 	textBuilder := strings.Builder{}
@@ -1962,6 +1962,6 @@ func nodeToDict(n *html.Node) *MShellDict {
 		}
 	}
 
-	d.Items["text"] = &MShellString{Content: textBuilder.String()}
+	d.Items["text"] = MShellString{Content: textBuilder.String()}
 	return d
 }

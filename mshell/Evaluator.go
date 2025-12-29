@@ -124,7 +124,7 @@ func (objList *MShellStack) String() string {
 
 func getIntOption(dict *MShellDict, key string) (int, bool, error) {
 	if val, ok := dict.Items[key]; ok {
-		if intObj, ok := val.(*MShellInt); ok {
+		if intObj, ok := val.(MShellInt); ok {
 			return intObj.Value, true, nil
 		}
 		return 0, true, fmt.Errorf("The '%s' option in 'numFmt' must be an int, found a %s (%s)", key, val.TypeName(), val.DebugString())
@@ -145,7 +145,7 @@ func getStringOption(dict *MShellDict, key string) (string, bool, error) {
 
 func getBoolOption(dict *MShellDict, key string) (bool, bool, error) {
 	if val, ok := dict.Items[key]; ok {
-		boolObj, ok := val.(*MShellBool)
+		boolObj, ok := val.(MShellBool)
 		if !ok {
 			return false, true, fmt.Errorf("The '%s' option in 'numFmt' must be a bool, found a %s (%s)", key, val.TypeName(), val.DebugString())
 		}
@@ -229,7 +229,7 @@ func getGroupingOption(dict *MShellDict, key string) ([]int, bool, error) {
 
 	grouping := make([]int, len(list.Items))
 	for i, item := range list.Items {
-		intItem, ok := item.(*MShellInt)
+		intItem, ok := item.(MShellInt)
 		if !ok {
 			return nil, true, fmt.Errorf("The '%s' option in 'numFmt' must be a list of ints, found a %s (%s) at index %d", key, item.TypeName(), item.DebugString(), i)
 		}
@@ -705,7 +705,7 @@ MainLoop:
 					// Print known binaries
 					debugList := context.Pbm.DebugList()
 					for _, item := range debugList.Items {
-						fmt.Fprintf(os.Stderr, "%s\t%s\n", item.(*MShellList).Items[0].(*MShellString).Content, item.(*MShellList).Items[1].(*MShellString).Content)
+						fmt.Fprintf(os.Stderr, "%s\t%s\n", item.(*MShellList).Items[0].(MShellString).Content, item.(*MShellList).Items[1].(MShellString).Content)
 					}
 
 					// fmt.Fprint(os.Stderr, debugStr)
@@ -801,7 +801,7 @@ MainLoop:
 
 					newList := NewList(len(files))
 					for i, file := range files {
-						newList.Items[i] = &MShellPath{file}
+						newList.Items[i] = MShellPath{file}
 					}
 
 					stack.Push(newList)
@@ -818,7 +818,7 @@ MainLoop:
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error reading from stdin: %s\n", t.Line, t.Column, err.Error()))
 					}
-					stack.Push(&MShellString{buffer.String()})
+					stack.Push(MShellString{buffer.String()})
 				} else if t.Lexeme == "append" {
 					obj1, err := stack.Pop()
 					if err != nil {
@@ -854,7 +854,7 @@ MainLoop:
 					// Dump the positional arguments onto the stack as a list of strings
 					newList := NewList(len(state.PositionalArgs))
 					for i, arg := range state.PositionalArgs {
-						newList.Items[i] = &MShellString{arg}
+						newList.Items[i] = MShellString{arg}
 					}
 					stack.Push(newList)
 				} else if t.Lexeme == "len" {
@@ -865,13 +865,13 @@ MainLoop:
 
 					switch objTyped := obj.(type) {
 					case *MShellList:
-						stack.Push(&MShellInt{len(objTyped.Items)})
-					case *MShellString:
-						stack.Push(&MShellInt{len(objTyped.Content)})
-					case *MShellPath:
-						stack.Push(&MShellInt{len(objTyped.Path)})
-					case *MShellLiteral:
-						stack.Push(&MShellInt{len(objTyped.LiteralText)})
+						stack.Push(MShellInt{len(objTyped.Items)})
+					case MShellString:
+						stack.Push(MShellInt{len(objTyped.Content)})
+					case MShellPath:
+						stack.Push(MShellInt{len(objTyped.Path)})
+					case MShellLiteral:
+						stack.Push(MShellInt{len(objTyped.LiteralText)})
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot get length of a %s.\n", t.Line, t.Column, obj.TypeName()))
 					}
@@ -886,7 +886,7 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'nth' operation on a stack with only one item.\n", t.Line, t.Column))
 					}
 
-					int1, ok := obj1.(*MShellInt)
+					int1, ok := obj1.(MShellInt)
 					if ok {
 						result, err := obj2.Index(int1.Value)
 						if err != nil {
@@ -894,7 +894,7 @@ MainLoop:
 						}
 						stack.Push(result)
 					} else {
-						int2, ok := obj2.(*MShellInt)
+						int2, ok := obj2.(MShellInt)
 						if ok {
 							result, err := obj1.Index(int2.Value)
 							if err != nil {
@@ -911,7 +911,7 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'pick' operation on an empty stack.\n", t.Line, t.Column))
 					}
 					// Check that obj1 is an integer
-					int1, ok := obj1.(*MShellInt)
+					int1, ok := obj1.(MShellInt)
 					if !ok {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'pick' with a %s.\n", t.Line, t.Column, obj1.TypeName()))
 					}
@@ -948,11 +948,11 @@ MainLoop:
 					}
 
 					switch topTyped := top.(type) {
-					case *MShellLiteral:
+					case MShellLiteral:
 						fmt.Fprint(writer, topTyped.LiteralText)
-					case *MShellString:
+					case MShellString:
 						fmt.Fprint(writer, topTyped.Content)
-					case *MShellInt:
+					case MShellInt:
 						fmt.Fprint(writer, topTyped.Value)
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot write a %s.\n", t.Line, t.Column, top.TypeName()))
@@ -987,7 +987,7 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot find-replace with a %s as the original string.\n", t.Line, t.Column, obj3.TypeName()))
 					}
 
-					stack.Push(&MShellString{strings.ReplaceAll(originalStr, findStr, replacementStr)})
+					stack.Push(MShellString{strings.ReplaceAll(originalStr, findStr, replacementStr)})
 				} else if t.Lexeme == "split" {
 					delimiter, strLiteral, err := stack.Pop2(t)
 					if err != nil {
@@ -1007,7 +1007,7 @@ MainLoop:
 					split := strings.Split(strToSplit, delimiterStr)
 					newList := NewList(len(split))
 					for i, item := range split {
-						newList.Items[i] = &MShellString{item}
+						newList.Items[i] = MShellString{item}
 					}
 					stack.Push(newList)
 				} else if t.Lexeme == "wsplit" {
@@ -1024,7 +1024,7 @@ MainLoop:
 					split := strings.Fields(strToSplit)
 					newList := NewList(len(split))
 					for i, item := range split {
-						newList.Items[i] = &MShellString{item}
+						newList.Items[i] = MShellString{item}
 					}
 
 					stack.Push(newList)
@@ -1044,9 +1044,9 @@ MainLoop:
 					var listItems []string
 
 					switch delimiterTyped := delimiter.(type) {
-					case *MShellString:
+					case MShellString:
 						delimiterStr = delimiterTyped.Content
-					case *MShellLiteral:
+					case MShellLiteral:
 						delimiterStr = delimiterTyped.LiteralText
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot join with a %s.\n", t.Line, t.Column, delimiter.TypeName()))
@@ -1056,9 +1056,9 @@ MainLoop:
 					case *MShellList:
 						for _, item := range listTyped.Items {
 							switch itemTyped := item.(type) {
-							case *MShellString:
+							case MShellString:
 								listItems = append(listItems, itemTyped.Content)
-							case *MShellLiteral:
+							case MShellLiteral:
 								listItems = append(listItems, itemTyped.LiteralText)
 							default:
 								return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot join a list with a %s inside (%s).\n", t.Line, t.Column, item.TypeName(), item.DebugString()))
@@ -1068,14 +1068,14 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a list as the second item on stack for join, received a %s (%s). The delimiter was '%s'\n", t.Line, t.Column, list.TypeName(), list.DebugString(), delimiterStr))
 					}
 
-					stack.Push(&MShellString{strings.Join(listItems, delimiterStr)})
+					stack.Push(MShellString{strings.Join(listItems, delimiterStr)})
 				} else if t.Lexeme == "lines" {
 					obj, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot evaluate 'lines' on an empty stack.\n", t.Line, t.Column))
 					}
 
-					s1, ok := obj.(*MShellString)
+					s1, ok := obj.(MShellString)
 					if !ok {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot evaluate 'lines' on a %s.\n", t.Line, t.Column, obj.TypeName()))
 					}
@@ -1089,7 +1089,7 @@ MainLoop:
 							}
 						}
 
-						newList.Items = append(newList.Items, &MShellString{line})
+						newList.Items = append(newList.Items, MShellString{line})
 					}
 
 					stack.Push(newList)
@@ -1102,7 +1102,7 @@ MainLoop:
 						return state.FailWithMessage(err.Error())
 					}
 
-					obj1Index, ok := obj1.(*MShellInt)
+					obj1Index, ok := obj1.(MShellInt)
 					if !ok {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot set at a non-integer index at top of stack, found a %s (%s).\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
 					}
@@ -1131,7 +1131,7 @@ MainLoop:
 						return state.FailWithMessage(err.Error())
 					}
 
-					obj1Index, ok := obj1.(*MShellInt)
+					obj1Index, ok := obj1.(MShellInt)
 					if !ok {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot insert at a non-integer index.\n", t.Line, t.Column))
 					}
@@ -1158,10 +1158,10 @@ MainLoop:
 					}
 
 					switch obj1.(type) {
-					case *MShellInt:
+					case MShellInt:
 						switch obj2.(type) {
 						case *MShellList:
-							index := obj1.(*MShellInt).Value
+							index := obj1.(MShellInt).Value
 							if index < 0 {
 								index = len(obj2.(*MShellList).Items) + index
 							}
@@ -1176,8 +1176,8 @@ MainLoop:
 						}
 					case *MShellList:
 						switch obj2.(type) {
-						case *MShellInt:
-							index := obj2.(*MShellInt).Value
+						case MShellInt:
+							index := obj2.(MShellInt).Value
 							if index < 0 {
 								index = len(obj1.(*MShellList).Items) + index
 							}
@@ -1208,7 +1208,7 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error reading file: %s\n", t.Line, t.Column, err.Error()))
 					}
 
-					stack.Push(&MShellString{string(content)})
+					stack.Push(MShellString{string(content)})
 				} else if t.Lexeme == "readFileBytes" {
 					obj1, err := stack.Pop()
 					if err != nil {
@@ -1255,14 +1255,14 @@ MainLoop:
 					if dict, ok := stringOrDict.(*MShellDict); ok {
 						// Check if the substring is a key in the dictionary
 						_, exists := dict.Items[substringText]
-						stack.Push(&MShellBool{exists})
+						stack.Push(MShellBool{exists})
 					} else {
 						totalStringText, err := stringOrDict.CastString()
 						if err != nil {
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot search in a %s.\n", t.Line, t.Column, stringOrDict.TypeName()))
 						}
 
-						stack.Push(&MShellBool{strings.Contains(totalStringText, substringText)})
+						stack.Push(MShellBool{strings.Contains(totalStringText, substringText)})
 					}
 				} else if t.Lexeme == "/" {
 					obj1, obj2, err := stack.Pop2(t)
@@ -1272,26 +1272,26 @@ MainLoop:
 
 					if obj1.IsNumeric() && obj2.IsNumeric() {
 						switch obj1 := obj1.(type) {
-						case *MShellInt:
+						case MShellInt:
 							if obj1.Value == 0 {
 								return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot divide by zero.\n", t.Line, t.Column))
 							}
 							switch obj2 := obj2.(type) {
-							case *MShellInt:
-								stack.Push(&MShellInt{obj2.Value / obj1.Value})
-							case *MShellFloat:
+							case MShellInt:
+								stack.Push(MShellInt{obj2.Value / obj1.Value})
+							case MShellFloat:
 								return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot divide a float by an int.\n", t.Line, t.Column))
 							}
-						case *MShellFloat:
+						case MShellFloat:
 							if obj1.Value == 0 {
 								return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot divide by zero.\n", t.Line, t.Column))
 							}
 
 							switch obj2 := obj2.(type) {
-							case *MShellInt:
+							case MShellInt:
 								return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot divide an int by a float.\n", t.Line, t.Column))
-							case *MShellFloat:
-								stack.Push(&MShellFloat{obj2.Value / obj1.Value})
+							case MShellFloat:
+								stack.Push(MShellFloat{obj2.Value / obj1.Value})
 							}
 						default:
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot divide a %s and a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
@@ -1299,12 +1299,12 @@ MainLoop:
 					} else {
 						// Check if both are paths
 						switch obj1.(type) {
-						case *MShellPath:
+						case MShellPath:
 							switch obj2.(type) {
-							case *MShellPath:
+							case MShellPath:
 								// This is a path join operation
-								newPath := filepath.Join(obj2.(*MShellPath).Path, obj1.(*MShellPath).Path)
-								stack.Push(&MShellPath{newPath})
+								newPath := filepath.Join(obj2.(MShellPath).Path, obj1.(MShellPath).Path)
+								stack.Push(MShellPath{newPath})
 							default:
 								return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do a join between a %s (%s) and a %s (%s).\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString(), obj1.TypeName(), obj1.DebugString()))
 							}
@@ -1318,7 +1318,7 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'exit' operation on an empty stack. If you are trying to exit out of the interactive shell, you are probably looking to do `0 exit`.\n", t.Line, t.Column))
 					}
 
-					exitInt, ok := exitCode.(*MShellInt)
+					exitInt, ok := exitCode.(MShellInt)
 					if !ok {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot exit with a %s.\n", t.Line, t.Column, exitCode.TypeName()))
 					}
@@ -1339,17 +1339,17 @@ MainLoop:
 					}
 
 					switch objTyped := obj.(type) {
-					case *MShellString:
+					case MShellString:
 						floatVal, err := strconv.ParseFloat(strings.TrimSpace(objTyped.Content), 64)
 						if err != nil {
 							stack.Push(&Maybe{obj: nil})
 						} else {
-							stack.Push(&Maybe{obj: &MShellFloat{floatVal}})
+							stack.Push(&Maybe{obj: MShellFloat{floatVal}})
 						}
 						// I don't believe checking for literal is required, because it should have been parsed as a float to start with?
-					case *MShellInt:
-						stack.Push(&MShellFloat{float64(objTyped.Value)})
-					case *MShellFloat:
+					case MShellInt:
+						stack.Push(MShellFloat{float64(objTyped.Value)})
+					case MShellFloat:
 						stack.Push(obj)
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert a %s to a float.\n", t.Line, t.Column, obj.TypeName()))
@@ -1361,18 +1361,18 @@ MainLoop:
 					}
 
 					switch objTyped := obj.(type) {
-					case *MShellString:
+					case MShellString:
 						intVal, err := strconv.Atoi(strings.TrimSpace(objTyped.Content))
 						if err != nil {
 							stack.Push(&Maybe{obj: nil})
 						} else {
-							stack.Push(&Maybe{obj: &MShellInt{intVal}})
+							stack.Push(&Maybe{obj: MShellInt{intVal}})
 						}
 						// I don't believe checking for literal is required, because it should have been parsed as a float to start with?
-					case *MShellInt:
+					case MShellInt:
 						stack.Push(obj)
-					case *MShellFloat:
-						stack.Push(&MShellInt{int(objTyped.Value)})
+					case MShellFloat:
+						stack.Push(MShellInt{int(objTyped.Value)})
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert a %s to an int.\n", t.Line, t.Column, obj.TypeName()))
 					}
@@ -1384,9 +1384,9 @@ MainLoop:
 
 					var dateStr string
 					switch dateStrTyped := dateStrObj.(type) {
-					case *MShellString:
+					case MShellString:
 						dateStr = dateStrTyped.Content
-					case *MShellLiteral:
+					case MShellLiteral:
 						dateStr = dateStrTyped.LiteralText
 					case *MShellDateTime:
 						stack.Push(dateStrObj)
@@ -1415,13 +1415,13 @@ MainLoop:
 					if t.Lexeme == "files" {
 						for _, file := range files {
 							if !file.IsDir() {
-								newList.Items = append(newList.Items, &MShellPath{file.Name()})
+								newList.Items = append(newList.Items, MShellPath{file.Name()})
 							}
 						}
 					} else {
 						for _, file := range files {
 							if file.IsDir() {
-								newList.Items = append(newList.Items, &MShellPath{file.Name()})
+								newList.Items = append(newList.Items, MShellPath{file.Name()})
 							}
 						}
 					}
@@ -1440,16 +1440,16 @@ MainLoop:
 					fileInfo, err := os.Stat(path)
 					if err != nil {
 						if errors.Is(err, os.ErrNotExist) {
-							stack.Push(&MShellBool{false})
+							stack.Push(MShellBool{false})
 						} else {
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error checking if %s is a directory: %s\n", t.Line, t.Column, path, err.Error()))
 						}
 					} else {
 						switch t.Lexeme {
 						case "isDir":
-							stack.Push(&MShellBool{fileInfo.IsDir()})
+							stack.Push(MShellBool{fileInfo.IsDir()})
 						case "isFile":
-							stack.Push(&MShellBool{!fileInfo.IsDir()})
+							stack.Push(MShellBool{!fileInfo.IsDir()})
 						default:
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Unknown operation: %s\n", t.Line, t.Column, t.Lexeme))
 						}
@@ -1488,13 +1488,13 @@ MainLoop:
 						tildeExpanded = filepath.Join(homeDir, t.Lexeme[2:])
 					}
 
-					stack.Push(&MShellString{tildeExpanded})
+					stack.Push(MShellString{tildeExpanded})
 				} else if t.Lexeme == "pwd" {
 					pwd, err := os.Getwd()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error getting current directory: %s\n", t.Line, t.Column, err.Error()))
 					}
-					stack.Push(&MShellString{pwd})
+					stack.Push(MShellString{pwd})
 				} else if t.Lexeme == "psub" {
 					obj1, err := stack.Pop()
 					if err != nil {
@@ -1511,13 +1511,13 @@ MainLoop:
 
 					// Write the contents of the object to the temporary file
 					switch obj1Typed := obj1.(type) {
-					case *MShellString:
+					case MShellString:
 						_, err = tmpfile.WriteString(obj1Typed.Content)
 						if err != nil {
 							tmpfile.Close()
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error writing to temporary file: %s\n", t.Line, t.Column, err.Error()))
 						}
-					case *MShellLiteral:
+					case MShellLiteral:
 						_, err = tmpfile.WriteString(obj1Typed.LiteralText)
 						if err != nil {
 							tmpfile.Close()
@@ -1527,7 +1527,7 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'psub' with a %s.\n", t.Line, t.Column, obj1.TypeName()))
 					}
 					tmpfile.Close()
-					stack.Push(&MShellString{tmpfile.Name()})
+					stack.Push(MShellString{tmpfile.Name()})
 				} else if t.Lexeme == "now" {
 					// Drop current local date time onto the stack
 					now := time.Now()
@@ -1557,7 +1557,7 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot get the day of a %s.\n", t.Line, t.Column, dateTimeObj.TypeName()))
 					}
 
-					stack.Push(&MShellInt{dateTime.Time.Day()})
+					stack.Push(MShellInt{dateTime.Time.Day()})
 				} else if t.Lexeme == "month" {
 					dateTimeObj, err := stack.Pop()
 					if err != nil {
@@ -1569,7 +1569,7 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot get the month of a %s.\n", t.Line, t.Column, dateTimeObj.TypeName()))
 					}
 
-					stack.Push(&MShellInt{int(dateTime.Time.Month())})
+					stack.Push(MShellInt{int(dateTime.Time.Month())})
 
 				} else if t.Lexeme == "year" {
 					dateTimeObj, err := stack.Pop()
@@ -1582,7 +1582,7 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot get the year of a %s.\n", t.Line, t.Column, dateTimeObj.TypeName()))
 					}
 
-					stack.Push(&MShellInt{dateTime.Time.Year()})
+					stack.Push(MShellInt{dateTime.Time.Year()})
 				} else if t.Lexeme == "hour" {
 					dateTimeObj, err := stack.Pop()
 					if err != nil {
@@ -1594,7 +1594,7 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot get the hour of a %s.\n", t.Line, t.Column, dateTimeObj.TypeName()))
 					}
 
-					stack.Push(&MShellInt{dateTime.Time.Hour()})
+					stack.Push(MShellInt{dateTime.Time.Hour()})
 				} else if t.Lexeme == "minute" {
 					dateTimeObj, err := stack.Pop()
 					if err != nil {
@@ -1606,7 +1606,7 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot get the minute of a %s.\n", t.Line, t.Column, dateTimeObj.TypeName()))
 					}
 
-					stack.Push(&MShellInt{dateTime.Time.Minute()})
+					stack.Push(MShellInt{dateTime.Time.Minute()})
 				} else if t.Lexeme == "mod" {
 					obj1, err := stack.Pop()
 					if err != nil {
@@ -1619,36 +1619,36 @@ MainLoop:
 					}
 
 					switch obj1.(type) {
-					case *MShellInt:
+					case MShellInt:
 						switch obj2.(type) {
-						case *MShellInt:
-							if obj1.(*MShellInt).Value == 0 {
+						case MShellInt:
+							if obj1.(MShellInt).Value == 0 {
 								return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot mod by zero.\n", t.Line, t.Column))
 							}
 
-							stack.Push(&MShellInt{obj2.(*MShellInt).Value % obj1.(*MShellInt).Value})
-						case *MShellFloat:
-							if obj1.(*MShellInt).Value == 0 {
+							stack.Push(MShellInt{obj2.(MShellInt).Value % obj1.(MShellInt).Value})
+						case MShellFloat:
+							if obj1.(MShellInt).Value == 0 {
 								return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot mod by zero.\n", t.Line, t.Column))
 							}
 
-							stack.Push(&MShellFloat{math.Mod(obj2.(*MShellFloat).Value, float64(obj1.(*MShellInt).Value))})
+							stack.Push(MShellFloat{math.Mod(obj2.(MShellFloat).Value, float64(obj1.(MShellInt).Value))})
 						}
 
-					case *MShellFloat:
+					case MShellFloat:
 						switch obj2.(type) {
-						case *MShellInt:
-							if obj1.(*MShellFloat).Value == 0 {
+						case MShellInt:
+							if obj1.(MShellFloat).Value == 0 {
 								return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot mod by zero.\n", t.Line, t.Column))
 							}
 
-							stack.Push(&MShellFloat{math.Mod(float64(obj2.(*MShellInt).Value), obj1.(*MShellFloat).Value)})
-						case *MShellFloat:
-							if obj1.(*MShellFloat).Value == 0 {
+							stack.Push(MShellFloat{math.Mod(float64(obj2.(MShellInt).Value), obj1.(MShellFloat).Value)})
+						case MShellFloat:
+							if obj1.(MShellFloat).Value == 0 {
 								return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot mod by zero.\n", t.Line, t.Column))
 							}
 
-							stack.Push(&MShellFloat{math.Mod(obj2.(*MShellFloat).Value, obj1.(*MShellFloat).Value)})
+							stack.Push(MShellFloat{math.Mod(obj2.(MShellFloat).Value, obj1.(MShellFloat).Value)})
 						}
 					}
 				} else if t.Lexeme == "basename" || t.Lexeme == "dirname" || t.Lexeme == "ext" || t.Lexeme == "stem" {
@@ -1663,15 +1663,15 @@ MainLoop:
 					}
 
 					if t.Lexeme == "basename" {
-						stack.Push(&MShellPath{filepath.Base(path)})
+						stack.Push(MShellPath{filepath.Base(path)})
 					} else if t.Lexeme == "dirname" {
-						stack.Push(&MShellPath{filepath.Dir(path)})
+						stack.Push(MShellPath{filepath.Dir(path)})
 					} else if t.Lexeme == "ext" {
-						stack.Push(&MShellString{filepath.Ext(path)})
+						stack.Push(MShellString{filepath.Ext(path)})
 					} else if t.Lexeme == "stem" {
 						// This should include previous dir if it exists
 
-						stack.Push(&MShellPath{strings.TrimSuffix(path, filepath.Ext(path))})
+						stack.Push(MShellPath{strings.TrimSuffix(path, filepath.Ext(path))})
 					}
 				} else if t.Lexeme == "toPath" {
 					obj1, err := stack.Pop()
@@ -1684,7 +1684,7 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert a %s to a path.\n", t.Line, t.Column, obj1.TypeName()))
 					}
 
-					stack.Push(&MShellPath{path})
+					stack.Push(MShellPath{path})
 				} else if t.Lexeme == "dateFmt" {
 					obj1, err := stack.Pop()
 					if err != nil {
@@ -1697,7 +1697,7 @@ MainLoop:
 					}
 
 					// Obj1 should be the format string, obj2 should be the date time object
-					formatString, ok := obj1.(*MShellString)
+					formatString, ok := obj1.(MShellString)
 					if !ok {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot format a date with a %s.\n", t.Line, t.Column, obj1.TypeName()))
 					}
@@ -1708,7 +1708,7 @@ MainLoop:
 					}
 
 					newStr := dateTime.Time.Format(formatString.Content)
-					stack.Push(&MShellString{newStr})
+					stack.Push(MShellString{newStr})
 				} else if t.Lexeme == "trim" || t.Lexeme == "trimStart" || t.Lexeme == "trimEnd" {
 					obj1, err := stack.Pop()
 					if err != nil {
@@ -1721,11 +1721,11 @@ MainLoop:
 					}
 
 					if t.Lexeme == "trim" {
-						stack.Push(&MShellString{strings.TrimSpace(str)})
+						stack.Push(MShellString{strings.TrimSpace(str)})
 					} else if t.Lexeme == "trimStart" {
-						stack.Push(&MShellString{strings.TrimLeft(str, " \t\n")})
+						stack.Push(MShellString{strings.TrimLeft(str, " \t\n")})
 					} else if t.Lexeme == "trimEnd" {
-						stack.Push(&MShellString{strings.TrimRight(str, " \t\n")})
+						stack.Push(MShellString{strings.TrimRight(str, " \t\n")})
 					}
 				} else if t.Lexeme == "upper" || t.Lexeme == "lower" || t.Lexeme == "title" {
 					obj1, err := stack.Pop()
@@ -1744,12 +1744,12 @@ MainLoop:
 					}
 
 					switch obj1Typed := obj1.(type) {
-					case *MShellString:
-						stack.Push(&MShellString{f(obj1Typed.Content)})
-					case *MShellLiteral:
-						stack.Push(&MShellLiteral{f(obj1Typed.LiteralText)})
-					case *MShellPath:
-						stack.Push(&MShellPath{f(obj1Typed.Path)})
+					case MShellString:
+						stack.Push(MShellString{f(obj1Typed.Content)})
+					case MShellLiteral:
+						stack.Push(MShellLiteral{f(obj1Typed.LiteralText)})
+					case MShellPath:
+						stack.Push(MShellPath{f(obj1Typed.Path)})
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot %s a %s (%s).\n", t.Line, t.Column, t.Lexeme, obj1.TypeName(), obj1.DebugString()))
 					}
@@ -1766,9 +1766,9 @@ MainLoop:
 
 					var num float64
 					switch n := numberObj.(type) {
-					case *MShellInt:
+					case MShellInt:
 						num = float64(n.Value)
-					case *MShellFloat:
+					case MShellFloat:
 						num = n.Value
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second parameter in 'numFmt' must be numeric, found a %s (%s)\n", t.Line, t.Column, numberObj.TypeName(), numberObj.DebugString()))
@@ -1829,7 +1829,7 @@ MainLoop:
 						formatted = fmt.Sprintf("%.*f", decimals, num)
 					} else if hasSigfigs {
 						if preserveInt {
-							if intObj, ok := numberObj.(*MShellInt); ok {
+							if intObj, ok := numberObj.(MShellInt); ok {
 								absStr := fmt.Sprintf("%d", int(math.Abs(float64(intObj.Value))))
 								if len(absStr) > sigfigs {
 									formatted = fmt.Sprintf("%d", intObj.Value)
@@ -1841,9 +1841,9 @@ MainLoop:
 						}
 					} else {
 						switch n := numberObj.(type) {
-						case *MShellInt:
+						case MShellInt:
 							formatted = fmt.Sprintf("%d", n.Value)
-						case *MShellFloat:
+						case MShellFloat:
 							formatted = strconv.FormatFloat(n.Value, 'f', -1, 64)
 						}
 					}
@@ -1875,7 +1875,7 @@ MainLoop:
 						}
 					}
 
-					stack.Push(&MShellString{formatted})
+					stack.Push(MShellString{formatted})
 				} else if t.Lexeme == "hardLink" {
 					newTarget, err := stack.Pop()
 					if err != nil {
@@ -1908,10 +1908,10 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error creating temporary file: %s\n", t.Line, t.Column, err.Error()))
 					}
 					// Dump the full path to the stack
-					stack.Push(&MShellPath{tmpfile.Name()})
+					stack.Push(MShellPath{tmpfile.Name()})
 				} else if t.Lexeme == "tempDir" {
 					tmpdir := os.TempDir()
-					stack.Push(&MShellPath{tmpdir})
+					stack.Push(MShellPath{tmpdir})
 				} else if t.Lexeme == "endsWith" || t.Lexeme == "startsWith" {
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
@@ -1929,9 +1929,9 @@ MainLoop:
 					}
 
 					if t.Lexeme == "endsWith" {
-						stack.Push(&MShellBool{strings.HasSuffix(str2, str1)})
+						stack.Push(MShellBool{strings.HasSuffix(str2, str1)})
 					} else if t.Lexeme == "startsWith" {
-						stack.Push(&MShellBool{strings.HasPrefix(str2, str1)})
+						stack.Push(MShellBool{strings.HasPrefix(str2, str1)})
 					}
 				} else if t.Lexeme == "leftPad" {
 					obj1, obj2, obj3, err := stack.Pop3(t)
@@ -1939,7 +1939,7 @@ MainLoop:
 						return state.FailWithMessage(err.Error())
 					}
 
-					totalLen, ok := obj1.(*MShellInt)
+					totalLen, ok := obj1.(MShellInt)
 					if !ok {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot leftPad with a %s as the total length.\n", t.Line, t.Column, obj1.TypeName()))
 					}
@@ -1963,7 +1963,7 @@ MainLoop:
 					}
 
 					if len(inputStr) >= totalLen.Value {
-						stack.Push(&MShellString{inputStr})
+						stack.Push(MShellString{inputStr})
 					} else {
 						needed := totalLen.Value - len(inputStr)
 						padLen := len(padStr)
@@ -1983,7 +1983,7 @@ MainLoop:
 						}
 
 						builder.WriteString(inputStr)
-						stack.Push(&MShellString{builder.String()})
+						stack.Push(MShellString{builder.String()})
 					}
 				} else if t.Lexeme == "isWeekend" || t.Lexeme == "isWeekday" || t.Lexeme == "dow" {
 					obj1, err := stack.Pop()
@@ -1998,11 +1998,11 @@ MainLoop:
 
 					dayOfWeek := int(dateTimeObj.Time.Weekday())
 					if t.Lexeme == "isWeekend" {
-						stack.Push(&MShellBool{dayOfWeek == 0 || dayOfWeek == 6})
+						stack.Push(MShellBool{dayOfWeek == 0 || dayOfWeek == 6})
 					} else if t.Lexeme == "isWeekday" {
-						stack.Push(&MShellBool{dayOfWeek != 0 && dayOfWeek != 6})
+						stack.Push(MShellBool{dayOfWeek != 0 && dayOfWeek != 6})
 					} else if t.Lexeme == "dow" {
-						stack.Push(&MShellInt{dayOfWeek})
+						stack.Push(MShellInt{dayOfWeek})
 					}
 				} else if t.Lexeme == "toUnixTime" {
 					obj1, err := stack.Pop()
@@ -2014,14 +2014,14 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot get the unix time of a %s (%s).\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
 					}
 
-					stack.Push(&MShellInt{int(dateTimeObj.Time.Unix())})
+					stack.Push(MShellInt{int(dateTimeObj.Time.Unix())})
 				} else if t.Lexeme == "fromUnixTime" {
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
 					}
 
-					intVal, ok := obj1.(*MShellInt)
+					intVal, ok := obj1.(MShellInt)
 					if !ok {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert a %s (%s) to a datetime.\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
 					}
@@ -2196,7 +2196,7 @@ MainLoop:
 							packItem.PreserveRoot = false
 						}
 						if modeObj, ok := entryDict.Items["mode"]; ok {
-							modeInt, ok := modeObj.(*MShellInt)
+							modeInt, ok := modeObj.(MShellInt)
 							if !ok {
 								return state.FailWithMessage(fmt.Sprintf("%d:%d: zipPack entry %d had a non-integer mode (%s).\n", t.Line, t.Column, idx, modeObj.TypeName()))
 							}
@@ -2228,12 +2228,12 @@ MainLoop:
 					result := NewList(0)
 					for _, entry := range entries {
 						dict := NewDict()
-						dict.Items["name"] = &MShellString{entry.Name}
-						dict.Items["compressedSize"] = &MShellInt{entry.CompressedSize}
-						dict.Items["uncompressedSize"] = &MShellInt{entry.UncompressedSize}
-						dict.Items["isDir"] = &MShellBool{entry.IsDir}
-						dict.Items["perm"] = &MShellInt{int(entry.Mode.Perm())}
-						dict.Items["executable"] = &MShellBool{!entry.IsDir && entry.Mode.Perm()&0o111 != 0}
+						dict.Items["name"] = MShellString{entry.Name}
+						dict.Items["compressedSize"] = MShellInt{entry.CompressedSize}
+						dict.Items["uncompressedSize"] = MShellInt{entry.UncompressedSize}
+						dict.Items["isDir"] = MShellBool{entry.IsDir}
+						dict.Items["perm"] = MShellInt{int(entry.Mode.Perm())}
+						dict.Items["executable"] = MShellBool{!entry.IsDir && entry.Mode.Perm()&0o111 != 0}
 						dict.Items["modified"] = &MShellDateTime{Time: entry.Modified, OriginalString: entry.Modified.Format("2006-01-02T15:04:05")}
 						result.Items = append(result.Items, dict)
 					}
@@ -2345,7 +2345,7 @@ MainLoop:
 						return state.FailWithMessage(err.Error())
 					}
 
-					intVal, ok := obj1.(*MShellInt)
+					intVal, ok := obj1.(MShellInt)
 					if !ok {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot skip a %s.\n", t.Line, t.Column, obj1.TypeName()))
 					}
@@ -2417,7 +2417,7 @@ MainLoop:
 					if err != nil {
 						stack.Push(&Maybe{obj: nil})
 					} else {
-						stack.Push(&Maybe{obj: &MShellInt{int(fileInfo.Size())}})
+						stack.Push(&Maybe{obj: MShellInt{int(fileInfo.Size())}})
 					}
 				} else if t.Lexeme == "lsDir" {
 					obj1, err := stack.Pop()
@@ -2438,13 +2438,13 @@ MainLoop:
 					// Create a new list and add the files to it, full paths
 					newList := NewList(0)
 					for _, file := range files {
-						newList.Items = append(newList.Items, &MShellPath{filepath.Join(path, file.Name())})
+						newList.Items = append(newList.Items, MShellPath{filepath.Join(path, file.Name())})
 					}
 
 					stack.Push(newList)
 				} else if t.Lexeme == "runtime" {
 					// Place the name of the current OS runtime on the stack
-					stack.Push(&MShellString{runtime.GOOS})
+					stack.Push(MShellString{runtime.GOOS})
 				} else if t.Lexeme == "sort" || t.Lexeme == "sortV" {
 					obj1, err := stack.Pop()
 					if err != nil {
@@ -2502,7 +2502,7 @@ MainLoop:
 					// Convert to hex string
 					hash := hex.EncodeToString(sum)
 					// Push the hash onto the stack
-					stack.Push(&MShellString{hash})
+					stack.Push(MShellString{hash})
 				} else if t.Lexeme == "get" {
 					// Get a value from string key for a dictionary.
 					// dict "key" get
@@ -2600,11 +2600,11 @@ MainLoop:
 
 					if t.Lexeme == "keys" {
 						for key := range dict.Items {
-							newList.Items[i] = &MShellString{key}
+							newList.Items[i] = MShellString{key}
 							i++
 						}
 						sort.Slice(newList.Items, func(a, b int) bool {
-							return newList.Items[a].(*MShellString).Content < newList.Items[b].(*MShellString).Content
+							return newList.Items[a].(MShellString).Content < newList.Items[b].(MShellString).Content
 						})
 					} else if t.Lexeme == "values" {
 						for _, value := range dict.Items {
@@ -2643,9 +2643,9 @@ MainLoop:
 
 					matches := re.FindStringSubmatch(str)
 					if matches == nil {
-						stack.Push(&MShellBool{false})
+						stack.Push(MShellBool{false})
 					} else {
-						stack.Push(&MShellBool{true})
+						stack.Push(MShellBool{true})
 					}
 				} else if t.Lexeme == "reReplace" {
 					// Replace a regex in a string, fullString regex replacement
@@ -2675,7 +2675,7 @@ MainLoop:
 					}
 
 					newStr := re.ReplaceAllString(str, replacement)
-					stack.Push(&MShellString{newStr})
+					stack.Push(MShellString{newStr})
 				} else if t.Lexeme == "reFindAll" {
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
@@ -2701,7 +2701,7 @@ MainLoop:
 					for _, groupMatches := range matches {
 						innerList := NewList(0)
 						for _, groupMatch := range groupMatches {
-							innerList.Items = append(innerList.Items, &MShellString{groupMatch})
+							innerList.Items = append(innerList.Items, MShellString{groupMatch})
 						}
 						matchList.Items = append(matchList.Items, innerList)
 					}
@@ -2732,7 +2732,7 @@ MainLoop:
 					for _, groupMatches := range matches {
 						innerList := NewList(0)
 						for _, groupMatch := range groupMatches {
-							innerList.Items = append(innerList.Items, &MShellInt{groupMatch})
+							innerList.Items = append(innerList.Items, MShellInt{groupMatch})
 						}
 						matchList.Items = append(matchList.Items, innerList)
 					}
@@ -2748,14 +2748,14 @@ MainLoop:
 					var reader *csv.Reader
 					var file *os.File
 					switch obj1Typed := obj1.(type) {
-					case *MShellPath, *MShellLiteral:
+					case MShellPath, MShellLiteral:
 						path, _ := obj1.CastString()
 						file, err = os.Open(path)
 						if err != nil {
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error opening file %s: %s\n", t.Line, t.Column, path, err.Error()))
 						}
 						reader = csv.NewReader(file)
-					case *MShellString:
+					case MShellString:
 						// Create a new CSV reader directly from the string contents
 						reader = csv.NewReader(strings.NewReader(obj1Typed.Content))
 					}
@@ -2777,7 +2777,7 @@ MainLoop:
 						// Turn record into MShellList of strings
 						newInnerList := NewList(len(record))
 						for i, val := range record {
-							newInnerList.Items[i] = &MShellString{val}
+							newInnerList.Items[i] = MShellString{val}
 						}
 
 						newOuterList.Items = append(newOuterList.Items, newInnerList)
@@ -2793,7 +2793,7 @@ MainLoop:
 					// If a path or literal, read the file as UTF-8. Else, read the string as the contents directly.
 					var jsonData []byte
 					switch obj1Typed := obj1.(type) {
-					case *MShellPath, *MShellLiteral:
+					case MShellPath, MShellLiteral:
 						path, _ := obj1.CastString()
 						file, err := os.Open(path)
 						if err != nil {
@@ -2806,7 +2806,7 @@ MainLoop:
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error reading file %s: %s\n", t.Line, t.Column, path, err.Error()))
 						}
 
-					case *MShellString:
+					case MShellString:
 						// Create a new JSON reader directly from the string contents
 						jsonData = []byte(obj1Typed.Content)
 					case MShellBinary:
@@ -2836,14 +2836,14 @@ MainLoop:
 					}
 
 					jsonStr := obj1.ToJson()
-					stack.Push(&MShellString{jsonStr})
+					stack.Push(MShellString{jsonStr})
 				} else if t.Lexeme == "type" {
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'type' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
-					stack.Push(&MShellString{obj1.TypeName()})
+					stack.Push(MShellString{obj1.TypeName()})
 
 				} else if t.Lexeme == "utcToCst" {
 					obj1, err := stack.Pop()
@@ -2875,13 +2875,13 @@ MainLoop:
 
 					if obj1.IsNumeric() {
 						switch num := obj1.(type) {
-						case *MShellInt:
+						case MShellInt:
 							stack.Push(num)
-						case *MShellFloat:
-							stack.Push(&MShellInt{int(math.Floor(num.Value))})
+						case MShellFloat:
+							stack.Push(MShellInt{int(math.Floor(num.Value))})
 						default:
 							floatVal := obj1.FloatNumeric()
-							stack.Push(&MShellInt{int(math.Floor(floatVal))})
+							stack.Push(MShellInt{int(math.Floor(floatVal))})
 						}
 					} else {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot floor a %s.\n", t.Line, t.Column, obj1.TypeName()))
@@ -2895,13 +2895,13 @@ MainLoop:
 
 					if obj1.IsNumeric() {
 						switch num := obj1.(type) {
-						case *MShellInt:
+						case MShellInt:
 							stack.Push(num)
-						case *MShellFloat:
-							stack.Push(&MShellInt{int(math.Ceil(num.Value))})
+						case MShellFloat:
+							stack.Push(MShellInt{int(math.Ceil(num.Value))})
 						default:
 							floatVal := obj1.FloatNumeric()
-							stack.Push(&MShellInt{int(math.Ceil(floatVal))})
+							stack.Push(MShellInt{int(math.Ceil(floatVal))})
 						}
 					} else {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot ceil a %s.\n", t.Line, t.Column, obj1.TypeName()))
@@ -2916,7 +2916,7 @@ MainLoop:
 					if obj1.IsNumeric() {
 						floatVal := obj1.FloatNumeric()
 						rounded := int(math.Round(floatVal))
-						stack.Push(&MShellInt{rounded})
+						stack.Push(MShellInt{rounded})
 					} else {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot round a %s.\n", t.Line, t.Column, obj1.TypeName()))
 					}
@@ -2926,7 +2926,7 @@ MainLoop:
 						return state.FailWithMessage(err.Error())
 					}
 
-					obj1Int, ok := obj1.(*MShellInt)
+					obj1Int, ok := obj1.(MShellInt)
 					if !ok {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: The number of decimal places parameter in toFixed is not an integer. Found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
 					}
@@ -2937,7 +2937,7 @@ MainLoop:
 
 					floatVal := obj2.FloatNumeric()
 
-					stack.Push(&MShellString{fmt.Sprintf("%.*f", obj1Int.Value, floatVal)})
+					stack.Push(MShellString{fmt.Sprintf("%.*f", obj1Int.Value, floatVal)})
 				} else if t.Lexeme == "countSubStr" {
 					// Count the number of times a substring appears in a string
 					obj1, obj2, err := stack.Pop2(t)
@@ -2956,7 +2956,7 @@ MainLoop:
 					}
 
 					count := strings.Count(str, subStr)
-					stack.Push(&MShellInt{count})
+					stack.Push(MShellInt{count})
 				} else if t.Lexeme == "uniq" {
 					// Remove duplicates from a list
 					obj1, err := stack.Pop()
@@ -2979,25 +2979,25 @@ MainLoop:
 
 					for i, item := range listObj.Items {
 						switch itemTyped := item.(type) {
-						case *MShellString:
+						case MShellString:
 							strItem := itemTyped
 							if _, ok := stringsSeen[strItem.Content]; !ok {
 								newList.Items = append(newList.Items, strItem)
 								stringsSeen[strItem.Content] = nil
 							}
-						case *MShellPath:
+						case MShellPath:
 							pathItem := itemTyped
 							if _, ok := pathsSeen[pathItem.Path]; !ok {
 								newList.Items = append(newList.Items, pathItem)
 								pathsSeen[pathItem.Path] = nil
 							}
-						case *MShellInt:
+						case MShellInt:
 							intItem := itemTyped
 							if _, ok := intsSeen[intItem.Value]; !ok {
 								newList.Items = append(newList.Items, intItem)
 								intsSeen[intItem.Value] = nil
 							}
-						case *MShellFloat:
+						case MShellFloat:
 							floatItem := itemTyped
 							if _, ok := floatsSeen[floatItem.Value]; !ok {
 								newList.Items = append(newList.Items, floatItem)
@@ -3009,12 +3009,12 @@ MainLoop:
 								newList.Items = append(newList.Items, dateTimeItem)
 								dateTimesSeen[dateTimeItem.Time] = nil
 							}
-						case *MShellLiteral:
+						case MShellLiteral:
 							// Treat like strings
 							literalItem := itemTyped
 							if _, ok := stringsSeen[literalItem.LiteralText]; !ok {
 								// Convert to a string
-								newList.Items = append(newList.Items, &MShellString{literalItem.LiteralText})
+								newList.Items = append(newList.Items, MShellString{literalItem.LiteralText})
 								stringsSeen[literalItem.LiteralText] = nil
 							}
 						default:
@@ -3144,7 +3144,7 @@ MainLoop:
 					}
 
 					if maybeObj, ok := obj.(*Maybe); ok {
-						stack.Push(&MShellBool{maybeObj.IsNone()})
+						stack.Push(MShellBool{maybeObj.IsNone()})
 					} else {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot check if a %s is None.\n", t.Line, t.Column, obj.TypeName()))
 					}
@@ -3200,7 +3200,7 @@ MainLoop:
 
 					// Check if the command is in the PATH
 					_, found := context.Pbm.Lookup(objStr)
-					stack.Push(&MShellBool{found})
+					stack.Push(MShellBool{found})
 				} else if t.Lexeme == "parseHtml" {
 					// Parse HTML from a string or file
 					obj1, err := stack.Pop()
@@ -3211,7 +3211,7 @@ MainLoop:
 					var reader io.Reader
 					var file *os.File
 					switch obj1Typed := obj1.(type) {
-					case *MShellPath, *MShellLiteral:
+					case MShellPath, MShellLiteral:
 						path, _ := obj1.CastString()
 						file, err = os.Open(path)
 						if err != nil {
@@ -3219,7 +3219,7 @@ MainLoop:
 						}
 
 						reader = file
-					case *MShellString:
+					case MShellString:
 						// Create a new HTML reader directly from the string contents
 						reader = strings.NewReader(obj1Typed.Content)
 					}
@@ -3241,7 +3241,7 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'inc' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
-					intObj, ok := obj.(*MShellInt)
+					intObj, ok := obj.(MShellInt)
 					if !ok {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot increment a %s.\n", t.Line, t.Column, obj.TypeName()))
 					}
@@ -3276,7 +3276,7 @@ MainLoop:
 					for i, key := range keys {
 						// Create a new list for the key-value pair
 						pairList := NewList(2)
-						pairList.Items[0] = &MShellString{key} // Key
+						pairList.Items[0] = MShellString{key} // Key
 						pairList.Items[1] = dict.Items[key]    // Value
 						newList.Items[i] = pairList
 					}
@@ -3327,7 +3327,7 @@ MainLoop:
 					if index == -1 {
 						stack.Push(&Maybe{obj: nil}) // No match found
 					} else {
-						stack.Push(&Maybe{obj: &MShellInt{Value: index}})
+						stack.Push(&Maybe{obj: MShellInt{Value: index}})
 					}
 				} else if t.Lexeme == "absPath" {
 					obj, err := stack.Pop()
@@ -3346,7 +3346,7 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error converting path '%s' to absolute path: %s\n", t.Line, t.Column, pathStr, err.Error()))
 					}
 
-					stack.Push(&MShellPath{Path: absPath})
+					stack.Push(MShellPath{Path: absPath})
 				} else if t.Lexeme == "bind" {
 					// Maybe monad bind
 					obj1, obj2, err := stack.Pop2(t)
@@ -3400,9 +3400,9 @@ MainLoop:
 					// Work either on string or path
 					var data []byte
 					switch objTyped := obj.(type) {
-					case *MShellString:
+					case MShellString:
 						data = []byte(objTyped.Content)
-					case *MShellPath:
+					case MShellPath:
 						pathStr, err := obj.CastString()
 						if err != nil {
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert a %s to a string for MD5 hashing.\n", t.Line, t.Column, obj.TypeName()))
@@ -3425,7 +3425,7 @@ MainLoop:
 
 					hash := md5.Sum(data)
 					hashStr := hex.EncodeToString(hash[:])
-					stack.Push(&MShellString{hashStr})
+					stack.Push(MShellString{hashStr})
 				} else if t.Lexeme == "take" {
 					// Take the first n items from a list
 					obj1, obj2, err := stack.Pop2(t)
@@ -3434,7 +3434,7 @@ MainLoop:
 					}
 
 					// obj1 should be an integer
-					intObj, ok := obj1.(*MShellInt)
+					intObj, ok := obj1.(MShellInt)
 					if !ok {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: The first parameter in 'take' is expected to be an integer, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
 					}
@@ -3454,11 +3454,11 @@ MainLoop:
 						}
 
 						stack.Push(newList)
-					case *MShellString:
+					case MShellString:
 						strObj := obj2Typed
 						length := min(intObj.Value, len(strObj.Content)) // Adjust to max length
 						newStr := strObj.Content[:length]
-						stack.Push(&MShellString{newStr})
+						stack.Push(MShellString{newStr})
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second parameter in 'take' is expected to be a list or string, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
 					}
@@ -3469,7 +3469,7 @@ MainLoop:
 					}
 
 					// obj1 should be an integer
-					intObj, ok := obj1.(*MShellInt)
+					intObj, ok := obj1.(MShellInt)
 					if !ok {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: The first parameter in 'skip' is expected to be an integer, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
 					}
@@ -3490,20 +3490,20 @@ MainLoop:
 						}
 
 						stack.Push(newList)
-					case *MShellString:
+					case MShellString:
 						strObj := obj2Typed
 						length := max(0, len(strObj.Content)-intObj.Value)
 						newStr := strObj.Content[length:]
-						stack.Push(&MShellString{newStr})
+						stack.Push(MShellString{newStr})
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second parameter in 'skip' is expected to be a list or string, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
 					}
 				} else if t.Lexeme == "hostname" {
 					host, err := os.Hostname()
 					if err != nil {
-						stack.Push(&MShellString{"unknown"})
+						stack.Push(MShellString{"unknown"})
 					} else {
-						stack.Push(&MShellString{host})
+						stack.Push(MShellString{host})
 					}
 				} else if t.Lexeme == "removeWindowsVolumePrefix" {
 					obj, err := stack.Pop()
@@ -3517,9 +3517,9 @@ MainLoop:
 					}
 
 					if runtime.GOOS == "windows" {
-						stack.Push(&MShellString{StripVolumePrefix(asStr)})
+						stack.Push(MShellString{StripVolumePrefix(asStr)})
 					} else {
-						stack.Push(&MShellString{asStr})
+						stack.Push(MShellString{asStr})
 					}
 				} else if t.Lexeme == "pop" {
 					obj, err := stack.Pop()
@@ -3604,7 +3604,7 @@ MainLoop:
 											return state.FailWithMessage(fmt.Sprintf("%d:%d: The function in 'sortByCmp' did not return a value, found an empty stack.\n", t.Line, t.Column))
 										}
 
-										cmpInt, ok := cmpResult.(*MShellInt)
+										cmpInt, ok := cmpResult.(MShellInt)
 										if !ok {
 											return state.FailWithMessage(fmt.Sprintf("%d:%d: The function in 'sortByCmp' did not return an integer, found a %s (%s).\n", t.Line, t.Column, cmpResult.TypeName(), cmpResult.DebugString()))
 										}
@@ -3655,7 +3655,7 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second parameter in 'versionSortCmp' is expected to be stringable, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
 					}
 
-					stack.Push(&MShellInt{Value: VersionSortCmp(str1, str2)})
+					stack.Push(MShellInt{Value: VersionSortCmp(str1, str2)})
 				} else if t.Lexeme == "httpGet" || t.Lexeme == "httpPost" {
 					// Expect a dictionary on the stack
 					obj, err := stack.Pop()
@@ -3685,7 +3685,7 @@ MainLoop:
 					// Check for optional time out in seconds
 					timeoutValue, ok := dict.Items["timeout"]
 					if ok {
-						timeoutInt, ok := timeoutValue.(*MShellInt)
+						timeoutInt, ok := timeoutValue.(MShellInt)
 						if !ok {
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: The 'timeout' value in '%s' must be an integer, found a %s (%s)\n", t.Line, t.Column, t.Lexeme, timeoutValue.TypeName(), timeoutValue.DebugString()))
 						}
@@ -3760,13 +3760,13 @@ MainLoop:
 						stack.Push(&Maybe{obj: nil}) // No response
 					} else {
 						responseDict := NewDict()
-						responseDict.Items["status"] = &MShellInt{Value: resp.StatusCode}
-						responseDict.Items["reason"] = &MShellString{Content: resp.Status}
+						responseDict.Items["status"] = MShellInt{Value: resp.StatusCode}
+						responseDict.Items["reason"] = MShellString{Content: resp.Status}
 						responseHeaders := NewDict()
 						for key, values := range resp.Header {
 							valueList := NewList(len(values))
 							for i, value := range values {
-								valueList.Items[i] = &MShellString{Content: value}
+								valueList.Items[i] = MShellString{Content: value}
 							}
 
 							responseHeaders.Items[key] = valueList
@@ -3793,10 +3793,10 @@ MainLoop:
 
 					var encodedStr string
 					switch typedObj := obj.(type) {
-					case *MShellString:
+					case MShellString:
 						// URL encode the string
 						encodedStr = url.QueryEscape(typedObj.Content)
-					case *MShellLiteral:
+					case MShellLiteral:
 						// URL encode the literal string
 						encodedStr = url.QueryEscape(typedObj.LiteralText)
 					case *MShellDict:
@@ -3825,7 +3825,7 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on a %s.\n", t.Line, t.Column, t.Lexeme, obj.TypeName()))
 					}
 
-					stack.Push(&MShellString{Content: encodedStr})
+					stack.Push(MShellString{Content: encodedStr})
 				} else if t.Lexeme == "base64encode" {
 					// Convert binary data to a base64 string.
 					obj, err := stack.Pop()
@@ -3839,7 +3839,7 @@ MainLoop:
 					}
 
 					encoded := base64.StdEncoding.EncodeToString([]byte(binaryObj))
-					stack.Push(&MShellString{Content: encoded})
+					stack.Push(MShellString{Content: encoded})
 				} else if t.Lexeme == "base64decode" {
 					// Convert a base64 string to binary data.
 					obj, err := stack.Pop()
@@ -3847,7 +3847,7 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'base64decode' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
-					strObj, ok := obj.(*MShellString)
+					strObj, ok := obj.(MShellString)
 					if !ok {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: The top of stack in 'base64decode' is expected to be a string, found a %s (%s)\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
 					}
@@ -3872,7 +3872,7 @@ MainLoop:
 
 					// Convert binary to string
 					strContent := string(binaryObj)
-					stack.Push(&MShellString{Content: strContent})
+					stack.Push(MShellString{Content: strContent})
 				} else if t.Lexeme == "utf8Bytes" {
 					// Convert MShellString on the top of the stack to UTF-8 bytes
 					obj, err := stack.Pop()
@@ -3880,7 +3880,7 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'utf8bytes' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
-					strObj, ok := obj.(*MShellString)
+					strObj, ok := obj.(MShellString)
 					if !ok {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: The top of stack in 'utf8bytes' is expected to be a string, found a %s (%s)\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
 					}
@@ -3914,7 +3914,7 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'parseLinkHeader' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
-					strObj, ok := obj.(*MShellString)
+					strObj, ok := obj.(MShellString)
 					if !ok {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: The top of stack in 'parseLinkHeader' is expected to be a string, found a %s (%s)\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
 					}
@@ -3929,11 +3929,11 @@ MainLoop:
 					linksList := NewList(len(links))
 					for i, link := range links {
 						linkDict := NewDict()
-						linkDict.Items["url"] = &MShellString{Content: link.Uri}
-						linkDict.Items["rel"] = &MShellString{Content: link.Rel}
+						linkDict.Items["url"] = MShellString{Content: link.Uri}
+						linkDict.Items["rel"] = MShellString{Content: link.Rel}
 						paramDict := NewDict()
 						for key, value := range link.Params {
-							paramDict.Items[key] = &MShellString{Content: value}
+							paramDict.Items[key] = MShellString{Content: value}
 						}
 						linkDict.Items["params"] = paramDict
 						linksList.Items[i] = linkDict
@@ -3954,9 +3954,9 @@ MainLoop:
 
 					_, err = os.Lstat(pathStr)
 					if err == nil {
-						stack.Push(&MShellBool{Value: true}) // File exists
+						stack.Push(MShellBool{Value: true}) // File exists
 					} else if os.IsNotExist(err) {
-						stack.Push(&MShellBool{Value: false}) // File definitely does not exist
+						stack.Push(MShellBool{Value: false}) // File definitely does not exist
 					} else {
 						// Something else went wrong (permissions, I/O error, etc.)
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error checking file existence for '%s': %s\n", t.Line, t.Column, pathStr, err.Error()))
@@ -3969,25 +3969,25 @@ MainLoop:
 					}
 
 					// Both objects should be floats
-					float1, ok := obj1.(*MShellFloat)
+					float1, ok := obj1.(MShellFloat)
 					if !ok {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second parameter in 'floatCmp' is expected to be a float, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
 					}
-					float2, ok := obj2.(*MShellFloat)
+					float2, ok := obj2.(MShellFloat)
 					if !ok {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: The first parameter in 'floatCmp' is expected to be a float, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
 					}
 
 					// Compare the floats
 					if float2.Value < float1.Value {
-						stack.Push(&MShellInt{Value: -1})
+						stack.Push(MShellInt{Value: -1})
 					} else if float2.Value > float1.Value {
-						stack.Push(&MShellInt{Value: 1})
+						stack.Push(MShellInt{Value: 1})
 					} else {
-						stack.Push(&MShellInt{Value: 0})
+						stack.Push(MShellInt{Value: 0})
 					}
 				} else if t.Lexeme == "nullDevice" {
-					stack.Push(&MShellPath{Path: nullDevice})
+					stack.Push(MShellPath{Path: nullDevice})
 				} else if t.Lexeme == "return" {
 					// Return from the current function
 					return EvalResult{
@@ -4005,7 +4005,7 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Found literal token '%s' outside of a list context. Normally this is unintended. Either make it a string literal or path, or ensure the definition is available.\n", t.Line, t.Column, t.Lexeme))
 					}
 
-					stack.Push(&MShellLiteral{t.Lexeme})
+					stack.Push(MShellLiteral{t.Lexeme})
 				}
 			} else if t.Type == ASTERISK {
 				obj1, err := stack.Pop()
@@ -4027,19 +4027,19 @@ MainLoop:
 					}
 
 					switch obj1.(type) {
-					case *MShellInt:
+					case MShellInt:
 						switch obj2.(type) {
-						case *MShellInt:
-							stack.Push(&MShellInt{obj2.(*MShellInt).Value * obj1.(*MShellInt).Value})
-						case *MShellFloat:
-							stack.Push(&MShellFloat{obj2.(*MShellFloat).Value * float64(obj1.(*MShellInt).Value)})
+						case MShellInt:
+							stack.Push(MShellInt{obj2.(MShellInt).Value * obj1.(MShellInt).Value})
+						case MShellFloat:
+							stack.Push(MShellFloat{obj2.(MShellFloat).Value * float64(obj1.(MShellInt).Value)})
 						}
-					case *MShellFloat:
+					case MShellFloat:
 						switch obj2.(type) {
-						case *MShellInt:
-							stack.Push(&MShellFloat{float64(obj2.(*MShellInt).Value) * float64(obj1.(*MShellFloat).Value)})
-					case *MShellFloat:
-							stack.Push(&MShellFloat{obj2.(*MShellFloat).Value * obj1.(*MShellFloat).Value})
+						case MShellInt:
+							stack.Push(MShellFloat{float64(obj2.(MShellInt).Value) * float64(obj1.(MShellFloat).Value)})
+					case MShellFloat:
+							stack.Push(MShellFloat{obj2.(MShellFloat).Value * obj1.(MShellFloat).Value})
 						}
 					}
 				}
@@ -4164,14 +4164,14 @@ MainLoop:
 					newMShellList := NewList(0)
 					scanner := bufio.NewScanner(bytes.NewReader(stdout))
 					for scanner.Scan() {
-						newMShellList.Items = append(newMShellList.Items, &MShellString{scanner.Text()})
+						newMShellList.Items = append(newMShellList.Items, MShellString{scanner.Text()})
 					}
 					stack.Push(newMShellList)
 				} else if stdoutBehavior == STDOUT_STRIPPED {
 					stripped := strings.TrimSpace(string(stdout))
-					stack.Push(&MShellString{stripped})
+					stack.Push(MShellString{stripped})
 				} else if stdoutBehavior == STDOUT_COMPLETE {
-					stack.Push(&MShellString{string(stdout)})
+					stack.Push(MShellString{string(stdout)})
 				} else if stdoutBehavior == STDOUT_BINARY {
 					stack.Push(MShellBinary(stdout))
 				} else if stdoutBehavior != STDOUT_NONE {
@@ -4183,14 +4183,14 @@ MainLoop:
 					newMShellList := NewList(0)
 					scanner := bufio.NewScanner(bytes.NewReader(stderr))
 					for scanner.Scan() {
-						newMShellList.Items = append(newMShellList.Items, &MShellString{scanner.Text()})
+						newMShellList.Items = append(newMShellList.Items, MShellString{scanner.Text()})
 					}
 					stack.Push(newMShellList)
 				} else if stderrBehavior == STDERR_STRIPPED {
 					stripped := strings.TrimSpace(string(stderr))
-					stack.Push(&MShellString{stripped})
+					stack.Push(MShellString{stripped})
 				} else if stderrBehavior == STDERR_COMPLETE {
-					stack.Push(&MShellString{string(stderr)})
+					stack.Push(MShellString{string(stderr)})
 				} else if stderrBehavior == STDERR_BINARY {
 					stack.Push(MShellBinary(stderr))
 				} else if stderrBehavior != STDERR_NONE {
@@ -4200,27 +4200,27 @@ MainLoop:
 
 				// Push the exit code onto the stack if a question was used to execute
 				if t.Type == QUESTION {
-					stack.Push(&MShellInt{exitCode})
+					stack.Push(MShellInt{exitCode})
 				}
 			} else if t.Type == TRUE { // Token Type
-				stack.Push(&MShellBool{true})
+				stack.Push(MShellBool{true})
 			} else if t.Type == FALSE { // Token Type
-				stack.Push(&MShellBool{false})
+				stack.Push(MShellBool{false})
 			} else if t.Type == INTEGER { // Token Type
 				intVal, err := strconv.Atoi(t.Lexeme)
 				if err != nil {
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing integer: %s\n", t.Line, t.Column, err.Error()))
 				}
 
-				stack.Push(&MShellInt{intVal})
+				stack.Push(MShellInt{intVal})
 			} else if t.Type == STRING { // Token Type
 				parsedString, err := ParseRawString(t.Lexeme)
 				if err != nil {
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing string: %s\n", t.Line, t.Column, err.Error()))
 				}
-				stack.Push(&MShellString{parsedString})
+				stack.Push(MShellString{parsedString})
 			} else if t.Type == SINGLEQUOTESTRING { // Token Type
-				stack.Push(&MShellString{t.Lexeme[1 : len(t.Lexeme)-1]})
+				stack.Push(MShellString{t.Lexeme[1 : len(t.Lexeme)-1]})
 			} else if t.Type == IFF {
 				iff_name := "iff"
 				firstObj, err := stack.Pop()
@@ -4257,15 +4257,15 @@ MainLoop:
 					}
 
 					switch thirdTyped := thrirdObj.(type) {
-					case *MShellBool:
+					case MShellBool:
 						condition = thirdTyped.Value
-					case *MShellInt:
+					case MShellInt:
 						condition = thirdTyped.Value == 0
 					}
-				case *MShellBool:
+				case MShellBool:
 					trueQuote = firstQuote
 					condition = secondTyped.Value
-				case *MShellInt:
+				case MShellInt:
 					trueQuote = firstQuote
 					condition = secondTyped.Value == 0
 				default:
@@ -4344,12 +4344,12 @@ MainLoop:
 
 					// Check for either integer or boolean
 					switch topTyped := top.(type) {
-					case *MShellInt:
+					case MShellInt:
 						if topTyped.Value == 0 {
 							trueIndex = i
 							break ListLoop
 						}
-					case *MShellBool:
+					case MShellBool:
 						if topTyped.Value {
 							trueIndex = i
 							break ListLoop
@@ -4395,39 +4395,39 @@ MainLoop:
 				}
 
 				switch obj1.(type) {
-				case *MShellInt:
+				case MShellInt:
 					switch obj2.(type) {
-					case *MShellInt:
-						stack.Push(&MShellInt{obj2.(*MShellInt).Value + obj1.(*MShellInt).Value})
-					case *MShellFloat:
-						stack.Push(&MShellFloat{float64(obj2.(*MShellFloat).Value) + float64(obj1.(*MShellInt).Value)})
+					case MShellInt:
+						stack.Push(MShellInt{obj2.(MShellInt).Value + obj1.(MShellInt).Value})
+					case MShellFloat:
+						stack.Push(MShellFloat{float64(obj2.(MShellFloat).Value) + float64(obj1.(MShellInt).Value)})
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot add an integer to a %s (%s).\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
 					}
-				case *MShellFloat:
+				case MShellFloat:
 					switch obj2.(type) {
-					case *MShellFloat:
-						stack.Push(&MShellFloat{obj2.(*MShellFloat).Value + obj1.(*MShellFloat).Value})
-					case *MShellInt:
-						stack.Push(&MShellFloat{float64(obj2.(*MShellInt).Value) + obj1.(*MShellFloat).Value})
+					case MShellFloat:
+						stack.Push(MShellFloat{obj2.(MShellFloat).Value + obj1.(MShellFloat).Value})
+					case MShellInt:
+						stack.Push(MShellFloat{float64(obj2.(MShellInt).Value) + obj1.(MShellFloat).Value})
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot add a float to a %s.\n", t.Line, t.Column, obj2.TypeName()))
 					}
-				case *MShellString:
+				case MShellString:
 					switch obj2.(type) {
-					case *MShellString:
-						stack.Push(&MShellString{obj2.(*MShellString).Content + obj1.(*MShellString).Content})
-					case *MShellLiteral:
-						stack.Push(&MShellString{obj2.(*MShellLiteral).LiteralText + obj1.(*MShellString).Content})
+					case MShellString:
+						stack.Push(MShellString{obj2.(MShellString).Content + obj1.(MShellString).Content})
+					case MShellLiteral:
+						stack.Push(MShellString{obj2.(MShellLiteral).LiteralText + obj1.(MShellString).Content})
 					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot add a string ('%s') to a %s (%s).\n", t.Line, t.Column, obj1.(*MShellString).Content, obj2.TypeName(), obj2.DebugString()))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot add a string ('%s') to a %s (%s).\n", t.Line, t.Column, obj1.(MShellString).Content, obj2.TypeName(), obj2.DebugString()))
 					}
-				case *MShellLiteral:
+				case MShellLiteral:
 					switch obj2.(type) {
-					case *MShellString:
-						stack.Push(&MShellString{obj2.(*MShellString).Content + obj1.(*MShellLiteral).LiteralText})
-					case *MShellLiteral:
-						stack.Push(&MShellString{obj2.(*MShellLiteral).LiteralText + obj1.(*MShellLiteral).LiteralText})
+					case MShellString:
+						stack.Push(MShellString{obj2.(MShellString).Content + obj1.(MShellLiteral).LiteralText})
+					case MShellLiteral:
+						stack.Push(MShellString{obj2.(MShellLiteral).LiteralText + obj1.(MShellLiteral).LiteralText})
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot add a literal (%s) to a %s.\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName()))
 					}
@@ -4441,11 +4441,11 @@ MainLoop:
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot add a list to a %s.\n", t.Line, t.Column, obj2.TypeName()))
 					}
-				case *MShellPath:
+				case MShellPath:
 					switch obj2.(type) {
-					case *MShellPath:
+					case MShellPath:
 						// Do string join, not path join. Concat the strings
-						stack.Push(&MShellPath{obj2.(*MShellPath).Path + obj1.(*MShellPath).Path})
+						stack.Push(MShellPath{obj2.(MShellPath).Path + obj1.(MShellPath).Path})
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot add a path to a %s.\n", t.Line, t.Column, obj2.TypeName()))
 					}
@@ -4464,21 +4464,21 @@ MainLoop:
 				}
 
 				switch obj1.(type) {
-				case *MShellInt:
+				case MShellInt:
 					switch obj2.(type) {
-					case *MShellInt:
-						stack.Push(&MShellInt{obj2.(*MShellInt).Value - obj1.(*MShellInt).Value})
-					case *MShellFloat:
-						stack.Push(&MShellFloat{obj2.(*MShellFloat).Value - float64(obj1.(*MShellInt).Value)})
+					case MShellInt:
+						stack.Push(MShellInt{obj2.(MShellInt).Value - obj1.(MShellInt).Value})
+					case MShellFloat:
+						stack.Push(MShellFloat{obj2.(MShellFloat).Value - float64(obj1.(MShellInt).Value)})
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot subtract an integer from a %s.\n", t.Line, t.Column, obj2.TypeName()))
 					}
-				case *MShellFloat:
+				case MShellFloat:
 					switch obj2.(type) {
-					case *MShellFloat:
-						stack.Push(&MShellFloat{obj2.(*MShellFloat).Value - obj1.(*MShellFloat).Value})
-					case *MShellInt:
-						stack.Push(&MShellFloat{float64(obj2.(*MShellInt).Value) - obj1.(*MShellFloat).Value})
+					case MShellFloat:
+						stack.Push(MShellFloat{obj2.(MShellFloat).Value - obj1.(MShellFloat).Value})
+					case MShellInt:
+						stack.Push(MShellFloat{float64(obj2.(MShellInt).Value) - obj1.(MShellFloat).Value})
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot subtract a float from a %s.\n", t.Line, t.Column, obj2.TypeName()))
 					}
@@ -4487,7 +4487,7 @@ MainLoop:
 					case *MShellDateTime:
 						// Return a float with the difference in days.
 						days := obj2.(*MShellDateTime).Time.Sub(obj1.(*MShellDateTime).Time).Hours() / 24
-						stack.Push(&MShellFloat{days})
+						stack.Push(MShellFloat{days})
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot subtract a %s from a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
 					}
@@ -4506,20 +4506,20 @@ MainLoop:
 				}
 
 				switch obj1.(type) {
-				case *MShellBool:
+				case MShellBool:
 					switch obj2.(type) {
-					case *MShellBool:
+					case MShellBool:
 						if t.Type == AND {
-							stack.Push(&MShellBool{obj2.(*MShellBool).Value && obj1.(*MShellBool).Value})
+							stack.Push(MShellBool{obj2.(MShellBool).Value && obj1.(MShellBool).Value})
 						} else {
-							stack.Push(&MShellBool{obj2.(*MShellBool).Value || obj1.(*MShellBool).Value})
+							stack.Push(MShellBool{obj2.(MShellBool).Value || obj1.(MShellBool).Value})
 						}
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s and %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
 					}
 				case *MShellQuotation:
 					if t.Type == AND {
-						if obj2.(*MShellBool).Value {
+						if obj2.(MShellBool).Value {
 							result, err := state.EvaluateQuote(*obj1.(*MShellQuotation), stack, context, definitions)
 							if err != nil {
 								return state.FailWithMessage(err.Error())
@@ -4535,18 +4535,18 @@ MainLoop:
 								return result
 							}
 
-							seconObjBool, ok := secondObj.(*MShellBool)
+							seconObjBool, ok := secondObj.(MShellBool)
 							if !ok {
 								return state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a boolean after executing the quotation in %s, received a %s.\n", t.Line, t.Column, t.Lexeme, secondObj.TypeName()))
 							}
 
-							stack.Push(&MShellBool{seconObjBool.Value})
+							stack.Push(MShellBool{seconObjBool.Value})
 						} else {
-							stack.Push(&MShellBool{false})
+							stack.Push(MShellBool{false})
 						}
 					} else {
-						if obj2.(*MShellBool).Value {
-							stack.Push(&MShellBool{true})
+						if obj2.(MShellBool).Value {
+							stack.Push(MShellBool{true})
 						} else {
 
 							result, err := state.EvaluateQuote(*obj1.(*MShellQuotation), stack, context, definitions)
@@ -4564,12 +4564,12 @@ MainLoop:
 								return result
 							}
 
-							seconObjBool, ok := secondObj.(*MShellBool)
+							seconObjBool, ok := secondObj.(MShellBool)
 							if !ok {
 								return state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a boolean after executing the quotation in %s, received a %s.\n", t.Line, t.Column, t.Lexeme, secondObj.TypeName()))
 							}
 
-							stack.Push(&MShellBool{seconObjBool.Value})
+							stack.Push(MShellBool{seconObjBool.Value})
 						}
 					}
 				default:
@@ -4582,13 +4582,13 @@ MainLoop:
 				}
 
 				switch objTyped := obj.(type) {
-				case *MShellBool:
-					stack.Push(&MShellBool{!objTyped.Value})
-				case *MShellInt:
+				case MShellBool:
+					stack.Push(MShellBool{!objTyped.Value})
+				case MShellInt:
 					if objTyped.Value == 0 {
-						stack.Push(&MShellBool{false})
+						stack.Push(MShellBool{false})
 					} else {
-						stack.Push(&MShellBool{true})
+						stack.Push(MShellBool{true})
 					}
 				default:
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s.\n", t.Line, t.Column, t.Lexeme, obj.TypeName()))
@@ -4606,9 +4606,9 @@ MainLoop:
 
 				if obj1.IsNumeric() && obj2.IsNumeric() {
 					if t.Type == GREATERTHANOREQUAL {
-						stack.Push(&MShellBool{obj2.FloatNumeric() >= obj1.FloatNumeric()})
+						stack.Push(MShellBool{obj2.FloatNumeric() >= obj1.FloatNumeric()})
 					} else {
-						stack.Push(&MShellBool{obj2.FloatNumeric() <= obj1.FloatNumeric()})
+						stack.Push(MShellBool{obj2.FloatNumeric() <= obj1.FloatNumeric()})
 					}
 				} else {
 
@@ -4617,9 +4617,9 @@ MainLoop:
 
 					if ok1 && ok2 {
 						if t.Type == GREATERTHANOREQUAL {
-							stack.Push(&MShellBool{obj2Date.Time.After(obj1Date.Time) || obj2Date.Time.Equal(obj1Date.Time)})
+							stack.Push(MShellBool{obj2Date.Time.After(obj1Date.Time) || obj2Date.Time.Equal(obj1Date.Time)})
 						} else {
-							stack.Push(&MShellBool{obj2Date.Time.Before(obj1Date.Time) || obj2Date.Time.Equal(obj1Date.Time)})
+							stack.Push(MShellBool{obj2Date.Time.Before(obj1Date.Time) || obj2Date.Time.Equal(obj1Date.Time)})
 						}
 					} else {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s and a %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
@@ -4639,28 +4639,28 @@ MainLoop:
 
 				if obj1.IsNumeric() && obj2.IsNumeric() {
 					if t.Type == GREATERTHAN {
-						stack.Push(&MShellBool{obj2.FloatNumeric() > obj1.FloatNumeric()})
+						stack.Push(MShellBool{obj2.FloatNumeric() > obj1.FloatNumeric()})
 					} else {
-						stack.Push(&MShellBool{obj2.FloatNumeric() < obj1.FloatNumeric()})
+						stack.Push(MShellBool{obj2.FloatNumeric() < obj1.FloatNumeric()})
 					}
 				} else {
 					switch obj1.(type) {
-					case *MShellString:
+					case MShellString:
 						switch obj2.(type) {
 						case *MShellList:
 							if t.Type == GREATERTHAN {
-								obj2.(*MShellList).StandardOutputFile = obj1.(*MShellString).Content
+								obj2.(*MShellList).StandardOutputFile = obj1.(MShellString).Content
 							} else { // LESSTHAN, input redirection
 								obj2.(*MShellList).StdinBehavior = STDIN_CONTENT
-								obj2.(*MShellList).StandardInputContents = obj1.(*MShellString).Content
+								obj2.(*MShellList).StandardInputContents = obj1.(MShellString).Content
 							}
 							stack.Push(obj2)
 						case *MShellQuotation:
 							if t.Type == GREATERTHAN {
-								obj2.(*MShellQuotation).StandardOutputFile = obj1.(*MShellString).Content
+								obj2.(*MShellQuotation).StandardOutputFile = obj1.(MShellString).Content
 							} else { // LESSTHAN, input redirection
 								obj2.(*MShellQuotation).StdinBehavior = STDIN_CONTENT
-								obj2.(*MShellQuotation).StandardInputContents = obj1.(*MShellString).Content
+								obj2.(*MShellQuotation).StandardInputContents = obj1.(MShellString).Content
 							}
 							stack.Push(obj2)
 						case *MShellPipe:
@@ -4691,43 +4691,43 @@ MainLoop:
 						} else {
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect binary data (%s) to a %s (%s). Use '<' for input redirection.\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
 						}
-					case *MShellLiteral:
+					case MShellLiteral:
 						switch obj2.(type) {
 						case *MShellList:
 							if t.Type == GREATERTHAN {
-								obj2.(*MShellList).StandardOutputFile = obj1.(*MShellLiteral).LiteralText
+								obj2.(*MShellList).StandardOutputFile = obj1.(MShellLiteral).LiteralText
 							} else { // LESSTHAN, input redirection
 								obj2.(*MShellList).StdinBehavior = STDIN_CONTENT
-								obj2.(*MShellList).StandardInputFile = obj1.(*MShellLiteral).LiteralText
+								obj2.(*MShellList).StandardInputFile = obj1.(MShellLiteral).LiteralText
 							}
 							stack.Push(obj2)
 						case *MShellQuotation:
 							if t.Type == GREATERTHAN {
-								obj2.(*MShellQuotation).StandardOutputFile = obj1.(*MShellLiteral).LiteralText
+								obj2.(*MShellQuotation).StandardOutputFile = obj1.(MShellLiteral).LiteralText
 							} else {
 								obj2.(*MShellQuotation).StdinBehavior = STDIN_CONTENT
-								obj2.(*MShellQuotation).StandardInputContents = obj1.(*MShellLiteral).LiteralText
+								obj2.(*MShellQuotation).StandardInputContents = obj1.(MShellLiteral).LiteralText
 							}
 						default:
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a %s (%s) to a %s (%s).\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
 						}
 
-					case *MShellPath:
+					case MShellPath:
 						switch obj2.(type) {
 						case *MShellList:
 							if t.Type == GREATERTHAN {
-								obj2.(*MShellList).StandardOutputFile = obj1.(*MShellPath).Path
+								obj2.(*MShellList).StandardOutputFile = obj1.(MShellPath).Path
 							} else { // LESSTHAN, input redirection
 								obj2.(*MShellList).StdinBehavior = STDIN_FILE
-								obj2.(*MShellList).StandardInputFile = obj1.(*MShellPath).Path
+								obj2.(*MShellList).StandardInputFile = obj1.(MShellPath).Path
 							}
 							stack.Push(obj2)
 						case *MShellQuotation:
 							if t.Type == GREATERTHAN {
-								obj2.(*MShellQuotation).StandardOutputFile = obj1.(*MShellPath).Path
+								obj2.(*MShellQuotation).StandardOutputFile = obj1.(MShellPath).Path
 							} else {
 								obj2.(*MShellQuotation).StdinBehavior = STDIN_FILE
-								obj2.(*MShellQuotation).StandardInputFile = obj1.(*MShellPath).Path
+								obj2.(*MShellQuotation).StandardInputFile = obj1.(MShellPath).Path
 							}
 							stack.Push(obj2)
 						default:
@@ -4737,9 +4737,9 @@ MainLoop:
 						switch obj2.(type) {
 						case *MShellDateTime:
 							if t.Type == GREATERTHAN {
-								stack.Push(&MShellBool{obj2.(*MShellDateTime).Time.After(obj1.(*MShellDateTime).Time)})
+								stack.Push(MShellBool{obj2.(*MShellDateTime).Time.After(obj1.(*MShellDateTime).Time)})
 							} else {
-								stack.Push(&MShellBool{obj2.(*MShellDateTime).Time.Before(obj1.(*MShellDateTime).Time)})
+								stack.Push(MShellBool{obj2.(*MShellDateTime).Time.Before(obj1.(*MShellDateTime).Time)})
 							}
 						default:
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot %s a datetime (%s) to a %s (%s).\n", t.Line, t.Column, t.Lexeme, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
@@ -4800,7 +4800,7 @@ MainLoop:
 				// Strip off the leading '$' and trailing '!' for the environment variable name
 				varName := t.Lexeme[1 : len(t.Lexeme)-1]
 				_, found := os.LookupEnv(varName)
-				stack.Push(&MShellBool{found})
+				stack.Push(MShellBool{found})
 			} else if t.Type == ENVRETREIVE { // Token Type
 				envVarName := t.Lexeme[1:len(t.Lexeme)]
 				varValue, found := os.LookupEnv(envVarName)
@@ -4809,7 +4809,7 @@ MainLoop:
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Could not get the environment variable '%s'.\n", t.Line, t.Column, envVarName))
 				}
 
-				stack.Push(&MShellString{varValue})
+				stack.Push(MShellString{varValue})
 
 			} else if t.Type == VARSTORE { // Token Type
 				obj, err := stack.Pop()
@@ -4829,7 +4829,7 @@ MainLoop:
 					// Check current environment variables
 					envValue, ok := os.LookupEnv(name)
 					if ok {
-						stack.Push(&MShellString{envValue})
+						stack.Push(MShellString{envValue})
 					} else {
 						var message strings.Builder
 						message.WriteString(fmt.Sprintf("%d:%d: Variable %s not found.\n", t.Line, t.Column, name))
@@ -4966,7 +4966,7 @@ MainLoop:
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot compare '=' between %s (%s) and %s (%s): %s\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString(), obj2.TypeName(), obj2.DebugString(), err.Error()))
 				}
 
-				stack.Push(&MShellBool{doesEqual})
+				stack.Push(MShellBool{doesEqual})
 			} else if t.Type == INTERPRET { // Token Type
 				obj, err := stack.Pop()
 				if err != nil {
@@ -5005,7 +5005,7 @@ MainLoop:
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Positional argument %s is greater than the number of arguments provided.\n", t.Line, t.Column, t.Lexeme))
 				}
 
-				stack.Push(&MShellString{state.PositionalArgs[posIndex-1]})
+				stack.Push(MShellString{state.PositionalArgs[posIndex-1]})
 			} else if t.Type == PIPE { // Token Type
 				obj1, err := stack.Pop()
 				if err != nil {
@@ -5043,8 +5043,8 @@ MainLoop:
 					line, err := bufferedReader.ReadString('\n')
 					if err != nil {
 						if err == io.EOF {
-							stack.Push(&MShellString{""})
-							stack.Push(&MShellBool{false})
+							stack.Push(MShellString{""})
+							stack.Push(MShellBool{false})
 						} else {
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error reading from stdin: %s\n", t.Line, t.Column, err.Error()))
 						}
@@ -5057,8 +5057,8 @@ MainLoop:
 							line = line[:len(line)-1]
 						}
 
-						stack.Push(&MShellString{line})
-						stack.Push(&MShellBool{true})
+						stack.Push(MShellString{line})
+						stack.Push(MShellBool{true})
 					}
 
 					// Reset the position of the reader to the position after the read
@@ -5081,16 +5081,16 @@ MainLoop:
 							if err == io.EOF {
 								// If nothing in line, then this was the end of the file
 								if line.Len() == 0 {
-									stack.Push(&MShellString{""})
-									stack.Push(&MShellBool{false})
+									stack.Push(MShellString{""})
+									stack.Push(MShellBool{false})
 								} else {
 									// Else, we have a final that wasn't terminated by a newline. Still try to remove '\r' if it's there
 									builderStr := line.String()
 									if len(builderStr) > 0 && builderStr[len(builderStr)-1] == '\r' {
 										builderStr = builderStr[:len(builderStr)-1]
 									}
-									stack.Push(&MShellString{builderStr})
-									stack.Push(&MShellBool{true})
+									stack.Push(MShellString{builderStr})
+									stack.Push(MShellBool{true})
 								}
 								break
 							} else {
@@ -5106,8 +5106,8 @@ MainLoop:
 								builderStr = builderStr[:len(builderStr)-1]
 							}
 
-							stack.Push(&MShellString{builderStr})
-							stack.Push(&MShellBool{true})
+							stack.Push(MShellString{builderStr})
+							stack.Push(MShellBool{true})
 							break
 						} else {
 							line.WriteByte(b[0])
@@ -5120,7 +5120,7 @@ MainLoop:
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert an empty stack to a string.\n", t.Line, t.Column))
 				}
 
-				stack.Push(&MShellString{obj.ToString()})
+				stack.Push(MShellString{obj.ToString()})
 			} else if t.Type == INDEXER { // Token Type
 				obj1, err := stack.Pop()
 				if err != nil {
@@ -5231,9 +5231,9 @@ MainLoop:
 				if err != nil {
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing float: %s\n", t.Line, t.Column, err.Error()))
 				}
-				stack.Push(&MShellFloat{floatVal})
+				stack.Push(MShellFloat{floatVal})
 			} else if t.Type == PATH { // Token Type
-				stack.Push(&MShellPath{t.Lexeme[1 : len(t.Lexeme)-1]})
+				stack.Push(MShellPath{t.Lexeme[1 : len(t.Lexeme)-1]})
 			} else if t.Type == DATETIME { // Token Type
 				year, _ := strconv.Atoi(t.Lexeme[0:4])
 				month, _ := strconv.Atoi(t.Lexeme[5:7])
@@ -5292,7 +5292,7 @@ MainLoop:
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot compare '!=' between %s and %s: %s\n", t.Line, t.Column, obj1.TypeName(), obj2.TypeName(), err.Error()))
 				}
 
-				stack.Push(&MShellBool{!doesEqual})
+				stack.Push(MShellBool{!doesEqual})
 			} else {
 				return state.FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' ('%s') yet.\n", t.Line, t.Column, t.Type, t.Lexeme))
 			}
@@ -5311,12 +5311,12 @@ const (
 	FORMATMODEFORMAT
 )
 
-func (state *EvalState) EvaluateFormatString(lexeme string, context ExecuteContext, definitions []MShellDefinition, callStackItem CallStackItem) (*MShellString, error) {
+func (state *EvalState) EvaluateFormatString(lexeme string, context ExecuteContext, definitions []MShellDefinition, callStackItem CallStackItem) (MShellString, error) {
 
 	allRunes := []rune(lexeme)
 
 	if len(allRunes) < 3 {
-		return nil, fmt.Errorf("Found format string with less than 3 characters: %s", lexeme)
+		return MShellString{""}, fmt.Errorf("Found format string with less than 3 characters: %s", lexeme)
 	}
 
 	var b strings.Builder
@@ -5351,7 +5351,7 @@ func (state *EvalState) EvaluateFormatString(lexeme string, context ExecuteConte
 			case '{':
 				b.WriteRune('{') // This is a literal '{' in the format string
 			default:
-				return nil, fmt.Errorf("invalid escape character '%c'", c)
+				return MShellString{""}, fmt.Errorf("invalid escape character '%c'", c)
 			}
 			mode = FORMATMODENORMAL
 		} else if mode == FORMATMODENORMAL {
@@ -5373,7 +5373,7 @@ func (state *EvalState) EvaluateFormatString(lexeme string, context ExecuteConte
 				parser.NextToken()
 				contents, err := parser.ParseFile()
 				if err != nil {
-					return nil, fmt.Errorf("Error parsing format string %s: %s", formatStr, err)
+					return MShellString{""}, fmt.Errorf("Error parsing format string %s: %s", formatStr, err)
 				}
 
 				// Evaluate the format string contents
@@ -5383,17 +5383,17 @@ func (state *EvalState) EvaluateFormatString(lexeme string, context ExecuteConte
 				result := state.Evaluate(contents.Items, &stack, context, definitions, callStackItem)
 
 				if !result.Success {
-					return nil, fmt.Errorf("Error evaluating format string %s", formatStr)
+					return MShellString{""}, fmt.Errorf("Error evaluating format string %s", formatStr)
 				}
 
 				if len(stack) != 1 {
-					return nil, fmt.Errorf("Format string %s did not evaluate to a single value", formatStr)
+					return MShellString{""}, fmt.Errorf("Format string %s did not evaluate to a single value", formatStr)
 				}
 
 				// Get the string representation of the result
 				resultStr, err := stack[0].CastString()
 				if err != nil {
-					return nil, fmt.Errorf("Format string contents %s did not evaluate to a stringable value", formatStr)
+					return MShellString{""}, fmt.Errorf("Format string contents %s did not evaluate to a stringable value", formatStr)
 				}
 
 				b.WriteString(resultStr)
@@ -5408,10 +5408,10 @@ func (state *EvalState) EvaluateFormatString(lexeme string, context ExecuteConte
 	}
 
 	if mode != FORMATMODENORMAL {
-		return nil, fmt.Errorf("Format string ended in an invalid state")
+		return MShellString{""}, fmt.Errorf("Format string ended in an invalid state")
 	}
 
-	return &MShellString{b.String()}, nil
+	return MShellString{b.String()}, nil
 }
 
 type Executable interface {
@@ -6000,14 +6000,14 @@ func ParseJsonObjToMshell(jsonObj any) MShellObject {
 		return dict
 
 	case string:
-		return &MShellString{o}
+		return MShellString{o}
 	case float64:
-		return &MShellFloat{o}
+		return MShellFloat{o}
 	case bool:
 		if o {
-			return &MShellBool{true}
+			return MShellBool{true}
 		} else {
-			return &MShellBool{false}
+			return MShellBool{false}
 		}
 	case nil:
 		return &Maybe{obj: nil}
@@ -6501,7 +6501,7 @@ func boolOption(dict *MShellDict, key string) (bool, bool, error) {
 	if !ok {
 		return false, false, nil
 	}
-	boolVal, ok := item.(*MShellBool)
+	boolVal, ok := item.(MShellBool)
 	if !ok {
 		return false, true, fmt.Errorf("Option '%s' must be a bool, found %s", key, item.TypeName())
 	}
@@ -6513,7 +6513,7 @@ func intOption(dict *MShellDict, key string) (int, bool, error) {
 	if !ok {
 		return 0, false, nil
 	}
-	intVal, ok := item.(*MShellInt)
+	intVal, ok := item.(MShellInt)
 	if !ok {
 		return 0, true, fmt.Errorf("Option '%s' must be an int, found %s", key, item.TypeName())
 	}
