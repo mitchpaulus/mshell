@@ -34,7 +34,7 @@ const (
 	CLIHTML
 )
 
-const mshellVersion = "0.7.0"
+const mshellVersion = "0.8.0"
 
 type TabMatch struct {
 	TabMatchType TabMatchType
