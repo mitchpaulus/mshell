@@ -1,3 +1,11 @@
+## Interactive CLI
+
+History search is prefix-based and case-insensitive. The prefix is whatever is currently in the input buffer; editing the buffer resets the prefix for the next search.
+
+- Ctrl-P: search backward through history by prefix
+- Ctrl-N: search forward through history by prefix
+- Ctrl-Y: accept the inline history completion
+
 ## Data Types
 
 ### `str` Strings
