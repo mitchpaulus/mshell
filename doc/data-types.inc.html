@@ -48,8 +48,7 @@ For example, a quotation is used as an argument to the <code>map</code> function
 </p>
 
 <pre>
-<code><span class="mshellLEFT_PAREN">(</span><span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span> <span class="mshellPLUS">+</span><span class="mshellRIGHT_PAREN">)</span>
-<span class="mshellEOF"></span></code>
+<code><span class="mshellLEFT_PAREN">(</span><span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span> <span class="mshellPLUS">+</span><span class="mshellRIGHT_PAREN">)</span></code>
 </pre>
 
 
@@ -61,15 +60,13 @@ No commas are required between elements.
 </p>
 
 <pre>
-<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span> <span class="mshellINTEGER">3</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span>
-<span class="mshellEOF"></span></code>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span> <span class="mshellINTEGER">3</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code>
 </pre>
 
 <p>Lists can be added together with the <code>+</code> operator. The result is a new list object.</p>
 
 <pre>
-<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">3</span> <span class="mshellINTEGER">4</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPLUS">+</span> <span class="mshellLINECOMMENT"># [1 2 3 4]</span>
-<span class="mshellEOF"></span></code>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">3</span> <span class="mshellINTEGER">4</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPLUS">+</span> <span class="mshellLINECOMMENT"># [1 2 3 4]</span></code>
 </pre>
 
 
@@ -103,8 +100,7 @@ If you need to escape or use string interpolation, then use double quotes and <c
 
 <pre>
 <code><span class="mshellPATH">`path/to/file`</span>
-<span class="mshellFORMATSTRING">$&#34;my/path/is/built/from/{variable}&#34;</span> <span class="mshellLITERAL">toPath</span>
-<span class="mshellEOF"></span></code>
+<span class="mshellFORMATSTRING">$&#34;my/path/is/built/from/</span><span class="mshellVARRETRIEVE">{@variable}</span><span class="mshellFORMATSTRING">&#34;</span> <span class="mshellLITERAL">toPath</span></code>
 </pre>
 
 <p>
@@ -122,8 +118,7 @@ In <code>msh</code>, this choice can be made by using the appropriate type.
 
 <pre>
 <code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">wc</span> <span class="mshellLITERAL">-l</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`myfile.txt`</span> <span class="mshellLESSTHAN">&lt;</span> <span class="mshellEXECUTE">;</span> <span class="mshellLINECOMMENT"># Counts the number of lines in myfile.txt</span>
-<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">wc</span> <span class="mshellLITERAL">-l</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellSTRING">&#34;line 1\nline 2\n&#34;</span> <span class="mshellLESSTHAN">&lt;</span> <span class="mshellEXECUTE">;</span> <span class="mshellLINECOMMENT"># Counts the number of lines in the string &#34;line 1\nline 2\n&#34; (2)</span>
-<span class="mshellEOF"></span></code>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">wc</span> <span class="mshellLITERAL">-l</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellSTRING">&#34;line 1\nline 2\n&#34;</span> <span class="mshellLESSTHAN">&lt;</span> <span class="mshellEXECUTE">;</span> <span class="mshellLINECOMMENT"># Counts the number of lines in the string &#34;line 1\nline 2\n&#34; (2)</span></code>
 </pre>
 
 <h1 id="data-type-dictionary">Dictionary <a class="section-link" href="#data-type-dictionary" aria-label="Permalink">§</a> <a class="back-to-top" href="#data-types-top">Back to top</a></h1>
@@ -136,8 +131,7 @@ Dictionaries can be instantiated using dictionary literals, like:
 </p>
 
 <pre>
-<code><span class="mshellLEFT_CURLY">{</span> <span class="mshellSTRING">&#34;key&#34;</span><span class="mshellCOLON">:</span> <span class="mshellINTEGER">1</span> <span class="mshellRIGHT_CURLY">}</span>
-<span class="mshellEOF"></span></code>
+<code><span class="mshellLEFT_CURLY">{</span> <span class="mshellSTRING">&#34;key&#34;</span><span class="mshellCOLON">:</span> <span class="mshellINTEGER">1</span> <span class="mshellRIGHT_CURLY">}</span></code>
 </pre>
 
 <p>
@@ -146,9 +140,7 @@ Best practice is a space between the colon and the value.
 </p>
 
 <pre>
-<code><span class="mshellLEFT_CURLY">{</span> <span class="mshellSTRING">&#34;key&#34;</span><span class="mshellENDINDEXER">:1</span> <span class="mshellRIGHT_CURLY">}</span> <span class="mshellLINECOMMENT"># Bad because &#39;:1&#39; is treated as index</span>
-<span class="mshellEOF"></span></code>
-</pre>
+<code><span class="mshellLEFT_CURLY">{</span> <span class="mshellSTRING">&#34;key&#34;</span><span class="mshellENDINDEXER">:1</span> <span class="mshellRIGHT_CURLY">}</span> <span class="mshellLINECOMMENT"># Bad because &#39;:1&#39; is treated as index</span></code></pre>
 
 <h1 id="data-type-datetime">Date/Time <a class="section-link" href="#data-type-datetime" aria-label="Permalink">§</a> <a class="back-to-top" href="#data-types-top">Back to top</a></h1>
 
@@ -161,8 +153,7 @@ Date/times can be entered using a literal syntax, in ISO-8601 format.
 <span class="mshellDATETIME">2023-10-01</span>
 <span class="mshellDATETIME">2023-10-01T13</span>
 <span class="mshellDATETIME">2023-10-01T13:01</span>
-<span class="mshellDATETIME">2023-10-01T13:01:30</span>
-<span class="mshellEOF"></span></code>
+<span class="mshellDATETIME">2023-10-01T13:01:30</span></code>
 </pre>
 
 
@@ -171,8 +162,7 @@ Dates can be subtracted from each other, and the result is a float number of day
 </p>
 
 <pre>
-<code><span class="mshellDATETIME">2023-10-02</span> <span class="mshellDATETIME">2023-10-01</span> <span class="mshellMINUS">-</span> <span class="mshellLINECOMMENT"># 1.0</span>
-<span class="mshellEOF"></span></code>
+<code><span class="mshellDATETIME">2023-10-02</span> <span class="mshellDATETIME">2023-10-01</span> <span class="mshellMINUS">-</span> <span class="mshellLINECOMMENT"># 1.0</span></code>
 </pre>
 
 <h1 id="data-type-int-and-float">Float and Integer <a class="section-link" href="#data-type-int-and-float" aria-label="Permalink">§</a> <a class="back-to-top" href="#data-types-top">Back to top</a></h1>
@@ -184,8 +174,7 @@ Any literal number with a decimal will be lexed as a float, otherwise it will be
 
 <pre>
 <code><span class="mshellINTEGER">1</span>   <span class="mshellLINECOMMENT"># This is a integer literal</span>
-<span class="mshellFLOAT">1.0</span> <span class="mshellLINECOMMENT"># This is a float literal</span>
-<span class="mshellEOF"></span></code>
+<span class="mshellFLOAT">1.0</span> <span class="mshellLINECOMMENT"># This is a float literal</span></code>
 </pre>
 
 <p>
@@ -193,8 +182,7 @@ Division for integers will result in an integer without the remainder.
 </p>
 
 <pre>
-<code><span class="mshellINTEGER">5</span> <span class="mshellINTEGER">2</span> <span class="mshellLITERAL">/</span> <span class="mshellLINECOMMENT"># Integer 2, not float 2.5</span>
-<span class="mshellEOF"></span></code>
+<code><span class="mshellINTEGER">5</span> <span class="mshellINTEGER">2</span> <span class="mshellLITERAL">/</span> <span class="mshellLINECOMMENT"># Integer 2, not float 2.5</span></code>
 </pre>
 
 <p>
@@ -205,8 +193,7 @@ For the other operations, if the types are mixed, the result is a float.
 <pre>
 <code><span class="mshellINTEGER">2</span> <span class="mshellFLOAT">2.5</span> <span class="mshellASTERISK">*</span> <span class="mshellLINECOMMENT"># 5.0 float</span>
 <span class="mshellINTEGER">3</span> <span class="mshellFLOAT">2.5</span> <span class="mshellMINUS">-</span> <span class="mshellLINECOMMENT"># 0.5 float</span>
-<span class="mshellINTEGER">3</span> <span class="mshellFLOAT">2.5</span> <span class="mshellPLUS">+</span> <span class="mshellLINECOMMENT"># 5.5 float</span>
-<span class="mshellEOF"></span></code>
+<span class="mshellINTEGER">3</span> <span class="mshellFLOAT">2.5</span> <span class="mshellPLUS">+</span> <span class="mshellLINECOMMENT"># 5.5 float</span></code>
 </pre>
 
 
@@ -224,8 +211,7 @@ They can be instantiated using:
 
 <pre>
 <code><span class="mshellLITERAL">none</span> <span class="mshellLINECOMMENT"># None value</span>
-<span class="mshellSTRING">&#34;my string&#34;</span> <span class="mshellLITERAL">just</span> <span class="mshellLINECOMMENT"># Just value of a string</span>
-<span class="mshellEOF"></span></code>
+<span class="mshellSTRING">&#34;my string&#34;</span> <span class="mshellLITERAL">just</span> <span class="mshellLINECOMMENT"># Just value of a string</span></code>
 </pre>
 
 <p>
@@ -235,8 +221,7 @@ This is done with the <code>?</code> operator.
 
 <pre>
 <code><span class="mshellSTRING">&#34;1&#34;</span> <span class="mshellLITERAL">toFloat</span><span class="mshellQUESTION">?</span> <span class="mshellLINECOMMENT"># This will result in 1.0 being on the stack (Not wrapped)</span>
-<span class="mshellSTRING">&#34;bad string&#34;</span> <span class="mshellLITERAL">toFloat</span><span class="mshellQUESTION">?</span> <span class="mshellLINECOMMENT"># This will result in failure and execution will stop.</span>
-<span class="mshellEOF"></span></code>
+<span class="mshellSTRING">&#34;bad string&#34;</span> <span class="mshellLITERAL">toFloat</span><span class="mshellQUESTION">?</span> <span class="mshellLINECOMMENT"># This will result in failure and execution will stop.</span></code>
 </pre>
 
 <h1 id="data-type-pipe">Pipe <a class="section-link" href="#data-type-pipe" aria-label="Permalink">§</a> <a class="back-to-top" href="#data-types-top">Back to top</a></h1>
@@ -253,8 +238,7 @@ It's created by the <code>|</code> operator.
 <code><span class="mshellLEFT_SQUARE_BRACKET">[</span>
   <span class="mshellLEFT_SQUARE_BRACKET">[</span> <span class="mshellLITERAL">myCommand</span> <span class="mshellRIGHT_SQUARE_BRACKET">]</span>
   <span class="mshellLEFT_SQUARE_BRACKET">[</span> <span class="mshellLITERAL">wc</span> <span class="mshellLITERAL">-l</span> <span class="mshellRIGHT_SQUARE_BRACKET">]</span>
-<span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPIPE">|</span> <span class="mshellEXECUTE">;</span>  <span class="mshellLINECOMMENT"># Counting the number of lines of output from myCommand</span>
-<span class="mshellEOF"></span></code>
+<span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPIPE">|</span> <span class="mshellEXECUTE">;</span>  <span class="mshellLINECOMMENT"># Counting the number of lines of output from myCommand</span></code>
 </pre>
 
 <h1 id="data-type-binary">Binary <a class="section-link" href="#data-type-binary" aria-label="Permalink">§</a> <a class="back-to-top" href="#data-types-top">Back to top</a></h1>
