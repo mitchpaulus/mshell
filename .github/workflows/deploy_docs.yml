@@ -30,7 +30,7 @@ jobs:
         ssh-keyscan -H "${{ secrets.MSH_DOC_HOST }}" >> ~/.ssh/known_hosts
 
     - name: Build go
-      run: cd mshell && go build -o mshell
+      run: cd mshell && go build -o mshell && cp mshell msh
 
     - name: Set Go PATH, MSHSTDLIB
       run: |
