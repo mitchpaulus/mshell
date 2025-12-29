@@ -524,6 +524,10 @@ type TermState struct {
 	tabCompletions0    []string // Tab completions for the current command
 	tabCompletions1    []string // Tab completions for the current command
 	currentTabComplete int
+	historySearchPrefix string
+	historySearchIndex  int
+	historySearchActive bool
+	historySearchOriginal string
 
 	stack             MShellStack
 	context           ExecuteContext
@@ -532,6 +536,82 @@ type TermState struct {
 	stdLibDefs        []MShellDefinition
 	initCallStackItem CallStackItem
 	// pathBinManager IPathBinManager
+}
+
+func historyPrefixMatch(prefix string, candidate string) bool {
+	if len(prefix) == 0 {
+		return true
+	}
+	if len(candidate) < len(prefix) {
+		return false
+	}
+	return strings.EqualFold(candidate[:len(prefix)], prefix)
+}
+
+func (state *TermState) resetHistorySearch() {
+	state.historySearchActive = false
+	state.historySearchIndex = -1
+	state.historySearchPrefix = ""
+	state.historySearchOriginal = ""
+}
+
+func (state *TermState) historySearch(direction int) {
+	if len(history) == 0 {
+		fmt.Fprintf(os.Stdout, "\a")
+		return
+	}
+
+	if !state.historySearchActive {
+		state.historySearchPrefix = string(state.currentCommand)
+		state.historySearchOriginal = string(state.currentCommand)
+		state.historySearchActive = true
+		if direction < 0 {
+			state.historySearchIndex = len(history)
+		} else {
+			state.historySearchIndex = len(history) - 1
+		}
+	}
+
+	current := string(state.currentCommand)
+	start := state.historySearchIndex
+	if direction < 0 {
+		for i := start - 1; i >= 0; i-- {
+			if !historyPrefixMatch(state.historySearchPrefix, history[i]) {
+				continue
+			}
+			if history[i] == current {
+				continue
+			}
+			state.historySearchIndex = i
+			state.currentCommand = []rune(history[i])
+			state.index = len(state.currentCommand)
+			state.historyIndex = len(history) - i
+			return
+		}
+	} else {
+		for i := start + 1; i < len(history); i++ {
+			if !historyPrefixMatch(state.historySearchPrefix, history[i]) {
+				continue
+			}
+			if history[i] == current {
+				continue
+			}
+			state.historySearchIndex = i
+			state.currentCommand = []rune(history[i])
+			state.index = len(state.currentCommand)
+			state.historyIndex = len(history) - i
+			return
+		}
+	}
+
+	if direction > 0 && current != state.historySearchOriginal {
+		state.currentCommand = []rune(state.historySearchOriginal)
+		state.index = len(state.currentCommand)
+		state.resetHistorySearch()
+		return
+	}
+
+	fmt.Fprintf(os.Stdout, "\a")
 }
 
 func (s *TermState) Render() {
@@ -835,6 +915,7 @@ func (state *TermState) replaceText(newText string, replaceStart int, replaceEnd
 
 	state.currentCommand = append(state.currentCommand[:replaceStart], append([]rune(newText), state.currentCommand[replaceEnd:]...)...)
 	state.index = replaceStart + len(newText)
+	state.resetHistorySearch()
 }
 
 type TerminalToken interface {
@@ -1581,6 +1662,7 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 
 	// Reset current command
 	state.currentCommand = state.currentCommand[:0]
+	state.resetHistorySearch()
 
 	p := state.p
 	l := state.l
@@ -1919,6 +2001,7 @@ func (state *TermState) PushChars(chars []rune) {
 	state.index = min(state.index, len(state.currentCommand))
 	state.currentCommand = append(state.currentCommand[:state.index], append(chars, state.currentCommand[state.index:]...)...)
 	state.index += len(chars)
+	state.resetHistorySearch()
 
 	// // Push chars to current command
 	// ClearToEnd()
@@ -1946,6 +2029,7 @@ func (state *TermState) acceptHistoryCompletion() {
 
 	copy(state.currentCommand, state.historyComplete)
 	state.index = len(state.currentCommand)
+	state.resetHistorySearch()
 }
 
 func WriteToHistory(command string, directory string, historyFilePath string) error {
@@ -2186,6 +2270,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				// Move cursor to end of the alias
 				state.index = i + 1 + len(aliasValue) + 1
 				// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index)
+				state.resetHistorySearch()
 			} else {
 				state.PushChars([]rune{rune(t.Char)})
 			}
@@ -2215,6 +2300,10 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				state.index++
 				// fmt.Fprintf(os.Stdout, "\033[C")
 			}
+		} else if t.Char == 14 { // Ctrl-N
+			state.historySearch(1)
+		} else if t.Char == 16 { // Ctrl-P
+			state.historySearch(-1)
 		} else if t.Char == 8 { // Backspace (or more typically CTRL-Backspace)
 			// Do same as CTRL-W
 			// Erase last word
@@ -2231,6 +2320,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				}
 
 				state.currentCommand = append(state.currentCommand[:state.index], state.currentCommand[origIndex:]...)
+				state.resetHistorySearch()
 
 				// Erase the word
 				// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + state.index)
@@ -2455,6 +2545,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			// Erase to end of line
 			// fmt.Fprintf(os.Stdout, "\033[K")
 			state.currentCommand = state.currentCommand[:state.index]
+			state.resetHistorySearch()
 		} else if t.Char == 12 { // Ctrl-L
 			state.ClearScreen()
 		} else if t.Char == 13 { // Enter
@@ -2473,6 +2564,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 
 			// // Remaining chars in current command
 			state.currentCommand = state.currentCommand[state.index:]
+			state.resetHistorySearch()
 			// for i := 0; i < len(state.currentCommand); i++ {
 			// fmt.Fprintf(os.Stdout, "%c", state.currentCommand[i])
 			// }
@@ -2494,6 +2586,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				}
 
 				state.currentCommand = append(state.currentCommand[:state.index], state.currentCommand[origIndex:]...)
+				state.resetHistorySearch()
 
 				// // Erase the word
 				// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + state.index)
@@ -2511,6 +2604,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			if state.index > 0 {
 				state.currentCommand = append(state.currentCommand[:state.index-1], state.currentCommand[state.index:]...)
 				state.index--
+				state.resetHistorySearch()
 
 				// fmt.Fprintf(os.Stdout, "\033[D")
 				// fmt.Fprintf(os.Stdout, "\033[K")
@@ -2578,6 +2672,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				// fmt.Fprintf(os.Stdout, "mshell> %s", history[reverseIndex])
 				state.currentCommand = []rune(history[reverseIndex])
 				state.index = len(state.currentCommand)
+				state.resetHistorySearch()
 				break
 			}
 		} else if t == KEY_DOWN {
@@ -2595,6 +2690,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 						// fmt.Fprintf(os.Stdout, "mshell> ")
 						state.currentCommand = []rune{}
 						state.index = 0
+						state.resetHistorySearch()
 					} else {
 						reverseIndex := len(history) - state.historyIndex
 						// Compare current command to history, if the same, skip and continue to search
@@ -2606,6 +2702,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 						// fmt.Fprint(os.Stdout, history[reverseIndex])
 						state.currentCommand = []rune(history[reverseIndex])
 						state.index = len(state.currentCommand)
+						state.resetHistorySearch()
 					}
 					break
 				}
@@ -2637,6 +2734,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index)
 
 				state.currentCommand = append(state.currentCommand[:state.index], state.currentCommand[state.index+1:]...)
+				state.resetHistorySearch()
 			}
 		}
 	}

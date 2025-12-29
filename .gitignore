@@ -9,6 +9,7 @@ codex.log
 
 *.mshell_history
 *.vsix
+plans/
 
 covcounters.*
 covmeta.*
