@@ -3,6 +3,7 @@
 `base.html` readFile lines baseLines!
 
 [
+    `getting-started.inc.html`
     `basics.inc.html`
     `data-types.inc.html`
     `examples.inc.html`

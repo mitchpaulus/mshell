@@ -1,0 +1,91 @@
+<div id="getting-started-top"></div>
+<p>
+Getting started with <code>mshell</code> is a quick setup: install the CLI binary and then enable editor support.
+</p>
+
+<h1 id="getting-started-installation">Installation <a class="section-link" href="#getting-started-installation" aria-label="Permalink">§</a> <a class="back-to-top" href="#getting-started-top">Back to top</a></h1>
+
+<h2 id="getting-started-installation-binary">1) Download the binary and add it to your PATH</h2>
+
+<p>
+<code>mshell</code> ships as a single executable. Download the appropriate release archive from the
+<a href="https://github.com/mitchpaulus/mshell/releases/latest" target="_blank" rel="noopener noreferrer">GitHub releases page</a>,
+extract it, and place the binary on your <code>PATH</code>.
+</p>
+
+<h3 id="getting-started-installation-unix">Linux/macOS</h3>
+
+<pre>
+<code>tar -xvf linux_amd64.tar.gz
+mv msh ~/.local/bin/
+chmod +x ~/.local/bin/msh</code>
+</pre>
+
+<h3 id="getting-started-installation-windows">Windows</h3>
+
+<pre>
+<code><span class="mshellLINECOMMENT"># cmd.exe</span>
+tar -xvf windows_amd64.tar.gz
+move msh.exe "%USERPROFILE%\\bin\\"</code>
+</pre>
+
+<pre>
+<code><span class="mshellLINECOMMENT"># PowerShell</span>
+tar -xvf windows_amd64.tar.gz
+Move-Item msh.exe "$env:USERPROFILE\\bin\\"</code>
+</pre>
+
+<h2 id="getting-started-installation-stdlib">2) Set up the standard library</h2>
+
+<p>
+The standard library lives at <code>lib/std.msh</code> in this repo. Download or copy that file to a stable location,
+then set <code>MSHSTDLIB</code> to point at it.
+</p>
+
+<p>Examples:</p>
+
+<pre>
+<code><span class="mshellLINECOMMENT"># bash/zsh/sh</span>
+export MSHSTDLIB="/path/to/std.msh"</code>
+</pre>
+
+<pre>
+<code><span class="mshellLINECOMMENT"># fish</span>
+set -gx MSHSTDLIB "/path/to/std.msh"</code>
+</pre>
+
+<pre>
+<code><span class="mshellLINECOMMENT"># PowerShell (current session)</span>
+$env:MSHSTDLIB = "C:\path\to\std.msh"
+
+<span class="mshellLINECOMMENT"># PowerShell (persist for your user account)</span>
+[Environment]::SetEnvironmentVariable("MSHSTDLIB", "C:\path\to\std.msh", "User")</code>
+</pre>
+
+<pre>
+<code><span class="mshellLINECOMMENT"># Windows (GUI)</span>
+<span class="mshellLINECOMMENT"># Use the Start menu: "Edit environment variables for your account"</span>
+<span class="mshellLINECOMMENT"># and add MSHSTDLIB with the full path to std.msh.</span></code>
+</pre>
+
+<p>
+An example installer script is available at
+<a href="https://github.com/mitchpaulus/mshell/blob/main/install.sh" target="_blank" rel="noopener noreferrer">install.sh</a>.
+</p>
+
+<h1 id="getting-started-editor-support">Editor Support <a class="section-link" href="#getting-started-editor-support" aria-label="Permalink">§</a> <a class="back-to-top" href="#getting-started-top">Back to top</a></h1>
+
+<p>
+Syntax highlighting and editor integrations are available for common editors:
+</p>
+
+<ul>
+  <li>Sublime Text: <a href="https://github.com/mitchpaulus/mshell/tree/main/sublime/msh.sublime-syntax" target="_blank" rel="noopener noreferrer">msh.sublime-syntax</a></li>
+  <li>Notepad++: <a href="https://github.com/mitchpaulus/mshell/tree/main/Notepad++" target="_blank" rel="noopener noreferrer">user-defined language files</a> (light and dark)</li>
+  <li>Vim/Neovim: <a href="https://github.com/mitchpaulus/mshell-vim" target="_blank" rel="noopener noreferrer">mshell-vim</a></li>
+</ul>
+
+<p>
+A language server is bundled with the CLI, providing builtin hover information, completion on <code>@</code> variables,
+and scope-aware variable renaming.
+</p>
