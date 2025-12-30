@@ -5,6 +5,9 @@ History search is prefix-based and case-insensitive. The prefix is whatever is c
 - Ctrl-P: search backward through history by prefix
 - Ctrl-N: search forward through history by prefix
 - Ctrl-Y: accept the inline history completion
+- Tab: complete the current token; press Tab again to cycle matches and fill the input
+- Shift-Tab: cycle completion backward when matches are active
+- Ctrl-N/Ctrl-P: when cycling completions, move forward/backward through matches
 
 ## Data Types
 
