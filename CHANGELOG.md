@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - CLI history prefix search on Ctrl-N/Ctrl-P (case-insensitive)
+- Alt-. to cycle last argument from history in the CLI
 
 ## 0.8.0 - 2025-12-29
 
