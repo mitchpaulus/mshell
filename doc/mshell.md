@@ -298,6 +298,8 @@ Dates can be subtracted from each other, and the result is a float number of day
 - `dow`: Get day of week from date (0-6). Sunday = 0, .., Saturday = 6 `(date -- int)`
 - `toUnixTime`: Get unix time from date `(date -- int)`
 - `fromUnixTime`: Get date from unix time int `(date -- int)`
+- `toOleDate`: Convert a date to an OLE Automation date float `(date -- float)`
+- `fromOleDate`: Convert an OLE Automation date float to a date `(numeric -- date)`
 - `addDays`: Add days to date `(date numeric -- date)`
 - `utcToCst`: Convert a UTC datetime to US Central Time `(date -- date)`
 

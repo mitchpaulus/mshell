@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Functions
+  - `fromOleDate`
+  - `toOleDate`
 - CLI history prefix search on Ctrl-N/Ctrl-P (case-insensitive)
 - Alt-. to cycle last argument from history in the CLI
 

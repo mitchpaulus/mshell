@@ -45,6 +45,8 @@ type MShellFunction struct {
 	InputTypes []MShellType
 }
 
+var oleAutomationEpoch = time.Date(1899, 12, 30, 0, 0, 0, 0, time.UTC)
+
 type MShellStack []MShellObject
 
 func (objList *MShellStack) Peek() (MShellObject, error) {
@@ -2015,6 +2017,19 @@ MainLoop:
 					}
 
 					stack.Push(MShellInt{int(dateTimeObj.Time.Unix())})
+				} else if t.Lexeme == "toOleDate" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'toOleDate' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					dateTimeObj, ok := obj1.(*MShellDateTime)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot get an OLE date from a %s (%s).\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
+					}
+
+					oleDays := dateTimeObj.Time.In(time.UTC).Sub(oleAutomationEpoch).Hours() / 24
+					stack.Push(MShellFloat{oleDays})
 				} else if t.Lexeme == "fromUnixTime" {
 					obj1, err := stack.Pop()
 					if err != nil {
@@ -2029,6 +2044,19 @@ MainLoop:
 					newTime := time.Unix(int64(intVal.Value), 0).UTC()
 
 					stack.Push(&MShellDateTime{Time: newTime, OriginalString: newTime.Format("2006-01-02T15:04")})
+				} else if t.Lexeme == "fromOleDate" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
+					}
+
+					if !obj1.IsNumeric() {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert a %s (%s) to a datetime.\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
+					}
+
+					oleDays := obj1.FloatNumeric()
+					newTime := oleAutomationEpoch.Add(time.Duration(oleDays * float64(24*time.Hour)))
+					stack.Push(&MShellDateTime{Time: newTime, OriginalString: ""})
 				} else if t.Lexeme == "writeFile" || t.Lexeme == "appendFile" {
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
