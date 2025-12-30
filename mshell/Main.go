@@ -533,6 +533,10 @@ type TermState struct {
 	tabCycleEnd        int
 	tabCycleTokenType  TokenType
 	tabCycleMatches    []string
+	lastArgCycleActive bool
+	lastArgCycleIndex  int
+	lastArgCycleStart  int
+	lastArgCycleEnd    int
 	historySearchPrefix string
 	historySearchIndex  int
 	historySearchActive bool
@@ -573,6 +577,73 @@ func (state *TermState) resetTabCycle() {
 	if state.tabCycleMatches != nil {
 		state.tabCycleMatches = state.tabCycleMatches[:0]
 	}
+}
+
+func (state *TermState) resetLastArgCycle() {
+	state.lastArgCycleActive = false
+	state.lastArgCycleIndex = 0
+	state.lastArgCycleStart = 0
+	state.lastArgCycleEnd = 0
+}
+
+func isAltDotWordToken(tokenType TokenType) bool {
+	switch tokenType {
+	case LITERAL, STRING, SINGLEQUOTESTRING, PATH, INTEGER, FLOAT, DATETIME, FORMATSTRING, TRUE, FALSE:
+		return true
+	case VARRETRIEVE, VARSTORE, ENVRETREIVE, ENVSTORE, ENVCHECK, POSITIONAL, TILDEEXPANSION:
+		return true
+	default:
+		return false
+	}
+}
+
+func lastArgumentFromCommand(command string) (string, bool) {
+	l := NewLexer(command, nil)
+	tokens, err := l.Tokenize()
+	if err != nil {
+		parts := strings.Fields(command)
+		if len(parts) == 0 {
+			return "", false
+		}
+		return parts[len(parts)-1], true
+	}
+
+	for i := len(tokens) - 1; i >= 0; i-- {
+		if isAltDotWordToken(tokens[i].Type) {
+			return tokens[i].Lexeme, true
+		}
+	}
+
+	return "", false
+}
+
+func (state *TermState) cycleLastArgument() {
+	if len(history) == 0 {
+		fmt.Fprintf(os.Stdout, "\a")
+		return
+	}
+
+	if !state.lastArgCycleActive {
+		state.lastArgCycleActive = true
+		state.lastArgCycleIndex = 0
+		state.lastArgCycleStart = state.index
+		state.lastArgCycleEnd = state.index
+	}
+
+	for i := state.lastArgCycleIndex; i < len(history); i++ {
+		command := history[len(history)-1-i]
+		lastArg, ok := lastArgumentFromCommand(command)
+		if !ok || len(lastArg) == 0 {
+			continue
+		}
+
+		state.replaceText(lastArg, state.lastArgCycleStart, state.lastArgCycleEnd)
+		state.lastArgCycleEnd = state.index
+		state.lastArgCycleIndex = i + 1
+		return
+	}
+
+	fmt.Fprintf(os.Stdout, "\a")
 }
 
 func (state *TermState) clearTabCompletionsDisplay() {
@@ -1108,6 +1179,7 @@ var SpecialKeyName = []string{
 	"KEY_ALT_B",
 	"KEY_ALT_F",
 	"KEY_ALT_O",
+	"KEY_ALT_DOT",
 	"KEY_CTRL_DELETE",
 	"KEY_SHIFT_TAB",
 }
@@ -1139,6 +1211,7 @@ const (
 	KEY_ALT_B
 	KEY_ALT_F
 	KEY_ALT_O
+	KEY_ALT_DOT
 
 	KEY_CTRL_DELETE
 	KEY_SHIFT_TAB
@@ -1415,6 +1488,8 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 				return KEY_ALT_F, nil
 			} else if c == 111 { // Alt-O
 				return KEY_ALT_O, nil
+			} else if c == 46 { // Alt-.
+				return KEY_ALT_DOT, nil
 				// Quit
 			} else {
 				// Unknown escape sequence
@@ -2229,6 +2304,10 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 	if !state.isTabCycleNav(token) {
 		state.resetTabCycle()
 	}
+	if sk, ok := token.(SpecialKey); ok && sk == KEY_ALT_DOT {
+	} else {
+		state.resetLastArgCycle()
+	}
 
 	switch t := token.(type) {
 	case MutliByteToken:
@@ -2786,6 +2865,8 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			fmt.Fprintf(os.Stdout, "\r\n")
 			fmt.Fprintf(state.f, "Exiting mshell using ALT-o...\n")
 			return true, nil
+		} else if t == KEY_ALT_DOT {
+			state.cycleLastArgument()
 		} else if t == KEY_SHIFT_TAB {
 			if state.tabCycleActive && len(state.tabCycleMatches) > 0 {
 				state.cycleTabCompletion(-1)
