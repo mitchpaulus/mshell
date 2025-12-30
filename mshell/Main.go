@@ -575,6 +575,30 @@ func (state *TermState) resetTabCycle() {
 	}
 }
 
+func (state *TermState) clearTabCompletionsDisplay() {
+	var displayed []string
+	if state.currentTabComplete == 0 {
+		displayed = state.tabCompletions1
+	} else {
+		displayed = state.tabCompletions0
+	}
+
+	if len(displayed) == 0 {
+		return
+	}
+
+	limit := state.numRows - state.promptRow
+	clearCount := min(len(displayed), limit)
+	for i := 0; i < clearCount; i++ {
+		fmt.Fprintf(os.Stdout, "\n\033[2K")
+	}
+	for i := 0; i < clearCount; i++ {
+		fmt.Fprintf(os.Stdout, "\033[A")
+	}
+
+	fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index)
+}
+
 func (state *TermState) isTabToken(token TerminalToken) bool {
 	if t, ok := token.(AsciiToken); ok && t.Char == 9 {
 		return true
@@ -1711,6 +1735,11 @@ func (state *TermState) TrySaveHistory() {
 }
 
 func (state *TermState) ExecuteCurrentCommand() (bool, int) {
+	state.clearTabCompletionsDisplay()
+	state.resetTabCycle()
+	state.tabCompletions0 = state.tabCompletions0[:0]
+	state.tabCompletions1 = state.tabCompletions1[:0]
+
 	// Add command to history
 	currentCommandStr := strings.TrimSpace(string(state.currentCommand))
 
