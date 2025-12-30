@@ -307,6 +307,9 @@ func main() {
 			tabCompletions0:    make([]string, 0, 10),
 			tabCompletions1:    make([]string, 0, 10),
 			currentTabComplete: 0,
+			tabCycleActive:     false,
+			tabCycleIndex:      -1,
+			tabCycleMatches:    make([]string, 0, 10),
 
 			stack: make(MShellStack, 0),
 
@@ -524,6 +527,12 @@ type TermState struct {
 	tabCompletions0    []string // Tab completions for the current command
 	tabCompletions1    []string // Tab completions for the current command
 	currentTabComplete int
+	tabCycleActive     bool
+	tabCycleIndex      int
+	tabCycleStart      int
+	tabCycleEnd        int
+	tabCycleTokenType  TokenType
+	tabCycleMatches    []string
 	historySearchPrefix string
 	historySearchIndex  int
 	historySearchActive bool
@@ -553,6 +562,83 @@ func (state *TermState) resetHistorySearch() {
 	state.historySearchIndex = -1
 	state.historySearchPrefix = ""
 	state.historySearchOriginal = ""
+}
+
+func (state *TermState) resetTabCycle() {
+	state.tabCycleActive = false
+	state.tabCycleIndex = -1
+	state.tabCycleStart = 0
+	state.tabCycleEnd = 0
+	state.tabCycleTokenType = EOF
+	if state.tabCycleMatches != nil {
+		state.tabCycleMatches = state.tabCycleMatches[:0]
+	}
+}
+
+func (state *TermState) isTabToken(token TerminalToken) bool {
+	if t, ok := token.(AsciiToken); ok && t.Char == 9 {
+		return true
+	}
+	if t, ok := token.(SpecialKey); ok && t == KEY_SHIFT_TAB {
+		return true
+	}
+	return false
+}
+
+func (state *TermState) isTabCycleNav(token TerminalToken) bool {
+	if state.isTabToken(token) {
+		return true
+	}
+	if t, ok := token.(AsciiToken); ok {
+		if t.Char == 14 || t.Char == 16 {
+			return true
+		}
+	}
+	return false
+}
+
+func (state *TermState) setTabCompletions(matches []string) {
+	if state.currentTabComplete == 0 {
+		state.tabCompletions0 = append(state.tabCompletions0, matches...)
+	} else {
+		state.tabCompletions1 = append(state.tabCompletions1, matches...)
+	}
+}
+
+func (state *TermState) buildCompletionInsert(match string, tokenType TokenType) string {
+	if tokenType == UNFINISHEDSINGLEQUOTESTRING {
+		return "'" + match
+	} else if tokenType == UNFINISHEDPATH {
+		insertString := "`" + match
+		if !strings.HasSuffix(match, string(os.PathSeparator)) {
+			insertString += "` "
+		}
+		return insertString
+	}
+
+	state.l.resetInput(match)
+	tokens, err := state.l.Tokenize()
+	if len(tokens) > 2 && err == nil {
+		// Quote when the completion needs multiple tokens to parse.
+		return "'" + match + "'"
+	}
+	return match
+}
+
+func (state *TermState) cycleTabCompletion(direction int) {
+	if len(state.tabCycleMatches) == 0 {
+		return
+	}
+	state.tabCycleIndex += direction
+	if state.tabCycleIndex >= len(state.tabCycleMatches) {
+		state.tabCycleIndex = 0
+	} else if state.tabCycleIndex < 0 {
+		state.tabCycleIndex = len(state.tabCycleMatches) - 1
+	}
+	insertString := state.buildCompletionInsert(state.tabCycleMatches[state.tabCycleIndex], state.tabCycleTokenType)
+	state.replaceText(insertString, state.tabCycleStart, state.tabCycleEnd)
+	state.tabCycleEnd = state.index
+	state.setTabCompletions(state.tabCycleMatches)
 }
 
 func (state *TermState) historySearch(direction int) {
@@ -744,7 +830,13 @@ func (s *TermState) Render() {
 	for i := 0; i < min(len(currentTabCompletion), limit); i++ {
 		// // Do \r\n to move to the next line
 		s.renderBuffer = append(s.renderBuffer, "\r\n"...)
-		s.renderBuffer = append(s.renderBuffer, []byte(currentTabCompletion[i])...)
+		if s.tabCycleActive && s.tabCycleIndex == i {
+			s.renderBuffer = append(s.renderBuffer, "\033[7m"...)
+			s.renderBuffer = append(s.renderBuffer, []byte(currentTabCompletion[i])...)
+			s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
+		} else {
+			s.renderBuffer = append(s.renderBuffer, []byte(currentTabCompletion[i])...)
+		}
 	}
 
 	// Move back up number of completion lines
@@ -993,6 +1085,7 @@ var SpecialKeyName = []string{
 	"KEY_ALT_F",
 	"KEY_ALT_O",
 	"KEY_CTRL_DELETE",
+	"KEY_SHIFT_TAB",
 }
 
 const (
@@ -1024,6 +1117,7 @@ const (
 	KEY_ALT_O
 
 	KEY_CTRL_DELETE
+	KEY_SHIFT_TAB
 )
 
 type EofTerminalToken struct{}
@@ -1222,8 +1316,8 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 					}
 				}
 
-				if c >= 64 && c <= 126 {
-					if c == 51 {
+			if c >= 64 && c <= 126 {
+				if c == 51 {
 						// c = <-inputChan
 						c, err = stdinReaderState.ReadByte()
 						if err != nil {
@@ -1254,6 +1348,8 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 						return KEY_END, nil
 					} else if c == 72 {
 						return KEY_HOME, nil
+					} else if c == 90 {
+						return KEY_SHIFT_TAB, nil
 					} else {
 						// Unknown escape sequence
 						fmt.Fprintf(state.f, "Unknown escape sequence: ESC [ %d\n", c)
@@ -2101,6 +2197,10 @@ func WriteToHistory(command string, directory string, historyFilePath string) er
 func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 	var err error
 
+	if !state.isTabCycleNav(token) {
+		state.resetTabCycle()
+	}
+
 	switch t := token.(type) {
 	case MutliByteToken:
 		state.PushChars([]rune{t.Char})
@@ -2301,9 +2401,17 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				// fmt.Fprintf(os.Stdout, "\033[C")
 			}
 		} else if t.Char == 14 { // Ctrl-N
-			state.historySearch(1)
+			if state.tabCycleActive {
+				state.cycleTabCompletion(1)
+			} else {
+				state.historySearch(1)
+			}
 		} else if t.Char == 16 { // Ctrl-P
-			state.historySearch(-1)
+			if state.tabCycleActive {
+				state.cycleTabCompletion(-1)
+			} else {
+				state.historySearch(-1)
+			}
 		} else if t.Char == 8 { // Backspace (or more typically CTRL-Backspace)
 			// Do same as CTRL-W
 			// Erase last word
@@ -2339,6 +2447,13 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				state.l.allowUnterminatedString = false
 			}()
 
+			if state.tabCycleActive && len(state.tabCycleMatches) > 0 {
+				state.cycleTabCompletion(1)
+				return false, nil
+			}
+
+			state.resetTabCycle()
+
 			state.l.resetInput(string(state.currentCommand[0:state.index]))
 			tokens, err := state.l.Tokenize()
 			if err != nil {
@@ -2369,6 +2484,8 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 					}
 				}
 			}
+			replaceStart := state.index - lastTokenLength
+			replaceEnd := state.index
 
 			fmt.Fprintf(state.f, "Last token: %s %d\n", lastToken, len(tokens))
 			fmt.Fprintf(state.f, "Prefix: %s\n", prefix)
@@ -2487,28 +2604,10 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				fmt.Fprintf(os.Stdout, "\a")
 			} else if len(matches) == 1 {
 				// Lex the match and check if we have to quote around it
-				if lastToken.Type == UNFINISHEDSINGLEQUOTESTRING {
-					insertString = "'" + matches[0].Match
-				} else if lastToken.Type == UNFINISHEDPATH {
-					insertString = "`" + matches[0].Match
-					// Add closing '`' if the item is not a directory. Just check if ends with path sep.
-					if !strings.HasSuffix(matches[0].Match, string(os.PathSeparator)) {
-						insertString += "` "
-					}
-				} else {
-					state.l.resetInput(matches[0].Match)
-					tokens, err := state.l.Tokenize()
-					if len(tokens) > 2 && err == nil {
-						// We have to quote around it
-						// TODO: Deal with case when the match itself has a single quote.
-						insertString = "'" + matches[0].Match + "'"
-					} else {
-						insertString = matches[0].Match
-					}
-				}
+				insertString = state.buildCompletionInsert(matches[0].Match, lastToken.Type)
 
 				// Replace the prefex
-				state.replaceText(insertString, state.index-lastTokenLength, state.index)
+				state.replaceText(insertString, replaceStart, replaceEnd)
 			} else {
 				// Print out the longest common prefix
 				longestCommonPrefix := getLongestCommonPrefix(GetMatchTexts(matches))
@@ -2532,14 +2631,17 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 					}
 
 					// Replace the prefix
-					state.replaceText(longestCommonPrefix, state.index-lastTokenLength, state.index)
+					state.replaceText(longestCommonPrefix, replaceStart, replaceEnd)
 				}
 
-				if state.currentTabComplete == 0 {
-					state.tabCompletions0 = append(state.tabCompletions0, GetMatchTexts(matches)...)
-				} else {
-					state.tabCompletions1 = append(state.tabCompletions1, GetMatchTexts(matches)...)
-				}
+				tabMatchTexts := GetMatchTexts(matches)
+				state.tabCycleActive = true
+				state.tabCycleIndex = -1
+				state.tabCycleStart = replaceStart
+				state.tabCycleEnd = state.index
+				state.tabCycleTokenType = lastToken.Type
+				state.tabCycleMatches = append(state.tabCycleMatches[:0], tabMatchTexts...)
+				state.setTabCompletions(tabMatchTexts)
 			}
 		} else if t.Char == 11 { // Ctrl-K
 			// Erase to end of line
@@ -2655,6 +2757,12 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			fmt.Fprintf(os.Stdout, "\r\n")
 			fmt.Fprintf(state.f, "Exiting mshell using ALT-o...\n")
 			return true, nil
+		} else if t == KEY_SHIFT_TAB {
+			if state.tabCycleActive && len(state.tabCycleMatches) > 0 {
+				state.cycleTabCompletion(-1)
+			} else {
+				return state.HandleToken(AsciiToken{Char: 9})
+			}
 		} else if t == KEY_UP {
 			// Up arrow
 			for state.historyIndex >= 0 && state.historyIndex < len(history) {
