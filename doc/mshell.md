@@ -10,6 +10,32 @@ History search is prefix-based and case-insensitive. The prefix is whatever is c
 - Shift-Tab: cycle completion backward when matches are active
 - Ctrl-N/Ctrl-P: when cycling completions, move forward/backward through matches
 
+### Shell completions
+
+mshell can emit shell completion scripts for:
+
+- bash
+- fish
+- nushell
+- elvish
+
+Run `msh completions <shell>` and source the output:
+
+```
+# bash
+source <(msh completions bash)
+
+# fish
+msh completions fish | source
+
+# elvish
+msh completions elvish | eval
+
+# nushell
+msh completions nushell | save --force $"($nu.default-config-dir)/completions/msh.nu"
+use $"($nu.default-config-dir)/completions/msh.nu" *
+```
+
 ### Binary map overrides
 
 mshell supports a simple bin map file that overrides PATH lookups. The file lives alongside the history files (e.g. `~/.local/share/msh/msh_bins.txt` on Linux/macOS or `%LOCALAPPDATA%\mshell\msh_bins.txt` on Windows).

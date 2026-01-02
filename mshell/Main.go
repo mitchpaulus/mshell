@@ -153,6 +153,11 @@ func main() {
 		return
 	}
 
+	if len(os.Args) >= 2 && os.Args[1] == "completions" {
+		os.Exit(runCompletionsCommand(os.Args[2:]))
+		return
+	}
+
 	command := CLIEXECUTE
 
 	// printLex := false
@@ -189,6 +194,7 @@ func main() {
 			fmt.Println("Usage: mshell [OPTION].. [ARG].. < FILE")
 			fmt.Println("Usage: mshell [OPTION].. -c INPUT [ARG]..")
 			fmt.Println("Usage: msh bin <command>")
+			fmt.Println("Usage: msh completions <shell>")
 			fmt.Println("Usage: msh lsp")
 			fmt.Println("")
 			fmt.Println("Options:")
@@ -200,6 +206,7 @@ func main() {
 			fmt.Println("  -c INPUT     Execute INPUT as the program, before positional args")
 			fmt.Println("  -h, --help   Print this help message")
 			fmt.Println("  bin          Manage msh_bins.txt entries")
+			fmt.Println("  completions  Print shell completion script")
 			os.Exit(0)
 			return
 		} else if arg == "--version" {
@@ -3059,6 +3066,192 @@ func runBinCommand(args []string) int {
 		printBinUsage()
 		return 1
 	}
+}
+
+func runCompletionsCommand(args []string) int {
+	if len(args) != 1 {
+		fmt.Fprintln(os.Stderr, "Usage: msh completions <shell>")
+		fmt.Fprintln(os.Stderr, "Supported shells: bash, fish, nushell, elvish")
+		return 1
+	}
+
+	script, ok := completionScript(args[0])
+	if !ok {
+		fmt.Fprintf(os.Stderr, "Unknown shell: %s\n", args[0])
+		fmt.Fprintln(os.Stderr, "Supported shells: bash, fish, nushell, elvish")
+		return 1
+	}
+
+	fmt.Fprint(os.Stdout, script)
+	return 0
+}
+
+func completionScript(shell string) (string, bool) {
+	switch shell {
+	case "bash":
+		return bashCompletionScript(), true
+	case "fish":
+		return fishCompletionScript(), true
+	case "nushell":
+		return nushellCompletionScript(), true
+	case "elvish":
+		return elvishCompletionScript(), true
+	default:
+		return "", false
+	}
+}
+
+func bashCompletionScript() string {
+	return `# bash completion for msh/mshell
+_msh_completion() {
+    local cur prev cmd sub
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+    if [[ $COMP_CWORD -eq 1 ]]; then
+        if [[ "$cur" == -* ]]; then
+            COMPREPLY=( $(compgen -W "--html --lex --parse --version --help -h -c" -- "$cur") )
+            return 0
+        fi
+        COMPREPLY=( $(compgen -W "bin lsp completions" -- "$cur") )
+        return 0
+    fi
+
+    cmd="${COMP_WORDS[1]}"
+    case "$cmd" in
+        bin)
+            if [[ $COMP_CWORD -eq 2 ]]; then
+                COMPREPLY=( $(compgen -W "add remove list path edit audit debug" -- "$cur") )
+                return 0
+            fi
+            sub="${COMP_WORDS[2]}"
+            if [[ "$sub" == "add" ]]; then
+                COMPREPLY=( $(compgen -f -- "$cur") )
+                return 0
+            fi
+            return 0
+            ;;
+        completions)
+            COMPREPLY=( $(compgen -W "bash fish nushell elvish" -- "$cur") )
+            return 0
+            ;;
+    esac
+
+    if [[ "$cur" == -* ]]; then
+        COMPREPLY=( $(compgen -W "--html --lex --parse --version --help -h -c" -- "$cur") )
+        return 0
+    fi
+
+    COMPREPLY=( $(compgen -f -- "$cur") )
+    return 0
+}
+
+complete -F _msh_completion msh mshell
+`
+}
+
+func fishCompletionScript() string {
+	return `function __msh_register_completions --argument-names cmd
+    complete -c $cmd -f -l html -d 'Render the input as HTML'
+    complete -c $cmd -f -l lex -d 'Print tokens from the input'
+    complete -c $cmd -f -l parse -d 'Print the parsed AST as JSON'
+    complete -c $cmd -f -l version -d 'Print version information'
+    complete -c $cmd -f -s c -r -d 'Execute INPUT as the program'
+    complete -c $cmd -f -s h -l help -d 'Show help'
+
+    complete -c $cmd -f -n '__fish_use_subcommand' -a 'bin lsp completions'
+    complete -c $cmd -f -n '__fish_seen_subcommand_from bin' -a 'add remove list path edit audit debug'
+    complete -c $cmd -x -n '__fish_seen_subcommand_from completions' -a 'bash fish nushell elvish'
+end
+
+__msh_register_completions msh
+__msh_register_completions mshell
+`
+}
+
+func nushellCompletionScript() string {
+	return `def "msh_completion_shells" [] {
+  [bash fish nushell elvish]
+}
+
+def "msh_commands" [] {
+  [bin lsp completions]
+}
+
+def "msh_bin_subcommands" [] {
+  [add remove list path edit audit debug]
+}
+
+export extern "msh" [
+  --html
+  --lex
+  --parse
+  --version
+  --help
+  -h
+  -c: string
+  command?: string@"msh_commands"
+  ...args
+]
+
+export extern "msh bin" [
+  subcommand: string@"msh_bin_subcommands"
+  name?: string
+  path?: string
+]
+
+export extern "msh completions" [
+  shell: string@"msh_completion_shells"
+]
+
+export extern "mshell" [
+  --html
+  --lex
+  --parse
+  --version
+  --help
+  -h
+  -c: string
+  command?: string@"msh_commands"
+  ...args
+]
+
+export extern "mshell bin" [
+  subcommand: string@"msh_bin_subcommands"
+  name?: string
+  path?: string
+]
+
+export extern "mshell completions" [
+  shell: string@"msh_completion_shells"
+]
+`
+}
+
+func elvishCompletionScript() string {
+	return `fn _msh_complete { |@args|
+  if (== (count $args) 0) {
+    put bin lsp completions --html --lex --parse --version --help -h -c
+    return
+  }
+
+  var cmd = $args[0]
+  if (== $cmd bin) {
+    if (<= (count $args) 2) {
+      put add remove list path edit audit debug
+    }
+    return
+  }
+
+  if (== $cmd completions) {
+    put bash fish nushell elvish
+  }
+}
+
+set edit:completion:arg-completer[msh] = $_msh_complete
+set edit:completion:arg-completer[mshell] = $_msh_complete
+`
 }
 
 func printBinUsage() {

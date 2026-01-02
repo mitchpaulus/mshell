@@ -32,6 +32,7 @@ If there are multiple functions, group under a `- Functions` bullet.
 ## CLI
 
 The CLI code is at `mshell/Main.go`.
+If you make a change to the CLI interface, make sure to update the shell completions.
 
 ## Testing instructions
 
