@@ -65,8 +65,6 @@ Standard output will always be pushed first, and then standard error.
 </code>
 </pre>
 
-
-
 <h1 id="input-redirection">Input redirection</h1>
 
 <p>
@@ -93,3 +91,36 @@ Use <code>&lt;</code> to feed data into stdin. The type of the value on top of t
 <code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">md5sum</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`binary_stdin.bin`</span> <span class="mshellLITERAL">readFileBytes</span> <span class="mshellLESSTHAN">&lt;</span> <span class="mshellEXECUTE">;</span> <span class="mshellLINECOMMENT"># Streams raw bytes into the command</span>
 <span class="mshellEOF"></span></code>
 </pre>
+
+<h1 id="binary-resolution">How mshell finds binaries</h1>
+
+<p>
+When executing an external command, <code>mshell</code> resolves the binary name using a two-step process.
+First it checks the bin map file for an override, and if none is found it falls back to <code>PATH</code>.
+</p>
+
+<p>
+The bin map file lives alongside the history files (for example, <code>~/.local/share/msh/msh_bins.txt</code> on Linux/macOS or <code>%LOCALAPPDATA%\mshell\msh_bins.txt</code> on Windows).
+Each non-empty line is a tab-separated pair of fields: the binary name and the absolute path to the binary.
+Both fields are trimmed, the name must not contain path separators, and the line must contain exactly two fields.
+</p>
+
+<pre>
+<code>mytool	/usr/local/bin/mytool
+another	/home/me/bin/another</code>
+</pre>
+
+<p>
+To manage the file, use the <code>msh bin</code> subcommands:
+</p>
+
+<ul>
+  <li><code>msh bin add &lt;path&gt;</code>: add/replace using the file basename and absolute path</li>
+  <li><code>msh bin add &lt;name&gt; &lt;path&gt;</code>: add/replace using an explicit name</li>
+  <li><code>msh bin remove &lt;name&gt;</code>: remove an entry by name</li>
+  <li><code>msh bin list</code>: print the bin map file contents</li>
+  <li><code>msh bin path</code>: print the bin map file path</li>
+  <li><code>msh bin edit</code>: edit the file in <code>$EDITOR</code></li>
+  <li><code>msh bin audit</code>: report invalid or missing entries</li>
+  <li><code>msh bin debug &lt;name&gt;</code>: show lookup details for a binary</li>
+</ul>

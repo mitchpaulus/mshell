@@ -3249,6 +3249,7 @@ func binAuditCommand() int {
 	}
 
 	issues := make([]string, 0)
+	seenNames := make(map[string]bool)
 	for idx, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
@@ -3264,6 +3265,13 @@ func binAuditCommand() int {
 		if name == "" || path == "" {
 			issues = append(issues, fmt.Sprintf("invalid-format: line %d", idx+1))
 			continue
+		}
+
+		normalizedName := normalizeBinName(name)
+		if seenNames[normalizedName] {
+			issues = append(issues, fmt.Sprintf("duplicate-name: %s %s", name, path))
+		} else {
+			seenNames[normalizedName] = true
 		}
 
 		if hasPathSeparator(name) {
@@ -3304,7 +3312,7 @@ func binAuditCommand() int {
 		fmt.Fprintln(os.Stdout, issue)
 	}
 
-	return 0
+	return 1
 }
 
 func binDebugCommand(name string) int {
@@ -3431,6 +3439,13 @@ func isExecutableForAudit(path string) (bool, error) {
 
 func hasPathSeparator(name string) bool {
 	return strings.ContainsRune(name, '/') || strings.ContainsRune(name, '\\')
+}
+
+func normalizeBinName(name string) string {
+	if runtime.GOOS == "windows" {
+		return strings.ToUpper(name)
+	}
+	return name
 }
 
 type binSearchStatus int
