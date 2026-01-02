@@ -199,7 +199,7 @@ func main() {
 			fmt.Println("  --version    Print version information and exit")
 			fmt.Println("  -c INPUT     Execute INPUT as the program, before positional args")
 			fmt.Println("  -h, --help   Print this help message")
-			fmt.Println("  bin          Manage msh_bins entries")
+			fmt.Println("  bin          Manage msh_bins.txt entries")
 			os.Exit(0)
 			return
 		} else if arg == "--version" {
@@ -3009,11 +3009,27 @@ func runBinCommand(args []string) int {
 
 	switch args[0] {
 	case "add":
-		if len(args) != 2 {
+		if len(args) != 2 && len(args) != 3 {
 			fmt.Fprintln(os.Stderr, "Usage: msh bin add <path>")
+			fmt.Fprintln(os.Stderr, "Usage: msh bin add <name> <path>")
 			return 1
 		}
-		return binAddCommand(args[1])
+		if len(args) == 2 {
+			return binAddCommand("", args[1])
+		}
+		return binAddCommand(args[1], args[2])
+	case "remove":
+		if len(args) != 2 {
+			fmt.Fprintln(os.Stderr, "Usage: msh bin remove <name>")
+			return 1
+		}
+		return binRemoveCommand(args[1])
+	case "list":
+		if len(args) != 1 {
+			fmt.Fprintln(os.Stderr, "Usage: msh bin list")
+			return 1
+		}
+		return binListCommand()
 	case "path":
 		if len(args) != 1 {
 			fmt.Fprintln(os.Stderr, "Usage: msh bin path")
@@ -3049,14 +3065,17 @@ func printBinUsage() {
 	fmt.Fprintln(os.Stdout, "Usage: msh bin <command>")
 	fmt.Fprintln(os.Stdout, "")
 	fmt.Fprintln(os.Stdout, "Commands:")
-	fmt.Fprintln(os.Stdout, "  add <path>   Add/replace a bin entry for the binary at <path>")
-	fmt.Fprintln(os.Stdout, "  path         Print the msh_bins file path")
+	fmt.Fprintln(os.Stdout, "  add <path>       Add/replace a bin entry for the binary at <path>")
+	fmt.Fprintln(os.Stdout, "  add <name> <path> Add/replace a bin entry named <name> for <path>")
+	fmt.Fprintln(os.Stdout, "  remove <name> Remove a bin entry by binary name")
+	fmt.Fprintln(os.Stdout, "  list         Print the bin map file contents")
+	fmt.Fprintln(os.Stdout, "  path         Print the msh_bins.txt file path")
 	fmt.Fprintln(os.Stdout, "  edit         Edit the bin map file in $EDITOR")
 	fmt.Fprintln(os.Stdout, "  audit        Report invalid or missing bin map entries")
 	fmt.Fprintln(os.Stdout, "  debug <name> Print PATH/bin map lookup details for a binary")
 }
 
-func binAddCommand(pathArg string) int {
+func binAddCommand(nameArg string, pathArg string) int {
 	absPath, err := filepath.Abs(pathArg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error resolving path '%s': %s\n", pathArg, err)
@@ -3077,7 +3096,20 @@ func binAddCommand(pathArg string) int {
 		return 1
 	}
 
-	name := filepath.Base(absPath)
+	name := ""
+	if nameArg == "" {
+		name = filepath.Base(absPath)
+	} else {
+		name = strings.TrimSpace(nameArg)
+		if name == "" {
+			fmt.Fprintln(os.Stderr, "Error: bin name must not be empty")
+			return 1
+		}
+	}
+	if hasPathSeparator(name) {
+		fmt.Fprintf(os.Stderr, "Error: bin name must not include path separators: %s\n", name)
+		return 1
+	}
 
 	mapPath, lines, err := readBinMapLines()
 	if err != nil {
@@ -3093,7 +3125,41 @@ func binAddCommand(pathArg string) int {
 		}
 		filtered = append(filtered, line)
 	}
-	filtered = append(filtered, name+" "+absPath)
+	filtered = append(filtered, name+"\t"+absPath)
+
+	if err := writeBinMapLines(mapPath, filtered); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing bin map: %s\n", err)
+		return 1
+	}
+
+	return 0
+}
+
+func binRemoveCommand(name string) int {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		fmt.Fprintln(os.Stderr, "Error: bin name must not be empty")
+		return 1
+	}
+	if hasPathSeparator(name) {
+		fmt.Fprintf(os.Stderr, "Error: bin name must not include path separators: %s\n", name)
+		return 1
+	}
+
+	mapPath, lines, err := readBinMapLines()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading bin map: %s\n", err)
+		return 1
+	}
+
+	filtered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		entry, ok := parseBinMapLine(line)
+		if ok && binNameMatches(entry.Name, name) {
+			continue
+		}
+		filtered = append(filtered, line)
+	}
 
 	if err := writeBinMapLines(mapPath, filtered); err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing bin map: %s\n", err)
@@ -3110,6 +3176,22 @@ func binPathCommand() int {
 		return 1
 	}
 	fmt.Fprintln(os.Stdout, path)
+	return 0
+}
+
+func binListCommand() int {
+	_, lines, err := readBinMapLines()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading bin map: %s\n", err)
+		return 1
+	}
+
+	if len(lines) == 0 {
+		return 0
+	}
+
+	content := strings.Join(lines, "\n")
+	fmt.Fprintln(os.Stdout, content)
 	return 0
 }
 
@@ -3160,36 +3242,56 @@ func binAuditCommand() int {
 		return 1
 	}
 
-	entries, err := loadBinMapEntries()
+	_, lines, err := readBinMapLines()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error reading bin map: %s\n", err)
 		return 1
 	}
 
 	issues := make([]string, 0)
-	for _, entry := range entries {
-		if !filepath.IsAbs(entry.Path) {
-			issues = append(issues, fmt.Sprintf("not-absolute: %s %s", entry.Name, entry.Path))
+	for idx, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		fields := strings.Split(trimmed, "\t")
+		if len(fields) != 2 {
+			issues = append(issues, fmt.Sprintf("invalid-format: line %d", idx+1))
+			continue
+		}
+		name := strings.TrimSpace(fields[0])
+		path := strings.TrimSpace(fields[1])
+		if name == "" || path == "" {
+			issues = append(issues, fmt.Sprintf("invalid-format: line %d", idx+1))
+			continue
 		}
 
-		info, err := os.Lstat(entry.Path)
+		if hasPathSeparator(name) {
+			issues = append(issues, fmt.Sprintf("invalid-name: %s %s", name, path))
+		}
+
+		if !filepath.IsAbs(path) {
+			issues = append(issues, fmt.Sprintf("not-absolute: %s %s", name, path))
+		}
+
+		info, err := os.Lstat(path)
 		if err != nil {
 			if os.IsNotExist(err) {
-				issues = append(issues, fmt.Sprintf("missing: %s %s", entry.Name, entry.Path))
+				issues = append(issues, fmt.Sprintf("missing: %s %s", name, path))
 			} else {
-				issues = append(issues, fmt.Sprintf("missing: %s %s (%s)", entry.Name, entry.Path, err))
+				issues = append(issues, fmt.Sprintf("missing: %s %s (%s)", name, path, err))
 			}
 			continue
 		}
 
 		if info.Mode() & os.ModeSymlink != 0 {
-			if _, err := os.Stat(entry.Path); err != nil {
-				issues = append(issues, fmt.Sprintf("bad-symlink: %s %s", entry.Name, entry.Path))
+			if _, err := os.Stat(path); err != nil {
+				issues = append(issues, fmt.Sprintf("bad-symlink: %s %s", name, path))
 			}
 		}
 
-		if ok, err := isExecutableForAudit(entry.Path); err == nil && !ok {
-			issues = append(issues, fmt.Sprintf("\033[31mnot-executable: %s %s\033[0m", entry.Name, entry.Path))
+		if ok, err := isExecutableForAudit(path); err == nil && !ok {
+			issues = append(issues, fmt.Sprintf("\033[31mnot-executable: %s %s\033[0m", name, path))
 		}
 	}
 
@@ -3228,19 +3330,19 @@ func binDebugCommand(name string) int {
 	}
 
 	if binMapPath == "" {
-		fmt.Fprintln(os.Stdout, "Checked msh_bins: not found")
+		fmt.Fprintln(os.Stdout, "Checked msh_bins.txt: not found")
 	} else {
 		if _, err := os.Stat(binMapPath); err != nil {
 			if os.IsNotExist(err) {
-				fmt.Fprintf(os.Stdout, "Checked msh_bins: \033[31mfound at %s (missing)\033[0m\n", binMapPath)
+				fmt.Fprintf(os.Stdout, "Checked msh_bins.txt: \033[31mfound at %s (missing)\033[0m\n", binMapPath)
 			} else {
-				fmt.Fprintf(os.Stdout, "Checked msh_bins: \033[31mfound at %s (error: %s)\033[0m\n", binMapPath, err)
+				fmt.Fprintf(os.Stdout, "Checked msh_bins.txt: \033[31mfound at %s (error: %s)\033[0m\n", binMapPath, err)
 			}
 		} else {
 			if ok, err := isExecutableForAudit(binMapPath); err == nil && !ok {
-				fmt.Fprintf(os.Stdout, "Checked msh_bins: \033[31mfound at %s (not executable)\033[0m\n", binMapPath)
+				fmt.Fprintf(os.Stdout, "Checked msh_bins.txt: \033[31mfound at %s (not executable)\033[0m\n", binMapPath)
 			} else {
-				fmt.Fprintf(os.Stdout, "Checked msh_bins: \033[32mfound at %s\033[0m\n", binMapPath)
+				fmt.Fprintf(os.Stdout, "Checked msh_bins.txt: \033[32mfound at %s\033[0m\n", binMapPath)
 			}
 		}
 	}
@@ -3286,14 +3388,14 @@ func binDebugCommand(name string) int {
 	}
 
 	if binMapPath != "" {
-		fmt.Fprintf(os.Stdout, "Resolved by msh_bins: \033[32m%s\033[0m\n", binMapPath)
+		fmt.Fprintf(os.Stdout, "Resolved by msh_bins.txt: \033[32m%s\033[0m\n", binMapPath)
 	} else {
-		fmt.Fprintln(os.Stdout, "Resolved by msh_bins: not found")
+		fmt.Fprintln(os.Stdout, "Resolved by msh_bins.txt: not found")
 	}
 
 	success := false
 	if binMapPath != "" {
-		fmt.Fprintf(os.Stdout, "Final result: \033[32m%s -> %s from msh_bins\033[0m\n", name, binMapPath)
+		fmt.Fprintf(os.Stdout, "Final result: \033[32m%s -> %s from msh_bins.txt\033[0m\n", name, binMapPath)
 		success = true
 	} else if foundPath != "" {
 		fmt.Fprintf(os.Stdout, "Final result: \033[32m%s -> %s from PATH\033[0m\n", name, foundPath)
@@ -3325,6 +3427,10 @@ func isExecutableForAudit(path string) (bool, error) {
 	}
 
 	return (info.Mode() & 0111) != 0, nil
+}
+
+func hasPathSeparator(name string) bool {
+	return strings.ContainsRune(name, '/') || strings.ContainsRune(name, '\\')
 }
 
 type binSearchStatus int

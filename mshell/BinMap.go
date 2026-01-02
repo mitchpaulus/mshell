@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-const binMapFileName = "msh_bins"
+const binMapFileName = "msh_bins.txt"
 
 type BinMapEntry struct {
 	Name string
@@ -24,16 +24,16 @@ func BinMapPath() (string, error) {
 }
 
 func parseBinMapLine(line string) (BinMapEntry, bool) {
-	line = strings.TrimSpace(line)
-	if line == "" {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
 		return BinMapEntry{}, false
 	}
-	spaceIdx := strings.IndexByte(line, ' ')
-	if spaceIdx < 0 {
+	fields := strings.Split(trimmed, "\t")
+	if len(fields) != 2 {
 		return BinMapEntry{}, false
 	}
-	name := strings.TrimSpace(line[:spaceIdx])
-	path := strings.TrimSpace(line[spaceIdx+1:])
+	name := strings.TrimSpace(fields[0])
+	path := strings.TrimSpace(fields[1])
 	if name == "" || path == "" {
 		return BinMapEntry{}, false
 	}
@@ -97,7 +97,11 @@ func readBinMapLines() (string, []string, error) {
 	lines := make([]string, 0)
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
-		lines = append(lines, scanner.Text())
+		line := scanner.Text()
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		lines = append(lines, line)
 	}
 	if err := scanner.Err(); err != nil {
 		return "", nil, err

@@ -12,20 +12,23 @@ History search is prefix-based and case-insensitive. The prefix is whatever is c
 
 ### Binary map overrides
 
-mshell supports a simple bin map file that overrides PATH lookups. The file lives alongside the history files (e.g. `~/.local/share/msh/msh_bins` on Linux/macOS or `%LOCALAPPDATA%\mshell\msh_bins` on Windows).
+mshell supports a simple bin map file that overrides PATH lookups. The file lives alongside the history files (e.g. `~/.local/share/msh/msh_bins.txt` on Linux/macOS or `%LOCALAPPDATA%\mshell\msh_bins.txt` on Windows).
 
 Each line is a single mapping in the form:
 
 ```
-binary /full/path/to/binary
+binary	/full/path/to/binary
 ```
 
-mshell splits on the first space and trims both sides.
+mshell expects two tab-separated fields and trims both sides.
 
 CLI helpers:
 
 - `msh bin add <path>`: add/replace an entry using the file basename and absolute path (fails if the file does not exist)
-- `msh bin path`: print the msh_bins file path
+- `msh bin add <name> <path>`: add/replace an entry using the provided name and path (fails if the file does not exist)
+- `msh bin remove <name>`: remove an entry by binary name
+- `msh bin list`: print the bin map file contents
+- `msh bin path`: print the msh_bins.txt file path
 - `msh bin edit`: edit the bin map file in `$EDITOR`
 - `msh bin audit`: report entries that are missing, not absolute, broken symlinks, or not executable (and report if the file is missing)
 - `msh bin debug <name>`: print PATH/bin map lookup details for a binary
