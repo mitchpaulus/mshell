@@ -36,54 +36,9 @@ func (pbm *PathBinManager) Matches(search string) []string {
 
 
 func NewPathBinManager() IPathBinManager {
-	// Get the current path from the environment
-	currPath, exists := os.LookupEnv("PATH")
-	var currPathSlice []string
-	if !exists {
-		currPathSlice = make([]string, 0)
-	} else {
-		currPathSlice = strings.Split(currPath, ":")
-	}
-
-	var binaryPaths = make(map[string]string)
-
-	for _, pathItem := range currPathSlice {
-		// Stat the directory, look for executables
-		// dir, err := os.Open(pathItem)
-		// if err != nil {
-			// continue
-		// }
-		files, err := os.ReadDir(pathItem)
-		if err != nil {
-			continue
-		}
-
-		// First add all the executables to the binaryPaths map
-		// If already exists, skip
-		for _, file := range files {
-			if file.IsDir() {
-				continue
-			}
-
-			fileInfo, err := file.Info()
-			if err != nil {
-				continue
-			}
-
-			if fileInfo.Mode() & 0111 != 0 {
-				_, exists := binaryPaths[file.Name()]
-				if !exists {
-					binaryPaths[file.Name()] = pathItem + "/" + file.Name()
-				}
-			}
-		}
-	}
-
-	return &PathBinManager{
-		currPath: currPathSlice,
-		index: 0,
-		binaryPaths: binaryPaths,
-	}
+	pbm := PathBinManager{}
+	pbm.Update()
+	return &pbm
 }
 
 func (pbm *PathBinManager) DebugList() *MShellList {
@@ -216,6 +171,15 @@ func (pbm *PathBinManager) Update() {
 					binaryPaths[file.Name()] = pathItem + "/" + file.Name()
 				}
 			}
+		}
+	}
+
+	binMap, err := loadBinMap()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading bin map: %s\n", err)
+	} else {
+		for name, path := range binMap {
+			binaryPaths[name] = path
 		}
 	}
 

@@ -171,6 +171,15 @@ func (pbm *PathBinManager) Update() {
 		}
 	}
 
+	binMap, err := loadBinMap()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading bin map: %s\n", err)
+	} else {
+		for name, path := range binMap {
+			binaryPaths[strings.ToUpper(name)] = WinBinaryPath{ FullPath: path, OriginalFileName: name }
+		}
+	}
+
 	pbm.currPath = currPathSlice
 	pbm.binaryPaths = binaryPaths
 	pbm.pathExts = pathExtsSlice

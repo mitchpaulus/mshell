@@ -78,6 +78,15 @@ func (pbm *PathBinManager) Update() {
 		}
 	}
 
+	binMap, err := loadBinMap()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading bin map: %s\n", err)
+	} else {
+		for name, path := range binMap {
+			binaryPaths[name] = path
+		}
+	}
+
 	pbm.currPath = currPathSlice
 	pbm.binaryPaths = binaryPaths
 

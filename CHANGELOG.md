@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `toOleDate`
 - CLI history prefix search on Ctrl-N/Ctrl-P (case-insensitive)
 - Alt-. to cycle last argument from history in the CLI
+- Bin map file and `msh bin` CLI commands for binary overrides
 
 ## 0.8.0 - 2025-12-29
 
