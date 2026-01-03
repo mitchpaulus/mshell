@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Alt-. to cycle last argument from history in the CLI
 - Bin map file and `msh bin` CLI commands for binary overrides
 - `msh completions` subcommand for bash, fish, nushell, and elvish
+- CLI syntax highlighting for environment variables
 
 ## 0.8.0 - 2025-12-29
 
