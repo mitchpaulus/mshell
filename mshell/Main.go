@@ -871,6 +871,14 @@ func (s *TermState) Render() {
 				s.renderBuffer = append(s.renderBuffer, "\033[33m"...)
 				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
 				s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
+			} else if t.Type == ENVSTORE {
+				s.renderBuffer = append(s.renderBuffer, "\033[32m"...)
+				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
+				s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
+			} else if t.Type == ENVRETREIVE || t.Type == ENVCHECK {
+				s.renderBuffer = append(s.renderBuffer, "\033[33m"...)
+				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
+				s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
 			} else {
 				if i == commandLiteralIndex {
 					s.renderBuffer = append(s.renderBuffer, "\033[4;34m"...)
