@@ -1,0 +1,27 @@
+def mshCompletion ([str] -- [str])
+    input!
+    ['-h' '--help' '--html' '--lex' '--parse' '--version' '-c'] opts!
+    ['lsp' 'bin' 'completions'] subcommands!
+
+    @input len 0 >
+    (
+        @input :0: first!
+        @first 'lsp' =
+        ([]) # Nothing after lsp
+        (
+            @input 'bin' =
+            (
+                ['add' 'remove' 'list' 'path' 'edit' 'audit' 'debug']
+            )
+            (
+                []
+            )
+            iff
+        )
+        iff
+    )
+    (
+        @options @subcommands extend
+    )
+    iff
+end
