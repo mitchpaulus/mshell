@@ -1007,7 +1007,7 @@ func (s *TermState) commandLiteralTokenIndex(tokens []Token) int {
 	return -1
 }
 
-func (s *TermState) firstBinaryToken(tokens []Token) (Token, bool) {
+func (s *TermState) isFirstTokenBinary(tokens []Token) (Token, bool) {
 	for _, token := range tokens {
 		if token.Type == WHITESPACE || token.Type == LINECOMMENT {
 			continue
@@ -1929,7 +1929,7 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 		literalStr := p.curr.Lexeme
 
 		hasPipe := false
-		firstToken, firstTokenIsCmd := state.firstBinaryToken([]Token{p.curr})
+		firstToken, firstTokenIsCmd := state.isFirstTokenBinary([]Token{p.curr})
 		if firstTokenIsCmd {
 			literalStr = firstToken.Lexeme
 		}
@@ -2643,7 +2643,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			}
 
 			// Check if we are in binary completion
-			_, binaryCompletion := state.firstBinaryToken(tokens)
+			_, binaryCompletion := state.isFirstTokenBinary(tokens)
 			_ = binaryCompletion
 
 
