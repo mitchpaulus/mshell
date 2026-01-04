@@ -831,12 +831,14 @@ func (s *TermState) Render() {
 
 	tokens, err := s.l.Tokenize()
 	commandLiteralIndex := -1
+	firstTokenIsBinary := false
 	if err != nil {
 		for _, r := range s.currentCommand {
 			s.renderBuffer = utf8.AppendRune(s.renderBuffer, r)
 		}
 	} else {
 		commandLiteralIndex = s.commandLiteralTokenIndex(tokens)
+		_, firstTokenIsBinary = s.isFirstTokenBinary(tokens)
 
 		for i, t := range tokens {
 			if t.Type == STRING || t.Type == SINGLEQUOTESTRING || t.Type == FORMATSTRING {
@@ -879,6 +881,22 @@ func (s *TermState) Render() {
 				s.renderBuffer = append(s.renderBuffer, "\033[33m"...)
 				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
 				s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
+			} else if t.Type == LITERAL {
+				underlineLiteral := false
+				if firstTokenIsBinary {
+					if _, ok := BuiltInList[t.Lexeme]; ok || IsDefinitionDefined(t.Lexeme, s.stdLibDefs) {
+						underlineLiteral = true
+					}
+				}
+				if i == commandLiteralIndex {
+					s.renderBuffer = append(s.renderBuffer, "\033[4;34m"...)
+				} else if underlineLiteral {
+					s.renderBuffer = append(s.renderBuffer, "\033[4m"...)
+				}
+				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
+				if i == commandLiteralIndex || underlineLiteral {
+					s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
+				}
 			} else {
 				if i == commandLiteralIndex {
 					s.renderBuffer = append(s.renderBuffer, "\033[4;34m"...)
