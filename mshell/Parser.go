@@ -270,6 +270,7 @@ type MShellDefinition struct {
 	NameToken Token
 	Items     []MShellParseItem
 	TypeDef   TypeDefinition
+	Metadata  MShellParseDict
 }
 
 func (def *MShellDefinition) ToJson() string {
@@ -397,21 +398,29 @@ func (parser *MShellParser) ParseFile() (*MShellFile, error) {
 		case INDEXER, ENDINDEXER, STARTINDEXER, SLICEINDEXER:
 			indexerList := parser.ParseIndexer()
 			file.Items = append(file.Items, indexerList)
-		case DEF:
-			_ = parser.Match(parser.curr, DEF)
-			if parser.curr.Type != LITERAL {
-				return file, fmt.Errorf("%d: %d: Expected a name for the definition, got %s", parser.curr.Line, parser.curr.Column, parser.curr.Type)
-			}
+	case DEF:
+		_ = parser.Match(parser.curr, DEF)
+		if parser.curr.Type != LITERAL {
+			return file, fmt.Errorf("%d: %d: Expected a name for the definition, got %s", parser.curr.Line, parser.curr.Column, parser.curr.Type)
+		}
 
-			nameToken := parser.curr
-			def := MShellDefinition{Name: parser.curr.Lexeme, NameToken: nameToken, Items: []MShellParseItem{}, TypeDef: TypeDefinition{}}
-			_ = parser.Match(parser.curr, LITERAL)
+		nameToken := parser.curr
+		def := MShellDefinition{Name: parser.curr.Lexeme, NameToken: nameToken, Items: []MShellParseItem{}, TypeDef: TypeDefinition{}}
+		_ = parser.Match(parser.curr, LITERAL)
 
-			typeDef, err := parser.ParseTypeDefinition()
+		if parser.curr.Type == LEFT_CURLY {
+			metadata, err := parser.ParseStaticDict()
 			if err != nil {
 				return file, err
 			}
-			def.TypeDef = *typeDef
+			def.Metadata = *metadata
+		}
+
+		typeDef, err := parser.ParseTypeDefinition()
+		if err != nil {
+			return file, err
+		}
+		def.TypeDef = *typeDef
 
 			for {
 				if parser.curr.Type == END {
@@ -1527,6 +1536,49 @@ func (parser *MShellParser) ParseDict() (*MShellParseDict, error) {
 	return dict, nil
 }
 
+func (parser *MShellParser) ParseStaticDict() (*MShellParseDict, error) {
+	dict := &MShellParseDict{}
+	dict.StartToken = parser.curr
+	err := parser.Match(parser.curr, LEFT_CURLY)
+	if err != nil {
+		return dict, err
+	}
+
+	dict.Items = []MShellParseDictKeyValue{}
+	for {
+		if parser.curr.Type == RIGHT_CURLY {
+			break
+		} else if parser.curr.Type == EOF {
+			return dict, fmt.Errorf("Did not find closing '}' for metadata dict beginning at line %d, column %d.", dict.StartToken.Line, dict.StartToken.Column)
+		} else {
+			keyValue, err := parser.parseStaticDictKeyValue()
+			if err != nil {
+				return dict, err
+			}
+			dict.Items = append(dict.Items, keyValue)
+		}
+	}
+
+	dict.EndToken = parser.curr
+	err = parser.Match(parser.curr, RIGHT_CURLY)
+	if err != nil {
+		return dict, err
+	}
+
+	keys := make([]string, 0, len(dict.Items))
+	for _, item := range dict.Items {
+		keys = append(keys, item.Key)
+	}
+	sort.Strings(keys)
+	for i := 1; i < len(keys); i++ {
+		if keys[i] == keys[i-1] {
+			return dict, fmt.Errorf("Duplicate key '%s' found in metadata dict at line %d, column %d.", keys[i], dict.StartToken.Line, dict.StartToken.Column)
+		}
+	}
+
+	return dict, nil
+}
+
 func (parser *MShellParser) parseDictKeyValue() (MShellParseDictKeyValue, error) {
 	// Else expect a literal or string key.
 	keyToken := parser.curr.Type
@@ -1589,6 +1641,63 @@ func (parser *MShellParser) parseDictKeyValue() (MShellParseDictKeyValue, error)
 	return MShellParseDictKeyValue{Key: key, Value: valueItems}, nil
 }
 
+func (parser *MShellParser) parseStaticDictKeyValue() (MShellParseDictKeyValue, error) {
+	keyToken := parser.curr.Type
+	if keyToken != LITERAL && keyToken != STRING && keyToken != SINGLEQUOTESTRING && keyToken != INTEGER && keyToken != STARTINDEXER {
+		return MShellParseDictKeyValue{}, fmt.Errorf("Expected a key for metadata dict, got %s at line %d, column %d.", keyToken, parser.curr.Line, parser.curr.Column)
+	}
+
+	var key string
+	var err error
+	if keyToken == STRING {
+		key, err = ParseRawString(parser.curr.Lexeme)
+		if err != nil {
+			return MShellParseDictKeyValue{}, fmt.Errorf("Error parsing metadata dict string key: %s at line %d, column %d.", err.Error(), parser.curr.Line, parser.curr.Column)
+		}
+	} else if keyToken == SINGLEQUOTESTRING {
+		key = parser.curr.Lexeme[1 : len(parser.curr.Lexeme)-1]
+	} else if keyToken == LITERAL {
+		key = parser.curr.Lexeme
+	} else if keyToken == INTEGER {
+		intVal, _ := strconv.Atoi(parser.curr.Lexeme)
+		key = strconv.Itoa(intVal)
+	} else if keyToken == STARTINDEXER {
+		indexStr := parser.curr.Lexeme[:len(parser.curr.Lexeme)-1]
+		intVal, _ := strconv.Atoi(indexStr)
+		key = strconv.Itoa(intVal)
+	} else {
+		return MShellParseDictKeyValue{}, fmt.Errorf("Expected a key for metadata dict, got %s at line %d, column %d.", keyToken, parser.curr.Line, parser.curr.Column)
+	}
+
+	parser.NextToken()
+	if keyToken != STARTINDEXER {
+		err = parser.MatchWithMessage(parser.curr, COLON, fmt.Sprintf("Expected ':' after key %s at line %d, column %d.", key, parser.curr.Line, parser.curr.Column))
+		if err != nil {
+			return MShellParseDictKeyValue{}, err
+		}
+	}
+
+	var valueItems []MShellParseItem
+	for {
+		if parser.curr.Type == COMMA {
+			parser.NextToken()
+			break
+		} else if parser.curr.Type == RIGHT_CURLY {
+			break
+		} else if parser.curr.Type == EOF {
+			return MShellParseDictKeyValue{}, fmt.Errorf("Unexpected EOF while parsing metadata dict at line %d, column %d.", parser.curr.Line, parser.curr.Column)
+		} else {
+			item, err := parser.ParseStaticItem()
+			if err != nil {
+				return MShellParseDictKeyValue{}, err
+			}
+			valueItems = append(valueItems, item)
+		}
+	}
+
+	return MShellParseDictKeyValue{Key: key, Value: valueItems}, nil
+}
+
 func (parser *MShellParser) ParseList() (*MShellParseList, error) {
 	list := &MShellParseList{}
 	list.StartToken = parser.curr
@@ -1603,6 +1712,34 @@ func (parser *MShellParser) ParseList() (*MShellParseList, error) {
 			return list, fmt.Errorf("Did not find closing ']' for list beginning at line %d, column %d.", list.StartToken.Line, list.StartToken.Column)
 		} else {
 			item, err := parser.ParseItem()
+			if err != nil {
+				return list, err
+			}
+			list.Items = append(list.Items, item)
+		}
+	}
+	list.EndToken = parser.curr
+	err = parser.Match(parser.curr, RIGHT_SQUARE_BRACKET)
+	if err != nil {
+		return list, err
+	}
+	return list, nil
+}
+
+func (parser *MShellParser) ParseStaticList() (*MShellParseList, error) {
+	list := &MShellParseList{}
+	list.StartToken = parser.curr
+	err := parser.Match(parser.curr, LEFT_SQUARE_BRACKET)
+	if err != nil {
+		return list, err
+	}
+	for {
+		if parser.curr.Type == RIGHT_SQUARE_BRACKET {
+			break
+		} else if parser.curr.Type == EOF {
+			return list, fmt.Errorf("Did not find closing ']' for metadata list beginning at line %d, column %d.", list.StartToken.Line, list.StartToken.Column)
+		} else {
+			item, err := parser.ParseStaticItem()
 			if err != nil {
 				return list, err
 			}
@@ -1639,6 +1776,21 @@ func (parser *MShellParser) ParseItem() (MShellParseItem, error) {
 		return parser.ParseGetter()
 	default:
 		return parser.ParseSimple(), nil
+	}
+}
+
+func (parser *MShellParser) ParseStaticItem() (MShellParseItem, error) {
+	switch parser.curr.Type {
+	case LEFT_SQUARE_BRACKET:
+		return parser.ParseStaticList()
+	case LEFT_CURLY:
+		return parser.ParseStaticDict()
+	case STRING, SINGLEQUOTESTRING, INTEGER, FLOAT, TRUE, FALSE:
+		return parser.ParseSimple(), nil
+	case FORMATSTRING:
+		return nil, fmt.Errorf("Interpolated strings are not allowed in metadata at line %d, column %d.", parser.curr.Line, parser.curr.Column)
+	default:
+		return nil, fmt.Errorf("Expected static metadata value at line %d, column %d, got %s.", parser.curr.Line, parser.curr.Column, parser.curr.Type)
 	}
 }
 

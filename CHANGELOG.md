@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Functions
   - `fromOleDate`
   - `toOleDate`
+- Function definition metadata dictionaries in `def` signatures
 - CLI history prefix search on Ctrl-N/Ctrl-P (case-insensitive)
 - Alt-. to cycle last argument from history in the CLI
 - Bin map file and `msh bin` CLI commands for binary overrides

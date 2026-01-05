@@ -145,6 +145,18 @@ Dates can be subtracted from each other, and the result is a float number of day
 2023-10-02 2023-10-01 - # 1.0
 ```
 
+## Definitions
+
+Definitions use `def` with an optional metadata dictionary before the type signature.
+
+```mshell
+def myfunction { 'key': 10 } (str -- str)
+  ...
+end
+```
+
+Metadata values must be static: strings (single or double quoted), integers, floats, booleans, or nested lists/dicts of the same. Interpolated strings are not allowed.
+
 ## Built-ins
 
 - `.s`: Print stack at current location (--)
