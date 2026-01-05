@@ -23,6 +23,8 @@ def mshCompletion { 'complete': ['msh' 'mshell'] } ([str] -- [str])
 end
 ```
 
+The standard library includes `__gitCompletion` for git argument completion.
+
 ### Shell completions
 
 mshell can emit shell completion scripts for:
