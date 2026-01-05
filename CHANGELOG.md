@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Functions
   - `fromOleDate`
   - `toOleDate`
+  - `__gitCompletion`
+- Function definition metadata dictionaries in `def` signatures
+- Definition-based CLI completions via the `complete` metadata key
+- CLI completions for:
+  - `msh`
+  - `git`
+  - `fd`
+  - `rg`
 - CLI history prefix search on Ctrl-N/Ctrl-P (case-insensitive)
 - Alt-. to cycle last argument from history in the CLI
 - Bin map file and `msh bin` CLI commands for binary overrides
