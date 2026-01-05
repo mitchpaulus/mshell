@@ -832,12 +832,14 @@ func (s *TermState) Render() {
 
 	tokens, err := s.l.Tokenize()
 	commandLiteralIndex := -1
+	firstTokenIsBinary := false
 	if err != nil {
 		for _, r := range s.currentCommand {
 			s.renderBuffer = utf8.AppendRune(s.renderBuffer, r)
 		}
 	} else {
 		commandLiteralIndex = s.commandLiteralTokenIndex(tokens)
+		_, firstTokenIsBinary = s.isFirstTokenBinary(tokens)
 
 		for i, t := range tokens {
 			if t.Type == STRING || t.Type == SINGLEQUOTESTRING || t.Type == FORMATSTRING {
@@ -880,6 +882,22 @@ func (s *TermState) Render() {
 				s.renderBuffer = append(s.renderBuffer, "\033[33m"...)
 				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
 				s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
+			} else if t.Type == LITERAL {
+				underlineLiteral := false
+				if firstTokenIsBinary {
+					if _, ok := BuiltInList[t.Lexeme]; ok || IsDefinitionDefined(t.Lexeme, s.stdLibDefs) {
+						underlineLiteral = true
+					}
+				}
+				if i == commandLiteralIndex {
+					s.renderBuffer = append(s.renderBuffer, "\033[4;34m"...)
+				} else if underlineLiteral {
+					s.renderBuffer = append(s.renderBuffer, "\033[4m"...)
+				}
+				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
+				if i == commandLiteralIndex || underlineLiteral {
+					s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
+				}
 			} else {
 				if i == commandLiteralIndex {
 					s.renderBuffer = append(s.renderBuffer, "\033[4;34m"...)
@@ -1008,7 +1026,7 @@ func (s *TermState) commandLiteralTokenIndex(tokens []Token) int {
 	return -1
 }
 
-func (s *TermState) firstBinaryToken(tokens []Token) (Token, bool) {
+func (s *TermState) isFirstTokenBinary(tokens []Token) (Token, bool) {
 	for _, token := range tokens {
 		if token.Type == WHITESPACE || token.Type == LINECOMMENT {
 			continue
@@ -2092,7 +2110,7 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 		literalStr := p.curr.Lexeme
 
 		hasPipe := false
-		firstToken, firstTokenIsCmd := state.firstBinaryToken([]Token{p.curr})
+		firstToken, firstTokenIsCmd := state.isFirstTokenBinary([]Token{p.curr})
 		if firstTokenIsCmd {
 			literalStr = firstToken.Lexeme
 		}
@@ -2806,8 +2824,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			}
 
 			// Check if we are in binary completion
-			binaryToken, binaryCompletion := state.firstBinaryToken(tokens)
-
+			binaryToken, binaryCompletion := state.isFirstTokenBinary(tokens)
 
 			replaceStart := state.index - lastTokenLength
 			replaceEnd := state.index

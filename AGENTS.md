@@ -29,6 +29,9 @@ Always make sure to update the documentation appropriately.
 In the `CHANGELOG.md` file, add the new function as a line under the ## Unreleased (create if necessary), ### Added heading.
 If there are multiple functions, group under a `- Functions` bullet.
 
+Right now, the functions are defined in dumb way, requiring us to track all the known built-ins in a separate map at `mshell/BuiltInList.go`.
+If something is added or removed, make sure to update `mshell/BuiltInList.go`.
+
 ## CLI
 
 The CLI code is at `mshell/Main.go`.

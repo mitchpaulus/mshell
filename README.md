@@ -79,6 +79,7 @@ Note that you'll also need the environment variable `MSHSTDLIB` pointing to the 
 # TODO
 
 - Job control. Right now, if you CTRL-c a long running process, it kills the entire shell.
+- Pattern matching syntax.
 - Type checking.
 - Improved error messages.
 - Built in file manager (like [Elvish](https://elv.sh/)).
