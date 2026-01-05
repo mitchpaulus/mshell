@@ -1007,6 +1007,35 @@ func (s *TermState) commandLiteralTokenIndex(tokens []Token) int {
 	return -1
 }
 
+func (s *TermState) firstBinaryToken(tokens []Token) (Token, bool) {
+	for _, token := range tokens {
+		if token.Type == WHITESPACE || token.Type == LINECOMMENT {
+			continue
+		}
+		if token.Type != LITERAL {
+			return Token{}, false
+		}
+
+		literalStr := token.Lexeme
+		firstTokenIsCmd := false
+		_, isInPath := s.context.Pbm.Lookup(literalStr)
+		if isInPath {
+			firstTokenIsCmd = true
+		} else {
+			// This is a secondary check to capture things like 'cd'.
+			_, firstTokenIsCmd = knownCommands[literalStr]
+		}
+
+		if ((strings.Contains(literalStr, string(os.PathSeparator)) && s.context.Pbm.IsExecutableFile(literalStr)) || firstTokenIsCmd) && !IsDefinitionDefined(literalStr, s.stdLibDefs) {
+			return token, true
+		}
+
+		return Token{}, false
+	}
+
+	return Token{}, false
+}
+
 type HistoryItem struct {
 	UnixTimeUtc int64
 	Directory   string
@@ -1892,22 +1921,18 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 
 	fmt.Fprintf(state.f, "Executing Command: '%s'\n", currentCommandStr)
 	state.l.resetInput(currentCommandStr)
+
 	state.p.NextToken()
 
 	if p.curr.Type == LITERAL {
 		// Check for known commands. If so, we'll essentially wrap the entire command in a list to execute
 		literalStr := p.curr.Lexeme
 
-		firstTokenIsCmd := false
-		_, isInPath := state.context.Pbm.Lookup(literalStr)
-		if isInPath {
-			firstTokenIsCmd = true
-		} else {
-			// This is a secondary check to capture things like 'cd'.
-			_, firstTokenIsCmd = knownCommands[literalStr]
-		}
-
 		hasPipe := false
+		firstToken, firstTokenIsCmd := state.firstBinaryToken([]Token{p.curr})
+		if firstTokenIsCmd {
+			literalStr = firstToken.Lexeme
+		}
 		if ((strings.Contains(literalStr, string(os.PathSeparator)) && state.context.Pbm.IsExecutableFile(literalStr)) || firstTokenIsCmd) && !IsDefinitionDefined(literalStr, state.stdLibDefs) {
 			tokenBufBuilder.Reset()
 			// Clear token buffer
@@ -2578,6 +2603,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				state.l.allowUnterminatedString = false
 			}()
 
+			// Short circuit if we are actively in tab completion mode.
 			if state.tabCycleActive && len(state.tabCycleMatches) > 0 {
 				state.cycleTabCompletion(1)
 				return false, nil
@@ -2615,6 +2641,12 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 					}
 				}
 			}
+
+			// Check if we are in binary completion
+			_, binaryCompletion := state.firstBinaryToken(tokens)
+			_ = binaryCompletion
+
+
 			replaceStart := state.index - lastTokenLength
 			replaceEnd := state.index
 
