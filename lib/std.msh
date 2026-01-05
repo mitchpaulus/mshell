@@ -756,4 +756,68 @@ def __gitCompletion { 'complete': ['git'] } ([str] -- [str])
     iff
 end
 # }}}
+# fd {{{
+def __fdDefaultOptions ( -- [str])
+    [
+        '-h' '--help' '-V' '--version' '-H' '--hidden' '-I' '--no-ignore' '-u' '--unrestricted'
+        '-g' '--glob' '-t' '--type' '-e' '--extension' '-x' '--exec' '-X' '--exec-batch'
+        '-E' '--exclude' '-p' '--full-path' '-a' '--absolute-path' '-L' '--follow'
+        '-d' '--max-depth' '--min-depth' '-S' '--size' '-s' '--case-sensitive' '-i' '--ignore-case'
+        '-c' '--color' '--threads' '--base-directory' '--path-separator' '--ignore-file'
+        '--one-file-system' '--changed-within' '--changed-before' '--max-results'
+        '--strip-cwd-prefix'
+    ]
+end
+
+def __fdCompletion { 'complete': ['fd'] } ([str] -- [str])
+    input! @input len 0 >
+    (
+        @input :-1: last!
+        ['-t' '--type'] (@last =) any
+        ( ['file' 'directory' 'symlink' 'executable' 'empty' 'socket' 'pipe' 'char-device' 'block-device'] )
+        (
+            ['-c' '--color'] (@last =) any ( ['auto' 'always' 'never'] ) ( __fdDefaultOptions ) iff
+        )
+        iff
+    )
+    ( __fdDefaultOptions )
+    iff
+end
+# }}}
+# rg {{{
+def __rgDefaultOptions ( -- [str])
+    [
+        '-h' '--help' '--version' '-g' '--glob' '-F' '--fixed-strings' '-e' '--regexp'
+        '-i' '--ignore-case' '-S' '--smart-case' '-s' '--case-sensitive' '-U' '--multiline'
+        '-u' '--unrestricted' '-w' '--word-regexp' '-x' '--line-regexp'
+        '-v' '--invert-match' '-c' '--count' '-l' '--files-with-matches'
+        '--files-without-match' '--files' '--no-messages' '--follow' '--hidden' '--no-ignore'
+        '--one-file-system' '-t' '--type' '-T' '--type-not' '--type-add'
+        '--glob-case-insensitive' '-C' '--context' '-B' '--before-context' '-A' '--after-context'
+        '-m' '--max-count' '--max-depth' '--max-filesize' '--max-columns' '--max-columns-preview'
+        '--mmap' '--no-mmap' '--threads' '--pcre2' '--no-pcre2'
+        '--color' '--colors' '--heading' '-n' '--line-number' '--column' '--no-line-number'
+        '-H' '--with-filename' '--no-filename' '--no-heading' '--json'
+        '--sort' '--sortr' '--type-list'
+    ]
+end
+
+def __rgCompletion { 'complete': ['rg'] } ([str] -- [str])
+    input!
+    @input len 0 >
+    (
+        @input :-1: last!
+        ['-t' '--type'] (@last =) any
+        (
+            ['rg' '--type-list'] * ; lines (":" split :0:) map
+        )
+        (
+            ['--color'] (@last =) any ( ['auto' 'always' 'never'] ) ( __rgDefaultOptions ) iff
+        )
+        iff
+    )
+    ( __rgDefaultOptions )
+    iff
+end
+# }}}
 # }}}
