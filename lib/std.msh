@@ -372,3 +372,388 @@ end
 def 2tuple (a b -- [a])
     [] rot append swap append
 end
+
+# COMPLETIONS {{{
+# msh {{{
+def __mshCompletion { 'complete': ['msh' 'mshell'] } ([str] -- [str])
+    input!
+    ['-h' '--help' '--html' '--lex' '--parse' '--version' '-c'] options!
+    ['lsp' 'bin' 'completions'] subcommands!
+
+    @input len 0 >
+    (
+        @input :0: first!
+        @first 'lsp' =
+        ([]) # Nothing after lsp
+        (
+            @input :0: 'bin' =
+            (
+                ['add' 'remove' 'list' 'path' 'edit' 'audit' 'debug']
+            )
+            (
+                @input :0: 'completions' =
+                (
+                    ['fish' 'bash' 'nushell' 'elvish']
+                )
+                (
+                    []
+                ) iff
+            )
+            iff
+        )
+        iff
+    )
+    (
+        @options @subcommands extend
+    )
+    iff
+end
+# }}}
+# git {{{
+def __gitOptionsForSubcmd (str -- [str])
+    cmd!
+    {
+        "add": [
+            "-n" "--dry-run" "-v" "--verbose" "-f" "--force" "-i" "--interactive" "-p" "--patch"
+            "-e" "--edit" "-u" "--update" "-A" "--all" "-N" "--intent-to-add" "--refresh"
+            "--ignore-errors" "--ignore-missing" "--pathspec-from-file" "--pathspec-file-nul"
+        ],
+        "am": [
+            "-s" "--signoff" "-k" "--keep" "--keep-non-patch" "--no-keep-cr" "-c" "--scissors"
+            "--no-scissors" "-q" "--quiet" "--no-utf8" "-3" "--3way" "--no-3way"
+            "--rerere-autoupdate" "--ignore-space-change" "--directory" "--exclude" "--include"
+            "--reject" "-i" "--interactive" "--committer-date-is-author-date" "--ignore-date"
+            "--skip" "--continue" "--abort" "--quit" "--whitespace" "--quoted-cr"
+        ],
+        "annotate": [
+            "-b" "--root" "-c" "-C" "-M" "-L" "-l" "-t" "-p" "--porcelain" "--line-porcelain"
+            "--incremental" "--contents" "-S" "--reverse" "-w" "-f" "--show-name" "-n" "--show-number"
+            "-s" "--suppress" "-e" "--show-email" "--date"
+        ],
+        "apply": [
+            "--stat" "--numstat" "--summary" "--check" "--index" "--cached" "--intent-to-add"
+            "-3" "--3way" "-R" "--reverse" "--reject" "--unidiff-zero" "--apply" "--no-add"
+            "--allow-binary-replacement" "--binary" "--exclude" "--include" "--directory"
+            "--ignore-space-change" "--ignore-whitespace" "--whitespace" "--inaccurate-eof"
+            "-v" "--verbose" "--recount" "--unsafe-paths"
+        ],
+        "archive": [
+            "-l" "--list" "-v" "--verbose" "--worktree-attributes" "--format" "--prefix"
+            "-o" "--output" "--add-file" "--remote" "--exec"
+        ],
+        "bisect": [
+            "start" "bad" "new" "good" "old" "terms" "skip" "reset" "visualize" "replay" "log" "run" "help"
+            "--no-checkout" "--first-parent" "--term-new" "--term-bad" "--term-old" "--term-good"
+        ],
+        "blame": [
+            "-b" "--root" "-c" "-C" "-M" "-L" "-l" "-t" "-p" "--porcelain" "--line-porcelain"
+            "--incremental" "--contents" "-S" "--reverse" "-w" "-f" "--show-name" "-n" "--show-number"
+            "-s" "--suppress" "-e" "--show-email" "--date"
+        ],
+        "branch": [
+            "-d" "--delete" "-D" "-m" "--move" "-M" "-c" "--copy" "-C" "-f" "--force"
+            "-a" "--all" "-r" "--remotes" "-t" "--track" "--no-track" "--set-upstream-to"
+            "--unset-upstream" "--merged" "--no-merged" "--contains" "--no-contains"
+            "--edit-description" "-l" "--list" "--sort" "--color"
+        ],
+        "checkout": [
+            "-b" "-B" "-t" "--track" "--no-track" "-f" "--force" "-q" "--quiet" "--detach"
+            "--guess" "--no-guess" "--overlay" "--no-overlay" "--recurse-submodules" "--no-recurse-submodules"
+            "--progress" "--no-progress" "--conflict=merge" "--conflict=diff3" "--ours" "--theirs"
+            "--pathspec-from-file" "--pathspec-file-nul"
+        ],
+        "cherry": [
+            "-v"
+        ],
+        "cherry-pick": [
+            "-e" "--edit" "-x" "-n" "--no-commit" "-s" "--signoff" "--ff" "--continue" "--abort"
+            "--skip" "--quit" "-m" "--mainline" "-S" "--gpg-sign" "--no-gpg-sign"
+            "--strategy" "-X" "--strategy-option"
+        ],
+        "clean": [
+            "-n" "--dry-run" "-f" "--force" "-i" "--interactive" "-q" "--quiet" "-d" "-x" "-X"
+            "-e" "--exclude"
+        ],
+        "clone": [
+            "-q" "--quiet" "-v" "--verbose" "-n" "--no-checkout" "--bare" "--mirror" "-o" "--origin"
+            "-b" "--branch" "--depth" "--filter" "--single-branch" "--no-single-branch" "--recursive"
+            "--recurse-submodules" "--jobs" "--shallow-submodules" "--no-shallow-submodules"
+            "--dissociate" "--reference" "--progress" "--no-tags" "--tags" "--shallow-since"
+            "--shallow-exclude" "--remote-submodules" "--no-remote-submodules" "--server-option"
+            "--no-reject-shallow" "--reject-shallow" "--sparse" "--separate-git-dir" "--template"
+            "--upload-pack" "--config"
+        ],
+        "commit": [
+            "--amend" "-a" "--all" "-p" "--patch" "-m" "--message" "-c" "--reedit-message"
+            "-C" "--reuse-message" "-F" "--file" "-e" "--edit" "-q" "--quiet" "-v" "--verbose"
+            "-n" "--no-verify" "-S" "--gpg-sign" "--no-gpg-sign" "--fixup" "--squash"
+            "--reset-author" "--no-edit" "--signoff" "--no-signoff" "--author" "--date"
+            "--cleanup" "--status" "--no-status" "--allow-empty" "--allow-empty-message"
+            "--only" "--include" "--pathspec-from-file" "--pathspec-file-nul"
+        ],
+        "describe": [
+            "--dirty" "--broken" "--all" "--tags" "--contains" "--abbrev" "--candidates"
+            "--exact-match" "--debug" "--long" "--match" "--exclude" "--always" "--first-parent"
+        ],
+        "diff": [
+            "--cached" "--staged" "--stat" "--numstat" "--shortstat" "--summary" "-p" "--patch"
+            "--name-only" "--name-status" "--color" "--no-color" "-U" "--unified" "--word-diff"
+            "--word-diff-regex" "-b" "--ignore-space-change" "-w" "--ignore-all-space"
+            "--ignore-space-at-eol" "--ignore-blank-lines" "--diff-filter" "-M" "--find-renames"
+            "-C" "--find-copies" "--find-copies-harder" "--no-renames" "--relative"
+            "--src-prefix" "--dst-prefix" "--no-prefix" "--submodule" "--dirstat" "--patience"
+            "--histogram"
+        ],
+        "fetch": [
+            "-q" "--quiet" "-v" "--verbose" "-a" "--append" "-f" "--force" "-p" "--prune"
+            "--all" "-t" "--tags" "--no-tags" "-P" "--prune-tags" "--prefetch" "--refetch"
+            "--dry-run" "--depth" "--deepen" "--shallow-since" "--shallow-exclude" "--unshallow"
+            "--update-shallow" "-k" "--keep" "-u" "--update-head-ok" "--progress" "--no-progress"
+            "--refmap" "--filter" "-4" "--ipv4" "-6" "--ipv6" "--negotiation-tip"
+            "--recurse-submodules" "--jobs" "--show-forced-updates" "--no-show-forced-updates"
+        ],
+        "format-patch": [
+            "-o" "--output-directory" "--stdout" "-p" "--no-stat" "--stat" "--numstat"
+            "--shortstat" "--summary" "--no-renames" "--full-index" "--binary" "-a" "--text"
+            "--ignore-space-at-eol" "-b" "--ignore-space-change" "-w" "--ignore-all-space"
+            "--ignore-blank-lines" "-W" "--function-context" "--no-prefix" "--numbered"
+            "--no-numbered"
+        ],
+        "gc": [
+            "--aggressive" "--auto" "--prune" "--no-prune" "--quiet" "--force" "--keep-largest-pack"
+        ],
+        "grep": [
+            "--cached" "--no-index" "--untracked" "--exclude-standard" "--recurse-submodules"
+            "-a" "--text" "--textconv" "--no-textconv" "-i" "--ignore-case" "-I"
+            "-r" "--recursive" "--no-recursive" "-w" "--word-regexp" "-v" "--invert-match"
+            "-E" "--extended-regexp" "-G" "--basic-regexp" "-P" "--perl-regexp" "-F" "--fixed-strings"
+            "-n" "--line-number" "--column" "-l" "--files-with-matches" "-L" "--files-without-match"
+            "-z" "--null" "-o" "--only-matching" "-c" "--count" "--no-color" "--break" "--heading"
+            "-p" "--show-function" "-W" "--function-context" "-e" "--and" "--or" "--not" "--all-match"
+            "--max-depth" "--threads" "-C" "--context" "-A" "--after-context" "-B" "--before-context"
+        ],
+        "init": [
+            "-q" "--quiet" "--bare" "--template" "--separate-git-dir" "--shared"
+            "-b" "--initial-branch" "--object-format"
+        ],
+        "log": [
+            "--follow" "--no-decorate" "--decorate" "--source" "--stat" "--numstat" "--shortstat"
+            "--summary" "-p" "--patch" "--name-only" "--name-status" "--abbrev-commit" "--no-abbrev-commit"
+            "--oneline" "--pretty" "--format" "--graph" "--since" "--until" "--author" "--committer"
+            "--grep" "--all" "--branches" "--tags" "--remotes" "-n" "--max-count" "--skip"
+            "--reverse" "--no-merges" "--merges" "--first-parent" "--diff-filter" "--relative"
+        ],
+        "merge": [
+            "--commit" "--no-commit" "-e" "--edit" "--no-edit" "--ff" "--no-ff" "--ff-only"
+            "--log" "--no-log" "--stat" "-n" "--no-stat" "--squash" "--no-squash"
+            "-s" "--strategy" "-X" "--strategy-option" "--verify-signatures" "--no-verify-signatures"
+            "-q" "--quiet" "-v" "--verbose" "--progress" "--no-progress" "--allow-unrelated-histories"
+            "--signoff" "--no-signoff" "--autostash" "--no-autostash" "--abort" "--continue"
+        ],
+        "mv": [
+            "-f" "--force" "-k" "-n" "--dry-run" "-v" "--verbose"
+        ],
+        "notes": [
+            "add" "copy" "append" "edit" "show" "merge" "remove" "prune" "get-ref" "list"
+            "-f" "--force" "-m" "--message" "-F" "--file" "-C" "--reuse-message"
+            "-c" "--reedit-message" "--stdin" "-v" "--verbose" "-q" "--quiet" "--allow-empty"
+            "--commit" "--abort" "-s" "--strategy"
+        ],
+        "pull": [
+            "-q" "--quiet" "-v" "--verbose" "-a" "--append" "-f" "--force" "-p" "--prune"
+            "--all" "--no-tags" "--tags" "--progress" "--no-progress" "--rebase" "--no-rebase"
+            "--ff" "--no-ff" "--ff-only" "--squash" "--no-squash" "--autostash" "--no-autostash"
+            "-s" "--strategy" "-X" "--strategy-option" "--allow-unrelated-histories"
+            "--depth" "--deepen" "--shallow-since" "--shallow-exclude" "--unshallow" "--update-shallow"
+            "--jobs" "-4" "--ipv4" "-6" "--ipv6" "--upload-pack" "--recurse-submodules"
+        ],
+        "push": [
+            "--all" "--prune" "--mirror" "--delete" "--tags" "--follow-tags" "-n" "--dry-run"
+            "--porcelain" "-f" "--force" "--force-with-lease" "--force-if-includes"
+            "-u" "--set-upstream" "-q" "--quiet" "-v" "--verbose" "--progress" "--no-progress"
+            "--verify" "--no-verify" "--recurse-submodules" "--signed" "--no-signed"
+            "--atomic" "--no-atomic" "--push-option" "-o" "--repo" "--receive-pack" "--exec"
+            "-4" "--ipv4" "-6" "--ipv6"
+        ],
+        "rebase": [
+            "--continue" "--abort" "--skip" "--edit-todo" "-i" "--interactive" "-m" "--merge"
+            "-q" "--quiet" "-v" "--verbose" "--stat" "-n" "--no-stat" "--verify" "--no-verify"
+            "-f" "--force-rebase" "--committer-date-is-author-date" "--ignore-date"
+            "-p" "--preserve-merges" "-r" "--rebase-merges" "--root" "--autosquash"
+            "--no-autosquash" "--autostash" "--no-autostash" "--no-ff" "--onto" "--exec"
+        ],
+        "reset": [
+            "--soft" "--mixed" "--hard" "--merge" "--keep" "-q" "--quiet" "-p" "--patch"
+            "--pathspec-from-file" "--pathspec-file-nul"
+        ],
+        "restore": [
+            "-s" "--source" "-p" "--patch" "-W" "--worktree" "-S" "--staged"
+            "--ours" "--theirs" "-m" "--merge" "--ignore-unmerged" "--ignore-skip-worktree-bits"
+            "--overlay" "--no-overlay" "--pathspec-from-file" "--pathspec-file-nul"
+        ],
+        "revert": [
+            "--continue" "--abort" "--skip" "--quit" "-n" "--no-commit" "-e" "--edit" "--no-edit"
+            "-m" "--mainline" "-S" "--gpg-sign" "--no-gpg-sign" "-s" "--signoff"
+            "--rerere-autoupdate" "--no-rerere-autoupdate" "--strategy" "-X" "--strategy-option"
+        ],
+        "rm": [
+            "--cached" "--ignore-unmatch" "-r" "-q" "-f" "-n" "--dry-run" "--sparse"
+            "--pathspec-from-file" "--pathspec-file-nul"
+        ],
+        "show": [
+            "--pretty" "--format" "--abbrev-commit" "--no-abbrev-commit" "--oneline" "--encoding"
+            "--expand-tabs" "--no-expand-tabs" "--notes" "--no-notes" "--show-signature"
+            "-s" "--no-patch" "-p" "--patch" "--stat" "--numstat" "--shortstat" "--summary"
+            "--name-only" "--name-status"
+        ],
+        "shortlog": [
+            "-n" "--numbered" "-s" "--summary" "-e" "--email" "-c" "--committer" "--group" "--no-group"
+            "-w"
+        ],
+        "stash": [
+            "list" "show" "pop" "apply" "clear" "drop" "branch" "push"
+            "-a" "--all" "-u" "--include-untracked" "-k" "--keep-index" "-p" "--patch"
+            "-m" "--message" "-S" "--staged" "--no-keep-index"
+        ],
+        "status": [
+            "-s" "--short" "-b" "--branch" "--porcelain" "-z" "-u" "--untracked-files"
+            "--ignore-submodules" "-v" "--verbose" "--no-ahead-behind" "--renames" "--no-renames"
+            "--show-stash" "--column" "--no-column" "--pathspec-from-file" "--pathspec-file-nul"
+        ],
+        "switch": [
+            "-c" "--create" "-C" "--force-create" "-d" "--detach" "-f" "--force" "--discard-changes"
+            "-m" "--merge" "-t" "--track" "--no-track" "--guess" "--no-guess" "--orphan"
+            "--recurse-submodules" "--no-recurse-submodules" "--progress" "--no-progress" "-q" "--quiet"
+        ],
+        "tag": [
+            "-a" "--annotate" "-s" "--sign" "-d" "--delete" "-v" "--verify" "-f" "--force"
+            "-l" "--list" "--contains" "--no-contains" "-m" "--message" "-F" "--file"
+            "-u" "--local-user" "--cleanup" "--create-reflog" "--no-create-reflog" "--sort"
+            "--merged" "--no-merged" "--points-at" "--color" "--column" "--no-column"
+        ],
+        "worktree": [
+            "add" "list" "lock" "move" "prune" "remove" "unlock"
+            "-f" "--force" "-b" "-B" "--detach" "--checkout" "--no-checkout" "--guess-remote"
+            "--no-guess-remote" "--track" "--no-track" "--lock" "-q" "--quiet" "--porcelain"
+            "-n" "--dry-run" "-v" "--verbose" "--expire"
+        ],
+        "submodule": [
+            "add" "status" "init" "deinit" "update" "set-branch" "set-url" "summary" "foreach" "sync" "absorbgitdirs"
+            "--init" "--recursive" "--checkout" "--merge" "--rebase" "--remote" "--force" "--filter"
+            "--depth" "--jobs" "-q" "--quiet" "-b" "--branch"
+        ],
+        "remote": [
+            "-v" "--verbose" "add" "rm" "remove" "show" "prune" "update" "rename" "set-head" "set-url"
+            "get-url" "set-branches" "--tags" "--no-tags" "-f" "--force" "--add" "--delete" "--push"
+            "--all" "--dry-run" "--prune"
+        ]
+    }
+    @cmd get [] maybe
+end
+
+def __gitFilePaths ( -- [str])
+    ['git' 'ls-files'] * ; lines
+    ['git' 'status' '--porcelain'] * ; lines
+    (trim) map (len 0 >) filter
+    ('^.. ' '' reReplace) map
+    ('.* -> ' '' reReplace) map
+    extend uniq
+end
+
+def __gitCompletion { 'complete': ['git'] } ([str] -- [str])
+    input!
+    ['-h' '--help' '-v' '--version' '-C' '-c' '--git-dir' '--work-tree' '--namespace' '--paginate' '--no-pager'] globalOptions!
+
+    @input len 0 >
+    (
+        @input :0: subcmd!
+        @subcmd "-" startsWith
+        (
+            @globalOptions ['git' '--list-cmds=main'] * ; lines extend
+        )
+        (
+            ['add' 'am' 'annotate' 'apply' 'archive' 'bisect' 'blame' 'branch' 'checkout' 'cherry' 'cherry-pick' 'clean' 'clone' 'commit' 'describe' 'diff' 'fetch' 'format-patch' 'gc' 'grep' 'init' 'log' 'merge' 'mv' 'notes' 'pull' 'push' 'rebase' 'reset' 'restore' 'revert' 'rm' 'show' 'shortlog' 'stash' 'status' 'switch' 'tag' 'worktree' 'submodule' 'remote'] porcelainCommands!
+            ['checkout' 'switch' 'branch' 'merge' 'rebase' 'reset' 'restore' 'show' 'log' 'diff' 'cherry-pick' 'revert' 'tag' 'describe' 'notes'] refCommands!
+            ['fetch' 'pull' 'push'] remoteCommands!
+            ['list' 'show' 'pop' 'apply' 'drop' 'clear' 'branch' 'push'] stashSubcommands!
+            ['add' 'rm' 'remove' 'show' 'prune' 'update' 'rename' 'set-head' 'set-url' 'get-url' 'set-branches'] remoteSubcommands!
+            ['add' 'rm' 'mv' 'restore' 'checkout' 'reset' 'diff' 'status' 'commit' 'grep' 'show' 'log'] fileCommands!
+
+            @porcelainCommands (@subcmd =) any
+            (
+                @subcmd __gitOptionsForSubcmd subcmdOptions!
+            )
+            (
+                [] subcmdOptions!
+            )
+            iff
+
+            @globalOptions @subcmdOptions extend options!
+
+            @subcmd 'remote' =
+            (
+                @input len 1 =
+                (
+                    @options @remoteSubcommands extend
+                )
+                (
+                    @options ['git' 'remote'] * ; lines extend
+                )
+                iff
+            )
+            (
+                @subcmd 'stash' =
+                (
+                    @input len 1 =
+                    (
+                        @options @stashSubcommands extend
+                    )
+                    (
+                        @input :1: stashCmd!
+                        ['apply' 'pop' 'drop' 'show' 'branch'] needStash!
+                        @needStash (@stashCmd =) any
+                        (
+                            @options ['git' 'stash' 'list' '--format=%gd'] * ; lines extend
+                        )
+                        (
+                            @options
+                        )
+                        iff
+                    )
+                    iff
+                )
+                (
+                    @options completions!
+                    @remoteCommands (@subcmd =) any
+                    (
+                        @completions ['git' 'remote'] * ; lines extend completions!
+                    )
+                    ()
+                    iff
+                    @refCommands (@subcmd =) any
+                    (
+                        @completions ['git' 'for-each-ref' '--format=%(refname:short)' 'refs/heads' 'refs/remotes' 'refs/tags'] * ; lines extend completions!
+                    )
+                    ()
+                    iff
+                    @fileCommands (@subcmd =) any
+                    (
+                        @completions __gitFilePaths extend completions!
+                    )
+                    ()
+                    iff
+                    @completions
+                )
+                iff
+            )
+            iff
+        )
+        iff
+    )
+    (
+        @globalOptions ['git' '--list-cmds=main'] * ; lines extend
+    )
+    iff
+end
+# }}}
+# }}}
