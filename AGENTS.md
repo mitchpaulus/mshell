@@ -34,6 +34,12 @@ If there are multiple functions, group under a `- Functions` bullet.
 The CLI code is at `mshell/Main.go`.
 If you make a change to the CLI interface, make sure to update the shell completions.
 
+### Completions
+
+Completions for common commands are in the standard library `lib/std.msh` at the bottom.
+Wrap in a Vim fold, and make the definition following the pattern of the others.
+Completions definitions have key 'complete' in the definition meta data, where the value is the list of commands it is used for.
+
 ## Testing instructions
 
 All test cases are in `tests`.
