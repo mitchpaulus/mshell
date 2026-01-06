@@ -156,6 +156,31 @@ func getBoolOption(dict *MShellDict, key string) (bool, bool, error) {
 	return false, false, nil
 }
 
+func escapeMshellString(input string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range input {
+		switch r {
+		case '\\':
+			b.WriteString("\\\\")
+		case '"':
+			b.WriteString("\\\"")
+		case '\n':
+			b.WriteString("\\n")
+		case '\t':
+			b.WriteString("\\t")
+		case '\r':
+			b.WriteString("\\r")
+		case '\033':
+			b.WriteString("\\e")
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
+}
+
 func formatWithSigFigs(num float64, sigfigs int) string {
 	if num == 0 {
 		return fmt.Sprintf("0.%s", strings.Repeat("0", sigfigs))
@@ -990,6 +1015,18 @@ MainLoop:
 					}
 
 					stack.Push(MShellString{strings.ReplaceAll(originalStr, findStr, replacementStr)})
+				} else if t.Lexeme == "strEscape" {
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'strEscape' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					strToEscape, err := obj.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot escape a %s (%s).\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
+					}
+
+					stack.Push(MShellString{escapeMshellString(strToEscape)})
 				} else if t.Lexeme == "split" {
 					delimiter, strLiteral, err := stack.Pop2(t)
 					if err != nil {

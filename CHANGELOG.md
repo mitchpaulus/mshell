@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `fromOleDate`
   - `toOleDate`
   - `__gitCompletion`
+  - `strEscape`
 - Function definition metadata dictionaries in `def` signatures
 - Definition-based CLI completions via the `complete` metadata key
 - CLI completions for:
