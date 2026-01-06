@@ -57,6 +57,8 @@ const (
 	TABMATCHENVVAR
 	TABMATCHVAR
 	TABMATCHCMD
+	TABMATCHBUILTIN
+	TABMATCHDEF
 )
 
 var tempFiles []string
@@ -717,23 +719,24 @@ func (state *TermState) setTabCompletions(matches []string) {
 }
 
 func (state *TermState) buildCompletionInsert(match string, tokenType TokenType) string {
-	if tokenType == UNFINISHEDSINGLEQUOTESTRING {
+	switch tokenType {
+	case UNFINISHEDSINGLEQUOTESTRING:
 		return "'" + match
-	} else if tokenType == UNFINISHEDPATH {
+	case UNFINISHEDPATH:
 		insertString := "`" + match
 		if !strings.HasSuffix(match, string(os.PathSeparator)) {
 			insertString += "` "
 		}
 		return insertString
+	default:
+		state.l.resetInput(match)
+		tokens, err := state.l.Tokenize()
+		if len(tokens) > 2 && err == nil {
+			// Quote when the completion needs multiple tokens to parse.
+			return "'" + match + "'"
+		}
+		return match
 	}
-
-	state.l.resetInput(match)
-	tokens, err := state.l.Tokenize()
-	if len(tokens) > 2 && err == nil {
-		// Quote when the completion needs multiple tokens to parse.
-		return "'" + match + "'"
-	}
-	return match
 }
 
 func (state *TermState) cycleTabCompletion(direction int) {
@@ -2885,9 +2888,24 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 
 			// Try to complete on command names
 			if len(tokens) == 2 && len(prefix) > 0 && lastToken.Type == LITERAL {
+				seen := make(map[string]struct{})
 				binMatches := state.context.Pbm.Matches(prefix)
 				for _, match := range binMatches {
 					matches = append(matches, TabMatch{TABMATCHCMD, match})
+					seen[match] = struct{}{}
+				}
+
+			}
+
+			for name := range BuiltInList {
+				if strings.HasPrefix(name, prefix) {
+					matches = append(matches, TabMatch{TABMATCHBUILTIN, name})
+				}
+			}
+
+			for _, def := range state.stdLibDefs {
+				if strings.HasPrefix(def.Name, prefix) {
+					matches = append(matches, TabMatch{TABMATCHDEF, def.Name})
 				}
 			}
 
@@ -2976,11 +2994,12 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 					// Print bell
 					fmt.Fprintf(os.Stdout, "\a")
 				} else {
-					if lastToken.Type == UNFINISHEDSINGLEQUOTESTRING {
+					switch lastToken.Type {
+					case UNFINISHEDSINGLEQUOTESTRING:
 						longestCommonPrefix = "'" + longestCommonPrefix
-					} else if lastToken.Type == UNFINISHEDPATH {
+					case UNFINISHEDPATH:
 						longestCommonPrefix = "`" + longestCommonPrefix
-					} else {
+					default:
 						state.l.resetInput(longestCommonPrefix)
 						tokens, err := state.l.Tokenize()
 						if len(tokens) > 2 && err == nil {
