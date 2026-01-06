@@ -88,7 +88,14 @@ Double quoted strings have the following escape sequences:
 
 <p> If you have a backslash, and it isn't followed by one of the escape characters above, <code>msh</code> will throw an error. </p>
 
-<p> No escaping is done within single quoted strings or paths. </p>
+<p>No escaping is done within single quoted strings or paths.</p>
+
+<p> 
+<code>mshell</code> is implemented in <a href="https://go.dev">Go</a>. Therefore, it's important to understand how Go thinks about strings.
+<a href="https://go.dev/blog/strings">This blog post</a> explains the design of Go string handling.
+In short, if you stick to UTF-8 encoded strings and data, you should have a good time.
+If you have strings in other encodings, your results might have subtle differences.
+</p>
 
 <h1 id="data-type-path">Path <a class="section-link" href="#data-type-path" aria-label="Permalink">§</a> <a class="back-to-top" href="#data-types-top">Back to top</a></h1>
 <p> Since paths are such a common object to deal with in shell scripts, mshell has a dedicated type. </p>
