@@ -9,6 +9,9 @@ The standard library for the language is in `lib/std.msh`.
 Always work in a separate feature branch.
 Do NOT run `gofmt` without my permission. I will tell you when it's allowed.
 
+You do not have much training data on this language. Please read the HTML documentation in `doc/` to get a full understanding of the language.
+If you don't understand something, or don't find something in the docs, you MUST tell me, so it can be made clear for you and everyone else.
+
 ## Building
 
 In the `mshell` directory, there are several very simple build scripts that are one line `go build` commands.

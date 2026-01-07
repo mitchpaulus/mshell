@@ -651,13 +651,9 @@ def __gitOptionsForSubcmd (str -- [str])
     @cmd get [] maybe
 end
 
-def __gitFilePaths ( -- [str])
-    ['git' 'ls-files'] * ; lines
-    ['git' 'status' '--porcelain'] * ; lines
-    (trim) map (len 0 >) filter
-    ('^.. ' '' reReplace) map
-    ('.* -> ' '' reReplace) map
-    extend uniq
+# Prefer untracked files for git add completions, then changed files, then repo files.
+def __gitAddFilePaths ( -- [str])
+    ['git' 'status' '--porcelain'] * ; lines (trim len 0 >) filter ('->' in not) filter (3:) map
 end
 
 def __gitCompletion { 'complete': ['git'] } ([str] -- [str])
@@ -723,24 +719,37 @@ def __gitCompletion { 'complete': ['git'] } ([str] -- [str])
                     iff
                 )
                 (
-                    @options completions!
+                    @subcmd 'add' =
+                    (
+                        [] completions!
+                    )
+                    (
+                        @options completions!
+                    )
+                    iff
+
                     @remoteCommands (@subcmd =) any
                     (
                         @completions ['git' 'remote'] * ; lines extend completions!
                     )
-                    ()
                     iff
+
                     @refCommands (@subcmd =) any
                     (
                         @completions ['git' 'for-each-ref' '--format=%(refname:short)' 'refs/heads' 'refs/remotes' 'refs/tags'] * ; lines extend completions!
                     )
-                    ()
                     iff
+
                     @fileCommands (@subcmd =) any
                     (
-                        @completions __gitFilePaths extend completions!
+                        @subcmd 'add' = (@completions __gitAddFilePaths extend completions!) iff
                     )
-                    ()
+                    iff
+
+                    @subcmd 'add' =
+                    (
+                        @completions @options extend completions!
+                    )
                     iff
                     @completions
                 )
