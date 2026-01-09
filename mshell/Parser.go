@@ -265,6 +265,80 @@ func (quote *MShellParseQuote) DebugString() string {
 	return builder.String()
 }
 
+// MShellParseElseIf represents an else-if branch with its condition and body
+type MShellParseElseIf struct {
+	Condition []MShellParseItem
+	Body      []MShellParseItem
+}
+
+// MShellParseIfBlock represents an if/else-if/else/end block
+type MShellParseIfBlock struct {
+	IfBody     []MShellParseItem
+	ElseIfs    []MShellParseElseIf
+	ElseBody   []MShellParseItem
+	StartToken Token
+	EndToken   Token
+}
+
+func (ifBlock *MShellParseIfBlock) GetStartToken() Token {
+	return ifBlock.StartToken
+}
+
+func (ifBlock *MShellParseIfBlock) GetEndToken() Token {
+	return ifBlock.EndToken
+}
+
+func (ifBlock *MShellParseIfBlock) ToJson() string {
+	builder := strings.Builder{}
+	builder.WriteString("{\"if_body\": ")
+	builder.WriteString(ToJson(ifBlock.IfBody))
+	builder.WriteString(", \"else_ifs\": [")
+	for i, elseIf := range ifBlock.ElseIfs {
+		if i > 0 {
+			builder.WriteString(", ")
+		}
+		builder.WriteString("{\"condition\": ")
+		builder.WriteString(ToJson(elseIf.Condition))
+		builder.WriteString(", \"body\": ")
+		builder.WriteString(ToJson(elseIf.Body))
+		builder.WriteString("}")
+	}
+	builder.WriteString("], \"else_body\": ")
+	builder.WriteString(ToJson(ifBlock.ElseBody))
+	builder.WriteString("}")
+	return builder.String()
+}
+
+func (ifBlock *MShellParseIfBlock) DebugString() string {
+	builder := strings.Builder{}
+	builder.WriteString("if ")
+	for _, item := range ifBlock.IfBody {
+		builder.WriteString(item.DebugString())
+		builder.WriteString(" ")
+	}
+	for _, elseIf := range ifBlock.ElseIfs {
+		builder.WriteString("else* ")
+		for _, item := range elseIf.Condition {
+			builder.WriteString(item.DebugString())
+			builder.WriteString(" ")
+		}
+		builder.WriteString("*if ")
+		for _, item := range elseIf.Body {
+			builder.WriteString(item.DebugString())
+			builder.WriteString(" ")
+		}
+	}
+	if len(ifBlock.ElseBody) > 0 {
+		builder.WriteString("else ")
+		for _, item := range ifBlock.ElseBody {
+			builder.WriteString(item.DebugString())
+			builder.WriteString(" ")
+		}
+	}
+	builder.WriteString("end")
+	return builder.String()
+}
+
 type MShellDefinition struct {
 	Name      string
 	NameToken Token
@@ -398,6 +472,12 @@ func (parser *MShellParser) ParseFile() (*MShellFile, error) {
 		case INDEXER, ENDINDEXER, STARTINDEXER, SLICEINDEXER:
 			indexerList := parser.ParseIndexer()
 			file.Items = append(file.Items, indexerList)
+		case IF:
+			ifBlock, err := parser.ParseIfBlock()
+			if err != nil {
+				return file, err
+			}
+			file.Items = append(file.Items, ifBlock)
 	case DEF:
 		_ = parser.Match(parser.curr, DEF)
 		if parser.curr.Type != LITERAL {
@@ -1774,6 +1854,8 @@ func (parser *MShellParser) ParseItem() (MShellParseItem, error) {
 		return nil, errors.New("Unexpected EOF while parsing item")
 	case COLON:
 		return parser.ParseGetter()
+	case IF:
+		return parser.ParseIfBlock()
 	default:
 		return parser.ParseSimple(), nil
 	}
@@ -1862,4 +1944,98 @@ func (parser *MShellParser) ParseQuote() (*MShellParseQuote, error) {
 		return quote, err
 	}
 	return quote, nil
+}
+
+func (parser *MShellParser) ParseIfBlock() (*MShellParseIfBlock, error) {
+	ifBlock := &MShellParseIfBlock{StartToken: parser.curr}
+	err := parser.Match(parser.curr, IF)
+	if err != nil {
+		return ifBlock, err
+	}
+
+	// Parse the if body until we see ELSESTAR, ELSE, or END
+	for {
+		switch parser.curr.Type {
+		case ELSESTAR, ELSE, END:
+			goto DoneIfBody
+		case EOF:
+			return ifBlock, fmt.Errorf("Did not find 'end' for if block beginning at line %d, column %d.", ifBlock.StartToken.Line, ifBlock.StartToken.Column)
+		default:
+			item, err := parser.ParseItem()
+			if err != nil {
+				return ifBlock, err
+			}
+			ifBlock.IfBody = append(ifBlock.IfBody, item)
+		}
+	}
+DoneIfBody:
+
+	// Parse else-if branches
+	for parser.curr.Type == ELSESTAR {
+		parser.NextToken() // consume else*
+
+		elseIf := MShellParseElseIf{}
+
+		// Parse condition items until *if
+		for {
+			if parser.curr.Type == STARIF {
+				break
+			} else if parser.curr.Type == EOF {
+				return ifBlock, fmt.Errorf("Did not find '*if' for 'else*' in if block beginning at line %d, column %d.", ifBlock.StartToken.Line, ifBlock.StartToken.Column)
+			} else {
+				item, err := parser.ParseItem()
+				if err != nil {
+					return ifBlock, err
+				}
+				elseIf.Condition = append(elseIf.Condition, item)
+			}
+		}
+		parser.NextToken() // consume *if
+
+		// Parse else-if body until ELSESTAR, ELSE, or END
+		for {
+			switch parser.curr.Type {
+			case ELSESTAR, ELSE, END:
+				goto DoneElseIfBody
+			case EOF:
+				return ifBlock, fmt.Errorf("Did not find 'end' for if block beginning at line %d, column %d.", ifBlock.StartToken.Line, ifBlock.StartToken.Column)
+			default:
+				item, err := parser.ParseItem()
+				if err != nil {
+					return ifBlock, err
+				}
+				elseIf.Body = append(elseIf.Body, item)
+			}
+		}
+	DoneElseIfBody:
+		ifBlock.ElseIfs = append(ifBlock.ElseIfs, elseIf)
+	}
+
+	// Parse optional else body
+	if parser.curr.Type == ELSE {
+		parser.NextToken() // consume else
+
+		for {
+			if parser.curr.Type == END {
+				break
+			} else if parser.curr.Type == EOF {
+				return ifBlock, fmt.Errorf("Did not find 'end' for if block beginning at line %d, column %d.", ifBlock.StartToken.Line, ifBlock.StartToken.Column)
+			} else {
+				item, err := parser.ParseItem()
+				if err != nil {
+					return ifBlock, err
+				}
+				ifBlock.ElseBody = append(ifBlock.ElseBody, item)
+			}
+		}
+	}
+
+	// Match the closing 'end'
+	ifBlock.EndToken = parser.curr
+	err = parser.Match(parser.curr, END)
+	if err != nil {
+		return ifBlock, err
+	}
+
+	return ifBlock, nil
 }

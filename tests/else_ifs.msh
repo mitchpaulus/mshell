@@ -1,0 +1,550 @@
+# Basic if/else-if/else tests
+true if
+    "First quote" wl
+else* true  *if
+    "Else if" wl
+else
+    "Final else" wl
+end
+
+false if
+    "First quote" wl
+else* true  *if
+    "Else if" wl
+else
+    "Final else" wl
+end
+
+true if
+    "First quote" wl
+else* false  *if
+    "Else if" wl
+else
+    "Final else" wl
+end
+
+false if
+    "First quote" wl
+else* false  *if
+    "Else if" wl
+else
+    "Final else" wl
+end
+
+# ==========================================
+# If without else
+# ==========================================
+"--- If without else ---" wl
+
+true if
+    "Only if, no else" wl
+end
+
+false if
+    "Should not print" wl
+end
+
+"After if without else" wl
+
+# ==========================================
+# If with only else (no else-if)
+# ==========================================
+"--- If with only else ---" wl
+
+true if
+    "If branch taken" wl
+else
+    "Else branch" wl
+end
+
+false if
+    "If branch" wl
+else
+    "Else branch taken" wl
+end
+
+# ==========================================
+# Integer conditions (0 = true, non-zero = false)
+# ==========================================
+"--- Integer conditions ---" wl
+
+0 if
+    "Zero is true" wl
+else
+    "Zero is false" wl
+end
+
+1 if
+    "One is true" wl
+else
+    "One is false" wl
+end
+
+-1 if
+    "Negative one is true" wl
+else
+    "Negative one is false" wl
+end
+
+42 if
+    "42 is true" wl
+else
+    "42 is false" wl
+end
+
+# ==========================================
+# Multiple else-if branches
+# ==========================================
+"--- Multiple else-if branches ---" wl
+
+1 n!
+@n 1 = if
+    "n is 1" wl
+else* @n 2 = *if
+    "n is 2" wl
+else* @n 3 = *if
+    "n is 3" wl
+else* @n 4 = *if
+    "n is 4" wl
+else
+    "n is something else" wl
+end
+
+3 n!
+@n 1 = if
+    "n is 1" wl
+else* @n 2 = *if
+    "n is 2" wl
+else* @n 3 = *if
+    "n is 3" wl
+else* @n 4 = *if
+    "n is 4" wl
+else
+    "n is something else" wl
+end
+
+99 n!
+@n 1 = if
+    "n is 1" wl
+else* @n 2 = *if
+    "n is 2" wl
+else* @n 3 = *if
+    "n is 3" wl
+else* @n 4 = *if
+    "n is 4" wl
+else
+    "n is something else" wl
+end
+
+# ==========================================
+# Multiple tokens in body
+# ==========================================
+"--- Multiple tokens in body ---" wl
+
+true if
+    "Line 1" wl
+    "Line 2" wl
+    "Line 3" wl
+end
+
+# ==========================================
+# Stack operations in if blocks
+# ==========================================
+"--- Stack operations ---" wl
+
+10 20
+true if
+    + "Sum: " w wl
+else
+    - "Diff: " w wl
+end
+
+10 20
+false if
+    + "Sum: " w wl
+else
+    - "Diff: " w wl
+end
+
+# ==========================================
+# Variables in if blocks
+# ==========================================
+"--- Variables in if blocks ---" wl
+
+0 counter!
+true if
+    @counter 1 + counter!
+    @counter 1 + counter!
+    @counter 1 + counter!
+end
+"Counter: " w @counter wl
+
+# ==========================================
+# Nested if blocks
+# ==========================================
+"--- Nested if blocks ---" wl
+
+true if
+    "Outer true" wl
+    true if
+        "Inner true" wl
+    else
+        "Inner false" wl
+    end
+else
+    "Outer false" wl
+end
+
+true if
+    "Outer true" wl
+    false if
+        "Inner true" wl
+    else
+        "Inner false" wl
+    end
+else
+    "Outer false" wl
+end
+
+false if
+    "Outer true" wl
+else
+    "Outer false" wl
+    true if
+        "Inner in else: true" wl
+    else
+        "Inner in else: false" wl
+    end
+end
+
+# ==========================================
+# Deeply nested if blocks
+# ==========================================
+"--- Deeply nested ---" wl
+
+true if
+    true if
+        true if
+            true if
+                "Four levels deep" wl
+            end
+        end
+    end
+end
+
+true if
+    false if
+        "Should not print" wl
+    else
+        true if
+            false if
+                "Should not print" wl
+            else
+                "Deep in else branches" wl
+            end
+        end
+    end
+end
+
+# ==========================================
+# If in else-if body
+# ==========================================
+"--- If in else-if body ---" wl
+
+false if
+    "First" wl
+else* true *if
+    "Else-if taken" wl
+    true if
+        "Nested in else-if" wl
+    end
+else
+    "Final else" wl
+end
+
+# ==========================================
+# Complex conditions
+# ==========================================
+"--- Complex conditions ---" wl
+
+5 xx!
+10 yy!
+
+@xx 5 = @yy 10 = and if
+    "Both conditions true" wl
+else
+    "At least one false" wl
+end
+
+@xx 5 = @yy 20 = and if
+    "Both conditions true" wl
+else
+    "At least one false" wl
+end
+
+@xx 5 = @yy 20 = or if
+    "At least one true" wl
+else
+    "Both false" wl
+end
+
+@xx 10 = not if
+    "xx is not 10" wl
+else
+    "xx is 10" wl
+end
+
+# ==========================================
+# If blocks inside loops
+# ==========================================
+"--- If in loops ---" wl
+
+0 i!
+(
+    @i 5 >= if break end
+    @i 2 = if
+        "i is 2" wl
+    else* @i 4 = *if
+        "i is 4" wl
+    else
+        "i is " w @i wl
+    end
+    @i 1 + i!
+) loop
+
+# ==========================================
+# Break inside if in loop
+# ==========================================
+"--- Break in if ---" wl
+
+0 i!
+(
+    @i 10 >= if break end
+    @i 3 = if
+        "Breaking at 3" wl
+        break
+    end
+    "i = " w @i wl
+    @i 1 + i!
+) loop
+"After loop" wl
+
+# ==========================================
+# Continue inside if in loop
+# ==========================================
+"--- Continue in if ---" wl
+
+0 i!
+(
+    @i 5 >= if break end
+    @i 1 + i!
+    @i 3 = if
+        continue
+    end
+    "i = " w @i wl
+) loop
+
+# ==========================================
+# Single-line if blocks
+# ==========================================
+"--- Single-line if ---" wl
+
+true if "Single line true" wl end
+false if "Should not print" wl end
+true if "A" w else "B" w end
+false if "A" w else "B" w end
+"\n" w
+
+# ==========================================
+# Empty bodies
+# ==========================================
+"--- Empty bodies ---" wl
+
+true if
+end
+"After empty if" wl
+
+false if
+else
+end
+"After empty else" wl
+
+false if
+else* true *if
+end
+"After empty else-if" wl
+
+# ==========================================
+# If in definition
+# ==========================================
+def testIf (bool --)
+    if
+        "Def: true branch" wl
+    else
+        "Def: false branch" wl
+    end
+end
+
+"--- If in definition ---" wl
+true testIf
+false testIf
+
+# ==========================================
+# Recursive-like if usage in definition
+# ==========================================
+def fizzBuzz (int --)
+    n!
+    @n 15 mod 0 = if
+        "FizzBuzz" wl
+    else* @n 3 mod 0 = *if
+        "Fizz" wl
+    else* @n 5 mod 0 = *if
+        "Buzz" wl
+    else
+        @n wl
+    end
+end
+
+"--- FizzBuzz 1-15 ---" wl
+1 fizzBuzz
+2 fizzBuzz
+3 fizzBuzz
+4 fizzBuzz
+5 fizzBuzz
+6 fizzBuzz
+7 fizzBuzz
+8 fizzBuzz
+9 fizzBuzz
+10 fizzBuzz
+11 fizzBuzz
+12 fizzBuzz
+13 fizzBuzz
+14 fizzBuzz
+15 fizzBuzz
+
+# ==========================================
+# If with list operations
+# ==========================================
+"--- If with lists ---" wl
+
+[1 2 3] list!
+@list len 0 > if
+    "List is not empty, first: " w @list :0: wl
+else
+    "List is empty" wl
+end
+
+[] emptyList!
+@emptyList len 0 > if
+    "List is not empty" wl
+else
+    "List is empty" wl
+end
+
+# ==========================================
+# Chained comparisons in conditions
+# ==========================================
+"--- Chained comparisons ---" wl
+
+5 val!
+@val 0 > @val 10 < and if
+    "val is between 0 and 10" wl
+end
+
+15 val!
+@val 0 > @val 10 < and if
+    "val is between 0 and 10" wl
+else
+    "val is outside range" wl
+end
+
+# ==========================================
+# If with string operations
+# ==========================================
+"--- If with strings ---" wl
+
+"hello" mystr!
+@mystr "hello" = if
+    "String matches" wl
+else
+    "String does not match" wl
+end
+
+@mystr "world" = if
+    "String is world" wl
+else
+    "String is not world" wl
+end
+
+# ==========================================
+# Multiple if blocks in sequence
+# ==========================================
+"--- Sequential ifs ---" wl
+
+true if "A" w end
+true if "B" w end
+false if "C" w end
+true if "D" w end
+"\n" w
+
+# ==========================================
+# Stress test: many else-ifs
+# ==========================================
+"--- Many else-ifs ---" wl
+
+7 n!
+@n 1 = if "one" wl
+else* @n 2 = *if "two" wl
+else* @n 3 = *if "three" wl
+else* @n 4 = *if "four" wl
+else* @n 5 = *if "five" wl
+else* @n 6 = *if "six" wl
+else* @n 7 = *if "seven" wl
+else* @n 8 = *if "eight" wl
+else* @n 9 = *if "nine" wl
+else* @n 10 = *if "ten" wl
+else "other" wl
+end
+
+# ==========================================
+# If inside quote execution
+# ==========================================
+"--- If in quote ---" wl
+
+(true if "Quote if true" wl end) x
+(false if "Should not print" wl else "Quote else" wl end) x
+
+# ==========================================
+# Return value preservation
+# ==========================================
+"--- Return value preservation ---" wl
+
+true if 42 else 0 end
+"Value: " w wl
+
+false if 42 else 99 end
+"Value: " w wl
+
+# ==========================================
+# Nested else-ifs
+# ==========================================
+"--- Nested else-ifs ---" wl
+
+false if
+    "First if" wl
+else* true *if
+    "First else-if" wl
+    false if
+        "Nested if" wl
+    else* false *if
+        "Nested else-if 1" wl
+    else* true *if
+        "Nested else-if 2" wl
+    else
+        "Nested else" wl
+    end
+else
+    "Final else" wl
+end
+
+"--- All tests complete ---" wl
