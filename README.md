@@ -86,6 +86,9 @@ Note that you'll also need the environment variable `MSHSTDLIB` pointing to the 
 
 # References/Inspirations
 
+- [Nushell](https://www.nushell.sh/)
+- [Elvish](https://elv.sh/)
+- [fish](https://fishshell.com/)
 - [Porth](https://gitlab.com/tsoding/porth)
 - [Factor](https://factorcode.org/)
 - [`dt`](https://dt.plumbing/)
