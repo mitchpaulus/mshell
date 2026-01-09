@@ -1,0 +1,31 @@
+true if
+    "First quote" wl
+else* true  *if
+    "Else if" wl
+else
+    "Final else" wl
+end
+
+false if
+    "First quote" wl
+else* true  *if
+    "Else if" wl
+else
+    "Final else" wl
+end
+
+true if
+    "First quote" wl
+else* false  *if
+    "Else if" wl
+else
+    "Final else" wl
+end
+
+false if
+    "First quote" wl
+else* false  *if
+    "Else if" wl
+else
+    "Final else" wl
+end

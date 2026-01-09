@@ -50,7 +50,9 @@ def each ([T] (T --) --)
     over len each-len! # Get total length
     0 each-idx! # index
     (
-        [(@each-idx @each-len >=) (break)] if
+        @each-idx @each-len >= if
+            break
+        end
         # "Each idx: " w @each-idx w " Each len: " w @each-len wl
         over @each-idx nth # Get current item
         over x  # Copy over quote, execute
@@ -66,7 +68,9 @@ def eachWhile ([T] (T -- bool) --)
     over len each-len! # Get total length
     0 each-idx! # index
     (
-        [(@each-idx @each-len >=) (break)] if
+        @each-idx @each-len >= if
+            break
+        end
         # "Each idx: " w @each-idx w " Each len: " w @each-len wl
         over @each-idx nth # Get current item
         over x  # Copy over quote, execute
@@ -177,7 +181,9 @@ def reverse ([T] -- [T])
     dup len 1 - reverse-idx! # Set Idx
     [] # list accum
     (
-        [(@reverse-idx 0 <) (break)] if
+        @reverse-idx 0 < if
+            break
+        end
         over @reverse-idx nth append # Get current item
         @reverse-idx 1 - reverse-idx! # dec index
     ) loop
@@ -186,7 +192,7 @@ end
 
 # abs (int|float -- int|float)
 def abs (float -- float)
-    [(dup 0 <) (-1 *)] if
+    dup 0 < if -1 * end
 end
 
 
@@ -205,7 +211,7 @@ def readTsvFile (str -- [[str]])
 end
 
 def max2 (float float -- float)
-    over over [(<) (swap)] if drop
+    over over < if swap end drop
 end
 
 # TODO: define actual float/int min
@@ -214,7 +220,7 @@ def max ([float] -- float)
 end
 
 def min2 (float float -- float)
-    over over [(>) (swap)] if drop
+    over over > if swap end drop
 end
 
 # TODO: define actual float/int max
@@ -230,16 +236,15 @@ def transpose ([[a]] -- [[a]])
     [] transpose-accum!
     0 colIndex!
     (
-        [(@colIndex @colmax >=) (break)] if
+        @colIndex @colmax >= if break end
         0 rowIndex!
         [] inner-accum!
         (
-            [(@rowIndex @numrows >=) (break)] if
+            @rowIndex @numrows >= if break end
             @list @rowIndex nth curRow!
-            [
-                (@curRow len @colIndex >)
-                (@inner-accum @curRow @colIndex nth append drop)
-            ] if
+            @curRow len @colIndex > if
+                @inner-accum @curRow @colIndex nth append drop
+            end
             @rowIndex 1 + rowIndex!
         ) loop
 
