@@ -385,33 +385,20 @@ def __mshCompletion { 'complete': ['msh' 'mshell'] } ([str] -- [str])
     ['-h' '--help' '--html' '--lex' '--parse' '--version' '-c'] options!
     ['lsp' 'bin' 'completions'] subcommands!
 
-    @input len 0 >
-    (
+    @input len 0 > if
         @input :0: first!
-        @first 'lsp' =
-        ([]) # Nothing after lsp
-        (
-            @input :0: 'bin' =
-            (
-                ['add' 'remove' 'list' 'path' 'edit' 'audit' 'debug']
-            )
-            (
-                @input :0: 'completions' =
-                (
-                    ['fish' 'bash' 'nushell' 'elvish']
-                )
-                (
-                    []
-                ) iff
-            )
-            iff
-        )
-        iff
-    )
-    (
+        @first 'lsp' = if
+            [] # Nothing after lsp
+        else* @first 'bin' = *if
+            ['add' 'remove' 'list' 'path' 'edit' 'audit' 'debug']
+        else* @first 'completions' = *if
+            ['fish' 'bash' 'nushell' 'elvish']
+        else
+            []
+        end
+    else
         @options @subcommands extend
-    )
-    iff
+    end
 end
 # }}}
 # git {{{
@@ -665,14 +652,11 @@ def __gitCompletion { 'complete': ['git'] } ([str] -- [str])
     input!
     ['-h' '--help' '-v' '--version' '-C' '-c' '--git-dir' '--work-tree' '--namespace' '--paginate' '--no-pager'] globalOptions!
 
-    @input len 0 >
-    (
+    @input len 0 > if
         @input :0: subcmd!
-        @subcmd "-" startsWith
-        (
+        @subcmd "-" startsWith if
             @globalOptions ['git' '--list-cmds=main'] * ; lines extend
-        )
-        (
+        else
             ['add' 'am' 'annotate' 'apply' 'archive' 'bisect' 'blame' 'branch' 'checkout' 'cherry' 'cherry-pick' 'clean' 'clone' 'commit' 'describe' 'diff' 'fetch' 'format-patch' 'gc' 'grep' 'init' 'log' 'merge' 'mv' 'notes' 'pull' 'push' 'rebase' 'reset' 'restore' 'revert' 'rm' 'show' 'shortlog' 'stash' 'status' 'switch' 'tag' 'worktree' 'submodule' 'remote'] porcelainCommands!
             ['checkout' 'switch' 'branch' 'merge' 'rebase' 'reset' 'restore' 'show' 'log' 'diff' 'cherry-pick' 'revert' 'tag' 'describe' 'notes'] refCommands!
             ['fetch' 'pull' 'push'] remoteCommands!
@@ -680,94 +664,62 @@ def __gitCompletion { 'complete': ['git'] } ([str] -- [str])
             ['add' 'rm' 'remove' 'show' 'prune' 'update' 'rename' 'set-head' 'set-url' 'get-url' 'set-branches'] remoteSubcommands!
             ['add' 'rm' 'mv' 'restore' 'checkout' 'reset' 'diff' 'status' 'commit' 'grep' 'show' 'log'] fileCommands!
 
-            @porcelainCommands (@subcmd =) any
-            (
+            @porcelainCommands (@subcmd =) any if
                 @subcmd __gitOptionsForSubcmd subcmdOptions!
-            )
-            (
+            else
                 [] subcmdOptions!
-            )
-            iff
+            end
 
             @globalOptions @subcmdOptions extend options!
 
-            @subcmd 'remote' =
-            (
-                @input len 1 =
-                (
+            @subcmd 'remote' = if
+                @input len 1 = if
                     @options @remoteSubcommands extend
-                )
-                (
+                else
                     @options ['git' 'remote'] * ; lines extend
-                )
-                iff
-            )
-            (
-                @subcmd 'stash' =
-                (
-                    @input len 1 =
-                    (
-                        @options @stashSubcommands extend
-                    )
-                    (
-                        @input :1: stashCmd!
-                        ['apply' 'pop' 'drop' 'show' 'branch'] needStash!
-                        @needStash (@stashCmd =) any
-                        (
-                            @options ['git' 'stash' 'list' '--format=%gd'] * ; lines extend
-                        )
-                        (
-                            @options
-                        )
-                        iff
-                    )
-                    iff
-                )
-                (
-                    @subcmd 'add' =
-                    (
-                        [] completions!
-                    )
-                    (
-                        @options completions!
-                    )
-                    iff
+                end
+            else* @subcmd 'stash' = *if
+                @input len 1 = if
+                    @options @stashSubcommands extend
+                else
+                    @input :1: stashCmd!
+                    ['apply' 'pop' 'drop' 'show' 'branch'] needStash!
+                    @needStash (@stashCmd =) any if
+                        @options ['git' 'stash' 'list' '--format=%gd'] * ; lines extend
+                    else
+                        @options
+                    end
+                end
+            else
+                @subcmd 'add' = if
+                    [] completions!
+                else
+                    @options completions!
+                end
 
-                    @remoteCommands (@subcmd =) any
-                    (
-                        @completions ['git' 'remote'] * ; lines extend completions!
-                    )
-                    iff
+                @remoteCommands (@subcmd =) any if
+                    @completions ['git' 'remote'] * ; lines extend completions!
+                end
 
-                    @refCommands (@subcmd =) any
-                    (
-                        @completions ['git' 'for-each-ref' '--format=%(refname:short)' 'refs/heads' 'refs/remotes' 'refs/tags'] * ; lines extend completions!
-                    )
-                    iff
+                @refCommands (@subcmd =) any if
+                    @completions ['git' 'for-each-ref' '--format=%(refname:short)' 'refs/heads' 'refs/remotes' 'refs/tags'] * ; lines extend completions!
+                end
 
-                    @fileCommands (@subcmd =) any
-                    (
-                        @subcmd 'add' = (@completions __gitAddFilePaths extend completions!) iff
-                    )
-                    iff
+                @fileCommands (@subcmd =) any if
+                    @subcmd 'add' = if
+                        @completions __gitAddFilePaths extend completions!
+                    end
+                end
 
-                    @subcmd 'add' =
-                    (
-                        @completions @options extend completions!
-                    )
-                    iff
-                    @completions
-                )
-                iff
-            )
-            iff
-        )
-        iff
-    )
-    (
+                @subcmd 'add' = if
+                    @completions @options extend completions!
+                end
+                @completions
+            end
+        end
+    else
         @globalOptions ['git' '--list-cmds=main'] * ; lines extend
-    )
-    iff
+    end
 end
 # }}}
 # fd {{{
@@ -784,18 +736,16 @@ def __fdDefaultOptions ( -- [str])
 end
 
 def __fdCompletion { 'complete': ['fd'] } ([str] -- [str])
-    input! @input len 0 >
-    (
+    input! @input len 0 > if
         @input :-1: last!
-        ['-t' '--type'] (@last =) any
-        ( ['file' 'directory' 'symlink' 'executable' 'empty' 'socket' 'pipe' 'char-device' 'block-device'] )
-        (
-            ['-c' '--color'] (@last =) any ( ['auto' 'always' 'never'] ) ( __fdDefaultOptions ) iff
-        )
-        iff
-    )
-    ( __fdDefaultOptions )
-    iff
+        ['-t' '--type'] (@last =) any if
+            ['file' 'directory' 'symlink' 'executable' 'empty' 'socket' 'pipe' 'char-device' 'block-device']
+        else
+            ['-c' '--color'] (@last =) any if ['auto' 'always' 'never'] else  __fdDefaultOptions end
+        end
+    else
+        __fdDefaultOptions
+    end
 end
 # }}}
 # rg {{{
@@ -818,20 +768,15 @@ end
 
 def __rgCompletion { 'complete': ['rg'] } ([str] -- [str])
     input!
-    @input len 0 >
-    (
+    @input len 0 > if
         @input :-1: last!
-        ['-t' '--type'] (@last =) any
-        (
+
+        ['-t' '--type'] (@last =) any if
             ['rg' '--type-list'] * ; lines (":" split :0:) map
-        )
-        (
+        else
             ['--color'] (@last =) any ( ['auto' 'always' 'never'] ) ( __rgDefaultOptions ) iff
-        )
-        iff
-    )
-    ( __rgDefaultOptions )
-    iff
+        end
+    else __rgDefaultOptions end
 end
 # }}}
 # }}}
