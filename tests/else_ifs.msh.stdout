@@ -2,3 +2,111 @@ First quote
 Else if
 First quote
 Final else
+--- If without else ---
+Only if, no else
+After if without else
+--- If with only else ---
+If branch taken
+Else branch taken
+--- Integer conditions ---
+Zero is true
+One is false
+Negative one is false
+42 is false
+--- Multiple else-if branches ---
+n is 1
+n is 3
+n is something else
+--- Multiple tokens in body ---
+Line 1
+Line 2
+Line 3
+--- Stack operations ---
+Sum: 30
+Diff: -10
+--- Variables in if blocks ---
+Counter: 3
+--- Nested if blocks ---
+Outer true
+Inner true
+Outer true
+Inner false
+Outer false
+Inner in else: true
+--- Deeply nested ---
+Four levels deep
+Deep in else branches
+--- If in else-if body ---
+Else-if taken
+Nested in else-if
+--- Complex conditions ---
+Both conditions true
+At least one false
+At least one true
+xx is not 10
+--- If in loops ---
+i is 0
+i is 1
+i is 2
+i is 3
+i is 4
+--- Break in if ---
+i = 0
+i = 1
+i = 2
+Breaking at 3
+After loop
+--- Continue in if ---
+i = 1
+i = 2
+i = 4
+i = 5
+--- Single-line if ---
+Single line true
+AB
+--- Empty bodies ---
+After empty if
+After empty else
+After empty else-if
+--- If in definition ---
+Def: true branch
+Def: false branch
+--- FizzBuzz 1-15 ---
+1
+2
+Fizz
+4
+Buzz
+Fizz
+7
+8
+Fizz
+Buzz
+11
+Fizz
+13
+14
+FizzBuzz
+--- If with lists ---
+List is not empty, first: 1
+List is empty
+--- Chained comparisons ---
+val is between 0 and 10
+val is outside range
+--- If with strings ---
+String matches
+String is not world
+--- Sequential ifs ---
+ABD
+--- Many else-ifs ---
+seven
+--- If in quote ---
+Quote if true
+Quote else
+--- Return value preservation ---
+Value: 42
+Value: 99
+--- Nested else-ifs ---
+First else-if
+Nested else-if 2
+--- All tests complete ---
