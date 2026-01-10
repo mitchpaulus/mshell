@@ -50,17 +50,16 @@ For that, you use the <code>></code>, <code>>></code>, <code>*</code>, and <code
 <p> You can do similar things with standard error.</p>
 
 <p>
-To redirect standard error to a file, use <code>2></code>.
+To redirect standard error to a file, use <code>2></code>
+<span title="The 2 is the standard error file descriptor; this mirrors typical POSIX shell syntax. It was chosen to be most familiar for those coming from bash/zsh/fish, I might provide a different alias in the future." style="cursor: help;">[?]</span>,
+and <code>^</code> instead of <code>*</code>.
+
 </p>
 
 <pre>
 <code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`errors.log`</span> <span class="mshellSTDERRREDIRECT">2&gt;</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Redirects stderr to the file, truncating it.</span>
 <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`errors.log`</span> <span class="mshellSTDERRAPPEND">2&gt;&gt;</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Redirects stderr to the file, appending.</span>
-</code>
-</pre>
-
-<pre>
-<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellCARET">^</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Puts all of stderr on the stack as a string.</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellCARET">^</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Puts all of stderr on the stack as a string.</span>
 <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellCARET BINARY">^b</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Puts all of stderr on the stack as a binary.</span>
 </code>
 </pre>
@@ -76,6 +75,27 @@ Standard output will always be pushed first, and then standard error.
 <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellCARET BINARY">^b</span> <span class="mshellASTERISKBINARY">*b</span> <span class="mshellBANG">!</span> 
 </code>
 </pre>
+
+<table>
+  <caption>Summary of external command operators</caption>
+  <thead>
+    <tr> <th>Operator</th> <th>Effect on external commands</th> <th>Notes</th> </tr>
+  </thead>
+  <tbody>
+    <tr> <td><code>;</code></td> <td>Execute and continue.</td> <td>No exit code on the stack.</td> </tr>
+    <tr> <td><code>!</code></td> <td>Execute and stop on non-zero exit.</td> <td>Uses the command exit code.</td> </tr>
+    <tr> <td><code>?</code></td> <td>Execute and push the exit code.</td> <td>Integer is left on the stack.</td> </tr>
+    <tr> <td><code>></code></td> <td>Redirect stdout to a file.</td> <td>Truncates the file.</td> </tr>
+    <tr> <td><code>>></code></td> <td>Redirect stdout to a file.</td> <td>Appends to the file.</td> </tr>
+    <tr> <td><code>*</code></td> <td>Capture stdout to the stack.</td> <td>As a string.</td> </tr>
+    <tr> <td><code>*b</code></td> <td>Capture stdout to the stack.</td> <td>As binary.</td> </tr>
+    <tr> <td><code>2></code></td> <td>Redirect stderr to a file.</td> <td>Truncates the file.</td> </tr>
+    <tr> <td><code>2>></code></td> <td>Redirect stderr to a file.</td> <td>Appends to the file.</td> </tr>
+    <tr> <td><code>^</code></td> <td>Capture stderr to the stack.</td> <td>As a string.</td> </tr>
+    <tr> <td><code>^b</code></td> <td>Capture stderr to the stack.</td> <td>As binary.</td> </tr>
+    <tr> <td><code>&lt;</code></td> <td>Feed stdin from a value.</td> <td>String, path, or binary.</td> </tr>
+  </tbody>
+</table>
 
 <h1 id="input-redirection">Input redirection</h1>
 
