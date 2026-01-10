@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bin map file and `msh bin` CLI commands for binary overrides
 - `msh completions` subcommand for bash, fish, nushell, and elvish
 - CLI syntax highlighting for environment variables
+- Append stderr redirection with `2>>`
 
 ## 0.8.0 - 2025-12-29
 

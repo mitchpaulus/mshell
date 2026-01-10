@@ -846,7 +846,7 @@ MainLoop:
 
 				stack.Pop()
 				stack.Push(TypeString{})
-			} else if t.Type == STDERRREDIRECT { // Token Type
+			} else if t.Type == STDERRREDIRECT || t.Type == STDERRAPPEND { // Token Type
 				if len(stack) < 2 && inQuote {
 					typeCheckResult.Errors = append(typeCheckResult.Errors, TypeCheckError{Token: t, Message: "Expected a list and a string on the stack, but found less than two items. Redirect cannot be at the beginning of quote.\n"})
 				}

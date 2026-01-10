@@ -1,0 +1,3 @@
+# FILE:stderr_redirect.txt
+[mshell -c '"To stderr" wle'] `stderr_redirect.txt` 2> !
+[mshell -c '"To stderr - appending" wle'] `stderr_redirect.txt` 2>> !

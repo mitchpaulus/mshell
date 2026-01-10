@@ -644,6 +644,7 @@ type MShellList struct {
 	StandardOutputFile    string
 	AppendOutput          bool
 	StandardErrorFile     string
+	AppendError           bool
 	// This sets how stdout is handled, whether it's broken up into lines, stripped of trailing newline, or left as is
 	StdoutBehavior  StdoutBehavior
 	StderrBehavior  StderrBehavior
@@ -669,6 +670,7 @@ func NewList(initLength int) *MShellList {
 		StandardOutputFile:    "",
 		AppendOutput:          false,
 		StandardErrorFile:     "",
+		AppendError:           false,
 		StdoutBehavior:        STDOUT_NONE,
 		StderrBehavior:        STDERR_NONE,
 		RunInBackground:       false,
@@ -728,6 +730,7 @@ func CopyListParams(copyFromList *MShellList, copyToList *MShellList) {
 	copyToList.StandardInputFile = copyFromList.StandardInputFile
 	copyToList.StandardOutputFile = copyFromList.StandardOutputFile
 	copyToList.StandardErrorFile = copyFromList.StandardErrorFile
+	copyToList.AppendError = copyFromList.AppendError
 	copyToList.StdoutBehavior = copyFromList.StdoutBehavior
 	copyToList.StderrBehavior = copyFromList.StderrBehavior
 }

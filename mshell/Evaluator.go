@@ -4803,7 +4803,7 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do a %s operation with a %s (%s) and a %s (%s).\n", t.Line, t.Column, t.Lexeme, obj1.TypeName(), obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
 					}
 				}
-			} else if t.Type == STDERRREDIRECT { // Token Type
+			} else if t.Type == STDERRREDIRECT || t.Type == STDERRAPPEND { // Token Type
 				obj1, err := stack.Pop()
 				if err != nil {
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect stderr on an empty stack.\n", t.Line, t.Column))
@@ -4821,6 +4821,7 @@ MainLoop:
 				switch obj2Typed := obj2.(type) {
 				case *MShellList:
 					obj2Typed.StandardErrorFile = redirectFile
+					obj2Typed.AppendError = t.Type == STDERRAPPEND
 					stack.Push(obj2Typed)
 				case *MShellQuotation:
 					obj2Typed.StandardErrorFile = redirectFile
@@ -5745,7 +5746,12 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 		cmd.Stderr = &stderrBuffer
 	} else if list.StandardErrorFile != "" {
 		// Open the file for writing
-		file, err := os.Create(list.StandardErrorFile)
+		var file *os.File
+		if list.AppendError {
+			file, err = os.OpenFile(list.StandardErrorFile, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+		} else {
+			file, err = os.Create(list.StandardErrorFile)
+		}
 		if err != nil {
 			return state.FailWithMessage(fmt.Sprintf("Error opening file %s for writing: %s\n", list.StandardErrorFile, err.Error())), 1, nil, nil
 		}
