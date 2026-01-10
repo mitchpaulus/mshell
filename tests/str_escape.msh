@@ -1,0 +1,6 @@
+"plain" strEscape wl
+"line\nbreak" strEscape wl
+"tab\tstop" strEscape wl
+"quote \" and slash \\" strEscape wl
+"esc\eend" strEscape wl
+"👨‍👩‍👧‍👦" strEscape wl

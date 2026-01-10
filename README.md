@@ -79,7 +79,6 @@ Note that you'll also need the environment variable `MSHSTDLIB` pointing to the 
 # TODO
 
 - Job control. Right now, if you CTRL-c a long running process, it kills the entire shell.
-- CLI completions system.
 - Pattern matching syntax.
 - Type checking.
 - Improved error messages.
@@ -87,6 +86,9 @@ Note that you'll also need the environment variable `MSHSTDLIB` pointing to the 
 
 # References/Inspirations
 
+- [Nushell](https://www.nushell.sh/)
+- [Elvish](https://elv.sh/)
+- [fish](https://fishshell.com/)
 - [Porth](https://gitlab.com/tsoding/porth)
 - [Factor](https://factorcode.org/)
 - [`dt`](https://dt.plumbing/)

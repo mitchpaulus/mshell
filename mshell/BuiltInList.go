@@ -125,6 +125,7 @@ var BuiltInList = map[string]struct{}{
 	"startsWith": {},
 	"stdin": {},
 	"stem": {},
+	"strEscape": {},
 	"swap": {},
 	"take": {},
 	"tempDir": {},

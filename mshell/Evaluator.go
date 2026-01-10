@@ -156,6 +156,31 @@ func getBoolOption(dict *MShellDict, key string) (bool, bool, error) {
 	return false, false, nil
 }
 
+func escapeMshellString(input string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range input {
+		switch r {
+		case '\\':
+			b.WriteString("\\\\")
+		case '"':
+			b.WriteString("\\\"")
+		case '\n':
+			b.WriteString("\\n")
+		case '\t':
+			b.WriteString("\\t")
+		case '\r':
+			b.WriteString("\\r")
+		case '\033':
+			b.WriteString("\\e")
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
+}
+
 func formatWithSigFigs(num float64, sigfigs int) string {
 	if num == 0 {
 		return fmt.Sprintf("0.%s", strings.Repeat("0", sigfigs))
@@ -396,6 +421,7 @@ const (
 	CALLSTACKDICT
 	CALLSTACKQUOTE
 	CALLSTACKDEF
+	CALLSTACKIF
 )
 
 type CallStackItem struct {
@@ -516,6 +542,87 @@ MainLoop:
 			parseQuote := t
 			q := MShellQuotation{Tokens: parseQuote.Items, StandardInputFile: "", StandardOutputFile: "", StandardErrorFile: "", Variables: context.Variables, MShellParseQuote: parseQuote}
 			stack.Push(&q)
+		case *MShellParseIfBlock:
+			ifBlock := t
+			startToken := ifBlock.GetStartToken()
+
+			// Pop the condition from the stack
+			condObj, err := stack.Pop()
+			if err != nil {
+				return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot evaluate 'if' on an empty stack.\n", startToken.Line, startToken.Column))
+			}
+
+			// Evaluate condition
+			var condition bool
+			switch condTyped := condObj.(type) {
+			case MShellBool:
+				condition = condTyped.Value
+			case MShellInt:
+				condition = condTyped.Value == 0
+			default:
+				return state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a boolean or integer for if condition, received a %s.\n", startToken.Line, startToken.Column, condObj.TypeName()))
+			}
+
+			if condition {
+				// Execute if body
+				callStackItem := CallStackItem{MShellParseItem: ifBlock, Name: "if", CallStackType: CALLSTACKIF}
+				result := state.Evaluate(ifBlock.IfBody, stack, context, definitions, callStackItem)
+				if result.ShouldPassResultUpStack() {
+					return result
+				}
+			} else {
+				// Check else-if branches
+				foundMatch := false
+				for _, elseIf := range ifBlock.ElseIfs {
+					// Evaluate condition
+					callStackItem := CallStackItem{MShellParseItem: ifBlock, Name: "else-if-condition", CallStackType: CALLSTACKIF}
+					result := state.Evaluate(elseIf.Condition, stack, context, definitions, callStackItem)
+					if !result.Success || result.ExitCalled {
+						return result
+					}
+					if result.BreakNum > 0 {
+						return state.FailWithMessage("Encountered break within else-if condition.\n")
+					}
+					if result.Continue {
+						return state.FailWithMessage("Encountered continue within else-if condition.\n")
+					}
+
+					elseIfCondObj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Found an empty stack when evaluating else-if condition.\n", startToken.Line, startToken.Column))
+					}
+
+					var elseIfCondition bool
+					switch elseIfCondTyped := elseIfCondObj.(type) {
+					case MShellBool:
+						elseIfCondition = elseIfCondTyped.Value
+					case MShellInt:
+						elseIfCondition = elseIfCondTyped.Value == 0
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a boolean or integer for else-if condition, received a %s.\n", startToken.Line, startToken.Column, elseIfCondObj.TypeName()))
+					}
+
+					if elseIfCondition {
+						// Execute else-if body
+						callStackItem := CallStackItem{MShellParseItem: ifBlock, Name: "else-if", CallStackType: CALLSTACKIF}
+						result := state.Evaluate(elseIf.Body, stack, context, definitions, callStackItem)
+						if result.ShouldPassResultUpStack() {
+							return result
+						}
+						foundMatch = true
+						break
+					}
+				}
+
+				// If no else-if matched, execute else body if present
+				if !foundMatch && len(ifBlock.ElseBody) > 0 {
+					callStackItem := CallStackItem{MShellParseItem: ifBlock, Name: "else", CallStackType: CALLSTACKIF}
+					result := state.Evaluate(ifBlock.ElseBody, stack, context, definitions, callStackItem)
+					if result.ShouldPassResultUpStack() {
+						return result
+					}
+				}
+			}
 		case *MShellIndexerList:
 			obj1, err := stack.Pop()
 			if err != nil {
@@ -990,6 +1097,18 @@ MainLoop:
 					}
 
 					stack.Push(MShellString{strings.ReplaceAll(originalStr, findStr, replacementStr)})
+				} else if t.Lexeme == "strEscape" {
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'strEscape' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					strToEscape, err := obj.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot escape a %s (%s).\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
+					}
+
+					stack.Push(MShellString{escapeMshellString(strToEscape)})
 				} else if t.Lexeme == "split" {
 					delimiter, strLiteral, err := stack.Pop2(t)
 					if err != nil {
@@ -4319,98 +4438,6 @@ MainLoop:
 					}
 				}
 
-			} else if t.Type == IF { // Token Type
-				obj, err := stack.Pop()
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do an 'if' on an empty stack.\n", t.Line, t.Column))
-				}
-
-				list, ok := obj.(*MShellList)
-				if !ok {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Argument for if expected to be a list of quoations, received a %s\n", t.Line, t.Column, obj.TypeName()))
-				}
-
-				if len(list.Items) < 2 {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: If statement requires a list with at least 2 items. Found %d.\n", t.Line, t.Column, len(list.Items)))
-				}
-
-				// Check that all items are quotations
-				for i, item := range list.Items {
-					if _, ok := item.(*MShellQuotation); !ok {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Item %d in if statement is not a quotation.\n", t.Line, t.Column, i))
-					}
-				}
-
-				trueIndex := -1
-
-			ListLoop:
-				for i := 0; i < len(list.Items)-1; i += 2 {
-					quotation := list.Items[i].(*MShellQuotation)
-
-					result, err := state.EvaluateQuote(*quotation, stack, context, definitions)
-					if err != nil {
-						return state.FailWithMessage(err.Error())
-					}
-
-					if !result.Success || result.ExitCalled {
-						return result
-					}
-
-					if result.BreakNum > 0 {
-						return state.FailWithMessage("Encountered break within if statement.\n")
-					}
-
-					if result.Continue {
-						return state.FailWithMessage("Encountered continue within if statement.\n")
-					}
-
-					top, err := stack.Pop()
-					if err != nil {
-						conditionNum := i/2 + 1
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Found an empty stack when evaluating condition #%d .\n", t.Line, t.Column, conditionNum))
-					}
-
-					// Check for either integer or boolean
-					switch topTyped := top.(type) {
-					case MShellInt:
-						if topTyped.Value == 0 {
-							trueIndex = i
-							break ListLoop
-						}
-					case MShellBool:
-						if topTyped.Value {
-							trueIndex = i
-							break ListLoop
-						}
-					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Expected an integer or boolean for condition #%d, received a %s.\n", t.Line, t.Column, i/2+1, top.TypeName()))
-					}
-				}
-
-				if trueIndex > -1 {
-					quotation := list.Items[trueIndex+1].(*MShellQuotation)
-
-					result, err := state.EvaluateQuote(*quotation, stack, context, definitions)
-					if err != nil {
-						return state.FailWithMessage(err.Error())
-					}
-
-					// If we encounter a break, we should return it up the stack
-					if result.ShouldPassResultUpStack() {
-						return result
-					}
-				} else if len(list.Items)%2 == 1 { // Try to find a final else statement, will be the last item in the list if odd number of items
-					quotation := list.Items[len(list.Items)-1].(*MShellQuotation)
-
-					result, err := state.EvaluateQuote(*quotation, stack, context, definitions)
-					if err != nil {
-						return state.FailWithMessage(err.Error())
-					}
-
-					if result.ShouldPassResultUpStack() {
-						return result
-					}
-				}
 			} else if t.Type == PLUS { // Token Type
 				obj1, err := stack.Pop()
 				if err != nil {

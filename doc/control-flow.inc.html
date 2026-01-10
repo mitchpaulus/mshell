@@ -1,0 +1,142 @@
+<div id="control-flow-top"></div>
+
+<p>
+<code>mshell</code> provides control flow constructs for conditional execution and looping.
+</p>
+
+<h1 id="control-flow-if">if / else* / else / end <a class="section-link" href="#control-flow-if" aria-label="Permalink">§</a> <a class="back-to-top" href="#control-flow-top">Back to top</a></h1>
+
+<p>
+The <code>if</code> block is the primary conditional construct.
+The condition is evaluated before <code>if</code> and popped from the stack.
+</p>
+
+<pre>
+<code><span class="mshellTRUE">true</span> <span class="mshellIF">if</span>
+    <span class="mshellSTRING">"condition was true"</span> <span class="mshellLITERAL">wl</span>
+<span class="mshellEND">end</span></code>
+</pre>
+
+<p>Add an <code>else</code> branch for when the condition is false:</p>
+
+<pre>
+<code><span class="mshellFALSE">false</span> <span class="mshellIF">if</span>
+    <span class="mshellSTRING">"true branch"</span> <span class="mshellLITERAL">wl</span>
+<span class="mshellELSE">else</span>
+    <span class="mshellSTRING">"false branch"</span> <span class="mshellLITERAL">wl</span>
+<span class="mshellEND">end</span></code>
+</pre>
+
+<p>Use <code>else*</code> and <code>*if</code> for else-if chains:</p>
+
+<pre>
+<code><span class="mshellINTEGER">2</span> <span class="mshellVARSTORE">n!</span>
+<span class="mshellVARRETRIEVE">@n</span> <span class="mshellINTEGER">1</span> <span class="mshellEQUAL">=</span> <span class="mshellIF">if</span>
+    <span class="mshellSTRING">"one"</span> <span class="mshellLITERAL">wl</span>
+<span class="mshellELSESTAR">else*</span> <span class="mshellVARRETRIEVE">@n</span> <span class="mshellINTEGER">2</span> <span class="mshellEQUAL">=</span> <span class="mshellSTARIF">*if</span>
+    <span class="mshellSTRING">"two"</span> <span class="mshellLITERAL">wl</span>
+<span class="mshellELSESTAR">else*</span> <span class="mshellVARRETRIEVE">@n</span> <span class="mshellINTEGER">3</span> <span class="mshellEQUAL">=</span> <span class="mshellSTARIF">*if</span>
+    <span class="mshellSTRING">"three"</span> <span class="mshellLITERAL">wl</span>
+<span class="mshellELSE">else</span>
+    <span class="mshellSTRING">"other"</span> <span class="mshellLITERAL">wl</span>
+<span class="mshellEND">end</span></code>
+</pre>
+
+<p>
+Conditions can be booleans or integers. For integers, <code>0</code> is true (like Unix exit codes), non-zero is false.
+</p>
+
+<pre>
+<code><span class="mshellINTEGER">0</span> <span class="mshellIF">if</span> <span class="mshellSTRING">"zero is true"</span> <span class="mshellLITERAL">wl</span> <span class="mshellEND">end</span>
+<span class="mshellINTEGER">1</span> <span class="mshellIF">if</span> <span class="mshellSTRING">"not printed"</span> <span class="mshellLITERAL">wl</span> <span class="mshellEND">end</span></code>
+</pre>
+
+<h1 id="control-flow-iff">iff <a class="section-link" href="#control-flow-iff" aria-label="Permalink">§</a> <a class="back-to-top" href="#control-flow-top">Back to top</a></h1>
+
+<p>
+<code>iff</code> is a postfix conditional that executes quotations based on a condition.
+It has two forms: with and without a false branch.
+</p>
+
+<pre>
+<code><span class="mshellLINECOMMENT"># Two-argument form: condition (true-quote) iff</span>
+<span class="mshellTRUE">true</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellSTRING">"was true"</span> <span class="mshellLITERAL">wl</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">iff</span>
+
+<span class="mshellLINECOMMENT"># Three-argument form: condition (true-quote) (false-quote) iff</span>
+<span class="mshellFALSE">false</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellSTRING">"true"</span> <span class="mshellLITERAL">wl</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellSTRING">"false"</span> <span class="mshellLITERAL">wl</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">iff</span></code>
+</pre>
+
+<p><code>iff</code> is useful for inline conditionals:</p>
+
+<pre>
+<code><span class="mshellVARRETRIEVE">@count</span> <span class="mshellINTEGER">0</span> <span class="mshellGREATERTHAN">&gt;</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellVARRETRIEVE">@items</span> <span class="mshellLITERAL">process</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">iff</span></code>
+</pre>
+
+<h1 id="control-flow-loop">loop <a class="section-link" href="#control-flow-loop" aria-label="Permalink">§</a> <a class="back-to-top" href="#control-flow-top">Back to top</a></h1>
+
+<p>
+<code>loop</code> repeatedly executes a quotation until <code>break</code> is called.
+</p>
+
+<pre>
+<code><span class="mshellINTEGER">0</span> <span class="mshellVARSTORE">i!</span>
+<span class="mshellLEFT_PAREN">(</span>
+    <span class="mshellVARRETRIEVE">@i</span> <span class="mshellINTEGER">5</span> <span class="mshellGREATERTHANOREQUAL">&gt;=</span> <span class="mshellIF">if</span> <span class="mshellBREAK">break</span> <span class="mshellEND">end</span>
+    <span class="mshellVARRETRIEVE">@i</span> <span class="mshellLITERAL">wl</span>
+    <span class="mshellVARRETRIEVE">@i</span> <span class="mshellINTEGER">1</span> <span class="mshellPLUS">+</span> <span class="mshellVARSTORE">i!</span>
+<span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">loop</span></code>
+</pre>
+
+<p>Output:</p>
+<pre><code>0
+1
+2
+3
+4</code></pre>
+
+<h1 id="control-flow-break">break <a class="section-link" href="#control-flow-break" aria-label="Permalink">§</a> <a class="back-to-top" href="#control-flow-top">Back to top</a></h1>
+
+<p>
+<code>break</code> exits the innermost loop.
+</p>
+
+<pre>
+<code><span class="mshellINTEGER">0</span> <span class="mshellVARSTORE">i!</span>
+<span class="mshellLEFT_PAREN">(</span>
+    <span class="mshellVARRETRIEVE">@i</span> <span class="mshellINTEGER">1</span> <span class="mshellPLUS">+</span> <span class="mshellVARSTORE">i!</span>
+    <span class="mshellVARRETRIEVE">@i</span> <span class="mshellINTEGER">3</span> <span class="mshellEQUAL">=</span> <span class="mshellIF">if</span>
+        <span class="mshellSTRING">"breaking"</span> <span class="mshellLITERAL">wl</span>
+        <span class="mshellBREAK">break</span>
+    <span class="mshellEND">end</span>
+    <span class="mshellVARRETRIEVE">@i</span> <span class="mshellLITERAL">wl</span>
+<span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">loop</span>
+<span class="mshellSTRING">"done"</span> <span class="mshellLITERAL">wl</span></code>
+</pre>
+
+<p>Output:</p>
+<pre><code>1
+2
+breaking
+done</code></pre>
+
+<h1 id="control-flow-continue">continue <a class="section-link" href="#control-flow-continue" aria-label="Permalink">§</a> <a class="back-to-top" href="#control-flow-top">Back to top</a></h1>
+
+<p>
+<code>continue</code> skips the rest of the current iteration and starts the next one.
+</p>
+
+<pre>
+<code><span class="mshellINTEGER">0</span> <span class="mshellVARSTORE">i!</span>
+<span class="mshellLEFT_PAREN">(</span>
+    <span class="mshellVARRETRIEVE">@i</span> <span class="mshellINTEGER">5</span> <span class="mshellGREATERTHANOREQUAL">&gt;=</span> <span class="mshellIF">if</span> <span class="mshellBREAK">break</span> <span class="mshellEND">end</span>
+    <span class="mshellVARRETRIEVE">@i</span> <span class="mshellINTEGER">1</span> <span class="mshellPLUS">+</span> <span class="mshellVARSTORE">i!</span>
+    <span class="mshellVARRETRIEVE">@i</span> <span class="mshellINTEGER">3</span> <span class="mshellEQUAL">=</span> <span class="mshellIF">if</span> <span class="mshellCONTINUE">continue</span> <span class="mshellEND">end</span>
+    <span class="mshellVARRETRIEVE">@i</span> <span class="mshellLITERAL">wl</span>
+<span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">loop</span></code>
+</pre>
+
+<p>Output (3 is skipped):</p>
+<pre><code>1
+2
+4
+5</code></pre>

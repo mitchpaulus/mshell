@@ -255,7 +255,13 @@ awk <span class="mshellSINGLEQUOTESTRING">'END { print NR }'</span> &lt; input_f
         <tr>
             <td> 17 </td>
             <td> Print in reverse order the fields of every line </td>
-            <td><code>{ <span class="awk-keyword">for</span> (i = <span class="awk-builtin">NF</span>; i &gt; 0; i = i - 1) <span class="awk-function">printf</span> (i == 1 ? <span class="awk-string">"%s"</span> : <span class="awk-string">"%s "</span>), <span class="awk-field">$i</span>; <span class="awk-function">printf</span> <span class="awk-string">"\n"</span> }</code></td>
+            <td>
+<pre><code>{ 
+    <span class="awk-keyword">for</span> (i = <span class="awk-builtin">NF</span>; i &gt; 0; i = i - 1) {
+        <span class="awk-function">printf</span> (i == 1 ? <span class="awk-string">"%s"</span> : <span class="awk-string">"%s "</span>), <span class="awk-field">$i</span>; <span class="awk-function">printf</span> <span class="awk-string">"\n"</span> 
+    }
+}</code></pre>
+            </td>
             <td><code><span class="mshellLITERAL">wt</span> (reverse wjoin wl) each</code></td>
         </tr>
         <tr>

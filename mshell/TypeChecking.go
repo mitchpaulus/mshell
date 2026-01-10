@@ -139,6 +139,12 @@ var builtInDefs = map[string][]TypeDefinition{
 			OutputTypes: []MShellType{TypeString{}},
 		},
 	},
+	"strEscape": {
+		{
+			InputTypes:  []MShellType{TypeString{}},
+			OutputTypes: []MShellType{TypeString{}},
+		},
+	},
 	"leftPad": {
 		{
 			InputTypes:  []MShellType{TypeString{}, TypeString{}, TypeInt{}},

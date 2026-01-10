@@ -92,6 +92,9 @@ const (
 	ASTERISKBINARY
 	CARET
 	CARETBINARY
+	ELSE
+	ELSESTAR
+	STARIF
 )
 
 func (t TokenType) String() string {
@@ -248,6 +251,12 @@ func (t TokenType) String() string {
 		return "CARET"
 	case CARETBINARY:
 		return "CARET BINARY"
+	case ELSE:
+		return "ELSE"
+	case ELSESTAR:
+		return "ELSESTAR"
+	case STARIF:
+		return "STARIF"
 	default:
 		return "UNKNOWN"
 	}
@@ -459,7 +468,19 @@ func (l *Lexer) literalOrKeywordType() TokenType {
 	case 'd':
 		return l.checkKeyword(1, "ef", DEF)
 	case 'e':
-		return l.checkKeyword(1, "nd", END)
+		if l.curLen() > 1 {
+			c := l.input[l.start+1]
+			switch c {
+			case 'l':
+				if l.curLen() == 4 && l.peek() == '*' {
+					l.advance()
+					return l.checkKeyword(5, "", ELSESTAR)
+				}
+				return l.checkKeyword(2, "se", ELSE)
+			case 'n':
+				return l.checkKeyword(2, "d", END)
+			}
+		}
 	case 'f':
 		if l.curLen() > 1 {
 			c := l.input[l.start+1]
@@ -714,6 +735,15 @@ func (l *Lexer) scanTokenAll() Token {
 		if l.peek() == 'b' {
 			l.advance()
 			return l.makeToken(ASTERISKBINARY)
+		} else if l.peek() == 'i' && l.peekNext() == 'f' {
+			l.advance()
+			l.advance()
+			// Check that we're at end or next char is not a literal char
+			if !isAllowedLiteral(l.peek()) {
+				return l.makeToken(STARIF)
+			}
+			// Otherwise continue parsing as literal
+			return l.parseLiteralOrKeyword()
 		} else {
 			return l.makeToken(ASTERISK)
 		}

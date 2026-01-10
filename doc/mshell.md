@@ -10,6 +10,21 @@ History search is prefix-based and case-insensitive. The prefix is whatever is c
 - Shift-Tab: cycle completion backward when matches are active
 - Ctrl-N/Ctrl-P: when cycling completions, move forward/backward through matches
 
+### Definition-based completions
+
+The CLI can use definition metadata to provide argument completions for binaries. Add a `complete` key in the metadata dictionary of a `def` to register it for one or more command names. The definition is invoked with a clean stack containing a single list of argument tokens (excluding the binary name and the current prefix), and it should return a list of strings.
+
+```mshell
+def mshCompletion { 'complete': ['msh' 'mshell'] } ([str] -- [str])
+    input!
+    ['-h' '--help' '--html' '--lex' '--parse' '--version' '-c'] options!
+    ['lsp' 'bin' 'completions'] subcommands!
+    @options @subcommands extend
+end
+```
+
+The standard library includes `__gitCompletion` for git argument completion.
+
 ### Shell completions
 
 mshell can emit shell completion scripts for:
@@ -144,6 +159,18 @@ Dates can be subtracted from each other, and the result is a float number of day
 ```mshell
 2023-10-02 2023-10-01 - # 1.0
 ```
+
+## Definitions
+
+Definitions use `def` with an optional metadata dictionary before the type signature.
+
+```mshell
+def myfunction { 'key': 10 } (str -- str)
+  ...
+end
+```
+
+Metadata values must be static: strings (single or double quoted), integers, floats, booleans, or nested lists/dicts of the same. Interpolated strings are not allowed.
 
 ## Built-ins
 

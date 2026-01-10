@@ -22,7 +22,7 @@
             <Keywords name="Folders in code1">def</Keywords>
             <Keywords name="Folders in code2">end</Keywords>
             <Keywords name="Folders in comment" />
-            <Keywords name="Keywords1">def end if iff loop read str break continue and or not soe</Keywords>
+            <Keywords name="Keywords1">def end if *if else else* iff loop read str break continue and or not soe</Keywords>
             <Keywords name="Keywords2">true false</Keywords>
             <Keywords name="Keywords3">int float bool</Keywords>
             <Keywords name="Keywords4">o oc os</Keywords>

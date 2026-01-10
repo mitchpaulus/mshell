@@ -57,6 +57,8 @@ const (
 	TABMATCHENVVAR
 	TABMATCHVAR
 	TABMATCHCMD
+	TABMATCHBUILTIN
+	TABMATCHDEF
 )
 
 var tempFiles []string
@@ -562,6 +564,7 @@ type TermState struct {
 	evalState         EvalState
 	callStack         CallStack
 	stdLibDefs        []MShellDefinition
+	completionDefinitions map[string][]MShellDefinition
 	initCallStackItem CallStackItem
 	// pathBinManager IPathBinManager
 }
@@ -716,23 +719,24 @@ func (state *TermState) setTabCompletions(matches []string) {
 }
 
 func (state *TermState) buildCompletionInsert(match string, tokenType TokenType) string {
-	if tokenType == UNFINISHEDSINGLEQUOTESTRING {
+	switch tokenType {
+	case UNFINISHEDSINGLEQUOTESTRING:
 		return "'" + match
-	} else if tokenType == UNFINISHEDPATH {
+	case UNFINISHEDPATH:
 		insertString := "`" + match
 		if !strings.HasSuffix(match, string(os.PathSeparator)) {
 			insertString += "` "
 		}
 		return insertString
+	default:
+		state.l.resetInput(match)
+		tokens, err := state.l.Tokenize()
+		if len(tokens) > 2 && err == nil {
+			// Quote when the completion needs multiple tokens to parse.
+			return "'" + match + "'"
+		}
+		return match
 	}
-
-	state.l.resetInput(match)
-	tokens, err := state.l.Tokenize()
-	if len(tokens) > 2 && err == nil {
-		// Quote when the completion needs multiple tokens to parse.
-		return "'" + match + "'"
-	}
-	return match
 }
 
 func (state *TermState) cycleTabCompletion(direction int) {
@@ -1067,6 +1071,167 @@ func IsDefinitionDefined(name string, definitions []MShellDefinition) bool {
 		}
 	}
 	return false
+}
+
+func completionMetadataNames(def MShellDefinition) ([]string, error) {
+	for _, item := range def.Metadata.Items {
+		if item.Key != "complete" {
+			continue
+		}
+		if len(item.Value) != 1 {
+			return nil, fmt.Errorf("metadata key 'complete' expects a single list value")
+		}
+		list, ok := item.Value[0].(*MShellParseList)
+		if !ok {
+			return nil, fmt.Errorf("metadata key 'complete' expects a list value")
+		}
+		names := make([]string, 0, len(list.Items))
+		for _, listItem := range list.Items {
+			token, ok := listItem.(Token)
+			if !ok {
+				return nil, fmt.Errorf("metadata key 'complete' list items must be strings")
+			}
+			name, err := completionMetadataString(token)
+			if err != nil {
+				return nil, err
+			}
+			names = append(names, name)
+		}
+		return names, nil
+	}
+
+	return nil, nil
+}
+
+func completionMetadataString(token Token) (string, error) {
+	switch token.Type {
+	case STRING:
+		return ParseRawString(token.Lexeme)
+	case SINGLEQUOTESTRING:
+		if len(token.Lexeme) < 2 {
+			return "", fmt.Errorf("empty single-quoted string in completion metadata")
+		}
+		return token.Lexeme[1 : len(token.Lexeme)-1], nil
+	default:
+		return "", fmt.Errorf("expected string token for completion metadata, got %s", token.Type)
+	}
+}
+
+func completionArgString(token Token) (string, error) {
+	switch token.Type {
+	case STRING:
+		return ParseRawString(token.Lexeme)
+	case SINGLEQUOTESTRING:
+		if len(token.Lexeme) < 2 {
+			return "", fmt.Errorf("empty single-quoted string in completion args")
+		}
+		return token.Lexeme[1 : len(token.Lexeme)-1], nil
+	case PATH:
+		if len(token.Lexeme) < 2 {
+			return "", fmt.Errorf("empty path literal in completion args")
+		}
+		return token.Lexeme[1 : len(token.Lexeme)-1], nil
+	default:
+		return token.Lexeme, nil
+	}
+}
+
+func (state *TermState) buildCompletionDefinitionMap(definitions []MShellDefinition) map[string][]MShellDefinition {
+	completionDefs := make(map[string][]MShellDefinition)
+	for _, def := range definitions {
+		names, err := completionMetadataNames(def)
+		if err != nil {
+			fmt.Fprintf(state.f, "Completion metadata error in def '%s': %s\n", def.Name, err)
+			continue
+		}
+		for _, name := range names {
+			completionDefs[name] = append(completionDefs[name], def)
+		}
+	}
+	return completionDefs
+}
+
+func (state *TermState) completionArgsFromTokens(tokens []Token, prefix string) []string {
+	args := make([]string, 0, len(tokens))
+	excludeIndex := -1
+	if prefix != "" && len(tokens) >= 2 {
+		excludeIndex = len(tokens) - 2
+	}
+
+	foundBinary := false
+	for i, token := range tokens {
+		if token.Type == WHITESPACE || token.Type == LINECOMMENT || token.Type == EOF {
+			continue
+		}
+		if !foundBinary {
+			foundBinary = true
+			continue
+		}
+		if i == excludeIndex {
+			continue
+		}
+		arg, err := completionArgString(token)
+		if err != nil {
+			fmt.Fprintf(state.f, "Completion arg error for token %s: %s\n", token, err)
+			continue
+		}
+		args = append(args, arg)
+	}
+
+	return args
+}
+
+func (state *TermState) runCompletionDefinitions(defs []MShellDefinition, args []string) []string {
+	if len(defs) == 0 {
+		return nil
+	}
+	matches := make([]string, 0)
+	seen := map[string]struct{}{}
+
+	for _, def := range defs {
+		completionList := NewList(len(args))
+		for i, arg := range args {
+			completionList.Items[i] = MShellString{Content: arg}
+		}
+		completionStack := MShellStack{completionList}
+		callStackItem := CallStackItem{MShellParseItem: def.NameToken, Name: def.Name, CallStackType: CALLSTACKDEF}
+		result := state.evalState.Evaluate(def.Items, &completionStack, state.context, state.stdLibDefs, callStackItem)
+		if !result.Success {
+			fmt.Fprintf(state.f, "Completion definition '%s' failed to evaluate\n", def.Name)
+			continue
+		}
+		if result.ExitCalled {
+			fmt.Fprintf(state.f, "Completion definition '%s' called exit\n", def.Name)
+			continue
+		}
+		if len(completionStack) == 0 {
+			fmt.Fprintf(state.f, "Completion definition '%s' left an empty stack\n", def.Name)
+			continue
+		}
+		if len(completionStack) > 1 {
+			fmt.Fprintf(state.f, "Completion definition '%s' left %d items on the stack\n", def.Name, len(completionStack))
+		}
+		top := completionStack[len(completionStack)-1]
+		list, ok := top.(*MShellList)
+		if !ok {
+			fmt.Fprintf(state.f, "Completion definition '%s' did not return a list\n", def.Name)
+			continue
+		}
+		for _, item := range list.Items {
+			str, err := item.CastString()
+			if err != nil {
+				fmt.Fprintf(state.f, "Completion definition '%s' returned a non-string: %s\n", def.Name, err)
+				continue
+			}
+			if _, ok := seen[str]; ok {
+				continue
+			}
+			seen[str] = struct{}{}
+			matches = append(matches, str)
+		}
+	}
+
+	return matches
 }
 
 func (state *TermState) clearToPrompt() {
@@ -1724,6 +1889,7 @@ func (state *TermState) InteractiveMode() error {
 	}
 
 	state.stdLibDefs = stdLibDefs
+	state.completionDefinitions = state.buildCompletionDefinitionMap(state.stdLibDefs)
 
 	history = make([]string, 0)
 	state.historyIndex = 0
@@ -2661,9 +2827,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			}
 
 			// Check if we are in binary completion
-			_, binaryCompletion := state.isFirstTokenBinary(tokens)
-			_ = binaryCompletion
-
+			binaryToken, binaryCompletion := state.isFirstTokenBinary(tokens)
 
 			replaceStart := state.index - lastTokenLength
 			replaceEnd := state.index
@@ -2673,7 +2837,24 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 
 			var matches []TabMatch
 
-			// Environment variable completion
+			// Binary specific completions should come first
+			if binaryCompletion {
+				isCompletingBinary := prefix != "" && lastToken.Start == binaryToken.Start && lastToken.Line == binaryToken.Line
+				if !isCompletingBinary {
+					defs := state.completionDefinitions[binaryToken.Lexeme]
+					if len(defs) > 0 {
+						args := state.completionArgsFromTokens(tokens, prefix)
+						completionMatches := state.runCompletionDefinitions(defs, args)
+						for _, match := range completionMatches {
+							if strings.HasPrefix(match, prefix) {
+								matches = append(matches, TabMatch{TABMATCHCMD, match})
+							}
+						}
+					}
+				}
+			}
+
+			// Environment variable completions should come next
 			if len(prefix) > 0 && prefix[0] == '$' {
 				vars := os.Environ()
 				for _, envVar := range vars {
@@ -2707,9 +2888,24 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 
 			// Try to complete on command names
 			if len(tokens) == 2 && len(prefix) > 0 && lastToken.Type == LITERAL {
+				seen := make(map[string]struct{})
 				binMatches := state.context.Pbm.Matches(prefix)
 				for _, match := range binMatches {
 					matches = append(matches, TabMatch{TABMATCHCMD, match})
+					seen[match] = struct{}{}
+				}
+
+			}
+
+			for name := range BuiltInList {
+				if strings.HasPrefix(name, prefix) {
+					matches = append(matches, TabMatch{TABMATCHBUILTIN, name})
+				}
+			}
+
+			for _, def := range state.stdLibDefs {
+				if strings.HasPrefix(def.Name, prefix) {
+					matches = append(matches, TabMatch{TABMATCHDEF, def.Name})
 				}
 			}
 
@@ -2798,11 +2994,12 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 					// Print bell
 					fmt.Fprintf(os.Stdout, "\a")
 				} else {
-					if lastToken.Type == UNFINISHEDSINGLEQUOTESTRING {
+					switch lastToken.Type {
+					case UNFINISHEDSINGLEQUOTESTRING:
 						longestCommonPrefix = "'" + longestCommonPrefix
-					} else if lastToken.Type == UNFINISHEDPATH {
+					case UNFINISHEDPATH:
 						longestCommonPrefix = "`" + longestCommonPrefix
-					} else {
+					default:
 						state.l.resetInput(longestCommonPrefix)
 						tokens, err := state.l.Tokenize()
 						if len(tokens) > 2 && err == nil {

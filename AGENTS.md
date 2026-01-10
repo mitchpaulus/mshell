@@ -9,6 +9,9 @@ The standard library for the language is in `lib/std.msh`.
 Always work in a separate feature branch.
 Do NOT run `gofmt` without my permission. I will tell you when it's allowed.
 
+You do not have much training data on this language. Please read the HTML documentation in `doc/` to get a full understanding of the language.
+If you don't understand something, or don't find something in the docs, you MUST tell me, so it can be made clear for you and everyone else.
+
 ## Building
 
 In the `mshell` directory, there are several very simple build scripts that are one line `go build` commands.
@@ -36,6 +39,12 @@ If something is added or removed, make sure to update `mshell/BuiltInList.go`.
 
 The CLI code is at `mshell/Main.go`.
 If you make a change to the CLI interface, make sure to update the shell completions.
+
+### Completions
+
+Completions for common commands are in the standard library `lib/std.msh` at the bottom.
+Wrap in a Vim fold, and make the definition following the pattern of the others.
+Completions definitions have key 'complete' in the definition meta data, where the value is the list of commands it is used for.
 
 ## Testing instructions
 

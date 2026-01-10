@@ -22,7 +22,11 @@ contexts:
       scope: comment.line.number-sign.msh
 
   keywords:
-    - match: '\\b(def|end|if|iff|loop|read|str|break|continue)\\b'
+    - match: 'else\\*'
+      scope: keyword.control.msh
+    - match: '\\*if'
+      scope: keyword.control.msh
+    - match: '\\b(def|end|if|iff|loop|read|str|break|continue|else)\\b'
       scope: keyword.control.msh
     - match: '\\b(and|or|not)\\b'
       scope: keyword.operator.word.msh
