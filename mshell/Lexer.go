@@ -68,6 +68,7 @@ const (
 	DEF
 	END
 	STDERRREDIRECT
+	STDERRAPPEND
 	TYPEINT
 	TYPEFLOAT
 	// TYPESTRING, using str token instead
@@ -201,6 +202,8 @@ func (t TokenType) String() string {
 		return "END"
 	case STDERRREDIRECT:
 		return "STDERRREDIRECT"
+	case STDERRAPPEND:
+		return "STDERRAPPEND"
 	case TYPEINT:
 		return "TYPEINT"
 	case TYPEFLOAT:
@@ -832,6 +835,11 @@ func (l *Lexer) parseNumberOrStartIndexer() Token {
 			return l.makeToken(STARTINDEXER)
 		}
 	} else if peek == '>' {
+		if l.peekNext() == '>' {
+			l.advance()
+			l.advance()
+			return l.makeToken(STDERRAPPEND)
+		}
 		l.advance()
 		return l.makeToken(STDERRREDIRECT)
 	} else if peek == '.' {

@@ -32,20 +32,32 @@ To initiate execution, you use one of 3 operators:
 <span class="mshellEOF"></span></code>
 </pre>
 
-<p> 
+<p>
 The other choice you often have when executing commands is what to do with the standard output.
 Sometimes you will want to redirect it to a file, other times you will want to leave the contents on the stack to process further.
-For that, you use the <code>></code> and <code>*</code> operators.
+For that, you use the <code>></code>, <code>>></code>, <code>*</code>, and <code>*b</code> operators.
 </p>
 
 <pre>
-<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`fileToRedirectTo`</span> <span class="mshellGREATERTHAN">&gt;</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Redirects the output to the file.</span>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`fileToRedirectTo`</span> <span class="mshellGREATERTHAN">&gt;</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Redirects stdout to the file, truncating it.</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`fileToRedirectTo`</span> <span class="mshellSTDAPPEND">&gt;&gt;</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Redirects stdout to the file, appending.</span>
 <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellASTERISK">*</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Puts all of stdout on the stack as a string.</span>
 <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellASTERISKBINARY">*b</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Puts all of stdout on the stack as a binary.</span>
 </code>
 </pre>
 
-<p> You can do similar things with standard error. </p>
+
+<p> You can do similar things with standard error.</p>
+
+<p>
+To redirect standard error to a file, use <code>2></code>.
+</p>
+
+<pre>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`errors.log`</span> <span class="mshellSTDERRREDIRECT">2&gt;</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Redirects stderr to the file, truncating it.</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`errors.log`</span> <span class="mshellSTDERRAPPEND">2&gt;&gt;</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Redirects stderr to the file, appending.</span>
+</code>
+</pre>
 
 <pre>
 <code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellCARET">^</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Puts all of stderr on the stack as a string.</span>
