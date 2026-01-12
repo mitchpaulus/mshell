@@ -37,81 +37,7 @@ const (
 
 const mshellVersion = "0.8.0"
 
-type TabMatch struct {
-	TabMatchType TabMatchType
-	Match        string
-}
-
-func GetMatchTexts(matches []TabMatch) []string {
-	matchText := make([]string, len(matches))
-	for i, m := range matches {
-		matchText[i] = m.Match
-	}
-	return matchText
-}
-
-type TabMatchType int
-
-const (
-	TABMATCHFILE TabMatchType = iota
-	TABMATCHENVVAR
-	TABMATCHVAR
-	TABMATCHCMD
-	TABMATCHBUILTIN
-	TABMATCHDEF
-)
-
 var tempFiles []string
-
-func getLongestCommonPrefix(strs []string) string {
-	if len(strs) == 0 {
-		return ""
-	} else if len(strs) == 1 {
-		return strs[0]
-	}
-
-	// sort.Strings(strs)
-
-	// first := strs[0]
-	// last := strs[len(strs)-1]
-	b := strings.Builder{}
-
-	// Max int
-	minLen := int(^uint(0) >> 1)
-
-	if len(strs[0]) == 0 {
-		return ""
-	}
-
-	first_byte_of_first := strs[0][0]
-
-	for _, str := range strs {
-		if len(str) == 0 {
-			return ""
-		}
-		l := len(str)
-		if l < minLen {
-			minLen = l
-		}
-		if str[0] != first_byte_of_first {
-			return ""
-		}
-	}
-
-	b.WriteByte(first_byte_of_first)
-
-	for i := 1; i < minLen; i++ {
-		first_byte := strs[0][i]
-		for _, str := range strs {
-			if str[i] != first_byte {
-				return b.String()
-			}
-		}
-		b.WriteByte(first_byte)
-	}
-
-	return b.String()
-}
 
 func main() {
 	// Enable profiling
@@ -2854,120 +2780,34 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				}
 			}
 
-			// Environment variable completions should come next
-			if len(prefix) > 0 && prefix[0] == '$' {
-				vars := os.Environ()
-				for _, envVar := range vars {
-					// state.f.Write([]byte(fmt.Sprintf("Checking env var: '%s'\n", envVar)))
-					if strings.HasPrefix(envVar, prefix[1:]) {
-						// Split on '=' and take the first part
-						parts := strings.SplitN(envVar, "=", 2)
-						if len(parts) > 0 {
-							matches = append(matches, TabMatch{TABMATCHENVVAR, "$" + parts[0]})
-						}
-					}
-				}
+			// Build completion dependencies from current state
+			variables := make(map[string]struct{}, len(state.context.Variables))
+			for v := range state.context.Variables {
+				variables[v] = struct{}{}
 			}
 
-			// Variable completion
-			if len(prefix) > 0 && prefix[0] == '@' {
-				searchPrefix := prefix[1:]
-				for v := range state.context.Variables {
-					if strings.HasPrefix(v, searchPrefix) {
-						matches = append(matches, TabMatch{TABMATCHVAR, "@" + v})
-					}
-				}
-			} else if lastToken.Type == LITERAL {
-				// Completion on variables, since you could always end with !
-				for v := range state.context.Variables {
-					if strings.HasPrefix(v, prefix) {
-						matches = append(matches, TabMatch{TABMATCHVAR, v + "!"})
-					}
-				}
+			definitions := make([]string, len(state.stdLibDefs))
+			for i, def := range state.stdLibDefs {
+				definitions[i] = def.Name
 			}
 
-			// Try to complete on command names
-			if len(tokens) == 2 && len(prefix) > 0 && lastToken.Type == LITERAL {
-				seen := make(map[string]struct{})
-				binMatches := state.context.Pbm.Matches(prefix)
-				for _, match := range binMatches {
-					matches = append(matches, TabMatch{TABMATCHCMD, match})
-					seen[match] = struct{}{}
-				}
-
+			deps := CompletionDeps{
+				FS:          OSCompletionFS{},
+				Env:         OSCompletionEnv{},
+				Binaries:    state.context.Pbm,
+				Variables:   variables,
+				BuiltIns:    BuiltInList,
+				Definitions: definitions,
 			}
 
-			for name := range BuiltInList {
-				if strings.HasPrefix(name, prefix) {
-					matches = append(matches, TabMatch{TABMATCHBUILTIN, name})
-				}
+			input := CompletionInput{
+				Prefix:        prefix,
+				LastTokenType: lastToken.Type,
+				NumTokens:     len(tokens),
 			}
 
-			for _, def := range state.stdLibDefs {
-				if strings.HasPrefix(def.Name, prefix) {
-					matches = append(matches, TabMatch{TABMATCHDEF, def.Name})
-				}
-			}
-
-			// FILE Path Completion
-			if prefix == "" {
-				// Dump everything in the current directory
-				cwd, err := os.Getwd()
-				if err == nil {
-					files, err := os.ReadDir(cwd)
-					if err == nil {
-						for _, file := range files {
-							if file.IsDir() {
-								matches = append(matches, TabMatch{TABMATCHFILE, file.Name() + string(os.PathSeparator)})
-							} else {
-								matches = append(matches, TabMatch{TABMATCHFILE, file.Name()})
-							}
-						}
-					}
-				}
-			} else if lastToken.Type != UNFINISHEDSTRING && lastToken.Type != UNFINISHEDSINGLEQUOTESTRING {
-				// Split on last path separator
-				indexOfLastSeparator := -1
-				for i := len(prefix) - 1; i >= 0; i-- {
-					if IsPathSeparator(prefix[i]) {
-						// Found a path separator, split here
-						indexOfLastSeparator = i
-						break
-					}
-				}
-
-				dir := prefix[0 : indexOfLastSeparator+1]
-				filename := prefix[indexOfLastSeparator+1:]
-
-				// cleanPath := filepath.Clean(prefix)
-				// dir := filepath.Dir(cleanPath)
-				// filename := filepath.Base(prefix)
-				// dir := UnmodifiedDir(prefix)
-
-				fmt.Fprintf(state.f, "Dir: '%s', Filename: '%s'\n", dir, filename)
-
-				var searchDir string
-				if len(dir) == 0 {
-					searchDir = "."
-				} else {
-					searchDir = dir
-				}
-
-				files, err := os.ReadDir(searchDir)
-				if err == nil {
-					// Find all files that start with prefix
-					for _, file := range files {
-						if strings.HasPrefix(file.Name(), filename) {
-							// Rejoin the directory and filename. If a directory, end with a path separator.
-							if file.IsDir() {
-								matches = append(matches, TabMatch{TABMATCHFILE, dir + file.Name() + string(os.PathSeparator)})
-							} else {
-								matches = append(matches, TabMatch{TABMATCHFILE, dir + file.Name()})
-							}
-						}
-					}
-				}
-			}
+			// Generate completions using the extracted function
+			matches = append(matches, GenerateCompletions(input, deps)...)
 
 			var insertString string
 			fmt.Fprintf(state.f, "Len matches: '%d'\n", len(matches))
