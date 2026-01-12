@@ -21,14 +21,8 @@ func TestSimpleCliParser_SingleCommand(t *testing.T) {
 		t.Errorf("Expected 1 command, got %d", len(pipeline.Commands))
 	}
 
-	if len(pipeline.Commands[0].Tokens) != 2 {
-		t.Errorf("Expected 2 tokens, got %d", len(pipeline.Commands[0].Tokens))
-	}
-
-	expected := "['ls' '-la'];"
-	result := pipeline.ToMShellString()
-	if result != expected {
-		t.Errorf("Expected '%s', got '%s'", expected, result)
+	if len(pipeline.Commands[0].Items) != 2 {
+		t.Errorf("Expected 2 items, got %d", len(pipeline.Commands[0].Items))
 	}
 }
 
@@ -48,12 +42,6 @@ func TestSimpleCliParser_Pipeline(t *testing.T) {
 	if len(pipeline.Commands) != 2 {
 		t.Errorf("Expected 2 commands, got %d", len(pipeline.Commands))
 	}
-
-	expected := "[['cat' 'file.txt'] ['grep' 'foo']]|;"
-	result := pipeline.ToMShellString()
-	if result != expected {
-		t.Errorf("Expected '%s', got '%s'", expected, result)
-	}
 }
 
 func TestSimpleCliParser_StdinRedirect(t *testing.T) {
@@ -72,12 +60,6 @@ func TestSimpleCliParser_StdinRedirect(t *testing.T) {
 	if pipeline.StdinRedirect == nil {
 		t.Error("Expected stdin redirect to be set")
 	}
-
-	expected := "['grep' 'foo'] `input.txt` < ;"
-	result := pipeline.ToMShellString()
-	if result != expected {
-		t.Errorf("Expected '%s', got '%s'", expected, result)
-	}
 }
 
 func TestSimpleCliParser_StdoutRedirect(t *testing.T) {
@@ -95,12 +77,6 @@ func TestSimpleCliParser_StdoutRedirect(t *testing.T) {
 
 	if pipeline.StdoutRedirect == nil {
 		t.Error("Expected stdout redirect to be set")
-	}
-
-	expected := "['cat' 'file.txt'] `output.txt` > ;"
-	result := pipeline.ToMShellString()
-	if result != expected {
-		t.Errorf("Expected '%s', got '%s'", expected, result)
 	}
 }
 
@@ -124,12 +100,6 @@ func TestSimpleCliParser_PipelineWithStdoutRedirect(t *testing.T) {
 	if pipeline.StdoutRedirect == nil {
 		t.Error("Expected stdout redirect to be set")
 	}
-
-	expected := "[['cat' 'file.txt'] ['grep' 'foo'] `output.txt` >]|;"
-	result := pipeline.ToMShellString()
-	if result != expected {
-		t.Errorf("Expected '%s', got '%s'", expected, result)
-	}
 }
 
 func TestSimpleCliParser_StdinAndStdoutRedirect(t *testing.T) {
@@ -152,12 +122,6 @@ func TestSimpleCliParser_StdinAndStdoutRedirect(t *testing.T) {
 	if pipeline.StdoutRedirect == nil {
 		t.Error("Expected stdout redirect to be set")
 	}
-
-	expected := "['sort'] `input.txt` < `output.txt` > ;"
-	result := pipeline.ToMShellString()
-	if result != expected {
-		t.Errorf("Expected '%s', got '%s'", expected, result)
-	}
 }
 
 func TestSimpleCliParser_MultiplePipes(t *testing.T) {
@@ -176,16 +140,10 @@ func TestSimpleCliParser_MultiplePipes(t *testing.T) {
 	if len(pipeline.Commands) != 3 {
 		t.Errorf("Expected 3 commands, got %d", len(pipeline.Commands))
 	}
-
-	expected := "[['cat' 'file'] ['grep' 'foo'] ['wc' '-l']]|;"
-	result := pipeline.ToMShellString()
-	if result != expected {
-		t.Errorf("Expected '%s', got '%s'", expected, result)
-	}
 }
 
-func TestSimpleCliParser_PathToken(t *testing.T) {
-	input := "cat `myfile.txt`"
+func TestSimpleCliParser_ListArgument(t *testing.T) {
+	input := "numargs 1 2 [4 5 6]"
 	l := NewLexer(input, nil)
 	p := NewMShellSimpleCliParser(l)
 
@@ -197,32 +155,15 @@ func TestSimpleCliParser_PathToken(t *testing.T) {
 		t.Fatal("Expected non-nil pipeline")
 	}
 
-	// Path token should be preserved as-is
-	expected := "['cat' `myfile.txt`];"
-	result := pipeline.ToMShellString()
-	if result != expected {
-		t.Errorf("Expected '%s', got '%s'", expected, result)
-	}
-}
-
-func TestSimpleCliParser_StringToken(t *testing.T) {
-	input := `echo "hello world"`
-	l := NewLexer(input, nil)
-	p := NewMShellSimpleCliParser(l)
-
-	pipeline, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Unexpected error: %v", err)
-	}
-	if pipeline == nil {
-		t.Fatal("Expected non-nil pipeline")
+	// Should have 4 items: numargs, 1, 2, [4 5 6]
+	if len(pipeline.Commands[0].Items) != 4 {
+		t.Errorf("Expected 4 items, got %d", len(pipeline.Commands[0].Items))
 	}
 
-	// Double-quoted string should be preserved
-	expected := `['echo' "hello world"];`
-	result := pipeline.ToMShellString()
-	if result != expected {
-		t.Errorf("Expected '%s', got '%s'", expected, result)
+	// Fourth item should be a list
+	_, ok := pipeline.Commands[0].Items[3].(*MShellParseList)
+	if !ok {
+		t.Errorf("Expected fourth item to be MShellParseList, got %T", pipeline.Commands[0].Items[3])
 	}
 }
 
@@ -262,8 +203,8 @@ func TestSimpleCliParser_EmptyInput(t *testing.T) {
 	}
 }
 
-func TestSimpleCliParser_StdinRedirectWithPath(t *testing.T) {
-	input := "grep foo < `input.txt`"
+func TestSimpleCliParser_ToMShellFile_SingleCommand(t *testing.T) {
+	input := "ls -la"
 	l := NewLexer(input, nil)
 	p := NewMShellSimpleCliParser(l)
 
@@ -271,14 +212,114 @@ func TestSimpleCliParser_StdinRedirectWithPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
-	if pipeline == nil {
-		t.Fatal("Expected non-nil pipeline")
+
+	file := pipeline.ToMShellFile()
+	if file == nil {
+		t.Fatal("Expected non-nil MShellFile")
 	}
 
-	// Path token should be preserved in redirect
-	expected := "['grep' 'foo'] `input.txt` < ;"
-	result := pipeline.ToMShellString()
-	if result != expected {
-		t.Errorf("Expected '%s', got '%s'", expected, result)
+	// Should have: [list] ;
+	if len(file.Items) != 2 {
+		t.Errorf("Expected 2 items, got %d", len(file.Items))
+	}
+
+	// First item should be a list
+	list, ok := file.Items[0].(*MShellParseList)
+	if !ok {
+		t.Errorf("Expected first item to be MShellParseList, got %T", file.Items[0])
+	}
+
+	// List should have 2 items: 'ls' and '-la'
+	if len(list.Items) != 2 {
+		t.Errorf("Expected 2 items in command list, got %d", len(list.Items))
+	}
+
+	// Second item should be EXECUTE
+	execToken, ok := file.Items[1].(Token)
+	if !ok || execToken.Type != EXECUTE {
+		t.Errorf("Expected EXECUTE token, got %T %v", file.Items[1], file.Items[1])
+	}
+}
+
+func TestSimpleCliParser_ToMShellFile_PipelineWithRedirect(t *testing.T) {
+	input := "cat file.txt | wc -l > count.txt"
+	l := NewLexer(input, nil)
+	p := NewMShellSimpleCliParser(l)
+
+	pipeline, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	file := pipeline.ToMShellFile()
+	if file == nil {
+		t.Fatal("Expected non-nil MShellFile")
+	}
+
+	// Should have: [outer list] | ;
+	if len(file.Items) != 3 {
+		t.Errorf("Expected 3 items, got %d", len(file.Items))
+	}
+
+	// First item should be outer list
+	outerList, ok := file.Items[0].(*MShellParseList)
+	if !ok {
+		t.Errorf("Expected first item to be MShellParseList, got %T", file.Items[0])
+	}
+
+	// Outer list should have: [cmd1] [cmd2] path >
+	// That's 4 items
+	if len(outerList.Items) != 4 {
+		t.Errorf("Expected 4 items in outer list, got %d", len(outerList.Items))
+	}
+
+	// Second item should be PIPE
+	pipeToken, ok := file.Items[1].(Token)
+	if !ok || pipeToken.Type != PIPE {
+		t.Errorf("Expected PIPE token, got %T %v", file.Items[1], file.Items[1])
+	}
+
+	// Third item should be EXECUTE
+	execToken, ok := file.Items[2].(Token)
+	if !ok || execToken.Type != EXECUTE {
+		t.Errorf("Expected EXECUTE token, got %T %v", file.Items[2], file.Items[2])
+	}
+}
+
+func TestSimpleCliParser_ToMShellFile_ListArgument(t *testing.T) {
+	input := "numargs 1 2 [4 5 6]"
+	l := NewLexer(input, nil)
+	p := NewMShellSimpleCliParser(l)
+
+	pipeline, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	file := pipeline.ToMShellFile()
+	if file == nil {
+		t.Fatal("Expected non-nil MShellFile")
+	}
+
+	// Should have: [list] ;
+	if len(file.Items) != 2 {
+		t.Errorf("Expected 2 items, got %d", len(file.Items))
+	}
+
+	// First item should be a list
+	cmdList, ok := file.Items[0].(*MShellParseList)
+	if !ok {
+		t.Fatalf("Expected first item to be MShellParseList, got %T", file.Items[0])
+	}
+
+	// Command list should have 4 items: 'numargs' '1' '2' [4 5 6]
+	if len(cmdList.Items) != 4 {
+		t.Errorf("Expected 4 items in command list, got %d", len(cmdList.Items))
+	}
+
+	// Fourth item should be a nested list (preserved from input)
+	_, ok = cmdList.Items[3].(*MShellParseList)
+	if !ok {
+		t.Errorf("Expected fourth item to be MShellParseList, got %T", cmdList.Items[3])
 	}
 }

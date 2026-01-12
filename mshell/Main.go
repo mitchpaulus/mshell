@@ -188,7 +188,7 @@ func main() {
 		return
 	}
 
-	if len(input) == 0 && term.IsTerminal(stdOutFd) {
+	if len(input) == 0 && term.IsTerminal(stdOutFd) && term.IsTerminal(int(os.Stdin.Fd())) {
 		// fmt.Fprintf(os.Stdout, "Got here\n")
 		numRows, numCols, err := term.GetSize(stdOutFd)
 		if err != nil {
@@ -2034,6 +2034,9 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 
 	state.p.NextToken()
 
+	var parsed *MShellFile
+	var err error
+
 	if p.curr.Type == LITERAL {
 		// Check for known commands. If so, we'll essentially wrap the entire command in a list to execute
 		literalStr := p.curr.Lexeme
@@ -2053,10 +2056,9 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 				l.resetInput(currentCommandStr)
 				p.NextToken()
 			} else if pipeline != nil {
-				currentCommandStr = pipeline.ToMShellString()
-				fmt.Fprintf(state.f, "Command: %s\n", currentCommandStr)
-				l.resetInput(currentCommandStr)
-				p.NextToken()
+				// Directly create the AST without re-parsing
+				parsed = pipeline.ToMShellFile()
+				fmt.Fprintf(state.f, "Command: %s\n", pipeline.ToMShellString())
 			} else {
 				// Empty pipeline, reset to original
 				l.resetInput(currentCommandStr)
@@ -2065,7 +2067,10 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 		}
 	}
 
-	parsed, err := p.ParseFile()
+	// Only parse normally if we didn't already create the AST from simple CLI
+	if parsed == nil {
+		parsed, err = p.ParseFile()
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "\r\nError parsing input: %s\n", err)
 		// Move to start

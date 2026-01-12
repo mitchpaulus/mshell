@@ -2,58 +2,42 @@ package main
 
 // SimpleCliParser parses simple CLI-style commands with pipes and redirects.
 // Grammar:
-//   CLI : tokens+ ('<' fileToken)? ('|' tokens+)* ('>' fileToken)?
+//   CLI : item+ ('<' item)? ('|' item+)* ('>' item)?
 //
-// Where fileToken is a LITERAL, STRING, SINGLEQUOTESTRING, or PATH.
+// Items are parsed using the normal MShellParser, which handles lists, dicts, etc.
+// Only PIPE, LESSTHAN, and GREATERTHAN are treated specially at the top level.
 
-// SimpleCliCommand represents a single command with its arguments
+// SimpleCliCommand represents a single command with its arguments (parsed items)
 type SimpleCliCommand struct {
-	Tokens []Token
+	Items []MShellParseItem
 }
 
 // SimpleCliPipeline represents the full CLI parse tree
 type SimpleCliPipeline struct {
 	Commands       []SimpleCliCommand // At least one command
-	StdinRedirect  *Token             // Optional stdin redirect file
-	StdoutRedirect *Token             // Optional stdout redirect file
+	StdinRedirect  MShellParseItem    // Optional stdin redirect (can be path, string, etc.)
+	StdoutRedirect MShellParseItem    // Optional stdout redirect
 }
 
-// MShellSimpleCliParser parses simple CLI-style input
+// MShellSimpleCliParser parses simple CLI-style input using MShellParser for items
 type MShellSimpleCliParser struct {
-	lexer *Lexer
-	curr  Token
+	parser *MShellParser
 }
 
 // NewMShellSimpleCliParser creates a new simple CLI parser
 func NewMShellSimpleCliParser(lexer *Lexer) *MShellSimpleCliParser {
-	parser := &MShellSimpleCliParser{lexer: lexer}
-	parser.NextToken()
-	return parser
+	return &MShellSimpleCliParser{
+		parser: NewMShellParser(lexer),
+	}
 }
 
-// NextToken advances to the next token
-func (p *MShellSimpleCliParser) NextToken() {
-	p.curr = p.lexer.scanToken()
-}
-
-// ResetInput resets the parser with new input
-func (p *MShellSimpleCliParser) ResetInput(input string) {
-	p.lexer.resetInput(input)
-	p.NextToken()
-}
-
-// isFileToken returns true if the token can be used as a file path for redirects
-func isFileToken(t Token) bool {
-	return t.Type == LITERAL || t.Type == STRING || t.Type == SINGLEQUOTESTRING || t.Type == PATH
-}
-
-// isCommandToken returns true if the token is valid as part of a command
-func isCommandToken(t Token) bool {
+// isSimpleCliDelimiter returns true if the token delimits commands/redirects in simple CLI mode
+func isSimpleCliDelimiter(t Token) bool {
 	switch t.Type {
 	case EOF, PIPE, LESSTHAN, GREATERTHAN:
-		return false
-	default:
 		return true
+	default:
+		return false
 	}
 }
 
@@ -64,62 +48,71 @@ func (p *MShellSimpleCliParser) Parse() (*SimpleCliPipeline, error) {
 		Commands: make([]SimpleCliCommand, 0),
 	}
 
-	// Parse first command (required: tokens+)
-	firstCmd := SimpleCliCommand{Tokens: make([]Token, 0)}
-	for isCommandToken(p.curr) {
-		firstCmd.Tokens = append(firstCmd.Tokens, p.curr)
-		p.NextToken()
+	// Parse first command (required: item+)
+	firstCmd, err := p.parseCommand()
+	if err != nil {
+		return nil, err
 	}
-
-	if len(firstCmd.Tokens) == 0 {
-		return nil, nil // Empty input or no valid tokens
+	if len(firstCmd.Items) == 0 {
+		return nil, nil // Empty input
 	}
 	result.Commands = append(result.Commands, firstCmd)
 
-	// Check for optional stdin redirect ('<' fileToken)?
-	if p.curr.Type == LESSTHAN {
-		p.NextToken() // consume '<'
-		if !isFileToken(p.curr) {
-			return nil, &SimpleCliParseError{Message: "expected file path after '<'", Token: p.curr}
+	// Check for optional stdin redirect ('<' item)?
+	if p.parser.curr.Type == LESSTHAN {
+		p.parser.NextToken() // consume '<'
+		item, err := p.parser.ParseItem()
+		if err != nil {
+			return nil, &SimpleCliParseError{Message: "expected item after '<'", Token: p.parser.curr}
 		}
-		stdinToken := p.curr // Make a copy
-		result.StdinRedirect = &stdinToken
-		p.NextToken()
+		result.StdinRedirect = item
 	}
 
-	// Parse zero or more piped commands ('|' tokens+)*
-	for p.curr.Type == PIPE {
-		p.NextToken() // consume '|'
+	// Parse zero or more piped commands ('|' item+)*
+	for p.parser.curr.Type == PIPE {
+		p.parser.NextToken() // consume '|'
 
-		cmd := SimpleCliCommand{Tokens: make([]Token, 0)}
-		for isCommandToken(p.curr) {
-			cmd.Tokens = append(cmd.Tokens, p.curr)
-			p.NextToken()
+		cmd, err := p.parseCommand()
+		if err != nil {
+			return nil, err
 		}
-
-		if len(cmd.Tokens) == 0 {
-			return nil, &SimpleCliParseError{Message: "expected command after '|'", Token: p.curr}
+		if len(cmd.Items) == 0 {
+			return nil, &SimpleCliParseError{Message: "expected command after '|'", Token: p.parser.curr}
 		}
 		result.Commands = append(result.Commands, cmd)
 	}
 
-	// Check for optional stdout redirect ('>' fileToken)?
-	if p.curr.Type == GREATERTHAN {
-		p.NextToken() // consume '>'
-		if !isFileToken(p.curr) {
-			return nil, &SimpleCliParseError{Message: "expected file path after '>'", Token: p.curr}
+	// Check for optional stdout redirect ('>' item)?
+	if p.parser.curr.Type == GREATERTHAN {
+		p.parser.NextToken() // consume '>'
+		item, err := p.parser.ParseItem()
+		if err != nil {
+			return nil, &SimpleCliParseError{Message: "expected item after '>'", Token: p.parser.curr}
 		}
-		stdoutToken := p.curr // Make a copy
-		result.StdoutRedirect = &stdoutToken
-		p.NextToken()
+		result.StdoutRedirect = item
 	}
 
 	// Should be at EOF now
-	if p.curr.Type != EOF {
-		return nil, &SimpleCliParseError{Message: "unexpected token after command", Token: p.curr}
+	if p.parser.curr.Type != EOF {
+		return nil, &SimpleCliParseError{Message: "unexpected token after command", Token: p.parser.curr}
 	}
 
 	return result, nil
+}
+
+// parseCommand parses items until we hit a delimiter (PIPE, LESSTHAN, GREATERTHAN, EOF)
+func (p *MShellSimpleCliParser) parseCommand() (SimpleCliCommand, error) {
+	cmd := SimpleCliCommand{Items: make([]MShellParseItem, 0)}
+
+	for !isSimpleCliDelimiter(p.parser.curr) {
+		item, err := p.parser.ParseItem()
+		if err != nil {
+			return cmd, err
+		}
+		cmd.Items = append(cmd.Items, item)
+	}
+
+	return cmd, nil
 }
 
 // SimpleCliParseError represents a parse error
@@ -132,132 +125,120 @@ func (e *SimpleCliParseError) Error() string {
 	return e.Message + " at " + e.Token.Lexeme
 }
 
-// ToMShellString transforms the simple CLI parse tree into mshell syntax.
-// Examples:
-//   - "ls -la" -> "['ls' '-la'];"
-//   - "cat file | grep foo" -> "[['cat' 'file'] ['grep' 'foo']]|;"
-//   - "grep foo < input.txt" -> "['grep' 'foo'] `input.txt` < ;"
-//   - "cat file > out.txt" -> "['cat' 'file'] `out.txt` > ;"
-//   - "cat file | grep foo > out.txt" -> "[['cat' 'file'] ['grep' 'foo'] `out.txt` >]|;"
-//   - "sort < in.txt | wc -l > out.txt" -> "[['sort'] `in.txt` < ['wc' '-l'] `out.txt` >]|;"
+// ToMShellString transforms the simple CLI parse tree into mshell syntax (for debugging).
 func (pipeline *SimpleCliPipeline) ToMShellString() string {
-	var sb stringBuilder
+	file := pipeline.ToMShellFile()
+	var result string
+	for _, item := range file.Items {
+		result += item.DebugString()
+	}
+	return result
+}
 
+// ToMShellFile transforms the simple CLI parse tree directly into an MShellFile AST.
+// Since items are already parsed as MShellParseItems, we just need to wrap them
+// in the appropriate list structure and add operators.
+func (pipeline *SimpleCliPipeline) ToMShellFile() *MShellFile {
 	hasPipe := len(pipeline.Commands) > 1
 
+	var items []MShellParseItem
+
 	if hasPipe {
-		// Multiple commands with redirects on first/last command:
-		// [[cmd1] stdin< [cmd2] stdout>]|;
-		sb.WriteString("[")
+		// Multiple commands: [[cmd1 items] [cmd2 items] redirect >]|;
+		// Create outer list containing command lists and redirects
+		outerItems := make([]MShellParseItem, 0)
+
 		for i, cmd := range pipeline.Commands {
-			sb.WriteString("[")
-			writeCommandTokens(&sb, cmd.Tokens)
-			sb.WriteString("]")
+			// Create inner command list from parsed items
+			cmdList := &MShellParseList{
+				Items:      convertItemsForExecution(cmd.Items),
+				StartToken: Token{Type: LEFT_SQUARE_BRACKET, Lexeme: "["},
+				EndToken:   Token{Type: RIGHT_SQUARE_BRACKET, Lexeme: "]"},
+			}
+			outerItems = append(outerItems, cmdList)
 
-			// Stdin redirect goes on first command
+			// Stdin redirect goes after first command
 			if i == 0 && pipeline.StdinRedirect != nil {
-				sb.WriteString(" ")
-				sb.WriteString(tokenToMShellPath(*pipeline.StdinRedirect))
-				sb.WriteString(" <")
+				outerItems = append(outerItems, pipeline.StdinRedirect)
+				outerItems = append(outerItems, Token{Type: LESSTHAN, Lexeme: "<"})
 			}
 
-			// Stdout redirect goes on last command
+			// Stdout redirect goes after last command
 			if i == len(pipeline.Commands)-1 && pipeline.StdoutRedirect != nil {
-				sb.WriteString(" ")
-				sb.WriteString(tokenToMShellPath(*pipeline.StdoutRedirect))
-				sb.WriteString(" >")
-			}
-
-			// Add space before next command (but not after last)
-			if i < len(pipeline.Commands)-1 {
-				sb.WriteString(" ")
+				outerItems = append(outerItems, pipeline.StdoutRedirect)
+				outerItems = append(outerItems, Token{Type: GREATERTHAN, Lexeme: ">"})
 			}
 		}
-		sb.WriteString("]|;")
+
+		outerList := &MShellParseList{
+			Items:      outerItems,
+			StartToken: Token{Type: LEFT_SQUARE_BRACKET, Lexeme: "["},
+			EndToken:   Token{Type: RIGHT_SQUARE_BRACKET, Lexeme: "]"},
+		}
+
+		items = []MShellParseItem{
+			outerList,
+			Token{Type: PIPE, Lexeme: "|"},
+			Token{Type: EXECUTE, Lexeme: ";"},
+		}
 	} else {
-		// Single command: ['cmd' args]
-		sb.WriteString("[")
-		writeCommandTokens(&sb, pipeline.Commands[0].Tokens)
-		sb.WriteString("]")
+		// Single command: [cmd items] redirect < redirect > ;
+		cmdList := &MShellParseList{
+			Items:      convertItemsForExecution(pipeline.Commands[0].Items),
+			StartToken: Token{Type: LEFT_SQUARE_BRACKET, Lexeme: "["},
+			EndToken:   Token{Type: RIGHT_SQUARE_BRACKET, Lexeme: "]"},
+		}
+		items = []MShellParseItem{cmdList}
 
 		// Add stdin redirect if present
 		if pipeline.StdinRedirect != nil {
-			sb.WriteString(" ")
-			sb.WriteString(tokenToMShellPath(*pipeline.StdinRedirect))
-			sb.WriteString(" <")
+			items = append(items, pipeline.StdinRedirect)
+			items = append(items, Token{Type: LESSTHAN, Lexeme: "<"})
 		}
 
 		// Add stdout redirect if present
 		if pipeline.StdoutRedirect != nil {
-			sb.WriteString(" ")
-			sb.WriteString(tokenToMShellPath(*pipeline.StdoutRedirect))
-			sb.WriteString(" >")
+			items = append(items, pipeline.StdoutRedirect)
+			items = append(items, Token{Type: GREATERTHAN, Lexeme: ">"})
 		}
 
-		// Add space before ; if we had any redirects
-		if pipeline.StdinRedirect != nil || pipeline.StdoutRedirect != nil {
-			sb.WriteString(" ")
-		}
-		sb.WriteString(";")
+		items = append(items, Token{Type: EXECUTE, Lexeme: ";"})
 	}
 
-	return sb.String()
-}
-
-// stringBuilder is a simple wrapper around string concatenation
-type stringBuilder struct {
-	result string
-}
-
-func (sb *stringBuilder) WriteString(s string) {
-	sb.result += s
-}
-
-func (sb *stringBuilder) String() string {
-	return sb.result
-}
-
-// writeCommandTokens writes command tokens to the string builder
-func writeCommandTokens(sb *stringBuilder, tokens []Token) {
-	for i, t := range tokens {
-		if i > 0 {
-			sb.WriteString(" ")
-		}
-		sb.WriteString(tokenToMShellArg(t))
+	return &MShellFile{
+		Definitions: nil,
+		Items:       items,
 	}
 }
 
-// tokenToMShellArg converts a token to its mshell representation as a command argument
-func tokenToMShellArg(t Token) string {
-	switch t.Type {
-	case STRING:
-		return t.Lexeme // Already has quotes
-	case SINGLEQUOTESTRING:
-		return t.Lexeme // Already has quotes
-	case PATH:
-		return t.Lexeme // Already has backticks
+// convertItemsForExecution converts parsed items for use in a command list.
+// Literals are converted to single-quoted strings for execution.
+func convertItemsForExecution(items []MShellParseItem) []MShellParseItem {
+	result := make([]MShellParseItem, len(items))
+	for i, item := range items {
+		result[i] = convertItemForExecution(item)
+	}
+	return result
+}
+
+// convertItemForExecution converts a single parsed item for execution.
+// Literals become single-quoted strings, other types are preserved.
+func convertItemForExecution(item MShellParseItem) MShellParseItem {
+	switch v := item.(type) {
+	case Token:
+		// Convert LITERAL tokens to SINGLEQUOTESTRING for execution
+		if v.Type == LITERAL {
+			return Token{
+				Type:   SINGLEQUOTESTRING,
+				Lexeme: "'" + v.Lexeme + "'",
+				Line:   v.Line,
+				Column: v.Column,
+				Start:  v.Start,
+			}
+		}
+		return v
 	default:
-		// Wrap literals and other tokens in single quotes
-		return "'" + t.Lexeme + "'"
-	}
-}
-
-// tokenToMShellPath converts a token to a path for redirects
-func tokenToMShellPath(t Token) string {
-	switch t.Type {
-	case PATH:
-		return t.Lexeme // Already has backticks
-	case STRING:
-		// Convert "file" to `file`
-		// Remove quotes and wrap in backticks
-		inner := t.Lexeme[1 : len(t.Lexeme)-1]
-		return "`" + inner + "`"
-	case SINGLEQUOTESTRING:
-		// Convert 'file' to `file`
-		inner := t.Lexeme[1 : len(t.Lexeme)-1]
-		return "`" + inner + "`"
-	default:
-		// Wrap literal in backticks for path
-		return "`" + t.Lexeme + "`"
+		// Lists, dicts, quotes, etc. are preserved as-is
+		return item
 	}
 }
