@@ -1236,8 +1236,6 @@ func (state *TermState) ClearScreen() {
 	// state.promptRow = state.numPromptLines
 }
 
-var tokenBuf []Token
-var tokenBufBuilder strings.Builder
 var aliases map[string]string
 var history []string
 
@@ -2040,57 +2038,30 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 		// Check for known commands. If so, we'll essentially wrap the entire command in a list to execute
 		literalStr := p.curr.Lexeme
 
-		hasPipe := false
 		firstToken, firstTokenIsCmd := state.isFirstTokenBinary([]Token{p.curr})
 		if firstTokenIsCmd {
 			literalStr = firstToken.Lexeme
 		}
 		if ((strings.Contains(literalStr, string(os.PathSeparator)) && state.context.Pbm.IsExecutableFile(literalStr)) || firstTokenIsCmd) && !IsDefinitionDefined(literalStr, state.stdLibDefs) {
-			tokenBufBuilder.Reset()
-			// Clear token buffer
-			tokenBuf = tokenBuf[:0]
-			tokenBuf = append(tokenBuf, p.curr)
-			// Consume all tokens up until EOF or PIPE
-			for p.NextToken(); p.curr.Type != EOF; p.NextToken() {
-				if p.curr.Type == PIPE {
-					hasPipe = true
-				}
-				tokenBuf = append(tokenBuf, p.curr)
-			}
-
-			tokenBufBuilder.WriteString("[")
-			if hasPipe {
-				// If we have a PIPE, we need to split the command into multiple commands.
-				tokenBufBuilder.WriteString("[")
-				tokenBufBuilder.WriteString("'" + literalStr + "'")
-				for _, t := range tokenBuf[1:] {
-					if t.Type == PIPE {
-						tokenBufBuilder.WriteString("] [")
-					} else {
-						tokenBufBuilder.WriteString(" ")
-						tokenBufBuilder.WriteString(t.Lexeme)
-					}
-				}
-				tokenBufBuilder.WriteString("]")
-			} else {
-				tokenBufBuilder.WriteString("'" + literalStr + "'")
-				for _, t := range tokenBuf[1:] {
-					tokenBufBuilder.WriteString(" ")
-					tokenBufBuilder.WriteString(t.Lexeme)
-				}
-			}
-			tokenBufBuilder.WriteString("]")
-
-			if hasPipe {
-				tokenBufBuilder.WriteString("|;")
-			} else {
-				tokenBufBuilder.WriteString(";")
-			}
-
-			currentCommandStr = tokenBufBuilder.String()
-			fmt.Fprintf(state.f, "Command: %s\n", currentCommandStr)
+			// Use the simple CLI parser to handle pipes and redirects
 			l.resetInput(currentCommandStr)
-			p.NextToken()
+			simpleCliParser := NewMShellSimpleCliParser(l)
+			pipeline, parseErr := simpleCliParser.Parse()
+			if parseErr != nil {
+				fmt.Fprintf(os.Stderr, "\r\nError parsing simple CLI: %s\n", parseErr)
+				// Reset lexer to original input for normal parsing to attempt
+				l.resetInput(currentCommandStr)
+				p.NextToken()
+			} else if pipeline != nil {
+				currentCommandStr = pipeline.ToMShellString()
+				fmt.Fprintf(state.f, "Command: %s\n", currentCommandStr)
+				l.resetInput(currentCommandStr)
+				p.NextToken()
+			} else {
+				// Empty pipeline, reset to original
+				l.resetInput(currentCommandStr)
+				p.NextToken()
+			}
 		}
 	}
 
