@@ -629,7 +629,9 @@ func (state *TermState) isTabCycleNav(token TerminalToken) bool {
 		return true
 	}
 	if t, ok := token.(AsciiToken); ok {
-		if t.Char == 14 || t.Char == 16 {
+		// Tab cycle nav keys: Ctrl-N (14), Ctrl-P (16), Enter (13)
+		// Enter is included so we can accept completion without executing
+		if t.Char == 14 || t.Char == 16 || t.Char == 13 {
 			return true
 		}
 	}
@@ -2869,6 +2871,14 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 		} else if t.Char == 12 { // Ctrl-L
 			state.ClearScreen()
 		} else if t.Char == 13 { // Enter
+			// If in tab completion mode, accept the completion without executing
+			if state.tabCycleActive {
+				state.clearTabCompletionsDisplay()
+				state.resetTabCycle()
+				state.tabCompletions0 = state.tabCompletions0[:0]
+				state.tabCompletions1 = state.tabCompletions1[:0]
+				return false, nil
+			}
 			// Add command to history
 			shouldExit, _ := state.ExecuteCurrentCommand()
 			if shouldExit {
