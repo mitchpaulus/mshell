@@ -117,6 +117,13 @@ func GenerateCompletions(input CompletionInput, deps CompletionDeps) []TabMatch 
 	var matches []TabMatch
 	prefix := input.Prefix
 
+	// For unfinished strings/paths, only complete files
+	if input.LastTokenType == UNFINISHEDPATH ||
+		input.LastTokenType == UNFINISHEDSTRING ||
+		input.LastTokenType == UNFINISHEDSINGLEQUOTESTRING {
+		return generateFileCompletions(input, deps.FS)
+	}
+
 	// 1. Environment variable completion ($VAR)
 	if len(prefix) > 0 && prefix[0] == '$' {
 		searchPrefix := prefix[1:]
@@ -180,11 +187,6 @@ func GenerateCompletions(input CompletionInput, deps CompletionDeps) []TabMatch 
 func generateFileCompletions(input CompletionInput, cfs CompletionFS) []TabMatch {
 	var matches []TabMatch
 	prefix := input.Prefix
-
-	// Skip file completion for quoted strings
-	if input.LastTokenType == UNFINISHEDSTRING || input.LastTokenType == UNFINISHEDSINGLEQUOTESTRING {
-		return matches
-	}
 
 	if prefix == "" {
 		// Complete all files in current directory
