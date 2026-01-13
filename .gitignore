@@ -4,6 +4,7 @@ copy.msh
 .redo/
 mshell/bin
 mshell/test.msh
+mshell/msh
 codex.log
 .gocache/
 .cache/
