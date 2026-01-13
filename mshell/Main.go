@@ -2072,7 +2072,13 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 				// p.NextToken()
 			} else if pipeline != nil {
 				// Directly create the AST without re-parsing
-				parsed = pipeline.ToMShellFile()
+				var toMShellErr error
+				parsed, toMShellErr = pipeline.ToMShellFile()
+				if toMShellErr != nil {
+					fmt.Fprintf(os.Stderr, "\r\nError transforming simple CLI: %s\r\n", toMShellErr)
+					fmt.Fprintf(os.Stdout, "\033[1G")
+					goto PromptPrint
+				}
 				fmt.Fprintf(state.f, "Command: %s\n", pipeline.ToMShellString())
 			} else {
 				// Empty pipeline, reset to original

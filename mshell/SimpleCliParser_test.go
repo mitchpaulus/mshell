@@ -241,7 +241,10 @@ func TestSimpleCliParser_ToMShellFile_SingleCommand(t *testing.T) {
 		t.Fatalf("Unexpected error: %v", err)
 	}
 
-	file := pipeline.ToMShellFile()
+	file, fileErr := pipeline.ToMShellFile()
+	if fileErr != nil {
+		t.Fatalf("Unexpected error: %v", fileErr)
+	}
 	if file == nil {
 		t.Fatal("Expected non-nil MShellFile")
 	}
@@ -279,7 +282,10 @@ func TestSimpleCliParser_ToMShellFile_PipelineWithRedirect(t *testing.T) {
 		t.Fatalf("Unexpected error: %v", err)
 	}
 
-	file := pipeline.ToMShellFile()
+	file, fileErr := pipeline.ToMShellFile()
+	if fileErr != nil {
+		t.Fatalf("Unexpected error: %v", fileErr)
+	}
 	if file == nil {
 		t.Fatal("Expected non-nil MShellFile")
 	}
@@ -324,7 +330,10 @@ func TestSimpleCliParser_ToMShellFile_ListArgument(t *testing.T) {
 		t.Fatalf("Unexpected error: %v", err)
 	}
 
-	file := pipeline.ToMShellFile()
+	file, fileErr := pipeline.ToMShellFile()
+	if fileErr != nil {
+		t.Fatalf("Unexpected error: %v", fileErr)
+	}
 	if file == nil {
 		t.Fatal("Expected non-nil MShellFile")
 	}
