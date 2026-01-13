@@ -188,7 +188,7 @@ func main() {
 		return
 	}
 
-	if len(input) == 0 && term.IsTerminal(stdOutFd) {
+	if len(input) == 0 && term.IsTerminal(stdOutFd) && term.IsTerminal(int(os.Stdin.Fd())) {
 		// fmt.Fprintf(os.Stdout, "Got here\n")
 		numRows, numCols, err := term.GetSize(stdOutFd)
 		if err != nil {
@@ -1236,8 +1236,6 @@ func (state *TermState) ClearScreen() {
 	// state.promptRow = state.numPromptLines
 }
 
-var tokenBuf []Token
-var tokenBufBuilder strings.Builder
 var aliases map[string]string
 var history []string
 
@@ -1973,7 +1971,18 @@ func (state *TermState) TrySaveHistory() {
 	historyToSave = historyToSave[:0]
 }
 
+// Returns boolean 'shouldExit' and integer 'exitCode'
 func (state *TermState) ExecuteCurrentCommand() (bool, int) {
+
+	// Defer putting the terminal back in raw mode
+	defer func() {
+		// Put terminal back into raw mode
+		_, err := term.MakeRaw(state.stdInFd)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error setting terminal to raw mode: %s\n", err)
+		}
+	}()
+
 	state.clearTabCompletionsDisplay()
 	state.resetTabCycle()
 	state.tabCompletions0 = state.tabCompletions0[:0]
@@ -2036,65 +2045,47 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 
 	state.p.NextToken()
 
+	var parsed *MShellFile
+	var err error
+
 	if p.curr.Type == LITERAL {
 		// Check for known commands. If so, we'll essentially wrap the entire command in a list to execute
 		literalStr := p.curr.Lexeme
 
-		hasPipe := false
 		firstToken, firstTokenIsCmd := state.isFirstTokenBinary([]Token{p.curr})
 		if firstTokenIsCmd {
 			literalStr = firstToken.Lexeme
 		}
 		if ((strings.Contains(literalStr, string(os.PathSeparator)) && state.context.Pbm.IsExecutableFile(literalStr)) || firstTokenIsCmd) && !IsDefinitionDefined(literalStr, state.stdLibDefs) {
-			tokenBufBuilder.Reset()
-			// Clear token buffer
-			tokenBuf = tokenBuf[:0]
-			tokenBuf = append(tokenBuf, p.curr)
-			// Consume all tokens up until EOF or PIPE
-			for p.NextToken(); p.curr.Type != EOF; p.NextToken() {
-				if p.curr.Type == PIPE {
-					hasPipe = true
-				}
-				tokenBuf = append(tokenBuf, p.curr)
-			}
-
-			tokenBufBuilder.WriteString("[")
-			if hasPipe {
-				// If we have a PIPE, we need to split the command into multiple commands.
-				tokenBufBuilder.WriteString("[")
-				tokenBufBuilder.WriteString("'" + literalStr + "'")
-				for _, t := range tokenBuf[1:] {
-					if t.Type == PIPE {
-						tokenBufBuilder.WriteString("] [")
-					} else {
-						tokenBufBuilder.WriteString(" ")
-						tokenBufBuilder.WriteString(t.Lexeme)
-					}
-				}
-				tokenBufBuilder.WriteString("]")
-			} else {
-				tokenBufBuilder.WriteString("'" + literalStr + "'")
-				for _, t := range tokenBuf[1:] {
-					tokenBufBuilder.WriteString(" ")
-					tokenBufBuilder.WriteString(t.Lexeme)
-				}
-			}
-			tokenBufBuilder.WriteString("]")
-
-			if hasPipe {
-				tokenBufBuilder.WriteString("|;")
-			} else {
-				tokenBufBuilder.WriteString(";")
-			}
-
-			currentCommandStr = tokenBufBuilder.String()
-			fmt.Fprintf(state.f, "Command: %s\n", currentCommandStr)
+			// Use the simple CLI parser to handle pipes and redirects
 			l.resetInput(currentCommandStr)
-			p.NextToken()
+			simpleCliParser := NewMShellSimpleCliParser(l)
+			pipeline, parseErr := simpleCliParser.Parse()
+			if parseErr != nil {
+				fmt.Fprintf(os.Stderr, "\r\nError parsing simple CLI: %s\r\n", parseErr)
+				// Goto PromptPrint
+				fmt.Fprintf(os.Stdout, "\033[1G")
+				goto PromptPrint
+
+				// // Reset lexer to original input for normal parsing to attempt
+				// l.resetInput(currentCommandStr)
+				// p.NextToken()
+			} else if pipeline != nil {
+				// Directly create the AST without re-parsing
+				parsed = pipeline.ToMShellFile()
+				fmt.Fprintf(state.f, "Command: %s\n", pipeline.ToMShellString())
+			} else {
+				// Empty pipeline, reset to original
+				l.resetInput(currentCommandStr)
+				p.NextToken()
+			}
 		}
 	}
 
-	parsed, err := p.ParseFile()
+	// Only parse normally if we didn't already create the AST from simple CLI
+	if parsed == nil {
+		parsed, err = p.ParseFile()
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "\r\nError parsing input: %s\n", err)
 		// Move to start
@@ -2128,6 +2119,7 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 		}
 	}
 
+PromptPrint:
 	fmt.Fprintf(os.Stdout, "\033[1G")
 	err = state.printPrompt()
 	if err != nil {
@@ -2136,13 +2128,6 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 	}
 
 	state.index = 0
-
-	// Put terminal back into raw mode
-	_, err = term.MakeRaw(state.stdInFd)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error setting terminal to raw mode: %s\n", err)
-		return true, 1
-	}
 
 	return false, 0
 }

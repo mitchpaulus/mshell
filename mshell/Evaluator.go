@@ -5551,29 +5551,27 @@ func (quotation *MShellQuotation) GetStandardOutputFile() string {
 }
 
 func (state *EvalState) ChangeDirectory(dir string) (EvalResult, int, []byte, []byte) {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return state.FailWithMessage(fmt.Sprintf("Error getting current directory: %s\n", err.Error())), 1, nil, nil
-	}
+	cwd, currDirErr := os.Getwd()
 
-	err = os.Chdir(dir)
+	err := os.Chdir(dir)
 	if err != nil {
 		return state.FailWithMessage(fmt.Sprintf("Error changing directory to %s: %s\n", dir, err.Error())), 1, nil, nil
 	}
 
-	// Update OLDPWD and PWD
-	err = os.Setenv("OLDPWD", cwd)
-	if err != nil {
-		return state.FailWithMessage(fmt.Sprintf("Error setting OLDPWD: %s\n", err.Error())), 1, nil, nil
-	}
+	if currDirErr == nil {
+		// Update OLDPWD and PWD
+		err = os.Setenv("OLDPWD", cwd)
+		if err != nil {
+			return state.FailWithMessage(fmt.Sprintf("Error setting OLDPWD: %s\n", err.Error())), 1, nil, nil
+		}
 
-	err = os.Setenv("PWD", dir)
-	if err != nil {
-		return state.FailWithMessage(fmt.Sprintf("Error setting PWD: %s\n", err.Error())), 1, nil, nil
+		err = os.Setenv("PWD", dir)
+		if err != nil {
+			return state.FailWithMessage(fmt.Sprintf("Error setting PWD: %s\n", err.Error())), 1, nil, nil
+		}
 	}
 
 	return SimpleSuccess(), 0, nil, nil
-
 }
 
 func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (EvalResult, int, []byte, []byte) {
