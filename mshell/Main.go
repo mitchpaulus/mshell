@@ -1971,7 +1971,18 @@ func (state *TermState) TrySaveHistory() {
 	historyToSave = historyToSave[:0]
 }
 
+// Returns boolean 'shouldExit' and integer 'exitCode'
 func (state *TermState) ExecuteCurrentCommand() (bool, int) {
+
+	// Defer putting the terminal back in raw mode
+	defer func() {
+		// Put terminal back into raw mode
+		_, err := term.MakeRaw(state.stdInFd)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error setting terminal to raw mode: %s\n", err)
+		}
+	}()
+
 	state.clearTabCompletionsDisplay()
 	state.resetTabCycle()
 	state.tabCompletions0 = state.tabCompletions0[:0]
@@ -2051,10 +2062,14 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 			simpleCliParser := NewMShellSimpleCliParser(l)
 			pipeline, parseErr := simpleCliParser.Parse()
 			if parseErr != nil {
-				fmt.Fprintf(os.Stderr, "\r\nError parsing simple CLI: %s\n", parseErr)
-				// Reset lexer to original input for normal parsing to attempt
-				l.resetInput(currentCommandStr)
-				p.NextToken()
+				fmt.Fprintf(os.Stderr, "\r\nError parsing simple CLI: %s\r\n", parseErr)
+				// Goto PromptPrint
+				fmt.Fprintf(os.Stdout, "\033[1G")
+				goto PromptPrint
+
+				// // Reset lexer to original input for normal parsing to attempt
+				// l.resetInput(currentCommandStr)
+				// p.NextToken()
 			} else if pipeline != nil {
 				// Directly create the AST without re-parsing
 				parsed = pipeline.ToMShellFile()
@@ -2104,6 +2119,7 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 		}
 	}
 
+PromptPrint:
 	fmt.Fprintf(os.Stdout, "\033[1G")
 	err = state.printPrompt()
 	if err != nil {
@@ -2112,13 +2128,6 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 	}
 
 	state.index = 0
-
-	// Put terminal back into raw mode
-	_, err = term.MakeRaw(state.stdInFd)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error setting terminal to raw mode: %s\n", err)
-		return true, 1
-	}
 
 	return false, 0
 }

@@ -1,5 +1,9 @@
 package main
 
+import (
+	"fmt"
+)
+
 // SimpleCliParser parses simple CLI-style commands with pipes and redirects.
 // Grammar:
 //   CLI : item+ ('<' item)? ('|' item+)* ('>' item)?
@@ -122,7 +126,7 @@ type SimpleCliParseError struct {
 }
 
 func (e *SimpleCliParseError) Error() string {
-	return e.Message + " at " + e.Token.Lexeme
+	return fmt.Sprintf("%s at '%s'", e.Message, e.Token.Lexeme)
 }
 
 // ToMShellString transforms the simple CLI parse tree into mshell syntax (for debugging).
