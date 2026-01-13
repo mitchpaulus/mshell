@@ -103,6 +103,7 @@ var BuiltInList = map[string]struct{}{
 	"reFindAllIndex": {},
 	"reMatch": {},
 	"reReplace": {},
+	"reSplit": {},
 	"readFile": {},
 	"readFileBytes": {},
 	"removeWindowsVolumePrefix": {},

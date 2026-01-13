@@ -2885,6 +2885,33 @@ MainLoop:
 					}
 
 					stack.Push(matchList)
+				} else if t.Lexeme == "reSplit" {
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+					regexStr, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot use a %s as a regex.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					str, err := obj2.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot use a %s as a string to split.\n", t.Line, t.Column, obj2.TypeName()))
+					}
+
+					re, err := regexp.Compile(regexStr)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error compiling regex '%s': %s\n", t.Line, t.Column, regexStr, err.Error()))
+					}
+
+					parts := re.Split(str, -1)
+					resultList := NewList(len(parts))
+					for i, part := range parts {
+						resultList.Items[i] = MShellString{part}
+					}
+
+					stack.Push(resultList)
 				} else if t.Lexeme == "parseCsv" {
 					obj1, err := stack.Pop()
 					if err != nil {
