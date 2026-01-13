@@ -12,3 +12,8 @@
 "my str1 my str2" 'str([0-9])' reFindAll str wl
 "my str1 my str2" 'str[0-9]' reFindAllIndex str wl
 "my str1 my str2" 'str([0-9])' reFindAllIndex str wl
+
+# Split by regex
+"a1b2c3d" '[0-9]' reSplit str wl
+"one,two;three:four" '[,;:]' reSplit str wl
+"hello   world" '\s+' reSplit str wl

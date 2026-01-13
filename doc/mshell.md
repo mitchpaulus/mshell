@@ -388,6 +388,7 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
 - `reFindAll`: Get all the matches of a regular expression. `(str re -- [[ str ]])`
 - `reFindAllIndex`: Get all match index pairs (start and end offsets) for a regular expression, including capture groups. `(str re -- [[int]])`
 - `reReplace`: Replace all occurrences of a regular expression in a string with a replacement string. `(str:orig re str:replacement -- str)`
+- `reSplit`: Split a string by a regular expression delimiter. `(str re -- [str])`
 
 ## Paths
 
