@@ -70,6 +70,14 @@ func (p *MShellSimpleCliParser) Parse() (*SimpleCliPipeline, error) {
 			return nil, &SimpleCliParseError{Message: "expected item after '<'", Token: p.parser.curr}
 		}
 		result.StdinRedirect = item
+
+		// After stdin redirect, only valid tokens are: PIPE, GREATERTHAN, or EOF
+		if p.parser.curr.Type != PIPE && p.parser.curr.Type != GREATERTHAN && p.parser.curr.Type != EOF {
+			return nil, &SimpleCliParseError{
+				Message: "only a single item expected after '<'",
+				Token:   p.parser.curr,
+			}
+		}
 	}
 
 	// Parse zero or more piped commands ('|' item+)*
@@ -94,6 +102,14 @@ func (p *MShellSimpleCliParser) Parse() (*SimpleCliPipeline, error) {
 			return nil, &SimpleCliParseError{Message: "expected item after '>'", Token: p.parser.curr}
 		}
 		result.StdoutRedirect = item
+
+		// After stdout redirect, only valid token is EOF
+		if p.parser.curr.Type != EOF {
+			return nil, &SimpleCliParseError{
+				Message: "only a single item expected after '>'",
+				Token:   p.parser.curr,
+			}
+		}
 	}
 
 	// Should be at EOF now

@@ -189,6 +189,34 @@ func TestSimpleCliParser_ErrorMissingRedirectFile(t *testing.T) {
 	}
 }
 
+func TestSimpleCliParser_ErrorExtraItemsAfterStdinRedirect(t *testing.T) {
+	input := "grep foo < input.txt extra"
+	l := NewLexer(input, nil)
+	p := NewMShellSimpleCliParser(l)
+
+	_, err := p.Parse()
+	if err == nil {
+		t.Error("Expected error for extra items after stdin redirect, got nil")
+	}
+	if err != nil && err.Error() != "only a single item expected after '<' at 'extra'" {
+		t.Errorf("Unexpected error message: %s", err.Error())
+	}
+}
+
+func TestSimpleCliParser_ErrorExtraItemsAfterStdoutRedirect(t *testing.T) {
+	input := "cat file > output.txt extra"
+	l := NewLexer(input, nil)
+	p := NewMShellSimpleCliParser(l)
+
+	_, err := p.Parse()
+	if err == nil {
+		t.Error("Expected error for extra items after stdout redirect, got nil")
+	}
+	if err != nil && err.Error() != "only a single item expected after '>' at 'extra'" {
+		t.Errorf("Unexpected error message: %s", err.Error())
+	}
+}
+
 func TestSimpleCliParser_EmptyInput(t *testing.T) {
 	input := ""
 	l := NewLexer(input, nil)
