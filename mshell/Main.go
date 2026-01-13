@@ -3669,15 +3669,18 @@ func binDebugCommand(name string) int {
 				continue
 			}
 			candidate, status := findBinaryInDirDetailed(dir, name)
-			if status == binSearchFound {
+			switch status {
+			case binSearchFound:
 				fmt.Fprintf(os.Stdout, "Searched PATH: %s -> \033[32mfound %s\033[0m\n", dir, candidate)
 				if foundPath == "" {
 					foundPath = candidate
 				}
-			} else if status == binSearchNotExecutable {
+			case binSearchNotExecutable:
 				sawNotExecutable = true
 				fmt.Fprintf(os.Stdout, "Searched PATH: %s -> \033[31mfound %s (not executable)\033[0m\n", dir, candidate)
-			} else {
+			case binSearchDirNotAvailable:
+				fmt.Fprintf(os.Stdout, "Searched PATH: %s -> \033[31mdirectory not available\033[0m\n", dir)
+			default:
 				fmt.Fprintf(os.Stdout, "Searched PATH: %s -> not found\n", dir)
 			}
 		}
@@ -3752,9 +3755,15 @@ const (
 	binSearchNotFound binSearchStatus = iota
 	binSearchFound
 	binSearchNotExecutable
+	binSearchDirNotAvailable
 )
 
 func findBinaryInDirDetailed(dir string, name string) (string, binSearchStatus) {
+	// Short-circuit on non-statable directory
+	if _, err := os.Stat(dir); err != nil {
+		return "", binSearchDirNotAvailable
+	}
+
 	if runtime.GOOS == "windows" {
 		pathExts := []string{".EXE", ".CMD", ".BAT", ".COM", ".MSH"}
 		upperName := strings.ToUpper(name)
@@ -3771,29 +3780,26 @@ func findBinaryInDirDetailed(dir string, name string) (string, binSearchStatus) 
 				return candidate, binSearchFound
 			}
 			return "", binSearchNotFound
-		}
-		for _, ext := range pathExts {
-			candidate := filepath.Join(dir, name+ext)
-			if _, err := os.Stat(candidate); err == nil {
-				return candidate, binSearchFound
+		} else {
+			for _, ext := range pathExts {
+				candidate := filepath.Join(dir, name+ext)
+				if _, err := os.Stat(candidate); err == nil {
+					return candidate, binSearchFound
+				}
 			}
+			return "", binSearchNotFound
 		}
+	} else { // Non-windows
 		candidate := filepath.Join(dir, name)
-		if _, err := os.Stat(candidate); err == nil {
+		info, err := os.Stat(candidate)
+		if err != nil {
+			return "", binSearchNotFound
+		}
+		if info.Mode() & 0111 == 0 {
 			return candidate, binSearchNotExecutable
 		}
-		return "", binSearchNotFound
+		return candidate, binSearchFound
 	}
-
-	candidate := filepath.Join(dir, name)
-	info, err := os.Stat(candidate)
-	if err != nil {
-		return "", binSearchNotFound
-	}
-	if info.Mode() & 0111 == 0 {
-		return candidate, binSearchNotExecutable
-	}
-	return candidate, binSearchFound
 }
 
 func writeBinMapLines(path string, lines []string) error {
