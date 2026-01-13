@@ -28,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CLI syntax highlighting for environment variables
 - Append stderr redirection with `2>>`
 
+### Fixed
+
+- CLI binary mode now converts literal redirect targets (e.g., `cmd > file.txt` converts `file.txt` to a string for stdout, path for stdin)
+
 ## 0.8.0 - 2025-12-29
 
 ### Added

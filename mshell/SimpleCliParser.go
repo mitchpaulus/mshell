@@ -147,7 +147,10 @@ func (e *SimpleCliParseError) Error() string {
 
 // ToMShellString transforms the simple CLI parse tree into mshell syntax (for debugging).
 func (pipeline *SimpleCliPipeline) ToMShellString() string {
-	file := pipeline.ToMShellFile()
+	file, err := pipeline.ToMShellFile()
+	if err != nil {
+		return fmt.Sprintf("Error: %s", err)
+	}
 	var result string
 	for _, item := range file.Items {
 		result += item.DebugString()
@@ -158,8 +161,42 @@ func (pipeline *SimpleCliPipeline) ToMShellString() string {
 // ToMShellFile transforms the simple CLI parse tree directly into an MShellFile AST.
 // Since items are already parsed as MShellParseItems, we just need to wrap them
 // in the appropriate list structure and add operators.
-func (pipeline *SimpleCliPipeline) ToMShellFile() *MShellFile {
+func (pipeline *SimpleCliPipeline) ToMShellFile() (*MShellFile, error) {
 	hasPipe := len(pipeline.Commands) > 1
+
+	// Convert stdin redirect: LITERAL becomes PATH, string-like types pass through
+	var stdinItem MShellParseItem
+	if pipeline.StdinRedirect != nil {
+		if t, ok := pipeline.StdinRedirect.(Token); ok {
+			switch t.Type {
+			case LITERAL:
+				stdinItem = Token{Type: PATH, Lexeme: "`" + t.Lexeme + "`", Line: t.Line, Column: t.Column, Start: t.Start}
+			case STRING, SINGLEQUOTESTRING, PATH:
+				stdinItem = t
+			default:
+				return nil, &SimpleCliParseError{Message: "stdin redirect must be a string or path", Token: t}
+			}
+		} else {
+			return nil, &SimpleCliParseError{Message: "stdin redirect must be a string or path", Token: Token{Lexeme: fmt.Sprintf("%v", pipeline.StdinRedirect)}}
+		}
+	}
+
+	// Convert stdout redirect: LITERAL becomes SINGLEQUOTESTRING, string-like types pass through
+	var stdoutItem MShellParseItem
+	if pipeline.StdoutRedirect != nil {
+		if t, ok := pipeline.StdoutRedirect.(Token); ok {
+			switch t.Type {
+			case LITERAL:
+				stdoutItem = Token{Type: SINGLEQUOTESTRING, Lexeme: "'" + t.Lexeme + "'", Line: t.Line, Column: t.Column, Start: t.Start}
+			case STRING, SINGLEQUOTESTRING, PATH:
+				stdoutItem = t
+			default:
+				return nil, &SimpleCliParseError{Message: "stdout redirect must be a string or path", Token: t}
+			}
+		} else {
+			return nil, &SimpleCliParseError{Message: "stdout redirect must be a string or path", Token: Token{Lexeme: fmt.Sprintf("%v", pipeline.StdoutRedirect)}}
+		}
+	}
 
 	var items []MShellParseItem
 
@@ -178,14 +215,14 @@ func (pipeline *SimpleCliPipeline) ToMShellFile() *MShellFile {
 			outerItems = append(outerItems, cmdList)
 
 			// Stdin redirect goes after first command
-			if i == 0 && pipeline.StdinRedirect != nil {
-				outerItems = append(outerItems, pipeline.StdinRedirect)
+			if i == 0 && stdinItem != nil {
+				outerItems = append(outerItems, stdinItem)
 				outerItems = append(outerItems, Token{Type: LESSTHAN, Lexeme: "<"})
 			}
 
 			// Stdout redirect goes after last command
-			if i == len(pipeline.Commands)-1 && pipeline.StdoutRedirect != nil {
-				outerItems = append(outerItems, pipeline.StdoutRedirect)
+			if i == len(pipeline.Commands)-1 && stdoutItem != nil {
+				outerItems = append(outerItems, stdoutItem)
 				outerItems = append(outerItems, Token{Type: GREATERTHAN, Lexeme: ">"})
 			}
 		}
@@ -211,14 +248,14 @@ func (pipeline *SimpleCliPipeline) ToMShellFile() *MShellFile {
 		items = []MShellParseItem{cmdList}
 
 		// Add stdin redirect if present
-		if pipeline.StdinRedirect != nil {
-			items = append(items, pipeline.StdinRedirect)
+		if stdinItem != nil {
+			items = append(items, stdinItem)
 			items = append(items, Token{Type: LESSTHAN, Lexeme: "<"})
 		}
 
 		// Add stdout redirect if present
-		if pipeline.StdoutRedirect != nil {
-			items = append(items, pipeline.StdoutRedirect)
+		if stdoutItem != nil {
+			items = append(items, stdoutItem)
 			items = append(items, Token{Type: GREATERTHAN, Lexeme: ">"})
 		}
 
@@ -228,7 +265,7 @@ func (pipeline *SimpleCliPipeline) ToMShellFile() *MShellFile {
 	return &MShellFile{
 		Definitions: nil,
 		Items:       items,
-	}
+	}, nil
 }
 
 // convertItemsForExecution converts parsed items for use in a command list.
