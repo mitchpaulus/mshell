@@ -1,0 +1,6 @@
+# FILE:quote_stderr_redirect.txt
+# Test stderr redirect with quotation using 2>
+(
+    "to-stderr" wle
+    "also-to-stderr" wle
+) `quote_stderr_redirect.txt` 2> x

@@ -554,10 +554,19 @@ func (q *MShellQuotation) BuildExecutionContext(context *ExecuteContext) (*Execu
 	quoteContext := ExecuteContext{
 		StandardInput:     nil,
 		StandardOutput:    nil,
+		StandardError:     nil,
 		Variables:         q.Variables,
 		ShouldCloseInput:  false,
 		ShouldCloseOutput: false,
+		ShouldCloseError:  false,
 		Pbm:               context.Pbm,
+	}
+
+	// Check for same-path stdout/stderr redirection
+	samePath := q.StandardOutputFile != "" && q.StandardOutputFile == q.StandardErrorFile
+	if samePath && q.AppendOutput != q.AppendError {
+		t := q.GetStartToken()
+		return nil, fmt.Errorf("%d:%d: Cannot redirect stdout and stderr to the same file '%s' with different append modes.\n", t.Line, t.Column, q.StandardOutputFile)
 	}
 
 	if q.StdinBehavior != STDIN_NONE {
@@ -573,7 +582,6 @@ func (q *MShellQuotation) BuildExecutionContext(context *ExecuteContext) (*Execu
 			}
 			quoteContext.StandardInput = file
 			quoteContext.ShouldCloseInput = true
-			// defer file.Close()
 		}
 	} else if context.StandardInput != nil {
 		quoteContext.StandardInput = context.StandardInput
@@ -581,6 +589,9 @@ func (q *MShellQuotation) BuildExecutionContext(context *ExecuteContext) (*Execu
 		// Default to stdin of this process itself
 		quoteContext.StandardInput = os.Stdin
 	}
+
+	// Track shared output file for same-path case
+	var sharedOutputFile *os.File
 
 	if q.StandardOutputFile != "" {
 		var file *os.File
@@ -596,12 +607,40 @@ func (q *MShellQuotation) BuildExecutionContext(context *ExecuteContext) (*Execu
 		}
 		quoteContext.StandardOutput = file
 		quoteContext.ShouldCloseOutput = true
-		// defer file.Close()
+		if samePath {
+			sharedOutputFile = file
+		}
 	} else if context.StandardOutput != nil {
 		quoteContext.StandardOutput = context.StandardOutput
 	} else {
 		// Default to stdout of this process itself
 		quoteContext.StandardOutput = os.Stdout
+	}
+
+	// Handle stderr redirection
+	if sharedOutputFile != nil {
+		// Use the same file descriptor as stdout
+		quoteContext.StandardError = sharedOutputFile
+		// Don't set ShouldCloseError since stdout will close it
+	} else if q.StandardErrorFile != "" {
+		var file *os.File
+		var err error
+		if q.AppendError {
+			file, err = os.OpenFile(q.StandardErrorFile, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+		} else {
+			file, err = os.Create(q.StandardErrorFile)
+		}
+		if err != nil {
+			t := q.GetStartToken()
+			return nil, fmt.Errorf("%d:%d: Error opening file %s for writing: %s\n", t.Line, t.Column, q.StandardErrorFile, err.Error())
+		}
+		quoteContext.StandardError = file
+		quoteContext.ShouldCloseError = true
+	} else if context.StandardError != nil {
+		quoteContext.StandardError = context.StandardError
+	} else {
+		// Default to stderr of this process itself
+		quoteContext.StandardError = os.Stderr
 	}
 
 	return &quoteContext, nil

@@ -345,6 +345,7 @@ type ExecuteContext struct {
 	Variables         map[string]MShellObject // Mapping from variable name without leading '@' or trailing '!' to object.
 	ShouldCloseInput  bool
 	ShouldCloseOutput bool
+	ShouldCloseError  bool
 	Pbm               IPathBinManager
 }
 
@@ -355,6 +356,7 @@ func (context *ExecuteContext) CloneLessVariables() *ExecuteContext {
 		StandardError:     context.StandardError,
 		ShouldCloseInput:  context.ShouldCloseInput,
 		ShouldCloseOutput: context.ShouldCloseOutput,
+		ShouldCloseError:  context.ShouldCloseError,
 		Pbm:               context.Pbm,
 	}
 
@@ -374,6 +376,14 @@ func (context *ExecuteContext) Close() {
 	if context.ShouldCloseOutput {
 		if context.StandardOutput != nil {
 			if closer, ok := context.StandardOutput.(io.Closer); ok {
+				closer.Close()
+			}
+		}
+	}
+
+	if context.ShouldCloseError {
+		if context.StandardError != nil {
+			if closer, ok := context.StandardError.(io.Closer); ok {
 				closer.Close()
 			}
 		}
@@ -1047,7 +1057,11 @@ MainLoop:
 
 					var writer io.Writer
 					if t.Lexeme == "we" || t.Lexeme == "wle" {
-						writer = os.Stderr // TODO: Update like below for stdout.
+						if context.StandardError == nil {
+							writer = os.Stderr
+						} else {
+							writer = context.StandardError
+						}
 					} else {
 						if context.StandardOutput == nil {
 							writer = os.Stdout
@@ -5833,15 +5847,14 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 		}
 		cmd.Stderr = file
 		defer file.Close()
-		// } else if context.Stand != nil {
-		// cmd.Stderr = context.StandardError  // TBD: Implement this
+	} else if context.StandardError != nil {
+		cmd.Stderr = context.StandardError
 	} else {
 		if list.RunInBackground {
 			cmd.Stderr = nil
 		} else {
-			// Default to stdout of this process itself
+			// Default to stderr of this process itself
 			cmd.Stderr = os.Stderr
-			// cmd.Stdout = nil
 		}
 	}
 

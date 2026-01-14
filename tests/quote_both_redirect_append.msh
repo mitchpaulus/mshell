@@ -1,0 +1,11 @@
+# FILE:quote_both_redirect_append.txt
+# Test &>> redirect with quotation (append mode)
+(
+    "first-stdout" wl
+    "first-stderr" wle
+) `quote_both_redirect_append.txt` &> x
+
+(
+    "second-stdout" wl
+    "second-stderr" wle
+) `quote_both_redirect_append.txt` &>> x
