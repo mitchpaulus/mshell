@@ -181,6 +181,12 @@ func escapeMshellString(input string) string {
 	return b.String()
 }
 
+// containsNullByte checks if a string contains a null byte, which typically indicates
+// the string was incorrectly built from UTF-16 data instead of UTF-8.
+func containsNullByte(s string) bool {
+	return strings.ContainsRune(s, 0)
+}
+
 func formatWithSigFigs(num float64, sigfigs int) string {
 	if num == 0 {
 		return fmt.Sprintf("0.%s", strings.Repeat("0", sigfigs))
@@ -345,6 +351,7 @@ type ExecuteContext struct {
 	Variables         map[string]MShellObject // Mapping from variable name without leading '@' or trailing '!' to object.
 	ShouldCloseInput  bool
 	ShouldCloseOutput bool
+	ShouldCloseError  bool
 	Pbm               IPathBinManager
 }
 
@@ -355,6 +362,7 @@ func (context *ExecuteContext) CloneLessVariables() *ExecuteContext {
 		StandardError:     context.StandardError,
 		ShouldCloseInput:  context.ShouldCloseInput,
 		ShouldCloseOutput: context.ShouldCloseOutput,
+		ShouldCloseError:  context.ShouldCloseError,
 		Pbm:               context.Pbm,
 	}
 
@@ -374,6 +382,14 @@ func (context *ExecuteContext) Close() {
 	if context.ShouldCloseOutput {
 		if context.StandardOutput != nil {
 			if closer, ok := context.StandardOutput.(io.Closer); ok {
+				closer.Close()
+			}
+		}
+	}
+
+	if context.ShouldCloseError {
+		if context.StandardError != nil {
+			if closer, ok := context.StandardError.(io.Closer); ok {
 				closer.Close()
 			}
 		}
@@ -1047,7 +1063,11 @@ MainLoop:
 
 					var writer io.Writer
 					if t.Lexeme == "we" || t.Lexeme == "wle" {
-						writer = os.Stderr // TODO: Update like below for stdout.
+						if context.StandardError == nil {
+							writer = os.Stderr
+						} else {
+							writer = context.StandardError
+						}
 					} else {
 						if context.StandardOutput == nil {
 							writer = os.Stdout
@@ -2250,6 +2270,14 @@ MainLoop:
 					source, err := obj2.CastString()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot %s from a %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName()))
+					}
+
+					// Check for null bytes in file paths
+					if containsNullByte(source) {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Found a null byte in the source file path for '%s'. This is almost certainly not intended. You may have built the file name from UTF-16. Please ensure that your string is UTF-8 for the most predictable results.\n", t.Line, t.Column, t.Lexeme))
+					}
+					if containsNullByte(destination) {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Found a null byte in the destination file path for '%s'. This is almost certainly not intended. You may have built the file name from UTF-16. Please ensure that your string is UTF-8 for the most predictable results.\n", t.Line, t.Column, t.Lexeme))
 					}
 
 					// Check if destination is a directory
@@ -4275,15 +4303,22 @@ MainLoop:
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot append to a %s.\n", t.Line, t.Column, redirectPath.TypeName()))
 				}
 
-				var listObj *MShellList
-				var ok bool
-				if listObj, ok = obj2.(*MShellList); !ok {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Second item on stack for %s should be a list, found a %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName()))
+				if containsNullByte(path) {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Found a null byte in the redirection file path. This is almost certainly not intended. You may have built the file name from UTF-16. Please ensure that your string is UTF-8 for the most predictable results.\n", t.Line, t.Column))
 				}
 
-				listObj.StandardOutputFile = path
-				listObj.AppendOutput = true
-				stack.Push(listObj)
+				switch obj2Typed := obj2.(type) {
+				case *MShellList:
+					obj2Typed.StandardOutputFile = path
+					obj2Typed.AppendOutput = true
+					stack.Push(obj2Typed)
+				case *MShellQuotation:
+					obj2Typed.StandardOutputFile = path
+					obj2Typed.AppendOutput = true
+					stack.Push(obj2Typed)
+				default:
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Second item on stack for %s should be a list or quotation, found a %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName()))
+				}
 			} else if t.Type == LEFT_SQUARE_BRACKET { // Token Type
 				return state.FailWithMessage(fmt.Sprintf("%d:%d: Found unexpected left square bracket.\n", t.Line, t.Column))
 			} else if t.Type == LEFT_PAREN { // Token Type
@@ -4728,21 +4763,25 @@ MainLoop:
 				} else {
 					switch obj1.(type) {
 					case MShellString:
+						path := obj1.(MShellString).Content
+						if containsNullByte(path) {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Found a null byte in the redirection file path. This is almost certainly not intended. You may have built the file name from UTF-16. Please ensure that your string is UTF-8 for the most predictable results.\n", t.Line, t.Column))
+						}
 						switch obj2.(type) {
 						case *MShellList:
 							if t.Type == GREATERTHAN {
-								obj2.(*MShellList).StandardOutputFile = obj1.(MShellString).Content
+								obj2.(*MShellList).StandardOutputFile = path
 							} else { // LESSTHAN, input redirection
 								obj2.(*MShellList).StdinBehavior = STDIN_CONTENT
-								obj2.(*MShellList).StandardInputContents = obj1.(MShellString).Content
+								obj2.(*MShellList).StandardInputContents = path
 							}
 							stack.Push(obj2)
 						case *MShellQuotation:
 							if t.Type == GREATERTHAN {
-								obj2.(*MShellQuotation).StandardOutputFile = obj1.(MShellString).Content
+								obj2.(*MShellQuotation).StandardOutputFile = path
 							} else { // LESSTHAN, input redirection
 								obj2.(*MShellQuotation).StdinBehavior = STDIN_CONTENT
-								obj2.(*MShellQuotation).StandardInputContents = obj1.(MShellString).Content
+								obj2.(*MShellQuotation).StandardInputContents = path
 							}
 							stack.Push(obj2)
 						case *MShellPipe:
@@ -4774,42 +4813,50 @@ MainLoop:
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect binary data (%s) to a %s (%s). Use '<' for input redirection.\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
 						}
 					case MShellLiteral:
+						path := obj1.(MShellLiteral).LiteralText
+						if containsNullByte(path) {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Found a null byte in the redirection file path. This is almost certainly not intended. You may have built the file name from UTF-16. Please ensure that your string is UTF-8 for the most predictable results.\n", t.Line, t.Column))
+						}
 						switch obj2.(type) {
 						case *MShellList:
 							if t.Type == GREATERTHAN {
-								obj2.(*MShellList).StandardOutputFile = obj1.(MShellLiteral).LiteralText
+								obj2.(*MShellList).StandardOutputFile = path
 							} else { // LESSTHAN, input redirection
 								obj2.(*MShellList).StdinBehavior = STDIN_CONTENT
-								obj2.(*MShellList).StandardInputFile = obj1.(MShellLiteral).LiteralText
+								obj2.(*MShellList).StandardInputFile = path
 							}
 							stack.Push(obj2)
 						case *MShellQuotation:
 							if t.Type == GREATERTHAN {
-								obj2.(*MShellQuotation).StandardOutputFile = obj1.(MShellLiteral).LiteralText
+								obj2.(*MShellQuotation).StandardOutputFile = path
 							} else {
 								obj2.(*MShellQuotation).StdinBehavior = STDIN_CONTENT
-								obj2.(*MShellQuotation).StandardInputContents = obj1.(MShellLiteral).LiteralText
+								obj2.(*MShellQuotation).StandardInputContents = path
 							}
 						default:
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a %s (%s) to a %s (%s).\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
 						}
 
 					case MShellPath:
+						path := obj1.(MShellPath).Path
+						if containsNullByte(path) {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Found a null byte in the redirection file path. This is almost certainly not intended. You may have built the file name from UTF-16. Please ensure that your string is UTF-8 for the most predictable results.\n", t.Line, t.Column))
+						}
 						switch obj2.(type) {
 						case *MShellList:
 							if t.Type == GREATERTHAN {
-								obj2.(*MShellList).StandardOutputFile = obj1.(MShellPath).Path
+								obj2.(*MShellList).StandardOutputFile = path
 							} else { // LESSTHAN, input redirection
 								obj2.(*MShellList).StdinBehavior = STDIN_FILE
-								obj2.(*MShellList).StandardInputFile = obj1.(MShellPath).Path
+								obj2.(*MShellList).StandardInputFile = path
 							}
 							stack.Push(obj2)
 						case *MShellQuotation:
 							if t.Type == GREATERTHAN {
-								obj2.(*MShellQuotation).StandardOutputFile = obj1.(MShellPath).Path
+								obj2.(*MShellQuotation).StandardOutputFile = path
 							} else {
 								obj2.(*MShellQuotation).StdinBehavior = STDIN_FILE
-								obj2.(*MShellQuotation).StandardInputFile = obj1.(MShellPath).Path
+								obj2.(*MShellQuotation).StandardInputFile = path
 							}
 							stack.Push(obj2)
 						default:
@@ -4845,6 +4892,10 @@ MainLoop:
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect stderr to a %s.\n", t.Line, t.Column, obj1.TypeName()))
 				}
 
+				if containsNullByte(redirectFile) {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Found a null byte in the redirection file path. This is almost certainly not intended. You may have built the file name from UTF-16. Please ensure that your string is UTF-8 for the most predictable results.\n", t.Line, t.Column))
+				}
+
 				switch obj2Typed := obj2.(type) {
 				case *MShellList:
 					obj2Typed.StandardErrorFile = redirectFile
@@ -4852,9 +4903,47 @@ MainLoop:
 					stack.Push(obj2Typed)
 				case *MShellQuotation:
 					obj2Typed.StandardErrorFile = redirectFile
+					obj2Typed.AppendError = t.Type == STDERRAPPEND
 					stack.Push(obj2Typed)
 				default:
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect stderr to a %s.\n", t.Line, t.Column, obj2.TypeName()))
+				}
+			} else if t.Type == STDOUTANDSTDERRREDIRECT || t.Type == STDOUTANDSTDERRAPPEND { // Token Type
+				obj1, err := stack.Pop()
+				if err != nil {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect stdout and stderr on an empty stack.\n", t.Line, t.Column))
+				}
+				obj2, err := stack.Pop()
+				if err != nil {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect stdout and stderr on a stack with only one item.\n", t.Line, t.Column))
+				}
+
+				redirectFile, err := obj1.CastString()
+				if err != nil {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect stdout and stderr to a %s.\n", t.Line, t.Column, obj1.TypeName()))
+				}
+
+				if containsNullByte(redirectFile) {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Found a null byte in the redirection file path. This is almost certainly not intended. You may have built the file name from UTF-16. Please ensure that your string is UTF-8 for the most predictable results.\n", t.Line, t.Column))
+				}
+
+				appendMode := t.Type == STDOUTANDSTDERRAPPEND
+
+				switch obj2Typed := obj2.(type) {
+				case *MShellList:
+					obj2Typed.StandardOutputFile = redirectFile
+					obj2Typed.AppendOutput = appendMode
+					obj2Typed.StandardErrorFile = redirectFile
+					obj2Typed.AppendError = appendMode
+					stack.Push(obj2Typed)
+				case *MShellQuotation:
+					obj2Typed.StandardOutputFile = redirectFile
+					obj2Typed.AppendOutput = appendMode
+					obj2Typed.StandardErrorFile = redirectFile
+					obj2Typed.AppendError = appendMode
+					stack.Push(obj2Typed)
+				default:
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect stdout and stderr to a %s.\n", t.Line, t.Column, obj2.TypeName()))
 				}
 			} else if t.Type == ENVSTORE { // Token Type
 				obj, err := stack.Pop()
@@ -5700,8 +5789,16 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 	// cmd := exec.Command(commandLineArgs[0], commandLineArgs[1:]...)
 	cmd.Env = os.Environ()
 
+	// Check for same-path stdout/stderr redirection
+	// If both are redirecting to the exact same path string, use a single file descriptor
+	samePath := list.StandardOutputFile != "" && list.StandardOutputFile == list.StandardErrorFile
+	if samePath && list.AppendOutput != list.AppendError {
+		return state.FailWithMessage(fmt.Sprintf("Cannot redirect stdout and stderr to the same file '%s' with different append modes.\n", list.StandardOutputFile)), 1, nil, nil
+	}
+
 	// STDOUT HANDLING
 	var commandSubWriter bytes.Buffer
+	var sharedOutputFile *os.File // Used when stdout and stderr go to the same file
 	// TBD: Should we allow command substituation and redirection at the same time?
 	// Probably more hassle than worth including, with probable workarounds for that rare case.
 	if list.StdoutBehavior != STDOUT_NONE {
@@ -5719,6 +5816,9 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 			return state.FailWithMessage(fmt.Sprintf("Error opening file %s for writing: %s\n", list.StandardOutputFile, err.Error())), 1, nil, nil
 		}
 		cmd.Stdout = file
+		if samePath {
+			sharedOutputFile = file
+		}
 		defer file.Close()
 	} else if context.StandardOutput != nil {
 		cmd.Stdout = context.StandardOutput
@@ -5769,6 +5869,9 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 
 	if list.StderrBehavior != STDERR_NONE {
 		cmd.Stderr = &stderrBuffer
+	} else if sharedOutputFile != nil {
+		// Use the same file descriptor as stdout
+		cmd.Stderr = sharedOutputFile
 	} else if list.StandardErrorFile != "" {
 		// Open the file for writing
 		var file *os.File
@@ -5782,15 +5885,14 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 		}
 		cmd.Stderr = file
 		defer file.Close()
-		// } else if context.Stand != nil {
-		// cmd.Stderr = context.StandardError  // TBD: Implement this
+	} else if context.StandardError != nil {
+		cmd.Stderr = context.StandardError
 	} else {
 		if list.RunInBackground {
 			cmd.Stderr = nil
 		} else {
-			// Default to stdout of this process itself
+			// Default to stderr of this process itself
 			cmd.Stderr = os.Stderr
-			// cmd.Stdout = nil
 		}
 	}
 

@@ -1,0 +1,4 @@
+# FILE:both_redirect_append.txt
+# Test &>> operator - redirects both stdout and stderr to file (append)
+[sh -c "echo first-stdout; echo first-stderr >&2"] `both_redirect_append.txt` &> !
+[sh -c "echo second-stdout; echo second-stderr >&2"] `both_redirect_append.txt` &>> !

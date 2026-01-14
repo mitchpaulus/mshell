@@ -53,7 +53,23 @@ For that, you use the <code>></code>, <code>>></code>, <code>*</code>, and <code
 To redirect standard error to a file, use <code>2></code>
 <span title="The 2 is the standard error file descriptor; this mirrors typical POSIX shell syntax. It was chosen to be most familiar for those coming from bash/zsh/fish, I might provide a different alias in the future." style="cursor: help;">[?]</span>,
 and <code>^</code> instead of <code>*</code>.
+</p>
 
+<p>
+To redirect both standard output and standard error to the same file, use <code>&amp;></code> (truncate) or <code>&amp;>></code> (append).
+This ensures both streams share the same file descriptor, preserving the order of output.
+</p>
+
+<pre>
+<code>[yourCommand] `output.log` &amp;> ! <span class="mshellLINECOMMENT"># Redirects both stdout and stderr to the file, truncating it.</span>
+[yourCommand] `output.log` &amp;>> ! <span class="mshellLINECOMMENT"># Redirects both stdout and stderr to the file, appending.</span>
+</code>
+</pre>
+
+<p>
+If you manually use <code>></code> and <code>2></code> with exactly the same path string, mshell will automatically
+use a single file descriptor for both streams, avoiding race conditions. However, if the append modes differ
+(e.g., <code>></code> and <code>2>></code> to the same file), an error will be raised.
 </p>
 
 <pre>
@@ -91,11 +107,38 @@ Standard output will always be pushed first, and then standard error.
     <tr> <td><code>*b</code></td> <td>Capture stdout to the stack.</td> <td>As binary.</td> </tr>
     <tr> <td><code>2></code></td> <td>Redirect stderr to a file.</td> <td>Truncates the file.</td> </tr>
     <tr> <td><code>2>></code></td> <td>Redirect stderr to a file.</td> <td>Appends to the file.</td> </tr>
+    <tr> <td><code>&amp;></code></td> <td>Redirect both stdout and stderr to a file.</td> <td>Truncates the file.</td> </tr>
+    <tr> <td><code>&amp;>></code></td> <td>Redirect both stdout and stderr to a file.</td> <td>Appends to the file.</td> </tr>
     <tr> <td><code>^</code></td> <td>Capture stderr to the stack.</td> <td>As a string.</td> </tr>
     <tr> <td><code>^b</code></td> <td>Capture stderr to the stack.</td> <td>As binary.</td> </tr>
     <tr> <td><code>&lt;</code></td> <td>Feed stdin from a value.</td> <td>String, path, or binary.</td> </tr>
   </tbody>
 </table>
+
+<h2 id="quotation-redirection">Redirection on quotations</h2>
+
+<p>
+All of the redirection operators above also work on quotations.
+This is useful when you want to redirect the output of mshell code that uses <code>wl</code>, <code>wle</code>, or other built-in functions that write to stdout or stderr.
+It is also useful when you have many commands that you want to run while appending all the outputs to a single file, without having to put the redirection on each command invocation.
+</p>
+
+<pre>
+<code><span class="mshellLEFT_PAREN">(</span>
+    <span class="mshellSTRING">"Hello from stdout"</span> <span class="mshellLITERAL">wl</span>
+    <span class="mshellSTRING">"Hello from stderr"</span> <span class="mshellLITERAL">wle</span>
+<span class="mshellRIGHT_PAREN">)</span> <span class="mshellPATH">`output.log`</span> <span class="mshellSTDOUTANDSTDERRREDIRECT">&amp;></span> <span class="mshellEXECUTE">x</span> <span class="mshellLINECOMMENT"># Redirects both stdout and stderr from the quotation to output.log</span>
+</code>
+</pre>
+
+<pre>
+<code><span class="mshellLEFT_PAREN">(</span>
+    <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">echo</span> <span class="mshellSTRING">"Running step 1"</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellBANG">!</span>
+    <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">echo</span> <span class="mshellSTRING">"Running step 2"</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellBANG">!</span>
+    <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">echo</span> <span class="mshellSTRING">"Running step 3"</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellBANG">!</span>
+<span class="mshellRIGHT_PAREN">)</span> <span class="mshellPATH">`build.log`</span> <span class="mshellSTDAPPEND">&gt;&gt;</span> <span class="mshellEXECUTE">x</span> <span class="mshellLINECOMMENT"># All command outputs appended to build.log</span>
+</code>
+</pre>
 
 <h1 id="input-redirection">Input redirection</h1>
 

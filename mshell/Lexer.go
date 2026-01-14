@@ -95,6 +95,8 @@ const (
 	ELSE
 	ELSESTAR
 	STARIF
+	STDOUTANDSTDERRREDIRECT  // &>
+	STDOUTANDSTDERRAPPEND    // &>>
 )
 
 func (t TokenType) String() string {
@@ -257,6 +259,10 @@ func (t TokenType) String() string {
 		return "ELSESTAR"
 	case STARIF:
 		return "STARIF"
+	case STDOUTANDSTDERRREDIRECT:
+		return "STDOUTANDSTDERRREDIRECT"
+	case STDOUTANDSTDERRAPPEND:
+		return "STDOUTANDSTDERRAPPEND"
 	default:
 		return "UNKNOWN"
 	}
@@ -680,6 +686,14 @@ func (l *Lexer) scanTokenAll() Token {
 	case ',':
 		return l.makeToken(COMMA)
 	case '&':
+		if l.peek() == '>' {
+			l.advance()
+			if l.peek() == '>' {
+				l.advance()
+				return l.makeToken(STDOUTANDSTDERRAPPEND)
+			}
+			return l.makeToken(STDOUTANDSTDERRREDIRECT)
+		}
 		return l.makeToken(AMPERSAND)
 	case '<':
 		if l.peek() == '=' {

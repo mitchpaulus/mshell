@@ -1,0 +1,4 @@
+# FILE:same_path_redirect.txt
+# Test same-path detection - when > and 2> use the exact same path string,
+# they should share a single file descriptor
+[sh -c "echo stdout; echo stderr >&2"] `same_path_redirect.txt` > `same_path_redirect.txt` 2> !

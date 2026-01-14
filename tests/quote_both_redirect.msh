@@ -1,0 +1,6 @@
+# FILE:quote_both_redirect.txt
+# Test &> redirect with quotation (both stdout and stderr to same file)
+(
+    "stdout-line" wl
+    "stderr-line" wle
+) `quote_both_redirect.txt` &> x
