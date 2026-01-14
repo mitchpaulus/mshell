@@ -1,3 +1,6 @@
+tests/both_redirect.txt
+tests/both_redirect_append.txt
+tests/same_path_redirect.txt
 .claude/settings.local.json
 copy.msh
 .idea/
