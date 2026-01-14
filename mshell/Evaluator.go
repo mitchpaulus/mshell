@@ -181,6 +181,12 @@ func escapeMshellString(input string) string {
 	return b.String()
 }
 
+// containsNullByte checks if a string contains a null byte, which typically indicates
+// the string was incorrectly built from UTF-16 data instead of UTF-8.
+func containsNullByte(s string) bool {
+	return strings.ContainsRune(s, 0)
+}
+
 func formatWithSigFigs(num float64, sigfigs int) string {
 	if num == 0 {
 		return fmt.Sprintf("0.%s", strings.Repeat("0", sigfigs))
@@ -2266,6 +2272,14 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot %s from a %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName()))
 					}
 
+					// Check for null bytes in file paths
+					if containsNullByte(source) {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Found a null byte in the source file path for '%s'. This is almost certainly not intended. You may have built the file name from UTF-16. Please ensure that your string is UTF-8 for the most predictable results.\n", t.Line, t.Column, t.Lexeme))
+					}
+					if containsNullByte(destination) {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Found a null byte in the destination file path for '%s'. This is almost certainly not intended. You may have built the file name from UTF-16. Please ensure that your string is UTF-8 for the most predictable results.\n", t.Line, t.Column, t.Lexeme))
+					}
+
 					// Check if destination is a directory
 					if fi, err := os.Stat(destination); err == nil && fi.IsDir() {
 						// If it is a directory, append the source file name to the destination
@@ -4289,6 +4303,10 @@ MainLoop:
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot append to a %s.\n", t.Line, t.Column, redirectPath.TypeName()))
 				}
 
+				if containsNullByte(path) {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Found a null byte in the redirection file path. This is almost certainly not intended. You may have built the file name from UTF-16. Please ensure that your string is UTF-8 for the most predictable results.\n", t.Line, t.Column))
+				}
+
 				switch obj2Typed := obj2.(type) {
 				case *MShellList:
 					obj2Typed.StandardOutputFile = path
@@ -4745,21 +4763,25 @@ MainLoop:
 				} else {
 					switch obj1.(type) {
 					case MShellString:
+						path := obj1.(MShellString).Content
+						if containsNullByte(path) {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Found a null byte in the redirection file path. This is almost certainly not intended. You may have built the file name from UTF-16. Please ensure that your string is UTF-8 for the most predictable results.\n", t.Line, t.Column))
+						}
 						switch obj2.(type) {
 						case *MShellList:
 							if t.Type == GREATERTHAN {
-								obj2.(*MShellList).StandardOutputFile = obj1.(MShellString).Content
+								obj2.(*MShellList).StandardOutputFile = path
 							} else { // LESSTHAN, input redirection
 								obj2.(*MShellList).StdinBehavior = STDIN_CONTENT
-								obj2.(*MShellList).StandardInputContents = obj1.(MShellString).Content
+								obj2.(*MShellList).StandardInputContents = path
 							}
 							stack.Push(obj2)
 						case *MShellQuotation:
 							if t.Type == GREATERTHAN {
-								obj2.(*MShellQuotation).StandardOutputFile = obj1.(MShellString).Content
+								obj2.(*MShellQuotation).StandardOutputFile = path
 							} else { // LESSTHAN, input redirection
 								obj2.(*MShellQuotation).StdinBehavior = STDIN_CONTENT
-								obj2.(*MShellQuotation).StandardInputContents = obj1.(MShellString).Content
+								obj2.(*MShellQuotation).StandardInputContents = path
 							}
 							stack.Push(obj2)
 						case *MShellPipe:
@@ -4791,42 +4813,50 @@ MainLoop:
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect binary data (%s) to a %s (%s). Use '<' for input redirection.\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
 						}
 					case MShellLiteral:
+						path := obj1.(MShellLiteral).LiteralText
+						if containsNullByte(path) {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Found a null byte in the redirection file path. This is almost certainly not intended. You may have built the file name from UTF-16. Please ensure that your string is UTF-8 for the most predictable results.\n", t.Line, t.Column))
+						}
 						switch obj2.(type) {
 						case *MShellList:
 							if t.Type == GREATERTHAN {
-								obj2.(*MShellList).StandardOutputFile = obj1.(MShellLiteral).LiteralText
+								obj2.(*MShellList).StandardOutputFile = path
 							} else { // LESSTHAN, input redirection
 								obj2.(*MShellList).StdinBehavior = STDIN_CONTENT
-								obj2.(*MShellList).StandardInputFile = obj1.(MShellLiteral).LiteralText
+								obj2.(*MShellList).StandardInputFile = path
 							}
 							stack.Push(obj2)
 						case *MShellQuotation:
 							if t.Type == GREATERTHAN {
-								obj2.(*MShellQuotation).StandardOutputFile = obj1.(MShellLiteral).LiteralText
+								obj2.(*MShellQuotation).StandardOutputFile = path
 							} else {
 								obj2.(*MShellQuotation).StdinBehavior = STDIN_CONTENT
-								obj2.(*MShellQuotation).StandardInputContents = obj1.(MShellLiteral).LiteralText
+								obj2.(*MShellQuotation).StandardInputContents = path
 							}
 						default:
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a %s (%s) to a %s (%s).\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
 						}
 
 					case MShellPath:
+						path := obj1.(MShellPath).Path
+						if containsNullByte(path) {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Found a null byte in the redirection file path. This is almost certainly not intended. You may have built the file name from UTF-16. Please ensure that your string is UTF-8 for the most predictable results.\n", t.Line, t.Column))
+						}
 						switch obj2.(type) {
 						case *MShellList:
 							if t.Type == GREATERTHAN {
-								obj2.(*MShellList).StandardOutputFile = obj1.(MShellPath).Path
+								obj2.(*MShellList).StandardOutputFile = path
 							} else { // LESSTHAN, input redirection
 								obj2.(*MShellList).StdinBehavior = STDIN_FILE
-								obj2.(*MShellList).StandardInputFile = obj1.(MShellPath).Path
+								obj2.(*MShellList).StandardInputFile = path
 							}
 							stack.Push(obj2)
 						case *MShellQuotation:
 							if t.Type == GREATERTHAN {
-								obj2.(*MShellQuotation).StandardOutputFile = obj1.(MShellPath).Path
+								obj2.(*MShellQuotation).StandardOutputFile = path
 							} else {
 								obj2.(*MShellQuotation).StdinBehavior = STDIN_FILE
-								obj2.(*MShellQuotation).StandardInputFile = obj1.(MShellPath).Path
+								obj2.(*MShellQuotation).StandardInputFile = path
 							}
 							stack.Push(obj2)
 						default:
@@ -4862,6 +4892,10 @@ MainLoop:
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect stderr to a %s.\n", t.Line, t.Column, obj1.TypeName()))
 				}
 
+				if containsNullByte(redirectFile) {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Found a null byte in the redirection file path. This is almost certainly not intended. You may have built the file name from UTF-16. Please ensure that your string is UTF-8 for the most predictable results.\n", t.Line, t.Column))
+				}
+
 				switch obj2Typed := obj2.(type) {
 				case *MShellList:
 					obj2Typed.StandardErrorFile = redirectFile
@@ -4887,6 +4921,10 @@ MainLoop:
 				redirectFile, err := obj1.CastString()
 				if err != nil {
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect stdout and stderr to a %s.\n", t.Line, t.Column, obj1.TypeName()))
+				}
+
+				if containsNullByte(redirectFile) {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Found a null byte in the redirection file path. This is almost certainly not intended. You may have built the file name from UTF-16. Please ensure that your string is UTF-8 for the most predictable results.\n", t.Line, t.Column))
 				}
 
 				appendMode := t.Type == STDOUTANDSTDERRAPPEND
