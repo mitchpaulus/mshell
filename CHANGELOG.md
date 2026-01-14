@@ -30,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Append stderr redirection with `2>>`
 - Combined stdout/stderr redirection with `&>` (truncate) and `&>>` (append)
 - Same-path detection when using `>` and `2>` with identical paths (shares single file descriptor)
+- Full stderr redirection support for quotations (`2>`, `2>>`, `&>`, `&>>`)
+- Null byte validation for redirection file paths and `cp`/`mv` commands
 
 ### Fixed
 
