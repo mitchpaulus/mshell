@@ -1,6 +1,12 @@
 tests/both_redirect.txt
 tests/both_redirect_append.txt
 tests/same_path_redirect.txt
+tests/quote_both_redirect.txt
+tests/quote_both_redirect_append.txt
+tests/quote_stderr_append.txt
+tests/quote_stderr_redirect.txt
+tests/test_quote_stderr.txt
+
 .claude/settings.local.json
 copy.msh
 .idea/
