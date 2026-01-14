@@ -28,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `msh completions` subcommand for bash, fish, nushell, and elvish
 - CLI syntax highlighting for environment variables
 - Append stderr redirection with `2>>`
+- Combined stdout/stderr redirection with `&>` (truncate) and `&>>` (append)
+- Same-path detection when using `>` and `2>` with identical paths (shares single file descriptor)
 
 ### Fixed
 

@@ -53,7 +53,23 @@ For that, you use the <code>></code>, <code>>></code>, <code>*</code>, and <code
 To redirect standard error to a file, use <code>2></code>
 <span title="The 2 is the standard error file descriptor; this mirrors typical POSIX shell syntax. It was chosen to be most familiar for those coming from bash/zsh/fish, I might provide a different alias in the future." style="cursor: help;">[?]</span>,
 and <code>^</code> instead of <code>*</code>.
+</p>
 
+<p>
+To redirect both standard output and standard error to the same file, use <code>&amp;></code> (truncate) or <code>&amp;>></code> (append).
+This ensures both streams share the same file descriptor, preserving the order of output.
+</p>
+
+<pre>
+<code>[yourCommand] `output.log` &amp;> ! <span class="mshellLINECOMMENT"># Redirects both stdout and stderr to the file, truncating it.</span>
+[yourCommand] `output.log` &amp;>> ! <span class="mshellLINECOMMENT"># Redirects both stdout and stderr to the file, appending.</span>
+</code>
+</pre>
+
+<p>
+If you manually use <code>></code> and <code>2></code> with exactly the same path string, mshell will automatically
+use a single file descriptor for both streams, avoiding race conditions. However, if the append modes differ
+(e.g., <code>></code> and <code>2>></code> to the same file), an error will be raised.
 </p>
 
 <pre>
@@ -91,6 +107,8 @@ Standard output will always be pushed first, and then standard error.
     <tr> <td><code>*b</code></td> <td>Capture stdout to the stack.</td> <td>As binary.</td> </tr>
     <tr> <td><code>2></code></td> <td>Redirect stderr to a file.</td> <td>Truncates the file.</td> </tr>
     <tr> <td><code>2>></code></td> <td>Redirect stderr to a file.</td> <td>Appends to the file.</td> </tr>
+    <tr> <td><code>&amp;></code></td> <td>Redirect both stdout and stderr to a file.</td> <td>Truncates the file.</td> </tr>
+    <tr> <td><code>&amp;>></code></td> <td>Redirect both stdout and stderr to a file.</td> <td>Appends to the file.</td> </tr>
     <tr> <td><code>^</code></td> <td>Capture stderr to the stack.</td> <td>As a string.</td> </tr>
     <tr> <td><code>^b</code></td> <td>Capture stderr to the stack.</td> <td>As binary.</td> </tr>
     <tr> <td><code>&lt;</code></td> <td>Feed stdin from a value.</td> <td>String, path, or binary.</td> </tr>

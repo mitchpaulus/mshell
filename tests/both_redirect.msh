@@ -1,0 +1,4 @@
+# FILE:both_redirect.txt
+# Test &> operator - redirects both stdout and stderr to file (truncate)
+[sh -c "echo stdout; echo stderr >&2"] `both_redirect.txt` &> !
+[sh -c "echo stdout; echo stderr >&2"] `both_redirect.txt` &> !

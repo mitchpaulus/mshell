@@ -4856,6 +4856,37 @@ MainLoop:
 				default:
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect stderr to a %s.\n", t.Line, t.Column, obj2.TypeName()))
 				}
+			} else if t.Type == STDOUTANDSTDERRREDIRECT || t.Type == STDOUTANDSTDERRAPPEND { // Token Type
+				obj1, err := stack.Pop()
+				if err != nil {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect stdout and stderr on an empty stack.\n", t.Line, t.Column))
+				}
+				obj2, err := stack.Pop()
+				if err != nil {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect stdout and stderr on a stack with only one item.\n", t.Line, t.Column))
+				}
+
+				redirectFile, err := obj1.CastString()
+				if err != nil {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect stdout and stderr to a %s.\n", t.Line, t.Column, obj1.TypeName()))
+				}
+
+				appendMode := t.Type == STDOUTANDSTDERRAPPEND
+
+				switch obj2Typed := obj2.(type) {
+				case *MShellList:
+					obj2Typed.StandardOutputFile = redirectFile
+					obj2Typed.AppendOutput = appendMode
+					obj2Typed.StandardErrorFile = redirectFile
+					obj2Typed.AppendError = appendMode
+					stack.Push(obj2Typed)
+				case *MShellQuotation:
+					obj2Typed.StandardOutputFile = redirectFile
+					obj2Typed.StandardErrorFile = redirectFile
+					stack.Push(obj2Typed)
+				default:
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect stdout and stderr to a %s.\n", t.Line, t.Column, obj2.TypeName()))
+				}
 			} else if t.Type == ENVSTORE { // Token Type
 				obj, err := stack.Pop()
 				if err != nil {
@@ -5700,8 +5731,16 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 	// cmd := exec.Command(commandLineArgs[0], commandLineArgs[1:]...)
 	cmd.Env = os.Environ()
 
+	// Check for same-path stdout/stderr redirection
+	// If both are redirecting to the exact same path string, use a single file descriptor
+	samePath := list.StandardOutputFile != "" && list.StandardOutputFile == list.StandardErrorFile
+	if samePath && list.AppendOutput != list.AppendError {
+		return state.FailWithMessage(fmt.Sprintf("Cannot redirect stdout and stderr to the same file '%s' with different append modes.\n", list.StandardOutputFile)), 1, nil, nil
+	}
+
 	// STDOUT HANDLING
 	var commandSubWriter bytes.Buffer
+	var sharedOutputFile *os.File // Used when stdout and stderr go to the same file
 	// TBD: Should we allow command substituation and redirection at the same time?
 	// Probably more hassle than worth including, with probable workarounds for that rare case.
 	if list.StdoutBehavior != STDOUT_NONE {
@@ -5719,6 +5758,9 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 			return state.FailWithMessage(fmt.Sprintf("Error opening file %s for writing: %s\n", list.StandardOutputFile, err.Error())), 1, nil, nil
 		}
 		cmd.Stdout = file
+		if samePath {
+			sharedOutputFile = file
+		}
 		defer file.Close()
 	} else if context.StandardOutput != nil {
 		cmd.Stdout = context.StandardOutput
@@ -5769,6 +5811,9 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 
 	if list.StderrBehavior != STDERR_NONE {
 		cmd.Stderr = &stderrBuffer
+	} else if sharedOutputFile != nil {
+		// Use the same file descriptor as stdout
+		cmd.Stderr = sharedOutputFile
 	} else if list.StandardErrorFile != "" {
 		// Open the file for writing
 		var file *os.File

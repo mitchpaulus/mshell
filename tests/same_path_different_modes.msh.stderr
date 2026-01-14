@@ -1,0 +1,1 @@
+Cannot redirect stdout and stderr to the same file 'same_path_modes.txt' with different append modes.
