@@ -43,7 +43,7 @@ func TestHoverRequestForBuiltin(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runErr = RunLSP([]string{"--stdio"}, clientReader, serverWriter)
+		runErr = RunLSP(clientReader, serverWriter)
 		serverWriter.Close()
 	}()
 
@@ -141,7 +141,7 @@ func TestCompletionForVarRetrieve(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runErr = RunLSP([]string{"--stdio"}, clientReader, serverWriter)
+		runErr = RunLSP(clientReader, serverWriter)
 		serverWriter.Close()
 	}()
 
@@ -258,7 +258,7 @@ func TestCompletionForVarRetrieveBareAt(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runErr = RunLSP([]string{"--stdio"}, clientReader, serverWriter)
+		runErr = RunLSP(clientReader, serverWriter)
 		serverWriter.Close()
 	}()
 
@@ -372,7 +372,7 @@ func TestPrepareRenameVariable(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runErr = RunLSP([]string{"--stdio"}, clientReader, serverWriter)
+		runErr = RunLSP(clientReader, serverWriter)
 		serverWriter.Close()
 	}()
 
@@ -472,7 +472,7 @@ func TestPrepareRenameVariableStore(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runErr = RunLSP([]string{"--stdio"}, clientReader, serverWriter)
+		runErr = RunLSP(clientReader, serverWriter)
 		serverWriter.Close()
 	}()
 
@@ -572,7 +572,7 @@ func TestPrepareRenameRejectsNonVariable(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runErr = RunLSP([]string{"--stdio"}, clientReader, serverWriter)
+		runErr = RunLSP(clientReader, serverWriter)
 		serverWriter.Close()
 	}()
 
@@ -658,7 +658,7 @@ func TestRenameGlobalVariable(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runErr = RunLSP([]string{"--stdio"}, clientReader, serverWriter)
+		runErr = RunLSP(clientReader, serverWriter)
 		serverWriter.Close()
 	}()
 
@@ -788,7 +788,7 @@ func TestRenameVariableInsideDefinition(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runErr = RunLSP([]string{"--stdio"}, clientReader, serverWriter)
+		runErr = RunLSP(clientReader, serverWriter)
 		serverWriter.Close()
 	}()
 

@@ -65,3 +65,8 @@ msh build.msh
 Files in `doc/build` are build artifacts. Do not edit these.
 There is a main base template at `doc/base.html`, which has most of the general purpose CSS and styles for code.
 You should rebuild the docs when you make edits.
+
+## VS Code
+
+Code for the VS Code extension is at `code/`.
+If we update syntax, ensure to update appropriately.
