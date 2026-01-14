@@ -61,8 +61,8 @@ This ensures both streams share the same file descriptor, preserving the order o
 </p>
 
 <pre>
-<code>[yourCommand] `output.log` &amp;> ! <span class="mshellLINECOMMENT"># Redirects both stdout and stderr to the file, truncating it.</span>
-[yourCommand] `output.log` &amp;>> ! <span class="mshellLINECOMMENT"># Redirects both stdout and stderr to the file, appending.</span>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`output.log`</span> <span class="mshellSTDOUTANDSTDERRREDIRECT">&amp;></span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Redirects both stdout and stderr to the file, truncating it.</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`output.log`</span> <span class="mshellSTDOUTANDSTDERRAPPEND">&amp;>></span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Redirects both stdout and stderr to the file, appending.</span>
 </code>
 </pre>
 
