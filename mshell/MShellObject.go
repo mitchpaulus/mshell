@@ -535,7 +535,9 @@ type MShellQuotation struct {
 	StandardInputBinary   []byte
 	StandardInputFile     string
 	StandardOutputFile    string
+	AppendOutput          bool
 	StandardErrorFile     string
+	AppendError           bool
 	Variables             map[string]MShellObject
 }
 
@@ -581,7 +583,13 @@ func (q *MShellQuotation) BuildExecutionContext(context *ExecuteContext) (*Execu
 	}
 
 	if q.StandardOutputFile != "" {
-		file, err := os.Create(q.StandardOutputFile)
+		var file *os.File
+		var err error
+		if q.AppendOutput {
+			file, err = os.OpenFile(q.StandardOutputFile, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+		} else {
+			file, err = os.Create(q.StandardOutputFile)
+		}
 		if err != nil {
 			t := q.GetStartToken()
 			return nil, fmt.Errorf("%d:%d: Error opening file %s for writing: %s\n", t.Line, t.Column, q.StandardOutputFile, err.Error())

@@ -4275,15 +4275,18 @@ MainLoop:
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot append to a %s.\n", t.Line, t.Column, redirectPath.TypeName()))
 				}
 
-				var listObj *MShellList
-				var ok bool
-				if listObj, ok = obj2.(*MShellList); !ok {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Second item on stack for %s should be a list, found a %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName()))
+				switch obj2Typed := obj2.(type) {
+				case *MShellList:
+					obj2Typed.StandardOutputFile = path
+					obj2Typed.AppendOutput = true
+					stack.Push(obj2Typed)
+				case *MShellQuotation:
+					obj2Typed.StandardOutputFile = path
+					obj2Typed.AppendOutput = true
+					stack.Push(obj2Typed)
+				default:
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Second item on stack for %s should be a list or quotation, found a %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName()))
 				}
-
-				listObj.StandardOutputFile = path
-				listObj.AppendOutput = true
-				stack.Push(listObj)
 			} else if t.Type == LEFT_SQUARE_BRACKET { // Token Type
 				return state.FailWithMessage(fmt.Sprintf("%d:%d: Found unexpected left square bracket.\n", t.Line, t.Column))
 			} else if t.Type == LEFT_PAREN { // Token Type
@@ -4852,6 +4855,7 @@ MainLoop:
 					stack.Push(obj2Typed)
 				case *MShellQuotation:
 					obj2Typed.StandardErrorFile = redirectFile
+					obj2Typed.AppendError = t.Type == STDERRAPPEND
 					stack.Push(obj2Typed)
 				default:
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect stderr to a %s.\n", t.Line, t.Column, obj2.TypeName()))
@@ -4882,7 +4886,9 @@ MainLoop:
 					stack.Push(obj2Typed)
 				case *MShellQuotation:
 					obj2Typed.StandardOutputFile = redirectFile
+					obj2Typed.AppendOutput = appendMode
 					obj2Typed.StandardErrorFile = redirectFile
+					obj2Typed.AppendError = appendMode
 					stack.Push(obj2Typed)
 				default:
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect stdout and stderr to a %s.\n", t.Line, t.Column, obj2.TypeName()))
