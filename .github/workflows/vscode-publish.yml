@@ -1,0 +1,31 @@
+name: Publish VS Code Extension
+
+on:
+  push:
+    tags:
+      - 'vscode*'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        working-directory: code
+        run: npm ci
+
+      - name: Compile
+        working-directory: code
+        run: npm run compile
+
+      - name: Publish to Marketplace
+        working-directory: code
+        run: npx @vscode/vsce publish
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}

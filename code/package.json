@@ -3,7 +3,7 @@
     "displayName": "mshell",
     "description": "Syntax highlighting and language support for the mshell concatenative shell language",
     "publisher": "MitchellPaulus",
-    "version": "0.6.4",
+    "version": "0.9.0",
     "engines": { "vscode": "^1.90.0" },
     "categories": ["Programming Languages"],
     "main": "./out/extension.js",
