@@ -80,6 +80,7 @@ Note that you'll also need the environment variable `MSHSTDLIB` pointing to the 
 # TODO
 
 - Job control. Right now, if you CTRL-c a long running process, it kills the entire shell.
+- User defined abbreviations (like fish). Right now you get my hard-coded ones, sorry.
 - Pattern matching syntax.
 - Type checking.
 - Improved error messages.
