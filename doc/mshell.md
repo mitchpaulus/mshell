@@ -154,7 +154,7 @@ Date/times can be entered using a literal syntax, in ISO-8601 format.
 2023-10-01T13:01:30
 ```
 
-Dates can be subtracted from each other, and the result is a float number of days.
+Dates can be subtracted from each other, and the result is a floating-point number of days.
 
 ```mshell
 2023-10-02 2023-10-01 - # 1.0
@@ -494,7 +494,7 @@ The presence of an environment variable can be checked using the `?` suffix.
 # Setting and exporting for subprocesses
 "Hello, World!" $MSHELL_VAR!
 
-# Checking for variable existance
+# Checking for variable existence
 [($MY_ENV_VAR?) ("MY_ENV_VAR exists") ("MY_ENV_VAR does not exist")] if wl
 ```
 

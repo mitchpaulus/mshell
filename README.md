@@ -70,6 +70,7 @@ Note that you'll also need the environment variable `MSHSTDLIB` pointing to the 
 
 # Editor Support
 
+- VS Code extension is available on the Marketplace: [`MitchellPaulus.mshell`](https://marketplace.visualstudio.com/items?itemName=MitchellPaulus.mshell).
 - Sublime Text syntax highlighting is available in [`sublime/msh.sublime-syntax`](https://github.com/mitchpaulus/mshell/tree/main/sublime/msh.sublime-syntax).
 - Notepad++ light and dark user-defined language files are available in [`Notepad++/`](https://github.com/mitchpaulus/mshell/tree/main/Notepad++).
 - Vim/Neovim syntax highlighting is available via [`mshell-vim`](https://github.com/mitchpaulus/mshell-vim).

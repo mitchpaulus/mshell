@@ -26,13 +26,13 @@ chmod +x ~/.local/bin/msh</code>
 <pre>
 <code><span class="mshellLINECOMMENT"># cmd.exe</span>
 tar -xvf windows_amd64.tar.gz
-move msh.exe "%USERPROFILE%\\bin\\"</code>
+move msh.exe <span class="mshellSTRING">"%USERPROFILE%\\bin\\"</span></code>
 </pre>
 
 <pre>
 <code><span class="mshellLINECOMMENT"># PowerShell</span>
 tar -xvf windows_amd64.tar.gz
-Move-Item msh.exe "$env:USERPROFILE\\bin\\"</code>
+Move-Item msh.exe <span class="mshellSTRING">"$env:USERPROFILE\\bin\\"</span></code>
 </pre>
 
 <h2 id="getting-started-installation-stdlib">2) Set up the standard library</h2>
@@ -46,25 +46,25 @@ then set <code>MSHSTDLIB</code> to point at it.
 
 <pre>
 <code><span class="mshellLINECOMMENT"># bash/zsh/sh</span>
-export MSHSTDLIB="/path/to/std.msh"</code>
+export MSHSTDLIB=<span class="mshellSTRING">"/path/to/std.msh"</span></code>
 </pre>
 
 <pre>
 <code><span class="mshellLINECOMMENT"># fish</span>
-set -gx MSHSTDLIB "/path/to/std.msh"</code>
+set -gx MSHSTDLIB <span class="mshellSTRING">"/path/to/std.msh"</span></code>
 </pre>
 
 <pre>
 <code><span class="mshellLINECOMMENT"># PowerShell (current session)</span>
-$env:MSHSTDLIB = "C:\path\to\std.msh"
+$env:MSHSTDLIB = <span class="mshellSTRING">"C:\path\to\std.msh"</span>
 
 <span class="mshellLINECOMMENT"># PowerShell (persist for your user account)</span>
-[Environment]::SetEnvironmentVariable("MSHSTDLIB", "C:\path\to\std.msh", "User")</code>
+[Environment]::SetEnvironmentVariable(<span class="mshellSTRING">"MSHSTDLIB"</span>, <span class="mshellSTRING">"C:\path\to\std.msh"</span>, <span class="mshellSTRING">"User"</span>)</code>
 </pre>
 
 <pre>
 <code><span class="mshellLINECOMMENT"># Windows (GUI)</span>
-<span class="mshellLINECOMMENT"># Use the Start menu: "Edit environment variables for your account"</span>
+<span class="mshellLINECOMMENT"># Use the Start menu: </span><span class="mshellSTRING">"Edit environment variables for your account"</span>
 <span class="mshellLINECOMMENT"># and add MSHSTDLIB with the full path to std.msh.</span></code>
 </pre>
 
@@ -80,6 +80,7 @@ Syntax highlighting and editor integrations are available for common editors:
 </p>
 
 <ul>
+  <li>VS Code Extension: <a href="https://marketplace.visualstudio.com/items?itemName=MitchellPaulus.mshell" target="_blank" rel="noopener noreferrer">mshell extension</a></li>
   <li>Sublime Text: <a href="https://github.com/mitchpaulus/mshell/tree/main/sublime/msh.sublime-syntax" target="_blank" rel="noopener noreferrer">msh.sublime-syntax</a></li>
   <li>Notepad++: <a href="https://github.com/mitchpaulus/mshell/tree/main/Notepad++" target="_blank" rel="noopener noreferrer">user-defined language files</a> (light and dark)</li>
   <li>Vim/Neovim: <a href="https://github.com/mitchpaulus/mshell-vim" target="_blank" rel="noopener noreferrer">mshell-vim</a></li>
