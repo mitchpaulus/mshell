@@ -1,0 +1,72 @@
+<div id="variables-top"></div>
+
+<p>
+<code>mshell</code> has two variable namespaces: mshell variables (typed values stored in the interpreter)
+and environment variables (strings stored in the process environment).
+They use different sigils and behave differently.
+</p>
+
+<h1 id="variables-mshell">mshell Variables <a class="section-link" href="#variables-mshell" aria-label="Permalink">§</a> <a class="back-to-top" href="#variables-top">Back to top</a></h1>
+
+<p>
+Store a value with the <code>!</code> suffix and retrieve it with <code>@</code>.
+Storing pops the top of the stack; retrieval pushes the stored value back onto the stack.
+</p>
+
+<pre>
+<code><span class="mshellINTEGER">42</span> <span class="mshellVARSTORE">answer!</span>
+<span class="mshellVARRETRIEVE">@answer</span> <span class="mshellINTEGER">1</span> <span class="mshellPLUS">+</span> <span class="mshellVARSTORE">total!</span>
+<span class="mshellVARRETRIEVE">@total</span> <span class="mshellLITERAL">wl</span></code>
+</pre>
+
+<p>
+Retrieving an unknown variable results in an error.
+Mshell variables do not consult the environment, so <code>@name</code> only looks in the mshell variable map.
+</p>
+
+<h1 id="variables-environment">Environment Variables <a class="section-link" href="#variables-environment" aria-label="Permalink">§</a> <a class="back-to-top" href="#variables-top">Back to top</a></h1>
+
+<p>
+Environment variables are accessed with <code><span class="mshellVARRETRIEVE">$NAME</span></code>.
+They are always strings.
+Use <code><span class="mshellVARSTORE">$NAME!</span></code> to set them and <code><span class="mshellVARRETRIEVE">$NAME</span><span class="mshellQUESTION">?</span></code> to check for existence.
+Reading a missing environment variable with <code><span class="mshellVARRETRIEVE">$NAME</span></code> is an error.
+Environment variables are always exported to subprocesses, so setting them affects subsequent command executions.
+</p>
+
+<pre>
+<code><span class="mshellSTRING">"info"</span> <span class="mshellVARSTORE">$LOG_LEVEL!</span>
+<span class="mshellVARRETRIEVE">$LOG_LEVEL</span> <span class="mshellLITERAL">wl</span>
+
+<span class="mshellVARRETRIEVE">$EDITOR</span><span class="mshellQUESTION">?</span> <span class="mshellIF">if</span>
+    <span class="mshellVARRETRIEVE">$EDITOR</span> <span class="mshellLITERAL">wl</span>
+<span class="mshellELSE">else</span>
+    <span class="mshellSTRING">"vim"</span> <span class="mshellLITERAL">wl</span>
+<span class="mshellEND">end</span></code>
+</pre>
+
+<p>
+You can print all environment variables (sorted by key) using the built-in <code>.env</code> function.
+</p>
+
+<pre>
+<code><span class="mshellLITERAL">.env</span></code>
+</pre>
+
+<pre>
+<code><span class="mshellSTRING">"/tmp"</span> <span class="mshellVARSTORE">$TMPDIR!</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;my-tool&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellBANG">!</span></code>
+</pre>
+
+<h1 id="variables-pwd">PWD and OLDPWD <a class="section-link" href="#variables-pwd" aria-label="Permalink">§</a> <a class="back-to-top" href="#variables-top">Back to top</a></h1>
+
+<p>
+Changing directories updates <code>PWD</code> and <code>OLDPWD</code> in the environment.
+You can read them the same way as any other environment variable.
+</p>
+
+<pre>
+<code><span class="mshellVARRETRIEVE">$PWD</span> <span class="mshellLITERAL">wl</span>
+<span class="mshellPATH">`/tmp`</span> <span class="mshellLITERAL">cd</span>
+<span class="mshellVARRETRIEVE">$OLDPWD</span> <span class="mshellLITERAL">wl</span></code>
+</pre>

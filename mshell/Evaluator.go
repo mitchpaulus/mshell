@@ -4998,19 +4998,13 @@ MainLoop:
 				if found_mshell_variable {
 					stack.Push(obj)
 				} else {
-					// Check current environment variables
-					envValue, ok := os.LookupEnv(name)
-					if ok {
-						stack.Push(MShellString{envValue})
-					} else {
-						var message strings.Builder
-						message.WriteString(fmt.Sprintf("%d:%d: Variable %s not found.\n", t.Line, t.Column, name))
-						message.WriteString("Variables:\n")
-						for key := range context.Variables {
-							message.WriteString(fmt.Sprintf("  %s\n", key))
-						}
-						return state.FailWithMessage(message.String())
+					var message strings.Builder
+					fmt.Fprintf(&message, "%d:%d: Variable %s not found.\n", t.Line, t.Column, name)
+					message.WriteString("Variables:\n")
+					for key := range context.Variables {
+						fmt.Fprintf(&message, "  %s\n", key)
 					}
+					return state.FailWithMessage(message.String())
 				}
 			} else if t.Type == LOOP { // Token Type
 				obj, err := stack.Pop()
