@@ -98,14 +98,7 @@ func newLSPError(code int, format string, args ...any) *lspRequestError {
 }
 
 // RunLSP executes the language server using stdio transport.
-func RunLSP(args []string, in io.Reader, out io.Writer) error {
-	for _, arg := range args {
-		if arg == "--stdio" {
-			continue
-		}
-		return fmt.Errorf("unsupported LSP option %q", arg)
-	}
-
+func RunLSP(in io.Reader, out io.Writer) error {
 	builtins := defaultBuiltinInfo()
 	if len(builtins) == 0 {
 		logLSP("no builtin hover entries configured")

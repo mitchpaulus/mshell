@@ -10,7 +10,7 @@
         },
         {
             "name": "constant.language.bool",
-            "match": "\b(true|false)\b"
+            "match": "\\b(true|false)\\b"
         },
         {
             "name": "string.quoted.single.mshell",
@@ -23,6 +23,12 @@
             "name": "string.quoted.other.path.mshell",
             "begin": "`",
             "end": "`"
+        },
+        {
+            "include": "#string_interpolated"
+        },
+        {
+            "include": "#string_double"
         },
         {
             "name": "variable.other.set",
@@ -52,9 +58,34 @@
                 { "include": "#escape_simple" }
             ]
         },
+        "string_interpolated": {
+            "name": "string.quoted.double.interpolated.mshell",
+            "begin": "\\$\"",
+            "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.mshell" } },
+            "end": "\"",
+            "endCaptures": { "0": { "name": "punctuation.definition.string.end.mshell" } },
+            "patterns": [
+                { "include": "#interpolation" },
+                { "include": "#escape_format" }
+            ]
+        },
+        "interpolation": {
+            "name": "meta.interpolation.mshell",
+            "begin": "\\{",
+            "beginCaptures": { "0": { "name": "punctuation.section.interpolation.begin.mshell" } },
+            "end": "\\}",
+            "endCaptures": { "0": { "name": "punctuation.section.interpolation.end.mshell" } },
+            "patterns": [
+                { "include": "$self" }
+            ]
+        },
         "escape_simple": {
             "name": "constant.character.escape.mshell",
-            "match": "\\\\(e|n|t|r|\"|\\\\)"
+            "match": "\\\\[entr\"\\\\]"
+        },
+        "escape_format": {
+            "name": "constant.character.escape.mshell",
+            "match": "\\\\[entr\"\\\\{]"
         }
     }
 }

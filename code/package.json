@@ -1,23 +1,29 @@
 {
     "name": "mshell",
     "displayName": "mshell",
-    "publisher": "MitchellPaulus",              
-    "version": "0.6.4",
-    "engines": { "vscode": "^1.90.0" },         
+    "description": "Syntax highlighting and language support for the mshell concatenative shell language",
+    "publisher": "MitchellPaulus",
+    "version": "0.9.0",
+    "engines": { "vscode": "^1.90.0" },
     "categories": ["Programming Languages"],
+    "main": "./out/extension.js",
+    "activationEvents": [
+        "onLanguage:mshell"
+    ],
     "contributes": {
         "languages": [
             {
                 "id": "mshell",
                 "aliases": ["msh"],
                 "extensions": [".msh", ".mshell"],
-                "firstLine": "^#!.*\\b(mshell|msh)\\b"
+                "firstLine": "^#!.*\\b(mshell|msh)\\b",
+                "configuration": "./language-configuration.json"
             }
         ],
         "grammars": [
             {
                 "language": "mshell",
-                "scopeName": "source.mshell",  
+                "scopeName": "source.mshell",
                 "path": "./syntaxes/mshell.textmate.json"
             }
         ],
@@ -26,7 +32,30 @@
                 "editor.insertSpaces": true,
                 "editor.tabSize": 2
             }
+        },
+        "configuration": {
+            "title": "mshell",
+            "properties": {
+                "mshell.lspPath": {
+                    "type": "string",
+                    "default": "msh",
+                    "description": "Path to the msh executable for the language server"
+                }
+            }
         }
+    },
+    "scripts": {
+        "vscode:prepublish": "npm run compile",
+        "compile": "tsc -p ./",
+        "watch": "tsc -watch -p ./"
+    },
+    "dependencies": {
+        "vscode-languageclient": "^9.0.1"
+    },
+    "devDependencies": {
+        "@types/node": "^20.11.0",
+        "@types/vscode": "^1.90.0",
+        "typescript": "^5.3.3"
     },
     "repository": { "type": "git", "url": "https://github.com/mitchpaulus/mshell" },
     "bugs": { "url": "https://github.com/mitchpaulus/mshell" },

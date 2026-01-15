@@ -2,7 +2,18 @@
 
 This is the official extension for the concatenative shell-like programming language [`mshell`](https://github.com/mitchpaulus/mshell).
 
-# Features
+## Features
 
-Currently, this extension supports syntax highlighting.
-The canonical file name extension for `mshell` files is `.msh` or `.mshell`.
+- Syntax highlighting for `.msh` and `.mshell` files
+- Language Server Protocol (LSP) support:
+  - Hover documentation for built-in functions
+  - Variable name completion (triggered by `@`)
+  - Variable rename support
+
+## Requirements
+
+For LSP features, the `msh` executable must be installed and available in your PATH, or configured via the `mshell.lspPath` setting.
+
+## Extension Settings
+
+- `mshell.lspPath`: Path to the msh executable for the language server (default: `"msh"`)
