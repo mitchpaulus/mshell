@@ -27,7 +27,23 @@ The source code for all these types is in a single file at: <a href="https://git
 Since brevity is a strong design goal, like most shells, many basic tokens can be written as-is.
 But unlike in most shells, we limit where the number of places literal tokens can be used.
 They can only be used in list literals, because that's how commands are input.
-Outside of lists, it will result in a error.
+Outside of lists, it will result in an error.
+</p>
+
+<p>
+Literal tokens may contain any non-whitespace characters except the following:
+</p>
+
+<ul>
+    <li><code>[ ] ( ) { } &lt; &gt; : ; ? ! @ , * &amp; | &#34; &#39; ^</code></li>
+</ul>
+
+<p>
+Periods and forward/backslashes (<code>.</code>, <code>/</code>, <code>\</code>) are allowed so common path-like tokens do not need quoting.
+</p>
+
+<p>
+The equals sign (<code>=</code>) is also allowed so flags like <code>--option=value</code> do not need quoting on the CLI.
 </p>
 
 <h1 id="data-type-bool">Bool <a class="section-link" href="#data-type-bool" aria-label="Permalink">§</a> <a class="back-to-top" href="#data-types-top">Back to top</a></h1>
@@ -69,6 +85,26 @@ No commas are required between elements.
 <code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">3</span> <span class="mshellINTEGER">4</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPLUS">+</span> <span class="mshellLINECOMMENT"># [1 2 3 4]</span></code>
 </pre>
 
+<p>
+Lists support indexing and slicing with colon-based indexers placed after the list.
+Indexes are zero-based, and negative indexes count from the end.
+</p>
+
+<pre>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">4</span> <span class="mshellINTEGER">3</span> <span class="mshellINTEGER">2</span> <span class="mshellINTEGER">1</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellINDEXER">:1:</span> <span class="mshellLINECOMMENT"># 3</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">4</span> <span class="mshellINTEGER">3</span> <span class="mshellINTEGER">2</span> <span class="mshellINTEGER">1</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellINDEXER">1:3</span> <span class="mshellLINECOMMENT"># [3 2]</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">4</span> <span class="mshellINTEGER">3</span> <span class="mshellINTEGER">2</span> <span class="mshellINTEGER">1</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellINDEXER">:3</span> <span class="mshellLINECOMMENT"># [4 3 2]</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">4</span> <span class="mshellINTEGER">3</span> <span class="mshellINTEGER">2</span> <span class="mshellINTEGER">1</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellINDEXER">2:</span> <span class="mshellLINECOMMENT"># [2 1]</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">4</span> <span class="mshellINTEGER">3</span> <span class="mshellINTEGER">2</span> <span class="mshellINTEGER">1</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellINDEXER">:-1:</span> <span class="mshellLINECOMMENT"># 1</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">4</span> <span class="mshellINTEGER">3</span> <span class="mshellINTEGER">2</span> <span class="mshellINTEGER">1</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellINDEXER">:-2</span> <span class="mshellLINECOMMENT"># [4 3]</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">4</span> <span class="mshellINTEGER">3</span> <span class="mshellINTEGER">2</span> <span class="mshellINTEGER">1</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellINDEXER">-3:</span> <span class="mshellLINECOMMENT"># [3 2 1]</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">4</span> <span class="mshellINTEGER">3</span> <span class="mshellINTEGER">2</span> <span class="mshellINTEGER">1</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellINDEXER">-3:-1</span> <span class="mshellLINECOMMENT"># [3 2]</span></code>
+</pre>
+
+<p>
+Slice ranges must be forward (start less than or equal to end). Reverse ranges like <code>3:1</code> are invalid; use <code>reverse</code> after slicing if needed.
+</p>
+
 
 <h1 id="data-type-string">String <a class="section-link" href="#data-type-string" aria-label="Permalink">§</a> <a class="back-to-top" href="#data-types-top">Back to top</a></h1>
 
@@ -86,7 +122,24 @@ Double quoted strings have the following escape sequences:
   <li> <code>\"</code>: Double quote </li>
 </ul>
 
-<p> If you have a backslash, and it isn't followed by one of the escape characters above, <code>msh</code> will throw an error. </p>
+<p>
+Strings use the same indexing and slicing syntax as lists.
+Indexing returns a one-character string, and slicing returns a substring.
+Indexes are zero-based, and negative indexes count from the end.
+</p>
+
+<pre>
+<code><span class="mshellSTRING">&#34;mshell&#34;</span> <span class="mshellINDEXER">:1:</span> <span class="mshellLINECOMMENT"># &#34;s&#34;</span>
+<span class="mshellSTRING">&#34;mshell&#34;</span> <span class="mshellINDEXER">1:4</span> <span class="mshellLINECOMMENT"># &#34;she&#34;</span>
+<span class="mshellSTRING">&#34;mshell&#34;</span> <span class="mshellINDEXER">:3</span> <span class="mshellLINECOMMENT"># &#34;msh&#34;</span>
+<span class="mshellSTRING">&#34;mshell&#34;</span> <span class="mshellINDEXER">2:</span> <span class="mshellLINECOMMENT"># &#34;hell&#34;</span>
+<span class="mshellSTRING">&#34;mshell&#34;</span> <span class="mshellINDEXER">:-1:</span> <span class="mshellLINECOMMENT"># &#34;l&#34;</span>
+<span class="mshellSTRING">&#34;mshell&#34;</span> <span class="mshellINDEXER">:-2</span> <span class="mshellLINECOMMENT"># &#34;msh&#34;</span>
+<span class="mshellSTRING">&#34;mshell&#34;</span> <span class="mshellINDEXER">-3:</span> <span class="mshellLINECOMMENT"># &#34;hell&#34;</span>
+<span class="mshellSTRING">&#34;mshell&#34;</span> <span class="mshellINDEXER">-4:-1</span> <span class="mshellLINECOMMENT"># &#34;she&#34;</span></code>
+</pre>
+
+<p> If you have a backslash and it isn't followed by one of the escape characters above, <code>msh</code> will throw an error. </p>
 
 <p>No escaping is done within single quoted strings or paths.</p>
 
@@ -165,7 +218,7 @@ Date/times can be entered using a literal syntax, in ISO-8601 format.
 
 
 <p>
-Dates can be subtracted from each other, and the result is a float number of days.
+Dates can be subtracted from each other, and the result is a floating-point number of days.
 </p>
 
 <pre>
@@ -180,7 +233,7 @@ Any literal number with a decimal will be lexed as a float, otherwise it will be
 </p>
 
 <pre>
-<code><span class="mshellINTEGER">1</span>   <span class="mshellLINECOMMENT"># This is a integer literal</span>
+<code><span class="mshellINTEGER">1</span>   <span class="mshellLINECOMMENT"># This is an integer literal</span>
 <span class="mshellFLOAT">1.0</span> <span class="mshellLINECOMMENT"># This is a float literal</span></code>
 </pre>
 
@@ -193,7 +246,7 @@ Division for integers will result in an integer without the remainder.
 </pre>
 
 <p>
-Division is only supported for similar types, it is a runtime error to divide with a float and an integer.
+Division is only supported for similar types, it is a runtime error to divide a float by an integer (or an integer by a float).
 For the other operations, if the types are mixed, the result is a float.
 </p>
 
