@@ -1,0 +1,9 @@
+# FILE:quote_stderr_append.txt
+# Test 2>> (stderr append) with quotation
+(
+    "first-error" wle
+) `quote_stderr_append.txt` 2> x
+
+(
+    "second-error" wle
+) `quote_stderr_append.txt` 2>> x

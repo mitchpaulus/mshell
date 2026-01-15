@@ -1,0 +1,2 @@
+# Test error case - same path with different append modes should fail
+[sh -c "echo test"] `same_path_modes.txt` > `same_path_modes.txt` 2>> !
