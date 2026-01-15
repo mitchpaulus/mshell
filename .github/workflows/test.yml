@@ -11,6 +11,12 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    - name: Check AGENTS.md matches CLAUDE.md
+      run: |
+        agents_sha=$(sha256sum AGENTS.md | awk '{print $1}')
+        claude_sha=$(sha256sum CLAUDE.md | awk '{print $1}')
+        test "$agents_sha" = "$claude_sha"
+
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
