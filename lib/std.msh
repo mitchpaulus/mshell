@@ -748,6 +748,56 @@ def __fdCompletion { 'complete': ['fd'] } ([str] -- [str])
     end
 end
 # }}}
+# ssh {{{
+def __sshHosts ( -- [str])
+    # Parse ~/.ssh/config for Host entries
+    $"{$HOME}/.ssh/config" configPath!
+    @configPath fileExists if
+        @configPath readFile lines
+        (trim) map
+        (lower "host " startsWith) filter
+        (5:) map # Remove "Host " prefix
+        (wsplit) map concat # Split on whitespace for multiple hosts per line
+        ("*" in not) filter # Remove wildcard entries
+    else
+        []
+    end
+end
+
+def __sshDefaultOptions ( -- [str])
+    [
+        '-4' '-6' '-A' '-a' '-B' '-b' '-C' '-c' '-D' '-E' '-e' '-F' '-f' '-G' '-g'
+        '-I' '-i' '-J' '-K' '-k' '-L' '-l' '-M' '-m' '-N' '-n' '-O' '-o' '-P' '-p'
+        '-Q' '-q' '-R' '-S' '-s' '-T' '-t' '-V' '-v' '-W' '-w' '-X' '-x' '-Y' '-y'
+    ]
+end
+
+def __sshOptionArgs ( -- dict)
+    {
+        '-c': ['aes128-ctr' 'aes192-ctr' 'aes256-ctr' 'aes128-gcm@openssh.com' 'aes256-gcm@openssh.com' 'chacha20-poly1305@openssh.com'],
+        '-e': ['^' 'none'],
+        '-m': ['hmac-sha2-256' 'hmac-sha2-512' 'umac-64@openssh.com' 'umac-128@openssh.com' 'hmac-sha2-256-etm@openssh.com' 'hmac-sha2-512-etm@openssh.com' 'umac-64-etm@openssh.com' 'umac-128-etm@openssh.com'],
+        '-O': ['check' 'forward' 'cancel' 'exit' 'stop'],
+        '-o': ['AddKeysToAgent' 'BatchMode' 'BindAddress' 'CanonicalDomains' 'Compression' 'ConnectionAttempts' 'ConnectTimeout' 'ForwardAgent' 'ForwardX11' 'HostKeyAlgorithms' 'IdentityFile' 'LogLevel' 'PreferredAuthentications' 'ProxyCommand' 'ProxyJump' 'PubkeyAuthentication' 'ServerAliveInterval' 'StrictHostKeyChecking' 'UserKnownHostsFile'],
+        '-Q': ['cipher' 'cipher-auth' 'help' 'mac' 'kex' 'kex-gss' 'key' 'key-ca-sign' 'key-cert' 'key-plain' 'key-sig' 'protocol-version' 'sig']
+    }
+end
+
+def __sshCompletion { 'complete': ['ssh'] } ([str] -- [str])
+    input!
+    @input len 0 > if
+        @input :-1: last!
+        # -J (jump host) needs dynamic lookup
+        '-J' @last = if
+            __sshHosts
+        else
+            __sshOptionArgs @last get (__sshDefaultOptions __sshHosts extend) maybe
+        end
+    else
+        __sshDefaultOptions __sshHosts extend
+    end
+end
+# }}}
 # rg {{{
 def __rgDefaultOptions ( -- [str])
     [
