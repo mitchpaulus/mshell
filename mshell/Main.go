@@ -2768,6 +2768,10 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 						completionMatches := state.runCompletionDefinitions(defs, args)
 						for _, match := range completionMatches {
 							if strings.HasPrefix(match, prefix) {
+								// Only show options (starting with '-') if the prefix also starts with '-'
+								if strings.HasPrefix(match, "-") && !strings.HasPrefix(prefix, "-") {
+									continue
+								}
 								matches = append(matches, TabMatch{TABMATCHCMD, match})
 							}
 						}
