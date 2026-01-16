@@ -2577,6 +2577,8 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 
 			// state.currentCommand = append(state.currentCommand[:state.index], append([]rune{rune(t.Char)}, state.currentCommand[state.index:]...)...)
 			// state.index++
+		} else if t.Char == 0 { // Ctrl-Space
+			state.PushChars([]rune{' '})
 		} else if t.Char == 32 {
 			// Space
 			// Check for aliases. Split current command by whitespace, and check if last word is in aliases.
