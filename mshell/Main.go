@@ -1783,7 +1783,7 @@ func (state *TermState) InteractiveMode() error {
 		"s":  "git status -u",
 		"v":  "nvim",
 		"mk": "mkdir",
-		"ls": "ls -al --color",
+		"ls": "eza -l",
 		"gi": "nvim .gitignore",
 		"a":  "git add",
 		"d":  "git diff -w",
