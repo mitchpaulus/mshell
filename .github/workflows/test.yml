@@ -23,7 +23,7 @@ jobs:
         cache-dependency-path: mshell/go.sum
 
     - name: Build go
-      run: cd mshell && go build -o mshell
+      run: cd mshell && go build -o mshell && cp mshell msh
 
     - name: Set Go PATH, MSHSTDLIB
       run: |
