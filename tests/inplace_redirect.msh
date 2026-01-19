@@ -1,0 +1,5 @@
+# Test in-place modification with sort
+[msh -c '"banana\napple\ncherry\n" w'] `inplace_test.txt` > !
+[msh -c 'stdin lines sort unlines w'] `inplace_test.txt` <> !
+`inplace_test.txt` readFile w
+`inplace_test.txt` rm

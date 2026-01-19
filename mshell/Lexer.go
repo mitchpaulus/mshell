@@ -97,6 +97,7 @@ const (
 	STARIF
 	STDOUTANDSTDERRREDIRECT  // &>
 	STDOUTANDSTDERRAPPEND    // &>>
+	INPLACEREDIRECT          // <>
 )
 
 func (t TokenType) String() string {
@@ -263,6 +264,8 @@ func (t TokenType) String() string {
 		return "STDOUTANDSTDERRREDIRECT"
 	case STDOUTANDSTDERRAPPEND:
 		return "STDOUTANDSTDERRAPPEND"
+	case INPLACEREDIRECT:
+		return "INPLACEREDIRECT"
 	default:
 		return "UNKNOWN"
 	}
@@ -696,7 +699,10 @@ func (l *Lexer) scanTokenAll() Token {
 		}
 		return l.makeToken(AMPERSAND)
 	case '<':
-		if l.peek() == '=' {
+		if l.peek() == '>' {
+			l.advance()
+			return l.makeToken(INPLACEREDIRECT)
+		} else if l.peek() == '=' {
 			l.advance()
 			return l.makeToken(LESSTHANOREQUAL)
 		} else {

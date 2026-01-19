@@ -1,0 +1,9 @@
+# Test that file is preserved when command fails
+[msh -c '"original\n" w'] `inplace_fail_test.txt` > !
+# Run a command that will fail - file should remain unchanged
+[msh -c "stdin w 1 exit"] `inplace_fail_test.txt` <> ?
+# Should print 1 (the exit code)
+wl
+# File should still have original content
+`inplace_fail_test.txt` readFile w
+`inplace_fail_test.txt` rm
