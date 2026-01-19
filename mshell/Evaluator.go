@@ -4945,6 +4945,38 @@ MainLoop:
 				default:
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect stdout and stderr to a %s.\n", t.Line, t.Column, obj2.TypeName()))
 				}
+			} else if t.Type == INPLACEREDIRECT { // Token Type
+				filePath, obj2, err := stack.Pop2(t)
+				if err != nil {
+					return state.FailWithMessage(err.Error())
+				}
+
+				// Require Path type
+				pathObj, ok := filePath.(MShellPath)
+				if !ok {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: In-place redirect (<>) requires a Path, found %s.\n",
+						t.Line, t.Column, filePath.TypeName()))
+				}
+
+				// Only lists are supported (external commands have exit codes)
+				list, ok := obj2.(*MShellList)
+				if !ok {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: In-place redirect (<>) requires a List, found %s.\n",
+						t.Line, t.Column, obj2.TypeName()))
+				}
+
+				// Read file contents immediately
+				fileContents, err := os.ReadFile(pathObj.Path)
+				if err != nil {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Error reading file '%s': %s\n",
+						t.Line, t.Column, pathObj.Path, err.Error()))
+				}
+
+				// Set stdin to file contents, track in-place file
+				list.StdinBehavior = STDIN_BINARY
+				list.StandardInputBinary = fileContents
+				list.InPlaceFile = pathObj.Path
+				stack.Push(list)
 			} else if t.Type == ENVSTORE { // Token Type
 				obj, err := stack.Pop()
 				if err != nil {
@@ -5793,9 +5825,19 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 	// STDOUT HANDLING
 	var commandSubWriter bytes.Buffer
 	var sharedOutputFile *os.File // Used when stdout and stderr go to the same file
+	var inPlaceFileMode os.FileMode // File mode for in-place file, preserved across write
 	// TBD: Should we allow command substituation and redirection at the same time?
 	// Probably more hassle than worth including, with probable workarounds for that rare case.
 	if list.StdoutBehavior != STDOUT_NONE {
+		cmd.Stdout = &commandSubWriter
+	} else if list.InPlaceFile != "" {
+		// In-place file modification: capture stdout to buffer, write back on success
+		// Get original file permissions to preserve them
+		fileInfo, err := os.Stat(list.InPlaceFile)
+		if err != nil {
+			return state.FailWithMessage(fmt.Sprintf("Error getting file info for '%s': %s\n", list.InPlaceFile, err.Error())), 1, nil, nil
+		}
+		inPlaceFileMode = fileInfo.Mode()
 		cmd.Stdout = &commandSubWriter
 	} else if list.StandardOutputFile != "" {
 		// Open the file for writing
@@ -5920,6 +5962,15 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 			exitCode = cmd.ProcessState.ExitCode()
 		}
 	}
+
+	// In-place file modification: write stdout back to file on success (exit code 0)
+	if list.InPlaceFile != "" && exitCode == 0 {
+		err := os.WriteFile(list.InPlaceFile, commandSubWriter.Bytes(), inPlaceFileMode)
+		if err != nil {
+			return state.FailWithMessage(fmt.Sprintf("Error writing to in-place file '%s': %s\n", list.InPlaceFile, err.Error())), 1, nil, nil
+		}
+	}
+
 	return SimpleSuccess(), exitCode, commandSubWriter.Bytes(), stderrBuffer.Bytes()
 }
 

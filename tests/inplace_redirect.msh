@@ -1,0 +1,5 @@
+# Test in-place modification with sort
+[printf "banana\napple\ncherry\n"] `inplace_test.txt` > !
+[/usr/bin/sort] `inplace_test.txt` <> !
+`inplace_test.txt` readFile w
+`inplace_test.txt` rm

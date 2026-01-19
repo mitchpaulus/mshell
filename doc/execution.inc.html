@@ -112,6 +112,7 @@ Standard output will always be pushed first, and then standard error.
     <tr> <td><code>^</code></td> <td>Capture stderr to the stack.</td> <td>As a string.</td> </tr>
     <tr> <td><code>^b</code></td> <td>Capture stderr to the stack.</td> <td>As binary.</td> </tr>
     <tr> <td><code>&lt;</code></td> <td>Feed stdin from a value.</td> <td>String, path, or binary.</td> </tr>
+    <tr> <td><code>&lt;&gt;</code></td> <td>In-place file modification.</td> <td>Reads file to stdin, writes stdout back on success.</td> </tr>
   </tbody>
 </table>
 
@@ -164,6 +165,69 @@ Use <code>&lt;</code> to feed data into stdin. The type of the value on top of t
 
 <pre>
 <code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">md5sum</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`binary_stdin.bin`</span> <span class="mshellLITERAL">readFileBytes</span> <span class="mshellLESSTHAN">&lt;</span> <span class="mshellEXECUTE">;</span> <span class="mshellLINECOMMENT"># Streams raw bytes into the command</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+<h1 id="in-place-modification">In-place file modification</h1>
+
+<p>
+The <code>&lt;&gt;</code> operator enables in-place file modification. It reads a file's contents,
+passes them to the command's stdin, and on successful completion (exit code 0), writes the
+command's stdout back to the same file. This is similar to the <code>sponge</code> command
+from moreutils.
+</p>
+
+<pre>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">sort</span> <span class="mshellLITERAL">-u</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`file.txt`</span> <span class="mshellINPLACEREDIRECT">&lt;&gt;</span> <span class="mshellBANG">!</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+<p>
+This is equivalent to, but safer than:
+</p>
+
+<pre>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">sort</span> <span class="mshellLITERAL">-u</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`file.txt`</span> <span class="mshellLESSTHAN">&lt;</span> <span class="mshellPATH">`file.txt.tmp`</span> <span class="mshellGREATERTHAN">&gt;</span> <span class="mshellBANG">!</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">mv</span> <span class="mshellLITERAL">file.txt.tmp</span> <span class="mshellLITERAL">file.txt</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellBANG">!</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+<h2>Semantics</h2>
+
+<ul>
+<li>The file is read when <code>&lt;&gt;</code> is evaluated, capturing its contents at that moment.</li>
+<li>If the command exits with code 0 (success), stdout replaces the file contents.</li>
+<li>If the command exits with a non-zero code (failure), the original file is preserved unchanged.</li>
+<li>File permissions are preserved.</li>
+</ul>
+
+<h2>Requirements</h2>
+
+<ul>
+<li>Only works with lists (external commands), not quotations.</li>
+<li>Requires a <code>Path</code> type (backtick-quoted), not a string.</li>
+<li>The file must exist at the time <code>&lt;&gt;</code> is evaluated.</li>
+</ul>
+
+<h2>Examples</h2>
+
+<pre>
+<code><span class="mshellLINECOMMENT"># Sort a file in place, removing duplicates</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">sort</span> <span class="mshellLITERAL">-u</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`data.txt`</span> <span class="mshellINPLACEREDIRECT">&lt;&gt;</span> <span class="mshellBANG">!</span>
+
+<span class="mshellLINECOMMENT"># Format JSON in place</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">jq</span> <span class="mshellLITERAL">.</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`config.json`</span> <span class="mshellINPLACEREDIRECT">&lt;&gt;</span> <span class="mshellBANG">!</span>
+
+<span class="mshellLINECOMMENT"># Filter lines in place (keep only lines containing "error")</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">grep</span> <span class="mshellLITERAL">error</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`log.txt`</span> <span class="mshellINPLACEREDIRECT">&lt;&gt;</span> <span class="mshellBANG">!</span>
+
+<span class="mshellLINECOMMENT"># Using with ? to check exit code without failing</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">sort</span> <span class="mshellLITERAL">-u</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`file.txt`</span> <span class="mshellINPLACEREDIRECT">&lt;&gt;</span> <span class="mshellQUESTION">?</span>
+<span class="mshellINTEGER">0</span> <span class="mshellEQUALS">=</span> <span class="mshellIF">if</span>
+    <span class="mshellSTRING">"File sorted successfully"</span> <span class="mshellLITERAL">wl</span>
+<span class="mshellELSE">else</span>
+    <span class="mshellSTRING">"Sort failed, file unchanged"</span> <span class="mshellLITERAL">wl</span>
+<span class="mshellEND">end</span>
 <span class="mshellEOF"></span></code>
 </pre>
 

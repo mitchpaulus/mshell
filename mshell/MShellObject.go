@@ -696,6 +696,7 @@ type MShellList struct {
 	StdoutBehavior  StdoutBehavior
 	StderrBehavior  StderrBehavior
 	RunInBackground bool
+	InPlaceFile     string // File path for in-place modification with <>
 }
 
 // initLength creates list like: make([]MShellObject, initLength)
@@ -721,6 +722,7 @@ func NewList(initLength int) *MShellList {
 		StdoutBehavior:        STDOUT_NONE,
 		StderrBehavior:        STDERR_NONE,
 		RunInBackground:       false,
+		InPlaceFile:           "",
 	}
 }
 
@@ -780,6 +782,7 @@ func CopyListParams(copyFromList *MShellList, copyToList *MShellList) {
 	copyToList.AppendError = copyFromList.AppendError
 	copyToList.StdoutBehavior = copyFromList.StdoutBehavior
 	copyToList.StderrBehavior = copyFromList.StderrBehavior
+	copyToList.InPlaceFile = copyFromList.InPlaceFile
 }
 
 type MShellString struct {

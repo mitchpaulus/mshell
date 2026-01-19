@@ -1,0 +1,6 @@
+# Test that empty output works (file becomes empty)
+[printf "some content\n"] `inplace_empty_test.txt` > !
+[printf ""] `inplace_empty_test.txt` <> !
+`inplace_empty_test.txt` readFile
+"" = if "empty" wl else "not empty" wl end
+`inplace_empty_test.txt` rm

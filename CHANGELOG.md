@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `<>` operator for in-place file modification. Reads file to stdin, writes stdout back on success.
+  Example: `` [sort -u] `file.txt` <> ! ``
 - Functions
   - `chomp`
   - `fromOleDate`

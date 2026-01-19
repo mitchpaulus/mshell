@@ -1,0 +1,9 @@
+# Test that file is preserved when command fails
+[printf "original\n"] `inplace_fail_test.txt` > !
+# Run a command that will fail - file should remain unchanged
+[/bin/sh -c "cat; exit 1"] `inplace_fail_test.txt` <> ?
+# Should print 1 (the exit code)
+wl
+# File should still have original content
+`inplace_fail_test.txt` readFile w
+`inplace_fail_test.txt` rm
