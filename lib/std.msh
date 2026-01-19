@@ -176,6 +176,16 @@ def unlines ([str] -- str)
     @unlines-accum "" join
 end
 
+# chomp (str -- str)
+# Strip a single trailing newline. Handles both \n and \r\n.
+def chomp (str -- str)
+    dup "\r\n" endsWith if
+        :-2
+    else* dup "\n" endsWith *if
+        :-1
+    end
+end
+
 # reverse ([T*]|str -- [T*]|str)
 def reverse ([T] -- [T])
     dup len 1 - reverse-idx! # Set Idx

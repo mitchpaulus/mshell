@@ -1,0 +1,8 @@
+def test (str --)
+    s! [xxd -p -c 1] @s chomp < * ! lines " " join wl
+end
+"abc\n" test # 'abc'
+"abc\r\n" test # 'abc'
+"abc\r" test # 'abc\r'
+"abc\r\n\r\n" test # 'abc\r\n'
+"abc\n\n" test # 'abc\n'
