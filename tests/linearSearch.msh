@@ -1,0 +1,3 @@
+[1 2 3 4] (2 mod 0 =) linearSearch str wl
+[1 2 3 4] (5 =) linearSearch str wl
+[] (1 =) linearSearch str wl

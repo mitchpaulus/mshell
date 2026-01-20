@@ -127,6 +127,22 @@ def filter ([T] (T -- bool) -- [T])
     @filter-accum
 end
 
+def linearSearch ([T] (T -- bool) -- Maybe[T])
+    list!, quote!
+    none linearSearch-result!
+    0 linearSearch-idx!
+    (
+        @linearSearch-idx @list len >= (break) iff
+        @list @linearSearch-idx nth linearSearch-item!
+        @linearSearch-item @quote x if
+            @linearSearch-item just linearSearch-result!
+            break
+        end
+        @linearSearch-idx 1 + linearSearch-idx!
+    ) loop
+    @linearSearch-result
+end
+
 # foldl (quote initial list -- result)
 def foldl ((T T -- T) T [T] -- T)
     #  quote initial list
