@@ -47,6 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Breaking change: `@name` now only reads mshell variables and no longer falls back to environment variables; use `$NAME` for environment access.
+- `w`/`we` now accept binary input and write raw bytes to stdout/stderr.
 
 ## 0.8.0 - 2025-12-29
 
