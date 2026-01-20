@@ -38,9 +38,9 @@
         <tr> <td><code>rot</code></td> <td>Rotate the top three items.</td> <td><code>(a b c -- b c a)</code></td> </tr>
         <tr> <td><code>-rot</code></td> <td>Rotate the top three items in the opposite direction.</td> <td><code>(a b c -- c a b)</code></td> </tr>
         <tr> <td><code>nip</code></td> <td>Remove the second item.</td> <td><code>(a b -- b)</code></td> </tr>
-        <tr> <td><code>w</code></td> <td>Write a string to stdout.</td> <td><code>(<span class="sig-type sig-type-str">str</span> -- )</code></td> </tr>
+        <tr> <td><code>w</code></td> <td>Write a string or binary to stdout.</td> <td><code>(<span class="sig-type sig-type-str">str</span>|<span class="sig-type sig-type-binary">binary</span> -- )</code></td> </tr>
         <tr> <td><code>wl</code></td> <td>Write a string to stdout and add a newline.</td> <td><code>(<span class="sig-type sig-type-str">str</span> -- )</code></td> </tr>
-        <tr> <td><code>we</code></td> <td>Write a string to stderr.</td> <td><code>(<span class="sig-type sig-type-str">str</span> -- )</code></td> </tr>
+        <tr> <td><code>we</code></td> <td>Write a string or binary to stderr.</td> <td><code>(<span class="sig-type sig-type-str">str</span>|<span class="sig-type sig-type-binary">binary</span> -- )</code></td> </tr>
         <tr> <td><code>wle</code></td> <td>Write a string to stderr and add a newline.</td> <td><code>(<span class="sig-type sig-type-str">str</span> -- )</code></td> </tr>
         <tr> <td><code>len</code></td> <td>Return the length of a string or list.</td> <td><code>([a] -- <span class="sig-type sig-type-int">int</span>)</code>, <code>(<span class="sig-type sig-type-str">str</span> -- <span class="sig-type sig-type-int">int</span>)</code></td> </tr>
         <tr> <td><code>args</code></td> <td>Push the argument list (without argv[0]) onto the stack.</td> <td><code>(-- [<span class="sig-type sig-type-str">str</span>])</code></td> </tr>

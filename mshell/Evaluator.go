@@ -1083,6 +1083,11 @@ MainLoop:
 						fmt.Fprint(writer, topTyped.Content)
 					case MShellInt:
 						fmt.Fprint(writer, topTyped.Value)
+					case MShellBinary:
+						if t.Lexeme == "wl" || t.Lexeme == "wle" {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot write a %s.\n", t.Line, t.Column, top.TypeName()))
+						}
+						_, _ = writer.Write(topTyped)
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot write a %s.\n", t.Line, t.Column, top.TypeName()))
 					}

@@ -187,9 +187,9 @@ Metadata values must be static: strings (single or double quoted), integers, flo
 - `rot`: Rotate the top three items, `( a b c -- b c a )`
 - `-rot`: Rotate the top three items in the opposite direction `( a b c -- c a b )`
 - `nip`: Remove second item, `( a b -- b )`
-- `w`: Write to stdout (str -- )
+- `w`: Write to stdout (str|binary -- )
 - `wl`: Write line to stdout (str -- )
-- `we`: Write error to stderr (str -- )
+- `we`: Write error to stderr (str|binary -- )
 - `wle`: Write error line stderr (str -- )
 - `len`: Length of string/list `([a] -- int | str -- int)`
 - `args`: List of string arguments. Does not include the name of the executing file. `( -- [str])`
