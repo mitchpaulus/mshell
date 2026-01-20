@@ -1,0 +1,37 @@
+2
+["name" "age"]
+["Alice" "Bob"]
+[30 25]
+Alice
+30
+Bob
+25
+Alice
+30
+{"age": 30, "name": "Alice"}
+2
+2
+{"source": "test"}
+{"unit": "celsius"}
+{"unit": "percent"}
+[1 100 3]
+["x" "y"]
+[10 20]
+[0 0]
+["x"]
+["a" "y"]
+2
+[4 5]
+[4]
+Grid
+["x" "y"]
+[10 20 30]
+each output:
+Alice
+Bob
+[{"a": 1, "b": 2}, {"a": 3, "b": 4}]
+{"a": 1, "b": 2}
+0
+["col1" "col2"]
+30
+2

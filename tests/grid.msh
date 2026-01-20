@@ -1,0 +1,111 @@
+# Grid tests
+
+# Basic grid literal
+{{ name, age; "Alice", 30; "Bob", 25 }} grid!
+
+# gridRows
+@grid gridRows str wl
+
+# gridCols
+@grid gridCols str wl
+
+# gridCol - extract a column as a list
+@grid "name" gridCol str wl
+@grid "age" gridCol str wl
+
+# Grid indexing - get a GridRow
+@grid :0: row0!
+@grid :1: row1!
+
+# GridRow field access with :colname (? unwraps Maybe)
+@row0 :name? wl
+@row0 :age? str wl
+@row1 :name? wl
+@row1 :age? str wl
+
+# GridRow field access with get
+@row0 "name" get? wl
+@row0 "age" get? str wl
+
+# toDict
+@row0 toDict str wl
+
+# len on Grid
+@grid len str wl
+
+# len on GridRow (returns number of columns)
+@row0 len str wl
+
+# Grid with metadata
+{{
+    { "source": "test" };
+    x, y;
+    1, 2;
+    3, 4
+}} metaGrid!
+
+@metaGrid gridMeta? str wl
+
+# Grid with column metadata
+{{
+    temp { "unit": "celsius" }, humidity { "unit": "percent" };
+    23.5, 65.0;
+    24.1, 62.5
+}} colMetaGrid!
+
+@colMetaGrid "temp" gridColMeta? str wl
+@colMetaGrid "humidity" gridColMeta? str wl
+
+# gridSetCell
+{{ x; 1; 2; 3 }} "x" 1 100 gridSetCell "x" gridCol str wl
+
+# gridAddCol with list
+{{ x; 1; 2 }} "y" [10 20] gridAddCol addedGrid!
+@addedGrid gridCols str wl
+@addedGrid "y" gridCol str wl
+
+# gridAddCol with default value
+{{ x; 1; 2 }} "y" 0 gridAddCol "y" gridCol str wl
+
+# gridRemoveCol
+{{ x, y; 1, 2; 3, 4 }} "y" gridRemoveCol gridCols str wl
+
+# gridRenameCol
+{{ x, y; 1, 2 }} "x" "a" gridRenameCol gridCols str wl
+
+# filter
+{{ x; 1; 2; 3; 4; 5 }} (:x? 3 >) filter filteredView!
+@filteredView gridRows str wl
+@filteredView "x" gridCol str wl
+
+# filter on GridView (chained filter)
+@filteredView (:x? 5 <) filter "x" gridCol str wl
+
+# gridCompact - materialize a view to a grid
+@filteredView gridCompact type wl
+
+# map
+{{ x; 1; 2; 3 }} (toDict dup "x" get? 10 * "y" swap set) map mappedGrid!
+@mappedGrid gridCols str wl
+@mappedGrid "y" gridCol str wl
+
+# each - side effects only
+"each output:" wl
+{{ name; "Alice"; "Bob" }} (:name? wl) each
+
+# Grid toJson
+{{ a, b; 1, 2; 3, 4 }} toJson wl
+
+# GridRow toJson
+{{ a, b; 1, 2 }} :0: toJson wl
+
+# Empty grid
+{{ col1, col2; }} emptyGrid!
+@emptyGrid gridRows str wl
+@emptyGrid gridCols str wl
+
+# Negative indexing for GridRow
+{{ x; 10; 20; 30 }} :-1: :x? str wl
+
+# GridView len
+{{ x; 1; 2; 3; 4 }} (:x? 2 >) filter len str wl

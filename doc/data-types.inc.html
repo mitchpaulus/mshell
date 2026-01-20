@@ -14,7 +14,10 @@
     <li><a href="#data-type-datetime">Date/Time</a></li>
     <li><a href="#data-type-maybe">Maybe</a></li>
     <li><a href="#data-type-pipe">Pipe</a></li>
-    <li><a href="#data-type-binary">Binary</a>
+    <li><a href="#data-type-binary">Binary</a></li>
+    <li><a href="#data-type-grid">Grid</a></li>
+    <li><a href="#data-type-gridview">GridView</a></li>
+    <li><a href="#data-type-gridrow">GridRow</a></li>
 </ul>
 
 <p>
@@ -307,4 +310,36 @@ It's created by the <code>|</code> operator.
 Many times in shell programs you need to deal directly with binary data.
 This type represents an array of bytes.
 Example functions that takes binary data as input and output are <a href="functions.html#func-utf8Str"><code>utf8Str</code></a>, <a href="functions.html#func-utf8Bytes"><code>utf8Bytes</code></a>, <a href="functions.html#func-base64encode"><code>base64encode</code></a>, and <a href="functions.html#func-base64decode"><code>base64decode</code></a>.
+</p>
+
+<h1 id="data-type-grid">Grid <a class="section-link" href="#data-type-grid" aria-label="Permalink">§</a> <a class="back-to-top" href="#data-types-top">Back to top</a></h1>
+
+<p>
+A <code>Grid</code> is a high-performance columnar data frame type for tabular data.
+It stores data column-wise for efficient operations on columns.
+See the <a href="grid.html">Grid documentation</a> for full details.
+</p>
+
+<pre>
+<code><span class="mshellDOUBLE_LEFT_CURLY">{{</span>
+   <span class="mshellLITERAL">name</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">age</span><span class="mshellEXECUTE">;</span>
+   <span class="mshellSTRING">"Alice"</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">30</span><span class="mshellEXECUTE">;</span>
+   <span class="mshellSTRING">"Bob"</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">25</span>
+<span class="mshellDOUBLE_RIGHT_CURLY">}}</span></code>
+</pre>
+
+<h1 id="data-type-gridview">GridView <a class="section-link" href="#data-type-gridview" aria-label="Permalink">§</a> <a class="back-to-top" href="#data-types-top">Back to top</a></h1>
+
+<p>
+A <code>GridView</code> is a filtered view of a Grid that references the original data without copying.
+It is created by the <code>gridFilter</code> operation.
+Use <code>gridCompact</code> to materialize a GridView into a real Grid.
+</p>
+
+<h1 id="data-type-gridrow">GridRow <a class="section-link" href="#data-type-gridrow" aria-label="Permalink">§</a> <a class="back-to-top" href="#data-types-top">Back to top</a></h1>
+
+<p>
+A <code>GridRow</code> is a lazy reference to a single row in a Grid.
+It supports dictionary-like access with <code>:colname</code> or <code>get</code>.
+Use <code>toDict</code> to convert a GridRow to a dictionary.
 </p>

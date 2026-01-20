@@ -408,8 +408,9 @@ func (file *MShellFile) ToJson() string {
 }
 
 type MShellParser struct {
-	lexer *Lexer
-	curr  Token
+	lexer        *Lexer
+	curr         Token
+	pendingToken *Token // Used when DOUBLE_RIGHT_CURLY needs to be split into two RIGHT_CURLYs
 }
 
 func NewMShellParser(lexer *Lexer) *MShellParser {
@@ -424,7 +425,12 @@ func (parser *MShellParser) ResetInput(input string) {
 }
 
 func (parser *MShellParser) NextToken() {
-	parser.curr = parser.lexer.scanToken()
+	if parser.pendingToken != nil {
+		parser.curr = *parser.pendingToken
+		parser.pendingToken = nil
+	} else {
+		parser.curr = parser.lexer.scanToken()
+	}
 }
 
 // Checks for the desired match, and then advances the parser.
@@ -446,6 +452,28 @@ func (parser *MShellParser) MatchWithMessage(token Token, tokenType TokenType, m
 	return nil
 }
 
+// MatchRightCurly matches a RIGHT_CURLY token, but also handles DOUBLE_RIGHT_CURLY
+// by consuming only the first '}' and leaving the second for the next token.
+func (parser *MShellParser) MatchRightCurly() error {
+	if parser.curr.Type == RIGHT_CURLY {
+		parser.NextToken()
+		return nil
+	}
+	if parser.curr.Type == DOUBLE_RIGHT_CURLY {
+		// Create a pending RIGHT_CURLY token for the second '}'
+		pendingToken := Token{
+			Type:   RIGHT_CURLY,
+			Lexeme: "}",
+			Line:   parser.curr.Line,
+			Column: parser.curr.Column + 1,
+		}
+		parser.pendingToken = &pendingToken
+		parser.NextToken()
+		return nil
+	}
+	return fmt.Errorf("%d:%d: Expected RIGHT_CURLY, got %s", parser.curr.Line, parser.curr.Column, parser.curr.Type)
+}
+
 func (parser *MShellParser) ParseFile() (*MShellFile, error) {
 	file := &MShellFile{}
 
@@ -456,6 +484,8 @@ func (parser *MShellParser) ParseFile() (*MShellFile, error) {
 			return file, errors.New(message)
 		case RIGHT_CURLY:
 			return file, fmt.Errorf("Unexpected '}' while parsing file at line %d, column %d", parser.curr.Line, parser.curr.Column)
+		case DOUBLE_RIGHT_CURLY:
+			return file, fmt.Errorf("Unexpected '}}' while parsing file at line %d, column %d", parser.curr.Line, parser.curr.Column)
 		case LEFT_SQUARE_BRACKET:
 			list, err := parser.ParseList()
 			if err != nil {
@@ -469,6 +499,12 @@ func (parser *MShellParser) ParseFile() (*MShellFile, error) {
 				return file, err
 			}
 			file.Items = append(file.Items, dict)
+		case DOUBLE_LEFT_CURLY:
+			grid, err := parser.ParseGrid()
+			if err != nil {
+				return file, err
+			}
+			file.Items = append(file.Items, grid)
 		case INDEXER, ENDINDEXER, STARTINDEXER, SLICEINDEXER:
 			indexerList := parser.ParseIndexer()
 			file.Items = append(file.Items, indexerList)
@@ -1512,7 +1548,7 @@ func (parser *MShellParser) ParseTypeDictionary() (*TypeDictionary, error) {
 		dictType.WildCardType = valueType
 	}
 
-	err = parser.Match(parser.curr, RIGHT_CURLY)
+	err = parser.MatchRightCurly()
 	if err != nil {
 		return nil, err
 	}
@@ -1846,6 +1882,8 @@ func (parser *MShellParser) ParseItem() (MShellParseItem, error) {
 			return nil, err
 		}
 		return dict, nil
+	case DOUBLE_LEFT_CURLY:
+		return parser.ParseGrid()
 	case INDEXER, ENDINDEXER, STARTINDEXER, SLICEINDEXER:
 		return parser.ParseIndexer(), nil
 	case VARSTORE:
@@ -1895,7 +1933,8 @@ func (parser *MShellParser) ParseGetter() (MShellParseItem, error) {
 		parsedStr := t.Lexeme[1 : len(t.Lexeme)-1]
 		parser.NextToken()
 		return &MShellGetter{Token: t, String: parsedStr}, nil
-	case LITERAL:
+	case LITERAL, INTERPRET:
+		// INTERPRET is 'x' which can be used as a getter name
 		parser.NextToken()
 		return &MShellGetter{Token: t, String: t.Lexeme}, nil
 	default:
@@ -1944,6 +1983,87 @@ func (parser *MShellParser) ParseQuote() (*MShellParseQuote, error) {
 		return quote, err
 	}
 	return quote, nil
+}
+
+// MShellParseGridColumn represents a column definition in a grid literal
+type MShellParseGridColumn struct {
+	Name      string
+	NameToken Token
+	Meta      *MShellParseDict  // nil if no metadata
+}
+
+// MShellParseGrid represents a grid literal
+type MShellParseGrid struct {
+	StartToken Token
+	EndToken   Token
+	GridMeta   *MShellParseDict         // nil if no grid metadata
+	Columns    []MShellParseGridColumn
+	Rows       [][]MShellParseItem      // Rows[rowIdx][colIdx] - expressions to evaluate
+}
+
+func (grid *MShellParseGrid) GetStartToken() Token {
+	return grid.StartToken
+}
+
+func (grid *MShellParseGrid) GetEndToken() Token {
+	return grid.EndToken
+}
+
+func (grid *MShellParseGrid) ToJson() string {
+	var sb strings.Builder
+	sb.WriteString("{\"grid_meta\": ")
+	if grid.GridMeta != nil {
+		sb.WriteString(grid.GridMeta.ToJson())
+	} else {
+		sb.WriteString("null")
+	}
+
+	sb.WriteString(", \"columns\": [")
+	for i, col := range grid.Columns {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString("{\"name\": \"")
+		sb.WriteString(col.Name)
+		sb.WriteString("\"")
+		if col.Meta != nil {
+			sb.WriteString(", \"meta\": ")
+			sb.WriteString(col.Meta.ToJson())
+		}
+		sb.WriteString("}")
+	}
+
+	sb.WriteString("], \"rows\": [")
+	for i, row := range grid.Rows {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString("[")
+		for j, item := range row {
+			if j > 0 {
+				sb.WriteString(", ")
+			}
+			sb.WriteString(item.ToJson())
+		}
+		sb.WriteString("]")
+	}
+	sb.WriteString("]}")
+	return sb.String()
+}
+
+func (grid *MShellParseGrid) DebugString() string {
+	var sb strings.Builder
+	sb.WriteString("{{ ")
+	for i, col := range grid.Columns {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString(col.Name)
+	}
+	sb.WriteString("; ")
+	sb.WriteString(fmt.Sprintf("%d rows", len(grid.Rows)))
+	sb.WriteString(" }}")
+	return sb.String()
 }
 
 func (parser *MShellParser) ParseIfBlock() (*MShellParseIfBlock, error) {
@@ -2038,4 +2158,189 @@ DoneIfBody:
 	}
 
 	return ifBlock, nil
+}
+
+// ParseGrid parses a grid literal: {{ ... }}
+// Grammar:
+//   {{ [grid-meta ;] col1 [col-meta], col2, ...; row1_val1, row1_val2, ...; row2_val1, ... }}
+func (parser *MShellParser) ParseGrid() (*MShellParseGrid, error) {
+	grid := &MShellParseGrid{StartToken: parser.curr}
+	err := parser.Match(parser.curr, DOUBLE_LEFT_CURLY)
+	if err != nil {
+		return grid, err
+	}
+
+	// Check for empty grid or closing
+	if parser.curr.Type == DOUBLE_RIGHT_CURLY {
+		grid.EndToken = parser.curr
+		parser.NextToken()
+		return grid, nil
+	}
+
+	// First, check if we have grid metadata (a dict followed by semicolon before columns)
+	// We need to look ahead to determine if the first item is grid metadata or column defs
+	if parser.curr.Type == LEFT_CURLY {
+		// Could be grid metadata dict, parse it
+		dict, err := parser.ParseStaticDict()
+		if err != nil {
+			return grid, err
+		}
+		// If followed by EXECUTE (;), it's grid metadata
+		if parser.curr.Type == EXECUTE {
+			grid.GridMeta = dict
+			parser.NextToken() // consume ;
+		} else {
+			// It was not grid metadata, this is an error - dicts can't be column names
+			return grid, fmt.Errorf("Expected ';' after grid metadata dict at line %d, column %d.", parser.curr.Line, parser.curr.Column)
+		}
+	}
+
+	// Check if we're done after grid metadata
+	if parser.curr.Type == DOUBLE_RIGHT_CURLY {
+		grid.EndToken = parser.curr
+		parser.NextToken()
+		return grid, nil
+	}
+
+	// Parse column definitions: col1 [meta], col2 [meta], ...; or col1, col2, ...;
+	for {
+		// Expect a column name (literal or string)
+		var colName string
+		var colNameToken Token
+
+		switch parser.curr.Type {
+		case LITERAL, INTERPRET:
+			// INTERPRET is 'x' which can be used as a column name
+			colName = parser.curr.Lexeme
+			colNameToken = parser.curr
+			parser.NextToken()
+		case STRING:
+			parsedStr, err := ParseRawString(parser.curr.Lexeme)
+			if err != nil {
+				return grid, fmt.Errorf("Error parsing column name string at line %d, column %d: %s", parser.curr.Line, parser.curr.Column, err.Error())
+			}
+			colName = parsedStr
+			colNameToken = parser.curr
+			parser.NextToken()
+		case SINGLEQUOTESTRING:
+			if len(parser.curr.Lexeme) < 2 {
+				return grid, fmt.Errorf("Invalid single-quoted column name at line %d, column %d.", parser.curr.Line, parser.curr.Column)
+			}
+			colName = parser.curr.Lexeme[1 : len(parser.curr.Lexeme)-1]
+			colNameToken = parser.curr
+			parser.NextToken()
+		case EXECUTE:
+			// Empty column list before ;
+			break
+		case DOUBLE_RIGHT_CURLY:
+			// Empty grid with no columns
+			grid.EndToken = parser.curr
+			parser.NextToken()
+			return grid, nil
+		default:
+			return grid, fmt.Errorf("Expected column name (literal or string) at line %d, column %d, got %s.", parser.curr.Line, parser.curr.Column, parser.curr.Type)
+		}
+
+		// If we hit EXECUTE without a column name, break to parse rows
+		if parser.curr.Type == EXECUTE && colName == "" {
+			parser.NextToken()
+			break
+		}
+
+		col := MShellParseGridColumn{Name: colName, NameToken: colNameToken}
+
+		// Check for optional column metadata dict
+		if parser.curr.Type == LEFT_CURLY {
+			dict, err := parser.ParseStaticDict()
+			if err != nil {
+				return grid, err
+			}
+			col.Meta = dict
+		}
+
+		grid.Columns = append(grid.Columns, col)
+
+		// Check for comma (more columns) or semicolon (end of column defs)
+		if parser.curr.Type == COMMA {
+			parser.NextToken()
+			continue
+		} else if parser.curr.Type == EXECUTE {
+			parser.NextToken()
+			break
+		} else if parser.curr.Type == DOUBLE_RIGHT_CURLY {
+			// Grid with only column definitions, no rows
+			grid.EndToken = parser.curr
+			parser.NextToken()
+			return grid, nil
+		} else {
+			return grid, fmt.Errorf("Expected ',' or ';' after column definition at line %d, column %d, got %s.", parser.curr.Line, parser.curr.Column, parser.curr.Type)
+		}
+	}
+
+	// Parse row data
+	numCols := len(grid.Columns)
+	for {
+		if parser.curr.Type == DOUBLE_RIGHT_CURLY {
+			break
+		}
+
+		// Parse a row of values
+		var row []MShellParseItem
+		for {
+			if parser.curr.Type == EXECUTE || parser.curr.Type == DOUBLE_RIGHT_CURLY {
+				break
+			}
+
+			// Parse a single value expression
+			item, err := parser.ParseItem()
+			if err != nil {
+				return grid, err
+			}
+			row = append(row, item)
+
+			// Check for comma (more values in row) or semicolon/}} (end of row)
+			if parser.curr.Type == COMMA {
+				parser.NextToken()
+				continue
+			} else {
+				break
+			}
+		}
+
+		// Validate row length if we have columns defined
+		if numCols > 0 && len(row) != numCols {
+			return grid, fmt.Errorf("Row %d has %d values but grid has %d columns at line %d.", len(grid.Rows)+1, len(row), numCols, parser.curr.Line)
+		}
+
+		// If this is the first row and no columns were defined, create generic column names
+		if len(grid.Columns) == 0 && len(row) > 0 {
+			for i := range row {
+				grid.Columns = append(grid.Columns, MShellParseGridColumn{
+					Name:      fmt.Sprintf("col%d", i),
+					NameToken: grid.StartToken,
+				})
+			}
+			numCols = len(row)
+		}
+
+		if len(row) > 0 {
+			grid.Rows = append(grid.Rows, row)
+		}
+
+		// Handle row terminator
+		if parser.curr.Type == EXECUTE {
+			parser.NextToken()
+		} else if parser.curr.Type == DOUBLE_RIGHT_CURLY {
+			// Trailing semicolon is optional
+			break
+		}
+	}
+
+	grid.EndToken = parser.curr
+	err = parser.Match(parser.curr, DOUBLE_RIGHT_CURLY)
+	if err != nil {
+		return grid, fmt.Errorf("Expected '}}' to close grid at line %d, column %d.", parser.curr.Line, parser.curr.Column)
+	}
+
+	return grid, nil
 }

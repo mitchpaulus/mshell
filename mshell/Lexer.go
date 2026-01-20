@@ -98,6 +98,8 @@ const (
 	STDOUTANDSTDERRREDIRECT  // &>
 	STDOUTANDSTDERRAPPEND    // &>>
 	INPLACEREDIRECT          // <>
+	DOUBLE_LEFT_CURLY        // {{
+	DOUBLE_RIGHT_CURLY       // }}
 )
 
 func (t TokenType) String() string {
@@ -266,6 +268,10 @@ func (t TokenType) String() string {
 		return "STDOUTANDSTDERRAPPEND"
 	case INPLACEREDIRECT:
 		return "INPLACEREDIRECT"
+	case DOUBLE_LEFT_CURLY:
+		return "DOUBLE_LEFT_CURLY"
+	case DOUBLE_RIGHT_CURLY:
+		return "DOUBLE_RIGHT_CURLY"
 	default:
 		return "UNKNOWN"
 	}
@@ -648,8 +654,16 @@ func (l *Lexer) scanTokenAll() Token {
 	case ')':
 		return l.makeToken(RIGHT_PAREN)
 	case '{':
+		if l.peek() == '{' {
+			l.advance()
+			return l.makeToken(DOUBLE_LEFT_CURLY)
+		}
 		return l.makeToken(LEFT_CURLY)
 	case '}':
+		if l.peek() == '}' {
+			l.advance()
+			return l.makeToken(DOUBLE_RIGHT_CURLY)
+		}
 		return l.makeToken(RIGHT_CURLY)
 	case ';':
 		return l.makeToken(EXECUTE)

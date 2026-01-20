@@ -46,24 +46,6 @@ def 2apply ([a] (a a -- c) -- c)
     swap 2unpack rot x
 end
 
-def each ([T] (T --) --)
-    over len each-len! # Get total length
-    0 each-idx! # index
-    (
-        @each-idx @each-len >= if
-            break
-        end
-        # "Each idx: " w @each-idx w " Each len: " w @each-len wl
-        over @each-idx nth # Get current item
-        over x  # Copy over quote, execute
-        @each-idx 1 + each-idx! # inc index
-        # "Each idx: " w @each-idx wl
-    ) loop
-
-    # Drop list and quote, total length, index
-    drop drop
-end
-
 def eachWhile ([T] (T -- bool) --)
     over len each-len! # Get total length
     0 each-idx! # index
@@ -107,24 +89,6 @@ def dropWhile ([T] (T -- bool) -- [T])
         @dropWhile-idx 1 + dropWhile-idx!
     ) loop
     @list @dropWhile-idx skip
-end
-
-# filter (list quote -- list)
-def filter ([T] (T -- bool) -- [T])
-    list!, quote!
-    @list len filter-len! # Get total length
-    0 filter-idx! # Index
-    [] filter-accum! # Accumulator
-    (
-        @filter-idx @filter-len >= (break) iff
-        @list @filter-idx nth item!
-        # $"Item: {@item str}" wl
-        @item @quote x  result!
-        # $"Result: {@result str}" wl
-        @result ( @filter-accum @item append drop ) iff
-        @filter-idx 1 + filter-idx! # inc index
-    ) loop
-    @filter-accum
 end
 
 # foldl (quote initial list -- result)
