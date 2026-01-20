@@ -1,0 +1,10 @@
+'' '' true
+'' 'a' true
+'a' '' true
+'a' 'a' true
+'a' 'b' true
+'b' 'a' true
+'A' 'a' true
+'a' 'A' true
+'a' 'aa' true
+'aa' 'a' true
