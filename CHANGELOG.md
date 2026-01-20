@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `toOleDate`
   - `__gitCompletion`
   - `__sshCompletion`
+  - `strCmp`
   - `strEscape`
   - `reSplit`
 - Function definition metadata dictionaries in `def` signatures

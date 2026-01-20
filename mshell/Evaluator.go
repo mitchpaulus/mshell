@@ -3840,6 +3840,23 @@ MainLoop:
 
 					listToBeSorted.Items = sorted_array
 					stack.Push(listToBeSorted)
+				} else if t.Lexeme == "strCmp" {
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					str2, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second parameter in 'strCmp' is expected to be stringable, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
+					}
+
+					str1, err := obj2.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The first parameter in 'strCmp' is expected to be stringable, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
+					}
+
+					stack.Push(MShellInt{Value: strings.Compare(str1, str2)})
 				} else if t.Lexeme == "versionSortCmp" {
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {

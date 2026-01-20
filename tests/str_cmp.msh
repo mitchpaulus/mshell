@@ -1,0 +1,14 @@
+def compareAndWrite (int str str -- )
+    b! a! $"'{@a}' '{@b}' " w @a @b strCmp = str wl
+end
+
+0 "" "" compareAndWrite
+-1 "" "a" compareAndWrite
+1 "a" "" compareAndWrite
+0 "a" "a" compareAndWrite
+-1 "a" "b" compareAndWrite
+1 "b" "a" compareAndWrite
+-1 "A" "a" compareAndWrite
+1 "a" "A" compareAndWrite
+-1 "a" "aa" compareAndWrite
+1 "aa" "a" compareAndWrite

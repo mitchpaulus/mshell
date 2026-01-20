@@ -343,6 +343,7 @@ Metadata values must be static: strings (single or double quoted), integers, flo
 - `sort`: Sort list. Converts all items to strings, then sorts using go's `sort.Strings` `(list -- list)`
 - `sortV`: Version sort list. Converts all items to strings, then sorts like GNU `sort -V` (`list -- list`)
 - `sortByCmp`: Sort a list by a comparison function. The function/quotation should return -1 when a < b, 0 when a = b, or 1 when a > b. `[a] (a a -- int) -- [a]`
+- `strCmp`: Compare two strings lexicographically using Go's [`strings.Compare`](https://pkg.go.dev/strings#Compare); returns -1, 0, or 1. Useful with `sortByCmp`. `(str str -- int)`
 - `versionSortCmp`: A comparison function for use with `sortByCmp`. Used to implement "version sort" or "natural sort". `(str str -- int)`
 - `floatCmp`: Compare two floats and return -1, 0, or 1. Useful with `sortByCmp` for numeric sorting. `(float float -- int)`
 
