@@ -46,6 +46,13 @@ Completions for common commands are in the standard library `lib/std.msh` at the
 Wrap in a Vim fold, and make the definition following the pattern of the others.
 Completions definitions have key 'complete' in the definition meta data, where the value is the list of commands it is used for.
 
+In general, completions should be in this order:
+
+1. Binary specific completions
+2. Files/Directories
+3. Variables
+4. `mshell` commands/definitions
+
 ## Testing instructions
 
 All test cases are in `tests`.
