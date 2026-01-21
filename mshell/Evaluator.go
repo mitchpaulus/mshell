@@ -353,6 +353,8 @@ type ExecuteContext struct {
 	ShouldCloseOutput bool
 	ShouldCloseError  bool
 	Pbm               IPathBinManager
+	InPipeline        bool      // True if this is part of a pipeline; foreground handling is done by RunPipeline
+	PipelinePidChan   chan int  // Channel for reporting process PID to pipeline manager (optional, only set for pipelines)
 }
 
 func (context *ExecuteContext) CloneLessVariables() *ExecuteContext {
@@ -364,6 +366,8 @@ func (context *ExecuteContext) CloneLessVariables() *ExecuteContext {
 		ShouldCloseOutput: context.ShouldCloseOutput,
 		ShouldCloseError:  context.ShouldCloseError,
 		Pbm:               context.Pbm,
+		InPipeline:        context.InPipeline,
+		PipelinePidChan:   context.PipelinePidChan,
 	}
 
 	newContext.Variables = make(map[string]MShellObject)
@@ -5967,21 +5971,57 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 		}
 		exitCode = 0 // TODO: What to set here?
 	} else {
-		startErr := cmd.Run() // Manually deal with the exit code upstream
+		// Use Start + Wait instead of Run so we can set the foreground process group
+		startErr = cmd.Start()
 		if startErr != nil {
-			if _, ok := startErr.(*exec.ExitError); !ok {
-				fmt.Fprintf(os.Stderr, "Error running command: %s\n", startErr.Error())
-				fmt.Fprintf(os.Stderr, "Command: '%s'\n", cmd.Path)
-				for i, arg := range cmd.Args {
-					fmt.Fprintf(os.Stderr, "Arg %d: '%s'\n", i, arg)
-				}
-				exitCode = 1
-			} else {
-				// Command exited with non-zero exit code
-				exitCode = startErr.(*exec.ExitError).ExitCode()
+			fmt.Fprintf(os.Stderr, "Error starting command: %s\n", startErr.Error())
+			fmt.Fprintf(os.Stderr, "Command: '%s'\n", cmd.Path)
+			for i, arg := range cmd.Args {
+				fmt.Fprintf(os.Stderr, "Arg %d: '%s'\n", i, arg)
 			}
+			exitCode = 1
 		} else {
-			exitCode = cmd.ProcessState.ExitCode()
+			// If we're in a pipeline, report the PID so RunPipeline can manage foreground
+			if context.InPipeline && context.PipelinePidChan != nil && cmd.Process != nil {
+				select {
+				case context.PipelinePidChan <- cmd.Process.Pid:
+				default:
+					// Channel full or closed, that's fine - first process already reported
+				}
+			}
+
+			// If stdin is a terminal and we're not in a pipeline, set the subprocess as
+			// the foreground process group so that CTRL-C goes to it instead of the shell.
+			// For pipelines, RunPipeline handles foreground process group management.
+			stdinFd := int(os.Stdin.Fd())
+			shouldSetForeground := !context.InPipeline && IsTerminal(stdinFd) && cmd.Process != nil
+			if shouldSetForeground {
+				// Ignore SIGTTOU/SIGTTIN to prevent shell from stopping when manipulating foreground
+				restoreSignals := IgnoreSignalsForJobControl()
+				SetForegroundProcessGroup(stdinFd, cmd.Process.Pid)
+				restoreSignals()
+			}
+
+			waitErr := cmd.Wait()
+
+			// Restore the shell as the foreground process group
+			if shouldSetForeground {
+				restoreSignals := IgnoreSignalsForJobControl()
+				RestoreForegroundProcessGroup(stdinFd)
+				restoreSignals()
+			}
+
+			if waitErr != nil {
+				if _, ok := waitErr.(*exec.ExitError); !ok {
+					fmt.Fprintf(os.Stderr, "Error running command: %s\n", waitErr.Error())
+					exitCode = 1
+				} else {
+					// Command exited with non-zero exit code
+					exitCode = waitErr.(*exec.ExitError).ExitCode()
+				}
+			} else {
+				exitCode = cmd.ProcessState.ExitCode()
+			}
 		}
 	}
 
@@ -6032,12 +6072,18 @@ func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContex
 
 	var buf bytes.Buffer
 	var stdErrBuf bytes.Buffer
+
+	// Create a channel to receive the first process PID for foreground management
+	pidChan := make(chan int, 1)
+
 	for i := 0; i < len(MShellPipe.List.Items); i++ {
 		newContext := ExecuteContext{
-			StandardInput:  nil,
-			StandardOutput: nil,
-			Variables:      context.Variables,
-			Pbm:            context.Pbm,
+			StandardInput:   nil,
+			StandardOutput:  nil,
+			Variables:       context.Variables,
+			Pbm:             context.Pbm,
+			InPipeline:      true,
+			PipelinePidChan: pidChan,
 		}
 
 		if i == 0 {
@@ -6105,8 +6151,32 @@ func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContex
 		}(i, item.(Executable))
 	}
 
+	// Set the first process that reports its PID as the foreground process group
+	// so that CTRL-C goes to the pipeline instead of the shell
+	stdinFd := int(os.Stdin.Fd())
+	setForeground := IsTerminal(stdinFd)
+	if setForeground {
+		select {
+		case pid := <-pidChan:
+			// Ignore SIGTTOU/SIGTTIN to prevent shell from stopping when manipulating foreground
+			restoreSignals := IgnoreSignalsForJobControl()
+			SetForegroundProcessGroup(stdinFd, pid)
+			restoreSignals()
+		case <-time.After(100 * time.Millisecond):
+			// No external process started within timeout (maybe all are built-ins)
+			setForeground = false
+		}
+	}
+
 	// Wait for all processes to complete
 	wg.Wait()
+
+	// Restore the shell as the foreground process group
+	if setForeground {
+		restoreSignals := IgnoreSignalsForJobControl()
+		RestoreForegroundProcessGroup(stdinFd)
+		restoreSignals()
+	}
 
 	var stdoutBytes []byte
 	var stderrBytes []byte
