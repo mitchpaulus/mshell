@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Grid (data frame) type with columnar storage for high-performance tabular data
-  - Literal syntax: `{{ col1, col2; val1, val2; val3, val4 }}`
+  - Literal syntax: `[| col1, col2; val1, val2; val3, val4 |]`
   - Optional grid and column metadata
   - Typed column storage (int, float, string, datetime) with automatic optimization
   - `GridView` for filtered views without data copying

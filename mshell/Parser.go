@@ -408,9 +408,8 @@ func (file *MShellFile) ToJson() string {
 }
 
 type MShellParser struct {
-	lexer        *Lexer
-	curr         Token
-	pendingToken *Token // Used when DOUBLE_RIGHT_CURLY needs to be split into two RIGHT_CURLYs
+	lexer *Lexer
+	curr  Token
 }
 
 func NewMShellParser(lexer *Lexer) *MShellParser {
@@ -425,12 +424,7 @@ func (parser *MShellParser) ResetInput(input string) {
 }
 
 func (parser *MShellParser) NextToken() {
-	if parser.pendingToken != nil {
-		parser.curr = *parser.pendingToken
-		parser.pendingToken = nil
-	} else {
-		parser.curr = parser.lexer.scanToken()
-	}
+	parser.curr = parser.lexer.scanToken()
 }
 
 // Checks for the desired match, and then advances the parser.
@@ -452,28 +446,6 @@ func (parser *MShellParser) MatchWithMessage(token Token, tokenType TokenType, m
 	return nil
 }
 
-// MatchRightCurly matches a RIGHT_CURLY token, but also handles DOUBLE_RIGHT_CURLY
-// by consuming only the first '}' and leaving the second for the next token.
-func (parser *MShellParser) MatchRightCurly() error {
-	if parser.curr.Type == RIGHT_CURLY {
-		parser.NextToken()
-		return nil
-	}
-	if parser.curr.Type == DOUBLE_RIGHT_CURLY {
-		// Create a pending RIGHT_CURLY token for the second '}'
-		pendingToken := Token{
-			Type:   RIGHT_CURLY,
-			Lexeme: "}",
-			Line:   parser.curr.Line,
-			Column: parser.curr.Column + 1,
-		}
-		parser.pendingToken = &pendingToken
-		parser.NextToken()
-		return nil
-	}
-	return fmt.Errorf("%d:%d: Expected RIGHT_CURLY, got %s", parser.curr.Line, parser.curr.Column, parser.curr.Type)
-}
-
 func (parser *MShellParser) ParseFile() (*MShellFile, error) {
 	file := &MShellFile{}
 
@@ -484,8 +456,8 @@ func (parser *MShellParser) ParseFile() (*MShellFile, error) {
 			return file, errors.New(message)
 		case RIGHT_CURLY:
 			return file, fmt.Errorf("Unexpected '}' while parsing file at line %d, column %d", parser.curr.Line, parser.curr.Column)
-		case DOUBLE_RIGHT_CURLY:
-			return file, fmt.Errorf("Unexpected '}}' while parsing file at line %d, column %d", parser.curr.Line, parser.curr.Column)
+		case GRID_CLOSE:
+			return file, fmt.Errorf("Unexpected '|]' while parsing file at line %d, column %d", parser.curr.Line, parser.curr.Column)
 		case LEFT_SQUARE_BRACKET:
 			list, err := parser.ParseList()
 			if err != nil {
@@ -499,7 +471,7 @@ func (parser *MShellParser) ParseFile() (*MShellFile, error) {
 				return file, err
 			}
 			file.Items = append(file.Items, dict)
-		case DOUBLE_LEFT_CURLY:
+		case GRID_OPEN:
 			grid, err := parser.ParseGrid()
 			if err != nil {
 				return file, err
@@ -1548,7 +1520,7 @@ func (parser *MShellParser) ParseTypeDictionary() (*TypeDictionary, error) {
 		dictType.WildCardType = valueType
 	}
 
-	err = parser.MatchRightCurly()
+	err = parser.Match(parser.curr, RIGHT_CURLY)
 	if err != nil {
 		return nil, err
 	}
@@ -1882,7 +1854,7 @@ func (parser *MShellParser) ParseItem() (MShellParseItem, error) {
 			return nil, err
 		}
 		return dict, nil
-	case DOUBLE_LEFT_CURLY:
+	case GRID_OPEN:
 		return parser.ParseGrid()
 	case INDEXER, ENDINDEXER, STARTINDEXER, SLICEINDEXER:
 		return parser.ParseIndexer(), nil
@@ -2165,13 +2137,13 @@ DoneIfBody:
 //   {{ [grid-meta ;] col1 [col-meta], col2, ...; row1_val1, row1_val2, ...; row2_val1, ... }}
 func (parser *MShellParser) ParseGrid() (*MShellParseGrid, error) {
 	grid := &MShellParseGrid{StartToken: parser.curr}
-	err := parser.Match(parser.curr, DOUBLE_LEFT_CURLY)
+	err := parser.Match(parser.curr, GRID_OPEN)
 	if err != nil {
 		return grid, err
 	}
 
 	// Check for empty grid or closing
-	if parser.curr.Type == DOUBLE_RIGHT_CURLY {
+	if parser.curr.Type == GRID_CLOSE {
 		grid.EndToken = parser.curr
 		parser.NextToken()
 		return grid, nil
@@ -2196,7 +2168,7 @@ func (parser *MShellParser) ParseGrid() (*MShellParseGrid, error) {
 	}
 
 	// Check if we're done after grid metadata
-	if parser.curr.Type == DOUBLE_RIGHT_CURLY {
+	if parser.curr.Type == GRID_CLOSE {
 		grid.EndToken = parser.curr
 		parser.NextToken()
 		return grid, nil
@@ -2232,7 +2204,7 @@ func (parser *MShellParser) ParseGrid() (*MShellParseGrid, error) {
 		case EXECUTE:
 			// Empty column list before ;
 			break
-		case DOUBLE_RIGHT_CURLY:
+		case GRID_CLOSE:
 			// Empty grid with no columns
 			grid.EndToken = parser.curr
 			parser.NextToken()
@@ -2267,7 +2239,7 @@ func (parser *MShellParser) ParseGrid() (*MShellParseGrid, error) {
 		} else if parser.curr.Type == EXECUTE {
 			parser.NextToken()
 			break
-		} else if parser.curr.Type == DOUBLE_RIGHT_CURLY {
+		} else if parser.curr.Type == GRID_CLOSE {
 			// Grid with only column definitions, no rows
 			grid.EndToken = parser.curr
 			parser.NextToken()
@@ -2280,14 +2252,14 @@ func (parser *MShellParser) ParseGrid() (*MShellParseGrid, error) {
 	// Parse row data
 	numCols := len(grid.Columns)
 	for {
-		if parser.curr.Type == DOUBLE_RIGHT_CURLY {
+		if parser.curr.Type == GRID_CLOSE {
 			break
 		}
 
 		// Parse a row of values
 		var row []MShellParseItem
 		for {
-			if parser.curr.Type == EXECUTE || parser.curr.Type == DOUBLE_RIGHT_CURLY {
+			if parser.curr.Type == EXECUTE || parser.curr.Type == GRID_CLOSE {
 				break
 			}
 
@@ -2330,16 +2302,16 @@ func (parser *MShellParser) ParseGrid() (*MShellParseGrid, error) {
 		// Handle row terminator
 		if parser.curr.Type == EXECUTE {
 			parser.NextToken()
-		} else if parser.curr.Type == DOUBLE_RIGHT_CURLY {
+		} else if parser.curr.Type == GRID_CLOSE {
 			// Trailing semicolon is optional
 			break
 		}
 	}
 
 	grid.EndToken = parser.curr
-	err = parser.Match(parser.curr, DOUBLE_RIGHT_CURLY)
+	err = parser.Match(parser.curr, GRID_CLOSE)
 	if err != nil {
-		return grid, fmt.Errorf("Expected '}}' to close grid at line %d, column %d.", parser.curr.Line, parser.curr.Column)
+		return grid, fmt.Errorf("Expected '|]' to close grid at line %d, column %d.", parser.curr.Line, parser.curr.Column)
 	}
 
 	return grid, nil

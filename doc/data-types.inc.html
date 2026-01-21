@@ -321,18 +321,18 @@ See the <a href="grid.html">Grid documentation</a> for full details.
 </p>
 
 <pre>
-<code><span class="mshellDOUBLE_LEFT_CURLY">{{</span>
+<code><span class="mshellGRID_OPEN">[|</span>
    <span class="mshellLITERAL">name</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">age</span><span class="mshellEXECUTE">;</span>
    <span class="mshellSTRING">"Alice"</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">30</span><span class="mshellEXECUTE">;</span>
    <span class="mshellSTRING">"Bob"</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">25</span>
-<span class="mshellDOUBLE_RIGHT_CURLY">}}</span></code>
+<span class="mshellGRID_CLOSE">|]</span></code>
 </pre>
 
 <h1 id="data-type-gridview">GridView <a class="section-link" href="#data-type-gridview" aria-label="Permalink">§</a> <a class="back-to-top" href="#data-types-top">Back to top</a></h1>
 
 <p>
 A <code>GridView</code> is a filtered view of a Grid that references the original data without copying.
-It is created by the <code>gridFilter</code> operation.
+It is created by the <code>filter</code> operation.
 Use <code>gridCompact</code> to materialize a GridView into a real Grid.
 </p>
 

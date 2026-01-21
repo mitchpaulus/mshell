@@ -37,18 +37,18 @@ Grids support:
 <h1 id="grid-literal-syntax">Literal Syntax <a class="section-link" href="#grid-literal-syntax" aria-label="Permalink">§</a> <a class="back-to-top" href="#grid-top">Back to top</a></h1>
 
 <p>
-Grids are created using the <code>{{</code> and <code>}}</code> delimiters.
+Grids are created using the <code>[|</code> and <code>|]</code> delimiters.
 </p>
 
 <h2>Basic Grid</h2>
 
 <pre>
-<code><span class="mshellDOUBLE_LEFT_CURLY">{{</span>
+<code><span class="mshellGRID_OPEN">[|</span>
    <span class="mshellLITERAL">name</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">age</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">city</span><span class="mshellEXECUTE">;</span>
    <span class="mshellSTRING">"Alice"</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">30</span><span class="mshellCOMMA">,</span> <span class="mshellSTRING">"NYC"</span><span class="mshellEXECUTE">;</span>
    <span class="mshellSTRING">"Bob"</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">25</span><span class="mshellCOMMA">,</span> <span class="mshellSTRING">"LA"</span><span class="mshellEXECUTE">;</span>
    <span class="mshellSTRING">"Carol"</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">35</span><span class="mshellCOMMA">,</span> <span class="mshellSTRING">"Chicago"</span>
-<span class="mshellDOUBLE_RIGHT_CURLY">}}</span></code>
+<span class="mshellGRID_CLOSE">|]</span></code>
 </pre>
 
 <p>Structure:</p>
@@ -61,7 +61,7 @@ Grids are created using the <code>{{</code> and <code>}}</code> delimiters.
 <h2>Empty Grid</h2>
 
 <pre>
-<code><span class="mshellDOUBLE_LEFT_CURLY">{{</span> <span class="mshellLITERAL">col1</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">col2</span><span class="mshellEXECUTE">;</span> <span class="mshellDOUBLE_RIGHT_CURLY">}}</span>  <span class="mshellLINECOMMENT"># Grid with columns but no rows</span></code>
+<code><span class="mshellGRID_OPEN">[|</span> <span class="mshellLITERAL">col1</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">col2</span><span class="mshellEXECUTE">;</span> <span class="mshellGRID_CLOSE">|]</span>  <span class="mshellLINECOMMENT"># Grid with columns but no rows</span></code>
 </pre>
 
 <h1 id="grid-metadata">Metadata <a class="section-link" href="#grid-metadata" aria-label="Permalink">§</a> <a class="back-to-top" href="#grid-top">Back to top</a></h1>
@@ -73,12 +73,12 @@ Optional grid-level metadata is specified as a dictionary followed by <code>;</c
 </p>
 
 <pre>
-<code><span class="mshellDOUBLE_LEFT_CURLY">{{</span>
+<code><span class="mshellGRID_OPEN">[|</span>
    <span class="mshellLEFT_CURLY">{</span> <span class="mshellSTRING">"source"</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">"sensors"</span><span class="mshellCOMMA">,</span> <span class="mshellSTRING">"version"</span><span class="mshellCOLON">:</span> <span class="mshellINTEGER">2</span> <span class="mshellRIGHT_CURLY">}</span><span class="mshellEXECUTE">;</span>
    <span class="mshellLITERAL">timestamp</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">value</span><span class="mshellEXECUTE">;</span>
    <span class="mshellDATETIME">2024-01-01T10:00</span><span class="mshellCOMMA">,</span> <span class="mshellFLOAT">23.5</span><span class="mshellEXECUTE">;</span>
    <span class="mshellDATETIME">2024-01-01T11:00</span><span class="mshellCOMMA">,</span> <span class="mshellFLOAT">24.1</span>
-<span class="mshellDOUBLE_RIGHT_CURLY">}}</span></code>
+<span class="mshellGRID_CLOSE">|]</span></code>
 </pre>
 
 <h2>Column Metadata</h2>
@@ -88,11 +88,11 @@ Each column can have optional metadata specified as a dictionary immediately aft
 </p>
 
 <pre>
-<code><span class="mshellDOUBLE_LEFT_CURLY">{{</span>
+<code><span class="mshellGRID_OPEN">[|</span>
    <span class="mshellLITERAL">temperature</span> <span class="mshellLEFT_CURLY">{</span> <span class="mshellSTRING">"unit"</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">"celsius"</span> <span class="mshellRIGHT_CURLY">}</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">humidity</span> <span class="mshellLEFT_CURLY">{</span> <span class="mshellSTRING">"unit"</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">"percent"</span> <span class="mshellRIGHT_CURLY">}</span><span class="mshellEXECUTE">;</span>
    <span class="mshellFLOAT">23.5</span><span class="mshellCOMMA">,</span> <span class="mshellFLOAT">65.0</span><span class="mshellEXECUTE">;</span>
    <span class="mshellFLOAT">24.1</span><span class="mshellCOMMA">,</span> <span class="mshellFLOAT">62.5</span>
-<span class="mshellDOUBLE_RIGHT_CURLY">}}</span></code>
+<span class="mshellGRID_CLOSE">|]</span></code>
 </pre>
 
 <h1 id="grid-operations">Grid Operations <a class="section-link" href="#grid-operations" aria-label="Permalink">§</a> <a class="back-to-top" href="#grid-top">Back to top</a></h1>
@@ -164,7 +164,7 @@ Each column can have optional metadata specified as a dictionary immediately aft
 
 <pre>
 <code><span class="mshellLINECOMMENT"># Create a grid</span>
-<span class="mshellDOUBLE_LEFT_CURLY">{{</span> <span class="mshellLITERAL">x</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">y</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">1</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">2</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">3</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">4</span> <span class="mshellDOUBLE_RIGHT_CURLY">}}</span> <span class="mshellVARSTORE">grid!</span>
+<span class="mshellGRID_OPEN">[|</span> <span class="mshellLITERAL">x</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">y</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">1</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">2</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">3</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">4</span> <span class="mshellGRID_CLOSE">|]</span> <span class="mshellVARSTORE">grid!</span>
 
 <span class="mshellLINECOMMENT"># Get row count</span>
 <span class="mshellVARRETRIEVE">@grid</span> <span class="mshellLITERAL">gridRows</span>  <span class="mshellLINECOMMENT"># 2</span>
@@ -190,13 +190,13 @@ It maintains a list of row indices that match the filter criteria.
 </p>
 
 <p>
-GridViews are created by the <code>gridFilter</code> operation and can be used in most places where a Grid is expected.
+GridViews are created by the <code>filter</code> operation and can be used in most places where a Grid is expected.
 To materialize a GridView into a real Grid (with copied data), use <code>gridCompact</code>.
 </p>
 
 <pre>
 <code><span class="mshellLINECOMMENT"># Filter creates a GridView</span>
-<span class="mshellDOUBLE_LEFT_CURLY">{{</span> <span class="mshellLITERAL">x</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">1</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">2</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">3</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">4</span> <span class="mshellDOUBLE_RIGHT_CURLY">}}</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">x</span> <span class="mshellINTEGER">2</span> <span class="mshellGREATERTHAN">></span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">gridFilter</span>  <span class="mshellLINECOMMENT"># GridView with rows where x > 2</span>
+<span class="mshellGRID_OPEN">[|</span> <span class="mshellLITERAL">x</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">1</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">2</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">3</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">4</span> <span class="mshellGRID_CLOSE">|]</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">x</span> <span class="mshellINTEGER">2</span> <span class="mshellGREATERTHAN">></span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">filter</span>  <span class="mshellLINECOMMENT"># GridView with rows where x > 2</span>
 
 <span class="mshellLINECOMMENT"># Materialize to a Grid</span>
 <span class="mshellLITERAL">gridCompact</span>  <span class="mshellLINECOMMENT"># Now a real Grid with copied data</span></code>
@@ -221,7 +221,7 @@ GridRows support dictionary-like access:
 </ul>
 
 <pre>
-<code><span class="mshellDOUBLE_LEFT_CURLY">{{</span> <span class="mshellLITERAL">name</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">age</span><span class="mshellEXECUTE">;</span> <span class="mshellSTRING">"Alice"</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">30</span> <span class="mshellDOUBLE_RIGHT_CURLY">}}</span> <span class="mshellVARSTORE">grid!</span>
+<code><span class="mshellGRID_OPEN">[|</span> <span class="mshellLITERAL">name</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">age</span><span class="mshellEXECUTE">;</span> <span class="mshellSTRING">"Alice"</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">30</span> <span class="mshellGRID_CLOSE">|]</span> <span class="mshellVARSTORE">grid!</span>
 
 <span class="mshellLINECOMMENT"># Access first row</span>
 <span class="mshellVARRETRIEVE">@grid</span> <span class="mshellINDEXER">:0:</span>  <span class="mshellLINECOMMENT"># GridRow for first row</span>
@@ -243,18 +243,18 @@ GridRows support dictionary-like access:
         <tr> <th>Name</th> <th>Description</th> <th>Signature</th> </tr>
     </thead>
     <tbody>
-        <tr id="func-gridFilter">
-            <td><code>gridFilter</code></td>
+        <tr id="func-filter">
+            <td><code>filter</code></td>
             <td>Filter rows using a predicate quotation. The quotation receives a GridRow and should return a boolean. Returns a GridView (no data copying).</td>
             <td><code>(Grid|GridView (<span class="sig-type sig-type-gridrow">GridRow</span> -- <span class="sig-type sig-type-bool">bool</span>) -- GridView)</code></td>
         </tr>
-        <tr id="func-gridMap">
-            <td><code>gridMap</code></td>
+        <tr id="func-map">
+            <td><code>map</code></td>
             <td>Transform rows using a quotation. The quotation receives a GridRow and should return a GridRow or dict. Returns a new Grid.</td>
             <td><code>(Grid|GridView (<span class="sig-type sig-type-gridrow">GridRow</span> -- <span class="sig-type sig-type-gridrow">GridRow</span>|<span class="sig-type sig-type-dict">dict</span>) -- Grid)</code></td>
         </tr>
-        <tr id="func-gridEach">
-            <td><code>gridEach</code></td>
+        <tr id="func-each">
+            <td><code>each</code></td>
             <td>Iterate over rows for side effects. The quotation receives a GridRow.</td>
             <td><code>(Grid|GridView (<span class="sig-type sig-type-gridrow">GridRow</span> -- ) -- )</code></td>
         </tr>
@@ -269,25 +269,25 @@ GridRows support dictionary-like access:
 <h2>Examples</h2>
 
 <pre>
-<code><span class="mshellDOUBLE_LEFT_CURLY">{{</span>
+<code><span class="mshellGRID_OPEN">[|</span>
    <span class="mshellLITERAL">name</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">score</span><span class="mshellEXECUTE">;</span>
    <span class="mshellSTRING">"Alice"</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">85</span><span class="mshellEXECUTE">;</span>
    <span class="mshellSTRING">"Bob"</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">92</span><span class="mshellEXECUTE">;</span>
    <span class="mshellSTRING">"Carol"</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">78</span>
-<span class="mshellDOUBLE_RIGHT_CURLY">}}</span> <span class="mshellVARSTORE">students!</span>
+<span class="mshellGRID_CLOSE">|]</span> <span class="mshellVARSTORE">students!</span>
 
 <span class="mshellLINECOMMENT"># Filter: students with score >= 80</span>
-<span class="mshellVARRETRIEVE">@students</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">score</span> <span class="mshellINTEGER">80</span> <span class="mshellGREATERTHANOREQUAL">>=</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">gridFilter</span>
+<span class="mshellVARRETRIEVE">@students</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">score</span> <span class="mshellINTEGER">80</span> <span class="mshellGREATERTHANOREQUAL">>=</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">filter</span>
 <span class="mshellLINECOMMENT"># GridView with Alice and Bob</span>
 
 <span class="mshellLINECOMMENT"># Map: add a "passed" column</span>
 <span class="mshellVARRETRIEVE">@students</span> <span class="mshellLEFT_PAREN">(</span>
    <span class="mshellLITERAL">toDict</span>
    <span class="mshellLITERAL">dup</span> <span class="mshellSTRING">"score"</span> <span class="mshellLITERAL">get</span><span class="mshellQUESTION">?</span> <span class="mshellINTEGER">70</span> <span class="mshellGREATERTHANOREQUAL">>=</span> <span class="mshellSTRING">"passed"</span> <span class="mshellLITERAL">set</span>
-<span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">gridMap</span>
+<span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">map</span>
 
 <span class="mshellLINECOMMENT"># Each: print each student's name</span>
-<span class="mshellVARRETRIEVE">@students</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">name</span> <span class="mshellLITERAL">wl</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">gridEach</span>
+<span class="mshellVARRETRIEVE">@students</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">name</span> <span class="mshellLITERAL">wl</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">each</span>
 <span class="mshellLINECOMMENT"># Prints: Alice, Bob, Carol (one per line)</span></code>
 </pre>
 
@@ -298,7 +298,7 @@ Grids serialize to JSON as an array of row objects:
 </p>
 
 <pre>
-<code><span class="mshellDOUBLE_LEFT_CURLY">{{</span> <span class="mshellLITERAL">x</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">y</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">1</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">2</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">3</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">4</span> <span class="mshellDOUBLE_RIGHT_CURLY">}}</span> <span class="mshellLITERAL">toJson</span>
+<code><span class="mshellGRID_OPEN">[|</span> <span class="mshellLITERAL">x</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">y</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">1</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">2</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">3</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">4</span> <span class="mshellGRID_CLOSE">|]</span> <span class="mshellLITERAL">toJson</span>
 <span class="mshellLINECOMMENT"># [{"x": 1, "y": 2}, {"x": 3, "y": 4}]</span></code>
 </pre>
 
@@ -307,6 +307,6 @@ GridRows also serialize as JSON objects:
 </p>
 
 <pre>
-<code><span class="mshellDOUBLE_LEFT_CURLY">{{</span> <span class="mshellLITERAL">x</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">y</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">1</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">2</span> <span class="mshellDOUBLE_RIGHT_CURLY">}}</span> <span class="mshellINDEXER">:0:</span> <span class="mshellLITERAL">toJson</span>
+<code><span class="mshellGRID_OPEN">[|</span> <span class="mshellLITERAL">x</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">y</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">1</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">2</span> <span class="mshellGRID_CLOSE">|]</span> <span class="mshellINDEXER">:0:</span> <span class="mshellLITERAL">toJson</span>
 <span class="mshellLINECOMMENT"># {"x": 1, "y": 2}</span></code>
 </pre>
