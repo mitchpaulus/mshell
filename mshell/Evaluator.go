@@ -386,25 +386,6 @@ func (context *ExecuteContext) CloneLessVariables() *ExecuteContext {
 	return newContext
 }
 
-// Extend creates a new context with merged variables from the current context and additional variables.
-// Variables in additionalVars take precedence over those in the current context.
-func (context ExecuteContext) Extend(additionalVars map[string]MShellObject) ExecuteContext {
-	newContext := ExecuteContext{
-		StandardInput:  context.StandardInput,
-		StandardOutput: context.StandardOutput,
-		StandardError:  context.StandardError,
-		Variables:      make(map[string]MShellObject),
-		Pbm:            context.Pbm,
-	}
-	for k, v := range context.Variables {
-		newContext.Variables[k] = v
-	}
-	for k, v := range additionalVars {
-		newContext.Variables[k] = v
-	}
-	return newContext
-}
-
 func (context *ExecuteContext) Close() {
 	if context.ShouldCloseInput {
 		if context.StandardInput != nil {
@@ -3790,8 +3771,10 @@ MainLoop:
 
 							var mapStack MShellStack
 							mapStack = []MShellObject{row}
-							callStackItem := CallStackItem{MShellParseItem: t, Name: "map", CallStackType: CALLSTACKQUOTE}
-							result := state.Evaluate(fn.Tokens, &mapStack, context.Extend(fn.Variables), definitions, callStackItem)
+							result, err := state.EvaluateQuote(*fn, &mapStack, context, definitions)
+							if err != nil {
+								return state.FailWithMessage(err.Error())
+							}
 							if !result.Success {
 								return result
 							}
@@ -3994,8 +3977,10 @@ MainLoop:
 
 							var filterStack MShellStack
 							filterStack = []MShellObject{row}
-							callStackItem := CallStackItem{MShellParseItem: t, Name: "filter", CallStackType: CALLSTACKQUOTE}
-							result := state.Evaluate(quote.Tokens, &filterStack, context.Extend(quote.Variables), definitions, callStackItem)
+							result, err := state.EvaluateQuote(*quote, &filterStack, context, definitions)
+							if err != nil {
+								return state.FailWithMessage(err.Error())
+							}
 							if !result.Success {
 								return result
 							}
@@ -4084,8 +4069,10 @@ MainLoop:
 
 							var eachStack MShellStack
 							eachStack = []MShellObject{row}
-							callStackItem := CallStackItem{MShellParseItem: t, Name: "each", CallStackType: CALLSTACKQUOTE}
-							result := state.Evaluate(quote.Tokens, &eachStack, context.Extend(quote.Variables), definitions, callStackItem)
+							result, err := state.EvaluateQuote(*quote, &eachStack, context, definitions)
+							if err != nil {
+								return state.FailWithMessage(err.Error())
+							}
 							if !result.Success {
 								return result
 							}
