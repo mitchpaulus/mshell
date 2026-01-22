@@ -15,5 +15,12 @@
 *.txt text eol=lf
 *.html text eol=lf
 *json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.xml text eol=lf
+*.ts text eol=lf
+code/.vscodeignore text eol=lf
 LICENSE text eol=lf
 numargs text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
