@@ -2,11 +2,14 @@ package main
 
 import (
 	"os"
+	"os/signal"
 	"strings"
 	"sort"
 	"os/exec"
 	"fmt"
+	"syscall"
 	"golang.org/x/term"
+	"golang.org/x/sys/unix"
 )
 
 const nullDevice = "/dev/null"
@@ -182,8 +185,51 @@ func (pbm *PathBinManager) Lookup(binName string) (string, bool) {
 }
 
 func (pbm *PathBinManager) SetupCommand(allArgs []string) (*exec.Cmd) {
-	// No-op for Linux, as we don't need to set the PATH
-	return exec.Command(allArgs[0], allArgs[1:]...)
+	cmd := exec.Command(allArgs[0], allArgs[1:]...)
+	// Put subprocess in its own process group so CTRL-C only affects it, not the shell
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true,
+	}
+	return cmd
+}
+
+// IgnoreSignalsForJobControl ignores SIGTTOU and SIGTTIN which would stop the shell
+// when it manipulates the foreground process group. Returns a function to restore signals.
+func IgnoreSignalsForJobControl() func() {
+	signal.Ignore(syscall.SIGTTOU, syscall.SIGTTIN)
+	return func() {
+		signal.Reset(syscall.SIGTTOU, syscall.SIGTTIN)
+	}
+}
+
+// SetForegroundProcessGroup makes the given process group the foreground process group
+// of the terminal. Returns the previous foreground process group ID so it can be restored.
+// IMPORTANT: Call IgnoreSignalsForJobControl() before this to avoid SIGTTOU stopping the shell.
+func SetForegroundProcessGroup(ttyFd int, pgid int) (int, error) {
+	// Get current foreground process group
+	oldPgid, err := unix.IoctlGetInt(ttyFd, unix.TIOCGPGRP)
+	if err != nil {
+		return 0, err
+	}
+
+	// Set new foreground process group
+	err = unix.IoctlSetPointerInt(ttyFd, unix.TIOCSPGRP, pgid)
+	if err != nil {
+		return oldPgid, err
+	}
+
+	return oldPgid, nil
+}
+
+// RestoreForegroundProcessGroup restores the shell's process group as foreground
+// IMPORTANT: Call IgnoreSignalsForJobControl() before this to avoid SIGTTOU stopping the shell.
+func RestoreForegroundProcessGroup(ttyFd int) error {
+	return unix.IoctlSetPointerInt(ttyFd, unix.TIOCSPGRP, syscall.Getpgrp())
+}
+
+// IsTerminal returns true if the file descriptor is connected to a terminal
+func IsTerminal(fd int) bool {
+	return term.IsTerminal(fd)
 }
 
 func IsPathSeparator(c uint8) bool {
