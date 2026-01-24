@@ -3089,6 +3089,36 @@ MainLoop:
 					dateTimeObj.Time = dateTimeObj.Time.In(cstLocation)
 					dateTimeObj.OriginalString = ""
 					stack.Push(dateTimeObj)
+				} else if t.Lexeme == "cstToUtc" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'toUtc' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					// Convert the datetime to UTC from assumed CST
+					dateTimeObj, ok := obj1.(*MShellDateTime)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert a %s to UTC.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					cstLocation, err := time.LoadLocation("America/Chicago")
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error loading CST location: %s\n", t.Line, t.Column, err.Error()))
+					}
+
+					cstTime := time.Date(
+						dateTimeObj.Time.Year(),
+						dateTimeObj.Time.Month(),
+						dateTimeObj.Time.Day(),
+						dateTimeObj.Time.Hour(),
+						dateTimeObj.Time.Minute(),
+						dateTimeObj.Time.Second(),
+						dateTimeObj.Time.Nanosecond(),
+						cstLocation,
+					)
+					dateTimeObj.Time = cstTime.In(time.UTC)
+					dateTimeObj.OriginalString = ""
+					stack.Push(dateTimeObj)
 				} else if t.Lexeme == "floor" {
 					// Round a number down to the nearest integer
 					obj1, err := stack.Pop()

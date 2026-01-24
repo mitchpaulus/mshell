@@ -380,6 +380,7 @@ Metadata values must be static: strings (single or double quoted), integers, flo
 - `fromOleDate`: Convert an OLE Automation date float to a date `(numeric -- date)`
 - `addDays`: Add days to date `(date numeric -- date)`
 - `utcToCst`: Convert a UTC datetime to US Central Time `(date -- date)`
+- `cstToUtc`: Convert a US Central Time datetime to UTC `(date -- date)`
 
 ## Regular Expression Functions
 
