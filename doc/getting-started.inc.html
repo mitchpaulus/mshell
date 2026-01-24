@@ -73,6 +73,34 @@ An example installer script is available at
 <a href="https://github.com/mitchpaulus/mshell/blob/main/install.sh" target="_blank" rel="noopener noreferrer">install.sh</a>.
 </p>
 
+<h1 id="getting-started-github-actions">GitHub Actions <a class="section-link" href="#getting-started-github-actions" aria-label="Permalink">§</a> <a class="back-to-top" href="#getting-started-top">Back to top</a></h1>
+
+<p>
+To use <code>mshell</code> in GitHub Actions workflows, use the official action:
+</p>
+
+<pre>
+<code><span class="yaml-key">steps:</span>
+  - <span class="yaml-key">uses:</span> mitchpaulus/mshell@v1
+  - <span class="yaml-key">run:</span> msh script.msh</code>
+</pre>
+
+<p>
+To pin a specific version:
+</p>
+
+<pre>
+<code><span class="yaml-key">steps:</span>
+  - <span class="yaml-key">uses:</span> mitchpaulus/mshell@main
+    <span class="yaml-key">with:</span>
+      <span class="yaml-key">version:</span> v0.8.0
+  - <span class="yaml-key">run:</span> msh script.msh</code>
+</pre>
+
+<p>
+The action downloads the pre-built binary for the runner platform and sets up the <code>MSHSTDLIB</code> environment variable automatically.
+</p>
+
 <h1 id="getting-started-editor-support">Editor Support <a class="section-link" href="#getting-started-editor-support" aria-label="Permalink">§</a> <a class="back-to-top" href="#getting-started-top">Back to top</a></h1>
 
 <p>
