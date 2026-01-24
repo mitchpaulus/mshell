@@ -1,0 +1,49 @@
+name: 'Setup mshell'
+description: 'Install the mshell concatenative shell language'
+inputs:
+  version:
+    description: 'Version to install (e.g., v0.1.0). Defaults to latest.'
+    required: false
+    default: 'latest'
+runs:
+  using: 'composite'
+  steps:
+    - name: Determine platform
+      id: platform
+      shell: bash
+      run: |
+        case "${{ runner.os }}-${{ runner.arch }}" in
+          Linux-X64)   echo "asset=linux_amd64" >> $GITHUB_OUTPUT ;;
+          Linux-ARM64) echo "asset=linux_arm64" >> $GITHUB_OUTPUT ;;
+          macOS-X64)   echo "asset=darwin_amd64" >> $GITHUB_OUTPUT ;;
+          macOS-ARM64) echo "asset=darwin_arm64" >> $GITHUB_OUTPUT ;;
+          Windows-X64) echo "asset=windows_amd64" >> $GITHUB_OUTPUT ;;
+          *) echo "Unsupported platform: ${{ runner.os }}-${{ runner.arch }}" && exit 1 ;;
+        esac
+
+    - name: Download and install mshell
+      shell: bash
+      run: |
+        VERSION="${{ inputs.version }}"
+        ASSET="${{ steps.platform.outputs.asset }}"
+
+        if [ "$VERSION" = "latest" ]; then
+          URL="https://github.com/${{ github.repository }}/releases/latest/download/${ASSET}.tar.gz"
+        else
+          URL="https://github.com/${{ github.repository }}/releases/download/${VERSION}/${ASSET}.tar.gz"
+        fi
+
+        mkdir -p "$HOME/.mshell/bin"
+        curl -sL "$URL" | tar -xz -C "$HOME/.mshell/bin"
+        echo "$HOME/.mshell/bin" >> $GITHUB_PATH
+
+    - name: Download standard library
+      shell: bash
+      run: |
+        VERSION="${{ inputs.version }}"
+        if [ "$VERSION" = "latest" ]; then
+          curl -sL "https://raw.githubusercontent.com/${{ github.repository }}/main/lib/std.msh" -o "$HOME/.mshell/std.msh"
+        else
+          curl -sL "https://raw.githubusercontent.com/${{ github.repository }}/${VERSION}/lib/std.msh" -o "$HOME/.mshell/std.msh"
+        fi
+        echo "MSHSTDLIB=$HOME/.mshell/std.msh" >> $GITHUB_ENV
