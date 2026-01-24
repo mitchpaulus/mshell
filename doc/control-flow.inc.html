@@ -179,3 +179,13 @@ The syntax is <code>functionName. ... end</code>, which is equivalent to <code>(
 <code><span class="mshellLINECOMMENT"># For each sublist, filter elements &gt; 5</span>
 <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span> <span class="mshellINTEGER">3</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">4</span> <span class="mshellINTEGER">5</span> <span class="mshellINTEGER">6</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">7</span> <span class="mshellINTEGER">8</span> <span class="mshellINTEGER">9</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPREFIXQUOTE">map.</span> <span class="mshellPREFIXQUOTE">filter.</span> <span class="mshellINTEGER">5</span> <span class="mshellGREATERTHAN">&gt;</span> <span class="mshellEND">end</span> <span class="mshellEND">end</span>   <span class="mshellLINECOMMENT"># Result: [[] [6] [7 8 9]]</span></code>
 </pre>
+
+<p>
+This is also useful to turn boolean operators <code>and</code> and <code>or</code> into
+a more traditional lookup infix format:
+</p>
+
+<pre>
+<code><span class="mshellTRUE">true</span> <span class="mshellPREFIXQUOTE">or.</span> <span class="mshellFALSE">false</span> <span class="mshellEND">end</span> <span class="mshellPREFIXQUOTE">and.</span> <span class="mshellTRUE">true</span> <span class="mshellEND">end</span> <span class="mshellLINECOMMENT"># Like (true | false) &amp; true = true</span>
+<span class="mshellEOF"></span></code>
+</pre>
