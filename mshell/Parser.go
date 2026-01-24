@@ -281,7 +281,8 @@ func (pq *MShellParsePrefixQuote) GetEndToken() Token {
 }
 
 func (pq *MShellParsePrefixQuote) ToJson() string {
-	funcName := pq.StartToken.Lexeme[1:] // Strip leading '.'
+	lexeme := pq.StartToken.Lexeme
+	funcName := lexeme[:len(lexeme)-1] // Strip trailing '.'
 	return fmt.Sprintf("{\"prefix_quote\": {\"function\": \"%s\", \"items\": %s}}", funcName, ToJson(pq.Items))
 }
 

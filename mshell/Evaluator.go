@@ -567,12 +567,13 @@ MainLoop:
 			// Create a quotation from the items and push onto stack
 			q := MShellQuotation{Tokens: prefixQuote.Items, StandardInputFile: "", StandardOutputFile: "", StandardErrorFile: "", Variables: context.Variables, MShellParseQuote: nil}
 			stack.Push(&q)
-			// Create a token for the function name (strip leading '.')
+			// Create a token for the function name (strip trailing '.')
+			lexeme := prefixQuote.StartToken.Lexeme
 			funcToken := Token{
 				Line:   prefixQuote.StartToken.Line,
 				Column: prefixQuote.StartToken.Column,
 				Start:  prefixQuote.StartToken.Start,
-				Lexeme: prefixQuote.StartToken.Lexeme[1:],
+				Lexeme: lexeme[:len(lexeme)-1],
 				Type:   LITERAL,
 			}
 			// Recursively evaluate the function call

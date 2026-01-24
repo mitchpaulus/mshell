@@ -451,6 +451,12 @@ func (l *Lexer) parseLiteralOrKeyword() Token {
 		}
 	}
 
+	// Check for prefix quote syntax: literal ending with '.' (e.g., "filter.", "map.")
+	lexeme := l.input[l.start:l.current]
+	if len(lexeme) > 1 && lexeme[len(lexeme)-1] == '.' {
+		return l.makeToken(PREFIXQUOTE)
+	}
+
 	tokenType := l.literalOrKeywordType()
 	return l.makeToken(tokenType)
 }
@@ -776,31 +782,6 @@ func (l *Lexer) scanTokenAll() Token {
 			return l.makeToken(CARETBINARY)
 		}
 		return l.makeToken(CARET)
-	case '.':
-		// Prefix quote: .functionName
-		// Must be followed by a valid identifier character (not digit, not space, not '/' which indicates a path)
-		nextChar := l.peek()
-		if nextChar == '/' || nextChar == '\\' {
-			// This is a relative path like ./foo, not a prefix quote
-			return l.parseLiteralOrKeyword()
-		}
-		if nextChar == 0 || unicode.IsSpace(nextChar) || unicode.IsDigit(nextChar) || !isAllowedLiteral(nextChar) {
-			fmt.Fprintf(os.Stderr, "%d:%d: A '.' must be followed by an identifier for prefix quote syntax.\n", l.line, l.col)
-			return l.makeToken(ERROR)
-		}
-		// Consume the rest of the identifier (including any embedded periods)
-		for {
-			if l.atEnd() {
-				break
-			}
-			c := l.peek()
-			if isAllowedLiteral(c) {
-				l.advance()
-			} else {
-				break
-			}
-		}
-		return l.makeToken(PREFIXQUOTE)
 	default:
 		// return l.parseLiteralOrNumber()
 		return l.parseLiteralOrKeyword()

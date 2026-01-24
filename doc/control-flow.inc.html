@@ -145,7 +145,7 @@ done</code></pre>
 
 <p>
 Prefix quotes provide an alternative syntax for applying functions to quotations.
-The syntax is <code>.functionName ... end</code>, which is equivalent to <code>(...) functionName</code>.
+The syntax is <code>functionName. ... end</code>, which is equivalent to <code>(...) functionName</code>.
 </p>
 
 <pre>
@@ -153,28 +153,29 @@ The syntax is <code>.functionName ... end</code>, which is equivalent to <code>(
 <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span> <span class="mshellINTEGER">3</span> <span class="mshellINTEGER">4</span> <span class="mshellINTEGER">5</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellINTEGER">3</span> <span class="mshellGREATERTHAN">&gt;</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">filter</span>
 
 <span class="mshellLINECOMMENT"># Prefix quote syntax</span>
-<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span> <span class="mshellINTEGER">3</span> <span class="mshellINTEGER">4</span> <span class="mshellINTEGER">5</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">.filter</span> <span class="mshellINTEGER">3</span> <span class="mshellGREATERTHAN">&gt;</span> <span class="mshellEND">end</span></code>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span> <span class="mshellINTEGER">3</span> <span class="mshellINTEGER">4</span> <span class="mshellINTEGER">5</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPREFIXQUOTE">filter.</span> <span class="mshellINTEGER">3</span> <span class="mshellGREATERTHAN">&gt;</span> <span class="mshellEND">end</span></code>
 </pre>
 
 <p>Prefix quotes work with any function that expects a quotation, including <code>map</code>, <code>filter</code>, <code>each</code>, and user-defined functions:</p>
 
 <pre>
 <code><span class="mshellLINECOMMENT"># Double each element</span>
-<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span> <span class="mshellINTEGER">3</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">.map</span> <span class="mshellINTEGER">2</span> <span class="mshellASTERISK">*</span> <span class="mshellEND">end</span>   <span class="mshellLINECOMMENT"># Result: [2 4 6]</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span> <span class="mshellINTEGER">3</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPREFIXQUOTE">map.</span> <span class="mshellINTEGER">2</span> <span class="mshellASTERISK">*</span> <span class="mshellEND">end</span>   <span class="mshellLINECOMMENT"># Result: [2 4 6]</span>
 
 <span class="mshellLINECOMMENT"># Print each item</span>
-<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSTRING">"a"</span> <span class="mshellSTRING">"b"</span> <span class="mshellSTRING">"c"</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">.each</span> <span class="mshellLITERAL">wl</span> <span class="mshellEND">end</span></code>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSTRING">"a"</span> <span class="mshellSTRING">"b"</span> <span class="mshellSTRING">"c"</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPREFIXQUOTE">each.</span> <span class="mshellLITERAL">wl</span> <span class="mshellEND">end</span></code>
 </pre>
 
-<p>Prefix quotes can be nested:</p>
+<p>Prefix quotes can be chained:</p>
 
 <pre>
 <code><span class="mshellLINECOMMENT"># Filter positives, then double them</span>
-<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellMINUS">-</span><span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span> <span class="mshellMINUS">-</span><span class="mshellINTEGER">3</span> <span class="mshellINTEGER">4</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">.filter</span> <span class="mshellINTEGER">0</span> <span class="mshellGREATERTHAN">&gt;</span> <span class="mshellEND">end</span> <span class="mshellLITERAL">.map</span> <span class="mshellINTEGER">2</span> <span class="mshellASTERISK">*</span> <span class="mshellEND">end</span>   <span class="mshellLINECOMMENT"># Result: [4 8]</span></code>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellMINUS">-</span><span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span> <span class="mshellMINUS">-</span><span class="mshellINTEGER">3</span> <span class="mshellINTEGER">4</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPREFIXQUOTE">filter.</span> <span class="mshellINTEGER">0</span> <span class="mshellGREATERTHAN">&gt;</span> <span class="mshellEND">end</span> <span class="mshellPREFIXQUOTE">map.</span> <span class="mshellINTEGER">2</span> <span class="mshellASTERISK">*</span> <span class="mshellEND">end</span>   <span class="mshellLINECOMMENT"># Result: [4 8]</span></code>
 </pre>
 
-<p>Function names can include periods for namespaced functions:</p>
+<p>Prefix quotes can also be nested (one inside another):</p>
 
 <pre>
-<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span> <span class="mshellINTEGER">3</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">.my.custom.map</span> <span class="mshellINTEGER">2</span> <span class="mshellASTERISK">*</span> <span class="mshellEND">end</span></code>
+<code><span class="mshellLINECOMMENT"># For each sublist, filter elements &gt; 5</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span> <span class="mshellINTEGER">3</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">4</span> <span class="mshellINTEGER">5</span> <span class="mshellINTEGER">6</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">7</span> <span class="mshellINTEGER">8</span> <span class="mshellINTEGER">9</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPREFIXQUOTE">map.</span> <span class="mshellPREFIXQUOTE">filter.</span> <span class="mshellINTEGER">5</span> <span class="mshellGREATERTHAN">&gt;</span> <span class="mshellEND">end</span> <span class="mshellEND">end</span>   <span class="mshellLINECOMMENT"># Result: [[] [6] [7 8 9]]</span></code>
 </pre>

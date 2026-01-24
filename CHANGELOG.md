@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Prefix quote syntax (`.functionName ... end`) as an alternative to `(...) functionName`
+- Prefix quote syntax (`functionName. ... end`) as an alternative to `(...) functionName`
 - `<>` operator for in-place file modification. Reads file to stdin, writes stdout back on success.
   Example: `` [sort -u] `file.txt` <> ! ``
 - Functions
