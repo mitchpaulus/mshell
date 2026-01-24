@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Prefix quote syntax (`.functionName ... end`) as an alternative to `(...) functionName`
 - `<>` operator for in-place file modification. Reads file to stdin, writes stdout back on success.
   Example: `` [sort -u] `file.txt` <> ! ``
 - Functions
@@ -34,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bin map file and `msh bin` CLI commands for binary overrides
 - `msh completions` subcommand for bash, fish, nushell, and elvish
 - CLI syntax highlighting for environment variables
+- GitHub Action for installing mshell in CI workflows
 - Append stderr redirection with `2>>`
 - Combined stdout/stderr redirection with `&>` (truncate) and `&>>` (append)
 - Same-path detection when using `>` and `2>` with identical paths (shares single file descriptor)
@@ -49,6 +51,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Breaking change: `@name` now only reads mshell variables and no longer falls back to environment variables; use `$NAME` for environment access.
 - `w`/`we` now accept binary input and write raw bytes to stdout/stderr.
+- Renamed `.s` to `stack`, `.def` to `defs`, `.env` to `env`
+- Removed `.b` (use `binPaths` instead)
 
 ## 0.8.0 - 2025-12-29
 

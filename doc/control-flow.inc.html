@@ -140,3 +140,41 @@ done</code></pre>
 2
 4
 5</code></pre>
+
+<h1 id="control-flow-prefix-quote">Prefix Quote Syntax <a class="section-link" href="#control-flow-prefix-quote" aria-label="Permalink">§</a> <a class="back-to-top" href="#control-flow-top">Back to top</a></h1>
+
+<p>
+Prefix quotes provide an alternative syntax for applying functions to quotations.
+The syntax is <code>.functionName ... end</code>, which is equivalent to <code>(...) functionName</code>.
+</p>
+
+<pre>
+<code><span class="mshellLINECOMMENT"># Traditional postfix syntax</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span> <span class="mshellINTEGER">3</span> <span class="mshellINTEGER">4</span> <span class="mshellINTEGER">5</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellINTEGER">3</span> <span class="mshellGREATERTHAN">&gt;</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">filter</span>
+
+<span class="mshellLINECOMMENT"># Prefix quote syntax</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span> <span class="mshellINTEGER">3</span> <span class="mshellINTEGER">4</span> <span class="mshellINTEGER">5</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">.filter</span> <span class="mshellINTEGER">3</span> <span class="mshellGREATERTHAN">&gt;</span> <span class="mshellEND">end</span></code>
+</pre>
+
+<p>Prefix quotes work with any function that expects a quotation, including <code>map</code>, <code>filter</code>, <code>each</code>, and user-defined functions:</p>
+
+<pre>
+<code><span class="mshellLINECOMMENT"># Double each element</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span> <span class="mshellINTEGER">3</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">.map</span> <span class="mshellINTEGER">2</span> <span class="mshellASTERISK">*</span> <span class="mshellEND">end</span>   <span class="mshellLINECOMMENT"># Result: [2 4 6]</span>
+
+<span class="mshellLINECOMMENT"># Print each item</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSTRING">"a"</span> <span class="mshellSTRING">"b"</span> <span class="mshellSTRING">"c"</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">.each</span> <span class="mshellLITERAL">wl</span> <span class="mshellEND">end</span></code>
+</pre>
+
+<p>Prefix quotes can be nested:</p>
+
+<pre>
+<code><span class="mshellLINECOMMENT"># Filter positives, then double them</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellMINUS">-</span><span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span> <span class="mshellMINUS">-</span><span class="mshellINTEGER">3</span> <span class="mshellINTEGER">4</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">.filter</span> <span class="mshellINTEGER">0</span> <span class="mshellGREATERTHAN">&gt;</span> <span class="mshellEND">end</span> <span class="mshellLITERAL">.map</span> <span class="mshellINTEGER">2</span> <span class="mshellASTERISK">*</span> <span class="mshellEND">end</span>   <span class="mshellLINECOMMENT"># Result: [4 8]</span></code>
+</pre>
+
+<p>Function names can include periods for namespaced functions:</p>
+
+<pre>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span> <span class="mshellINTEGER">3</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">.my.custom.map</span> <span class="mshellINTEGER">2</span> <span class="mshellASTERISK">*</span> <span class="mshellEND">end</span></code>
+</pre>
