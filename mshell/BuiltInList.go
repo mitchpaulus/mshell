@@ -3,11 +3,10 @@ package main
 // BuiltInList is a lookup set of internal built-in command literals.
 var BuiltInList = map[string]struct{}{
 	"-rot": {},
-	".b": {},
-	".def": {},
-	".env": {},
-	".s": {},
 	"/": {},
+	"defs": {},
+	"env": {},
+	"stack": {},
 	"absPath": {},
 	"addDays": {},
 	"append": {},

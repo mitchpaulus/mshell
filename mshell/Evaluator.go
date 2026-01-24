@@ -562,6 +562,26 @@ MainLoop:
 			parseQuote := t
 			q := MShellQuotation{Tokens: parseQuote.Items, StandardInputFile: "", StandardOutputFile: "", StandardErrorFile: "", Variables: context.Variables, MShellParseQuote: parseQuote}
 			stack.Push(&q)
+		case *MShellParsePrefixQuote:
+			prefixQuote := t
+			// Create a quotation from the items and push onto stack
+			q := MShellQuotation{Tokens: prefixQuote.Items, StandardInputFile: "", StandardOutputFile: "", StandardErrorFile: "", Variables: context.Variables, MShellParseQuote: nil}
+			stack.Push(&q)
+			// Create a token for the function name (strip trailing '.')
+			lexeme := prefixQuote.StartToken.Lexeme
+			funcToken := Token{
+				Line:   prefixQuote.StartToken.Line,
+				Column: prefixQuote.StartToken.Column,
+				Start:  prefixQuote.StartToken.Start,
+				Lexeme: lexeme[:len(lexeme)-1],
+				Type:   LITERAL,
+			}
+			// Recursively evaluate the function call
+			callStackItem := CallStackItem{MShellParseItem: prefixQuote, Name: funcToken.Lexeme, CallStackType: CALLSTACKDEF}
+			result := state.Evaluate([]MShellParseItem{funcToken}, stack, context, definitions, callStackItem)
+			if result.ShouldPassResultUpStack() {
+				return result
+			}
 		case *MShellParseIfBlock:
 			ifBlock := t
 			startToken := ifBlock.GetStartToken()
@@ -827,27 +847,19 @@ MainLoop:
 					}
 				}
 
-				if t.Lexeme == ".s" {
+				if t.Lexeme == "stack" {
 					// Print current stack
 					fmt.Fprint(os.Stderr, stack.String())
-				} else if t.Lexeme == ".b" {
-					// Print known binaries
-					debugList := context.Pbm.DebugList()
-					for _, item := range debugList.Items {
-						fmt.Fprintf(os.Stderr, "%s\t%s\n", item.(*MShellList).Items[0].(MShellString).Content, item.(*MShellList).Items[1].(MShellString).Content)
-					}
-
-					// fmt.Fprint(os.Stderr, debugStr)
 				} else if t.Lexeme == "binPaths" {
 					stack.Push(context.Pbm.DebugList())
 
-				} else if t.Lexeme == ".def" {
+				} else if t.Lexeme == "defs" {
 					// Print out available definitions
 					fmt.Fprint(os.Stderr, "Available definitions:\n")
 					for _, definition := range definitions {
 						fmt.Fprintf(os.Stderr, "%s\n", definition.Name)
 					}
-				} else if t.Lexeme == ".env" {
+				} else if t.Lexeme == "env" {
 					// Print a list of all environment variables, sorted by key
 					envVars := os.Environ()
 					slices.Sort(envVars)
@@ -4216,6 +4228,89 @@ MainLoop:
 					}
 				} else if t.Lexeme == "nullDevice" {
 					stack.Push(MShellPath{Path: nullDevice})
+				} else if t.Lexeme == "and" || t.Lexeme == "or" {
+					// Token Type
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
+					}
+
+					obj2, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on a stack with only one item.\n", t.Line, t.Column, t.Lexeme))
+					}
+
+					switch obj1.(type) {
+					case MShellBool:
+						switch obj2.(type) {
+						case MShellBool:
+							if t.Lexeme == "and" {
+								stack.Push(MShellBool{obj2.(MShellBool).Value && obj1.(MShellBool).Value})
+							} else {
+								stack.Push(MShellBool{obj2.(MShellBool).Value || obj1.(MShellBool).Value})
+							}
+						default:
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s and %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
+						}
+					case *MShellQuotation:
+						if t.Lexeme == "and" {
+							if obj2.(MShellBool).Value {
+								result, err := state.EvaluateQuote(*obj1.(*MShellQuotation), stack, context, definitions)
+								if err != nil {
+									return state.FailWithMessage(err.Error())
+								}
+
+								// Pop the top off the stack
+								secondObj, err := stack.Pop()
+								if err != nil {
+									return state.FailWithMessage(fmt.Sprintf("%d:%d: After executing the quotation in %s, the stack was empty.\n", t.Line, t.Column, t.Lexeme))
+								}
+
+								if result.ShouldPassResultUpStack() {
+									return result
+								}
+
+								seconObjBool, ok := secondObj.(MShellBool)
+								if !ok {
+									return state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a boolean after executing the quotation in %s, received a %s.\n", t.Line, t.Column, t.Lexeme, secondObj.TypeName()))
+								}
+
+								stack.Push(MShellBool{seconObjBool.Value})
+							} else {
+								stack.Push(MShellBool{false})
+							}
+						} else {
+							if obj2.(MShellBool).Value {
+								stack.Push(MShellBool{true})
+							} else {
+
+								result, err := state.EvaluateQuote(*obj1.(*MShellQuotation), stack, context, definitions)
+								if err != nil {
+									return state.FailWithMessage(err.Error())
+								}
+
+								// Pop the top off the stack
+								secondObj, err := stack.Pop()
+								if err != nil {
+									return state.FailWithMessage(fmt.Sprintf("%d:%d: After executing the quotation in %s, the stack was empty.\n", t.Line, t.Column, t.Lexeme))
+								}
+
+								if result.ShouldPassResultUpStack() {
+									return result
+								}
+
+								seconObjBool, ok := secondObj.(MShellBool)
+								if !ok {
+									return state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a boolean after executing the quotation in %s, received a %s.\n", t.Line, t.Column, t.Lexeme, secondObj.TypeName()))
+								}
+
+								stack.Push(MShellBool{seconObjBool.Value})
+							}
+						}
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s and %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
+					}
+
 				} else if t.Lexeme == "return" {
 					// Return from the current function
 					return EvalResult{
@@ -4225,7 +4320,6 @@ MainLoop:
 						ExitCode:   0,
 						ExitCalled: false,
 					}
-
 				} else { // last new function
 					// If we aren't in a list context, throw an error.
 					// Nearly always this is unintended.
@@ -4636,87 +4730,6 @@ MainLoop:
 					}
 				default:
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '-' to a %s and %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
-				}
-			} else if t.Type == AND || t.Type == OR { // Token Type
-				obj1, err := stack.Pop()
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
-				}
-
-				obj2, err := stack.Pop()
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on a stack with only one item.\n", t.Line, t.Column, t.Lexeme))
-				}
-
-				switch obj1.(type) {
-				case MShellBool:
-					switch obj2.(type) {
-					case MShellBool:
-						if t.Type == AND {
-							stack.Push(MShellBool{obj2.(MShellBool).Value && obj1.(MShellBool).Value})
-						} else {
-							stack.Push(MShellBool{obj2.(MShellBool).Value || obj1.(MShellBool).Value})
-						}
-					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s and %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
-					}
-				case *MShellQuotation:
-					if t.Type == AND {
-						if obj2.(MShellBool).Value {
-							result, err := state.EvaluateQuote(*obj1.(*MShellQuotation), stack, context, definitions)
-							if err != nil {
-								return state.FailWithMessage(err.Error())
-							}
-
-							// Pop the top off the stack
-							secondObj, err := stack.Pop()
-							if err != nil {
-								return state.FailWithMessage(fmt.Sprintf("%d:%d: After executing the quotation in %s, the stack was empty.\n", t.Line, t.Column, t.Lexeme))
-							}
-
-							if result.ShouldPassResultUpStack() {
-								return result
-							}
-
-							seconObjBool, ok := secondObj.(MShellBool)
-							if !ok {
-								return state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a boolean after executing the quotation in %s, received a %s.\n", t.Line, t.Column, t.Lexeme, secondObj.TypeName()))
-							}
-
-							stack.Push(MShellBool{seconObjBool.Value})
-						} else {
-							stack.Push(MShellBool{false})
-						}
-					} else {
-						if obj2.(MShellBool).Value {
-							stack.Push(MShellBool{true})
-						} else {
-
-							result, err := state.EvaluateQuote(*obj1.(*MShellQuotation), stack, context, definitions)
-							if err != nil {
-								return state.FailWithMessage(err.Error())
-							}
-
-							// Pop the top off the stack
-							secondObj, err := stack.Pop()
-							if err != nil {
-								return state.FailWithMessage(fmt.Sprintf("%d:%d: After executing the quotation in %s, the stack was empty.\n", t.Line, t.Column, t.Lexeme))
-							}
-
-							if result.ShouldPassResultUpStack() {
-								return result
-							}
-
-							seconObjBool, ok := secondObj.(MShellBool)
-							if !ok {
-								return state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a boolean after executing the quotation in %s, received a %s.\n", t.Line, t.Column, t.Lexeme, secondObj.TypeName()))
-							}
-
-							stack.Push(MShellBool{seconObjBool.Value})
-						}
-					}
-				default:
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s and %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
 				}
 			} else if t.Type == NOT { // Token Type
 				obj, err := stack.Pop()
