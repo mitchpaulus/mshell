@@ -21,6 +21,7 @@ var BuiltInList = map[string]struct{}{
 	"ceil": {},
 	"countSubStr": {},
 	"cp": {},
+	"cstToUtc": {},
 	"date": {},
 	"dateFmt": {},
 	"day": {},

@@ -1,2 +1,17 @@
 2025-05-29T16:00 utcToCst str wl
 2025-01-02T16:00 utcToCst str wl
+2025-05-29T11:00 cstToUtc str wl
+2025-01-02T10:00 cstToUtc str wl
+
+# DST problems
+"Spring Forward" wl
+$"1 AM: {2025-03-09T01:00 cstToUtc isoDateTimeFmt}" wl
+$"2 AM: {2025-03-09T02:00 cstToUtc isoDateTimeFmt}" wl
+$"2:30 AM (doesn't actually exist): {2025-03-09T02:30 cstToUtc isoDateTimeFmt}" wl
+$"3 AM: {2025-03-09T03:00 cstToUtc isoDateTimeFmt}" wl
+
+"Fall Back" wl
+$"1 AM: {2025-11-02T01:00 cstToUtc isoDateTimeFmt}" wl
+$"2 AM: {2025-11-02T02:00 cstToUtc isoDateTimeFmt}" wl
+$"2:30 AM: {2025-11-02T02:30 cstToUtc isoDateTimeFmt}" wl
+$"3 AM: {2025-11-02T03:00 cstToUtc isoDateTimeFmt}" wl
