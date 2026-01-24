@@ -749,8 +749,6 @@ MainLoop:
 				TypeCheckNonGenericAndPush(typeDefAdd, stack, &typeCheckResult, t)
 			} else if t.Type == MINUS { // Token Type
 				TypeCheckNonGenericAndPush(typeDefMinus, stack, &typeCheckResult, t)
-			} else if t.Type == AND || t.Type == OR { // Token Type
-				TypeCheckNonGenericAndPush(typeDefAndOr, stack, &typeCheckResult, t)
 			} else if t.Type == NOT { // Token Type
 				TypeCheckNonGenericAndPush(typeDefNot, stack, &typeCheckResult, t)
 			} else if t.Type == GREATERTHANOREQUAL || t.Type == LESSTHANOREQUAL { // Token Type

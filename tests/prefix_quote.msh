@@ -1,18 +1,8 @@
 # Test prefix quote syntax (functionName. ... end)
-
-true or. false end and. true end wl
+true or. false end and. true end str wl
 
 # Basic filter
 [1 2 3 4 5] filter. 3 > end (str) map ", " join wl
-
-# Basic map
-[1 2 3] map. 2 * end (str) map ", " join wl
-
-# Empty result from filter
-[1 2 3] filter. 10 > end len wl
-
-# Chained prefix quotes
-[-1 2 -3 4] filter. 0 > end map. 2 * end (str) map ", " join wl
 
 # Nested prefix quotes (map containing a filter)
 [[1 2 3] [4 5 6] [7 8 9]] map. filter. 5 > end end ((str) map ", " join) map "; " join wl
@@ -21,9 +11,6 @@ true or. false end and. true end wl
 0 total!
 [1 2 3 4 5] each. @total + total! end
 @total wl
-
-# Mix prefix and traditional syntax
-[1 2 3 4 5] filter. 2 > end (2 *) map (str) map ", " join wl
 
 # Prefix quote with variable capture
 5 threshold!

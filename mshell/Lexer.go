@@ -40,8 +40,6 @@ const (
 	BREAK
 	CONTINUE
 	NOT
-	AND
-	OR
 	GREATERTHANOREQUAL
 	LESSTHANOREQUAL
 	LESSTHAN
@@ -155,10 +153,6 @@ func (t TokenType) String() string {
 		return "CONTINUE"
 	case NOT:
 		return "NOT"
-	case AND:
-		return "AND"
-	case OR:
-		return "OR"
 	case GREATERTHANOREQUAL:
 		return "GREATERTHANOREQUAL"
 	case LESSTHANOREQUAL:
@@ -469,8 +463,6 @@ func (l *Lexer) literalOrKeywordType() TokenType {
 		}
 	case '+':
 		return l.checkKeyword(1, "", PLUS)
-	case 'a':
-		return l.checkKeyword(1, "nd", AND)
 	case 'b':
 		if l.curLen() > 1 {
 			c := l.input[l.start+1]
@@ -537,8 +529,6 @@ func (l *Lexer) literalOrKeywordType() TokenType {
 		switch c {
 		case 'c':
 			return l.checkKeyword(2, "", STDOUTCOMPLETE)
-		case 'r':
-			return l.checkKeyword(2, "", OR)
 		case 's':
 			return l.checkKeyword(2, "", STDOUTSTRIPPED)
 		}
