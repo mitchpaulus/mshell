@@ -35,6 +35,19 @@ runs:
 
         mkdir -p "$HOME/.mshell/bin"
         curl -sL "$URL" | tar -xz -C "$HOME/.mshell/bin"
+
+        # Create symlinks so both msh and mshell work
+        cd "$HOME/.mshell/bin"
+        if [ -f mshell ]; then
+          ln -sf mshell msh
+        elif [ -f msh ]; then
+          ln -sf msh mshell
+        elif [ -f mshell.exe ]; then
+          cp mshell.exe msh.exe
+        elif [ -f msh.exe ]; then
+          cp msh.exe mshell.exe
+        fi
+
         echo "$HOME/.mshell/bin" >> $GITHUB_PATH
 
     - name: Download standard library
