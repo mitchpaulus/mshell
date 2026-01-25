@@ -265,6 +265,39 @@ func (quote *MShellParseQuote) DebugString() string {
 	return builder.String()
 }
 
+// MShellParsePrefixQuote represents a prefix quote: .functionName ... end
+type MShellParsePrefixQuote struct {
+	Items      []MShellParseItem // Items between function and 'end'
+	StartToken Token             // The PREFIXQUOTE token (.filter)
+	EndToken   Token             // The 'end' token
+}
+
+func (pq *MShellParsePrefixQuote) GetStartToken() Token {
+	return pq.StartToken
+}
+
+func (pq *MShellParsePrefixQuote) GetEndToken() Token {
+	return pq.EndToken
+}
+
+func (pq *MShellParsePrefixQuote) ToJson() string {
+	lexeme := pq.StartToken.Lexeme
+	funcName := lexeme[:len(lexeme)-1] // Strip trailing '.'
+	return fmt.Sprintf("{\"prefix_quote\": {\"function\": \"%s\", \"items\": %s}}", funcName, ToJson(pq.Items))
+}
+
+func (pq *MShellParsePrefixQuote) DebugString() string {
+	builder := strings.Builder{}
+	builder.WriteString(pq.StartToken.Lexeme)
+	builder.WriteString(" ")
+	for _, item := range pq.Items {
+		builder.WriteString(item.DebugString())
+		builder.WriteString(" ")
+	}
+	builder.WriteString("end")
+	return builder.String()
+}
+
 // MShellParseElseIf represents an else-if branch with its condition and body
 type MShellParseElseIf struct {
 	Condition []MShellParseItem
@@ -486,6 +519,12 @@ func (parser *MShellParser) ParseFile() (*MShellFile, error) {
 				return file, err
 			}
 			file.Items = append(file.Items, ifBlock)
+		case PREFIXQUOTE:
+			pq, err := parser.ParsePrefixQuote()
+			if err != nil {
+				return file, err
+			}
+			file.Items = append(file.Items, pq)
 	case DEF:
 		_ = parser.Match(parser.curr, DEF)
 		if parser.curr.Type != LITERAL {
@@ -1866,6 +1905,8 @@ func (parser *MShellParser) ParseItem() (MShellParseItem, error) {
 		return parser.ParseGetter()
 	case IF:
 		return parser.ParseIfBlock()
+	case PREFIXQUOTE:
+		return parser.ParsePrefixQuote()
 	default:
 		return parser.ParseSimple(), nil
 	}
@@ -2036,6 +2077,34 @@ func (grid *MShellParseGrid) DebugString() string {
 	sb.WriteString(fmt.Sprintf("%d rows", len(grid.Rows)))
 	sb.WriteString(" }}")
 	return sb.String()
+}
+
+func (parser *MShellParser) ParsePrefixQuote() (*MShellParsePrefixQuote, error) {
+	pq := &MShellParsePrefixQuote{StartToken: parser.curr}
+	parser.NextToken() // consume the PREFIXQUOTE token
+
+	// Parse items until we see END
+	for {
+		if parser.curr.Type == END {
+			break
+		} else if parser.curr.Type == EOF {
+			return pq, fmt.Errorf("Did not find 'end' for prefix quote %s beginning at line %d, column %d.", pq.StartToken.Lexeme, pq.StartToken.Line, pq.StartToken.Column)
+		} else {
+			item, err := parser.ParseItem()
+			if err != nil {
+				return pq, err
+			}
+			pq.Items = append(pq.Items, item)
+		}
+	}
+
+	pq.EndToken = parser.curr
+	err := parser.Match(parser.curr, END)
+	if err != nil {
+		return pq, err
+	}
+
+	return pq, nil
 }
 
 func (parser *MShellParser) ParseIfBlock() (*MShellParseIfBlock, error) {

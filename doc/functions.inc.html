@@ -26,10 +26,9 @@
         <tr> <th>Name</th> <th>Description</th> <th>Signature</th> </tr>
     </thead>
     <tbody>
-        <tr> <td><code>.s</code></td> <td>Print the stack at the current location.</td> <td><code>(--)</code></td> </tr>
-        <tr> <td><code>.b</code></td> <td>Print paths to all known binaries.</td> <td><code>(--)</code></td> </tr>
-        <tr> <td><code>.def</code></td> <td>Print available definitions at the current location.</td> <td><code>(--)</code></td> </tr>
-        <tr> <td><code>.env</code></td> <td>Write all environment variables to stderr in sorted order.</td> <td><code>(--)</code></td> </tr>
+        <tr> <td><code>stack</code></td> <td>Print the stack at the current location.</td> <td><code>(--)</code></td> </tr>
+        <tr> <td><code>defs</code></td> <td>Print available definitions at the current location.</td> <td><code>(--)</code></td> </tr>
+        <tr> <td><code>env</code></td> <td>Write all environment variables to stderr in sorted order.</td> <td><code>(--)</code></td> </tr>
         <tr> <td><code>dup</code></td> <td>Duplicate the top stack item.</td> <td><code>(a -- a a)</code></td> </tr>
         <tr> <td><code>swap</code></td> <td>Swap the top two stack items.</td> <td><code>(a b -- b a)</code></td> </tr>
         <tr> <td><code>drop</code></td> <td>Drop the top stack item.</td> <td><code>(a -- )</code></td> </tr>
@@ -38,9 +37,9 @@
         <tr> <td><code>rot</code></td> <td>Rotate the top three items.</td> <td><code>(a b c -- b c a)</code></td> </tr>
         <tr> <td><code>-rot</code></td> <td>Rotate the top three items in the opposite direction.</td> <td><code>(a b c -- c a b)</code></td> </tr>
         <tr> <td><code>nip</code></td> <td>Remove the second item.</td> <td><code>(a b -- b)</code></td> </tr>
-        <tr> <td><code>w</code></td> <td>Write a string to stdout.</td> <td><code>(<span class="sig-type sig-type-str">str</span> -- )</code></td> </tr>
+        <tr> <td><code>w</code></td> <td>Write a string or binary to stdout.</td> <td><code>(<span class="sig-type sig-type-str">str</span>|<span class="sig-type sig-type-binary">binary</span> -- )</code></td> </tr>
         <tr> <td><code>wl</code></td> <td>Write a string to stdout and add a newline.</td> <td><code>(<span class="sig-type sig-type-str">str</span> -- )</code></td> </tr>
-        <tr> <td><code>we</code></td> <td>Write a string to stderr.</td> <td><code>(<span class="sig-type sig-type-str">str</span> -- )</code></td> </tr>
+        <tr> <td><code>we</code></td> <td>Write a string or binary to stderr.</td> <td><code>(<span class="sig-type sig-type-str">str</span>|<span class="sig-type sig-type-binary">binary</span> -- )</code></td> </tr>
         <tr> <td><code>wle</code></td> <td>Write a string to stderr and add a newline.</td> <td><code>(<span class="sig-type sig-type-str">str</span> -- )</code></td> </tr>
         <tr> <td><code>len</code></td> <td>Return the length of a string or list.</td> <td><code>([a] -- <span class="sig-type sig-type-int">int</span>)</code>, <code>(<span class="sig-type sig-type-str">str</span> -- <span class="sig-type sig-type-int">int</span>)</code></td> </tr>
         <tr> <td><code>args</code></td> <td>Push the argument list (without argv[0]) onto the stack.</td> <td><code>(-- [<span class="sig-type sig-type-str">str</span>])</code></td> </tr>
@@ -219,6 +218,7 @@
         <tr> <td><code>reverse</code></td> <td>Reverse a list.</td> <td><code>(<span class="sig-type sig-type-list">list</span> -- <span class="sig-type sig-type-list">list</span>)</code></td> </tr>
         <tr> <td><code>sum</code></td> <td>Sum numeric values in a list.</td> <td><code>([<span class="sig-type sig-type-numeric">numeric</span>] -- <span class="sig-type sig-type-numeric">numeric</span>)</code></td> </tr>
         <tr> <td><code>filter</code></td> <td>Filter a list by a predicate quotation.</td> <td><code>([a] (a -- <span class="sig-type sig-type-bool">bool</span>) -- [a])</code></td> </tr>
+        <tr> <td><code>linearSearch</code></td> <td>Return the first element that satisfies a predicate quotation, or <code>none</code> when missing.</td> <td><code>([a] (a -- <span class="sig-type sig-type-bool">bool</span>) -- <span class="sig-type sig-type-maybe">Maybe</span>[a])</code></td> </tr>
         <tr> <td><code>any</code></td> <td>Return true if any element satisfies the predicate.</td> <td><code>([a] (a -- <span class="sig-type sig-type-bool">bool</span>) -- <span class="sig-type sig-type-bool">bool</span>)</code></td> </tr>
         <tr> <td><code>all</code></td> <td>Return true if all elements satisfy the predicate.</td> <td><code>([a] (a -- <span class="sig-type sig-type-bool">bool</span>) -- <span class="sig-type sig-type-bool">bool</span>)</code></td> </tr>
         <tr> <td><code>skip</code></td> <td>Skip the first <code>n</code> elements. If <code>n</code> is negative, this will cause exception. If <code>n</code> is greater than length of the list, an empty list is returned.</td> <td><code>(<span class="sig-type sig-type-list">list</span> <span class="sig-type sig-type-int">int</span> -- <span class="sig-type sig-type-list">list</span>)</code></td> </tr>
@@ -249,6 +249,7 @@
         <tr> <td><code>sort</code></td> <td>Sort a list by string conversion using <code>sort.Strings</code>.</td> <td><code>(<span class="sig-type sig-type-list">list</span> -- <span class="sig-type sig-type-list">list</span>)</code></td> </tr>
         <tr> <td><code>sortV</code></td> <td>Version-sort a list (like <code>sort -V</code>).</td> <td><code>(<span class="sig-type sig-type-list">list</span> -- <span class="sig-type sig-type-list">list</span>)</code></td> </tr>
         <tr> <td><code>sortByCmp</code></td> <td>Sort a list using a comparison quotation that returns -1, 0, or 1.</td> <td><code>([a] (a a -- <span class="sig-type sig-type-int">int</span>) -- [a])</code></td> </tr>
+        <tr> <td><code>strCmp</code></td> <td>Compare two strings lexicographically using <a href="https://pkg.go.dev/strings#Compare" target="_blank" rel="noopener noreferrer"><code>strings.Compare</code></a>; returns -1, 0, or 1. Useful with <code>sortByCmp</code>.</td> <td><code>(<span class="sig-type sig-type-str">str</span> <span class="sig-type sig-type-str">str</span> -- <span class="sig-type sig-type-int">int</span>)</code></td> </tr>
         <tr> <td><code>versionSortCmp</code></td> <td>Comparison function for version-aware sorting (also known as natural sort). Useful with <code>sortByCmp</code>.</td> <td><code>(<span class="sig-type sig-type-str">str</span> <span class="sig-type sig-type-str">str</span> -- <span class="sig-type sig-type-int">int</span>)</code></td> </tr>
         <tr> <td><code>floatCmp</code></td> <td>Compare two floats and return -1, 0, or 1; useful with <code>sortByCmp</code>.</td> <td><code>(<span class="sig-type sig-type-float">float</span> <span class="sig-type sig-type-float">float</span> -- <span class="sig-type sig-type-int">int</span>)</code></td> </tr>
     </tbody>
@@ -301,6 +302,7 @@
         <tr> <td><code>fromOleDate</code></td> <td>Create a date from an OLE Automation date float. This is equivalent to Excel dates (<a href="https://learn.microsoft.com/en-us/troubleshoot/microsoft-365-apps/excel/wrongly-assumes-1900-is-leap-year">Less some early time bugs</a>).</td> <td><code>(<span class="sig-type sig-type-numeric">numeric</span> -- <span class="sig-type sig-type-date">date</span>)</code></td> </tr>
         <tr> <td><code>addDays</code></td> <td>Add days to a date.</td> <td><code>(<span class="sig-type sig-type-date">date</span> <span class="sig-type sig-type-numeric">numeric</span> -- <span class="sig-type sig-type-date">date</span>)</code></td> </tr>
         <tr> <td><code>utcToCst</code></td> <td>Convert a UTC datetime to US Central Time.</td> <td><code>(<span class="sig-type sig-type-date">date</span> -- <span class="sig-type sig-type-date">date</span>)</code></td> </tr>
+        <tr> <td><code>cstToUtc</code></td> <td>Convert a US Central Time datetime to UTC.</td> <td><code>(<span class="sig-type sig-type-date">date</span> -- <span class="sig-type sig-type-date">date</span>)</code></td> </tr>
     </tbody>
 </table>
 

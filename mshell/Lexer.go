@@ -40,8 +40,6 @@ const (
 	BREAK
 	CONTINUE
 	NOT
-	AND
-	OR
 	GREATERTHANOREQUAL
 	LESSTHANOREQUAL
 	LESSTHAN
@@ -100,6 +98,7 @@ const (
 	INPLACEREDIRECT          // <>
 	GRID_OPEN                // [|
 	GRID_CLOSE               // |]
+	PREFIXQUOTE              // .functionName
 )
 
 func (t TokenType) String() string {
@@ -156,10 +155,6 @@ func (t TokenType) String() string {
 		return "CONTINUE"
 	case NOT:
 		return "NOT"
-	case AND:
-		return "AND"
-	case OR:
-		return "OR"
 	case GREATERTHANOREQUAL:
 		return "GREATERTHANOREQUAL"
 	case LESSTHANOREQUAL:
@@ -272,6 +267,8 @@ func (t TokenType) String() string {
 		return "GRID_OPEN"
 	case GRID_CLOSE:
 		return "GRID_CLOSE"
+	case PREFIXQUOTE:
+		return "PREFIXQUOTE"
 	default:
 		return "UNKNOWN"
 	}
@@ -454,6 +451,12 @@ func (l *Lexer) parseLiteralOrKeyword() Token {
 		}
 	}
 
+	// Check for prefix quote syntax: literal ending with '.' (e.g., "filter.", "map.")
+	lexeme := l.input[l.start:l.current]
+	if len(lexeme) > 1 && lexeme[len(lexeme)-1] == '.' {
+		return l.makeToken(PREFIXQUOTE)
+	}
+
 	tokenType := l.literalOrKeywordType()
 	return l.makeToken(tokenType)
 }
@@ -466,8 +469,6 @@ func (l *Lexer) literalOrKeywordType() TokenType {
 		}
 	case '+':
 		return l.checkKeyword(1, "", PLUS)
-	case 'a':
-		return l.checkKeyword(1, "nd", AND)
 	case 'b':
 		if l.curLen() > 1 {
 			c := l.input[l.start+1]
@@ -534,8 +535,6 @@ func (l *Lexer) literalOrKeywordType() TokenType {
 		switch c {
 		case 'c':
 			return l.checkKeyword(2, "", STDOUTCOMPLETE)
-		case 'r':
-			return l.checkKeyword(2, "", OR)
 		case 's':
 			return l.checkKeyword(2, "", STDOUTSTRIPPED)
 		}

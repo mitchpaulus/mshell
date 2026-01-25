@@ -137,7 +137,19 @@ func GenerateCompletions(input CompletionInput, deps CompletionDeps) []TabMatch 
 		}
 	}
 
-	// 2. MShell variable completion (@var)
+	// 2. Binary name completion (first token position)
+	// NumTokens == 2 means: one token + EOF
+	if input.NumTokens == 2 && len(prefix) > 0 && input.LastTokenType == LITERAL {
+		binMatches := deps.Binaries.Matches(prefix)
+		for _, match := range binMatches {
+			matches = append(matches, TabMatch{TABMATCHCMD, match})
+		}
+	}
+
+	// 3. File path completion
+	matches = append(matches, generateFileCompletions(input, deps.FS)...)
+
+	// 4. MShell variable completion (@var)
 	if len(prefix) > 0 && prefix[0] == '@' {
 		searchPrefix := prefix[1:]
 		for v := range deps.Variables {
@@ -154,31 +166,19 @@ func GenerateCompletions(input CompletionInput, deps CompletionDeps) []TabMatch 
 		}
 	}
 
-	// 3. Binary name completion (first token position)
-	// NumTokens == 2 means: one token + EOF
-	if input.NumTokens == 2 && len(prefix) > 0 && input.LastTokenType == LITERAL {
-		binMatches := deps.Binaries.Matches(prefix)
-		for _, match := range binMatches {
-			matches = append(matches, TabMatch{TABMATCHCMD, match})
-		}
-	}
-
-	// 4. Built-in command completion
+	// 5. Built-in command completion
 	for name := range deps.BuiltIns {
 		if strings.HasPrefix(name, prefix) {
 			matches = append(matches, TabMatch{TABMATCHBUILTIN, name})
 		}
 	}
 
-	// 5. Definition completion
+	// 6. Definition completion
 	for _, defName := range deps.Definitions {
 		if strings.HasPrefix(defName, prefix) {
 			matches = append(matches, TabMatch{TABMATCHDEF, defName})
 		}
 	}
-
-	// 6. File path completion
-	matches = append(matches, generateFileCompletions(input, deps.FS)...)
 
 	return matches
 }

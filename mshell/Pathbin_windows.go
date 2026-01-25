@@ -5,9 +5,18 @@ import (
 	"sort"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"golang.org/x/sys/windows"
 	"fmt"
+)
+
+// Windows CTRL-C handling
+// When a subprocess is running, we track its process group ID so we can forward CTRL-C to it.
+var (
+	foregroundPgidMu    sync.Mutex
+	foregroundPgid      uint32 // Process group ID of the current foreground process (0 if none)
+	ctrlHandlerInstalled bool
 )
 
 const nullDevice = "NUL"
@@ -273,4 +282,85 @@ func (s *TermState) UpdateSize() {
 	}
 	s.numCols = int(info.Window.Right - info.Window.Left + 1)
 	s.numRows = int(info.Window.Bottom - info.Window.Top + 1)
+}
+
+// Windows API constants
+const (
+	CTRL_C_EVENT     = 0
+	CTRL_BREAK_EVENT = 1
+)
+
+var (
+	kernel32                  = syscall.NewLazyDLL("kernel32.dll")
+	procSetConsoleCtrlHandler = kernel32.NewProc("SetConsoleCtrlHandler")
+)
+
+// consoleCtrlHandler handles console control events (CTRL-C, CTRL-BREAK, etc.)
+// When a child process is running (foregroundPgid != 0), the shell ignores CTRL-C
+// so only the child is terminated. The child receives CTRL-C directly from the console.
+func consoleCtrlHandler(ctrlType uint32) uintptr {
+	if ctrlType == CTRL_C_EVENT || ctrlType == CTRL_BREAK_EVENT {
+		foregroundPgidMu.Lock()
+		hasChild := foregroundPgid != 0
+		foregroundPgidMu.Unlock()
+
+		if hasChild {
+			// A child process is running. Return TRUE to indicate we handled the event,
+			// which prevents the shell from being terminated. The child process will
+			// receive the CTRL-C directly from the console and handle it.
+			return 1
+		}
+	}
+	// Return FALSE to let the default handler process the event (terminates the shell)
+	return 0
+}
+
+// installCtrlHandler installs the console control handler if not already installed
+func installCtrlHandler() {
+	foregroundPgidMu.Lock()
+	defer foregroundPgidMu.Unlock()
+
+	if !ctrlHandlerInstalled {
+		// SetConsoleCtrlHandler with add=true (1) adds the handler to the list
+		procSetConsoleCtrlHandler.Call(syscall.NewCallback(consoleCtrlHandler), 1)
+		ctrlHandlerInstalled = true
+	}
+}
+
+// IgnoreSignalsForJobControl is a no-op on Windows.
+// On Windows, we use a console control handler instead.
+func IgnoreSignalsForJobControl() func() {
+	return func() {}
+}
+
+// SetForegroundProcessGroup marks that a child process is running.
+// On Windows, this causes the console control handler to ignore CTRL-C for the shell,
+// allowing only the child to be terminated.
+func SetForegroundProcessGroup(ttyFd int, pgid int) (int, error) {
+	installCtrlHandler()
+
+	foregroundPgidMu.Lock()
+	oldPgid := foregroundPgid
+	foregroundPgid = uint32(pgid)
+	foregroundPgidMu.Unlock()
+
+	return int(oldPgid), nil
+}
+
+// RestoreForegroundProcessGroup marks that no child process is running.
+// CTRL-C will now terminate the shell again.
+func RestoreForegroundProcessGroup(ttyFd int) error {
+	foregroundPgidMu.Lock()
+	foregroundPgid = 0
+	foregroundPgidMu.Unlock()
+	return nil
+}
+
+// IsTerminal returns true if the file descriptor is connected to a terminal
+func IsTerminal(fd int) bool {
+	// Check if it's a console handle
+	handle := windows.Handle(fd)
+	var mode uint32
+	err := windows.GetConsoleMode(handle, &mode)
+	return err == nil
 }

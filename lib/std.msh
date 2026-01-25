@@ -91,6 +91,40 @@ def dropWhile ([T] (T -- bool) -- [T])
     @list @dropWhile-idx skip
 end
 
+# filter (list quote -- list)
+def filter ([T] (T -- bool) -- [T])
+    list!, quote!
+    @list len filter-len! # Get total length
+    0 filter-idx! # Index
+    [] filter-accum! # Accumulator
+    (
+        @filter-idx @filter-len >= (break) iff
+        @list @filter-idx nth item!
+        # $"Item: {@item str}" wl
+        @item @quote x  result!
+        # $"Result: {@result str}" wl
+        @result ( @filter-accum @item append drop ) iff
+        @filter-idx 1 + filter-idx! # inc index
+    ) loop
+    @filter-accum
+end
+
+def linearSearch ([T] (T -- bool) -- Maybe[T])
+    list!, quote!
+    none linearSearch-result!
+    0 linearSearch-idx!
+    (
+        @linearSearch-idx @list len >= (break) iff
+        @list @linearSearch-idx nth linearSearch-item!
+        @linearSearch-item @quote x if
+            @linearSearch-item just linearSearch-result!
+            break
+        end
+        @linearSearch-idx 1 + linearSearch-idx!
+    ) loop
+    @linearSearch-result
+end
+
 # foldl (quote initial list -- result)
 def foldl ((T T -- T) T [T] -- T)
     #  quote initial list

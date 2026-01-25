@@ -3,6 +3,8 @@
 > [!WARNING]
 > This is still very much an experiment.
 > I still am changing significant parts of the syntax and semantics.
+> At this point, this repository has fewer than 10 stars, so I will be operating as if I am the only user.
+> If you are using it, have feedback, or just want to say hello, you can email [mshell-feedback@mitchellt.com](mailto:mshell-feedback@mitchellt.com) or use the GitHub discussions.
 
 `mshell` is my personal scripting language, meant to replace short shell scripts (< ~100 LOC) and other shell one-liners.
 A concatenative language is a good fit for this purpose, as it allows for easy composition of simple functions and pipelines.
@@ -79,7 +81,7 @@ Note that you'll also need the environment variable `MSHSTDLIB` pointing to the 
 
 # TODO
 
-- Job control. Right now, if you CTRL-c a long running process, it kills the entire shell.
+- Job control. We don't have CTRL-z or `bg`/`fg` functionality right now.
 - User defined abbreviations (like fish). Right now you get my hard-coded ones, sorry.
 - Pattern matching syntax.
 - Type checking.

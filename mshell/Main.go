@@ -2126,7 +2126,7 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 	}
 
 PromptPrint:
-	fmt.Fprintf(os.Stdout, "\033[1G")
+	state.ensurePromptNewline()
 	err = state.printPrompt()
 	if err != nil {
 		fmt.Fprint(os.Stderr, err.Error())
@@ -2138,6 +2138,23 @@ PromptPrint:
 	return false, 0
 }
 
+func (state *TermState) ensurePromptNewline() {
+	_, err := term.MakeRaw(state.stdInFd)
+	if err != nil {
+		return
+	}
+
+	_, col, err := state.getCurrentPos()
+	term.Restore(state.stdInFd, &state.oldState)
+	if err != nil {
+		return
+	}
+
+	if col != 1 {
+		fmt.Fprint(os.Stdout, "⏎\r\n")
+	}
+}
+
 func (state *TermState) toCooked() {
 	term.Restore(state.stdInFd, &state.oldState)
 }
@@ -2146,7 +2163,9 @@ func (state *TermState) printPrompt() error {
 	// Get out of raw mode
 	state.toCooked()
 
+	// My hard-coded color for now.
 	fmt.Fprintf(os.Stdout, "\033[35m")
+
 	// Print PWD
 	cwd, err := os.Getwd()
 

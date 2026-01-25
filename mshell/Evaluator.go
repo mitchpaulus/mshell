@@ -369,6 +369,8 @@ type ExecuteContext struct {
 	ShouldCloseOutput bool
 	ShouldCloseError  bool
 	Pbm               IPathBinManager
+	InPipeline        bool      // True if this is part of a pipeline; foreground handling is done by RunPipeline
+	PipelinePidChan   chan int  // Channel for reporting process PID to pipeline manager (optional, only set for pipelines)
 }
 
 func (context *ExecuteContext) CloneLessVariables() *ExecuteContext {
@@ -380,6 +382,8 @@ func (context *ExecuteContext) CloneLessVariables() *ExecuteContext {
 		ShouldCloseOutput: context.ShouldCloseOutput,
 		ShouldCloseError:  context.ShouldCloseError,
 		Pbm:               context.Pbm,
+		InPipeline:        context.InPipeline,
+		PipelinePidChan:   context.PipelinePidChan,
 	}
 
 	newContext.Variables = make(map[string]MShellObject)
@@ -668,6 +672,26 @@ MainLoop:
 			parseQuote := t
 			q := MShellQuotation{Tokens: parseQuote.Items, StandardInputFile: "", StandardOutputFile: "", StandardErrorFile: "", Variables: context.Variables, MShellParseQuote: parseQuote}
 			stack.Push(&q)
+		case *MShellParsePrefixQuote:
+			prefixQuote := t
+			// Create a quotation from the items and push onto stack
+			q := MShellQuotation{Tokens: prefixQuote.Items, StandardInputFile: "", StandardOutputFile: "", StandardErrorFile: "", Variables: context.Variables, MShellParseQuote: nil}
+			stack.Push(&q)
+			// Create a token for the function name (strip trailing '.')
+			lexeme := prefixQuote.StartToken.Lexeme
+			funcToken := Token{
+				Line:   prefixQuote.StartToken.Line,
+				Column: prefixQuote.StartToken.Column,
+				Start:  prefixQuote.StartToken.Start,
+				Lexeme: lexeme[:len(lexeme)-1],
+				Type:   LITERAL,
+			}
+			// Recursively evaluate the function call
+			callStackItem := CallStackItem{MShellParseItem: prefixQuote, Name: funcToken.Lexeme, CallStackType: CALLSTACKDEF}
+			result := state.Evaluate([]MShellParseItem{funcToken}, stack, context, definitions, callStackItem)
+			if result.ShouldPassResultUpStack() {
+				return result
+			}
 		case *MShellParseIfBlock:
 			ifBlock := t
 			startToken := ifBlock.GetStartToken()
@@ -941,27 +965,19 @@ MainLoop:
 					}
 				}
 
-				if t.Lexeme == ".s" {
+				if t.Lexeme == "stack" {
 					// Print current stack
 					fmt.Fprint(os.Stderr, stack.String())
-				} else if t.Lexeme == ".b" {
-					// Print known binaries
-					debugList := context.Pbm.DebugList()
-					for _, item := range debugList.Items {
-						fmt.Fprintf(os.Stderr, "%s\t%s\n", item.(*MShellList).Items[0].(MShellString).Content, item.(*MShellList).Items[1].(MShellString).Content)
-					}
-
-					// fmt.Fprint(os.Stderr, debugStr)
 				} else if t.Lexeme == "binPaths" {
 					stack.Push(context.Pbm.DebugList())
 
-				} else if t.Lexeme == ".def" {
+				} else if t.Lexeme == "defs" {
 					// Print out available definitions
 					fmt.Fprint(os.Stderr, "Available definitions:\n")
 					for _, definition := range definitions {
 						fmt.Fprintf(os.Stderr, "%s\n", definition.Name)
 					}
-				} else if t.Lexeme == ".env" {
+				} else if t.Lexeme == "env" {
 					// Print a list of all environment variables, sorted by key
 					envVars := os.Environ()
 					slices.Sort(envVars)
@@ -1207,6 +1223,11 @@ MainLoop:
 						fmt.Fprint(writer, topTyped.Content)
 					case MShellInt:
 						fmt.Fprint(writer, topTyped.Value)
+					case MShellBinary:
+						if t.Lexeme == "wl" || t.Lexeme == "wle" {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot write a %s.\n", t.Line, t.Column, top.TypeName()))
+						}
+						_, _ = writer.Write(topTyped)
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot write a %s.\n", t.Line, t.Column, top.TypeName()))
 					}
@@ -3523,6 +3544,36 @@ MainLoop:
 					dateTimeObj.Time = dateTimeObj.Time.In(cstLocation)
 					dateTimeObj.OriginalString = ""
 					stack.Push(dateTimeObj)
+				} else if t.Lexeme == "cstToUtc" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'toUtc' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					// Convert the datetime to UTC from assumed CST
+					dateTimeObj, ok := obj1.(*MShellDateTime)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert a %s to UTC.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					cstLocation, err := time.LoadLocation("America/Chicago")
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error loading CST location: %s\n", t.Line, t.Column, err.Error()))
+					}
+
+					cstTime := time.Date(
+						dateTimeObj.Time.Year(),
+						dateTimeObj.Time.Month(),
+						dateTimeObj.Time.Day(),
+						dateTimeObj.Time.Hour(),
+						dateTimeObj.Time.Minute(),
+						dateTimeObj.Time.Second(),
+						dateTimeObj.Time.Nanosecond(),
+						cstLocation,
+					)
+					dateTimeObj.Time = cstTime.In(time.UTC)
+					dateTimeObj.OriginalString = ""
+					stack.Push(dateTimeObj)
 				} else if t.Lexeme == "floor" {
 					// Round a number down to the nearest integer
 					obj1, err := stack.Pop()
@@ -4590,6 +4641,23 @@ MainLoop:
 
 					listToBeSorted.Items = sorted_array
 					stack.Push(listToBeSorted)
+				} else if t.Lexeme == "strCmp" {
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					str2, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second parameter in 'strCmp' is expected to be stringable, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
+					}
+
+					str1, err := obj2.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The first parameter in 'strCmp' is expected to be stringable, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
+					}
+
+					stack.Push(MShellInt{Value: strings.Compare(str1, str2)})
 				} else if t.Lexeme == "versionSortCmp" {
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
@@ -4940,6 +5008,89 @@ MainLoop:
 					}
 				} else if t.Lexeme == "nullDevice" {
 					stack.Push(MShellPath{Path: nullDevice})
+				} else if t.Lexeme == "and" || t.Lexeme == "or" {
+					// Token Type
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
+					}
+
+					obj2, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on a stack with only one item.\n", t.Line, t.Column, t.Lexeme))
+					}
+
+					switch obj1.(type) {
+					case MShellBool:
+						switch obj2.(type) {
+						case MShellBool:
+							if t.Lexeme == "and" {
+								stack.Push(MShellBool{obj2.(MShellBool).Value && obj1.(MShellBool).Value})
+							} else {
+								stack.Push(MShellBool{obj2.(MShellBool).Value || obj1.(MShellBool).Value})
+							}
+						default:
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s and %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
+						}
+					case *MShellQuotation:
+						if t.Lexeme == "and" {
+							if obj2.(MShellBool).Value {
+								result, err := state.EvaluateQuote(*obj1.(*MShellQuotation), stack, context, definitions)
+								if err != nil {
+									return state.FailWithMessage(err.Error())
+								}
+
+								// Pop the top off the stack
+								secondObj, err := stack.Pop()
+								if err != nil {
+									return state.FailWithMessage(fmt.Sprintf("%d:%d: After executing the quotation in %s, the stack was empty.\n", t.Line, t.Column, t.Lexeme))
+								}
+
+								if result.ShouldPassResultUpStack() {
+									return result
+								}
+
+								seconObjBool, ok := secondObj.(MShellBool)
+								if !ok {
+									return state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a boolean after executing the quotation in %s, received a %s.\n", t.Line, t.Column, t.Lexeme, secondObj.TypeName()))
+								}
+
+								stack.Push(MShellBool{seconObjBool.Value})
+							} else {
+								stack.Push(MShellBool{false})
+							}
+						} else {
+							if obj2.(MShellBool).Value {
+								stack.Push(MShellBool{true})
+							} else {
+
+								result, err := state.EvaluateQuote(*obj1.(*MShellQuotation), stack, context, definitions)
+								if err != nil {
+									return state.FailWithMessage(err.Error())
+								}
+
+								// Pop the top off the stack
+								secondObj, err := stack.Pop()
+								if err != nil {
+									return state.FailWithMessage(fmt.Sprintf("%d:%d: After executing the quotation in %s, the stack was empty.\n", t.Line, t.Column, t.Lexeme))
+								}
+
+								if result.ShouldPassResultUpStack() {
+									return result
+								}
+
+								seconObjBool, ok := secondObj.(MShellBool)
+								if !ok {
+									return state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a boolean after executing the quotation in %s, received a %s.\n", t.Line, t.Column, t.Lexeme, secondObj.TypeName()))
+								}
+
+								stack.Push(MShellBool{seconObjBool.Value})
+							}
+						}
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s and %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
+					}
+
 				} else if t.Lexeme == "return" {
 					// Return from the current function
 					return EvalResult{
@@ -4949,7 +5100,6 @@ MainLoop:
 						ExitCode:   0,
 						ExitCalled: false,
 					}
-
 				} else { // last new function
 					// If we aren't in a list context, throw an error.
 					// Nearly always this is unintended.
@@ -5360,87 +5510,6 @@ MainLoop:
 					}
 				default:
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '-' to a %s and %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
-				}
-			} else if t.Type == AND || t.Type == OR { // Token Type
-				obj1, err := stack.Pop()
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
-				}
-
-				obj2, err := stack.Pop()
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on a stack with only one item.\n", t.Line, t.Column, t.Lexeme))
-				}
-
-				switch obj1.(type) {
-				case MShellBool:
-					switch obj2.(type) {
-					case MShellBool:
-						if t.Type == AND {
-							stack.Push(MShellBool{obj2.(MShellBool).Value && obj1.(MShellBool).Value})
-						} else {
-							stack.Push(MShellBool{obj2.(MShellBool).Value || obj1.(MShellBool).Value})
-						}
-					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s and %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
-					}
-				case *MShellQuotation:
-					if t.Type == AND {
-						if obj2.(MShellBool).Value {
-							result, err := state.EvaluateQuote(*obj1.(*MShellQuotation), stack, context, definitions)
-							if err != nil {
-								return state.FailWithMessage(err.Error())
-							}
-
-							// Pop the top off the stack
-							secondObj, err := stack.Pop()
-							if err != nil {
-								return state.FailWithMessage(fmt.Sprintf("%d:%d: After executing the quotation in %s, the stack was empty.\n", t.Line, t.Column, t.Lexeme))
-							}
-
-							if result.ShouldPassResultUpStack() {
-								return result
-							}
-
-							seconObjBool, ok := secondObj.(MShellBool)
-							if !ok {
-								return state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a boolean after executing the quotation in %s, received a %s.\n", t.Line, t.Column, t.Lexeme, secondObj.TypeName()))
-							}
-
-							stack.Push(MShellBool{seconObjBool.Value})
-						} else {
-							stack.Push(MShellBool{false})
-						}
-					} else {
-						if obj2.(MShellBool).Value {
-							stack.Push(MShellBool{true})
-						} else {
-
-							result, err := state.EvaluateQuote(*obj1.(*MShellQuotation), stack, context, definitions)
-							if err != nil {
-								return state.FailWithMessage(err.Error())
-							}
-
-							// Pop the top off the stack
-							secondObj, err := stack.Pop()
-							if err != nil {
-								return state.FailWithMessage(fmt.Sprintf("%d:%d: After executing the quotation in %s, the stack was empty.\n", t.Line, t.Column, t.Lexeme))
-							}
-
-							if result.ShouldPassResultUpStack() {
-								return result
-							}
-
-							seconObjBool, ok := secondObj.(MShellBool)
-							if !ok {
-								return state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a boolean after executing the quotation in %s, received a %s.\n", t.Line, t.Column, t.Lexeme, secondObj.TypeName()))
-							}
-
-							stack.Push(MShellBool{seconObjBool.Value})
-						}
-					}
-				default:
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s and %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
 				}
 			} else if t.Type == NOT { // Token Type
 				obj, err := stack.Pop()
@@ -6695,21 +6764,57 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 		}
 		exitCode = 0 // TODO: What to set here?
 	} else {
-		startErr := cmd.Run() // Manually deal with the exit code upstream
+		// Use Start + Wait instead of Run so we can set the foreground process group
+		startErr = cmd.Start()
 		if startErr != nil {
-			if _, ok := startErr.(*exec.ExitError); !ok {
-				fmt.Fprintf(os.Stderr, "Error running command: %s\n", startErr.Error())
-				fmt.Fprintf(os.Stderr, "Command: '%s'\n", cmd.Path)
-				for i, arg := range cmd.Args {
-					fmt.Fprintf(os.Stderr, "Arg %d: '%s'\n", i, arg)
-				}
-				exitCode = 1
-			} else {
-				// Command exited with non-zero exit code
-				exitCode = startErr.(*exec.ExitError).ExitCode()
+			fmt.Fprintf(os.Stderr, "Error starting command: %s\n", startErr.Error())
+			fmt.Fprintf(os.Stderr, "Command: '%s'\n", cmd.Path)
+			for i, arg := range cmd.Args {
+				fmt.Fprintf(os.Stderr, "Arg %d: '%s'\n", i, arg)
 			}
+			exitCode = 1
 		} else {
-			exitCode = cmd.ProcessState.ExitCode()
+			// If we're in a pipeline, report the PID so RunPipeline can manage foreground
+			if context.InPipeline && context.PipelinePidChan != nil && cmd.Process != nil {
+				select {
+				case context.PipelinePidChan <- cmd.Process.Pid:
+				default:
+					// Channel full or closed, that's fine - first process already reported
+				}
+			}
+
+			// If stdin is a terminal and we're not in a pipeline, set the subprocess as
+			// the foreground process group so that CTRL-C goes to it instead of the shell.
+			// For pipelines, RunPipeline handles foreground process group management.
+			stdinFd := int(os.Stdin.Fd())
+			shouldSetForeground := !context.InPipeline && IsTerminal(stdinFd) && cmd.Process != nil
+			if shouldSetForeground {
+				// Ignore SIGTTOU/SIGTTIN to prevent shell from stopping when manipulating foreground
+				restoreSignals := IgnoreSignalsForJobControl()
+				SetForegroundProcessGroup(stdinFd, cmd.Process.Pid)
+				restoreSignals()
+			}
+
+			waitErr := cmd.Wait()
+
+			// Restore the shell as the foreground process group
+			if shouldSetForeground {
+				restoreSignals := IgnoreSignalsForJobControl()
+				RestoreForegroundProcessGroup(stdinFd)
+				restoreSignals()
+			}
+
+			if waitErr != nil {
+				if _, ok := waitErr.(*exec.ExitError); !ok {
+					fmt.Fprintf(os.Stderr, "Error running command: %s\n", waitErr.Error())
+					exitCode = 1
+				} else {
+					// Command exited with non-zero exit code
+					exitCode = waitErr.(*exec.ExitError).ExitCode()
+				}
+			} else {
+				exitCode = cmd.ProcessState.ExitCode()
+			}
 		}
 	}
 
@@ -6760,12 +6865,18 @@ func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContex
 
 	var buf bytes.Buffer
 	var stdErrBuf bytes.Buffer
+
+	// Create a channel to receive the first process PID for foreground management
+	pidChan := make(chan int, 1)
+
 	for i := 0; i < len(MShellPipe.List.Items); i++ {
 		newContext := ExecuteContext{
-			StandardInput:  nil,
-			StandardOutput: nil,
-			Variables:      context.Variables,
-			Pbm:            context.Pbm,
+			StandardInput:   nil,
+			StandardOutput:  nil,
+			Variables:       context.Variables,
+			Pbm:             context.Pbm,
+			InPipeline:      true,
+			PipelinePidChan: pidChan,
 		}
 
 		if i == 0 {
@@ -6833,8 +6944,32 @@ func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContex
 		}(i, item.(Executable))
 	}
 
+	// Set the first process that reports its PID as the foreground process group
+	// so that CTRL-C goes to the pipeline instead of the shell
+	stdinFd := int(os.Stdin.Fd())
+	setForeground := IsTerminal(stdinFd)
+	if setForeground {
+		select {
+		case pid := <-pidChan:
+			// Ignore SIGTTOU/SIGTTIN to prevent shell from stopping when manipulating foreground
+			restoreSignals := IgnoreSignalsForJobControl()
+			SetForegroundProcessGroup(stdinFd, pid)
+			restoreSignals()
+		case <-time.After(100 * time.Millisecond):
+			// No external process started within timeout (maybe all are built-ins)
+			setForeground = false
+		}
+	}
+
 	// Wait for all processes to complete
 	wg.Wait()
+
+	// Restore the shell as the foreground process group
+	if setForeground {
+		restoreSignals := IgnoreSignalsForJobControl()
+		RestoreForegroundProcessGroup(stdinFd)
+		restoreSignals()
+	}
 
 	var stdoutBytes []byte
 	var stderrBytes []byte

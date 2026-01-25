@@ -187,9 +187,9 @@ Metadata values must be static: strings (single or double quoted), integers, flo
 - `rot`: Rotate the top three items, `( a b c -- b c a )`
 - `-rot`: Rotate the top three items in the opposite direction `( a b c -- c a b )`
 - `nip`: Remove second item, `( a b -- b )`
-- `w`: Write to stdout (str -- )
+- `w`: Write to stdout (str|binary -- )
 - `wl`: Write line to stdout (str -- )
-- `we`: Write error to stderr (str -- )
+- `we`: Write error to stderr (str|binary -- )
 - `wle`: Write error line stderr (str -- )
 - `len`: Length of string/list `([a] -- int | str -- int)`
 - `args`: List of string arguments. Does not include the name of the executing file. `( -- [str])`
@@ -343,6 +343,7 @@ Metadata values must be static: strings (single or double quoted), integers, flo
 - `sort`: Sort list. Converts all items to strings, then sorts using go's `sort.Strings` `(list -- list)`
 - `sortV`: Version sort list. Converts all items to strings, then sorts like GNU `sort -V` (`list -- list`)
 - `sortByCmp`: Sort a list by a comparison function. The function/quotation should return -1 when a < b, 0 when a = b, or 1 when a > b. `[a] (a a -- int) -- [a]`
+- `strCmp`: Compare two strings lexicographically using Go's [`strings.Compare`](https://pkg.go.dev/strings#Compare); returns -1, 0, or 1. Useful with `sortByCmp`. `(str str -- int)`
 - `versionSortCmp`: A comparison function for use with `sortByCmp`. Used to implement "version sort" or "natural sort". `(str str -- int)`
 - `floatCmp`: Compare two floats and return -1, 0, or 1. Useful with `sortByCmp` for numeric sorting. `(float float -- int)`
 
@@ -379,6 +380,7 @@ Metadata values must be static: strings (single or double quoted), integers, flo
 - `fromOleDate`: Convert an OLE Automation date float to a date `(numeric -- date)`
 - `addDays`: Add days to date `(date numeric -- date)`
 - `utcToCst`: Convert a UTC datetime to US Central Time `(date -- date)`
+- `cstToUtc`: Convert a US Central Time datetime to UTC `(date -- date)`
 
 ## Regular Expression Functions
 
