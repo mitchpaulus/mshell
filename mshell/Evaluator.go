@@ -109,6 +109,22 @@ func (objList *MShellStack) Pop3(t Token) (MShellObject, MShellObject, MShellObj
 	return obj1, obj2, obj3, nil
 }
 
+// Returns four objects from the stack.
+// obj1, obj2, obj3, obj4 := stack.Pop4(t)
+// obj1 was on top, obj4 is at the bottom.
+func (objList *MShellStack) Pop4(t Token) (MShellObject, MShellObject, MShellObject, MShellObject, error) {
+	obj1, obj2, obj3, err := objList.Pop3(t)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+
+	obj4, err := objList.Pop()
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("%d:%d: Cannot do '%s' operation on a stack with only three items.\n", t.Line, t.Column, t.Lexeme)
+	}
+	return obj1, obj2, obj3, obj4, nil
+}
+
 func (objList *MShellStack) Push(obj MShellObject) {
 	*objList = append(*objList, obj)
 }
@@ -558,6 +574,100 @@ MainLoop:
 			}
 
 			stack.Push(dict)
+		case *MShellParseGrid:
+			// Evaluate the grid literal
+			parseGrid := t
+			grid := NewGrid()
+
+			// Evaluate grid metadata if present
+			if parseGrid.GridMeta != nil {
+				var metaStack MShellStack
+				metaStack = []MShellObject{}
+				metaItems := []MShellParseItem{parseGrid.GridMeta}
+				callStackItem := CallStackItem{MShellParseItem: parseGrid, Name: "grid-meta", CallStackType: CALLSTACKDICT}
+				result := state.Evaluate(metaItems, &metaStack, context, definitions, callStackItem)
+				if !result.Success {
+					return result
+				}
+				if result.ExitCalled {
+					return result
+				}
+				if len(metaStack) != 1 {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Grid metadata must evaluate to exactly one value.\n", parseGrid.GridMeta.GetStartToken().Line, parseGrid.GridMeta.GetStartToken().Column))
+				}
+				metaDict, ok := metaStack[0].(*MShellDict)
+				if !ok {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Grid metadata must be a dictionary.\n", parseGrid.GridMeta.GetStartToken().Line, parseGrid.GridMeta.GetStartToken().Column))
+				}
+				grid.Meta = metaDict
+			}
+
+			// Set up columns
+			numCols := len(parseGrid.Columns)
+			numRows := len(parseGrid.Rows)
+			grid.RowCount = numRows
+
+			for _, colDef := range parseGrid.Columns {
+				col := NewGridColumn(colDef.Name, numRows)
+
+				// Evaluate column metadata if present
+				if colDef.Meta != nil {
+					var colMetaStack MShellStack
+					colMetaStack = []MShellObject{}
+					colMetaItems := []MShellParseItem{colDef.Meta}
+					callStackItem := CallStackItem{MShellParseItem: parseGrid, Name: "col-meta", CallStackType: CALLSTACKDICT}
+					result := state.Evaluate(colMetaItems, &colMetaStack, context, definitions, callStackItem)
+					if !result.Success {
+						return result
+					}
+					if result.ExitCalled {
+						return result
+					}
+					if len(colMetaStack) != 1 {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Column metadata must evaluate to exactly one value.\n", colDef.Meta.GetStartToken().Line, colDef.Meta.GetStartToken().Column))
+					}
+					colMetaDict, ok := colMetaStack[0].(*MShellDict)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Column metadata must be a dictionary.\n", colDef.Meta.GetStartToken().Line, colDef.Meta.GetStartToken().Column))
+					}
+					col.Meta = colMetaDict
+				}
+
+				grid.AddColumn(col)
+			}
+
+			// Evaluate row data
+			for rowIdx, rowItems := range parseGrid.Rows {
+				if len(rowItems) != numCols {
+					startToken := parseGrid.GetStartToken()
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Row %d has %d items but grid has %d columns.\n", startToken.Line, startToken.Column, rowIdx+1, len(rowItems), numCols))
+				}
+
+				for colIdx, cellItem := range rowItems {
+					var cellStack MShellStack
+					cellStack = []MShellObject{}
+					cellItems := []MShellParseItem{cellItem}
+					callStackItem := CallStackItem{MShellParseItem: parseGrid, Name: "grid-cell", CallStackType: CALLSTACKDICT}
+					result := state.Evaluate(cellItems, &cellStack, context, definitions, callStackItem)
+					if !result.Success {
+						return result
+					}
+					if result.ExitCalled {
+						return result
+					}
+					if len(cellStack) != 1 {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Grid cell must evaluate to exactly one value.\n", cellItem.GetStartToken().Line, cellItem.GetStartToken().Column))
+					}
+					grid.Columns[colIdx].GenericData[rowIdx] = cellStack[0]
+				}
+			}
+
+			// Optimize column storage based on actual data types
+			for _, col := range grid.Columns {
+				optimizeColumnStorage(col)
+			}
+
+			stack.Push(grid)
 		case *MShellParseQuote:
 			parseQuote := t
 			q := MShellQuotation{Tokens: parseQuote.Items, StandardInputFile: "", StandardOutputFile: "", StandardErrorFile: "", Variables: context.Variables, MShellParseQuote: parseQuote}
@@ -805,24 +915,32 @@ MainLoop:
 				context.Variables[varName] = obj
 			}
 		case *MShellGetter:
-			// Handle like 'get'
+			// Handle like 'get' for dict or GridRow
 			getter := t
 			obj, err := stack.Pop()
 			if err != nil {
 				return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do ':' operation on an empty stack.\n", getter.Token.Line, getter.Token.Column))
 			}
 
-			dict, ok := obj.(*MShellDict)
-			if !ok {
-				return state.FailWithMessage(fmt.Sprintf("%d:%d: The stack parameter for the dictionary in ':' is not a dictionary. Found a %s (%s). Key: %s\n", getter.Token.Line, getter.Token.Column, obj.TypeName(), obj.DebugString(), getter.String))
-			}
-
-			value, ok := dict.Items[getter.String]
-			if !ok {
-				stack.Push(&Maybe{obj: nil})
-			} else {
-				maybe := Maybe{obj: value}
-				stack.Push(&maybe)
+			switch objTyped := obj.(type) {
+			case *MShellDict:
+				value, ok := objTyped.Items[getter.String]
+				if !ok {
+					stack.Push(&Maybe{obj: nil})
+				} else {
+					maybe := Maybe{obj: value}
+					stack.Push(&maybe)
+				}
+			case *MShellGridRow:
+				value, ok := objTyped.Get(getter.String)
+				if !ok {
+					stack.Push(&Maybe{obj: nil})
+				} else {
+					maybe := Maybe{obj: value}
+					stack.Push(&maybe)
+				}
+			default:
+				return state.FailWithMessage(fmt.Sprintf("%d:%d: The stack parameter for ':' is not a dictionary or GridRow. Found a %s (%s). Key: %s\n", getter.Token.Line, getter.Token.Column, obj.TypeName(), obj.DebugString(), getter.String))
 			}
 
 		case Token:
@@ -1013,6 +1131,12 @@ MainLoop:
 						stack.Push(MShellInt{len(objTyped.Path)})
 					case MShellLiteral:
 						stack.Push(MShellInt{len(objTyped.LiteralText)})
+					case *MShellGrid:
+						stack.Push(MShellInt{objTyped.RowCount})
+					case *MShellGridView:
+						stack.Push(MShellInt{len(objTyped.Indices)})
+					case *MShellGridRow:
+						stack.Push(MShellInt{len(objTyped.Grid.Columns)})
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot get length of a %s.\n", t.Line, t.Column, obj.TypeName()))
 					}
@@ -2700,8 +2824,9 @@ MainLoop:
 					// Push the hash onto the stack
 					stack.Push(MShellString{hash})
 				} else if t.Lexeme == "get" {
-					// Get a value from string key for a dictionary.
+					// Get a value from string key for a dictionary or GridRow.
 					// dict "key" get
+					// gridrow "colname" get
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -2709,28 +2834,28 @@ MainLoop:
 
 					keyStr, err := obj1.CastString()
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: The stack parameter for the dictionary key is not a string. Found a %s (%s).\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The stack parameter for the key is not a string. Found a %s (%s).\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
 					}
 
-					dict, ok := obj2.(*MShellDict)
-					if !ok {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: The stack parameter for the dictionary in 'get' is not a dictionary. Found a %s (%s). Key: %s\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString(), keyStr))
-					}
-
-					value, ok := dict.Items[keyStr]
-					if !ok {
-						// var sb strings.Builder
-						// sb.WriteString(fmt.Sprintf("%d:%d: Key '%s' not found in dictionary.\n", t.Line, t.Column, keyStr))
-						// sb.WriteString("Available keys:\n")
-						// for k := range dict.Items {
-						// // TODO: Escape
-						// sb.WriteString(fmt.Sprintf("  - '%s'\n", k))
-						// }
-						// return state.FailWithMessage(sb.String())
-						stack.Push(&Maybe{obj: nil})
-					} else {
-						maybe := Maybe{obj: value}
-						stack.Push(&maybe)
+					switch obj2Typed := obj2.(type) {
+					case *MShellDict:
+						value, ok := obj2Typed.Items[keyStr]
+						if !ok {
+							stack.Push(&Maybe{obj: nil})
+						} else {
+							maybe := Maybe{obj: value}
+							stack.Push(&maybe)
+						}
+					case *MShellGridRow:
+						value, ok := obj2Typed.Get(keyStr)
+						if !ok {
+							stack.Push(&Maybe{obj: nil})
+						} else {
+							maybe := Maybe{obj: value}
+							stack.Push(&maybe)
+						}
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The stack parameter for 'get' is not a dictionary or GridRow. Found a %s (%s). Key: %s\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString(), keyStr))
 					}
 				} else if t.Lexeme == "getDef" {
 					// Get a value from string key for a dictionary.
@@ -2815,6 +2940,336 @@ MainLoop:
 					}
 
 					stack.Push(newList)
+				} else if t.Lexeme == "gridRows" {
+					// Get the number of rows in a Grid or GridView.
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'gridRows' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					switch objTyped := obj.(type) {
+					case *MShellGrid:
+						stack.Push(MShellInt{objTyped.RowCount})
+					case *MShellGridView:
+						stack.Push(MShellInt{len(objTyped.Indices)})
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot get rows of a %s.\n", t.Line, t.Column, obj.TypeName()))
+					}
+				} else if t.Lexeme == "gridCols" {
+					// Get the list of column names from a Grid or GridView.
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'gridCols' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					var grid *MShellGrid
+					switch objTyped := obj.(type) {
+					case *MShellGrid:
+						grid = objTyped
+					case *MShellGridView:
+						grid = objTyped.Source
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot get columns of a %s.\n", t.Line, t.Column, obj.TypeName()))
+					}
+
+					newList := NewList(len(grid.Columns))
+					for i, col := range grid.Columns {
+						newList.Items[i] = MShellString{col.Name}
+					}
+					stack.Push(newList)
+				} else if t.Lexeme == "gridMeta" {
+					// Get the grid-level metadata dict from a Grid or GridView.
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'gridMeta' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					var grid *MShellGrid
+					switch objTyped := obj.(type) {
+					case *MShellGrid:
+						grid = objTyped
+					case *MShellGridView:
+						grid = objTyped.Source
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot get metadata of a %s.\n", t.Line, t.Column, obj.TypeName()))
+					}
+
+					if grid.Meta != nil {
+						stack.Push(&Maybe{obj: grid.Meta})
+					} else {
+						stack.Push(&Maybe{obj: nil})
+					}
+				} else if t.Lexeme == "gridColMeta" {
+					// Get the column metadata dict from a Grid or GridView.
+					// grid "colname" gridColMeta
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					colName, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Column name must be a string, got %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					var grid *MShellGrid
+					switch objTyped := obj2.(type) {
+					case *MShellGrid:
+						grid = objTyped
+					case *MShellGridView:
+						grid = objTyped.Source
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot get column metadata of a %s.\n", t.Line, t.Column, obj2.TypeName()))
+					}
+
+					col := grid.GetColumn(colName)
+					if col == nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Column '%s' not found in grid.\n", t.Line, t.Column, colName))
+					}
+
+					if col.Meta != nil {
+						stack.Push(&Maybe{obj: col.Meta})
+					} else {
+						stack.Push(&Maybe{obj: nil})
+					}
+				} else if t.Lexeme == "gridCol" {
+					// Extract a single column as a list.
+					// grid "colname" gridCol
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					colName, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Column name must be a string, got %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					switch objTyped := obj2.(type) {
+					case *MShellGrid:
+						col := objTyped.GetColumn(colName)
+						if col == nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Column '%s' not found in grid.\n", t.Line, t.Column, colName))
+						}
+						newList := NewList(objTyped.RowCount)
+						for i := 0; i < objTyped.RowCount; i++ {
+							newList.Items[i] = col.Get(i)
+						}
+						stack.Push(newList)
+					case *MShellGridView:
+						col := objTyped.Source.GetColumn(colName)
+						if col == nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Column '%s' not found in grid.\n", t.Line, t.Column, colName))
+						}
+						newList := NewList(len(objTyped.Indices))
+						for i, idx := range objTyped.Indices {
+							newList.Items[i] = col.Get(idx)
+						}
+						stack.Push(newList)
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot extract column from a %s.\n", t.Line, t.Column, obj2.TypeName()))
+					}
+				} else if t.Lexeme == "toDict" {
+					// Convert a GridRow to a dictionary.
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'toDict' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					gridRow, ok := obj.(*MShellGridRow)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert a %s to a dictionary.\n", t.Line, t.Column, obj.TypeName()))
+					}
+
+					stack.Push(gridRow.ToDict())
+				} else if t.Lexeme == "gridSetCell" {
+					// Set a single cell value: grid "colname" rowIdx value gridSetCell -> grid
+					value, rowIdx, colName, gridObj, err := stack.Pop4(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					colNameStr, err := colName.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Column name must be a string, got %s.\n", t.Line, t.Column, colName.TypeName()))
+					}
+
+					rowIdxInt, ok := rowIdx.(MShellInt)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Row index must be an integer, got %s.\n", t.Line, t.Column, rowIdx.TypeName()))
+					}
+
+					grid, ok := gridObj.(*MShellGrid)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot set cell in a %s.\n", t.Line, t.Column, gridObj.TypeName()))
+					}
+
+					col := grid.GetColumn(colNameStr)
+					if col == nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Column '%s' not found in grid.\n", t.Line, t.Column, colNameStr))
+					}
+
+					idx := rowIdxInt.Value
+					if idx < 0 {
+						idx = grid.RowCount + idx
+					}
+					if idx < 0 || idx >= grid.RowCount {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Row index %d out of range for grid with %d rows.\n", t.Line, t.Column, rowIdxInt.Value, grid.RowCount))
+					}
+
+					col.Set(idx, value)
+					stack.Push(grid)
+				} else if t.Lexeme == "gridCompact" {
+					// Materialize a GridView into a real Grid (copy filtered rows).
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'gridCompact' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					switch objTyped := obj.(type) {
+					case *MShellGrid:
+						// Already a grid, just push it back
+						stack.Push(objTyped)
+					case *MShellGridView:
+						// Create a new grid from the view
+						newGrid := NewGrid()
+						newGrid.Meta = objTyped.Source.Meta
+						newGrid.RowCount = len(objTyped.Indices)
+
+						for _, srcCol := range objTyped.Source.Columns {
+							newCol := NewGridColumn(srcCol.Name, newGrid.RowCount)
+							newCol.Meta = srcCol.Meta
+							for i, srcIdx := range objTyped.Indices {
+								newCol.GenericData[i] = srcCol.Get(srcIdx)
+							}
+							newGrid.AddColumn(newCol)
+						}
+
+						// Optimize column storage
+						for _, col := range newGrid.Columns {
+							optimizeColumnStorage(col)
+						}
+
+						stack.Push(newGrid)
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot compact a %s.\n", t.Line, t.Column, obj.TypeName()))
+					}
+				} else if t.Lexeme == "gridAddCol" {
+					// Add a new column to a grid.
+					// grid "colname" [values] gridAddCol -> grid
+					// grid "colname" defaultValue gridAddCol -> grid
+					obj1, obj2, obj3, err := stack.Pop3(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					grid, ok := obj3.(*MShellGrid)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: gridAddCol requires a Grid, got %s.\n", t.Line, t.Column, obj3.TypeName()))
+					}
+
+					colName, err := obj2.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Column name must be a string, got %s.\n", t.Line, t.Column, obj2.TypeName()))
+					}
+
+					// Check if column already exists
+					if grid.GetColumn(colName) != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Column '%s' already exists in grid.\n", t.Line, t.Column, colName))
+					}
+
+					newCol := NewGridColumn(colName, grid.RowCount)
+
+					// Check if obj1 is a list of values or a default value
+					if list, ok := obj1.(*MShellList); ok {
+						if len(list.Items) != grid.RowCount {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Column values list has %d items but grid has %d rows.\n", t.Line, t.Column, len(list.Items), grid.RowCount))
+						}
+						for i, item := range list.Items {
+							newCol.GenericData[i] = item
+						}
+					} else {
+						// Use obj1 as default value for all rows
+						for i := 0; i < grid.RowCount; i++ {
+							newCol.GenericData[i] = obj1
+						}
+					}
+
+					optimizeColumnStorage(newCol)
+					grid.AddColumn(newCol)
+					stack.Push(grid)
+				} else if t.Lexeme == "gridRemoveCol" {
+					// Remove a column from a grid.
+					// grid "colname" gridRemoveCol -> grid
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					colName, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Column name must be a string, got %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					grid, ok := obj2.(*MShellGrid)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: gridRemoveCol requires a Grid, got %s.\n", t.Line, t.Column, obj2.TypeName()))
+					}
+
+					colIdx, exists := grid.ColIndex[colName]
+					if !exists {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Column '%s' not found in grid.\n", t.Line, t.Column, colName))
+					}
+
+					// Remove column from slice
+					grid.Columns = append(grid.Columns[:colIdx], grid.Columns[colIdx+1:]...)
+
+					// Rebuild ColIndex
+					grid.ColIndex = make(map[string]int)
+					for i, col := range grid.Columns {
+						grid.ColIndex[col.Name] = i
+					}
+
+					stack.Push(grid)
+				} else if t.Lexeme == "gridRenameCol" {
+					// Rename a column in a grid.
+					// grid "oldname" "newname" gridRenameCol -> grid
+					obj1, obj2, obj3, err := stack.Pop3(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					newName, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: New column name must be a string, got %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					oldName, err := obj2.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Old column name must be a string, got %s.\n", t.Line, t.Column, obj2.TypeName()))
+					}
+
+					grid, ok := obj3.(*MShellGrid)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: gridRenameCol requires a Grid, got %s.\n", t.Line, t.Column, obj3.TypeName()))
+					}
+
+					colIdx, exists := grid.ColIndex[oldName]
+					if !exists {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Column '%s' not found in grid.\n", t.Line, t.Column, oldName))
+					}
+
+					// Check if new name already exists
+					if _, exists := grid.ColIndex[newName]; exists {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Column '%s' already exists in grid.\n", t.Line, t.Column, newName))
+					}
+
+					// Rename column
+					grid.Columns[colIdx].Name = newName
+					delete(grid.ColIndex, oldName)
+					grid.ColIndex[newName] = colIdx
+
+					stack.Push(grid)
 				} else if t.Lexeme == "reMatch" {
 					// Match a regex against a string
 					obj1, obj2, err := stack.Pop2(t)
@@ -3285,7 +3740,7 @@ MainLoop:
 					}
 					stack.Push(&Maybe{obj: o})
 				} else if t.Lexeme == "map" {
-					// Map a function over a list, or a Maybe
+					// Map a function over a list, Maybe, Grid, or GridView
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -3297,7 +3752,7 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: The first parameter in 'map' is expected to be a function, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
 					}
 
-					// Check if obj2 is a list or a Maybe
+					// Check if obj2 is a list, Maybe, Grid, or GridView
 					switch obj2Typed := obj2.(type) {
 					case *MShellList:
 
@@ -3343,6 +3798,120 @@ MainLoop:
 							mapResult, _ := stack.Pop()
 							stack.Push(&Maybe{obj: mapResult}) // Wrap the result back in a Maybe
 						}
+					case *MShellGrid, *MShellGridView:
+						// Map over Grid or GridView
+						var sourceGrid *MShellGrid
+						var sourceIndices []int
+
+						switch gridTyped := obj2Typed.(type) {
+						case *MShellGrid:
+							sourceGrid = gridTyped
+							sourceIndices = make([]int, gridTyped.RowCount)
+							for i := range sourceIndices {
+								sourceIndices[i] = i
+							}
+						case *MShellGridView:
+							sourceGrid = gridTyped.Source
+							sourceIndices = gridTyped.Indices
+						}
+
+						// Collect mapped rows (as dicts or GridRows)
+						mappedRows := make([]MShellObject, len(sourceIndices))
+						for i, idx := range sourceIndices {
+							row := &MShellGridRow{Grid: sourceGrid, RowIndex: idx}
+
+							var mapStack MShellStack
+							mapStack = []MShellObject{row}
+							result, err := state.EvaluateQuote(*fn, &mapStack, context, definitions)
+							if err != nil {
+								return state.FailWithMessage(err.Error())
+							}
+							if !result.Success {
+								return result
+							}
+							if result.ExitCalled {
+								return result
+							}
+							if result.BreakNum > 0 {
+								break
+							}
+
+							if len(mapStack) == 0 {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: map transformation returned empty stack.\n", t.Line, t.Column))
+							}
+
+							mapResult, _ := mapStack.Pop()
+							mappedRows[i] = mapResult
+						}
+
+						// If all results are GridRows or dicts with same columns, create a new Grid
+						if len(mappedRows) == 0 {
+							// Empty grid, use source columns
+							newGrid := NewGrid()
+							newGrid.Meta = sourceGrid.Meta
+							newGrid.RowCount = 0
+							for _, col := range sourceGrid.Columns {
+								newCol := NewGridColumn(col.Name, 0)
+								newCol.Meta = col.Meta
+								newGrid.AddColumn(newCol)
+							}
+							stack.Push(newGrid)
+						} else {
+							// Determine column structure from first row
+							var colNames []string
+							switch firstRow := mappedRows[0].(type) {
+							case *MShellGridRow:
+								for _, col := range firstRow.Grid.Columns {
+									colNames = append(colNames, col.Name)
+								}
+							case *MShellDict:
+								for k := range firstRow.Items {
+									colNames = append(colNames, k)
+								}
+								// Sort for consistency
+								sort.Strings(colNames)
+							default:
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: map transformation on Grid must return a GridRow or dict, got %s.\n", t.Line, t.Column, firstRow.TypeName()))
+							}
+
+							newGrid := NewGrid()
+							newGrid.Meta = sourceGrid.Meta
+							newGrid.RowCount = len(mappedRows)
+
+							for _, colName := range colNames {
+								newCol := NewGridColumn(colName, newGrid.RowCount)
+								newGrid.AddColumn(newCol)
+							}
+
+							// Fill in values
+							for rowIdx, row := range mappedRows {
+								switch rowTyped := row.(type) {
+								case *MShellGridRow:
+									for colIdx, colName := range colNames {
+										val, ok := rowTyped.Get(colName)
+										if ok {
+											newGrid.Columns[colIdx].GenericData[rowIdx] = val
+										}
+									}
+								case *MShellDict:
+									for colIdx, colName := range colNames {
+										val, ok := rowTyped.Items[colName]
+										if ok {
+											newGrid.Columns[colIdx].GenericData[rowIdx] = val
+										}
+									}
+								}
+							}
+
+							// Optimize column storage
+							for _, col := range newGrid.Columns {
+								optimizeColumnStorage(col)
+							}
+
+							stack.Push(newGrid)
+						}
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot map over a %s.\n", t.Line, t.Column, obj2.TypeName()))
 					}
 				} else if t.Lexeme == "map2" {
 					// Allow a binary function over two maybes
@@ -3389,6 +3958,187 @@ MainLoop:
 
 						mapResult, _ := stack.Pop()
 						stack.Push(&Maybe{obj: mapResult}) // Wrap the result back in a Maybe
+					}
+				} else if t.Lexeme == "filter" {
+					// Filter a list, Grid, or GridView using a predicate quotation
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					quote, ok := obj1.(*MShellQuotation)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: filter requires a quotation, got %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					switch obj2Typed := obj2.(type) {
+					case *MShellList:
+						// Filter a list
+						var filteredItems []MShellObject
+						for _, item := range obj2Typed.Items {
+							var filterStack MShellStack
+							filterStack = []MShellObject{item}
+							result, err := state.EvaluateQuote(*quote, &filterStack, context, definitions)
+							if err != nil {
+								return state.FailWithMessage(err.Error())
+							}
+							if result.ShouldPassResultUpStack() {
+								return result
+							}
+							if len(filterStack) == 0 {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: filter predicate returned empty stack.\n", t.Line, t.Column))
+							}
+							predResult, _ := filterStack.Pop()
+							switch predTyped := predResult.(type) {
+							case MShellBool:
+								if predTyped.Value {
+									filteredItems = append(filteredItems, item)
+								}
+							case MShellInt:
+								if predTyped.Value == 0 {
+									filteredItems = append(filteredItems, item)
+								}
+							default:
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: filter predicate must return a boolean or integer, got %s.\n", t.Line, t.Column, predResult.TypeName()))
+							}
+						}
+						newList := NewList(len(filteredItems))
+						copy(newList.Items, filteredItems)
+						stack.Push(newList)
+					case *MShellGrid, *MShellGridView:
+						// Filter a Grid or GridView - returns a GridView
+						var sourceGrid *MShellGrid
+						var sourceIndices []int
+
+						switch gridTyped := obj2Typed.(type) {
+						case *MShellGrid:
+							sourceGrid = gridTyped
+							sourceIndices = make([]int, gridTyped.RowCount)
+							for i := range sourceIndices {
+								sourceIndices[i] = i
+							}
+						case *MShellGridView:
+							sourceGrid = gridTyped.Source
+							sourceIndices = gridTyped.Indices
+						}
+
+						var matchingIndices []int
+						for _, idx := range sourceIndices {
+							row := &MShellGridRow{Grid: sourceGrid, RowIndex: idx}
+
+							var filterStack MShellStack
+							filterStack = []MShellObject{row}
+							result, err := state.EvaluateQuote(*quote, &filterStack, context, definitions)
+							if err != nil {
+								return state.FailWithMessage(err.Error())
+							}
+							if !result.Success {
+								return result
+							}
+							if result.ExitCalled {
+								return result
+							}
+							if result.BreakNum > 0 {
+								break
+							}
+
+							if len(filterStack) == 0 {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: filter predicate returned empty stack.\n", t.Line, t.Column))
+							}
+
+							predResult, _ := filterStack.Pop()
+							switch predTyped := predResult.(type) {
+							case MShellBool:
+								if predTyped.Value {
+									matchingIndices = append(matchingIndices, idx)
+								}
+							case MShellInt:
+								if predTyped.Value == 0 {
+									matchingIndices = append(matchingIndices, idx)
+								}
+							default:
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: filter predicate must return a boolean or integer, got %s.\n", t.Line, t.Column, predResult.TypeName()))
+							}
+						}
+
+						view := &MShellGridView{Source: sourceGrid, Indices: matchingIndices}
+						stack.Push(view)
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot filter a %s.\n", t.Line, t.Column, obj2.TypeName()))
+					}
+				} else if t.Lexeme == "each" {
+					// Iterate over a list, Grid, or GridView for side effects
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					quote, ok := obj1.(*MShellQuotation)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: each requires a quotation, got %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					switch obj2Typed := obj2.(type) {
+					case *MShellList:
+						// Iterate over a list
+						for _, item := range obj2Typed.Items {
+							var eachStack MShellStack
+							eachStack = []MShellObject{item}
+							result, err := state.EvaluateQuote(*quote, &eachStack, context, definitions)
+							if err != nil {
+								return state.FailWithMessage(err.Error())
+							}
+							if result.ExitCalled {
+								return result
+							}
+							if result.BreakNum > 0 {
+								break
+							}
+							if result.Continue {
+								continue
+							}
+						}
+					case *MShellGrid, *MShellGridView:
+						// Iterate over Grid or GridView
+						var sourceGrid *MShellGrid
+						var sourceIndices []int
+
+						switch gridTyped := obj2Typed.(type) {
+						case *MShellGrid:
+							sourceGrid = gridTyped
+							sourceIndices = make([]int, gridTyped.RowCount)
+							for i := range sourceIndices {
+								sourceIndices[i] = i
+							}
+						case *MShellGridView:
+							sourceGrid = gridTyped.Source
+							sourceIndices = gridTyped.Indices
+						}
+
+						for _, idx := range sourceIndices {
+							row := &MShellGridRow{Grid: sourceGrid, RowIndex: idx}
+
+							var eachStack MShellStack
+							eachStack = []MShellObject{row}
+							result, err := state.EvaluateQuote(*quote, &eachStack, context, definitions)
+							if err != nil {
+								return state.FailWithMessage(err.Error())
+							}
+							if !result.Success {
+								return result
+							}
+							if result.ExitCalled {
+								return result
+							}
+							if result.BreakNum > 0 {
+								break
+							}
+							if result.Continue {
+								continue
+							}
+						}
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot iterate over a %s with each.\n", t.Line, t.Column, obj2.TypeName()))
 					}
 				} else if t.Lexeme == "isNone" {
 					obj, err := stack.Pop()
@@ -7445,4 +8195,98 @@ func ParseLinkParam(linkHeader string, i int) (string, string, int, error) {
 
 	i = EatLinkHeaderWhitespace(linkHeader, i)
 	return paramName, paramValue.String(), i, nil
+}
+
+// optimizeColumnStorage attempts to convert a generic column to a typed column
+// for better performance when all values are of the same type.
+func optimizeColumnStorage(col *GridColumn) {
+	if col.ColType != COL_GENERIC || len(col.GenericData) == 0 {
+		return
+	}
+
+	// Check if all values are of the same type
+	allInts := true
+	allFloats := true
+	allStrings := true
+	allDateTimes := true
+
+	for _, val := range col.GenericData {
+		if val == nil {
+			continue // Skip nil values (None)
+		}
+
+		switch val.(type) {
+		case MShellInt:
+			allStrings = false
+			allDateTimes = false
+		case MShellFloat:
+			allInts = false
+			allStrings = false
+			allDateTimes = false
+		case MShellString:
+			allInts = false
+			allFloats = false
+			allDateTimes = false
+		case *MShellDateTime:
+			allInts = false
+			allFloats = false
+			allStrings = false
+		default:
+			// Mixed type, keep as generic
+			return
+		}
+	}
+
+	numRows := len(col.GenericData)
+
+	// Convert to typed storage
+	if allInts {
+		col.IntData = make([]int64, numRows)
+		for i, val := range col.GenericData {
+			if val == nil {
+				col.IntData[i] = 0 // Default for None
+			} else if intVal, ok := val.(MShellInt); ok {
+				col.IntData[i] = int64(intVal.Value)
+			}
+		}
+		col.ColType = COL_INT
+		col.GenericData = nil
+	} else if allFloats {
+		col.FloatData = make([]float64, numRows)
+		for i, val := range col.GenericData {
+			if val == nil {
+				col.FloatData[i] = 0.0 // Default for None
+			} else if floatVal, ok := val.(MShellFloat); ok {
+				col.FloatData[i] = floatVal.Value
+			} else if intVal, ok := val.(MShellInt); ok {
+				// Promote int to float
+				col.FloatData[i] = float64(intVal.Value)
+			}
+		}
+		col.ColType = COL_FLOAT
+		col.GenericData = nil
+	} else if allStrings {
+		col.StringData = make([]string, numRows)
+		for i, val := range col.GenericData {
+			if val == nil {
+				col.StringData[i] = "" // Default for None
+			} else if strVal, ok := val.(MShellString); ok {
+				col.StringData[i] = strVal.Content
+			}
+		}
+		col.ColType = COL_STRING
+		col.GenericData = nil
+	} else if allDateTimes {
+		col.DateTimeData = make([]time.Time, numRows)
+		for i, val := range col.GenericData {
+			if val == nil {
+				col.DateTimeData[i] = time.Time{} // Default for None
+			} else if dtVal, ok := val.(*MShellDateTime); ok {
+				col.DateTimeData[i] = dtVal.Time
+			}
+		}
+		col.ColType = COL_DATETIME
+		col.GenericData = nil
+	}
+	// If none of the above, keep as generic
 }

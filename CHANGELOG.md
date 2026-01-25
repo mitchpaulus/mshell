@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Grid (data frame) type with columnar storage for high-performance tabular data
+  - Literal syntax: `[| col1, col2; val1, val2; val3, val4 |]`
+  - Optional grid and column metadata
+  - Typed column storage (int, float, string, datetime) with automatic optimization
+  - `GridView` for filtered views without data copying
+  - `GridRow` for lazy row access without allocation
+- Functions
+  - `gridRows` - get row count
+  - `gridCols` - get list of column names
+  - `gridMeta` - get grid-level metadata
+  - `gridColMeta` - get column metadata
+  - `gridCol` - extract a column as a list
+  - `gridAddCol` - add a column
+  - `gridRemoveCol` - remove a column
+  - `gridRenameCol` - rename a column
+  - `gridSetCell` - set a single cell value
+  - `gridCompact` - materialize a GridView to a Grid
+  - `filter` - now a built-in that works on both Lists and Grids/GridViews
+  - `each` - now a built-in that works on both Lists and Grids/GridViews
+  - `toDict` - convert a GridRow to a dictionary
+- Extended `map` to work with Grid and GridView (transforms rows using quotation returning dict)
+- Extended `len` to work with Grid, GridView, and GridRow
+- Extended `get` and `:` getter to work with GridRow
 - Prefix quote syntax (`functionName. ... end`) as an alternative to `(...) functionName`
 - `<>` operator for in-place file modification. Reads file to stdin, writes stdout back on success.
   Example: `` [sort -u] `file.txt` <> ! ``

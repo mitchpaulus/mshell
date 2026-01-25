@@ -96,6 +96,8 @@ const (
 	STDOUTANDSTDERRREDIRECT  // &>
 	STDOUTANDSTDERRAPPEND    // &>>
 	INPLACEREDIRECT          // <>
+	GRID_OPEN                // [|
+	GRID_CLOSE               // |]
 	PREFIXQUOTE              // .functionName
 )
 
@@ -261,6 +263,10 @@ func (t TokenType) String() string {
 		return "STDOUTANDSTDERRAPPEND"
 	case INPLACEREDIRECT:
 		return "INPLACEREDIRECT"
+	case GRID_OPEN:
+		return "GRID_OPEN"
+	case GRID_CLOSE:
+		return "GRID_CLOSE"
 	case PREFIXQUOTE:
 		return "PREFIXQUOTE"
 	default:
@@ -639,6 +645,10 @@ func (l *Lexer) scanTokenAll() Token {
 	case '\'':
 		return l.parseSingleQuoteString()
 	case '[':
+		if l.peek() == '|' {
+			l.advance()
+			return l.makeToken(GRID_OPEN)
+		}
 		return l.makeToken(LEFT_SQUARE_BRACKET)
 	case ']':
 		return l.makeToken(RIGHT_SQUARE_BRACKET)
@@ -653,6 +663,10 @@ func (l *Lexer) scanTokenAll() Token {
 	case ';':
 		return l.makeToken(EXECUTE)
 	case '|':
+		if l.peek() == ']' {
+			l.advance()
+			return l.makeToken(GRID_CLOSE)
+		}
 		return l.makeToken(PIPE)
 	case '?':
 		return l.makeToken(QUESTION)

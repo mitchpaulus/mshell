@@ -46,24 +46,6 @@ def 2apply ([a] (a a -- c) -- c)
     swap 2unpack rot x
 end
 
-def each ([T] (T --) --)
-    over len each-len! # Get total length
-    0 each-idx! # index
-    (
-        @each-idx @each-len >= if
-            break
-        end
-        # "Each idx: " w @each-idx w " Each len: " w @each-len wl
-        over @each-idx nth # Get current item
-        over x  # Copy over quote, execute
-        @each-idx 1 + each-idx! # inc index
-        # "Each idx: " w @each-idx wl
-    ) loop
-
-    # Drop list and quote, total length, index
-    drop drop
-end
-
 def eachWhile ([T] (T -- bool) --)
     over len each-len! # Get total length
     0 each-idx! # index
