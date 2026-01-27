@@ -77,3 +77,11 @@ You should rebuild the docs when you make edits.
 
 Code for the VS Code extension is at `code/`.
 If we update syntax, ensure to update appropriately.
+
+## Releases
+
+1. Move items from unreleased to new version number in CHANGELOG.
+2. Update `mshellVersion` variable in `Main.go`.
+3. Update 'Getting Started' docs with latest version for GitHub action.
+   Remember, the action.yaml is part of this repo, so the versions stay in sync.
+4. I will do the final git tag and GitHub release step.

@@ -35,7 +35,7 @@ const (
 	CLIHTML
 )
 
-const mshellVersion = "0.8.0"
+const mshellVersion = "0.9.0"
 
 var tempFiles []string
 
