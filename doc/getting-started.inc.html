@@ -81,7 +81,7 @@ To use <code>mshell</code> in GitHub Actions workflows, use the official action:
 
 <pre>
 <code><span class="yaml-key">steps:</span>
-  - <span class="yaml-key">uses:</span> mitchpaulus/mshell@v1
+  - <span class="yaml-key">uses:</span> mitchpaulus/mshell@v0.9.0
   - <span class="yaml-key">run:</span> msh script.msh</code>
 </pre>
 
@@ -91,9 +91,9 @@ To pin a specific version:
 
 <pre>
 <code><span class="yaml-key">steps:</span>
-  - <span class="yaml-key">uses:</span> mitchpaulus/mshell@main
+  - <span class="yaml-key">uses:</span> mitchpaulus/mshell@v0.9.0
     <span class="yaml-key">with:</span>
-      <span class="yaml-key">version:</span> v0.8.0
+      <span class="yaml-key">version:</span> v0.9.0
   - <span class="yaml-key">run:</span> msh script.msh</code>
 </pre>
 
