@@ -23,14 +23,16 @@ runs:
 
     - name: Download and install mshell
       shell: bash
+      env:
+        ACTION_REPO: ${{ github.action_repository }}
       run: |
         VERSION="${{ inputs.version }}"
         ASSET="${{ steps.platform.outputs.asset }}"
 
         if [ "$VERSION" = "latest" ]; then
-          URL="https://github.com/${{ github.action_repository }}/releases/latest/download/${ASSET}.tar.gz"
+          URL="https://github.com/${ACTION_REPO}/releases/latest/download/${ASSET}.tar.gz"
         else
-          URL="https://github.com/${{ github.action_repository }}/releases/download/${VERSION}/${ASSET}.tar.gz"
+          URL="https://github.com/${ACTION_REPO}/releases/download/${VERSION}/${ASSET}.tar.gz"
         fi
 
         mkdir -p "$HOME/.mshell/bin"
@@ -52,11 +54,13 @@ runs:
 
     - name: Download standard library
       shell: bash
+      env:
+        ACTION_REPO: ${{ github.action_repository }}
       run: |
         VERSION="${{ inputs.version }}"
         if [ "$VERSION" = "latest" ]; then
-          curl -sL "https://raw.githubusercontent.com/${{ github.action_repository }}/main/lib/std.msh" -o "$HOME/.mshell/std.msh"
+          curl -sL "https://raw.githubusercontent.com/${ACTION_REPO}/main/lib/std.msh" -o "$HOME/.mshell/std.msh"
         else
-          curl -sL "https://raw.githubusercontent.com/${{ github.action_repository }}/${VERSION}/lib/std.msh" -o "$HOME/.mshell/std.msh"
+          curl -sL "https://raw.githubusercontent.com/${ACTION_REPO}/${VERSION}/lib/std.msh" -o "$HOME/.mshell/std.msh"
         fi
         echo "MSHSTDLIB=$HOME/.mshell/std.msh" >> $GITHUB_ENV
