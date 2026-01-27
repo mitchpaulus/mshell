@@ -28,9 +28,9 @@ runs:
         ASSET="${{ steps.platform.outputs.asset }}"
 
         if [ "$VERSION" = "latest" ]; then
-          URL="https://github.com/${{ github.repository }}/releases/latest/download/${ASSET}.tar.gz"
+          URL="https://github.com/${{ github.action_repository }}/releases/latest/download/${ASSET}.tar.gz"
         else
-          URL="https://github.com/${{ github.repository }}/releases/download/${VERSION}/${ASSET}.tar.gz"
+          URL="https://github.com/${{ github.action_repository }}/releases/download/${VERSION}/${ASSET}.tar.gz"
         fi
 
         mkdir -p "$HOME/.mshell/bin"
@@ -55,8 +55,8 @@ runs:
       run: |
         VERSION="${{ inputs.version }}"
         if [ "$VERSION" = "latest" ]; then
-          curl -sL "https://raw.githubusercontent.com/${{ github.repository }}/main/lib/std.msh" -o "$HOME/.mshell/std.msh"
+          curl -sL "https://raw.githubusercontent.com/${{ github.action_repository }}/main/lib/std.msh" -o "$HOME/.mshell/std.msh"
         else
-          curl -sL "https://raw.githubusercontent.com/${{ github.repository }}/${VERSION}/lib/std.msh" -o "$HOME/.mshell/std.msh"
+          curl -sL "https://raw.githubusercontent.com/${{ github.action_repository }}/${VERSION}/lib/std.msh" -o "$HOME/.mshell/std.msh"
         fi
         echo "MSHSTDLIB=$HOME/.mshell/std.msh" >> $GITHUB_ENV
