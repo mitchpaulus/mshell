@@ -420,7 +420,7 @@ func (state *EvalState) FailWithMessage(message string) EvalResult {
 		if parseItem == nil {
 			fmt.Fprintf(os.Stderr, "%s\n", callStackItem.Name)
 		} else {
-			startToken := callStackItem.MShellParseItem.GetStartToken()
+			startToken := parseItem.GetStartToken()
 			if startToken.TokenFile != nil {
 				fmt.Fprintf(os.Stderr, "%s:%d:%d %s\n", startToken.TokenFile.Path, startToken.Line, startToken.Column, callStackItem.Name)
 			} else {
@@ -565,7 +565,12 @@ MainLoop:
 		case *MShellParsePrefixQuote:
 			prefixQuote := t
 			// Create a quotation from the items and push onto stack
-			q := MShellQuotation{Tokens: prefixQuote.Items, StandardInputFile: "", StandardOutputFile: "", StandardErrorFile: "", Variables: context.Variables, MShellParseQuote: nil}
+			mshellParseQuote := MShellParseQuote{
+				Items: prefixQuote.Items,
+				StartToken: prefixQuote.StartToken,
+				EndToken: prefixQuote.EndToken,
+			}
+			q := MShellQuotation{Tokens: prefixQuote.Items, StandardInputFile: "", StandardOutputFile: "", StandardErrorFile: "", Variables: context.Variables, MShellParseQuote: &mshellParseQuote}
 			stack.Push(&q)
 			// Create a token for the function name (strip trailing '.')
 			lexeme := prefixQuote.StartToken.Lexeme
