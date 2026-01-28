@@ -14,6 +14,7 @@ import (
 	"io"
 	"io/fs"
 	"math"
+	"math/rand"
 	"os"
 	"os/exec"
 	"path"
@@ -46,6 +47,11 @@ type MShellFunction struct {
 }
 
 var oleAutomationEpoch = time.Date(1899, 12, 30, 0, 0, 0, 0, time.UTC)
+var randomFixedRand = rand.New(rand.NewSource(1))
+
+func init() {
+	rand.Seed(time.Now().UnixNano())
+}
 
 type MShellStack []MShellObject
 
@@ -3202,6 +3208,10 @@ MainLoop:
 					}
 
 					stack.Push(MShellFloat{Value: math.Log(floatObj.Value)})
+				} else if t.Lexeme == "random" {
+					stack.Push(MShellFloat{Value: rand.Float64()})
+				} else if t.Lexeme == "randomFixed" {
+					stack.Push(MShellFloat{Value: randomFixedRand.Float64()})
 				} else if t.Lexeme == "toFixed" {
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {

@@ -1,0 +1,7 @@
+# randomFixed should be deterministic but advance the sequence
+randomFixed a!
+randomFixed b!
+@a 0.0 >= @a 1.0 < and
+@b 0.0 >= @b 1.0 < and
+@a @b = not and
+("ok") ("bad") iff wl

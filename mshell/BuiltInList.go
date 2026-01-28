@@ -100,6 +100,8 @@ var BuiltInList = map[string]struct{}{
 	"pop": {},
 	"psub": {},
 	"pwd": {},
+	"random": {},
+	"randomFixed": {},
 	"reFindAll": {},
 	"reFindAllIndex": {},
 	"reMatch": {},
