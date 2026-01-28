@@ -127,6 +127,7 @@ var BuiltInList = map[string]struct{}{
 	"sortByCmp": {},
 	"sortV": {},
 	"split": {},
+	"sqrt": {},
 	"startsWith": {},
 	"stdin": {},
 	"stem": {},
