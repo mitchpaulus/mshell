@@ -56,6 +56,7 @@ In general, completions should be in this order:
 ## Testing instructions
 
 All test cases are in `tests`.
+You must have rebuilt a new binary in `mshell` prior to testing.
 
 - cd to `tests/` and run `./test.sh`.
 - cd to `mshell/` and run `go test`.

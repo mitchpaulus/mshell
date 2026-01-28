@@ -1,0 +1,2 @@
+# Random should return a float in [0, 1)
+random dup 0.0 >= swap 1.0 < and ("ok") ("bad") iff wl

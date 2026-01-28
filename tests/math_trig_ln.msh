@@ -1,0 +1,11 @@
+# Basic trig/log checks (radians)
+0.0 sin 6 toFixed wl
+0.0 cos 6 toFixed wl
+0.0 tan 6 toFixed wl
+1.0 ln 6 toFixed wl
+2.0 ln2 6 toFixed wl
+10.0 ln10 6 toFixed wl
+
+1.5707963267948966 sin 6 toFixed wl
+3.141592653589793 cos 6 toFixed wl
+0.7853981633974483 tan 6 toFixed wl

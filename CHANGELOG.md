@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Functions
+  - `sin`
+  - `cos`
+  - `tan`
+  - `ln`
+  - `ln2`
+  - `ln10`
+  - `random`
+  - `randomFixed`
+
 ### Fixed
 
 ### Changed
