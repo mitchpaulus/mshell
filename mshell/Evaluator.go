@@ -3212,6 +3212,18 @@ MainLoop:
 					stack.Push(MShellFloat{Value: rand.Float64()})
 				} else if t.Lexeme == "randomFixed" {
 					stack.Push(MShellFloat{Value: randomFixedRand.Float64()})
+				} else if t.Lexeme == "sqrt" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'sqrt' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					floatObj, ok := obj1.(MShellFloat)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The parameter in 'sqrt' is expected to be a float, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
+					}
+
+					stack.Push(MShellFloat{Value: math.Sqrt(floatObj.Value)})
 				} else if t.Lexeme == "toFixed" {
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {

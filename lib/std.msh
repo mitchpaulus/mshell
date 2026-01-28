@@ -221,6 +221,45 @@ def abs (float -- float)
     dup 0 < if -1 * end
 end
 
+# This uses the Marsaglia polar method
+# https://en.wikipedia.org/wiki/Marsaglia_polar_method
+def randomNorm (-- float)
+    (
+        random 2.0 * 1.0 - u!
+        random 2.0 * 1.0 - v!
+        @u dup * @v dup * + s!
+        @s 0.0 > @s 1.0 < and if
+            # u * sqrt( (-2 * ln(s) / s )
+            @s ln -2.0 * @s / sqrt
+            @u * out! break
+        end
+    ) loop
+    @out
+end
+
+# Min, Mode, Max.
+# https://en.wikipedia.org/wiki/Triangular_distribution
+def randomTri (float float float -- float)
+    a!, c!, b!
+    @a toFloat a! @b toFloat b! @c toFloat c!
+    @c @a - @b @a - / f!
+    random u!
+    @u @f < if
+        @u
+        @b @a -
+        @c @a -
+        * * sqrt
+        @a +
+    else
+        @b
+            1 @u -
+            @b @a -
+            @b @c -
+            * * sqrt
+        -
+    end
+end
+
 def cos (float -- float)
     1.5707963267948966 + sin
 end
