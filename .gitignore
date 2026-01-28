@@ -18,6 +18,7 @@ mshell/test.msh
 mshell/msh
 codex.log
 .gocache/
+.gomodcache/
 .cache/
 
 *.mshell_history

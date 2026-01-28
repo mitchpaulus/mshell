@@ -3178,6 +3178,30 @@ MainLoop:
 					} else {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot round a %s.\n", t.Line, t.Column, obj1.TypeName()))
 					}
+				} else if t.Lexeme == "sin" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'sin' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					floatObj, ok := obj1.(MShellFloat)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The parameter in 'sin' is expected to be a float, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
+					}
+
+					stack.Push(MShellFloat{Value: math.Sin(floatObj.Value)})
+				} else if t.Lexeme == "ln" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'ln' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					floatObj, ok := obj1.(MShellFloat)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The parameter in 'ln' is expected to be a float, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
+					}
+
+					stack.Push(MShellFloat{Value: math.Log(floatObj.Value)})
 				} else if t.Lexeme == "toFixed" {
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {

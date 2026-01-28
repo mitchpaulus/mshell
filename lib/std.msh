@@ -221,6 +221,22 @@ def abs (float -- float)
     dup 0 < if -1 * end
 end
 
+def cos (float -- float)
+    1.5707963267948966 + sin
+end
+
+def tan (float -- float)
+    dup sin swap cos /
+end
+
+def ln2 (float -- float)
+    ln 1.4426950408889634 *
+end
+
+def ln10 (float -- float)
+    ln 0.4342944819032518 *
+end
+
 
 def tab (-- str) "	" end
 def tsplit (str -- [str])  tab split end
