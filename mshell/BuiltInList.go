@@ -137,6 +137,7 @@ var BuiltInList = map[string]struct{}{
 	"take": {},
 	"tempDir": {},
 	"tempFile": {},
+	"tempFileExt": {},
 	"title": {},
 	"toDt": {},
 	"toFixed": {},

@@ -227,8 +227,9 @@ Metadata values must be static: strings (single or double quoted), integers, flo
 - `isFile`: Check if path is a file. `(path -- bool)`
 - `fileExists`: Check whether a file or directory exists. `(str|path -- bool)`
 - `hardLink`: Create a hard link. `(existingSourcePath newTargetPath -- )`
-- `tempFile`: Create a temporary file, and put the full path on the stack. `( -- str)`
-- `tempDir`: Return path to the OS specific temporary directory. No checks on permission or existence, so never fails. See [`os.TempDir`](https://pkg.go.dev/os#TempDir) in golang. `$TMPDIR` or `/tmp` for Unix, `%TMP%`, `%TEMP%, %USERPROFILE%`, or the Windows directory (`C:\Windows`). `( -- str)`
+- `tempFile`: Create a temporary file with go [`os.CreateTemp`](https://pkg.go.dev/os#CreateTemp) using `dir=""` (defaults to [`os.TempDir`](https://pkg.go.dev/os#TempDir)) and pattern `msh-`, so the filename starts with `msh-` plus a random suffix. Pushes the full path. The file is not removed automatically; use `rm`/`rmf` when you are done. `( -- path)`
+- `tempFileExt`: Create a temporary file with a required extension. The extension input is canonicalized to start with `.` if needed. Uses go [`os.CreateTemp`](https://pkg.go.dev/os#CreateTemp) with `dir=""` (defaults to [`os.TempDir`](https://pkg.go.dev/os#TempDir)) and pattern `msh-*` plus the canonicalized extension, so the filename ends with the extension. Pushes the full path. The file is not removed automatically; use `rm`/`rmf` when you are done. `(str|path -- path)`
+- `tempDir`: Return path to the OS specific temporary directory. No checks on permission or existence, so never fails. See [`os.TempDir`](https://pkg.go.dev/os#TempDir) in golang. `$TMPDIR` or `/tmp` for Unix, `%TMP%`, `%TEMP%, %USERPROFILE%`, or the Windows directory (`C:\Windows`). `( -- path)`
 - `rm`: Remove file. Will stop execution on IO error, including file not found. `(str -- )`
 - `rmf`: Remove file. Will not stop execution on IO error, including file not found. `(str -- )`
 - `cp`: Copy file or directory. `(str:source str:dest -- )`
