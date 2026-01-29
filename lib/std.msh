@@ -342,15 +342,13 @@ def any ([T] (T -- bool) -- bool)
     @list len listLength!
     false result!
     (
-        @index @listLength >=
-        (break)
-        (
+        @index @listLength >= if
+            break
+        else
             @list @index nth @quote x
             (true result! break)
-            ()
             iff
-        )
-        iff
+        end
         @index 1 + index!
     ) loop
     @result
