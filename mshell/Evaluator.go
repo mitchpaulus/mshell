@@ -2080,6 +2080,33 @@ MainLoop:
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error creating temporary file: %s\n", t.Line, t.Column, err.Error()))
 					}
+					if err := tmpfile.Close(); err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error closing temporary file: %s\n", t.Line, t.Column, err.Error()))
+					}
+					// Dump the full path to the stack
+					stack.Push(MShellPath{tmpfile.Name()})
+				} else if t.Lexeme == "tempFileExt" {
+					extValue, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'tempFileExt' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					extStr, err := extValue.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot create tempFileExt with a %s.\n", t.Line, t.Column, extValue.TypeName()))
+					}
+
+					if extStr != "" && !strings.HasPrefix(extStr, ".") {
+						extStr = "." + extStr
+					}
+
+					tmpfile, err := os.CreateTemp("", "msh-*"+extStr)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error creating temporary file: %s\n", t.Line, t.Column, err.Error()))
+					}
+					if err := tmpfile.Close(); err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error closing temporary file: %s\n", t.Line, t.Column, err.Error()))
+					}
 					// Dump the full path to the stack
 					stack.Push(MShellPath{tmpfile.Name()})
 				} else if t.Lexeme == "tempDir" {
