@@ -835,6 +835,11 @@ func (state *TermState) isTabCycleNav(token TerminalToken) bool {
 	if state.isTabToken(token) {
 		return true
 	}
+	if t, ok := token.(SpecialKey); ok {
+		if t == KEY_UP || t == KEY_DOWN || t == KEY_LEFT || t == KEY_RIGHT {
+			return true
+		}
+	}
 	if t, ok := token.(AsciiToken); ok {
 		// Tab cycle nav keys: Ctrl-N (14), Ctrl-P (16), Enter (13)
 		// Enter is included so we can accept completion without executing
@@ -888,6 +893,65 @@ func (state *TermState) cycleTabCompletion(direction int) {
 	state.replaceText(insertString, state.tabCycleStart, state.tabCycleEnd)
 	state.tabCycleEnd = state.index
 	state.setTabCompletions(state.tabCycleMatches)
+}
+
+func (state *TermState) selectTabCompletion(index int) {
+	if len(state.tabCycleMatches) == 0 {
+		return
+	}
+	if index < 0 {
+		index = 0
+	}
+	if index >= len(state.tabCycleMatches) {
+		index = len(state.tabCycleMatches) - 1
+	}
+	state.tabCycleIndex = index
+	insertString := state.buildCompletionInsert(state.tabCycleMatches[state.tabCycleIndex], state.tabCycleTokenType)
+	state.replaceText(insertString, state.tabCycleStart, state.tabCycleEnd)
+	state.tabCycleEnd = state.index
+	state.setTabCompletions(state.tabCycleMatches)
+}
+
+func (state *TermState) cycleTabCompletionColumn(direction int) {
+	if len(state.tabCycleMatches) == 0 {
+		return
+	}
+
+	state.UpdateSize()
+	availableRows := state.numRows - state.promptRow
+	if availableRows < 0 {
+		availableRows = 0
+	}
+	rowLimit := min(tabCompletionColumnLimit, availableRows)
+	layout := completionLayoutFor(state.tabCycleMatches, rowLimit, state.numCols)
+	if layout.columns <= 1 || layout.rows <= 0 {
+		return
+	}
+
+	index := state.tabCycleIndex
+	if index < 0 || index >= len(state.tabCycleMatches) {
+		index = 0
+	}
+
+	row := index % layout.rows
+	col := index / layout.rows
+	targetCol := col + direction
+	if targetCol < 0 {
+		targetCol = layout.columns - 1
+	} else if targetCol >= layout.columns {
+		targetCol = 0
+	}
+
+	targetRow := row
+	if targetCol < len(layout.colHeights) && targetRow >= layout.colHeights[targetCol] {
+		targetRow = layout.colHeights[targetCol] - 1
+	}
+	if targetRow < 0 {
+		targetRow = 0
+	}
+
+	newIndex := targetCol*layout.rows + targetRow
+	state.selectTabCompletion(newIndex)
 }
 
 func (state *TermState) historySearch(direction int) {
@@ -3254,6 +3318,10 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				return state.HandleToken(AsciiToken{Char: 9})
 			}
 		} else if t == KEY_UP {
+			if state.tabCycleActive {
+				state.cycleTabCompletion(-1)
+				return false, nil
+			}
 			// Up arrow
 			for state.historyIndex >= 0 && state.historyIndex < len(history) {
 				state.historyIndex++
@@ -3274,6 +3342,10 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				break
 			}
 		} else if t == KEY_DOWN {
+			if state.tabCycleActive {
+				state.cycleTabCompletion(1)
+				return false, nil
+			}
 			if state.historyIndex <= 0 {
 				state.historyIndex = 0
 			} else if state.historyIndex > len(history) {
@@ -3306,12 +3378,20 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				}
 			}
 		} else if t == KEY_RIGHT {
+			if state.tabCycleActive {
+				state.cycleTabCompletionColumn(1)
+				return false, nil
+			}
 			// Right arrow
 			if state.index < len(state.currentCommand) {
 				state.index++
 				// fmt.Fprintf(os.Stdout, "\033[C")
 			}
 		} else if t == KEY_LEFT {
+			if state.tabCycleActive {
+				state.cycleTabCompletionColumn(-1)
+				return false, nil
+			}
 			// Left arrow
 			if state.index > 0 {
 				state.index--
