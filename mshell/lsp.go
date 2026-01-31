@@ -34,6 +34,7 @@ type lspServer struct {
 	builtins  map[string]*builtinInfo
 	lexer     *Lexer
 	parser    *MShellParser
+	pathBins  IPathBinManager
 	varNames  map[string]struct{}
 	candsBuf  []string
 }
@@ -106,6 +107,7 @@ func RunLSP(in io.Reader, out io.Writer) error {
 
 	lexer := NewLexer("", nil)
 	parser := NewMShellParser(lexer)
+	pathBins := NewPathBinManager()
 
 	server := &lspServer{
 		in:        bufio.NewReader(in),
@@ -114,6 +116,7 @@ func RunLSP(in io.Reader, out io.Writer) error {
 		builtins:  builtins,
 		lexer:     lexer,
 		parser:    parser,
+		pathBins:  pathBins,
 		varNames:  make(map[string]struct{}),
 	}
 
@@ -463,10 +466,14 @@ func (s *lspServer) completion(params protocol.CompletionParams) ([]protocol.Com
 	positionLine := int(params.Position.Line)
 	positionChar := int(params.Position.Character)
 	var (
-		prefix        string
-		found         bool
-		retrieveToken Token
+		varPrefix     string
+		varFound      bool
+		varToken      Token
+		literalPrefix string
+		literalFound  bool
+		literalToken  Token
 	)
+	listStack := make([]bool, 0)
 
 	for {
 		tok := lexer.scanToken()
@@ -474,70 +481,109 @@ func (s *lspServer) completion(params protocol.CompletionParams) ([]protocol.Com
 			break
 		}
 
+		switch tok.Type {
+		case LEFT_SQUARE_BRACKET:
+			if len(listStack) > 0 && !listStack[len(listStack)-1] {
+				listStack[len(listStack)-1] = true
+			}
+			listStack = append(listStack, false)
+			continue
+		case RIGHT_SQUARE_BRACKET:
+			if len(listStack) > 0 {
+				listStack = listStack[:len(listStack)-1]
+			}
+			continue
+		}
+
 		if tok.Type == VARSTORE {
 			if len(tok.Lexeme) > 1 {
 				name := tok.Lexeme[:len(tok.Lexeme)-1]
 				s.varNames[name] = struct{}{}
 			}
-			continue
 		}
 
-		if tok.Type != VARRETRIEVE {
-			continue
+		if tok.Type == VARRETRIEVE && tokenContainsPosition(tok, positionLine, positionChar) {
+			varPrefix = completionPrefix(tok, positionChar)
+			varToken = tok
+			varFound = true
 		}
 
-		tokenLine := tok.Line - 1
-		if tokenLine != positionLine {
-			continue
+		if tok.Type == LITERAL && len(listStack) > 0 && !listStack[len(listStack)-1] {
+			if tokenContainsPosition(tok, positionLine, positionChar) {
+				literalPrefix = literalCompletionPrefix(tok, positionChar)
+				literalToken = tok
+				literalFound = true
+			}
 		}
 
-		startChar := tok.Column - 1
-		length := utf8.RuneCountInString(tok.Lexeme)
-		endChar := startChar + length
-		if positionChar < startChar || positionChar > endChar {
-			continue
-		}
-
-		prefix = completionPrefix(tok, positionChar)
-		retrieveToken = tok
-		found = true
-	}
-
-	if !found {
-		return []protocol.CompletionItem{}, true
-	}
-
-	candidates := s.candsBuf[:0]
-	for name := range s.varNames {
-		if strings.HasPrefix(name, prefix) {
-			candidates = append(candidates, name)
+		if len(listStack) > 0 && !listStack[len(listStack)-1] {
+			listStack[len(listStack)-1] = true
 		}
 	}
 
-	sort.Strings(candidates)
-	line := uint32(retrieveToken.Line - 1)
-	startChar := uint32(retrieveToken.Column - 1)
-	endChar := startChar + uint32(utf8.RuneCountInString(retrieveToken.Lexeme))
-	editRange := protocol.Range{
-		Start: protocol.Position{Line: line, Character: startChar},
-		End:   protocol.Position{Line: line, Character: endChar},
-	}
-	items := make([]protocol.CompletionItem, 0, len(candidates))
-	for _, name := range candidates {
-		label := "@" + name
-		items = append(items, protocol.CompletionItem{
-			Label: label,
-			Kind:  protocol.CompletionItemKindVariable,
-			TextEdit: &protocol.TextEdit{
-				Range:   editRange,
-				NewText: label,
-			},
-		})
+	if varFound {
+		candidates := s.candsBuf[:0]
+		for name := range s.varNames {
+			if strings.HasPrefix(name, varPrefix) {
+				candidates = append(candidates, name)
+			}
+		}
+
+		sort.Strings(candidates)
+		line := uint32(varToken.Line - 1)
+		startChar := uint32(varToken.Column - 1)
+		endChar := startChar + uint32(utf8.RuneCountInString(varToken.Lexeme))
+		editRange := protocol.Range{
+			Start: protocol.Position{Line: line, Character: startChar},
+			End:   protocol.Position{Line: line, Character: endChar},
+		}
+		items := make([]protocol.CompletionItem, 0, len(candidates))
+		for _, name := range candidates {
+			label := "@" + name
+			items = append(items, protocol.CompletionItem{
+				Label: label,
+				Kind:  protocol.CompletionItemKindVariable,
+				TextEdit: &protocol.TextEdit{
+					Range:   editRange,
+					NewText: label,
+				},
+			})
+		}
+
+		s.candsBuf = candidates
+
+		return items, true
 	}
 
-	s.candsBuf = candidates
+	if literalFound && literalPrefix != "" && s.pathBins != nil {
+		matches := s.pathBins.Matches(literalPrefix)
+		if len(matches) == 0 {
+			return []protocol.CompletionItem{}, true
+		}
 
-	return items, true
+		line := uint32(literalToken.Line - 1)
+		startChar := uint32(literalToken.Column - 1)
+		endChar := startChar + uint32(utf8.RuneCountInString(literalToken.Lexeme))
+		editRange := protocol.Range{
+			Start: protocol.Position{Line: line, Character: startChar},
+			End:   protocol.Position{Line: line, Character: endChar},
+		}
+		items := make([]protocol.CompletionItem, 0, len(matches))
+		for _, match := range matches {
+			items = append(items, protocol.CompletionItem{
+				Label: match,
+				Kind:  protocol.CompletionItemKindFunction,
+				TextEdit: &protocol.TextEdit{
+					Range:   editRange,
+					NewText: match,
+				},
+			})
+		}
+
+		return items, true
+	}
+
+	return []protocol.CompletionItem{}, true
 }
 
 type renameTarget struct {
@@ -774,6 +820,21 @@ func completionPrefix(token Token, positionChar int) string {
 	}
 
 	return string(runes[1:offset])
+}
+
+func literalCompletionPrefix(token Token, positionChar int) string {
+	startChar := token.Column - 1
+	offset := positionChar - startChar
+	if offset <= 0 {
+		return ""
+	}
+
+	runes := []rune(token.Lexeme)
+	if offset > len(runes) {
+		offset = len(runes)
+	}
+
+	return string(runes[:offset])
 }
 
 func (d *lspDocument) wordAt(pos protocol.Position) (string, protocol.Range) {

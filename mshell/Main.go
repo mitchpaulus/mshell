@@ -2818,9 +2818,19 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				Definitions: definitions,
 			}
 
+			prevTokenType := EOF
+			if len(tokens) > 1 {
+				if lastTokenLength == 0 {
+					prevTokenType = lastToken.Type
+				} else if len(tokens) >= 3 {
+					prevTokenType = tokens[len(tokens)-3].Type
+				}
+			}
+
 			input := CompletionInput{
 				Prefix:        prefix,
 				LastTokenType: lastToken.Type,
+				PrevTokenType: prevTokenType,
 				NumTokens:     len(tokens),
 			}
 

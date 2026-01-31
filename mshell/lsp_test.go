@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -335,6 +336,148 @@ func TestCompletionForVarRetrieveBareAt(t *testing.T) {
 	}
 	if item.TextEdit.Range.End.Line != 1 || item.TextEdit.Range.End.Character != 1 {
 		t.Fatalf("unexpected edit range end: %+v", item.TextEdit.Range.End)
+	}
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      3,
+		"method":  "shutdown",
+	})
+
+	shutdownResp := readLSPResponse(t, output)
+	if shutdownResp.Error != nil {
+		t.Fatalf("shutdown returned error: %+v", shutdownResp.Error)
+	}
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "exit",
+	})
+
+	clientWriter.Close()
+	wg.Wait()
+	if runErr != nil {
+		t.Fatalf("RunLSP returned error: %v", runErr)
+	}
+}
+
+func TestCompletionForBinaryListFirstItem(t *testing.T) {
+	tmpDir := t.TempDir()
+	baseName := "lspbin"
+	fileName := baseName
+	if runtime.GOOS == "windows" {
+		fileName = baseName + ".cmd"
+	}
+	binPath := filepath.Join(tmpDir, fileName)
+	content := []byte("")
+	if runtime.GOOS == "windows" {
+		content = []byte("@echo off\r\n")
+	}
+	if err := os.WriteFile(binPath, content, 0644); err != nil {
+		t.Fatalf("failed to write temp binary: %v", err)
+	}
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(binPath, 0755); err != nil {
+			t.Fatalf("failed to chmod temp binary: %v", err)
+		}
+	}
+
+	oldPath := os.Getenv("PATH")
+	if err := os.Setenv("PATH", tmpDir); err != nil {
+		t.Fatalf("failed to set PATH: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Setenv("PATH", oldPath)
+	})
+
+	doc := "[ " + baseName
+	uri := protocol.DocumentURI("file:///completion-bin.msh")
+
+	clientReader, clientWriter := io.Pipe()
+	serverReader, serverWriter := io.Pipe()
+
+	var wg sync.WaitGroup
+	var runErr error
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		runErr = RunLSP(clientReader, serverWriter)
+		serverWriter.Close()
+	}()
+
+	output := bufio.NewReader(serverReader)
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "initialize",
+		"params": map[string]any{
+			"capabilities": map[string]any{},
+		},
+	})
+
+	initResp := readLSPResponse(t, output)
+	if initResp.Error != nil {
+		t.Fatalf("initialize returned error: %+v", initResp.Error)
+	}
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "textDocument/didOpen",
+		"params": map[string]any{
+			"textDocument": map[string]any{
+				"uri":        uri,
+				"languageId": "mshell",
+				"version":    1,
+				"text":       doc,
+			},
+		},
+	})
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      2,
+		"method":  "textDocument/completion",
+		"params": map[string]any{
+			"textDocument": map[string]any{"uri": uri},
+			"position": map[string]any{
+				"line":      0,
+				"character": len([]rune(doc)),
+			},
+		},
+	})
+
+	completionResp := readLSPResponse(t, output)
+	if completionResp.Error != nil {
+		t.Fatalf("completion returned error: %+v", completionResp.Error)
+	}
+
+	payload, err := json.Marshal(completionResp.Result)
+	if err != nil {
+		t.Fatalf("failed to marshal completion result: %v", err)
+	}
+
+	var items []protocol.CompletionItem
+	if err := json.Unmarshal(payload, &items); err != nil {
+		t.Fatalf("failed to unmarshal completion result: %v", err)
+	}
+
+	found := false
+	for _, item := range items {
+		if item.Label != fileName {
+			continue
+		}
+		found = true
+		if item.TextEdit == nil {
+			t.Fatalf("expected completion to include text edit")
+		}
+		if item.TextEdit.NewText != fileName {
+			t.Fatalf("unexpected completion new text: %q", item.TextEdit.NewText)
+		}
+		break
+	}
+	if !found {
+		t.Fatalf("expected completion to include %q, got %v", fileName, items)
 	}
 
 	sendLSPMessage(t, clientWriter, map[string]any{

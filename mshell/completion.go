@@ -98,6 +98,7 @@ type CompletionEnv interface {
 type CompletionInput struct {
 	Prefix        string    // The text to complete (may include leading $ or @)
 	LastTokenType TokenType // Type of the last token (affects completion behavior)
+	PrevTokenType TokenType // Type of the token before the current completion target
 	NumTokens     int       // Number of tokens in the input (includes EOF)
 }
 
@@ -137,9 +138,12 @@ func GenerateCompletions(input CompletionInput, deps CompletionDeps) []TabMatch 
 		}
 	}
 
-	// 2. Binary name completion (first token position)
+	// 2. Binary name completion (first token position or after pipe/list start)
 	// NumTokens == 2 means: one token + EOF
-	if input.NumTokens == 2 && len(prefix) > 0 && input.LastTokenType == LITERAL {
+	binaryPosition := input.NumTokens == 2 ||
+		input.PrevTokenType == PIPE ||
+		input.PrevTokenType == LEFT_SQUARE_BRACKET
+	if binaryPosition && len(prefix) > 0 && input.LastTokenType == LITERAL {
 		binMatches := deps.Binaries.Matches(prefix)
 		for _, match := range binMatches {
 			matches = append(matches, TabMatch{TABMATCHCMD, match})
