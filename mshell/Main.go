@@ -36,6 +36,7 @@ const (
 )
 
 const mshellVersion = "0.9.0"
+const tabCompletionColumnLimit = 10
 
 var tempFiles []string
 
@@ -590,6 +591,207 @@ func (state *TermState) cycleLastArgument() {
 	fmt.Fprintf(os.Stdout, "\a")
 }
 
+type completionLayout struct {
+	columns    int
+	rows       int
+	colHeights []int
+	colWidths  []int
+}
+
+func completionLayoutFor(matches []string, rowLimit int, maxWidth int) completionLayout {
+	layout := completionLayout{columns: 1}
+	total := len(matches)
+	if total == 0 {
+		return layout
+	}
+
+	effectiveLimit := rowLimit
+	if effectiveLimit <= 0 {
+		effectiveLimit = 1
+	}
+
+	if total <= effectiveLimit {
+		return completionLayoutWithColumns(matches, 1)
+	}
+
+	columns := (total + effectiveLimit - 1) / effectiveLimit
+	if columns > total {
+		columns = total
+	}
+
+	layout = completionLayoutWithColumns(matches, columns)
+	if maxWidth <= 0 {
+		return layout
+	}
+
+	if completionLayoutWidth(layout) <= maxWidth {
+		for columns < total {
+			next := completionLayoutWithColumns(matches, columns+1)
+			if completionLayoutWidth(next) <= maxWidth {
+				layout = next
+				columns++
+			} else {
+				break
+			}
+		}
+		return layout
+	}
+
+	for columns > 1 {
+		columns--
+		layout = completionLayoutWithColumns(matches, columns)
+		if completionLayoutWidth(layout) <= maxWidth {
+			break
+		}
+	}
+
+	return layout
+}
+
+func completionLayoutWithColumns(matches []string, columns int) completionLayout {
+	total := len(matches)
+	if total == 0 {
+		return completionLayout{}
+	}
+	if columns < 1 {
+		columns = 1
+	}
+	if columns > total {
+		columns = total
+	}
+
+	rows := (total + columns - 1) / columns
+	colHeights := make([]int, columns)
+	colWidths := make([]int, columns)
+	for col := 0; col < columns; col++ {
+		start := col * rows
+		if start >= total {
+			colHeights[col] = 0
+			colWidths[col] = 0
+			continue
+		}
+		end := min(start+rows, total)
+		colHeights[col] = end - start
+		colWidths[col] = completionMaxWidth(matches[start:end])
+	}
+
+	return completionLayout{
+		columns:    columns,
+		rows:       rows,
+		colHeights: colHeights,
+		colWidths:  colWidths,
+	}
+}
+
+func completionLayoutWidth(layout completionLayout) int {
+	width := 0
+	visibleCols := 0
+	for i, colWidth := range layout.colWidths {
+		if i < len(layout.colHeights) && layout.colHeights[i] > 0 {
+			width += colWidth
+			visibleCols++
+		}
+	}
+	if visibleCols > 1 {
+		width += 2 * (visibleCols - 1)
+	}
+	return width
+}
+
+func completionMaxWidth(matches []string) int {
+	maxWidth := 0
+	for _, match := range matches {
+		width := utf8.RuneCountInString(match)
+		if width > maxWidth {
+			maxWidth = width
+		}
+	}
+	return maxWidth
+}
+
+func completionRowsNeeded(matches []string, rowLimit int, maxWidth int) int {
+	if len(matches) == 0 {
+		return 0
+	}
+	layout := completionLayoutFor(matches, rowLimit, maxWidth)
+	return layout.rows
+}
+
+func completionDisplayRows(matches []string, highlightIndex int, rowLimit int, availableRows int, maxWidth int) []string {
+	if len(matches) == 0 || availableRows <= 0 {
+		return nil
+	}
+
+	layout := completionLayoutFor(matches, rowLimit, maxWidth)
+	if layout.rows <= availableRows {
+		return completionRows(matches, highlightIndex, layout, layout.rows)
+	}
+
+	rowsToShow := availableRows - 1
+	if rowsToShow <= 0 {
+		return []string{fmt.Sprintf("[%d] more items..", len(matches))}
+	}
+
+	rows := completionRows(matches, highlightIndex, layout, rowsToShow)
+	hiddenCount := len(matches) - completionDisplayedCount(layout, rowsToShow)
+	rows = append(rows, fmt.Sprintf("[%d] more items..", hiddenCount))
+	return rows
+}
+
+func completionRows(matches []string, highlightIndex int, layout completionLayout, rows int) []string {
+	if rows <= 0 {
+		return nil
+	}
+	if rows > layout.rows {
+		rows = layout.rows
+	}
+
+	lines := make([]string, 0, rows)
+	for row := 0; row < rows; row++ {
+		line := ""
+		for col := 0; col < layout.columns; col++ {
+			index := col*layout.rows + row
+			if index >= len(matches) {
+				break
+			}
+			raw := matches[index]
+			display := completionItemDisplay(raw, index == highlightIndex)
+			line += display
+			nextIndex := index + layout.rows
+			if nextIndex < len(matches) {
+				pad := layout.colWidths[col] - utf8.RuneCountInString(raw)
+				if pad < 0 {
+					pad = 0
+				}
+				line += strings.Repeat(" ", pad+2)
+			}
+		}
+		if len(line) > 0 {
+			lines = append(lines, line)
+		}
+	}
+
+	return lines
+}
+
+func completionDisplayedCount(layout completionLayout, rows int) int {
+	if rows <= 0 {
+		return 0
+	}
+	displayed := 0
+	for _, height := range layout.colHeights {
+		displayed += min(rows, height)
+	}
+	return displayed
+}
+
+func completionItemDisplay(value string, highlight bool) string {
+	if !highlight {
+		return value
+	}
+	return "\033[7m" + value + "\033[0m"
+}
+
 func (state *TermState) clearTabCompletionsDisplay() {
 	var displayed []string
 	if state.currentTabComplete == 0 {
@@ -602,8 +804,13 @@ func (state *TermState) clearTabCompletionsDisplay() {
 		return
 	}
 
-	limit := state.numRows - state.promptRow
-	clearCount := min(len(displayed), limit)
+	availableRows := state.numRows - state.promptRow
+	if availableRows < 0 {
+		availableRows = 0
+	}
+	columnLimit := min(tabCompletionColumnLimit, availableRows)
+	clearLines := completionDisplayRows(displayed, -1, columnLimit, availableRows, state.numCols)
+	clearCount := len(clearLines)
 	for i := 0; i < clearCount; i++ {
 		fmt.Fprintf(os.Stdout, "\n\033[2K")
 	}
@@ -627,6 +834,11 @@ func (state *TermState) isTabToken(token TerminalToken) bool {
 func (state *TermState) isTabCycleNav(token TerminalToken) bool {
 	if state.isTabToken(token) {
 		return true
+	}
+	if t, ok := token.(SpecialKey); ok {
+		if t == KEY_UP || t == KEY_DOWN || t == KEY_LEFT || t == KEY_RIGHT {
+			return true
+		}
 	}
 	if t, ok := token.(AsciiToken); ok {
 		// Tab cycle nav keys: Ctrl-N (14), Ctrl-P (16), Enter (13)
@@ -681,6 +893,65 @@ func (state *TermState) cycleTabCompletion(direction int) {
 	state.replaceText(insertString, state.tabCycleStart, state.tabCycleEnd)
 	state.tabCycleEnd = state.index
 	state.setTabCompletions(state.tabCycleMatches)
+}
+
+func (state *TermState) selectTabCompletion(index int) {
+	if len(state.tabCycleMatches) == 0 {
+		return
+	}
+	if index < 0 {
+		index = 0
+	}
+	if index >= len(state.tabCycleMatches) {
+		index = len(state.tabCycleMatches) - 1
+	}
+	state.tabCycleIndex = index
+	insertString := state.buildCompletionInsert(state.tabCycleMatches[state.tabCycleIndex], state.tabCycleTokenType)
+	state.replaceText(insertString, state.tabCycleStart, state.tabCycleEnd)
+	state.tabCycleEnd = state.index
+	state.setTabCompletions(state.tabCycleMatches)
+}
+
+func (state *TermState) cycleTabCompletionColumn(direction int) {
+	if len(state.tabCycleMatches) == 0 {
+		return
+	}
+
+	state.UpdateSize()
+	availableRows := state.numRows - state.promptRow
+	if availableRows < 0 {
+		availableRows = 0
+	}
+	rowLimit := min(tabCompletionColumnLimit, availableRows)
+	layout := completionLayoutFor(state.tabCycleMatches, rowLimit, state.numCols)
+	if layout.columns <= 1 || layout.rows <= 0 {
+		return
+	}
+
+	index := state.tabCycleIndex
+	if index < 0 || index >= len(state.tabCycleMatches) {
+		index = 0
+	}
+
+	row := index % layout.rows
+	col := index / layout.rows
+	targetCol := col + direction
+	if targetCol < 0 {
+		targetCol = layout.columns - 1
+	} else if targetCol >= layout.columns {
+		targetCol = 0
+	}
+
+	targetRow := row
+	if targetCol < len(layout.colHeights) && targetRow >= layout.colHeights[targetCol] {
+		targetRow = layout.colHeights[targetCol] - 1
+	}
+	if targetRow < 0 {
+		targetRow = 0
+	}
+
+	newIndex := targetCol*layout.rows + targetRow
+	state.selectTabCompletion(newIndex)
 }
 
 func (state *TermState) historySearch(direction int) {
@@ -874,41 +1145,46 @@ func (s *TermState) Render() {
 		previousTabCompletion = s.tabCompletions0
 	}
 
-	// Do current completions, up to 10
-	limit := s.numRows - s.promptRow
-	if len(currentTabCompletion) > limit {
+	availableRows := s.numRows - s.promptRow
+	if availableRows < 0 {
+		availableRows = 0
+	}
+	columnLimit := min(tabCompletionColumnLimit, availableRows)
+	rowsNeeded := completionRowsNeeded(currentTabCompletion, columnLimit, s.numCols)
+	if rowsNeeded > availableRows {
 		linesPossible := max(0, s.promptRow-s.numPromptLines)
-		fmt.Fprintf(s.f, "Lines possible: %d\n", linesPossible)
-		diff := len(currentTabCompletion) - limit
-		s.ScrollDown(min(diff, linesPossible))
-		limit = s.numRows - s.promptRow
-	}
-
-	// Clean previous tab completions
-	for i := 0; i < min(len(previousTabCompletion), limit); i++ {
-		// Do \n to move to the next line
-		s.renderBuffer = append(s.renderBuffer, "\n"...)
-		s.renderBuffer = append(s.renderBuffer, "\033[2K"...)
-	}
-	// Move back up number of completion lines
-	for i := 0; i < min(len(previousTabCompletion), limit); i++ {
-		s.renderBuffer = append(s.renderBuffer, "\033[A"...)
-	}
-
-	for i := 0; i < min(len(currentTabCompletion), limit); i++ {
-		// // Do \r\n to move to the next line
-		s.renderBuffer = append(s.renderBuffer, "\r\n"...)
-		if s.tabCycleActive && s.tabCycleIndex == i {
-			s.renderBuffer = append(s.renderBuffer, "\033[7m"...)
-			s.renderBuffer = append(s.renderBuffer, []byte(currentTabCompletion[i])...)
-			s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
-		} else {
-			s.renderBuffer = append(s.renderBuffer, []byte(currentTabCompletion[i])...)
+		diff := rowsNeeded - availableRows
+		if diff > 0 && linesPossible > 0 {
+			s.ScrollDown(min(diff, linesPossible))
+			availableRows = s.numRows - s.promptRow
+			if availableRows < 0 {
+				availableRows = 0
+			}
+			columnLimit = min(tabCompletionColumnLimit, availableRows)
 		}
 	}
 
-	// Move back up number of completion lines
-	for i := 0; i < min(len(currentTabCompletion), limit); i++ {
+	highlightIndex := -1
+	if s.tabCycleActive {
+		highlightIndex = s.tabCycleIndex
+	}
+
+	previousLines := completionDisplayRows(previousTabCompletion, -1, columnLimit, availableRows, s.numCols)
+	for i := 0; i < len(previousLines); i++ {
+		s.renderBuffer = append(s.renderBuffer, "\n"...)
+		s.renderBuffer = append(s.renderBuffer, "\033[2K"...)
+	}
+	for i := 0; i < len(previousLines); i++ {
+		s.renderBuffer = append(s.renderBuffer, "\033[A"...)
+	}
+
+	currentLines := completionDisplayRows(currentTabCompletion, highlightIndex, columnLimit, availableRows, s.numCols)
+	for i := 0; i < len(currentLines); i++ {
+		s.renderBuffer = append(s.renderBuffer, "\r\n"...)
+		s.renderBuffer = append(s.renderBuffer, []byte(currentLines[i])...)
+	}
+
+	for i := 0; i < len(currentLines); i++ {
 		s.renderBuffer = append(s.renderBuffer, "\033[A"...)
 	}
 
@@ -916,7 +1192,7 @@ func (s *TermState) Render() {
 	pos := s.promptLength + 1 + s.index
 	s.renderBuffer = append(s.renderBuffer, fmt.Sprintf("\033[%dG", pos)...)
 
-	fmt.Fprintf(s.f, "Term index: %d, command length: %d, num completions: %d, limit: %d\n, prompt row: %d, numRows: %d\n", s.index, len(s.currentCommand), len(currentTabCompletion), limit, s.promptRow, s.numRows)
+	fmt.Fprintf(s.f, "Term index: %d, command length: %d, num completions: %d, available rows: %d\n, prompt row: %d, numRows: %d\n", s.index, len(s.currentCommand), len(currentTabCompletion), availableRows, s.promptRow, s.numRows)
 
 	// Push the buffer to stdout
 	// fmt.Fprintf(s.f, "Rendering buffer: %s\n", string(s.renderBuffer))
@@ -1261,8 +1537,29 @@ func (state *TermState) replaceText(newText string, replaceStart int, replaceEnd
 	// fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[replaceEnd:]))
 	// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + replaceStart + len(newText))
 
-	state.currentCommand = append(state.currentCommand[:replaceStart], append([]rune(newText), state.currentCommand[replaceEnd:]...)...)
-	state.index = replaceStart + len(newText)
+	commandLength := len(state.currentCommand)
+	if replaceStart < 0 {
+		replaceStart = 0
+	}
+	if replaceEnd < 0 {
+		replaceEnd = 0
+	}
+	if replaceStart > commandLength {
+		replaceStart = commandLength
+	}
+	if replaceEnd > commandLength {
+		replaceEnd = commandLength
+	}
+	if replaceStart > replaceEnd {
+		replaceStart = replaceEnd
+	}
+
+	insertRunes := []rune(newText)
+	state.currentCommand = append(state.currentCommand[:replaceStart], append(insertRunes, state.currentCommand[replaceEnd:]...)...)
+	state.index = replaceStart + len(insertRunes)
+	if state.index > len(state.currentCommand) {
+		state.index = len(state.currentCommand)
+	}
 	state.resetHistorySearch()
 }
 
@@ -2751,12 +3048,13 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				lastToken = tokens[len(tokens)-2]
 
 				zeroBasedStartOfToken := lastToken.Column - 1
+				lastTokenRuneLength := utf8.RuneCountInString(lastToken.Lexeme)
 
-				if state.index > zeroBasedStartOfToken+len(lastToken.Lexeme) {
+				if state.index > zeroBasedStartOfToken+lastTokenRuneLength {
 					prefix = ""
 				} else {
 
-					lastTokenLength = len(lastToken.Lexeme)
+					lastTokenLength = lastTokenRuneLength
 
 					if lastToken.Type == UNFINISHEDSTRING || lastToken.Type == UNFINISHEDSINGLEQUOTESTRING || lastToken.Type == UNFINISHEDPATH {
 						prefix = string(state.currentCommand[zeroBasedStartOfToken+1 : state.index])
@@ -3020,6 +3318,10 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				return state.HandleToken(AsciiToken{Char: 9})
 			}
 		} else if t == KEY_UP {
+			if state.tabCycleActive {
+				state.cycleTabCompletion(-1)
+				return false, nil
+			}
 			// Up arrow
 			for state.historyIndex >= 0 && state.historyIndex < len(history) {
 				state.historyIndex++
@@ -3040,6 +3342,10 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				break
 			}
 		} else if t == KEY_DOWN {
+			if state.tabCycleActive {
+				state.cycleTabCompletion(1)
+				return false, nil
+			}
 			if state.historyIndex <= 0 {
 				state.historyIndex = 0
 			} else if state.historyIndex > len(history) {
@@ -3072,12 +3378,20 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				}
 			}
 		} else if t == KEY_RIGHT {
+			if state.tabCycleActive {
+				state.cycleTabCompletionColumn(1)
+				return false, nil
+			}
 			// Right arrow
 			if state.index < len(state.currentCommand) {
 				state.index++
 				// fmt.Fprintf(os.Stdout, "\033[C")
 			}
 		} else if t == KEY_LEFT {
+			if state.tabCycleActive {
+				state.cycleTabCompletionColumn(-1)
+				return false, nil
+			}
 			// Left arrow
 			if state.index > 0 {
 				state.index--
