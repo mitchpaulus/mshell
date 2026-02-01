@@ -94,6 +94,27 @@ MShellObject
     MShellFloat
 ```
 
+# Executable Lookups
+
+Two steps:
+
+- Find the absolute path to file
+- Understand how to transform CLI to run file
+
+## Linux/Unix like:
+
+Finding:
+
+- PATH: all files with an executable bit
+- Explicit set
+
+Running:
+
+- If it has shebang -> Run directly, let OS handle interpreter setup.
+- No shebang -> Can check for extension/explicit pattern configuration.
+
+Map exact name -> [ 'asdf' 'asdfasdf'  ]
+
 ## References
 
 [fish shell built in](https://github.com/fish-shell/fish-shell/tree/master/src/builtins)

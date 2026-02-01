@@ -1,0 +1,9 @@
+{
+    'bins': {
+        'name': ['name'],
+        'othername': ['uv' 'run']
+    },
+    'binPatterns': {
+        '*.py': ['uv' 'run' '--script' @file]
+    }
+}

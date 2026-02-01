@@ -97,6 +97,7 @@ func main() {
 	input := ""
 	inputSet := false
 	positionalArgs := []string{}
+	configPathFlag := ""
 	var inputFile *TokenFile
 	inputFile = nil
 
@@ -108,7 +109,17 @@ func main() {
 	for i < len(os.Args) {
 		arg := os.Args[i]
 		i++
-		if arg == "--lex" {
+		if strings.HasPrefix(arg, "--config=") {
+			configPathFlag = strings.TrimPrefix(arg, "--config=")
+		} else if arg == "--config" {
+			if i >= len(os.Args) {
+				fmt.Println("Error: --config requires a path")
+				os.Exit(1)
+				return
+			}
+			configPathFlag = os.Args[i]
+			i++
+		} else if arg == "--lex" {
 			command = CLILEX
 			// printLex = true
 		} else if arg == "--typecheck" {
@@ -127,6 +138,7 @@ func main() {
 			fmt.Println("Usage: msh lsp")
 			fmt.Println("")
 			fmt.Println("Options:")
+			fmt.Println("  --config PATH  Load config from PATH (overrides MSH_CONFIG and defaults)")
 			fmt.Println("  --html       Render the input as HTML")
 			fmt.Println("  --lex        Print the tokens lexed from the input")
 			fmt.Println("  --parse      Print the parsed Abstract Syntax Tree as JSON")
@@ -187,6 +199,14 @@ func main() {
 		html := HtmlFromInput(input)
 		fmt.Fprintf(os.Stdout, "%s", html)
 		return
+	}
+
+	if command == CLIEXECUTE {
+		loadedConfigDict, loadedConfigPath, err = LoadConfig(configPathFlag)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
+			os.Exit(1)
+		}
 	}
 
 	if len(input) == 0 && term.IsTerminal(stdOutFd) && term.IsTerminal(int(os.Stdin.Fd())) {
@@ -3554,9 +3574,14 @@ _msh_completion() {
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
+    if [[ $prev == "--config" ]]; then
+        COMPREPLY=( $(compgen -f -- "$cur") )
+        return 0
+    fi
+
     if [[ $COMP_CWORD -eq 1 ]]; then
         if [[ "$cur" == -* ]]; then
-            COMPREPLY=( $(compgen -W "--html --lex --parse --version --help -h -c" -- "$cur") )
+            COMPREPLY=( $(compgen -W "--config --html --lex --parse --version --help -h -c" -- "$cur") )
             return 0
         fi
         COMPREPLY=( $(compgen -W "bin lsp completions" -- "$cur") )
@@ -3584,7 +3609,7 @@ _msh_completion() {
     esac
 
     if [[ "$cur" == -* ]]; then
-        COMPREPLY=( $(compgen -W "--html --lex --parse --version --help -h -c" -- "$cur") )
+        COMPREPLY=( $(compgen -W "--config --html --lex --parse --version --help -h -c" -- "$cur") )
         return 0
     fi
 
@@ -3598,6 +3623,7 @@ complete -F _msh_completion msh mshell
 
 func fishCompletionScript() string {
 	return `function __msh_register_completions --argument-names cmd
+    complete -c $cmd -f -l config -r -d 'Load config from PATH'
     complete -c $cmd -f -l html -d 'Render the input as HTML'
     complete -c $cmd -f -l lex -d 'Print tokens from the input'
     complete -c $cmd -f -l parse -d 'Print the parsed AST as JSON'
@@ -3629,6 +3655,7 @@ def "msh_bin_subcommands" [] {
 }
 
 export extern "msh" [
+  --config: string
   --html
   --lex
   --parse
@@ -3651,6 +3678,7 @@ export extern "msh completions" [
 ]
 
 export extern "mshell" [
+  --config: string
   --html
   --lex
   --parse
@@ -3677,7 +3705,7 @@ export extern "mshell completions" [
 func elvishCompletionScript() string {
 	return `fn _msh_complete { |@args|
   if (== (count $args) 0) {
-    put bin lsp completions --html --lex --parse --version --help -h -c
+    put bin lsp completions --config --html --lex --parse --version --help -h -c
     return
   }
 
