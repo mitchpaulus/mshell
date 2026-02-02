@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `sqrt`
   - `randomTri`
   - `tempFileExt`
+- CLI Alt-D inserts the current date as `YYYY-MM-DD`
 
 ### Fixed
 
