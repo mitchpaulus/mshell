@@ -3223,6 +3223,35 @@ MainLoop:
 					}
 
 					stack.Push(MShellFloat{Value: math.Sin(floatObj.Value)})
+				} else if t.Lexeme == "arctan" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'arctan' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					floatObj, ok := obj1.(MShellFloat)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The parameter in 'arctan' is expected to be a float, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
+					}
+
+					stack.Push(MShellFloat{Value: math.Atan(floatObj.Value)})
+				} else if t.Lexeme == "pow" {
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					exponent, ok := obj1.(MShellFloat)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The exponent in 'pow' is expected to be a float, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
+					}
+
+					base, ok := obj2.(MShellFloat)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The base in 'pow' is expected to be a float, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
+					}
+
+					stack.Push(MShellFloat{Value: math.Pow(base.Value, exponent.Value)})
 				} else if t.Lexeme == "ln" {
 					obj1, err := stack.Pop()
 					if err != nil {

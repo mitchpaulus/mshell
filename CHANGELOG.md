@@ -13,9 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `sin`
   - `cos`
   - `tan`
+  - `arctan`
   - `ln`
   - `ln2`
   - `ln10`
+  - `pow`
   - `random`
   - `randomFixed`
   - `randomNorm`
