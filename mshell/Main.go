@@ -1635,6 +1635,7 @@ var SpecialKeyName = []string{
 	"KEY_HOME",
 	"KEY_END",
 	"KEY_ALT_B",
+	"KEY_ALT_D",
 	"KEY_ALT_F",
 	"KEY_ALT_O",
 	"KEY_ALT_DOT",
@@ -1667,6 +1668,7 @@ const (
 	KEY_END
 
 	KEY_ALT_B
+	KEY_ALT_D
 	KEY_ALT_F
 	KEY_ALT_O
 	KEY_ALT_DOT
@@ -1941,6 +1943,8 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 			} else if c == 98 { // Alt-B
 				// Move cursor left by word
 				return KEY_ALT_B, nil
+			} else if c == 100 { // Alt-D
+				return KEY_ALT_D, nil
 			} else if c == 102 { // Alt-F
 				// Move cursor right by word
 				return KEY_ALT_F, nil
@@ -3309,6 +3313,9 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			fmt.Fprintf(os.Stdout, "\r\n")
 			fmt.Fprintf(state.f, "Exiting mshell using ALT-o...\n")
 			return true, nil
+		} else if t == KEY_ALT_D {
+			dateStr := time.Now().Format("2006-01-02")
+			state.PushChars([]rune(dateStr))
 		} else if t == KEY_ALT_DOT {
 			state.cycleLastArgument()
 		} else if t == KEY_SHIFT_TAB {
