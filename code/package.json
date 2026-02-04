@@ -27,6 +27,44 @@
                 }
             ]
         },
+        "debuggers": [
+            {
+                "type": "mshell",
+                "label": "mshell",
+                "languages": ["mshell"],
+                "configurationAttributes": {
+                    "launch": {
+                        "required": ["program"],
+                        "properties": {
+                            "program": {
+                                "type": "string",
+                                "description": "Absolute path to the mshell script."
+                            }
+                        }
+                    }
+                },
+                "initialConfigurations": [
+                    {
+                        "type": "mshell",
+                        "request": "launch",
+                        "name": "Run mshell file",
+                        "program": "${file}"
+                    }
+                ],
+                "configurationSnippets": [
+                    {
+                        "label": "mshell: Run current file",
+                        "description": "Run the active mshell file.",
+                        "body": {
+                            "type": "mshell",
+                            "request": "launch",
+                            "name": "Run mshell file",
+                            "program": "${file}"
+                        }
+                    }
+                ]
+            }
+        ],
         "languages": [
             {
                 "id": "mshell",
