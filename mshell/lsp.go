@@ -353,6 +353,9 @@ func (s *lspServer) sendResult(id *json.RawMessage, result any) error {
 	if id == nil {
 		return nil
 	}
+	if result == nil {
+		result = json.RawMessage("null")
+	}
 	resp := responseMessage{
 		JSONRPC: jsonrpcVersion,
 		ID:      id,
