@@ -28,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Windows CMD.EXE /C quoting now handles quoted commands with extra arguments (e.g., npm.cmd paths with spaces).
+
 ### Changed
 
 ## 0.9.0 - 2026-01-27
