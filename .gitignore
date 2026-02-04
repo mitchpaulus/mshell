@@ -8,6 +8,7 @@ tests/quote_stderr_redirect.txt
 tests/test_quote_stderr.txt
 
 code/node_modules/
+code/out/
 
 .claude/settings.local.json
 copy.msh
