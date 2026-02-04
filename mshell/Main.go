@@ -611,35 +611,24 @@ func completionLayoutFor(matches []string, rowLimit int, maxWidth int) completio
 	}
 
 	if total <= effectiveLimit {
-		return completionLayoutWithColumns(matches, 1)
+		return completionLayoutWithRows(matches, total, 1)
 	}
 
-	columns := (total + effectiveLimit - 1) / effectiveLimit
-	if columns > total {
-		columns = total
-	}
-
-	layout = completionLayoutWithColumns(matches, columns)
+	rows := min(effectiveLimit, total)
+	columns := (total + rows - 1) / rows
+	layout = completionLayoutWithRows(matches, rows, columns)
 	if maxWidth <= 0 {
 		return layout
 	}
 
 	if completionLayoutWidth(layout) <= maxWidth {
-		for columns < total {
-			next := completionLayoutWithColumns(matches, columns+1)
-			if completionLayoutWidth(next) <= maxWidth {
-				layout = next
-				columns++
-			} else {
-				break
-			}
-		}
 		return layout
 	}
 
 	for columns > 1 {
 		columns--
-		layout = completionLayoutWithColumns(matches, columns)
+		rows = (total + columns - 1) / columns
+		layout = completionLayoutWithRows(matches, rows, columns)
 		if completionLayoutWidth(layout) <= maxWidth {
 			break
 		}
@@ -648,10 +637,16 @@ func completionLayoutFor(matches []string, rowLimit int, maxWidth int) completio
 	return layout
 }
 
-func completionLayoutWithColumns(matches []string, columns int) completionLayout {
+func completionLayoutWithRows(matches []string, rows int, columns int) completionLayout {
 	total := len(matches)
 	if total == 0 {
 		return completionLayout{}
+	}
+	if rows < 1 {
+		rows = 1
+	}
+	if rows > total {
+		rows = total
 	}
 	if columns < 1 {
 		columns = 1
@@ -659,8 +654,9 @@ func completionLayoutWithColumns(matches []string, columns int) completionLayout
 	if columns > total {
 		columns = total
 	}
-
-	rows := (total + columns - 1) / columns
+	if rows*columns < total {
+		rows = (total + columns - 1) / columns
+	}
 	colHeights := make([]int, columns)
 	colWidths := make([]int, columns)
 	for col := 0; col < columns; col++ {
