@@ -1940,9 +1940,6 @@ func (parser *MShellParser) ParseGetter() (MShellParseItem, error) {
 		parser.NextToken()
 		return &MShellGetter{Token: t, String: parsedStr}, nil
 	case SINGLEQUOTESTRING:
-		if len(t.Lexeme) < 2 {
-			return nil, fmt.Errorf("Error parsing getter string: empty single-quoted string at line %d, column %d.", t.Line, t.Column)
-		}
 		parsedStr := t.Lexeme[1 : len(t.Lexeme)-1]
 		parser.NextToken()
 		return &MShellGetter{Token: t, String: parsedStr}, nil
@@ -2201,9 +2198,9 @@ DoneIfBody:
 	return ifBlock, nil
 }
 
-// ParseGrid parses a grid literal: {{ ... }}
+// ParseGrid parses a grid literal: [| ... |]
 // Grammar:
-//   {{ [grid-meta ;] col1 [col-meta], col2, ...; row1_val1, row1_val2, ...; row2_val1, ... }}
+//   [| [grid-meta ;] col1 [col-meta], col2, ...; row1_val1, row1_val2, ...; row2_val1, ... |]
 func (parser *MShellParser) ParseGrid() (*MShellParseGrid, error) {
 	grid := &MShellParseGrid{StartToken: parser.curr}
 	err := parser.Match(parser.curr, GRID_OPEN)
@@ -2226,14 +2223,22 @@ func (parser *MShellParser) ParseGrid() (*MShellParseGrid, error) {
 		if err != nil {
 			return grid, err
 		}
-		// If followed by EXECUTE (;), it's grid metadata
-		if parser.curr.Type == EXECUTE {
-			grid.GridMeta = dict
-			parser.NextToken() // consume ;
-		} else {
-			// It was not grid metadata, this is an error - dicts can't be column names
-			return grid, fmt.Errorf("Expected ';' after grid metadata dict at line %d, column %d.", parser.curr.Line, parser.curr.Column)
-		}
+
+		grid.GridMeta = dict
+
+		// // If followed by EXECUTE (;), it's grid metadata
+		// if parser.curr.Type == EXECUTE {
+			// grid.GridMeta = dict
+			// parser.NextToken() // consume ;
+		// } else {
+			// // It was not grid metadata, this is an error - dicts can't be column names
+			// return grid, fmt.Errorf("Expected ';' after grid metadata dict at line %d, column %d.", parser.curr.Line, parser.curr.Column)
+		// }
+	}
+
+	// Check for an optional ';' separator
+	if parser.curr.Type == EXECUTE {
+		parser.NextToken() // consume ;
 	}
 
 	// Check if we're done after grid metadata
@@ -2244,6 +2249,7 @@ func (parser *MShellParser) ParseGrid() (*MShellParseGrid, error) {
 	}
 
 	// Parse column definitions: col1 [meta], col2 [meta], ...; or col1, col2, ...;
+ColDefLoop:
 	for {
 		// Expect a column name (literal or string)
 		var colName string
@@ -2272,7 +2278,7 @@ func (parser *MShellParser) ParseGrid() (*MShellParseGrid, error) {
 			parser.NextToken()
 		case EXECUTE:
 			// Empty column list before ;
-			break
+			break ColDefLoop
 		case GRID_CLOSE:
 			// Empty grid with no columns
 			grid.EndToken = parser.curr
@@ -2280,12 +2286,6 @@ func (parser *MShellParser) ParseGrid() (*MShellParseGrid, error) {
 			return grid, nil
 		default:
 			return grid, fmt.Errorf("Expected column name (literal or string) at line %d, column %d, got %s.", parser.curr.Line, parser.curr.Column, parser.curr.Type)
-		}
-
-		// If we hit EXECUTE without a column name, break to parse rows
-		if parser.curr.Type == EXECUTE && colName == "" {
-			parser.NextToken()
-			break
 		}
 
 		col := MShellParseGridColumn{Name: colName, NameToken: colNameToken}
@@ -2301,20 +2301,16 @@ func (parser *MShellParser) ParseGrid() (*MShellParseGrid, error) {
 
 		grid.Columns = append(grid.Columns, col)
 
-		// Check for comma (more columns) or semicolon (end of column defs)
+		// // If we hit EXECUTE without a column name, break to parse rows
+		// if parser.curr.Type == EXECUTE && colName == "" {
+			// parser.NextToken()
+			// break
+		// }
+
+		// Check for optional comma separator
 		if parser.curr.Type == COMMA {
 			parser.NextToken()
 			continue
-		} else if parser.curr.Type == EXECUTE {
-			parser.NextToken()
-			break
-		} else if parser.curr.Type == GRID_CLOSE {
-			// Grid with only column definitions, no rows
-			grid.EndToken = parser.curr
-			parser.NextToken()
-			return grid, nil
-		} else {
-			return grid, fmt.Errorf("Expected ',' or ';' after column definition at line %d, column %d, got %s.", parser.curr.Line, parser.curr.Column, parser.curr.Type)
 		}
 	}
 
