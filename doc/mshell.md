@@ -6,13 +6,10 @@ History search is prefix-based and case-insensitive. The prefix is whatever is c
 - Ctrl-N: search forward through history by prefix
 - Ctrl-Y: accept the inline history completion
 - Ctrl-Space: insert a literal space without expanding aliases
-- Alt-D: insert the current date as YYYY-MM-DD
 - Alt-.: insert the last argument from history; repeat to cycle older entries
 - Tab: complete the current token; press Tab again to cycle matches and fill the input
 - Shift-Tab: cycle completion backward when matches are active
 - Ctrl-N/Ctrl-P: when cycling completions, move forward/backward through matches
-
-Completion results render in one or two columns based on available rows. If the list still doesn't fit, the final line shows `[n] more items..`.
 
 ### Definition-based completions
 
@@ -454,25 +451,206 @@ You can store to several variables in one go by separating the store tokens with
 @my_var
 
 # Storing multiple values at once
-1 2 3 a!, b!, c!
+1 2 3 a!, b!, c!  # a is 1, b is 2, c is 3.
 @a @b @c
 
 # A trailing comma after the last store is ignored
 4 5 a!, b!,
 ```
 
-## Command Substitution
+## Execution
 
-With a list on the stack, the following operators will leave output content on the stack after process execution:
+Execution of external commands or binaries is different in `mshell`.
+Instead of it being the main syntactical construct, in `mshell` you build up a list of arguments, and then at a time of your choosing, you execute it.
 
 ```mshell
-o: [str], Standard output, split by lines
-oc: str, Standard output, complete untouched
-os: str: Standard output, stripped
-e: [str], Standard error, split by lines
-ec: str, Standard error, complete untouched
-es: str, Standard error, stripped
+['my-program' 'arg1' 'arg2'];
 ```
+
+Often there are different things you want out of your execution, or you want different behavior depending on the exit code.
+`mshell` gives you full flexibility to decide with concise syntax.
+
+To initiate execution, you use one of 3 operators:
+
+- `;`: Execute command, always continue. Don't provide any information on the exit code.
+- `!`: Execute command, but stop the running script execution on any non-zero exit code.
+- `?`: Execute command, leaving the exit code integer on the stack.
+
+```mshell
+['false']; # mshell will continue past this point
+['true']! # Will execute and continue because of 0 exit code
+['my-command']? exitCode!
+$"Exit code was {@exitCode}" wl
+```
+
+The other choice you often have when executing commands is what to do with the standard output. Sometimes you will want to redirect it to a file, other times you will want to leave the contents on the stack to process further. For that, you use the `>`, `>>`, `*`, and `*b` operators.
+
+```mshell
+[yourCommand] `fileToRedirectTo` > !  # Redirects stdout to the file, truncating it.
+[yourCommand] `fileToRedirectTo` >> ! # Redirects stdout to the file, appending.
+[yourCommand] * !                     # Puts all of stdout on the stack as a string.
+[yourCommand] *b !                    # Puts all of stdout on the stack as a binary.
+```
+
+You can do similar things with standard error. To redirect standard error to a file, use `2>`, and `^` instead of `*`.
+
+To redirect both standard output and standard error to the same file, use `&>` (truncate) or `&>>` (append). This ensures both streams share the same file descriptor, preserving the order of output.
+
+```mshell
+[yourCommand] `output.log` &> !  # Redirects both stdout and stderr to the file, truncating it.
+[yourCommand] `output.log` &>> ! # Redirects both stdout and stderr to the file, appending.
+```
+
+If you manually use `>` and `2>` with exactly the same path string, mshell will automatically use a single file descriptor for both streams, avoiding race conditions. However, if the append modes differ (e.g., `>` and `2>>` to the same file), an error will be raised.
+
+```mshell
+[yourCommand] `errors.log` 2> !   # Redirects stderr to the file, truncating it.
+[yourCommand] `errors.log` 2>> !  # Redirects stderr to the file, appending.
+[yourCommand] ^ !                # Puts all of stderr on the stack as a string.
+[yourCommand] ^b !               # Puts all of stderr on the stack as a binary.
+```
+
+If you want to put both standard output and standard error onto the stack, you can do that.
+Standard output will always be pushed first, and then standard error.
+
+So the following are equivalent:
+
+```mshell
+[yourCommand] *b ^b ! # Order here does not matter
+[yourCommand] ^b *b !
+```
+
+Summary of external command operators:
+
+Operator | Effect on external commands                | Notes
+---------|--------------------------------------------|-----------------------------------------------------
+`;`      | Execute and continue.                      | No exit code on the stack.
+`!`      | Execute and stop on non-zero exit.         | Uses the command exit code.
+`?`      | Execute and push the exit code.            | Integer is left on the stack.
+`>`      | Redirect stdout to a file.                 | Truncates the file.
+`>>`     | Redirect stdout to a file.                 | Appends to the file.
+`*`      | Capture stdout to the stack.               | As a string.
+`*b`     | Capture stdout to the stack.               | As binary.
+`2>`     | Redirect stderr to a file.                 | Truncates the file.
+`2>>`    | Redirect stderr to a file.                 | Appends to the file.
+`&>`     | Redirect both stdout and stderr to a file. | Truncates the file.
+`&>>`    | Redirect both stdout and stderr to a file. | Appends to the file.
+`^`      | Capture stderr to the stack.               | As a string.
+`^b`     | Capture stderr to the stack.               | As binary.
+`<`      | Feed stdin from a value.                   | String, path, or binary.
+`<>`     | In-place file modification.                | Reads file to stdin, writes stdout back on success.
+
+### Redirection on quotations
+
+All of the redirection operators above also work on quotations. This is useful when you want to redirect the output of mshell code that uses `wl`, `wle`, or other built-in functions that write to stdout or stderr. It is also useful when you have many commands that you want to run while appending all the outputs to a single file, without having to put the redirection on each command invocation.
+
+```mshell
+(
+    "Hello from stdout" wl
+    "Hello from stderr" wle
+) `output.log` &> x # Redirects both stdout and stderr from the quotation to output.log
+```
+
+```mshell
+(
+    [echo "Running step 1"]!
+    [echo "Running step 2"]!
+    [echo "Running step 3"]!
+) `build.log` >> x # All command outputs appended to build.log
+```
+
+### Input Redirection
+
+Use `<` to feed data into stdin. The type of the value on top of the stack determines how the input is provided.
+
+`String` values are encoded as UTF-8 and streamed as text.
+
+```mshell
+[wc -l] "line 1\nline 2\n" < ; # Counts the lines from the provided string
+```
+
+`Path` values open the referenced file and stream its contents.
+
+```mshell
+[wc -l] `myfile.txt` < ; # Equivalent to shell input redirection from a file
+```
+
+`Binary` values are written directly without any string conversion.
+
+```mshell
+[md5sum] `binary_stdin.bin` readFileBytes < ; # Streams raw bytes into the command
+```
+
+### In-place file modification
+
+The `<>` operator enables in-place file modification. It reads a file's contents, passes them to the command's stdin, and on successful completion (exit code 0), writes the command's stdout back to the same file. This is similar to the `sponge` command from moreutils.
+
+```mshell
+[sort -u] `file.txt` <> !
+```
+
+This is equivalent to, but safer than:
+
+```mshell
+[sort -u] `file.txt` < `file.txt.tmp` > !
+[mv file.txt.tmp file.txt] !
+```
+
+#### Semantics
+
+- The file is read when `<>` is evaluated, capturing its contents at that moment.
+- If the command exits with code 0 (success), stdout replaces the file contents.
+- If the command exits with a non-zero code (failure), the original file is preserved unchanged.
+- File permissions are preserved.
+
+#### Requirements
+
+- Only works with lists (external commands), not quotations.
+- Requires a `Path` type (backtick-quoted), not a string.
+- The file must exist at the time `<>` is evaluated.
+
+#### Examples
+
+```mshell
+# Sort a file in place, removing duplicates
+[sort -u] `data.txt` <> !
+
+# Format JSON in place
+[jq .] `config.json` <> !
+
+# Filter lines in place (keep only lines containing "error")
+[grep error] `log.txt` <> !
+
+# Using with ? to check exit code without failing
+[sort -u] `file.txt` <> ?
+0 = if
+    "File sorted successfully" wl
+else
+    "Sort failed, file unchanged" wl
+end
+```
+
+### How mshell finds binaries
+
+When executing an external command, `mshell` resolves the binary name using a two-step process. First it checks the bin map file for an override, and if none is found it falls back to `PATH`.
+
+The bin map file lives alongside the history files (for example, `~/.local/share/msh/msh_bins.txt` on Linux/macOS or `%LOCALAPPDATA%\\mshell\\msh_bins.txt` on Windows). Each non-empty line is a tab-separated pair of fields: the binary name and the absolute path to the binary. Both fields are trimmed, the name must not contain path separators, and the line must contain exactly two fields.
+
+```
+mytool	/usr/local/bin/mytool
+another	/home/me/bin/another
+```
+
+To manage the file, use the `msh bin` subcommands:
+
+- `msh bin add <path>`: add/replace using the file basename and absolute path
+- `msh bin add <name> <path>`: add/replace using an explicit name
+- `msh bin remove <name>`: remove an entry by name
+- `msh bin list`: print the bin map file contents
+- `msh bin path`: print the bin map file path
+- `msh bin edit`: edit the file in `$EDITOR`
+- `msh bin audit`: report invalid or missing entries
+- `msh bin debug <name>`: show lookup details for a binary
 
 ## Process Substitution
 
@@ -542,3 +720,11 @@ The current object types supported by `mshell` are:
 9. Date/Times
 10. Dictionary
 11. Maybe
+
+## LLM Notes
+
+- `mshell` is concatenative and stack-based: words run left-to-right, consuming values from the stack and pushing results.
+- External commands are lists of strings; execute them with `;` (always continue), `!` (stop on non-zero), or `?` (push exit code).
+- Comments use `#` and run to the end of the line.
+- Paths are backticked literals with no escaping; use string interpolation with `toPath` when you need escapes.
+- Quotations are `(...)` blocks; execute a quotation with `x`.

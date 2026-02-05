@@ -20,8 +20,31 @@ Storing pops the top of the stack; retrieval pushes the stored value back onto t
 </pre>
 
 <p>
+You can store multiple values at once by separating the store tokens with commas. A trailing comma after the last store is ignored.
+</p>
+
+<pre>
+<code><span class="mshellLINECOMMENT"># Storing multiple values at once</span>
+<span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span> <span class="mshellINTEGER">3</span> <span class="mshellVARSTORE">a!</span>, <span class="mshellVARSTORE">b!</span>, <span class="mshellVARSTORE">c!</span> <span class="mshellLINECOMMENT"># a is 1, b is 2, c is 3.</span>
+<span class="mshellVARRETRIEVE">@a</span> <span class="mshellVARRETRIEVE">@b</span> <span class="mshellVARRETRIEVE">@c</span>
+
+<span class="mshellLINECOMMENT"># A trailing comma after the last store is ignored</span>
+<span class="mshellINTEGER">4</span> <span class="mshellINTEGER">5</span> <span class="mshellVARSTORE">a!</span>, <span class="mshellVARSTORE">b!</span>,</code>
+</pre>
+
+<p> 
+Storing values at once is useful in definitions, so that the variables appear in order of the stack, instead of revserse.
+</p>
+
+<pre><code><span class="mshellDEF">def</span> <span class="mshellLITERAL">myDef</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellTYPEINT">int</span> <span class="mshellSTR">str</span> <span class="mshellLITERAL">path</span> <span class="mshellDOUBLEDASH">--</span> <span class="mshellRIGHT_PAREN">)</span>
+    <span class="mshellVARSTORE">myInt!</span><span class="mshellCOMMA">,</span> <span class="mshellVARSTORE">myStr!</span><span class="mshellCOMMA">,</span> <span class="mshellVARSTORE">myPath!</span>
+    <span class="mshellLINECOMMENT"># Do things..</span>
+<span class="mshellEND">end</span>
+<span class="mshellEOF"></span></code></pre>
+
+<p>
 Retrieving an unknown variable results in an error.
-Mshell variables do not consult the environment, so <code>@name</code> only looks in the mshell variable map.
+<code>mshell</code> variables do not consult the environment, so <code><span class="mshellVARRETRIEVE">@name</span></code> only looks in the mshell variable map.
 </p>
 
 <h1 id="variables-environment">Environment Variables <a class="section-link" href="#variables-environment" aria-label="Permalink">§</a> <a class="back-to-top" href="#variables-top">Back to top</a></h1>
@@ -46,7 +69,7 @@ Environment variables are always exported to subprocesses, so setting them affec
 </pre>
 
 <p>
-You can print all environment variables (sorted by key) using the built-in <code>.env</code> function.
+You can print all environment variables (sorted by key) using the built-in <code>env</code> function.
 </p>
 
 <pre>
