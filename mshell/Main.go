@@ -384,7 +384,7 @@ func main() {
 					CallStackType:   CALLSTACKFILE,
 				}
 
-				result := state.Evaluate(stdlibFile.Items, &stack, context, allDefinitions, callStackItem)
+				result := state.EvaluateWithTCO(stdlibFile.Items, &stack, context, allDefinitions, callStackItem)
 				if !result.Success {
 					fmt.Fprintf(os.Stderr, "Error evaluating MSHSTDLIB file %s.\n", stdlibPath)
 					os.Exit(1)
@@ -431,7 +431,7 @@ func main() {
 		CallStackType:   CALLSTACKFILE,
 	}
 
-	result := state.Evaluate(file.Items, &stack, context, allDefinitions, callStackItem)
+	result := state.EvaluateWithTCO(file.Items, &stack, context, allDefinitions, callStackItem)
 
 	if !result.Success {
 		if result.ExitCode != 0 {
@@ -1395,7 +1395,7 @@ func (state *TermState) runCompletionDefinitions(defs []MShellDefinition, args [
 		}
 		completionStack := MShellStack{completionList}
 		callStackItem := CallStackItem{MShellParseItem: def.NameToken, Name: def.Name, CallStackType: CALLSTACKDEF}
-		result := state.evalState.Evaluate(def.Items, &completionStack, state.context, state.stdLibDefs, callStackItem)
+		result := state.evalState.EvaluateWithTCO(def.Items, &completionStack, state.context, state.stdLibDefs, callStackItem)
 		if !result.Success {
 			fmt.Fprintf(state.f, "Completion definition '%s' failed to evaluate\n", def.Name)
 			continue
@@ -2411,7 +2411,7 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 
 	if len(parsed.Items) > 0 {
 		state.initCallStackItem.MShellParseItem = parsed.Items[0]
-		result := state.evalState.Evaluate(parsed.Items, &state.stack, state.context, state.stdLibDefs, state.initCallStackItem)
+		result := state.evalState.EvaluateWithTCO(parsed.Items, &state.stack, state.context, state.stdLibDefs, state.initCallStackItem)
 
 		if result.ExitCalled {
 			return true, result.ExitCode
@@ -2635,7 +2635,7 @@ func stdLibDefinitions(stack MShellStack, context ExecuteContext, state EvalStat
 				}
 
 				// allDefinitions = append(allDefinitions, stdlibFile.Definitions...)
-				result := state.Evaluate(stdlibFile.Items, &stack, context, stdlibFile.Definitions, callStackItem)
+				result := state.EvaluateWithTCO(stdlibFile.Items, &stack, context, stdlibFile.Definitions, callStackItem)
 
 				if !result.Success {
 					fmt.Fprintf(os.Stderr, "Error evaluating MSHSTDLIB file %s.\n", rcPath)

@@ -350,6 +350,51 @@ func (result EvalResult) String() string {
 	return fmt.Sprintf("EvalResult: Success: %t, Continue: %t, BreakNum: %d, ExitCode: %d, ExitCalled: %t", result.Success, result.Continue, result.BreakNum, result.ExitCode, result.ExitCalled)
 }
 
+// FrameType indicates the type of evaluation frame
+type FrameType int
+
+const (
+	FRAME_NORMAL FrameType = iota // Standard evaluation (definition, quote, if body)
+	FRAME_LIST                    // List literal - collect stack into list
+	FRAME_DICT                    // Dict value - collect stack for key
+	FRAME_LOOP                    // Loop body - iterate until break
+)
+
+// EvaluationFrame represents a single frame in the evaluation stack
+type EvaluationFrame struct {
+	Objects       []MShellParseItem
+	Index         int
+	Context       ExecuteContext
+	Stack         *MShellStack
+	Definitions   []MShellDefinition
+	CallStackItem CallStackItem
+	FrameType     FrameType
+
+	// For FRAME_LIST: parent stack to push result list onto
+	ParentStack *MShellStack
+
+	// For FRAME_DICT: key name and dict being built
+	DictKey       string
+	Dict          *MShellDict
+	DictKeyValues []MShellDictKeyValue // Remaining keys to process
+	DictKeyIndex  int
+
+	// For FRAME_LOOP: loop state
+	LoopMax          int
+	LoopCount        int
+	LoopQuotation    *MShellQuotation
+	InitialStackSize int
+
+	// Whether to call Context.Close() when this frame is popped
+	ShouldCloseContext bool
+}
+
+// MShellDictKeyValue holds a key-value pair for dictionary evaluation
+type MShellDictKeyValue struct {
+	Key   string
+	Value []MShellParseItem
+}
+
 type ExecuteContext struct {
 	StandardInput     io.Reader
 	StandardOutput    io.Writer
@@ -471,6 +516,725 @@ func (stack *CallStack) Pop() (CallStackItem, error) {
 	return popped, nil
 }
 
+// Run executes the frame-based evaluator with TCO support
+func (state *EvalState) Run(frames *[]EvaluationFrame) EvalResult {
+	for len(*frames) > 0 {
+		frame := &(*frames)[len(*frames)-1]
+
+		// Frame exhausted - handle completion
+		if frame.Index >= len(frame.Objects) {
+			result := state.completeFrame(frames)
+			if !result.Success {
+				return result
+			}
+			continue
+		}
+
+		token := frame.Objects[frame.Index]
+		frame.Index++
+
+		// Process token - returns error result or success
+		result := state.processToken(token, frame, frames)
+		if !result.Success || result.ExitCalled {
+			return result
+		}
+
+		// Handle control flow from old Evaluate fallback
+		if result.BreakNum > 0 {
+			state.handleBreak(frames, result.BreakNum)
+		}
+		if result.Continue {
+			state.handleContinue(frames)
+		}
+	}
+
+	return SimpleSuccess()
+}
+
+// handleBreak pops frames until we've exited N loops
+func (state *EvalState) handleBreak(frames *[]EvaluationFrame, breakNum int) {
+	for breakNum > 0 && len(*frames) > 0 {
+		frame := &(*frames)[len(*frames)-1]
+		if frame.FrameType == FRAME_LOOP {
+			breakNum--
+			state.LoopDepth--
+		}
+		if frame.ShouldCloseContext {
+			frame.Context.Close()
+		}
+		if frame.CallStackItem.MShellParseItem != nil {
+			state.CallStack.Pop()
+		}
+		*frames = (*frames)[:len(*frames)-1]
+	}
+}
+
+// handleContinue pops frames until loop, restarts it
+func (state *EvalState) handleContinue(frames *[]EvaluationFrame) {
+	for len(*frames) > 0 {
+		frame := &(*frames)[len(*frames)-1]
+		if frame.FrameType == FRAME_LOOP {
+			frame.Index = 0 // Restart loop body
+			return
+		}
+		if frame.ShouldCloseContext {
+			frame.Context.Close()
+		}
+		if frame.CallStackItem.MShellParseItem != nil {
+			state.CallStack.Pop()
+		}
+		*frames = (*frames)[:len(*frames)-1]
+	}
+}
+
+// handleReturn pops frames until we exit current definition
+func (state *EvalState) handleReturn(frames *[]EvaluationFrame) {
+	for len(*frames) > 0 {
+		frame := &(*frames)[len(*frames)-1]
+		isDefFrame := frame.FrameType == FRAME_NORMAL && frame.CallStackItem.CallStackType == CALLSTACKDEF
+		if frame.ShouldCloseContext {
+			frame.Context.Close()
+		}
+		if frame.CallStackItem.MShellParseItem != nil {
+			state.CallStack.Pop()
+		}
+		*frames = (*frames)[:len(*frames)-1]
+		if isDefFrame {
+			return // Exited the definition
+		}
+	}
+}
+
+// completeFrame handles what happens when a frame finishes executing
+func (state *EvalState) completeFrame(frames *[]EvaluationFrame) EvalResult {
+	frame := &(*frames)[len(*frames)-1]
+
+	switch frame.FrameType {
+	case FRAME_LIST:
+		// Collect isolated stack into a list, push onto parent
+		list := NewList(len(*frame.Stack))
+		copy(list.Items, *frame.Stack)
+		frame.ParentStack.Push(list)
+		// Pop call stack if needed
+		if frame.CallStackItem.MShellParseItem != nil {
+			state.CallStack.Pop()
+		}
+		*frames = (*frames)[:len(*frames)-1]
+
+	case FRAME_DICT:
+		// Store result for current key
+		if len(*frame.Stack) == 0 {
+			return state.FailWithMessage(fmt.Sprintf("Dictionary key '%s' evaluated to an empty stack.\n", frame.DictKey))
+		}
+		if len(*frame.Stack) > 1 {
+			return state.FailWithMessage(fmt.Sprintf("Dictionary key '%s' evaluated to a stack with more than one item.\n", frame.DictKey))
+		}
+		frame.Dict.Items[frame.DictKey] = (*frame.Stack)[0]
+
+		// Check if more keys to process
+		frame.DictKeyIndex++
+		if frame.DictKeyIndex < len(frame.DictKeyValues) {
+			// Reset for next key
+			kv := frame.DictKeyValues[frame.DictKeyIndex]
+			frame.Objects = kv.Value
+			frame.Index = 0
+			frame.DictKey = kv.Key
+			*frame.Stack = MShellStack{}
+		} else {
+			// Dict complete - push onto parent
+			frame.ParentStack.Push(frame.Dict)
+			// Pop call stack if needed
+			if frame.CallStackItem.MShellParseItem != nil {
+				state.CallStack.Pop()
+			}
+			*frames = (*frames)[:len(*frames)-1]
+		}
+
+	case FRAME_LOOP:
+		// Check stack size hasn't changed
+		if len(*frame.Stack) != frame.InitialStackSize {
+			return state.FailWithMessage(fmt.Sprintf("Stack size changed from %d to %d in loop.\n", frame.InitialStackSize, len(*frame.Stack)))
+		}
+
+		frame.LoopCount++
+		if frame.LoopCount < frame.LoopMax {
+			// Restart loop
+			frame.Index = 0
+		} else {
+			// Loop exceeded max iterations
+			return state.FailWithMessage(fmt.Sprintf("Loop exceeded maximum number of iterations (%d).\n", frame.LoopMax))
+		}
+
+	case FRAME_NORMAL:
+		if frame.ShouldCloseContext {
+			frame.Context.Close()
+		}
+		// Pop call stack if needed
+		if frame.CallStackItem.MShellParseItem != nil {
+			state.CallStack.Pop()
+		}
+		*frames = (*frames)[:len(*frames)-1]
+	}
+
+	return SimpleSuccess()
+}
+
+// isTailPosition checks if we're at the last token in a frame suitable for TCO
+func (state *EvalState) isTailPosition(frame *EvaluationFrame) bool {
+	return frame.Index == len(frame.Objects) && frame.FrameType == FRAME_NORMAL
+}
+
+// processToken handles a single token in the frame-based evaluator
+// It returns an EvalResult that may have special flags for control flow
+func (state *EvalState) processToken(token MShellParseItem, frame *EvaluationFrame, frames *[]EvaluationFrame) EvalResult {
+	stack := frame.Stack
+	context := frame.Context
+	definitions := frame.Definitions
+
+	switch t := token.(type) {
+	case *MShellParseList:
+		// Push FRAME_LIST with isolated stack
+		listStack := MShellStack{}
+		callStackItem := CallStackItem{MShellParseItem: t, Name: "list", CallStackType: CALLSTACKLIST}
+		state.CallStack.Push(callStackItem)
+		newFrame := EvaluationFrame{
+			Objects:       t.Items,
+			Index:         0,
+			Context:       context,
+			Stack:         &listStack,
+			Definitions:   definitions,
+			CallStackItem: callStackItem,
+			FrameType:     FRAME_LIST,
+			ParentStack:   stack,
+		}
+		*frames = append(*frames, newFrame)
+		return SimpleSuccess()
+
+	case *MShellParseDict:
+		// If no items, just push empty dict
+		if len(t.Items) == 0 {
+			stack.Push(NewDict())
+			return SimpleSuccess()
+		}
+
+		// Build list of key-value pairs
+		keyValues := make([]MShellDictKeyValue, len(t.Items))
+		for i, kv := range t.Items {
+			keyValues[i] = MShellDictKeyValue{Key: kv.Key, Value: kv.Value}
+		}
+
+		// Push FRAME_DICT for first key
+		dictStack := MShellStack{}
+		callStackItem := CallStackItem{MShellParseItem: t, Name: "dict", CallStackType: CALLSTACKDICT}
+		state.CallStack.Push(callStackItem)
+		newFrame := EvaluationFrame{
+			Objects:       keyValues[0].Value,
+			Index:         0,
+			Context:       context,
+			Stack:         &dictStack,
+			Definitions:   definitions,
+			CallStackItem: callStackItem,
+			FrameType:     FRAME_DICT,
+			ParentStack:   stack,
+			DictKey:       keyValues[0].Key,
+			Dict:          NewDict(),
+			DictKeyValues: keyValues,
+			DictKeyIndex:  0,
+		}
+		*frames = append(*frames, newFrame)
+		return SimpleSuccess()
+
+	case *MShellParseQuote:
+		q := MShellQuotation{Tokens: t.Items, StandardInputFile: "", StandardOutputFile: "", StandardErrorFile: "", Variables: context.Variables, MShellParseQuote: t}
+		stack.Push(&q)
+		return SimpleSuccess()
+
+	case *MShellParsePrefixQuote:
+		// Create quotation and push onto stack
+		mshellParseQuote := MShellParseQuote{
+			Items:      t.Items,
+			StartToken: t.StartToken,
+			EndToken:   t.EndToken,
+		}
+		q := MShellQuotation{Tokens: t.Items, StandardInputFile: "", StandardOutputFile: "", StandardErrorFile: "", Variables: context.Variables, MShellParseQuote: &mshellParseQuote}
+		stack.Push(&q)
+
+		// Create a token for the function name (strip trailing '.')
+		lexeme := t.StartToken.Lexeme
+		funcToken := Token{
+			Line:   t.StartToken.Line,
+			Column: t.StartToken.Column,
+			Start:  t.StartToken.Start,
+			Lexeme: lexeme[:len(lexeme)-1],
+			Type:   LITERAL,
+		}
+
+		// Check for definition
+		for _, definition := range definitions {
+			if definition.Name == funcToken.Lexeme {
+				return state.callDefinition(definition, funcToken, frame, frames)
+			}
+		}
+
+		// Not a definition - fall back to token processing
+		return state.processTokenLiteral(funcToken, frame, frames)
+
+	case *MShellParseIfBlock:
+		return state.processIfBlock(t, frame, frames)
+
+	case *MShellIndexerList:
+		return state.processIndexerList(t, frame)
+
+	case MShellVarstoreList:
+		return state.processVarstoreList(t, frame)
+
+	case *MShellGetter:
+		return state.processGetter(t, frame)
+
+	case Token:
+		return state.processTokenToken(t, frame, frames)
+
+	default:
+		return state.FailWithMessage(fmt.Sprintf("Unknown token type: %T\n", token))
+	}
+}
+
+// callDefinition handles calling a definition with TCO support
+func (state *EvalState) callDefinition(def MShellDefinition, token Token, frame *EvaluationFrame, frames *[]EvaluationFrame) EvalResult {
+	newContext := frame.Context.CloneLessVariables()
+	callStackItem := CallStackItem{MShellParseItem: token, Name: def.Name, CallStackType: CALLSTACKDEF}
+
+	// TCO: Check if this is a tail call
+	isTailCall := state.isTailPosition(frame)
+
+	if isTailCall {
+		// Replace current frame instead of pushing
+		// Close context if this frame owns it
+		if frame.ShouldCloseContext {
+			frame.Context.Close()
+		}
+		// Pop call stack for current frame
+		if frame.CallStackItem.MShellParseItem != nil {
+			state.CallStack.Pop()
+		}
+
+		frame.Objects = def.Items
+		frame.Index = 0
+		frame.Context = *newContext
+		frame.CallStackItem = callStackItem
+		frame.ShouldCloseContext = false
+
+		// Push new call stack item
+		state.CallStack.Push(callStackItem)
+		return SimpleSuccess()
+	}
+
+	// Non-tail: push new frame
+	state.CallStack.Push(callStackItem)
+	newFrame := EvaluationFrame{
+		Objects:       def.Items,
+		Index:         0,
+		Context:       *newContext,
+		Stack:         frame.Stack, // Shared stack
+		Definitions:   frame.Definitions,
+		CallStackItem: callStackItem,
+		FrameType:     FRAME_NORMAL,
+	}
+	*frames = append(*frames, newFrame)
+	return SimpleSuccess()
+}
+
+// processIfBlock handles if/else-if/else blocks
+func (state *EvalState) processIfBlock(ifBlock *MShellParseIfBlock, frame *EvaluationFrame, frames *[]EvaluationFrame) EvalResult {
+	stack := frame.Stack
+	context := frame.Context
+	definitions := frame.Definitions
+	startToken := ifBlock.GetStartToken()
+
+	// Pop the condition from the stack
+	condObj, err := stack.Pop()
+	if err != nil {
+		return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot evaluate 'if' on an empty stack.\n", startToken.Line, startToken.Column))
+	}
+
+	// Evaluate condition
+	var condition bool
+	switch condTyped := condObj.(type) {
+	case MShellBool:
+		condition = condTyped.Value
+	case MShellInt:
+		condition = condTyped.Value == 0
+	default:
+		return state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a boolean or integer for if condition, received a %s.\n", startToken.Line, startToken.Column, condObj.TypeName()))
+	}
+
+	if condition {
+		// Execute if body - push frame
+		callStackItem := CallStackItem{MShellParseItem: ifBlock, Name: "if", CallStackType: CALLSTACKIF}
+		state.CallStack.Push(callStackItem)
+		newFrame := EvaluationFrame{
+			Objects:       ifBlock.IfBody,
+			Index:         0,
+			Context:       context,
+			Stack:         stack,
+			Definitions:   definitions,
+			CallStackItem: callStackItem,
+			FrameType:     FRAME_NORMAL,
+		}
+		*frames = append(*frames, newFrame)
+		return SimpleSuccess()
+	}
+
+	// Check else-if branches - need to evaluate conditions inline
+	for _, elseIf := range ifBlock.ElseIfs {
+		// Evaluate condition using the old Evaluate method for now
+		// This is a temporary solution - ideally we'd push a frame for the condition
+		callStackItem := CallStackItem{MShellParseItem: ifBlock, Name: "else-if-condition", CallStackType: CALLSTACKIF}
+		result := state.Evaluate(elseIf.Condition, stack, context, definitions, callStackItem)
+		if !result.Success || result.ExitCalled {
+			return result
+		}
+		if result.BreakNum > 0 {
+			return state.FailWithMessage("Encountered break within else-if condition.\n")
+		}
+		if result.Continue {
+			return state.FailWithMessage("Encountered continue within else-if condition.\n")
+		}
+
+		elseIfCondObj, err := stack.Pop()
+		if err != nil {
+			return state.FailWithMessage(fmt.Sprintf("%d:%d: Found an empty stack when evaluating else-if condition.\n", startToken.Line, startToken.Column))
+		}
+
+		var elseIfCondition bool
+		switch elseIfCondTyped := elseIfCondObj.(type) {
+		case MShellBool:
+			elseIfCondition = elseIfCondTyped.Value
+		case MShellInt:
+			elseIfCondition = elseIfCondTyped.Value == 0
+		default:
+			return state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a boolean or integer for else-if condition, received a %s.\n", startToken.Line, startToken.Column, elseIfCondObj.TypeName()))
+		}
+
+		if elseIfCondition {
+			// Execute else-if body
+			callStackItem := CallStackItem{MShellParseItem: ifBlock, Name: "else-if", CallStackType: CALLSTACKIF}
+			state.CallStack.Push(callStackItem)
+			newFrame := EvaluationFrame{
+				Objects:       elseIf.Body,
+				Index:         0,
+				Context:       context,
+				Stack:         stack,
+				Definitions:   definitions,
+				CallStackItem: callStackItem,
+				FrameType:     FRAME_NORMAL,
+			}
+			*frames = append(*frames, newFrame)
+			return SimpleSuccess()
+		}
+	}
+
+	// If no else-if matched, execute else body if present
+	if len(ifBlock.ElseBody) > 0 {
+		callStackItem := CallStackItem{MShellParseItem: ifBlock, Name: "else", CallStackType: CALLSTACKIF}
+		state.CallStack.Push(callStackItem)
+		newFrame := EvaluationFrame{
+			Objects:       ifBlock.ElseBody,
+			Index:         0,
+			Context:       context,
+			Stack:         stack,
+			Definitions:   definitions,
+			CallStackItem: callStackItem,
+			FrameType:     FRAME_NORMAL,
+		}
+		*frames = append(*frames, newFrame)
+	}
+
+	return SimpleSuccess()
+}
+
+// processTokenToken handles Token types in the frame-based evaluator
+func (state *EvalState) processTokenToken(t Token, frame *EvaluationFrame, frames *[]EvaluationFrame) EvalResult {
+	stack := frame.Stack
+	context := frame.Context
+	definitions := frame.Definitions
+
+	if t.Type == EOF {
+		return SimpleSuccess()
+	}
+
+	if t.Type == LITERAL {
+		// Handle return - unwind to definition
+		if t.Lexeme == "return" {
+			state.handleReturn(frames)
+			return SimpleSuccess()
+		}
+
+		// Check for definitions first (with TCO)
+		for _, definition := range definitions {
+			if definition.Name == t.Lexeme {
+				return state.callDefinition(definition, t, frame, frames)
+			}
+		}
+		// Not a definition - process as regular literal
+		return state.processTokenLiteral(t, frame, frames)
+	}
+
+	if t.Type == BREAK {
+		// Handle break by unwinding frames
+		state.handleBreak(frames, 1)
+		return SimpleSuccess()
+	}
+
+	if t.Type == CONTINUE {
+		// Handle continue by unwinding to loop
+		state.handleContinue(frames)
+		return SimpleSuccess()
+	}
+
+	if t.Type == LOOP {
+		return state.processLoop(t, frame, frames)
+	}
+
+	if t.Type == IFF {
+		return state.processIff(t, frame, frames)
+	}
+
+	// For other token types, fall back to the old Evaluate for now
+	// We'll wrap the single token in a slice and call Evaluate
+	// This is a temporary bridge while we migrate all token handling
+	// Preserve the call stack type from the frame
+	callStackItem := CallStackItem{MShellParseItem: nil, Name: "token", CallStackType: frame.CallStackItem.CallStackType}
+	result := state.Evaluate([]MShellParseItem{t}, stack, context, definitions, callStackItem)
+	return result
+}
+
+// processTokenLiteral handles LITERAL tokens that are not definitions
+func (state *EvalState) processTokenLiteral(t Token, frame *EvaluationFrame, frames *[]EvaluationFrame) EvalResult {
+	stack := frame.Stack
+	context := frame.Context
+	definitions := frame.Definitions
+
+	// Fall back to old Evaluate for literal handling, preserving the call stack type
+	callStackItem := CallStackItem{MShellParseItem: nil, Name: "literal", CallStackType: frame.CallStackItem.CallStackType}
+	result := state.Evaluate([]MShellParseItem{t}, stack, context, definitions, callStackItem)
+	return result
+}
+
+// processLoop handles the loop construct
+func (state *EvalState) processLoop(t Token, frame *EvaluationFrame, frames *[]EvaluationFrame) EvalResult {
+	stack := frame.Stack
+	context := frame.Context
+	definitions := frame.Definitions
+
+	obj, err := stack.Pop()
+	if err != nil {
+		return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do a loop on an empty stack.\n", t.Line, t.Column))
+	}
+
+	quotation, ok := obj.(*MShellQuotation)
+	if !ok {
+		return state.FailWithMessage(fmt.Sprintf("%d:%d: Argument for loop expected to be a quotation, received a %s\n", t.Line, t.Column, obj.TypeName()))
+	}
+
+	if len(quotation.Tokens) == 0 {
+		return state.FailWithMessage(fmt.Sprintf("%d:%d: Loop quotation needs a minimum of one token.\n", t.Line, t.Column))
+	}
+
+	// Build loop context
+	loopContext := ExecuteContext{
+		StandardInput:  nil,
+		StandardOutput: nil,
+		Variables:      context.Variables,
+		Pbm:            context.Pbm,
+	}
+
+	if quotation.StdinBehavior != STDIN_NONE {
+		if quotation.StdinBehavior == STDIN_CONTENT {
+			loopContext.StandardInput = strings.NewReader(quotation.StandardInputContents)
+		} else if quotation.StdinBehavior == STDIN_BINARY {
+			loopContext.StandardInput = bytes.NewReader(quotation.StandardInputBinary)
+		} else if quotation.StdinBehavior == STDIN_FILE {
+			file, err := os.Open(quotation.StandardInputFile)
+			if err != nil {
+				return state.FailWithMessage(fmt.Sprintf("%d:%d: Error opening file %s for reading: %s\n", t.Line, t.Column, quotation.StandardInputFile, err.Error()))
+			}
+			loopContext.StandardInput = file
+			loopContext.ShouldCloseInput = true
+		}
+	}
+
+	if quotation.StandardOutputFile != "" {
+		file, err := os.Create(quotation.StandardOutputFile)
+		if err != nil {
+			return state.FailWithMessage(fmt.Sprintf("%d:%d: Error opening file %s for writing: %s\n", t.Line, t.Column, quotation.StandardOutputFile, err.Error()))
+		}
+		loopContext.StandardOutput = file
+		loopContext.ShouldCloseOutput = true
+	}
+
+	// Push FRAME_LOOP
+	state.LoopDepth++
+	callStackItem := CallStackItem{MShellParseItem: quotation, Name: "loop", CallStackType: CALLSTACKQUOTE}
+	state.CallStack.Push(callStackItem)
+	newFrame := EvaluationFrame{
+		Objects:          quotation.Tokens,
+		Index:            0,
+		Context:          loopContext,
+		Stack:            stack,
+		Definitions:      definitions,
+		CallStackItem:    callStackItem,
+		FrameType:        FRAME_LOOP,
+		LoopMax:          15000000,
+		LoopCount:        0,
+		LoopQuotation:    quotation,
+		InitialStackSize: len(*stack),
+	}
+	*frames = append(*frames, newFrame)
+	return SimpleSuccess()
+}
+
+// processIff handles the iff construct in the frame-based evaluator
+// by pushing the selected quotation body as a frame instead of recursing
+func (state *EvalState) processIff(t Token, frame *EvaluationFrame, frames *[]EvaluationFrame) EvalResult {
+	stack := frame.Stack
+	context := frame.Context
+	definitions := frame.Definitions
+
+	iff_name := "iff"
+	firstObj, err := stack.Pop()
+	if err != nil {
+		return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do an '%s' on a stack with only two items.\n", t.Line, t.Column, iff_name))
+	}
+
+	firstQuote, ok := firstObj.(*MShellQuotation)
+	if !ok {
+		return state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a quotation on top of stack for %s, received a %s.\n", t.Line, t.Column, iff_name, firstObj.TypeName()))
+	}
+
+	secondObj, err := stack.Pop()
+	if err != nil {
+		return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do an '%s' on a stack with only one item.\n", t.Line, t.Column, iff_name))
+	}
+
+	var trueQuote *MShellQuotation
+	var falseQuote *MShellQuotation
+	var condition bool
+
+	switch secondTyped := secondObj.(type) {
+	case *MShellQuotation:
+		falseQuote = firstQuote
+		trueQuote = secondTyped
+
+		thrirdObj, err := stack.Pop()
+		if err != nil {
+			return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do an '%s' on a stack with only two quotes.\n", t.Line, t.Column, iff_name))
+		}
+
+		switch thirdTyped := thrirdObj.(type) {
+		case MShellBool:
+			condition = thirdTyped.Value
+		case MShellInt:
+			condition = thirdTyped.Value == 0
+		default:
+			return state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a boolean or integer for %s condition, received a %s.\n", t.Line, t.Column, iff_name, thrirdObj.TypeName()))
+		}
+	case MShellBool:
+		trueQuote = firstQuote
+		condition = secondTyped.Value
+	case MShellInt:
+		trueQuote = firstQuote
+		condition = secondTyped.Value == 0
+	default:
+		return state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a quotation or boolean for %s, received a %s.\n", t.Line, t.Column, iff_name, secondObj.TypeName()))
+	}
+
+	var quoteToExecute *MShellQuotation
+	if condition {
+		quoteToExecute = trueQuote
+	} else {
+		quoteToExecute = falseQuote
+	}
+
+	if quoteToExecute != nil {
+		qContext, err := quoteToExecute.BuildExecutionContext(&context)
+		if err != nil {
+			return state.FailWithMessage(err.Error())
+		}
+
+		callStackItem := CallStackItem{MShellParseItem: quoteToExecute, Name: "Quote", CallStackType: CALLSTACKQUOTE}
+		state.CallStack.Push(callStackItem)
+		newFrame := EvaluationFrame{
+			Objects:            quoteToExecute.Tokens,
+			Index:              0,
+			Context:            *qContext,
+			Stack:              stack,
+			Definitions:        definitions,
+			CallStackItem:      callStackItem,
+			FrameType:          FRAME_NORMAL,
+			ShouldCloseContext: true,
+		}
+		*frames = append(*frames, newFrame)
+	}
+
+	return SimpleSuccess()
+}
+
+// processIndexerList handles indexer operations
+func (state *EvalState) processIndexerList(indexerList *MShellIndexerList, frame *EvaluationFrame) EvalResult {
+	stack := frame.Stack
+	context := frame.Context
+	definitions := frame.Definitions
+
+	// Fall back to old Evaluate for indexer handling
+	callStackItem := CallStackItem{MShellParseItem: nil, Name: "indexer", CallStackType: CALLSTACKFILE}
+	result := state.Evaluate([]MShellParseItem{indexerList}, stack, context, definitions, callStackItem)
+	return result
+}
+
+// processVarstoreList handles variable storage
+func (state *EvalState) processVarstoreList(varstoreList MShellVarstoreList, frame *EvaluationFrame) EvalResult {
+	stack := frame.Stack
+
+	// First check lengths
+	if len(varstoreList.VarStores) > len(*stack) {
+		return state.FailWithMessage(fmt.Sprintf("%d:%d: Not enough items on stack (%d) to store into %d variables.\n", varstoreList.GetStartToken().Line, varstoreList.GetStartToken().Column, len(*stack), len(varstoreList.VarStores)))
+	}
+
+	// Have to bind in reverse order
+	for i := len(varstoreList.VarStores) - 1; i >= 0; i-- {
+		varstoreToken := varstoreList.VarStores[i]
+		obj, _ := stack.Pop()
+		varName := varstoreToken.Lexeme[0 : len(varstoreToken.Lexeme)-1] // Remove the trailing !
+		frame.Context.Variables[varName] = obj
+	}
+	return SimpleSuccess()
+}
+
+// processGetter handles dictionary getter operations
+func (state *EvalState) processGetter(getter *MShellGetter, frame *EvaluationFrame) EvalResult {
+	stack := frame.Stack
+
+	obj, err := stack.Pop()
+	if err != nil {
+		return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do ':' operation on an empty stack.\n", getter.Token.Line, getter.Token.Column))
+	}
+
+	dict, ok := obj.(*MShellDict)
+	if !ok {
+		return state.FailWithMessage(fmt.Sprintf("%d:%d: The stack parameter for the dictionary in ':' is not a dictionary. Found a %s (%s). Key: %s\n", getter.Token.Line, getter.Token.Column, obj.TypeName(), obj.DebugString(), getter.String))
+	}
+
+	value, ok := dict.Items[getter.String]
+	if !ok {
+		stack.Push(&Maybe{obj: nil})
+	} else {
+		maybe := Maybe{obj: value}
+		stack.Push(&maybe)
+	}
+	return SimpleSuccess()
+}
+
 func (state *EvalState) EvaluateQuote(quotation MShellQuotation, stack *MShellStack, outerContext ExecuteContext, definitions []MShellDefinition) (EvalResult, error) {
 	qContext, err := quotation.BuildExecutionContext(&outerContext)
 	defer qContext.Close()
@@ -479,6 +1243,35 @@ func (state *EvalState) EvaluateQuote(quotation MShellQuotation, stack *MShellSt
 	}
 	callStackItem := CallStackItem{MShellParseItem: &quotation, Name: "Quote", CallStackType: CALLSTACKQUOTE}
 	return state.Evaluate(quotation.Tokens, stack, (*qContext), definitions, callStackItem), nil
+}
+
+// EvaluateWithTCO evaluates using the frame-based evaluator with TCO support
+// This is the preferred entry point for evaluation as it supports tail-call optimization
+func (state *EvalState) EvaluateWithTCO(objects []MShellParseItem, stack *MShellStack, context ExecuteContext, definitions []MShellDefinition, callStackItem CallStackItem) EvalResult {
+	// Create initial frame
+	if callStackItem.MShellParseItem != nil {
+		state.CallStack.Push(callStackItem)
+	}
+
+	initialFrame := EvaluationFrame{
+		Objects:       objects,
+		Index:         0,
+		Context:       context,
+		Stack:         stack,
+		Definitions:   definitions,
+		CallStackItem: callStackItem,
+		FrameType:     FRAME_NORMAL,
+	}
+	frames := []EvaluationFrame{initialFrame}
+
+	result := state.Run(&frames)
+
+	// Pop the initial call stack item if we pushed one
+	if callStackItem.MShellParseItem != nil {
+		state.CallStack.Pop()
+	}
+
+	return result
 }
 
 func (state *EvalState) Evaluate(objects []MShellParseItem, stack *MShellStack, context ExecuteContext, definitions []MShellDefinition, callStackItem CallStackItem) EvalResult {

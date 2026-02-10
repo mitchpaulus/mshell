@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Tail-call optimization (TCO) for recursive definitions in tail position.
 - Functions
   - `sin`
   - `cos`

@@ -173,6 +173,46 @@ end
 
 Metadata values must be static: strings (single or double quoted), integers, floats, booleans, or nested lists/dicts of the same. Interpolated strings are not allowed.
 
+### Tail-Call Optimization
+
+Recursive definitions in tail position are optimized to avoid stack overflow.
+A call is in tail position when it is the last operation in a definition body (including inside `iff` branches).
+
+```mshell
+# Tail-recursive countdown - optimized
+def countdown (int -- int)
+    n!
+    @n 0 <= (0) (@n 1 - countdown) iff
+end
+
+# Tail-recursive factorial with accumulator - optimized
+def factorial (int int -- int)
+    n!, acc!
+    @n 1 <= (@acc) (@n 1 - @acc @n * factorial) iff
+end
+
+# Non-tail recursion - not optimized (uses Go stack)
+def sumTo (int -- int)
+    n!
+    @n 0 <= (0) (@n 1 - sumTo @n +) iff
+end
+```
+
+In the `sumTo` example, the recursive call is not in tail position because `@n +` follows it.
+To optimize, convert to an accumulator pattern:
+
+```mshell
+def sumTo-acc (int int -- int)
+    n!, acc!
+    @n 0 <= (@acc) (@n 1 - @acc @n + sumTo-acc) iff
+end
+
+# Call with initial accumulator of 0
+def sumTo (int -- int)
+    0 sumTo-acc
+end
+```
+
 ## Built-ins
 
 - `.s`: Print stack at current location (--)
