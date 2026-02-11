@@ -890,7 +890,7 @@ func (state *EvalState) processIfBlock(ifBlock *MShellParseIfBlock, frame *Evalu
 		// Evaluate condition using the old Evaluate method for now
 		// This is a temporary solution - ideally we'd push a frame for the condition
 		callStackItem := CallStackItem{MShellParseItem: ifBlock, Name: "else-if-condition", CallStackType: CALLSTACKIF}
-		result := state.Evaluate(elseIf.Condition, stack, context, definitions, callStackItem)
+		result := state.evaluateItems(elseIf.Condition, stack, context, definitions, callStackItem)
 		if !result.Success || result.ExitCalled {
 			return result
 		}
@@ -1005,7 +1005,7 @@ func (state *EvalState) processTokenToken(t Token, frame *EvaluationFrame, frame
 	// This is a temporary bridge while we migrate all token handling
 	// Preserve the call stack type from the frame
 	callStackItem := CallStackItem{MShellParseItem: nil, Name: "token", CallStackType: frame.CallStackItem.CallStackType}
-	result := state.Evaluate([]MShellParseItem{t}, stack, context, definitions, callStackItem)
+	result := state.evaluateItems([]MShellParseItem{t}, stack, context, definitions, callStackItem)
 	return result
 }
 
@@ -1017,7 +1017,7 @@ func (state *EvalState) processTokenLiteral(t Token, frame *EvaluationFrame, fra
 
 	// Fall back to old Evaluate for literal handling, preserving the call stack type
 	callStackItem := CallStackItem{MShellParseItem: nil, Name: "literal", CallStackType: frame.CallStackItem.CallStackType}
-	result := state.Evaluate([]MShellParseItem{t}, stack, context, definitions, callStackItem)
+	result := state.evaluateItems([]MShellParseItem{t}, stack, context, definitions, callStackItem)
 	return result
 }
 
@@ -1188,7 +1188,7 @@ func (state *EvalState) processIndexerList(indexerList *MShellIndexerList, frame
 
 	// Fall back to old Evaluate for indexer handling
 	callStackItem := CallStackItem{MShellParseItem: nil, Name: "indexer", CallStackType: CALLSTACKFILE}
-	result := state.Evaluate([]MShellParseItem{indexerList}, stack, context, definitions, callStackItem)
+	result := state.evaluateItems([]MShellParseItem{indexerList}, stack, context, definitions, callStackItem)
 	return result
 }
 
@@ -1242,12 +1242,11 @@ func (state *EvalState) EvaluateQuote(quotation MShellQuotation, stack *MShellSt
 		return EvalResult{}, err
 	}
 	callStackItem := CallStackItem{MShellParseItem: &quotation, Name: "Quote", CallStackType: CALLSTACKQUOTE}
-	return state.Evaluate(quotation.Tokens, stack, (*qContext), definitions, callStackItem), nil
+	return state.evaluateItems(quotation.Tokens, stack, (*qContext), definitions, callStackItem), nil
 }
 
-// EvaluateWithTCO evaluates using the frame-based evaluator with TCO support
-// This is the preferred entry point for evaluation as it supports tail-call optimization
-func (state *EvalState) EvaluateWithTCO(objects []MShellParseItem, stack *MShellStack, context ExecuteContext, definitions []MShellDefinition, callStackItem CallStackItem) EvalResult {
+// Evaluate evaluates a list of parsed items using the frame-based evaluator with TCO support
+func (state *EvalState) Evaluate(objects []MShellParseItem, stack *MShellStack, context ExecuteContext, definitions []MShellDefinition, callStackItem CallStackItem) EvalResult {
 	// Create initial frame
 	if callStackItem.MShellParseItem != nil {
 		state.CallStack.Push(callStackItem)
@@ -1274,7 +1273,7 @@ func (state *EvalState) EvaluateWithTCO(objects []MShellParseItem, stack *MShell
 	return result
 }
 
-func (state *EvalState) Evaluate(objects []MShellParseItem, stack *MShellStack, context ExecuteContext, definitions []MShellDefinition, callStackItem CallStackItem) EvalResult {
+func (state *EvalState) evaluateItems(objects []MShellParseItem, stack *MShellStack, context ExecuteContext, definitions []MShellDefinition, callStackItem CallStackItem) EvalResult {
 	// Defer popping the call stack
 	if callStackItem.MShellParseItem != nil {
 		state.CallStack.Push(callStackItem)
@@ -1298,7 +1297,7 @@ MainLoop:
 			listStack = []MShellObject{}
 
 			callStackItem := CallStackItem{MShellParseItem: list, Name: "list", CallStackType: CALLSTACKLIST}
-			result := state.Evaluate(list.Items, &listStack, context, definitions, callStackItem)
+			result := state.evaluateItems(list.Items, &listStack, context, definitions, callStackItem)
 
 			if !result.Success {
 				fmt.Fprint(os.Stderr, "Failed to evaluate list.\n")
@@ -1331,7 +1330,7 @@ MainLoop:
 				var dictStack MShellStack
 				dictStack = []MShellObject{}
 				callStackItem := CallStackItem{MShellParseItem: parseDict, Name: "dict", CallStackType: CALLSTACKDICT}
-				result := state.Evaluate(keyValue.Value, &dictStack, context, definitions, callStackItem)
+				result := state.evaluateItems(keyValue.Value, &dictStack, context, definitions, callStackItem)
 				if !result.Success {
 					fmt.Fprint(os.Stderr, "Failed to evaluate dictionary.\n")
 					return result
@@ -1382,7 +1381,7 @@ MainLoop:
 			}
 			// Recursively evaluate the function call
 			callStackItem := CallStackItem{MShellParseItem: prefixQuote, Name: funcToken.Lexeme, CallStackType: CALLSTACKDEF}
-			result := state.Evaluate([]MShellParseItem{funcToken}, stack, context, definitions, callStackItem)
+			result := state.evaluateItems([]MShellParseItem{funcToken}, stack, context, definitions, callStackItem)
 			if result.ShouldPassResultUpStack() {
 				return result
 			}
@@ -1410,7 +1409,7 @@ MainLoop:
 			if condition {
 				// Execute if body
 				callStackItem := CallStackItem{MShellParseItem: ifBlock, Name: "if", CallStackType: CALLSTACKIF}
-				result := state.Evaluate(ifBlock.IfBody, stack, context, definitions, callStackItem)
+				result := state.evaluateItems(ifBlock.IfBody, stack, context, definitions, callStackItem)
 				if result.ShouldPassResultUpStack() {
 					return result
 				}
@@ -1420,7 +1419,7 @@ MainLoop:
 				for _, elseIf := range ifBlock.ElseIfs {
 					// Evaluate condition
 					callStackItem := CallStackItem{MShellParseItem: ifBlock, Name: "else-if-condition", CallStackType: CALLSTACKIF}
-					result := state.Evaluate(elseIf.Condition, stack, context, definitions, callStackItem)
+					result := state.evaluateItems(elseIf.Condition, stack, context, definitions, callStackItem)
 					if !result.Success || result.ExitCalled {
 						return result
 					}
@@ -1449,7 +1448,7 @@ MainLoop:
 					if elseIfCondition {
 						// Execute else-if body
 						callStackItem := CallStackItem{MShellParseItem: ifBlock, Name: "else-if", CallStackType: CALLSTACKIF}
-						result := state.Evaluate(elseIf.Body, stack, context, definitions, callStackItem)
+						result := state.evaluateItems(elseIf.Body, stack, context, definitions, callStackItem)
 						if result.ShouldPassResultUpStack() {
 							return result
 						}
@@ -1461,7 +1460,7 @@ MainLoop:
 				// If no else-if matched, execute else body if present
 				if !foundMatch && len(ifBlock.ElseBody) > 0 {
 					callStackItem := CallStackItem{MShellParseItem: ifBlock, Name: "else", CallStackType: CALLSTACKIF}
-					result := state.Evaluate(ifBlock.ElseBody, stack, context, definitions, callStackItem)
+					result := state.evaluateItems(ifBlock.ElseBody, stack, context, definitions, callStackItem)
 					if result.ShouldPassResultUpStack() {
 						return result
 					}
@@ -1641,7 +1640,7 @@ MainLoop:
 						// Evaluate the definition
 						newContext := context.CloneLessVariables()
 						callStackItem := CallStackItem{MShellParseItem: t, Name: definition.Name, CallStackType: CALLSTACKDEF}
-						result := state.Evaluate(definition.Items, stack, *newContext, definitions, callStackItem)
+						result := state.evaluateItems(definition.Items, stack, *newContext, definitions, callStackItem)
 
 						if result.ShouldPassResultUpStack() {
 							return result
@@ -6066,7 +6065,7 @@ MainLoop:
 				initialStackSize := len(*stack)
 
 				for loopCount < maxLoops {
-					result := state.Evaluate(quotation.Tokens, stack, loopContext, definitions, CallStackItem{quotation, "quote", CALLSTACKQUOTE})
+					result := state.evaluateItems(quotation.Tokens, stack, loopContext, definitions, CallStackItem{quotation, "quote", CALLSTACKQUOTE})
 					if !result.Success || result.ExitCalled {
 						return result
 					}
@@ -6547,7 +6546,7 @@ func (state *EvalState) EvaluateFormatString(lexeme string, context ExecuteConte
 				var stack MShellStack
 				stack = []MShellObject{}
 
-				result := state.Evaluate(contents.Items, &stack, context, definitions, callStackItem)
+				result := state.evaluateItems(contents.Items, &stack, context, definitions, callStackItem)
 
 				if !result.Success {
 					return MShellString{""}, fmt.Errorf("Error evaluating format string %s", formatStr)
@@ -6636,7 +6635,7 @@ func (quotation *MShellQuotation) Execute(state *EvalState, context ExecuteConte
 		quotationContext.StandardOutput = os.Stdout
 	}
 
-	result := state.Evaluate(quotation.Tokens, stack, quotationContext, definitions, CallStackItem{quotation, "quote", CALLSTACKQUOTE})
+	result := state.evaluateItems(quotation.Tokens, stack, quotationContext, definitions, CallStackItem{quotation, "quote", CALLSTACKQUOTE})
 
 	if !result.Success || result.ExitCalled {
 		return result, result.ExitCode
