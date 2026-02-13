@@ -33,6 +33,13 @@ type FileManager struct {
 
 	previewCache map[string][]string // cached preview lines per file path
 
+	// Search state
+	searching    bool   // true when typing a search query
+	searchQuery  []rune // current search input
+	searchActive bool   // true when a search has been committed
+	searchTerm   string // lowercase committed search term
+	searchMatches []int // indices into entries that match
+
 	ttyOut *os.File // where TUI output goes (may differ from stdout)
 }
 
@@ -164,10 +171,15 @@ func (fm *FileManager) loadDirectory() {
 
 	fm.entries = entries
 	fm.previewCache = make(map[string][]string)
+	fm.searchActive = false
+	fm.searchMatches = fm.searchMatches[:0]
 }
 
 func (fm *FileManager) visibleRows() int {
-	return fm.rows - 1
+	if fm.searching {
+		return fm.rows - 2 // header + search bar
+	}
+	return fm.rows - 1 // header only
 }
 
 func (fm *FileManager) clampCursor() {
@@ -224,6 +236,52 @@ func (fm *FileManager) leftPaneWidth() int {
 	return maxLen
 }
 
+func (fm *FileManager) writeHighlightedName(buf *bytes.Buffer, name string, isDir bool, isCursor bool) {
+	if !fm.searchActive || len(fm.searchTerm) == 0 {
+		buf.WriteString(name)
+		return
+	}
+
+	nameLower := strings.ToLower(name)
+	matchStart := strings.Index(nameLower, fm.searchTerm)
+	if matchStart < 0 {
+		buf.WriteString(name)
+		return
+	}
+
+	runes := []rune(name)
+	termRunes := utf8.RuneCountInString(fm.searchTerm)
+
+	// Find rune index of match start
+	runeIdx := 0
+	byteIdx := 0
+	for runeIdx < len(runes) && byteIdx < matchStart {
+		byteIdx += utf8.RuneLen(runes[runeIdx])
+		runeIdx++
+	}
+	matchRuneStart := runeIdx
+	matchRuneEnd := matchRuneStart + termRunes
+	if matchRuneEnd > len(runes) {
+		matchRuneEnd = len(runes)
+	}
+
+	// Write pre-match
+	buf.WriteString(string(runes[:matchRuneStart]))
+	// Highlight: yellow background
+	buf.WriteString("\033[33;1m")
+	buf.WriteString(string(runes[matchRuneStart:matchRuneEnd]))
+	// Restore previous style
+	buf.WriteString("\033[22;39m")
+	if isDir {
+		buf.WriteString("\033[34m")
+	}
+	if isCursor {
+		buf.WriteString("\033[7m")
+	}
+	// Write post-match
+	buf.WriteString(string(runes[matchRuneEnd:]))
+}
+
 func (fm *FileManager) render() {
 	var buf bytes.Buffer
 
@@ -278,7 +336,7 @@ func (fm *FileManager) render() {
 				nameRunes = leftW
 			}
 			buf.WriteString(" ")
-			buf.WriteString(name)
+			fm.writeHighlightedName(&buf, name, entry.IsDir(), idx == fm.cursor)
 			// Pad to leftW
 			pad := leftW - nameRunes - 1
 			if pad > 0 {
@@ -304,6 +362,19 @@ func (fm *FileManager) render() {
 			}
 			buf.WriteString(line)
 		}
+	}
+
+	// Search bar at the bottom
+	if fm.searching {
+		buf.WriteString("\r\n")
+		searchLine := "/" + string(fm.searchQuery)
+		searchRunes := utf8.RuneCountInString(searchLine)
+		if searchRunes > fm.cols {
+			searchLine = string([]rune(searchLine)[:fm.cols])
+		}
+		buf.WriteString(searchLine)
+		// Show cursor at end of search input
+		buf.WriteString("\033[?25h")
 	}
 
 	fm.ttyOut.Write(buf.Bytes())
@@ -397,6 +468,10 @@ func (fm *FileManager) handleInput() bool {
 		return false
 	}
 
+	if fm.searching {
+		return fm.handleSearchInput(buf, n)
+	}
+
 	key := buf[0]
 
 	// Check for escape sequences
@@ -472,6 +547,15 @@ func (fm *FileManager) handleInput() bool {
 		fm.adjustScroll()
 	case 'e':
 		fm.openEditor()
+	case '/':
+		fm.searching = true
+		fm.searchQuery = fm.searchQuery[:0]
+		fm.ttyOut.WriteString("\033[?25h") // show cursor
+		return false
+	case 'n':
+		fm.searchNext()
+	case 'p':
+		fm.searchPrev()
 	}
 
 	if key != 'g' {
@@ -479,6 +563,160 @@ func (fm *FileManager) handleInput() bool {
 	}
 
 	return false
+}
+
+func (fm *FileManager) handleSearchInput(buf []byte, _ int) bool {
+	key := buf[0]
+
+	// Escape cancels search
+	if key == 0x1b {
+		fm.searching = false
+		fm.ttyOut.WriteString("\033[?25l")
+		return false
+	}
+
+	// Enter commits search
+	if key == 13 {
+		fm.searching = false
+		fm.ttyOut.WriteString("\033[?25l")
+		fm.commitSearch()
+		return false
+	}
+
+	// Backspace
+	if key == 127 {
+		if len(fm.searchQuery) > 0 {
+			fm.searchQuery = fm.searchQuery[:len(fm.searchQuery)-1]
+			fm.updateSearchLive()
+		}
+		return false
+	}
+
+	// Ctrl-U clears the search input
+	if key == 21 {
+		fm.searchQuery = fm.searchQuery[:0]
+		fm.updateSearchLive()
+		return false
+	}
+
+	// Ctrl-W deletes the last word
+	if key == 23 {
+		if len(fm.searchQuery) > 0 {
+			// Skip trailing spaces
+			i := len(fm.searchQuery) - 1
+			for i >= 0 && fm.searchQuery[i] == ' ' {
+				i--
+			}
+			// Delete back to previous space or start
+			for i >= 0 && fm.searchQuery[i] != ' ' {
+				i--
+			}
+			fm.searchQuery = fm.searchQuery[:i+1]
+			fm.updateSearchLive()
+		}
+		return false
+	}
+
+	// Printable characters
+	if key >= 32 && key < 127 {
+		fm.searchQuery = append(fm.searchQuery, rune(key))
+		fm.updateSearchLive()
+	}
+
+	return false
+}
+
+func (fm *FileManager) updateSearchLive() {
+	if len(fm.searchQuery) == 0 {
+		fm.searchMatches = fm.searchMatches[:0]
+		fm.searchActive = false
+		return
+	}
+	query := strings.ToLower(string(fm.searchQuery))
+	fm.searchTerm = query
+	fm.searchMatches = fm.searchMatches[:0]
+	for i, e := range fm.entries {
+		if strings.Contains(strings.ToLower(e.Name()), query) {
+			fm.searchMatches = append(fm.searchMatches, i)
+		}
+	}
+	fm.searchActive = true
+	// Jump to first match at or after current cursor
+	for _, idx := range fm.searchMatches {
+		if idx >= fm.cursor {
+			fm.cursor = idx
+			fm.adjustScroll()
+			return
+		}
+	}
+	// Wrap to first match
+	if len(fm.searchMatches) > 0 {
+		fm.cursor = fm.searchMatches[0]
+		fm.adjustScroll()
+	}
+}
+
+func (fm *FileManager) commitSearch() {
+	if len(fm.searchQuery) == 0 {
+		fm.searchActive = false
+		fm.searchMatches = fm.searchMatches[:0]
+		return
+	}
+	fm.searchTerm = strings.ToLower(string(fm.searchQuery))
+	fm.buildSearchMatches()
+	if len(fm.searchMatches) > 0 {
+		// Jump to first match at or after cursor
+		for _, idx := range fm.searchMatches {
+			if idx >= fm.cursor {
+				fm.cursor = idx
+				fm.adjustScroll()
+				return
+			}
+		}
+		fm.cursor = fm.searchMatches[0]
+		fm.adjustScroll()
+	}
+}
+
+func (fm *FileManager) buildSearchMatches() {
+	fm.searchMatches = fm.searchMatches[:0]
+	for i, e := range fm.entries {
+		if strings.Contains(strings.ToLower(e.Name()), fm.searchTerm) {
+			fm.searchMatches = append(fm.searchMatches, i)
+		}
+	}
+}
+
+func (fm *FileManager) searchNext() {
+	if !fm.searchActive || len(fm.searchMatches) == 0 {
+		return
+	}
+	for _, idx := range fm.searchMatches {
+		if idx > fm.cursor {
+			fm.cursor = idx
+			fm.adjustScroll()
+			return
+		}
+	}
+	// Wrap around
+	fm.cursor = fm.searchMatches[0]
+	fm.adjustScroll()
+}
+
+func (fm *FileManager) searchPrev() {
+	if !fm.searchActive || len(fm.searchMatches) == 0 {
+		return
+	}
+	for i := len(fm.searchMatches) - 1; i >= 0; i-- {
+		if fm.searchMatches[i] < fm.cursor {
+			fm.cursor = fm.searchMatches[i]
+			fm.adjustScroll()
+			return
+		}
+	}
+	// Wrap around
+	fm.cursor = fm.searchMatches[len(fm.searchMatches)-1]
+	fm.adjustScroll()
 }
 
 func (fm *FileManager) enterSelected() {
