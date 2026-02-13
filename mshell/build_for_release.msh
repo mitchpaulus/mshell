@@ -40,7 +40,7 @@ def build_os_arch (--)
     list! @list :0: $GOOS! @list :1: $GOARCH! @list :2: $BIN_NAME!
     $"Working on {$GOOS} {$GOARCH}" wl
     [go build -o $"bin/{$GOOS}_{$GOARCH}/{$BIN_NAME}"];
-    [cp ../lib/std.msh $"bin/{$GOOS}_{$GOARCH}/std.msh"];
+    `../lib/std.msh` $"bin/{$GOOS}_{$GOARCH}/std.msh" cp
     [tar -C $"bin/{$GOOS}_{$GOARCH}" -czf $"bin/{$GOOS}_{$GOARCH}.tar.gz" $"{$BIN_NAME}" std.msh];
 end
 
