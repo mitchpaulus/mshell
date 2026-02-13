@@ -289,7 +289,7 @@ func (fm *FileManager) render() {
 	buf.WriteString("\033[H\033[2J")
 
 	leftW := fm.leftPaneWidth()
-	rightW := fm.cols - leftW - 1 // 1 for separator
+	rightW := fm.cols - leftW - 3 // 3 for " │ " separator
 	if rightW < 0 {
 		rightW = 0
 	}
@@ -351,7 +351,7 @@ func (fm *FileManager) render() {
 		}
 
 		// Separator
-		buf.WriteString("\033[90m\u2502\033[0m")
+		buf.WriteString(" \033[90m\u2502\033[0m ")
 
 		// Right pane
 		if row < len(previewLines) {
@@ -554,7 +554,7 @@ func (fm *FileManager) handleInput() bool {
 		return false
 	case 'n':
 		fm.searchNext()
-	case 'p':
+	case 'N', 'p':
 		fm.searchPrev()
 	}
 
