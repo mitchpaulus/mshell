@@ -236,6 +236,21 @@ func (fm *FileManager) leftPaneWidth() int {
 	return maxLen
 }
 
+// truncateMiddle truncates s to maxRunes by replacing the middle with "..".
+func truncateMiddle(s string, maxRunes int) string {
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	if maxRunes <= 2 {
+		return string(runes[:maxRunes])
+	}
+	// Split available space: more on the left
+	leftLen := (maxRunes - 2 + 1) / 2
+	rightLen := maxRunes - 2 - leftLen
+	return string(runes[:leftLen]) + ".." + string(runes[len(runes)-rightLen:])
+}
+
 func (fm *FileManager) writeHighlightedName(buf *bytes.Buffer, name string, isDir bool, isCursor bool) {
 	if !fm.searchActive || len(fm.searchTerm) == 0 {
 		buf.WriteString(name)
@@ -298,7 +313,7 @@ func (fm *FileManager) render() {
 	header := fmt.Sprintf(" %s@%s: %s", fm.username, fm.hostname, fm.currentDir)
 	headerRunes := utf8.RuneCountInString(header)
 	if headerRunes > fm.cols {
-		header = string([]rune(header)[:fm.cols])
+		header = truncateMiddle(header, fm.cols)
 	} else {
 		header += strings.Repeat(" ", fm.cols-headerRunes)
 	}
@@ -331,14 +346,15 @@ func (fm *FileManager) render() {
 				buf.WriteString("\033[34m") // blue for directories
 			}
 
-			if nameRunes > leftW {
-				name = string([]rune(name)[:leftW])
-				nameRunes = leftW
+			availW := leftW - 1 // 1 for leading space
+			if nameRunes > availW {
+				name = truncateMiddle(name, availW)
+				nameRunes = availW
 			}
 			buf.WriteString(" ")
 			fm.writeHighlightedName(&buf, name, entry.IsDir(), idx == fm.cursor)
 			// Pad to leftW
-			pad := leftW - nameRunes - 1
+			pad := availW - nameRunes
 			if pad > 0 {
 				buf.WriteString(strings.Repeat(" ", pad))
 			}
@@ -358,7 +374,7 @@ func (fm *FileManager) render() {
 			line := previewLines[row]
 			lineRunes := utf8.RuneCountInString(line)
 			if lineRunes > rightW {
-				line = string([]rune(line)[:rightW])
+				line = truncateMiddle(line, rightW)
 			}
 			buf.WriteString(line)
 		}
