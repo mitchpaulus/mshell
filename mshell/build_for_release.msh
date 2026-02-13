@@ -34,11 +34,14 @@
 
 soe
 
+"0" $CGO_ENABLED!
+
 def build_os_arch (--)
     list! @list :0: $GOOS! @list :1: $GOARCH! @list :2: $BIN_NAME!
     $"Working on {$GOOS} {$GOARCH}" wl
     [go build -o $"bin/{$GOOS}_{$GOARCH}/{$BIN_NAME}"];
-    [tar -C $"bin/{$GOOS}_{$GOARCH}" -czf $"bin/{$GOOS}_{$GOARCH}.tar.gz" $"{$BIN_NAME}"];
+    [cp ../lib/std.msh $"bin/{$GOOS}_{$GOARCH}/std.msh"];
+    [tar -C $"bin/{$GOOS}_{$GOARCH}" -czf $"bin/{$GOOS}_{$GOARCH}.tar.gz" $"{$BIN_NAME}" std.msh];
 end
 
 [
