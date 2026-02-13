@@ -1,2 +1,2 @@
 #!/bin/sh
-GOOS=windows GOARCH=amd64 go build -ldflags "-H=windowsgui" -o mshw.exe
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "-H=windowsgui" -o mshw.exe
