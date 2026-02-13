@@ -87,6 +87,11 @@ func main() {
 		return
 	}
 
+	if len(os.Args) >= 2 && os.Args[1] == "fm" {
+		os.Exit(RunFileManager())
+		return
+	}
+
 	command := CLIEXECUTE
 
 	// printLex := false
@@ -125,6 +130,7 @@ func main() {
 			fmt.Println("Usage: msh bin <command>")
 			fmt.Println("Usage: msh completions <shell>")
 			fmt.Println("Usage: msh lsp")
+			fmt.Println("Usage: msh fm")
 			fmt.Println("")
 			fmt.Println("Options:")
 			fmt.Println("  --html       Render the input as HTML")
@@ -136,6 +142,7 @@ func main() {
 			fmt.Println("  -h, --help   Print this help message")
 			fmt.Println("  bin          Manage msh_bins.txt entries")
 			fmt.Println("  completions  Print shell completion script")
+			fmt.Println("  fm           Open the built-in file manager")
 			os.Exit(0)
 			return
 		} else if arg == "--version" {
@@ -3194,6 +3201,24 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			state.resetHistorySearch()
 		} else if t.Char == 12 { // Ctrl-L
 			state.ClearScreen()
+		} else if t.Char == 15 { // Ctrl-O - file manager
+			newDir := RunFileManagerInteractive(state.stdInFd, &state.oldState)
+			if newDir != "" {
+				os.Chdir(newDir)
+			}
+			// Refresh terminal size
+			cols, rows, sizeErr := term.GetSize(int(os.Stdout.Fd()))
+			if sizeErr == nil {
+				state.numRows = rows
+				state.numCols = cols
+			}
+			fmt.Fprintf(os.Stdout, "\033[H\033[2J")
+			state.currentCommand = state.currentCommand[:0]
+			state.index = 0
+			err = state.printPrompt()
+			if err != nil {
+				return false, err
+			}
 		} else if t.Char == 13 { // Enter
 			// If in tab completion mode, accept the completion without executing
 			if state.tabCycleActive {
