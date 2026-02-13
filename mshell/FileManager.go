@@ -41,6 +41,11 @@ type FileManager struct {
 	searchMatches []int // indices into entries that match
 
 	ttyOut *os.File // where TUI output goes (may differ from stdout)
+
+	// Bookmark state
+	bookmarks       map[byte]string
+	pendingMark     bool // waiting for mark character after 'm'
+	showingBookmarks bool // showing bookmark selection after ';'
 }
 
 // RunFileManager runs as a standalone subcommand (msh fm).
@@ -71,6 +76,7 @@ func RunFileManager() int {
 	fm.cols = cols
 
 	fm.initUserInfo()
+	fm.bookmarks = loadBookmarks()
 
 	fm.currentDir, err = os.Getwd()
 	if err != nil {
@@ -119,6 +125,7 @@ func RunFileManagerInteractive(stdInFd int, oldState *term.State) string {
 	fm.cols = cols
 
 	fm.initUserInfo()
+	fm.bookmarks = loadBookmarks()
 
 	fm.currentDir, _ = os.Getwd()
 	fm.loadDirectory()
@@ -393,7 +400,79 @@ func (fm *FileManager) render() {
 		buf.WriteString("\033[?25h")
 	}
 
+	// Bookmark overlay
+	if fm.pendingMark || fm.showingBookmarks {
+		fm.renderBookmarkOverlay(&buf)
+	}
+
 	fm.ttyOut.Write(buf.Bytes())
+}
+
+func (fm *FileManager) renderBookmarkOverlay(buf *bytes.Buffer) {
+	// Draw a centered overlay box
+	var lines []string
+	if fm.pendingMark {
+		lines = append(lines, " Set bookmark (0-9, a-z): ")
+	} else {
+		lines = append(lines, " Go to bookmark: ")
+	}
+	// List existing bookmarks
+	for c := byte('0'); c <= '9'; c++ {
+		if dir, ok := fm.bookmarks[c]; ok {
+			lines = append(lines, fmt.Sprintf("  %c  %s", c, dir))
+		}
+	}
+	for c := byte('a'); c <= 'z'; c++ {
+		if dir, ok := fm.bookmarks[c]; ok {
+			lines = append(lines, fmt.Sprintf("  %c  %s", c, dir))
+		}
+	}
+	if len(lines) == 1 {
+		lines = append(lines, "  (no bookmarks)")
+	}
+
+	// Find box width
+	boxW := 0
+	for _, l := range lines {
+		runes := utf8.RuneCountInString(l)
+		if runes > boxW {
+			boxW = runes
+		}
+	}
+	boxW += 2 // padding
+	if boxW > fm.cols-4 {
+		boxW = fm.cols - 4
+	}
+
+	// Center position
+	startCol := (fm.cols - boxW) / 2
+	if startCol < 1 {
+		startCol = 1
+	}
+	startRow := (fm.rows-len(lines))/2 + 1
+	if startRow < 2 {
+		startRow = 2
+	}
+
+	for i, line := range lines {
+		row := startRow + i
+		if row > fm.rows {
+			break
+		}
+		buf.WriteString(fmt.Sprintf("\033[%d;%dH", row, startCol))
+		buf.WriteString("\033[7m") // reverse video
+		lineRunes := utf8.RuneCountInString(line)
+		if lineRunes > boxW {
+			line = truncateMiddle(line, boxW)
+			lineRunes = boxW
+		}
+		buf.WriteString(line)
+		pad := boxW - lineRunes
+		if pad > 0 {
+			buf.WriteString(strings.Repeat(" ", pad))
+		}
+		buf.WriteString("\033[0m")
+	}
 }
 
 func (fm *FileManager) getPreview() []string {
@@ -490,6 +569,28 @@ func (fm *FileManager) handleInput() bool {
 
 	key := buf[0]
 
+	if fm.pendingMark {
+		fm.pendingMark = false
+		if isBookmarkChar(key) {
+			fm.bookmarks[key] = fm.currentDir
+			saveBookmarks(fm.bookmarks)
+		}
+		return false
+	}
+
+	if fm.showingBookmarks {
+		fm.showingBookmarks = false
+		if isBookmarkChar(key) {
+			if dir, ok := fm.bookmarks[key]; ok {
+				fm.currentDir = dir
+				fm.cursor = 0
+				fm.offset = 0
+				fm.loadDirectory()
+			}
+		}
+		return false
+	}
+
 	// Check for escape sequences
 	if n >= 3 && buf[0] == 0x1b && buf[1] == '[' {
 		switch buf[2] {
@@ -572,6 +673,12 @@ func (fm *FileManager) handleInput() bool {
 		fm.searchNext()
 	case 'N', 'p':
 		fm.searchPrev()
+	case 'm':
+		fm.pendingMark = true
+		return false
+	case ';':
+		fm.showingBookmarks = true
+		return false
 	}
 
 	if key != 'g' {
@@ -814,4 +921,63 @@ func (fm *FileManager) openEditor() {
 	fm.loadDirectory()
 	fm.clampCursor()
 	fm.adjustScroll()
+}
+
+// Bookmarks
+
+const bookmarksFileName = "fm_bookmarks"
+
+func bookmarksFilePath() (string, error) {
+	dir, err := GetHistoryDir()
+	if err != nil {
+		return "", err
+	}
+	return dir + bookmarksFileName, nil
+}
+
+func loadBookmarks() map[byte]string {
+	bookmarks := make(map[byte]string)
+	path, err := bookmarksFilePath()
+	if err != nil {
+		return bookmarks
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return bookmarks
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if len(line) >= 3 && line[1] == ' ' {
+			bookmarks[line[0]] = line[2:]
+		}
+	}
+	return bookmarks
+}
+
+func isBookmarkChar(c byte) bool {
+	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z')
+}
+
+func saveBookmarks(bookmarks map[byte]string) error {
+	path, err := bookmarksFilePath()
+	if err != nil {
+		return err
+	}
+	var sb strings.Builder
+	for c := byte('0'); c <= '9'; c++ {
+		if dir, ok := bookmarks[c]; ok {
+			sb.WriteByte(c)
+			sb.WriteByte(' ')
+			sb.WriteString(dir)
+			sb.WriteByte('\n')
+		}
+	}
+	for c := byte('a'); c <= 'z'; c++ {
+		if dir, ok := bookmarks[c]; ok {
+			sb.WriteByte(c)
+			sb.WriteByte(' ')
+			sb.WriteString(dir)
+			sb.WriteByte('\n')
+		}
+	}
+	return os.WriteFile(path, []byte(sb.String()), 0644)
 }
