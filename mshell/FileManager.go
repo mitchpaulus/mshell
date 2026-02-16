@@ -46,6 +46,11 @@ type FileManager struct {
 	bookmarks       map[byte]string
 	pendingMark     bool // waiting for mark character after 'm'
 	showingBookmarks bool // showing bookmark selection after ';'
+
+	// Rename state
+	renaming       bool
+	renameInput    []rune
+	renameCursor   int // cursor position within renameInput
 }
 
 // RunFileManager runs as a standalone subcommand (msh fm).
@@ -183,8 +188,8 @@ func (fm *FileManager) loadDirectory() {
 }
 
 func (fm *FileManager) visibleRows() int {
-	if fm.searching {
-		return fm.rows - 2 // header + search bar
+	if fm.searching || fm.renaming {
+		return fm.rows - 2 // header + bottom bar
 	}
 	return fm.rows - 1 // header only
 }
@@ -400,6 +405,22 @@ func (fm *FileManager) render() {
 		buf.WriteString("\033[?25h")
 	}
 
+	// Rename bar at the bottom
+	if fm.renaming {
+		buf.WriteString("\r\n")
+		prefix := "rename: "
+		renameLine := prefix + string(fm.renameInput)
+		renameRunes := utf8.RuneCountInString(renameLine)
+		if renameRunes > fm.cols {
+			renameLine = string([]rune(renameLine)[:fm.cols])
+		}
+		buf.WriteString(renameLine)
+		// Position cursor
+		cursorCol := utf8.RuneCountInString(prefix) + fm.renameCursor + 1
+		buf.WriteString(fmt.Sprintf("\033[%d;%dH", fm.rows, cursorCol))
+		buf.WriteString("\033[?25h")
+	}
+
 	// Bookmark overlay
 	if fm.pendingMark || fm.showingBookmarks {
 		fm.renderBookmarkOverlay(&buf)
@@ -567,6 +588,10 @@ func (fm *FileManager) handleInput() bool {
 		return fm.handleSearchInput(buf, n)
 	}
 
+	if fm.renaming {
+		return fm.handleRenameInput(buf, n)
+	}
+
 	key := buf[0]
 
 	if fm.pendingMark {
@@ -664,6 +689,9 @@ func (fm *FileManager) handleInput() bool {
 		fm.adjustScroll()
 	case 'e':
 		fm.openEditor()
+	case 'r':
+		fm.startRename()
+		return false
 	case '/':
 		fm.searching = true
 		fm.searchQuery = fm.searchQuery[:0]
@@ -827,6 +855,146 @@ func (fm *FileManager) searchPrev() {
 	// Wrap around
 	fm.cursor = fm.searchMatches[len(fm.searchMatches)-1]
 	fm.adjustScroll()
+}
+
+func (fm *FileManager) startRename() {
+	if len(fm.entries) == 0 || fm.cursor >= len(fm.entries) {
+		return
+	}
+	name := fm.entries[fm.cursor].Name()
+	fm.renaming = true
+	fm.renameInput = []rune(name)
+
+	// Position cursor before the extension
+	ext := filepath.Ext(name)
+	if len(ext) > 0 && len(ext) < len(name) {
+		fm.renameCursor = utf8.RuneCountInString(name) - utf8.RuneCountInString(ext)
+	} else {
+		fm.renameCursor = len(fm.renameInput)
+	}
+}
+
+func (fm *FileManager) handleRenameInput(buf []byte, n int) bool {
+	key := buf[0]
+
+	// Escape cancels
+	if key == 0x1b {
+		// Check for arrow keys: ESC [ A/B/C/D
+		if n >= 3 && buf[1] == '[' {
+			switch buf[2] {
+			case 'C': // Right
+				if fm.renameCursor < len(fm.renameInput) {
+					fm.renameCursor++
+				}
+			case 'D': // Left
+				if fm.renameCursor > 0 {
+					fm.renameCursor--
+				}
+			case 'H': // Home
+				fm.renameCursor = 0
+			case 'F': // End
+				fm.renameCursor = len(fm.renameInput)
+			}
+			return false
+		}
+		fm.renaming = false
+		fm.ttyOut.WriteString("\033[?25l")
+		return false
+	}
+
+	// Enter commits rename
+	if key == 13 {
+		fm.renaming = false
+		fm.ttyOut.WriteString("\033[?25l")
+		fm.commitRename()
+		return false
+	}
+
+	// Backspace
+	if key == 127 {
+		if fm.renameCursor > 0 {
+			fm.renameInput = append(fm.renameInput[:fm.renameCursor-1], fm.renameInput[fm.renameCursor:]...)
+			fm.renameCursor--
+		}
+		return false
+	}
+
+	// Ctrl-U clears to start
+	if key == 21 {
+		fm.renameInput = fm.renameInput[fm.renameCursor:]
+		fm.renameCursor = 0
+		return false
+	}
+
+	// Ctrl-W delete word backwards
+	if key == 23 {
+		if fm.renameCursor > 0 {
+			i := fm.renameCursor - 1
+			for i > 0 && fm.renameInput[i] == ' ' {
+				i--
+			}
+			for i > 0 && fm.renameInput[i-1] != ' ' && fm.renameInput[i-1] != '.' {
+				i--
+			}
+			fm.renameInput = append(fm.renameInput[:i], fm.renameInput[fm.renameCursor:]...)
+			fm.renameCursor = i
+		}
+		return false
+	}
+
+	// Ctrl-A go to start
+	if key == 1 {
+		fm.renameCursor = 0
+		return false
+	}
+
+	// Ctrl-E go to end
+	if key == 5 {
+		fm.renameCursor = len(fm.renameInput)
+		return false
+	}
+
+	// Ctrl-K delete to end
+	if key == 11 {
+		fm.renameInput = fm.renameInput[:fm.renameCursor]
+		return false
+	}
+
+	// Printable characters
+	if key >= 32 && key < 127 {
+		fm.renameInput = append(fm.renameInput[:fm.renameCursor], append([]rune{rune(key)}, fm.renameInput[fm.renameCursor:]...)...)
+		fm.renameCursor++
+	}
+
+	return false
+}
+
+func (fm *FileManager) commitRename() {
+	if len(fm.entries) == 0 || fm.cursor >= len(fm.entries) {
+		return
+	}
+	oldName := fm.entries[fm.cursor].Name()
+	newName := string(fm.renameInput)
+	if newName == "" || newName == oldName {
+		return
+	}
+
+	oldPath := filepath.Join(fm.currentDir, oldName)
+	newPath := filepath.Join(fm.currentDir, newName)
+	err := os.Rename(oldPath, newPath)
+	if err != nil {
+		return
+	}
+
+	fm.loadDirectory()
+	// Try to select the renamed entry
+	for i, e := range fm.entries {
+		if e.Name() == newName {
+			fm.cursor = i
+			fm.adjustScroll()
+			break
+		}
+	}
 }
 
 func (fm *FileManager) enterSelected() {
