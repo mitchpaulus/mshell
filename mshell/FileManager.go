@@ -51,11 +51,15 @@ type FileManager struct {
 	renaming       bool
 	renameInput    []rune
 	renameCursor   int // cursor position within renameInput
+
+	// Status message (shown once at bottom, cleared on first keypress)
+	statusMsg string
 }
 
 // RunFileManager runs as a standalone subcommand (msh fm).
 // TUI goes to /dev/tty, final directory is printed to stdout.
-func RunFileManager() int {
+// If startDir is non-empty and is a valid directory, it is used instead of cwd.
+func RunFileManager(startDir string) int {
 	fm := &FileManager{}
 	fm.stdInFd = int(os.Stdin.Fd())
 
@@ -83,10 +87,23 @@ func RunFileManager() int {
 	fm.initUserInfo()
 	fm.bookmarks = loadBookmarks()
 
-	fm.currentDir, err = os.Getwd()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error getting working directory: %s\n", err)
-		return 1
+	if startDir != "" {
+		if info, err := os.Stat(startDir); err == nil && info.IsDir() {
+			fm.currentDir, _ = filepath.Abs(startDir)
+		} else {
+			fm.statusMsg = fmt.Sprintf("Directory not found: %s", startDir)
+			fm.currentDir, err = os.Getwd()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error getting working directory: %s\n", err)
+				return 1
+			}
+		}
+	} else {
+		fm.currentDir, err = os.Getwd()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error getting working directory: %s\n", err)
+			return 1
+		}
 	}
 
 	fm.loadDirectory()
@@ -115,8 +132,9 @@ func RunFileManager() int {
 
 // RunFileManagerInteractive runs from within the mshell interactive session.
 // The terminal is already in raw mode from the interactive session.
+// If startDir is non-empty and is a valid directory, it is used instead of cwd.
 // Returns the directory the user was in when they quit.
-func RunFileManagerInteractive(stdInFd int, oldState *term.State) string {
+func RunFileManagerInteractive(stdInFd int, oldState *term.State, startDir string) string {
 	fm := &FileManager{}
 	fm.stdInFd = stdInFd
 	fm.oldState = *oldState
@@ -132,7 +150,16 @@ func RunFileManagerInteractive(stdInFd int, oldState *term.State) string {
 	fm.initUserInfo()
 	fm.bookmarks = loadBookmarks()
 
-	fm.currentDir, _ = os.Getwd()
+	if startDir != "" {
+		if info, err := os.Stat(startDir); err == nil && info.IsDir() {
+			fm.currentDir, _ = filepath.Abs(startDir)
+		} else {
+			fm.statusMsg = fmt.Sprintf("Directory not found: %s", startDir)
+			fm.currentDir, _ = os.Getwd()
+		}
+	} else {
+		fm.currentDir, _ = os.Getwd()
+	}
 	fm.loadDirectory()
 
 	// Terminal is already in raw mode from the interactive session.
@@ -142,6 +169,55 @@ func RunFileManagerInteractive(stdInFd int, oldState *term.State) string {
 	fm.mainLoop()
 
 	fm.ttyOut.WriteString("\033[?25h\033[?1049l")
+
+	return fm.currentDir
+}
+
+// RunFileManagerBuiltin runs from a builtin call during evaluation.
+// The terminal is in cooked mode, so this handles MakeRaw/Restore itself.
+// If startDir is non-empty and is a valid directory, it is used instead of cwd.
+// Returns the directory the user was in when they quit.
+func RunFileManagerBuiltin(startDir string) string {
+	fm := &FileManager{}
+	fm.stdInFd = int(os.Stdin.Fd())
+	fm.ttyOut = os.Stdout
+
+	cols, rows, err := term.GetSize(int(os.Stdout.Fd()))
+	if err != nil {
+		return ""
+	}
+	fm.rows = rows
+	fm.cols = cols
+
+	fm.initUserInfo()
+	fm.bookmarks = loadBookmarks()
+
+	if startDir != "" {
+		if info, err := os.Stat(startDir); err == nil && info.IsDir() {
+			fm.currentDir, _ = filepath.Abs(startDir)
+		} else {
+			fm.statusMsg = fmt.Sprintf("Directory not found: %s", startDir)
+			fm.currentDir, _ = os.Getwd()
+		}
+	} else {
+		fm.currentDir, _ = os.Getwd()
+	}
+	fm.loadDirectory()
+
+	oldState, err := term.MakeRaw(fm.stdInFd)
+	if err != nil {
+		return ""
+	}
+	fm.oldState = *oldState
+
+	fm.ttyOut.WriteString("\033[?1049h\033[?25l")
+
+	defer func() {
+		fm.ttyOut.WriteString("\033[?25h\033[?1049l")
+		term.Restore(fm.stdInFd, &fm.oldState)
+	}()
+
+	fm.mainLoop()
 
 	return fm.currentDir
 }
@@ -188,7 +264,7 @@ func (fm *FileManager) loadDirectory() {
 }
 
 func (fm *FileManager) visibleRows() int {
-	if fm.searching || fm.renaming {
+	if fm.searching || fm.renaming || fm.statusMsg != "" {
 		return fm.rows - 2 // header + bottom bar
 	}
 	return fm.rows - 1 // header only
@@ -481,6 +557,19 @@ func (fm *FileManager) render() {
 		buf.WriteString("\033[?25h")
 	}
 
+	// Status message at the bottom
+	if fm.statusMsg != "" && !fm.searching && !fm.renaming {
+		buf.WriteString("\r\n")
+		msg := fm.statusMsg
+		msgRunes := utf8.RuneCountInString(msg)
+		if msgRunes > fm.cols {
+			msg = string([]rune(msg)[:fm.cols])
+		}
+		buf.WriteString("\033[33m") // yellow
+		buf.WriteString(msg)
+		buf.WriteString("\033[0m")
+	}
+
 	// Bookmark overlay
 	if fm.pendingMark || fm.showingBookmarks {
 		fm.renderBookmarkOverlay(&buf)
@@ -643,6 +732,8 @@ func (fm *FileManager) handleInput() bool {
 	if err != nil || n == 0 {
 		return false
 	}
+
+	fm.statusMsg = ""
 
 	if fm.searching {
 		return fm.handleSearchInput(buf, n)

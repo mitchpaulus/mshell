@@ -84,6 +84,7 @@ var BuiltInList = map[string]struct{}{
 	"mkdir": {},
 	"mkdirp": {},
 	"mod": {},
+	"mshFileManager": {},
 	"month": {},
 	"mv": {},
 	"nip": {},
