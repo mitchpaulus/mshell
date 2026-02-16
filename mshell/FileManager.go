@@ -775,6 +775,8 @@ func (fm *FileManager) handleInput() bool {
 		fm.clipboardPaste()
 	case 'c':
 		clearClipboard()
+	case 'x':
+		fm.deleteEntry()
 	case 'm':
 		fm.pendingMark = true
 		return false
@@ -1301,6 +1303,101 @@ func versionedPath(dest string) string {
 			return candidate
 		}
 	}
+}
+
+// Delete to trash
+
+func (fm *FileManager) deleteEntry() {
+	if len(fm.entries) == 0 || fm.cursor >= len(fm.entries) {
+		return
+	}
+	entry := fm.entries[fm.cursor]
+	name := entry.Name()
+	absPath := filepath.Join(fm.currentDir, name)
+
+	if !fm.promptDelete(entry) {
+		return
+	}
+
+	if err := TrashFile(absPath); err != nil {
+		return
+	}
+
+	fm.loadDirectory()
+	fm.clampCursor()
+	fm.adjustScroll()
+}
+
+// promptDelete shows a confirmation overlay. Returns true if the user confirms.
+func (fm *FileManager) promptDelete(entry os.DirEntry) bool {
+	name := entry.Name()
+	lines := []string{
+		fmt.Sprintf(" Delete \"%s\"? ", name),
+	}
+
+	// For non-empty directories, show entry count
+	if entry.IsDir() {
+		dirPath := filepath.Join(fm.currentDir, name)
+		if subEntries, err := os.ReadDir(dirPath); err == nil && len(subEntries) > 0 {
+			lines = append(lines, fmt.Sprintf(" (directory with %d entries) ", len(subEntries)))
+		}
+	}
+
+	lines = append(lines, "")
+	lines = append(lines, "  y  Confirm")
+	lines = append(lines, "  Esc  Cancel")
+
+	// Find box width
+	boxW := 0
+	for _, l := range lines {
+		runes := utf8.RuneCountInString(l)
+		if runes > boxW {
+			boxW = runes
+		}
+	}
+	boxW += 2
+	if boxW > fm.cols-4 {
+		boxW = fm.cols - 4
+	}
+
+	startCol := (fm.cols - boxW) / 2
+	if startCol < 1 {
+		startCol = 1
+	}
+	startRow := (fm.rows-len(lines))/2 + 1
+	if startRow < 2 {
+		startRow = 2
+	}
+
+	var buf bytes.Buffer
+	for i, line := range lines {
+		row := startRow + i
+		if row > fm.rows {
+			break
+		}
+		buf.WriteString(fmt.Sprintf("\033[%d;%dH", row, startCol))
+		buf.WriteString("\033[7m")
+		lineRunes := utf8.RuneCountInString(line)
+		if lineRunes > boxW {
+			line = truncateMiddle(line, boxW)
+			lineRunes = boxW
+		}
+		buf.WriteString(line)
+		pad := boxW - lineRunes
+		if pad > 0 {
+			buf.WriteString(strings.Repeat(" ", pad))
+		}
+		buf.WriteString("\033[0m")
+	}
+	fm.ttyOut.Write(buf.Bytes())
+
+	// Read one key
+	keyBuf := make([]byte, 16)
+	n, err := os.Stdin.Read(keyBuf)
+	if err != nil || n == 0 {
+		return false
+	}
+	return keyBuf[0] == 'y'
 }
 
 // Bookmarks
