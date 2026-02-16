@@ -764,19 +764,6 @@ func (fm *FileManager) updateSearchLive() {
 		}
 	}
 	fm.searchActive = true
-	// Jump to first match at or after current cursor
-	for _, idx := range fm.searchMatches {
-		if idx >= fm.cursor {
-			fm.cursor = idx
-			fm.adjustScroll()
-			return
-		}
-	}
-	// Wrap to first match
-	if len(fm.searchMatches) > 0 {
-		fm.cursor = fm.searchMatches[0]
-		fm.adjustScroll()
-	}
 }
 
 func (fm *FileManager) commitSearch() {
