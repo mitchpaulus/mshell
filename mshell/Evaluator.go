@@ -7146,26 +7146,54 @@ func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContex
 }
 
 func CopyFile(source string, dest string) error {
-	// TODO: Fix this dumb copy code.
-	// Copy the file
+	srcInfo, err := os.Lstat(source)
+	if err != nil {
+		return err
+	}
+
+	// Handle symlinks
+	if srcInfo.Mode()&os.ModeSymlink != 0 {
+		target, err := os.Readlink(source)
+		if err != nil {
+			return err
+		}
+		return os.Symlink(target, dest)
+	}
+
+	// Handle directories recursively
+	if srcInfo.IsDir() {
+		if err := os.MkdirAll(dest, srcInfo.Mode().Perm()); err != nil {
+			return err
+		}
+		entries, err := os.ReadDir(source)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			srcPath := filepath.Join(source, entry.Name())
+			dstPath := filepath.Join(dest, entry.Name())
+			if err := CopyFile(srcPath, dstPath); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	// Regular file: preserve permissions
 	input, err := os.Open(source)
 	if err != nil {
 		return err
 	}
 	defer input.Close()
 
-	output, err := os.Create(dest)
+	output, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, srcInfo.Mode().Perm())
 	if err != nil {
 		return err
 	}
 	defer output.Close()
 
 	_, err = io.Copy(output, input)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return err
 }
 
 func VersionSortComparer(a_str string, b_str string) int {

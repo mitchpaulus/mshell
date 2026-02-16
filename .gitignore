@@ -20,6 +20,7 @@ mshell/msh
 codex.log
 .gocache/
 .gomodcache/
+.gopath/
 .cache/
 
 *.mshell_history

@@ -221,6 +221,12 @@ func (fm *FileManager) adjustScroll() {
 }
 
 func (fm *FileManager) leftPaneWidth() int {
+	_, clipPaths := loadClipboard()
+	clipSet := make(map[string]bool)
+	for _, p := range clipPaths {
+		clipSet[p] = true
+	}
+
 	maxLen := 0
 	visible := fm.visibleRows()
 	end := fm.offset + visible
@@ -232,6 +238,10 @@ func (fm *FileManager) leftPaneWidth() int {
 		nameLen := utf8.RuneCountInString(name)
 		if fm.entries[i].IsDir() {
 			nameLen++ // for '/'
+		}
+		entryPath := filepath.Join(fm.currentDir, fm.entries[i].Name())
+		if clipSet[entryPath] {
+			nameLen += 2 // indent for clipboard entries
 		}
 		if nameLen > maxLen {
 			maxLen = nameLen
@@ -321,16 +331,49 @@ func (fm *FileManager) render() {
 		rightW = 0
 	}
 
+	// Load clipboard for display
+	clipOp, clipPaths := loadClipboard()
+	clipSet := make(map[string]bool)
+	for _, p := range clipPaths {
+		clipSet[p] = true
+	}
+
 	// Header row
 	header := fmt.Sprintf(" %s@%s: %s", fm.username, fm.hostname, fm.currentDir)
-	headerRunes := utf8.RuneCountInString(header)
-	if headerRunes > fm.cols {
-		header = truncateMiddle(header, fm.cols)
-	} else {
-		header += strings.Repeat(" ", fm.cols-headerRunes)
+
+	// Clipboard status suffix
+	clipStatus := ""
+	if clipOp != "" && len(clipPaths) > 0 {
+		noun := "file"
+		if len(clipPaths) != 1 {
+			noun = "files"
+		}
+		clipStatus = fmt.Sprintf(" %s %d %s", strings.ToUpper(clipOp), len(clipPaths), noun)
 	}
+
+	headerRunes := utf8.RuneCountInString(header)
+	clipStatusRunes := utf8.RuneCountInString(clipStatus)
+
 	buf.WriteString("\033[7m") // reverse video
+	if headerRunes+clipStatusRunes > fm.cols {
+		header = truncateMiddle(header, fm.cols-clipStatusRunes)
+		headerRunes = fm.cols - clipStatusRunes
+	}
 	buf.WriteString(header)
+	// Pad between header and clip status
+	pad := fm.cols - headerRunes - clipStatusRunes
+	if pad > 0 {
+		buf.WriteString(strings.Repeat(" ", pad))
+	}
+	if clipStatus != "" {
+		if clipOp == "cut" {
+			buf.WriteString("\033[31m") // red
+		} else {
+			buf.WriteString("\033[32m") // green
+		}
+		buf.WriteString(clipStatus)
+		buf.WriteString("\033[39m") // reset fg, keep reverse
+	}
 	buf.WriteString("\033[0m")
 
 	// Preview content
@@ -348,30 +391,47 @@ func (fm *FileManager) render() {
 			if entry.IsDir() {
 				name += "/"
 			}
+
+			entryPath := filepath.Join(fm.currentDir, entry.Name())
+			inClip := clipSet[entryPath]
+			indent := 0
+			if inClip {
+				indent = 2
+			}
+
 			nameRunes := utf8.RuneCountInString(name)
 
 			if idx == fm.cursor {
 				buf.WriteString("\033[7m") // reverse video for selected
 			}
 
-			if entry.IsDir() {
+			if inClip {
+				if clipOp == "cut" {
+					buf.WriteString("\033[31m") // red
+				} else {
+					buf.WriteString("\033[32m") // green
+				}
+			} else if entry.IsDir() {
 				buf.WriteString("\033[34m") // blue for directories
 			}
 
-			availW := leftW - 1 // 1 for leading space
+			availW := leftW - 1 - indent // 1 for leading space
 			if nameRunes > availW {
 				name = truncateMiddle(name, availW)
 				nameRunes = availW
 			}
 			buf.WriteString(" ")
+			if indent > 0 {
+				buf.WriteString(strings.Repeat(" ", indent))
+			}
 			fm.writeHighlightedName(&buf, name, entry.IsDir(), idx == fm.cursor)
 			// Pad to leftW
-			pad := availW - nameRunes
-			if pad > 0 {
-				buf.WriteString(strings.Repeat(" ", pad))
+			padLeft := availW - nameRunes
+			if padLeft > 0 {
+				buf.WriteString(strings.Repeat(" ", padLeft))
 			}
 
-			if idx == fm.cursor {
+			if idx == fm.cursor || inClip {
 				buf.WriteString("\033[0m")
 			}
 		} else {
@@ -699,8 +759,24 @@ func (fm *FileManager) handleInput() bool {
 		return false
 	case 'n':
 		fm.searchNext()
-	case 'N', 'p':
+	case 'N':
 		fm.searchPrev()
+	case 'd':
+		fm.clipboardCut()
+	case 'y':
+		if fm.lastKey == 'y' {
+			fm.clipboardCopy()
+			fm.lastKey = 0
+			return false
+		}
+		fm.lastKey = 'y'
+		return false
+	case 'p':
+		fm.clipboardPaste()
+	case 'c':
+		clearClipboard()
+	case 'x':
+		fm.deleteEntry()
 	case 'm':
 		fm.pendingMark = true
 		return false
@@ -709,7 +785,7 @@ func (fm *FileManager) handleInput() bool {
 		return false
 	}
 
-	if key != 'g' {
+	if key != 'g' && key != 'y' {
 		fm.lastKey = 0
 	}
 
@@ -1078,6 +1154,252 @@ func (fm *FileManager) openEditor() {
 	fm.adjustScroll()
 }
 
+// Clipboard actions
+
+func (fm *FileManager) clipboardCut() {
+	if len(fm.entries) == 0 || fm.cursor >= len(fm.entries) {
+		return
+	}
+	absPath := filepath.Join(fm.currentDir, fm.entries[fm.cursor].Name())
+	saveClipboard("cut", []string{absPath})
+}
+
+func (fm *FileManager) clipboardCopy() {
+	if len(fm.entries) == 0 || fm.cursor >= len(fm.entries) {
+		return
+	}
+	absPath := filepath.Join(fm.currentDir, fm.entries[fm.cursor].Name())
+	saveClipboard("copy", []string{absPath})
+}
+
+func (fm *FileManager) clipboardPaste() {
+	op, paths := loadClipboard()
+	if op == "" || len(paths) == 0 {
+		return
+	}
+	for _, src := range paths {
+		base := filepath.Base(src)
+		dest := filepath.Join(fm.currentDir, base)
+		if src == dest {
+			if op == "cut" {
+				continue
+			}
+			// Copy to same directory: go straight to versioned name
+			dest = versionedPath(dest)
+		} else if _, err := os.Lstat(dest); err == nil {
+			// Destination exists but is a different file
+			choice := fm.promptConflict(base)
+			if choice == 0 {
+				// Cancel
+				return
+			}
+			if choice == 2 {
+				// Version number
+				dest = versionedPath(dest)
+			}
+			// choice == 1: overwrite, use dest as-is
+		}
+
+		if op == "cut" {
+			if err := os.Rename(src, dest); err != nil {
+				return
+			}
+		} else {
+			if err := CopyFile(src, dest); err != nil {
+				return
+			}
+		}
+	}
+	if op == "cut" {
+		clearClipboard()
+	}
+	fm.loadDirectory()
+	fm.clampCursor()
+	fm.adjustScroll()
+}
+
+// promptConflict shows an overlay asking the user how to handle a name conflict.
+// Returns 0=cancel, 1=overwrite, 2=version number.
+func (fm *FileManager) promptConflict(name string) int {
+	lines := []string{
+		fmt.Sprintf(" \"%s\" already exists ", name),
+		"",
+		"  o  Overwrite",
+		"  v  Rename with version number",
+		"  Esc  Cancel",
+	}
+
+	// Find box width
+	boxW := 0
+	for _, l := range lines {
+		runes := utf8.RuneCountInString(l)
+		if runes > boxW {
+			boxW = runes
+		}
+	}
+	boxW += 2 // padding
+	if boxW > fm.cols-4 {
+		boxW = fm.cols - 4
+	}
+
+	startCol := (fm.cols - boxW) / 2
+	if startCol < 1 {
+		startCol = 1
+	}
+	startRow := (fm.rows-len(lines))/2 + 1
+	if startRow < 2 {
+		startRow = 2
+	}
+
+	var buf bytes.Buffer
+	for i, line := range lines {
+		row := startRow + i
+		if row > fm.rows {
+			break
+		}
+		buf.WriteString(fmt.Sprintf("\033[%d;%dH", row, startCol))
+		buf.WriteString("\033[7m")
+		lineRunes := utf8.RuneCountInString(line)
+		if lineRunes > boxW {
+			line = truncateMiddle(line, boxW)
+			lineRunes = boxW
+		}
+		buf.WriteString(line)
+		pad := boxW - lineRunes
+		if pad > 0 {
+			buf.WriteString(strings.Repeat(" ", pad))
+		}
+		buf.WriteString("\033[0m")
+	}
+	fm.ttyOut.Write(buf.Bytes())
+
+	// Read one key
+	keyBuf := make([]byte, 16)
+	n, err := os.Stdin.Read(keyBuf)
+	if err != nil || n == 0 {
+		return 0
+	}
+	switch keyBuf[0] {
+	case 'o':
+		return 1
+	case 'v':
+		return 2
+	default:
+		return 0
+	}
+}
+
+// versionedPath returns a path with a version number appended, e.g.
+// "file.txt" -> "file (1).txt", "dir" -> "dir (1)".
+func versionedPath(dest string) string {
+	dir := filepath.Dir(dest)
+	base := filepath.Base(dest)
+	ext := filepath.Ext(base)
+	stem := strings.TrimSuffix(base, ext)
+
+	for i := 1; ; i++ {
+		candidate := filepath.Join(dir, fmt.Sprintf("%s (%d)%s", stem, i, ext))
+		if _, err := os.Lstat(candidate); err != nil {
+			return candidate
+		}
+	}
+}
+
+// Delete to trash
+
+func (fm *FileManager) deleteEntry() {
+	if len(fm.entries) == 0 || fm.cursor >= len(fm.entries) {
+		return
+	}
+	entry := fm.entries[fm.cursor]
+	name := entry.Name()
+	absPath := filepath.Join(fm.currentDir, name)
+
+	if !fm.promptDelete(entry) {
+		return
+	}
+
+	if err := TrashFile(absPath); err != nil {
+		return
+	}
+
+	fm.loadDirectory()
+	fm.clampCursor()
+	fm.adjustScroll()
+}
+
+// promptDelete shows a confirmation overlay. Returns true if the user confirms.
+func (fm *FileManager) promptDelete(entry os.DirEntry) bool {
+	name := entry.Name()
+	lines := []string{
+		fmt.Sprintf(" Delete \"%s\"? ", name),
+	}
+
+	// For non-empty directories, show entry count
+	if entry.IsDir() {
+		dirPath := filepath.Join(fm.currentDir, name)
+		if subEntries, err := os.ReadDir(dirPath); err == nil && len(subEntries) > 0 {
+			lines = append(lines, fmt.Sprintf(" (directory with %d entries) ", len(subEntries)))
+		}
+	}
+
+	lines = append(lines, "")
+	lines = append(lines, "  y  Confirm")
+	lines = append(lines, "  Esc  Cancel")
+
+	// Find box width
+	boxW := 0
+	for _, l := range lines {
+		runes := utf8.RuneCountInString(l)
+		if runes > boxW {
+			boxW = runes
+		}
+	}
+	boxW += 2
+	if boxW > fm.cols-4 {
+		boxW = fm.cols - 4
+	}
+
+	startCol := (fm.cols - boxW) / 2
+	if startCol < 1 {
+		startCol = 1
+	}
+	startRow := (fm.rows-len(lines))/2 + 1
+	if startRow < 2 {
+		startRow = 2
+	}
+
+	var buf bytes.Buffer
+	for i, line := range lines {
+		row := startRow + i
+		if row > fm.rows {
+			break
+		}
+		buf.WriteString(fmt.Sprintf("\033[%d;%dH", row, startCol))
+		buf.WriteString("\033[7m")
+		lineRunes := utf8.RuneCountInString(line)
+		if lineRunes > boxW {
+			line = truncateMiddle(line, boxW)
+			lineRunes = boxW
+		}
+		buf.WriteString(line)
+		pad := boxW - lineRunes
+		if pad > 0 {
+			buf.WriteString(strings.Repeat(" ", pad))
+		}
+		buf.WriteString("\033[0m")
+	}
+	fm.ttyOut.Write(buf.Bytes())
+
+	// Read one key
+	keyBuf := make([]byte, 16)
+	n, err := os.Stdin.Read(keyBuf)
+	if err != nil || n == 0 {
+		return false
+	}
+	return keyBuf[0] == 'y'
+}
+
 // Bookmarks
 
 const bookmarksFileName = "fm_bookmarks"
@@ -1110,6 +1432,61 @@ func loadBookmarks() map[byte]string {
 
 func isBookmarkChar(c byte) bool {
 	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z')
+}
+
+// Clipboard
+
+const clipboardFileName = "fm_clipboard"
+
+func clipboardFilePath() (string, error) {
+	dir, err := GetHistoryDir()
+	if err != nil {
+		return "", err
+	}
+	return dir + clipboardFileName, nil
+}
+
+func loadClipboard() (string, []string) {
+	path, err := clipboardFilePath()
+	if err != nil {
+		return "", nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", nil
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	if len(lines) < 2 {
+		return "", nil
+	}
+	op := lines[0]
+	if op != "cut" && op != "copy" {
+		return "", nil
+	}
+	return op, lines[1:]
+}
+
+func saveClipboard(op string, paths []string) error {
+	path, err := clipboardFilePath()
+	if err != nil {
+		return err
+	}
+	var sb strings.Builder
+	sb.WriteString(op)
+	sb.WriteByte('\n')
+	for _, p := range paths {
+		sb.WriteString(p)
+		sb.WriteByte('\n')
+	}
+	return os.WriteFile(path, []byte(sb.String()), 0644)
+}
+
+func clearClipboard() error {
+	path, err := clipboardFilePath()
+	if err != nil {
+		return err
+	}
+	return os.Remove(path)
 }
 
 func saveBookmarks(bookmarks map[byte]string) error {
