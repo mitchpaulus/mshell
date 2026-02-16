@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Version-sorted entries, directories first and colored blue
   - Binary file detection for preview
   - Preview caching for fast scrolling
+  - Cut/copy/paste buffer (`d` cut, `yy` copy, `p` paste, `c` clear) shared across instances
   - `msh fm` prints final directory to stdout for `cd "$(msh fm)"` usage
 
 ## 0.10.0 - 2026-02-13
