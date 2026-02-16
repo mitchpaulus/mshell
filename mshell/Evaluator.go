@@ -2206,6 +2206,24 @@ MainLoop:
 					if !result.Success {
 						return result
 					}
+				} else if t.Lexeme == "mshFileManager" {
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'mshFileManager' on an empty stack.\n", t.Line, t.Column))
+					}
+
+					dir, err := obj.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot use a %s as a starting directory for mshFileManager.\n", t.Line, t.Column, obj.TypeName()))
+					}
+
+					newDir := RunFileManagerBuiltin(dir)
+					if newDir != "" {
+						result, _, _, _ := state.ChangeDirectory(newDir)
+						if !result.Success {
+							return result
+						}
+					}
 				} else if t.Lexeme == "in" {
 					substring, stringOrDict, err := stack.Pop2(t)
 					if err != nil {

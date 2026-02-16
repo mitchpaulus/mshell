@@ -88,7 +88,11 @@ func main() {
 	}
 
 	if len(os.Args) >= 2 && os.Args[1] == "fm" {
-		os.Exit(RunFileManager())
+		startDir := ""
+		if len(os.Args) >= 3 {
+			startDir = os.Args[2]
+		}
+		os.Exit(RunFileManager(startDir))
 		return
 	}
 
@@ -3202,9 +3206,13 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 		} else if t.Char == 12 { // Ctrl-L
 			state.ClearScreen()
 		} else if t.Char == 15 { // Ctrl-O - file manager
-			newDir := RunFileManagerInteractive(state.stdInFd, &state.oldState)
+			newDir := RunFileManagerInteractive(state.stdInFd, &state.oldState, "")
 			if newDir != "" {
-				os.Chdir(newDir)
+				cwd, cwdErr := os.Getwd()
+				if err := os.Chdir(newDir); err == nil && cwdErr == nil {
+					os.Setenv("OLDPWD", cwd)
+					os.Setenv("PWD", newDir)
+				}
 			}
 			// Refresh terminal size
 			cols, rows, sizeErr := term.GetSize(int(os.Stdout.Fd()))

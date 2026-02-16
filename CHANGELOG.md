@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `mshFileManager` builtin: pops a starting directory from the stack, opens the file manager, and cds to the final directory on exit
+- `msh fm` now accepts an optional starting directory argument
 - Built-in file manager via `msh fm` subcommand and Ctrl-O in interactive mode
   - Dual-pane layout with directory listing and file/directory preview
   - Vim-style navigation (`j`/`k`, `h`/`l`, `gg`/`G`, Ctrl-u/Ctrl-d)
