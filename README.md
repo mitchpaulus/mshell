@@ -30,8 +30,8 @@ tar -xvf linux_amd64.tar.gz
 
 Put that file in a directory that is in your `$PATH` and make sure it is marked as executable on Linux.
 
-The other file to copy is the standard library, which is at `lib/std.msh` in this repo.
-Download that, put it somewhere. Then set the environment variable `$MSHSTDLIB` to point to that file location.
+The other file to copy is the standard library, which is included in the release, or is at `lib/std.msh` in this repo.
+Get that, put it somewhere. Then set the environment variable `$MSHSTDLIB` to point to that file location.
 
 An example install script is at [install.sh](https://github.com/mitchpaulus/mshell/blob/main/install.sh) in this repository.
 
@@ -86,7 +86,6 @@ Note that you'll also need the environment variable `MSHSTDLIB` pointing to the 
 - Pattern matching syntax.
 - Type checking.
 - Improved error messages.
-- Built in file manager (like [Elvish](https://elv.sh/)).
 
 # References/Inspirations
 
