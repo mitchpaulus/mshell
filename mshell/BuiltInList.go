@@ -19,6 +19,7 @@ var BuiltInList = map[string]struct{}{
 	"binPaths": {},
 	"bind": {},
 	"cd": {},
+	"completionDefs": {},
 	"ceil": {},
 	"countSubStr": {},
 	"cp": {},
