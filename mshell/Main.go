@@ -502,7 +502,6 @@ type TermState struct {
 	evalState         EvalState
 	callStack         CallStack
 	stdLibDefs        []MShellDefinition
-	completionDefinitions map[string][]MShellDefinition
 	initCallStackItem CallStackItem
 	// pathBinManager IPathBinManager
 }
@@ -1347,21 +1346,6 @@ func completionArgString(token Token) (string, error) {
 	}
 }
 
-func (state *TermState) buildCompletionDefinitionMap(definitions []MShellDefinition) map[string][]MShellDefinition {
-	completionDefs := make(map[string][]MShellDefinition)
-	for _, def := range definitions {
-		names, err := completionMetadataNames(def)
-		if err != nil {
-			fmt.Fprintf(state.f, "Completion metadata error in def '%s': %s\n", def.Name, err)
-			continue
-		}
-		for _, name := range names {
-			completionDefs[name] = append(completionDefs[name], def)
-		}
-	}
-	return completionDefs
-}
-
 func (state *TermState) completionArgsFromTokens(tokens []Token, prefix string) []string {
 	args := make([]string, 0, len(tokens))
 	excludeIndex := -1
@@ -2123,7 +2107,7 @@ func (state *TermState) InteractiveMode() error {
 	}
 
 	state.stdLibDefs = stdLibDefs
-	state.completionDefinitions = state.buildCompletionDefinitionMap(state.stdLibDefs)
+	state.evalState.AddCompletionDefinitions(state.stdLibDefs)
 
 	history = make([]string, 0)
 	state.historyIndex = 0
@@ -2419,6 +2403,11 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 	// So want them to see non-raw mode terminal state.
 	term.Restore(state.stdInFd, &state.oldState)
 	fmt.Fprintf(os.Stdout, "\n")
+
+	if len(parsed.Definitions) > 0 {
+		state.stdLibDefs = append(state.stdLibDefs, parsed.Definitions...)
+		state.evalState.AddCompletionDefinitions(parsed.Definitions)
+	}
 
 	if len(parsed.Items) > 0 {
 		state.initCallStackItem.MShellParseItem = parsed.Items[0]
@@ -3090,7 +3079,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			if binaryCompletion {
 				isCompletingBinary := prefix != "" && lastToken.Start == binaryToken.Start && lastToken.Line == binaryToken.Line
 				if !isCompletingBinary {
-					defs := state.completionDefinitions[binaryToken.Lexeme]
+					defs := state.evalState.CompletionDefinitions[binaryToken.Lexeme]
 					if len(defs) > 0 {
 						args := state.completionArgsFromTokens(tokens, prefix)
 						completionMatches := state.runCompletionDefinitions(defs, args)

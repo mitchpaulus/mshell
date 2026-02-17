@@ -330,8 +330,24 @@ type EvalState struct {
 	PositionalArgs []string
 	LoopDepth      int
 
-	StopOnError bool
-	CallStack   CallStack
+	StopOnError           bool
+	CallStack             CallStack
+	CompletionDefinitions map[string][]MShellDefinition
+}
+
+func (state *EvalState) AddCompletionDefinitions(definitions []MShellDefinition) {
+	if state.CompletionDefinitions == nil {
+		state.CompletionDefinitions = make(map[string][]MShellDefinition)
+	}
+	for _, def := range definitions {
+		names, err := completionMetadataNames(def)
+		if err != nil {
+			continue
+		}
+		for _, name := range names {
+			state.CompletionDefinitions[name] = append(state.CompletionDefinitions[name], def)
+		}
+	}
 }
 
 type EvalResult struct {
@@ -1662,6 +1678,16 @@ MainLoop:
 					for _, definition := range definitions {
 						fmt.Fprintf(os.Stderr, "%s\n", definition.Name)
 					}
+				} else if t.Lexeme == "completionDefs" {
+					dict := &MShellDict{Items: make(map[string]MShellObject)}
+					for name, defs := range state.CompletionDefinitions {
+						quotations := make([]MShellObject, len(defs))
+						for i, def := range defs {
+							quotations[i] = &MShellQuotation{Tokens: def.Items, StdinBehavior: STDIN_NONE}
+						}
+						dict.Items[name] = &MShellList{Items: quotations}
+					}
+					stack.Push(dict)
 				} else if t.Lexeme == "env" {
 					// Print a list of all environment variables, sorted by key
 					envVars := os.Environ()
