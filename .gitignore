@@ -17,6 +17,7 @@ copy.msh
 mshell/bin
 mshell/test.msh
 mshell/msh
+mshell/mshell.exe
 codex.log
 .gocache/
 .gomodcache/
