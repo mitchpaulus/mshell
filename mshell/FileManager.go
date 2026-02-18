@@ -693,6 +693,11 @@ func (fm *FileManager) computePreview(entry os.DirEntry, path string) []string {
 		return lines
 	}
 
+	// PDFs don't always have a null byte, so treat by extension
+	if strings.EqualFold(filepath.Ext(path), ".pdf") {
+		return []string{" (binary file)"}
+	}
+
 	// Check for binary before reading full file
 	f, err := os.Open(path)
 	if err != nil {
