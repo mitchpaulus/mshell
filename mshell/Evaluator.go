@@ -1683,7 +1683,7 @@ MainLoop:
 					for name, defs := range state.CompletionDefinitions {
 						quotations := make([]MShellObject, len(defs))
 						for i, def := range defs {
-							quotations[i] = &MShellQuotation{Tokens: def.Items, StdinBehavior: STDIN_NONE}
+							quotations[i] = &MShellQuotation{Tokens: def.Items, StdinBehavior: STDIN_NONE, Variables: context.Variables}
 						}
 						dict.Items[name] = &MShellList{Items: quotations}
 					}

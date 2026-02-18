@@ -387,6 +387,7 @@ func main() {
 			}
 
 			allDefinitions = append(allDefinitions, stdlibFile.Definitions...)
+			state.AddCompletionDefinitions(stdlibFile.Definitions)
 
 			if len(stdlibFile.Items) > 0 {
 				callStackItem := CallStackItem{
@@ -415,6 +416,7 @@ func main() {
 	}
 
 	allDefinitions = append(allDefinitions, file.Definitions...)
+	state.AddCompletionDefinitions(file.Definitions)
 
 	if command == CLITYPECHECK {
 		var typeStack MShellTypeStack

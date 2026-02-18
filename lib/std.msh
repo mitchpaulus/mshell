@@ -908,4 +908,188 @@ def __rgCompletion { 'complete': ['rg'] } ([str] -- [str])
     else __rgDefaultOptions end
 end
 # }}}
+# sudo {{{
+def __sudoCompletion { 'complete': ['sudo'] } ([str] -- [str])
+    input!
+    ['-A' '--askpass' '-b' '--background' '-E' '--preserve-env'
+     '-H' '--set-home' '-i' '--login' '-K' '--remove-timestamp'
+     '-k' '--reset-timestamp' '-l' '--list' '-n' '--non-interactive'
+     '-P' '--preserve-groups' '-S' '--stdin' '-s' '--shell'
+     '-V' '--version' '-v' '--validate'] noArgOptions!
+
+    ['-C' '--close-from' '-g' '--group' '-h' '--host'
+     '-p' '--prompt' '-u' '--user' '-U' '--other-user'
+     '-T' '--command-timeout'] argOptions!
+
+    # Walk through input to find the subcommand (first non-option, non-option-value token)
+    0 i!
+    false skipNext!
+    [] subcmdArgs!
+    "" subcmd!
+    @input len inputLen!
+
+    (
+        @i @inputLen >= if break end
+        @input @i nth tok!
+        @skipNext if
+            false skipNext!
+        else
+            @subcmd len 0 > if
+                @subcmdArgs @tok append subcmdArgs!
+            else
+                @argOptions (@tok =) any if
+                    true skipNext!
+                else* @noArgOptions (@tok =) any *if
+                    # skip
+                else* @tok "-" startsWith *if
+                    # Unknown option, skip
+                else
+                    @tok subcmd!
+                end
+            end
+        end
+        @i 1 + i!
+    ) loop
+
+    @subcmd len 0 > if
+        # Found a subcommand, try to delegate to its completion definition
+        completionDefs @subcmd [] getDef delegateQuotes!
+        @delegateQuotes len 0 > if
+            @subcmdArgs @delegateQuotes :0: x
+        else
+            []
+        end
+    else
+        @noArgOptions @argOptions extend binPaths (:0: str) map extend
+    end
+end
+# }}}
+# systemctl {{{
+def __systemctlCompletion { 'complete': ['systemctl'] } ([str] -- [str])
+    input!
+    ['list-units' 'list-sockets' 'start' 'stop' 'reload' 'restart'
+     'try-restart' 'reload-or-restart' 'reload-or-try-restart' 'try-reload-or-restart'
+     'isolate' 'kill' 'is-active' 'is-failed' 'status' 'show' 'cat' 'edit'
+     'help' 'reset-failed' 'list-unit-files' 'enable' 'disable' 'is-enabled'
+     'reenable' 'preset' 'mask' 'unmask' 'link' 'load' 'list-jobs' 'cancel'
+     'dump' 'list-dependencies' 'snapshot' 'delete' 'daemon-reload' 'daemon-reexec'
+     'show-environment' 'set-environment' 'unset-environment'
+     'default' 'rescue' 'emergency' 'halt' 'poweroff' 'reboot' 'kexec' 'exit'
+     'suspend' 'suspend-then-hibernate' 'hibernate' 'hybrid-sleep' 'switch-root'
+     'list-timers' 'set-property' 'import-environment' 'get-default' 'set-default'
+     'list-automounts' 'is-system-running' 'freeze' 'thaw'
+     'mount-image' 'bind' 'clean'] subcommands!
+
+    ['start' 'stop' 'reload' 'restart' 'try-restart'
+     'reload-or-restart' 'reload-or-try-restart' 'try-reload-or-restart'
+     'isolate' 'kill' 'is-active' 'is-failed' 'status' 'show' 'cat' 'edit'
+     'help' 'reset-failed' 'enable' 'disable' 'is-enabled' 'reenable'
+     'preset' 'mask' 'unmask' 'freeze' 'thaw' 'clean'
+     'list-dependencies' 'set-property'] unitCommands!
+
+    ['--all' '--recursive' '--reverse' '--after' '--before'
+     '--full' '--show-types' '--no-block' '--no-legend' '--no-pager'
+     '--no-wall' '--no-reload' '--no-ask-password' '--failed'
+     '--runtime' '--plain' '--now' '--firmware-setup'
+     '-a' '-r' '-l' '-f' '-q' '-h' '--help' '--version'] noArgOptions!
+
+    ['-t' '--type' '--state' '-p' '--property' '--job-mode'
+     '-n' '--lines' '-o' '--output' '-H' '--host'
+     '-M' '--machine' '-s' '--signal' '--kill-who'
+     '--root' '--boot-loader-entry' '--boot-loader-menu'] argOptions!
+
+    # Find the subcommand
+    0 i!
+    false skipNext!
+    "" subcmd!
+    @input len inputLen!
+
+    (
+        @i @inputLen >= if break end
+        @input @i nth tok!
+        @skipNext if
+            false skipNext!
+        else
+            @subcmd len 0 > if
+                break
+            else
+                @argOptions (@tok =) any if
+                    true skipNext!
+                else* @noArgOptions (@tok =) any *if
+                    # skip
+                else* @tok "--user" = @tok "--system" = or @tok "--global" = or *if
+                    # skip, these are standalone flags
+                else* @tok "-" startsWith *if
+                    # Unknown option, skip
+                else
+                    @tok subcmd!
+                end
+            end
+        end
+        @i 1 + i!
+    ) loop
+
+    @subcmd len 0 > if
+        @unitCommands (@subcmd =) any if
+            # Return unit names for commands that operate on units
+            ['systemctl' 'list-unit-files' '--no-legend' '--no-pager'] * ;
+            lines (" " split :0:) map
+        else
+            @noArgOptions @argOptions extend
+        end
+    else
+        @subcommands @noArgOptions extend @argOptions extend
+    end
+end
+# }}}
+# journalctl {{{
+def __journalctlCompletion { 'complete': ['journalctl'] } ([str] -- [str])
+    input!
+    ['-h' '--help' '--version' '--no-pager' '-a' '--all'
+     '-f' '--follow' '-e' '--pager-end' '--no-tail'
+     '-q' '--quiet' '-m' '--merge' '--this-boot'
+     '-r' '--reverse' '--utc' '--no-hostname'
+     '-x' '--catalog' '--list-boots' '-k' '--dmesg'
+     '--new-id128' '--header' '--disk-usage' '--setup-keys'
+     '--verify' '--update-catalog' '--sync' '--flush'
+     '--relinquish-var' '--smart-relinquish-var' '--rotate'
+     '--show-cursor' '--user' '--system'
+     '--list-catalog' '--dump-catalog'] noArgOptions!
+
+    ['-n' '--lines' '-o' '--output' '-b' '--boot'
+     '-u' '--unit' '-p' '--priority' '-c' '--cursor'
+     '--since' '--until' '-F' '--field'
+     '-D' '--directory' '--interval' '--verify-key'
+     '--output-fields' '-t' '--identifier' '--user-unit'
+     '--facility' '-g' '--grep' '--case-sensitive'
+     '--cursor-file' '--after-cursor' '-M' '--machine'
+     '--file' '--root' '--namespace'
+     '--vacuum-size' '--vacuum-time' '--vacuum-files'
+     '-N' '--fields' '-s' '--signal'] argOptions!
+
+    @input len 0 > if
+        @input :-1: last!
+
+        # Context-sensitive completions for options that take values
+        ['-p' '--priority'] (@last =) any if
+            ['emerg' '0' 'alert' '1' 'crit' '2' 'err' '3'
+             'warning' '4' 'notice' '5' 'info' '6' 'debug' '7']
+        else* ['-o' '--output'] (@last =) any *if
+            ['short' 'short-precise' 'short-iso' 'short-iso-precise'
+             'short-full' 'short-monotonic' 'short-unix'
+             'verbose' 'export' 'json' 'json-pretty' 'json-sse'
+             'json-seq' 'cat' 'with-unit']
+        else* ['-u' '--unit'] (@last =) any *if
+            ['systemctl' 'list-unit-files' '--no-legend' '--no-pager'] * ;
+            lines (" " split :0:) map
+        else* ['--since' '--until'] (@last =) any *if
+            ['yesterday' 'today' 'tomorrow' 'now']
+        else
+            @noArgOptions @argOptions extend
+        end
+    else
+        @noArgOptions @argOptions extend
+    end
+end
+# }}}
 # }}}
