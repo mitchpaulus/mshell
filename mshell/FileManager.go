@@ -1175,6 +1175,12 @@ func (fm *FileManager) enterSelected() {
 	}
 	entry := fm.entries[fm.cursor]
 	if !entry.IsDir() {
+		switch runtime.GOOS {
+		case "windows":
+			fm.openFileWindows(entry)
+		case "linux", "darwin":
+			fm.openFileUnix(entry)
+		}
 		return
 	}
 	newDir := filepath.Join(fm.currentDir, entry.Name())
@@ -1249,6 +1255,116 @@ func (fm *FileManager) openEditor() {
 	fm.loadDirectory()
 	fm.clampCursor()
 	fm.adjustScroll()
+}
+
+func isBinaryFile(path string) bool {
+	if strings.EqualFold(filepath.Ext(path), ".pdf") {
+		return true
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return true
+	}
+	defer f.Close()
+	probe := make([]byte, 512)
+	n, _ := f.Read(probe)
+	return n > 0 && bytes.ContainsRune(probe[:n], 0)
+}
+
+func (fm *FileManager) openFileWindows(entry os.DirEntry) {
+	filePath := filepath.Join(fm.currentDir, entry.Name())
+
+	editor := os.Getenv("EDITOR")
+	if editor != "" && !isBinaryFile(filePath) {
+		// Open text file in editor, same as 'e' binding
+		fm.ttyOut.WriteString("\033[?25h\033[?1049l")
+		term.Restore(fm.stdInFd, &fm.oldState)
+
+		cmd := exec.Command(editor, filePath)
+		cmd.Dir = fm.currentDir
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		err := cmd.Run()
+
+		// Re-enter raw mode and alternate buffer
+		newState, _ := term.MakeRaw(fm.stdInFd)
+		if newState != nil {
+			fm.oldState = *newState
+		}
+		fm.ttyOut.WriteString("\033[?1049h\033[?25l")
+
+		cols, rows, sizeErr := term.GetSize(int(fm.ttyOut.Fd()))
+		if sizeErr == nil {
+			fm.rows = rows
+			fm.cols = cols
+		}
+
+		fm.loadDirectory()
+		fm.clampCursor()
+		fm.adjustScroll()
+
+		if err == nil {
+			return
+		}
+		// Editor failed; fall through to Start-Process
+	}
+
+	// Binary file, no $EDITOR, or editor failed: open with Windows default app
+	escapedPath := strings.ReplaceAll(filePath, "'", "''")
+	psCmd := "Start-Process -FilePath '" + escapedPath + "'"
+	cmd := exec.Command("powershell.exe", "-NoProfile", "-Command", psCmd)
+	cmd.Stdin = nil
+	cmd.Run()
+}
+
+func (fm *FileManager) openFileUnix(entry os.DirEntry) {
+	filePath := filepath.Join(fm.currentDir, entry.Name())
+
+	editor := os.Getenv("EDITOR")
+	if editor != "" && !isBinaryFile(filePath) {
+		// Open text file in editor, same as 'e' binding
+		fm.ttyOut.WriteString("\033[?25h\033[?1049l")
+		term.Restore(fm.stdInFd, &fm.oldState)
+
+		cmd := exec.Command(editor, filePath)
+		cmd.Dir = fm.currentDir
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		err := cmd.Run()
+
+		// Re-enter raw mode and alternate buffer
+		newState, _ := term.MakeRaw(fm.stdInFd)
+		if newState != nil {
+			fm.oldState = *newState
+		}
+		fm.ttyOut.WriteString("\033[?1049h\033[?25l")
+
+		cols, rows, sizeErr := term.GetSize(int(fm.ttyOut.Fd()))
+		if sizeErr == nil {
+			fm.rows = rows
+			fm.cols = cols
+		}
+
+		fm.loadDirectory()
+		fm.clampCursor()
+		fm.adjustScroll()
+
+		if err == nil {
+			return
+		}
+		// Editor failed; fall through to xdg-open/open
+	}
+
+	// Binary file, no $EDITOR, or editor failed: open with system default
+	opener := "xdg-open"
+	if runtime.GOOS == "darwin" {
+		opener = "open"
+	}
+	cmd := exec.Command(opener, filePath)
+	cmd.Stdin = nil
+	cmd.Start()
 }
 
 // Clipboard actions
