@@ -1226,6 +1226,7 @@ func (fm *FileManager) openEditor() {
 	term.Restore(fm.stdInFd, &fm.oldState)
 
 	cmd := exec.Command(editor, filePath)
+	cmd.Dir = fm.currentDir
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
