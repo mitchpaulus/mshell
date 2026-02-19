@@ -617,7 +617,7 @@ On exit, changes the working directory to the directory the user navigated to.
 - `del`: Delete element from list, `(list index -- list)` or `(index list -- list)`
 - `extend`: Extends an existing list with items from another list. Difference between this and `+` is that it modifies the original list in-place. `(originalList toAddList -- list)`
 - `insert`: Insert element into list, `(list element index -- list)`
-- `setAt`: Set element at index, `(list element index -- list)`
+- `setAt`: Set element at index, negative index is allowed.  `(list element index -- list)`
 - `nth`: Nth element of list (0-based) `([a] int -- a)`
 - `reverse`: Reverse list, `(list -- list)`
 - `sum`: Sum of list, `([numeric] -- numeric)`
