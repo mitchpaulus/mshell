@@ -297,9 +297,12 @@ func (fm *FileManager) adjustScroll() {
 }
 
 func (fm *FileManager) leftPaneWidth() int {
-	_, clipPaths := loadClipboard()
+	cutPaths, copyPaths := loadClipboard()
 	clipSet := make(map[string]bool)
-	for _, p := range clipPaths {
+	for _, p := range cutPaths {
+		clipSet[p] = true
+	}
+	for _, p := range copyPaths {
 		clipSet[p] = true
 	}
 
@@ -408,10 +411,14 @@ func (fm *FileManager) render() {
 	}
 
 	// Load clipboard for display
-	clipOp, clipPaths := loadClipboard()
-	clipSet := make(map[string]bool)
-	for _, p := range clipPaths {
-		clipSet[p] = true
+	cutPaths, copyPaths := loadClipboard()
+	cutSet := make(map[string]bool)
+	copySet := make(map[string]bool)
+	for _, p := range cutPaths {
+		cutSet[p] = true
+	}
+	for _, p := range copyPaths {
+		copySet[p] = true
 	}
 
 	// Header row
@@ -419,12 +426,19 @@ func (fm *FileManager) render() {
 
 	// Clipboard status suffix
 	clipStatus := ""
-	if clipOp != "" && len(clipPaths) > 0 {
+	if len(cutPaths) > 0 {
 		noun := "file"
-		if len(clipPaths) != 1 {
+		if len(cutPaths) != 1 {
 			noun = "files"
 		}
-		clipStatus = fmt.Sprintf(" %s %d %s", strings.ToUpper(clipOp), len(clipPaths), noun)
+		clipStatus = fmt.Sprintf(" CUT %d %s", len(cutPaths), noun)
+	}
+	if len(copyPaths) > 0 {
+		noun := "file"
+		if len(copyPaths) != 1 {
+			noun = "files"
+		}
+		clipStatus += fmt.Sprintf(" COPY %d %s", len(copyPaths), noun)
 	}
 
 	headerRunes := utf8.RuneCountInString(header)
@@ -442,11 +456,7 @@ func (fm *FileManager) render() {
 		buf.WriteString(strings.Repeat(" ", pad))
 	}
 	if clipStatus != "" {
-		if clipOp == "cut" {
-			buf.WriteString("\033[31m") // red
-		} else {
-			buf.WriteString("\033[32m") // green
-		}
+		buf.WriteString("\033[36m") // cyan
 		buf.WriteString(clipStatus)
 		buf.WriteString("\033[39m") // reset fg, keep reverse
 	}
@@ -469,7 +479,9 @@ func (fm *FileManager) render() {
 			}
 
 			entryPath := filepath.Join(fm.currentDir, entry.Name())
-			inClip := clipSet[entryPath]
+			inCut := cutSet[entryPath]
+			inCopy := copySet[entryPath]
+			inClip := inCut || inCopy
 			indent := 0
 			if inClip {
 				indent = 2
@@ -481,12 +493,10 @@ func (fm *FileManager) render() {
 				buf.WriteString("\033[7m") // reverse video for selected
 			}
 
-			if inClip {
-				if clipOp == "cut" {
-					buf.WriteString("\033[31m") // red
-				} else {
-					buf.WriteString("\033[32m") // green
-				}
+			if inCut {
+				buf.WriteString("\033[31m") // red
+			} else if inCopy {
+				buf.WriteString("\033[32m") // green
 			} else if entry.IsDir() {
 				buf.WriteString("\033[34m") // blue for directories
 			}
@@ -1374,7 +1384,7 @@ func (fm *FileManager) clipboardCut() {
 		return
 	}
 	absPath := filepath.Join(fm.currentDir, fm.entries[fm.cursor].Name())
-	saveClipboard("cut", []string{absPath})
+	_ = addClipboardPath("cut", absPath)
 }
 
 func (fm *FileManager) clipboardCopy() {
@@ -1382,14 +1392,31 @@ func (fm *FileManager) clipboardCopy() {
 		return
 	}
 	absPath := filepath.Join(fm.currentDir, fm.entries[fm.cursor].Name())
-	saveClipboard("copy", []string{absPath})
+	_ = addClipboardPath("copy", absPath)
 }
 
 func (fm *FileManager) clipboardPaste() {
-	op, paths := loadClipboard()
-	if op == "" || len(paths) == 0 {
+	cutPaths, copyPaths := loadClipboard()
+	if len(cutPaths) == 0 && len(copyPaths) == 0 {
 		return
 	}
+
+	if !fm.pasteClipboardPaths("cut", cutPaths) {
+		return
+	}
+	if !fm.pasteClipboardPaths("copy", copyPaths) {
+		return
+	}
+
+	if len(cutPaths) > 0 {
+		_ = saveClipboard(nil, copyPaths)
+	}
+	fm.loadDirectory()
+	fm.clampCursor()
+	fm.adjustScroll()
+}
+
+func (fm *FileManager) pasteClipboardPaths(op string, paths []string) bool {
 	for _, src := range paths {
 		base := filepath.Base(src)
 		dest := filepath.Join(fm.currentDir, base)
@@ -1404,7 +1431,7 @@ func (fm *FileManager) clipboardPaste() {
 			choice := fm.promptConflict(base)
 			if choice == 0 {
 				// Cancel
-				return
+				return false
 			}
 			if choice == 2 {
 				// Version number
@@ -1415,20 +1442,15 @@ func (fm *FileManager) clipboardPaste() {
 
 		if op == "cut" {
 			if err := os.Rename(src, dest); err != nil {
-				return
+				return false
 			}
 		} else {
 			if err := CopyFile(src, dest); err != nil {
-				return
+				return false
 			}
 		}
 	}
-	if op == "cut" {
-		clearClipboard()
-	}
-	fm.loadDirectory()
-	fm.clampCursor()
-	fm.adjustScroll()
+	return true
 }
 
 // promptConflict shows an overlay asking the user how to handle a name conflict.
@@ -1659,35 +1681,75 @@ func clipboardFilePath() (string, error) {
 	return dir + clipboardFileName, nil
 }
 
-func loadClipboard() (string, []string) {
+func loadClipboard() ([]string, []string) {
 	path, err := clipboardFilePath()
 	if err != nil {
-		return "", nil
+		return nil, nil
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", nil
+		return nil, nil
 	}
-	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
-	if len(lines) < 2 {
-		return "", nil
+	trimmed := strings.TrimRight(string(data), "\n")
+	if trimmed == "" {
+		return nil, nil
 	}
-	op := lines[0]
-	if op != "cut" && op != "copy" {
-		return "", nil
+	lines := strings.Split(trimmed, "\n")
+	if len(lines) == 0 {
+		return nil, nil
 	}
-	return op, lines[1:]
+
+	var cutPaths []string
+	var copyPaths []string
+	dirty := false
+	for _, line := range lines {
+		if line == "" {
+			dirty = true
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 2)
+		if len(parts) != 2 {
+			dirty = true
+			continue
+		}
+		op := parts[0]
+		path := parts[1]
+		if path == "" {
+			dirty = true
+			continue
+		}
+		if op == "cut" {
+			copyPaths = removePath(copyPaths, path)
+			cutPaths = appendUniquePath(cutPaths, path)
+		} else if op == "copy" {
+			cutPaths = removePath(cutPaths, path)
+			copyPaths = appendUniquePath(copyPaths, path)
+		} else {
+			dirty = true
+		}
+	}
+	if dirty {
+		_ = saveClipboard(cutPaths, copyPaths)
+	}
+	return cutPaths, copyPaths
 }
 
-func saveClipboard(op string, paths []string) error {
+func saveClipboard(cutPaths []string, copyPaths []string) error {
+	if len(cutPaths) == 0 && len(copyPaths) == 0 {
+		return clearClipboard()
+	}
 	path, err := clipboardFilePath()
 	if err != nil {
 		return err
 	}
 	var sb strings.Builder
-	sb.WriteString(op)
-	sb.WriteByte('\n')
-	for _, p := range paths {
+	for _, p := range cutPaths {
+		sb.WriteString("cut\t")
+		sb.WriteString(p)
+		sb.WriteByte('\n')
+	}
+	for _, p := range copyPaths {
+		sb.WriteString("copy\t")
 		sb.WriteString(p)
 		sb.WriteByte('\n')
 	}
@@ -1700,6 +1762,36 @@ func clearClipboard() error {
 		return err
 	}
 	return os.Remove(path)
+}
+
+func appendUniquePath(paths []string, path string) []string {
+	for _, existing := range paths {
+		if existing == path {
+			return paths
+		}
+	}
+	return append(paths, path)
+}
+
+func removePath(paths []string, path string) []string {
+	for i, existing := range paths {
+		if existing == path {
+			return append(paths[:i], paths[i+1:]...)
+		}
+	}
+	return paths
+}
+
+func addClipboardPath(op string, path string) error {
+	cutPaths, copyPaths := loadClipboard()
+	if op == "cut" {
+		copyPaths = removePath(copyPaths, path)
+		cutPaths = appendUniquePath(cutPaths, path)
+	} else if op == "copy" {
+		cutPaths = removePath(cutPaths, path)
+		copyPaths = appendUniquePath(copyPaths, path)
+	}
+	return saveClipboard(cutPaths, copyPaths)
 }
 
 func saveBookmarks(bookmarks map[byte]string) error {
