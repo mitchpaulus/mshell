@@ -333,6 +333,7 @@ type EvalState struct {
 	StopOnError           bool
 	CallStack             CallStack
 	CompletionDefinitions map[string][]MShellDefinition
+	PreviousDirectories   []string
 }
 
 func (state *EvalState) AddCompletionDefinitions(definitions []MShellDefinition) {
@@ -2229,6 +2230,16 @@ MainLoop:
 					}
 
 					result, _, _, _ := state.ChangeDirectory(dir)
+					if !result.Success {
+						return result
+					}
+				} else if t.Lexeme == "cdh" {
+					result, _ := state.RunCdh(context)
+					if !result.Success {
+						return result
+					}
+				} else if t.Lexeme == "cdp" {
+					result, _ := state.RunCdp()
 					if !result.Success {
 						return result
 					}
@@ -6723,9 +6734,121 @@ func (state *EvalState) ChangeDirectory(dir string) (EvalResult, int, []byte, []
 		if err != nil {
 			return state.FailWithMessage(fmt.Sprintf("Error setting PWD: %s\n", err.Error())), 1, nil, nil
 		}
+
+		state.AddPreviousDirectory(cwd)
 	}
 
 	return SimpleSuccess(), 0, nil, nil
+}
+
+func (state *EvalState) AddPreviousDirectory(dir string) {
+	if dir == "" {
+		return
+	}
+
+	normalizedDir := filepath.Clean(dir)
+	writeIndex := 0
+	for _, existingDir := range state.PreviousDirectories {
+		if existingDir == normalizedDir {
+			continue
+		}
+		state.PreviousDirectories[writeIndex] = existingDir
+		writeIndex++
+	}
+
+	state.PreviousDirectories = state.PreviousDirectories[:writeIndex]
+	state.PreviousDirectories = append(state.PreviousDirectories, normalizedDir)
+}
+
+func cdhSelectionToIndex(selection string, maxIndex int) (int, bool) {
+	selection = strings.TrimSpace(selection)
+	if selection == "" {
+		return 0, false
+	}
+
+	if selectionNum, err := strconv.Atoi(selection); err == nil {
+		if selectionNum < 1 || selectionNum > maxIndex {
+			return 0, false
+		}
+		return selectionNum, true
+	}
+
+	if len(selection) == 1 {
+		selectionRune := unicode.ToLower(rune(selection[0]))
+		if selectionRune >= 'a' && selectionRune <= 'z' {
+			letterIndex := int(selectionRune-'a') + 1
+			if letterIndex >= 1 && letterIndex <= maxIndex {
+				return letterIndex, true
+			}
+		}
+	}
+
+	return 0, false
+}
+
+func (state *EvalState) RunCdh(context ExecuteContext) (EvalResult, error) {
+	if len(state.PreviousDirectories) == 0 {
+		return SimpleSuccess(), nil
+	}
+
+	stdout := context.StandardOutput
+	if stdout == nil {
+		stdout = os.Stdout
+	}
+
+	stdin := context.StandardInput
+	if stdin == nil {
+		stdin = os.Stdin
+	}
+
+	maxEntries := len(state.PreviousDirectories)
+	if maxEntries > 26 {
+		maxEntries = 26
+	}
+
+	start := len(state.PreviousDirectories) - maxEntries
+	for i := start; i < len(state.PreviousDirectories); i++ {
+		selectionIndex := len(state.PreviousDirectories) - i
+		selectionLetter := rune('a' + selectionIndex - 1)
+		fmt.Fprintf(stdout, " %c  %d)  %s\n", selectionLetter, selectionIndex, state.PreviousDirectories[i])
+	}
+
+	fmt.Fprint(stdout, "Select directory by letter or number: ")
+	reader := bufio.NewReader(stdin)
+	selection, err := reader.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return state.FailWithMessage(fmt.Sprintf("Error reading cdh selection: %s\n", err.Error())), err
+	}
+
+	selection = strings.TrimSpace(selection)
+	if selection == "" {
+		return SimpleSuccess(), nil
+	}
+
+	selectionIndex, ok := cdhSelectionToIndex(selection, maxEntries)
+	if !ok {
+		return state.FailWithMessage("Invalid cdh selection.\n"), fmt.Errorf("invalid cdh selection")
+	}
+
+	targetDir := state.PreviousDirectories[len(state.PreviousDirectories)-selectionIndex]
+	result, exitCode, _, _ := state.ChangeDirectory(targetDir)
+	if exitCode != 0 {
+		return result, fmt.Errorf("cdh change directory failed")
+	}
+	return result, nil
+}
+
+func (state *EvalState) RunCdp() (EvalResult, error) {
+	if len(state.PreviousDirectories) == 0 {
+		return SimpleSuccess(), nil
+	}
+
+	targetDir := state.PreviousDirectories[len(state.PreviousDirectories)-1]
+	result, exitCode, _, _ := state.ChangeDirectory(targetDir)
+	if exitCode != 0 {
+		return result, fmt.Errorf("cdp change directory failed")
+	}
+	return result, nil
 }
 
 func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (EvalResult, int, []byte, []byte) {
@@ -6789,6 +6912,43 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 		}
 
 		return SimpleSuccess(), 0, nil, nil
+	}
+
+	// Handle cdh/cdp commands specially
+	if commandLineArgs[0] == "cdh" || commandLineArgs[0] == "cdp" {
+		commandName := commandLineArgs[0]
+		takesNoArgsMessage := fmt.Sprintf("%s command takes no arguments.\n", commandName)
+
+		if len(commandLineArgs) > 2 {
+			fmt.Fprint(os.Stderr, takesNoArgsMessage)
+			return SimpleSuccess(), 0, nil, nil
+		}
+
+		if len(commandLineArgs) == 2 {
+			if commandLineArgs[1] == "-h" || commandLineArgs[1] == "--help" {
+				if commandName == "cdh" {
+					fmt.Fprint(os.Stderr, "cdh: cdh\nShow previous directories and select one to cd into.\n")
+				} else {
+					fmt.Fprint(os.Stderr, "cdp: cdp\nChange directory to the most recent previous directory.\n")
+				}
+			} else {
+				fmt.Fprint(os.Stderr, takesNoArgsMessage)
+			}
+			return SimpleSuccess(), 0, nil, nil
+		}
+
+		var result EvalResult
+		var err error
+		if commandName == "cdh" {
+			result, err = state.RunCdh(context)
+		} else {
+			result, err = state.RunCdp()
+		}
+
+		if err != nil {
+			return result, 1, nil, nil
+		}
+		return result, 0, nil, nil
 	}
 
 	// Check that we find the command in the path

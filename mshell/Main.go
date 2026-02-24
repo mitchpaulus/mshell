@@ -1510,7 +1510,11 @@ var history []string
 
 var historyToSave []HistoryItem
 
-var knownCommands = map[string]struct{}{"cd": {}}
+var knownCommands = map[string]struct{}{
+	"cd":  {},
+	"cdh": {},
+	"cdp": {},
+}
 
 // // printText prints the text at the current cursor position, moving existing text to the right.
 // func (state *TermState) printText(text string) {
