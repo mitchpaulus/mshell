@@ -6787,7 +6787,27 @@ func cdhSelectionToIndex(selection string, maxIndex int) (int, bool) {
 	return 0, false
 }
 
-func readCdhSelection(stdin io.Reader, stdout io.Writer) (string, error) {
+func isValidCdhSelectionByte(b byte, maxEntries int) bool {
+	if maxEntries <= 0 {
+		return false
+	}
+
+	if b >= '1' && b <= '9' {
+		return int(b-'0') <= maxEntries
+	}
+
+	if b >= 'a' && b <= 'z' {
+		return int(b-'a'+1) <= maxEntries
+	}
+
+	if b >= 'A' && b <= 'Z' {
+		return int(b-'A'+1) <= maxEntries
+	}
+
+	return false
+}
+
+func readCdhSelection(stdin io.Reader, stdout io.Writer, maxEntries int) (string, error) {
 	if stdinFile, ok := stdin.(*os.File); ok {
 		stdinFd := int(stdinFile.Fd())
 		if term.IsTerminal(stdinFd) {
@@ -6795,7 +6815,6 @@ func readCdhSelection(stdin io.Reader, stdout io.Writer) (string, error) {
 			if err == nil {
 				defer term.Restore(stdinFd, oldState)
 
-				input := make([]byte, 0, 8)
 				for {
 					buf := make([]byte, 1)
 					n, readErr := stdinFile.Read(buf)
@@ -6807,27 +6826,24 @@ func readCdhSelection(stdin io.Reader, stdout io.Writer) (string, error) {
 						}
 						if b == '\r' || b == '\n' {
 							fmt.Fprint(stdout, "\r\n")
-							return strings.TrimSpace(string(input)), nil
+							return "", nil
 						}
 						if b == 127 || b == 8 {
-							if len(input) > 0 {
-								input = input[:len(input)-1]
-								fmt.Fprint(stdout, "\b \b")
-							}
-							continue
-						}
-						if !((b >= '0' && b <= '9') || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')) {
-							// Strictly accept only alphanumeric characters for this prompt.
 							continue
 						}
 
-						input = append(input, b)
+						if !isValidCdhSelectionByte(b, maxEntries) {
+							continue
+						}
+
 						fmt.Fprintf(stdout, "%c", b)
+						fmt.Fprint(stdout, "\r\n")
+						return string([]byte{b}), nil
 					}
 
 					if readErr != nil {
 						if errors.Is(readErr, io.EOF) {
-							return strings.TrimSpace(string(input)), nil
+							return "", nil
 						}
 						return "", readErr
 					}
@@ -6842,17 +6858,17 @@ func readCdhSelection(stdin io.Reader, stdout io.Writer) (string, error) {
 		return "", err
 	}
 
-	// Strict fallback path for non-terminal readers: keep only alphanumeric.
-	filtered := make([]rune, 0, len(selection))
-	for _, r := range strings.TrimSpace(selection) {
-		if r == '\u0003' {
+	trimmed := strings.TrimSpace(selection)
+	for i := 0; i < len(trimmed); i++ {
+		b := trimmed[i]
+		if b == 3 {
 			return "", nil
 		}
-		if unicode.IsDigit(r) || unicode.IsLetter(r) {
-			filtered = append(filtered, r)
+		if isValidCdhSelectionByte(b, maxEntries) {
+			return string([]byte{b}), nil
 		}
 	}
-	return string(filtered), nil
+	return "", nil
 }
 
 func (state *EvalState) RunCdh(context ExecuteContext) (EvalResult, error) {
@@ -6889,8 +6905,8 @@ func (state *EvalState) RunCdh(context ExecuteContext) (EvalResult, error) {
 	}
 
 	maxEntries := len(selectableDirs)
-	if maxEntries > 26 {
-		maxEntries = 26
+	if maxEntries > 9 {
+		maxEntries = 9
 	}
 
 	start := len(selectableDirs) - maxEntries
@@ -6901,7 +6917,7 @@ func (state *EvalState) RunCdh(context ExecuteContext) (EvalResult, error) {
 	}
 
 	fmt.Fprint(stdout, "Select directory by letter or number: ")
-	selection, err := readCdhSelection(stdin, stdout)
+	selection, err := readCdhSelection(stdin, stdout, maxEntries)
 	if err != nil {
 		return state.FailWithMessage(fmt.Sprintf("Error reading cdh selection: %s\n", err.Error())), err
 	}
