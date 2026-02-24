@@ -37,6 +37,7 @@ import (
 	_ "time/tzdata"
 	"unicode"
 	"unicode/utf8"
+	"golang.org/x/term"
 	// "net/http/httputil"
 )
 
@@ -6786,6 +6787,74 @@ func cdhSelectionToIndex(selection string, maxIndex int) (int, bool) {
 	return 0, false
 }
 
+func readCdhSelection(stdin io.Reader, stdout io.Writer) (string, error) {
+	if stdinFile, ok := stdin.(*os.File); ok {
+		stdinFd := int(stdinFile.Fd())
+		if term.IsTerminal(stdinFd) {
+			oldState, err := term.MakeRaw(stdinFd)
+			if err == nil {
+				defer term.Restore(stdinFd, oldState)
+
+				input := make([]byte, 0, 8)
+				for {
+					buf := make([]byte, 1)
+					n, readErr := stdinFile.Read(buf)
+					if n > 0 {
+						b := buf[0]
+						if b == 3 {
+							fmt.Fprint(stdout, "\r\n")
+							return "", nil
+						}
+						if b == '\r' || b == '\n' {
+							fmt.Fprint(stdout, "\r\n")
+							return strings.TrimSpace(string(input)), nil
+						}
+						if b == 127 || b == 8 {
+							if len(input) > 0 {
+								input = input[:len(input)-1]
+								fmt.Fprint(stdout, "\b \b")
+							}
+							continue
+						}
+						if !((b >= '0' && b <= '9') || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')) {
+							// Strictly accept only alphanumeric characters for this prompt.
+							continue
+						}
+
+						input = append(input, b)
+						fmt.Fprintf(stdout, "%c", b)
+					}
+
+					if readErr != nil {
+						if errors.Is(readErr, io.EOF) {
+							return strings.TrimSpace(string(input)), nil
+						}
+						return "", readErr
+					}
+				}
+			}
+		}
+	}
+
+	reader := bufio.NewReader(stdin)
+	selection, err := reader.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", err
+	}
+
+	// Strict fallback path for non-terminal readers: keep only alphanumeric.
+	filtered := make([]rune, 0, len(selection))
+	for _, r := range strings.TrimSpace(selection) {
+		if r == '\u0003' {
+			return "", nil
+		}
+		if unicode.IsDigit(r) || unicode.IsLetter(r) {
+			filtered = append(filtered, r)
+		}
+	}
+	return string(filtered), nil
+}
+
 func (state *EvalState) RunCdh(context ExecuteContext) (EvalResult, error) {
 	if len(state.PreviousDirectories) == 0 {
 		return SimpleSuccess(), nil
@@ -6801,26 +6870,42 @@ func (state *EvalState) RunCdh(context ExecuteContext) (EvalResult, error) {
 		stdin = os.Stdin
 	}
 
-	maxEntries := len(state.PreviousDirectories)
+	currentDir, err := os.Getwd()
+	if err != nil {
+		return state.FailWithMessage(fmt.Sprintf("Error getting current directory: %s\n", err.Error())), err
+	}
+	currentDir = filepath.Clean(currentDir)
+
+	selectableDirs := make([]string, 0, len(state.PreviousDirectories))
+	for _, dir := range state.PreviousDirectories {
+		if filepath.Clean(dir) == currentDir {
+			continue
+		}
+		selectableDirs = append(selectableDirs, dir)
+	}
+
+	if len(selectableDirs) == 0 {
+		return SimpleSuccess(), nil
+	}
+
+	maxEntries := len(selectableDirs)
 	if maxEntries > 26 {
 		maxEntries = 26
 	}
 
-	start := len(state.PreviousDirectories) - maxEntries
-	for i := start; i < len(state.PreviousDirectories); i++ {
-		selectionIndex := len(state.PreviousDirectories) - i
+	start := len(selectableDirs) - maxEntries
+	for i := start; i < len(selectableDirs); i++ {
+		selectionIndex := len(selectableDirs) - i
 		selectionLetter := rune('a' + selectionIndex - 1)
-		fmt.Fprintf(stdout, " %c  %d)  %s\n", selectionLetter, selectionIndex, state.PreviousDirectories[i])
+		fmt.Fprintf(stdout, " %c  %d)  %s\n", selectionLetter, selectionIndex, selectableDirs[i])
 	}
 
 	fmt.Fprint(stdout, "Select directory by letter or number: ")
-	reader := bufio.NewReader(stdin)
-	selection, err := reader.ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
+	selection, err := readCdhSelection(stdin, stdout)
+	if err != nil {
 		return state.FailWithMessage(fmt.Sprintf("Error reading cdh selection: %s\n", err.Error())), err
 	}
 
-	selection = strings.TrimSpace(selection)
 	if selection == "" {
 		return SimpleSuccess(), nil
 	}
@@ -6830,7 +6915,7 @@ func (state *EvalState) RunCdh(context ExecuteContext) (EvalResult, error) {
 		return state.FailWithMessage("Invalid cdh selection.\n"), fmt.Errorf("invalid cdh selection")
 	}
 
-	targetDir := state.PreviousDirectories[len(state.PreviousDirectories)-selectionIndex]
+	targetDir := selectableDirs[len(selectableDirs)-selectionIndex]
 	result, exitCode, _, _ := state.ChangeDirectory(targetDir)
 	if exitCode != 0 {
 		return result, fmt.Errorf("cdh change directory failed")

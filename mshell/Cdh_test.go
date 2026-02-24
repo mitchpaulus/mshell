@@ -100,6 +100,98 @@ func TestRunCdhChangesToSelectedDirectory(t *testing.T) {
 	}
 }
 
+func TestRunCdhCtrlCCancelsPrompt(t *testing.T) {
+	originalCwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(originalCwd)
+	})
+
+	baseDir := t.TempDir()
+	currentDir := filepath.Join(baseDir, "current")
+	previousDir := filepath.Join(baseDir, "previous")
+	for _, d := range []string{currentDir, previousDir} {
+		if err := os.MkdirAll(d, 0755); err != nil {
+			t.Fatalf("mkdir failed for %s: %v", d, err)
+		}
+	}
+
+	if err := os.Chdir(currentDir); err != nil {
+		t.Fatalf("chdir failed for %s: %v", currentDir, err)
+	}
+
+	state := &EvalState{PreviousDirectories: []string{previousDir}}
+	var output bytes.Buffer
+	context := ExecuteContext{
+		StandardInput:  strings.NewReader("\x03"),
+		StandardOutput: &output,
+	}
+
+	result, err := state.RunCdh(context)
+	if err != nil {
+		t.Fatalf("RunCdh returned error: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("RunCdh should succeed when cancelled")
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd failed after cdh cancel: %v", err)
+	}
+	if cwd != currentDir {
+		t.Fatalf("cwd should be unchanged on cancel: got %s want %s", cwd, currentDir)
+	}
+}
+
+func TestRunCdhExcludesCurrentDirectoryFromMenu(t *testing.T) {
+	originalCwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(originalCwd)
+	})
+
+	baseDir := t.TempDir()
+	currentDir := filepath.Join(baseDir, "current")
+	previousDir := filepath.Join(baseDir, "previous")
+	for _, d := range []string{currentDir, previousDir} {
+		if err := os.MkdirAll(d, 0755); err != nil {
+			t.Fatalf("mkdir failed for %s: %v", d, err)
+		}
+	}
+
+	if err := os.Chdir(currentDir); err != nil {
+		t.Fatalf("chdir failed for %s: %v", currentDir, err)
+	}
+
+	state := &EvalState{PreviousDirectories: []string{currentDir, previousDir}}
+	var output bytes.Buffer
+	context := ExecuteContext{
+		StandardInput:  strings.NewReader("a\n"),
+		StandardOutput: &output,
+	}
+
+	result, err := state.RunCdh(context)
+	if err != nil {
+		t.Fatalf("RunCdh returned error: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("RunCdh returned failure")
+	}
+
+	menuOutput := output.String()
+	if strings.Contains(menuOutput, currentDir) {
+		t.Fatalf("menu output should not include current directory: %q", menuOutput)
+	}
+	if !strings.Contains(menuOutput, previousDir) {
+		t.Fatalf("menu output should include previous directory: %q", menuOutput)
+	}
+}
+
 func TestRunCdpChangesToMostRecentPreviousDirectory(t *testing.T) {
 	originalCwd, err := os.Getwd()
 	if err != nil {
