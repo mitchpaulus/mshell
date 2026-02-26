@@ -443,21 +443,63 @@ func (file *MShellFile) ToJson() string {
 type MShellParser struct {
 	lexer *Lexer
 	curr  Token
+	initialized bool
+}
+
+type parserPanic struct {
+	err error
 }
 
 func NewMShellParser(lexer *Lexer) *MShellParser {
-	parser := &MShellParser{lexer: lexer}
-	parser.NextToken()
-	return parser
+	return &MShellParser{lexer: lexer}
 }
 
 func (parser *MShellParser) ResetInput(input string) {
 	parser.lexer.resetInput(input)
-	parser.NextToken()
+	parser.initialized = false
+}
+
+func (parser *MShellParser) recoverPanic(err *error) {
+	recovered := recover()
+	if recovered == nil {
+		return
+	}
+
+	asParserPanic, ok := recovered.(parserPanic)
+	if ok {
+		*err = asParserPanic.err
+		return
+	}
+
+	panic(recovered)
+}
+
+func (parser *MShellParser) scanToken() Token {
+	token := parser.lexer.scanToken()
+	if token.Type == ERROR {
+		panic(parserPanic{err: errors.New(token.Lexeme)})
+	}
+	return token
+}
+
+func (parser *MShellParser) scanTokenAll() Token {
+	token := parser.lexer.scanTokenAll()
+	if token.Type == ERROR {
+		panic(parserPanic{err: errors.New(token.Lexeme)})
+	}
+	return token
+}
+
+func (parser *MShellParser) ensureInitialized() {
+	if !parser.initialized {
+		parser.NextToken()
+		parser.initialized = true
+	}
 }
 
 func (parser *MShellParser) NextToken() {
-	parser.curr = parser.lexer.scanToken()
+	parser.curr = parser.scanToken()
+	parser.initialized = true
 }
 
 // Checks for the desired match, and then advances the parser.
@@ -479,8 +521,10 @@ func (parser *MShellParser) MatchWithMessage(token Token, tokenType TokenType, m
 	return nil
 }
 
-func (parser *MShellParser) ParseFile() (*MShellFile, error) {
-	file := &MShellFile{}
+func (parser *MShellParser) ParseFile() (file *MShellFile, err error) {
+	file = &MShellFile{}
+	defer parser.recoverPanic(&err)
+	parser.ensureInitialized()
 
 	for parser.curr.Type != EOF {
 		switch parser.curr.Type {
@@ -1874,6 +1918,8 @@ func (parser *MShellParser) ParseStaticList() (*MShellParseList, error) {
 }
 
 func (parser *MShellParser) ParseItem() (MShellParseItem, error) {
+	parser.ensureInitialized()
+
 	switch parser.curr.Type {
 	case LEFT_SQUARE_BRACKET:
 		return parser.ParseList()

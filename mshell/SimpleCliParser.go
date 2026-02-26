@@ -47,7 +47,23 @@ func isSimpleCliDelimiter(t Token) bool {
 
 // Parse parses the input according to the simple CLI grammar.
 // Returns nil if the input is empty or doesn't start with a valid token.
-func (p *MShellSimpleCliParser) Parse() (*SimpleCliPipeline, error) {
+func (p *MShellSimpleCliParser) Parse() (pipeline *SimpleCliPipeline, err error) {
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			return
+		}
+		asParserPanic, ok := recovered.(parserPanic)
+		if ok {
+			err = asParserPanic.err
+			pipeline = nil
+			return
+		}
+		panic(recovered)
+	}()
+
+	p.parser.ensureInitialized()
+
 	result := &SimpleCliPipeline{
 		Commands: make([]SimpleCliCommand, 0),
 	}

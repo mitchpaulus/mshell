@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -186,6 +187,20 @@ func TestSimpleCliParser_ErrorMissingRedirectFile(t *testing.T) {
 	_, err := p.Parse()
 	if err == nil {
 		t.Error("Expected error for missing redirect file, got nil")
+	}
+}
+
+func TestSimpleCliParser_ErrorLexerToken(t *testing.T) {
+	input := "cd `design\\"
+	l := NewLexer(input, nil)
+	p := NewMShellSimpleCliParser(l)
+
+	_, err := p.Parse()
+	if err == nil {
+		t.Error("Expected lexer error, got nil")
+	}
+	if err != nil && !strings.Contains(err.Error(), "Unterminated path") {
+		t.Errorf("Expected unterminated path error, got: %s", err.Error())
 	}
 }
 

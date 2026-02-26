@@ -2335,6 +2335,11 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 	state.currentCommand = state.currentCommand[:0]
 	state.resetHistorySearch()
 
+	if len(currentCommandStr) > 0 {
+		state.toCooked()
+		fmt.Fprintln(os.Stdout)
+	}
+
 	p := state.p
 	l := state.l
 
@@ -2360,9 +2365,8 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 			simpleCliParser := NewMShellSimpleCliParser(l)
 			pipeline, parseErr := simpleCliParser.Parse()
 			if parseErr != nil {
-				fmt.Fprintf(os.Stderr, "\r\nError parsing simple CLI: %s\r\n", parseErr)
+				fmt.Fprintf(os.Stderr, "%s\n", parseErr)
 				// Goto PromptPrint
-				fmt.Fprintf(os.Stdout, "\033[1G")
 				goto PromptPrint
 
 				// // Reset lexer to original input for normal parsing to attempt
@@ -2391,9 +2395,7 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 		parsed, err = p.ParseFile()
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "\r\nError parsing input: %s\n", err)
-		// Move to start
-		fmt.Fprintf(os.Stdout, "\033[1G")
+		fmt.Fprintf(os.Stderr, "Error parsing input: %s\n", err)
 
 		err = state.printPrompt()
 		if err != nil {
@@ -2408,7 +2410,6 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 	// During evaluation, normal terminal output can happen, or TUI apps can be run.
 	// So want them to see non-raw mode terminal state.
 	term.Restore(state.stdInFd, &state.oldState)
-	fmt.Fprintf(os.Stdout, "\n")
 
 	if len(parsed.Definitions) > 0 {
 		state.stdLibDefs = append(state.stdLibDefs, parsed.Definitions...)

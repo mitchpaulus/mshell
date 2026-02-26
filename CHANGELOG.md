@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `cdh`
   - `cdp`
 
+### Fixed
+
+- CLI interactive command execution now switches to a fresh output line before parsing/evaluation, so lexer/parser errors do not render on the prompt line.
+- Lexer `ERROR` tokens now stop parsing immediately (including simple CLI parsing), preventing fallthrough to evaluation errors like unimplemented `ERROR` token handling.
+
 ## 0.12.0 - 2026-02-19
 
 ### Changed

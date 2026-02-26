@@ -2,10 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"unicode"
-	"errors"
 )
 
 
@@ -371,6 +371,12 @@ func (l *Lexer) makeToken(tokenType TokenType) Token {
 	}
 }
 
+func (l *Lexer) makeErrorToken(message string) Token {
+	t := l.makeToken(ERROR)
+	t.Lexeme = message
+	return t
+}
+
 func (l *Lexer) advance() rune {
 	c := l.input[l.current]
 	l.current++
@@ -664,17 +670,12 @@ func (l *Lexer) scanTokenAll() Token {
 			err := l.consumeString()
 			if err != nil {
 				if l.allowUnterminatedString {
-					_, ok := err.(ConsumeStringErrorUnterminated)
-					if ok {
+					var unterminated ConsumeStringErrorUnterminated
+					if errors.As(err, &unterminated) {
 						return l.makeToken(UNFINISHEDSTRING)
-					} else {
-						fmt.Fprintf(os.Stderr, "%s", err)
-						return l.makeToken(ERROR)
 					}
-				} else {
-					fmt.Fprintf(os.Stderr, "%s", err)
-					return l.makeToken(ERROR)
 				}
+				return l.makeErrorToken(err.Error())
 			} else {
 				return l.makeToken(FORMATSTRING)
 			}
@@ -785,8 +786,7 @@ func (l *Lexer) parseSingleQuoteString() Token {
 			if l.allowUnterminatedString {
 				return l.makeToken(UNFINISHEDSINGLEQUOTESTRING)
 			} else {
-				fmt.Fprintf(os.Stderr, "%d:%d: Unterminated string.\n", l.line, l.col)
-				return l.makeToken(ERROR)
+				return l.makeErrorToken(fmt.Sprintf("%d:%d: Unterminated string.", l.line, l.col))
 			}
 		}
 
@@ -1034,18 +1034,17 @@ func (e ConsumeStringErrorInvalidEscape) Error() string {
 	return e.ErrorString
 }
 
-func (l *Lexer) consumeString() ConsumeStringError {
+func (l *Lexer) consumeString() error {
 	// When this is called, we've already consumed a single double quote.
 	inEscape := false
 	for {
 		if l.atEnd() {
-			return ConsumeStringErrorUnterminated{ErrorString: fmt.Sprintf("%d:%d: Unterminated string.\n", l.line, l.col)}
+			return ConsumeStringErrorUnterminated{ErrorString: fmt.Sprintf("%d:%d: Unterminated string.", l.line, l.col)}
 		}
 		c := l.advance()
 		if inEscape {
 			if c != 'e' && c != 'n' && c != 't' && c != 'r' && c != '\\' && c != '"' {
-				return fmt.Errorf("%d:%d: Invalid escape character within string, '%c'. Expected 'e', 'n', 't', 'r', '\\', or '\"'.\n", l.line, l.col, c)
-				// return l.makeToken(ERROR)
+				return ConsumeStringErrorInvalidEscape{ErrorString: fmt.Sprintf("%d:%d: Invalid escape character within string, '%c'. Expected 'e', 'n', 't', 'r', '\\', or '\"'.", l.line, l.col, c)}
 			}
 			inEscape = false
 		} else {
@@ -1068,17 +1067,12 @@ func (l *Lexer) parseString() Token {
 	if err != nil {
 
 		if l.allowUnterminatedString {
-			_, ok := err.(ConsumeStringErrorUnterminated)
-			if ok {
+			var unterminated ConsumeStringErrorUnterminated
+			if errors.As(err, &unterminated) {
 				return l.makeToken(UNFINISHEDSTRING)
-			} else {
-				fmt.Fprintf(os.Stderr, "%s", err)
-				return l.makeToken(ERROR)
 			}
-		} else {
-			fmt.Fprintf(os.Stderr, "%s", err)
-			return l.makeToken(ERROR)
 		}
+		return l.makeErrorToken(err.Error())
 	}
 
 	return l.makeToken(STRING)
@@ -1090,10 +1084,19 @@ func (l *Lexer) parsePath() Token {
 			if l.allowUnterminatedString {
 				return l.makeToken(UNFINISHEDPATH)
 			} else {
-				fmt.Fprintf(os.Stderr, "%d:%d: Unterminated path.\n", l.line, l.col)
-				return l.makeToken(ERROR)
+				pathContent := []rune(l.curLexeme())
+				if len(pathContent) > 0 && pathContent[0] == '`' {
+					pathContent = pathContent[1:]
+				}
+					if len(pathContent) > 10 {
+						pathContent = pathContent[:10]
+					}
+					if len(pathContent) > 0 {
+						return l.makeErrorToken(fmt.Sprintf("%d:%d: Unterminated path (`%s...).", l.line, l.col, string(pathContent)))
+					}
+					return l.makeErrorToken(fmt.Sprintf("%d:%d: Unterminated path.", l.line, l.col))
+				}
 			}
-		}
 		c := l.advance()
 		if c == '`' {
 			break
