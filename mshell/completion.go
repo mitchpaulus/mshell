@@ -162,7 +162,7 @@ func GenerateCompletions(input CompletionInput, deps CompletionDeps) []TabMatch 
 				matches = append(matches, TabMatch{TABMATCHVAR, "@" + v})
 			}
 		}
-	} else if input.LastTokenType == LITERAL {
+	} else if input.LastTokenType == LITERAL && !input.InBinaryMode {
 		// Completion on variables with ! suffix
 		for v := range deps.Variables {
 			if strings.HasPrefix(v, prefix) {
@@ -172,9 +172,11 @@ func GenerateCompletions(input CompletionInput, deps CompletionDeps) []TabMatch 
 	}
 
 	// 5. Built-in command completion
-	for name := range deps.BuiltIns {
-		if strings.HasPrefix(name, prefix) {
-			matches = append(matches, TabMatch{TABMATCHBUILTIN, name})
+	if !input.InBinaryMode {
+		for name := range deps.BuiltIns {
+			if strings.HasPrefix(name, prefix) {
+				matches = append(matches, TabMatch{TABMATCHBUILTIN, name})
+			}
 		}
 	}
 

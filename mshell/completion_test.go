@@ -406,9 +406,17 @@ func TestDefinitionCompletion(t *testing.T) {
 	}
 }
 
-func TestDefinitionCompletionSuppressedInBinaryMode(t *testing.T) {
+func TestNonFileCompletionSuppressedInBinaryMode(t *testing.T) {
 	deps := CompletionDeps{
-		FS:       FakeCompletionFS{Cwd: "/home/user", Entries: map[string][]FakeDirEntry{}},
+		FS: FakeCompletionFS{
+			Cwd: "/home/user",
+			Entries: map[string][]FakeDirEntry{
+				".": {
+					{EntryName: "docs", EntryIsDir: true},
+					{EntryName: "data.txt", EntryIsDir: false},
+				},
+			},
+		},
 		Env:      FakeCompletionEnv{},
 		Binaries: FakePathBinManager{},
 		Variables: map[string]struct{}{
@@ -419,7 +427,7 @@ func TestDefinitionCompletionSuppressedInBinaryMode(t *testing.T) {
 	}
 
 	input := CompletionInput{
-		Prefix:        "git",
+		Prefix:        "d",
 		LastTokenType: LITERAL,
 		NumTokens:     3,
 		InBinaryMode:  true,
@@ -429,17 +437,22 @@ func TestDefinitionCompletionSuppressedInBinaryMode(t *testing.T) {
 	defMatches := filterMatchesByType(matches, TABMATCHDEF)
 	builtinMatches := filterMatchesByType(matches, TABMATCHBUILTIN)
 	varMatches := filterMatchesByType(matches, TABMATCHVAR)
+	fileMatches := filterMatchesByType(matches, TABMATCHFILE)
 
 	if len(defMatches) != 0 {
 		t.Errorf("expected 0 definition matches in binary mode, got %d: %v", len(defMatches), defMatches)
 	}
 
-	if len(builtinMatches) != 1 || builtinMatches[0] != "git-help" {
-		t.Errorf("expected builtin git-help to still match, got %v", builtinMatches)
+	if len(builtinMatches) != 0 {
+		t.Errorf("expected 0 builtin matches in binary mode, got %v", builtinMatches)
 	}
 
-	if len(varMatches) != 1 || varMatches[0] != "gitvar!" {
-		t.Errorf("expected variable bang completion to still match, got %v", varMatches)
+	if len(varMatches) != 0 {
+		t.Errorf("expected 0 variable bang matches in binary mode, got %v", varMatches)
+	}
+
+	if len(fileMatches) != 2 || fileMatches[0] != "data.txt" || fileMatches[1] != "docs/" {
+		t.Errorf("expected file matches to still work in binary mode, got %v", fileMatches)
 	}
 }
 
