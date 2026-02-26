@@ -495,6 +495,7 @@ end
 - `toInt`: Convert to int. `(numeric -- Mabye[int])`
 - `exit`: Exit the current script with the provided exit code. `(int -- )`
 - `read`: Read a line from stdin. Puts a str and bool of whether the read was successful on the stack. `( -- str bool)`
+- `prompt`: Write a prompt string to the controlling TTY and read a line from the controlling TTY. Returns `"" false` when no controlling TTY is available. `(str -- str bool)`
 - `stdin`: Drop stdin onto the stack `( -- str)`
 - `::`: Drop stdin onto the stack and split by lines `( -- [str])`. This is a shorthand for `stdin lines`.
 - `foldl`: Fold left. `(quote initial list -- result)`

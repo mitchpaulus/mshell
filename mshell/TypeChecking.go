@@ -77,6 +77,12 @@ var builtInDefs = map[string][]TypeDefinition{
 			OutputTypes: []MShellType{TypeString{}},
 		},
 	},
+	"prompt": {
+		{
+			InputTypes:  []MShellType{TypeString{}},
+			OutputTypes: []MShellType{TypeString{}, TypeBool{}},
+		},
+	},
 	// Append probably has to be handled specially.
 	// "append": {
 	// {

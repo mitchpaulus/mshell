@@ -1791,11 +1791,29 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error reading from stdin: %s\n", t.Line, t.Column, err.Error()))
 					}
 					stack.Push(MShellString{buffer.String()})
-				} else if t.Lexeme == "append" {
-					obj1, err := stack.Pop()
+				} else if t.Lexeme == "prompt" {
+					obj1, err := stack.Pop1(t)
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'append' operation on an empty stack.\n", t.Line, t.Column))
+						return state.FailWithMessage(err.Error())
 					}
+
+					promptText, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Prompt input expected to be a string, received a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
+					}
+
+					line, ok, err := readPromptFromTTY(promptText)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error reading from TTY prompt: %s\n", t.Line, t.Column, err.Error()))
+					}
+
+					stack.Push(MShellString{line})
+					stack.Push(MShellBool{ok})
+				} else if t.Lexeme == "append" {
+						obj1, err := stack.Pop()
+						if err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'append' operation on an empty stack.\n", t.Line, t.Column))
+						}
 
 					obj2, err := stack.Pop()
 					if err != nil {
@@ -6805,6 +6823,92 @@ func isValidCdhSelectionByte(b byte, maxEntries int) bool {
 	}
 
 	return false
+}
+
+type promptTTYIO struct {
+	// input reads user keystrokes from the controlling TTY.
+	input *os.File
+	// output writes prompt text to the controlling TTY. This is separate from
+	// input on Windows (CONIN$ vs CONOUT$), but may be the same file on Unix.
+	output *os.File
+}
+
+func (tty *promptTTYIO) Close() {
+	if tty == nil {
+		return
+	}
+	if tty.input != nil {
+		tty.input.Close()
+	}
+	if tty.output != nil && tty.output != tty.input {
+		tty.output.Close()
+	}
+}
+
+// openPromptTTYFunc is overridable in tests so prompt behavior can be verified
+// without requiring a real controlling terminal in the test runner.
+var openPromptTTYFunc = defaultOpenPromptTTY
+
+// defaultOpenPromptTTY opens the process controlling terminal for production use.
+func defaultOpenPromptTTY() (*promptTTYIO, error) {
+	if runtime.GOOS == "windows" {
+		input, err := os.OpenFile("CONIN$", os.O_RDONLY, 0)
+		if err != nil {
+			return nil, err
+		}
+
+		output, err := os.OpenFile("CONOUT$", os.O_WRONLY, 0)
+		if err != nil {
+			input.Close()
+			return nil, err
+		}
+
+		return &promptTTYIO{input: input, output: output}, nil
+	}
+
+	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		return nil, err
+	}
+	return &promptTTYIO{input: tty, output: tty}, nil
+}
+
+func readPromptLine(reader io.Reader) (string, bool, error) {
+	bufferedReader := bufio.NewReader(reader)
+	line, err := bufferedReader.ReadString('\n')
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			if len(line) == 0 {
+				return "", false, nil
+			}
+		} else {
+			return "", false, err
+		}
+	}
+
+	if len(line) > 0 && line[len(line)-1] == '\n' {
+		line = line[:len(line)-1]
+	}
+	if len(line) > 0 && line[len(line)-1] == '\r' {
+		line = line[:len(line)-1]
+	}
+
+	return line, true, nil
+}
+
+func readPromptFromTTY(promptText string) (string, bool, error) {
+	tty, err := openPromptTTYFunc()
+	if err != nil {
+		return "", false, nil
+	}
+	defer tty.Close()
+
+	_, err = tty.output.Write([]byte(promptText))
+	if err != nil {
+		return "", false, err
+	}
+
+	return readPromptLine(tty.input)
 }
 
 func readCdhSelection(stdin io.Reader, stdout io.Writer, maxEntries int) (string, error) {
