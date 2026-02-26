@@ -947,6 +947,11 @@ func defaultBuiltinInfo() map[string]*builtinInfo {
 			Description: "Read a line from stdin, leaving the line and success flag on the stack.",
 			Signatures:  []string{"(-- str bool)"},
 		},
+		"prompt": {
+			Name:        "prompt",
+			Description: "Write a prompt to the controlling TTY and read a line from the controlling TTY.",
+			Signatures:  []string{"(str -- str bool)"},
+		},
 		"stdin": {
 			Name:        "stdin",
 			Description: "Read stdin into a string.",

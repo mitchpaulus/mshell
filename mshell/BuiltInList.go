@@ -104,6 +104,7 @@ var BuiltInList = map[string]struct{}{
 	"pick": {},
 	"pop": {},
 	"pow": {},
+	"prompt": {},
 	"psub": {},
 	"pwd": {},
 	"random": {},
