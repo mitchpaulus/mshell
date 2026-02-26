@@ -3137,6 +3137,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				LastTokenType: lastToken.Type,
 				PrevTokenType: prevTokenType,
 				NumTokens:     len(tokens),
+				InBinaryMode:  binaryCompletion,
 			}
 
 			// Generate completions using the extracted function

@@ -406,6 +406,43 @@ func TestDefinitionCompletion(t *testing.T) {
 	}
 }
 
+func TestDefinitionCompletionSuppressedInBinaryMode(t *testing.T) {
+	deps := CompletionDeps{
+		FS:       FakeCompletionFS{Cwd: "/home/user", Entries: map[string][]FakeDirEntry{}},
+		Env:      FakeCompletionEnv{},
+		Binaries: FakePathBinManager{},
+		Variables: map[string]struct{}{
+			"gitvar": {},
+		},
+		BuiltIns:    map[string]struct{}{"git-help": {}},
+		Definitions: []string{"git-add", "git-commit", "git-push"},
+	}
+
+	input := CompletionInput{
+		Prefix:        "git",
+		LastTokenType: LITERAL,
+		NumTokens:     3,
+		InBinaryMode:  true,
+	}
+
+	matches := GenerateCompletions(input, deps)
+	defMatches := filterMatchesByType(matches, TABMATCHDEF)
+	builtinMatches := filterMatchesByType(matches, TABMATCHBUILTIN)
+	varMatches := filterMatchesByType(matches, TABMATCHVAR)
+
+	if len(defMatches) != 0 {
+		t.Errorf("expected 0 definition matches in binary mode, got %d: %v", len(defMatches), defMatches)
+	}
+
+	if len(builtinMatches) != 1 || builtinMatches[0] != "git-help" {
+		t.Errorf("expected builtin git-help to still match, got %v", builtinMatches)
+	}
+
+	if len(varMatches) != 1 || varMatches[0] != "gitvar!" {
+		t.Errorf("expected variable bang completion to still match, got %v", varMatches)
+	}
+}
+
 func TestFileCompletionEmptyPrefix(t *testing.T) {
 	deps := CompletionDeps{
 		FS: FakeCompletionFS{

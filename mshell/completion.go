@@ -100,6 +100,7 @@ type CompletionInput struct {
 	LastTokenType TokenType // Type of the last token (affects completion behavior)
 	PrevTokenType TokenType // Type of the token before the current completion target
 	NumTokens     int       // Number of tokens in the input (includes EOF)
+	InBinaryMode  bool      // True when current command line is in binary/pipeline mode
 }
 
 // CompletionDeps bundles all dependencies needed for generating completions.
@@ -178,9 +179,11 @@ func GenerateCompletions(input CompletionInput, deps CompletionDeps) []TabMatch 
 	}
 
 	// 6. Definition completion
-	for _, defName := range deps.Definitions {
-		if strings.HasPrefix(defName, prefix) {
-			matches = append(matches, TabMatch{TABMATCHDEF, defName})
+	if !input.InBinaryMode {
+		for _, defName := range deps.Definitions {
+			if strings.HasPrefix(defName, prefix) {
+				matches = append(matches, TabMatch{TABMATCHDEF, defName})
+			}
 		}
 	}
 
