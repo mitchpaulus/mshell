@@ -489,6 +489,7 @@ type TermState struct {
 	tabCycleStart      int
 	tabCycleEnd        int
 	tabCycleTokenType  TokenType
+	tabCycleAllFiles   bool
 	tabCycleMatches    []string
 	lastArgCycleActive bool
 	lastArgCycleIndex  int
@@ -531,6 +532,7 @@ func (state *TermState) resetTabCycle() {
 	state.tabCycleStart = 0
 	state.tabCycleEnd = 0
 	state.tabCycleTokenType = EOF
+	state.tabCycleAllFiles = false
 	if state.tabCycleMatches != nil {
 		state.tabCycleMatches = state.tabCycleMatches[:0]
 	}
@@ -866,7 +868,21 @@ func (state *TermState) setTabCompletions(matches []string) {
 	}
 }
 
-func (state *TermState) buildCompletionInsert(match string, tokenType TokenType) string {
+func allMatchesAreFiles(matches []TabMatch) bool {
+	if len(matches) == 0 {
+		return false
+	}
+
+	for _, m := range matches {
+		if m.TabMatchType != TABMATCHFILE {
+			return false
+		}
+	}
+
+	return true
+}
+
+func (state *TermState) buildCompletionInsert(match string, tokenType TokenType, preferPathQuote bool) string {
 	switch tokenType {
 	case UNFINISHEDSINGLEQUOTESTRING:
 		return "'" + match
@@ -881,9 +897,37 @@ func (state *TermState) buildCompletionInsert(match string, tokenType TokenType)
 		tokens, err := state.l.Tokenize()
 		if len(tokens) > 2 && err == nil {
 			// Quote when the completion needs multiple tokens to parse.
+			if preferPathQuote {
+				insertString := "`" + match
+				if !strings.HasSuffix(match, string(os.PathSeparator)) {
+					insertString += "` "
+				}
+				return insertString
+			}
 			return "'" + match + "'"
 		}
 		return match
+	}
+}
+
+func (state *TermState) buildSharedCompletionInsert(longestCommonPrefix string, tokenType TokenType, allFileMatches bool) string {
+	switch tokenType {
+	case UNFINISHEDSINGLEQUOTESTRING:
+		return "'" + longestCommonPrefix
+	case UNFINISHEDPATH:
+		return "`" + longestCommonPrefix
+	default:
+		needsQuoteForWhitespace := strings.ContainsAny(longestCommonPrefix, " \t\r\n")
+		state.l.resetInput(longestCommonPrefix)
+		tokens, err := state.l.Tokenize()
+		if (len(tokens) > 2 && err == nil) || needsQuoteForWhitespace {
+			// Add only the opening quote while user keeps typing to disambiguate.
+			if allFileMatches {
+				return "`" + longestCommonPrefix
+			}
+			return "'" + longestCommonPrefix
+		}
+		return longestCommonPrefix
 	}
 }
 
@@ -897,7 +941,7 @@ func (state *TermState) cycleTabCompletion(direction int) {
 	} else if state.tabCycleIndex < 0 {
 		state.tabCycleIndex = len(state.tabCycleMatches) - 1
 	}
-	insertString := state.buildCompletionInsert(state.tabCycleMatches[state.tabCycleIndex], state.tabCycleTokenType)
+	insertString := state.buildCompletionInsert(state.tabCycleMatches[state.tabCycleIndex], state.tabCycleTokenType, state.tabCycleAllFiles)
 	state.replaceText(insertString, state.tabCycleStart, state.tabCycleEnd)
 	state.tabCycleEnd = state.index
 	state.setTabCompletions(state.tabCycleMatches)
@@ -914,7 +958,7 @@ func (state *TermState) selectTabCompletion(index int) {
 		index = len(state.tabCycleMatches) - 1
 	}
 	state.tabCycleIndex = index
-	insertString := state.buildCompletionInsert(state.tabCycleMatches[state.tabCycleIndex], state.tabCycleTokenType)
+	insertString := state.buildCompletionInsert(state.tabCycleMatches[state.tabCycleIndex], state.tabCycleTokenType, state.tabCycleAllFiles)
 	state.replaceText(insertString, state.tabCycleStart, state.tabCycleEnd)
 	state.tabCycleEnd = state.index
 	state.setTabCompletions(state.tabCycleMatches)
@@ -3142,6 +3186,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 
 			// Generate completions using the extracted function
 			matches = append(matches, GenerateCompletions(input, deps)...)
+			allFileMatches := allMatchesAreFiles(matches)
 
 			var insertString string
 			fmt.Fprintf(state.f, "Len matches: '%d'\n", len(matches))
@@ -3155,7 +3200,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				fmt.Fprintf(os.Stdout, "\a")
 			} else if len(matches) == 1 {
 				// Lex the match and check if we have to quote around it
-				insertString = state.buildCompletionInsert(matches[0].Match, lastToken.Type)
+				insertString = state.buildCompletionInsert(matches[0].Match, lastToken.Type, matches[0].TabMatchType == TABMATCHFILE)
 
 				// Replace the prefex
 				state.replaceText(insertString, replaceStart, replaceEnd)
@@ -3168,19 +3213,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 					// Print bell
 					fmt.Fprintf(os.Stdout, "\a")
 				} else {
-					switch lastToken.Type {
-					case UNFINISHEDSINGLEQUOTESTRING:
-						longestCommonPrefix = "'" + longestCommonPrefix
-					case UNFINISHEDPATH:
-						longestCommonPrefix = "`" + longestCommonPrefix
-					default:
-						state.l.resetInput(longestCommonPrefix)
-						tokens, err := state.l.Tokenize()
-						if len(tokens) > 2 && err == nil {
-							// We have to put start quote around it, but don't put end quote, wait for more input
-							longestCommonPrefix = "'" + longestCommonPrefix
-						}
-					}
+					longestCommonPrefix = state.buildSharedCompletionInsert(longestCommonPrefix, lastToken.Type, allFileMatches)
 
 					// Replace the prefix
 					state.replaceText(longestCommonPrefix, replaceStart, replaceEnd)
@@ -3192,6 +3225,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				state.tabCycleStart = replaceStart
 				state.tabCycleEnd = state.index
 				state.tabCycleTokenType = lastToken.Type
+				state.tabCycleAllFiles = allFileMatches
 				state.tabCycleMatches = append(state.tabCycleMatches[:0], tabMatchTexts...)
 				state.setTabCompletions(tabMatchTexts)
 			}
