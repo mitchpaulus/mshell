@@ -2440,14 +2440,14 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error parsing input: %s\n", err)
-
+		// State.index reset must be before ensurePromptNewline and printPrompt as those can consume typed characters while waiting for terminal response
+		state.index = 0
 		err = state.printPrompt()
 		if err != nil {
 			fmt.Fprint(os.Stderr, err.Error())
 			return true, 1
 		}
 
-		state.index = 0
 		return false, 0
 	}
 
@@ -2474,6 +2474,8 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 	}
 
 PromptPrint:
+	// State.index reset must be before ensurePromptNewline and printPrompt as those can consume typed characters while waiting for terminal response
+	state.index = 0
 	state.ensurePromptNewline()
 	err = state.printPrompt()
 	if err != nil {
@@ -2481,7 +2483,6 @@ PromptPrint:
 		return true, 1
 	}
 
-	state.index = 0
 
 	return false, 0
 }
