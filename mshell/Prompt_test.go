@@ -13,26 +13,22 @@ func TestReadPromptLine(t *testing.T) {
 		name    string
 		input   string
 		want    string
-		wantOk  bool
 		wantErr bool
 	}{
-		{name: "newline terminated", input: "hello\n", want: "hello", wantOk: true},
-		{name: "crlf terminated", input: "hello\r\n", want: "hello", wantOk: true},
-		{name: "eof without newline", input: "hello", want: "hello", wantOk: true},
-		{name: "empty eof", input: "", want: "", wantOk: false},
+		{name: "newline terminated", input: "hello\n", want: "hello"},
+		{name: "crlf terminated", input: "hello\r\n", want: "hello"},
+		{name: "eof without newline", input: "hello", want: "hello"},
+		{name: "empty eof", input: "", want: "", wantErr: true},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, ok, err := readPromptLine(strings.NewReader(tc.input))
+			got, err := readPromptLine(strings.NewReader(tc.input))
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("error mismatch: got %v wantErr %v", err, tc.wantErr)
 			}
 			if got != tc.want {
 				t.Fatalf("line mismatch: got %q want %q", got, tc.want)
-			}
-			if ok != tc.wantOk {
-				t.Fatalf("ok mismatch: got %v want %v", ok, tc.wantOk)
 			}
 		})
 	}
@@ -47,15 +43,9 @@ func TestReadPromptFromTTYNoTTY(t *testing.T) {
 		openPromptTTYFunc = originalOpenPromptTTY
 	})
 
-	line, ok, err := readPromptFromTTY("Enter value: ")
-	if err != nil {
-		t.Fatalf("readPromptFromTTY returned unexpected error: %v", err)
-	}
-	if ok {
-		t.Fatalf("expected ok=false when no tty is available")
-	}
-	if line != "" {
-		t.Fatalf("expected empty line when no tty is available, got %q", line)
+	_, err := readPromptFromTTY("Enter value: ")
+	if err == nil {
+		t.Fatalf("expected readPromptFromTTY to fail when no tty is available")
 	}
 }
 
@@ -89,12 +79,9 @@ func TestReadPromptFromTTYWritesPromptAndReadsLine(t *testing.T) {
 		_ = outputReader.Close()
 	})
 
-	line, ok, err := readPromptFromTTY("Enter value: ")
+	line, err := readPromptFromTTY("Enter value: ")
 	if err != nil {
 		t.Fatalf("readPromptFromTTY returned unexpected error: %v", err)
-	}
-	if !ok {
-		t.Fatalf("expected ok=true")
 	}
 	if line != "typed response" {
 		t.Fatalf("line mismatch: got %q want %q", line, "typed response")
