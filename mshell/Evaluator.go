@@ -1802,13 +1802,12 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Prompt input expected to be a string, received a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
 					}
 
-					line, ok, err := readPromptFromTTY(promptText)
+					line, err := readPromptFromTTY(promptText)
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error reading from TTY prompt: %s\n", t.Line, t.Column, err.Error()))
 					}
 
 					stack.Push(MShellString{line})
-					stack.Push(MShellBool{ok})
 				} else if t.Lexeme == "append" {
 						obj1, err := stack.Pop()
 						if err != nil {
@@ -6873,16 +6872,16 @@ func defaultOpenPromptTTY() (*promptTTYIO, error) {
 	return &promptTTYIO{input: tty, output: tty}, nil
 }
 
-func readPromptLine(reader io.Reader) (string, bool, error) {
+func readPromptLine(reader io.Reader) (string, error) {
 	bufferedReader := bufio.NewReader(reader)
 	line, err := bufferedReader.ReadString('\n')
 	if err != nil {
 		if errors.Is(err, io.EOF) {
 			if len(line) == 0 {
-				return "", false, nil
+				return "", io.EOF
 			}
 		} else {
-			return "", false, err
+			return "", err
 		}
 	}
 
@@ -6893,19 +6892,19 @@ func readPromptLine(reader io.Reader) (string, bool, error) {
 		line = line[:len(line)-1]
 	}
 
-	return line, true, nil
+	return line, nil
 }
 
-func readPromptFromTTY(promptText string) (string, bool, error) {
+func readPromptFromTTY(promptText string) (string, error) {
 	tty, err := openPromptTTYFunc()
 	if err != nil {
-		return "", false, nil
+		return "", err
 	}
 	defer tty.Close()
 
 	_, err = tty.output.Write([]byte(promptText))
 	if err != nil {
-		return "", false, err
+		return "", err
 	}
 
 	return readPromptLine(tty.input)

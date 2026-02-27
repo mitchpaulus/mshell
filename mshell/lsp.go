@@ -950,7 +950,7 @@ func defaultBuiltinInfo() map[string]*builtinInfo {
 		"prompt": {
 			Name:        "prompt",
 			Description: "Write a prompt to the controlling TTY and read a line from the controlling TTY.",
-			Signatures:  []string{"(str -- str bool)"},
+			Signatures:  []string{"(str -- str)"},
 		},
 		"stdin": {
 			Name:        "stdin",
