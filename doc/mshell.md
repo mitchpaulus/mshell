@@ -629,6 +629,8 @@ On exit, changes the working directory to the directory the user navigated to.
 - `uniq`: Remove duplicate elements from list. Works for all non-compound types. `([a] -- [a])`
 - `zip`: Zip two lists together. If the two list are different lengths, resulting list will be the same length as the shorter of the two lists. `([a] [b] (a b -- c) -- [c])`
 - `concat`: Flatten list of lists one level. Useful for things like a `flatMap`, which can be defined like `map concat`. `([[a]] -- [a])`
+- `toSvgPathStr`: Build an SVG path `d` string from a list of `[x y]` pairs. First pair uses `M`, remaining pairs use `L`. `([[numeric]] -- str)`
+- `scaleLinear`: Build a linear scaler from a domain/range pair; returns a quotation that maps input values. `([numeric] [numeric] -- (numeric -- numeric))`
 - `cartesian`: Produces the Cartesian product between two lists. Output is a list of lists, in which the inner list has two elements. `([a] [a] -- [[a]])`
 - `groupBy`: Groups items of a list into a dictionary based on a key function. The key function should take each item as input and produce a string.
              The output is a dictionary with the unique keys and values that are lists of the corresponding items.

@@ -243,6 +243,8 @@
         <tr> <td><code>uniq</code></td> <td>Remove duplicate elements.</td> <td><code>([a] -- [a])</code></td> </tr>
         <tr> <td><code>zip</code></td> <td>Zip two lists using a combining quotation. Result length matches the shorter input.</td> <td><code>([a] [b] (a b -- c) -- [c])</code></td> </tr>
         <tr> <td><code>concat</code></td> <td>Flatten a list of lists one level.</td> <td><code>([[a]] -- [a])</code></td> </tr>
+        <tr> <td><code>toSvgPathStr</code></td> <td>Build an SVG path <code>d</code> string from a list of <code>[x y]</code> pairs. First pair uses <code>M</code>, remaining pairs use <code>L</code>.</td> <td><code>([[<span class="sig-type sig-type-numeric">numeric</span>]] -- <span class="sig-type sig-type-str">str</span>)</code></td> </tr>
+        <tr> <td><code>scaleLinear</code></td> <td>Build a linear scaler from a domain/range pair; returns a quotation that maps input values.</td> <td><code>([<span class="sig-type sig-type-numeric">numeric</span>] [<span class="sig-type sig-type-numeric">numeric</span>] -- (<span class="sig-type sig-type-numeric">numeric</span> -- <span class="sig-type sig-type-numeric">numeric</span>))</code></td> </tr>
         <tr> <td><code>cartesian</code></td> <td>Cartesian product of two lists.</td> <td><code>([a] [a] -- [[a]])</code></td> </tr>
         <tr> <td><code>groupBy</code></td> <td>
             Group items into a dictionary using a key quotation. The quotation receives each item and must return a string key;
