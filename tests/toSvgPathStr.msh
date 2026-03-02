@@ -1,0 +1,6 @@
+[] toSvgPathStr len str wl
+
+[[0 0]] toSvgPathStr wl
+[[0.5 1.25]] toSvgPathStr wl
+[[0 0] [10 5] [20 0]] toSvgPathStr wl
+[[-1.5 2] [3 -4.75]] toSvgPathStr wl

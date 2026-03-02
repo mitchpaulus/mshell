@@ -283,6 +283,26 @@ def tjoin ([str] -- str)  tab join end
 
 def cjoin ([str] -- str) "," join end
 
+# Build an SVG path "d" string from [x y] pairs.
+def toSvgPathStr ([[numeric]] -- str)
+    points!
+    @points len 0 = if
+        ""
+    else
+        @points :0: first!
+        @points 1 skip rest!
+        [$"M {@points :0: :0: str} {@points :0: :1: str}"]
+        @rest map. r! $"L {@r :0: str} {@r :1: str}" end
+        extend " " join
+    end
+end
+
+def scaleLinear ([numeric] [numeric] -- (numeric -- float))
+    domain!, range! @domain 2unpack d0!, d1! @range 2unpack r0!, r1!
+    @r1 @r0 - toFloat @d1 @d0 toFloat - / slope!
+    (@d0 - @slope * @r0 +)
+end
+
 def uw ([str] --) unlines w end
 # tuw = tab unlines write
 def tuw ([[str]] -- ) (tjoin) map uw end
