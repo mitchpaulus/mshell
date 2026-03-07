@@ -16,6 +16,17 @@ import (
 	"golang.org/x/term"
 )
 
+type previewResult struct {
+	path  string
+	lines []string
+}
+
+type inputEvent struct {
+	buf []byte
+	n   int
+	err error
+}
+
 type FileManager struct {
 	rows, cols int
 	stdInFd    int
@@ -31,7 +42,9 @@ type FileManager struct {
 
 	lastKey byte // for gg detection
 
-	previewCache map[string][]string // cached preview lines per file path
+	previewCache   map[string][]string // cached preview lines per file path
+	previewChan    chan previewResult   // channel for async preview results
+	previewLoading string              // path currently being loaded async
 
 	// Search state
 	searching    bool   // true when typing a search query
@@ -232,11 +245,36 @@ func (fm *FileManager) initUserInfo() {
 }
 
 func (fm *FileManager) mainLoop() {
+	inputCh := make(chan inputEvent, 1)
+	fm.previewChan = make(chan previewResult, 4)
+
+	go func() {
+		for {
+			buf := make([]byte, 16)
+			n, err := os.Stdin.Read(buf)
+			inputCh <- inputEvent{buf: buf, n: n, err: err}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
 	for {
 		fm.render()
-		quit := fm.handleInput()
-		if quit {
-			break
+
+		select {
+		case ev := <-inputCh:
+			if ev.err != nil || ev.n == 0 {
+				return
+			}
+			if fm.handleInput(ev.buf, ev.n) {
+				return
+			}
+		case result := <-fm.previewChan:
+			fm.previewCache[result.path] = result.lines
+			if fm.previewLoading == result.path {
+				fm.previewLoading = ""
+			}
 		}
 	}
 }
@@ -667,14 +705,21 @@ func (fm *FileManager) getPreview() []string {
 		return cached
 	}
 
-	lines := fm.computePreview(entry, path)
-	fm.previewCache[path] = lines
-	return lines
+	// Start async load if not already loading this path
+	if fm.previewLoading != path {
+		fm.previewLoading = path
+		maxLines := fm.visibleRows()
+		ch := fm.previewChan
+		go func() {
+			lines := computePreview(entry, path, maxLines)
+			ch <- previewResult{path: path, lines: lines}
+		}()
+	}
+
+	return []string{" Loading..."}
 }
 
-func (fm *FileManager) computePreview(entry os.DirEntry, path string) []string {
-	maxLines := fm.visibleRows()
-
+func computePreview(entry os.DirEntry, path string, maxLines int) []string {
 	if entry.IsDir() {
 		subEntries, err := os.ReadDir(path)
 		if err != nil {
@@ -741,13 +786,7 @@ func (fm *FileManager) computePreview(entry os.DirEntry, path string) []string {
 	return lines
 }
 
-func (fm *FileManager) handleInput() bool {
-	buf := make([]byte, 16)
-	n, err := os.Stdin.Read(buf)
-	if err != nil || n == 0 {
-		return false
-	}
-
+func (fm *FileManager) handleInput(buf []byte, n int) bool {
 	fm.statusMsg = ""
 
 	if fm.searching {
