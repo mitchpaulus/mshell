@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"unicode/utf8"
 
 	"golang.org/x/term"
@@ -45,6 +46,9 @@ type FileManager struct {
 	previewCache   map[string][]string // cached preview lines per file path
 	previewChan    chan previewResult   // channel for async preview results
 	previewLoading string              // path currently being loaded async
+	inputChan      chan inputEvent
+	quitChan       chan struct{}
+	modalActive    atomic.Bool
 
 	// Search state
 	searching    bool   // true when typing a search query
@@ -245,25 +249,25 @@ func (fm *FileManager) initUserInfo() {
 }
 
 func (fm *FileManager) mainLoop() {
-	inputCh := make(chan inputEvent, 1)
+	fm.inputChan = make(chan inputEvent, 1)
 	fm.previewChan = make(chan previewResult, 4)
-	quitCh := make(chan struct{}, 1)
+	fm.quitChan = make(chan struct{}, 1)
 
 	go func() {
 		for {
 			buf := make([]byte, 16)
 			n, err := os.Stdin.Read(buf)
 			if err != nil {
-				inputCh <- inputEvent{buf: buf, n: 0, err: err}
+				fm.inputChan <- inputEvent{buf: buf, n: 0, err: err}
 				return
 			}
 			// Check for 'q' quit directly in the reader so we never
 			// block on a channel send after the main loop has exited.
-			if n == 1 && buf[0] == 'q' && !fm.searching && !fm.renaming && !fm.pendingMark && !fm.showingBookmarks {
-				quitCh <- struct{}{}
+			if n == 1 && buf[0] == 'q' && !fm.modalActive.Load() && !fm.searching && !fm.renaming && !fm.pendingMark && !fm.showingBookmarks {
+				fm.quitChan <- struct{}{}
 				return
 			}
-			inputCh <- inputEvent{buf: buf, n: n, err: nil}
+			fm.inputChan <- inputEvent{buf: buf, n: n, err: nil}
 		}
 	}()
 
@@ -271,18 +275,41 @@ func (fm *FileManager) mainLoop() {
 		fm.render()
 
 		select {
-		case ev := <-inputCh:
+		case ev := <-fm.inputChan:
 			if ev.err != nil || ev.n == 0 {
 				return
 			}
 			fm.handleInput(ev.buf, ev.n)
-		case <-quitCh:
+		case <-fm.quitChan:
 			return
 		case result := <-fm.previewChan:
-			fm.previewCache[result.path] = result.lines
-			if fm.previewLoading == result.path {
-				fm.previewLoading = ""
+			fm.handlePreviewResult(result)
+		}
+	}
+}
+
+func (fm *FileManager) handlePreviewResult(result previewResult) {
+	fm.previewCache[result.path] = result.lines
+	if fm.previewLoading == result.path {
+		fm.previewLoading = ""
+	}
+}
+
+func (fm *FileManager) readModalKey() (byte, bool) {
+	fm.modalActive.Store(true)
+	defer fm.modalActive.Store(false)
+
+	for {
+		select {
+		case ev := <-fm.inputChan:
+			if ev.err != nil || ev.n == 0 {
+				return 0, false
 			}
+			return ev.buf[0], true
+		case <-fm.quitChan:
+			return 0, false
+		case result := <-fm.previewChan:
+			fm.handlePreviewResult(result)
 		}
 	}
 }
@@ -1549,13 +1576,11 @@ func (fm *FileManager) promptConflict(name string) int {
 	}
 	fm.ttyOut.Write(buf.Bytes())
 
-	// Read one key
-	keyBuf := make([]byte, 16)
-	n, err := os.Stdin.Read(keyBuf)
-	if err != nil || n == 0 {
+	key, ok := fm.readModalKey()
+	if !ok {
 		return 0
 	}
-	switch keyBuf[0] {
+	switch key {
 	case 'o':
 		return 1
 	case 'v':
@@ -1667,13 +1692,11 @@ func (fm *FileManager) promptDelete(entry os.DirEntry) bool {
 	}
 	fm.ttyOut.Write(buf.Bytes())
 
-	// Read one key
-	keyBuf := make([]byte, 16)
-	n, err := os.Stdin.Read(keyBuf)
-	if err != nil || n == 0 {
+	key, ok := fm.readModalKey()
+	if !ok {
 		return false
 	}
-	return keyBuf[0] == 'y'
+	return key == 'y'
 }
 
 // Bookmarks
