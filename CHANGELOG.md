@@ -12,7 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Functions
   - `cdh`
   - `cdp`
+  - `fromUnixTimeMicro`
+  - `fromUnixTimeMilli`
+  - `fromUnixTimeNano`
   - `prompt`
+  - `toUnixTimeMicro`
+  - `toUnixTimeMilli`
+  - `toUnixTimeNano`
   - `toSvgPathStr`
   - `scaleLinear`
 

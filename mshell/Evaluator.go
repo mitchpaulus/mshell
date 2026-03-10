@@ -3069,7 +3069,7 @@ MainLoop:
 					} else if t.Lexeme == "dow" {
 						stack.Push(MShellInt{dayOfWeek})
 					}
-				} else if t.Lexeme == "toUnixTime" {
+				} else if t.Lexeme == "toUnixTime" || t.Lexeme == "toUnixTimeMilli" || t.Lexeme == "toUnixTimeMicro" || t.Lexeme == "toUnixTimeNano" {
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'unixTime' operation on an empty stack.\n", t.Line, t.Column))
@@ -3079,7 +3079,15 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot get the unix time of a %s (%s).\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
 					}
 
-					stack.Push(MShellInt{int(dateTimeObj.Time.Unix())})
+					if t.Lexeme == "toUnixTime" {
+						stack.Push(MShellInt{int(dateTimeObj.Time.Unix())})
+					} else if t.Lexeme == "toUnixTimeMilli" {
+						stack.Push(MShellInt{int(dateTimeObj.Time.UnixMilli())})
+					} else if t.Lexeme == "toUnixTimeMicro" {
+						stack.Push(MShellInt{int(dateTimeObj.Time.UnixMicro())})
+					} else if t.Lexeme == "toUnixTimeNano" {
+						stack.Push(MShellInt{int(dateTimeObj.Time.UnixNano())})
+					}
 				} else if t.Lexeme == "toOleDate" {
 					obj1, err := stack.Pop()
 					if err != nil {
@@ -3093,7 +3101,7 @@ MainLoop:
 
 					oleDays := dateTimeObj.Time.In(time.UTC).Sub(oleAutomationEpoch).Hours() / 24
 					stack.Push(MShellFloat{oleDays})
-				} else if t.Lexeme == "fromUnixTime" {
+				} else if t.Lexeme == "fromUnixTime" || t.Lexeme == "fromUnixTimeMilli" || t.Lexeme == "fromUnixTimeMicro" || t.Lexeme == "fromUnixTimeNano" {
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
@@ -3104,7 +3112,16 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert a %s (%s) to a datetime.\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
 					}
 
-					newTime := time.Unix(int64(intVal.Value), 0).UTC()
+					var newTime time.Time
+					if t.Lexeme == "fromUnixTime" {
+						newTime = time.Unix(int64(intVal.Value), 0).UTC()
+					} else if t.Lexeme == "fromUnixTimeMilli" {
+						newTime = time.UnixMilli(int64(intVal.Value)).UTC()
+					} else if t.Lexeme == "fromUnixTimeMicro" {
+						newTime = time.UnixMicro(int64(intVal.Value)).UTC()
+					} else if t.Lexeme == "fromUnixTimeNano" {
+						newTime = time.Unix(0, int64(intVal.Value)).UTC()
+					}
 
 					stack.Push(&MShellDateTime{Time: newTime, OriginalString: newTime.Format("2006-01-02T15:04")})
 				} else if t.Lexeme == "fromOleDate" {
