@@ -676,8 +676,14 @@ end
 - `isWeekend`: Check if date is a weekend `(date -- bool)`
 - `isWeekday`: Check if date is a weekday `(date -- bool)`
 - `dow`: Get day of week from date (0-6). Sunday = 0, .., Saturday = 6 `(date -- int)`
-- `toUnixTime`: Get unix time from date `(date -- int)`
-- `fromUnixTime`: Get date from unix time int `(date -- int)`
+- `toUnixTime`: Get unix time in seconds from date `(date -- int)`
+- `toUnixTimeMilli`: Get unix time in milliseconds from date `(date -- int)`
+- `toUnixTimeMicro`: Get unix time in microseconds from date `(date -- int)`
+- `toUnixTimeNano`: Get unix time in nanoseconds from date `(date -- int)`
+- `fromUnixTime`: Get date from unix time in seconds `(int -- date)`
+- `fromUnixTimeMilli`: Get date from unix time in milliseconds int `(int -- date)`
+- `fromUnixTimeMicro`: Get date from unix time in microseconds int `(int -- date)`
+- `fromUnixTimeNano`: Get date from unix time in nanoseconds int `(int -- date)`
 - `toOleDate`: Convert a date to an OLE Automation date float `(date -- float)`
 - `fromOleDate`: Convert an OLE Automation date float to a date `(numeric -- date)`
 - `addDays`: Add days to date `(date numeric -- date)`
