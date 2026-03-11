@@ -200,7 +200,7 @@ func main() {
 		return
 	}
 
-	if len(input) == 0 && term.IsTerminal(stdOutFd) && term.IsTerminal(int(os.Stdin.Fd())) {
+	if !inputSet && term.IsTerminal(stdOutFd) && term.IsTerminal(int(os.Stdin.Fd())) {
 		// fmt.Fprintf(os.Stdout, "Got here\n")
 		numRows, numCols, err := term.GetSize(stdOutFd)
 		if err != nil {
