@@ -108,6 +108,7 @@ func main() {
 	positionalArgs := []string{}
 	var inputFile *TokenFile
 	inputFile = nil
+	inputFilePath := ""
 
 	if len(os.Args) == 1 {
 		// Enter interactive mode
@@ -165,6 +166,7 @@ func main() {
 			break
 		} else {
 			inputSet = true
+			inputFilePath = arg
 			inputBytes, err := os.ReadFile(arg)
 			if err != nil {
 				fmt.Println(err)
@@ -417,6 +419,28 @@ func main() {
 
 	allDefinitions = append(allDefinitions, file.Definitions...)
 	state.AddCompletionDefinitions(file.Definitions)
+
+	if file.Version != "" && file.Version != mshellVersion && inputFilePath != "" && command == CLIEXECUTE {
+		altName := "msh-" + file.Version
+		altExe, lookErr := exec.LookPath(altName)
+		if lookErr != nil {
+			fmt.Fprintf(os.Stderr, "Script requires msh %s (current: %s); could not find %s on PATH\n", file.Version, mshellVersion, altName)
+			os.Exit(1)
+			return
+		}
+		cmd := exec.Command(altExe, os.Args[1:]...)
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		runErr := cmd.Run()
+		if runErr != nil {
+			if exitErr, ok := runErr.(*exec.ExitError); ok {
+				os.Exit(exitErr.ExitCode())
+			}
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 
 	if command == CLITYPECHECK {
 		var typeStack MShellTypeStack

@@ -97,6 +97,7 @@ const (
 	STDOUTANDSTDERRAPPEND    // &>>
 	INPLACEREDIRECT          // <>
 	PREFIXQUOTE              // .functionName
+	VER
 )
 
 func (t TokenType) String() string {
@@ -263,6 +264,8 @@ func (t TokenType) String() string {
 		return "INPLACEREDIRECT"
 	case PREFIXQUOTE:
 		return "PREFIXQUOTE"
+	case VER:
+		return "VER"
 	default:
 		return "UNKNOWN"
 	}
@@ -552,6 +555,8 @@ func (l *Lexer) literalOrKeywordType() TokenType {
 		}
 	case 't':
 		return l.checkKeyword(1, "rue", TRUE)
+	case 'V':
+		return l.checkKeyword(1, "ER", VER)
 	case 'x':
 		if l.curLen() == 1 {
 			return INTERPRET

@@ -23,6 +23,7 @@ type MShellParseItem interface {
 type MShellFile struct {
 	Definitions []MShellDefinition
 	Items       []MShellParseItem
+	Version     string // Set by VER "x.y.z" directive; empty if not specified.
 }
 
 type MShellParseList struct {
@@ -437,7 +438,7 @@ func (file *MShellFile) ToJson() string {
 	}
 	items.WriteString("]")
 
-	return fmt.Sprintf("{\"definitions\": %s, \"items\": %s}", definitions.String(), items.String())
+	return fmt.Sprintf("{\"version\": %q, \"definitions\": %s, \"items\": %s}", file.Version, definitions.String(), items.String())
 }
 
 type MShellParser struct {
@@ -603,6 +604,24 @@ func (parser *MShellParser) ParseFile() (file *MShellFile, err error) {
 			_ = parser.Match(parser.curr, END)
 			// return file, errors.New("DEF Not implemented")
 			// parser.ParseDefinition()
+		case VER:
+			if file.Version != "" {
+				return file, fmt.Errorf("%d:%d: Duplicate VER directive; version already set to %q", parser.curr.Line, parser.curr.Column, file.Version)
+			}
+			parser.NextToken()
+			t := parser.curr
+			if t.Type == STRING {
+				v, err := ParseRawString(t.Lexeme)
+				if err != nil {
+					return file, fmt.Errorf("%d:%d: Invalid string in VER directive: %s", t.Line, t.Column, err)
+				}
+				file.Version = v
+			} else if t.Type == SINGLEQUOTESTRING {
+				file.Version = t.Lexeme[1 : len(t.Lexeme)-1]
+			} else {
+				return file, fmt.Errorf("%d:%d: Expected a string after VER, got %s", t.Line, t.Column, t.Type)
+			}
+			parser.NextToken()
 		// case
 		// parser.ParseItem()
 		default:
