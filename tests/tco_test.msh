@@ -1,0 +1,31 @@
+# Test 1: Deep tail recursion (would overflow without TCO)
+def countdown (int -- int)
+    n!
+    @n 0 <= (0) (@n 1 - countdown) iff
+end
+
+1000000 countdown wl
+
+# Test 2: Mutual tail recursion
+def isEven (int -- bool)
+    n!
+    @n 0 = (true) (@n 1 - isOdd) iff
+end
+
+def isOdd (int -- bool)
+    n!
+    @n 0 = (false) (@n 1 - isEven) iff
+end
+
+1000000 isEven str wl
+
+# Test 3: Non-tail recursion still works (just not optimized)
+# Using a smaller value since non-tail recursion uses stack
+def sumTo (int -- int)
+    n!
+    @n 0 <= (0) (@n 1 - sumTo @n +) iff
+end
+
+100 sumTo wl
+
+"All TCO tests passed" wl

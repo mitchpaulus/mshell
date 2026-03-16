@@ -1,0 +1,10 @@
+1772069437000000000 fromUnixTimeNano "2006-01-02 15:04:05.0000" dateFmt wl
+1772069437000000 fromUnixTimeMicro "2006-01-02 15:04:05.0000" dateFmt wl
+1772069437000 fromUnixTimeMilli "2006-01-02 15:04:05.0000" dateFmt wl
+1772069437 fromUnixTime "2006-01-02 15:04:05.0000" dateFmt wl
+
+2026-02-26T01:30:37 d!
+@d toUnixTime wl
+@d toUnixTimeMilli wl
+@d toUnixTimeMicro wl
+@d toUnixTimeNano wl

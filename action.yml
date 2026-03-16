@@ -52,15 +52,6 @@ runs:
 
         echo "$HOME/.mshell/bin" >> $GITHUB_PATH
 
-    - name: Download standard library
-      shell: bash
-      env:
-        ACTION_REPO: ${{ github.action_repository }}
-      run: |
-        VERSION="${{ inputs.version }}"
-        if [ "$VERSION" = "latest" ]; then
-          curl -sL "https://raw.githubusercontent.com/${ACTION_REPO}/main/lib/std.msh" -o "$HOME/.mshell/std.msh"
-        else
-          curl -sL "https://raw.githubusercontent.com/${ACTION_REPO}/${VERSION}/lib/std.msh" -o "$HOME/.mshell/std.msh"
-        fi
+        # std.msh is included in the release tarball, move it to a standard location
+        mv "$HOME/.mshell/bin/std.msh" "$HOME/.mshell/std.msh"
         echo "MSHSTDLIB=$HOME/.mshell/std.msh" >> $GITHUB_ENV

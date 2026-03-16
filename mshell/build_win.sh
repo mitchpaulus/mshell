@@ -1,2 +1,2 @@
 #!/bin/sh
-GOOS=windows GOARCH=amd64 go build -o msh.exe
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o msh.exe

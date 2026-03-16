@@ -35,7 +35,7 @@ const (
 	CLIHTML
 )
 
-const mshellVersion = "0.9.0"
+const mshellVersion = "0.12.0"
 const tabCompletionColumnLimit = 10
 
 var tempFiles []string
@@ -84,6 +84,15 @@ func main() {
 
 	if len(os.Args) >= 2 && os.Args[1] == "completions" {
 		os.Exit(runCompletionsCommand(os.Args[2:]))
+		return
+	}
+
+	if len(os.Args) >= 2 && os.Args[1] == "fm" {
+		startDir := ""
+		if len(os.Args) >= 3 {
+			startDir = os.Args[2]
+		}
+		os.Exit(RunFileManager(startDir))
 		return
 	}
 
@@ -136,6 +145,7 @@ func main() {
 			fmt.Println("Usage: msh bin <command>")
 			fmt.Println("Usage: msh completions <shell>")
 			fmt.Println("Usage: msh lsp")
+			fmt.Println("Usage: msh fm")
 			fmt.Println("")
 			fmt.Println("Options:")
 			fmt.Println("  --config PATH  Load config from PATH (overrides MSH_CONFIG and defaults)")
@@ -148,6 +158,7 @@ func main() {
 			fmt.Println("  -h, --help   Print this help message")
 			fmt.Println("  bin          Manage msh_bins.txt entries")
 			fmt.Println("  completions  Print shell completion script")
+			fmt.Println("  fm           Open the built-in file manager")
 			os.Exit(0)
 			return
 		} else if arg == "--version" {
@@ -209,7 +220,7 @@ func main() {
 		}
 	}
 
-	if len(input) == 0 && term.IsTerminal(stdOutFd) && term.IsTerminal(int(os.Stdin.Fd())) {
+	if !inputSet && term.IsTerminal(stdOutFd) && term.IsTerminal(int(os.Stdin.Fd())) {
 		// fmt.Fprintf(os.Stdout, "Got here\n")
 		numRows, numCols, err := term.GetSize(stdOutFd)
 		if err != nil {
@@ -396,6 +407,7 @@ func main() {
 			}
 
 			allDefinitions = append(allDefinitions, stdlibFile.Definitions...)
+			state.AddCompletionDefinitions(stdlibFile.Definitions)
 
 			if len(stdlibFile.Items) > 0 {
 				callStackItem := CallStackItem{
@@ -424,6 +436,7 @@ func main() {
 	}
 
 	allDefinitions = append(allDefinitions, file.Definitions...)
+	state.AddCompletionDefinitions(file.Definitions)
 
 	if command == CLITYPECHECK {
 		var typeStack MShellTypeStack
@@ -496,6 +509,7 @@ type TermState struct {
 	tabCycleStart      int
 	tabCycleEnd        int
 	tabCycleTokenType  TokenType
+	tabCycleAllFiles   bool
 	tabCycleMatches    []string
 	lastArgCycleActive bool
 	lastArgCycleIndex  int
@@ -511,7 +525,6 @@ type TermState struct {
 	evalState         EvalState
 	callStack         CallStack
 	stdLibDefs        []MShellDefinition
-	completionDefinitions map[string][]MShellDefinition
 	initCallStackItem CallStackItem
 	// pathBinManager IPathBinManager
 }
@@ -539,6 +552,7 @@ func (state *TermState) resetTabCycle() {
 	state.tabCycleStart = 0
 	state.tabCycleEnd = 0
 	state.tabCycleTokenType = EOF
+	state.tabCycleAllFiles = false
 	if state.tabCycleMatches != nil {
 		state.tabCycleMatches = state.tabCycleMatches[:0]
 	}
@@ -631,35 +645,24 @@ func completionLayoutFor(matches []string, rowLimit int, maxWidth int) completio
 	}
 
 	if total <= effectiveLimit {
-		return completionLayoutWithColumns(matches, 1)
+		return completionLayoutWithRows(matches, total, 1)
 	}
 
-	columns := (total + effectiveLimit - 1) / effectiveLimit
-	if columns > total {
-		columns = total
-	}
-
-	layout = completionLayoutWithColumns(matches, columns)
+	rows := min(effectiveLimit, total)
+	columns := (total + rows - 1) / rows
+	layout = completionLayoutWithRows(matches, rows, columns)
 	if maxWidth <= 0 {
 		return layout
 	}
 
 	if completionLayoutWidth(layout) <= maxWidth {
-		for columns < total {
-			next := completionLayoutWithColumns(matches, columns+1)
-			if completionLayoutWidth(next) <= maxWidth {
-				layout = next
-				columns++
-			} else {
-				break
-			}
-		}
 		return layout
 	}
 
 	for columns > 1 {
 		columns--
-		layout = completionLayoutWithColumns(matches, columns)
+		rows = (total + columns - 1) / columns
+		layout = completionLayoutWithRows(matches, rows, columns)
 		if completionLayoutWidth(layout) <= maxWidth {
 			break
 		}
@@ -668,10 +671,16 @@ func completionLayoutFor(matches []string, rowLimit int, maxWidth int) completio
 	return layout
 }
 
-func completionLayoutWithColumns(matches []string, columns int) completionLayout {
+func completionLayoutWithRows(matches []string, rows int, columns int) completionLayout {
 	total := len(matches)
 	if total == 0 {
 		return completionLayout{}
+	}
+	if rows < 1 {
+		rows = 1
+	}
+	if rows > total {
+		rows = total
 	}
 	if columns < 1 {
 		columns = 1
@@ -679,8 +688,9 @@ func completionLayoutWithColumns(matches []string, columns int) completionLayout
 	if columns > total {
 		columns = total
 	}
-
-	rows := (total + columns - 1) / columns
+	if rows*columns < total {
+		rows = (total + columns - 1) / columns
+	}
 	colHeights := make([]int, columns)
 	colWidths := make([]int, columns)
 	for col := 0; col < columns; col++ {
@@ -878,7 +888,21 @@ func (state *TermState) setTabCompletions(matches []string) {
 	}
 }
 
-func (state *TermState) buildCompletionInsert(match string, tokenType TokenType) string {
+func allMatchesAreFiles(matches []TabMatch) bool {
+	if len(matches) == 0 {
+		return false
+	}
+
+	for _, m := range matches {
+		if m.TabMatchType != TABMATCHFILE {
+			return false
+		}
+	}
+
+	return true
+}
+
+func (state *TermState) buildCompletionInsert(match string, tokenType TokenType, preferPathQuote bool) string {
 	switch tokenType {
 	case UNFINISHEDSINGLEQUOTESTRING:
 		return "'" + match
@@ -893,9 +917,37 @@ func (state *TermState) buildCompletionInsert(match string, tokenType TokenType)
 		tokens, err := state.l.Tokenize()
 		if len(tokens) > 2 && err == nil {
 			// Quote when the completion needs multiple tokens to parse.
+			if preferPathQuote {
+				insertString := "`" + match
+				if !strings.HasSuffix(match, string(os.PathSeparator)) {
+					insertString += "` "
+				}
+				return insertString
+			}
 			return "'" + match + "'"
 		}
 		return match
+	}
+}
+
+func (state *TermState) buildSharedCompletionInsert(longestCommonPrefix string, tokenType TokenType, allFileMatches bool) string {
+	switch tokenType {
+	case UNFINISHEDSINGLEQUOTESTRING:
+		return "'" + longestCommonPrefix
+	case UNFINISHEDPATH:
+		return "`" + longestCommonPrefix
+	default:
+		needsQuoteForWhitespace := strings.ContainsAny(longestCommonPrefix, " \t\r\n")
+		state.l.resetInput(longestCommonPrefix)
+		tokens, err := state.l.Tokenize()
+		if (len(tokens) > 2 && err == nil) || needsQuoteForWhitespace {
+			// Add only the opening quote while user keeps typing to disambiguate.
+			if allFileMatches {
+				return "`" + longestCommonPrefix
+			}
+			return "'" + longestCommonPrefix
+		}
+		return longestCommonPrefix
 	}
 }
 
@@ -909,7 +961,7 @@ func (state *TermState) cycleTabCompletion(direction int) {
 	} else if state.tabCycleIndex < 0 {
 		state.tabCycleIndex = len(state.tabCycleMatches) - 1
 	}
-	insertString := state.buildCompletionInsert(state.tabCycleMatches[state.tabCycleIndex], state.tabCycleTokenType)
+	insertString := state.buildCompletionInsert(state.tabCycleMatches[state.tabCycleIndex], state.tabCycleTokenType, state.tabCycleAllFiles)
 	state.replaceText(insertString, state.tabCycleStart, state.tabCycleEnd)
 	state.tabCycleEnd = state.index
 	state.setTabCompletions(state.tabCycleMatches)
@@ -926,7 +978,7 @@ func (state *TermState) selectTabCompletion(index int) {
 		index = len(state.tabCycleMatches) - 1
 	}
 	state.tabCycleIndex = index
-	insertString := state.buildCompletionInsert(state.tabCycleMatches[state.tabCycleIndex], state.tabCycleTokenType)
+	insertString := state.buildCompletionInsert(state.tabCycleMatches[state.tabCycleIndex], state.tabCycleTokenType, state.tabCycleAllFiles)
 	state.replaceText(insertString, state.tabCycleStart, state.tabCycleEnd)
 	state.tabCycleEnd = state.index
 	state.setTabCompletions(state.tabCycleMatches)
@@ -1360,21 +1412,6 @@ func completionArgString(token Token) (string, error) {
 	}
 }
 
-func (state *TermState) buildCompletionDefinitionMap(definitions []MShellDefinition) map[string][]MShellDefinition {
-	completionDefs := make(map[string][]MShellDefinition)
-	for _, def := range definitions {
-		names, err := completionMetadataNames(def)
-		if err != nil {
-			fmt.Fprintf(state.f, "Completion metadata error in def '%s': %s\n", def.Name, err)
-			continue
-		}
-		for _, name := range names {
-			completionDefs[name] = append(completionDefs[name], def)
-		}
-	}
-	return completionDefs
-}
-
 func (state *TermState) completionArgsFromTokens(tokens []Token, prefix string) []string {
 	args := make([]string, 0, len(tokens))
 	excludeIndex := -1
@@ -1537,7 +1574,11 @@ var history []string
 
 var historyToSave []HistoryItem
 
-var knownCommands = map[string]struct{}{"cd": {}}
+var knownCommands = map[string]struct{}{
+	"cd":  {},
+	"cdh": {},
+	"cdp": {},
+}
 
 // // printText prints the text at the current cursor position, moving existing text to the right.
 // func (state *TermState) printText(text string) {
@@ -1655,6 +1696,7 @@ var SpecialKeyName = []string{
 	"KEY_HOME",
 	"KEY_END",
 	"KEY_ALT_B",
+	"KEY_ALT_D",
 	"KEY_ALT_F",
 	"KEY_ALT_O",
 	"KEY_ALT_DOT",
@@ -1687,6 +1729,7 @@ const (
 	KEY_END
 
 	KEY_ALT_B
+	KEY_ALT_D
 	KEY_ALT_F
 	KEY_ALT_O
 	KEY_ALT_DOT
@@ -1961,6 +2004,8 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 			} else if c == 98 { // Alt-B
 				// Move cursor left by word
 				return KEY_ALT_B, nil
+			} else if c == 100 { // Alt-D
+				return KEY_ALT_D, nil
 			} else if c == 102 { // Alt-F
 				// Move cursor right by word
 				return KEY_ALT_F, nil
@@ -2132,7 +2177,7 @@ func (state *TermState) InteractiveMode() error {
 	}
 
 	state.stdLibDefs = stdLibDefs
-	state.completionDefinitions = state.buildCompletionDefinitionMap(state.stdLibDefs)
+	state.evalState.AddCompletionDefinitions(state.stdLibDefs)
 
 	history = make([]string, 0)
 	state.historyIndex = 0
@@ -2354,6 +2399,11 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 	state.currentCommand = state.currentCommand[:0]
 	state.resetHistorySearch()
 
+	if len(currentCommandStr) > 0 {
+		state.toCooked()
+		fmt.Fprintln(os.Stdout)
+	}
+
 	p := state.p
 	l := state.l
 
@@ -2379,9 +2429,8 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 			simpleCliParser := NewMShellSimpleCliParser(l)
 			pipeline, parseErr := simpleCliParser.Parse()
 			if parseErr != nil {
-				fmt.Fprintf(os.Stderr, "\r\nError parsing simple CLI: %s\r\n", parseErr)
+				fmt.Fprintf(os.Stderr, "%s\n", parseErr)
 				// Goto PromptPrint
-				fmt.Fprintf(os.Stdout, "\033[1G")
 				goto PromptPrint
 
 				// // Reset lexer to original input for normal parsing to attempt
@@ -2410,24 +2459,26 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 		parsed, err = p.ParseFile()
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "\r\nError parsing input: %s\n", err)
-		// Move to start
-		fmt.Fprintf(os.Stdout, "\033[1G")
-
+		fmt.Fprintf(os.Stderr, "Error parsing input: %s\n", err)
+		// State.index reset must be before ensurePromptNewline and printPrompt as those can consume typed characters while waiting for terminal response
+		state.index = 0
 		err = state.printPrompt()
 		if err != nil {
 			fmt.Fprint(os.Stderr, err.Error())
 			return true, 1
 		}
 
-		state.index = 0
 		return false, 0
 	}
 
 	// During evaluation, normal terminal output can happen, or TUI apps can be run.
 	// So want them to see non-raw mode terminal state.
 	term.Restore(state.stdInFd, &state.oldState)
-	fmt.Fprintf(os.Stdout, "\n")
+
+	if len(parsed.Definitions) > 0 {
+		state.stdLibDefs = append(state.stdLibDefs, parsed.Definitions...)
+		state.evalState.AddCompletionDefinitions(parsed.Definitions)
+	}
 
 	if len(parsed.Items) > 0 {
 		state.initCallStackItem.MShellParseItem = parsed.Items[0]
@@ -2443,6 +2494,8 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 	}
 
 PromptPrint:
+	// State.index reset must be before ensurePromptNewline and printPrompt as those can consume typed characters while waiting for terminal response
+	state.index = 0
 	state.ensurePromptNewline()
 	err = state.printPrompt()
 	if err != nil {
@@ -2450,7 +2503,6 @@ PromptPrint:
 		return true, 1
 	}
 
-	state.index = 0
 
 	return false, 0
 }
@@ -3099,7 +3151,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			if binaryCompletion {
 				isCompletingBinary := prefix != "" && lastToken.Start == binaryToken.Start && lastToken.Line == binaryToken.Line
 				if !isCompletingBinary {
-					defs := state.completionDefinitions[binaryToken.Lexeme]
+					defs := state.evalState.CompletionDefinitions[binaryToken.Lexeme]
 					if len(defs) > 0 {
 						args := state.completionArgsFromTokens(tokens, prefix)
 						completionMatches := state.runCompletionDefinitions(defs, args)
@@ -3150,10 +3202,12 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				LastTokenType: lastToken.Type,
 				PrevTokenType: prevTokenType,
 				NumTokens:     len(tokens),
+				InBinaryMode:  binaryCompletion,
 			}
 
 			// Generate completions using the extracted function
 			matches = append(matches, GenerateCompletions(input, deps)...)
+			allFileMatches := allMatchesAreFiles(matches)
 
 			var insertString string
 			fmt.Fprintf(state.f, "Len matches: '%d'\n", len(matches))
@@ -3167,7 +3221,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				fmt.Fprintf(os.Stdout, "\a")
 			} else if len(matches) == 1 {
 				// Lex the match and check if we have to quote around it
-				insertString = state.buildCompletionInsert(matches[0].Match, lastToken.Type)
+				insertString = state.buildCompletionInsert(matches[0].Match, lastToken.Type, matches[0].TabMatchType == TABMATCHFILE)
 
 				// Replace the prefex
 				state.replaceText(insertString, replaceStart, replaceEnd)
@@ -3180,19 +3234,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 					// Print bell
 					fmt.Fprintf(os.Stdout, "\a")
 				} else {
-					switch lastToken.Type {
-					case UNFINISHEDSINGLEQUOTESTRING:
-						longestCommonPrefix = "'" + longestCommonPrefix
-					case UNFINISHEDPATH:
-						longestCommonPrefix = "`" + longestCommonPrefix
-					default:
-						state.l.resetInput(longestCommonPrefix)
-						tokens, err := state.l.Tokenize()
-						if len(tokens) > 2 && err == nil {
-							// We have to put start quote around it, but don't put end quote, wait for more input
-							longestCommonPrefix = "'" + longestCommonPrefix
-						}
-					}
+					longestCommonPrefix = state.buildSharedCompletionInsert(longestCommonPrefix, lastToken.Type, allFileMatches)
 
 					// Replace the prefix
 					state.replaceText(longestCommonPrefix, replaceStart, replaceEnd)
@@ -3204,6 +3246,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				state.tabCycleStart = replaceStart
 				state.tabCycleEnd = state.index
 				state.tabCycleTokenType = lastToken.Type
+				state.tabCycleAllFiles = allFileMatches
 				state.tabCycleMatches = append(state.tabCycleMatches[:0], tabMatchTexts...)
 				state.setTabCompletions(tabMatchTexts)
 			}
@@ -3214,6 +3257,28 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			state.resetHistorySearch()
 		} else if t.Char == 12 { // Ctrl-L
 			state.ClearScreen()
+		} else if t.Char == 15 { // Ctrl-O - file manager
+			newDir := RunFileManagerInteractive(state.stdInFd, &state.oldState, "")
+			if newDir != "" {
+				cwd, cwdErr := os.Getwd()
+				if err := os.Chdir(newDir); err == nil && cwdErr == nil {
+					os.Setenv("OLDPWD", cwd)
+					os.Setenv("PWD", newDir)
+				}
+			}
+			// Refresh terminal size
+			cols, rows, sizeErr := term.GetSize(int(os.Stdout.Fd()))
+			if sizeErr == nil {
+				state.numRows = rows
+				state.numCols = cols
+			}
+			fmt.Fprintf(os.Stdout, "\033[H\033[2J")
+			state.currentCommand = state.currentCommand[:0]
+			state.index = 0
+			err = state.printPrompt()
+			if err != nil {
+				return false, err
+			}
 		} else if t.Char == 13 { // Enter
 			// If in tab completion mode, accept the completion without executing
 			if state.tabCycleActive {
@@ -3329,6 +3394,9 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			fmt.Fprintf(os.Stdout, "\r\n")
 			fmt.Fprintf(state.f, "Exiting mshell using ALT-o...\n")
 			return true, nil
+		} else if t == KEY_ALT_D {
+			dateStr := time.Now().Format("2006-01-02")
+			state.PushChars([]rune(dateStr))
 		} else if t == KEY_ALT_DOT {
 			state.cycleLastArgument()
 		} else if t == KEY_SHIFT_TAB {

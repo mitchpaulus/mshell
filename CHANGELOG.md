@@ -10,22 +10,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Functions
+  - `cdh`
+  - `cdp`
+  - `fromUnixTimeMicro`
+  - `fromUnixTimeMilli`
+  - `fromUnixTimeNano`
+  - `prompt`
+  - `toUnixTimeMicro`
+  - `toUnixTimeMilli`
+  - `toUnixTimeNano`
+  - `toSvgPathStr`
+  - `scaleLinear`
+
+### Fixed
+
+- CLI interactive command execution now switches to a fresh output line before parsing/evaluation, so lexer/parser errors do not render on the prompt line.
+- Lexer `ERROR` tokens now stop parsing immediately (including simple CLI parsing), preventing fallthrough to evaluation errors like unimplemented `ERROR` token handling.
+
+## 0.12.0 - 2026-02-19
+
+### Changed
+
+- File manager `l` on a file now opens it: text files open in `$EDITOR`, binary/unreadable files open with the platform default (`Start-Process` on Windows, `xdg-open` on Linux, `open` on macOS)
+
+## 0.11.0 - 2026-02-18
+
+### Added
+
+- `completionDefs` builtin: pushes a dictionary of completion definitions, keyed by command name with quotation values
+- `mshFileManager` builtin: pops a starting directory from the stack, opens the file manager, and cds to the final directory on exit
+- `msh fm` now accepts an optional starting directory argument
+- Built-in file manager via `msh fm` subcommand and Ctrl-O in interactive mode
+  - Dual-pane layout with directory listing and file/directory preview
+  - Vim-style navigation (`j`/`k`, `h`/`l`, `gg`/`G`, Ctrl-u/Ctrl-d)
+  - Search with `/`, case-insensitive match highlighting, `n`/`N` to cycle matches
+  - Rename with `r`, cursor positioned before extension, Ctrl-W word delete
+  - Bookmarks with `m` + char to set, `;` + char to jump
+  - Editor integration with `e` (uses `$EDITOR`)
+  - Directory change on quit (Ctrl-O returns to shell in new directory)
+  - Version-sorted entries, directories first and colored blue
+  - Binary file detection for preview
+  - Preview caching for fast scrolling
+  - Cut/copy/paste buffer (`d` cut, `yy` copy, `p` paste, `c` clear) shared across instances
+  - Delete to trash (`x`) with confirmation, using platform-native trash
+  - `msh fm` prints final directory to stdout for `cd "$(msh fm)"` usage
+
+## 0.10.0 - 2026-02-13
+
+### Added
+
+- Tail-call optimization (TCO) for recursive definitions in tail position.
+- Functions
   - `sin`
   - `cos`
   - `tan`
+  - `arctan`
   - `ln`
   - `ln2`
   - `ln10`
+  - `pow`
   - `random`
   - `randomFixed`
   - `randomNorm`
   - `sqrt`
   - `randomTri`
   - `tempFileExt`
+- CLI Alt-D inserts the current date as `YYYY-MM-DD`
 
 ### Fixed
 
+- Windows CMD.EXE /C quoting now handles quoted commands with extra arguments (e.g., npm.cmd paths with spaces).
+
 ### Changed
+
+- Builds/releases now are pure Go, built with `CGO_ENABLED=0`.
 
 ## 0.9.0 - 2026-01-27
 

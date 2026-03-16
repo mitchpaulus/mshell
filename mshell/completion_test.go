@@ -406,6 +406,56 @@ func TestDefinitionCompletion(t *testing.T) {
 	}
 }
 
+func TestNonFileCompletionSuppressedInBinaryMode(t *testing.T) {
+	deps := CompletionDeps{
+		FS: FakeCompletionFS{
+			Cwd: "/home/user",
+			Entries: map[string][]FakeDirEntry{
+				".": {
+					{EntryName: "docs", EntryIsDir: true},
+					{EntryName: "data.txt", EntryIsDir: false},
+				},
+			},
+		},
+		Env:      FakeCompletionEnv{},
+		Binaries: FakePathBinManager{},
+		Variables: map[string]struct{}{
+			"gitvar": {},
+		},
+		BuiltIns:    map[string]struct{}{"git-help": {}},
+		Definitions: []string{"git-add", "git-commit", "git-push"},
+	}
+
+	input := CompletionInput{
+		Prefix:        "d",
+		LastTokenType: LITERAL,
+		NumTokens:     3,
+		InBinaryMode:  true,
+	}
+
+	matches := GenerateCompletions(input, deps)
+	defMatches := filterMatchesByType(matches, TABMATCHDEF)
+	builtinMatches := filterMatchesByType(matches, TABMATCHBUILTIN)
+	varMatches := filterMatchesByType(matches, TABMATCHVAR)
+	fileMatches := filterMatchesByType(matches, TABMATCHFILE)
+
+	if len(defMatches) != 0 {
+		t.Errorf("expected 0 definition matches in binary mode, got %d: %v", len(defMatches), defMatches)
+	}
+
+	if len(builtinMatches) != 0 {
+		t.Errorf("expected 0 builtin matches in binary mode, got %v", builtinMatches)
+	}
+
+	if len(varMatches) != 0 {
+		t.Errorf("expected 0 variable bang matches in binary mode, got %v", varMatches)
+	}
+
+	if len(fileMatches) != 2 || fileMatches[0] != "data.txt" || fileMatches[1] != "docs/" {
+		t.Errorf("expected file matches to still work in binary mode, got %v", fileMatches)
+	}
+}
+
 func TestFileCompletionEmptyPrefix(t *testing.T) {
 	deps := CompletionDeps{
 		FS: FakeCompletionFS{

@@ -100,6 +100,7 @@ type CompletionInput struct {
 	LastTokenType TokenType // Type of the last token (affects completion behavior)
 	PrevTokenType TokenType // Type of the token before the current completion target
 	NumTokens     int       // Number of tokens in the input (includes EOF)
+	InBinaryMode  bool      // True when current command line is in binary/pipeline mode
 }
 
 // CompletionDeps bundles all dependencies needed for generating completions.
@@ -161,7 +162,7 @@ func GenerateCompletions(input CompletionInput, deps CompletionDeps) []TabMatch 
 				matches = append(matches, TabMatch{TABMATCHVAR, "@" + v})
 			}
 		}
-	} else if input.LastTokenType == LITERAL {
+	} else if input.LastTokenType == LITERAL && !input.InBinaryMode {
 		// Completion on variables with ! suffix
 		for v := range deps.Variables {
 			if strings.HasPrefix(v, prefix) {
@@ -171,16 +172,20 @@ func GenerateCompletions(input CompletionInput, deps CompletionDeps) []TabMatch 
 	}
 
 	// 5. Built-in command completion
-	for name := range deps.BuiltIns {
-		if strings.HasPrefix(name, prefix) {
-			matches = append(matches, TabMatch{TABMATCHBUILTIN, name})
+	if !input.InBinaryMode {
+		for name := range deps.BuiltIns {
+			if strings.HasPrefix(name, prefix) {
+				matches = append(matches, TabMatch{TABMATCHBUILTIN, name})
+			}
 		}
 	}
 
 	// 6. Definition completion
-	for _, defName := range deps.Definitions {
-		if strings.HasPrefix(defName, prefix) {
-			matches = append(matches, TabMatch{TABMATCHDEF, defName})
+	if !input.InBinaryMode {
+		for _, defName := range deps.Definitions {
+			if strings.HasPrefix(defName, prefix) {
+				matches = append(matches, TabMatch{TABMATCHDEF, defName})
+			}
 		}
 	}
 

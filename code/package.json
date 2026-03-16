@@ -8,9 +8,63 @@
     "categories": ["Programming Languages"],
     "main": "./out/extension.js",
     "activationEvents": [
-        "onLanguage:mshell"
+        "onLanguage:mshell",
+        "onCommand:mshell.runCurrentFile"
     ],
     "contributes": {
+        "commands": [
+            {
+                "command": "mshell.runCurrentFile",
+                "title": "mshell: Run Current File"
+            }
+        ],
+        "menus": {
+            "editor/title": [
+                {
+                    "command": "mshell.runCurrentFile",
+                    "group": "navigation",
+                    "when": "resourceLangId == mshell"
+                }
+            ]
+        },
+        "debuggers": [
+            {
+                "type": "mshell",
+                "label": "mshell",
+                "languages": ["mshell"],
+                "configurationAttributes": {
+                    "launch": {
+                        "required": ["program"],
+                        "properties": {
+                            "program": {
+                                "type": "string",
+                                "description": "Absolute path to the mshell script."
+                            }
+                        }
+                    }
+                },
+                "initialConfigurations": [
+                    {
+                        "type": "mshell",
+                        "request": "launch",
+                        "name": "Run mshell file",
+                        "program": "${file}"
+                    }
+                ],
+                "configurationSnippets": [
+                    {
+                        "label": "mshell: Run current file",
+                        "description": "Run the active mshell file.",
+                        "body": {
+                            "type": "mshell",
+                            "request": "launch",
+                            "name": "Run mshell file",
+                            "program": "${file}"
+                        }
+                    }
+                ]
+            }
+        ],
         "languages": [
             {
                 "id": "mshell",
@@ -40,6 +94,11 @@
                     "type": "string",
                     "default": "msh",
                     "description": "Path to the msh executable for the language server"
+                },
+                "mshell.mshPath": {
+                    "type": "string",
+                    "default": "msh",
+                    "description": "Path to the msh executable for running scripts"
                 }
             }
         }
