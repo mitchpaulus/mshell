@@ -252,6 +252,78 @@ func TestBinaryCompletion(t *testing.T) {
 	}
 }
 
+func TestBinaryCompletionAfterPipe(t *testing.T) {
+	deps := CompletionDeps{
+		FS:  FakeCompletionFS{Cwd: "/home/user", Entries: map[string][]FakeDirEntry{}},
+		Env: FakeCompletionEnv{},
+		Binaries: FakePathBinManager{
+			Binaries: map[string]string{
+				"git":  "/usr/bin/git",
+				"grep": "/usr/bin/grep",
+				"go":   "/usr/bin/go",
+				"ls":   "/usr/bin/ls",
+			},
+		},
+		Variables:   map[string]struct{}{},
+		BuiltIns:    map[string]struct{}{},
+		Definitions: []string{},
+	}
+
+	input := CompletionInput{
+		Prefix:        "g",
+		LastTokenType: LITERAL,
+		PrevTokenType: PIPE,
+		NumTokens:     4,
+	}
+
+	matches := GenerateCompletions(input, deps)
+	binMatches := filterMatchesByType(matches, TABMATCHCMD)
+
+	if len(binMatches) != 3 {
+		t.Errorf("expected 3 binary matches, got %d: %v", len(binMatches), binMatches)
+	}
+
+	if binMatches[0] != "git" || binMatches[1] != "go" || binMatches[2] != "grep" {
+		t.Errorf("expected git, go, grep, got %v", binMatches)
+	}
+}
+
+func TestBinaryCompletionAfterListStart(t *testing.T) {
+	deps := CompletionDeps{
+		FS:  FakeCompletionFS{Cwd: "/home/user", Entries: map[string][]FakeDirEntry{}},
+		Env: FakeCompletionEnv{},
+		Binaries: FakePathBinManager{
+			Binaries: map[string]string{
+				"git":  "/usr/bin/git",
+				"grep": "/usr/bin/grep",
+				"go":   "/usr/bin/go",
+				"ls":   "/usr/bin/ls",
+			},
+		},
+		Variables:   map[string]struct{}{},
+		BuiltIns:    map[string]struct{}{},
+		Definitions: []string{},
+	}
+
+	input := CompletionInput{
+		Prefix:        "g",
+		LastTokenType: LITERAL,
+		PrevTokenType: LEFT_SQUARE_BRACKET,
+		NumTokens:     3,
+	}
+
+	matches := GenerateCompletions(input, deps)
+	binMatches := filterMatchesByType(matches, TABMATCHCMD)
+
+	if len(binMatches) != 3 {
+		t.Errorf("expected 3 binary matches, got %d: %v", len(binMatches), binMatches)
+	}
+
+	if binMatches[0] != "git" || binMatches[1] != "go" || binMatches[2] != "grep" {
+		t.Errorf("expected git, go, grep, got %v", binMatches)
+	}
+}
+
 func TestBinaryCompletionNotFirstToken(t *testing.T) {
 	deps := CompletionDeps{
 		FS:  FakeCompletionFS{Cwd: "/home/user", Entries: map[string][]FakeDirEntry{}},
@@ -331,6 +403,56 @@ func TestDefinitionCompletion(t *testing.T) {
 
 	if len(defMatches) != 3 {
 		t.Errorf("expected 3 definition matches, got %d: %v", len(defMatches), defMatches)
+	}
+}
+
+func TestNonFileCompletionSuppressedInBinaryMode(t *testing.T) {
+	deps := CompletionDeps{
+		FS: FakeCompletionFS{
+			Cwd: "/home/user",
+			Entries: map[string][]FakeDirEntry{
+				".": {
+					{EntryName: "docs", EntryIsDir: true},
+					{EntryName: "data.txt", EntryIsDir: false},
+				},
+			},
+		},
+		Env:      FakeCompletionEnv{},
+		Binaries: FakePathBinManager{},
+		Variables: map[string]struct{}{
+			"gitvar": {},
+		},
+		BuiltIns:    map[string]struct{}{"git-help": {}},
+		Definitions: []string{"git-add", "git-commit", "git-push"},
+	}
+
+	input := CompletionInput{
+		Prefix:        "d",
+		LastTokenType: LITERAL,
+		NumTokens:     3,
+		InBinaryMode:  true,
+	}
+
+	matches := GenerateCompletions(input, deps)
+	defMatches := filterMatchesByType(matches, TABMATCHDEF)
+	builtinMatches := filterMatchesByType(matches, TABMATCHBUILTIN)
+	varMatches := filterMatchesByType(matches, TABMATCHVAR)
+	fileMatches := filterMatchesByType(matches, TABMATCHFILE)
+
+	if len(defMatches) != 0 {
+		t.Errorf("expected 0 definition matches in binary mode, got %d: %v", len(defMatches), defMatches)
+	}
+
+	if len(builtinMatches) != 0 {
+		t.Errorf("expected 0 builtin matches in binary mode, got %v", builtinMatches)
+	}
+
+	if len(varMatches) != 0 {
+		t.Errorf("expected 0 variable bang matches in binary mode, got %v", varMatches)
+	}
+
+	if len(fileMatches) != 2 || fileMatches[0] != "data.txt" || fileMatches[1] != "docs/" {
+		t.Errorf("expected file matches to still work in binary mode, got %v", fileMatches)
 	}
 }
 

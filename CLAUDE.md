@@ -56,6 +56,7 @@ In general, completions should be in this order:
 ## Testing instructions
 
 All test cases are in `tests`.
+You must have rebuilt a new binary in `mshell` prior to testing.
 
 - cd to `tests/` and run `./test.sh`.
 - cd to `mshell/` and run `go test`.
@@ -73,7 +74,18 @@ Files in `doc/build` are build artifacts. Do not edit these.
 There is a main base template at `doc/base.html`, which has most of the general purpose CSS and styles for code.
 You should rebuild the docs when you make edits.
 
+For markdown files, prefer to have sentences on their own line.
+Only wrap really long lines, and try to wrap on a comma or other punctuation.
+
 ## VS Code
 
 Code for the VS Code extension is at `code/`.
 If we update syntax, ensure to update appropriately.
+
+## Releases
+
+1. Move items from unreleased to new version number in CHANGELOG.
+2. Update `mshellVersion` variable in `Main.go`.
+3. Update 'Getting Started' docs with latest version for GitHub action.
+   Remember, the action.yaml is part of this repo, so the versions stay in sync.
+4. I will do the final git tag and GitHub release step.
