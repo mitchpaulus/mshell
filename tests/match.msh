@@ -1,0 +1,131 @@
+# Value matching - string
+"hello" match
+    "hello" : "greeting" wl,
+    "bye"   : "farewell" wl,
+    _       : "unknown" wl,
+end
+
+# Value matching - integer
+42 match
+    1  : "one" wl,
+    42 : "forty-two" wl,
+    _  : "other" wl,
+end
+
+# Value matching - boolean
+true match
+    true  : "is true" wl,
+    false : "is false" wl,
+end
+
+# Type matching - int
+42 match
+    int : "integer" wl,
+    str : "string" wl,
+    _   : "other" wl,
+end
+
+# Type matching - str
+"hello" match
+    int : "integer" wl,
+    str : "string" wl,
+    _   : "other" wl,
+end
+
+# Type matching - float
+3.14 match
+    int   : "integer" wl,
+    float : "float" wl,
+    _     : "other" wl,
+end
+
+# Type matching - bool
+false match
+    bool : "boolean" wl,
+    _    : "other" wl,
+end
+
+# Type matching - list
+[1 2 3] match
+    list : "list" wl,
+    _    : "other" wl,
+end
+
+# Wildcard matching
+"anything" match
+    _ : "wildcard" wl,
+end
+
+# Trailing comma is optional (last arm)
+99 match
+    99 : "ninety-nine" wl
+end
+
+# Match with body that pushes to stack
+10 match
+    10 : "ten",
+    _  : "not ten",
+end
+wl
+
+# Single quote string matching
+'world' match
+    'hello' : "hi" wl,
+    'world' : "globe" wl,
+    _       : "?" wl,
+end
+
+# Maybe destructuring - just
+"value" just match
+    just v : @v wl,
+    none   : "none" wl,
+end
+
+# Maybe destructuring - none
+none match
+    just v : @v wl,
+    none   : "got none" wl,
+end
+
+# Maybe destructuring - just with wildcard
+"ignored" just match
+    just _ : "just something" wl,
+    none   : "none" wl,
+end
+
+# List destructuring - exact
+[1 2 3] match
+    [a b c] : @b str wl,
+    _       : "other" wl,
+end
+
+# List destructuring - empty
+[] match
+    []  : "empty list" wl,
+    _   : "not empty" wl,
+end
+
+# List destructuring - spread
+[1 2 3 4 5] match
+    [head ...tail] : @head str wl,
+    _              : "other" wl,
+end
+
+# List destructuring - wildcard in list
+[10 20 30] match
+    [_ middle _] : @middle str wl,
+    _            : "other" wl,
+end
+
+# Dict destructuring
+{ 'name': "Alice", 'age': 30 } match
+    { 'name': n, 'age': a } : [@n " is " @a str] "" join wl,
+    _                       : "missing fields" wl,
+end
+
+# Dict destructuring - missing key no match
+{ 'name': "Bob" } match
+    { 'name': n, 'age': a } : @n wl,
+    { 'name': n }           : [@n " (no age)"] "" join wl,
+    _                       : "other" wl,
+end

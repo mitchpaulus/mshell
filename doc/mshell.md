@@ -468,6 +468,91 @@ def sumTo (int -- int)
 end
 ```
 
+## Pattern Matching
+
+The `match ... end` block provides multi-way dispatch.
+It pops the top-of-stack value (the "subject") and checks each arm top-to-bottom.
+The first matching arm's body is executed.
+If no arm matches, it is a runtime error.
+
+Each arm has the form: `pattern : body ,`
+The trailing comma on the last arm is optional.
+
+### Wildcard
+
+`_` matches any value (catch-all).
+
+### Value Matching
+
+Literal values (integers, floats, strings, booleans, paths) match
+if the subject equals the pattern value.
+
+```mshell
+"hello" match
+    "hello" : "greeting" wl,
+    "bye"   : "farewell" wl,
+    _       : "unknown" wl,
+end
+```
+
+### Type Matching
+
+Type keywords match based on the subject's type:
+`int`, `float`, `str`, `bool`, `list`, `dict`, `path`, `date`, `quotation`, `maybe`, `binary`.
+
+```mshell
+42 match
+    int : "integer" wl,
+    str : "string" wl,
+    _   : "other" wl,
+end
+```
+
+### Maybe Destructuring
+
+`just v` matches a Maybe that is Just, binding the inner value to `v`.
+`none` matches a Maybe that is None.
+Use `just _` to match Just without binding.
+
+```mshell
+myDict "key" get match
+    just v : @v wl,
+    none   : "not found" wl,
+end
+```
+
+### List Destructuring
+
+A list pattern `[a b c]` matches a list of exactly that length,
+binding elements to the given names.
+Use `_` to discard a position.
+Use `...rest` to capture remaining elements.
+
+```mshell
+myList match
+    [head ...tail] : @head wl,
+    []             : "empty" wl,
+    _              : "not a list" wl,
+end
+```
+
+### Dict Destructuring
+
+A dict pattern `{ 'key': v }` matches a dict that contains the given keys,
+binding their values to the given names.
+
+```mshell
+person match
+    { 'name': n, 'age': a } : @n wl,
+    _                       : "missing fields" wl,
+end
+```
+
+Destructuring bindings are scoped to the match arm body.
+
+Note that the subject is consumed by `match`.
+The body runs on the original stack minus the subject.
+
 ## Built-ins
 
 - `.s`: Print stack at current location (--)

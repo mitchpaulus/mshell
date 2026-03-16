@@ -1,0 +1,4 @@
+# Should fail: no matching arm and no wildcard
+"hello" match
+    "bye" : "farewell" wl,
+end
