@@ -118,15 +118,15 @@ wl
     _       : drop "?" wl,
 end
 
-# Maybe destructuring - just (subject stays on stack, drop it)
+# Maybe destructuring - just (subject popped when bindings exist)
 "value" just match
-    just v : drop @v wl,
+    just v : @v wl,
     none   : drop "none" wl,
 end
 
 # Maybe destructuring - none
 none match
-    just v : drop @v wl,
+    just v : @v wl,
     none   : drop "got none" wl,
 end
 
@@ -136,9 +136,9 @@ end
     none   : drop "none" wl,
 end
 
-# List destructuring - exact (subject stays on stack, drop it)
+# List destructuring - exact (subject popped when bindings exist)
 [1 2 3] match
-    [a b c] : drop @b str wl,
+    [a b c] : @b str wl,
     _       : drop "other" wl,
 end
 
@@ -150,31 +150,31 @@ end
 
 # List destructuring - spread
 [1 2 3 4 5] match
-    [head ...tail] : drop @head str wl,
+    [head ...tail] : @head str wl,
     _              : drop "other" wl,
 end
 
 # List destructuring - wildcard in list
 [10 20 30] match
-    [_ middle _] : drop @middle str wl,
+    [_ middle _] : @middle str wl,
     _            : drop "other" wl,
 end
 
-# Dict destructuring (subject stays on stack, drop it)
+# Dict destructuring (subject popped when bindings exist)
 { 'name': "Alice", 'age': 30 } match
-    { 'name': n, 'age': a } : drop [@n " is " @a str] "" join wl,
+    { 'name': n, 'age': a } : [@n " is " @a str] "" join wl,
     _                       : drop "missing fields" wl,
 end
 
 # Dict destructuring - missing key no match
 { 'name': "Bob" } match
-    { 'name': n, 'age': a } : drop @n wl,
-    { 'name': n }           : drop [@n " (no age)"] "" join wl,
+    { 'name': n, 'age': a } : @n wl,
+    { 'name': n }           : [@n " (no age)"] "" join wl,
     _                       : drop "other" wl,
 end
 
 # Dict destructuring - extra keys is fine for match
 { 'name': "Charlie", 'age': 25, 'city': "NY" } match
-    { 'name': n, 'age': a } : drop [@n " is " @a str] "" join wl,
+    { 'name': n, 'age': a } : [@n " is " @a str] "" join wl,
     _                       : drop "missing fields" wl,
 end

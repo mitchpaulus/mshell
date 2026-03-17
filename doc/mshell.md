@@ -471,12 +471,15 @@ end
 ## Pattern Matching
 
 The `match ... end` block provides multi-way dispatch.
-It pops the top-of-stack value (the "subject") and checks each arm top-to-bottom.
-The first matching arm's body is executed.
+Arms are checked top-to-bottom and the first matching arm's body is executed.
 If no arm matches, it is a runtime error.
 
 Each arm has the form: `pattern : body ,`
 The trailing comma on the last arm is optional.
+
+For value, type, and wildcard patterns, the subject remains on the stack.
+For destructuring patterns that produce bindings (`just v`, `[a b]`, `{ 'k': v }`),
+the subject is popped from the stack and the bound variables are available in the body.
 
 ### Wildcard
 
@@ -516,7 +519,7 @@ Use `just _` to match Just without binding.
 
 ```mshell
 myDict "key" get match
-    just v : drop @v wl,
+    just v : @v wl,
     none   : drop "not found" wl,
 end
 ```
@@ -530,7 +533,7 @@ Use `...rest` to capture remaining elements.
 
 ```mshell
 myList match
-    [head ...tail] : drop @head wl,
+    [head ...tail] : @head wl,
     []             : drop "empty" wl,
     _              : drop "not a list" wl,
 end
@@ -543,16 +546,13 @@ binding their values to the given names.
 
 ```mshell
 person match
-    { 'name': n, 'age': a } : drop @n wl,
+    { 'name': n, 'age': a } : @n wl,
     _                       : drop "missing fields" wl,
 end
 ```
 
 Destructuring bindings are added to the outer variable scope,
 the same as `if` blocks.
-
-The subject remains on top of the stack when the arm body runs.
-Use `drop` if you don't need it.
 
 ```mshell
 1 outerVariable!
