@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `match ... end` pattern matching syntax with value matching, type matching, `_` wildcard, maybe destructuring (`just v`/`none`), list destructuring (`[a b ...rest]`), and dict destructuring (`{ 'key': v }`)
 - Functions
   - `cdh`
   - `cdp`

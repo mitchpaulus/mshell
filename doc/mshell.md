@@ -468,6 +468,101 @@ def sumTo (int -- int)
 end
 ```
 
+## Pattern Matching
+
+The `match ... end` block provides multi-way dispatch.
+Arms are checked top-to-bottom and the first matching arm's body is executed.
+If no arm matches, it is a runtime error.
+
+Each arm has the form: `pattern : body ,`
+The trailing comma on the last arm is optional.
+
+For value, type, and wildcard patterns, the subject remains on the stack.
+For destructuring patterns that produce bindings (`just v`, `[a b]`, `{ 'k': v }`),
+the subject is popped from the stack and the bound variables are available in the body.
+
+### Wildcard
+
+`_` matches any value (catch-all).
+
+### Value Matching
+
+Literal values (integers, floats, strings, booleans, paths) match
+if the subject equals the pattern value.
+
+```mshell
+"hello" match
+    "hello" : drop "greeting" wl,
+    "bye"   : drop "farewell" wl,
+    _       : drop "unknown" wl,
+end
+```
+
+### Type Matching
+
+Type keywords match based on the subject's type:
+`int`, `float`, `str`, `bool`, `list`, `dict`, `path`, `date`, `quotation`, `maybe`, `binary`.
+
+```mshell
+42 match
+    int : drop "integer" wl,
+    str : drop "string" wl,
+    _   : drop "other" wl,
+end
+```
+
+### Maybe Destructuring
+
+`just v` matches a Maybe that is Just, binding the inner value to `v`.
+`none` matches a Maybe that is None.
+Use `just _` to match Just without binding.
+
+```mshell
+myDict "key" get match
+    just v : @v wl,
+    none   : drop "not found" wl,
+end
+```
+
+### List Destructuring
+
+A list pattern `[a b c]` matches a list of exactly that length,
+binding elements to the given names.
+Use `_` to discard a position.
+Use `...rest` to capture remaining elements.
+
+```mshell
+myList match
+    [head ...tail] : @head wl,
+    []             : drop "empty" wl,
+    _              : drop "not a list" wl,
+end
+```
+
+### Dict Destructuring
+
+A dict pattern `{ 'key': v }` matches a dict that contains the given keys,
+binding their values to the given names.
+
+```mshell
+person match
+    { 'name': n, 'age': a } : @n wl,
+    _                       : drop "missing fields" wl,
+end
+```
+
+Destructuring bindings are added to the outer variable scope,
+the same as `if` blocks.
+
+```mshell
+1 outerVariable!
+10 match
+    int : @outerVariable + str wl,
+    _   : drop "Not found" wl,
+end
+# Prints "11" — the subject (10) + outerVariable (1)
+```
+
 ## Built-ins
 
 - `.s`: Print stack at current location (--)
