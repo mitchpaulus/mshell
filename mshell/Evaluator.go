@@ -982,7 +982,7 @@ func (state *EvalState) processMatchBlock(matchBlock *MShellParseMatchBlock, fra
 	definitions := frame.Definitions
 	startToken := matchBlock.GetStartToken()
 
-	subject, err := stack.Pop()
+	subject, err := stack.Peek()
 	if err != nil {
 		return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot evaluate 'match' on an empty stack.\n", startToken.Line, startToken.Column))
 	}
@@ -993,33 +993,21 @@ func (state *EvalState) processMatchBlock(matchBlock *MShellParseMatchBlock, fra
 			return result
 		}
 		if matched {
-			callStackItem := CallStackItem{MShellParseItem: matchBlock, Name: "match", CallStackType: CALLSTACKMATCH}
-			state.CallStack.Push(callStackItem)
-
-			armContext := context
-			shouldClose := false
-			if len(bindings) > 0 {
-				armContext = *context.CloneLessVariables()
-				// Copy parent variables
-				for k, v := range context.Variables {
-					armContext.Variables[k] = v
-				}
-				// Add bindings
-				for k, v := range bindings {
-					armContext.Variables[k] = v
-				}
-				shouldClose = false
+			// Add destructuring bindings directly to the outer context
+			for k, v := range bindings {
+				context.Variables[k] = v
 			}
 
+			callStackItem := CallStackItem{MShellParseItem: matchBlock, Name: "match", CallStackType: CALLSTACKMATCH}
+			state.CallStack.Push(callStackItem)
 			newFrame := EvaluationFrame{
-				Objects:            arm.Body,
-				Index:              0,
-				Context:            armContext,
-				Stack:              stack,
-				Definitions:        definitions,
-				CallStackItem:      callStackItem,
-				FrameType:          FRAME_NORMAL,
-				ShouldCloseContext: shouldClose,
+				Objects:       arm.Body,
+				Index:         0,
+				Context:       context,
+				Stack:         stack,
+				Definitions:   definitions,
+				CallStackItem: callStackItem,
+				FrameType:     FRAME_NORMAL,
 			}
 			*frames = append(*frames, newFrame)
 			return SimpleSuccess()
@@ -1837,7 +1825,7 @@ MainLoop:
 			}
 		case *MShellParseMatchBlock:
 			startToken := t.GetStartToken()
-			subject, err := stack.Pop()
+			subject, err := stack.Peek()
 			if err != nil {
 				return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot evaluate 'match' on an empty stack.\n", startToken.Line, startToken.Column))
 			}
@@ -1849,18 +1837,12 @@ MainLoop:
 					return result
 				}
 				if armMatched {
-					armContext := context
-					if len(bindings) > 0 {
-						armContext = *context.CloneLessVariables()
-						for k, v := range context.Variables {
-							armContext.Variables[k] = v
-						}
-						for k, v := range bindings {
-							armContext.Variables[k] = v
-						}
+					// Add destructuring bindings directly to the outer context
+					for k, v := range bindings {
+						context.Variables[k] = v
 					}
 					callStackItem := CallStackItem{MShellParseItem: t, Name: "match", CallStackType: CALLSTACKMATCH}
-					result := state.evaluateItems(arm.Body, stack, armContext, definitions, callStackItem)
+					result := state.evaluateItems(arm.Body, stack, context, definitions, callStackItem)
 					if result.ShouldPassResultUpStack() {
 						return result
 					}

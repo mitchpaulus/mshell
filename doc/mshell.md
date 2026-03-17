@@ -489,9 +489,9 @@ if the subject equals the pattern value.
 
 ```mshell
 "hello" match
-    "hello" : "greeting" wl,
-    "bye"   : "farewell" wl,
-    _       : "unknown" wl,
+    "hello" : drop "greeting" wl,
+    "bye"   : drop "farewell" wl,
+    _       : drop "unknown" wl,
 end
 ```
 
@@ -502,9 +502,9 @@ Type keywords match based on the subject's type:
 
 ```mshell
 42 match
-    int : "integer" wl,
-    str : "string" wl,
-    _   : "other" wl,
+    int : drop "integer" wl,
+    str : drop "string" wl,
+    _   : drop "other" wl,
 end
 ```
 
@@ -516,8 +516,8 @@ Use `just _` to match Just without binding.
 
 ```mshell
 myDict "key" get match
-    just v : @v wl,
-    none   : "not found" wl,
+    just v : drop @v wl,
+    none   : drop "not found" wl,
 end
 ```
 
@@ -530,9 +530,9 @@ Use `...rest` to capture remaining elements.
 
 ```mshell
 myList match
-    [head ...tail] : @head wl,
-    []             : "empty" wl,
-    _              : "not a list" wl,
+    [head ...tail] : drop @head wl,
+    []             : drop "empty" wl,
+    _              : drop "not a list" wl,
 end
 ```
 
@@ -543,15 +543,25 @@ binding their values to the given names.
 
 ```mshell
 person match
-    { 'name': n, 'age': a } : @n wl,
-    _                       : "missing fields" wl,
+    { 'name': n, 'age': a } : drop @n wl,
+    _                       : drop "missing fields" wl,
 end
 ```
 
-Destructuring bindings are scoped to the match arm body.
+Destructuring bindings are added to the outer variable scope,
+the same as `if` blocks.
 
-Note that the subject is consumed by `match`.
-The body runs on the original stack minus the subject.
+The subject remains on top of the stack when the arm body runs.
+Use `drop` if you don't need it.
+
+```mshell
+1 outerVariable!
+10 match
+    int : @outerVariable + str wl,
+    _   : drop "Not found" wl,
+end
+# Prints "11" — the subject (10) + outerVariable (1)
+```
 
 ## Built-ins
 
