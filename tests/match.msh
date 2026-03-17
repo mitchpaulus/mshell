@@ -51,6 +51,42 @@ end
     _    : "other" wl,
 end
 
+# Type matching - path
+`/tmp/test` match
+    path : "path" wl,
+    _    : "other" wl,
+end
+
+# Type matching - date
+2025-01-01 match
+    date : "date" wl,
+    _    : "other" wl,
+end
+
+# Type matching - quotation
+(1 2 +) match
+    quotation : "quotation" wl,
+    _         : "other" wl,
+end
+
+# Type matching - maybe
+"hello" just match
+    maybe : "maybe" wl,
+    _     : "other" wl,
+end
+
+# Type matching - binary
+"hello" utf8Bytes match
+    binary : "binary" wl,
+    _      : "other" wl,
+end
+
+# Type matching - dict
+{ "a": 1 } match
+    dict : "dict" wl,
+    _    : "other" wl,
+end
+
 # Wildcard matching
 "anything" match
     _ : "wildcard" wl,

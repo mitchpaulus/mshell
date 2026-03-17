@@ -6,6 +6,12 @@ string
 float
 boolean
 list
+path
+date
+quotation
+maybe
+binary
+dict
 wildcard
 ninety-nine
 ten
