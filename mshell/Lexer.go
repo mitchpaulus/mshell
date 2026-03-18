@@ -97,6 +97,7 @@ const (
 	STDOUTANDSTDERRAPPEND    // &>>
 	INPLACEREDIRECT          // <>
 	PREFIXQUOTE              // .functionName
+	MATCH
 	VER
 )
 
@@ -264,6 +265,8 @@ func (t TokenType) String() string {
 		return "INPLACEREDIRECT"
 	case PREFIXQUOTE:
 		return "PREFIXQUOTE"
+	case MATCH:
+		return "MATCH"
 	case VER:
 		return "VER"
 	default:
@@ -527,6 +530,8 @@ func (l *Lexer) literalOrKeywordType() TokenType {
 		}
 	case 'l':
 		return l.checkKeyword(1, "oop", LOOP)
+	case 'm':
+		return l.checkKeyword(1, "atch", MATCH)
 	case 'n':
 		return l.checkKeyword(1, "ot", NOT)
 	case 'o':

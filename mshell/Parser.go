@@ -373,6 +373,63 @@ func (ifBlock *MShellParseIfBlock) DebugString() string {
 	return builder.String()
 }
 
+// MShellParseMatchArm represents a single arm of a match block
+type MShellParseMatchArm struct {
+	Pattern []MShellParseItem
+	Body    []MShellParseItem
+}
+
+// MShellParseMatchBlock represents a match...end block
+type MShellParseMatchBlock struct {
+	Arms       []MShellParseMatchArm
+	StartToken Token
+	EndToken   Token
+}
+
+func (m *MShellParseMatchBlock) GetStartToken() Token {
+	return m.StartToken
+}
+
+func (m *MShellParseMatchBlock) GetEndToken() Token {
+	return m.EndToken
+}
+
+func (m *MShellParseMatchBlock) ToJson() string {
+	var sb strings.Builder
+	sb.WriteString("{\"match\": [")
+	for i, arm := range m.Arms {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString("{\"pattern\": ")
+		sb.WriteString(ToJson(arm.Pattern))
+		sb.WriteString(", \"body\": ")
+		sb.WriteString(ToJson(arm.Body))
+		sb.WriteString("}")
+	}
+	sb.WriteString("]}")
+	return sb.String()
+}
+
+func (m *MShellParseMatchBlock) DebugString() string {
+	var sb strings.Builder
+	sb.WriteString("match ")
+	for _, arm := range m.Arms {
+		for _, item := range arm.Pattern {
+			sb.WriteString(item.DebugString())
+			sb.WriteString(" ")
+		}
+		sb.WriteString(": ")
+		for _, item := range arm.Body {
+			sb.WriteString(item.DebugString())
+			sb.WriteString(" ")
+		}
+		sb.WriteString(", ")
+	}
+	sb.WriteString("end")
+	return sb.String()
+}
+
 type MShellDefinition struct {
 	Name      string
 	NameToken Token
@@ -556,6 +613,12 @@ func (parser *MShellParser) ParseFile() (file *MShellFile, err error) {
 				return file, err
 			}
 			file.Items = append(file.Items, ifBlock)
+		case MATCH:
+			matchBlock, err := parser.ParseMatchBlock()
+			if err != nil {
+				return file, err
+			}
+			file.Items = append(file.Items, matchBlock)
 		case PREFIXQUOTE:
 			pq, err := parser.ParsePrefixQuote()
 			if err != nil {
@@ -1960,6 +2023,8 @@ func (parser *MShellParser) ParseItem() (MShellParseItem, error) {
 		return parser.ParseGetter()
 	case IF:
 		return parser.ParseIfBlock()
+	case MATCH:
+		return parser.ParseMatchBlock()
 	case PREFIXQUOTE:
 		return parser.ParsePrefixQuote()
 	default:
@@ -2172,4 +2237,81 @@ DoneIfBody:
 	}
 
 	return ifBlock, nil
+}
+
+func (parser *MShellParser) ParseMatchBlock() (*MShellParseMatchBlock, error) {
+	matchBlock := &MShellParseMatchBlock{StartToken: parser.curr}
+	err := parser.Match(parser.curr, MATCH)
+	if err != nil {
+		return matchBlock, err
+	}
+
+	for {
+		if parser.curr.Type == END {
+			break
+		}
+		if parser.curr.Type == EOF {
+			return matchBlock, fmt.Errorf("Did not find 'end' for match block beginning at line %d, column %d.", matchBlock.StartToken.Line, matchBlock.StartToken.Column)
+		}
+
+		arm := MShellParseMatchArm{}
+
+		// Parse pattern items until COLON
+		for {
+			if parser.curr.Type == COLON {
+				break
+			}
+			if parser.curr.Type == EOF {
+				return matchBlock, fmt.Errorf("Did not find ':' for match arm in match block beginning at line %d, column %d.", matchBlock.StartToken.Line, matchBlock.StartToken.Column)
+			}
+			if parser.curr.Type == END {
+				return matchBlock, fmt.Errorf("Did not find ':' for match arm in match block beginning at line %d, column %d.", matchBlock.StartToken.Line, matchBlock.StartToken.Column)
+			}
+			item, err := parser.ParseItem()
+			if err != nil {
+				return matchBlock, err
+			}
+			arm.Pattern = append(arm.Pattern, item)
+		}
+
+		if len(arm.Pattern) == 0 {
+			return matchBlock, fmt.Errorf("Empty pattern in match arm at line %d, column %d.", parser.curr.Line, parser.curr.Column)
+		}
+
+		// Consume the COLON
+		parser.NextToken()
+
+		// Parse body items until COMMA or END
+		for {
+			if parser.curr.Type == COMMA {
+				break
+			}
+			if parser.curr.Type == END {
+				break
+			}
+			if parser.curr.Type == EOF {
+				return matchBlock, fmt.Errorf("Did not find ',' or 'end' for match arm body in match block beginning at line %d, column %d.", matchBlock.StartToken.Line, matchBlock.StartToken.Column)
+			}
+			item, err := parser.ParseItem()
+			if err != nil {
+				return matchBlock, err
+			}
+			arm.Body = append(arm.Body, item)
+		}
+
+		matchBlock.Arms = append(matchBlock.Arms, arm)
+
+		// Consume the COMMA if present (allow trailing comma before END)
+		if parser.curr.Type == COMMA {
+			parser.NextToken()
+		}
+	}
+
+	matchBlock.EndToken = parser.curr
+	err = parser.Match(parser.curr, END)
+	if err != nil {
+		return matchBlock, err
+	}
+
+	return matchBlock, nil
 }
