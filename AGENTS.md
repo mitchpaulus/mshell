@@ -77,6 +77,8 @@ You should rebuild the docs when you make edits.
 For markdown files, prefer to have sentences on their own line.
 Only wrap really long lines, and try to wrap on a comma or other punctuation.
 
+Also update the `doc/mshell.md` markdown file. This is documentation for agents like yourself.
+
 ## VS Code
 
 Code for the VS Code extension is at `code/`.
