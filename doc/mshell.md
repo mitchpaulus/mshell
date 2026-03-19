@@ -757,6 +757,7 @@ end
 - `keys`: Get keys from dictionary. Sorted. `(dict -- [str])`
 - `values`: Get values from dictionary. Sorted. `(dict -- [str])`
 - `keyValues`: Get key/value pairs from dictionary as a list of lists. Each inner list is a two-element list with the key and value. Sorted by key. `(dict -- [[str a]])`
+- `map`: Map a quotation over dictionary values. Keys are preserved. `(dict (a -- b) -- dict)`
 - `in`: Check if key exists in dictionary. `(dict str -- bool)`
 
 ## Date Functions
