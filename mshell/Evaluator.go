@@ -4710,6 +4710,29 @@ MainLoop:
 							mapResult, _ := stack.Pop()
 							stack.Push(&Maybe{obj: mapResult}) // Wrap the result back in a Maybe
 						}
+					case *MShellDict:
+						dictObj := obj2Typed
+						newDict := &MShellDict{Items: make(map[string]MShellObject, len(dictObj.Items))}
+
+						var mapStack MShellStack
+						mapStack = []MShellObject{}
+
+						for key, value := range dictObj.Items {
+							mapStack.Push(value)
+							result, err := state.EvaluateQuote(*fn, &mapStack, context, definitions)
+							if err != nil {
+								return state.FailWithMessage(err.Error())
+							}
+							if result.ShouldPassResultUpStack() {
+								return result
+							}
+							if len(mapStack) != 1 {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: The function in 'map' did not return a single value, found %d values.\n", t.Line, t.Column, len(mapStack)))
+							}
+							mapResult, _ := mapStack.Pop()
+							newDict.Items[key] = mapResult
+						}
+						stack.Push(newDict)
 					}
 				} else if t.Lexeme == "map2" {
 					// Allow a binary function over two maybes
