@@ -1065,7 +1065,7 @@ func (state *TermState) historySearch(direction int) {
 	fmt.Fprintf(os.Stdout, "\a")
 }
 
-func (s *TermState) Render() {
+func (s *TermState) Render(renderHistory bool) {
 	s.renderBuffer = s.renderBuffer[:0] // Clear the buffer
 	// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
 	// state.index = 0
@@ -1170,22 +1170,24 @@ func (s *TermState) Render() {
 	// }
 
 	// Search for history
-	historySearchNew := SearchHistory(string(s.currentCommand), historyToSave)
-	s.historyComplete = []rune(historySearchNew)
-	numToAdd := len(s.historyComplete) - len(s.currentCommand)
-	if numToAdd < 0 {
-		historySearch := SearchHistory(string(s.currentCommand), s.previousHistory)
-		s.historyComplete = []rune(historySearch)
-		numToAdd = len(s.historyComplete) - len(s.currentCommand)
-	}
+	if (renderHistory) {
+		historySearchNew := SearchHistory(string(s.currentCommand), historyToSave)
+		s.historyComplete = []rune(historySearchNew)
+		numToAdd := len(s.historyComplete) - len(s.currentCommand)
+		if numToAdd < 0 {
+			historySearch := SearchHistory(string(s.currentCommand), s.previousHistory)
+			s.historyComplete = []rune(historySearch)
+			numToAdd = len(s.historyComplete) - len(s.currentCommand)
+		}
 
-	// Print escape code for light gray
-	s.renderBuffer = append(s.renderBuffer, "\033[90m"...)
-	for i := 0; i < numToAdd; i++ {
-		s.renderBuffer = utf8.AppendRune(s.renderBuffer, s.historyComplete[len(s.currentCommand)+i])
+		// Print escape code for light gray
+		s.renderBuffer = append(s.renderBuffer, "\033[90m"...)
+		for i := 0; i < numToAdd; i++ {
+			s.renderBuffer = utf8.AppendRune(s.renderBuffer, s.historyComplete[len(s.currentCommand)+i])
+		}
+		// Reset color
+		s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
 	}
-	// Reset color
-	s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
 
 	var currentTabCompletion []string
 	var previousTabCompletion []string
@@ -2218,7 +2220,7 @@ func (state *TermState) InteractiveMode() error {
 		if end {
 			break
 		}
-		state.Render()
+		state.Render(true)
 
 		// Swap tab completions
 		state.currentTabComplete = 1 - state.currentTabComplete
@@ -2349,7 +2351,6 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 			currentCommandStr = currentCommandStr[:i] + alias
 			state.currentCommand = []rune(currentCommandStr)
 			state.index = len(state.currentCommand)
-			state.Render()
 		}
 
 		// // Update the UI.
@@ -2359,6 +2360,9 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 		// // Move cursor to end
 		// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index+1)
 	}
+
+	// This render should handle stored tokens on aliases, cleared out history completion/tab completion.
+	state.Render(false)
 
 	if len(currentCommandStr) > 0 {
 		history = append(history, currentCommandStr)
