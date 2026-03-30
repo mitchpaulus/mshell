@@ -1262,7 +1262,7 @@ func (s *TermState) Render(renderHistory bool) {
 	pos := s.promptLength + 1 + s.index
 	s.renderBuffer = append(s.renderBuffer, fmt.Sprintf("\033[%dG", pos)...)
 
-	s.Logf("Term index: %d, command length: %d, num completions: %d, available rows: %d\n, prompt row: %d, numRows: %d\n", s.index, len(s.currentCommand), len(currentTabCompletion), availableRows, s.promptRow, s.numRows)
+	s.Logf("Term index: %d, command length: %d, num completions: %d, available rows: %d, prompt row: %d, numRows: %d\n", s.index, len(s.currentCommand), len(currentTabCompletion), availableRows, s.promptRow, s.numRows)
 
 	// Push the buffer to stdout
 	// fmt.Fprintf(s.f, "Rendering buffer: %s\n", string(s.renderBuffer))
