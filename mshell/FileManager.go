@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"golang.org/x/term"
@@ -1458,9 +1460,13 @@ func (fm *FileManager) openFileWindows(entry os.DirEntry) {
 	// Binary file, no $EDITOR, or editor failed: open with Windows default app
 	escapedPath := strings.ReplaceAll(filePath, "'", "''")
 	psCmd := "Start-Process -FilePath '" + escapedPath + "'"
-	cmd := exec.Command("powershell.exe", "-NoProfile", "-Command", psCmd)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-Command", psCmd)
 	cmd.Stdin = nil
-	cmd.Run()
+	if err := cmd.Run(); err != nil && ctx.Err() == context.DeadlineExceeded {
+		fm.statusMsg = "Start-Process timed out (OneDrive?)"
+	}
 }
 
 func (fm *FileManager) openFileUnix(entry os.DirEntry) {
