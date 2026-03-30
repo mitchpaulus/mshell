@@ -11,21 +11,23 @@ import (
 	"runtime"
 	"sort"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"unicode/utf8"
 
 	"golang.org/x/term"
 )
 
+type previewRequest struct {
+	path     string
+	entry    os.DirEntry
+	maxLines int
+	gen      uint64
+}
+
 type previewResult struct {
 	path  string
 	lines []string
-}
-
-type inputEvent struct {
-	buf []byte
-	n   int
-	err error
+	gen   uint64
 }
 
 type FileManager struct {
@@ -43,12 +45,12 @@ type FileManager struct {
 
 	lastKey byte // for gg detection
 
-	previewCache   map[string][]string // cached preview lines per file path
-	previewChan    chan previewResult   // channel for async preview results
-	previewLoading string              // path currently being loaded async
-	inputChan      chan inputEvent
-	quitChan       chan struct{}
-	modalActive    atomic.Bool
+	previewCache  map[string][]string // cached preview lines per file path
+	previewReqCh  chan previewRequest  // sends requests to the preview worker
+	previewChan   chan previewResult   // receives results from the preview worker
+	previewDone   chan struct{}        // closed to shut down preview goroutines
+	previewWG     sync.WaitGroup
+	previewGen    uint64               // bumped on selection change; stale results are dropped
 
 	// Search state
 	searching    bool   // true when typing a search query
@@ -71,6 +73,10 @@ type FileManager struct {
 
 	// Status message (shown once at bottom, cleared on first keypress)
 	statusMsg string
+
+	// renderMu serializes render() calls between the main loop and the
+	// preview receiver goroutine.
+	renderMu sync.Mutex
 }
 
 // RunFileManager runs as a standalone subcommand (msh fm).
@@ -248,70 +254,138 @@ func (fm *FileManager) initUserInfo() {
 	}
 }
 
-func (fm *FileManager) mainLoop() {
-	fm.inputChan = make(chan inputEvent, 1)
-	fm.previewChan = make(chan previewResult, 4)
-	fm.quitChan = make(chan struct{}, 1)
+func (fm *FileManager) startPreviewLoop() {
+	fm.previewReqCh = make(chan previewRequest, 1)
+	fm.previewChan = make(chan previewResult, 1)
+	fm.previewDone = make(chan struct{})
 
+	// Worker goroutine: computes previews, coalescing rapid requests.
+	fm.previewWG.Add(1)
 	go func() {
+		defer fm.previewWG.Done()
 		for {
-			buf := make([]byte, 16)
-			n, err := os.Stdin.Read(buf)
-			if err != nil {
-				fm.inputChan <- inputEvent{buf: buf, n: 0, err: err}
+			select {
+			case <-fm.previewDone:
 				return
+			case req := <-fm.previewReqCh:
+				// Drain and keep only the newest request.
+				for {
+					select {
+					case newer := <-fm.previewReqCh:
+						req = newer
+					default:
+						goto COMPUTE
+					}
+				}
+			COMPUTE:
+				lines := computePreview(req.entry, req.path, req.maxLines)
+				select {
+				case <-fm.previewDone:
+					return
+				case fm.previewChan <- previewResult{
+					path:  req.path,
+					lines: lines,
+					gen:   req.gen,
+				}:
+				}
 			}
-			// Check for 'q' quit directly in the reader so we never
-			// block on a channel send after the main loop has exited.
-			if n == 1 && buf[0] == 'q' && !fm.modalActive.Load() && !fm.searching && !fm.renaming && !fm.pendingMark && !fm.showingBookmarks {
-				fm.quitChan <- struct{}{}
-				return
-			}
-			fm.inputChan <- inputEvent{buf: buf, n: n, err: nil}
 		}
 	}()
 
-	for {
-		fm.render()
-
-		select {
-		case ev := <-fm.inputChan:
-			if ev.err != nil || ev.n == 0 {
+	// Receiver goroutine: applies results and re-renders.
+	fm.previewWG.Add(1)
+	go func() {
+		defer fm.previewWG.Done()
+		for {
+			select {
+			case <-fm.previewDone:
 				return
+			case result := <-fm.previewChan:
+				fm.renderMu.Lock()
+				if result.gen == fm.previewGen {
+					fm.previewCache[result.path] = result.lines
+					fm.render()
+				}
+				fm.renderMu.Unlock()
 			}
-			fm.handleInput(ev.buf, ev.n)
-		case <-fm.quitChan:
-			return
-		case result := <-fm.previewChan:
-			fm.handlePreviewResult(result)
 		}
+	}()
+}
+
+func (fm *FileManager) stopPreviewLoop() {
+	close(fm.previewDone)
+	fm.previewWG.Wait()
+}
+
+// schedulePreview sends a preview request for the currently selected entry.
+// Safe to call on every cursor/directory change; the worker coalesces rapid
+// requests and stale results are dropped via the generation number.
+func (fm *FileManager) schedulePreview() {
+	if len(fm.entries) == 0 || fm.cursor >= len(fm.entries) {
+		return
+	}
+	entry := fm.entries[fm.cursor]
+	path := filepath.Join(fm.currentDir, entry.Name())
+
+	if _, ok := fm.previewCache[path]; ok {
+		return // already cached
+	}
+
+	fm.previewGen++
+
+	req := previewRequest{
+		path:     path,
+		entry:    entry,
+		maxLines: fm.visibleRows(),
+		gen:      fm.previewGen,
+	}
+
+	// Non-blocking send; if the channel is full the worker will drain
+	// and pick up the latest request.
+	select {
+	case fm.previewReqCh <- req:
+	default:
+		// Channel full — drain the old request and send the new one.
+		select {
+		case <-fm.previewReqCh:
+		default:
+		}
+		fm.previewReqCh <- req
 	}
 }
 
-func (fm *FileManager) handlePreviewResult(result previewResult) {
-	fm.previewCache[result.path] = result.lines
-	if fm.previewLoading == result.path {
-		fm.previewLoading = ""
+func (fm *FileManager) mainLoop() {
+	fm.startPreviewLoop()
+	defer fm.stopPreviewLoop()
+
+	for {
+		fm.renderMu.Lock()
+		fm.schedulePreview()
+		fm.render()
+		fm.renderMu.Unlock()
+
+		buf := make([]byte, 16)
+		n, err := os.Stdin.Read(buf)
+		if err != nil || n == 0 {
+			return
+		}
+		if n == 1 && buf[0] == 'q' && !fm.searching && !fm.renaming && !fm.pendingMark && !fm.showingBookmarks {
+			return
+		}
+
+		fm.renderMu.Lock()
+		fm.handleInput(buf, n)
+		fm.renderMu.Unlock()
 	}
 }
 
 func (fm *FileManager) readModalKey() (byte, bool) {
-	fm.modalActive.Store(true)
-	defer fm.modalActive.Store(false)
-
-	for {
-		select {
-		case ev := <-fm.inputChan:
-			if ev.err != nil || ev.n == 0 {
-				return 0, false
-			}
-			return ev.buf[0], true
-		case <-fm.quitChan:
-			return 0, false
-		case result := <-fm.previewChan:
-			fm.handlePreviewResult(result)
-		}
+	buf := make([]byte, 16)
+	n, err := os.Stdin.Read(buf)
+	if err != nil || n == 0 {
+		return 0, false
 	}
+	return buf[0], true
 }
 
 func (fm *FileManager) loadDirectory() {
@@ -740,17 +814,6 @@ func (fm *FileManager) getPreview() []string {
 		return cached
 	}
 
-	// Start async load if not already loading this path
-	if fm.previewLoading != path {
-		fm.previewLoading = path
-		maxLines := fm.visibleRows()
-		ch := fm.previewChan
-		go func() {
-			lines := computePreview(entry, path, maxLines)
-			ch <- previewResult{path: path, lines: lines}
-		}()
-	}
-
 	return []string{" Loading..."}
 }
 
@@ -791,7 +854,7 @@ func computePreview(entry os.DirEntry, path string, maxLines int) []string {
 	// Check for binary before reading full file
 	f, err := os.Open(path)
 	if err != nil {
-		return []string{" (cannot read)"}
+		return []string{" (cannot open for reading)"}
 	}
 	defer f.Close()
 
@@ -1314,7 +1377,11 @@ func (fm *FileManager) openEditor() {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.Run()
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "editor %q exited with error: %v\nPress Enter to continue...", editor, err)
+		buf := make([]byte, 1)
+		os.Stdin.Read(buf)
+	}
 
 	// Re-enter raw mode and alternate buffer
 	newState, _ := term.MakeRaw(fm.stdInFd)
