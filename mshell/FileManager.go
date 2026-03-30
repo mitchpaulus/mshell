@@ -371,13 +371,9 @@ func (fm *FileManager) mainLoop() {
 		if err != nil || n == 0 {
 			return
 		}
-		if n == 1 && buf[0] == 'q' && !fm.searching && !fm.renaming && !fm.pendingMark && !fm.showingBookmarks {
+		if fm.handleInput(buf, n) {
 			return
 		}
-
-		fm.renderMu.Lock()
-		fm.handleInput(buf, n)
-		fm.renderMu.Unlock()
 	}
 }
 
@@ -886,17 +882,44 @@ func computePreview(entry os.DirEntry, path string, maxLines int) []string {
 	return lines
 }
 
-func (fm *FileManager) handleInput(buf []byte, n int) {
-	fm.statusMsg = ""
+func escapeSequenceLength(buf []byte) int {
+	if len(buf) >= 5 && buf[0] == 0x1b && buf[1] == '[' && buf[2] == '1' && buf[3] == '5' && buf[4] == '~' {
+		return 5
+	}
+	if len(buf) >= 3 && buf[0] == 0x1b && buf[1] == '[' {
+		switch buf[2] {
+		case 'A', 'B', 'C', 'D', 'F', 'H':
+			return 3
+		}
+	}
+	return 1
+}
 
+func (fm *FileManager) handleInput(buf []byte, n int) bool {
+	fm.renderMu.Lock()
+	defer fm.renderMu.Unlock()
+
+	fm.statusMsg = ""
+	for i := 0; i < n; {
+		consumed, quit := fm.handleInputEvent(buf[i:n])
+		if quit {
+			return true
+		}
+		if consumed <= 0 {
+			consumed = 1
+		}
+		i += consumed
+	}
+	return false
+}
+
+func (fm *FileManager) handleInputEvent(buf []byte) (int, bool) {
 	if fm.searching {
-		fm.handleSearchInput(buf, n)
-		return
+		return fm.handleSearchInput(buf), false
 	}
 
 	if fm.renaming {
-		fm.handleRenameInput(buf, n)
-		return
+		return fm.handleRenameInput(buf), false
 	}
 
 	key := buf[0]
@@ -907,7 +930,7 @@ func (fm *FileManager) handleInput(buf []byte, n int) {
 			fm.bookmarks[key] = fm.currentDir
 			saveBookmarks(fm.bookmarks)
 		}
-		return
+		return 1, false
 	}
 
 	if fm.showingBookmarks {
@@ -920,45 +943,47 @@ func (fm *FileManager) handleInput(buf []byte, n int) {
 				fm.loadDirectory()
 			}
 		}
-		return
+		return 1, false
 	}
 
 	// Check for escape sequences
-	if n >= 3 && buf[0] == 0x1b && buf[1] == '[' {
+	if len(buf) >= 3 && buf[0] == 0x1b && buf[1] == '[' {
 		switch buf[2] {
 		case 'A': // Up arrow
 			fm.cursor--
 			fm.clampCursor()
 			fm.adjustScroll()
 			fm.lastKey = 0
-			return
+			return 3, false
 		case 'B': // Down arrow
 			fm.cursor++
 			fm.clampCursor()
 			fm.adjustScroll()
 			fm.lastKey = 0
-			return
+			return 3, false
 		case 'C': // Right arrow - enter directory
 			fm.enterSelected()
 			fm.lastKey = 0
-			return
+			return 3, false
 		case 'D': // Left arrow - parent directory
 			fm.goParent()
 			fm.lastKey = 0
-			return
+			return 3, false
 		}
 
 		// F5 = \033[15~
-		if n >= 4 && buf[2] == '1' && buf[3] == '5' {
+		if len(buf) >= 5 && buf[2] == '1' && buf[3] == '5' && buf[4] == '~' {
 			fm.loadDirectory()
 			fm.clampCursor()
 			fm.adjustScroll()
 			fm.lastKey = 0
-			return
+			return 5, false
 		}
 	}
 
 	switch key {
+	case 'q':
+		return 1, true
 	case 'j':
 		fm.cursor++
 		fm.clampCursor()
@@ -980,10 +1005,10 @@ func (fm *FileManager) handleInput(buf []byte, n int) {
 			fm.cursor = 0
 			fm.offset = 0
 			fm.lastKey = 0
-			return
+			return 1, false
 		}
 		fm.lastKey = 'g'
-		return
+		return 1, false
 	case 4: // Ctrl-d
 		fm.cursor += 10
 		fm.clampCursor()
@@ -996,12 +1021,12 @@ func (fm *FileManager) handleInput(buf []byte, n int) {
 		fm.openEditor()
 	case 'r':
 		fm.startRename()
-		return
+		return 1, false
 	case '/':
 		fm.searching = true
 		fm.searchQuery = fm.searchQuery[:0]
 		fm.ttyOut.WriteString("\033[?25h") // show cursor
-		return
+		return 1, false
 	case 'n':
 		fm.searchNext()
 	case 'N':
@@ -1012,10 +1037,10 @@ func (fm *FileManager) handleInput(buf []byte, n int) {
 		if fm.lastKey == 'y' {
 			fm.clipboardCopy()
 			fm.lastKey = 0
-			return
+			return 1, false
 		}
 		fm.lastKey = 'y'
-		return
+		return 1, false
 	case 'p':
 		fm.clipboardPaste()
 	case 'c':
@@ -1024,25 +1049,26 @@ func (fm *FileManager) handleInput(buf []byte, n int) {
 		fm.deleteEntry()
 	case 'm':
 		fm.pendingMark = true
-		return
+		return 1, false
 	case ';':
 		fm.showingBookmarks = true
-		return
+		return 1, false
 	}
 
 	if key != 'g' && key != 'y' {
 		fm.lastKey = 0
 	}
+	return 1, false
 }
 
-func (fm *FileManager) handleSearchInput(buf []byte, _ int) {
+func (fm *FileManager) handleSearchInput(buf []byte) int {
 	key := buf[0]
 
 	// Escape cancels search
 	if key == 0x1b {
 		fm.searching = false
 		fm.ttyOut.WriteString("\033[?25l")
-		return
+		return escapeSequenceLength(buf)
 	}
 
 	// Enter commits search
@@ -1050,7 +1076,7 @@ func (fm *FileManager) handleSearchInput(buf []byte, _ int) {
 		fm.searching = false
 		fm.ttyOut.WriteString("\033[?25l")
 		fm.commitSearch()
-		return
+		return 1
 	}
 
 	// Backspace
@@ -1059,14 +1085,14 @@ func (fm *FileManager) handleSearchInput(buf []byte, _ int) {
 			fm.searchQuery = fm.searchQuery[:len(fm.searchQuery)-1]
 			fm.updateSearchLive()
 		}
-		return
+		return 1
 	}
 
 	// Ctrl-U clears the search input
 	if key == 21 {
 		fm.searchQuery = fm.searchQuery[:0]
 		fm.updateSearchLive()
-		return
+		return 1
 	}
 
 	// Ctrl-W deletes the last word
@@ -1084,7 +1110,7 @@ func (fm *FileManager) handleSearchInput(buf []byte, _ int) {
 			fm.searchQuery = fm.searchQuery[:i+1]
 			fm.updateSearchLive()
 		}
-		return
+		return 1
 	}
 
 	// Printable characters
@@ -1092,6 +1118,7 @@ func (fm *FileManager) handleSearchInput(buf []byte, _ int) {
 		fm.searchQuery = append(fm.searchQuery, rune(key))
 		fm.updateSearchLive()
 	}
+	return 1
 }
 
 func (fm *FileManager) updateSearchLive() {
@@ -1191,13 +1218,13 @@ func (fm *FileManager) startRename() {
 	}
 }
 
-func (fm *FileManager) handleRenameInput(buf []byte, n int) {
+func (fm *FileManager) handleRenameInput(buf []byte) int {
 	key := buf[0]
 
 	// Escape cancels
 	if key == 0x1b {
 		// Check for arrow keys: ESC [ A/B/C/D
-		if n >= 3 && buf[1] == '[' {
+		if len(buf) >= 3 && buf[1] == '[' {
 			switch buf[2] {
 			case 'C': // Right
 				if fm.renameCursor < len(fm.renameInput) {
@@ -1212,11 +1239,11 @@ func (fm *FileManager) handleRenameInput(buf []byte, n int) {
 			case 'F': // End
 				fm.renameCursor = len(fm.renameInput)
 			}
-			return
+			return 3
 		}
 		fm.renaming = false
 		fm.ttyOut.WriteString("\033[?25l")
-		return
+		return 1
 	}
 
 	// Enter commits rename
@@ -1224,7 +1251,7 @@ func (fm *FileManager) handleRenameInput(buf []byte, n int) {
 		fm.renaming = false
 		fm.ttyOut.WriteString("\033[?25l")
 		fm.commitRename()
-		return
+		return 1
 	}
 
 	// Backspace
@@ -1233,14 +1260,14 @@ func (fm *FileManager) handleRenameInput(buf []byte, n int) {
 			fm.renameInput = append(fm.renameInput[:fm.renameCursor-1], fm.renameInput[fm.renameCursor:]...)
 			fm.renameCursor--
 		}
-		return
+		return 1
 	}
 
 	// Ctrl-U clears to start
 	if key == 21 {
 		fm.renameInput = fm.renameInput[fm.renameCursor:]
 		fm.renameCursor = 0
-		return
+		return 1
 	}
 
 	// Ctrl-W delete word backwards
@@ -1256,25 +1283,25 @@ func (fm *FileManager) handleRenameInput(buf []byte, n int) {
 			fm.renameInput = append(fm.renameInput[:i], fm.renameInput[fm.renameCursor:]...)
 			fm.renameCursor = i
 		}
-		return
+		return 1
 	}
 
 	// Ctrl-A go to start
 	if key == 1 {
 		fm.renameCursor = 0
-		return
+		return 1
 	}
 
 	// Ctrl-E go to end
 	if key == 5 {
 		fm.renameCursor = len(fm.renameInput)
-		return
+		return 1
 	}
 
 	// Ctrl-K delete to end
 	if key == 11 {
 		fm.renameInput = fm.renameInput[:fm.renameCursor]
-		return
+		return 1
 	}
 
 	// Printable characters
@@ -1282,6 +1309,7 @@ func (fm *FileManager) handleRenameInput(buf []byte, n int) {
 		fm.renameInput = append(fm.renameInput[:fm.renameCursor], append([]rune{rune(key)}, fm.renameInput[fm.renameCursor:]...)...)
 		fm.renameCursor++
 	}
+	return 1
 }
 
 func (fm *FileManager) commitRename() {

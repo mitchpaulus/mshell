@@ -1,9 +1,21 @@
 package main
 
 import (
+	"io/fs"
+	"os"
 	"reflect"
 	"testing"
 )
+
+type testDirEntry struct {
+	name  string
+	isDir bool
+}
+
+func (e testDirEntry) Name() string               { return e.name }
+func (e testDirEntry) IsDir() bool                { return e.isDir }
+func (e testDirEntry) Type() fs.FileMode          { return 0 }
+func (e testDirEntry) Info() (fs.FileInfo, error) { return nil, nil }
 
 func TestAppendUniquePathAppendsWhenMissing(t *testing.T) {
 	paths := []string{"/tmp/a", "/tmp/b"}
@@ -42,5 +54,24 @@ func TestRemovePathNoOpWhenMissing(t *testing.T) {
 
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("removePath() = %v, want %v", got, want)
+	}
+}
+
+func TestHandleInputProcessesBufferedQuit(t *testing.T) {
+	fm := &FileManager{
+		entries: []os.DirEntry{
+			testDirEntry{name: "a"},
+			testDirEntry{name: "b"},
+			testDirEntry{name: "c"},
+		},
+	}
+
+	quit := fm.handleInput([]byte("jq"), 2)
+
+	if !quit {
+		t.Fatal("expected buffered q to quit")
+	}
+	if fm.cursor != 1 {
+		t.Fatalf("cursor = %d, want 1", fm.cursor)
 	}
 }
