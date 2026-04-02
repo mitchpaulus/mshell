@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -39,6 +40,186 @@ const mshellVersion = "v0.13.0"
 const tabCompletionColumnLimit = 10
 
 var tempFiles []string
+
+func parseMShellInput(input string, inputFile *TokenFile) (*MShellFile, error) {
+	lexer := NewLexer(input, inputFile)
+	parser := MShellParser{lexer: lexer}
+	parser.NextToken()
+	return parser.ParseFile()
+}
+
+type startupFileSpec struct {
+	path        string
+	description string
+	envVar      string
+	required    bool
+}
+
+func getStartupDataDir() (string, error) {
+	if runtime.GOOS == "windows" {
+		localAppData, ok := os.LookupEnv("LOCALAPPDATA")
+		if !ok || strings.TrimSpace(localAppData) == "" {
+			return "", fmt.Errorf("LOCALAPPDATA is not set")
+		}
+		return filepath.Join(localAppData, "msh"), nil
+	}
+
+	xdgDataHome, ok := os.LookupEnv("XDG_DATA_HOME")
+	if ok && strings.TrimSpace(xdgDataHome) != "" {
+		return filepath.Join(xdgDataHome, "msh"), nil
+	}
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+
+	return filepath.Join(homeDir, ".local", "share", "msh"), nil
+}
+
+func getStartupConfigDir() (string, error) {
+	if runtime.GOOS == "windows" {
+		localAppData, ok := os.LookupEnv("LOCALAPPDATA")
+		if !ok || strings.TrimSpace(localAppData) == "" {
+			return "", fmt.Errorf("LOCALAPPDATA is not set")
+		}
+		return filepath.Join(localAppData, "msh"), nil
+	}
+
+	xdgConfigHome, ok := os.LookupEnv("XDG_CONFIG_HOME")
+	if ok && strings.TrimSpace(xdgConfigHome) != "" {
+		return filepath.Join(xdgConfigHome, "msh"), nil
+	}
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+
+	return filepath.Join(homeDir, ".config", "msh"), nil
+}
+
+func getStartupPaths(version string, versionSpecificInit bool) (string, string, error) {
+	if version == "" {
+		return "", "", fmt.Errorf("startup version is empty")
+	}
+
+	dataDir, err := getStartupDataDir()
+	if err != nil {
+		return "", "", err
+	}
+
+	configDir, err := getStartupConfigDir()
+	if err != nil {
+		return "", "", err
+	}
+
+	stdlibPath := filepath.Join(dataDir, "lib", version, "std.msh")
+	initPath := filepath.Join(configDir, "init", "init.msh")
+	if versionSpecificInit {
+		initPath = filepath.Join(configDir, "init", version, "init.msh")
+	}
+
+	return stdlibPath, initPath, nil
+}
+
+func getStartupFileSpecs(version string, versionSpecificInit bool) (startupFileSpec, startupFileSpec, error) {
+	stdlibPath, initPath, err := getStartupPaths(version, versionSpecificInit)
+	if err != nil {
+		return startupFileSpec{}, startupFileSpec{}, err
+	}
+
+	stdlibDescription := fmt.Sprintf("standard library for %s", version)
+	initDescription := "user init file"
+	if versionSpecificInit {
+		initDescription = fmt.Sprintf("user init file for %s", version)
+	}
+
+	stdlibSpec := startupFileSpec{
+		path:        stdlibPath,
+		description: stdlibDescription,
+		required:    true,
+	}
+
+	initSpec := startupFileSpec{
+		path:        initPath,
+		description: initDescription,
+		required:    false,
+	}
+
+	if envPath, ok := os.LookupEnv("MSHSTDLIB"); ok && strings.TrimSpace(envPath) != "" {
+		stdlibSpec.path = envPath
+		stdlibSpec.description = "standard library from MSHSTDLIB"
+		stdlibSpec.envVar = "MSHSTDLIB"
+		stdlibSpec.required = true
+	}
+
+	if envPath, ok := os.LookupEnv("MSHINIT"); ok && strings.TrimSpace(envPath) != "" {
+		initSpec.path = envPath
+		initSpec.description = "user init file from MSHINIT"
+		initSpec.envVar = "MSHINIT"
+		initSpec.required = true
+	}
+
+	return stdlibSpec, initSpec, nil
+}
+
+func loadStartupFile(path string, description string, stack *MShellStack, context ExecuteContext, state *EvalState, definitions *[]MShellDefinition) error {
+	sourceBytes, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("%s not found at %s: %w", description, path, err)
+		}
+		return fmt.Errorf("error reading %s at %s: %w", description, path, err)
+	}
+
+	parsedFile, err := parseMShellInput(string(sourceBytes), &TokenFile{path})
+	if err != nil {
+		return fmt.Errorf("error parsing %s at %s: %w", description, path, err)
+	}
+
+	*definitions = append(*definitions, parsedFile.Definitions...)
+	state.AddCompletionDefinitions(parsedFile.Definitions)
+
+	if len(parsedFile.Items) > 0 {
+		callStackItem := CallStackItem{
+			MShellParseItem: parsedFile.Items[0],
+			Name:            path,
+			CallStackType:   CALLSTACKFILE,
+		}
+
+		result := state.Evaluate(parsedFile.Items, stack, context, *definitions, callStackItem)
+		if !result.Success {
+			return fmt.Errorf("error evaluating %s at %s", description, path)
+		}
+	}
+
+	return nil
+}
+
+func loadStartupDefinitions(version string, versionSpecificInit bool, stack *MShellStack, context ExecuteContext, state *EvalState) ([]MShellDefinition, error) {
+	stdlibSpec, initSpec, err := getStartupFileSpecs(version, versionSpecificInit)
+	if err != nil {
+		return nil, err
+	}
+
+	definitions := make([]MShellDefinition, 0)
+	if err := loadStartupFile(stdlibSpec.path, stdlibSpec.description, stack, context, state, &definitions); err != nil {
+		if versionSpecificInit && stdlibSpec.envVar == "" && errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("%w; download/install prompting is not implemented yet", err)
+		}
+		return nil, err
+	}
+
+	if err := loadStartupFile(initSpec.path, initSpec.description, stack, context, state, &definitions); err != nil {
+		if !initSpec.required && errors.Is(err, os.ErrNotExist) {
+			return definitions, nil
+		}
+		return nil, err
+	}
+
+	return definitions, nil
+}
 
 func main() {
 	// Enable profiling
@@ -167,6 +348,7 @@ func main() {
 		} else {
 			inputSet = true
 			inputFilePath = arg
+			inputFile = &TokenFile{arg}
 			inputBytes, err := os.ReadFile(arg)
 			if err != nil {
 				fmt.Println(err)
@@ -315,9 +497,8 @@ func main() {
 		input = string(inputBytes)
 	}
 
-	l := NewLexer(input, inputFile)
-
 	if command == CLILEX {
+		l := NewLexer(input, inputFile)
 		tokens, _ := l.Tokenize()
 		fmt.Println("Tokens:")
 		for _, t := range tokens {
@@ -325,101 +506,35 @@ func main() {
 			fmt.Printf("%d:%d:%s %s\n", t.Line, t.Column, t.Type, t.Lexeme)
 		}
 		return
-	} else if command == CLIPARSE {
-		p := MShellParser{lexer: l}
-		p.NextToken()
-		file, err := p.ParseFile()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error parsing file %s: %s\n", input, err)
-			os.Exit(1)
-			return
-		}
-
-		fmt.Println(file.ToJson())
-		return
 	}
 
-	var callStack CallStack
-	callStack = make([]CallStackItem, 0, 10)
-
-	state := EvalState{
-		PositionalArgs: positionalArgs,
-		LoopDepth:      0,
-		CallStack:      callStack,
+	sourceName := "stdin"
+	if inputFilePath != "" {
+		sourceName = inputFilePath
+	} else if inputFile != nil {
+		sourceName = inputFile.Path
+	} else if inputSet {
+		sourceName = "-c input"
 	}
 
-	var stack MShellStack
-	stack = []MShellObject{}
-	context := ExecuteContext{
-		StandardInput:  nil,
-		StandardOutput: nil,
-		Variables:      map[string]MShellObject{},
-		Pbm:            NewPathBinManager(),
-	}
-
-	var allDefinitions []MShellDefinition
-
-	// Check for environment variable MSHSTDLIB and load that file. Read as UTF-8
-	stdlibPathVar, stdlibSet := os.LookupEnv("MSHSTDLIB")
-	if stdlibSet {
-		// Split the path by :, except on Windows where it's ;
-		// If there are multiple paths, load each one.
-		var rcPaths []string
-		if runtime.GOOS == "windows" {
-			rcPaths = strings.Split(stdlibPathVar, ";")
-			// fmt.Fprintf(os.Stderr, "Windows: %s\n", stdlibPathVar)
-		} else {
-			rcPaths = strings.Split(stdlibPathVar, ":")
-		}
-
-		for _, stdlibPath := range rcPaths {
-			stdlibBytes, err := os.ReadFile(stdlibPath)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error reading file '%s': %s\n", stdlibPath, err)
-				os.Exit(1)
-				return
-			}
-			stdlibLexer := NewLexer(string(stdlibBytes), &TokenFile{stdlibPath})
-			stdlibParser := MShellParser{lexer: stdlibLexer}
-			stdlibParser.NextToken()
-			stdlibFile, err := stdlibParser.ParseFile()
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error parsing file %s: %s\n", stdlibPath, err)
-				os.Exit(1)
-				return
-			}
-
-			allDefinitions = append(allDefinitions, stdlibFile.Definitions...)
-			state.AddCompletionDefinitions(stdlibFile.Definitions)
-
-			if len(stdlibFile.Items) > 0 {
-				callStackItem := CallStackItem{
-					MShellParseItem: nil,
-					Name:            stdlibPath,
-					CallStackType:   CALLSTACKFILE,
-				}
-
-				result := state.Evaluate(stdlibFile.Items, &stack, context, allDefinitions, callStackItem)
-				if !result.Success {
-					fmt.Fprintf(os.Stderr, "Error evaluating MSHSTDLIB file %s.\n", stdlibPath)
-					os.Exit(1)
-					return
-				}
-			}
-		}
-	}
-
-	p := MShellParser{lexer: l}
-	p.NextToken()
-	file, err := p.ParseFile()
+	file, err := parseMShellInput(input, inputFile)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error parsing file %s: %s\n", input, err)
+		fmt.Fprintf(os.Stderr, "Error parsing file %s: %s\n", sourceName, err)
 		os.Exit(1)
 		return
 	}
 
-	allDefinitions = append(allDefinitions, file.Definitions...)
-	state.AddCompletionDefinitions(file.Definitions)
+	if command == CLIPARSE {
+		fmt.Println(file.ToJson())
+		return
+	}
+
+	effectiveVersion := mshellVersion
+	versionSpecificInit := false
+	if file.Version != "" {
+		effectiveVersion = file.Version
+		versionSpecificInit = true
+	}
 
 	if file.Version != "" && file.Version != mshellVersion && inputFilePath != "" && command == CLIEXECUTE {
 		altName := "msh-" + file.Version
@@ -442,6 +557,36 @@ func main() {
 		}
 		os.Exit(0)
 	}
+
+	var callStack CallStack
+	callStack = make([]CallStackItem, 0, 10)
+
+	state := EvalState{
+		PositionalArgs: positionalArgs,
+		LoopDepth:      0,
+		CallStack:      callStack,
+	}
+
+	var stack MShellStack
+	stack = []MShellObject{}
+	context := ExecuteContext{
+		StandardInput:  nil,
+		StandardOutput: nil,
+		Variables:      map[string]MShellObject{},
+		Pbm:            NewPathBinManager(),
+	}
+
+	var allDefinitions []MShellDefinition
+
+	startupDefinitions, err := loadStartupDefinitions(effectiveVersion, versionSpecificInit, &stack, context, &state)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading startup files: %s\n", err)
+		os.Exit(1)
+		return
+	}
+	allDefinitions = append(allDefinitions, startupDefinitions...)
+	allDefinitions = append(allDefinitions, file.Definitions...)
+	state.AddCompletionDefinitions(file.Definitions)
 
 	if command == CLITYPECHECK {
 		var typeStack MShellTypeStack
@@ -2199,7 +2344,6 @@ func (state *TermState) InteractiveMode() error {
 	}
 
 	state.stdLibDefs = stdLibDefs
-	state.evalState.AddCompletionDefinitions(state.stdLibDefs)
 
 	history = make([]string, 0)
 	state.historyIndex = 0
@@ -2690,58 +2834,7 @@ func (state *TermState) getCurrentPos() (int, int, error) {
 }
 
 func stdLibDefinitions(stack MShellStack, context ExecuteContext, state EvalState) ([]MShellDefinition, error) {
-	// Check for environment variable MSHSTDLIB and load that file. Read as UTF-8
-	stdlibPath, stdlibSet := os.LookupEnv("MSHSTDLIB")
-	definitions := make([]MShellDefinition, 0)
-
-	if stdlibSet {
-		// Split the path by :, except for Windows, where it's split by ;
-		// If there are multiple paths, load each one.
-		var rcPaths []string
-		if runtime.GOOS == "windows" {
-			rcPaths = strings.Split(stdlibPath, ";")
-		} else {
-			rcPaths = strings.Split(stdlibPath, ":")
-		}
-
-		for _, rcPath := range rcPaths {
-			stdlibBytes, err := os.ReadFile(rcPath)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error reading file %s: %s\n", rcPath, err)
-				return nil, err
-			}
-
-			stdlibLexer := NewLexer(string(stdlibBytes), &TokenFile{rcPath})
-			stdlibParser := MShellParser{lexer: stdlibLexer}
-			stdlibParser.NextToken()
-			stdlibFile, err := stdlibParser.ParseFile()
-
-			definitions = append(definitions, stdlibFile.Definitions...)
-
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error parsing file %s: %s\n", rcPath, err)
-				return nil, err
-			}
-
-			if len(stdlibFile.Items) > 0 {
-				callStackItem := CallStackItem{
-					MShellParseItem: stdlibFile.Items[0],
-					Name:            rcPath,
-					CallStackType:   CALLSTACKFILE,
-				}
-
-				// allDefinitions = append(allDefinitions, stdlibFile.Definitions...)
-				result := state.Evaluate(stdlibFile.Items, &stack, context, stdlibFile.Definitions, callStackItem)
-
-				if !result.Success {
-					fmt.Fprintf(os.Stderr, "Error evaluating MSHSTDLIB file %s.\n", rcPath)
-					return nil, err
-				}
-			}
-		}
-	}
-
-	return definitions, nil
+	return loadStartupDefinitions(mshellVersion, true, &stack, context, &state)
 }
 
 func registerTempFileForCleanup(tempFileName string) {

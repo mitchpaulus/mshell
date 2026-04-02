@@ -52,6 +52,27 @@ runs:
 
         echo "$HOME/.mshell/bin" >> $GITHUB_PATH
 
-        # std.msh is included in the release tarball, move it to a standard location
-        mv "$HOME/.mshell/bin/std.msh" "$HOME/.mshell/std.msh"
-        echo "MSHSTDLIB=$HOME/.mshell/std.msh" >> $GITHUB_ENV
+        if [ -f "$HOME/.mshell/bin/msh" ]; then
+          MSH_BIN="$HOME/.mshell/bin/msh"
+        elif [ -f "$HOME/.mshell/bin/msh.exe" ]; then
+          MSH_BIN="$HOME/.mshell/bin/msh.exe"
+        elif [ -f "$HOME/.mshell/bin/mshell" ]; then
+          MSH_BIN="$HOME/.mshell/bin/mshell"
+        else
+          MSH_BIN="$HOME/.mshell/bin/mshell.exe"
+        fi
+
+        MSH_VERSION="$("$MSH_BIN" --version)"
+
+        # Set config and std directories.
+        if [ "${{ runner.os }}" = "Windows" ]; then
+          DATA_DIR="$LOCALAPPDATA/msh"
+        else
+          DATA_DIR="$HOME/.local/share/msh"
+        fi
+
+        mkdir -p "$DATA_DIR/lib/$MSH_VERSION"
+
+        # std.msh is included in the release tarball; move it into the startup location, default and versioned.
+        cp "$HOME/.mshell/bin/std.msh" "$DATA_DIR/lib/std.msh"
+        mv "$HOME/.mshell/bin/std.msh" "$DATA_DIR/lib/$MSH_VERSION/std.msh"
