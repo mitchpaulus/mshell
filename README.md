@@ -31,14 +31,13 @@ tar -xvf linux_amd64.tar.gz
 Put that file in a directory that is in your `$PATH` and make sure it is marked as executable on Linux.
 
 The other file to copy is the standard library, which is included in the release, or is at `lib/std.msh` in this repo.
-For `msh v0.13.0`, put it at `${XDG_DATA_HOME:-$HOME/.local/share}/msh/lib/v0.13.0/std.msh` on Linux/macOS
-or `%LOCALAPPDATA%\msh\lib\v0.13.0\std.msh` on Windows.
-Also create init files at `${XDG_CONFIG_HOME:-$HOME/.config}/msh/init/init.msh`
-and `${XDG_CONFIG_HOME:-$HOME/.config}/msh/init/v0.13.0/init.msh`
-on Linux/macOS,
-or `%LOCALAPPDATA%\msh\init\init.msh` and `%LOCALAPPDATA%\msh\init\v0.13.0\init.msh` on Windows.
-Those init files are optional.
-For one-off overrides, `MSHSTDLIB` and `MSHINIT` can point to exact startup files for the current execution.
+For `msh v0.13.0`, put it at `${XDG_DATA_HOME:-$HOME/.local/share}/msh/v0.13.0/std.msh` on Linux/macOS
+or `%LOCALAPPDATA%\msh\v0.13.0\std.msh` on Windows.
+Also create `${XDG_CONFIG_HOME:-$HOME/.config}/msh/v0.13.0/init.msh` on Linux/macOS
+or `%LOCALAPPDATA%\msh\v0.13.0\init.msh` on Windows.
+That init file is required, but it can be empty.
+For one-off overrides, `MSHSTDLIB` and `MSHINIT` can point to exact startup files for interactive use and scripts without `VER`.
+Scripts with `VER "vX.Y.Z"` always use the startup files for `vX.Y.Z`.
 
 An example install script is at [install.sh](https://github.com/mitchpaulus/mshell/blob/main/install.sh) in this repository.
 

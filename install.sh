@@ -35,8 +35,13 @@ ln -s "$HOME"/.local/bin/msh "$HOME"/.local/bin/mshell 2>/dev/null
 
 MSH_VERSION="$("$HOME/.local/bin/msh" --version)"
 
-mkdir -p "$DATA_DIR/lib/$MSH_VERSION"
+mkdir -p "$DATA_DIR/$MSH_VERSION"
+mkdir -p "$CONFIG_DIR/$MSH_VERSION"
 
 # Move std.msh from the release tarball to the versioned startup directory.
-mv "$HOME"/.local/bin/std.msh "$DATA_DIR/lib/$MSH_VERSION/std.msh"
-cp "$DATA_DIR/lib/$MSH_VERSION/std.msh" "$DATA_DIR/lib/std.msh"
+mv "$HOME"/.local/bin/std.msh "$DATA_DIR/$MSH_VERSION/std.msh"
+
+# Create an empty init.msh so startup succeeds on first run.
+if [ ! -f "$CONFIG_DIR/$MSH_VERSION/init.msh" ]; then
+    : > "$CONFIG_DIR/$MSH_VERSION/init.msh"
+fi

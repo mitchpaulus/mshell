@@ -212,18 +212,20 @@ Process substitution is done using the `psub` operator.
 
 `msh` loads startup files before running code.
 
-- For scripts, the standard library is loaded from a versioned data path:
-  `$XDG_DATA_HOME/msh/lib/<version>/std.msh` on Linux/macOS
-  (falling back to `~/.local/share/msh/lib/<version>/std.msh`)
-  or `%LOCALAPPDATA%\msh\lib\<version>\std.msh` on Windows.
-- For normal scripts without `VER`, the user init file is loaded from
-  `$XDG_CONFIG_HOME/msh/init/init.msh` on Linux/macOS
-  (falling back to `~/.config/msh/init/init.msh`)
-  or `%LOCALAPPDATA%\msh\init\init.msh` on Windows.
-- If a script declares `VER "vX.Y.Z"`, `msh` uses that version for the standard library path and loads the init file from `init/<version>/init.msh`.
-- The init file is optional by default. If the resolved init path does not exist, startup continues without it.
-- `MSHSTDLIB` and `MSHINIT` override those resolved paths for the current execution only. Each variable overrides only its own file, and `MSHINIT` is treated as required when set.
-- Interactive use takes the current executable for version matching, but loads the unversioned startup files: `lib/std.msh` and `init/init.msh`.
+- Startup files are always version-specific.
+- The standard library is loaded from
+  `$XDG_DATA_HOME/msh/<version>/std.msh` on Linux/macOS
+  (falling back to `~/.local/share/msh/<version>/std.msh`)
+  or `%LOCALAPPDATA%\msh\<version>\std.msh` on Windows.
+- The user init file is loaded from
+  `$XDG_CONFIG_HOME/msh/<version>/init.msh` on Linux/macOS
+  (falling back to `~/.config/msh/<version>/init.msh`)
+  or `%LOCALAPPDATA%\msh\<version>\init.msh` on Windows.
+- Both files are required at the resolved paths. An empty `init.msh` is fine if you do not need custom startup code.
+- For scripts without `VER`, `msh` uses the current executable version.
+- If a script declares `VER "vX.Y.Z"` and the current executable is a different version, `msh` looks for `msh-vX.Y.Z` on `PATH` and re-executes the script with that binary.
+- When `VER` is present, `MSHSTDLIB` and `MSHINIT` are cleared so startup comes from the versioned locations.
+- `MSHSTDLIB` and `MSHINIT` only override startup for interactive use and scripts without `VER`.
 
 ## Tilde Substitution
 

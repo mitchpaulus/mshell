@@ -49,4 +49,3 @@ We should be taking these steps when executing a file:
         - `$XDG_CONFIG_HOME/msh/{version}/init.msh` (Unix) or `$LOCALAPPDATA/msh/{version}/init.msh` (Windows)
 
       - Fail if these files are not found and explain to user.
-
