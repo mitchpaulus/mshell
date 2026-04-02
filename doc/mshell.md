@@ -597,6 +597,8 @@ end
 - `wt`: "Whitespace table", puts stdin split by lines and whitespace on the stack. `( -- [[str]])`
 - `tt`: "Tab table", puts stdin split by lines and tabs on the stack. `( -- [[str]])`
 - `ttFile`: "Tab table" from file, puts content from file name split by lines and tabs on the stack. `(str -- [[str]])`
+- `unlines`: Join a list of strings into a single string using `\n` line endings. `([str] -- str)`
+- `unlinesCrLf`: Join a list of strings into a single string using `\r\n` line endings. `([str] -- str)`
 - `uw`: Shorthand for `unlines w` `([str] -- )`
 - `tuw`: Shorthand for `(tjoin) map uw` `([[str]] -- )`
 - `runtime`: Get the current OS runtime. This is the output of the GOOS environment variable. Common possible values are `linux`, `windows`, and `darwin`. `( -- str)`
@@ -667,6 +669,8 @@ end
 - `split`: Split string into list of strings by delimiter. (str delimiter -- [str])
 - `wsplit`: Split string into list of strings by runs of whitespace. (str -- [str])
 - `join`: Join list of strings into a single string, (list delimiter -- str)
+- `unlines`: Join list of strings into a single string using `\n` line endings. `([str] -- str)`
+- `unlinesCrLf`: Join list of strings into a single string using `\r\n` line endings. `([str] -- str)`
 - `in`: Check for substring in string. (totalString subString -- bool)
 - `index`: Get index of first occurrence of substring in string. Returns Maybe[int] with None for the substring not being found. `(str str -- Maybe[int])`
 - `lastIndexOf`: Get index of last occurrence of substring in string. Returns Maybe[int] with None for the substring not being found. `(str str -- Maybe[int])`
@@ -753,6 +757,7 @@ end
 - `keys`: Get keys from dictionary. Sorted. `(dict -- [str])`
 - `values`: Get values from dictionary. Sorted. `(dict -- [str])`
 - `keyValues`: Get key/value pairs from dictionary as a list of lists. Each inner list is a two-element list with the key and value. Sorted by key. `(dict -- [[str a]])`
+- `map`: Map a quotation over dictionary values. Keys are preserved. `(dict (a -- b) -- dict)`
 - `in`: Check if key exists in dictionary. `(dict str -- bool)`
 
 ## Date Functions

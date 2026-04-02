@@ -323,7 +323,7 @@ func (s *TermState) UpdateSize() {
 	var err error
 	err = windows.GetConsoleScreenBufferInfo(stdout, &info)
 	if err != nil {
-		fmt.Fprintf(s.f, "Error getting console screen buffer info for FD %d: %s\n", stdout, err)
+		s.Logf("Error getting console screen buffer info for FD %d: %s\n", stdout, err)
 	}
 	s.numCols = int(info.Window.Right - info.Window.Left + 1)
 	s.numRows = int(info.Window.Bottom - info.Window.Top + 1)

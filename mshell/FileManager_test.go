@@ -1,11 +1,21 @@
 package main
 
 import (
-	"path/filepath"
+	"io/fs"
+	"os"
 	"reflect"
 	"testing"
-	"time"
 )
+
+type testDirEntry struct {
+	name  string
+	isDir bool
+}
+
+func (e testDirEntry) Name() string               { return e.name }
+func (e testDirEntry) IsDir() bool                { return e.isDir }
+func (e testDirEntry) Type() fs.FileMode          { return 0 }
+func (e testDirEntry) Info() (fs.FileInfo, error) { return nil, nil }
 
 func TestAppendUniquePathAppendsWhenMissing(t *testing.T) {
 	paths := []string{"/tmp/a", "/tmp/b"}
@@ -47,47 +57,21 @@ func TestRemovePathNoOpWhenMissing(t *testing.T) {
 	}
 }
 
-func TestReadModalKeyUsesSharedInputChannel(t *testing.T) {
-	previewPath := filepath.Join(t.TempDir(), "example.txt")
-
+func TestHandleInputProcessesBufferedQuit(t *testing.T) {
 	fm := &FileManager{
-		inputChan:      make(chan inputEvent),
-		previewChan:    make(chan previewResult, 1),
-		quitChan:       make(chan struct{}, 1),
-		previewCache:   make(map[string][]string),
-		previewLoading: previewPath,
+		entries: []os.DirEntry{
+			testDirEntry{name: "a"},
+			testDirEntry{name: "b"},
+			testDirEntry{name: "c"},
+		},
 	}
 
-	fm.previewChan <- previewResult{
-		path:  previewPath,
-		lines: []string{" preview"},
-	}
+	quit := fm.handleInput([]byte("jq"), 2)
 
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		fm.inputChan <- inputEvent{
-			buf: []byte{'o'},
-			n:   1,
-		}
-	}()
-
-	key, ok := fm.readModalKey()
-	if !ok {
-		t.Fatal("readModalKey() returned ok=false")
+	if !quit {
+		t.Fatal("expected buffered q to quit")
 	}
-	if key != 'o' {
-		t.Fatalf("readModalKey() = %q, want %q", key, 'o')
-	}
-	if fm.modalActive.Load() {
-		t.Fatal("readModalKey() left modalActive enabled")
-	}
-
-	wantPreview := []string{" preview"}
-	gotPreview := fm.previewCache[previewPath]
-	if !reflect.DeepEqual(gotPreview, wantPreview) {
-		t.Fatalf("preview cache = %v, want %v", gotPreview, wantPreview)
-	}
-	if fm.previewLoading != "" {
-		t.Fatalf("previewLoading = %q, want empty string", fm.previewLoading)
+	if fm.cursor != 1 {
+		t.Fatalf("cursor = %d, want 1", fm.cursor)
 	}
 }

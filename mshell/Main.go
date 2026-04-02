@@ -279,6 +279,7 @@ func main() {
 
 			callStack: callStack,
 			f:         f,
+			logInstanceID: newLogInstanceID(),
 			evalState: EvalState{
 				PositionalArgs: make([]string, 0),
 				LoopDepth:      0,
@@ -495,6 +496,7 @@ type TermState struct {
 	p              *MShellParser
 	historyIndex   int
 	f              *os.File // This is log file.
+	logInstanceID  string
 	// tokenChan chan TerminalToken
 	stdInState *StdinReaderState
 
@@ -531,6 +533,20 @@ type TermState struct {
 	stdLibDefs        []MShellDefinition
 	initCallStackItem CallStackItem
 	// pathBinManager IPathBinManager
+}
+
+func newLogInstanceID() string {
+	return strconv.FormatInt(time.Now().UnixNano(), 10)
+}
+
+func (state *TermState) Logf(format string, args ...interface{}) {
+	if state == nil || state.f == nil {
+		return
+	}
+
+	msg := fmt.Sprintf(format, args...)
+	timestamp := time.Now().Format(time.RFC3339Nano)
+	fmt.Fprintf(state.f, "%s %s %s", timestamp, state.logInstanceID, msg)
 }
 
 func historyPrefixMatch(prefix string, candidate string) bool {
@@ -1089,7 +1105,7 @@ func (state *TermState) historySearch(direction int) {
 	fmt.Fprintf(os.Stdout, "\a")
 }
 
-func (s *TermState) Render() {
+func (s *TermState) Render(renderHistory bool) {
 	s.renderBuffer = s.renderBuffer[:0] // Clear the buffer
 	// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
 	// state.index = 0
@@ -1194,22 +1210,24 @@ func (s *TermState) Render() {
 	// }
 
 	// Search for history
-	historySearchNew := SearchHistory(string(s.currentCommand), historyToSave)
-	s.historyComplete = []rune(historySearchNew)
-	numToAdd := len(s.historyComplete) - len(s.currentCommand)
-	if numToAdd < 0 {
-		historySearch := SearchHistory(string(s.currentCommand), s.previousHistory)
-		s.historyComplete = []rune(historySearch)
-		numToAdd = len(s.historyComplete) - len(s.currentCommand)
-	}
+	if (renderHistory) {
+		historySearchNew := SearchHistory(string(s.currentCommand), historyToSave)
+		s.historyComplete = []rune(historySearchNew)
+		numToAdd := len(s.historyComplete) - len(s.currentCommand)
+		if numToAdd < 0 {
+			historySearch := SearchHistory(string(s.currentCommand), s.previousHistory)
+			s.historyComplete = []rune(historySearch)
+			numToAdd = len(s.historyComplete) - len(s.currentCommand)
+		}
 
-	// Print escape code for light gray
-	s.renderBuffer = append(s.renderBuffer, "\033[90m"...)
-	for i := 0; i < numToAdd; i++ {
-		s.renderBuffer = utf8.AppendRune(s.renderBuffer, s.historyComplete[len(s.currentCommand)+i])
+		// Print escape code for light gray
+		s.renderBuffer = append(s.renderBuffer, "\033[90m"...)
+		for i := 0; i < numToAdd; i++ {
+			s.renderBuffer = utf8.AppendRune(s.renderBuffer, s.historyComplete[len(s.currentCommand)+i])
+		}
+		// Reset color
+		s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
 	}
-	// Reset color
-	s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
 
 	var currentTabCompletion []string
 	var previousTabCompletion []string
@@ -1268,7 +1286,7 @@ func (s *TermState) Render() {
 	pos := s.promptLength + 1 + s.index
 	s.renderBuffer = append(s.renderBuffer, fmt.Sprintf("\033[%dG", pos)...)
 
-	fmt.Fprintf(s.f, "Term index: %d, command length: %d, num completions: %d, available rows: %d\n, prompt row: %d, numRows: %d\n", s.index, len(s.currentCommand), len(currentTabCompletion), availableRows, s.promptRow, s.numRows)
+	s.Logf("Term index: %d, command length: %d, num completions: %d, available rows: %d, prompt row: %d, numRows: %d\n", s.index, len(s.currentCommand), len(currentTabCompletion), availableRows, s.promptRow, s.numRows)
 
 	// Push the buffer to stdout
 	// fmt.Fprintf(s.f, "Rendering buffer: %s\n", string(s.renderBuffer))
@@ -1437,7 +1455,7 @@ func (state *TermState) completionArgsFromTokens(tokens []Token, prefix string) 
 		}
 		arg, err := completionArgString(token)
 		if err != nil {
-			fmt.Fprintf(state.f, "Completion arg error for token %s: %s\n", token, err)
+			state.Logf("Completion arg error for token %s: %s\n", token, err)
 			continue
 		}
 		args = append(args, arg)
@@ -1462,30 +1480,30 @@ func (state *TermState) runCompletionDefinitions(defs []MShellDefinition, args [
 		callStackItem := CallStackItem{MShellParseItem: def.NameToken, Name: def.Name, CallStackType: CALLSTACKDEF}
 		result := state.evalState.Evaluate(def.Items, &completionStack, state.context, state.stdLibDefs, callStackItem)
 		if !result.Success {
-			fmt.Fprintf(state.f, "Completion definition '%s' failed to evaluate\n", def.Name)
+			state.Logf("Completion definition '%s' failed to evaluate\n", def.Name)
 			continue
 		}
 		if result.ExitCalled {
-			fmt.Fprintf(state.f, "Completion definition '%s' called exit\n", def.Name)
+			state.Logf("Completion definition '%s' called exit\n", def.Name)
 			continue
 		}
 		if len(completionStack) == 0 {
-			fmt.Fprintf(state.f, "Completion definition '%s' left an empty stack\n", def.Name)
+			state.Logf("Completion definition '%s' left an empty stack\n", def.Name)
 			continue
 		}
 		if len(completionStack) > 1 {
-			fmt.Fprintf(state.f, "Completion definition '%s' left %d items on the stack\n", def.Name, len(completionStack))
+			state.Logf("Completion definition '%s' left %d items on the stack\n", def.Name, len(completionStack))
 		}
 		top := completionStack[len(completionStack)-1]
 		list, ok := top.(*MShellList)
 		if !ok {
-			fmt.Fprintf(state.f, "Completion definition '%s' did not return a list\n", def.Name)
+			state.Logf("Completion definition '%s' did not return a list\n", def.Name)
 			continue
 		}
 		for _, item := range list.Items {
 			str, err := item.CastString()
 			if err != nil {
-				fmt.Fprintf(state.f, "Completion definition '%s' returned a non-string: %s\n", def.Name, err)
+				state.Logf("Completion definition '%s' returned a non-string: %s\n", def.Name, err)
 				continue
 			}
 			if _, ok := seen[str]; ok {
@@ -1520,14 +1538,14 @@ func (state *TermState) ScrollDown(numLines int) {
 	state.UpdateSize()
 	curRow, curCol, err := state.getCurrentPos()
 	if err != nil {
-		fmt.Fprintf(state.f, "Error getting cursor position: %s\n", err)
+		state.Logf("Error getting cursor position: %s\n", err)
 		return
 	}
 
 	// TODO: Limit to current size of the terminal.
 
 	// rowsToScroll := curRow - state.numPromptLines
-	fmt.Fprintf(state.f, "Cur Row: %d, Lines to scroll: %d", curRow, numLines)
+	state.Logf("Cur Row: %d, Lines to scroll: %d\n", curRow, numLines)
 
 	// Move cursor to bottom of terminal, if you have a terminal that has over 10000 lines, I'm sorry.
 	fmt.Fprintf(os.Stdout, "\033[10000B")
@@ -1552,13 +1570,13 @@ func (state *TermState) ClearScreen() {
 	state.UpdateSize()
 	curRow, _, err := state.getCurrentPos()
 	if err != nil {
-		fmt.Fprintf(state.f, "Error getting cursor position: %s\n", err)
+		state.Logf("Error getting cursor position: %s\n", err)
 		return
 	}
 
 	rowsToScroll := curRow - state.numPromptLines
 	state.ScrollDown(rowsToScroll)
-	fmt.Fprintf(state.f, "Cleared screen, scrolled %d rows\n", rowsToScroll)
+	state.Logf("Cleared screen, scrolled %d rows\n", rowsToScroll)
 	// fmt.Fprintf(state.f, "%d %d %d\n", curRow, state.numPromptLines, rowsToScroll)
 
 	// // Move cursor to bottom of terminal, if you have a terminal that has over 10000 lines, I'm sorry.
@@ -1788,7 +1806,7 @@ func (state *TermState) StdinReader(stdInChan chan byte, pauseChan chan bool) {
 		case shouldPause := <-pauseChan:
 			if shouldPause {
 				// Pause reading from stdin
-				fmt.Fprintf(state.f, "Pausing stdin reader\n")
+				state.Logf("Pausing stdin reader\n")
 				for {
 					// Wait for unpause
 					shouldUnpause := <-pauseChan
@@ -1796,7 +1814,7 @@ func (state *TermState) StdinReader(stdInChan chan byte, pauseChan chan bool) {
 						break
 					}
 				}
-				fmt.Fprintf(state.f, "Unpausing stdin reader\n")
+				state.Logf("Unpausing stdin reader\n")
 			}
 		default:
 			// Read char
@@ -1816,13 +1834,13 @@ func (state *TermState) StdinReader(stdInChan chan byte, pauseChan chan bool) {
 				b := readBuffer[i]
 
 				if b > 32 && b < 127 {
-					fmt.Fprintf(state.f, "Sending %c..\n", b)
+					state.Logf("Sending %c..\n", b)
 					stdInChan <- readBuffer[i]
-					fmt.Fprintf(state.f, "Sent %c..\n", b)
+					state.Logf("Sent %c..\n", b)
 				} else {
-					fmt.Fprintf(state.f, "Sending %d..\n", b)
+					state.Logf("Sending %d..\n", b)
 					stdInChan <- readBuffer[i]
-					fmt.Fprintf(state.f, "Sent %d..\n", b)
+					state.Logf("Sent %d..\n", b)
 				}
 				// fmt.Fprintf(f, "Sending %d..\n", readBuffer[i])
 			}
@@ -1923,7 +1941,7 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 					return KEY_LEFT, nil
 				} else {
 					// Unknown escape sequence
-					fmt.Fprintf(state.f, "Unknown escape sequence: ESC O %d\n", c)
+					state.Logf("Unknown escape sequence: ESC O %d\n", c)
 					return UnknownToken{}, nil
 				}
 			} else if c == 91 { // 91 = [, CSI
@@ -1974,7 +1992,7 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 						return KEY_SHIFT_TAB, nil
 					} else {
 						// Unknown escape sequence
-						fmt.Fprintf(state.f, "Unknown escape sequence: ESC [ %d\n", c)
+						state.Logf("Unknown escape sequence: ESC [ %d\n", c)
 						return UnknownToken{}, nil
 					}
 				} else { // else read until we get a final char, @ to ~, or 0x40 to 0x7E
@@ -2020,7 +2038,7 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 				// Quit
 			} else {
 				// Unknown escape sequence
-				fmt.Fprintf(state.f, "Unknown escape sequence: ESC %d\n", c)
+				state.Logf("Unknown escape sequence: ESC %d\n", c)
 				return UnknownToken{}, nil
 				// return AsciiToken{Char: 27}
 				// return AsciiToken{Char: c}
@@ -2038,7 +2056,7 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 			}
 
 			if b2 >= 128 && b2 <= 191 { // 128-191 are the second byte of a 2-byte UTF-8 character
-				fmt.Fprintf(state.f, "Got 2-byte UTF-8 character: %d %d\n", c, b2)
+				state.Logf("Got 2-byte UTF-8 character: %d %d\n", c, b2)
 				// Return the 2-byte UTF-8 character as a single token
 				// Convert to rune
 				r := rune((int32(b2) & 0x3F) | ((int32(c) & 0x1F) << 6))
@@ -2066,13 +2084,13 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 				}
 
 				if b3 >= 128 && b3 <= 191 { // 128-191 are the third byte of a 3-byte UTF-8 character
-					fmt.Fprintf(state.f, "Got 3-byte UTF-8 character: %d %d %d (%x %x %x)\n", c, b2, b3, c, b2, b3)
+					state.Logf("Got 3-byte UTF-8 character: %d %d %d (%x %x %x)\n", c, b2, b3, c, b2, b3)
 					// Return the 3-byte UTF-8 character as a single token
 					// Convert to rune
 					r := rune((int32(c&0x0F) << 12) | (int32(b2&0x3F) << 6) | int32(b3&0x3F))
 					return MutliByteToken{Char: r}, nil
 				} else {
-					fmt.Fprintf(state.f, "Unknown second byte for 3-byte UTF-8 character: %d\n", b2)
+					state.Logf("Unknown second byte for 3-byte UTF-8 character: %d\n", b2)
 					// return AsciiToken{Char: c}
 					return UnknownToken{}, nil
 				}
@@ -2109,25 +2127,25 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 					}
 
 					if b4 >= 128 && b4 <= 191 { // 128-191 are the fourth byte of a 4-byte UTF-8 character
-						fmt.Fprintf(state.f, "Got 4-byte UTF-8 character: %d %d %d %d\n", c, b2, b3, b4)
+						state.Logf("Got 4-byte UTF-8 character: %d %d %d %d\n", c, b2, b3, b4)
 						// Return the 4-byte UTF-8 character as a single token
 						// Convert to rune
 						r := rune((int32(c&0x07) << 18) | (int32(b2&0x3F) << 12) | (int32(b3&0x3F) << 6) | int32(b4&0x3F))
 						return MutliByteToken{Char: r}, nil
 					} else {
-						fmt.Fprintf(state.f, "Unknown third byte for 4-byte UTF-8 character: %d\n", b3)
+						state.Logf("Unknown third byte for 4-byte UTF-8 character: %d\n", b3)
 						// return AsciiToken{Char: c}
 						return UnknownToken{}, nil
 					}
 				} else {
-					fmt.Fprintf(state.f, "Unknown second byte for 3-byte UTF-8 character: %d\n", b2)
+					state.Logf("Unknown second byte for 3-byte UTF-8 character: %d\n", b2)
 					// return AsciiToken{Char: c}
 					return UnknownToken{}, nil
 				}
 			}
 
 		} else {
-			fmt.Fprintf(state.f, "Unknown start byte: %d\n", c)
+			state.Logf("Unknown start byte: %d\n", c)
 			// return AsciiToken{Char: c}
 			return UnknownToken{}, nil
 		}
@@ -2168,7 +2186,7 @@ func (state *TermState) InteractiveMode() error {
 		return fmt.Errorf("Error setting terminal to raw mode at beginning of interactive mode: %s", err)
 	}
 	state.oldState = *oldState
-	fmt.Fprintf(state.f, "Old state: %v\n", state.oldState)
+	state.Logf("Old state: %v\n", state.oldState)
 
 	defer term.Restore(state.stdInFd, &state.oldState)
 
@@ -2196,11 +2214,11 @@ func (state *TermState) InteractiveMode() error {
 				history = append(history, item.Command)
 			}
 		} else {
-			fmt.Fprintf(state.f, "Error reading history file %s: %s\n", filepath.Join(historyDir, "msh_history"), err)
+			state.Logf("Error reading history file %s: %s\n", filepath.Join(historyDir, "msh_history"), err)
 		}
-		fmt.Fprintf(state.f, "%d items loaded from history file %s\n", len(state.previousHistory), filepath.Join(historyDir, "msh_history"))
+		state.Logf("%d items loaded from history file %s\n", len(state.previousHistory), filepath.Join(historyDir, "msh_history"))
 	} else {
-		fmt.Fprintf(state.f, "Error getting history directory: %s\n", err)
+		state.Logf("Error getting history directory: %s\n", err)
 	}
 
 	err = state.printPrompt()
@@ -2220,15 +2238,15 @@ func (state *TermState) InteractiveMode() error {
 			state.tabCompletions1 = state.tabCompletions1[:0]
 		}
 
-		fmt.Fprintf(state.f, "Waiting for token... ")
+		state.Logf("Waiting for token...\n")
 		state.f.Sync()
 		token, err = state.InteractiveLexer(stdInState) // token = <- tokenChan
 		if err != nil {
-			fmt.Fprintf(state.f, "Got err from interactive lexer: %s\n", err)
+			state.Logf("Got err from interactive lexer: %s\n", err)
 			return err
 		}
 
-		fmt.Fprintf(state.f, "Got token: %s\n", token)
+		state.Logf("Got token: %s\n", token)
 
 		if _, ok := token.(EofTerminalToken); ok {
 			return nil
@@ -2242,7 +2260,7 @@ func (state *TermState) InteractiveMode() error {
 		if end {
 			break
 		}
-		state.Render()
+		state.Render(true)
 
 		// Swap tab completions
 		state.currentTabComplete = 1 - state.currentTabComplete
@@ -2253,7 +2271,7 @@ func (state *TermState) InteractiveMode() error {
 
 func (state *TermState) TrySaveHistory() {
 	if len(historyToSave) == 0 {
-		fmt.Fprintf(state.f, "No history to save.\n")
+		state.Logf("No history to save.\n")
 		return
 	}
 
@@ -2331,7 +2349,7 @@ func (state *TermState) TrySaveHistory() {
 		}
 	}
 
-	fmt.Fprintf(state.f, "Saved %d history items to %s\n", len(historyToSave), historyFile)
+	state.Logf("Saved %d history items to %s\n", len(historyToSave), historyFile)
 
 	// Clear history to save
 	historyToSave = historyToSave[:0]
@@ -2373,7 +2391,6 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 			currentCommandStr = currentCommandStr[:i] + alias
 			state.currentCommand = []rune(currentCommandStr)
 			state.index = len(state.currentCommand)
-			state.Render()
 		}
 
 		// // Update the UI.
@@ -2383,6 +2400,9 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 		// // Move cursor to end
 		// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index+1)
 	}
+
+	// This render should handle stored tokens on aliases, cleared out history completion/tab completion.
+	state.Render(false)
 
 	if len(currentCommandStr) > 0 {
 		history = append(history, currentCommandStr)
@@ -2411,7 +2431,7 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 	p := state.p
 	l := state.l
 
-	fmt.Fprintf(state.f, "Executing Command: '%s'\n", currentCommandStr)
+	state.Logf("Executing Command: '%s'\n", currentCommandStr)
 	state.l.resetInput(currentCommandStr)
 
 	state.p.NextToken()
@@ -2449,7 +2469,7 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 					fmt.Fprintf(os.Stdout, "\033[1G")
 					goto PromptPrint
 				}
-				fmt.Fprintf(state.f, "Command: %s\n", pipeline.ToMShellString())
+				state.Logf("Command: %s\n", pipeline.ToMShellString())
 			} else {
 				// Empty pipeline, reset to original
 				l.resetInput(currentCommandStr)
@@ -2659,7 +2679,7 @@ func (state *TermState) getCurrentPos() (int, int, error) {
 				return row, col, nil
 			}
 		default:
-			fmt.Fprintf(state.f, "Got other token: %v\n", t)
+			state.Logf("Got other token: %v\n", t)
 			// Ignore getting a token that ends the program for now.
 			_, err = state.HandleToken(t)
 			if err != nil {
@@ -2763,7 +2783,7 @@ func (state *TermState) acceptHistoryCompletion() {
 		return
 	}
 
-	fmt.Fprintf(state.f, "History complete: %s\n", string(state.historyComplete))
+	state.Logf("History complete: %s\n", string(state.historyComplete))
 	if cap(state.currentCommand) < cap(state.historyComplete) {
 		state.currentCommand = make([]rune, len(state.historyComplete), cap(state.historyComplete))
 	} else {
@@ -3017,8 +3037,8 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				// state.currentCommand = append(state.currentCommand, ' ')
 				// state.currentCommand = append(state.currentCommand, state.currentCommand[state.index:]...)
 
-				fmt.Fprintf(state.f, "Alias: %s -> %s\n", lastWord, aliasValue)
-				fmt.Fprintf(state.f, "Current command: %s\n", string(state.currentCommand))
+				state.Logf("Alias: %s -> %s\n", lastWord, aliasValue)
+				state.Logf("Current command: %s\n", string(state.currentCommand))
 
 				// Move cursor to end of the alias
 				state.index = i + 1 + len(aliasValue) + 1
@@ -3146,8 +3166,8 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			replaceStart := state.index - lastTokenLength
 			replaceEnd := state.index
 
-			fmt.Fprintf(state.f, "Last token: %s %d\n", lastToken, len(tokens))
-			fmt.Fprintf(state.f, "Prefix: %s\n", prefix)
+			state.Logf("Last token: %s %d\n", lastToken, len(tokens))
+			state.Logf("Prefix: %s\n", prefix)
 
 			var matches []TabMatch
 
@@ -3214,11 +3234,11 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			allFileMatches := allMatchesAreFiles(matches)
 
 			var insertString string
-			fmt.Fprintf(state.f, "Len matches: '%d'\n", len(matches))
+			state.Logf("Len matches: '%d'\n", len(matches))
 
 			if len(matches) < 5 {
 				// Print matches
-				fmt.Fprintf(state.f, "Matches: %s\n", strings.Join(GetMatchTexts(matches), ", "))
+				state.Logf("Matches: %s\n", strings.Join(GetMatchTexts(matches), ", "))
 			}
 
 			if len(matches) == 0 {
@@ -3232,7 +3252,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			} else {
 				// Print out the longest common prefix
 				longestCommonPrefix := getLongestCommonPrefix(GetMatchTexts(matches))
-				fmt.Fprintf(state.f, "Longest common prefix: '%s'\n", longestCommonPrefix)
+				state.Logf("Longest common prefix: '%s'\n", longestCommonPrefix)
 
 				if len(longestCommonPrefix) <= len(prefix) {
 					// Print bell
@@ -3396,7 +3416,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 		} else if t == KEY_ALT_O { // Alt-O
 			// Quit
 			fmt.Fprintf(os.Stdout, "\r\n")
-			fmt.Fprintf(state.f, "Exiting mshell using ALT-o...\n")
+			state.Logf("Exiting mshell using ALT-o...\n")
 			return true, nil
 		} else if t == KEY_ALT_D {
 			dateStr := time.Now().Format("2006-01-02")
