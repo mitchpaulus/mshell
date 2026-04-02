@@ -212,7 +212,7 @@ Process substitution is done using the `psub` operator.
 
 `msh` loads startup files before running code.
 
-- The standard library is loaded from a versioned data path:
+- For scripts, the standard library is loaded from a versioned data path:
   `$XDG_DATA_HOME/msh/lib/<version>/std.msh` on Linux/macOS
   (falling back to `~/.local/share/msh/lib/<version>/std.msh`)
   or `%LOCALAPPDATA%\msh\lib\<version>\std.msh` on Windows.
@@ -223,7 +223,7 @@ Process substitution is done using the `psub` operator.
 - If a script declares `VER "vX.Y.Z"`, `msh` uses that version for the standard library path and loads the init file from `init/<version>/init.msh`.
 - The init file is optional by default. If the resolved init path does not exist, startup continues without it.
 - `MSHSTDLIB` and `MSHINIT` override those resolved paths for the current execution only. Each variable overrides only its own file, and `MSHINIT` is treated as required when set.
-- Interactive use takes the version from the current executable, so interactive startup looks for versioned startup files for that `msh`.
+- Interactive use takes the current executable for version matching, but loads the unversioned startup files: `lib/std.msh` and `init/init.msh`.
 
 ## Tilde Substitution
 

@@ -99,11 +99,7 @@ func getStartupConfigDir() (string, error) {
 	return filepath.Join(homeDir, ".config", "msh"), nil
 }
 
-func getStartupPaths(version string, versionSpecificInit bool) (string, string, error) {
-	if version == "" {
-		return "", "", fmt.Errorf("startup version is empty")
-	}
-
+func getStartupPaths(version string, versionedStdlib bool, versionSpecificInit bool) (string, string, error) {
 	dataDir, err := getStartupDataDir()
 	if err != nil {
 		return "", "", err
@@ -114,22 +110,35 @@ func getStartupPaths(version string, versionSpecificInit bool) (string, string, 
 		return "", "", err
 	}
 
-	stdlibPath := filepath.Join(dataDir, "lib", version, "std.msh")
+	stdlibPath := filepath.Join(dataDir, "lib", "std.msh")
+	if versionedStdlib {
+		if version == "" {
+			return "", "", fmt.Errorf("startup version is empty")
+		}
+		stdlibPath = filepath.Join(dataDir, "lib", version, "std.msh")
+	}
+
 	initPath := filepath.Join(configDir, "init", "init.msh")
 	if versionSpecificInit {
+		if version == "" {
+			return "", "", fmt.Errorf("startup version is empty")
+		}
 		initPath = filepath.Join(configDir, "init", version, "init.msh")
 	}
 
 	return stdlibPath, initPath, nil
 }
 
-func getStartupFileSpecs(version string, versionSpecificInit bool) (startupFileSpec, startupFileSpec, error) {
-	stdlibPath, initPath, err := getStartupPaths(version, versionSpecificInit)
+func getStartupFileSpecs(version string, versionedStdlib bool, versionSpecificInit bool) (startupFileSpec, startupFileSpec, error) {
+	stdlibPath, initPath, err := getStartupPaths(version, versionedStdlib, versionSpecificInit)
 	if err != nil {
 		return startupFileSpec{}, startupFileSpec{}, err
 	}
 
-	stdlibDescription := fmt.Sprintf("standard library for %s", version)
+	stdlibDescription := "standard library"
+	if versionedStdlib {
+		stdlibDescription = fmt.Sprintf("standard library for %s", version)
+	}
 	initDescription := "user init file"
 	if versionSpecificInit {
 		initDescription = fmt.Sprintf("user init file for %s", version)
@@ -197,8 +206,8 @@ func loadStartupFile(path string, description string, stack *MShellStack, contex
 	return nil
 }
 
-func loadStartupDefinitions(version string, versionSpecificInit bool, stack *MShellStack, context ExecuteContext, state *EvalState) ([]MShellDefinition, error) {
-	stdlibSpec, initSpec, err := getStartupFileSpecs(version, versionSpecificInit)
+func loadStartupDefinitions(version string, versionedStdlib bool, versionSpecificInit bool, stack *MShellStack, context ExecuteContext, state *EvalState) ([]MShellDefinition, error) {
+	stdlibSpec, initSpec, err := getStartupFileSpecs(version, versionedStdlib, versionSpecificInit)
 	if err != nil {
 		return nil, err
 	}
@@ -578,7 +587,7 @@ func main() {
 
 	var allDefinitions []MShellDefinition
 
-	startupDefinitions, err := loadStartupDefinitions(effectiveVersion, versionSpecificInit, &stack, context, &state)
+	startupDefinitions, err := loadStartupDefinitions(effectiveVersion, true, versionSpecificInit, &stack, context, &state)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading startup files: %s\n", err)
 		os.Exit(1)
@@ -2834,7 +2843,7 @@ func (state *TermState) getCurrentPos() (int, int, error) {
 }
 
 func stdLibDefinitions(stack MShellStack, context ExecuteContext, state EvalState) ([]MShellDefinition, error) {
-	return loadStartupDefinitions(mshellVersion, true, &stack, context, &state)
+	return loadStartupDefinitions(mshellVersion, false, false, &stack, context, &state)
 }
 
 func registerTempFileForCleanup(tempFileName string) {
