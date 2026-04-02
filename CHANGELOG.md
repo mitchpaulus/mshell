@@ -32,7 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Startup now loads the standard library from the versioned XDG/`LOCALAPPDATA` data directory, treats init files as optional unless `MSHINIT` is set, and still allows exact per-run overrides via `MSHSTDLIB` and `MSHINIT`.
+- Startup now loads both `std.msh` and `init.msh` from version directories (`msh/<version>/...`), keeps `init.msh` optional for implicit current-version startup unless `MSHINIT` is set, requires it for `VER` scripts, re-execs `VER` scripts with `msh-<version>` when needed, and ignores `MSHSTDLIB`/`MSHINIT` for `VER` scripts.
 
 ## 0.12.0 - 2026-02-19
 

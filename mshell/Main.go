@@ -55,6 +55,12 @@ type startupFileSpec struct {
 	required    bool
 }
 
+type startupLoadOptions struct {
+	version            string
+	allowEnvOverrides  bool
+	requireInit        bool
+}
+
 func getStartupDataDir() (string, error) {
 	if runtime.GOOS == "windows" {
 		localAppData, ok := os.LookupEnv("LOCALAPPDATA")
@@ -99,7 +105,7 @@ func getStartupConfigDir() (string, error) {
 	return filepath.Join(homeDir, ".config", "msh"), nil
 }
 
-func getStartupPaths(version string, versionSpecificInit bool) (string, string, error) {
+func getStartupPaths(version string) (string, string, error) {
 	if version == "" {
 		return "", "", fmt.Errorf("startup version is empty")
 	}
@@ -114,26 +120,20 @@ func getStartupPaths(version string, versionSpecificInit bool) (string, string, 
 		return "", "", err
 	}
 
-	stdlibPath := filepath.Join(dataDir, "lib", version, "std.msh")
-	initPath := filepath.Join(configDir, "init", "init.msh")
-	if versionSpecificInit {
-		initPath = filepath.Join(configDir, "init", version, "init.msh")
-	}
+	stdlibPath := filepath.Join(dataDir, version, "std.msh")
+	initPath := filepath.Join(configDir, version, "init.msh")
 
 	return stdlibPath, initPath, nil
 }
 
-func getStartupFileSpecs(version string, versionSpecificInit bool) (startupFileSpec, startupFileSpec, error) {
-	stdlibPath, initPath, err := getStartupPaths(version, versionSpecificInit)
+func getStartupFileSpecs(options startupLoadOptions) (startupFileSpec, startupFileSpec, error) {
+	stdlibPath, initPath, err := getStartupPaths(options.version)
 	if err != nil {
 		return startupFileSpec{}, startupFileSpec{}, err
 	}
 
-	stdlibDescription := fmt.Sprintf("standard library for %s", version)
-	initDescription := "user init file"
-	if versionSpecificInit {
-		initDescription = fmt.Sprintf("user init file for %s", version)
-	}
+	stdlibDescription := fmt.Sprintf("standard library for %s", options.version)
+	initDescription := fmt.Sprintf("user init file for %s", options.version)
 
 	stdlibSpec := startupFileSpec{
 		path:        stdlibPath,
@@ -144,21 +144,23 @@ func getStartupFileSpecs(version string, versionSpecificInit bool) (startupFileS
 	initSpec := startupFileSpec{
 		path:        initPath,
 		description: initDescription,
-		required:    false,
+		required:    options.requireInit,
 	}
 
-	if envPath, ok := os.LookupEnv("MSHSTDLIB"); ok && strings.TrimSpace(envPath) != "" {
-		stdlibSpec.path = envPath
-		stdlibSpec.description = "standard library from MSHSTDLIB"
-		stdlibSpec.envVar = "MSHSTDLIB"
-		stdlibSpec.required = true
-	}
+	if options.allowEnvOverrides {
+		if envPath, ok := os.LookupEnv("MSHSTDLIB"); ok && strings.TrimSpace(envPath) != "" {
+			stdlibSpec.path = envPath
+			stdlibSpec.description = "standard library from MSHSTDLIB"
+			stdlibSpec.envVar = "MSHSTDLIB"
+			stdlibSpec.required = true
+		}
 
-	if envPath, ok := os.LookupEnv("MSHINIT"); ok && strings.TrimSpace(envPath) != "" {
-		initSpec.path = envPath
-		initSpec.description = "user init file from MSHINIT"
-		initSpec.envVar = "MSHINIT"
-		initSpec.required = true
+		if envPath, ok := os.LookupEnv("MSHINIT"); ok && strings.TrimSpace(envPath) != "" {
+			initSpec.path = envPath
+			initSpec.description = "user init file from MSHINIT"
+			initSpec.envVar = "MSHINIT"
+			initSpec.required = true
+		}
 	}
 
 	return stdlibSpec, initSpec, nil
@@ -197,17 +199,35 @@ func loadStartupFile(path string, description string, stack *MShellStack, contex
 	return nil
 }
 
-func loadStartupDefinitions(version string, versionSpecificInit bool, stack *MShellStack, context ExecuteContext, state *EvalState) ([]MShellDefinition, error) {
-	stdlibSpec, initSpec, err := getStartupFileSpecs(version, versionSpecificInit)
+func clearStartupOverrideEnv() error {
+	if err := os.Unsetenv("MSHSTDLIB"); err != nil {
+		return err
+	}
+	if err := os.Unsetenv("MSHINIT"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func envWithoutStartupOverrides() []string {
+	filteredEnv := make([]string, 0, len(os.Environ()))
+	for _, envVar := range os.Environ() {
+		if strings.HasPrefix(envVar, "MSHSTDLIB=") || strings.HasPrefix(envVar, "MSHINIT=") {
+			continue
+		}
+		filteredEnv = append(filteredEnv, envVar)
+	}
+	return filteredEnv
+}
+
+func loadStartupDefinitions(options startupLoadOptions, stack *MShellStack, context ExecuteContext, state *EvalState) ([]MShellDefinition, error) {
+	stdlibSpec, initSpec, err := getStartupFileSpecs(options)
 	if err != nil {
 		return nil, err
 	}
 
 	definitions := make([]MShellDefinition, 0)
 	if err := loadStartupFile(stdlibSpec.path, stdlibSpec.description, stack, context, state, &definitions); err != nil {
-		if versionSpecificInit && stdlibSpec.envVar == "" && errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("%w; download/install prompting is not implemented yet", err)
-		}
 		return nil, err
 	}
 
@@ -530,13 +550,15 @@ func main() {
 	}
 
 	effectiveVersion := mshellVersion
-	versionSpecificInit := false
+	allowStartupEnvOverrides := true
+	requireVersionedInit := false
 	if file.Version != "" {
 		effectiveVersion = file.Version
-		versionSpecificInit = true
+		allowStartupEnvOverrides = false
+		requireVersionedInit = true
 	}
 
-	if file.Version != "" && file.Version != mshellVersion && inputFilePath != "" && command == CLIEXECUTE {
+	if file.Version != "" && file.Version != mshellVersion && inputFilePath != "" {
 		altName := "msh-" + file.Version
 		altExe, lookErr := exec.LookPath(altName)
 		if lookErr != nil {
@@ -548,6 +570,7 @@ func main() {
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
+		cmd.Env = envWithoutStartupOverrides()
 		runErr := cmd.Run()
 		if runErr != nil {
 			if exitErr, ok := runErr.(*exec.ExitError); ok {
@@ -556,6 +579,14 @@ func main() {
 			os.Exit(1)
 		}
 		os.Exit(0)
+	}
+
+	if file.Version != "" {
+		if err := clearStartupOverrideEnv(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error clearing startup override environment variables: %s\n", err)
+			os.Exit(1)
+			return
+		}
 	}
 
 	var callStack CallStack
@@ -578,7 +609,11 @@ func main() {
 
 	var allDefinitions []MShellDefinition
 
-	startupDefinitions, err := loadStartupDefinitions(effectiveVersion, versionSpecificInit, &stack, context, &state)
+	startupDefinitions, err := loadStartupDefinitions(startupLoadOptions{
+		version:           effectiveVersion,
+		allowEnvOverrides: allowStartupEnvOverrides,
+		requireInit:       requireVersionedInit,
+	}, &stack, context, &state)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading startup files: %s\n", err)
 		os.Exit(1)
@@ -2834,7 +2869,11 @@ func (state *TermState) getCurrentPos() (int, int, error) {
 }
 
 func stdLibDefinitions(stack MShellStack, context ExecuteContext, state EvalState) ([]MShellDefinition, error) {
-	return loadStartupDefinitions(mshellVersion, true, &stack, context, &state)
+	return loadStartupDefinitions(startupLoadOptions{
+		version:           mshellVersion,
+		allowEnvOverrides: true,
+		requireInit:       false,
+	}, &stack, context, &state)
 }
 
 func registerTempFileForCleanup(tempFileName string) {

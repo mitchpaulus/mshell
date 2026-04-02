@@ -38,22 +38,24 @@ Move-Item msh.exe <span class="mshellSTRING">"$env:USERPROFILE\\bin\\"</span></c
 <h2 id="getting-started-installation-stdlib">2) Set up the standard library</h2>
 
 <p>
-Copy <code>lib/std.msh</code> from this repo into the startup location for the version of <code>msh</code> you are installing.
-<code>msh</code> looks for the standard library at <code>$XDG_DATA_HOME/msh/lib/std.msh</code> on Linux/macOS
-(falling back to <code>~/.local/share/msh/lib/std.msh</code>)
-and at <code>%LOCALAPPDATA%\msh\lib\std.msh</code> on Windows.
+Copy <code>std.msh</code> from the release into the startup location for the version of <code>msh</code> you are installing.
+<code>msh</code> looks for the standard library at <code>$XDG_DATA_HOME/msh/&lt;version&gt;/std.msh</code> on Linux/macOS
+(falling back to <code>~/.local/share/msh/&lt;version&gt;/std.msh</code>)
+and at <code>%LOCALAPPDATA%\msh\&lt;version&gt;\std.msh</code> on Windows.
 </p>
 
 <p>
-It also loads a user init file from <code>$XDG_CONFIG_HOME/msh/init/init.msh</code> on Linux/macOS
-(falling back to <code>~/.config/msh/init/init.msh</code>)
-or <code>%LOCALAPPDATA%\msh\init\init.msh</code> on Windows.
+It also loads a user init file from <code>$XDG_CONFIG_HOME/msh/&lt;version&gt;/init.msh</code> on Linux/macOS
+(falling back to <code>~/.config/msh/&lt;version&gt;/init.msh</code>)
+or <code>%LOCALAPPDATA%\msh\&lt;version&gt;\init.msh</code> on Windows.
 </p>
 
 <p>
-If you need to override startup for a specific run, <code>MSHSTDLIB</code> and <code>MSHINIT</code> take precedence over those locations.
-Each variable overrides only its own file.
-The init file is optional unless you explicitly set <code>MSHINIT</code>.
+The standard library is required at the resolved path.
+For interactive use and scripts without <code>VER</code>, missing <code>init.msh</code> is allowed unless you explicitly set <code>MSHINIT</code>.
+Scripts with <code>VER "vX.Y.Z"</code> require the version-specific <code>init.msh</code> for that version.
+If you need to override startup for a specific run, <code>MSHSTDLIB</code> and <code>MSHINIT</code> take precedence for interactive use and scripts without <code>VER</code>.
+Scripts with <code>VER "vX.Y.Z"</code> always use the version-specific startup files for that version.
 </p>
 
 <p>

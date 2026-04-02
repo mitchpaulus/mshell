@@ -28,25 +28,24 @@ it will attempt to find/install on the system.
 We should be taking these steps when executing a file:
 
 1. Parse file and look for version in the file.
+   - If version specified
+     - If there is a mismatch, then attempt to restart the process with the correct executable.
+       Clear the MSHSTDLIB and MSHINIT env vars so it then looks for the version specific ones.
+     - Same version, also clear those environment variables, continue below.
+   - Else no version specified
+     - Continue below
+   - For interactive use, we are taking the version of the current executable, and current state of environment variables.
+
+2. Lookup paths to standard library in init files.
 
    - First check hardcoded environment variables
      - `MSHSTDLIB`: hardcoded path if exists. Hard fail and tell user if that file doesn't exist.
      - `MSHINIT`: hardcoded path if exists. Hard fail and tell user if that file doesn't exist.
 
-   - No version:
-     - Look for std library code at:
-       - `$XDG_DATA_HOME/msh/lib/{version}/std.msh` (Unix) or `$LOCALAPPDATA/msh/lib/{version}/std.msh` (Windows)
-     - Look for user-init code at:
-       - `$XDG_CONFIG_HOME/msh/init/init.msh` (Unix) or `$LOCALAPPDATA/msh/init/init.msh` (Windows)
+   - Else look for corresponding version
+      - Look for std library code at:
+        - `$XDG_DATA_HOME/msh/{version}/std.msh` (Unix) or `$LOCALAPPDATA/msh/{version}/std.msh` (Windows)
+      - Look for user-init code at:
+        - `$XDG_CONFIG_HOME/msh/{version}/init.msh` (Unix) or `$LOCALAPPDATA/msh/{version}/init.msh` (Windows)
 
-     - Fail if these files are not found and explain to user.
-
-   - Has version:
-     - Look for std library code at:
-       - `$XDG_DATA_HOME/msh/lib/{version}/std.msh` (Unix) or `$LOCALAPPDATA/msh/lib/{version}/std.msh` (Windows)
-     - Look for user-init code at:
-       - `$XDG_CONFIG_HOME/msh/init/{version}/init.msh` (Unix) or `$LOCALAPPDATA/msh/init/{version}/init.msh` (Windows)
-
-     - If these are not found, prompt user if they want to download them from the internet to get them.
-
-For interactive use, we are taking the version of the current executable.
+      - Fail if these files are not found and explain to user.

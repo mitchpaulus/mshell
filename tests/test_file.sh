@@ -1,8 +1,11 @@
 #!/bin/bash
 TMP_FILE="$(mktemp)"
 TMP_ERR="$(mktemp)"
+TMP_INIT="$(mktemp)"
+trap 'rm -f "$TMP_FILE" "$TMP_ERR" "$TMP_INIT"' EXIT
 
 export MSHSTDLIB="$(realpath ../lib/std.msh)"
+export MSHINIT="$TMP_INIT"
 
 if printf %s "$1" | grep -q 'positional'; then
     ../mshell/mshell "$1" Hello World > "$TMP_FILE" 2>"$TMP_ERR"
