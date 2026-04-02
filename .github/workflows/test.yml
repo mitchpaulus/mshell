@@ -21,6 +21,7 @@ jobs:
       uses: actions/setup-go@v6
       with:
         cache-dependency-path: mshell/go.sum
+        go-version-file: 'mshell/go.mod'
 
     - name: Build go
       run: cd mshell && go build -o mshell && cp mshell msh
