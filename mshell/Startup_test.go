@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestGetStartupFileSpecsUsesIndependentEnvironmentOverrides(t *testing.T) {
 	t.Setenv("MSHINIT", "")
@@ -67,5 +71,56 @@ func TestGetStartupFileSpecsUsesMSHINITForVersionedScripts(t *testing.T) {
 
 	if initSpec.envVar != "MSHINIT" {
 		t.Fatalf("initSpec.envVar = %q, want %q", initSpec.envVar, "MSHINIT")
+	}
+}
+
+func TestLoadStartupDefinitionsAllowsMissingDefaultInit(t *testing.T) {
+	t.Setenv("MSHSTDLIB", "")
+	t.Setenv("MSHINIT", "")
+
+	dataHome := t.TempDir()
+	configHome := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dataHome)
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+
+	version := "v9.9.9"
+	stdlibDir := filepath.Join(dataHome, "msh", "lib", version)
+	if err := os.MkdirAll(stdlibDir, 0755); err != nil {
+		t.Fatalf("MkdirAll(stdlibDir) error = %v", err)
+	}
+
+	stdlibPath := filepath.Join(stdlibDir, "std.msh")
+	if err := os.WriteFile(stdlibPath, []byte("\"from-stdlib\" startup!\n"), 0644); err != nil {
+		t.Fatalf("WriteFile(stdlibPath) error = %v", err)
+	}
+
+	stack := MShellStack{}
+	context := ExecuteContext{
+		Variables: map[string]MShellObject{},
+		Pbm:       NewPathBinManager(),
+	}
+	state := EvalState{}
+
+	definitions, err := loadStartupDefinitions(version, false, &stack, context, &state)
+	if err != nil {
+		t.Fatalf("loadStartupDefinitions() error = %v", err)
+	}
+
+	if len(definitions) != 0 {
+		t.Fatalf("len(definitions) = %d, want 0", len(definitions))
+	}
+
+	startupValue, ok := context.Variables["startup"]
+	if !ok {
+		t.Fatalf("expected startup variable to be set by stdlib")
+	}
+
+	startupStr, ok := startupValue.(MShellString)
+	if !ok {
+		t.Fatalf("startup variable type = %T, want MShellString", startupValue)
+	}
+
+	if startupStr.Content != "from-stdlib" {
+		t.Fatalf("startup variable = %q, want %q", startupStr.Content, "from-stdlib")
 	}
 }

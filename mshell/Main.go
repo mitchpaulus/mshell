@@ -52,6 +52,7 @@ type startupFileSpec struct {
 	path        string
 	description string
 	envVar      string
+	required    bool
 }
 
 func getStartupDataDir() (string, error) {
@@ -137,23 +138,27 @@ func getStartupFileSpecs(version string, versionSpecificInit bool) (startupFileS
 	stdlibSpec := startupFileSpec{
 		path:        stdlibPath,
 		description: stdlibDescription,
+		required:    true,
 	}
 
 	initSpec := startupFileSpec{
 		path:        initPath,
 		description: initDescription,
+		required:    false,
 	}
 
 	if envPath, ok := os.LookupEnv("MSHSTDLIB"); ok && strings.TrimSpace(envPath) != "" {
 		stdlibSpec.path = envPath
 		stdlibSpec.description = "standard library from MSHSTDLIB"
 		stdlibSpec.envVar = "MSHSTDLIB"
+		stdlibSpec.required = true
 	}
 
 	if envPath, ok := os.LookupEnv("MSHINIT"); ok && strings.TrimSpace(envPath) != "" {
 		initSpec.path = envPath
 		initSpec.description = "user init file from MSHINIT"
 		initSpec.envVar = "MSHINIT"
+		initSpec.required = true
 	}
 
 	return stdlibSpec, initSpec, nil
@@ -207,8 +212,8 @@ func loadStartupDefinitions(version string, versionSpecificInit bool, stack *MSh
 	}
 
 	if err := loadStartupFile(initSpec.path, initSpec.description, stack, context, state, &definitions); err != nil {
-		if versionSpecificInit && initSpec.envVar == "" && errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("%w; download/install prompting is not implemented yet", err)
+		if !initSpec.required && errors.Is(err, os.ErrNotExist) {
+			return definitions, nil
 		}
 		return nil, err
 	}

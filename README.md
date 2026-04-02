@@ -37,6 +37,7 @@ Also create init files at `${XDG_CONFIG_HOME:-$HOME/.config}/msh/init/init.msh`
 and `${XDG_CONFIG_HOME:-$HOME/.config}/msh/init/v0.13.0/init.msh`
 on Linux/macOS,
 or `%LOCALAPPDATA%\msh\init\init.msh` and `%LOCALAPPDATA%\msh\init\v0.13.0\init.msh` on Windows.
+Those init files are optional.
 For one-off overrides, `MSHSTDLIB` and `MSHINIT` can point to exact startup files for the current execution.
 
 An example install script is at [install.sh](https://github.com/mitchpaulus/mshell/blob/main/install.sh) in this repository.
