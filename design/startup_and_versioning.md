@@ -25,9 +25,9 @@ it will attempt to find/install on the system.
 
 ## Startup
 
-We should be taking these steps when executing on a file:
+We should be taking these steps when executing a file:
 
-1. Look for version in the file.
+1. Parse file and look for version in the file.
 
    - No version:
      - Look for std library code at:
@@ -44,6 +44,5 @@ We should be taking these steps when executing on a file:
        - `$XDG_CONFIG_HOME/msh/init/{version}/init.msh` (Unix) or `$LOCALAPPDATA/msh/init/{version}/init.msh` (Windows)
 
      - If these are not found, prompt user if they want to download them from the internet to get them.
-
 
 For interactive use, we are taking the version of the current executable.

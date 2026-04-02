@@ -31,7 +31,12 @@ tar -xvf linux_amd64.tar.gz
 Put that file in a directory that is in your `$PATH` and make sure it is marked as executable on Linux.
 
 The other file to copy is the standard library, which is included in the release, or is at `lib/std.msh` in this repo.
-Get that, put it somewhere. Then set the environment variable `$MSHSTDLIB` to point to that file location.
+For `msh v0.13.0`, put it at `${XDG_DATA_HOME:-$HOME/.local/share}/msh/lib/v0.13.0/std.msh` on Linux/macOS
+or `%LOCALAPPDATA%\msh\lib\v0.13.0\std.msh` on Windows.
+Also create init files at `${XDG_CONFIG_HOME:-$HOME/.config}/msh/init/init.msh`
+and `${XDG_CONFIG_HOME:-$HOME/.config}/msh/init/v0.13.0/init.msh`
+on Linux/macOS,
+or `%LOCALAPPDATA%\msh\init\init.msh` and `%LOCALAPPDATA%\msh\init\v0.13.0\init.msh` on Windows.
 
 An example install script is at [install.sh](https://github.com/mitchpaulus/mshell/blob/main/install.sh) in this repository.
 
@@ -55,7 +60,7 @@ msh -c 'sl len wl' < input_file_to_process.txt
 awk 'END { print NR }' < input_file_to_process.txt
 ```
 
-Note that you'll also need the environment variable `MSHSTDLIB` pointing to the file at `lib/std.msh`.
+These examples assume the standard library is installed in the normal startup location for your current `msh` version.
 
 
 *Simpler execution of common shell idioms*

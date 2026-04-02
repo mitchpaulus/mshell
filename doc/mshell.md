@@ -208,6 +208,21 @@ Process substitution is done using the `psub` operator.
 [my_command_needing_file "my test" psub];
 ```
 
+## Startup Files
+
+`msh` loads startup files before running code.
+
+- The standard library is loaded from a versioned data path:
+  `$XDG_DATA_HOME/msh/lib/<version>/std.msh` on Linux/macOS
+  (falling back to `~/.local/share/msh/lib/<version>/std.msh`)
+  or `%LOCALAPPDATA%\msh\lib\<version>\std.msh` on Windows.
+- For normal scripts without `VER`, the user init file is loaded from
+  `$XDG_CONFIG_HOME/msh/init/init.msh` on Linux/macOS
+  (falling back to `~/.config/msh/init/init.msh`)
+  or `%LOCALAPPDATA%\msh\init\init.msh` on Windows.
+- If a script declares `VER "vX.Y.Z"`, `msh` uses that version for the standard library path and loads the init file from `init/<version>/init.msh`.
+- Interactive use takes the version from the current executable, so interactive startup looks for versioned startup files for that `msh`.
+
 ## Tilde Substitution
 
 When encountering a literal token that begins with `~/` or is `~` alone,

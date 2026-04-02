@@ -52,6 +52,37 @@ runs:
 
         echo "$HOME/.mshell/bin" >> $GITHUB_PATH
 
-        # std.msh is included in the release tarball, move it to a standard location
-        mv "$HOME/.mshell/bin/std.msh" "$HOME/.mshell/std.msh"
-        echo "MSHSTDLIB=$HOME/.mshell/std.msh" >> $GITHUB_ENV
+        if [ -f "$HOME/.mshell/bin/msh" ]; then
+          MSH_BIN="$HOME/.mshell/bin/msh"
+        elif [ -f "$HOME/.mshell/bin/msh.exe" ]; then
+          MSH_BIN="$HOME/.mshell/bin/msh.exe"
+        elif [ -f "$HOME/.mshell/bin/mshell" ]; then
+          MSH_BIN="$HOME/.mshell/bin/mshell"
+        else
+          MSH_BIN="$HOME/.mshell/bin/mshell.exe"
+        fi
+
+        MSH_VERSION="$("$MSH_BIN" --version)"
+
+        if [ "${{ runner.os }}" = "Windows" ]; then
+          STARTUP_ROOT="$HOME/.mshell/localappdata"
+          DATA_DIR="$STARTUP_ROOT/msh"
+          CONFIG_DIR="$STARTUP_ROOT/msh"
+          echo "LOCALAPPDATA=$STARTUP_ROOT" >> $GITHUB_ENV
+        else
+          XDG_DATA_HOME_VALUE="$HOME/.mshell/xdg-data"
+          XDG_CONFIG_HOME_VALUE="$HOME/.mshell/xdg-config"
+          DATA_DIR="$XDG_DATA_HOME_VALUE/msh"
+          CONFIG_DIR="$XDG_CONFIG_HOME_VALUE/msh"
+          echo "XDG_DATA_HOME=$XDG_DATA_HOME_VALUE" >> $GITHUB_ENV
+          echo "XDG_CONFIG_HOME=$XDG_CONFIG_HOME_VALUE" >> $GITHUB_ENV
+        fi
+
+        mkdir -p "$DATA_DIR/lib/$MSH_VERSION"
+        mkdir -p "$CONFIG_DIR/init"
+        mkdir -p "$CONFIG_DIR/init/$MSH_VERSION"
+
+        # std.msh is included in the release tarball; move it into the startup location.
+        mv "$HOME/.mshell/bin/std.msh" "$DATA_DIR/lib/$MSH_VERSION/std.msh"
+        touch "$CONFIG_DIR/init/init.msh"
+        touch "$CONFIG_DIR/init/$MSH_VERSION/init.msh"
