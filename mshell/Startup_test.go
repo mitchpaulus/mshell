@@ -56,6 +56,7 @@ func TestGetStartupFileSpecsUsesIndependentEnvironmentOverrides(t *testing.T) {
 	stdlibSpec, initSpec, err := getStartupFileSpecs(startupLoadOptions{
 		version:           "v9.9.9",
 		allowEnvOverrides: true,
+		requireInit:       false,
 	})
 	if err != nil {
 		t.Fatalf("getStartupFileSpecs() error = %v", err)
@@ -95,6 +96,7 @@ func TestGetStartupFileSpecsIgnoresEnvironmentOverridesWhenDisabled(t *testing.T
 	stdlibSpec, initSpec, err := getStartupFileSpecs(startupLoadOptions{
 		version:           "v1.2.3",
 		allowEnvOverrides: false,
+		requireInit:       true,
 	})
 	if err != nil {
 		t.Fatalf("getStartupFileSpecs() error = %v", err)
@@ -152,6 +154,7 @@ func TestLoadStartupDefinitionsLoadsVersionedStdlibAndInit(t *testing.T) {
 	definitions, err := loadStartupDefinitions(startupLoadOptions{
 		version:           version,
 		allowEnvOverrides: false,
+		requireInit:       true,
 	}, &stack, context, &state)
 	if err != nil {
 		t.Fatalf("loadStartupDefinitions() error = %v", err)
@@ -190,7 +193,7 @@ func TestLoadStartupDefinitionsLoadsVersionedStdlibAndInit(t *testing.T) {
 	}
 }
 
-func TestLoadStartupDefinitionsRequiresVersionedInit(t *testing.T) {
+func TestLoadStartupDefinitionsRequiresInitForExplicitVersion(t *testing.T) {
 	t.Setenv("MSHSTDLIB", "")
 	t.Setenv("MSHINIT", "")
 
@@ -215,6 +218,7 @@ func TestLoadStartupDefinitionsRequiresVersionedInit(t *testing.T) {
 	_, err := loadStartupDefinitions(startupLoadOptions{
 		version:           version,
 		allowEnvOverrides: false,
+		requireInit:       true,
 	}, &stack, context, &state)
 	if err == nil {
 		t.Fatalf("loadStartupDefinitions() error = nil, want missing init error")
@@ -222,6 +226,60 @@ func TestLoadStartupDefinitionsRequiresVersionedInit(t *testing.T) {
 
 	if !strings.Contains(err.Error(), filepath.Join(configHome, "msh", version, "init.msh")) {
 		t.Fatalf("loadStartupDefinitions() error = %q, want missing init path", err.Error())
+	}
+}
+
+func TestLoadStartupDefinitionsAllowsMissingInitForImplicitVersion(t *testing.T) {
+	t.Setenv("MSHSTDLIB", "")
+	t.Setenv("MSHINIT", "")
+
+	dataHome := t.TempDir()
+	configHome := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dataHome)
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+
+	version := "v9.9.9"
+	stdlibDir := filepath.Join(dataHome, "msh", version)
+	if err := os.MkdirAll(stdlibDir, 0755); err != nil {
+		t.Fatalf("MkdirAll(stdlibDir) error = %v", err)
+	}
+
+	stdlibPath := filepath.Join(stdlibDir, "std.msh")
+	if err := os.WriteFile(stdlibPath, []byte("\"from-stdlib\" stdlibSource!\n"), 0644); err != nil {
+		t.Fatalf("WriteFile(stdlibPath) error = %v", err)
+	}
+
+	stack, context, state := newStartupTestContext()
+
+	definitions, err := loadStartupDefinitions(startupLoadOptions{
+		version:           version,
+		allowEnvOverrides: true,
+		requireInit:       false,
+	}, &stack, context, &state)
+	if err != nil {
+		t.Fatalf("loadStartupDefinitions() error = %v", err)
+	}
+
+	if len(definitions) != 0 {
+		t.Fatalf("len(definitions) = %d, want 0", len(definitions))
+	}
+
+	if _, ok := context.Variables["startup"]; ok {
+		t.Fatalf("expected startup variable to remain unset without init")
+	}
+
+	stdlibValue, ok := context.Variables["stdlibSource"]
+	if !ok {
+		t.Fatalf("expected stdlibSource variable to be set by stdlib")
+	}
+
+	stdlibStr, ok := stdlibValue.(MShellString)
+	if !ok {
+		t.Fatalf("stdlibSource variable type = %T, want MShellString", stdlibValue)
+	}
+
+	if stdlibStr.Content != "from-stdlib" {
+		t.Fatalf("stdlibSource variable = %q, want %q", stdlibStr.Content, "from-stdlib")
 	}
 }
 

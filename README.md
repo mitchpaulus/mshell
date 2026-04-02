@@ -35,7 +35,7 @@ For `msh v0.13.0`, put it at `${XDG_DATA_HOME:-$HOME/.local/share}/msh/v0.13.0/s
 or `%LOCALAPPDATA%\msh\v0.13.0\std.msh` on Windows.
 Also create `${XDG_CONFIG_HOME:-$HOME/.config}/msh/v0.13.0/init.msh` on Linux/macOS
 or `%LOCALAPPDATA%\msh\v0.13.0\init.msh` on Windows.
-That init file is required, but it can be empty.
+That init file is required for scripts that declare `VER "v0.13.0"`, but it is optional for interactive use and scripts without `VER`.
 For one-off overrides, `MSHSTDLIB` and `MSHINIT` can point to exact startup files for interactive use and scripts without `VER`.
 Scripts with `VER "vX.Y.Z"` always use the startup files for `vX.Y.Z`.
 

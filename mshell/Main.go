@@ -58,6 +58,7 @@ type startupFileSpec struct {
 type startupLoadOptions struct {
 	version            string
 	allowEnvOverrides  bool
+	requireInit        bool
 }
 
 func getStartupDataDir() (string, error) {
@@ -143,7 +144,7 @@ func getStartupFileSpecs(options startupLoadOptions) (startupFileSpec, startupFi
 	initSpec := startupFileSpec{
 		path:        initPath,
 		description: initDescription,
-		required:    true,
+		required:    options.requireInit,
 	}
 
 	if options.allowEnvOverrides {
@@ -231,6 +232,9 @@ func loadStartupDefinitions(options startupLoadOptions, stack *MShellStack, cont
 	}
 
 	if err := loadStartupFile(initSpec.path, initSpec.description, stack, context, state, &definitions); err != nil {
+		if !initSpec.required && errors.Is(err, os.ErrNotExist) {
+			return definitions, nil
+		}
 		return nil, err
 	}
 
@@ -547,9 +551,11 @@ func main() {
 
 	effectiveVersion := mshellVersion
 	allowStartupEnvOverrides := true
+	requireVersionedInit := false
 	if file.Version != "" {
 		effectiveVersion = file.Version
 		allowStartupEnvOverrides = false
+		requireVersionedInit = true
 	}
 
 	if file.Version != "" && file.Version != mshellVersion && inputFilePath != "" {
@@ -606,6 +612,7 @@ func main() {
 	startupDefinitions, err := loadStartupDefinitions(startupLoadOptions{
 		version:           effectiveVersion,
 		allowEnvOverrides: allowStartupEnvOverrides,
+		requireInit:       requireVersionedInit,
 	}, &stack, context, &state)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading startup files: %s\n", err)
@@ -2865,6 +2872,7 @@ func stdLibDefinitions(stack MShellStack, context ExecuteContext, state EvalStat
 	return loadStartupDefinitions(startupLoadOptions{
 		version:           mshellVersion,
 		allowEnvOverrides: true,
+		requireInit:       false,
 	}, &stack, context, &state)
 }
 

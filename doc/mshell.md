@@ -221,9 +221,11 @@ Process substitution is done using the `psub` operator.
   `$XDG_CONFIG_HOME/msh/<version>/init.msh` on Linux/macOS
   (falling back to `~/.config/msh/<version>/init.msh`)
   or `%LOCALAPPDATA%\msh\<version>\init.msh` on Windows.
-- Both files are required at the resolved paths. An empty `init.msh` is fine if you do not need custom startup code.
+- The standard library is required at the resolved path.
 - For scripts without `VER`, `msh` uses the current executable version.
+- For scripts without `VER` and interactive use, missing `init.msh` is allowed unless `MSHINIT` is explicitly set.
 - If a script declares `VER "vX.Y.Z"` and the current executable is a different version, `msh` looks for `msh-vX.Y.Z` on `PATH` and re-executes the script with that binary.
+- When `VER` is present, the version-specific `init.msh` is required.
 - When `VER` is present, `MSHSTDLIB` and `MSHINIT` are cleared so startup comes from the versioned locations.
 - `MSHSTDLIB` and `MSHINIT` only override startup for interactive use and scripts without `VER`.
 
