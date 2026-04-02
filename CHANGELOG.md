@@ -24,11 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `toSvgPathStr`
   - `unlinesCrLf`
   - `scaleLinear`
+- Explicit version syntax (example: `VER "v0.13.0"`)  and execution. You can now specify the exact version a script should run with and this will force the execution to use that interpreter and corresponding standard library.
 
 ### Fixed
 
 - CLI interactive command execution now switches to a fresh output line before parsing/evaluation, so lexer/parser errors do not render on the prompt line.
-- Lexer `ERROR` tokens now stop parsing immediately (including simple CLI parsing), preventing fallthrough to evaluation errors like unimplemented `ERROR` token handling.
+- Lexer `ERROR` tokens now stop parsing immediately (including simple CLI parsing), preventing fall through to evaluation errors like unimplemented `ERROR` token handling.
 
 ### Changed
 
