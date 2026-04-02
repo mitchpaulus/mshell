@@ -39,17 +39,15 @@ Move-Item msh.exe <span class="mshellSTRING">"$env:USERPROFILE\\bin\\"</span></c
 
 <p>
 Copy <code>lib/std.msh</code> from this repo into the startup location for the version of <code>msh</code> you are installing.
-<code>msh v0.13.0</code> looks for the standard library at <code>$XDG_DATA_HOME/msh/lib/v0.13.0/std.msh</code> on Linux/macOS
-(falling back to <code>~/.local/share/msh/lib/v0.13.0/std.msh</code>)
-and at <code>%LOCALAPPDATA%\msh\lib\v0.13.0\std.msh</code> on Windows.
+<code>msh</code> looks for the standard library at <code>$XDG_DATA_HOME/msh/lib/std.msh</code> on Linux/macOS
+(falling back to <code>~/.local/share/msh/lib/std.msh</code>)
+and at <code>%LOCALAPPDATA%\msh\lib\std.msh</code> on Windows.
 </p>
 
 <p>
 It also loads a user init file from <code>$XDG_CONFIG_HOME/msh/init/init.msh</code> on Linux/macOS
 (falling back to <code>~/.config/msh/init/init.msh</code>)
 or <code>%LOCALAPPDATA%\msh\init\init.msh</code> on Windows.
-If a script starts with <code>VER "v0.13.0"</code>,
-<code>msh</code> uses the matching standard library path above and loads the init file from <code>init/v0.13.0/init.msh</code> instead.
 </p>
 
 <p>
@@ -57,45 +55,6 @@ If you need to override startup for a specific run, <code>MSHSTDLIB</code> and <
 Each variable overrides only its own file.
 The init file is optional unless you explicitly set <code>MSHINIT</code>.
 </p>
-
-<p>Examples:</p>
-
-<pre>
-<code><span class="mshellLINECOMMENT"># bash/zsh/sh</span>
-mkdir -p "$XDG_DATA_HOME/msh/lib/v0.13.0"
-cp lib/std.msh "$XDG_DATA_HOME/msh/lib/v0.13.0/std.msh"
-mkdir -p "$XDG_CONFIG_HOME/msh/init"
-mkdir -p "$XDG_CONFIG_HOME/msh/init/v0.13.0"
-touch "$XDG_CONFIG_HOME/msh/init/init.msh"
-touch "$XDG_CONFIG_HOME/msh/init/v0.13.0/init.msh"</code>
-</pre>
-
-<pre>
-<code><span class="mshellLINECOMMENT"># fish</span>
-mkdir -p "$XDG_DATA_HOME/msh/lib/v0.13.0"
-cp lib/std.msh "$XDG_DATA_HOME/msh/lib/v0.13.0/std.msh"
-mkdir -p "$XDG_CONFIG_HOME/msh/init"
-mkdir -p "$XDG_CONFIG_HOME/msh/init/v0.13.0"
-touch "$XDG_CONFIG_HOME/msh/init/init.msh"
-touch "$XDG_CONFIG_HOME/msh/init/v0.13.0/init.msh"</code>
-</pre>
-
-<pre>
-<code><span class="mshellLINECOMMENT"># PowerShell (current session)</span>
-$libDir = Join-Path $env:LOCALAPPDATA <span class="mshellSTRING">"msh\\lib\\v0.13.0"</span>
-$initDir = Join-Path $env:LOCALAPPDATA <span class="mshellSTRING">"msh\\init"</span>
-New-Item -ItemType Directory -Force -Path $libDir, $initDir, (Join-Path $initDir <span class="mshellSTRING">"v0.13.0"</span>)
-Copy-Item lib\std.msh (Join-Path $libDir <span class="mshellSTRING">"std.msh"</span>)
-New-Item -ItemType File -Force -Path (Join-Path $initDir <span class="mshellSTRING">"init.msh"</span>)
-New-Item -ItemType File -Force -Path (Join-Path $initDir <span class="mshellSTRING">"v0.13.0\\init.msh"</span>)</code>
-</pre>
-
-<pre>
-<code><span class="mshellLINECOMMENT"># Windows (GUI)</span>
-<span class="mshellLINECOMMENT"># Create %LOCALAPPDATA%\msh\lib\v0.13.0\std.msh</span>
-<span class="mshellLINECOMMENT"># and both %LOCALAPPDATA%\msh\init\init.msh</span>
-<span class="mshellLINECOMMENT"># and %LOCALAPPDATA%\msh\init\v0.13.0\init.msh.</span></code>
-</pre>
 
 <p>
 An example installer script is available at

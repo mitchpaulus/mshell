@@ -36,12 +36,7 @@ ln -s "$HOME"/.local/bin/msh "$HOME"/.local/bin/mshell 2>/dev/null
 MSH_VERSION="$("$HOME/.local/bin/msh" --version)"
 
 mkdir -p "$DATA_DIR/lib/$MSH_VERSION"
-mkdir -p "$CONFIG_DIR/init"
-mkdir -p "$CONFIG_DIR/init/$MSH_VERSION"
 
 # Move std.msh from the release tarball to the versioned startup directory.
 mv "$HOME"/.local/bin/std.msh "$DATA_DIR/lib/$MSH_VERSION/std.msh"
-
-# Create init files expected by unversioned scripts, versioned scripts, and interactive startup.
-touch "$CONFIG_DIR/init/init.msh"
-touch "$CONFIG_DIR/init/$MSH_VERSION/init.msh"
+cp "$DATA_DIR/lib/$MSH_VERSION/std.msh" "$DATA_DIR/lib/std.msh"
