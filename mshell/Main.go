@@ -2373,7 +2373,7 @@ func (state *TermState) InteractiveMode() error {
 	state.l = NewLexer("", nil)
 	state.p = &MShellParser{lexer: state.l}
 
-	stdLibDefs, err := stdLibDefinitions(state.stack, state.context, state.evalState)
+	stdLibDefs, err := stdLibDefinitions(&state.stack, state.context, &state.evalState)
 	if err != nil {
 		return fmt.Errorf("Error loading standard library: %s\n", err)
 	}
@@ -2868,12 +2868,12 @@ func (state *TermState) getCurrentPos() (int, int, error) {
 	}
 }
 
-func stdLibDefinitions(stack MShellStack, context ExecuteContext, state EvalState) ([]MShellDefinition, error) {
+func stdLibDefinitions(stack *MShellStack, context ExecuteContext, state *EvalState) ([]MShellDefinition, error) {
 	return loadStartupDefinitions(startupLoadOptions{
 		version:           mshellVersion,
 		allowEnvOverrides: true,
 		requireInit:       false,
-	}, &stack, context, &state)
+	}, stack, context, state)
 }
 
 func registerTempFileForCleanup(tempFileName string) {

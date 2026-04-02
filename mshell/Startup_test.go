@@ -323,7 +323,7 @@ func TestStdLibDefinitionsUsesCurrentVersionStartupFilesWithEnvOverrides(t *test
 
 	stack, context, state := newStartupTestContext()
 
-	if _, err := stdLibDefinitions(stack, context, state); err != nil {
+	if _, err := stdLibDefinitions(&stack, context, &state); err != nil {
 		t.Fatalf("stdLibDefinitions() error = %v", err)
 	}
 
@@ -353,6 +353,47 @@ func TestStdLibDefinitionsUsesCurrentVersionStartupFilesWithEnvOverrides(t *test
 
 	if stdlibStr.Content != "from-env-stdlib" {
 		t.Fatalf("stdlibSource variable = %q, want %q", stdlibStr.Content, "from-env-stdlib")
+	}
+}
+
+func TestStdLibDefinitionsAddsCompletionDefinitionsToState(t *testing.T) {
+	t.Setenv("MSHSTDLIB", "")
+	t.Setenv("MSHINIT", "")
+
+	dataHome := t.TempDir()
+	configHome := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dataHome)
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+
+	versionDirData := filepath.Join(dataHome, "msh", mshellVersion)
+	if err := os.MkdirAll(versionDirData, 0755); err != nil {
+		t.Fatalf("MkdirAll(versionDirData) error = %v", err)
+	}
+
+	stdlibPath := filepath.Join(versionDirData, "std.msh")
+	stdlibSource := "def __demoCompletion { 'complete': ['demo'] } ([str] -- [str])\n    ['--flag']\nend\n"
+	if err := os.WriteFile(stdlibPath, []byte(stdlibSource), 0644); err != nil {
+		t.Fatalf("WriteFile(stdlibPath) error = %v", err)
+	}
+
+	stack, context, state := newStartupTestContext()
+
+	definitions, err := stdLibDefinitions(&stack, context, &state)
+	if err != nil {
+		t.Fatalf("stdLibDefinitions() error = %v", err)
+	}
+
+	if len(definitions) != 1 {
+		t.Fatalf("len(definitions) = %d, want 1", len(definitions))
+	}
+
+	completionDefs := state.CompletionDefinitions["demo"]
+	if len(completionDefs) != 1 {
+		t.Fatalf("len(state.CompletionDefinitions[\"demo\"]) = %d, want 1", len(completionDefs))
+	}
+
+	if completionDefs[0].Name != "__demoCompletion" {
+		t.Fatalf("completionDefs[0].Name = %q, want %q", completionDefs[0].Name, "__demoCompletion")
 	}
 }
 
