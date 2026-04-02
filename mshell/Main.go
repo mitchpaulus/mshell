@@ -48,6 +48,12 @@ func parseMShellInput(input string, inputFile *TokenFile) (*MShellFile, error) {
 	return parser.ParseFile()
 }
 
+type startupFileSpec struct {
+	path        string
+	description string
+	envVar      string
+}
+
 func getStartupDataDir() (string, error) {
 	if runtime.GOOS == "windows" {
 		localAppData, ok := os.LookupEnv("LOCALAPPDATA")
@@ -116,6 +122,43 @@ func getStartupPaths(version string, versionSpecificInit bool) (string, string, 
 	return stdlibPath, initPath, nil
 }
 
+func getStartupFileSpecs(version string, versionSpecificInit bool) (startupFileSpec, startupFileSpec, error) {
+	stdlibPath, initPath, err := getStartupPaths(version, versionSpecificInit)
+	if err != nil {
+		return startupFileSpec{}, startupFileSpec{}, err
+	}
+
+	stdlibDescription := fmt.Sprintf("standard library for %s", version)
+	initDescription := "user init file"
+	if versionSpecificInit {
+		initDescription = fmt.Sprintf("user init file for %s", version)
+	}
+
+	stdlibSpec := startupFileSpec{
+		path:        stdlibPath,
+		description: stdlibDescription,
+	}
+
+	initSpec := startupFileSpec{
+		path:        initPath,
+		description: initDescription,
+	}
+
+	if envPath, ok := os.LookupEnv("MSHSTDLIB"); ok && strings.TrimSpace(envPath) != "" {
+		stdlibSpec.path = envPath
+		stdlibSpec.description = "standard library from MSHSTDLIB"
+		stdlibSpec.envVar = "MSHSTDLIB"
+	}
+
+	if envPath, ok := os.LookupEnv("MSHINIT"); ok && strings.TrimSpace(envPath) != "" {
+		initSpec.path = envPath
+		initSpec.description = "user init file from MSHINIT"
+		initSpec.envVar = "MSHINIT"
+	}
+
+	return stdlibSpec, initSpec, nil
+}
+
 func loadStartupFile(path string, description string, stack *MShellStack, context ExecuteContext, state *EvalState, definitions *[]MShellDefinition) error {
 	sourceBytes, err := os.ReadFile(path)
 	if err != nil {
@@ -150,26 +193,21 @@ func loadStartupFile(path string, description string, stack *MShellStack, contex
 }
 
 func loadStartupDefinitions(version string, versionSpecificInit bool, stack *MShellStack, context ExecuteContext, state *EvalState) ([]MShellDefinition, error) {
-	stdlibPath, initPath, err := getStartupPaths(version, versionSpecificInit)
+	stdlibSpec, initSpec, err := getStartupFileSpecs(version, versionSpecificInit)
 	if err != nil {
 		return nil, err
 	}
 
 	definitions := make([]MShellDefinition, 0)
-	stdlibDescription := fmt.Sprintf("standard library for %s", version)
-	if err := loadStartupFile(stdlibPath, stdlibDescription, stack, context, state, &definitions); err != nil {
-		if versionSpecificInit && errors.Is(err, os.ErrNotExist) {
+	if err := loadStartupFile(stdlibSpec.path, stdlibSpec.description, stack, context, state, &definitions); err != nil {
+		if versionSpecificInit && stdlibSpec.envVar == "" && errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("%w; download/install prompting is not implemented yet", err)
 		}
 		return nil, err
 	}
 
-	initDescription := "user init file"
-	if versionSpecificInit {
-		initDescription = fmt.Sprintf("user init file for %s", version)
-	}
-	if err := loadStartupFile(initPath, initDescription, stack, context, state, &definitions); err != nil {
-		if versionSpecificInit && errors.Is(err, os.ErrNotExist) {
+	if err := loadStartupFile(initSpec.path, initSpec.description, stack, context, state, &definitions); err != nil {
+		if versionSpecificInit && initSpec.envVar == "" && errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("%w; download/install prompting is not implemented yet", err)
 		}
 		return nil, err

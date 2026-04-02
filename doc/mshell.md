@@ -221,6 +221,7 @@ Process substitution is done using the `psub` operator.
   (falling back to `~/.config/msh/init/init.msh`)
   or `%LOCALAPPDATA%\msh\init\init.msh` on Windows.
 - If a script declares `VER "vX.Y.Z"`, `msh` uses that version for the standard library path and loads the init file from `init/<version>/init.msh`.
+- `MSHSTDLIB` and `MSHINIT` override those resolved paths for the current execution only. Each variable overrides only its own file.
 - Interactive use takes the version from the current executable, so interactive startup looks for versioned startup files for that `msh`.
 
 ## Tilde Substitution

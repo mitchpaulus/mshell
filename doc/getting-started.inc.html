@@ -52,6 +52,11 @@ If a script starts with <code>VER "v0.13.0"</code>,
 <code>msh</code> uses the matching standard library path above and loads the init file from <code>init/v0.13.0/init.msh</code> instead.
 </p>
 
+<p>
+If you need to override startup for a specific run, <code>MSHSTDLIB</code> and <code>MSHINIT</code> take precedence over those locations.
+Each variable overrides only its own file.
+</p>
+
 <p>Examples:</p>
 
 <pre>

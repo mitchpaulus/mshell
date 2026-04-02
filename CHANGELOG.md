@@ -32,7 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Startup now loads the standard library from the versioned XDG/`LOCALAPPDATA` data directory and user init files from the new config directory locations, instead of relying on `MSHSTDLIB`.
+- Startup now loads the standard library from the versioned XDG/`LOCALAPPDATA` data directory and user init files from the new config directory locations, while still allowing exact per-run overrides via `MSHSTDLIB` and `MSHINIT`.
 
 ## 0.12.0 - 2026-02-19
 

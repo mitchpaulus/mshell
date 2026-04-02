@@ -29,6 +29,10 @@ We should be taking these steps when executing a file:
 
 1. Parse file and look for version in the file.
 
+   - First check hardcoded environment variables
+     - `MSHSTDLIB`: hardcoded path if exists. Hard fail and tell user if that file doesn't exist.
+     - `MSHINIT`: hardcoded path if exists. Hard fail and tell user if that file doesn't exist.
+
    - No version:
      - Look for std library code at:
        - `$XDG_DATA_HOME/msh/lib/{version}/std.msh` (Unix) or `$LOCALAPPDATA/msh/lib/{version}/std.msh` (Windows)
