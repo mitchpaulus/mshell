@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
 
     - name: Check AGENTS.md matches CLAUDE.md
       run: |
@@ -18,7 +18,7 @@ jobs:
         test "$agents_sha" = "$claude_sha"
 
     - name: Set up Go
-      uses: actions/setup-go@v5
+      uses: actions/setup-go@v6
       with:
         cache-dependency-path: mshell/go.sum
 
