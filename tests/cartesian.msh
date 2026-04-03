@@ -1,0 +1,7 @@
+[[]]
+[1 2]   cartesian
+[3 4]   cartesian
+[5 6 7] cartesian
+out!
+@out len wl
+@out str wl

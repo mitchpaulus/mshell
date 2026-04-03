@@ -454,8 +454,18 @@ def concat ([[a]] -- [a])
     l! (+) [] @l foldl
 end
 
-def cartesian ([a] [b] -- [a])
-    listA!, listB! @listA (a! @listB (b! [@a @b]) map) map concat
+# This is a better form from a typing perspective, because it allows for chaining
+# Can get it started with an identity list [[]]
+def cartesian ([[a]] [a] -- [[a]])
+    listA!, listB!
+    @listA map.
+        a!
+        @listB map.
+            # Need to force new list object with '+', 'extend' won't work here.
+            b! @a [@b] +
+        end
+    end
+    concat
 end
 
 # groupBy list (a -- str) -- dict
