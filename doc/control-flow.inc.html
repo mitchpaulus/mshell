@@ -342,6 +342,12 @@ The syntax is <code>functionName. ... end</code> (that is, the function name has
 <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span> <span class="mshellINTEGER">3</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">4</span> <span class="mshellINTEGER">5</span> <span class="mshellINTEGER">6</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">7</span> <span class="mshellINTEGER">8</span> <span class="mshellINTEGER">9</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPREFIXQUOTE">map.</span> <span class="mshellPREFIXQUOTE">filter.</span> <span class="mshellINTEGER">5</span> <span class="mshellGREATERTHAN">&gt;</span> <span class="mshellEND">end</span> <span class="mshellEND">end</span>   <span class="mshellLINECOMMENT"># Result: [[] [6] [7 8 9]]</span></code>
 </pre>
 
+<p><code>filter</code> also works on dictionaries; the quotation receives each value and matching entries keep their original keys:</p>
+
+<pre>
+<code><span class="mshellLEFT_CURLY">{</span> <span class="mshellSTRING">"a"</span><span class="mshellCOLON">:</span> <span class="mshellINTEGER">1</span><span class="mshellCOMMA">,</span> <span class="mshellSTRING">"b"</span><span class="mshellCOLON">:</span> <span class="mshellINTEGER">2</span><span class="mshellCOMMA">,</span> <span class="mshellSTRING">"c"</span><span class="mshellCOLON">:</span> <span class="mshellINTEGER">3</span> <span class="mshellRIGHT_CURLY">}</span> <span class="mshellPREFIXQUOTE">filter.</span> <span class="mshellINTEGER">1</span> <span class="mshellGREATERTHAN">&gt;</span> <span class="mshellEND">end</span> <span class="mshellLITERAL">str</span> <span class="mshellLITERAL">wl</span>   <span class="mshellLINECOMMENT"># {"b": 2, "c": 3}</span></code>
+</pre>
+
 <p>
 This is also useful to turn boolean operators <code>and</code> and <code>or</code> into
 a more traditional lookup infix format:

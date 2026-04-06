@@ -16,6 +16,8 @@ true or. false end and. true end str wl
 5 threshold!
 [1 2 3 4 5 6 7] filter. @threshold > end (str) map ", " join wl
 
+{ "a": 1, "b": 2, "c": 3 } filter. 1 > end str wl
+
 # Prefix quote calling user-defined function
 def double (int -- int) 2 * end
 [1 2 3] map. double end (str) map ", " join wl

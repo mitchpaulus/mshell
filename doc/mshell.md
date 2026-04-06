@@ -741,7 +741,7 @@ end
 - `nth`: Nth element of list (0-based) `([a] int -- a)`
 - `reverse`: Reverse list, `(list -- list)`
 - `sum`: Sum of list, `([numeric] -- numeric)`
-- `filter`: Filter list, `([a] (a -- bool) -- [a])`
+- `filter`: Filter a list or dictionary, returning a new collection. The input list or dictionary is not modified in place. For dictionaries, the quotation is applied to each value and matching entries are preserved. `([a] (a -- bool) -- [a])`, `(dict (a -- bool) -- dict)`
 - `any`: Check if any element in list satisfies a condition, `([a] (a -- bool) -- bool)`
 - `all`: Check if all elements in list satisfy a condition, `([a] (a -- bool) -- bool)`
 - `skip`: Skip first n elements of list, `(list int -- list)`
@@ -779,6 +779,7 @@ end
 - `values`: Get values from dictionary. Sorted. `(dict -- [str])`
 - `keyValues`: Get key/value pairs from dictionary as a list of lists. Each inner list is a two-element list with the key and value. Sorted by key. `(dict -- [[str a]])`
 - `map`: Map a quotation over dictionary values. Keys are preserved. `(dict (a -- b) -- dict)`
+- `filter`: Filter dictionary values with a predicate quotation, returning a new dictionary. Keys are preserved for matching entries, and the original dictionary is not modified in place. `(dict (a -- bool) -- dict)`
 - `in`: Check if key exists in dictionary. `(dict str -- bool)`
 
 ## Date Functions
