@@ -4651,6 +4651,83 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'just' operation on an empty stack.\n", t.Line, t.Column))
 					}
 					stack.Push(&Maybe{obj: o})
+				} else if t.Lexeme == "filter" {
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					fn, ok := obj1.(*MShellQuotation)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The first parameter in 'filter' is expected to be a function, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
+					}
+
+					switch obj2Typed := obj2.(type) {
+					case *MShellList:
+						listObj := obj2Typed
+						newList := NewList(0)
+
+						var filterStack MShellStack
+						filterStack = []MShellObject{}
+
+						for _, item := range listObj.Items {
+							filterStack.Push(item)
+							result, err := state.EvaluateQuote(*fn, &filterStack, context, definitions)
+							if err != nil {
+								return state.FailWithMessage(err.Error())
+							}
+							if result.ShouldPassResultUpStack() {
+								return result
+							}
+							if len(filterStack) != 1 {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: The function in 'filter' did not return a single value, found %d values.\n", t.Line, t.Column, len(filterStack)))
+							}
+
+							filterResult, _ := filterStack.Pop()
+							filterBool, ok := filterResult.(MShellBool)
+							if !ok {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: The function in 'filter' did not return a bool, found a %s (%s).\n", t.Line, t.Column, filterResult.TypeName(), filterResult.DebugString()))
+							}
+
+							if filterBool.Value {
+								newList.Items = append(newList.Items, item)
+							}
+						}
+						stack.Push(newList)
+					case *MShellDict:
+						dictObj := obj2Typed
+						newDict := &MShellDict{Items: make(map[string]MShellObject, len(dictObj.Items))}
+
+						var filterStack MShellStack
+						filterStack = []MShellObject{}
+
+						for key, value := range dictObj.Items {
+							filterStack.Push(value)
+							result, err := state.EvaluateQuote(*fn, &filterStack, context, definitions)
+							if err != nil {
+								return state.FailWithMessage(err.Error())
+							}
+							if result.ShouldPassResultUpStack() {
+								return result
+							}
+							if len(filterStack) != 1 {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: The function in 'filter' did not return a single value, found %d values.\n", t.Line, t.Column, len(filterStack)))
+							}
+
+							filterResult, _ := filterStack.Pop()
+							filterBool, ok := filterResult.(MShellBool)
+							if !ok {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: The function in 'filter' did not return a bool, found a %s (%s).\n", t.Line, t.Column, filterResult.TypeName(), filterResult.DebugString()))
+							}
+
+							if filterBool.Value {
+								newDict.Items[key] = value
+							}
+						}
+						stack.Push(newDict)
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second parameter in 'filter' is expected to be a list or dictionary, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
+					}
 				} else if t.Lexeme == "map" {
 					// Map a function over a list, or a Maybe
 					obj1, obj2, err := stack.Pop2(t)

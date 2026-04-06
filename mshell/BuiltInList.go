@@ -45,6 +45,7 @@ var BuiltInList = map[string]struct{}{
 	"fileExists": {},
 	"fileSize": {},
 	"files": {},
+	"filter": {},
 	"findReplace": {},
 	"floatCmp": {},
 	"floor": {},
