@@ -12,17 +12,40 @@ As a stack based language, the number of items on the stack must be known, it ca
 
 ```mshell
 `myzip.zip` zipExtract  # Running without setting explicit optional dict
-`myzip.zip` # { 'overwrite': false } zipExtract
+`myzip.zip` %{ 'overwrite': false } zipExtract
+
+# Also, %{ is not a single token, it is split so you could do
+
+{
+  'myprop': 1
+} defaults!
+
+myinput % @defaults myFunctionWithDefaults
 ```
 
 Usage within a definition:
 
 ```
-def mydef (str # { 'my_opt_prop': 10 } -- str)
+def mydef (str %{ 'my_opt_prop': 10 } -- str)
   @opt :my_opt_prop 5 maybe # default to 5 for optional property
   # do things..
 end
 ```
+
+## Immediate Review Of The Examples
+
+Two important observations from the current grammar:
+
+- `#` is already the line comment token in the lexer, so `# { ... } zipExtract` cannot work without changing comment lexing
+- your instinct that the optional dict must be parsed together with the callable is correct; ambient "set defaults now, consume them later" state is too implicit
+
+That means the design should probably enforce a shape like:
+
+```mshell
+`myzip.zip` <optional-args-syntax> zipExtract
+```
+
+where the parser can bind the optional-args node directly to `zipExtract`, rather than storing some interpreter-global pending dictionary.
 
 ## Goals
 
@@ -178,6 +201,20 @@ My bias:
 - `withArgs` is easier to implement and easier to reason about
 - a sigil form is nicer if this is meant to feel fundamental and common
 
+One thing I would change from the earlier draft:
+
+- do not model this as long-lived pending state in the evaluator
+- do parse it as a call-site construct attached to the following named callable
+
+In other words, the internal representation should look more like:
+
+- `CallWithOptionalArgs(target=zipExtract, overrides=...)`
+
+and less like:
+
+- `PushPendingOptionalDict(...)`
+- `LaterCallSomethingAndMaybeConsumeIt(...)`
+
 ## Candidate Declaration Syntaxes
 
 Call-site sugar is only half the problem.
@@ -275,6 +312,25 @@ This is a decent internal representation, but not a full source-level design by 
 
 If the language gets sugar, these are the realistic candidates.
 
+### `#{ ... }`
+
+```mshell
+123 #{ 'decimals': 2 } numFmt
+```
+
+Pros:
+
+- visually suggestive
+- compact
+
+Cons:
+
+- not currently available, because `#` starts a line comment today
+- would require reworking comment lexing rules
+- likely not worth the grammar cost
+
+So although this is aesthetically plausible, it is currently a poor fit for mshell as implemented.
+
 ### `?{ ... }`
 
 ```mshell
@@ -322,6 +378,28 @@ Cons:
 
 - more verbose
 
+### Postfix Binder Form
+
+```mshell
+123 { 'decimals': 2 } -> numFmt
+```
+
+or
+
+```mshell
+123 { 'decimals': 2 } @> numFmt
+```
+
+Pros:
+
+- visually binds the dict to the next callable
+- avoids the idea that the dict has an independent lifetime
+
+Cons:
+
+- requires finding a token that is actually available
+- introduces more grammar surface than a keyword
+
 ## Lexer Decisions
 
 These decisions have to be made before picking syntax.
@@ -330,11 +408,18 @@ These decisions have to be made before picking syntax.
 
 If yes, the lexer needs a dedicated token for something like:
 
+- `#{`
 - `?{`
 - `&{`
 - some other prefix immediately before `{`
 
 If no, and the syntax is keyword-based, the lexer might not need to change at all.
+
+Important current fact:
+
+- `#` is already unconditionally lexed as `LINECOMMENT`
+
+So `#` is not currently available for optional-argument syntax without a deliberate lexer redesign.
 
 ### 2. Can Option Names Be Bare Literals?
 
@@ -368,6 +453,22 @@ If the syntax is prefix-plus-dict, the lexer can either:
 
 A single dedicated token is usually easier to parse.
 
+### 5. Does The Syntax Need To Be Adjacent?
+
+For example, should this be valid:
+
+```mshell
+?{ 'a': 1 } fn
+```
+
+but this invalid:
+
+```mshell
+? { 'a': 1 } fn
+```
+
+Requiring adjacency usually keeps lexing simpler and makes the feature easier to spot.
+
 ## Parser Decisions
 
 ### 1. Where Is The Optional Schema Declared?
@@ -394,6 +495,15 @@ into a normal internal call shape early, later stages stay simpler.
 
 If not, the evaluator needs special pending-option behavior.
 
+Given your concern about accidental lifetime, parser desugaring now looks much better than evaluator-side pending state.
+
+The parser could produce an AST node that already couples:
+
+- the override dictionary
+- the target callable token
+
+That keeps the lifetime lexical and explicit.
+
 ### 3. How Are Built-Ins Described?
 
 Built-ins currently have positional type definitions in `TypeChecking.go` and a separate built-in list.
@@ -419,26 +529,31 @@ You need a rule for whether optional bundles only target named definitions/built
 
 My recommendation is to start with named built-ins and named definitions only.
 
+### 5. Does The Parser Require Immediate Adjacency To The Callee?
+
+This needs a firm answer.
+
+Recommended rule:
+
+- optional-argument syntax must be immediately followed by the callable it targets
+- any other token in between is a parse error
+
+That prevents the feature from silently becoming ambient state.
+
 ## Semantic Decisions
 
 These are the biggest design choices.
 
 ### 1. What Is The Lifetime Of The Bundle?
 
-If call-site sugar creates a pending bundle, does it apply to:
+The best answer is now:
 
-- the very next callable token only
-- the next definition or built-in only
-- the next thing that consumes a call frame
+- none, as an independent runtime concept
 
-The rule should be narrow.
+The bundle should not live on its own.
+It should be part of the call syntax for one specific call site.
 
-Recommended rule:
-
-- it applies only to the immediately following named built-in or named definition
-- anything else in between is an error
-
-That prevents spooky action at a distance.
+That avoids spooky action at a distance entirely.
 
 ### 2. Unknown Keys: Error Or Ignore?
 
@@ -476,6 +591,11 @@ Receiving a real dict is simpler and matches current built-ins.
 
 The body can always unpack what it needs.
 
+But there is also a performance tradeoff:
+
+- materializing a merged dict for every call is simple
+- not materializing it unless needed is faster
+
 ### 6. Can Callers Still Pass An Explicit Dict?
 
 I think yes.
@@ -494,6 +614,193 @@ Start with:
 - optional named args
 
 If required named args ever appear, they can use the same schema machinery later.
+
+### 8. Is Omission Distinct From "Provided Value Equals Default"?
+
+This matters if a definition wants to know whether the caller explicitly set a key.
+
+There are two models:
+
+- only the final merged value matters
+- the runtime also tracks which keys were explicitly overridden
+
+The first model is simpler and cheaper.
+
+### 9. Does A Definition Receive Fully Merged Options Or Just Overrides?
+
+Choices:
+
+- pass only overrides and let the body call `maybe`/`getDef`
+- pass a fully merged dict
+- bind resolved option locals before entering the body
+
+This is one of the biggest semantic and performance choices.
+
+### 10. Are Optional Args Part Of Overload Resolution?
+
+If multiple built-in type definitions exist, do optional keys participate in choosing one?
+
+Prefer no, initially.
+
+Overload resolution should stay positional first.
+
+### 11. Can Optional Args Be Used On Prefix-Quote Calls?
+
+Example:
+
+```mshell
+[1 2 3] ?{ 'n': 2 } take.
+```
+
+This is tempting, but it complicates parsing and should probably wait.
+
+## Performance Review
+
+If the feature is implemented naively, it can absolutely create a lot of garbage:
+
+- parse an override dict literal
+- allocate a runtime dict object
+- allocate a second merged dict object
+- maybe unpack values into locals
+- then discard the dicts after one call
+
+That would be wasteful for hot built-ins.
+
+### Performance Goal
+
+The common path should be:
+
+- zero extra allocations when no optional args are provided
+- at most one small allocation when overrides are provided
+- no full merge dict allocation unless the callee actually needs a dictionary object
+
+### Recommended Runtime Model
+
+Represent optional args internally as:
+
+- schema/defaults stored once on the callable
+- per-call overrides stored separately
+
+Then give the callee a lightweight lookup object that answers:
+
+1. is key overridden?
+2. otherwise return static default
+
+That avoids building a merged dictionary eagerly.
+
+Conceptually:
+
+```text
+callable schema:
+  overwrite -> false
+  stripComponents -> 0
+
+call site overrides:
+  overwrite -> true
+
+lookup("overwrite") => true
+lookup("stripComponents") => 0
+```
+
+### Where To Store Defaults
+
+For performance, defaults should be parsed once and stored on the definition/built-in object, not rebuilt per call.
+
+For user definitions that means:
+
+- compile the default expressions at definition load time if they are static literals
+- store resulting `MShellObject`s directly in the definition metadata/schema
+
+For built-ins:
+
+- hardcode the schema once in Go
+
+### Avoid Eager Merge Dicts
+
+The most important performance recommendation is:
+
+- do not eagerly allocate a merged `MShellDict` on every call
+
+Instead:
+
+- keep overrides as one small dict or compact slice
+- fall back to schema defaults on lookup
+
+Only materialize a real merged dict if:
+
+- the function body explicitly needs one as a first-class object
+- or the existing implementation already consumes a dict and rewriting it is not worth it yet
+
+### Prefer Key Interning Or Small Fixed Layouts For Built-Ins
+
+For hot built-ins with a small known option set, a generic `map[string]MShellObject` is not ideal.
+
+A more efficient internal representation is:
+
+- schema assigns each known option a small integer slot
+- overrides are stored in a small slice or bitset-plus-slice
+
+That reduces:
+
+- string hashing
+- map allocation
+- GC pressure
+
+This is especially attractive for built-ins like `zipExtract` and `numFmt` where the key set is tiny and fixed.
+
+### Keep The Fast Path Fast
+
+For calls with no optional overrides:
+
+- the caller should not allocate any options object at all
+- the callee should branch to its existing default behavior
+
+That means syntax like:
+
+```mshell
+`myzip.zip` zipExtract
+```
+
+should ideally execute with essentially the same runtime cost as today, aside from one extra nil-check on optional schema.
+
+### User Definition Tradeoff
+
+User definitions are trickier than built-ins.
+
+If the definition body wants `@opt` as a normal dict, you probably will allocate one.
+
+If instead the implementation binds option locals on entry, like:
+
+- `overwrite`
+- `stripComponents`
+
+then you can avoid a materialized dict entirely for the common case.
+
+That suggests two implementation tiers:
+
+- first version: materialize one merged dict for user definitions, keep built-ins optimized enough
+- later version: compile option lookups into local bindings and avoid the dict
+
+### GC-Critical Questions
+
+These are the questions I would answer before implementing:
+
+- Does a user definition need an actual options dict object, or are resolved locals enough?
+- Are default values required to be static literals, so they can be stored once?
+- Can built-ins use specialized structs instead of general dictionaries?
+- Is the common case "no overrides", and can that be represented as `nil`?
+- Do we need to preserve "was explicitly provided" information, or only the resolved value?
+
+## More Questions
+
+- Should the optional-argument syntax be legal only before named callables, or also before quotations?
+- Should the declaration syntax allow defaults that reference earlier positional inputs, or must defaults be closed/static?
+- If a caller passes an explicit trailing dict and also uses optional-argument sugar, is that forbidden?
+- Should optional args appear in `defs` output and completion metadata?
+- Should unknown keys be a parse-time error for statically known callables, or always runtime?
+- If a definition is recursive, are option defaults re-evaluated each recursive call, or stored once?
+- Can optional args be inherited through wrappers, or must wrappers manually forward them?
+- Do you want syntax for "required keyword-like args" later, and should this design leave room for that?
 
 ## A Plausible First Version
 
