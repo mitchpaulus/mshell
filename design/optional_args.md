@@ -145,6 +145,54 @@ Practical allowed forms on the right side of `%` are likely:
 
 The callable must appear immediately after the optional-args item.
 
+### Internal Parse Representation
+
+Ordinary literals should stay exactly as they are today:
+
+- a normal `Token` with type `LITERAL`
+
+`%` should not create a second kind of literal token.
+
+Instead, the parser should create a new compound parse item that implements `MShellParseItem`.
+
+Conceptually:
+
+```go
+type MShellParseOptionalCall struct {
+    OptArg MShellParseItem // dict literal or variable retrieve
+    Target Token           // the callable literal token
+}
+```
+
+So:
+
+```mshell
+myinput myFunction
+```
+
+would still parse as ordinary items, while:
+
+```mshell
+myinput % @defaults myFunction
+```
+
+would parse as:
+
+- `Token(LITERAL, "myinput")`
+- `MShellParseOptionalCall{OptArg: Token(VARRETRIEVE, "@defaults"), Target: Token(LITERAL, "myFunction")}`
+
+This keeps the separation clean:
+
+- the lexer only needs a `%` token
+- the parser owns the "bind opt dict to immediate callable" rule
+- the evaluator can resolve the target token at runtime the same way normal literal calls already resolve
+
+That means the parser rule after seeing `%` is roughly:
+
+1. parse exactly one allowed opt-arg item
+2. require the next token to be a `LITERAL`
+3. emit one `MShellParseOptionalCall`
+
 ## Signature / Definition Syntax
 
 I was previously assuming the definition declared a schema or defaults.
