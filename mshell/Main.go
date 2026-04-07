@@ -36,7 +36,7 @@ const (
 	CLIHTML
 )
 
-const mshellVersion = "v0.13.0"
+const mshellVersion = "v0.14.0"
 const tabCompletionColumnLimit = 10
 
 var tempFiles []string
