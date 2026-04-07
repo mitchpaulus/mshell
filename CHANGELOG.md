@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## v0.13.0 - 2026-04-07
 
 ### Added
 
@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `unlinesCrLf`
   - `scaleLinear`
 - Explicit version syntax (example: `VER "v0.13.0"`)  and execution. You can now specify the exact version a script should run with and this will force the execution to use that interpreter and corresponding standard library.
+- Multiple cut/copy selections in file manager.
 
 ### Fixed
 
@@ -35,15 +36,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Startup now loads both `std.msh` and `init.msh` from version directories (`msh/<version>/...`), keeps `init.msh` optional for implicit current-version startup unless `MSHINIT` is set, requires it for `VER` scripts, re-execs `VER` scripts with `msh-<version>` when needed, and ignores `MSHSTDLIB`/`MSHINIT` for `VER` scripts.
-- `cartesian` type signature changed. Now is `[[a]] [a] -- [[a]]`. This make it easy to chain more than one Cartesian product.
+- `cartesian` type signature changed. Now is `[[a]] [a] -- [[a]]`. This make it easy to chain more than one Cartesian product. Usually start the chain off with empty `[[]]` as an identity element.
 
-## 0.12.0 - 2026-02-19
+## v0.12.0 - 2026-02-19
 
 ### Changed
 
 - File manager `l` on a file now opens it: text files open in `$EDITOR`, binary/unreadable files open with the platform default (`Start-Process` on Windows, `xdg-open` on Linux, `open` on macOS)
 
-## 0.11.0 - 2026-02-18
+## v0.11.0 - 2026-02-18
 
 ### Added
 
@@ -65,7 +66,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Delete to trash (`x`) with confirmation, using platform-native trash
   - `msh fm` prints final directory to stdout for `cd "$(msh fm)"` usage
 
-## 0.10.0 - 2026-02-13
+## v0.10.0 - 2026-02-13
 
 ### Added
 
@@ -95,7 +96,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Builds/releases now are pure Go, built with `CGO_ENABLED=0`.
 
-## 0.9.0 - 2026-01-27
+## v0.9.0 - 2026-01-27
 
 ### Added
 
@@ -145,7 +146,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Renamed `.s` to `stack`, `.def` to `defs`, `.env` to `env`
 - Removed `.b` (use `binPaths` instead)
 
-## 0.8.0 - 2025-12-29
+## v0.8.0 - 2025-12-29
 
 ### Added
 
@@ -205,7 +206,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Fixed infinite loop in `versionSortCmp` when non-digit after digit.
 
-## 0.7.0 - 2025-10-03
+## v0.7.0 - 2025-10-03
 
 ### Added
 
@@ -249,7 +250,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `fileSize` now returns Maybe
 
 
-## 0.6.0 - 2025-07-17
+## v0.6.0 - 2025-07-17
 
 ### Added
 
@@ -267,7 +268,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sorted output for `keys` and `values`
 - `map` now a built in function
 
-## 0.5.0 - 2025-06-24
+## v0.5.0 - 2025-06-24
 
 ### Added
 
@@ -285,7 +286,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bug in `unlines`
 - Bad printing in certain cases for `.s` and others.
 
-## 0.4.0 - 2025-05-26
+## v0.4.0 - 2025-05-26
 
 ### Added
 
@@ -312,6 +313,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Allow standard output redirection to any string-like item.
 
 
-## 0.1.0 through 0.3.0
+## v0.1.0 through 0.3.0
 
 - Initial releases of the project.
