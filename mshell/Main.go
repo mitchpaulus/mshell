@@ -423,18 +423,18 @@ func main() {
 				return
 			}
 
-			// Make dir LOCALAPPDATA/mshell if it doesn't exist
-			err = os.MkdirAll(local_app_data+"/mshell", 0755)
+			// Make dir LOCALAPPDATA/msh if it doesn't exist
+			err = os.MkdirAll(local_app_data+"/msh", 0755)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error creating directory %s/mshell: %s\n", local_app_data, err)
+				fmt.Fprintf(os.Stderr, "Error creating directory %s/msh: %s\n", local_app_data, err)
 				os.Exit(1)
 				return
 			}
 
 			// Open file for writing
-			f, err = os.OpenFile(local_app_data+"/mshell/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			f, err = os.OpenFile(local_app_data+"/msh/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error opening file %s/mshell/mshell.log: %s\n", local_app_data, err)
+				fmt.Fprintf(os.Stderr, "Error opening file %s/msh/mshell.log: %s\n", local_app_data, err)
 				os.Exit(1)
 				return
 			}
@@ -2800,18 +2800,18 @@ func (state *TermState) getCurrentPos() (int, int, error) {
 	// return 0, 0, fmt.Errorf("Error getting LOCALAPPDATA environment variable")
 	// }
 
-	// // Make dir LOCALAPPDATA/mshell if it doesn't exist
-	// err := os.MkdirAll(local_app_data + "/mshell", 0755)
+	// // Make dir LOCALAPPDATA/msh if it doesn't exist
+	// err := os.MkdirAll(local_app_data + "/msh", 0755)
 	// if err != nil {
-	// fmt.Fprintf(os.Stderr, "Error creating directory %s/mshell: %s\n", local_app_data, err)
+	// fmt.Fprintf(os.Stderr, "Error creating directory %s/msh: %s\n", local_app_data, err)
 	// os.Exit(1)
 	// return 0, 0, err
 	// }
 
 	// // Open file for writing
-	// f, err := os.OpenFile(local_app_data + "/mshell/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	// f, err := os.OpenFile(local_app_data + "/msh/mshell.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	// if err != nil {
-	// fmt.Fprintf(os.Stderr, "Error opening file %s/mshell/mshell.log: %s\n", local_app_data, err)
+	// fmt.Fprintf(os.Stderr, "Error opening file %s/msh/mshell.log: %s\n", local_app_data, err)
 	// os.Exit(1)
 	// return 0, 0, err
 	// }
@@ -2933,7 +2933,8 @@ func WriteToHistory(command string, directory string, historyFilePath string) er
 	// 256 bit (32 byte) SHA hash of command
 	// 64 bit (8 byte) timestamp
 
-	// File is ~/.local/share/mshell/.mshell_history or $LOCALAPPDATA/mshell/.mshell_history depending on OS
+	// File is stored under the platform history directory, such as ~/.local/share/msh/msh_history
+	// or $LOCALAPPDATA/msh/msh_history depending on OS.
 	// If the file doesn't exist, create it.
 
 	// var path string

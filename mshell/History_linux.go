@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 )
 
 func GetHistoryDir() (string, error) {
@@ -11,7 +12,10 @@ func GetHistoryDir() (string, error) {
 	if exists {
 		// Check that the directory exists
 		if stat, err := os.Stat(xdgDataHome); err == nil && stat.IsDir() {
-			dir = xdgDataHome
+			dir = filepath.Join(xdgDataHome, "msh")
+			if err := os.MkdirAll(dir, 0755); err != nil {
+				return "", err
+			}
 			return dir, nil
 		}
 	}

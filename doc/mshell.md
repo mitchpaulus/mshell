@@ -182,7 +182,7 @@ end
 
 When executing an external command, `mshell` resolves the binary name using a two-step process. First it checks the bin map file for an override, and if none is found it falls back to `PATH`.
 
-The bin map file lives alongside the history files (for example, `~/.local/share/msh/msh_bins.txt` on Linux/macOS or `%LOCALAPPDATA%\\mshell\\msh_bins.txt` on Windows). Each non-empty line is a tab-separated pair of fields: the binary name and the absolute path to the binary. Both fields are trimmed, the name must not contain path separators, and the line must contain exactly two fields.
+The bin map file lives alongside the history files (for example, `$XDG_DATA_HOME/msh/msh_bins.txt` or `~/.local/share/msh/msh_bins.txt` on Linux/macOS, or `%LOCALAPPDATA%\\msh\\msh_bins.txt` on Windows). Each non-empty line is a tab-separated pair of fields: the binary name and the absolute path to the binary. Both fields are trimmed, the name must not contain path separators, and the line must contain exactly two fields.
 
 ```
 mytool	/usr/local/bin/mytool
@@ -261,6 +261,11 @@ If the indexing is fixed, there is dedicated syntax for it.
 [ 4 3 2 1 ] 1:3  # [ 3 2 ]
 [ 4 3 2 1 ] :3   # [ 4 3 2 ]
 [ 4 3 2 1 ] 2:   # [ 2 1 ]
+# Works on any list element on the stack, not just list literals
+[ 4 3 2 1 ] myList!
+@myList :1:  # 3
+[ [ 'nested' 'list' ] ['is' 'here'] ] nested!
+@nested :1: :0: # 'is'
 ```
 
 For non-fixed indexing, you have the `nth` operator.
@@ -330,7 +335,7 @@ use $"($nu.default-config-dir)/completions/msh.nu" *
 
 ### Binary map overrides
 
-mshell supports a simple bin map file that overrides PATH lookups. The file lives alongside the history files (e.g. `~/.local/share/msh/msh_bins.txt` on Linux/macOS or `%LOCALAPPDATA%\mshell\msh_bins.txt` on Windows).
+mshell supports a simple bin map file that overrides PATH lookups. The file lives alongside the history files (e.g. `$XDG_DATA_HOME/msh/msh_bins.txt` or `~/.local/share/msh/msh_bins.txt` on Linux/macOS, or `%LOCALAPPDATA%\msh\msh_bins.txt` on Windows).
 
 Each line is a single mapping in the form:
 
