@@ -661,7 +661,8 @@ end
 - `pwd`: Get current working directory `( -- str)`
 - `mshFileManager`: Open the built-in file manager.
    Pops a starting directory from the stack.
-   On exit, changes the working directory to the directory the user navigated to. `(str -- )`
+   On exit, changes the working directory to the directory the user navigated to.
+   The preview pane short-circuits common binary extensions and shows first-level contents for `.zip` and `.tar.gz` archives. `(str -- )`
 - `writeFile`: Write string to file (UTF-8). Overwrites file if it exists. `(str content str file -- )`
 - `appendFile`: Append string to file (UTF-8). `(str content str file -- )`
 - `fileSize`: Get size of file in bytes. Returns a Maybe in case file doesn't exist or other IO error. `(str -- Maybe int)`

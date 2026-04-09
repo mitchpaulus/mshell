@@ -1,7 +1,11 @@
 package main
 
 import (
+	"slices"
+	"archive/tar"
+	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"fmt"
 	"io"
@@ -31,6 +35,17 @@ type previewResult struct {
 	lines []string
 	gen   uint64
 }
+
+type archiveListingEntry struct {
+	name     string
+	isDir    bool
+	size     int64
+	modified time.Time
+}
+
+// OneDrive may create this hidden lock/metadata file inside synced directories.
+// Hide it from the file manager so it does not clutter listings or previews.
+const oneDriveHiddenMetadataFileName = ".849C9593-D756-4E56-8D6E-42412F2A707B"
 
 type FileManager struct {
 	rows, cols int
@@ -392,6 +407,7 @@ func (fm *FileManager) loadDirectory() {
 		fm.entries = nil
 		return
 	}
+	entries = filterIgnoredFileManagerEntries(entries)
 
 	sort.SliceStable(entries, func(i, j int) bool {
 		iDir := entries[i].IsDir()
@@ -821,6 +837,7 @@ func computePreview(entry os.DirEntry, path string, maxLines int) []string {
 		if err != nil {
 			return []string{" (cannot read)"}
 		}
+		subEntries = filterIgnoredFileManagerEntries(subEntries)
 		sort.SliceStable(subEntries, func(i, j int) bool {
 			iDir := subEntries[i].IsDir()
 			jDir := subEntries[j].IsDir()
@@ -844,8 +861,15 @@ func computePreview(entry os.DirEntry, path string, maxLines int) []string {
 		return lines
 	}
 
-	// PDFs don't always have a null byte, so treat by extension
-	if strings.EqualFold(filepath.Ext(path), ".pdf") {
+	if isZipPreviewPath(path) {
+		return previewZipArchive(path, maxLines)
+	}
+
+	if isTarGzPreviewPath(path) {
+		return previewTarGzArchive(path, maxLines)
+	}
+
+	if hasKnownBinaryPreviewExtension(path) {
 		return []string{" (binary file)"}
 	}
 
@@ -880,6 +904,272 @@ func computePreview(entry os.DirEntry, path string, maxLines int) []string {
 		lines = append(lines, " "+line)
 	}
 	return lines
+}
+
+func filterIgnoredFileManagerEntries(entries []os.DirEntry) []os.DirEntry {
+	filtered := make([]os.DirEntry, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Name() == oneDriveHiddenMetadataFileName {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	return filtered
+}
+
+func isZipPreviewPath(path string) bool {
+	return strings.EqualFold(filepath.Ext(path), ".zip")
+}
+
+func isTarGzPreviewPath(path string) bool {
+	lowerPath := strings.ToLower(path)
+	return strings.HasSuffix(lowerPath, ".tar.gz") || strings.HasSuffix(lowerPath, ".tgz")
+}
+
+func hasKnownBinaryPreviewExtension(path string) bool {
+	lowerPath := strings.ToLower(path)
+	for _, suffix := range []string{
+		".aac",
+		".ai",
+		".apk",
+		".appimage",
+		".avi",
+		".bmp",
+		".deb",
+		".dll",
+		".doc",
+		".docx",
+		".dylib",
+		".exe",
+		".flac",
+		".gif",
+		".heic",
+		".ico",
+		".img",
+		".iso",
+		".jar",
+		".jpeg",
+		".jpg",
+		".m4a",
+		".mkv",
+		".mov",
+		".mp3",
+		".mp4",
+		".msi",
+		".ogg",
+		".otf",
+		".pdf",
+		".png",
+		".ppt",
+		".pptx",
+		".rpm",
+		".so",
+		".tif",
+		".tiff",
+		".ttf",
+		".vhd",
+		".vhdx",
+		".wav",
+		".webm",
+		".webp",
+		".wmv",
+		".woff",
+		".woff2",
+		".xls",
+		".xlsb",
+		".xlsm",
+		".xlsx",
+	} {
+		if strings.HasSuffix(lowerPath, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+func previewZipArchive(path string, maxLines int) []string {
+	reader, err := zip.OpenReader(path)
+	if err != nil {
+		return []string{" (cannot read zip archive)"}
+	}
+	defer reader.Close()
+
+	entries := make([]archiveListingEntry, 0, len(reader.File))
+	var totalSize int64
+	fileCount := 0
+	dirCount := 0
+	for _, file := range reader.File {
+		entry := archiveListingEntry{
+			name:     file.Name,
+			isDir:    file.FileInfo().IsDir(),
+			size:     int64(file.UncompressedSize64),
+			modified: file.Modified,
+		}
+		entries = append(entries, entry)
+		if entry.isDir {
+			dirCount++
+		} else {
+			fileCount++
+			totalSize += entry.size
+		}
+	}
+
+	return buildDetailedArchivePreviewLines(path, entries, totalSize, fileCount, dirCount, maxLines)
+}
+
+func buildDetailedArchivePreviewLines(path string, entries []archiveListingEntry, totalSize int64, fileCount int, dirCount int, maxLines int) []string {
+	sizeWidth := len("Length")
+	for _, entry := range entries {
+		sizeLen := len(formatPreviewSize(entry.size))
+		if sizeLen > sizeWidth {
+			sizeWidth = sizeLen
+		}
+	}
+
+	headerLine := fmt.Sprintf(" %*s  %-10s %-8s  %s", sizeWidth, "Length", "Date", "Time", "Name")
+	dashLine := fmt.Sprintf(" %s  %s %s  %s",
+		strings.Repeat("-", sizeWidth),
+		strings.Repeat("-", 10),
+		strings.Repeat("-", 8),
+		strings.Repeat("-", 4),
+	)
+
+	lines := []string{
+		fmt.Sprintf(" Archive:  %s", path),
+		headerLine,
+		dashLine,
+	}
+
+	for _, entry := range entries {
+		name := entry.name
+		if entry.isDir && !strings.HasSuffix(name, "/") {
+			name += "/"
+		}
+
+		dateStr := "----------"
+		timeStr := "--------"
+		if !entry.modified.IsZero() {
+			dateStr = entry.modified.Format("2006-01-02")
+			timeStr = entry.modified.Format("3:04 PM")
+		}
+
+		lines = append(lines, fmt.Sprintf(
+			" %*s  %s %-8s  %s",
+			sizeWidth,
+			formatPreviewSize(entry.size),
+			dateStr,
+			timeStr,
+			name,
+		))
+	}
+
+	summaryLabel := fmt.Sprintf("%d files", fileCount)
+	if dirCount > 0 {
+		summaryLabel = fmt.Sprintf("%s, %d dirs", summaryLabel, dirCount)
+	}
+	lines = append(lines, dashLine)
+	lines = append(lines, fmt.Sprintf(" %*s  %s %s  %s",
+		sizeWidth,
+		formatPreviewSize(totalSize),
+		strings.Repeat(" ", 10),
+		strings.Repeat(" ", 8),
+		summaryLabel,
+	))
+
+	return truncatePreviewMiddle(lines, 3, 2, maxLines)
+}
+
+func truncatePreviewMiddle(lines []string, keepHead int, keepTail int, maxLines int) []string {
+	if maxLines <= 0 || len(lines) <= maxLines {
+		return lines
+	}
+	if maxLines == 1 {
+		return lines[:1]
+	}
+	if keepHead+keepTail >= maxLines {
+		return truncatePreviewLines(lines, maxLines)
+	}
+
+	head := append([]string{}, lines[:keepHead]...)
+	tail := append([]string{}, lines[len(lines)-keepTail:]...)
+	omitted := len(lines) - len(head) - len(tail)
+	head = append(head, fmt.Sprintf(" ... %d more", omitted))
+	head = append(head, tail...)
+	return head
+}
+
+func previewTarGzArchive(path string, maxLines int) []string {
+	file, err := os.Open(path)
+	if err != nil {
+		return []string{" (cannot open archive)"}
+	}
+	defer file.Close()
+
+	gzipReader, err := gzip.NewReader(file)
+	if err != nil {
+		return []string{" (cannot read tar.gz archive)"}
+	}
+	defer gzipReader.Close()
+
+	tarReader := tar.NewReader(gzipReader)
+	entries := make([]archiveListingEntry, 0)
+	var totalSize int64
+	fileCount := 0
+	dirCount := 0
+	for {
+		header, err := tarReader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return []string{" (cannot read tar.gz archive)"}
+		}
+
+		entry := archiveListingEntry{
+			name:  header.Name,
+			isDir: header.FileInfo().IsDir(),
+			size:  header.Size,
+			modified: header.ModTime,
+		}
+		entries = append(entries, entry)
+		if entry.isDir {
+			dirCount++
+		} else {
+			fileCount++
+			totalSize += entry.size
+		}
+	}
+
+	return buildDetailedArchivePreviewLines(path, entries, totalSize, fileCount, dirCount, maxLines)
+}
+
+func truncatePreviewLines(lines []string, maxLines int) []string {
+	if maxLines <= 0 || len(lines) <= maxLines {
+		return lines
+	}
+	if maxLines == 1 {
+		return lines[:1]
+	}
+
+	remaining := len(lines) - maxLines + 1
+	truncated := append([]string{}, lines[:maxLines-1]...)
+	truncated = append(truncated, fmt.Sprintf(" ... %d more", remaining))
+	return truncated
+}
+
+func formatPreviewSize(size int64) string {
+	if size < 1024 {
+		return fmt.Sprintf("%d B", size)
+	}
+
+	value := float64(size)
+	for _, unit := range []string{"KiB", "MiB", "GiB", "TiB"} {
+		value /= 1024
+		if value < 1024 {
+			return fmt.Sprintf("%.1f %s", value, unit)
+		}
+	}
+	return fmt.Sprintf("%.1f PiB", value/1024)
 }
 
 func escapeSequenceLength(buf []byte) int {
@@ -1433,7 +1723,7 @@ func (fm *FileManager) openEditor() {
 }
 
 func isBinaryFile(path string) bool {
-	if strings.EqualFold(filepath.Ext(path), ".pdf") {
+	if hasKnownBinaryPreviewExtension(path) || isZipPreviewPath(path) || isTarGzPreviewPath(path) {
 		return true
 	}
 	f, err := os.Open(path)
@@ -1744,8 +2034,11 @@ func (fm *FileManager) promptDelete(entry os.DirEntry) bool {
 	// For non-empty directories, show entry count
 	if entry.IsDir() {
 		dirPath := filepath.Join(fm.currentDir, name)
-		if subEntries, err := os.ReadDir(dirPath); err == nil && len(subEntries) > 0 {
+		if subEntries, err := os.ReadDir(dirPath); err == nil {
+			subEntries = filterIgnoredFileManagerEntries(subEntries)
+			if len(subEntries) > 0 {
 			lines = append(lines, fmt.Sprintf(" (directory with %d entries) ", len(subEntries)))
+		}
 		}
 	}
 
@@ -1934,11 +2227,9 @@ func clearClipboard() error {
 }
 
 func appendUniquePath(paths []string, path string) []string {
-	for _, existing := range paths {
-		if existing == path {
+	if slices.Contains(paths, path) {
 			return paths
 		}
-	}
 	return append(paths, path)
 }
 

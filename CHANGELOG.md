@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - History, bin map, and interactive log storage now use the `$LOCALAPPDATA\msh` directory on Windows instead of `$LOCALAPPDATA\mshell`, and `XDG_DATA_HOME` history/bin map storage now uses the required `msh/` subdirectory on Linux/macOS.
   You should be able to simply move the previous files over with no problems.
 - `msh bin edit` now falls back to the platform default opener when `$EDITOR` is unavailable
+- File manager preview now short-circuits many more common binary extensions and shows detailed archive listings with human-readable sizes and `h:mm AM/PM` times for `.zip` and `.tar.gz` archives
+- File manager now hides OneDrive's hidden `.849C9593-D756-4E56-8D6E-42412F2A707B` metadata file from listings and directory previews
 
 
 ## v0.13.0 - 2026-04-07
