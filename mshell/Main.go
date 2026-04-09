@@ -3791,7 +3791,6 @@ func runEditCommand(args []string) int {
 	}
 
 	if len(args) != 1 {
-		fmt.Fprintln(os.Stderr, "Usage: msh edit <target>")
 		printEditUsage()
 		return 1
 	}
@@ -4013,7 +4012,7 @@ func printBinUsage() {
 }
 
 func printEditUsage() {
-	fmt.Fprintln(os.Stdout, "Usage: msh edit <target>")
+	fmt.Fprintln(os.Stdout, "Usage: msh edit <init>")
 	fmt.Fprintln(os.Stdout, "")
 	fmt.Fprintln(os.Stdout, "Targets:")
 	fmt.Fprintln(os.Stdout, "  init  Edit the current init.msh file (or MSHINIT when set)")
