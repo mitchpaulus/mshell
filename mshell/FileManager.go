@@ -1813,7 +1813,7 @@ func bookmarksFilePath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return dir + bookmarksFileName, nil
+	return filepath.Join(dir, bookmarksFileName), nil
 }
 
 func loadBookmarks() map[byte]string {
@@ -1847,7 +1847,7 @@ func clipboardFilePath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return dir + clipboardFileName, nil
+	return filepath.Join(dir, clipboardFileName), nil
 }
 
 func loadClipboard() ([]string, []string) {

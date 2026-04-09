@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 )
 
+// GetHistoryDir returns the platform history/storage directory path without a trailing separator.
 func GetHistoryDir() (string, error) {
 	// Check XDG_DATA_HOME environment variable
 	var dir string
@@ -25,7 +26,7 @@ func GetHistoryDir() (string, error) {
 	if err != nil {
 		return "", err
 	} else {
-		dir = homeDir + "/.local/share/msh/"
+		dir = filepath.Join(homeDir, ".local", "share", "msh")
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return "", err
 		}

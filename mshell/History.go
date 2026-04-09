@@ -1,27 +1,28 @@
 package main
 
 import (
-	"os"
-	"github.com/cespare/xxhash"
-	"encoding/binary"
 	"bufio"
+	"encoding/binary"
+	"github.com/cespare/xxhash"
+	"os"
+	"path/filepath"
 )
 
 // Returns slice of HistoryItem data, last item is the most recent
 func ReadHistory(historyDir string) ([]HistoryItem, error) {
-	historyFile := historyDir + "/msh_history"
+	historyFile := filepath.Join(historyDir, "msh_history")
 	history, err := ReadHistoryFile(historyFile)
 	if err != nil {
 		return nil, err
 	}
 
-	commandHashFile := historyDir + "/msh_commands"
+	commandHashFile := filepath.Join(historyDir, "msh_commands")
 	commandHashes, err := ReadHashFile(commandHashFile)
 	if err != nil {
 		return nil, err
 	}
 
-	directoryHashFile := historyDir + "/msh_dirs"
+	directoryHashFile := filepath.Join(historyDir, "msh_dirs")
 	directoryHashes, err := ReadHashFile(directoryHashFile)
 	if err != nil {
 		return nil, err
