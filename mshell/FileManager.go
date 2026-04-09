@@ -1486,11 +1486,14 @@ func (fm *FileManager) openFileWindows(entry os.DirEntry) {
 	}
 
 	// Binary file, no $EDITOR, or editor failed: open with Windows default app
-	escapedPath := strings.ReplaceAll(filePath, "'", "''")
-	psCmd := "Start-Process -FilePath '" + escapedPath + "'"
+	command, args, err := defaultAppCommand(filePath, runtime.GOOS)
+	if err != nil {
+		fm.statusMsg = err.Error()
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-Command", psCmd)
+	cmd := exec.CommandContext(ctx, command, args...)
 	cmd.Stdin = nil
 	if err := cmd.Run(); err != nil && ctx.Err() == context.DeadlineExceeded {
 		fm.statusMsg = "Start-Process timed out (OneDrive?)"
@@ -1537,11 +1540,12 @@ func (fm *FileManager) openFileUnix(entry os.DirEntry) {
 	}
 
 	// Binary file, no $EDITOR, or editor failed: open with system default
-	opener := "xdg-open"
-	if runtime.GOOS == "darwin" {
-		opener = "open"
+	command, args, err := defaultAppCommand(filePath, runtime.GOOS)
+	if err != nil {
+		fm.statusMsg = err.Error()
+		return
 	}
-	cmd := exec.Command(opener, filePath)
+	cmd := exec.Command(command, args...)
 	cmd.Stdin = nil
 	cmd.Start()
 }

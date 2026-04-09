@@ -51,6 +51,11 @@ or <code>%LOCALAPPDATA%\msh\&lt;version&gt;\init.msh</code> on Windows.
 </p>
 
 <p>
+To open the current init file without remembering the path, run <code>msh edit init</code>.
+It uses <code>$EDITOR</code> when available, otherwise the platform default opener.
+</p>
+
+<p>
 The standard library is required at the resolved path.
 For interactive use and scripts without <code>VER</code>, missing <code>init.msh</code> is allowed unless you explicitly set <code>MSHINIT</code>.
 Scripts with <code>VER "vX.Y.Z"</code> require the version-specific <code>init.msh</code> for that version.

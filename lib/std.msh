@@ -486,7 +486,7 @@ end
 def __mshCompletion { 'complete': ['msh' 'mshell'] } ([str] -- [str])
     input!
     ['-h' '--help' '--html' '--lex' '--parse' '--version' '-c'] options!
-    ['lsp' 'bin' 'completions'] subcommands!
+    ['lsp' 'bin' 'edit' 'completions'] subcommands!
 
     @input len 0 > if
         @input :0: first!
@@ -494,6 +494,8 @@ def __mshCompletion { 'complete': ['msh' 'mshell'] } ([str] -- [str])
             [] # Nothing after lsp
         else* @first 'bin' = *if
             ['add' 'remove' 'list' 'path' 'edit' 'audit' 'debug']
+        else* @first 'edit' = *if
+            ['init']
         else* @first 'completions' = *if
             ['fish' 'bash' 'nushell' 'elvish']
         else
