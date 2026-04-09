@@ -2,8 +2,10 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 )
 
+// GetHistoryDir returns the platform history/storage directory path without a trailing separator.
 func GetHistoryDir() (string, error) {
 	// Check XDG_DATA_HOME environment variable
 	var dir string
@@ -11,7 +13,10 @@ func GetHistoryDir() (string, error) {
 	if exists {
 		// Check that the directory exists
 		if stat, err := os.Stat(xdgDataHome); err == nil && stat.IsDir() {
-			dir = xdgDataHome
+			dir = filepath.Join(xdgDataHome, "msh")
+			if err := os.MkdirAll(dir, 0755); err != nil {
+				return "", err
+			}
 			return dir, nil
 		}
 	}
@@ -21,7 +26,7 @@ func GetHistoryDir() (string, error) {
 	if err != nil {
 		return "", err
 	} else {
-		dir = homeDir + "/.local/share/msh/"
+		dir = filepath.Join(homeDir, ".local", "share", "msh")
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return "", err
 		}

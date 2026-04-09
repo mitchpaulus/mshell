@@ -3,7 +3,8 @@
 # Can use this script like:
 # curl -sL https://raw.githubusercontent.com/mitchpaulus/mshell/refs/heads/main/install.sh | sh -
 
-DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/mshell"
+DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/msh"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/msh"
 
 # Detect OS
 OS="$(uname -s)"
@@ -27,21 +28,20 @@ TARBALL="${GOOS}_${GOARCH}.tar.gz"
 echo "Detected platform: $GOOS/$GOARCH (tarball: $TARBALL)"
 
 mkdir -p "$HOME"/.local/bin
-mkdir -p "$DATA_DIR"
 curl -sL "https://github.com/mitchpaulus/mshell/releases/latest/download/${TARBALL}" | tar -xz -C "$HOME"/.local/bin
 
 # Check for symlink, if it doesn't exist, create it
 ln -s "$HOME"/.local/bin/msh "$HOME"/.local/bin/mshell 2>/dev/null
 
-# Move std.msh from the release tarball to the share directory
-mv "$HOME"/.local/bin/std.msh "$DATA_DIR"/std.msh
-# grep for 'export MSHSTDLIB' in .bashrc, if it doesn't exist, add it
+MSH_VERSION="$("$HOME/.local/bin/msh" --version)"
 
-# Add MSHSTDLIB export to the appropriate shell rc file
-# shellcheck disable=SC2016
-MSHSTDLIB_EXPORT='export MSHSTDLIB="${XDG_DATA_HOME:-$HOME/.local/share}/mshell/std.msh"'
-if [ "$GOOS" = "darwin" ] && [ -f "$HOME/.zshrc" ]; then
-    grep -q 'export MSHSTDLIB' "$HOME"/.zshrc || echo "$MSHSTDLIB_EXPORT" >> "$HOME"/.zshrc
-else
-    grep -q 'export MSHSTDLIB' "$HOME"/.bashrc || echo "$MSHSTDLIB_EXPORT" >> "$HOME"/.bashrc
+mkdir -p "$DATA_DIR/$MSH_VERSION"
+mkdir -p "$CONFIG_DIR/$MSH_VERSION"
+
+# Move std.msh from the release tarball to the versioned startup directory.
+mv "$HOME"/.local/bin/std.msh "$DATA_DIR/$MSH_VERSION/std.msh"
+
+# Create an empty init.msh so startup succeeds on first run.
+if [ ! -f "$CONFIG_DIR/$MSH_VERSION/init.msh" ]; then
+    : > "$CONFIG_DIR/$MSH_VERSION/init.msh"
 fi

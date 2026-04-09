@@ -527,6 +527,7 @@ const (
 	CALLSTACKQUOTE
 	CALLSTACKDEF
 	CALLSTACKIF
+	CALLSTACKMATCH
 )
 
 type CallStackItem struct {
@@ -816,6 +817,9 @@ func (state *EvalState) processToken(token MShellParseItem, frame *EvaluationFra
 	case *MShellParseIfBlock:
 		return state.processIfBlock(t, frame, frames)
 
+	case *MShellParseMatchBlock:
+		return state.processMatchBlock(t, frame, frames)
+
 	case *MShellIndexerList:
 		return state.processIndexerList(t, frame)
 
@@ -985,6 +989,345 @@ func (state *EvalState) processIfBlock(ifBlock *MShellParseIfBlock, frame *Evalu
 	}
 
 	return SimpleSuccess()
+}
+
+// processMatchBlock handles match...end blocks
+func (state *EvalState) processMatchBlock(matchBlock *MShellParseMatchBlock, frame *EvaluationFrame, frames *[]EvaluationFrame) EvalResult {
+	stack := frame.Stack
+	context := frame.Context
+	definitions := frame.Definitions
+	startToken := matchBlock.GetStartToken()
+
+	subject, err := stack.Peek()
+	if err != nil {
+		return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot evaluate 'match' on an empty stack.\n", startToken.Line, startToken.Column))
+	}
+
+	for _, arm := range matchBlock.Arms {
+		matched, bindings, result := state.matchPattern(arm.Pattern, subject, startToken)
+		if !result.Success {
+			return result
+		}
+		if matched {
+			// If there are destructuring bindings, pop the subject since
+			// the user is interested in the parts, not the whole.
+			if len(bindings) > 0 {
+				stack.Pop()
+				for k, v := range bindings {
+					context.Variables[k] = v
+				}
+			}
+
+			callStackItem := CallStackItem{MShellParseItem: matchBlock, Name: "match", CallStackType: CALLSTACKMATCH}
+			state.CallStack.Push(callStackItem)
+			newFrame := EvaluationFrame{
+				Objects:       arm.Body,
+				Index:         0,
+				Context:       context,
+				Stack:         stack,
+				Definitions:   definitions,
+				CallStackItem: callStackItem,
+				FrameType:     FRAME_NORMAL,
+			}
+			*frames = append(*frames, newFrame)
+			return SimpleSuccess()
+		}
+	}
+
+	return state.FailWithMessage(fmt.Sprintf("%d:%d: No matching arm found in match block and no wildcard '_' arm provided.\n", startToken.Line, startToken.Column))
+}
+
+// matchPattern checks if a subject matches a pattern (list of parse items).
+// Returns (matched bool, bindings map, result EvalResult).
+func (state *EvalState) matchPattern(pattern []MShellParseItem, subject MShellObject, startToken Token) (bool, map[string]MShellObject, EvalResult) {
+	// Handle multi-token patterns (e.g., "just v" for maybe destructuring)
+	if len(pattern) == 2 {
+		first, firstOk := pattern[0].(Token)
+		second, secondOk := pattern[1].(Token)
+		if firstOk && secondOk && first.Type == LITERAL && first.Lexeme == "just" {
+			// Maybe Just destructuring
+			var maybeVal Maybe
+			var ok bool
+			switch m := subject.(type) {
+			case Maybe:
+				maybeVal = m
+				ok = true
+			case *Maybe:
+				maybeVal = *m
+				ok = true
+			}
+			if !ok || maybeVal.IsNone() {
+				return false, nil, SimpleSuccess()
+			}
+			bindings := make(map[string]MShellObject)
+			if second.Type == LITERAL && second.Lexeme != "_" {
+				bindings[second.Lexeme] = maybeVal.obj
+			}
+			return true, bindings, SimpleSuccess()
+		}
+	}
+
+	if len(pattern) != 1 {
+		return false, nil, state.FailWithMessage(fmt.Sprintf("%d:%d: Match arm pattern must be a single item (or 'just <binding>').\n", startToken.Line, startToken.Column))
+	}
+
+	patternItem := pattern[0]
+
+	switch p := patternItem.(type) {
+	case Token:
+		matched, result := state.matchTokenPattern(p, subject)
+		return matched, nil, result
+	case *MShellParseList:
+		return state.matchListPattern(p, subject)
+	case *MShellParseDict:
+		return state.matchDictPattern(p, subject, startToken)
+	default:
+		return false, nil, state.FailWithMessage(fmt.Sprintf("%d:%d: Unsupported pattern type: %T\n", startToken.Line, startToken.Column, patternItem))
+	}
+}
+
+// matchTokenPattern matches a single token pattern against a subject.
+func (state *EvalState) matchTokenPattern(p Token, subject MShellObject) (bool, EvalResult) {
+	switch p.Type {
+	case LITERAL:
+		if p.Lexeme == "_" {
+			return true, SimpleSuccess()
+		}
+		if p.Lexeme == "none" {
+			switch m := subject.(type) {
+			case Maybe:
+				if m.IsNone() {
+					return true, SimpleSuccess()
+				}
+			case *Maybe:
+				if m.IsNone() {
+					return true, SimpleSuccess()
+				}
+			}
+			return false, SimpleSuccess()
+		}
+		// Type matching keywords
+		switch p.Lexeme {
+		case "list":
+			_, ok := subject.(*MShellList)
+			return ok, SimpleSuccess()
+		case "dict":
+			_, ok := subject.(*MShellDict)
+			return ok, SimpleSuccess()
+		case "path":
+			_, ok := subject.(MShellPath)
+			return ok, SimpleSuccess()
+		case "date":
+			_, ok := subject.(*MShellDateTime)
+			return ok, SimpleSuccess()
+		case "quotation":
+			_, ok := subject.(*MShellQuotation)
+			return ok, SimpleSuccess()
+		case "maybe":
+			switch subject.(type) {
+			case Maybe, *Maybe:
+				return true, SimpleSuccess()
+			}
+			return false, SimpleSuccess()
+		case "binary":
+			_, ok := subject.(MShellBinary)
+			return ok, SimpleSuccess()
+		}
+		return false, state.FailWithMessage(fmt.Sprintf("%d:%d: Unknown match pattern literal '%s'.\n", p.Line, p.Column, p.Lexeme))
+
+	case TYPEINT:
+		_, ok := subject.(MShellInt)
+		return ok, SimpleSuccess()
+	case TYPEFLOAT:
+		_, ok := subject.(MShellFloat)
+		return ok, SimpleSuccess()
+	case STR:
+		_, ok := subject.(MShellString)
+		return ok, SimpleSuccess()
+	case TYPEBOOL:
+		_, ok := subject.(MShellBool)
+		return ok, SimpleSuccess()
+
+	case INTEGER:
+		intVal, err := strconv.Atoi(p.Lexeme)
+		if err != nil {
+			return false, state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing integer in match pattern: %s\n", p.Line, p.Column, err.Error()))
+		}
+		patternObj := MShellInt{intVal}
+		eq, err := subject.Equals(patternObj)
+		if err != nil {
+			return false, SimpleSuccess()
+		}
+		return eq, SimpleSuccess()
+
+	case FLOAT:
+		floatVal, err := strconv.ParseFloat(p.Lexeme, 64)
+		if err != nil {
+			return false, state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing float in match pattern: %s\n", p.Line, p.Column, err.Error()))
+		}
+		patternObj := MShellFloat{floatVal}
+		eq, err := subject.Equals(patternObj)
+		if err != nil {
+			return false, SimpleSuccess()
+		}
+		return eq, SimpleSuccess()
+
+	case STRING:
+		parsedString, err := ParseRawString(p.Lexeme)
+		if err != nil {
+			return false, state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing string in match pattern: %s\n", p.Line, p.Column, err.Error()))
+		}
+		patternObj := MShellString{parsedString}
+		eq, err := subject.Equals(patternObj)
+		if err != nil {
+			return false, SimpleSuccess()
+		}
+		return eq, SimpleSuccess()
+
+	case SINGLEQUOTESTRING:
+		patternObj := MShellString{p.Lexeme[1 : len(p.Lexeme)-1]}
+		eq, err := subject.Equals(patternObj)
+		if err != nil {
+			return false, SimpleSuccess()
+		}
+		return eq, SimpleSuccess()
+
+	case TRUE:
+		patternObj := MShellBool{true}
+		eq, err := subject.Equals(patternObj)
+		if err != nil {
+			return false, SimpleSuccess()
+		}
+		return eq, SimpleSuccess()
+
+	case FALSE:
+		patternObj := MShellBool{false}
+		eq, err := subject.Equals(patternObj)
+		if err != nil {
+			return false, SimpleSuccess()
+		}
+		return eq, SimpleSuccess()
+
+	case PATH:
+		patternObj := MShellPath{p.Lexeme[1 : len(p.Lexeme)-1]}
+		eq, err := subject.Equals(patternObj)
+		if err != nil {
+			return false, SimpleSuccess()
+		}
+		return eq, SimpleSuccess()
+
+	default:
+		return false, state.FailWithMessage(fmt.Sprintf("%d:%d: Unsupported token type in match pattern: %s\n", p.Line, p.Column, p.Type))
+	}
+}
+
+// matchListPattern matches a list destructuring pattern against a subject.
+func (state *EvalState) matchListPattern(pattern *MShellParseList, subject MShellObject) (bool, map[string]MShellObject, EvalResult) {
+	list, ok := subject.(*MShellList)
+	if !ok {
+		return false, nil, SimpleSuccess()
+	}
+
+	// Check for spread pattern
+	spreadIndex := -1
+	for i, item := range pattern.Items {
+		if tok, ok := item.(Token); ok && tok.Type == LITERAL && len(tok.Lexeme) > 3 && tok.Lexeme[:3] == "..." {
+			spreadIndex = i
+			break
+		}
+	}
+
+	if spreadIndex >= 0 {
+		// Pattern with spread: [a ...rest] or [a b ...rest]
+		beforeCount := spreadIndex
+		afterCount := len(pattern.Items) - spreadIndex - 1
+		minRequired := beforeCount + afterCount
+
+		if len(list.Items) < minRequired {
+			return false, nil, SimpleSuccess()
+		}
+
+		bindings := make(map[string]MShellObject)
+		// Bind elements before spread
+		for i := 0; i < beforeCount; i++ {
+			tok, ok := pattern.Items[i].(Token)
+			if !ok {
+				return false, nil, state.FailWithMessage(fmt.Sprintf("List pattern element must be a literal.\n"))
+			}
+			if tok.Type == LITERAL && tok.Lexeme != "_" {
+				bindings[tok.Lexeme] = list.Items[i]
+			}
+		}
+
+		// Bind spread
+		spreadTok := pattern.Items[spreadIndex].(Token)
+		spreadName := spreadTok.Lexeme[3:] // Remove "..."
+		if spreadName != "_" {
+			restList := NewList(len(list.Items) - minRequired)
+			copy(restList.Items, list.Items[beforeCount:len(list.Items)-afterCount])
+			bindings[spreadName] = restList
+		}
+
+		// Bind elements after spread
+		for i := 0; i < afterCount; i++ {
+			tok, ok := pattern.Items[spreadIndex+1+i].(Token)
+			if !ok {
+				return false, nil, state.FailWithMessage(fmt.Sprintf("List pattern element must be a literal.\n"))
+			}
+			if tok.Type == LITERAL && tok.Lexeme != "_" {
+				bindings[tok.Lexeme] = list.Items[len(list.Items)-afterCount+i]
+			}
+		}
+
+		return true, bindings, SimpleSuccess()
+	}
+
+	// Exact match: [a b c] must match length exactly
+	if len(list.Items) != len(pattern.Items) {
+		return false, nil, SimpleSuccess()
+	}
+
+	bindings := make(map[string]MShellObject)
+	for i, item := range pattern.Items {
+		tok, ok := item.(Token)
+		if !ok {
+			return false, nil, state.FailWithMessage(fmt.Sprintf("List pattern element must be a literal.\n"))
+		}
+		if tok.Type == LITERAL && tok.Lexeme != "_" {
+			bindings[tok.Lexeme] = list.Items[i]
+		}
+	}
+
+	return true, bindings, SimpleSuccess()
+}
+
+// matchDictPattern matches a dict destructuring pattern against a subject.
+func (state *EvalState) matchDictPattern(pattern *MShellParseDict, subject MShellObject, startToken Token) (bool, map[string]MShellObject, EvalResult) {
+	dict, ok := subject.(*MShellDict)
+	if !ok {
+		return false, nil, SimpleSuccess()
+	}
+
+	bindings := make(map[string]MShellObject)
+	for _, kv := range pattern.Items {
+		val, exists := dict.Items[kv.Key]
+		if !exists {
+			return false, nil, SimpleSuccess()
+		}
+		// The value side should be a single literal token for the binding name
+		if len(kv.Value) != 1 {
+			return false, nil, state.FailWithMessage(fmt.Sprintf("%d:%d: Dict pattern value must be a single binding name.\n", startToken.Line, startToken.Column))
+		}
+		tok, ok := kv.Value[0].(Token)
+		if !ok || tok.Type != LITERAL {
+			return false, nil, state.FailWithMessage(fmt.Sprintf("%d:%d: Dict pattern value must be a literal binding name.\n", startToken.Line, startToken.Column))
+		}
+		if tok.Lexeme != "_" {
+			bindings[tok.Lexeme] = val
+		}
+	}
+
+	return true, bindings, SimpleSuccess()
 }
 
 // processTokenToken handles Token types in the frame-based evaluator
@@ -1593,6 +1936,41 @@ MainLoop:
 						return result
 					}
 				}
+			}
+		case *MShellParseMatchBlock:
+			startToken := t.GetStartToken()
+			subject, err := stack.Peek()
+			if err != nil {
+				return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot evaluate 'match' on an empty stack.\n", startToken.Line, startToken.Column))
+			}
+
+			matched := false
+			for _, arm := range t.Arms {
+				armMatched, bindings, result := state.matchPattern(arm.Pattern, subject, startToken)
+				if !result.Success {
+					return result
+				}
+				if armMatched {
+					// If there are destructuring bindings, pop the subject since
+					// the user is interested in the parts, not the whole.
+					if len(bindings) > 0 {
+						stack.Pop()
+						for k, v := range bindings {
+							context.Variables[k] = v
+						}
+					}
+					callStackItem := CallStackItem{MShellParseItem: t, Name: "match", CallStackType: CALLSTACKMATCH}
+					result := state.evaluateItems(arm.Body, stack, context, definitions, callStackItem)
+					if result.ShouldPassResultUpStack() {
+						return result
+					}
+					matched = true
+					break
+				}
+			}
+
+			if !matched {
+				return state.FailWithMessage(fmt.Sprintf("%d:%d: No matching arm found in match block and no wildcard '_' arm provided.\n", startToken.Line, startToken.Column))
 			}
 		case *MShellIndexerList:
 			obj1, err := stack.Pop()
@@ -4728,6 +5106,83 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'just' operation on an empty stack.\n", t.Line, t.Column))
 					}
 					stack.Push(&Maybe{obj: o})
+				} else if t.Lexeme == "filter" {
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					fn, ok := obj1.(*MShellQuotation)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The first parameter in 'filter' is expected to be a function, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
+					}
+
+					switch obj2Typed := obj2.(type) {
+					case *MShellList:
+						listObj := obj2Typed
+						newList := NewList(0)
+
+						var filterStack MShellStack
+						filterStack = []MShellObject{}
+
+						for _, item := range listObj.Items {
+							filterStack.Push(item)
+							result, err := state.EvaluateQuote(*fn, &filterStack, context, definitions)
+							if err != nil {
+								return state.FailWithMessage(err.Error())
+							}
+							if result.ShouldPassResultUpStack() {
+								return result
+							}
+							if len(filterStack) != 1 {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: The function in 'filter' did not return a single value, found %d values.\n", t.Line, t.Column, len(filterStack)))
+							}
+
+							filterResult, _ := filterStack.Pop()
+							filterBool, ok := filterResult.(MShellBool)
+							if !ok {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: The function in 'filter' did not return a bool, found a %s (%s).\n", t.Line, t.Column, filterResult.TypeName(), filterResult.DebugString()))
+							}
+
+							if filterBool.Value {
+								newList.Items = append(newList.Items, item)
+							}
+						}
+						stack.Push(newList)
+					case *MShellDict:
+						dictObj := obj2Typed
+						newDict := &MShellDict{Items: make(map[string]MShellObject, len(dictObj.Items))}
+
+						var filterStack MShellStack
+						filterStack = []MShellObject{}
+
+						for key, value := range dictObj.Items {
+							filterStack.Push(value)
+							result, err := state.EvaluateQuote(*fn, &filterStack, context, definitions)
+							if err != nil {
+								return state.FailWithMessage(err.Error())
+							}
+							if result.ShouldPassResultUpStack() {
+								return result
+							}
+							if len(filterStack) != 1 {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: The function in 'filter' did not return a single value, found %d values.\n", t.Line, t.Column, len(filterStack)))
+							}
+
+							filterResult, _ := filterStack.Pop()
+							filterBool, ok := filterResult.(MShellBool)
+							if !ok {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: The function in 'filter' did not return a bool, found a %s (%s).\n", t.Line, t.Column, filterResult.TypeName(), filterResult.DebugString()))
+							}
+
+							if filterBool.Value {
+								newDict.Items[key] = value
+							}
+						}
+						stack.Push(newDict)
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second parameter in 'filter' is expected to be a list or dictionary, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
+					}
 				} else if t.Lexeme == "map" {
 					// Map a function over a list, Maybe, Grid, or GridView
 					obj1, obj2, err := stack.Pop2(t)
@@ -4811,10 +5266,12 @@ MainLoop:
 
 							var mapStack MShellStack
 							mapStack = []MShellObject{row}
+
 							result, err := state.EvaluateQuote(*fn, &mapStack, context, definitions)
 							if err != nil {
 								return state.FailWithMessage(err.Error())
 							}
+
 							if !result.Success {
 								return result
 							}
@@ -4899,6 +5356,31 @@ MainLoop:
 
 							stack.Push(newGrid)
 						}
+					case *MShellDict:
+						dictObj := obj2Typed
+						newDict := &MShellDict{Items: make(map[string]MShellObject, len(dictObj.Items))}
+
+						var mapStack MShellStack
+						mapStack = []MShellObject{}
+
+						for key, value := range dictObj.Items {
+							mapStack.Push(value)
+
+							result, err := state.EvaluateQuote(*fn, &mapStack, context, definitions)
+							if err != nil {
+								return state.FailWithMessage(err.Error())
+							}
+
+							if result.ShouldPassResultUpStack() {
+								return result
+							}
+							if len(mapStack) != 1 {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: The function in 'map' did not return a single value, found %d values.\n", t.Line, t.Column, len(mapStack)))
+							}
+							mapResult, _ := mapStack.Pop()
+							newDict.Items[key] = mapResult
+						}
+						stack.Push(newDict)
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot map over a %s.\n", t.Line, t.Column, obj2.TypeName()))
 					}

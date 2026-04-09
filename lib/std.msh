@@ -91,24 +91,6 @@ def dropWhile ([T] (T -- bool) -- [T])
     @list @dropWhile-idx skip
 end
 
-# filter (list quote -- list)
-def filter ([T] (T -- bool) -- [T])
-    list!, quote!
-    @list len filter-len! # Get total length
-    0 filter-idx! # Index
-    [] filter-accum! # Accumulator
-    (
-        @filter-idx @filter-len >= (break) iff
-        @list @filter-idx nth item!
-        # $"Item: {@item str}" wl
-        @item @quote x  result!
-        # $"Result: {@result str}" wl
-        @result ( @filter-accum @item append drop ) iff
-        @filter-idx 1 + filter-idx! # inc index
-    ) loop
-    @filter-accum
-end
-
 def linearSearch ([T] (T -- bool) -- Maybe[T])
     list!, quote!
     none linearSearch-result!
@@ -173,6 +155,18 @@ def unlines ([str] -- str)
     ) each
     @unlines-accum "" join
 end
+
+# unlinesCrLf (list[str] -- str)
+def unlinesCrLf ([str] -- str)
+    [] unlines-accum! # Accumulator
+    (
+       @unlines-accum swap append
+       "\r\n" append
+       drop
+    ) each
+    @unlines-accum "" join
+end
+
 
 # chomp (str -- str)
 # Strip a single trailing newline. Handles both \n and \r\n.
@@ -424,8 +418,18 @@ def concat ([[a]] -- [a])
     l! (+) [] @l foldl
 end
 
-def cartesian ([a] [b] -- [a])
-    listA!, listB! @listA (a! @listB (b! [@a @b]) map) map concat
+# This is a better form from a typing perspective, because it allows for chaining
+# Can get it started with an identity list [[]]
+def cartesian ([[a]] [a] -- [[a]])
+    listA!, listB!
+    @listA map.
+        a!
+        @listB map.
+            # Need to force new list object with '+', 'extend' won't work here.
+            b! @a [@b] +
+        end
+    end
+    concat
 end
 
 # groupBy list (a -- str) -- dict
@@ -464,7 +468,7 @@ end
 def __mshCompletion { 'complete': ['msh' 'mshell'] } ([str] -- [str])
     input!
     ['-h' '--help' '--html' '--lex' '--parse' '--version' '-c'] options!
-    ['lsp' 'bin' 'completions'] subcommands!
+    ['lsp' 'bin' 'edit' 'completions'] subcommands!
 
     @input len 0 > if
         @input :0: first!
@@ -472,6 +476,8 @@ def __mshCompletion { 'complete': ['msh' 'mshell'] } ([str] -- [str])
             [] # Nothing after lsp
         else* @first 'bin' = *if
             ['add' 'remove' 'list' 'path' 'edit' 'audit' 'debug']
+        else* @first 'edit' = *if
+            ['init']
         else* @first 'completions' = *if
             ['fish' 'bash' 'nushell' 'elvish']
         else

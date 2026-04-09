@@ -99,6 +99,8 @@ const (
 	GRID_OPEN                // [|
 	GRID_CLOSE               // |]
 	PREFIXQUOTE              // .functionName
+	MATCH
+	VER
 )
 
 func (t TokenType) String() string {
@@ -269,6 +271,10 @@ func (t TokenType) String() string {
 		return "GRID_CLOSE"
 	case PREFIXQUOTE:
 		return "PREFIXQUOTE"
+	case MATCH:
+		return "MATCH"
+	case VER:
+		return "VER"
 	default:
 		return "UNKNOWN"
 	}
@@ -530,6 +536,8 @@ func (l *Lexer) literalOrKeywordType() TokenType {
 		}
 	case 'l':
 		return l.checkKeyword(1, "oop", LOOP)
+	case 'm':
+		return l.checkKeyword(1, "atch", MATCH)
 	case 'n':
 		return l.checkKeyword(1, "ot", NOT)
 	case 'o':
@@ -558,6 +566,8 @@ func (l *Lexer) literalOrKeywordType() TokenType {
 		}
 	case 't':
 		return l.checkKeyword(1, "rue", TRUE)
+	case 'V':
+		return l.checkKeyword(1, "ER", VER)
 	case 'x':
 		if l.curLen() == 1 {
 			return INTERPRET

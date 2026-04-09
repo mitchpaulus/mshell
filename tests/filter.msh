@@ -2,3 +2,13 @@
 
 # Test filtering list of lists, this caught a bug with the order of the internal append in filter
 [[1 2] [] [3 4 5]] (len 1 >) filter ((str) map ", " join) map uw
+
+{ "a": 1, "b": 2, "c": 3 } (1 >) filter str wl
+
+[1 2 3 4] originalList!
+@originalList (2 >) filter str wl
+@originalList str wl
+
+{ "a": 1, "b": 2, "c": 3 } originalDict!
+@originalDict (1 >) filter str wl
+@originalDict str wl

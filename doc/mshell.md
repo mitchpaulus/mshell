@@ -182,7 +182,7 @@ end
 
 When executing an external command, `mshell` resolves the binary name using a two-step process. First it checks the bin map file for an override, and if none is found it falls back to `PATH`.
 
-The bin map file lives alongside the history files (for example, `~/.local/share/msh/msh_bins.txt` on Linux/macOS or `%LOCALAPPDATA%\\mshell\\msh_bins.txt` on Windows). Each non-empty line is a tab-separated pair of fields: the binary name and the absolute path to the binary. Both fields are trimmed, the name must not contain path separators, and the line must contain exactly two fields.
+The bin map file lives alongside the history files (for example, `$XDG_DATA_HOME/msh/msh_bins.txt` or `~/.local/share/msh/msh_bins.txt` on Linux/macOS, or `%LOCALAPPDATA%\\msh\\msh_bins.txt` on Windows). Each non-empty line is a tab-separated pair of fields: the binary name and the absolute path to the binary. Both fields are trimmed, the name must not contain path separators, and the line must contain exactly two fields.
 
 ```
 mytool	/usr/local/bin/mytool
@@ -196,7 +196,7 @@ To manage the file, use the `msh bin` subcommands:
 - `msh bin remove <name>`: remove an entry by name
 - `msh bin list`: print the bin map file contents
 - `msh bin path`: print the bin map file path
-- `msh bin edit`: edit the file in `$EDITOR`
+- `msh bin edit`: edit the file in `$EDITOR`, or the platform default opener if `$EDITOR` is unavailable
 - `msh bin audit`: report invalid or missing entries
 - `msh bin debug <name>`: show lookup details for a binary
 
@@ -207,6 +207,28 @@ Process substitution is done using the `psub` operator.
 ```mshell
 [my_command_needing_file "my test" psub];
 ```
+
+## Startup Files
+
+`msh` loads startup files before running code.
+
+- Startup files are always version-specific.
+- The standard library is loaded from
+  `$XDG_DATA_HOME/msh/<version>/std.msh` on Linux/macOS
+  (falling back to `~/.local/share/msh/<version>/std.msh`)
+  or `%LOCALAPPDATA%\msh\<version>\std.msh` on Windows.
+- The user init file is loaded from
+  `$XDG_CONFIG_HOME/msh/<version>/init.msh` on Linux/macOS
+  (falling back to `~/.config/msh/<version>/init.msh`)
+  or `%LOCALAPPDATA%\msh\<version>\init.msh` on Windows.
+- The standard library is required at the resolved path.
+- For scripts without `VER`, `msh` uses the current executable version.
+- For scripts without `VER` and interactive use, missing `init.msh` is allowed unless `MSHINIT` is explicitly set.
+- If a script declares `VER "vX.Y.Z"` and the current executable is a different version, `msh` looks for `msh-vX.Y.Z` on `PATH` and re-executes the script with that binary.
+- When `VER` is present, the version-specific `init.msh` is required.
+- When `VER` is present, `MSHSTDLIB` and `MSHINIT` are cleared so startup comes from the versioned locations.
+- `MSHSTDLIB` and `MSHINIT` only override startup for interactive use and scripts without `VER`.
+- `msh edit init` opens the current init file path using `$EDITOR`; if `$EDITOR` is unavailable, it falls back to the platform default opener (`xdg-open` on Linux, `open` on macOS, `Start-Process` via PowerShell on Windows).
 
 ## Tilde Substitution
 
@@ -240,6 +262,11 @@ If the indexing is fixed, there is dedicated syntax for it.
 [ 4 3 2 1 ] 1:3  # [ 3 2 ]
 [ 4 3 2 1 ] :3   # [ 4 3 2 ]
 [ 4 3 2 1 ] 2:   # [ 2 1 ]
+# Works on any list element on the stack, not just list literals
+[ 4 3 2 1 ] myList!
+@myList :1:  # 3
+[ [ 'nested' 'list' ] ['is' 'here'] ] nested!
+@nested :1: :0: # 'is'
 ```
 
 For non-fixed indexing, you have the `nth` operator.
@@ -274,7 +301,7 @@ The CLI can use definition metadata to provide argument completions for binaries
 def mshCompletion { 'complete': ['msh' 'mshell'] } ([str] -- [str])
     input!
     ['-h' '--help' '--html' '--lex' '--parse' '--version' '-c'] options!
-    ['lsp' 'bin' 'completions'] subcommands!
+    ['lsp' 'bin' 'edit' 'completions'] subcommands!
     @options @subcommands extend
 end
 ```
@@ -309,7 +336,7 @@ use $"($nu.default-config-dir)/completions/msh.nu" *
 
 ### Binary map overrides
 
-mshell supports a simple bin map file that overrides PATH lookups. The file lives alongside the history files (e.g. `~/.local/share/msh/msh_bins.txt` on Linux/macOS or `%LOCALAPPDATA%\mshell\msh_bins.txt` on Windows).
+mshell supports a simple bin map file that overrides PATH lookups. The file lives alongside the history files (e.g. `$XDG_DATA_HOME/msh/msh_bins.txt` or `~/.local/share/msh/msh_bins.txt` on Linux/macOS, or `%LOCALAPPDATA%\msh\msh_bins.txt` on Windows).
 
 Each line is a single mapping in the form:
 
@@ -326,7 +353,7 @@ CLI helpers:
 - `msh bin remove <name>`: remove an entry by binary name
 - `msh bin list`: print the bin map file contents
 - `msh bin path`: print the msh_bins.txt file path
-- `msh bin edit`: edit the bin map file in `$EDITOR`
+- `msh bin edit`: edit the bin map file in `$EDITOR`, or the platform default opener if `$EDITOR` is unavailable
 - `msh bin audit`: report entries that are missing, not absolute, broken symlinks, or not executable (and report if the file is missing)
 - `msh bin debug <name>`: print PATH/bin map lookup details for a binary
 
@@ -468,6 +495,101 @@ def sumTo (int -- int)
 end
 ```
 
+## Pattern Matching
+
+The `match ... end` block provides multi-way dispatch.
+Arms are checked top-to-bottom and the first matching arm's body is executed.
+If no arm matches, it is a runtime error.
+
+Each arm has the form: `pattern : body ,`
+The trailing comma on the last arm is optional.
+
+For value, type, and wildcard patterns, the subject remains on the stack.
+For destructuring patterns that produce bindings (`just v`, `[a b]`, `{ 'k': v }`),
+the subject is popped from the stack and the bound variables are available in the body.
+
+### Wildcard
+
+`_` matches any value (catch-all).
+
+### Value Matching
+
+Literal values (integers, floats, strings, booleans, paths) match
+if the subject equals the pattern value.
+
+```mshell
+"hello" match
+    "hello" : drop "greeting" wl,
+    "bye"   : drop "farewell" wl,
+    _       : drop "unknown" wl,
+end
+```
+
+### Type Matching
+
+Type keywords match based on the subject's type:
+`int`, `float`, `str`, `bool`, `list`, `dict`, `path`, `date`, `quotation`, `maybe`, `binary`.
+
+```mshell
+42 match
+    int : drop "integer" wl,
+    str : drop "string" wl,
+    _   : drop "other" wl,
+end
+```
+
+### Maybe Destructuring
+
+`just v` matches a Maybe that is Just, binding the inner value to `v`.
+`none` matches a Maybe that is None.
+Use `just _` to match Just without binding.
+
+```mshell
+myDict "key" get match
+    just v : @v wl,
+    none   : drop "not found" wl,
+end
+```
+
+### List Destructuring
+
+A list pattern `[a b c]` matches a list of exactly that length,
+binding elements to the given names.
+Use `_` to discard a position.
+Use `...rest` to capture remaining elements.
+
+```mshell
+myList match
+    [head ...tail] : @head wl,
+    []             : drop "empty" wl,
+    _              : drop "not a list" wl,
+end
+```
+
+### Dict Destructuring
+
+A dict pattern `{ 'key': v }` matches a dict that contains the given keys,
+binding their values to the given names.
+
+```mshell
+person match
+    { 'name': n, 'age': a } : @n wl,
+    _                       : drop "missing fields" wl,
+end
+```
+
+Destructuring bindings are added to the outer variable scope,
+the same as `if` blocks.
+
+```mshell
+1 outerVariable!
+10 match
+    int : @outerVariable + str wl,
+    _   : drop "Not found" wl,
+end
+# Prints "11" — the subject (10) + outerVariable (1)
+```
+
 ## Built-ins
 
 - `.s`: Print stack at current location (--)
@@ -502,6 +624,8 @@ end
 - `wt`: "Whitespace table", puts stdin split by lines and whitespace on the stack. `( -- [[str]])`
 - `tt`: "Tab table", puts stdin split by lines and tabs on the stack. `( -- [[str]])`
 - `ttFile`: "Tab table" from file, puts content from file name split by lines and tabs on the stack. `(str -- [[str]])`
+- `unlines`: Join a list of strings into a single string using `\n` line endings. `([str] -- str)`
+- `unlinesCrLf`: Join a list of strings into a single string using `\r\n` line endings. `([str] -- str)`
 - `uw`: Shorthand for `unlines w` `([str] -- )`
 - `tuw`: Shorthand for `(tjoin) map uw` `([[str]] -- )`
 - `runtime`: Get the current OS runtime. This is the output of the GOOS environment variable. Common possible values are `linux`, `windows`, and `darwin`. `( -- str)`
@@ -537,7 +661,8 @@ end
 - `pwd`: Get current working directory `( -- str)`
 - `mshFileManager`: Open the built-in file manager.
    Pops a starting directory from the stack.
-   On exit, changes the working directory to the directory the user navigated to. `(str -- )`
+   On exit, changes the working directory to the directory the user navigated to.
+   The preview pane short-circuits common binary extensions and shows first-level contents for `.zip` and `.tar.gz` archives. `(str -- )`
 - `writeFile`: Write string to file (UTF-8). Overwrites file if it exists. `(str content str file -- )`
 - `appendFile`: Append string to file (UTF-8). `(str content str file -- )`
 - `fileSize`: Get size of file in bytes. Returns a Maybe in case file doesn't exist or other IO error. `(str -- Maybe int)`
@@ -572,6 +697,8 @@ end
 - `split`: Split string into list of strings by delimiter. (str delimiter -- [str])
 - `wsplit`: Split string into list of strings by runs of whitespace. (str -- [str])
 - `join`: Join list of strings into a single string, (list delimiter -- str)
+- `unlines`: Join list of strings into a single string using `\n` line endings. `([str] -- str)`
+- `unlinesCrLf`: Join list of strings into a single string using `\r\n` line endings. `([str] -- str)`
 - `in`: Check for substring in string. (totalString subString -- bool)
 - `index`: Get index of first occurrence of substring in string. Returns Maybe[int] with None for the substring not being found. `(str str -- Maybe[int])`
 - `lastIndexOf`: Get index of last occurrence of substring in string. Returns Maybe[int] with None for the substring not being found. `(str str -- Maybe[int])`
@@ -621,7 +748,7 @@ end
 - `nth`: Nth element of list (0-based) `([a] int -- a)`
 - `reverse`: Reverse list, `(list -- list)`
 - `sum`: Sum of list, `([numeric] -- numeric)`
-- `filter`: Filter list, `([a] (a -- bool) -- [a])`
+- `filter`: Filter a list or dictionary, returning a new collection. The input list or dictionary is not modified in place. For dictionaries, the quotation is applied to each value and matching entries are preserved. `([a] (a -- bool) -- [a])`, `(dict (a -- bool) -- dict)`
 - `any`: Check if any element in list satisfies a condition, `([a] (a -- bool) -- bool)`
 - `all`: Check if all elements in list satisfy a condition, `([a] (a -- bool) -- bool)`
 - `skip`: Skip first n elements of list, `(list int -- list)`
@@ -658,6 +785,8 @@ end
 - `keys`: Get keys from dictionary. Sorted. `(dict -- [str])`
 - `values`: Get values from dictionary. Sorted. `(dict -- [str])`
 - `keyValues`: Get key/value pairs from dictionary as a list of lists. Each inner list is a two-element list with the key and value. Sorted by key. `(dict -- [[str a]])`
+- `map`: Map a quotation over dictionary values. Keys are preserved. `(dict (a -- b) -- dict)`
+- `filter`: Filter dictionary values with a predicate quotation, returning a new dictionary. Keys are preserved for matching entries, and the original dictionary is not modified in place. `(dict (a -- bool) -- dict)`
 - `in`: Check if key exists in dictionary. `(dict str -- bool)`
 
 ## Date Functions

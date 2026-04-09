@@ -31,7 +31,13 @@ tar -xvf linux_amd64.tar.gz
 Put that file in a directory that is in your `$PATH` and make sure it is marked as executable on Linux.
 
 The other file to copy is the standard library, which is included in the release, or is at `lib/std.msh` in this repo.
-Get that, put it somewhere. Then set the environment variable `$MSHSTDLIB` to point to that file location.
+For `msh v0.13.0`, put it at `${XDG_DATA_HOME:-$HOME/.local/share}/msh/v0.13.0/std.msh` on Linux/macOS
+or `%LOCALAPPDATA%\msh\v0.13.0\std.msh` on Windows.
+Also create `${XDG_CONFIG_HOME:-$HOME/.config}/msh/v0.13.0/init.msh` on Linux/macOS
+or `%LOCALAPPDATA%\msh\v0.13.0\init.msh` on Windows.
+That init file is required for scripts that declare `VER "v0.13.0"`, but it is optional for interactive use and scripts without `VER`.
+For one-off overrides, `MSHSTDLIB` and `MSHINIT` can point to exact startup files for interactive use and scripts without `VER`.
+Scripts with `VER "vX.Y.Z"` always use the startup files for `vX.Y.Z`.
 
 An example install script is at [install.sh](https://github.com/mitchpaulus/mshell/blob/main/install.sh) in this repository.
 
@@ -55,7 +61,7 @@ msh -c 'sl len wl' < input_file_to_process.txt
 awk 'END { print NR }' < input_file_to_process.txt
 ```
 
-Note that you'll also need the environment variable `MSHSTDLIB` pointing to the file at `lib/std.msh`.
+These examples assume the standard library is installed in the normal startup location for your current `msh` version.
 
 
 *Simpler execution of common shell idioms*
@@ -83,7 +89,6 @@ Note that you'll also need the environment variable `MSHSTDLIB` pointing to the 
 
 - Job control. We don't have CTRL-z or `bg`/`fg` functionality right now.
 - User defined abbreviations (like fish). Right now you get my hard-coded ones, sorry.
-- Pattern matching syntax.
 - Type checking.
 - Improved error messages.
 
