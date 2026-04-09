@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 )
 
+// GetHistoryDir returns the platform history/storage directory path without a trailing separator.
 func GetHistoryDir() (string, error) {
 	// Check LOCALAPPDATA
 	localAppData, exists := os.LookupEnv("LOCALAPPDATA")
