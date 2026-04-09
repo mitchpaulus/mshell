@@ -196,7 +196,7 @@ To manage the file, use the `msh bin` subcommands:
 - `msh bin remove <name>`: remove an entry by name
 - `msh bin list`: print the bin map file contents
 - `msh bin path`: print the bin map file path
-- `msh bin edit`: edit the file in `$EDITOR`
+- `msh bin edit`: edit the file in `$EDITOR`, or the platform default opener if `$EDITOR` is unavailable
 - `msh bin audit`: report invalid or missing entries
 - `msh bin debug <name>`: show lookup details for a binary
 
@@ -228,6 +228,7 @@ Process substitution is done using the `psub` operator.
 - When `VER` is present, the version-specific `init.msh` is required.
 - When `VER` is present, `MSHSTDLIB` and `MSHINIT` are cleared so startup comes from the versioned locations.
 - `MSHSTDLIB` and `MSHINIT` only override startup for interactive use and scripts without `VER`.
+- `msh edit init` opens the current init file path using `$EDITOR`; if `$EDITOR` is unavailable, it falls back to the platform default opener (`xdg-open` on Linux, `open` on macOS, `Start-Process` via PowerShell on Windows).
 
 ## Tilde Substitution
 
@@ -300,7 +301,7 @@ The CLI can use definition metadata to provide argument completions for binaries
 def mshCompletion { 'complete': ['msh' 'mshell'] } ([str] -- [str])
     input!
     ['-h' '--help' '--html' '--lex' '--parse' '--version' '-c'] options!
-    ['lsp' 'bin' 'completions'] subcommands!
+    ['lsp' 'bin' 'edit' 'completions'] subcommands!
     @options @subcommands extend
 end
 ```
@@ -352,7 +353,7 @@ CLI helpers:
 - `msh bin remove <name>`: remove an entry by binary name
 - `msh bin list`: print the bin map file contents
 - `msh bin path`: print the msh_bins.txt file path
-- `msh bin edit`: edit the bin map file in `$EDITOR`
+- `msh bin edit`: edit the bin map file in `$EDITOR`, or the platform default opener if `$EDITOR` is unavailable
 - `msh bin audit`: report entries that are missing, not absolute, broken symlinks, or not executable (and report if the file is missing)
 - `msh bin debug <name>`: print PATH/bin map lookup details for a binary
 

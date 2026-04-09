@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -288,6 +289,11 @@ func main() {
 		return
 	}
 
+	if len(os.Args) >= 2 && os.Args[1] == "edit" {
+		os.Exit(runEditCommand(os.Args[2:]))
+		return
+	}
+
 	if len(os.Args) >= 2 && os.Args[1] == "fm" {
 		startDir := ""
 		if len(os.Args) >= 3 {
@@ -334,6 +340,7 @@ func main() {
 			fmt.Println("Usage: mshell [OPTION].. [ARG].. < FILE")
 			fmt.Println("Usage: mshell [OPTION].. -c INPUT [ARG]..")
 			fmt.Println("Usage: msh bin <command>")
+			fmt.Println("Usage: msh edit <target>")
 			fmt.Println("Usage: msh completions <shell>")
 			fmt.Println("Usage: msh lsp")
 			fmt.Println("Usage: msh fm")
@@ -347,6 +354,7 @@ func main() {
 			fmt.Println("  -c INPUT     Execute INPUT as the program, before positional args")
 			fmt.Println("  -h, --help   Print this help message")
 			fmt.Println("  bin          Manage msh_bins.txt entries")
+			fmt.Println("  edit         Edit common msh files")
 			fmt.Println("  completions  Print shell completion script")
 			fmt.Println("  fm           Open the built-in file manager")
 			os.Exit(0)
@@ -3776,6 +3784,27 @@ func runCompletionsCommand(args []string) int {
 	return 0
 }
 
+func runEditCommand(args []string) int {
+	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
+		printEditUsage()
+		return 0
+	}
+
+	if len(args) != 1 {
+		printEditUsage()
+		return 1
+	}
+
+	switch args[0] {
+	case "init":
+		return editInitCommand()
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown edit target: %s\n", args[0])
+		printEditUsage()
+		return 1
+	}
+}
+
 func completionScript(shell string) (string, bool) {
 	switch shell {
 	case "bash":
@@ -3804,7 +3833,7 @@ _msh_completion() {
             COMPREPLY=( $(compgen -W "--html --lex --parse --version --help -h -c" -- "$cur") )
             return 0
         fi
-        COMPREPLY=( $(compgen -W "bin lsp completions" -- "$cur") )
+        COMPREPLY=( $(compgen -W "bin edit lsp completions" -- "$cur") )
         return 0
     fi
 
@@ -3820,6 +3849,10 @@ _msh_completion() {
                 COMPREPLY=( $(compgen -f -- "$cur") )
                 return 0
             fi
+            return 0
+            ;;
+        edit)
+            COMPREPLY=( $(compgen -W "init" -- "$cur") )
             return 0
             ;;
         completions)
@@ -3850,8 +3883,9 @@ func fishCompletionScript() string {
     complete -c $cmd -f -s c -r -d 'Execute INPUT as the program'
     complete -c $cmd -f -s h -l help -d 'Show help'
 
-    complete -c $cmd -f -n '__fish_use_subcommand' -a 'bin lsp completions'
+    complete -c $cmd -f -n '__fish_use_subcommand' -a 'bin edit lsp completions'
     complete -c $cmd -f -n '__fish_seen_subcommand_from bin' -a 'add remove list path edit audit debug'
+    complete -c $cmd -f -n '__fish_seen_subcommand_from edit' -a 'init'
     complete -c $cmd -x -n '__fish_seen_subcommand_from completions' -a 'bash fish nushell elvish'
 end
 
@@ -3866,11 +3900,15 @@ func nushellCompletionScript() string {
 }
 
 def "msh_commands" [] {
-  [bin lsp completions]
+  [bin edit lsp completions]
 }
 
 def "msh_bin_subcommands" [] {
   [add remove list path edit audit debug]
+}
+
+def "msh_edit_targets" [] {
+  [init]
 }
 
 export extern "msh" [
@@ -3889,6 +3927,10 @@ export extern "msh bin" [
   subcommand: string@"msh_bin_subcommands"
   name?: string
   path?: string
+]
+
+export extern "msh edit" [
+  target: string@"msh_edit_targets"
 ]
 
 export extern "msh completions" [
@@ -3913,6 +3955,10 @@ export extern "mshell bin" [
   path?: string
 ]
 
+export extern "mshell edit" [
+  target: string@"msh_edit_targets"
+]
+
 export extern "mshell completions" [
   shell: string@"msh_completion_shells"
 ]
@@ -3922,7 +3968,7 @@ export extern "mshell completions" [
 func elvishCompletionScript() string {
 	return `fn _msh_complete { |@args|
   if (== (count $args) 0) {
-    put bin lsp completions --html --lex --parse --version --help -h -c
+    put bin edit lsp completions --html --lex --parse --version --help -h -c
     return
   }
 
@@ -3930,6 +3976,13 @@ func elvishCompletionScript() string {
   if (== $cmd bin) {
     if (<= (count $args) 2) {
       put add remove list path edit audit debug
+    }
+    return
+  }
+
+  if (== $cmd edit) {
+    if (<= (count $args) 2) {
+      put init
     }
     return
   }
@@ -3953,9 +4006,65 @@ func printBinUsage() {
 	fmt.Fprintln(os.Stdout, "  remove <name> Remove a bin entry by binary name")
 	fmt.Fprintln(os.Stdout, "  list         Print the bin map file contents")
 	fmt.Fprintln(os.Stdout, "  path         Print the msh_bins.txt file path")
-	fmt.Fprintln(os.Stdout, "  edit         Edit the bin map file in $EDITOR")
+	fmt.Fprintln(os.Stdout, "  edit         Edit the bin map file in $EDITOR or the platform default opener")
 	fmt.Fprintln(os.Stdout, "  audit        Report invalid or missing bin map entries")
 	fmt.Fprintln(os.Stdout, "  debug <name> Print PATH/bin map lookup details for a binary")
+}
+
+func printEditUsage() {
+	fmt.Fprintln(os.Stdout, "Usage: msh edit <init>")
+	fmt.Fprintln(os.Stdout, "")
+	fmt.Fprintln(os.Stdout, "Targets:")
+	fmt.Fprintln(os.Stdout, "  init  Edit the current init.msh file (or MSHINIT when set)")
+}
+
+func defaultAppCommand(path string, goos string) (string, []string, error) {
+	switch goos {
+	case "linux":
+		return "xdg-open", []string{path}, nil
+	case "windows":
+		escapedPath := strings.ReplaceAll(path, "'", "''")
+		psCmd := "Start-Process -FilePath '" + escapedPath + "'"
+		return "powershell.exe", []string{"-NoProfile", "-Command", psCmd}, nil
+	case "darwin":
+		return "open", []string{path}, nil
+	default:
+		return "", nil, fmt.Errorf("No default opener is configured for OS '%s'", goos)
+	}
+}
+
+var runAttachedCommand = func(name string, args []string) error {
+	cmd := exec.Command(name, args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+func openPathInEditorOrDefaultApp(path string) error {
+	editor := strings.TrimSpace(os.Getenv("EDITOR"))
+	if editor != "" {
+		if err := runAttachedCommand(editor, []string{path}); err == nil {
+			return nil
+		}
+	}
+
+	command, args, err := defaultAppCommand(path, runtime.GOOS)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, command, args...)
+	cmd.Stdin = nil
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("default opener timed out")
+		}
+		return err
+	}
+	return nil
 }
 
 func binAddCommand(nameArg string, pathArg string) int {
@@ -4085,24 +4194,27 @@ func binEditCommand() int {
 		return 1
 	}
 
-	editor := os.Getenv("EDITOR")
-	if editor == "" {
-		fmt.Fprintln(os.Stderr, "Error: $EDITOR is not set")
+	if err := openPathInEditorOrDefaultApp(path); err != nil {
+		fmt.Fprintf(os.Stderr, "Error opening bin map file: %s\n", err)
 		return 1
 	}
 
-	editorArgs := strings.Fields(editor)
-	if len(editorArgs) == 0 {
-		fmt.Fprintln(os.Stderr, "Error: $EDITOR is empty")
+	return 0
+}
+
+func editInitCommand() int {
+	_, initSpec, err := getStartupFileSpecs(startupLoadOptions{
+		version:           mshellVersion,
+		allowEnvOverrides: true,
+		requireInit:       false,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error resolving init file: %s\n", err)
 		return 1
 	}
 
-	cmd := exec.Command(editorArgs[0], append(editorArgs[1:], path)...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error running editor: %s\n", err)
+	if err := openPathInEditorOrDefaultApp(initSpec.path); err != nil {
+		fmt.Fprintf(os.Stderr, "Error opening init file: %s\n", err)
 		return 1
 	}
 
