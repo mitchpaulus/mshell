@@ -1474,7 +1474,7 @@ func (s *TermState) Render(renderHistory bool) {
 	pos := s.promptLength + 1 + s.index
 	s.renderBuffer = append(s.renderBuffer, fmt.Sprintf("\033[%dG", pos)...)
 
-	s.Logf("Term index: %d, command length: %d, num completions: %d, available rows: %d, prompt row: %d, numRows: %d\n", s.index, len(s.currentCommand), len(currentTabCompletion), availableRows, s.promptRow, s.numRows)
+	// s.Logf("Term index: %d, command length: %d, num completions: %d, available rows: %d, prompt row: %d, numRows: %d\n", s.index, len(s.currentCommand), len(currentTabCompletion), availableRows, s.promptRow, s.numRows)
 
 	// Push the buffer to stdout
 	// fmt.Fprintf(s.f, "Rendering buffer: %s\n", string(s.renderBuffer))
@@ -2425,7 +2425,7 @@ func (state *TermState) InteractiveMode() error {
 			state.tabCompletions1 = state.tabCompletions1[:0]
 		}
 
-		state.Logf("Waiting for token...\n")
+		// state.Logf("Waiting for token...\n")
 		state.f.Sync()
 		token, err = state.InteractiveLexer(stdInState) // token = <- tokenChan
 		if err != nil {
@@ -2433,7 +2433,7 @@ func (state *TermState) InteractiveMode() error {
 			return err
 		}
 
-		state.Logf("Got token: %s\n", token)
+		// state.Logf("Got token: %s\n", token)
 
 		if _, ok := token.(EofTerminalToken); ok {
 			return nil
