@@ -1557,7 +1557,11 @@ func (state *EvalState) processVarstoreList(varstoreList MShellVarstoreList, fra
 
 	// First check lengths
 	if len(varstoreList.VarStores) > len(*stack) {
-		return state.FailWithMessage(fmt.Sprintf("%d:%d: Not enough items on stack (%d) to store into %d variables.\n", varstoreList.GetStartToken().Line, varstoreList.GetStartToken().Column, len(*stack), len(varstoreList.VarStores)))
+		if len(varstoreList.VarStores) == 1 {
+			return state.FailWithMessage(fmt.Sprintf("%d:%d: Nothing on the stack to store into variable %s.\n", varstoreList.GetStartToken().Line, varstoreList.GetStartToken().Column, varstoreList.VarStores[0].Lexeme))
+		} else {
+			return state.FailWithMessage(fmt.Sprintf("%d:%d: Not enough items on stack (%d) to store into %d variables (%s).\n", varstoreList.GetStartToken().Line, varstoreList.GetStartToken().Column, len(*stack), len(varstoreList.VarStores), varstoreList.DebugString()))
+		}
 	}
 
 	// Have to bind in reverse order
@@ -2323,7 +2327,7 @@ MainLoop:
 						fmt.Fprint(writer, topTyped.Value)
 					case MShellBinary:
 						if t.Lexeme == "wl" || t.Lexeme == "wle" {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot write a %s.\n", t.Line, t.Column, top.TypeName()))
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot write a binary with a newline. You can simply write with `w` or `we`.\n", t.Line, t.Column))
 						}
 						_, _ = writer.Write(topTyped)
 					default:
@@ -4874,7 +4878,7 @@ MainLoop:
 					// Check that obj2 is a Maybe
 					maybeObj, ok := obj2.(*Maybe)
 					if !ok {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second parameter in 'maybe' is expected to be a Maybe, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The first parameter in 'maybe' is expected to be a Maybe, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
 					}
 
 					if maybeObj.obj == nil {
