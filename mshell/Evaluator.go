@@ -2327,7 +2327,7 @@ MainLoop:
 						fmt.Fprint(writer, topTyped.Value)
 					case MShellBinary:
 						if t.Lexeme == "wl" || t.Lexeme == "wle" {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot write a binary with a newline. You can simply write with `w` or `we`.\n", t.Line, t.Column))
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot write a binary with a newline. You are allowed to write contents directly with `w` or `we`.\n", t.Line, t.Column))
 						}
 						_, _ = writer.Write(topTyped)
 					default:
