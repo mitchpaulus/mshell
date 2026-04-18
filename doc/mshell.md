@@ -519,10 +519,10 @@ if the subject equals the pattern value.
 
 ```mshell
 "hello" match
-    "hello" : "greeting" wl,
-    "bye"   : "farewell" wl,
-    _       : "unknown" wl,
-end
+    "hello" : "greeting",
+    "bye"   : "farewell",
+    _       : "unknown",
+end wl # Output: greeting
 ```
 
 Use `:>` when the arm body needs the matched subject, for example when matching
@@ -530,10 +530,10 @@ on type before sending the value through another function:
 
 ```mshell
 [1 2 3] match
-    list :> len str wl,
-    str  :> len str wl,
-    _    : "other" wl,
-end
+    list :> len str,
+    str  :> len str,
+    _    : "other",
+end wl # Output: 3
 ```
 
 ### Type Matching
@@ -543,10 +543,10 @@ Type keywords match based on the subject's type:
 
 ```mshell
 42 match
-    int : "integer" wl,
-    str : "string" wl,
-    _   : "other" wl,
-end
+    int : "integer",
+    str : "string",
+    _   : "other",
+end wl # Output: integer
 ```
 
 ### Maybe Destructuring
@@ -557,18 +557,18 @@ Use `just _` to match Just without binding.
 
 ```mshell
 myDict "key" get match
-    just v : @v wl,
-    none   : "not found" wl,
-end
+    just v : @v,
+    none   : "not found",
+end wl # Output: value
 ```
 
 Bindings and separator choice are independent, so preserving the subject is also valid:
 
 ```mshell
 myDict "key" get match
-    just v :> ? wl,
-    none   :  "not found" wl,
-end
+    just v :> ?,
+    none   :  "not found",
+end wl # Output: value
 ```
 
 ### List Destructuring
@@ -580,10 +580,21 @@ Use `...rest` to capture remaining elements.
 
 ```mshell
 myList match
-    [head ...tail] : @head wl,
-    []             : "empty" wl,
-    _              : "not a list" wl,
-end
+    [head ...tail] : @head,
+    []             : "empty",
+    _              : "not a list",
+end wl # Output: 1
+```
+
+`...rest` can also appear in the middle of the pattern.
+Items before it match from the front, items after it match from the back,
+and the spread binding receives everything in between.
+
+```mshell
+[1 2 3 4 5] match
+    [first ...middle last] : [@first @middle @last] (str) map " | " join,
+    _                      : "no match",
+end wl # Output: 1 | [2 3 4] | 5
 ```
 
 ### Dict Destructuring
@@ -593,9 +604,9 @@ binding their values to the given names.
 
 ```mshell
 person match
-    { 'name': n, 'age': a } : @n wl,
-    _                       : "missing fields" wl,
-end
+    { 'name': n, 'age': a } : @n,
+    _                       : "missing fields",
+end wl # Output: Alice
 ```
 
 Destructuring bindings are added to the outer variable scope,
@@ -604,10 +615,9 @@ the same as `if` blocks.
 ```mshell
 1 outerVariable!
 10 match
-    int :> @outerVariable + str wl,
-    _   : "Not found" wl,
-end
-# Prints "11" — the subject (10) + outerVariable (1)
+    int :> @outerVariable + str,
+    _   : "Not found",
+end wl # Output: 11
 ```
 
 ## Built-ins
