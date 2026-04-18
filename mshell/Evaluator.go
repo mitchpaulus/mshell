@@ -993,13 +993,11 @@ func (state *EvalState) processMatchBlock(matchBlock *MShellParseMatchBlock, fra
 			return result
 		}
 		if matched {
-			// If there are destructuring bindings, pop the subject since
-			// the user is interested in the parts, not the whole.
-			if len(bindings) > 0 {
+			if arm.Consume {
 				stack.Pop()
-				for k, v := range bindings {
-					context.Variables[k] = v
-				}
+			}
+			for k, v := range bindings {
+				context.Variables[k] = v
 			}
 
 			callStackItem := CallStackItem{MShellParseItem: matchBlock, Name: "match", CallStackType: CALLSTACKMATCH}
@@ -1841,13 +1839,11 @@ MainLoop:
 					return result
 				}
 				if armMatched {
-					// If there are destructuring bindings, pop the subject since
-					// the user is interested in the parts, not the whole.
-					if len(bindings) > 0 {
+					if arm.Consume {
 						stack.Pop()
-						for k, v := range bindings {
-							context.Variables[k] = v
-						}
+					}
+					for k, v := range bindings {
+						context.Variables[k] = v
 					}
 					callStackItem := CallStackItem{MShellParseItem: t, Name: "match", CallStackType: CALLSTACKMATCH}
 					result := state.evaluateItems(arm.Body, stack, context, definitions, callStackItem)

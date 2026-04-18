@@ -377,6 +377,7 @@ func (ifBlock *MShellParseIfBlock) DebugString() string {
 type MShellParseMatchArm struct {
 	Pattern []MShellParseItem
 	Body    []MShellParseItem
+	Consume bool
 }
 
 // MShellParseMatchBlock represents a match...end block
@@ -403,6 +404,8 @@ func (m *MShellParseMatchBlock) ToJson() string {
 		}
 		sb.WriteString("{\"pattern\": ")
 		sb.WriteString(ToJson(arm.Pattern))
+		sb.WriteString(", \"consume\": ")
+		sb.WriteString(fmt.Sprintf("%t", arm.Consume))
 		sb.WriteString(", \"body\": ")
 		sb.WriteString(ToJson(arm.Body))
 		sb.WriteString("}")
@@ -419,7 +422,11 @@ func (m *MShellParseMatchBlock) DebugString() string {
 			sb.WriteString(item.DebugString())
 			sb.WriteString(" ")
 		}
-		sb.WriteString(": ")
+		if arm.Consume {
+			sb.WriteString(": ")
+		} else {
+			sb.WriteString(":> ")
+		}
 		for _, item := range arm.Body {
 			sb.WriteString(item.DebugString())
 			sb.WriteString(" ")
@@ -2256,16 +2263,16 @@ func (parser *MShellParser) ParseMatchBlock() (*MShellParseMatchBlock, error) {
 
 		arm := MShellParseMatchArm{}
 
-		// Parse pattern items until COLON
+		// Parse pattern items until COLON or MATCHARMDUP
 		for {
-			if parser.curr.Type == COLON {
+			if parser.curr.Type == COLON || parser.curr.Type == MATCHARMDUP {
 				break
 			}
 			if parser.curr.Type == EOF {
-				return matchBlock, fmt.Errorf("Did not find ':' for match arm in match block beginning at line %d, column %d.", matchBlock.StartToken.Line, matchBlock.StartToken.Column)
+				return matchBlock, fmt.Errorf("Did not find ':' or ':>' for match arm in match block beginning at line %d, column %d.", matchBlock.StartToken.Line, matchBlock.StartToken.Column)
 			}
 			if parser.curr.Type == END {
-				return matchBlock, fmt.Errorf("Did not find ':' for match arm in match block beginning at line %d, column %d.", matchBlock.StartToken.Line, matchBlock.StartToken.Column)
+				return matchBlock, fmt.Errorf("Did not find ':' or ':>' for match arm in match block beginning at line %d, column %d.", matchBlock.StartToken.Line, matchBlock.StartToken.Column)
 			}
 			item, err := parser.ParseItem()
 			if err != nil {
@@ -2278,7 +2285,9 @@ func (parser *MShellParser) ParseMatchBlock() (*MShellParseMatchBlock, error) {
 			return matchBlock, fmt.Errorf("Empty pattern in match arm at line %d, column %d.", parser.curr.Line, parser.curr.Column)
 		}
 
-		// Consume the COLON
+		arm.Consume = parser.curr.Type == COLON
+
+		// Consume the arm separator
 		parser.NextToken()
 
 		// Parse body items until COMMA or END

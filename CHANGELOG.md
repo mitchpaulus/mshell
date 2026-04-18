@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `msh bin edit` now falls back to the platform default opener when `$EDITOR` is unavailable
 - File manager preview now short-circuits many more common binary extensions and shows detailed archive listings with human-readable sizes and `h:mm AM/PM` times for `.zip` and `.tar.gz` archives
 - File manager now hides OneDrive's hidden `.849C9593-D756-4E56-8D6E-42412F2A707B` metadata file from listings and directory previews
+- `match` arm separators now control subject consumption explicitly: `:` consumes the matched subject and `:>` preserves it, independent of pattern kind or bindings
 
 
 ## v0.13.0 - 2026-04-07

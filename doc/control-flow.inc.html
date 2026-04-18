@@ -150,19 +150,19 @@ Arms are checked top-to-bottom until a match is found.
 
 <pre>
 <code><span class="mshellSTRING">"hello"</span> <span class="mshellMATCH">match</span>
-    <span class="mshellSTRING">"hello"</span> : <span class="mshellLITERAL">drop</span> <span class="mshellSTRING">"greeting"</span> <span class="mshellLITERAL">wl</span>,
-    <span class="mshellSTRING">"bye"</span>   : <span class="mshellLITERAL">drop</span> <span class="mshellSTRING">"farewell"</span> <span class="mshellLITERAL">wl</span>,
-    <span class="mshellLITERAL">_</span>       : <span class="mshellLITERAL">drop</span> <span class="mshellSTRING">"unknown"</span> <span class="mshellLITERAL">wl</span>,
+    <span class="mshellSTRING">"hello"</span> : <span class="mshellSTRING">"greeting"</span> <span class="mshellLITERAL">wl</span>,
+    <span class="mshellSTRING">"bye"</span>   : <span class="mshellSTRING">"farewell"</span> <span class="mshellLITERAL">wl</span>,
+    <span class="mshellLITERAL">_</span>       : <span class="mshellSTRING">"unknown"</span> <span class="mshellLITERAL">wl</span>,
 <span class="mshellEND">end</span></code>
 </pre>
 
 <p>
-Each arm has the form <code>pattern : body ,</code> where <code>:</code> separates the pattern from the body
-and <code>,</code> terminates the arm.
+Each arm has the form <code>pattern : body ,</code> or <code>pattern :&gt; body ,</code>.
+The separator determines whether the matched subject is consumed.
 The trailing comma on the last arm is optional.
-For value, type, and wildcard patterns, the subject remains on the stack when the body executes.
-For destructuring patterns that produce bindings (<code>just v</code>, <code>[a b]</code>, <code>{ 'k': v }</code>),
-the subject is popped from the stack and the bound variables are available in the body.
+<code>:</code> consumes the matched subject before the body runs.
+<code>:&gt;</code> preserves the matched subject on the stack when the body runs.
+This is independent of pattern kind and bindings.
 </p>
 
 <p>
@@ -175,9 +175,19 @@ If no arm matches and no wildcard <code>_</code> arm is provided, a runtime erro
 
 <pre>
 <code><span class="mshellINTEGER">42</span> <span class="mshellMATCH">match</span>
-    <span class="mshellINTEGER">1</span>  : <span class="mshellLITERAL">drop</span> <span class="mshellSTRING">"one"</span> <span class="mshellLITERAL">wl</span>,
-    <span class="mshellINTEGER">42</span> : <span class="mshellLITERAL">drop</span> <span class="mshellSTRING">"forty-two"</span> <span class="mshellLITERAL">wl</span>,
-    <span class="mshellLITERAL">_</span>  : <span class="mshellLITERAL">drop</span> <span class="mshellSTRING">"other"</span> <span class="mshellLITERAL">wl</span>,
+    <span class="mshellINTEGER">1</span>  : <span class="mshellSTRING">"one"</span> <span class="mshellLITERAL">wl</span>,
+    <span class="mshellINTEGER">42</span> : <span class="mshellSTRING">"forty-two"</span> <span class="mshellLITERAL">wl</span>,
+    <span class="mshellLITERAL">_</span>  : <span class="mshellSTRING">"other"</span> <span class="mshellLITERAL">wl</span>,
+<span class="mshellEND">end</span></code>
+</pre>
+
+<p>Use <code>:&gt;</code> when the arm body needs the matched subject, for example when matching on type before sending the value through another function:</p>
+
+<pre>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span> <span class="mshellINTEGER">3</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellMATCH">match</span>
+    <span class="mshellLITERAL">list</span> :&gt; <span class="mshellLITERAL">len</span> <span class="mshellLITERAL">str</span> <span class="mshellLITERAL">wl</span>,
+    <span class="mshellLITERAL">str</span>  :&gt; <span class="mshellLITERAL">len</span> <span class="mshellLITERAL">str</span> <span class="mshellLITERAL">wl</span>,
+    <span class="mshellLITERAL">_</span>    : <span class="mshellSTRING">"other"</span> <span class="mshellLITERAL">wl</span>,
 <span class="mshellEND">end</span></code>
 </pre>
 
@@ -192,9 +202,9 @@ Supported type patterns: <code>int</code>, <code>float</code>, <code>str</code>,
 
 <pre>
 <code><span class="mshellINTEGER">42</span> <span class="mshellMATCH">match</span>
-    <span class="mshellLITERAL">int</span> : <span class="mshellLITERAL">drop</span> <span class="mshellSTRING">"integer"</span> <span class="mshellLITERAL">wl</span>,
-    <span class="mshellLITERAL">str</span> : <span class="mshellLITERAL">drop</span> <span class="mshellSTRING">"string"</span> <span class="mshellLITERAL">wl</span>,
-    <span class="mshellLITERAL">_</span>   : <span class="mshellLITERAL">drop</span> <span class="mshellSTRING">"other"</span> <span class="mshellLITERAL">wl</span>,
+    <span class="mshellLITERAL">int</span> : <span class="mshellSTRING">"integer"</span> <span class="mshellLITERAL">wl</span>,
+    <span class="mshellLITERAL">str</span> : <span class="mshellSTRING">"string"</span> <span class="mshellLITERAL">wl</span>,
+    <span class="mshellLITERAL">_</span>   : <span class="mshellSTRING">"other"</span> <span class="mshellLITERAL">wl</span>,
 <span class="mshellEND">end</span></code>
 </pre>
 
@@ -204,7 +214,7 @@ Supported type patterns: <code>int</code>, <code>float</code>, <code>str</code>,
 
 <pre>
 <code><span class="mshellSTRING">"anything"</span> <span class="mshellMATCH">match</span>
-    <span class="mshellLITERAL">_</span> : <span class="mshellLITERAL">drop</span> <span class="mshellSTRING">"wildcard"</span> <span class="mshellLITERAL">wl</span>,
+    <span class="mshellLITERAL">_</span> : <span class="mshellSTRING">"wildcard"</span> <span class="mshellLITERAL">wl</span>,
 <span class="mshellEND">end</span></code>
 </pre>
 
@@ -218,7 +228,16 @@ The <code>just</code> pattern binds the inner value to a variable:
 <pre>
 <code><span class="mshellSTRING">"value"</span> <span class="mshellLITERAL">just</span> <span class="mshellMATCH">match</span>
     <span class="mshellLITERAL">just</span> <span class="mshellLITERAL">v</span> : <span class="mshellVARRETRIEVE">@v</span> <span class="mshellLITERAL">wl</span>,
-    <span class="mshellLITERAL">none</span>   : <span class="mshellLITERAL">drop</span> <span class="mshellSTRING">"got none"</span> <span class="mshellLITERAL">wl</span>,
+    <span class="mshellLITERAL">none</span>   : <span class="mshellSTRING">"got none"</span> <span class="mshellLITERAL">wl</span>,
+<span class="mshellEND">end</span></code>
+</pre>
+
+<p>Bindings and separator choice are independent, so preserving the subject is also valid:</p>
+
+<pre>
+<code>myDict <span class="mshellSTRING">"key"</span> <span class="mshellLITERAL">get</span> <span class="mshellMATCH">match</span>
+    <span class="mshellLITERAL">just</span> <span class="mshellLITERAL">v</span> :&gt; <span class="mshellQUESTION">?</span> <span class="mshellLITERAL">wl</span>,
+    <span class="mshellLITERAL">none</span>   :  <span class="mshellSTRING">"not found"</span> <span class="mshellLITERAL">wl</span>,
 <span class="mshellEND">end</span></code>
 </pre>
 
@@ -226,8 +245,8 @@ The <code>just</code> pattern binds the inner value to a variable:
 
 <pre>
 <code><span class="mshellSTRING">"ignored"</span> <span class="mshellLITERAL">just</span> <span class="mshellMATCH">match</span>
-    <span class="mshellLITERAL">just</span> <span class="mshellLITERAL">_</span> : <span class="mshellLITERAL">drop</span> <span class="mshellSTRING">"just something"</span> <span class="mshellLITERAL">wl</span>,
-    <span class="mshellLITERAL">none</span>   : <span class="mshellLITERAL">drop</span> <span class="mshellSTRING">"none"</span> <span class="mshellLITERAL">wl</span>,
+    <span class="mshellLITERAL">just</span> <span class="mshellLITERAL">_</span> : <span class="mshellSTRING">"just something"</span> <span class="mshellLITERAL">wl</span>,
+    <span class="mshellLITERAL">none</span>   : <span class="mshellSTRING">"none"</span> <span class="mshellLITERAL">wl</span>,
 <span class="mshellEND">end</span></code>
 </pre>
 
@@ -239,25 +258,25 @@ The <code>just</code> pattern binds the inner value to a variable:
 <code><span class="mshellLINECOMMENT"># Exact match — binds each element</span>
 <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span> <span class="mshellINTEGER">3</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellMATCH">match</span>
     <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">a</span> <span class="mshellLITERAL">b</span> <span class="mshellLITERAL">c</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> : <span class="mshellVARRETRIEVE">@b</span> <span class="mshellLITERAL">str</span> <span class="mshellLITERAL">wl</span>,
-    <span class="mshellLITERAL">_</span>       : <span class="mshellLITERAL">drop</span> <span class="mshellSTRING">"other"</span> <span class="mshellLITERAL">wl</span>,
+    <span class="mshellLITERAL">_</span>       : <span class="mshellSTRING">"other"</span> <span class="mshellLITERAL">wl</span>,
 <span class="mshellEND">end</span>
 
 <span class="mshellLINECOMMENT"># Empty list</span>
 <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellMATCH">match</span>
-    <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span>  : <span class="mshellLITERAL">drop</span> <span class="mshellSTRING">"empty list"</span> <span class="mshellLITERAL">wl</span>,
-    <span class="mshellLITERAL">_</span>   : <span class="mshellLITERAL">drop</span> <span class="mshellSTRING">"not empty"</span> <span class="mshellLITERAL">wl</span>,
+    <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span>  : <span class="mshellSTRING">"empty list"</span> <span class="mshellLITERAL">wl</span>,
+    <span class="mshellLITERAL">_</span>   : <span class="mshellSTRING">"not empty"</span> <span class="mshellLITERAL">wl</span>,
 <span class="mshellEND">end</span>
 
 <span class="mshellLINECOMMENT"># Spread — head and rest</span>
 <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span> <span class="mshellINTEGER">3</span> <span class="mshellINTEGER">4</span> <span class="mshellINTEGER">5</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellMATCH">match</span>
     <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">head</span> <span class="mshellLITERAL">...tail</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> : <span class="mshellVARRETRIEVE">@head</span> <span class="mshellLITERAL">str</span> <span class="mshellLITERAL">wl</span>,
-    <span class="mshellLITERAL">_</span>              : <span class="mshellLITERAL">drop</span> <span class="mshellSTRING">"other"</span> <span class="mshellLITERAL">wl</span>,
+    <span class="mshellLITERAL">_</span>              : <span class="mshellSTRING">"other"</span> <span class="mshellLITERAL">wl</span>,
 <span class="mshellEND">end</span>
 
 <span class="mshellLINECOMMENT"># Wildcard in list — skip positions</span>
 <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">10</span> <span class="mshellINTEGER">20</span> <span class="mshellINTEGER">30</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellMATCH">match</span>
     <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">_</span> <span class="mshellLITERAL">middle</span> <span class="mshellLITERAL">_</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> : <span class="mshellVARRETRIEVE">@middle</span> <span class="mshellLITERAL">str</span> <span class="mshellLITERAL">wl</span>,
-    <span class="mshellLITERAL">_</span>            : <span class="mshellLITERAL">drop</span> <span class="mshellSTRING">"other"</span> <span class="mshellLITERAL">wl</span>,
+    <span class="mshellLITERAL">_</span>            : <span class="mshellSTRING">"other"</span> <span class="mshellLITERAL">wl</span>,
 <span class="mshellEND">end</span></code>
 </pre>
 
@@ -272,14 +291,14 @@ Extra keys in the subject are allowed — only the specified keys must be presen
 <code><span class="mshellLINECOMMENT"># Matches — both keys present</span>
 { <span class="mshellSINGLEQUOTESTRING">'name'</span>: <span class="mshellSTRING">"Alice"</span>, <span class="mshellSINGLEQUOTESTRING">'age'</span>: <span class="mshellINTEGER">30</span> } <span class="mshellMATCH">match</span>
     { <span class="mshellSINGLEQUOTESTRING">'name'</span>: <span class="mshellLITERAL">n</span>, <span class="mshellSINGLEQUOTESTRING">'age'</span>: <span class="mshellLITERAL">a</span> } : <span class="mshellVARRETRIEVE">@n</span> <span class="mshellLITERAL">wl</span>,
-    <span class="mshellLITERAL">_</span>                       : <span class="mshellLITERAL">drop</span> <span class="mshellSTRING">"missing fields"</span> <span class="mshellLITERAL">wl</span>,
+    <span class="mshellLITERAL">_</span>                       : <span class="mshellSTRING">"missing fields"</span> <span class="mshellLITERAL">wl</span>,
 <span class="mshellEND">end</span>
 
 <span class="mshellLINECOMMENT"># Falls through — 'age' key missing</span>
 { <span class="mshellSINGLEQUOTESTRING">'name'</span>: <span class="mshellSTRING">"Bob"</span> } <span class="mshellMATCH">match</span>
     { <span class="mshellSINGLEQUOTESTRING">'name'</span>: <span class="mshellLITERAL">n</span>, <span class="mshellSINGLEQUOTESTRING">'age'</span>: <span class="mshellLITERAL">a</span> } : <span class="mshellVARRETRIEVE">@n</span> <span class="mshellLITERAL">wl</span>,
     { <span class="mshellSINGLEQUOTESTRING">'name'</span>: <span class="mshellLITERAL">n</span> }           : <span class="mshellVARRETRIEVE">@n</span> <span class="mshellLITERAL">wl</span>,
-    <span class="mshellLITERAL">_</span>                       : <span class="mshellLITERAL">drop</span> <span class="mshellSTRING">"other"</span> <span class="mshellLITERAL">wl</span>,
+    <span class="mshellLITERAL">_</span>                       : <span class="mshellSTRING">"other"</span> <span class="mshellLITERAL">wl</span>,
 <span class="mshellEND">end</span></code>
 </pre>
 
@@ -289,15 +308,14 @@ Extra keys in the subject are allowed — only the specified keys must be presen
 <code>match</code> uses the same variable scoping as <code>if</code> blocks — arm bodies have access to
 all outer variables and can modify them.
 Destructuring bindings (from <code>just</code>, list, and dict patterns) are added to the outer scope.
-For non-destructuring patterns, the subject remains on the stack.
-For destructuring patterns with bindings, the subject is popped.
+Separator choice controls whether the matched subject is consumed.
 </p>
 
 <pre>
 <code><span class="mshellINTEGER">1</span> <span class="mshellVARSTORE">outerVariable!</span>
 <span class="mshellINTEGER">10</span> <span class="mshellMATCH">match</span>
-    <span class="mshellLITERAL">int</span> : <span class="mshellVARRETRIEVE">@outerVariable</span> <span class="mshellPLUS">+</span> <span class="mshellLITERAL">str</span> <span class="mshellLITERAL">wl</span>,
-    <span class="mshellLITERAL">_</span>   : <span class="mshellLITERAL">drop</span> <span class="mshellSTRING">"Not found"</span> <span class="mshellLITERAL">wl</span>,
+    <span class="mshellLITERAL">int</span> :&gt; <span class="mshellVARRETRIEVE">@outerVariable</span> <span class="mshellPLUS">+</span> <span class="mshellLITERAL">str</span> <span class="mshellLITERAL">wl</span>,
+    <span class="mshellLITERAL">_</span>   : <span class="mshellSTRING">"Not found"</span> <span class="mshellLITERAL">wl</span>,
 <span class="mshellEND">end</span></code>
 </pre>
 

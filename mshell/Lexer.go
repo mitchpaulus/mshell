@@ -81,6 +81,7 @@ const (
 	LEFT_CURLY
 	RIGHT_CURLY
 	COLON
+	MATCHARMDUP
 	NOTEQUAL // !=
 	BANG // !
 	STDAPPEND // >>
@@ -233,6 +234,8 @@ func (t TokenType) String() string {
 		return "RIGHT_CURLY"
 	case COLON:
 		return "COLON"
+	case MATCHARMDUP:
+		return "MATCHARMDUP"
 	case NOTEQUAL:
 		return "NOTEQUAL"
 	case BANG:
@@ -985,6 +988,11 @@ func (l *Lexer) parseIndexerOrColon() Token {
 	// Return literal if at end
 	if c == 0 {
 		return l.makeToken(COLON)
+	}
+
+	if c == '>' {
+		l.advance()
+		return l.makeToken(MATCHARMDUP)
 	}
 
 	if unicode.IsDigit(c) || c == '-' {
