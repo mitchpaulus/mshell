@@ -18,7 +18,7 @@ def chunkAcc([a] int [[a]] -- [[a]])
     end
 end
 
-def toCsvCell(str -- str)
+def toCsvCell (str -- str)
     s!
     @s "," in or. @s "\n" in end or. @s '"' in end if
         @s '"' '""' findReplace content!
