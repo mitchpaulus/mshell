@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - CLI
   - `msh edit init` to open the current init file path using `$EDITOR`, with fallback to the platform default opener when `$EDITOR` is unavailable
+- Functions
+  - `toCsvCell`
+  - `toCsv`
 
 ### Changed
 

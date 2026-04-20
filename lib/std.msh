@@ -8,17 +8,28 @@ end
 
 def chunkAcc([a] int [[a]] -- [[a]])
     list!, n!, acc!
-    @list len 0 <=
-    (
+    @list len 0 <= if
         @acc
-    )
-    (
+    else
         @list @n skip # new list
         @n # chunk size
         @acc @list @n take append # accumulator
         chunkAcc
-    )
-    iff
+    end
+end
+
+def toCsvCell (str -- str)
+    s!
+    @s "," in or. @s "\n" in end or. @s '"' in end if
+        @s '"' '""' findReplace content!
+        $"\"{@content}\""
+    else
+        @s
+    end
+end
+
+def toCsv ([[str]] -- str)
+    map. map. toCsvCell end "," join end unlines
 end
 
 def enumerate ([a] -- )

@@ -1,0 +1,26 @@
+# toCsvCell: plain string, no escaping needed
+"hello" toCsvCell wl
+
+# toCsvCell: empty string
+"" toCsvCell wl
+
+# toCsvCell: contains comma
+"a,b" toCsvCell wl
+
+# toCsvCell: contains newline
+"a\nb" toCsvCell wl
+
+# toCsvCell: contains double quote
+"a\"b" toCsvCell wl
+
+# toCsvCell: contains comma and double quote
+"a,\"b" toCsvCell wl
+
+# toCsv: simple rows
+[["a" "b" "c"] ["d" "e" "f"]] toCsv w
+
+# toCsv: single row
+[["x" "y"]] toCsv w
+
+# toCsv: cells needing escaping
+[["a,b" "c\"d" "plain"] ["line1\nline2" "ok" ""]] toCsv w

@@ -661,6 +661,8 @@ end wl # Output: 11
 - `runtime`: Get the current OS runtime. This is the output of the GOOS environment variable. Common possible values are `linux`, `windows`, and `darwin`. `( -- str)`
 - `hostname`: Get the current OS hostname. On failure to get, puts 'unknown' on the stack. `( -- str)`
 - `parseCsv`: Parse a CSV file into a list of lists of strings. Input can be a path/literal file name, or the string contents itself. (`path|str -- [[str]])`
+- `toCsvCell`: Escape a single CSV cell. If the value contains `,`, `"`, or a newline, wraps the value in double quotes and doubles any embedded quotes; otherwise returns the input unchanged. (`str -- str`)
+- `toCsv`: Serialize a list of rows to a CSV string. Each cell is escaped with `toCsvCell`, cells are joined with `,`, and rows are joined with `\n`. (`[[str]] -- str`)
 - `parseJson`: Parse JSON from a string, binary, or file path into mshell objects. (`path|str|binary -- list|dict|numeric|str|bool`)
 - `seq`: Generate a list of integers, starting from 0. Exclusive end to integer on stack. `2 seq` produces `[0 1]`. `(int -- [int])`
 - `repeat`: Create a list containing the provided value repeated `n` times. `(a int -- [a])`
