@@ -136,6 +136,22 @@ def linearSearch ([T] (T -- bool) -- Maybe[T])
     @linearSearch-result
 end
 
+def linearSearchIndex ([T] (T -- bool) -- Maybe[int])
+    list!, quote!
+    none linearSearchIndex-result!
+    0 linearSearchIndex-idx!
+    (
+        @linearSearchIndex-idx @list len >= (break) iff
+
+        @list @linearSearchIndex-idx nth @quote x if
+            @linearSearchIndex-idx just linearSearchIndex-result!
+            break
+        end
+        @linearSearchIndex-idx 1 + linearSearchIndex-idx!
+    ) loop
+    @linearSearchIndex-result
+end
+
 # foldl (quote initial list -- result)
 def foldl ((T T -- T) T [T] -- T)
     #  quote initial list
