@@ -102,6 +102,7 @@ var BuiltInList = map[string]struct{}{
 	"numFmt": {},
 	"over": {},
 	"parseCsv": {},
+	"parseExcel": {},
 	"parseHtml": {},
 	"parseJson": {},
 	"parseLinkHeader": {},
