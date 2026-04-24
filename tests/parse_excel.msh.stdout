@@ -1,0 +1,38 @@
+=== Hidden Sheet ===
+1:1:String|This should be a hidden cell.
+---
+=== Sheet Name with Spaces ===
+1:1:Float|12.365
+1:2:String|
+---
+2:1:String|A string
+2:2:String|
+---
+3:1:Boolean|true
+3:2:String|
+---
+4:1:Float|45660
+4:2:String|
+---
+5:1:String|13.5
+5:2:String|Number stored as text
+---
+6:1:Maybe|None
+6:2:String|
+---
+7:1:Float|5
+7:2:String|A formula
+---
+=== Sheet1 ===
+1:1:String|
+1:2:String|
+1:3:String|
+---
+2:1:String|
+2:2:String|
+2:3:String|
+---
+3:1:String|
+3:2:String|
+3:3:String|Should have blank filled
+---

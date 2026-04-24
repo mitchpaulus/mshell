@@ -1,0 +1,13 @@
+`excel_test_file.xlsx` parseExcel wb!
+
+@wb keys each. k!
+    $"=== {@k} ===" wl
+    @wb @k get? 1 enumerateN each.
+        2unpack row!, rowNum!
+        @row 1 enumerateN each.
+            2unpack cell!, colNum!
+            $"{@rowNum}:{@colNum}:{@cell type}|{@cell str}" wl
+        end
+    "---" wl
+    end
+end
