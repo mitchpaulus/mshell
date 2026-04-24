@@ -4349,6 +4349,31 @@ MainLoop:
 					// Convert the parsed data to analgous MShell types
 					resultObj := ParseJsonObjToMshell(parsedData)
 					stack.Push(resultObj)
+				} else if t.Lexeme == "parseExcel" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'parseExcel' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					var xlsxData []byte
+					switch obj1Typed := obj1.(type) {
+					case MShellPath:
+						p, _ := obj1.CastString()
+						xlsxData, err = os.ReadFile(p)
+						if err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error reading file %s: %s\n", t.Line, t.Column, p, err.Error()))
+						}
+					case MShellBinary:
+						xlsxData = []byte(obj1Typed)
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: 'parseExcel' expects a Path or Binary, got a %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					dict, err := parseExcelBytes(xlsxData)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing Excel: %s\n", t.Line, t.Column, err.Error()))
+					}
+					stack.Push(dict)
 				} else if t.Lexeme == "toJson" {
 					// Convert an object to JSON
 					obj1, err := stack.Pop()
