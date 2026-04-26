@@ -859,11 +859,19 @@ end wl # Output: 11
 All regular expression functions use the [Go regular expression syntax](https://pkg.go.dev/regexp/syntax).
 See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syntax.
 
-- `reMatch`: Match a regular expression against a string. Returns boolean true/false. `(str re -- bool)`
-- `reFindAll`: Get all the matches of a regular expression. `(str re -- [[ str ]])`
-- `reFindAllIndex`: Get all match index pairs (start and end offsets) for a regular expression, including capture groups. `(str re -- [[int]])`
-- `reReplace`: Replace all occurrences of a regular expression in a string with a replacement string. `(str:orig re str:replacement -- str)`
-- `reSplit`: Split a string by a regular expression delimiter. `(str re -- [str])`
+- `reMatch`: Match a regular expression against a string. Returns boolean true/false. `(str:string str:re -- bool)`
+- `reFindAll`: Get all matches of a regular expression. Each result row starts with the full match, followed by capture groups. `(str:string str:re -- [[str]])`
+- `reFindAllIndex`: Get all match index pairs (start and end offsets) for a regular expression. Offsets are 0-based, the start offset is inclusive, and the end offset is exclusive. Each result row contains start/end pairs for the full match, followed by capture groups. `(str:string str:re -- [[int]])`
+- `reReplace`: Replace all occurrences of a regular expression in a string with a replacement string. `(str:orig str:re str:replacement -- str)`
+- `reSplit`: Split a string by a regular expression delimiter. `(str:string str:re -- [str])`
+
+```mshell
+"abc 123 def 456" "([a-z]+) ([0-9]+)" reFindAll str wl
+# Output: [["abc 123" "abc" "123"] ["def 456" "def" "456"]]
+
+"abc 123 def 456" "([a-z]+) ([0-9]+)" reFindAllIndex str wl
+# Output: [[0 7 0 3 4 7] [8 15 8 11 12 15]]
+```
 
 ## Paths
 

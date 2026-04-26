@@ -357,13 +357,23 @@
         <tr> <th>Name</th> <th>Description</th> <th>Signature</th> </tr>
     </thead>
     <tbody>
-        <tr> <td><code>reMatch</code></td> <td>Test whether a string matches a regular expression.</td> <td><code>(<span class="sig-type sig-type-str">str</span> re -- <span class="sig-type sig-type-bool">bool</span>)</code></td> </tr>
-        <tr> <td><code>reFindAll</code></td> <td>Return all matches for a regular expression.</td> <td><code>(<span class="sig-type sig-type-str">str</span> re -- [[<span class="sig-type sig-type-str">str</span>]])</code></td> </tr>
-        <tr> <td><code>reFindAllIndex</code></td> <td>Return start/end offsets (including capture groups) for all matches.</td> <td><code>(<span class="sig-type sig-type-str">str</span> re -- [[<span class="sig-type sig-type-int">int</span>]])</code></td> </tr>
-        <tr> <td><code>reReplace</code></td> <td>Replace all matches with the provided replacement string.</td> <td><code>(<span class="sig-type sig-type-str">str</span>:orig re <span class="sig-type sig-type-str">str</span>:replacement -- <span class="sig-type sig-type-str">str</span>)</code></td> </tr>
-        <tr> <td><code>reSplit</code></td> <td>Split a string by a regular expression delimiter.</td> <td><code>(<span class="sig-type sig-type-str">str</span> re -- [<span class="sig-type sig-type-str">str</span>])</code></td> </tr>
+        <tr> <td><code>reMatch</code></td> <td>Test whether a string matches a regular expression.</td> <td><code>(<span class="sig-type sig-type-str">str</span>:string <span class="sig-type sig-type-str">str</span>:re -- <span class="sig-type sig-type-bool">bool</span>)</code></td> </tr>
+        <tr> <td><code>reFindAll</code></td> <td>Return all matches for a regular expression. Each result row starts with the full match, followed by capture groups.</td> <td><code>(<span class="sig-type sig-type-str">str</span>:string <span class="sig-type sig-type-str">str</span>:re -- [[<span class="sig-type sig-type-str">str</span>]])</code></td> </tr>
+        <tr> <td><code>reFindAllIndex</code></td> <td>Return 0-based start/end offsets for all matches, where the start offset is inclusive and the end offset is exclusive. Each result row contains start/end pairs for the full match, followed by capture groups.</td> <td><code>(<span class="sig-type sig-type-str">str</span>:string <span class="sig-type sig-type-str">str</span>:re -- [[<span class="sig-type sig-type-int">int</span>]])</code></td> </tr>
+        <tr> <td><code>reReplace</code></td> <td>Replace all matches with the provided replacement string.</td> <td><code>(<span class="sig-type sig-type-str">str</span>:orig <span class="sig-type sig-type-str">str</span>:re <span class="sig-type sig-type-str">str</span>:replacement -- <span class="sig-type sig-type-str">str</span>)</code></td> </tr>
+        <tr> <td><code>reSplit</code></td> <td>Split a string by a regular expression delimiter.</td> <td><code>(<span class="sig-type sig-type-str">str</span>:string <span class="sig-type sig-type-str">str</span>:re -- [<span class="sig-type sig-type-str">str</span>])</code></td> </tr>
     </tbody>
 </table>
+
+<p>For example, <code>reFindAll</code> returns each full match and its capture groups:</p>
+
+<pre><code><span class="mshellSTRING">&#34;abc 123 def 456&#34;</span> <span class="mshellSTRING">&#34;([a-z]+) ([0-9]+)&#34;</span> <span class="mshellLITERAL">reFindAll</span> <span class="mshellSTR">str</span> <span class="mshellLITERAL">wl</span>
+<span class="mshellLINECOMMENT"># Output: [[&#34;abc 123&#34; &#34;abc&#34; &#34;123&#34;] [&#34;def 456&#34; &#34;def&#34; &#34;456&#34;]]</span><span class="mshellEOF"></span></code></pre>
+
+<p><code>reFindAllIndex</code> returns the corresponding 0-based, inclusive-start, exclusive-end offsets in the same order:</p>
+
+<pre><code><span class="mshellSTRING">&#34;abc 123 def 456&#34;</span> <span class="mshellSTRING">&#34;([a-z]+) ([0-9]+)&#34;</span> <span class="mshellLITERAL">reFindAllIndex</span> <span class="mshellSTR">str</span> <span class="mshellLITERAL">wl</span>
+<span class="mshellLINECOMMENT"># Output: [[0 7 0 3 4 7] [8 15 8 11 12 15]]</span><span class="mshellEOF"></span></code></pre>
 
 
 <h1 id="functions-paths">Paths <a class="section-link" href="#functions-paths" aria-label="Permalink">§</a> <a class="back-to-top" href="#functions-top">Back to top</a></h1>
