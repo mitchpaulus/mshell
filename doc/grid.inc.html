@@ -167,6 +167,11 @@ Each column can have optional metadata specified as a dictionary immediately aft
             <td>Append a derived column to a Grid or GridView. The metadata dictionary is attached to the new column.</td>
             <td><code>(Grid|GridView <span class="sig-type sig-type-str">str</span>:colname <span class="sig-type sig-type-dict">dict</span>:meta (<span class="sig-type sig-type-gridrow">GridRow</span> -- a) -- Grid)</code></td>
         </tr>
+        <tr id="func-groupby-grid">
+            <td><code>groupBy</code></td>
+            <td>Group rows by key columns and return a summarized Grid. Aggregation specs are dictionaries with required <code>"agg"</code> quotation plus optional <code>"name"</code> and <code>"meta"</code>.</td>
+            <td><code>(Grid|GridView [<span class="sig-type sig-type-str">str</span>]:keys [<span class="sig-type sig-type-dict">dict</span>]:aggs -- Grid)</code></td>
+        </tr>
         <tr id="func-updatecol-grid">
             <td><code>updateCol</code></td>
             <td>Mutate a column in a Grid by applying a quotation to each cell. The quotation must return exactly one non-container value for each cell.</td>
@@ -217,6 +222,15 @@ Each column can have optional metadata specified as a dictionary immediately aft
 
 <span class="mshellLINECOMMENT"># Derive a new column with metadata</span>
 <span class="mshellVARRETRIEVE">@grid</span> <span class="mshellSTRING">"sum"</span> <span class="mshellLEFT_CURLY">{</span> <span class="mshellSTRING">"kind"</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">"derived"</span> <span class="mshellRIGHT_CURLY">}</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">x</span><span class="mshellQUESTION">?</span> <span class="mshellCOLON">:</span><span class="mshellLITERAL">y</span><span class="mshellQUESTION">?</span> <span class="mshellPLUS">+</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">derive</span>  <span class="mshellLINECOMMENT"># Grid with x, y, sum</span>
+
+<span class="mshellLINECOMMENT"># Group rows and compute multiple aggregations in one pass</span>
+<span class="mshellGRID_OPEN">[|</span> <span class="mshellLITERAL">region</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">sales</span><span class="mshellEXECUTE">;</span> <span class="mshellSTRING">"East"</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">10</span><span class="mshellEXECUTE">;</span> <span class="mshellSTRING">"West"</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">5</span><span class="mshellEXECUTE">;</span> <span class="mshellSTRING">"East"</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">7</span> <span class="mshellGRID_CLOSE">|]</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSTRING">"region"</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span>
+   <span class="mshellLEFT_CURLY">{</span> <span class="mshellSTRING">"name"</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">"n"</span><span class="mshellCOMMA">,</span> <span class="mshellSTRING">"agg"</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">gridRows</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellRIGHT_CURLY">}</span>
+   <span class="mshellLEFT_CURLY">{</span> <span class="mshellSTRING">"name"</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">"sales_total"</span><span class="mshellCOMMA">,</span> <span class="mshellSTRING">"meta"</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_CURLY">{</span> <span class="mshellSTRING">"unit"</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">"USD"</span> <span class="mshellRIGHT_CURLY">}</span><span class="mshellCOMMA">,</span> <span class="mshellSTRING">"agg"</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellSTRING">"sales"</span> <span class="mshellLITERAL">gridCol</span> <span class="mshellLITERAL">sum</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellRIGHT_CURLY">}</span>
+<span class="mshellRIGHT_SQUARE_BRACKET">]</span>
+<span class="mshellLITERAL">groupBy</span>  <span class="mshellLINECOMMENT"># Grid with region, n, sales_total</span>
 
 <span class="mshellLINECOMMENT"># Update a string column in place to typed values</span>
 <span class="mshellVARRETRIEVE">@grid</span> <span class="mshellSTRING">"x"</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">toFloat</span><span class="mshellQUESTION">?</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">updateCol</span>  <span class="mshellLINECOMMENT"># Mutates column x</span></code>

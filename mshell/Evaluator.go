@@ -1827,6 +1827,126 @@ func isContainerType(obj MShellObject) bool {
 	}
 }
 
+type gridGroupByAggSpec struct {
+	Name  string
+	Meta  *MShellDict
+	Quote *MShellQuotation
+}
+
+func typedGridGroupKeyPart(obj MShellObject) (string, error) {
+	if obj == nil {
+		return "nil:", nil
+	}
+	if isContainerType(obj) {
+		return "", fmt.Errorf("groupBy key values cannot be container types, got %s", obj.TypeName())
+	}
+
+	switch objTyped := obj.(type) {
+	case MShellBool:
+		return fmt.Sprintf("bool:%t", objTyped.Value), nil
+	case MShellInt:
+		return fmt.Sprintf("int:%d", objTyped.Value), nil
+	case MShellFloat:
+		floatVal := objTyped.Value
+		if floatVal == 0 {
+			floatVal = 0
+		}
+		return "float:" + strconv.FormatFloat(floatVal, 'g', -1, 64), nil
+	case MShellString:
+		encoded, _ := json.Marshal(objTyped.Content)
+		return "str:" + string(encoded), nil
+	case MShellPath:
+		encoded, _ := json.Marshal(objTyped.Path)
+		return "path:" + string(encoded), nil
+	case MShellLiteral:
+		encoded, _ := json.Marshal(objTyped.LiteralText)
+		return "literal:" + string(encoded), nil
+	case *MShellDateTime:
+		return fmt.Sprintf("date:%d", objTyped.Time.UnixNano()), nil
+	case *Maybe:
+		if objTyped.obj == nil {
+			return "maybe:none", nil
+		}
+		innerKey, err := typedGridGroupKeyPart(objTyped.obj)
+		if err != nil {
+			return "", err
+		}
+		return "maybe:just:" + innerKey, nil
+	default:
+		return obj.TypeName() + ":" + obj.ToJson(), nil
+	}
+}
+
+func typedGridGroupKey(sourceGrid *MShellGrid, rowIdx int, keyCols []string) (string, error) {
+	parts := make([]string, len(keyCols))
+	for i, colName := range keyCols {
+		col := sourceGrid.GetColumn(colName)
+		part, err := typedGridGroupKeyPart(col.Get(rowIdx))
+		if err != nil {
+			return "", err
+		}
+		parts[i] = part
+	}
+	return strings.Join(parts, "\x1f"), nil
+}
+
+func parseGridGroupByAggSpecs(aggList *MShellList) ([]gridGroupByAggSpec, error) {
+	specs := make([]gridGroupByAggSpec, len(aggList.Items))
+	allowedKeys := map[string]struct{}{
+		"agg":  {},
+		"name": {},
+		"meta": {},
+	}
+
+	for i, item := range aggList.Items {
+		specDict, ok := item.(*MShellDict)
+		if !ok {
+			return nil, fmt.Errorf("groupBy aggregation spec %d must be a dictionary, got %s", i+1, item.TypeName())
+		}
+
+		for key := range specDict.Items {
+			if _, ok := allowedKeys[key]; !ok {
+				return nil, fmt.Errorf("groupBy aggregation spec %d has unknown key '%s'", i+1, key)
+			}
+		}
+
+		aggObj, ok := specDict.Items["agg"]
+		if !ok {
+			return nil, fmt.Errorf("groupBy aggregation spec %d is missing required key 'agg'", i+1)
+		}
+		aggQuote, ok := aggObj.(*MShellQuotation)
+		if !ok {
+			return nil, fmt.Errorf("groupBy aggregation spec %d key 'agg' must be a quotation, got %s", i+1, aggObj.TypeName())
+		}
+
+		name := fmt.Sprintf("AggCol%d", i+1)
+		if nameObj, ok := specDict.Items["name"]; ok {
+			nameStr, ok := nameObj.(MShellString)
+			if !ok {
+				return nil, fmt.Errorf("groupBy aggregation spec %d key 'name' must be a string, got %s", i+1, nameObj.TypeName())
+			}
+			name = nameStr.Content
+		}
+
+		meta := NewDict()
+		if metaObj, ok := specDict.Items["meta"]; ok {
+			metaDict, ok := metaObj.(*MShellDict)
+			if !ok {
+				return nil, fmt.Errorf("groupBy aggregation spec %d key 'meta' must be a dictionary, got %s", i+1, metaObj.TypeName())
+			}
+			meta = metaDict
+		}
+
+		specs[i] = gridGroupByAggSpec{
+			Name:  name,
+			Meta:  meta,
+			Quote: aggQuote,
+		}
+	}
+
+	return specs, nil
+}
+
 func (state *EvalState) evaluateItems(objects []MShellParseItem, stack *MShellStack, context ExecuteContext, definitions []MShellDefinition, callStackItem CallStackItem) EvalResult {
 	// Defer popping the call stack
 	if callStackItem.MShellParseItem != nil {
@@ -4855,6 +4975,179 @@ MainLoop:
 
 					optimizeColumnStorage(newCol)
 					newGrid.AddColumn(newCol)
+					stack.Push(newGrid)
+				} else if t.Lexeme == "groupBy" {
+					if len(*stack) < 2 {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'groupBy' operation on a stack with less than two items.\n", t.Line, t.Column))
+					}
+
+					top := (*stack)[len(*stack)-1]
+					if quote, ok := top.(*MShellQuotation); ok {
+						obj1, obj2, err := stack.Pop2(t)
+						if err != nil {
+							return state.FailWithMessage(err.Error())
+						}
+
+						list, ok := obj2.(*MShellList)
+						if !ok {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: list groupBy requires a list below the quotation, got %s.\n", t.Line, t.Column, obj2.TypeName()))
+						}
+
+						quote = obj1.(*MShellQuotation)
+						groups := NewDict()
+						for _, item := range list.Items {
+							var groupStack MShellStack
+							groupStack = []MShellObject{item}
+
+							result, err := state.EvaluateQuote(*quote, &groupStack, context, definitions)
+							if err != nil {
+								return state.FailWithMessage(err.Error())
+							}
+							if result.ShouldPassResultUpStack() {
+								return result
+							}
+							if len(groupStack) != 1 {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: list groupBy quotation must return exactly one value, found %d values.\n", t.Line, t.Column, len(groupStack)))
+							}
+
+							keyObj, _ := groupStack.Pop()
+							key, err := keyObj.CastString()
+							if err != nil {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: list groupBy quotation must return a string key, got %s.\n", t.Line, t.Column, keyObj.TypeName()))
+							}
+
+							groupList, ok := groups.Items[key].(*MShellList)
+							if !ok {
+								groupList = NewList(0)
+								groups.Items[key] = groupList
+							}
+							groupList.Items = append(groupList.Items, item)
+						}
+
+						stack.Push(groups)
+						continue MainLoop
+					}
+
+					obj1, obj2, obj3, err := stack.Pop3(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					aggList, ok := obj1.(*MShellList)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: grid groupBy requires a list of aggregation specs, got %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					keyList, ok := obj2.(*MShellList)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: grid groupBy requires a list of key column names, got %s.\n", t.Line, t.Column, obj2.TypeName()))
+					}
+
+					sourceGrid, sourceIndices, err := getGridSourceAndIndices(obj3)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: grid groupBy requires a Grid or GridView, got %s.\n", t.Line, t.Column, obj3.TypeName()))
+					}
+
+					keyCols := make([]string, len(keyList.Items))
+					seenKeyCols := make(map[string]struct{}, len(keyList.Items))
+					for i, item := range keyList.Items {
+						colName, err := item.CastString()
+						if err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: groupBy key column names must be strings, got %s.\n", t.Line, t.Column, item.TypeName()))
+						}
+						if _, exists := seenKeyCols[colName]; exists {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: groupBy key column '%s' was requested more than once.\n", t.Line, t.Column, colName))
+						}
+						if sourceGrid.GetColumn(colName) == nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Column '%s' not found in grid.\n", t.Line, t.Column, colName))
+						}
+						seenKeyCols[colName] = struct{}{}
+						keyCols[i] = colName
+					}
+
+					aggSpecs, err := parseGridGroupByAggSpecs(aggList)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s.\n", t.Line, t.Column, err.Error()))
+					}
+
+					outputNames := make(map[string]struct{}, len(keyCols)+len(aggSpecs))
+					for _, keyCol := range keyCols {
+						outputNames[keyCol] = struct{}{}
+					}
+					for _, aggSpec := range aggSpecs {
+						if _, exists := outputNames[aggSpec.Name]; exists {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: groupBy output column '%s' is duplicated or conflicts with a key column.\n", t.Line, t.Column, aggSpec.Name))
+						}
+						outputNames[aggSpec.Name] = struct{}{}
+					}
+
+					groupOrder := make([][]int, 0)
+					groupMap := make(map[string]int)
+					for _, srcIdx := range sourceIndices {
+						key, err := typedGridGroupKey(sourceGrid, srcIdx, keyCols)
+						if err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: %s.\n", t.Line, t.Column, err.Error()))
+						}
+						groupIdx, exists := groupMap[key]
+						if !exists {
+							groupIdx = len(groupOrder)
+							groupMap[key] = groupIdx
+							groupOrder = append(groupOrder, []int{})
+						}
+						groupOrder[groupIdx] = append(groupOrder[groupIdx], srcIdx)
+					}
+
+					newGrid := NewGrid()
+					newGrid.Meta = sourceGrid.Meta
+					newGrid.RowCount = len(groupOrder)
+
+					for _, keyColName := range keyCols {
+						sourceCol := sourceGrid.GetColumn(keyColName)
+						newCol := NewGridColumn(keyColName, newGrid.RowCount)
+						newCol.Meta = sourceCol.Meta
+						newGrid.AddColumn(newCol)
+					}
+					for _, aggSpec := range aggSpecs {
+						newCol := NewGridColumn(aggSpec.Name, newGrid.RowCount)
+						newCol.Meta = aggSpec.Meta
+						newGrid.AddColumn(newCol)
+					}
+
+					for rowIdx, groupIndices := range groupOrder {
+						firstSrcIdx := groupIndices[0]
+						for keyColIdx, keyColName := range keyCols {
+							sourceCol := sourceGrid.GetColumn(keyColName)
+							newGrid.Columns[keyColIdx].GenericData[rowIdx] = sourceCol.Get(firstSrcIdx)
+						}
+
+						groupView := &MShellGridView{Source: sourceGrid, Indices: groupIndices}
+						for aggIdx, aggSpec := range aggSpecs {
+							var aggStack MShellStack
+							aggStack = []MShellObject{groupView}
+
+							result, err := state.EvaluateQuote(*aggSpec.Quote, &aggStack, context, definitions)
+							if err != nil {
+								return state.FailWithMessage(err.Error())
+							}
+							if result.ShouldPassResultUpStack() {
+								return result
+							}
+							if len(aggStack) != 1 {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: groupBy aggregation '%s' must return exactly one value, found %d values.\n", t.Line, t.Column, aggSpec.Name, len(aggStack)))
+							}
+
+							aggVal, _ := aggStack.Pop()
+							if isContainerType(aggVal) {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: groupBy aggregation '%s' cannot return a container type, got %s.\n", t.Line, t.Column, aggSpec.Name, aggVal.TypeName()))
+							}
+							newGrid.Columns[len(keyCols)+aggIdx].GenericData[rowIdx] = aggVal
+						}
+					}
+
+					for _, col := range newGrid.Columns {
+						optimizeColumnStorage(col)
+					}
+
 					stack.Push(newGrid)
 				} else if t.Lexeme == "reMatch" {
 					// Match a regex against a string

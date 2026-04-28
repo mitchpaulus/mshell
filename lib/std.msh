@@ -459,19 +459,6 @@ def cartesian ([[a]] [a] -- [[a]])
     concat
 end
 
-# groupBy list (a -- str) -- dict
-def groupBy ((a -- str) -- dict)
-    q! list! @list @q map uniq keys!
-    {} d! @keys (@d swap [] set drop) each
-    @list
-    (
-       i! @i @q x key!
-       @d @key get? @i append drop
-    )
-    each
-    @d
-end
-
 def listToDict ([a] (a -- str) (a -- b) -- c)
     l!, keyFunc!, valFunc!
     {} d!

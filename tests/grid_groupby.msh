@@ -1,0 +1,94 @@
+# Grid groupBy tests
+
+# Existing list groupBy behavior is preserved by the built-in overload.
+[1 2 3 4] (2 mod str) groupBy str wl
+
+# Multiple aggregations are evaluated against each first-seen group.
+[|
+    region, sales, qty;
+    "East", 10, 1;
+    "West", 5, 2;
+    "East", 7, 3
+|]
+["region"]
+[
+    { "name": "n", "agg": (gridRows) }
+    { "name": "sales_total", "meta": { "unit": "USD" }, "agg": ("sales" gridCol sum) }
+    { "name": "qty_total", "agg": ("qty" gridCol sum) }
+]
+groupBy grouped!
+@grouped toJson wl
+@grouped gridCols str wl
+@grouped "sales_total" gridColMeta? str wl
+
+# Default aggregation name and default empty metadata.
+[| region { "role": "key" }, sales; "East", 10; "West", 5 |]
+["region"]
+[
+    { "agg": (gridRows) }
+]
+groupBy defaultAgg!
+@defaultAgg gridCols str wl
+@defaultAgg "region" gridColMeta? str wl
+@defaultAgg "AggCol1" gridColMeta? str wl
+
+# Empty aggregation list behaves like distinct, preserving first-seen order.
+[|
+    region, month;
+    "East", "Jan";
+    "West", "Jan";
+    "East", "Jan";
+    "East", "Feb"
+|]
+["region" "month"]
+[]
+groupBy toJson wl
+
+# Empty key list aggregates the whole table.
+[| sales; 10; 5; 7 |]
+[]
+[
+    { "name": "total", "agg": ("sales" gridCol sum) }
+]
+groupBy toJson wl
+
+# Empty input produces schema without evaluating aggregations.
+[| region, sales; |]
+["region"]
+[
+    { "name": "boom", "agg": (unknownFunction) }
+]
+groupBy emptyGrouped!
+@emptyGrouped gridRows str wl
+@emptyGrouped gridCols str wl
+
+[| sales; |]
+[]
+[
+    { "name": "total", "agg": (unknownFunction) }
+]
+groupBy emptyNoKey!
+@emptyNoKey gridRows str wl
+@emptyNoKey gridCols str wl
+
+# Empty keys and empty aggregations form a zero-column row for non-empty input.
+[| x; 1; 2 |] [] [] groupBy noCols!
+@noCols gridRows str wl
+@noCols gridCols str wl
+@noCols toJson wl
+
+[| x; |] [] [] groupBy emptyNoCols!
+@emptyNoCols gridRows str wl
+@emptyNoCols gridCols str wl
+@emptyNoCols toJson wl
+
+# Grouping keys are type-aware.
+[| k; 1; 1.0; "1"; 1 |]
+["k"]
+[
+    { "name": "n", "agg": (gridRows) }
+]
+groupBy typedGrouped!
+@typedGrouped "k" gridCol str wl
+@typedGrouped "k" gridCol (type) map str wl
+@typedGrouped "n" gridCol str wl

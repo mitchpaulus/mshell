@@ -795,8 +795,7 @@ end wl # Output: 11
 - `scaleLinear`: Build a linear scaler from a domain/range pair; returns a quotation that maps input values. `([numeric] [numeric] -- (numeric -- numeric))`
 - `cartesian`: Produces the Cartesian product between two lists. Output is a list of lists, in which the inner list has two elements. `([a] [a] -- [[a]])`
 - `groupBy`: Groups items of a list into a dictionary based on a key function. The key function should take each item as input and produce a string.
-             The output is a dictionary with the unique keys and values that are lists of the corresponding items.
-             `[a] (a -- str) -- dict [a])`
+  The output is a dictionary with the unique keys and values that are lists of the corresponding items. `([a] (a -- str) -- dict)`
 - `listToDict`: Transform a list into a dictionary with a key and value selector function. `([a] (a -- b) (a -- c) -- { b: c })`
 - `take`: Take the first `n` number of elements from list. `([a] int -- [a])`
 - `repeat`: Build a list by repeating the value the requested number of times. `(a int -- [a])`
@@ -808,7 +807,28 @@ end wl # Output: 11
 - `select`: Project a `Grid` or `GridView` to a requested ordered list of column names, returning a materialized `Grid`. `(Grid|GridView [str] -- Grid)`
 - `exclude`: Drop a list of column names from a `Grid` or `GridView`, returning a materialized `Grid`. `(Grid|GridView [str] -- Grid)`
 - `derive`: Append a derived column to a `Grid` or `GridView`. The metadata dictionary is attached to the new column. `(Grid|GridView str dict (GridRow -- any) -- Grid)`
+- `groupBy`: Group rows by key columns and return a summarized `Grid`. `(Grid|GridView [str]:keys [dict]:aggs -- Grid)`
 - `updateCol`: Mutate a column in a `Grid` by applying a quotation to each cell. The quotation must return exactly one non-container value. `(Grid str (any -- any) -- Grid)`
+
+Grid `groupBy` aggregation specs are dictionaries.
+Each spec requires an `agg` quotation and may include `name` and `meta`.
+The `agg` quotation receives a `GridView` for one non-empty group and must return exactly one non-container value.
+`name` defaults to `AggCol<N>`, and `meta` defaults to `{}`.
+Key column metadata is copied from the source grid.
+Groups are emitted in first-seen order, and key comparison is type-aware.
+An empty aggregation list acts like distinct over the key columns.
+An empty key list aggregates the whole table into one group when input has rows.
+For empty input, `groupBy` returns the output schema with zero rows and does not evaluate aggregation quotations.
+
+```mshell
+[| region, sales; "East", 10; "West", 5; "East", 7 |]
+["region"]
+[
+    { "name": "n", "agg": (gridRows) }
+    { "name": "sales_total", "meta": { "unit": "USD" }, "agg": ("sales" gridCol sum) }
+]
+groupBy
+```
 
 ## Sorting
 

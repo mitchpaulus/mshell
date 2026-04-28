@@ -29,7 +29,7 @@ To best do that, those ingestion functions will be in golang, not part of the st
 select  (grid [str] -- grid)
 exclude (grid [str] -- grid)
 gridRenameCol (grid str str -- grid)
-groupBy (grid [str]: keys ([any] -- any): agg str: aggName -- grid)
+groupBy (Grid|GridView [str]:keys [dict]:aggs -- Grid)
 derive (grid str dict (gridRow -- any) -- grid)
 
 # Injestion
