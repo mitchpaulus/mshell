@@ -2451,6 +2451,11 @@ ColDefLoop:
 		}
 	}
 
+	// Consume the column/row separator before parsing row data.
+	if parser.curr.Type == EXECUTE {
+		parser.NextToken()
+	}
+
 	// Parse row data
 	numCols := len(grid.Columns)
 	for {

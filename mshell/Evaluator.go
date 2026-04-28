@@ -755,6 +755,9 @@ func (state *EvalState) processToken(token MShellParseItem, frame *EvaluationFra
 		*frames = append(*frames, newFrame)
 		return SimpleSuccess()
 
+	case *MShellParseGrid:
+		return state.evaluateParseGrid(t, stack, context, definitions)
+
 	case *MShellParseQuote:
 		q := MShellQuotation{Tokens: t.Items, StandardInputFile: "", StandardOutputFile: "", StandardErrorFile: "", Variables: context.Variables, MShellParseQuote: t}
 		stack.Push(&q)
@@ -1565,7 +1568,7 @@ func (state *EvalState) processVarstoreList(varstoreList MShellVarstoreList, fra
 	return SimpleSuccess()
 }
 
-// processGetter handles dictionary getter operations
+// processGetter handles ':' getter operations for dictionaries and grid rows.
 func (state *EvalState) processGetter(getter *MShellGetter, frame *EvaluationFrame) EvalResult {
 	stack := frame.Stack
 
@@ -1574,12 +1577,18 @@ func (state *EvalState) processGetter(getter *MShellGetter, frame *EvaluationFra
 		return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do ':' operation on an empty stack.\n", getter.Token.Line, getter.Token.Column))
 	}
 
-	dict, ok := obj.(*MShellDict)
-	if !ok {
-		return state.FailWithMessage(fmt.Sprintf("%d:%d: The stack parameter for the dictionary in ':' is not a dictionary. Found a %s (%s). Key: %s\n", getter.Token.Line, getter.Token.Column, obj.TypeName(), obj.DebugString(), getter.String))
+	var value MShellObject
+	var ok bool
+
+	switch objTyped := obj.(type) {
+	case *MShellDict:
+		value, ok = objTyped.Items[getter.String]
+	case *MShellGridRow:
+		value, ok = objTyped.Get(getter.String)
+	default:
+		return state.FailWithMessage(fmt.Sprintf("%d:%d: The stack parameter for ':' is not a dictionary or GridRow. Found a %s (%s). Key: %s\n", getter.Token.Line, getter.Token.Column, obj.TypeName(), obj.DebugString(), getter.String))
 	}
 
-	value, ok := dict.Items[getter.String]
 	if !ok {
 		stack.Push(&Maybe{obj: nil})
 	} else {
@@ -1625,6 +1634,97 @@ func (state *EvalState) Evaluate(objects []MShellParseItem, stack *MShellStack, 
 	}
 
 	return result
+}
+
+func (state *EvalState) evaluateParseGrid(parseGrid *MShellParseGrid, stack *MShellStack, context ExecuteContext, definitions []MShellDefinition) EvalResult {
+	grid := NewGrid()
+
+	// Evaluate grid metadata if present.
+	if parseGrid.GridMeta != nil {
+		var metaStack MShellStack
+		metaStack = []MShellObject{}
+		metaItems := []MShellParseItem{parseGrid.GridMeta}
+		callStackItem := CallStackItem{MShellParseItem: parseGrid, Name: "grid-meta", CallStackType: CALLSTACKDICT}
+		result := state.Evaluate(metaItems, &metaStack, context, definitions, callStackItem)
+		if !result.Success {
+			return result
+		}
+		if result.ExitCalled {
+			return result
+		}
+		if len(metaStack) != 1 {
+			return state.FailWithMessage(fmt.Sprintf("%d:%d: Grid metadata must evaluate to exactly one value.\n", parseGrid.GridMeta.GetStartToken().Line, parseGrid.GridMeta.GetStartToken().Column))
+		}
+		metaDict, ok := metaStack[0].(*MShellDict)
+		if !ok {
+			return state.FailWithMessage(fmt.Sprintf("%d:%d: Grid metadata must be a dictionary.\n", parseGrid.GridMeta.GetStartToken().Line, parseGrid.GridMeta.GetStartToken().Column))
+		}
+		grid.Meta = metaDict
+	}
+
+	numCols := len(parseGrid.Columns)
+	numRows := len(parseGrid.Rows)
+	grid.RowCount = numRows
+
+	for _, colDef := range parseGrid.Columns {
+		col := NewGridColumn(colDef.Name, numRows)
+
+		if colDef.Meta != nil {
+			var colMetaStack MShellStack
+			colMetaStack = []MShellObject{}
+			colMetaItems := []MShellParseItem{colDef.Meta}
+			callStackItem := CallStackItem{MShellParseItem: parseGrid, Name: "col-meta", CallStackType: CALLSTACKDICT}
+			result := state.Evaluate(colMetaItems, &colMetaStack, context, definitions, callStackItem)
+			if !result.Success {
+				return result
+			}
+			if result.ExitCalled {
+				return result
+			}
+			if len(colMetaStack) != 1 {
+				return state.FailWithMessage(fmt.Sprintf("%d:%d: Column metadata must evaluate to exactly one value.\n", colDef.Meta.GetStartToken().Line, colDef.Meta.GetStartToken().Column))
+			}
+			colMetaDict, ok := colMetaStack[0].(*MShellDict)
+			if !ok {
+				return state.FailWithMessage(fmt.Sprintf("%d:%d: Column metadata must be a dictionary.\n", colDef.Meta.GetStartToken().Line, colDef.Meta.GetStartToken().Column))
+			}
+			col.Meta = colMetaDict
+		}
+
+		grid.AddColumn(col)
+	}
+
+	for rowIdx, rowItems := range parseGrid.Rows {
+		if len(rowItems) != numCols {
+			startToken := parseGrid.GetStartToken()
+			return state.FailWithMessage(fmt.Sprintf("%d:%d: Row %d has %d items but grid has %d columns.\n", startToken.Line, startToken.Column, rowIdx+1, len(rowItems), numCols))
+		}
+
+		for colIdx, cellItem := range rowItems {
+			var cellStack MShellStack
+			cellStack = []MShellObject{}
+			cellItems := []MShellParseItem{cellItem}
+			callStackItem := CallStackItem{MShellParseItem: parseGrid, Name: "grid-cell", CallStackType: CALLSTACKDICT}
+			result := state.Evaluate(cellItems, &cellStack, context, definitions, callStackItem)
+			if !result.Success {
+				return result
+			}
+			if result.ExitCalled {
+				return result
+			}
+			if len(cellStack) != 1 {
+				return state.FailWithMessage(fmt.Sprintf("%d:%d: Grid cell must evaluate to exactly one value.\n", cellItem.GetStartToken().Line, cellItem.GetStartToken().Column))
+			}
+			grid.Columns[colIdx].GenericData[rowIdx] = cellStack[0]
+		}
+	}
+
+	for _, col := range grid.Columns {
+		optimizeColumnStorage(col)
+	}
+
+	stack.Push(grid)
+	return SimpleSuccess()
 }
 
 func (state *EvalState) evaluateItems(objects []MShellParseItem, stack *MShellStack, context ExecuteContext, definitions []MShellDefinition, callStackItem CallStackItem) EvalResult {
@@ -1711,99 +1811,10 @@ MainLoop:
 
 			stack.Push(dict)
 		case *MShellParseGrid:
-			// Evaluate the grid literal
-			parseGrid := t
-			grid := NewGrid()
-
-			// Evaluate grid metadata if present
-			if parseGrid.GridMeta != nil {
-				var metaStack MShellStack
-				metaStack = []MShellObject{}
-				metaItems := []MShellParseItem{parseGrid.GridMeta}
-				callStackItem := CallStackItem{MShellParseItem: parseGrid, Name: "grid-meta", CallStackType: CALLSTACKDICT}
-				result := state.Evaluate(metaItems, &metaStack, context, definitions, callStackItem)
-				if !result.Success {
-					return result
-				}
-				if result.ExitCalled {
-					return result
-				}
-				if len(metaStack) != 1 {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Grid metadata must evaluate to exactly one value.\n", parseGrid.GridMeta.GetStartToken().Line, parseGrid.GridMeta.GetStartToken().Column))
-				}
-				metaDict, ok := metaStack[0].(*MShellDict)
-				if !ok {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Grid metadata must be a dictionary.\n", parseGrid.GridMeta.GetStartToken().Line, parseGrid.GridMeta.GetStartToken().Column))
-				}
-				grid.Meta = metaDict
+			result := state.evaluateParseGrid(t, stack, context, definitions)
+			if !result.Success || result.ExitCalled {
+				return result
 			}
-
-			// Set up columns
-			numCols := len(parseGrid.Columns)
-			numRows := len(parseGrid.Rows)
-			grid.RowCount = numRows
-
-			for _, colDef := range parseGrid.Columns {
-				col := NewGridColumn(colDef.Name, numRows)
-
-				// Evaluate column metadata if present
-				if colDef.Meta != nil {
-					var colMetaStack MShellStack
-					colMetaStack = []MShellObject{}
-					colMetaItems := []MShellParseItem{colDef.Meta}
-					callStackItem := CallStackItem{MShellParseItem: parseGrid, Name: "col-meta", CallStackType: CALLSTACKDICT}
-					result := state.Evaluate(colMetaItems, &colMetaStack, context, definitions, callStackItem)
-					if !result.Success {
-						return result
-					}
-					if result.ExitCalled {
-						return result
-					}
-					if len(colMetaStack) != 1 {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Column metadata must evaluate to exactly one value.\n", colDef.Meta.GetStartToken().Line, colDef.Meta.GetStartToken().Column))
-					}
-					colMetaDict, ok := colMetaStack[0].(*MShellDict)
-					if !ok {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Column metadata must be a dictionary.\n", colDef.Meta.GetStartToken().Line, colDef.Meta.GetStartToken().Column))
-					}
-					col.Meta = colMetaDict
-				}
-
-				grid.AddColumn(col)
-			}
-
-			// Evaluate row data
-			for rowIdx, rowItems := range parseGrid.Rows {
-				if len(rowItems) != numCols {
-					startToken := parseGrid.GetStartToken()
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Row %d has %d items but grid has %d columns.\n", startToken.Line, startToken.Column, rowIdx+1, len(rowItems), numCols))
-				}
-
-				for colIdx, cellItem := range rowItems {
-					var cellStack MShellStack
-					cellStack = []MShellObject{}
-					cellItems := []MShellParseItem{cellItem}
-					callStackItem := CallStackItem{MShellParseItem: parseGrid, Name: "grid-cell", CallStackType: CALLSTACKDICT}
-					result := state.Evaluate(cellItems, &cellStack, context, definitions, callStackItem)
-					if !result.Success {
-						return result
-					}
-					if result.ExitCalled {
-						return result
-					}
-					if len(cellStack) != 1 {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Grid cell must evaluate to exactly one value.\n", cellItem.GetStartToken().Line, cellItem.GetStartToken().Column))
-					}
-					grid.Columns[colIdx].GenericData[rowIdx] = cellStack[0]
-				}
-			}
-
-			// Optimize column storage based on actual data types
-			for _, col := range grid.Columns {
-				optimizeColumnStorage(col)
-			}
-
-			stack.Push(grid)
 		case *MShellParseQuote:
 			parseQuote := t
 			q := MShellQuotation{Tokens: parseQuote.Items, StandardInputFile: "", StandardOutputFile: "", StandardErrorFile: "", Variables: context.Variables, MShellParseQuote: parseQuote}
@@ -5189,8 +5200,53 @@ MainLoop:
 							}
 						}
 						stack.Push(newDict)
+					case *MShellGrid, *MShellGridView:
+						var sourceGrid *MShellGrid
+						var sourceIndices []int
+
+						switch gridTyped := obj2Typed.(type) {
+						case *MShellGrid:
+							sourceGrid = gridTyped
+							sourceIndices = make([]int, gridTyped.RowCount)
+							for i := range sourceIndices {
+								sourceIndices[i] = i
+							}
+						case *MShellGridView:
+							sourceGrid = gridTyped.Source
+							sourceIndices = gridTyped.Indices
+						}
+
+						var matchingIndices []int
+						for _, idx := range sourceIndices {
+							row := &MShellGridRow{Grid: sourceGrid, RowIndex: idx}
+
+							var filterStack MShellStack
+							filterStack = []MShellObject{row}
+							result, err := state.EvaluateQuote(*fn, &filterStack, context, definitions)
+							if err != nil {
+								return state.FailWithMessage(err.Error())
+							}
+							if result.ShouldPassResultUpStack() {
+								return result
+							}
+							if len(filterStack) == 0 {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: filter predicate returned empty stack.\n", t.Line, t.Column))
+							}
+
+							filterResult, _ := filterStack.Pop()
+							filterBool, ok := filterResult.(MShellBool)
+							if !ok {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: The function in 'filter' did not return a bool, found a %s (%s).\n", t.Line, t.Column, filterResult.TypeName(), filterResult.DebugString()))
+							}
+
+							if filterBool.Value {
+								matchingIndices = append(matchingIndices, idx)
+							}
+						}
+
+						stack.Push(&MShellGridView{Source: sourceGrid, Indices: matchingIndices})
 					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second parameter in 'filter' is expected to be a list or dictionary, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second parameter in 'filter' is expected to be a list, dictionary, Grid, or GridView, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
 					}
 				} else if t.Lexeme == "map" {
 					// Map a function over a list, Maybe, Grid, or GridView
