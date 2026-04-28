@@ -1,1 +1,1 @@
-1:43: Cannot write a Binary.
+1:43: Cannot write a binary with a newline. You are allowed to write contents directly with `w` or `we`.

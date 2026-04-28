@@ -1,6 +1,7 @@
 package main
 
 import (
+	"maps"
 	"archive/zip"
 	"bufio"
 	"bytes"
@@ -49,10 +50,6 @@ type MShellFunction struct {
 
 var oleAutomationEpoch = time.Date(1899, 12, 30, 0, 0, 0, 0, time.UTC)
 var randomFixedRand = rand.New(rand.NewSource(1))
-
-func init() {
-	rand.Seed(time.Now().UnixNano())
-}
 
 type MShellStack []MShellObject
 
@@ -249,27 +246,6 @@ func formatWithSigFigs(num float64, sigfigs int) string {
 	intRounded := int64(rounded) * int64(scale)
 	digits = fmt.Sprintf("%d", intRounded)
 	return sign + digits
-}
-
-func formatWithDecimals(num float64, decimals int) string {
-	sign := ""
-	if num < 0 {
-		sign = "-"
-		num = -num
-	}
-
-	scale := math.Pow10(decimals)
-	rounded := math.Round(num * scale)
-	intPart := int64(rounded) / int64(scale)
-	fracPart := int64(math.Abs(rounded)) % int64(scale)
-
-	intStr := fmt.Sprintf("%d", intPart)
-	if decimals == 0 {
-		return sign + intStr
-	}
-
-	fracStr := fmt.Sprintf("%0*d", decimals, fracPart)
-	return sign + intStr + "." + fracStr
 }
 
 func getGroupingOption(dict *MShellDict, key string) ([]int, bool, error) {
@@ -812,7 +788,7 @@ func (state *EvalState) processToken(token MShellParseItem, frame *EvaluationFra
 		}
 
 		// Not a definition - fall back to token processing
-		return state.processTokenLiteral(funcToken, frame, frames)
+		return state.processTokenLiteral(funcToken, frame)
 
 	case *MShellParseIfBlock:
 		return state.processIfBlock(t, frame, frames)
@@ -1009,14 +985,10 @@ func (state *EvalState) processMatchBlock(matchBlock *MShellParseMatchBlock, fra
 			return result
 		}
 		if matched {
-			// If there are destructuring bindings, pop the subject since
-			// the user is interested in the parts, not the whole.
-			if len(bindings) > 0 {
+			if arm.Consume {
 				stack.Pop()
-				for k, v := range bindings {
-					context.Variables[k] = v
-				}
 			}
+			maps.Copy(context.Variables, bindings)
 
 			callStackItem := CallStackItem{MShellParseItem: matchBlock, Name: "match", CallStackType: CALLSTACKMATCH}
 			state.CallStack.Push(callStackItem)
@@ -1249,10 +1221,10 @@ func (state *EvalState) matchListPattern(pattern *MShellParseList, subject MShel
 
 		bindings := make(map[string]MShellObject)
 		// Bind elements before spread
-		for i := 0; i < beforeCount; i++ {
+		for i := range beforeCount {
 			tok, ok := pattern.Items[i].(Token)
 			if !ok {
-				return false, nil, state.FailWithMessage(fmt.Sprintf("List pattern element must be a literal.\n"))
+				return false, nil, state.FailWithMessage("List pattern element must be a literal.\n")
 			}
 			if tok.Type == LITERAL && tok.Lexeme != "_" {
 				bindings[tok.Lexeme] = list.Items[i]
@@ -1269,10 +1241,10 @@ func (state *EvalState) matchListPattern(pattern *MShellParseList, subject MShel
 		}
 
 		// Bind elements after spread
-		for i := 0; i < afterCount; i++ {
+		for i := range afterCount {
 			tok, ok := pattern.Items[spreadIndex+1+i].(Token)
 			if !ok {
-				return false, nil, state.FailWithMessage(fmt.Sprintf("List pattern element must be a literal.\n"))
+				return false, nil, state.FailWithMessage("List pattern element must be a literal.\n")
 			}
 			if tok.Type == LITERAL && tok.Lexeme != "_" {
 				bindings[tok.Lexeme] = list.Items[len(list.Items)-afterCount+i]
@@ -1291,7 +1263,7 @@ func (state *EvalState) matchListPattern(pattern *MShellParseList, subject MShel
 	for i, item := range pattern.Items {
 		tok, ok := item.(Token)
 		if !ok {
-			return false, nil, state.FailWithMessage(fmt.Sprintf("List pattern element must be a literal.\n"))
+			return false, nil, state.FailWithMessage("List pattern element must be a literal.\n")
 		}
 		if tok.Type == LITERAL && tok.Lexeme != "_" {
 			bindings[tok.Lexeme] = list.Items[i]
@@ -1354,7 +1326,7 @@ func (state *EvalState) processTokenToken(t Token, frame *EvaluationFrame, frame
 			}
 		}
 		// Not a definition - process as regular literal
-		return state.processTokenLiteral(t, frame, frames)
+		return state.processTokenLiteral(t, frame)
 	}
 
 	if t.Type == BREAK {
@@ -1387,7 +1359,7 @@ func (state *EvalState) processTokenToken(t Token, frame *EvaluationFrame, frame
 }
 
 // processTokenLiteral handles LITERAL tokens that are not definitions
-func (state *EvalState) processTokenLiteral(t Token, frame *EvaluationFrame, frames *[]EvaluationFrame) EvalResult {
+func (state *EvalState) processTokenLiteral(t Token, frame *EvaluationFrame) EvalResult {
 	stack := frame.Stack
 	context := frame.Context
 	definitions := frame.Definitions
@@ -1427,11 +1399,12 @@ func (state *EvalState) processLoop(t Token, frame *EvaluationFrame, frames *[]E
 	}
 
 	if quotation.StdinBehavior != STDIN_NONE {
-		if quotation.StdinBehavior == STDIN_CONTENT {
+		switch quotation.StdinBehavior {
+		case STDIN_CONTENT:
 			loopContext.StandardInput = strings.NewReader(quotation.StandardInputContents)
-		} else if quotation.StdinBehavior == STDIN_BINARY {
+		case STDIN_BINARY:
 			loopContext.StandardInput = bytes.NewReader(quotation.StandardInputBinary)
-		} else if quotation.StdinBehavior == STDIN_FILE {
+		case STDIN_FILE:
 			file, err := os.Open(quotation.StandardInputFile)
 			if err != nil {
 				return state.FailWithMessage(fmt.Sprintf("%d:%d: Error opening file %s for reading: %s\n", t.Line, t.Column, quotation.StandardInputFile, err.Error()))
@@ -1575,7 +1548,11 @@ func (state *EvalState) processVarstoreList(varstoreList MShellVarstoreList, fra
 
 	// First check lengths
 	if len(varstoreList.VarStores) > len(*stack) {
-		return state.FailWithMessage(fmt.Sprintf("%d:%d: Not enough items on stack (%d) to store into %d variables.\n", varstoreList.GetStartToken().Line, varstoreList.GetStartToken().Column, len(*stack), len(varstoreList.VarStores)))
+		if len(varstoreList.VarStores) == 1 {
+			return state.FailWithMessage(fmt.Sprintf("%d:%d: Nothing on the stack to store into variable %s.\n", varstoreList.GetStartToken().Line, varstoreList.GetStartToken().Column, varstoreList.VarStores[0].Lexeme))
+		} else {
+			return state.FailWithMessage(fmt.Sprintf("%d:%d: Not enough items on stack (%d) to store into %d variables (%s).\n", varstoreList.GetStartToken().Line, varstoreList.GetStartToken().Column, len(*stack), len(varstoreList.VarStores), varstoreList.DebugString()))
+		}
 	}
 
 	// Have to bind in reverse order
@@ -1951,14 +1928,10 @@ MainLoop:
 					return result
 				}
 				if armMatched {
-					// If there are destructuring bindings, pop the subject since
-					// the user is interested in the parts, not the whole.
-					if len(bindings) > 0 {
+					if arm.Consume {
 						stack.Pop()
-						for k, v := range bindings {
-							context.Variables[k] = v
-						}
 					}
+					maps.Copy(context.Variables, bindings)
 					callStackItem := CallStackItem{MShellParseItem: t, Name: "match", CallStackType: CALLSTACKMATCH}
 					result := state.evaluateItems(arm.Body, stack, context, definitions, callStackItem)
 					if result.ShouldPassResultUpStack() {
@@ -2451,7 +2424,7 @@ MainLoop:
 						fmt.Fprint(writer, topTyped.Value)
 					case MShellBinary:
 						if t.Lexeme == "wl" || t.Lexeme == "wle" {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot write a %s.\n", t.Line, t.Column, top.TypeName()))
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot write a binary with a newline. You are allowed to write contents directly with `w` or `we`.\n", t.Line, t.Column))
 						}
 						_, _ = writer.Write(topTyped)
 					default:
@@ -3202,13 +3175,14 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot get the %s of a %s.\n", t.Line, t.Column, t.Lexeme, obj1.TypeName()))
 					}
 
-					if t.Lexeme == "basename" {
+					switch t.Lexeme {
+					case "basename":
 						stack.Push(MShellPath{filepath.Base(path)})
-					} else if t.Lexeme == "dirname" {
+					case "dirname":
 						stack.Push(MShellPath{filepath.Dir(path)})
-					} else if t.Lexeme == "ext" {
+					case "ext":
 						stack.Push(MShellString{filepath.Ext(path)})
-					} else if t.Lexeme == "stem" {
+					case "stem":
 						// This should include previous dir if it exists
 
 						stack.Push(MShellPath{strings.TrimSuffix(path, filepath.Ext(path))})
@@ -3260,11 +3234,12 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot trim a %s.\n", t.Line, t.Column, obj1.TypeName()))
 					}
 
-					if t.Lexeme == "trim" {
+					switch t.Lexeme {
+					case "trim":
 						stack.Push(MShellString{strings.TrimSpace(str)})
-					} else if t.Lexeme == "trimStart" {
+					case "trimStart":
 						stack.Push(MShellString{strings.TrimLeft(str, " \t\n")})
-					} else if t.Lexeme == "trimEnd" {
+					case "trimEnd":
 						stack.Push(MShellString{strings.TrimRight(str, " \t\n")})
 					}
 				} else if t.Lexeme == "upper" || t.Lexeme == "lower" || t.Lexeme == "title" {
@@ -3274,11 +3249,12 @@ MainLoop:
 					}
 
 					var f func(string) string
-					if t.Lexeme == "upper" {
+					switch t.Lexeme {
+					case "upper":
 						f = strings.ToUpper
-					} else if t.Lexeme == "lower" {
+					case "lower":
 						f = strings.ToLower
-					} else if t.Lexeme == "title" {
+					case "title":
 						titleCaser := cases.Title(language.English)
 						f = titleCaser.String
 					}
@@ -3495,9 +3471,10 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot check if a %s %s a %s.\n", t.Line, t.Column, obj2.TypeName(), t.Lexeme, obj1.TypeName()))
 					}
 
-					if t.Lexeme == "endsWith" {
+					switch t.Lexeme {
+					case "endsWith":
 						stack.Push(MShellBool{strings.HasSuffix(str2, str1)})
-					} else if t.Lexeme == "startsWith" {
+					case "startsWith":
 						stack.Push(MShellBool{strings.HasPrefix(str2, str1)})
 					}
 				} else if t.Lexeme == "leftPad" {
@@ -3564,11 +3541,12 @@ MainLoop:
 					}
 
 					dayOfWeek := int(dateTimeObj.Time.Weekday())
-					if t.Lexeme == "isWeekend" {
+					switch t.Lexeme {
+					case "isWeekend":
 						stack.Push(MShellBool{dayOfWeek == 0 || dayOfWeek == 6})
-					} else if t.Lexeme == "isWeekday" {
+					case "isWeekday":
 						stack.Push(MShellBool{dayOfWeek != 0 && dayOfWeek != 6})
-					} else if t.Lexeme == "dow" {
+					case "dow":
 						stack.Push(MShellInt{dayOfWeek})
 					}
 				} else if t.Lexeme == "toUnixTime" || t.Lexeme == "toUnixTimeMilli" || t.Lexeme == "toUnixTimeMicro" || t.Lexeme == "toUnixTimeNano" {
@@ -3581,13 +3559,14 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot get the unix time of a %s (%s).\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
 					}
 
-					if t.Lexeme == "toUnixTime" {
+					switch t.Lexeme {
+					case "toUnixTime":
 						stack.Push(MShellInt{int(dateTimeObj.Time.Unix())})
-					} else if t.Lexeme == "toUnixTimeMilli" {
+					case "toUnixTimeMilli":
 						stack.Push(MShellInt{int(dateTimeObj.Time.UnixMilli())})
-					} else if t.Lexeme == "toUnixTimeMicro" {
+					case "toUnixTimeMicro":
 						stack.Push(MShellInt{int(dateTimeObj.Time.UnixMicro())})
-					} else if t.Lexeme == "toUnixTimeNano" {
+					case "toUnixTimeNano":
 						stack.Push(MShellInt{int(dateTimeObj.Time.UnixNano())})
 					}
 				} else if t.Lexeme == "toOleDate" {
@@ -3615,13 +3594,14 @@ MainLoop:
 					}
 
 					var newTime time.Time
-					if t.Lexeme == "fromUnixTime" {
+					switch t.Lexeme {
+					case "fromUnixTime":
 						newTime = time.Unix(int64(intVal.Value), 0).UTC()
-					} else if t.Lexeme == "fromUnixTimeMilli" {
+					case "fromUnixTimeMilli":
 						newTime = time.UnixMilli(int64(intVal.Value)).UTC()
-					} else if t.Lexeme == "fromUnixTimeMicro" {
+					case "fromUnixTimeMicro":
 						newTime = time.UnixMicro(int64(intVal.Value)).UTC()
-					} else if t.Lexeme == "fromUnixTimeNano" {
+					case "fromUnixTimeNano":
 						newTime = time.Unix(0, int64(intVal.Value)).UTC()
 					}
 
@@ -3662,9 +3642,10 @@ MainLoop:
 					}
 
 					var file *os.File
-					if t.Lexeme == "writeFile" {
+					switch t.Lexeme {
+					case "writeFile":
 						file, err = os.Create(path)
-					} else if t.Lexeme == "appendFile" {
+					case "appendFile":
 						file, err = os.OpenFile(path, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
 					}
 					if err != nil {
@@ -3994,25 +3975,27 @@ MainLoop:
 					switch objTyped := obj.(type) {
 					case *MShellList:
 						list := objTyped
-						if t.Lexeme == "e" {
+						switch t.Lexeme {
+						case "e":
 							list.StderrBehavior = STDERR_LINES
-						} else if t.Lexeme == "es" {
+						case "es":
 							list.StderrBehavior = STDERR_STRIPPED
-						} else if t.Lexeme == "ec" {
+						case "ec":
 							list.StderrBehavior = STDERR_COMPLETE
-						} else {
+						default:
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Type))
 						}
 						stack.Push(list)
 					case *MShellPipe:
 						pipe := objTyped
-						if t.Lexeme == "e" {
+						switch t.Lexeme {
+						case "e":
 							pipe.StderrBehavior = STDERR_LINES
-						} else if t.Lexeme == "es" {
+						case "es":
 							pipe.StderrBehavior = STDERR_STRIPPED
-						} else if t.Lexeme == "ec" {
+						case "ec":
 							pipe.StderrBehavior = STDERR_COMPLETE
-						} else {
+						default:
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Type))
 						}
 						stack.Push(pipe)
@@ -4217,7 +4200,8 @@ MainLoop:
 					newList := NewList(len(dict.Items))
 					i := 0
 
-					if t.Lexeme == "keys" {
+					switch t.Lexeme {
+					case "keys":
 						for key := range dict.Items {
 							newList.Items[i] = MShellString{key}
 							i++
@@ -4225,7 +4209,7 @@ MainLoop:
 						sort.Slice(newList.Items, func(a, b int) bool {
 							return newList.Items[a].(MShellString).Content < newList.Items[b].(MShellString).Content
 						})
-					} else if t.Lexeme == "values" {
+					case "values":
 						for _, value := range dict.Items {
 							newList.Items[i] = value
 							i++
@@ -4233,7 +4217,7 @@ MainLoop:
 						sort.Slice(newList.Items, func(a, b int) bool {
 							return newList.Items[a].DebugString() < newList.Items[b].DebugString()
 						})
-					} else {
+					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Lexeme))
 					}
 
@@ -4804,6 +4788,31 @@ MainLoop:
 					// Convert the parsed data to analgous MShell types
 					resultObj := ParseJsonObjToMshell(parsedData)
 					stack.Push(resultObj)
+				} else if t.Lexeme == "parseExcel" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'parseExcel' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					var xlsxData []byte
+					switch obj1Typed := obj1.(type) {
+					case MShellPath:
+						p, _ := obj1.CastString()
+						xlsxData, err = os.ReadFile(p)
+						if err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error reading file %s: %s\n", t.Line, t.Column, p, err.Error()))
+						}
+					case MShellBinary:
+						xlsxData = []byte(obj1Typed)
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: 'parseExcel' expects a Path or Binary, got a %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					dict, err := parseExcelBytes(xlsxData)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing Excel: %s\n", t.Line, t.Column, err.Error()))
+					}
+					stack.Push(dict)
 				} else if t.Lexeme == "toJson" {
 					// Convert an object to JSON
 					obj1, err := stack.Pop()
@@ -5632,7 +5641,7 @@ MainLoop:
 					// Check that obj2 is a Maybe
 					maybeObj, ok := obj2.(*Maybe)
 					if !ok {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second parameter in 'maybe' is expected to be a Maybe, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The first parameter in 'maybe' is expected to be a Maybe, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
 					}
 
 					if maybeObj.obj == nil {
@@ -7057,21 +7066,21 @@ MainLoop:
 						if containsNullByte(path) {
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Found a null byte in the redirection file path. This is almost certainly not intended. You may have built the file name from UTF-16. Please ensure that your string is UTF-8 for the most predictable results.\n", t.Line, t.Column))
 						}
-						switch obj2.(type) {
+						switch obj2 := obj2.(type) {
 						case *MShellList:
 							if t.Type == GREATERTHAN {
-								obj2.(*MShellList).StandardOutputFile = path
+								obj2.StandardOutputFile = path
 							} else { // LESSTHAN, input redirection
-								obj2.(*MShellList).StdinBehavior = STDIN_CONTENT
-								obj2.(*MShellList).StandardInputContents = path
+								obj2.StdinBehavior = STDIN_CONTENT
+								obj2.StandardInputContents = path
 							}
 							stack.Push(obj2)
 						case *MShellQuotation:
 							if t.Type == GREATERTHAN {
-								obj2.(*MShellQuotation).StandardOutputFile = path
+								obj2.StandardOutputFile = path
 							} else { // LESSTHAN, input redirection
-								obj2.(*MShellQuotation).StdinBehavior = STDIN_CONTENT
-								obj2.(*MShellQuotation).StandardInputContents = path
+								obj2.StdinBehavior = STDIN_CONTENT
+								obj2.StandardInputContents = path
 							}
 							stack.Push(obj2)
 						case *MShellPipe:
@@ -7107,21 +7116,21 @@ MainLoop:
 						if containsNullByte(path) {
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Found a null byte in the redirection file path. This is almost certainly not intended. You may have built the file name from UTF-16. Please ensure that your string is UTF-8 for the most predictable results.\n", t.Line, t.Column))
 						}
-						switch obj2.(type) {
+						switch obj2 := obj2.(type) {
 						case *MShellList:
 							if t.Type == GREATERTHAN {
-								obj2.(*MShellList).StandardOutputFile = path
+								obj2.StandardOutputFile = path
 							} else { // LESSTHAN, input redirection
-								obj2.(*MShellList).StdinBehavior = STDIN_CONTENT
-								obj2.(*MShellList).StandardInputFile = path
+								obj2.StdinBehavior = STDIN_CONTENT
+								obj2.StandardInputFile = path
 							}
 							stack.Push(obj2)
 						case *MShellQuotation:
 							if t.Type == GREATERTHAN {
-								obj2.(*MShellQuotation).StandardOutputFile = path
+								obj2.StandardOutputFile = path
 							} else {
-								obj2.(*MShellQuotation).StdinBehavior = STDIN_CONTENT
-								obj2.(*MShellQuotation).StandardInputContents = path
+								obj2.StdinBehavior = STDIN_CONTENT
+								obj2.StandardInputContents = path
 							}
 						default:
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a %s (%s) to a %s (%s).\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
@@ -7132,21 +7141,21 @@ MainLoop:
 						if containsNullByte(path) {
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Found a null byte in the redirection file path. This is almost certainly not intended. You may have built the file name from UTF-16. Please ensure that your string is UTF-8 for the most predictable results.\n", t.Line, t.Column))
 						}
-						switch obj2.(type) {
+						switch obj2 := obj2.(type) {
 						case *MShellList:
 							if t.Type == GREATERTHAN {
-								obj2.(*MShellList).StandardOutputFile = path
+								obj2.StandardOutputFile = path
 							} else { // LESSTHAN, input redirection
-								obj2.(*MShellList).StdinBehavior = STDIN_FILE
-								obj2.(*MShellList).StandardInputFile = path
+								obj2.StdinBehavior = STDIN_FILE
+								obj2.StandardInputFile = path
 							}
 							stack.Push(obj2)
 						case *MShellQuotation:
 							if t.Type == GREATERTHAN {
-								obj2.(*MShellQuotation).StandardOutputFile = path
+								obj2.StandardOutputFile = path
 							} else {
-								obj2.(*MShellQuotation).StdinBehavior = STDIN_FILE
-								obj2.(*MShellQuotation).StandardInputFile = path
+								obj2.StdinBehavior = STDIN_FILE
+								obj2.StandardInputFile = path
 							}
 							stack.Push(obj2)
 						default:
@@ -7351,11 +7360,12 @@ MainLoop:
 				}
 
 				if quotation.StdinBehavior != STDIN_NONE {
-					if quotation.StdinBehavior == STDIN_CONTENT {
+					switch quotation.StdinBehavior {
+					case STDIN_CONTENT:
 						loopContext.StandardInput = strings.NewReader(quotation.StandardInputContents)
-					} else if quotation.StdinBehavior == STDIN_BINARY {
+					case STDIN_BINARY:
 						loopContext.StandardInput = bytes.NewReader(quotation.StandardInputBinary)
-					} else if quotation.StdinBehavior == STDIN_FILE {
+					case STDIN_FILE:
 						file, err := os.Open(quotation.StandardInputFile)
 						if err != nil {
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error opening file %s for reading: %s\n", t.Line, t.Column, quotation.StandardInputFile, err.Error()))
@@ -7363,7 +7373,7 @@ MainLoop:
 						loopContext.StandardInput = file
 						// TODO: This probably shouldn't be done here like this
 						defer file.Close()
-					} else {
+					default:
 						panic("Unknown stdin behavior")
 					}
 				}
@@ -7687,25 +7697,27 @@ MainLoop:
 				switch objTyped := obj.(type) {
 				case *MShellList:
 					list := objTyped
-					if t.Type == STDOUTLINES {
+					switch t.Type {
+					case STDOUTLINES:
 						list.StdoutBehavior = STDOUT_LINES
-					} else if t.Type == STDOUTSTRIPPED {
+					case STDOUTSTRIPPED:
 						list.StdoutBehavior = STDOUT_STRIPPED
-					} else if t.Type == STDOUTCOMPLETE {
+					case STDOUTCOMPLETE:
 						list.StdoutBehavior = STDOUT_COMPLETE
-					} else {
+					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Type))
 					}
 					stack.Push(list)
 				case *MShellPipe:
 					pipe := objTyped
-					if t.Type == STDOUTLINES {
+					switch t.Type {
+					case STDOUTLINES:
 						pipe.StdoutBehavior = STDOUT_LINES
-					} else if t.Type == STDOUTSTRIPPED {
+					case STDOUTSTRIPPED:
 						pipe.StdoutBehavior = STDOUT_STRIPPED
-					} else if t.Type == STDOUTCOMPLETE {
+					case STDOUTCOMPLETE:
 						pipe.StdoutBehavior = STDOUT_COMPLETE
-					} else {
+					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Type))
 					}
 					stack.Push(pipe)
@@ -7822,7 +7834,8 @@ func (state *EvalState) EvaluateFormatString(lexeme string, context ExecuteConte
 		c := allRunes[index]
 		index++
 
-		if mode == FORMATMODEESCAPE {
+		switch mode {
+		case FORMATMODEESCAPE:
 			switch c {
 			case 'e':
 				b.WriteRune('\033')
@@ -7842,16 +7855,17 @@ func (state *EvalState) EvaluateFormatString(lexeme string, context ExecuteConte
 				return MShellString{""}, fmt.Errorf("invalid escape character '%c'", c)
 			}
 			mode = FORMATMODENORMAL
-		} else if mode == FORMATMODENORMAL {
-			if c == '\\' {
+		case FORMATMODENORMAL:
+			switch c {
+			case '\\':
 				mode = FORMATMODEESCAPE
-			} else if c == '{' {
+			case '{':
 				formatStrStartIndex = index - 1
 				mode = FORMATMODEFORMAT
-			} else {
+			default:
 				b.WriteRune(rune(c))
 			}
-		} else if mode == FORMATMODEFORMAT {
+		case FORMATMODEFORMAT:
 			if c == '}' {
 				formatStrEndIndex = index - 1
 				formatStr := string(allRunes[formatStrStartIndex+1 : formatStrEndIndex])
@@ -7890,7 +7904,7 @@ func (state *EvalState) EvaluateFormatString(lexeme string, context ExecuteConte
 				formatStrEndIndex = -1
 				mode = FORMATMODENORMAL
 			}
-		} else {
+		default:
 			panic("Unknown format mode")
 		}
 	}
@@ -7922,18 +7936,19 @@ func (quotation *MShellQuotation) Execute(state *EvalState, context ExecuteConte
 	}
 
 	if quotation.StdinBehavior != STDIN_NONE {
-		if quotation.StdinBehavior == STDIN_CONTENT {
+		switch quotation.StdinBehavior {
+		case STDIN_CONTENT:
 			quotationContext.StandardInput = strings.NewReader(quotation.StandardInputContents)
-		} else if quotation.StdinBehavior == STDIN_BINARY {
+		case STDIN_BINARY:
 			quotationContext.StandardInput = bytes.NewReader(quotation.StandardInputBinary)
-		} else if quotation.StdinBehavior == STDIN_FILE {
+		case STDIN_FILE:
 			file, err := os.Open(quotation.StandardInputFile)
 			if err != nil {
 				return state.FailWithMessage(fmt.Sprintf("Error opening file %s for reading: %s\n", quotation.StandardInputFile, err.Error())), 1
 			}
 			quotationContext.StandardInput = file
 			defer file.Close()
-		} else {
+		default:
 			panic("Unknown stdin behavior")
 		}
 	} else if context.StandardInput != nil {
@@ -8256,10 +8271,7 @@ func (state *EvalState) RunCdh(context ExecuteContext) (EvalResult, error) {
 		return SimpleSuccess(), nil
 	}
 
-	maxEntries := len(selectableDirs)
-	if maxEntries > 9 {
-		maxEntries = 9
-	}
+	maxEntries := min(len(selectableDirs), 9)
 
 	start := len(selectableDirs) - maxEntries
 	for i := start; i < len(selectableDirs); i++ {
@@ -8495,11 +8507,12 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 
 	// STDIN HANDLING
 	if list.StdinBehavior != STDIN_NONE {
-		if list.StdinBehavior == STDIN_CONTENT {
+		switch list.StdinBehavior {
+		case STDIN_CONTENT:
 			cmd.Stdin = strings.NewReader(list.StandardInputContents)
-		} else if list.StdinBehavior == STDIN_BINARY {
+		case STDIN_BINARY:
 			cmd.Stdin = bytes.NewReader(list.StandardInputBinary)
-		} else if list.StdinBehavior == STDIN_FILE {
+		case STDIN_FILE:
 			// Open the file for reading
 			file, err := os.Open(list.StandardInputFile)
 			if err != nil {
@@ -8507,7 +8520,7 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 			}
 			cmd.Stdin = file
 			defer file.Close()
-		} else {
+		default:
 			panic("Unknown stdin behavior")
 		}
 

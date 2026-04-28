@@ -1,180 +1,204 @@
 # Value matching - string
 "hello" match
-    "hello" : drop "greeting" wl,
-    "bye"   : drop "farewell" wl,
-    _       : drop "unknown" wl,
+    "hello" : "greeting" wl,
+    "bye"   : "farewell" wl,
+    _       : "unknown" wl,
 end
 
-# Outer variable access and subject on stack
+# Outer variable access and subject preserved on stack
 1 outerVariable!
 10 match
-    int : @outerVariable + str wl,
-    _   : drop "Not found" wl,
+    int :> @outerVariable + str wl,
+    _   :> str wl,
 end
 
 # Value matching - integer
 42 match
-    1  : drop "one" wl,
-    42 : drop "forty-two" wl,
-    _  : drop "other" wl,
+    1  : "one" wl,
+    42 : "forty-two" wl,
+    _  : "other" wl,
 end
 
 # Value matching - boolean
 true match
-    true  : drop "is true" wl,
-    false : drop "is false" wl,
+    true  : "is true" wl,
+    false : "is false" wl,
 end
 
 # Type matching - int
 42 match
-    int : drop "integer" wl,
-    str : drop "string" wl,
-    _   : drop "other" wl,
+    int : "integer" wl,
+    str : "string" wl,
+    _   : "other" wl,
 end
 
 # Type matching - str
 "hello" match
-    int : drop "integer" wl,
-    str : drop "string" wl,
-    _   : drop "other" wl,
+    int : "integer" wl,
+    str : "string" wl,
+    _   : "other" wl,
 end
 
 # Type matching - float
 3.14 match
-    int   : drop "integer" wl,
-    float : drop "float" wl,
-    _     : drop "other" wl,
+    int   : "integer" wl,
+    float : "float" wl,
+    _     : "other" wl,
 end
 
 # Type matching - bool
 false match
-    bool : drop "boolean" wl,
-    _    : drop "other" wl,
+    bool : "boolean" wl,
+    _    : "other" wl,
 end
 
 # Type matching - list
 [1 2 3] match
-    list : drop "list" wl,
-    _    : drop "other" wl,
+    list : "list" wl,
+    _    : "other" wl,
 end
 
 # Type matching - path
 `/tmp/test` match
-    path : drop "path" wl,
-    _    : drop "other" wl,
+    path : "path" wl,
+    _    : "other" wl,
 end
 
 # Type matching - date
 2025-01-01 match
-    date : drop "date" wl,
-    _    : drop "other" wl,
+    date : "date" wl,
+    _    : "other" wl,
 end
 
 # Type matching - quotation
 (1 2 +) match
-    quotation : drop "quotation" wl,
-    _         : drop "other" wl,
+    quotation : "quotation" wl,
+    _         : "other" wl,
 end
 
 # Type matching - maybe
 "hello" just match
-    maybe : drop "maybe" wl,
-    _     : drop "other" wl,
+    maybe : "maybe" wl,
+    _     : "other" wl,
 end
 
 # Type matching - binary
 "hello" utf8Bytes match
-    binary : drop "binary" wl,
-    _      : drop "other" wl,
+    binary : "binary" wl,
+    _      : "other" wl,
 end
 
 # Type matching - dict
 { "a": 1 } match
-    dict : drop "dict" wl,
-    _    : drop "other" wl,
+    dict : "dict" wl,
+    _    : "other" wl,
 end
 
 # Wildcard matching
 "anything" match
-    _ : drop "wildcard" wl,
+    _ : "wildcard" wl,
 end
 
 # Trailing comma is optional (last arm)
 99 match
-    99 : drop "ninety-nine" wl
+    99 : "ninety-nine" wl
 end
 
 # Match with body that pushes to stack (subject replaced)
 10 match
-    10 : drop "ten",
-    _  : drop "not ten",
+    10 : "ten",
+    _  : "not ten",
 end
 wl
 
 # Single quote string matching
 'world' match
-    'hello' : drop "hi" wl,
-    'world' : drop "globe" wl,
-    _       : drop "?" wl,
+    'hello' : "hi" wl,
+    'world' : "globe" wl,
+    _       : "?" wl,
 end
 
-# Maybe destructuring - just (subject popped when bindings exist)
+# Preserve subject for a literal arm when needed
+"hello" match
+    "hello" :> wl,
+    _       :> wl,
+end
+
+# Maybe destructuring - just
 "value" just match
     just v : @v wl,
-    none   : drop "none" wl,
+    none   : "none" wl,
 end
 
 # Maybe destructuring - none
 none match
     just v : @v wl,
-    none   : drop "got none" wl,
+    none   : "got none" wl,
 end
 
 # Maybe destructuring - just with wildcard
 "ignored" just match
-    just _ : drop "just something" wl,
-    none   : drop "none" wl,
+    just _ : "just something" wl,
+    none   : "none" wl,
 end
 
-# List destructuring - exact (subject popped when bindings exist)
+# Maybe destructuring - preserve original maybe while still binding
+"value" just match
+    just v :> ? wl,
+    none   :  "none" wl,
+end
+
+# List destructuring - exact
 [1 2 3] match
     [a b c] : @b str wl,
-    _       : drop "other" wl,
+    _       : "other" wl,
 end
 
 # List destructuring - empty
 [] match
-    []  : drop "empty list" wl,
-    _   : drop "not empty" wl,
+    []  : "empty list" wl,
+    _   : "not empty" wl,
 end
 
 # List destructuring - spread
 [1 2 3 4 5] match
     [head ...tail] : @head str wl,
-    _              : drop "other" wl,
+    _              : "other" wl,
 end
 
 # List destructuring - wildcard in list
 [10 20 30] match
     [_ middle _] : @middle str wl,
-    _            : drop "other" wl,
+    _            : "other" wl,
 end
 
-# Dict destructuring (subject popped when bindings exist)
+# List destructuring - preserve original list
+[1 2 3] match
+    [a b c] :> len str wl,
+    _       :> str wl,
+end
+
+# Dict destructuring
 { 'name': "Alice", 'age': 30 } match
     { 'name': n, 'age': a } : [@n " is " @a str] "" join wl,
-    _                       : drop "missing fields" wl,
+    _                       : "missing fields" wl,
 end
 
 # Dict destructuring - missing key no match
 { 'name': "Bob" } match
     { 'name': n, 'age': a } : @n wl,
     { 'name': n }           : [@n " (no age)"] "" join wl,
-    _                       : drop "other" wl,
+    _                       : "other" wl,
 end
 
 # Dict destructuring - extra keys is fine for match
 { 'name': "Charlie", 'age': 25, 'city': "NY" } match
     { 'name': n, 'age': a } : [@n " is " @a str] "" join wl,
-    _                       : drop "missing fields" wl,
+    _                       : "missing fields" wl,
+end
+
+# Dict destructuring - preserve original dict
+{ 'name': "Dana", 'age': 40 } match
+    { 'name': n, 'age': a } :> keys len @a + str wl,
+    _                       :> keys len str wl,
 end
