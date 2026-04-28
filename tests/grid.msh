@@ -85,13 +85,20 @@
 @filteredView gridCompact type wl
 
 # map
+"Map Test" wl
+"--------" wl
 [| x; 1; 2; 3 |] (toDict dup "x" get? 10 * "y" swap set) map mappedGrid!
+@mappedGrid str wl
 @mappedGrid gridCols str wl
+@mappedGrid "x" gridCol str wl
 @mappedGrid "y" gridCol str wl
+"" wl
 
 # each - side effects only
 "each output:" wl
+"------------" wl
 [| name; "Alice"; "Bob" |] (:name? wl) each
+"" wl
 
 # Grid toJson
 [| a, b; 1, 2; 3, 4 |] toJson wl

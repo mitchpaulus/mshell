@@ -24,11 +24,18 @@ Alice
 [4 5]
 [4]
 Grid
+Map Test
+--------
+Grid{cols: [x, y], rows: 3}
 ["x" "y"]
+[1 2 3]
 [10 20 30]
+
 each output:
+------------
 Alice
 Bob
+
 [{"a": 1, "b": 2}, {"a": 3, "b": 4}]
 {"a": 1, "b": 2}
 0
