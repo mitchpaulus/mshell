@@ -807,6 +807,7 @@ end wl # Output: 11
 - `select`: Project a `Grid` or `GridView` to a requested ordered list of column names, returning a materialized `Grid`. `(Grid|GridView [str] -- Grid)`
 - `exclude`: Drop a list of column names from a `Grid` or `GridView`, returning a materialized `Grid`. `(Grid|GridView [str] -- Grid)`
 - `derive`: Append a derived column to a `Grid` or `GridView`. The metadata dictionary is attached to the new column. `(Grid|GridView str dict (GridRow -- any) -- Grid)`
+- `updateCol`: Mutate a column in a `Grid` by applying a quotation to each cell. The quotation must return exactly one non-container value. `(Grid str (any -- any) -- Grid)`
 
 ## Sorting
 

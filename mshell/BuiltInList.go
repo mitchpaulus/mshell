@@ -181,6 +181,7 @@ var BuiltInList = map[string]struct{}{
 	"trimEnd": {},
 	"trimStart": {},
 	"type": {},
+	"updateCol": {},
 	"uniq": {},
 	"upper": {},
 	"urlEncode": {},

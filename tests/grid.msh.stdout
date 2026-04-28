@@ -49,5 +49,7 @@ Bob
 ["name" "score" "passed"]
 [false true]
 {"kind": "derived"}
+[1.5 2.75]
+List
 30
 2

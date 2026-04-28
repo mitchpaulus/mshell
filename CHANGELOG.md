@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `select` - project a grid to a specific ordered set of columns
   - `exclude` - drop a set of columns from a grid
   - `derive` - append a derived column to a grid
+  - `updateCol` - mutate a grid column by applying a quotation to each cell
   - `filter` - now a built-in that works on both Lists and Grids/GridViews
   - `each` - now a built-in that works on both Lists and Grids/GridViews
   - `toDict` - convert a GridRow to a dictionary

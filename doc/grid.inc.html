@@ -162,6 +162,11 @@ Each column can have optional metadata specified as a dictionary immediately aft
             <td>Append a derived column to a Grid or GridView. The metadata dictionary is attached to the new column.</td>
             <td><code>(Grid|GridView <span class="sig-type sig-type-str">str</span>:colname <span class="sig-type sig-type-dict">dict</span>:meta (<span class="sig-type sig-type-gridrow">GridRow</span> -- a) -- Grid)</code></td>
         </tr>
+        <tr id="func-updatecol-grid">
+            <td><code>updateCol</code></td>
+            <td>Mutate a column in a Grid by applying a quotation to each cell. The quotation must return exactly one non-container value for each cell.</td>
+            <td><code>(Grid <span class="sig-type sig-type-str">str</span>:colname (a -- b) -- Grid)</code></td>
+        </tr>
         <tr id="func-gridCompact">
             <td><code>gridCompact</code></td>
             <td>Materialize a GridView into a real Grid (copies the filtered rows). If already a Grid, returns it unchanged.</td>
@@ -203,7 +208,10 @@ Each column can have optional metadata specified as a dictionary immediately aft
 <span class="mshellVARRETRIEVE">@grid</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSTRING">"y"</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">exclude</span>  <span class="mshellLINECOMMENT"># Grid with only x</span>
 
 <span class="mshellLINECOMMENT"># Derive a new column with metadata</span>
-<span class="mshellVARRETRIEVE">@grid</span> <span class="mshellSTRING">"sum"</span> <span class="mshellLEFT_CURLY">{</span> <span class="mshellSTRING">"kind"</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">"derived"</span> <span class="mshellRIGHT_CURLY">}</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">x</span><span class="mshellQUESTION">?</span> <span class="mshellCOLON">:</span><span class="mshellLITERAL">y</span><span class="mshellQUESTION">?</span> <span class="mshellPLUS">+</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">derive</span>  <span class="mshellLINECOMMENT"># Grid with x, y, sum</span></code>
+<span class="mshellVARRETRIEVE">@grid</span> <span class="mshellSTRING">"sum"</span> <span class="mshellLEFT_CURLY">{</span> <span class="mshellSTRING">"kind"</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">"derived"</span> <span class="mshellRIGHT_CURLY">}</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">x</span><span class="mshellQUESTION">?</span> <span class="mshellCOLON">:</span><span class="mshellLITERAL">y</span><span class="mshellQUESTION">?</span> <span class="mshellPLUS">+</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">derive</span>  <span class="mshellLINECOMMENT"># Grid with x, y, sum</span>
+
+<span class="mshellLINECOMMENT"># Update a string column in place to typed values</span>
+<span class="mshellVARRETRIEVE">@grid</span> <span class="mshellSTRING">"x"</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">toFloat</span><span class="mshellQUESTION">?</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">updateCol</span>  <span class="mshellLINECOMMENT"># Mutates column x</span></code>
 </pre>
 
 <h1 id="grid-view">GridView <a class="section-link" href="#grid-view" aria-label="Permalink">§</a> <a class="back-to-top" href="#grid-top">Back to top</a></h1>

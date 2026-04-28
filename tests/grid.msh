@@ -129,6 +129,10 @@
 @derivedGrid "passed" gridCol str wl
 @derivedGrid "passed" gridColMeta? str wl
 
+# updateCol
+[| temp; "1.5"; "2.75" |] "temp" (toFloat?) updateCol "temp" gridCol str wl
+[| d; "2026-01-02"; "2026-01-03" |] "d" (toDt?) updateCol "d" gridCol type wl
+
 # Negative indexing for GridRow
 [| x; 10; 20; 30 |] :-1: :x? str wl
 

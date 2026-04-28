@@ -1763,6 +1763,15 @@ func projectGridColumns(sourceGrid *MShellGrid, sourceIndices []int, colNames []
 	return newGrid
 }
 
+func isContainerType(obj MShellObject) bool {
+	switch obj.(type) {
+	case *MShellList, *MShellDict, *MShellGrid, *MShellGridView, *MShellGridRow:
+		return true
+	default:
+		return false
+	}
+}
+
 func (state *EvalState) evaluateItems(objects []MShellParseItem, stack *MShellStack, context ExecuteContext, definitions []MShellDefinition, callStackItem CallStackItem) EvalResult {
 	// Defer popping the call stack
 	if callStackItem.MShellParseItem != nil {
@@ -4598,6 +4607,62 @@ MainLoop:
 					delete(grid.ColIndex, oldName)
 					grid.ColIndex[newName] = colIdx
 
+					stack.Push(grid)
+				} else if t.Lexeme == "updateCol" {
+					obj1, obj2, obj3, err := stack.Pop3(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					quote, ok := obj1.(*MShellQuotation)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: updateCol requires a quotation, got %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					colName, err := obj2.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: updateCol column name must be a string, got %s.\n", t.Line, t.Column, obj2.TypeName()))
+					}
+
+					grid, ok := obj3.(*MShellGrid)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: updateCol requires a Grid, got %s.\n", t.Line, t.Column, obj3.TypeName()))
+					}
+
+					colIdx, exists := grid.ColIndex[colName]
+					if !exists {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Column '%s' not found in grid.\n", t.Line, t.Column, colName))
+					}
+
+					oldCol := grid.Columns[colIdx]
+					newCol := NewGridColumn(oldCol.Name, grid.RowCount)
+					newCol.Meta = oldCol.Meta
+
+					for rowIdx := 0; rowIdx < grid.RowCount; rowIdx++ {
+						var updateStack MShellStack
+						updateStack = []MShellObject{oldCol.Get(rowIdx)}
+
+						result, err := state.EvaluateQuote(*quote, &updateStack, context, definitions)
+						if err != nil {
+							return state.FailWithMessage(err.Error())
+						}
+						if result.ShouldPassResultUpStack() {
+							return result
+						}
+						if len(updateStack) != 1 {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: updateCol quotation must return exactly one value, found %d values.\n", t.Line, t.Column, len(updateStack)))
+						}
+
+						newVal, _ := updateStack.Pop()
+						if isContainerType(newVal) {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: updateCol quotation cannot return a container type, got %s.\n", t.Line, t.Column, newVal.TypeName()))
+						}
+						newCol.GenericData[rowIdx] = newVal
+					}
+
+					optimizeColumnStorage(newCol)
+					grid.Columns[colIdx] = newCol
+					grid.ColIndex[colName] = colIdx
 					stack.Push(grid)
 				} else if t.Lexeme == "select" {
 					obj1, obj2, err := stack.Pop2(t)
