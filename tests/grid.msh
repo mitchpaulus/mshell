@@ -3,6 +3,12 @@
 # Basic grid literal
 [| name, age; "Alice", 30; "Bob", 25 |] grid!
 
+# toGrid from parsed CSV rows
+"name,age\nAlice,30\nBob,25\n" parseCsv toGrid csvGrid!
+@csvGrid gridCols str wl
+@csvGrid "name" gridCol str wl
+@csvGrid "age" gridCol str wl
+
 # gridRows
 @grid gridRows str wl
 

@@ -1763,6 +1763,61 @@ func projectGridColumns(sourceGrid *MShellGrid, sourceIndices []int, colNames []
 	return newGrid
 }
 
+func buildGridFromStringRows(rows *MShellList) (*MShellGrid, error) {
+	if len(rows.Items) == 0 {
+		return nil, fmt.Errorf("toGrid requires at least one row for headers.\n")
+	}
+
+	headerRow, ok := rows.Items[0].(*MShellList)
+	if !ok {
+		return nil, fmt.Errorf("toGrid requires each row to be a list. Header row was %s.\n", rows.Items[0].TypeName())
+	}
+
+	colNames := make([]string, len(headerRow.Items))
+	seenCols := make(map[string]struct{}, len(headerRow.Items))
+	for i, item := range headerRow.Items {
+		colName, err := item.CastString()
+		if err != nil {
+			return nil, fmt.Errorf("toGrid header at column %d could not be converted to a string.\n", i+1)
+		}
+		if _, exists := seenCols[colName]; exists {
+			return nil, fmt.Errorf("toGrid found duplicate header '%s'.\n", colName)
+		}
+		seenCols[colName] = struct{}{}
+		colNames[i] = colName
+	}
+
+	newGrid := NewGrid()
+	newGrid.RowCount = len(rows.Items) - 1
+	for _, colName := range colNames {
+		newGrid.AddColumn(NewGridColumn(colName, newGrid.RowCount))
+	}
+
+	for rowIdx := 1; rowIdx < len(rows.Items); rowIdx++ {
+		row, ok := rows.Items[rowIdx].(*MShellList)
+		if !ok {
+			return nil, fmt.Errorf("toGrid requires each row to be a list. Row %d was %s.\n", rowIdx+1, rows.Items[rowIdx].TypeName())
+		}
+		if len(row.Items) != len(colNames) {
+			return nil, fmt.Errorf("Row %d has %d values but grid has %d columns.\n", rowIdx, len(row.Items), len(colNames))
+		}
+
+		for colIdx, item := range row.Items {
+			cellStr, err := item.CastString()
+			if err != nil {
+				return nil, fmt.Errorf("toGrid cell at row %d, column %d could not be converted to a string.\n", rowIdx+1, colIdx+1)
+			}
+			newGrid.Columns[colIdx].GenericData[rowIdx-1] = MShellString{Content: cellStr}
+		}
+	}
+
+	for _, col := range newGrid.Columns {
+		optimizeColumnStorage(col)
+	}
+
+	return newGrid, nil
+}
+
 func isContainerType(obj MShellObject) bool {
 	switch obj.(type) {
 	case *MShellList, *MShellDict, *MShellGrid, *MShellGridView, *MShellGridRow:
@@ -4993,6 +5048,23 @@ MainLoop:
 					}
 					stack.Push(newOuterList)
 					file.Close()
+				} else if t.Lexeme == "toGrid" {
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'toGrid' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					rows, ok := obj.(*MShellList)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: toGrid requires a list of rows, got %s.\n", t.Line, t.Column, obj.TypeName()))
+					}
+
+					grid, err := buildGridFromStringRows(rows)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s", t.Line, t.Column, err.Error()))
+					}
+
+					stack.Push(grid)
 				} else if t.Lexeme == "parseJson" {
 					obj1, err := stack.Pop()
 					if err != nil {

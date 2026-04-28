@@ -34,6 +34,11 @@ Grids support:
     <li><strong>Views</strong>: The <code>GridView</code> type represents a filtered subset of rows without copying data.</li>
 </ul>
 
+<p>
+For ingestion from delimited text or other row-oriented sources, use <code>toGrid</code> to convert
+<code>[[str]]</code> into a Grid. The first row is treated as the header row.
+</p>
+
 <h1 id="grid-literal-syntax">Literal Syntax <a class="section-link" href="#grid-literal-syntax" aria-label="Permalink">§</a> <a class="back-to-top" href="#grid-top">Back to top</a></h1>
 
 <p>
@@ -185,6 +190,9 @@ Each column can have optional metadata specified as a dictionary immediately aft
 <pre>
 <code><span class="mshellLINECOMMENT"># Create a grid</span>
 <span class="mshellGRID_OPEN">[|</span> <span class="mshellLITERAL">x</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">y</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">1</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">2</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">3</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">4</span> <span class="mshellGRID_CLOSE">|]</span> <span class="mshellVARSTORE">grid!</span>
+
+<span class="mshellLINECOMMENT"># Or build one from parsed row data</span>
+<span class="mshellSTRING">"x,y\n1,2\n3,4\n"</span> <span class="mshellLITERAL">parseCsv</span> <span class="mshellLITERAL">toGrid</span> <span class="mshellVARSTORE">csvGrid!</span>
 
 <span class="mshellLINECOMMENT"># Get row count</span>
 <span class="mshellVARRETRIEVE">@grid</span> <span class="mshellLITERAL">gridRows</span>  <span class="mshellLINECOMMENT"># 2</span>

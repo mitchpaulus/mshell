@@ -169,6 +169,7 @@ var BuiltInList = map[string]struct{}{
 	"toDt": {},
 	"toFixed": {},
 	"toFloat": {},
+	"toGrid": {},
 	"toInt": {},
 	"toJson": {},
 	"toOleDate": {},
