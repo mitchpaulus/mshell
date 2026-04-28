@@ -40,5 +40,14 @@ Bob
 {"a": 1, "b": 2}
 0
 ["col1" "col2"]
+["z" "x"]
+[3 6]
+[1 4]
+["x" "z"]
+[4]
+[6]
+["name" "score" "passed"]
+[false true]
+{"kind": "derived"}
 30
 2

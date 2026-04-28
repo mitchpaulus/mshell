@@ -147,6 +147,21 @@ Each column can have optional metadata specified as a dictionary immediately aft
             <td>Rename a column in a grid.</td>
             <td><code>(Grid <span class="sig-type sig-type-str">str</span>:oldname <span class="sig-type sig-type-str">str</span>:newname -- Grid)</code></td>
         </tr>
+        <tr id="func-select-grid">
+            <td><code>select</code></td>
+            <td>Project a Grid or GridView to the requested columns, preserving the requested order and returning a materialized Grid.</td>
+            <td><code>(Grid|GridView [<span class="sig-type sig-type-str">str</span>] -- Grid)</code></td>
+        </tr>
+        <tr id="func-exclude-grid">
+            <td><code>exclude</code></td>
+            <td>Drop the requested columns from a Grid or GridView and return a materialized Grid.</td>
+            <td><code>(Grid|GridView [<span class="sig-type sig-type-str">str</span>] -- Grid)</code></td>
+        </tr>
+        <tr id="func-derive-grid">
+            <td><code>derive</code></td>
+            <td>Append a derived column to a Grid or GridView. The metadata dictionary is attached to the new column.</td>
+            <td><code>(Grid|GridView <span class="sig-type sig-type-str">str</span>:colname <span class="sig-type sig-type-dict">dict</span>:meta (<span class="sig-type sig-type-gridrow">GridRow</span> -- a) -- Grid)</code></td>
+        </tr>
         <tr id="func-gridCompact">
             <td><code>gridCompact</code></td>
             <td>Materialize a GridView into a real Grid (copies the filtered rows). If already a Grid, returns it unchanged.</td>
@@ -179,7 +194,16 @@ Each column can have optional metadata specified as a dictionary immediately aft
 <span class="mshellVARRETRIEVE">@grid</span> <span class="mshellSTRING">"z"</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">10</span> <span class="mshellINTEGER">20</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">gridAddCol</span>  <span class="mshellLINECOMMENT"># Grid with x, y, z columns</span>
 
 <span class="mshellLINECOMMENT"># Set a cell value</span>
-<span class="mshellVARRETRIEVE">@grid</span> <span class="mshellSTRING">"x"</span> <span class="mshellINTEGER">0</span> <span class="mshellINTEGER">100</span> <span class="mshellLITERAL">gridSetCell</span>  <span class="mshellLINECOMMENT"># Sets grid[0]["x"] = 100</span></code>
+<span class="mshellVARRETRIEVE">@grid</span> <span class="mshellSTRING">"x"</span> <span class="mshellINTEGER">0</span> <span class="mshellINTEGER">100</span> <span class="mshellLITERAL">gridSetCell</span>  <span class="mshellLINECOMMENT"># Sets grid[0]["x"] = 100</span>
+
+<span class="mshellLINECOMMENT"># Select columns in a specific order</span>
+<span class="mshellVARRETRIEVE">@grid</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSTRING">"y"</span> <span class="mshellSTRING">"x"</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">select</span>  <span class="mshellLINECOMMENT"># Grid with columns y, x</span>
+
+<span class="mshellLINECOMMENT"># Exclude a column</span>
+<span class="mshellVARRETRIEVE">@grid</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSTRING">"y"</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">exclude</span>  <span class="mshellLINECOMMENT"># Grid with only x</span>
+
+<span class="mshellLINECOMMENT"># Derive a new column with metadata</span>
+<span class="mshellVARRETRIEVE">@grid</span> <span class="mshellSTRING">"sum"</span> <span class="mshellLEFT_CURLY">{</span> <span class="mshellSTRING">"kind"</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">"derived"</span> <span class="mshellRIGHT_CURLY">}</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">x</span><span class="mshellQUESTION">?</span> <span class="mshellCOLON">:</span><span class="mshellLITERAL">y</span><span class="mshellQUESTION">?</span> <span class="mshellPLUS">+</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">derive</span>  <span class="mshellLINECOMMENT"># Grid with x, y, sum</span></code>
 </pre>
 
 <h1 id="grid-view">GridView <a class="section-link" href="#grid-view" aria-label="Permalink">§</a> <a class="back-to-top" href="#grid-top">Back to top</a></h1>

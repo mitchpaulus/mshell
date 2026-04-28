@@ -111,6 +111,24 @@
 @emptyGrid gridRows str wl
 @emptyGrid gridCols str wl
 
+# select
+[| x, y, z; 1, 2, 3; 4, 5, 6 |] ["z" "x"] select selectedGrid!
+@selectedGrid gridCols str wl
+@selectedGrid "z" gridCol str wl
+@selectedGrid "x" gridCol str wl
+
+# exclude on GridView
+[| x, y, z; 1, 2, 3; 4, 5, 6 |] (:x? 2 >=) filter ["y"] exclude excludedGrid!
+@excludedGrid gridCols str wl
+@excludedGrid "x" gridCol str wl
+@excludedGrid "z" gridCol str wl
+
+# derive with column metadata on GridView
+[| name, score; "Alice", 85; "Bob", 92; "Carol", 78 |] (:score? 80 >=) filter "passed" { "kind": "derived" } (:score? 90 >=) derive derivedGrid!
+@derivedGrid gridCols str wl
+@derivedGrid "passed" gridCol str wl
+@derivedGrid "passed" gridColMeta? str wl
+
 # Negative indexing for GridRow
 [| x; 10; 20; 30 |] :-1: :x? str wl
 
