@@ -776,7 +776,7 @@ end wl # Output: 11
 - `2each`: Apply a quotation to the two values on the stack individually, returning results in the original order. `(a b (a -- c) -- c c)`
 - `2tuple`: Pack the top two stack values into a new two-element list, `(a b -- [a])`
 - `del`: Delete element from list, `(list index -- list)` or `(index list -- list)`
-- `extend`: Extends an existing list with items from another list. Difference between this and `+` is that it modifies the original list in-place. `(originalList toAddList -- list)`
+- `extend`: Extends an existing list with items from another list, or a `Grid`/`GridView` with rows from another `Grid`/`GridView`. Difference between this and `+` is that it modifies the receiver in place. For grids, see the Grid section below. `(originalList toAddList -- list)` or `(Grid|GridView Grid|GridView -- Grid|GridView)`
 - `insert`: Insert element into list, `(list element index -- list)`
 - `setAt`: Set element at index, negative index is allowed.  `(list element index -- list)`
 - `nth`: Nth element of list (0-based) `([a] int -- a)`
@@ -818,6 +818,8 @@ end wl # Output: 11
   `(Grid|GridView Grid|GridView (GridRow -- a) (GridRow -- a) -- Grid)`
 - `leftJoin`: Left outer equi-join. Same shape as `join`; unmatched left rows are emitted with right-side cells filled with `none`. `(Grid|GridView Grid|GridView (GridRow -- a) (GridRow -- a) -- Grid)`
 - `outerJoin`: Full outer equi-join. Same shape as `join`; unmatched rows from either side appear with the absent side filled with `none`. Affected columns fall back to generic storage. `(Grid|GridView Grid|GridView (GridRow -- a) (GridRow -- a) -- Grid)`
+- `+` (Grid|GridView): Vertical concatenation. Returns a new `Grid` whose rows are the left operand's rows followed by the right operand's rows. Column matching is strict-by-name; the left grid's column order is preserved. Per-column types resolve dynamically: matching non-generic types stay; any other combination (including int+float) becomes `COL_GENERIC` — there is no numeric promotion. Grid-level and column-level metadata merge with left-wins on key conflicts. The result is a deep copy and shares no storage with the inputs. `(Grid|GridView Grid|GridView -- Grid)`
+- `extend` (Grid|GridView): In-place vertical concatenation. Mutates the lower operand to include the upper operand's rows after its own and returns the same object on the stack. Column-name matching, type widening to `COL_GENERIC`, and metadata merging follow the same rules as `+`. Both operands may be `GridView`; when the receiver is a view, the underlying source grid is the storage that grows, and the view's indices extend to include the new row indices — other handles to the same source grid will observe the new rows. `(Grid|GridView Grid|GridView -- Grid|GridView)`
 
 Grid `groupBy` aggregation specs are dictionaries.
 Each spec requires an `agg` quotation and may include `name` and `meta`.

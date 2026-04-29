@@ -36,10 +36,18 @@ join      (Grid|GridView Grid|GridView (GridRow -- key) (GridRow -- key) -- Grid
 leftJoin  (Grid|GridView Grid|GridView (GridRow -- key) (GridRow -- key) -- Grid)
 outerJoin (Grid|GridView Grid|GridView (GridRow -- key) (GridRow -- key) -- Grid)
 
++      (Grid|GridView Grid|GridView -- Grid)
+extend (Grid|GridView Grid|GridView -- Grid)
 # Injestion
 
 toGrid ([[str]] -- grid) # headers assumed on first row.
+
 ```
+
+# Specifics
+
+`union`. For consistency, I like the concept of '+' and 'extend', the same way with lists.
+'+' will create a new object, extend will reuse and extend original reference.
 
 ## References
 

@@ -1,0 +1,127 @@
+# Vertical concatenation of grids via `+` and `extend`.
+
+# Basic +: rows from left appear before rows from right.
+"-- basic + --" wl
+[| name, age; "Alice", 30; "Bob", 25 |] g1!
+[| name, age; "Carol", 40 |] g2!
+@g1 @g2 + r!
+@r gridCols str wl
+@r "name" gridCol str wl
+@r "age" gridCol str wl
+@r len str wl
+
+# + with columns in different order: left wins.
+"-- + reorder --" wl
+[| a, b; 1, 2 |] r1!
+[| b, a; 20, 10 |] r2!
+@r1 @r2 + ro!
+@ro gridCols str wl
+@ro "a" gridCol str wl
+@ro "b" gridCol str wl
+
+# + does not mutate either input.
+"-- + no mutation --" wl
+@g1 "name" gridCol str wl
+@g1 len str wl
+@g2 "name" gridCol str wl
+@g2 len str wl
+
+# Type mismatch falls to generic.
+"-- type mismatch --" wl
+[| x; 1; 2 |] gi!
+[| x; 3.5; 4.5 |] gf!
+@gi @gf + gen!
+@gen "x" gridCol str wl
+
+# Empty (zero-row) schema'd grid concatenates fine.
+"-- empty schema'd grid --" wl
+[| x, y; |] empty!
+[| x, y; 1, 2; 3, 4 |] full!
+@empty @full + er!
+@er gridCols str wl
+@er "x" gridCol str wl
+@er len str wl
+
+# GridView in either + position.
+"-- views in + --" wl
+[| x; 1; 2; 3; 4 |] vsrc1!
+[| x; 10; 20; 30; 40 |] vsrc2!
+@vsrc1 (:x? 2 >) filter v1!
+@vsrc2 (:x? 30 <) filter v2!
+@v1 @v2 + vr!
+@vr "x" gridCol str wl
+@vr len str wl
+
+# Variadic concat as a left fold using foldl from std.
+"-- foldl --" wl
+[| x; 1 |] fg1!
+[| x; 2 |] fg2!
+[| x; 3 |] fg3!
+(+) @fg1 [@fg2 @fg3] foldl fr!
+@fr "x" gridCol str wl
+@fr len str wl
+
+# Meta merge: left wins on conflict, both keys preserved when not in conflict.
+"-- meta merge + --" wl
+[|
+   { "src": "a", "version": 1 };
+   x { "unit": "m" }, y;
+   1, 2
+|] mg1!
+[|
+   { "src": "b", "owner": "alice" };
+   x { "unit": "ft" }, y { "kind": "count" };
+   3, 4
+|] mg2!
+@mg1 @mg2 + mr!
+@mr gridMeta? str wl
+@mr "x" gridColMeta? str wl
+@mr "y" gridColMeta? str wl
+@mg1 "x" gridColMeta? str wl
+
+# extend mutates the receiver in place.
+"-- extend basic --" wl
+[| x; 1; 2 |] eg1!
+[| x; 3; 4 |] eg2!
+@eg1 @eg2 extend ext1!
+@ext1 type wl
+@eg1 "x" gridCol str wl
+@eg1 len str wl
+@eg2 "x" gridCol str wl
+@eg2 len str wl
+
+# extend widens the receiver to generic on type mismatch.
+"-- extend widen --" wl
+[| x; 1; 2 |] wg1!
+[| x; 3.5; 4.5 |] wg2!
+@wg1 @wg2 extend dropped!
+@wg1 "x" gridCol str wl
+@wg1 len str wl
+
+# extend with GridView as receiver mutates the underlying source grid
+# and grows the view's indices to include the new rows.
+"-- extend view receiver --" wl
+[| x; 100; 200; 300 |] vg!
+@vg (:x? 200 >=) filter vrecv!
+[| x; 1; 2; 3; 4 |] addn!
+@vrecv @addn extend dropped!
+@vrecv "x" gridCol str wl
+@vrecv len str wl
+@vg "x" gridCol str wl
+@vg len str wl
+
+# extend meta merge follows the same left-wins rule.
+"-- extend meta --" wl
+[|
+  { "src": "a" };
+  x { "unit": "m" };
+  1
+|] em1!
+[|
+  { "src": "b", "owner": "alice" };
+  x { "unit": "ft", "precision": 0.1 };
+  2
+|] em2!
+@em1 @em2 extend dropped!
+@em1 gridMeta? str wl
+@em1 "x" gridColMeta? str wl

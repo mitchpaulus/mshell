@@ -1763,6 +1763,279 @@ func projectGridColumns(sourceGrid *MShellGrid, sourceIndices []int, colNames []
 	return newGrid
 }
 
+// resolveColType applies the concat type lattice: same non-generic type wins;
+// any other combination produces COL_GENERIC. There is no numeric promotion.
+func resolveColType(a, b ColumnType) ColumnType {
+	if a == b && a != COL_GENERIC {
+		return a
+	}
+	return COL_GENERIC
+}
+
+// mergeMetaLeftWins shallow-merges two meta dicts. Keys present in left override right.
+// Returns nil if both inputs are nil.
+func mergeMetaLeftWins(left, right *MShellDict) *MShellDict {
+	if left == nil && right == nil {
+		return nil
+	}
+	out := NewDict()
+	if right != nil {
+		for k, v := range right.Items {
+			out.Items[k] = v
+		}
+	}
+	if left != nil {
+		for k, v := range left.Items {
+			out.Items[k] = v
+		}
+	}
+	return out
+}
+
+// gridSchemaDiff reports columns missing-in-right and extra-in-right relative to left.
+// Returned slices are sorted alphabetically.
+func gridSchemaDiff(left, right *MShellGrid) (missingInRight, extraInRight []string) {
+	for name := range left.ColIndex {
+		if _, ok := right.ColIndex[name]; !ok {
+			missingInRight = append(missingInRight, name)
+		}
+	}
+	for name := range right.ColIndex {
+		if _, ok := left.ColIndex[name]; !ok {
+			extraInRight = append(extraInRight, name)
+		}
+	}
+	sort.Strings(missingInRight)
+	sort.Strings(extraInRight)
+	return
+}
+
+// formatColumnNameList renders a list of column names, capping at 10 with a
+// "(... N more)" trailer to avoid flooding the terminal on pathological mismatches.
+func formatColumnNameList(names []string) string {
+	const cap = 10
+	if len(names) <= cap {
+		return strings.Join(names, ", ")
+	}
+	return strings.Join(names[:cap], ", ") + fmt.Sprintf(", ... (%d more)", len(names)-cap)
+}
+
+// validateGridSchemaMatch enforces strict-by-name matching. Types are not checked
+// here; type handling happens dynamically per column.
+func validateGridSchemaMatch(left, right *MShellGrid) error {
+	if len(left.ColIndex) != len(right.ColIndex) {
+		return formatGridSchemaMismatch(left, right)
+	}
+	for name := range left.ColIndex {
+		if _, ok := right.ColIndex[name]; !ok {
+			return formatGridSchemaMismatch(left, right)
+		}
+	}
+	return nil
+}
+
+func formatGridSchemaMismatch(left, right *MShellGrid) error {
+	missing, extra := gridSchemaDiff(left, right)
+	var sb strings.Builder
+	sb.WriteString("Cannot concat grids: column sets differ.")
+	if len(missing) > 0 {
+		sb.WriteString("\n  Missing in right: ")
+		sb.WriteString(formatColumnNameList(missing))
+	}
+	if len(extra) > 0 {
+		sb.WriteString("\n  Extra in right:   ")
+		sb.WriteString(formatColumnNameList(extra))
+	}
+	sb.WriteString("\n")
+	return fmt.Errorf("%s", sb.String())
+}
+
+// concatGrids returns a new grid containing left's rows followed by right's rows.
+// Accepts Grid or GridView in either position. Deep-copies storage; result shares
+// no slice backing with either input.
+func concatGrids(leftObj, rightObj MShellObject) (*MShellGrid, error) {
+	leftSrc, leftIndices, err := getGridSourceAndIndices(leftObj)
+	if err != nil {
+		return nil, err
+	}
+	rightSrc, rightIndices, err := getGridSourceAndIndices(rightObj)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateGridSchemaMatch(leftSrc, rightSrc); err != nil {
+		return nil, err
+	}
+
+	leftRows := len(leftIndices)
+	rightRows := len(rightIndices)
+	totalRows := leftRows + rightRows
+
+	newGrid := NewGrid()
+	newGrid.RowCount = totalRows
+	newGrid.Meta = mergeMetaLeftWins(leftSrc.Meta, rightSrc.Meta)
+
+	for _, leftCol := range leftSrc.Columns {
+		rightCol := rightSrc.GetColumn(leftCol.Name)
+		resolved := resolveColType(leftCol.ColType, rightCol.ColType)
+
+		newCol := &GridColumn{
+			Name:    leftCol.Name,
+			Meta:    mergeMetaLeftWins(leftCol.Meta, rightCol.Meta),
+			ColType: resolved,
+		}
+
+		switch resolved {
+		case COL_INT:
+			newCol.IntData = make([]int64, totalRows)
+			for i, idx := range leftIndices {
+				newCol.IntData[i] = leftCol.IntData[idx]
+			}
+			for i, idx := range rightIndices {
+				newCol.IntData[leftRows+i] = rightCol.IntData[idx]
+			}
+		case COL_FLOAT:
+			newCol.FloatData = make([]float64, totalRows)
+			for i, idx := range leftIndices {
+				newCol.FloatData[i] = leftCol.FloatData[idx]
+			}
+			for i, idx := range rightIndices {
+				newCol.FloatData[leftRows+i] = rightCol.FloatData[idx]
+			}
+		case COL_STRING:
+			newCol.StringData = make([]string, totalRows)
+			for i, idx := range leftIndices {
+				newCol.StringData[i] = leftCol.StringData[idx]
+			}
+			for i, idx := range rightIndices {
+				newCol.StringData[leftRows+i] = rightCol.StringData[idx]
+			}
+		case COL_DATETIME:
+			newCol.DateTimeData = make([]time.Time, totalRows)
+			for i, idx := range leftIndices {
+				newCol.DateTimeData[i] = leftCol.DateTimeData[idx]
+			}
+			for i, idx := range rightIndices {
+				newCol.DateTimeData[leftRows+i] = rightCol.DateTimeData[idx]
+			}
+		default:
+			newCol.GenericData = make([]MShellObject, totalRows)
+			for i, idx := range leftIndices {
+				newCol.GenericData[i] = leftCol.Get(idx)
+			}
+			for i, idx := range rightIndices {
+				newCol.GenericData[leftRows+i] = rightCol.Get(idx)
+			}
+		}
+
+		newGrid.AddColumn(newCol)
+	}
+
+	return newGrid, nil
+}
+
+// widenColumnToGeneric rewrites a column's storage to COL_GENERIC in place.
+// The *GridColumn pointer is preserved so existing GridView references remain valid.
+func widenColumnToGeneric(col *GridColumn) {
+	if col.ColType == COL_GENERIC {
+		return
+	}
+	n := col.Len()
+	generic := make([]MShellObject, n)
+	for i := 0; i < n; i++ {
+		generic[i] = col.Get(i)
+	}
+	col.GenericData = generic
+	col.IntData = nil
+	col.FloatData = nil
+	col.StringData = nil
+	col.DateTimeData = nil
+	col.ColType = COL_GENERIC
+}
+
+// appendColumnRows appends the given source rows onto dst in place. dst must already
+// be widened (if needed) so that resolveColType(dst, src) == dst.ColType.
+func appendColumnRows(dst, src *GridColumn, srcIndices []int) {
+	if dst.ColType == src.ColType && dst.ColType != COL_GENERIC {
+		switch dst.ColType {
+		case COL_INT:
+			for _, idx := range srcIndices {
+				dst.IntData = append(dst.IntData, src.IntData[idx])
+			}
+		case COL_FLOAT:
+			for _, idx := range srcIndices {
+				dst.FloatData = append(dst.FloatData, src.FloatData[idx])
+			}
+		case COL_STRING:
+			for _, idx := range srcIndices {
+				dst.StringData = append(dst.StringData, src.StringData[idx])
+			}
+		case COL_DATETIME:
+			for _, idx := range srcIndices {
+				dst.DateTimeData = append(dst.DateTimeData, src.DateTimeData[idx])
+			}
+		}
+		return
+	}
+	// dst must be COL_GENERIC at this point.
+	for _, idx := range srcIndices {
+		dst.GenericData = append(dst.GenericData, src.Get(idx))
+	}
+}
+
+// extendGrid mutates the receiver in place to include source's rows after its own.
+// receiver may be Grid or GridView; if a view, its underlying source grid is
+// mutated and the view's Indices are extended to include the new row indices.
+// Returns the original receiver object for the caller to push back on the stack.
+func extendGrid(receiverObj, sourceObj MShellObject) (MShellObject, error) {
+	var receiverView *MShellGridView
+	var receiverGrid *MShellGrid
+	switch r := receiverObj.(type) {
+	case *MShellGrid:
+		receiverGrid = r
+	case *MShellGridView:
+		receiverView = r
+		receiverGrid = r.Source
+	default:
+		return nil, fmt.Errorf("extend receiver must be a Grid or GridView, found %s", receiverObj.TypeName())
+	}
+
+	sourceGrid, sourceIndices, err := getGridSourceAndIndices(sourceObj)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateGridSchemaMatch(receiverGrid, sourceGrid); err != nil {
+		return nil, err
+	}
+
+	sourceRowCount := len(sourceIndices)
+	if sourceRowCount == 0 {
+		return receiverObj, nil
+	}
+
+	oldReceiverRowCount := receiverGrid.RowCount
+
+	for _, recvCol := range receiverGrid.Columns {
+		srcCol := sourceGrid.GetColumn(recvCol.Name)
+		resolved := resolveColType(recvCol.ColType, srcCol.ColType)
+		if resolved != recvCol.ColType {
+			widenColumnToGeneric(recvCol)
+		}
+		appendColumnRows(recvCol, srcCol, sourceIndices)
+		recvCol.Meta = mergeMetaLeftWins(recvCol.Meta, srcCol.Meta)
+	}
+
+	receiverGrid.RowCount += sourceRowCount
+	receiverGrid.Meta = mergeMetaLeftWins(receiverGrid.Meta, sourceGrid.Meta)
+
+	if receiverView != nil {
+		for i := 0; i < sourceRowCount; i++ {
+			receiverView.Indices = append(receiverView.Indices, oldReceiverRowCount+i)
+		}
+		return receiverView, nil
+	}
+	return receiverGrid, nil
+}
+
 func buildGridFromStringRows(rows *MShellList) (*MShellGrid, error) {
 	if len(rows.Items) == 0 {
 		return nil, fmt.Errorf("toGrid requires at least one row for headers.\n")
@@ -6694,26 +6967,34 @@ MainLoop:
 
 					stack.Push(newList)
 				} else if t.Lexeme == "extend" {
-					// Extend a list with another list in place
+					// Extend a list with another list, or a grid/gridview with another grid/gridview, in place.
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
 					}
 
-					listObj, ok := obj1.(*MShellList)
-					if !ok {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: The top of stack in 'extend' is expected to be a list, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
+					switch receiver := obj2.(type) {
+					case *MShellList:
+						listObj, ok := obj1.(*MShellList)
+						if !ok {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: The top of stack in 'extend' is expected to be a list, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
+						}
+						receiver.Items = append(receiver.Items, listObj.Items...)
+						stack.Push(receiver)
+					case *MShellGrid, *MShellGridView:
+						switch obj1.(type) {
+						case *MShellGrid, *MShellGridView:
+							result, err := extendGrid(obj2, obj1)
+							if err != nil {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: %s", t.Line, t.Column, err.Error()))
+							}
+							stack.Push(result)
+						default:
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: The top of stack in 'extend' is expected to be a Grid or GridView, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
+						}
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second item on stack in 'extend' is expected to be a list or Grid/GridView, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
 					}
-
-					extendListObj, ok := obj2.(*MShellList)
-					if !ok {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second item on stack in 'extend' is expected to be a list, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
-					}
-
-					for _, item := range listObj.Items {
-						extendListObj.Items = append(extendListObj.Items, item)
-					}
-					stack.Push(extendListObj)
 				} else if t.Lexeme == "index" || t.Lexeme == "lastIndexOf" {
 					// Find the first or last index of a substring in a string
 					obj1, obj2, err := stack.Pop2(t)
@@ -7873,6 +8154,17 @@ MainLoop:
 						stack.Push(MShellPath{obj2.(MShellPath).Path + obj1.(MShellPath).Path})
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot add a path to a %s.\n", t.Line, t.Column, obj2.TypeName()))
+					}
+				case *MShellGrid, *MShellGridView:
+					switch obj2.(type) {
+					case *MShellGrid, *MShellGridView:
+						newGrid, err := concatGrids(obj2, obj1)
+						if err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: %s", t.Line, t.Column, err.Error()))
+						}
+						stack.Push(newGrid)
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot add a %s to a %s.\n", t.Line, t.Column, obj1.TypeName(), obj2.TypeName()))
 					}
 				default:
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '+' between a %s and a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))

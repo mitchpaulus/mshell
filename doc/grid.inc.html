@@ -460,3 +460,55 @@ The extractor signature can express a Cartesian product by collapsing both sides
 Combine with <code>filter</code> for arbitrary predicate joins.
 A dedicated <code>crossJoin</code> built-in may be added later as a clarity shortcut.
 </p>
+
+<h1>Vertical concatenation</h1>
+
+<p>
+Stacking two grids row-wise is exposed via the operators <code>+</code> and <code>extend</code>,
+mirroring how lists already compose.
+There is no <code>union</code> keyword:
+SQL's <code>UNION</code> dedupes,
+which is not what users want most of the time,
+and naming the row-stack <code>union</code> would mislead anyone coming from SQL.
+</p>
+
+<ul>
+    <li><code>+</code> returns a new <code>Grid</code> with the lower operand's rows first, then the upper operand's rows. The result is a deep copy and shares no storage with either input.</li>
+    <li><code>extend</code> mutates the lower operand in place to include the upper operand's rows after its own. Both <code>+</code> and <code>extend</code> accept <code>Grid</code> or <code>GridView</code> in either position.</li>
+</ul>
+
+<h2>Schema rules</h2>
+
+<ul>
+    <li><strong>Column matching is strict by name.</strong> Both grids must have the same set of column names; otherwise the operation errors with a diff of missing and extra columns.</li>
+    <li><strong>Output column order follows the left grid.</strong> Columns in the right grid are looked up by name and reordered to match.</li>
+    <li><strong>Type handling is dynamic.</strong> Same non-generic type on both sides &rarr; that type. Otherwise (including <code>int</code> + <code>float</code>) &rarr; <code>COL_GENERIC</code>. There is no numeric promotion. Datetime is treated like any other type.</li>
+    <li><strong>Empty (zero-row) typed columns are not special-cased.</strong> A zero-row <code>int</code> column concatenated with a <code>float</code> column still produces a generic column.</li>
+    <li><strong>Empty (zero-column) grids are not an identity.</strong> They do not silently adopt the other grid's schema. For variadic concat, fold using the first grid as the seed.</li>
+</ul>
+
+<h2>Metadata</h2>
+
+<p>
+Grid-level <code>Meta</code> and per-column <code>Meta</code> both merge with left-wins on key conflict.
+Meta and column type are independent &mdash;
+a column going to <code>COL_GENERIC</code> does not drop or alter its meta.
+For <code>extend</code>, the receiver's meta is mutated to the merged result.
+</p>
+
+<h2><code>extend</code> details</h2>
+
+<ul>
+    <li><strong>Widening.</strong> When the receiver column's type does not match the source's, the receiver column's storage is rewritten to <code>COL_GENERIC</code> in place. Existing <code>GridView</code> references continue to read correctly through the column's <code>Get</code> dispatch.</li>
+    <li><strong>View receiver.</strong> When the receiver is a <code>GridView</code>, the underlying source grid is the storage that grows. The view's <code>Indices</code> are extended to include the new row indices. Other handles to the same source grid will observe the new rows; other views over the same source see the new rows when they read the source directly, but their own <code>Indices</code> are not modified.</li>
+</ul>
+
+<h2>Variadic concat</h2>
+
+<p>
+Use <code>foldl</code> from the standard library, with the first grid as the seed:
+</p>
+
+<pre>
+<code><span class="mshellLEFT_PAREN">(</span><span class="mshellPLUS">+</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellVARRETRIEVE">@first</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellVARRETRIEVE">@second</span> <span class="mshellVARRETRIEVE">@third</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">foldl</span></code>
+</pre>
