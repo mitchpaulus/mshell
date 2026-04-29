@@ -133,6 +133,11 @@ Each column can have optional metadata specified as a dictionary immediately aft
             <td>Extract a single column as a list of values.</td>
             <td><code>(Grid|GridView <span class="sig-type sig-type-str">str</span>:colname -- [a])</code></td>
         </tr>
+        <tr id="func-gridValues">
+            <td><code>gridValues</code></td>
+            <td>Extract cell values as row-major lists. The result does not include a header row and does not coerce cell types.</td>
+            <td><code>(Grid|GridView -- [[a]])</code></td>
+        </tr>
         <tr id="func-gridSetCell">
             <td><code>gridSetCell</code></td>
             <td>Set a single cell value. Returns the modified grid.</td>
@@ -223,6 +228,9 @@ Each column can have optional metadata specified as a dictionary immediately aft
 
 <span class="mshellLINECOMMENT"># Extract a column</span>
 <span class="mshellVARRETRIEVE">@grid</span> <span class="mshellSTRING">"x"</span> <span class="mshellLITERAL">gridCol</span>  <span class="mshellLINECOMMENT"># [1 3]</span>
+
+<span class="mshellLINECOMMENT"># Extract row-major values without headers</span>
+<span class="mshellVARRETRIEVE">@grid</span> <span class="mshellLITERAL">gridValues</span>  <span class="mshellLINECOMMENT"># [[1 2] [3 4]]</span>
 
 <span class="mshellLINECOMMENT"># Add a new column</span>
 <span class="mshellVARRETRIEVE">@grid</span> <span class="mshellSTRING">"z"</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">10</span> <span class="mshellINTEGER">20</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">gridAddCol</span>  <span class="mshellLINECOMMENT"># Grid with x, y, z columns</span>

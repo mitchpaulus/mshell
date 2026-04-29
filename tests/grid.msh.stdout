@@ -5,6 +5,8 @@
 ["name" "age"]
 ["Alice" "Bob"]
 [30 25]
+[["Alice" 30] ["Bob" 25]]
+Integer
 Alice
 30
 Bob
@@ -25,6 +27,7 @@ Alice
 ["a" "y"]
 2
 [4 5]
+[[4] [5]]
 [4]
 Grid
 Map Test

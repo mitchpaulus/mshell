@@ -70,6 +70,7 @@ var BuiltInList = map[string]struct{}{
 	"gridRenameCol": {},
 	"gridRows": {},
 	"gridSetCell": {},
+	"gridValues": {},
 	"groupBy": {},
 	"hardLink": {},
 	"hostname": {},

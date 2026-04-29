@@ -19,6 +19,10 @@
 @grid "name" gridCol str wl
 @grid "age" gridCol str wl
 
+# gridValues - extract row values as a list of lists, without headers
+@grid gridValues str wl
+@grid gridValues :0: :1: type wl
+
 # Grid indexing - get a GridRow
 @grid :0: row0!
 @grid :1: row1!
@@ -83,6 +87,7 @@
 [| x; 1; 2; 3; 4; 5 |] (:x? 3 >) filter filteredView!
 @filteredView gridRows str wl
 @filteredView "x" gridCol str wl
+@filteredView gridValues str wl
 
 # filter on GridView (chained filter)
 @filteredView (:x? 5 <) filter "x" gridCol str wl
