@@ -1,0 +1,3 @@
+4:9: Cannot concat grids: column sets differ.
+  Missing in right: age
+  Extra in right:   city

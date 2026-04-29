@@ -1,0 +1,48 @@
+-- basic + --
+["name" "age"]
+["Alice" "Bob" "Carol"]
+[30 25 40]
+3
+-- + reorder --
+["a" "b"]
+[1 10]
+[2 20]
+-- + no mutation --
+["Alice" "Bob"]
+2
+["Carol"]
+1
+-- type mismatch --
+[1 2 3.5 4.5]
+-- empty schema'd grid --
+["x" "y"]
+[1 3]
+2
+-- views in + --
+[3 4 10 20]
+4
+-- foldl --
+[1 2 3]
+3
+-- meta merge + --
+{"owner": "alice", "src": "a", "version": 1}
+{"unit": "m"}
+{"kind": "count"}
+{"unit": "m"}
+-- extend basic --
+Grid
+[1 2 3 4]
+4
+[3 4]
+2
+-- extend widen --
+[1 2 3.5 4.5]
+4
+-- extend view receiver --
+[200 300 1 2 3 4]
+6
+[100 200 300 1 2 3 4]
+7
+-- extend meta --
+{"owner": "alice", "src": "a"}
+{"precision": 0.1, "unit": "m"}
