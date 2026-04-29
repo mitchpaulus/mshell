@@ -32,6 +32,10 @@ gridRenameCol (grid str str -- grid)
 groupBy (Grid|GridView [str]:keys [dict]:aggs -- Grid)
 derive (grid str dict (gridRow -- any) -- grid)
 
+join      (Grid|GridView Grid|GridView (GridRow -- key) (GridRow -- key) -- Grid)
+leftJoin  (Grid|GridView Grid|GridView (GridRow -- key) (GridRow -- key) -- Grid)
+outerJoin (Grid|GridView Grid|GridView (GridRow -- key) (GridRow -- key) -- Grid)
+
 # Injestion
 
 toGrid ([[str]] -- grid) # headers assumed on first row.
