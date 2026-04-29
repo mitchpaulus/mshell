@@ -171,7 +171,7 @@ Each column can have optional metadata specified as a dictionary immediately aft
         <tr id="func-groupby-grid">
             <td><code>groupBy</code></td>
             <td>Group rows by key columns and return a summarized Grid. Aggregation specs are dictionaries with required <code>"agg"</code> quotation plus optional <code>"name"</code> and <code>"meta"</code>.</td>
-            <td><code>(Grid|GridView [<span class="sig-type sig-type-str">str</span>]:keys [<span class="sig-type sig-type-dict">dict</span>]:aggs -- Grid)</code></td>
+            <td><code>(Grid|GridView [<span class="sig-type sig-type-str">str</span>]:keys [{"agg": (GridView -- any), "name"?: <span class="sig-type sig-type-str">str</span>, "meta"?: <span class="sig-type sig-type-dict">dict</span>}]:aggs -- Grid)</code></td>
         </tr>
         <tr id="func-updatecol-grid">
             <td><code>updateCol</code></td>
