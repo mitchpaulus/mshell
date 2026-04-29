@@ -2078,7 +2078,7 @@ func buildGridFromStringRows(rows *MShellList) (*MShellGrid, error) {
 		for colIdx, item := range row.Items {
 			cellStr, err := item.CastString()
 			if err != nil {
-				return nil, fmt.Errorf("toGrid cell at row %d, column %d could not be converted to a string.\n", rowIdx+1, colIdx+1)
+				return nil, fmt.Errorf("toGrid cell at row %d, column %d could not be converted to a string. Found type %s.\n", rowIdx+1, colIdx+1, item.TypeName())
 			}
 			newGrid.Columns[colIdx].GenericData[rowIdx-1] = MShellString{Content: cellStr}
 		}
