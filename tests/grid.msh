@@ -139,6 +139,26 @@
 [| temp; "1.5"; "2.75" |] "temp" (toFloat?) updateCol "temp" gridCol str wl
 [| d; "2026-01-02"; "2026-01-03" |] "d" (toDt?) updateCol "d" gridCol type wl
 
+# Test materializing updateCol on a GridView
+"GridView updateCol materializes" wl
+"-------------------------------" wl
+[| x, y;
+   1, "a";
+   2, "b";
+   3, "c";
+   4, "d" |] backingGrid!
+@backingGrid (:x? 2 >) filter "x" (str) updateCol updatedBackingGrid!
+@updatedBackingGrid type wl
+@updatedBackingGrid gridRows str wl
+@updatedBackingGrid gridCols str wl
+@updatedBackingGrid "x" gridCol str wl
+@updatedBackingGrid "x" gridCol (type) map str wl
+@updatedBackingGrid "y" gridCol str wl
+@backingGrid "x" gridCol str wl
+@backingGrid "y" gridCol str wl
+@backingGrid gridRows str wl
+'' wl
+
 # Negative indexing for GridRow
 [| x; 10; 20; 30 |] :-1: :x? str wl
 

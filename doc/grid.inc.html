@@ -175,8 +175,8 @@ Each column can have optional metadata specified as a dictionary immediately aft
         </tr>
         <tr id="func-updatecol-grid">
             <td><code>updateCol</code></td>
-            <td>Mutate a column in a Grid by applying a quotation to each cell. The quotation must return exactly one non-container value for each cell.</td>
-            <td><code>(Grid <span class="sig-type sig-type-str">str</span>:colname (a -- b) -- Grid)</code></td>
+            <td>Mutate a column in a Grid by applying a quotation to each cell. When used on a GridView, a new Grid is materialized from the viewed rows, the quotation is applied to that column, all result columns are retyped, and the backing Grid is left unchanged. The quotation must return exactly one non-container value for each cell.</td>
+            <td><code>(Grid|GridView <span class="sig-type sig-type-str">str</span>:colname (a -- b) -- Grid)</code></td>
         </tr>
         <tr id="func-gridCompact">
             <td><code>gridCompact</code></td>

@@ -54,5 +54,17 @@ Bob
 {"kind": "derived"}
 [1.5 2.75]
 List
+GridView updateCol materializes
+-------------------------------
+Grid
+2
+["x" "y"]
+["3" "4"]
+["String" "String"]
+["c" "d"]
+[1 2 3 4]
+["a" "b" "c" "d"]
+4
+
 30
 2

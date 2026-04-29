@@ -5009,10 +5009,11 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: updateCol column name must be a string, got %s.\n", t.Line, t.Column, obj2.TypeName()))
 					}
 
-					grid, ok := obj3.(*MShellGrid)
-					if !ok {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: updateCol requires a Grid, got %s.\n", t.Line, t.Column, obj3.TypeName()))
+					grid, sourceIndices, err := getGridSourceAndIndices(obj3)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: updateCol requires a Grid or GridView, got %s.\n", t.Line, t.Column, obj3.TypeName()))
 					}
+					_, isGridView := obj3.(*MShellGridView)
 
 					colIdx, exists := grid.ColIndex[colName]
 					if !exists {
@@ -5020,10 +5021,58 @@ MainLoop:
 					}
 
 					oldCol := grid.Columns[colIdx]
+					if isGridView {
+						newGrid := NewGrid()
+						newGrid.Meta = grid.Meta
+						newGrid.RowCount = len(sourceIndices)
+
+						for _, sourceCol := range grid.Columns {
+							newCol := NewGridColumn(sourceCol.Name, len(sourceIndices))
+							newCol.Meta = sourceCol.Meta
+							newGrid.AddColumn(newCol)
+						}
+
+						for newRowIdx, sourceRowIdx := range sourceIndices {
+							for oldColIdx, sourceCol := range grid.Columns {
+								if oldColIdx == colIdx {
+									continue
+								}
+								newGrid.Columns[oldColIdx].GenericData[newRowIdx] = sourceCol.Get(sourceRowIdx)
+							}
+
+							var updateStack MShellStack
+							updateStack = []MShellObject{oldCol.Get(sourceRowIdx)}
+
+							result, err := state.EvaluateQuote(*quote, &updateStack, context, definitions)
+							if err != nil {
+								return state.FailWithMessage(err.Error())
+							}
+							if result.ShouldPassResultUpStack() {
+								return result
+							}
+							if len(updateStack) != 1 {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: updateCol quotation must return exactly one value, found %d values.\n", t.Line, t.Column, len(updateStack)))
+							}
+
+							newVal, _ := updateStack.Pop()
+							if isContainerType(newVal) {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: updateCol quotation cannot return a container type, got %s.\n", t.Line, t.Column, newVal.TypeName()))
+							}
+							newGrid.Columns[colIdx].GenericData[newRowIdx] = newVal
+						}
+
+						for _, newCol := range newGrid.Columns {
+							optimizeColumnStorage(newCol)
+						}
+
+						stack.Push(newGrid)
+						continue MainLoop
+					}
+
 					newCol := NewGridColumn(oldCol.Name, grid.RowCount)
 					newCol.Meta = oldCol.Meta
 
-					for rowIdx := 0; rowIdx < grid.RowCount; rowIdx++ {
+					for _, rowIdx := range sourceIndices {
 						var updateStack MShellStack
 						updateStack = []MShellObject{oldCol.Get(rowIdx)}
 
