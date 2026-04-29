@@ -808,7 +808,7 @@ end wl # Output: 11
 - `exclude`: Drop a list of column names from a `Grid` or `GridView`, returning a materialized `Grid`. `(Grid|GridView [str] -- Grid)`
 - `derive`: Append a derived column to a `Grid` or `GridView`. The metadata dictionary is attached to the new column. `(Grid|GridView str dict (GridRow -- any) -- Grid)`
 - `groupBy`: Group rows by key columns and return a summarized `Grid`. `(Grid|GridView [str]:keys [dict]:aggs -- Grid)`
-- `updateCol`: Mutate a column in a `Grid` by applying a quotation to each cell. The quotation must return exactly one non-container value. `(Grid str (any -- any) -- Grid)`
+- `updateCol`: Mutate a column in a `Grid` by applying a quotation to each cell. When used on a `GridView`, a new `Grid` is materialized from the viewed rows, the quotation is applied to that column, all result columns are retyped, and the backing `Grid` is left unchanged. The quotation must return exactly one non-container value. `(Grid|GridView str (any -- any) -- Grid)`
 - `join`: Inner equi-join of two grids using key extractor quotations on each side.
   `join` is polymorphic with the string-join built-in: when the top of the stack is a quotation, the grid form is used.
   Keys must be a non-container scalar or a flat list of scalars (treated as a tuple key).
