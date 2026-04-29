@@ -1,0 +1,462 @@
+<div id="grid-top"></div>
+
+<p>
+<code>msh</code> provides a high-performance columnar data frame type called <strong>Grid</strong>, inspired by pandas and Axon grids.
+Grids are ideal for working with tabular data, time series analysis, and data transformation pipelines.
+</p>
+
+<ul>
+    <li><a href="#grid-overview">Overview</a></li>
+    <li><a href="#grid-literal-syntax">Literal Syntax</a></li>
+    <li><a href="#grid-metadata">Metadata</a></li>
+    <li><a href="#grid-operations">Grid Operations</a></li>
+    <li><a href="#grid-view">GridView</a></li>
+    <li><a href="#grid-row">GridRow</a></li>
+    <li><a href="#grid-iteration">Iteration Operations</a></li>
+    <li><a href="#grid-joins">Joins</a></li>
+</ul>
+
+<h1 id="grid-overview">Overview <a class="section-link" href="#grid-overview" aria-label="Permalink">§</a> <a class="back-to-top" href="#grid-top">Back to top</a></h1>
+
+<p>
+A Grid stores data in columnar format, where each column is stored as a contiguous array.
+This provides excellent cache locality for column-wise operations like aggregations, filtering, and transformations.
+</p>
+
+<p>
+Grids support:
+</p>
+
+<ul>
+    <li><strong>Typed column storage</strong>: Columns with homogeneous types (all integers, all floats, all strings, or all datetimes) use specialized storage for performance.</li>
+    <li><strong>Grid-level metadata</strong>: Optional dictionary attached to the entire grid.</li>
+    <li><strong>Column-level metadata</strong>: Optional dictionary attached to each column.</li>
+    <li><strong>Lazy row access</strong>: The <code>GridRow</code> type provides efficient row-by-row access without copying data.</li>
+    <li><strong>Views</strong>: The <code>GridView</code> type represents a filtered subset of rows without copying data.</li>
+</ul>
+
+<p>
+For ingestion from delimited text or other row-oriented sources, use <code>toGrid</code> to convert
+<code>[[str]]</code> into a Grid. The first row is treated as the header row.
+</p>
+
+<h1 id="grid-literal-syntax">Literal Syntax <a class="section-link" href="#grid-literal-syntax" aria-label="Permalink">§</a> <a class="back-to-top" href="#grid-top">Back to top</a></h1>
+
+<p>
+Grids are created using the <code>[|</code> and <code>|]</code> delimiters.
+</p>
+
+<h2>Basic Grid</h2>
+
+<pre>
+<code><span class="mshellGRID_OPEN">[|</span>
+   <span class="mshellLITERAL">name</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">age</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">city</span><span class="mshellEXECUTE">;</span>
+   <span class="mshellSTRING">"Alice"</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">30</span><span class="mshellCOMMA">,</span> <span class="mshellSTRING">"NYC"</span><span class="mshellEXECUTE">;</span>
+   <span class="mshellSTRING">"Bob"</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">25</span><span class="mshellCOMMA">,</span> <span class="mshellSTRING">"LA"</span><span class="mshellEXECUTE">;</span>
+   <span class="mshellSTRING">"Carol"</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">35</span><span class="mshellCOMMA">,</span> <span class="mshellSTRING">"Chicago"</span>
+<span class="mshellGRID_CLOSE">|]</span></code>
+</pre>
+
+<p>Structure:</p>
+<ul>
+    <li>Column definitions come first (comma-separated names, terminated by <code>;</code>)</li>
+    <li>Row data follows (comma-separated values, each row terminated by <code>;</code>)</li>
+    <li>The trailing semicolon on the last row is optional</li>
+</ul>
+
+<h2>Empty Grid</h2>
+
+<pre>
+<code><span class="mshellGRID_OPEN">[|</span> <span class="mshellLITERAL">col1</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">col2</span><span class="mshellEXECUTE">;</span> <span class="mshellGRID_CLOSE">|]</span>  <span class="mshellLINECOMMENT"># Grid with columns but no rows</span></code>
+</pre>
+
+<h1 id="grid-metadata">Metadata <a class="section-link" href="#grid-metadata" aria-label="Permalink">§</a> <a class="back-to-top" href="#grid-top">Back to top</a></h1>
+
+<h2>Grid Metadata</h2>
+
+<p>
+Optional grid-level metadata is specified as a dictionary followed by <code>;</code> before the column definitions:
+</p>
+
+<pre>
+<code><span class="mshellGRID_OPEN">[|</span>
+   <span class="mshellLEFT_CURLY">{</span> <span class="mshellSTRING">"source"</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">"sensors"</span><span class="mshellCOMMA">,</span> <span class="mshellSTRING">"version"</span><span class="mshellCOLON">:</span> <span class="mshellINTEGER">2</span> <span class="mshellRIGHT_CURLY">}</span><span class="mshellEXECUTE">;</span>
+   <span class="mshellLITERAL">timestamp</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">value</span><span class="mshellEXECUTE">;</span>
+   <span class="mshellDATETIME">2024-01-01T10:00</span><span class="mshellCOMMA">,</span> <span class="mshellFLOAT">23.5</span><span class="mshellEXECUTE">;</span>
+   <span class="mshellDATETIME">2024-01-01T11:00</span><span class="mshellCOMMA">,</span> <span class="mshellFLOAT">24.1</span>
+<span class="mshellGRID_CLOSE">|]</span></code>
+</pre>
+
+<h2>Column Metadata</h2>
+
+<p>
+Each column can have optional metadata specified as a dictionary immediately after the column name:
+</p>
+
+<pre>
+<code><span class="mshellGRID_OPEN">[|</span>
+   <span class="mshellLITERAL">temperature</span> <span class="mshellLEFT_CURLY">{</span> <span class="mshellSTRING">"unit"</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">"celsius"</span> <span class="mshellRIGHT_CURLY">}</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">humidity</span> <span class="mshellLEFT_CURLY">{</span> <span class="mshellSTRING">"unit"</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">"percent"</span> <span class="mshellRIGHT_CURLY">}</span><span class="mshellEXECUTE">;</span>
+   <span class="mshellFLOAT">23.5</span><span class="mshellCOMMA">,</span> <span class="mshellFLOAT">65.0</span><span class="mshellEXECUTE">;</span>
+   <span class="mshellFLOAT">24.1</span><span class="mshellCOMMA">,</span> <span class="mshellFLOAT">62.5</span>
+<span class="mshellGRID_CLOSE">|]</span></code>
+</pre>
+
+<h1 id="grid-operations">Grid Operations <a class="section-link" href="#grid-operations" aria-label="Permalink">§</a> <a class="back-to-top" href="#grid-top">Back to top</a></h1>
+
+<table class="function-table">
+    <thead>
+        <tr> <th>Name</th> <th>Description</th> <th>Signature</th> </tr>
+    </thead>
+    <tbody>
+        <tr id="func-gridRows">
+            <td><code>gridRows</code></td>
+            <td>Get the number of rows in a Grid or GridView.</td>
+            <td><code>(Grid|GridView -- <span class="sig-type sig-type-int">int</span>)</code></td>
+        </tr>
+        <tr id="func-gridCols">
+            <td><code>gridCols</code></td>
+            <td>Get the list of column names from a Grid or GridView.</td>
+            <td><code>(Grid|GridView -- [<span class="sig-type sig-type-str">str</span>])</code></td>
+        </tr>
+        <tr id="func-gridMeta">
+            <td><code>gridMeta</code></td>
+            <td>Get the grid-level metadata dictionary. Returns <code>none</code> if no metadata.</td>
+            <td><code>(Grid|GridView -- <span class="sig-type sig-type-maybe">Maybe</span>[<span class="sig-type sig-type-dict">dict</span>])</code></td>
+        </tr>
+        <tr id="func-gridColMeta">
+            <td><code>gridColMeta</code></td>
+            <td>Get the metadata dictionary for a specific column. Returns <code>none</code> if no metadata.</td>
+            <td><code>(Grid|GridView <span class="sig-type sig-type-str">str</span>:colname -- <span class="sig-type sig-type-maybe">Maybe</span>[<span class="sig-type sig-type-dict">dict</span>])</code></td>
+        </tr>
+        <tr id="func-gridCol">
+            <td><code>gridCol</code></td>
+            <td>Extract a single column as a list of values.</td>
+            <td><code>(Grid|GridView <span class="sig-type sig-type-str">str</span>:colname -- [a])</code></td>
+        </tr>
+        <tr id="func-gridSetCell">
+            <td><code>gridSetCell</code></td>
+            <td>Set a single cell value. Returns the modified grid.</td>
+            <td><code>(Grid <span class="sig-type sig-type-str">str</span>:colname <span class="sig-type sig-type-int">int</span>:rowIdx value -- Grid)</code></td>
+        </tr>
+        <tr id="func-gridAddCol">
+            <td><code>gridAddCol</code></td>
+            <td>Add a new column to a grid. The third argument can be a list of values (must match row count) or a default value for all rows.</td>
+            <td><code>(Grid <span class="sig-type sig-type-str">str</span>:colname [values]|default -- Grid)</code></td>
+        </tr>
+        <tr id="func-gridRemoveCol">
+            <td><code>gridRemoveCol</code></td>
+            <td>Remove a column from a grid by name.</td>
+            <td><code>(Grid <span class="sig-type sig-type-str">str</span>:colname -- Grid)</code></td>
+        </tr>
+        <tr id="func-gridRenameCol">
+            <td><code>gridRenameCol</code></td>
+            <td>Rename a column in a grid.</td>
+            <td><code>(Grid <span class="sig-type sig-type-str">str</span>:oldname <span class="sig-type sig-type-str">str</span>:newname -- Grid)</code></td>
+        </tr>
+        <tr id="func-select-grid">
+            <td><code>select</code></td>
+            <td>Project a Grid or GridView to the requested columns, preserving the requested order and returning a materialized Grid.</td>
+            <td><code>(Grid|GridView [<span class="sig-type sig-type-str">str</span>] -- Grid)</code></td>
+        </tr>
+        <tr id="func-exclude-grid">
+            <td><code>exclude</code></td>
+            <td>Drop the requested columns from a Grid or GridView and return a materialized Grid.</td>
+            <td><code>(Grid|GridView [<span class="sig-type sig-type-str">str</span>] -- Grid)</code></td>
+        </tr>
+        <tr id="func-derive-grid">
+            <td><code>derive</code></td>
+            <td>Append a derived column to a Grid or GridView. The metadata dictionary is attached to the new column.</td>
+            <td><code>(Grid|GridView <span class="sig-type sig-type-str">str</span>:colname <span class="sig-type sig-type-dict">dict</span>:meta (<span class="sig-type sig-type-gridrow">GridRow</span> -- a) -- Grid)</code></td>
+        </tr>
+        <tr id="func-groupby-grid">
+            <td><code>groupBy</code></td>
+            <td>Group rows by key columns and return a summarized Grid. Aggregation specs are dictionaries with required <code>"agg"</code> quotation plus optional <code>"name"</code> and <code>"meta"</code>.</td>
+            <td><code>(Grid|GridView [<span class="sig-type sig-type-str">str</span>]:keys [<span class="sig-type sig-type-dict">dict</span>]:aggs -- Grid)</code></td>
+        </tr>
+        <tr id="func-updatecol-grid">
+            <td><code>updateCol</code></td>
+            <td>Mutate a column in a Grid by applying a quotation to each cell. The quotation must return exactly one non-container value for each cell.</td>
+            <td><code>(Grid <span class="sig-type sig-type-str">str</span>:colname (a -- b) -- Grid)</code></td>
+        </tr>
+        <tr id="func-gridCompact">
+            <td><code>gridCompact</code></td>
+            <td>Materialize a GridView into a real Grid (copies the filtered rows). If already a Grid, returns it unchanged.</td>
+            <td><code>(Grid|GridView -- Grid)</code></td>
+        </tr>
+        <tr id="func-len-grid">
+            <td><code>len</code></td>
+            <td>Returns the number of rows in a Grid, GridView, or columns in a GridRow.</td>
+            <td><code>(Grid|GridView|GridRow -- <span class="sig-type sig-type-int">int</span>)</code></td>
+        </tr>
+        <tr id="func-join-grid">
+            <td><code>join</code></td>
+            <td>Inner equi-join of two Grids or GridViews using key extractor quotations on each side. Polymorphic with the string-join built-in: when the top of the stack is a quotation, the grid form is used. See <a href="#grid-joins">Joins</a>.</td>
+            <td><code>(Grid|GridView Grid|GridView (<span class="sig-type sig-type-gridrow">GridRow</span> -- a) (<span class="sig-type sig-type-gridrow">GridRow</span> -- a) -- Grid)</code></td>
+        </tr>
+        <tr id="func-leftjoin-grid">
+            <td><code>leftJoin</code></td>
+            <td>Left outer equi-join. Unmatched left rows appear with right-side cells filled with <code>none</code>.</td>
+            <td><code>(Grid|GridView Grid|GridView (<span class="sig-type sig-type-gridrow">GridRow</span> -- a) (<span class="sig-type sig-type-gridrow">GridRow</span> -- a) -- Grid)</code></td>
+        </tr>
+        <tr id="func-outerjoin-grid">
+            <td><code>outerJoin</code></td>
+            <td>Full outer equi-join. Unmatched rows from either side appear with the absent side filled with <code>none</code>.</td>
+            <td><code>(Grid|GridView Grid|GridView (<span class="sig-type sig-type-gridrow">GridRow</span> -- a) (<span class="sig-type sig-type-gridrow">GridRow</span> -- a) -- Grid)</code></td>
+        </tr>
+    </tbody>
+</table>
+
+<h2>Examples</h2>
+
+<pre>
+<code><span class="mshellLINECOMMENT"># Create a grid</span>
+<span class="mshellGRID_OPEN">[|</span> <span class="mshellLITERAL">x</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">y</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">1</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">2</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">3</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">4</span> <span class="mshellGRID_CLOSE">|]</span> <span class="mshellVARSTORE">grid!</span>
+
+<span class="mshellLINECOMMENT"># Or build one from parsed row data</span>
+<span class="mshellSTRING">"x,y\n1,2\n3,4\n"</span> <span class="mshellLITERAL">parseCsv</span> <span class="mshellLITERAL">toGrid</span> <span class="mshellVARSTORE">csvGrid!</span>
+
+<span class="mshellLINECOMMENT"># Get row count</span>
+<span class="mshellVARRETRIEVE">@grid</span> <span class="mshellLITERAL">gridRows</span>  <span class="mshellLINECOMMENT"># 2</span>
+
+<span class="mshellLINECOMMENT"># Get column names</span>
+<span class="mshellVARRETRIEVE">@grid</span> <span class="mshellLITERAL">gridCols</span>  <span class="mshellLINECOMMENT"># ["x" "y"]</span>
+
+<span class="mshellLINECOMMENT"># Extract a column</span>
+<span class="mshellVARRETRIEVE">@grid</span> <span class="mshellSTRING">"x"</span> <span class="mshellLITERAL">gridCol</span>  <span class="mshellLINECOMMENT"># [1 3]</span>
+
+<span class="mshellLINECOMMENT"># Add a new column</span>
+<span class="mshellVARRETRIEVE">@grid</span> <span class="mshellSTRING">"z"</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">10</span> <span class="mshellINTEGER">20</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">gridAddCol</span>  <span class="mshellLINECOMMENT"># Grid with x, y, z columns</span>
+
+<span class="mshellLINECOMMENT"># Set a cell value</span>
+<span class="mshellVARRETRIEVE">@grid</span> <span class="mshellSTRING">"x"</span> <span class="mshellINTEGER">0</span> <span class="mshellINTEGER">100</span> <span class="mshellLITERAL">gridSetCell</span>  <span class="mshellLINECOMMENT"># Sets grid[0]["x"] = 100</span>
+
+<span class="mshellLINECOMMENT"># Select columns in a specific order</span>
+<span class="mshellVARRETRIEVE">@grid</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSTRING">"y"</span> <span class="mshellSTRING">"x"</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">select</span>  <span class="mshellLINECOMMENT"># Grid with columns y, x</span>
+
+<span class="mshellLINECOMMENT"># Exclude a column</span>
+<span class="mshellVARRETRIEVE">@grid</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSTRING">"y"</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">exclude</span>  <span class="mshellLINECOMMENT"># Grid with only x</span>
+
+<span class="mshellLINECOMMENT"># Derive a new column with metadata</span>
+<span class="mshellVARRETRIEVE">@grid</span> <span class="mshellSTRING">"sum"</span> <span class="mshellLEFT_CURLY">{</span> <span class="mshellSTRING">"kind"</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">"derived"</span> <span class="mshellRIGHT_CURLY">}</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">x</span><span class="mshellQUESTION">?</span> <span class="mshellCOLON">:</span><span class="mshellLITERAL">y</span><span class="mshellQUESTION">?</span> <span class="mshellPLUS">+</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">derive</span>  <span class="mshellLINECOMMENT"># Grid with x, y, sum</span>
+
+<span class="mshellLINECOMMENT"># Group rows and compute multiple aggregations in one pass</span>
+<span class="mshellGRID_OPEN">[|</span> <span class="mshellLITERAL">region</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">sales</span><span class="mshellEXECUTE">;</span> <span class="mshellSTRING">"East"</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">10</span><span class="mshellEXECUTE">;</span> <span class="mshellSTRING">"West"</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">5</span><span class="mshellEXECUTE">;</span> <span class="mshellSTRING">"East"</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">7</span> <span class="mshellGRID_CLOSE">|]</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSTRING">"region"</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span>
+   <span class="mshellLEFT_CURLY">{</span> <span class="mshellSTRING">"name"</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">"n"</span><span class="mshellCOMMA">,</span> <span class="mshellSTRING">"agg"</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">gridRows</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellRIGHT_CURLY">}</span>
+   <span class="mshellLEFT_CURLY">{</span> <span class="mshellSTRING">"name"</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">"sales_total"</span><span class="mshellCOMMA">,</span> <span class="mshellSTRING">"meta"</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_CURLY">{</span> <span class="mshellSTRING">"unit"</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">"USD"</span> <span class="mshellRIGHT_CURLY">}</span><span class="mshellCOMMA">,</span> <span class="mshellSTRING">"agg"</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellSTRING">"sales"</span> <span class="mshellLITERAL">gridCol</span> <span class="mshellLITERAL">sum</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellRIGHT_CURLY">}</span>
+<span class="mshellRIGHT_SQUARE_BRACKET">]</span>
+<span class="mshellLITERAL">groupBy</span>  <span class="mshellLINECOMMENT"># Grid with region, n, sales_total</span>
+
+<span class="mshellLINECOMMENT"># Update a string column in place to typed values</span>
+<span class="mshellVARRETRIEVE">@grid</span> <span class="mshellSTRING">"x"</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">toFloat</span><span class="mshellQUESTION">?</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">updateCol</span>  <span class="mshellLINECOMMENT"># Mutates column x</span></code>
+</pre>
+
+<h1 id="grid-view">GridView <a class="section-link" href="#grid-view" aria-label="Permalink">§</a> <a class="back-to-top" href="#grid-top">Back to top</a></h1>
+
+<p>
+A <code>GridView</code> is a filtered view of a Grid that references the original data without copying.
+It maintains a list of row indices that match the filter criteria.
+</p>
+
+<p>
+GridViews are created by the <code>filter</code> operation and can be used in most places where a Grid is expected.
+To materialize a GridView into a real Grid (with copied data), use <code>gridCompact</code>.
+</p>
+
+<pre>
+<code><span class="mshellLINECOMMENT"># Filter creates a GridView</span>
+<span class="mshellGRID_OPEN">[|</span> <span class="mshellLITERAL">x</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">1</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">2</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">3</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">4</span> <span class="mshellGRID_CLOSE">|]</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">x</span> <span class="mshellINTEGER">2</span> <span class="mshellGREATERTHAN">></span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">filter</span>  <span class="mshellLINECOMMENT"># GridView with rows where x > 2</span>
+
+<span class="mshellLINECOMMENT"># Materialize to a Grid</span>
+<span class="mshellLITERAL">gridCompact</span>  <span class="mshellLINECOMMENT"># Now a real Grid with copied data</span></code>
+</pre>
+
+<h1 id="grid-row">GridRow <a class="section-link" href="#grid-row" aria-label="Permalink">§</a> <a class="back-to-top" href="#grid-top">Back to top</a></h1>
+
+<p>
+A <code>GridRow</code> is a lazy reference to a single row in a Grid.
+It does not copy data; instead, it stores a reference to the parent grid and a row index.
+This makes iteration over grids very efficient.
+</p>
+
+<p>
+GridRows support dictionary-like access:
+</p>
+
+<ul>
+    <li><code>:colname</code> getter syntax returns the value at that column</li>
+    <li><code>get</code> operation works with string keys</li>
+    <li><code>toDict</code> materializes the row to an actual dictionary</li>
+</ul>
+
+<pre>
+<code><span class="mshellGRID_OPEN">[|</span> <span class="mshellLITERAL">name</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">age</span><span class="mshellEXECUTE">;</span> <span class="mshellSTRING">"Alice"</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">30</span> <span class="mshellGRID_CLOSE">|]</span> <span class="mshellVARSTORE">grid!</span>
+
+<span class="mshellLINECOMMENT"># Access first row</span>
+<span class="mshellVARRETRIEVE">@grid</span> <span class="mshellINDEXER">:0:</span>  <span class="mshellLINECOMMENT"># GridRow for first row</span>
+
+<span class="mshellLINECOMMENT"># Get column value from GridRow</span>
+<span class="mshellCOLON">:</span><span class="mshellLITERAL">name</span>  <span class="mshellLINECOMMENT"># "Alice"</span>
+
+<span class="mshellLINECOMMENT"># Or use get</span>
+<span class="mshellVARRETRIEVE">@grid</span> <span class="mshellINDEXER">:0:</span> <span class="mshellSTRING">"age"</span> <span class="mshellLITERAL">get</span><span class="mshellQUESTION">?</span>  <span class="mshellLINECOMMENT"># 30</span>
+
+<span class="mshellLINECOMMENT"># Convert to dict</span>
+<span class="mshellVARRETRIEVE">@grid</span> <span class="mshellINDEXER">:0:</span> <span class="mshellLITERAL">toDict</span>  <span class="mshellLINECOMMENT"># {"age": 30, "name": "Alice"}</span></code>
+</pre>
+
+<h1 id="grid-iteration">Iteration Operations <a class="section-link" href="#grid-iteration" aria-label="Permalink">§</a> <a class="back-to-top" href="#grid-top">Back to top</a></h1>
+
+<table class="function-table">
+    <thead>
+        <tr> <th>Name</th> <th>Description</th> <th>Signature</th> </tr>
+    </thead>
+    <tbody>
+        <tr id="func-filter">
+            <td><code>filter</code></td>
+            <td>Filter rows using a predicate quotation. The quotation receives a GridRow and should return a boolean. Returns a GridView (no data copying).</td>
+            <td><code>(Grid|GridView (<span class="sig-type sig-type-gridrow">GridRow</span> -- <span class="sig-type sig-type-bool">bool</span>) -- GridView)</code></td>
+        </tr>
+        <tr id="func-map">
+            <td><code>map</code></td>
+            <td>Transform rows using a quotation. The quotation receives a GridRow and should return a GridRow or dict. Returns a new Grid.</td>
+            <td><code>(Grid|GridView (<span class="sig-type sig-type-gridrow">GridRow</span> -- <span class="sig-type sig-type-gridrow">GridRow</span>|<span class="sig-type sig-type-dict">dict</span>) -- Grid)</code></td>
+        </tr>
+        <tr id="func-each">
+            <td><code>each</code></td>
+            <td>Iterate over rows for side effects. The quotation receives a GridRow.</td>
+            <td><code>(Grid|GridView (<span class="sig-type sig-type-gridrow">GridRow</span> -- ) -- )</code></td>
+        </tr>
+        <tr id="func-toDict">
+            <td><code>toDict</code></td>
+            <td>Convert a GridRow to a dictionary.</td>
+            <td><code>(<span class="sig-type sig-type-gridrow">GridRow</span> -- <span class="sig-type sig-type-dict">dict</span>)</code></td>
+        </tr>
+    </tbody>
+</table>
+
+<h2>Examples</h2>
+
+<pre>
+<code><span class="mshellGRID_OPEN">[|</span>
+   <span class="mshellLITERAL">name</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">score</span><span class="mshellEXECUTE">;</span>
+   <span class="mshellSTRING">"Alice"</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">85</span><span class="mshellEXECUTE">;</span>
+   <span class="mshellSTRING">"Bob"</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">92</span><span class="mshellEXECUTE">;</span>
+   <span class="mshellSTRING">"Carol"</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">78</span>
+<span class="mshellGRID_CLOSE">|]</span> <span class="mshellVARSTORE">students!</span>
+
+<span class="mshellLINECOMMENT"># Filter: students with score >= 80</span>
+<span class="mshellVARRETRIEVE">@students</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">score</span> <span class="mshellINTEGER">80</span> <span class="mshellGREATERTHANOREQUAL">>=</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">filter</span>
+<span class="mshellLINECOMMENT"># GridView with Alice and Bob</span>
+
+<span class="mshellLINECOMMENT"># Map: add a "passed" column</span>
+<span class="mshellVARRETRIEVE">@students</span> <span class="mshellLEFT_PAREN">(</span>
+   <span class="mshellLITERAL">toDict</span>
+   <span class="mshellLITERAL">dup</span> <span class="mshellSTRING">"score"</span> <span class="mshellLITERAL">get</span><span class="mshellQUESTION">?</span> <span class="mshellINTEGER">70</span> <span class="mshellGREATERTHANOREQUAL">>=</span> <span class="mshellSTRING">"passed"</span> <span class="mshellLITERAL">set</span>
+<span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">map</span>
+
+<span class="mshellLINECOMMENT"># Each: print each student's name</span>
+<span class="mshellVARRETRIEVE">@students</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">name</span> <span class="mshellLITERAL">wl</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">each</span>
+<span class="mshellLINECOMMENT"># Prints: Alice, Bob, Carol (one per line)</span></code>
+</pre>
+
+<h1 id="grid-json">JSON Serialization <a class="section-link" href="#grid-json" aria-label="Permalink">§</a> <a class="back-to-top" href="#grid-top">Back to top</a></h1>
+
+<p>
+Grids serialize to JSON as an array of row objects:
+</p>
+
+<pre>
+<code><span class="mshellGRID_OPEN">[|</span> <span class="mshellLITERAL">x</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">y</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">1</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">2</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">3</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">4</span> <span class="mshellGRID_CLOSE">|]</span> <span class="mshellLITERAL">toJson</span>
+<span class="mshellLINECOMMENT"># [{"x": 1, "y": 2}, {"x": 3, "y": 4}]</span></code>
+</pre>
+
+<p>
+GridRows also serialize as JSON objects:
+</p>
+
+<pre>
+<code><span class="mshellGRID_OPEN">[|</span> <span class="mshellLITERAL">x</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">y</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">1</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">2</span> <span class="mshellGRID_CLOSE">|]</span> <span class="mshellINDEXER">:0:</span> <span class="mshellLITERAL">toJson</span>
+<span class="mshellLINECOMMENT"># {"x": 1, "y": 2}</span></code>
+</pre>
+
+<h1 id="grid-joins">Joins <a class="section-link" href="#grid-joins" aria-label="Permalink">§</a> <a class="back-to-top" href="#grid-top">Back to top</a></h1>
+
+<p>
+<code>join</code>, <code>leftJoin</code>, and <code>outerJoin</code> combine two grids by an equality key.
+The key is computed by a quotation on each side that takes a <code>GridRow</code> and returns a single value.
+This makes renamed keys, derived keys, and case-insensitive matches all expressible without renaming columns first.
+</p>
+
+<p>
+Stack signature, top to bottom on entry: right key extractor, left key extractor, right grid, left grid.
+Both grid arguments accept a <code>Grid</code> or <code>GridView</code>.
+</p>
+
+<h2>Inner join</h2>
+
+<pre>
+<code><span class="mshellGRID_OPEN">[|</span> <span class="mshellLITERAL">id</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">name</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">1</span><span class="mshellCOMMA">,</span> <span class="mshellSTRING">"Alice"</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">2</span><span class="mshellCOMMA">,</span> <span class="mshellSTRING">"Bob"</span> <span class="mshellGRID_CLOSE">|]</span> <span class="mshellVARSTORE">l!</span>
+<span class="mshellGRID_OPEN">[|</span> <span class="mshellLITERAL">uid</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">score</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">1</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">90</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">2</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">80</span> <span class="mshellGRID_CLOSE">|]</span> <span class="mshellVARSTORE">r!</span>
+<span class="mshellVARRETRIEVE">@l</span> <span class="mshellVARRETRIEVE">@r</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">id</span><span class="mshellQUESTION">?</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">uid</span><span class="mshellQUESTION">?</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">join</span></code>
+</pre>
+
+<h2>Compound key</h2>
+
+<p>
+Return a list to use a tuple key.
+Use <code>2tuple</code> to pack two stack values into a list.
+Both extractors must produce keys with the same shape.
+</p>
+
+<pre>
+<code><span class="mshellVARRETRIEVE">@trades</span> <span class="mshellVARRETRIEVE">@positions</span>
+   <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">dup</span> <span class="mshellCOLON">:</span><span class="mshellLITERAL">date</span><span class="mshellQUESTION">?</span> <span class="mshellLITERAL">swap</span> <span class="mshellCOLON">:</span><span class="mshellLITERAL">region</span><span class="mshellQUESTION">?</span> <span class="mshellLITERAL">2tuple</span><span class="mshellRIGHT_PAREN">)</span>
+   <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">dup</span> <span class="mshellCOLON">:</span><span class="mshellLITERAL">dt</span><span class="mshellQUESTION">?</span> <span class="mshellLITERAL">swap</span> <span class="mshellCOLON">:</span><span class="mshellLITERAL">rgn</span><span class="mshellQUESTION">?</span> <span class="mshellLITERAL">2tuple</span><span class="mshellRIGHT_PAREN">)</span>
+   <span class="mshellLITERAL">join</span></code>
+</pre>
+
+<h2>Renamed key</h2>
+
+<pre>
+<code><span class="mshellVARRETRIEVE">@orders</span> <span class="mshellVARRETRIEVE">@customers</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">customer_id</span><span class="mshellQUESTION">?</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">id</span><span class="mshellQUESTION">?</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">leftJoin</span></code>
+</pre>
+
+<h2>Outer join</h2>
+
+<p>
+Unmatched cells are <code>none</code>.
+Affected columns fall back to generic storage; this is intentional and documented.
+</p>
+
+<pre>
+<code><span class="mshellVARRETRIEVE">@l</span> <span class="mshellVARRETRIEVE">@r</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">id</span><span class="mshellQUESTION">?</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">uid</span><span class="mshellQUESTION">?</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">outerJoin</span></code>
+</pre>
+
+<h2>Semantics</h2>
+
+<ul>
+   <li><strong>Equality.</strong> Type-aware, matching <code>groupBy</code>: an <code>int</code> 1 does not match a <code>float</code> 1.0 unless both extractors normalize.</li>
+   <li><strong>Null keys.</strong> Quotation results that are <code>none</code> never match anything (SQL <code>NULL ≠ NULL</code>). Such rows are dropped from inner joins, and appear as orphans in left and outer joins.</li>
+   <li><strong>Allowed key values.</strong> Any non-container scalar, or a flat list of scalars (treated as a tuple key). Nested lists, dicts, grids, or other container shapes raise an error.</li>
+   <li><strong>Output column order.</strong> All left columns first in their original order, then all right columns. Column-level metadata is preserved per-column. The output grid carries the left grid's metadata.</li>
+   <li><strong>Column collisions.</strong> If any column name appears in both grids the join errors before doing any work. Use <code>select</code>, <code>exclude</code>, or <code>gridRenameCol</code> first. Key columns are not auto-deduplicated because the extractors are opaque.</li>
+   <li><strong>Multi-match.</strong> When duplicate keys exist on both sides, every left match is paired with every right match (Cartesian within the bucket).</li>
+   <li><strong>Row order.</strong> Inner and left joins emit rows in left-grid order. Outer joins append right-grid orphans after, in right-grid order.</li>
+</ul>
+
+<h2>Cross product idiom</h2>
+
+<p>
+The extractor signature can express a Cartesian product by collapsing both sides to a single bucket:
+</p>
+
+<pre>
+<code><span class="mshellVARRETRIEVE">@left</span> <span class="mshellVARRETRIEVE">@right</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">drop</span> <span class="mshellINTEGER">1</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">drop</span> <span class="mshellINTEGER">1</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">join</span></code>
+</pre>
+
+<p>
+Combine with <code>filter</code> for arbitrary predicate joins.
+A dedicated <code>crossJoin</code> built-in may be added later as a clarity shortcut.
+</p>

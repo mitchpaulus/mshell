@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Grid (data frame) type with columnar storage for high-performance tabular data
+  - Literal syntax: `[| col1, col2; val1, val2; val3, val4 |]`
+  - Optional grid and column metadata
+  - Typed column storage (int, float, string, datetime) with automatic optimization
+  - `GridView` for filtered views without data copying
+  - `GridRow` for lazy row access without allocation
+- Extended `map` to work with Grid and GridView (transforms rows using quotation returning dict)
+- Extended `len` to work with Grid, GridView, and GridRow
+- Extended `get` and `:` getter to work with GridRow
+- Functions
+  - `gridRows` - get row count
+  - `gridCols` - get list of column names
+  - `gridMeta` - get grid-level metadata
+  - `gridColMeta` - get column metadata
+  - `gridCol` - extract a column as a list
+  - `gridAddCol` - add a column
+  - `gridRemoveCol` - remove a column
+  - `gridRenameCol` - rename a column
+  - `gridSetCell` - set a single cell value
+  - `gridCompact` - materialize a GridView to a Grid
+  - `select` - project a grid to a specific ordered set of columns
+  - `exclude` - drop a set of columns from a grid
+  - `derive` - append a derived column to a grid
+  - `groupBy` - group grids by key columns with multiple aggregation specs, and preserve existing list grouping behavior
+  - `updateCol` - mutate a grid column by applying a quotation to each cell
+  - `toGrid` - build a grid from `[[str]]` with headers on the first row
+  - `join` (grid form) - inner equi-join of two grids via key-extractor quotations; polymorphic with the existing string `join`
+  - `leftJoin` - left outer equi-join of two grids
+  - `outerJoin` - full outer equi-join of two grids
+  - `filter` - now a built-in that works on both Lists and Grids/GridViews
+  - `each` - now a built-in that works on both Lists and Grids/GridViews
+  - `toDict` - convert a GridRow to a dictionary
 - CLI
   - `msh edit init` to open the current init file path using `$EDITOR`, with fallback to the platform default opener when `$EDITOR` is unavailable
 - Functions

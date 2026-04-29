@@ -661,6 +661,7 @@ end wl # Output: 11
 - `runtime`: Get the current OS runtime. This is the output of the GOOS environment variable. Common possible values are `linux`, `windows`, and `darwin`. `( -- str)`
 - `hostname`: Get the current OS hostname. On failure to get, puts 'unknown' on the stack. `( -- str)`
 - `parseCsv`: Parse a CSV file into a list of lists of strings. Input can be a path/literal file name, or the string contents itself. (`path|str -- [[str]])`
+- `toGrid`: Build a Grid from a list of string rows. The first row supplies column headers and remaining rows become string-valued data rows. (`[[str]] -- Grid`)
 - `toCsvCell`: Escape a single CSV cell. If the value contains `,`, `"`, or a newline, wraps the value in double quotes and doubles any embedded quotes; otherwise returns the input unchanged. (`str -- str`)
 - `toCsv`: Serialize a list of rows to a CSV string. Each cell is escaped with `toCsvCell`, cells are joined with `,`, and rows are joined with `\n`. (`[[str]] -- str`)
 - `parseJson`: Parse JSON from a string, binary, or file path into mshell objects. (`path|str|binary -- list|dict|numeric|str|bool`)
@@ -794,13 +795,49 @@ end wl # Output: 11
 - `scaleLinear`: Build a linear scaler from a domain/range pair; returns a quotation that maps input values. `([numeric] [numeric] -- (numeric -- numeric))`
 - `cartesian`: Produces the Cartesian product between two lists. Output is a list of lists, in which the inner list has two elements. `([a] [a] -- [[a]])`
 - `groupBy`: Groups items of a list into a dictionary based on a key function. The key function should take each item as input and produce a string.
-             The output is a dictionary with the unique keys and values that are lists of the corresponding items.
-             `[a] (a -- str) -- dict [a])`
+  The output is a dictionary with the unique keys and values that are lists of the corresponding items. `([a] (a -- str) -- dict)`
 - `listToDict`: Transform a list into a dictionary with a key and value selector function. `([a] (a -- b) (a -- c) -- { b: c })`
 - `take`: Take the first `n` number of elements from list. `([a] int -- [a])`
 - `repeat`: Build a list by repeating the value the requested number of times. `(a int -- [a])`
 - `chunk`: Group a list into consecutive sublists of size `n`. The final chunk may be shorter if the list length isn't divisible by `n`. `([a] int -- [[a]])`
 - `pop`: Pop the final element off the list. Returns a Maybe, `none` for the empty list. Leaves the modified list on the stack. `([a] -- [a] a)`
+
+## Grid Functions
+
+- `select`: Project a `Grid` or `GridView` to a requested ordered list of column names, returning a materialized `Grid`. `(Grid|GridView [str] -- Grid)`
+- `exclude`: Drop a list of column names from a `Grid` or `GridView`, returning a materialized `Grid`. `(Grid|GridView [str] -- Grid)`
+- `derive`: Append a derived column to a `Grid` or `GridView`. The metadata dictionary is attached to the new column. `(Grid|GridView str dict (GridRow -- any) -- Grid)`
+- `groupBy`: Group rows by key columns and return a summarized `Grid`. `(Grid|GridView [str]:keys [dict]:aggs -- Grid)`
+- `updateCol`: Mutate a column in a `Grid` by applying a quotation to each cell. The quotation must return exactly one non-container value. `(Grid str (any -- any) -- Grid)`
+- `join`: Inner equi-join of two grids using key extractor quotations on each side.
+  `join` is polymorphic with the string-join built-in: when the top of the stack is a quotation, the grid form is used.
+  Keys must be a non-container scalar or a flat list of scalars (treated as a tuple key).
+  Quotation results that are `none` never match anything (SQL `NULL ≠ NULL` semantics).
+  Output columns are all left columns followed by all right columns; the output grid carries the left grid's metadata.
+  Column-name collisions on non-key columns raise an error before any work — resolve with `select`, `exclude`, or `gridRenameCol` first.
+  `(Grid|GridView Grid|GridView (GridRow -- a) (GridRow -- a) -- Grid)`
+- `leftJoin`: Left outer equi-join. Same shape as `join`; unmatched left rows are emitted with right-side cells filled with `none`. `(Grid|GridView Grid|GridView (GridRow -- a) (GridRow -- a) -- Grid)`
+- `outerJoin`: Full outer equi-join. Same shape as `join`; unmatched rows from either side appear with the absent side filled with `none`. Affected columns fall back to generic storage. `(Grid|GridView Grid|GridView (GridRow -- a) (GridRow -- a) -- Grid)`
+
+Grid `groupBy` aggregation specs are dictionaries.
+Each spec requires an `agg` quotation and may include `name` and `meta`.
+The `agg` quotation receives a `GridView` for one non-empty group and must return exactly one non-container value.
+`name` defaults to `AggCol<N>`, and `meta` defaults to `{}`.
+Key column metadata is copied from the source grid.
+Groups are emitted in first-seen order, and key comparison is type-aware.
+An empty aggregation list acts like distinct over the key columns.
+An empty key list aggregates the whole table into one group when input has rows.
+For empty input, `groupBy` returns the output schema with zero rows and does not evaluate aggregation quotations.
+
+```mshell
+[| region, sales; "East", 10; "West", 5; "East", 7 |]
+["region"]
+[
+    { "name": "n", "agg": (gridRows) }
+    { "name": "sales_total", "meta": { "unit": "USD" }, "agg": ("sales" gridCol sum) }
+]
+groupBy
+```
 
 ## Sorting
 

@@ -2018,3 +2018,513 @@ func nodeToDict(n *html.Node) *MShellDict {
 	d.Items["text"] = MShellString{Content: textBuilder.String()}
 	return d
 }
+
+// Grid types {{{
+
+// ColumnType represents the storage type of a column
+type ColumnType int
+
+const (
+	COL_GENERIC ColumnType = iota
+	COL_INT
+	COL_FLOAT
+	COL_STRING
+	COL_DATETIME
+)
+
+// GridColumn - Supports typed storage with fallback
+type GridColumn struct {
+	Name         string
+	Meta         *MShellDict      // Optional column metadata
+	ColType      ColumnType
+	IntData      []int64
+	FloatData    []float64
+	StringData   []string
+	DateTimeData []time.Time
+	GenericData  []MShellObject   // Fallback for mixed types
+}
+
+// NewGridColumn creates a new column with the given name and row count
+func NewGridColumn(name string, rowCount int) *GridColumn {
+	return &GridColumn{
+		Name:        name,
+		Meta:        nil,
+		ColType:     COL_GENERIC,
+		GenericData: make([]MShellObject, rowCount),
+	}
+}
+
+// Get returns the value at the given row index
+func (col *GridColumn) Get(index int) MShellObject {
+	switch col.ColType {
+	case COL_INT:
+		return MShellInt{Value: int(col.IntData[index])}
+	case COL_FLOAT:
+		return MShellFloat{Value: col.FloatData[index]}
+	case COL_STRING:
+		return MShellString{Content: col.StringData[index]}
+	case COL_DATETIME:
+		return &MShellDateTime{Time: col.DateTimeData[index]}
+	default:
+		return col.GenericData[index]
+	}
+}
+
+// Set sets the value at the given row index
+func (col *GridColumn) Set(index int, value MShellObject) {
+	switch col.ColType {
+	case COL_INT:
+		if intVal, ok := value.(MShellInt); ok {
+			col.IntData[index] = int64(intVal.Value)
+		}
+	case COL_FLOAT:
+		if floatVal, ok := value.(MShellFloat); ok {
+			col.FloatData[index] = floatVal.Value
+		}
+	case COL_STRING:
+		if strVal, ok := value.(MShellString); ok {
+			col.StringData[index] = strVal.Content
+		}
+	case COL_DATETIME:
+		if dtVal, ok := value.(*MShellDateTime); ok {
+			col.DateTimeData[index] = dtVal.Time
+		}
+	default:
+		col.GenericData[index] = value
+	}
+}
+
+// Len returns the number of rows in the column
+func (col *GridColumn) Len() int {
+	switch col.ColType {
+	case COL_INT:
+		return len(col.IntData)
+	case COL_FLOAT:
+		return len(col.FloatData)
+	case COL_STRING:
+		return len(col.StringData)
+	case COL_DATETIME:
+		return len(col.DateTimeData)
+	default:
+		return len(col.GenericData)
+	}
+}
+
+// MShellGrid - Columnar storage for maximum performance
+type MShellGrid struct {
+	Meta     *MShellDict           // Optional grid-level metadata (nil if none)
+	Columns  []*GridColumn         // Columnar storage
+	ColIndex map[string]int        // Fast column name -> index lookup
+	RowCount int                   // Number of rows
+}
+
+// NewGrid creates a new empty grid
+func NewGrid() *MShellGrid {
+	return &MShellGrid{
+		Meta:     nil,
+		Columns:  make([]*GridColumn, 0),
+		ColIndex: make(map[string]int),
+		RowCount: 0,
+	}
+}
+
+// AddColumn adds a column to the grid
+func (g *MShellGrid) AddColumn(col *GridColumn) {
+	g.ColIndex[col.Name] = len(g.Columns)
+	g.Columns = append(g.Columns, col)
+}
+
+// GetColumn returns the column with the given name, or nil if not found
+func (g *MShellGrid) GetColumn(name string) *GridColumn {
+	if idx, ok := g.ColIndex[name]; ok {
+		return g.Columns[idx]
+	}
+	return nil
+}
+
+// GetRow returns the row at the given index as a GridRow
+func (g *MShellGrid) GetRow(index int) *MShellGridRow {
+	return &MShellGridRow{Grid: g, RowIndex: index}
+}
+
+// MShellGrid MShellObject interface {{{
+
+func (g *MShellGrid) TypeName() string {
+	return "Grid"
+}
+
+func (g *MShellGrid) IsCommandLineable() bool {
+	return false
+}
+
+func (g *MShellGrid) IsNumeric() bool {
+	return false
+}
+
+func (g *MShellGrid) FloatNumeric() float64 {
+	return 0
+}
+
+func (g *MShellGrid) CommandLine() string {
+	return ""
+}
+
+func (g *MShellGrid) DebugString() string {
+	colNames := make([]string, len(g.Columns))
+	for i, col := range g.Columns {
+		colNames[i] = col.Name
+	}
+	return fmt.Sprintf("Grid{cols: [%s], rows: %d}", strings.Join(colNames, ", "), g.RowCount)
+}
+
+func (g *MShellGrid) Index(index int) (MShellObject, error) {
+	if index < 0 {
+		index = g.RowCount + index
+	}
+	if index < 0 || index >= g.RowCount {
+		return nil, fmt.Errorf("Index %d out of range for Grid with %d rows.\n", index, g.RowCount)
+	}
+	return g.GetRow(index), nil
+}
+
+func (g *MShellGrid) SliceStart(startInclusive int) (MShellObject, error) {
+	if startInclusive < 0 {
+		startInclusive = g.RowCount + startInclusive
+	}
+	if startInclusive < 0 || startInclusive > g.RowCount {
+		return nil, fmt.Errorf("Start index %d out of range for Grid with %d rows.\n", startInclusive, g.RowCount)
+	}
+	indices := make([]int, g.RowCount-startInclusive)
+	for i := range indices {
+		indices[i] = startInclusive + i
+	}
+	return &MShellGridView{Source: g, Indices: indices}, nil
+}
+
+func (g *MShellGrid) SliceEnd(end int) (MShellObject, error) {
+	if end < 0 {
+		end = g.RowCount + end
+	}
+	if end < 0 || end > g.RowCount {
+		return nil, fmt.Errorf("End index %d out of range for Grid with %d rows.\n", end, g.RowCount)
+	}
+	indices := make([]int, end)
+	for i := range indices {
+		indices[i] = i
+	}
+	return &MShellGridView{Source: g, Indices: indices}, nil
+}
+
+func (g *MShellGrid) Slice(startInc int, endExc int) (MShellObject, error) {
+	if startInc < 0 {
+		startInc = g.RowCount + startInc
+	}
+	if endExc < 0 {
+		endExc = g.RowCount + endExc
+	}
+	if startInc < 0 || endExc > g.RowCount || startInc > endExc {
+		return nil, fmt.Errorf("Slice [%d:%d) out of range for Grid with %d rows.\n", startInc, endExc, g.RowCount)
+	}
+	indices := make([]int, endExc-startInc)
+	for i := range indices {
+		indices[i] = startInc + i
+	}
+	return &MShellGridView{Source: g, Indices: indices}, nil
+}
+
+func (g *MShellGrid) ToJson() string {
+	var sb strings.Builder
+	sb.WriteString("[")
+	for i := 0; i < g.RowCount; i++ {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		row := g.GetRow(i)
+		sb.WriteString(row.ToJson())
+	}
+	sb.WriteString("]")
+	return sb.String()
+}
+
+func (g *MShellGrid) ToString() string {
+	return g.DebugString()
+}
+
+func (g *MShellGrid) IndexErrStr() string {
+	return fmt.Sprintf(" Grid with %d rows", g.RowCount)
+}
+
+func (g *MShellGrid) Concat(other MShellObject) (MShellObject, error) {
+	otherGrid, ok := other.(*MShellGrid)
+	if !ok {
+		return nil, fmt.Errorf("Cannot concatenate a Grid with a %s.\n", other.TypeName())
+	}
+	// Check column compatibility
+	if len(g.Columns) != len(otherGrid.Columns) {
+		return nil, fmt.Errorf("Cannot concatenate grids with different column counts (%d vs %d).\n", len(g.Columns), len(otherGrid.Columns))
+	}
+	for i, col := range g.Columns {
+		if col.Name != otherGrid.Columns[i].Name {
+			return nil, fmt.Errorf("Cannot concatenate grids with different column names at index %d (%s vs %s).\n", i, col.Name, otherGrid.Columns[i].Name)
+		}
+	}
+
+	// Create new grid with combined rows
+	newGrid := NewGrid()
+	newGrid.RowCount = g.RowCount + otherGrid.RowCount
+
+	for i, col := range g.Columns {
+		newCol := NewGridColumn(col.Name, newGrid.RowCount)
+		if col.Meta != nil {
+			newCol.Meta = col.Meta
+		}
+		// Copy data from first grid
+		for j := 0; j < g.RowCount; j++ {
+			newCol.GenericData[j] = col.Get(j)
+		}
+		// Copy data from second grid
+		for j := 0; j < otherGrid.RowCount; j++ {
+			newCol.GenericData[g.RowCount+j] = otherGrid.Columns[i].Get(j)
+		}
+		newGrid.AddColumn(newCol)
+	}
+
+	return newGrid, nil
+}
+
+func (g *MShellGrid) Equals(other MShellObject) (bool, error) {
+	return false, fmt.Errorf("Equality currently not defined for grids.\n")
+}
+
+func (g *MShellGrid) CastString() (string, error) {
+	return "", fmt.Errorf("Cannot cast a Grid to a string.\n")
+}
+
+// }}}
+
+// MShellGridView - Filtered view without copying data
+type MShellGridView struct {
+	Source  *MShellGrid  // Reference to original grid
+	Indices []int        // Row indices in the view
+}
+
+// GetRow returns the row at the given view index as a GridRow
+func (v *MShellGridView) GetRow(index int) *MShellGridRow {
+	return &MShellGridRow{Grid: v.Source, RowIndex: v.Indices[index]}
+}
+
+// MShellGridView MShellObject interface {{{
+
+func (v *MShellGridView) TypeName() string {
+	return "GridView"
+}
+
+func (v *MShellGridView) IsCommandLineable() bool {
+	return false
+}
+
+func (v *MShellGridView) IsNumeric() bool {
+	return false
+}
+
+func (v *MShellGridView) FloatNumeric() float64 {
+	return 0
+}
+
+func (v *MShellGridView) CommandLine() string {
+	return ""
+}
+
+func (v *MShellGridView) DebugString() string {
+	return fmt.Sprintf("GridView{source: %s, rows: %d}", v.Source.DebugString(), len(v.Indices))
+}
+
+func (v *MShellGridView) Index(index int) (MShellObject, error) {
+	if index < 0 {
+		index = len(v.Indices) + index
+	}
+	if index < 0 || index >= len(v.Indices) {
+		return nil, fmt.Errorf("Index %d out of range for GridView with %d rows.\n", index, len(v.Indices))
+	}
+	return v.GetRow(index), nil
+}
+
+func (v *MShellGridView) SliceStart(startInclusive int) (MShellObject, error) {
+	if startInclusive < 0 {
+		startInclusive = len(v.Indices) + startInclusive
+	}
+	if startInclusive < 0 || startInclusive > len(v.Indices) {
+		return nil, fmt.Errorf("Start index %d out of range for GridView with %d rows.\n", startInclusive, len(v.Indices))
+	}
+	return &MShellGridView{Source: v.Source, Indices: v.Indices[startInclusive:]}, nil
+}
+
+func (v *MShellGridView) SliceEnd(end int) (MShellObject, error) {
+	if end < 0 {
+		end = len(v.Indices) + end
+	}
+	if end < 0 || end > len(v.Indices) {
+		return nil, fmt.Errorf("End index %d out of range for GridView with %d rows.\n", end, len(v.Indices))
+	}
+	return &MShellGridView{Source: v.Source, Indices: v.Indices[:end]}, nil
+}
+
+func (v *MShellGridView) Slice(startInc int, endExc int) (MShellObject, error) {
+	if startInc < 0 {
+		startInc = len(v.Indices) + startInc
+	}
+	if endExc < 0 {
+		endExc = len(v.Indices) + endExc
+	}
+	if startInc < 0 || endExc > len(v.Indices) || startInc > endExc {
+		return nil, fmt.Errorf("Slice [%d:%d) out of range for GridView with %d rows.\n", startInc, endExc, len(v.Indices))
+	}
+	return &MShellGridView{Source: v.Source, Indices: v.Indices[startInc:endExc]}, nil
+}
+
+func (v *MShellGridView) ToJson() string {
+	var sb strings.Builder
+	sb.WriteString("[")
+	for i, idx := range v.Indices {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		row := &MShellGridRow{Grid: v.Source, RowIndex: idx}
+		sb.WriteString(row.ToJson())
+	}
+	sb.WriteString("]")
+	return sb.String()
+}
+
+func (v *MShellGridView) ToString() string {
+	return v.DebugString()
+}
+
+func (v *MShellGridView) IndexErrStr() string {
+	return fmt.Sprintf(" GridView with %d rows", len(v.Indices))
+}
+
+func (v *MShellGridView) Concat(other MShellObject) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot concatenate a GridView. Use compact first.\n")
+}
+
+func (v *MShellGridView) Equals(other MShellObject) (bool, error) {
+	return false, fmt.Errorf("Equality currently not defined for grid views.\n")
+}
+
+func (v *MShellGridView) CastString() (string, error) {
+	return "", fmt.Errorf("Cannot cast a GridView to a string.\n")
+}
+
+// }}}
+
+// MShellGridRow - Lazy row view (does not allocate per-row objects)
+type MShellGridRow struct {
+	Grid     *MShellGrid  // Parent grid reference
+	RowIndex int          // Row index within grid
+}
+
+// Get returns the value at the given column name
+func (r *MShellGridRow) Get(colName string) (MShellObject, bool) {
+	col := r.Grid.GetColumn(colName)
+	if col == nil {
+		return nil, false
+	}
+	return col.Get(r.RowIndex), true
+}
+
+// ToDict materializes the row to an actual MShellDict
+func (r *MShellGridRow) ToDict() *MShellDict {
+	d := NewDict()
+	for _, col := range r.Grid.Columns {
+		d.Items[col.Name] = col.Get(r.RowIndex)
+	}
+	return d
+}
+
+// MShellGridRow MShellObject interface {{{
+
+func (r *MShellGridRow) TypeName() string {
+	return "GridRow"
+}
+
+func (r *MShellGridRow) IsCommandLineable() bool {
+	return false
+}
+
+func (r *MShellGridRow) IsNumeric() bool {
+	return false
+}
+
+func (r *MShellGridRow) FloatNumeric() float64 {
+	return 0
+}
+
+func (r *MShellGridRow) CommandLine() string {
+	return ""
+}
+
+func (r *MShellGridRow) DebugString() string {
+	d := r.ToDict()
+	return fmt.Sprintf("GridRow%s", d.DebugString())
+}
+
+func (r *MShellGridRow) Index(index int) (MShellObject, error) {
+	if index < 0 {
+		index = len(r.Grid.Columns) + index
+	}
+	if index < 0 || index >= len(r.Grid.Columns) {
+		return nil, fmt.Errorf("Index %d out of range for GridRow with %d columns.\n", index, len(r.Grid.Columns))
+	}
+	return r.Grid.Columns[index].Get(r.RowIndex), nil
+}
+
+func (r *MShellGridRow) SliceStart(startInclusive int) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot slice a GridRow.\n")
+}
+
+func (r *MShellGridRow) SliceEnd(end int) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot slice a GridRow.\n")
+}
+
+func (r *MShellGridRow) Slice(startInc int, endExc int) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot slice a GridRow.\n")
+}
+
+func (r *MShellGridRow) ToJson() string {
+	var sb strings.Builder
+	sb.WriteString("{")
+	for i, col := range r.Grid.Columns {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		keyEnc, _ := json.Marshal(col.Name)
+		sb.WriteString(fmt.Sprintf("%s: %s", string(keyEnc), col.Get(r.RowIndex).ToJson()))
+	}
+	sb.WriteString("}")
+	return sb.String()
+}
+
+func (r *MShellGridRow) ToString() string {
+	return r.DebugString()
+}
+
+func (r *MShellGridRow) IndexErrStr() string {
+	return ""
+}
+
+func (r *MShellGridRow) Concat(other MShellObject) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot concatenate a GridRow.\n")
+}
+
+func (r *MShellGridRow) Equals(other MShellObject) (bool, error) {
+	return false, fmt.Errorf("Equality currently not defined for grid rows.\n")
+}
+
+func (r *MShellGridRow) CastString() (string, error) {
+	return "", fmt.Errorf("Cannot cast a GridRow to a string.\n")
+}
+
+// }}}
+
+// }}}
