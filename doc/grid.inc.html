@@ -13,6 +13,7 @@ Grids are ideal for working with tabular data, time series analysis, and data tr
     <li><a href="#grid-view">GridView</a></li>
     <li><a href="#grid-row">GridRow</a></li>
     <li><a href="#grid-iteration">Iteration Operations</a></li>
+    <li><a href="#grid-joins">Joins</a></li>
 </ul>
 
 <h1 id="grid-overview">Overview <a class="section-link" href="#grid-overview" aria-label="Permalink">§</a> <a class="back-to-top" href="#grid-top">Back to top</a></h1>
@@ -186,6 +187,21 @@ Each column can have optional metadata specified as a dictionary immediately aft
             <td><code>len</code></td>
             <td>Returns the number of rows in a Grid, GridView, or columns in a GridRow.</td>
             <td><code>(Grid|GridView|GridRow -- <span class="sig-type sig-type-int">int</span>)</code></td>
+        </tr>
+        <tr id="func-join-grid">
+            <td><code>join</code></td>
+            <td>Inner equi-join of two Grids or GridViews using key extractor quotations on each side. Polymorphic with the string-join built-in: when the top of the stack is a quotation, the grid form is used. See <a href="#grid-joins">Joins</a>.</td>
+            <td><code>(Grid|GridView Grid|GridView (<span class="sig-type sig-type-gridrow">GridRow</span> -- a) (<span class="sig-type sig-type-gridrow">GridRow</span> -- a) -- Grid)</code></td>
+        </tr>
+        <tr id="func-leftjoin-grid">
+            <td><code>leftJoin</code></td>
+            <td>Left outer equi-join. Unmatched left rows appear with right-side cells filled with <code>none</code>.</td>
+            <td><code>(Grid|GridView Grid|GridView (<span class="sig-type sig-type-gridrow">GridRow</span> -- a) (<span class="sig-type sig-type-gridrow">GridRow</span> -- a) -- Grid)</code></td>
+        </tr>
+        <tr id="func-outerjoin-grid">
+            <td><code>outerJoin</code></td>
+            <td>Full outer equi-join. Unmatched rows from either side appear with the absent side filled with <code>none</code>.</td>
+            <td><code>(Grid|GridView Grid|GridView (<span class="sig-type sig-type-gridrow">GridRow</span> -- a) (<span class="sig-type sig-type-gridrow">GridRow</span> -- a) -- Grid)</code></td>
         </tr>
     </tbody>
 </table>
@@ -364,3 +380,83 @@ GridRows also serialize as JSON objects:
 <code><span class="mshellGRID_OPEN">[|</span> <span class="mshellLITERAL">x</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">y</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">1</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">2</span> <span class="mshellGRID_CLOSE">|]</span> <span class="mshellINDEXER">:0:</span> <span class="mshellLITERAL">toJson</span>
 <span class="mshellLINECOMMENT"># {"x": 1, "y": 2}</span></code>
 </pre>
+
+<h1 id="grid-joins">Joins <a class="section-link" href="#grid-joins" aria-label="Permalink">§</a> <a class="back-to-top" href="#grid-top">Back to top</a></h1>
+
+<p>
+<code>join</code>, <code>leftJoin</code>, and <code>outerJoin</code> combine two grids by an equality key.
+The key is computed by a quotation on each side that takes a <code>GridRow</code> and returns a single value.
+This makes renamed keys, derived keys, and case-insensitive matches all expressible without renaming columns first.
+</p>
+
+<p>
+Stack signature, top to bottom on entry: right key extractor, left key extractor, right grid, left grid.
+Both grid arguments accept a <code>Grid</code> or <code>GridView</code>.
+</p>
+
+<h2>Inner join</h2>
+
+<pre>
+<code><span class="mshellGRID_OPEN">[|</span> <span class="mshellLITERAL">id</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">name</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">1</span><span class="mshellCOMMA">,</span> <span class="mshellSTRING">"Alice"</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">2</span><span class="mshellCOMMA">,</span> <span class="mshellSTRING">"Bob"</span> <span class="mshellGRID_CLOSE">|]</span> <span class="mshellVARSTORE">l!</span>
+<span class="mshellGRID_OPEN">[|</span> <span class="mshellLITERAL">uid</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">score</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">1</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">90</span><span class="mshellEXECUTE">;</span> <span class="mshellINTEGER">2</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">80</span> <span class="mshellGRID_CLOSE">|]</span> <span class="mshellVARSTORE">r!</span>
+<span class="mshellVARRETRIEVE">@l</span> <span class="mshellVARRETRIEVE">@r</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">id</span><span class="mshellQUESTION">?</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">uid</span><span class="mshellQUESTION">?</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">join</span></code>
+</pre>
+
+<h2>Compound key</h2>
+
+<p>
+Return a list to use a tuple key.
+Use <code>2tuple</code> to pack two stack values into a list.
+Both extractors must produce keys with the same shape.
+</p>
+
+<pre>
+<code><span class="mshellVARRETRIEVE">@trades</span> <span class="mshellVARRETRIEVE">@positions</span>
+   <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">dup</span> <span class="mshellCOLON">:</span><span class="mshellLITERAL">date</span><span class="mshellQUESTION">?</span> <span class="mshellLITERAL">swap</span> <span class="mshellCOLON">:</span><span class="mshellLITERAL">region</span><span class="mshellQUESTION">?</span> <span class="mshellLITERAL">2tuple</span><span class="mshellRIGHT_PAREN">)</span>
+   <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">dup</span> <span class="mshellCOLON">:</span><span class="mshellLITERAL">dt</span><span class="mshellQUESTION">?</span> <span class="mshellLITERAL">swap</span> <span class="mshellCOLON">:</span><span class="mshellLITERAL">rgn</span><span class="mshellQUESTION">?</span> <span class="mshellLITERAL">2tuple</span><span class="mshellRIGHT_PAREN">)</span>
+   <span class="mshellLITERAL">join</span></code>
+</pre>
+
+<h2>Renamed key</h2>
+
+<pre>
+<code><span class="mshellVARRETRIEVE">@orders</span> <span class="mshellVARRETRIEVE">@customers</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">customer_id</span><span class="mshellQUESTION">?</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">id</span><span class="mshellQUESTION">?</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">leftJoin</span></code>
+</pre>
+
+<h2>Outer join</h2>
+
+<p>
+Unmatched cells are <code>none</code>.
+Affected columns fall back to generic storage; this is intentional and documented.
+</p>
+
+<pre>
+<code><span class="mshellVARRETRIEVE">@l</span> <span class="mshellVARRETRIEVE">@r</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">id</span><span class="mshellQUESTION">?</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">uid</span><span class="mshellQUESTION">?</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">outerJoin</span></code>
+</pre>
+
+<h2>Semantics</h2>
+
+<ul>
+   <li><strong>Equality.</strong> Type-aware, matching <code>groupBy</code>: an <code>int</code> 1 does not match a <code>float</code> 1.0 unless both extractors normalize.</li>
+   <li><strong>Null keys.</strong> Quotation results that are <code>none</code> never match anything (SQL <code>NULL ≠ NULL</code>). Such rows are dropped from inner joins, and appear as orphans in left and outer joins.</li>
+   <li><strong>Allowed key values.</strong> Any non-container scalar, or a flat list of scalars (treated as a tuple key). Nested lists, dicts, grids, or other container shapes raise an error.</li>
+   <li><strong>Output column order.</strong> All left columns first in their original order, then all right columns. Column-level metadata is preserved per-column. The output grid carries the left grid's metadata.</li>
+   <li><strong>Column collisions.</strong> If any column name appears in both grids the join errors before doing any work. Use <code>select</code>, <code>exclude</code>, or <code>gridRenameCol</code> first. Key columns are not auto-deduplicated because the extractors are opaque.</li>
+   <li><strong>Multi-match.</strong> When duplicate keys exist on both sides, every left match is paired with every right match (Cartesian within the bucket).</li>
+   <li><strong>Row order.</strong> Inner and left joins emit rows in left-grid order. Outer joins append right-grid orphans after, in right-grid order.</li>
+</ul>
+
+<h2>Cross product idiom</h2>
+
+<p>
+The extractor signature can express a Cartesian product by collapsing both sides to a single bucket:
+</p>
+
+<pre>
+<code><span class="mshellVARRETRIEVE">@left</span> <span class="mshellVARRETRIEVE">@right</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">drop</span> <span class="mshellINTEGER">1</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">drop</span> <span class="mshellINTEGER">1</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">join</span></code>
+</pre>
+
+<p>
+Combine with <code>filter</code> for arbitrary predicate joins.
+A dedicated <code>crossJoin</code> built-in may be added later as a clarity shortcut.
+</p>

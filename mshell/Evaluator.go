@@ -1947,6 +1947,207 @@ func parseGridGroupByAggSpecs(aggList *MShellList) ([]gridGroupByAggSpec, error)
 	return specs, nil
 }
 
+type joinKind int
+
+const (
+	joinInner joinKind = iota
+	joinLeft
+	joinOuter
+)
+
+// evaluatedJoinKey converts a quotation result into a stable string key.
+// Returns (key, isNone, err). isNone=true means the row should not match anything,
+// matching SQL NULL ≠ NULL semantics. A list is treated as a tuple key; any none
+// component makes the whole compound key isNone.
+func evaluatedJoinKey(obj MShellObject) (string, bool, error) {
+	if obj == nil {
+		return "", true, nil
+	}
+	if maybe, ok := obj.(*Maybe); ok {
+		if maybe.obj == nil {
+			return "", true, nil
+		}
+		return evaluatedJoinKey(maybe.obj)
+	}
+	if list, ok := obj.(*MShellList); ok {
+		parts := make([]string, len(list.Items))
+		for i, item := range list.Items {
+			if _, isList := item.(*MShellList); isList {
+				return "", false, fmt.Errorf("compound join key may not contain nested lists")
+			}
+			partStr, isNone, err := evaluatedJoinKey(item)
+			if err != nil {
+				return "", false, err
+			}
+			if isNone {
+				return "", true, nil
+			}
+			parts[i] = partStr
+		}
+		return "list:[" + strings.Join(parts, "\x1f") + "]", false, nil
+	}
+	if isContainerType(obj) {
+		return "", false, fmt.Errorf("join key may not be a %s", obj.TypeName())
+	}
+	part, err := typedGridGroupKeyPart(obj)
+	if err != nil {
+		return "", false, err
+	}
+	return part, false, nil
+}
+
+// evaluateJoinKeys runs the key extractor quotation against every row in the source
+// view and returns parallel slices of key strings and isNone flags.
+func (state *EvalState) evaluateJoinKeys(t Token, side string, sourceGrid *MShellGrid, sourceIndices []int, quote *MShellQuotation, context ExecuteContext, definitions []MShellDefinition) ([]string, []bool, EvalResult) {
+	keys := make([]string, len(sourceIndices))
+	isNone := make([]bool, len(sourceIndices))
+	for i, srcIdx := range sourceIndices {
+		row := &MShellGridRow{Grid: sourceGrid, RowIndex: srcIdx}
+		var qStack MShellStack = []MShellObject{row}
+		result, err := state.EvaluateQuote(*quote, &qStack, context, definitions)
+		if err != nil {
+			return nil, nil, state.FailWithMessage(err.Error())
+		}
+		if result.ShouldPassResultUpStack() {
+			return nil, nil, result
+		}
+		if len(qStack) != 1 {
+			return nil, nil, state.FailWithMessage(fmt.Sprintf("%d:%d: %s %s key quotation must return exactly one value, found %d values.\n", t.Line, t.Column, t.Lexeme, side, len(qStack)))
+		}
+		keyVal, _ := qStack.Pop()
+		keyStr, none, err := evaluatedJoinKey(keyVal)
+		if err != nil {
+			return nil, nil, state.FailWithMessage(fmt.Sprintf("%d:%d: %s %s key error: %s.\n", t.Line, t.Column, t.Lexeme, side, err.Error()))
+		}
+		keys[i] = keyStr
+		isNone[i] = none
+	}
+	return keys, isNone, SimpleSuccess()
+}
+
+// executeGridJoin pops 4 items from stack (leftGrid rightGrid leftQuote rightQuote)
+// and pushes the joined Grid. SQL-style NULL semantics: rows whose extractor returns
+// none never match anything, but appear as orphans in left/outer joins.
+func (state *EvalState) executeGridJoin(t Token, stack *MShellStack, kind joinKind, context ExecuteContext, definitions []MShellDefinition) EvalResult {
+	obj1, obj2, obj3, obj4, err := stack.Pop4(t)
+	if err != nil {
+		return state.FailWithMessage(err.Error())
+	}
+
+	rightQuote, ok := obj1.(*MShellQuotation)
+	if !ok {
+		return state.FailWithMessage(fmt.Sprintf("%d:%d: %s requires a right key quotation, got %s.\n", t.Line, t.Column, t.Lexeme, obj1.TypeName()))
+	}
+	leftQuote, ok := obj2.(*MShellQuotation)
+	if !ok {
+		return state.FailWithMessage(fmt.Sprintf("%d:%d: %s requires a left key quotation, got %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName()))
+	}
+
+	leftGrid, leftIndices, err := getGridSourceAndIndices(obj4)
+	if err != nil {
+		return state.FailWithMessage(fmt.Sprintf("%d:%d: %s requires a Grid or GridView for the left side, got %s.\n", t.Line, t.Column, t.Lexeme, obj4.TypeName()))
+	}
+	rightGrid, rightIndices, err := getGridSourceAndIndices(obj3)
+	if err != nil {
+		return state.FailWithMessage(fmt.Sprintf("%d:%d: %s requires a Grid or GridView for the right side, got %s.\n", t.Line, t.Column, t.Lexeme, obj3.TypeName()))
+	}
+
+	rightColNameSet := make(map[string]struct{}, len(rightGrid.Columns))
+	for _, col := range rightGrid.Columns {
+		rightColNameSet[col.Name] = struct{}{}
+	}
+	for _, col := range leftGrid.Columns {
+		if _, exists := rightColNameSet[col.Name]; exists {
+			return state.FailWithMessage(fmt.Sprintf("%d:%d: %s: column '%s' appears in both grids; rename or exclude before joining.\n", t.Line, t.Column, t.Lexeme, col.Name))
+		}
+	}
+
+	rightKeys, rightKeyIsNone, keyResult := state.evaluateJoinKeys(t, "right", rightGrid, rightIndices, rightQuote, context, definitions)
+	if !keyResult.Success || keyResult.ShouldPassResultUpStack() {
+		return keyResult
+	}
+
+	buildMap := make(map[string][]int, len(rightKeys))
+	for i, key := range rightKeys {
+		if rightKeyIsNone[i] {
+			continue
+		}
+		buildMap[key] = append(buildMap[key], i)
+	}
+
+	leftKeys, leftKeyIsNone, keyResult := state.evaluateJoinKeys(t, "left", leftGrid, leftIndices, leftQuote, context, definitions)
+	if !keyResult.Success || keyResult.ShouldPassResultUpStack() {
+		return keyResult
+	}
+
+	type joinPair struct {
+		leftLocalIdx  int
+		rightLocalIdx int
+	}
+	pairs := make([]joinPair, 0, len(leftIndices))
+	matchedRight := make([]bool, len(rightIndices))
+
+	for li := range leftIndices {
+		var matches []int
+		if !leftKeyIsNone[li] {
+			matches = buildMap[leftKeys[li]]
+		}
+		if len(matches) > 0 {
+			for _, ri := range matches {
+				pairs = append(pairs, joinPair{leftLocalIdx: li, rightLocalIdx: ri})
+				matchedRight[ri] = true
+			}
+		} else if kind == joinLeft || kind == joinOuter {
+			pairs = append(pairs, joinPair{leftLocalIdx: li, rightLocalIdx: -1})
+		}
+	}
+
+	if kind == joinOuter {
+		for ri := range rightIndices {
+			if !matchedRight[ri] {
+				pairs = append(pairs, joinPair{leftLocalIdx: -1, rightLocalIdx: ri})
+			}
+		}
+	}
+
+	newGrid := NewGrid()
+	newGrid.Meta = leftGrid.Meta
+	newGrid.RowCount = len(pairs)
+
+	for _, leftCol := range leftGrid.Columns {
+		newCol := NewGridColumn(leftCol.Name, newGrid.RowCount)
+		newCol.Meta = leftCol.Meta
+		for outIdx, p := range pairs {
+			if p.leftLocalIdx == -1 {
+				newCol.GenericData[outIdx] = &Maybe{obj: nil}
+			} else {
+				newCol.GenericData[outIdx] = leftCol.Get(leftIndices[p.leftLocalIdx])
+			}
+		}
+		newGrid.AddColumn(newCol)
+	}
+
+	for _, rightCol := range rightGrid.Columns {
+		newCol := NewGridColumn(rightCol.Name, newGrid.RowCount)
+		newCol.Meta = rightCol.Meta
+		for outIdx, p := range pairs {
+			if p.rightLocalIdx == -1 {
+				newCol.GenericData[outIdx] = &Maybe{obj: nil}
+			} else {
+				newCol.GenericData[outIdx] = rightCol.Get(rightIndices[p.rightLocalIdx])
+			}
+		}
+		newGrid.AddColumn(newCol)
+	}
+
+	for _, col := range newGrid.Columns {
+		optimizeColumnStorage(col)
+	}
+
+	stack.Push(newGrid)
+	return SimpleSuccess()
+}
+
 func (state *EvalState) evaluateItems(objects []MShellParseItem, stack *MShellStack, context ExecuteContext, definitions []MShellDefinition, callStackItem CallStackItem) EvalResult {
 	// Defer popping the call stack
 	if callStackItem.MShellParseItem != nil {
@@ -2745,6 +2946,15 @@ MainLoop:
 
 					stack.Push(newList)
 				} else if t.Lexeme == "join" {
+					if len(*stack) >= 1 {
+						if _, isQuote := (*stack)[len(*stack)-1].(*MShellQuotation); isQuote {
+							result := state.executeGridJoin(t, stack, joinInner, context, definitions)
+							if result.ShouldPassResultUpStack() {
+								return result
+							}
+							continue MainLoop
+						}
+					}
 					// This is a string join function
 					delimiter, err := stack.Pop()
 					if err != nil {
@@ -5149,6 +5359,16 @@ MainLoop:
 					}
 
 					stack.Push(newGrid)
+				} else if t.Lexeme == "leftJoin" {
+					result := state.executeGridJoin(t, stack, joinLeft, context, definitions)
+					if result.ShouldPassResultUpStack() {
+						return result
+					}
+				} else if t.Lexeme == "outerJoin" {
+					result := state.executeGridJoin(t, stack, joinOuter, context, definitions)
+					if result.ShouldPassResultUpStack() {
+						return result
+					}
 				} else if t.Lexeme == "reMatch" {
 					// Match a regex against a string
 					obj1, obj2, err := stack.Pop2(t)

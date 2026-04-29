@@ -35,6 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `groupBy` - group grids by key columns with multiple aggregation specs, and preserve existing list grouping behavior
   - `updateCol` - mutate a grid column by applying a quotation to each cell
   - `toGrid` - build a grid from `[[str]]` with headers on the first row
+  - `join` (grid form) - inner equi-join of two grids via key-extractor quotations; polymorphic with the existing string `join`
+  - `leftJoin` - left outer equi-join of two grids
+  - `outerJoin` - full outer equi-join of two grids
   - `filter` - now a built-in that works on both Lists and Grids/GridViews
   - `each` - now a built-in that works on both Lists and Grids/GridViews
   - `toDict` - convert a GridRow to a dictionary

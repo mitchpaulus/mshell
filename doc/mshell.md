@@ -809,6 +809,15 @@ end wl # Output: 11
 - `derive`: Append a derived column to a `Grid` or `GridView`. The metadata dictionary is attached to the new column. `(Grid|GridView str dict (GridRow -- any) -- Grid)`
 - `groupBy`: Group rows by key columns and return a summarized `Grid`. `(Grid|GridView [str]:keys [dict]:aggs -- Grid)`
 - `updateCol`: Mutate a column in a `Grid` by applying a quotation to each cell. The quotation must return exactly one non-container value. `(Grid str (any -- any) -- Grid)`
+- `join`: Inner equi-join of two grids using key extractor quotations on each side.
+  `join` is polymorphic with the string-join built-in: when the top of the stack is a quotation, the grid form is used.
+  Keys must be a non-container scalar or a flat list of scalars (treated as a tuple key).
+  Quotation results that are `none` never match anything (SQL `NULL ≠ NULL` semantics).
+  Output columns are all left columns followed by all right columns; the output grid carries the left grid's metadata.
+  Column-name collisions on non-key columns raise an error before any work — resolve with `select`, `exclude`, or `gridRenameCol` first.
+  `(Grid|GridView Grid|GridView (GridRow -- a) (GridRow -- a) -- Grid)`
+- `leftJoin`: Left outer equi-join. Same shape as `join`; unmatched left rows are emitted with right-side cells filled with `none`. `(Grid|GridView Grid|GridView (GridRow -- a) (GridRow -- a) -- Grid)`
+- `outerJoin`: Full outer equi-join. Same shape as `join`; unmatched rows from either side appear with the absent side filled with `none`. Affected columns fall back to generic storage. `(Grid|GridView Grid|GridView (GridRow -- a) (GridRow -- a) -- Grid)`
 
 Grid `groupBy` aggregation specs are dictionaries.
 Each spec requires an `agg` quotation and may include `name` and `meta`.
