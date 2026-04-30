@@ -5065,6 +5065,37 @@ MainLoop:
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot extract column from a %s.\n", t.Line, t.Column, obj2.TypeName()))
 					}
+				} else if t.Lexeme == "gridValues" {
+					// Extract grid values as row-major list of lists, without headers.
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'gridValues' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					switch objTyped := obj.(type) {
+					case *MShellGrid:
+						newOuterList := NewList(objTyped.RowCount)
+						for rowIdx := 0; rowIdx < objTyped.RowCount; rowIdx++ {
+							newInnerList := NewList(len(objTyped.Columns))
+							for colIdx, col := range objTyped.Columns {
+								newInnerList.Items[colIdx] = col.Get(rowIdx)
+							}
+							newOuterList.Items[rowIdx] = newInnerList
+						}
+						stack.Push(newOuterList)
+					case *MShellGridView:
+						newOuterList := NewList(len(objTyped.Indices))
+						for rowIdx, sourceRowIdx := range objTyped.Indices {
+							newInnerList := NewList(len(objTyped.Source.Columns))
+							for colIdx, col := range objTyped.Source.Columns {
+								newInnerList.Items[colIdx] = col.Get(sourceRowIdx)
+							}
+							newOuterList.Items[rowIdx] = newInnerList
+						}
+						stack.Push(newOuterList)
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot extract values from a %s.\n", t.Line, t.Column, obj.TypeName()))
+					}
 				} else if t.Lexeme == "toDict" {
 					// Convert a GridRow to a dictionary.
 					obj, err := stack.Pop()

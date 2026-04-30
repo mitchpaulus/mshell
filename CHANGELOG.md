@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `gridRemoveCol` - remove a column
   - `gridRenameCol` - rename a column
   - `gridSetCell` - set a single cell value
+  - `gridValues` - extract grid values as row-major lists without headers
   - `gridCompact` - materialize a GridView to a Grid
   - `select` - project a grid to a specific ordered set of columns
   - `exclude` - drop a set of columns from a grid
