@@ -1,0 +1,33 @@
+#!/usr/bin/env mshell
+# Driver: run all impl x scenario combos under hyperfine.
+# Run from the benchmark directory (the one containing this file).
+
+`test_dataset.csv` fileExists not if
+    "test_dataset.csv missing -- run: uv run gen_data.py" wle
+    1 exit
+end
+
+`out/pandas` mkdirp
+`out/polars` mkdirp
+`out/mshell` mkdirp
+`results` mkdirp
+
+# Pick up MSHELL from the environment, otherwise assume "mshell" is on PATH.
+$MSHELL? if $MSHELL else "msh" end mshellBin!
+
+[ "load" "filter" "groupby" "join" ] (
+    s!
+    $"=== {@s} ===" wl
+    [hyperfine
+        --warmup 2
+        --runs 10
+        --export-markdown $"results/{@s}.md"
+        --export-json $"results/{@s}.json"
+        -n $"pandas/{@s}"  $"uv run pandas/{@s}.py"
+        -n $"polars/{@s}"  $"uv run polars/{@s}.py"
+        -n $"mshell/{@s}"  $"{@mshellBin} mshell/{@s}.msh"
+    ]!
+) each
+
+"" wl
+"Results in results/. Run verify.msh to compare fingerprints." wl

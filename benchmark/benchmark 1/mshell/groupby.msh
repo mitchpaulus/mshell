@@ -1,0 +1,29 @@
+# mshell: read CSV, group by category aggregating count + floor-sum of value.
+
+`test_dataset.csv` parseCsv toGrid
+"value" (toFloat?) updateCol g!
+
+@g
+["category"]
+[
+    { "name": "count", "agg": (gridRows) }
+    { "name": "sum_value_floor", "agg": ("value" gridCol (floor) map sum) }
+]
+groupBy agg!
+
+# Iterate the result grid in canonical (sorted) category order.
+"" lines!
+[ "A" "B" "C" "D" ] (
+    cat!
+    @agg (:category? @cat =) filter row!
+    @row gridRows 0 = if
+        $"count_{@cat}\t0\nsum_value_floor_{@cat}\t0\n" appended!
+    else
+        @row "count" gridCol :0: c!
+        @row "sum_value_floor" gridCol :0: s!
+        $"count_{@cat}\t{@c}\nsum_value_floor_{@cat}\t{@s}\n" appended!
+    end
+    @lines @appended + lines!
+) each
+
+@lines "out/mshell/groupby.txt" writeFile
