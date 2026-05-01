@@ -1,0 +1,33 @@
+#!/usr/bin/env mshell
+# Compare fingerprint files across impls; one line of status per scenario.
+
+0 fails!
+[ "load" "filter" "groupby" "join" ] (
+    s!
+    $"out/pandas/{@s}.txt" pPath!
+    $"out/polars/{@s}.txt" qPath!
+    $"out/mshell/{@s}.txt" mPath!
+
+    @pPath fileExists @qPath fileExists and @mPath fileExists and not if
+        $"[{@s}] SKIP (missing output)" wl
+    else
+        @pPath readFile p!
+        @qPath readFile q!
+        @mPath readFile m!
+
+        @p @q = @p @m = and if
+            $"[{@s}] OK" wl
+        else
+            $"[{@s}] MISMATCH" wl
+            "--- pandas ---" wl
+            @p w
+            "--- polars ---" wl
+            @q w
+            "--- mshell ---" wl
+            @m w
+            @fails 1 + fails!
+        end
+    end
+) each
+
+@fails exit
