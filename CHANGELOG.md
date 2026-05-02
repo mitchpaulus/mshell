@@ -50,6 +50,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `toCsv`
   - `linearSearchIndex`
   - `parseExcel`
+  - `sortBy` - stable ascending sort of a Grid or GridView by one or more columns; bare-string and list-of-strings forms; `none` cells sort last; cross-type values in a generic column error
+  - `sortByCmp` extended to accept Grid or GridView; the comparator receives two `GridRow`s
+  - `reverse` is now a built-in and accepts list, Grid, or GridView (the prior std lib `reverse` definition is removed; behavior on lists is unchanged)
 
 ### Changed
 
