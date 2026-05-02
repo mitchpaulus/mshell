@@ -205,20 +205,6 @@ def chomp (str -- str)
     end
 end
 
-# reverse ([T*]|str -- [T*]|str)
-def reverse ([T] -- [T])
-    dup len 1 - reverse-idx! # Set Idx
-    [] # list accum
-    (
-        @reverse-idx 0 < if
-            break
-        end
-        over @reverse-idx nth append # Get current item
-        @reverse-idx 1 - reverse-idx! # dec index
-    ) loop
-    nip # Drop original list
-end
-
 # abs (int|float -- int|float)
 def abs (float -- float)
     dup 0 < if -1 * end

@@ -1763,6 +1763,238 @@ func projectGridColumns(sourceGrid *MShellGrid, sourceIndices []int, colNames []
 	return newGrid
 }
 
+// projectGridAllColumns builds a new Grid containing every column from
+// sourceGrid, with rows materialized from the given source indices in order.
+func projectGridAllColumns(sourceGrid *MShellGrid, sourceIndices []int) *MShellGrid {
+	colNames := make([]string, len(sourceGrid.Columns))
+	for i, col := range sourceGrid.Columns {
+		colNames[i] = col.Name
+	}
+	return projectGridColumns(sourceGrid, sourceIndices, colNames)
+}
+
+func isNoneCell(v MShellObject) bool {
+	if v == nil {
+		return true
+	}
+	if m, ok := v.(*Maybe); ok {
+		return m.IsNone()
+	}
+	if m, ok := v.(Maybe); ok {
+		return m.IsNone()
+	}
+	return false
+}
+
+func unwrapMaybeCell(v MShellObject) MShellObject {
+	if m, ok := v.(*Maybe); ok {
+		return m.obj
+	}
+	if m, ok := v.(Maybe); ok {
+		return m.obj
+	}
+	return v
+}
+
+// compareGridGenericCells compares two values from a generic column under
+// sortBy semantics: `none` last, error on cross-type. Maybe wrappers are
+// unwrapped so a Just(x) compares as x.
+func compareGridGenericCells(colName string, a, b MShellObject) (int, error) {
+	aNone := isNoneCell(a)
+	bNone := isNoneCell(b)
+	if aNone && bNone {
+		return 0, nil
+	}
+	if aNone {
+		return 1, nil
+	}
+	if bNone {
+		return -1, nil
+	}
+	a = unwrapMaybeCell(a)
+	b = unwrapMaybeCell(b)
+
+	switch av := a.(type) {
+	case MShellInt:
+		if bv, ok := b.(MShellInt); ok {
+			if av.Value < bv.Value {
+				return -1, nil
+			}
+			if av.Value > bv.Value {
+				return 1, nil
+			}
+			return 0, nil
+		}
+	case MShellFloat:
+		if bv, ok := b.(MShellFloat); ok {
+			return compareFloatsNoneLast(av.Value, bv.Value), nil
+		}
+	case MShellString:
+		if bv, ok := b.(MShellString); ok {
+			return strings.Compare(av.Content, bv.Content), nil
+		}
+	case *MShellDateTime:
+		if bv, ok := b.(*MShellDateTime); ok {
+			if av.Time.Before(bv.Time) {
+				return -1, nil
+			}
+			if av.Time.After(bv.Time) {
+				return 1, nil
+			}
+			return 0, nil
+		}
+	case MShellBool:
+		if bv, ok := b.(MShellBool); ok {
+			if !av.Value && bv.Value {
+				return -1, nil
+			}
+			if av.Value && !bv.Value {
+				return 1, nil
+			}
+			return 0, nil
+		}
+	}
+	return 0, fmt.Errorf("Cannot sort column '%s': cannot compare %s and %s.", colName, a.TypeName(), b.TypeName())
+}
+
+// compareFloatsNoneLast compares two floats with NaN sorted last (mirroring
+// `none`-last semantics).
+func compareFloatsNoneLast(a, b float64) int {
+	aNaN := math.IsNaN(a)
+	bNaN := math.IsNaN(b)
+	if aNaN && bNaN {
+		return 0
+	}
+	if aNaN {
+		return 1
+	}
+	if bNaN {
+		return -1
+	}
+	if a < b {
+		return -1
+	}
+	if a > b {
+		return 1
+	}
+	return 0
+}
+
+// mergeSortMShellByQuotation does a stable merge sort of items using a
+// quotation that pops two values and pushes a comparison int (-1 / 0 / 1).
+// The returned slice may be either the original input slice or a freshly
+// allocated buffer; callers must use the return value rather than the input.
+func (state *EvalState) mergeSortMShellByQuotation(t Token, items []MShellObject, quotation *MShellQuotation, context ExecuteContext, definitions []MShellDefinition, label string) ([]MShellObject, EvalResult) {
+	n := len(items)
+	if n < 2 {
+		return items, SimpleSuccess()
+	}
+
+	array1 := items
+	array2 := make([]MShellObject, n)
+
+	curr_array := 0
+	sorted_array := array1
+	work_array := array2
+
+	cmpStack := MShellStack{}
+
+	for width := 1; width < n; width = 2 * width {
+		for i := 0; i < n; i = i + 2*width {
+			iLeftStart := i
+			iRightStart := min(i+width, n)
+			iEnd := min(i+2*width, n)
+
+			leftIndex := iLeftStart
+			rightIndex := iRightStart
+
+			for k := iLeftStart; k < iEnd; k++ {
+				if leftIndex < iRightStart {
+					if rightIndex >= iEnd {
+						work_array[k] = sorted_array[leftIndex]
+						leftIndex++
+					} else {
+						cmpStack.Clear()
+						cmpStack.Push(sorted_array[leftIndex])
+						cmpStack.Push(sorted_array[rightIndex])
+
+						result, err := state.EvaluateQuote(*quotation, &cmpStack, context, definitions)
+						if err != nil {
+							return nil, state.FailWithMessage(err.Error())
+						}
+						if result.ShouldPassResultUpStack() {
+							return nil, result
+						}
+
+						cmpResult, err := cmpStack.Pop()
+						if err != nil {
+							return nil, state.FailWithMessage(fmt.Sprintf("%d:%d: The function in '%s' did not return a value, found an empty stack.\n", t.Line, t.Column, label))
+						}
+						cmpInt, ok := cmpResult.(MShellInt)
+						if !ok {
+							return nil, state.FailWithMessage(fmt.Sprintf("%d:%d: The function in '%s' did not return an integer, found a %s (%s).\n", t.Line, t.Column, label, cmpResult.TypeName(), cmpResult.DebugString()))
+						}
+
+						if cmpInt.Value <= 0 {
+							work_array[k] = sorted_array[leftIndex]
+							leftIndex++
+						} else {
+							work_array[k] = sorted_array[rightIndex]
+							rightIndex++
+						}
+					}
+				} else {
+					work_array[k] = sorted_array[rightIndex]
+					rightIndex++
+				}
+			}
+		}
+
+		curr_array = 1 - curr_array
+		if curr_array == 0 {
+			sorted_array = array1
+			work_array = array2
+		} else {
+			sorted_array = array2
+			work_array = array1
+		}
+	}
+
+	return sorted_array, SimpleSuccess()
+}
+
+// compareGridCellsForSort compares two cells from the same column under sortBy
+// semantics. Returns -1, 0, or 1, or an error on incompatible types in a
+// generic column.
+func compareGridCellsForSort(col *GridColumn, idxA, idxB int) (int, error) {
+	switch col.ColType {
+	case COL_INT:
+		a, b := col.IntData[idxA], col.IntData[idxB]
+		if a < b {
+			return -1, nil
+		}
+		if a > b {
+			return 1, nil
+		}
+		return 0, nil
+	case COL_FLOAT:
+		return compareFloatsNoneLast(col.FloatData[idxA], col.FloatData[idxB]), nil
+	case COL_STRING:
+		return strings.Compare(col.StringData[idxA], col.StringData[idxB]), nil
+	case COL_DATETIME:
+		a, b := col.DateTimeData[idxA], col.DateTimeData[idxB]
+		if a.Before(b) {
+			return -1, nil
+		}
+		if a.After(b) {
+			return 1, nil
+		}
+		return 0, nil
+	default:
+		return compareGridGenericCells(col.Name, col.GenericData[idxA], col.GenericData[idxB])
+	}
+}
+
 // resolveColType applies the concat type lattice: same non-generic type wins;
 // any other combination produces COL_GENERIC. There is no numeric promotion.
 func resolveColType(a, b ColumnType) ColumnType {
@@ -4785,6 +5017,100 @@ MainLoop:
 					}
 
 					stack.Push(sortedList)
+				} else if t.Lexeme == "sortBy" {
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					sourceGrid, sourceIndices, err := getGridSourceAndIndices(obj2)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: sortBy requires a Grid or GridView, got %s.\n", t.Line, t.Column, obj2.TypeName()))
+					}
+
+					var colNames []string
+					switch spec := obj1.(type) {
+					case MShellString:
+						colNames = []string{spec.Content}
+					case *MShellList:
+						colNames = make([]string, len(spec.Items))
+						for i, item := range spec.Items {
+							s, err := item.CastString()
+							if err != nil {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: sortBy column names must be strings, got %s.\n", t.Line, t.Column, item.TypeName()))
+							}
+							colNames[i] = s
+						}
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: sortBy requires a column name (str) or list of column names ([str]), got %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					if len(colNames) == 0 {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: sortBy requires at least one column name.\n", t.Line, t.Column))
+					}
+
+					sortCols := make([]*GridColumn, len(colNames))
+					for i, name := range colNames {
+						col := sourceGrid.GetColumn(name)
+						if col == nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Column '%s' not found in grid.\n", t.Line, t.Column, name))
+						}
+						sortCols[i] = col
+					}
+
+					permutation := make([]int, len(sourceIndices))
+					copy(permutation, sourceIndices)
+
+					var sortErr error
+					sort.SliceStable(permutation, func(a, b int) bool {
+						if sortErr != nil {
+							return false
+						}
+						for _, col := range sortCols {
+							cmp, err := compareGridCellsForSort(col, permutation[a], permutation[b])
+							if err != nil {
+								sortErr = err
+								return false
+							}
+							if cmp != 0 {
+								return cmp < 0
+							}
+						}
+						return false
+					})
+					if sortErr != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, sortErr.Error()))
+					}
+
+					stack.Push(projectGridAllColumns(sourceGrid, permutation))
+				} else if t.Lexeme == "reverse" {
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'reverse' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					switch target := obj.(type) {
+					case *MShellList:
+						newItems := make([]MShellObject, len(target.Items))
+						for i, v := range target.Items {
+							newItems[len(target.Items)-1-i] = v
+						}
+						newList := NewList(0)
+						newList.Items = newItems
+						stack.Push(newList)
+					case *MShellGrid, *MShellGridView:
+						sourceGrid, sourceIndices, err := getGridSourceAndIndices(target)
+						if err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
+						}
+						permutation := make([]int, len(sourceIndices))
+						for i, idx := range sourceIndices {
+							permutation[len(sourceIndices)-1-i] = idx
+						}
+						stack.Push(projectGridAllColumns(sourceGrid, permutation))
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot reverse a %s.\n", t.Line, t.Column, obj.TypeName()))
+					}
 				} else if t.Lexeme == "sha256sum" {
 					// Get the SHA256 hash of a file
 					obj1, err := stack.Pop()
@@ -7267,100 +7593,40 @@ MainLoop:
 						return state.FailWithMessage(err.Error())
 					}
 
-					// Obj2 should be list
-					listToBeSorted, ok := obj2.(*MShellList)
-					if !ok {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: The 2nd from top of stack in 'sortByCmp' is expected to be a list, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
-					}
-					// Obj1 should be a quotation
 					quotation, ok := obj1.(*MShellQuotation)
 					if !ok {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: The top of stack for 'sortByCmp' is expected to be a function, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
 					}
 
-					// Using merge sort below because it is stable which allows for multiple levels of sorting, like "then by".
-					// Merge sort generally also has good enough performance for now.
-					n := len(obj2.(*MShellList).Items)
-					array1 := obj2.(*MShellList).Items
-					array2 := make([]MShellObject, n)
-
-					curr_array := 0
-
-					sorted_array := array1
-					work_array := array2
-
-					cmpStack := MShellStack{}
-
-					for width := 1; width < n; width = 2 * width {
-						for i := 0; i < n; i = i + 2*width {
-							iLeftStart := i                // Inclusive left start
-							iRightStart := min(i+width, n) // Inclusive right start, exclusive left end
-							iEnd := min(i+2*width, n)      // Exclusive End
-
-							leftIndex := iLeftStart
-							rightIndex := iRightStart
-
-							for k := iLeftStart; k < iEnd; k++ {
-								if leftIndex < iRightStart {
-									if rightIndex >= iEnd {
-										work_array[k] = sorted_array[leftIndex]
-										leftIndex++
-									} else {
-										// Do comparison
-										// Clear stack
-										cmpStack.Clear()
-										cmpStack.Push(sorted_array[leftIndex])
-										cmpStack.Push(sorted_array[rightIndex])
-
-										result, err := state.EvaluateQuote(*quotation, &cmpStack, context, definitions)
-										if err != nil {
-											return state.FailWithMessage(err.Error())
-										}
-
-										if result.ShouldPassResultUpStack() {
-											return result
-										}
-
-										// Check that an integer is on top of the stack.
-										cmpResult, err := cmpStack.Pop()
-										if err != nil {
-											return state.FailWithMessage(fmt.Sprintf("%d:%d: The function in 'sortByCmp' did not return a value, found an empty stack.\n", t.Line, t.Column))
-										}
-
-										cmpInt, ok := cmpResult.(MShellInt)
-										if !ok {
-											return state.FailWithMessage(fmt.Sprintf("%d:%d: The function in 'sortByCmp' did not return an integer, found a %s (%s).\n", t.Line, t.Column, cmpResult.TypeName(), cmpResult.DebugString()))
-										}
-
-										// fmt.Fprintf(os.Stderr, "Comparing %s and %s: %d\n", sorted_array[leftIndex].DebugString(), sorted_array[rightIndex].DebugString(), cmpInt.Value)
-
-										if cmpInt.Value <= 0 { // left <= right
-											work_array[k] = sorted_array[leftIndex]
-											leftIndex++
-										} else { // left > right
-											work_array[k] = sorted_array[rightIndex]
-											rightIndex++
-										}
-									}
-								} else {
-									work_array[k] = sorted_array[rightIndex]
-									rightIndex++
-								}
-							}
+					switch target := obj2.(type) {
+					case *MShellList:
+						sorted, evalRes := state.mergeSortMShellByQuotation(t, target.Items, quotation, context, definitions, "sortByCmp")
+						if evalRes.ShouldPassResultUpStack() {
+							return evalRes
 						}
-
-						curr_array = 1 - curr_array
-						if curr_array == 0 {
-							sorted_array = array1
-							work_array = array2
-						} else {
-							sorted_array = array2
-							work_array = array1
+						target.Items = sorted
+						stack.Push(target)
+					case *MShellGrid, *MShellGridView:
+						sourceGrid, sourceIndices, err := getGridSourceAndIndices(target)
+						if err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
 						}
+						rows := make([]MShellObject, len(sourceIndices))
+						for i, idx := range sourceIndices {
+							rows[i] = &MShellGridRow{Grid: sourceGrid, RowIndex: idx}
+						}
+						sorted, evalRes := state.mergeSortMShellByQuotation(t, rows, quotation, context, definitions, "sortByCmp")
+						if evalRes.ShouldPassResultUpStack() {
+							return evalRes
+						}
+						permutation := make([]int, len(sorted))
+						for i, item := range sorted {
+							permutation[i] = item.(*MShellGridRow).RowIndex
+						}
+						stack.Push(projectGridAllColumns(sourceGrid, permutation))
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The 2nd from top of stack in 'sortByCmp' is expected to be a list, Grid, or GridView, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
 					}
-
-					listToBeSorted.Items = sorted_array
-					stack.Push(listToBeSorted)
 				} else if t.Lexeme == "strCmp" {
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {

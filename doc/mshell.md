@@ -781,7 +781,7 @@ end wl # Output: 11
 - `insert`: Insert element into list, `(list element index -- list)`
 - `setAt`: Set element at index, negative index is allowed.  `(list element index -- list)`
 - `nth`: Nth element of list (0-based) `([a] int -- a)`
-- `reverse`: Reverse list, `(list -- list)`
+- `reverse`: Reverse a list, Grid, or GridView. See Sorting section. `(list -- list)` / `(Grid|GridView -- Grid)`
 - `sum`: Sum of list, `([numeric] -- numeric)`
 - `filter`: Filter a list or dictionary, returning a new collection. The input list or dictionary is not modified in place. For dictionaries, the quotation is applied to each value and matching entries are preserved. `([a] (a -- bool) -- [a])`, `(dict (a -- bool) -- dict)`
 - `linearSearch`: Return the first element that satisfies the predicate, or `none` if nothing matches. `([a] (a -- bool) -- Maybe[a])`
@@ -847,7 +847,9 @@ groupBy
 
 - `sort`: Sort list. Converts all items to strings, then sorts using go's `sort.Strings` `(list -- list)`
 - `sortV`: Version sort list. Converts all items to strings, then sorts like GNU `sort -V` (`list -- list`)
-- `sortByCmp`: Sort a list by a comparison function. The function/quotation should return -1 when a < b, 0 when a = b, or 1 when a > b. `[a] (a a -- int) -- [a]`
+- `sortBy`: Sort a Grid or GridView by one or more columns ascending. Spec is a column name (str) or list of column names ([str]); priority is left-to-right. Stable; `none` cells sort last; cross-type values in a generic column error. Compose with `reverse` for descending. `(Grid|GridView str|[str] -- Grid)`
+- `sortByCmp`: Sort a list, Grid, or GridView using a comparison function. The function/quotation receives two items (or two `GridRow`s) and should return -1 when a < b, 0 when a = b, or 1 when a > b. Stable. `[a] (a a -- int) -- [a]` / `(Grid|GridView (GridRow GridRow -- int) -- Grid)`
+- `reverse`: Reverse a list, Grid, or GridView, returning a new value with elements/rows in reverse order. `(list -- list)` / `(Grid|GridView -- Grid)`
 - `strCmp`: Compare two strings lexicographically using Go's [`strings.Compare`](https://pkg.go.dev/strings#Compare); returns -1, 0, or 1. Useful with `sortByCmp`. `(str str -- int)`
 - `versionSortCmp`: A comparison function for use with `sortByCmp`. Used to implement "version sort" or "natural sort". `(str str -- int)`
 - `floatCmp`: Compare two floats and return -1, 0, or 1. Useful with `sortByCmp` for numeric sorting. `(float float -- int)`

@@ -14,6 +14,7 @@ Grids are ideal for working with tabular data, time series analysis, and data tr
     <li><a href="#grid-row">GridRow</a></li>
     <li><a href="#grid-iteration">Iteration Operations</a></li>
     <li><a href="#grid-joins">Joins</a></li>
+    <li><a href="#grid-sorting">Sorting</a></li>
 </ul>
 
 <h1 id="grid-overview">Overview <a class="section-link" href="#grid-overview" aria-label="Permalink">§</a> <a class="back-to-top" href="#grid-top">Back to top</a></h1>
@@ -207,6 +208,21 @@ Each column can have optional metadata specified as a dictionary immediately aft
             <td><code>outerJoin</code></td>
             <td>Full outer equi-join. Unmatched rows from either side appear with the absent side filled with <code>none</code>.</td>
             <td><code>(Grid|GridView Grid|GridView (<span class="sig-type sig-type-gridrow">GridRow</span> -- a) (<span class="sig-type sig-type-gridrow">GridRow</span> -- a) -- Grid)</code></td>
+        </tr>
+        <tr id="func-sortby-grid">
+            <td><code>sortBy</code></td>
+            <td>Sort rows of a Grid or GridView by one or more columns ascending. Stable; <code>none</code> cells sort last; cross-type values in a generic column error. See <a href="#grid-sorting">Sorting</a>.</td>
+            <td><code>(Grid|GridView <span class="sig-type sig-type-str">str</span>|[<span class="sig-type sig-type-str">str</span>] -- Grid)</code></td>
+        </tr>
+        <tr id="func-sortbycmp-grid">
+            <td><code>sortByCmp</code></td>
+            <td>Stable sort with a user-supplied comparator. Polymorphic with the list <code>sortByCmp</code>. The comparator receives two <code>GridRow</code>s and returns -1, 0, or 1.</td>
+            <td><code>(Grid|GridView (<span class="sig-type sig-type-gridrow">GridRow</span> <span class="sig-type sig-type-gridrow">GridRow</span> -- <span class="sig-type sig-type-int">int</span>) -- Grid)</code></td>
+        </tr>
+        <tr id="func-reverse-grid">
+            <td><code>reverse</code></td>
+            <td>Return a new Grid with rows in reverse order. Polymorphic with the list <code>reverse</code>.</td>
+            <td><code>(Grid|GridView -- Grid)</code></td>
         </tr>
     </tbody>
 </table>
@@ -519,4 +535,83 @@ Use <code>foldl</code> from the standard library, with the first grid as the see
 
 <pre>
 <code><span class="mshellLEFT_PAREN">(</span><span class="mshellPLUS">+</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellVARRETRIEVE">@first</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellVARRETRIEVE">@second</span> <span class="mshellVARRETRIEVE">@third</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">foldl</span></code>
+</pre>
+
+<h1 id="grid-sorting">Sorting <a class="section-link" href="#grid-sorting" aria-label="Permalink">§</a> <a class="back-to-top" href="#grid-top">Back to top</a></h1>
+
+<p>
+<code>sortBy</code> sorts a Grid or GridView by one or more columns ascending and returns a new Grid.
+The spec is either a column name (str) or a list of column names (sorted left-to-right by lex priority).
+</p>
+
+<pre>
+<code><span class="mshellLINECOMMENT"># Sort by a single column (bare string)</span>
+<span class="mshellVARRETRIEVE">@grid</span> <span class="mshellSTRING">"age"</span> <span class="mshellLITERAL">sortBy</span>
+
+<span class="mshellLINECOMMENT"># Sort by multiple columns ascending</span>
+<span class="mshellVARRETRIEVE">@grid</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSTRING">"region"</span> <span class="mshellSTRING">"age"</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">sortBy</span></code>
+</pre>
+
+<h2>Semantics</h2>
+
+<ul>
+   <li><strong>Stable.</strong> Equal keys preserve their input order. This is what makes the sequenced-sort idiom (below) work.</li>
+   <li><strong>Ascending only.</strong> Descending is composed with <code>reverse</code>.</li>
+   <li><strong>Default ordering by type:</strong> numeric for <code>int</code> and <code>float</code>, lexicographic byte-wise for <code>str</code>, chronological for <code>datetime</code>, <code>false</code> before <code>true</code> for <code>bool</code>.</li>
+   <li><strong><code>none</code> last.</strong> Cells that are <code>none</code> sort after all other values. NaN floats are treated the same way.</li>
+   <li><strong>Cross-type comparison errors.</strong> A generic column with mixed scalar types (e.g., string and int values in the same column) errors at sort time, naming the column and the two type names.</li>
+</ul>
+
+<h2>Direction and mixed-direction multi-key</h2>
+
+<p>
+<code>sortBy</code> only sorts ascending. A descending sort is <code>sortBy</code> followed by <code>reverse</code>.
+For mixed-direction multi-key sorts, sequence single-key sorts in <strong>reverse priority order</strong>
+(lowest priority first), using <code>reverse</code> on the keys that need to be descending.
+Stability preserves the prior order within ties at each step.
+</p>
+
+<pre>
+<code><span class="mshellLINECOMMENT"># Want: region asc, age desc, name asc</span>
+<span class="mshellVARRETRIEVE">@grid</span> <span class="mshellSTRING">"name"</span>   <span class="mshellLITERAL">sortBy</span>           <span class="mshellLINECOMMENT"># lowest priority first</span>
+       <span class="mshellSTRING">"age"</span>    <span class="mshellLITERAL">sortBy</span> <span class="mshellLITERAL">reverse</span>   <span class="mshellLINECOMMENT"># age desc</span>
+       <span class="mshellSTRING">"region"</span> <span class="mshellLITERAL">sortBy</span>           <span class="mshellLINECOMMENT"># highest priority; stable preserves the rest</span></code>
+</pre>
+
+<h2>Custom comparators with <code>sortByCmp</code></h2>
+
+<p>
+For ordering rules that aren't expressible as ascending column sorts &mdash;
+case-insensitive matching, version sort, multi-criteria with mixed direction collapsed into one call &mdash;
+use <code>sortByCmp</code> with a quotation that takes two <code>GridRow</code>s and returns -1, 0, or 1.
+The comparator owns null and cross-type handling.
+</p>
+
+<pre>
+<code><span class="mshellLINECOMMENT"># Sort by lower-cased name</span>
+<span class="mshellVARRETRIEVE">@grid</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">swap</span> <span class="mshellCOLON">:</span><span class="mshellLITERAL">name</span><span class="mshellQUESTION">?</span> <span class="mshellLITERAL">lower</span> <span class="mshellLITERAL">swap</span> <span class="mshellCOLON">:</span><span class="mshellLITERAL">name</span><span class="mshellQUESTION">?</span> <span class="mshellLITERAL">lower</span> <span class="mshellLITERAL">strCmp</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">sortByCmp</span></code>
+</pre>
+
+<h2>Sorting by a computed value</h2>
+
+<p>
+There is no key-extractor variant of <code>sortBy</code>.
+To sort by a value computed from each row, <code>derive</code> the column first and then <code>sortBy</code>.
+The intermediate column can be kept or <code>exclude</code>d after.
+</p>
+
+<pre>
+<code><span class="mshellVARRETRIEVE">@grid</span> <span class="mshellSTRING">"_key"</span> <span class="mshellLEFT_CURLY">{</span><span class="mshellRIGHT_CURLY">}</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">first</span><span class="mshellQUESTION">?</span> <span class="mshellCOLON">:</span><span class="mshellLITERAL">last</span><span class="mshellQUESTION">?</span> <span class="mshellPLUS">+</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">derive</span> <span class="mshellSTRING">"_key"</span> <span class="mshellLITERAL">sortBy</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSTRING">"_key"</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLITERAL">exclude</span></code>
+</pre>
+
+<h2><code>reverse</code></h2>
+
+<p>
+<code>reverse</code> returns a new Grid with rows in the opposite order.
+Polymorphic with the list <code>reverse</code>.
+</p>
+
+<pre>
+<code><span class="mshellVARRETRIEVE">@grid</span> <span class="mshellLITERAL">reverse</span>           <span class="mshellLINECOMMENT"># Grid with last row first</span>
+<span class="mshellVARRETRIEVE">@grid</span> <span class="mshellSTRING">"age"</span> <span class="mshellLITERAL">sortBy</span> <span class="mshellLITERAL">reverse</span>  <span class="mshellLINECOMMENT"># Sort by age descending</span></code>
 </pre>
