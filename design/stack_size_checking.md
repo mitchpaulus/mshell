@@ -24,6 +24,28 @@ For loops, the stack size must not have a net change.
 type myType = int | str
 ```
 
+No constructor names given to the different branches. We rarely have cases where a type like below is required.
+
+```
+type length = int Inches | int Feet
+```
+
+## Function overloading
+
+I think it is convenient and allowed to have overloaded user definitions.
+The definitions can even have different arity.
+
+```
+def mydef (str -- str)
+
+end
+
+def mydef (float float -- str)
+
+end
+```
+
+
 ## Cast syntax
 
 Right now, I'm liking:
