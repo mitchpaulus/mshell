@@ -851,6 +851,117 @@ the stack,
 `applySig` against a hardcoded set of arithmetic builtins.
 That proves the design before committing to the full surface.
 
+## Implementation progress
+
+Branch: **`type-checker-v1`** (off main; not yet pushed).
+
+The user has imposed two standing constraints during implementation:
+1. If a type definition in the **standard library** (`lib/std.msh`) looks wrong, **stop and ask** before changing it.
+2. If an **existing test fails**, **stop and ask** before editing the test or the code that broke it.
+
+Per CLAUDE.md, do not run `gofmt` without asking, and do not commit without an explicit user request.
+
+### Phase 1 — Arena and primitives — DONE
+
+Files created:
+
+- `mshell/Type.go` — type representation, arena, hashconsing, name interning,
+  reserved-type-name predicate.
+- `mshell/Type_test.go` — 18 unit tests covering hashconsing, shape normalization,
+  union flatten/dedupe/sort/collapse, brand semantics, quote hashconsing,
+  grid family, var ids, name table, reserved-type-name lookup.
+
+Concrete primitives in the arena (assigned in this fixed order during
+`NewTypeArena`):
+
+```
+TidNothing = 0   // sentinel
+TidBool    = 1
+TidInt     = 2
+TidFloat   = 3
+TidStr     = 4
+TidBytes   = 5
+TidNone    = 6
+TidBottom  = 7
+```
+
+`QuoteSig` already carries the `Fail TypeId` and `Pure bool` fields; defaults
+in V1 are `TidNothing` and `false`. Phase 2 does not require a struct
+migration.
+
+`NewTypeArena` reserves index 0 in the side tables (`shapeFields`, `quoteSigs`,
+`unionMembers`, `gridSchemas`) so non-zero `Extra` is always meaningful.
+
+Verification:
+
+- `go build ./...` clean.
+- `go test ./...` passes — new tests + all pre-existing Go tests.
+- `./build.sh` builds the binary.
+- `./tests/test.sh` — every integration test passes, no regressions.
+
+No stdlib or existing test files were modified.
+
+Note: `firstCompositeId` constant in `Type.go` is currently unused (a
+diagnostic warning); it is kept as documentation of the boundary between
+primitive ids and composite ids. Safe to remove if it bothers anyone.
+
+### Naming gotcha encountered
+
+`GridColumn` already exists in `mshell/MShellObject.go` as the runtime
+representation. The type-system column struct was renamed to
+`GridSchemaCol` to avoid the collision. If future grid-related types come
+up, watch for similar collisions with runtime names in `MShellObject.go`.
+
+### Phase 1 — what was deferred from the plan
+
+- **Lexer keyword reservation** for `as`, `<fail>`, `pure`, `try`, `fail`,
+  `just`, `none`. Not done yet — `just` and `none` already exist as
+  language constructs, the others (`as`, `try`, `fail`, `pure`) were
+  confirmed unused as bare identifiers in stdlib & tests but the actual
+  lexer additions are deferred until they are needed by the parser
+  (Phase 5 onward). When done, add `TokenType` entries (e.g. `AS`, `TRY`,
+  `FAIL_KEYWORD`, `PURE`) and dispatch them from
+  `Lexer.literalOrKeywordType`.
+- **Built-in type-name reservation** at the parser level. The
+  `IsReservedTypeName` predicate exists in `Type.go` but is not yet wired
+  into a `type X = ...` parser. Wire when the parser learns to handle
+  `type` declarations.
+
+### Phase 2 — Stack and applySig — NEXT
+
+Scope:
+
+- Create `mshell/TypeChecker.go` with `Checker`, `TypeStack`,
+  `VarEnv` (empty for now), `FnContext`, the basic `applySig`.
+- A static table of primitive-only builtin sigs (just enough for
+  arithmetic and comparison: `+`, `-`, `*`, `/`, `<`, `>`, etc.).
+- A simple substitution-free `unify` for primitives only (just integer
+  equality of `TypeId`).
+- Tests that simulate small token streams and check stack outcomes:
+  `2 3 +` leaves `int`; `2 "x" +` produces a type error; `+` with empty
+  stack produces underflow.
+
+What does NOT belong in Phase 2:
+
+- Lists/dicts/shapes/unions/brands (Phase 3+).
+- Generics (Phase 6).
+- `if`/`else`, `match`, branch reconciliation (Phase 6b).
+- Any wiring into `Main.go` (Phase 10).
+
+Testing strategy:
+
+- Pure unit tests in `mshell/TypeChecker_test.go` that build a
+  small token stream and call the checker directly.
+- Do NOT integrate into the existing parser path yet. The checker can
+  consume a hand-built sequence of `Token`s for now.
+
+### Migration thread
+
+`mshell/TypeChecking.go` (the existing 883-line interface-based checker)
+remains untouched and operational. It will be deleted at the end of
+Phase 11, once the new module reaches feature parity. Don't poke it
+during V1 unless integrating in Phase 10 forces a change.
+
 ## Phase 2: `<fail>` effect and `pure`
 
 Deferred from V1.
