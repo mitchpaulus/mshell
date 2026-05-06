@@ -84,13 +84,13 @@
 [| x; 1; 2 |] eg1!
 [| x; 3; 4 |] eg2!
 @eg1 @eg2 extend ext1!
-@ext1 type wl
+@ext1 typeof wl
 @eg1 "x" gridCol str wl
 @eg1 len str wl
 @eg2 "x" gridCol str wl
 @eg2 len str wl
 
-# extend widens the receiver to generic on type mismatch.
+# extend widens the receiver to generic on typeof mismatch.
 "-- extend widen --" wl
 [| x; 1; 2 |] wg1!
 [| x; 3.5; 4.5 |] wg2!

@@ -4,6 +4,41 @@ import (
 	"testing"
 )
 
+// Phase 10 prep: type-checker keyword reservations.
+func TestTypeCheckerKeywords(t *testing.T) {
+	cases := []struct {
+		input string
+		want  TokenType
+	}{
+		{"as", AS},
+		{"type", TYPE},
+		{"try", TRY},
+		{"fail", FAIL_KEYWORD},
+		{"pure", PURE},
+		// Make sure neighbors still tokenize as before.
+		{"true", TRUE},
+		{"false", FALSE},
+		{"float", TYPEFLOAT},
+		// And that variant prefixes don't get swallowed.
+		{"types", LITERAL},
+		{"asx", LITERAL},
+		{"trying", LITERAL},
+		{"failed", LITERAL},
+		{"purest", LITERAL},
+	}
+	for _, tc := range cases {
+		l := NewLexer(tc.input, nil)
+		toks, _ := l.Tokenize()
+		if len(toks) < 1 {
+			t.Errorf("%q: no tokens produced", tc.input)
+			continue
+		}
+		if toks[0].Type != tc.want {
+			t.Errorf("%q: got %s, want %s", tc.input, toks[0].Type, tc.want)
+		}
+	}
+}
+
 func TestUnterminatedString(t *testing.T) {
 	input := `"Hello, world!`
 	l := NewLexer(input, nil)

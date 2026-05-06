@@ -6335,10 +6335,10 @@ MainLoop:
 
 					jsonStr := obj1.ToJson()
 					stack.Push(MShellString{jsonStr})
-				} else if t.Lexeme == "type" {
+				} else if t.Lexeme == "typeof" {
 					obj1, err := stack.Pop()
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'type' operation on an empty stack.\n", t.Line, t.Column))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'typeof' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
 					stack.Push(MShellString{obj1.TypeName()})

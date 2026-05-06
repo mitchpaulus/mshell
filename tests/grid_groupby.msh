@@ -90,5 +90,5 @@ groupBy emptyNoKey!
 ]
 groupBy typedGrouped!
 @typedGrouped "k" gridCol str wl
-@typedGrouped "k" gridCol (type) map str wl
+@typedGrouped "k" gridCol (typeof) map str wl
 @typedGrouped "n" gridCol str wl

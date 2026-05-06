@@ -21,7 +21,7 @@
 
 # gridValues - extract row values as a list of lists, without headers
 @grid gridValues str wl
-@grid gridValues :0: :1: type wl
+@grid gridValues :0: :1: typeof wl
 
 # Grid indexing - get a GridRow
 @grid :0: row0!
@@ -93,7 +93,7 @@
 @filteredView (:x? 5 <) filter "x" gridCol str wl
 
 # gridCompact - materialize a view to a grid
-@filteredView gridCompact type wl
+@filteredView gridCompact typeof wl
 
 # map
 "Map Test" wl
@@ -142,7 +142,7 @@
 
 # updateCol
 [| temp; "1.5"; "2.75" |] "temp" (toFloat?) updateCol "temp" gridCol str wl
-[| d; "2026-01-02"; "2026-01-03" |] "d" (toDt?) updateCol "d" gridCol type wl
+[| d; "2026-01-02"; "2026-01-03" |] "d" (toDt?) updateCol "d" gridCol typeof wl
 
 # Test materializing updateCol on a GridView
 "GridView updateCol materializes" wl
@@ -153,11 +153,11 @@
    3, "c";
    4, "d" |] backingGrid!
 @backingGrid (:x? 2 >) filter "x" (str) updateCol updatedBackingGrid!
-@updatedBackingGrid type wl
+@updatedBackingGrid typeof wl
 @updatedBackingGrid gridRows str wl
 @updatedBackingGrid gridCols str wl
 @updatedBackingGrid "x" gridCol str wl
-@updatedBackingGrid "x" gridCol (type) map str wl
+@updatedBackingGrid "x" gridCol (typeof) map str wl
 @updatedBackingGrid "y" gridCol str wl
 @backingGrid "x" gridCol str wl
 @backingGrid "y" gridCol str wl
