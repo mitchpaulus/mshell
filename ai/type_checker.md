@@ -2192,6 +2192,73 @@ Tests in `TypeCheckProgram_test.go` (6 new):
 Verification: `go build ./...`, `go test ./...`, `./build.sh`,
 `./tests/test.sh` — all green.
 
+### Phase 10 step 4h — Builtin overloads + string/Maybe ops — DONE
+
+Real test programs now type-check cleanly under `--check-types`:
+the survey starts producing actual program output instead of
+unknown-identifier errors. `tests/string_funcs.msh` runs end-to-
+end with the flag on; `tests/arithmetic.msh` only has 2 errors
+(both legitimate per design — implicit int→float is rejected).
+
+Refactor: `Checker.builtins` retyped from `map[TokenType]QuoteSig`
+to `map[TokenType][]QuoteSig`, and `checkOne` now drives token-
+typed builtins through `resolveAndApply`. Token ops can carry
+multiple overloads the same way LITERAL builtins do.
+
+`resolveAndApply` polish:
+
+- **Inferring-mode bypass:** when `c.inferring` is on (quote-body
+  inference), the resolver punts to the first candidate so
+  applySig's underflow-as-fresh-var synthesis can run. Without
+  this, every candidate would drop on stack-too-short.
+- **Clean recovery on no-match:** when no candidate unifies,
+  the resolver pops the first candidate's input arity from
+  the stack (capped at the actual stack size) and pushes
+  fresh vars for outputs — directly, without re-running
+  applySig (which would add redundant errors). User sees one
+  `TErrNoMatchingOverload` per call site.
+
+Sigs added:
+
+- **Arithmetic float overloads** for `+`, `-`, `*`, `**`, `<`,
+  `>`, `<=`, `>=` — int and float now both work, mixed rejected
+  (per the no-implicit-coercion rule in
+  `ai/type_checker.md:702`).
+- `/` (LITERAL) — int and float overloads.
+- **String ops:** `join`, `wsplit`, `split`, `lines`, `unlines`,
+  `trim`, `trimStart`, `trimEnd`, `upper`, `lower`, `chomp`.
+- **Maybe ops:** `map` overloaded for `Maybe[T]` (in addition
+  to lists), `isJust`, `isNone`.
+
+Tests in `TypeCheckProgram_test.go` (3 new):
+
+- `TestTypeCheckProgramFloatArithmetic` — `1.5 2.0 +`,
+  `1.0 2.0 /`, `1.5 2.0 <` all pass.
+- `TestTypeCheckProgramStringOps` — 7 string-op programs.
+- `TestTypeCheckProgramMaybeMap` — `5 just (1 +) map drop`
+  passes via the new Maybe-map overload.
+
+Three earlier tests updated for the new no-match recovery:
+`TestCheckerIntPlusStr`, `TestCheckerPlusUnderflow`,
+`TestCheckerPlusUnderflowOneArg` now expect
+`TErrNoMatchingOverload` and the recovery's stack shape (pops
+input arity, pushes fresh-var outputs).
+
+Verification: `go build ./...`, `go test ./...`, `./build.sh`,
+`./tests/test.sh` — all green.
+
+Survey of `--check-types` against real programs:
+
+| File                   | Before      | After             |
+| ---------------------- | ----------- | ----------------- |
+| `tests/string_funcs.msh` | many errors | passes, runs     |
+| `tests/arithmetic.msh` | many errors | 2 errors (mixed int/float, by design) |
+| `tests/maybe.msh`      | many errors | 2 errors (`?`, `map2` still unregistered) |
+
+Remaining sigs to add (most-needed): `iff` (control flow),
+`map2`/`zip`/`unzip` (Maybe & list pair ops), file/process ops,
+date/time, dict ops, grid ops.
+
 Original step-4 plan (kept for reference):
 
 - After parsing, walk `file.Items` collecting `MShellTypeDecl`

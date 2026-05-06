@@ -111,6 +111,46 @@ func TestTypeCheckProgramUnregisteredBuiltinFlagged(t *testing.T) {
 	}
 }
 
+func TestTypeCheckProgramFloatArithmetic(t *testing.T) {
+	cases := []string{
+		`1.5 2.0 + wl`,
+		`1.0 2.0 / wl`,
+		`1.5 2.0 < wl`,
+	}
+	for _, src := range cases {
+		errs, ok := parseAndCheck(t, src)
+		if !ok || len(errs) != 0 {
+			t.Errorf("%q: expected pass; errs=%v", src, errs)
+		}
+	}
+}
+
+func TestTypeCheckProgramStringOps(t *testing.T) {
+	cases := []string{
+		`"hello world" wsplit drop`,
+		`["a" "b"] "," join wl`,
+		`"a,b,c" "," split drop`,
+		`"hello\nworld" lines drop`,
+		`["a" "b"] unlines wl`,
+		`" hi " trim wl`,
+		`"hi" upper wl`,
+	}
+	for _, src := range cases {
+		errs, ok := parseAndCheck(t, src)
+		if !ok || len(errs) != 0 {
+			t.Errorf("%q: expected pass; errs=%v", src, errs)
+		}
+	}
+}
+
+func TestTypeCheckProgramMaybeMap(t *testing.T) {
+	src := `5 just (1 +) map drop`
+	errs, ok := parseAndCheck(t, src)
+	if !ok || len(errs) != 0 {
+		t.Fatalf("expected Maybe map to type-check; errs=%v", errs)
+	}
+}
+
 func TestTypeCheckProgramRegisteredBuiltins(t *testing.T) {
 	// Sanity: a small program using only registered builtins flow-checks.
 	cases := []string{

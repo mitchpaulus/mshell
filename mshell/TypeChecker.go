@@ -76,7 +76,7 @@ type Checker struct {
 	subst  Substitution
 	errors []TypeError
 
-	builtins     map[TokenType]QuoteSig
+	builtins     map[TokenType][]QuoteSig
 	nameBuiltins map[NameId][]QuoteSig
 
 	// typeEnv holds named type declarations (Phase 5). Built-in / reserved
@@ -143,8 +143,8 @@ func (c *Checker) checkOne(tok Token) {
 		return
 	}
 
-	if sig, ok := c.builtins[tok.Type]; ok {
-		c.applySig(sig, tok)
+	if sigs, ok := c.builtins[tok.Type]; ok {
+		c.resolveAndApply(sigs, tok)
 		return
 	}
 

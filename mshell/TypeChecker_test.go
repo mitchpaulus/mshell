@@ -44,34 +44,32 @@ func TestCheckerIntPlusStr(t *testing.T) {
 		mkTok(PLUS, "+"),
 	)
 	errs := c.Errors()
+	// `+` now has int and float overloads; neither matches int+str, so
+	// the resolver reports TErrNoMatchingOverload.
 	if len(errs) != 1 {
 		t.Fatalf("expected 1 error, got %d: %+v", len(errs), errs)
 	}
-	if errs[0].Kind != TErrTypeMismatch {
-		t.Fatalf("expected TErrTypeMismatch, got %v", errs[0].Kind)
+	if errs[0].Kind != TErrNoMatchingOverload {
+		t.Fatalf("expected TErrNoMatchingOverload, got %v", errs[0].Kind)
 	}
-	if errs[0].Expected != TidInt || errs[0].Actual != TidStr {
-		t.Fatalf("expected int<-str mismatch, got expected=%v actual=%v",
-			errs[0].Expected, errs[0].Actual)
-	}
-	if errs[0].ArgIndex != 1 {
-		t.Fatalf("expected ArgIndex=1 (top of stack is second input), got %d", errs[0].ArgIndex)
-	}
-	// Sig still applied so cascading errors stay quiet: stack should hold the int output.
-	if c.Stack().Len() != 1 || c.Stack().Top() != TidInt {
-		t.Fatalf("after error sig should still produce int output; got len=%d top=%v",
-			c.Stack().Len(), c.Stack().Top())
+	// Recovery pops 2, pushes 1 fresh var.
+	if c.Stack().Len() != 1 {
+		t.Fatalf("after no-match recovery stack should have 1 fresh var; got len=%d", c.Stack().Len())
 	}
 }
 
 func TestCheckerPlusUnderflow(t *testing.T) {
 	c := runTokens(mkTok(PLUS, "+"))
 	errs := c.Errors()
-	if len(errs) != 1 || errs[0].Kind != TErrStackUnderflow {
-		t.Fatalf("expected single underflow error, got %+v", errs)
+	// With overloads, both arity-2 candidates drop on stack-too-short
+	// and the resolver reports TErrNoMatchingOverload (rather than
+	// the underlying underflow).
+	if len(errs) != 1 || errs[0].Kind != TErrNoMatchingOverload {
+		t.Fatalf("expected single no-match error, got %+v", errs)
 	}
-	if c.Stack().Len() != 0 {
-		t.Fatalf("expected empty stack after underflow, got len=%d", c.Stack().Len())
+	// Recovery: pops 0 (empty), pushes 1 fresh var.
+	if c.Stack().Len() != 1 {
+		t.Fatalf("expected 1 fresh var after recovery, got len=%d", c.Stack().Len())
 	}
 }
 
@@ -81,12 +79,12 @@ func TestCheckerPlusUnderflowOneArg(t *testing.T) {
 		mkTok(PLUS, "+"),
 	)
 	errs := c.Errors()
-	if len(errs) != 1 || errs[0].Kind != TErrStackUnderflow {
-		t.Fatalf("expected single underflow error, got %+v", errs)
+	if len(errs) != 1 || errs[0].Kind != TErrNoMatchingOverload {
+		t.Fatalf("expected single no-match error, got %+v", errs)
 	}
-	// Underflow leaves the stack alone so the rest of the program has something to chew on.
-	if c.Stack().Len() != 1 || c.Stack().Top() != TidInt {
-		t.Fatalf("expected stack to retain its int after underflow, got len=%d", c.Stack().Len())
+	// Recovery: pops 1 (the int), pushes 1 fresh var.
+	if c.Stack().Len() != 1 {
+		t.Fatalf("expected 1 fresh var after recovery, got len=%d", c.Stack().Len())
 	}
 }
 

@@ -39,6 +39,17 @@ func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 		c.applySig(candidates[0], callSite)
 		return
 	}
+	// In quote-body inference mode, the stack is intentionally short
+	// and applySig synthesizes fresh vars for missing inputs.
+	// Overload resolution would drop every candidate due to
+	// "stack too short" before that synthesis runs. Punt to the
+	// first candidate; the inference path will pad it correctly.
+	// Future improvement: rank candidates by output specificity in
+	// inferring mode.
+	if c.inferring {
+		c.applySig(candidates[0], callSite)
+		return
+	}
 
 	stackSnap := c.Snapshot()
 	substSnap := c.subst.Checkpoint()
@@ -84,7 +95,19 @@ func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 			Pos:  callSite,
 			Hint: "no listed signature accepts the current stack",
 		})
-		c.applySig(candidates[0], callSite)
+		// Clean stack-shape recovery without re-running applySig
+		// (which would add redundant errors). Pop the first
+		// candidate's inputs (best effort) and push fresh vars
+		// for outputs so downstream checking has a coherent stack.
+		first := candidates[0]
+		need := len(first.Inputs)
+		if c.stack.Len() < need {
+			need = c.stack.Len()
+		}
+		c.stack.items = c.stack.items[:c.stack.Len()-need]
+		for range first.Outputs {
+			c.stack.Push(c.subst.FreshVar(c.arena))
+		}
 		return
 	}
 

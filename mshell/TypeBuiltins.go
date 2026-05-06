@@ -271,6 +271,90 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		}}
 	}
 
+	// ----- Arithmetic LITERAL ops -----
+
+	// `/` is LITERAL (no dedicated token). Overloaded int/float.
+	out[names.Intern("/")] = []QuoteSig{
+		{Inputs: []TypeId{TidInt, TidInt}, Outputs: []TypeId{TidInt}},
+		{Inputs: []TypeId{TidFloat, TidFloat}, Outputs: []TypeId{TidFloat}},
+	}
+
+	// ----- String ops -----
+
+	// join : ([str] str -- str)
+	out[names.Intern("join")] = []QuoteSig{{
+		Inputs:  []TypeId{arena.MakeList(TidStr), TidStr},
+		Outputs: []TypeId{TidStr},
+	}}
+	// wsplit : (str -- [str])
+	out[names.Intern("wsplit")] = []QuoteSig{{
+		Inputs:  []TypeId{TidStr},
+		Outputs: []TypeId{arena.MakeList(TidStr)},
+	}}
+	// split : (str str -- [str])
+	out[names.Intern("split")] = []QuoteSig{{
+		Inputs:  []TypeId{TidStr, TidStr},
+		Outputs: []TypeId{arena.MakeList(TidStr)},
+	}}
+	// lines : (str -- [str])
+	out[names.Intern("lines")] = []QuoteSig{{
+		Inputs:  []TypeId{TidStr},
+		Outputs: []TypeId{arena.MakeList(TidStr)},
+	}}
+	// unlines : ([str] -- str)
+	out[names.Intern("unlines")] = []QuoteSig{{
+		Inputs:  []TypeId{arena.MakeList(TidStr)},
+		Outputs: []TypeId{TidStr},
+	}}
+	// trim : (str -- str), trimStart, trimEnd
+	for _, name := range []string{"trim", "trimStart", "trimEnd", "upper", "lower"} {
+		out[names.Intern(name)] = []QuoteSig{{
+			Inputs:  []TypeId{TidStr},
+			Outputs: []TypeId{TidStr},
+		}}
+	}
+	// chomp : (str -- str)
+	out[names.Intern("chomp")] = []QuoteSig{{
+		Inputs:  []TypeId{TidStr},
+		Outputs: []TypeId{TidStr},
+	}}
+
+	// ----- Maybe ops -----
+
+	// Overload `map` to also handle Maybe[T] (T -- U) -> Maybe[U].
+	{
+		t := arena.MakeVar(0)
+		u := arena.MakeVar(1)
+		fn := arena.MakeQuote(QuoteSig{
+			Inputs:  []TypeId{t},
+			Outputs: []TypeId{u},
+		})
+		mapName := names.Intern("map")
+		out[mapName] = append(out[mapName], QuoteSig{
+			Inputs:   []TypeId{arena.MakeMaybe(t), fn},
+			Outputs:  []TypeId{arena.MakeMaybe(u)},
+			Generics: []TypeVarId{0, 1},
+		})
+	}
+	// isJust : (Maybe[T] -- bool)
+	{
+		t := arena.MakeVar(0)
+		out[names.Intern("isJust")] = []QuoteSig{{
+			Inputs:   []TypeId{arena.MakeMaybe(t)},
+			Outputs:  []TypeId{TidBool},
+			Generics: []TypeVarId{0},
+		}}
+	}
+	// isNone : (Maybe[T] -- bool)
+	{
+		t := arena.MakeVar(0)
+		out[names.Intern("isNone")] = []QuoteSig{{
+			Inputs:   []TypeId{arena.MakeMaybe(t)},
+			Outputs:  []TypeId{TidBool},
+			Generics: []TypeVarId{0},
+		}}
+	}
+
 	// ----- Type introspection -----
 
 	// typeof : (T -- str)
@@ -286,13 +370,24 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 	return out
 }
 
-// builtinSigsByToken returns sigs for ops that have dedicated lexer tokens.
-// STR is the conversion form (T -- str); the lexer emits STR for the bare
-// `str` keyword in expression position. The TypeExpr parser handles STR
-// in type position separately and never consults this table.
-func builtinSigsByToken(arena *TypeArena) map[TokenType]QuoteSig {
+// builtinSigsByToken returns sigs for ops that have dedicated lexer
+// tokens. The map values are slices so overload dispatch (Phase 9)
+// drives token-typed builtins the same way it drives LITERAL ones —
+// arithmetic now has int and float overloads, string concatenation
+// can be added later via additional `+` arms, etc.
+//
+// STR is the conversion form (T -- str); the lexer emits STR for the
+// bare `str` keyword in expression position. The TypeExpr parser
+// handles STR in type position separately and never consults this
+// table.
+func builtinSigsByToken(arena *TypeArena) map[TokenType][]QuoteSig {
 	intIntInt := QuoteSig{Inputs: []TypeId{TidInt, TidInt}, Outputs: []TypeId{TidInt}}
+	floatFloatFloat := QuoteSig{Inputs: []TypeId{TidFloat, TidFloat}, Outputs: []TypeId{TidFloat}}
 	intIntBool := QuoteSig{Inputs: []TypeId{TidInt, TidInt}, Outputs: []TypeId{TidBool}}
+	floatFloatBool := QuoteSig{Inputs: []TypeId{TidFloat, TidFloat}, Outputs: []TypeId{TidBool}}
+
+	arithmetic := []QuoteSig{intIntInt, floatFloatFloat}
+	comparison := []QuoteSig{intIntBool, floatFloatBool}
 
 	// STR : (T -- str) — generic conversion to string.
 	t := arena.MakeVar(0)
@@ -301,27 +396,25 @@ func builtinSigsByToken(arena *TypeArena) map[TokenType]QuoteSig {
 		Outputs:  []TypeId{TidStr},
 		Generics: []TypeVarId{0},
 	}
+	// Polymorphic equality: both operands must unify.
+	eqSig := QuoteSig{
+		Inputs:   []TypeId{arena.MakeVar(0), arena.MakeVar(0)},
+		Outputs:  []TypeId{TidBool},
+		Generics: []TypeVarId{0},
+	}
 
-	return map[TokenType]QuoteSig{
-		PLUS:               intIntInt,
-		MINUS:              intIntInt,
-		ASTERISK:           intIntInt,
-		ASTERISKBINARY:     intIntInt,
-		LESSTHAN:           intIntBool,
-		GREATERTHAN:        intIntBool,
-		LESSTHANOREQUAL:    intIntBool,
-		GREATERTHANOREQUAL: intIntBool,
-		STR:                strConv,
-		NOT:                {Inputs: []TypeId{TidBool}, Outputs: []TypeId{TidBool}},
-		EQUALS: {
-			Inputs:   []TypeId{arena.MakeVar(0), arena.MakeVar(0)},
-			Outputs:  []TypeId{TidBool},
-			Generics: []TypeVarId{0},
-		},
-		NOTEQUAL: {
-			Inputs:   []TypeId{arena.MakeVar(0), arena.MakeVar(0)},
-			Outputs:  []TypeId{TidBool},
-			Generics: []TypeVarId{0},
-		},
+	return map[TokenType][]QuoteSig{
+		PLUS:               arithmetic,
+		MINUS:              arithmetic,
+		ASTERISK:           arithmetic,
+		ASTERISKBINARY:     arithmetic,
+		LESSTHAN:           comparison,
+		GREATERTHAN:        comparison,
+		LESSTHANOREQUAL:    comparison,
+		GREATERTHANOREQUAL: comparison,
+		STR:                {strConv},
+		NOT:                {{Inputs: []TypeId{TidBool}, Outputs: []TypeId{TidBool}}},
+		EQUALS:             {eqSig},
+		NOTEQUAL:           {eqSig},
 	}
 }
