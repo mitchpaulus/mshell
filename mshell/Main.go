@@ -316,6 +316,7 @@ func main() {
 	var inputFile *TokenFile
 	inputFile = nil
 	inputFilePath := ""
+	checkTypes := false // --check-types: gate execution with the new Checker (Phase 10 step 3)
 
 	if len(os.Args) == 1 {
 		// Enter interactive mode
@@ -330,6 +331,8 @@ func main() {
 			// printLex = true
 		} else if arg == "--typecheck" {
 			command = CLITYPECHECK
+		} else if arg == "--check-types" {
+			checkTypes = true
 		} else if arg == "--parse" {
 			command = CLIPARSE
 			// printParse = true
@@ -349,6 +352,7 @@ func main() {
 			fmt.Println("  --html       Render the input as HTML")
 			fmt.Println("  --lex        Print the tokens lexed from the input")
 			fmt.Println("  --parse      Print the parsed Abstract Syntax Tree as JSON")
+			fmt.Println("  --check-types Run the new static type checker as a gate before evaluation (Phase 10 preview)")
 			// fmt.Println("  --typecheck  Type check the input and report any errors") Ignore this for now.
 			fmt.Println("  --version    Print version information and exit")
 			fmt.Println("  -c INPUT     Execute INPUT as the program, before positional args")
@@ -644,6 +648,16 @@ func main() {
 			os.Exit(1)
 		} else {
 			os.Exit(0)
+		}
+	}
+
+	if checkTypes {
+		errs, ok := TypeCheckProgram(file)
+		if !ok {
+			for _, e := range errs {
+				fmt.Fprintln(os.Stderr, e)
+			}
+			os.Exit(1)
 		}
 	}
 

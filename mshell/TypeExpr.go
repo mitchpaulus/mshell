@@ -1,11 +1,22 @@
 package main
 
-// Type-expression parser (Phase 10, step 1).
+// Type-expression parser (Phase 10).
 //
-// Consumes a token stream and produces a TypeId. Used by the main parser at
-// every site that contains a type expression: the right-hand side of
-// `type X = ...` declarations, the operand of `<value> as <T>`, and (later)
-// the input/output lists of `def` signatures.
+// Two-stage design:
+//
+//  1. ParseTypeExprAST consumes a token stream and produces a TypeExprAST —
+//     a stateless parse tree. No arena / Checker dependency. This is what
+//     the main parser invokes when it encounters `type X = ...` or
+//     `<value> as <T>`, so the parser stays decoupled from the type system
+//     and forward references work naturally (the AST is resolved later).
+//
+//  2. ResolveTypeExprAST walks the AST and builds a TypeId via the
+//     Checker's arena, looking up named types in the type environment.
+//
+// ParseTypeExpr (the slice-input convenience entry point) chains the two:
+// parse to AST, then resolve. Existing tests use this form. New parser
+// integration uses ParseTypeExprAST directly off the streaming token
+// source and stores the AST on the parse tree.
 //
 // Grammar:
 //
@@ -19,103 +30,148 @@ package main
 //   sig      := typeExpr* '--' typeExpr*
 //   entry    := key ':' typeExpr
 //   named    := LITERAL ( '[' typeExpr ']' )?
-//
-// The dict-vs-shape decision is made on the first key inside `{...}`:
-//
-//   - Key parses as a type expression (primitive, list, dict, etc.) -> dict.
-//     Exactly one key:value pair is allowed for dicts.
-//   - Key is a LITERAL identifier followed by ':' -> shape with named fields.
-//
-// Generics (a bare identifier that is not a known type) are NOT yet
-// supported — they error out as "unknown type". Generics land alongside
-// `def` signature parsing in the next chunk; until then, simple `type X =
-// ...` declarations and `as <T>` casts only need monomorphic type
-// expressions.
 
-// ParseTypeExpr parses a single type expression from `tokens` starting at
-// index 0. It returns the resulting TypeId, the number of tokens consumed,
-// and any errors encountered. On error, the returned TypeId is best-effort
-// (often TidNothing) and consumed >= 0.
-func ParseTypeExpr(c *Checker, tokens []Token) (TypeId, int, []TypeError) {
-	p := &typeExprParser{tokens: tokens, c: c}
-	id := p.parseUnion()
-	return id, p.pos, p.errs
+// TokenSource is the abstraction over a token stream. The slice adapter
+// powers the convenience API and unit tests; the streaming parser
+// implements its own adapter so it can drive ParseTypeExprAST directly.
+type TokenSource interface {
+	Peek() Token
+	Advance() Token
 }
 
-type typeExprParser struct {
-	tokens []Token
-	pos    int
-	c      *Checker
-	errs   []TypeError
+// SliceTokenSource adapts a []Token to TokenSource.
+type SliceTokenSource struct {
+	Tokens []Token
+	Pos    int
 }
 
-func (p *typeExprParser) atEnd() bool {
-	return p.pos >= len(p.tokens)
-}
-
-func (p *typeExprParser) peek() Token {
-	if p.atEnd() {
+func (s *SliceTokenSource) Peek() Token {
+	if s.Pos >= len(s.Tokens) {
 		return Token{Type: EOF}
 	}
-	return p.tokens[p.pos]
+	return s.Tokens[s.Pos]
 }
 
-func (p *typeExprParser) advance() Token {
-	t := p.peek()
-	if !p.atEnd() {
-		p.pos++
+func (s *SliceTokenSource) Advance() Token {
+	t := s.Peek()
+	if s.Pos < len(s.Tokens) {
+		s.Pos++
 	}
 	return t
 }
 
-func (p *typeExprParser) errAt(tok Token, hint string) {
-	p.errs = append(p.errs, TypeError{
-		Kind: TErrTypeParse,
-		Pos:  tok,
-		Hint: hint,
-	})
+// TypeExprAST is a parsed-but-unresolved type expression. Implementations
+// hold the source token (for error reporting) and any sub-expressions.
+type TypeExprAST interface {
+	StartToken() Token
 }
 
-func (p *typeExprParser) expect(tt TokenType, what string) (Token, bool) {
-	tok := p.peek()
+type TypePrimAST struct {
+	Tok Token
+	Tid TypeId // for primitives whose TypeId is known at lex time
+}
+
+func (a *TypePrimAST) StartToken() Token { return a.Tok }
+
+type TypeNamedAST struct {
+	Tok  Token  // the LITERAL token
+	Name string // lexeme
+	Args []TypeExprAST
+}
+
+func (a *TypeNamedAST) StartToken() Token { return a.Tok }
+
+type TypeListAST struct {
+	Tok  Token
+	Elem TypeExprAST
+}
+
+func (a *TypeListAST) StartToken() Token { return a.Tok }
+
+type TypeDictAST struct {
+	Tok Token
+	K   TypeExprAST
+	V   TypeExprAST
+}
+
+func (a *TypeDictAST) StartToken() Token { return a.Tok }
+
+type ShapeFieldAST struct {
+	Tok  Token
+	Name string
+	Type TypeExprAST
+}
+
+type TypeShapeAST struct {
+	Tok    Token
+	Fields []ShapeFieldAST
+}
+
+func (a *TypeShapeAST) StartToken() Token { return a.Tok }
+
+type TypeQuoteAST struct {
+	Tok     Token
+	Inputs  []TypeExprAST
+	Outputs []TypeExprAST
+}
+
+func (a *TypeQuoteAST) StartToken() Token { return a.Tok }
+
+type TypeUnionAST struct {
+	Tok  Token
+	Arms []TypeExprAST
+}
+
+func (a *TypeUnionAST) StartToken() Token { return a.Tok }
+
+// astParser is the recursive-descent driver over a TokenSource.
+type astParser struct {
+	src  TokenSource
+	errs []TypeError
+}
+
+func (p *astParser) errAt(tok Token, hint string) {
+	p.errs = append(p.errs, TypeError{Kind: TErrTypeParse, Pos: tok, Hint: hint})
+}
+
+func (p *astParser) expect(tt TokenType, what string) (Token, bool) {
+	tok := p.src.Peek()
 	if tok.Type != tt {
 		p.errAt(tok, "expected "+what)
 		return tok, false
 	}
-	return p.advance(), true
+	return p.src.Advance(), true
 }
 
-// parseUnion is the top of the grammar. It parses one primary, then folds
-// any `| primary` arms into a single union TypeId.
-func (p *typeExprParser) parseUnion() TypeId {
+func (p *astParser) parseUnion() TypeExprAST {
 	first := p.parsePrimary()
-	if p.peek().Type != PIPE {
+	if p.src.Peek().Type != PIPE {
 		return first
 	}
-	arms := []TypeId{first}
-	for p.peek().Type == PIPE {
-		p.advance()
+	startTok := first.StartToken()
+	arms := []TypeExprAST{first}
+	for p.src.Peek().Type == PIPE {
+		p.src.Advance()
 		arms = append(arms, p.parsePrimary())
 	}
-	return p.c.arena.MakeUnion(arms, NameNone)
+	return &TypeUnionAST{Tok: startTok, Arms: arms}
 }
 
-// parsePrimary handles every form except a top-level union.
-func (p *typeExprParser) parsePrimary() TypeId {
-	tok := p.peek()
+func (p *astParser) parsePrimary() TypeExprAST {
+	tok := p.src.Peek()
 	switch tok.Type {
 	case TYPEINT:
-		p.advance()
-		return TidInt
+		p.src.Advance()
+		return &TypePrimAST{Tok: tok, Tid: TidInt}
 	case TYPEFLOAT:
-		p.advance()
-		return TidFloat
+		p.src.Advance()
+		return &TypePrimAST{Tok: tok, Tid: TidFloat}
 	case TYPEBOOL:
-		p.advance()
-		return TidBool
+		p.src.Advance()
+		return &TypePrimAST{Tok: tok, Tid: TidBool}
 	case STR:
-		p.advance()
-		return TidStr
+		p.src.Advance()
+		return &TypePrimAST{Tok: tok, Tid: TidStr}
 	case LEFT_SQUARE_BRACKET:
 		return p.parseList()
 	case LEFT_CURLY:
@@ -126,59 +182,49 @@ func (p *typeExprParser) parsePrimary() TypeId {
 		return p.parseNamed()
 	}
 	p.errAt(tok, "expected a type")
-	if !p.atEnd() {
-		p.advance()
+	if tok.Type != EOF {
+		p.src.Advance()
 	}
-	return TidNothing
+	return &TypePrimAST{Tok: tok, Tid: TidNothing}
 }
 
-// parseList consumes `[ typeExpr ]` and returns the list TypeId.
-func (p *typeExprParser) parseList() TypeId {
-	p.advance() // [
+func (p *astParser) parseList() TypeExprAST {
+	open := p.src.Advance() // [
 	elem := p.parseUnion()
 	p.expect(RIGHT_SQUARE_BRACKET, "']'")
-	return p.c.arena.MakeList(elem)
+	return &TypeListAST{Tok: open, Elem: elem}
 }
 
-// parseDictOrShape consumes `{ ... }`. The first key decides which form:
-// a primitive/composite key means dict (single pair); a LITERAL key means
-// shape (one or more named fields).
-func (p *typeExprParser) parseDictOrShape() TypeId {
-	openTok := p.advance() // {
-	if p.peek().Type == RIGHT_CURLY {
-		// Empty record / shape.
-		p.advance()
-		return p.c.arena.MakeShape(nil)
+func (p *astParser) parseDictOrShape() TypeExprAST {
+	open := p.src.Advance() // {
+	if p.src.Peek().Type == RIGHT_CURLY {
+		p.src.Advance()
+		return &TypeShapeAST{Tok: open}
 	}
-	// Decide dict vs shape by lookahead: shape iff key is LITERAL followed
-	// by ':' AND the LITERAL is not itself a primitive type spelled as a
-	// LITERAL (e.g. "bytes", "none"). Primitives spelled with dedicated
-	// tokens (TYPEINT, etc.) always mean dict.
-	first := p.peek()
-	if first.Type == LITERAL && p.lookaheadColon() && !isPrimitiveLiteralType(first.Lexeme) {
-		return p.parseShape(openTok)
+	first := p.src.Peek()
+	if first.Type == LITERAL && p.peekIsColonAfterLiteral() && !isPrimitiveLiteralType(first.Lexeme) {
+		return p.parseShape(open)
 	}
-	// Dict path.
 	keyType := p.parseUnion()
 	p.expect(COLON, "':'")
 	valType := p.parseUnion()
-	if p.peek().Type == COMMA {
-		p.errAt(p.peek(), "dict types take a single key:value pair; use a shape `{a: T, b: U}` for multiple fields")
-		// Consume to a closing brace for recovery.
-		for !p.atEnd() && p.peek().Type != RIGHT_CURLY {
-			p.advance()
+	if p.src.Peek().Type == COMMA {
+		p.errAt(p.src.Peek(), "dict types take a single key:value pair; use a shape `{a: T, b: U}` for multiple fields")
+		for {
+			t := p.src.Peek()
+			if t.Type == RIGHT_CURLY || t.Type == EOF {
+				break
+			}
+			p.src.Advance()
 		}
 	}
 	p.expect(RIGHT_CURLY, "'}'")
-	return p.c.arena.MakeDict(keyType, valType)
+	return &TypeDictAST{Tok: open, K: keyType, V: valType}
 }
 
-// parseShape parses one or more `name: T` entries. The opening `{` has
-// already been consumed.
-func (p *typeExprParser) parseShape(openTok Token) TypeId {
-	_ = openTok
-	var fields []ShapeField
-	seen := map[NameId]bool{}
+func (p *astParser) parseShape(openTok Token) TypeExprAST {
+	var fields []ShapeFieldAST
+	seen := map[string]bool{}
 	for {
 		nameTok, ok := p.expect(LITERAL, "field name")
 		if !ok {
@@ -186,91 +232,203 @@ func (p *typeExprParser) parseShape(openTok Token) TypeId {
 		}
 		p.expect(COLON, "':'")
 		t := p.parseUnion()
-		nameId := p.c.names.Intern(nameTok.Lexeme)
-		if seen[nameId] {
+		if seen[nameTok.Lexeme] {
 			p.errAt(nameTok, "duplicate shape field '"+nameTok.Lexeme+"'")
 		} else {
-			seen[nameId] = true
-			fields = append(fields, ShapeField{Name: nameId, Type: t})
+			seen[nameTok.Lexeme] = true
+			fields = append(fields, ShapeFieldAST{Tok: nameTok, Name: nameTok.Lexeme, Type: t})
 		}
-		if p.peek().Type == COMMA {
-			p.advance()
+		if p.src.Peek().Type == COMMA {
+			p.src.Advance()
 			continue
 		}
 		break
 	}
 	p.expect(RIGHT_CURLY, "'}'")
-	return p.c.arena.MakeShape(fields)
+	return &TypeShapeAST{Tok: openTok, Fields: fields}
 }
 
-// parseQuote consumes `( in* -- out* )` and returns a quote TypeId.
-func (p *typeExprParser) parseQuote() TypeId {
-	p.advance() // (
-	var inputs, outputs []TypeId
-	for !p.atEnd() && p.peek().Type != DOUBLEDASH && p.peek().Type != RIGHT_PAREN {
+func (p *astParser) parseQuote() TypeExprAST {
+	open := p.src.Advance() // (
+	var inputs, outputs []TypeExprAST
+	for {
+		t := p.src.Peek()
+		if t.Type == DOUBLEDASH || t.Type == RIGHT_PAREN || t.Type == EOF {
+			break
+		}
 		inputs = append(inputs, p.parseUnion())
 	}
-	if p.peek().Type == DOUBLEDASH {
-		p.advance()
-		for !p.atEnd() && p.peek().Type != RIGHT_PAREN {
+	if p.src.Peek().Type == DOUBLEDASH {
+		p.src.Advance()
+		for {
+			t := p.src.Peek()
+			if t.Type == RIGHT_PAREN || t.Type == EOF {
+				break
+			}
 			outputs = append(outputs, p.parseUnion())
 		}
 	} else {
-		p.errAt(p.peek(), "expected '--' in quote signature")
+		p.errAt(p.src.Peek(), "expected '--' in quote signature")
 	}
 	p.expect(RIGHT_PAREN, "')'")
-	return p.c.arena.MakeQuote(QuoteSig{Inputs: inputs, Outputs: outputs})
+	return &TypeQuoteAST{Tok: open, Inputs: inputs, Outputs: outputs}
 }
 
-// parseNamed handles a LITERAL token: a built-in non-keyword type name
-// (Maybe, Grid, GridView, GridRow, bytes, none) or a user-declared type
-// from the type environment. `Maybe` is the only one that takes a
-// bracketed type argument.
-func (p *typeExprParser) parseNamed() TypeId {
-	tok := p.advance()
-	switch tok.Lexeme {
-	case "bytes":
-		return TidBytes
-	case "none":
-		return TidNone
-	case "Grid":
-		return p.c.arena.MakeGrid(0)
-	case "GridView":
-		return p.c.arena.MakeGridView(0)
-	case "GridRow":
-		return p.c.arena.MakeGridRow(0)
-	case "Maybe":
-		if p.peek().Type != LEFT_SQUARE_BRACKET {
+func (p *astParser) parseNamed() TypeExprAST {
+	tok := p.src.Advance()
+	node := &TypeNamedAST{Tok: tok, Name: tok.Lexeme}
+	// Maybe is the only built-in named form that takes a bracketed type
+	// argument. User-declared types might (in the future) take args; for
+	// now we only accept `[T]` after Maybe.
+	if tok.Lexeme == "Maybe" {
+		if p.src.Peek().Type != LEFT_SQUARE_BRACKET {
 			p.errAt(tok, "Maybe requires a type argument: Maybe[T]")
-			return TidNothing
+			return node
 		}
-		p.advance() // [
+		p.src.Advance() // [
 		inner := p.parseUnion()
 		p.expect(RIGHT_SQUARE_BRACKET, "']'")
-		return p.c.arena.MakeMaybe(inner)
+		node.Args = []TypeExprAST{inner}
 	}
-	// User-declared type lookup.
-	if id := p.c.LookupType(tok.Lexeme); id != TidNothing {
-		return id
+	return node
+}
+
+// peekIsColonAfterLiteral reports whether the token after the current
+// LITERAL is COLON. The TokenSource interface only exposes single-token
+// peek, so this is awkward — we work around it by peeking one token, then
+// looking inside if the source is a SliceTokenSource. For the streaming
+// parser, we instead disambiguate by attempting a lookahead via peek-after-
+// consume. To keep the implementation simple and portable across both
+// sources, we use a small wrapper: SliceTokenSource has direct access; the
+// streaming parser overrides this through a method on its adapter.
+//
+// To avoid tying the AST parser to a specific source, we ask the source
+// directly via a type assertion. Sources that don't support two-token
+// lookahead default to "false", which means an ambiguous shape-vs-dict
+// case at the streaming parser is parsed as a dict by default. The main
+// parser's adapter implements two-token peek to keep the behavior
+// consistent.
+func (p *astParser) peekIsColonAfterLiteral() bool {
+	if la, ok := p.src.(twoTokenPeeker); ok {
+		return la.PeekAt(1).Type == COLON
 	}
-	p.errAt(tok, "unknown type '"+tok.Lexeme+"'")
+	return false
+}
+
+// twoTokenPeeker is an optional capability on TokenSource: peek N tokens
+// ahead. SliceTokenSource and the streaming parser's adapter implement it.
+type twoTokenPeeker interface {
+	PeekAt(n int) Token
+}
+
+// PeekAt returns the token at offset n from the current position. Out of
+// range returns an EOF token.
+func (s *SliceTokenSource) PeekAt(n int) Token {
+	idx := s.Pos + n
+	if idx >= len(s.Tokens) || idx < 0 {
+		return Token{Type: EOF}
+	}
+	return s.Tokens[idx]
+}
+
+// ParseTypeExprAST parses a single type expression off `src`. After return,
+// `src` is positioned just past the consumed expression. Errors collect
+// into the returned slice; on error, the AST may be partial.
+func ParseTypeExprAST(src TokenSource) (TypeExprAST, []TypeError) {
+	p := &astParser{src: src}
+	ast := p.parseUnion()
+	return ast, p.errs
+}
+
+// ResolveTypeExprAST converts a parsed AST into a TypeId via the Checker's
+// arena, looking up named types in the type environment. Errors are
+// appended to the Checker. Returns TidNothing on resolution failure (after
+// emitting an error) so callers can still continue.
+func ResolveTypeExprAST(c *Checker, ast TypeExprAST) TypeId {
+	switch n := ast.(type) {
+	case *TypePrimAST:
+		return n.Tid
+	case *TypeListAST:
+		return c.arena.MakeList(ResolveTypeExprAST(c, n.Elem))
+	case *TypeDictAST:
+		return c.arena.MakeDict(ResolveTypeExprAST(c, n.K), ResolveTypeExprAST(c, n.V))
+	case *TypeShapeAST:
+		fields := make([]ShapeField, 0, len(n.Fields))
+		for _, f := range n.Fields {
+			fields = append(fields, ShapeField{
+				Name: c.names.Intern(f.Name),
+				Type: ResolveTypeExprAST(c, f.Type),
+			})
+		}
+		return c.arena.MakeShape(fields)
+	case *TypeQuoteAST:
+		ins := make([]TypeId, 0, len(n.Inputs))
+		for _, in := range n.Inputs {
+			ins = append(ins, ResolveTypeExprAST(c, in))
+		}
+		outs := make([]TypeId, 0, len(n.Outputs))
+		for _, out := range n.Outputs {
+			outs = append(outs, ResolveTypeExprAST(c, out))
+		}
+		return c.arena.MakeQuote(QuoteSig{Inputs: ins, Outputs: outs})
+	case *TypeUnionAST:
+		arms := make([]TypeId, 0, len(n.Arms))
+		for _, a := range n.Arms {
+			arms = append(arms, ResolveTypeExprAST(c, a))
+		}
+		return c.arena.MakeUnion(arms, NameNone)
+	case *TypeNamedAST:
+		switch n.Name {
+		case "bytes":
+			return TidBytes
+		case "none":
+			return TidNone
+		case "Grid":
+			return c.arena.MakeGrid(0)
+		case "GridView":
+			return c.arena.MakeGridView(0)
+		case "GridRow":
+			return c.arena.MakeGridRow(0)
+		case "Maybe":
+			// Missing arg is already reported at parse time; just degrade
+			// gracefully here so callers still get a sensible TypeId chain.
+			if len(n.Args) != 1 {
+				return TidNothing
+			}
+			return c.arena.MakeMaybe(ResolveTypeExprAST(c, n.Args[0]))
+		}
+		if id := c.LookupType(n.Name); id != TidNothing {
+			return id
+		}
+		c.errors = append(c.errors, TypeError{
+			Kind: TErrTypeParse, Pos: n.Tok,
+			Hint: "unknown type '" + n.Name + "'",
+		})
+		return TidNothing
+	}
 	return TidNothing
 }
 
-// lookaheadColon reports whether the token at p.pos+1 is COLON. Used to
-// distinguish shape entries from dict pair forms.
-func (p *typeExprParser) lookaheadColon() bool {
-	if p.pos+1 >= len(p.tokens) {
-		return false
+// ParseTypeExpr is the convenience entry point used by tests and callers
+// that already have a token slice. Returns (TypeId, consumed, errors).
+func ParseTypeExpr(c *Checker, tokens []Token) (TypeId, int, []TypeError) {
+	src := &SliceTokenSource{Tokens: tokens}
+	ast, errs := ParseTypeExprAST(src)
+	preLen := len(c.errors)
+	id := ResolveTypeExprAST(c, ast)
+	// Surface resolution-time errors back to caller (and remove them from
+	// the checker's accumulator so this entry point stays self-contained).
+	if len(c.errors) > preLen {
+		errs = append(errs, c.errors[preLen:]...)
+		c.errors = c.errors[:preLen]
 	}
-	return p.tokens[p.pos+1].Type == COLON
+	return id, src.Pos, errs
 }
 
 // isPrimitiveLiteralType reports whether a LITERAL lexeme names a built-in
-// type (the ones that aren't given dedicated tokens). When such a name
-// appears as a key inside `{...}`, the form is a dict (the user is using
-// the primitive as the dict's key type), not a shape with that field name —
-// per the design, reserved type names cannot be field names.
+// type. When such a name appears as a key inside `{...}`, the form is a
+// dict (the user is using the primitive as the dict's key type), not a
+// shape with that field name.
 func isPrimitiveLiteralType(lex string) bool {
 	switch lex {
 	case "bytes", "none", "Maybe", "Grid", "GridView", "GridRow":

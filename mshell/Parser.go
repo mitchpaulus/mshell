@@ -682,6 +682,12 @@ func (parser *MShellParser) ParseFile() (file *MShellFile, err error) {
 			_ = parser.Match(parser.curr, END)
 			// return file, errors.New("DEF Not implemented")
 			// parser.ParseDefinition()
+		case TYPE:
+			decl, err := parser.ParseTypeDecl()
+			if err != nil {
+				return file, err
+			}
+			file.Items = append(file.Items, decl)
 		case VER:
 			if file.Version != "" {
 				return file, fmt.Errorf("%d:%d: Duplicate VER directive; version already set to %q", parser.curr.Line, parser.curr.Column, file.Version)
@@ -2044,6 +2050,8 @@ func (parser *MShellParser) ParseItem() (MShellParseItem, error) {
 		return parser.ParseMatchBlock()
 	case PREFIXQUOTE:
 		return parser.ParsePrefixQuote()
+	case AS:
+		return parser.ParseAsCast()
 	default:
 		return parser.ParseSimple(), nil
 	}

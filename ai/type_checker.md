@@ -1500,16 +1500,284 @@ Verification: `go build ./...`, `go test ./...`, `./build.sh`,
 `./tests/test.sh` — all green. No stdlib changes; tests modified only
 to reflect the `type` → `typeof` rename.
 
-#### What this unlocks
+### Phase 10 step 2 — Parser integration of `type` and `as` — DONE
 
-The next chunk wires `ParseTypeExpr` into the main parser:
+Wired the type-expression parser into `MShellParser`. Both forms
+parse cleanly through the existing pipeline; they are no-ops at
+evaluation time (purely static, by design). The Checker is NOT yet
+invoked at run time — that's step 3 behind `--typecheck`.
 
-- Top-level `type X = <typeExpr>` declarations call
-  `Checker.DeclareType`.
-- Postfix `<value> as <typeExpr>` calls `Checker.Cast`.
-- After that: `Main.go` integration behind `--typecheck` flag,
-  fixture-migration sweep, and finally deletion of the old
-  `TypeChecking.go`.
+Refactor:
+
+`mshell/TypeExpr.go` — split into a stateless AST + a Checker-driven
+resolver:
+
+- `TokenSource` interface (`Peek`, `Advance`, optional `PeekAt(n)`).
+- `SliceTokenSource` adapter (powers existing slice tests).
+- `TypeExprAST` interface and concrete nodes: `TypePrimAST`,
+  `TypeNamedAST`, `TypeListAST`, `TypeDictAST`, `TypeShapeAST`
+  (with `ShapeFieldAST`), `TypeQuoteAST`, `TypeUnionAST`.
+- `ParseTypeExprAST(src) (TypeExprAST, []TypeError)` — stateless;
+  no arena dependency.
+- `ResolveTypeExprAST(c, ast) TypeId` — walks the AST and builds a
+  TypeId via the Checker's arena, looking up named types in
+  `typeEnv`.
+- `ParseTypeExpr(c, tokens)` is now a shim: parse to AST, resolve.
+  Existing 22 tests still pass unchanged.
+
+Forward references work naturally: parser stores AST, resolution
+runs when the checker pass executes.
+
+Files added:
+
+- `mshell/TypeParseIntegration.go` — new parse-tree node types and
+  parser methods.
+- `mshell/TypeParseIntegration_test.go` — 8 integration tests.
+
+New parse-tree node types:
+
+```go
+type MShellTypeDecl struct {
+    Name      string
+    NameToken Token
+    StartTok  Token       // the TYPE keyword
+    Body      TypeExprAST
+}
+type MShellAsCast struct {
+    AsToken Token
+    Target  TypeExprAST
+}
+```
+
+Both implement `MShellParseItem`. Both are static-only at
+evaluation time — the evaluator has new cases that return
+`SimpleSuccess()` for them.
+
+Streaming adapter (`parserTokenSource`):
+
+- Wraps `*MShellParser`; pre-loaded with `parser.curr`.
+- `ensureN(n)` pulls more tokens from the lexer as needed.
+- `PeekAt(n)` works for arbitrary `n`; the AST parser only needs
+  `n <= 1` (shape-vs-dict disambiguation).
+- `finish()` writes the un-consumed lookahead token back into
+  `parser.curr`. Asserts no more than one un-consumed token remains;
+  if it ever fires, the AST parser has a buffering bug.
+
+Parser additions:
+
+- `(*MShellParser).parseTypeExprStreaming()` — runs `ParseTypeExprAST`
+  against the live token stream and tidies up.
+- `(*MShellParser).ParseTypeDecl()` — handles `type Name = <typeExpr>`.
+- `(*MShellParser).ParseAsCast()` — handles `as <typeExpr>`.
+- `case TYPE:` added to `ParseFile` (top-level only).
+- `case AS:` added to `ParseItem` (works inside lists/quotes too,
+  since `ParseItem` is the recursive descent core).
+
+Tests in `TypeParseIntegration_test.go` (8):
+
+- Parse `type Result = int | str` → `MShellTypeDecl` with
+  `TypeUnionAST` body of 2 arms.
+- `type UserId = int  42 wl` — type decl followed by program; verify
+  trailing items survive.
+- `type R = int  42 as R` — `as` postfix produces `MShellAsCast` with
+  `TypeNamedAST` target.
+- `type Result = int  42 as Result wl` — trailing `wl` not swallowed
+  by the cast (verifies the streaming adapter restores `parser.curr`
+  correctly).
+- `type Box = Maybe[int]` — Maybe with bracketed argument.
+- `type Person = {name: str, age: int}` — shape body.
+- `type = int` (missing name) → parse error.
+- `type X int` (missing `=`) → parse error.
+
+End-to-end smoke test: a real `.msh` program containing both
+`type Result = int | str` and `42 as Result` parses, type/as nodes
+no-op at evaluation, and the rest of the program (`"hello" wl`)
+runs unchanged.
+
+Verification: `go build ./...`, `go test ./...`, `./build.sh`,
+`./tests/test.sh` — all green. No stdlib changes required.
+
+### Phase 10 step 3 — Main.go integration behind `--check-types` — DONE
+
+The new Checker is now invokable from the CLI as a pre-evaluation
+gate. Off by default during fixture migration; flips to default
+once the suite is clean.
+
+Files added:
+
+- `mshell/TypeCheckProgram.go` — `TypeCheckProgram(file *MShellFile)
+  ([]string, bool)` entry point.
+- `mshell/TypeCheckProgram_test.go` — 9 unit tests.
+
+Edits to `mshell/Main.go`:
+
+- New `checkTypes` variable wired from the `--check-types` flag.
+- Help text entry.
+- Gate call between parse and evaluate: on failure, print formatted
+  errors to stderr and `os.Exit(1)`.
+
+Today's check is intentionally narrow:
+
+1. Pre-collect all `MShellTypeDecl` items from `file.Items`.
+2. For each decl: resolve body AST → TypeId via `ResolveTypeExprAST`,
+   then call `Checker.DeclareType`. Errors flow into the checker:
+   reserved-type-name (e.g. `type Maybe = ...`), duplicate-name,
+   and unknown-type-in-body all surface.
+3. Walk every parse item with `visitForAsCasts`, recursing into
+   `MShellParseList`, `MShellParseQuote`, and `MShellParseDict`.
+   For each `MShellAsCast`, resolve the target AST. This catches
+   unknown-type targets and Maybe-arity errors at well-formedness
+   time even before the program-flow walker exists.
+4. Format any accumulated errors via `TypeError.Format(arena, names)`.
+
+What is NOT done yet (and is the obvious next chunk):
+
+- Driving the `TypeStack` through every parse-tree node so the full
+  set of static type checks (`applySig`, branch reconciliation,
+  match exhaustiveness, overload dispatch) actually runs over user
+  code. The infrastructure for all of these exists; only the
+  parse-tree walker is missing.
+- Definition (`def`) sig parsing. Currently `def` bodies are not
+  type-checked.
+- Stdlib hashing/caching from the design.
+
+Reserved-name parser quirk (worth flagging): `type int = ...` fails
+at PARSE time because `int` lexes as TYPEINT, not LITERAL — the
+parser's name slot only accepts LITERAL. Same for `float`, `bool`,
+`str`. The LITERAL-shaped reserved names — `Maybe`, `Grid`,
+`GridView`, `GridRow`, `bytes`, `none` — DO reach the parser and
+get rejected at the checker level via `IsReservedTypeName`. That
+split is fine for users (both forms are still rejected) but the
+error messages differ.
+
+Tests in `TypeCheckProgram_test.go` (9):
+
+- Empty program passes.
+- Valid `type Result = int | str` passes.
+- `type Maybe = int` fails (reserved-name path through the checker).
+- Two `type X = ...` decls fail (duplicate name).
+- `type X = Nope` fails (unknown body).
+- `type A = int  type B = A | str` passes (cross-decl forward ref).
+- `type R = int  42 as R` passes (cast target resolved).
+- `42 as Nope` fails (unknown cast target at top level).
+- `[42 as Nope]` fails (visitor recurses into composite items).
+- Plain mshell program with no `type`/`as` passes (we don't yet do
+  flow checking).
+
+End-to-end CLI smoke verified:
+
+| Program | Flag           | Result                       |
+| ------- | -------------- | ---------------------------- |
+| good    | none           | runs, prints output          |
+| good    | `--check-types` | check passes, then runs     |
+| bad     | none           | bypassed, runs (no-op), 0    |
+| bad     | `--check-types` | check fails, stderr, exit 1 |
+
+Verification: `go build ./...`, `go test ./...`, `./build.sh`,
+`./tests/test.sh` — all green. No stdlib changes; no fixture
+migration needed (flag is opt-in and existing tests don't pass it).
+
+### Phase 10 step 4 — Parse-tree flow walker (first cut) — DONE
+
+The Checker now walks the parse tree and drives the TypeStack
+through tokens and casts. Programs with arithmetic, comparison,
+`just`/`none`, type declarations, `as` casts, and varstore/getter
+flow check end-to-end under `--check-types`.
+
+Programs that lean on word builtins not yet in
+`builtinSigsByName`/`builtinSigsByToken` (most existing mshell
+code) will surface unknown-identifier errors. That's the intended
+signal: as the builtin table fills out, more programs become
+checkable. Until then, `--check-types` stays opt-in.
+
+`mshell/TypeCheckProgram.go`:
+
+- `(*Checker).CheckProgram(file)` — registers all `MShellTypeDecl`
+  in declaration order (forward refs work), then walks
+  `file.Items` through `checkParseItem`.
+- `(*Checker).checkParseItem(item)` — dispatcher.
+
+Per-node behavior in this cut:
+
+| Parse item                       | Stack effect                                 |
+| -------------------------------- | -------------------------------------------- |
+| `*MShellTypeDecl`                | skip (registered in pre-pass)                |
+| `*MShellAsCast`                  | resolve target, call `Checker.Cast`          |
+| `Token`                          | dispatch via `checkOne` (existing builtins)  |
+| `*MShellParseList`               | recurse into items (sandboxed), push `[T?]`  |
+| `*MShellParseDict`               | recurse into values, push empty shape        |
+| `*MShellParseQuote`              | recurse into body, push `( -- )` placeholder |
+| `*MShellParsePrefixQuote`        | no-op                                        |
+| `*MShellParseIfBlock`/`Match`    | no-op (branch reconciliation deferred)       |
+| `*MShellParseGrid`               | push opaque `Grid`                           |
+| `*MShellIndexerList`             | pop one, push fresh var                      |
+| `MShellVarstoreList`             | pop per name, bind in `VarEnv`               |
+| `*MShellGetter`                  | push `VarEnv` lookup or fresh var            |
+
+Recursion into list/dict/quote items is sandboxed via
+`snapshotStack`/`restoreStack` so nested casts get walked but
+inner stack effects don't leak out (we don't yet attempt
+per-element list inference).
+
+Variable-binding semantics for `MShellVarstoreList`: pops one
+item per name in reverse (top-of-stack binds to the rightmost
+name, matching the runtime). The bound type lands in
+`VarEnv.bound`; `MShellGetter` reads from there.
+
+Tests in `TypeCheckProgram_test.go` (5 new on top of existing 9):
+
+- Arithmetic flow check passes (`2 3 +`).
+- Arithmetic flow check fails on type mismatch (`2 "x" +`).
+- Unregistered builtin (`wl`) surfaces as unknown identifier —
+  documents the migration boundary.
+- AsCast against the live stack: `42 as Result` where
+  `Result = int|str` passes; `42 as Flag` where `Flag = bool`
+  fails with `TErrInvalidCast`.
+- Varstore + getter + arithmetic: `2 n! :n 3 +` passes
+  end-to-end.
+
+Reserved-name parse-time discovery worth flagging: the lexer
+treats single-character `x` as `INTERPRET` (a reserved token),
+so `x` cannot be used as a variable name. Tests use `n` instead.
+
+Verification: `go build ./...`, `go test ./...`, `./build.sh`,
+`./tests/test.sh` — all green. Existing integration tests
+unaffected (flag is opt-in).
+
+#### What this unlocks (continuation)
+
+Remaining V1 chunks:
+
+- **Builtin table buildout.** The most impactful next step. Each
+  registered builtin makes another class of program checkable.
+  Order roughly by how often each appears in the test suite:
+  `wl`/`print`, list ops (`len`, `map`, `filter`), string ops,
+  Maybe pattern matching, etc.
+- **Branch reconciliation wiring.** `if`/`else` and `match` block
+  walkers that drive `Fork`/`CaptureArm`/`ReconcileArms` already
+  built in `TypeBranch.go`. Match exhaustiveness is checkable
+  via `CheckMatchExhaustive`.
+- **Definition (`def`) sig parsing + body checking.** Parse the
+  sig declaration, register a `QuoteSig` keyed by the def's
+  name, type-check the body in a fresh `FnContext`.
+- **Quote-body inference integration.** `InferQuoteSig` already
+  exists (Phase 7); plug it into the quote walker case.
+- **Stdlib hashing/caching** (per design line 765-772).
+- **Phase 11:** delete `mshell/TypeChecking.go` once parity is
+  reached.
+
+Original step-4 plan (kept for reference):
+
+- After parsing, walk `file.Items` collecting `MShellTypeDecl`
+  nodes and call `Checker.DeclareType(name, ResolveTypeExprAST(c,
+  body))` to register them.
+- Walk again, type-checking the program. At each `MShellAsCast`
+  node, resolve target → `TypeId` and call `Checker.Cast`.
+- Gate the whole pass behind `--typecheck` (off by default during
+  fixture migration; flip to default once the test suite is clean).
+- Sweep `.stderr` fixtures whose runtime errors the checker now
+  catches statically.
+- Delete the old `mshell/TypeChecking.go` (Phase 11).
 
 ### Migration thread
 

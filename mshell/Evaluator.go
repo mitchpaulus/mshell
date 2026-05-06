@@ -811,6 +811,14 @@ func (state *EvalState) processToken(token MShellParseItem, frame *EvaluationFra
 	case Token:
 		return state.processTokenToken(t, frame, frames)
 
+	case *MShellTypeDecl:
+		// Static-only: type declarations have no runtime effect by design.
+		return SimpleSuccess()
+
+	case *MShellAsCast:
+		// Static-only: `as` is a checker hint; no runtime work.
+		return SimpleSuccess()
+
 	default:
 		return state.FailWithMessage(fmt.Sprintf("Unknown token type: %T\n", token))
 	}
