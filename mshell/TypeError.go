@@ -22,6 +22,9 @@ const (
 	TErrTypeMismatch
 	TErrUnknownIdentifier
 	TErrLeftoverStack // top-level program left items on the stack at end (informational; not always an error)
+	TErrBranchStackSize
+	TErrBranchVarSet
+	TErrNonExhaustiveMatch
 )
 
 // TypeError is a single static-check failure. Pos is a Token (its line/column
@@ -58,6 +61,12 @@ func (e TypeError) Format(arena *TypeArena, names *NameTable) string {
 		fmt.Fprintf(&sb, "unknown identifier '%s'", e.Name)
 	case TErrLeftoverStack:
 		fmt.Fprintf(&sb, "values left on stack at end of program: %s", e.Hint)
+	case TErrBranchStackSize:
+		fmt.Fprintf(&sb, "branches produce stacks of differing sizes: %s", e.Hint)
+	case TErrBranchVarSet:
+		fmt.Fprintf(&sb, "branches bind different variable sets: %s", e.Hint)
+	case TErrNonExhaustiveMatch:
+		fmt.Fprintf(&sb, "non-exhaustive match: %s", e.Hint)
 	default:
 		fmt.Fprintf(&sb, "unknown type error")
 	}

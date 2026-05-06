@@ -1111,20 +1111,93 @@ Deferred to Phase 6b:
   on the stack at end of program. Probably folds into the same
   reconciliation pass.
 
+### Phase 6b — Branch reconciliation and exhaustiveness — DONE
+
+Files added:
+
+- `mshell/TypeBranch.go` — `ScopeSnapshot`, `Snapshot`, `Fork`,
+  `BranchArm`, `CaptureArm`, `ReconcileArms`, `MatchArmKind`,
+  `MatchArmTag`, `CheckMatchExhaustive`.
+- `mshell/TypeBranch_test.go` — 16 tests (snapshot detachment,
+  fork restoration, same-type reconciliation, type-union
+  reconciliation, stack-size mismatch, var-set mismatch, var-type
+  union, diverged-arm drop, all-diverged clears state, Maybe match
+  exhaustive / missing-none / wildcard, union match exhaustive /
+  missing-arm / wildcard, Maybe-pattern style match returning int).
+
+`TypeError.go` extended with three new kinds:
+`TErrBranchStackSize`, `TErrBranchVarSet`, `TErrNonExhaustiveMatch`.
+
+Reconciliation rules implemented:
+
+- **Stack sizes must match** across non-diverged arms; size mismatch
+  is `TErrBranchStackSize`. Recovery uses the first non-diverged
+  arm's tail so downstream errors don't cascade.
+- **Var sets must match** across non-diverged arms; mismatch is
+  `TErrBranchVarSet`. Same recovery as above.
+- **Per-slot type union** via `arena.MakeUnion` (auto-flatten /
+  dedup / collapse). Same union for per-var types.
+- **Diverged arms dropped entirely** from size, var-set, and union
+  computations. The `Diverged` flag is supplied by the caller
+  (parser-driven path will set it from `exit` / infinite-loop
+  detection in Phase 10).
+- **All-diverged branches clear state**: stack and vars empty,
+  representing dead code downstream. No error reported here —
+  Phase 10 may add a "dead code" warning at the integration layer.
+
+Exhaustiveness:
+
+- **Maybe[T]**: requires both `MatchArmJust` and `MatchArmNone`,
+  or a `MatchArmWildcard`.
+- **Union**: every flattened arm must be covered by an exact
+  `MatchArmType` pattern, or a `MatchArmWildcard`.
+- **Other kinds**: no rule encoded; flagged non-exhaustive unless
+  a wildcard appears. Shape/brand exhaustiveness lands when the
+  parser-driven path produces those arm shapes.
+
+Substitution intentionally NOT rolled back between arms. Bindings
+from arm 1 persist into arm 2's checking. This may cause spurious
+errors in pathological cases; promoting it to a snapshot/restore is
+a localized fix if needed in practice. Documented at the head of
+`TypeBranch.go`.
+
+Verification: `go build ./...`, `go test ./...`, `./build.sh`,
+`./tests/test.sh` — all green.
+
+What this unlocks:
+
+- Phase-4's deferred match-arm dispatch is now buildable: a parser
+  pass can run each arm's body through Fork → check tokens →
+  CaptureArm → ReconcileArms, with `CheckMatchExhaustive` on the
+  pattern side. The user-visible `match` lands in Phase 10 when the
+  parser is wired in.
+- Phase 7 (quote-body inference) will use Snapshot/Fork to recurse
+  on a quote's items with a fresh stack.
+
 ### Phase 5 — Unions, brands, and `as` cast — NEXT
 
-Phase 3 already implemented union/brand unification. Phase 5 adds
-the surface syntax: `type X = A | B` declarations producing a
-`TypeId` in the type environment, and `<value> as <Type>` casts
-that re-tag a value's static type. The hard part is parser-level
-reservation of identifiers as type names, plus the "as" postfix
-syntax — neither of which is needed at the pure-checker layer that
-Phase 4 was built on.
+Phase 3 already implemented union/brand unification at the
+`unify()` level. Phase 5 adds the surface syntax: `type X = A | B`
+declarations producing a `TypeId` in the type environment, and
+`<value> as <Type>` casts that re-tag a value's static type.
 
-Phase 5 may be a good moment to start the parser integration,
-since `type` declarations and `as` are syntactic features. That
-nudges Phase 10 earlier than the original schedule. Worth a check
-before committing.
+Phase 5 is the first phase where touching the parser becomes
+hard to avoid. Two options:
+
+1. **Pure-checker minimal**: add a "type environment" (`map[NameId]TypeId`)
+   and a "cast" entry point on the Checker (`(c *Checker) Cast(target TypeId, callSite Token)`).
+   Defer the parser/lexer changes for `type` declarations and the
+   `as` postfix until Phase 10. This keeps the same shape as the
+   prior phases — pure checker plus tests via constructed token
+   streams or direct API calls.
+2. **Start parser integration now**: register `type` as a top-level
+   form, parse `T = A | B`, build the union via the arena, and
+   land the postfix `as` operator in the lexer. This pulls Phase 10
+   forward but front-loads the schema work.
+
+Recommendation when continuing: option 1, then Phase 7 (quote-body
+inference) and Phase 9 (overload dispatch), then a single parser
+integration pass for Phases 5/10/11 together.
 
 ### Migration thread
 
