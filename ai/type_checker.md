@@ -927,33 +927,57 @@ up, watch for similar collisions with runtime names in `MShellObject.go`.
   into a `type X = ...` parser. Wire when the parser learns to handle
   `type` declarations.
 
-### Phase 2 — Stack and applySig — NEXT
+### Phase 2 — Stack and applySig — DONE
 
-Scope:
+Files created:
 
-- Create `mshell/TypeChecker.go` with `Checker`, `TypeStack`,
-  `VarEnv` (empty for now), `FnContext`, the basic `applySig`.
-- A static table of primitive-only builtin sigs (just enough for
-  arithmetic and comparison: `+`, `-`, `*`, `/`, `<`, `>`, etc.).
-- A simple substitution-free `unify` for primitives only (just integer
-  equality of `TypeId`).
-- Tests that simulate small token streams and check stack outcomes:
-  `2 3 +` leaves `int`; `2 "x" +` produces a type error; `+` with empty
-  stack produces underflow.
+- `mshell/TypeChecker.go` — `Checker`, `TypeStack`, `VarEnv` (placeholder),
+  `FnContext`, `applySig`, primitive-only `unify` (TidBottom unifies with
+  anything; otherwise integer equality of `TypeId`).
+- `mshell/TypeBuiltins.go` — `builtinSigsByToken()` returning a small
+  `map[TokenType]QuoteSig` for `+`, `-`, `*`, `**`, `<`, `>`, `<=`, `>=`.
+  All entries are `(int int -- int)` or `(int int -- bool)`.
+- `mshell/TypeError.go` — `TypeError`, `TypeErrorKind`, `Format`, plus
+  a primitive-only `FormatType`. Composite kinds render as
+  `<Kind #id>` for now.
+- `mshell/TypeChecker_test.go` — covers `2 3 +`, `2 "x" +`,
+  underflow with 0 and 1 args, comparison returns bool, all four
+  primitive literal pushes, unknown identifier, and error formatting.
 
-What does NOT belong in Phase 2:
+Behavior decisions worth flagging:
+
+- On stack underflow, `applySig` reports the error and **leaves the
+  stack untouched**. On a type mismatch, it still pops inputs and
+  pushes outputs. Both choices are about reducing cascading errors
+  in a multi-token stream.
+- `LITERAL` tokens fall through to `TErrUnknownIdentifier` since
+  Phase 2 has no name resolution. The parser-driven path replaces
+  this in Phase 10.
+
+Verification:
+
+- `go build ./...` clean.
+- `go test ./...` passes (existing tests + 7 new Phase-2 tests).
+- `./build.sh` + `./tests/test.sh` — all integration tests pass.
+
+No stdlib or existing test files were modified. The Phase-1 deferrals
+(lexer keyword reservation for `as`/`<fail>`/`pure`/`try`/`fail`,
+parser-level reserved-type-name enforcement) remain deferred —
+nothing in Phase 2 needs them.
+
+What does NOT belong in Phase 2 (and was not done):
 
 - Lists/dicts/shapes/unions/brands (Phase 3+).
-- Generics (Phase 6).
+- Generics, substitution (Phase 6).
 - `if`/`else`, `match`, branch reconciliation (Phase 6b).
 - Any wiring into `Main.go` (Phase 10).
 
-Testing strategy:
+### Phase 3 — Composites: lists, dicts, shapes, opaque grids — NEXT
 
-- Pure unit tests in `mshell/TypeChecker_test.go` that build a
-  small token stream and call the checker directly.
-- Do NOT integrate into the existing parser path yet. The checker can
-  consume a hand-built sequence of `Token`s for now.
+Scope per the plan above. The arena already has constructors
+(`MakeList`, `MakeDict`, `MakeShape`, `MakeGrid` etc.); Phase 3
+extends the checker to push/pop them and adds composite cases to
+`unify` (still without type variables — that's Phase 6).
 
 ### Migration thread
 
