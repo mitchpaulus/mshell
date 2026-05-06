@@ -4094,28 +4094,20 @@ MainLoop:
 							}
 
 							stack.Push(MShellInt{obj2.(MShellInt).Value % obj1.(MShellInt).Value})
-						case MShellFloat:
-							if obj1.(MShellInt).Value == 0 {
-								return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot mod by zero.\n", t.Line, t.Column))
-							}
-
-							stack.Push(MShellFloat{math.Mod(obj2.(MShellFloat).Value, float64(obj1.(MShellInt).Value))})
+						default:
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot mod a %s by an integer. Use 'toFloat' / 'toInt' to convert explicitly — 'mod' does not coerce numeric types.\n", t.Line, t.Column, obj2.TypeName()))
 						}
 
 					case MShellFloat:
 						switch obj2.(type) {
-						case MShellInt:
-							if obj1.(MShellFloat).Value == 0 {
-								return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot mod by zero.\n", t.Line, t.Column))
-							}
-
-							stack.Push(MShellFloat{math.Mod(float64(obj2.(MShellInt).Value), obj1.(MShellFloat).Value)})
 						case MShellFloat:
 							if obj1.(MShellFloat).Value == 0 {
 								return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot mod by zero.\n", t.Line, t.Column))
 							}
 
 							stack.Push(MShellFloat{math.Mod(obj2.(MShellFloat).Value, obj1.(MShellFloat).Value)})
+						default:
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot mod a %s by a float. Use 'toFloat' / 'toInt' to convert explicitly — 'mod' does not coerce numeric types.\n", t.Line, t.Column, obj2.TypeName()))
 						}
 					}
 				} else if t.Lexeme == "basename" || t.Lexeme == "dirname" || t.Lexeme == "ext" || t.Lexeme == "stem" {
@@ -8127,15 +8119,15 @@ MainLoop:
 						switch obj2.(type) {
 						case MShellInt:
 							stack.Push(MShellInt{obj2.(MShellInt).Value * obj1.(MShellInt).Value})
-						case MShellFloat:
-							stack.Push(MShellFloat{obj2.(MShellFloat).Value * float64(obj1.(MShellInt).Value)})
+						default:
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot multiply a %s by an integer. Use 'toFloat' / 'toInt' to convert explicitly — '*' does not coerce numeric types.\n", t.Line, t.Column, obj2.TypeName()))
 						}
 					case MShellFloat:
 						switch obj2.(type) {
-						case MShellInt:
-							stack.Push(MShellFloat{float64(obj2.(MShellInt).Value) * float64(obj1.(MShellFloat).Value)})
-					case MShellFloat:
+						case MShellFloat:
 							stack.Push(MShellFloat{obj2.(MShellFloat).Value * obj1.(MShellFloat).Value})
+						default:
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot multiply a %s by a float. Use 'toFloat' / 'toInt' to convert explicitly — '*' does not coerce numeric types.\n", t.Line, t.Column, obj2.TypeName()))
 						}
 					}
 				}
@@ -8410,19 +8402,15 @@ MainLoop:
 					switch obj2.(type) {
 					case MShellInt:
 						stack.Push(MShellInt{obj2.(MShellInt).Value + obj1.(MShellInt).Value})
-					case MShellFloat:
-						stack.Push(MShellFloat{float64(obj2.(MShellFloat).Value) + float64(obj1.(MShellInt).Value)})
 					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot add an integer to a %s (%s).\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot add an integer to a %s (%s). Use 'toFloat' / 'toInt' to convert explicitly — '+' does not coerce numeric types.\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
 					}
 				case MShellFloat:
 					switch obj2.(type) {
 					case MShellFloat:
 						stack.Push(MShellFloat{obj2.(MShellFloat).Value + obj1.(MShellFloat).Value})
-					case MShellInt:
-						stack.Push(MShellFloat{float64(obj2.(MShellInt).Value) + obj1.(MShellFloat).Value})
 					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot add a float to a %s.\n", t.Line, t.Column, obj2.TypeName()))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot add a float to a %s. Use 'toFloat' / 'toInt' to convert explicitly — '+' does not coerce numeric types.\n", t.Line, t.Column, obj2.TypeName()))
 					}
 				case MShellString:
 					switch obj2.(type) {
@@ -8490,19 +8478,15 @@ MainLoop:
 					switch obj2.(type) {
 					case MShellInt:
 						stack.Push(MShellInt{obj2.(MShellInt).Value - obj1.(MShellInt).Value})
-					case MShellFloat:
-						stack.Push(MShellFloat{obj2.(MShellFloat).Value - float64(obj1.(MShellInt).Value)})
 					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot subtract an integer from a %s.\n", t.Line, t.Column, obj2.TypeName()))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot subtract an integer from a %s. Use 'toFloat' / 'toInt' to convert explicitly — '-' does not coerce numeric types.\n", t.Line, t.Column, obj2.TypeName()))
 					}
 				case MShellFloat:
 					switch obj2.(type) {
 					case MShellFloat:
 						stack.Push(MShellFloat{obj2.(MShellFloat).Value - obj1.(MShellFloat).Value})
-					case MShellInt:
-						stack.Push(MShellFloat{float64(obj2.(MShellInt).Value) - obj1.(MShellFloat).Value})
 					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot subtract a float from a %s.\n", t.Line, t.Column, obj2.TypeName()))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot subtract a float from a %s. Use 'toFloat' / 'toInt' to convert explicitly — '-' does not coerce numeric types.\n", t.Line, t.Column, obj2.TypeName()))
 					}
 				case *MShellDateTime:
 					switch obj2.(type) {
@@ -8546,10 +8530,26 @@ MainLoop:
 				}
 
 				if obj1.IsNumeric() && obj2.IsNumeric() {
-					if t.Type == GREATERTHANOREQUAL {
-						stack.Push(MShellBool{obj2.FloatNumeric() >= obj1.FloatNumeric()})
-					} else {
-						stack.Push(MShellBool{obj2.FloatNumeric() <= obj1.FloatNumeric()})
+					// No implicit numeric coercion: both must be the same type.
+					obj1Int, isInt1 := obj1.(MShellInt)
+					obj2Int, isInt2 := obj2.(MShellInt)
+					obj1Flt, isFlt1 := obj1.(MShellFloat)
+					obj2Flt, isFlt2 := obj2.(MShellFloat)
+					switch {
+					case isInt1 && isInt2:
+						if t.Type == GREATERTHANOREQUAL {
+							stack.Push(MShellBool{obj2Int.Value >= obj1Int.Value})
+						} else {
+							stack.Push(MShellBool{obj2Int.Value <= obj1Int.Value})
+						}
+					case isFlt1 && isFlt2:
+						if t.Type == GREATERTHANOREQUAL {
+							stack.Push(MShellBool{obj2Flt.Value >= obj1Flt.Value})
+						} else {
+							stack.Push(MShellBool{obj2Flt.Value <= obj1Flt.Value})
+						}
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' across numeric types %s and %s. Use 'toFloat' / 'toInt' to convert explicitly.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
 					}
 				} else {
 
@@ -8579,10 +8579,26 @@ MainLoop:
 				}
 
 				if obj1.IsNumeric() && obj2.IsNumeric() {
-					if t.Type == GREATERTHAN {
-						stack.Push(MShellBool{obj2.FloatNumeric() > obj1.FloatNumeric()})
-					} else {
-						stack.Push(MShellBool{obj2.FloatNumeric() < obj1.FloatNumeric()})
+					// No implicit numeric coercion: both must be the same type.
+					obj1Int, isInt1 := obj1.(MShellInt)
+					obj2Int, isInt2 := obj2.(MShellInt)
+					obj1Flt, isFlt1 := obj1.(MShellFloat)
+					obj2Flt, isFlt2 := obj2.(MShellFloat)
+					switch {
+					case isInt1 && isInt2:
+						if t.Type == GREATERTHAN {
+							stack.Push(MShellBool{obj2Int.Value > obj1Int.Value})
+						} else {
+							stack.Push(MShellBool{obj2Int.Value < obj1Int.Value})
+						}
+					case isFlt1 && isFlt2:
+						if t.Type == GREATERTHAN {
+							stack.Push(MShellBool{obj2Flt.Value > obj1Flt.Value})
+						} else {
+							stack.Push(MShellBool{obj2Flt.Value < obj1Flt.Value})
+						}
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' across numeric types %s and %s. Use 'toFloat' / 'toInt' to convert explicitly.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
 					}
 				} else {
 					switch obj1.(type) {
