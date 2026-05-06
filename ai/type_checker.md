@@ -972,12 +972,117 @@ What does NOT belong in Phase 2 (and was not done):
 - `if`/`else`, `match`, branch reconciliation (Phase 6b).
 - Any wiring into `Main.go` (Phase 10).
 
-### Phase 3 — Composites: lists, dicts, shapes, opaque grids — NEXT
+### Phase 3 — Composites: lists, dicts, shapes, opaque grids — DONE
 
-Scope per the plan above. The arena already has constructors
-(`MakeList`, `MakeDict`, `MakeShape`, `MakeGrid` etc.); Phase 3
-extends the checker to push/pop them and adds composite cases to
-`unify` (still without type variables — that's Phase 6).
+Phase 1 already provided the arena constructors. Phase 3's contribution
+is on the checker side:
+
+- `Checker.unify` now dispatches on `TypeKind`:
+  - `TKMaybe`, `TKList` — recurse on inner.
+  - `TKDict` — recurse on K and V.
+  - `TKShape` — width subtyping (every required field of `want` must
+    appear in `got` with a unifiable type; extras allowed in `got`).
+    Linear merge thanks to pre-sorted field lists.
+  - `TKUnion` — subset rule (every arm of `got` must unify with some
+    arm of `want`); brand ids must match.
+  - `TKBrand` — nominal: same brand id required, no implicit unwrap to
+    underlying. Casting (`as`) is the future escape hatch.
+  - `TKQuote` — pairwise unify inputs and outputs, with Fail/Pure flags
+    matched directly (always default in V1).
+  - `TKGrid` / `TKGridView` / `TKGridRow` — opaque in Phase 3:
+    unknown-schema (`Extra == 0`) unifies with any same-kind grid;
+    different known schemas don't (Phase 8 adds real schema tracking).
+- `FormatType` rendering for all composite kinds: `[T]`, `Maybe[T]`,
+  `{K: V}`, `{a: int, b: str}`, `int | str`, branded `Mine(int | str)`,
+  `UserId(int)`, `(int -- str)`, `Grid`, `T0` (var rendering for Phase 6).
+
+Tests added in `mshell/TypeCheckerComposite_test.go` (15 tests):
+list equality / mismatch / cross-kind, Maybe recursion, shape width
+subtyping in both directions, shape field-type mismatch, union subset
+in both directions, branded-union distinctness, brand nominality
+(including no-implicit-unwrap), quote arity / input mismatch, opaque
+grid unify and Grid-vs-GridView distinctness, TidBottom unification,
+applySig with a composite-typed input (matching and mismatching),
+and FormatType rendering for every composite kind.
+
+Verification: `go build ./...`, `go test ./...`, `./build.sh`,
+`./tests/test.sh` — all green. No stdlib or existing test files
+modified.
+
+Notes / deferred:
+
+- The composite recursion in `unify` will need a new pass for type
+  variables (Phase 6) — the recursive calls are where TKVar bindings
+  will hook in.
+- No name-keyed builtin table yet. The TokenType-keyed table covers
+  arithmetic and comparison; word-style builtins (`len`, `map`, etc.)
+  arrive with overload dispatch in Phase 9.
+- No quote-body inference or `if`/`else` / `match` reconciliation —
+  those land in Phases 6b and 7.
+
+### Phase 6 — Type variables and unification — DONE (taken out of order)
+
+Did Phase 6 before Phase 4 because Maybe's `just` / `none` constructors
+are inherently parametric — building them on top of stub generics would
+just have to be torn out.
+
+Files added:
+
+- `mshell/TypeUnify.go` — `Substitution` (slice indexed by `TypeVarId`),
+  `FreshVar`, `Apply` (recursive, rebuilds composites through the arena
+  so hashconsing stays canonical, with path compression on var chains),
+  `Bind` (with occurs check), `occurs` (recursive into all composite
+  kinds), and `(*Checker).Instantiate` + `renameVars` for fresh-renaming
+  a polymorphic sig at a call site.
+- `mshell/TypeUnify_test.go` — 16 tests: fresh-var distinctness, var
+  binding from either side, vacuous self-unify, transitive resolution
+  via two vars, var/concrete conflict, occurs check, var inside list,
+  Apply rebuilding [T] → [int], polymorphic id sig at two call sites
+  with different concrete types, parametric `just`-style sig, two-var
+  pair-to-dict sig, `(T T -- T)` constraint across inputs (positive and
+  negative), Apply rebuilding a quote, `T7` formatting.
+
+`Checker.unify` updated:
+
+- Both sides go through `subst.Apply` first, so resolved chains are
+  followed before structural checks.
+- After Apply, if either side is still `TKVar`, it must be unbound;
+  bind it (with occurs) to the other side.
+- The Phase-3 composite cases are otherwise untouched — recursive
+  `c.unify` calls inside them automatically pick up the new var
+  resolution.
+
+`Checker.applySig` now calls `Instantiate(sig)` on entry (no-op for
+monomorphic sigs) and pushes outputs through `subst.Apply` so freshly
+bound vars resolve immediately on their way to the stack.
+
+`FormatType` already had `T<n>` rendering from Phase 3.
+
+Verification: `go build ./...`, `go test ./...`, `./build.sh`,
+`./tests/test.sh` — all green. No stdlib or existing test files
+modified.
+
+### Phase 4 — Maybe[T] and constructors — NEXT
+
+With substitution and instantiation in place, `just` and `none` are
+straightforward parametric sigs:
+
+- `just : (T -- Maybe[T])` with `Generics: [T]`.
+- `none : ( -- Maybe[T])` with `Generics: [T]`.
+  The free `T` in `none`'s output remains unbound until context binds
+  it; if the program ends with an unbound var on the stack, that's a
+  candidate for an "ambiguous Maybe[?]" error (handled in Phase 4 or
+  punted to Phase 6b's branch reconciliation if simpler).
+
+Match-arm dispatch (`Checker.checkMatch`) reads the static type of the
+matched value and routes to the right sub-checker. For Maybe it
+expects `just @v -> ...` and `none -> ...` arms; both arms must be
+present (exhaustiveness) and produce stack-size-matching tails.
+
+Phase 4 is the first phase that needs name-keyed builtin lookup
+(`just` / `none` are LITERAL tokens, not punctuation). A simple
+`map[NameId]QuoteSig` alongside `builtinSigsByToken` is enough; the
+overload-friendly version (Phase 9) generalizes to a slice-valued map.
 
 ### Migration thread
 

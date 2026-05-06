@@ -73,6 +73,7 @@ type Checker struct {
 
 	stack  TypeStack
 	vars   VarEnv
+	subst  Substitution
 	errors []TypeError
 
 	builtins map[TokenType]QuoteSig
@@ -150,6 +151,7 @@ func (c *Checker) checkOne(tok Token) {
 // is still applied (inputs popped, outputs pushed) so cascading errors are
 // reduced.
 func (c *Checker) applySig(sig QuoteSig, callSite Token) {
+	sig = c.Instantiate(sig)
 	if len(c.stack.items) < len(sig.Inputs) {
 		c.errors = append(c.errors, TypeError{
 			Kind: TErrStackUnderflow,
@@ -172,21 +174,156 @@ func (c *Checker) applySig(sig QuoteSig, callSite Token) {
 	}
 	c.stack.items = c.stack.items[:base]
 	for _, out := range sig.Outputs {
-		c.stack.items = append(c.stack.items, out)
+		c.stack.items = append(c.stack.items, c.subst.Apply(c.arena, out))
 	}
 }
 
-// unify is the Phase-2 "unifier": primitive-only structural equality.
-// Generics, unions, brands, and the rest land in Phase 6 when Substitution
-// is introduced. TidBottom unifies with anything — it is the divergent
-// type and cannot occur as a literal yet, but the rule is encoded here so
-// future divergent operations (exit, infinite loop) work transparently.
+// unify checks whether `got` is acceptable where `want` is expected and
+// records any TKVar bindings into the checker's substitution. Phase 6
+// added the variable cases: each side is first resolved through the
+// current substitution, and any remaining TKVar gets bound (with an
+// occurs check) to the other side.
+//
+// Composite cases (Phase 3) recurse via c.unify so each inner unification
+// also goes through Apply; this means a binding made deep inside a
+// composite immediately affects later sibling slots in the same call.
+//
+// `got` is the actual stack type; `want` is the sig's declared input.
+// Acceptance is asymmetric where the rules are asymmetric (shape width
+// subtyping, union subset). Variable binding is symmetric — either side
+// is willing to be bound to the other.
+//
+// TidBottom unifies with anything — divergent operations (`exit`,
+// infinite loops; Phase-2-of-effects: propagated `fail`) produce it.
 func (c *Checker) unify(got, want TypeId) bool {
+	got = c.subst.Apply(c.arena, got)
+	want = c.subst.Apply(c.arena, want)
 	if got == want {
 		return true
 	}
 	if got == TidBottom || want == TidBottom {
 		return true
 	}
+
+	gn := c.arena.Node(got)
+	wn := c.arena.Node(want)
+
+	// Variable cases: bind whichever side is still a free variable. After
+	// Apply above, a TKVar here is guaranteed unbound.
+	if gn.Kind == TKVar {
+		return c.subst.Bind(c.arena, TypeVarId(gn.A), want)
+	}
+	if wn.Kind == TKVar {
+		return c.subst.Bind(c.arena, TypeVarId(wn.A), got)
+	}
+
+	if gn.Kind != wn.Kind {
+		return false
+	}
+
+	switch gn.Kind {
+	case TKMaybe, TKList:
+		return c.unify(TypeId(gn.A), TypeId(wn.A))
+	case TKDict:
+		return c.unify(TypeId(gn.A), TypeId(wn.A)) && c.unify(TypeId(gn.B), TypeId(wn.B))
+	case TKShape:
+		return c.unifyShape(gn, wn)
+	case TKUnion:
+		return c.unifyUnion(gn, wn)
+	case TKBrand:
+		// Nominal: brand ids must match. Underlying types must coincide too;
+		// hashconsing guarantees that if brand id and underlying agree we'd
+		// already have gotten id equality up top — so reaching here with
+		// matching brand ids means underlyings differ, which is a programmer
+		// error we treat as a mismatch.
+		return gn.A == wn.A && gn.B == wn.B
+	case TKQuote:
+		return c.unifyQuote(gn, wn)
+	case TKGrid, TKGridView, TKGridRow:
+		// Phase-3 grids are opaque. Equality-by-id is the only way two grid
+		// types match; if we got here with same kind but different ids,
+		// they are different schemas (or one tracks schema and the other
+		// doesn't). Phase-3 treats schema-unknown as compatible with any
+		// schema of the same kind so opaque builtins still type-check.
+		if gn.Extra == 0 || wn.Extra == 0 {
+			return true
+		}
+		return false
+	}
 	return false
+}
+
+// unifyShape implements width subtyping: every field of `want` must appear
+// in `got` with a unifiable type. Extra fields in `got` are allowed.
+// Both field lists are pre-sorted by NameId (see normalizeShapeFields), so
+// the merge is linear.
+func (c *Checker) unifyShape(gn, wn TypeNode) bool {
+	gFields := c.arena.shapeFields[gn.Extra]
+	wFields := c.arena.shapeFields[wn.Extra]
+	gi := 0
+	for _, wf := range wFields {
+		// Advance gi to the first field with name >= wf.Name.
+		for gi < len(gFields) && gFields[gi].Name < wf.Name {
+			gi++
+		}
+		if gi == len(gFields) || gFields[gi].Name != wf.Name {
+			return false
+		}
+		if !c.unify(gFields[gi].Type, wf.Type) {
+			return false
+		}
+		gi++
+	}
+	return true
+}
+
+// unifyUnion implements the subset rule: every arm of `got` must unify
+// with some arm of `want`. Both arm lists are sorted/deduped (see
+// flattenAndCanonicalizeUnion). Brand ids must match — a branded union
+// is nominal and never collapses with a different brand or with the
+// unbranded form.
+func (c *Checker) unifyUnion(gn, wn TypeNode) bool {
+	if gn.A != wn.A {
+		return false
+	}
+	gArms := c.arena.unionMembers[gn.Extra]
+	wArms := c.arena.unionMembers[wn.Extra]
+	for _, ga := range gArms {
+		matched := false
+		for _, wa := range wArms {
+			if c.unify(ga, wa) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
+}
+
+// unifyQuote unifies two quote signatures. In Phase 3 this is exact-arity,
+// pairwise unification of inputs and outputs. Fail/Pure flags must match
+// directly (always default in V1 — Phase-2-of-effects revisits this).
+func (c *Checker) unifyQuote(gn, wn TypeNode) bool {
+	gs := c.arena.quoteSigs[gn.Extra]
+	ws := c.arena.quoteSigs[wn.Extra]
+	if len(gs.Inputs) != len(ws.Inputs) || len(gs.Outputs) != len(ws.Outputs) {
+		return false
+	}
+	if gs.Fail != ws.Fail || gs.Pure != ws.Pure {
+		return false
+	}
+	for i := range gs.Inputs {
+		if !c.unify(gs.Inputs[i], ws.Inputs[i]) {
+			return false
+		}
+	}
+	for i := range gs.Outputs {
+		if !c.unify(gs.Outputs[i], ws.Outputs[i]) {
+			return false
+		}
+	}
+	return true
 }

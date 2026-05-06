@@ -64,8 +64,9 @@ func (e TypeError) Format(arena *TypeArena, names *NameTable) string {
 	return sb.String()
 }
 
-// FormatType renders a TypeId to source-shaped text. Phase 2 only handles
-// primitives; later phases extend this to composites.
+// FormatType renders a TypeId to source-shaped text. Primitives and the
+// Phase-3 composite kinds are covered. Type variables (Phase 6) and grid
+// schemas (Phase 8) extend this further.
 func FormatType(arena *TypeArena, names *NameTable, id TypeId) string {
 	switch id {
 	case TidNothing:
@@ -85,7 +86,72 @@ func FormatType(arena *TypeArena, names *NameTable, id TypeId) string {
 	case TidBottom:
 		return "<bottom>"
 	}
-	// Composite kinds — minimal rendering for now.
 	n := arena.Node(id)
+	switch n.Kind {
+	case TKMaybe:
+		return "Maybe[" + FormatType(arena, names, TypeId(n.A)) + "]"
+	case TKList:
+		return "[" + FormatType(arena, names, TypeId(n.A)) + "]"
+	case TKDict:
+		return "{" + FormatType(arena, names, TypeId(n.A)) + ": " + FormatType(arena, names, TypeId(n.B)) + "}"
+	case TKShape:
+		var sb strings.Builder
+		sb.WriteByte('{')
+		for i, f := range arena.shapeFields[n.Extra] {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			sb.WriteString(names.Name(f.Name))
+			sb.WriteString(": ")
+			sb.WriteString(FormatType(arena, names, f.Type))
+		}
+		sb.WriteByte('}')
+		return sb.String()
+	case TKUnion:
+		var sb strings.Builder
+		if n.A != 0 {
+			sb.WriteString(names.Name(NameId(n.A)))
+			sb.WriteByte('(')
+		}
+		for i, arm := range arena.unionMembers[n.Extra] {
+			if i > 0 {
+				sb.WriteString(" | ")
+			}
+			sb.WriteString(FormatType(arena, names, arm))
+		}
+		if n.A != 0 {
+			sb.WriteByte(')')
+		}
+		return sb.String()
+	case TKBrand:
+		return names.Name(NameId(n.A)) + "(" + FormatType(arena, names, TypeId(n.B)) + ")"
+	case TKQuote:
+		sig := arena.quoteSigs[n.Extra]
+		var sb strings.Builder
+		sb.WriteByte('(')
+		for i, in := range sig.Inputs {
+			if i > 0 {
+				sb.WriteByte(' ')
+			}
+			sb.WriteString(FormatType(arena, names, in))
+		}
+		sb.WriteString(" -- ")
+		for i, out := range sig.Outputs {
+			if i > 0 {
+				sb.WriteByte(' ')
+			}
+			sb.WriteString(FormatType(arena, names, out))
+		}
+		sb.WriteByte(')')
+		return sb.String()
+	case TKVar:
+		return fmt.Sprintf("T%d", n.A)
+	case TKGrid:
+		return "Grid"
+	case TKGridView:
+		return "GridView"
+	case TKGridRow:
+		return "GridRow"
+	}
 	return fmt.Sprintf("<%s #%d>", n.Kind, uint32(id))
 }
