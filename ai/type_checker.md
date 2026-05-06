@@ -1388,6 +1388,129 @@ Recommendation when continuing: option 1, then Phase 7 (quote-body
 inference) and Phase 9 (overload dispatch), then a single parser
 integration pass for Phases 5/10/11 together.
 
+### Phase 10 step 1 — Lexer keyword reservation + type-expression parser — DONE
+
+Took the split-Phase-10 path (option B): land lexer + parser surface in
+chunks before wiring the checker into the run path. This entry covers
+the first chunk.
+
+#### Breaking change: runtime `type` builtin renamed to `typeof`
+
+`type` was a runtime introspection builtin (`(a -- str)`); the design
+reserves `type` as a keyword for `type X = ...` declarations. Resolved
+by renaming the builtin to `typeof`.
+
+Edits:
+
+- `mshell/Evaluator.go:6338` — dispatch + error message.
+- `mshell/BuiltInList.go:190`.
+- `tests/grid.msh`, `tests/grid_concat.msh`, `tests/grid_groupby.msh`,
+  `tests/parse_excel.msh` — six bare-word call sites; one inside a
+  format string (`{@cell typeof}`).
+- `doc/mshell.md`, `doc/mshell.html`, `doc/functions.inc.html`.
+
+When the next release cuts, this should land in `## Unreleased / ###
+Changed` with a note that `type` is now a reserved keyword.
+
+#### Lexer keyword reservations
+
+`mshell/Lexer.go` — five new TokenType constants and recognition:
+
+- `AS`, `TYPE`, `TRY`, `FAIL_KEYWORD`, `PURE`.
+- `String()` cases for each.
+- New top-level branches in `literalOrKeywordType`: `'a'` for `as`,
+  `'p'` for `pure`. Existing `'t'` and `'f'` branches widened to
+  sub-switch on the second character so `true`/`try`/`type` and
+  `false`/`fail`/`float` coexist.
+
+`mshell/Lexer_test.go` — `TestTypeCheckerKeywords` covers the five new
+keywords, the neighbors they share prefixes with (`true`, `false`,
+`float`), and prefix variants (`types`, `asx`, `trying`, `failed`,
+`purest`) that must remain `LITERAL`.
+
+`AS` and `TYPE` are user-visible from the next chunk onward; `TRY`,
+`FAIL_KEYWORD`, `PURE` are reserved early so future Phase 2 migration
+doesn't break user identifiers.
+
+#### Type-expression parser
+
+`mshell/TypeExpr.go` — `ParseTypeExpr(c *Checker, tokens []Token)
+(TypeId, int, []TypeError)`. Self-contained recursive descent that
+consumes a token slice and returns a TypeId.
+
+Grammar (per file header):
+
+```
+typeExpr := union
+union    := primary ( '|' primary )*
+primary  := '(' sig ')'
+          | '[' typeExpr ']'
+          | '{' entry ( ',' entry )* '}'
+          | named
+          | TYPEINT | TYPEFLOAT | TYPEBOOL | STR
+sig      := typeExpr* '--' typeExpr*
+entry    := key ':' typeExpr
+named    := LITERAL ( '[' typeExpr ']' )?
+```
+
+Supported forms:
+
+- Primitives via dedicated tokens (`int`, `float`, `bool`, `str`) and
+  via LITERAL lexeme (`bytes`, `none`).
+- `[T]`, `Maybe[T]`.
+- `Grid`, `GridView`, `GridRow` (opaque schema; Phase 8 adds tracking).
+- `(in* -- out*)` quote sigs.
+- Unions `A | B | C` with left-to-right fold, hashconsed via
+  `MakeUnion`.
+- Dict `{K: V}` and shape `{a: T, b: U}`.
+- User-declared types via `Checker.LookupType`.
+
+Dict-vs-shape disambiguation on the first key inside `{...}`:
+
+- LITERAL key followed by `:`, where the LITERAL is NOT a primitive
+  type name spelled as a literal (`bytes`/`none`/`Maybe`/`Grid`/
+  `GridView`/`GridRow`) → shape.
+- Anything else → dict (single pair). Multi-pair dict is rejected
+  with a hint pointing at shapes.
+
+Generics deferred. A bare LITERAL that doesn't resolve to a built-in
+or declared type is an error today. Generics land alongside `def`
+signature parsing in the next chunk.
+
+New error kind: `TErrTypeParse`. Pos is the offending token; Hint
+carries the message.
+
+`mshell/TypeExpr_test.go` — 22 tests:
+
+- All six primitives.
+- List, nested list, list-of-Maybe, list-with-union-element.
+- Maybe[int], missing-arg error.
+- Dict `{str: int}`.
+- Shape: 2-field, empty `{}`, duplicate-field rejected,
+  multi-pair-dict rejected.
+- Union (2 arms, 3 arms).
+- Quote `(int int -- int)`, empty `( -- )`, missing `--` error.
+- Grid family (kind verification).
+- User-declared type lookup via DeclareType + name reference.
+- Unknown identifier produces `TErrTypeParse`.
+- Consumed-count check (parser stops at the type expression boundary,
+  leaving trailing tokens for the caller).
+
+Verification: `go build ./...`, `go test ./...`, `./build.sh`,
+`./tests/test.sh` — all green. No stdlib changes; tests modified only
+to reflect the `type` → `typeof` rename.
+
+#### What this unlocks
+
+The next chunk wires `ParseTypeExpr` into the main parser:
+
+- Top-level `type X = <typeExpr>` declarations call
+  `Checker.DeclareType`.
+- Postfix `<value> as <typeExpr>` calls `Checker.Cast`.
+- After that: `Main.go` integration behind `--typecheck` flag,
+  fixture-migration sweep, and finally deletion of the old
+  `TypeChecking.go`.
+
 ### Migration thread
 
 `mshell/TypeChecking.go` (the existing 883-line interface-based checker)
