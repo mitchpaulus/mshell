@@ -1835,6 +1835,70 @@ Known token-LITERAL gotchas worth flagging for future work:
 - Single-character `x` is INTERPRET (reserved), can't be used
   as a variable name.
 
+### Phase 10 step 4c — `if`/`else-if`/`else` branch reconciliation — DONE
+
+`MShellParseIfBlock` is no longer a no-op stub. The walker now
+drives every arm through `Snapshot`/`Fork`/`CaptureArm`/
+`ReconcileArms` from Phase 6b's `TypeBranch.go`.
+
+mshell `if` syntax (per `tests/else_ifs.msh`):
+
+```
+<condition> if
+    <true body>
+else* <condition2> *if
+    <else-if body>
+else
+    <else body>
+end
+```
+
+The condition for the main `if` lives on the stack at entry —
+the runtime pops it before executing the body, and we mirror
+that. Else-if condition bodies are inline code that push a
+bool/int and then get popped before the arm body runs.
+
+`(*Checker).checkIfBlock(ifBlock)`:
+
+1. Pop condition from the live stack; report `TErrTypeMismatch`
+   if it's not bool or int (`isBoolOrInt` resolves through the
+   substitution first).
+2. `Snapshot` the post-pop state.
+3. Walk `IfBody`, capture as a non-diverged `BranchArm`.
+4. For each `ElseIf`: `Fork(snap)`, walk its `Condition` items,
+   pop and check the resulting bool/int, walk its `Body`,
+   capture.
+5. If `ElseBody` present: `Fork(snap)`, walk it, capture.
+   Otherwise add an implicit "did nothing" arm equal to the
+   snapshot — at runtime an else-less if may simply not fire.
+6. `ReconcileArms` merges per-arm tails: stack sizes must
+   match across non-diverged arms; per-slot types are unioned;
+   var sets must agree.
+
+`MShellParseMatchBlock` is still a stub (recurses into arm
+bodies for nested casts but doesn't drive the stack). Match
+arm dispatch is more involved because pattern semantics
+depend on the matched value's static type — that's its own
+chunk.
+
+Tests added in `TypeCheckProgram_test.go` (4):
+
+- `TestTypeCheckProgramIfBlock` — four happy-path forms:
+  basic if/else, comparison condition, else-less if, full
+  else-if chain.
+- `TestTypeCheckProgramIfNonBoolCondition` —
+  `"hello" if 1 wl else 2 wl end` rejected.
+- `TestTypeCheckProgramIfStackSizeMismatch` —
+  `true if 42 else end` rejected (true branch leaves 42, else
+  branch leaves nothing).
+- `TestTypeCheckProgramIfBranchTypeUnion` —
+  `true if 42 else "hi" end wl` passes because the post-branch
+  slot is `int|str` and `wl` accepts anything (polymorphic
+  consumer).
+
+Verification: `go build ./...`, `go test ./...`, `./build.sh`,
+`./tests/test.sh` — all green.
+
 Original step-4 plan (kept for reference):
 
 - After parsing, walk `file.Items` collecting `MShellTypeDecl`

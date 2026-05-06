@@ -130,11 +130,21 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 		// Treated like a no-op stack-wise for now.
 		return
 
-	case *MShellParseIfBlock, *MShellParseMatchBlock:
-		// Branch reconciliation infra exists in TypeBranch.go but
-		// hooking it up requires extracting the per-arm parse-item
-		// streams and feeding them through Fork/CaptureArm/
-		// ReconcileArms. Deferred to the next walker pass.
+	case *MShellParseIfBlock:
+		c.checkIfBlock(it)
+		return
+
+	case *MShellParseMatchBlock:
+		// Match arm dispatch is more involved (pattern semantics on
+		// the matched type drive arm typing). Walk arm bodies for
+		// nested casts but otherwise no-op the stack effect.
+		for _, arm := range it.Arms {
+			scope := c.snapshotStack()
+			for _, sub := range arm.Body {
+				c.checkParseItem(sub)
+			}
+			c.restoreStack(scope)
+		}
 		return
 
 	case *MShellParseGrid:
@@ -181,6 +191,101 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 		}
 		return
 	}
+}
+
+// checkIfBlock drives an if/else-if/else chain through the branch
+// reconciliation infrastructure (TypeBranch.go). The condition for
+// the main `if` is already on the stack at entry — the runtime pops
+// it before executing the body; we mirror that here. Each else-if
+// arm starts from the post-pop snapshot, walks its condition body
+// (which is expected to push a bool/int), pops that, then walks the
+// arm body. An else-less if implicitly contributes a "did nothing"
+// arm equal to the entry snapshot, since at runtime the if block
+// may simply not fire.
+func (c *Checker) checkIfBlock(ifBlock *MShellParseIfBlock) {
+	startTok := ifBlock.GetStartToken()
+
+	if c.stack.Len() == 0 {
+		c.errors = append(c.errors, TypeError{
+			Kind: TErrStackUnderflow,
+			Pos:  startTok,
+			Hint: "if condition",
+		})
+		return
+	}
+	cond := c.stack.items[c.stack.Len()-1]
+	c.stack.items = c.stack.items[:c.stack.Len()-1]
+	if !c.isBoolOrInt(cond) {
+		c.errors = append(c.errors, TypeError{
+			Kind:     TErrTypeMismatch,
+			Pos:      startTok,
+			Expected: TidBool,
+			Actual:   cond,
+			Hint:     "if condition must be bool or int",
+		})
+	}
+
+	snap := c.Snapshot()
+
+	// If body.
+	for _, sub := range ifBlock.IfBody {
+		c.checkParseItem(sub)
+	}
+	arms := []BranchArm{c.CaptureArm(false)}
+
+	// else-if arms.
+	for _, elseIf := range ifBlock.ElseIfs {
+		c.Fork(snap)
+		for _, sub := range elseIf.Condition {
+			c.checkParseItem(sub)
+		}
+		// Pop the else-if condition.
+		if c.stack.Len() == 0 {
+			c.errors = append(c.errors, TypeError{
+				Kind: TErrStackUnderflow,
+				Pos:  startTok,
+				Hint: "else-if condition",
+			})
+		} else {
+			ec := c.stack.items[c.stack.Len()-1]
+			c.stack.items = c.stack.items[:c.stack.Len()-1]
+			if !c.isBoolOrInt(ec) {
+				c.errors = append(c.errors, TypeError{
+					Kind:     TErrTypeMismatch,
+					Pos:      startTok,
+					Expected: TidBool,
+					Actual:   ec,
+					Hint:     "else-if condition must be bool or int",
+				})
+			}
+		}
+		for _, sub := range elseIf.Body {
+			c.checkParseItem(sub)
+		}
+		arms = append(arms, c.CaptureArm(false))
+	}
+
+	// else body, or the implicit "did nothing" arm if absent.
+	if len(ifBlock.ElseBody) > 0 {
+		c.Fork(snap)
+		for _, sub := range ifBlock.ElseBody {
+			c.checkParseItem(sub)
+		}
+		arms = append(arms, c.CaptureArm(false))
+	} else {
+		c.Fork(snap)
+		arms = append(arms, c.CaptureArm(false))
+	}
+
+	c.ReconcileArms(arms, startTok)
+}
+
+// isBoolOrInt reports whether t resolves to bool or int after applying
+// the current substitution. mshell's runtime accepts either as an if
+// condition.
+func (c *Checker) isBoolOrInt(t TypeId) bool {
+	r := c.subst.Apply(c.arena, t)
+	return r == TidBool || r == TidInt
 }
 
 // snapshotStack / restoreStack capture and restore the stack

@@ -169,6 +169,49 @@ func TestTypeCheckProgramAsCastIncompatibleAgainstStack(t *testing.T) {
 	}
 }
 
+func TestTypeCheckProgramIfBlock(t *testing.T) {
+	cases := []string{
+		`true if "yes" wl else "no" wl end`,
+		`1 2 < if "less" wl else "ge" wl end`,
+		`true if "y" wl end`, // no else
+		// else-if chain
+		`1 if "one" wl else* 2 *if "two" wl else "other" wl end`,
+	}
+	for _, src := range cases {
+		errs, ok := parseAndCheck(t, src)
+		if !ok || len(errs) != 0 {
+			t.Errorf("%q: expected pass; errs=%v", src, errs)
+		}
+	}
+}
+
+func TestTypeCheckProgramIfNonBoolCondition(t *testing.T) {
+	// "hello" on top isn't bool/int.
+	errs, ok := parseAndCheck(t, `"hello" if 1 wl else 2 wl end`)
+	if ok {
+		t.Fatalf("expected condition mismatch; errs=%v", errs)
+	}
+}
+
+func TestTypeCheckProgramIfStackSizeMismatch(t *testing.T) {
+	// True branch leaves 42 on the stack, false branch leaves nothing —
+	// reconciliation rejects this.
+	errs, ok := parseAndCheck(t, `true if 42 else end`)
+	if ok {
+		t.Fatalf("expected branch-size mismatch; errs=%v", errs)
+	}
+}
+
+func TestTypeCheckProgramIfBranchTypeUnion(t *testing.T) {
+	// Both branches push but with different types — the post-branch
+	// stack slot becomes int|str. The rest of the program must be
+	// compatible. `wl` accepts anything, so this should pass.
+	errs, ok := parseAndCheck(t, `true if 42 else "hi" end wl`)
+	if !ok || len(errs) != 0 {
+		t.Errorf("expected pass via union; errs=%v", errs)
+	}
+}
+
 func TestTypeCheckProgramVarStoreThenGetter(t *testing.T) {
 	// A varstore captures the top of the stack into a name; a `:name`
 	// getter pushes that type back. Use only registered ops so the
