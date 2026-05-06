@@ -1062,27 +1062,69 @@ Verification: `go build ./...`, `go test ./...`, `./build.sh`,
 `./tests/test.sh` — all green. No stdlib or existing test files
 modified.
 
-### Phase 4 — Maybe[T] and constructors — NEXT
+### Phase 4 — Maybe[T] constructors — DONE (match-arm dispatch deferred)
 
-With substitution and instantiation in place, `just` and `none` are
-straightforward parametric sigs:
+Constructors:
 
 - `just : (T -- Maybe[T])` with `Generics: [T]`.
-- `none : ( -- Maybe[T])` with `Generics: [T]`.
-  The free `T` in `none`'s output remains unbound until context binds
-  it; if the program ends with an unbound var on the stack, that's a
-  candidate for an "ambiguous Maybe[?]" error (handled in Phase 4 or
-  punted to Phase 6b's branch reconciliation if simpler).
+- `none : ( -- Maybe[T])` with `Generics: [T]` and no inputs.
+  The free `T` remains an unbound TKVar until surrounding context
+  pins it; if nothing pins it, the var sits on the stack and
+  later phases will diagnose ("ambiguous Maybe[?]" — likely
+  alongside Phase 6b's reconciliation).
 
-Match-arm dispatch (`Checker.checkMatch`) reads the static type of the
-matched value and routes to the right sub-checker. For Maybe it
-expects `just @v -> ...` and `none -> ...` arms; both arms must be
-present (exhaustiveness) and produce stack-size-matching tails.
+`Checker` gained a name-keyed builtin table (`nameBuiltins
+map[NameId]QuoteSig`) populated by `builtinSigsByName(arena, names)`
+in `TypeBuiltins.go`. `checkOne` now routes `LITERAL` tokens through
+this table by interning the lexeme and looking up; misses fall
+through to the existing unknown-identifier error.
 
-Phase 4 is the first phase that needs name-keyed builtin lookup
-(`just` / `none` are LITERAL tokens, not punctuation). A simple
-`map[NameId]QuoteSig` alongside `builtinSigsByToken` is enough; the
-overload-friendly version (Phase 9) generalizes to a slice-valued map.
+Canonical sigs in the name table use plain `MakeVar(0)` rather than
+allocating through `Substitution.FreshVar`. That's safe because every
+call to `applySig` runs `Instantiate` first, which fresh-renames the
+sig's `Generics` to fresh substitution slots; two canonical sigs may
+both reuse `TypeVarId(0)` without colliding because renameVars
+produces fresh per-call vars before unification touches them.
+
+Tests added in `mshell/TypeMaybe_test.go` (7 tests):
+
+- `5 just` → `Maybe[int]`.
+- Two `just` calls on int and str independently produce `Maybe[int]`
+  and `Maybe[str]` (call-site freshness).
+- `none` produces `Maybe[T?]` with an unbound TKVar inside.
+- `none` flowing into a `Maybe[int]` consumer binds the var.
+- `5 just` flows into a `Maybe[int]` consumer.
+- `5 just` rejected by a `Maybe[str]` consumer.
+- A bare `5` rejected by a `Maybe[int]` consumer (no implicit lift).
+
+Verification: `go build ./...`, `go test ./...`, `./build.sh`,
+`./tests/test.sh` — all green.
+
+Deferred to Phase 6b:
+
+- Match-arm dispatch (`Checker.checkMatch`). Maybe pattern-matching
+  needs branch reconciliation infrastructure that doesn't exist yet
+  (snapshot/restore VarEnv across arms, stack-size match, per-slot
+  type union). Building it standalone would be wasted work — Phase 6b
+  is where it belongs.
+- The "ambiguous Maybe[?]" diagnostic for an unbound var lingering
+  on the stack at end of program. Probably folds into the same
+  reconciliation pass.
+
+### Phase 5 — Unions, brands, and `as` cast — NEXT
+
+Phase 3 already implemented union/brand unification. Phase 5 adds
+the surface syntax: `type X = A | B` declarations producing a
+`TypeId` in the type environment, and `<value> as <Type>` casts
+that re-tag a value's static type. The hard part is parser-level
+reservation of identifiers as type names, plus the "as" postfix
+syntax — neither of which is needed at the pure-checker layer that
+Phase 4 was built on.
+
+Phase 5 may be a good moment to start the parser integration,
+since `type` declarations and `as` are syntactic features. That
+nudges Phase 10 earlier than the original schedule. Worth a check
+before committing.
 
 ### Migration thread
 

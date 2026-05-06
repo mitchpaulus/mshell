@@ -76,7 +76,8 @@ type Checker struct {
 	subst  Substitution
 	errors []TypeError
 
-	builtins map[TokenType]QuoteSig
+	builtins     map[TokenType]QuoteSig
+	nameBuiltins map[NameId]QuoteSig
 
 	currentFn *FnContext
 }
@@ -85,10 +86,11 @@ type Checker struct {
 // The builtin sig table is built once here.
 func NewChecker(arena *TypeArena, names *NameTable) *Checker {
 	return &Checker{
-		arena:    arena,
-		names:    names,
-		vars:     NewVarEnv(),
-		builtins: builtinSigsByToken(),
+		arena:        arena,
+		names:        names,
+		vars:         NewVarEnv(),
+		builtins:     builtinSigsByToken(),
+		nameBuiltins: builtinSigsByName(arena, names),
 	}
 }
 
@@ -133,6 +135,14 @@ func (c *Checker) checkOne(tok Token) {
 	if sig, ok := c.builtins[tok.Type]; ok {
 		c.applySig(sig, tok)
 		return
+	}
+
+	if tok.Type == LITERAL {
+		nameId := c.names.Intern(tok.Lexeme)
+		if sig, ok := c.nameBuiltins[nameId]; ok {
+			c.applySig(sig, tok)
+			return
+		}
 	}
 
 	c.errors = append(c.errors, TypeError{
