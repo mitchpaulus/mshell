@@ -2126,6 +2126,72 @@ What's still NOT done:
   date/time, etc.).
 - **Phase 11:** delete `mshell/TypeChecking.go`.
 
+### Phase 10 step 4g — Match block walker — DONE
+
+`MShellParseMatchBlock` is no longer a stub. The walker now drives
+each arm through branch reconciliation, with per-arm subject
+handling (consume vs preserve) and `just <name>` destructuring on
+`Maybe[T]` subjects.
+
+`(*Checker).checkMatchBlock(matchBlock)`:
+
+1. Peek the subject (top of stack); error if stack is empty.
+2. Snapshot for branch reconciliation.
+3. For each arm:
+   a. `Fork(snap)`.
+   b. If `arm.Consume` (`:` syntax): pop the subject. Otherwise
+      (`:>`): leave it on the stack so the arm body can use it.
+   c. `bindMaybeJust(c, subject, arm.Pattern)` — when the
+      pattern is `just <name>` and the subject is `Maybe[T]`,
+      bind `<name>` to `T`. Returns the list of bound NameIds.
+   d. Walk the arm body via `checkParseItem`.
+   e. **Strip pattern-introduced bindings** before
+      `CaptureArm(false)` — they're arm-local and shouldn't
+      reach reconciliation as a var-set disagreement across
+      arms.
+4. `ReconcileArms`: stack sizes must match across arms; per-slot
+   types are unioned; var sets must agree (after pattern
+   bindings have been stripped).
+
+Per-arm subject handling: a match block can mix `:` and `:>` arms;
+the walker forks per arm so each can pop or keep the subject as
+declared. If arms produce different stack depths, reconciliation
+flags a `TErrBranchStackSize`.
+
+What's still NOT done:
+
+- **Pattern-driven type narrowing.** Inside an `int : ...` arm
+  the subject's static type is provably `int`; the body could
+  use that information. Not implemented yet — the body sees
+  the unrefined subject type.
+- **Exhaustiveness checking.** Phase 6b's
+  `CheckMatchExhaustive` exists but classifying the parser's
+  pattern items into `MatchArmKind` requires another small
+  translation pass. Deferred.
+- **Other destructuring patterns** (e.g. shape patterns,
+  branded-union arms).
+
+Tests in `TypeCheckProgram_test.go` (6 new):
+
+- `TestTypeCheckProgramMatchValueArms` —
+  `"hello" match "hello" : ..., _ : ..., end` clean-checks
+  with all-consume arms.
+- `TestTypeCheckProgramMatchTypeArms` — int/str/wildcard arms
+  pass.
+- `TestTypeCheckProgramMatchPreserveSubject` — `:>` arms
+  preserve subject on the stack.
+- `TestTypeCheckProgramMatchJustBinding` —
+  `5 just match just v : :v wl, none : "n" wl, end` passes;
+  the `v` binding is arm-local and stripped before reconcile.
+- `TestTypeCheckProgramMatchArmStackMismatch` — mixing `:`
+  (consume) and `:>` (preserve) when arms produce equal
+  stacks otherwise differs in the subject slot; rejected.
+- `TestTypeCheckProgramMatchEmptyStack` — `match _ : ... end`
+  on an empty stack rejected.
+
+Verification: `go build ./...`, `go test ./...`, `./build.sh`,
+`./tests/test.sh` — all green.
+
 Original step-4 plan (kept for reference):
 
 - After parsing, walk `file.Items` collecting `MShellTypeDecl`

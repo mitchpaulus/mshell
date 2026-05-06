@@ -241,16 +241,7 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 		return
 
 	case *MShellParseMatchBlock:
-		// Match arm dispatch is more involved (pattern semantics on
-		// the matched type drive arm typing). Walk arm bodies for
-		// nested casts but otherwise no-op the stack effect.
-		for _, arm := range it.Arms {
-			scope := c.snapshotStack()
-			for _, sub := range arm.Body {
-				c.checkParseItem(sub)
-			}
-			c.restoreStack(scope)
-		}
+		c.checkMatchBlock(it)
 		return
 
 	case *MShellParseGrid:
@@ -384,6 +375,101 @@ func (c *Checker) checkIfBlock(ifBlock *MShellParseIfBlock) {
 	}
 
 	c.ReconcileArms(arms, startTok)
+}
+
+// checkMatchBlock drives a `<subject> match ... end` through branch
+// reconciliation. The subject is on top of the stack at entry; the
+// runtime peeks (not pops) it, then per-arm pops if `Consume` is true.
+//
+// This first cut handles:
+//   - Per-arm Consume vs preserve: each arm forks to the entry
+//     snapshot, then pops or keeps the subject before walking the body.
+//   - `just <bindingName>` patterns: when the subject is `Maybe[T]`,
+//     the body sees `bindingName` bound to T.
+//   - Wildcard `_` patterns: any subject matches; no narrowing.
+//   - Type / value literal patterns (int, str, bool, "x", 42, true):
+//     no narrowing yet — the body sees the unrefined subject type.
+//     Refinement (e.g. inside an `int : ...` arm the subject is known
+//     to be int) is a future improvement.
+//
+// What's NOT yet done:
+//   - Exhaustiveness checking. The Phase 6b `CheckMatchExhaustive`
+//     helper is available but classifying the parser's pattern items
+//     into the MatchArmKind enum needs another translation step.
+//   - Pattern-driven type narrowing inside arms.
+func (c *Checker) checkMatchBlock(matchBlock *MShellParseMatchBlock) {
+	startTok := matchBlock.GetStartToken()
+	if c.stack.Len() == 0 {
+		c.errors = append(c.errors, TypeError{
+			Kind: TErrStackUnderflow,
+			Pos:  startTok,
+			Hint: "match subject",
+		})
+		return
+	}
+	subject := c.stack.items[c.stack.Len()-1]
+	snap := c.Snapshot()
+
+	if len(matchBlock.Arms) == 0 {
+		// Empty match block: no arms could fire. Treat as a no-op.
+		// The runtime would error at first use; the checker keeps
+		// the subject on the stack.
+		return
+	}
+
+	arms := make([]BranchArm, 0, len(matchBlock.Arms))
+	for _, arm := range matchBlock.Arms {
+		c.Fork(snap)
+		// Apply per-arm subject handling.
+		if arm.Consume {
+			// Pop the subject — body sees the stack without it.
+			c.stack.items = c.stack.items[:c.stack.Len()-1]
+		}
+		// `just v` destructuring: bind v to the inner of Maybe[T].
+		// Pattern-introduced bindings are arm-local; we strip them
+		// before capturing so ReconcileArms doesn't see them as a
+		// var-set disagreement across arms.
+		patternBindings := bindMaybeJust(c, subject, arm.Pattern)
+
+		for _, sub := range arm.Body {
+			c.checkParseItem(sub)
+		}
+		for _, name := range patternBindings {
+			delete(c.vars.bound, name)
+		}
+		arms = append(arms, c.CaptureArm(false))
+	}
+	c.ReconcileArms(arms, startTok)
+}
+
+// bindMaybeJust looks for the two-token `just <name>` pattern and, if
+// the subject is a Maybe[T], binds the pattern's name to T in the
+// current scope. Returns the list of NameIds it bound so the caller
+// can strip them before reconciliation (pattern bindings are
+// arm-local; they don't propagate past the match block).
+func bindMaybeJust(c *Checker, subject TypeId, pattern []MShellParseItem) []NameId {
+	if len(pattern) != 2 {
+		return nil
+	}
+	first, ok1 := pattern[0].(Token)
+	second, ok2 := pattern[1].(Token)
+	if !ok1 || !ok2 {
+		return nil
+	}
+	if first.Type != LITERAL || first.Lexeme != "just" {
+		return nil
+	}
+	if second.Type != LITERAL || second.Lexeme == "_" {
+		return nil
+	}
+	resolved := c.subst.Apply(c.arena, subject)
+	n := c.arena.Node(resolved)
+	if n.Kind != TKMaybe {
+		return nil
+	}
+	nameId := c.names.Intern(second.Lexeme)
+	c.vars.bound[nameId] = TypeId(n.A)
+	return []NameId{nameId}
 }
 
 // isBoolOrInt reports whether t resolves to bool or int after applying

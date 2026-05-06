@@ -358,6 +358,91 @@ func TestTypeCheckProgramMapFilterTypeMismatch(t *testing.T) {
 	}
 }
 
+func TestTypeCheckProgramMatchValueArms(t *testing.T) {
+	// All arms consume the subject (`:`) and produce nothing on the
+	// stack. Reconciliation passes (all arms agree).
+	src := `
+"hello" match
+    "hello" : "greeting" wl,
+    "bye"   : "farewell" wl,
+    _       : "unknown" wl,
+end
+`
+	errs, ok := parseAndCheck(t, src)
+	if !ok || len(errs) != 0 {
+		t.Fatalf("expected pass; errs=%v", errs)
+	}
+}
+
+func TestTypeCheckProgramMatchTypeArms(t *testing.T) {
+	src := `
+42 match
+    int : "integer" wl,
+    str : "string" wl,
+    _   : "other" wl,
+end
+`
+	errs, ok := parseAndCheck(t, src)
+	if !ok || len(errs) != 0 {
+		t.Fatalf("expected pass; errs=%v", errs)
+	}
+}
+
+func TestTypeCheckProgramMatchPreserveSubject(t *testing.T) {
+	// `:>` keeps the subject on the stack for the body. Each arm
+	// produces a string on top, so the post-match stack is
+	// [subject, str].
+	src := `
+42 match
+    int :> str wl,
+    _   :> str wl,
+end
+`
+	errs, ok := parseAndCheck(t, src)
+	if !ok || len(errs) != 0 {
+		t.Fatalf("expected pass; errs=%v", errs)
+	}
+}
+
+func TestTypeCheckProgramMatchJustBinding(t *testing.T) {
+	// just v binds v to the inner of Maybe[T]. Inside the arm,
+	// `:v` retrieves an int.
+	src := `
+5 just match
+    just v : :v wl,
+    none : "nothing" wl,
+end
+`
+	errs, ok := parseAndCheck(t, src)
+	if !ok || len(errs) != 0 {
+		t.Fatalf("expected pass; errs=%v", errs)
+	}
+}
+
+func TestTypeCheckProgramMatchArmStackMismatch(t *testing.T) {
+	// One arm consumes (Consume=true) and produces nothing; another
+	// preserves (Consume=false) and produces nothing — net stack
+	// depth differs by the subject.
+	src := `
+42 match
+    int : "i" wl,
+    _ :> "other" wl,
+end
+`
+	errs, ok := parseAndCheck(t, src)
+	if ok {
+		t.Fatalf("expected branch-size mismatch; errs=%v", errs)
+	}
+}
+
+func TestTypeCheckProgramMatchEmptyStack(t *testing.T) {
+	src := `match _ : "x" wl, end`
+	errs, ok := parseAndCheck(t, src)
+	if ok {
+		t.Fatalf("expected stack-underflow; errs=%v", errs)
+	}
+}
+
 func TestTypeCheckProgramVarStoreThenGetter(t *testing.T) {
 	// A varstore captures the top of the stack into a name; a `:name`
 	// getter pushes that type back. Use only registered ops so the
