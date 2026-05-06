@@ -58,23 +58,119 @@ func (c *Checker) CheckProgram(file *MShellFile) {
 			c.DeclareType(d.Name, body)
 		}
 	}
-	// Pre-pass 2: register all `def` signatures so call sites can
-	// resolve them. Body type-checking is a separate (later) chunk
-	// — for now we just trust the declared sig.
+	// Pre-pass 2: register all `def` signatures so call sites (and
+	// recursive self-calls inside def bodies) can resolve them.
+	defSigs := make([]QuoteSig, len(file.Definitions))
 	for i := range file.Definitions {
 		def := &file.Definitions[i]
 		sig, _ := TranslateTypeDef(c.arena, &def.TypeDef)
-		// Only register sigs that translated cleanly enough to have
-		// at least an output list. Defs with placeholders still get
-		// registered so call sites aren't reported as unknown — the
-		// placeholders act as fresh vars.
+		defSigs[i] = sig
 		nameId := c.names.Intern(def.Name)
 		c.nameBuiltins[nameId] = append(c.nameBuiltins[nameId], sig)
 	}
-	// Flow walk.
+	// Pre-pass 3: type-check each def body against its declared sig.
+	for i := range file.Definitions {
+		c.checkDefBody(&file.Definitions[i], defSigs[i])
+	}
+	// Flow walk of top-level items.
 	for _, item := range file.Items {
 		c.checkParseItem(item)
 	}
+}
+
+// checkDefBody verifies that the def's body, when run with the
+// declared inputs on the stack, produces a stack matching the
+// declared outputs.
+//
+// Isolation:
+//   - Stack and VarEnv are saved + reset before the check; the
+//     def's body sees only its inputs and its own variable scope.
+//   - The substitution is checkpointed and rolled back afterwards
+//     so per-body bindings don't leak globally.
+//   - Generics are fresh-renamed via Instantiate so the body
+//     check operates on substitution-local TypeVarIds; recursive
+//     self-calls go through nameBuiltins as usual and get their
+//     own fresh-rename.
+func (c *Checker) checkDefBody(def *MShellDefinition, sig QuoteSig) {
+	// Save outer state.
+	outerStack := c.stack.items
+	outerVars := c.vars.bound
+	prevFn := c.currentFn
+	cp := c.subst.Checkpoint()
+
+	c.stack.items = nil
+	c.vars.bound = make(map[NameId]TypeId)
+
+	// Fresh-rename generics for this body check.
+	instSig := c.Instantiate(sig)
+	c.currentFn = &FnContext{Sig: instSig}
+
+	// Push declared inputs.
+	for _, in := range instSig.Inputs {
+		c.stack.Push(in)
+	}
+
+	// Walk the body.
+	for _, item := range def.Items {
+		c.checkParseItem(item)
+	}
+
+	// Verify the resulting stack matches declared outputs.
+	expected := instSig.Outputs
+	if c.stack.Len() != len(expected) {
+		c.errors = append(c.errors, TypeError{
+			Kind: TErrTypeMismatch,
+			Pos:  def.NameToken,
+			Hint: defBodyArityHint(def.Name, len(expected), c.stack.Len()),
+		})
+	} else {
+		for i, want := range expected {
+			got := c.stack.items[i]
+			if !c.unify(got, want) {
+				c.errors = append(c.errors, TypeError{
+					Kind:     TErrTypeMismatch,
+					Pos:      def.NameToken,
+					Expected: want,
+					Actual:   got,
+					ArgIndex: i,
+					Hint:     "def body output position " + intToStr(i) + " of '" + def.Name + "'",
+				})
+			}
+		}
+	}
+
+	// Restore outer state.
+	c.currentFn = prevFn
+	c.subst.Rollback(cp)
+	c.stack.items = outerStack
+	c.vars.bound = outerVars
+}
+
+func defBodyArityHint(name string, want, got int) string {
+	return "def body of '" + name + "' produced " + intToStr(got) +
+		" output(s); declared sig has " + intToStr(want)
+}
+
+func intToStr(i int) string {
+	if i == 0 {
+		return "0"
+	}
+	neg := i < 0
+	if neg {
+		i = -i
+	}
+	var b [20]byte
+	pos := len(b)
+	for i > 0 {
+		pos--
+		b[pos] = byte('0' + i%10)
+		i /= 10
+	}
+	if neg {
+		pos--
+		b[pos] = '-'
+	}
+	return string(b[pos:])
 }
 
 // checkParseItem dispatches a single parse-tree item, advancing the

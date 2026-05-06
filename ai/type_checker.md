@@ -1978,6 +1978,82 @@ What's still NOT done:
 - **Match block walker** (still a stub).
 - **Quote-body inference integration** (Phase 7 hookup).
 
+### Phase 10 step 4e — `def` body type-checking — DONE
+
+Each user-defined function's body is now type-checked against
+its declared signature. Bugs inside def bodies surface at check
+time, not just call sites.
+
+Pre-pass 3 in `(*Checker).CheckProgram`:
+
+```go
+for i := range file.Definitions {
+    c.checkDefBody(&file.Definitions[i], defSigs[i])
+}
+```
+
+`(*Checker).checkDefBody(def, sig)` flow:
+
+1. Save outer state: stack, var env, currentFn, substitution
+   checkpoint.
+2. Reset stack and var env to empty (the body sees only its
+   declared inputs and its own variable scope).
+3. `Instantiate(sig)` to fresh-rename generics for this body
+   check.
+4. Push declared inputs onto the empty stack in declaration
+   order.
+5. Walk the body items through `checkParseItem` — which means
+   the entire walker (operators, casts, if-blocks, vars, etc.)
+   is available inside def bodies.
+6. After the walk, verify the resulting stack length equals the
+   declared output arity. If yes, unify each stack slot against
+   the corresponding declared output. Report mismatches with the
+   def's `NameToken` as the position.
+7. Restore outer state. The substitution rollback ensures
+   per-body bindings don't leak across defs.
+
+Recursion works naturally: pre-pass 2 registers all sigs in
+`nameBuiltins` before pre-pass 3 starts checking bodies, so a
+def calling itself resolves through the same overload-dispatch
+path as any other call.
+
+Tests in `TypeCheckProgram_test.go` (3 new):
+
+- `TestTypeCheckProgramDefBodyArityMismatch` —
+  `def bad (int -- int) dup end` rejected (body produces 2
+  outputs, sig declares 1).
+- `TestTypeCheckProgramDefBodyTypeError` —
+  `def bad (int -- int) true + end` rejected (`true 1 +`
+  pattern: bool + int).
+- `TestTypeCheckProgramDefRecursiveCallChecks` —
+  `def rec (int -- int) rec end` clean-checks; the body's
+  call to `rec` resolves against the pre-registered sig.
+
+The earlier `TestTypeCheckProgramDefList` was updated: its
+empty body would now correctly fail body checking
+(`[T] -> T` with empty body leaves `[T]` on the stack), so the
+test became `def listLen ([T] -- int) len end` which uses a
+real builtin to satisfy the sig.
+
+Verification: `go build ./...`, `go test ./...`, `./build.sh`,
+`./tests/test.sh` — all green. Existing integration tests
+unaffected (flag still opt-in; def body checks only run when
+`--check-types` is set).
+
+What's still NOT done:
+
+- **Match block walker.**
+- **Quote-body inference integration.** Phase 7's
+  `InferQuoteSig` exists but isn't yet plugged into
+  `MShellParseQuote`'s case in `checkParseItem`. With it,
+  quotes pushed onto the stack would carry their inferred
+  sigs, enabling higher-order builtins like `map` and
+  `filter` to type-check.
+- **More builtin sigs.** Especially the higher-order ops
+  (`map`, `filter`, `reduce`, `each`, …).
+- **Stdlib hashing/caching.**
+- **Phase 11:** delete `mshell/TypeChecking.go`.
+
 Original step-4 plan (kept for reference):
 
 - After parsing, walk `file.Items` collecting `MShellTypeDecl`

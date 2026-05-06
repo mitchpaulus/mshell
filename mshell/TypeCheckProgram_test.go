@@ -256,15 +256,58 @@ end
 }
 
 func TestTypeCheckProgramDefList(t *testing.T) {
-	// firstOf ([T] -- T): consumes a list, produces an element.
+	// listLen consumes a list and produces an int — body uses the
+	// registered `len` builtin so the body type-checks.
 	src := `
-def firstOf ([T] -- T)
+def listLen ([T] -- int)
+    len
 end
-[1 2 3] firstOf wl
+[1 2 3] listLen wl
 `
 	errs, ok := parseAndCheck(t, src)
 	if !ok || len(errs) != 0 {
 		t.Fatalf("expected pass; errs=%v", errs)
+	}
+}
+
+func TestTypeCheckProgramDefBodyArityMismatch(t *testing.T) {
+	// declared (int -- int) but body produces (int int) on the stack.
+	src := `
+def bad (int -- int)
+    dup
+end
+`
+	errs, ok := parseAndCheck(t, src)
+	if ok {
+		t.Fatalf("expected body arity error; errs=%v", errs)
+	}
+}
+
+func TestTypeCheckProgramDefBodyTypeError(t *testing.T) {
+	// Body has a flow-level type error (can't add bool to int).
+	src := `
+def bad (int -- int)
+    true +
+end
+`
+	errs, ok := parseAndCheck(t, src)
+	if ok {
+		t.Fatalf("expected body type error; errs=%v", errs)
+	}
+}
+
+func TestTypeCheckProgramDefRecursiveCallChecks(t *testing.T) {
+	// Recursive self-call resolves through nameBuiltins (registered
+	// in pre-pass 2 before bodies are checked).
+	src := `
+def rec (int -- int)
+    rec
+end
+5 rec wl
+`
+	errs, ok := parseAndCheck(t, src)
+	if !ok || len(errs) != 0 {
+		t.Fatalf("expected recursive sig to type-check; errs=%v", errs)
 	}
 }
 
