@@ -1766,6 +1766,75 @@ Remaining V1 chunks:
 - **Phase 11:** delete `mshell/TypeChecking.go` once parity is
   reached.
 
+### Phase 10 step 4b — Builtin table buildout (first pass) — DONE
+
+`mshell/TypeBuiltins.go` grew a meaningful batch of common
+builtins. The bar for inclusion is "appears often in real
+programs and has a clean sig". As programs in the test suite
+surface unknown-identifier errors under `--check-types`, the
+right response is usually to add the offending builtin here.
+
+Refactor: `builtinSigsByToken()` now takes `*TypeArena` so it
+can build generic sigs (specifically STR's `(T -- str)`).
+`Checker` constructor passes its arena in.
+
+Builtins added:
+
+**Stack manipulation (LITERAL, all polymorphic):**
+- `dup`, `drop`, `swap`, `over`, `rot`, `nip`, `tuck`
+
+**I/O (LITERAL, polymorphic consumers):**
+- `wl`, `wle`, `print`, `printe`  — `(T -- )`
+- `wln` — `( -- )`
+
+**Boolean (LITERAL, except `not`):**
+- `not` — `(bool -- bool)`, registered as NOT token (it's a
+  reserved keyword, not LITERAL)
+- `and`, `or` — `(bool bool -- bool)`
+
+**Arithmetic helpers (LITERAL, overloaded across int/float):**
+- `abs`, `neg`
+
+**Numeric conversions (LITERAL, overloaded):**
+- `toFloat` — `int -> float | float -> float`
+- `toInt`   — `float -> int | str -> int | int -> int`
+
+**List ops (LITERAL):**
+- `len` — `[T] -> int | str -> int | {K: V} -> int`
+- `append`, `push` — `([T] T -- [T])`
+- `reverse` — `[T] -> [T] | str -> str`
+
+**Type introspection (LITERAL):**
+- `typeof` — `(T -- str)`
+
+**Token-typed ops (byToken):**
+- `STR` — `(T -- str)` generic conversion (lexer emits STR for
+  bare `str` keyword in expression position; TypeExpr parser
+  handles STR-in-type-position separately)
+- `NOT` — `(bool -- bool)`
+- `EQUALS` (`=`), `NOTEQUAL` (`!=`) — `(T T -- bool)` polymorphic
+  (both inputs must unify, so `true 1 =` is rejected)
+
+Tests added in `TypeCheckProgram_test.go`:
+
+- `TestTypeCheckProgramRegisteredBuiltins` — 12 small programs
+  using the new builtins all flow-check cleanly.
+- `TestTypeCheckProgramBuiltinTypeMismatches` — three negative
+  cases that the checker now catches: `true not 5 +`,
+  `"hello" 1 +`, `true 1 =`.
+
+Verification: `go build ./...`, `go test ./...`, `./build.sh`,
+`./tests/test.sh` — all green.
+
+Known token-LITERAL gotchas worth flagging for future work:
+- `not` is NOT (token), not LITERAL. Same convention applies
+  to other reserved keywords.
+- `str` is STR (token) in expression position, TidStr in type
+  position. `typeof` was renamed from `type` for this reason
+  (see Phase 10 step 1 notes).
+- Single-character `x` is INTERPRET (reserved), can't be used
+  as a variable name.
+
 Original step-4 plan (kept for reference):
 
 - After parsing, walk `file.Items` collecting `MShellTypeDecl`

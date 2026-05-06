@@ -100,7 +100,7 @@ func NewChecker(arena *TypeArena, names *NameTable) *Checker {
 		arena:        arena,
 		names:        names,
 		vars:         NewVarEnv(),
-		builtins:     builtinSigsByToken(),
+		builtins:     builtinSigsByToken(arena),
 		nameBuiltins: builtinSigsByName(arena, names),
 	}
 }

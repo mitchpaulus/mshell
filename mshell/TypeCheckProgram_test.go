@@ -103,12 +103,52 @@ func TestTypeCheckProgramArithmeticTypeMismatch(t *testing.T) {
 }
 
 func TestTypeCheckProgramUnregisteredBuiltinFlagged(t *testing.T) {
-	// Until the builtin table grows, word builtins like `wl` surface as
-	// unknown identifiers under --check-types. That's the expected
-	// signal for what to register next.
-	errs, ok := parseAndCheck(t, `42 wl`)
+	// Word builtins not yet in the table surface as unknown identifiers.
+	// `gridCol` is one such (Grid-related ops haven't been registered).
+	errs, ok := parseAndCheck(t, `42 gridCol`)
 	if ok {
-		t.Fatalf("expected unknown-identifier error for unregistered 'wl'; errs=%v", errs)
+		t.Fatalf("expected unknown-identifier error for unregistered 'gridCol'; errs=%v", errs)
+	}
+}
+
+func TestTypeCheckProgramRegisteredBuiltins(t *testing.T) {
+	// Sanity: a small program using only registered builtins flow-checks.
+	cases := []string{
+		`42 wl`,
+		`42 dup +`,
+		`1 2 swap -`,
+		`true not`,
+		`42 str wl`,
+		`42 dup drop wl`,
+		`1 2 = wl`,
+		`"hello" len wl`,
+		`"a" "b" != wl`,
+		`42 abs wl`,
+		`42 toFloat wl`,
+		`"42" toInt wl`,
+	}
+	for _, src := range cases {
+		errs, ok := parseAndCheck(t, src)
+		if !ok || len(errs) != 0 {
+			t.Errorf("%q: expected pass; errs=%v", src, errs)
+		}
+	}
+}
+
+func TestTypeCheckProgramBuiltinTypeMismatches(t *testing.T) {
+	cases := []struct {
+		src    string
+		reason string
+	}{
+		{`true not 5 +`, "bool + int via not output"},
+		{`"hello" 1 +`, "str + int rejected"},
+		{`true 1 =`, "bool = int (different types) rejected"},
+	}
+	for _, tc := range cases {
+		errs, ok := parseAndCheck(t, tc.src)
+		if ok {
+			t.Errorf("%q (%s): expected failure; errs=%v", tc.src, tc.reason, errs)
+		}
 	}
 }
 
