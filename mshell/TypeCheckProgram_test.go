@@ -212,6 +212,62 @@ func TestTypeCheckProgramIfBranchTypeUnion(t *testing.T) {
 	}
 }
 
+func TestTypeCheckProgramDefRegisteredAtCallSite(t *testing.T) {
+	// User-defined function `inc (int -- int)` should make `5 inc`
+	// type-check cleanly.
+	src := `
+def inc (int -- int)
+    1 +
+end
+5 inc wl
+`
+	errs, ok := parseAndCheck(t, src)
+	if !ok || len(errs) != 0 {
+		t.Fatalf("expected clean check; errs=%v", errs)
+	}
+}
+
+func TestTypeCheckProgramDefCallSiteTypeMismatch(t *testing.T) {
+	src := `
+def inc (int -- int)
+    1 +
+end
+"hi" inc wl
+`
+	errs, ok := parseAndCheck(t, src)
+	if ok {
+		t.Fatalf("expected type-mismatch at call site; errs=%v", errs)
+	}
+}
+
+func TestTypeCheckProgramDefGenericIdentity(t *testing.T) {
+	// id (T -- T): polymorphic, should accept int or str at separate
+	// call sites.
+	src := `
+def id (T -- T)
+end
+5 id wl
+"x" id wl
+`
+	errs, ok := parseAndCheck(t, src)
+	if !ok || len(errs) != 0 {
+		t.Fatalf("expected polymorphic id to pass; errs=%v", errs)
+	}
+}
+
+func TestTypeCheckProgramDefList(t *testing.T) {
+	// firstOf ([T] -- T): consumes a list, produces an element.
+	src := `
+def firstOf ([T] -- T)
+end
+[1 2 3] firstOf wl
+`
+	errs, ok := parseAndCheck(t, src)
+	if !ok || len(errs) != 0 {
+		t.Fatalf("expected pass; errs=%v", errs)
+	}
+}
+
 func TestTypeCheckProgramVarStoreThenGetter(t *testing.T) {
 	// A varstore captures the top of the stack into a name; a `:name`
 	// getter pushes that type back. Use only registered ops so the

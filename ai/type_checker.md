@@ -1899,6 +1899,85 @@ Tests added in `TypeCheckProgram_test.go` (4):
 Verification: `go build ./...`, `go test ./...`, `./build.sh`,
 `./tests/test.sh` — all green.
 
+### Phase 10 step 4d — `def` sig registration — DONE
+
+User-defined functions (`def` declarations) now register their
+signatures in the new Checker so call sites resolve correctly.
+Body type-checking against the declared sig is a separate
+chunk — for now we trust the declared sig.
+
+Bridge: `mshell/TypeDefTranslate.go` translates the
+old-parser-built `TypeDefinition` (`[]MShellType` + `[]MShellType`)
+into a new-Checker `QuoteSig`. This lets every existing user
+def get a sig in the new arena without touching the parser.
+Phase 11 deletes the old type-system parse tree and the
+translator with it.
+
+Translation table:
+
+| Old `MShellType`           | New `TypeId`                  |
+| -------------------------- | ----------------------------- |
+| `TypeInt{}`                | `TidInt`                      |
+| `TypeFloat{}`              | `TidFloat`                    |
+| `TypeString{}`             | `TidStr`                      |
+| `TypeBool{}`               | `TidBool`                     |
+| `TypeBinary{}`             | `TidBytes`                    |
+| `TypeGeneric{Name}`        | fresh `TKVar` (name-scoped)   |
+| `*TypeHomogeneousList`     | `MakeList(elem)`              |
+| `*TypeQuote`               | `MakeQuote(...)` recursive    |
+| `*TypeDictionary` (wild)   | `MakeDict(str, V)`            |
+| `*TypeDictionary` (named)  | (skipped, error logged)       |
+| `*TypeTuple`               | (skipped, error logged)       |
+
+Generics scoping: each def has its own `map[string]TypeVarId`.
+First occurrence of a name allocates a fresh `TypeVarId`;
+later occurrences reuse it. All allocated IDs flow into
+`QuoteSig.Generics` so `Checker.Instantiate` fresh-renames
+at every call site.
+
+`(*Checker).CheckProgram(file)` gained pre-pass 2:
+
+```go
+for i := range file.Definitions {
+    def := &file.Definitions[i]
+    sig, _ := TranslateTypeDef(c.arena, &def.TypeDef)
+    nameId := c.names.Intern(def.Name)
+    c.nameBuiltins[nameId] = append(c.nameBuiltins[nameId], sig)
+}
+```
+
+Defs are appended to `nameBuiltins`, so they participate in the
+Phase-9 overload dispatch the same way builtins do — a name with
+multiple sigs (one builtin + one user def, or multiple user defs)
+gets the most-specific resolution per call site.
+
+Tests in `TypeCheckProgram_test.go` (4 new):
+
+- `TestTypeCheckProgramDefRegisteredAtCallSite` —
+  `def inc (int -- int) ... end  5 inc wl` clean-checks; the
+  sig translates to `(int -- int)` and the call site unifies.
+- `TestTypeCheckProgramDefCallSiteTypeMismatch` —
+  `"hi" inc` with the same `inc` rejected as type mismatch.
+- `TestTypeCheckProgramDefGenericIdentity` — `def id (T -- T)`
+  used at two distinct types (`5 id`, `"x" id`); both pass
+  because Instantiate fresh-renames T at each call site.
+- `TestTypeCheckProgramDefList` —
+  `def firstOf ([T] -- T)` against `[1 2 3] firstOf` passes.
+
+Verification: `go build ./...`, `go test ./...`, `./build.sh`,
+`./tests/test.sh` — all green. No stdlib changes.
+
+What's still NOT done:
+
+- **Def body type-checking.** The body should be checked
+  against the declared sig in a fresh `FnContext`. The
+  infrastructure exists; just needs wiring. This is the next
+  obvious chunk.
+- **`type X = ...` declarations inside def bodies.** Out of
+  scope; type decls are file-level only by design.
+- **Match block walker** (still a stub).
+- **Quote-body inference integration** (Phase 7 hookup).
+
 Original step-4 plan (kept for reference):
 
 - After parsing, walk `file.Items` collecting `MShellTypeDecl`

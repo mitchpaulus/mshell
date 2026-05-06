@@ -47,15 +47,29 @@ func TypeCheckProgram(file *MShellFile) (errors []string, ok bool) {
 }
 
 // CheckProgram is the file-level type-check pass. It registers all
-// type declarations, then walks the parse tree driving the type
-// stack. Error accumulation lives on the Checker.
+// type declarations and user-defined function sigs, then walks the
+// parse tree driving the type stack. Error accumulation lives on the
+// Checker.
 func (c *Checker) CheckProgram(file *MShellFile) {
-	// Pre-pass: register all type declarations.
+	// Pre-pass 1: register all `type` declarations.
 	for _, item := range file.Items {
 		if d, ok := item.(*MShellTypeDecl); ok {
 			body := ResolveTypeExprAST(c, d.Body)
 			c.DeclareType(d.Name, body)
 		}
+	}
+	// Pre-pass 2: register all `def` signatures so call sites can
+	// resolve them. Body type-checking is a separate (later) chunk
+	// — for now we just trust the declared sig.
+	for i := range file.Definitions {
+		def := &file.Definitions[i]
+		sig, _ := TranslateTypeDef(c.arena, &def.TypeDef)
+		// Only register sigs that translated cleanly enough to have
+		// at least an output list. Defs with placeholders still get
+		// registered so call sites aren't reported as unknown — the
+		// placeholders act as fresh vars.
+		nameId := c.names.Intern(def.Name)
+		c.nameBuiltins[nameId] = append(c.nameBuiltins[nameId], sig)
 	}
 	// Flow walk.
 	for _, item := range file.Items {
