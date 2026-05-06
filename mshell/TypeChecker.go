@@ -79,6 +79,10 @@ type Checker struct {
 	builtins     map[TokenType]QuoteSig
 	nameBuiltins map[NameId][]QuoteSig
 
+	// typeEnv holds named type declarations (Phase 5). Built-in / reserved
+	// type names are NOT stored here — they are recognized directly.
+	typeEnv map[NameId]TypeId
+
 	// Quote-body inference state (Phase 7). When inferring is true,
 	// applySig responds to stack underflow by synthesizing fresh type
 	// variables instead of reporting an error; those vars accumulate

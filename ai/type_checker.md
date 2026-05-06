@@ -1272,7 +1272,98 @@ the resolver uses sig.Inputs only for scoring; when `<fail>` /
 `pure` are added, the score function can fold them in without
 changing the resolver loop.
 
-### Phase 5 — Unions, brands, and `as` cast — NEXT
+### Phase 5 — Unions, brands, and `as` cast — DONE (option 1, pure-checker minimal)
+
+Took option 1 from the two paths described below: pure checker, no parser
+or lexer changes. The user-visible `type X = ...` form and the postfix
+`as` operator land together with the rest of the parser integration in
+Phase 10.
+
+Files added:
+
+- `mshell/TypeCast.go` — `(*Checker).DeclareType`, `LookupType`, `Cast`,
+  plus internal helpers `brandify`, `castOk`, `acceptsAs`, `underlying`.
+- `mshell/TypeCast_test.go` — 14 tests: union-type declaration produces
+  branded union; newtype declaration over a primitive produces TKBrand;
+  reserved type names rejected; duplicate names rejected; two distinct
+  declarations with the same body produce distinct nominal types and do
+  not unify; cast int → branded union (member of arms); cast int|str →
+  branded union (subset of arms); cast bool → Result rejected as
+  TErrInvalidCast; cast brand A → brand B rejected; cast A → underlying
+  union allowed; newtype cast from underlying allowed; newtype cast from
+  wrong underlying rejected; cast underflow recovers by pushing target;
+  identity cast is a no-op; LookupType on missing name returns
+  TidNothing.
+
+`Checker` gained a new field:
+
+```go
+typeEnv map[NameId]TypeId
+```
+
+initialized lazily on first DeclareType. Reserved built-in type names
+are NOT stored here — `IsReservedTypeName` is consulted before
+declaration and the parser-driven path will recognize built-ins
+directly.
+
+Three new error kinds in `TypeError.go`:
+
+- `TErrReservedTypeName` — attempt to redefine `int`, `Maybe`, etc.
+- `TErrDuplicateTypeName` — same name declared twice.
+- `TErrInvalidCast` — source type not compatible with target.
+
+DeclareType behavior (`brandify`):
+
+- `type X = A | B` over an unbranded union: returns a NEW union with
+  the same arms but `brandId = NameId(X)`. Hashconsing in
+  `MakeUnion` already keys on the brand id, so two declarations with
+  the same arms but different names produce distinct TypeIds.
+- `type X = T` over any non-union type (primitive, list, dict, shape,
+  Maybe, brand, etc.): returns a `TKBrand` wrapping `T`. This is the
+  newtype case.
+- Re-branding an already-branded union is reported as an error using
+  `TErrReservedTypeName` (closest existing kind, with a hint;
+  `TErrInvalidTypeBody` could be added later if this case shows up
+  more).
+
+Cast compatibility (`castOk`) tries four trials in order, each isolated
+by a substitution checkpoint:
+
+1. Identity (`src == dst`).
+2. Direct unification.
+3. Tag-in: `src` is acceptable where `dst`'s UNDERLYING is expected.
+   This covers a primitive (or any non-union) flowing into a branded
+   union, since primitives don't unify with a union directly.
+4. Untag: `dst` is acceptable where `src`'s UNDERLYING is expected.
+   Lets a branded value cast back to its structural form.
+
+`acceptsAs` is a cast-only "is src valid where dst is expected" check.
+It differs from `unify` in one crucial direction: when `dst` is a
+union, `src` matches if it's compatible with any arm. `unify` is
+symmetric on kind, so `int` can't unify with `int|str` directly; cast
+acceptance is asymmetric and handles the membership case.
+
+`underlying`:
+
+- Branded union → unbranded union with same arms (one layer).
+- TKBrand wrapper → the wrapped underlying TypeId (one layer).
+- Anything else → the type itself.
+
+Recursion past one layer was not needed by any current test.
+Promotion to multi-layer peeling is a localized fix if needed.
+
+Verification: `go build ./...`, `go test ./...`, `./build.sh`,
+`./tests/test.sh` — all green. No stdlib or existing test files
+modified.
+
+What this unlocks:
+
+- Phase 10 parser work for `type X = A | B` declarations and the
+  postfix `as` operator can call `DeclareType` / `Cast` directly.
+- Other phases that need named-type lookup (sig parsing, pattern arms
+  matching against branded unions) call `LookupType`.
+
+Original notes (left here for context):
 
 Phase 3 already implemented union/brand unification at the
 `unify()` level. Phase 5 adds the surface syntax: `type X = A | B`

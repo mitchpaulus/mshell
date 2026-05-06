@@ -27,6 +27,9 @@ const (
 	TErrNonExhaustiveMatch
 	TErrAmbiguousOverload
 	TErrNoMatchingOverload
+	TErrReservedTypeName
+	TErrDuplicateTypeName
+	TErrInvalidCast
 )
 
 // TypeError is a single static-check failure. Pos is a Token (its line/column
@@ -73,6 +76,17 @@ func (e TypeError) Format(arena *TypeArena, names *NameTable) string {
 		fmt.Fprintf(&sb, "ambiguous call to '%s': %s", e.Pos.Lexeme, e.Hint)
 	case TErrNoMatchingOverload:
 		fmt.Fprintf(&sb, "no matching overload for '%s': %s", e.Pos.Lexeme, e.Hint)
+	case TErrReservedTypeName:
+		fmt.Fprintf(&sb, "cannot redefine reserved type name '%s'", e.Name)
+		if e.Hint != "" {
+			fmt.Fprintf(&sb, " (%s)", e.Hint)
+		}
+	case TErrDuplicateTypeName:
+		fmt.Fprintf(&sb, "type '%s' is already declared", e.Name)
+	case TErrInvalidCast:
+		fmt.Fprintf(&sb, "invalid cast: cannot cast %s to %s",
+			FormatType(arena, names, e.Actual),
+			FormatType(arena, names, e.Expected))
 	default:
 		fmt.Fprintf(&sb, "unknown type error")
 	}
