@@ -21,17 +21,17 @@ package main
 // Checker.Instantiate. Two separate canonical sigs may both use
 // TypeVarId(0); they don't collide because renameVars produces fresh
 // per-call variables before unification ever touches them.
-func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId]QuoteSig {
-	out := make(map[NameId]QuoteSig, 4)
+func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig {
+	out := make(map[NameId][]QuoteSig, 4)
 
 	// just : (T -- Maybe[T])
 	{
 		t := arena.MakeVar(0)
-		out[names.Intern("just")] = QuoteSig{
+		out[names.Intern("just")] = []QuoteSig{{
 			Inputs:   []TypeId{t},
 			Outputs:  []TypeId{arena.MakeMaybe(t)},
 			Generics: []TypeVarId{0},
-		}
+		}}
 	}
 
 	// none : ( -- Maybe[T])
@@ -40,11 +40,11 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId]QuoteSig {
 	// will diagnose. For now we just push the unbound var.
 	{
 		t := arena.MakeVar(0)
-		out[names.Intern("none")] = QuoteSig{
+		out[names.Intern("none")] = []QuoteSig{{
 			Inputs:   nil,
 			Outputs:  []TypeId{arena.MakeMaybe(t)},
 			Generics: []TypeVarId{0},
-		}
+		}}
 	}
 
 	return out

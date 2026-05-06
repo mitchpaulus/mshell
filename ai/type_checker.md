@@ -1174,6 +1174,104 @@ What this unlocks:
 - Phase 7 (quote-body inference) will use Snapshot/Fork to recurse
   on a quote's items with a fresh stack.
 
+### Phase 7 — Quote-body inference — DONE
+
+Files added:
+
+- `mshell/TypeQuote.go` — `(*Checker).InferQuoteSig(body []Token) QuoteSig`.
+  Snapshots outer state, runs the body against an empty stack with
+  inference mode on, then restores. Inputs accumulate (deepest-first)
+  via fresh-var synthesis on underflow; outputs are whatever's left
+  on the stack at end. Both lists are pushed through
+  `subst.Apply` before returning so concretized vars resolve.
+- `mshell/TypeQuote_test.go` — 11 tests: empty quote, literal-only,
+  `[2 +]` → `(int -- int)`, `[+]` → `(int int -- int)`,
+  `[+ +]` → `(int int int -- int)`, `[<]` → `(int int -- bool)`,
+  `[just]` produces a Maybe over the input var, `[none]` produces
+  Maybe with a fresh var, outer state restoration including the
+  `inferring` flag and `inferInputs` slice, type mismatch surfacing
+  inside a body, and round-trip use of the inferred quote at a
+  higher-order call site.
+
+`Checker` gained two fields: `inferring bool` and `inferInputs []TypeId`.
+`applySig` now branches on `c.inferring` when underflow is detected:
+each missing slot is filled with a fresh `subst.FreshVar`, those vars
+are prepended to `c.stack.items` (deepest at the bottom) and
+prepended to `c.inferInputs` (deepest at the front, matching
+caller-stack order).
+
+Known limitation, deferred:
+
+- **No generalization.** Free type variables in the inferred sig
+  remain as plain unbound vars in the global substitution. A body
+  like `[dup]` returns `(T0 -- T0 T0)` with `T0` shared across all
+  subsequent uses; calling such a quote at two different concrete
+  types will conflict on the second call. Real let-polymorphism
+  lands when a concrete need surfaces — likely with Phase 9
+  overloading or with user-written `def` bodies that lack sigs.
+
+Verification: `go build ./...`, `go test ./...`, `./build.sh`,
+`./tests/test.sh` — all green.
+
+### Phase 9 — Overload dispatch — DONE (taken before Phase 5)
+
+Did Phase 9 before Phase 5 per the recommendation: stays at the
+pure-checker layer, while Phase 5's user-facing pieces (`type X =
+A | B` declarations and the `as` cast) are mostly parser work.
+
+Files added:
+
+- `mshell/TypeOverload.go` — `(*Checker).resolveAndApply(candidates,
+  callSite)` and `specificityScore`.
+- `mshell/TypeOverload_test.go` — 10 tests: concrete-vs-generic
+  preference (both directions), different-arity overloads, no-match
+  fallback, ambiguity detection, shape-beats-var, brand-beats-var,
+  trial-isolation across calls (verifies one trial's bindings don't
+  leak into the next), specificity-score spot checks, subst
+  Checkpoint/Rollback round-trip.
+
+Other changes:
+
+- `Substitution` gained `SubstCheckpoint`, `Checkpoint`, and
+  `Rollback`. Rollback shrinks `bound` as needed; vars allocated
+  after the checkpoint become unreachable through this substitution
+  (their arena nodes remain, harmlessly orphaned).
+- `Checker.nameBuiltins` retyped from `map[NameId]QuoteSig` to
+  `map[NameId][]QuoteSig` so a name can carry multiple signatures.
+- `builtinSigsByName` updated to register one-element slices for
+  `just` and `none`.
+- `checkOne` now routes LITERAL tokens through `resolveAndApply`
+  instead of calling `applySig` directly.
+- Two new error kinds: `TErrAmbiguousOverload`,
+  `TErrNoMatchingOverload`.
+
+Resolution algorithm (per `TypeOverload.go` header):
+
+1. Snapshot stack and substitution.
+2. For each candidate: restore both, instantiate, drop on
+   arity-fail, trial-unify each input. Score the candidate from
+   its **pre-instantiation** sig so generics with remaining vars
+   score lower than concrete inputs.
+3. Restore both snapshots once more so the actual application
+   below starts clean.
+4. If exactly one candidate has the highest score, apply it. Ties
+   are reported as ambiguity (and the first tied candidate
+   applied for recovery). No matches are reported as no-match
+   (and the first listed candidate applied for recovery).
+
+Specificity score: every non-TKVar arena node in an input
+contributes 1, brand wrappers add a +1 bonus, TKVar contributes 0.
+Higher = more specific. Sum across the input list.
+
+Verification: `go build ./...`, `go test ./...`, `./build.sh`,
+`./tests/test.sh` — all green. No stdlib or existing test files
+modified.
+
+Forward-compatibility hooks for Phase-2-of-effects already in place:
+the resolver uses sig.Inputs only for scoring; when `<fail>` /
+`pure` are added, the score function can fold them in without
+changing the resolver loop.
+
 ### Phase 5 — Unions, brands, and `as` cast — NEXT
 
 Phase 3 already implemented union/brand unification at the

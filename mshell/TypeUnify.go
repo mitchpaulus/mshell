@@ -28,6 +28,35 @@ func (s *Substitution) FreshVar(arena *TypeArena) TypeId {
 	return arena.MakeVar(id)
 }
 
+// SubstCheckpoint records the substitution's state at a point in time
+// so it can be rolled back. Used by overload resolution (Phase 9) to
+// trial-unify each candidate without polluting state for the next.
+type SubstCheckpoint struct {
+	bound []TypeId
+}
+
+// Checkpoint returns a snapshot of the current substitution. Detached
+// from the live state.
+func (s *Substitution) Checkpoint() SubstCheckpoint {
+	out := make([]TypeId, len(s.bound))
+	copy(out, s.bound)
+	return SubstCheckpoint{bound: out}
+}
+
+// Rollback restores the substitution to a prior snapshot, including
+// shrinking the bound slice if the snapshot was smaller. Vars
+// allocated since the checkpoint become inaccessible (their indices
+// fall off the slice); they remain in the arena but no longer
+// resolve through this substitution.
+func (s *Substitution) Rollback(snap SubstCheckpoint) {
+	if cap(s.bound) >= len(snap.bound) {
+		s.bound = s.bound[:len(snap.bound)]
+	} else {
+		s.bound = make([]TypeId, len(snap.bound))
+	}
+	copy(s.bound, snap.bound)
+}
+
 // Apply resolves a TypeId against the current substitution, walking into
 // composites and rebuilding them if any inner type changed. Path
 // compression is applied to variable chains so repeated lookups are fast.

@@ -77,7 +77,14 @@ type Checker struct {
 	errors []TypeError
 
 	builtins     map[TokenType]QuoteSig
-	nameBuiltins map[NameId]QuoteSig
+	nameBuiltins map[NameId][]QuoteSig
+
+	// Quote-body inference state (Phase 7). When inferring is true,
+	// applySig responds to stack underflow by synthesizing fresh type
+	// variables instead of reporting an error; those vars accumulate
+	// into inferInputs in caller-stack order (deepest first).
+	inferring   bool
+	inferInputs []TypeId
 
 	currentFn *FnContext
 }
@@ -139,8 +146,8 @@ func (c *Checker) checkOne(tok Token) {
 
 	if tok.Type == LITERAL {
 		nameId := c.names.Intern(tok.Lexeme)
-		if sig, ok := c.nameBuiltins[nameId]; ok {
-			c.applySig(sig, tok)
+		if sigs, ok := c.nameBuiltins[nameId]; ok {
+			c.resolveAndApply(sigs, tok)
 			return
 		}
 	}
@@ -163,11 +170,25 @@ func (c *Checker) checkOne(tok Token) {
 func (c *Checker) applySig(sig QuoteSig, callSite Token) {
 	sig = c.Instantiate(sig)
 	if len(c.stack.items) < len(sig.Inputs) {
-		c.errors = append(c.errors, TypeError{
-			Kind: TErrStackUnderflow,
-			Pos:  callSite,
-		})
-		return
+		if c.inferring {
+			// Synthesize fresh vars at the bottom of the stack to satisfy
+			// the demand. Each synthesized var also lands at the front of
+			// inferInputs because the deepest-needed var is the first
+			// item the quote's caller must supply (bottom of caller stack).
+			need := len(sig.Inputs) - len(c.stack.items)
+			extra := make([]TypeId, need)
+			for i := 0; i < need; i++ {
+				extra[i] = c.subst.FreshVar(c.arena)
+			}
+			c.inferInputs = append(append([]TypeId(nil), extra...), c.inferInputs...)
+			c.stack.items = append(append([]TypeId(nil), extra...), c.stack.items...)
+		} else {
+			c.errors = append(c.errors, TypeError{
+				Kind: TErrStackUnderflow,
+				Pos:  callSite,
+			})
+			return
+		}
 	}
 	base := len(c.stack.items) - len(sig.Inputs)
 	for i, want := range sig.Inputs {

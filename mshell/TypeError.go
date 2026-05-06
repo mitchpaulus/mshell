@@ -25,6 +25,8 @@ const (
 	TErrBranchStackSize
 	TErrBranchVarSet
 	TErrNonExhaustiveMatch
+	TErrAmbiguousOverload
+	TErrNoMatchingOverload
 )
 
 // TypeError is a single static-check failure. Pos is a Token (its line/column
@@ -67,6 +69,10 @@ func (e TypeError) Format(arena *TypeArena, names *NameTable) string {
 		fmt.Fprintf(&sb, "branches bind different variable sets: %s", e.Hint)
 	case TErrNonExhaustiveMatch:
 		fmt.Fprintf(&sb, "non-exhaustive match: %s", e.Hint)
+	case TErrAmbiguousOverload:
+		fmt.Fprintf(&sb, "ambiguous call to '%s': %s", e.Pos.Lexeme, e.Hint)
+	case TErrNoMatchingOverload:
+		fmt.Fprintf(&sb, "no matching overload for '%s': %s", e.Pos.Lexeme, e.Hint)
 	default:
 		fmt.Fprintf(&sb, "unknown type error")
 	}
