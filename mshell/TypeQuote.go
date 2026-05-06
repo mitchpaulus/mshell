@@ -63,3 +63,41 @@ func (c *Checker) InferQuoteSig(body []Token) QuoteSig {
 
 	return QuoteSig{Inputs: inputs, Outputs: outputs}
 }
+
+// InferQuoteSigItems is the parse-tree variant of InferQuoteSig. The
+// new program walker (TypeCheckProgram.go / checkParseItem) consumes
+// parse items rather than raw tokens, so quote literals encountered
+// during program checking call this entry point. Same fresh-stack /
+// underflow-as-fresh-var semantics; the difference is the walker.
+func (c *Checker) InferQuoteSigItems(body []MShellParseItem) QuoteSig {
+	outerSnap := c.Snapshot()
+	outerInferring := c.inferring
+	outerInputs := c.inferInputs
+
+	c.stack.items = c.stack.items[:0]
+	c.vars.bound = make(map[NameId]TypeId)
+	c.inferring = true
+	c.inferInputs = nil
+
+	for _, item := range body {
+		c.checkParseItem(item)
+	}
+
+	rawInputs := c.inferInputs
+	rawOutputs := append([]TypeId(nil), c.stack.items...)
+
+	c.inferring = outerInferring
+	c.inferInputs = outerInputs
+	c.Fork(outerSnap)
+
+	inputs := make([]TypeId, len(rawInputs))
+	for i, in := range rawInputs {
+		inputs[i] = c.subst.Apply(c.arena, in)
+	}
+	outputs := make([]TypeId, len(rawOutputs))
+	for i, out := range rawOutputs {
+		outputs[i] = c.subst.Apply(c.arena, out)
+	}
+
+	return QuoteSig{Inputs: inputs, Outputs: outputs}
+}

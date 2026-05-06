@@ -311,6 +311,53 @@ end
 	}
 }
 
+func TestTypeCheckProgramQuoteLiteralInferred(t *testing.T) {
+	// `(2 +)` infers as (int -- int). Calling it requires a quote-
+	// consumer; for this test we just push and drop to verify the
+	// quote literal alone doesn't error.
+	src := `(2 +) drop`
+	errs, ok := parseAndCheck(t, src)
+	if !ok || len(errs) != 0 {
+		t.Fatalf("expected pass; errs=%v", errs)
+	}
+}
+
+func TestTypeCheckProgramQuoteWithBodyTypeError(t *testing.T) {
+	// Body has a type error inside the quote — should surface
+	// during inference.
+	src := `(true 1 +) drop`
+	errs, ok := parseAndCheck(t, src)
+	if ok {
+		t.Fatalf("expected body error to surface; errs=%v", errs)
+	}
+}
+
+func TestTypeCheckProgramHigherOrderBuiltins(t *testing.T) {
+	// map : ([T] (T -- U) -- [U]). Quote-body inference produces
+	// the (int -- int) sig from `(1 +)`, which then unifies with
+	// map's quote-input slot.
+	cases := []string{
+		`[1 2 3] (1 +) map drop`,
+		`[1 2 3] (0 >) filter drop`,
+		`[1 2 3] (wl) each`,
+	}
+	for _, src := range cases {
+		errs, ok := parseAndCheck(t, src)
+		if !ok || len(errs) != 0 {
+			t.Errorf("%q: expected pass; errs=%v", src, errs)
+		}
+	}
+}
+
+func TestTypeCheckProgramMapFilterTypeMismatch(t *testing.T) {
+	// filter wants (T -- bool); the quote produces an int instead.
+	src := `[1 2 3] (1 +) filter drop`
+	errs, ok := parseAndCheck(t, src)
+	if ok {
+		t.Fatalf("expected mismatch; errs=%v", errs)
+	}
+}
+
 func TestTypeCheckProgramVarStoreThenGetter(t *testing.T) {
 	// A varstore captures the top of the stack into a name; a `:name`
 	// getter pushes that type back. Use only registered ops so the

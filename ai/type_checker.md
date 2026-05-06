@@ -2054,6 +2054,78 @@ What's still NOT done:
 - **Stdlib hashing/caching.**
 - **Phase 11:** delete `mshell/TypeChecking.go`.
 
+### Phase 10 step 4f — Quote-body inference + higher-order builtins — DONE
+
+Quote literals inside programs now get their full inferred sigs,
+and the higher-order list builtins (`map`/`filter`/`each`) check
+end-to-end.
+
+Wiring:
+
+`mshell/TypeQuote.go` gained `(*Checker).InferQuoteSigItems(body
+[]MShellParseItem) QuoteSig` — same fresh-stack /
+underflow-as-fresh-var semantics as Phase 7's
+`InferQuoteSig(body []Token)`, but operates on parse items so it
+fits the new walker.
+
+`MShellParseQuote` case in `checkParseItem`:
+
+```go
+sig := c.InferQuoteSigItems(it.Items)
+c.stack.Push(c.arena.MakeQuote(sig))
+```
+
+So a quote literal `(2 +)` pushes a quote with sig `(int -- int)`
+on the stack.
+
+Higher-order builtins added in `TypeBuiltins.go`:
+
+- `map`    : `([T] (T -- U) -- [U])`
+- `filter` : `([T] (T -- bool) -- [T])`
+- `each`   : `([T] (T -- ) -- )`
+
+These plus quote inference mean `[1 2 3] (1 +) map` checks: the
+quote is inferred as `(int -- int)`, unified with `(T -- U)`
+which binds `T=int`, `U=int`, and the input list `[int]` matches
+the first slot.
+
+Tests in `TypeCheckProgram_test.go` (4 new):
+
+- `TestTypeCheckProgramQuoteLiteralInferred` —
+  `(2 +) drop` flow-checks (drop accepts the inferred quote).
+- `TestTypeCheckProgramQuoteWithBodyTypeError` —
+  `(true 1 +) drop` rejected; the body error surfaces during
+  inference.
+- `TestTypeCheckProgramHigherOrderBuiltins` — three cases pass:
+  `[1 2 3] (1 +) map drop`,
+  `[1 2 3] (0 >) filter drop`,
+  `[1 2 3] (wl) each`.
+- `TestTypeCheckProgramMapFilterTypeMismatch` —
+  `[1 2 3] (1 +) filter drop` rejected because the quote infers
+  as `(int -- int)`, not the `(T -- bool)` filter requires.
+
+Verification: `go build ./...`, `go test ./...`, `./build.sh`,
+`./tests/test.sh` — all green.
+
+Known limitation (carried from Phase 7): no generalization of
+free type variables in inferred sigs. A quote like `(dup)`
+infers as `(T0 -- T0 T0)` with `T0` left as a global free
+var. Calling such a quote at two distinct concrete types in
+the same program will currently conflict on the second call.
+Generalization (let-polymorphism) lands when a real use case
+emerges.
+
+What's still NOT done:
+
+- **Match block walker.**
+- **Stdlib hashing/caching** (file load + hash + cached
+  arena/state).
+- **More builtin sigs.** The table is now ~35 entries; to
+  cover most of stdlib it likely needs another 50-100
+  additions (string ops, dict ops, file/process ops, grids,
+  date/time, etc.).
+- **Phase 11:** delete `mshell/TypeChecking.go`.
+
 Original step-4 plan (kept for reference):
 
 - After parsing, walk `file.Items` collecting `MShellTypeDecl`

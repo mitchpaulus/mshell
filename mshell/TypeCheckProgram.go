@@ -224,16 +224,12 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 		return
 
 	case *MShellParseQuote:
-		// Walk body for inner casts; push a fresh quote sig
-		// placeholder. Real quote-body inference (Phase 7 lives
-		// behind InferQuoteSig) plugs in when the walker is
-		// pulling tokens off the same stream.
-		scope := c.snapshotStack()
-		for _, sub := range it.Items {
-			c.checkParseItem(sub)
-		}
-		c.restoreStack(scope)
-		c.stack.Push(c.arena.MakeQuote(QuoteSig{}))
+		// Phase 7 inference: run the body against a fresh empty
+		// stack with inferring mode on, accumulate underflow as
+		// fresh-var inputs, take the residual stack as outputs.
+		// The result is the quote literal's inferred sig.
+		sig := c.InferQuoteSigItems(it.Items)
+		c.stack.Push(c.arena.MakeQuote(sig))
 		return
 
 	case *MShellParsePrefixQuote:

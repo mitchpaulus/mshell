@@ -226,6 +226,51 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		}
 	}
 
+	// ----- Higher-order list ops -----
+
+	// map : ([T] (T -- U) -- [U])
+	{
+		t := arena.MakeVar(0)
+		u := arena.MakeVar(1)
+		fn := arena.MakeQuote(QuoteSig{
+			Inputs:  []TypeId{t},
+			Outputs: []TypeId{u},
+		})
+		out[names.Intern("map")] = []QuoteSig{{
+			Inputs:   []TypeId{arena.MakeList(t), fn},
+			Outputs:  []TypeId{arena.MakeList(u)},
+			Generics: []TypeVarId{0, 1},
+		}}
+	}
+
+	// filter : ([T] (T -- bool) -- [T])
+	{
+		t := arena.MakeVar(0)
+		fn := arena.MakeQuote(QuoteSig{
+			Inputs:  []TypeId{t},
+			Outputs: []TypeId{TidBool},
+		})
+		out[names.Intern("filter")] = []QuoteSig{{
+			Inputs:   []TypeId{arena.MakeList(t), fn},
+			Outputs:  []TypeId{arena.MakeList(t)},
+			Generics: []TypeVarId{0},
+		}}
+	}
+
+	// each : ([T] (T -- ) -- )
+	{
+		t := arena.MakeVar(0)
+		fn := arena.MakeQuote(QuoteSig{
+			Inputs:  []TypeId{t},
+			Outputs: nil,
+		})
+		out[names.Intern("each")] = []QuoteSig{{
+			Inputs:   []TypeId{arena.MakeList(t), fn},
+			Outputs:  nil,
+			Generics: []TypeVarId{0},
+		}}
+	}
+
 	// ----- Type introspection -----
 
 	// typeof : (T -- str)
