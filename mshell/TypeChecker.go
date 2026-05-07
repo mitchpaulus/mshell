@@ -142,12 +142,12 @@ func (c *Checker) checkOne(tok Token) {
 		c.stack.Push(TidBool)
 		return
 	case FORMATSTRING:
-		// `$"...{expr}..."` evaluates interpolations and yields a
-		// string. Interpolation contents reference variables
-		// (`@name`), bare names (`name`), and arbitrary expressions
-		// — checking them properly requires re-lexing the inside,
-		// which is left for a follow-up. For now, accept the
-		// literal as `str`.
+		// `$"...{expr}..."` evaluates each `{...}` block as a tiny
+		// program and concatenates the result. Type-check each
+		// block on a fresh sub-stack that inherits the current
+		// VarEnv, requiring the block to produce exactly one
+		// value. The format string itself always pushes `str`.
+		c.checkFormatStringInterpolations(tok)
 		c.stack.Push(TidStr)
 		return
 	case PATH:
@@ -197,6 +197,14 @@ func (c *Checker) checkOne(tok Token) {
 		Pos:  tok,
 		Name: tok.Lexeme,
 	})
+	// Push a fresh var so downstream walks see *something* in
+	// place of the unknown identifier's effect. This mirrors the
+	// resilience strategy elsewhere (VARRETRIEVE on miss,
+	// no-overload-recovery in resolveAndApply): one error per
+	// site, no cascading "stack underflow" / "no matching
+	// overload" diagnostics that would only restate the original
+	// gap.
+	c.stack.Push(c.subst.FreshVar(c.arena))
 }
 
 // applySig is the hot path. It validates arity, unifies each input against

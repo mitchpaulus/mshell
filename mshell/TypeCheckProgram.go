@@ -521,6 +521,93 @@ func bindMaybeJust(c *Checker, subject TypeId, pattern []MShellParseItem) []Name
 	return []NameId{nameId}
 }
 
+// checkFormatStringInterpolations walks each `{...}` block inside a
+// FORMATSTRING token, type-checking it as a tiny program against a
+// fresh sub-stack that inherits the current VarEnv. Each block must
+// produce exactly one value (the runtime concatenates it into the
+// output string). The outer stack and substitution are unaffected
+// regardless of what the blocks contain — only diagnostics
+// accumulate.
+//
+// The lexeme is the full `$"..."` token including the leading `$"`
+// and trailing `"`. Escape handling mirrors EvaluateFormatString in
+// the runtime: `\{` is a literal `{`, `\\` is a literal `\`, etc.
+func (c *Checker) checkFormatStringInterpolations(tok Token) {
+	runes := []rune(tok.Lexeme)
+	if len(runes) < 3 {
+		return
+	}
+	// Skip leading `$"`; stop before trailing `"`.
+	const (
+		modeNormal = iota
+		modeEscape
+		modeFormat
+	)
+	mode := modeNormal
+	startIdx := -1
+	for i := 2; i < len(runes)-1; i++ {
+		ch := runes[i]
+		switch mode {
+		case modeEscape:
+			mode = modeNormal
+		case modeNormal:
+			switch ch {
+			case '\\':
+				mode = modeEscape
+			case '{':
+				startIdx = i + 1
+				mode = modeFormat
+			}
+		case modeFormat:
+			if ch == '}' {
+				inner := string(runes[startIdx:i])
+				c.checkFormatBlock(inner, tok)
+				mode = modeNormal
+				startIdx = -1
+			}
+		}
+	}
+}
+
+// checkFormatBlock lexes/parses one interpolation block and walks its
+// items on a fresh sub-stack. The current VarEnv is shared so `@name`
+// references resolve against the surrounding scope. Errors are
+// reported against the format-string token's position — finer source
+// mapping inside the block is left for a follow-up. The outer stack
+// and substitution are restored before returning.
+func (c *Checker) checkFormatBlock(src string, callSite Token) {
+	lex := NewLexer(src, nil)
+	parser := NewMShellParser(lex)
+	file, err := parser.ParseFile()
+	if err != nil {
+		c.errors = append(c.errors, TypeError{
+			Kind: TErrUnknownIdentifier,
+			Pos:  callSite,
+			Name: "format-string interpolation: " + src,
+		})
+		return
+	}
+
+	outerStack := c.stack.items
+	cp := c.subst.Checkpoint()
+	c.stack.items = nil
+
+	for _, item := range file.Items {
+		c.checkParseItem(item)
+	}
+
+	if c.stack.Len() != 1 {
+		c.errors = append(c.errors, TypeError{
+			Kind: TErrInterpolationArity,
+			Pos:  callSite,
+			Hint: "format-string interpolation `{" + src + "}` must produce exactly one value, got " + intToStr(c.stack.Len()),
+		})
+	}
+
+	c.subst.Rollback(cp)
+	c.stack.items = outerStack
+}
+
 // isBoolOrInt reports whether t resolves to bool or int after applying
 // the current substitution. mshell's runtime accepts either as an if
 // condition.

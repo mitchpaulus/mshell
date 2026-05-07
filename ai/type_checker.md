@@ -2477,6 +2477,91 @@ process-list-aware walking mode; grid builtins
 JSON/numeric formatters (`toJson`, `numFmt`, `toFixed`); and
 match/loop arm-introduced bindings (`@i`, `@archive`).
 
+### Phase 10 step 4m — Big builtin batch + cascade resilience + format-string interpolation — DONE
+
+**Builtins added.** Filling out the long tail surfaced by the
+post-step-4l survey:
+
+- Numeric/string formatters: `toJson`, `toFixed`, `numFmt`,
+  `countSubStr`, `title` (alongside upper/lower/trim).
+- Grid ops (unknown-schema): `gridRows`, `gridCols`, `gridMeta`,
+  `gridColMeta`, `gridCol`, `gridValues`, `toGrid`, `toDict`,
+  `sortBy`, `groupBy`, `gridSetCell`, `gridAddCol`,
+  `gridRemoveCol`, `updateCol`, `sortByCmp`.
+- File/process: `parseCsv`, `parseJson`, `mkdir`/`mkdirp`,
+  `cd`, `tempFile`/`tempFileExt`/`tempDir`, `strEscape`,
+  `writeFile`/`appendFile`, `endsWith`/`startsWith`.
+- List/data: `uniq`, `pop`, `utf8Str`, `utf8Bytes`.
+- Control flow: `return` (modeled as no-op stack-shape-wise; it's
+  divergent at runtime).
+
+**Cascade resilience — two changes.**
+
+1. *Unknown identifier pushes a fresh var.* Previously
+   `checkOne` left the stack untouched on unknown-identifier,
+   which produced cascades of "stack underflow" / "no matching
+   overload" downstream that only restated the original gap.
+   Now we record the diagnostic and push a `FreshVar`, mirroring
+   the recovery used elsewhere (VARRETRIEVE on miss,
+   no-overload-recovery in `resolveAndApply`).
+2. *Tied-overload diagnostic suppressed when input is unbound.*
+   When two overloads tie on specificity but the relevant input
+   slot is an unbound `TKVar` (typically a fresh var produced
+   upstream), the ambiguity is a cascade artifact, not a
+   resolution problem. The resolver now picks the first
+   candidate deterministically in that case rather than
+   emitting `TErrAmbiguousOverload`.
+
+**Inferring-mode overload resolution.** `resolveAndApply` no
+longer punts unconditionally to the first candidate inside a
+quote body. We try the normal resolution first; only when every
+candidate fails (typically because the body's stack is shorter
+than any candidate's arity) do we fall back to the first
+candidate so `applySig`'s underflow-as-fresh-var synthesis can
+run. This fixes `iff` (and similar overloaded ops) producing
+spurious "expected bool at argument 0" inside quote bodies.
+
+**Format-string interpolation.** `$"...{expr}..."` now type-
+checks each `{...}` block as a tiny program against a fresh
+sub-stack that inherits the surrounding `VarEnv`. Each block
+must produce exactly one value (the runtime concatenates it
+into the output string). The outer stack and substitution are
+restored before continuing. New `TErrInterpolationArity`
+diagnostic surfaces blocks that produce 0 or 2+ items.
+Implementation lives in `Checker.checkFormatStringInterpolations`
+/ `checkFormatBlock` (`TypeCheckProgram.go`); the lexeme escape
+handling mirrors `EvaluateFormatString` in the runtime.
+
+**Survey helper.** Added `ai/check_survey.sh` so the iteration
+loop ("rebuild → count passing files / categorise errors") is a
+one-command operation instead of a copy-paste shell snippet.
+Modes: `summary | files | top | categories <file> | build`.
+
+Verification: `go build ./...`, `go test ./...`, `./build.sh`,
+`./tests/test.sh` — all green.
+
+**Pass-rate sweep on `tests/`:**
+
+|                | Files passing |
+| -------------- | ------------- |
+| Before step 4m | 26 / 150 |
+| After step 4m  | 30 / 150 |
+
+Remaining hot buckets in the long tail:
+- **Process-list semantics.** `;`, `!`, `&>`, `|`, `echo`, `sh`,
+  `-c`, `cat`, `printf`, `msh` — these are tokens *inside*
+  process literals (`[cmd args] ;` runs argv as a subprocess).
+  The list walker currently treats every contained token under
+  normal stack semantics; a process-list-aware mode would make
+  these vanish.
+- **Match-arm / for-loop bindings.** `@i`, `@n`, `@a`,
+  `@archive` — these are introduced by `(... :var)` arm
+  binders or per-iteration loop vars that the checker doesn't
+  yet wire into `VarEnv`.
+- **Long tail of niche builtins.** `cstToUtc`, `extend`,
+  `arctan`, etc. — straightforward sig adds, low individual
+  impact.
+
 ### Migration thread
 
 `mshell/TypeChecking.go` (the existing 883-line interface-based checker)

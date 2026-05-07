@@ -39,17 +39,14 @@ func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 		c.applySig(candidates[0], callSite)
 		return
 	}
-	// In quote-body inference mode, the stack is intentionally short
-	// and applySig synthesizes fresh vars for missing inputs.
-	// Overload resolution would drop every candidate due to
-	// "stack too short" before that synthesis runs. Punt to the
-	// first candidate; the inference path will pad it correctly.
-	// Future improvement: rank candidates by output specificity in
-	// inferring mode.
-	if c.inferring {
-		c.applySig(candidates[0], callSite)
-		return
-	}
+	// In quote-body inference mode, the stack may be intentionally
+	// short — applySig synthesizes fresh vars for missing inputs.
+	// We still want overload resolution to do its job when the
+	// stack *does* have enough items, so try the normal path
+	// first; only fall back to "punt to the first candidate" when
+	// every candidate would drop on stack-too-short and synthesis
+	// is the only way forward.
+	inferringFallback := c.inferring
 
 	stackSnap := c.Snapshot()
 	substSnap := c.subst.Checkpoint()
@@ -90,6 +87,17 @@ func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 	c.subst.Rollback(substSnap)
 
 	if len(ok) == 0 {
+		// In inferring mode (quote body), every candidate may drop
+		// purely because the stack is shorter than its arity. Hand
+		// off to the first candidate so applySig's underflow-as-
+		// fresh-var synthesis can run. Without this, we'd flag
+		// "no matching overload" for any builtin called inside a
+		// quote that needs more inputs than the body has supplied
+		// so far.
+		if inferringFallback {
+			c.applySig(candidates[0], callSite)
+			return
+		}
 		c.errors = append(c.errors, TypeError{
 			Kind: TErrNoMatchingOverload,
 			Pos:  callSite,
@@ -123,11 +131,30 @@ func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 		}
 	}
 	if tied {
-		c.errors = append(c.errors, TypeError{
-			Kind: TErrAmbiguousOverload,
-			Pos:  callSite,
-			Hint: "multiple equally-specific overloads match",
-		})
+		// Suppress the diagnostic when the tie is caused by an
+		// unbound input (typically a fresh var produced by an
+		// upstream unknown identifier or no-match recovery). The
+		// ambiguity is a cascade artifact, not a genuine
+		// resolution problem — picking the first candidate
+		// deterministically preserves stack shape without piling
+		// on diagnostics that only restate the upstream gap.
+		inputArity := len(ok[bestIdx].sig.Inputs)
+		base := c.stack.Len() - inputArity
+		hasUnboundInput := false
+		for i := 0; i < inputArity && base+i < c.stack.Len(); i++ {
+			t := c.subst.Apply(c.arena, c.stack.items[base+i])
+			if c.arena.Kind(t) == TKVar {
+				hasUnboundInput = true
+				break
+			}
+		}
+		if !hasUnboundInput {
+			c.errors = append(c.errors, TypeError{
+				Kind: TErrAmbiguousOverload,
+				Pos:  callSite,
+				Hint: "multiple equally-specific overloads match",
+			})
+		}
 	}
 	c.applySig(ok[bestIdx].sig, callSite)
 }

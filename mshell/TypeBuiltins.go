@@ -486,8 +486,9 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		Inputs:  []TypeId{arena.MakeList(TidStr)},
 		Outputs: []TypeId{TidStr},
 	}}
+	// title (alongside upper/lower): (str -- str)
 	// trim : (str -- str), trimStart, trimEnd
-	for _, name := range []string{"trim", "trimStart", "trimEnd", "upper", "lower"} {
+	for _, name := range []string{"trim", "trimStart", "trimEnd", "upper", "lower", "title"} {
 		out[names.Intern(name)] = []QuoteSig{{
 			Inputs:  []TypeId{TidStr},
 			Outputs: []TypeId{TidStr},
@@ -498,6 +499,327 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		Inputs:  []TypeId{TidStr},
 		Outputs: []TypeId{TidStr},
 	}}
+
+	// ----- Numeric / formatting ops -----
+
+	// toFixed : (int int -- str) | (float int -- str)
+	out[names.Intern("toFixed")] = []QuoteSig{
+		{Inputs: []TypeId{TidInt, TidInt}, Outputs: []TypeId{TidStr}},
+		{Inputs: []TypeId{TidFloat, TidInt}, Outputs: []TypeId{TidStr}},
+	}
+	// numFmt : (int {str: V} -- str) | (float {str: V} -- str)
+	{
+		v := arena.MakeVar(0)
+		dict := arena.MakeDict(TidStr, v)
+		out[names.Intern("numFmt")] = []QuoteSig{
+			{
+				Inputs:   []TypeId{TidInt, dict},
+				Outputs:  []TypeId{TidStr},
+				Generics: []TypeVarId{0},
+			},
+			{
+				Inputs:   []TypeId{TidFloat, arena.MakeDict(TidStr, arena.MakeVar(0))},
+				Outputs:  []TypeId{TidStr},
+				Generics: []TypeVarId{0},
+			},
+		}
+	}
+	// countSubStr : (str str -- int)
+	out[names.Intern("countSubStr")] = []QuoteSig{{
+		Inputs:  []TypeId{TidStr, TidStr},
+		Outputs: []TypeId{TidInt},
+	}}
+	// toJson : (T -- str) — generic conversion to JSON.
+	{
+		t := arena.MakeVar(0)
+		out[names.Intern("toJson")] = []QuoteSig{{
+			Inputs:   []TypeId{t},
+			Outputs:  []TypeId{TidStr},
+			Generics: []TypeVarId{0},
+		}}
+	}
+
+	// ----- Grid ops -----
+	//
+	// In V1 we don't track grid schemas through these operations,
+	// so every grid sig uses the unknown-schema variants
+	// (schemaIdx 0). Element types extracted from columns are
+	// modeled as fresh generics — overload dispatch and the
+	// downstream walk treat the result as polymorphic.
+
+	gridU := arena.MakeGrid(0)
+	gridViewU := arena.MakeGridView(0)
+	gridRowU := arena.MakeGridRow(0)
+
+	// gridRows / gridCols : (Grid|GridView -- int) / (-- [str])
+	out[names.Intern("gridRows")] = []QuoteSig{
+		{Inputs: []TypeId{gridU}, Outputs: []TypeId{TidInt}},
+		{Inputs: []TypeId{gridViewU}, Outputs: []TypeId{TidInt}},
+	}
+	out[names.Intern("gridCols")] = []QuoteSig{
+		{Inputs: []TypeId{gridU}, Outputs: []TypeId{arena.MakeList(TidStr)}},
+		{Inputs: []TypeId{gridViewU}, Outputs: []TypeId{arena.MakeList(TidStr)}},
+	}
+	// gridMeta : (Grid|GridView -- Maybe[{str: V}])
+	{
+		v := arena.MakeVar(0)
+		metaDict := arena.MakeDict(TidStr, v)
+		out[names.Intern("gridMeta")] = []QuoteSig{
+			{
+				Inputs:   []TypeId{gridU},
+				Outputs:  []TypeId{arena.MakeMaybe(metaDict)},
+				Generics: []TypeVarId{0},
+			},
+			{
+				Inputs:   []TypeId{gridViewU},
+				Outputs:  []TypeId{arena.MakeMaybe(arena.MakeDict(TidStr, arena.MakeVar(0)))},
+				Generics: []TypeVarId{0},
+			},
+		}
+	}
+	// gridColMeta : (Grid|GridView str -- Maybe[{str: V}])
+	{
+		v := arena.MakeVar(0)
+		metaDict := arena.MakeDict(TidStr, v)
+		out[names.Intern("gridColMeta")] = []QuoteSig{
+			{
+				Inputs:   []TypeId{gridU, TidStr},
+				Outputs:  []TypeId{arena.MakeMaybe(metaDict)},
+				Generics: []TypeVarId{0},
+			},
+			{
+				Inputs:   []TypeId{gridViewU, TidStr},
+				Outputs:  []TypeId{arena.MakeMaybe(arena.MakeDict(TidStr, arena.MakeVar(0)))},
+				Generics: []TypeVarId{0},
+			},
+		}
+	}
+	// gridCol : (Grid|GridView str -- [T])
+	{
+		t := arena.MakeVar(0)
+		out[names.Intern("gridCol")] = []QuoteSig{
+			{
+				Inputs:   []TypeId{gridU, TidStr},
+				Outputs:  []TypeId{arena.MakeList(t)},
+				Generics: []TypeVarId{0},
+			},
+			{
+				Inputs:   []TypeId{gridViewU, TidStr},
+				Outputs:  []TypeId{arena.MakeList(arena.MakeVar(0))},
+				Generics: []TypeVarId{0},
+			},
+		}
+	}
+	// gridValues : (Grid|GridView -- [[T]])
+	{
+		t := arena.MakeVar(0)
+		out[names.Intern("gridValues")] = []QuoteSig{
+			{
+				Inputs:   []TypeId{gridU},
+				Outputs:  []TypeId{arena.MakeList(arena.MakeList(t))},
+				Generics: []TypeVarId{0},
+			},
+			{
+				Inputs:   []TypeId{gridViewU},
+				Outputs:  []TypeId{arena.MakeList(arena.MakeList(arena.MakeVar(0)))},
+				Generics: []TypeVarId{0},
+			},
+		}
+	}
+	// toGrid : ([T] -- Grid)
+	{
+		t := arena.MakeVar(0)
+		out[names.Intern("toGrid")] = []QuoteSig{{
+			Inputs:   []TypeId{arena.MakeList(t)},
+			Outputs:  []TypeId{gridU},
+			Generics: []TypeVarId{0},
+		}}
+	}
+	// toDict : (GridRow -- {str: V})
+	{
+		v := arena.MakeVar(0)
+		out[names.Intern("toDict")] = []QuoteSig{{
+			Inputs:   []TypeId{gridRowU},
+			Outputs:  []TypeId{arena.MakeDict(TidStr, v)},
+			Generics: []TypeVarId{0},
+		}}
+	}
+	// sortBy : (Grid|GridView str -- GridView) | (Grid|GridView [str] -- GridView)
+	out[names.Intern("sortBy")] = []QuoteSig{
+		{Inputs: []TypeId{gridU, TidStr}, Outputs: []TypeId{gridViewU}},
+		{Inputs: []TypeId{gridViewU, TidStr}, Outputs: []TypeId{gridViewU}},
+		{Inputs: []TypeId{gridU, arena.MakeList(TidStr)}, Outputs: []TypeId{gridViewU}},
+		{Inputs: []TypeId{gridViewU, arena.MakeList(TidStr)}, Outputs: []TypeId{gridViewU}},
+	}
+	// gridSetCell : (Grid str int T -- Grid)
+	{
+		t := arena.MakeVar(0)
+		out[names.Intern("gridSetCell")] = []QuoteSig{{
+			Inputs:   []TypeId{gridU, TidStr, TidInt, t},
+			Outputs:  []TypeId{gridU},
+			Generics: []TypeVarId{0},
+		}}
+	}
+	// gridAddCol : (Grid str [T] -- Grid) | (Grid str T -- Grid)
+	{
+		t := arena.MakeVar(0)
+		out[names.Intern("gridAddCol")] = []QuoteSig{
+			{
+				Inputs:   []TypeId{gridU, TidStr, arena.MakeList(t)},
+				Outputs:  []TypeId{gridU},
+				Generics: []TypeVarId{0},
+			},
+			{
+				Inputs:   []TypeId{gridU, TidStr, arena.MakeVar(0)},
+				Outputs:  []TypeId{gridU},
+				Generics: []TypeVarId{0},
+			},
+		}
+	}
+	// gridRemoveCol : (Grid str -- Grid)
+	out[names.Intern("gridRemoveCol")] = []QuoteSig{{
+		Inputs:  []TypeId{gridU, TidStr},
+		Outputs: []TypeId{gridU},
+	}}
+	// updateCol : (Grid|GridView str (T -- U) -- Grid)
+	{
+		t := arena.MakeVar(0)
+		u := arena.MakeVar(1)
+		fn := arena.MakeQuote(QuoteSig{Inputs: []TypeId{t}, Outputs: []TypeId{u}})
+		out[names.Intern("updateCol")] = []QuoteSig{
+			{
+				Inputs:   []TypeId{gridU, TidStr, fn},
+				Outputs:  []TypeId{gridU},
+				Generics: []TypeVarId{0, 1},
+			},
+			{
+				Inputs: []TypeId{gridViewU, TidStr, arena.MakeQuote(QuoteSig{
+					Inputs:  []TypeId{arena.MakeVar(0)},
+					Outputs: []TypeId{arena.MakeVar(1)},
+				})},
+				Outputs:  []TypeId{gridU},
+				Generics: []TypeVarId{0, 1},
+			},
+		}
+	}
+	// sortByCmp : ([T] (T T -- int) -- [T]) | (Grid (GridRow GridRow -- int) -- Grid)
+	{
+		t := arena.MakeVar(0)
+		listCmp := arena.MakeQuote(QuoteSig{
+			Inputs:  []TypeId{t, t},
+			Outputs: []TypeId{TidInt},
+		})
+		rowCmp := arena.MakeQuote(QuoteSig{
+			Inputs:  []TypeId{gridRowU, gridRowU},
+			Outputs: []TypeId{TidInt},
+		})
+		out[names.Intern("sortByCmp")] = []QuoteSig{
+			{
+				Inputs:   []TypeId{arena.MakeList(t), listCmp},
+				Outputs:  []TypeId{arena.MakeList(t)},
+				Generics: []TypeVarId{0},
+			},
+			{Inputs: []TypeId{gridU, rowCmp}, Outputs: []TypeId{gridU}},
+			{Inputs: []TypeId{gridViewU, rowCmp}, Outputs: []TypeId{gridViewU}},
+		}
+	}
+	// parseCsv : (str -- [[str]]) | (path -- [[str]])
+	out[names.Intern("parseCsv")] = []QuoteSig{
+		{Inputs: []TypeId{TidStr}, Outputs: []TypeId{arena.MakeList(arena.MakeList(TidStr))}},
+		{Inputs: []TypeId{TidPath}, Outputs: []TypeId{arena.MakeList(arena.MakeList(TidStr))}},
+	}
+	// parseJson : (str -- T) | (path -- T) | (bytes -- T)
+	{
+		t := arena.MakeVar(0)
+		out[names.Intern("parseJson")] = []QuoteSig{
+			{Inputs: []TypeId{TidStr}, Outputs: []TypeId{t}, Generics: []TypeVarId{0}},
+			{Inputs: []TypeId{TidPath}, Outputs: []TypeId{arena.MakeVar(0)}, Generics: []TypeVarId{0}},
+			{Inputs: []TypeId{TidBytes}, Outputs: []TypeId{arena.MakeVar(0)}, Generics: []TypeVarId{0}},
+		}
+	}
+	// mkdir / mkdirp : (str -- ) | (path -- )
+	for _, name := range []string{"mkdir", "mkdirp"} {
+		out[names.Intern(name)] = []QuoteSig{
+			{Inputs: []TypeId{TidStr}},
+			{Inputs: []TypeId{TidPath}},
+		}
+	}
+	// cd : (str -- ) | (path -- )
+	out[names.Intern("cd")] = []QuoteSig{
+		{Inputs: []TypeId{TidStr}},
+		{Inputs: []TypeId{TidPath}},
+	}
+	// tempFile, tempDir : ( -- path )
+	for _, name := range []string{"tempFile", "tempDir"} {
+		out[names.Intern(name)] = []QuoteSig{{Outputs: []TypeId{TidPath}}}
+	}
+	// tempFileExt : (str -- path)
+	out[names.Intern("tempFileExt")] = []QuoteSig{{
+		Inputs:  []TypeId{TidStr},
+		Outputs: []TypeId{TidPath},
+	}}
+	// strEscape : (str -- str)
+	out[names.Intern("strEscape")] = []QuoteSig{{
+		Inputs:  []TypeId{TidStr},
+		Outputs: []TypeId{TidStr},
+	}}
+	// writeFile / appendFile : (str|path str|bytes -- )
+	for _, name := range []string{"writeFile", "appendFile"} {
+		out[names.Intern(name)] = []QuoteSig{
+			{Inputs: []TypeId{TidStr, TidStr}},
+			{Inputs: []TypeId{TidStr, TidBytes}},
+			{Inputs: []TypeId{TidPath, TidStr}},
+			{Inputs: []TypeId{TidPath, TidBytes}},
+		}
+	}
+	// endsWith / startsWith : (str str -- bool)
+	for _, name := range []string{"endsWith", "startsWith"} {
+		out[names.Intern(name)] = []QuoteSig{{
+			Inputs:  []TypeId{TidStr, TidStr},
+			Outputs: []TypeId{TidBool},
+		}}
+	}
+	// uniq : ([T] -- [T])
+	{
+		t := arena.MakeVar(0)
+		out[names.Intern("uniq")] = []QuoteSig{{
+			Inputs:   []TypeId{arena.MakeList(t)},
+			Outputs:  []TypeId{arena.MakeList(t)},
+			Generics: []TypeVarId{0},
+		}}
+	}
+	// pop : ([T] -- Maybe[T])  — destructive pop, empty list -> none
+	{
+		t := arena.MakeVar(0)
+		out[names.Intern("pop")] = []QuoteSig{{
+			Inputs:   []TypeId{arena.MakeList(t)},
+			Outputs:  []TypeId{arena.MakeMaybe(t)},
+			Generics: []TypeVarId{0},
+		}}
+	}
+	// utf8Str : (bytes -- str)
+	out[names.Intern("utf8Str")] = []QuoteSig{{
+		Inputs:  []TypeId{TidBytes},
+		Outputs: []TypeId{TidStr},
+	}}
+	// utf8Bytes : (str -- bytes)
+	out[names.Intern("utf8Bytes")] = []QuoteSig{{
+		Inputs:  []TypeId{TidStr},
+		Outputs: []TypeId{TidBytes},
+	}}
+	// return : ( -- )  divergent at runtime, but stack-shape-wise a no-op.
+	out[names.Intern("return")] = []QuoteSig{{}}
+
+	// groupBy : ([T] (T -- str) -- {str: [T]})
+	{
+		t := arena.MakeVar(0)
+		fn := arena.MakeQuote(QuoteSig{Inputs: []TypeId{t}, Outputs: []TypeId{TidStr}})
+		out[names.Intern("groupBy")] = []QuoteSig{{
+			Inputs:   []TypeId{arena.MakeList(t), fn},
+			Outputs:  []TypeId{arena.MakeDict(TidStr, arena.MakeList(t))},
+			Generics: []TypeVarId{0},
+		}}
+	}
 
 	// ----- Maybe ops -----
 

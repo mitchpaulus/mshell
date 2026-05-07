@@ -31,6 +31,7 @@ const (
 	TErrDuplicateTypeName
 	TErrInvalidCast
 	TErrTypeParse
+	TErrInterpolationArity
 )
 
 // TypeError is a single static-check failure. Pos is a Token (its line/column
@@ -90,6 +91,8 @@ func (e TypeError) Format(arena *TypeArena, names *NameTable) string {
 			FormatType(arena, names, e.Expected))
 	case TErrTypeParse:
 		fmt.Fprintf(&sb, "type parse error: %s", e.Hint)
+	case TErrInterpolationArity:
+		fmt.Fprintf(&sb, "%s", e.Hint)
 	default:
 		fmt.Fprintf(&sb, "unknown type error")
 	}
