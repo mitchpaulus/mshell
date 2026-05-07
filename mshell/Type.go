@@ -30,7 +30,9 @@ const (
 	TidStr
 	TidBytes
 	TidNone
-	TidBottom // divergent: exit, infinite loop, (Phase 2) propagated fail
+	TidPath     // path literal (`...`) and the path runtime type
+	TidDateTime // date/time literal (YYYY-MM-DD[THH:MM[:SS]]) and now/date ops
+	TidBottom   // divergent: exit, infinite loop, (Phase 2) propagated fail
 )
 
 // firstCompositeId is the id at which user-constructed composite types begin.
@@ -174,6 +176,8 @@ func NewTypeArena() *TypeArena {
 		TKPrim, // TidStr
 		TKPrim, // TidBytes
 		TKPrim, // TidNone
+		TKPrim, // TidPath
+		TKPrim, // TidDateTime
 		TKPrim, // TidBottom
 	}
 	for i := range primitives {

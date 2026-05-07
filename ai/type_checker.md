@@ -2423,6 +2423,60 @@ grid builtins (`gridCol`, `gridCols`, `gridRows`,
 `numFmt`, `toFixed`). Each is a separate, mechanical buildout —
 none are blocked on architecture.
 
+### Phase 10 step 4l — Format strings, path/datetime literals, date/file ops — DONE
+
+Three previously-unparsed token forms now produce sensible types,
+and the corresponding builtin sigs have been registered.
+
+**New primitive types:** `TidPath`, `TidDateTime`. Added to the
+arena's primitive table, name-resolved by the type-expression
+parser (`path`, `datetime`), and rendered by `FormatType`. The
+existing primitive constants (`TidBool` … `TidBottom`) keep their
+positions; the new pair is inserted between `TidNone` and
+`TidBottom`. No callers depend on the numeric value of `TidBottom`
+— only on the named constant — so this is invisible to existing
+code.
+
+**New `checkOne` cases:**
+
+- `FORMATSTRING` (`$"...{expr}..."`) → push `str`. Interpolation
+  contents are not yet re-checked; deferred.
+- `PATH` (`` `...` ``) → push `path`.
+- `DATETIME` (`YYYY-MM-DD[THH:MM[:SS]]`) → push `datetime`.
+
+**New builtins (`TypeBuiltins.go`):**
+
+- Path/DateTime conversions: `toPath` (str|path → path),
+  `toDt` (str → Maybe[datetime] | datetime → datetime).
+- Time: `now` (-- datetime), `date` (datetime → datetime),
+  `day`/`month`/`year`/`hour`/`minute`/`second`/`weekday`
+  (datetime → int), `toUnixTime`/`Milli`/`Micro`/`Nano`
+  (datetime → int), `dateFmt` (datetime str → str).
+- File: `readFile` (str|path → str), `readFileBytes`
+  (str|path → bytes), `files`/`dirs` (-- [path]).
+
+**`and` / `or` short-circuit overload.** The runtime accepts both
+`(bool bool -- bool)` and `(bool [-- bool] -- bool)` (quote
+form). The new arm is registered alongside the existing one;
+overload dispatch picks the right shape automatically.
+
+Verification: `go build ./...`, `go test ./...`, `./build.sh`,
+`./tests/test.sh` — all green.
+
+**Pass-rate sweep on `tests/`:**
+
+|                | Files passing |
+| -------------- | ------------- |
+| Before step 4l | 21 / 150 |
+| After step 4l  | 26 / 150 |
+
+Still-blocking patterns in the long tail: bare-command tokens
+inside process lists (`echo`, `sh`, `-c`, `;`) which would need a
+process-list-aware walking mode; grid builtins
+(`gridCol`/`gridCols`/`gridRows`/`gridColMeta`/`groupBy`/`sortBy`);
+JSON/numeric formatters (`toJson`, `numFmt`, `toFixed`); and
+match/loop arm-introduced bindings (`@i`, `@archive`).
+
 ### Migration thread
 
 `mshell/TypeChecking.go` (the existing 883-line interface-based checker)

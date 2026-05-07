@@ -135,14 +135,20 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 	// ----- Boolean ops -----
 	// `not` lexes as NOT (token type), not LITERAL — see byToken table.
 
-	out[names.Intern("and")] = []QuoteSig{{
-		Inputs:  []TypeId{TidBool, TidBool},
-		Outputs: []TypeId{TidBool},
-	}}
-	out[names.Intern("or")] = []QuoteSig{{
-		Inputs:  []TypeId{TidBool, TidBool},
-		Outputs: []TypeId{TidBool},
-	}}
+	// `and`/`or` overload: plain (bool bool -- bool) and a
+	// short-circuit form taking a quote that yields a bool —
+	//   (bool [-- bool] -- bool)
+	{
+		boolQuote := arena.MakeQuote(QuoteSig{Outputs: []TypeId{TidBool}})
+		out[names.Intern("and")] = []QuoteSig{
+			{Inputs: []TypeId{TidBool, TidBool}, Outputs: []TypeId{TidBool}},
+			{Inputs: []TypeId{TidBool, boolQuote}, Outputs: []TypeId{TidBool}},
+		}
+		out[names.Intern("or")] = []QuoteSig{
+			{Inputs: []TypeId{TidBool, TidBool}, Outputs: []TypeId{TidBool}},
+			{Inputs: []TypeId{TidBool, boolQuote}, Outputs: []TypeId{TidBool}},
+		}
+	}
 
 	// ----- Arithmetic helpers -----
 
@@ -167,6 +173,65 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		{Inputs: []TypeId{TidFloat}, Outputs: []TypeId{TidInt}},
 		{Inputs: []TypeId{TidStr}, Outputs: []TypeId{TidInt}},
 		{Inputs: []TypeId{TidInt}, Outputs: []TypeId{TidInt}},
+	}
+
+	// ----- Path / DateTime / File ops -----
+
+	// String-castable: str, path, literal — model as str|path overloads.
+	// (Literals don't have a TypeId equivalent in the value system.)
+
+	// toPath : (str -- path) | (path -- path)
+	out[names.Intern("toPath")] = []QuoteSig{
+		{Inputs: []TypeId{TidStr}, Outputs: []TypeId{TidPath}},
+		{Inputs: []TypeId{TidPath}, Outputs: []TypeId{TidPath}},
+	}
+	// toDt : (str -- Maybe[datetime]) | (datetime -- datetime)
+	out[names.Intern("toDt")] = []QuoteSig{
+		{Inputs: []TypeId{TidStr}, Outputs: []TypeId{arena.MakeMaybe(TidDateTime)}},
+		{Inputs: []TypeId{TidDateTime}, Outputs: []TypeId{TidDateTime}},
+	}
+	// now : ( -- datetime )
+	out[names.Intern("now")] = []QuoteSig{{Outputs: []TypeId{TidDateTime}}}
+
+	// date : (datetime -- datetime)  — strip time-of-day to midnight
+	out[names.Intern("date")] = []QuoteSig{{
+		Inputs:  []TypeId{TidDateTime},
+		Outputs: []TypeId{TidDateTime},
+	}}
+	// day/month/year/hour/minute/second : (datetime -- int)
+	for _, name := range []string{"day", "month", "year", "hour", "minute", "second", "weekday"} {
+		out[names.Intern(name)] = []QuoteSig{{
+			Inputs:  []TypeId{TidDateTime},
+			Outputs: []TypeId{TidInt},
+		}}
+	}
+	// toUnixTime / toUnixTimeMilli / toUnixTimeMicro / toUnixTimeNano :
+	//   (datetime -- int)
+	for _, name := range []string{"toUnixTime", "toUnixTimeMilli", "toUnixTimeMicro", "toUnixTimeNano"} {
+		out[names.Intern(name)] = []QuoteSig{{
+			Inputs:  []TypeId{TidDateTime},
+			Outputs: []TypeId{TidInt},
+		}}
+	}
+	// dateFmt : (datetime str -- str)
+	out[names.Intern("dateFmt")] = []QuoteSig{{
+		Inputs:  []TypeId{TidDateTime, TidStr},
+		Outputs: []TypeId{TidStr},
+	}}
+
+	// readFile : (str -- str) | (path -- str)
+	out[names.Intern("readFile")] = []QuoteSig{
+		{Inputs: []TypeId{TidStr}, Outputs: []TypeId{TidStr}},
+		{Inputs: []TypeId{TidPath}, Outputs: []TypeId{TidStr}},
+	}
+	// readFileBytes : (str -- bytes) | (path -- bytes)
+	out[names.Intern("readFileBytes")] = []QuoteSig{
+		{Inputs: []TypeId{TidStr}, Outputs: []TypeId{TidBytes}},
+		{Inputs: []TypeId{TidPath}, Outputs: []TypeId{TidBytes}},
+	}
+	// files / dirs : ( -- [path] )
+	for _, name := range []string{"files", "dirs"} {
+		out[names.Intern(name)] = []QuoteSig{{Outputs: []TypeId{arena.MakeList(TidPath)}}}
 	}
 
 	// ----- List ops -----

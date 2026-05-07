@@ -383,6 +383,10 @@ func ResolveTypeExprAST(c *Checker, ast TypeExprAST) TypeId {
 			return TidBytes
 		case "none":
 			return TidNone
+		case "path":
+			return TidPath
+		case "datetime":
+			return TidDateTime
 		case "Grid":
 			return c.arena.MakeGrid(0)
 		case "GridView":

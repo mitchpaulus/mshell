@@ -141,6 +141,21 @@ func (c *Checker) checkOne(tok Token) {
 	case TRUE, FALSE:
 		c.stack.Push(TidBool)
 		return
+	case FORMATSTRING:
+		// `$"...{expr}..."` evaluates interpolations and yields a
+		// string. Interpolation contents reference variables
+		// (`@name`), bare names (`name`), and arbitrary expressions
+		// — checking them properly requires re-lexing the inside,
+		// which is left for a follow-up. For now, accept the
+		// literal as `str`.
+		c.stack.Push(TidStr)
+		return
+	case PATH:
+		c.stack.Push(TidPath)
+		return
+	case DATETIME:
+		c.stack.Push(TidDateTime)
+		return
 	case VARRETRIEVE:
 		// `@name`: push the bound variable's type. Unknown name
 		// is reported (a `@name` reference assumes prior storage
