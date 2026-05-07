@@ -273,7 +273,13 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 			}
 			top := c.stack.items[c.stack.Len()-1]
 			c.stack.items = c.stack.items[:c.stack.Len()-1]
-			c.vars.bound[c.names.Intern(tok.Lexeme)] = top
+			// VARSTORE lexeme is `name!`; strip the trailing `!`
+			// so it interns as the same name `@name` looks up.
+			storeName := tok.Lexeme
+			if n := len(storeName); n > 0 && storeName[n-1] == '!' {
+				storeName = storeName[:n-1]
+			}
+			c.vars.bound[c.names.Intern(storeName)] = top
 		}
 		return
 

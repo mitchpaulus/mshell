@@ -2272,6 +2272,56 @@ Original step-4 plan (kept for reference):
   catches statically.
 - Delete the old `mshell/TypeChecking.go` (Phase 11).
 
+### Phase 10 step 4i — `@name` (VARRETRIEVE) dispatch — DONE
+
+Two interlocking bugs were dropping `@name` references on the
+floor across nearly every real program:
+
+1. `checkOne` in `TypeChecker.go` had no `case VARRETRIEVE`,
+   so `@n` fell through to "unknown identifier".
+2. `MShellVarstoreList` interned the raw token lexeme `n!`
+   (with the trailing `!`), but a `@n` retrieval — even once
+   handled — strips the leading `@` and looks up `n`. The two
+   sides interned to different `NameId`s, so the lookup would
+   miss even when the variable had been stored.
+
+Fixes:
+
+- New `VARRETRIEVE` case in `checkOne` (`TypeChecker.go`):
+  strip the leading `@`, look up in `c.vars.bound`, push the
+  bound type. On miss, emit `TErrUnknownIdentifier` and push
+  a fresh var so the rest of the walk stays coherent.
+- `MShellVarstoreList` handler (`TypeCheckProgram.go`) now
+  strips the trailing `!` before interning, so store and
+  retrieve agree on the name.
+
+Tests added to `TypeCheckProgram_test.go`:
+
+- `TestTypeCheckProgramVarStoreThenAtRetrieve` — `2 n! @n 3 +`
+  passes end-to-end.
+- `TestTypeCheckProgramAtRetrieveInsideDef` — verifies the
+  per-def VarEnv still works through the new path.
+- `TestTypeCheckProgramAtRetrieveUnknown` — `@nope` with no
+  prior store reports unknown identifier.
+
+Verification: `go test ./...`, `./build.sh`, `./tests/test.sh`
+— all green.
+
+Survey impact (top files, before → after):
+
+| File              | Before | After |
+| ----------------- | ------ | ----- |
+| `grid.msh`        | 177    | 109   |
+| `grid_concat.msh` | 136    | 59    |
+| `grid_join.msh`   | 110    | 77    |
+| `else_ifs.msh`    | 139    | 53    |
+| `match.msh`       | ~22    | <16 (drops out of top 20) |
+
+Most-needed remaining gaps surfaced by the new survey:
+`iff` (control flow), `mod`, `wl` arity in some contexts,
+loop keywords (`loop`, `break`, `continue`), `len` overload
+disambiguation, dict ops, grid ops, date/time builtins.
+
 ### Migration thread
 
 `mshell/TypeChecking.go` (the existing 883-line interface-based checker)

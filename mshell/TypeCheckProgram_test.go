@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // Phase 10 step 3 tests: TypeCheckProgram entry point.
 
@@ -490,5 +493,49 @@ func TestTypeCheckProgramVarStoreThenGetter(t *testing.T) {
 	errs, ok := parseAndCheck(t, "2 n! :n 3 +")
 	if !ok || len(errs) != 0 {
 		t.Fatalf("expected varstore + getter + arithmetic to pass; errs=%v", errs)
+	}
+}
+
+func TestTypeCheckProgramVarStoreThenAtRetrieve(t *testing.T) {
+	// `name!` stores; `@name` retrieves. The VARSTORE lexeme is
+	// `name!` and the VARRETRIEVE lexeme is `@name` — both must
+	// intern to the same NameId for the lookup to succeed.
+	errs, ok := parseAndCheck(t, "2 n! @n 3 +")
+	if !ok || len(errs) != 0 {
+		t.Fatalf("expected varstore + @retrieve + arithmetic to pass; errs=%v", errs)
+	}
+}
+
+func TestTypeCheckProgramAtRetrieveInsideDef(t *testing.T) {
+	// `n!` inside a def body must populate the per-def VarEnv so
+	// the subsequent `@n` resolves to the captured input type.
+	src := `
+def myfn (int -- int)
+    n!
+    @n 1 +
+end
+5 myfn
+`
+	errs, ok := parseAndCheck(t, src)
+	if !ok || len(errs) != 0 {
+		t.Fatalf("expected pass; errs=%v", errs)
+	}
+}
+
+func TestTypeCheckProgramAtRetrieveUnknown(t *testing.T) {
+	// `@nope` with no prior `nope!` is reported as unknown.
+	errs, ok := parseAndCheck(t, "@nope")
+	if ok {
+		t.Fatalf("expected unknown-identifier error; got pass")
+	}
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e, "unknown identifier") && strings.Contains(e, "@nope") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected unknown-identifier @nope error; errs=%v", errs)
 	}
 }

@@ -141,6 +141,27 @@ func (c *Checker) checkOne(tok Token) {
 	case TRUE, FALSE:
 		c.stack.Push(TidBool)
 		return
+	case VARRETRIEVE:
+		// `@name`: push the bound variable's type. Unknown name
+		// is reported (a `@name` reference assumes prior storage
+		// via `name!`). On miss, push a fresh var so the rest of
+		// the walk has something coherent to operate on.
+		name := tok.Lexeme
+		if len(name) > 0 && name[0] == '@' {
+			name = name[1:]
+		}
+		nameId := c.names.Intern(name)
+		if t, ok := c.vars.bound[nameId]; ok {
+			c.stack.Push(t)
+		} else {
+			c.errors = append(c.errors, TypeError{
+				Kind: TErrUnknownIdentifier,
+				Pos:  tok,
+				Name: tok.Lexeme,
+			})
+			c.stack.Push(c.subst.FreshVar(c.arena))
+		}
+		return
 	}
 
 	if sigs, ok := c.builtins[tok.Type]; ok {
