@@ -212,15 +212,23 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 		return
 
 	case *MShellParseDict:
-		// Walk values for nested casts; push an empty shape.
+		// Dict literal `{k: v, ...}`. Keys are always strings at the
+		// runtime level. Infer the value type by walking each kv's
+		// value expression and unifying the resulting top-of-stack
+		// against a shared V; default to a fresh var if empty.
+		valueT := c.subst.FreshVar(c.arena)
 		for _, kv := range it.Items {
 			scope := c.snapshotStack()
 			for _, sub := range kv.Value {
 				c.checkParseItem(sub)
 			}
+			if c.stack.Len() > scope.length {
+				got := c.stack.items[c.stack.Len()-1]
+				_ = c.unify(got, valueT)
+			}
 			c.restoreStack(scope)
 		}
-		c.stack.Push(c.arena.MakeShape(nil))
+		c.stack.Push(c.arena.MakeDict(TidStr, valueT))
 		return
 
 	case *MShellParseQuote:

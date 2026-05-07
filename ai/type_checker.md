@@ -2322,6 +2322,58 @@ Most-needed remaining gaps surfaced by the new survey:
 loop keywords (`loop`, `break`, `continue`), `len` overload
 disambiguation, dict ops, grid ops, date/time builtins.
 
+### Phase 10 step 4j — Builtin buildout: control flow, dict ops, dict literal — DONE
+
+Surveyed `--check-types` against the test corpus and added the
+highest-leverage missing sigs.
+
+**LITERAL-keyed builtins (`TypeBuiltins.go`):**
+
+- I/O: `w`, `we` (consumeAny — match `wl`/`wle`).
+- Arithmetic: `mod` (int/float overloads).
+- Dict ops: `keys`, `values`, `keyValues`, `set`, `setd`, `get`,
+  `getDef`, `in` (with list and string overloads).
+- List unpack: `2unpack` (`[T] -- T T`).
+
+**Token-keyed builtins:**
+
+- `QUESTION` (`?`): `Maybe[T] -- T` (unwrap; None aborts at
+  runtime). Process-execute forms not yet handled.
+- `IFF`: three overloads — `bool [-- ] iff`,
+  `bool [-- ] [-- ] iff`, and `bool [-- T] [-- T] iff` for the
+  common `bool ("a") ("b") iff` pattern.
+- `LOOP`: pops a no-effect quote `[-- ]`.
+- `BREAK`, `CONTINUE`: empty sigs (no surface-level stack effect).
+
+**Dict literal typing fix (`TypeCheckProgram.go`):**
+
+`MShellParseDict` was pushing `Shape(nil)` — that was an opaque
+record placeholder, not a dict, so `keys`/`values`/`get`/`set`
+would never unify against a dict literal `{}`. Changed to push
+`Dict[str, V]` where `V` is inferred by walking each kv's value
+expression and unifying the resulting top-of-stack against a
+shared fresh var (defaulting to fresh on empty `{}`).
+
+Verification: `go build ./...`, `go test ./...`, `./build.sh`,
+`./tests/test.sh` — all green.
+
+Survey impact (top files, before → after this step):
+
+| File              | Before | After |
+| ----------------- | ------ | ----- |
+| `dicts.msh`       | 52     | 9     |
+| `else_ifs.msh`    | 53     | <16 (drops out of top 20) |
+| `boolean_logic.msh` | 21   | 7     |
+| `grid.msh`        | 109    | 86    |
+| `grid_concat.msh` | 59     | 55    |
+
+Remaining hot spots surface std.msh-defined helpers (`uw`, `iff`-
+style helpers from std.msh), format-string literals
+(`$"{@key}..."`), grid ops, date literals, and date/time
+builtins. The std.msh integration will be its own step — the
+checker currently sees only the input file's defs, so anything
+in `lib/std.msh` resolves as unknown.
+
 ### Migration thread
 
 `mshell/TypeChecking.go` (the existing 883-line interface-based checker)
