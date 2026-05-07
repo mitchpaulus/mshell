@@ -2640,6 +2640,94 @@ Remaining hot buckets:
   on a list. Would need either a special "modifier" mode or a
   separate token type for the postfix capture forms.
 
+### Phase 10 step 4o — Big builtin batch + parser bug fix + redirect/capture markers — DONE
+
+Drove the `--check-types` pass-rate from 48 → 78 / 150 with a
+broad batch of sigs and one real bug fix.
+
+**Parser bug.** `Parser.go:1457` produced `TypeInt{}` for the
+`TYPEFLOAT` keyword in def-position. Every std.msh def with a
+`float` input/output (`cos`, `tan`, `ln2`, `ln10`) was being
+registered as `(int -- ...)`, so float arguments tripped a type
+mismatch. Changed to `TypeFloat{}`.
+
+**`<` / `>` redirect overloads.** Both tokens double as
+redirection markers when applied to a list/quote: `[cmd]
+"file" >` sets stdout, `[cmd] "in" <` pipes input. Added
+`[T] str -- [T]` / `[T] path -- [T]` arms alongside the
+existing numeric comparisons. Same overloads added to
+`STDERRREDIRECT` (`2>`), `STDERRAPPEND` (`2>>`),
+`STDOUTANDSTDERRREDIRECT` (`&>`), `STDOUTANDSTDERRAPPEND`
+(`&>>`), `INPLACEREDIRECT` (`<>`), and `STDAPPEND` (`>>`).
+
+**Capture markers.** `*` / `*b` / `^` / `^b` are postfix list
+modifiers (set stdout/stderr capture). `*` doubles as
+multiplication; we added a list-passthrough arm to
+`ASTERISK`/`ASTERISKBINARY`. `CARET`/`CARETBINARY` got
+list-only sigs. Same pattern for `STDOUTLINES` (`os`),
+`STDOUTSTRIPPED` (`ol`), `STDOUTCOMPLETE` (`oc`).
+
+**Heterogenous `+` / list `+` / path `+` / grid `+`.**
+`PLUS` is now its own overload list (`plusOverloads`)
+covering int+int, float+float, str+str, list+list, path+path,
+and grid+grid (concat). The arithmetic-only
+`-` / `*` / `**` / comparisons keep the int|float-only
+invariant per the no-implicit-coercion rule.
+
+**Math/trig.** Registered `sin`, `arctan`, `ln`, `sqrt`, `pow`
+(float-only per runtime), `floor`/`ceil`/`round` (int|float ->
+int), `random`/`randomFixed` (-- float).
+
+**Date/time + path/file builtins added:** `cstToUtc`,
+`fromOleDate`, `toOleDate`, `addDays` (datetime + count, in
+runtime stack order), `rm`/`rmf`, `os`, `isCmd`,
+`hostname`, `index`/`lastIndexOf`, `leftPad`/`rightPad`,
+`reReplace`, `reMatch`, `reFindAll`, `findReplace`,
+`reSplit`, `take`/`skip` (list/str + count), `sort`/`sortV`/
+`sortVu`, `extend` (list/grid), `del` (list + index),
+`map2` (Maybe binary fn).
+
+**Grid joins:** `outerJoin`, `leftJoin`, `innerJoin`,
+`rightJoin` — all `(Grid Grid (GridRow -- T) (GridRow -- T)
+-- Grid)`.
+
+**Zip ops:** `zipRead`, `zipDirInc`, `zipDirExc`, `zipPack`,
+`zipExtract`, `zipExtractEntry`, `zipList`. All accept
+str|path for path-like args.
+
+**`len` extended** to Grid, GridView, GridRow.
+
+**`filter` extended** to Dict (`{K:V} (V -- bool) -- {K:V}`)
+and Grid/GridView (`Grid ( -- bool) -- GridView` — predicate
+uses `:col?`-style getters against the implicit row).
+
+**Inferring varstore.** When a quote body starts with `n!`
+on an empty stack (e.g. `(num! @num wl @num 3 <)`),
+`MShellVarstoreList` now synthesizes a fresh var as the
+quote's caller-supplied input and binds it. This mirrors
+`applySig`'s underflow-as-fresh-var behavior and lets
+patterns like `eachWhile` quote bodies type-check cleanly.
+
+**Argument-order fixes.** Caught and corrected reversed
+inputs on `addDays`, `take`, `skip`, `del` (runtime takes
+deeper-collection-first; the sigs now match).
+
+Verification: `go build ./...`, `go test ./...`, `./build.sh`,
+`./tests/test.sh` — all green.
+
+**Pass-rate sweep on `tests/`:**
+
+|                | Files passing |
+| -------------- | ------------- |
+| Before step 4o | 48 / 150 |
+| After step 4o  | 78 / 150 |
+
+Remaining noise is mostly cascade tails from `iff` /
+`toFloat` / `wl` underflow caused by upstream type
+mismatches, plus a few low-volume niche builtins
+(`utcToCst`, `setAt`, `reFindAllIndex`, `pwd`,
+`parseLinkHeader`, `md5`, `insert`).
+
 ### Migration thread
 
 `mshell/TypeChecking.go` (the existing 883-line interface-based checker)

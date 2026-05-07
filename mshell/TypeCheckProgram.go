@@ -314,6 +314,23 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 		for i := len(it.VarStores) - 1; i >= 0; i-- {
 			tok := it.VarStores[i]
 			if c.stack.Len() == 0 {
+				if c.inferring {
+					// Quote body that starts by binding its
+					// input(s): synthesize a fresh var as the
+					// quote's i'th caller-supplied input. This
+					// mirrors applySig's underflow-as-fresh-var
+					// behavior so patterns like
+					//   (num! @num wl @num 3 <)
+					// produce a sig of (num -- bool).
+					fresh := c.subst.FreshVar(c.arena)
+					c.inferInputs = append([]TypeId{fresh}, c.inferInputs...)
+					storeName := tok.Lexeme
+					if n := len(storeName); n > 0 && storeName[n-1] == '!' {
+						storeName = storeName[:n-1]
+					}
+					c.vars.bound[c.names.Intern(storeName)] = fresh
+					continue
+				}
 				c.errors = append(c.errors, TypeError{
 					Kind: TErrStackUnderflow,
 					Pos:  tok,

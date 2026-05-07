@@ -1454,7 +1454,7 @@ forLoop:
 			types = append(types, TypeInt{})
 			parser.NextToken()
 		case TYPEFLOAT:
-			types = append(types, TypeInt{})
+			types = append(types, TypeFloat{})
 			parser.NextToken()
 		case STR:
 			types = append(types, TypeString{})
