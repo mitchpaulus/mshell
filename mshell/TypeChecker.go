@@ -108,7 +108,7 @@ func NewChecker(arena *TypeArena, names *NameTable) *Checker {
 		arena:        arena,
 		names:        names,
 		vars:         NewVarEnv(),
-		builtins:     builtinSigsByToken(arena),
+		builtins:     builtinSigsByToken(arena, names),
 		nameBuiltins: builtinSigsByName(arena, names),
 	}
 }
@@ -241,11 +241,50 @@ func (c *Checker) checkOne(tok Token) {
 	}
 
 	if sigs, ok := c.builtins[tok.Type]; ok {
+		if tok.Type == LOOP && c.tryLoop(tok) {
+			return
+		}
+		if tok.Type == PIPE && c.stack.Len() > 0 {
+			top := c.subst.Apply(c.arena, c.stack.Top())
+			if c.arena.Kind(top) == TKBrand {
+				return
+			}
+		}
+		if c.tryQuoteRedirect(tok) {
+			return
+		}
 		c.resolveAndApply(sigs, tok)
 		return
 	}
 
 	if tok.Type == LITERAL {
+		if tok.Lexeme == "append" && c.tryAppend() {
+			return
+		}
+		if tok.Lexeme == "get" && c.tryGet(tok) {
+			return
+		}
+		if tok.Lexeme == "zipPack" {
+			need := 2
+			if c.stack.Len() < need {
+				need = c.stack.Len()
+			}
+			c.stack.items = c.stack.items[:c.stack.Len()-need]
+			return
+		}
+		if tok.Lexeme == "foldl" {
+			if c.stack.Len() < 3 {
+				c.errors = append(c.errors, TypeError{Kind: TErrStackUnderflow, Pos: tok, Hint: "foldl"})
+				return
+			}
+			acc := c.stack.items[c.stack.Len()-2]
+			c.stack.items = c.stack.items[:c.stack.Len()-3]
+			c.stack.Push(acc)
+			return
+		}
+		if tok.Lexeme == "join" && c.tryGridJoin(tok) {
+			return
+		}
 		nameId := c.names.Intern(tok.Lexeme)
 		if sigs, ok := c.nameBuiltins[nameId]; ok {
 			c.resolveAndApply(sigs, tok)
@@ -277,6 +316,144 @@ func (c *Checker) checkOne(tok Token) {
 	// overload" diagnostics that would only restate the original
 	// gap.
 	c.stack.Push(c.subst.FreshVar(c.arena))
+}
+
+func (c *Checker) tryAppend() bool {
+	if c.stack.Len() >= 2 {
+		top := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-1])
+		second := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-2])
+		if c.arena.Kind(second) == TKList {
+			elem := TypeId(c.arena.Node(second).A)
+			c.stack.items = c.stack.items[:c.stack.Len()-2]
+			c.stack.Push(c.arena.MakeList(c.arena.MakeUnion([]TypeId{elem, top}, 0)))
+			return true
+		}
+		if c.arena.Kind(top) == TKList {
+			elem := TypeId(c.arena.Node(top).A)
+			c.stack.items = c.stack.items[:c.stack.Len()-2]
+			c.stack.Push(c.arena.MakeList(c.arena.MakeUnion([]TypeId{elem, second}, 0)))
+			return true
+		}
+	}
+
+	if c.inferring && c.stack.Len() == 1 {
+		list := c.subst.Apply(c.arena, c.stack.Top())
+		node := c.arena.Node(list)
+		if node.Kind != TKList {
+			return false
+		}
+		item := c.subst.FreshVar(c.arena)
+		c.inferInputs = append([]TypeId{item}, c.inferInputs...)
+		elem := TypeId(node.A)
+		c.stack.items = c.stack.items[:0]
+		c.stack.Push(c.arena.MakeList(c.arena.MakeUnion([]TypeId{elem, item}, 0)))
+		return true
+	}
+
+	return false
+}
+
+func (c *Checker) tryGet(tok Token) bool {
+	if c.stack.Len() < 2 {
+		return false
+	}
+	key := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-1])
+	receiver := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-2])
+	if !c.unify(key, TidStr) {
+		return false
+	}
+
+	var value TypeId
+	node := c.arena.Node(receiver)
+	switch node.Kind {
+	case TKGridRow, TKShape:
+		value = c.lookupGetterValueType(receiver, c.names.Intern(""))
+	case TKDict:
+		value = TypeId(node.B)
+	case TKVar:
+		value = c.subst.FreshVar(c.arena)
+		if !c.unify(receiver, c.arena.MakeDict(TidStr, value)) {
+			return false
+		}
+	default:
+		return false
+	}
+
+	c.stack.items = c.stack.items[:c.stack.Len()-2]
+	c.stack.Push(c.arena.MakeMaybe(value))
+	return true
+}
+
+func (c *Checker) tryLoop(tok Token) bool {
+	if c.stack.Len() == 0 {
+		return false
+	}
+	top := c.subst.Apply(c.arena, c.stack.Top())
+	if c.arena.Kind(top) != TKQuote {
+		return false
+	}
+	sig := c.arena.QuoteSig(top)
+	if len(sig.Inputs) != len(sig.Outputs) {
+		return false
+	}
+	for i := range sig.Inputs {
+		if !c.unify(sig.Inputs[i], sig.Outputs[i]) {
+			c.errors = append(c.errors, TypeError{
+				Kind:     TErrTypeMismatch,
+				Pos:      tok,
+				Expected: sig.Inputs[i],
+				Actual:   sig.Outputs[i],
+				ArgIndex: i,
+				Hint:     "loop quote must preserve stack types",
+			})
+			return true
+		}
+	}
+	c.stack.items = c.stack.items[:c.stack.Len()-1]
+	return true
+}
+
+func (c *Checker) tryGridJoin(tok Token) bool {
+	if c.stack.Len() < 4 {
+		return false
+	}
+	top := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-1])
+	second := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-2])
+	left := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-4])
+	right := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-3])
+	if c.arena.Kind(top) != TKQuote || c.arena.Kind(second) != TKQuote {
+		return false
+	}
+	leftKind := c.arena.Kind(left)
+	rightKind := c.arena.Kind(right)
+	if (leftKind != TKGrid && leftKind != TKGridView) || (rightKind != TKGrid && rightKind != TKGridView) {
+		return false
+	}
+	c.stack.items = c.stack.items[:c.stack.Len()-4]
+	c.stack.Push(c.arena.MakeGrid(0))
+	return true
+}
+
+func (c *Checker) tryQuoteRedirect(tok Token) bool {
+	switch tok.Type {
+	case LESSTHAN, GREATERTHAN, STDERRREDIRECT, STDERRAPPEND,
+		STDOUTANDSTDERRREDIRECT, STDOUTANDSTDERRAPPEND, INPLACEREDIRECT, STDAPPEND:
+	default:
+		return false
+	}
+	if c.stack.Len() < 2 {
+		return false
+	}
+	target := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-1])
+	if target != TidStr && target != TidPath && target != TidBytes {
+		return false
+	}
+	quote := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-2])
+	if c.arena.Kind(quote) != TKQuote {
+		return false
+	}
+	c.stack.items = c.stack.items[:c.stack.Len()-1]
+	return true
 }
 
 // applySig is the hot path. It validates arity, unifies each input against
@@ -369,6 +546,18 @@ func (c *Checker) unify(got, want TypeId) bool {
 	}
 
 	if gn.Kind != wn.Kind {
+		if gn.Kind == TKDict && wn.Kind == TKShape {
+			return c.unifyDictToShape(gn, wn)
+		}
+		if gn.Kind == TKShape && wn.Kind == TKDict {
+			return c.unifyShapeToDict(gn, wn)
+		}
+		if gn.Kind == TKUnion {
+			return c.unifyUnionToType(gn, want)
+		}
+		if wn.Kind == TKUnion {
+			return c.unifyTypeToUnion(got, wn)
+		}
 		return false
 	}
 
@@ -382,12 +571,10 @@ func (c *Checker) unify(got, want TypeId) bool {
 	case TKUnion:
 		return c.unifyUnion(gn, wn)
 	case TKBrand:
-		// Nominal: brand ids must match. Underlying types must coincide too;
-		// hashconsing guarantees that if brand id and underlying agree we'd
-		// already have gotten id equality up top — so reaching here with
-		// matching brand ids means underlyings differ, which is a programmer
-		// error we treat as a mismatch.
-		return gn.A == wn.A && gn.B == wn.B
+		// Nominal wrapper: brand ids must match, but the wrapped
+		// type can still contain generics that need normal structural
+		// unification at the call site.
+		return gn.A == wn.A && c.unify(TypeId(gn.B), TypeId(wn.B))
 	case TKQuote:
 		return c.unifyQuote(gn, wn)
 	case TKGrid, TKGridView, TKGridRow:
@@ -400,6 +587,54 @@ func (c *Checker) unify(got, want TypeId) bool {
 			return true
 		}
 		return false
+	}
+	return false
+}
+
+func (c *Checker) unifyDictToShape(gn, wn TypeNode) bool {
+	if !c.unify(TypeId(gn.A), TidStr) {
+		return false
+	}
+	value := TypeId(gn.B)
+	for _, field := range c.arena.shapeFields[wn.Extra] {
+		if !c.unify(value, field.Type) {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *Checker) unifyShapeToDict(gn, wn TypeNode) bool {
+	if !c.unify(TidStr, TypeId(wn.A)) {
+		return false
+	}
+	fields := c.arena.shapeFields[gn.Extra]
+	if len(fields) == 0 {
+		return true
+	}
+	values := make([]TypeId, 0, len(fields))
+	for _, field := range fields {
+		values = append(values, field.Type)
+	}
+	return c.unify(c.arena.MakeUnion(values, 0), TypeId(wn.B))
+}
+
+func (c *Checker) unifyUnionToType(gn TypeNode, want TypeId) bool {
+	for _, arm := range c.arena.unionMembers[gn.Extra] {
+		if !c.unify(arm, want) {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *Checker) unifyTypeToUnion(got TypeId, wn TypeNode) bool {
+	for _, arm := range c.arena.unionMembers[wn.Extra] {
+		cp := c.subst.Checkpoint()
+		if c.unify(got, arm) {
+			return true
+		}
+		c.subst.Rollback(cp)
 	}
 	return false
 }

@@ -73,7 +73,7 @@ func (c *Checker) RegisterStdlibSigs(defs []MShellDefinition) {
 		if _, exists := c.nameBuiltins[nameId]; exists {
 			continue
 		}
-		sig, errs := TranslateTypeDef(c.arena, &def.TypeDef)
+		sig, errs := TranslateTypeDef(c.arena, c.names, &def.TypeDef)
 		if len(errs) != 0 {
 			continue
 		}
@@ -98,7 +98,7 @@ func (c *Checker) CheckProgram(file *MShellFile) {
 	defSigs := make([]QuoteSig, len(file.Definitions))
 	for i := range file.Definitions {
 		def := &file.Definitions[i]
-		sig, _ := TranslateTypeDef(c.arena, &def.TypeDef)
+		sig, _ := TranslateTypeDef(c.arena, c.names, &def.TypeDef)
 		defSigs[i] = sig
 		nameId := c.names.Intern(def.Name)
 		c.nameBuiltins[nameId] = append(c.nameBuiltins[nameId], sig)
@@ -232,11 +232,11 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 		return
 
 	case *MShellParseList:
-		// Recurse into elements so any inner casts get walked.
-		// Each element pushes onto the stack inside the recursion;
-		// we collapse to a single list-of-fresh-var TypeId so the
-		// outer stack reflects "a list pushed". Real per-element
-		// inference comes when the walker matures.
+		// Evaluate list contents on an isolated stack, mirroring the
+		// runtime's FRAME_LIST behavior, then collapse the resulting
+		// item stack into a homogeneous list element type. Heterogeneous
+		// literals become list-of-union, which is the closest static
+		// representation to mshell's runtime lists.
 		//
 		// listDepth is bumped so that bare LITERAL tokens inside the
 		// list (shell-style argv words) get typed as `str` instead
@@ -248,29 +248,34 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 			c.checkParseItem(sub)
 		}
 		c.listDepth--
+		items := append([]TypeId(nil), c.stack.items[listScope.length:]...)
 		c.restoreStack(listScope)
 		elem := c.subst.FreshVar(c.arena)
+		if len(items) > 0 {
+			elem = c.arena.MakeUnion(items, 0)
+		}
 		c.stack.Push(c.arena.MakeList(elem))
 		return
 
 	case *MShellParseDict:
-		// Dict literal `{k: v, ...}`. Keys are always strings at the
-		// runtime level. Infer the value type by walking each kv's
-		// value expression and unifying the resulting top-of-stack
-		// against a shared V; default to a fresh var if empty.
-		valueT := c.subst.FreshVar(c.arena)
+		// Dict literal `{k: v, ...}`. Preserve concrete keys as a
+		// shape so heterogeneous dictionaries can satisfy declared
+		// dictionary shapes. Shape-to-dict unification below keeps
+		// generic dictionary operations working.
+		fields := make([]ShapeField, 0, len(it.Items))
 		for _, kv := range it.Items {
 			scope := c.snapshotStack()
 			for _, sub := range kv.Value {
 				c.checkParseItem(sub)
 			}
+			valueT := c.subst.FreshVar(c.arena)
 			if c.stack.Len() > scope.length {
-				got := c.stack.items[c.stack.Len()-1]
-				_ = c.unify(got, valueT)
+				valueT = c.stack.items[c.stack.Len()-1]
 			}
+			fields = append(fields, ShapeField{Name: c.names.Intern(kv.Key), Type: valueT})
 			c.restoreStack(scope)
 		}
-		c.stack.Push(c.arena.MakeDict(TidStr, valueT))
+		c.stack.Push(c.arena.MakeShape(fields))
 		return
 
 	case *MShellParseQuote:
@@ -330,12 +335,20 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 		return
 
 	case *MShellIndexerList:
-		// Indexing reads from the stack and pushes a fresh element
-		// var. Conservative placeholder.
+		var indexed TypeId
+		elementIndex := isSingleElementIndexer(it)
 		if c.stack.Len() > 0 {
+			indexed = c.stack.items[c.stack.Len()-1]
 			c.stack.items = c.stack.items[:c.stack.Len()-1]
+		} else if c.inferring {
+			if elementIndex {
+				indexed = c.subst.FreshVar(c.arena)
+			} else {
+				indexed = c.arena.MakeList(c.subst.FreshVar(c.arena))
+			}
+			c.inferInputs = append([]TypeId{indexed}, c.inferInputs...)
 		}
-		c.stack.Push(c.subst.FreshVar(c.arena))
+		c.stack.Push(c.indexerResultType(indexed, elementIndex))
 		return
 
 	case MShellVarstoreList:
@@ -551,51 +564,110 @@ func (c *Checker) checkMatchBlock(matchBlock *MShellParseMatchBlock) {
 			// Pop the subject — body sees the stack without it.
 			c.stack.items = c.stack.items[:c.stack.Len()-1]
 		}
-		// `just v` destructuring: bind v to the inner of Maybe[T].
-		// Pattern-introduced bindings are arm-local; we strip them
-		// before capturing so ReconcileArms doesn't see them as a
-		// var-set disagreement across arms.
-		patternBindings := bindMaybeJust(c, subject, arm.Pattern)
+		// Pattern-introduced bindings are arm-local. Restore any
+		// shadowed outer bindings before capturing so ReconcileArms
+		// doesn't see them as var-set disagreements across arms.
+		patternBindings := c.bindMatchPattern(subject, arm.Pattern)
 
 		for _, sub := range arm.Body {
 			c.checkParseItem(sub)
 		}
-		for _, name := range patternBindings {
-			delete(c.vars.bound, name)
-		}
+		c.restorePatternBindings(patternBindings)
 		arms = append(arms, c.CaptureArm(false))
 	}
 	c.ReconcileArms(arms, startTok)
 }
 
-// bindMaybeJust looks for the two-token `just <name>` pattern and, if
-// the subject is a Maybe[T], binds the pattern's name to T in the
-// current scope. Returns the list of NameIds it bound so the caller
-// can strip them before reconciliation (pattern bindings are
-// arm-local; they don't propagate past the match block).
-func bindMaybeJust(c *Checker, subject TypeId, pattern []MShellParseItem) []NameId {
+type patternBinding struct {
+	Name NameId
+	Old  TypeId
+	Had  bool
+}
+
+func (c *Checker) bindPatternName(name string, typ TypeId, bindings *[]patternBinding) {
+	if name == "_" || name == "" {
+		return
+	}
+	nameId := c.names.Intern(name)
+	old, had := c.vars.bound[nameId]
+	*bindings = append(*bindings, patternBinding{Name: nameId, Old: old, Had: had})
+	c.vars.bound[nameId] = typ
+}
+
+func (c *Checker) restorePatternBindings(bindings []patternBinding) {
+	for i := len(bindings) - 1; i >= 0; i-- {
+		b := bindings[i]
+		if b.Had {
+			c.vars.bound[b.Name] = b.Old
+		} else {
+			delete(c.vars.bound, b.Name)
+		}
+	}
+}
+
+// bindMatchPattern mirrors runtime match destructuring enough for body
+// type-checking:
+//   - `just name` binds the Maybe payload.
+//   - `[a b ...rest]` binds element names and spread rest.
+//   - `{ 'key': name }` binds dictionary value names.
+//
+// Value/type/wildcard patterns do not introduce bindings.
+func (c *Checker) bindMatchPattern(subject TypeId, pattern []MShellParseItem) []patternBinding {
+	var bindings []patternBinding
+
+	// `just v`
 	if len(pattern) != 2 {
-		return nil
+		goto single
 	}
-	first, ok1 := pattern[0].(Token)
-	second, ok2 := pattern[1].(Token)
-	if !ok1 || !ok2 {
-		return nil
+	if first, ok1 := pattern[0].(Token); ok1 {
+		if second, ok2 := pattern[1].(Token); ok2 &&
+			first.Type == LITERAL && first.Lexeme == "just" &&
+			second.Type == LITERAL && second.Lexeme != "_" {
+			resolved := c.subst.Apply(c.arena, subject)
+			n := c.arena.Node(resolved)
+			if n.Kind == TKMaybe {
+				c.bindPatternName(second.Lexeme, TypeId(n.A), &bindings)
+			}
+			return bindings
+		}
 	}
-	if first.Type != LITERAL || first.Lexeme != "just" {
-		return nil
+
+single:
+	if len(pattern) != 1 {
+		return bindings
 	}
-	if second.Type != LITERAL || second.Lexeme == "_" {
-		return nil
+	switch p := pattern[0].(type) {
+	case *MShellParseList:
+		elem := c.subst.FreshVar(c.arena)
+		resolved := c.subst.Apply(c.arena, subject)
+		n := c.arena.Node(resolved)
+		if n.Kind == TKList {
+			elem = TypeId(n.A)
+		}
+		for _, item := range p.Items {
+			tok, ok := item.(Token)
+			if !ok || tok.Type != LITERAL {
+				continue
+			}
+			if len(tok.Lexeme) > 3 && tok.Lexeme[:3] == "..." {
+				c.bindPatternName(tok.Lexeme[3:], c.arena.MakeList(elem), &bindings)
+			} else {
+				c.bindPatternName(tok.Lexeme, elem, &bindings)
+			}
+		}
+	case *MShellParseDict:
+		for _, kv := range p.Items {
+			if len(kv.Value) != 1 {
+				continue
+			}
+			tok, ok := kv.Value[0].(Token)
+			if ok && tok.Type == LITERAL {
+				value := c.subst.FreshVar(c.arena)
+				c.bindPatternName(tok.Lexeme, value, &bindings)
+			}
+		}
 	}
-	resolved := c.subst.Apply(c.arena, subject)
-	n := c.arena.Node(resolved)
-	if n.Kind != TKMaybe {
-		return nil
-	}
-	nameId := c.names.Intern(second.Lexeme)
-	c.vars.bound[nameId] = TypeId(n.A)
-	return []NameId{nameId}
+	return bindings
 }
 
 // checkFormatStringInterpolations walks each `{...}` block inside a
@@ -711,6 +783,40 @@ func (c *Checker) lookupGetterValueType(t TypeId, name NameId) TypeId {
 		}
 	case TKDict:
 		return TypeId(n.B)
+	}
+	return c.subst.FreshVar(c.arena)
+}
+
+func isSingleElementIndexer(indexers *MShellIndexerList) bool {
+	if len(indexers.Indexers) != 1 {
+		return false
+	}
+	tok, ok := indexers.Indexers[0].(Token)
+	return ok && tok.Type == INDEXER
+}
+
+func (c *Checker) indexerResultType(t TypeId, elementIndex bool) TypeId {
+	if t == TidNothing {
+		return c.subst.FreshVar(c.arena)
+	}
+	r := c.subst.Apply(c.arena, t)
+	n := c.arena.Node(r)
+	switch n.Kind {
+	case TKBrand:
+		return r
+	case TKList:
+		if !elementIndex {
+			return r
+		}
+		return TypeId(n.A)
+	case TKGrid, TKGridView:
+		return c.arena.MakeGridRow(n.Extra)
+	case TKDict:
+		return TypeId(n.B)
+	case TKPrim:
+		if r == TidStr || r == TidPath {
+			return TidStr
+		}
 	}
 	return c.subst.FreshVar(c.arena)
 }

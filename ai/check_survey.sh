@@ -18,6 +18,28 @@ tests_dir="$repo_root/tests"
 
 mode="${1:-summary}"
 
+lock_file="${TMPDIR:-/tmp}/mshell-check-survey.lock"
+exec 9>"$lock_file"
+flock 9
+
+run_check() {
+    local f="$1"
+    local base
+    base="$(basename "$f")"
+
+    if printf %s "$base" | grep -q 'positional'; then
+        (cd "$tests_dir" && "$mshell_bin" --check-types "$base" Hello World)
+    elif [ "$base" = "args.msh" ]; then
+        (cd "$tests_dir" && "$mshell_bin" --check-types "$base" Hello World)
+    elif [ "$base" = "stdin_keyword.msh" ]; then
+        (cd "$tests_dir" && "$mshell_bin" --check-types stdin_keyword.msh < stdin_for_test.txt)
+    elif [ "$base" = "pwd.msh" ]; then
+        (cd "$tests_dir" && "$mshell_bin" --check-types "pwd.msh" "$(pwd)")
+    else
+        (cd "$tests_dir" && "$mshell_bin" --check-types < "$base")
+    fi
+}
+
 build_mshell() {
     (cd "$repo_root/mshell" && ./build.sh)
 }
@@ -26,7 +48,7 @@ summary() {
     local pass=0 total=0
     for f in "$tests_dir"/*.msh; do
         total=$((total + 1))
-        if "$mshell_bin" --check-types "$f" >/dev/null 2>&1; then
+        if run_check "$f" >/dev/null 2>&1; then
             pass=$((pass + 1))
         fi
     done
@@ -36,7 +58,7 @@ summary() {
 per_file() {
     for f in "$tests_dir"/*.msh; do
         local errs
-        errs=$("$mshell_bin" --check-types "$f" 2>&1 | grep -c "type error" || true)
+        errs=$(run_check "$f" 2>&1 | grep -c "type error" || true)
         if [ "$errs" != "0" ]; then
             echo "$errs  $(basename "$f")"
         fi
@@ -45,7 +67,7 @@ per_file() {
 
 top_categories() {
     for f in "$tests_dir"/*.msh; do
-        "$mshell_bin" --check-types "$f" 2>&1 | grep "type error" | sed 's/at line [0-9]*, column [0-9]*: //'
+        run_check "$f" 2>&1 | grep "type error" | sed 's/at line [0-9]*, column [0-9]*: //'
     done | sort | uniq -c | sort -rn | head -25
 }
 
@@ -54,7 +76,7 @@ categories_for_file() {
     if [ ! -f "$f" ] && [ -f "$tests_dir/$f" ]; then
         f="$tests_dir/$f"
     fi
-    "$mshell_bin" --check-types "$f" 2>&1 | sed 's/at line [0-9]*, column [0-9]*: //' | sort | uniq -c | sort -rn
+    run_check "$f" 2>&1 | sed 's/at line [0-9]*, column [0-9]*: //' | sort | uniq -c | sort -rn
 }
 
 case "$mode" in

@@ -19,9 +19,10 @@ import "fmt"
 // Anything the translator can't represent yields TidNothing for that
 // slot and an error string in errs; the caller decides whether to drop
 // the def or register it with placeholders.
-func TranslateTypeDef(arena *TypeArena, def *TypeDefinition) (QuoteSig, []string) {
+func TranslateTypeDef(arena *TypeArena, names *NameTable, def *TypeDefinition) (QuoteSig, []string) {
 	tx := &typeDefTranslator{
 		arena:    arena,
+		names:    names,
 		generics: map[string]TypeVarId{},
 	}
 	inputs := make([]TypeId, 0, len(def.InputTypes))
@@ -45,6 +46,7 @@ func TranslateTypeDef(arena *TypeArena, def *TypeDefinition) (QuoteSig, []string
 
 type typeDefTranslator struct {
 	arena    *TypeArena
+	names    *NameTable
 	generics map[string]TypeVarId
 	nextVar  uint32
 	errs     []string
@@ -93,20 +95,24 @@ func (tx *typeDefTranslator) translate(t MShellType) TypeId {
 		}
 		return tx.arena.MakeQuote(QuoteSig{Inputs: ins, Outputs: outs})
 	case *TypeDictionary:
-		// Old TypeDictionary maps named keys to types; treat as a
-		// shape if all keys are concrete, otherwise punt.
 		if v.WildCardType != nil {
-			// Wildcard dict: K is str by convention, V is the wildcard type.
-			return tx.arena.MakeDict(TidStr, tx.translate(v.WildCardType))
+			if len(v.TypeMap) == 0 {
+				return tx.arena.MakeDict(TidStr, tx.translate(v.WildCardType))
+			}
+			// V1 has no "shape plus wildcard" type. Preserve the
+			// concrete fields as a shape; width subtyping accepts
+			// extra runtime keys.
+			fields := make([]ShapeField, 0, len(v.TypeMap))
+			for key, typ := range v.TypeMap {
+				fields = append(fields, ShapeField{Name: tx.names.Intern(key), Type: tx.translate(typ)})
+			}
+			return tx.arena.MakeShape(fields)
 		}
 		fields := make([]ShapeField, 0, len(v.TypeMap))
-		// We don't have a NameTable here; the arena's hashconsing keys
-		// shapes by NameId, so we synthesize. Skipping shapes in defs
-		// for now — they're rare and translating requires the names
-		// table which the translator doesn't carry.
-		_ = fields
-		tx.errs = append(tx.errs, "TypeDictionary translation not supported (skipped)")
-		return TidNothing
+		for key, typ := range v.TypeMap {
+			fields = append(fields, ShapeField{Name: tx.names.Intern(key), Type: tx.translate(typ)})
+		}
+		return tx.arena.MakeShape(fields)
 	case *TypeTuple:
 		// Heterogeneous tuples don't have a clean V1 mapping. Punt.
 		tx.errs = append(tx.errs, "TypeTuple translation not supported (skipped)")
