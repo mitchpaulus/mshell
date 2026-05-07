@@ -363,20 +363,17 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 			Generics: []TypeVarId{0, 1, 2},
 		}}
 	}
-	// in : (K {K: V} -- bool) | (T [T] -- bool) | (str str -- bool)
+	// in : ({K: V} K -- bool) | (str str -- bool)
+	// Stack order matches the runtime: the haystack (dict or
+	// string) is below, the needle (key or substring) on top.
 	{
 		k := arena.MakeVar(0)
 		v := arena.MakeVar(1)
 		out[names.Intern("in")] = []QuoteSig{
 			{
-				Inputs:   []TypeId{k, arena.MakeDict(k, v)},
+				Inputs:   []TypeId{arena.MakeDict(k, v), k},
 				Outputs:  []TypeId{TidBool},
 				Generics: []TypeVarId{0, 1},
-			},
-			{
-				Inputs:   []TypeId{arena.MakeVar(0), arena.MakeList(arena.MakeVar(0))},
-				Outputs:  []TypeId{TidBool},
-				Generics: []TypeVarId{0},
 			},
 			{
 				Inputs:  []TypeId{TidStr, TidStr},

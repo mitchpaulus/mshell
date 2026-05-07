@@ -652,7 +652,7 @@ func main() {
 	}
 
 	if checkTypes {
-		errs, ok := TypeCheckProgram(file)
+		errs, ok := TypeCheckProgram(file, startupDefinitions)
 		if !ok {
 			for _, e := range errs {
 				fmt.Fprintln(os.Stderr, e)

@@ -29,11 +29,19 @@ package main
 // TypeCheckProgram runs the new Checker against the given file.
 // Returns formatted error strings (one per error) and an
 // exit-friendly bool: ok == true means no errors were found.
-func TypeCheckProgram(file *MShellFile) (errors []string, ok bool) {
+//
+// stdlibDefs is the slice of definitions loaded from `lib/std.msh`
+// (and any other startup files). Their sigs are pre-registered as
+// builtins so call sites resolve, but their bodies are not
+// type-checked here — std.msh exercises features (process lists,
+// format strings, dynamic exec) the v1 checker does not yet model,
+// and we trust the runtime tests catch breakage there.
+func TypeCheckProgram(file *MShellFile, stdlibDefs []MShellDefinition) (errors []string, ok bool) {
 	arena := NewTypeArena()
 	names := NewNameTable()
 	checker := NewChecker(arena, names)
 
+	checker.RegisterStdlibSigs(stdlibDefs)
 	checker.CheckProgram(file)
 
 	if len(checker.errors) == 0 {
@@ -44,6 +52,33 @@ func TypeCheckProgram(file *MShellFile) (errors []string, ok bool) {
 		out = append(out, e.Format(arena, names))
 	}
 	return out, false
+}
+
+// RegisterStdlibSigs translates each stdlib def's TypeDefinition
+// into a QuoteSig and registers it under its name as a callable
+// builtin. Defs without a usable sig (translator errors) are
+// skipped silently — the call site will surface as
+// `unknown identifier`, which is the same behavior as before
+// integration.
+//
+// If a name is already in nameBuiltins (i.e. a real builtin with
+// the same identifier already exists), the stdlib def is skipped:
+// we trust the table-driven sig over the std.msh re-declaration to
+// avoid spurious "ambiguous overload" diagnostics for operations
+// like `2unpack` that exist in both places.
+func (c *Checker) RegisterStdlibSigs(defs []MShellDefinition) {
+	for i := range defs {
+		def := &defs[i]
+		nameId := c.names.Intern(def.Name)
+		if _, exists := c.nameBuiltins[nameId]; exists {
+			continue
+		}
+		sig, errs := TranslateTypeDef(c.arena, &def.TypeDef)
+		if len(errs) != 0 {
+			continue
+		}
+		c.nameBuiltins[nameId] = append(c.nameBuiltins[nameId], sig)
+	}
 }
 
 // CheckProgram is the file-level type-check pass. It registers all

@@ -2374,6 +2374,55 @@ builtins. The std.msh integration will be its own step — the
 checker currently sees only the input file's defs, so anything
 in `lib/std.msh` resolves as unknown.
 
+### Phase 10 step 4k — std.msh integration — DONE
+
+The runtime always loads `lib/std.msh` (and any user init) before
+executing the input file, registering every def in `stdLibDefs`.
+Until now the type checker saw none of them, so calls to
+`chunk`, `enumerate`, `2apply`, `wt`, `uw`, etc. all surfaced as
+unknown identifiers.
+
+**Wiring:**
+
+- `TypeCheckProgram` now takes a second arg: `stdlibDefs
+  []MShellDefinition`. `Main.go` passes the already-loaded
+  `startupDefinitions` through.
+- New `Checker.RegisterStdlibSigs(defs)` translates each stdlib
+  def's `TypeDefinition` into a `QuoteSig` via `TranslateTypeDef`
+  and appends it to `nameBuiltins`. Bodies are NOT type-checked
+  (std.msh exercises features the v1 checker doesn't model:
+  process lists, format strings, dynamic exec). We trust the
+  runtime tests to catch breakage in std.msh itself.
+- Names that are already in `nameBuiltins` (real builtins like
+  `2unpack`) are skipped to avoid spurious "ambiguous overload"
+  diagnostics when std.msh re-declares them.
+
+**`in` overload corrected.** While exercising the corpus, found
+the dict overload had its arg order inverted (`(K Dict[K,V] --
+bool)` instead of the runtime's `(Dict[K,V] K -- bool)`). Fixed,
+and the list overload removed (the runtime doesn't support it).
+
+Verification: `go build ./...`, `go test ./...`, `./build.sh`,
+`./tests/test.sh` — all green.
+
+**Pass-rate sweep on `tests/`:**
+
+|                  | Files passing `--check-types` |
+| ---------------- | ----------------------------- |
+| Before step 4i   | (uncounted, but many) |
+| After step 4i+4j | 19 / 150 |
+| After step 4k    | 21 / 150 |
+
+The pass-rate movement is modest because most still-failing
+files lean on features the v1 checker doesn't model yet:
+format strings (`$"..."`), date literals, path literals
+(`` `path` ``), bare-command/exec syntax (`echo`, `sh -c`),
+grid builtins (`gridCol`, `gridCols`, `gridRows`,
+`gridColMeta`, `groupBy`, `sortBy`), date/time builtins (`now`,
+`toUnixTime`, etc.), and JSON/numeric formatters (`toJson`,
+`numFmt`, `toFixed`). Each is a separate, mechanical buildout —
+none are blocked on architecture.
+
 ### Migration thread
 
 `mshell/TypeChecking.go` (the existing 883-line interface-based checker)
