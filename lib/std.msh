@@ -152,6 +152,11 @@ end
 
 # sum (list -- value)
 def sum ([float] -- float)
+    (+) 0.0 rot foldl
+end
+
+# sum (list -- value)
+def sumInt ([float] -- float)
     (+) 0 rot foldl
 end
 
@@ -207,7 +212,7 @@ end
 
 # abs (int|float -- int|float)
 def abs (float -- float)
-    dup 0 < if -1 * end
+    dup 0.0 < if -1.0 * end
 end
 
 # This uses the Marsaglia polar method
