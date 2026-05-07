@@ -237,10 +237,17 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 		// we collapse to a single list-of-fresh-var TypeId so the
 		// outer stack reflects "a list pushed". Real per-element
 		// inference comes when the walker matures.
+		//
+		// listDepth is bumped so that bare LITERAL tokens inside the
+		// list (shell-style argv words) get typed as `str` instead
+		// of being flagged as unknown identifiers — see the
+		// matching branch in `checkOne`.
 		listScope := c.snapshotStack()
+		c.listDepth++
 		for _, sub := range it.Items {
 			c.checkParseItem(sub)
 		}
+		c.listDepth--
 		c.restoreStack(listScope)
 		elem := c.subst.FreshVar(c.arena)
 		c.stack.Push(c.arena.MakeList(elem))

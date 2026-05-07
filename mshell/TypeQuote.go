@@ -75,7 +75,18 @@ func (c *Checker) InferQuoteSigItems(body []MShellParseItem) QuoteSig {
 	outerInputs := c.inferInputs
 
 	c.stack.items = c.stack.items[:0]
-	c.vars.bound = make(map[NameId]TypeId)
+	// Inherit the outer var environment so the quote body can
+	// reference enclosing-scope bindings (`@i`, `@archive`, etc.).
+	// Quotes are closures — `loop`, `iff` arms, and standalone
+	// quotes all read variables from the surrounding scope at
+	// runtime. The outer scope is restored from outerSnap after
+	// the body finishes, so any stores inside the quote stay
+	// local to it.
+	inherited := make(map[NameId]TypeId, len(c.vars.bound))
+	for k, v := range c.vars.bound {
+		inherited[k] = v
+	}
+	c.vars.bound = inherited
 	c.inferring = true
 	c.inferInputs = nil
 

@@ -90,6 +90,14 @@ type Checker struct {
 	inferring   bool
 	inferInputs []TypeId
 
+	// listDepth tracks how deeply nested we are inside list literals
+	// (`[...]`). Inside lists, mshell allows bare literals as strings
+	// — that's how shell pipelines like `[sh -c "echo hi" ;]` stay
+	// readable without quoting every argv token. A LITERAL that
+	// resolves to no builtin/def/var is taken as `str` instead of
+	// being reported as an unknown identifier when listDepth > 0.
+	listDepth int
+
 	currentFn *FnContext
 }
 
@@ -156,6 +164,38 @@ func (c *Checker) checkOne(tok Token) {
 	case DATETIME:
 		c.stack.Push(TidDateTime)
 		return
+	case INTERPRET:
+		// Single-char `x`: pops a quote and applies it to the
+		// stack. Row-polymorphic — its effect depends on the
+		// quote's sig, not a fixed shape — so we resolve the
+		// quote's inputs/outputs at this call site instead of
+		// going through the builtin table.
+		if c.stack.Len() == 0 {
+			c.errors = append(c.errors, TypeError{
+				Kind: TErrStackUnderflow,
+				Pos:  tok,
+				Hint: "interpret needs a quote on top",
+			})
+			c.stack.Push(c.subst.FreshVar(c.arena))
+			return
+		}
+		top := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-1])
+		topNode := c.arena.Node(top)
+		if topNode.Kind != TKQuote {
+			c.errors = append(c.errors, TypeError{
+				Kind:     TErrTypeMismatch,
+				Pos:      tok,
+				Actual:   top,
+				Expected: c.arena.MakeQuote(QuoteSig{}),
+				Hint:     "interpret expected a quote on top",
+			})
+			c.stack.items = c.stack.items[:c.stack.Len()-1]
+			return
+		}
+		c.stack.items = c.stack.items[:c.stack.Len()-1]
+		sig := c.arena.QuoteSig(top)
+		c.applySig(sig, tok)
+		return
 	case VARRETRIEVE:
 		// `@name`: push the bound variable's type. Unknown name
 		// is reported (a `@name` reference assumes prior storage
@@ -190,6 +230,17 @@ func (c *Checker) checkOne(tok Token) {
 			c.resolveAndApply(sigs, tok)
 			return
 		}
+	}
+
+	// Inside a list literal, an unrecognized LITERAL is the
+	// shell-style "argv token" — it pushes itself as a string.
+	// This is the only place mshell allows bare literals as
+	// values, and it's load-bearing for `[cmd args] ;`-style
+	// pipelines where forcing the user to quote every word
+	// would defeat the point.
+	if c.listDepth > 0 && tok.Type == LITERAL {
+		c.stack.Push(TidStr)
+		return
 	}
 
 	c.errors = append(c.errors, TypeError{

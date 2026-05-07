@@ -340,10 +340,14 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 
 	// ----- Arithmetic LITERAL ops -----
 
-	// `/` is LITERAL (no dedicated token). Overloaded int/float.
+	// `/` is LITERAL (no dedicated token). Overloaded:
+	//   int int -- int       arithmetic division
+	//   float float -- float arithmetic division
+	//   path path -- path    filepath.Join
 	out[names.Intern("/")] = []QuoteSig{
 		{Inputs: []TypeId{TidInt, TidInt}, Outputs: []TypeId{TidInt}},
 		{Inputs: []TypeId{TidFloat, TidFloat}, Outputs: []TypeId{TidFloat}},
+		{Inputs: []TypeId{TidPath, TidPath}, Outputs: []TypeId{TidPath}},
 	}
 	// `mod` : (int int -- int) | (float float -- float)
 	out[names.Intern("mod")] = []QuoteSig{
@@ -905,14 +909,48 @@ func builtinSigsByToken(arena *TypeArena) map[TokenType][]QuoteSig {
 		Generics: []TypeVarId{0},
 	}
 
-	// QUESTION (`?`): unwrap a Maybe[T] to T (None aborts at runtime).
-	// Process-execute forms (list `?` for exit code) are not handled
-	// here yet — list/process types live outside the v1 type surface.
-	questionSig := func() QuoteSig {
+	// QUESTION (`?`): three roles depending on what's on the stack.
+	//   Maybe[T] -- T   : unwrap (None aborts at runtime)
+	//   [T] -- int      : run process list, push exit code
+	// EXECUTE/BANG share the process-list role but produce no output
+	// (BANG additionally aborts on nonzero exit at runtime).
+	questionSigs := func() []QuoteSig {
+		t := arena.MakeVar(0)
+		listT := arena.MakeList(arena.MakeVar(0))
+		return []QuoteSig{
+			{
+				Inputs:   []TypeId{arena.MakeMaybe(t)},
+				Outputs:  []TypeId{t},
+				Generics: []TypeVarId{0},
+			},
+			{
+				Inputs:   []TypeId{listT},
+				Outputs:  []TypeId{TidInt},
+				Generics: []TypeVarId{0},
+			},
+		}
+	}
+	// EXECUTE / BANG: run a list as a subprocess. Output behavior
+	// depends on stdout/stderr capture markers we don't yet model;
+	// the no-capture form produces nothing, which is the most
+	// common case (`[cmd args] ;`).
+	execSig := func() QuoteSig {
 		t := arena.MakeVar(0)
 		return QuoteSig{
-			Inputs:   []TypeId{arena.MakeMaybe(t)},
-			Outputs:  []TypeId{t},
+			Inputs:   []TypeId{arena.MakeList(t)},
+			Outputs:  nil,
+			Generics: []TypeVarId{0},
+		}
+	}
+	// PIPE (`|`): the runtime converts a list into a pipeline value.
+	// We don't model `Pipe` distinctly from a list yet — typing PIPE
+	// as a list-to-list passthrough lets the trailing `; / ! / ?`
+	// see something it accepts.
+	pipeSig := func() QuoteSig {
+		t := arena.MakeVar(0)
+		return QuoteSig{
+			Inputs:   []TypeId{arena.MakeList(t)},
+			Outputs:  []TypeId{arena.MakeList(t)},
 			Generics: []TypeVarId{0},
 		}
 	}
@@ -958,10 +996,13 @@ func builtinSigsByToken(arena *TypeArena) map[TokenType][]QuoteSig {
 		NOT:                {{Inputs: []TypeId{TidBool}, Outputs: []TypeId{TidBool}}},
 		EQUALS:             {eqSig},
 		NOTEQUAL:           {eqSig},
-		QUESTION:           {questionSig()},
+		QUESTION:           questionSigs(),
 		IFF:                iffSigs(),
 		LOOP:               {loopSig},
 		BREAK:              {noOp},
 		CONTINUE:           {noOp},
+		EXECUTE:            {execSig()},
+		BANG:               {execSig()},
+		PIPE:               {pipeSig()},
 	}
 }

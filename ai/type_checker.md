@@ -2562,6 +2562,84 @@ Remaining hot buckets in the long tail:
   `arctan`, etc. — straightforward sig adds, low individual
   impact.
 
+### Phase 10 step 4n — Process-list semantics, INTERPRET, PIPE, quote closures — DONE
+
+**Bare literals inside lists.** Mshell allows unquoted argv-style
+words inside `[...]` so traditional shell pipelines stay
+readable: `[sh -c "echo hi"] ;` doesn't force the user to quote
+`sh`, `-c`, `cat`, `echo`, etc. The checker now bumps
+`c.listDepth` while walking `MShellParseList`; in `checkOne`,
+an unrecognized LITERAL with `listDepth > 0` pushes `str`
+instead of being flagged as an unknown identifier. This is the
+ONLY place mshell allows non-definition literals; outside of
+lists, they're still real type errors.
+
+**EXECUTE / BANG / PIPE sigs.** `;`, `!`, and `|` are postfix
+operators that consume a list and either run it or convert it
+to a pipeline. New token-keyed sigs:
+
+- `EXECUTE` (`;`): `[T] -- ` (run, no capture)
+- `BANG` (`!`): `[T] -- ` (run, abort on nonzero exit)
+- `PIPE` (`|`): `[T] -- [T]` (passthrough — we don't model
+  `Pipe` distinctly from a list yet, but the trailing `;`
+  still sees something it accepts)
+
+**QUESTION (`?`) overload.** Added `[T] -- int` (process exec
+exit-code form) alongside the existing `Maybe[T] -- T`
+(unwrap) overload. Overload dispatch picks correctly based on
+the type of the top stack item.
+
+**INTERPRET (`x`) row-polymorphic dispatch.** Single-char `x`
+pops a quote and applies it to the surrounding stack — its
+effect is the quote's sig, not a fixed shape. Added a
+dedicated `INTERPRET` case in `checkOne` that pops the top,
+verifies it's a quote, and feeds its `QuoteSig` into
+`applySig`. This is row-polymorphic dispatch via the value
+itself rather than a sig table.
+
+**Quote-body closures.** `InferQuoteSigItems` was resetting
+`c.vars.bound` to an empty map at the start of the body, so
+quote literals couldn't see outer bindings — `@i` inside
+`(@i 50 > (break) iff)` always resolved as unknown. Quotes are
+closures at runtime (loop bodies, iff arms, and standalone
+quotes all read enclosing-scope vars), so the inference path
+now inherits the outer var environment. Stores inside the
+quote remain local because the outer scope is restored from
+`outerSnap` when the body finishes.
+
+**Path division.** Added `path path -- path` overload to `/`
+(runtime calls `filepath.Join`).
+
+Verification: `go build ./...`, `go test ./...`, `./build.sh`,
+`./tests/test.sh` — all green.
+
+**Pass-rate sweep on `tests/`:**
+
+|                | Files passing |
+| -------------- | ------------- |
+| Before step 4n | 30 / 150 |
+| After step 4n  | 48 / 150 |
+
+Biggest single jumps:
+- Bare-literal-as-string + EXECUTE/BANG/PIPE sigs: most of the
+  +18 — every `[cmd args] ;` style program now type-checks
+  cleanly.
+- Quote closures (`@i` inside loop quotes): unblocked
+  fizzbuzz / loop-with-counter patterns across the corpus.
+- INTERPRET dispatch: closes off `x` (apply quote) inside
+  std-lib helpers like `2apply`.
+
+Remaining hot buckets:
+- Niche builtins not yet sigged: `cstToUtc`, `extend`,
+  `arctan`, `take`, `sortV`, `reReplace`, `outerJoin`,
+  `zipRead`, `zipExtract`, etc. Pure mechanical buildout.
+- Some `+`/`>`/`<`/`len`/`map` cascades still on float-vs-int
+  or unknown-list-elem ambiguity.
+- Stdout/stderr capture markers (`*b`, `^b`, `&>`) on
+  process lists — currently typed as arithmetic, which fails
+  on a list. Would need either a special "modifier" mode or a
+  separate token type for the postfix capture forms.
+
 ### Migration thread
 
 `mshell/TypeChecking.go` (the existing 883-line interface-based checker)
