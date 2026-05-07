@@ -295,7 +295,38 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 		return
 
 	case *MShellParseGrid:
-		c.stack.Push(c.arena.MakeGrid(0))
+		// Derive a column-typed schema by walking each cell expression
+		// in isolation and unioning the per-column results. An empty
+		// column (no rows) gets a fresh var so subsequent ops can
+		// refine it.
+		cols := make([]GridSchemaCol, len(it.Columns))
+		for ci, col := range it.Columns {
+			nameId := c.names.Intern(col.Name)
+			var cellTypes []TypeId
+			for _, row := range it.Rows {
+				if ci >= len(row) {
+					continue
+				}
+				scope := c.snapshotStack()
+				c.checkParseItem(row[ci])
+				if c.stack.Len() > scope.length {
+					cellTypes = append(cellTypes, c.stack.items[c.stack.Len()-1])
+				}
+				c.restoreStack(scope)
+			}
+			var colType TypeId
+			switch len(cellTypes) {
+			case 0:
+				colType = c.subst.FreshVar(c.arena)
+			case 1:
+				colType = cellTypes[0]
+			default:
+				colType = c.arena.MakeUnion(cellTypes, 0)
+			}
+			cols[ci] = GridSchemaCol{Name: nameId, Type: colType}
+		}
+		schemaIdx := c.arena.MakeGridSchemaIdx(cols)
+		c.stack.Push(c.arena.MakeGrid(schemaIdx))
 		return
 
 	case *MShellIndexerList:
@@ -351,14 +382,36 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 		return
 
 	case *MShellGetter:
-		// `:name` lookup: push the var's current type (or fresh
-		// var if unknown).
+		// `:name` pops a Dict or GridRow off the stack and pushes
+		// Maybe[V]. The value type V is looked up from the popped
+		// type's schema when known: TKGridRow with a tracked schema
+		// resolves the column by name; TKDict[str, V] yields V; any
+		// other case pushes Maybe[fresh].
+		//
+		// Underflow while inferring a quote signature synthesizes a
+		// fresh var as the quote's input — the caller's expected
+		// (GridRow -- T) sig will unify with (T_fresh -- Maybe[T])
+		// and bind T_fresh to GridRow at apply time. This lets
+		// extractor quotes like `(:id?)` infer cleanly.
 		nameId := c.names.Intern(it.String)
-		if t, ok := c.vars.bound[nameId]; ok {
-			c.stack.Push(t)
-		} else {
-			c.stack.Push(c.subst.FreshVar(c.arena))
+		if c.stack.Len() == 0 {
+			if c.inferring {
+				fresh := c.subst.FreshVar(c.arena)
+				c.inferInputs = append([]TypeId{fresh}, c.inferInputs...)
+				c.stack.Push(c.arena.MakeMaybe(c.subst.FreshVar(c.arena)))
+				return
+			}
+			c.errors = append(c.errors, TypeError{
+				Kind: TErrStackUnderflow,
+				Pos:  it.Token,
+				Hint: "':' getter",
+			})
+			c.stack.Push(c.arena.MakeMaybe(c.subst.FreshVar(c.arena)))
+			return
 		}
+		top := c.stack.items[c.stack.Len()-1]
+		c.stack.items = c.stack.items[:c.stack.Len()-1]
+		c.stack.Push(c.arena.MakeMaybe(c.lookupGetterValueType(top, nameId)))
 		return
 	}
 }
@@ -630,6 +683,36 @@ func (c *Checker) checkFormatBlock(src string, callSite Token) {
 
 	c.subst.Rollback(cp)
 	c.stack.items = outerStack
+}
+
+// lookupGetterValueType returns the value type produced by a `:name`
+// getter applied to a value of type t. The result is the inner V of the
+// returned Maybe[V]; callers wrap it.
+//
+// Resolution order after applying the current substitution:
+//   - TKGridRow with a tracked schema: look up the column by name.
+//     Hit → its declared type. Miss → fresh var (the runtime would
+//     return None at this site; we keep type-checking permissive).
+//   - TKDict[str, V]: V (regardless of name; dict keys are dynamic).
+//   - Anything else (TKVar, unknown-schema GridRow, union, ...):
+//     fresh var.
+func (c *Checker) lookupGetterValueType(t TypeId, name NameId) TypeId {
+	r := c.subst.Apply(c.arena, t)
+	n := c.arena.Node(r)
+	switch n.Kind {
+	case TKGridRow:
+		schemaIdx := n.Extra
+		if schemaIdx != 0 {
+			for _, col := range c.arena.gridSchemas[schemaIdx].Columns {
+				if col.Name == name {
+					return col.Type
+				}
+			}
+		}
+	case TKDict:
+		return TypeId(n.B)
+	}
+	return c.subst.FreshVar(c.arena)
 }
 
 // isBoolOrInt reports whether t resolves to bool or int after applying

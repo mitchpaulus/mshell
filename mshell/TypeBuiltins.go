@@ -188,10 +188,16 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 
 	// ----- Numeric conversions -----
 
-	// toFloat : (int -- float) | (float -- float)
+	// toFloat : (int -- float) | (float -- float) | (str -- Maybe[float])
 	out[names.Intern("toFloat")] = []QuoteSig{
 		{Inputs: []TypeId{TidInt}, Outputs: []TypeId{TidFloat}},
 		{Inputs: []TypeId{TidFloat}, Outputs: []TypeId{TidFloat}},
+		{Inputs: []TypeId{TidStr}, Outputs: []TypeId{arena.MakeMaybe(TidFloat)}},
+	}
+	// toFixed : (float|int int -- str)  format value with N decimals
+	out[names.Intern("toFixed")] = []QuoteSig{
+		{Inputs: []TypeId{TidFloat, TidInt}, Outputs: []TypeId{TidStr}},
+		{Inputs: []TypeId{TidInt, TidInt}, Outputs: []TypeId{TidStr}},
 	}
 	// toInt : (float -- int) | (str -- int)
 	out[names.Intern("toInt")] = []QuoteSig{
@@ -307,7 +313,7 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 			Generics: []TypeVarId{0},
 		}}
 	}
-	// reverse : ([T] -- [T]) | (str -- str)
+	// reverse : ([T] -- [T]) | (str -- str) | (Grid|GridView -- GridView)
 	{
 		t := arena.MakeVar(0)
 		out[names.Intern("reverse")] = []QuoteSig{
@@ -319,6 +325,14 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 			{
 				Inputs:  []TypeId{TidStr},
 				Outputs: []TypeId{TidStr},
+			},
+			{
+				Inputs:  []TypeId{arena.MakeGrid(0)},
+				Outputs: []TypeId{arena.MakeGridView(0)},
+			},
+			{
+				Inputs:  []TypeId{arena.MakeGridView(0)},
+				Outputs: []TypeId{arena.MakeGridView(0)},
 			},
 		}
 	}
@@ -356,7 +370,10 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 			Inputs:  []TypeId{v},
 			Outputs: []TypeId{TidBool},
 		})
-		gridFn := arena.MakeQuote(QuoteSig{Outputs: []TypeId{TidBool}})
+		gridRowFn := arena.MakeQuote(QuoteSig{
+			Inputs:  []TypeId{arena.MakeGridRow(0)},
+			Outputs: []TypeId{TidBool},
+		})
 		out[names.Intern("filter")] = []QuoteSig{
 			{
 				Inputs:   []TypeId{arena.MakeList(t), fn},
@@ -368,8 +385,8 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 				Outputs:  []TypeId{arena.MakeDict(k, v)},
 				Generics: []TypeVarId{0, 1},
 			},
-			{Inputs: []TypeId{arena.MakeGrid(0), gridFn}, Outputs: []TypeId{arena.MakeGridView(0)}},
-			{Inputs: []TypeId{arena.MakeGridView(0), gridFn}, Outputs: []TypeId{arena.MakeGridView(0)}},
+			{Inputs: []TypeId{arena.MakeGrid(0), gridRowFn}, Outputs: []TypeId{arena.MakeGridView(0)}},
+			{Inputs: []TypeId{arena.MakeGridView(0), gridRowFn}, Outputs: []TypeId{arena.MakeGridView(0)}},
 		}
 	}
 
@@ -816,13 +833,15 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		Inputs:  []TypeId{TidStr},
 		Outputs: []TypeId{TidStr},
 	}}
-	// writeFile / appendFile : (str|path str|bytes -- )
+	// writeFile / appendFile : (content path -- )
+	// Stack order: content (str|bytes) below, path (str|path) on top.
+	// Runtime pops top → path, then content (Pop2).
 	for _, name := range []string{"writeFile", "appendFile"} {
 		out[names.Intern(name)] = []QuoteSig{
 			{Inputs: []TypeId{TidStr, TidStr}},
-			{Inputs: []TypeId{TidStr, TidBytes}},
-			{Inputs: []TypeId{TidPath, TidStr}},
-			{Inputs: []TypeId{TidPath, TidBytes}},
+			{Inputs: []TypeId{TidStr, TidPath}},
+			{Inputs: []TypeId{TidBytes, TidStr}},
+			{Inputs: []TypeId{TidBytes, TidPath}},
 		}
 	}
 	// endsWith / startsWith : (str str -- bool)
@@ -1010,6 +1029,75 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 	}
 	// hostname : ( -- str )
 	out[names.Intern("hostname")] = []QuoteSig{{Outputs: []TypeId{TidStr}}}
+	// pwd : ( -- path )
+	out[names.Intern("pwd")] = []QuoteSig{{Outputs: []TypeId{TidPath}}}
+	// args : ( -- [str] )
+	out[names.Intern("args")] = []QuoteSig{{Outputs: []TypeId{arena.MakeList(TidStr)}}}
+	// md5 : (str -- str) | (bytes -- str)
+	out[names.Intern("md5")] = []QuoteSig{
+		{Inputs: []TypeId{TidStr}, Outputs: []TypeId{TidStr}},
+		{Inputs: []TypeId{TidBytes}, Outputs: []TypeId{TidStr}},
+	}
+	// fileSize : (path|str -- int)
+	out[names.Intern("fileSize")] = []QuoteSig{
+		{Inputs: []TypeId{TidPath}, Outputs: []TypeId{TidInt}},
+		{Inputs: []TypeId{TidStr}, Outputs: []TypeId{TidInt}},
+	}
+	// fileExists : (path|str -- bool)
+	out[names.Intern("fileExists")] = []QuoteSig{
+		{Inputs: []TypeId{TidPath}, Outputs: []TypeId{TidBool}},
+		{Inputs: []TypeId{TidStr}, Outputs: []TypeId{TidBool}},
+	}
+	// fromUnixTime : (int -- datetime)  seconds since epoch
+	out[names.Intern("fromUnixTime")] = []QuoteSig{{
+		Inputs:  []TypeId{TidInt},
+		Outputs: []TypeId{TidDateTime},
+	}}
+	// utcToCst : (datetime -- datetime)
+	out[names.Intern("utcToCst")] = []QuoteSig{{
+		Inputs:  []TypeId{TidDateTime},
+		Outputs: []TypeId{TidDateTime},
+	}}
+	// reFindAllIndex : (str str -- [[int]])  match → [start, end] pairs
+	out[names.Intern("reFindAllIndex")] = []QuoteSig{{
+		Inputs:  []TypeId{TidStr, TidStr},
+		Outputs: []TypeId{arena.MakeList(arena.MakeList(TidInt))},
+	}}
+	// parseLinkHeader : (str -- [{str: str}])
+	out[names.Intern("parseLinkHeader")] = []QuoteSig{{
+		Inputs:  []TypeId{TidStr},
+		Outputs: []TypeId{arena.MakeList(arena.MakeDict(TidStr, TidStr))},
+	}}
+	// setAt : ([T] int T -- [T]) | (str int str -- str)  positional set
+	{
+		t := arena.MakeVar(0)
+		out[names.Intern("setAt")] = []QuoteSig{
+			{
+				Inputs:   []TypeId{arena.MakeList(t), TidInt, t},
+				Outputs:  []TypeId{arena.MakeList(t)},
+				Generics: []TypeVarId{0},
+			},
+			{
+				Inputs:  []TypeId{TidStr, TidInt, TidStr},
+				Outputs: []TypeId{TidStr},
+			},
+		}
+	}
+	// insert : ([T] int T -- [T]) | (str int str -- str)  positional insert
+	{
+		t := arena.MakeVar(0)
+		out[names.Intern("insert")] = []QuoteSig{
+			{
+				Inputs:   []TypeId{arena.MakeList(t), TidInt, t},
+				Outputs:  []TypeId{arena.MakeList(t)},
+				Generics: []TypeVarId{0},
+			},
+			{
+				Inputs:  []TypeId{TidStr, TidInt, TidStr},
+				Outputs: []TypeId{TidStr},
+			},
+		}
+	}
 
 	// ----- Grid joins -----
 	// outerJoin / leftJoin / innerJoin / rightJoin :
@@ -1030,6 +1118,9 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		for _, name := range []string{"outerJoin", "leftJoin", "innerJoin", "rightJoin"} {
 			out[names.Intern(name)] = []QuoteSig{joinSig()}
 		}
+		// `join` already has a `[str] str -- str` overload; add the
+		// grid form so `g1 g2 (:k?) (:k?) join` type-checks.
+		out[names.Intern("join")] = append(out[names.Intern("join")], joinSig())
 	}
 
 	// ----- Zip ops -----
@@ -1069,17 +1160,17 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 	}
 	// zipExtract : (path|str path|str {str: V} -- )
 	{
-		v := arena.MakeVar(0)
-		options := arena.MakeDict(TidStr, v)
+		mk := func(a, b TypeId) QuoteSig {
+			return QuoteSig{
+				Inputs:   []TypeId{a, b, arena.MakeDict(TidStr, arena.MakeVar(0))},
+				Generics: []TypeVarId{0},
+			}
+		}
 		out[names.Intern("zipExtract")] = []QuoteSig{
-			{
-				Inputs:   []TypeId{TidStr, TidStr, options},
-				Generics: []TypeVarId{0},
-			},
-			{
-				Inputs:   []TypeId{TidPath, TidStr, arena.MakeDict(TidStr, arena.MakeVar(0))},
-				Generics: []TypeVarId{0},
-			},
+			mk(TidStr, TidStr),
+			mk(TidStr, TidPath),
+			mk(TidPath, TidStr),
+			mk(TidPath, TidPath),
 		}
 	}
 	// zipExtractEntry : (path|str str path|str {str: V} -- )
@@ -1114,15 +1205,31 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		}
 	}
 
-	// groupBy : ([T] (T -- str) -- {str: [T]})
+	// groupBy :
+	//   ([T] (T -- str) -- {str: [T]})            list form
+	//   (Grid|GridView [str] [{str: V}] -- Grid)  grid form
 	{
 		t := arena.MakeVar(0)
 		fn := arena.MakeQuote(QuoteSig{Inputs: []TypeId{t}, Outputs: []TypeId{TidStr}})
-		out[names.Intern("groupBy")] = []QuoteSig{{
-			Inputs:   []TypeId{arena.MakeList(t), fn},
-			Outputs:  []TypeId{arena.MakeDict(TidStr, arena.MakeList(t))},
-			Generics: []TypeVarId{0},
-		}}
+		v := arena.MakeVar(1)
+		aggList := arena.MakeList(arena.MakeDict(TidStr, v))
+		out[names.Intern("groupBy")] = []QuoteSig{
+			{
+				Inputs:   []TypeId{arena.MakeList(t), fn},
+				Outputs:  []TypeId{arena.MakeDict(TidStr, arena.MakeList(t))},
+				Generics: []TypeVarId{0},
+			},
+			{
+				Inputs:   []TypeId{gridU, arena.MakeList(TidStr), aggList},
+				Outputs:  []TypeId{gridU},
+				Generics: []TypeVarId{1},
+			},
+			{
+				Inputs:   []TypeId{gridViewU, arena.MakeList(TidStr), aggList},
+				Outputs:  []TypeId{gridU},
+				Generics: []TypeVarId{1},
+			},
+		}
 	}
 
 	// ----- Maybe ops -----
@@ -1222,6 +1329,11 @@ func builtinSigsByToken(arena *TypeArena) map[TokenType][]QuoteSig {
 	// list or quote: `[cmd] "file" >` sets stdout, `[cmd] "in" <`
 	// pipes input. The output is the same list/quote (with
 	// redirection metadata set).
+	//
+	// Quote-on-bottom (e.g. `(...) "f" 2>`) is not yet covered.
+	// Doing so would need either a "wildcard quote" type or a
+	// special-case dispatch — both touch the type machinery in
+	// non-trivial ways, so it stays a known gap for now.
 	redirT := arena.MakeVar(0)
 	redirSigs := []QuoteSig{
 		intIntBool,

@@ -196,6 +196,27 @@ func (c *Checker) checkOne(tok Token) {
 		sig := c.arena.QuoteSig(top)
 		c.applySig(sig, tok)
 		return
+	case ENVRETREIVE:
+		// `$VAR`: read an environment variable. Always pushes str
+		// (runtime errors if unset; we don't model that effect).
+		c.stack.Push(TidStr)
+		return
+	case ENVCHECK:
+		// `$VAR?`: check whether an env var is set, push bool.
+		c.stack.Push(TidBool)
+		return
+	case ENVSTORE:
+		// `$VAR!`: pops a string-castable value and exports it.
+		if c.stack.Len() == 0 {
+			c.errors = append(c.errors, TypeError{
+				Kind: TErrStackUnderflow,
+				Pos:  tok,
+				Hint: "env-store needs a value",
+			})
+			return
+		}
+		c.stack.items = c.stack.items[:c.stack.Len()-1]
+		return
 	case VARRETRIEVE:
 		// `@name`: push the bound variable's type. Unknown name
 		// is reported (a `@name` reference assumes prior storage

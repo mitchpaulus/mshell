@@ -153,10 +153,11 @@ type TypeArena struct {
 	nodes []TypeNode
 	cons  map[string]TypeId
 
-	shapeFields  [][]ShapeField
-	quoteSigs    []QuoteSig
-	unionMembers [][]TypeId // each slice is sorted, deduped
-	gridSchemas  []GridSchema
+	shapeFields    [][]ShapeField
+	quoteSigs      []QuoteSig
+	unionMembers   [][]TypeId // each slice is sorted, deduped
+	gridSchemas    []GridSchema
+	gridSchemaCons map[string]uint32
 }
 
 // NewTypeArena constructs an arena pre-populated with the primitive ids
@@ -297,6 +298,30 @@ func (a *TypeArena) MakeQuote(sig QuoteSig) TypeId {
 // denotes "schema unknown" (the V1 default until schema tracking lands).
 func (a *TypeArena) MakeGrid(schemaIdx uint32) TypeId {
 	return a.intern(TKGrid, 0, 0, schemaIdx, "")
+}
+
+// MakeGridSchemaIdx interns a GridSchema and returns the schema index used by
+// TKGrid / TKGridView / TKGridRow nodes. An empty cols slice maps to the
+// "schema unknown" sentinel (idx 0). Two structurally equal column lists
+// (same names in the same order, same type ids) share an index so that
+// MakeGrid(idx) hash-conses to the same TypeId.
+func (a *TypeArena) MakeGridSchemaIdx(cols []GridSchemaCol) uint32 {
+	if len(cols) == 0 {
+		return 0
+	}
+	key := encodeGridSchemaKey(cols)
+	if a.gridSchemaCons == nil {
+		a.gridSchemaCons = make(map[string]uint32, 8)
+	}
+	if idx, ok := a.gridSchemaCons[key]; ok {
+		return idx
+	}
+	cp := make([]GridSchemaCol, len(cols))
+	copy(cp, cols)
+	idx := uint32(len(a.gridSchemas))
+	a.gridSchemas = append(a.gridSchemas, GridSchema{Columns: cp})
+	a.gridSchemaCons[key] = idx
+	return idx
 }
 
 // MakeGridView returns the canonical TypeId for a grid-view type.
@@ -449,6 +474,22 @@ func encodeUnionKey(arms []TypeId, brandId NameId) string {
 			sb.WriteByte(',')
 		}
 		sb.WriteString(strconv.FormatUint(uint64(arm), 10))
+	}
+	return sb.String()
+}
+
+// encodeGridSchemaKey builds the cons-table key for a grid schema. Order is
+// significant — grids carry column order — so columns are not sorted.
+func encodeGridSchemaKey(cols []GridSchemaCol) string {
+	var sb strings.Builder
+	sb.WriteString("G:")
+	for i, c := range cols {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		sb.WriteString(strconv.FormatUint(uint64(c.Name), 10))
+		sb.WriteByte('=')
+		sb.WriteString(strconv.FormatUint(uint64(c.Type), 10))
 	}
 	return sb.String()
 }

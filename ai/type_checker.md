@@ -2728,6 +2728,92 @@ mismatches, plus a few low-volume niche builtins
 (`utcToCst`, `setAt`, `reFindAllIndex`, `pwd`,
 `parseLinkHeader`, `md5`, `insert`).
 
+### Phase 10 step 4p — Grid column-type schemas + getter fix + builtin batch — DONE
+
+Drove the `--check-types` pass-rate from 73 → 84 / 150. The
+two structural changes:
+
+**Grid column-type schemas.** `MakeGridSchemaIdx` interns
+ordered `[]GridSchemaCol` lists; equal column names+types
+collapse to the same `schemaIdx` so two structurally
+identical grids share a `TypeId`. Grid literals
+(`MShellParseGrid`) now derive a schema by walking each
+cell expression in isolation (snapshot/check/restore),
+unioning the per-column results. Empty columns get a fresh
+var. The encode key (`encodeGridSchemaKey`) is order-
+sensitive — grids carry column order — so it does not sort.
+
+The unification rule for grids stays "schema-unknown
+unifies with anything"; opaque builtins (`gridCols`,
+`gridRows`, etc.) declared against `MakeGrid(0)` continue
+to accept literal grids with concrete schemas.
+
+**`:` getter semantics fix.** The previous Getter checker
+treated `:name` as a variable lookup with no stack effect
+— it pushed the bound type, or a fresh var on miss, and
+never popped. The runtime is the opposite: `:name` *pops*
+a Dict or GridRow off the stack and pushes `Maybe[V]`. The
+new logic resolves the popped type, looks up the column
+type from a tracked `TKGridRow` schema or returns the V of
+a `TKDict[str, V]`, and otherwise falls back to a fresh
+var. Underflow during quote inference synthesizes a fresh
+var as the quote's input — extractor quotes like `(:id?)`
+inferring as `(GridRow -- Maybe[T])` is what callers like
+`outerJoin` / `filter` / `groupBy` expect.
+
+Two existing tests asserted the old (incorrect) variable-
+lookup behavior with code that actually fails at runtime
+(`2 n! :n 3 +` errors with "empty stack"). Replaced with
+`{"n": 2} :n` which exercises the corrected semantics.
+
+**Builtin batch.**
+
+- `groupBy` grew a grid form `(Grid|GridView [str] [{str: V}] -- Grid)`
+  alongside the existing list form.
+- `join` got the grid overload `(Grid Grid (GridRow -- T)
+  (GridRow -- T) -- Grid)` to mirror `outerJoin` /
+  `leftJoin` / `innerJoin` / `rightJoin`.
+- `filter` on Grid/GridView now expects `(GridRow -- bool)`
+  (the `:col?`-getter style — input synthesized via the
+  Getter underflow path).
+- New: `pwd`, `args`, `md5`, `fileSize`, `fileExists`,
+  `fromUnixTime`, `utcToCst`, `reFindAllIndex`,
+  `parseLinkHeader`, `setAt`, `insert`, `toFixed`.
+- `toFloat` gained `(str -- Maybe[float])`.
+- `reverse` gained `Grid|GridView -> GridView`.
+- `writeFile` / `appendFile` argument order fix: runtime
+  pops top → path then content; sig was reversed. Now
+  `(content path -- )` with str|bytes / str|path arms.
+- `zipExtract` rounded out to all four str/path
+  combinations.
+- ENV tokens (`$VAR`, `$VAR?`, `$VAR!`) are now first-
+  class in `checkOne` instead of falling through to
+  unknown-identifier.
+
+**Pass-rate sweep on `tests/`:**
+
+|                | Files passing |
+| -------------- | ------------- |
+| Before step 4p | 73 / 150 |
+| After step 4p  | 84 / 150 |
+
+Remaining hot buckets:
+- Single-arm `iff` with quotes that push (e.g. `(... return)`):
+  needs richer divergence modeling on `return` so a quote
+  ending with it satisfies the `( -- )` arm.
+- Match-arm pattern bindings (`[a b c]`, `[head ...tail]`):
+  not yet implemented; produces unknown-identifier on `@a`
+  etc. inside arms.
+- Capture markers (`*b`, `^b`) on EXECUTE: still typed as
+  list passthrough; the result type doesn't reflect the
+  bytes/string promotion EXECUTE performs.
+- Quote-on-bottom redirects (`(...) "f" 2>`): no overload
+  yet — would need a "wildcard quote" type or special
+  dispatch.
+- Tests with `(--)` defs whose bodies actually consume
+  inputs (e.g. `dates.msh` `testType`) — these are real
+  test bugs but inflate the unknown-identifier count.
+
 ### Migration thread
 
 `mshell/TypeChecking.go` (the existing 883-line interface-based checker)

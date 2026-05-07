@@ -449,10 +449,11 @@ end
 
 func TestTypeCheckProgramMatchJustBinding(t *testing.T) {
 	// just v binds v to the inner of Maybe[T]. Inside the arm,
-	// `:v` retrieves an int.
+	// `@v` retrieves an int. (`:n` is the dict/grid getter and pops
+	// the stack — the wrong tool here.)
 	src := `
 5 just match
-    just v : :v wl,
+    just v : @v wl,
     none : "nothing" wl,
 end
 `
@@ -486,13 +487,13 @@ func TestTypeCheckProgramMatchEmptyStack(t *testing.T) {
 	}
 }
 
-func TestTypeCheckProgramVarStoreThenGetter(t *testing.T) {
-	// A varstore captures the top of the stack into a name; a `:name`
-	// getter pushes that type back. Use only registered ops so the
-	// stack stays well-typed end-to-end.
-	errs, ok := parseAndCheck(t, "2 n! :n 3 +")
+func TestTypeCheckProgramGetterOnDict(t *testing.T) {
+	// `:name` pops a Dict (or GridRow) off the stack and pushes
+	// Maybe[V]. Here {"n": 2} ":n" yields Maybe[int]; we just check
+	// it type-checks and produces a single value.
+	errs, ok := parseAndCheck(t, `{"n": 2} :n`)
 	if !ok || len(errs) != 0 {
-		t.Fatalf("expected varstore + getter + arithmetic to pass; errs=%v", errs)
+		t.Fatalf("expected dict + getter to pass; errs=%v", errs)
 	}
 }
 
