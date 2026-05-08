@@ -637,7 +637,11 @@ func (c *Checker) applySig(sig QuoteSig, callSite Token) {
 	}
 	c.stack.items = c.stack.items[:base]
 	for _, out := range sig.Outputs {
-		c.stack.items = append(c.stack.items, c.subst.Apply(c.arena, out))
+		resolved := c.subst.Apply(c.arena, out)
+		if resolved == TidBottom {
+			c.diverged = true
+		}
+		c.stack.items = append(c.stack.items, resolved)
 	}
 }
 

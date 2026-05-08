@@ -66,6 +66,11 @@ func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 			continue
 		}
 		base := len(c.stack.items) - len(instantiated.Inputs)
+		unboundActual := make([]bool, len(instantiated.Inputs))
+		for i := range instantiated.Inputs {
+			actual := c.subst.Apply(c.arena, c.stack.items[base+i])
+			unboundActual[i] = c.arena.Kind(actual) == TKVar
+		}
 		match := true
 		for i, want := range instantiated.Inputs {
 			if !c.unify(c.stack.items[base+i], want) {
@@ -77,8 +82,11 @@ func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 			continue
 		}
 		score := 0
-		for _, in := range cand.Inputs {
+		for i, in := range cand.Inputs {
 			score += specificityScore(c.arena, in)
+			if unboundActual[i] && c.arena.Kind(in) != TKVar {
+				score -= 100
+			}
 		}
 		ok = append(ok, viable{sig: cand, score: score})
 	}

@@ -185,6 +185,29 @@ end
 	}
 }
 
+func TestTypeCheckProgramIffExitBranchDiverges(t *testing.T) {
+	src := `
+args (a! @a "--help" = @a "-h" = or) any
+(
+    "usage" wl
+    0 exit
+) iff
+"body" wl
+`
+	errs, ok := parseAndCheck(t, src)
+	if !ok || len(errs) != 0 {
+		t.Fatalf("expected iff exit branch to type-check as divergent; errs=%v", errs)
+	}
+}
+
+func TestTypeCheckProgramAnyQuoteInputStaysString(t *testing.T) {
+	src := `args (a! @a "--help" = @a "-h" = or) any drop`
+	errs, ok := parseAndCheck(t, src)
+	if !ok || len(errs) != 0 {
+		t.Fatalf("expected any quote input to stay string; errs=%v", errs)
+	}
+}
+
 func TestTypeCheckProgramLoopBreakBranchPreservesStack(t *testing.T) {
 	src := `
 1
