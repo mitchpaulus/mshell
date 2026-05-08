@@ -357,11 +357,7 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 			indexed = c.stack.items[c.stack.Len()-1]
 			c.stack.items = c.stack.items[:c.stack.Len()-1]
 		} else if c.inferring {
-			if elementIndex {
-				indexed = c.subst.FreshVar(c.arena)
-			} else {
-				indexed = c.arena.MakeList(c.subst.FreshVar(c.arena))
-			}
+			indexed = c.subst.FreshVar(c.arena)
 			c.inferInputs = append([]TypeId{indexed}, c.inferInputs...)
 		}
 		c.stack.Push(c.indexerResultType(indexed, elementIndex))
@@ -503,11 +499,12 @@ func (c *Checker) checkIfBlock(ifBlock *MShellParseIfBlock) {
 	for _, sub := range ifBlock.IfBody {
 		c.checkParseItem(sub)
 	}
-	arms := []BranchArm{c.CaptureArm(false)}
+	arms := []BranchArm{c.CaptureArm(c.diverged)}
 
 	// else-if arms.
 	for _, elseIf := range ifBlock.ElseIfs {
 		c.Fork(snap)
+		c.diverged = false
 		for _, sub := range elseIf.Condition {
 			c.checkParseItem(sub)
 		}
@@ -534,18 +531,20 @@ func (c *Checker) checkIfBlock(ifBlock *MShellParseIfBlock) {
 		for _, sub := range elseIf.Body {
 			c.checkParseItem(sub)
 		}
-		arms = append(arms, c.CaptureArm(false))
+		arms = append(arms, c.CaptureArm(c.diverged))
 	}
 
 	// else body, or the implicit "did nothing" arm if absent.
 	if len(ifBlock.ElseBody) > 0 {
 		c.Fork(snap)
+		c.diverged = false
 		for _, sub := range ifBlock.ElseBody {
 			c.checkParseItem(sub)
 		}
-		arms = append(arms, c.CaptureArm(false))
+		arms = append(arms, c.CaptureArm(c.diverged))
 	} else {
 		c.Fork(snap)
+		c.diverged = false
 		arms = append(arms, c.CaptureArm(false))
 	}
 

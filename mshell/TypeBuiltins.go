@@ -215,25 +215,45 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 	for _, name := range []string{"random", "randomFixed"} {
 		out[names.Intern(name)] = []QuoteSig{{Outputs: []TypeId{TidFloat}}}
 	}
+	// sum : ([float] -- float) | ([int] -- int)
+	out[names.Intern("sum")] = []QuoteSig{
+		{Inputs: []TypeId{arena.MakeList(TidFloat)}, Outputs: []TypeId{TidFloat}},
+		{Inputs: []TypeId{arena.MakeList(TidInt)}, Outputs: []TypeId{TidInt}},
+	}
+	// sumInt is currently declared in std.msh as float-returning.
+	out[names.Intern("sumInt")] = []QuoteSig{{
+		Inputs:  []TypeId{arena.MakeList(TidFloat)},
+		Outputs: []TypeId{TidFloat},
+	}}
 
 	// ----- Numeric conversions -----
 
-	// toFloat : (int -- Maybe[float]) | (float -- Maybe[float]) | (str -- Maybe[float])
+	// toFloat : (int -- float) | (float -- float) | (str -- Maybe[float])
 	out[names.Intern("toFloat")] = []QuoteSig{
-		{Inputs: []TypeId{TidInt}, Outputs: []TypeId{arena.MakeMaybe(TidFloat)}},
-		{Inputs: []TypeId{TidFloat}, Outputs: []TypeId{arena.MakeMaybe(TidFloat)}},
+		{Inputs: []TypeId{TidInt}, Outputs: []TypeId{TidFloat}},
+		{Inputs: []TypeId{TidFloat}, Outputs: []TypeId{TidFloat}},
 		{Inputs: []TypeId{TidStr}, Outputs: []TypeId{arena.MakeMaybe(TidFloat)}},
+		{
+			Inputs:   []TypeId{arena.MakeVar(0)},
+			Outputs:  []TypeId{arena.MakeMaybe(TidFloat)},
+			Generics: []TypeVarId{0},
+		},
 	}
 	// toFixed : (float|int int -- str)  format value with N decimals
 	out[names.Intern("toFixed")] = []QuoteSig{
 		{Inputs: []TypeId{TidFloat, TidInt}, Outputs: []TypeId{TidStr}},
 		{Inputs: []TypeId{TidInt, TidInt}, Outputs: []TypeId{TidStr}},
 	}
-	// toInt : (float -- Maybe[int]) | (str -- Maybe[int]) | (int -- Maybe[int])
+	// toInt : (float -- int) | (str -- Maybe[int]) | (int -- int)
 	out[names.Intern("toInt")] = []QuoteSig{
-		{Inputs: []TypeId{TidFloat}, Outputs: []TypeId{arena.MakeMaybe(TidInt)}},
+		{Inputs: []TypeId{TidFloat}, Outputs: []TypeId{TidInt}},
 		{Inputs: []TypeId{TidStr}, Outputs: []TypeId{arena.MakeMaybe(TidInt)}},
-		{Inputs: []TypeId{TidInt}, Outputs: []TypeId{arena.MakeMaybe(TidInt)}},
+		{Inputs: []TypeId{TidInt}, Outputs: []TypeId{TidInt}},
+		{
+			Inputs:   []TypeId{arena.MakeVar(0)},
+			Outputs:  []TypeId{arena.MakeMaybe(TidInt)},
+			Generics: []TypeVarId{0},
+		},
 	}
 
 	// ----- Path / DateTime / File ops -----
@@ -447,15 +467,6 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 			Inputs:   []TypeId{fn, acc, arena.MakeList(item)},
 			Outputs:  []TypeId{acc},
 			Generics: []TypeVarId{0, 1},
-		}}
-	}
-	// push : ([T] T -- [T])  (alias of append in mshell)
-	{
-		t := arena.MakeVar(0)
-		out[names.Intern("push")] = []QuoteSig{{
-			Inputs:   []TypeId{arena.MakeList(t), t},
-			Outputs:  []TypeId{arena.MakeList(t)},
-			Generics: []TypeVarId{0},
 		}}
 	}
 	// reverse : ([T] -- [T]) | (str -- str) | (Grid|GridView -- GridView)
@@ -1648,12 +1659,14 @@ func builtinSigsByToken(arena *TypeArena, names *NameTable) map[TokenType][]Quot
 	// Capture markers `*` / `*b` / `^` / `^b` are postfix list/pipe
 	// modifiers. Model them as internal brands on the command-list
 	// type so a following `;` / `!` can push captured stream output.
+	stdoutLinesBrand := names.Intern("#capture-stdout-lines")
 	stdoutStrBrand := names.Intern("#capture-stdout-str")
 	stdoutBytesBrand := names.Intern("#capture-stdout-bytes")
 	stderrStrBrand := names.Intern("#capture-stderr-str")
 	stderrBytesBrand := names.Intern("#capture-stderr-bytes")
 	captureT := arena.MakeVar(0)
 	captureList := arena.MakeList(captureT)
+	stdoutLinesCmd := arena.MakeBrand(stdoutLinesBrand, captureList)
 	stdoutStrCmd := arena.MakeBrand(stdoutStrBrand, captureList)
 	stdoutBytesCmd := arena.MakeBrand(stdoutBytesBrand, captureList)
 	stderrStrCmd := arena.MakeBrand(stderrStrBrand, captureList)
@@ -1683,6 +1696,13 @@ func builtinSigsByToken(arena *TypeArena, names *NameTable) map[TokenType][]Quot
 		{
 			Inputs:   []TypeId{stderrBytesCmd},
 			Outputs:  []TypeId{stderrBytesStdoutStrCmd},
+			Generics: []TypeVarId{0},
+		},
+	}
+	starLinesOverloads := []QuoteSig{
+		{
+			Inputs:   []TypeId{captureList},
+			Outputs:  []TypeId{stdoutLinesCmd},
 			Generics: []TypeVarId{0},
 		},
 	}
@@ -1812,6 +1832,7 @@ func builtinSigsByToken(arena *TypeArena, names *NameTable) map[TokenType][]Quot
 	// QUESTION (`?`): three roles depending on what's on the stack.
 	//   Maybe[T] -- T   : unwrap (None aborts at runtime)
 	//   [T] -- int      : run process list, push exit code
+	//   captured command -- captured output(s) int
 	// EXECUTE/BANG share the process-list role but produce no output
 	// (BANG additionally aborts on nonzero exit at runtime).
 	questionSigs := func() []QuoteSig {
@@ -1828,6 +1849,19 @@ func builtinSigsByToken(arena *TypeArena, names *NameTable) map[TokenType][]Quot
 				Outputs:  []TypeId{TidInt},
 				Generics: []TypeVarId{0},
 			},
+			{Inputs: []TypeId{stdoutStrCmd}, Outputs: []TypeId{TidStr, TidInt}, Generics: []TypeVarId{0}},
+			{Inputs: []TypeId{stdoutLinesCmd}, Outputs: []TypeId{arena.MakeList(TidStr), TidInt}, Generics: []TypeVarId{0}},
+			{Inputs: []TypeId{stdoutBytesCmd}, Outputs: []TypeId{TidBytes, TidInt}, Generics: []TypeVarId{0}},
+			{Inputs: []TypeId{stderrStrCmd}, Outputs: []TypeId{TidStr, TidInt}, Generics: []TypeVarId{0}},
+			{Inputs: []TypeId{stderrBytesCmd}, Outputs: []TypeId{TidBytes, TidInt}, Generics: []TypeVarId{0}},
+			{Inputs: []TypeId{stdoutStrStderrStrCmd}, Outputs: []TypeId{TidStr, TidStr, TidInt}, Generics: []TypeVarId{0}},
+			{Inputs: []TypeId{stdoutStrStderrBytesCmd}, Outputs: []TypeId{TidStr, TidBytes, TidInt}, Generics: []TypeVarId{0}},
+			{Inputs: []TypeId{stdoutBytesStderrStrCmd}, Outputs: []TypeId{TidBytes, TidStr, TidInt}, Generics: []TypeVarId{0}},
+			{Inputs: []TypeId{stdoutBytesStderrBytesCmd}, Outputs: []TypeId{TidBytes, TidBytes, TidInt}, Generics: []TypeVarId{0}},
+			{Inputs: []TypeId{stderrStrStdoutStrCmd}, Outputs: []TypeId{TidStr, TidStr, TidInt}, Generics: []TypeVarId{0}},
+			{Inputs: []TypeId{stderrStrStdoutBytesCmd}, Outputs: []TypeId{TidBytes, TidStr, TidInt}, Generics: []TypeVarId{0}},
+			{Inputs: []TypeId{stderrBytesStdoutStrCmd}, Outputs: []TypeId{TidStr, TidBytes, TidInt}, Generics: []TypeVarId{0}},
+			{Inputs: []TypeId{stderrBytesStdoutBytesCmd}, Outputs: []TypeId{TidBytes, TidBytes, TidInt}, Generics: []TypeVarId{0}},
 		}
 	}
 	// EXECUTE / BANG: run a list as a subprocess. Unbranded command
@@ -1837,6 +1871,7 @@ func builtinSigsByToken(arena *TypeArena, names *NameTable) map[TokenType][]Quot
 	execSigs := func() []QuoteSig {
 		return []QuoteSig{
 			{Inputs: []TypeId{captureList}, Generics: []TypeVarId{0}},
+			{Inputs: []TypeId{stdoutLinesCmd}, Outputs: []TypeId{arena.MakeList(TidStr)}, Generics: []TypeVarId{0}},
 			{Inputs: []TypeId{stdoutStrCmd}, Outputs: []TypeId{TidStr}, Generics: []TypeVarId{0}},
 			{Inputs: []TypeId{stdoutBytesCmd}, Outputs: []TypeId{TidBytes}, Generics: []TypeVarId{0}},
 			{Inputs: []TypeId{stderrStrCmd}, Outputs: []TypeId{TidStr}, Generics: []TypeVarId{0}},
@@ -1906,7 +1941,7 @@ func builtinSigsByToken(arena *TypeArena, names *NameTable) map[TokenType][]Quot
 		ASTERISKBINARY:     starBytesOverloads,
 		CARET:              caretOverloads,
 		CARETBINARY:        caretBytesOverloads,
-		STDOUTLINES:        starOverloads,
+		STDOUTLINES:        starLinesOverloads,
 		STDOUTSTRIPPED:     starOverloads,
 		STDOUTCOMPLETE:     starOverloads,
 		LESSTHAN:           redirSigs,
@@ -1923,7 +1958,7 @@ func builtinSigsByToken(arena *TypeArena, names *NameTable) map[TokenType][]Quot
 		READ:               {{Outputs: []TypeId{TidStr, TidBool}}},
 		STOP_ON_ERROR:      {{}},
 		STR:                {strConv},
-		NOT:                {{Inputs: []TypeId{TidBool}, Outputs: []TypeId{TidBool}}},
+		NOT:                {{Inputs: []TypeId{TidBool}, Outputs: []TypeId{TidBool}}, {Inputs: []TypeId{TidInt}, Outputs: []TypeId{TidBool}}},
 		EQUALS:             eqSigs,
 		NOTEQUAL:           eqSigs,
 		QUESTION:           questionSigs(),

@@ -63,7 +63,15 @@ func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 
 		instantiated := c.Instantiate(cand)
 		if len(c.stack.items) < len(instantiated.Inputs) {
-			continue
+			if !c.inferring {
+				continue
+			}
+			need := len(instantiated.Inputs) - len(c.stack.items)
+			extra := make([]TypeId, need)
+			for i := 0; i < need; i++ {
+				extra[i] = c.subst.FreshVar(c.arena)
+			}
+			c.stack.items = append(append([]TypeId(nil), extra...), c.stack.items...)
 		}
 		base := len(c.stack.items) - len(instantiated.Inputs)
 		unboundActual := make([]bool, len(instantiated.Inputs))
@@ -148,7 +156,10 @@ func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 		// on diagnostics that only restate the upstream gap.
 		inputArity := len(ok[bestIdx].sig.Inputs)
 		base := c.stack.Len() - inputArity
-		hasUnboundInput := false
+		hasUnboundInput := base < 0
+		if base < 0 {
+			base = 0
+		}
 		for i := 0; i < inputArity && base+i < c.stack.Len(); i++ {
 			t := c.subst.Apply(c.arena, c.stack.items[base+i])
 			if c.arena.Kind(t) == TKVar {
