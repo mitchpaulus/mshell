@@ -1,0 +1,376 @@
+<div id="type-system-top"></div>
+
+<p>
+The mshell type system checks stack effects before a script runs.
+It does not change the runtime data model described in <a href="data-types.html">Data Types</a>; instead it gives the checker enough information to prove that values, variables, quotations, branches, and definitions agree about what is on the stack.
+</p>
+
+<ul>
+    <li><a href="#type-system-running">Running the Checker</a></li>
+    <li><a href="#type-system-stack-effects">Stack Effects</a></li>
+    <li><a href="#type-system-type-expressions">Type Expressions</a></li>
+    <li><a href="#type-system-dictionaries">Dictionaries</a></li>
+    <li><a href="#type-system-lists">Lists</a></li>
+    <li><a href="#type-system-quotes">Quotations</a></li>
+    <li><a href="#type-system-control-flow">Control Flow</a></li>
+    <li><a href="#type-system-current-boundaries">Current Boundaries</a></li>
+</ul>
+
+<h1 id="type-system-running">Running the Checker <a class="section-link" href="#type-system-running" aria-label="Permalink">§</a> <a class="back-to-top" href="#type-system-top">Back to top</a></h1>
+
+<p>
+Use <code>--check-types</code> to type-check a file.
+When type checking succeeds, the script continues to normal execution.
+When type checking fails, execution is stopped before user code runs.
+</p>
+
+<pre><code>msh --check-types script.msh</code></pre>
+
+<p>
+The checker reads definitions from the standard library and the current file.
+Definition signatures are the main source of static information.
+Literal expressions, variable stores and retrieves, built-ins, quotations, and control-flow constructs are then checked against those signatures.
+</p>
+
+<h1 id="type-system-stack-effects">Stack Effects <a class="section-link" href="#type-system-stack-effects" aria-label="Permalink">§</a> <a class="back-to-top" href="#type-system-top">Back to top</a></h1>
+
+<p>
+Function signatures use a stack-effect form:
+</p>
+
+<pre><code>def name (inputs -- outputs)
+    ...
+end</code></pre>
+
+<p>
+Inputs appear in the order they must already be on the stack.
+The rightmost input is the top item consumed first by the definition body.
+Outputs appear in the order left on the stack after the definition finishes.
+</p>
+
+<pre><code>def addOne (int -- int)
+    1 +
+end
+
+def fullName (str str -- str)
+    last!, first!
+    $"{@first} {@last}"
+end</code></pre>
+
+<p>
+Generic type names are written as ordinary lowercase or uppercase names in signatures.
+The same name means the same type within one signature.
+This is how list and higher-order functions preserve relationships without naming a concrete type.
+</p>
+
+<pre><code>def first ([a] -- a)
+    :0:
+end
+
+def applyTwice (a (a -- a) -- a)
+    f!
+    @f x
+    @f x
+end</code></pre>
+
+<h1 id="type-system-type-expressions">Type Expressions <a class="section-link" href="#type-system-type-expressions" aria-label="Permalink">§</a> <a class="back-to-top" href="#type-system-top">Back to top</a></h1>
+
+<p>
+The primitive static type names are <code>int</code>, <code>float</code>, <code>bool</code>, <code>str</code>, <code>path</code>, <code>datetime</code>, <code>bytes</code>, and <code>none</code>.
+Named runtime types such as <code>Grid</code>, <code>GridView</code>, and <code>GridRow</code> are also available.
+</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Form</th>
+      <th>Meaning</th>
+      <th>Example</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>T</code></td>
+      <td>Primitive, named type, alias, or generic</td>
+      <td><code>int</code>, <code>str</code>, <code>Person</code>, <code>a</code></td>
+    </tr>
+    <tr>
+      <td><code>[T]</code></td>
+      <td>List whose elements all fit type <code>T</code></td>
+      <td><code>[str]</code>, <code>[int | str]</code></td>
+    </tr>
+    <tr>
+      <td><code>{K: V}</code></td>
+      <td>Dictionary from key type <code>K</code> to value type <code>V</code></td>
+      <td><code>{str: int}</code></td>
+    </tr>
+    <tr>
+      <td><code>{name: T, age: U}</code></td>
+      <td>Dictionary shape with known fields</td>
+      <td><code>{name: str, age: int}</code></td>
+    </tr>
+    <tr>
+      <td><code>Maybe[T]</code></td>
+      <td>Optional value, usually returned by lookups and parsing</td>
+      <td><code>Maybe[int]</code></td>
+    </tr>
+    <tr>
+      <td><code>T | U</code></td>
+      <td>Union: a value may be any listed type</td>
+      <td><code>int | float</code></td>
+    </tr>
+    <tr>
+      <td><code>(A B -- C)</code></td>
+      <td>Quotation type with its own stack effect</td>
+      <td><code>(int int -- bool)</code></td>
+    </tr>
+  </tbody>
+</table>
+
+<p>
+Top-level type declarations give names to type expressions.
+They are useful for casts and for naming larger shapes and unions that are reused by other type declarations.
+Current definition signatures still use the historical signature parser, so dictionary shapes in <code>def</code> signatures are written with quoted field names as shown below.
+</p>
+
+<pre><code>type Person = {name: str, age: int}
+type JsonScalar = str | int | float | bool | none
+type JsonDict = {str: JsonScalar}
+
+{ "name": "Ada", "age": 36 } as Person :age? 1 +</code></pre>
+
+<p>
+Use <code>as</code> to make an explicit assertion when the checker needs help with a value that cannot be inferred precisely enough from local syntax.
+</p>
+
+<pre><code>{ "name": "Ada", "age": 36 } as Person</code></pre>
+
+<h1 id="type-system-dictionaries">Dictionaries <a class="section-link" href="#type-system-dictionaries" aria-label="Permalink">§</a> <a class="back-to-top" href="#type-system-top">Back to top</a></h1>
+
+<p>
+Runtime dictionaries have string keys.
+The type system can describe dictionaries in two complementary ways:
+as homogeneous maps, where every key has the same value type, or as shapes, where specific keys have specific value types.
+</p>
+
+<h2 id="type-system-dictionary-homogeneous">Homogeneous Dictionaries <a class="section-link" href="#type-system-dictionary-homogeneous" aria-label="Permalink">§</a></h2>
+
+<p>
+A homogeneous dictionary is best when the keys are dynamic and every value has the same meaning.
+For example, a count table is a string-keyed dictionary of integers.
+</p>
+
+<pre><code>{ "passed": 10, "failed": 2 } as {str: int} values len</code></pre>
+
+<p>
+Older definition signatures also support a compact dictionary form:
+</p>
+
+<pre><code>def countValues ({ int } -- int)
+    values len
+end</code></pre>
+
+<p>
+In a definition signature, <code>{ int }</code> means a dictionary whose string keys all have <code>int</code> values.
+The equivalent type-expression spelling is <code>{str: int}</code>.
+The wildcard spelling <code>{ *: int }</code> is also accepted in definition signatures and has the same practical meaning.
+</p>
+
+<h2 id="type-system-dictionary-shapes">Dictionary Shapes <a class="section-link" href="#type-system-dictionary-shapes" aria-label="Permalink">§</a></h2>
+
+<p>
+A shape is best when a dictionary is being used as a record.
+Each named field has its own static type, so the checker can validate field access and prevent accidental field/value mixups.
+</p>
+
+<pre><code>def labelPerson ({ "name": str, "age": int, "active": bool } -- str)
+    person!
+    @person :name? name!
+    @person :age? age!
+    $"{@name} ({@age})"
+end</code></pre>
+
+<p>
+The <code>:field?</code> style is the usual way to read a required field from a checked shape.
+Without <code>?</code>, dictionary lookup returns <code>Maybe[T]</code>.
+The question mark unwraps the <code>Maybe</code> and preserves the plain field type for the rest of the expression.
+</p>
+
+<pre><code>type Person = {name: str, age: int}
+
+{ "name": "Ada", "age": 36 } as Person :age? 1 +</code></pre>
+
+<h2 id="type-system-dictionary-nesting">Nested Dictionaries <a class="section-link" href="#type-system-dictionary-nesting" aria-label="Permalink">§</a></h2>
+
+<p>
+Dictionary shapes compose with lists, unions, and homogeneous dictionaries.
+This makes JSON-like data much more precise than a single broad <code>dict</code> type.
+</p>
+
+<pre><code>type Address = {city: str, state: str}
+type Person = {
+    name: str,
+    age: int,
+    address: Address,
+    tags: [str]
+}
+
+{
+    "name": "Ada",
+    "age": 36,
+    "address": {"city": "London", "state": "UK"},
+    "tags": ["math" "computing"]
+} as Person :address? :city?</code></pre>
+
+<p>
+Use homogeneous dictionaries inside shapes when one field is itself a dynamic map.
+</p>
+
+<pre><code>type Report = {
+    title: str,
+    totals: {str: float},
+    notes: [str]
+}</code></pre>
+
+<h1 id="type-system-lists">Lists <a class="section-link" href="#type-system-lists" aria-label="Permalink">§</a> <a class="back-to-top" href="#type-system-top">Back to top</a></h1>
+
+<p>
+Runtime lists can hold any mix of values.
+The static type system describes that in one of two useful ways: as a homogeneous list with a single element type, or as a list whose element type is a union.
+</p>
+
+<h2 id="type-system-list-homogeneous">Homogeneous Lists <a class="section-link" href="#type-system-list-homogeneous" aria-label="Permalink">§</a></h2>
+
+<p>
+A homogeneous list has one element type.
+This is the strongest and most useful list type because functions such as <code>map</code>, <code>filter</code>, <code>sortByCmp</code>, <code>zip</code>, <code>foldl</code>, and indexing can preserve the element type exactly.
+</p>
+
+<pre><code>def doubleAll ([int] -- [int])
+    (2 *) map
+end
+
+def names ([{ "name": str, "age": int }] -- [str])
+    (:name?) map
+end</code></pre>
+
+<p>
+The signature <code>[a]</code> means "a list of some single element type".
+It does not mean "any list with unrelated element types".
+This lets generic functions keep their input and output relationships precise.
+</p>
+
+<pre><code>def keepPassing ([a] (a -- bool) -- [a])
+    filter
+end</code></pre>
+
+<h2 id="type-system-list-heterogeneous">Heterogeneous Lists <a class="section-link" href="#type-system-list-heterogeneous" aria-label="Permalink">§</a></h2>
+
+<p>
+When a list intentionally contains a fixed set of possible element kinds, use a union element type.
+For example, <code>[int | str]</code> is a list where every element is either an integer or a string.
+</p>
+
+<pre><code>type Cell = int | float | str | bool
+type Row = [Cell]
+type Table = [Row]
+
+[1 "Ada" true] as [int | str | bool]</code></pre>
+
+<p>
+This is powerful for shell data because many real inputs are table-like or JSON-like rather than class-like.
+A CSV row, a spreadsheet row, a parsed JSON array, or command output that has been split into fields can be represented without discarding the known set of legal element types.
+</p>
+
+<pre><code>type CsvCell = int | str
+type CsvRow = [CsvCell]
+type CsvRows = [CsvRow]
+
+[["Ada" 36] ["Grace" 42]] as [[int | str]] (len 0 &gt;) filter</code></pre>
+
+<p>
+The checker currently treats heterogeneous lists as lists of unions, not as fixed-length tuples with per-index types.
+That means <code>[1 "Ada"]</code> can be understood as <code>[int | str]</code>, but the checker does not use index <code>:0:</code> to prove "this position is always int" unless the value is converted or asserted in another way.
+</p>
+
+<h1 id="type-system-quotes">Quotations <a class="section-link" href="#type-system-quotes" aria-label="Permalink">§</a> <a class="back-to-top" href="#type-system-top">Back to top</a></h1>
+
+<p>
+Quotation types describe the stack effect of code values.
+This is what makes higher-order definitions such as <code>map</code>, <code>filter</code>, and <code>sortByCmp</code> checkable.
+</p>
+
+<pre><code>def adults ([{ "name": str, "age": int }] -- [{ "name": str, "age": int }])
+    (:age? 18 &gt;=) filter
+end</code></pre>
+
+<p>
+The quotation <code>(:age? 18 &gt;=)</code> is inferred as a function from a person-shaped dictionary to <code>bool</code> because <code>filter</code> expects a predicate quotation.
+Context is important: many quotations start generic and become concrete only when passed to a function or checked against a definition signature.
+</p>
+
+<p>
+Operators with multiple valid signatures keep an overload set until context resolves them.
+For example, the quotation <code>(&gt;)</code> is not immediately "integer greater-than".
+It can become <code>(int int -- bool)</code>, <code>(float float -- bool)</code>, <code>(str str -- bool)</code>, or <code>(datetime datetime -- bool)</code> depending on the expected quotation type.
+</p>
+
+<pre><code>def after (datetime datetime (datetime datetime -- bool) -- bool)
+    cmp!
+    @cmp x
+end
+
+2024-01-02 2024-01-01 (&gt;) after</code></pre>
+
+<h1 id="type-system-control-flow">Control Flow <a class="section-link" href="#type-system-control-flow" aria-label="Permalink">§</a> <a class="back-to-top" href="#type-system-top">Back to top</a></h1>
+
+<p>
+Branching constructs must reconcile stack and variable state across reachable branches.
+For <code>if</code>, <code>else</code>, <code>iff</code>, and <code>match</code>, each non-diverging branch must leave the same number of stack items.
+Corresponding stack positions are unified so compatible branch outputs become a shared type or union.
+</p>
+
+<pre><code>true if
+    1
+else
+    2
+end
+# leaves int
+
+true if
+    1
+else
+    "one"
+end
+# leaves int | str</code></pre>
+
+<p>
+Variables bound inside branches also have to agree.
+If one reachable branch binds <code>name!</code>, the other reachable branches must bind <code>name!</code> too, and the bound types must be compatible.
+</p>
+
+<p>
+Branches that diverge with <code>return</code>, <code>break</code>, or <code>continue</code> are excluded from reconciliation.
+That lets guard-style code type-check naturally.
+</p>
+
+<pre><code>def positiveName (int -- str)
+    n!
+    @n 0 &lt; if
+        "negative" return
+    end
+    "positive"
+end</code></pre>
+
+<h1 id="type-system-current-boundaries">Current Boundaries <a class="section-link" href="#type-system-current-boundaries" aria-label="Permalink">§</a> <a class="back-to-top" href="#type-system-top">Back to top</a></h1>
+
+<p>
+The checker is intentionally static and conservative.
+It catches stack underflows, unknown definitions, incompatible built-in usage, incompatible branch results, and definition bodies that do not match their declared signatures.
+Runtime checks still exist for data-dependent conditions such as missing dictionary keys, failed <code>?</code> unwraps, file-system failures, process exit codes, and values that come from external programs.
+</p>
+
+<p>
+When the checker cannot infer a precise shape for dynamic data, prefer adding a named type and an <code>as</code> assertion near the boundary where the data enters typed code.
+That keeps the rest of the script checked with useful dictionary, list, union, and quotation types.
+</p>

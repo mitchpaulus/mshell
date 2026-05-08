@@ -443,6 +443,109 @@ Dates can be subtracted from each other, and the result is a floating-point numb
 2023-10-02 2023-10-01 - # 1.0
 ```
 
+## Type System
+
+Use `msh --check-types script.msh` to run static type checking before script execution.
+The checker validates stack effects, definition bodies, quotation arguments, built-ins, variable bindings, and branch reconciliation.
+
+Definitions use stack-effect signatures.
+Inputs are listed before `--`, outputs after it, and the rightmost input is the top stack item consumed first.
+
+```mshell
+def addOne (int -- int)
+    1 +
+end
+
+def fullName (str str -- str)
+    last!, first!
+    $"{@first} {@last}"
+end
+```
+
+Primitive static type names include `int`, `float`, `bool`, `str`, `path`, `datetime`, `bytes`, and `none`.
+Named runtime types such as `Grid`, `GridView`, and `GridRow` are also available.
+
+Type expressions compose with lists, dictionaries, unions, `Maybe`, and quotation types.
+
+```mshell
+[str]                 # list of strings
+{str: int}            # string-keyed dictionary of ints
+{name: str, age: int} # dictionary shape
+Maybe[int]            # optional int
+int | str             # union
+(int int -- bool)     # quotation type
+```
+
+Top-level type declarations name larger type expressions.
+Use them for casts and for naming record-like dictionaries and unions that are reused by other type declarations.
+Current definition signatures still use the historical signature parser, so dictionary shapes in `def` signatures are written with quoted field names.
+
+```mshell
+type Person = {name: str, age: int}
+type Cell = int | float | str | bool | none
+type Row = [Cell]
+
+{ "name": "Ada", "age": 36 } as Person :age? 1 +
+```
+
+Dictionary types are split into homogeneous dictionaries and shapes.
+A homogeneous dictionary is for dynamic keys where every value has the same type.
+In a type expression, write `{str: int}`.
+In older definition signatures, `{ int }` or `{ *: int }` means the same string-keyed dictionary of ints.
+
+```mshell
+{ "passed": 10, "failed": 2 } as {str: int} values len
+```
+
+A shape is for record-like dictionaries with known fields.
+Shapes let `:field?` access preserve the precise field type.
+
+```mshell
+def labelPerson ({ "name": str, "age": int, "active": bool } -- str)
+    person!
+    @person :name? name!
+    @person :age? age!
+    $"{@name} ({@age})"
+end
+```
+
+Lists are homogeneous when every element has one type, such as `[int]` or `[Person]`.
+This is the strongest list type because higher-order functions preserve the element type.
+
+```mshell
+def doubleAll ([int] -- [int])
+    (2 *) map
+end
+
+def names ([{ "name": str, "age": int }] -- [str])
+    (:name?) map
+end
+```
+
+Heterogeneous lists are represented as lists whose element type is a union.
+For example, `[int | str]` means every element is either an int or a string.
+This is useful for JSON-like data, spreadsheet rows, and other shell data where each cell can be one of a fixed set of types.
+
+```mshell
+type Cell = int | float | str | bool
+type Row = [Cell]
+type Table = [Row]
+
+[1 "Ada" true] as [int | str | bool]
+```
+
+The checker currently models heterogeneous lists as lists of unions, not fixed-length tuples with per-index types.
+That means index `:0:` does not by itself prove a specific per-position type unless the value is converted or asserted.
+
+Quotation types describe the stack effect of code values.
+Operators with multiple valid signatures keep an overload set until context resolves them.
+For example, `(>)` can become `(int int -- bool)`, `(float float -- bool)`, `(str str -- bool)`, or `(datetime datetime -- bool)` depending on the expected quotation type.
+
+Control-flow branches must reconcile stack and variable state across reachable paths.
+Branches that diverge with `return`, `break`, or `continue` are excluded from reconciliation.
+
+For more detail, see the generated Type System help page.
+
 ## Definitions
 
 Definitions use `def` with an optional metadata dictionary before the type signature.
