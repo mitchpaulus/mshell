@@ -2814,6 +2814,39 @@ Remaining hot buckets:
   inputs (e.g. `dates.msh` `testType`) — these are real
   test bugs but inflate the unknown-identifier count.
 
+### Phase 10 step 4q — Overloaded quote values for bare overloaded words — DONE
+
+Bare quoted overloaded words like `(>)` were being forced to a
+single signature during quote inference. The resolver chose the
+first viable overload without caller context, so `(>)` inferred as
+`(int int -- bool)` even when passed to a def expecting
+`(datetime datetime -- bool)`.
+
+The checker now has a `TKOverloadedQuote` arena kind backed by an
+ordered `[][]QuoteSig` side table. A quote literal whose body is a
+single overloaded token or overloaded literal def preserves the
+candidate set instead of selecting an arm immediately. The concrete
+arm is selected later when either:
+
+- the overloaded quote unifies against an expected `TKQuote`; or
+- `x` applies it to the current stack.
+
+This keeps the long-term model honest: `(>)` is a quote value with an
+overload set, not "the int comparison quote" by default.
+
+Related fixes:
+
+- Datetime comparison overloads were added for `<`, `>`, `<=`, and
+  `>=`.
+- The old def-signature translator now treats `path` and `datetime`
+  as primitive type names when they appear as literal-shaped type
+  items.
+
+Verification: `go test ./...`, `./build.sh`, targeted
+`--check-types` runs for `tests/boolean_logic.msh` and
+`tests/dates.msh`, and `./tests/test.sh` all pass. Clean-startup
+survey is now `135 / 150`.
+
 ### Migration thread
 
 `mshell/TypeChecking.go` (the existing 883-line interface-based checker)

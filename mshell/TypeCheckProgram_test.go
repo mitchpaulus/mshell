@@ -154,6 +154,21 @@ func TestTypeCheckProgramMaybeMap(t *testing.T) {
 	}
 }
 
+func TestTypeCheckProgramOverloadedQuoteResolvesFromExpectedQuote(t *testing.T) {
+	src := `
+def useDateCmp (datetime datetime (datetime datetime -- bool) -- bool)
+    op! b! a!
+    @a @b @op x
+end
+
+2025-01-01 2025-01-02 (>) useDateCmp
+`
+	errs, ok := parseAndCheck(t, src)
+	if !ok || len(errs) != 0 {
+		t.Fatalf("expected overloaded quote to resolve as datetime comparison; errs=%v", errs)
+	}
+}
+
 func TestTypeCheckProgramRegisteredBuiltins(t *testing.T) {
 	// Sanity: a small program using only registered builtins flow-checks.
 	cases := []string{

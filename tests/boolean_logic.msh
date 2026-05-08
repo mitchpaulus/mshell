@@ -1,8 +1,8 @@
-def header (--)
+def header (str --)
     "" wl wl "========" wl
 end
 
-def result (--)
+def result (bool --)
     ("truey") ("falsey") iff wl
 end
 

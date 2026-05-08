@@ -152,6 +152,28 @@ func (s *Substitution) Apply(arena *TypeArena, t TypeId) TypeId {
 			Pure:     sig.Pure,
 			Generics: sig.Generics,
 		})
+	case TKOverloadedQuote:
+		sigs := arena.overloadedQuoteSigs[n.Extra]
+		rebuilt := make([]QuoteSig, len(sigs))
+		changed := false
+		for i, sig := range sigs {
+			newIn, inChanged := s.applySpan(arena, sig.Inputs)
+			newOut, outChanged := s.applySpan(arena, sig.Outputs)
+			rebuilt[i] = QuoteSig{
+				Inputs:   newIn,
+				Outputs:  newOut,
+				Fail:     sig.Fail,
+				Pure:     sig.Pure,
+				Generics: sig.Generics,
+			}
+			if inChanged || outChanged {
+				changed = true
+			}
+		}
+		if !changed {
+			return t
+		}
+		return arena.MakeOverloadedQuote(rebuilt)
 	}
 	return t
 }
@@ -246,6 +268,20 @@ func (s *Substitution) occurs(arena *TypeArena, v TypeVarId, t TypeId) bool {
 		for _, out := range sig.Outputs {
 			if s.occurs(arena, v, out) {
 				return true
+			}
+		}
+		return false
+	case TKOverloadedQuote:
+		for _, sig := range arena.overloadedQuoteSigs[n.Extra] {
+			for _, in := range sig.Inputs {
+				if s.occurs(arena, v, in) {
+					return true
+				}
+			}
+			for _, out := range sig.Outputs {
+				if s.occurs(arena, v, out) {
+					return true
+				}
 			}
 		}
 		return false
@@ -377,6 +413,39 @@ func (c *Checker) renameVars(t TypeId, rename map[TypeVarId]TypeId) TypeId {
 			Pure:     sig.Pure,
 			Generics: nil,
 		})
+	case TKOverloadedQuote:
+		sigs := c.arena.overloadedQuoteSigs[n.Extra]
+		out := make([]QuoteSig, len(sigs))
+		changed := false
+		for i, sig := range sigs {
+			newIn := make([]TypeId, len(sig.Inputs))
+			newOut := make([]TypeId, len(sig.Outputs))
+			for j, in := range sig.Inputs {
+				ri := c.renameVars(in, rename)
+				newIn[j] = ri
+				if ri != in {
+					changed = true
+				}
+			}
+			for j, outType := range sig.Outputs {
+				ro := c.renameVars(outType, rename)
+				newOut[j] = ro
+				if ro != outType {
+					changed = true
+				}
+			}
+			out[i] = QuoteSig{
+				Inputs:   newIn,
+				Outputs:  newOut,
+				Fail:     sig.Fail,
+				Pure:     sig.Pure,
+				Generics: nil,
+			}
+		}
+		if !changed {
+			return t
+		}
+		return c.arena.MakeOverloadedQuote(out)
 	}
 	return t
 }

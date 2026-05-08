@@ -199,6 +199,21 @@ func specificityScore(arena *TypeArena, t TypeId) int {
 			s += specificityScore(arena, out)
 		}
 		return s
+	case TKOverloadedQuote:
+		best := 0
+		for _, sig := range arena.overloadedQuoteSigs[n.Extra] {
+			score := 1
+			for _, in := range sig.Inputs {
+				score += specificityScore(arena, in)
+			}
+			for _, out := range sig.Outputs {
+				score += specificityScore(arena, out)
+			}
+			if score > best {
+				best = score
+			}
+		}
+		return best
 	}
 	return 1
 }

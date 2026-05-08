@@ -50,6 +50,7 @@ const (
 	TKDict                     // A = key T, B = value T
 	TKShape                    // Extra = index into shapeFields
 	TKQuote                    // Extra = index into quoteSigs
+	TKOverloadedQuote          // Extra = index into overloadedQuoteSigs
 	TKUnion                    // A = brand id (or 0); Extra = index into unionMembers
 	TKBrand                    // A = brand id; B = underlying TypeId
 	TKVar                      // A = TypeVarId
@@ -75,6 +76,8 @@ func (k TypeKind) String() string {
 		return "Shape"
 	case TKQuote:
 		return "Quote"
+	case TKOverloadedQuote:
+		return "OverloadedQuote"
 	case TKUnion:
 		return "Union"
 	case TKBrand:
@@ -155,6 +158,7 @@ type TypeArena struct {
 
 	shapeFields    [][]ShapeField
 	quoteSigs      []QuoteSig
+	overloadedQuoteSigs [][]QuoteSig
 	unionMembers   [][]TypeId // each slice is sorted, deduped
 	gridSchemas    []GridSchema
 	gridSchemaCons map[string]uint32
@@ -192,6 +196,7 @@ func NewTypeArena() *TypeArena {
 	// Same for shapeFields and quoteSigs.
 	a.shapeFields = append(a.shapeFields, nil)
 	a.quoteSigs = append(a.quoteSigs, QuoteSig{})
+	a.overloadedQuoteSigs = append(a.overloadedQuoteSigs, nil)
 	return a
 }
 
@@ -294,6 +299,27 @@ func (a *TypeArena) MakeQuote(sig QuoteSig) TypeId {
 	return id
 }
 
+// MakeOverloadedQuote returns the canonical TypeId for a quote value that
+// still has multiple possible signatures. This is used for bare quoted
+// overloaded words like `(>)`; the concrete arm is selected when context
+// later supplies an expected quote type or `x` applies it to the live stack.
+func (a *TypeArena) MakeOverloadedQuote(sigs []QuoteSig) TypeId {
+	if len(sigs) == 1 {
+		return a.MakeQuote(sigs[0])
+	}
+	key := encodeOverloadedQuoteKey(sigs)
+	if id, ok := a.cons[key]; ok {
+		return id
+	}
+	cp := make([]QuoteSig, len(sigs))
+	copy(cp, sigs)
+	idx := uint32(len(a.overloadedQuoteSigs))
+	a.overloadedQuoteSigs = append(a.overloadedQuoteSigs, cp)
+	id := a.append(TypeNode{Kind: TKOverloadedQuote, Extra: idx})
+	a.cons[key] = id
+	return id
+}
+
 // MakeGrid returns the canonical TypeId for a grid type. schemaIdx of 0
 // denotes "schema unknown" (the V1 default until schema tracking lands).
 func (a *TypeArena) MakeGrid(schemaIdx uint32) TypeId {
@@ -360,6 +386,16 @@ func (a *TypeArena) QuoteSig(id TypeId) QuoteSig {
 		panic("TypeArena.QuoteSig: not a quote")
 	}
 	return a.quoteSigs[n.Extra]
+}
+
+// OverloadedQuoteSigs returns the candidate signatures of an overloaded
+// quote type. Caller must not mutate.
+func (a *TypeArena) OverloadedQuoteSigs(id TypeId) []QuoteSig {
+	n := a.Node(id)
+	if n.Kind != TKOverloadedQuote {
+		panic("TypeArena.OverloadedQuoteSigs: not an overloaded quote")
+	}
+	return a.overloadedQuoteSigs[n.Extra]
 }
 
 // GridSchema returns the schema for a grid-family type. The unknown-schema
@@ -529,6 +565,21 @@ func encodeQuoteKey(sig QuoteSig) string {
 	return sb.String()
 }
 
+// encodeOverloadedQuoteKey builds the cons-table key for an overload set.
+// Candidate order is significant: overload dispatch is most-specific-first
+// with source/table order as the deterministic fallback.
+func encodeOverloadedQuoteKey(sigs []QuoteSig) string {
+	var sb strings.Builder
+	sb.WriteString("O:")
+	for i, sig := range sigs {
+		if i > 0 {
+			sb.WriteByte('|')
+		}
+		sb.WriteString(encodeQuoteKey(sig))
+	}
+	return sb.String()
+}
+
 // normalizeShapeFields returns a sorted copy of fields with duplicate-name
 // detection. Panics on duplicate names — duplicate fields in a shape literal
 // is a static error and should be caught higher up; reaching here is a bug.
@@ -600,7 +651,7 @@ func (t *NameTable) Name(id NameId) string {
 func IsReservedTypeName(name string) bool {
 	switch name {
 	case "int", "float", "str", "bool", "bytes", "none",
-		"Maybe", "Grid", "GridView", "GridRow":
+		"path", "datetime", "Maybe", "Grid", "GridView", "GridRow":
 		return true
 	}
 	return false

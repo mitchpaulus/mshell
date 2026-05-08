@@ -11,10 +11,10 @@
 2025-01-29 "Jan 29, 2025" toDt? = str wl
 2025-01-29 "Jan 28, 2025" toDt? = str wl
 
-def testType (--)
-    operator! opStr! date2! date!
-    @date @date2 toDt? @operator x str result!
-    $"{@date str}{@opStr}{@date2}: {@result}" wl
+def testType (datetime str str (datetime datetime -- bool)  -- )
+    date!, dateStr!, opStr!, operator!
+    @date @dateStr toDt? @operator x str result!
+    $"{@date str}{@opStr}{@dateStr}: {@result}" wl
 end
 
 "\nComparing >=" wl

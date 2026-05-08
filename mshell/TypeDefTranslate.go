@@ -74,6 +74,12 @@ func (tx *typeDefTranslator) translate(t MShellType) TypeId {
 	case TypeBinary:
 		return TidBytes
 	case TypeGeneric:
+		switch v.Name {
+		case "path":
+			return TidPath
+		case "datetime":
+			return TidDateTime
+		}
 		// Generics are name-scoped per def. First occurrence allocates
 		// a fresh var; later occurrences of the same name reuse it.
 		if id, ok := tx.generics[v.Name]; ok {

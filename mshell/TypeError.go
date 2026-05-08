@@ -183,6 +183,18 @@ func FormatType(arena *TypeArena, names *NameTable, id TypeId) string {
 		}
 		sb.WriteByte(')')
 		return sb.String()
+	case TKOverloadedQuote:
+		sigs := arena.overloadedQuoteSigs[n.Extra]
+		var sb strings.Builder
+		sb.WriteString("overload{")
+		for i, sig := range sigs {
+			if i > 0 {
+				sb.WriteString(" | ")
+			}
+			sb.WriteString(FormatType(arena, names, arena.MakeQuote(sig)))
+		}
+		sb.WriteByte('}')
+		return sb.String()
 	case TKVar:
 		return fmt.Sprintf("T%d", n.A)
 	case TKGrid:

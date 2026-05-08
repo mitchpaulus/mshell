@@ -1530,9 +1530,10 @@ func builtinSigsByToken(arena *TypeArena, names *NameTable) map[TokenType][]Quot
 	floatFloatFloat := QuoteSig{Inputs: []TypeId{TidFloat, TidFloat}, Outputs: []TypeId{TidFloat}}
 	intIntBool := QuoteSig{Inputs: []TypeId{TidInt, TidInt}, Outputs: []TypeId{TidBool}}
 	floatFloatBool := QuoteSig{Inputs: []TypeId{TidFloat, TidFloat}, Outputs: []TypeId{TidBool}}
+	dateTimeDateTimeBool := QuoteSig{Inputs: []TypeId{TidDateTime, TidDateTime}, Outputs: []TypeId{TidBool}}
 
 	arithmetic := []QuoteSig{intIntInt, floatFloatFloat}
-	comparison := []QuoteSig{intIntBool, floatFloatBool}
+	comparison := []QuoteSig{intIntBool, floatFloatBool, dateTimeDateTimeBool}
 
 	// Capture markers `*` / `*b` / `^` / `^b` are postfix list/pipe
 	// modifiers. Model them as internal brands on the command-list
@@ -1640,6 +1641,7 @@ func builtinSigsByToken(arena *TypeArena, names *NameTable) map[TokenType][]Quot
 	redirSigs := []QuoteSig{
 		intIntBool,
 		floatFloatBool,
+		dateTimeDateTimeBool,
 		{
 			Inputs:   []TypeId{arena.MakeList(redirT), TidStr},
 			Outputs:  []TypeId{arena.MakeList(redirT)},

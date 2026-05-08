@@ -279,6 +279,10 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 		return
 
 	case *MShellParseQuote:
+		if candidates, ok := c.quoteOverloadCandidates(it.Items); ok {
+			c.stack.Push(c.arena.MakeOverloadedQuote(candidates))
+			return
+		}
 		// Phase 7 inference: run the body against a fresh empty
 		// stack with inferring mode on, accumulate underflow as
 		// fresh-var inputs, take the residual stack as outputs.
@@ -427,6 +431,26 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 		c.stack.Push(c.arena.MakeMaybe(c.lookupGetterValueType(top, nameId)))
 		return
 	}
+}
+
+func (c *Checker) quoteOverloadCandidates(items []MShellParseItem) ([]QuoteSig, bool) {
+	if len(items) != 1 {
+		return nil, false
+	}
+	tok, ok := items[0].(Token)
+	if !ok {
+		return nil, false
+	}
+	if sigs, ok := c.builtins[tok.Type]; ok && len(sigs) > 1 {
+		return sigs, true
+	}
+	if tok.Type == LITERAL {
+		nameId := c.names.Intern(tok.Lexeme)
+		if sigs, ok := c.nameBuiltins[nameId]; ok && len(sigs) > 1 {
+			return sigs, true
+		}
+	}
+	return nil, false
 }
 
 // checkIfBlock drives an if/else-if/else chain through the branch

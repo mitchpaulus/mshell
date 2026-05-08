@@ -181,6 +181,11 @@ func (c *Checker) checkOne(tok Token) {
 		}
 		top := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-1])
 		topNode := c.arena.Node(top)
+		if topNode.Kind == TKOverloadedQuote {
+			c.stack.items = c.stack.items[:c.stack.Len()-1]
+			c.resolveAndApply(c.arena.overloadedQuoteSigs[topNode.Extra], tok)
+			return
+		}
 		if topNode.Kind != TKQuote {
 			c.errors = append(c.errors, TypeError{
 				Kind:     TErrTypeMismatch,
@@ -546,6 +551,12 @@ func (c *Checker) unify(got, want TypeId) bool {
 	}
 
 	if gn.Kind != wn.Kind {
+		if gn.Kind == TKOverloadedQuote && wn.Kind == TKQuote {
+			return c.unifyOverloadedQuoteToQuote(gn, want)
+		}
+		if gn.Kind == TKQuote && wn.Kind == TKOverloadedQuote {
+			return c.unifyOverloadedQuoteToQuote(wn, got)
+		}
 		if gn.Kind == TKDict && wn.Kind == TKShape {
 			return c.unifyDictToShape(gn, wn)
 		}
@@ -577,6 +588,8 @@ func (c *Checker) unify(got, want TypeId) bool {
 		return gn.A == wn.A && c.unify(TypeId(gn.B), TypeId(wn.B))
 	case TKQuote:
 		return c.unifyQuote(gn, wn)
+	case TKOverloadedQuote:
+		return false
 	case TKGrid, TKGridView, TKGridRow:
 		// Phase-3 grids are opaque. Equality-by-id is the only way two grid
 		// types match; if we got here with same kind but different ids,
@@ -588,6 +601,20 @@ func (c *Checker) unify(got, want TypeId) bool {
 		}
 		return false
 	}
+	return false
+}
+
+func (c *Checker) unifyOverloadedQuoteToQuote(overNode TypeNode, quote TypeId) bool {
+	candidates := c.arena.overloadedQuoteSigs[overNode.Extra]
+	cp := c.subst.Checkpoint()
+	for _, cand := range candidates {
+		c.subst.Rollback(cp)
+		inst := c.Instantiate(cand)
+		if c.unify(c.arena.MakeQuote(inst), quote) {
+			return true
+		}
+	}
+	c.subst.Rollback(cp)
 	return false
 }
 
