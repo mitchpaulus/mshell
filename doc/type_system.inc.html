@@ -22,9 +22,11 @@ It does not change the runtime data model described in <a href="data-types.html"
 Use <code>--check-types</code> to type-check a file.
 When type checking succeeds, the script continues to normal execution.
 When type checking fails, execution is stopped before user code runs.
+Use <code>--type-check-only</code> to run the same checker and exit without evaluating the script.
 </p>
 
 <pre><code>msh --check-types script.msh</code></pre>
+<pre><code>msh --type-check-only script.msh</code></pre>
 
 <p>
 The checker reads definitions from the standard library and the current file.

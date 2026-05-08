@@ -3,7 +3,7 @@ package main
 // Phase 10 step 3 (gate) + step 4 (program-flow walker).
 //
 // TypeCheckProgram is the entry point invoked from Main.go's
-// `--check-types` gate. It does two passes:
+// `--check-types` gate and `--type-check-only` mode. It does two passes:
 //
 //   1. Pre-pass: collect all MShellTypeDecl items and register each
 //      via Checker.DeclareType. Forward references across decls
@@ -23,8 +23,8 @@ package main
 // land as the builtin table and parse-tree walker grow. Until then,
 // programs that lean on unregistered word builtins (most existing
 // mshell programs do) will surface unknown-identifier errors when
-// run under --check-types — that's the signal for what to register
-// next.
+// run under --check-types or --type-check-only — that's the signal
+// for what to register next.
 
 // TypeCheckProgram runs the new Checker against the given file.
 // Returns formatted error strings (one per error) and an

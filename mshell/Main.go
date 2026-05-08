@@ -317,6 +317,7 @@ func main() {
 	inputFile = nil
 	inputFilePath := ""
 	checkTypes := false // --check-types: gate execution with the new Checker (Phase 10 step 3)
+	typeCheckOnly := false
 
 	if len(os.Args) == 1 {
 		// Enter interactive mode
@@ -333,6 +334,9 @@ func main() {
 			command = CLITYPECHECK
 		} else if arg == "--check-types" {
 			checkTypes = true
+		} else if arg == "--type-check-only" {
+			checkTypes = true
+			typeCheckOnly = true
 		} else if arg == "--parse" {
 			command = CLIPARSE
 			// printParse = true
@@ -353,6 +357,7 @@ func main() {
 			fmt.Println("  --lex        Print the tokens lexed from the input")
 			fmt.Println("  --parse      Print the parsed Abstract Syntax Tree as JSON")
 			fmt.Println("  --check-types Run the new static type checker as a gate before evaluation (Phase 10 preview)")
+			fmt.Println("  --type-check-only Run the new static type checker and exit without evaluation")
 			// fmt.Println("  --typecheck  Type check the input and report any errors") Ignore this for now.
 			fmt.Println("  --version    Print version information and exit")
 			fmt.Println("  -c INPUT     Execute INPUT as the program, before positional args")
@@ -658,6 +663,9 @@ func main() {
 				fmt.Fprintln(os.Stderr, e)
 			}
 			os.Exit(1)
+		}
+		if typeCheckOnly {
+			os.Exit(0)
 		}
 	}
 

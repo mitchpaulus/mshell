@@ -472,7 +472,7 @@ end
 # msh {{{
 def __mshCompletion { 'complete': ['msh' 'mshell'] } ([str] -- [str])
     input!
-    ['-h' '--help' '--html' '--lex' '--parse' '--version' '-c'] options!
+    ['-h' '--help' '--html' '--lex' '--parse' '--check-types' '--type-check-only' '--version' '-c'] options!
     ['lsp' 'bin' 'edit' 'completions'] subcommands!
 
     @input len 0 > if

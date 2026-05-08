@@ -300,7 +300,7 @@ The CLI can use definition metadata to provide argument completions for binaries
 ```mshell
 def mshCompletion { 'complete': ['msh' 'mshell'] } ([str] -- [str])
     input!
-    ['-h' '--help' '--html' '--lex' '--parse' '--version' '-c'] options!
+    ['-h' '--help' '--html' '--lex' '--parse' '--check-types' '--type-check-only' '--version' '-c'] options!
     ['lsp' 'bin' 'edit' 'completions'] subcommands!
     @options @subcommands extend
 end
@@ -446,6 +446,7 @@ Dates can be subtracted from each other, and the result is a floating-point numb
 ## Type System
 
 Use `msh --check-types script.msh` to run static type checking before script execution.
+Use `msh --type-check-only script.msh` to run the same static checks and exit without evaluating the script.
 The checker validates stack effects, definition bodies, quotation arguments, built-ins, variable bindings, and branch reconciliation.
 
 Definitions use stack-effect signatures.
