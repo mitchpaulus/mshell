@@ -141,6 +141,7 @@ type QuoteSig struct {
 	Outputs  []TypeId
 	Fail     TypeId // Phase 2
 	Pure     bool   // Phase 2
+	Diverges bool   // return/break/continue style control flow
 	Generics []TypeVarId
 }
 
@@ -552,6 +553,12 @@ func encodeQuoteKey(sig QuoteSig) string {
 	sb.WriteByte(';')
 	if sig.Pure {
 		sb.WriteByte('P')
+	} else {
+		sb.WriteByte('-')
+	}
+	sb.WriteByte(';')
+	if sig.Diverges {
+		sb.WriteByte('D')
 	} else {
 		sb.WriteByte('-')
 	}

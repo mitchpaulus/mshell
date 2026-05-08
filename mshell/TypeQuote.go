@@ -35,11 +35,13 @@ func (c *Checker) InferQuoteSig(body []Token) QuoteSig {
 	outerSnap := c.Snapshot()
 	outerInferring := c.inferring
 	outerInputs := c.inferInputs
+	outerDiverged := c.diverged
 
 	c.stack.items = c.stack.items[:0]
 	c.vars.bound = make(map[NameId]TypeId)
 	c.inferring = true
 	c.inferInputs = nil
+	c.diverged = false
 
 	for _, tok := range body {
 		c.checkOne(tok)
@@ -47,10 +49,12 @@ func (c *Checker) InferQuoteSig(body []Token) QuoteSig {
 
 	rawInputs := c.inferInputs
 	rawOutputs := append([]TypeId(nil), c.stack.items...)
+	diverged := c.diverged
 
 	c.inferring = outerInferring
 	c.inferInputs = outerInputs
 	c.Fork(outerSnap)
+	c.diverged = outerDiverged
 
 	inputs := make([]TypeId, len(rawInputs))
 	for i, in := range rawInputs {
@@ -61,7 +65,7 @@ func (c *Checker) InferQuoteSig(body []Token) QuoteSig {
 		outputs[i] = c.subst.Apply(c.arena, out)
 	}
 
-	return QuoteSig{Inputs: inputs, Outputs: outputs}
+	return QuoteSig{Inputs: inputs, Outputs: outputs, Diverges: diverged}
 }
 
 // InferQuoteSigItems is the parse-tree variant of InferQuoteSig. The
@@ -73,6 +77,7 @@ func (c *Checker) InferQuoteSigItems(body []MShellParseItem) QuoteSig {
 	outerSnap := c.Snapshot()
 	outerInferring := c.inferring
 	outerInputs := c.inferInputs
+	outerDiverged := c.diverged
 
 	c.stack.items = c.stack.items[:0]
 	// Inherit the outer var environment so the quote body can
@@ -89,6 +94,7 @@ func (c *Checker) InferQuoteSigItems(body []MShellParseItem) QuoteSig {
 	c.vars.bound = inherited
 	c.inferring = true
 	c.inferInputs = nil
+	c.diverged = false
 
 	for _, item := range body {
 		c.checkParseItem(item)
@@ -96,10 +102,12 @@ func (c *Checker) InferQuoteSigItems(body []MShellParseItem) QuoteSig {
 
 	rawInputs := c.inferInputs
 	rawOutputs := append([]TypeId(nil), c.stack.items...)
+	diverged := c.diverged
 
 	c.inferring = outerInferring
 	c.inferInputs = outerInputs
 	c.Fork(outerSnap)
+	c.diverged = outerDiverged
 
 	inputs := make([]TypeId, len(rawInputs))
 	for i, in := range rawInputs {
@@ -110,5 +118,5 @@ func (c *Checker) InferQuoteSigItems(body []MShellParseItem) QuoteSig {
 		outputs[i] = c.subst.Apply(c.arena, out)
 	}
 
-	return QuoteSig{Inputs: inputs, Outputs: outputs}
+	return QuoteSig{Inputs: inputs, Outputs: outputs, Diverges: diverged}
 }

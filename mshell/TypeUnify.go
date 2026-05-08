@@ -150,6 +150,7 @@ func (s *Substitution) Apply(arena *TypeArena, t TypeId) TypeId {
 			Outputs:  newOut,
 			Fail:     sig.Fail,
 			Pure:     sig.Pure,
+			Diverges: sig.Diverges,
 			Generics: sig.Generics,
 		})
 	case TKOverloadedQuote:
@@ -164,6 +165,7 @@ func (s *Substitution) Apply(arena *TypeArena, t TypeId) TypeId {
 				Outputs:  newOut,
 				Fail:     sig.Fail,
 				Pure:     sig.Pure,
+				Diverges: sig.Diverges,
 				Generics: sig.Generics,
 			}
 			if inChanged || outChanged {
@@ -310,10 +312,11 @@ func (c *Checker) Instantiate(sig QuoteSig) QuoteSig {
 		freshOut[i] = c.renameVars(out, rename)
 	}
 	return QuoteSig{
-		Inputs:  freshIn,
-		Outputs: freshOut,
-		Fail:    sig.Fail,
-		Pure:    sig.Pure,
+		Inputs:   freshIn,
+		Outputs:  freshOut,
+		Fail:     sig.Fail,
+		Pure:     sig.Pure,
+		Diverges: sig.Diverges,
 		// Generics intentionally dropped: instantiation consumes them.
 	}
 }
@@ -411,6 +414,7 @@ func (c *Checker) renameVars(t TypeId, rename map[TypeVarId]TypeId) TypeId {
 			Outputs:  newOut,
 			Fail:     sig.Fail,
 			Pure:     sig.Pure,
+			Diverges: sig.Diverges,
 			Generics: nil,
 		})
 	case TKOverloadedQuote:
@@ -439,6 +443,7 @@ func (c *Checker) renameVars(t TypeId, rename map[TypeVarId]TypeId) TypeId {
 				Outputs:  newOut,
 				Fail:     sig.Fail,
 				Pure:     sig.Pure,
+				Diverges: sig.Diverges,
 				Generics: nil,
 			}
 		}

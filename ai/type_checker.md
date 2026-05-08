@@ -2847,6 +2847,42 @@ Verification: `go test ./...`, `./build.sh`, targeted
 `tests/dates.msh`, and `./tests/test.sh` all pass. Clean-startup
 survey is now `135 / 150`.
 
+### Phase 10 step 4r — `iff` branch checking and divergence — DONE
+
+The checker previously modeled `iff` through a few fixed overloads.
+That broke real control-flow patterns because a branch that exits via
+`return`, `break`, or `continue` should not have to match the
+fallthrough stack shape.
+
+`iff` is now checked as a branch construct:
+
+- the checker pops the condition and one or two quote arms;
+- each quote arm is applied against a forked stack snapshot;
+- divergent arms are skipped during branch reconciliation;
+- single-arm `iff` gets an implicit no-op false arm.
+
+The checker now tracks path divergence during quote and def-body
+checking. `return` validates against the current function's declared
+outputs and marks that path divergent. `break` and `continue` mark the
+current quote path divergent, which lets loop guard branches type-check
+without forcing the loop body to appear stack-changing.
+
+This unblocks the remaining real checker failures in the test corpus:
+`tests/return.msh` and `tests/while_read.msh` now pass
+`--check-types`.
+
+Verification: `go test ./...`, `./build.sh`, targeted
+`--check-types` runs for `tests/return.msh` and
+`tests/while_read.msh`.
+
+The survey helper now measures the static gate separately from runtime
+exit status. `tests/if_fail.msh` is marked as an expected static
+failure, since `1 iff` is invalid and should be rejected by the checker.
+With that distinction, the clean-startup static survey is now
+`150 / 150`. The remaining nonzero `--check-types` command exits are
+expected runtime-failure fixtures that passed the static gate and then
+failed while executing.
+
 ### Migration thread
 
 `mshell/TypeChecking.go` (the existing 883-line interface-based checker)

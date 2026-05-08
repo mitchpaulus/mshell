@@ -27,8 +27,9 @@ package main
 // and to restore its entry state between arms. It does not capture
 // the substitution — that is intentionally global, see file header.
 type ScopeSnapshot struct {
-	stack []TypeId
-	vars  map[NameId]TypeId
+	stack    []TypeId
+	vars     map[NameId]TypeId
+	diverged bool
 }
 
 // Snapshot returns a copy of the checker's current stack and var env.
@@ -41,7 +42,7 @@ func (c *Checker) Snapshot() ScopeSnapshot {
 	for k, v := range c.vars.bound {
 		varsCopy[k] = v
 	}
-	return ScopeSnapshot{stack: stackCopy, vars: varsCopy}
+	return ScopeSnapshot{stack: stackCopy, vars: varsCopy, diverged: c.diverged}
 }
 
 // Fork resets the checker's stack and var env to a copy of snap. The
@@ -53,6 +54,7 @@ func (c *Checker) Fork(snap ScopeSnapshot) {
 	for k, v := range snap.vars {
 		c.vars.bound[k] = v
 	}
+	c.diverged = snap.diverged
 }
 
 // BranchArm is the result of running the checker over a single arm of

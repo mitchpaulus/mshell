@@ -169,6 +169,37 @@ end
 	}
 }
 
+func TestTypeCheckProgramIffReturnBranchDiverges(t *testing.T) {
+	src := `
+def returnTest (str -- str)
+    a!
+    @a "a" = ("Found a" return) iff
+    @a
+end
+
+"a" returnTest wl
+`
+	errs, ok := parseAndCheck(t, src)
+	if !ok || len(errs) != 0 {
+		t.Fatalf("expected iff return branch to type-check as divergent; errs=%v", errs)
+	}
+}
+
+func TestTypeCheckProgramLoopBreakBranchPreservesStack(t *testing.T) {
+	src := `
+1
+(
+    read not (drop break) () iff
+    linetext! num!
+    @num 1 +
+) loop
+`
+	errs, ok := parseAndCheck(t, src)
+	if !ok || len(errs) != 0 {
+		t.Fatalf("expected break branch to preserve loop stack shape; errs=%v", errs)
+	}
+}
+
 func TestTypeCheckProgramRegisteredBuiltins(t *testing.T) {
 	// Sanity: a small program using only registered builtins flow-checks.
 	cases := []string{

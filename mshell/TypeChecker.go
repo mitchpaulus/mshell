@@ -62,7 +62,8 @@ func NewVarEnv() VarEnv {
 // declared signature matters; Phase 2 of the deferred effect work adds
 // declared/inferred fail and pure tracking.
 type FnContext struct {
-	Sig QuoteSig
+	Sig       QuoteSig
+	SawReturn bool
 }
 
 // Checker is the top-level type-checking session. It owns the arena, name
@@ -75,6 +76,7 @@ type Checker struct {
 	vars   VarEnv
 	subst  Substitution
 	errors []TypeError
+	diverged bool
 
 	builtins     map[TokenType][]QuoteSig
 	nameBuiltins map[NameId][]QuoteSig
@@ -136,6 +138,9 @@ func (c *Checker) CheckTokens(tokens []Token) {
 // in the builtin table apply the corresponding sig. Anything else is
 // reported as an unknown identifier (Phase 2 surface is intentionally tiny).
 func (c *Checker) checkOne(tok Token) {
+	if c.diverged {
+		return
+	}
 	switch tok.Type {
 	case INTEGER:
 		c.stack.Push(TidInt)
@@ -200,6 +205,9 @@ func (c *Checker) checkOne(tok Token) {
 		c.stack.items = c.stack.items[:c.stack.Len()-1]
 		sig := c.arena.QuoteSig(top)
 		c.applySig(sig, tok)
+		if sig.Diverges {
+			c.diverged = true
+		}
 		return
 	case ENVRETREIVE:
 		// `$VAR`: read an environment variable. Always pushes str
@@ -246,6 +254,15 @@ func (c *Checker) checkOne(tok Token) {
 	}
 
 	if sigs, ok := c.builtins[tok.Type]; ok {
+		switch tok.Type {
+		case IFF:
+			if c.tryIff(tok) {
+				return
+			}
+		case BREAK, CONTINUE:
+			c.diverged = true
+			return
+		}
 		if tok.Type == LOOP && c.tryLoop(tok) {
 			return
 		}
@@ -263,6 +280,9 @@ func (c *Checker) checkOne(tok Token) {
 	}
 
 	if tok.Type == LITERAL {
+		if tok.Lexeme == "return" && c.tryReturn(tok) {
+			return
+		}
 		if tok.Lexeme == "append" && c.tryAppend() {
 			return
 		}
@@ -321,6 +341,39 @@ func (c *Checker) checkOne(tok Token) {
 	// overload" diagnostics that would only restate the original
 	// gap.
 	c.stack.Push(c.subst.FreshVar(c.arena))
+}
+
+func (c *Checker) tryReturn(tok Token) bool {
+	if c.currentFn == nil {
+		return false
+	}
+	c.currentFn.SawReturn = true
+	expected := c.currentFn.Sig.Outputs
+	if c.stack.Len() < len(expected) {
+		c.errors = append(c.errors, TypeError{
+			Kind: TErrStackUnderflow,
+			Pos:  tok,
+			Hint: "return",
+		})
+		c.diverged = true
+		return true
+	}
+	base := c.stack.Len() - len(expected)
+	for i, want := range expected {
+		got := c.stack.items[base+i]
+		if !c.unify(got, want) {
+			c.errors = append(c.errors, TypeError{
+				Kind:     TErrTypeMismatch,
+				Pos:      tok,
+				Expected: want,
+				Actual:   got,
+				ArgIndex: i,
+			})
+		}
+	}
+	c.stack.items = c.stack.items[:base]
+	c.diverged = true
+	return true
 }
 
 func (c *Checker) tryAppend() bool {
@@ -387,6 +440,83 @@ func (c *Checker) tryGet(tok Token) bool {
 	c.stack.items = c.stack.items[:c.stack.Len()-2]
 	c.stack.Push(c.arena.MakeMaybe(value))
 	return true
+}
+
+func (c *Checker) tryIff(tok Token) bool {
+	if c.stack.Len() < 2 {
+		return false
+	}
+	falseQuote := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-1])
+	falseNode := c.arena.Node(falseQuote)
+	if falseNode.Kind != TKQuote {
+		return false
+	}
+	second := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-2])
+	secondNode := c.arena.Node(second)
+
+	var trueQuote TypeId
+	var hasFalse bool
+	var cond TypeId
+	var baseLen int
+	if secondNode.Kind == TKQuote {
+		if c.stack.Len() < 3 {
+			return false
+		}
+		hasFalse = true
+		trueQuote = second
+		cond = c.stack.items[c.stack.Len()-3]
+		baseLen = c.stack.Len() - 3
+	} else {
+		trueQuote = falseQuote
+		cond = c.stack.items[c.stack.Len()-2]
+		baseLen = c.stack.Len() - 2
+	}
+
+	if !c.isBoolOrInt(cond) {
+		c.errors = append(c.errors, TypeError{
+			Kind:     TErrTypeMismatch,
+			Pos:      tok,
+			Expected: TidBool,
+			Actual:   cond,
+			ArgIndex: 0,
+		})
+	}
+
+	c.stack.items = c.stack.items[:baseLen]
+	snap := c.Snapshot()
+
+	c.applyQuoteArm(trueQuote, tok)
+	arms := []BranchArm{c.CaptureArm(c.diverged)}
+
+	if hasFalse {
+		c.Fork(snap)
+		c.applyQuoteArm(falseQuote, tok)
+		arms = append(arms, c.CaptureArm(c.diverged))
+	} else {
+		c.Fork(snap)
+		arms = append(arms, c.CaptureArm(false))
+	}
+
+	c.ReconcileArms(arms, tok)
+	return true
+}
+
+func (c *Checker) applyQuoteArm(quote TypeId, tok Token) {
+	if c.arena.Kind(quote) != TKQuote {
+		c.errors = append(c.errors, TypeError{
+			Kind:     TErrTypeMismatch,
+			Pos:      tok,
+			Expected: c.arena.MakeQuote(QuoteSig{}),
+			Actual:   quote,
+			Hint:     "iff branch",
+		})
+		return
+	}
+	sig := c.arena.QuoteSig(quote)
+	c.applySig(sig, tok)
+	if sig.Diverges {
+		c.diverged = true
+	}
 }
 
 func (c *Checker) tryLoop(tok Token) bool {
@@ -725,7 +855,7 @@ func (c *Checker) unifyQuote(gn, wn TypeNode) bool {
 	if len(gs.Inputs) != len(ws.Inputs) || len(gs.Outputs) != len(ws.Outputs) {
 		return false
 	}
-	if gs.Fail != ws.Fail || gs.Pure != ws.Pure {
+	if gs.Fail != ws.Fail || gs.Pure != ws.Pure || gs.Diverges != ws.Diverges {
 		return false
 	}
 	for i := range gs.Inputs {

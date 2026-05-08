@@ -130,15 +130,18 @@ func (c *Checker) checkDefBody(def *MShellDefinition, sig QuoteSig) {
 	// Save outer state.
 	outerStack := c.stack.items
 	outerVars := c.vars.bound
+	outerDiverged := c.diverged
 	prevFn := c.currentFn
 	cp := c.subst.Checkpoint()
 
 	c.stack.items = nil
 	c.vars.bound = make(map[NameId]TypeId)
+	c.diverged = false
 
 	// Fresh-rename generics for this body check.
 	instSig := c.Instantiate(sig)
-	c.currentFn = &FnContext{Sig: instSig}
+	fnCtx := &FnContext{Sig: instSig}
+	c.currentFn = fnCtx
 
 	// Push declared inputs.
 	for _, in := range instSig.Inputs {
@@ -152,7 +155,12 @@ func (c *Checker) checkDefBody(def *MShellDefinition, sig QuoteSig) {
 
 	// Verify the resulting stack matches declared outputs.
 	expected := instSig.Outputs
-	if c.stack.Len() != len(expected) {
+	if c.diverged || (fnCtx.SawReturn && c.stack.Len() == 0) {
+		// A path that has already returned is checked at the return
+		// site. During V1 we also accept a body with return sites and
+		// no residual fallthrough stack; exhaustive-return analysis is
+		// a later control-flow refinement.
+	} else if c.stack.Len() != len(expected) {
 		c.errors = append(c.errors, TypeError{
 			Kind: TErrTypeMismatch,
 			Pos:  def.NameToken,
@@ -179,6 +187,7 @@ func (c *Checker) checkDefBody(def *MShellDefinition, sig QuoteSig) {
 	c.subst.Rollback(cp)
 	c.stack.items = outerStack
 	c.vars.bound = outerVars
+	c.diverged = outerDiverged
 }
 
 func defBodyArityHint(name string, want, got int) string {
@@ -214,6 +223,9 @@ func intToStr(i int) string {
 // the walk doesn't cascade into garbage; this is acceptable while
 // the walker grows.
 func (c *Checker) checkParseItem(item MShellParseItem) {
+	if c.diverged {
+		return
+	}
 	switch it := item.(type) {
 
 	case *MShellTypeDecl:
