@@ -75,3 +75,23 @@ func TestHandleInputProcessesBufferedQuit(t *testing.T) {
 		t.Fatalf("cursor = %d, want 1", fm.cursor)
 	}
 }
+
+func TestEnterSelectedWindowsVolumeSwitchesCurrentDirectory(t *testing.T) {
+	fm := &FileManager{
+		showingWindowsVolumes: true,
+		entries: []os.DirEntry{
+			fileManagerVolumeEntry{name: "C:"},
+			fileManagerVolumeEntry{name: "F:"},
+		},
+		cursor: 1,
+	}
+
+	fm.enterSelected()
+
+	if fm.currentDir != `F:\` {
+		t.Fatalf("currentDir = %q, want %q", fm.currentDir, `F:\`)
+	}
+	if fm.showingWindowsVolumes {
+		t.Fatal("expected volume list to close after selecting a volume")
+	}
+}

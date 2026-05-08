@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"os/user"
@@ -43,6 +44,15 @@ type archiveListingEntry struct {
 	modified time.Time
 }
 
+type fileManagerVolumeEntry struct {
+	name string
+}
+
+func (e fileManagerVolumeEntry) Name() string               { return e.name }
+func (e fileManagerVolumeEntry) IsDir() bool                { return true }
+func (e fileManagerVolumeEntry) Type() fs.FileMode          { return fs.ModeDir }
+func (e fileManagerVolumeEntry) Info() (fs.FileInfo, error) { return nil, nil }
+
 // OneDrive may create this hidden lock/metadata file inside synced directories.
 // Hide it from the file manager so it does not clutter listings or previews.
 const oneDriveHiddenMetadataFileName = ".849C9593-D756-4E56-8D6E-42412F2A707B"
@@ -56,6 +66,7 @@ type FileManager struct {
 	entries    []os.DirEntry
 	cursor     int
 	offset     int
+	showingWindowsVolumes bool
 
 	hostname string
 	username string
@@ -342,7 +353,7 @@ func (fm *FileManager) schedulePreview() {
 		return
 	}
 	entry := fm.entries[fm.cursor]
-	path := filepath.Join(fm.currentDir, entry.Name())
+	path := fm.selectedEntryPath(entry)
 
 	if _, ok := fm.previewCache[path]; ok {
 		return // already cached
@@ -402,6 +413,7 @@ func (fm *FileManager) readModalKey() (byte, bool) {
 }
 
 func (fm *FileManager) loadDirectory() {
+	fm.showingWindowsVolumes = false
 	entries, err := os.ReadDir(fm.currentDir)
 	if err != nil {
 		fm.entries = nil
@@ -422,6 +434,63 @@ func (fm *FileManager) loadDirectory() {
 	fm.previewCache = make(map[string][]string)
 	fm.searchActive = false
 	fm.searchMatches = fm.searchMatches[:0]
+}
+
+func windowsVolumeRoot(name string) string {
+	return name + `\`
+}
+
+func windowsVolumeName(path string) string {
+	volumeName := filepath.VolumeName(path)
+	if len(volumeName) == 2 && volumeName[1] == ':' {
+		return strings.ToUpper(volumeName)
+	}
+	return ""
+}
+
+func isWindowsVolumeRoot(path string) bool {
+	if runtime.GOOS != "windows" {
+		return false
+	}
+	volumeName := windowsVolumeName(path)
+	if volumeName == "" {
+		return false
+	}
+	return filepath.Clean(path) == filepath.Clean(windowsVolumeRoot(volumeName))
+}
+
+func (fm *FileManager) selectedEntryPath(entry os.DirEntry) string {
+	if fm.showingWindowsVolumes {
+		return windowsVolumeRoot(entry.Name())
+	}
+	return filepath.Join(fm.currentDir, entry.Name())
+}
+
+func (fm *FileManager) showWindowsVolumes() {
+	fm.entries = mountedWindowsVolumes()
+	fm.previewCache = make(map[string][]string)
+	fm.searchActive = false
+	fm.searchMatches = fm.searchMatches[:0]
+	fm.showingWindowsVolumes = true
+	fm.cursor = 0
+	fm.offset = 0
+
+	currentVolume := windowsVolumeName(fm.currentDir)
+	for i, entry := range fm.entries {
+		if entry.Name() == currentVolume {
+			fm.cursor = i
+			fm.adjustScroll()
+			break
+		}
+	}
+}
+
+func (fm *FileManager) requireRealDirectory() bool {
+	if !fm.showingWindowsVolumes {
+		return true
+	}
+	fm.statusMsg = "Select a volume first."
+	return false
 }
 
 func (fm *FileManager) visibleRows() int {
@@ -479,7 +548,7 @@ func (fm *FileManager) leftPaneWidth() int {
 		if fm.entries[i].IsDir() {
 			nameLen++ // for '/'
 		}
-		entryPath := filepath.Join(fm.currentDir, fm.entries[i].Name())
+		entryPath := fm.selectedEntryPath(fm.entries[i])
 		if clipSet[entryPath] {
 			nameLen += 2 // indent for clipboard entries
 		}
@@ -583,7 +652,11 @@ func (fm *FileManager) render() {
 	}
 
 	// Header row
-	header := fmt.Sprintf(" %s@%s: %s", fm.username, fm.hostname, fm.currentDir)
+	headerDir := fm.currentDir
+	if fm.showingWindowsVolumes {
+		headerDir = "Windows volumes"
+	}
+	header := fmt.Sprintf(" %s@%s: %s", fm.username, fm.hostname, headerDir)
 
 	// Clipboard status suffix
 	clipStatus := ""
@@ -639,7 +712,7 @@ func (fm *FileManager) render() {
 				name += "/"
 			}
 
-			entryPath := filepath.Join(fm.currentDir, entry.Name())
+			entryPath := fm.selectedEntryPath(entry)
 			inCut := cutSet[entryPath]
 			inCopy := copySet[entryPath]
 			inClip := inCut || inCopy
@@ -822,7 +895,7 @@ func (fm *FileManager) getPreview() []string {
 	}
 
 	entry := fm.entries[fm.cursor]
-	path := filepath.Join(fm.currentDir, entry.Name())
+	path := fm.selectedEntryPath(entry)
 
 	if cached, ok := fm.previewCache[path]; ok {
 		return cached
@@ -1263,7 +1336,11 @@ func (fm *FileManager) handleInputEvent(buf []byte) (int, bool) {
 
 		// F5 = \033[15~
 		if len(buf) >= 5 && buf[2] == '1' && buf[3] == '5' && buf[4] == '~' {
-			fm.loadDirectory()
+			if fm.showingWindowsVolumes {
+				fm.showWindowsVolumes()
+			} else {
+				fm.loadDirectory()
+			}
 			fm.clampCursor()
 			fm.adjustScroll()
 			fm.lastKey = 0
@@ -1308,8 +1385,13 @@ func (fm *FileManager) handleInputEvent(buf []byte) (int, bool) {
 		fm.clampCursor()
 		fm.adjustScroll()
 	case 'e':
-		fm.openEditor()
+		if fm.requireRealDirectory() {
+			fm.openEditor()
+		}
 	case 'r':
+		if !fm.requireRealDirectory() {
+			return 1, false
+		}
 		fm.startRename()
 		return 1, false
 	case '/':
@@ -1322,8 +1404,13 @@ func (fm *FileManager) handleInputEvent(buf []byte) (int, bool) {
 	case 'N':
 		fm.searchPrev()
 	case 'd':
-		fm.clipboardCut()
+		if fm.requireRealDirectory() {
+			fm.clipboardCut()
+		}
 	case 'y':
+		if !fm.requireRealDirectory() {
+			return 1, false
+		}
 		if fm.lastKey == 'y' {
 			fm.clipboardCopy()
 			fm.lastKey = 0
@@ -1332,11 +1419,15 @@ func (fm *FileManager) handleInputEvent(buf []byte) (int, bool) {
 		fm.lastKey = 'y'
 		return 1, false
 	case 'p':
-		fm.clipboardPaste()
+		if fm.requireRealDirectory() {
+			fm.clipboardPaste()
+		}
 	case 'c':
 		clearClipboard()
 	case 'x':
-		fm.deleteEntry()
+		if fm.requireRealDirectory() {
+			fm.deleteEntry()
+		}
 	case 'm':
 		fm.pendingMark = true
 		return 1, false
@@ -1635,6 +1726,13 @@ func (fm *FileManager) enterSelected() {
 		return
 	}
 	entry := fm.entries[fm.cursor]
+	if fm.showingWindowsVolumes {
+		fm.currentDir = windowsVolumeRoot(entry.Name())
+		fm.cursor = 0
+		fm.offset = 0
+		fm.loadDirectory()
+		return
+	}
 	if !entry.IsDir() {
 		switch runtime.GOOS {
 		case "windows":
@@ -1652,6 +1750,13 @@ func (fm *FileManager) enterSelected() {
 }
 
 func (fm *FileManager) goParent() {
+	if fm.showingWindowsVolumes {
+		return
+	}
+	if isWindowsVolumeRoot(fm.currentDir) {
+		fm.showWindowsVolumes()
+		return
+	}
 	parent := filepath.Dir(fm.currentDir)
 	if parent == fm.currentDir {
 		return
