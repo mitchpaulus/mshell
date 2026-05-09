@@ -461,6 +461,29 @@ func TestTypeCheckProgramHigherOrderBuiltins(t *testing.T) {
 	}
 }
 
+func TestTypeCheckProgramFilterPredicateWithIndexer(t *testing.T) {
+	src := `"scripts" lsDir (isFile) filter (readFile lines :0: "env msh" in) filter drop`
+	errs, ok := parseAndCheck(t, src)
+	if !ok || len(errs) != 0 {
+		t.Fatalf("expected filter predicate with indexer to type-check; errs=%v", errs)
+	}
+}
+
+func TestTypeCheckProgramWritePathRejected(t *testing.T) {
+	errs, ok := parseAndCheck(t, "`file.txt` wl")
+	if ok {
+		t.Fatalf("expected path write to fail type checking; errs=%v", errs)
+	}
+}
+
+func TestTypeCheckProgramPrefixQuoteBodyChecked(t *testing.T) {
+	src := "[`file.txt`] each. f! @f wl end"
+	errs, ok := parseAndCheck(t, src)
+	if ok {
+		t.Fatalf("expected path write inside prefix quote to fail type checking; errs=%v", errs)
+	}
+}
+
 func TestTypeCheckProgramMapFilterTypeMismatch(t *testing.T) {
 	// filter wants (T -- bool); the quote produces an int instead.
 	src := `[1 2 3] (1 +) filter drop`

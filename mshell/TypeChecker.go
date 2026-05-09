@@ -310,6 +310,9 @@ func (c *Checker) checkOne(tok Token) {
 		if tok.Lexeme == "join" && c.tryGridJoin(tok) {
 			return
 		}
+		if c.tryRejectPathWrite(tok) {
+			return
+		}
 		nameId := c.names.Intern(tok.Lexeme)
 		if sigs, ok := c.nameBuiltins[nameId]; ok {
 			c.resolveAndApply(sigs, tok)
@@ -341,6 +344,30 @@ func (c *Checker) checkOne(tok Token) {
 	// overload" diagnostics that would only restate the original
 	// gap.
 	c.stack.Push(c.subst.FreshVar(c.arena))
+}
+
+func (c *Checker) tryRejectPathWrite(tok Token) bool {
+	switch tok.Lexeme {
+	case "wl", "wle", "w", "we":
+	default:
+		return false
+	}
+	if c.stack.Len() == 0 {
+		return false
+	}
+	top := c.subst.Apply(c.arena, c.stack.Top())
+	if top != TidPath {
+		return false
+	}
+	c.errors = append(c.errors, TypeError{
+		Kind:     TErrTypeMismatch,
+		Pos:      tok,
+		Expected: TidStr,
+		Actual:   top,
+		Hint:     "write does not accept path; use str first",
+	})
+	c.stack.items = c.stack.items[:c.stack.Len()-1]
+	return true
 }
 
 func (c *Checker) tryReturn(tok Token) bool {
@@ -871,9 +898,10 @@ func (c *Checker) unifyUnion(gn, wn TypeNode) bool {
 	return true
 }
 
-// unifyQuote unifies two quote signatures. In Phase 3 this is exact-arity,
-// pairwise unification of inputs and outputs. Fail/Pure flags must match
-// directly (always default in V1 — Phase-2-of-effects revisits this).
+// unifyQuote unifies two quote signatures. Inputs are contravariant
+// (the actual quote may accept a wider input type than the expected
+// context supplies), while outputs are covariant. Fail/Pure flags must
+// match directly (always default in V1 — Phase-2-of-effects revisits this).
 func (c *Checker) unifyQuote(gn, wn TypeNode) bool {
 	gs := c.arena.quoteSigs[gn.Extra]
 	ws := c.arena.quoteSigs[wn.Extra]
@@ -884,7 +912,7 @@ func (c *Checker) unifyQuote(gn, wn TypeNode) bool {
 		return false
 	}
 	for i := range gs.Inputs {
-		if !c.unify(gs.Inputs[i], ws.Inputs[i]) {
+		if !c.unify(ws.Inputs[i], gs.Inputs[i]) {
 			return false
 		}
 	}

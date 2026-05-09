@@ -304,7 +304,16 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 		return
 
 	case *MShellParsePrefixQuote:
-		// Treated like a no-op stack-wise for now.
+		funcName := it.StartToken.Lexeme
+		if len(funcName) > 0 && funcName[len(funcName)-1] == '.' {
+			funcName = funcName[:len(funcName)-1]
+		}
+		sig := c.InferQuoteSigItemsWithInputs(it.Items, c.prefixQuoteInputs(funcName))
+		c.stack.Push(c.arena.MakeQuote(sig))
+		callTok := it.StartToken
+		callTok.Type = LITERAL
+		callTok.Lexeme = funcName
+		c.checkOne(callTok)
 		return
 
 	case *MShellParseIfBlock:
@@ -439,6 +448,26 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 		c.stack.Push(c.arena.MakeMaybe(c.lookupGetterValueType(top, nameId)))
 		return
 	}
+}
+
+func (c *Checker) prefixQuoteInputs(funcName string) []TypeId {
+	switch funcName {
+	case "each", "filter", "map", "any", "all":
+	default:
+		return nil
+	}
+	if c.stack.Len() == 0 {
+		return nil
+	}
+	receiver := c.subst.Apply(c.arena, c.stack.Top())
+	node := c.arena.Node(receiver)
+	switch node.Kind {
+	case TKList:
+		return []TypeId{TypeId(node.A)}
+	case TKDict:
+		return []TypeId{TypeId(node.B)}
+	}
+	return nil
 }
 
 func (c *Checker) quoteOverloadCandidates(items []MShellParseItem) ([]QuoteSig, bool) {

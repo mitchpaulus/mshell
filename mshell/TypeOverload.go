@@ -34,6 +34,11 @@ package main
 // add an extra +1 to favor nominal matches over equivalent
 // structural ones.
 
+type viableOverload struct {
+	sig   QuoteSig
+	score int
+}
+
 func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 	if len(candidates) == 1 {
 		c.applySig(candidates[0], callSite)
@@ -51,11 +56,7 @@ func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 	stackSnap := c.Snapshot()
 	substSnap := c.subst.Checkpoint()
 
-	type viable struct {
-		sig   QuoteSig
-		score int
-	}
-	var ok []viable
+	var viable []viableOverload
 
 	for _, cand := range candidates {
 		c.Fork(stackSnap)
@@ -96,13 +97,13 @@ func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 				score -= 100
 			}
 		}
-		ok = append(ok, viable{sig: cand, score: score})
+		viable = append(viable, viableOverload{sig: cand, score: score})
 	}
 
 	c.Fork(stackSnap)
 	c.subst.Rollback(substSnap)
 
-	if len(ok) == 0 {
+	if len(viable) == 0 {
 		// In inferring mode (quote body), every candidate may drop
 		// purely because the stack is shorter than its arity. Hand
 		// off to the first candidate so applySig's underflow-as-
@@ -137,12 +138,12 @@ func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 
 	bestIdx := 0
 	tied := false
-	for i := 1; i < len(ok); i++ {
+	for i := 1; i < len(viable); i++ {
 		switch {
-		case ok[i].score > ok[bestIdx].score:
+		case viable[i].score > viable[bestIdx].score:
 			bestIdx = i
 			tied = false
-		case ok[i].score == ok[bestIdx].score:
+		case viable[i].score == viable[bestIdx].score:
 			tied = true
 		}
 	}
@@ -154,7 +155,7 @@ func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 		// resolution problem — picking the first candidate
 		// deterministically preserves stack shape without piling
 		// on diagnostics that only restate the upstream gap.
-		inputArity := len(ok[bestIdx].sig.Inputs)
+		inputArity := len(viable[bestIdx].sig.Inputs)
 		base := c.stack.Len() - inputArity
 		hasUnboundInput := base < 0
 		if base < 0 {
@@ -173,9 +174,55 @@ func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 				Pos:  callSite,
 				Hint: "multiple equally-specific overloads match",
 			})
+		} else if c.inferring {
+			if merged, ok := c.mergeInputOnlyOverloads(viable); ok {
+				c.applySig(merged, callSite)
+				return
+			}
 		}
 	}
-	c.applySig(ok[bestIdx].sig, callSite)
+	c.applySig(viable[bestIdx].sig, callSite)
+}
+
+func (c *Checker) mergeInputOnlyOverloads(candidates []viableOverload) (QuoteSig, bool) {
+	if len(candidates) < 2 {
+		return QuoteSig{}, false
+	}
+	first := candidates[0].sig
+	if len(first.Generics) != 0 {
+		return QuoteSig{}, false
+	}
+	inputs := make([][]TypeId, len(first.Inputs))
+	for i, in := range first.Inputs {
+		inputs[i] = append(inputs[i], in)
+	}
+	for _, candidate := range candidates[1:] {
+		sig := candidate.sig
+		if len(sig.Generics) != 0 ||
+			len(sig.Inputs) != len(first.Inputs) ||
+			len(sig.Outputs) != len(first.Outputs) ||
+			sig.Fail != first.Fail ||
+			sig.Pure != first.Pure ||
+			sig.Diverges != first.Diverges {
+			return QuoteSig{}, false
+		}
+		for i := range sig.Outputs {
+			if sig.Outputs[i] != first.Outputs[i] {
+				return QuoteSig{}, false
+			}
+		}
+		for i, in := range sig.Inputs {
+			inputs[i] = append(inputs[i], in)
+		}
+	}
+
+	merged := first
+	merged.Inputs = make([]TypeId, len(inputs))
+	for i, arms := range inputs {
+		merged.Inputs[i] = c.arena.MakeUnion(arms, 0)
+	}
+	merged.Outputs = append([]TypeId(nil), first.Outputs...)
+	return merged, true
 }
 
 // specificityScore counts how much "structural commitment" a type

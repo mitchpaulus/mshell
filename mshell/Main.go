@@ -662,10 +662,15 @@ func main() {
 			for _, e := range errs {
 				fmt.Fprintln(os.Stderr, e)
 			}
-			os.Exit(1)
 		}
 		if typeCheckOnly {
-			os.Exit(0)
+			if ok {
+				os.Exit(0)
+			}
+			os.Exit(1)
+		}
+		if !ok {
+			os.Exit(1)
 		}
 	}
 

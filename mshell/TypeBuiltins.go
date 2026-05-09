@@ -112,7 +112,7 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		}}
 	}
 
-	// ----- I/O (consume one of anything, no output) -----
+	// ----- I/O (consume one writable value, no output) -----
 
 	consumeAny := func() QuoteSig {
 		t := arena.MakeVar(0)
@@ -126,8 +126,6 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 	out[names.Intern("wle")] = []QuoteSig{consumeAny()}    // write line stderr
 	out[names.Intern("w")] = []QuoteSig{consumeAny()}      // write no newline
 	out[names.Intern("we")] = []QuoteSig{consumeAny()}     // write to stderr no newline
-	out[names.Intern("print")] = []QuoteSig{consumeAny()}  // write no newline
-	out[names.Intern("printe")] = []QuoteSig{consumeAny()} // write to stderr no newline
 
 	// wln : ( -- )  write just a newline
 	out[names.Intern("wln")] = []QuoteSig{{}}

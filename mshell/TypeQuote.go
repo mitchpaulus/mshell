@@ -76,12 +76,20 @@ func (c *Checker) InferQuoteSig(body []Token) QuoteSig {
 // during program checking call this entry point. Same fresh-stack /
 // underflow-as-fresh-var semantics; the difference is the walker.
 func (c *Checker) InferQuoteSigItems(body []MShellParseItem) QuoteSig {
+	return c.inferQuoteSigItemsWithInputs(body, nil)
+}
+
+func (c *Checker) InferQuoteSigItemsWithInputs(body []MShellParseItem, inputs []TypeId) QuoteSig {
+	return c.inferQuoteSigItemsWithInputs(body, inputs)
+}
+
+func (c *Checker) inferQuoteSigItemsWithInputs(body []MShellParseItem, initialInputs []TypeId) QuoteSig {
 	outerSnap := c.Snapshot()
 	outerInferring := c.inferring
 	outerInputs := c.inferInputs
 	outerDiverged := c.diverged
 
-	c.stack.items = c.stack.items[:0]
+	c.stack.items = append(c.stack.items[:0], initialInputs...)
 	// Inherit the outer var environment so the quote body can
 	// reference enclosing-scope bindings (`@i`, `@archive`, etc.).
 	// Quotes are closures — `loop`, `iff` arms, and standalone
@@ -102,7 +110,7 @@ func (c *Checker) InferQuoteSigItems(body []MShellParseItem) QuoteSig {
 		c.checkParseItem(item)
 	}
 
-	rawInputs := c.inferInputs
+	rawInputs := append(append([]TypeId(nil), c.inferInputs...), initialInputs...)
 	rawOutputs := append([]TypeId(nil), c.stack.items...)
 	rawBindings := quoteBindingDelta(outerSnap.vars, c.vars.bound)
 	diverged := c.diverged
