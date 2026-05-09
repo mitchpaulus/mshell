@@ -484,13 +484,14 @@ func (c *Checker) tryIff(tok Token) bool {
 
 	c.stack.items = c.stack.items[:baseLen]
 	snap := c.Snapshot()
+	allowedBindings := c.commonIffBindings(trueQuote, falseQuote, hasFalse)
 
-	c.applyQuoteArm(trueQuote, tok)
+	c.applyQuoteArm(trueQuote, tok, allowedBindings)
 	arms := []BranchArm{c.CaptureArm(c.diverged)}
 
 	if hasFalse {
 		c.Fork(snap)
-		c.applyQuoteArm(falseQuote, tok)
+		c.applyQuoteArm(falseQuote, tok, allowedBindings)
 		arms = append(arms, c.CaptureArm(c.diverged))
 	} else {
 		c.Fork(snap)
@@ -501,7 +502,7 @@ func (c *Checker) tryIff(tok Token) bool {
 	return true
 }
 
-func (c *Checker) applyQuoteArm(quote TypeId, tok Token) {
+func (c *Checker) applyQuoteArm(quote TypeId, tok Token, allowedBindings map[NameId]struct{}) {
 	if c.arena.Kind(quote) != TKQuote {
 		c.errors = append(c.errors, TypeError{
 			Kind:     TErrTypeMismatch,
@@ -514,9 +515,29 @@ func (c *Checker) applyQuoteArm(quote TypeId, tok Token) {
 	}
 	sig := c.arena.QuoteSig(quote)
 	c.applySig(sig, tok)
+	for name, t := range sig.Bindings {
+		if _, ok := allowedBindings[name]; ok {
+			c.vars.bound[name] = c.subst.Apply(c.arena, t)
+		}
+	}
 	if sig.Diverges {
 		c.diverged = true
 	}
+}
+
+func (c *Checker) commonIffBindings(trueQuote, falseQuote TypeId, hasFalse bool) map[NameId]struct{} {
+	out := make(map[NameId]struct{})
+	if !hasFalse || c.arena.Kind(trueQuote) != TKQuote || c.arena.Kind(falseQuote) != TKQuote {
+		return out
+	}
+	trueBindings := c.arena.QuoteSig(trueQuote).Bindings
+	falseBindings := c.arena.QuoteSig(falseQuote).Bindings
+	for name := range trueBindings {
+		if _, ok := falseBindings[name]; ok {
+			out[name] = struct{}{}
+		}
+	}
+	return out
 }
 
 func (c *Checker) tryLoop(tok Token) bool {

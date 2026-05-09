@@ -11,6 +11,7 @@ package main
 // See ai/type_checker.md for the full design.
 
 import (
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -142,6 +143,7 @@ type QuoteSig struct {
 	Fail     TypeId // Phase 2
 	Pure     bool   // Phase 2
 	Diverges bool   // return/break/continue style control flow
+	Bindings map[NameId]TypeId
 	Generics []TypeVarId
 }
 
@@ -561,6 +563,22 @@ func encodeQuoteKey(sig QuoteSig) string {
 		sb.WriteByte('D')
 	} else {
 		sb.WriteByte('-')
+	}
+	sb.WriteByte(';')
+	if len(sig.Bindings) > 0 {
+		names := make([]int, 0, len(sig.Bindings))
+		for name := range sig.Bindings {
+			names = append(names, int(name))
+		}
+		sort.Ints(names)
+		for i, name := range names {
+			if i > 0 {
+				sb.WriteByte(',')
+			}
+			sb.WriteString(strconv.FormatUint(uint64(name), 10))
+			sb.WriteByte('=')
+			sb.WriteString(strconv.FormatUint(uint64(sig.Bindings[NameId(name)]), 10))
+		}
 	}
 	sb.WriteByte(';')
 	for i, g := range sig.Generics {

@@ -49,6 +49,7 @@ func (c *Checker) InferQuoteSig(body []Token) QuoteSig {
 
 	rawInputs := c.inferInputs
 	rawOutputs := append([]TypeId(nil), c.stack.items...)
+	rawBindings := quoteBindingDelta(outerSnap.vars, c.vars.bound)
 	diverged := c.diverged
 
 	c.inferring = outerInferring
@@ -64,8 +65,9 @@ func (c *Checker) InferQuoteSig(body []Token) QuoteSig {
 	for i, out := range rawOutputs {
 		outputs[i] = c.subst.Apply(c.arena, out)
 	}
+	bindings := c.applyBindingTypes(rawBindings)
 
-	return QuoteSig{Inputs: inputs, Outputs: outputs, Diverges: diverged}
+	return QuoteSig{Inputs: inputs, Outputs: outputs, Diverges: diverged, Bindings: bindings}
 }
 
 // InferQuoteSigItems is the parse-tree variant of InferQuoteSig. The
@@ -102,6 +104,7 @@ func (c *Checker) InferQuoteSigItems(body []MShellParseItem) QuoteSig {
 
 	rawInputs := c.inferInputs
 	rawOutputs := append([]TypeId(nil), c.stack.items...)
+	rawBindings := quoteBindingDelta(outerSnap.vars, c.vars.bound)
 	diverged := c.diverged
 
 	c.inferring = outerInferring
@@ -117,6 +120,28 @@ func (c *Checker) InferQuoteSigItems(body []MShellParseItem) QuoteSig {
 	for i, out := range rawOutputs {
 		outputs[i] = c.subst.Apply(c.arena, out)
 	}
+	bindings := c.applyBindingTypes(rawBindings)
 
-	return QuoteSig{Inputs: inputs, Outputs: outputs, Diverges: diverged}
+	return QuoteSig{Inputs: inputs, Outputs: outputs, Diverges: diverged, Bindings: bindings}
+}
+
+func quoteBindingDelta(before, after map[NameId]TypeId) map[NameId]TypeId {
+	delta := make(map[NameId]TypeId)
+	for name, afterType := range after {
+		if beforeType, ok := before[name]; !ok || beforeType != afterType {
+			delta[name] = afterType
+		}
+	}
+	return delta
+}
+
+func (c *Checker) applyBindingTypes(bindings map[NameId]TypeId) map[NameId]TypeId {
+	if len(bindings) == 0 {
+		return nil
+	}
+	out := make(map[NameId]TypeId, len(bindings))
+	for name, t := range bindings {
+		out[name] = c.subst.Apply(c.arena, t)
+	}
+	return out
 }

@@ -609,3 +609,51 @@ func TestTypeCheckProgramAtRetrieveUnknown(t *testing.T) {
 		t.Fatalf("expected unknown-identifier @nope error; errs=%v", errs)
 	}
 }
+
+func TestTypeCheckProgramIffMergesCommonQuoteBindings(t *testing.T) {
+	src := `
+true
+(
+    "tmp" local!
+    "a" path!
+)
+(
+    "b" path!
+)
+iff
+@path wl
+`
+	errs, ok := parseAndCheck(t, src)
+	if !ok || len(errs) != 0 {
+		t.Fatalf("expected common iff quote binding to be visible; errs=%v", errs)
+	}
+}
+
+func TestTypeCheckProgramIffDoesNotExposeOneSidedQuoteBinding(t *testing.T) {
+	src := `
+true
+(
+    "tmp" local!
+    "a" path!
+)
+(
+    "b" path!
+)
+iff
+@local
+`
+	errs, ok := parseAndCheck(t, src)
+	if ok {
+		t.Fatalf("expected one-sided iff quote binding to remain local")
+	}
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e, "unknown identifier") && strings.Contains(e, "@local") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected unknown-identifier @local error; errs=%v", errs)
+	}
+}

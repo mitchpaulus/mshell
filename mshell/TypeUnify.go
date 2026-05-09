@@ -311,12 +311,20 @@ func (c *Checker) Instantiate(sig QuoteSig) QuoteSig {
 	for i, out := range sig.Outputs {
 		freshOut[i] = c.renameVars(out, rename)
 	}
+	var freshBindings map[NameId]TypeId
+	if len(sig.Bindings) > 0 {
+		freshBindings = make(map[NameId]TypeId, len(sig.Bindings))
+		for name, t := range sig.Bindings {
+			freshBindings[name] = c.renameVars(t, rename)
+		}
+	}
 	return QuoteSig{
 		Inputs:   freshIn,
 		Outputs:  freshOut,
 		Fail:     sig.Fail,
 		Pure:     sig.Pure,
 		Diverges: sig.Diverges,
+		Bindings: freshBindings,
 		// Generics intentionally dropped: instantiation consumes them.
 	}
 }
@@ -406,6 +414,17 @@ func (c *Checker) renameVars(t TypeId, rename map[TypeVarId]TypeId) TypeId {
 				changed = true
 			}
 		}
+		var bindings map[NameId]TypeId
+		if len(sig.Bindings) > 0 {
+			bindings = make(map[NameId]TypeId, len(sig.Bindings))
+			for name, bindingType := range sig.Bindings {
+				renamed := c.renameVars(bindingType, rename)
+				bindings[name] = renamed
+				if renamed != bindingType {
+					changed = true
+				}
+			}
+		}
 		if !changed {
 			return t
 		}
@@ -415,6 +434,7 @@ func (c *Checker) renameVars(t TypeId, rename map[TypeVarId]TypeId) TypeId {
 			Fail:     sig.Fail,
 			Pure:     sig.Pure,
 			Diverges: sig.Diverges,
+			Bindings: bindings,
 			Generics: nil,
 		})
 	case TKOverloadedQuote:
