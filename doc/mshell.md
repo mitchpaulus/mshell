@@ -801,6 +801,7 @@ end wl # Output: 11
 - `mshFileManager`: Open the built-in file manager.
    Pops a starting directory from the stack.
    On exit, changes the working directory to the directory the user navigated to.
+   On Windows, pressing `h` at the root of a drive shows the mounted drive letters so you can switch volumes.
    The preview pane short-circuits common binary extensions and shows first-level contents for `.zip` and `.tar.gz` archives. `(str -- )`
 - `writeFile`: Write string to file (UTF-8). Overwrites file if it exists. `(str content str file -- )`
 - `appendFile`: Append string to file (UTF-8). `(str content str file -- )`

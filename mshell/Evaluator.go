@@ -1341,12 +1341,18 @@ func (state *EvalState) processTokenToken(t Token, frame *EvaluationFrame, frame
 	}
 
 	if t.Type == BREAK {
+		if state.LoopDepth == 0 {
+			return state.FailWithMessage(fmt.Sprintf("%d:%d: break used outside of loop.\n", t.Line, t.Column))
+		}
 		// Handle break by unwinding frames
 		state.handleBreak(frames, 1)
 		return SimpleSuccess()
 	}
 
 	if t.Type == CONTINUE {
+		if state.LoopDepth == 0 {
+			return state.FailWithMessage(fmt.Sprintf("%d:%d: continue used outside of loop.\n", t.Line, t.Column))
+		}
 		// Handle continue by unwinding to loop
 		state.handleContinue(frames)
 		return SimpleSuccess()
@@ -6839,14 +6845,8 @@ MainLoop:
 								return state.FailWithMessage(err.Error())
 							}
 
-							if !result.Success {
+							if result.ShouldPassResultUpStack() {
 								return result
-							}
-							if result.ExitCalled {
-								return result
-							}
-							if result.BreakNum > 0 {
-								break
 							}
 
 							if len(mapStack) == 0 {
@@ -7070,14 +7070,8 @@ MainLoop:
 							if err != nil {
 								return state.FailWithMessage(err.Error())
 							}
-							if !result.Success {
+							if result.ShouldPassResultUpStack() {
 								return result
-							}
-							if result.ExitCalled {
-								return result
-							}
-							if result.BreakNum > 0 {
-								break
 							}
 
 							if len(filterStack) == 0 {
@@ -7126,14 +7120,8 @@ MainLoop:
 							if err != nil {
 								return state.FailWithMessage(err.Error())
 							}
-							if result.ExitCalled {
+							if result.ShouldPassResultUpStack() {
 								return result
-							}
-							if result.BreakNum > 0 {
-								break
-							}
-							if result.Continue {
-								continue
 							}
 						}
 					case *MShellGrid, *MShellGridView:
@@ -7162,17 +7150,8 @@ MainLoop:
 							if err != nil {
 								return state.FailWithMessage(err.Error())
 							}
-							if !result.Success {
+							if result.ShouldPassResultUpStack() {
 								return result
-							}
-							if result.ExitCalled {
-								return result
-							}
-							if result.BreakNum > 0 {
-								break
-							}
-							if result.Continue {
-								continue
 							}
 						}
 					default:
@@ -8987,8 +8966,14 @@ MainLoop:
 				// return EvalResult{true, breakDiff - 1, 0, false}
 				// }
 			} else if t.Type == BREAK { // Token Type
+				if state.LoopDepth == 0 {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: break used outside of loop.\n", t.Line, t.Column))
+				}
 				return EvalResult{true, false, 1, 0, false}
 			} else if t.Type == CONTINUE { // Token Type
+				if state.LoopDepth == 0 {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: continue used outside of loop.\n", t.Line, t.Column))
+				}
 				return EvalResult{true, true, 0, 0, false}
 			} else if t.Type == EQUALS { // Token Type
 				obj1, err := stack.Pop()

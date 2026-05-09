@@ -6,6 +6,7 @@ tests/quote_both_redirect_append.txt
 tests/quote_stderr_append.txt
 tests/quote_stderr_redirect.txt
 tests/test_quote_stderr.txt
+tests/msh-scripts/
 
 tests/msh-scripts/
 
