@@ -189,12 +189,6 @@ func (t TokenType) String() string {
 		return "STARTINDEXER"
 	case SLICEINDEXER:
 		return "SLICEINDEXER"
-	case STDOUTLINES:
-		return "STDOUTLINES"
-	case STDOUTSTRIPPED:
-		return "STDOUTSTRIPPED"
-	case STDOUTCOMPLETE:
-		return "STDOUTCOMPLETE"
 	case TILDEEXPANSION:
 		return "TILDEEXPANSION"
 	case STOP_ON_ERROR:
