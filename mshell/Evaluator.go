@@ -8083,6 +8083,9 @@ MainLoop:
 				if asList, ok := obj1.(*MShellList); ok {
 					asList.StdoutBehavior = STDOUT_COMPLETE
 					stack.Push(asList)
+				} else if asPipe, ok := obj1.(*MShellPipe); ok {
+					asPipe.StdoutBehavior = STDOUT_COMPLETE
+					stack.Push(asPipe)
 				} else {
 					obj2, err := stack.Pop()
 					if err != nil {
@@ -9190,42 +9193,6 @@ MainLoop:
 				}
 
 				stack.Push(result)
-			} else if t.Type == STDOUTLINES || t.Type == STDOUTSTRIPPED || t.Type == STDOUTCOMPLETE { // Token Type
-				obj, err := stack.Pop()
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot set stdout behavior to lines on an empty stack.\n", t.Line, t.Column))
-				}
-
-				switch objTyped := obj.(type) {
-				case *MShellList:
-					list := objTyped
-					switch t.Type {
-					case STDOUTLINES:
-						list.StdoutBehavior = STDOUT_LINES
-					case STDOUTSTRIPPED:
-						list.StdoutBehavior = STDOUT_STRIPPED
-					case STDOUTCOMPLETE:
-						list.StdoutBehavior = STDOUT_COMPLETE
-					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Type))
-					}
-					stack.Push(list)
-				case *MShellPipe:
-					pipe := objTyped
-					switch t.Type {
-					case STDOUTLINES:
-						pipe.StdoutBehavior = STDOUT_LINES
-					case STDOUTSTRIPPED:
-						pipe.StdoutBehavior = STDOUT_STRIPPED
-					case STDOUTCOMPLETE:
-						pipe.StdoutBehavior = STDOUT_COMPLETE
-					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' yet.\n", t.Line, t.Column, t.Type))
-					}
-					stack.Push(pipe)
-				default:
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot set stdout behavior on a %s.\n", t.Line, t.Column, obj.TypeName()))
-				}
 			} else if t.Type == STOP_ON_ERROR { // Token Type
 				state.StopOnError = true
 			} else if t.Type == FLOAT { // Token Type
