@@ -32,7 +32,6 @@ type CliCommand int
 const (
 	CLILEX CliCommand = iota
 	CLIPARSE
-	CLITYPECHECK
 	CLIEXECUTE
 	CLIHTML
 )
@@ -330,8 +329,6 @@ func main() {
 		if arg == "--lex" {
 			command = CLILEX
 			// printLex = true
-		} else if arg == "--typecheck" {
-			command = CLITYPECHECK
 		} else if arg == "--check-types" {
 			checkTypes = true
 		} else if arg == "--type-check-only" {
@@ -639,22 +636,6 @@ func main() {
 	allDefinitions = append(allDefinitions, startupDefinitions...)
 	allDefinitions = append(allDefinitions, file.Definitions...)
 	state.AddCompletionDefinitions(file.Definitions)
-
-	if command == CLITYPECHECK {
-		var typeStack MShellTypeStack
-		typeStack = make([]MShellType, 0)
-		typeCheckResult := TypeCheck(file.Items, typeStack, allDefinitions, false)
-
-		for _, typeError := range typeCheckResult.Errors {
-			fmt.Fprintf(os.Stderr, "%s", typeError)
-		}
-
-		if len(typeCheckResult.Errors) > 0 {
-			os.Exit(1)
-		} else {
-			os.Exit(0)
-		}
-	}
 
 	if checkTypes {
 		errs, ok := TypeCheckProgram(file, startupDefinitions)

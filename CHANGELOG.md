@@ -65,6 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - On Windows, pressing `h` at the root of a drive in the file manager now shows mounted drive letters so you can switch volumes.
 - `match` arm separators now control subject consumption explicitly: `:` consumes the matched subject and `:>` preserves it, independent of pattern kind or bindings
 - `updateCol` now accepts `GridView`, materializes a new `Grid` from the viewed rows, retypes the result columns, and leaves the backing `Grid` unchanged.
+- Completely removed the concept of `o`, `oc`, and `os`.
 
 
 ## v0.13.0 - 2026-04-07
