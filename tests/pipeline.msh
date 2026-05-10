@@ -13,10 +13,10 @@
 [
     [printf "hello\\nEarth!\\n"]
     [sed "s/Earth/World/"]
-] | os ; wl
+] | * ; chomp wl
 
-# Swapping order of | and os shouldn't matter
+# Swapping order of | and * shouldn't matter
 [
     [printf "hello\\nEarth!\\n"]
     [sed "s/Earth/World/"]
-]  os | ; wl
+]  * | ; chomp wl

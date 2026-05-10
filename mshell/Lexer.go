@@ -58,9 +58,6 @@ const (
 	ENDINDEXER
 	STARTINDEXER
 	SLICEINDEXER
-	STDOUTLINES
-	STDOUTSTRIPPED
-	STDOUTCOMPLETE
 	TILDEEXPANSION
 	STOP_ON_ERROR
 	DEF
@@ -543,18 +540,6 @@ func (l *Lexer) literalOrKeywordType() TokenType {
 		return l.checkKeyword(1, "atch", MATCH)
 	case 'n':
 		return l.checkKeyword(1, "ot", NOT)
-	case 'o':
-		if l.curLen() == 1 {
-			return STDOUTLINES
-		}
-
-		c := l.input[l.start+1]
-		switch c {
-		case 'c':
-			return l.checkKeyword(2, "", STDOUTCOMPLETE)
-		case 's':
-			return l.checkKeyword(2, "", STDOUTSTRIPPED)
-		}
 	case 'r':
 		return l.checkKeyword(1, "ead", READ)
 	case 's':
