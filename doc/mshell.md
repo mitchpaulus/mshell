@@ -757,7 +757,8 @@ end wl # Output: 11
   - `'thousandsSep'` (str): separator (default `","`, only applied when `'grouping'` is provided).
   - `'grouping'` (list[int]): LC_NUMERIC-style group sizes (reused from the end); if `'thousandsSep'` is set without `'grouping'`, `[3]` is assumed.
 - `countSubStr`: Count occurrences of substring in string. `(str str -- int)`
-- `take`: Take first n characters from string. `(str int -- str)`
+- `skip`: Skip first n characters from string using the same indexing logic as string slicing. `(str int -- str)`
+- `take`: Take first n characters from string using the same indexing logic as string slicing. `(str int -- str)`
 - `base64encode`: Encode binary data as base64. `(binary -- str)`
 - `base64decode`: Decode base64 string into binary data. `(str -- binary)`
 - `utf8Str`: Decode UTF-8 bytes into a string. `(binary -- str)`
@@ -789,7 +790,7 @@ end wl # Output: 11
 - `linearSearchIndex`: Return the zero-based index of the first element that satisfies the predicate, or `none` if nothing matches. `([a] (a -- bool) -- Maybe[int])`
 - `any`: Check if any element in list satisfies a condition, `([a] (a -- bool) -- bool)`
 - `all`: Check if all elements in list satisfy a condition, `([a] (a -- bool) -- bool)`
-- `skip`: Skip first n elements of list, `(list int -- list)`
+- `skip`: Skip first n elements of list, or first n characters of string. `(list int -- list)` / `(str int -- str)`
 - `uniq`: Remove duplicate elements from list. Works for all non-compound types. `([a] -- [a])`
 - `zip`: Zip two lists together. If the two list are different lengths, resulting list will be the same length as the shorter of the two lists. `([a] [b] (a b -- c) -- [c])`
 - `concat`: Flatten list of lists one level. Useful for things like a `flatMap`, which can be defined like `map concat`. `([[a]] -- [a])`
@@ -799,7 +800,7 @@ end wl # Output: 11
 - `groupBy`: Groups items of a list into a dictionary based on a key function. The key function should take each item as input and produce a string.
   The output is a dictionary with the unique keys and values that are lists of the corresponding items. `([a] (a -- str) -- dict)`
 - `listToDict`: Transform a list into a dictionary with a key and value selector function. `([a] (a -- b) (a -- c) -- { b: c })`
-- `take`: Take the first `n` number of elements from list. `([a] int -- [a])`
+- `take`: Take the first `n` number of elements from list, or first n characters of string. `([a] int -- [a])` / `(str int -- str)`
 - `repeat`: Build a list by repeating the value the requested number of times. `(a int -- [a])`
 - `chunk`: Group a list into consecutive sublists of size `n`. The final chunk may be shorter if the list length isn't divisible by `n`. `([a] int -- [[a]])`
 - `pop`: Pop the final element off the list. Returns a Maybe, `none` for the empty list. Leaves the modified list on the stack. `([a] -- [a] a)`
