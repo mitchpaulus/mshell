@@ -4889,37 +4889,6 @@ MainLoop:
 					} else {
 						stack.Push(&Maybe{obj: MShellBinary(data)})
 					}
-				} else if t.Lexeme == "skip" {
-					obj1, obj2, err := stack.Pop2(t)
-					if err != nil {
-						return state.FailWithMessage(err.Error())
-					}
-
-					intVal, ok := obj1.(MShellInt)
-					if !ok {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot skip a %s.\n", t.Line, t.Column, obj1.TypeName()))
-					}
-
-					if intVal.Value < 0 {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot skip a negative number of items (%d).\n", t.Line, t.Column, intVal.Value))
-					}
-
-					var length int
-					switch obj2Typed := obj2.(type) {
-					case *MShellList:
-						length = len(obj2Typed.Items)
-					case MShellString:
-						length = len(obj2Typed.Content)
-					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot skip on a %s.\n", t.Line, t.Column, obj2.TypeName()))
-					}
-
-					newObj, err := obj2.SliceStart(min(intVal.Value, length))
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
-					}
-
-					stack.Push(newObj)
 				} else if t.Lexeme == "e" || t.Lexeme == "ec" || t.Lexeme == "es" {
 					// Token Type
 					obj, err := stack.Pop()
