@@ -671,7 +671,7 @@ end wl # Output: 11
 - `repeat`: Create a list containing the provided value repeated `n` times. `(a int -- [a])`
 - `binPaths`: Puts a list of lists with 2 items, first is the executable name, second is the full path to the executable. `(-- [[str]])`
 - `urlEncode`: URL-encode a string or dictionary of parameters. `(str|dict -- str)`
-- `type`: Return the type name of the top stack item `(a -- str)`
+- `typeof`: Return the type name of the top stack item `(a -- str)`
 
 
 ## File/Directory Functions

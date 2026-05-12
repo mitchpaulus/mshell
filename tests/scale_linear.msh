@@ -1,6 +1,6 @@
-0 [0 10] [0 100] scaleLinear x str wl
-10 [0 10] [0 100] scaleLinear x str wl
-5 [0 10] [0 100] scaleLinear x str wl
--5 [-10 0] [0 1] scaleLinear x str wl
-0 [10 0] [0 100] scaleLinear x str wl
-[0 2.5 5] [0 5] [0 10] scaleLinear map (str) map " " join wl
+0.0 [0 10] [0 100] scaleLinear x str wl
+10.0 [0 10] [0 100] scaleLinear x str wl
+5.0 [0 10] [0 100] scaleLinear x str wl
+-5.0 [-10 0] [0 1] scaleLinear x str wl
+0.0 [10 0] [0 100] scaleLinear x str wl
+[0.0 2.5 5.0] [0 5] [0 10] scaleLinear map (str) map " " join wl

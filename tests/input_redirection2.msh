@@ -1,0 +1,6 @@
+['a' 'b' 'c'] ('a' = ) filter list!
+['cat'] * @list unlines < ! output!
+@output w
+# This test was written because the dumb AI couldn't figure out the type checking for this.
+# Originally failing with:
+# type error at line 2, column 25: no matching overload for '<': no listed signature accepts the current stack

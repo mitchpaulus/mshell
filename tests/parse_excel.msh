@@ -6,7 +6,7 @@
         2unpack row!, rowNum!
         @row 1 enumerateN each.
             2unpack cell!, colNum!
-            $"{@rowNum}:{@colNum}:{@cell type}|{@cell str}" wl
+            $"{@rowNum}:{@colNum}:{@cell typeof}|{@cell str}" wl
         end
     "---" wl
     end

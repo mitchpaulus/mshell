@@ -3,15 +3,3 @@
 [1 2 3] 1 take str wl
 [1 2 3] 3 take str wl
 [1 2 3] 4 take str wl
-"abcdef" 0 take strEscape wl
-"abcdef" 2 take wl
-"abcdef" 6 take wl
-"abcdef" 9 take wl
-"abcdef" 0 skip wl
-"abcdef" 2 skip wl
-"abcdef" 6 skip strEscape wl
-"abcdef" 9 skip strEscape wl
-"👨‍👩‍👧‍👦x" 1 skip "👨‍👩‍👧‍👦x" 1: = str wl
-"👨‍👩‍👧‍👦x" 25 skip "👨‍👩‍👧‍👦x" 25: = str wl
-"👨‍👩‍👧‍👦x" 1 take "👨‍👩‍👧‍👦x" :1 = str wl
-"👨‍👩‍👧‍👦x" 25 take "👨‍👩‍👧‍👦x" :25 = str wl

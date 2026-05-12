@@ -13,8 +13,8 @@
 ["region"]
 [
     { "name": "n", "agg": (gridRows) }
-    { "name": "sales_total", "meta": { "unit": "USD" }, "agg": ("sales" gridCol sum) }
-    { "name": "qty_total", "agg": ("qty" gridCol sum) }
+    { "name": "sales_total", "meta": { "unit": "USD" }, "agg": ("sales" gridCol sumInt) }
+    { "name": "qty_total", "agg": ("qty" gridCol sumInt) }
 ]
 groupBy grouped!
 @grouped toJson wl
@@ -48,7 +48,7 @@ groupBy toJson wl
 [| sales; 10; 5; 7 |]
 []
 [
-    { "name": "total", "agg": ("sales" gridCol sum) }
+    { "name": "total", "agg": ("sales" gridCol sumInt) }
 ]
 groupBy toJson wl
 
@@ -90,5 +90,5 @@ groupBy emptyNoKey!
 ]
 groupBy typedGrouped!
 @typedGrouped "k" gridCol str wl
-@typedGrouped "k" gridCol (type) map str wl
+@typedGrouped "k" gridCol (typeof) map str wl
 @typedGrouped "n" gridCol str wl

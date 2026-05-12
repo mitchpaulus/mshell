@@ -152,6 +152,11 @@ end
 
 # sum (list -- value)
 def sum ([float] -- float)
+    (+) 0.0 rot foldl
+end
+
+# sum (list -- value)
+def sumInt ([int] -- int)
     (+) 0 rot foldl
 end
 
