@@ -17,7 +17,7 @@ import (
 )
 
 func TestHoverRequestForBuiltin(t *testing.T) {
-	path := filepath.Join("..", "tests", "stack_ops.msh")
+	path := filepath.Join("..", "tests", "success", "stack_ops.msh")
 	content, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("failed to read test document: %v", err)
@@ -34,7 +34,7 @@ func TestHoverRequestForBuiltin(t *testing.T) {
 		t.Fatalf("expected to find 'swap' in line %d of %s", lineIndex+1, path)
 	}
 
-	uri := protocol.DocumentURI("file:///tests/stack_ops.msh")
+	uri := protocol.DocumentURI("file:///tests/success/stack_ops.msh")
 
 	clientReader, clientWriter := io.Pipe()
 	serverReader, serverWriter := io.Pipe()
