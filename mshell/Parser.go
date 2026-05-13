@@ -1551,64 +1551,62 @@ func (parser *MShellParser) ParseTypeQuote() (*TypeQuote, error) {
 	return &typeQuote, nil
 }
 
-func (parser *MShellParser) ParseTypeList() (*TypeHomogeneousList, error) {
+func (parser *MShellParser) ParseTypeList() (MShellType, error) {
 	err := parser.Match(parser.curr, LEFT_SQUARE_BRACKET)
 	if err != nil {
 		return nil, err
 	}
 
-	// Single type list
-	var listType MShellType
+	types := []MShellType{}
 
-	// Parse type
-	switch parser.curr.Type {
-	case TYPEINT:
-		listType = TypeInt{}
-		parser.NextToken()
-	case TYPEFLOAT:
-		listType = TypeInt{}
-		parser.NextToken()
-	case STR:
-		listType = TypeString{}
-		parser.NextToken()
-	case TYPEBOOL:
-		listType = TypeBool{}
-		parser.NextToken()
-	case AMPERSAND:
-		// Parse tuple/heterogeneous list
-		typeTuple, err := parser.ParseTypeTuple()
-		if err != nil {
-			return nil, err
+	for parser.curr.Type != RIGHT_SQUARE_BRACKET {
+		var t MShellType
+		switch parser.curr.Type {
+		case TYPEINT:
+			t = TypeInt{}
+			parser.NextToken()
+		case TYPEFLOAT:
+			t = TypeFloat{}
+			parser.NextToken()
+		case STR:
+			t = TypeString{}
+			parser.NextToken()
+		case TYPEBOOL:
+			t = TypeBool{}
+			parser.NextToken()
+		case AMPERSAND:
+			tt, err := parser.ParseTypeTuple()
+			if err != nil {
+				return nil, err
+			}
+			t = tt
+		case LEFT_SQUARE_BRACKET:
+			tl, err := parser.ParseTypeList()
+			if err != nil {
+				return nil, err
+			}
+			t = tl
+		case LEFT_PAREN:
+			tq, err := parser.ParseTypeQuote()
+			if err != nil {
+				return nil, err
+			}
+			t = tq
+		case LEFT_CURLY:
+			td, err := parser.ParseTypeDictionary()
+			if err != nil {
+				return nil, err
+			}
+			t = td
+		case LITERAL:
+			t = TypeGeneric{Name: parser.curr.Lexeme}
+			parser.NextToken()
+		case EOF:
+			return nil, fmt.Errorf("Unexpected EOF while parsing type list at line %d, column %d.", parser.curr.Line, parser.curr.Column)
+		default:
+			return nil, fmt.Errorf("Unexpected token %s while parsing type list", parser.curr.Type)
 		}
-		listType = typeTuple
-	case LEFT_SQUARE_BRACKET:
-		// Parse list
-		typeList, err := parser.ParseTypeList()
-		if err != nil {
-			return nil, err
-		}
-		listType = typeList
-	case LEFT_PAREN:
-		// Parse quote
-		typeQuote, err := parser.ParseTypeQuote()
-		if err != nil {
-			return nil, err
-		}
-		listType = typeQuote
-	case LEFT_CURLY:
-		// Parse dictionary
-		typeDict, err := parser.ParseTypeDictionary()
-		if err != nil {
-			return nil, err
-		}
-		listType = typeDict
-	case LITERAL:
-		// Parse generic
-		genericType := TypeGeneric{Name: parser.curr.Lexeme}
-		listType = genericType
-		parser.NextToken()
-	default:
-		return nil, fmt.Errorf("Unexpected token %s while parsing type list", parser.curr.Type)
+		types = append(types, t)
 	}
 
 	err = parser.Match(parser.curr, RIGHT_SQUARE_BRACKET)
@@ -1616,8 +1614,14 @@ func (parser *MShellParser) ParseTypeList() (*TypeHomogeneousList, error) {
 		return nil, err
 	}
 
-	typeList := TypeHomogeneousList{ListType: listType}
-	return &typeList, nil
+	if len(types) == 0 {
+		return nil, fmt.Errorf("Empty type list at line %d, column %d.", parser.curr.Line, parser.curr.Column)
+	}
+	if len(types) == 1 {
+		return &TypeHomogeneousList{ListType: types[0]}, nil
+	}
+	// Multiple types inside `[...]` denote a heterogeneous tuple.
+	return &TypeTuple{Types: types, StdoutBehavior: STDOUT_NONE}, nil
 }
 
 func (parser *MShellParser) ParseTypeDictionary() (*TypeDictionary, error) {

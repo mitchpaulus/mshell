@@ -442,6 +442,15 @@ func (c *Checker) tryAppend() bool {
 }
 
 func (c *Checker) tryGet(tok Token) bool {
+	if c.inferring && c.stack.Len() < 2 {
+		need := 2 - c.stack.Len()
+		extra := make([]TypeId, need)
+		for i := 0; i < need; i++ {
+			extra[i] = c.subst.FreshVar(c.arena)
+		}
+		c.inferInputs = append(append([]TypeId(nil), extra...), c.inferInputs...)
+		c.stack.items = append(append([]TypeId(nil), extra...), c.stack.items...)
+	}
 	if c.stack.Len() < 2 {
 		return false
 	}

@@ -218,12 +218,22 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		{Inputs: []TypeId{arena.MakeList(TidFloat)}, Outputs: []TypeId{TidFloat}},
 		{Inputs: []TypeId{arena.MakeList(TidInt)}, Outputs: []TypeId{TidInt}},
 	}
-	// sumInt is currently declared in std.msh as float-returning.
-	out[names.Intern("sumInt")] = []QuoteSig{{
-		Inputs:  []TypeId{arena.MakeList(TidFloat)},
-		Outputs: []TypeId{TidFloat},
-	}}
-
+	// max / min : ([float] -- float) | ([int] -- int)
+	for _, name := range []string{"max", "min"} {
+		out[names.Intern(name)] = []QuoteSig{
+			{Inputs: []TypeId{arena.MakeList(TidFloat)}, Outputs: []TypeId{TidFloat}},
+			{Inputs: []TypeId{arena.MakeList(TidInt)}, Outputs: []TypeId{TidInt}},
+		}
+	}
+	// max2 / min2 : (float float -- float) | (int int -- int) with cross overloads
+	for _, name := range []string{"max2", "min2"} {
+		out[names.Intern(name)] = []QuoteSig{
+			{Inputs: []TypeId{TidInt, TidInt}, Outputs: []TypeId{TidInt}},
+			{Inputs: []TypeId{TidFloat, TidFloat}, Outputs: []TypeId{TidFloat}},
+			{Inputs: []TypeId{TidInt, TidFloat}, Outputs: []TypeId{TidFloat}},
+			{Inputs: []TypeId{TidFloat, TidInt}, Outputs: []TypeId{TidFloat}},
+		}
+	}
 	// ----- Numeric conversions -----
 
 	// toFloat : (int -- float) | (float -- float) | (str -- Maybe[float])

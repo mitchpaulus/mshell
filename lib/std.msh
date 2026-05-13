@@ -32,11 +32,11 @@ def toCsv ([[str]] -- str)
     map. map. toCsvCell end "," join end unlines
 end
 
-def enumerate ([a] -- )
+def enumerate ([a] -- [[a int]])
     dup len seq (2tuple) zip
 end
 
-def enumerateN ([a] int -- )
+def enumerateN ([a] int -- [[a int]])
     i! dup len seq (@i +) map (2tuple) zip
 end
 
