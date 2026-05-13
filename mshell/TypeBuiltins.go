@@ -1654,29 +1654,28 @@ func builtinSigsByToken(arena *TypeArena, names *NameTable) map[TokenType][]Quot
 	arithmetic := []QuoteSig{intIntInt, floatFloatFloat, intFloatFloat, floatIntFloat}
 	comparison := []QuoteSig{intIntBool, floatFloatBool, dateTimeDateTimeBool}
 
-	// Capture markers `*` / `*b` / `^` / `^b` are postfix list/pipe
-	// modifiers. Model them as internal brands on the command-list
-	// type so a following `;` / `!` can push captured stream output.
-	stdoutLinesBrand := names.Intern("#capture-stdout-lines")
-	stdoutStrBrand := names.Intern("#capture-stdout-str")
-	stdoutBytesBrand := names.Intern("#capture-stdout-bytes")
-	stderrStrBrand := names.Intern("#capture-stderr-str")
-	stderrBytesBrand := names.Intern("#capture-stderr-bytes")
+	// Capture markers `*` / `*b` / `^` / `^b` are postfix command
+	// modifiers. Model them as a command type over the argv list plus
+	// structured stdout/stderr capture modes so redirection can preserve
+	// the exact command without enumerating brand combinations.
 	captureT := arena.MakeVar(0)
 	captureList := arena.MakeList(captureT)
-	stdoutLinesCmd := arena.MakeBrand(stdoutLinesBrand, captureList)
-	stdoutStrCmd := arena.MakeBrand(stdoutStrBrand, captureList)
-	stdoutBytesCmd := arena.MakeBrand(stdoutBytesBrand, captureList)
-	stderrStrCmd := arena.MakeBrand(stderrStrBrand, captureList)
-	stderrBytesCmd := arena.MakeBrand(stderrBytesBrand, captureList)
-	stdoutStrStderrStrCmd := arena.MakeBrand(stdoutStrBrand, stderrStrCmd)
-	stdoutStrStderrBytesCmd := arena.MakeBrand(stdoutStrBrand, stderrBytesCmd)
-	stdoutBytesStderrStrCmd := arena.MakeBrand(stdoutBytesBrand, stderrStrCmd)
-	stdoutBytesStderrBytesCmd := arena.MakeBrand(stdoutBytesBrand, stderrBytesCmd)
-	stderrStrStdoutStrCmd := arena.MakeBrand(stderrStrBrand, stdoutStrCmd)
-	stderrStrStdoutBytesCmd := arena.MakeBrand(stderrStrBrand, stdoutBytesCmd)
-	stderrBytesStdoutStrCmd := arena.MakeBrand(stderrBytesBrand, stdoutStrCmd)
-	stderrBytesStdoutBytesCmd := arena.MakeBrand(stderrBytesBrand, stdoutBytesCmd)
+	cmd := func(stdout, stderr CommandCaptureMode) TypeId {
+		return arena.MakeCommand(captureList, stdout, stderr)
+	}
+	stdoutLinesCmd := cmd(CommandCaptureLines, CommandCaptureNone)
+	stdoutStrCmd := cmd(CommandCaptureStr, CommandCaptureNone)
+	stdoutBytesCmd := cmd(CommandCaptureBytes, CommandCaptureNone)
+	stderrStrCmd := cmd(CommandCaptureNone, CommandCaptureStr)
+	stderrBytesCmd := cmd(CommandCaptureNone, CommandCaptureBytes)
+	stdoutStrStderrStrCmd := cmd(CommandCaptureStr, CommandCaptureStr)
+	stdoutStrStderrBytesCmd := cmd(CommandCaptureStr, CommandCaptureBytes)
+	stdoutBytesStderrStrCmd := cmd(CommandCaptureBytes, CommandCaptureStr)
+	stdoutBytesStderrBytesCmd := cmd(CommandCaptureBytes, CommandCaptureBytes)
+	stderrStrStdoutStrCmd := stdoutStrStderrStrCmd
+	stderrStrStdoutBytesCmd := stdoutBytesStderrStrCmd
+	stderrBytesStdoutStrCmd := stdoutStrStderrBytesCmd
+	stderrBytesStdoutBytesCmd := stdoutBytesStderrBytesCmd
 
 	starOverloads := []QuoteSig{
 		intIntInt,
@@ -1694,13 +1693,6 @@ func builtinSigsByToken(arena *TypeArena, names *NameTable) map[TokenType][]Quot
 		{
 			Inputs:   []TypeId{stderrBytesCmd},
 			Outputs:  []TypeId{stderrBytesStdoutStrCmd},
-			Generics: []TypeVarId{0},
-		},
-	}
-	starLinesOverloads := []QuoteSig{
-		{
-			Inputs:   []TypeId{captureList},
-			Outputs:  []TypeId{stdoutLinesCmd},
 			Generics: []TypeVarId{0},
 		},
 	}
@@ -1856,10 +1848,6 @@ func builtinSigsByToken(arena *TypeArena, names *NameTable) map[TokenType][]Quot
 			{Inputs: []TypeId{stdoutStrStderrBytesCmd}, Outputs: []TypeId{TidStr, TidBytes, TidInt}, Generics: []TypeVarId{0}},
 			{Inputs: []TypeId{stdoutBytesStderrStrCmd}, Outputs: []TypeId{TidBytes, TidStr, TidInt}, Generics: []TypeVarId{0}},
 			{Inputs: []TypeId{stdoutBytesStderrBytesCmd}, Outputs: []TypeId{TidBytes, TidBytes, TidInt}, Generics: []TypeVarId{0}},
-			{Inputs: []TypeId{stderrStrStdoutStrCmd}, Outputs: []TypeId{TidStr, TidStr, TidInt}, Generics: []TypeVarId{0}},
-			{Inputs: []TypeId{stderrStrStdoutBytesCmd}, Outputs: []TypeId{TidBytes, TidStr, TidInt}, Generics: []TypeVarId{0}},
-			{Inputs: []TypeId{stderrBytesStdoutStrCmd}, Outputs: []TypeId{TidStr, TidBytes, TidInt}, Generics: []TypeVarId{0}},
-			{Inputs: []TypeId{stderrBytesStdoutBytesCmd}, Outputs: []TypeId{TidBytes, TidBytes, TidInt}, Generics: []TypeVarId{0}},
 		}
 	}
 	// EXECUTE / BANG: run a list as a subprocess. Unbranded command
@@ -1878,10 +1866,6 @@ func builtinSigsByToken(arena *TypeArena, names *NameTable) map[TokenType][]Quot
 			{Inputs: []TypeId{stdoutStrStderrBytesCmd}, Outputs: []TypeId{TidStr, TidBytes}, Generics: []TypeVarId{0}},
 			{Inputs: []TypeId{stdoutBytesStderrStrCmd}, Outputs: []TypeId{TidBytes, TidStr}, Generics: []TypeVarId{0}},
 			{Inputs: []TypeId{stdoutBytesStderrBytesCmd}, Outputs: []TypeId{TidBytes, TidBytes}, Generics: []TypeVarId{0}},
-			{Inputs: []TypeId{stderrStrStdoutStrCmd}, Outputs: []TypeId{TidStr, TidStr}, Generics: []TypeVarId{0}},
-			{Inputs: []TypeId{stderrStrStdoutBytesCmd}, Outputs: []TypeId{TidBytes, TidStr}, Generics: []TypeVarId{0}},
-			{Inputs: []TypeId{stderrBytesStdoutStrCmd}, Outputs: []TypeId{TidStr, TidBytes}, Generics: []TypeVarId{0}},
-			{Inputs: []TypeId{stderrBytesStdoutBytesCmd}, Outputs: []TypeId{TidBytes, TidBytes}, Generics: []TypeVarId{0}},
 		}
 	}
 	// PIPE (`|`): the runtime converts a list into a pipeline value.
@@ -1939,9 +1923,6 @@ func builtinSigsByToken(arena *TypeArena, names *NameTable) map[TokenType][]Quot
 		ASTERISKBINARY:     starBytesOverloads,
 		CARET:              caretOverloads,
 		CARETBINARY:        caretBytesOverloads,
-		STDOUTLINES:        starLinesOverloads,
-		STDOUTSTRIPPED:     starOverloads,
-		STDOUTCOMPLETE:     starOverloads,
 		LESSTHAN:           redirSigs,
 		GREATERTHAN:        redirSigs,
 		STDERRREDIRECT:     redirSigs,

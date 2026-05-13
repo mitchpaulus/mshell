@@ -1,5 +1,5 @@
 #!/bin/sh
-set -e 
+set -e
 
 TMP_INIT="$(mktemp)"
 trap 'rm -f "$TMP_INIT"' EXIT
@@ -8,5 +8,5 @@ export MSHINIT="$TMP_INIT"
 
 for f in *.msh; do
     echo "Type checking $f"
-    msh --typecheck "$f"
+    msh --type-check-only "$f"
 done

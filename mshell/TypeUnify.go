@@ -138,6 +138,12 @@ func (s *Substitution) Apply(arena *TypeArena, t TypeId) TypeId {
 			return t
 		}
 		return arena.MakeBrand(NameId(n.A), under)
+	case TKCommand:
+		argv := s.Apply(arena, TypeId(n.A))
+		if argv == TypeId(n.A) {
+			return t
+		}
+		return arena.MakeCommand(argv, CommandCaptureMode(n.B), CommandCaptureMode(n.Extra))
 	case TKQuote:
 		sig := arena.quoteSigs[n.Extra]
 		newIn, inChanged := s.applySpan(arena, sig.Inputs)
@@ -260,6 +266,8 @@ func (s *Substitution) occurs(arena *TypeArena, v TypeVarId, t TypeId) bool {
 		return false
 	case TKBrand:
 		return s.occurs(arena, v, TypeId(n.B))
+	case TKCommand:
+		return s.occurs(arena, v, TypeId(n.A))
 	case TKQuote:
 		sig := arena.quoteSigs[n.Extra]
 		for _, in := range sig.Inputs {
@@ -395,6 +403,12 @@ func (c *Checker) renameVars(t TypeId, rename map[TypeVarId]TypeId) TypeId {
 			return t
 		}
 		return c.arena.MakeBrand(NameId(n.A), under)
+	case TKCommand:
+		argv := c.renameVars(TypeId(n.A), rename)
+		if argv == TypeId(n.A) {
+			return t
+		}
+		return c.arena.MakeCommand(argv, CommandCaptureMode(n.B), CommandCaptureMode(n.Extra))
 	case TKQuote:
 		sig := c.arena.quoteSigs[n.Extra]
 		newIn := make([]TypeId, len(sig.Inputs))

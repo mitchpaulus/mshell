@@ -255,6 +255,8 @@ func specificityScore(arena *TypeArena, t TypeId) int {
 		return s
 	case TKBrand:
 		return 2 + specificityScore(arena, TypeId(n.B))
+	case TKCommand:
+		return 1 + specificityScore(arena, TypeId(n.A))
 	case TKQuote:
 		sig := arena.quoteSigs[n.Extra]
 		s := 1

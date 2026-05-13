@@ -164,6 +164,18 @@ func FormatType(arena *TypeArena, names *NameTable, id TypeId) string {
 		return sb.String()
 	case TKBrand:
 		return names.Name(NameId(n.A)) + "(" + FormatType(arena, names, TypeId(n.B)) + ")"
+	case TKCommand:
+		var parts []string
+		if n.B != uint32(CommandCaptureNone) {
+			parts = append(parts, "stdout="+formatCommandCapture(CommandCaptureMode(n.B)))
+		}
+		if n.Extra != uint32(CommandCaptureNone) {
+			parts = append(parts, "stderr="+formatCommandCapture(CommandCaptureMode(n.Extra)))
+		}
+		if len(parts) == 0 {
+			return "Command[" + FormatType(arena, names, TypeId(n.A)) + "]"
+		}
+		return "Command[" + FormatType(arena, names, TypeId(n.A)) + "; " + strings.Join(parts, ", ") + "]"
 	case TKQuote:
 		sig := arena.quoteSigs[n.Extra]
 		var sb strings.Builder
@@ -205,4 +217,17 @@ func FormatType(arena *TypeArena, names *NameTable, id TypeId) string {
 		return "GridRow"
 	}
 	return fmt.Sprintf("<%s #%d>", n.Kind, uint32(id))
+}
+
+func formatCommandCapture(mode CommandCaptureMode) string {
+	switch mode {
+	case CommandCaptureStr:
+		return "str"
+	case CommandCaptureBytes:
+		return "bytes"
+	case CommandCaptureLines:
+		return "[str]"
+	default:
+		return "none"
+	}
 }

@@ -484,6 +484,26 @@ func TestTypeCheckProgramPrefixQuoteBodyChecked(t *testing.T) {
 	}
 }
 
+func TestTypeCheckProgramInputRedirectionAfterCapture(t *testing.T) {
+	cases := []string{
+		`['cat'] * "stdin" < ! output! @output w`,
+		`['cat'] * ` + "`stdin.txt`" + ` < ! output! @output w`,
+		`['cat'] * "stdin" utf8Bytes < ! output! @output w`,
+		`['cat'] *b "stdin" < ! output! @output w`,
+		`['cat'] *| "stdin" < ! output! @output drop`,
+		`['cat'] ^ "stdin" < ! output! @output w`,
+		`['cat'] ^b "stdin" < ! output! @output w`,
+		`['cat'] * ^ "stdin" < ! stdout! stderr! @stdout w @stderr w`,
+		`['cat'] ^ * "stdin" < ! stderr! stdout! @stdout w @stderr w`,
+	}
+	for _, src := range cases {
+		errs, ok := parseAndCheck(t, src)
+		if !ok || len(errs) != 0 {
+			t.Fatalf("%q: expected redirection after capture marker to type-check; errs=%v", src, errs)
+		}
+	}
+}
+
 func TestTypeCheckProgramMapFilterTypeMismatch(t *testing.T) {
 	// filter wants (T -- bool); the quote produces an int instead.
 	src := `[1 2 3] (1 +) filter drop`

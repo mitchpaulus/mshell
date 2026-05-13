@@ -268,11 +268,14 @@ func (c *Checker) checkOne(tok Token) {
 		}
 		if tok.Type == PIPE && c.stack.Len() > 0 {
 			top := c.subst.Apply(c.arena, c.stack.Top())
-			if c.arena.Kind(top) == TKBrand {
+			if c.arena.Kind(top) == TKCommand {
 				return
 			}
 		}
 		if c.tryQuoteRedirect(tok) {
+			return
+		}
+		if c.tryCommandRedirect(tok) {
 			return
 		}
 		c.resolveAndApply(sigs, tok)
@@ -639,6 +642,40 @@ func (c *Checker) tryQuoteRedirect(tok Token) bool {
 	return true
 }
 
+func (c *Checker) tryCommandRedirect(tok Token) bool {
+	switch tok.Type {
+	case LESSTHAN, GREATERTHAN, STDERRREDIRECT, STDERRAPPEND,
+		STDOUTANDSTDERRREDIRECT, STDOUTANDSTDERRAPPEND, INPLACEREDIRECT, STDAPPEND:
+	default:
+		return false
+	}
+	if c.stack.Len() < 2 {
+		return false
+	}
+	target := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-1])
+	if target != TidStr && target != TidPath && target != TidBytes {
+		return false
+	}
+	cmd := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-2])
+	if !c.isCommandLike(cmd) {
+		return false
+	}
+	c.stack.items = c.stack.items[:c.stack.Len()-1]
+	return true
+}
+
+func (c *Checker) isCommandLike(t TypeId) bool {
+	n := c.arena.Node(t)
+	switch n.Kind {
+	case TKList:
+		return true
+	case TKCommand:
+		return true
+	default:
+		return false
+	}
+}
+
 // applySig is the hot path. It validates arity, unifies each input against
 // the corresponding stack slot, pops the inputs, and pushes the outputs.
 //
@@ -768,6 +805,8 @@ func (c *Checker) unify(got, want TypeId) bool {
 		// type can still contain generics that need normal structural
 		// unification at the call site.
 		return gn.A == wn.A && c.unify(TypeId(gn.B), TypeId(wn.B))
+	case TKCommand:
+		return gn.B == wn.B && gn.Extra == wn.Extra && c.unify(TypeId(gn.A), TypeId(wn.A))
 	case TKQuote:
 		return c.unifyQuote(gn, wn)
 	case TKOverloadedQuote:

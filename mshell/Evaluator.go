@@ -4889,34 +4889,6 @@ MainLoop:
 					} else {
 						stack.Push(&Maybe{obj: MShellBinary(data)})
 					}
-				} else if t.Lexeme == "skip" {
-					// Skip like C# LINQ
-					obj1, obj2, err := stack.Pop2(t)
-					if err != nil {
-						return state.FailWithMessage(err.Error())
-					}
-
-					intVal, ok := obj1.(MShellInt)
-					if !ok {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot skip a %s.\n", t.Line, t.Column, obj1.TypeName()))
-					}
-
-					listVal, ok := obj2.(*MShellList)
-					if !ok {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot skip on a %s.\n", t.Line, t.Column, obj2.TypeName()))
-					}
-
-					if intVal.Value < 0 {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot skip a negative number of items (%d).\n", t.Line, t.Column, intVal.Value))
-					}
-
-					// Don't fail on n > len(list), just return empty
-					newObj, err := obj2.SliceStart(min(intVal.Value, len(listVal.Items)))
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
-					}
-
-					stack.Push(newObj)
 				} else if t.Lexeme == "e" || t.Lexeme == "ec" || t.Lexeme == "es" {
 					// Token Type
 					obj, err := stack.Pop()
@@ -7484,9 +7456,11 @@ MainLoop:
 						stack.Push(newList)
 					case MShellString:
 						strObj := obj2Typed
-						length := min(intObj.Value, len(strObj.Content)) // Adjust to max length
-						newStr := strObj.Content[:length]
-						stack.Push(MShellString{newStr})
+						newStr, err := strObj.SliceEnd(min(intObj.Value, len(strObj.Content)))
+						if err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
+						}
+						stack.Push(newStr)
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second parameter in 'take' is expected to be a list or string, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
 					}
@@ -7520,9 +7494,11 @@ MainLoop:
 						stack.Push(newList)
 					case MShellString:
 						strObj := obj2Typed
-						length := max(0, len(strObj.Content)-intObj.Value)
-						newStr := strObj.Content[length:]
-						stack.Push(MShellString{newStr})
+						newStr, err := strObj.SliceStart(min(intObj.Value, len(strObj.Content)))
+						if err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
+						}
+						stack.Push(newStr)
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second parameter in 'skip' is expected to be a list or string, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
 					}
