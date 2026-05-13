@@ -53,7 +53,7 @@ def 2unpack ([a] -- a a)
     dup :0: swap :1:
 end
 
-def 2apply ([a] (a a -- c) -- c)
+def 2apply ([a b] (a b -- c) -- c)
     swap 2unpack rot x
 end
 

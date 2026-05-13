@@ -262,11 +262,26 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 		c.listDepth--
 		items := append([]TypeId(nil), c.stack.items[listScope.length:]...)
 		c.restoreStack(listScope)
-		elem := c.subst.FreshVar(c.arena)
-		if len(items) > 0 {
-			elem = c.arena.MakeUnion(items, 0)
+		if len(items) == 0 {
+			c.stack.Push(c.arena.MakeList(c.subst.FreshVar(c.arena)))
+			return
 		}
-		c.stack.Push(c.arena.MakeList(elem))
+		// Detect homogeneity: every slot the same TypeId. Homogeneous
+		// literals stay as `[T]` so list-consuming code keeps working
+		// as before. Heterogeneous literals become tuples so 2unpack /
+		// pattern-match can recover positional types.
+		homogeneous := true
+		for i := 1; i < len(items); i++ {
+			if items[i] != items[0] {
+				homogeneous = false
+				break
+			}
+		}
+		if homogeneous {
+			c.stack.Push(c.arena.MakeList(items[0]))
+		} else {
+			c.stack.Push(c.arena.MakeTuple(items))
+		}
 		return
 
 	case *MShellParseDict:
@@ -292,7 +307,17 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 
 	case *MShellParseQuote:
 		if candidates, ok := c.quoteOverloadCandidates(it.Items); ok {
-			c.stack.Push(c.arena.MakeOverloadedQuote(candidates))
+			// Instantiate each candidate's generics to fresh vars at
+			// the push site. Builtin overload templates share small
+			// TypeVarIds (0, 1, ...) across entries, so storing the
+			// raw candidates would let occurs checks conflate them
+			// with the caller's freshly-allocated vars. Per-push
+			// instantiation gives each quote literal a private set.
+			fresh := make([]QuoteSig, len(candidates))
+			for i, cand := range candidates {
+				fresh[i] = c.Instantiate(cand)
+			}
+			c.stack.Push(c.arena.MakeOverloadedQuote(fresh))
 			return
 		}
 		// Phase 7 inference: run the body against a fresh empty

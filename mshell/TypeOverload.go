@@ -239,6 +239,12 @@ func specificityScore(arena *TypeArena, t TypeId) int {
 		return 1
 	case TKMaybe, TKList:
 		return 1 + specificityScore(arena, TypeId(n.A))
+	case TKTuple:
+		s := 1
+		for _, slot := range arena.tupleSlots[n.Extra] {
+			s += specificityScore(arena, slot)
+		}
+		return s
 	case TKDict:
 		return 1 + specificityScore(arena, TypeId(n.A)) + specificityScore(arena, TypeId(n.B))
 	case TKShape:

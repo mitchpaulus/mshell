@@ -61,6 +61,8 @@ const (
 	TKGrid     // Extra = index into gridSchemas (0 = unknown schema)
 	TKGridView // Extra = index into gridSchemas (0 = unknown schema)
 	TKGridRow  // Extra = index into gridSchemas (0 = unknown schema)
+
+	TKTuple // Extra = index into tupleSlots; fixed-arity heterogeneous list
 )
 
 // String returns a debug name for a TypeKind.
@@ -94,6 +96,8 @@ func (k TypeKind) String() string {
 		return "GridView"
 	case TKGridRow:
 		return "GridRow"
+	case TKTuple:
+		return "Tuple"
 	}
 	return "Unknown"
 }
@@ -177,6 +181,7 @@ type TypeArena struct {
 	unionMembers   [][]TypeId // each slice is sorted, deduped
 	gridSchemas    []GridSchema
 	gridSchemaCons map[string]uint32
+	tupleSlots     [][]TypeId // index 0 reserved
 }
 
 // NewTypeArena constructs an arena pre-populated with the primitive ids
@@ -212,7 +217,50 @@ func NewTypeArena() *TypeArena {
 	a.shapeFields = append(a.shapeFields, nil)
 	a.quoteSigs = append(a.quoteSigs, QuoteSig{})
 	a.overloadedQuoteSigs = append(a.overloadedQuoteSigs, nil)
+	a.tupleSlots = append(a.tupleSlots, nil)
 	return a
+}
+
+// MakeTuple returns the canonical TypeId for a fixed-arity heterogeneous
+// list with the given per-slot types. Slot order is significant. A 0- or
+// 1-slot tuple collapses to nothing/list-of-elem; callers should normally
+// use MakeList for the 1-slot case.
+func (a *TypeArena) MakeTuple(slots []TypeId) TypeId {
+	if len(slots) == 0 {
+		return a.MakeList(TidNothing)
+	}
+	key := encodeTupleKey(slots)
+	if id, ok := a.cons[key]; ok {
+		return id
+	}
+	cp := make([]TypeId, len(slots))
+	copy(cp, slots)
+	idx := uint32(len(a.tupleSlots))
+	a.tupleSlots = append(a.tupleSlots, cp)
+	id := a.append(TypeNode{Kind: TKTuple, Extra: idx})
+	a.cons[key] = id
+	return id
+}
+
+// TupleSlots returns the per-slot types of a tuple. Caller must not mutate.
+func (a *TypeArena) TupleSlots(id TypeId) []TypeId {
+	n := a.Node(id)
+	if n.Kind != TKTuple {
+		panic("TypeArena.TupleSlots: not a tuple")
+	}
+	return a.tupleSlots[n.Extra]
+}
+
+func encodeTupleKey(slots []TypeId) string {
+	var sb strings.Builder
+	sb.WriteString("T:")
+	for i, s := range slots {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		sb.WriteString(strconv.FormatUint(uint64(s), 10))
+	}
+	return sb.String()
 }
 
 // Node returns the in-arena record for id. Out-of-range ids are a programmer

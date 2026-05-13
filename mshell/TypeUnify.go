@@ -87,6 +87,25 @@ func (s *Substitution) Apply(arena *TypeArena, t TypeId) TypeId {
 			return t
 		}
 		return arena.MakeList(inner)
+	case TKTuple:
+		slots := arena.tupleSlots[n.Extra]
+		var rebuilt []TypeId
+		changed := false
+		for i, slot := range slots {
+			rs := s.Apply(arena, slot)
+			if rs != slot && !changed {
+				rebuilt = make([]TypeId, len(slots))
+				copy(rebuilt, slots[:i])
+				changed = true
+			}
+			if changed {
+				rebuilt[i] = rs
+			}
+		}
+		if !changed {
+			return t
+		}
+		return arena.MakeTuple(rebuilt)
 	case TKDict:
 		k := s.Apply(arena, TypeId(n.A))
 		v := s.Apply(arena, TypeId(n.B))
@@ -248,6 +267,13 @@ func (s *Substitution) occurs(arena *TypeArena, v TypeVarId, t TypeId) bool {
 		return false
 	case TKMaybe, TKList:
 		return s.occurs(arena, v, TypeId(n.A))
+	case TKTuple:
+		for _, slot := range arena.tupleSlots[n.Extra] {
+			if s.occurs(arena, v, slot) {
+				return true
+			}
+		}
+		return false
 	case TKDict:
 		return s.occurs(arena, v, TypeId(n.A)) || s.occurs(arena, v, TypeId(n.B))
 	case TKShape:
@@ -360,6 +386,21 @@ func (c *Checker) renameVars(t TypeId, rename map[TypeVarId]TypeId) TypeId {
 			return t
 		}
 		return c.arena.MakeList(inner)
+	case TKTuple:
+		slots := c.arena.tupleSlots[n.Extra]
+		out := make([]TypeId, len(slots))
+		changed := false
+		for i, slot := range slots {
+			rs := c.renameVars(slot, rename)
+			out[i] = rs
+			if rs != slot {
+				changed = true
+			}
+		}
+		if !changed {
+			return t
+		}
+		return c.arena.MakeTuple(out)
 	case TKDict:
 		k := c.renameVars(TypeId(n.A), rename)
 		v := c.renameVars(TypeId(n.B), rename)

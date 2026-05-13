@@ -131,6 +131,17 @@ func FormatType(arena *TypeArena, names *NameTable, id TypeId) string {
 		return "Maybe[" + FormatType(arena, names, TypeId(n.A)) + "]"
 	case TKList:
 		return "[" + FormatType(arena, names, TypeId(n.A)) + "]"
+	case TKTuple:
+		var sb strings.Builder
+		sb.WriteByte('[')
+		for i, slot := range arena.tupleSlots[n.Extra] {
+			if i > 0 {
+				sb.WriteByte(' ')
+			}
+			sb.WriteString(FormatType(arena, names, slot))
+		}
+		sb.WriteByte(']')
+		return sb.String()
 	case TKDict:
 		return "{" + FormatType(arena, names, TypeId(n.A)) + ": " + FormatType(arena, names, TypeId(n.B)) + "}"
 	case TKShape:

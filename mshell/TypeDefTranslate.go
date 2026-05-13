@@ -120,10 +120,6 @@ func (tx *typeDefTranslator) translate(t MShellType) TypeId {
 		}
 		return tx.arena.MakeShape(fields)
 	case *TypeTuple:
-		// V1 has no fixed-arity tuple type. Model `[a b ...]` from
-		// the def syntax as a homogeneous list whose element type is
-		// the union of the tuple's slot types. Arity is lost but
-		// 2unpack / map / each users get a usable element type.
 		elems := make([]TypeId, 0, len(v.Types))
 		for _, et := range v.Types {
 			elems = append(elems, tx.translate(et))
@@ -131,7 +127,7 @@ func (tx *typeDefTranslator) translate(t MShellType) TypeId {
 		if len(elems) == 1 {
 			return tx.arena.MakeList(elems[0])
 		}
-		return tx.arena.MakeList(tx.arena.MakeUnion(elems, NameNone))
+		return tx.arena.MakeTuple(elems)
 	}
 	tx.errs = append(tx.errs, fmt.Sprintf("unknown MShellType %T (skipped)", t))
 	return TidNothing

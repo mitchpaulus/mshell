@@ -292,6 +292,9 @@ func (c *Checker) checkOne(tok Token) {
 		if tok.Lexeme == "get" && c.tryGet(tok) {
 			return
 		}
+		if tok.Lexeme == "2unpack" && c.try2unpack(tok) {
+			return
+		}
 		if tok.Lexeme == "zipPack" {
 			need := 2
 			if c.stack.Len() < need {
@@ -439,6 +442,29 @@ func (c *Checker) tryAppend() bool {
 	}
 
 	return false
+}
+
+// try2unpack handles the tuple case where `2unpack` should produce
+// positional slot types rather than collapsing both outputs to the
+// generic element type. Falls back to the normal overload path for
+// non-tuple inputs.
+func (c *Checker) try2unpack(tok Token) bool {
+	if c.stack.Len() < 1 {
+		return false
+	}
+	top := c.subst.Apply(c.arena, c.stack.Top())
+	node := c.arena.Node(top)
+	if node.Kind != TKTuple {
+		return false
+	}
+	slots := c.arena.tupleSlots[node.Extra]
+	if len(slots) != 2 {
+		return false
+	}
+	c.stack.items = c.stack.items[:c.stack.Len()-1]
+	c.stack.Push(slots[0])
+	c.stack.Push(slots[1])
+	return true
 }
 
 func (c *Checker) tryGet(tok Token) bool {
@@ -791,6 +817,12 @@ func (c *Checker) unify(got, want TypeId) bool {
 		if gn.Kind == TKShape && wn.Kind == TKDict {
 			return c.unifyShapeToDict(gn, wn)
 		}
+		if gn.Kind == TKTuple && wn.Kind == TKList {
+			return c.unifyTupleToList(gn, TypeId(wn.A))
+		}
+		if gn.Kind == TKList && wn.Kind == TKTuple {
+			return c.unifyTupleToList(wn, TypeId(gn.A))
+		}
 		if gn.Kind == TKUnion {
 			return c.unifyUnionToType(gn, want)
 		}
@@ -803,6 +835,18 @@ func (c *Checker) unify(got, want TypeId) bool {
 	switch gn.Kind {
 	case TKMaybe, TKList:
 		return c.unify(TypeId(gn.A), TypeId(wn.A))
+	case TKTuple:
+		gSlots := c.arena.tupleSlots[gn.Extra]
+		wSlots := c.arena.tupleSlots[wn.Extra]
+		if len(gSlots) != len(wSlots) {
+			return false
+		}
+		for i := range gSlots {
+			if !c.unify(gSlots[i], wSlots[i]) {
+				return false
+			}
+		}
+		return true
 	case TKDict:
 		return c.unify(TypeId(gn.A), TypeId(wn.A)) && c.unify(TypeId(gn.B), TypeId(wn.B))
 	case TKShape:
@@ -832,6 +876,29 @@ func (c *Checker) unify(got, want TypeId) bool {
 		return false
 	}
 	return false
+}
+
+// unifyTupleToList accepts a tuple where a list is expected. If the list's
+// element type is still a free variable, we bind it to the union of the
+// tuple's slot types so heterogeneous literals can satisfy generic list
+// inputs. If the element type is already concrete, every slot must unify
+// with it individually. Asymmetric — a list does not refine into a tuple.
+func (c *Checker) unifyTupleToList(tupleNode TypeNode, listElem TypeId) bool {
+	slots := c.arena.tupleSlots[tupleNode.Extra]
+	resolved := c.subst.Apply(c.arena, listElem)
+	if c.arena.Kind(resolved) == TKVar {
+		applied := make([]TypeId, len(slots))
+		for i, slot := range slots {
+			applied[i] = c.subst.Apply(c.arena, slot)
+		}
+		return c.unify(c.arena.MakeUnion(applied, 0), resolved)
+	}
+	for _, slot := range slots {
+		if !c.unify(slot, listElem) {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *Checker) unifyOverloadedQuoteToQuote(overNode TypeNode, quote TypeId) bool {
