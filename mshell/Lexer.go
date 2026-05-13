@@ -563,6 +563,8 @@ func (l *Lexer) literalOrKeywordType() TokenType {
 		return l.checkKeyword(1, "atch", MATCH)
 	case 'n':
 		return l.checkKeyword(1, "ot", NOT)
+	case 'p':
+		return l.checkKeyword(1, "ure", PURE)
 	case 'r':
 		return l.checkKeyword(1, "ead", READ)
 	case 's':
