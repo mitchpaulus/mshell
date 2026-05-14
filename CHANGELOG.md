@@ -67,6 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `updateCol` now accepts `GridView`, materializes a new `Grid` from the viewed rows, retypes the result columns, and leaves the backing `Grid` unchanged.
 - `skip` and `take` now work on strings using the same indexing logic as string slicing.
 - Completely removed the concept of `o`, `oc`, and `os`.
+- `2apply` standard library signature narrowed from `([a | b] (a|b a|b -- c) -- c)` to `([a] (a a -- c) -- c)`. Heterogeneous two-element lists are no longer accepted; cast the list to a homogeneous element type if you need the prior behavior.
 
 
 ## v0.13.0 - 2026-04-07
