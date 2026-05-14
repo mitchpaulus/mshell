@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"go.lsp.dev/protocol"
@@ -27,16 +28,18 @@ const (
 var errExitBeforeShutdown = errors.New("exit received before shutdown")
 
 type lspServer struct {
-	in        *bufio.Reader
-	out       *bufio.Writer
-	documents map[protocol.DocumentURI]*lspDocument
-	shutdown  bool
-	builtins  map[string]*builtinInfo
-	lexer     *Lexer
-	parser    *MShellParser
-	pathBins  IPathBinManager
-	varNames  map[string]struct{}
-	candsBuf  []string
+	in         *bufio.Reader
+	out        *bufio.Writer
+	writeMu    sync.Mutex
+	documents  map[protocol.DocumentURI]*lspDocument
+	shutdown   bool
+	builtins   map[string]*builtinInfo
+	lexer      *Lexer
+	parser     *MShellParser
+	pathBins   IPathBinManager
+	varNames   map[string]struct{}
+	candsBuf   []string
+	stdlibDefs []MShellDefinition
 }
 
 type lspDocument struct {
@@ -80,6 +83,12 @@ type responseMessage struct {
 	Error   *responseError   `json:"error,omitempty"`
 }
 
+type notificationMessage struct {
+	JSONRPC string `json:"jsonrpc"`
+	Method  string `json:"method"`
+	Params  any    `json:"params,omitempty"`
+}
+
 type responseError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
@@ -120,7 +129,36 @@ func RunLSP(in io.Reader, out io.Writer) error {
 		varNames:  make(map[string]struct{}),
 	}
 
+	if defs, err := loadStdlibDefsForLSP(); err != nil {
+		logLSP(fmt.Sprintf("type-check diagnostics: stdlib unavailable (%v); proceeding without stdlib sigs", err))
+	} else {
+		server.stdlibDefs = defs
+	}
+
 	return server.run()
+}
+
+// loadStdlibDefsForLSP locates the standard library file (honoring
+// MSHSTDLIB if set, else the version-keyed install path), parses it,
+// and returns its definitions. The bodies are not evaluated; we only
+// need the signatures to register as builtins for the type-checker.
+func loadStdlibDefsForLSP() ([]MShellDefinition, error) {
+	stdlibSpec, _, err := getStartupFileSpecs(startupLoadOptions{
+		version:           mshellVersion,
+		allowEnvOverrides: true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	source, err := os.ReadFile(stdlibSpec.path)
+	if err != nil {
+		return nil, err
+	}
+	parsed, err := parseMShellInput(string(source), &TokenFile{stdlibSpec.path})
+	if err != nil {
+		return nil, err
+	}
+	return parsed.Definitions, nil
 }
 
 func (s *lspServer) run() error {
@@ -272,6 +310,11 @@ func (s *lspServer) handleMessage(msg *jsonrpcMessage) (bool, error) {
 			return false, nil
 		}
 		delete(s.documents, params.TextDocument.URI)
+		// Clear any diagnostics the client was showing for this doc.
+		_ = s.writeNotification("textDocument/publishDiagnostics", protocol.PublishDiagnosticsParams{
+			URI:         params.TextDocument.URI,
+			Diagnostics: []protocol.Diagnostic{},
+		})
 		return false, nil
 	case "textDocument/hover":
 		if msg.ID == nil {
@@ -397,7 +440,21 @@ func (s *lspServer) writeMessage(resp responseMessage) error {
 	if err != nil {
 		return err
 	}
+	return s.writePayload(payload)
+}
 
+func (s *lspServer) writeNotification(method string, params any) error {
+	n := notificationMessage{JSONRPC: jsonrpcVersion, Method: method, Params: params}
+	payload, err := json.Marshal(n)
+	if err != nil {
+		return err
+	}
+	return s.writePayload(payload)
+}
+
+func (s *lspServer) writePayload(payload []byte) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	if _, err := fmt.Fprintf(s.out, "Content-Length: %d\r\n\r\n", len(payload)); err != nil {
 		return err
 	}
@@ -414,6 +471,148 @@ func (s *lspServer) updateDocument(uri protocol.DocumentURI, text string) {
 		s.documents[uri] = doc
 	}
 	doc.setText(text)
+	// Run diagnostics asynchronously so the event loop can keep
+	// servicing requests; the write side is mutex-guarded so the
+	// notification interleaves safely with response writes.
+	go s.publishDiagnosticsFor(uri, doc.Text)
+}
+
+// publishDiagnosticsFor parses the document text and runs the static
+// type checker, converting any parse or type errors into LSP
+// diagnostics and sending a textDocument/publishDiagnostics
+// notification. An empty diagnostic list clears prior diagnostics on
+// the client. Runs on its own goroutine; it builds a private parser
+// so it doesn't race with handlers using s.parser.
+func (s *lspServer) publishDiagnosticsFor(uri protocol.DocumentURI, text string) {
+	diags := s.computeDiagnostics(text)
+	if diags == nil {
+		diags = []protocol.Diagnostic{}
+	}
+	params := protocol.PublishDiagnosticsParams{
+		URI:         uri,
+		Diagnostics: diags,
+	}
+	if err := s.writeNotification("textDocument/publishDiagnostics", params); err != nil {
+		logLSP(fmt.Sprintf("publishDiagnostics write failed: %v", err))
+	}
+}
+
+func (s *lspServer) computeDiagnostics(text string) []protocol.Diagnostic {
+	lexer := NewLexer(text, nil)
+	parser := NewMShellParser(lexer)
+	file, parseErr := parser.ParseFile()
+	if parseErr != nil {
+		return []protocol.Diagnostic{parseErrorToDiagnostic(parseErr)}
+	}
+
+	arena := NewTypeArena()
+	names := NewNameTable()
+	checker := NewChecker(arena, names)
+	checker.RegisterStdlibSigs(s.stdlibDefs)
+	checker.CheckProgram(file)
+
+	errs := checker.Errors()
+	if len(errs) == 0 {
+		return nil
+	}
+	diags := make([]protocol.Diagnostic, 0, len(errs))
+	for _, e := range errs {
+		diags = append(diags, typeErrorToDiagnostic(e, arena, names))
+	}
+	return diags
+}
+
+func typeErrorToDiagnostic(e TypeError, arena *TypeArena, names *NameTable) protocol.Diagnostic {
+	line := uint32(0)
+	col := uint32(0)
+	if e.Pos.Line > 0 {
+		line = uint32(e.Pos.Line - 1)
+	}
+	if e.Pos.Column > 0 {
+		col = uint32(e.Pos.Column - 1)
+	}
+	endCol := col + uint32(utf8.RuneCountInString(e.Pos.Lexeme))
+	if endCol == col {
+		endCol = col + 1
+	}
+	return protocol.Diagnostic{
+		Range: protocol.Range{
+			Start: protocol.Position{Line: line, Character: col},
+			End:   protocol.Position{Line: line, Character: endCol},
+		},
+		Severity: protocol.DiagnosticSeverityError,
+		Source:   "mshell",
+		Message:  stripErrorPrefix(e.Format(arena, names)),
+	}
+}
+
+// stripErrorPrefix removes the "type error at line X, column Y: "
+// prefix that TypeError.Format adds. LSP clients already render the
+// location from the diagnostic range, so the prefix is redundant.
+func stripErrorPrefix(formatted string) string {
+	const prefix = "type error at line "
+	if !strings.HasPrefix(formatted, prefix) {
+		return formatted
+	}
+	if idx := strings.Index(formatted, ": "); idx >= 0 {
+		return formatted[idx+2:]
+	}
+	return formatted
+}
+
+func parseErrorToDiagnostic(err error) protocol.Diagnostic {
+	msg := err.Error()
+	line, col := uint32(0), uint32(0)
+	// Many parser errors begin with "line:col:" style. Best-effort
+	// extract; fall back to (0,0) on miss so the client still
+	// renders the message somewhere.
+	if l, c, ok := parseLineColPrefix(msg); ok {
+		if l > 0 {
+			line = uint32(l - 1)
+		}
+		if c > 0 {
+			col = uint32(c - 1)
+		}
+	}
+	return protocol.Diagnostic{
+		Range: protocol.Range{
+			Start: protocol.Position{Line: line, Character: col},
+			End:   protocol.Position{Line: line, Character: col + 1},
+		},
+		Severity: protocol.DiagnosticSeverityError,
+		Source:   "mshell",
+		Message:  msg,
+	}
+}
+
+func parseLineColPrefix(msg string) (int, int, bool) {
+	// Accept either "<line>:<col>:" or "line N, column M" forms.
+	if i := strings.Index(msg, ":"); i > 0 {
+		if l, err := strconv.Atoi(msg[:i]); err == nil {
+			rest := msg[i+1:]
+			if j := strings.Index(rest, ":"); j > 0 {
+				if c, err := strconv.Atoi(rest[:j]); err == nil {
+					return l, c, true
+				}
+			}
+		}
+	}
+	if i := strings.Index(msg, "line "); i >= 0 {
+		rest := msg[i+5:]
+		var l int
+		n, _ := fmt.Sscanf(rest, "%d", &l)
+		if n == 1 {
+			if j := strings.Index(rest, "column "); j >= 0 {
+				var c int
+				m, _ := fmt.Sscanf(rest[j+7:], "%d", &c)
+				if m == 1 {
+					return l, c, true
+				}
+			}
+			return l, 0, true
+		}
+	}
+	return 0, 0, false
 }
 
 func (s *lspServer) hover(params protocol.HoverParams) (*protocol.Hover, bool) {

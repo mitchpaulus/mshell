@@ -99,6 +99,16 @@ const (
 	PREFIXQUOTE              // .functionName
 	MATCH
 	VER
+
+	// Reserved for the static type checker (Phase 5/10) and Phase 2 of the
+	// effect system. AS and TYPE are user-visible from Phase 10 onward;
+	// TRY, FAIL_KEYWORD, and PURE are reserved early so future Phase 2
+	// migration doesn't break user identifiers.
+	AS
+	TYPE
+	TRY
+	FAIL_KEYWORD
+	PURE
 )
 
 func (t TokenType) String() string {
@@ -269,6 +279,16 @@ func (t TokenType) String() string {
 		return "MATCH"
 	case VER:
 		return "VER"
+	case AS:
+		return "AS"
+	case TYPE:
+		return "TYPE"
+	case TRY:
+		return "TRY"
+	case FAIL_KEYWORD:
+		return "FAIL_KEYWORD"
+	case PURE:
+		return "PURE"
 	default:
 		return "UNKNOWN"
 	}
@@ -475,6 +495,8 @@ func (l *Lexer) literalOrKeywordType() TokenType {
 		}
 	case '+':
 		return l.checkKeyword(1, "", PLUS)
+	case 'a':
+		return l.checkKeyword(1, "s", AS)
 	case 'b':
 		if l.curLen() > 1 {
 			c := l.input[l.start+1]
@@ -508,7 +530,14 @@ func (l *Lexer) literalOrKeywordType() TokenType {
 			c := l.input[l.start+1]
 			switch c {
 			case 'a':
-				return l.checkKeyword(2, "lse", FALSE)
+				if l.curLen() > 2 {
+					switch l.input[l.start+2] {
+					case 'l':
+						return l.checkKeyword(3, "se", FALSE)
+					case 'i':
+						return l.checkKeyword(3, "l", FAIL_KEYWORD)
+					}
+				}
 			case 'l':
 				return l.checkKeyword(2, "oat", TYPEFLOAT)
 			}
@@ -534,6 +563,8 @@ func (l *Lexer) literalOrKeywordType() TokenType {
 		return l.checkKeyword(1, "atch", MATCH)
 	case 'n':
 		return l.checkKeyword(1, "ot", NOT)
+	case 'p':
+		return l.checkKeyword(1, "ure", PURE)
 	case 'r':
 		return l.checkKeyword(1, "ead", READ)
 	case 's':
@@ -547,7 +578,22 @@ func (l *Lexer) literalOrKeywordType() TokenType {
 			}
 		}
 	case 't':
-		return l.checkKeyword(1, "rue", TRUE)
+		if l.curLen() > 1 {
+			c := l.input[l.start+1]
+			switch c {
+			case 'r':
+				if l.curLen() > 2 {
+					switch l.input[l.start+2] {
+					case 'u':
+						return l.checkKeyword(3, "e", TRUE)
+					case 'y':
+						return l.checkKeyword(3, "", TRY)
+					}
+				}
+			case 'y':
+				return l.checkKeyword(2, "pe", TYPE)
+			}
+		}
 	case 'V':
 		return l.checkKeyword(1, "ER", VER)
 	case 'x':

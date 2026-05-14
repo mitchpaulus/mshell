@@ -32,12 +32,12 @@ def toCsv ([[str]] -- str)
     map. map. toCsvCell end "," join end unlines
 end
 
-def enumerate ([a] -- )
-    dup len seq (2tuple) zip
+def enumerate ([a] -- [{"item": a, "index": int }])
+    dup len seq (a!, i! { "item": @a, "index": @i }) zip
 end
 
-def enumerateN ([a] int -- )
-    i! dup len seq (@i +) map (2tuple) zip
+def enumerateN ([a] int -- [{"item": a, "index": int }])
+    start! dup len seq (@start +) map (a!, i! { "item": @a, "index": @i }) zip
 end
 
 def 2each (T T (T -- b) -- b b)
@@ -150,15 +150,9 @@ def foldl ((T T -- T) T [T] -- T)
     @foldl-accum
 end
 
-# sum (list -- value)
-def sum ([float] -- float)
-    (+) 0.0 rot foldl
-end
-
-# sum (list -- value)
-def sumInt ([int] -- int)
-    (+) 0 rot foldl
-end
+# sumInt retained as an alias for backwards compatibility; the primary
+# `sum` is now a runtime builtin that handles both [int] and [float].
+def sumInt ([int] -- int) sum end
 
 # [s]tdin [l]ines
 def sl (-- [str]) stdin lines end
@@ -210,10 +204,7 @@ def chomp (str -- str)
     end
 end
 
-# abs (int|float -- int|float)
-def abs (float -- float)
-    dup 0 < if -1 * end
-end
+# `abs` is now a runtime builtin (int -- int) | (float -- float).
 
 # This uses the Marsaglia polar method
 # https://en.wikipedia.org/wiki/Marsaglia_polar_method
@@ -246,7 +237,7 @@ def randomTri (float float float -- float)
         @a +
     else
         @b
-            1 @u -
+            1.0 @u -
             @b @a -
             @b @c -
             * * sqrt
@@ -291,8 +282,8 @@ def toSvgPathStr ([[numeric]] -- str)
     end
 end
 
-def scaleLinear ([numeric] [numeric] -- (numeric -- float))
-    domain!, range! @domain 2unpack d0!, d1! @range 2unpack r0!, r1!
+def scaleLinear ([numeric] [numeric] -- (float -- float))
+    ((toFloat) map) 2each domain!, range! @domain 2unpack d0!, d1! @range 2unpack r0!, r1!
     @r1 @r0 - toFloat @d1 @d0 toFloat - / slope!
     (@d0 - @slope * @r0 +)
 end
@@ -305,23 +296,8 @@ def readTsvFile (str -- [[str]])
     readFile lines (tsplit) map
 end
 
-def max2 (float float -- float)
-    over over < if swap end drop
-end
-
-# TODO: define actual float/int min
-def max ([float] -- float)
-    (max2) -999999999999 rot foldl
-end
-
-def min2 (float float -- float)
-    over over > if swap end drop
-end
-
-# TODO: define actual float/int max
-def min ([float] -- float)
-    (min2) 999999999999 rot foldl
-end
+# `max`, `min`, `max2`, `min2` are now runtime builtins with proper
+# int/float overload handling.
 
 # This also works for non-square matrices, swapping row-major for column-major
 # Horribly inefficient, but it works
@@ -464,7 +440,7 @@ def listToDict ([a] (a -- str) (a -- b) -- c)
     @d
 end
 
-def 2tuple (a b -- [a])
+def 2tuple (a b -- [a | b])
     [] rot append swap append
 end
 
@@ -472,7 +448,7 @@ end
 # msh {{{
 def __mshCompletion { 'complete': ['msh' 'mshell'] } ([str] -- [str])
     input!
-    ['-h' '--help' '--html' '--lex' '--parse' '--version' '-c'] options!
+    ['-h' '--help' '--html' '--lex' '--parse' '--check-types' '--type-check-only' '--version' '-c'] options!
     ['lsp' 'bin' 'edit' 'completions'] subcommands!
 
     @input len 0 > if

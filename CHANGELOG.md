@@ -45,6 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `+` and `extend` for vertical concatenation of Grids/GridViews. Strict matching by name (left-grid order wins); type mismatch produces a generic column with no numeric promotion; meta merges left-wins. `+` deep-copies; `extend` mutates the receiver in place, widening to generic when needed, and accepts a GridView in either position (the underlying source grid grows and the view's indices extend to include the new rows).
 - CLI
   - `msh edit init` to open the current init file path using `$EDITOR`, with fallback to the platform default opener when `$EDITOR` is unavailable
+  - `--type-check-only` to run static type checking and exit without evaluating the script
 - Functions
   - `toCsvCell`
   - `toCsv`
@@ -66,6 +67,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `updateCol` now accepts `GridView`, materializes a new `Grid` from the viewed rows, retypes the result columns, and leaves the backing `Grid` unchanged.
 - `skip` and `take` now work on strings using the same indexing logic as string slicing.
 - Completely removed the concept of `o`, `oc`, and `os`.
+- `2apply` standard library signature narrowed from `([a | b] (a|b a|b -- c) -- c)` to `([a] (a a -- c) -- c)`. Heterogeneous two-element lists are no longer accepted; cast the list to a homogeneous element type if you need the prior behavior.
+- `abs`, `max`, `min`, `max2`, `min2`, and `sum` are now runtime builtins with proper `(int -- int) | (float -- float)` overloads (and `([int] -- int) | ([float] -- float)` for the list-folding variants). They were previously stdlib defs whose float-only bodies crashed on int operands when called via the int overload. `sumInt` is kept as a stdlib alias for backwards compatibility. Mixed int+float overloads on `max2`/`min2` have been removed since the runtime `<`/`>` operators reject mixed numeric types.
+- `len` runtime now accepts dictionaries (returns key count); the sig already permitted this.
+- `md5` runtime now accepts `bytes` input directly, matching the listed overload.
+- `fileSize` static signature corrected from `(path|str -- int)` to `(path|str -- Maybe[int])` to match the runtime, which returns `Maybe[int]` (`None` on stat failure).
+- `setAt` and `insert` static signatures no longer claim a `(str str int -- str)` overload that the runtime did not implement.
+- `toFloat` / `toInt` static signatures no longer include a generic `(T -- Maybe[float|int])` fallback; only concrete `int`/`float`/`str` inputs are accepted, matching the runtime. The `str` overload is listed first so that under inferring overload resolution (e.g. inside `(toFloat?)`) it wins ties.
+- Dict type expressions now require an implicit (or `str`) key. `{V}` and `{str: V}` are accepted; anything else (`{int: V}`, `{path: V}`, etc.) is a parse error. Dict keys are always `str` at runtime, and the type system no longer pretends otherwise. Every dict-related builtin signature (`keys`, `values`, `get`, `set`, `setd`, `getDef`, `map`, `filter`, `in`, `len`, `keyValues`, `listToDict`) drops the `K` generic accordingly.
 
 
 ## v0.13.0 - 2026-04-07

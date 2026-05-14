@@ -3,10 +3,13 @@
 @wb keys each. k!
     $"=== {@k} ===" wl
     @wb @k get? 1 enumerateN each.
-        2unpack row!, rowNum!
-        @row 1 enumerateN each.
-            2unpack cell!, colNum!
-            $"{@rowNum}:{@colNum}:{@cell typeof}|{@cell str}" wl
+        # 2unpack row!, rowNum!
+        row!
+        @row :item? 1 enumerateN each.
+            col!
+            @col :item? cell!
+            # 2unpack cell!, colNum!
+            $"{@row :index?}:{@col :index?}:{@cell typeof}|{@cell str}" wl
         end
     "---" wl
     end

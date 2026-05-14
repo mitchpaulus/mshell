@@ -32,7 +32,6 @@ type CliCommand int
 const (
 	CLILEX CliCommand = iota
 	CLIPARSE
-	CLITYPECHECK
 	CLIEXECUTE
 	CLIHTML
 )
@@ -316,6 +315,8 @@ func main() {
 	var inputFile *TokenFile
 	inputFile = nil
 	inputFilePath := ""
+	checkTypes := false // --check-types: gate execution with the new Checker (Phase 10 step 3)
+	typeCheckOnly := false
 
 	if len(os.Args) == 1 {
 		// Enter interactive mode
@@ -328,8 +329,11 @@ func main() {
 		if arg == "--lex" {
 			command = CLILEX
 			// printLex = true
-		} else if arg == "--typecheck" {
-			command = CLITYPECHECK
+		} else if arg == "--check-types" {
+			checkTypes = true
+		} else if arg == "--type-check-only" {
+			checkTypes = true
+			typeCheckOnly = true
 		} else if arg == "--parse" {
 			command = CLIPARSE
 			// printParse = true
@@ -349,6 +353,8 @@ func main() {
 			fmt.Println("  --html       Render the input as HTML")
 			fmt.Println("  --lex        Print the tokens lexed from the input")
 			fmt.Println("  --parse      Print the parsed Abstract Syntax Tree as JSON")
+			fmt.Println("  --check-types Run the new static type checker as a gate before evaluation (Phase 10 preview)")
+			fmt.Println("  --type-check-only Run the new static type checker and exit without evaluation")
 			// fmt.Println("  --typecheck  Type check the input and report any errors") Ignore this for now.
 			fmt.Println("  --version    Print version information and exit")
 			fmt.Println("  -c INPUT     Execute INPUT as the program, before positional args")
@@ -631,19 +637,21 @@ func main() {
 	allDefinitions = append(allDefinitions, file.Definitions...)
 	state.AddCompletionDefinitions(file.Definitions)
 
-	if command == CLITYPECHECK {
-		var typeStack MShellTypeStack
-		typeStack = make([]MShellType, 0)
-		typeCheckResult := TypeCheck(file.Items, typeStack, allDefinitions, false)
-
-		for _, typeError := range typeCheckResult.Errors {
-			fmt.Fprintf(os.Stderr, "%s", typeError)
+	if checkTypes {
+		errs, ok := TypeCheckProgram(file, startupDefinitions)
+		if !ok {
+			for _, e := range errs {
+				fmt.Fprintln(os.Stderr, e)
+			}
 		}
-
-		if len(typeCheckResult.Errors) > 0 {
+		if typeCheckOnly {
+			if ok {
+				os.Exit(0)
+			}
 			os.Exit(1)
-		} else {
-			os.Exit(0)
+		}
+		if !ok {
+			os.Exit(1)
 		}
 	}
 
