@@ -260,9 +260,9 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 			return
 		}
 		// Detect homogeneity: every slot the same TypeId. Homogeneous
-		// literals stay as `[T]` so list-consuming code keeps working
-		// as before. Heterogeneous literals become tuples so 2unpack /
-		// pattern-match can recover positional types.
+		// literals stay as `[T]`. Heterogeneous literals collapse to
+		// `[T1 | T2 | ...]` — the element type is the union of the
+		// observed slot types, matching the structural-union direction.
 		homogeneous := true
 		for i := 1; i < len(items); i++ {
 			if items[i] != items[0] {
@@ -273,7 +273,7 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 		if homogeneous {
 			c.stack.Push(c.arena.MakeList(items[0]))
 		} else {
-			c.stack.Push(c.arena.MakeTuple(items))
+			c.stack.Push(c.arena.MakeList(c.arena.MakeUnion(items, 0)))
 		}
 		return
 
