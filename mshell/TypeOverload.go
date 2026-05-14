@@ -1,5 +1,7 @@
 package main
 
+import "strings"
+
 // Phase 9: overload dispatch.
 //
 // A name may map to multiple QuoteSigs ("overloads"). At each call
@@ -118,7 +120,7 @@ func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 		c.errors = append(c.errors, TypeError{
 			Kind: TErrNoMatchingOverload,
 			Pos:  callSite,
-			Hint: "no listed signature accepts the current stack",
+			Hint: c.formatOverloadFailure(candidates),
 		})
 		// Clean stack-shape recovery without re-running applySig
 		// (which would add redundant errors). Pop the first
@@ -172,7 +174,7 @@ func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 			c.errors = append(c.errors, TypeError{
 				Kind: TErrAmbiguousOverload,
 				Pos:  callSite,
-				Hint: "multiple equally-specific overloads match",
+				Hint: c.formatOverloadAmbiguity(viable),
 			})
 		} else if c.inferring {
 			if merged, ok := c.mergeInputOnlyOverloads(viable); ok {
@@ -284,4 +286,61 @@ func specificityScore(arena *TypeArena, t TypeId) int {
 		return best
 	}
 	return 1
+}
+
+// formatOverloadFailure renders a multi-line hint describing the
+// observed stack and every candidate signature. Used when no overload
+// unified against the live stack — the reader needs to see *what*
+// they had vs. *what was possible*.
+func (c *Checker) formatOverloadFailure(candidates []QuoteSig) string {
+	var sb strings.Builder
+	sb.WriteString("no listed signature accepts the current stack\n")
+	sb.WriteString("  stack (top first):")
+	sb.WriteString(c.formatStackForDiagnostic())
+	sb.WriteString("\n  candidates:")
+	for _, cand := range candidates {
+		sb.WriteString("\n    ")
+		sb.WriteString(FormatType(c.arena, c.names, c.arena.MakeQuote(cand)))
+	}
+	return sb.String()
+}
+
+// formatOverloadAmbiguity is the ambiguous-overload counterpart.
+// Only the tied candidates are listed (those at the max specificity
+// score) since they're the ones the user needs to disambiguate.
+func (c *Checker) formatOverloadAmbiguity(viable []viableOverload) string {
+	bestScore := viable[0].score
+	for _, v := range viable[1:] {
+		if v.score > bestScore {
+			bestScore = v.score
+		}
+	}
+	var sb strings.Builder
+	sb.WriteString("multiple equally-specific overloads match\n")
+	sb.WriteString("  stack (top first):")
+	sb.WriteString(c.formatStackForDiagnostic())
+	sb.WriteString("\n  tied candidates:")
+	for _, v := range viable {
+		if v.score != bestScore {
+			continue
+		}
+		sb.WriteString("\n    ")
+		sb.WriteString(FormatType(c.arena, c.names, c.arena.MakeQuote(v.sig)))
+	}
+	return sb.String()
+}
+
+// formatStackForDiagnostic prints the current stack with substitutions
+// applied so type variables resolve to whatever they were bound to.
+// One item per line, top of stack first.
+func (c *Checker) formatStackForDiagnostic() string {
+	if c.stack.Len() == 0 {
+		return " <empty>"
+	}
+	var sb strings.Builder
+	for i := c.stack.Len() - 1; i >= 0; i-- {
+		sb.WriteString("\n    ")
+		sb.WriteString(FormatType(c.arena, c.names, c.subst.Apply(c.arena, c.stack.items[i])))
+	}
+	return sb.String()
 }

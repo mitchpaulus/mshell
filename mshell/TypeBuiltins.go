@@ -1431,7 +1431,7 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 			Generics: []TypeVarId{0, 1},
 		}}
 	}
-	// setAt : ([T] T int -- [T]) | (str str int -- str)  positional set
+	// setAt : ([T] T int -- [T])  positional set on lists
 	{
 		t := arena.MakeVar(0)
 		out[names.Intern("setAt")] = []QuoteSig{
@@ -1440,13 +1440,9 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 				Outputs:  []TypeId{arena.MakeList(t)},
 				Generics: []TypeVarId{0},
 			},
-			{
-				Inputs:  []TypeId{TidStr, TidStr, TidInt},
-				Outputs: []TypeId{TidStr},
-			},
 		}
 	}
-	// insert : ([T] T int -- [T]) | (str str int -- str)  positional insert
+	// insert : ([T] T int -- [T])  positional insert on lists
 	{
 		t := arena.MakeVar(0)
 		out[names.Intern("insert")] = []QuoteSig{
@@ -1454,10 +1450,6 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 				Inputs:   []TypeId{arena.MakeList(t), t, TidInt},
 				Outputs:  []TypeId{arena.MakeList(t)},
 				Generics: []TypeVarId{0},
-			},
-			{
-				Inputs:  []TypeId{TidStr, TidStr, TidInt},
-				Outputs: []TypeId{TidStr},
 			},
 		}
 	}
