@@ -328,6 +328,11 @@ func (parser *MShellParser) parseTypeDictOrShape(errs *[]TypeError) MShellParseI
 
 // finishDictOrBareType expects either `: V}` (regular dict) or just `}`
 // (bare-type sugar `{T}` = `{*: T}` = Dict[str, T]).
+//
+// Dict keys are always `str` at runtime. An explicit key type is
+// accepted only if it is literally `str` (for parity with prior sig
+// syntax); other key types are rejected with TErrTypeParse so the
+// type system can't pretend to support {int: V} / {path: V} etc.
 func (parser *MShellParser) finishDictOrBareType(open Token, first MShellParseItem, errs *[]TypeError) MShellParseItem {
 	if parser.curr.Type == RIGHT_CURLY {
 		// Bare-type sugar: `{T}` -> wildcard dict keyed by str.
@@ -338,6 +343,13 @@ func (parser *MShellParser) finishDictOrBareType(open Token, first MShellParseIt
 		*errs = append(*errs, TypeError{Kind: TErrTypeParse, Pos: parser.curr, Hint: "expected ':' or '}'"})
 	} else {
 		parser.NextToken()
+	}
+	if !isStrKeyExpr(first) {
+		*errs = append(*errs, TypeError{
+			Kind: TErrTypeParse,
+			Pos:  open,
+			Hint: "dict keys are always 'str'; write `{V}` or `{str: V}` instead",
+		})
 	}
 	val, subErrs := parser.parseTypeExpr()
 	*errs = append(*errs, subErrs...)
@@ -481,6 +493,21 @@ func synthStrKey(open Token) MShellParseItem {
 	tok.Type = STR
 	tok.Lexeme = "str"
 	return &TypePrim{Tok: tok, Tid: TidStr}
+}
+
+// isStrKeyExpr reports whether the parsed type expression denotes the
+// `str` primitive — the only key type dict literals can carry at
+// runtime. Anything else (including TypeVar / TypeNamed for non-str
+// types) is rejected at parse time so the type system can't pretend
+// dict keys are polymorphic.
+func isStrKeyExpr(item MShellParseItem) bool {
+	switch n := item.(type) {
+	case *TypePrim:
+		return n.Tid == TidStr
+	case *TypeNamed:
+		return n.Name == "str"
+	}
+	return false
 }
 
 func (parser *MShellParser) parseTypeQuote(errs *[]TypeError) MShellParseItem {

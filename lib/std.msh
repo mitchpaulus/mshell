@@ -150,15 +150,9 @@ def foldl ((T T -- T) T [T] -- T)
     @foldl-accum
 end
 
-# sum (list -- value)
-def sum ([float] -- float)
-    (+) 0.0 rot foldl
-end
-
-# sum (list -- value)
-def sumInt ([int] -- int)
-    (+) 0 rot foldl
-end
+# sumInt retained as an alias for backwards compatibility; the primary
+# `sum` is now a runtime builtin that handles both [int] and [float].
+def sumInt ([int] -- int) sum end
 
 # [s]tdin [l]ines
 def sl (-- [str]) stdin lines end
@@ -210,10 +204,7 @@ def chomp (str -- str)
     end
 end
 
-# abs (int|float -- int|float)
-def abs (float -- float)
-    dup 0.0 < if -1.0 * end
-end
+# `abs` is now a runtime builtin (int -- int) | (float -- float).
 
 # This uses the Marsaglia polar method
 # https://en.wikipedia.org/wiki/Marsaglia_polar_method
@@ -305,23 +296,8 @@ def readTsvFile (str -- [[str]])
     readFile lines (tsplit) map
 end
 
-def max2 (float float -- float)
-    over over < if swap end drop
-end
-
-# TODO: define actual float/int min
-def max ([float] -- float)
-    (max2) -999999999999 rot foldl
-end
-
-def min2 (float float -- float)
-    over over > if swap end drop
-end
-
-# TODO: define actual float/int max
-def min ([float] -- float)
-    (min2) 999999999999 rot foldl
-end
+# `max`, `min`, `max2`, `min2` are now runtime builtins with proper
+# int/float overload handling.
 
 # This also works for non-square matrices, swapping row-major for column-major
 # Horribly inefficient, but it works

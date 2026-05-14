@@ -3281,6 +3281,8 @@ MainLoop:
 						stack.Push(MShellInt{len(objTyped.Indices)})
 					case *MShellGridRow:
 						stack.Push(MShellInt{len(objTyped.Grid.Columns)})
+					case *MShellDict:
+						stack.Push(MShellInt{len(objTyped.Items)})
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot get length of a %s.\n", t.Line, t.Column, obj.TypeName()))
 					}
@@ -6489,6 +6491,120 @@ MainLoop:
 					}
 
 					stack.Push(MShellFloat{Value: math.Sqrt(floatObj.Value)})
+				} else if t.Lexeme == "abs" {
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'abs' operation on an empty stack.\n", t.Line, t.Column))
+					}
+					switch v := obj.(type) {
+					case MShellInt:
+						if v.Value < 0 {
+							stack.Push(MShellInt{-v.Value})
+						} else {
+							stack.Push(v)
+						}
+					case MShellFloat:
+						if v.Value < 0 {
+							stack.Push(MShellFloat{-v.Value})
+						} else {
+							stack.Push(v)
+						}
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: 'abs' requires int or float, found a %s.\n", t.Line, t.Column, obj.TypeName()))
+					}
+				} else if t.Lexeme == "max2" || t.Lexeme == "min2" {
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+					takeFirst := false // whether to keep obj2 (first arg, deeper on stack)
+					switch a := obj2.(type) {
+					case MShellInt:
+						b, ok := obj1.(MShellInt)
+						if !ok {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: '%s' requires both operands to be the same numeric type; got int and %s.\n", t.Line, t.Column, t.Lexeme, obj1.TypeName()))
+						}
+						if t.Lexeme == "max2" {
+							takeFirst = a.Value >= b.Value
+						} else {
+							takeFirst = a.Value <= b.Value
+						}
+					case MShellFloat:
+						b, ok := obj1.(MShellFloat)
+						if !ok {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: '%s' requires both operands to be the same numeric type; got float and %s.\n", t.Line, t.Column, t.Lexeme, obj1.TypeName()))
+						}
+						if t.Lexeme == "max2" {
+							takeFirst = a.Value >= b.Value
+						} else {
+							takeFirst = a.Value <= b.Value
+						}
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: '%s' requires int or float, found a %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName()))
+					}
+					if takeFirst {
+						stack.Push(obj2)
+					} else {
+						stack.Push(obj1)
+					}
+				} else if t.Lexeme == "max" || t.Lexeme == "min" || t.Lexeme == "sum" {
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
+					}
+					list, ok := obj.(*MShellList)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: '%s' requires a list, found a %s.\n", t.Line, t.Column, t.Lexeme, obj.TypeName()))
+					}
+					if len(list.Items) == 0 {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot '%s' an empty list.\n", t.Line, t.Column, t.Lexeme))
+					}
+					switch first := list.Items[0].(type) {
+					case MShellInt:
+						acc := first.Value
+						for i, item := range list.Items[1:] {
+							v, ok := item.(MShellInt)
+							if !ok {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: '%s' on int list found a %s at index %d.\n", t.Line, t.Column, t.Lexeme, item.TypeName(), i+1))
+							}
+							switch t.Lexeme {
+							case "max":
+								if v.Value > acc {
+									acc = v.Value
+								}
+							case "min":
+								if v.Value < acc {
+									acc = v.Value
+								}
+							case "sum":
+								acc += v.Value
+							}
+						}
+						stack.Push(MShellInt{acc})
+					case MShellFloat:
+						acc := first.Value
+						for i, item := range list.Items[1:] {
+							v, ok := item.(MShellFloat)
+							if !ok {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: '%s' on float list found a %s at index %d.\n", t.Line, t.Column, t.Lexeme, item.TypeName(), i+1))
+							}
+							switch t.Lexeme {
+							case "max":
+								if v.Value > acc {
+									acc = v.Value
+								}
+							case "min":
+								if v.Value < acc {
+									acc = v.Value
+								}
+							case "sum":
+								acc += v.Value
+							}
+						}
+						stack.Push(MShellFloat{acc})
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: '%s' requires a list of int or float, found a list of %s.\n", t.Line, t.Column, t.Lexeme, first.TypeName()))
+					}
 				} else if t.Lexeme == "toFixed" {
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
@@ -7396,6 +7512,8 @@ MainLoop:
 					switch objTyped := obj.(type) {
 					case MShellString:
 						data = []byte(objTyped.Content)
+					case MShellBinary:
+						data = []byte(objTyped)
 					case MShellPath:
 						pathStr, err := obj.CastString()
 						if err != nil {

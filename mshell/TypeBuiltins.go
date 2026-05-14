@@ -172,22 +172,6 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		{Inputs: []TypeId{TidInt}, Outputs: []TypeId{TidInt}},
 		{Inputs: []TypeId{TidFloat}, Outputs: []TypeId{TidFloat}},
 	}
-	out[names.Intern("max2")] = []QuoteSig{
-		{Inputs: []TypeId{TidInt, TidInt}, Outputs: []TypeId{TidInt}},
-		{Inputs: []TypeId{TidFloat, TidFloat}, Outputs: []TypeId{TidFloat}},
-		{Inputs: []TypeId{TidInt, TidFloat}, Outputs: []TypeId{TidFloat}},
-		{Inputs: []TypeId{TidFloat, TidInt}, Outputs: []TypeId{TidFloat}},
-	}
-	out[names.Intern("min2")] = []QuoteSig{
-		{Inputs: []TypeId{TidInt, TidInt}, Outputs: []TypeId{TidInt}},
-		{Inputs: []TypeId{TidFloat, TidFloat}, Outputs: []TypeId{TidFloat}},
-		{Inputs: []TypeId{TidInt, TidFloat}, Outputs: []TypeId{TidFloat}},
-		{Inputs: []TypeId{TidFloat, TidInt}, Outputs: []TypeId{TidFloat}},
-	}
-	out[names.Intern("neg")] = []QuoteSig{
-		{Inputs: []TypeId{TidInt}, Outputs: []TypeId{TidInt}},
-		{Inputs: []TypeId{TidFloat}, Outputs: []TypeId{TidFloat}},
-	}
 	// Trig / log / sqrt — runtime requires float input (mshell
 	// rejects implicit int->float coercion). std.msh defines
 	// `cos`, `tan`, `ln2`, `ln10` on top of these primitives.
@@ -225,43 +209,37 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 			{Inputs: []TypeId{arena.MakeList(TidInt)}, Outputs: []TypeId{TidInt}},
 		}
 	}
-	// max2 / min2 : (float float -- float) | (int int -- int) with cross overloads
+	// max2 / min2 : (int int -- int) | (float float -- float)
+	// Mixed int/float pairs are rejected at runtime; no cross overloads.
 	for _, name := range []string{"max2", "min2"} {
 		out[names.Intern(name)] = []QuoteSig{
 			{Inputs: []TypeId{TidInt, TidInt}, Outputs: []TypeId{TidInt}},
 			{Inputs: []TypeId{TidFloat, TidFloat}, Outputs: []TypeId{TidFloat}},
-			{Inputs: []TypeId{TidInt, TidFloat}, Outputs: []TypeId{TidFloat}},
-			{Inputs: []TypeId{TidFloat, TidInt}, Outputs: []TypeId{TidFloat}},
 		}
 	}
 	// ----- Numeric conversions -----
 
-	// toFloat : (int -- float) | (float -- float) | (str -- Maybe[float])
+	// toFloat : (str -- Maybe[float]) | (int -- float) | (float -- float)
+	// The str overload is listed first so that under inferring-mode
+	// overload resolution (when the input type is unknown, e.g. inside
+	// `(toFloat?)`), the str-with-Maybe variant wins the tie. That
+	// matches the typical use of `toFloat` paired with `?`.
 	out[names.Intern("toFloat")] = []QuoteSig{
+		{Inputs: []TypeId{TidStr}, Outputs: []TypeId{arena.MakeMaybe(TidFloat)}},
 		{Inputs: []TypeId{TidInt}, Outputs: []TypeId{TidFloat}},
 		{Inputs: []TypeId{TidFloat}, Outputs: []TypeId{TidFloat}},
-		{Inputs: []TypeId{TidStr}, Outputs: []TypeId{arena.MakeMaybe(TidFloat)}},
-		{
-			Inputs:   []TypeId{arena.MakeVar(0)},
-			Outputs:  []TypeId{arena.MakeMaybe(TidFloat)},
-			Generics: []TypeVarId{0},
-		},
 	}
 	// toFixed : (float|int int -- str)  format value with N decimals
 	out[names.Intern("toFixed")] = []QuoteSig{
 		{Inputs: []TypeId{TidFloat, TidInt}, Outputs: []TypeId{TidStr}},
 		{Inputs: []TypeId{TidInt, TidInt}, Outputs: []TypeId{TidStr}},
 	}
-	// toInt : (float -- int) | (str -- Maybe[int]) | (int -- int)
+	// toInt : (str -- Maybe[int]) | (float -- int) | (int -- int)
+	// str-first ordering for the same reason as toFloat above.
 	out[names.Intern("toInt")] = []QuoteSig{
-		{Inputs: []TypeId{TidFloat}, Outputs: []TypeId{TidInt}},
 		{Inputs: []TypeId{TidStr}, Outputs: []TypeId{arena.MakeMaybe(TidInt)}},
+		{Inputs: []TypeId{TidFloat}, Outputs: []TypeId{TidInt}},
 		{Inputs: []TypeId{TidInt}, Outputs: []TypeId{TidInt}},
-		{
-			Inputs:   []TypeId{arena.MakeVar(0)},
-			Outputs:  []TypeId{arena.MakeMaybe(TidInt)},
-			Generics: []TypeVarId{0},
-		},
 	}
 
 	// ----- Path / DateTime / File ops -----
@@ -389,13 +367,12 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 
 	// ----- List ops -----
 
-	// len : ([T] -- int) | (str -- int) | ({K: V} -- int)
+	// len : ([T] -- int) | (str -- int) | ({V} -- int)
 	//     | (Grid -- int) | (GridView -- int) | (GridRow -- int)
 	// Grid/GridView return rows; GridRow returns columns.
 	{
 		t := arena.MakeVar(0)
-		k := arena.MakeVar(0)
-		v := arena.MakeVar(1)
+		v := arena.MakeVar(0)
 		out[names.Intern("len")] = []QuoteSig{
 			{
 				Inputs:   []TypeId{arena.MakeList(t)},
@@ -411,9 +388,9 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 				Outputs: []TypeId{TidInt},
 			},
 			{
-				Inputs:   []TypeId{arena.MakeDict(k, v)},
+				Inputs:   []TypeId{arena.MakeDict(TidStr, v)},
 				Outputs:  []TypeId{TidInt},
-				Generics: []TypeVarId{0, 1},
+				Generics: []TypeVarId{0},
 			},
 			{Inputs: []TypeId{arena.MakeGrid(0)}, Outputs: []TypeId{TidInt}},
 			{Inputs: []TypeId{arena.MakeGridView(0)}, Outputs: []TypeId{TidInt}},
@@ -547,7 +524,6 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 			Inputs:  []TypeId{t},
 			Outputs: []TypeId{TidBool},
 		})
-		k := arena.MakeVar(0)
 		v := arena.MakeVar(1)
 		dictFn := arena.MakeQuote(QuoteSig{
 			Inputs:  []TypeId{v},
@@ -564,9 +540,9 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 				Generics: []TypeVarId{0},
 			},
 			{
-				Inputs:   []TypeId{arena.MakeDict(k, v), dictFn},
-				Outputs:  []TypeId{arena.MakeDict(k, v)},
-				Generics: []TypeVarId{0, 1},
+				Inputs:   []TypeId{arena.MakeDict(TidStr, v), dictFn},
+				Outputs:  []TypeId{arena.MakeDict(TidStr, v)},
+				Generics: []TypeVarId{1},
 			},
 			{Inputs: []TypeId{arena.MakeGrid(0), gridRowFn}, Outputs: []TypeId{arena.MakeGridView(0)}},
 			{Inputs: []TypeId{arena.MakeGridView(0), gridRowFn}, Outputs: []TypeId{arena.MakeGridView(0)}},
@@ -586,19 +562,19 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 			Generics: []TypeVarId{0},
 		}}
 	}
-	// listToDict : ([T] (T -- K) (T -- V) -- {K: V})
+	// listToDict : ([T] (T -- str) (T -- V) -- {V})
+	// The key-extractor must produce a str since dict keys are always str.
 	{
 		t := arena.MakeVar(0)
-		k := arena.MakeVar(1)
 		v := arena.MakeVar(2)
 		out[names.Intern("listToDict")] = []QuoteSig{{
 			Inputs: []TypeId{
 				arena.MakeList(t),
-				arena.MakeQuote(QuoteSig{Inputs: []TypeId{t}, Outputs: []TypeId{k}}),
+				arena.MakeQuote(QuoteSig{Inputs: []TypeId{t}, Outputs: []TypeId{TidStr}}),
 				arena.MakeQuote(QuoteSig{Inputs: []TypeId{t}, Outputs: []TypeId{v}}),
 			},
-			Outputs:  []TypeId{arena.MakeDict(k, v)},
-			Generics: []TypeVarId{0, 1, 2},
+			Outputs:  []TypeId{arena.MakeDict(TidStr, v)},
+			Generics: []TypeVarId{0, 2},
 		}}
 	}
 
@@ -621,55 +597,50 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 
 	// ----- Dict ops -----
 
-	// keys : ({K: V} -- [K])
+	// keys : ({V} -- [str])
 	{
-		k := arena.MakeVar(0)
 		v := arena.MakeVar(1)
 		out[names.Intern("keys")] = []QuoteSig{{
-			Inputs:   []TypeId{arena.MakeDict(k, v)},
-			Outputs:  []TypeId{arena.MakeList(k)},
-			Generics: []TypeVarId{0, 1},
+			Inputs:   []TypeId{arena.MakeDict(TidStr, v)},
+			Outputs:  []TypeId{arena.MakeList(TidStr)},
+			Generics: []TypeVarId{1},
 		}}
 	}
-	// values : ({K: V} -- [V])
+	// values : ({V} -- [V])
 	{
-		k := arena.MakeVar(0)
 		v := arena.MakeVar(1)
 		out[names.Intern("values")] = []QuoteSig{{
-			Inputs:   []TypeId{arena.MakeDict(k, v)},
+			Inputs:   []TypeId{arena.MakeDict(TidStr, v)},
 			Outputs:  []TypeId{arena.MakeList(v)},
-			Generics: []TypeVarId{0, 1},
+			Generics: []TypeVarId{1},
 		}}
 	}
-	// set : ({K: V} K V -- {K: V})
+	// set : ({V} str V -- {V})
 	{
-		k := arena.MakeVar(0)
 		v := arena.MakeVar(1)
 		out[names.Intern("set")] = []QuoteSig{{
-			Inputs:   []TypeId{arena.MakeDict(k, v), k, v},
-			Outputs:  []TypeId{arena.MakeDict(k, v)},
-			Generics: []TypeVarId{0, 1},
+			Inputs:   []TypeId{arena.MakeDict(TidStr, v), TidStr, v},
+			Outputs:  []TypeId{arena.MakeDict(TidStr, v)},
+			Generics: []TypeVarId{1},
 		}}
 	}
-	// setd : ({K: V} K V -- )  — drop variant
+	// setd : ({V} str V -- )  — drop variant
 	{
-		k := arena.MakeVar(0)
 		v := arena.MakeVar(1)
 		out[names.Intern("setd")] = []QuoteSig{{
-			Inputs:   []TypeId{arena.MakeDict(k, v), k, v},
+			Inputs:   []TypeId{arena.MakeDict(TidStr, v), TidStr, v},
 			Outputs:  nil,
-			Generics: []TypeVarId{0, 1},
+			Generics: []TypeVarId{1},
 		}}
 	}
-	// get : ({K: V} K -- Maybe[V])
+	// get : ({V} str -- Maybe[V]) | (GridRow str -- Maybe[T])
 	{
-		k := arena.MakeVar(0)
 		v := arena.MakeVar(1)
 		out[names.Intern("get")] = []QuoteSig{
 			{
-				Inputs:   []TypeId{arena.MakeDict(k, v), k},
+				Inputs:   []TypeId{arena.MakeDict(TidStr, v), TidStr},
 				Outputs:  []TypeId{arena.MakeMaybe(v)},
-				Generics: []TypeVarId{0, 1},
+				Generics: []TypeVarId{1},
 			},
 			{
 				Inputs:   []TypeId{arena.MakeGridRow(0), TidStr},
@@ -678,57 +649,53 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 			},
 		}
 	}
-	// getDef : ({K: V} K V -- V)  — get with default
+	// getDef : ({V} str V -- V)  — get with default
 	{
-		k := arena.MakeVar(0)
 		v := arena.MakeVar(1)
 		out[names.Intern("getDef")] = []QuoteSig{{
-			Inputs:   []TypeId{arena.MakeDict(k, v), k, v},
+			Inputs:   []TypeId{arena.MakeDict(TidStr, v), TidStr, v},
 			Outputs:  []TypeId{v},
-			Generics: []TypeVarId{0, 1},
+			Generics: []TypeVarId{1},
 		}}
 	}
-	// map : ({K: V} (V -- U) -- {K: U})
+	// map : ({V} (V -- U) -- {U})
 	{
-		k := arena.MakeVar(0)
 		v := arena.MakeVar(1)
 		u := arena.MakeVar(2)
 		mapName := names.Intern("map")
 		out[mapName] = append(out[mapName], QuoteSig{
 			Inputs: []TypeId{
-				arena.MakeDict(k, v),
+				arena.MakeDict(TidStr, v),
 				arena.MakeQuote(QuoteSig{Inputs: []TypeId{v}, Outputs: []TypeId{u}}),
 			},
-			Outputs:  []TypeId{arena.MakeDict(k, u)},
-			Generics: []TypeVarId{0, 1, 2},
+			Outputs:  []TypeId{arena.MakeDict(TidStr, u)},
+			Generics: []TypeVarId{1, 2},
 		})
 	}
-	// keyValues : ({K: V} -- [[K, V]])  — list of [k, v] pairs.
-	// Modeled here as `[Maybe[V]]` would lie; pairs in mshell are
-	// represented as 2-element lists at runtime, and the list is
-	// heterogeneous (K and V). We approximate as `[T]` with T fresh —
-	// callers typically use `2unpack` / pattern-match to recover.
+	// keyValues : ({V} -- [[T]])  — list of [k, v] pairs.
+	// Pairs are represented as 2-element lists at runtime, and the
+	// list is heterogeneous (str and V). We approximate as `[[T]]`
+	// with T fresh — callers typically use `2unpack` / pattern-match
+	// to recover.
 	{
-		k := arena.MakeVar(0)
 		v := arena.MakeVar(1)
 		t := arena.MakeVar(2)
 		out[names.Intern("keyValues")] = []QuoteSig{{
-			Inputs:   []TypeId{arena.MakeDict(k, v)},
+			Inputs:   []TypeId{arena.MakeDict(TidStr, v)},
 			Outputs:  []TypeId{arena.MakeList(arena.MakeList(t))},
-			Generics: []TypeVarId{0, 1, 2},
+			Generics: []TypeVarId{1, 2},
 		}}
 	}
-	// in : ({K: V} K -- bool) | (str str -- bool)
+	// in : ({V} str -- bool) | (str str -- bool)
 	// Stack order matches the runtime: the haystack (dict or
 	// string) is below, the needle (key or substring) on top.
 	{
-		k := arena.MakeVar(0)
 		v := arena.MakeVar(1)
 		out[names.Intern("in")] = []QuoteSig{
 			{
-				Inputs:   []TypeId{arena.MakeDict(k, v), k},
+				Inputs:   []TypeId{arena.MakeDict(TidStr, v), TidStr},
 				Outputs:  []TypeId{TidBool},
-				Generics: []TypeVarId{0, 1},
+				Generics: []TypeVarId{1},
 			},
 			{
 				Inputs:  []TypeId{TidStr, TidStr},
@@ -1338,10 +1305,10 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		Inputs:  []TypeId{TidPath},
 		Outputs: []TypeId{TidStr},
 	}}
-	// fileSize : (path|str -- int)
+	// fileSize : (path|str -- Maybe[int])
 	out[names.Intern("fileSize")] = []QuoteSig{
-		{Inputs: []TypeId{TidPath}, Outputs: []TypeId{TidInt}},
-		{Inputs: []TypeId{TidStr}, Outputs: []TypeId{TidInt}},
+		{Inputs: []TypeId{TidPath}, Outputs: []TypeId{arena.MakeMaybe(TidInt)}},
+		{Inputs: []TypeId{TidStr}, Outputs: []TypeId{arena.MakeMaybe(TidInt)}},
 	}
 	// fileExists : (path|str -- bool)
 	out[names.Intern("fileExists")] = []QuoteSig{

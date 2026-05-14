@@ -242,7 +242,12 @@ func specificityScore(arena *TypeArena, t TypeId) int {
 	case TKMaybe, TKList:
 		return 1 + specificityScore(arena, TypeId(n.A))
 	case TKDict:
-		return 1 + specificityScore(arena, TypeId(n.A)) + specificityScore(arena, TypeId(n.B))
+		// Dict keys are always `str` by language design, so the key
+		// position adds no useful discrimination between candidates;
+		// only the value type contributes. Counting it would tilt
+		// inferring-mode resolution toward dict overloads over list
+		// overloads when both could fit.
+		return 1 + specificityScore(arena, TypeId(n.B))
 	case TKShape:
 		s := 1
 		for _, f := range arena.shapeFields[n.Extra] {
