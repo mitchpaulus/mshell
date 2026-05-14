@@ -54,12 +54,8 @@ func TypeCheckProgram(file *MShellFile, stdlibDefs []MShellDefinition) (errors [
 	return out, false
 }
 
-// RegisterStdlibSigs translates each stdlib def's TypeDefinition
-// into a QuoteSig and registers it under its name as a callable
-// builtin. Defs without a usable sig (translator errors) are
-// skipped silently — the call site will surface as
-// `unknown identifier`, which is the same behavior as before
-// integration.
+// RegisterStdlibSigs resolves each stdlib def's signature AST into a
+// QuoteSig and registers it under its name as a callable builtin.
 //
 // If a name is already in nameBuiltins (i.e. a real builtin with
 // the same identifier already exists), the stdlib def is skipped:
@@ -73,10 +69,7 @@ func (c *Checker) RegisterStdlibSigs(defs []MShellDefinition) {
 		if _, exists := c.nameBuiltins[nameId]; exists {
 			continue
 		}
-		sig, errs := TranslateTypeDef(c.arena, c.names, &def.TypeDef)
-		if len(errs) != 0 {
-			continue
-		}
+		sig := c.ResolveDefSig(def.Inputs, def.Outputs)
 		c.nameBuiltins[nameId] = append(c.nameBuiltins[nameId], sig)
 	}
 }
@@ -89,7 +82,7 @@ func (c *Checker) CheckProgram(file *MShellFile) {
 	// Pre-pass 1: register all `type` declarations.
 	for _, item := range file.Items {
 		if d, ok := item.(*MShellTypeDecl); ok {
-			body := ResolveTypeExprAST(c, d.Body)
+			body := c.resolveTypeExpr(d.Body, nil)
 			c.DeclareType(d.Name, body)
 		}
 	}
@@ -98,7 +91,7 @@ func (c *Checker) CheckProgram(file *MShellFile) {
 	defSigs := make([]QuoteSig, len(file.Definitions))
 	for i := range file.Definitions {
 		def := &file.Definitions[i]
-		sig, _ := TranslateTypeDef(c.arena, c.names, &def.TypeDef)
+		sig := c.ResolveDefSig(def.Inputs, def.Outputs)
 		defSigs[i] = sig
 		nameId := c.names.Intern(def.Name)
 		c.nameBuiltins[nameId] = append(c.nameBuiltins[nameId], sig)
@@ -233,7 +226,7 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 		return
 
 	case *MShellAsCast:
-		target := ResolveTypeExprAST(c, it.Target)
+		target := c.resolveTypeExpr(it.Target, nil)
 		if target != TidNothing {
 			c.Cast(target, it.AsToken)
 		}

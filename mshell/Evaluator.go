@@ -42,12 +42,6 @@ import (
 	// "net/http/httputil"
 )
 
-type MShellFunction struct {
-	Name       string
-	Evaluate   func(stack MShellStack, Context ExecuteContext)
-	InputTypes []MShellType
-}
-
 var oleAutomationEpoch = time.Date(1899, 12, 30, 0, 0, 0, 0, time.UTC)
 var randomFixedRand = rand.New(rand.NewSource(1))
 

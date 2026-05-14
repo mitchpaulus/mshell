@@ -32,12 +32,12 @@ def toCsv ([[str]] -- str)
     map. map. toCsvCell end "," join end unlines
 end
 
-def enumerate ([a] -- [[a int]])
-    dup len seq (2tuple) zip
+def enumerate ([a] -- [{"item": a, "index": int }])
+    dup len seq (a!, i! { "item": @a, "index": @i }) zip
 end
 
-def enumerateN ([a] int -- [[a int]])
-    i! dup len seq (@i +) map (2tuple) zip
+def enumerateN ([a] int -- [{"item": a, "index": int }])
+    start! dup len seq (@start +) map (a!, i! { "item": @a, "index": @i }) zip
 end
 
 def 2each (T T (T -- b) -- b b)
@@ -53,7 +53,7 @@ def 2unpack ([a] -- a a)
     dup :0: swap :1:
 end
 
-def 2apply ([a b] (a b -- c) -- c)
+def 2apply ([a | b] (a|b a|b -- c) -- c)
     swap 2unpack rot x
 end
 
@@ -464,7 +464,7 @@ def listToDict ([a] (a -- str) (a -- b) -- c)
     @d
 end
 
-def 2tuple (a b -- [a])
+def 2tuple (a b -- [a | b])
     [] rot append swap append
 end
 
