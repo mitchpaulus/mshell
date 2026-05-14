@@ -101,7 +101,8 @@ end
 
 # Trailing comma is optional (last arm)
 99 match
-    99 : "ninety-nine" wl
+    99 : "ninety-nine" wl,
+    _  : "other" wl
 end
 
 # Match with body that pushes to stack (subject replaced)

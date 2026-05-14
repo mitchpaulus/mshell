@@ -613,11 +613,10 @@ func (c *Checker) checkIfBlock(ifBlock *MShellParseIfBlock) {
 //     Refinement (e.g. inside an `int : ...` arm the subject is known
 //     to be int) is a future improvement.
 //
-// What's NOT yet done:
-//   - Exhaustiveness checking. The Phase 6b `CheckMatchExhaustive`
-//     helper is available but classifying the parser's pattern items
-//     into the MatchArmKind enum needs another translation step.
-//   - Pattern-driven type narrowing inside arms.
+// Exhaustiveness is enforced via classifyArmPattern + CheckMatchExhaustive:
+// the matched value's static type must be fully covered by the arm patterns,
+// or a wildcard `_` arm must be present. Pattern-driven type narrowing inside
+// arms is still a future improvement.
 func (c *Checker) checkMatchBlock(matchBlock *MShellParseMatchBlock) {
 	startTok := matchBlock.GetStartToken()
 	if c.stack.Len() == 0 {
@@ -639,6 +638,7 @@ func (c *Checker) checkMatchBlock(matchBlock *MShellParseMatchBlock) {
 	}
 
 	arms := make([]BranchArm, 0, len(matchBlock.Arms))
+	tags := make([]MatchArmTag, 0, len(matchBlock.Arms))
 	for _, arm := range matchBlock.Arms {
 		c.Fork(snap)
 		// Apply per-arm subject handling.
@@ -656,8 +656,62 @@ func (c *Checker) checkMatchBlock(matchBlock *MShellParseMatchBlock) {
 		}
 		c.restorePatternBindings(patternBindings)
 		arms = append(arms, c.CaptureArm(false))
+		tags = append(tags, c.classifyArmPattern(arm.Pattern))
 	}
 	c.ReconcileArms(arms, startTok)
+	c.CheckMatchExhaustive(subject, tags, startTok)
+}
+
+// classifyArmPattern reduces a parsed match arm pattern to the
+// MatchArmTag the exhaustiveness checker understands. Anything not
+// recognized as wildcard / just / none / true / false / a known type
+// name is returned as MatchArmType with TidNothing — it counts as a
+// non-wildcard arm but credits no coverage.
+func (c *Checker) classifyArmPattern(pattern []MShellParseItem) MatchArmTag {
+	if len(pattern) == 1 {
+		tok, ok := pattern[0].(Token)
+		if ok {
+			switch tok.Type {
+			case TYPEINT:
+				return MatchArmTag{Kind: MatchArmType, TypeArm: TidInt}
+			case TYPEFLOAT:
+				return MatchArmTag{Kind: MatchArmType, TypeArm: TidFloat}
+			case TYPEBOOL:
+				return MatchArmTag{Kind: MatchArmType, TypeArm: TidBool}
+			case STR:
+				return MatchArmTag{Kind: MatchArmType, TypeArm: TidStr}
+			case TRUE:
+				return MatchArmTag{Kind: MatchArmTrue}
+			case FALSE:
+				return MatchArmTag{Kind: MatchArmFalse}
+			case LITERAL:
+				switch tok.Lexeme {
+				case "_":
+					return MatchArmTag{Kind: MatchArmWildcard}
+				case "none":
+					return MatchArmTag{Kind: MatchArmNone}
+				case "path":
+					return MatchArmTag{Kind: MatchArmType, TypeArm: TidPath}
+				case "date":
+					return MatchArmTag{Kind: MatchArmType, TypeArm: TidDateTime}
+				case "binary":
+					return MatchArmTag{Kind: MatchArmType, TypeArm: TidBytes}
+				}
+				// User-declared named type (e.g. `type X = A | B`).
+				if tid := c.LookupType(tok.Lexeme); tid != TidNothing {
+					return MatchArmTag{Kind: MatchArmType, TypeArm: tid}
+				}
+			}
+		}
+	}
+	if len(pattern) == 2 {
+		if t0, ok := pattern[0].(Token); ok && t0.Type == LITERAL && t0.Lexeme == "just" {
+			if _, ok := pattern[1].(Token); ok {
+				return MatchArmTag{Kind: MatchArmJust}
+			}
+		}
+	}
+	return MatchArmTag{Kind: MatchArmType, TypeArm: TidNothing}
 }
 
 type patternBinding struct {

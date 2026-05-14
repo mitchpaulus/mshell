@@ -205,6 +205,8 @@ const (
 	MatchArmJust
 	MatchArmNone
 	MatchArmType
+	MatchArmTrue  // bool literal `true` pattern
+	MatchArmFalse // bool literal `false` pattern
 )
 
 // MatchArmTag describes one pattern-side of a match arm. The body's
@@ -275,6 +277,25 @@ func (c *Checker) CheckMatchExhaustive(matched TypeId, arms []MatchArmTag, callS
 			Hint: "union match must cover every arm or include a wildcard",
 		})
 		return false
+
+	case TKPrim:
+		// Booleans have a finite inhabitant set; `true`+`false` arms
+		// cover them without a wildcard. Other primitives (int, str,
+		// ...) have unbounded inhabitants and need a wildcard.
+		if matched == TidBool {
+			hasTrue, hasFalse := false, false
+			for _, arm := range arms {
+				switch arm.Kind {
+				case MatchArmTrue:
+					hasTrue = true
+				case MatchArmFalse:
+					hasFalse = true
+				}
+			}
+			if hasTrue && hasFalse {
+				return true
+			}
+		}
 	}
 
 	// Other kinds — no exhaustiveness rule encoded yet (shapes, brands,
