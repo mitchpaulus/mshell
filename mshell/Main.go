@@ -221,6 +221,18 @@ func envWithoutStartupOverrides() []string {
 	return filteredEnv
 }
 
+// startupLoadError wraps an underlying load failure with the spec that was being
+// loaded, so callers can build a rich diagnostic describing the lookup process.
+type startupLoadError struct {
+	which   string // "stdlib" or "init"
+	spec    startupFileSpec
+	options startupLoadOptions
+	cause   error
+}
+
+func (e *startupLoadError) Error() string { return e.cause.Error() }
+func (e *startupLoadError) Unwrap() error { return e.cause }
+
 func loadStartupDefinitions(options startupLoadOptions, stack *MShellStack, context ExecuteContext, state *EvalState) ([]MShellDefinition, error) {
 	stdlibSpec, initSpec, err := getStartupFileSpecs(options)
 	if err != nil {
@@ -229,17 +241,146 @@ func loadStartupDefinitions(options startupLoadOptions, stack *MShellStack, cont
 
 	definitions := make([]MShellDefinition, 0)
 	if err := loadStartupFile(stdlibSpec.path, stdlibSpec.description, stack, context, state, &definitions); err != nil {
-		return nil, err
+		return nil, &startupLoadError{which: "stdlib", spec: stdlibSpec, options: options, cause: err}
 	}
 
 	if err := loadStartupFile(initSpec.path, initSpec.description, stack, context, state, &definitions); err != nil {
 		if !initSpec.required && errors.Is(err, os.ErrNotExist) {
 			return definitions, nil
 		}
-		return nil, err
+		return nil, &startupLoadError{which: "init", spec: initSpec, options: options, cause: err}
 	}
 
 	return definitions, nil
+}
+
+// formatStartupErrorMessage builds a multi-line explanation of how msh searches
+// for its startup files and where the lookup failed, so users can understand
+// what to do next without having to read the source.
+//
+// inputFilePath is the script being run (empty if reading stdin or -c input).
+// fileVersion is the value of any `VER "x.y.z"` directive in that script, or "".
+func formatStartupErrorMessage(err error, inputFilePath, fileVersion string) string {
+	var sle *startupLoadError
+	if !errors.As(err, &sle) {
+		return fmt.Sprintf("Error loading startup files: %s", err)
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "Error loading startup files: %s\n", sle.cause)
+	b.WriteString("\n")
+
+	src := inputFilePath
+	if src == "" {
+		src = "<stdin or -c input>"
+	}
+	fmt.Fprintf(&b, "While loading startup files for: %s\n", src)
+
+	if fileVersion != "" {
+		fmt.Fprintf(&b, "Version pinned by `VER \"%s\"` directive in the script; running msh (%s) matches, so MSHSTDLIB/MSHINIT overrides are ignored.\n", fileVersion, mshellVersion)
+	} else {
+		fmt.Fprintf(&b, "Version not pinned in the script; using the current msh version %s. MSHSTDLIB/MSHINIT overrides are honored.\n", mshellVersion)
+	}
+
+	stdlibPath, initPath, pathsErr := getStartupPaths(sle.options.version)
+
+	envStdlib, envStdlibSet := os.LookupEnv("MSHSTDLIB")
+	envInit, envInitSet := os.LookupEnv("MSHINIT")
+
+	b.WriteString("\nStandard library (std.msh) lookup order:\n")
+	if sle.options.allowEnvOverrides {
+		if envStdlibSet && strings.TrimSpace(envStdlib) != "" {
+			fmt.Fprintf(&b, "  1. MSHSTDLIB env var = %q  (used)\n", envStdlib)
+		} else {
+			fmt.Fprintf(&b, "  1. MSHSTDLIB env var (not set)\n")
+		}
+	} else {
+		envDisplay := "(not set)"
+		if envStdlibSet {
+			envDisplay = fmt.Sprintf("= %q", envStdlib)
+		}
+		fmt.Fprintf(&b, "  1. MSHSTDLIB env var %s  (ignored: version pinned)\n", envDisplay)
+	}
+	if pathsErr != nil {
+		fmt.Fprintf(&b, "  2. Standard location: <unavailable: %s>\n", pathsErr)
+	} else {
+		fmt.Fprintf(&b, "  2. Standard location: %s\n", stdlibPath)
+	}
+
+	b.WriteString("\nInit file (init.msh) lookup order:\n")
+	if sle.options.allowEnvOverrides {
+		if envInitSet && strings.TrimSpace(envInit) != "" {
+			fmt.Fprintf(&b, "  1. MSHINIT env var = %q  (used)\n", envInit)
+		} else {
+			fmt.Fprintf(&b, "  1. MSHINIT env var (not set)\n")
+		}
+	} else {
+		envDisplay := "(not set)"
+		if envInitSet {
+			envDisplay = fmt.Sprintf("= %q", envInit)
+		}
+		fmt.Fprintf(&b, "  1. MSHINIT env var %s  (ignored: version pinned)\n", envDisplay)
+	}
+	if pathsErr != nil {
+		fmt.Fprintf(&b, "  2. Standard location: <unavailable: %s>\n", pathsErr)
+	} else {
+		fmt.Fprintf(&b, "  2. Standard location: %s\n", initPath)
+	}
+	if sle.options.requireInit {
+		b.WriteString("  (init file is required because the script pinned a version)\n")
+	} else {
+		b.WriteString("  (init file is optional; missing init is not an error when no version is pinned)\n")
+	}
+
+	dataDir, dataDirErr := getStartupDataDir()
+	configDir, configDirErr := getStartupConfigDir()
+	b.WriteString("\nStandard locations are derived from:\n")
+	if runtime.GOOS == "windows" {
+		b.WriteString("  - data dir: %LOCALAPPDATA%\\msh\\<version>\\std.msh\n")
+		b.WriteString("  - config dir: %LOCALAPPDATA%\\msh\\<version>\\init.msh\n")
+	} else {
+		b.WriteString("  - data dir: $XDG_DATA_HOME/msh/<version>/std.msh, falling back to $HOME/.local/share/msh/<version>/std.msh\n")
+		b.WriteString("  - config dir: $XDG_CONFIG_HOME/msh/<version>/init.msh, falling back to $HOME/.config/msh/<version>/init.msh\n")
+	}
+	if dataDirErr == nil {
+		fmt.Fprintf(&b, "  - resolved data dir: %s\n", dataDir)
+	}
+	if configDirErr == nil {
+		fmt.Fprintf(&b, "  - resolved config dir: %s\n", configDir)
+	}
+
+	b.WriteString("\nWhat failed: ")
+	switch sle.which {
+	case "stdlib":
+		fmt.Fprintf(&b, "loading the standard library from %s\n", sle.spec.path)
+	case "init":
+		fmt.Fprintf(&b, "loading the init file from %s\n", sle.spec.path)
+	}
+
+	b.WriteString("\nTo resolve:\n")
+	if errors.Is(sle.cause, os.ErrNotExist) {
+		switch sle.which {
+		case "stdlib":
+			fmt.Fprintf(&b, "  - Install std.msh for version %s at the standard location shown above\n", sle.options.version)
+			if sle.options.allowEnvOverrides {
+				b.WriteString("  - Or set MSHSTDLIB to point at an existing std.msh file\n")
+			} else {
+				b.WriteString("  - Or remove the VER directive from the script so the running msh version is used (and MSHSTDLIB can override)\n")
+			}
+		case "init":
+			fmt.Fprintf(&b, "  - Create an init.msh at the standard location shown above\n")
+			if sle.options.allowEnvOverrides {
+				b.WriteString("  - Or set MSHINIT to point at an existing init.msh file\n")
+			}
+			if sle.options.requireInit {
+				b.WriteString("  - Or remove the VER directive from the script if you don't need a versioned init\n")
+			}
+		}
+	} else {
+		b.WriteString("  - Fix the underlying error reported above (parse/eval/permissions) at the indicated path\n")
+	}
+
+	return b.String()
 }
 
 func main() {
@@ -623,7 +764,7 @@ func main() {
 		requireInit:       requireVersionedInit,
 	}, &stack, context, &state)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error loading startup files: %s\n", err)
+		fmt.Fprintln(os.Stderr, formatStartupErrorMessage(err, inputFilePath, file.Version))
 		os.Exit(1)
 		return
 	}
