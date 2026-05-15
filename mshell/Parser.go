@@ -24,6 +24,8 @@ type MShellFile struct {
 	Definitions []MShellDefinition
 	Items       []MShellParseItem
 	Version     string // Set by VER "x.y.z" directive; empty if not specified.
+	VersionLine int    // Line of the VER token when Version is set
+	VersionCol  int    // Column of the VER token when Version is set
 }
 
 type MShellParseList struct {
@@ -686,6 +688,8 @@ func (parser *MShellParser) ParseFile() (file *MShellFile, err error) {
 			if file.Version != "" {
 				return file, fmt.Errorf("%d:%d: Duplicate VER directive; version already set to %q", parser.curr.Line, parser.curr.Column, file.Version)
 			}
+			verLine := parser.curr.Line
+			verCol := parser.curr.Column
 			parser.NextToken()
 			t := parser.curr
 			if t.Type == STRING {
@@ -694,8 +698,12 @@ func (parser *MShellParser) ParseFile() (file *MShellFile, err error) {
 					return file, fmt.Errorf("%d:%d: Invalid string in VER directive: %s", t.Line, t.Column, err)
 				}
 				file.Version = v
+				file.VersionLine = verLine
+				file.VersionCol = verCol
 			} else if t.Type == SINGLEQUOTESTRING {
 				file.Version = t.Lexeme[1 : len(t.Lexeme)-1]
+				file.VersionLine = verLine
+				file.VersionCol = verCol
 			} else {
 				return file, fmt.Errorf("%d:%d: Expected a string after VER, got %s", t.Line, t.Column, t.Type)
 			}

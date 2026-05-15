@@ -228,10 +228,35 @@ type startupLoadError struct {
 	spec    startupFileSpec
 	options startupLoadOptions
 	cause   error
+
+	// otherSpec / otherStatus describe the result of a preflight check on the
+	// startup file that wasn't actively being loaded (e.g. init when stdlib
+	// failed first), so the user sees every relevant problem in one message.
+	otherSpec   *startupFileSpec
+	otherStatus string
 }
 
 func (e *startupLoadError) Error() string { return e.cause.Error() }
 func (e *startupLoadError) Unwrap() error { return e.cause }
+
+// preflightStartupFile returns a short human-readable status describing whether
+// the file at spec.path is reachable and parseable, without evaluating it.
+func preflightStartupFile(spec startupFileSpec) string {
+	sourceBytes, err := os.ReadFile(spec.path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			if spec.required {
+				return fmt.Sprintf("missing at %s (required, would also fail)", spec.path)
+			}
+			return fmt.Sprintf("missing at %s (optional, would be skipped)", spec.path)
+		}
+		return fmt.Sprintf("unreadable at %s: %s", spec.path, err)
+	}
+	if _, err := parseMShellInput(string(sourceBytes), &TokenFile{spec.path}); err != nil {
+		return fmt.Sprintf("present at %s but would fail to parse: %s", spec.path, err)
+	}
+	return fmt.Sprintf("present at %s (parses ok; not evaluated because the other startup file failed first)", spec.path)
+}
 
 func loadStartupDefinitions(options startupLoadOptions, stack *MShellStack, context ExecuteContext, state *EvalState) ([]MShellDefinition, error) {
 	stdlibSpec, initSpec, err := getStartupFileSpecs(options)
@@ -241,7 +266,15 @@ func loadStartupDefinitions(options startupLoadOptions, stack *MShellStack, cont
 
 	definitions := make([]MShellDefinition, 0)
 	if err := loadStartupFile(stdlibSpec.path, stdlibSpec.description, stack, context, state, &definitions); err != nil {
-		return nil, &startupLoadError{which: "stdlib", spec: stdlibSpec, options: options, cause: err}
+		initStatus := preflightStartupFile(initSpec)
+		return nil, &startupLoadError{
+			which:       "stdlib",
+			spec:        stdlibSpec,
+			options:     options,
+			cause:       err,
+			otherSpec:   &initSpec,
+			otherStatus: initStatus,
+		}
 	}
 
 	if err := loadStartupFile(initSpec.path, initSpec.description, stack, context, state, &definitions); err != nil {
@@ -260,7 +293,8 @@ func loadStartupDefinitions(options startupLoadOptions, stack *MShellStack, cont
 //
 // inputFilePath is the script being run (empty if reading stdin or -c input).
 // fileVersion is the value of any `VER "x.y.z"` directive in that script, or "".
-func formatStartupErrorMessage(err error, inputFilePath, fileVersion string) string {
+// verLine/verCol are the location of the VER token (1-based); ignored when fileVersion is "".
+func formatStartupErrorMessage(err error, inputFilePath, fileVersion string, verLine, verCol int) string {
 	var sle *startupLoadError
 	if !errors.As(err, &sle) {
 		return fmt.Sprintf("Error loading startup files: %s", err)
@@ -277,9 +311,16 @@ func formatStartupErrorMessage(err error, inputFilePath, fileVersion string) str
 	fmt.Fprintf(&b, "While loading startup files for: %s\n", src)
 
 	if fileVersion != "" {
-		fmt.Fprintf(&b, "Version pinned by `VER \"%s\"` directive in the script; running msh (%s) matches, so MSHSTDLIB/MSHINIT overrides are ignored.\n", fileVersion, mshellVersion)
+		loc := ""
+		if verLine > 0 {
+			loc = fmt.Sprintf(" at line %d, column %d", verLine, verCol)
+			if inputFilePath != "" {
+				loc = fmt.Sprintf(" at %s:%d:%d", inputFilePath, verLine, verCol)
+			}
+		}
+		fmt.Fprintf(&b, "Version pinned by `VER \"%s\"` directive%s; running msh (%s) matches, so MSHSTDLIB/MSHINIT environment variable overrides are ignored.\n", fileVersion, loc, mshellVersion)
 	} else {
-		fmt.Fprintf(&b, "Version not pinned in the script; using the current msh version %s. MSHSTDLIB/MSHINIT overrides are honored.\n", mshellVersion)
+		fmt.Fprintf(&b, "Version not pinned in the script; using the current msh version %s. MSHSTDLIB/MSHINIT environment variable overrides are honored.\n", mshellVersion)
 	}
 
 	stdlibPath, initPath, pathsErr := getStartupPaths(sle.options.version)
@@ -357,18 +398,34 @@ func formatStartupErrorMessage(err error, inputFilePath, fileVersion string) str
 		fmt.Fprintf(&b, "loading the init file from %s\n", sle.spec.path)
 	}
 
+	if sle.otherSpec != nil && sle.otherStatus != "" {
+		other := "init file"
+		if sle.which == "init" {
+			other = "standard library"
+		}
+		fmt.Fprintf(&b, "Other startup file (%s): %s\n", other, sle.otherStatus)
+	}
+
 	b.WriteString("\nTo resolve:\n")
 	if errors.Is(sle.cause, os.ErrNotExist) {
 		switch sle.which {
 		case "stdlib":
-			fmt.Fprintf(&b, "  - Install std.msh for version %s at the standard location shown above\n", sle.options.version)
+			if pathsErr == nil {
+				fmt.Fprintf(&b, "  - Install std.msh for version %s at %s\n", sle.options.version, stdlibPath)
+			} else {
+				fmt.Fprintf(&b, "  - Install std.msh for version %s at the standard location (could not resolve: %s)\n", sle.options.version, pathsErr)
+			}
 			if sle.options.allowEnvOverrides {
 				b.WriteString("  - Or set MSHSTDLIB to point at an existing std.msh file\n")
 			} else {
 				b.WriteString("  - Or remove the VER directive from the script so the running msh version is used (and MSHSTDLIB can override)\n")
 			}
 		case "init":
-			fmt.Fprintf(&b, "  - Create an init.msh at the standard location shown above\n")
+			if pathsErr == nil {
+				fmt.Fprintf(&b, "  - Create an init.msh at %s\n", initPath)
+			} else {
+				fmt.Fprintf(&b, "  - Create an init.msh at the standard location (could not resolve: %s)\n", pathsErr)
+			}
 			if sle.options.allowEnvOverrides {
 				b.WriteString("  - Or set MSHINIT to point at an existing init.msh file\n")
 			}
@@ -764,7 +821,7 @@ func main() {
 		requireInit:       requireVersionedInit,
 	}, &stack, context, &state)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, formatStartupErrorMessage(err, inputFilePath, file.Version))
+		fmt.Fprintln(os.Stderr, formatStartupErrorMessage(err, inputFilePath, file.Version, file.VersionLine, file.VersionCol))
 		os.Exit(1)
 		return
 	}
