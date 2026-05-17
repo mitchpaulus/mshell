@@ -123,12 +123,14 @@ func (c *Checker) checkDefBody(def *MShellDefinition, sig QuoteSig) {
 	// Save outer state.
 	outerStack := c.stack.items
 	outerVars := c.vars.bound
+	outerMaybeVars := c.vars.maybeBound
 	outerDiverged := c.diverged
 	prevFn := c.currentFn
 	cp := c.subst.Checkpoint()
 
 	c.stack.items = nil
 	c.vars.bound = make(map[NameId]TypeId)
+	c.vars.maybeBound = make(map[NameId]TypeId)
 	c.diverged = false
 
 	// Fresh-rename generics for this body check.
@@ -180,6 +182,7 @@ func (c *Checker) checkDefBody(def *MShellDefinition, sig QuoteSig) {
 	c.subst.Rollback(cp)
 	c.stack.items = outerStack
 	c.vars.bound = outerVars
+	c.vars.maybeBound = outerMaybeVars
 	c.diverged = outerDiverged
 }
 
@@ -411,7 +414,9 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 					if n := len(storeName); n > 0 && storeName[n-1] == '!' {
 						storeName = storeName[:n-1]
 					}
-					c.vars.bound[c.names.Intern(storeName)] = fresh
+					storeNameId := c.names.Intern(storeName)
+					c.vars.bound[storeNameId] = fresh
+					delete(c.vars.maybeBound, storeNameId)
 					continue
 				}
 				c.errors = append(c.errors, TypeError{
@@ -429,7 +434,9 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 			if n := len(storeName); n > 0 && storeName[n-1] == '!' {
 				storeName = storeName[:n-1]
 			}
-			c.vars.bound[c.names.Intern(storeName)] = top
+			storeNameId := c.names.Intern(storeName)
+			c.vars.bound[storeNameId] = top
+			delete(c.vars.maybeBound, storeNameId)
 		}
 		return
 

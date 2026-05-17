@@ -39,6 +39,7 @@ func (c *Checker) InferQuoteSig(body []Token) QuoteSig {
 
 	c.stack.items = c.stack.items[:0]
 	c.vars.bound = make(map[NameId]TypeId)
+	c.vars.maybeBound = make(map[NameId]TypeId)
 	c.inferring = true
 	c.inferInputs = nil
 	c.diverged = false
@@ -101,7 +102,12 @@ func (c *Checker) inferQuoteSigItemsWithInputs(body []MShellParseItem, initialIn
 	for k, v := range c.vars.bound {
 		inherited[k] = v
 	}
+	inheritedMaybe := make(map[NameId]TypeId, len(c.vars.maybeBound))
+	for k, v := range c.vars.maybeBound {
+		inheritedMaybe[k] = v
+	}
 	c.vars.bound = inherited
+	c.vars.maybeBound = inheritedMaybe
 	c.inferring = true
 	c.inferInputs = nil
 	c.diverged = false

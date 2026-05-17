@@ -21,6 +21,7 @@ const (
 	TErrStackUnderflow
 	TErrTypeMismatch
 	TErrUnknownIdentifier
+	TErrMaybeUnset // variable bound on some control-flow paths but not others
 	TErrLeftoverStack // top-level program left items on the stack at end (informational; not always an error)
 	TErrBranchStackSize
 	TErrBranchVarSet
@@ -66,6 +67,8 @@ func (e TypeError) Format(arena *TypeArena, names *NameTable) string {
 			FormatType(arena, names, e.Actual))
 	case TErrUnknownIdentifier:
 		fmt.Fprintf(&sb, "unknown identifier '%s'", e.Name)
+	case TErrMaybeUnset:
+		fmt.Fprintf(&sb, "variable '%s' may be unset here: it is bound on some control-flow paths but not all", e.Name)
 	case TErrLeftoverStack:
 		fmt.Fprintf(&sb, "values left on stack at end of program: %s", e.Hint)
 	case TErrBranchStackSize:

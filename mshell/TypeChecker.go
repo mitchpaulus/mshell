@@ -47,15 +47,33 @@ func (s *TypeStack) Snapshot() []TypeId {
 	return out
 }
 
-// VarEnv is a per-scope mapping from bound variable name to its current type.
-// Phase 2 keeps this here as a placeholder; bindings are not yet exercised.
+// VarEnv tracks bound variables per scope. Variables fall into two
+// states:
+//
+//   - bound: definitely set on every path that leads here. `@name`
+//     reads the stored TypeId.
+//
+//   - maybeBound: set on some paths but not others. Branch
+//     reconciliation lifts names that aren't bound in every live arm
+//     into this map (keyed by name, value is the unioned type from
+//     whichever arms did bind it). Reading `@name` while it's in this
+//     map is reported as an error — the user should restructure so
+//     the binding is unconditional, since mshell has no probe
+//     operator.
+//
+// A subsequent unconditional VARSTORE for the same name removes the
+// maybeBound entry (the store makes the binding definite again).
 type VarEnv struct {
-	bound map[NameId]TypeId
+	bound      map[NameId]TypeId
+	maybeBound map[NameId]TypeId
 }
 
 // NewVarEnv constructs an empty environment.
 func NewVarEnv() VarEnv {
-	return VarEnv{bound: make(map[NameId]TypeId, 8)}
+	return VarEnv{
+		bound:      make(map[NameId]TypeId, 8),
+		maybeBound: make(map[NameId]TypeId, 0),
+	}
 }
 
 // FnContext is the per-function checking context. In Phase 2 only the
@@ -231,16 +249,27 @@ func (c *Checker) checkOne(tok Token) {
 		c.stack.items = c.stack.items[:c.stack.Len()-1]
 		return
 	case VARRETRIEVE:
-		// `@name`: push the bound variable's type. Unknown name
-		// is reported (a `@name` reference assumes prior storage
-		// via `name!`). On miss, push a fresh var so the rest of
-		// the walk has something coherent to operate on.
+		// `@name`: push the bound variable's type. Three cases:
+		//   - bound on every path leading here: push the stored
+		//     TypeId.
+		//   - maybeBound (set on some paths, not others): report
+		//     TErrMaybeUnset and push the stored TypeId so
+		//     downstream checking still has a coherent stack.
+		//   - unknown: report TErrUnknownIdentifier and push a
+		//     fresh var.
 		name := tok.Lexeme
 		if len(name) > 0 && name[0] == '@' {
 			name = name[1:]
 		}
 		nameId := c.names.Intern(name)
 		if t, ok := c.vars.bound[nameId]; ok {
+			c.stack.Push(t)
+		} else if t, ok := c.vars.maybeBound[nameId]; ok {
+			c.errors = append(c.errors, TypeError{
+				Kind: TErrMaybeUnset,
+				Pos:  tok,
+				Name: tok.Lexeme,
+			})
 			c.stack.Push(t)
 		} else {
 			c.errors = append(c.errors, TypeError{

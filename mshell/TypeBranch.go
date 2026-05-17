@@ -27,9 +27,10 @@ package main
 // and to restore its entry state between arms. It does not capture
 // the substitution — that is intentionally global, see file header.
 type ScopeSnapshot struct {
-	stack    []TypeId
-	vars     map[NameId]TypeId
-	diverged bool
+	stack      []TypeId
+	vars       map[NameId]TypeId
+	maybeVars  map[NameId]TypeId
+	diverged   bool
 }
 
 // Snapshot returns a copy of the checker's current stack and var env.
@@ -42,7 +43,11 @@ func (c *Checker) Snapshot() ScopeSnapshot {
 	for k, v := range c.vars.bound {
 		varsCopy[k] = v
 	}
-	return ScopeSnapshot{stack: stackCopy, vars: varsCopy, diverged: c.diverged}
+	maybeCopy := make(map[NameId]TypeId, len(c.vars.maybeBound))
+	for k, v := range c.vars.maybeBound {
+		maybeCopy[k] = v
+	}
+	return ScopeSnapshot{stack: stackCopy, vars: varsCopy, maybeVars: maybeCopy, diverged: c.diverged}
 }
 
 // Fork resets the checker's stack and var env to a copy of snap. The
@@ -54,6 +59,10 @@ func (c *Checker) Fork(snap ScopeSnapshot) {
 	for k, v := range snap.vars {
 		c.vars.bound[k] = v
 	}
+	c.vars.maybeBound = make(map[NameId]TypeId, len(snap.maybeVars))
+	for k, v := range snap.maybeVars {
+		c.vars.maybeBound[k] = v
+	}
 	c.diverged = snap.diverged
 }
 
@@ -63,9 +72,10 @@ func (c *Checker) Fork(snap ScopeSnapshot) {
 // CaptureArm at the tail. Diverged is true when the arm cannot fall
 // through (exit, infinite loop, propagated fail).
 type BranchArm struct {
-	Stack    []TypeId
-	Vars     map[NameId]TypeId
-	Diverged bool
+	Stack     []TypeId
+	Vars      map[NameId]TypeId
+	MaybeVars map[NameId]TypeId
+	Diverged  bool
 }
 
 // CaptureArm reads the checker's current stack and vars into a
@@ -79,7 +89,11 @@ func (c *Checker) CaptureArm(diverged bool) BranchArm {
 	for k, v := range c.vars.bound {
 		varsCopy[k] = v
 	}
-	return BranchArm{Stack: stackCopy, Vars: varsCopy, Diverged: diverged}
+	maybeCopy := make(map[NameId]TypeId, len(c.vars.maybeBound))
+	for k, v := range c.vars.maybeBound {
+		maybeCopy[k] = v
+	}
+	return BranchArm{Stack: stackCopy, Vars: varsCopy, MaybeVars: maybeCopy, Diverged: diverged}
 }
 
 // ReconcileArms merges per-arm tail states into a single post-branch
@@ -106,6 +120,7 @@ func (c *Checker) ReconcileArms(arms []BranchArm, callSite Token) {
 		// code is dead. (No error here — Phase 7-or-later may flag it.)
 		c.stack.items = c.stack.items[:0]
 		c.vars.bound = make(map[NameId]TypeId)
+		c.vars.maybeBound = make(map[NameId]TypeId)
 		return
 	}
 
@@ -132,28 +147,9 @@ func (c *Checker) ReconcileArms(arms []BranchArm, callSite Token) {
 		for k, v := range first.Vars {
 			c.vars.bound[k] = v
 		}
-		return
-	}
-
-	// Var-set agreement: every non-diverged arm must bind the same names.
-	varsAgree := true
-	for _, i := range live[1:] {
-		if !sameVarSet(first.Vars, arms[i].Vars) {
-			varsAgree = false
-			break
-		}
-	}
-	if !varsAgree {
-		c.errors = append(c.errors, TypeError{
-			Kind: TErrBranchVarSet,
-			Pos:  callSite,
-			Hint: "all branches must bind the same set of variable names",
-		})
-		// Recovery: same as above.
-		c.stack.items = append(c.stack.items[:0], first.Stack...)
-		c.vars.bound = make(map[NameId]TypeId, len(first.Vars))
-		for k, v := range first.Vars {
-			c.vars.bound[k] = v
+		c.vars.maybeBound = make(map[NameId]TypeId, len(first.MaybeVars))
+		for k, v := range first.MaybeVars {
+			c.vars.maybeBound[k] = v
 		}
 		return
 	}
@@ -170,30 +166,46 @@ func (c *Checker) ReconcileArms(arms []BranchArm, callSite Token) {
 	}
 	c.stack.items = append(c.stack.items[:0], merged...)
 
-	// Per-var type union.
-	mergedVars := make(map[NameId]TypeId, len(first.Vars))
-	for name := range first.Vars {
+	// Per-var reconciliation. A name is "definitely bound" after the
+	// branch iff every live arm has it in `Vars` (bound). Otherwise
+	// — bound in some live arms but not others, or sitting in
+	// MaybeVars on any arm — it lifts to maybeBound. Types are
+	// unioned across whichever arms carried the name in either map,
+	// so `@name` at a downstream maybeBound site still has a useful
+	// type for recovery.
+	allNames := make(map[NameId]struct{})
+	for _, i := range live {
+		for n := range arms[i].Vars {
+			allNames[n] = struct{}{}
+		}
+		for n := range arms[i].MaybeVars {
+			allNames[n] = struct{}{}
+		}
+	}
+	mergedBound := make(map[NameId]TypeId)
+	mergedMaybe := make(map[NameId]TypeId)
+	for name := range allNames {
+		boundEverywhere := true
 		scratch = scratch[:0]
 		for _, i := range live {
-			scratch = append(scratch, arms[i].Vars[name])
+			if t, ok := arms[i].Vars[name]; ok {
+				scratch = append(scratch, t)
+				continue
+			}
+			boundEverywhere = false
+			if t, ok := arms[i].MaybeVars[name]; ok {
+				scratch = append(scratch, t)
+			}
 		}
-		mergedVars[name] = c.arena.MakeUnion(scratch, 0)
-	}
-	c.vars.bound = mergedVars
-}
-
-// sameVarSet reports whether two var maps have identical key sets.
-// Type comparison is left for the per-name union step.
-func sameVarSet(a, b map[NameId]TypeId) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for k := range a {
-		if _, ok := b[k]; !ok {
-			return false
+		merged := c.arena.MakeUnion(scratch, 0)
+		if boundEverywhere {
+			mergedBound[name] = merged
+		} else {
+			mergedMaybe[name] = merged
 		}
 	}
-	return true
+	c.vars.bound = mergedBound
+	c.vars.maybeBound = mergedMaybe
 }
 
 // MatchArmKind tags the shape of a match arm for exhaustiveness analysis.
