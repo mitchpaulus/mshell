@@ -327,26 +327,12 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 		return
 
 	case *MShellParseQuote:
-		if candidates, ok := c.quoteOverloadCandidates(it.Items); ok {
-			// Instantiate each candidate's generics to fresh vars at
-			// the push site. Builtin overload templates share small
-			// TypeVarIds (0, 1, ...) across entries, so storing the
-			// raw candidates would let occurs checks conflate them
-			// with the caller's freshly-allocated vars. Per-push
-			// instantiation gives each quote literal a private set.
-			fresh := make([]QuoteSig, len(candidates))
-			for i, cand := range candidates {
-				fresh[i] = c.Instantiate(cand)
-			}
-			c.stack.Push(c.arena.MakeOverloadedQuote(fresh))
-			return
-		}
-		// Phase 7 inference: run the body against a fresh empty
-		// stack with inferring mode on, accumulate underflow as
-		// fresh-var inputs, take the residual stack as outputs.
-		// The result is the quote literal's inferred sig.
-		sig := c.InferQuoteSigItems(it.Items)
-		c.stack.Push(c.arena.MakeQuote(sig))
+		// Branching inference walks the body considering every
+		// viable overload at each step. The result is the set of
+		// surviving sigs — one collapses to TKQuote, multiple to
+		// TKOverloadedQuote so the consumption site can resolve.
+		sigs := c.InferQuoteSigItems(it.Items)
+		c.stack.Push(c.arena.MakeOverloadedQuote(sigs))
 		return
 
 	case *MShellParsePrefixQuote:
@@ -354,8 +340,8 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 		if len(funcName) > 0 && funcName[len(funcName)-1] == '.' {
 			funcName = funcName[:len(funcName)-1]
 		}
-		sig := c.InferQuoteSigItemsWithInputs(it.Items, c.prefixQuoteInputs(funcName))
-		c.stack.Push(c.arena.MakeQuote(sig))
+		sigs := c.InferQuoteSigItemsWithInputs(it.Items, c.prefixQuoteInputs(funcName))
+		c.stack.Push(c.arena.MakeOverloadedQuote(sigs))
 		callTok := it.StartToken
 		callTok.Type = LITERAL
 		callTok.Lexeme = funcName
@@ -518,26 +504,6 @@ func (c *Checker) prefixQuoteInputs(funcName string) []TypeId {
 		return []TypeId{TypeId(node.B)}
 	}
 	return nil
-}
-
-func (c *Checker) quoteOverloadCandidates(items []MShellParseItem) ([]QuoteSig, bool) {
-	if len(items) != 1 {
-		return nil, false
-	}
-	tok, ok := items[0].(Token)
-	if !ok {
-		return nil, false
-	}
-	if sigs, ok := c.builtins[tok.Type]; ok && len(sigs) > 1 {
-		return sigs, true
-	}
-	if tok.Type == LITERAL {
-		nameId := c.names.Intern(tok.Lexeme)
-		if sigs, ok := c.nameBuiltins[nameId]; ok && len(sigs) > 1 {
-			return sigs, true
-		}
-	}
-	return nil, false
 }
 
 // checkIfBlock drives an if/else-if/else chain through the branch
