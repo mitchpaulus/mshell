@@ -1,5 +1,7 @@
 package main
 
+import "strings"
+
 // Phase 10 step 3 (gate) + step 4 (program-flow walker).
 //
 // TypeCheckProgram is the entry point invoked from Main.go's
@@ -157,21 +159,25 @@ func (c *Checker) checkDefBody(def *MShellDefinition, sig QuoteSig) {
 		// a later control-flow refinement.
 	} else if c.stack.Len() != len(expected) {
 		c.errors = append(c.errors, TypeError{
-			Kind: TErrTypeMismatch,
+			Kind: TErrDefBodyMismatch,
 			Pos:  def.NameToken,
-			Hint: defBodyArityHint(def.Name, len(expected), c.stack.Len()),
+			Name: def.Name,
+			Hint: defBodyArityHint(c, def.Name, expected, c.stack.items),
 		})
 	} else {
 		for i, want := range expected {
 			got := c.stack.items[i]
 			if !c.unify(got, want) {
 				c.errors = append(c.errors, TypeError{
-					Kind:     TErrTypeMismatch,
+					Kind:     TErrDefBodyMismatch,
 					Pos:      def.NameToken,
+					Name:     def.Name,
 					Expected: want,
 					Actual:   got,
 					ArgIndex: i,
-					Hint:     "def body output position " + intToStr(i) + " of '" + def.Name + "'",
+					Hint: "output position " + intToStr(i) +
+						" — declared " + FormatType(c.arena, c.names, want) +
+						", body produced " + FormatType(c.arena, c.names, got),
 				})
 			}
 		}
@@ -186,9 +192,28 @@ func (c *Checker) checkDefBody(def *MShellDefinition, sig QuoteSig) {
 	c.diverged = outerDiverged
 }
 
-func defBodyArityHint(name string, want, got int) string {
-	return "def body of '" + name + "' produced " + intToStr(got) +
-		" output(s); declared sig has " + intToStr(want)
+func defBodyArityHint(c *Checker, _ string, declared, produced []TypeId) string {
+	return "declared " + intToStr(len(declared)) + " output(s) " + formatTypeList(c, declared) +
+		", body produced " + intToStr(len(produced)) + " " + formatTypeList(c, produced)
+}
+
+// formatTypeList renders a stack/outputs slice as a parenthesized
+// type list ordered as written in a def signature (left-to-right,
+// bottom of stack to top). Empty renders as "( )".
+func formatTypeList(c *Checker, items []TypeId) string {
+	if len(items) == 0 {
+		return "( )"
+	}
+	var sb strings.Builder
+	sb.WriteByte('(')
+	for i, t := range items {
+		if i > 0 {
+			sb.WriteByte(' ')
+		}
+		sb.WriteString(FormatType(c.arena, c.names, t))
+	}
+	sb.WriteByte(')')
+	return sb.String()
 }
 
 func intToStr(i int) string {
@@ -553,7 +578,9 @@ func (c *Checker) checkIfBlock(ifBlock *MShellParseIfBlock) {
 	for _, sub := range ifBlock.IfBody {
 		c.checkParseItem(sub)
 	}
-	arms := []BranchArm{c.CaptureArm(c.diverged)}
+	ifArm := c.CaptureArm(c.diverged)
+	ifArm.Body = ifBlock.IfBody
+	arms := []BranchArm{ifArm}
 
 	// else-if arms.
 	for _, elseIf := range ifBlock.ElseIfs {
@@ -585,7 +612,9 @@ func (c *Checker) checkIfBlock(ifBlock *MShellParseIfBlock) {
 		for _, sub := range elseIf.Body {
 			c.checkParseItem(sub)
 		}
-		arms = append(arms, c.CaptureArm(c.diverged))
+		arm := c.CaptureArm(c.diverged)
+		arm.Body = elseIf.Body
+		arms = append(arms, arm)
 	}
 
 	// else body, or the implicit "did nothing" arm if absent.
@@ -595,7 +624,9 @@ func (c *Checker) checkIfBlock(ifBlock *MShellParseIfBlock) {
 		for _, sub := range ifBlock.ElseBody {
 			c.checkParseItem(sub)
 		}
-		arms = append(arms, c.CaptureArm(c.diverged))
+		arm := c.CaptureArm(c.diverged)
+		arm.Body = ifBlock.ElseBody
+		arms = append(arms, arm)
 	} else {
 		c.Fork(snap)
 		c.diverged = false
@@ -662,7 +693,9 @@ func (c *Checker) checkMatchBlock(matchBlock *MShellParseMatchBlock) {
 			c.checkParseItem(sub)
 		}
 		c.restorePatternBindings(patternBindings)
-		arms = append(arms, c.CaptureArm(false))
+		captured := c.CaptureArm(false)
+		captured.Body = arm.Body
+		arms = append(arms, captured)
 		tags = append(tags, c.classifyArmPattern(arm.Pattern))
 	}
 	c.ReconcileArms(arms, startTok)

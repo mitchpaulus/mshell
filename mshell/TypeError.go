@@ -25,6 +25,7 @@ const (
 	TErrLeftoverStack // top-level program left items on the stack at end (informational; not always an error)
 	TErrBranchStackSize
 	TErrBranchVarSet
+	TErrDefBodyMismatch // def's declared sig and body stack effect disagree
 	TErrNonExhaustiveMatch
 	TErrAmbiguousOverload
 	TErrNoMatchingOverload
@@ -96,6 +97,11 @@ func (e TypeError) Format(arena *TypeArena, names *NameTable) string {
 		fmt.Fprintf(&sb, "type parse error: %s", e.Hint)
 	case TErrInterpolationArity:
 		fmt.Fprintf(&sb, "%s", e.Hint)
+	case TErrDefBodyMismatch:
+		// Hint carries the human-readable "declared vs body"
+		// description. Pos is the def's name token (the body could
+		// span many lines, so the name is the most stable anchor).
+		fmt.Fprintf(&sb, "definition and body do not match for '%s': %s", e.Name, e.Hint)
 	default:
 		fmt.Fprintf(&sb, "unknown type error")
 	}

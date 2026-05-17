@@ -1,5 +1,10 @@
 package main
 
+import (
+	"fmt"
+	"strings"
+)
+
 // Phase 6b: branch reconciliation and variable-environment scoping.
 //
 // All branching constructs (`if`/`else`, `match`, the eventual `try:`)
@@ -71,11 +76,18 @@ func (c *Checker) Fork(snap ScopeSnapshot) {
 // snapshotting before, forking, running the arm body, and calling
 // CaptureArm at the tail. Diverged is true when the arm cannot fall
 // through (exit, infinite loop, propagated fail).
+//
+// Body is the parse-item slice the arm was built from. It's purely a
+// breadcrumb for diagnostic rendering (e.g. the per-branch summary in
+// the stack-size mismatch message) — the type effects come from Stack
+// / Vars / MaybeVars. Callers set it after CaptureArm if they want
+// richer error text.
 type BranchArm struct {
 	Stack     []TypeId
 	Vars      map[NameId]TypeId
 	MaybeVars map[NameId]TypeId
 	Diverged  bool
+	Body      []MShellParseItem
 }
 
 // CaptureArm reads the checker's current stack and vars into a
@@ -138,7 +150,7 @@ func (c *Checker) ReconcileArms(arms []BranchArm, callSite Token) {
 		c.errors = append(c.errors, TypeError{
 			Kind: TErrBranchStackSize,
 			Pos:  callSite,
-			Hint: "all branches must produce the same number of stack items",
+			Hint: c.formatBranchSizeMismatch(arms, live),
 		})
 		// Recovery: take the first non-diverged arm's tail as the merged
 		// state so downstream errors don't cascade off a missing stack.
@@ -206,6 +218,110 @@ func (c *Checker) ReconcileArms(arms []BranchArm, callSite Token) {
 	}
 	c.vars.bound = mergedBound
 	c.vars.maybeBound = mergedMaybe
+}
+
+// formatBranchSizeMismatch builds the Hint string for a stack-size
+// disagreement across non-diverged arms. For up to 10 live arms each
+// gets a line of the form
+//
+//   Branch N: <first10>...<last10>  (T1 -- T2 T3)
+//
+// where the body summary is derived from the arm's parse-item
+// breadcrumbs (see BranchArm.Body) and the stack signature is the
+// arm's tail stack rendered top-first. Beyond 10 arms the message
+// falls back to a single line, since the per-branch detail would
+// dominate the diagnostic.
+func (c *Checker) formatBranchSizeMismatch(arms []BranchArm, live []int) string {
+	const lead = "all branches must produce the same number of stack items"
+	if len(live) > 10 {
+		return lead
+	}
+	var sb strings.Builder
+	sb.WriteString(lead)
+	for n, i := range live {
+		fmt.Fprintf(&sb, "\n  Branch %d: %s  %s",
+			n+1,
+			truncateBranchSnippet(formatItemsSnippet(arms[i].Body)),
+			c.formatArmStack(arms[i].Stack),
+		)
+	}
+	return sb.String()
+}
+
+// formatArmStack renders an arm's tail stack as a `(top -- ... -- bottom)`
+// readout. Items are rendered top-first (last-pushed first), matching
+// how the rest of the type-error formatter speaks about the stack.
+func (c *Checker) formatArmStack(stack []TypeId) string {
+	if len(stack) == 0 {
+		return "( -- )"
+	}
+	var sb strings.Builder
+	sb.WriteString("( -- ")
+	for i := len(stack) - 1; i >= 0; i-- {
+		if i != len(stack)-1 {
+			sb.WriteByte(' ')
+		}
+		sb.WriteString(FormatType(c.arena, c.names, stack[i]))
+	}
+	sb.WriteString(" )")
+	return sb.String()
+}
+
+// formatItemsSnippet collapses a slice of parse items to a single
+// whitespace-separated string for diagnostic snippets. Composite
+// items (lists, dicts, quotes, etc.) collapse to
+// `<openLexeme>...<closeLexeme>` rather than recursing arbitrarily
+// deep — the caller takes a first/last-N substring of the result so
+// over-precision would be wasted work.
+func formatItemsSnippet(items []MShellParseItem) string {
+	if len(items) == 0 {
+		return "<empty>"
+	}
+	var sb strings.Builder
+	for i, it := range items {
+		if i > 0 {
+			sb.WriteByte(' ')
+		}
+		switch v := it.(type) {
+		case Token:
+			sb.WriteString(v.Lexeme)
+		default:
+			start := v.GetStartToken().Lexeme
+			end := v.GetEndToken().Lexeme
+			sb.WriteString(start)
+			if end != "" && end != start {
+				sb.WriteString("...")
+				sb.WriteString(end)
+			}
+		}
+	}
+	return sb.String()
+}
+
+// truncateBranchSnippet shortens a body snippet to first 10 / last 10
+// chars joined by an ellipsis. Strings short enough to fit are
+// returned unchanged. Whitespace runs are collapsed to single spaces
+// first so multi-line bodies stay one row in the diagnostic.
+func truncateBranchSnippet(s string) string {
+	// Collapse internal whitespace runs.
+	var b strings.Builder
+	prevSpace := false
+	for _, r := range s {
+		if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+			if !prevSpace {
+				b.WriteByte(' ')
+			}
+			prevSpace = true
+			continue
+		}
+		b.WriteRune(r)
+		prevSpace = false
+	}
+	collapsed := strings.TrimSpace(b.String())
+	if len(collapsed) <= 23 {
+		return collapsed
+	}
+	return collapsed[:10] + "..." + collapsed[len(collapsed)-10:]
 }
 
 // MatchArmKind tags the shape of a match arm for exhaustiveness analysis.
