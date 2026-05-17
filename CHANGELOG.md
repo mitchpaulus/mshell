@@ -50,6 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `toCsvCell`
   - `toCsv`
   - `linearSearchIndex`
+  - `id` / `2id` / `3id` - identity quotes useful as no-op value selectors for `listToDict` and similar
   - `parseExcel`
   - `sortBy` - stable ascending sort of a Grid or GridView by one or more columns; bare-string and list-of-strings forms; `none` cells sort last; cross-type values in a generic column error
   - `sortByCmp` extended to accept Grid or GridView; the comparator receives two `GridRow`s

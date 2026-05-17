@@ -243,6 +243,9 @@
         <tr> <td><code>2unpack</code></td> <td>Unpack a two-element list onto the stack.</td> <td><code>([a b] -- a b)</code></td> </tr>
         <tr> <td><code>2apply</code></td> <td>Apply a binary quotation to a two-element list.</td> <td><code>([a b] (a b -- c) -- c)</code></td> </tr>
         <tr> <td><code>2each</code></td> <td>Apply a quotation to the top two stack values individually.</td> <td><code>(a a (a -- c) -- c c)</code></td> </tr>
+        <tr> <td><code>id</code></td> <td>Identity quote — leaves the top stack value unchanged. Useful as a no-op value selector for <code>listToDict</code> and similar.</td> <td><code>(T -- T)</code></td> </tr>
+        <tr> <td><code>2id</code></td> <td>Two-argument identity quote.</td> <td><code>(T1 T2 -- T1 T2)</code></td> </tr>
+        <tr> <td><code>3id</code></td> <td>Three-argument identity quote.</td> <td><code>(T1 T2 T3 -- T1 T2 T3)</code></td> </tr>
         <tr> <td><code>2tuple</code></td> <td>Pack the top two stack values into a two-element list.</td> <td><code>(a b -- [a b])</code></td> </tr>
         <tr> <td><code>del</code></td> <td>Delete an element from a list.</td> <td><code>(<span class="sig-type sig-type-list">list</span> <span class="sig-type sig-type-int">int</span>:index -- <span class="sig-type sig-type-list">list</span>)</code>, <code>(<span class="sig-type sig-type-int">int</span>:index <span class="sig-type sig-type-list">list</span> -- <span class="sig-type sig-type-list">list</span>)</code></td> </tr>
         <tr> <td><code>extend</code></td> <td>Extend a list with the contents of another list in place.</td> <td><code>(<span class="sig-type sig-type-list">list</span> <span class="sig-type sig-type-list">list</span> -- <span class="sig-type sig-type-list">list</span>)</code></td> </tr>

@@ -881,6 +881,9 @@ end wl # Output: 11
 - `2unpack`: Unpack a two-element list onto the stack. `([a] -- a a)`
 - `2apply`: Apply a binary quotation to a two-element list. `([a] (a a -- c) -- c)`
 - `2each`: Apply a quotation to the two values on the stack individually, returning results in the original order. `(a b (a -- c) -- c c)`
+- `id`: Identity quote — leaves the top stack value unchanged. Useful as a no-op value selector (e.g. for `listToDict`). `(T -- T)`
+- `2id`: Two-argument identity quote. `(T1 T2 -- T1 T2)`
+- `3id`: Three-argument identity quote. `(T1 T2 T3 -- T1 T2 T3)`
 - `2tuple`: Pack the top two stack values into a new two-element list, `(a b -- [a])`
 - `del`: Delete element from list, `(list index -- list)` or `(index list -- list)`
 - `extend`: Extends an existing list with items from another list, or a `Grid`/`GridView` with rows from another `Grid`/`GridView`. Difference between this and `+` is that it modifies the receiver in place. For grids, see the Grid section below. `(originalList toAddList -- list)` or `(Grid|GridView Grid|GridView -- Grid|GridView)`

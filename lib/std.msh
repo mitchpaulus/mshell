@@ -57,6 +57,12 @@ def 2apply ([a] (a a -- c) -- c)
     swap 2unpack rot x
 end
 
+# Identity quotes — useful as a no-op value selector for things like
+# `listToDict`, where you want to keep the element as-is.
+def id (T -- T) end
+def 2id (T1 T2 -- T1 T2) end
+def 3id (T1 T2 T3 -- T1 T2 T3) end
+
 def eachWhile ([T] (T -- bool) --)
     over len each-len! # Get total length
     0 each-idx! # index
