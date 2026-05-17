@@ -1847,6 +1847,18 @@ func builtinSigsByToken(arena *TypeArena, names *NameTable) map[TokenType][]Quot
 			Generics: []TypeVarId{0},
 		}
 	}
+	// AMPERSAND (`&`): marks a command list to run in the background.
+	// The runtime flips RunInBackground on the popped list and pushes
+	// it back; the actual subprocess start happens at the trailing
+	// `;`/`!`. Type effect mirrors PIPE: list-to-list passthrough.
+	ampersandSig := func() QuoteSig {
+		t := arena.MakeVar(0)
+		return QuoteSig{
+			Inputs:   []TypeId{arena.MakeList(t)},
+			Outputs:  []TypeId{arena.MakeList(t)},
+			Generics: []TypeVarId{0},
+		}
+	}
 
 	// IFF: structural conditional with one or two quote arms.
 	//   bool [-- ]       iff  → no-effect, single arm
@@ -1915,5 +1927,6 @@ func builtinSigsByToken(arena *TypeArena, names *NameTable) map[TokenType][]Quot
 		EXECUTE:            execSigs(),
 		BANG:               execSigs(),
 		PIPE:               {pipeSig()},
+		AMPERSAND:          {ampersandSig()},
 	}
 }

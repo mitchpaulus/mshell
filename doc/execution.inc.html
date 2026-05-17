@@ -113,6 +113,7 @@ Standard output will always be pushed first, and then standard error.
     <tr> <td><code>^b</code></td> <td>Capture stderr to the stack.</td> <td>As binary.</td> </tr>
     <tr> <td><code>&lt;</code></td> <td>Feed stdin from a value.</td> <td>String, path, or binary.</td> </tr>
     <tr> <td><code>&lt;&gt;</code></td> <td>In-place file modification.</td> <td>Reads file to stdin, writes stdout back on success.</td> </tr>
+    <tr> <td><code>&amp;</code></td> <td>Mark the command list to run asynchronously.</td> <td>Marks the list; the trailing <code>;</code>/<code>!</code> starts the subprocess and returns immediately without waiting. Stdout and stderr default to discarded.</td> </tr>
   </tbody>
 </table>
 

@@ -87,6 +87,7 @@ Operator | Effect on external commands                | Notes
 `^b`     | Capture stderr to the stack.               | As binary.
 `<`      | Feed stdin from a value.                   | String, path, or binary.
 `<>`     | In-place file modification.                | Reads file to stdin, writes stdout back on success.
+`&`      | Mark the command list to run asynchronously. | Marks the list; the trailing `;`/`!` starts the subprocess and returns immediately without waiting. Stdout and stderr default to discarded.
 
 ### Redirection on quotations
 
