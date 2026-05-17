@@ -127,6 +127,14 @@ func (c *Checker) ReconcileArms(arms []BranchArm, callSite Token) {
 		}
 	}
 
+	// The post-branch is reachable iff at least one arm fell through
+	// without diverging. Set c.diverged accordingly so the surrounding
+	// scope's downstream checking sees the correct reachability —
+	// otherwise a diverged arm (e.g. `none: ... exit`) would leak its
+	// `diverged = true` past the join, silently suppressing later
+	// def-body output checks.
+	c.diverged = len(live) == 0
+
 	if len(live) == 0 {
 		// Whole branch is unreachable. Clear the stack/vars; downstream
 		// code is dead. (No error here — Phase 7-or-later may flag it.)

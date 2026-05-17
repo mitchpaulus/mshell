@@ -693,7 +693,7 @@ func (c *Checker) checkMatchBlock(matchBlock *MShellParseMatchBlock) {
 			c.checkParseItem(sub)
 		}
 		c.restorePatternBindings(patternBindings)
-		captured := c.CaptureArm(false)
+		captured := c.CaptureArm(c.diverged)
 		captured.Body = arm.Body
 		arms = append(arms, captured)
 		tags = append(tags, c.classifyArmPattern(arm.Pattern))
