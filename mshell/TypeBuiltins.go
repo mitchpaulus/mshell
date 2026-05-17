@@ -1163,8 +1163,6 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 			{Inputs: []TypeId{TidPath}},
 		}
 	}
-	// os : ( -- str )  — host OS identifier
-	out[names.Intern("os")] = []QuoteSig{{Outputs: []TypeId{TidStr}}}
 	// isCmd : (str -- bool) | (path -- bool)
 	out[names.Intern("isCmd")] = []QuoteSig{
 		{Inputs: []TypeId{TidStr}, Outputs: []TypeId{TidBool}},
