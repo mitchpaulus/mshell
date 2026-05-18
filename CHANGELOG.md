@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Type checking v1!
 - Grid (data frame) type with columnar storage for high-performance tabular data
   - Literal syntax: `[| col1, col2; val1, val2; val3, val4 |]`
   - Optional grid and column metadata
@@ -45,10 +46,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `+` and `extend` for vertical concatenation of Grids/GridViews. Strict matching by name (left-grid order wins); type mismatch produces a generic column with no numeric promotion; meta merges left-wins. `+` deep-copies; `extend` mutates the receiver in place, widening to generic when needed, and accepts a GridView in either position (the underlying source grid grows and the view's indices extend to include the new rows).
 - CLI
   - `msh edit init` to open the current init file path using `$EDITOR`, with fallback to the platform default opener when `$EDITOR` is unavailable
+  - `--type-check-only` to run static type checking and exit without evaluating the script
 - Functions
   - `toCsvCell`
   - `toCsv`
   - `linearSearchIndex`
+  - `id` / `2id` / `3id` - identity quotes useful as no-op value selectors for `listToDict` and similar
   - `parseExcel`
   - `sortBy` - stable ascending sort of a Grid or GridView by one or more columns; bare-string and list-of-strings forms; `none` cells sort last; cross-type values in a generic column error
   - `sortByCmp` extended to accept Grid or GridView; the comparator receives two `GridRow`s
@@ -66,6 +69,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `updateCol` now accepts `GridView`, materializes a new `Grid` from the viewed rows, retypes the result columns, and leaves the backing `Grid` unchanged.
 - `skip` and `take` now work on strings using the same indexing logic as string slicing.
 - Completely removed the concept of `o`, `oc`, and `os`.
+- `abs`, `max`, `min`, `max2`, `min2`, and `sum` are now runtime builtins with proper `(int -- int) | (float -- float)` overloads (and `([int] -- int) | ([float] -- float)` for the list-folding variants). They were previously stdlib defs whose float-only bodies crashed on int operands when called via the int overload. `sumInt` is kept as a stdlib alias for backwards compatibility. Mixed int+float overloads on `max2`/`min2` have been removed since the runtime `<`/`>` operators reject mixed numeric types.
+- `len` runtime now accepts dictionaries (returns key count); the sig already permitted this.
+- `md5` runtime now accepts `bytes` input directly, matching the listed overload.
+- Dict type expressions now require an implicit (or `str`) key. `{V}` and `{str: V}` are accepted; anything else (`{int: V}`, `{path: V}`, etc.) is a parse error. Dict keys are always `str` at runtime, and the type system no longer pretends otherwise. Every dict-related builtin signature (`keys`, `values`, `get`, `set`, `setd`, `getDef`, `map`, `filter`, `in`, `len`, `keyValues`, `listToDict`) drops the `K` generic accordingly.
 - `Error loading startup files:` now includes the script path, whether a version was pinned, the full MSHSTDLIB/MSHINIT and standard-location lookup order, and concrete resolution steps
 
 

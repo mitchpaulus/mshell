@@ -1088,5 +1088,10 @@ func readLSPResponse(t *testing.T, reader *bufio.Reader) responseMessage {
 	if err := json.Unmarshal(payload, &resp); err != nil {
 		t.Fatalf("failed to unmarshal response: %v", err)
 	}
+	// Skip server-originated notifications (no ID) so tests that
+	// expect a specific response don't trip over diagnostics.
+	if resp.ID == nil {
+		return readLSPResponse(t, reader)
+	}
 	return resp
 }

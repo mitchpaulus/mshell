@@ -1,1 +1,1 @@
-[["a" "b"] "c"] (append) 2apply str wl
+[1 2] (+) 2apply wl

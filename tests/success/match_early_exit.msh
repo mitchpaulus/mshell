@@ -1,0 +1,5 @@
+# This early exit previously broke type checking, but this should be valid.
+1 just match
+    just v :,
+    none: "Bad" wle 1 exit
+end

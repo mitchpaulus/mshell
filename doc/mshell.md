@@ -87,6 +87,7 @@ Operator | Effect on external commands                | Notes
 `^b`     | Capture stderr to the stack.               | As binary.
 `<`      | Feed stdin from a value.                   | String, path, or binary.
 `<>`     | In-place file modification.                | Reads file to stdin, writes stdout back on success.
+`&`      | Mark the command list to run asynchronously. | Marks the list; the trailing `;`/`!` starts the subprocess and returns immediately without waiting. Stdout and stderr default to discarded.
 
 ### Redirection on quotations
 
@@ -300,7 +301,7 @@ The CLI can use definition metadata to provide argument completions for binaries
 ```mshell
 def mshCompletion { 'complete': ['msh' 'mshell'] } ([str] -- [str])
     input!
-    ['-h' '--help' '--html' '--lex' '--parse' '--version' '-c'] options!
+    ['-h' '--help' '--html' '--lex' '--parse' '--check-types' '--type-check-only' '--version' '-c'] options!
     ['lsp' 'bin' 'edit' 'completions'] subcommands!
     @options @subcommands extend
 end
@@ -442,6 +443,110 @@ Dates can be subtracted from each other, and the result is a floating-point numb
 ```mshell
 2023-10-02 2023-10-01 - # 1.0
 ```
+
+## Type System
+
+Use `msh --check-types script.msh` to run static type checking before script execution.
+Use `msh --type-check-only script.msh` to run the same static checks and exit without evaluating the script.
+The checker validates stack effects, definition bodies, quotation arguments, built-ins, variable bindings, and branch reconciliation.
+
+Definitions use stack-effect signatures.
+Inputs are listed before `--`, outputs after it, and the rightmost input is the top stack item consumed first.
+
+```mshell
+def addOne (int -- int)
+    1 +
+end
+
+def fullName (str str -- str)
+    last!, first!
+    $"{@first} {@last}"
+end
+```
+
+Primitive static type names include `int`, `float`, `bool`, `str`, `path`, `datetime`, `bytes`, and `none`.
+Named runtime types such as `Grid`, `GridView`, and `GridRow` are also available.
+
+Type expressions compose with lists, dictionaries, unions, `Maybe`, and quotation types.
+
+```mshell
+[str]                 # list of strings
+{str: int}            # string-keyed dictionary of ints
+{name: str, age: int} # dictionary shape
+Maybe[int]            # optional int
+int | str             # union
+(int int -- bool)     # quotation type
+```
+
+Top-level type declarations name larger type expressions.
+Use them for casts and for naming record-like dictionaries and unions that are reused by other type declarations.
+Current definition signatures still use the historical signature parser, so dictionary shapes in `def` signatures are written with quoted field names.
+
+```mshell
+type Person = {name: str, age: int}
+type Cell = int | float | str | bool | none
+type Row = [Cell]
+
+{ "name": "Ada", "age": 36 } as Person :age? 1 +
+```
+
+Dictionary types are split into homogeneous dictionaries and shapes.
+A homogeneous dictionary is for dynamic keys where every value has the same type.
+In a type expression, write `{str: int}`.
+In older definition signatures, `{ int }` or `{ *: int }` means the same string-keyed dictionary of ints.
+
+```mshell
+{ "passed": 10, "failed": 2 } as {str: int} values len
+```
+
+A shape is for record-like dictionaries with known fields.
+Shapes let `:field?` access preserve the precise field type.
+
+```mshell
+def labelPerson ({ "name": str, "age": int, "active": bool } -- str)
+    person!
+    @person :name? name!
+    @person :age? age!
+    $"{@name} ({@age})"
+end
+```
+
+Lists are homogeneous when every element has one type, such as `[int]` or `[Person]`.
+This is the strongest list type because higher-order functions preserve the element type.
+
+```mshell
+def doubleAll ([int] -- [int])
+    (2 *) map
+end
+
+def names ([{ "name": str, "age": int }] -- [str])
+    (:name?) map
+end
+```
+
+Heterogeneous lists are represented as lists whose element type is a union.
+For example, `[int | str]` means every element is either an int or a string.
+This is useful for JSON-like data, spreadsheet rows, and other shell data where each cell can be one of a fixed set of types.
+
+```mshell
+type Cell = int | float | str | bool
+type Row = [Cell]
+type Table = [Row]
+
+[1 "Ada" true] as [int | str | bool]
+```
+
+The checker currently models heterogeneous lists as lists of unions, not fixed-length tuples with per-index types.
+That means index `:0:` does not by itself prove a specific per-position type unless the value is converted or asserted.
+
+Quotation types describe the stack effect of code values.
+Operators with multiple valid signatures keep an overload set until context resolves them.
+For example, `(>)` can become `(int int -- bool)`, `(float float -- bool)`, `(str str -- bool)`, or `(datetime datetime -- bool)` depending on the expected quotation type.
+
+Control-flow branches must reconcile stack and variable state across reachable paths.
+Branches that diverge with `return`, `break`, or `continue` are excluded from reconciliation.
+
+For more detail, see the generated Type System help page.
 
 ## Definitions
 
@@ -777,6 +882,9 @@ end wl # Output: 11
 - `2unpack`: Unpack a two-element list onto the stack. `([a] -- a a)`
 - `2apply`: Apply a binary quotation to a two-element list. `([a] (a a -- c) -- c)`
 - `2each`: Apply a quotation to the two values on the stack individually, returning results in the original order. `(a b (a -- c) -- c c)`
+- `id`: Identity quote — leaves the top stack value unchanged. Useful as a no-op value selector (e.g. for `listToDict`). `(T -- T)`
+- `2id`: Two-argument identity quote. `(T1 T2 -- T1 T2)`
+- `3id`: Three-argument identity quote. `(T1 T2 T3 -- T1 T2 T3)`
 - `2tuple`: Pack the top two stack values into a new two-element list, `(a b -- [a])`
 - `del`: Delete element from list, `(list index -- list)` or `(index list -- list)`
 - `extend`: Extends an existing list with items from another list, or a `Grid`/`GridView` with rows from another `Grid`/`GridView`. Difference between this and `+` is that it modifies the receiver in place. For grids, see the Grid section below. `(originalList toAddList -- list)` or `(Grid|GridView Grid|GridView -- Grid|GridView)`
@@ -948,21 +1056,22 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
 
 ## HTTP Requests
 
-- `httpGet`: Make a HTTP GET request. Signature is `(dict -- dict)`. Takes the request information in a dictionary that should have the following keys:
+- `httpGet`: Make a HTTP GET request. Signature is `({str: T} -- Maybe[{status: int, reason: str, headers: {str: [str]}, body: bytes}])`. Takes the request information in a dictionary that should have the following keys:
 
-  - `url`: Full URL, including all the query parameters
-  - `headers`: A dictionary of key-value pairs for the request headers
+  - `url`: Full URL, including all the query parameters (required, stringable)
+  - `timeout`: Request timeout in seconds (optional, positive integer; default 30)
+  - `headers`: A dictionary of key-value pairs for the request headers (optional)
 
   Returns a Maybe wrapping a response dictionary.
-  The response is `none` is the web request totally fails, like hitting a timeout.
+  The response is `none` if the web request totally fails, like hitting a timeout.
   Otherwise a Just Dictionary is returned, with fields
 
   - `status`: Integer status code
   - `reason`: Full reason line, ex: `"200 OK"`
-  - `headers`: Dictionary of key-value header pairs
-  - `body`: Body of response, read as UTF-8 string.
+  - `headers`: Dictionary of header name to a list of values
+  - `body`: Body of response, as raw `bytes`. Decode with `utf8Str` if you want a UTF-8 string.
 
-- `httpPost`: Make a HTTP POST request. Signature is `(dict -- dict)`. Only difference from `httpGet` is that on the request dictionary, you can also set the `body` field to a string.
+- `httpPost`: Make a HTTP POST request. Signature is the same as `httpGet`. The only difference is that on the request dictionary, you can also set the `body` field to a stringable value.
 
 ## Variables
 
