@@ -9377,6 +9377,10 @@ MainLoop:
 			} else {
 				return state.FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' ('%s') yet.\n", t.Line, t.Column, t.Type, t.Lexeme))
 			}
+		case *MShellAsCast:
+			// Static-only: `as` is a checker hint; no runtime work.
+		case *MShellTypeDecl:
+			// Static-only: type declarations have no runtime effect by design.
 		default:
 			return state.FailWithMessage(fmt.Sprintf("We haven't implemented the type '%T' yet.\n", t))
 		}
