@@ -858,6 +858,21 @@ func (c *Checker) checkMatchBlock(matchBlock *MShellParseMatchBlock) {
 // non-wildcard arm but credits no coverage.
 func (c *Checker) classifyArmPattern(pattern []MShellParseItem) MatchArmTag {
 	if len(pattern) == 1 {
+		if list, ok := pattern[0].(*MShellParseList); ok {
+			// `[]` covers empty lists. `[... ...rest]` (any pattern
+			// element whose LITERAL lexeme starts with `...`) is a
+			// rest-binding form that matches every non-empty list
+			// (or every list of length >= prefix count).
+			if len(list.Items) == 0 {
+				return MatchArmTag{Kind: MatchArmEmptyList}
+			}
+			for _, item := range list.Items {
+				if tok, ok := item.(Token); ok && tok.Type == LITERAL &&
+					strings.HasPrefix(tok.Lexeme, "...") {
+					return MatchArmTag{Kind: MatchArmListWithRest}
+				}
+			}
+		}
 		tok, ok := pattern[0].(Token)
 		if ok {
 			switch tok.Type {

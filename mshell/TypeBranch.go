@@ -343,6 +343,13 @@ const (
 	MatchArmType
 	MatchArmTrue  // bool literal `true` pattern
 	MatchArmFalse // bool literal `false` pattern
+	// MatchArmEmptyList: `[]` pattern. Covers empty lists.
+	MatchArmEmptyList
+	// MatchArmListWithRest: `[a ...rest]`, `[a b ...rest]`, or
+	// `[...rest]` — any list pattern with a `...name` element.
+	// Covers all lists whose length is at least the number of
+	// non-rest pattern elements.
+	MatchArmListWithRest
 )
 
 // MatchArmTag describes one pattern-side of a match arm. The body's
@@ -431,6 +438,27 @@ func (c *Checker) CheckMatchExhaustive(matched TypeId, arms []MatchArmTag, callS
 			if hasTrue && hasFalse {
 				return true
 			}
+		}
+
+	case TKList:
+		// A list's inhabitants split by length: zero (empty) vs
+		// one-or-more. `[]` covers empty; any list pattern that ends
+		// with `...rest` covers the rest. The pair is exhaustive
+		// without a wildcard. More precise length-based coverage
+		// (e.g. distinguishing `[a]` from `[a b ...rest]`) is a
+		// future refinement; the current rule handles the common
+		// "empty vs non-empty" idiom.
+		hasEmpty, hasRest := false, false
+		for _, arm := range arms {
+			switch arm.Kind {
+			case MatchArmEmptyList:
+				hasEmpty = true
+			case MatchArmListWithRest:
+				hasRest = true
+			}
+		}
+		if hasEmpty && hasRest {
+			return true
 		}
 	}
 
