@@ -6,7 +6,7 @@
 def f (dict --)
     seen!
     @seen match
-        dict :>
+        dict :
             @seen "x" in not if
                 "found" wl
             end

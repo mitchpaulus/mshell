@@ -1,6 +1,10 @@
 package main
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+	"unicode/utf8"
+)
 
 // Phase 10 step 3 (gate) + step 4 (program-flow walker).
 //
@@ -716,17 +720,21 @@ func (c *Checker) checkIfBlock(ifBlock *MShellParseIfBlock) {
 
 	entry := c.captureBranch()
 	var armBranches []quoteBranch
+	var armLabels []string
 
-	walkArm := func(body []MShellParseItem) {
+	walkArm := func(body []MShellParseItem, label string) {
 		c.loadBranch(entry)
 		c.diverged = false
-		armBranches = append(armBranches,
-			c.driveBranchesOverItems([]quoteBranch{c.captureBranch()}, body)...)
+		spawned := c.driveBranchesOverItems([]quoteBranch{c.captureBranch()}, body)
+		for _, b := range spawned {
+			armBranches = append(armBranches, b)
+			armLabels = append(armLabels, label)
+		}
 	}
 
-	walkArm(ifBlock.IfBody)
+	walkArm(ifBlock.IfBody, "if")
 
-	for _, elseIf := range ifBlock.ElseIfs {
+	for i, elseIf := range ifBlock.ElseIfs {
 		c.loadBranch(entry)
 		c.diverged = false
 		for _, sub := range elseIf.Condition {
@@ -751,21 +759,47 @@ func (c *Checker) checkIfBlock(ifBlock *MShellParseIfBlock) {
 				})
 			}
 		}
-		armBranches = append(armBranches,
-			c.driveBranchesOverItems([]quoteBranch{c.captureBranch()}, elseIf.Body)...)
+		label := fmt.Sprintf("else if #%d", i+1)
+		spawned := c.driveBranchesOverItems([]quoteBranch{c.captureBranch()}, elseIf.Body)
+		for _, b := range spawned {
+			armBranches = append(armBranches, b)
+			armLabels = append(armLabels, label)
+		}
 	}
 
 	if len(ifBlock.ElseBody) > 0 {
-		walkArm(ifBlock.ElseBody)
+		walkArm(ifBlock.ElseBody, "else")
 	} else {
 		// Implicit do-nothing arm: the if block may not fire at all.
 		armBranches = append(armBranches, entry)
+		armLabels = append(armLabels, "no-arm")
 	}
 
+	c.reconcileArmBranches(armBranches, armLabels, entry, startTok)
+}
+
+// reconcileArmBranches takes the surviving branches from all arms of
+// an if- or match-block and chooses a post-state for the surrounding
+// walker. `labels` runs parallel to armBranches and gives each
+// branch a short source-snippet (the match arm's pattern, or the
+// if-block's arm role) used purely in the TErrBranchStackSize
+// diagnostic.
+//
+//   - 0 surviving branches → all arms errored; fall back to the
+//     pre-construct state so downstream code stays coherent.
+//   - 1 surviving branch → load it directly; the construct has a
+//     fully-determined effect.
+//   - multiple live (non-diverged) branches that disagree on stack
+//     SIZE → emit TErrBranchStackSize anchored at the construct's
+//     start token. This is a structural defect of the source, not
+//     an ambiguity downstream code can resolve, so we surface it
+//     here rather than letting the branches survive into
+//     end-of-program TErrAmbiguousTyping with worse signal.
+//   - multiple branches that agree on size → fan out via
+//     branchSpawn so per-slot type differences propagate; downstream
+//     constraints may narrow them.
+func (c *Checker) reconcileArmBranches(armBranches []quoteBranch, labels []string, entry quoteBranch, startTok Token) {
 	if len(armBranches) == 0 {
-		// All arms died with errors already reported. Leave the
-		// stack in the post-condition state so subsequent code has
-		// something coherent to type against.
 		c.loadBranch(entry)
 		return
 	}
@@ -773,9 +807,130 @@ func (c *Checker) checkIfBlock(ifBlock *MShellParseIfBlock) {
 		c.loadBranch(armBranches[0])
 		return
 	}
-	// Multiple surviving alternatives. Hand them to the outer walker
-	// the same way resolveAndApply does for a multi-viable call.
+	liveBranches, liveLabels := filterLiveBranchesWithLabels(armBranches, labels)
+	if len(liveBranches) <= 1 {
+		if len(liveBranches) == 1 {
+			c.loadBranch(liveBranches[0])
+		} else {
+			c.loadBranch(armBranches[0])
+		}
+		return
+	}
+	wantSize := len(liveBranches[0].stack)
+	sizesAgree := true
+	for _, b := range liveBranches[1:] {
+		if len(b.stack) != wantSize {
+			sizesAgree = false
+			break
+		}
+	}
+	if !sizesAgree {
+		c.errors = append(c.errors, TypeError{
+			Kind: TErrBranchStackSize,
+			Pos:  startTok,
+			Hint: c.formatArmBranchSizes(liveBranches, liveLabels),
+		})
+		c.loadBranch(liveBranches[0])
+		return
+	}
 	c.branchSpawn = append(c.branchSpawn, armBranches...)
+}
+
+// filterLiveBranchesWithLabels mirrors filterLiveBranches but also
+// keeps a parallel labels slice in sync, dropping the label of any
+// diverged branch.
+func filterLiveBranchesWithLabels(branches []quoteBranch, labels []string) ([]quoteBranch, []string) {
+	live := make([]quoteBranch, 0, len(branches))
+	liveLabels := make([]string, 0, len(branches))
+	for i, b := range branches {
+		if b.diverged {
+			continue
+		}
+		live = append(live, b)
+		var lbl string
+		if i < len(labels) {
+			lbl = labels[i]
+		}
+		liveLabels = append(liveLabels, lbl)
+	}
+	return live, liveLabels
+}
+
+// formatArmBranchSizes renders one line per surviving arm-branch with
+// its source-snippet label and tail stack as a `(top -- ... --
+// bottom)` signature. Used as the hint for TErrBranchStackSize.
+// Branches are loaded in turn so each line reflects the branch's own
+// substitution.
+func (c *Checker) formatArmBranchSizes(branches []quoteBranch, labels []string) string {
+	const lead = "all arms must produce the same number of stack items"
+	saved := c.captureBranch()
+	defer c.loadBranch(saved)
+	var sb strings.Builder
+	sb.WriteString(lead)
+	for i, b := range branches {
+		c.loadBranch(b)
+		resolved := make([]TypeId, len(c.stack.items))
+		for j, t := range c.stack.items {
+			resolved[j] = c.subst.Apply(c.arena, t)
+		}
+		label := ""
+		if i < len(labels) {
+			label = labels[i]
+		}
+		if label == "" {
+			fmt.Fprintf(&sb, "\n  Branch %d:  %s", i+1, c.formatArmStack(resolved))
+		} else {
+			fmt.Fprintf(&sb, "\n  Branch %d (%s):  %s", i+1, label, c.formatArmStack(resolved))
+		}
+	}
+	return sb.String()
+}
+
+// truncatePatternSnippet shortens a pattern snippet for use inline
+// in the TErrBranchStackSize hint. Snippets up to 20 visible chars
+// (covers the common list-pattern idioms like `[header ...rows]`)
+// pass through unchanged; longer ones get a head/tail split joined
+// by a single-char Unicode ellipsis so rest-binds (`...name`) stay
+// readable next to the truncation marker.
+func truncatePatternSnippet(s string) string {
+	collapsed := strings.Join(strings.Fields(s), " ")
+	const cap = 20
+	if utf8.RuneCountInString(collapsed) <= cap {
+		return collapsed
+	}
+	runes := []rune(collapsed)
+	return string(runes[:9]) + "…" + string(runes[len(runes)-9:])
+}
+
+// formatPatternSnippet renders a match-arm pattern as a short string,
+// recursing into list / dict / quote literals so patterns like
+// `[a ...rest]` display their contents rather than collapsing to
+// `[...]` the way formatItemsSnippet does for arbitrary composites.
+func formatPatternSnippet(items []MShellParseItem) string {
+	var sb strings.Builder
+	for i, it := range items {
+		if i > 0 {
+			sb.WriteByte(' ')
+		}
+		sb.WriteString(formatPatternItem(it))
+	}
+	return sb.String()
+}
+
+func formatPatternItem(it MShellParseItem) string {
+	switch v := it.(type) {
+	case Token:
+		return v.Lexeme
+	case *MShellParseList:
+		return "[" + formatPatternSnippet(v.Items) + "]"
+	default:
+		start := it.GetStartToken().Lexeme
+		end := it.GetEndToken().Lexeme
+		if end != "" && end != start {
+			return start + "…" + end
+		}
+		return start
+	}
 }
 
 // checkMatchBlock drives a `<subject> match ... end` through branch
@@ -818,6 +973,7 @@ func (c *Checker) checkMatchBlock(matchBlock *MShellParseMatchBlock) {
 	}
 
 	var armBranches []quoteBranch
+	var armLabels []string
 	tags := make([]MatchArmTag, 0, len(matchBlock.Arms))
 	for _, arm := range matchBlock.Arms {
 		c.loadBranch(entry)
@@ -834,21 +990,16 @@ func (c *Checker) checkMatchBlock(matchBlock *MShellParseMatchBlock) {
 		// lifts.
 		c.bindMatchPattern(subject, arm.Pattern)
 
-		armBranches = append(armBranches,
-			c.driveBranchesOverItems([]quoteBranch{c.captureBranch()}, arm.Body)...)
+		label := truncatePatternSnippet(formatPatternSnippet(arm.Pattern))
+		spawned := c.driveBranchesOverItems([]quoteBranch{c.captureBranch()}, arm.Body)
+		for _, b := range spawned {
+			armBranches = append(armBranches, b)
+			armLabels = append(armLabels, label)
+		}
 		tags = append(tags, c.classifyArmPattern(arm.Pattern))
 	}
 	c.CheckMatchExhaustive(subject, tags, startTok)
-
-	if len(armBranches) == 0 {
-		c.loadBranch(entry)
-		return
-	}
-	if len(armBranches) == 1 {
-		c.loadBranch(armBranches[0])
-		return
-	}
-	c.branchSpawn = append(c.branchSpawn, armBranches...)
+	c.reconcileArmBranches(armBranches, armLabels, entry, startTok)
 }
 
 // classifyArmPattern reduces a parsed match arm pattern to the
