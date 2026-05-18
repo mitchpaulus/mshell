@@ -1,0 +1,9 @@
+# Pattern binding from a `just` arm must remain accessible after the
+# match when the only other live arm diverges. Previously the type
+# checker stripped pattern bindings before arm capture so `@v`
+# outside the match was reported as "unknown identifier".
+1 just match
+    just v :,
+    none: 1 exit
+end
+@v wl

@@ -608,25 +608,87 @@ func (c *Checker) commonIffBindings(trueQuote, falseQuote TypeId, hasFalse bool)
 	return out
 }
 
+// instantiatedQuoteCandidates returns the Instantiate-d candidate
+// sigs for a stack-resident quote value. Single-sig TKQuote yields
+// one entry; TKOverloadedQuote yields one per stored sig. Other
+// kinds return nil so try* helpers know they shouldn't engage.
+//
+// This is the protocol every consumer of a stored quote sig must
+// obey: Instantiate before unification or substitution lookups,
+// because the stored sig's TypeVarIds in Generics are symbolic and
+// don't address the live substitution.
+func (c *Checker) instantiatedQuoteCandidates(t TypeId) []QuoteSig {
+	switch c.arena.Kind(t) {
+	case TKQuote:
+		return []QuoteSig{c.Instantiate(c.arena.QuoteSig(t))}
+	case TKOverloadedQuote:
+		raw := c.arena.overloadedQuoteSigs[c.arena.Node(t).Extra]
+		out := make([]QuoteSig, len(raw))
+		for i, s := range raw {
+			out[i] = c.Instantiate(s)
+		}
+		return out
+	}
+	return nil
+}
+
+// tryLoop accepts a stack-resident quote whose net stack effect is
+// identity (inputs unify position-wise with outputs). It engages for
+// both single-sig and overloaded quotes — for the latter, it picks
+// the first candidate whose shape satisfies the identity check.
 func (c *Checker) tryLoop(tok Token) bool {
 	if c.stack.Len() == 0 {
 		return false
 	}
 	top := c.subst.Apply(c.arena, c.stack.Top())
-	if c.arena.Kind(top) != TKQuote {
+	candidates := c.instantiatedQuoteCandidates(top)
+	if len(candidates) == 0 {
 		return false
 	}
-	sig := c.arena.QuoteSig(top)
-	if len(sig.Inputs) != len(sig.Outputs) {
-		return false
+	// Trial each candidate; the first one whose inputs unify with
+	// outputs wins. Substitution is checkpointed so a failed trial
+	// doesn't leak bindings.
+	cp := c.subst.Checkpoint()
+	for _, sig := range candidates {
+		c.subst.Rollback(cp)
+		if len(sig.Inputs) != len(sig.Outputs) {
+			continue
+		}
+		ok := true
+		for i := range sig.Inputs {
+			if !c.unify(sig.Inputs[i], sig.Outputs[i]) {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			c.stack.items = c.stack.items[:c.stack.Len()-1]
+			return true
+		}
 	}
-	for i := range sig.Inputs {
-		if !c.unify(sig.Inputs[i], sig.Outputs[i]) {
+	// None of the candidates produce an identity stack effect.
+	// Report against the first single-sig shape if available, else
+	// surface a generic mismatch.
+	c.subst.Rollback(cp)
+	first := candidates[0]
+	if len(first.Inputs) != len(first.Outputs) {
+		c.errors = append(c.errors, TypeError{
+			Kind:     TErrTypeMismatch,
+			Pos:      tok,
+			Expected: c.arena.MakeQuote(QuoteSig{}),
+			Actual:   top,
+			Hint:     "loop quote must have matching input and output arity",
+		})
+		c.stack.items = c.stack.items[:c.stack.Len()-1]
+		return true
+	}
+	for i := range first.Inputs {
+		if !c.unify(first.Inputs[i], first.Outputs[i]) {
 			c.errors = append(c.errors, TypeError{
 				Kind:     TErrTypeMismatch,
 				Pos:      tok,
-				Expected: sig.Inputs[i],
-				Actual:   sig.Outputs[i],
+				Expected: first.Inputs[i],
+				Actual:   first.Outputs[i],
 				ArgIndex: i,
 				Hint:     "loop quote must preserve stack types",
 			})
@@ -645,7 +707,7 @@ func (c *Checker) tryGridJoin(tok Token) bool {
 	second := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-2])
 	left := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-4])
 	right := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-3])
-	if c.arena.Kind(top) != TKQuote || c.arena.Kind(second) != TKQuote {
+	if !isQuoteKind(c.arena.Kind(top)) || !isQuoteKind(c.arena.Kind(second)) {
 		return false
 	}
 	leftKind := c.arena.Kind(left)
@@ -656,6 +718,13 @@ func (c *Checker) tryGridJoin(tok Token) bool {
 	c.stack.items = c.stack.items[:c.stack.Len()-4]
 	c.stack.Push(c.arena.MakeGrid(0))
 	return true
+}
+
+// isQuoteKind reports whether a TypeKind is a quote (single-sig or
+// overloaded). Used by the try* helpers that test for a quote on the
+// stack without caring about its arity.
+func isQuoteKind(k TypeKind) bool {
+	return k == TKQuote || k == TKOverloadedQuote
 }
 
 func (c *Checker) tryQuoteRedirect(tok Token) bool {
@@ -673,11 +742,12 @@ func (c *Checker) tryQuoteRedirect(tok Token) bool {
 		return false
 	}
 	quote := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-2])
-	if c.arena.Kind(quote) != TKQuote {
-		return false
+	switch c.arena.Kind(quote) {
+	case TKQuote, TKOverloadedQuote:
+		c.stack.items = c.stack.items[:c.stack.Len()-1]
+		return true
 	}
-	c.stack.items = c.stack.items[:c.stack.Len()-1]
-	return true
+	return false
 }
 
 func (c *Checker) tryCommandRedirect(tok Token) bool {
@@ -979,9 +1049,16 @@ func (c *Checker) unifyUnion(gn, wn TypeNode) bool {
 // (the actual quote may accept a wider input type than the expected
 // context supplies), while outputs are covariant. Fail/Pure flags must
 // match directly (always default in V1 — Phase-2-of-effects revisits this).
+// unifyQuote unifies two TKQuote sigs. Each side may carry a
+// Generics list whose TypeVarIds are symbolic — they refer to
+// nothing in the current substitution and must be renamed to fresh
+// substitution-allocated vars before structural unification. We
+// Instantiate both sides; for a sig with empty Generics this is a
+// no-op, matching the protocol that hand-written and inferred sigs
+// alike obey.
 func (c *Checker) unifyQuote(gn, wn TypeNode) bool {
-	gs := c.arena.quoteSigs[gn.Extra]
-	ws := c.arena.quoteSigs[wn.Extra]
+	gs := c.Instantiate(c.arena.quoteSigs[gn.Extra])
+	ws := c.Instantiate(c.arena.quoteSigs[wn.Extra])
 	if len(gs.Inputs) != len(ws.Inputs) || len(gs.Outputs) != len(ws.Outputs) {
 		return false
 	}

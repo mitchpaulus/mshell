@@ -599,6 +599,26 @@ func TestTypeCheckProgramMatchEmptyStack(t *testing.T) {
 	}
 }
 
+func TestTypeCheckProgramMatchPatternBindingEscapesArm(t *testing.T) {
+	// A name introduced by a `just` pattern in the only live arm
+	// (the `none` arm diverges) must be readable after the match.
+	// Previously the checker stripped pattern bindings before
+	// capture, so `@v` outside the match reported "unknown
+	// identifier" even though the just arm was the only path
+	// reaching that point.
+	src := `
+5 just match
+    just v :,
+    none: 1 exit
+end
+@v wl
+`
+	errs, ok := parseAndCheck(t, src)
+	if !ok || len(errs) != 0 {
+		t.Fatalf("expected just-binding to survive past match; errs=%v", errs)
+	}
+}
+
 func TestTypeCheckProgramGetterOnDict(t *testing.T) {
 	// `:name` pops a Dict (or GridRow) off the stack and pushes
 	// Maybe[V]. Here {"n": 2} ":n" yields Maybe[int]; we just check

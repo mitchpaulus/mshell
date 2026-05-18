@@ -77,12 +77,21 @@ func (c *Checker) inferQuoteSigsTokens(body []Token, initialInputs []TypeId, ste
 	outerInferring := c.inferring
 	outerInputs := c.inferInputs
 	outerDiverged := c.diverged
+	outerSubst := c.subst.Checkpoint()
 
 	defer func() {
 		c.inferring = outerInferring
 		c.inferInputs = outerInputs
 		c.Fork(outerSnap)
 		c.diverged = outerDiverged
+		// Roll the substitution back to what it was before this
+		// inference. Each surviving sig has carried its Generics
+		// list across, so consumers Instantiate per-use. Any
+		// inference-time bindings that aren't captured in Generics
+		// were branch-local and would leak into the surrounding
+		// scope (binding fresh vars from outer inferInputs to
+		// concrete types from this body's last branch).
+		c.subst.Rollback(outerSubst)
 	}()
 
 	branches := []quoteBranch{c.initialQuoteBranch(initialInputs, outerSnap)}
@@ -143,12 +152,16 @@ func (c *Checker) inferQuoteSigsItems(body []MShellParseItem, initialInputs []Ty
 	outerInferring := c.inferring
 	outerInputs := c.inferInputs
 	outerDiverged := c.diverged
+	outerSubst := c.subst.Checkpoint()
 
 	defer func() {
 		c.inferring = outerInferring
 		c.inferInputs = outerInputs
 		c.Fork(outerSnap)
 		c.diverged = outerDiverged
+		// See inferQuoteSigsTokens for why we roll back the
+		// substitution explicitly here.
+		c.subst.Rollback(outerSubst)
 	}()
 
 	branches := []quoteBranch{c.initialQuoteBranch(initialInputs, outerSnap)}
@@ -354,6 +367,18 @@ func (c *Checker) tryBranchStep(b quoteBranch, step func()) (quoteBranch, []Type
 // QuoteSigs (inputs resolved through each branch's substitution,
 // outputs and bindings likewise). Loads each branch in turn so the
 // substitution state lines up before applying.
+//
+// Each sig's free TypeVarIds (those that remained unbound after the
+// branch's walk) are collected into the sig's Generics list. This is
+// load-bearing for the multi-sig case: every branch shares the same
+// global substitution slots, so a free var in branch A's sig points
+// to the same arena TKVar node as a free var in branch B's sig. If
+// we leave them ungeneralized, a consumer applying the resulting
+// TKOverloadedQuote later reads through the substitution at that
+// later time — which may have arbitrary bindings from upstream — and
+// gets the wrong type. Adding the free vars to Generics makes
+// Instantiate rename them to fresh per-use-site vars, restoring
+// independence.
 func (c *Checker) collectQuoteSigs(branches []quoteBranch, initialInputs []TypeId, outerSnap ScopeSnapshot) []QuoteSig {
 	sigs := make([]QuoteSig, 0, len(branches))
 	for _, b := range branches {
@@ -373,14 +398,89 @@ func (c *Checker) collectQuoteSigs(branches []quoteBranch, initialInputs []TypeI
 		}
 		bindings := c.applyBindingTypes(rawBindings)
 
+		generics := collectFreeTypeVars(c.arena, inputs, outputs, bindings)
+
 		sigs = append(sigs, QuoteSig{
 			Inputs:   inputs,
 			Outputs:  outputs,
 			Diverges: b.diverged,
 			Bindings: bindings,
+			Generics: generics,
 		})
 	}
 	return dedupeQuoteSigs(sigs)
+}
+
+// collectFreeTypeVars returns the deduplicated list of TypeVarIds
+// appearing in any of the supplied type slices / binding maps. Used
+// by collectQuoteSigs to populate a QuoteSig's Generics so Instantiate
+// at the consumer side renames them.
+func collectFreeTypeVars(arena *TypeArena, inputs, outputs []TypeId, bindings map[NameId]TypeId) []TypeVarId {
+	seen := make(map[TypeVarId]struct{})
+	var ordered []TypeVarId
+	visit := func(t TypeId) { walkFreeTypeVars(arena, t, seen, &ordered) }
+	for _, in := range inputs {
+		visit(in)
+	}
+	for _, out := range outputs {
+		visit(out)
+	}
+	for _, t := range bindings {
+		visit(t)
+	}
+	if len(ordered) == 0 {
+		return nil
+	}
+	return ordered
+}
+
+// walkFreeTypeVars descends a TypeId and appends any TKVar's
+// TypeVarId to `ordered` (deduped via `seen`). Composite kinds are
+// recursed structurally; lookups don't go through the substitution
+// because callers pass already-Apply'd TypeIds, so any remaining
+// TKVar is genuinely free.
+func walkFreeTypeVars(arena *TypeArena, t TypeId, seen map[TypeVarId]struct{}, ordered *[]TypeVarId) {
+	n := arena.Node(t)
+	switch n.Kind {
+	case TKVar:
+		id := TypeVarId(n.A)
+		if _, dup := seen[id]; !dup {
+			seen[id] = struct{}{}
+			*ordered = append(*ordered, id)
+		}
+	case TKMaybe:
+		walkFreeTypeVars(arena, TypeId(n.A), seen, ordered)
+	case TKList:
+		walkFreeTypeVars(arena, TypeId(n.A), seen, ordered)
+	case TKDict:
+		walkFreeTypeVars(arena, TypeId(n.A), seen, ordered)
+		walkFreeTypeVars(arena, TypeId(n.B), seen, ordered)
+	case TKQuote:
+		sig := arena.QuoteSig(t)
+		for _, in := range sig.Inputs {
+			walkFreeTypeVars(arena, in, seen, ordered)
+		}
+		for _, out := range sig.Outputs {
+			walkFreeTypeVars(arena, out, seen, ordered)
+		}
+	case TKOverloadedQuote:
+		for _, sig := range arena.overloadedQuoteSigs[n.Extra] {
+			for _, in := range sig.Inputs {
+				walkFreeTypeVars(arena, in, seen, ordered)
+			}
+			for _, out := range sig.Outputs {
+				walkFreeTypeVars(arena, out, seen, ordered)
+			}
+		}
+	case TKUnion:
+		for _, member := range arena.unionMembers[n.Extra] {
+			walkFreeTypeVars(arena, member, seen, ordered)
+		}
+	case TKShape:
+		for _, f := range arena.shapeFields[n.Extra] {
+			walkFreeTypeVars(arena, f.Type, seen, ordered)
+		}
+	}
 }
 
 // dedupeQuoteSigs drops sigs that are structurally identical to an

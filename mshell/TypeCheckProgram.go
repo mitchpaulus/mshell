@@ -650,15 +650,22 @@ func (c *Checker) checkMatchBlock(matchBlock *MShellParseMatchBlock) {
 			// Pop the subject — body sees the stack without it.
 			c.stack.items = c.stack.items[:c.stack.Len()-1]
 		}
-		// Pattern-introduced bindings are arm-local. Restore any
-		// shadowed outer bindings before capturing so ReconcileArms
-		// doesn't see them as var-set disagreements across arms.
+		// Pattern-introduced bindings flow into the captured arm
+		// like any other binding. ReconcileArms tolerates name-set
+		// disagreement across arms (lifts to maybeBound where some
+		// arms bind a name and others don't), so a `just devType`
+		// arm that falls through next to a divergent `none` arm
+		// correctly leaves `devType` bound in the post-match scope.
+		// The patternBindings slice is collected but no longer
+		// restored before capture — the next iteration's Fork(snap)
+		// resets state to the entry snapshot, so cross-arm bleed is
+		// already prevented.
 		patternBindings := c.bindMatchPattern(subject, arm.Pattern)
+		_ = patternBindings
 
 		for _, sub := range arm.Body {
 			c.checkParseItem(sub)
 		}
-		c.restorePatternBindings(patternBindings)
 		captured := c.CaptureArm(c.diverged)
 		captured.Body = arm.Body
 		arms = append(arms, captured)
