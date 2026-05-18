@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Type checking v1!
 - Grid (data frame) type with columnar storage for high-performance tabular data
   - Literal syntax: `[| col1, col2; val1, val2; val3, val4 |]`
   - Optional grid and column metadata
@@ -58,7 +59,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Type-checker overload resolution no longer ranks candidates by specificity. When more than one overload remains viable after trial unification, the checker fans the in-flight branches out (top-level walks and def bodies share the same branching driver used inside quote-body inference). Downstream constraints prune the branches; if more than one survives at end of program or a def-body boundary fails to converge, a new `TErrAmbiguousTyping` diagnostic asks the user for a type annotation and lists the surviving alternatives. The legacy direct-call path (CheckTokens / lower-level tests) reports `TErrAmbiguousOverload` instead of silently picking.
 - History, bin map, and interactive log storage now use the `$LOCALAPPDATA\msh` directory on Windows instead of `$LOCALAPPDATA\mshell`, and `XDG_DATA_HOME` history/bin map storage now uses the required `msh/` subdirectory on Linux/macOS.
   You should be able to simply move the previous files over with no problems.
 - `msh bin edit` now falls back to the platform default opener when `$EDITOR` is unavailable
@@ -69,26 +69,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `updateCol` now accepts `GridView`, materializes a new `Grid` from the viewed rows, retypes the result columns, and leaves the backing `Grid` unchanged.
 - `skip` and `take` now work on strings using the same indexing logic as string slicing.
 - Completely removed the concept of `o`, `oc`, and `os`.
-- `2apply` standard library signature narrowed from `([a | b] (a|b a|b -- c) -- c)` to `([a] (a a -- c) -- c)`. Heterogeneous two-element lists are no longer accepted; cast the list to a homogeneous element type if you need the prior behavior.
 - `abs`, `max`, `min`, `max2`, `min2`, and `sum` are now runtime builtins with proper `(int -- int) | (float -- float)` overloads (and `([int] -- int) | ([float] -- float)` for the list-folding variants). They were previously stdlib defs whose float-only bodies crashed on int operands when called via the int overload. `sumInt` is kept as a stdlib alias for backwards compatibility. Mixed int+float overloads on `max2`/`min2` have been removed since the runtime `<`/`>` operators reject mixed numeric types.
 - `len` runtime now accepts dictionaries (returns key count); the sig already permitted this.
 - `md5` runtime now accepts `bytes` input directly, matching the listed overload.
-- `fileSize` static signature corrected from `(path|str -- int)` to `(path|str -- Maybe[int])` to match the runtime, which returns `Maybe[int]` (`None` on stat failure).
-- `setAt` and `insert` static signatures no longer claim a `(str str int -- str)` overload that the runtime did not implement.
-- `toFloat` / `toInt` static signatures no longer include a generic `(T -- Maybe[float|int])` fallback; only concrete `int`/`float`/`str` inputs are accepted, matching the runtime. The `str` overload is listed first so that under inferring overload resolution (e.g. inside `(toFloat?)`) it wins ties.
-- Type checker quote-body inference now branches over overloaded internal operations instead of arbitrarily picking the first viable candidate. A quote like `(len 0 !=)` whose body uses overloaded ops becomes a `TKOverloadedQuote` with one signature per surviving body walk; the consumer (`filter`/`map`/`each`/etc.) then picks the appropriate sig at the use site via the existing overload-resolution machinery. Previously such quotes silently committed to the first listed overload, which routinely produced wrong types when the call-site element type didn't happen to match the first candidate. Dead-end branches are dropped silently (same as overload elimination); only when every branch dies at the same body token is an error reported, pointing at the actual failing token. Branches are capped at 1024 to bound adversarial inputs; realistic quotes stay well below that.
-- Quote-body inference now produces sigs that behave like declarative artifacts (matching the existing protocol for hand-written builtin sigs). Inferred sigs carry a complete `Generics` list of their free TypeVarIds, and the substitution is rolled back when inference exits, so the sig's symbolic vars no longer alias live substitution slots. Every consumer of a stored quote sig must `Instantiate` before use; the previously-implicit protocol is now enforced uniformly:
-  - `Substitution.Apply` respects sig-local `Generics` when walking into a quote (via `applySpanExcluding`).
-  - `unifyQuote` instantiates both sides before structural unification.
-  - `tryLoop` now accepts `TKOverloadedQuote` and picks the first candidate whose inputs unify with outputs; substitution is checkpointed between candidate trials.
-  - `tryQuoteRedirect` and `tryGridJoin` recognize `TKOverloadedQuote` alongside `TKQuote` on the stack.
-- Match-arm pattern bindings now propagate to the post-match scope through normal branch reconciliation instead of being stripped before each arm's capture. A name bound by a pattern (e.g. `just devType :,`) is available outside the match as `bound[T]` when every live arm binds it, or as `maybeBound[T]` when some live arms don't — reading it then surfaces the existing `may be unset` diagnostic rather than `unknown identifier`.
-- Branch reconciliation now resets `c.diverged` based on the *join* reachability instead of leaving whatever the last arm set. Previously, a `match`/`if` with one diverged arm (e.g. `none: ... exit`) and one live arm left the checker's `diverged` flag stuck at `true`, which silently suppressed the def-body output check for the rest of the enclosing definition.
-- Type checker now emits a dedicated `definition and body do not match` diagnostic when a `def`'s declared signature disagrees with its body. The message splits the declared and body-produced types apart on either side of a comma, instead of reusing the generic argument-mismatch format that read like a call-site error.
-- Type checker `branches produce stacks of differing sizes` diagnostic now enumerates each live branch with a short snippet of its body and its actual stack signature (e.g. `Branch 1: "a" wl 99  ( -- int )`). Falls back to the plain message when there are more than 10 live branches.
-- Type checker now recognizes the background-execution marker `&` with the signature `([T] -- [T])`. Previously it surfaced as an `unknown identifier '&'` diagnostic even though the runtime already supported it.
-- Type checker no longer requires every branch of a conditional to bind the same set of variable names. A variable bound in only some live arms is tracked as "maybe bound"; reading it downstream produces a `variable may be unset` error explaining that the binding exists on some paths but not all. Variables bound before the branch stay definitively bound, and a later unconditional store clears the maybe-bound state.
 - Dict type expressions now require an implicit (or `str`) key. `{V}` and `{str: V}` are accepted; anything else (`{int: V}`, `{path: V}`, etc.) is a parse error. Dict keys are always `str` at runtime, and the type system no longer pretends otherwise. Every dict-related builtin signature (`keys`, `values`, `get`, `set`, `setd`, `getDef`, `map`, `filter`, `in`, `len`, `keyValues`, `listToDict`) drops the `K` generic accordingly.
+- `Error loading startup files:` now includes the script path, whether a version was pinned, the full MSHSTDLIB/MSHINIT and standard-location lookup order, and concrete resolution steps
 
 
 ## v0.13.0 - 2026-04-07
