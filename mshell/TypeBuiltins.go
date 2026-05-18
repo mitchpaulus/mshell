@@ -1345,15 +1345,32 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 			{Inputs: []TypeId{TidPath}, Outputs: []TypeId{arena.MakeDict(TidStr, arena.MakeVar(0))}, Generics: []TypeVarId{0}},
 		}
 	}
-	// httpGet / httpPost : ({str: T} -- Maybe[{str: U}])
+	// httpGet / httpPost :
+	//   ({str: T}
+	//    -- Maybe[{status: int, reason: str, headers: {str: [str]}, body: bytes}])
+	//
+	// Input stays loose ({str: T}) because the runtime accepts a
+	// dict with one required `url` key plus several optional ones
+	// (`timeout`, `body`, `headers`) — the type system has no
+	// notion of optional shape fields, so requiring `url` would
+	// reject every caller that adds optionals.
+	//
+	// Output, by contrast, is precise: on a successful request the
+	// runtime always builds a 4-field response dict. Encoding it as
+	// a shape lets `:status?` / `:body?` etc. resolve their value
+	// types without falling back to fresh vars.
 	{
 		reqV := arena.MakeVar(0)
-		respV := arena.MakeVar(1)
-		resp := arena.MakeMaybe(arena.MakeDict(TidStr, respV))
+		respShape := arena.MakeShape([]ShapeField{
+			{Name: names.Intern("status"), Type: TidInt},
+			{Name: names.Intern("reason"), Type: TidStr},
+			{Name: names.Intern("headers"), Type: arena.MakeDict(TidStr, arena.MakeList(TidStr))},
+			{Name: names.Intern("body"), Type: TidBytes},
+		})
 		sigs := []QuoteSig{{
 			Inputs:   []TypeId{arena.MakeDict(TidStr, reqV)},
-			Outputs:  []TypeId{resp},
-			Generics: []TypeVarId{0, 1},
+			Outputs:  []TypeId{arena.MakeMaybe(respShape)},
+			Generics: []TypeVarId{0},
 		}}
 		out[names.Intern("httpGet")] = sigs
 		out[names.Intern("httpPost")] = sigs

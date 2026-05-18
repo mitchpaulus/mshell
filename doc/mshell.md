@@ -1056,21 +1056,22 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
 
 ## HTTP Requests
 
-- `httpGet`: Make a HTTP GET request. Signature is `(dict -- dict)`. Takes the request information in a dictionary that should have the following keys:
+- `httpGet`: Make a HTTP GET request. Signature is `({str: T} -- Maybe[{status: int, reason: str, headers: {str: [str]}, body: bytes}])`. Takes the request information in a dictionary that should have the following keys:
 
-  - `url`: Full URL, including all the query parameters
-  - `headers`: A dictionary of key-value pairs for the request headers
+  - `url`: Full URL, including all the query parameters (required, stringable)
+  - `timeout`: Request timeout in seconds (optional, positive integer; default 30)
+  - `headers`: A dictionary of key-value pairs for the request headers (optional)
 
   Returns a Maybe wrapping a response dictionary.
-  The response is `none` is the web request totally fails, like hitting a timeout.
+  The response is `none` if the web request totally fails, like hitting a timeout.
   Otherwise a Just Dictionary is returned, with fields
 
   - `status`: Integer status code
   - `reason`: Full reason line, ex: `"200 OK"`
-  - `headers`: Dictionary of key-value header pairs
-  - `body`: Body of response, read as UTF-8 string.
+  - `headers`: Dictionary of header name to a list of values
+  - `body`: Body of response, as raw `bytes`. Decode with `utf8Str` if you want a UTF-8 string.
 
-- `httpPost`: Make a HTTP POST request. Signature is `(dict -- dict)`. Only difference from `httpGet` is that on the request dictionary, you can also set the `body` field to a string.
+- `httpPost`: Make a HTTP POST request. Signature is the same as `httpGet`. The only difference is that on the request dictionary, you can also set the `body` field to a stringable value.
 
 ## Variables
 
