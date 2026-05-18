@@ -1619,6 +1619,10 @@ func builtinSigsByToken(arena *TypeArena, names *NameTable) map[TokenType][]Quot
 	dateTimeDateTimeBool := QuoteSig{Inputs: []TypeId{TidDateTime, TidDateTime}, Outputs: []TypeId{TidBool}}
 
 	arithmetic := []QuoteSig{intIntInt, floatFloatFloat, intFloatFloat, floatIntFloat}
+	// `-` also subtracts two datetimes into a float number of days.
+	dateTimeDateTimeFloat := QuoteSig{Inputs: []TypeId{TidDateTime, TidDateTime}, Outputs: []TypeId{TidFloat}}
+	minusOverloads := append([]QuoteSig{}, arithmetic...)
+	minusOverloads = append(minusOverloads, dateTimeDateTimeFloat)
 	comparison := []QuoteSig{intIntBool, floatFloatBool, dateTimeDateTimeBool}
 
 	// Capture markers `*` / `*b` / `^` / `^b` are postfix command
@@ -1897,7 +1901,7 @@ func builtinSigsByToken(arena *TypeArena, names *NameTable) map[TokenType][]Quot
 
 	return map[TokenType][]QuoteSig{
 		PLUS:               plusOverloads,
-		MINUS:              arithmetic,
+		MINUS:              minusOverloads,
 		ASTERISK:           starOverloads,
 		ASTERISKBINARY:     starBytesOverloads,
 		CARET:              caretOverloads,

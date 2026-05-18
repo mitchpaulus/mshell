@@ -50,3 +50,6 @@ end
 0.5 fromOleDate isoDateTimeFmt wl
 
 2026-01-01 toOleDate fromOleDate isoDateTimeFmt wl
+
+# Subtraction give float number of days.
+2026-05-18 2026-05-16 - 1 toFixed wl
