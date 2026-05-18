@@ -1,0 +1,16 @@
+# Regression: multi-overload dispatch inside a match-arm body must
+# propagate branches the same way it does at the top level. Companion
+# to multi_overload_in_if.msh — `checkMatchBlock` had the same
+# single-state walk pattern as the old `checkIfBlock`.
+
+def f (dict --)
+    seen!
+    @seen match
+        dict :>
+            @seen "x" in not if
+                "found" wl
+            end
+        ,
+        _ : ,
+    end
+end

@@ -124,24 +124,43 @@ func (c *Checker) reconcileTopLevelBranches(file *MShellFile, branches []quoteBr
 	if len(branches) == 0 {
 		return
 	}
-	if len(branches) == 1 {
+	// Diverged branches (return / exit / propagated fail) represent
+	// paths that never reach end-of-program at runtime, so they
+	// don't participate in convergence. If every branch diverged,
+	// the program itself diverges and we just keep one for state.
+	live := filterLiveBranches(branches)
+	if len(live) == 0 {
 		c.loadBranch(branches[0])
 		return
 	}
-	// Multiple branches survived. If they all converge on the same
-	// final stack (modulo substitution), pick any. Otherwise the
-	// program is ambiguous and the user must add an annotation.
-	if branchStacksConverge(c, branches) {
-		c.loadBranch(branches[0])
+	if len(live) == 1 {
+		c.loadBranch(live[0])
 		return
 	}
-	c.loadBranch(branches[0])
+	if branchStacksConverge(c, live) {
+		c.loadBranch(live[0])
+		return
+	}
+	c.loadBranch(live[0])
 	pos := lastBranchingTokenInFile(file)
 	c.errors = append(c.errors, TypeError{
 		Kind: TErrAmbiguousTyping,
 		Pos:  pos,
-		Hint: formatBranchStacks(c, branches),
+		Hint: formatBranchStacks(c, live),
 	})
+}
+
+// filterLiveBranches returns the non-diverged subset. Used at
+// convergence points (end-of-program, end-of-def) where diverged
+// paths don't represent realizable runtime continuations.
+func filterLiveBranches(branches []quoteBranch) []quoteBranch {
+	live := make([]quoteBranch, 0, len(branches))
+	for _, b := range branches {
+		if !b.diverged {
+			live = append(live, b)
+		}
+	}
+	return live
 }
 
 // branchStacksConverge reports whether all branches end with the same
@@ -659,15 +678,19 @@ func (c *Checker) prefixQuoteInputs(funcName string) []TypeId {
 	return nil
 }
 
-// checkIfBlock drives an if/else-if/else chain through the branch
-// reconciliation infrastructure (TypeBranch.go). The condition for
-// the main `if` is already on the stack at entry — the runtime pops
-// it before executing the body; we mirror that here. Each else-if
-// arm starts from the post-pop snapshot, walks its condition body
-// (which is expected to push a bool/int), pops that, then walks the
-// arm body. An else-less if implicitly contributes a "did nothing"
-// arm equal to the entry snapshot, since at runtime the if block
-// may simply not fire.
+// checkIfBlock drives an if/else-if/else chain through the branching
+// walker. The condition for the main `if` is already on the stack at
+// entry — the runtime pops it before executing the body; we mirror
+// that here. Each arm body is walked through driveBranchesOverItems
+// so multi-overload dispatch inside an arm fans out the same way it
+// does anywhere else; the surviving branches from every arm become
+// the candidate post-if states.
+//
+// An else-less if implicitly contributes a "did nothing" arm equal to
+// the entry snapshot, since at runtime the if block may simply not
+// fire. Surviving arm-branches are emitted into branchSpawn so the
+// outer walker propagates them; if exactly one survives, the live
+// state is loaded directly.
 func (c *Checker) checkIfBlock(ifBlock *MShellParseIfBlock) {
 	startTok := ifBlock.GetStartToken()
 
@@ -691,24 +714,24 @@ func (c *Checker) checkIfBlock(ifBlock *MShellParseIfBlock) {
 		})
 	}
 
-	snap := c.Snapshot()
+	entry := c.captureBranch()
+	var armBranches []quoteBranch
 
-	// If body.
-	for _, sub := range ifBlock.IfBody {
-		c.checkParseItem(sub)
+	walkArm := func(body []MShellParseItem) {
+		c.loadBranch(entry)
+		c.diverged = false
+		armBranches = append(armBranches,
+			c.driveBranchesOverItems([]quoteBranch{c.captureBranch()}, body)...)
 	}
-	ifArm := c.CaptureArm(c.diverged)
-	ifArm.Body = ifBlock.IfBody
-	arms := []BranchArm{ifArm}
 
-	// else-if arms.
+	walkArm(ifBlock.IfBody)
+
 	for _, elseIf := range ifBlock.ElseIfs {
-		c.Fork(snap)
+		c.loadBranch(entry)
 		c.diverged = false
 		for _, sub := range elseIf.Condition {
 			c.checkParseItem(sub)
 		}
-		// Pop the else-if condition.
 		if c.stack.Len() == 0 {
 			c.errors = append(c.errors, TypeError{
 				Kind: TErrStackUnderflow,
@@ -728,31 +751,31 @@ func (c *Checker) checkIfBlock(ifBlock *MShellParseIfBlock) {
 				})
 			}
 		}
-		for _, sub := range elseIf.Body {
-			c.checkParseItem(sub)
-		}
-		arm := c.CaptureArm(c.diverged)
-		arm.Body = elseIf.Body
-		arms = append(arms, arm)
+		armBranches = append(armBranches,
+			c.driveBranchesOverItems([]quoteBranch{c.captureBranch()}, elseIf.Body)...)
 	}
 
-	// else body, or the implicit "did nothing" arm if absent.
 	if len(ifBlock.ElseBody) > 0 {
-		c.Fork(snap)
-		c.diverged = false
-		for _, sub := range ifBlock.ElseBody {
-			c.checkParseItem(sub)
-		}
-		arm := c.CaptureArm(c.diverged)
-		arm.Body = ifBlock.ElseBody
-		arms = append(arms, arm)
+		walkArm(ifBlock.ElseBody)
 	} else {
-		c.Fork(snap)
-		c.diverged = false
-		arms = append(arms, c.CaptureArm(false))
+		// Implicit do-nothing arm: the if block may not fire at all.
+		armBranches = append(armBranches, entry)
 	}
 
-	c.ReconcileArms(arms, startTok)
+	if len(armBranches) == 0 {
+		// All arms died with errors already reported. Leave the
+		// stack in the post-condition state so subsequent code has
+		// something coherent to type against.
+		c.loadBranch(entry)
+		return
+	}
+	if len(armBranches) == 1 {
+		c.loadBranch(armBranches[0])
+		return
+	}
+	// Multiple surviving alternatives. Hand them to the outer walker
+	// the same way resolveAndApply does for a multi-viable call.
+	c.branchSpawn = append(c.branchSpawn, armBranches...)
 }
 
 // checkMatchBlock drives a `<subject> match ... end` through branch
@@ -785,7 +808,7 @@ func (c *Checker) checkMatchBlock(matchBlock *MShellParseMatchBlock) {
 		return
 	}
 	subject := c.stack.items[c.stack.Len()-1]
-	snap := c.Snapshot()
+	entry := c.captureBranch()
 
 	if len(matchBlock.Arms) == 0 {
 		// Empty match block: no arms could fire. Treat as a no-op.
@@ -794,38 +817,38 @@ func (c *Checker) checkMatchBlock(matchBlock *MShellParseMatchBlock) {
 		return
 	}
 
-	arms := make([]BranchArm, 0, len(matchBlock.Arms))
+	var armBranches []quoteBranch
 	tags := make([]MatchArmTag, 0, len(matchBlock.Arms))
 	for _, arm := range matchBlock.Arms {
-		c.Fork(snap)
+		c.loadBranch(entry)
+		c.diverged = false
 		// Apply per-arm subject handling.
 		if arm.Consume {
 			// Pop the subject — body sees the stack without it.
 			c.stack.items = c.stack.items[:c.stack.Len()-1]
 		}
 		// Pattern-introduced bindings flow into the captured arm
-		// like any other binding. ReconcileArms tolerates name-set
-		// disagreement across arms (lifts to maybeBound where some
-		// arms bind a name and others don't), so a `just devType`
-		// arm that falls through next to a divergent `none` arm
-		// correctly leaves `devType` bound in the post-match scope.
-		// The patternBindings slice is collected but no longer
-		// restored before capture — the next iteration's Fork(snap)
-		// resets state to the entry snapshot, so cross-arm bleed is
-		// already prevented.
-		patternBindings := c.bindMatchPattern(subject, arm.Pattern)
-		_ = patternBindings
+		// like any other binding. Each surviving branch keeps its
+		// own bindings, so per-arm name disagreements naturally
+		// surface as branch differences rather than maybeBound
+		// lifts.
+		c.bindMatchPattern(subject, arm.Pattern)
 
-		for _, sub := range arm.Body {
-			c.checkParseItem(sub)
-		}
-		captured := c.CaptureArm(c.diverged)
-		captured.Body = arm.Body
-		arms = append(arms, captured)
+		armBranches = append(armBranches,
+			c.driveBranchesOverItems([]quoteBranch{c.captureBranch()}, arm.Body)...)
 		tags = append(tags, c.classifyArmPattern(arm.Pattern))
 	}
-	c.ReconcileArms(arms, startTok)
 	c.CheckMatchExhaustive(subject, tags, startTok)
+
+	if len(armBranches) == 0 {
+		c.loadBranch(entry)
+		return
+	}
+	if len(armBranches) == 1 {
+		c.loadBranch(armBranches[0])
+		return
+	}
+	c.branchSpawn = append(c.branchSpawn, armBranches...)
 }
 
 // classifyArmPattern reduces a parsed match arm pattern to the
@@ -894,17 +917,6 @@ func (c *Checker) bindPatternName(name string, typ TypeId, bindings *[]patternBi
 	old, had := c.vars.bound[nameId]
 	*bindings = append(*bindings, patternBinding{Name: nameId, Old: old, Had: had})
 	c.vars.bound[nameId] = typ
-}
-
-func (c *Checker) restorePatternBindings(bindings []patternBinding) {
-	for i := len(bindings) - 1; i >= 0; i-- {
-		b := bindings[i]
-		if b.Had {
-			c.vars.bound[b.Name] = b.Old
-		} else {
-			delete(c.vars.bound, b.Name)
-		}
-	}
 }
 
 // bindMatchPattern mirrors runtime match destructuring enough for body

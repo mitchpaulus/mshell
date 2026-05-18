@@ -295,6 +295,16 @@ func copyVarMap(m map[NameId]TypeId) map[NameId]TypeId {
 // returned slice is the resulting branches: a single capture for a
 // deterministic step, or every entry in branchSpawn if the step
 // fanned out.
+//
+// Errors emitted by the step are split into two roles:
+//   - When the step produced no branches and no spawn, the errors
+//     are the reason the step failed; the caller propagates them up
+//     and the branch dies.
+//   - When the step both errored and fanned out (e.g. checkIfBlock
+//     reports a non-bool condition while still walking its arms),
+//     the errors are non-branch-local and get reattached to the
+//     parent's c.errors so they surface alongside the surviving
+//     branches.
 func (c *Checker) tryBranchStep(b quoteBranch, step func()) ([]quoteBranch, []TypeError, bool) {
 	c.loadBranch(b)
 	savedSpawn := c.branchSpawn
@@ -310,6 +320,9 @@ func (c *Checker) tryBranchStep(b quoteBranch, step func()) ([]quoteBranch, []Ty
 	c.branchSpawn = savedSpawn
 	c.branchingEnabled = savedEnabled
 	if len(spawned) > 0 {
+		if len(produced) > 0 {
+			c.errors = append(c.errors, produced...)
+		}
 		return spawned, nil, true
 	}
 	if len(produced) > 0 {
