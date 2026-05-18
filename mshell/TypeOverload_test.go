@@ -2,7 +2,16 @@ package main
 
 import "testing"
 
-// Phase-9 tests: overload dispatch.
+// Overload-dispatch tests.
+//
+// The checker no longer prioritizes candidates by specificity: if more
+// than one overload remains viable after trial unification against the
+// current stack, the result is ambiguous unless something downstream
+// narrows the set to one. These tests exercise the direct
+// (non-branching) call path used by CheckTokens / lower-level tests,
+// where ambiguity is reported via TErrAmbiguousOverload. The
+// branching-walker integration tests live in
+// TypeCheckProgram_test.go.
 
 // registerOverloads is a test helper that injects a name->[]sig entry
 // into the checker's overload table.
@@ -11,10 +20,11 @@ func registerOverloads(c *Checker, name string, sigs ...QuoteSig) {
 	c.nameBuiltins[id] = append(c.nameBuiltins[id], sigs...)
 }
 
-func TestOverloadConcreteWinsOverGeneric(t *testing.T) {
+func TestOverloadConcreteAndGenericBothViableIsAmbiguous(t *testing.T) {
 	// f : (int -- int)         — concrete
 	// f : (T -- T)             — generic
-	// Calling with int on stack should pick the concrete one.
+	// Calling with int on stack: both overloads unify. With no
+	// specificity ranking, this is ambiguous in the direct-call path.
 	c := freshChecker()
 	tVar := TypeVarId(0)
 	tType := c.arena.MakeVar(tVar)
@@ -27,12 +37,15 @@ func TestOverloadConcreteWinsOverGeneric(t *testing.T) {
 	c.checkOne(mkTok(INTEGER, "5"))
 	c.checkOne(mkTok(LITERAL, "f"))
 
-	if errs := c.Errors(); len(errs) != 0 {
-		t.Fatalf("unexpected errors: %+v", errs)
+	found := false
+	for _, e := range c.Errors() {
+		if e.Kind == TErrAmbiguousOverload {
+			found = true
+			break
+		}
 	}
-	if c.stack.Top() != TidInt {
-		t.Fatalf("expected int on top; got %s",
-			FormatType(c.arena, c.names, c.stack.Top()))
+	if !found {
+		t.Fatalf("expected TErrAmbiguousOverload, got %+v", c.Errors())
 	}
 }
 
@@ -157,10 +170,10 @@ func TestOverloadAmbiguous(t *testing.T) {
 	}
 }
 
-func TestOverloadShapeBeatsVar(t *testing.T) {
+func TestOverloadShapeAndVarBothViableIsAmbiguous(t *testing.T) {
 	// f : ({a: int} -- int)        — concrete shape
 	// f : (T -- int)               — pure variable
-	// Calling with {a: int}: shape wins.
+	// Calling with {a: int}: both overloads unify. Ambiguous.
 	c := freshChecker()
 	nA := c.names.Intern("a")
 	shapeAInt := c.arena.MakeShape([]ShapeField{{Name: nA, Type: TidInt}})
@@ -175,15 +188,22 @@ func TestOverloadShapeBeatsVar(t *testing.T) {
 	c.stack.Push(shapeAInt)
 	c.checkOne(mkTok(LITERAL, "f"))
 
-	if errs := c.Errors(); len(errs) != 0 {
-		t.Fatalf("unexpected errors: %+v", errs)
+	found := false
+	for _, e := range c.Errors() {
+		if e.Kind == TErrAmbiguousOverload {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected TErrAmbiguousOverload, got %+v", c.Errors())
 	}
 }
 
-func TestOverloadBrandBeatsStructural(t *testing.T) {
+func TestOverloadBrandAndVarBothViableIsAmbiguous(t *testing.T) {
 	// f : (UserId -- int)         — branded int
 	// f : (T -- int)              — pure variable
-	// Calling with UserId: brand wins (brand bonus).
+	// Calling with UserId: both overloads unify. Ambiguous.
 	c := freshChecker()
 	brandU := c.names.Intern("UserId")
 	userId := c.arena.MakeBrand(brandU, TidInt)
@@ -198,8 +218,15 @@ func TestOverloadBrandBeatsStructural(t *testing.T) {
 	c.stack.Push(userId)
 	c.checkOne(mkTok(LITERAL, "f"))
 
-	if errs := c.Errors(); len(errs) != 0 {
-		t.Fatalf("unexpected errors: %+v", errs)
+	found := false
+	for _, e := range c.Errors() {
+		if e.Kind == TErrAmbiguousOverload {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected TErrAmbiguousOverload, got %+v", c.Errors())
 	}
 }
 
@@ -253,28 +280,6 @@ func TestOverloadIsolation(t *testing.T) {
 	if c.stack.Top() != TidBool {
 		t.Fatalf("second call: T should rebind to bool, got %s",
 			FormatType(c.arena, c.names, c.stack.Top()))
-	}
-}
-
-func TestSpecificityScores(t *testing.T) {
-	// Quick spot-checks on the scoring function.
-	arena := NewTypeArena()
-	names := NewNameTable()
-	if specificityScore(arena, TidInt) != 1 {
-		t.Errorf("int score should be 1")
-	}
-	if specificityScore(arena, arena.MakeVar(0)) != 0 {
-		t.Errorf("var score should be 0")
-	}
-	if specificityScore(arena, arena.MakeList(TidInt)) != 2 {
-		t.Errorf("[int] score should be 2")
-	}
-	if specificityScore(arena, arena.MakeList(arena.MakeVar(0))) != 1 {
-		t.Errorf("[T] score should be 1")
-	}
-	brand := arena.MakeBrand(names.Intern("U"), TidInt)
-	if specificityScore(arena, brand) != 3 {
-		t.Errorf("UserId(int) score should be 3 (brand bonus + int)")
 	}
 }
 

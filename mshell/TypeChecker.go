@@ -110,6 +110,21 @@ type Checker struct {
 	inferring   bool
 	inferInputs []TypeId
 
+	// branchSpawn is populated by multi-dispatch sites (resolveAndApply
+	// with multiple viable candidates, prefix-quote handlers, INTERPRET
+	// on an overloaded quote) when the checker is running under the
+	// branching walker. Each entry is one alternative outcome of the
+	// current step. tryBranchStep clears this before invoking the step
+	// and reads it after: a non-empty result fans out the current
+	// branch into all the spawned alternatives instead of capturing a
+	// single deterministic continuation.
+	//
+	// When branchingEnabled is false (legacy path: direct CheckTokens,
+	// tests that don't go through the branching walker), multi-dispatch
+	// sites fall back to their pre-branching behavior.
+	branchSpawn      []quoteBranch
+	branchingEnabled bool
+
 	// listDepth tracks how deeply nested we are inside list literals
 	// (`[...]`). Inside lists, mshell allows bare literals as strings
 	// — that's how shell pipelines like `[sh -c "echo hi" ;]` stay

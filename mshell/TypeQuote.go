@@ -33,15 +33,21 @@ package main
 const quoteBranchCap = 1024
 
 // quoteBranch captures all checker state that varies across
-// alternative inference paths through a quote body. The substitution
-// is checkpointed (full bound-slice copy) because per-branch
-// unifications must not leak into siblings.
+// alternative inference paths through a quote body OR a top-level /
+// def-body walk. The substitution is checkpointed (full bound-slice
+// copy) because per-branch unifications must not leak into siblings.
+//
+// `inferring` controls underflow handling for applySig: in quote-body
+// inference it is true (stack underflow synthesizes fresh inputs); in
+// top-level / def-body walks it is false (stack underflow is a real
+// error). Storing it per-branch lets one shared driver serve both.
 type quoteBranch struct {
 	stack       []TypeId
 	vars        map[NameId]TypeId
 	maybeVars   map[NameId]TypeId
 	inferInputs []TypeId
 	diverged    bool
+	inferring   bool
 	substCp     SubstCheckpoint
 }
 
@@ -95,50 +101,14 @@ func (c *Checker) inferQuoteSigsTokens(body []Token, initialInputs []TypeId, ste
 	}()
 
 	branches := []quoteBranch{c.initialQuoteBranch(initialInputs, outerSnap)}
+	branches = c.driveBranches(branches, len(body), func(i int) func() {
+		tok := body[i]
+		return func() { step(tok) }
+	})
 
-	for _, tok := range body {
-		candidates := c.tokenOverloadCandidates(tok)
-		nextBranches := make([]quoteBranch, 0, len(branches))
-		var lastErrors []TypeError
-
-		for _, b := range branches {
-			if len(candidates) > 1 {
-				for _, cand := range candidates {
-					nb, errs, ok := c.tryBranchApply(b, cand, tok)
-					if ok {
-						nextBranches = append(nextBranches, nb)
-						if len(nextBranches) >= quoteBranchCap {
-							break
-						}
-					} else if len(errs) > 0 {
-						lastErrors = errs
-					}
-				}
-			} else {
-				nb, errs, ok := c.tryBranchStep(b, func() { step(tok) })
-				if ok {
-					nextBranches = append(nextBranches, nb)
-				} else if len(errs) > 0 {
-					lastErrors = errs
-				}
-			}
-			if len(nextBranches) >= quoteBranchCap {
-				break
-			}
-		}
-
-		if len(nextBranches) == 0 {
-			// Every branch died at this step. Surface the failing
-			// step's error verbatim; pick the first since they all
-			// pointed at the same token with the same cause.
-			if len(lastErrors) > 0 {
-				c.errors = append(c.errors, lastErrors[0])
-			}
-			return c.recoveryQuoteSigs()
-		}
-		branches = nextBranches
+	if len(branches) == 0 {
+		return c.recoveryQuoteSigs()
 	}
-
 	return c.collectQuoteSigs(branches, initialInputs, outerSnap)
 }
 
@@ -165,110 +135,80 @@ func (c *Checker) inferQuoteSigsItems(body []MShellParseItem, initialInputs []Ty
 	}()
 
 	branches := []quoteBranch{c.initialQuoteBranch(initialInputs, outerSnap)}
+	branches = c.driveBranchesOverItems(branches, body)
 
-	for _, item := range body {
-		var candidates []QuoteSig
-		var callTok Token
-		if tok, ok := item.(Token); ok {
-			candidates = c.tokenOverloadCandidates(tok)
-			callTok = tok
-		}
+	if len(branches) == 0 {
+		return c.recoveryQuoteSigs()
+	}
+	return c.collectQuoteSigs(branches, initialInputs, outerSnap)
+}
 
+// driveBranchesOverItems walks a parse-item body. Each item advances
+// every live branch through checkParseItem; multi-dispatch sites
+// inside the step (resolveAndApply with more than one viable
+// candidate, INTERPRET on an overloaded quote, the prefix-quote
+// handler) fan out via the checker's branchSpawn slice, which
+// tryBranchStep reads. There is no fan-out at this level — the driver
+// is intentionally one path so token-level specials (tryIff, tryGridJoin,
+// tryReturn, tryQuoteRedirect, ...) inside checkOne always fire before
+// dispatch.
+func (c *Checker) driveBranchesOverItems(initial []quoteBranch, body []MShellParseItem) []quoteBranch {
+	return c.driveBranches(initial, len(body), func(i int) func() {
+		item := body[i]
+		return func() { c.checkParseItem(item) }
+	})
+}
+
+// driveBranches is the shared core branching driver. At each step the
+// `next` callback supplies a "step" closure that advances one branch.
+// The driver returns the surviving branches (nil if all died at some
+// step; the first representative error is added to c.errors before
+// returning). Fan-out is handled entirely by branchSpawn, populated
+// inside the step by multi-dispatch sites in resolveAndApply.
+func (c *Checker) driveBranches(
+	branches []quoteBranch,
+	steps int,
+	next func(i int) func(),
+) []quoteBranch {
+	for i := 0; i < steps; i++ {
+		step := next(i)
 		nextBranches := make([]quoteBranch, 0, len(branches))
 		var lastErrors []TypeError
 
 		for _, b := range branches {
-			if len(candidates) > 1 {
-				for _, cand := range candidates {
-					nb, errs, ok := c.tryBranchApply(b, cand, callTok)
-					if ok {
-						nextBranches = append(nextBranches, nb)
-						if len(nextBranches) >= quoteBranchCap {
-							break
-						}
-					} else if len(errs) > 0 {
-						lastErrors = errs
-					}
+			// Diverged branches (return / exit / propagated fail)
+			// don't consume further items — pass them through
+			// unchanged so the residual body doesn't underflow them.
+			if b.diverged {
+				nextBranches = append(nextBranches, b)
+				if len(nextBranches) >= quoteBranchCap {
+					break
 				}
-			} else {
-				captured := item
-				nb, errs, ok := c.tryBranchStep(b, func() { c.checkParseItem(captured) })
-				if ok {
-					nextBranches = append(nextBranches, nb)
-				} else if len(errs) > 0 {
-					lastErrors = errs
-				}
+				continue
 			}
-			if len(nextBranches) >= quoteBranchCap {
-				break
+			nbs, errs, ok := c.tryBranchStep(b, step)
+			if ok {
+				nextBranches = append(nextBranches, nbs...)
+				if len(nextBranches) >= quoteBranchCap {
+					break
+				}
+			} else if len(errs) > 0 {
+				lastErrors = errs
 			}
 		}
 
 		if len(nextBranches) == 0 {
+			// Every branch died at this step. Surface the failing
+			// step's error verbatim; pick the first since they all
+			// pointed at the same token with the same cause.
 			if len(lastErrors) > 0 {
 				c.errors = append(c.errors, lastErrors[0])
 			}
-			return c.recoveryQuoteSigs()
+			return nil
 		}
 		branches = nextBranches
 	}
-
-	return c.collectQuoteSigs(branches, initialInputs, outerSnap)
-}
-
-// tokenOverloadCandidates returns the overload set for a Token if it
-// maps to one. Nil/empty means "no fan-out at this token" — the step
-// is applied deterministically. A single-entry result also returns
-// nil so the deterministic path is taken; only true >1 fan-out
-// triggers branching.
-//
-// Some tokens get special handling in checkOne (tryIff, tryLoop,
-// tryRejectPathWrite, the redirect detectors, etc.) before the
-// resolveAndApply fallback. Naively calling applySig with each
-// candidate skips that special handling and produces wrong results
-// — e.g. an `iff` whose arms are quotes is reconciled through
-// ReconcileArms, not raw input unification. For those tokens we
-// return nil and the deterministic step path runs checkOne, which
-// preserves the existing semantics.
-func (c *Checker) tokenOverloadCandidates(tok Token) []QuoteSig {
-	if tokenHasSpecialHandling(tok) {
-		return nil
-	}
-	if sigs, ok := c.builtins[tok.Type]; ok && len(sigs) > 1 {
-		return sigs
-	}
-	if tok.Type == LITERAL {
-		nameId := c.names.Intern(tok.Lexeme)
-		if sigs, ok := c.nameBuiltins[nameId]; ok && len(sigs) > 1 {
-			return sigs
-		}
-	}
-	return nil
-}
-
-// tokenHasSpecialHandling lists tokens that have structurally
-// special pre-resolveAndApply handling in checkOne that can't be
-// replicated by applying a single sig. The redirect tokens
-// (`<`/`>`/etc.) are intentionally NOT here: their tryQuoteRedirect
-// / tryCommandRedirect helpers only fire when the stack already has
-// a TKQuote/TKCommand with a target string/path/bytes on top, which
-// doesn't occur during fresh-stack quote-body inference. Branching
-// for them resolves their comparison overloads correctly.
-//
-// The LITERAL specials (tryAppend, tryGet, tryReturn, etc.) are also
-// not listed: their fast paths require specific stack shapes that
-// aren't produced by inference-time fresh-var synthesis. If the user
-// writes a quote body that does land on such a shape mid-walk,
-// resolveAndApply (via applySig in a branch) still produces the
-// right effect — just without the bespoke union-aware refinements
-// tryAppend would add. That's an acceptable trade for not losing
-// overload alternatives at inference time.
-func tokenHasSpecialHandling(tok Token) bool {
-	switch tok.Type {
-	case IFF, BREAK, CONTINUE, LOOP, PIPE:
-		return true
-	}
-	return false
+	return branches
 }
 
 // initialQuoteBranch builds the starting branch for a body walk:
@@ -292,6 +232,24 @@ func (c *Checker) initialQuoteBranch(initialInputs []TypeId, outerSnap ScopeSnap
 		maybeVars:   inheritedMaybe,
 		inferInputs: nil,
 		diverged:    false,
+		inferring:   true,
+		substCp:     c.subst.Checkpoint(),
+	}
+}
+
+// initialTopBranch builds the starting branch for a top-level or
+// def-body walk: copy the current var environment, seed the stack from
+// the caller-supplied initial inputs (def inputs / nil at top level),
+// and run with inferring=false so underflow remains a real error.
+func (c *Checker) initialTopBranch(initialStack []TypeId) quoteBranch {
+	stack := append([]TypeId(nil), initialStack...)
+	return quoteBranch{
+		stack:       stack,
+		vars:        copyVarMap(c.vars.bound),
+		maybeVars:   copyVarMap(c.vars.maybeBound),
+		inferInputs: nil,
+		diverged:    false,
+		inferring:   false,
 		substCp:     c.subst.Checkpoint(),
 	}
 }
@@ -305,7 +263,7 @@ func (c *Checker) loadBranch(b quoteBranch) {
 	c.vars.maybeBound = copyVarMap(b.maybeVars)
 	c.inferInputs = append([]TypeId(nil), b.inferInputs...)
 	c.diverged = b.diverged
-	c.inferring = true
+	c.inferring = b.inferring
 }
 
 // captureBranch reads the checker's current state into a quoteBranch
@@ -317,6 +275,7 @@ func (c *Checker) captureBranch() quoteBranch {
 		maybeVars:   copyVarMap(c.vars.maybeBound),
 		inferInputs: append([]TypeId(nil), c.inferInputs...),
 		diverged:    c.diverged,
+		inferring:   c.inferring,
 		substCp:     c.subst.Checkpoint(),
 	}
 }
@@ -329,38 +288,34 @@ func copyVarMap(m map[NameId]TypeId) map[NameId]TypeId {
 	return out
 }
 
-// tryBranchApply applies a single candidate sig to a forked branch.
-// Errors generated by applySig are captured locally — they do not
-// pollute c.errors unless every branch fails and the driver surfaces
-// one of them. Returns the new branch state, the locally-captured
-// errors, and a boolean indicating success.
-func (c *Checker) tryBranchApply(b quoteBranch, cand QuoteSig, callTok Token) (quoteBranch, []TypeError, bool) {
+// tryBranchStep runs one driver step against a branch. The step
+// (typically checkParseItem or checkOne) does its own special-case
+// handling and dispatches via resolveAndApply when needed; multi-
+// dispatch sites populate branchSpawn instead of picking. The
+// returned slice is the resulting branches: a single capture for a
+// deterministic step, or every entry in branchSpawn if the step
+// fanned out.
+func (c *Checker) tryBranchStep(b quoteBranch, step func()) ([]quoteBranch, []TypeError, bool) {
 	c.loadBranch(b)
-	savedErrs := c.errors
-	c.errors = nil
-	c.applySig(cand, callTok)
-	produced := c.errors
-	c.errors = savedErrs
-	if len(produced) > 0 {
-		return quoteBranch{}, produced, false
-	}
-	return c.captureBranch(), nil, true
-}
-
-// tryBranchStep is the non-overloaded counterpart of tryBranchApply.
-// Used for parse items whose effect is deterministic (literals,
-// non-overloaded operations, composite items handled internally).
-func (c *Checker) tryBranchStep(b quoteBranch, step func()) (quoteBranch, []TypeError, bool) {
-	c.loadBranch(b)
+	savedSpawn := c.branchSpawn
+	c.branchSpawn = nil
+	savedEnabled := c.branchingEnabled
+	c.branchingEnabled = true
 	savedErrs := c.errors
 	c.errors = nil
 	step()
 	produced := c.errors
 	c.errors = savedErrs
-	if len(produced) > 0 {
-		return quoteBranch{}, produced, false
+	spawned := c.branchSpawn
+	c.branchSpawn = savedSpawn
+	c.branchingEnabled = savedEnabled
+	if len(spawned) > 0 {
+		return spawned, nil, true
 	}
-	return c.captureBranch(), nil, true
+	if len(produced) > 0 {
+		return nil, produced, false
+	}
+	return []quoteBranch{c.captureBranch()}, nil, true
 }
 
 // collectQuoteSigs converts surviving branches into their final

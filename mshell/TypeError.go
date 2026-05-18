@@ -29,6 +29,12 @@ const (
 	TErrNonExhaustiveMatch
 	TErrAmbiguousOverload
 	TErrNoMatchingOverload
+	// TErrAmbiguousTyping is emitted when the branching walker reaches
+	// the end of a program (or a synchronization point) with more than
+	// one surviving branch whose typings disagree. The user must add
+	// an annotation upstream to disambiguate. Hint lists the surviving
+	// final stacks.
+	TErrAmbiguousTyping
 	TErrReservedTypeName
 	TErrDuplicateTypeName
 	TErrInvalidCast
@@ -82,6 +88,8 @@ func (e TypeError) Format(arena *TypeArena, names *NameTable) string {
 		fmt.Fprintf(&sb, "ambiguous call to '%s': %s", e.Pos.Lexeme, e.Hint)
 	case TErrNoMatchingOverload:
 		fmt.Fprintf(&sb, "no matching overload for '%s': %s", e.Pos.Lexeme, e.Hint)
+	case TErrAmbiguousTyping:
+		fmt.Fprintf(&sb, "ambiguous typing — add an annotation to disambiguate: %s", e.Hint)
 	case TErrReservedTypeName:
 		fmt.Fprintf(&sb, "cannot redefine reserved type name '%s'", e.Name)
 		if e.Hint != "" {

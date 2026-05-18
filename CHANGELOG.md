@@ -58,6 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Type-checker overload resolution no longer ranks candidates by specificity. When more than one overload remains viable after trial unification, the checker fans the in-flight branches out (top-level walks and def bodies share the same branching driver used inside quote-body inference). Downstream constraints prune the branches; if more than one survives at end of program or a def-body boundary fails to converge, a new `TErrAmbiguousTyping` diagnostic asks the user for a type annotation and lists the surviving alternatives. The legacy direct-call path (CheckTokens / lower-level tests) reports `TErrAmbiguousOverload` instead of silently picking.
 - History, bin map, and interactive log storage now use the `$LOCALAPPDATA\msh` directory on Windows instead of `$LOCALAPPDATA\mshell`, and `XDG_DATA_HOME` history/bin map storage now uses the required `msh/` subdirectory on Linux/macOS.
   You should be able to simply move the previous files over with no problems.
 - `msh bin edit` now falls back to the platform default opener when `$EDITOR` is unavailable

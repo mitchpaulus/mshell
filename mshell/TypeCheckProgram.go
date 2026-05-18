@@ -102,10 +102,112 @@ func (c *Checker) CheckProgram(file *MShellFile) {
 	for i := range file.Definitions {
 		c.checkDefBody(&file.Definitions[i], defSigs[i])
 	}
-	// Flow walk of top-level items.
-	for _, item := range file.Items {
-		c.checkParseItem(item)
+	// Flow walk of top-level items via the branching driver. Initial
+	// state is the live checker state captured into a single branch;
+	// surviving branches at the end are the program's possible typings.
+	// If exactly one survives, commit its substitution and stack.
+	// Multiple surviving branches is TErrAmbiguousTyping (the program
+	// has under-constrained typing). Zero surviving means a step in the
+	// middle exhausted all alternatives, with the failing-step error
+	// already recorded.
+	initial := []quoteBranch{c.initialTopBranch(c.stack.items)}
+	c.stack.items = c.stack.items[:0]
+	branches := c.driveBranchesOverItems(initial, file.Items)
+	c.reconcileTopLevelBranches(file, branches)
+}
+
+func (c *Checker) reconcileTopLevelBranches(file *MShellFile, branches []quoteBranch) {
+	if len(branches) == 0 {
+		return
 	}
+	if len(branches) == 1 {
+		c.loadBranch(branches[0])
+		return
+	}
+	// Multiple branches survived. If they all converge on the same
+	// final stack (modulo substitution), pick any. Otherwise the
+	// program is ambiguous and the user must add an annotation.
+	if branchStacksConverge(c, branches) {
+		c.loadBranch(branches[0])
+		return
+	}
+	c.loadBranch(branches[0])
+	pos := lastBranchingTokenInFile(file)
+	c.errors = append(c.errors, TypeError{
+		Kind: TErrAmbiguousTyping,
+		Pos:  pos,
+		Hint: formatBranchStacks(c, branches),
+	})
+}
+
+// branchStacksConverge reports whether all branches end with the same
+// stack shape after substitution. Used to silently accept ambiguity
+// that the surrounding context has fully resolved.
+func branchStacksConverge(c *Checker, branches []quoteBranch) bool {
+	if len(branches) <= 1 {
+		return true
+	}
+	// Canonicalize each branch's stack as a slice of post-substitution
+	// TypeIds. Compare to the first.
+	canon := func(b quoteBranch) []TypeId {
+		c.loadBranch(b)
+		out := make([]TypeId, len(c.stack.items))
+		for i, t := range c.stack.items {
+			out[i] = c.subst.Apply(c.arena, t)
+		}
+		return out
+	}
+	first := canon(branches[0])
+	for _, b := range branches[1:] {
+		cur := canon(b)
+		if len(cur) != len(first) {
+			return false
+		}
+		for i := range first {
+			if cur[i] != first[i] {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// formatBranchStacks renders one line per surviving branch's final
+// stack, suitable for an ambiguity-diagnostic hint. The branches are
+// loaded in turn so their substitutions resolve.
+func formatBranchStacks(c *Checker, branches []quoteBranch) string {
+	var sb strings.Builder
+	sb.WriteString("surviving typings (top of stack first):")
+	for i, b := range branches {
+		c.loadBranch(b)
+		sb.WriteString("\n  branch ")
+		sb.WriteString(intToStr(i + 1))
+		sb.WriteString(":")
+		if c.stack.Len() == 0 {
+			sb.WriteString(" <empty>")
+			continue
+		}
+		for j := c.stack.Len() - 1; j >= 0; j-- {
+			sb.WriteString("\n    ")
+			sb.WriteString(FormatType(c.arena, c.names, c.subst.Apply(c.arena, c.stack.items[j])))
+		}
+	}
+	return sb.String()
+}
+
+// lastBranchingTokenInFile is a best-effort anchor for ambiguity
+// diagnostics: the last token in the program. The branching driver
+// doesn't track which step introduced the ambiguity, so we point at
+// the end of the program. A future refinement could thread the
+// branching-event token through driveBranches.
+func lastBranchingTokenInFile(file *MShellFile) Token {
+	var best Token
+	for _, item := range file.Items {
+		if tok, ok := item.(Token); ok {
+			best = tok
+		}
+	}
+	return best
 }
 
 // checkDefBody verifies that the def's body, when run with the
@@ -121,12 +223,24 @@ func (c *Checker) CheckProgram(file *MShellFile) {
 //     check operates on substitution-local TypeVarIds; recursive
 //     self-calls go through nameBuiltins as usual and get their
 //     own fresh-rename.
+//
+// The body is walked through the branching driver
+// (driveBranchesOverItems). Each multi-overload call inside the body
+// fans the in-flight branches out; downstream constraints prune them.
+// The declared output signature is the convergence point: any
+// surviving branch whose final stack unifies with the declared
+// outputs is accepted. Branches that don't match are simply dropped
+// — equivalent for the purposes of the declared sig, even if their
+// intermediate types differed. If no branch matches, the closest
+// mismatch is surfaced via TErrDefBodyMismatch.
 func (c *Checker) checkDefBody(def *MShellDefinition, sig QuoteSig) {
 	// Save outer state.
 	outerStack := c.stack.items
 	outerVars := c.vars.bound
 	outerMaybeVars := c.vars.maybeBound
 	outerDiverged := c.diverged
+	outerInferring := c.inferring
+	outerInferInputs := c.inferInputs
 	prevFn := c.currentFn
 	cp := c.subst.Checkpoint()
 
@@ -134,53 +248,29 @@ func (c *Checker) checkDefBody(def *MShellDefinition, sig QuoteSig) {
 	c.vars.bound = make(map[NameId]TypeId)
 	c.vars.maybeBound = make(map[NameId]TypeId)
 	c.diverged = false
+	c.inferring = false
+	c.inferInputs = nil
 
 	// Fresh-rename generics for this body check.
 	instSig := c.Instantiate(sig)
 	fnCtx := &FnContext{Sig: instSig}
 	c.currentFn = fnCtx
 
-	// Push declared inputs.
+	// Build the initial branch from a stack pre-loaded with declared inputs.
 	for _, in := range instSig.Inputs {
 		c.stack.Push(in)
 	}
+	initial := []quoteBranch{c.initialTopBranch(c.stack.items)}
+	c.stack.items = c.stack.items[:0]
 
-	// Walk the body.
-	for _, item := range def.Items {
-		c.checkParseItem(item)
-	}
+	branches := c.driveBranchesOverItems(initial, def.Items)
 
-	// Verify the resulting stack matches declared outputs.
 	expected := instSig.Outputs
-	if c.diverged || (fnCtx.SawReturn && c.stack.Len() == 0) {
-		// A path that has already returned is checked at the return
-		// site. During V1 we also accept a body with return sites and
-		// no residual fallthrough stack; exhaustive-return analysis is
-		// a later control-flow refinement.
-	} else if c.stack.Len() != len(expected) {
-		c.errors = append(c.errors, TypeError{
-			Kind: TErrDefBodyMismatch,
-			Pos:  def.NameToken,
-			Name: def.Name,
-			Hint: defBodyArityHint(c, def.Name, expected, c.stack.items),
-		})
+	if len(branches) == 0 {
+		// All branches died; the failing-step error is already in
+		// c.errors. Nothing more to report here.
 	} else {
-		for i, want := range expected {
-			got := c.stack.items[i]
-			if !c.unify(got, want) {
-				c.errors = append(c.errors, TypeError{
-					Kind:     TErrDefBodyMismatch,
-					Pos:      def.NameToken,
-					Name:     def.Name,
-					Expected: want,
-					Actual:   got,
-					ArgIndex: i,
-					Hint: "output position " + intToStr(i) +
-						" — declared " + FormatType(c.arena, c.names, want) +
-						", body produced " + FormatType(c.arena, c.names, got),
-				})
-			}
-		}
+		c.reconcileDefBodyBranches(def, fnCtx, expected, branches)
 	}
 
 	// Restore outer state.
@@ -190,6 +280,65 @@ func (c *Checker) checkDefBody(def *MShellDefinition, sig QuoteSig) {
 	c.vars.bound = outerVars
 	c.vars.maybeBound = outerMaybeVars
 	c.diverged = outerDiverged
+	c.inferring = outerInferring
+	c.inferInputs = outerInferInputs
+}
+
+// reconcileDefBodyBranches accepts the def body iff at least one
+// surviving branch agrees with the declared output sig. Branches that
+// diverged (return / exit / propagated fail) are accepted regardless
+// of residual stack. The first non-matching branch's mismatch is held
+// in reserve and only surfaced when no branch matches at all.
+func (c *Checker) reconcileDefBodyBranches(def *MShellDefinition, fnCtx *FnContext, expected []TypeId, branches []quoteBranch) {
+	var firstMismatch *TypeError
+	for _, b := range branches {
+		c.loadBranch(b)
+		if c.diverged || (fnCtx.SawReturn && c.stack.Len() == 0) {
+			return
+		}
+		if c.stack.Len() != len(expected) {
+			if firstMismatch == nil {
+				err := TypeError{
+					Kind: TErrDefBodyMismatch,
+					Pos:  def.NameToken,
+					Name: def.Name,
+					Hint: defBodyArityHint(c, def.Name, expected, c.stack.items),
+				}
+				firstMismatch = &err
+			}
+			continue
+		}
+		cp := c.subst.Checkpoint()
+		matched := true
+		for i, want := range expected {
+			got := c.stack.items[i]
+			if !c.unify(got, want) {
+				matched = false
+				if firstMismatch == nil {
+					err := TypeError{
+						Kind:     TErrDefBodyMismatch,
+						Pos:      def.NameToken,
+						Name:     def.Name,
+						Expected: want,
+						Actual:   got,
+						ArgIndex: i,
+						Hint: "output position " + intToStr(i) +
+							" — declared " + FormatType(c.arena, c.names, want) +
+							", body produced " + FormatType(c.arena, c.names, got),
+					}
+					firstMismatch = &err
+				}
+				break
+			}
+		}
+		if matched {
+			return
+		}
+		c.subst.Rollback(cp)
+	}
+	if firstMismatch != nil {
+		c.errors = append(c.errors, *firstMismatch)
+	}
 }
 
 func defBodyArityHint(c *Checker, _ string, declared, produced []TypeId) string {
