@@ -327,6 +327,10 @@ func (c *Checker) checkOne(tok Token) {
 	}
 
 	if tok.Type == LITERAL {
+		if tok.Lexeme == "dbg" {
+			c.emitDebugDump(tok)
+			return
+		}
 		if tok.Lexeme == "return" && c.tryReturn(tok) {
 			return
 		}

@@ -46,14 +46,18 @@ func TypeCheckProgram(file *MShellFile, stdlibDefs []MShellDefinition) (errors [
 	checker.RegisterStdlibSigs(stdlibDefs)
 	checker.CheckProgram(file)
 
-	if len(checker.errors) == 0 {
-		return nil, true
-	}
 	out := make([]string, 0, len(checker.errors))
+	ok = true
 	for _, e := range checker.errors {
 		out = append(out, e.Format(arena, names))
+		if e.Severity == SeverityError {
+			ok = false
+		}
 	}
-	return out, false
+	if len(out) == 0 {
+		return nil, true
+	}
+	return out, ok
 }
 
 // RegisterStdlibSigs resolves each stdlib def's signature AST into a

@@ -535,23 +535,28 @@ func typeErrorToDiagnostic(e TypeError, arena *TypeArena, names *NameTable) prot
 	if endCol == col {
 		endCol = col + 1
 	}
+	severity := protocol.DiagnosticSeverityError
+	if e.Severity == SeverityInfo {
+		severity = protocol.DiagnosticSeverityInformation
+	}
 	return protocol.Diagnostic{
 		Range: protocol.Range{
 			Start: protocol.Position{Line: line, Character: col},
 			End:   protocol.Position{Line: line, Character: endCol},
 		},
-		Severity: protocol.DiagnosticSeverityError,
+		Severity: severity,
 		Source:   "mshell",
 		Message:  stripErrorPrefix(e.Format(arena, names)),
 	}
 }
 
-// stripErrorPrefix removes the "type error at line X, column Y: "
-// prefix that TypeError.Format adds. LSP clients already render the
-// location from the diagnostic range, so the prefix is redundant.
+// stripErrorPrefix removes the "type error at line X, column Y: " (or
+// "type info at line ...") prefix that TypeError.Format adds. LSP
+// clients already render the location from the diagnostic range, so
+// the prefix is redundant.
 func stripErrorPrefix(formatted string) string {
-	const prefix = "type error at line "
-	if !strings.HasPrefix(formatted, prefix) {
+	if !strings.HasPrefix(formatted, "type error at line ") &&
+		!strings.HasPrefix(formatted, "type info at line ") {
 		return formatted
 	}
 	if idx := strings.Index(formatted, ": "); idx >= 0 {

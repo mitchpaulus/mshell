@@ -40,12 +40,28 @@ const (
 	TErrInvalidCast
 	TErrTypeParse
 	TErrInterpolationArity
+	// TErrDebugDump is emitted by the `dbg` builtin at each branch
+	// that walks past it. Informational severity — does not fail the
+	// type check. Hint holds the formatted snapshot of stack + vars.
+	TErrDebugDump
 )
 
-// TypeError is a single static-check failure. Pos is a Token (its line/column
+// TypeErrorSeverity classifies a diagnostic. Severity-error blocks
+// the type check; severity-info is purely informational (used by
+// `dbg` snapshots) and never causes the type checker to fail.
+type TypeErrorSeverity uint8
+
+const (
+	SeverityError TypeErrorSeverity = iota
+	SeverityInfo
+)
+
+// TypeError is a single static-check finding. Pos is a Token (its line/column
 // drive error formatting). Expected/Actual are TypeIds; the Hint is free text
-// for cases where a more specific message helps.
+// for cases where a more specific message helps. Severity defaults to
+// SeverityError; set SeverityInfo for non-fatal diagnostics.
 type TypeError struct {
+	Severity TypeErrorSeverity
 	Kind     TypeErrorKind
 	Pos      Token
 	Expected TypeId
@@ -59,7 +75,11 @@ type TypeError struct {
 // consulted to render TypeIds back to source-shaped text.
 func (e TypeError) Format(arena *TypeArena, names *NameTable) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "type error at line %d, column %d: ", e.Pos.Line, e.Pos.Column)
+	prefix := "type error"
+	if e.Severity == SeverityInfo {
+		prefix = "type info"
+	}
+	fmt.Fprintf(&sb, "%s at line %d, column %d: ", prefix, e.Pos.Line, e.Pos.Column)
 	switch e.Kind {
 	case TErrStackUnderflow:
 		fmt.Fprintf(&sb, "stack underflow at '%s'", e.Pos.Lexeme)
@@ -90,6 +110,8 @@ func (e TypeError) Format(arena *TypeArena, names *NameTable) string {
 		fmt.Fprintf(&sb, "no matching overload for '%s': %s", e.Pos.Lexeme, e.Hint)
 	case TErrAmbiguousTyping:
 		fmt.Fprintf(&sb, "ambiguous typing — add an annotation to disambiguate: %s", e.Hint)
+	case TErrDebugDump:
+		fmt.Fprintf(&sb, "dbg: %s", e.Hint)
 	case TErrReservedTypeName:
 		fmt.Fprintf(&sb, "cannot redefine reserved type name '%s'", e.Name)
 		if e.Hint != "" {

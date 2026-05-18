@@ -6317,6 +6317,8 @@ MainLoop:
 
 					stack.Push(MShellString{obj1.TypeName()})
 
+				} else if t.Lexeme == "dbg" {
+					// Static-only checker hint; no runtime work.
 				} else if t.Lexeme == "utcToCst" {
 					obj1, err := stack.Pop()
 					if err != nil {

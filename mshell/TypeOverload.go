@@ -1,6 +1,11 @@
 package main
 
-import "strings"
+import (
+	"fmt"
+	"os"
+	"sort"
+	"strings"
+)
 
 // Overload dispatch.
 //
@@ -208,4 +213,59 @@ func (c *Checker) formatStackForDiagnostic() string {
 		sb.WriteString(FormatType(c.arena, c.names, c.subst.Apply(c.arena, c.stack.items[i])))
 	}
 	return sb.String()
+}
+
+// emitDebugDump renders the current branch's stack and bound-var
+// environment, appends an info-severity TypeError (so the LSP /
+// editor squiggle layer surfaces it inline), and also writes the same
+// snapshot to stderr so CLI users see it during --type-check-only
+// runs. Each surviving branch hits its own emitDebugDump
+// independently, so multiple branches naturally produce multiple
+// outputs — the count tells you how many branches were alive here.
+func (c *Checker) emitDebugDump(tok Token) {
+	var sb strings.Builder
+	sb.WriteString("\n  stack (top first):")
+	sb.WriteString(c.formatStackForDiagnostic())
+	sb.WriteString("\n  vars:")
+	allNames := make(map[NameId]struct{}, len(c.vars.bound)+len(c.vars.maybeBound))
+	for id := range c.vars.bound {
+		allNames[id] = struct{}{}
+	}
+	for id := range c.vars.maybeBound {
+		allNames[id] = struct{}{}
+	}
+	if len(allNames) == 0 {
+		sb.WriteString(" <none>")
+	} else {
+		ordered := make([]NameId, 0, len(allNames))
+		for id := range allNames {
+			ordered = append(ordered, id)
+		}
+		sort.Slice(ordered, func(i, j int) bool {
+			return c.names.Name(ordered[i]) < c.names.Name(ordered[j])
+		})
+		for _, id := range ordered {
+			name := c.names.Name(id)
+			if t, ok := c.vars.bound[id]; ok {
+				sb.WriteString("\n    ")
+				sb.WriteString(name)
+				sb.WriteString(" : ")
+				sb.WriteString(FormatType(c.arena, c.names, c.subst.Apply(c.arena, t)))
+			}
+			if t, ok := c.vars.maybeBound[id]; ok {
+				sb.WriteString("\n    ?")
+				sb.WriteString(name)
+				sb.WriteString(" : ")
+				sb.WriteString(FormatType(c.arena, c.names, c.subst.Apply(c.arena, t)))
+			}
+		}
+	}
+	hint := sb.String()
+	c.errors = append(c.errors, TypeError{
+		Severity: SeverityInfo,
+		Kind:     TErrDebugDump,
+		Pos:      tok,
+		Hint:     hint,
+	})
+	fmt.Fprintf(os.Stderr, "dbg at line %d, column %d:%s\n", tok.Line, tok.Column, hint)
 }

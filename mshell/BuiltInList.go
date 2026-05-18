@@ -30,6 +30,7 @@ var BuiltInList = map[string]struct{}{
 	"date": {},
 	"dateFmt": {},
 	"day": {},
+	"dbg": {},
 	"del": {},
 	"derive": {},
 	"dirname": {},
