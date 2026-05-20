@@ -720,3 +720,29 @@ iff
 		t.Fatalf("expected unknown-identifier @local error; errs=%v", errs)
 	}
 }
+
+// Regression: a `dbg` token inside the branching driver appends a
+// SeverityInfo TypeError to flag the diagnostic for the LSP. Previously
+// tryBranchStep treated *any* error produced by a step as fatal and
+// killed the branch, which short-circuited driveBranches and skipped
+// every token after the `dbg`. The result: a real type error sitting
+// downstream of a `dbg` silently disappeared. Putting `dbg` in front of
+// a broken token "fixed" the error report, which is exactly the
+// symptom that surfaced this bug.
+func TestTypeCheckProgramDbgDoesNotSuppressLaterErrors(t *testing.T) {
+	// Without the fix, `dbg` swallows the error from `"x" +`.
+	errs, ok := parseAndCheck(t, `42 dbg "x" +`)
+	if ok {
+		t.Fatalf("expected type error after dbg to surface; errs=%v", errs)
+	}
+}
+
+func TestTypeCheckProgramDbgInValidProgramPasses(t *testing.T) {
+	// A valid program with `dbg` mid-stream still type-checks. The
+	// dbg dump is recorded as a SeverityInfo diagnostic but does not
+	// fail the program.
+	errs, ok := parseAndCheck(t, `42 dbg 1 + wl`)
+	if !ok {
+		t.Fatalf("expected valid program with dbg to pass; errs=%v", errs)
+	}
+}

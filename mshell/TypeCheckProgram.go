@@ -53,10 +53,14 @@ func TypeCheckProgram(file *MShellFile, stdlibDefs []MShellDefinition) (errors [
 	out := make([]string, 0, len(checker.errors))
 	ok = true
 	for _, e := range checker.errors {
-		out = append(out, e.Format(arena, names))
-		if e.Severity == SeverityError {
-			ok = false
+		// Info-severity diagnostics (e.g. `dbg` dumps) are written to
+		// stderr directly by their source for the CLI path; skip them
+		// here so Main.go doesn't print them a second time.
+		if e.Severity != SeverityError {
+			continue
 		}
+		out = append(out, e.Format(arena, names))
+		ok = false
 	}
 	if len(out) == 0 {
 		return nil, true
