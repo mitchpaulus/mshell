@@ -319,14 +319,30 @@ func (c *Checker) tryBranchStep(b quoteBranch, step func()) ([]quoteBranch, []Ty
 	spawned := c.branchSpawn
 	c.branchSpawn = savedSpawn
 	c.branchingEnabled = savedEnabled
+	// Info-severity diagnostics (e.g. `dbg` dumps) are passthroughs:
+	// they must not kill the branch, since the step still succeeded
+	// type-wise. Split them out and reattach to the parent's errors
+	// so they still surface in the final output.
+	var fatal []TypeError
+	var info []TypeError
+	for _, e := range produced {
+		if e.Severity == SeverityInfo {
+			info = append(info, e)
+		} else {
+			fatal = append(fatal, e)
+		}
+	}
+	if len(info) > 0 {
+		c.errors = append(c.errors, info...)
+	}
 	if len(spawned) > 0 {
-		if len(produced) > 0 {
-			c.errors = append(c.errors, produced...)
+		if len(fatal) > 0 {
+			c.errors = append(c.errors, fatal...)
 		}
 		return spawned, nil, true
 	}
-	if len(produced) > 0 {
-		return nil, produced, false
+	if len(fatal) > 0 {
+		return nil, fatal, false
 	}
 	return []quoteBranch{c.captureBranch()}, nil, true
 }
