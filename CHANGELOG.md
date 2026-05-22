@@ -74,6 +74,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `md5` runtime now accepts `bytes` input directly, matching the listed overload.
 - Dict type expressions now require an implicit (or `str`) key. `{V}` and `{str: V}` are accepted; anything else (`{int: V}`, `{path: V}`, etc.) is a parse error. Dict keys are always `str` at runtime, and the type system no longer pretends otherwise. Every dict-related builtin signature (`keys`, `values`, `get`, `set`, `setd`, `getDef`, `map`, `filter`, `in`, `len`, `keyValues`, `listToDict`) drops the `K` generic accordingly.
 - `Error loading startup files:` now includes the script path, whether a version was pinned, the full MSHSTDLIB/MSHINIT and standard-location lookup order, and concrete resolution steps
+- Tightened the grid form of `groupBy`: the aggregation-spec list is typed as `[{agg: (GridView -- V)}]` instead of `[{str: V}]`, so the required `agg` field and its quotation shape are now enforced statically. The agg quote's output type is generic per element, so a single list may mix specs whose quotations return different scalar types. Width subtyping still allows the optional `name` and `meta` fields.
 
 
 ## v0.13.0 - 2026-04-07
