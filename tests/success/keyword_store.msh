@@ -1,0 +1,3 @@
+10 x! @x wl
+"hello" def! @def wl
+"end" end! @end wl
