@@ -1539,13 +1539,35 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 	}
 
 	// groupBy :
-	//   ([T] (T -- str) -- {str: [T]})            list form
-	//   (Grid|GridView [str] [{str: V}] -- Grid)  grid form
+	//   ([T] (T -- str) -- {str: [T]})                            list form
+	//   (Grid|GridView [str] [{agg: (GridView -- V)}] -- Grid)    grid form
+	//
+	// The grid spec element is a shape with a required `agg`
+	// quotation that consumes the per-group GridView and produces
+	// the value placed in the new column. Width subtyping permits
+	// callers to add the optional `name` (str) and `meta`
+	// ({str: ...}) fields without listing them here; the runtime
+	// validates their types.
+	//
+	// `V` is declared as a generic on the inner `agg` quote rather
+	// than on the outer sig, so each `unifyQuote` against an agg
+	// field instantiates a fresh variable. This lets one list mix
+	// specs whose quotes return different types (e.g. an `int`
+	// `sumInt` alongside a `float` average), matching the runtime,
+	// which makes no cross-spec coherence demand.
 	{
 		t := arena.MakeVar(0)
 		fn := arena.MakeQuote(QuoteSig{Inputs: []TypeId{t}, Outputs: []TypeId{TidStr}})
-		v := arena.MakeVar(1)
-		aggList := arena.MakeList(v)
+		v := arena.MakeVar(0)
+		aggQuote := arena.MakeQuote(QuoteSig{
+			Inputs:   []TypeId{gridViewU},
+			Outputs:  []TypeId{v},
+			Generics: []TypeVarId{0},
+		})
+		aggSpec := arena.MakeShape([]ShapeField{
+			{Name: names.Intern("agg"), Type: aggQuote},
+		})
+		aggList := arena.MakeList(aggSpec)
 		out[names.Intern("groupBy")] = []QuoteSig{
 			{
 				Inputs:   []TypeId{arena.MakeList(t), fn},
@@ -1553,14 +1575,12 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 				Generics: []TypeVarId{0},
 			},
 			{
-				Inputs:   []TypeId{gridU, arena.MakeList(TidStr), aggList},
-				Outputs:  []TypeId{gridU},
-				Generics: []TypeVarId{1},
+				Inputs:  []TypeId{gridU, arena.MakeList(TidStr), aggList},
+				Outputs: []TypeId{gridU},
 			},
 			{
-				Inputs:   []TypeId{gridViewU, arena.MakeList(TidStr), aggList},
-				Outputs:  []TypeId{gridU},
-				Generics: []TypeVarId{1},
+				Inputs:  []TypeId{gridViewU, arena.MakeList(TidStr), aggList},
+				Outputs: []TypeId{gridU},
 			},
 		}
 	}
