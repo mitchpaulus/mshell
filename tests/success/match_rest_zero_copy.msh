@@ -1,0 +1,11 @@
+# `[head ...rest]` binds rest as a zero-copy sub-slice of the source.
+# This test checks that append on the rest does not leak into the
+# source list (cap=len on the sub-slice forces a fresh allocation).
+
+[1 2 3 4 5] src!
+@src match
+    [_ ...rest] :
+        @rest 99 append drop
+        @rest toJson wl   # rest with appended 99
+        @src toJson wl    # source unchanged
+end
