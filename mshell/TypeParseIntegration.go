@@ -71,8 +71,7 @@ func (parser *MShellParser) ParseTypeDecl() (*MShellTypeDecl, error) {
 	parser.NextToken() // consume =
 	body, errs := parser.parseTypeExpr()
 	if len(errs) > 0 {
-		return nil, fmt.Errorf("%d:%d: type declaration body: %s",
-			startTok.Line, startTok.Column, joinTypeErrs(errs))
+		return nil, fmt.Errorf("type declaration body: %s", joinTypeErrs(errs))
 	}
 	return &MShellTypeDecl{
 		Name:      nameTok.Lexeme,
@@ -89,19 +88,27 @@ func (parser *MShellParser) ParseAsCast() (*MShellAsCast, error) {
 	parser.NextToken() // consume AS
 	target, errs := parser.parseTypeExpr()
 	if len(errs) > 0 {
-		return nil, fmt.Errorf("%d:%d: 'as' target: %s",
-			asTok.Line, asTok.Column, joinTypeErrs(errs))
+		return nil, fmt.Errorf("'as' target: %s", joinTypeErrs(errs))
 	}
 	return &MShellAsCast{AsToken: asTok, Target: target}, nil
 }
 
 func joinTypeErrs(errs []TypeError) string {
 	var sb strings.Builder
-	for i, e := range errs {
-		if i > 0 {
+	wrote := 0
+	type pos struct{ line, col int }
+	seen := make(map[pos]struct{}, len(errs))
+	for _, e := range errs {
+		key := pos{line: e.Pos.Line, col: e.Pos.Column}
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		if wrote > 0 {
 			sb.WriteString("; ")
 		}
-		sb.WriteString(e.Hint)
+		fmt.Fprintf(&sb, "%d:%d: %s", e.Pos.Line, e.Pos.Column, e.Hint)
+		wrote++
 	}
 	return sb.String()
 }
