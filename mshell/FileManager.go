@@ -1368,6 +1368,11 @@ func (fm *FileManager) handleInputEvent(buf []byte) (int, bool) {
 		fm.clampCursor()
 		fm.adjustScroll()
 	case 'g':
+		if fm.lastKey == 'y' {
+			fm.yankSystemClipboard(yankGitPath)
+			fm.lastKey = 0
+			return 1, false
+		}
 		if fm.lastKey == 'g' {
 			fm.cursor = 0
 			fm.offset = 0
@@ -1408,17 +1413,27 @@ func (fm *FileManager) handleInputEvent(buf []byte) (int, bool) {
 			fm.clipboardCut()
 		}
 	case 'y':
-		if !fm.requireRealDirectory() {
-			return 1, false
-		}
 		if fm.lastKey == 'y' {
-			fm.clipboardCopy()
+			if fm.requireRealDirectory() {
+				fm.clipboardCopy()
+			}
 			fm.lastKey = 0
 			return 1, false
 		}
 		fm.lastKey = 'y'
 		return 1, false
+	case 'f':
+		if fm.lastKey == 'y' {
+			fm.yankSystemClipboard(yankFileName)
+			fm.lastKey = 0
+			return 1, false
+		}
 	case 'p':
+		if fm.lastKey == 'y' {
+			fm.yankSystemClipboard(yankFullPath)
+			fm.lastKey = 0
+			return 1, false
+		}
 		if fm.requireRealDirectory() {
 			fm.clipboardPaste()
 		}
@@ -1961,6 +1976,67 @@ func (fm *FileManager) clipboardCopy() {
 	}
 	absPath := filepath.Join(fm.currentDir, fm.entries[fm.cursor].Name())
 	_ = addClipboardPath("copy", absPath)
+}
+
+type yankKind int
+
+const (
+	yankFileName yankKind = iota
+	yankFullPath
+	yankGitPath
+)
+
+func (fm *FileManager) yankSystemClipboard(kind yankKind) {
+	if len(fm.entries) == 0 || fm.cursor >= len(fm.entries) {
+		return
+	}
+	name := fm.entries[fm.cursor].Name()
+	absPath := filepath.Join(fm.currentDir, name)
+
+	var text, label string
+	switch kind {
+	case yankFileName:
+		text = name
+		label = "name"
+	case yankFullPath:
+		text = absPath
+		label = "path"
+	case yankGitPath:
+		rel, err := gitRelativePath(absPath)
+		if err != nil {
+			fm.statusMsg = err.Error()
+			return
+		}
+		text = rel
+		label = "git path"
+	}
+
+	if err := writeSystemClipboard(text); err != nil {
+		fm.statusMsg = fmt.Sprintf("Clipboard: %s", err.Error())
+		return
+	}
+	fm.statusMsg = fmt.Sprintf("Copied %s: %s", label, text)
+}
+
+func gitRelativePath(absPath string) (string, error) {
+	dir := absPath
+	if info, err := os.Stat(absPath); err != nil || !info.IsDir() {
+		dir = filepath.Dir(absPath)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			rel, err := filepath.Rel(dir, absPath)
+			if err != nil {
+				return "", err
+			}
+			return filepath.ToSlash(rel), nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", fmt.Errorf("no .git directory found above %s", absPath)
+		}
+		dir = parent
+	}
 }
 
 func (fm *FileManager) clipboardPaste() {

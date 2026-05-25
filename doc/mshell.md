@@ -802,7 +802,8 @@ end wl # Output: 11
    Pops a starting directory from the stack.
    On exit, changes the working directory to the directory the user navigated to.
    On Windows, pressing `h` at the root of a drive shows the mounted drive letters so you can switch volumes.
-   The preview pane short-circuits common binary extensions and shows first-level contents for `.zip` and `.tar.gz` archives. `(str -- )`
+   The preview pane short-circuits common binary extensions and shows first-level contents for `.zip` and `.tar.gz` archives.
+   Yank bindings copy text about the selected entry to the system clipboard: `yf` (file name), `yp` (full path), `yg` (path relative to the enclosing `.git` directory). `(str -- )`
 - `writeFile`: Write string to file (UTF-8). Overwrites file if it exists. `(str content str file -- )`
 - `appendFile`: Append string to file (UTF-8). `(str content str file -- )`
 - `fileSize`: Get size of file in bytes. Returns a Maybe in case file doesn't exist or other IO error. `(str -- Maybe int)`

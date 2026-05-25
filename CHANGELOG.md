@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- File manager yank bindings that copy to the system clipboard via `wl-copy`/`xclip`/`xsel`/`pbcopy`/`clip`:
+  - `yf` — copy the selected entry's file name
+  - `yp` — copy the selected entry's absolute path
+  - `yg` — copy the selected entry's path relative to the enclosing `.git` directory
 - Grid (data frame) type with columnar storage for high-performance tabular data
   - Literal syntax: `[| col1, col2; val1, val2; val3, val4 |]`
   - Optional grid and column metadata
