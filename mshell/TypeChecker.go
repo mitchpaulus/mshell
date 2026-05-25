@@ -1,5 +1,7 @@
 package main
 
+import "fmt"
+
 // Phase 2 of the type checker: stack simulation and applySig over a small
 // primitive-only token stream.
 //
@@ -359,6 +361,9 @@ func (c *Checker) checkOne(tok Token) {
 			return
 		}
 		if tok.Lexeme == "join" && c.tryGridJoin(tok) {
+			return
+		}
+		if tok.Lexeme == "pivot" && c.tryPivot(tok) {
 			return
 		}
 		if c.tryRejectPathWrite(tok) {
@@ -744,6 +749,64 @@ func (c *Checker) tryGridJoin(tok Token) bool {
 // stack without caring about its arity.
 func isQuoteKind(k TypeKind) bool {
 	return k == TKQuote || k == TKOverloadedQuote
+}
+
+// isContainerKind reports whether a TypeKind denotes a runtime
+// container value (list, dict, shape/struct, or any grid family
+// member). Used by ops like `pivot` whose result cells must be
+// scalars.
+func isContainerKind(k TypeKind) bool {
+	switch k {
+	case TKList, TKDict, TKShape, TKGrid, TKGridView, TKGridRow:
+		return true
+	}
+	return false
+}
+
+// tryPivot runs `pivot`'s normal overload resolution and then verifies
+// that the supplied aggregation quote's output type is a scalar. The
+// runtime rejects container cells at evaluation; surfacing the same
+// constraint here turns the runtime crash into a typed error pointing
+// at the call site.
+//
+// Caveat: when the quote's output resolves to an unconstrained type
+// variable (e.g. `(:val?)`, where the getter on an unconstrained input
+// yields a fresh var), there's nothing concrete to test, and this
+// check stays quiet. Catching those needs bidirectional inference
+// (re-walking the quote body with `GridView` pre-bound as the input).
+func (c *Checker) tryPivot(tok Token) bool {
+	sigs, ok := c.nameBuiltins[c.names.Intern("pivot")]
+	if !ok {
+		return false
+	}
+	var quoteOutputs []TypeId
+	if c.stack.Len() >= 1 {
+		top := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-1])
+		switch c.arena.Kind(top) {
+		case TKQuote:
+			sig := c.arena.QuoteSig(top)
+			quoteOutputs = append(quoteOutputs, sig.Outputs...)
+		case TKOverloadedQuote:
+			n := c.arena.Node(top)
+			for _, sig := range c.arena.overloadedQuoteSigs[n.Extra] {
+				quoteOutputs = append(quoteOutputs, sig.Outputs...)
+			}
+		}
+	}
+	c.resolveAndApply(sigs, tok)
+	for _, out := range quoteOutputs {
+		resolved := c.subst.Apply(c.arena, out)
+		if isContainerKind(c.arena.Kind(resolved)) {
+			c.errors = append(c.errors, TypeError{
+				Kind:   TErrTypeMismatch,
+				Pos:    tok,
+				Actual: resolved,
+				Hint:   fmt.Sprintf("pivot aggregation must return a scalar; this quote returns %s", FormatType(c.arena, c.names, resolved)),
+			})
+			break
+		}
+	}
+	return true
 }
 
 func (c *Checker) tryQuoteRedirect(tok Token) bool {

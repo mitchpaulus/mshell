@@ -87,11 +87,18 @@ func (e TypeError) Format(arena *TypeArena, names *NameTable) string {
 			fmt.Fprintf(&sb, " (%s)", e.Hint)
 		}
 	case TErrTypeMismatch:
-		fmt.Fprintf(&sb, "'%s' expected %s at argument %d, got %s",
-			e.Pos.Lexeme,
-			FormatType(arena, names, e.Expected),
-			e.ArgIndex,
-			FormatType(arena, names, e.Actual))
+		if e.Expected == TidNothing && e.Hint != "" {
+			// Custom-hint-driven mismatch (e.g. domain rules like
+			// pivot's "no container cells"); skip the canned
+			// "expected X at argument N" template.
+			fmt.Fprintf(&sb, "%s", e.Hint)
+		} else {
+			fmt.Fprintf(&sb, "'%s' expected %s at argument %d, got %s",
+				e.Pos.Lexeme,
+				FormatType(arena, names, e.Expected),
+				e.ArgIndex,
+				FormatType(arena, names, e.Actual))
+		}
 	case TErrUnknownIdentifier:
 		fmt.Fprintf(&sb, "unknown identifier '%s'", e.Name)
 	case TErrMaybeUnset:
