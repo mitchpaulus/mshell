@@ -1580,7 +1580,37 @@ func (state *EvalState) processVarstoreList(varstoreList MShellVarstoreList, fra
 	return SimpleSuccess()
 }
 
-// processGetter handles ':' getter operations for dictionaries and grid rows.
+// gridColumnAsList materializes the named column of a Grid as a fresh
+// list. Returns (list, true) on hit, (nil, false) when the column is
+// absent.
+func gridColumnAsList(g *MShellGrid, name string) (*MShellList, bool) {
+	col := g.GetColumn(name)
+	if col == nil {
+		return nil, false
+	}
+	out := NewList(g.RowCount)
+	for i := 0; i < g.RowCount; i++ {
+		out.Items[i] = col.Get(i)
+	}
+	return out, true
+}
+
+// gridViewColumnAsList materializes the named column of a GridView,
+// honoring the view's row indices.
+func gridViewColumnAsList(v *MShellGridView, name string) (*MShellList, bool) {
+	col := v.Source.GetColumn(name)
+	if col == nil {
+		return nil, false
+	}
+	out := NewList(len(v.Indices))
+	for i, idx := range v.Indices {
+		out.Items[i] = col.Get(idx)
+	}
+	return out, true
+}
+
+// processGetter handles ':' getter operations for dictionaries, grid
+// rows, and grids/grid views (column lookup).
 func (state *EvalState) processGetter(getter *MShellGetter, frame *EvaluationFrame) EvalResult {
 	stack := frame.Stack
 
@@ -1597,8 +1627,12 @@ func (state *EvalState) processGetter(getter *MShellGetter, frame *EvaluationFra
 		value, ok = objTyped.Items[getter.String]
 	case *MShellGridRow:
 		value, ok = objTyped.Get(getter.String)
+	case *MShellGrid:
+		value, ok = gridColumnAsList(objTyped, getter.String)
+	case *MShellGridView:
+		value, ok = gridViewColumnAsList(objTyped, getter.String)
 	default:
-		return state.FailWithMessage(fmt.Sprintf("%d:%d: The stack parameter for ':' is not a dictionary or GridRow. Found a %s (%s). Key: %s\n", getter.Token.Line, getter.Token.Column, obj.TypeName(), obj.DebugString(), getter.String))
+		return state.FailWithMessage(fmt.Sprintf("%d:%d: The stack parameter for ':' is not a dictionary, GridRow, Grid, or GridView. Found a %s (%s). Key: %s\n", getter.Token.Line, getter.Token.Column, obj.TypeName(), obj.DebugString(), getter.String))
 	}
 
 	if !ok {
@@ -3043,25 +3077,25 @@ MainLoop:
 				return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do ':' operation on an empty stack.\n", getter.Token.Line, getter.Token.Column))
 			}
 
+			var value MShellObject
+			var ok bool
 			switch objTyped := obj.(type) {
 			case *MShellDict:
-				value, ok := objTyped.Items[getter.String]
-				if !ok {
-					stack.Push(&Maybe{obj: nil})
-				} else {
-					maybe := Maybe{obj: value}
-					stack.Push(&maybe)
-				}
+				value, ok = objTyped.Items[getter.String]
 			case *MShellGridRow:
-				value, ok := objTyped.Get(getter.String)
-				if !ok {
-					stack.Push(&Maybe{obj: nil})
-				} else {
-					maybe := Maybe{obj: value}
-					stack.Push(&maybe)
-				}
+				value, ok = objTyped.Get(getter.String)
+			case *MShellGrid:
+				value, ok = gridColumnAsList(objTyped, getter.String)
+			case *MShellGridView:
+				value, ok = gridViewColumnAsList(objTyped, getter.String)
 			default:
-				return state.FailWithMessage(fmt.Sprintf("%d:%d: The stack parameter for ':' is not a dictionary or GridRow. Found a %s (%s). Key: %s\n", getter.Token.Line, getter.Token.Column, obj.TypeName(), obj.DebugString(), getter.String))
+				return state.FailWithMessage(fmt.Sprintf("%d:%d: The stack parameter for ':' is not a dictionary, GridRow, Grid, or GridView. Found a %s (%s). Key: %s\n", getter.Token.Line, getter.Token.Column, obj.TypeName(), obj.DebugString(), getter.String))
+			}
+			if !ok {
+				stack.Push(&Maybe{obj: nil})
+			} else {
+				maybe := Maybe{obj: value}
+				stack.Push(&maybe)
 			}
 
 		case Token:
@@ -5136,25 +5170,25 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: The stack parameter for the key is not a string. Found a %s (%s).\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
 					}
 
+					var value MShellObject
+					var ok bool
 					switch obj2Typed := obj2.(type) {
 					case *MShellDict:
-						value, ok := obj2Typed.Items[keyStr]
-						if !ok {
-							stack.Push(&Maybe{obj: nil})
-						} else {
-							maybe := Maybe{obj: value}
-							stack.Push(&maybe)
-						}
+						value, ok = obj2Typed.Items[keyStr]
 					case *MShellGridRow:
-						value, ok := obj2Typed.Get(keyStr)
-						if !ok {
-							stack.Push(&Maybe{obj: nil})
-						} else {
-							maybe := Maybe{obj: value}
-							stack.Push(&maybe)
-						}
+						value, ok = obj2Typed.Get(keyStr)
+					case *MShellGrid:
+						value, ok = gridColumnAsList(obj2Typed, keyStr)
+					case *MShellGridView:
+						value, ok = gridViewColumnAsList(obj2Typed, keyStr)
 					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: The stack parameter for 'get' is not a dictionary or GridRow. Found a %s (%s). Key: %s\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString(), keyStr))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The stack parameter for 'get' is not a dictionary, GridRow, Grid, or GridView. Found a %s (%s). Key: %s\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString(), keyStr))
+					}
+					if !ok {
+						stack.Push(&Maybe{obj: nil})
+					} else {
+						maybe := Maybe{obj: value}
+						stack.Push(&maybe)
 					}
 				} else if t.Lexeme == "getDef" {
 					// Get a value from string key for a dictionary.

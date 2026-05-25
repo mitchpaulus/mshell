@@ -1,0 +1,18 @@
+# `:name` on Grid/GridView returns the named column as a Maybe[[T]].
+# Missing columns yield None, matching Dict/GridRow behavior.
+
+[| name, n; "a", 1; "b", 2; "c", 3 |] g!
+
+# Grid: hit returns the column unwrapped (`:n?` is `:n` + `?` Maybe unwrap).
+@g :n? toJson wl
+
+# Miss: bare `:missing` returns None as a Maybe.
+@g :missing toJson wl
+
+# `get` polymorphism mirrors `:`.
+@g "n" get ? toJson wl
+
+# GridView (filtered) returns the projected column for the surviving rows.
+@g (:n? 1 >) filter v!
+@v :n? toJson wl
+@v :name? toJson wl
