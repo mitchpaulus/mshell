@@ -4,19 +4,21 @@ TMP_ERR="$(mktemp)"
 TMP_INIT="$(mktemp)"
 trap 'rm -f "$TMP_FILE" "$TMP_ERR" "$TMP_INIT"' EXIT
 
-export MSHSTDLIB="$(realpath ../lib/std.msh)"
+export MSHSTDLIB="$(realpath ../../lib/std.msh)"
 export MSHINIT="$TMP_INIT"
 
+BINARY=../../mshell/mshell
+
 if printf %s "$1" | grep -q 'positional'; then
-    ../mshell/mshell "$1" Hello World > "$TMP_FILE" 2>"$TMP_ERR"
+    $BINARY "$1" Hello World > "$TMP_FILE" 2>"$TMP_ERR"
 elif test "$(basename "$1")" = "args.msh"; then
-    ../mshell/mshell "$1" Hello World > "$TMP_FILE" 2>"$TMP_ERR"
+    $BINARY "$1" Hello World > "$TMP_FILE" 2>"$TMP_ERR"
 elif test "$(basename "$1")" = "stdin_keyword.msh"; then
-    ../mshell/mshell stdin_keyword.msh < stdin_for_test.txt > "$TMP_FILE" 2>"$TMP_ERR"
+    $BINARY stdin_keyword.msh < stdin_for_test.txt > "$TMP_FILE" 2>"$TMP_ERR"
 elif test "$(basename "$1")" = "pwd.msh"; then
-    ../mshell/mshell "pwd.msh" "$(pwd)" > "$TMP_FILE" 2>"$TMP_ERR"
+    $BINARY "pwd.msh" "$(pwd)" > "$TMP_FILE" 2>"$TMP_ERR"
 else
-    ../mshell/mshell < "$1" > "$TMP_FILE" 2>"$TMP_ERR"
+    $BINARY < "$1" > "$TMP_FILE" 2>"$TMP_ERR"
 fi
 
 if test "$?" -eq 0; then

@@ -1,5 +1,10 @@
 package main
 
+import (
+	"fmt"
+	"strings"
+)
+
 // Phase 6b: branch reconciliation and variable-environment scoping.
 //
 // All branching constructs (`if`/`else`, `match`, the eventual `try:`)
@@ -27,9 +32,10 @@ package main
 // and to restore its entry state between arms. It does not capture
 // the substitution — that is intentionally global, see file header.
 type ScopeSnapshot struct {
-	stack    []TypeId
-	vars     map[NameId]TypeId
-	diverged bool
+	stack      []TypeId
+	vars       map[NameId]TypeId
+	maybeVars  map[NameId]TypeId
+	diverged   bool
 }
 
 // Snapshot returns a copy of the checker's current stack and var env.
@@ -42,7 +48,11 @@ func (c *Checker) Snapshot() ScopeSnapshot {
 	for k, v := range c.vars.bound {
 		varsCopy[k] = v
 	}
-	return ScopeSnapshot{stack: stackCopy, vars: varsCopy, diverged: c.diverged}
+	maybeCopy := make(map[NameId]TypeId, len(c.vars.maybeBound))
+	for k, v := range c.vars.maybeBound {
+		maybeCopy[k] = v
+	}
+	return ScopeSnapshot{stack: stackCopy, vars: varsCopy, maybeVars: maybeCopy, diverged: c.diverged}
 }
 
 // Fork resets the checker's stack and var env to a copy of snap. The
@@ -54,6 +64,10 @@ func (c *Checker) Fork(snap ScopeSnapshot) {
 	for k, v := range snap.vars {
 		c.vars.bound[k] = v
 	}
+	c.vars.maybeBound = make(map[NameId]TypeId, len(snap.maybeVars))
+	for k, v := range snap.maybeVars {
+		c.vars.maybeBound[k] = v
+	}
 	c.diverged = snap.diverged
 }
 
@@ -62,10 +76,18 @@ func (c *Checker) Fork(snap ScopeSnapshot) {
 // snapshotting before, forking, running the arm body, and calling
 // CaptureArm at the tail. Diverged is true when the arm cannot fall
 // through (exit, infinite loop, propagated fail).
+//
+// Body is the parse-item slice the arm was built from. It's purely a
+// breadcrumb for diagnostic rendering (e.g. the per-branch summary in
+// the stack-size mismatch message) — the type effects come from Stack
+// / Vars / MaybeVars. Callers set it after CaptureArm if they want
+// richer error text.
 type BranchArm struct {
-	Stack    []TypeId
-	Vars     map[NameId]TypeId
-	Diverged bool
+	Stack     []TypeId
+	Vars      map[NameId]TypeId
+	MaybeVars map[NameId]TypeId
+	Diverged  bool
+	Body      []MShellParseItem
 }
 
 // CaptureArm reads the checker's current stack and vars into a
@@ -79,7 +101,11 @@ func (c *Checker) CaptureArm(diverged bool) BranchArm {
 	for k, v := range c.vars.bound {
 		varsCopy[k] = v
 	}
-	return BranchArm{Stack: stackCopy, Vars: varsCopy, Diverged: diverged}
+	maybeCopy := make(map[NameId]TypeId, len(c.vars.maybeBound))
+	for k, v := range c.vars.maybeBound {
+		maybeCopy[k] = v
+	}
+	return BranchArm{Stack: stackCopy, Vars: varsCopy, MaybeVars: maybeCopy, Diverged: diverged}
 }
 
 // ReconcileArms merges per-arm tail states into a single post-branch
@@ -101,11 +127,20 @@ func (c *Checker) ReconcileArms(arms []BranchArm, callSite Token) {
 		}
 	}
 
+	// The post-branch is reachable iff at least one arm fell through
+	// without diverging. Set c.diverged accordingly so the surrounding
+	// scope's downstream checking sees the correct reachability —
+	// otherwise a diverged arm (e.g. `none: ... exit`) would leak its
+	// `diverged = true` past the join, silently suppressing later
+	// def-body output checks.
+	c.diverged = len(live) == 0
+
 	if len(live) == 0 {
 		// Whole branch is unreachable. Clear the stack/vars; downstream
 		// code is dead. (No error here — Phase 7-or-later may flag it.)
 		c.stack.items = c.stack.items[:0]
 		c.vars.bound = make(map[NameId]TypeId)
+		c.vars.maybeBound = make(map[NameId]TypeId)
 		return
 	}
 
@@ -123,7 +158,7 @@ func (c *Checker) ReconcileArms(arms []BranchArm, callSite Token) {
 		c.errors = append(c.errors, TypeError{
 			Kind: TErrBranchStackSize,
 			Pos:  callSite,
-			Hint: "all branches must produce the same number of stack items",
+			Hint: c.formatBranchSizeMismatch(arms, live),
 		})
 		// Recovery: take the first non-diverged arm's tail as the merged
 		// state so downstream errors don't cascade off a missing stack.
@@ -132,28 +167,9 @@ func (c *Checker) ReconcileArms(arms []BranchArm, callSite Token) {
 		for k, v := range first.Vars {
 			c.vars.bound[k] = v
 		}
-		return
-	}
-
-	// Var-set agreement: every non-diverged arm must bind the same names.
-	varsAgree := true
-	for _, i := range live[1:] {
-		if !sameVarSet(first.Vars, arms[i].Vars) {
-			varsAgree = false
-			break
-		}
-	}
-	if !varsAgree {
-		c.errors = append(c.errors, TypeError{
-			Kind: TErrBranchVarSet,
-			Pos:  callSite,
-			Hint: "all branches must bind the same set of variable names",
-		})
-		// Recovery: same as above.
-		c.stack.items = append(c.stack.items[:0], first.Stack...)
-		c.vars.bound = make(map[NameId]TypeId, len(first.Vars))
-		for k, v := range first.Vars {
-			c.vars.bound[k] = v
+		c.vars.maybeBound = make(map[NameId]TypeId, len(first.MaybeVars))
+		for k, v := range first.MaybeVars {
+			c.vars.maybeBound[k] = v
 		}
 		return
 	}
@@ -170,30 +186,150 @@ func (c *Checker) ReconcileArms(arms []BranchArm, callSite Token) {
 	}
 	c.stack.items = append(c.stack.items[:0], merged...)
 
-	// Per-var type union.
-	mergedVars := make(map[NameId]TypeId, len(first.Vars))
-	for name := range first.Vars {
+	// Per-var reconciliation. A name is "definitely bound" after the
+	// branch iff every live arm has it in `Vars` (bound). Otherwise
+	// — bound in some live arms but not others, or sitting in
+	// MaybeVars on any arm — it lifts to maybeBound. Types are
+	// unioned across whichever arms carried the name in either map,
+	// so `@name` at a downstream maybeBound site still has a useful
+	// type for recovery.
+	allNames := make(map[NameId]struct{})
+	for _, i := range live {
+		for n := range arms[i].Vars {
+			allNames[n] = struct{}{}
+		}
+		for n := range arms[i].MaybeVars {
+			allNames[n] = struct{}{}
+		}
+	}
+	mergedBound := make(map[NameId]TypeId)
+	mergedMaybe := make(map[NameId]TypeId)
+	for name := range allNames {
+		boundEverywhere := true
 		scratch = scratch[:0]
 		for _, i := range live {
-			scratch = append(scratch, arms[i].Vars[name])
+			if t, ok := arms[i].Vars[name]; ok {
+				scratch = append(scratch, t)
+				continue
+			}
+			boundEverywhere = false
+			if t, ok := arms[i].MaybeVars[name]; ok {
+				scratch = append(scratch, t)
+			}
 		}
-		mergedVars[name] = c.arena.MakeUnion(scratch, 0)
+		merged := c.arena.MakeUnion(scratch, 0)
+		if boundEverywhere {
+			mergedBound[name] = merged
+		} else {
+			mergedMaybe[name] = merged
+		}
 	}
-	c.vars.bound = mergedVars
+	c.vars.bound = mergedBound
+	c.vars.maybeBound = mergedMaybe
 }
 
-// sameVarSet reports whether two var maps have identical key sets.
-// Type comparison is left for the per-name union step.
-func sameVarSet(a, b map[NameId]TypeId) bool {
-	if len(a) != len(b) {
-		return false
+// formatBranchSizeMismatch builds the Hint string for a stack-size
+// disagreement across non-diverged arms. For up to 10 live arms each
+// gets a line of the form
+//
+//   Branch N: <first10>...<last10>  (T1 -- T2 T3)
+//
+// where the body summary is derived from the arm's parse-item
+// breadcrumbs (see BranchArm.Body) and the stack signature is the
+// arm's tail stack rendered top-first. Beyond 10 arms the message
+// falls back to a single line, since the per-branch detail would
+// dominate the diagnostic.
+func (c *Checker) formatBranchSizeMismatch(arms []BranchArm, live []int) string {
+	const lead = "all branches must produce the same number of stack items"
+	if len(live) > 10 {
+		return lead
 	}
-	for k := range a {
-		if _, ok := b[k]; !ok {
-			return false
+	var sb strings.Builder
+	sb.WriteString(lead)
+	for n, i := range live {
+		fmt.Fprintf(&sb, "\n  Branch %d: %s  %s",
+			n+1,
+			truncateBranchSnippet(formatItemsSnippet(arms[i].Body)),
+			c.formatArmStack(arms[i].Stack),
+		)
+	}
+	return sb.String()
+}
+
+// formatArmStack renders an arm's tail stack as a `(top -- ... -- bottom)`
+// readout. Items are rendered top-first (last-pushed first), matching
+// how the rest of the type-error formatter speaks about the stack.
+func (c *Checker) formatArmStack(stack []TypeId) string {
+	if len(stack) == 0 {
+		return "( -- )"
+	}
+	var sb strings.Builder
+	sb.WriteString("( -- ")
+	for i := len(stack) - 1; i >= 0; i-- {
+		if i != len(stack)-1 {
+			sb.WriteByte(' ')
+		}
+		sb.WriteString(FormatType(c.arena, c.names, stack[i]))
+	}
+	sb.WriteString(" )")
+	return sb.String()
+}
+
+// formatItemsSnippet collapses a slice of parse items to a single
+// whitespace-separated string for diagnostic snippets. Composite
+// items (lists, dicts, quotes, etc.) collapse to
+// `<openLexeme>...<closeLexeme>` rather than recursing arbitrarily
+// deep — the caller takes a first/last-N substring of the result so
+// over-precision would be wasted work.
+func formatItemsSnippet(items []MShellParseItem) string {
+	if len(items) == 0 {
+		return "<empty>"
+	}
+	var sb strings.Builder
+	for i, it := range items {
+		if i > 0 {
+			sb.WriteByte(' ')
+		}
+		switch v := it.(type) {
+		case Token:
+			sb.WriteString(v.Lexeme)
+		default:
+			start := v.GetStartToken().Lexeme
+			end := v.GetEndToken().Lexeme
+			sb.WriteString(start)
+			if end != "" && end != start {
+				sb.WriteString("...")
+				sb.WriteString(end)
+			}
 		}
 	}
-	return true
+	return sb.String()
+}
+
+// truncateBranchSnippet shortens a body snippet to first 10 / last 10
+// chars joined by an ellipsis. Strings short enough to fit are
+// returned unchanged. Whitespace runs are collapsed to single spaces
+// first so multi-line bodies stay one row in the diagnostic.
+func truncateBranchSnippet(s string) string {
+	// Collapse internal whitespace runs.
+	var b strings.Builder
+	prevSpace := false
+	for _, r := range s {
+		if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+			if !prevSpace {
+				b.WriteByte(' ')
+			}
+			prevSpace = true
+			continue
+		}
+		b.WriteRune(r)
+		prevSpace = false
+	}
+	collapsed := strings.TrimSpace(b.String())
+	if len(collapsed) <= 23 {
+		return collapsed
+	}
+	return collapsed[:10] + "..." + collapsed[len(collapsed)-10:]
 }
 
 // MatchArmKind tags the shape of a match arm for exhaustiveness analysis.
@@ -205,6 +341,15 @@ const (
 	MatchArmJust
 	MatchArmNone
 	MatchArmType
+	MatchArmTrue  // bool literal `true` pattern
+	MatchArmFalse // bool literal `false` pattern
+	// MatchArmEmptyList: `[]` pattern. Covers empty lists.
+	MatchArmEmptyList
+	// MatchArmListWithRest: `[a ...rest]`, `[a b ...rest]`, or
+	// `[...rest]` — any list pattern with a `...name` element.
+	// Covers all lists whose length is at least the number of
+	// non-rest pattern elements.
+	MatchArmListWithRest
 )
 
 // MatchArmTag describes one pattern-side of a match arm. The body's
@@ -275,6 +420,46 @@ func (c *Checker) CheckMatchExhaustive(matched TypeId, arms []MatchArmTag, callS
 			Hint: "union match must cover every arm or include a wildcard",
 		})
 		return false
+
+	case TKPrim:
+		// Booleans have a finite inhabitant set; `true`+`false` arms
+		// cover them without a wildcard. Other primitives (int, str,
+		// ...) have unbounded inhabitants and need a wildcard.
+		if matched == TidBool {
+			hasTrue, hasFalse := false, false
+			for _, arm := range arms {
+				switch arm.Kind {
+				case MatchArmTrue:
+					hasTrue = true
+				case MatchArmFalse:
+					hasFalse = true
+				}
+			}
+			if hasTrue && hasFalse {
+				return true
+			}
+		}
+
+	case TKList:
+		// A list's inhabitants split by length: zero (empty) vs
+		// one-or-more. `[]` covers empty; any list pattern that ends
+		// with `...rest` covers the rest. The pair is exhaustive
+		// without a wildcard. More precise length-based coverage
+		// (e.g. distinguishing `[a]` from `[a b ...rest]`) is a
+		// future refinement; the current rule handles the common
+		// "empty vs non-empty" idiom.
+		hasEmpty, hasRest := false, false
+		for _, arm := range arms {
+			switch arm.Kind {
+			case MatchArmEmptyList:
+				hasEmpty = true
+			case MatchArmListWithRest:
+				hasRest = true
+			}
+		}
+		if hasEmpty && hasRest {
+			return true
+		}
 	}
 
 	// Other kinds — no exhaustiveness rule encoded yet (shapes, brands,

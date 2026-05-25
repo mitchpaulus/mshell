@@ -477,6 +477,14 @@ func (l *Lexer) parseLiteralOrKeyword() Token {
 		}
 	}
 
+	// If the literal is immediately followed by '!', it's a variable store —
+	// regardless of whether the literal happens to match a keyword. This lets
+	// users name a variable anything, including 'x', 'if', 'def', etc.
+	if l.peek() == '!' {
+		l.advance()
+		return l.makeToken(VARSTORE)
+	}
+
 	// Check for prefix quote syntax: literal ending with '.' (e.g., "filter.", "map.")
 	lexeme := l.input[l.start:l.current]
 	if len(lexeme) > 1 && lexeme[len(lexeme)-1] == '.' {
@@ -563,6 +571,8 @@ func (l *Lexer) literalOrKeywordType() TokenType {
 		return l.checkKeyword(1, "atch", MATCH)
 	case 'n':
 		return l.checkKeyword(1, "ot", NOT)
+	case 'p':
+		return l.checkKeyword(1, "ure", PURE)
 	case 'r':
 		return l.checkKeyword(1, "ead", READ)
 	case 's':

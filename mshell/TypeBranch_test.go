@@ -92,17 +92,31 @@ func TestReconcileStackSizeMismatch(t *testing.T) {
 	}
 }
 
-func TestReconcileVarSetMismatch(t *testing.T) {
+func TestReconcileVarSetLiftsToMaybeBound(t *testing.T) {
+	// Names bound in only some arms lift to maybeBound after reconciliation
+	// rather than triggering a hard error. Reading such a name downstream
+	// is what produces a diagnostic (TErrMaybeUnset), not the reconcile itself.
 	c := freshChecker()
 	entry := c.Snapshot()
 	x := c.names.Intern("x")
 	y := c.names.Intern("y")
 	a1 := runArm(c, entry, false, func() { c.vars.bound[x] = TidInt })
-	a2 := runArm(c, entry, false, func() { c.vars.bound[y] = TidInt })
+	a2 := runArm(c, entry, false, func() { c.vars.bound[y] = TidStr })
 	c.ReconcileArms([]BranchArm{a1, a2}, mkTok(IF, "if"))
-	errs := c.Errors()
-	if len(errs) != 1 || errs[0].Kind != TErrBranchVarSet {
-		t.Fatalf("expected var-set error, got %+v", errs)
+	if errs := c.Errors(); len(errs) != 0 {
+		t.Fatalf("unexpected errors: %+v", errs)
+	}
+	if _, ok := c.vars.bound[x]; ok {
+		t.Fatalf("expected x to lift out of bound, still present")
+	}
+	if _, ok := c.vars.bound[y]; ok {
+		t.Fatalf("expected y to lift out of bound, still present")
+	}
+	if got, ok := c.vars.maybeBound[x]; !ok || got != TidInt {
+		t.Fatalf("expected maybeBound[x] = int, got ok=%v val=%v", ok, got)
+	}
+	if got, ok := c.vars.maybeBound[y]; !ok || got != TidStr {
+		t.Fatalf("expected maybeBound[y] = str, got ok=%v val=%v", ok, got)
 	}
 }
 
@@ -120,6 +134,50 @@ func TestReconcileVarTypeUnion(t *testing.T) {
 	if got := c.vars.bound[x]; got != want {
 		t.Fatalf("x should merge to int|str, got %s",
 			FormatType(c.arena, c.names, got))
+	}
+}
+
+func TestReconcilePreBoundStaysBound(t *testing.T) {
+	// A name bound before the branch stays in `bound` even if no arm
+	// re-binds it: the entry binding survives every arm via Fork.
+	c := freshChecker()
+	x := c.names.Intern("x")
+	c.vars.bound[x] = TidInt
+	entry := c.Snapshot()
+	a1 := runArm(c, entry, false, func() {})
+	a2 := runArm(c, entry, false, func() { c.vars.bound[x] = TidStr })
+	c.ReconcileArms([]BranchArm{a1, a2}, mkTok(IF, "if"))
+	if errs := c.Errors(); len(errs) != 0 {
+		t.Fatalf("unexpected errors: %+v", errs)
+	}
+	if _, maybe := c.vars.maybeBound[x]; maybe {
+		t.Fatalf("pre-bound x should not lift to maybeBound")
+	}
+	want := c.arena.MakeUnion([]TypeId{TidInt, TidStr}, 0)
+	if got := c.vars.bound[x]; got != want {
+		t.Fatalf("x should merge to int|str, got %s",
+			FormatType(c.arena, c.names, got))
+	}
+}
+
+func TestReconcileMaybeFromOneArmLeaks(t *testing.T) {
+	// A name bound on only one arm of a no-else if (modeled as one
+	// arm binding + one no-op arm) lifts to maybeBound carrying the
+	// type from the binding arm.
+	c := freshChecker()
+	entry := c.Snapshot()
+	x := c.names.Intern("x")
+	a1 := runArm(c, entry, false, func() { c.vars.bound[x] = TidInt })
+	a2 := runArm(c, entry, false, func() {}) // implicit no-else arm
+	c.ReconcileArms([]BranchArm{a1, a2}, mkTok(IF, "if"))
+	if errs := c.Errors(); len(errs) != 0 {
+		t.Fatalf("unexpected errors: %+v", errs)
+	}
+	if _, ok := c.vars.bound[x]; ok {
+		t.Fatalf("x should not be in bound")
+	}
+	if got, ok := c.vars.maybeBound[x]; !ok || got != TidInt {
+		t.Fatalf("expected maybeBound[x] = int, got ok=%v val=%v", ok, got)
 	}
 }
 

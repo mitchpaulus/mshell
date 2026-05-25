@@ -484,6 +484,26 @@ func TestTypeCheckProgramPrefixQuoteBodyChecked(t *testing.T) {
 	}
 }
 
+func TestTypeCheckProgramInputRedirectionAfterCapture(t *testing.T) {
+	cases := []string{
+		`['cat'] * "stdin" < ! output! @output w`,
+		`['cat'] * ` + "`stdin.txt`" + ` < ! output! @output w`,
+		`['cat'] * "stdin" utf8Bytes < ! output! @output w`,
+		`['cat'] *b "stdin" < ! output! @output w`,
+		`['cat'] *| "stdin" < ! output! @output drop`,
+		`['cat'] ^ "stdin" < ! output! @output w`,
+		`['cat'] ^b "stdin" < ! output! @output w`,
+		`['cat'] * ^ "stdin" < ! stdout! stderr! @stdout w @stderr w`,
+		`['cat'] ^ * "stdin" < ! stderr! stdout! @stdout w @stderr w`,
+	}
+	for _, src := range cases {
+		errs, ok := parseAndCheck(t, src)
+		if !ok || len(errs) != 0 {
+			t.Fatalf("%q: expected redirection after capture marker to type-check; errs=%v", src, errs)
+		}
+	}
+}
+
 func TestTypeCheckProgramMapFilterTypeMismatch(t *testing.T) {
 	// filter wants (T -- bool); the quote produces an int instead.
 	src := `[1 2 3] (1 +) filter drop`
@@ -576,6 +596,26 @@ func TestTypeCheckProgramMatchEmptyStack(t *testing.T) {
 	errs, ok := parseAndCheck(t, src)
 	if ok {
 		t.Fatalf("expected stack-underflow; errs=%v", errs)
+	}
+}
+
+func TestTypeCheckProgramMatchPatternBindingEscapesArm(t *testing.T) {
+	// A name introduced by a `just` pattern in the only live arm
+	// (the `none` arm diverges) must be readable after the match.
+	// Previously the checker stripped pattern bindings before
+	// capture, so `@v` outside the match reported "unknown
+	// identifier" even though the just arm was the only path
+	// reaching that point.
+	src := `
+5 just match
+    just v :,
+    none: 1 exit
+end
+@v wl
+`
+	errs, ok := parseAndCheck(t, src)
+	if !ok || len(errs) != 0 {
+		t.Fatalf("expected just-binding to survive past match; errs=%v", errs)
 	}
 }
 
@@ -678,5 +718,31 @@ iff
 	}
 	if !found {
 		t.Fatalf("expected unknown-identifier @local error; errs=%v", errs)
+	}
+}
+
+// Regression: a `dbg` token inside the branching driver appends a
+// SeverityInfo TypeError to flag the diagnostic for the LSP. Previously
+// tryBranchStep treated *any* error produced by a step as fatal and
+// killed the branch, which short-circuited driveBranches and skipped
+// every token after the `dbg`. The result: a real type error sitting
+// downstream of a `dbg` silently disappeared. Putting `dbg` in front of
+// a broken token "fixed" the error report, which is exactly the
+// symptom that surfaced this bug.
+func TestTypeCheckProgramDbgDoesNotSuppressLaterErrors(t *testing.T) {
+	// Without the fix, `dbg` swallows the error from `"x" +`.
+	errs, ok := parseAndCheck(t, `42 dbg "x" +`)
+	if ok {
+		t.Fatalf("expected type error after dbg to surface; errs=%v", errs)
+	}
+}
+
+func TestTypeCheckProgramDbgInValidProgramPasses(t *testing.T) {
+	// A valid program with `dbg` mid-stream still type-checks. The
+	// dbg dump is recorded as a SeverityInfo diagnostic but does not
+	// fail the program.
+	errs, ok := parseAndCheck(t, `42 dbg 1 + wl`)
+	if !ok {
+		t.Fatalf("expected valid program with dbg to pass; errs=%v", errs)
 	}
 }

@@ -53,10 +53,12 @@ groupBy toJson wl
 groupBy toJson wl
 
 # Empty input produces schema without evaluating aggregations.
+# The agg quotes here must type-check, but the runtime never calls
+# them because there are no groups.
 [| region, sales; |]
 ["region"]
 [
-    { "name": "boom", "agg": (unknownFunction) }
+    { "name": "boom", "agg": (gridRows) }
 ]
 groupBy emptyGrouped!
 @emptyGrouped gridRows str wl
@@ -65,7 +67,7 @@ groupBy emptyGrouped!
 [| sales; |]
 []
 [
-    { "name": "total", "agg": (unknownFunction) }
+    { "name": "total", "agg": ("sales" gridCol sumInt) }
 ]
 groupBy emptyNoKey!
 @emptyNoKey gridRows str wl
@@ -92,3 +94,15 @@ groupBy typedGrouped!
 @typedGrouped "k" gridCol str wl
 @typedGrouped "k" gridCol (typeof) map str wl
 @typedGrouped "n" gridCol str wl
+
+# Aggregations may return different scalar types across specs in
+# the same list — the agg quote's output type is generic per call.
+[| region, sales; "East", 10; "West", 5 |]
+["region"]
+[
+    { "name": "n", "agg": (gridRows) }
+    { "name": "tag", "agg": (drop "ok") }
+    { "name": "x", "agg": (drop 1.5) }
+]
+groupBy mixedAgg!
+@mixedAgg toJson wl

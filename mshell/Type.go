@@ -54,6 +54,7 @@ const (
 	TKOverloadedQuote          // Extra = index into overloadedQuoteSigs
 	TKUnion                    // A = brand id (or 0); Extra = index into unionMembers
 	TKBrand                    // A = brand id; B = underlying TypeId
+	TKCommand                  // A = argv list TypeId; B = stdout capture; Extra = stderr capture
 	TKVar                      // A = TypeVarId
 
 	// Grid family — built-in like Maybe; see "Grid types" in ai/type_checker.md.
@@ -83,6 +84,8 @@ func (k TypeKind) String() string {
 		return "Union"
 	case TKBrand:
 		return "Brand"
+	case TKCommand:
+		return "Command"
 	case TKVar:
 		return "Var"
 	case TKGrid:
@@ -104,6 +107,15 @@ type TypeNode struct {
 	B     uint32
 	Extra uint32
 }
+
+type CommandCaptureMode uint32
+
+const (
+	CommandCaptureNone CommandCaptureMode = iota
+	CommandCaptureStr
+	CommandCaptureBytes
+	CommandCaptureLines
+)
 
 // TypeVarId identifies a generic type variable. Fresh ids are issued at
 // generic-instantiation sites (each call to a polymorphic function yields
@@ -245,6 +257,13 @@ func (a *TypeArena) MakeVar(v TypeVarId) TypeId {
 // underlying differs (which is a programmer error caught at higher levels).
 func (a *TypeArena) MakeBrand(brandId NameId, underlying TypeId) TypeId {
 	return a.intern(TKBrand, uint32(brandId), uint32(underlying), 0, "")
+}
+
+// MakeCommand returns the canonical TypeId for an executable command value.
+// argv is the underlying command-list type. stdout/stderr capture modes
+// determine the stack outputs produced by `?`, `;`, and `!`.
+func (a *TypeArena) MakeCommand(argv TypeId, stdout, stderr CommandCaptureMode) TypeId {
+	return a.intern(TKCommand, uint32(argv), uint32(stdout), uint32(stderr), "")
 }
 
 // MakeShape returns the canonical TypeId for a record/shape type with the

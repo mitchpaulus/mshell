@@ -42,12 +42,6 @@ import (
 	// "net/http/httputil"
 )
 
-type MShellFunction struct {
-	Name       string
-	Evaluate   func(stack MShellStack, Context ExecuteContext)
-	InputTypes []MShellType
-}
-
 var oleAutomationEpoch = time.Date(1899, 12, 30, 0, 0, 0, 0, time.UTC)
 var randomFixedRand = rand.New(rand.NewSource(1))
 
@@ -327,6 +321,33 @@ type EvalState struct {
 	CallStack             CallStack
 	CompletionDefinitions map[string][]MShellDefinition
 	PreviousDirectories   []string
+
+	defIndex    map[string]int
+	defIndexLen int
+}
+
+// RebuildDefinitionIndex records the first index for each name, matching
+// the front-to-back, first-match-wins behavior of the linear scan it replaces.
+func (state *EvalState) RebuildDefinitionIndex(definitions []MShellDefinition) {
+	idx := make(map[string]int, len(definitions))
+	for i, def := range definitions {
+		if _, exists := idx[def.Name]; !exists {
+			idx[def.Name] = i
+		}
+	}
+	state.defIndex = idx
+	state.defIndexLen = len(definitions)
+}
+
+func (state *EvalState) lookupDefinition(definitions []MShellDefinition, name string) (MShellDefinition, bool) {
+	if state.defIndex == nil || state.defIndexLen != len(definitions) {
+		state.RebuildDefinitionIndex(definitions)
+	}
+	i, ok := state.defIndex[name]
+	if !ok || i >= len(definitions) {
+		return MShellDefinition{}, false
+	}
+	return definitions[i], true
 }
 
 func (state *EvalState) AddCompletionDefinitions(definitions []MShellDefinition) {
@@ -784,10 +805,8 @@ func (state *EvalState) processToken(token MShellParseItem, frame *EvaluationFra
 		}
 
 		// Check for definition
-		for _, definition := range definitions {
-			if definition.Name == funcToken.Lexeme {
-				return state.callDefinition(definition, funcToken, frame, frames)
-			}
+		if def, ok := state.lookupDefinition(definitions, funcToken.Lexeme); ok {
+			return state.callDefinition(def, funcToken, frame, frames)
 		}
 
 		// Not a definition - fall back to token processing
@@ -1242,13 +1261,17 @@ func (state *EvalState) matchListPattern(pattern *MShellParseList, subject MShel
 			}
 		}
 
-		// Bind spread
+		// Bind spread as a zero-copy sub-slice. cap=len forces any
+		// later append on the rest list to reallocate, so the source
+		// list's tail is never overwritten. Note that setAt on the
+		// rest list will mutate the shared backing — historically
+		// rest was an independent copy, so user code that mutates
+		// the rest in place will now also mutate the source.
 		spreadTok := pattern.Items[spreadIndex].(Token)
 		spreadName := spreadTok.Lexeme[3:] // Remove "..."
 		if spreadName != "_" {
-			restList := NewList(len(list.Items) - minRequired)
-			copy(restList.Items, list.Items[beforeCount:len(list.Items)-afterCount])
-			bindings[spreadName] = restList
+			end := len(list.Items) - afterCount
+			bindings[spreadName] = &MShellList{Items: list.Items[beforeCount:end:end]}
 		}
 
 		// Bind elements after spread
@@ -1331,10 +1354,8 @@ func (state *EvalState) processTokenToken(t Token, frame *EvaluationFrame, frame
 		}
 
 		// Check for definitions first (with TCO)
-		for _, definition := range definitions {
-			if definition.Name == t.Lexeme {
-				return state.callDefinition(definition, t, frame, frames)
-			}
+		if def, ok := state.lookupDefinition(definitions, t.Lexeme); ok {
+			return state.callDefinition(def, t, frame, frames)
 		}
 		// Not a definition - process as regular literal
 		return state.processTokenLiteral(t, frame)
@@ -1582,7 +1603,37 @@ func (state *EvalState) processVarstoreList(varstoreList MShellVarstoreList, fra
 	return SimpleSuccess()
 }
 
-// processGetter handles ':' getter operations for dictionaries and grid rows.
+// gridColumnAsList materializes the named column of a Grid as a fresh
+// list. Returns (list, true) on hit, (nil, false) when the column is
+// absent.
+func gridColumnAsList(g *MShellGrid, name string) (*MShellList, bool) {
+	col := g.GetColumn(name)
+	if col == nil {
+		return nil, false
+	}
+	out := NewList(g.RowCount)
+	for i := 0; i < g.RowCount; i++ {
+		out.Items[i] = col.Get(i)
+	}
+	return out, true
+}
+
+// gridViewColumnAsList materializes the named column of a GridView,
+// honoring the view's row indices.
+func gridViewColumnAsList(v *MShellGridView, name string) (*MShellList, bool) {
+	col := v.Source.GetColumn(name)
+	if col == nil {
+		return nil, false
+	}
+	out := NewList(len(v.Indices))
+	for i, idx := range v.Indices {
+		out.Items[i] = col.Get(idx)
+	}
+	return out, true
+}
+
+// processGetter handles ':' getter operations for dictionaries, grid
+// rows, and grids/grid views (column lookup).
 func (state *EvalState) processGetter(getter *MShellGetter, frame *EvaluationFrame) EvalResult {
 	stack := frame.Stack
 
@@ -1599,8 +1650,12 @@ func (state *EvalState) processGetter(getter *MShellGetter, frame *EvaluationFra
 		value, ok = objTyped.Items[getter.String]
 	case *MShellGridRow:
 		value, ok = objTyped.Get(getter.String)
+	case *MShellGrid:
+		value, ok = gridColumnAsList(objTyped, getter.String)
+	case *MShellGridView:
+		value, ok = gridViewColumnAsList(objTyped, getter.String)
 	default:
-		return state.FailWithMessage(fmt.Sprintf("%d:%d: The stack parameter for ':' is not a dictionary or GridRow. Found a %s (%s). Key: %s\n", getter.Token.Line, getter.Token.Column, obj.TypeName(), obj.DebugString(), getter.String))
+		return state.FailWithMessage(fmt.Sprintf("%d:%d: The stack parameter for ':' is not a dictionary, GridRow, Grid, or GridView. Found a %s (%s). Key: %s\n", getter.Token.Line, getter.Token.Column, obj.TypeName(), obj.DebugString(), getter.String))
 	}
 
 	if !ok {
@@ -3045,25 +3100,25 @@ MainLoop:
 				return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do ':' operation on an empty stack.\n", getter.Token.Line, getter.Token.Column))
 			}
 
+			var value MShellObject
+			var ok bool
 			switch objTyped := obj.(type) {
 			case *MShellDict:
-				value, ok := objTyped.Items[getter.String]
-				if !ok {
-					stack.Push(&Maybe{obj: nil})
-				} else {
-					maybe := Maybe{obj: value}
-					stack.Push(&maybe)
-				}
+				value, ok = objTyped.Items[getter.String]
 			case *MShellGridRow:
-				value, ok := objTyped.Get(getter.String)
-				if !ok {
-					stack.Push(&Maybe{obj: nil})
-				} else {
-					maybe := Maybe{obj: value}
-					stack.Push(&maybe)
-				}
+				value, ok = objTyped.Get(getter.String)
+			case *MShellGrid:
+				value, ok = gridColumnAsList(objTyped, getter.String)
+			case *MShellGridView:
+				value, ok = gridViewColumnAsList(objTyped, getter.String)
 			default:
-				return state.FailWithMessage(fmt.Sprintf("%d:%d: The stack parameter for ':' is not a dictionary or GridRow. Found a %s (%s). Key: %s\n", getter.Token.Line, getter.Token.Column, obj.TypeName(), obj.DebugString(), getter.String))
+				return state.FailWithMessage(fmt.Sprintf("%d:%d: The stack parameter for ':' is not a dictionary, GridRow, Grid, or GridView. Found a %s (%s). Key: %s\n", getter.Token.Line, getter.Token.Column, obj.TypeName(), obj.DebugString(), getter.String))
+			}
+			if !ok {
+				stack.Push(&Maybe{obj: nil})
+			} else {
+				maybe := Maybe{obj: value}
+				stack.Push(&maybe)
 			}
 
 		case Token:
@@ -3073,19 +3128,17 @@ MainLoop:
 			} else if t.Type == LITERAL {
 
 				// Check for definitions
-				for _, definition := range definitions {
-					if definition.Name == t.Lexeme {
-						// Evaluate the definition
-						newContext := context.CloneLessVariables()
-						callStackItem := CallStackItem{MShellParseItem: t, Name: definition.Name, CallStackType: CALLSTACKDEF}
-						result := state.evaluateItems(definition.Items, stack, *newContext, definitions, callStackItem)
+				if definition, ok := state.lookupDefinition(definitions, t.Lexeme); ok {
+					// Evaluate the definition
+					newContext := context.CloneLessVariables()
+					callStackItem := CallStackItem{MShellParseItem: t, Name: definition.Name, CallStackType: CALLSTACKDEF}
+					result := state.evaluateItems(definition.Items, stack, *newContext, definitions, callStackItem)
 
-						if result.ShouldPassResultUpStack() {
-							return result
-						}
-
-						continue MainLoop
+					if result.ShouldPassResultUpStack() {
+						return result
 					}
+
+					continue MainLoop
 				}
 
 				if t.Lexeme == "stack" {
@@ -3287,6 +3340,8 @@ MainLoop:
 						stack.Push(MShellInt{len(objTyped.Indices)})
 					case *MShellGridRow:
 						stack.Push(MShellInt{len(objTyped.Grid.Columns)})
+					case *MShellDict:
+						stack.Push(MShellInt{len(objTyped.Items)})
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot get length of a %s.\n", t.Line, t.Column, obj.TypeName()))
 					}
@@ -4889,34 +4944,6 @@ MainLoop:
 					} else {
 						stack.Push(&Maybe{obj: MShellBinary(data)})
 					}
-				} else if t.Lexeme == "skip" {
-					// Skip like C# LINQ
-					obj1, obj2, err := stack.Pop2(t)
-					if err != nil {
-						return state.FailWithMessage(err.Error())
-					}
-
-					intVal, ok := obj1.(MShellInt)
-					if !ok {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot skip a %s.\n", t.Line, t.Column, obj1.TypeName()))
-					}
-
-					listVal, ok := obj2.(*MShellList)
-					if !ok {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot skip on a %s.\n", t.Line, t.Column, obj2.TypeName()))
-					}
-
-					if intVal.Value < 0 {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot skip a negative number of items (%d).\n", t.Line, t.Column, intVal.Value))
-					}
-
-					// Don't fail on n > len(list), just return empty
-					newObj, err := obj2.SliceStart(min(intVal.Value, len(listVal.Items)))
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
-					}
-
-					stack.Push(newObj)
 				} else if t.Lexeme == "e" || t.Lexeme == "ec" || t.Lexeme == "es" {
 					// Token Type
 					obj, err := stack.Pop()
@@ -5164,25 +5191,25 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: The stack parameter for the key is not a string. Found a %s (%s).\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
 					}
 
+					var value MShellObject
+					var ok bool
 					switch obj2Typed := obj2.(type) {
 					case *MShellDict:
-						value, ok := obj2Typed.Items[keyStr]
-						if !ok {
-							stack.Push(&Maybe{obj: nil})
-						} else {
-							maybe := Maybe{obj: value}
-							stack.Push(&maybe)
-						}
+						value, ok = obj2Typed.Items[keyStr]
 					case *MShellGridRow:
-						value, ok := obj2Typed.Get(keyStr)
-						if !ok {
-							stack.Push(&Maybe{obj: nil})
-						} else {
-							maybe := Maybe{obj: value}
-							stack.Push(&maybe)
-						}
+						value, ok = obj2Typed.Get(keyStr)
+					case *MShellGrid:
+						value, ok = gridColumnAsList(obj2Typed, keyStr)
+					case *MShellGridView:
+						value, ok = gridViewColumnAsList(obj2Typed, keyStr)
 					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: The stack parameter for 'get' is not a dictionary or GridRow. Found a %s (%s). Key: %s\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString(), keyStr))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The stack parameter for 'get' is not a dictionary, GridRow, Grid, or GridView. Found a %s (%s). Key: %s\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString(), keyStr))
+					}
+					if !ok {
+						stack.Push(&Maybe{obj: nil})
+					} else {
+						maybe := Maybe{obj: value}
+						stack.Push(&maybe)
 					}
 				} else if t.Lexeme == "getDef" {
 					// Get a value from string key for a dictionary.
@@ -6044,6 +6071,161 @@ MainLoop:
 					}
 
 					stack.Push(newGrid)
+				} else if t.Lexeme == "pivot" {
+					if len(*stack) < 4 {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'pivot' operation on a stack with less than four items.\n", t.Line, t.Column))
+					}
+
+					obj1, obj2, obj3, obj4, err := stack.Pop4(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					quote, ok := obj1.(*MShellQuotation)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: pivot requires a quotation on top of the stack, got %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					colKeyName, err := obj2.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: pivot requires a string column-key name, got %s.\n", t.Line, t.Column, obj2.TypeName()))
+					}
+
+					rowKeyList, ok := obj3.(*MShellList)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: pivot requires a list of row-key column names, got %s.\n", t.Line, t.Column, obj3.TypeName()))
+					}
+
+					sourceGrid, sourceIndices, err := getGridSourceAndIndices(obj4)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: pivot requires a Grid or GridView, got %s.\n", t.Line, t.Column, obj4.TypeName()))
+					}
+
+					rowKeyCols := make([]string, len(rowKeyList.Items))
+					seenRowKeyCols := make(map[string]struct{}, len(rowKeyList.Items))
+					for i, item := range rowKeyList.Items {
+						colName, err := item.CastString()
+						if err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: pivot row-key column names must be strings, got %s.\n", t.Line, t.Column, item.TypeName()))
+						}
+						if _, exists := seenRowKeyCols[colName]; exists {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: pivot row-key column '%s' was requested more than once.\n", t.Line, t.Column, colName))
+						}
+						if sourceGrid.GetColumn(colName) == nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Column '%s' not found in grid.\n", t.Line, t.Column, colName))
+						}
+						seenRowKeyCols[colName] = struct{}{}
+						rowKeyCols[i] = colName
+					}
+
+					if _, exists := seenRowKeyCols[colKeyName]; exists {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: pivot column-key '%s' cannot also be a row-key.\n", t.Line, t.Column, colKeyName))
+					}
+
+					colKeyCol := sourceGrid.GetColumn(colKeyName)
+					if colKeyCol == nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Column '%s' not found in grid.\n", t.Line, t.Column, colKeyName))
+					}
+
+					type pivotBucketKey struct {
+						rowGroupIdx int
+						colName     string
+					}
+
+					rowKeyMap := make(map[string]int)
+					rowFirstSrcIdx := make([]int, 0)
+					colNameSet := make(map[string]struct{})
+					buckets := make(map[pivotBucketKey][]int)
+
+					for _, srcIdx := range sourceIndices {
+						rowKey, err := typedGridGroupKey(sourceGrid, srcIdx, rowKeyCols)
+						if err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: %s.\n", t.Line, t.Column, err.Error()))
+						}
+						rowGroupIdx, exists := rowKeyMap[rowKey]
+						if !exists {
+							rowGroupIdx = len(rowFirstSrcIdx)
+							rowKeyMap[rowKey] = rowGroupIdx
+							rowFirstSrcIdx = append(rowFirstSrcIdx, srcIdx)
+						}
+
+						colVal := colKeyCol.Get(srcIdx)
+						colStr, ok := colVal.(MShellString)
+						if !ok {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: pivot column-key column '%s' must contain only strings, found %s at row %d.\n", t.Line, t.Column, colKeyName, colVal.TypeName(), srcIdx))
+						}
+
+						colNameSet[colStr.Content] = struct{}{}
+						bk := pivotBucketKey{rowGroupIdx: rowGroupIdx, colName: colStr.Content}
+						buckets[bk] = append(buckets[bk], srcIdx)
+					}
+
+					pivotedColNames := make([]string, 0, len(colNameSet))
+					for name := range colNameSet {
+						pivotedColNames = append(pivotedColNames, name)
+					}
+					sort.Slice(pivotedColNames, func(i, j int) bool {
+						return VersionSortComparer(pivotedColNames[i], pivotedColNames[j]) < 0
+					})
+
+					for _, name := range pivotedColNames {
+						if _, exists := seenRowKeyCols[name]; exists {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: pivot column-key value '%s' collides with a row-key column name.\n", t.Line, t.Column, name))
+						}
+					}
+
+					newGrid := NewGrid()
+					newGrid.Meta = sourceGrid.Meta
+					newGrid.RowCount = len(rowFirstSrcIdx)
+
+					for _, keyColName := range rowKeyCols {
+						sourceCol := sourceGrid.GetColumn(keyColName)
+						newCol := NewGridColumn(keyColName, newGrid.RowCount)
+						newCol.Meta = sourceCol.Meta
+						for rowIdx, srcIdx := range rowFirstSrcIdx {
+							newCol.GenericData[rowIdx] = sourceCol.Get(srcIdx)
+						}
+						newGrid.AddColumn(newCol)
+					}
+
+					for _, colName := range pivotedColNames {
+						newCol := NewGridColumn(colName, newGrid.RowCount)
+						for rowGroupIdx := 0; rowGroupIdx < newGrid.RowCount; rowGroupIdx++ {
+							srcIndices, has := buckets[pivotBucketKey{rowGroupIdx: rowGroupIdx, colName: colName}]
+							if !has {
+								newCol.GenericData[rowGroupIdx] = &Maybe{obj: nil}
+								continue
+							}
+
+							groupView := &MShellGridView{Source: sourceGrid, Indices: srcIndices}
+							var aggStack MShellStack
+							aggStack = []MShellObject{groupView}
+
+							result, err := state.EvaluateQuote(*quote, &aggStack, context, definitions)
+							if err != nil {
+								return state.FailWithMessage(err.Error())
+							}
+							if result.ShouldPassResultUpStack() {
+								return result
+							}
+							if len(aggStack) != 1 {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: pivot aggregation for column '%s' must return exactly one value, found %d values.\n", t.Line, t.Column, colName, len(aggStack)))
+							}
+
+							aggVal, _ := aggStack.Pop()
+							if isContainerType(aggVal) {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: pivot aggregation for column '%s' cannot return a container type, got %s.\n", t.Line, t.Column, colName, aggVal.TypeName()))
+							}
+							newCol.GenericData[rowGroupIdx] = aggVal
+						}
+						newGrid.AddColumn(newCol)
+					}
+
+					for _, col := range newGrid.Columns {
+						optimizeColumnStorage(col)
+					}
+
+					stack.Push(newGrid)
 				} else if t.Lexeme == "leftJoin" {
 					result := state.executeGridJoin(t, stack, joinLeft, context, definitions)
 					if result.ShouldPassResultUpStack() {
@@ -6349,6 +6531,8 @@ MainLoop:
 
 					stack.Push(MShellString{obj1.TypeName()})
 
+				} else if t.Lexeme == "dbg" {
+					// Static-only checker hint; no runtime work.
 				} else if t.Lexeme == "utcToCst" {
 					obj1, err := stack.Pop()
 					if err != nil {
@@ -6523,6 +6707,120 @@ MainLoop:
 					}
 
 					stack.Push(MShellFloat{Value: math.Sqrt(floatObj.Value)})
+				} else if t.Lexeme == "abs" {
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'abs' operation on an empty stack.\n", t.Line, t.Column))
+					}
+					switch v := obj.(type) {
+					case MShellInt:
+						if v.Value < 0 {
+							stack.Push(MShellInt{-v.Value})
+						} else {
+							stack.Push(v)
+						}
+					case MShellFloat:
+						if v.Value < 0 {
+							stack.Push(MShellFloat{-v.Value})
+						} else {
+							stack.Push(v)
+						}
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: 'abs' requires int or float, found a %s.\n", t.Line, t.Column, obj.TypeName()))
+					}
+				} else if t.Lexeme == "max2" || t.Lexeme == "min2" {
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+					takeFirst := false // whether to keep obj2 (first arg, deeper on stack)
+					switch a := obj2.(type) {
+					case MShellInt:
+						b, ok := obj1.(MShellInt)
+						if !ok {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: '%s' requires both operands to be the same numeric type; got int and %s.\n", t.Line, t.Column, t.Lexeme, obj1.TypeName()))
+						}
+						if t.Lexeme == "max2" {
+							takeFirst = a.Value >= b.Value
+						} else {
+							takeFirst = a.Value <= b.Value
+						}
+					case MShellFloat:
+						b, ok := obj1.(MShellFloat)
+						if !ok {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: '%s' requires both operands to be the same numeric type; got float and %s.\n", t.Line, t.Column, t.Lexeme, obj1.TypeName()))
+						}
+						if t.Lexeme == "max2" {
+							takeFirst = a.Value >= b.Value
+						} else {
+							takeFirst = a.Value <= b.Value
+						}
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: '%s' requires int or float, found a %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName()))
+					}
+					if takeFirst {
+						stack.Push(obj2)
+					} else {
+						stack.Push(obj1)
+					}
+				} else if t.Lexeme == "max" || t.Lexeme == "min" || t.Lexeme == "sum" {
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
+					}
+					list, ok := obj.(*MShellList)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: '%s' requires a list, found a %s.\n", t.Line, t.Column, t.Lexeme, obj.TypeName()))
+					}
+					if len(list.Items) == 0 {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot '%s' an empty list.\n", t.Line, t.Column, t.Lexeme))
+					}
+					switch first := list.Items[0].(type) {
+					case MShellInt:
+						acc := first.Value
+						for i, item := range list.Items[1:] {
+							v, ok := item.(MShellInt)
+							if !ok {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: '%s' on int list found a %s at index %d.\n", t.Line, t.Column, t.Lexeme, item.TypeName(), i+1))
+							}
+							switch t.Lexeme {
+							case "max":
+								if v.Value > acc {
+									acc = v.Value
+								}
+							case "min":
+								if v.Value < acc {
+									acc = v.Value
+								}
+							case "sum":
+								acc += v.Value
+							}
+						}
+						stack.Push(MShellInt{acc})
+					case MShellFloat:
+						acc := first.Value
+						for i, item := range list.Items[1:] {
+							v, ok := item.(MShellFloat)
+							if !ok {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: '%s' on float list found a %s at index %d.\n", t.Line, t.Column, t.Lexeme, item.TypeName(), i+1))
+							}
+							switch t.Lexeme {
+							case "max":
+								if v.Value > acc {
+									acc = v.Value
+								}
+							case "min":
+								if v.Value < acc {
+									acc = v.Value
+								}
+							case "sum":
+								acc += v.Value
+							}
+						}
+						stack.Push(MShellFloat{acc})
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: '%s' requires a list of int or float, found a list of %s.\n", t.Line, t.Column, t.Lexeme, first.TypeName()))
+					}
 				} else if t.Lexeme == "toFixed" {
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
@@ -7430,6 +7728,8 @@ MainLoop:
 					switch objTyped := obj.(type) {
 					case MShellString:
 						data = []byte(objTyped.Content)
+					case MShellBinary:
+						data = []byte(objTyped)
 					case MShellPath:
 						pathStr, err := obj.CastString()
 						if err != nil {
@@ -7484,9 +7784,11 @@ MainLoop:
 						stack.Push(newList)
 					case MShellString:
 						strObj := obj2Typed
-						length := min(intObj.Value, len(strObj.Content)) // Adjust to max length
-						newStr := strObj.Content[:length]
-						stack.Push(MShellString{newStr})
+						newStr, err := strObj.SliceEnd(min(intObj.Value, len(strObj.Content)))
+						if err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
+						}
+						stack.Push(newStr)
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second parameter in 'take' is expected to be a list or string, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
 					}
@@ -7520,9 +7822,11 @@ MainLoop:
 						stack.Push(newList)
 					case MShellString:
 						strObj := obj2Typed
-						length := max(0, len(strObj.Content)-intObj.Value)
-						newStr := strObj.Content[length:]
-						stack.Push(MShellString{newStr})
+						newStr, err := strObj.SliceStart(min(intObj.Value, len(strObj.Content)))
+						if err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
+						}
+						stack.Push(newStr)
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second parameter in 'skip' is expected to be a list or string, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
 					}
@@ -9289,6 +9593,10 @@ MainLoop:
 			} else {
 				return state.FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' ('%s') yet.\n", t.Line, t.Column, t.Type, t.Lexeme))
 			}
+		case *MShellAsCast:
+			// Static-only: `as` is a checker hint; no runtime work.
+		case *MShellTypeDecl:
+			// Static-only: type declarations have no runtime effect by design.
 		default:
 			return state.FailWithMessage(fmt.Sprintf("We haven't implemented the type '%T' yet.\n", t))
 		}

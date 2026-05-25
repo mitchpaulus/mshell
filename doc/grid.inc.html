@@ -13,6 +13,7 @@ Grids are ideal for working with tabular data, time series analysis, and data tr
     <li><a href="#grid-view">GridView</a></li>
     <li><a href="#grid-row">GridRow</a></li>
     <li><a href="#grid-iteration">Iteration Operations</a></li>
+    <li><a href="#func-pivot-grid">Pivot</a></li>
     <li><a href="#grid-joins">Joins</a></li>
     <li><a href="#grid-sorting">Sorting</a></li>
 </ul>
@@ -179,6 +180,11 @@ Each column can have optional metadata specified as a dictionary immediately aft
             <td>Group rows by key columns and return a summarized Grid. Aggregation specs are dictionaries with required <code>"agg"</code> quotation plus optional <code>"name"</code> and <code>"meta"</code>.</td>
             <td><code>(Grid|GridView [<span class="sig-type sig-type-str">str</span>]:keys [{"agg": (GridView -- any), "name"?: <span class="sig-type sig-type-str">str</span>, "meta"?: <span class="sig-type sig-type-dict">dict</span>}]:aggs -- Grid)</code></td>
         </tr>
+        <tr id="func-pivot-grid">
+            <td><code>pivot</code></td>
+            <td>Reshape a Grid into a pivot table. Rows are grouped by <code>rowKeys</code> (first-seen order, like <code>groupBy</code>); the distinct values of the <code>colKey</code> column become new column names, ordered with the version-aware natural sort. The aggregation quotation runs once per (row-group, column-value) cell with a <code>GridView</code> of the matching source rows; cells with no matching rows are filled with <code>none</code> and the quotation is not invoked. The <code>colKey</code> column must contain only strings, and no distinct column value may collide with a row-key column name.</td>
+            <td><code>(Grid|GridView [<span class="sig-type sig-type-str">str</span>]:rowKeys <span class="sig-type sig-type-str">str</span>:colKey (<span class="sig-type sig-type-gridview">GridView</span> -- a) -- Grid)</code></td>
+        </tr>
         <tr id="func-updatecol-grid">
             <td><code>updateCol</code></td>
             <td>Mutate a column in a Grid by applying a quotation to each cell. When used on a GridView, a new Grid is materialized from the viewed rows, the quotation is applied to that column, all result columns are retyped, and the backing Grid is left unchanged. The quotation must return exactly one non-container value for each cell.</td>
@@ -294,6 +300,18 @@ To materialize a GridView into a real Grid (with copied data), use <code>gridCom
 
 <span class="mshellLINECOMMENT"># Materialize to a Grid</span>
 <span class="mshellLITERAL">gridCompact</span>  <span class="mshellLINECOMMENT"># Now a real Grid with copied data</span></code>
+</pre>
+
+<p>
+The <code>:name</code> getter and the <code>get</code> built-in also accept a Grid or GridView directly and return the named column as a <code>Maybe[[T]]</code>.
+This is a shorthand for <code>gridCol</code>: the wrapped list is the same materialized column, or <code>none</code> when the column is absent.
+On a GridView the values are projected through the view's row indices.
+</p>
+
+<pre>
+<code><span class="mshellGRID_OPEN">[|</span> <span class="mshellLITERAL">name</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">n</span><span class="mshellEXECUTE">;</span> <span class="mshellSTRING">"a"</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">1</span><span class="mshellEXECUTE">;</span> <span class="mshellSTRING">"b"</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">2</span> <span class="mshellGRID_CLOSE">|]</span> <span class="mshellVARSTORE">g!</span>
+<span class="mshellVARRETRIEVE">@g</span> <span class="mshellCOLON">:</span><span class="mshellLITERAL">n?</span>  <span class="mshellLINECOMMENT"># [1, 2]  — `:n` returns Maybe[[int]], `?` unwraps</span>
+<span class="mshellVARRETRIEVE">@g</span> <span class="mshellCOLON">:</span><span class="mshellLITERAL">missing</span>  <span class="mshellLINECOMMENT"># None</span></code>
 </pre>
 
 <h1 id="grid-row">GridRow <a class="section-link" href="#grid-row" aria-label="Permalink">§</a> <a class="back-to-top" href="#grid-top">Back to top</a></h1>

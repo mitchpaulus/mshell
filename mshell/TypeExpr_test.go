@@ -11,19 +11,17 @@ import "testing"
 func parseTypeExprSrc(t *testing.T, c *Checker, src string) (TypeId, []TypeError) {
 	t.Helper()
 	l := NewLexer(src, nil)
-	rawToks, err := l.Tokenize()
-	if err != nil {
-		t.Fatalf("lex %q: %v", src, err)
+	p := NewMShellParser(l)
+	p.ensureInitialized()
+	item, errs := p.parseTypeExpr()
+	preLen := len(c.errors)
+	id := c.resolveTypeExpr(item, nil)
+	// Surface resolution-time errors emitted into the checker too, so
+	// tests checking for unknown-type errors still see them.
+	if len(c.errors) > preLen {
+		errs = append(errs, c.errors[preLen:]...)
+		c.errors = c.errors[:preLen]
 	}
-	// Strip whitespace/comments/EOF — the type-expr parser doesn't expect them.
-	var toks []Token
-	for _, tk := range rawToks {
-		if tk.Type == WHITESPACE || tk.Type == LINECOMMENT || tk.Type == EOF {
-			continue
-		}
-		toks = append(toks, tk)
-	}
-	id, _, errs := ParseTypeExpr(c, toks)
 	return id, errs
 }
 
@@ -263,25 +261,20 @@ func TestTypeExprUnionInList(t *testing.T) {
 }
 
 func TestTypeExprConsumedCount(t *testing.T) {
+	// After parsing one type expression, the next token should remain
+	// available on the parser so the surrounding program can continue.
 	c := newCheckerForTypeExpr(t)
-	src := "int extra"
-	l := NewLexer(src, nil)
-	rawToks, _ := l.Tokenize()
-	var toks []Token
-	for _, tk := range rawToks {
-		if tk.Type == WHITESPACE || tk.Type == LINECOMMENT || tk.Type == EOF {
-			continue
-		}
-		toks = append(toks, tk)
-	}
-	id, consumed, errs := ParseTypeExpr(c, toks)
+	l := NewLexer("int extra", nil)
+	p := NewMShellParser(l)
+	p.ensureInitialized()
+	item, errs := p.parseTypeExpr()
 	if len(errs) != 0 {
 		t.Fatalf("errs %+v", errs)
 	}
-	if id != TidInt {
+	if id := c.resolveTypeExpr(item, nil); id != TidInt {
 		t.Fatalf("id %d, want TidInt", id)
 	}
-	if consumed != 1 {
-		t.Fatalf("consumed %d, want 1 (the 'extra' literal should be left)", consumed)
+	if p.curr.Type != LITERAL || p.curr.Lexeme != "extra" {
+		t.Fatalf("next token = %v, want LITERAL 'extra'", p.curr)
 	}
 }

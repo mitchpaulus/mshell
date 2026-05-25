@@ -1,0 +1,3 @@
+# The column-key column must contain strings; an int row should error.
+[| region, month, sales; "East", 1, 10 |]
+["region"] "month" ("sales" gridCol sumInt) pivot wl

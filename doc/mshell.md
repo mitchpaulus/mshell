@@ -87,6 +87,7 @@ Operator | Effect on external commands                | Notes
 `^b`     | Capture stderr to the stack.               | As binary.
 `<`      | Feed stdin from a value.                   | String, path, or binary.
 `<>`     | In-place file modification.                | Reads file to stdin, writes stdout back on success.
+`&`      | Mark the command list to run asynchronously. | Marks the list; the trailing `;`/`!` starts the subprocess and returns immediately without waiting. Stdout and stderr default to discarded.
 
 ### Redirection on quotations
 
@@ -862,7 +863,8 @@ end wl # Output: 11
   - `'thousandsSep'` (str): separator (default `","`, only applied when `'grouping'` is provided).
   - `'grouping'` (list[int]): LC_NUMERIC-style group sizes (reused from the end); if `'thousandsSep'` is set without `'grouping'`, `[3]` is assumed.
 - `countSubStr`: Count occurrences of substring in string. `(str str -- int)`
-- `take`: Take first n characters from string. `(str int -- str)`
+- `skip`: Skip first n characters from string using the same indexing logic as string slicing. `(str int -- str)`
+- `take`: Take first n characters from string using the same indexing logic as string slicing. `(str int -- str)`
 - `base64encode`: Encode binary data as base64. `(binary -- str)`
 - `base64decode`: Decode base64 string into binary data. `(str -- binary)`
 - `utf8Str`: Decode UTF-8 bytes into a string. `(binary -- str)`
@@ -881,6 +883,9 @@ end wl # Output: 11
 - `2unpack`: Unpack a two-element list onto the stack. `([a] -- a a)`
 - `2apply`: Apply a binary quotation to a two-element list. `([a] (a a -- c) -- c)`
 - `2each`: Apply a quotation to the two values on the stack individually, returning results in the original order. `(a b (a -- c) -- c c)`
+- `id`: Identity quote — leaves the top stack value unchanged. Useful as a no-op value selector (e.g. for `listToDict`). `(T -- T)`
+- `2id`: Two-argument identity quote. `(T1 T2 -- T1 T2)`
+- `3id`: Three-argument identity quote. `(T1 T2 T3 -- T1 T2 T3)`
 - `2tuple`: Pack the top two stack values into a new two-element list, `(a b -- [a])`
 - `del`: Delete element from list, `(list index -- list)` or `(index list -- list)`
 - `extend`: Extends an existing list with items from another list, or a `Grid`/`GridView` with rows from another `Grid`/`GridView`. Difference between this and `+` is that it modifies the receiver in place. For grids, see the Grid section below. `(originalList toAddList -- list)` or `(Grid|GridView Grid|GridView -- Grid|GridView)`
@@ -894,7 +899,7 @@ end wl # Output: 11
 - `linearSearchIndex`: Return the zero-based index of the first element that satisfies the predicate, or `none` if nothing matches. `([a] (a -- bool) -- Maybe[int])`
 - `any`: Check if any element in list satisfies a condition, `([a] (a -- bool) -- bool)`
 - `all`: Check if all elements in list satisfy a condition, `([a] (a -- bool) -- bool)`
-- `skip`: Skip first n elements of list, `(list int -- list)`
+- `skip`: Skip first n elements of list, or first n characters of string. `(list int -- list)` / `(str int -- str)`
 - `uniq`: Remove duplicate elements from list. Works for all non-compound types. `([a] -- [a])`
 - `zip`: Zip two lists together. If the two list are different lengths, resulting list will be the same length as the shorter of the two lists. `([a] [b] (a b -- c) -- [c])`
 - `concat`: Flatten list of lists one level. Useful for things like a `flatMap`, which can be defined like `map concat`. `([[a]] -- [a])`
@@ -904,17 +909,20 @@ end wl # Output: 11
 - `groupBy`: Groups items of a list into a dictionary based on a key function. The key function should take each item as input and produce a string.
   The output is a dictionary with the unique keys and values that are lists of the corresponding items. `([a] (a -- str) -- dict)`
 - `listToDict`: Transform a list into a dictionary with a key and value selector function. `([a] (a -- b) (a -- c) -- { b: c })`
-- `take`: Take the first `n` number of elements from list. `([a] int -- [a])`
+- `take`: Take the first `n` number of elements from list, or first n characters of string. `([a] int -- [a])` / `(str int -- str)`
 - `repeat`: Build a list by repeating the value the requested number of times. `(a int -- [a])`
 - `chunk`: Group a list into consecutive sublists of size `n`. The final chunk may be shorter if the list length isn't divisible by `n`. `([a] int -- [[a]])`
 - `pop`: Pop the final element off the list. Returns a Maybe, `none` for the empty list. Leaves the modified list on the stack. `([a] -- [a] a)`
 
 ## Grid Functions
 
+The `:name` getter and the `get` built-in accept a `Grid` or `GridView` in addition to `dict` and `GridRow`. On a grid the lookup returns the named column as `Maybe[[T]]` — the materialized column when present, `none` when absent — making `:n?` a shorthand for `"n" gridCol`. On a `GridView` the values are projected through the view's row indices.
+
 - `select`: Project a `Grid` or `GridView` to a requested ordered list of column names, returning a materialized `Grid`. `(Grid|GridView [str] -- Grid)`
 - `exclude`: Drop a list of column names from a `Grid` or `GridView`, returning a materialized `Grid`. `(Grid|GridView [str] -- Grid)`
 - `derive`: Append a derived column to a `Grid` or `GridView`. The metadata dictionary is attached to the new column. `(Grid|GridView str dict (GridRow -- any) -- Grid)`
 - `groupBy`: Group rows by key columns and return a summarized `Grid`. `(Grid|GridView [str]:keys [{"agg": (GridView -- any), "name"?: str, "meta"?: dict}]:aggs -- Grid)`
+- `pivot`: Reshape into a pivot table. Rows are grouped by `rowKeys` (first-seen order); the distinct values of the `colKey` column become new column names, ordered by version-aware natural sort. The aggregation quotation runs once per (row-group, column-value) cell with a `GridView` of matching source rows. Empty cells are filled with `none` and the quotation is not invoked for them. The `colKey` column must contain only strings; column-value collisions with a row-key column name are an error. `(Grid|GridView [str]:rowKeys str:colKey (GridView -- any) -- Grid)`
 - `updateCol`: Mutate a column in a `Grid` by applying a quotation to each cell. When used on a `GridView`, a new `Grid` is materialized from the viewed rows, the quotation is applied to that column, all result columns are retyped, and the backing `Grid` is left unchanged. The quotation must return exactly one non-container value. `(Grid|GridView str (any -- any) -- Grid)`
 - `gridValues`: Extract cell values as row-major lists. The result does not include a header row and does not coerce cell types. `(Grid|GridView -- [[a]])`
 - `join`: Inner equi-join of two grids using key extractor quotations on each side.
@@ -1052,21 +1060,22 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
 
 ## HTTP Requests
 
-- `httpGet`: Make a HTTP GET request. Signature is `(dict -- dict)`. Takes the request information in a dictionary that should have the following keys:
+- `httpGet`: Make a HTTP GET request. Signature is `({str: T} -- Maybe[{status: int, reason: str, headers: {str: [str]}, body: bytes}])`. Takes the request information in a dictionary that should have the following keys:
 
-  - `url`: Full URL, including all the query parameters
-  - `headers`: A dictionary of key-value pairs for the request headers
+  - `url`: Full URL, including all the query parameters (required, stringable)
+  - `timeout`: Request timeout in seconds (optional, positive integer; default 30)
+  - `headers`: A dictionary of key-value pairs for the request headers (optional)
 
   Returns a Maybe wrapping a response dictionary.
-  The response is `none` is the web request totally fails, like hitting a timeout.
+  The response is `none` if the web request totally fails, like hitting a timeout.
   Otherwise a Just Dictionary is returned, with fields
 
   - `status`: Integer status code
   - `reason`: Full reason line, ex: `"200 OK"`
-  - `headers`: Dictionary of key-value header pairs
-  - `body`: Body of response, read as UTF-8 string.
+  - `headers`: Dictionary of header name to a list of values
+  - `body`: Body of response, as raw `bytes`. Decode with `utf8Str` if you want a UTF-8 string.
 
-- `httpPost`: Make a HTTP POST request. Signature is `(dict -- dict)`. Only difference from `httpGet` is that on the request dictionary, you can also set the `body` field to a string.
+- `httpPost`: Make a HTTP POST request. Signature is the same as `httpGet`. The only difference is that on the request dictionary, you can also set the `body` field to a stringable value.
 
 ## Variables
 

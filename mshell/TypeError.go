@@ -21,23 +21,47 @@ const (
 	TErrStackUnderflow
 	TErrTypeMismatch
 	TErrUnknownIdentifier
+	TErrMaybeUnset // variable bound on some control-flow paths but not others
 	TErrLeftoverStack // top-level program left items on the stack at end (informational; not always an error)
 	TErrBranchStackSize
 	TErrBranchVarSet
+	TErrDefBodyMismatch // def's declared sig and body stack effect disagree
 	TErrNonExhaustiveMatch
 	TErrAmbiguousOverload
 	TErrNoMatchingOverload
+	// TErrAmbiguousTyping is emitted when the branching walker reaches
+	// the end of a program (or a synchronization point) with more than
+	// one surviving branch whose typings disagree. The user must add
+	// an annotation upstream to disambiguate. Hint lists the surviving
+	// final stacks.
+	TErrAmbiguousTyping
 	TErrReservedTypeName
 	TErrDuplicateTypeName
 	TErrInvalidCast
 	TErrTypeParse
 	TErrInterpolationArity
+	// TErrDebugDump is emitted by the `dbg` builtin at each branch
+	// that walks past it. Informational severity — does not fail the
+	// type check. Hint holds the formatted snapshot of stack + vars.
+	TErrDebugDump
 )
 
-// TypeError is a single static-check failure. Pos is a Token (its line/column
+// TypeErrorSeverity classifies a diagnostic. Severity-error blocks
+// the type check; severity-info is purely informational (used by
+// `dbg` snapshots) and never causes the type checker to fail.
+type TypeErrorSeverity uint8
+
+const (
+	SeverityError TypeErrorSeverity = iota
+	SeverityInfo
+)
+
+// TypeError is a single static-check finding. Pos is a Token (its line/column
 // drive error formatting). Expected/Actual are TypeIds; the Hint is free text
-// for cases where a more specific message helps.
+// for cases where a more specific message helps. Severity defaults to
+// SeverityError; set SeverityInfo for non-fatal diagnostics.
 type TypeError struct {
+	Severity TypeErrorSeverity
 	Kind     TypeErrorKind
 	Pos      Token
 	Expected TypeId
@@ -51,7 +75,11 @@ type TypeError struct {
 // consulted to render TypeIds back to source-shaped text.
 func (e TypeError) Format(arena *TypeArena, names *NameTable) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "type error at line %d, column %d: ", e.Pos.Line, e.Pos.Column)
+	prefix := "type error"
+	if e.Severity == SeverityInfo {
+		prefix = "type info"
+	}
+	fmt.Fprintf(&sb, "%s at line %d, column %d: ", prefix, e.Pos.Line, e.Pos.Column)
 	switch e.Kind {
 	case TErrStackUnderflow:
 		fmt.Fprintf(&sb, "stack underflow at '%s'", e.Pos.Lexeme)
@@ -59,13 +87,22 @@ func (e TypeError) Format(arena *TypeArena, names *NameTable) string {
 			fmt.Fprintf(&sb, " (%s)", e.Hint)
 		}
 	case TErrTypeMismatch:
-		fmt.Fprintf(&sb, "'%s' expected %s at argument %d, got %s",
-			e.Pos.Lexeme,
-			FormatType(arena, names, e.Expected),
-			e.ArgIndex,
-			FormatType(arena, names, e.Actual))
+		if e.Expected == TidNothing && e.Hint != "" {
+			// Custom-hint-driven mismatch (e.g. domain rules like
+			// pivot's "no container cells"); skip the canned
+			// "expected X at argument N" template.
+			fmt.Fprintf(&sb, "%s", e.Hint)
+		} else {
+			fmt.Fprintf(&sb, "'%s' expected %s at argument %d, got %s",
+				e.Pos.Lexeme,
+				FormatType(arena, names, e.Expected),
+				e.ArgIndex,
+				FormatType(arena, names, e.Actual))
+		}
 	case TErrUnknownIdentifier:
 		fmt.Fprintf(&sb, "unknown identifier '%s'", e.Name)
+	case TErrMaybeUnset:
+		fmt.Fprintf(&sb, "variable '%s' may be unset here: it is bound on some control-flow paths but not all", e.Name)
 	case TErrLeftoverStack:
 		fmt.Fprintf(&sb, "values left on stack at end of program: %s", e.Hint)
 	case TErrBranchStackSize:
@@ -78,6 +115,10 @@ func (e TypeError) Format(arena *TypeArena, names *NameTable) string {
 		fmt.Fprintf(&sb, "ambiguous call to '%s': %s", e.Pos.Lexeme, e.Hint)
 	case TErrNoMatchingOverload:
 		fmt.Fprintf(&sb, "no matching overload for '%s': %s", e.Pos.Lexeme, e.Hint)
+	case TErrAmbiguousTyping:
+		fmt.Fprintf(&sb, "ambiguous typing — add an annotation to disambiguate: %s", e.Hint)
+	case TErrDebugDump:
+		fmt.Fprintf(&sb, "dbg: %s", e.Hint)
 	case TErrReservedTypeName:
 		fmt.Fprintf(&sb, "cannot redefine reserved type name '%s'", e.Name)
 		if e.Hint != "" {
@@ -93,6 +134,11 @@ func (e TypeError) Format(arena *TypeArena, names *NameTable) string {
 		fmt.Fprintf(&sb, "type parse error: %s", e.Hint)
 	case TErrInterpolationArity:
 		fmt.Fprintf(&sb, "%s", e.Hint)
+	case TErrDefBodyMismatch:
+		// Hint carries the human-readable "declared vs body"
+		// description. Pos is the def's name token (the body could
+		// span many lines, so the name is the most stable anchor).
+		fmt.Fprintf(&sb, "definition and body do not match for '%s': %s", e.Name, e.Hint)
 	default:
 		fmt.Fprintf(&sb, "unknown type error")
 	}
@@ -164,6 +210,18 @@ func FormatType(arena *TypeArena, names *NameTable, id TypeId) string {
 		return sb.String()
 	case TKBrand:
 		return names.Name(NameId(n.A)) + "(" + FormatType(arena, names, TypeId(n.B)) + ")"
+	case TKCommand:
+		var parts []string
+		if n.B != uint32(CommandCaptureNone) {
+			parts = append(parts, "stdout="+formatCommandCapture(CommandCaptureMode(n.B)))
+		}
+		if n.Extra != uint32(CommandCaptureNone) {
+			parts = append(parts, "stderr="+formatCommandCapture(CommandCaptureMode(n.Extra)))
+		}
+		if len(parts) == 0 {
+			return "Command[" + FormatType(arena, names, TypeId(n.A)) + "]"
+		}
+		return "Command[" + FormatType(arena, names, TypeId(n.A)) + "; " + strings.Join(parts, ", ") + "]"
 	case TKQuote:
 		sig := arena.quoteSigs[n.Extra]
 		var sb strings.Builder
@@ -205,4 +263,17 @@ func FormatType(arena *TypeArena, names *NameTable, id TypeId) string {
 		return "GridRow"
 	}
 	return fmt.Sprintf("<%s #%d>", n.Kind, uint32(id))
+}
+
+func formatCommandCapture(mode CommandCaptureMode) string {
+	switch mode {
+	case CommandCaptureStr:
+		return "str"
+	case CommandCaptureBytes:
+		return "bytes"
+	case CommandCaptureLines:
+		return "[str]"
+	default:
+		return "none"
+	}
 }

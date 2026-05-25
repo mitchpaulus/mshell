@@ -138,10 +138,23 @@ func (s *Substitution) Apply(arena *TypeArena, t TypeId) TypeId {
 			return t
 		}
 		return arena.MakeBrand(NameId(n.A), under)
+	case TKCommand:
+		argv := s.Apply(arena, TypeId(n.A))
+		if argv == TypeId(n.A) {
+			return t
+		}
+		return arena.MakeCommand(argv, CommandCaptureMode(n.B), CommandCaptureMode(n.Extra))
 	case TKQuote:
 		sig := arena.quoteSigs[n.Extra]
-		newIn, inChanged := s.applySpan(arena, sig.Inputs)
-		newOut, outChanged := s.applySpan(arena, sig.Outputs)
+		// Vars listed in sig.Generics are scoped to this sig — they
+		// are renamed by Instantiate at each use site, and must not
+		// be resolved through the global substitution here. Without
+		// this guard a free generic var (e.g. the `T` in a `(len)`
+		// quote inferred as `([T] -- int)`) could collide with an
+		// unrelated binding for the same TypeVarId in the current
+		// substitution and bake a concrete type into the stored sig.
+		newIn, inChanged := s.applySpanExcluding(arena, sig.Inputs, sig.Generics)
+		newOut, outChanged := s.applySpanExcluding(arena, sig.Outputs, sig.Generics)
 		if !inChanged && !outChanged {
 			return t
 		}
@@ -158,8 +171,8 @@ func (s *Substitution) Apply(arena *TypeArena, t TypeId) TypeId {
 		rebuilt := make([]QuoteSig, len(sigs))
 		changed := false
 		for i, sig := range sigs {
-			newIn, inChanged := s.applySpan(arena, sig.Inputs)
-			newOut, outChanged := s.applySpan(arena, sig.Outputs)
+			newIn, inChanged := s.applySpanExcluding(arena, sig.Inputs, sig.Generics)
+			newOut, outChanged := s.applySpanExcluding(arena, sig.Outputs, sig.Generics)
 			rebuilt[i] = QuoteSig{
 				Inputs:   newIn,
 				Outputs:  newOut,
@@ -202,6 +215,84 @@ func (s *Substitution) applySpan(arena *TypeArena, span []TypeId) ([]TypeId, boo
 		return span, false
 	}
 	return out, true
+}
+
+// applySpanExcluding is applySpan that leaves vars listed in
+// `excluded` untouched (so a sig's locally-scoped generics aren't
+// resolved through the global substitution).
+func (s *Substitution) applySpanExcluding(arena *TypeArena, span []TypeId, excluded []TypeVarId) ([]TypeId, bool) {
+	if len(excluded) == 0 {
+		return s.applySpan(arena, span)
+	}
+	skip := make(map[TypeVarId]struct{}, len(excluded))
+	for _, v := range excluded {
+		skip[v] = struct{}{}
+	}
+	var out []TypeId
+	changed := false
+	for i, x := range span {
+		rx := s.applyExcluding(arena, x, skip)
+		if rx != x && !changed {
+			out = make([]TypeId, len(span))
+			copy(out, span[:i])
+			changed = true
+		}
+		if changed {
+			out[i] = rx
+		}
+	}
+	if !changed {
+		return span, false
+	}
+	return out, true
+}
+
+// applyExcluding is Apply with a set of TypeVarIds to leave alone.
+// Mirrors Apply but recurses into composites with the same skip set
+// so a nested var in `excluded` doesn't get resolved either.
+func (s *Substitution) applyExcluding(arena *TypeArena, t TypeId, skip map[TypeVarId]struct{}) TypeId {
+	n := arena.Node(t)
+	switch n.Kind {
+	case TKVar:
+		v := TypeVarId(n.A)
+		if _, blocked := skip[v]; blocked {
+			return t
+		}
+		if int(v) >= len(s.bound) {
+			return t
+		}
+		bv := s.bound[v]
+		if bv == TidNothing {
+			return t
+		}
+		return s.applyExcluding(arena, bv, skip)
+	case TKMaybe:
+		inner := s.applyExcluding(arena, TypeId(n.A), skip)
+		if inner == TypeId(n.A) {
+			return t
+		}
+		return arena.MakeMaybe(inner)
+	case TKList:
+		inner := s.applyExcluding(arena, TypeId(n.A), skip)
+		if inner == TypeId(n.A) {
+			return t
+		}
+		return arena.MakeList(inner)
+	case TKDict:
+		k := s.applyExcluding(arena, TypeId(n.A), skip)
+		v := s.applyExcluding(arena, TypeId(n.B), skip)
+		if k == TypeId(n.A) && v == TypeId(n.B) {
+			return t
+		}
+		return arena.MakeDict(k, v)
+	}
+	// Fall through to the standard Apply for kinds where Generics
+	// scoping doesn't add anything (TKShape, TKUnion, etc. — those
+	// don't have nested QuoteSigs that would re-enter the
+	// generics-aware path; even if they did, recursing into them via
+	// Apply is correct because their type-vars aren't a sig's
+	// locally-scoped generics).
+	return s.Apply(arena, t)
 }
 
 // Bind sets the variable v's resolution to t. Returns false on occurs-check
@@ -260,6 +351,8 @@ func (s *Substitution) occurs(arena *TypeArena, v TypeVarId, t TypeId) bool {
 		return false
 	case TKBrand:
 		return s.occurs(arena, v, TypeId(n.B))
+	case TKCommand:
+		return s.occurs(arena, v, TypeId(n.A))
 	case TKQuote:
 		sig := arena.quoteSigs[n.Extra]
 		for _, in := range sig.Inputs {
@@ -395,6 +488,12 @@ func (c *Checker) renameVars(t TypeId, rename map[TypeVarId]TypeId) TypeId {
 			return t
 		}
 		return c.arena.MakeBrand(NameId(n.A), under)
+	case TKCommand:
+		argv := c.renameVars(TypeId(n.A), rename)
+		if argv == TypeId(n.A) {
+			return t
+		}
+		return c.arena.MakeCommand(argv, CommandCaptureMode(n.B), CommandCaptureMode(n.Extra))
 	case TKQuote:
 		sig := c.arena.quoteSigs[n.Extra]
 		newIn := make([]TypeId, len(sig.Inputs))

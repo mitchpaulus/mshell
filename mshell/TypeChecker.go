@@ -1,5 +1,7 @@
 package main
 
+import "fmt"
+
 // Phase 2 of the type checker: stack simulation and applySig over a small
 // primitive-only token stream.
 //
@@ -47,15 +49,33 @@ func (s *TypeStack) Snapshot() []TypeId {
 	return out
 }
 
-// VarEnv is a per-scope mapping from bound variable name to its current type.
-// Phase 2 keeps this here as a placeholder; bindings are not yet exercised.
+// VarEnv tracks bound variables per scope. Variables fall into two
+// states:
+//
+//   - bound: definitely set on every path that leads here. `@name`
+//     reads the stored TypeId.
+//
+//   - maybeBound: set on some paths but not others. Branch
+//     reconciliation lifts names that aren't bound in every live arm
+//     into this map (keyed by name, value is the unioned type from
+//     whichever arms did bind it). Reading `@name` while it's in this
+//     map is reported as an error — the user should restructure so
+//     the binding is unconditional, since mshell has no probe
+//     operator.
+//
+// A subsequent unconditional VARSTORE for the same name removes the
+// maybeBound entry (the store makes the binding definite again).
 type VarEnv struct {
-	bound map[NameId]TypeId
+	bound      map[NameId]TypeId
+	maybeBound map[NameId]TypeId
 }
 
 // NewVarEnv constructs an empty environment.
 func NewVarEnv() VarEnv {
-	return VarEnv{bound: make(map[NameId]TypeId, 8)}
+	return VarEnv{
+		bound:      make(map[NameId]TypeId, 8),
+		maybeBound: make(map[NameId]TypeId, 0),
+	}
 }
 
 // FnContext is the per-function checking context. In Phase 2 only the
@@ -91,6 +111,21 @@ type Checker struct {
 	// into inferInputs in caller-stack order (deepest first).
 	inferring   bool
 	inferInputs []TypeId
+
+	// branchSpawn is populated by multi-dispatch sites (resolveAndApply
+	// with multiple viable candidates, prefix-quote handlers, INTERPRET
+	// on an overloaded quote) when the checker is running under the
+	// branching walker. Each entry is one alternative outcome of the
+	// current step. tryBranchStep clears this before invoking the step
+	// and reads it after: a non-empty result fans out the current
+	// branch into all the spawned alternatives instead of capturing a
+	// single deterministic continuation.
+	//
+	// When branchingEnabled is false (legacy path: direct CheckTokens,
+	// tests that don't go through the branching walker), multi-dispatch
+	// sites fall back to their pre-branching behavior.
+	branchSpawn      []quoteBranch
+	branchingEnabled bool
 
 	// listDepth tracks how deeply nested we are inside list literals
 	// (`[...]`). Inside lists, mshell allows bare literals as strings
@@ -231,16 +266,27 @@ func (c *Checker) checkOne(tok Token) {
 		c.stack.items = c.stack.items[:c.stack.Len()-1]
 		return
 	case VARRETRIEVE:
-		// `@name`: push the bound variable's type. Unknown name
-		// is reported (a `@name` reference assumes prior storage
-		// via `name!`). On miss, push a fresh var so the rest of
-		// the walk has something coherent to operate on.
+		// `@name`: push the bound variable's type. Three cases:
+		//   - bound on every path leading here: push the stored
+		//     TypeId.
+		//   - maybeBound (set on some paths, not others): report
+		//     TErrMaybeUnset and push the stored TypeId so
+		//     downstream checking still has a coherent stack.
+		//   - unknown: report TErrUnknownIdentifier and push a
+		//     fresh var.
 		name := tok.Lexeme
 		if len(name) > 0 && name[0] == '@' {
 			name = name[1:]
 		}
 		nameId := c.names.Intern(name)
 		if t, ok := c.vars.bound[nameId]; ok {
+			c.stack.Push(t)
+		} else if t, ok := c.vars.maybeBound[nameId]; ok {
+			c.errors = append(c.errors, TypeError{
+				Kind: TErrMaybeUnset,
+				Pos:  tok,
+				Name: tok.Lexeme,
+			})
 			c.stack.Push(t)
 		} else {
 			c.errors = append(c.errors, TypeError{
@@ -268,11 +314,14 @@ func (c *Checker) checkOne(tok Token) {
 		}
 		if tok.Type == PIPE && c.stack.Len() > 0 {
 			top := c.subst.Apply(c.arena, c.stack.Top())
-			if c.arena.Kind(top) == TKBrand {
+			if c.arena.Kind(top) == TKCommand {
 				return
 			}
 		}
 		if c.tryQuoteRedirect(tok) {
+			return
+		}
+		if c.tryCommandRedirect(tok) {
 			return
 		}
 		c.resolveAndApply(sigs, tok)
@@ -280,6 +329,10 @@ func (c *Checker) checkOne(tok Token) {
 	}
 
 	if tok.Type == LITERAL {
+		if tok.Lexeme == "dbg" {
+			c.emitDebugDump(tok)
+			return
+		}
 		if tok.Lexeme == "return" && c.tryReturn(tok) {
 			return
 		}
@@ -308,6 +361,9 @@ func (c *Checker) checkOne(tok Token) {
 			return
 		}
 		if tok.Lexeme == "join" && c.tryGridJoin(tok) {
+			return
+		}
+		if tok.Lexeme == "pivot" && c.tryPivot(tok) {
 			return
 		}
 		if c.tryRejectPathWrite(tok) {
@@ -439,6 +495,15 @@ func (c *Checker) tryAppend() bool {
 }
 
 func (c *Checker) tryGet(tok Token) bool {
+	if c.inferring && c.stack.Len() < 2 {
+		need := 2 - c.stack.Len()
+		extra := make([]TypeId, need)
+		for i := 0; i < need; i++ {
+			extra[i] = c.subst.FreshVar(c.arena)
+		}
+		c.inferInputs = append(append([]TypeId(nil), extra...), c.inferInputs...)
+		c.stack.items = append(append([]TypeId(nil), extra...), c.stack.items...)
+	}
 	if c.stack.Len() < 2 {
 		return false
 	}
@@ -567,25 +632,87 @@ func (c *Checker) commonIffBindings(trueQuote, falseQuote TypeId, hasFalse bool)
 	return out
 }
 
+// instantiatedQuoteCandidates returns the Instantiate-d candidate
+// sigs for a stack-resident quote value. Single-sig TKQuote yields
+// one entry; TKOverloadedQuote yields one per stored sig. Other
+// kinds return nil so try* helpers know they shouldn't engage.
+//
+// This is the protocol every consumer of a stored quote sig must
+// obey: Instantiate before unification or substitution lookups,
+// because the stored sig's TypeVarIds in Generics are symbolic and
+// don't address the live substitution.
+func (c *Checker) instantiatedQuoteCandidates(t TypeId) []QuoteSig {
+	switch c.arena.Kind(t) {
+	case TKQuote:
+		return []QuoteSig{c.Instantiate(c.arena.QuoteSig(t))}
+	case TKOverloadedQuote:
+		raw := c.arena.overloadedQuoteSigs[c.arena.Node(t).Extra]
+		out := make([]QuoteSig, len(raw))
+		for i, s := range raw {
+			out[i] = c.Instantiate(s)
+		}
+		return out
+	}
+	return nil
+}
+
+// tryLoop accepts a stack-resident quote whose net stack effect is
+// identity (inputs unify position-wise with outputs). It engages for
+// both single-sig and overloaded quotes — for the latter, it picks
+// the first candidate whose shape satisfies the identity check.
 func (c *Checker) tryLoop(tok Token) bool {
 	if c.stack.Len() == 0 {
 		return false
 	}
 	top := c.subst.Apply(c.arena, c.stack.Top())
-	if c.arena.Kind(top) != TKQuote {
+	candidates := c.instantiatedQuoteCandidates(top)
+	if len(candidates) == 0 {
 		return false
 	}
-	sig := c.arena.QuoteSig(top)
-	if len(sig.Inputs) != len(sig.Outputs) {
-		return false
+	// Trial each candidate; the first one whose inputs unify with
+	// outputs wins. Substitution is checkpointed so a failed trial
+	// doesn't leak bindings.
+	cp := c.subst.Checkpoint()
+	for _, sig := range candidates {
+		c.subst.Rollback(cp)
+		if len(sig.Inputs) != len(sig.Outputs) {
+			continue
+		}
+		ok := true
+		for i := range sig.Inputs {
+			if !c.unify(sig.Inputs[i], sig.Outputs[i]) {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			c.stack.items = c.stack.items[:c.stack.Len()-1]
+			return true
+		}
 	}
-	for i := range sig.Inputs {
-		if !c.unify(sig.Inputs[i], sig.Outputs[i]) {
+	// None of the candidates produce an identity stack effect.
+	// Report against the first single-sig shape if available, else
+	// surface a generic mismatch.
+	c.subst.Rollback(cp)
+	first := candidates[0]
+	if len(first.Inputs) != len(first.Outputs) {
+		c.errors = append(c.errors, TypeError{
+			Kind:     TErrTypeMismatch,
+			Pos:      tok,
+			Expected: c.arena.MakeQuote(QuoteSig{}),
+			Actual:   top,
+			Hint:     "loop quote must have matching input and output arity",
+		})
+		c.stack.items = c.stack.items[:c.stack.Len()-1]
+		return true
+	}
+	for i := range first.Inputs {
+		if !c.unify(first.Inputs[i], first.Outputs[i]) {
 			c.errors = append(c.errors, TypeError{
 				Kind:     TErrTypeMismatch,
 				Pos:      tok,
-				Expected: sig.Inputs[i],
-				Actual:   sig.Outputs[i],
+				Expected: first.Inputs[i],
+				Actual:   first.Outputs[i],
 				ArgIndex: i,
 				Hint:     "loop quote must preserve stack types",
 			})
@@ -604,7 +731,7 @@ func (c *Checker) tryGridJoin(tok Token) bool {
 	second := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-2])
 	left := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-4])
 	right := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-3])
-	if c.arena.Kind(top) != TKQuote || c.arena.Kind(second) != TKQuote {
+	if !isQuoteKind(c.arena.Kind(top)) || !isQuoteKind(c.arena.Kind(second)) {
 		return false
 	}
 	leftKind := c.arena.Kind(left)
@@ -614,6 +741,71 @@ func (c *Checker) tryGridJoin(tok Token) bool {
 	}
 	c.stack.items = c.stack.items[:c.stack.Len()-4]
 	c.stack.Push(c.arena.MakeGrid(0))
+	return true
+}
+
+// isQuoteKind reports whether a TypeKind is a quote (single-sig or
+// overloaded). Used by the try* helpers that test for a quote on the
+// stack without caring about its arity.
+func isQuoteKind(k TypeKind) bool {
+	return k == TKQuote || k == TKOverloadedQuote
+}
+
+// isContainerKind reports whether a TypeKind denotes a runtime
+// container value (list, dict, shape/struct, or any grid family
+// member). Used by ops like `pivot` whose result cells must be
+// scalars.
+func isContainerKind(k TypeKind) bool {
+	switch k {
+	case TKList, TKDict, TKShape, TKGrid, TKGridView, TKGridRow:
+		return true
+	}
+	return false
+}
+
+// tryPivot runs `pivot`'s normal overload resolution and then verifies
+// that the supplied aggregation quote's output type is a scalar. The
+// runtime rejects container cells at evaluation; surfacing the same
+// constraint here turns the runtime crash into a typed error pointing
+// at the call site.
+//
+// Caveat: when the quote's output resolves to an unconstrained type
+// variable (e.g. `(:val?)`, where the getter on an unconstrained input
+// yields a fresh var), there's nothing concrete to test, and this
+// check stays quiet. Catching those needs bidirectional inference
+// (re-walking the quote body with `GridView` pre-bound as the input).
+func (c *Checker) tryPivot(tok Token) bool {
+	sigs, ok := c.nameBuiltins[c.names.Intern("pivot")]
+	if !ok {
+		return false
+	}
+	var quoteOutputs []TypeId
+	if c.stack.Len() >= 1 {
+		top := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-1])
+		switch c.arena.Kind(top) {
+		case TKQuote:
+			sig := c.arena.QuoteSig(top)
+			quoteOutputs = append(quoteOutputs, sig.Outputs...)
+		case TKOverloadedQuote:
+			n := c.arena.Node(top)
+			for _, sig := range c.arena.overloadedQuoteSigs[n.Extra] {
+				quoteOutputs = append(quoteOutputs, sig.Outputs...)
+			}
+		}
+	}
+	c.resolveAndApply(sigs, tok)
+	for _, out := range quoteOutputs {
+		resolved := c.subst.Apply(c.arena, out)
+		if isContainerKind(c.arena.Kind(resolved)) {
+			c.errors = append(c.errors, TypeError{
+				Kind:   TErrTypeMismatch,
+				Pos:    tok,
+				Actual: resolved,
+				Hint:   fmt.Sprintf("pivot aggregation must return a scalar; this quote returns %s", FormatType(c.arena, c.names, resolved)),
+			})
+			break
+		}
+	}
 	return true
 }
 
@@ -632,11 +824,46 @@ func (c *Checker) tryQuoteRedirect(tok Token) bool {
 		return false
 	}
 	quote := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-2])
-	if c.arena.Kind(quote) != TKQuote {
+	switch c.arena.Kind(quote) {
+	case TKQuote, TKOverloadedQuote:
+		c.stack.items = c.stack.items[:c.stack.Len()-1]
+		return true
+	}
+	return false
+}
+
+func (c *Checker) tryCommandRedirect(tok Token) bool {
+	switch tok.Type {
+	case LESSTHAN, GREATERTHAN, STDERRREDIRECT, STDERRAPPEND,
+		STDOUTANDSTDERRREDIRECT, STDOUTANDSTDERRAPPEND, INPLACEREDIRECT, STDAPPEND:
+	default:
+		return false
+	}
+	if c.stack.Len() < 2 {
+		return false
+	}
+	target := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-1])
+	if target != TidStr && target != TidPath && target != TidBytes {
+		return false
+	}
+	cmd := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-2])
+	if !c.isCommandLike(cmd) {
 		return false
 	}
 	c.stack.items = c.stack.items[:c.stack.Len()-1]
 	return true
+}
+
+func (c *Checker) isCommandLike(t TypeId) bool {
+	n := c.arena.Node(t)
+	switch n.Kind {
+	case TKList:
+		return true
+	case TKCommand:
+		return true
+	default:
+		return false
+	}
 }
 
 // applySig is the hot path. It validates arity, unifies each input against
@@ -768,6 +995,8 @@ func (c *Checker) unify(got, want TypeId) bool {
 		// type can still contain generics that need normal structural
 		// unification at the call site.
 		return gn.A == wn.A && c.unify(TypeId(gn.B), TypeId(wn.B))
+	case TKCommand:
+		return gn.B == wn.B && gn.Extra == wn.Extra && c.unify(TypeId(gn.A), TypeId(wn.A))
 	case TKQuote:
 		return c.unifyQuote(gn, wn)
 	case TKOverloadedQuote:
@@ -902,9 +1131,16 @@ func (c *Checker) unifyUnion(gn, wn TypeNode) bool {
 // (the actual quote may accept a wider input type than the expected
 // context supplies), while outputs are covariant. Fail/Pure flags must
 // match directly (always default in V1 — Phase-2-of-effects revisits this).
+// unifyQuote unifies two TKQuote sigs. Each side may carry a
+// Generics list whose TypeVarIds are symbolic — they refer to
+// nothing in the current substitution and must be renamed to fresh
+// substitution-allocated vars before structural unification. We
+// Instantiate both sides; for a sig with empty Generics this is a
+// no-op, matching the protocol that hand-written and inferred sigs
+// alike obey.
 func (c *Checker) unifyQuote(gn, wn TypeNode) bool {
-	gs := c.arena.quoteSigs[gn.Extra]
-	ws := c.arena.quoteSigs[wn.Extra]
+	gs := c.Instantiate(c.arena.quoteSigs[gn.Extra])
+	ws := c.Instantiate(c.arena.quoteSigs[wn.Extra])
 	if len(gs.Inputs) != len(ws.Inputs) || len(gs.Outputs) != len(ws.Outputs) {
 		return false
 	}

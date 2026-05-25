@@ -21,78 +21,102 @@ func sigEquals(a QuoteSig, ins []TypeId, outs []TypeId) bool {
 	return true
 }
 
+// sigsContain reports whether the inferred sig set contains a sig
+// with the given (inputs, outputs) shape.
+func sigsContain(sigs []QuoteSig, ins []TypeId, outs []TypeId) bool {
+	for _, s := range sigs {
+		if sigEquals(s, ins, outs) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestInferEmptyQuote(t *testing.T) {
 	c := freshChecker()
-	sig := c.InferQuoteSig(nil)
-	if !sigEquals(sig, nil, nil) {
-		t.Fatalf("empty quote: want ( -- ), got %s",
-			FormatType(c.arena, c.names, c.arena.MakeQuote(sig)))
+	sigs := c.InferQuoteSig(nil)
+	if len(sigs) != 1 || !sigEquals(sigs[0], nil, nil) {
+		t.Fatalf("empty quote: want ( -- ), got %d sigs", len(sigs))
 	}
 }
 
 func TestInferLiteralOnly(t *testing.T) {
 	c := freshChecker()
-	sig := c.InferQuoteSig([]Token{mkTok(INTEGER, "5")})
-	if !sigEquals(sig, nil, []TypeId{TidInt}) {
-		t.Fatalf("[5]: want ( -- int), got %s",
-			FormatType(c.arena, c.names, c.arena.MakeQuote(sig)))
+	sigs := c.InferQuoteSig([]Token{mkTok(INTEGER, "5")})
+	if len(sigs) != 1 || !sigEquals(sigs[0], nil, []TypeId{TidInt}) {
+		t.Fatalf("[5]: want ( -- int), got %d sigs", len(sigs))
 	}
 }
 
 func TestInferPartialPlus(t *testing.T) {
-	// [2 +] : (int -- int)
+	// [2 +]: the int literal pins `+`'s second input to int, so
+	// every branch except intIntInt dies. Single surviving sig.
 	c := freshChecker()
-	sig := c.InferQuoteSig([]Token{
+	sigs := c.InferQuoteSig([]Token{
 		mkTok(INTEGER, "2"),
 		mkTok(PLUS, "+"),
 	})
-	if !sigEquals(sig, []TypeId{TidInt}, []TypeId{TidInt}) {
-		t.Fatalf("[2 +]: want (int -- int), got %s",
-			FormatType(c.arena, c.names, c.arena.MakeQuote(sig)))
+	if len(sigs) != 1 || !sigEquals(sigs[0], []TypeId{TidInt}, []TypeId{TidInt}) {
+		t.Fatalf("[2 +]: want (int -- int), got %d sigs", len(sigs))
 	}
 }
 
 func TestInferFullPlus(t *testing.T) {
-	// [+] : (int int -- int)
+	// [+] is now genuinely overloaded: every viable `+` candidate
+	// against fresh inputs survives. Verify the int and str sigs
+	// are both present.
 	c := freshChecker()
-	sig := c.InferQuoteSig([]Token{mkTok(PLUS, "+")})
-	if !sigEquals(sig, []TypeId{TidInt, TidInt}, []TypeId{TidInt}) {
-		t.Fatalf("[+]: want (int int -- int), got %s",
-			FormatType(c.arena, c.names, c.arena.MakeQuote(sig)))
+	sigs := c.InferQuoteSig([]Token{mkTok(PLUS, "+")})
+	if !sigsContain(sigs, []TypeId{TidInt, TidInt}, []TypeId{TidInt}) {
+		t.Fatalf("[+]: missing (int int -- int) among %d sigs", len(sigs))
+	}
+	if !sigsContain(sigs, []TypeId{TidStr, TidStr}, []TypeId{TidStr}) {
+		t.Fatalf("[+]: missing (str str -- str) among %d sigs", len(sigs))
+	}
+	if len(sigs) < 2 {
+		t.Fatalf("[+]: expected >=2 sigs, got %d", len(sigs))
 	}
 }
 
 func TestInferDoublePlus(t *testing.T) {
-	// [+ +] : (int int int -- int)
-	// First + needs (a, b) — fresh v1 v2 at bottom. After: stack [int].
-	// Second + needs (deeper, top) — synthesize v3 at bottom. Inputs = [v3, v1, v2].
+	// [+ +]: the second + further narrows by its first operand
+	// matching the first +'s output. Several typings survive (int,
+	// float, str, list, path). Check the int and str paths.
 	c := freshChecker()
-	sig := c.InferQuoteSig([]Token{
+	sigs := c.InferQuoteSig([]Token{
 		mkTok(PLUS, "+"),
 		mkTok(PLUS, "+"),
 	})
-	if !sigEquals(sig, []TypeId{TidInt, TidInt, TidInt}, []TypeId{TidInt}) {
-		t.Fatalf("[+ +]: want (int int int -- int), got %s",
-			FormatType(c.arena, c.names, c.arena.MakeQuote(sig)))
+	if !sigsContain(sigs, []TypeId{TidInt, TidInt, TidInt}, []TypeId{TidInt}) {
+		t.Fatalf("[+ +]: missing (int int int -- int)")
+	}
+	if !sigsContain(sigs, []TypeId{TidStr, TidStr, TidStr}, []TypeId{TidStr}) {
+		t.Fatalf("[+ +]: missing (str str str -- str)")
 	}
 }
 
 func TestInferComparison(t *testing.T) {
-	// [<] : (int int -- bool)
+	// [<] used to be reported as (int int -- bool) because the int
+	// overload happened to be listed first. Under branching the int,
+	// float, and datetime comparison sigs all survive.
 	c := freshChecker()
-	sig := c.InferQuoteSig([]Token{mkTok(LESSTHAN, "<")})
-	if !sigEquals(sig, []TypeId{TidInt, TidInt}, []TypeId{TidBool}) {
-		t.Fatalf("[<]: want (int int -- bool), got %s",
-			FormatType(c.arena, c.names, c.arena.MakeQuote(sig)))
+	sigs := c.InferQuoteSig([]Token{mkTok(LESSTHAN, "<")})
+	if !sigsContain(sigs, []TypeId{TidInt, TidInt}, []TypeId{TidBool}) {
+		t.Fatalf("[<]: missing (int int -- bool)")
+	}
+	if !sigsContain(sigs, []TypeId{TidFloat, TidFloat}, []TypeId{TidBool}) {
+		t.Fatalf("[<]: missing (float float -- bool)")
 	}
 }
 
 func TestInferProducesMaybe(t *testing.T) {
-	// [just] : (T -- Maybe[T]) — note: T is not generalized, see Phase-7
-	// header comment. The inferred sig has whatever fresh var was
-	// allocated; we check the structural shape.
+	// [just]: still single-sig because `just` has only one overload.
 	c := freshChecker()
-	sig := c.InferQuoteSig([]Token{mkTok(LITERAL, "just")})
+	sigs := c.InferQuoteSig([]Token{mkTok(LITERAL, "just")})
+	if len(sigs) != 1 {
+		t.Fatalf("[just]: want 1 sig, got %d", len(sigs))
+	}
+	sig := sigs[0]
 	if len(sig.Inputs) != 1 || len(sig.Outputs) != 1 {
 		t.Fatalf("[just]: expected 1-in 1-out, got (%d -- %d)",
 			len(sig.Inputs), len(sig.Outputs))
@@ -116,9 +140,13 @@ func TestInferProducesMaybe(t *testing.T) {
 }
 
 func TestInferConsumesMaybe(t *testing.T) {
-	// [none] : ( -- Maybe[T]) — outputs Maybe with a fresh var.
+	// [none]: single-sig.
 	c := freshChecker()
-	sig := c.InferQuoteSig([]Token{mkTok(LITERAL, "none")})
+	sigs := c.InferQuoteSig([]Token{mkTok(LITERAL, "none")})
+	if len(sigs) != 1 {
+		t.Fatalf("[none]: want 1 sig, got %d", len(sigs))
+	}
+	sig := sigs[0]
 	if len(sig.Inputs) != 0 || len(sig.Outputs) != 1 {
 		t.Fatalf("[none]: expected 0-in 1-out, got (%d -- %d)",
 			len(sig.Inputs), len(sig.Outputs))
@@ -138,15 +166,14 @@ func TestInferRestoresOuterState(t *testing.T) {
 	c.stack.Push(TidStr)
 	c.vars.bound[x] = TidBool
 
-	sig := c.InferQuoteSig([]Token{
+	sigs := c.InferQuoteSig([]Token{
 		mkTok(INTEGER, "1"),
 		mkTok(INTEGER, "2"),
 		mkTok(PLUS, "+"),
 	})
 
-	if !sigEquals(sig, nil, []TypeId{TidInt}) {
-		t.Fatalf("inner sig wrong: want ( -- int), got %s",
-			FormatType(c.arena, c.names, c.arena.MakeQuote(sig)))
+	if len(sigs) != 1 || !sigEquals(sigs[0], nil, []TypeId{TidInt}) {
+		t.Fatalf("inner sig wrong: want ( -- int), got %d sigs", len(sigs))
 	}
 	// Outer state intact?
 	if c.stack.Len() != 1 || c.stack.Top() != TidStr {
@@ -164,9 +191,9 @@ func TestInferRestoresOuterState(t *testing.T) {
 }
 
 func TestInferTypeMismatchInsideQuote(t *testing.T) {
-	// [+] called context-free works (both inputs become int). But
-	// [2 "x" +] should produce a TErrTypeMismatch since the str
-	// literal cannot satisfy the int demand of `+`.
+	// [2 "x" +]: every `+` candidate fails on (int, str) inputs.
+	// Branching collapses to "every branch dies at +", surfacing
+	// the type mismatch from the failing applySig.
 	c := freshChecker()
 	c.InferQuoteSig([]Token{
 		mkTok(INTEGER, "2"),
@@ -182,16 +209,17 @@ func TestInferTypeMismatchInsideQuote(t *testing.T) {
 func TestInferAppliesAtCallSite(t *testing.T) {
 	// Round-trip: infer a quote, hand it to a higher-order builtin
 	// shaped like `apply : ((int -- int) int -- int)`, and verify
-	// the type checker accepts it.
+	// the type checker accepts it. [2 +] still infers single-sig
+	// (int -- int) because the int literal pins +'s second operand.
 	c := freshChecker()
-	innerSig := c.InferQuoteSig([]Token{
+	sigs := c.InferQuoteSig([]Token{
 		mkTok(INTEGER, "2"),
 		mkTok(PLUS, "+"),
 	})
-	if !sigEquals(innerSig, []TypeId{TidInt}, []TypeId{TidInt}) {
-		t.Fatalf("[2 +] should infer to (int -- int)")
+	if len(sigs) != 1 || !sigEquals(sigs[0], []TypeId{TidInt}, []TypeId{TidInt}) {
+		t.Fatalf("[2 +] should infer to (int -- int); got %d sigs", len(sigs))
 	}
-	innerType := c.arena.MakeQuote(innerSig)
+	innerType := c.arena.MakeQuote(sigs[0])
 
 	// Build a sig: apply : ((int -- int) int -- int)
 	apply := QuoteSig{
@@ -209,5 +237,24 @@ func TestInferAppliesAtCallSite(t *testing.T) {
 	if c.stack.Top() != TidInt {
 		t.Fatalf("expected int output from apply; got %s",
 			FormatType(c.arena, c.names, c.stack.Top()))
+	}
+}
+
+func TestInferBranchingOverloadedQuote(t *testing.T) {
+	// The headline case: `(len 0 !=)` should infer as a multi-sig
+	// overloaded quote because `len` itself is overloaded over its
+	// input shape. Verify both the str and list cases survive so a
+	// downstream `filter` on `[str]` or `[T]` can pick the right one.
+	c := freshChecker()
+	sigs := c.InferQuoteSig([]Token{
+		mkTok(LITERAL, "len"),
+		mkTok(INTEGER, "0"),
+		mkTok(NOTEQUAL, "!="),
+	})
+	if !sigsContain(sigs, []TypeId{TidStr}, []TypeId{TidBool}) {
+		t.Fatalf("(len 0 !=): missing (str -- bool) among %d sigs", len(sigs))
+	}
+	if !sigsContain(sigs, []TypeId{TidPath}, []TypeId{TidBool}) {
+		t.Fatalf("(len 0 !=): missing (path -- bool) among %d sigs", len(sigs))
 	}
 }

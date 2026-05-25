@@ -1,5 +1,11 @@
 package main
 
+import (
+	"fmt"
+	"strings"
+	"unicode/utf8"
+)
+
 // Phase 10 step 3 (gate) + step 4 (program-flow walker).
 //
 // TypeCheckProgram is the entry point invoked from Main.go's
@@ -44,22 +50,26 @@ func TypeCheckProgram(file *MShellFile, stdlibDefs []MShellDefinition) (errors [
 	checker.RegisterStdlibSigs(stdlibDefs)
 	checker.CheckProgram(file)
 
-	if len(checker.errors) == 0 {
+	out := make([]string, 0, len(checker.errors))
+	ok = true
+	for _, e := range checker.errors {
+		// Info-severity diagnostics (e.g. `dbg` dumps) are written to
+		// stderr directly by their source for the CLI path; skip them
+		// here so Main.go doesn't print them a second time.
+		if e.Severity != SeverityError {
+			continue
+		}
+		out = append(out, e.Format(arena, names))
+		ok = false
+	}
+	if len(out) == 0 {
 		return nil, true
 	}
-	out := make([]string, 0, len(checker.errors))
-	for _, e := range checker.errors {
-		out = append(out, e.Format(arena, names))
-	}
-	return out, false
+	return out, ok
 }
 
-// RegisterStdlibSigs translates each stdlib def's TypeDefinition
-// into a QuoteSig and registers it under its name as a callable
-// builtin. Defs without a usable sig (translator errors) are
-// skipped silently — the call site will surface as
-// `unknown identifier`, which is the same behavior as before
-// integration.
+// RegisterStdlibSigs resolves each stdlib def's signature AST into a
+// QuoteSig and registers it under its name as a callable builtin.
 //
 // If a name is already in nameBuiltins (i.e. a real builtin with
 // the same identifier already exists), the stdlib def is skipped:
@@ -73,10 +83,7 @@ func (c *Checker) RegisterStdlibSigs(defs []MShellDefinition) {
 		if _, exists := c.nameBuiltins[nameId]; exists {
 			continue
 		}
-		sig, errs := TranslateTypeDef(c.arena, c.names, &def.TypeDef)
-		if len(errs) != 0 {
-			continue
-		}
+		sig := c.ResolveDefSig(def.Inputs, def.Outputs)
 		c.nameBuiltins[nameId] = append(c.nameBuiltins[nameId], sig)
 	}
 }
@@ -89,7 +96,7 @@ func (c *Checker) CheckProgram(file *MShellFile) {
 	// Pre-pass 1: register all `type` declarations.
 	for _, item := range file.Items {
 		if d, ok := item.(*MShellTypeDecl); ok {
-			body := ResolveTypeExprAST(c, d.Body)
+			body := c.resolveTypeExpr(d.Body, nil)
 			c.DeclareType(d.Name, body)
 		}
 	}
@@ -98,7 +105,7 @@ func (c *Checker) CheckProgram(file *MShellFile) {
 	defSigs := make([]QuoteSig, len(file.Definitions))
 	for i := range file.Definitions {
 		def := &file.Definitions[i]
-		sig, _ := TranslateTypeDef(c.arena, c.names, &def.TypeDef)
+		sig := c.ResolveDefSig(def.Inputs, def.Outputs)
 		defSigs[i] = sig
 		nameId := c.names.Intern(def.Name)
 		c.nameBuiltins[nameId] = append(c.nameBuiltins[nameId], sig)
@@ -107,10 +114,131 @@ func (c *Checker) CheckProgram(file *MShellFile) {
 	for i := range file.Definitions {
 		c.checkDefBody(&file.Definitions[i], defSigs[i])
 	}
-	// Flow walk of top-level items.
-	for _, item := range file.Items {
-		c.checkParseItem(item)
+	// Flow walk of top-level items via the branching driver. Initial
+	// state is the live checker state captured into a single branch;
+	// surviving branches at the end are the program's possible typings.
+	// If exactly one survives, commit its substitution and stack.
+	// Multiple surviving branches is TErrAmbiguousTyping (the program
+	// has under-constrained typing). Zero surviving means a step in the
+	// middle exhausted all alternatives, with the failing-step error
+	// already recorded.
+	initial := []quoteBranch{c.initialTopBranch(c.stack.items)}
+	c.stack.items = c.stack.items[:0]
+	branches := c.driveBranchesOverItems(initial, file.Items)
+	c.reconcileTopLevelBranches(file, branches)
+}
+
+func (c *Checker) reconcileTopLevelBranches(file *MShellFile, branches []quoteBranch) {
+	if len(branches) == 0 {
+		return
 	}
+	// Diverged branches (return / exit / propagated fail) represent
+	// paths that never reach end-of-program at runtime, so they
+	// don't participate in convergence. If every branch diverged,
+	// the program itself diverges and we just keep one for state.
+	live := filterLiveBranches(branches)
+	if len(live) == 0 {
+		c.loadBranch(branches[0])
+		return
+	}
+	if len(live) == 1 {
+		c.loadBranch(live[0])
+		return
+	}
+	if branchStacksConverge(c, live) {
+		c.loadBranch(live[0])
+		return
+	}
+	c.loadBranch(live[0])
+	pos := lastBranchingTokenInFile(file)
+	c.errors = append(c.errors, TypeError{
+		Kind: TErrAmbiguousTyping,
+		Pos:  pos,
+		Hint: formatBranchStacks(c, live),
+	})
+}
+
+// filterLiveBranches returns the non-diverged subset. Used at
+// convergence points (end-of-program, end-of-def) where diverged
+// paths don't represent realizable runtime continuations.
+func filterLiveBranches(branches []quoteBranch) []quoteBranch {
+	live := make([]quoteBranch, 0, len(branches))
+	for _, b := range branches {
+		if !b.diverged {
+			live = append(live, b)
+		}
+	}
+	return live
+}
+
+// branchStacksConverge reports whether all branches end with the same
+// stack shape after substitution. Used to silently accept ambiguity
+// that the surrounding context has fully resolved.
+func branchStacksConverge(c *Checker, branches []quoteBranch) bool {
+	if len(branches) <= 1 {
+		return true
+	}
+	// Canonicalize each branch's stack as a slice of post-substitution
+	// TypeIds. Compare to the first.
+	canon := func(b quoteBranch) []TypeId {
+		c.loadBranch(b)
+		out := make([]TypeId, len(c.stack.items))
+		for i, t := range c.stack.items {
+			out[i] = c.subst.Apply(c.arena, t)
+		}
+		return out
+	}
+	first := canon(branches[0])
+	for _, b := range branches[1:] {
+		cur := canon(b)
+		if len(cur) != len(first) {
+			return false
+		}
+		for i := range first {
+			if cur[i] != first[i] {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// formatBranchStacks renders one line per surviving branch's final
+// stack, suitable for an ambiguity-diagnostic hint. The branches are
+// loaded in turn so their substitutions resolve.
+func formatBranchStacks(c *Checker, branches []quoteBranch) string {
+	var sb strings.Builder
+	sb.WriteString("surviving typings (top of stack first):")
+	for i, b := range branches {
+		c.loadBranch(b)
+		sb.WriteString("\n  branch ")
+		sb.WriteString(intToStr(i + 1))
+		sb.WriteString(":")
+		if c.stack.Len() == 0 {
+			sb.WriteString(" <empty>")
+			continue
+		}
+		for j := c.stack.Len() - 1; j >= 0; j-- {
+			sb.WriteString("\n    ")
+			sb.WriteString(FormatType(c.arena, c.names, c.subst.Apply(c.arena, c.stack.items[j])))
+		}
+	}
+	return sb.String()
+}
+
+// lastBranchingTokenInFile is a best-effort anchor for ambiguity
+// diagnostics: the last token in the program. The branching driver
+// doesn't track which step introduced the ambiguity, so we point at
+// the end of the program. A future refinement could thread the
+// branching-event token through driveBranches.
+func lastBranchingTokenInFile(file *MShellFile) Token {
+	var best Token
+	for _, item := range file.Items {
+		if tok, ok := item.(Token); ok {
+			best = tok
+		}
+	}
+	return best
 }
 
 // checkDefBody verifies that the def's body, when run with the
@@ -126,60 +254,54 @@ func (c *Checker) CheckProgram(file *MShellFile) {
 //     check operates on substitution-local TypeVarIds; recursive
 //     self-calls go through nameBuiltins as usual and get their
 //     own fresh-rename.
+//
+// The body is walked through the branching driver
+// (driveBranchesOverItems). Each multi-overload call inside the body
+// fans the in-flight branches out; downstream constraints prune them.
+// The declared output signature is the convergence point: any
+// surviving branch whose final stack unifies with the declared
+// outputs is accepted. Branches that don't match are simply dropped
+// — equivalent for the purposes of the declared sig, even if their
+// intermediate types differed. If no branch matches, the closest
+// mismatch is surfaced via TErrDefBodyMismatch.
 func (c *Checker) checkDefBody(def *MShellDefinition, sig QuoteSig) {
 	// Save outer state.
 	outerStack := c.stack.items
 	outerVars := c.vars.bound
+	outerMaybeVars := c.vars.maybeBound
 	outerDiverged := c.diverged
+	outerInferring := c.inferring
+	outerInferInputs := c.inferInputs
 	prevFn := c.currentFn
 	cp := c.subst.Checkpoint()
 
 	c.stack.items = nil
 	c.vars.bound = make(map[NameId]TypeId)
+	c.vars.maybeBound = make(map[NameId]TypeId)
 	c.diverged = false
+	c.inferring = false
+	c.inferInputs = nil
 
 	// Fresh-rename generics for this body check.
 	instSig := c.Instantiate(sig)
 	fnCtx := &FnContext{Sig: instSig}
 	c.currentFn = fnCtx
 
-	// Push declared inputs.
+	// Build the initial branch from a stack pre-loaded with declared inputs.
 	for _, in := range instSig.Inputs {
 		c.stack.Push(in)
 	}
+	initial := []quoteBranch{c.initialTopBranch(c.stack.items)}
+	c.stack.items = c.stack.items[:0]
 
-	// Walk the body.
-	for _, item := range def.Items {
-		c.checkParseItem(item)
-	}
+	branches := c.driveBranchesOverItems(initial, def.Items)
 
-	// Verify the resulting stack matches declared outputs.
 	expected := instSig.Outputs
-	if c.diverged || (fnCtx.SawReturn && c.stack.Len() == 0) {
-		// A path that has already returned is checked at the return
-		// site. During V1 we also accept a body with return sites and
-		// no residual fallthrough stack; exhaustive-return analysis is
-		// a later control-flow refinement.
-	} else if c.stack.Len() != len(expected) {
-		c.errors = append(c.errors, TypeError{
-			Kind: TErrTypeMismatch,
-			Pos:  def.NameToken,
-			Hint: defBodyArityHint(def.Name, len(expected), c.stack.Len()),
-		})
+	if len(branches) == 0 {
+		// All branches died; the failing-step error is already in
+		// c.errors. Nothing more to report here.
 	} else {
-		for i, want := range expected {
-			got := c.stack.items[i]
-			if !c.unify(got, want) {
-				c.errors = append(c.errors, TypeError{
-					Kind:     TErrTypeMismatch,
-					Pos:      def.NameToken,
-					Expected: want,
-					Actual:   got,
-					ArgIndex: i,
-					Hint:     "def body output position " + intToStr(i) + " of '" + def.Name + "'",
-				})
-			}
-		}
+		c.reconcileDefBodyBranches(def, fnCtx, expected, branches)
 	}
 
 	// Restore outer state.
@@ -187,12 +309,91 @@ func (c *Checker) checkDefBody(def *MShellDefinition, sig QuoteSig) {
 	c.subst.Rollback(cp)
 	c.stack.items = outerStack
 	c.vars.bound = outerVars
+	c.vars.maybeBound = outerMaybeVars
 	c.diverged = outerDiverged
+	c.inferring = outerInferring
+	c.inferInputs = outerInferInputs
 }
 
-func defBodyArityHint(name string, want, got int) string {
-	return "def body of '" + name + "' produced " + intToStr(got) +
-		" output(s); declared sig has " + intToStr(want)
+// reconcileDefBodyBranches accepts the def body iff at least one
+// surviving branch agrees with the declared output sig. Branches that
+// diverged (return / exit / propagated fail) are accepted regardless
+// of residual stack. The first non-matching branch's mismatch is held
+// in reserve and only surfaced when no branch matches at all.
+func (c *Checker) reconcileDefBodyBranches(def *MShellDefinition, fnCtx *FnContext, expected []TypeId, branches []quoteBranch) {
+	var firstMismatch *TypeError
+	for _, b := range branches {
+		c.loadBranch(b)
+		if c.diverged || (fnCtx.SawReturn && c.stack.Len() == 0) {
+			return
+		}
+		if c.stack.Len() != len(expected) {
+			if firstMismatch == nil {
+				err := TypeError{
+					Kind: TErrDefBodyMismatch,
+					Pos:  def.NameToken,
+					Name: def.Name,
+					Hint: defBodyArityHint(c, def.Name, expected, c.stack.items),
+				}
+				firstMismatch = &err
+			}
+			continue
+		}
+		cp := c.subst.Checkpoint()
+		matched := true
+		for i, want := range expected {
+			got := c.stack.items[i]
+			if !c.unify(got, want) {
+				matched = false
+				if firstMismatch == nil {
+					err := TypeError{
+						Kind:     TErrDefBodyMismatch,
+						Pos:      def.NameToken,
+						Name:     def.Name,
+						Expected: want,
+						Actual:   got,
+						ArgIndex: i,
+						Hint: "output position " + intToStr(i) +
+							" — declared " + FormatType(c.arena, c.names, want) +
+							", body produced " + FormatType(c.arena, c.names, got),
+					}
+					firstMismatch = &err
+				}
+				break
+			}
+		}
+		if matched {
+			return
+		}
+		c.subst.Rollback(cp)
+	}
+	if firstMismatch != nil {
+		c.errors = append(c.errors, *firstMismatch)
+	}
+}
+
+func defBodyArityHint(c *Checker, _ string, declared, produced []TypeId) string {
+	return "declared " + intToStr(len(declared)) + " output(s) " + formatTypeList(c, declared) +
+		", body produced " + intToStr(len(produced)) + " " + formatTypeList(c, produced)
+}
+
+// formatTypeList renders a stack/outputs slice as a parenthesized
+// type list ordered as written in a def signature (left-to-right,
+// bottom of stack to top). Empty renders as "( )".
+func formatTypeList(c *Checker, items []TypeId) string {
+	if len(items) == 0 {
+		return "( )"
+	}
+	var sb strings.Builder
+	sb.WriteByte('(')
+	for i, t := range items {
+		if i > 0 {
+			sb.WriteByte(' ')
+		}
+		sb.WriteString(FormatType(c.arena, c.names, t))
+	}
+	sb.WriteByte(')')
+	return sb.String()
 }
 
 func intToStr(i int) string {
@@ -233,7 +434,7 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 		return
 
 	case *MShellAsCast:
-		target := ResolveTypeExprAST(c, it.Target)
+		target := c.resolveTypeExpr(it.Target, nil)
 		if target != TidNothing {
 			c.Cast(target, it.AsToken)
 		}
@@ -262,11 +463,26 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 		c.listDepth--
 		items := append([]TypeId(nil), c.stack.items[listScope.length:]...)
 		c.restoreStack(listScope)
-		elem := c.subst.FreshVar(c.arena)
-		if len(items) > 0 {
-			elem = c.arena.MakeUnion(items, 0)
+		if len(items) == 0 {
+			c.stack.Push(c.arena.MakeList(c.subst.FreshVar(c.arena)))
+			return
 		}
-		c.stack.Push(c.arena.MakeList(elem))
+		// Detect homogeneity: every slot the same TypeId. Homogeneous
+		// literals stay as `[T]`. Heterogeneous literals collapse to
+		// `[T1 | T2 | ...]` — the element type is the union of the
+		// observed slot types, matching the structural-union direction.
+		homogeneous := true
+		for i := 1; i < len(items); i++ {
+			if items[i] != items[0] {
+				homogeneous = false
+				break
+			}
+		}
+		if homogeneous {
+			c.stack.Push(c.arena.MakeList(items[0]))
+		} else {
+			c.stack.Push(c.arena.MakeList(c.arena.MakeUnion(items, 0)))
+		}
 		return
 
 	case *MShellParseDict:
@@ -291,16 +507,12 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 		return
 
 	case *MShellParseQuote:
-		if candidates, ok := c.quoteOverloadCandidates(it.Items); ok {
-			c.stack.Push(c.arena.MakeOverloadedQuote(candidates))
-			return
-		}
-		// Phase 7 inference: run the body against a fresh empty
-		// stack with inferring mode on, accumulate underflow as
-		// fresh-var inputs, take the residual stack as outputs.
-		// The result is the quote literal's inferred sig.
-		sig := c.InferQuoteSigItems(it.Items)
-		c.stack.Push(c.arena.MakeQuote(sig))
+		// Branching inference walks the body considering every
+		// viable overload at each step. The result is the set of
+		// surviving sigs — one collapses to TKQuote, multiple to
+		// TKOverloadedQuote so the consumption site can resolve.
+		sigs := c.InferQuoteSigItems(it.Items)
+		c.stack.Push(c.arena.MakeOverloadedQuote(sigs))
 		return
 
 	case *MShellParsePrefixQuote:
@@ -308,8 +520,8 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 		if len(funcName) > 0 && funcName[len(funcName)-1] == '.' {
 			funcName = funcName[:len(funcName)-1]
 		}
-		sig := c.InferQuoteSigItemsWithInputs(it.Items, c.prefixQuoteInputs(funcName))
-		c.stack.Push(c.arena.MakeQuote(sig))
+		sigs := c.InferQuoteSigItemsWithInputs(it.Items, c.prefixQuoteInputs(funcName))
+		c.stack.Push(c.arena.MakeOverloadedQuote(sigs))
 		callTok := it.StartToken
 		callTok.Type = LITERAL
 		callTok.Lexeme = funcName
@@ -393,7 +605,9 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 					if n := len(storeName); n > 0 && storeName[n-1] == '!' {
 						storeName = storeName[:n-1]
 					}
-					c.vars.bound[c.names.Intern(storeName)] = fresh
+					storeNameId := c.names.Intern(storeName)
+					c.vars.bound[storeNameId] = fresh
+					delete(c.vars.maybeBound, storeNameId)
 					continue
 				}
 				c.errors = append(c.errors, TypeError{
@@ -411,7 +625,9 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 			if n := len(storeName); n > 0 && storeName[n-1] == '!' {
 				storeName = storeName[:n-1]
 			}
-			c.vars.bound[c.names.Intern(storeName)] = top
+			storeNameId := c.names.Intern(storeName)
+			c.vars.bound[storeNameId] = top
+			delete(c.vars.maybeBound, storeNameId)
 		}
 		return
 
@@ -470,35 +686,19 @@ func (c *Checker) prefixQuoteInputs(funcName string) []TypeId {
 	return nil
 }
 
-func (c *Checker) quoteOverloadCandidates(items []MShellParseItem) ([]QuoteSig, bool) {
-	if len(items) != 1 {
-		return nil, false
-	}
-	tok, ok := items[0].(Token)
-	if !ok {
-		return nil, false
-	}
-	if sigs, ok := c.builtins[tok.Type]; ok && len(sigs) > 1 {
-		return sigs, true
-	}
-	if tok.Type == LITERAL {
-		nameId := c.names.Intern(tok.Lexeme)
-		if sigs, ok := c.nameBuiltins[nameId]; ok && len(sigs) > 1 {
-			return sigs, true
-		}
-	}
-	return nil, false
-}
-
-// checkIfBlock drives an if/else-if/else chain through the branch
-// reconciliation infrastructure (TypeBranch.go). The condition for
-// the main `if` is already on the stack at entry — the runtime pops
-// it before executing the body; we mirror that here. Each else-if
-// arm starts from the post-pop snapshot, walks its condition body
-// (which is expected to push a bool/int), pops that, then walks the
-// arm body. An else-less if implicitly contributes a "did nothing"
-// arm equal to the entry snapshot, since at runtime the if block
-// may simply not fire.
+// checkIfBlock drives an if/else-if/else chain through the branching
+// walker. The condition for the main `if` is already on the stack at
+// entry — the runtime pops it before executing the body; we mirror
+// that here. Each arm body is walked through driveBranchesOverItems
+// so multi-overload dispatch inside an arm fans out the same way it
+// does anywhere else; the surviving branches from every arm become
+// the candidate post-if states.
+//
+// An else-less if implicitly contributes a "did nothing" arm equal to
+// the entry snapshot, since at runtime the if block may simply not
+// fire. Surviving arm-branches are emitted into branchSpawn so the
+// outer walker propagates them; if exactly one survives, the live
+// state is loaded directly.
 func (c *Checker) checkIfBlock(ifBlock *MShellParseIfBlock) {
 	startTok := ifBlock.GetStartToken()
 
@@ -522,22 +722,28 @@ func (c *Checker) checkIfBlock(ifBlock *MShellParseIfBlock) {
 		})
 	}
 
-	snap := c.Snapshot()
+	entry := c.captureBranch()
+	var armBranches []quoteBranch
+	var armLabels []string
 
-	// If body.
-	for _, sub := range ifBlock.IfBody {
-		c.checkParseItem(sub)
+	walkArm := func(body []MShellParseItem, label string) {
+		c.loadBranch(entry)
+		c.diverged = false
+		spawned := c.driveBranchesOverItems([]quoteBranch{c.captureBranch()}, body)
+		for _, b := range spawned {
+			armBranches = append(armBranches, b)
+			armLabels = append(armLabels, label)
+		}
 	}
-	arms := []BranchArm{c.CaptureArm(c.diverged)}
 
-	// else-if arms.
-	for _, elseIf := range ifBlock.ElseIfs {
-		c.Fork(snap)
+	walkArm(ifBlock.IfBody, "if")
+
+	for i, elseIf := range ifBlock.ElseIfs {
+		c.loadBranch(entry)
 		c.diverged = false
 		for _, sub := range elseIf.Condition {
 			c.checkParseItem(sub)
 		}
-		// Pop the else-if condition.
 		if c.stack.Len() == 0 {
 			c.errors = append(c.errors, TypeError{
 				Kind: TErrStackUnderflow,
@@ -557,27 +763,178 @@ func (c *Checker) checkIfBlock(ifBlock *MShellParseIfBlock) {
 				})
 			}
 		}
-		for _, sub := range elseIf.Body {
-			c.checkParseItem(sub)
+		label := fmt.Sprintf("else if #%d", i+1)
+		spawned := c.driveBranchesOverItems([]quoteBranch{c.captureBranch()}, elseIf.Body)
+		for _, b := range spawned {
+			armBranches = append(armBranches, b)
+			armLabels = append(armLabels, label)
 		}
-		arms = append(arms, c.CaptureArm(c.diverged))
 	}
 
-	// else body, or the implicit "did nothing" arm if absent.
 	if len(ifBlock.ElseBody) > 0 {
-		c.Fork(snap)
-		c.diverged = false
-		for _, sub := range ifBlock.ElseBody {
-			c.checkParseItem(sub)
-		}
-		arms = append(arms, c.CaptureArm(c.diverged))
+		walkArm(ifBlock.ElseBody, "else")
 	} else {
-		c.Fork(snap)
-		c.diverged = false
-		arms = append(arms, c.CaptureArm(false))
+		// Implicit do-nothing arm: the if block may not fire at all.
+		armBranches = append(armBranches, entry)
+		armLabels = append(armLabels, "no-arm")
 	}
 
-	c.ReconcileArms(arms, startTok)
+	c.reconcileArmBranches(armBranches, armLabels, entry, startTok)
+}
+
+// reconcileArmBranches takes the surviving branches from all arms of
+// an if- or match-block and chooses a post-state for the surrounding
+// walker. `labels` runs parallel to armBranches and gives each
+// branch a short source-snippet (the match arm's pattern, or the
+// if-block's arm role) used purely in the TErrBranchStackSize
+// diagnostic.
+//
+//   - 0 surviving branches → all arms errored; fall back to the
+//     pre-construct state so downstream code stays coherent.
+//   - 1 surviving branch → load it directly; the construct has a
+//     fully-determined effect.
+//   - multiple live (non-diverged) branches that disagree on stack
+//     SIZE → emit TErrBranchStackSize anchored at the construct's
+//     start token. This is a structural defect of the source, not
+//     an ambiguity downstream code can resolve, so we surface it
+//     here rather than letting the branches survive into
+//     end-of-program TErrAmbiguousTyping with worse signal.
+//   - multiple branches that agree on size → fan out via
+//     branchSpawn so per-slot type differences propagate; downstream
+//     constraints may narrow them.
+func (c *Checker) reconcileArmBranches(armBranches []quoteBranch, labels []string, entry quoteBranch, startTok Token) {
+	if len(armBranches) == 0 {
+		c.loadBranch(entry)
+		return
+	}
+	if len(armBranches) == 1 {
+		c.loadBranch(armBranches[0])
+		return
+	}
+	liveBranches, liveLabels := filterLiveBranchesWithLabels(armBranches, labels)
+	if len(liveBranches) <= 1 {
+		if len(liveBranches) == 1 {
+			c.loadBranch(liveBranches[0])
+		} else {
+			c.loadBranch(armBranches[0])
+		}
+		return
+	}
+	wantSize := len(liveBranches[0].stack)
+	sizesAgree := true
+	for _, b := range liveBranches[1:] {
+		if len(b.stack) != wantSize {
+			sizesAgree = false
+			break
+		}
+	}
+	if !sizesAgree {
+		c.errors = append(c.errors, TypeError{
+			Kind: TErrBranchStackSize,
+			Pos:  startTok,
+			Hint: c.formatArmBranchSizes(liveBranches, liveLabels),
+		})
+		c.loadBranch(liveBranches[0])
+		return
+	}
+	c.branchSpawn = append(c.branchSpawn, armBranches...)
+}
+
+// filterLiveBranchesWithLabels mirrors filterLiveBranches but also
+// keeps a parallel labels slice in sync, dropping the label of any
+// diverged branch.
+func filterLiveBranchesWithLabels(branches []quoteBranch, labels []string) ([]quoteBranch, []string) {
+	live := make([]quoteBranch, 0, len(branches))
+	liveLabels := make([]string, 0, len(branches))
+	for i, b := range branches {
+		if b.diverged {
+			continue
+		}
+		live = append(live, b)
+		var lbl string
+		if i < len(labels) {
+			lbl = labels[i]
+		}
+		liveLabels = append(liveLabels, lbl)
+	}
+	return live, liveLabels
+}
+
+// formatArmBranchSizes renders one line per surviving arm-branch with
+// its source-snippet label and tail stack as a `(top -- ... --
+// bottom)` signature. Used as the hint for TErrBranchStackSize.
+// Branches are loaded in turn so each line reflects the branch's own
+// substitution.
+func (c *Checker) formatArmBranchSizes(branches []quoteBranch, labels []string) string {
+	const lead = "all arms must produce the same number of stack items"
+	saved := c.captureBranch()
+	defer c.loadBranch(saved)
+	var sb strings.Builder
+	sb.WriteString(lead)
+	for i, b := range branches {
+		c.loadBranch(b)
+		resolved := make([]TypeId, len(c.stack.items))
+		for j, t := range c.stack.items {
+			resolved[j] = c.subst.Apply(c.arena, t)
+		}
+		label := ""
+		if i < len(labels) {
+			label = labels[i]
+		}
+		if label == "" {
+			fmt.Fprintf(&sb, "\n  Branch %d:  %s", i+1, c.formatArmStack(resolved))
+		} else {
+			fmt.Fprintf(&sb, "\n  Branch %d (%s):  %s", i+1, label, c.formatArmStack(resolved))
+		}
+	}
+	return sb.String()
+}
+
+// truncatePatternSnippet shortens a pattern snippet for use inline
+// in the TErrBranchStackSize hint. Snippets up to 20 visible chars
+// (covers the common list-pattern idioms like `[header ...rows]`)
+// pass through unchanged; longer ones get a head/tail split joined
+// by a single-char Unicode ellipsis so rest-binds (`...name`) stay
+// readable next to the truncation marker.
+func truncatePatternSnippet(s string) string {
+	collapsed := strings.Join(strings.Fields(s), " ")
+	const cap = 20
+	if utf8.RuneCountInString(collapsed) <= cap {
+		return collapsed
+	}
+	runes := []rune(collapsed)
+	return string(runes[:9]) + "…" + string(runes[len(runes)-9:])
+}
+
+// formatPatternSnippet renders a match-arm pattern as a short string,
+// recursing into list / dict / quote literals so patterns like
+// `[a ...rest]` display their contents rather than collapsing to
+// `[...]` the way formatItemsSnippet does for arbitrary composites.
+func formatPatternSnippet(items []MShellParseItem) string {
+	var sb strings.Builder
+	for i, it := range items {
+		if i > 0 {
+			sb.WriteByte(' ')
+		}
+		sb.WriteString(formatPatternItem(it))
+	}
+	return sb.String()
+}
+
+func formatPatternItem(it MShellParseItem) string {
+	switch v := it.(type) {
+	case Token:
+		return v.Lexeme
+	case *MShellParseList:
+		return "[" + formatPatternSnippet(v.Items) + "]"
+	default:
+		start := it.GetStartToken().Lexeme
+		end := it.GetEndToken().Lexeme
+		if end != "" && end != start {
+			return start + "…" + end
+		}
+		return start
+	}
 }
 
 // checkMatchBlock drives a `<subject> match ... end` through branch
@@ -595,11 +952,10 @@ func (c *Checker) checkIfBlock(ifBlock *MShellParseIfBlock) {
 //     Refinement (e.g. inside an `int : ...` arm the subject is known
 //     to be int) is a future improvement.
 //
-// What's NOT yet done:
-//   - Exhaustiveness checking. The Phase 6b `CheckMatchExhaustive`
-//     helper is available but classifying the parser's pattern items
-//     into the MatchArmKind enum needs another translation step.
-//   - Pattern-driven type narrowing inside arms.
+// Exhaustiveness is enforced via classifyArmPattern + CheckMatchExhaustive:
+// the matched value's static type must be fully covered by the arm patterns,
+// or a wildcard `_` arm must be present. Pattern-driven type narrowing inside
+// arms is still a future improvement.
 func (c *Checker) checkMatchBlock(matchBlock *MShellParseMatchBlock) {
 	startTok := matchBlock.GetStartToken()
 	if c.stack.Len() == 0 {
@@ -611,7 +967,7 @@ func (c *Checker) checkMatchBlock(matchBlock *MShellParseMatchBlock) {
 		return
 	}
 	subject := c.stack.items[c.stack.Len()-1]
-	snap := c.Snapshot()
+	entry := c.captureBranch()
 
 	if len(matchBlock.Arms) == 0 {
 		// Empty match block: no arms could fire. Treat as a no-op.
@@ -620,26 +976,101 @@ func (c *Checker) checkMatchBlock(matchBlock *MShellParseMatchBlock) {
 		return
 	}
 
-	arms := make([]BranchArm, 0, len(matchBlock.Arms))
+	var armBranches []quoteBranch
+	var armLabels []string
+	tags := make([]MatchArmTag, 0, len(matchBlock.Arms))
 	for _, arm := range matchBlock.Arms {
-		c.Fork(snap)
+		c.loadBranch(entry)
+		c.diverged = false
 		// Apply per-arm subject handling.
 		if arm.Consume {
 			// Pop the subject — body sees the stack without it.
 			c.stack.items = c.stack.items[:c.stack.Len()-1]
 		}
-		// Pattern-introduced bindings are arm-local. Restore any
-		// shadowed outer bindings before capturing so ReconcileArms
-		// doesn't see them as var-set disagreements across arms.
-		patternBindings := c.bindMatchPattern(subject, arm.Pattern)
+		// Pattern-introduced bindings flow into the captured arm
+		// like any other binding. Each surviving branch keeps its
+		// own bindings, so per-arm name disagreements naturally
+		// surface as branch differences rather than maybeBound
+		// lifts.
+		c.bindMatchPattern(subject, arm.Pattern)
 
-		for _, sub := range arm.Body {
-			c.checkParseItem(sub)
+		label := truncatePatternSnippet(formatPatternSnippet(arm.Pattern))
+		spawned := c.driveBranchesOverItems([]quoteBranch{c.captureBranch()}, arm.Body)
+		for _, b := range spawned {
+			armBranches = append(armBranches, b)
+			armLabels = append(armLabels, label)
 		}
-		c.restorePatternBindings(patternBindings)
-		arms = append(arms, c.CaptureArm(false))
+		tags = append(tags, c.classifyArmPattern(arm.Pattern))
 	}
-	c.ReconcileArms(arms, startTok)
+	c.CheckMatchExhaustive(subject, tags, startTok)
+	c.reconcileArmBranches(armBranches, armLabels, entry, startTok)
+}
+
+// classifyArmPattern reduces a parsed match arm pattern to the
+// MatchArmTag the exhaustiveness checker understands. Anything not
+// recognized as wildcard / just / none / true / false / a known type
+// name is returned as MatchArmType with TidNothing — it counts as a
+// non-wildcard arm but credits no coverage.
+func (c *Checker) classifyArmPattern(pattern []MShellParseItem) MatchArmTag {
+	if len(pattern) == 1 {
+		if list, ok := pattern[0].(*MShellParseList); ok {
+			// `[]` covers empty lists. `[... ...rest]` (any pattern
+			// element whose LITERAL lexeme starts with `...`) is a
+			// rest-binding form that matches every non-empty list
+			// (or every list of length >= prefix count).
+			if len(list.Items) == 0 {
+				return MatchArmTag{Kind: MatchArmEmptyList}
+			}
+			for _, item := range list.Items {
+				if tok, ok := item.(Token); ok && tok.Type == LITERAL &&
+					strings.HasPrefix(tok.Lexeme, "...") {
+					return MatchArmTag{Kind: MatchArmListWithRest}
+				}
+			}
+		}
+		tok, ok := pattern[0].(Token)
+		if ok {
+			switch tok.Type {
+			case TYPEINT:
+				return MatchArmTag{Kind: MatchArmType, TypeArm: TidInt}
+			case TYPEFLOAT:
+				return MatchArmTag{Kind: MatchArmType, TypeArm: TidFloat}
+			case TYPEBOOL:
+				return MatchArmTag{Kind: MatchArmType, TypeArm: TidBool}
+			case STR:
+				return MatchArmTag{Kind: MatchArmType, TypeArm: TidStr}
+			case TRUE:
+				return MatchArmTag{Kind: MatchArmTrue}
+			case FALSE:
+				return MatchArmTag{Kind: MatchArmFalse}
+			case LITERAL:
+				switch tok.Lexeme {
+				case "_":
+					return MatchArmTag{Kind: MatchArmWildcard}
+				case "none":
+					return MatchArmTag{Kind: MatchArmNone}
+				case "path":
+					return MatchArmTag{Kind: MatchArmType, TypeArm: TidPath}
+				case "date":
+					return MatchArmTag{Kind: MatchArmType, TypeArm: TidDateTime}
+				case "binary":
+					return MatchArmTag{Kind: MatchArmType, TypeArm: TidBytes}
+				}
+				// User-declared named type (e.g. `type X = A | B`).
+				if tid := c.LookupType(tok.Lexeme); tid != TidNothing {
+					return MatchArmTag{Kind: MatchArmType, TypeArm: tid}
+				}
+			}
+		}
+	}
+	if len(pattern) == 2 {
+		if t0, ok := pattern[0].(Token); ok && t0.Type == LITERAL && t0.Lexeme == "just" {
+			if _, ok := pattern[1].(Token); ok {
+				return MatchArmTag{Kind: MatchArmJust}
+			}
+		}
+	}
+	return MatchArmTag{Kind: MatchArmType, TypeArm: TidNothing}
 }
 
 type patternBinding struct {
@@ -656,17 +1087,6 @@ func (c *Checker) bindPatternName(name string, typ TypeId, bindings *[]patternBi
 	old, had := c.vars.bound[nameId]
 	*bindings = append(*bindings, patternBinding{Name: nameId, Old: old, Had: had})
 	c.vars.bound[nameId] = typ
-}
-
-func (c *Checker) restorePatternBindings(bindings []patternBinding) {
-	for i := len(bindings) - 1; i >= 0; i-- {
-		b := bindings[i]
-		if b.Had {
-			c.vars.bound[b.Name] = b.Old
-		} else {
-			delete(c.vars.bound, b.Name)
-		}
-	}
 }
 
 // bindMatchPattern mirrors runtime match destructuring enough for body
@@ -847,6 +1267,19 @@ func (c *Checker) lookupGetterValueType(t TypeId, name NameId) TypeId {
 		}
 	case TKDict:
 		return TypeId(n.B)
+	case TKGrid, TKGridView:
+		// `:name` on Grid/GridView returns the column as a list. The
+		// element type comes from the schema when known; otherwise a
+		// fresh var stands in.
+		schemaIdx := n.Extra
+		if schemaIdx != 0 {
+			for _, col := range c.arena.gridSchemas[schemaIdx].Columns {
+				if col.Name == name {
+					return c.arena.MakeList(col.Type)
+				}
+			}
+		}
+		return c.arena.MakeList(c.subst.FreshVar(c.arena))
 	}
 	return c.subst.FreshVar(c.arena)
 }

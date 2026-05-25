@@ -28,9 +28,9 @@ func TestParseTopLevelTypeDecl(t *testing.T) {
 	if decl.Name != "Result" {
 		t.Fatalf("name = %q, want Result", decl.Name)
 	}
-	union, ok := decl.Body.(*TypeUnionAST)
+	union, ok := decl.Body.(*TypeUnionExpr)
 	if !ok {
-		t.Fatalf("body should be TypeUnionAST, got %T", decl.Body)
+		t.Fatalf("body should be TypeUnionExpr, got %T", decl.Body)
 	}
 	if len(union.Arms) != 2 {
 		t.Fatalf("expected 2 arms, got %d", len(union.Arms))
@@ -56,9 +56,9 @@ func TestParseAsCast(t *testing.T) {
 	for _, it := range file.Items {
 		if cast, ok := it.(*MShellAsCast); ok {
 			sawAs = true
-			named, ok := cast.Target.(*TypeNamedAST)
+			named, ok := cast.Target.(*TypeNamed)
 			if !ok {
-				t.Fatalf("cast target should be TypeNamedAST, got %T", cast.Target)
+				t.Fatalf("cast target should be TypeNamed, got %T", cast.Target)
 			}
 			if named.Name != "R" {
 				t.Fatalf("cast target name = %q, want R", named.Name)
@@ -88,9 +88,9 @@ func TestParseAsThenTrailingTokens(t *testing.T) {
 func TestParseTypeDeclWithMaybe(t *testing.T) {
 	file := parseSourceForIntegration(t, "type Box = Maybe[int]")
 	decl := file.Items[0].(*MShellTypeDecl)
-	named, ok := decl.Body.(*TypeNamedAST)
+	named, ok := decl.Body.(*TypeNamed)
 	if !ok {
-		t.Fatalf("expected TypeNamedAST(Maybe), got %T", decl.Body)
+		t.Fatalf("expected TypeNamed(Maybe), got %T", decl.Body)
 	}
 	if named.Name != "Maybe" || len(named.Args) != 1 {
 		t.Fatalf("expected Maybe with 1 arg, got %+v", named)
@@ -100,9 +100,9 @@ func TestParseTypeDeclWithMaybe(t *testing.T) {
 func TestParseTypeDeclWithShape(t *testing.T) {
 	file := parseSourceForIntegration(t, "type Person = {name: str, age: int}")
 	decl := file.Items[0].(*MShellTypeDecl)
-	shape, ok := decl.Body.(*TypeShapeAST)
+	shape, ok := decl.Body.(*TypeShapeExpr)
 	if !ok {
-		t.Fatalf("expected TypeShapeAST, got %T", decl.Body)
+		t.Fatalf("expected TypeShapeExpr, got %T", decl.Body)
 	}
 	if len(shape.Fields) != 2 {
 		t.Fatalf("expected 2 fields, got %d", len(shape.Fields))

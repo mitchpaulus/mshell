@@ -1,0 +1,8 @@
+[{"region": "East", "Feb": 5, "Jan": 14}, {"region": "West", "Feb": null, "Jan": 3}]
+["region" "Feb" "Jan"]
+["grp" "2" "9" "10"]
+[{"region": "East", "product": "A", "Q1": 1, "Q2": 2}, {"region": "East", "product": "B", "Q1": 3, "Q2": null}, {"region": "West", "product": "A", "Q1": 4, "Q2": null}]
+0
+["region"]
+[{"Feb": 5, "Jan": 17}]
+[{"region": "East", "Feb": 99}]

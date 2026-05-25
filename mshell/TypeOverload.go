@@ -1,12 +1,21 @@
 package main
 
-// Phase 9: overload dispatch.
+import (
+	"fmt"
+	"os"
+	"sort"
+	"strings"
+)
+
+// Overload dispatch.
 //
 // A name may map to multiple QuoteSigs ("overloads"). At each call
-// site the checker picks the most-specific candidate that unifies
-// against the current stack. Selection is per-call-site; nothing is
-// memoized across uses (a future phase can add a monomorphic-call
-// fast path if profiling justifies it).
+// site the checker trial-unifies every candidate against the current
+// stack and keeps the viable set. There is no specificity ranking and
+// no automatic pick: if exactly one candidate is viable it is
+// applied; if more than one is viable the dispatch branches (under
+// the branching walker) or reports TErrAmbiguousOverload (in the
+// legacy direct-call path used by lower-level tests).
 //
 // Resolution algorithm:
 //
@@ -14,30 +23,16 @@ package main
 //   2. For each candidate:
 //        a. Restore both snapshots.
 //        b. Instantiate the candidate (fresh-rename its generics).
-//        c. If the candidate's arity exceeds the stack, drop it.
+//        c. If the candidate's arity exceeds the stack and we are
+//           not in inferring mode, drop it.
 //        d. Trial-unify each input against the matching stack slot.
 //           Any failure drops the candidate.
-//        e. If it survives, score its specificity from the
-//           pre-instantiation sig (so generic candidates with
-//           remaining vars score lower than concrete ones).
-//   3. Restore both snapshots once more (so the actual application
-//      below starts from a clean state).
-//   4. If exactly one candidate has the maximum score, apply it.
-//      If multiple share the max, report TErrAmbiguousOverload and
-//      apply the first of the tied candidates so downstream
-//      type-checking has something coherent to continue against.
-//      If none unified, report TErrNoMatchingOverload and apply the
-//      first listed candidate to recover.
-//
-// Specificity score (higher = more specific): every non-TKVar arena
-// node in an input contributes 1; TKVar contributes 0. Brand wrappers
-// add an extra +1 to favor nominal matches over equivalent
-// structural ones.
-
-type viableOverload struct {
-	sig   QuoteSig
-	score int
-}
+//   3. Restore both snapshots so the actual application starts clean.
+//   4. With one viable, apply it. With zero, report
+//      TErrNoMatchingOverload and recover. With multiple, fan out via
+//      branchSpawn (branching walker) or report TErrAmbiguousOverload
+//      (legacy path), applying the first viable candidate purely for
+//      diagnostic recovery.
 
 func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 	if len(candidates) == 1 {
@@ -56,7 +51,7 @@ func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 	stackSnap := c.Snapshot()
 	substSnap := c.subst.Checkpoint()
 
-	var viable []viableOverload
+	var viable []QuoteSig
 
 	for _, cand := range candidates {
 		c.Fork(stackSnap)
@@ -75,11 +70,6 @@ func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 			c.stack.items = append(append([]TypeId(nil), extra...), c.stack.items...)
 		}
 		base := len(c.stack.items) - len(instantiated.Inputs)
-		unboundActual := make([]bool, len(instantiated.Inputs))
-		for i := range instantiated.Inputs {
-			actual := c.subst.Apply(c.arena, c.stack.items[base+i])
-			unboundActual[i] = c.arena.Kind(actual) == TKVar
-		}
 		match := true
 		for i, want := range instantiated.Inputs {
 			if !c.unify(c.stack.items[base+i], want) {
@@ -90,14 +80,7 @@ func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 		if !match {
 			continue
 		}
-		score := 0
-		for i, in := range cand.Inputs {
-			score += specificityScore(c.arena, in)
-			if unboundActual[i] && c.arena.Kind(in) != TKVar {
-				score -= 100
-			}
-		}
-		viable = append(viable, viableOverload{sig: cand, score: score})
+		viable = append(viable, cand)
 	}
 
 	c.Fork(stackSnap)
@@ -118,7 +101,7 @@ func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 		c.errors = append(c.errors, TypeError{
 			Kind: TErrNoMatchingOverload,
 			Pos:  callSite,
-			Hint: "no listed signature accepts the current stack",
+			Hint: c.formatOverloadFailure(candidates),
 		})
 		// Clean stack-shape recovery without re-running applySig
 		// (which would add redundant errors). Pop the first
@@ -136,150 +119,153 @@ func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 		return
 	}
 
-	bestIdx := 0
-	tied := false
-	for i := 1; i < len(viable); i++ {
-		switch {
-		case viable[i].score > viable[bestIdx].score:
-			bestIdx = i
-			tied = false
-		case viable[i].score == viable[bestIdx].score:
-			tied = true
-		}
+	if len(viable) == 1 {
+		c.applySig(viable[0], callSite)
+		return
 	}
-	if tied {
-		// Suppress the diagnostic when the tie is caused by an
-		// unbound input (typically a fresh var produced by an
-		// upstream unknown identifier or no-match recovery). The
-		// ambiguity is a cascade artifact, not a genuine
-		// resolution problem — picking the first candidate
-		// deterministically preserves stack shape without piling
-		// on diagnostics that only restate the upstream gap.
-		inputArity := len(viable[bestIdx].sig.Inputs)
-		base := c.stack.Len() - inputArity
-		hasUnboundInput := base < 0
-		if base < 0 {
-			base = 0
-		}
-		for i := 0; i < inputArity && base+i < c.stack.Len(); i++ {
-			t := c.subst.Apply(c.arena, c.stack.items[base+i])
-			if c.arena.Kind(t) == TKVar {
-				hasUnboundInput = true
-				break
+
+	// Multiple candidates remain viable. In branching mode, fan out
+	// every viable continuation into the branchSpawn slice and let
+	// the caller (the branching driver via tryBranchStep) propagate
+	// the alternatives. Downstream constraints prune; if none do,
+	// the end-of-walk reconciler reports TErrAmbiguousTyping.
+	if c.branchingEnabled {
+		// applySig (in inferring mode) mutates c.inferInputs by
+		// prepending freshly-synthesized inputs. Capture the
+		// pre-call value so each fan-out iteration sees the same
+		// starting point — otherwise iteration k's branch would
+		// carry the union of iterations 0..k-1's synthesized inputs.
+		savedInferInputs := append([]TypeId(nil), c.inferInputs...)
+		for _, sig := range viable {
+			c.Fork(stackSnap)
+			c.subst.Rollback(substSnap)
+			c.inferInputs = append([]TypeId(nil), savedInferInputs...)
+			savedErrs := c.errors
+			c.errors = nil
+			c.applySig(sig, callSite)
+			stepErrs := c.errors
+			c.errors = savedErrs
+			if len(stepErrs) == 0 {
+				c.branchSpawn = append(c.branchSpawn, c.captureBranch())
 			}
 		}
-		if !hasUnboundInput {
-			c.errors = append(c.errors, TypeError{
-				Kind: TErrAmbiguousOverload,
-				Pos:  callSite,
-				Hint: "multiple equally-specific overloads match",
-			})
-		} else if c.inferring {
-			if merged, ok := c.mergeInputOnlyOverloads(viable); ok {
-				c.applySig(merged, callSite)
-				return
-			}
-		}
+		c.Fork(stackSnap)
+		c.subst.Rollback(substSnap)
+		c.inferInputs = savedInferInputs
+		return
 	}
-	c.applySig(viable[bestIdx].sig, callSite)
+
+	// Non-branching mode (legacy / direct CheckTokens path): the
+	// caller can't fan out, so any pick is a magic pick. Surface the
+	// ambiguity as an error and apply the first viable candidate
+	// only for diagnostic recovery.
+	c.errors = append(c.errors, TypeError{
+		Kind: TErrAmbiguousOverload,
+		Pos:  callSite,
+		Hint: c.formatOverloadAmbiguityFromSigs(viable),
+	})
+	c.applySig(viable[0], callSite)
 }
 
-func (c *Checker) mergeInputOnlyOverloads(candidates []viableOverload) (QuoteSig, bool) {
-	if len(candidates) < 2 {
-		return QuoteSig{}, false
+// formatOverloadFailure renders a multi-line hint describing the
+// observed stack and every candidate signature. Used when no overload
+// unified against the live stack — the reader needs to see *what*
+// they had vs. *what was possible*.
+func (c *Checker) formatOverloadFailure(candidates []QuoteSig) string {
+	var sb strings.Builder
+	sb.WriteString("no listed signature accepts the current stack\n")
+	sb.WriteString("  stack (top first):")
+	sb.WriteString(c.formatStackForDiagnostic())
+	sb.WriteString("\n  candidates:")
+	for _, cand := range candidates {
+		sb.WriteString("\n    ")
+		sb.WriteString(FormatType(c.arena, c.names, c.arena.MakeQuote(cand)))
 	}
-	first := candidates[0].sig
-	if len(first.Generics) != 0 {
-		return QuoteSig{}, false
-	}
-	inputs := make([][]TypeId, len(first.Inputs))
-	for i, in := range first.Inputs {
-		inputs[i] = append(inputs[i], in)
-	}
-	for _, candidate := range candidates[1:] {
-		sig := candidate.sig
-		if len(sig.Generics) != 0 ||
-			len(sig.Inputs) != len(first.Inputs) ||
-			len(sig.Outputs) != len(first.Outputs) ||
-			sig.Fail != first.Fail ||
-			sig.Pure != first.Pure ||
-			sig.Diverges != first.Diverges {
-			return QuoteSig{}, false
-		}
-		for i := range sig.Outputs {
-			if sig.Outputs[i] != first.Outputs[i] {
-				return QuoteSig{}, false
-			}
-		}
-		for i, in := range sig.Inputs {
-			inputs[i] = append(inputs[i], in)
-		}
-	}
-
-	merged := first
-	merged.Inputs = make([]TypeId, len(inputs))
-	for i, arms := range inputs {
-		merged.Inputs[i] = c.arena.MakeUnion(arms, 0)
-	}
-	merged.Outputs = append([]TypeId(nil), first.Outputs...)
-	return merged, true
+	return sb.String()
 }
 
-// specificityScore counts how much "structural commitment" a type
-// expresses. Every non-var node contributes 1; brand wrappers add
-// an extra to favor nominal matches. The score is summed across an
-// entire candidate's input list to rank candidates in
-// resolveAndApply.
-func specificityScore(arena *TypeArena, t TypeId) int {
-	n := arena.Node(t)
-	switch n.Kind {
-	case TKVar:
-		return 0
-	case TKPrim, TKGrid, TKGridView, TKGridRow:
-		return 1
-	case TKMaybe, TKList:
-		return 1 + specificityScore(arena, TypeId(n.A))
-	case TKDict:
-		return 1 + specificityScore(arena, TypeId(n.A)) + specificityScore(arena, TypeId(n.B))
-	case TKShape:
-		s := 1
-		for _, f := range arena.shapeFields[n.Extra] {
-			s += specificityScore(arena, f.Type)
-		}
-		return s
-	case TKUnion:
-		s := 1
-		for _, arm := range arena.unionMembers[n.Extra] {
-			s += specificityScore(arena, arm)
-		}
-		return s
-	case TKBrand:
-		return 2 + specificityScore(arena, TypeId(n.B))
-	case TKQuote:
-		sig := arena.quoteSigs[n.Extra]
-		s := 1
-		for _, in := range sig.Inputs {
-			s += specificityScore(arena, in)
-		}
-		for _, out := range sig.Outputs {
-			s += specificityScore(arena, out)
-		}
-		return s
-	case TKOverloadedQuote:
-		best := 0
-		for _, sig := range arena.overloadedQuoteSigs[n.Extra] {
-			score := 1
-			for _, in := range sig.Inputs {
-				score += specificityScore(arena, in)
-			}
-			for _, out := range sig.Outputs {
-				score += specificityScore(arena, out)
-			}
-			if score > best {
-				best = score
-			}
-		}
-		return best
+// formatOverloadAmbiguityFromSigs is the ambiguous-overload counterpart
+// for the legacy (non-branching) path. Every viable candidate is listed
+// since they're all the user needs to disambiguate.
+func (c *Checker) formatOverloadAmbiguityFromSigs(viable []QuoteSig) string {
+	var sb strings.Builder
+	sb.WriteString("multiple overloads match\n")
+	sb.WriteString("  stack (top first):")
+	sb.WriteString(c.formatStackForDiagnostic())
+	sb.WriteString("\n  viable candidates:")
+	for _, sig := range viable {
+		sb.WriteString("\n    ")
+		sb.WriteString(FormatType(c.arena, c.names, c.arena.MakeQuote(sig)))
 	}
-	return 1
+	return sb.String()
+}
+
+// formatStackForDiagnostic prints the current stack with substitutions
+// applied so type variables resolve to whatever they were bound to.
+// One item per line, top of stack first.
+func (c *Checker) formatStackForDiagnostic() string {
+	if c.stack.Len() == 0 {
+		return " <empty>"
+	}
+	var sb strings.Builder
+	for i := c.stack.Len() - 1; i >= 0; i-- {
+		sb.WriteString("\n    ")
+		sb.WriteString(FormatType(c.arena, c.names, c.subst.Apply(c.arena, c.stack.items[i])))
+	}
+	return sb.String()
+}
+
+// emitDebugDump renders the current branch's stack and bound-var
+// environment, appends an info-severity TypeError (so the LSP /
+// editor squiggle layer surfaces it inline), and also writes the same
+// snapshot to stderr so CLI users see it during --type-check-only
+// runs. Each surviving branch hits its own emitDebugDump
+// independently, so multiple branches naturally produce multiple
+// outputs — the count tells you how many branches were alive here.
+func (c *Checker) emitDebugDump(tok Token) {
+	var sb strings.Builder
+	sb.WriteString("\n  stack (top first):")
+	sb.WriteString(c.formatStackForDiagnostic())
+	sb.WriteString("\n  vars:")
+	allNames := make(map[NameId]struct{}, len(c.vars.bound)+len(c.vars.maybeBound))
+	for id := range c.vars.bound {
+		allNames[id] = struct{}{}
+	}
+	for id := range c.vars.maybeBound {
+		allNames[id] = struct{}{}
+	}
+	if len(allNames) == 0 {
+		sb.WriteString(" <none>")
+	} else {
+		ordered := make([]NameId, 0, len(allNames))
+		for id := range allNames {
+			ordered = append(ordered, id)
+		}
+		sort.Slice(ordered, func(i, j int) bool {
+			return c.names.Name(ordered[i]) < c.names.Name(ordered[j])
+		})
+		for _, id := range ordered {
+			name := c.names.Name(id)
+			if t, ok := c.vars.bound[id]; ok {
+				sb.WriteString("\n    ")
+				sb.WriteString(name)
+				sb.WriteString(" : ")
+				sb.WriteString(FormatType(c.arena, c.names, c.subst.Apply(c.arena, t)))
+			}
+			if t, ok := c.vars.maybeBound[id]; ok {
+				sb.WriteString("\n    ?")
+				sb.WriteString(name)
+				sb.WriteString(" : ")
+				sb.WriteString(FormatType(c.arena, c.names, c.subst.Apply(c.arena, t)))
+			}
+		}
+	}
+	hint := sb.String()
+	c.errors = append(c.errors, TypeError{
+		Severity: SeverityInfo,
+		Kind:     TErrDebugDump,
+		Pos:      tok,
+		Hint:     hint,
+	})
+	fmt.Fprintf(os.Stderr, "dbg at line %d, column %d:%s\n", tok.Line, tok.Column, hint)
 }
