@@ -633,7 +633,10 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 			Generics: []TypeVarId{1},
 		}}
 	}
-	// get : ({V} str -- Maybe[V]) | (GridRow str -- Maybe[T])
+	// get : ({V} str -- Maybe[V])
+	//     | (GridRow str -- Maybe[T])
+	//     | (Grid str -- Maybe[[T]])
+	//     | (GridView str -- Maybe[[T]])
 	{
 		v := arena.MakeVar(1)
 		out[names.Intern("get")] = []QuoteSig{
@@ -645,6 +648,16 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 			{
 				Inputs:   []TypeId{arena.MakeGridRow(0), TidStr},
 				Outputs:  []TypeId{arena.MakeMaybe(arena.MakeVar(0))},
+				Generics: []TypeVarId{0},
+			},
+			{
+				Inputs:   []TypeId{arena.MakeGrid(0), TidStr},
+				Outputs:  []TypeId{arena.MakeMaybe(arena.MakeList(arena.MakeVar(0)))},
+				Generics: []TypeVarId{0},
+			},
+			{
+				Inputs:   []TypeId{arena.MakeGridView(0), TidStr},
+				Outputs:  []TypeId{arena.MakeMaybe(arena.MakeList(arena.MakeVar(0)))},
 				Generics: []TypeVarId{0},
 			},
 		}
