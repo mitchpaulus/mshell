@@ -321,6 +321,33 @@ type EvalState struct {
 	CallStack             CallStack
 	CompletionDefinitions map[string][]MShellDefinition
 	PreviousDirectories   []string
+
+	defIndex    map[string]int
+	defIndexLen int
+}
+
+// RebuildDefinitionIndex records the first index for each name, matching
+// the front-to-back, first-match-wins behavior of the linear scan it replaces.
+func (state *EvalState) RebuildDefinitionIndex(definitions []MShellDefinition) {
+	idx := make(map[string]int, len(definitions))
+	for i, def := range definitions {
+		if _, exists := idx[def.Name]; !exists {
+			idx[def.Name] = i
+		}
+	}
+	state.defIndex = idx
+	state.defIndexLen = len(definitions)
+}
+
+func (state *EvalState) lookupDefinition(definitions []MShellDefinition, name string) (MShellDefinition, bool) {
+	if state.defIndex == nil || state.defIndexLen != len(definitions) {
+		state.RebuildDefinitionIndex(definitions)
+	}
+	i, ok := state.defIndex[name]
+	if !ok || i >= len(definitions) {
+		return MShellDefinition{}, false
+	}
+	return definitions[i], true
 }
 
 func (state *EvalState) AddCompletionDefinitions(definitions []MShellDefinition) {
@@ -778,10 +805,8 @@ func (state *EvalState) processToken(token MShellParseItem, frame *EvaluationFra
 		}
 
 		// Check for definition
-		for _, definition := range definitions {
-			if definition.Name == funcToken.Lexeme {
-				return state.callDefinition(definition, funcToken, frame, frames)
-			}
+		if def, ok := state.lookupDefinition(definitions, funcToken.Lexeme); ok {
+			return state.callDefinition(def, funcToken, frame, frames)
 		}
 
 		// Not a definition - fall back to token processing
@@ -1329,10 +1354,8 @@ func (state *EvalState) processTokenToken(t Token, frame *EvaluationFrame, frame
 		}
 
 		// Check for definitions first (with TCO)
-		for _, definition := range definitions {
-			if definition.Name == t.Lexeme {
-				return state.callDefinition(definition, t, frame, frames)
-			}
+		if def, ok := state.lookupDefinition(definitions, t.Lexeme); ok {
+			return state.callDefinition(def, t, frame, frames)
 		}
 		// Not a definition - process as regular literal
 		return state.processTokenLiteral(t, frame)
@@ -3105,19 +3128,17 @@ MainLoop:
 			} else if t.Type == LITERAL {
 
 				// Check for definitions
-				for _, definition := range definitions {
-					if definition.Name == t.Lexeme {
-						// Evaluate the definition
-						newContext := context.CloneLessVariables()
-						callStackItem := CallStackItem{MShellParseItem: t, Name: definition.Name, CallStackType: CALLSTACKDEF}
-						result := state.evaluateItems(definition.Items, stack, *newContext, definitions, callStackItem)
+				if definition, ok := state.lookupDefinition(definitions, t.Lexeme); ok {
+					// Evaluate the definition
+					newContext := context.CloneLessVariables()
+					callStackItem := CallStackItem{MShellParseItem: t, Name: definition.Name, CallStackType: CALLSTACKDEF}
+					result := state.evaluateItems(definition.Items, stack, *newContext, definitions, callStackItem)
 
-						if result.ShouldPassResultUpStack() {
-							return result
-						}
-
-						continue MainLoop
+					if result.ShouldPassResultUpStack() {
+						return result
 					}
+
+					continue MainLoop
 				}
 
 				if t.Lexeme == "stack" {
