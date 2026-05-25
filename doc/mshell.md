@@ -915,6 +915,8 @@ end wl # Output: 11
 
 ## Grid Functions
 
+The `:name` getter and the `get` built-in accept a `Grid` or `GridView` in addition to `dict` and `GridRow`. On a grid the lookup returns the named column as `Maybe[[T]]` — the materialized column when present, `none` when absent — making `:n?` a shorthand for `"n" gridCol`. On a `GridView` the values are projected through the view's row indices.
+
 - `select`: Project a `Grid` or `GridView` to a requested ordered list of column names, returning a materialized `Grid`. `(Grid|GridView [str] -- Grid)`
 - `exclude`: Drop a list of column names from a `Grid` or `GridView`, returning a materialized `Grid`. `(Grid|GridView [str] -- Grid)`
 - `derive`: Append a derived column to a `Grid` or `GridView`. The metadata dictionary is attached to the new column. `(Grid|GridView str dict (GridRow -- any) -- Grid)`

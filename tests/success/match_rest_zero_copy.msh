@@ -8,4 +8,6 @@
         @rest 99 append drop
         @rest toJson wl   # rest with appended 99
         @src toJson wl    # source unchanged
+    ,
+    _ : "unreachable" wl
 end

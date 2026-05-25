@@ -302,6 +302,18 @@ To materialize a GridView into a real Grid (with copied data), use <code>gridCom
 <span class="mshellLITERAL">gridCompact</span>  <span class="mshellLINECOMMENT"># Now a real Grid with copied data</span></code>
 </pre>
 
+<p>
+The <code>:name</code> getter and the <code>get</code> built-in also accept a Grid or GridView directly and return the named column as a <code>Maybe[[T]]</code>.
+This is a shorthand for <code>gridCol</code>: the wrapped list is the same materialized column, or <code>none</code> when the column is absent.
+On a GridView the values are projected through the view's row indices.
+</p>
+
+<pre>
+<code><span class="mshellGRID_OPEN">[|</span> <span class="mshellLITERAL">name</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">n</span><span class="mshellEXECUTE">;</span> <span class="mshellSTRING">"a"</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">1</span><span class="mshellEXECUTE">;</span> <span class="mshellSTRING">"b"</span><span class="mshellCOMMA">,</span> <span class="mshellINTEGER">2</span> <span class="mshellGRID_CLOSE">|]</span> <span class="mshellVARSTORE">g!</span>
+<span class="mshellVARRETRIEVE">@g</span> <span class="mshellCOLON">:</span><span class="mshellLITERAL">n?</span>  <span class="mshellLINECOMMENT"># [1, 2]  — `:n` returns Maybe[[int]], `?` unwraps</span>
+<span class="mshellVARRETRIEVE">@g</span> <span class="mshellCOLON">:</span><span class="mshellLITERAL">missing</span>  <span class="mshellLINECOMMENT"># None</span></code>
+</pre>
+
 <h1 id="grid-row">GridRow <a class="section-link" href="#grid-row" aria-label="Permalink">§</a> <a class="back-to-top" href="#grid-top">Back to top</a></h1>
 
 <p>

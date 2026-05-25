@@ -321,6 +321,33 @@ type EvalState struct {
 	CallStack             CallStack
 	CompletionDefinitions map[string][]MShellDefinition
 	PreviousDirectories   []string
+
+	defIndex    map[string]int
+	defIndexLen int
+}
+
+// RebuildDefinitionIndex records the first index for each name, matching
+// the front-to-back, first-match-wins behavior of the linear scan it replaces.
+func (state *EvalState) RebuildDefinitionIndex(definitions []MShellDefinition) {
+	idx := make(map[string]int, len(definitions))
+	for i, def := range definitions {
+		if _, exists := idx[def.Name]; !exists {
+			idx[def.Name] = i
+		}
+	}
+	state.defIndex = idx
+	state.defIndexLen = len(definitions)
+}
+
+func (state *EvalState) lookupDefinition(definitions []MShellDefinition, name string) (MShellDefinition, bool) {
+	if state.defIndex == nil || state.defIndexLen != len(definitions) {
+		state.RebuildDefinitionIndex(definitions)
+	}
+	i, ok := state.defIndex[name]
+	if !ok || i >= len(definitions) {
+		return MShellDefinition{}, false
+	}
+	return definitions[i], true
 }
 
 func (state *EvalState) AddCompletionDefinitions(definitions []MShellDefinition) {
@@ -778,10 +805,8 @@ func (state *EvalState) processToken(token MShellParseItem, frame *EvaluationFra
 		}
 
 		// Check for definition
-		for _, definition := range definitions {
-			if definition.Name == funcToken.Lexeme {
-				return state.callDefinition(definition, funcToken, frame, frames)
-			}
+		if def, ok := state.lookupDefinition(definitions, funcToken.Lexeme); ok {
+			return state.callDefinition(def, funcToken, frame, frames)
 		}
 
 		// Not a definition - fall back to token processing
@@ -1329,10 +1354,8 @@ func (state *EvalState) processTokenToken(t Token, frame *EvaluationFrame, frame
 		}
 
 		// Check for definitions first (with TCO)
-		for _, definition := range definitions {
-			if definition.Name == t.Lexeme {
-				return state.callDefinition(definition, t, frame, frames)
-			}
+		if def, ok := state.lookupDefinition(definitions, t.Lexeme); ok {
+			return state.callDefinition(def, t, frame, frames)
 		}
 		// Not a definition - process as regular literal
 		return state.processTokenLiteral(t, frame)
@@ -1580,7 +1603,37 @@ func (state *EvalState) processVarstoreList(varstoreList MShellVarstoreList, fra
 	return SimpleSuccess()
 }
 
-// processGetter handles ':' getter operations for dictionaries and grid rows.
+// gridColumnAsList materializes the named column of a Grid as a fresh
+// list. Returns (list, true) on hit, (nil, false) when the column is
+// absent.
+func gridColumnAsList(g *MShellGrid, name string) (*MShellList, bool) {
+	col := g.GetColumn(name)
+	if col == nil {
+		return nil, false
+	}
+	out := NewList(g.RowCount)
+	for i := 0; i < g.RowCount; i++ {
+		out.Items[i] = col.Get(i)
+	}
+	return out, true
+}
+
+// gridViewColumnAsList materializes the named column of a GridView,
+// honoring the view's row indices.
+func gridViewColumnAsList(v *MShellGridView, name string) (*MShellList, bool) {
+	col := v.Source.GetColumn(name)
+	if col == nil {
+		return nil, false
+	}
+	out := NewList(len(v.Indices))
+	for i, idx := range v.Indices {
+		out.Items[i] = col.Get(idx)
+	}
+	return out, true
+}
+
+// processGetter handles ':' getter operations for dictionaries, grid
+// rows, and grids/grid views (column lookup).
 func (state *EvalState) processGetter(getter *MShellGetter, frame *EvaluationFrame) EvalResult {
 	stack := frame.Stack
 
@@ -1597,8 +1650,12 @@ func (state *EvalState) processGetter(getter *MShellGetter, frame *EvaluationFra
 		value, ok = objTyped.Items[getter.String]
 	case *MShellGridRow:
 		value, ok = objTyped.Get(getter.String)
+	case *MShellGrid:
+		value, ok = gridColumnAsList(objTyped, getter.String)
+	case *MShellGridView:
+		value, ok = gridViewColumnAsList(objTyped, getter.String)
 	default:
-		return state.FailWithMessage(fmt.Sprintf("%d:%d: The stack parameter for ':' is not a dictionary or GridRow. Found a %s (%s). Key: %s\n", getter.Token.Line, getter.Token.Column, obj.TypeName(), obj.DebugString(), getter.String))
+		return state.FailWithMessage(fmt.Sprintf("%d:%d: The stack parameter for ':' is not a dictionary, GridRow, Grid, or GridView. Found a %s (%s). Key: %s\n", getter.Token.Line, getter.Token.Column, obj.TypeName(), obj.DebugString(), getter.String))
 	}
 
 	if !ok {
@@ -3043,25 +3100,25 @@ MainLoop:
 				return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do ':' operation on an empty stack.\n", getter.Token.Line, getter.Token.Column))
 			}
 
+			var value MShellObject
+			var ok bool
 			switch objTyped := obj.(type) {
 			case *MShellDict:
-				value, ok := objTyped.Items[getter.String]
-				if !ok {
-					stack.Push(&Maybe{obj: nil})
-				} else {
-					maybe := Maybe{obj: value}
-					stack.Push(&maybe)
-				}
+				value, ok = objTyped.Items[getter.String]
 			case *MShellGridRow:
-				value, ok := objTyped.Get(getter.String)
-				if !ok {
-					stack.Push(&Maybe{obj: nil})
-				} else {
-					maybe := Maybe{obj: value}
-					stack.Push(&maybe)
-				}
+				value, ok = objTyped.Get(getter.String)
+			case *MShellGrid:
+				value, ok = gridColumnAsList(objTyped, getter.String)
+			case *MShellGridView:
+				value, ok = gridViewColumnAsList(objTyped, getter.String)
 			default:
-				return state.FailWithMessage(fmt.Sprintf("%d:%d: The stack parameter for ':' is not a dictionary or GridRow. Found a %s (%s). Key: %s\n", getter.Token.Line, getter.Token.Column, obj.TypeName(), obj.DebugString(), getter.String))
+				return state.FailWithMessage(fmt.Sprintf("%d:%d: The stack parameter for ':' is not a dictionary, GridRow, Grid, or GridView. Found a %s (%s). Key: %s\n", getter.Token.Line, getter.Token.Column, obj.TypeName(), obj.DebugString(), getter.String))
+			}
+			if !ok {
+				stack.Push(&Maybe{obj: nil})
+			} else {
+				maybe := Maybe{obj: value}
+				stack.Push(&maybe)
 			}
 
 		case Token:
@@ -3071,19 +3128,17 @@ MainLoop:
 			} else if t.Type == LITERAL {
 
 				// Check for definitions
-				for _, definition := range definitions {
-					if definition.Name == t.Lexeme {
-						// Evaluate the definition
-						newContext := context.CloneLessVariables()
-						callStackItem := CallStackItem{MShellParseItem: t, Name: definition.Name, CallStackType: CALLSTACKDEF}
-						result := state.evaluateItems(definition.Items, stack, *newContext, definitions, callStackItem)
+				if definition, ok := state.lookupDefinition(definitions, t.Lexeme); ok {
+					// Evaluate the definition
+					newContext := context.CloneLessVariables()
+					callStackItem := CallStackItem{MShellParseItem: t, Name: definition.Name, CallStackType: CALLSTACKDEF}
+					result := state.evaluateItems(definition.Items, stack, *newContext, definitions, callStackItem)
 
-						if result.ShouldPassResultUpStack() {
-							return result
-						}
-
-						continue MainLoop
+					if result.ShouldPassResultUpStack() {
+						return result
 					}
+
+					continue MainLoop
 				}
 
 				if t.Lexeme == "stack" {
@@ -5136,25 +5191,25 @@ MainLoop:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: The stack parameter for the key is not a string. Found a %s (%s).\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
 					}
 
+					var value MShellObject
+					var ok bool
 					switch obj2Typed := obj2.(type) {
 					case *MShellDict:
-						value, ok := obj2Typed.Items[keyStr]
-						if !ok {
-							stack.Push(&Maybe{obj: nil})
-						} else {
-							maybe := Maybe{obj: value}
-							stack.Push(&maybe)
-						}
+						value, ok = obj2Typed.Items[keyStr]
 					case *MShellGridRow:
-						value, ok := obj2Typed.Get(keyStr)
-						if !ok {
-							stack.Push(&Maybe{obj: nil})
-						} else {
-							maybe := Maybe{obj: value}
-							stack.Push(&maybe)
-						}
+						value, ok = obj2Typed.Get(keyStr)
+					case *MShellGrid:
+						value, ok = gridColumnAsList(obj2Typed, keyStr)
+					case *MShellGridView:
+						value, ok = gridViewColumnAsList(obj2Typed, keyStr)
 					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: The stack parameter for 'get' is not a dictionary or GridRow. Found a %s (%s). Key: %s\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString(), keyStr))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The stack parameter for 'get' is not a dictionary, GridRow, Grid, or GridView. Found a %s (%s). Key: %s\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString(), keyStr))
+					}
+					if !ok {
+						stack.Push(&Maybe{obj: nil})
+					} else {
+						maybe := Maybe{obj: value}
+						stack.Push(&maybe)
 					}
 				} else if t.Lexeme == "getDef" {
 					// Get a value from string key for a dictionary.

@@ -1267,6 +1267,19 @@ func (c *Checker) lookupGetterValueType(t TypeId, name NameId) TypeId {
 		}
 	case TKDict:
 		return TypeId(n.B)
+	case TKGrid, TKGridView:
+		// `:name` on Grid/GridView returns the column as a list. The
+		// element type comes from the schema when known; otherwise a
+		// fresh var stands in.
+		schemaIdx := n.Extra
+		if schemaIdx != 0 {
+			for _, col := range c.arena.gridSchemas[schemaIdx].Columns {
+				if col.Name == name {
+					return c.arena.MakeList(col.Type)
+				}
+			}
+		}
+		return c.arena.MakeList(c.subst.FreshVar(c.arena))
 	}
 	return c.subst.FreshVar(c.arena)
 }
