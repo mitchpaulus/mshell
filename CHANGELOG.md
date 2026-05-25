@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `yf` — copy the selected entry's file name
   - `yp` — copy the selected entry's absolute path
   - `yg` — copy the selected entry's path relative to the enclosing `.git` directory
+- File manager popup that lists available follow-up keys whenever a multi-key prefix (`y`, `g`) is pending
 - Grid (data frame) type with columnar storage for high-performance tabular data
   - Literal syntax: `[| col1, col2; val1, val2; val3, val4 |]`
   - Optional grid and column metadata

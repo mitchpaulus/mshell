@@ -817,35 +817,42 @@ func (fm *FileManager) render() {
 	// Bookmark overlay
 	if fm.pendingMark || fm.showingBookmarks {
 		fm.renderBookmarkOverlay(&buf)
+	} else if fm.lastKey != 0 {
+		fm.renderPrefixOverlay(&buf)
 	}
 
 	fm.ttyOut.Write(buf.Bytes())
 }
 
-func (fm *FileManager) renderBookmarkOverlay(buf *bytes.Buffer) {
-	// Draw a centered overlay box
-	var lines []string
-	if fm.pendingMark {
-		lines = append(lines, " Set bookmark (0-9, a-z): ")
-	} else {
-		lines = append(lines, " Go to bookmark: ")
-	}
-	// List existing bookmarks
-	for c := byte('0'); c <= '9'; c++ {
-		if dir, ok := fm.bookmarks[c]; ok {
-			lines = append(lines, fmt.Sprintf("  %c  %s", c, dir))
+func (fm *FileManager) renderPrefixOverlay(buf *bytes.Buffer) {
+	var title string
+	var bindings [][2]string
+	switch fm.lastKey {
+	case 'y':
+		title = " Yank "
+		bindings = [][2]string{
+			{"y", "copy entry to file-manager clipboard"},
+			{"f", "file name → system clipboard"},
+			{"p", "full path → system clipboard"},
+			{"g", "git-relative path → system clipboard"},
 		}
-	}
-	for c := byte('a'); c <= 'z'; c++ {
-		if dir, ok := fm.bookmarks[c]; ok {
-			lines = append(lines, fmt.Sprintf("  %c  %s", c, dir))
+	case 'g':
+		title = " Go "
+		bindings = [][2]string{
+			{"g", "jump to top"},
 		}
-	}
-	if len(lines) == 1 {
-		lines = append(lines, "  (no bookmarks)")
+	default:
+		return
 	}
 
-	// Find box width
+	lines := []string{title}
+	for _, b := range bindings {
+		lines = append(lines, fmt.Sprintf("  %s  %s", b[0], b[1]))
+	}
+	fm.drawOverlayBox(buf, lines)
+}
+
+func (fm *FileManager) drawOverlayBox(buf *bytes.Buffer, lines []string) {
 	boxW := 0
 	for _, l := range lines {
 		runes := utf8.RuneCountInString(l)
@@ -853,12 +860,11 @@ func (fm *FileManager) renderBookmarkOverlay(buf *bytes.Buffer) {
 			boxW = runes
 		}
 	}
-	boxW += 2 // padding
+	boxW += 2
 	if boxW > fm.cols-4 {
 		boxW = fm.cols - 4
 	}
 
-	// Center position
 	startCol := (fm.cols - boxW) / 2
 	if startCol < 1 {
 		startCol = 1
@@ -874,7 +880,7 @@ func (fm *FileManager) renderBookmarkOverlay(buf *bytes.Buffer) {
 			break
 		}
 		buf.WriteString(fmt.Sprintf("\033[%d;%dH", row, startCol))
-		buf.WriteString("\033[7m") // reverse video
+		buf.WriteString("\033[7m")
 		lineRunes := utf8.RuneCountInString(line)
 		if lineRunes > boxW {
 			line = truncateMiddle(line, boxW)
@@ -887,6 +893,29 @@ func (fm *FileManager) renderBookmarkOverlay(buf *bytes.Buffer) {
 		}
 		buf.WriteString("\033[0m")
 	}
+}
+
+func (fm *FileManager) renderBookmarkOverlay(buf *bytes.Buffer) {
+	var lines []string
+	if fm.pendingMark {
+		lines = append(lines, " Set bookmark (0-9, a-z): ")
+	} else {
+		lines = append(lines, " Go to bookmark: ")
+	}
+	for c := byte('0'); c <= '9'; c++ {
+		if dir, ok := fm.bookmarks[c]; ok {
+			lines = append(lines, fmt.Sprintf("  %c  %s", c, dir))
+		}
+	}
+	for c := byte('a'); c <= 'z'; c++ {
+		if dir, ok := fm.bookmarks[c]; ok {
+			lines = append(lines, fmt.Sprintf("  %c  %s", c, dir))
+		}
+	}
+	if len(lines) == 1 {
+		lines = append(lines, "  (no bookmarks)")
+	}
+	fm.drawOverlayBox(buf, lines)
 }
 
 func (fm *FileManager) getPreview() []string {
