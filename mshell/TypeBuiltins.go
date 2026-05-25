@@ -1598,6 +1598,27 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		}
 	}
 
+	// pivot : (Grid|GridView [str]:rowKeys str:colKey (GridView -- T) -- Grid)
+	{
+		t := arena.MakeVar(0)
+		aggQuote := arena.MakeQuote(QuoteSig{
+			Inputs:  []TypeId{gridViewU},
+			Outputs: []TypeId{t},
+		})
+		out[names.Intern("pivot")] = []QuoteSig{
+			{
+				Inputs:   []TypeId{gridU, arena.MakeList(TidStr), TidStr, aggQuote},
+				Outputs:  []TypeId{gridU},
+				Generics: []TypeVarId{0},
+			},
+			{
+				Inputs:   []TypeId{gridViewU, arena.MakeList(TidStr), TidStr, aggQuote},
+				Outputs:  []TypeId{gridU},
+				Generics: []TypeVarId{0},
+			},
+		}
+	}
+
 	// ----- Maybe ops -----
 
 	// Overload `map` to also handle Maybe[T] (T -- U) -> Maybe[U].

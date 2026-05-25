@@ -35,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `exclude` - drop a set of columns from a grid
   - `derive` - append a derived column to a grid
   - `groupBy` - group grids by key columns with multiple aggregation specs, and preserve existing list grouping behavior
+  - `pivot` - reshape a Grid or GridView into a pivot table; rows are grouped by `rowKeys`, distinct `colKey` values become new columns ordered by version-sort, and each cell aggregates matching source rows (empty cells fill with `none`)
   - `updateCol` - mutate a grid column by applying a quotation to each cell
   - `toGrid` - build a grid from `[[str]]` with headers on the first row
   - `join` (grid form) - inner equi-join of two grids via key-extractor quotations; polymorphic with the existing string `join`

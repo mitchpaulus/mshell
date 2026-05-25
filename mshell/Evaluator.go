@@ -6071,6 +6071,161 @@ MainLoop:
 					}
 
 					stack.Push(newGrid)
+				} else if t.Lexeme == "pivot" {
+					if len(*stack) < 4 {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'pivot' operation on a stack with less than four items.\n", t.Line, t.Column))
+					}
+
+					obj1, obj2, obj3, obj4, err := stack.Pop4(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					quote, ok := obj1.(*MShellQuotation)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: pivot requires a quotation on top of the stack, got %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					colKeyName, err := obj2.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: pivot requires a string column-key name, got %s.\n", t.Line, t.Column, obj2.TypeName()))
+					}
+
+					rowKeyList, ok := obj3.(*MShellList)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: pivot requires a list of row-key column names, got %s.\n", t.Line, t.Column, obj3.TypeName()))
+					}
+
+					sourceGrid, sourceIndices, err := getGridSourceAndIndices(obj4)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: pivot requires a Grid or GridView, got %s.\n", t.Line, t.Column, obj4.TypeName()))
+					}
+
+					rowKeyCols := make([]string, len(rowKeyList.Items))
+					seenRowKeyCols := make(map[string]struct{}, len(rowKeyList.Items))
+					for i, item := range rowKeyList.Items {
+						colName, err := item.CastString()
+						if err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: pivot row-key column names must be strings, got %s.\n", t.Line, t.Column, item.TypeName()))
+						}
+						if _, exists := seenRowKeyCols[colName]; exists {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: pivot row-key column '%s' was requested more than once.\n", t.Line, t.Column, colName))
+						}
+						if sourceGrid.GetColumn(colName) == nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Column '%s' not found in grid.\n", t.Line, t.Column, colName))
+						}
+						seenRowKeyCols[colName] = struct{}{}
+						rowKeyCols[i] = colName
+					}
+
+					if _, exists := seenRowKeyCols[colKeyName]; exists {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: pivot column-key '%s' cannot also be a row-key.\n", t.Line, t.Column, colKeyName))
+					}
+
+					colKeyCol := sourceGrid.GetColumn(colKeyName)
+					if colKeyCol == nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Column '%s' not found in grid.\n", t.Line, t.Column, colKeyName))
+					}
+
+					type pivotBucketKey struct {
+						rowGroupIdx int
+						colName     string
+					}
+
+					rowKeyMap := make(map[string]int)
+					rowFirstSrcIdx := make([]int, 0)
+					colNameSet := make(map[string]struct{})
+					buckets := make(map[pivotBucketKey][]int)
+
+					for _, srcIdx := range sourceIndices {
+						rowKey, err := typedGridGroupKey(sourceGrid, srcIdx, rowKeyCols)
+						if err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: %s.\n", t.Line, t.Column, err.Error()))
+						}
+						rowGroupIdx, exists := rowKeyMap[rowKey]
+						if !exists {
+							rowGroupIdx = len(rowFirstSrcIdx)
+							rowKeyMap[rowKey] = rowGroupIdx
+							rowFirstSrcIdx = append(rowFirstSrcIdx, srcIdx)
+						}
+
+						colVal := colKeyCol.Get(srcIdx)
+						colStr, ok := colVal.(MShellString)
+						if !ok {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: pivot column-key column '%s' must contain only strings, found %s at row %d.\n", t.Line, t.Column, colKeyName, colVal.TypeName(), srcIdx))
+						}
+
+						colNameSet[colStr.Content] = struct{}{}
+						bk := pivotBucketKey{rowGroupIdx: rowGroupIdx, colName: colStr.Content}
+						buckets[bk] = append(buckets[bk], srcIdx)
+					}
+
+					pivotedColNames := make([]string, 0, len(colNameSet))
+					for name := range colNameSet {
+						pivotedColNames = append(pivotedColNames, name)
+					}
+					sort.Slice(pivotedColNames, func(i, j int) bool {
+						return VersionSortComparer(pivotedColNames[i], pivotedColNames[j]) < 0
+					})
+
+					for _, name := range pivotedColNames {
+						if _, exists := seenRowKeyCols[name]; exists {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: pivot column-key value '%s' collides with a row-key column name.\n", t.Line, t.Column, name))
+						}
+					}
+
+					newGrid := NewGrid()
+					newGrid.Meta = sourceGrid.Meta
+					newGrid.RowCount = len(rowFirstSrcIdx)
+
+					for _, keyColName := range rowKeyCols {
+						sourceCol := sourceGrid.GetColumn(keyColName)
+						newCol := NewGridColumn(keyColName, newGrid.RowCount)
+						newCol.Meta = sourceCol.Meta
+						for rowIdx, srcIdx := range rowFirstSrcIdx {
+							newCol.GenericData[rowIdx] = sourceCol.Get(srcIdx)
+						}
+						newGrid.AddColumn(newCol)
+					}
+
+					for _, colName := range pivotedColNames {
+						newCol := NewGridColumn(colName, newGrid.RowCount)
+						for rowGroupIdx := 0; rowGroupIdx < newGrid.RowCount; rowGroupIdx++ {
+							srcIndices, has := buckets[pivotBucketKey{rowGroupIdx: rowGroupIdx, colName: colName}]
+							if !has {
+								newCol.GenericData[rowGroupIdx] = &Maybe{obj: nil}
+								continue
+							}
+
+							groupView := &MShellGridView{Source: sourceGrid, Indices: srcIndices}
+							var aggStack MShellStack
+							aggStack = []MShellObject{groupView}
+
+							result, err := state.EvaluateQuote(*quote, &aggStack, context, definitions)
+							if err != nil {
+								return state.FailWithMessage(err.Error())
+							}
+							if result.ShouldPassResultUpStack() {
+								return result
+							}
+							if len(aggStack) != 1 {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: pivot aggregation for column '%s' must return exactly one value, found %d values.\n", t.Line, t.Column, colName, len(aggStack)))
+							}
+
+							aggVal, _ := aggStack.Pop()
+							if isContainerType(aggVal) {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: pivot aggregation for column '%s' cannot return a container type, got %s.\n", t.Line, t.Column, colName, aggVal.TypeName()))
+							}
+							newCol.GenericData[rowGroupIdx] = aggVal
+						}
+						newGrid.AddColumn(newCol)
+					}
+
+					for _, col := range newGrid.Columns {
+						optimizeColumnStorage(col)
+					}
+
+					stack.Push(newGrid)
 				} else if t.Lexeme == "leftJoin" {
 					result := state.executeGridJoin(t, stack, joinLeft, context, definitions)
 					if result.ShouldPassResultUpStack() {

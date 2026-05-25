@@ -1,0 +1,62 @@
+# Grid pivot tests
+
+# Basic pivot: row keys vs column key, aggregated cells.
+# East/Jan rows are aggregated; West has no Feb so it becomes null.
+[|
+    region, month, sales;
+    "East", "Jan", 10;
+    "East", "Feb", 5;
+    "West", "Jan", 3;
+    "East", "Jan", 4
+|]
+["region"] "month" ("sales" gridCol sumInt) pivot basic!
+@basic toJson wl
+@basic gridCols str wl
+
+# Pivoted columns are version-sorted, not lex-sorted, so "2" < "10".
+[|
+    grp, ver, v;
+    "a", "2", 1;
+    "a", "10", 2;
+    "a", "9", 3
+|]
+["grp"] "ver" ("v" gridCol sumInt) pivot versionSorted!
+@versionSorted gridCols str wl
+
+# Multi-rowKey pivot: composite row groups.
+[|
+    region, product, q, n;
+    "East", "A", "Q1", 1;
+    "East", "A", "Q2", 2;
+    "East", "B", "Q1", 3;
+    "West", "A", "Q1", 4
+|]
+["region" "product"] "q" ("n" gridCol sumInt) pivot multi!
+@multi toJson wl
+
+# Empty grid: result has rowKey columns and zero rows.
+[| region, month, sales; |]
+["region"] "month" ("sales" gridCol sumInt) pivot emptyGrid!
+@emptyGrid gridRows str wl
+@emptyGrid gridCols str wl
+
+# Empty rowKeys: a single global row, all columns are pivoted from colKey.
+[|
+    month, sales;
+    "Jan", 10;
+    "Feb", 5;
+    "Jan", 7
+|]
+[] "month" ("sales" gridCol sumInt) pivot global!
+@global toJson wl
+
+# GridView input also works (chained filter then pivot).
+[|
+    region, month, sales;
+    "East", "Jan", 10;
+    "West", "Feb", 5;
+    "East", "Feb", 99
+|]
+(:sales? 50 >) filter viewed!
+@viewed ["region"] "month" ("sales" gridCol sumInt) pivot fromView!
+@fromView toJson wl

@@ -651,7 +651,7 @@ func (parser *MShellParser) ParseFile() (file *MShellFile, err error) {
 
 		inputs, outputs, err := parser.parseDefSignature()
 		if err != nil {
-			return file, err
+			return file, fmt.Errorf("def %s signature: %s", def.Name, err.Error())
 		}
 		def.Inputs = inputs
 		def.Outputs = outputs

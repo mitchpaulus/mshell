@@ -22,6 +22,52 @@ import (
 	"strings"
 )
 
+// tokDesc returns a short human-readable description of a token, used
+// in `expected X, got Y` hints from the type-expression parser.
+func tokDesc(tok Token) string {
+	if tok.Type == EOF {
+		return "end of input"
+	}
+	if tok.Lexeme == "" {
+		return tok.Type.String()
+	}
+	return "'" + tok.Lexeme + "'"
+}
+
+// skipToShapeSync advances past tokens after a malformed shape entry
+// until it finds a top-level `,` or `}` (or EOF). It tracks nesting so
+// brackets inside the bad entry don't fool the synchronizer.
+func (parser *MShellParser) skipToShapeSync() {
+	depth := 0
+	for {
+		switch parser.curr.Type {
+		case EOF:
+			return
+		case LEFT_CURLY, LEFT_SQUARE_BRACKET, LEFT_PAREN:
+			depth++
+			parser.NextToken()
+		case RIGHT_CURLY:
+			if depth == 0 {
+				return
+			}
+			depth--
+			parser.NextToken()
+		case RIGHT_SQUARE_BRACKET, RIGHT_PAREN:
+			if depth > 0 {
+				depth--
+			}
+			parser.NextToken()
+		case COMMA:
+			if depth == 0 {
+				return
+			}
+			parser.NextToken()
+		default:
+			parser.NextToken()
+		}
+	}
+}
+
 // Node types ---------------------------------------------------------------
 
 // TypePrim is a primitive type keyword (int, float, bool, str).
@@ -247,7 +293,7 @@ func (parser *MShellParser) parseTypePrimary(errs *[]TypeError) MShellParseItem 
 	case LITERAL:
 		return parser.parseTypeNamed(errs)
 	}
-	*errs = append(*errs, TypeError{Kind: TErrTypeParse, Pos: tok, Hint: "expected a type"})
+	*errs = append(*errs, TypeError{Kind: TErrTypeParse, Pos: tok, Hint: "expected a type, got " + tokDesc(tok)})
 	if tok.Type != EOF {
 		parser.NextToken()
 	}
@@ -260,7 +306,7 @@ func (parser *MShellParser) parseTypeList(errs *[]TypeError) MShellParseItem {
 	elem, subErrs := parser.parseTypeExpr()
 	*errs = append(*errs, subErrs...)
 	if parser.curr.Type != RIGHT_SQUARE_BRACKET {
-		*errs = append(*errs, TypeError{Kind: TErrTypeParse, Pos: parser.curr, Hint: "expected ']'"})
+		*errs = append(*errs, TypeError{Kind: TErrTypeParse, Pos: parser.curr, Hint: "expected ']', got " + tokDesc(parser.curr)})
 	} else {
 		parser.NextToken()
 	}
@@ -340,7 +386,7 @@ func (parser *MShellParser) finishDictOrBareType(open Token, first MShellParseIt
 		return &TypeDictExpr{OpenTok: open, Key: synthStrKey(open), Value: first}
 	}
 	if parser.curr.Type != COLON {
-		*errs = append(*errs, TypeError{Kind: TErrTypeParse, Pos: parser.curr, Hint: "expected ':' or '}'"})
+		*errs = append(*errs, TypeError{Kind: TErrTypeParse, Pos: parser.curr, Hint: "expected ':' or '}', got " + tokDesc(parser.curr)})
 	} else {
 		parser.NextToken()
 	}
@@ -367,7 +413,7 @@ func (parser *MShellParser) finishDictOrBareType(open Token, first MShellParseIt
 		}
 	}
 	if parser.curr.Type != RIGHT_CURLY {
-		*errs = append(*errs, TypeError{Kind: TErrTypeParse, Pos: parser.curr, Hint: "expected '}'"})
+		*errs = append(*errs, TypeError{Kind: TErrTypeParse, Pos: parser.curr, Hint: "expected '}', got " + tokDesc(parser.curr)})
 	} else {
 		parser.NextToken()
 	}
@@ -379,7 +425,7 @@ func (parser *MShellParser) finishDictOrBareType(open Token, first MShellParseIt
 func (parser *MShellParser) parseWildcardDictBody(open Token, errs *[]TypeError) MShellParseItem {
 	parser.NextToken() // consume *
 	if parser.curr.Type != COLON {
-		*errs = append(*errs, TypeError{Kind: TErrTypeParse, Pos: parser.curr, Hint: "expected ':' after '*'"})
+		*errs = append(*errs, TypeError{Kind: TErrTypeParse, Pos: parser.curr, Hint: "expected ':' after '*', got " + tokDesc(parser.curr)})
 	} else {
 		parser.NextToken()
 	}
@@ -389,7 +435,7 @@ func (parser *MShellParser) parseWildcardDictBody(open Token, errs *[]TypeError)
 		parser.NextToken()
 	}
 	if parser.curr.Type != RIGHT_CURLY {
-		*errs = append(*errs, TypeError{Kind: TErrTypeParse, Pos: parser.curr, Hint: "expected '}'"})
+		*errs = append(*errs, TypeError{Kind: TErrTypeParse, Pos: parser.curr, Hint: "expected '}', got " + tokDesc(parser.curr)})
 	} else {
 		parser.NextToken()
 	}
@@ -421,7 +467,7 @@ func (parser *MShellParser) continueTypeShapeBody(shape *TypeShapeExpr, errs *[]
 		if parser.curr.Type == ASTERISK {
 			parser.NextToken() // consume *
 			if parser.curr.Type != COLON {
-				*errs = append(*errs, TypeError{Kind: TErrTypeParse, Pos: parser.curr, Hint: "expected ':' after '*'"})
+				*errs = append(*errs, TypeError{Kind: TErrTypeParse, Pos: parser.curr, Hint: "expected ':' after '*', got " + tokDesc(parser.curr)})
 			} else {
 				parser.NextToken()
 			}
@@ -455,11 +501,12 @@ func (parser *MShellParser) continueTypeShapeBody(shape *TypeShapeExpr, errs *[]
 			}
 			parser.NextToken()
 		default:
-			*errs = append(*errs, TypeError{Kind: TErrTypeParse, Pos: nameTok, Hint: "expected shape field name"})
-			return
+			*errs = append(*errs, TypeError{Kind: TErrTypeParse, Pos: nameTok, Hint: "expected shape field name, got " + tokDesc(nameTok) + " (each field needs a name like 'foo': T)"})
+			parser.skipToShapeSync()
+			continue
 		}
 		if parser.curr.Type != COLON {
-			*errs = append(*errs, TypeError{Kind: TErrTypeParse, Pos: parser.curr, Hint: "expected ':'"})
+			*errs = append(*errs, TypeError{Kind: TErrTypeParse, Pos: parser.curr, Hint: "expected ':' after shape field name '" + name + "', got " + tokDesc(parser.curr)})
 		} else {
 			parser.NextToken()
 		}
@@ -479,7 +526,7 @@ func (parser *MShellParser) continueTypeShapeBody(shape *TypeShapeExpr, errs *[]
 		}
 	}
 	if parser.curr.Type != RIGHT_CURLY {
-		*errs = append(*errs, TypeError{Kind: TErrTypeParse, Pos: parser.curr, Hint: "expected '}'"})
+		*errs = append(*errs, TypeError{Kind: TErrTypeParse, Pos: parser.curr, Hint: "expected '}', got " + tokDesc(parser.curr)})
 	} else {
 		parser.NextToken()
 	}
@@ -527,10 +574,10 @@ func (parser *MShellParser) parseTypeQuote(errs *[]TypeError) MShellParseItem {
 			outputs = append(outputs, item)
 		}
 	} else {
-		*errs = append(*errs, TypeError{Kind: TErrTypeParse, Pos: parser.curr, Hint: "expected '--' in quote signature"})
+		*errs = append(*errs, TypeError{Kind: TErrTypeParse, Pos: parser.curr, Hint: "expected '--' in quote signature, got " + tokDesc(parser.curr)})
 	}
 	if parser.curr.Type != RIGHT_PAREN {
-		*errs = append(*errs, TypeError{Kind: TErrTypeParse, Pos: parser.curr, Hint: "expected ')'"})
+		*errs = append(*errs, TypeError{Kind: TErrTypeParse, Pos: parser.curr, Hint: "expected ')', got " + tokDesc(parser.curr)})
 	} else {
 		parser.NextToken()
 	}
@@ -556,7 +603,7 @@ func (parser *MShellParser) applyMaybeArgs(node *TypeNamed, errs *[]TypeError) {
 	inner, subErrs := parser.parseTypeExpr()
 	*errs = append(*errs, subErrs...)
 	if parser.curr.Type != RIGHT_SQUARE_BRACKET {
-		*errs = append(*errs, TypeError{Kind: TErrTypeParse, Pos: parser.curr, Hint: "expected ']'"})
+		*errs = append(*errs, TypeError{Kind: TErrTypeParse, Pos: parser.curr, Hint: "expected ']' to close Maybe[T], got " + tokDesc(parser.curr)})
 	} else {
 		parser.NextToken()
 	}
@@ -601,7 +648,7 @@ func (parser *MShellParser) parseDefSignature() ([]MShellParseItem, []MShellPars
 		return nil, nil, err
 	}
 	if len(errs) > 0 {
-		return nil, nil, fmt.Errorf("def signature: %s", joinTypeErrs(errs))
+		return nil, nil, fmt.Errorf("%s", joinTypeErrs(errs))
 	}
 	return inputs, outputs, nil
 }

@@ -1,0 +1,3 @@
+# A column-key value that matches a row-key column name should error.
+[| region, label, n; "East", "region", 1 |]
+["region"] "label" ("n" gridCol sumInt) pivot wl

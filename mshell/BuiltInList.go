@@ -130,6 +130,7 @@ var BuiltInList = map[string]struct{}{
 	"parseJson": {},
 	"parseLinkHeader": {},
 	"pick": {},
+	"pivot": {},
 	"pop": {},
 	"pow": {},
 	"prompt": {},

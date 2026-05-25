@@ -1,0 +1,1 @@
+3:45: pivot column-key column 'month' must contain only strings, found Integer at row 0.
