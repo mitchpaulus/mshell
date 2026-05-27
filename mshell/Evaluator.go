@@ -809,8 +809,9 @@ func (state *EvalState) processToken(token MShellParseItem, frame *EvaluationFra
 			return state.callDefinition(def, funcToken, frame, frames)
 		}
 
-		// Not a definition - fall back to token processing
-		return state.processTokenLiteral(funcToken, frame)
+		// Not a definition - dispatch directly to token evaluation
+		callStackItem := CallStackItem{MShellParseItem: nil, Name: "literal", CallStackType: frame.CallStackItem.CallStackType}
+		return state.evaluateToken(funcToken, frame.Stack, frame.Context, frame.Definitions, callStackItem)
 
 	case *MShellParseIfBlock:
 		return state.processIfBlock(t, frame, frames)
@@ -1358,7 +1359,7 @@ func (state *EvalState) processTokenToken(t Token, frame *EvaluationFrame, frame
 			return state.callDefinition(def, t, frame, frames)
 		}
 		// Not a definition - process as regular literal
-		return state.processTokenLiteral(t, frame)
+		return state.evaluateToken(t, frame.Stack, frame.Context, frame.Definitions, frame.CallStackItem)
 	}
 
 	if t.Type == BREAK {
@@ -1387,25 +1388,10 @@ func (state *EvalState) processTokenToken(t Token, frame *EvaluationFrame, frame
 		return state.processIff(t, frame, frames)
 	}
 
-	// For other token types, fall back to the old Evaluate for now
-	// We'll wrap the single token in a slice and call Evaluate
-	// This is a temporary bridge while we migrate all token handling
-	// Preserve the call stack type from the frame
+	// Direct dispatch into evaluateToken — avoids per-token slice allocation.
+	// Preserve the call stack type from the frame.
 	callStackItem := CallStackItem{MShellParseItem: nil, Name: "token", CallStackType: frame.CallStackItem.CallStackType}
-	result := state.evaluateItems([]MShellParseItem{t}, stack, context, definitions, callStackItem)
-	return result
-}
-
-// processTokenLiteral handles LITERAL tokens that are not definitions
-func (state *EvalState) processTokenLiteral(t Token, frame *EvaluationFrame) EvalResult {
-	stack := frame.Stack
-	context := frame.Context
-	definitions := frame.Definitions
-
-	// Fall back to old Evaluate for literal handling, preserving the call stack type
-	callStackItem := CallStackItem{MShellParseItem: nil, Name: "literal", CallStackType: frame.CallStackItem.CallStackType}
-	result := state.evaluateItems([]MShellParseItem{t}, stack, context, definitions, callStackItem)
-	return result
+	return state.evaluateToken(t, stack, context, definitions, callStackItem)
 }
 
 // processLoop handles the loop construct
@@ -2733,7 +2719,6 @@ func (state *EvalState) evaluateItems(objects []MShellParseItem, stack *MShellSt
 
 	index := 0
 
-MainLoop:
 	for index < len(objects) {
 		t := objects[index]
 		index++
@@ -3122,7 +3107,2357 @@ MainLoop:
 			}
 
 		case Token:
+			result := state.evaluateToken(t, stack, context, definitions, callStackItem)
+			if result.ShouldPassResultUpStack() {
+				return result
+			}
+		case *MShellAsCast:
+			// Static-only: `as` is a checker hint; no runtime work.
+		case *MShellTypeDecl:
+			// Static-only: type declarations have no runtime effect by design.
+		default:
+			return state.FailWithMessage(fmt.Sprintf("We haven't implemented the type '%T' yet.\n", t))
+		}
 
+	}
+
+	return EvalResult{true, false, -1, 0, false}
+}
+
+const (
+	FORMATMODENORMAL = iota
+	FORMATMODEESCAPE
+	FORMATMODEFORMAT
+)
+
+func (state *EvalState) EvaluateFormatString(lexeme string, context ExecuteContext, definitions []MShellDefinition, callStackItem CallStackItem) (MShellString, error) {
+
+	allRunes := []rune(lexeme)
+
+	if len(allRunes) < 3 {
+		return MShellString{""}, fmt.Errorf("Found format string with less than 3 characters: %s", lexeme)
+	}
+
+	var b strings.Builder
+
+	index := 2
+	mode := FORMATMODENORMAL
+
+	formatStrStartIndex := -1
+	formatStrEndIndex := -1
+
+	lexer := NewLexer("", nil)
+	parser := MShellParser{lexer: lexer}
+
+	for index < len(allRunes)-1 {
+		c := allRunes[index]
+		index++
+
+		switch mode {
+		case FORMATMODEESCAPE:
+			switch c {
+			case 'e':
+				b.WriteRune('\033')
+			case 'n':
+				b.WriteRune('\n')
+			case 't':
+				b.WriteRune('\t')
+			case 'r':
+				b.WriteRune('\r')
+			case '\\':
+				b.WriteRune('\\')
+			case '"':
+				b.WriteRune('"')
+			case '{':
+				b.WriteRune('{') // This is a literal '{' in the format string
+			default:
+				return MShellString{""}, fmt.Errorf("invalid escape character '%c'", c)
+			}
+			mode = FORMATMODENORMAL
+		case FORMATMODENORMAL:
+			switch c {
+			case '\\':
+				mode = FORMATMODEESCAPE
+			case '{':
+				formatStrStartIndex = index - 1
+				mode = FORMATMODEFORMAT
+			default:
+				b.WriteRune(rune(c))
+			}
+		case FORMATMODEFORMAT:
+			if c == '}' {
+				formatStrEndIndex = index - 1
+				formatStr := string(allRunes[formatStrStartIndex+1 : formatStrEndIndex])
+
+				// Evaluate the format string
+				lexer.resetInput(formatStr)
+				parser.NextToken()
+				contents, err := parser.ParseFile()
+				if err != nil {
+					return MShellString{""}, fmt.Errorf("Error parsing format string %s: %s", formatStr, err)
+				}
+
+				// Evaluate the format string contents
+				var stack MShellStack
+				stack = []MShellObject{}
+
+				result := state.evaluateItems(contents.Items, &stack, context, definitions, callStackItem)
+
+				if !result.Success {
+					return MShellString{""}, fmt.Errorf("Error evaluating format string %s", formatStr)
+				}
+
+				if len(stack) != 1 {
+					return MShellString{""}, fmt.Errorf("Format string %s did not evaluate to a single value", formatStr)
+				}
+
+				// Get the string representation of the result
+				resultStr, err := stack[0].CastString()
+				if err != nil {
+					return MShellString{""}, fmt.Errorf("Format string contents %s did not evaluate to a stringable value", formatStr)
+				}
+
+				b.WriteString(resultStr)
+
+				formatStrStartIndex = -1
+				formatStrEndIndex = -1
+				mode = FORMATMODENORMAL
+			}
+		default:
+			panic("Unknown format mode")
+		}
+	}
+
+	if mode != FORMATMODENORMAL {
+		return MShellString{""}, fmt.Errorf("Format string ended in an invalid state")
+	}
+
+	return MShellString{b.String()}, nil
+}
+
+type Executable interface {
+	Execute(state *EvalState, context ExecuteContext, stack *MShellStack) (EvalResult, int, []byte, []byte)
+	GetStandardInputFile() string
+	GetStandardOutputFile() string
+}
+
+func (list *MShellList) Execute(state *EvalState, context ExecuteContext, stack *MShellStack) (EvalResult, int, []byte, []byte) {
+	result, exitCode, stdoutResult, stderrResult := RunProcess(*list, context, state)
+	return result, exitCode, stdoutResult, stderrResult
+}
+
+func (quotation *MShellQuotation) Execute(state *EvalState, context ExecuteContext, stack *MShellStack, definitions []MShellDefinition, callStack CallStack) (EvalResult, int) {
+	quotationContext := ExecuteContext{
+		StandardInput:  nil,
+		StandardOutput: nil,
+		Variables:      quotation.Variables,
+		Pbm:            context.Pbm,
+	}
+
+	if quotation.StdinBehavior != STDIN_NONE {
+		switch quotation.StdinBehavior {
+		case STDIN_CONTENT:
+			quotationContext.StandardInput = strings.NewReader(quotation.StandardInputContents)
+		case STDIN_BINARY:
+			quotationContext.StandardInput = bytes.NewReader(quotation.StandardInputBinary)
+		case STDIN_FILE:
+			file, err := os.Open(quotation.StandardInputFile)
+			if err != nil {
+				return state.FailWithMessage(fmt.Sprintf("Error opening file %s for reading: %s\n", quotation.StandardInputFile, err.Error())), 1
+			}
+			quotationContext.StandardInput = file
+			defer file.Close()
+		default:
+			panic("Unknown stdin behavior")
+		}
+	} else if context.StandardInput != nil {
+		quotationContext.StandardInput = context.StandardInput
+	} else {
+		// Default to stdin of this process itself
+		quotationContext.StandardInput = os.Stdin
+	}
+
+	if quotation.StandardOutputFile != "" {
+		file, err := os.Create(quotation.StandardOutputFile)
+		if err != nil {
+			return state.FailWithMessage(fmt.Sprintf("Error opening file %s for writing: %s\n", quotation.StandardOutputFile, err.Error())), 1
+		}
+		quotationContext.StandardOutput = file
+		defer file.Close()
+	} else if context.StandardOutput != nil {
+		quotationContext.StandardOutput = context.StandardOutput
+	} else {
+		// Default to stdout of this process itself
+		quotationContext.StandardOutput = os.Stdout
+	}
+
+	result := state.evaluateItems(quotation.Tokens, stack, quotationContext, definitions, CallStackItem{quotation, "quote", CALLSTACKQUOTE})
+
+	if !result.Success || result.ExitCalled {
+		return result, result.ExitCode
+	} else {
+		return SimpleSuccess(), 0
+	}
+}
+
+func (list *MShellList) GetStandardInputFile() string {
+	return list.StandardInputFile
+}
+
+func (list *MShellList) GetStandardOutputFile() string {
+	return list.StandardOutputFile
+}
+
+func (quotation *MShellQuotation) GetStandardInputFile() string {
+	return quotation.StandardInputFile
+}
+
+func (quotation *MShellQuotation) GetStandardOutputFile() string {
+	return quotation.StandardOutputFile
+}
+
+func (state *EvalState) ChangeDirectory(dir string) (EvalResult, int, []byte, []byte) {
+	cwd, currDirErr := os.Getwd()
+
+	err := os.Chdir(dir)
+	if err != nil {
+		return state.FailWithMessage(fmt.Sprintf("Error changing directory to %s: %s\n", dir, err.Error())), 1, nil, nil
+	}
+
+	if currDirErr == nil {
+		// Update OLDPWD and PWD
+		err = os.Setenv("OLDPWD", cwd)
+		if err != nil {
+			return state.FailWithMessage(fmt.Sprintf("Error setting OLDPWD: %s\n", err.Error())), 1, nil, nil
+		}
+
+		err = os.Setenv("PWD", dir)
+		if err != nil {
+			return state.FailWithMessage(fmt.Sprintf("Error setting PWD: %s\n", err.Error())), 1, nil, nil
+		}
+
+		state.AddPreviousDirectory(cwd)
+	}
+
+	return SimpleSuccess(), 0, nil, nil
+}
+
+func (state *EvalState) AddPreviousDirectory(dir string) {
+	if dir == "" {
+		return
+	}
+
+	normalizedDir := filepath.Clean(dir)
+	writeIndex := 0
+	for _, existingDir := range state.PreviousDirectories {
+		if existingDir == normalizedDir {
+			continue
+		}
+		state.PreviousDirectories[writeIndex] = existingDir
+		writeIndex++
+	}
+
+	state.PreviousDirectories = state.PreviousDirectories[:writeIndex]
+	state.PreviousDirectories = append(state.PreviousDirectories, normalizedDir)
+}
+
+func cdhSelectionToIndex(selection string, maxIndex int) (int, bool) {
+	selection = strings.TrimSpace(selection)
+	if selection == "" {
+		return 0, false
+	}
+
+	if selectionNum, err := strconv.Atoi(selection); err == nil {
+		if selectionNum < 1 || selectionNum > maxIndex {
+			return 0, false
+		}
+		return selectionNum, true
+	}
+
+	if len(selection) == 1 {
+		selectionRune := unicode.ToLower(rune(selection[0]))
+		if selectionRune >= 'a' && selectionRune <= 'z' {
+			letterIndex := int(selectionRune-'a') + 1
+			if letterIndex >= 1 && letterIndex <= maxIndex {
+				return letterIndex, true
+			}
+		}
+	}
+
+	return 0, false
+}
+
+func isValidCdhSelectionByte(b byte, maxEntries int) bool {
+	if maxEntries <= 0 {
+		return false
+	}
+
+	if b >= '1' && b <= '9' {
+		return int(b-'0') <= maxEntries
+	}
+
+	if b >= 'a' && b <= 'z' {
+		return int(b-'a'+1) <= maxEntries
+	}
+
+	if b >= 'A' && b <= 'Z' {
+		return int(b-'A'+1) <= maxEntries
+	}
+
+	return false
+}
+
+type promptTTYIO struct {
+	// input reads user keystrokes from the controlling TTY.
+	input *os.File
+	// output writes prompt text to the controlling TTY. This is separate from
+	// input on Windows (CONIN$ vs CONOUT$), but may be the same file on Unix.
+	output *os.File
+}
+
+func (tty *promptTTYIO) Close() {
+	if tty == nil {
+		return
+	}
+	if tty.input != nil {
+		tty.input.Close()
+	}
+	if tty.output != nil && tty.output != tty.input {
+		tty.output.Close()
+	}
+}
+
+// openPromptTTYFunc is overridable in tests so prompt behavior can be verified
+// without requiring a real controlling terminal in the test runner.
+var openPromptTTYFunc = defaultOpenPromptTTY
+
+// defaultOpenPromptTTY opens the process controlling terminal for production use.
+func defaultOpenPromptTTY() (*promptTTYIO, error) {
+	if runtime.GOOS == "windows" {
+		input, err := os.OpenFile("CONIN$", os.O_RDONLY, 0)
+		if err != nil {
+			return nil, err
+		}
+
+		output, err := os.OpenFile("CONOUT$", os.O_WRONLY, 0)
+		if err != nil {
+			input.Close()
+			return nil, err
+		}
+
+		return &promptTTYIO{input: input, output: output}, nil
+	}
+
+	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		return nil, err
+	}
+	return &promptTTYIO{input: tty, output: tty}, nil
+}
+
+func readPromptLine(reader io.Reader) (string, error) {
+	bufferedReader := bufio.NewReader(reader)
+	line, err := bufferedReader.ReadString('\n')
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			if len(line) == 0 {
+				return "", io.EOF
+			}
+		} else {
+			return "", err
+		}
+	}
+
+	if len(line) > 0 && line[len(line)-1] == '\n' {
+		line = line[:len(line)-1]
+	}
+	if len(line) > 0 && line[len(line)-1] == '\r' {
+		line = line[:len(line)-1]
+	}
+
+	return line, nil
+}
+
+func readPromptFromTTY(promptText string) (string, error) {
+	tty, err := openPromptTTYFunc()
+	if err != nil {
+		return "", err
+	}
+	defer tty.Close()
+
+	_, err = tty.output.Write([]byte(promptText))
+	if err != nil {
+		return "", err
+	}
+
+	return readPromptLine(tty.input)
+}
+
+func readCdhSelection(stdin io.Reader, stdout io.Writer, maxEntries int) (string, error) {
+	if stdinFile, ok := stdin.(*os.File); ok {
+		stdinFd := int(stdinFile.Fd())
+		if term.IsTerminal(stdinFd) {
+			oldState, err := term.MakeRaw(stdinFd)
+			if err == nil {
+				defer term.Restore(stdinFd, oldState)
+
+				for {
+					buf := make([]byte, 1)
+					n, readErr := stdinFile.Read(buf)
+					if n > 0 {
+						b := buf[0]
+						if b == 3 {
+							fmt.Fprint(stdout, "\r\n")
+							return "", nil
+						}
+						if b == '\r' || b == '\n' {
+							fmt.Fprint(stdout, "\r\n")
+							return "", nil
+						}
+						if b == 127 || b == 8 {
+							continue
+						}
+
+						if !isValidCdhSelectionByte(b, maxEntries) {
+							continue
+						}
+
+						fmt.Fprintf(stdout, "%c", b)
+						fmt.Fprint(stdout, "\r\n")
+						return string([]byte{b}), nil
+					}
+
+					if readErr != nil {
+						if errors.Is(readErr, io.EOF) {
+							return "", nil
+						}
+						return "", readErr
+					}
+				}
+			}
+		}
+	}
+
+	reader := bufio.NewReader(stdin)
+	selection, err := reader.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", err
+	}
+
+	trimmed := strings.TrimSpace(selection)
+	for i := 0; i < len(trimmed); i++ {
+		b := trimmed[i]
+		if b == 3 {
+			return "", nil
+		}
+		if isValidCdhSelectionByte(b, maxEntries) {
+			return string([]byte{b}), nil
+		}
+	}
+	return "", nil
+}
+
+func (state *EvalState) RunCdh(context ExecuteContext) (EvalResult, error) {
+	if len(state.PreviousDirectories) == 0 {
+		return SimpleSuccess(), nil
+	}
+
+	stdout := context.StandardOutput
+	if stdout == nil {
+		stdout = os.Stdout
+	}
+
+	stdin := context.StandardInput
+	if stdin == nil {
+		stdin = os.Stdin
+	}
+
+	currentDir, err := os.Getwd()
+	if err != nil {
+		return state.FailWithMessage(fmt.Sprintf("Error getting current directory: %s\n", err.Error())), err
+	}
+	currentDir = filepath.Clean(currentDir)
+
+	selectableDirs := make([]string, 0, len(state.PreviousDirectories))
+	for _, dir := range state.PreviousDirectories {
+		if filepath.Clean(dir) == currentDir {
+			continue
+		}
+		selectableDirs = append(selectableDirs, dir)
+	}
+
+	if len(selectableDirs) == 0 {
+		return SimpleSuccess(), nil
+	}
+
+	maxEntries := min(len(selectableDirs), 9)
+
+	start := len(selectableDirs) - maxEntries
+	for i := start; i < len(selectableDirs); i++ {
+		selectionIndex := len(selectableDirs) - i
+		selectionLetter := rune('a' + selectionIndex - 1)
+		fmt.Fprintf(stdout, " %c  %d)  %s\n", selectionLetter, selectionIndex, selectableDirs[i])
+	}
+
+	fmt.Fprint(stdout, "Select directory by letter or number: ")
+	selection, err := readCdhSelection(stdin, stdout, maxEntries)
+	if err != nil {
+		return state.FailWithMessage(fmt.Sprintf("Error reading cdh selection: %s\n", err.Error())), err
+	}
+
+	if selection == "" {
+		return SimpleSuccess(), nil
+	}
+
+	selectionIndex, ok := cdhSelectionToIndex(selection, maxEntries)
+	if !ok {
+		return state.FailWithMessage("Invalid cdh selection.\n"), fmt.Errorf("invalid cdh selection")
+	}
+
+	targetDir := selectableDirs[len(selectableDirs)-selectionIndex]
+	result, exitCode, _, _ := state.ChangeDirectory(targetDir)
+	if exitCode != 0 {
+		return result, fmt.Errorf("cdh change directory failed")
+	}
+	return result, nil
+}
+
+func (state *EvalState) RunCdp() (EvalResult, error) {
+	if len(state.PreviousDirectories) == 0 {
+		return SimpleSuccess(), nil
+	}
+
+	targetDir := state.PreviousDirectories[len(state.PreviousDirectories)-1]
+	result, exitCode, _, _ := state.ChangeDirectory(targetDir)
+	if exitCode != 0 {
+		return result, fmt.Errorf("cdp change directory failed")
+	}
+	return result, nil
+}
+
+func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (EvalResult, int, []byte, []byte) {
+	// Returns the result of running the process, the exit code, and the stdout result
+
+	// Check for empty list
+	if len(list.Items) == 0 {
+		return state.FailWithMessage("Cannot execute an empty list.\n"), 1, nil, nil
+	}
+
+	commandLineArgs := make([]string, 0)
+	var commandLineQueue []MShellObject
+
+	// Add all items to the queue, first in is the end of the slice, so add in reverse order
+	for i := len(list.Items) - 1; i >= 0; i-- {
+		commandLineQueue = append(commandLineQueue, list.Items[i])
+	}
+
+	for len(commandLineQueue) > 0 {
+		item := commandLineQueue[len(commandLineQueue)-1]
+		commandLineQueue = commandLineQueue[:len(commandLineQueue)-1]
+
+		if innerList, ok := item.(*MShellList); ok {
+			// Add to queue, first in is the end of the slice, so add in reverse order
+			for i := len(innerList.Items) - 1; i >= 0; i-- {
+				commandLineQueue = append(commandLineQueue, innerList.Items[i])
+			}
+		} else if !item.IsCommandLineable() {
+			return state.FailWithMessage(fmt.Sprintf("Item (%s) cannot be used as a command line argument.\n", item.DebugString())), 1, nil, nil
+		} else {
+			commandLineArgs = append(commandLineArgs, item.CommandLine())
+		}
+	}
+
+	// Need to check length here. You could have had a list of empty lists like:
+	// [[] [] [] []]
+	if len(commandLineArgs) == 0 {
+		return state.FailWithMessage("After list flattening, there still were no arguments to execute.\n"), 1, nil , nil
+	}
+
+	// Handle cd command specially
+	if commandLineArgs[0] == "cd" {
+		if len(commandLineArgs) > 3 {
+			fmt.Fprint(os.Stderr, "cd command only takes one argument.\n")
+		} else if len(commandLineArgs) == 2 {
+			// Check for -h or --help
+			if commandLineArgs[1] == "-h" || commandLineArgs[1] == "--help" {
+				fmt.Fprint(os.Stderr, "cd: cd [dir]\nChange the shell working directory.\n")
+				return SimpleSuccess(), 0, nil, nil
+			} else {
+				return state.ChangeDirectory(commandLineArgs[1])
+			}
+		} else {
+			// else cd to home directory
+			homeDir, err := os.UserHomeDir()
+			if err != nil {
+				return state.FailWithMessage(fmt.Sprintf("Error getting home directory: %s\n", err.Error())), 1, nil, nil
+			}
+
+			return state.ChangeDirectory(homeDir)
+		}
+
+		return SimpleSuccess(), 0, nil, nil
+	}
+
+	// Handle cdh/cdp commands specially
+	if commandLineArgs[0] == "cdh" || commandLineArgs[0] == "cdp" {
+		commandName := commandLineArgs[0]
+		takesNoArgsMessage := fmt.Sprintf("%s command takes no arguments.\n", commandName)
+
+		if len(commandLineArgs) > 2 {
+			fmt.Fprint(os.Stderr, takesNoArgsMessage)
+			return SimpleSuccess(), 0, nil, nil
+		}
+
+		if len(commandLineArgs) == 2 {
+			if commandLineArgs[1] == "-h" || commandLineArgs[1] == "--help" {
+				if commandName == "cdh" {
+					fmt.Fprint(os.Stderr, "cdh: cdh\nShow previous directories and select one to cd into.\n")
+				} else {
+					fmt.Fprint(os.Stderr, "cdp: cdp\nChange directory to the most recent previous directory.\n")
+				}
+			} else {
+				fmt.Fprint(os.Stderr, takesNoArgsMessage)
+			}
+			return SimpleSuccess(), 0, nil, nil
+		}
+
+		var result EvalResult
+		var err error
+		if commandName == "cdh" {
+			result, err = state.RunCdh(context)
+		} else {
+			result, err = state.RunCdp()
+		}
+
+		if err != nil {
+			return result, 1, nil, nil
+		}
+		return result, 0, nil, nil
+	}
+
+	// Check that we find the command in the path
+
+	var allArgs []string
+	var cmdPath string
+
+	// Check if there is a directory separator in the name of the command trying to execute
+	if strings.Contains(commandLineArgs[0], string(os.PathSeparator)) {
+		cmdPath = commandLineArgs[0]
+	} else {
+		var found bool
+		if context.Pbm == nil {
+			fmt.Fprint(os.Stderr, "No context found.\n")
+			return state.FailWithMessage(fmt.Sprintf("Command '%s' not found in path.\n", commandLineArgs[0])), 1, nil, nil
+		}
+
+		cmdPath, found = context.Pbm.Lookup(commandLineArgs[0])
+		if !found {
+			return state.FailWithMessage(fmt.Sprintf("Command '%s' not found in path.\n", commandLineArgs[0])), 1, nil, nil
+		}
+	}
+
+	// For interpreted files on Windows, we need to essentially do what a shebang on Linux does
+	cmdItems, err := context.Pbm.ExecuteArgs(cmdPath)
+	if err != nil {
+		return state.FailWithMessage(fmt.Sprintf("On Windows, we currently don't handle this file/extension: %s\n", cmdPath)), 1, nil, nil
+	}
+
+	allArgs = make([]string, 0, len(cmdItems)+len(commandLineArgs))
+	allArgs = append(allArgs, cmdItems...)
+	allArgs = append(allArgs, commandLineArgs[1:]...)
+
+	cmd := context.Pbm.SetupCommand(allArgs)
+	// cmd := exec.Command(allArgs[0], allArgs[1:]...)
+	// cmd := exec.Command(commandLineArgs[0], commandLineArgs[1:]...)
+	cmd.Env = os.Environ()
+
+	// Check for same-path stdout/stderr redirection
+	// If both are redirecting to the exact same path string, use a single file descriptor
+	samePath := list.StandardOutputFile != "" && list.StandardOutputFile == list.StandardErrorFile
+	if samePath && list.AppendOutput != list.AppendError {
+		return state.FailWithMessage(fmt.Sprintf("Cannot redirect stdout and stderr to the same file '%s' with different append modes.\n", list.StandardOutputFile)), 1, nil, nil
+	}
+
+	// STDOUT HANDLING
+	var commandSubWriter bytes.Buffer
+	var sharedOutputFile *os.File // Used when stdout and stderr go to the same file
+	var inPlaceFileMode os.FileMode // File mode for in-place file, preserved across write
+	// TBD: Should we allow command substituation and redirection at the same time?
+	// Probably more hassle than worth including, with probable workarounds for that rare case.
+	if list.StdoutBehavior != STDOUT_NONE {
+		cmd.Stdout = &commandSubWriter
+	} else if list.InPlaceFile != "" {
+		// In-place file modification: capture stdout to buffer, write back on success
+		// Get original file permissions to preserve them
+		fileInfo, err := os.Stat(list.InPlaceFile)
+		if err != nil {
+			return state.FailWithMessage(fmt.Sprintf("Error getting file info for '%s': %s\n", list.InPlaceFile, err.Error())), 1, nil, nil
+		}
+		inPlaceFileMode = fileInfo.Mode()
+		cmd.Stdout = &commandSubWriter
+	} else if list.StandardOutputFile != "" {
+		// Open the file for writing
+		var file *os.File
+		if list.AppendOutput {
+			file, err = os.OpenFile(list.StandardOutputFile, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+		} else {
+			file, err = os.Create(list.StandardOutputFile)
+		}
+
+		if err != nil {
+			return state.FailWithMessage(fmt.Sprintf("Error opening file %s for writing: %s\n", list.StandardOutputFile, err.Error())), 1, nil, nil
+		}
+		cmd.Stdout = file
+		if samePath {
+			sharedOutputFile = file
+		}
+		defer file.Close()
+	} else if context.StandardOutput != nil {
+		cmd.Stdout = context.StandardOutput
+	} else {
+		if list.RunInBackground {
+			cmd.Stdout = nil
+		} else {
+			// Default to stdout of this process itself
+			cmd.Stdout = os.Stdout
+			// cmd.Stdout = nil
+		}
+	}
+
+	// STDIN HANDLING
+	if list.StdinBehavior != STDIN_NONE {
+		switch list.StdinBehavior {
+		case STDIN_CONTENT:
+			cmd.Stdin = strings.NewReader(list.StandardInputContents)
+		case STDIN_BINARY:
+			cmd.Stdin = bytes.NewReader(list.StandardInputBinary)
+		case STDIN_FILE:
+			// Open the file for reading
+			file, err := os.Open(list.StandardInputFile)
+			if err != nil {
+				return state.FailWithMessage(fmt.Sprintf("Error opening file %s for reading: %s\n", list.StandardInputFile, err.Error())), 1, nil, nil
+			}
+			cmd.Stdin = file
+			defer file.Close()
+		default:
+			panic("Unknown stdin behavior")
+		}
+
+	} else if context.StandardInput != nil {
+		cmd.Stdin = context.StandardInput
+
+		// Print position of reader
+		// position, err := cmd.Stdin.(*os.File).Seek(0, io.SeekCurrent)
+		// if err != nil {
+		// return state.FailWithMessage(fmt.Sprintf("Error getting position of reader: %s\n", err.Error())), 1
+		// }
+		// fmt.Fprintf(os.Stderr, "Position of reader: %d\n", position)
+	} else {
+		// Default to stdin of this process itself
+		cmd.Stdin = os.Stdin
+	}
+
+	// STDERR HANDLING
+	var stderrBuffer bytes.Buffer
+
+	if list.StderrBehavior != STDERR_NONE {
+		cmd.Stderr = &stderrBuffer
+	} else if sharedOutputFile != nil {
+		// Use the same file descriptor as stdout
+		cmd.Stderr = sharedOutputFile
+	} else if list.StandardErrorFile != "" {
+		// Open the file for writing
+		var file *os.File
+		if list.AppendError {
+			file, err = os.OpenFile(list.StandardErrorFile, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+		} else {
+			file, err = os.Create(list.StandardErrorFile)
+		}
+		if err != nil {
+			return state.FailWithMessage(fmt.Sprintf("Error opening file %s for writing: %s\n", list.StandardErrorFile, err.Error())), 1, nil, nil
+		}
+		cmd.Stderr = file
+		defer file.Close()
+	} else if context.StandardError != nil {
+		cmd.Stderr = context.StandardError
+	} else {
+		if list.RunInBackground {
+			cmd.Stderr = nil
+		} else {
+			// Default to stderr of this process itself
+			cmd.Stderr = os.Stderr
+		}
+	}
+
+	var startErr error
+	var exitCode int
+
+	if list.RunInBackground {
+		// Print out current stdout and stderr
+		startErr = cmd.Start()
+
+		if startErr != nil {
+			fmt.Fprintf(os.Stderr, "Error starting command: %s\n", startErr.Error())
+			exitCode = 1
+		}
+		exitCode = 0 // TODO: What to set here?
+	} else {
+		// Use Start + Wait instead of Run so we can set the foreground process group
+		startErr = cmd.Start()
+		if startErr != nil {
+			fmt.Fprintf(os.Stderr, "Error starting command: %s\n", startErr.Error())
+			fmt.Fprintf(os.Stderr, "Command: '%s'\n", cmd.Path)
+			for i, arg := range cmd.Args {
+				fmt.Fprintf(os.Stderr, "Arg %d: '%s'\n", i, arg)
+			}
+			exitCode = 1
+		} else {
+			// If we're in a pipeline, report the PID so RunPipeline can manage foreground
+			if context.InPipeline && context.PipelinePidChan != nil && cmd.Process != nil {
+				select {
+				case context.PipelinePidChan <- cmd.Process.Pid:
+				default:
+					// Channel full or closed, that's fine - first process already reported
+				}
+			}
+
+			// If stdin is a terminal and we're not in a pipeline, set the subprocess as
+			// the foreground process group so that CTRL-C goes to it instead of the shell.
+			// For pipelines, RunPipeline handles foreground process group management.
+			stdinFd := int(os.Stdin.Fd())
+			shouldSetForeground := !context.InPipeline && IsTerminal(stdinFd) && cmd.Process != nil
+			if shouldSetForeground {
+				// Ignore SIGTTOU/SIGTTIN to prevent shell from stopping when manipulating foreground
+				restoreSignals := IgnoreSignalsForJobControl()
+				SetForegroundProcessGroup(stdinFd, cmd.Process.Pid)
+				restoreSignals()
+			}
+
+			waitErr := cmd.Wait()
+
+			// Restore the shell as the foreground process group
+			if shouldSetForeground {
+				restoreSignals := IgnoreSignalsForJobControl()
+				RestoreForegroundProcessGroup(stdinFd)
+				restoreSignals()
+			}
+
+			if waitErr != nil {
+				if _, ok := waitErr.(*exec.ExitError); !ok {
+					fmt.Fprintf(os.Stderr, "Error running command: %s\n", waitErr.Error())
+					exitCode = 1
+				} else {
+					// Command exited with non-zero exit code
+					exitCode = waitErr.(*exec.ExitError).ExitCode()
+				}
+			} else {
+				exitCode = cmd.ProcessState.ExitCode()
+			}
+		}
+	}
+
+	// In-place file modification: write stdout back to file on success (exit code 0)
+	if list.InPlaceFile != "" && exitCode == 0 {
+		err := os.WriteFile(list.InPlaceFile, commandSubWriter.Bytes(), inPlaceFileMode)
+		if err != nil {
+			return state.FailWithMessage(fmt.Sprintf("Error writing to in-place file '%s': %s\n", list.InPlaceFile, err.Error())), 1, nil, nil
+		}
+	}
+
+	return SimpleSuccess(), exitCode, commandSubWriter.Bytes(), stderrBuffer.Bytes()
+}
+
+func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContext, stack *MShellStack) (EvalResult, int, []byte, []byte) {
+	if len(MShellPipe.List.Items) == 0 {
+		return state.FailWithMessage("Cannot execute an empty pipe.\n"), 1, nil, nil
+	}
+
+	// Check that all list items are Executables
+	for i, item := range MShellPipe.List.Items {
+		if _, ok := item.(Executable); !ok {
+			return state.FailWithMessage(fmt.Sprintf("Item %d (%s) in pipe is not a list or a quotation.\n", i, item.DebugString())), 1, nil, nil
+		}
+	}
+
+	if len(MShellPipe.List.Items) == 1 {
+		// Just run the Execute on the first item
+		asExecutable, _ := MShellPipe.List.Items[0].(Executable)
+		return asExecutable.Execute(state, context, stack)
+	}
+
+	// Have at least 2 items here, create pipeline of Executables, set up list of contexts
+	contexts := make([]ExecuteContext, len(MShellPipe.List.Items))
+
+	pipeReaders := make([]io.Reader, len(MShellPipe.List.Items)-1)
+	pipeWriters := make([]io.Writer, len(MShellPipe.List.Items)-1)
+
+	// Set up pipes
+	for i := 0; i < len(MShellPipe.List.Items)-1; i++ {
+		pipeReader, pipeWriter, err := os.Pipe()
+		if err != nil {
+			return state.FailWithMessage(fmt.Sprintf("Error creating pipe: %s\n", err.Error())), 1, nil, nil
+		}
+		pipeReaders[i] = pipeReader
+		pipeWriters[i] = pipeWriter
+	}
+
+	var buf bytes.Buffer
+	var stdErrBuf bytes.Buffer
+
+	// Create a channel to receive the first process PID for foreground management
+	pidChan := make(chan int, 1)
+
+	for i := 0; i < len(MShellPipe.List.Items); i++ {
+		newContext := ExecuteContext{
+			StandardInput:   nil,
+			StandardOutput:  nil,
+			Variables:       context.Variables,
+			Pbm:             context.Pbm,
+			InPipeline:      true,
+			PipelinePidChan: pidChan,
+		}
+
+		if i == 0 {
+			// Stdin should use the context of this function, or the file marked on the initial object
+			executableStdinFile := MShellPipe.List.Items[i].(Executable).GetStandardInputFile()
+
+			if executableStdinFile != "" {
+				file, err := os.Open(executableStdinFile)
+				if err != nil {
+					return state.FailWithMessage(fmt.Sprintf("Error opening file %s for reading: %s\n", executableStdinFile, err.Error())), 1, nil, nil
+				}
+				newContext.StandardInput = file
+				defer file.Close()
+			} else if context.StandardInput != nil {
+				newContext.StandardInput = context.StandardInput
+			} else {
+				// Default to stdin of this process itself
+				newContext.StandardInput = os.Stdin
+			}
+
+			newContext.StandardOutput = pipeWriters[0]
+		} else if i == len(MShellPipe.List.Items)-1 {
+			newContext.StandardInput = pipeReaders[len(pipeReaders)-1]
+
+			// Stdout should use the context of this function
+			if MShellPipe.StdoutBehavior != STDOUT_NONE {
+				newContext.StandardOutput = &buf
+			} else {
+				newContext.StandardOutput = context.StandardOutput
+			}
+
+			// Handle the stderr behavior
+			if MShellPipe.StderrBehavior != STDERR_NONE {
+				newContext.StandardError = &stdErrBuf
+			} else {
+				newContext.StandardError = context.StandardError
+			}
+		} else {
+			newContext.StandardInput = pipeReaders[i-1]
+			newContext.StandardOutput = pipeWriters[i]
+		}
+
+		contexts[i] = newContext
+	}
+
+	// Run the executables concurrently
+	var wg sync.WaitGroup
+	results := make([]EvalResult, len(MShellPipe.List.Items))
+	exitCodes := make([]int, len(MShellPipe.List.Items))
+
+	for i, item := range MShellPipe.List.Items {
+		wg.Add(1)
+		go func(i int, item Executable) {
+			defer wg.Done()
+			// fmt.Fprintf(os.Stderr, "Running item %d\n", i)
+			results[i], exitCodes[i], _, _ = item.Execute(state, contexts[i], stack)
+
+			// Close pipe ends that are no longer needed
+			if i > 0 {
+				pipeReaders[i-1].(io.Closer).Close()
+			}
+			if i < len(MShellPipe.List.Items)-1 {
+				pipeWriters[i].(io.Closer).Close()
+			}
+		}(i, item.(Executable))
+	}
+
+	// Set the first process that reports its PID as the foreground process group
+	// so that CTRL-C goes to the pipeline instead of the shell
+	stdinFd := int(os.Stdin.Fd())
+	setForeground := IsTerminal(stdinFd)
+	if setForeground {
+		select {
+		case pid := <-pidChan:
+			// Ignore SIGTTOU/SIGTTIN to prevent shell from stopping when manipulating foreground
+			restoreSignals := IgnoreSignalsForJobControl()
+			SetForegroundProcessGroup(stdinFd, pid)
+			restoreSignals()
+		case <-time.After(100 * time.Millisecond):
+			// No external process started within timeout (maybe all are built-ins)
+			setForeground = false
+		}
+	}
+
+	// Wait for all processes to complete
+	wg.Wait()
+
+	// Restore the shell as the foreground process group
+	if setForeground {
+		restoreSignals := IgnoreSignalsForJobControl()
+		RestoreForegroundProcessGroup(stdinFd)
+		restoreSignals()
+	}
+
+	var stdoutBytes []byte
+	var stderrBytes []byte
+
+	if MShellPipe.StdoutBehavior != STDOUT_NONE {
+		stdoutBytes = buf.Bytes()
+	} else {
+		stdoutBytes = nil
+	}
+
+	if MShellPipe.StderrBehavior != STDERR_NONE {
+		stderrBytes = stdErrBuf.Bytes()
+	} else {
+		stderrBytes = nil
+	}
+
+	// Check for errors
+	for i, result := range results {
+		if !result.Success {
+			return result, exitCodes[i], stdoutBytes, stderrBytes
+		}
+	}
+
+	return SimpleSuccess(), exitCodes[len(exitCodes)-1], stdoutBytes, stderrBytes
+}
+
+func CopyFile(source string, dest string) error {
+	srcInfo, err := os.Lstat(source)
+	if err != nil {
+		return err
+	}
+
+	// Handle symlinks
+	if srcInfo.Mode()&os.ModeSymlink != 0 {
+		target, err := os.Readlink(source)
+		if err != nil {
+			return err
+		}
+		return os.Symlink(target, dest)
+	}
+
+	// Handle directories recursively
+	if srcInfo.IsDir() {
+		if err := os.MkdirAll(dest, srcInfo.Mode().Perm()); err != nil {
+			return err
+		}
+		entries, err := os.ReadDir(source)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			srcPath := filepath.Join(source, entry.Name())
+			dstPath := filepath.Join(dest, entry.Name())
+			if err := CopyFile(srcPath, dstPath); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	// Regular file: preserve permissions
+	input, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer input.Close()
+
+	output, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, srcInfo.Mode().Perm())
+	if err != nil {
+		return err
+	}
+	defer output.Close()
+
+	_, err = io.Copy(output, input)
+	return err
+}
+
+func VersionSortComparer(a_str string, b_str string) int {
+	a := []rune(a_str)
+	b := []rune(b_str)
+
+	a_index := 0
+	b_index := 0
+
+	a_end_index := 0
+	b_end_index := 0
+
+	for {
+		if a_index >= len(a) {
+			if b_index >= len(b) {
+				return 0 // Both strings are equal
+			} else {
+				return -1 // a is shorter than b
+			}
+		}
+
+		if b_index >= len(b) {
+			return 1 // b is shorter than a
+		}
+
+		cur_a := a[a_index]
+		cur_b := b[b_index]
+
+		if unicode.IsDigit(cur_a) && unicode.IsDigit(cur_b) {
+			a_end_index = a_index
+			b_end_index = b_index
+
+			// Find the end of the digit sequence in a
+			for a_end_index < len(a) && unicode.IsDigit(a[a_end_index]) {
+				a_end_index++
+			}
+
+			a_int, _ := strconv.Atoi(string(a[a_index:a_end_index]))
+
+			// Find the end of the digit sequence in b
+			for b_end_index < len(b) && unicode.IsDigit(b[b_end_index]) {
+				b_end_index++
+			}
+
+			b_int, _ := strconv.Atoi(string(b[b_index:b_end_index]))
+
+			if a_int < b_int {
+				return -1
+			} else if a_int > b_int {
+				return 1
+			} else {
+				a_index = a_end_index
+				b_index = b_end_index
+			}
+		} else if unicode.IsDigit(cur_a) {
+			// Check is b is less than 0
+			if cur_b < '0' {
+				return 1
+			} else {
+				return -1
+			}
+		} else if unicode.IsDigit(cur_b) {
+			// Check is a is less than 0
+			if cur_a < '0' {
+				return -1
+			} else {
+				return 1
+			}
+		} else {
+			if cur_a < cur_b {
+				return -1
+			} else if cur_a > cur_b {
+				return 1
+			} else {
+				a_index++
+				b_index++
+			}
+		}
+	}
+}
+
+func ParseJsonObjToMshell(jsonObj any) MShellObject {
+	// See https://pkg.go.dev/encoding/json#Unmarshal
+	switch o := jsonObj.(type) {
+	case []any:
+		list := NewList(0)
+		for _, item := range o {
+			parsedItem := ParseJsonObjToMshell(item)
+			list.Items = append(list.Items, parsedItem)
+		}
+		return list
+
+	case map[string]any:
+		dict := NewDict()
+		// TODO: decide and document how to handle duplicate keys in JSON objects
+		for key, value := range o {
+			dict.Items[key] = ParseJsonObjToMshell(value)
+		}
+		return dict
+
+	case string:
+		return MShellString{o}
+	case float64:
+		return MShellFloat{o}
+	case bool:
+		if o {
+			return MShellBool{true}
+		} else {
+			return MShellBool{false}
+		}
+	case nil:
+		return &Maybe{obj: nil}
+	default:
+		panic(fmt.Sprintf("Unknown JSON object type: %T", jsonObj))
+		// There should be no other types in JSON, but if there are, we can handle them here
+	}
+}
+
+// These 2 are courtesy of GPT-5.
+// Don't make me regret this.
+
+// StripVolumePrefix removes the Windows volume prefix from p (e.g. "C:",
+// "\\server\\share", "\\\\?\\C:", "\\\\?\\UNC\\server\\share", "\\\\.\\COM1",
+// "\\\\?\\Volume{GUID}") and returns the remainder. The result is guaranteed
+// NOT to start with '\' or '/'.
+//
+// Examples (on Windows):
+//
+//	"C:\\foo\\bar"                         -> "foo\\bar"
+//	"C:relative\\path"                     -> "relative\\path"
+//	"\\\\server\\share\\dir\\file"         -> "dir\\file"
+//	"\\\\?\\C:\\path\\to\\file"            -> "path\\to\\file"
+//	"\\\\?\\UNC\\server\\share\\dir"       -> "dir"
+//	"\\\\?\\Volume{GUID}\\Windows\\Temp"   -> "Windows\\Temp"
+//	"\\\\.\\COM1"                          -> ""  (device path, no remainder)
+func StripVolumePrefix(p string) string {
+	if runtime.GOOS != "windows" {
+		return p
+	}
+	vol := filepath.VolumeName(p)
+	rest := strings.TrimPrefix(p, vol)
+	// Remove any leading separators so it doesn't begin with "\" or "/".
+	rest = strings.TrimLeft(rest, `\/`)
+	return rest
+}
+
+// DirNoVolume is a convenience wrapper that returns the directory of p
+// with any Windows volume removed and no leading separator.
+func DirNoVolume(p string) string {
+	if runtime.GOOS != "windows" {
+		return filepath.Dir(p)
+	}
+	dir := filepath.Dir(p)
+	return StripVolumePrefix(dir)
+}
+
+func VersionSortCmp(s1 string, s2 string) int {
+	i := 0
+	j := 0
+
+	for {
+		if i >= len(s1) {
+			if j >= len(s2) {
+				return 0
+			}
+			return -1
+		}
+		if j >= len(s2) {
+			return 1
+		}
+
+		iStart := i
+		jStart := j
+
+		char1 := s1[i]
+		char2 := s2[j]
+		i++
+		j++
+		isDigit1 := false
+		isDigit2 := false
+
+		if char1 >= '0' && char1 <= '9' {
+			isDigit1 = true
+		}
+
+		if char2 >= '0' && char2 <= '9' {
+			isDigit2 = true
+		}
+
+		if isDigit1 && !isDigit2 {
+			return 1
+		}
+
+		if !isDigit1 && isDigit2 {
+			return -1
+		}
+
+		if !isDigit1 && !isDigit2 {
+			if char1 < char2 {
+				return -1
+			} else if char1 > char2 {
+				return 1
+			} else {
+				continue
+			}
+		}
+
+		// Both digits, read in all digits
+		for i < len(s1) {
+			if s1[i] >= '0' && s1[i] <= '9' {
+				i++
+			} else {
+				break
+			}
+		}
+
+		// Both digits, read in all digits
+		for j < len(s2) {
+			if s2[j] >= '0' && s2[j] <= '9' {
+				j++
+			} else {
+				break
+			}
+		}
+
+		// Get the integer representations
+		num1, _ := strconv.Atoi(s1[iStart:i])
+		num2, _ := strconv.Atoi(s2[jStart:j])
+
+		if num1 < num2 {
+			return -1
+		} else if num1 > num2 {
+			return 1
+		} else if (i - iStart) > (j - jStart) { // Sort more leading zeros after
+			return 1
+		} else if (i - iStart) < (j - jStart) {
+			return -1
+		}
+		// else continue because they are equal
+	}
+}
+
+type LinkHeader struct {
+	Uri    string
+	Rel    string
+	Params map[string]string
+}
+
+type zipPackItem struct {
+	SourcePath   string
+	ArchivePath  string
+	ModeOverride *os.FileMode
+	PreserveRoot bool
+}
+
+type zipEntryMetadata struct {
+	Name             string
+	CompressedSize   int
+	UncompressedSize int
+	Modified         time.Time
+	IsDir            bool
+	Mode             os.FileMode
+}
+
+type zipWriteOptions struct {
+	overwrite           bool
+	skipExisting        bool
+	preservePermissions bool
+}
+
+type zipExtractOptions struct {
+	zipWriteOptions
+	stripComponents int
+	pattern         string
+}
+
+type zipExtractEntryOptions struct {
+	zipWriteOptions
+	mkdirs bool
+}
+
+func zipDirectory(sourceDir, zipPath string, preserveRoot bool) error {
+	info, err := os.Stat(sourceDir)
+	if err != nil {
+		return fmt.Errorf("Error stating %s: %w", sourceDir, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("zipDir expects a directory. %s is not a directory", sourceDir)
+	}
+
+	srcAbs, err := filepath.Abs(sourceDir)
+	if err != nil {
+		return fmt.Errorf("Error resolving %s: %w", sourceDir, err)
+	}
+	if err := ensureZipTargetNotInsideSource(srcAbs, zipPath); err != nil {
+		return err
+	}
+
+	packItem := zipPackItem{
+		SourcePath:   sourceDir,
+		PreserveRoot: preserveRoot,
+	}
+	return buildZipFromEntries([]zipPackItem{packItem}, zipPath)
+}
+
+func ensureZipTargetNotInsideSource(sourceAbs string, zipPath string) error {
+	zipAbs, err := filepath.Abs(zipPath)
+	if err != nil {
+		return fmt.Errorf("Error resolving destination %s: %w", zipPath, err)
+	}
+	sourceWithSep := ensureTrailingSeparator(sourceAbs)
+	if zipAbs == sourceAbs || strings.HasPrefix(zipAbs, sourceWithSep) {
+		return fmt.Errorf("Zip destination %s cannot be inside the source directory %s", zipPath, sourceAbs)
+	}
+	return nil
+}
+
+func buildZipFromEntries(items []zipPackItem, zipPath string) error {
+	if len(items) == 0 {
+		return fmt.Errorf("zipPack requires at least one entry")
+	}
+
+	if err := os.MkdirAll(filepath.Dir(zipPath), 0755); err != nil {
+		return fmt.Errorf("Error creating parent directory for %s: %w", zipPath, err)
+	}
+
+	output, err := os.Create(zipPath)
+	if err != nil {
+		return fmt.Errorf("Error creating %s: %w", zipPath, err)
+	}
+	defer output.Close()
+
+	zipWriter := zip.NewWriter(output)
+	defer zipWriter.Close()
+
+	zipAbs, err := filepath.Abs(zipPath)
+	if err != nil {
+		return fmt.Errorf("Error resolving %s: %w", zipPath, err)
+	}
+
+	for _, item := range items {
+		info, err := os.Stat(item.SourcePath)
+		if err != nil {
+			return fmt.Errorf("Error stating %s: %w", item.SourcePath, err)
+		}
+
+		sourceAbs, err := filepath.Abs(item.SourcePath)
+		if err != nil {
+			return fmt.Errorf("Error resolving %s: %w", item.SourcePath, err)
+		}
+		sourceAbsWithSep := ensureTrailingSeparator(sourceAbs)
+		if zipAbs == sourceAbs || strings.HasPrefix(zipAbs, sourceAbsWithSep) {
+			return fmt.Errorf("Zip destination %s cannot be inside the source path %s", zipPath, sourceAbs)
+		}
+
+		if info.IsDir() {
+			prefix := strings.Trim(item.ArchivePath, "/")
+			if prefix == "" && item.PreserveRoot {
+				prefix = filepath.Base(sourceAbs)
+			}
+			if err := addDirectoryToZip(zipWriter, item.SourcePath, prefix, item.ModeOverride); err != nil {
+				return err
+			}
+			continue
+		}
+
+		name := item.ArchivePath
+		if name == "" {
+			name = filepath.Base(item.SourcePath)
+		}
+		name = strings.Trim(name, "/")
+		if name == "" {
+			return fmt.Errorf("zipPack entry for %s produced an empty archive path", item.SourcePath)
+		}
+
+		if err := addFileToZip(zipWriter, item.SourcePath, name, info, item.ModeOverride); err != nil {
+			return err
+		}
+	}
+
+	if err := zipWriter.Close(); err != nil {
+		return fmt.Errorf("Error finalizing zip %s: %w", zipPath, err)
+	}
+	if err := output.Close(); err != nil {
+		return fmt.Errorf("Error closing %s: %w", zipPath, err)
+	}
+	return nil
+}
+
+func addDirectoryToZip(zipWriter *zip.Writer, sourcePath, archivePrefix string, modeOverride *os.FileMode) error {
+	cleanPrefix := strings.Trim(archivePrefix, "/")
+	return filepath.WalkDir(sourcePath, func(pathStr string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+
+		relPath, err := filepath.Rel(sourcePath, pathStr)
+		if err != nil {
+			return err
+		}
+		relPath = filepath.ToSlash(relPath)
+
+		var entryName string
+		if relPath == "." {
+			entryName = cleanPrefix
+		} else if cleanPrefix == "" {
+			entryName = relPath
+		} else {
+			entryName = path.Join(cleanPrefix, relPath)
+		}
+
+		entryName = strings.Trim(entryName, "/")
+		if entryName == "" {
+			// We skip the implicit root when no prefix is requested.
+			return nil
+		}
+		if info.IsDir() {
+			entryName += "/"
+		}
+
+		return addFileToZip(zipWriter, pathStr, entryName, info, modeOverride)
+	})
+}
+
+func addFileToZip(zipWriter *zip.Writer, sourcePath, entryName string, info os.FileInfo, modeOverride *os.FileMode) error {
+	header, err := zip.FileInfoHeader(info)
+	if err != nil {
+		return err
+	}
+	header.Name = path.Clean(strings.ReplaceAll(entryName, "\\", "/"))
+	if info.IsDir() && !strings.HasSuffix(header.Name, "/") {
+		header.Name += "/"
+	}
+	if modeOverride != nil {
+		header.SetMode(*modeOverride)
+	}
+	if !info.IsDir() {
+		header.Method = zip.Deflate
+	}
+
+	writer, err := zipWriter.CreateHeader(header)
+	if err != nil {
+		return err
+	}
+
+	if info.IsDir() {
+		return nil
+	}
+
+	file, err := os.Open(sourcePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	if _, err := io.Copy(writer, file); err != nil {
+		return err
+	}
+	return nil
+}
+
+func safeSizeToInt(size uint64) (int, error) {
+	if size > math.MaxInt {
+		return 0, fmt.Errorf("Zip entry size %d exceeds supported range", size)
+	}
+	return int(size), nil
+}
+
+func collectZipMetadata(zipPath string) ([]zipEntryMetadata, error) {
+	reader, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return nil, fmt.Errorf("Error opening %s: %w", zipPath, err)
+	}
+	defer reader.Close()
+
+	entries := make([]zipEntryMetadata, 0, len(reader.File))
+	for _, file := range reader.File {
+		compressed, err := safeSizeToInt(file.CompressedSize64)
+		if err != nil {
+			return nil, err
+		}
+		uncompressed, err := safeSizeToInt(file.UncompressedSize64)
+		if err != nil {
+			return nil, err
+		}
+		info := file.FileInfo()
+		entry := zipEntryMetadata{
+			Name:             file.Name,
+			CompressedSize:   compressed,
+			UncompressedSize: uncompressed,
+			Modified:         file.Modified,
+			IsDir:            info.IsDir(),
+			Mode:             info.Mode(),
+		}
+		entries = append(entries, entry)
+	}
+
+	return entries, nil
+}
+
+func parseZipExtractOptions(dict *MShellDict) (zipExtractOptions, error) {
+	options := zipExtractOptions{
+		zipWriteOptions: zipWriteOptions{
+			overwrite:           false,
+			skipExisting:        false,
+			preservePermissions: true,
+		},
+		stripComponents: 0,
+		pattern:         "",
+	}
+
+	if val, ok, err := boolOption(dict, "overwrite"); err != nil {
+		return options, err
+	} else if ok {
+		options.overwrite = val
+	}
+
+	if val, ok, err := boolOption(dict, "skipExisting"); err != nil {
+		return options, err
+	} else if ok {
+		options.skipExisting = val
+	}
+
+	if options.overwrite && options.skipExisting {
+		return options, fmt.Errorf("zipExtract options 'overwrite' and 'skipExisting' are mutually exclusive")
+	}
+
+	if val, ok, err := boolOption(dict, "preservePermissions"); err != nil {
+		return options, err
+	} else if ok {
+		options.preservePermissions = val
+	}
+
+	if val, ok, err := intOption(dict, "stripComponents"); err != nil {
+		return options, err
+	} else if ok {
+		if val < 0 {
+			return options, fmt.Errorf("zipExtract option 'stripComponents' must be >= 0")
+		}
+		options.stripComponents = val
+	}
+
+	if val, ok, err := stringOption(dict, "pattern"); err != nil {
+		return options, err
+	} else if ok {
+		options.pattern = val
+	}
+
+	return options, nil
+}
+
+func parseZipExtractEntryOptions(dict *MShellDict) (zipExtractEntryOptions, error) {
+	options := zipExtractEntryOptions{
+		zipWriteOptions: zipWriteOptions{
+			overwrite:           false,
+			skipExisting:        false,
+			preservePermissions: true,
+		},
+		mkdirs: true,
+	}
+
+	if val, ok, err := boolOption(dict, "overwrite"); err != nil {
+		return options, err
+	} else if ok {
+		options.overwrite = val
+	}
+
+	if val, ok, err := boolOption(dict, "skipExisting"); err != nil {
+		return options, err
+	} else if ok {
+		options.skipExisting = val
+	}
+
+	if options.overwrite && options.skipExisting {
+		return options, fmt.Errorf("zipExtractEntry options 'overwrite' and 'skipExisting' are mutually exclusive")
+	}
+
+	if val, ok, err := boolOption(dict, "preservePermissions"); err != nil {
+		return options, err
+	} else if ok {
+		options.preservePermissions = val
+	}
+
+	if val, ok, err := boolOption(dict, "mkdirs"); err != nil {
+		return options, err
+	} else if ok {
+		options.mkdirs = val
+	}
+
+	return options, nil
+}
+
+func boolOption(dict *MShellDict, key string) (bool, bool, error) {
+	item, ok := dict.Items[key]
+	if !ok {
+		return false, false, nil
+	}
+	boolVal, ok := item.(MShellBool)
+	if !ok {
+		return false, true, fmt.Errorf("Option '%s' must be a bool, found %s", key, item.TypeName())
+	}
+	return boolVal.Value, true, nil
+}
+
+func intOption(dict *MShellDict, key string) (int, bool, error) {
+	item, ok := dict.Items[key]
+	if !ok {
+		return 0, false, nil
+	}
+	intVal, ok := item.(MShellInt)
+	if !ok {
+		return 0, true, fmt.Errorf("Option '%s' must be an int, found %s", key, item.TypeName())
+	}
+	return intVal.Value, true, nil
+}
+
+func stringOption(dict *MShellDict, key string) (string, bool, error) {
+	item, ok := dict.Items[key]
+	if !ok {
+		return "", false, nil
+	}
+	val, err := item.CastString()
+	if err != nil {
+		return "", true, fmt.Errorf("Option '%s' must be a string/path, found %s", key, item.TypeName())
+	}
+	return val, true, nil
+}
+
+func extractZipArchive(zipPath, destDir string, options zipExtractOptions) error {
+	reader, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return fmt.Errorf("Error opening %s: %w", zipPath, err)
+	}
+	defer reader.Close()
+
+	absDest, err := filepath.Abs(destDir)
+	if err != nil {
+		return fmt.Errorf("Error resolving destination %s: %w", destDir, err)
+	}
+
+	if err := os.MkdirAll(absDest, 0755); err != nil {
+		return fmt.Errorf("Error creating destination %s: %w", absDest, err)
+	}
+	baseWithSep := ensureTrailingSeparator(absDest)
+
+	for _, file := range reader.File {
+		if file.FileInfo().Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("Refusing to extract symlink %s", file.Name)
+		}
+
+		entryName := normalizeZipEntryName(file.Name)
+		if entryName == "" {
+			continue
+		}
+
+		if options.pattern != "" {
+			match, err := path.Match(options.pattern, entryName)
+			if err != nil {
+				return fmt.Errorf("Invalid zipExtract pattern '%s': %w", options.pattern, err)
+			}
+			if !match {
+				continue
+			}
+		}
+
+		stripped, err := stripZipComponents(entryName, options.stripComponents, file.FileInfo().IsDir())
+		if err != nil {
+			return err
+		}
+		if stripped == "" {
+			continue
+		}
+
+		target := filepath.Join(absDest, filepath.FromSlash(stripped))
+		target = filepath.Clean(target)
+		if err := ensureWithinBase(target, absDest, baseWithSep); err != nil {
+			return err
+		}
+
+		if err := writeZipFileToDisk(file, target, options.zipWriteOptions, true); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func extractZipEntry(zipPath, entryPath, destPath string, options zipExtractEntryOptions) error {
+	reader, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return fmt.Errorf("Error opening %s: %w", zipPath, err)
+	}
+	defer reader.Close()
+
+	targetName := normalizeZipEntryName(entryPath)
+	if targetName == "" {
+		return fmt.Errorf("Entry path %s resolves to an empty name", entryPath)
+	}
+
+	var fileEntry *zip.File
+	dirExists := false
+
+	for _, file := range reader.File {
+		name := normalizeZipEntryName(file.Name)
+		if name != targetName {
+			continue
+		}
+
+		if file.FileInfo().IsDir() {
+			dirExists = true
+			break
+		}
+		fileEntry = file
+		break
+	}
+
+	if dirExists {
+		return extractZipDirectoryEntries(reader.File, targetName, destPath, options)
+	}
+
+	if fileEntry != nil {
+		return extractZipFileEntry(fileEntry, destPath, options)
+	}
+
+	prefix := targetName + "/"
+	for _, file := range reader.File {
+		name := normalizeZipEntryName(file.Name)
+		if strings.HasPrefix(name, prefix) {
+			dirExists = true
+			break
+		}
+	}
+
+	if dirExists {
+		return extractZipDirectoryEntries(reader.File, targetName, destPath, options)
+	}
+
+	return fmt.Errorf("Entry '%s' not found in %s", entryPath, zipPath)
+}
+
+func extractZipDirectoryEntries(files []*zip.File, targetName, destPath string, options zipExtractEntryOptions) error {
+	absDest, err := filepath.Abs(destPath)
+	if err != nil {
+		return fmt.Errorf("Error resolving destination %s: %w", destPath, err)
+	}
+
+	if options.mkdirs {
+		if err := os.MkdirAll(absDest, 0755); err != nil {
+			return fmt.Errorf("Error creating destination %s: %w", absDest, err)
+		}
+	} else {
+		info, err := os.Stat(absDest)
+		if err != nil {
+			return fmt.Errorf("Destination %s does not exist", absDest)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("Destination %s is not a directory", absDest)
+		}
+	}
+
+	baseWithSep := ensureTrailingSeparator(absDest)
+	prefix := targetName + "/"
+
+	for _, file := range files {
+		if file.FileInfo().Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("Refusing to extract symlink %s", file.Name)
+		}
+
+		name := normalizeZipEntryName(file.Name)
+		if name == targetName && file.FileInfo().IsDir() {
+			continue
+		}
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+
+		relative := strings.TrimPrefix(name, prefix)
+		if relative == "" {
+			continue
+		}
+
+		target := filepath.Join(absDest, filepath.FromSlash(relative))
+		target = filepath.Clean(target)
+		if err := ensureWithinBase(target, absDest, baseWithSep); err != nil {
+			return err
+		}
+
+		if err := writeZipFileToDisk(file, target, options.zipWriteOptions, true); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func extractZipFileEntry(file *zip.File, destPath string, options zipExtractEntryOptions) error {
+	if file.FileInfo().Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("Refusing to extract symlink %s", file.Name)
+	}
+
+	absDest, err := filepath.Abs(destPath)
+	if err != nil {
+		return fmt.Errorf("Error resolving destination %s: %w", destPath, err)
+	}
+
+	parent := filepath.Dir(absDest)
+	if options.mkdirs {
+		if err := os.MkdirAll(parent, 0755); err != nil {
+			return fmt.Errorf("Error creating parent directory %s: %w", parent, err)
+		}
+	} else {
+		if _, err := os.Stat(parent); err != nil {
+			return fmt.Errorf("Parent directory %s does not exist", parent)
+		}
+	}
+
+	return writeZipFileToDisk(file, absDest, options.zipWriteOptions, false)
+}
+
+func writeZipFileToDisk(file *zip.File, destPath string, options zipWriteOptions, ensureParents bool) error {
+	info := file.FileInfo()
+
+	if info.IsDir() {
+		if ensureParents {
+			if err := os.MkdirAll(destPath, 0755); err != nil {
+				return fmt.Errorf("Error creating directory %s: %w", destPath, err)
+			}
+		} else if err := os.Mkdir(destPath, 0755); err != nil && !errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("Error creating directory %s: %w", destPath, err)
+		}
+
+		if options.preservePermissions {
+			if err := os.Chmod(destPath, info.Mode()); err != nil && !errors.Is(err, os.ErrPermission) {
+				return fmt.Errorf("Error setting permissions on %s: %w", destPath, err)
+			}
+		}
+		return nil
+	}
+
+	parentDir := filepath.Dir(destPath)
+	if ensureParents {
+		if err := os.MkdirAll(parentDir, 0755); err != nil {
+			return fmt.Errorf("Error creating parent directory %s: %w", parentDir, err)
+		}
+	} else {
+		if _, err := os.Stat(parentDir); err != nil {
+			return fmt.Errorf("Parent directory %s does not exist", parentDir)
+		}
+	}
+
+	if options.skipExisting {
+		if _, err := os.Stat(destPath); err == nil {
+			return nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	} else {
+		if _, err := os.Stat(destPath); err == nil && !options.overwrite {
+			return fmt.Errorf("Destination %s already exists", destPath)
+		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+
+	reader, err := file.Open()
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+
+	outFile, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode().Perm())
+	if err != nil {
+		return err
+	}
+	defer outFile.Close()
+
+	if _, err := io.Copy(outFile, reader); err != nil {
+		return err
+	}
+
+	if options.preservePermissions {
+		if err := os.Chmod(destPath, info.Mode()); err != nil && !errors.Is(err, os.ErrPermission) {
+			return fmt.Errorf("Error setting permissions on %s: %w", destPath, err)
+		}
+	}
+	return nil
+}
+
+func readZipEntry(zipPath, entryPath string) ([]byte, bool, error) {
+	reader, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return nil, false, fmt.Errorf("Error opening %s: %w", zipPath, err)
+	}
+	defer reader.Close()
+
+	target := normalizeZipEntryName(entryPath)
+	if target == "" {
+		return nil, false, fmt.Errorf("Entry path %s resolves to an empty name", entryPath)
+	}
+
+	for _, file := range reader.File {
+		name := normalizeZipEntryName(file.Name)
+		if name != target {
+			continue
+		}
+
+		if file.FileInfo().IsDir() {
+			return nil, false, fmt.Errorf("zipRead cannot read directory entries (%s)", entryPath)
+		}
+
+		rc, err := file.Open()
+		if err != nil {
+			return nil, false, err
+		}
+		data, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			return nil, false, err
+		}
+		return data, true, nil
+	}
+
+	return nil, false, nil
+}
+
+func normalizeZipEntryName(name string) string {
+	cleaned := strings.ReplaceAll(name, "\\", "/")
+	for strings.HasPrefix(cleaned, "./") {
+		cleaned = strings.TrimPrefix(cleaned, "./")
+	}
+	cleaned = path.Clean(cleaned)
+	cleaned = strings.TrimPrefix(cleaned, "./")
+	cleaned = strings.TrimPrefix(cleaned, "/")
+	if cleaned == "." {
+		return ""
+	}
+	return cleaned
+}
+
+func stripZipComponents(name string, components int, isDir bool) (string, error) {
+	if components == 0 || name == "" {
+		return name, nil
+	}
+
+	parts := strings.Split(name, "/")
+	if len(parts) <= components {
+		if isDir {
+			return "", nil
+		}
+		return "", fmt.Errorf("Cannot strip %d components from entry %s", components, name)
+	}
+	return strings.Join(parts[components:], "/"), nil
+}
+
+func ensureWithinBase(candidate, base, baseWithSep string) error {
+	candidate = filepath.Clean(candidate)
+	if candidate == base {
+		return nil
+	}
+	if !strings.HasPrefix(candidate, baseWithSep) {
+		return fmt.Errorf("Refusing to write outside destination directory %s (attempted %s)", base, candidate)
+	}
+	return nil
+}
+
+func ensureTrailingSeparator(path string) string {
+	if strings.HasSuffix(path, string(os.PathSeparator)) {
+		return path
+	}
+	return path + string(os.PathSeparator)
+}
+
+func EatLinkHeaderWhitespace(linkHeader string, i int) int {
+	for i < len(linkHeader) {
+		if unicode.IsSpace(rune(linkHeader[i])) {
+			i++
+		} else {
+			break
+		}
+	}
+	return i
+}
+
+// https://datatracker.ietf.org/doc/html/rfc8288
+
+// Link       = #link-value
+// link-value = "<" URI-Reference ">" *( OWS ";" OWS link-param )
+// link-param = token BWS [ "=" BWS ( token / quoted-string ) ]
+
+// https://datatracker.ietf.org/doc/html/rfc7230
+
+// token          = 1*tchar
+
+// tchar          = "!" / "#" / "$" / "%" / "&" / "'" / "*"
+// 					 / "+" / "-" / "." / "^" / "_" / "`" / "|" / "~"
+// 					/ DIGIT / ALPHA
+// 					; any VCHAR, except delimiters
+
+// quoted-string  = DQUOTE *( qdtext / quoted-pair ) DQUOTE
+// qdtext         = HTAB / SP / %x21 / %x23-5B / %x5D-7E / obs-text
+// obs-text       = %x80-FF
+// quoted-pair    = "\" ( HTAB / SP / VCHAR / obs-text )
+
+func IsTChar(char rune) bool {
+	return unicode.IsLetter(char) || unicode.IsDigit(char) || char == '!' || char == '#' || char == '$' || char == '%' ||
+		char == '&' || char == '\'' || char == '*' || char == '+' || char == '-' ||
+		char == '.' || char == '^' || char == '_' || char == '`' || char == '|' ||
+		char == '~'
+}
+
+func ParseLinkHeaders(linkHeader string) ([]LinkHeader, error) {
+	var headers []LinkHeader
+	i := 0
+
+	for {
+		i = EatLinkHeaderWhitespace(linkHeader, i)
+		if i >= len(linkHeader) {
+			break
+		}
+
+		header, nextIndex, err := ParseLinkHeader(linkHeader, i)
+		if err != nil {
+			return nil, fmt.Errorf("Error parsing link header at position %d: %s", i, err.Error())
+		}
+		headers = append(headers, header)
+		i = nextIndex
+
+		i = EatLinkHeaderWhitespace(linkHeader, i)
+		if i >= len(linkHeader) {
+			break
+		}
+
+		if linkHeader[i] != ',' {
+			return nil, fmt.Errorf("Expected ',' after link header at position %d, found '%c'", i, linkHeader[i])
+		}
+		i++
+	}
+
+	if len(headers) == 0 {
+		return nil, fmt.Errorf("Empty link header")
+	}
+
+	return headers, nil
+}
+
+func ParseLinkHeader(linkHeader string, i int) (LinkHeader, int, error) {
+	i = EatLinkHeaderWhitespace(linkHeader, i)
+	if i >= len(linkHeader) {
+		return LinkHeader{}, i, fmt.Errorf("Empty link header")
+	}
+
+	if linkHeader[i] != '<' {
+		return LinkHeader{}, i, fmt.Errorf("Link header does not start with '<': %s", linkHeader)
+	}
+	i++
+
+	uriStart := i
+	for i < len(linkHeader) && linkHeader[i] != '>' {
+		i++
+	}
+	if i >= len(linkHeader) {
+		return LinkHeader{}, i, fmt.Errorf("Empty link header")
+	}
+	uri := linkHeader[uriStart:i]
+	i++ // Skip '>'
+
+	params := make(map[string]string)
+	rel := ""
+
+	for {
+		i = EatLinkHeaderWhitespace(linkHeader, i)
+		if i >= len(linkHeader) || linkHeader[i] == ',' {
+			if len(rel) == 0 {
+				return LinkHeader{}, i, fmt.Errorf("Link header does not have a 'rel' parameter: %s", linkHeader)
+			}
+			return LinkHeader{Uri: uri, Rel: rel, Params: params}, i, nil
+		}
+
+		if linkHeader[i] != ';' {
+			return LinkHeader{}, i, fmt.Errorf("Expected ';' before link parameter at position %d: %s", i, linkHeader)
+		}
+		i++
+
+		paramName, paramValue, nextIndex, err := ParseLinkParam(linkHeader, i)
+		if err != nil {
+			return LinkHeader{}, i, fmt.Errorf("Error parsing link parameter: %s", err.Error())
+		}
+		i = nextIndex
+
+		if paramName == "" {
+			return LinkHeader{}, i, fmt.Errorf("Empty link parameter name")
+		}
+
+		if paramValue == "" {
+			return LinkHeader{}, i, fmt.Errorf("Empty link parameter value")
+		}
+
+		if paramName == "rel" {
+			rel = paramValue
+		} else {
+			params[paramName] = paramValue
+		}
+	}
+}
+
+func ParseLinkParam(linkHeader string, i int) (string, string, int, error) {
+	i = EatLinkHeaderWhitespace(linkHeader, i)
+	if i >= len(linkHeader) {
+		return "", "", i, fmt.Errorf("Empty link parameter")
+	}
+
+	paramStart := i
+	for i < len(linkHeader) && IsTChar(rune(linkHeader[i])) {
+		i++
+	}
+
+	if paramStart == i {
+		return "", "", i, fmt.Errorf("Empty link parameter name")
+	}
+
+	paramName := linkHeader[paramStart:i]
+
+	i = EatLinkHeaderWhitespace(linkHeader, i)
+	if i >= len(linkHeader) || linkHeader[i] != '=' {
+		return "", "", i, fmt.Errorf("Link parameter '%s' does not have a value", paramName)
+	}
+	i++
+
+	i = EatLinkHeaderWhitespace(linkHeader, i)
+	if i >= len(linkHeader) {
+		return "", "", i, fmt.Errorf("Link parameter '%s' does not have a value, expected value after '='", paramName)
+	}
+
+	var paramValue strings.Builder
+
+	if linkHeader[i] == '"' {
+		i++
+		for {
+			if i >= len(linkHeader) {
+				return "", "", i, fmt.Errorf("Unfinished quoted string for link parameter '%s'", paramName)
+			}
+
+			c := linkHeader[i]
+			i++
+
+			if c == '"' {
+				break
+			}
+
+			if c == '\\' {
+				if i >= len(linkHeader) {
+					return "", "", i, fmt.Errorf("Unfinished escape sequence in quoted string for link parameter '%s'", paramName)
+				}
+				paramValue.WriteByte(linkHeader[i])
+				i++
+				continue
+			}
+
+			paramValue.WriteByte(c)
+		}
+	} else {
+		valueStart := i
+		for i < len(linkHeader) && IsTChar(rune(linkHeader[i])) {
+			i++
+		}
+		if valueStart == i {
+			return "", "", i, fmt.Errorf("Link parameter '%s' does not have a value, expected value after '='", paramName)
+		}
+		paramValue.WriteString(linkHeader[valueStart:i])
+	}
+
+	i = EatLinkHeaderWhitespace(linkHeader, i)
+	return paramName, paramValue.String(), i, nil
+}
+
+// optimizeColumnStorage attempts to convert a generic column to a typed column
+// for better performance when all values are of the same type.
+func optimizeColumnStorage(col *GridColumn) {
+	if col.ColType != COL_GENERIC || len(col.GenericData) == 0 {
+		return
+	}
+
+	// Check if all values are of the same type
+	allInts := true
+	allFloats := true
+	allStrings := true
+	allDateTimes := true
+
+	for _, val := range col.GenericData {
+		if val == nil {
+			continue // Skip nil values (None)
+		}
+
+		switch val.(type) {
+		case MShellInt:
+			allStrings = false
+			allDateTimes = false
+		case MShellFloat:
+			allInts = false
+			allStrings = false
+			allDateTimes = false
+		case MShellString:
+			allInts = false
+			allFloats = false
+			allDateTimes = false
+		case *MShellDateTime:
+			allInts = false
+			allFloats = false
+			allStrings = false
+		default:
+			// Mixed type, keep as generic
+			return
+		}
+	}
+
+	numRows := len(col.GenericData)
+
+	// Convert to typed storage
+	if allInts {
+		col.IntData = make([]int64, numRows)
+		for i, val := range col.GenericData {
+			if val == nil {
+				col.IntData[i] = 0 // Default for None
+			} else if intVal, ok := val.(MShellInt); ok {
+				col.IntData[i] = int64(intVal.Value)
+			}
+		}
+		col.ColType = COL_INT
+		col.GenericData = nil
+	} else if allFloats {
+		col.FloatData = make([]float64, numRows)
+		for i, val := range col.GenericData {
+			if val == nil {
+				col.FloatData[i] = 0.0 // Default for None
+			} else if floatVal, ok := val.(MShellFloat); ok {
+				col.FloatData[i] = floatVal.Value
+			} else if intVal, ok := val.(MShellInt); ok {
+				// Promote int to float
+				col.FloatData[i] = float64(intVal.Value)
+			}
+		}
+		col.ColType = COL_FLOAT
+		col.GenericData = nil
+	} else if allStrings {
+		col.StringData = make([]string, numRows)
+		for i, val := range col.GenericData {
+			if val == nil {
+				col.StringData[i] = "" // Default for None
+			} else if strVal, ok := val.(MShellString); ok {
+				col.StringData[i] = strVal.Content
+			}
+		}
+		col.ColType = COL_STRING
+		col.GenericData = nil
+	} else if allDateTimes {
+		col.DateTimeData = make([]time.Time, numRows)
+		for i, val := range col.GenericData {
+			if val == nil {
+				col.DateTimeData[i] = time.Time{} // Default for None
+			} else if dtVal, ok := val.(*MShellDateTime); ok {
+				col.DateTimeData[i] = dtVal.Time
+			}
+		}
+		col.ColType = COL_DATETIME
+		col.GenericData = nil
+	}
+	// If none of the above, keep as generic
+}
+
+func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context ExecuteContext, definitions []MShellDefinition, callStackItem CallStackItem) EvalResult {
 			if t.Type == EOF {
 				return SimpleSuccess()
 			} else if t.Type == LITERAL {
@@ -3138,7 +5473,7 @@ MainLoop:
 						return result
 					}
 
-					continue MainLoop
+					return SimpleSuccess()
 				}
 
 				if t.Lexeme == "stack" {
@@ -3526,7 +5861,7 @@ MainLoop:
 							if result.ShouldPassResultUpStack() {
 								return result
 							}
-							continue MainLoop
+							return SimpleSuccess()
 						}
 					}
 					// This is a string join function
@@ -3918,7 +6253,7 @@ MainLoop:
 						dateStr = dateStrTyped.LiteralText
 					case *MShellDateTime:
 						stack.Push(dateStrObj)
-						continue MainLoop
+						return SimpleSuccess()
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert a %s to a datetime.\n", t.Line, t.Column, dateStrObj.TypeName()))
 					}
@@ -5729,7 +8064,7 @@ MainLoop:
 						}
 
 						stack.Push(newGrid)
-						continue MainLoop
+						return SimpleSuccess()
 					}
 
 					newCol := NewGridColumn(oldCol.Name, grid.RowCount)
@@ -5947,7 +8282,7 @@ MainLoop:
 						}
 
 						stack.Push(groups)
-						continue MainLoop
+						return SimpleSuccess()
 					}
 
 					obj1, obj2, obj3, err := stack.Pop3(t)
@@ -8508,7 +10843,7 @@ MainLoop:
 					} else {
 						stack.Push(maybe.obj) // Push the object inside the Maybe
 					}
-					continue MainLoop
+					return SimpleSuccess()
 				}
 
 				// Switch on type
@@ -9593,2348 +11928,6 @@ MainLoop:
 			} else {
 				return state.FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' ('%s') yet.\n", t.Line, t.Column, t.Type, t.Lexeme))
 			}
-		case *MShellAsCast:
-			// Static-only: `as` is a checker hint; no runtime work.
-		case *MShellTypeDecl:
-			// Static-only: type declarations have no runtime effect by design.
-		default:
-			return state.FailWithMessage(fmt.Sprintf("We haven't implemented the type '%T' yet.\n", t))
-		}
-
-	}
 
 	return EvalResult{true, false, -1, 0, false}
-}
-
-const (
-	FORMATMODENORMAL = iota
-	FORMATMODEESCAPE
-	FORMATMODEFORMAT
-)
-
-func (state *EvalState) EvaluateFormatString(lexeme string, context ExecuteContext, definitions []MShellDefinition, callStackItem CallStackItem) (MShellString, error) {
-
-	allRunes := []rune(lexeme)
-
-	if len(allRunes) < 3 {
-		return MShellString{""}, fmt.Errorf("Found format string with less than 3 characters: %s", lexeme)
-	}
-
-	var b strings.Builder
-
-	index := 2
-	mode := FORMATMODENORMAL
-
-	formatStrStartIndex := -1
-	formatStrEndIndex := -1
-
-	lexer := NewLexer("", nil)
-	parser := MShellParser{lexer: lexer}
-
-	for index < len(allRunes)-1 {
-		c := allRunes[index]
-		index++
-
-		switch mode {
-		case FORMATMODEESCAPE:
-			switch c {
-			case 'e':
-				b.WriteRune('\033')
-			case 'n':
-				b.WriteRune('\n')
-			case 't':
-				b.WriteRune('\t')
-			case 'r':
-				b.WriteRune('\r')
-			case '\\':
-				b.WriteRune('\\')
-			case '"':
-				b.WriteRune('"')
-			case '{':
-				b.WriteRune('{') // This is a literal '{' in the format string
-			default:
-				return MShellString{""}, fmt.Errorf("invalid escape character '%c'", c)
-			}
-			mode = FORMATMODENORMAL
-		case FORMATMODENORMAL:
-			switch c {
-			case '\\':
-				mode = FORMATMODEESCAPE
-			case '{':
-				formatStrStartIndex = index - 1
-				mode = FORMATMODEFORMAT
-			default:
-				b.WriteRune(rune(c))
-			}
-		case FORMATMODEFORMAT:
-			if c == '}' {
-				formatStrEndIndex = index - 1
-				formatStr := string(allRunes[formatStrStartIndex+1 : formatStrEndIndex])
-
-				// Evaluate the format string
-				lexer.resetInput(formatStr)
-				parser.NextToken()
-				contents, err := parser.ParseFile()
-				if err != nil {
-					return MShellString{""}, fmt.Errorf("Error parsing format string %s: %s", formatStr, err)
-				}
-
-				// Evaluate the format string contents
-				var stack MShellStack
-				stack = []MShellObject{}
-
-				result := state.evaluateItems(contents.Items, &stack, context, definitions, callStackItem)
-
-				if !result.Success {
-					return MShellString{""}, fmt.Errorf("Error evaluating format string %s", formatStr)
-				}
-
-				if len(stack) != 1 {
-					return MShellString{""}, fmt.Errorf("Format string %s did not evaluate to a single value", formatStr)
-				}
-
-				// Get the string representation of the result
-				resultStr, err := stack[0].CastString()
-				if err != nil {
-					return MShellString{""}, fmt.Errorf("Format string contents %s did not evaluate to a stringable value", formatStr)
-				}
-
-				b.WriteString(resultStr)
-
-				formatStrStartIndex = -1
-				formatStrEndIndex = -1
-				mode = FORMATMODENORMAL
-			}
-		default:
-			panic("Unknown format mode")
-		}
-	}
-
-	if mode != FORMATMODENORMAL {
-		return MShellString{""}, fmt.Errorf("Format string ended in an invalid state")
-	}
-
-	return MShellString{b.String()}, nil
-}
-
-type Executable interface {
-	Execute(state *EvalState, context ExecuteContext, stack *MShellStack) (EvalResult, int, []byte, []byte)
-	GetStandardInputFile() string
-	GetStandardOutputFile() string
-}
-
-func (list *MShellList) Execute(state *EvalState, context ExecuteContext, stack *MShellStack) (EvalResult, int, []byte, []byte) {
-	result, exitCode, stdoutResult, stderrResult := RunProcess(*list, context, state)
-	return result, exitCode, stdoutResult, stderrResult
-}
-
-func (quotation *MShellQuotation) Execute(state *EvalState, context ExecuteContext, stack *MShellStack, definitions []MShellDefinition, callStack CallStack) (EvalResult, int) {
-	quotationContext := ExecuteContext{
-		StandardInput:  nil,
-		StandardOutput: nil,
-		Variables:      quotation.Variables,
-		Pbm:            context.Pbm,
-	}
-
-	if quotation.StdinBehavior != STDIN_NONE {
-		switch quotation.StdinBehavior {
-		case STDIN_CONTENT:
-			quotationContext.StandardInput = strings.NewReader(quotation.StandardInputContents)
-		case STDIN_BINARY:
-			quotationContext.StandardInput = bytes.NewReader(quotation.StandardInputBinary)
-		case STDIN_FILE:
-			file, err := os.Open(quotation.StandardInputFile)
-			if err != nil {
-				return state.FailWithMessage(fmt.Sprintf("Error opening file %s for reading: %s\n", quotation.StandardInputFile, err.Error())), 1
-			}
-			quotationContext.StandardInput = file
-			defer file.Close()
-		default:
-			panic("Unknown stdin behavior")
-		}
-	} else if context.StandardInput != nil {
-		quotationContext.StandardInput = context.StandardInput
-	} else {
-		// Default to stdin of this process itself
-		quotationContext.StandardInput = os.Stdin
-	}
-
-	if quotation.StandardOutputFile != "" {
-		file, err := os.Create(quotation.StandardOutputFile)
-		if err != nil {
-			return state.FailWithMessage(fmt.Sprintf("Error opening file %s for writing: %s\n", quotation.StandardOutputFile, err.Error())), 1
-		}
-		quotationContext.StandardOutput = file
-		defer file.Close()
-	} else if context.StandardOutput != nil {
-		quotationContext.StandardOutput = context.StandardOutput
-	} else {
-		// Default to stdout of this process itself
-		quotationContext.StandardOutput = os.Stdout
-	}
-
-	result := state.evaluateItems(quotation.Tokens, stack, quotationContext, definitions, CallStackItem{quotation, "quote", CALLSTACKQUOTE})
-
-	if !result.Success || result.ExitCalled {
-		return result, result.ExitCode
-	} else {
-		return SimpleSuccess(), 0
-	}
-}
-
-func (list *MShellList) GetStandardInputFile() string {
-	return list.StandardInputFile
-}
-
-func (list *MShellList) GetStandardOutputFile() string {
-	return list.StandardOutputFile
-}
-
-func (quotation *MShellQuotation) GetStandardInputFile() string {
-	return quotation.StandardInputFile
-}
-
-func (quotation *MShellQuotation) GetStandardOutputFile() string {
-	return quotation.StandardOutputFile
-}
-
-func (state *EvalState) ChangeDirectory(dir string) (EvalResult, int, []byte, []byte) {
-	cwd, currDirErr := os.Getwd()
-
-	err := os.Chdir(dir)
-	if err != nil {
-		return state.FailWithMessage(fmt.Sprintf("Error changing directory to %s: %s\n", dir, err.Error())), 1, nil, nil
-	}
-
-	if currDirErr == nil {
-		// Update OLDPWD and PWD
-		err = os.Setenv("OLDPWD", cwd)
-		if err != nil {
-			return state.FailWithMessage(fmt.Sprintf("Error setting OLDPWD: %s\n", err.Error())), 1, nil, nil
-		}
-
-		err = os.Setenv("PWD", dir)
-		if err != nil {
-			return state.FailWithMessage(fmt.Sprintf("Error setting PWD: %s\n", err.Error())), 1, nil, nil
-		}
-
-		state.AddPreviousDirectory(cwd)
-	}
-
-	return SimpleSuccess(), 0, nil, nil
-}
-
-func (state *EvalState) AddPreviousDirectory(dir string) {
-	if dir == "" {
-		return
-	}
-
-	normalizedDir := filepath.Clean(dir)
-	writeIndex := 0
-	for _, existingDir := range state.PreviousDirectories {
-		if existingDir == normalizedDir {
-			continue
-		}
-		state.PreviousDirectories[writeIndex] = existingDir
-		writeIndex++
-	}
-
-	state.PreviousDirectories = state.PreviousDirectories[:writeIndex]
-	state.PreviousDirectories = append(state.PreviousDirectories, normalizedDir)
-}
-
-func cdhSelectionToIndex(selection string, maxIndex int) (int, bool) {
-	selection = strings.TrimSpace(selection)
-	if selection == "" {
-		return 0, false
-	}
-
-	if selectionNum, err := strconv.Atoi(selection); err == nil {
-		if selectionNum < 1 || selectionNum > maxIndex {
-			return 0, false
-		}
-		return selectionNum, true
-	}
-
-	if len(selection) == 1 {
-		selectionRune := unicode.ToLower(rune(selection[0]))
-		if selectionRune >= 'a' && selectionRune <= 'z' {
-			letterIndex := int(selectionRune-'a') + 1
-			if letterIndex >= 1 && letterIndex <= maxIndex {
-				return letterIndex, true
-			}
-		}
-	}
-
-	return 0, false
-}
-
-func isValidCdhSelectionByte(b byte, maxEntries int) bool {
-	if maxEntries <= 0 {
-		return false
-	}
-
-	if b >= '1' && b <= '9' {
-		return int(b-'0') <= maxEntries
-	}
-
-	if b >= 'a' && b <= 'z' {
-		return int(b-'a'+1) <= maxEntries
-	}
-
-	if b >= 'A' && b <= 'Z' {
-		return int(b-'A'+1) <= maxEntries
-	}
-
-	return false
-}
-
-type promptTTYIO struct {
-	// input reads user keystrokes from the controlling TTY.
-	input *os.File
-	// output writes prompt text to the controlling TTY. This is separate from
-	// input on Windows (CONIN$ vs CONOUT$), but may be the same file on Unix.
-	output *os.File
-}
-
-func (tty *promptTTYIO) Close() {
-	if tty == nil {
-		return
-	}
-	if tty.input != nil {
-		tty.input.Close()
-	}
-	if tty.output != nil && tty.output != tty.input {
-		tty.output.Close()
-	}
-}
-
-// openPromptTTYFunc is overridable in tests so prompt behavior can be verified
-// without requiring a real controlling terminal in the test runner.
-var openPromptTTYFunc = defaultOpenPromptTTY
-
-// defaultOpenPromptTTY opens the process controlling terminal for production use.
-func defaultOpenPromptTTY() (*promptTTYIO, error) {
-	if runtime.GOOS == "windows" {
-		input, err := os.OpenFile("CONIN$", os.O_RDONLY, 0)
-		if err != nil {
-			return nil, err
-		}
-
-		output, err := os.OpenFile("CONOUT$", os.O_WRONLY, 0)
-		if err != nil {
-			input.Close()
-			return nil, err
-		}
-
-		return &promptTTYIO{input: input, output: output}, nil
-	}
-
-	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
-	if err != nil {
-		return nil, err
-	}
-	return &promptTTYIO{input: tty, output: tty}, nil
-}
-
-func readPromptLine(reader io.Reader) (string, error) {
-	bufferedReader := bufio.NewReader(reader)
-	line, err := bufferedReader.ReadString('\n')
-	if err != nil {
-		if errors.Is(err, io.EOF) {
-			if len(line) == 0 {
-				return "", io.EOF
-			}
-		} else {
-			return "", err
-		}
-	}
-
-	if len(line) > 0 && line[len(line)-1] == '\n' {
-		line = line[:len(line)-1]
-	}
-	if len(line) > 0 && line[len(line)-1] == '\r' {
-		line = line[:len(line)-1]
-	}
-
-	return line, nil
-}
-
-func readPromptFromTTY(promptText string) (string, error) {
-	tty, err := openPromptTTYFunc()
-	if err != nil {
-		return "", err
-	}
-	defer tty.Close()
-
-	_, err = tty.output.Write([]byte(promptText))
-	if err != nil {
-		return "", err
-	}
-
-	return readPromptLine(tty.input)
-}
-
-func readCdhSelection(stdin io.Reader, stdout io.Writer, maxEntries int) (string, error) {
-	if stdinFile, ok := stdin.(*os.File); ok {
-		stdinFd := int(stdinFile.Fd())
-		if term.IsTerminal(stdinFd) {
-			oldState, err := term.MakeRaw(stdinFd)
-			if err == nil {
-				defer term.Restore(stdinFd, oldState)
-
-				for {
-					buf := make([]byte, 1)
-					n, readErr := stdinFile.Read(buf)
-					if n > 0 {
-						b := buf[0]
-						if b == 3 {
-							fmt.Fprint(stdout, "\r\n")
-							return "", nil
-						}
-						if b == '\r' || b == '\n' {
-							fmt.Fprint(stdout, "\r\n")
-							return "", nil
-						}
-						if b == 127 || b == 8 {
-							continue
-						}
-
-						if !isValidCdhSelectionByte(b, maxEntries) {
-							continue
-						}
-
-						fmt.Fprintf(stdout, "%c", b)
-						fmt.Fprint(stdout, "\r\n")
-						return string([]byte{b}), nil
-					}
-
-					if readErr != nil {
-						if errors.Is(readErr, io.EOF) {
-							return "", nil
-						}
-						return "", readErr
-					}
-				}
-			}
-		}
-	}
-
-	reader := bufio.NewReader(stdin)
-	selection, err := reader.ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return "", err
-	}
-
-	trimmed := strings.TrimSpace(selection)
-	for i := 0; i < len(trimmed); i++ {
-		b := trimmed[i]
-		if b == 3 {
-			return "", nil
-		}
-		if isValidCdhSelectionByte(b, maxEntries) {
-			return string([]byte{b}), nil
-		}
-	}
-	return "", nil
-}
-
-func (state *EvalState) RunCdh(context ExecuteContext) (EvalResult, error) {
-	if len(state.PreviousDirectories) == 0 {
-		return SimpleSuccess(), nil
-	}
-
-	stdout := context.StandardOutput
-	if stdout == nil {
-		stdout = os.Stdout
-	}
-
-	stdin := context.StandardInput
-	if stdin == nil {
-		stdin = os.Stdin
-	}
-
-	currentDir, err := os.Getwd()
-	if err != nil {
-		return state.FailWithMessage(fmt.Sprintf("Error getting current directory: %s\n", err.Error())), err
-	}
-	currentDir = filepath.Clean(currentDir)
-
-	selectableDirs := make([]string, 0, len(state.PreviousDirectories))
-	for _, dir := range state.PreviousDirectories {
-		if filepath.Clean(dir) == currentDir {
-			continue
-		}
-		selectableDirs = append(selectableDirs, dir)
-	}
-
-	if len(selectableDirs) == 0 {
-		return SimpleSuccess(), nil
-	}
-
-	maxEntries := min(len(selectableDirs), 9)
-
-	start := len(selectableDirs) - maxEntries
-	for i := start; i < len(selectableDirs); i++ {
-		selectionIndex := len(selectableDirs) - i
-		selectionLetter := rune('a' + selectionIndex - 1)
-		fmt.Fprintf(stdout, " %c  %d)  %s\n", selectionLetter, selectionIndex, selectableDirs[i])
-	}
-
-	fmt.Fprint(stdout, "Select directory by letter or number: ")
-	selection, err := readCdhSelection(stdin, stdout, maxEntries)
-	if err != nil {
-		return state.FailWithMessage(fmt.Sprintf("Error reading cdh selection: %s\n", err.Error())), err
-	}
-
-	if selection == "" {
-		return SimpleSuccess(), nil
-	}
-
-	selectionIndex, ok := cdhSelectionToIndex(selection, maxEntries)
-	if !ok {
-		return state.FailWithMessage("Invalid cdh selection.\n"), fmt.Errorf("invalid cdh selection")
-	}
-
-	targetDir := selectableDirs[len(selectableDirs)-selectionIndex]
-	result, exitCode, _, _ := state.ChangeDirectory(targetDir)
-	if exitCode != 0 {
-		return result, fmt.Errorf("cdh change directory failed")
-	}
-	return result, nil
-}
-
-func (state *EvalState) RunCdp() (EvalResult, error) {
-	if len(state.PreviousDirectories) == 0 {
-		return SimpleSuccess(), nil
-	}
-
-	targetDir := state.PreviousDirectories[len(state.PreviousDirectories)-1]
-	result, exitCode, _, _ := state.ChangeDirectory(targetDir)
-	if exitCode != 0 {
-		return result, fmt.Errorf("cdp change directory failed")
-	}
-	return result, nil
-}
-
-func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (EvalResult, int, []byte, []byte) {
-	// Returns the result of running the process, the exit code, and the stdout result
-
-	// Check for empty list
-	if len(list.Items) == 0 {
-		return state.FailWithMessage("Cannot execute an empty list.\n"), 1, nil, nil
-	}
-
-	commandLineArgs := make([]string, 0)
-	var commandLineQueue []MShellObject
-
-	// Add all items to the queue, first in is the end of the slice, so add in reverse order
-	for i := len(list.Items) - 1; i >= 0; i-- {
-		commandLineQueue = append(commandLineQueue, list.Items[i])
-	}
-
-	for len(commandLineQueue) > 0 {
-		item := commandLineQueue[len(commandLineQueue)-1]
-		commandLineQueue = commandLineQueue[:len(commandLineQueue)-1]
-
-		if innerList, ok := item.(*MShellList); ok {
-			// Add to queue, first in is the end of the slice, so add in reverse order
-			for i := len(innerList.Items) - 1; i >= 0; i-- {
-				commandLineQueue = append(commandLineQueue, innerList.Items[i])
-			}
-		} else if !item.IsCommandLineable() {
-			return state.FailWithMessage(fmt.Sprintf("Item (%s) cannot be used as a command line argument.\n", item.DebugString())), 1, nil, nil
-		} else {
-			commandLineArgs = append(commandLineArgs, item.CommandLine())
-		}
-	}
-
-	// Need to check length here. You could have had a list of empty lists like:
-	// [[] [] [] []]
-	if len(commandLineArgs) == 0 {
-		return state.FailWithMessage("After list flattening, there still were no arguments to execute.\n"), 1, nil , nil
-	}
-
-	// Handle cd command specially
-	if commandLineArgs[0] == "cd" {
-		if len(commandLineArgs) > 3 {
-			fmt.Fprint(os.Stderr, "cd command only takes one argument.\n")
-		} else if len(commandLineArgs) == 2 {
-			// Check for -h or --help
-			if commandLineArgs[1] == "-h" || commandLineArgs[1] == "--help" {
-				fmt.Fprint(os.Stderr, "cd: cd [dir]\nChange the shell working directory.\n")
-				return SimpleSuccess(), 0, nil, nil
-			} else {
-				return state.ChangeDirectory(commandLineArgs[1])
-			}
-		} else {
-			// else cd to home directory
-			homeDir, err := os.UserHomeDir()
-			if err != nil {
-				return state.FailWithMessage(fmt.Sprintf("Error getting home directory: %s\n", err.Error())), 1, nil, nil
-			}
-
-			return state.ChangeDirectory(homeDir)
-		}
-
-		return SimpleSuccess(), 0, nil, nil
-	}
-
-	// Handle cdh/cdp commands specially
-	if commandLineArgs[0] == "cdh" || commandLineArgs[0] == "cdp" {
-		commandName := commandLineArgs[0]
-		takesNoArgsMessage := fmt.Sprintf("%s command takes no arguments.\n", commandName)
-
-		if len(commandLineArgs) > 2 {
-			fmt.Fprint(os.Stderr, takesNoArgsMessage)
-			return SimpleSuccess(), 0, nil, nil
-		}
-
-		if len(commandLineArgs) == 2 {
-			if commandLineArgs[1] == "-h" || commandLineArgs[1] == "--help" {
-				if commandName == "cdh" {
-					fmt.Fprint(os.Stderr, "cdh: cdh\nShow previous directories and select one to cd into.\n")
-				} else {
-					fmt.Fprint(os.Stderr, "cdp: cdp\nChange directory to the most recent previous directory.\n")
-				}
-			} else {
-				fmt.Fprint(os.Stderr, takesNoArgsMessage)
-			}
-			return SimpleSuccess(), 0, nil, nil
-		}
-
-		var result EvalResult
-		var err error
-		if commandName == "cdh" {
-			result, err = state.RunCdh(context)
-		} else {
-			result, err = state.RunCdp()
-		}
-
-		if err != nil {
-			return result, 1, nil, nil
-		}
-		return result, 0, nil, nil
-	}
-
-	// Check that we find the command in the path
-
-	var allArgs []string
-	var cmdPath string
-
-	// Check if there is a directory separator in the name of the command trying to execute
-	if strings.Contains(commandLineArgs[0], string(os.PathSeparator)) {
-		cmdPath = commandLineArgs[0]
-	} else {
-		var found bool
-		if context.Pbm == nil {
-			fmt.Fprint(os.Stderr, "No context found.\n")
-			return state.FailWithMessage(fmt.Sprintf("Command '%s' not found in path.\n", commandLineArgs[0])), 1, nil, nil
-		}
-
-		cmdPath, found = context.Pbm.Lookup(commandLineArgs[0])
-		if !found {
-			return state.FailWithMessage(fmt.Sprintf("Command '%s' not found in path.\n", commandLineArgs[0])), 1, nil, nil
-		}
-	}
-
-	// For interpreted files on Windows, we need to essentially do what a shebang on Linux does
-	cmdItems, err := context.Pbm.ExecuteArgs(cmdPath)
-	if err != nil {
-		return state.FailWithMessage(fmt.Sprintf("On Windows, we currently don't handle this file/extension: %s\n", cmdPath)), 1, nil, nil
-	}
-
-	allArgs = make([]string, 0, len(cmdItems)+len(commandLineArgs))
-	allArgs = append(allArgs, cmdItems...)
-	allArgs = append(allArgs, commandLineArgs[1:]...)
-
-	cmd := context.Pbm.SetupCommand(allArgs)
-	// cmd := exec.Command(allArgs[0], allArgs[1:]...)
-	// cmd := exec.Command(commandLineArgs[0], commandLineArgs[1:]...)
-	cmd.Env = os.Environ()
-
-	// Check for same-path stdout/stderr redirection
-	// If both are redirecting to the exact same path string, use a single file descriptor
-	samePath := list.StandardOutputFile != "" && list.StandardOutputFile == list.StandardErrorFile
-	if samePath && list.AppendOutput != list.AppendError {
-		return state.FailWithMessage(fmt.Sprintf("Cannot redirect stdout and stderr to the same file '%s' with different append modes.\n", list.StandardOutputFile)), 1, nil, nil
-	}
-
-	// STDOUT HANDLING
-	var commandSubWriter bytes.Buffer
-	var sharedOutputFile *os.File // Used when stdout and stderr go to the same file
-	var inPlaceFileMode os.FileMode // File mode for in-place file, preserved across write
-	// TBD: Should we allow command substituation and redirection at the same time?
-	// Probably more hassle than worth including, with probable workarounds for that rare case.
-	if list.StdoutBehavior != STDOUT_NONE {
-		cmd.Stdout = &commandSubWriter
-	} else if list.InPlaceFile != "" {
-		// In-place file modification: capture stdout to buffer, write back on success
-		// Get original file permissions to preserve them
-		fileInfo, err := os.Stat(list.InPlaceFile)
-		if err != nil {
-			return state.FailWithMessage(fmt.Sprintf("Error getting file info for '%s': %s\n", list.InPlaceFile, err.Error())), 1, nil, nil
-		}
-		inPlaceFileMode = fileInfo.Mode()
-		cmd.Stdout = &commandSubWriter
-	} else if list.StandardOutputFile != "" {
-		// Open the file for writing
-		var file *os.File
-		if list.AppendOutput {
-			file, err = os.OpenFile(list.StandardOutputFile, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
-		} else {
-			file, err = os.Create(list.StandardOutputFile)
-		}
-
-		if err != nil {
-			return state.FailWithMessage(fmt.Sprintf("Error opening file %s for writing: %s\n", list.StandardOutputFile, err.Error())), 1, nil, nil
-		}
-		cmd.Stdout = file
-		if samePath {
-			sharedOutputFile = file
-		}
-		defer file.Close()
-	} else if context.StandardOutput != nil {
-		cmd.Stdout = context.StandardOutput
-	} else {
-		if list.RunInBackground {
-			cmd.Stdout = nil
-		} else {
-			// Default to stdout of this process itself
-			cmd.Stdout = os.Stdout
-			// cmd.Stdout = nil
-		}
-	}
-
-	// STDIN HANDLING
-	if list.StdinBehavior != STDIN_NONE {
-		switch list.StdinBehavior {
-		case STDIN_CONTENT:
-			cmd.Stdin = strings.NewReader(list.StandardInputContents)
-		case STDIN_BINARY:
-			cmd.Stdin = bytes.NewReader(list.StandardInputBinary)
-		case STDIN_FILE:
-			// Open the file for reading
-			file, err := os.Open(list.StandardInputFile)
-			if err != nil {
-				return state.FailWithMessage(fmt.Sprintf("Error opening file %s for reading: %s\n", list.StandardInputFile, err.Error())), 1, nil, nil
-			}
-			cmd.Stdin = file
-			defer file.Close()
-		default:
-			panic("Unknown stdin behavior")
-		}
-
-	} else if context.StandardInput != nil {
-		cmd.Stdin = context.StandardInput
-
-		// Print position of reader
-		// position, err := cmd.Stdin.(*os.File).Seek(0, io.SeekCurrent)
-		// if err != nil {
-		// return state.FailWithMessage(fmt.Sprintf("Error getting position of reader: %s\n", err.Error())), 1
-		// }
-		// fmt.Fprintf(os.Stderr, "Position of reader: %d\n", position)
-	} else {
-		// Default to stdin of this process itself
-		cmd.Stdin = os.Stdin
-	}
-
-	// STDERR HANDLING
-	var stderrBuffer bytes.Buffer
-
-	if list.StderrBehavior != STDERR_NONE {
-		cmd.Stderr = &stderrBuffer
-	} else if sharedOutputFile != nil {
-		// Use the same file descriptor as stdout
-		cmd.Stderr = sharedOutputFile
-	} else if list.StandardErrorFile != "" {
-		// Open the file for writing
-		var file *os.File
-		if list.AppendError {
-			file, err = os.OpenFile(list.StandardErrorFile, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
-		} else {
-			file, err = os.Create(list.StandardErrorFile)
-		}
-		if err != nil {
-			return state.FailWithMessage(fmt.Sprintf("Error opening file %s for writing: %s\n", list.StandardErrorFile, err.Error())), 1, nil, nil
-		}
-		cmd.Stderr = file
-		defer file.Close()
-	} else if context.StandardError != nil {
-		cmd.Stderr = context.StandardError
-	} else {
-		if list.RunInBackground {
-			cmd.Stderr = nil
-		} else {
-			// Default to stderr of this process itself
-			cmd.Stderr = os.Stderr
-		}
-	}
-
-	var startErr error
-	var exitCode int
-
-	if list.RunInBackground {
-		// Print out current stdout and stderr
-		startErr = cmd.Start()
-
-		if startErr != nil {
-			fmt.Fprintf(os.Stderr, "Error starting command: %s\n", startErr.Error())
-			exitCode = 1
-		}
-		exitCode = 0 // TODO: What to set here?
-	} else {
-		// Use Start + Wait instead of Run so we can set the foreground process group
-		startErr = cmd.Start()
-		if startErr != nil {
-			fmt.Fprintf(os.Stderr, "Error starting command: %s\n", startErr.Error())
-			fmt.Fprintf(os.Stderr, "Command: '%s'\n", cmd.Path)
-			for i, arg := range cmd.Args {
-				fmt.Fprintf(os.Stderr, "Arg %d: '%s'\n", i, arg)
-			}
-			exitCode = 1
-		} else {
-			// If we're in a pipeline, report the PID so RunPipeline can manage foreground
-			if context.InPipeline && context.PipelinePidChan != nil && cmd.Process != nil {
-				select {
-				case context.PipelinePidChan <- cmd.Process.Pid:
-				default:
-					// Channel full or closed, that's fine - first process already reported
-				}
-			}
-
-			// If stdin is a terminal and we're not in a pipeline, set the subprocess as
-			// the foreground process group so that CTRL-C goes to it instead of the shell.
-			// For pipelines, RunPipeline handles foreground process group management.
-			stdinFd := int(os.Stdin.Fd())
-			shouldSetForeground := !context.InPipeline && IsTerminal(stdinFd) && cmd.Process != nil
-			if shouldSetForeground {
-				// Ignore SIGTTOU/SIGTTIN to prevent shell from stopping when manipulating foreground
-				restoreSignals := IgnoreSignalsForJobControl()
-				SetForegroundProcessGroup(stdinFd, cmd.Process.Pid)
-				restoreSignals()
-			}
-
-			waitErr := cmd.Wait()
-
-			// Restore the shell as the foreground process group
-			if shouldSetForeground {
-				restoreSignals := IgnoreSignalsForJobControl()
-				RestoreForegroundProcessGroup(stdinFd)
-				restoreSignals()
-			}
-
-			if waitErr != nil {
-				if _, ok := waitErr.(*exec.ExitError); !ok {
-					fmt.Fprintf(os.Stderr, "Error running command: %s\n", waitErr.Error())
-					exitCode = 1
-				} else {
-					// Command exited with non-zero exit code
-					exitCode = waitErr.(*exec.ExitError).ExitCode()
-				}
-			} else {
-				exitCode = cmd.ProcessState.ExitCode()
-			}
-		}
-	}
-
-	// In-place file modification: write stdout back to file on success (exit code 0)
-	if list.InPlaceFile != "" && exitCode == 0 {
-		err := os.WriteFile(list.InPlaceFile, commandSubWriter.Bytes(), inPlaceFileMode)
-		if err != nil {
-			return state.FailWithMessage(fmt.Sprintf("Error writing to in-place file '%s': %s\n", list.InPlaceFile, err.Error())), 1, nil, nil
-		}
-	}
-
-	return SimpleSuccess(), exitCode, commandSubWriter.Bytes(), stderrBuffer.Bytes()
-}
-
-func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContext, stack *MShellStack) (EvalResult, int, []byte, []byte) {
-	if len(MShellPipe.List.Items) == 0 {
-		return state.FailWithMessage("Cannot execute an empty pipe.\n"), 1, nil, nil
-	}
-
-	// Check that all list items are Executables
-	for i, item := range MShellPipe.List.Items {
-		if _, ok := item.(Executable); !ok {
-			return state.FailWithMessage(fmt.Sprintf("Item %d (%s) in pipe is not a list or a quotation.\n", i, item.DebugString())), 1, nil, nil
-		}
-	}
-
-	if len(MShellPipe.List.Items) == 1 {
-		// Just run the Execute on the first item
-		asExecutable, _ := MShellPipe.List.Items[0].(Executable)
-		return asExecutable.Execute(state, context, stack)
-	}
-
-	// Have at least 2 items here, create pipeline of Executables, set up list of contexts
-	contexts := make([]ExecuteContext, len(MShellPipe.List.Items))
-
-	pipeReaders := make([]io.Reader, len(MShellPipe.List.Items)-1)
-	pipeWriters := make([]io.Writer, len(MShellPipe.List.Items)-1)
-
-	// Set up pipes
-	for i := 0; i < len(MShellPipe.List.Items)-1; i++ {
-		pipeReader, pipeWriter, err := os.Pipe()
-		if err != nil {
-			return state.FailWithMessage(fmt.Sprintf("Error creating pipe: %s\n", err.Error())), 1, nil, nil
-		}
-		pipeReaders[i] = pipeReader
-		pipeWriters[i] = pipeWriter
-	}
-
-	var buf bytes.Buffer
-	var stdErrBuf bytes.Buffer
-
-	// Create a channel to receive the first process PID for foreground management
-	pidChan := make(chan int, 1)
-
-	for i := 0; i < len(MShellPipe.List.Items); i++ {
-		newContext := ExecuteContext{
-			StandardInput:   nil,
-			StandardOutput:  nil,
-			Variables:       context.Variables,
-			Pbm:             context.Pbm,
-			InPipeline:      true,
-			PipelinePidChan: pidChan,
-		}
-
-		if i == 0 {
-			// Stdin should use the context of this function, or the file marked on the initial object
-			executableStdinFile := MShellPipe.List.Items[i].(Executable).GetStandardInputFile()
-
-			if executableStdinFile != "" {
-				file, err := os.Open(executableStdinFile)
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("Error opening file %s for reading: %s\n", executableStdinFile, err.Error())), 1, nil, nil
-				}
-				newContext.StandardInput = file
-				defer file.Close()
-			} else if context.StandardInput != nil {
-				newContext.StandardInput = context.StandardInput
-			} else {
-				// Default to stdin of this process itself
-				newContext.StandardInput = os.Stdin
-			}
-
-			newContext.StandardOutput = pipeWriters[0]
-		} else if i == len(MShellPipe.List.Items)-1 {
-			newContext.StandardInput = pipeReaders[len(pipeReaders)-1]
-
-			// Stdout should use the context of this function
-			if MShellPipe.StdoutBehavior != STDOUT_NONE {
-				newContext.StandardOutput = &buf
-			} else {
-				newContext.StandardOutput = context.StandardOutput
-			}
-
-			// Handle the stderr behavior
-			if MShellPipe.StderrBehavior != STDERR_NONE {
-				newContext.StandardError = &stdErrBuf
-			} else {
-				newContext.StandardError = context.StandardError
-			}
-		} else {
-			newContext.StandardInput = pipeReaders[i-1]
-			newContext.StandardOutput = pipeWriters[i]
-		}
-
-		contexts[i] = newContext
-	}
-
-	// Run the executables concurrently
-	var wg sync.WaitGroup
-	results := make([]EvalResult, len(MShellPipe.List.Items))
-	exitCodes := make([]int, len(MShellPipe.List.Items))
-
-	for i, item := range MShellPipe.List.Items {
-		wg.Add(1)
-		go func(i int, item Executable) {
-			defer wg.Done()
-			// fmt.Fprintf(os.Stderr, "Running item %d\n", i)
-			results[i], exitCodes[i], _, _ = item.Execute(state, contexts[i], stack)
-
-			// Close pipe ends that are no longer needed
-			if i > 0 {
-				pipeReaders[i-1].(io.Closer).Close()
-			}
-			if i < len(MShellPipe.List.Items)-1 {
-				pipeWriters[i].(io.Closer).Close()
-			}
-		}(i, item.(Executable))
-	}
-
-	// Set the first process that reports its PID as the foreground process group
-	// so that CTRL-C goes to the pipeline instead of the shell
-	stdinFd := int(os.Stdin.Fd())
-	setForeground := IsTerminal(stdinFd)
-	if setForeground {
-		select {
-		case pid := <-pidChan:
-			// Ignore SIGTTOU/SIGTTIN to prevent shell from stopping when manipulating foreground
-			restoreSignals := IgnoreSignalsForJobControl()
-			SetForegroundProcessGroup(stdinFd, pid)
-			restoreSignals()
-		case <-time.After(100 * time.Millisecond):
-			// No external process started within timeout (maybe all are built-ins)
-			setForeground = false
-		}
-	}
-
-	// Wait for all processes to complete
-	wg.Wait()
-
-	// Restore the shell as the foreground process group
-	if setForeground {
-		restoreSignals := IgnoreSignalsForJobControl()
-		RestoreForegroundProcessGroup(stdinFd)
-		restoreSignals()
-	}
-
-	var stdoutBytes []byte
-	var stderrBytes []byte
-
-	if MShellPipe.StdoutBehavior != STDOUT_NONE {
-		stdoutBytes = buf.Bytes()
-	} else {
-		stdoutBytes = nil
-	}
-
-	if MShellPipe.StderrBehavior != STDERR_NONE {
-		stderrBytes = stdErrBuf.Bytes()
-	} else {
-		stderrBytes = nil
-	}
-
-	// Check for errors
-	for i, result := range results {
-		if !result.Success {
-			return result, exitCodes[i], stdoutBytes, stderrBytes
-		}
-	}
-
-	return SimpleSuccess(), exitCodes[len(exitCodes)-1], stdoutBytes, stderrBytes
-}
-
-func CopyFile(source string, dest string) error {
-	srcInfo, err := os.Lstat(source)
-	if err != nil {
-		return err
-	}
-
-	// Handle symlinks
-	if srcInfo.Mode()&os.ModeSymlink != 0 {
-		target, err := os.Readlink(source)
-		if err != nil {
-			return err
-		}
-		return os.Symlink(target, dest)
-	}
-
-	// Handle directories recursively
-	if srcInfo.IsDir() {
-		if err := os.MkdirAll(dest, srcInfo.Mode().Perm()); err != nil {
-			return err
-		}
-		entries, err := os.ReadDir(source)
-		if err != nil {
-			return err
-		}
-		for _, entry := range entries {
-			srcPath := filepath.Join(source, entry.Name())
-			dstPath := filepath.Join(dest, entry.Name())
-			if err := CopyFile(srcPath, dstPath); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
-	// Regular file: preserve permissions
-	input, err := os.Open(source)
-	if err != nil {
-		return err
-	}
-	defer input.Close()
-
-	output, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, srcInfo.Mode().Perm())
-	if err != nil {
-		return err
-	}
-	defer output.Close()
-
-	_, err = io.Copy(output, input)
-	return err
-}
-
-func VersionSortComparer(a_str string, b_str string) int {
-	a := []rune(a_str)
-	b := []rune(b_str)
-
-	a_index := 0
-	b_index := 0
-
-	a_end_index := 0
-	b_end_index := 0
-
-	for {
-		if a_index >= len(a) {
-			if b_index >= len(b) {
-				return 0 // Both strings are equal
-			} else {
-				return -1 // a is shorter than b
-			}
-		}
-
-		if b_index >= len(b) {
-			return 1 // b is shorter than a
-		}
-
-		cur_a := a[a_index]
-		cur_b := b[b_index]
-
-		if unicode.IsDigit(cur_a) && unicode.IsDigit(cur_b) {
-			a_end_index = a_index
-			b_end_index = b_index
-
-			// Find the end of the digit sequence in a
-			for a_end_index < len(a) && unicode.IsDigit(a[a_end_index]) {
-				a_end_index++
-			}
-
-			a_int, _ := strconv.Atoi(string(a[a_index:a_end_index]))
-
-			// Find the end of the digit sequence in b
-			for b_end_index < len(b) && unicode.IsDigit(b[b_end_index]) {
-				b_end_index++
-			}
-
-			b_int, _ := strconv.Atoi(string(b[b_index:b_end_index]))
-
-			if a_int < b_int {
-				return -1
-			} else if a_int > b_int {
-				return 1
-			} else {
-				a_index = a_end_index
-				b_index = b_end_index
-			}
-		} else if unicode.IsDigit(cur_a) {
-			// Check is b is less than 0
-			if cur_b < '0' {
-				return 1
-			} else {
-				return -1
-			}
-		} else if unicode.IsDigit(cur_b) {
-			// Check is a is less than 0
-			if cur_a < '0' {
-				return -1
-			} else {
-				return 1
-			}
-		} else {
-			if cur_a < cur_b {
-				return -1
-			} else if cur_a > cur_b {
-				return 1
-			} else {
-				a_index++
-				b_index++
-			}
-		}
-	}
-}
-
-func ParseJsonObjToMshell(jsonObj any) MShellObject {
-	// See https://pkg.go.dev/encoding/json#Unmarshal
-	switch o := jsonObj.(type) {
-	case []any:
-		list := NewList(0)
-		for _, item := range o {
-			parsedItem := ParseJsonObjToMshell(item)
-			list.Items = append(list.Items, parsedItem)
-		}
-		return list
-
-	case map[string]any:
-		dict := NewDict()
-		// TODO: decide and document how to handle duplicate keys in JSON objects
-		for key, value := range o {
-			dict.Items[key] = ParseJsonObjToMshell(value)
-		}
-		return dict
-
-	case string:
-		return MShellString{o}
-	case float64:
-		return MShellFloat{o}
-	case bool:
-		if o {
-			return MShellBool{true}
-		} else {
-			return MShellBool{false}
-		}
-	case nil:
-		return &Maybe{obj: nil}
-	default:
-		panic(fmt.Sprintf("Unknown JSON object type: %T", jsonObj))
-		// There should be no other types in JSON, but if there are, we can handle them here
-	}
-}
-
-// These 2 are courtesy of GPT-5.
-// Don't make me regret this.
-
-// StripVolumePrefix removes the Windows volume prefix from p (e.g. "C:",
-// "\\server\\share", "\\\\?\\C:", "\\\\?\\UNC\\server\\share", "\\\\.\\COM1",
-// "\\\\?\\Volume{GUID}") and returns the remainder. The result is guaranteed
-// NOT to start with '\' or '/'.
-//
-// Examples (on Windows):
-//
-//	"C:\\foo\\bar"                         -> "foo\\bar"
-//	"C:relative\\path"                     -> "relative\\path"
-//	"\\\\server\\share\\dir\\file"         -> "dir\\file"
-//	"\\\\?\\C:\\path\\to\\file"            -> "path\\to\\file"
-//	"\\\\?\\UNC\\server\\share\\dir"       -> "dir"
-//	"\\\\?\\Volume{GUID}\\Windows\\Temp"   -> "Windows\\Temp"
-//	"\\\\.\\COM1"                          -> ""  (device path, no remainder)
-func StripVolumePrefix(p string) string {
-	if runtime.GOOS != "windows" {
-		return p
-	}
-	vol := filepath.VolumeName(p)
-	rest := strings.TrimPrefix(p, vol)
-	// Remove any leading separators so it doesn't begin with "\" or "/".
-	rest = strings.TrimLeft(rest, `\/`)
-	return rest
-}
-
-// DirNoVolume is a convenience wrapper that returns the directory of p
-// with any Windows volume removed and no leading separator.
-func DirNoVolume(p string) string {
-	if runtime.GOOS != "windows" {
-		return filepath.Dir(p)
-	}
-	dir := filepath.Dir(p)
-	return StripVolumePrefix(dir)
-}
-
-func VersionSortCmp(s1 string, s2 string) int {
-	i := 0
-	j := 0
-
-	for {
-		if i >= len(s1) {
-			if j >= len(s2) {
-				return 0
-			}
-			return -1
-		}
-		if j >= len(s2) {
-			return 1
-		}
-
-		iStart := i
-		jStart := j
-
-		char1 := s1[i]
-		char2 := s2[j]
-		i++
-		j++
-		isDigit1 := false
-		isDigit2 := false
-
-		if char1 >= '0' && char1 <= '9' {
-			isDigit1 = true
-		}
-
-		if char2 >= '0' && char2 <= '9' {
-			isDigit2 = true
-		}
-
-		if isDigit1 && !isDigit2 {
-			return 1
-		}
-
-		if !isDigit1 && isDigit2 {
-			return -1
-		}
-
-		if !isDigit1 && !isDigit2 {
-			if char1 < char2 {
-				return -1
-			} else if char1 > char2 {
-				return 1
-			} else {
-				continue
-			}
-		}
-
-		// Both digits, read in all digits
-		for i < len(s1) {
-			if s1[i] >= '0' && s1[i] <= '9' {
-				i++
-			} else {
-				break
-			}
-		}
-
-		// Both digits, read in all digits
-		for j < len(s2) {
-			if s2[j] >= '0' && s2[j] <= '9' {
-				j++
-			} else {
-				break
-			}
-		}
-
-		// Get the integer representations
-		num1, _ := strconv.Atoi(s1[iStart:i])
-		num2, _ := strconv.Atoi(s2[jStart:j])
-
-		if num1 < num2 {
-			return -1
-		} else if num1 > num2 {
-			return 1
-		} else if (i - iStart) > (j - jStart) { // Sort more leading zeros after
-			return 1
-		} else if (i - iStart) < (j - jStart) {
-			return -1
-		}
-		// else continue because they are equal
-	}
-}
-
-type LinkHeader struct {
-	Uri    string
-	Rel    string
-	Params map[string]string
-}
-
-type zipPackItem struct {
-	SourcePath   string
-	ArchivePath  string
-	ModeOverride *os.FileMode
-	PreserveRoot bool
-}
-
-type zipEntryMetadata struct {
-	Name             string
-	CompressedSize   int
-	UncompressedSize int
-	Modified         time.Time
-	IsDir            bool
-	Mode             os.FileMode
-}
-
-type zipWriteOptions struct {
-	overwrite           bool
-	skipExisting        bool
-	preservePermissions bool
-}
-
-type zipExtractOptions struct {
-	zipWriteOptions
-	stripComponents int
-	pattern         string
-}
-
-type zipExtractEntryOptions struct {
-	zipWriteOptions
-	mkdirs bool
-}
-
-func zipDirectory(sourceDir, zipPath string, preserveRoot bool) error {
-	info, err := os.Stat(sourceDir)
-	if err != nil {
-		return fmt.Errorf("Error stating %s: %w", sourceDir, err)
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("zipDir expects a directory. %s is not a directory", sourceDir)
-	}
-
-	srcAbs, err := filepath.Abs(sourceDir)
-	if err != nil {
-		return fmt.Errorf("Error resolving %s: %w", sourceDir, err)
-	}
-	if err := ensureZipTargetNotInsideSource(srcAbs, zipPath); err != nil {
-		return err
-	}
-
-	packItem := zipPackItem{
-		SourcePath:   sourceDir,
-		PreserveRoot: preserveRoot,
-	}
-	return buildZipFromEntries([]zipPackItem{packItem}, zipPath)
-}
-
-func ensureZipTargetNotInsideSource(sourceAbs string, zipPath string) error {
-	zipAbs, err := filepath.Abs(zipPath)
-	if err != nil {
-		return fmt.Errorf("Error resolving destination %s: %w", zipPath, err)
-	}
-	sourceWithSep := ensureTrailingSeparator(sourceAbs)
-	if zipAbs == sourceAbs || strings.HasPrefix(zipAbs, sourceWithSep) {
-		return fmt.Errorf("Zip destination %s cannot be inside the source directory %s", zipPath, sourceAbs)
-	}
-	return nil
-}
-
-func buildZipFromEntries(items []zipPackItem, zipPath string) error {
-	if len(items) == 0 {
-		return fmt.Errorf("zipPack requires at least one entry")
-	}
-
-	if err := os.MkdirAll(filepath.Dir(zipPath), 0755); err != nil {
-		return fmt.Errorf("Error creating parent directory for %s: %w", zipPath, err)
-	}
-
-	output, err := os.Create(zipPath)
-	if err != nil {
-		return fmt.Errorf("Error creating %s: %w", zipPath, err)
-	}
-	defer output.Close()
-
-	zipWriter := zip.NewWriter(output)
-	defer zipWriter.Close()
-
-	zipAbs, err := filepath.Abs(zipPath)
-	if err != nil {
-		return fmt.Errorf("Error resolving %s: %w", zipPath, err)
-	}
-
-	for _, item := range items {
-		info, err := os.Stat(item.SourcePath)
-		if err != nil {
-			return fmt.Errorf("Error stating %s: %w", item.SourcePath, err)
-		}
-
-		sourceAbs, err := filepath.Abs(item.SourcePath)
-		if err != nil {
-			return fmt.Errorf("Error resolving %s: %w", item.SourcePath, err)
-		}
-		sourceAbsWithSep := ensureTrailingSeparator(sourceAbs)
-		if zipAbs == sourceAbs || strings.HasPrefix(zipAbs, sourceAbsWithSep) {
-			return fmt.Errorf("Zip destination %s cannot be inside the source path %s", zipPath, sourceAbs)
-		}
-
-		if info.IsDir() {
-			prefix := strings.Trim(item.ArchivePath, "/")
-			if prefix == "" && item.PreserveRoot {
-				prefix = filepath.Base(sourceAbs)
-			}
-			if err := addDirectoryToZip(zipWriter, item.SourcePath, prefix, item.ModeOverride); err != nil {
-				return err
-			}
-			continue
-		}
-
-		name := item.ArchivePath
-		if name == "" {
-			name = filepath.Base(item.SourcePath)
-		}
-		name = strings.Trim(name, "/")
-		if name == "" {
-			return fmt.Errorf("zipPack entry for %s produced an empty archive path", item.SourcePath)
-		}
-
-		if err := addFileToZip(zipWriter, item.SourcePath, name, info, item.ModeOverride); err != nil {
-			return err
-		}
-	}
-
-	if err := zipWriter.Close(); err != nil {
-		return fmt.Errorf("Error finalizing zip %s: %w", zipPath, err)
-	}
-	if err := output.Close(); err != nil {
-		return fmt.Errorf("Error closing %s: %w", zipPath, err)
-	}
-	return nil
-}
-
-func addDirectoryToZip(zipWriter *zip.Writer, sourcePath, archivePrefix string, modeOverride *os.FileMode) error {
-	cleanPrefix := strings.Trim(archivePrefix, "/")
-	return filepath.WalkDir(sourcePath, func(pathStr string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-
-		relPath, err := filepath.Rel(sourcePath, pathStr)
-		if err != nil {
-			return err
-		}
-		relPath = filepath.ToSlash(relPath)
-
-		var entryName string
-		if relPath == "." {
-			entryName = cleanPrefix
-		} else if cleanPrefix == "" {
-			entryName = relPath
-		} else {
-			entryName = path.Join(cleanPrefix, relPath)
-		}
-
-		entryName = strings.Trim(entryName, "/")
-		if entryName == "" {
-			// We skip the implicit root when no prefix is requested.
-			return nil
-		}
-		if info.IsDir() {
-			entryName += "/"
-		}
-
-		return addFileToZip(zipWriter, pathStr, entryName, info, modeOverride)
-	})
-}
-
-func addFileToZip(zipWriter *zip.Writer, sourcePath, entryName string, info os.FileInfo, modeOverride *os.FileMode) error {
-	header, err := zip.FileInfoHeader(info)
-	if err != nil {
-		return err
-	}
-	header.Name = path.Clean(strings.ReplaceAll(entryName, "\\", "/"))
-	if info.IsDir() && !strings.HasSuffix(header.Name, "/") {
-		header.Name += "/"
-	}
-	if modeOverride != nil {
-		header.SetMode(*modeOverride)
-	}
-	if !info.IsDir() {
-		header.Method = zip.Deflate
-	}
-
-	writer, err := zipWriter.CreateHeader(header)
-	if err != nil {
-		return err
-	}
-
-	if info.IsDir() {
-		return nil
-	}
-
-	file, err := os.Open(sourcePath)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	if _, err := io.Copy(writer, file); err != nil {
-		return err
-	}
-	return nil
-}
-
-func safeSizeToInt(size uint64) (int, error) {
-	if size > math.MaxInt {
-		return 0, fmt.Errorf("Zip entry size %d exceeds supported range", size)
-	}
-	return int(size), nil
-}
-
-func collectZipMetadata(zipPath string) ([]zipEntryMetadata, error) {
-	reader, err := zip.OpenReader(zipPath)
-	if err != nil {
-		return nil, fmt.Errorf("Error opening %s: %w", zipPath, err)
-	}
-	defer reader.Close()
-
-	entries := make([]zipEntryMetadata, 0, len(reader.File))
-	for _, file := range reader.File {
-		compressed, err := safeSizeToInt(file.CompressedSize64)
-		if err != nil {
-			return nil, err
-		}
-		uncompressed, err := safeSizeToInt(file.UncompressedSize64)
-		if err != nil {
-			return nil, err
-		}
-		info := file.FileInfo()
-		entry := zipEntryMetadata{
-			Name:             file.Name,
-			CompressedSize:   compressed,
-			UncompressedSize: uncompressed,
-			Modified:         file.Modified,
-			IsDir:            info.IsDir(),
-			Mode:             info.Mode(),
-		}
-		entries = append(entries, entry)
-	}
-
-	return entries, nil
-}
-
-func parseZipExtractOptions(dict *MShellDict) (zipExtractOptions, error) {
-	options := zipExtractOptions{
-		zipWriteOptions: zipWriteOptions{
-			overwrite:           false,
-			skipExisting:        false,
-			preservePermissions: true,
-		},
-		stripComponents: 0,
-		pattern:         "",
-	}
-
-	if val, ok, err := boolOption(dict, "overwrite"); err != nil {
-		return options, err
-	} else if ok {
-		options.overwrite = val
-	}
-
-	if val, ok, err := boolOption(dict, "skipExisting"); err != nil {
-		return options, err
-	} else if ok {
-		options.skipExisting = val
-	}
-
-	if options.overwrite && options.skipExisting {
-		return options, fmt.Errorf("zipExtract options 'overwrite' and 'skipExisting' are mutually exclusive")
-	}
-
-	if val, ok, err := boolOption(dict, "preservePermissions"); err != nil {
-		return options, err
-	} else if ok {
-		options.preservePermissions = val
-	}
-
-	if val, ok, err := intOption(dict, "stripComponents"); err != nil {
-		return options, err
-	} else if ok {
-		if val < 0 {
-			return options, fmt.Errorf("zipExtract option 'stripComponents' must be >= 0")
-		}
-		options.stripComponents = val
-	}
-
-	if val, ok, err := stringOption(dict, "pattern"); err != nil {
-		return options, err
-	} else if ok {
-		options.pattern = val
-	}
-
-	return options, nil
-}
-
-func parseZipExtractEntryOptions(dict *MShellDict) (zipExtractEntryOptions, error) {
-	options := zipExtractEntryOptions{
-		zipWriteOptions: zipWriteOptions{
-			overwrite:           false,
-			skipExisting:        false,
-			preservePermissions: true,
-		},
-		mkdirs: true,
-	}
-
-	if val, ok, err := boolOption(dict, "overwrite"); err != nil {
-		return options, err
-	} else if ok {
-		options.overwrite = val
-	}
-
-	if val, ok, err := boolOption(dict, "skipExisting"); err != nil {
-		return options, err
-	} else if ok {
-		options.skipExisting = val
-	}
-
-	if options.overwrite && options.skipExisting {
-		return options, fmt.Errorf("zipExtractEntry options 'overwrite' and 'skipExisting' are mutually exclusive")
-	}
-
-	if val, ok, err := boolOption(dict, "preservePermissions"); err != nil {
-		return options, err
-	} else if ok {
-		options.preservePermissions = val
-	}
-
-	if val, ok, err := boolOption(dict, "mkdirs"); err != nil {
-		return options, err
-	} else if ok {
-		options.mkdirs = val
-	}
-
-	return options, nil
-}
-
-func boolOption(dict *MShellDict, key string) (bool, bool, error) {
-	item, ok := dict.Items[key]
-	if !ok {
-		return false, false, nil
-	}
-	boolVal, ok := item.(MShellBool)
-	if !ok {
-		return false, true, fmt.Errorf("Option '%s' must be a bool, found %s", key, item.TypeName())
-	}
-	return boolVal.Value, true, nil
-}
-
-func intOption(dict *MShellDict, key string) (int, bool, error) {
-	item, ok := dict.Items[key]
-	if !ok {
-		return 0, false, nil
-	}
-	intVal, ok := item.(MShellInt)
-	if !ok {
-		return 0, true, fmt.Errorf("Option '%s' must be an int, found %s", key, item.TypeName())
-	}
-	return intVal.Value, true, nil
-}
-
-func stringOption(dict *MShellDict, key string) (string, bool, error) {
-	item, ok := dict.Items[key]
-	if !ok {
-		return "", false, nil
-	}
-	val, err := item.CastString()
-	if err != nil {
-		return "", true, fmt.Errorf("Option '%s' must be a string/path, found %s", key, item.TypeName())
-	}
-	return val, true, nil
-}
-
-func extractZipArchive(zipPath, destDir string, options zipExtractOptions) error {
-	reader, err := zip.OpenReader(zipPath)
-	if err != nil {
-		return fmt.Errorf("Error opening %s: %w", zipPath, err)
-	}
-	defer reader.Close()
-
-	absDest, err := filepath.Abs(destDir)
-	if err != nil {
-		return fmt.Errorf("Error resolving destination %s: %w", destDir, err)
-	}
-
-	if err := os.MkdirAll(absDest, 0755); err != nil {
-		return fmt.Errorf("Error creating destination %s: %w", absDest, err)
-	}
-	baseWithSep := ensureTrailingSeparator(absDest)
-
-	for _, file := range reader.File {
-		if file.FileInfo().Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("Refusing to extract symlink %s", file.Name)
-		}
-
-		entryName := normalizeZipEntryName(file.Name)
-		if entryName == "" {
-			continue
-		}
-
-		if options.pattern != "" {
-			match, err := path.Match(options.pattern, entryName)
-			if err != nil {
-				return fmt.Errorf("Invalid zipExtract pattern '%s': %w", options.pattern, err)
-			}
-			if !match {
-				continue
-			}
-		}
-
-		stripped, err := stripZipComponents(entryName, options.stripComponents, file.FileInfo().IsDir())
-		if err != nil {
-			return err
-		}
-		if stripped == "" {
-			continue
-		}
-
-		target := filepath.Join(absDest, filepath.FromSlash(stripped))
-		target = filepath.Clean(target)
-		if err := ensureWithinBase(target, absDest, baseWithSep); err != nil {
-			return err
-		}
-
-		if err := writeZipFileToDisk(file, target, options.zipWriteOptions, true); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func extractZipEntry(zipPath, entryPath, destPath string, options zipExtractEntryOptions) error {
-	reader, err := zip.OpenReader(zipPath)
-	if err != nil {
-		return fmt.Errorf("Error opening %s: %w", zipPath, err)
-	}
-	defer reader.Close()
-
-	targetName := normalizeZipEntryName(entryPath)
-	if targetName == "" {
-		return fmt.Errorf("Entry path %s resolves to an empty name", entryPath)
-	}
-
-	var fileEntry *zip.File
-	dirExists := false
-
-	for _, file := range reader.File {
-		name := normalizeZipEntryName(file.Name)
-		if name != targetName {
-			continue
-		}
-
-		if file.FileInfo().IsDir() {
-			dirExists = true
-			break
-		}
-		fileEntry = file
-		break
-	}
-
-	if dirExists {
-		return extractZipDirectoryEntries(reader.File, targetName, destPath, options)
-	}
-
-	if fileEntry != nil {
-		return extractZipFileEntry(fileEntry, destPath, options)
-	}
-
-	prefix := targetName + "/"
-	for _, file := range reader.File {
-		name := normalizeZipEntryName(file.Name)
-		if strings.HasPrefix(name, prefix) {
-			dirExists = true
-			break
-		}
-	}
-
-	if dirExists {
-		return extractZipDirectoryEntries(reader.File, targetName, destPath, options)
-	}
-
-	return fmt.Errorf("Entry '%s' not found in %s", entryPath, zipPath)
-}
-
-func extractZipDirectoryEntries(files []*zip.File, targetName, destPath string, options zipExtractEntryOptions) error {
-	absDest, err := filepath.Abs(destPath)
-	if err != nil {
-		return fmt.Errorf("Error resolving destination %s: %w", destPath, err)
-	}
-
-	if options.mkdirs {
-		if err := os.MkdirAll(absDest, 0755); err != nil {
-			return fmt.Errorf("Error creating destination %s: %w", absDest, err)
-		}
-	} else {
-		info, err := os.Stat(absDest)
-		if err != nil {
-			return fmt.Errorf("Destination %s does not exist", absDest)
-		}
-		if !info.IsDir() {
-			return fmt.Errorf("Destination %s is not a directory", absDest)
-		}
-	}
-
-	baseWithSep := ensureTrailingSeparator(absDest)
-	prefix := targetName + "/"
-
-	for _, file := range files {
-		if file.FileInfo().Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("Refusing to extract symlink %s", file.Name)
-		}
-
-		name := normalizeZipEntryName(file.Name)
-		if name == targetName && file.FileInfo().IsDir() {
-			continue
-		}
-		if !strings.HasPrefix(name, prefix) {
-			continue
-		}
-
-		relative := strings.TrimPrefix(name, prefix)
-		if relative == "" {
-			continue
-		}
-
-		target := filepath.Join(absDest, filepath.FromSlash(relative))
-		target = filepath.Clean(target)
-		if err := ensureWithinBase(target, absDest, baseWithSep); err != nil {
-			return err
-		}
-
-		if err := writeZipFileToDisk(file, target, options.zipWriteOptions, true); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func extractZipFileEntry(file *zip.File, destPath string, options zipExtractEntryOptions) error {
-	if file.FileInfo().Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("Refusing to extract symlink %s", file.Name)
-	}
-
-	absDest, err := filepath.Abs(destPath)
-	if err != nil {
-		return fmt.Errorf("Error resolving destination %s: %w", destPath, err)
-	}
-
-	parent := filepath.Dir(absDest)
-	if options.mkdirs {
-		if err := os.MkdirAll(parent, 0755); err != nil {
-			return fmt.Errorf("Error creating parent directory %s: %w", parent, err)
-		}
-	} else {
-		if _, err := os.Stat(parent); err != nil {
-			return fmt.Errorf("Parent directory %s does not exist", parent)
-		}
-	}
-
-	return writeZipFileToDisk(file, absDest, options.zipWriteOptions, false)
-}
-
-func writeZipFileToDisk(file *zip.File, destPath string, options zipWriteOptions, ensureParents bool) error {
-	info := file.FileInfo()
-
-	if info.IsDir() {
-		if ensureParents {
-			if err := os.MkdirAll(destPath, 0755); err != nil {
-				return fmt.Errorf("Error creating directory %s: %w", destPath, err)
-			}
-		} else if err := os.Mkdir(destPath, 0755); err != nil && !errors.Is(err, os.ErrExist) {
-			return fmt.Errorf("Error creating directory %s: %w", destPath, err)
-		}
-
-		if options.preservePermissions {
-			if err := os.Chmod(destPath, info.Mode()); err != nil && !errors.Is(err, os.ErrPermission) {
-				return fmt.Errorf("Error setting permissions on %s: %w", destPath, err)
-			}
-		}
-		return nil
-	}
-
-	parentDir := filepath.Dir(destPath)
-	if ensureParents {
-		if err := os.MkdirAll(parentDir, 0755); err != nil {
-			return fmt.Errorf("Error creating parent directory %s: %w", parentDir, err)
-		}
-	} else {
-		if _, err := os.Stat(parentDir); err != nil {
-			return fmt.Errorf("Parent directory %s does not exist", parentDir)
-		}
-	}
-
-	if options.skipExisting {
-		if _, err := os.Stat(destPath); err == nil {
-			return nil
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-	} else {
-		if _, err := os.Stat(destPath); err == nil && !options.overwrite {
-			return fmt.Errorf("Destination %s already exists", destPath)
-		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-	}
-
-	reader, err := file.Open()
-	if err != nil {
-		return err
-	}
-	defer reader.Close()
-
-	outFile, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode().Perm())
-	if err != nil {
-		return err
-	}
-	defer outFile.Close()
-
-	if _, err := io.Copy(outFile, reader); err != nil {
-		return err
-	}
-
-	if options.preservePermissions {
-		if err := os.Chmod(destPath, info.Mode()); err != nil && !errors.Is(err, os.ErrPermission) {
-			return fmt.Errorf("Error setting permissions on %s: %w", destPath, err)
-		}
-	}
-	return nil
-}
-
-func readZipEntry(zipPath, entryPath string) ([]byte, bool, error) {
-	reader, err := zip.OpenReader(zipPath)
-	if err != nil {
-		return nil, false, fmt.Errorf("Error opening %s: %w", zipPath, err)
-	}
-	defer reader.Close()
-
-	target := normalizeZipEntryName(entryPath)
-	if target == "" {
-		return nil, false, fmt.Errorf("Entry path %s resolves to an empty name", entryPath)
-	}
-
-	for _, file := range reader.File {
-		name := normalizeZipEntryName(file.Name)
-		if name != target {
-			continue
-		}
-
-		if file.FileInfo().IsDir() {
-			return nil, false, fmt.Errorf("zipRead cannot read directory entries (%s)", entryPath)
-		}
-
-		rc, err := file.Open()
-		if err != nil {
-			return nil, false, err
-		}
-		data, err := io.ReadAll(rc)
-		rc.Close()
-		if err != nil {
-			return nil, false, err
-		}
-		return data, true, nil
-	}
-
-	return nil, false, nil
-}
-
-func normalizeZipEntryName(name string) string {
-	cleaned := strings.ReplaceAll(name, "\\", "/")
-	for strings.HasPrefix(cleaned, "./") {
-		cleaned = strings.TrimPrefix(cleaned, "./")
-	}
-	cleaned = path.Clean(cleaned)
-	cleaned = strings.TrimPrefix(cleaned, "./")
-	cleaned = strings.TrimPrefix(cleaned, "/")
-	if cleaned == "." {
-		return ""
-	}
-	return cleaned
-}
-
-func stripZipComponents(name string, components int, isDir bool) (string, error) {
-	if components == 0 || name == "" {
-		return name, nil
-	}
-
-	parts := strings.Split(name, "/")
-	if len(parts) <= components {
-		if isDir {
-			return "", nil
-		}
-		return "", fmt.Errorf("Cannot strip %d components from entry %s", components, name)
-	}
-	return strings.Join(parts[components:], "/"), nil
-}
-
-func ensureWithinBase(candidate, base, baseWithSep string) error {
-	candidate = filepath.Clean(candidate)
-	if candidate == base {
-		return nil
-	}
-	if !strings.HasPrefix(candidate, baseWithSep) {
-		return fmt.Errorf("Refusing to write outside destination directory %s (attempted %s)", base, candidate)
-	}
-	return nil
-}
-
-func ensureTrailingSeparator(path string) string {
-	if strings.HasSuffix(path, string(os.PathSeparator)) {
-		return path
-	}
-	return path + string(os.PathSeparator)
-}
-
-func EatLinkHeaderWhitespace(linkHeader string, i int) int {
-	for i < len(linkHeader) {
-		if unicode.IsSpace(rune(linkHeader[i])) {
-			i++
-		} else {
-			break
-		}
-	}
-	return i
-}
-
-// https://datatracker.ietf.org/doc/html/rfc8288
-
-// Link       = #link-value
-// link-value = "<" URI-Reference ">" *( OWS ";" OWS link-param )
-// link-param = token BWS [ "=" BWS ( token / quoted-string ) ]
-
-// https://datatracker.ietf.org/doc/html/rfc7230
-
-// token          = 1*tchar
-
-// tchar          = "!" / "#" / "$" / "%" / "&" / "'" / "*"
-// 					 / "+" / "-" / "." / "^" / "_" / "`" / "|" / "~"
-// 					/ DIGIT / ALPHA
-// 					; any VCHAR, except delimiters
-
-// quoted-string  = DQUOTE *( qdtext / quoted-pair ) DQUOTE
-// qdtext         = HTAB / SP / %x21 / %x23-5B / %x5D-7E / obs-text
-// obs-text       = %x80-FF
-// quoted-pair    = "\" ( HTAB / SP / VCHAR / obs-text )
-
-func IsTChar(char rune) bool {
-	return unicode.IsLetter(char) || unicode.IsDigit(char) || char == '!' || char == '#' || char == '$' || char == '%' ||
-		char == '&' || char == '\'' || char == '*' || char == '+' || char == '-' ||
-		char == '.' || char == '^' || char == '_' || char == '`' || char == '|' ||
-		char == '~'
-}
-
-func ParseLinkHeaders(linkHeader string) ([]LinkHeader, error) {
-	var headers []LinkHeader
-	i := 0
-
-	for {
-		i = EatLinkHeaderWhitespace(linkHeader, i)
-		if i >= len(linkHeader) {
-			break
-		}
-
-		header, nextIndex, err := ParseLinkHeader(linkHeader, i)
-		if err != nil {
-			return nil, fmt.Errorf("Error parsing link header at position %d: %s", i, err.Error())
-		}
-		headers = append(headers, header)
-		i = nextIndex
-
-		i = EatLinkHeaderWhitespace(linkHeader, i)
-		if i >= len(linkHeader) {
-			break
-		}
-
-		if linkHeader[i] != ',' {
-			return nil, fmt.Errorf("Expected ',' after link header at position %d, found '%c'", i, linkHeader[i])
-		}
-		i++
-	}
-
-	if len(headers) == 0 {
-		return nil, fmt.Errorf("Empty link header")
-	}
-
-	return headers, nil
-}
-
-func ParseLinkHeader(linkHeader string, i int) (LinkHeader, int, error) {
-	i = EatLinkHeaderWhitespace(linkHeader, i)
-	if i >= len(linkHeader) {
-		return LinkHeader{}, i, fmt.Errorf("Empty link header")
-	}
-
-	if linkHeader[i] != '<' {
-		return LinkHeader{}, i, fmt.Errorf("Link header does not start with '<': %s", linkHeader)
-	}
-	i++
-
-	uriStart := i
-	for i < len(linkHeader) && linkHeader[i] != '>' {
-		i++
-	}
-	if i >= len(linkHeader) {
-		return LinkHeader{}, i, fmt.Errorf("Empty link header")
-	}
-	uri := linkHeader[uriStart:i]
-	i++ // Skip '>'
-
-	params := make(map[string]string)
-	rel := ""
-
-	for {
-		i = EatLinkHeaderWhitespace(linkHeader, i)
-		if i >= len(linkHeader) || linkHeader[i] == ',' {
-			if len(rel) == 0 {
-				return LinkHeader{}, i, fmt.Errorf("Link header does not have a 'rel' parameter: %s", linkHeader)
-			}
-			return LinkHeader{Uri: uri, Rel: rel, Params: params}, i, nil
-		}
-
-		if linkHeader[i] != ';' {
-			return LinkHeader{}, i, fmt.Errorf("Expected ';' before link parameter at position %d: %s", i, linkHeader)
-		}
-		i++
-
-		paramName, paramValue, nextIndex, err := ParseLinkParam(linkHeader, i)
-		if err != nil {
-			return LinkHeader{}, i, fmt.Errorf("Error parsing link parameter: %s", err.Error())
-		}
-		i = nextIndex
-
-		if paramName == "" {
-			return LinkHeader{}, i, fmt.Errorf("Empty link parameter name")
-		}
-
-		if paramValue == "" {
-			return LinkHeader{}, i, fmt.Errorf("Empty link parameter value")
-		}
-
-		if paramName == "rel" {
-			rel = paramValue
-		} else {
-			params[paramName] = paramValue
-		}
-	}
-}
-
-func ParseLinkParam(linkHeader string, i int) (string, string, int, error) {
-	i = EatLinkHeaderWhitespace(linkHeader, i)
-	if i >= len(linkHeader) {
-		return "", "", i, fmt.Errorf("Empty link parameter")
-	}
-
-	paramStart := i
-	for i < len(linkHeader) && IsTChar(rune(linkHeader[i])) {
-		i++
-	}
-
-	if paramStart == i {
-		return "", "", i, fmt.Errorf("Empty link parameter name")
-	}
-
-	paramName := linkHeader[paramStart:i]
-
-	i = EatLinkHeaderWhitespace(linkHeader, i)
-	if i >= len(linkHeader) || linkHeader[i] != '=' {
-		return "", "", i, fmt.Errorf("Link parameter '%s' does not have a value", paramName)
-	}
-	i++
-
-	i = EatLinkHeaderWhitespace(linkHeader, i)
-	if i >= len(linkHeader) {
-		return "", "", i, fmt.Errorf("Link parameter '%s' does not have a value, expected value after '='", paramName)
-	}
-
-	var paramValue strings.Builder
-
-	if linkHeader[i] == '"' {
-		i++
-		for {
-			if i >= len(linkHeader) {
-				return "", "", i, fmt.Errorf("Unfinished quoted string for link parameter '%s'", paramName)
-			}
-
-			c := linkHeader[i]
-			i++
-
-			if c == '"' {
-				break
-			}
-
-			if c == '\\' {
-				if i >= len(linkHeader) {
-					return "", "", i, fmt.Errorf("Unfinished escape sequence in quoted string for link parameter '%s'", paramName)
-				}
-				paramValue.WriteByte(linkHeader[i])
-				i++
-				continue
-			}
-
-			paramValue.WriteByte(c)
-		}
-	} else {
-		valueStart := i
-		for i < len(linkHeader) && IsTChar(rune(linkHeader[i])) {
-			i++
-		}
-		if valueStart == i {
-			return "", "", i, fmt.Errorf("Link parameter '%s' does not have a value, expected value after '='", paramName)
-		}
-		paramValue.WriteString(linkHeader[valueStart:i])
-	}
-
-	i = EatLinkHeaderWhitespace(linkHeader, i)
-	return paramName, paramValue.String(), i, nil
-}
-
-// optimizeColumnStorage attempts to convert a generic column to a typed column
-// for better performance when all values are of the same type.
-func optimizeColumnStorage(col *GridColumn) {
-	if col.ColType != COL_GENERIC || len(col.GenericData) == 0 {
-		return
-	}
-
-	// Check if all values are of the same type
-	allInts := true
-	allFloats := true
-	allStrings := true
-	allDateTimes := true
-
-	for _, val := range col.GenericData {
-		if val == nil {
-			continue // Skip nil values (None)
-		}
-
-		switch val.(type) {
-		case MShellInt:
-			allStrings = false
-			allDateTimes = false
-		case MShellFloat:
-			allInts = false
-			allStrings = false
-			allDateTimes = false
-		case MShellString:
-			allInts = false
-			allFloats = false
-			allDateTimes = false
-		case *MShellDateTime:
-			allInts = false
-			allFloats = false
-			allStrings = false
-		default:
-			// Mixed type, keep as generic
-			return
-		}
-	}
-
-	numRows := len(col.GenericData)
-
-	// Convert to typed storage
-	if allInts {
-		col.IntData = make([]int64, numRows)
-		for i, val := range col.GenericData {
-			if val == nil {
-				col.IntData[i] = 0 // Default for None
-			} else if intVal, ok := val.(MShellInt); ok {
-				col.IntData[i] = int64(intVal.Value)
-			}
-		}
-		col.ColType = COL_INT
-		col.GenericData = nil
-	} else if allFloats {
-		col.FloatData = make([]float64, numRows)
-		for i, val := range col.GenericData {
-			if val == nil {
-				col.FloatData[i] = 0.0 // Default for None
-			} else if floatVal, ok := val.(MShellFloat); ok {
-				col.FloatData[i] = floatVal.Value
-			} else if intVal, ok := val.(MShellInt); ok {
-				// Promote int to float
-				col.FloatData[i] = float64(intVal.Value)
-			}
-		}
-		col.ColType = COL_FLOAT
-		col.GenericData = nil
-	} else if allStrings {
-		col.StringData = make([]string, numRows)
-		for i, val := range col.GenericData {
-			if val == nil {
-				col.StringData[i] = "" // Default for None
-			} else if strVal, ok := val.(MShellString); ok {
-				col.StringData[i] = strVal.Content
-			}
-		}
-		col.ColType = COL_STRING
-		col.GenericData = nil
-	} else if allDateTimes {
-		col.DateTimeData = make([]time.Time, numRows)
-		for i, val := range col.GenericData {
-			if val == nil {
-				col.DateTimeData[i] = time.Time{} // Default for None
-			} else if dtVal, ok := val.(*MShellDateTime); ok {
-				col.DateTimeData[i] = dtVal.Time
-			}
-		}
-		col.ColType = COL_DATETIME
-		col.GenericData = nil
-	}
-	// If none of the above, keep as generic
 }
