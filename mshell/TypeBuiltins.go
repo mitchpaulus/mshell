@@ -202,11 +202,12 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		{Inputs: []TypeId{arena.MakeList(TidFloat)}, Outputs: []TypeId{TidFloat}},
 		{Inputs: []TypeId{arena.MakeList(TidInt)}, Outputs: []TypeId{TidInt}},
 	}
-	// max / min : ([float] -- float) | ([int] -- int)
+	// max / min : ([float] -- float) | ([int] -- int) | ([DateTime] -- DateTime)
 	for _, name := range []string{"max", "min"} {
 		out[names.Intern(name)] = []QuoteSig{
 			{Inputs: []TypeId{arena.MakeList(TidFloat)}, Outputs: []TypeId{TidFloat}},
 			{Inputs: []TypeId{arena.MakeList(TidInt)}, Outputs: []TypeId{TidInt}},
+			{Inputs: []TypeId{arena.MakeList(TidDateTime)}, Outputs: []TypeId{TidDateTime}},
 		}
 	}
 	// max2 / min2 : (int int -- int) | (float float -- float)
