@@ -102,7 +102,7 @@ func TestHoverRequestForBuiltin(t *testing.T) {
 		t.Fatalf("failed to unmarshal hover result: %v", err)
 	}
 
-	expected := "```mshell\nswap :: (a b -- b a)\n```\n\nSwap the top two stack items."
+	expected := "```mshell\nswap :: (T0 T1 -- T1 T0)\n```\n\n_builtin_\n\nSwap the top two stack items."
 	if hover.Contents.Value != expected {
 		t.Fatalf("unexpected hover contents: %q", hover.Contents.Value)
 	}
@@ -1029,6 +1029,119 @@ func TestRenameVariableInsideDefinition(t *testing.T) {
 		"method":  "exit",
 	})
 
+	clientWriter.Close()
+	wg.Wait()
+	if runErr != nil {
+		t.Fatalf("RunLSP returned error: %v", runErr)
+	}
+}
+
+func TestBuildHoverIndexCoversTypedBuiltinsAndStdlib(t *testing.T) {
+	stdlibDefs, err := loadStdlibDefsForLSP()
+	if err != nil {
+		t.Skipf("stdlib not available in test environment: %v", err)
+	}
+
+	builtinSigs, stdlibHover := buildHoverIndex(stdlibDefs)
+
+	// `over` is in builtinSigsByName but not in defaultBuiltinInfo, so
+	// it exercises the new typed-builtin hover path.
+	if sigs, ok := builtinSigs["over"]; !ok || len(sigs) == 0 {
+		t.Fatalf("expected `over` in builtinSigs, got %v", sigs)
+	} else if !strings.Contains(sigs[0], "--") {
+		t.Fatalf("expected `over` sig to contain stack effect, got %q", sigs[0])
+	}
+
+	if sigs, ok := stdlibHover["chunk"]; !ok || len(sigs) == 0 {
+		t.Fatalf("expected `chunk` in stdlibHover, got %v", sigs)
+	} else if !strings.Contains(sigs[0], "--") {
+		t.Fatalf("expected `chunk` sig to contain stack effect, got %q", sigs[0])
+	}
+}
+
+func TestHoverForInFileUserDef(t *testing.T) {
+	doc := "def addOne (int -- int)\n    1 +\nend\n\n5 addOne\n"
+	uri := protocol.DocumentURI("file:///in-file-def.msh")
+
+	addOneCol := strings.Index("5 addOne", "addOne")
+	if addOneCol < 0 {
+		t.Fatalf("expected to find addOne reference")
+	}
+
+	clientReader, clientWriter := io.Pipe()
+	serverReader, serverWriter := io.Pipe()
+
+	var wg sync.WaitGroup
+	var runErr error
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		runErr = RunLSP(clientReader, serverWriter)
+		serverWriter.Close()
+	}()
+
+	output := bufio.NewReader(serverReader)
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "initialize",
+		"params":  map[string]any{"capabilities": map[string]any{}},
+	})
+	if r := readLSPResponse(t, output); r.Error != nil {
+		t.Fatalf("initialize returned error: %+v", r.Error)
+	}
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "textDocument/didOpen",
+		"params": map[string]any{
+			"textDocument": map[string]any{
+				"uri":        uri,
+				"languageId": "mshell",
+				"version":    1,
+				"text":       doc,
+			},
+		},
+	})
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      2,
+		"method":  "textDocument/hover",
+		"params": map[string]any{
+			"textDocument": map[string]any{"uri": uri},
+			"position":     map[string]any{"line": 4, "character": addOneCol + 1},
+		},
+	})
+
+	hoverResp := readLSPResponse(t, output)
+	if hoverResp.Error != nil {
+		t.Fatalf("hover returned error: %+v", hoverResp.Error)
+	}
+
+	hoverPayload, err := json.Marshal(hoverResp.Result)
+	if err != nil {
+		t.Fatalf("failed to marshal hover result: %v", err)
+	}
+
+	var hover protocol.Hover
+	if err := json.Unmarshal(hoverPayload, &hover); err != nil {
+		t.Fatalf("failed to unmarshal hover result: %v", err)
+	}
+
+	if !strings.Contains(hover.Contents.Value, "addOne :: (int -- int)") {
+		t.Fatalf("expected in-file def hover to include signature, got %q", hover.Contents.Value)
+	}
+	if !strings.Contains(hover.Contents.Value, "user-defined") {
+		t.Fatalf("expected in-file def hover to be tagged user-defined, got %q", hover.Contents.Value)
+	}
+
+	sendLSPMessage(t, clientWriter, map[string]any{"jsonrpc": "2.0", "id": 3, "method": "shutdown"})
+	if r := readLSPResponse(t, output); r.Error != nil {
+		t.Fatalf("shutdown returned error: %+v", r.Error)
+	}
+	sendLSPMessage(t, clientWriter, map[string]any{"jsonrpc": "2.0", "method": "exit"})
 	clientWriter.Close()
 	wg.Wait()
 	if runErr != nil {
