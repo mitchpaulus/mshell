@@ -28,18 +28,20 @@ const (
 var errExitBeforeShutdown = errors.New("exit received before shutdown")
 
 type lspServer struct {
-	in         *bufio.Reader
-	out        *bufio.Writer
-	writeMu    sync.Mutex
-	documents  map[protocol.DocumentURI]*lspDocument
-	shutdown   bool
-	builtins   map[string]*builtinInfo
-	lexer      *Lexer
-	parser     *MShellParser
-	pathBins   IPathBinManager
-	varNames   map[string]struct{}
-	candsBuf   []string
-	stdlibDefs []MShellDefinition
+	in           *bufio.Reader
+	out          *bufio.Writer
+	writeMu      sync.Mutex
+	documents    map[protocol.DocumentURI]*lspDocument
+	shutdown     bool
+	builtins     map[string]*builtinInfo
+	lexer        *Lexer
+	parser       *MShellParser
+	pathBins     IPathBinManager
+	varNames     map[string]struct{}
+	candsBuf     []string
+	stdlibDefs   []MShellDefinition
+	builtinSigs  map[string][]string // name -> formatted "(in -- out)" sigs from the type checker
+	stdlibHover  map[string][]string // name -> formatted sigs for stdlib defs
 }
 
 type lspDocument struct {
@@ -67,6 +69,7 @@ type builtinInfo struct {
 	Name        string
 	Description string
 	Signatures  []string
+	Kind        string // optional tag: "builtin", "stdlib", "user"
 }
 
 type jsonrpcMessage struct {
@@ -135,7 +138,41 @@ func RunLSP(in io.Reader, out io.Writer) error {
 		server.stdlibDefs = defs
 	}
 
+	server.builtinSigs, server.stdlibHover = buildHoverIndex(server.stdlibDefs)
+
 	return server.run()
+}
+
+// buildHoverIndex renders QuoteSigs for typed builtins and for stdlib
+// definitions into pre-formatted strings keyed by name. The arena and
+// names tables are local to this call; only the formatted strings
+// escape, so we don't carry around the type-checker state.
+func buildHoverIndex(stdlibDefs []MShellDefinition) (map[string][]string, map[string][]string) {
+	arena := NewTypeArena()
+	names := NewNameTable()
+
+	builtinSigs := make(map[string][]string)
+	for nameId, sigs := range builtinSigsByName(arena, names) {
+		name := names.Name(nameId)
+		formatted := make([]string, 0, len(sigs))
+		for _, sig := range sigs {
+			formatted = append(formatted, FormatType(arena, names, arena.MakeQuote(sig)))
+		}
+		builtinSigs[name] = formatted
+	}
+
+	stdlibHover := make(map[string][]string, len(stdlibDefs))
+	if len(stdlibDefs) > 0 {
+		checker := NewChecker(arena, names)
+		for i := range stdlibDefs {
+			def := &stdlibDefs[i]
+			sig := checker.ResolveDefSig(def.Inputs, def.Outputs)
+			formatted := FormatType(arena, names, arena.MakeQuote(sig))
+			stdlibHover[def.Name] = append(stdlibHover[def.Name], formatted)
+		}
+	}
+
+	return builtinSigs, stdlibHover
 }
 
 // loadStdlibDefsForLSP locates the standard library file (honoring
@@ -631,7 +668,7 @@ func (s *lspServer) hover(params protocol.HoverParams) (*protocol.Hover, bool) {
 		return nil, false
 	}
 
-	info := s.builtins[word]
+	info := s.resolveHover(word, doc)
 	if info == nil {
 		return nil, false
 	}
@@ -652,6 +689,55 @@ func (s *lspServer) hover(params protocol.HoverParams) (*protocol.Hover, bool) {
 	return hover, true
 }
 
+// resolveHover collects everything we know about `word` and returns a
+// merged builtinInfo. Resolution order:
+//   1. Hardcoded entries (carry human descriptions).
+//   2. Typed builtins from the type-checker table.
+//   3. Stdlib definitions.
+//   4. Definitions in the current file.
+//   5. Bare BuiltInList membership (last-resort tag).
+// Hardcoded descriptions are preferred over auto-formatted ones; typed
+// signatures are preferred over hardcoded ones since they carry generic
+// type variables.
+func (s *lspServer) resolveHover(word string, doc *lspDocument) *builtinInfo {
+	hard := s.builtins[word]
+	typedSigs := s.builtinSigs[word]
+
+	if hard != nil || len(typedSigs) > 0 {
+		info := &builtinInfo{Name: word, Kind: "builtin"}
+		if len(typedSigs) > 0 {
+			info.Signatures = typedSigs
+		} else if hard != nil {
+			info.Signatures = hard.Signatures
+		}
+		if hard != nil {
+			info.Description = hard.Description
+		}
+		return info
+	}
+
+	if sigs, ok := s.stdlibHover[word]; ok {
+		return &builtinInfo{Name: word, Signatures: sigs, Kind: "stdlib"}
+	}
+
+	if sigs := s.lookupInFileDefSig(word, doc); len(sigs) > 0 {
+		return &builtinInfo{Name: word, Signatures: sigs, Kind: "user-defined"}
+	}
+
+	if _, ok := BuiltInList[word]; ok {
+		return &builtinInfo{Name: word, Kind: "builtin"}
+	}
+
+	return nil
+}
+
+// lookupInFileDefSig parses the current document and returns formatted
+// signatures for any top-level definition named `name`. Returns nil if
+// the document fails to parse or no matching def exists.
+func (s *lspServer) lookupInFileDefSig(name string, doc *lspDocument) []string {
+	return s.inFileDefSigs(doc.Text)[name]
+}
+
 func (s *lspServer) completion(params protocol.CompletionParams) ([]protocol.CompletionItem, bool) {
 	doc, ok := s.documents[params.TextDocument.URI]
 	if !ok {
@@ -662,6 +748,8 @@ func (s *lspServer) completion(params protocol.CompletionParams) ([]protocol.Com
 	lexer.resetInput(doc.Text)
 	prevAllow := lexer.allowUnterminatedString
 	lexer.allowUnterminatedString = true
+	lexer.emitWhitespace = false
+	lexer.emitComments = false
 	defer func() {
 		lexer.allowUnterminatedString = prevAllow
 		lexer.emitWhitespace = false
@@ -673,14 +761,17 @@ func (s *lspServer) completion(params protocol.CompletionParams) ([]protocol.Com
 	positionLine := int(params.Position.Line)
 	positionChar := int(params.Position.Character)
 	var (
-		varPrefix     string
-		varFound      bool
-		varToken      Token
-		literalPrefix string
-		literalFound  bool
-		literalToken  Token
+		varPrefix             string
+		varFound              bool
+		varToken              Token
+		literalPrefix         string
+		literalFound          bool
+		literalInListFirstPos bool
+		literalToken          Token
+		prevWasDef            bool
 	)
 	listStack := make([]bool, 0)
+	defNames := make(map[string]struct{})
 
 	for {
 		tok := lexer.scanToken()
@@ -694,11 +785,13 @@ func (s *lspServer) completion(params protocol.CompletionParams) ([]protocol.Com
 				listStack[len(listStack)-1] = true
 			}
 			listStack = append(listStack, false)
+			prevWasDef = false
 			continue
 		case RIGHT_SQUARE_BRACKET:
 			if len(listStack) > 0 {
 				listStack = listStack[:len(listStack)-1]
 			}
+			prevWasDef = false
 			continue
 		}
 
@@ -715,82 +808,215 @@ func (s *lspServer) completion(params protocol.CompletionParams) ([]protocol.Com
 			varFound = true
 		}
 
-		if tok.Type == LITERAL && len(listStack) > 0 && !listStack[len(listStack)-1] {
+		if tok.Type == LITERAL {
+			inListFirstPos := len(listStack) > 0 && !listStack[len(listStack)-1]
 			if tokenContainsPosition(tok, positionLine, positionChar) {
 				literalPrefix = literalCompletionPrefix(tok, positionChar)
 				literalToken = tok
 				literalFound = true
+				literalInListFirstPos = inListFirstPos
+			}
+			if prevWasDef {
+				defNames[tok.Lexeme] = struct{}{}
 			}
 		}
 
 		if len(listStack) > 0 && !listStack[len(listStack)-1] {
 			listStack[len(listStack)-1] = true
 		}
+
+		prevWasDef = tok.Type == DEF
 	}
 
 	if varFound {
-		candidates := s.candsBuf[:0]
-		for name := range s.varNames {
-			if strings.HasPrefix(name, varPrefix) {
-				candidates = append(candidates, name)
-			}
-		}
-
-		sort.Strings(candidates)
-		line := uint32(varToken.Line - 1)
-		startChar := uint32(varToken.Column - 1)
-		endChar := startChar + uint32(utf8.RuneCountInString(varToken.Lexeme))
-		editRange := protocol.Range{
-			Start: protocol.Position{Line: line, Character: startChar},
-			End:   protocol.Position{Line: line, Character: endChar},
-		}
-		items := make([]protocol.CompletionItem, 0, len(candidates))
-		for _, name := range candidates {
-			label := "@" + name
-			items = append(items, protocol.CompletionItem{
-				Label: label,
-				Kind:  protocol.CompletionItemKindVariable,
-				TextEdit: &protocol.TextEdit{
-					Range:   editRange,
-					NewText: label,
-				},
-			})
-		}
-
-		s.candsBuf = candidates
-
-		return items, true
+		return s.completeVariable(varToken, varPrefix), true
 	}
 
-	if literalFound && literalPrefix != "" && s.pathBins != nil {
-		matches := s.pathBins.Matches(literalPrefix)
-		if len(matches) == 0 {
-			return []protocol.CompletionItem{}, true
+	if literalFound && literalPrefix != "" {
+		if literalInListFirstPos {
+			return s.completeListFirstLiteral(literalToken, literalPrefix), true
 		}
-
-		line := uint32(literalToken.Line - 1)
-		startChar := uint32(literalToken.Column - 1)
-		endChar := startChar + uint32(utf8.RuneCountInString(literalToken.Lexeme))
-		editRange := protocol.Range{
-			Start: protocol.Position{Line: line, Character: startChar},
-			End:   protocol.Position{Line: line, Character: endChar},
-		}
-		items := make([]protocol.CompletionItem, 0, len(matches))
-		for _, match := range matches {
-			items = append(items, protocol.CompletionItem{
-				Label: match,
-				Kind:  protocol.CompletionItemKindFunction,
-				TextEdit: &protocol.TextEdit{
-					Range:   editRange,
-					NewText: match,
-				},
-			})
-		}
-
-		return items, true
+		return s.completeWord(literalToken, literalPrefix, doc, defNames), true
 	}
 
 	return []protocol.CompletionItem{}, true
+}
+
+// completeVariable returns @-prefixed completions for the variables
+// collected during the lexer walk.
+func (s *lspServer) completeVariable(varToken Token, varPrefix string) []protocol.CompletionItem {
+	candidates := s.candsBuf[:0]
+	for name := range s.varNames {
+		if strings.HasPrefix(name, varPrefix) {
+			candidates = append(candidates, name)
+		}
+	}
+
+	sort.Strings(candidates)
+	editRange := tokenEditRange(varToken)
+	items := make([]protocol.CompletionItem, 0, len(candidates))
+	for _, name := range candidates {
+		label := "@" + name
+		items = append(items, protocol.CompletionItem{
+			Label: label,
+			Kind:  protocol.CompletionItemKindVariable,
+			TextEdit: &protocol.TextEdit{
+				Range:   editRange,
+				NewText: label,
+			},
+		})
+	}
+
+	s.candsBuf = candidates
+	return items
+}
+
+// completeListFirstLiteral returns PATH-binary completions when the
+// cursor sits on the first literal inside a `[ ... ]` (the typical
+// argv position).
+func (s *lspServer) completeListFirstLiteral(literalToken Token, literalPrefix string) []protocol.CompletionItem {
+	if s.pathBins == nil {
+		return []protocol.CompletionItem{}
+	}
+	matches := s.pathBins.Matches(literalPrefix)
+	if len(matches) == 0 {
+		return []protocol.CompletionItem{}
+	}
+
+	editRange := tokenEditRange(literalToken)
+	items := make([]protocol.CompletionItem, 0, len(matches))
+	for _, match := range matches {
+		items = append(items, protocol.CompletionItem{
+			Label: match,
+			Kind:  protocol.CompletionItemKindFunction,
+			TextEdit: &protocol.TextEdit{
+				Range:   editRange,
+				NewText: match,
+			},
+		})
+	}
+	return items
+}
+
+// completeWord offers callable names (in-file defs, stdlib defs, typed
+// builtins, plus BuiltInList membership) for a literal at the cursor
+// outside of a list-argv context. Items are deduplicated by label,
+// with higher-priority sources winning on collision.
+func (s *lspServer) completeWord(literalToken Token, prefix string, doc *lspDocument, inFileDefNames map[string]struct{}) []protocol.CompletionItem {
+	// Priority high → low: in-file → stdlib → typed builtin → BuiltInList.
+	// Higher-priority sources overwrite later ones via `seen`.
+	type cand struct {
+		label  string
+		detail string
+		kind   protocol.CompletionItemKind
+	}
+	seen := make(map[string]cand)
+
+	add := func(label, detail string, kind protocol.CompletionItemKind) {
+		if !strings.HasPrefix(label, prefix) {
+			return
+		}
+		if _, exists := seen[label]; exists {
+			return
+		}
+		seen[label] = cand{label: label, detail: detail, kind: kind}
+	}
+
+	// In-file defs: resolve sigs via the parser when possible; fall
+	// back to the lexer-collected name set when parsing fails.
+	inFileSigs := s.inFileDefSigs(doc.Text)
+	if len(inFileSigs) > 0 {
+		for name, sigs := range inFileSigs {
+			detail := ""
+			if len(sigs) > 0 {
+				detail = name + " :: " + sigs[0]
+			}
+			add(name, detail, protocol.CompletionItemKindFunction)
+		}
+	}
+	for name := range inFileDefNames {
+		add(name, "", protocol.CompletionItemKindFunction)
+	}
+
+	for name, sigs := range s.stdlibHover {
+		detail := ""
+		if len(sigs) > 0 {
+			detail = name + " :: " + sigs[0]
+		}
+		add(name, detail, protocol.CompletionItemKindFunction)
+	}
+
+	for name, sigs := range s.builtinSigs {
+		detail := ""
+		if len(sigs) > 0 {
+			detail = name + " :: " + sigs[0]
+		}
+		add(name, detail, protocol.CompletionItemKindFunction)
+	}
+
+	for name := range BuiltInList {
+		add(name, "", protocol.CompletionItemKindFunction)
+	}
+
+	if len(seen) == 0 {
+		return []protocol.CompletionItem{}
+	}
+
+	labels := make([]string, 0, len(seen))
+	for label := range seen {
+		labels = append(labels, label)
+	}
+	sort.Strings(labels)
+
+	editRange := tokenEditRange(literalToken)
+	items := make([]protocol.CompletionItem, 0, len(labels))
+	for _, label := range labels {
+		c := seen[label]
+		items = append(items, protocol.CompletionItem{
+			Label:  c.label,
+			Detail: c.detail,
+			Kind:   c.kind,
+			TextEdit: &protocol.TextEdit{
+				Range:   editRange,
+				NewText: c.label,
+			},
+		})
+	}
+	return items
+}
+
+// inFileDefSigs parses the document and returns a name → formatted
+// signatures map for every top-level definition. Returns nil on parse
+// failure so callers can fall back to lexer-collected names.
+func (s *lspServer) inFileDefSigs(text string) map[string][]string {
+	s.parser.ResetInput(text)
+	file, err := s.parser.ParseFile()
+	if err != nil || file == nil {
+		return nil
+	}
+	if len(file.Definitions) == 0 {
+		return nil
+	}
+	arena := NewTypeArena()
+	names := NewNameTable()
+	checker := NewChecker(arena, names)
+	out := make(map[string][]string, len(file.Definitions))
+	for i := range file.Definitions {
+		def := &file.Definitions[i]
+		sig := checker.ResolveDefSig(def.Inputs, def.Outputs)
+		out[def.Name] = append(out[def.Name], FormatType(arena, names, arena.MakeQuote(sig)))
+	}
+	return out
+}
+
+func tokenEditRange(tok Token) protocol.Range {
+	line := uint32(tok.Line - 1)
+	startChar := uint32(tok.Column - 1)
+	endChar := startChar + uint32(utf8.RuneCountInString(tok.Lexeme))
+	return protocol.Range{
+		Start: protocol.Position{Line: line, Character: startChar},
+		End:   protocol.Position{Line: line, Character: endChar},
+	}
 }
 
 type renameTarget struct {
@@ -1114,6 +1340,19 @@ func buildHoverContent(info *builtinInfo) string {
 			}
 		}
 		builder.WriteString("\n```")
+	} else if info.Kind != "" {
+		builder.WriteString("```mshell\n")
+		builder.WriteString(info.Name)
+		builder.WriteString("\n```")
+	}
+
+	if info.Kind != "" {
+		if builder.Len() > 0 {
+			builder.WriteString("\n\n")
+		}
+		builder.WriteString("_")
+		builder.WriteString(info.Kind)
+		builder.WriteString("_")
 	}
 
 	if info.Description != "" {
