@@ -116,9 +116,9 @@ func TestTypeCheckProgramUnregisteredBuiltinFlagged(t *testing.T) {
 
 func TestTypeCheckProgramFloatArithmetic(t *testing.T) {
 	cases := []string{
-		`1.5 2.0 + wl`,
-		`1.0 2.0 / wl`,
-		`1.5 2.0 < wl`,
+		`1.5 2.0 + str wl`,
+		`1.0 2.0 / str wl`,
+		`1.5 2.0 < str wl`,
 	}
 	for _, src := range cases {
 		errs, ok := parseAndCheck(t, src)
@@ -232,12 +232,12 @@ func TestTypeCheckProgramRegisteredBuiltins(t *testing.T) {
 		`true not`,
 		`42 str wl`,
 		`42 dup drop wl`,
-		`1 2 = wl`,
+		`1 2 = str wl`,
 		`"hello" len wl`,
-		`"a" "b" != wl`,
+		`"a" "b" != str wl`,
 		`42 abs wl`,
-		`42 toFloat wl`,
-		`"42" toInt wl`,
+		`42 toFloat str wl`,
+		`"42" toInt drop`,
 	}
 	for _, src := range cases {
 		errs, ok := parseAndCheck(t, src)
@@ -316,9 +316,9 @@ func TestTypeCheckProgramIfStackSizeMismatch(t *testing.T) {
 
 func TestTypeCheckProgramIfBranchTypeUnion(t *testing.T) {
 	// Both branches push but with different types — the post-branch
-	// stack slot becomes int|str. The rest of the program must be
-	// compatible. `wl` accepts anything, so this should pass.
-	errs, ok := parseAndCheck(t, `true if 42 else "hi" end wl`)
+	// stack slot becomes int|str. `drop` is polymorphic so the
+	// union-typed slot consumes cleanly.
+	errs, ok := parseAndCheck(t, `true if 42 else "hi" end drop`)
 	if !ok || len(errs) != 0 {
 		t.Errorf("expected pass via union; errs=%v", errs)
 	}
@@ -473,6 +473,44 @@ func TestTypeCheckProgramWritePathRejected(t *testing.T) {
 	errs, ok := parseAndCheck(t, "`file.txt` wl")
 	if ok {
 		t.Fatalf("expected path write to fail type checking; errs=%v", errs)
+	}
+}
+
+func TestTypeCheckProgramWriteRejectsNonStringIntTypes(t *testing.T) {
+	// Runtime's write switch (Evaluator.go) only stringifies str / int
+	// (and bytes for w/we). Anything else crashes — datetime, float, bool,
+	// list, dict, etc. The checker must reject these statically so the
+	// program never reaches the runtime failure.
+	cases := []string{
+		`2026-01-01 wl`,    // datetime
+		`1.5 wl`,           // float
+		`true wl`,          // bool
+		`[1 2 3] wl`,       // list
+		`2026-01-01 w`,     // datetime via w as well
+		`1.5 we`,           // float via we
+	}
+	for _, src := range cases {
+		errs, ok := parseAndCheck(t, src)
+		if ok {
+			t.Errorf("%q: expected type-check failure; errs=%v", src, errs)
+		}
+	}
+}
+
+func TestTypeCheckProgramWriteBinarySplitByVariant(t *testing.T) {
+	// w/we accept bytes; wl/wle do not (a trailing newline after raw
+	// bytes is rarely intended — runtime also rejects this).
+	if _, ok := parseAndCheck(t, `"x" utf8Bytes w`); !ok {
+		t.Errorf("w should accept binary")
+	}
+	if _, ok := parseAndCheck(t, `"x" utf8Bytes we`); !ok {
+		t.Errorf("we should accept binary")
+	}
+	if _, ok := parseAndCheck(t, `"x" utf8Bytes wl`); ok {
+		t.Errorf("wl should reject binary")
+	}
+	if _, ok := parseAndCheck(t, `"x" utf8Bytes wle`); ok {
+		t.Errorf("wle should reject binary")
 	}
 }
 
