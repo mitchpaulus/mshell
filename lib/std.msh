@@ -415,7 +415,11 @@ def findByTag (dict str -- [dict])
 end
 
 def concat ([[a]] -- [a])
-    l! (+) [] @l foldl
+    # Use `extend` (in-place append) rather than `+` so we accumulate into a
+    # single freshly-allocated seed list instead of allocating a new list at
+    # every fold step. The `[]` seed is private to this call so mutation is
+    # safe; the input sublists are unmodified.
+    l! (extend) [] @l foldl
 end
 
 # This is a better form from a typing perspective, because it allows for chaining
