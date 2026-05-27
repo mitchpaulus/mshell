@@ -739,10 +739,10 @@ end wl # Output: 11
 - `rot`: Rotate the top three items, `( a b c -- b c a )`
 - `-rot`: Rotate the top three items in the opposite direction `( a b c -- c a b )`
 - `nip`: Remove second item, `( a b -- b )`
-- `w`: Write to stdout (str|binary -- )
-- `wl`: Write line to stdout (str -- )
-- `we`: Write error to stderr (str|binary -- )
-- `wle`: Write error line stderr (str -- )
+- `w`: Write to stdout (str|int|binary -- ). Other types must be converted with `str` first.
+- `wl`: Write line to stdout (str|int -- ). Binary is not allowed because trailing newlines after raw bytes are rarely intended; use `w` for binary output. Other types must be converted with `str` first.
+- `we`: Write error to stderr (str|int|binary -- ).
+- `wle`: Write error line stderr (str|int -- ).
 - `len`: Length of string/list `([a] -- int | str -- int)`
 - `args`: List of string arguments. Does not include the name of the executing file. `( -- [str])`
 - `glob`: Run glob against string/literal on top of the stack. Leaves list of strings on the stack. Relies on golang's [filepath.Glob](https://pkg.go.dev/path/filepath#Glob), which in the current implementation, the response is sorted. `(str -- [str])`

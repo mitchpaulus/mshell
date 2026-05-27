@@ -113,19 +113,28 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 	}
 
 	// ----- I/O (consume one writable value, no output) -----
-
-	consumeAny := func() QuoteSig {
-		t := arena.MakeVar(0)
-		return QuoteSig{
-			Inputs:   []TypeId{t},
-			Outputs:  nil,
-			Generics: []TypeVarId{0},
-		}
+	//
+	// Runtime (Evaluator.go ~line 5759) only stringifies str, int, and
+	// binary; everything else fails with "Cannot write a X". Binary is
+	// further restricted to the no-newline variants because writing a
+	// trailing '\n' after raw bytes is rarely what callers want. Keep
+	// these sigs in lockstep with that switch — otherwise the checker
+	// silently waves through programs that crash at runtime (e.g.
+	// `2026-01-01 wl` on a datetime). Use `str` to coerce other types
+	// first (`1.5 str wl`).
+	writeStrInt := []QuoteSig{
+		{Inputs: []TypeId{TidStr}},
+		{Inputs: []TypeId{TidInt}},
 	}
-	out[names.Intern("wl")] = []QuoteSig{consumeAny()}     // write line
-	out[names.Intern("wle")] = []QuoteSig{consumeAny()}    // write line stderr
-	out[names.Intern("w")] = []QuoteSig{consumeAny()}      // write no newline
-	out[names.Intern("we")] = []QuoteSig{consumeAny()}     // write to stderr no newline
+	writeStrIntBytes := []QuoteSig{
+		{Inputs: []TypeId{TidStr}},
+		{Inputs: []TypeId{TidInt}},
+		{Inputs: []TypeId{TidBytes}},
+	}
+	out[names.Intern("wl")] = writeStrInt       // write line
+	out[names.Intern("wle")] = writeStrInt      // write line stderr
+	out[names.Intern("w")] = writeStrIntBytes   // write no newline
+	out[names.Intern("we")] = writeStrIntBytes  // write to stderr no newline
 
 	// wln : ( -- )  write just a newline
 	out[names.Intern("wln")] = []QuoteSig{{}}
