@@ -821,10 +821,10 @@ end wl # Output: 11
 - `abs`: Absolute value `(numeric -- numeric)`
 - `inc`: Increment integer value in place `(int -- int)`
 - `max2`: Maximum of two numbers `(numeric numeric -- numeric)`
-- `max`: Maximum of list of numbers `([numeric] -- numeric)`
+- `max`: Maximum of list of numbers or datetimes `([numeric] -- numeric) | ([DateTime] -- DateTime)`
 - `transpose`: Transpose list of lists `([[a]] -- [[a]])`
 - `min2`: Minimum of two numbers `(numeric numeric -- numeric)`
-- `min`: Minimum of list of numbers `([numeric] -- numeric)`
+- `min`: Minimum of list of numbers or datetimes `([numeric] -- numeric) | ([DateTime] -- DateTime)`
 - `mod`: Modulus `(numeric numeric -- numeric)`
 - `floor`: Round a number down to the nearest integer. `(numeric -- int)`
 - `ceil`: Round a number up to the nearest integer. `(numeric -- int)`

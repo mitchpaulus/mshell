@@ -77,6 +77,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `skip` and `take` now work on strings using the same indexing logic as string slicing.
 - Completely removed the concept of `o`, `oc`, and `os`.
 - `abs`, `max`, `min`, `max2`, `min2`, and `sum` are now runtime builtins with proper `(int -- int) | (float -- float)` overloads (and `([int] -- int) | ([float] -- float)` for the list-folding variants). They were previously stdlib defs whose float-only bodies crashed on int operands when called via the int overload. `sumInt` is kept as a stdlib alias for backwards compatibility. Mixed int+float overloads on `max2`/`min2` have been removed since the runtime `<`/`>` operators reject mixed numeric types.
+- `max` and `min` now also work on a list of `DateTime`, returning the latest/earliest element (`([DateTime] -- DateTime)`).
 - `len` runtime now accepts dictionaries (returns key count); the sig already permitted this.
 - `md5` runtime now accepts `bytes` input directly, matching the listed overload.
 - Dict type expressions now require an implicit (or `str`) key. `{V}` and `{str: V}` are accepted; anything else (`{int: V}`, `{path: V}`, etc.) is a parse error. Dict keys are always `str` at runtime, and the type system no longer pretends otherwise. Every dict-related builtin signature (`keys`, `values`, `get`, `set`, `setd`, `getDef`, `map`, `filter`, `in`, `len`, `keyValues`, `listToDict`) drops the `K` generic accordingly.

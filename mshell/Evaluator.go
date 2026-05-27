@@ -9153,8 +9153,30 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 							}
 						}
 						stack.Push(MShellFloat{acc})
+					case *MShellDateTime:
+						if t.Lexeme == "sum" {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: '%s' is not supported on a list of DateTime.\n", t.Line, t.Column, t.Lexeme))
+						}
+						acc := first
+						for i, item := range list.Items[1:] {
+							v, ok := item.(*MShellDateTime)
+							if !ok {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: '%s' on DateTime list found a %s at index %d.\n", t.Line, t.Column, t.Lexeme, item.TypeName(), i+1))
+							}
+							switch t.Lexeme {
+							case "max":
+								if v.Time.After(acc.Time) {
+									acc = v
+								}
+							case "min":
+								if v.Time.Before(acc.Time) {
+									acc = v
+								}
+							}
+						}
+						stack.Push(acc)
 					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: '%s' requires a list of int or float, found a list of %s.\n", t.Line, t.Column, t.Lexeme, first.TypeName()))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: '%s' requires a list of int, float, or DateTime, found a list of %s.\n", t.Line, t.Column, t.Lexeme, first.TypeName()))
 					}
 				} else if t.Lexeme == "toFixed" {
 					obj1, obj2, err := stack.Pop2(t)
