@@ -695,18 +695,21 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 			Generics: []TypeVarId{1, 2},
 		})
 	}
-	// keyValues : ({V} -- [[T]])  — list of [k, v] pairs.
-	// Pairs are represented as 2-element lists at runtime, and the
-	// list is heterogeneous (str and V). We approximate as `[[T]]`
-	// with T fresh — callers typically use `2unpack` / pattern-match
-	// to recover.
+	// keyValues : ({V} -- [Shape{k: str, v: V}])
+	// Each pair is a dict with fixed fields 'k' (the key) and 'v'
+	// (the value), so the heterogeneous key/value types survive the
+	// trip through the list. Callers use `:k` and `:v` getters to
+	// recover the two halves.
 	{
 		v := arena.MakeVar(1)
-		t := arena.MakeVar(2)
+		pair := arena.MakeShape([]ShapeField{
+			{Name: names.Intern("k"), Type: TidStr},
+			{Name: names.Intern("v"), Type: v},
+		})
 		out[names.Intern("keyValues")] = []QuoteSig{{
 			Inputs:   []TypeId{arena.MakeDict(TidStr, v)},
-			Outputs:  []TypeId{arena.MakeList(arena.MakeList(t))},
-			Generics: []TypeVarId{1, 2},
+			Outputs:  []TypeId{arena.MakeList(pair)},
+			Generics: []TypeVarId{1},
 		}}
 	}
 	// in : ({V} str -- bool) | (str str -- bool)

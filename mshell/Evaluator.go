@@ -9947,13 +9947,12 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 					sort.Strings(keys)
 
-					// Add each key-value pair as a list
+					// Add each key-value pair as a dict with 'k' and 'v' keys
 					for i, key := range keys {
-						// Create a new list for the key-value pair
-						pairList := NewList(2)
-						pairList.Items[0] = MShellString{key} // Key
-						pairList.Items[1] = dict.Items[key]    // Value
-						newList.Items[i] = pairList
+						pairDict := NewDict()
+						pairDict.Items["k"] = MShellString{key}
+						pairDict.Items["v"] = dict.Items[key]
+						newList.Items[i] = pairDict
 					}
 
 					stack.Push(newList)

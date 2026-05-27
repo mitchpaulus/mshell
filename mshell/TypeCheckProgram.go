@@ -1265,6 +1265,12 @@ func (c *Checker) lookupGetterValueType(t TypeId, name NameId) TypeId {
 				}
 			}
 		}
+	case TKShape:
+		for _, field := range c.arena.shapeFields[n.Extra] {
+			if field.Name == name {
+				return field.Type
+			}
+		}
 	case TKDict:
 		return TypeId(n.B)
 	case TKGrid, TKGridView:
