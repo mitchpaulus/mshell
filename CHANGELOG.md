@@ -66,6 +66,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** `keyValues` now returns a list of `{k, v}` dictionaries instead of a list of two-element lists.
+  Each pair has a `k` field holding the key and a `v` field holding the value, so the key and value types stay distinct (previously they were collapsed into a single shared type, which forced overload-resolution ambiguity downstream).
+  Update existing callers from `2unpack key!, value!` to `pair! @pair :k? key!, @pair :v? value!` (or use `:k?`/`:v?` directly).
 - History, bin map, and interactive log storage now use the `$LOCALAPPDATA\msh` directory on Windows instead of `$LOCALAPPDATA\mshell`, and `XDG_DATA_HOME` history/bin map storage now uses the required `msh/` subdirectory on Linux/macOS.
   You should be able to simply move the previous files over with no problems.
 - `msh bin edit` now falls back to the platform default opener when `$EDITOR` is unavailable

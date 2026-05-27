@@ -976,7 +976,11 @@ groupBy
 - `setd`: Set value in dictionary by key. Drop dict after. `(dict str a --)`
 - `keys`: Get keys from dictionary. Sorted. `(dict -- [str])`
 - `values`: Get values from dictionary. Sorted. `(dict -- [str])`
-- `keyValues`: Get key/value pairs from dictionary as a list of lists. Each inner list is a two-element list with the key and value. Sorted by key. `(dict -- [[str a]])`
+- `keyValues`: Get key/value pairs from dictionary as a list of `{k, v}` dictionaries.
+Each pair dict has a `k` field with the key and a `v` field with the value, so the two halves can be typed independently.
+Sorted by key.
+Access the parts with `:k?` and `:v?`.
+`(dict -- [{k: str, v: a}])`
 - `map`: Map a quotation over dictionary values. Keys are preserved. `(dict (a -- b) -- dict)`
 - `filter`: Filter dictionary values with a predicate quotation, returning a new dictionary. Keys are preserved for matching entries, and the original dictionary is not modified in place. `(dict (a -- bool) -- dict)`
 - `in`: Check if key exists in dictionary. `(dict str -- bool)`
