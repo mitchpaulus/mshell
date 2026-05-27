@@ -1036,6 +1036,187 @@ func TestRenameVariableInsideDefinition(t *testing.T) {
 	}
 }
 
+func TestCompletionWordOutsideLists(t *testing.T) {
+	doc := "def addOne (int -- int) 1 + end\n1 addO"
+	uri := protocol.DocumentURI("file:///completion-word.msh")
+
+	clientReader, clientWriter := io.Pipe()
+	serverReader, serverWriter := io.Pipe()
+
+	var wg sync.WaitGroup
+	var runErr error
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		runErr = RunLSP(clientReader, serverWriter)
+		serverWriter.Close()
+	}()
+
+	output := bufio.NewReader(serverReader)
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "initialize",
+		"params":  map[string]any{"capabilities": map[string]any{}},
+	})
+	if r := readLSPResponse(t, output); r.Error != nil {
+		t.Fatalf("initialize returned error: %+v", r.Error)
+	}
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "textDocument/didOpen",
+		"params": map[string]any{
+			"textDocument": map[string]any{
+				"uri":        uri,
+				"languageId": "mshell",
+				"version":    1,
+				"text":       doc,
+			},
+		},
+	})
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      2,
+		"method":  "textDocument/completion",
+		"params": map[string]any{
+			"textDocument": map[string]any{"uri": uri},
+			"position":     map[string]any{"line": 1, "character": 6},
+		},
+	})
+
+	completionResp := readLSPResponse(t, output)
+	if completionResp.Error != nil {
+		t.Fatalf("completion returned error: %+v", completionResp.Error)
+	}
+
+	payload, err := json.Marshal(completionResp.Result)
+	if err != nil {
+		t.Fatalf("failed to marshal completion result: %v", err)
+	}
+
+	var items []protocol.CompletionItem
+	if err := json.Unmarshal(payload, &items); err != nil {
+		t.Fatalf("failed to unmarshal completion result: %v", err)
+	}
+
+	if len(items) != 1 {
+		t.Fatalf("expected 1 completion item for 'addO', got %d: %+v", len(items), items)
+	}
+	if items[0].Label != "addOne" {
+		t.Fatalf("expected label 'addOne', got %q", items[0].Label)
+	}
+	if !strings.Contains(items[0].Detail, "(int -- int)") {
+		t.Fatalf("expected detail to include sig, got %q", items[0].Detail)
+	}
+	if items[0].TextEdit == nil || items[0].TextEdit.NewText != "addOne" {
+		t.Fatalf("expected TextEdit replacing with 'addOne', got %+v", items[0].TextEdit)
+	}
+
+	sendLSPMessage(t, clientWriter, map[string]any{"jsonrpc": "2.0", "id": 3, "method": "shutdown"})
+	if r := readLSPResponse(t, output); r.Error != nil {
+		t.Fatalf("shutdown returned error: %+v", r.Error)
+	}
+	sendLSPMessage(t, clientWriter, map[string]any{"jsonrpc": "2.0", "method": "exit"})
+	clientWriter.Close()
+	wg.Wait()
+	if runErr != nil {
+		t.Fatalf("RunLSP returned error: %v", runErr)
+	}
+}
+
+func TestCompletionWordIncludesBuiltinAndStdlib(t *testing.T) {
+	doc := "chu"
+	uri := protocol.DocumentURI("file:///completion-word-multi.msh")
+
+	clientReader, clientWriter := io.Pipe()
+	serverReader, serverWriter := io.Pipe()
+
+	var wg sync.WaitGroup
+	var runErr error
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		runErr = RunLSP(clientReader, serverWriter)
+		serverWriter.Close()
+	}()
+
+	output := bufio.NewReader(serverReader)
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "initialize",
+		"params":  map[string]any{"capabilities": map[string]any{}},
+	})
+	if r := readLSPResponse(t, output); r.Error != nil {
+		t.Fatalf("initialize returned error: %+v", r.Error)
+	}
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "textDocument/didOpen",
+		"params": map[string]any{
+			"textDocument": map[string]any{
+				"uri":        uri,
+				"languageId": "mshell",
+				"version":    1,
+				"text":       doc,
+			},
+		},
+	})
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      2,
+		"method":  "textDocument/completion",
+		"params": map[string]any{
+			"textDocument": map[string]any{"uri": uri},
+			"position":     map[string]any{"line": 0, "character": 3},
+		},
+	})
+
+	completionResp := readLSPResponse(t, output)
+	if completionResp.Error != nil {
+		t.Fatalf("completion returned error: %+v", completionResp.Error)
+	}
+
+	payload, err := json.Marshal(completionResp.Result)
+	if err != nil {
+		t.Fatalf("failed to marshal completion result: %v", err)
+	}
+
+	var items []protocol.CompletionItem
+	if err := json.Unmarshal(payload, &items); err != nil {
+		t.Fatalf("failed to unmarshal completion result: %v", err)
+	}
+
+	labels := map[string]bool{}
+	for _, it := range items {
+		labels[it.Label] = true
+	}
+	// `chunk` and `chunkAcc` are in the stdlib; both should appear.
+	if !labels["chunk"] {
+		t.Fatalf("expected `chunk` in completions, got %+v", labels)
+	}
+	if !labels["chunkAcc"] {
+		t.Fatalf("expected `chunkAcc` in completions, got %+v", labels)
+	}
+
+	sendLSPMessage(t, clientWriter, map[string]any{"jsonrpc": "2.0", "id": 3, "method": "shutdown"})
+	if r := readLSPResponse(t, output); r.Error != nil {
+		t.Fatalf("shutdown returned error: %+v", r.Error)
+	}
+	sendLSPMessage(t, clientWriter, map[string]any{"jsonrpc": "2.0", "method": "exit"})
+	clientWriter.Close()
+	wg.Wait()
+	if runErr != nil {
+		t.Fatalf("RunLSP returned error: %v", runErr)
+	}
+}
+
 func TestBuildHoverIndexCoversTypedBuiltinsAndStdlib(t *testing.T) {
 	stdlibDefs, err := loadStdlibDefsForLSP()
 	if err != nil {
