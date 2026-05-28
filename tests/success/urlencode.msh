@@ -1,4 +1,9 @@
 "hello world" urlEncode wl
+"a&b=c?d e" urlEncode wl
+"100% off" urlEncode wl
+"slash/and+plus" urlEncode wl
+"unicode: café" urlEncode wl
 {"q": "go lang", "n": 2} urlEncode wl
 {"tag": ["a" "b" "c"]} urlEncode wl
 {"n": [1 2 3]} urlEncode wl
+{"q": "a&b=c"} urlEncode wl
