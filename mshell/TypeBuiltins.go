@@ -1428,6 +1428,29 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		Inputs:  []TypeId{TidStr},
 		Outputs: []TypeId{TidBytes},
 	}}
+	// urlEncode : (str | {str: str|int|path|[str]|[int]|[path]} -- str)
+	//
+	// Dict values must be a scalar the runtime can CastString, or a
+	// list of such scalars (lists become repeated `k=v` pairs). The
+	// runtime's CastString succeeds only on str/int/path/literal, so
+	// float, bool, bytes, datetime, maybe, nested list, and nested
+	// dict all crash — exclude them from the signature.
+	{
+		valueU := arena.MakeUnion([]TypeId{
+			TidStr, TidInt, TidPath,
+			arena.MakeList(TidStr),
+			arena.MakeList(TidInt),
+			arena.MakeList(TidPath),
+		}, 0)
+		inputU := arena.MakeUnion([]TypeId{
+			TidStr,
+			arena.MakeDict(TidStr, valueU),
+		}, 0)
+		out[names.Intern("urlEncode")] = []QuoteSig{{
+			Inputs:  []TypeId{inputU},
+			Outputs: []TypeId{TidStr},
+		}}
+	}
 	// zipPack validates entry dictionaries at runtime. The checker
 	// keeps the stack effect broad until dictionary shape tracking is
 	// precise enough to express the required keys.
