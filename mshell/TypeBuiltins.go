@@ -1428,9 +1428,7 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		Inputs:  []TypeId{TidStr},
 		Outputs: []TypeId{TidBytes},
 	}}
-	// urlEncode :
-	//   (str -- str)
-	//   ({str: str|int|path|[str]|[int]|[path]} -- str)
+	// urlEncode : (str | {str: str|int|path|[str]|[int]|[path]} -- str)
 	//
 	// Dict values must be a scalar the runtime can CastString, or a
 	// list of such scalars (lists become repeated `k=v` pairs). The
@@ -1444,13 +1442,14 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 			arena.MakeList(TidInt),
 			arena.MakeList(TidPath),
 		}, 0)
-		out[names.Intern("urlEncode")] = []QuoteSig{
-			{Inputs: []TypeId{TidStr}, Outputs: []TypeId{TidStr}},
-			{
-				Inputs:  []TypeId{arena.MakeDict(TidStr, valueU)},
-				Outputs: []TypeId{TidStr},
-			},
-		}
+		inputU := arena.MakeUnion([]TypeId{
+			TidStr,
+			arena.MakeDict(TidStr, valueU),
+		}, 0)
+		out[names.Intern("urlEncode")] = []QuoteSig{{
+			Inputs:  []TypeId{inputU},
+			Outputs: []TypeId{TidStr},
+		}}
 	}
 	// zipPack validates entry dictionaries at runtime. The checker
 	// keeps the stack effect broad until dictionary shape tracking is
