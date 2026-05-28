@@ -1,2 +1,4 @@
 "hello world" urlEncode wl
 {"q": "go lang", "n": 2} urlEncode wl
+{"tag": ["a" "b" "c"]} urlEncode wl
+{"n": [1 2 3]} urlEncode wl

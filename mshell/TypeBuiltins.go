@@ -1428,19 +1428,27 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		Inputs:  []TypeId{TidStr},
 		Outputs: []TypeId{TidBytes},
 	}}
-	// urlEncode : (str -- str) | ({str: T} -- str)
+	// urlEncode :
+	//   (str -- str)
+	//   ({str: str|int|path|[str]|[int]|[path]} -- str)
 	//
-	// Dict input stays loose ({str: T}) because the runtime calls
-	// CastString on each value (and on each item if the value is a
-	// list), accepting any scalar-castable type.
+	// Dict values must be a scalar the runtime can CastString, or a
+	// list of such scalars (lists become repeated `k=v` pairs). The
+	// runtime's CastString succeeds only on str/int/path/literal, so
+	// float, bool, bytes, datetime, maybe, nested list, and nested
+	// dict all crash — exclude them from the signature.
 	{
-		v := arena.MakeVar(0)
+		valueU := arena.MakeUnion([]TypeId{
+			TidStr, TidInt, TidPath,
+			arena.MakeList(TidStr),
+			arena.MakeList(TidInt),
+			arena.MakeList(TidPath),
+		}, 0)
 		out[names.Intern("urlEncode")] = []QuoteSig{
 			{Inputs: []TypeId{TidStr}, Outputs: []TypeId{TidStr}},
 			{
-				Inputs:   []TypeId{arena.MakeDict(TidStr, v)},
-				Outputs:  []TypeId{TidStr},
-				Generics: []TypeVarId{0},
+				Inputs:  []TypeId{arena.MakeDict(TidStr, valueU)},
+				Outputs: []TypeId{TidStr},
 			},
 		}
 	}
