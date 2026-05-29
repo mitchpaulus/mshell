@@ -392,7 +392,146 @@ func (c *Checker) collectQuoteSigs(branches []quoteBranch, initialInputs []TypeI
 			Generics: generics,
 		})
 	}
-	return dedupeQuoteSigs(sigs)
+	return c.mergeUnionInputSigs(dedupeQuoteSigs(sigs))
+}
+
+// mergeUnionInputSigs coalesces candidate sigs that are identical
+// except in a single input position into one sig whose input at that
+// position is the union of the differing types. Iterated to a
+// fixpoint, this turns a set of same-output overload arms that differ
+// only in input flavor (e.g. (str -- path) and (path -- path)) into a
+// single union-input sig (str|path -- path) — a plain TKQuote rather
+// than a TKOverloadedQuote. That lets the quote be used where only a
+// non-overloaded quote is accepted (notably `iff`/`loop` branches),
+// which is the whole point: when every arm produces the same output,
+// the overload is really just a union on the inputs.
+//
+// Two sigs merge only when they have the same arity, identical outputs,
+// bindings, and effect flags, and their inputs differ in exactly one
+// position. Differing in two-or-more positions is left alone: unioning
+// each position independently could admit input tuples neither original
+// arm accepted (merging (str,str) and (path,path) would wrongly accept
+// (str,path)). Full cross-products still collapse, because they reduce
+// pairwise one position at a time — e.g. cp's four (str|path, str|path)
+// arms fold to a single sig.
+//
+// Sigs whose shared output is generic don't merge (their per-branch
+// fresh vars compare unequal), so they stay overloaded; that's a missed
+// collapse, never an unsound one.
+//
+// The merge is adopted ONLY when it collapses the whole set to a single
+// sig — i.e. when the quote genuinely becomes a plain (non-overloaded)
+// quote. If any arm remains (e.g. `len`, whose generic [T]/{V} arms
+// never fold into the concrete ones), the original sig set is returned
+// untouched: a partial merge would reshape a still-overloaded quote for
+// no benefit (it can't be an `iff` branch either way) while perturbing
+// downstream overload resolution.
+func (c *Checker) mergeUnionInputSigs(sigs []QuoteSig) []QuoteSig {
+	if len(sigs) <= 1 {
+		return sigs
+	}
+	work := append([]QuoteSig(nil), sigs...)
+	for {
+		merged := false
+	scan:
+		for i := 0; i < len(work); i++ {
+			for j := i + 1; j < len(work); j++ {
+				pos, ok := mergeableInputDiff(c, work[i], work[j])
+				if !ok {
+					continue
+				}
+				combined := work[i]
+				newInputs := append([]TypeId(nil), work[i].Inputs...)
+				newInputs[pos] = c.arena.MakeUnion(
+					[]TypeId{work[i].Inputs[pos], work[j].Inputs[pos]}, 0)
+				combined.Inputs = newInputs
+				combined.Generics = collectFreeTypeVars(
+					c.arena, combined.Inputs, combined.Outputs, combined.Bindings)
+				work[i] = combined
+				work = append(work[:j], work[j+1:]...)
+				merged = true
+				break scan
+			}
+		}
+		if !merged {
+			break
+		}
+	}
+	if len(work) == 1 {
+		return work
+	}
+	return sigs
+}
+
+// mergeableInputDiff reports the sole differing input position between a
+// and b (and true) when they are identical in arity, outputs, bindings,
+// and effect flags and differ in exactly one input slot whose two types
+// are both ground (free of type variables). Otherwise it returns
+// (0, false).
+//
+// The ground-input restriction keeps the merge from rewriting overloads
+// whose arms differ in a generic input position — e.g. `len`'s
+// ([T] -- int) / ({str:V} -- int) arms. Unioning those with concrete
+// arms yields a quote whose input is a giant mixed union, which then
+// fails to unify as a `filter`/`map` predicate (the overloaded form
+// resolves per-arm; the unioned form can't). Same-output overloads with
+// purely concrete arms (the str|path file ops) are unaffected and still
+// collapse to a single plain quote.
+func mergeableInputDiff(c *Checker, a, b QuoteSig) (int, bool) {
+	if len(a.Inputs) != len(b.Inputs) || len(a.Outputs) != len(b.Outputs) {
+		return 0, false
+	}
+	if a.Diverges != b.Diverges || a.Fail != b.Fail || a.Pure != b.Pure {
+		return 0, false
+	}
+	for i := range a.Outputs {
+		if a.Outputs[i] != b.Outputs[i] {
+			return 0, false
+		}
+	}
+	if !bindingsEqual(a.Bindings, b.Bindings) {
+		return 0, false
+	}
+	diff := -1
+	for i := range a.Inputs {
+		if a.Inputs[i] != b.Inputs[i] {
+			if diff != -1 {
+				return 0, false // more than one differing position
+			}
+			diff = i
+		}
+	}
+	if diff == -1 {
+		return 0, false // identical — dedupeQuoteSigs handles these
+	}
+	if !c.isGroundType(a.Inputs[diff]) || !c.isGroundType(b.Inputs[diff]) {
+		return 0, false
+	}
+	return diff, true
+}
+
+// isGroundType reports whether t contains no free type variable. t must
+// already be resolved (collectQuoteSigs Apply's every sig input through
+// its own branch's substitution before this runs); re-applying here
+// through the currently-loaded substitution would misjudge a var that
+// is free in its own branch but bound in some sibling branch.
+func (c *Checker) isGroundType(t TypeId) bool {
+	seen := make(map[TypeVarId]struct{})
+	var ordered []TypeVarId
+	walkFreeTypeVars(c.arena, t, seen, &ordered)
+	return len(ordered) == 0
+}
+
+func bindingsEqual(a, b map[NameId]TypeId) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if bv, ok := b[k]; !ok || bv != v {
+			return false
+		}
+	}
+	return true
 }
 
 // collectFreeTypeVars returns the deduplicated list of TypeVarIds

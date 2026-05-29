@@ -1,0 +1,19 @@
+# Regression: same-output overloaded builtins used directly as `iff`
+# branches. `cd` and `toPath` are overloaded on str|path, but every arm
+# shares an output, so a quote like `(cd)` / `(toPath cd)` now infers as
+# a single union-input (plain) quote and is accepted as a branch.
+# Previously these failed type-checking with "no matching overload for
+# 'iff'" because the quote inferred as an overloaded quote.
+#
+# Run by both typecheck_test.sh (the type-check is the feature under
+# test) and test.sh (the program must also execute and print "ok").
+
+# Condition true runs the first branch, dropping the pwd path.
+pwd true (drop) (cd) iff
+# Condition false runs the second branch: cd to the current dir (a no-op
+# at runtime), exercising the overloaded `(cd)` branch quote.
+pwd false (drop) (cd) iff
+# `(toPath cd)` composes two overloaded ops in one branch quote.
+pwd false (drop) (toPath cd) iff
+
+"ok" wl
