@@ -986,6 +986,11 @@ func (c *Checker) checkMatchBlock(matchBlock *MShellParseMatchBlock) {
 		if arm.Consume {
 			// Pop the subject — body sees the stack without it.
 			c.stack.items = c.stack.items[:c.stack.Len()-1]
+		} else if nt, ok := c.narrowMatchSubject(arm.Pattern); ok {
+			// Preserve (`:>`): narrow the on-stack subject to the arm's
+			// matched type, so a `float`/`int`/... arm body sees that
+			// type rather than the full union it matched against.
+			c.stack.items[c.stack.Len()-1] = nt
 		}
 		// Pattern-introduced bindings flow into the captured arm
 		// like any other binding. Each surviving branch keeps its
@@ -1071,6 +1076,27 @@ func (c *Checker) classifyArmPattern(pattern []MShellParseItem) MatchArmTag {
 		}
 	}
 	return MatchArmTag{Kind: MatchArmType, TypeArm: TidNothing}
+}
+
+// narrowMatchSubject returns the concrete primitive type that a
+// type-keyword arm pattern matches (int/float/str/path/bool/date/binary),
+// so the arm body can treat a union subject as that single type. These
+// primitives have no subtypes, so replacing the subject with the matched
+// primitive is a sound refinement regardless of the subject's static
+// type. Non-type-keyword patterns (wildcard, just/none, value literals,
+// list/dict destructuring) and user-declared union types return
+// ok=false and leave the subject unrefined — narrowing those is a
+// follow-up.
+func (c *Checker) narrowMatchSubject(pattern []MShellParseItem) (TypeId, bool) {
+	tag := c.classifyArmPattern(pattern)
+	if tag.Kind != MatchArmType {
+		return TidNothing, false
+	}
+	switch tag.TypeArm {
+	case TidInt, TidFloat, TidStr, TidPath, TidBool, TidDateTime, TidBytes:
+		return tag.TypeArm, true
+	}
+	return TidNothing, false
 }
 
 type patternBinding struct {
