@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Type checking v1!
+  - Quotes built from overloaded builtins whose arms all produce the same
+    output (e.g. the `str|path` file ops like `cd`, `toPath`, `readFile`)
+    now infer as a single union-input quote instead of an overloaded one,
+    so they can be used directly as `iff`/`loop` branch quotes
+    (e.g. `… (drop) (cd) iff`).
 - File manager yank bindings that copy to the system clipboard via `wl-copy`/`xclip`/`xsel`/`pbcopy`/`clip`:
   - `yf` — copy the selected entry's file name
   - `yp` — copy the selected entry's absolute path

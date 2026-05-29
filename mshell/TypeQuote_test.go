@@ -258,3 +258,29 @@ func TestInferBranchingOverloadedQuote(t *testing.T) {
 		t.Fatalf("(len 0 !=): missing (path -- bool) among %d sigs", len(sigs))
 	}
 }
+
+func TestInferUnionInputMergeToPlainQuote(t *testing.T) {
+	// `cd` is overloaded (str -- ) | (path -- ); both arms produce the
+	// same (empty) output, so the overload is really a union on the
+	// input. Quote inference must coalesce the arms into a single plain
+	// quote (str|path -- ) — not a two-arm overloaded quote — so the
+	// quote can be used as an `iff`/`loop` branch.
+	c := freshChecker()
+	sigs := c.InferQuoteSig([]Token{mkTok(LITERAL, "cd")})
+	if len(sigs) != 1 {
+		t.Fatalf("(cd): want 1 merged sig, got %d: %v", len(sigs), sigs)
+	}
+	strPath := c.arena.MakeUnion([]TypeId{TidStr, TidPath}, 0)
+	if !sigEquals(sigs[0], []TypeId{strPath}, nil) {
+		t.Fatalf("(cd): want (str|path -- ), got (%s -- %s)",
+			FormatType(c.arena, c.names, firstOr(sigs[0].Inputs)),
+			FormatType(c.arena, c.names, firstOr(sigs[0].Outputs)))
+	}
+}
+
+func firstOr(ts []TypeId) TypeId {
+	if len(ts) == 0 {
+		return TidBottom
+	}
+	return ts[0]
+}
