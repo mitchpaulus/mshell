@@ -837,7 +837,16 @@ func (c *Checker) reconcileArmBranches(armBranches []quoteBranch, labels []strin
 		c.loadBranch(liveBranches[0])
 		return
 	}
-	c.branchSpawn = append(c.branchSpawn, armBranches...)
+	// Fan out only the live branches. A diverged arm (exit / return /
+	// propagated fail) never reaches the code after the construct, so it
+	// must not be spawned as a surviving continuation: if it were, and the
+	// live branches later died at a downstream step, the diverged arm would
+	// pass through unchanged (driveBranches skips diverged branches), keep
+	// the surviving-branch count non-zero, and thereby swallow the live
+	// branches' real type errors — leaving a misleading `(.. -- Bottom)`
+	// signature behind. This mirrors filterLiveBranches at the other
+	// convergence points.
+	c.branchSpawn = append(c.branchSpawn, liveBranches...)
 }
 
 // filterLiveBranchesWithLabels mirrors filterLiveBranches but also
