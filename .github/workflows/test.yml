@@ -37,6 +37,9 @@ jobs:
     - name: Test mshell end-to-end
       run:  cd tests && ./test.sh
 
+    - name: Typecheck mshell end-to-end
+      run:  cd tests && ./typecheck_test.sh
+
     - name: Run lex test
       run: cd tests/lex-check && mshell test.msh
 
