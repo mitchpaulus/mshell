@@ -181,6 +181,15 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		{Inputs: []TypeId{TidInt}, Outputs: []TypeId{TidInt}},
 		{Inputs: []TypeId{TidFloat}, Outputs: []TypeId{TidFloat}},
 	}
+	// inc : (int -- int)  — increment an integer (int only at runtime)
+	out[names.Intern("inc")] = []QuoteSig{{
+		Inputs:  []TypeId{TidInt},
+		Outputs: []TypeId{TidInt},
+	}}
+	// sleep : (int | float -- )  — sleep N seconds
+	out[names.Intern("sleep")] = []QuoteSig{{
+		Inputs: []TypeId{arena.MakeUnion([]TypeId{TidInt, TidFloat}, 0)},
+	}}
 	// Trig / log / sqrt — runtime requires float input (mshell
 	// rejects implicit int->float coercion). std.msh defines
 	// `cos`, `tan`, `ln2`, `ln10` on top of these primitives.
@@ -281,11 +290,18 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		Inputs:  []TypeId{TidDateTime},
 		Outputs: []TypeId{TidDateTime},
 	}}
-	// day/month/year/hour/minute/second : (datetime -- int)
-	for _, name := range []string{"day", "month", "year", "hour", "minute", "second", "weekday"} {
+	// day/month/year/hour/minute/second/dow : (datetime -- int)
+	for _, name := range []string{"day", "month", "year", "hour", "minute", "second", "weekday", "dow"} {
 		out[names.Intern(name)] = []QuoteSig{{
 			Inputs:  []TypeId{TidDateTime},
 			Outputs: []TypeId{TidInt},
+		}}
+	}
+	// isWeekend / isWeekday : (datetime -- bool)
+	for _, name := range []string{"isWeekend", "isWeekday"} {
+		out[names.Intern(name)] = []QuoteSig{{
+			Inputs:  []TypeId{TidDateTime},
+			Outputs: []TypeId{TidBool},
 		}}
 	}
 	// toUnixTime / toUnixTimeMilli / toUnixTimeMicro / toUnixTimeNano :
@@ -1091,6 +1107,10 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		{Inputs: []TypeId{TidStr}},
 		{Inputs: []TypeId{TidPath}},
 	}
+	// cdh / cdp : ( -- )  — interactive directory history / pop navigation
+	for _, name := range []string{"cdh", "cdp"} {
+		out[names.Intern(name)] = []QuoteSig{{}}
+	}
 	// tempFile, tempDir : ( -- path )
 	for _, name := range []string{"tempFile", "tempDir"} {
 		out[names.Intern(name)] = []QuoteSig{{Outputs: []TypeId{TidPath}}}
@@ -1207,6 +1227,20 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 			Inputs:   []TypeId{arena.MakeMaybe(a), arena.MakeMaybe(b), fn},
 			Outputs:  []TypeId{arena.MakeMaybe(c2)},
 			Generics: []TypeVarId{0, 1, 2},
+		}}
+	}
+	// bind : (Maybe[A] (A -- Maybe[B]) -- Maybe[B])  — monadic bind
+	{
+		a := arena.MakeVar(0)
+		b := arena.MakeVar(1)
+		fn := arena.MakeQuote(QuoteSig{
+			Inputs:  []TypeId{a},
+			Outputs: []TypeId{arena.MakeMaybe(b)},
+		})
+		out[names.Intern("bind")] = []QuoteSig{{
+			Inputs:   []TypeId{arena.MakeMaybe(a), fn},
+			Outputs:  []TypeId{arena.MakeMaybe(b)},
+			Generics: []TypeVarId{0, 1},
 		}}
 	}
 	// maybe : (Maybe[T] U -- T|U)

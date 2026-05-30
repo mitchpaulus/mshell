@@ -1,0 +1,10 @@
+# dow: Sunday = 0, Monday = 1, Saturday = 6
+2023-10-01 dow wl
+2023-10-02 dow wl
+2023-10-07 dow wl
+# isWeekend: Sunday true, Monday false
+2023-10-01 isWeekend str wl
+2023-10-02 isWeekend str wl
+# isWeekday: Monday true, Sunday false
+2023-10-02 isWeekday str wl
+2023-10-01 isWeekday str wl
