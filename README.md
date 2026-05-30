@@ -89,7 +89,6 @@ These examples assume the standard library is installed in the normal startup lo
 
 - Job control. We don't have CTRL-z or `bg`/`fg` functionality right now.
 - User defined abbreviations (like fish). Right now you get my hard-coded ones, sorry.
-- Type checking.
 - Improved error messages.
 
 # References/Inspirations

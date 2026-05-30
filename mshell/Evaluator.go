@@ -5710,30 +5710,6 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'nth' with a %s and a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
 						}
 					}
-				} else if t.Lexeme == "pick" {
-					obj1, err := stack.Pop()
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'pick' operation on an empty stack.\n", t.Line, t.Column))
-					}
-					// Check that obj1 is an integer
-					int1, ok := obj1.(MShellInt)
-					if !ok {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'pick' with a %s.\n", t.Line, t.Column, obj1.TypeName()))
-					}
-
-					// Check that int is greater than or equal to 1
-					if int1.Value < 1 {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'pick' with a value less than 1.\n", t.Line, t.Column))
-					}
-
-					// Check that the stack has enough items
-					if int1.Value > len(*stack) {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'pick' on a stack with less than %d items.\n", t.Line, t.Column, int1.Value+1))
-					}
-
-					// Duplicate the nth item on the stack
-					// a b c 2  -> a b c b
-					stack.Push((*stack)[len(*stack)-int1.Value])
 				} else if t.Lexeme == "w" || t.Lexeme == "wl" || t.Lexeme == "we" || t.Lexeme == "wle" {
 					// Print the top of the stack to the console.
 					top, err := stack.Pop()

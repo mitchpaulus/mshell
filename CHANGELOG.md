@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Removed
+
+- The `pick` stack operator was removed.
+  Its stack effect depends on a runtime integer, so it could not be expressed in the static type checker, and it saw no real use.
+
 ### Added
 
 - Type checking v1!
