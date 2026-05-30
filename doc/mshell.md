@@ -735,7 +735,6 @@ end wl # Output: 11
 - `swap`: Swap (a b -- b a)
 - `drop`: Drop (a -- )
 - `over`: Over, copy second element to top `(a b -- a b a)`
-- `pick`: Pick, copy nth element to top, `(a b c int pick` -- `a b c [a | b | c])`
 - `rot`: Rotate the top three items, `( a b c -- b c a )`
 - `-rot`: Rotate the top three items in the opposite direction `( a b c -- c a b )`
 - `nip`: Remove second item, `( a b -- b )`

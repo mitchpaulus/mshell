@@ -17,24 +17,16 @@ import (
 )
 
 func TestHoverRequestForBuiltin(t *testing.T) {
-	path := filepath.Join("..", "tests", "success", "stack_ops.msh")
-	content, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("failed to read test document: %v", err)
-	}
-
-	lines := strings.Split(string(content), "\n")
-	lineIndex := 1
-	if len(lines) <= lineIndex {
-		t.Fatalf("expected at least %d lines in %s", lineIndex+1, path)
-	}
-
-	column := strings.Index(lines[lineIndex], "swap")
+	// Self-contained fixture so this test does not depend on the layout of
+	// any shared script in tests/success. Hover over the `swap` token.
+	content := "1 2 swap\n"
+	lineIndex := 0
+	column := strings.Index(content, "swap")
 	if column < 0 {
-		t.Fatalf("expected to find 'swap' in line %d of %s", lineIndex+1, path)
+		t.Fatalf("expected to find 'swap' in test document")
 	}
 
-	uri := protocol.DocumentURI("file:///tests/success/stack_ops.msh")
+	uri := protocol.DocumentURI("file:///stack_ops.msh")
 
 	clientReader, clientWriter := io.Pipe()
 	serverReader, serverWriter := io.Pipe()
@@ -72,7 +64,7 @@ func TestHoverRequestForBuiltin(t *testing.T) {
 				"uri":        uri,
 				"languageId": "mshell",
 				"version":    1,
-				"text":       string(content),
+				"text":       content,
 			},
 		},
 	})
