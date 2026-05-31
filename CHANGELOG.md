@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- A command that cannot start (not found, permission denied, bad format, ...) run
+  with `?` or `;` no longer aborts the script.
+  Instead, `?` leaves a negative exit code carrying the exact reason: `-(256+errno)`
+  for POSIX start failures, `-(1024+winerror)` on Windows, `-(128+signal)` for a
+  process killed by a signal (replacing the old flat `-1`), `-255` for a command
+  not found on `PATH`, and `-256` when the OS error cannot be read.
+  Negative codes never collide with a real exit status (`0`-`255`).
+  `!` still stops on these, exiting `msh` itself with the conventional 127/126/128+N.
+
 ### Removed
 
 - The `pick` stack operator was removed.

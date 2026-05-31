@@ -1,0 +1,4 @@
+# A command that cannot be found on PATH no longer aborts the script.
+# '?' leaves the not-found code (-255) and execution continues past it.
+['definitely-not-a-real-cmd-xyz']? wl
+'continued' wl
