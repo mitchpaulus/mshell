@@ -58,18 +58,12 @@ func (c *Checker) InferQuoteSig(body []Token) []QuoteSig {
 	step := func(tok Token) {
 		c.checkOne(tok)
 	}
-	return c.inferQuoteSigsTokens(body, nil, step)
+	return c.inferQuoteSigsTokens(body, step)
 }
 
 // InferQuoteSigItems is the parse-tree variant of InferQuoteSig.
 func (c *Checker) InferQuoteSigItems(body []MShellParseItem) []QuoteSig {
-	return c.InferQuoteSigItemsWithInputs(body, nil)
-}
-
-// InferQuoteSigItemsWithInputs is InferQuoteSigItems with caller-
-// supplied initial inputs (used by prefix-quote desugaring).
-func (c *Checker) InferQuoteSigItemsWithInputs(body []MShellParseItem, initialInputs []TypeId) []QuoteSig {
-	return c.inferQuoteSigsItems(body, initialInputs)
+	return c.inferQuoteSigsItems(body)
 }
 
 // inferQuoteSigsTokens drives branching inference over a raw-token
@@ -78,7 +72,7 @@ func (c *Checker) InferQuoteSigItemsWithInputs(body []MShellParseItem, initialIn
 // branch fans out by one viable candidate per overload. Non-
 // overloaded tokens advance each branch deterministically via the
 // supplied step function.
-func (c *Checker) inferQuoteSigsTokens(body []Token, initialInputs []TypeId, step func(Token)) []QuoteSig {
+func (c *Checker) inferQuoteSigsTokens(body []Token, step func(Token)) []QuoteSig {
 	outerSnap := c.Snapshot()
 	outerInferring := c.inferring
 	outerInputs := c.inferInputs
@@ -100,7 +94,7 @@ func (c *Checker) inferQuoteSigsTokens(body []Token, initialInputs []TypeId, ste
 		c.subst.Rollback(outerSubst)
 	}()
 
-	branches := []quoteBranch{c.initialQuoteBranch(initialInputs, outerSnap)}
+	branches := []quoteBranch{c.initialQuoteBranch(outerSnap)}
 	branches = c.driveBranches(branches, len(body), func(i int) func() {
 		tok := body[i]
 		return func() { step(tok) }
@@ -109,7 +103,7 @@ func (c *Checker) inferQuoteSigsTokens(body []Token, initialInputs []TypeId, ste
 	if len(branches) == 0 {
 		return c.recoveryQuoteSigs()
 	}
-	return c.collectQuoteSigs(branches, initialInputs, outerSnap)
+	return c.collectQuoteSigs(branches, outerSnap)
 }
 
 // inferQuoteSigsItems is the parse-item analog of inferQuoteSigsTokens.
@@ -117,7 +111,7 @@ func (c *Checker) inferQuoteSigsTokens(body []Token, initialInputs []TypeId, ste
 // nested quotes, if/match blocks, etc.) are walked deterministically
 // per branch through checkParseItem and contribute one continuation
 // each. Only Token items with overloaded candidates fan out.
-func (c *Checker) inferQuoteSigsItems(body []MShellParseItem, initialInputs []TypeId) []QuoteSig {
+func (c *Checker) inferQuoteSigsItems(body []MShellParseItem) []QuoteSig {
 	outerSnap := c.Snapshot()
 	outerInferring := c.inferring
 	outerInputs := c.inferInputs
@@ -134,13 +128,13 @@ func (c *Checker) inferQuoteSigsItems(body []MShellParseItem, initialInputs []Ty
 		c.subst.Rollback(outerSubst)
 	}()
 
-	branches := []quoteBranch{c.initialQuoteBranch(initialInputs, outerSnap)}
+	branches := []quoteBranch{c.initialQuoteBranch(outerSnap)}
 	branches = c.driveBranchesOverItems(branches, body)
 
 	if len(branches) == 0 {
 		return c.recoveryQuoteSigs()
 	}
-	return c.collectQuoteSigs(branches, initialInputs, outerSnap)
+	return c.collectQuoteSigs(branches, outerSnap)
 }
 
 // driveBranchesOverItems walks a parse-item body. Each item advances
@@ -213,11 +207,10 @@ func (c *Checker) driveBranches(
 
 // initialQuoteBranch builds the starting branch for a body walk:
 // inherit the outer var environment (quotes are closures over the
-// surrounding scope), seed the stack with the caller-supplied
-// initial inputs (used by prefix-quote desugaring), and start
-// inferring with no fresh inputs accumulated yet.
-func (c *Checker) initialQuoteBranch(initialInputs []TypeId, outerSnap ScopeSnapshot) quoteBranch {
-	stack := append([]TypeId(nil), initialInputs...)
+// surrounding scope), start with an empty stack, and begin inferring
+// with no fresh inputs accumulated yet.
+func (c *Checker) initialQuoteBranch(outerSnap ScopeSnapshot) quoteBranch {
+	var stack []TypeId
 	inheritedVars := make(map[NameId]TypeId, len(outerSnap.vars))
 	for k, v := range outerSnap.vars {
 		inheritedVars[k] = v
@@ -363,12 +356,12 @@ func (c *Checker) tryBranchStep(b quoteBranch, step func()) ([]quoteBranch, []Ty
 // gets the wrong type. Adding the free vars to Generics makes
 // Instantiate rename them to fresh per-use-site vars, restoring
 // independence.
-func (c *Checker) collectQuoteSigs(branches []quoteBranch, initialInputs []TypeId, outerSnap ScopeSnapshot) []QuoteSig {
+func (c *Checker) collectQuoteSigs(branches []quoteBranch, outerSnap ScopeSnapshot) []QuoteSig {
 	sigs := make([]QuoteSig, 0, len(branches))
 	for _, b := range branches {
 		c.loadBranch(b)
 
-		rawInputs := append(append([]TypeId(nil), c.inferInputs...), initialInputs...)
+		rawInputs := append([]TypeId(nil), c.inferInputs...)
 		rawOutputs := append([]TypeId(nil), c.stack.items...)
 		rawBindings := quoteBindingDelta(outerSnap.vars, c.vars.bound)
 

@@ -520,7 +520,16 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 		if len(funcName) > 0 && funcName[len(funcName)-1] == '.' {
 			funcName = funcName[:len(funcName)-1]
 		}
-		sigs := c.InferQuoteSigItemsWithInputs(it.Items, c.prefixQuoteInputs(funcName))
+		// `fn.` is pure syntax sugar for `(...) fn`, so infer the block
+		// body's signature exactly as a plain quote literal would — no
+		// seeding from the receiver element. Seeding the body input with
+		// the receiver's element type tangled the receiver's free type
+		// vars into the inferred quote sig; after the inference rolls its
+		// substitution back, the consumption site (`each`/`map`/...) then
+		// saw the quote and the receiver carrying decoupled vars and
+		// failed to unify (e.g. iterating `parseExcel`/`enumerate` output
+		// whose element is a shape with a free var).
+		sigs := c.InferQuoteSigItems(it.Items)
 		c.stack.Push(c.arena.MakeOverloadedQuote(sigs))
 		callTok := it.StartToken
 		callTok.Type = LITERAL
@@ -664,26 +673,6 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 		c.stack.Push(c.arena.MakeMaybe(c.lookupGetterValueType(top, nameId)))
 		return
 	}
-}
-
-func (c *Checker) prefixQuoteInputs(funcName string) []TypeId {
-	switch funcName {
-	case "each", "filter", "map", "any", "all":
-	default:
-		return nil
-	}
-	if c.stack.Len() == 0 {
-		return nil
-	}
-	receiver := c.subst.Apply(c.arena, c.stack.Top())
-	node := c.arena.Node(receiver)
-	switch node.Kind {
-	case TKList:
-		return []TypeId{TypeId(node.A)}
-	case TKDict:
-		return []TypeId{TypeId(node.B)}
-	}
-	return nil
 }
 
 // checkIfBlock drives an if/else-if/else chain through the branching
