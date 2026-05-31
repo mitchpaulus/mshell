@@ -867,10 +867,28 @@ func main() {
 
 	if !result.Success {
 		if result.ExitCode != 0 {
-			os.Exit(result.ExitCode)
+			os.Exit(toProcessExitStatus(result.ExitCode))
 		} else {
 			os.Exit(1)
 		}
+	}
+}
+
+// toProcessExitStatus maps an internal exit code to a valid 0-255 process exit
+// status for msh itself. The negative start-failure/signal codes used on the
+// mshell data stack would wrap mod 256 if passed to os.Exit directly, so at this
+// boundary we translate them to POSIX-conventional statuses (the precise reason
+// remains available on the stack via the '?' operator).
+func toProcessExitStatus(code int) int {
+	switch {
+	case code >= 0:
+		return code
+	case code >= -192 && code <= -129:
+		return -code // killed by signal N -> 128 + N
+	case code == ExitNotFoundOnPath:
+		return 127 // command not found
+	default:
+		return 126 // any other start failure
 	}
 }
 

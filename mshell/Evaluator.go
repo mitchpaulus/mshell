@@ -3635,6 +3635,23 @@ func (state *EvalState) RunCdp() (EvalResult, error) {
 	return result, nil
 }
 
+// Negative exit codes returned by RunProcess/RunPipeline encode *why* a command
+// could not run, in disjoint bands so a script can tell every failure apart.
+// Real processes only return 0..255, so negatives never collide with them.
+//
+//	-(128 + N)   killed by signal N            (signal = -code - 128)
+//	-255         not found while searching PATH (mshell-level, pre-exec)
+//	-256         start failed, OS error could not be extracted
+//	-(256 + E)   POSIX start failure, raw errno E   (errno  = -code - 256)
+//	-(1024 + W)  Windows start failure, raw error W (winErr = -code - 1024)
+//
+// classifyStartError and signalExitCode are defined per-platform (Pathbin_*.go).
+const (
+	signalBase         = 128
+	ExitNotFoundOnPath = -255
+	ExitStartUnknown   = -256
+)
+
 func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (EvalResult, int, []byte, []byte) {
 	// Returns the result of running the process, the exit code, and the stdout result
 
@@ -3746,20 +3763,24 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 	} else {
 		var found bool
 		if context.Pbm == nil {
-			fmt.Fprint(os.Stderr, "No context found.\n")
-			return state.FailWithMessage(fmt.Sprintf("Command '%s' not found in path.\n", commandLineArgs[0])), 1, nil, nil
+			// A missing command is a recoverable runtime condition, not a hard
+			// abort: report it and leave the not-found code so ?/; continue.
+			fmt.Fprintf(os.Stderr, "Command '%s' not found: no path context available.\n", commandLineArgs[0])
+			return SimpleSuccess(), ExitNotFoundOnPath, nil, nil
 		}
 
 		cmdPath, found = context.Pbm.Lookup(commandLineArgs[0])
 		if !found {
-			return state.FailWithMessage(fmt.Sprintf("Command '%s' not found in path.\n", commandLineArgs[0])), 1, nil, nil
+			fmt.Fprintf(os.Stderr, "Command '%s' not found in path.\n", commandLineArgs[0])
+			return SimpleSuccess(), ExitNotFoundOnPath, nil, nil
 		}
 	}
 
 	// For interpreted files on Windows, we need to essentially do what a shebang on Linux does
 	cmdItems, err := context.Pbm.ExecuteArgs(cmdPath)
 	if err != nil {
-		return state.FailWithMessage(fmt.Sprintf("On Windows, we currently don't handle this file/extension: %s\n", cmdPath)), 1, nil, nil
+		fmt.Fprintf(os.Stderr, "Could not resolve an interpreter for '%s'.\n", cmdPath)
+		return SimpleSuccess(), ExitNotFoundOnPath, nil, nil
 	}
 
 	allArgs = make([]string, 0, len(cmdItems)+len(commandLineArgs))
@@ -3898,9 +3919,11 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 
 		if startErr != nil {
 			fmt.Fprintf(os.Stderr, "Error starting command: %s\n", startErr.Error())
-			exitCode = 1
+			exitCode = classifyStartError(startErr)
+		} else {
+			// Backgrounded and started: we don't wait, so there is no exit code yet.
+			exitCode = 0
 		}
-		exitCode = 0 // TODO: What to set here?
 	} else {
 		// Use Start + Wait instead of Run so we can set the foreground process group
 		startErr = cmd.Start()
@@ -3910,7 +3933,7 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 			for i, arg := range cmd.Args {
 				fmt.Fprintf(os.Stderr, "Arg %d: '%s'\n", i, arg)
 			}
-			exitCode = 1
+			exitCode = classifyStartError(startErr)
 		} else {
 			// If we're in a pipeline, report the PID so RunPipeline can manage foreground
 			if context.InPipeline && context.PipelinePidChan != nil && cmd.Process != nil {
@@ -3945,7 +3968,10 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 			if waitErr != nil {
 				if _, ok := waitErr.(*exec.ExitError); !ok {
 					fmt.Fprintf(os.Stderr, "Error running command: %s\n", waitErr.Error())
-					exitCode = 1
+					exitCode = ExitStartUnknown
+				} else if code, signalled := signalExitCode(cmd.ProcessState); signalled {
+					// Killed by a signal: encode it as -(128 + signal).
+					exitCode = code
 				} else {
 					// Command exited with non-zero exit code
 					exitCode = waitErr.(*exec.ExitError).ExitCode()

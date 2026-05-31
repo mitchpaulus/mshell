@@ -31,6 +31,44 @@ To initiate execution, you use one of 3 operators:
 $"Exit code was {@exitCode}" wl
 ```
 
+A command that cannot even start (not found, no permission, bad format, ...) is
+no longer a fatal error: under `;` and `?` execution continues, and `?` leaves a
+*negative* exit code describing exactly what went wrong.
+Real processes only return `0`–`255`, so negative codes never collide with a
+genuine exit status, and they still count as a failure in `if`/`iff` (only `0`
+is success).
+The negative codes are organized into bands that carry the underlying OS error
+verbatim:
+
+Code              | Meaning                                          | Decode
+------------------|--------------------------------------------------|------------------------
+`0`–`255`         | Normal exit status from the process.             | —
+`-(128 + N)`      | Killed by signal `N`.                            | `signal = -code - 128`
+`-255`            | Command not found while searching `PATH`.        | (fixed)
+`-256`            | Failed to start, OS error could not be read.     | (fixed)
+`-(256 + errno)`  | POSIX start failure, carrying the raw `errno`.   | `errno = -code - 256`
+`-(1024 + err)`   | Windows start failure, carrying the raw error.   | `winErr = -code - 1024`
+
+Because the codes carry the *raw* OS error number, they are platform-specific.
+Common Linux examples (see `man errno` / `asm-generic/errno.h` for the full set):
+
+Code   | errno      | Meaning
+-------|------------|-------------------------------------------
+`-258` | `ENOENT`   | Not found at exec time (e.g. missing `#!` interpreter).
+`-264` | `ENOEXEC`  | Exec format error (not a runnable binary).
+`-269` | `EACCES`   | Permission denied — no execute bit, or the target is a directory.
+`-130` | —          | Killed by `SIGINT` (Ctrl-C); `-(128 + 2)`.
+`-137` | —          | Killed by `SIGKILL`; `-(128 + 9)`.
+
+mshell does not normalize these across operating systems — if you need a check
+that works on more than one platform, OR the relevant codes together yourself:
+
+```mshell
+# "Was it not found?" on both Linux (-258 at exec, -255 on PATH) and Windows (-1026)
+[my-cmd]? notFound!
+@notFound -255 = @notFound -258 = @notFound -1026 = or or
+```
+
 The other choice you often have when executing commands is what to do with the standard output. Sometimes you will want to redirect it to a file, other times you will want to leave the contents on the stack to process further. For that, you use the `>`, `>>`, `*`, and `*b` operators.
 
 ```mshell
@@ -74,7 +112,7 @@ Operator | Effect on external commands                | Notes
 ---------|--------------------------------------------|-----------------------------------------------------
 `;`      | Execute and continue.                      | No exit code on the stack.
 `!`      | Execute and stop on non-zero exit.         | Uses the command exit code.
-`?`      | Execute and push the exit code.            | Integer is left on the stack.
+`?`      | Execute and push the exit code.            | Integer left on the stack; negative if the command could not start (see codes above).
 `>`      | Redirect stdout to a file.                 | Truncates the file.
 `>>`     | Redirect stdout to a file.                 | Appends to the file.
 `*`      | Capture stdout to the stack.               | As a string.
