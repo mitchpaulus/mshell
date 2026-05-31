@@ -898,7 +898,7 @@ func (fm *FileManager) drawOverlayBox(buf *bytes.Buffer, lines []string) {
 func (fm *FileManager) renderBookmarkOverlay(buf *bytes.Buffer) {
 	var lines []string
 	if fm.pendingMark {
-		lines = append(lines, " Set bookmark (0-9, a-z): ")
+		lines = append(lines, " Set bookmark (0-9, a-z, A-Z): ")
 	} else {
 		lines = append(lines, " Go to bookmark: ")
 	}
@@ -908,6 +908,11 @@ func (fm *FileManager) renderBookmarkOverlay(buf *bytes.Buffer) {
 		}
 	}
 	for c := byte('a'); c <= 'z'; c++ {
+		if dir, ok := fm.bookmarks[c]; ok {
+			lines = append(lines, fmt.Sprintf("  %c  %s", c, dir))
+		}
+	}
+	for c := byte('A'); c <= 'Z'; c++ {
 		if dir, ok := fm.bookmarks[c]; ok {
 			lines = append(lines, fmt.Sprintf("  %c  %s", c, dir))
 		}
@@ -2338,7 +2343,7 @@ func loadBookmarks() map[byte]string {
 }
 
 func isBookmarkChar(c byte) bool {
-	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z')
+	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
 
 // Clipboard
@@ -2479,6 +2484,14 @@ func saveBookmarks(bookmarks map[byte]string) error {
 		}
 	}
 	for c := byte('a'); c <= 'z'; c++ {
+		if dir, ok := bookmarks[c]; ok {
+			sb.WriteByte(c)
+			sb.WriteByte(' ')
+			sb.WriteString(dir)
+			sb.WriteByte('\n')
+		}
+	}
+	for c := byte('A'); c <= 'Z'; c++ {
 		if dir, ok := bookmarks[c]; ok {
 			sb.WriteByte(c)
 			sb.WriteByte(' ')
