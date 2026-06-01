@@ -130,12 +130,13 @@ func readZipFile(f *zip.File) ([]byte, error) {
 }
 
 // parseExcelBytes parses the bytes of a .xlsx (OOXML spreadsheet) file and
-// returns a dict of sheet name -> list of lists of cell values. Cells are
-// returned as MShellFloat for numbers, MShellString for strings (shared,
-// inline, or formula-string results), MShellBool for booleans, and a None
-// Maybe for error cells. Missing <v> values and padding cells are empty
-// strings. Dates are returned as floats (Excel serial dates).
-func parseExcelBytes(data []byte) (*MShellDict, error) {
+// returns a list of sheets in workbook order. Each sheet is a dict with a
+// "name" key (the worksheet name) and a "data" key (a rectangular list of
+// rows). Cells are returned as MShellFloat for numbers, MShellString for
+// strings (shared, inline, or formula-string results), MShellBool for
+// booleans, and a None Maybe for error cells. Missing <v> values and padding
+// cells are empty strings. Dates are returned as floats (Excel serial dates).
+func parseExcelBytes(data []byte) (*MShellList, error) {
 	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
 		return nil, fmt.Errorf("not a valid zip/xlsx file: %w", err)
@@ -192,7 +193,7 @@ func parseExcelBytes(data []byte) (*MShellDict, error) {
 		}
 	}
 
-	result := NewDict()
+	result := NewList(0)
 	for _, sheet := range wb.Sheets {
 		rel, ok := relByID[sheet.RID]
 		if !ok {
@@ -228,7 +229,10 @@ func parseExcelBytes(data []byte) (*MShellDict, error) {
 		if err != nil {
 			return nil, fmt.Errorf("in sheet %q: %w", sheet.Name, err)
 		}
-		result.Items[sheet.Name] = rows
+		sheetDict := NewDict()
+		sheetDict.Items["name"] = MShellString{Content: sheet.Name}
+		sheetDict.Items["data"] = rows
+		result.Items = append(result.Items, sheetDict)
 	}
 
 	return result, nil

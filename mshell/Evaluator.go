@@ -8846,11 +8846,11 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: 'parseExcel' expects a Path or Binary, got a %s.\n", t.Line, t.Column, obj1.TypeName()))
 					}
 
-					dict, err := parseExcelBytes(xlsxData)
+					sheets, err := parseExcelBytes(xlsxData)
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing Excel: %s\n", t.Line, t.Column, err.Error()))
 					}
-					stack.Push(dict)
+					stack.Push(sheets)
 				} else if t.Lexeme == "toJson" {
 					// Convert an object to JSON
 					obj1, err := stack.Pop()

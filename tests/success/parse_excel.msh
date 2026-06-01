@@ -1,8 +1,8 @@
 `excel_test_file.xlsx` parseExcel wb!
 
-@wb keys each. k!
-    $"=== {@k} ===" wl
-    @wb @k get? 1 enumerateN each.
+@wb each. sheet!
+    $"=== {@sheet :name?} ===" wl
+    @sheet :data? 1 enumerateN each.
         # 2unpack row!, rowNum!
         row!
         @row :item? 1 enumerateN each.

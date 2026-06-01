@@ -158,15 +158,15 @@ func TestTypeCheckProgramMaybeMap(t *testing.T) {
 // regression where the `fn.` block form (syntax sugar for `(...) fn`)
 // diverged from the plain quote form. The prefix path seeded the block
 // body's input with the receiver's element type; when that element was a
-// shape carrying a free type var (here `parseExcel keyValues`, which has
-// type [{k: str, v: T}] with T unconstrained), reading two fields in the
+// shape carrying a free type var (here `parseExcel`, which has type
+// [{name: str, data: [[T]]}] with T unconstrained), reading two fields in the
 // body tangled the receiver's free var into the inferred quote sig and
 // the consuming `each` then failed to unify. The prefix and quote forms
 // must type-check identically.
 func TestTypeCheckProgramPrefixQuoteOverFreeVarShape(t *testing.T) {
-	src := "`f.xlsx` parseExcel keyValues each. pair!\n" +
-		"  @pair :v? val!\n" +
-		"  @pair :k? drop\n" +
+	src := "`f.xlsx` parseExcel each. sheet!\n" +
+		"  @sheet :data? val!\n" +
+		"  @sheet :name? drop\n" +
 		"end"
 	errs, ok := parseAndCheck(t, src)
 	if !ok || len(errs) != 0 {

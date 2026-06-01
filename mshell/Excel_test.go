@@ -77,19 +77,34 @@ func buildMinimalXlsx(t *testing.T) []byte {
 
 func TestParseExcelBytes(t *testing.T) {
 	data := buildMinimalXlsx(t)
-	dict, err := parseExcelBytes(data)
+	sheets, err := parseExcelBytes(data)
 	if err != nil {
 		t.Fatalf("parseExcelBytes: %v", err)
 	}
 
-	if len(dict.Items) != 2 {
-		t.Fatalf("expected 2 sheets, got %d", len(dict.Items))
+	if len(sheets.Items) != 2 {
+		t.Fatalf("expected 2 sheets, got %d", len(sheets.Items))
 	}
 
-	dataSheet, ok := dict.Items["Data"].(*MShellList)
-	if !ok {
-		t.Fatalf("Data sheet missing or wrong type")
+	// sheetData returns the "data" list of the sheet at index i, asserting its
+	// "name" matches. Sheets must come back in workbook order.
+	sheetData := func(i int, name string) *MShellList {
+		t.Helper()
+		d, ok := sheets.Items[i].(*MShellDict)
+		if !ok {
+			t.Fatalf("sheet %d: expected a dict, got %T", i, sheets.Items[i])
+		}
+		if s, ok := d.Items["name"].(MShellString); !ok || s.Content != name {
+			t.Fatalf("sheet %d: expected name %q, got %v", i, name, d.Items["name"])
+		}
+		rows, ok := d.Items["data"].(*MShellList)
+		if !ok {
+			t.Fatalf("sheet %d (%s): data missing or wrong type", i, name)
+		}
+		return rows
 	}
+
+	dataSheet := sheetData(0, "Data")
 	if len(dataSheet.Items) != 3 {
 		t.Fatalf("Data sheet: expected 3 rows, got %d", len(dataSheet.Items))
 	}
@@ -130,10 +145,7 @@ func TestParseExcelBytes(t *testing.T) {
 		t.Errorf("C3 padding: got %v", row3.Items[2])
 	}
 
-	summary, ok := dict.Items["Summary"].(*MShellList)
-	if !ok {
-		t.Fatalf("Summary sheet missing")
-	}
+	summary := sheetData(1, "Summary")
 	if len(summary.Items) != 1 {
 		t.Fatalf("Summary: expected 1 row, got %d", len(summary.Items))
 	}
