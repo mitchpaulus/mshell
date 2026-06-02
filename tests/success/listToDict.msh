@@ -3,6 +3,6 @@
     ["my key 2" 20]
     ["my key 2" 30]
 ]
-(:0:)
+(:0: str)
 (:1:)
 listToDict str wl

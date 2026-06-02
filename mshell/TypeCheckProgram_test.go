@@ -158,19 +158,70 @@ func TestTypeCheckProgramMaybeMap(t *testing.T) {
 // regression where the `fn.` block form (syntax sugar for `(...) fn`)
 // diverged from the plain quote form. The prefix path seeded the block
 // body's input with the receiver's element type; when that element was a
-// shape carrying a free type var (here `parseExcel keyValues`, which has
-// type [{k: str, v: T}] with T unconstrained), reading two fields in the
+// shape carrying a free type var (here `parseExcel`, whose data cells are
+// str|float|bool|Maybe[T] with T unconstrained), reading two fields in the
 // body tangled the receiver's free var into the inferred quote sig and
 // the consuming `each` then failed to unify. The prefix and quote forms
 // must type-check identically.
 func TestTypeCheckProgramPrefixQuoteOverFreeVarShape(t *testing.T) {
-	src := "`f.xlsx` parseExcel keyValues each. pair!\n" +
-		"  @pair :v? val!\n" +
-		"  @pair :k? drop\n" +
+	src := "`f.xlsx` parseExcel each. sheet!\n" +
+		"  @sheet :data? val!\n" +
+		"  @sheet :name? drop\n" +
 		"end"
 	errs, ok := parseAndCheck(t, src)
 	if !ok || len(errs) != 0 {
 		t.Fatalf("expected prefix-quote over free-var shape to type-check; errs=%v", errs)
+	}
+}
+
+// Indexer/slice quotes route through the shared overload machinery rather
+// than the old indexerResultType punt, which collapsed an unknown receiver
+// to a disconnected fresh output var. These three tests pin the resulting
+// behavior:
+
+// A bare slice quote infers as an overloaded quote whose output is tied to
+// its input, so `map` recovers the precise element type. If the old punt
+// returned a disconnected var, `(1:) map` over [[int]] would yield [T]; here
+// the program must type-check, exercising the tied list arm end to end.
+func TestTypeCheckIndexerSliceQuoteMapPropagatesElement(t *testing.T) {
+	errs, ok := parseAndCheck(t, "[[1 2 3] [4 5 6]] (1:) map")
+	if !ok || len(errs) != 0 {
+		t.Fatalf("expected (1:) map over [[int]] to type-check; errs=%v", errs)
+	}
+}
+
+// The element-extractor `(:0:)` over rows of [int] must resolve to int, not
+// a free var. listToDict requires a str key, so an int key is a genuine type
+// error. Under the old disconnected-var behavior the extractor's output var
+// bound spuriously to str and this passed — that masked unsoundness is what
+// the fix removes.
+func TestTypeCheckIndexerExtractorKeyTypeEnforced(t *testing.T) {
+	errs, ok := parseAndCheck(t, "[[1 2 3] [4 5 6]] (:0:) (:1:) listToDict")
+	if ok && len(errs) == 0 {
+		t.Fatalf("expected int key extractor to be rejected by listToDict's str key")
+	}
+}
+
+// Coercing the extracted key to str satisfies listToDict, confirming the
+// overloaded indexer quote resolves cleanly against an expected (T -- str).
+func TestTypeCheckIndexerExtractorKeyCoercible(t *testing.T) {
+	errs, ok := parseAndCheck(t, "[[1 2 3] [4 5 6]] (:0: str) (:1:) listToDict")
+	if !ok || len(errs) != 0 {
+		t.Fatalf("expected str-coerced key extractor to type-check; errs=%v", errs)
+	}
+}
+
+// Indexing a quote-bound variable whose type isn't pinned yet (here `@row`,
+// fixed later by the enclosing `map`) must NOT fan out across the container
+// overload arms — doing so binds the shared variable to a different container
+// per branch and corrupts the inferred element type. The body builds a [str],
+// so the map yields [[str]]; the trailing `:0: :0:` only type-checks if that
+// nested-list shape survived (the buggy fan-out collapsed it to [int], on
+// which the second index errors).
+func TestTypeCheckIndexerOnUnpinnedBoundVarDefers(t *testing.T) {
+	errs, ok := parseAndCheck(t, "[[1 2] [3 4]] map. row! [ @row :0: str ] end :0: :0:")
+	if !ok || len(errs) != 0 {
+		t.Fatalf("expected indexing an unpinned bound var inside map to preserve [[str]]; errs=%v", errs)
 	}
 }
 

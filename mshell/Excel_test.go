@@ -31,7 +31,7 @@ func buildMinimalXlsx(t *testing.T) []byte {
 			`xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">`+
 			`<sheets>`+
 			`<sheet name="Data" sheetId="1" r:id="rId1"/>`+
-			`<sheet name="Summary" sheetId="2" r:id="rId2"/>`+
+			`<sheet name="Summary" sheetId="2" state="hidden" r:id="rId2"/>`+
 			`</sheets></workbook>`)
 
 	writeZipFile(t, zw, "xl/_rels/workbook.xml.rels",
@@ -77,19 +77,41 @@ func buildMinimalXlsx(t *testing.T) []byte {
 
 func TestParseExcelBytes(t *testing.T) {
 	data := buildMinimalXlsx(t)
-	dict, err := parseExcelBytes(data)
+	sheets, err := parseExcelBytes(data)
 	if err != nil {
 		t.Fatalf("parseExcelBytes: %v", err)
 	}
 
-	if len(dict.Items) != 2 {
-		t.Fatalf("expected 2 sheets, got %d", len(dict.Items))
+	if len(sheets.Items) != 2 {
+		t.Fatalf("expected 2 sheets, got %d", len(sheets.Items))
 	}
 
-	dataSheet, ok := dict.Items["Data"].(*MShellList)
-	if !ok {
-		t.Fatalf("Data sheet missing or wrong type")
+	// sheetData returns the "data" list of the sheet at index i, asserting its
+	// "name", "hidden", and "visibility" keys. Sheets must come back in
+	// workbook order.
+	sheetData := func(i int, name string, wantHidden bool, wantVis string) *MShellList {
+		t.Helper()
+		d, ok := sheets.Items[i].(*MShellDict)
+		if !ok {
+			t.Fatalf("sheet %d: expected a dict, got %T", i, sheets.Items[i])
+		}
+		if s, ok := d.Items["name"].(MShellString); !ok || s.Content != name {
+			t.Fatalf("sheet %d: expected name %q, got %v", i, name, d.Items["name"])
+		}
+		if b, ok := d.Items["hidden"].(MShellBool); !ok || b.Value != wantHidden {
+			t.Errorf("sheet %d (%s): expected hidden=%v, got %v", i, name, wantHidden, d.Items["hidden"])
+		}
+		if s, ok := d.Items["visibility"].(MShellString); !ok || s.Content != wantVis {
+			t.Errorf("sheet %d (%s): expected visibility=%q, got %v", i, name, wantVis, d.Items["visibility"])
+		}
+		rows, ok := d.Items["data"].(*MShellList)
+		if !ok {
+			t.Fatalf("sheet %d (%s): data missing or wrong type", i, name)
+		}
+		return rows
 	}
+
+	dataSheet := sheetData(0, "Data", false, "visible")
 	if len(dataSheet.Items) != 3 {
 		t.Fatalf("Data sheet: expected 3 rows, got %d", len(dataSheet.Items))
 	}
@@ -130,10 +152,7 @@ func TestParseExcelBytes(t *testing.T) {
 		t.Errorf("C3 padding: got %v", row3.Items[2])
 	}
 
-	summary, ok := dict.Items["Summary"].(*MShellList)
-	if !ok {
-		t.Fatalf("Summary sheet missing")
-	}
+	summary := sheetData(1, "Summary", true, "hidden")
 	if len(summary.Items) != 1 {
 		t.Fatalf("Summary: expected 1 row, got %d", len(summary.Items))
 	}
