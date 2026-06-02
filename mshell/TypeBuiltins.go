@@ -1087,12 +1087,14 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 			{Inputs: []TypeId{TidBytes}, Outputs: []TypeId{arena.MakeVar(0)}, Generics: []TypeVarId{0}},
 		}
 	}
-	// parseExcel : (path|bytes -- [{name: str, data: [[v]]}])
+	// parseExcel : (path|bytes -- [{name: str, data: [[v]], hidden: bool, visibility: str}])
 	{
 		v := arena.MakeVar(0)
 		sheet := arena.MakeShape([]ShapeField{
 			{Name: names.Intern("name"), Type: TidStr},
 			{Name: names.Intern("data"), Type: arena.MakeList(arena.MakeList(v))},
+			{Name: names.Intern("hidden"), Type: TidBool},
+			{Name: names.Intern("visibility"), Type: TidStr},
 		})
 		out[names.Intern("parseExcel")] = []QuoteSig{
 			{Inputs: []TypeId{TidPath}, Outputs: []TypeId{arena.MakeList(sheet)}, Generics: []TypeVarId{0}},

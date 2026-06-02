@@ -79,7 +79,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `toCsv`
   - `linearSearchIndex`
   - `id` / `2id` / `3id` - identity quotes useful as no-op value selectors for `listToDict` and similar
-  - `parseExcel` - parse an `.xlsx` workbook into a list of sheets in workbook (tab) order; each sheet is a dict with a `name` key and a `data` key holding a rectangular list of rows
+  - `parseExcel` - parse an `.xlsx` workbook into a list of sheets in workbook (tab) order; each sheet is a dict with a `name` key, a `data` key holding a rectangular list of rows, a `hidden` key (bool), and a `visibility` key (`"visible"`/`"hidden"`/`"veryHidden"`)
   - `sortBy` - stable ascending sort of a Grid or GridView by one or more columns; bare-string and list-of-strings forms; `none` cells sort last; cross-type values in a generic column error
   - `sortByCmp` extended to accept Grid or GridView; the comparator receives two `GridRow`s
   - `reverse` is now a built-in and accepts list, Grid, or GridView (the prior std lib `reverse` definition is removed; behavior on lists is unchanged)

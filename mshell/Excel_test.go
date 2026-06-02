@@ -31,7 +31,7 @@ func buildMinimalXlsx(t *testing.T) []byte {
 			`xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">`+
 			`<sheets>`+
 			`<sheet name="Data" sheetId="1" r:id="rId1"/>`+
-			`<sheet name="Summary" sheetId="2" r:id="rId2"/>`+
+			`<sheet name="Summary" sheetId="2" state="hidden" r:id="rId2"/>`+
 			`</sheets></workbook>`)
 
 	writeZipFile(t, zw, "xl/_rels/workbook.xml.rels",
@@ -87,8 +87,9 @@ func TestParseExcelBytes(t *testing.T) {
 	}
 
 	// sheetData returns the "data" list of the sheet at index i, asserting its
-	// "name" matches. Sheets must come back in workbook order.
-	sheetData := func(i int, name string) *MShellList {
+	// "name", "hidden", and "visibility" keys. Sheets must come back in
+	// workbook order.
+	sheetData := func(i int, name string, wantHidden bool, wantVis string) *MShellList {
 		t.Helper()
 		d, ok := sheets.Items[i].(*MShellDict)
 		if !ok {
@@ -97,6 +98,12 @@ func TestParseExcelBytes(t *testing.T) {
 		if s, ok := d.Items["name"].(MShellString); !ok || s.Content != name {
 			t.Fatalf("sheet %d: expected name %q, got %v", i, name, d.Items["name"])
 		}
+		if b, ok := d.Items["hidden"].(MShellBool); !ok || b.Value != wantHidden {
+			t.Errorf("sheet %d (%s): expected hidden=%v, got %v", i, name, wantHidden, d.Items["hidden"])
+		}
+		if s, ok := d.Items["visibility"].(MShellString); !ok || s.Content != wantVis {
+			t.Errorf("sheet %d (%s): expected visibility=%q, got %v", i, name, wantVis, d.Items["visibility"])
+		}
 		rows, ok := d.Items["data"].(*MShellList)
 		if !ok {
 			t.Fatalf("sheet %d (%s): data missing or wrong type", i, name)
@@ -104,7 +111,7 @@ func TestParseExcelBytes(t *testing.T) {
 		return rows
 	}
 
-	dataSheet := sheetData(0, "Data")
+	dataSheet := sheetData(0, "Data", false, "visible")
 	if len(dataSheet.Items) != 3 {
 		t.Fatalf("Data sheet: expected 3 rows, got %d", len(dataSheet.Items))
 	}
@@ -145,7 +152,7 @@ func TestParseExcelBytes(t *testing.T) {
 		t.Errorf("C3 padding: got %v", row3.Items[2])
 	}
 
-	summary := sheetData(1, "Summary")
+	summary := sheetData(1, "Summary", true, "hidden")
 	if len(summary.Items) != 1 {
 		t.Fatalf("Summary: expected 1 row, got %d", len(summary.Items))
 	}

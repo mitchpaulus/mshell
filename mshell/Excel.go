@@ -131,8 +131,10 @@ func readZipFile(f *zip.File) ([]byte, error) {
 
 // parseExcelBytes parses the bytes of a .xlsx (OOXML spreadsheet) file and
 // returns a list of sheets in workbook order. Each sheet is a dict with a
-// "name" key (the worksheet name) and a "data" key (a rectangular list of
-// rows). Cells are returned as MShellFloat for numbers, MShellString for
+// "name" key (the worksheet name), a "data" key (a rectangular list of rows),
+// a "hidden" key (bool; true for hidden or veryHidden sheets), and a
+// "visibility" key ("visible", "hidden", or "veryHidden"). Cells are returned
+// as MShellFloat for numbers, MShellString for
 // strings (shared, inline, or formula-string results), MShellBool for
 // booleans, and a None Maybe for error cells. Missing <v> values and padding
 // cells are empty strings. Dates are returned as floats (Excel serial dates).
@@ -229,9 +231,20 @@ func parseExcelBytes(data []byte) (*MShellList, error) {
 		if err != nil {
 			return nil, fmt.Errorf("in sheet %q: %w", sheet.Name, err)
 		}
+		// The workbook <sheet state> attribute is "hidden", "veryHidden", or
+		// absent (treated as "visible"). Both hidden and veryHidden collapse to
+		// the hidden bool; visibility preserves the full distinction.
+		visibility := sheet.State
+		if visibility == "" {
+			visibility = "visible"
+		}
+		hidden := visibility != "visible"
+
 		sheetDict := NewDict()
 		sheetDict.Items["name"] = MShellString{Content: sheet.Name}
 		sheetDict.Items["data"] = rows
+		sheetDict.Items["hidden"] = MShellBool{Value: hidden}
+		sheetDict.Items["visibility"] = MShellString{Content: visibility}
 		result.Items = append(result.Items, sheetDict)
 	}
 

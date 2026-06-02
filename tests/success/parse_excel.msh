@@ -1,7 +1,7 @@
 `excel_test_file.xlsx` parseExcel wb!
 
 @wb each. sheet!
-    $"=== {@sheet :name?} ===" wl
+    $"=== {@sheet :name?} (hidden: {@sheet :hidden? str}, visibility: {@sheet :visibility?}) ===" wl
     @sheet :data? 1 enumerateN each.
         # 2unpack row!, rowNum!
         row!
