@@ -1087,12 +1087,17 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 			{Inputs: []TypeId{TidBytes}, Outputs: []TypeId{arena.MakeVar(0)}, Generics: []TypeVarId{0}},
 		}
 	}
-	// parseExcel : (path|bytes -- [{name: str, data: [[v]], hidden: bool, visibility: str}])
+	// parseExcel : (path|bytes -- [{name: str, data: [[str|float|bool|Maybe[v]]], hidden: bool, visibility: str}])
+	//
+	// A cell is a string, a float (numbers and dates), a bool, or a None Maybe
+	// (error cells like #DIV/0!). The Maybe carries a free inner type because an
+	// error cell is always None, mirroring how `none` itself is typed.
 	{
 		v := arena.MakeVar(0)
+		cell := arena.MakeUnion([]TypeId{TidStr, TidFloat, TidBool, arena.MakeMaybe(v)}, 0)
 		sheet := arena.MakeShape([]ShapeField{
 			{Name: names.Intern("name"), Type: TidStr},
-			{Name: names.Intern("data"), Type: arena.MakeList(arena.MakeList(v))},
+			{Name: names.Intern("data"), Type: arena.MakeList(arena.MakeList(cell))},
 			{Name: names.Intern("hidden"), Type: TidBool},
 			{Name: names.Intern("visibility"), Type: TidStr},
 		})

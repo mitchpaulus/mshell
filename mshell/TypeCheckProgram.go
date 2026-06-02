@@ -581,16 +581,37 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 		return
 
 	case *MShellIndexerList:
-		var indexed TypeId
 		elementIndex := isSingleElementIndexer(it)
-		if c.stack.Len() > 0 {
-			indexed = c.stack.items[c.stack.Len()-1]
-			c.stack.items = c.stack.items[:c.stack.Len()-1]
-		} else if c.inferring {
-			indexed = c.subst.FreshVar(c.arena)
-			c.inferInputs = append([]TypeId{indexed}, c.inferInputs...)
+
+		// Nothing to index outside inference: keep the lenient fresh-var
+		// result rather than reporting underflow (matches the getter case).
+		if c.stack.Len() == 0 && !c.inferring {
+			c.stack.Push(c.subst.FreshVar(c.arena))
+			return
 		}
-		c.stack.Push(c.indexerResultType(indexed, elementIndex))
+
+		// Grids/gridviews yield a GridRow whose schema is computed from the
+		// specific receiver, and brands pass through — neither is expressible
+		// as a generic candidate signature, so resolve them directly off the
+		// receiver.
+		if c.stack.Len() > 0 {
+			recv := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-1])
+			switch n := c.arena.Node(recv); n.Kind {
+			case TKGrid, TKGridView:
+				c.stack.items[c.stack.Len()-1] = c.arena.MakeGridRow(n.Extra)
+				return
+			case TKBrand:
+				c.stack.items[c.stack.Len()-1] = recv
+				return
+			}
+		}
+
+		// Every other receiver dispatches through the shared overload
+		// machinery: a concrete container resolves a single arm with full
+		// element/value precision, while an unbound-var receiver inside a
+		// quote fans out into an overloaded quote so consumers like `map`
+		// recover the element type.
+		c.resolveAndApply(c.indexerCandidates(elementIndex), it.GetStartToken())
 		return
 
 	case MShellVarstoreList:
@@ -1322,30 +1343,34 @@ func isSingleElementIndexer(indexers *MShellIndexerList) bool {
 	return ok && tok.Type == INDEXER
 }
 
-func (c *Checker) indexerResultType(t TypeId, elementIndex bool) TypeId {
-	if t == TidNothing {
-		return c.subst.FreshVar(c.arena)
-	}
-	r := c.subst.Apply(c.arena, t)
-	n := c.arena.Node(r)
-	switch n.Kind {
-	case TKBrand:
-		return r
-	case TKList:
-		if !elementIndex {
-			return r
-		}
-		return TypeId(n.A)
-	case TKGrid, TKGridView:
-		return c.arena.MakeGridRow(n.Extra)
-	case TKDict:
-		return TypeId(n.B)
-	case TKPrim:
-		if r == TidStr || r == TidPath {
-			return TidStr
+// indexerCandidates returns the overload arms for an indexer/slice whose
+// result type is a pure function of the receiver and is therefore expressible
+// as a generic signature. Receivers whose result is computed from the specific
+// receiver (grids/gridviews → schema-carrying GridRow, brands) are handled
+// directly at the call site, not here.
+//
+// elementIndex selects between single-element extraction (`:i:`) and a
+// sub-range (`i:`, `:j`, `i:j`, or a multi-indexer). Both forms narrow path to
+// str, matching the runtime.
+func (c *Checker) indexerCandidates(elementIndex bool) []QuoteSig {
+	a := c.arena
+	v := a.MakeVar(0)
+	if elementIndex {
+		return []QuoteSig{
+			{Inputs: []TypeId{a.MakeList(v)}, Outputs: []TypeId{v}, Generics: []TypeVarId{0}},
+			{Inputs: []TypeId{a.MakeDict(TidStr, v)}, Outputs: []TypeId{v}, Generics: []TypeVarId{0}},
+			{Inputs: []TypeId{TidStr}, Outputs: []TypeId{TidStr}},
+			{Inputs: []TypeId{TidPath}, Outputs: []TypeId{TidStr}},
+			{Inputs: []TypeId{TidBytes}, Outputs: []TypeId{TidBytes}},
 		}
 	}
-	return c.subst.FreshVar(c.arena)
+	return []QuoteSig{
+		{Inputs: []TypeId{a.MakeList(v)}, Outputs: []TypeId{a.MakeList(v)}, Generics: []TypeVarId{0}},
+		{Inputs: []TypeId{a.MakeDict(TidStr, v)}, Outputs: []TypeId{v}, Generics: []TypeVarId{0}},
+		{Inputs: []TypeId{TidStr}, Outputs: []TypeId{TidStr}},
+		{Inputs: []TypeId{TidPath}, Outputs: []TypeId{TidStr}},
+		{Inputs: []TypeId{TidBytes}, Outputs: []TypeId{TidBytes}},
+	}
 }
 
 // isBoolOrInt reports whether t resolves to bool or int after applying
