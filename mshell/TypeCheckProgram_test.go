@@ -211,6 +211,20 @@ func TestTypeCheckIndexerExtractorKeyCoercible(t *testing.T) {
 	}
 }
 
+// Indexing a quote-bound variable whose type isn't pinned yet (here `@row`,
+// fixed later by the enclosing `map`) must NOT fan out across the container
+// overload arms — doing so binds the shared variable to a different container
+// per branch and corrupts the inferred element type. The body builds a [str],
+// so the map yields [[str]]; the trailing `:0: :0:` only type-checks if that
+// nested-list shape survived (the buggy fan-out collapsed it to [int], on
+// which the second index errors).
+func TestTypeCheckIndexerOnUnpinnedBoundVarDefers(t *testing.T) {
+	errs, ok := parseAndCheck(t, "[[1 2] [3 4]] map. row! [ @row :0: str ] end :0: :0:")
+	if !ok || len(errs) != 0 {
+		t.Fatalf("expected indexing an unpinned bound var inside map to preserve [[str]]; errs=%v", errs)
+	}
+}
+
 func TestTypeCheckProgramOverloadedQuoteResolvesFromExpectedQuote(t *testing.T) {
 	src := `
 def useDateCmp (datetime datetime (datetime datetime -- bool) -- bool)

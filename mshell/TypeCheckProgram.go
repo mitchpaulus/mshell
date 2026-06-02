@@ -583,34 +583,46 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 	case *MShellIndexerList:
 		elementIndex := isSingleElementIndexer(it)
 
-		// Nothing to index outside inference: keep the lenient fresh-var
-		// result rather than reporting underflow (matches the getter case).
-		if c.stack.Len() == 0 && !c.inferring {
+		// Empty stack: the receiver is the indexer's input.
+		if c.stack.Len() == 0 {
+			if c.inferring {
+				// We're characterizing a quote whose body starts with the
+				// indexer (e.g. `(2:)`). Dispatch the overload arms so the
+				// quote captures the input→output link and fans out into an
+				// overloaded quote that consumers like `map` can resolve.
+				c.resolveAndApply(c.indexerCandidates(elementIndex), it.GetStartToken())
+			} else {
+				// Nothing to index; stay lenient rather than reporting
+				// underflow (matches the getter case).
+				c.stack.Push(c.subst.FreshVar(c.arena))
+			}
+			return
+		}
+
+		recv := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-1])
+		switch n := c.arena.Node(recv); n.Kind {
+		case TKGrid, TKGridView:
+			// GridRow result carries the receiver's specific schema, which
+			// can't be expressed as a generic candidate signature.
+			c.stack.items[c.stack.Len()-1] = c.arena.MakeGridRow(n.Extra)
+			return
+		case TKBrand:
+			c.stack.items[c.stack.Len()-1] = recv
+			return
+		case TKVar:
+			// The receiver is a real stack value whose type isn't known yet —
+			// commonly a quote-bound variable (`row!` then `@row :0:`) that an
+			// outer `map`/apply will pin later. Fanning out here would bind
+			// that shared variable to one container per overload arm and
+			// pollute inference, so defer: yield a fresh result and let the
+			// receiver be refined by the constraints that follow.
+			c.stack.items = c.stack.items[:c.stack.Len()-1]
 			c.stack.Push(c.subst.FreshVar(c.arena))
 			return
 		}
 
-		// Grids/gridviews yield a GridRow whose schema is computed from the
-		// specific receiver, and brands pass through — neither is expressible
-		// as a generic candidate signature, so resolve them directly off the
-		// receiver.
-		if c.stack.Len() > 0 {
-			recv := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-1])
-			switch n := c.arena.Node(recv); n.Kind {
-			case TKGrid, TKGridView:
-				c.stack.items[c.stack.Len()-1] = c.arena.MakeGridRow(n.Extra)
-				return
-			case TKBrand:
-				c.stack.items[c.stack.Len()-1] = recv
-				return
-			}
-		}
-
-		// Every other receiver dispatches through the shared overload
-		// machinery: a concrete container resolves a single arm with full
-		// element/value precision, while an unbound-var receiver inside a
-		// quote fans out into an overloaded quote so consumers like `map`
-		// recover the element type.
+		// Concrete container: dispatch through the shared overload machinery,
+		// which resolves a single arm with full element/value precision.
 		c.resolveAndApply(c.indexerCandidates(elementIndex), it.GetStartToken())
 		return
 
