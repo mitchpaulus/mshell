@@ -61,10 +61,29 @@ func (s *Substitution) Rollback(snap SubstCheckpoint) {
 // composites and rebuilding them if any inner type changed. Path
 // compression is applied to variable chains so repeated lookups are fast.
 func (s *Substitution) Apply(arena *TypeArena, t TypeId) TypeId {
+	return s.applyImpl(arena, t, nil)
+}
+
+// applyImpl is the shared resolver behind Apply. `skip` holds TypeVarIds that
+// must be left untouched: a quote signature's locally-scoped generics are
+// symbolic (renamed by Instantiate at each use site) and don't address the
+// live substitution, so resolving one could bake an unrelated binding for the
+// same TypeVarId into the stored sig — e.g. the `T` in a `(len)` quote
+// inferred as `([T] -- int)`. skip is nil for ordinary Apply and is populated
+// only while rebuilding the inputs/outputs of a quote whose Generics are
+// still in place.
+//
+// Path compression (writing the resolved type back into the bound slice) only
+// happens on full resolves (skip empty); a skipped resolve may leave some
+// vars unresolved, so caching it would be wrong.
+func (s *Substitution) applyImpl(arena *TypeArena, t TypeId, skip map[TypeVarId]struct{}) TypeId {
 	n := arena.Node(t)
 	switch n.Kind {
 	case TKVar:
 		v := TypeVarId(n.A)
+		if _, blocked := skip[v]; blocked {
+			return t
+		}
 		if int(v) >= len(s.bound) {
 			return t
 		}
@@ -72,24 +91,26 @@ func (s *Substitution) Apply(arena *TypeArena, t TypeId) TypeId {
 		if bv == TidNothing {
 			return t
 		}
-		resolved := s.Apply(arena, bv)
-		s.bound[v] = resolved // path compression
+		resolved := s.applyImpl(arena, bv, skip)
+		if len(skip) == 0 {
+			s.bound[v] = resolved // path compression
+		}
 		return resolved
 	case TKMaybe:
-		inner := s.Apply(arena, TypeId(n.A))
+		inner := s.applyImpl(arena, TypeId(n.A), skip)
 		if inner == TypeId(n.A) {
 			return t
 		}
 		return arena.MakeMaybe(inner)
 	case TKList:
-		inner := s.Apply(arena, TypeId(n.A))
+		inner := s.applyImpl(arena, TypeId(n.A), skip)
 		if inner == TypeId(n.A) {
 			return t
 		}
 		return arena.MakeList(inner)
 	case TKDict:
-		k := s.Apply(arena, TypeId(n.A))
-		v := s.Apply(arena, TypeId(n.B))
+		k := s.applyImpl(arena, TypeId(n.A), skip)
+		v := s.applyImpl(arena, TypeId(n.B), skip)
 		if k == TypeId(n.A) && v == TypeId(n.B) {
 			return t
 		}
@@ -146,15 +167,9 @@ func (s *Substitution) Apply(arena *TypeArena, t TypeId) TypeId {
 		return arena.MakeCommand(argv, CommandCaptureMode(n.B), CommandCaptureMode(n.Extra))
 	case TKQuote:
 		sig := arena.quoteSigs[n.Extra]
-		// Vars listed in sig.Generics are scoped to this sig — they
-		// are renamed by Instantiate at each use site, and must not
-		// be resolved through the global substitution here. Without
-		// this guard a free generic var (e.g. the `T` in a `(len)`
-		// quote inferred as `([T] -- int)`) could collide with an
-		// unrelated binding for the same TypeVarId in the current
-		// substitution and bake a concrete type into the stored sig.
-		newIn, inChanged := s.applySpanExcluding(arena, sig.Inputs, sig.Generics)
-		newOut, outChanged := s.applySpanExcluding(arena, sig.Outputs, sig.Generics)
+		inner := genericsSkip(sig)
+		newIn, inChanged := s.mapSpan(arena, sig.Inputs, inner)
+		newOut, outChanged := s.mapSpan(arena, sig.Outputs, inner)
 		if !inChanged && !outChanged {
 			return t
 		}
@@ -171,8 +186,9 @@ func (s *Substitution) Apply(arena *TypeArena, t TypeId) TypeId {
 		rebuilt := make([]QuoteSig, len(sigs))
 		changed := false
 		for i, sig := range sigs {
-			newIn, inChanged := s.applySpanExcluding(arena, sig.Inputs, sig.Generics)
-			newOut, outChanged := s.applySpanExcluding(arena, sig.Outputs, sig.Generics)
+			inner := genericsSkip(sig)
+			newIn, inChanged := s.mapSpan(arena, sig.Inputs, inner)
+			newOut, outChanged := s.mapSpan(arena, sig.Outputs, inner)
 			rebuilt[i] = QuoteSig{
 				Inputs:   newIn,
 				Outputs:  newOut,
@@ -193,15 +209,16 @@ func (s *Substitution) Apply(arena *TypeArena, t TypeId) TypeId {
 	return t
 }
 
-// applySpan walks a slice of TypeIds, returning a new slice if any element
-// resolved to something different and signaling whether the rebuild
-// happened. The original slice is returned untouched on no-change so
-// callers can compare slice headers cheaply.
-func (s *Substitution) applySpan(arena *TypeArena, span []TypeId) ([]TypeId, bool) {
+// mapSpan walks a slice of TypeIds through applyImpl, returning a new slice if
+// any element resolved to something different and signaling whether the
+// rebuild happened. The original slice is returned untouched on no-change so
+// callers can compare slice headers cheaply. `skip` is threaded into each
+// element's resolution (empty for the ordinary case).
+func (s *Substitution) mapSpan(arena *TypeArena, span []TypeId, skip map[TypeVarId]struct{}) ([]TypeId, bool) {
 	var out []TypeId
 	changed := false
 	for i, x := range span {
-		rx := s.Apply(arena, x)
+		rx := s.applyImpl(arena, x, skip)
 		if rx != x && !changed {
 			out = make([]TypeId, len(span))
 			copy(out, span[:i])
@@ -217,82 +234,17 @@ func (s *Substitution) applySpan(arena *TypeArena, span []TypeId) ([]TypeId, boo
 	return out, true
 }
 
-// applySpanExcluding is applySpan that leaves vars listed in
-// `excluded` untouched (so a sig's locally-scoped generics aren't
-// resolved through the global substitution).
-func (s *Substitution) applySpanExcluding(arena *TypeArena, span []TypeId, excluded []TypeVarId) ([]TypeId, bool) {
-	if len(excluded) == 0 {
-		return s.applySpan(arena, span)
+// genericsSkip builds the skip-set for a quote signature's locally-scoped
+// generics, or nil when the sig is monomorphic.
+func genericsSkip(sig QuoteSig) map[TypeVarId]struct{} {
+	if len(sig.Generics) == 0 {
+		return nil
 	}
-	skip := make(map[TypeVarId]struct{}, len(excluded))
-	for _, v := range excluded {
+	skip := make(map[TypeVarId]struct{}, len(sig.Generics))
+	for _, v := range sig.Generics {
 		skip[v] = struct{}{}
 	}
-	var out []TypeId
-	changed := false
-	for i, x := range span {
-		rx := s.applyExcluding(arena, x, skip)
-		if rx != x && !changed {
-			out = make([]TypeId, len(span))
-			copy(out, span[:i])
-			changed = true
-		}
-		if changed {
-			out[i] = rx
-		}
-	}
-	if !changed {
-		return span, false
-	}
-	return out, true
-}
-
-// applyExcluding is Apply with a set of TypeVarIds to leave alone.
-// Mirrors Apply but recurses into composites with the same skip set
-// so a nested var in `excluded` doesn't get resolved either.
-func (s *Substitution) applyExcluding(arena *TypeArena, t TypeId, skip map[TypeVarId]struct{}) TypeId {
-	n := arena.Node(t)
-	switch n.Kind {
-	case TKVar:
-		v := TypeVarId(n.A)
-		if _, blocked := skip[v]; blocked {
-			return t
-		}
-		if int(v) >= len(s.bound) {
-			return t
-		}
-		bv := s.bound[v]
-		if bv == TidNothing {
-			return t
-		}
-		return s.applyExcluding(arena, bv, skip)
-	case TKMaybe:
-		inner := s.applyExcluding(arena, TypeId(n.A), skip)
-		if inner == TypeId(n.A) {
-			return t
-		}
-		return arena.MakeMaybe(inner)
-	case TKList:
-		inner := s.applyExcluding(arena, TypeId(n.A), skip)
-		if inner == TypeId(n.A) {
-			return t
-		}
-		return arena.MakeList(inner)
-	case TKDict:
-		k := s.applyExcluding(arena, TypeId(n.A), skip)
-		v := s.applyExcluding(arena, TypeId(n.B), skip)
-		if k == TypeId(n.A) && v == TypeId(n.B) {
-			return t
-		}
-		return arena.MakeDict(k, v)
-	}
-	// Fall through to the standard Apply for kinds where Generics
-	// scoping doesn't add anything (TKShape, TKUnion, etc. — those
-	// don't have nested QuoteSigs that would re-enter the
-	// generics-aware path; even if they did, recursing into them via
-	// Apply is correct because their type-vars aren't a sig's
-	// locally-scoped generics).
-	return s.Apply(arena, t)
+	return skip
 }
 
 // Bind sets the variable v's resolution to t. Returns false on occurs-check
@@ -321,65 +273,74 @@ func (s *Substitution) Bind(arena *TypeArena, v TypeVarId, t TypeId) bool {
 // occurs reports whether v appears anywhere within t (after resolving
 // chained variable bindings). Required to keep the substitution finite.
 func (s *Substitution) occurs(arena *TypeArena, v TypeVarId, t TypeId) bool {
-	n := arena.Node(t)
-	switch n.Kind {
-	case TKVar:
-		if TypeVarId(n.A) == v {
+	return arena.walkTypeVars(t, func(x TypeVarId) bool {
+		if x == v {
 			return true
 		}
-		if int(n.A) < len(s.bound) && s.bound[n.A] != TidNothing {
-			return s.occurs(arena, v, s.bound[n.A])
+		// Follow a bound variable's chain; an occurrence reachable only
+		// through the binding still counts.
+		if int(x) < len(s.bound) && s.bound[x] != TidNothing {
+			return s.occurs(arena, v, s.bound[x])
 		}
 		return false
+	})
+}
+
+// walkTypeVars visits each TKVar reachable from t by descending structurally
+// through every composite kind. For every variable it calls visit(v); a true
+// return short-circuits the whole walk and walkTypeVars returns true. The
+// visit callback owns any substitution-chain following — it has the context
+// to decide whether a bound variable's binding should be chased.
+func (a *TypeArena) walkTypeVars(t TypeId, visit func(TypeVarId) bool) bool {
+	n := a.Node(t)
+	switch n.Kind {
+	case TKVar:
+		return visit(TypeVarId(n.A))
 	case TKMaybe, TKList:
-		return s.occurs(arena, v, TypeId(n.A))
+		return a.walkTypeVars(TypeId(n.A), visit)
 	case TKDict:
-		return s.occurs(arena, v, TypeId(n.A)) || s.occurs(arena, v, TypeId(n.B))
-	case TKShape:
-		for _, f := range arena.shapeFields[n.Extra] {
-			if s.occurs(arena, v, f.Type) {
-				return true
-			}
-		}
-		return false
-	case TKUnion:
-		for _, a := range arena.unionMembers[n.Extra] {
-			if s.occurs(arena, v, a) {
-				return true
-			}
-		}
-		return false
+		return a.walkTypeVars(TypeId(n.A), visit) || a.walkTypeVars(TypeId(n.B), visit)
 	case TKBrand:
-		return s.occurs(arena, v, TypeId(n.B))
+		return a.walkTypeVars(TypeId(n.B), visit)
 	case TKCommand:
-		return s.occurs(arena, v, TypeId(n.A))
+		return a.walkTypeVars(TypeId(n.A), visit)
+	case TKShape:
+		for _, f := range a.shapeFields[n.Extra] {
+			if a.walkTypeVars(f.Type, visit) {
+				return true
+			}
+		}
+	case TKUnion:
+		for _, m := range a.unionMembers[n.Extra] {
+			if a.walkTypeVars(m, visit) {
+				return true
+			}
+		}
 	case TKQuote:
-		sig := arena.quoteSigs[n.Extra]
-		for _, in := range sig.Inputs {
-			if s.occurs(arena, v, in) {
-				return true
-			}
+		if a.walkSigVars(a.quoteSigs[n.Extra], visit) {
+			return true
 		}
-		for _, out := range sig.Outputs {
-			if s.occurs(arena, v, out) {
-				return true
-			}
-		}
-		return false
 	case TKOverloadedQuote:
-		for _, sig := range arena.overloadedQuoteSigs[n.Extra] {
-			for _, in := range sig.Inputs {
-				if s.occurs(arena, v, in) {
-					return true
-				}
-			}
-			for _, out := range sig.Outputs {
-				if s.occurs(arena, v, out) {
-					return true
-				}
+		for _, sig := range a.overloadedQuoteSigs[n.Extra] {
+			if a.walkSigVars(sig, visit) {
+				return true
 			}
 		}
-		return false
+	}
+	return false
+}
+
+// walkSigVars visits the TKVars in a quote signature's inputs and outputs.
+func (a *TypeArena) walkSigVars(sig QuoteSig, visit func(TypeVarId) bool) bool {
+	for _, in := range sig.Inputs {
+		if a.walkTypeVars(in, visit) {
+			return true
+		}
+	}
+	for _, out := range sig.Outputs {
+		if a.walkTypeVars(out, visit) {
+			return true
+		}
 	}
 	return false
 }

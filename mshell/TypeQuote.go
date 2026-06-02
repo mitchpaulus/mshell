@@ -144,7 +144,7 @@ func (c *Checker) inferQuoteSigsItems(body []MShellParseItem) []QuoteSig {
 // handler) fan out via the checker's branchSpawn slice, which
 // tryBranchStep reads. There is no fan-out at this level — the driver
 // is intentionally one path so token-level specials (tryIff, tryGridJoin,
-// tryReturn, tryQuoteRedirect, ...) inside checkOne always fire before
+// tryReturn, tryRedirect, ...) inside checkOne always fire before
 // dispatch.
 func (c *Checker) driveBranchesOverItems(initial []quoteBranch, body []MShellParseItem) []quoteBranch {
 	return c.driveBranches(initial, len(body), func(i int) func() {
@@ -210,19 +210,10 @@ func (c *Checker) driveBranches(
 // surrounding scope), start with an empty stack, and begin inferring
 // with no fresh inputs accumulated yet.
 func (c *Checker) initialQuoteBranch(outerSnap ScopeSnapshot) quoteBranch {
-	var stack []TypeId
-	inheritedVars := make(map[NameId]TypeId, len(outerSnap.vars))
-	for k, v := range outerSnap.vars {
-		inheritedVars[k] = v
-	}
-	inheritedMaybe := make(map[NameId]TypeId, len(outerSnap.maybeVars))
-	for k, v := range outerSnap.maybeVars {
-		inheritedMaybe[k] = v
-	}
 	return quoteBranch{
-		stack:       stack,
-		vars:        inheritedVars,
-		maybeVars:   inheritedMaybe,
+		stack:       nil,
+		vars:        copyVarMap(outerSnap.vars),
+		maybeVars:   copyVarMap(outerSnap.maybeVars),
 		inferInputs: nil,
 		diverged:    false,
 		inferring:   true,
@@ -551,52 +542,17 @@ func collectFreeTypeVars(arena *TypeArena, inputs, outputs []TypeId, bindings ma
 }
 
 // walkFreeTypeVars descends a TypeId and appends any TKVar's
-// TypeVarId to `ordered` (deduped via `seen`). Composite kinds are
-// recursed structurally; lookups don't go through the substitution
-// because callers pass already-Apply'd TypeIds, so any remaining
-// TKVar is genuinely free.
+// TypeVarId to `ordered` (deduped via `seen`). Lookups don't go through
+// the substitution because callers pass already-Apply'd TypeIds, so any
+// remaining TKVar is genuinely free.
 func walkFreeTypeVars(arena *TypeArena, t TypeId, seen map[TypeVarId]struct{}, ordered *[]TypeVarId) {
-	n := arena.Node(t)
-	switch n.Kind {
-	case TKVar:
-		id := TypeVarId(n.A)
+	arena.walkTypeVars(t, func(id TypeVarId) bool {
 		if _, dup := seen[id]; !dup {
 			seen[id] = struct{}{}
 			*ordered = append(*ordered, id)
 		}
-	case TKMaybe:
-		walkFreeTypeVars(arena, TypeId(n.A), seen, ordered)
-	case TKList:
-		walkFreeTypeVars(arena, TypeId(n.A), seen, ordered)
-	case TKDict:
-		walkFreeTypeVars(arena, TypeId(n.A), seen, ordered)
-		walkFreeTypeVars(arena, TypeId(n.B), seen, ordered)
-	case TKQuote:
-		sig := arena.QuoteSig(t)
-		for _, in := range sig.Inputs {
-			walkFreeTypeVars(arena, in, seen, ordered)
-		}
-		for _, out := range sig.Outputs {
-			walkFreeTypeVars(arena, out, seen, ordered)
-		}
-	case TKOverloadedQuote:
-		for _, sig := range arena.overloadedQuoteSigs[n.Extra] {
-			for _, in := range sig.Inputs {
-				walkFreeTypeVars(arena, in, seen, ordered)
-			}
-			for _, out := range sig.Outputs {
-				walkFreeTypeVars(arena, out, seen, ordered)
-			}
-		}
-	case TKUnion:
-		for _, member := range arena.unionMembers[n.Extra] {
-			walkFreeTypeVars(arena, member, seen, ordered)
-		}
-	case TKShape:
-		for _, f := range arena.shapeFields[n.Extra] {
-			walkFreeTypeVars(arena, f.Type, seen, ordered)
-		}
-	}
+		return false // never short-circuit; collect them all
+	})
 }
 
 // dedupeQuoteSigs drops sigs that are structurally identical to an
