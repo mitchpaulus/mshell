@@ -42,32 +42,20 @@ type ScopeSnapshot struct {
 // The returned snapshot is detached from the live state — mutating the
 // checker after calling Snapshot does not change it.
 func (c *Checker) Snapshot() ScopeSnapshot {
-	stackCopy := make([]TypeId, len(c.stack.items))
-	copy(stackCopy, c.stack.items)
-	varsCopy := make(map[NameId]TypeId, len(c.vars.bound))
-	for k, v := range c.vars.bound {
-		varsCopy[k] = v
+	return ScopeSnapshot{
+		stack:     append([]TypeId(nil), c.stack.items...),
+		vars:      copyVarMap(c.vars.bound),
+		maybeVars: copyVarMap(c.vars.maybeBound),
+		diverged:  c.diverged,
 	}
-	maybeCopy := make(map[NameId]TypeId, len(c.vars.maybeBound))
-	for k, v := range c.vars.maybeBound {
-		maybeCopy[k] = v
-	}
-	return ScopeSnapshot{stack: stackCopy, vars: varsCopy, maybeVars: maybeCopy, diverged: c.diverged}
 }
 
 // Fork resets the checker's stack and var env to a copy of snap. The
 // snapshot itself is untouched, so it can be reused for sibling arms.
 func (c *Checker) Fork(snap ScopeSnapshot) {
-	c.stack.items = c.stack.items[:0]
-	c.stack.items = append(c.stack.items, snap.stack...)
-	c.vars.bound = make(map[NameId]TypeId, len(snap.vars))
-	for k, v := range snap.vars {
-		c.vars.bound[k] = v
-	}
-	c.vars.maybeBound = make(map[NameId]TypeId, len(snap.maybeVars))
-	for k, v := range snap.maybeVars {
-		c.vars.maybeBound[k] = v
-	}
+	c.stack.items = append(c.stack.items[:0], snap.stack...)
+	c.vars.bound = copyVarMap(snap.vars)
+	c.vars.maybeBound = copyVarMap(snap.maybeVars)
 	c.diverged = snap.diverged
 }
 
@@ -95,17 +83,12 @@ type BranchArm struct {
 // has no way to detect every divergent path on its own (e.g. a
 // definition that always exits cannot be inferred at this level).
 func (c *Checker) CaptureArm(diverged bool) BranchArm {
-	stackCopy := make([]TypeId, len(c.stack.items))
-	copy(stackCopy, c.stack.items)
-	varsCopy := make(map[NameId]TypeId, len(c.vars.bound))
-	for k, v := range c.vars.bound {
-		varsCopy[k] = v
+	return BranchArm{
+		Stack:     append([]TypeId(nil), c.stack.items...),
+		Vars:      copyVarMap(c.vars.bound),
+		MaybeVars: copyVarMap(c.vars.maybeBound),
+		Diverged:  diverged,
 	}
-	maybeCopy := make(map[NameId]TypeId, len(c.vars.maybeBound))
-	for k, v := range c.vars.maybeBound {
-		maybeCopy[k] = v
-	}
-	return BranchArm{Stack: stackCopy, Vars: varsCopy, MaybeVars: maybeCopy, Diverged: diverged}
 }
 
 // ReconcileArms merges per-arm tail states into a single post-branch
@@ -163,14 +146,8 @@ func (c *Checker) ReconcileArms(arms []BranchArm, callSite Token) {
 		// Recovery: take the first non-diverged arm's tail as the merged
 		// state so downstream errors don't cascade off a missing stack.
 		c.stack.items = append(c.stack.items[:0], first.Stack...)
-		c.vars.bound = make(map[NameId]TypeId, len(first.Vars))
-		for k, v := range first.Vars {
-			c.vars.bound[k] = v
-		}
-		c.vars.maybeBound = make(map[NameId]TypeId, len(first.MaybeVars))
-		for k, v := range first.MaybeVars {
-			c.vars.maybeBound[k] = v
-		}
+		c.vars.bound = copyVarMap(first.Vars)
+		c.vars.maybeBound = copyVarMap(first.MaybeVars)
 		return
 	}
 

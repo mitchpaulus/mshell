@@ -318,10 +318,7 @@ func (c *Checker) checkOne(tok Token) {
 				return
 			}
 		}
-		if c.tryQuoteRedirect(tok) {
-			return
-		}
-		if c.tryCommandRedirect(tok) {
+		if c.tryRedirect(tok) {
 			return
 		}
 		c.resolveAndApply(sigs, tok)
@@ -809,7 +806,13 @@ func (c *Checker) tryPivot(tok Token) bool {
 	return true
 }
 
-func (c *Checker) tryQuoteRedirect(tok Token) bool {
+// tryRedirect handles a redirect op (`>`, `<`, `>e`, ...) applied to a
+// `<operand> <target>` stack, where operand is a quote (single or overloaded)
+// or a command-like value (list/command) and target is a writable path
+// (str/path/bytes). It pops the target, leaving the operand on top. Returns
+// false (no effect) when the op or stack shape doesn't match, so the caller
+// falls through to ordinary builtin dispatch.
+func (c *Checker) tryRedirect(tok Token) bool {
 	switch tok.Type {
 	case LESSTHAN, GREATERTHAN, STDERRREDIRECT, STDERRAPPEND,
 		STDOUTANDSTDERRREDIRECT, STDOUTANDSTDERRAPPEND, INPLACEREDIRECT, STDAPPEND:
@@ -823,31 +826,8 @@ func (c *Checker) tryQuoteRedirect(tok Token) bool {
 	if target != TidStr && target != TidPath && target != TidBytes {
 		return false
 	}
-	quote := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-2])
-	switch c.arena.Kind(quote) {
-	case TKQuote, TKOverloadedQuote:
-		c.stack.items = c.stack.items[:c.stack.Len()-1]
-		return true
-	}
-	return false
-}
-
-func (c *Checker) tryCommandRedirect(tok Token) bool {
-	switch tok.Type {
-	case LESSTHAN, GREATERTHAN, STDERRREDIRECT, STDERRAPPEND,
-		STDOUTANDSTDERRREDIRECT, STDOUTANDSTDERRAPPEND, INPLACEREDIRECT, STDAPPEND:
-	default:
-		return false
-	}
-	if c.stack.Len() < 2 {
-		return false
-	}
-	target := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-1])
-	if target != TidStr && target != TidPath && target != TidBytes {
-		return false
-	}
-	cmd := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-2])
-	if !c.isCommandLike(cmd) {
+	operand := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-2])
+	if !isQuoteKind(c.arena.Kind(operand)) && !c.isCommandLike(operand) {
 		return false
 	}
 	c.stack.items = c.stack.items[:c.stack.Len()-1]
