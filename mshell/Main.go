@@ -4601,6 +4601,8 @@ func binDebugCommand(name string) int {
 				fmt.Fprintf(os.Stdout, "Searched PATH: %s -> \033[31mfound %s (not executable)\033[0m\n", dir, candidate)
 			case binSearchDirNotAvailable:
 				fmt.Fprintf(os.Stdout, "Searched PATH: %s -> \033[31mdirectory not available\033[0m\n", dir)
+			case binSearchPathEntryIsFile:
+				fmt.Fprintf(os.Stdout, "Searched PATH: %s -> \033[31mPATH entry is a file, not a directory\033[0m\n", dir)
 			default:
 				fmt.Fprintf(os.Stdout, "Searched PATH: %s -> not found\n", dir)
 			}
@@ -4677,12 +4679,17 @@ const (
 	binSearchFound
 	binSearchNotExecutable
 	binSearchDirNotAvailable
+	binSearchPathEntryIsFile
 )
 
 func findBinaryInDirDetailed(dir string, name string) (string, binSearchStatus) {
 	// Short-circuit on non-statable directory
-	if _, err := os.Stat(dir); err != nil {
+	info, err := os.Stat(dir)
+	if err != nil {
 		return "", binSearchDirNotAvailable
+	}
+	if !info.IsDir() {
+		return "", binSearchPathEntryIsFile
 	}
 
 	if runtime.GOOS == "windows" {
