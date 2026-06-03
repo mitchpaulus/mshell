@@ -174,6 +174,26 @@ func TestTypeCheckProgramPrefixQuoteOverFreeVarShape(t *testing.T) {
 	}
 }
 
+// TestTypeCheckListLiteralOverloadBranch guards against a list literal
+// whose body contained an overloaded op that fans out. The literal used
+// a flat loop (checkParseItem per item) instead of the branching driver,
+// so the spawned branches were left dangling and the collected item
+// stack was corrupted — `[ a b ]` collapsed to a bare scalar, tripping a
+// downstream list consumer. Here `:0:` fans out on the generic `map.`
+// element and `floor` narrows it; the list must come out as `[int]` so
+// `sum` (which requires a list) accepts it.
+func TestTypeCheckListLiteralOverloadBranch(t *testing.T) {
+	src := "[ [1.5 2.0] ] map.\n" +
+		"  row!\n" +
+		"  [ @row :0: floor   @row :1: floor ]\n" +
+		"  sum\n" +
+		"end"
+	errs, ok := parseAndCheck(t, src)
+	if !ok || len(errs) != 0 {
+		t.Fatalf("expected list literal with fanned-out body to type-check; errs=%v", errs)
+	}
+}
+
 // TestTypeCheckProgramEachOverDefQuoteFreeVarShape guards against an
 // Apply bug where the generics-skip set was dropped when resolving a
 // quote signature whose generic type variable lived *inside* a shape or

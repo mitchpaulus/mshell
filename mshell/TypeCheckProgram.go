@@ -451,37 +451,44 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 		// literals become list-of-union, which is the closest static
 		// representation to mshell's runtime lists.
 		//
+		// The body is driven through the branching driver rather than a
+		// plain loop, so an overloaded op inside the literal (e.g. an
+		// indexer on a still-generic element type) fans out and each
+		// surviving resolution is reconciled. A flat loop would leave
+		// branchSpawn dangling and corrupt the collected item stack.
+		//
 		// listDepth is bumped so that bare LITERAL tokens inside the
 		// list (shell-style argv words) get typed as `str` instead
 		// of being flagged as unknown identifiers — see the
 		// matching branch in `checkOne`.
 		listScope := c.snapshotStack()
 		c.listDepth++
-		for _, sub := range it.Items {
-			c.checkParseItem(sub)
-		}
+		branches := c.driveBranchesOverItems([]quoteBranch{c.captureBranch()}, it.Items)
 		c.listDepth--
-		items := append([]TypeId(nil), c.stack.items[listScope.length:]...)
-		c.restoreStack(listScope)
-		if len(items) == 0 {
-			c.stack.Push(c.arena.MakeList(c.subst.FreshVar(c.arena)))
+		if len(branches) == 0 {
+			// The body failed; the representative error is already on
+			// c.errors. Restore the stack so the branch dies cleanly.
+			c.restoreStack(listScope)
 			return
 		}
-		// Detect homogeneity: every slot the same TypeId. Homogeneous
-		// literals stay as `[T]`. Heterogeneous literals collapse to
-		// `[T1 | T2 | ...]` — the element type is the union of the
-		// observed slot types, matching the structural-union direction.
-		homogeneous := true
-		for i := 1; i < len(items); i++ {
-			if items[i] != items[0] {
-				homogeneous = false
-				break
-			}
+		// Common case: the body didn't fan out. Push the list directly so
+		// callers that invoke checkParseItem outside the branching driver
+		// (e.g. dict-literal values) still see it on the stack. Only a
+		// genuine multi-branch body spawns — and that only arises while
+		// driven by the branching walker, which consumes branchSpawn.
+		if len(branches) == 1 {
+			c.loadBranch(branches[0])
+			items := append([]TypeId(nil), c.stack.items[listScope.length:]...)
+			c.restoreStack(listScope)
+			c.stack.Push(c.listTypeFromItems(items))
+			return
 		}
-		if homogeneous {
-			c.stack.Push(c.arena.MakeList(items[0]))
-		} else {
-			c.stack.Push(c.arena.MakeList(c.arena.MakeUnion(items, 0)))
+		for _, b := range branches {
+			c.loadBranch(b)
+			items := append([]TypeId(nil), c.stack.items[listScope.length:]...)
+			c.restoreStack(listScope)
+			c.stack.Push(c.listTypeFromItems(items))
+			c.branchSpawn = append(c.branchSpawn, c.captureBranch())
 		}
 		return
 
@@ -706,6 +713,28 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 		c.stack.Push(c.arena.MakeMaybe(c.lookupGetterValueType(top, nameId)))
 		return
 	}
+}
+
+// listTypeFromItems collapses the item types collected from a list
+// literal body into the list's static type. An empty body yields
+// `[fresh]`. A homogeneous body (every slot the same TypeId) stays
+// `[T]`; a heterogeneous one collapses to `[T1 | T2 | ...]`, matching
+// the structural-union direction.
+func (c *Checker) listTypeFromItems(items []TypeId) TypeId {
+	if len(items) == 0 {
+		return c.arena.MakeList(c.subst.FreshVar(c.arena))
+	}
+	homogeneous := true
+	for i := 1; i < len(items); i++ {
+		if items[i] != items[0] {
+			homogeneous = false
+			break
+		}
+	}
+	if homogeneous {
+		return c.arena.MakeList(items[0])
+	}
+	return c.arena.MakeList(c.arena.MakeUnion(items, 0))
 }
 
 // checkIfBlock drives an if/else-if/else chain through the branching
