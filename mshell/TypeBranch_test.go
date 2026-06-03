@@ -304,6 +304,37 @@ func TestExhaustiveUnionWildcard(t *testing.T) {
 	}
 }
 
+func TestExhaustivePrimTotalArm(t *testing.T) {
+	// A match on a `str` subject with a `str` type-pattern arm is total
+	// on its own: the arm covers every inhabitant of str, so no wildcard
+	// is required even though str has unbounded inhabitants.
+	c := freshChecker()
+	ok := c.CheckMatchExhaustive(TidStr,
+		[]MatchArmTag{
+			{Kind: MatchArmType, TypeArm: TidFloat},
+			{Kind: MatchArmType, TypeArm: TidStr},
+		},
+		mkTok(MATCH, "match"))
+	if !ok {
+		t.Fatalf("str arm on str subject should be exhaustive; errors: %+v", c.Errors())
+	}
+}
+
+func TestExhaustivePrimNoTotalArm(t *testing.T) {
+	// A match on a `str` subject without a str arm (or wildcard) is not
+	// exhaustive: a float arm covers none of str's inhabitants.
+	c := freshChecker()
+	ok := c.CheckMatchExhaustive(TidStr,
+		[]MatchArmTag{{Kind: MatchArmType, TypeArm: TidFloat}},
+		mkTok(MATCH, "match"))
+	if ok {
+		t.Fatalf("float-only arm on str subject should not be exhaustive")
+	}
+	if len(c.Errors()) != 1 || c.Errors()[0].Kind != TErrNonExhaustiveMatch {
+		t.Fatalf("expected non-exhaustive error, got %+v", c.Errors())
+	}
+}
+
 func TestReconcileWithMaybePattern(t *testing.T) {
 	// Simulate a `match` over Maybe[int]: the just-arm extracts the int,
 	// the none-arm produces a default. Reconciliation should give int.

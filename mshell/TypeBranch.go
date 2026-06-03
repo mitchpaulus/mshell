@@ -349,6 +349,13 @@ func (c *Checker) CheckMatchExhaustive(matched TypeId, arms []MatchArmTag, callS
 		if arm.Kind == MatchArmWildcard {
 			return true
 		}
+		// A type-pattern arm whose type equals the matched type covers
+		// every inhabitant of that type — it's a total arm. E.g. a
+		// `str` arm in a match on a `str` subject is exhaustive on its
+		// own, just like a wildcard.
+		if arm.Kind == MatchArmType && c.subst.Apply(c.arena, arm.TypeArm) == matched {
+			return true
+		}
 	}
 
 	n := c.arena.Node(matched)
