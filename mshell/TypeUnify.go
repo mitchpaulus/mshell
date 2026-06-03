@@ -120,7 +120,7 @@ func (s *Substitution) applyImpl(arena *TypeArena, t TypeId, skip map[TypeVarId]
 		var rebuilt []ShapeField
 		changed := false
 		for i, f := range fields {
-			rt := s.Apply(arena, f.Type)
+			rt := s.applyImpl(arena, f.Type, skip)
 			if rt != f.Type && !changed {
 				rebuilt = make([]ShapeField, len(fields))
 				copy(rebuilt, fields[:i])
@@ -139,7 +139,7 @@ func (s *Substitution) applyImpl(arena *TypeArena, t TypeId, skip map[TypeVarId]
 		var rebuilt []TypeId
 		changed := false
 		for i, a := range arms {
-			ra := s.Apply(arena, a)
+			ra := s.applyImpl(arena, a, skip)
 			if ra != a && !changed {
 				rebuilt = make([]TypeId, len(arms))
 				copy(rebuilt, arms[:i])
@@ -154,13 +154,13 @@ func (s *Substitution) applyImpl(arena *TypeArena, t TypeId, skip map[TypeVarId]
 		}
 		return arena.MakeUnion(rebuilt, NameId(n.A))
 	case TKBrand:
-		under := s.Apply(arena, TypeId(n.B))
+		under := s.applyImpl(arena, TypeId(n.B), skip)
 		if under == TypeId(n.B) {
 			return t
 		}
 		return arena.MakeBrand(NameId(n.A), under)
 	case TKCommand:
-		argv := s.Apply(arena, TypeId(n.A))
+		argv := s.applyImpl(arena, TypeId(n.A), skip)
 		if argv == TypeId(n.A) {
 			return t
 		}
