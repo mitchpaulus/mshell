@@ -194,6 +194,30 @@ func TestTypeCheckListLiteralOverloadBranch(t *testing.T) {
 	}
 }
 
+// TestTypeCheckProgramEachOverDefQuoteFreeVarShape guards against an
+// Apply bug where the generics-skip set was dropped when resolving a
+// quote signature whose generic type variable lived *inside* a shape or
+// union (rather than directly under a Maybe/List/Dict). A `def` whose
+// declared input is `parseExcel`'s sheet shape (cells are
+// str|float|bool|Maybe[T]) was wrapped in a quote and handed to `each`.
+// During overload resolution the quote's own generic — buried in the
+// nested `Maybe[T]` inside the data union — got resolved against a
+// reused-id binding, baking a recursive type into the sig and tripping
+// the occurs check, so `each` reported "no matching overload". The fix
+// threads the skip set through TKShape/TKUnion/TKBrand/TKCommand in
+// applyImpl.
+func TestTypeCheckProgramEachOverDefQuoteFreeVarShape(t *testing.T) {
+	src := "def handleSheet ({name: str, data: [[bool | float | str | Maybe[T0]]], hidden: bool, visibility: str} -- )\n" +
+		"    drop\n" +
+		"end\n" +
+		"`f.xlsx` parseExcel allData!\n" +
+		"@allData (handleSheet) each\n"
+	errs, ok := parseAndCheck(t, src)
+	if !ok || len(errs) != 0 {
+		t.Fatalf("expected each over def-quote with free-var shape to type-check; errs=%v", errs)
+	}
+}
+
 // Indexer/slice quotes route through the shared overload machinery rather
 // than the old indexerResultType punt, which collapsed an unknown receiver
 // to a disconnected fresh output var. These three tests pin the resulting

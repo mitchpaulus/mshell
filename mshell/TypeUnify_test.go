@@ -252,6 +252,41 @@ func TestApplyComposesQuote(t *testing.T) {
 	}
 }
 
+func TestApplySkipsQuoteGenericInsideShapeUnion(t *testing.T) {
+	// A quote's own generic must NOT be resolved by Apply, even when it
+	// is bound in the substitution (e.g. its id was reused after a
+	// rollback). The generics-skip set has to reach the var no matter
+	// how deeply it is nested. Here the generic sits inside
+	// Maybe -> union -> list -> list -> shape, so this exercises the
+	// shape and union threading specifically.
+	c := freshChecker()
+	arena := c.arena
+	v := c.subst.FreshVar(arena)
+	vid := TypeVarId(arena.Node(v).A)
+
+	cell := arena.MakeUnion([]TypeId{TidBool, TidStr, arena.MakeMaybe(v)}, 0)
+	shape := arena.MakeShape([]ShapeField{
+		{Name: c.names.Intern("data"), Type: arena.MakeList(arena.MakeList(cell))},
+	})
+	q := arena.MakeQuote(QuoteSig{
+		Inputs:   []TypeId{shape},
+		Generics: []TypeVarId{vid},
+	})
+
+	// Simulate id reuse: the generic's slot gets bound to some unrelated
+	// concrete type after the quote was built.
+	if !c.subst.Bind(arena, vid, TidInt) {
+		t.Fatalf("Bind should succeed")
+	}
+
+	// Because vid is the quote's own generic, Apply must leave the quote
+	// untouched — resolving it would bake TidInt into the stored sig.
+	if got := c.subst.Apply(arena, q); got != q {
+		t.Fatalf("Apply must skip a quote's own generic nested in a shape/union; got %s, want %s",
+			FormatType(arena, c.names, got), FormatType(arena, c.names, q))
+	}
+}
+
 func TestFormatTypeVar(t *testing.T) {
 	arena := NewTypeArena()
 	names := NewNameTable()
