@@ -1,0 +1,12 @@
+# Regression: a list literal whose body contains an overloaded operation
+# that fans out (here `:0:` on the still-generic `map.` element, narrowed
+# by `toFixed`) must reconcile the branches and produce `[str]`. The list
+# literal previously evaluated its body with a flat loop that ignored the
+# branch fan-out, collapsing `[ a b ]` to a bare scalar and tripping
+# `tjoin` with "expected [str], got str".
+[ [1.5 2.0] [3.25 4.0] ] map.
+    row!
+    [ @row :0: 2 toFixed   @row :1: 1 toFixed ]
+    tjoin
+end
+uw
