@@ -1,12 +1,11 @@
-# Regression: a quote wrapping a def whose declared signature has a free
+# Regression (#241): a quote wrapping a def whose declared signature has a free
 # type variable nested inside a shape (here `val: Maybe[T0]`) must unify
 # when handed to `each`. The list element type carries its own free var
 # (from the `none` cell), and the type checker previously corrupted the
 # quote's generic while resolving it, reporting a spurious
 # "no matching overload for 'each'".
 def showName ({name: str, val: Maybe[T0]} -- )
-    sheet!
-    @sheet :name? str wl
+    :name? str wl
 end
 
 [ {"name": "alice", "val": none} ] (showName) each
