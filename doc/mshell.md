@@ -911,8 +911,8 @@ end wl # Output: 11
 
 - `append`: Append, `([a] a -- [a])`
 - `map`: Map a quotation over a list, `([a] (a -- b) -- [b])`
-- `enumerate`: Pair each element with its zero-based index, returning `[a, int]` pairs. `([a] -- [[a int]])`
-- `enumerateN`: Pair elements with indices starting from the supplied offset, returning `[a, int]` pairs. `([a] int -- [[a int]])`
+- `enumerate`: Pair each element with its zero-based index, returning `{"item": a, "index": int}` dicts. Access the fields with `:item?` and `:index?`. `([a] -- [{"item": a, "index": int}])`
+- `enumerateN`: Pair elements with indices starting from the supplied offset, returning `{"item": a, "index": int}` dicts. `([a] int -- [{"item": a, "index": int}])`
 - `each`: Execute a quotation for each element in a list, `([a] (a -- ) -- )`
 - `eachWhile`: Execute a quotation for each element in a list, stopping when a false is left on the stack `([a] (a -- bool) -- )`
 - `takeWhile`: Return the leading elements of a list while the predicate remains true. `([a] (a -- bool) -- [a])`
