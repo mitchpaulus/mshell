@@ -638,6 +638,157 @@ def sumTo (int -- int)
 end
 ```
 
+## Control Flow
+
+### if / else* / else / end
+
+`if` is the primary conditional. The condition is evaluated before `if` and
+popped from the stack.
+
+```mshell
+true if
+    "condition was true" wl
+end
+```
+
+Add an `else` branch for the false case:
+
+```mshell
+false if
+    "true branch" wl
+else
+    "false branch" wl
+end
+```
+
+Use `else*` and `*if` for else-if chains:
+
+```mshell
+2 n!
+@n 1 = if
+    "one" wl
+else* @n 2 = *if
+    "two" wl
+else* @n 3 = *if
+    "three" wl
+else
+    "other" wl
+end
+```
+
+Conditions can be booleans or integers.
+For integers, `0` is true (like Unix exit codes) and non-zero is false.
+
+```mshell
+0 if "zero is true" wl end
+1 if "not printed" wl end
+```
+
+### iff
+
+`iff` is a postfix conditional that executes quotations based on a condition.
+It has a two-argument form (no false branch) and a three-argument form.
+
+```mshell
+# Two-argument form: condition (true-quote) iff
+true ("was true" wl) iff
+
+# Three-argument form: condition (true-quote) (false-quote) iff
+false ("true" wl) ("false" wl) iff
+```
+
+It is useful for inline conditionals:
+
+```mshell
+@count 0 > (@items process) iff
+```
+
+### loop
+
+`loop` repeatedly executes a quotation until `break` is called.
+
+```mshell
+0 i!
+(
+    @i 5 >= if break end
+    @i wl
+    @i 1 + i!
+) loop
+# Output: 0 1 2 3 4 (one per line)
+```
+
+### break
+
+`break` exits the innermost loop.
+
+```mshell
+0 i!
+(
+    @i 1 + i!
+    @i 3 = if
+        "breaking" wl
+        break
+    end
+    @i wl
+) loop
+"done" wl
+# Output: 1 2 breaking done (one per line)
+```
+
+### continue
+
+`continue` skips the rest of the current iteration and starts the next one.
+
+```mshell
+0 i!
+(
+    @i 5 >= if break end
+    @i 1 + i!
+    @i 3 = if continue end
+    @i wl
+) loop
+# Output: 1 2 4 5 (3 is skipped)
+```
+
+### Prefix Quote Syntax
+
+Prefix quotes are an alternative syntax for applying functions to quotations.
+The syntax `functionName. ... end` (a period appended to the function name) is
+equivalent to `(...) functionName`.
+
+```mshell
+# Traditional postfix syntax
+[1 2 3 4 5] (3 >) filter
+
+# Prefix quote syntax
+[1 2 3 4 5] filter. 3 > end
+```
+
+They work with any function that expects a quotation, including `map`, `filter`,
+`each`, and user-defined functions:
+
+```mshell
+[1 2 3] map. 2 * end        # [2 4 6]
+["a" "b" "c"] each. wl end  # prints a, b, c
+```
+
+Prefix quotes can be chained and nested:
+
+```mshell
+# Filter positives, then double them
+[-1 2 -3 4] filter. 0 > end map. 2 * end   # [4 8]
+
+# For each sublist, filter elements > 5
+[[1 2 3] [4 5 6] [7 8 9]] map. filter. 5 > end end   # [[] [6] [7 8 9]]
+```
+
+This is also handy for turning the boolean operators `and` and `or` into a more
+traditional infix lookup format:
+
+```mshell
+true or. false end and. true end   # Like (true | false) & true = true
+```
+
 ## Pattern Matching
 
 The `match ... end` block provides multi-way dispatch.
