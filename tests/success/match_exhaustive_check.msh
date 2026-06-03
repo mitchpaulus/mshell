@@ -1,0 +1,14 @@
+# This is a test that proves that you don't need a wildcard arm if you have total types.
+def myMatch (str | float | int | bool -- str)
+	match
+		str : 'a',
+		float: 'b',
+		int: 'c',
+		bool: 'd',
+	end
+end
+
+'a' myMatch wl
+1.0 myMatch wl
+2 myMatch wl
+true myMatch wl
