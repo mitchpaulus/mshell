@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- The language server now offers completion on `$` environment variables, drawing
+  from the actual process environment as well as any environment variables already
+  referenced in the current file.
+
 ### Changed
 
 - A command that cannot start (not found, permission denied, bad format, ...) run

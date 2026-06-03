@@ -38,6 +38,7 @@ type lspServer struct {
 	parser       *MShellParser
 	pathBins     IPathBinManager
 	varNames     map[string]struct{}
+	envNames     map[string]struct{}
 	candsBuf     []string
 	stdlibDefs   []MShellDefinition
 	builtinSigs  map[string][]string // name -> formatted "(in -- out)" sigs from the type checker
@@ -130,6 +131,7 @@ func RunLSP(in io.Reader, out io.Writer) error {
 		parser:    parser,
 		pathBins:  pathBins,
 		varNames:  make(map[string]struct{}),
+		envNames:  make(map[string]struct{}),
 	}
 
 	if defs, err := loadStdlibDefsForLSP(); err != nil {
@@ -295,7 +297,7 @@ func (s *lspServer) handleMessage(msg *jsonrpcMessage) (bool, error) {
 				TextDocumentSync: protocol.TextDocumentSyncKindFull,
 				HoverProvider:    true,
 				CompletionProvider: &protocol.CompletionOptions{
-					TriggerCharacters: []string{"@"},
+					TriggerCharacters: []string{"@", "$"},
 				},
 				RenameProvider: &protocol.RenameOptions{PrepareProvider: true},
 			},
@@ -758,12 +760,16 @@ func (s *lspServer) completion(params protocol.CompletionParams) ([]protocol.Com
 	}()
 
 	clear(s.varNames)
+	clear(s.envNames)
 	positionLine := int(params.Position.Line)
 	positionChar := int(params.Position.Character)
 	var (
 		varPrefix             string
 		varFound              bool
 		varToken              Token
+		envPrefix             string
+		envFound              bool
+		envToken              Token
 		literalPrefix         string
 		literalFound          bool
 		literalInListFirstPos bool
@@ -808,6 +814,22 @@ func (s *lspServer) completion(params protocol.CompletionParams) ([]protocol.Com
 			varFound = true
 		}
 
+		if tok.Type == ENVRETREIVE || tok.Type == ENVSTORE || tok.Type == ENVCHECK {
+			atCursor := tokenContainsPosition(tok, positionLine, positionChar)
+			// Only retrieves (`$NAME`) trigger completion; store/check
+			// tokens carry a trailing `!`/`?` that the edit range would
+			// clobber. Names from all forms still feed the candidate set.
+			if atCursor && tok.Type == ENVRETREIVE {
+				// The token under the cursor is the partial name being
+				// typed; don't fold it into the in-file name set.
+				envPrefix = completionPrefix(tok, positionChar)
+				envToken = tok
+				envFound = true
+			} else if name := envVarName(tok); name != "" {
+				s.envNames[name] = struct{}{}
+			}
+		}
+
 		if tok.Type == LITERAL {
 			inListFirstPos := len(listStack) > 0 && !listStack[len(listStack)-1]
 			if tokenContainsPosition(tok, positionLine, positionChar) {
@@ -830,6 +852,16 @@ func (s *lspServer) completion(params protocol.CompletionParams) ([]protocol.Com
 
 	if varFound {
 		return s.completeVariable(varToken, varPrefix), true
+	}
+
+	if envFound {
+		return s.completeEnv(envToken, envPrefix), true
+	}
+
+	// A lone `$` lexes as a literal (not an env token until a name
+	// follows); treat it as an empty-prefix env completion trigger.
+	if literalFound && literalToken.Lexeme == "$" {
+		return s.completeEnv(literalToken, ""), true
 	}
 
 	if literalFound && literalPrefix != "" {
@@ -857,6 +889,72 @@ func (s *lspServer) completeVariable(varToken Token, varPrefix string) []protoco
 	items := make([]protocol.CompletionItem, 0, len(candidates))
 	for _, name := range candidates {
 		label := "@" + name
+		items = append(items, protocol.CompletionItem{
+			Label: label,
+			Kind:  protocol.CompletionItemKindVariable,
+			TextEdit: &protocol.TextEdit{
+				Range:   editRange,
+				NewText: label,
+			},
+		})
+	}
+
+	s.candsBuf = candidates
+	return items
+}
+
+// envVarName extracts the environment variable name from an ENVRETREIVE,
+// ENVSTORE, or ENVCHECK token. ENVRETREIVE is `$NAME`, while ENVSTORE is
+// `$NAME!` and ENVCHECK is `$NAME?`; the leading `$` and any trailing
+// sigil are stripped.
+func envVarName(tok Token) string {
+	lexeme := tok.Lexeme
+	if len(lexeme) < 2 || lexeme[0] != '$' {
+		return ""
+	}
+	name := lexeme[1:]
+	switch tok.Type {
+	case ENVSTORE, ENVCHECK:
+		name = name[:len(name)-1]
+	}
+	return name
+}
+
+// completeEnv returns `$`-prefixed completions for environment
+// variables. Candidates are the actual process environment plus any env
+// names already referenced in the current file (so a `$FOO!` write
+// suggests `$FOO` later even if it is not yet exported to this process).
+func (s *lspServer) completeEnv(envToken Token, envPrefix string) []protocol.CompletionItem {
+	candidates := s.candsBuf[:0]
+	seen := make(map[string]struct{})
+
+	consider := func(name string) {
+		if name == "" {
+			return
+		}
+		if _, ok := seen[name]; ok {
+			return
+		}
+		if !strings.HasPrefix(name, envPrefix) {
+			return
+		}
+		seen[name] = struct{}{}
+		candidates = append(candidates, name)
+	}
+
+	for _, entry := range os.Environ() {
+		name, _, _ := strings.Cut(entry, "=")
+		consider(name)
+	}
+	for name := range s.envNames {
+		consider(name)
+	}
+
+	sort.Strings(candidates)
+	editRange := tokenEditRange(envToken)
+	items := make([]protocol.CompletionItem, 0, len(candidates))
+	for _, name := range candidates {
+		label := "$" + name
 		items = append(items, protocol.CompletionItem{
 			Label: label,
 			Kind:  protocol.CompletionItemKindVariable,

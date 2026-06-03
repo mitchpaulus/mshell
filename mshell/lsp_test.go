@@ -353,6 +353,124 @@ func TestCompletionForVarRetrieveBareAt(t *testing.T) {
 	}
 }
 
+func TestCompletionForEnvRetrieve(t *testing.T) {
+	// A real process env var and an env var only referenced in the
+	// file should both be offered, filtered by the typed prefix.
+	t.Setenv("MSHELL_LSP_REAL", "1")
+	doc := "1 $MSHELL_LSP_FILE!\n$MSHELL_LSP_"
+	uri := protocol.DocumentURI("file:///completion-env.msh")
+
+	clientReader, clientWriter := io.Pipe()
+	serverReader, serverWriter := io.Pipe()
+
+	var wg sync.WaitGroup
+	var runErr error
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		runErr = RunLSP(clientReader, serverWriter)
+		serverWriter.Close()
+	}()
+
+	output := bufio.NewReader(serverReader)
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "initialize",
+		"params": map[string]any{
+			"capabilities": map[string]any{},
+		},
+	})
+
+	initResp := readLSPResponse(t, output)
+	if initResp.Error != nil {
+		t.Fatalf("initialize returned error: %+v", initResp.Error)
+	}
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "textDocument/didOpen",
+		"params": map[string]any{
+			"textDocument": map[string]any{
+				"uri":        uri,
+				"languageId": "mshell",
+				"version":    1,
+				"text":       doc,
+			},
+		},
+	})
+
+	// Cursor at end of `$MSHELL_LSP_` on line 1 (0-based).
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      2,
+		"method":  "textDocument/completion",
+		"params": map[string]any{
+			"textDocument": map[string]any{"uri": uri},
+			"position":     map[string]any{"line": 1, "character": 12},
+		},
+	})
+
+	completionResp := readLSPResponse(t, output)
+	if completionResp.Error != nil {
+		t.Fatalf("completion returned error: %+v", completionResp.Error)
+	}
+
+	payload, err := json.Marshal(completionResp.Result)
+	if err != nil {
+		t.Fatalf("failed to marshal completion result: %v", err)
+	}
+
+	var items []protocol.CompletionItem
+	if err := json.Unmarshal(payload, &items); err != nil {
+		t.Fatalf("failed to unmarshal completion result: %v", err)
+	}
+
+	labels := make([]string, 0, len(items))
+	for _, item := range items {
+		labels = append(labels, item.Label)
+		if item.Kind != protocol.CompletionItemKindVariable {
+			t.Fatalf("unexpected completion kind for %q: %v", item.Label, item.Kind)
+		}
+		if item.TextEdit == nil || item.TextEdit.NewText != item.Label {
+			t.Fatalf("unexpected text edit for %q: %+v", item.Label, item.TextEdit)
+		}
+	}
+
+	want := []string{"$MSHELL_LSP_FILE", "$MSHELL_LSP_REAL"}
+	if len(labels) != len(want) {
+		t.Fatalf("expected labels %v, got %v", want, labels)
+	}
+	for i, label := range want {
+		if labels[i] != label {
+			t.Fatalf("expected labels %v, got %v", want, labels)
+		}
+	}
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      3,
+		"method":  "shutdown",
+	})
+
+	shutdownResp := readLSPResponse(t, output)
+	if shutdownResp.Error != nil {
+		t.Fatalf("shutdown returned error: %+v", shutdownResp.Error)
+	}
+
+	sendLSPMessage(t, clientWriter, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "exit",
+	})
+
+	clientWriter.Close()
+	wg.Wait()
+	if runErr != nil {
+		t.Fatalf("RunLSP returned error: %v", runErr)
+	}
+}
+
 func TestCompletionForBinaryListFirstItem(t *testing.T) {
 	tmpDir := t.TempDir()
 	baseName := "lspbin"
