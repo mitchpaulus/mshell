@@ -364,6 +364,18 @@ That lets guard-style code type-check naturally.
     "positive"
 end</code></pre>
 
+<p>
+An overloaded built-in applied to a union operand is resolved once for each member of the union.
+The call type-checks when every member is handled by some overload, and its result is the union of the per-member results.
+A combination that no overload handles is an error, so an unsafe call is still rejected.
+</p>
+
+<pre><code>true if 1.0 else 1 end  # int | float
+
+int | float toFloat     # ok: (int -- float) and (float -- float) both apply, result float
+
+int | float 2.0 /       # error: the int member has no (int float -- ...) overload</code></pre>
+
 <h1 id="type-system-current-boundaries">Current Boundaries <a class="section-link" href="#type-system-current-boundaries" aria-label="Permalink">§</a> <a class="back-to-top" href="#type-system-top">Back to top</a></h1>
 
 <p>

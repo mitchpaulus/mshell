@@ -807,6 +807,11 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		{Inputs: []TypeId{TidFloat, TidInt}, Outputs: []TypeId{TidStr}},
 	}
 	// numFmt : (int {str: V} -- str) | (float {str: V} -- str)
+	//
+	// A value typed `int | float` (e.g. the joined result of a match/if
+	// whose arms produce different numeric types) is accepted via the
+	// overload-resolution union distribution in resolveAndApply, which
+	// checks both the int and float members against these overloads.
 	{
 		v := arena.MakeVar(0)
 		dict := arena.MakeDict(TidStr, v)

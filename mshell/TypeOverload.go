@@ -98,6 +98,16 @@ func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 			c.applySig(candidates[0], callSite)
 			return
 		}
+		// No candidate accepted the operands as-is. If an operand is a
+		// union (e.g. `int | float` from a joined match/if), try
+		// distributing: resolve the call for every member-combination
+		// and, when all are covered, push the union of their outputs.
+		// This is sound because each candidate mirrors its runtime
+		// switch, so proving every member-combination is handled proves
+		// every runtime value is handled.
+		if c.tryDistributeOverUnion(candidates) {
+			return
+		}
 		c.errors = append(c.errors, TypeError{
 			Kind: TErrNoMatchingOverload,
 			Pos:  callSite,
@@ -165,6 +175,148 @@ func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 		Hint: c.formatOverloadAmbiguityFromSigs(viable),
 	})
 	c.applySig(viable[0], callSite)
+}
+
+// maxUnionDistributionCombos caps the cartesian product explored by
+// tryDistributeOverUnion so a call with several wide union operands
+// can't blow up resolution time. Beyond the cap, distribution bails and
+// the normal "no matching overload" error is produced.
+const maxUnionDistributionCombos = 64
+
+// tryDistributeOverUnion handles the case where overload resolution
+// found no whole-stack match because an operand is a union. It treats
+// each union operand as the set of its members, enumerates the
+// cartesian product of member choices across the operand window, and
+// resolves the call for each concrete assignment. If every assignment
+// is handled by some candidate, the call is accepted and the per-slot
+// union of the assignments' outputs is pushed; the operands are
+// consumed as usual. If any assignment is unhandled (e.g. `int / float`
+// inside `(int|float) / float`), distribution fails and the caller
+// surfaces the normal error — so an unsound mixed combination is still
+// rejected.
+//
+// Returns true if it applied the call (state mutated), false if it
+// declined (state restored to the pre-call stack).
+//
+// Restrictions that keep this sound and bounded:
+//   - All candidates must share input and output arity. Differing
+//     arities make "how many operands to consume / expand" ambiguous.
+//   - Every chosen output must be fully concrete (no free type vars).
+//     A generic output would carry vars bound only under a per-assignment
+//     substitution that is rolled back here, leaving a dangling var in
+//     the merged union. Generic-on-the-whole-union calls already resolve
+//     via the normal path (the var binds to the union), so they never
+//     reach distribution.
+func (c *Checker) tryDistributeOverUnion(candidates []QuoteSig) bool {
+	arity := len(candidates[0].Inputs)
+	outArity := len(candidates[0].Outputs)
+	for _, cand := range candidates[1:] {
+		if len(cand.Inputs) != arity || len(cand.Outputs) != outArity {
+			return false
+		}
+	}
+	if arity == 0 || c.stack.Len() < arity {
+		return false
+	}
+
+	stackSnap := c.Snapshot()
+	substSnap := c.subst.Checkpoint()
+	base := c.stack.Len() - arity
+
+	// Member list per operand slot: the union's arms, or a singleton for
+	// a non-union operand. Bail unless at least one slot is a union.
+	memberLists := make([][]TypeId, arity)
+	anyUnion := false
+	combos := 1
+	for i := 0; i < arity; i++ {
+		t := c.subst.Apply(c.arena, c.stack.items[base+i])
+		n := c.arena.Node(t)
+		if n.Kind == TKUnion {
+			arms := c.arena.unionMembers[n.Extra]
+			cp := make([]TypeId, len(arms))
+			copy(cp, arms)
+			memberLists[i] = cp
+			anyUnion = true
+		} else {
+			memberLists[i] = []TypeId{t}
+		}
+		combos *= len(memberLists[i])
+		if combos > maxUnionDistributionCombos {
+			return false
+		}
+	}
+	if !anyUnion {
+		return false
+	}
+
+	// Walk the cartesian product as an odometer over member indices.
+	// For each assignment, find a viable candidate and record its
+	// resolved outputs per slot. Bail on the first unhandled assignment.
+	outArms := make([][]TypeId, outArity)
+	idx := make([]int, arity)
+	for {
+		found := false
+		for _, cand := range candidates {
+			c.Fork(stackSnap)
+			c.subst.Rollback(substSnap)
+			for i := 0; i < arity; i++ {
+				c.stack.items[base+i] = memberLists[i][idx[i]]
+			}
+			inst := c.Instantiate(cand)
+			ok := true
+			for i, want := range inst.Inputs {
+				if !c.unify(c.stack.items[base+i], want) {
+					ok = false
+					break
+				}
+			}
+			if !ok {
+				continue
+			}
+			// Record resolved outputs; bail if any carries a free var.
+			resolved := make([]TypeId, outArity)
+			for j, out := range inst.Outputs {
+				rt := c.subst.Apply(c.arena, out)
+				if c.arena.walkTypeVars(rt, func(TypeVarId) bool { return true }) {
+					c.Fork(stackSnap)
+					c.subst.Rollback(substSnap)
+					return false
+				}
+				resolved[j] = rt
+			}
+			for j := 0; j < outArity; j++ {
+				outArms[j] = append(outArms[j], resolved[j])
+			}
+			found = true
+			break
+		}
+		if !found {
+			c.Fork(stackSnap)
+			c.subst.Rollback(substSnap)
+			return false
+		}
+		k := arity - 1
+		for ; k >= 0; k-- {
+			idx[k]++
+			if idx[k] < len(memberLists[k]) {
+				break
+			}
+			idx[k] = 0
+		}
+		if k < 0 {
+			break
+		}
+	}
+
+	// Every combination is handled. Consume the operands and push the
+	// per-slot union of the assignments' outputs.
+	c.Fork(stackSnap)
+	c.subst.Rollback(substSnap)
+	c.stack.items = c.stack.items[:base]
+	for j := 0; j < outArity; j++ {
+		c.stack.Push(c.arena.MakeUnion(outArms[j], 0))
+	}
+	return true
 }
 
 // formatOverloadFailure renders a multi-line hint describing the
