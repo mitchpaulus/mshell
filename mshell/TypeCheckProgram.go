@@ -888,16 +888,107 @@ func (c *Checker) reconcileArmBranches(armBranches []quoteBranch, labels []strin
 		c.loadBranch(liveBranches[0])
 		return
 	}
-	// Fan out only the live branches. A diverged arm (exit / return /
-	// propagated fail) never reaches the code after the construct, so it
-	// must not be spawned as a surviving continuation: if it were, and the
-	// live branches later died at a downstream step, the diverged arm would
-	// pass through unchanged (driveBranches skips diverged branches), keep
-	// the surviving-branch count non-zero, and thereby swallow the live
-	// branches' real type errors — leaving a misleading `(.. -- Bottom)`
-	// signature behind. This mirrors filterLiveBranches at the other
-	// convergence points.
-	c.branchSpawn = append(c.branchSpawn, liveBranches...)
+	// Join the live arms into a single post-state by unioning per-slot
+	// types and merging var bindings, rather than fanning them out as
+	// alternative typings. Match/if arms are control-flow paths: every
+	// arm is a real runtime possibility, so the post-state must reflect
+	// *all* of them (a union), and a downstream op that rejects any
+	// member is a genuine error.
+	//
+	// Fanning the arms out as separate branchSpawn continuations was
+	// unsound: the branching driver keeps a program alive as long as
+	// *any* branch survives, so one arm could mask a type error that a
+	// sibling arm provokes downstream. E.g. `match []: 0.0, _ :> sum`
+	// leaves `int | float`; `@b @t toFloat /` is valid only for the
+	// `float` arm, yet the fan-out accepted the whole program because
+	// that arm survived — while the `int` arm (the actual runtime path
+	// for a non-empty list) crashes with "Cannot divide an int by a
+	// float." This mirrors the quote-form `iff` join in ReconcileArms.
+	c.joinArmBranches(liveBranches)
+}
+
+// joinArmBranches collapses size-agreeing arm branches into a single
+// post-state. Each stack slot becomes the union of that slot across
+// arms; a var bound in every arm stays bound (as a union of its arm
+// types) while one bound in only some arms lifts to maybeBound. The
+// branches carry independent substitution checkpoints, so each branch's
+// types are resolved under its own substitution before unioning. The
+// merged state is installed on the first branch's substitution so the
+// surrounding walker continues from a coherent checkpoint.
+func (c *Checker) joinArmBranches(branches []quoteBranch) {
+	n := len(branches[0].stack)
+	resolvedStacks := make([][]TypeId, len(branches))
+	resolvedVars := make([]map[NameId]TypeId, len(branches))
+	resolvedMaybe := make([]map[NameId]TypeId, len(branches))
+	for bi, b := range branches {
+		c.loadBranch(b)
+		rs := make([]TypeId, n)
+		for i := 0; i < n; i++ {
+			rs[i] = c.subst.Apply(c.arena, b.stack[i])
+		}
+		rv := make(map[NameId]TypeId, len(c.vars.bound))
+		for k, v := range c.vars.bound {
+			rv[k] = c.subst.Apply(c.arena, v)
+		}
+		rmv := make(map[NameId]TypeId, len(c.vars.maybeBound))
+		for k, v := range c.vars.maybeBound {
+			rmv[k] = c.subst.Apply(c.arena, v)
+		}
+		resolvedStacks[bi] = rs
+		resolvedVars[bi] = rv
+		resolvedMaybe[bi] = rmv
+	}
+
+	mergedStack := make([]TypeId, n)
+	scratch := make([]TypeId, 0, len(branches))
+	for slot := 0; slot < n; slot++ {
+		scratch = scratch[:0]
+		for bi := range branches {
+			scratch = append(scratch, resolvedStacks[bi][slot])
+		}
+		mergedStack[slot] = c.arena.MakeUnion(scratch, 0)
+	}
+
+	allNames := make(map[NameId]struct{})
+	for bi := range branches {
+		for nm := range resolvedVars[bi] {
+			allNames[nm] = struct{}{}
+		}
+		for nm := range resolvedMaybe[bi] {
+			allNames[nm] = struct{}{}
+		}
+	}
+	mergedBound := make(map[NameId]TypeId)
+	mergedMaybe := make(map[NameId]TypeId)
+	for nm := range allNames {
+		boundEverywhere := true
+		scratch = scratch[:0]
+		for bi := range branches {
+			if t, ok := resolvedVars[bi][nm]; ok {
+				scratch = append(scratch, t)
+				continue
+			}
+			boundEverywhere = false
+			if t, ok := resolvedMaybe[bi][nm]; ok {
+				scratch = append(scratch, t)
+			}
+		}
+		merged := c.arena.MakeUnion(scratch, 0)
+		if boundEverywhere {
+			mergedBound[nm] = merged
+		} else {
+			mergedMaybe[nm] = merged
+		}
+	}
+
+	// Install the merged state on the first branch's substitution. The
+	// unioned types are already fully resolved, so they remain valid;
+	// inferInputs / inferring carry over from a representative arm.
+	c.loadBranch(branches[0])
+	c.stack.items = append(c.stack.items[:0], mergedStack...)
+	c.vars.bound = mergedBound
+	c.vars.maybeBound = mergedMaybe
+	c.diverged = false
 }
 
 // filterLiveBranchesWithLabels mirrors filterLiveBranches but also

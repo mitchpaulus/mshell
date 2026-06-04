@@ -712,6 +712,129 @@ end
 	}
 }
 
+func TestTypeCheckProgramMatchArmTypeUnionFlowsForward(t *testing.T) {
+	// Arms that leave different types on the stack join into a UNION
+	// post-state, not a fan-out of alternative typings. Here the empty
+	// arm yields `float` and the wildcard arm yields `int` (sum of a
+	// non-empty [int]); the result must flow forward as `int | float`.
+	//
+	// Regression: the arms used to fan out as separate branchSpawn
+	// continuations, so the branching driver kept the program alive if
+	// *any* arm survived a downstream op. A division by a float then
+	// passed (valid for the float arm) while the int arm — the real
+	// runtime path for a non-empty list — crashes at runtime with
+	// "Cannot divide an int by a float." All arms are real control-flow
+	// paths, so a downstream op that rejects any union member is a
+	// genuine type error and must be reported.
+	src := `[1 2 3] match []: 0.0, _ :> sum end b!
+@b 2.0 /`
+	errs, ok := parseAndCheck(t, src)
+	if ok {
+		t.Fatalf("expected int|float / float to be rejected; errs=%v", errs)
+	}
+	joined := strings.Join(errs, "\n")
+	if !strings.Contains(joined, "int | float") {
+		t.Fatalf("expected the divisor's left operand to be reported as int | float; errs=%v", errs)
+	}
+}
+
+func TestTypeCheckProgramMatchArmTypeUnionAccepted(t *testing.T) {
+	// The dual of the regression test: when the downstream consumer
+	// accepts every member of the joined union, the program type-checks.
+	// `toJson` has a generic `(T -- str)` signature, so the `int | float`
+	// union binds cleanly. Guards against the join over-rejecting valid
+	// programs.
+	src := `[1 2 3] match []: 0.0, _ :> sum end b!
+@b toJson wl`
+	errs, ok := parseAndCheck(t, src)
+	if !ok || len(errs) != 0 {
+		t.Fatalf("expected int|float consumed by toJson to pass; errs=%v", errs)
+	}
+}
+
+func TestTypeCheckProgramMatchArmTypeSameCollapses(t *testing.T) {
+	// When every arm leaves the same type, the join's per-slot union
+	// collapses back to that single type (MakeUnion folds a one-arm
+	// union), so an op that only accepts that type still type-checks.
+	// Both arms here yield int, so int division downstream is valid.
+	src := `[1 2 3] match []: 0, _ :> sum end b!
+@b 2 /`
+	errs, ok := parseAndCheck(t, src)
+	if !ok || len(errs) != 0 {
+		t.Fatalf("expected same-typed arms to collapse to int and pass; errs=%v", errs)
+	}
+}
+
+func TestTypeCheckProgramUnionOperandDistributesToFloat(t *testing.T) {
+	// Overload resolution distributes over a union operand: `toFloat` has
+	// (int -- float) and (float -- float) arms, so an `int | float` value
+	// resolves to `float` (the union of the arms' outputs). The downstream
+	// float division then type-checks. This is how a correctly-written
+	// program consumes the joined union.
+	src := `[1 2 3] match []: 0.0, _ :> sum end b!
+@b toFloat 2.0 /`
+	errs, ok := parseAndCheck(t, src)
+	if !ok || len(errs) != 0 {
+		t.Fatalf("expected toFloat to distribute over int|float; errs=%v", errs)
+	}
+}
+
+func TestTypeCheckProgramUnionOperandDistributesNumFmt(t *testing.T) {
+	// numFmt keeps separate (int dict) / (float dict) overloads; the union
+	// distribution checks both members against them, so an `int | float`
+	// value is formatted without a bespoke union signature.
+	src := `[1 2 3] match []: 0.0, _ :> sum end b!
+@b { 'decimals': 0 } numFmt wl`
+	errs, ok := parseAndCheck(t, src)
+	if !ok || len(errs) != 0 {
+		t.Fatalf("expected numFmt to distribute over int|float; errs=%v", errs)
+	}
+}
+
+func TestTypeCheckProgramUnionOperandMixedRejected(t *testing.T) {
+	// Distribution must stay sound for multi-operand ops: `(int | float) /
+	// float` expands to the int/float and float/float combinations; the
+	// former has no candidate (the runtime rejects dividing an int by a
+	// float), so the whole call is rejected. This is the property that
+	// makes distribution safe where blanket per-builtin widening is not.
+	src := `[1 2 3] match []: 0.0, _ :> sum end b!
+@b 2.0 /`
+	errs, ok := parseAndCheck(t, src)
+	if ok {
+		t.Fatalf("expected (int|float) / float to be rejected; errs=%v", errs)
+	}
+}
+
+func TestTypeCheckProgramUnionBothOperandsRejected(t *testing.T) {
+	// Both operands are `int | float`: the (int, float) and (float, int)
+	// cross-combinations are unhandled, so the call is rejected even though
+	// the matching (int,int) and (float,float) combinations exist.
+	src := `[1 2 3] match []: 0.0, _ :> sum end b!
+[4 5] match []: 0.0, _ :> sum end c!
+@b @c /`
+	errs, ok := parseAndCheck(t, src)
+	if ok {
+		t.Fatalf("expected (int|float) / (int|float) to be rejected; errs=%v", errs)
+	}
+}
+
+func TestTypeCheckProgramIfArmTypeUnionFlowsForward(t *testing.T) {
+	// if/else blocks share reconcileArmBranches with match, so the same
+	// union-join applies: the true arm yields float and the false arm
+	// yields int, so the result is `int | float`. Dividing by a float is
+	// only valid for the float arm, so the program must be rejected.
+	src := `true if 0.0 else 5 end b!
+@b 2.0 /`
+	errs, ok := parseAndCheck(t, src)
+	if ok {
+		t.Fatalf("expected int|float / float to be rejected; errs=%v", errs)
+	}
+	joined := strings.Join(errs, "\n")
+	if !strings.Contains(joined, "int | float") {
+		t.Fatalf("expected the divisor's left operand to be reported as int | float; errs=%v", errs)
+	}
+}
+
 func TestTypeCheckProgramMatchJustBinding(t *testing.T) {
 	// just v binds v to the inner of Maybe[T]. Inside the arm,
 	// `@v` retrieves an int. (`:n` is the dict/grid getter and pops

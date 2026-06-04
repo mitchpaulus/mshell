@@ -15,6 +15,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The type checker now joins the arms of a `match` or `if`/`else` block into a
+  single union post-state instead of treating each arm as an independent
+  alternative typing. Previously, arms that left different types on the stack
+  (e.g. `match []: 0.0, _ :> sum end`, which yields `int | float`) fanned out, and
+  a later operation that was valid for only one arm let the whole program pass —
+  hiding a real type error that would crash at runtime. Such usage is now reported.
+- Overloaded built-ins now accept a union operand (such as the `int | float` a
+  `match`/`if` join produces) when every member of the union is handled. The
+  checker resolves the call for each member and yields the union of the results,
+  so `int | float toFloat` gives `float` and `int | float { … } numFmt` formats.
+  An unsafe combination is still rejected — e.g. `int | float` divided by a
+  `float` fails, because the `int` case has no matching overload.
 - In the interactive `::` CLI shorthand, bare literals in argument position are no
   longer turned into strings, so operators work again (e.g. `:: numargs '*' glob`
   now runs `glob` as the wildcard operator instead of passing the word `glob`).

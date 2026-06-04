@@ -583,6 +583,16 @@ For example, `(>)` can become `(int int -- bool)`, `(float float -- bool)`, `(st
 
 Control-flow branches must reconcile stack and variable state across reachable paths.
 Branches that diverge with `return`, `break`, or `continue` are excluded from reconciliation.
+When the reachable arms of a `match` or `if`/`else` block leave different types in a
+stack slot, those types are joined into a union for the code that follows.
+For example, `match []: 0.0, _ :> sum end` produces an `int | float`.
+An overloaded operation applied to a union operand is resolved for every member of
+the union; it type-checks when each member is handled, and the result is the union
+of the per-member results.
+So `int | float` through `toFloat` gives `float`, and `int | float { … } numFmt`
+formats fine.
+An operation that is valid for only some members is a type error — dividing an
+`int | float` by a `float` fails, because the `int` member has no matching overload.
 
 For more detail, see the generated Type System help page.
 
