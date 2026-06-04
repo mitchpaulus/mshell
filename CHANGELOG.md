@@ -13,6 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the actual process environment as well as any environment variables already
   referenced in the current file.
 
+### Fixed
+
+- In the interactive `::` CLI shorthand, bare literals in argument position are no
+  longer turned into strings, so operators work again (e.g. `:: numargs '*' glob`
+  now runs `glob` as the wildcard operator instead of passing the word `glob`).
+  The leading command name is still treated as a command, so an executable continues
+  to win over a builtin of the same name (e.g. `date`, `sort`).
+
 ### Changed
 
 - A command that cannot start (not found, permission denied, bad format, ...) run

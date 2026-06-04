@@ -284,22 +284,35 @@ func (pipeline *SimpleCliPipeline) ToMShellFile() (*MShellFile, error) {
 	}, nil
 }
 
-// convertItemsForExecution converts parsed items for use in a command list.
-// Literals are converted to single-quoted strings for execution.
+// convertItemsForExecution converts the parsed items of a single command for execution.
+//
+// The first item is the command name: a bare literal is converted to a single-quoted
+// string so that an executable always wins over a builtin/operator of the same name
+// (e.g. `date`, `sort`, `cp`). This matches the long-standing CLI behavior.
+//
+// Every remaining item is preserved as-is. At runtime, a literal in argument position
+// that names a builtin or definition acts as that operator (e.g. `'*' glob` expands the
+// wildcard), and any other literal is treated as a string. We deliberately do NOT quote
+// these, so operators keep working as a direct AST transformation rather than relying on
+// string manipulation.
 func convertItemsForExecution(items []MShellParseItem) []MShellParseItem {
 	result := make([]MShellParseItem, len(items))
 	for i, item := range items {
-		result[i] = convertItemForExecution(item)
+		if i == 0 {
+			result[i] = convertCommandNameForExecution(item)
+		} else {
+			result[i] = item
+		}
 	}
 	return result
 }
 
-// convertItemForExecution converts a single parsed item for execution.
-// Literals become single-quoted strings, other types are preserved.
-func convertItemForExecution(item MShellParseItem) MShellParseItem {
+// convertCommandNameForExecution converts a command-name item for execution.
+// A bare LITERAL becomes a single-quoted string so the command wins over any
+// builtin/operator of the same name; other types are preserved as-is.
+func convertCommandNameForExecution(item MShellParseItem) MShellParseItem {
 	switch v := item.(type) {
 	case Token:
-		// Convert LITERAL tokens to SINGLEQUOTESTRING for execution
 		if v.Type == LITERAL {
 			return Token{
 				Type:   SINGLEQUOTESTRING,
