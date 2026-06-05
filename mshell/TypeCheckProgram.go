@@ -710,7 +710,17 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 		}
 		top := c.stack.items[c.stack.Len()-1]
 		c.stack.items = c.stack.items[:c.stack.Len()-1]
-		c.stack.Push(c.arena.MakeMaybe(c.lookupGetterValueType(top, nameId)))
+		applied := c.subst.Apply(c.arena, top)
+		if !c.inferring && c.getterReceiverInvalid(applied) {
+			c.errors = append(c.errors, TypeError{
+				Kind:     TErrTypeMismatch,
+				Pos:      it.Token,
+				Expected: TidNothing,
+				Hint: fmt.Sprintf("':' getter expects a dict, GridRow, Grid, or GridView, got %s",
+					FormatType(c.arena, c.names, applied)),
+			})
+		}
+		c.stack.Push(c.arena.MakeMaybe(c.lookupGetterValueType(applied, nameId)))
 		return
 	}
 }
@@ -1639,8 +1649,49 @@ func (c *Checker) lookupGetterValueType(t TypeId, name NameId) TypeId {
 			}
 		}
 		return c.arena.MakeList(c.subst.FreshVar(c.arena))
+	case TKBrand:
+		// Branded values are exactly their underlying at runtime, so the
+		// getter resolves against the underlying type.
+		return c.lookupGetterValueType(TypeId(n.B), name)
 	}
 	return c.subst.FreshVar(c.arena)
+}
+
+// getterReceiverInvalid reports whether a `:name` getter applied to a
+// receiver of type t is guaranteed to fail at runtime. The runtime's
+// processGetter accepts only Dict, GridRow, Grid, and GridView (TKShape is
+// the checker's view of a dict literal); every other concrete value —
+// lists, primitives, Maybe, quotes, commands — hits the default branch and
+// crashes.
+//
+// The "absolutely fails" bar drives the recursion:
+//   - TKVar: not yet pinned; could still become a valid receiver, so
+//     permissive (the only kind that legitimately defers).
+//   - TKBrand: brands have no runtime representation — a branded value is
+//     exactly its underlying — so validity follows the underlying type.
+//   - TKUnion: a union value is one of its members at runtime, so the
+//     getter only certainly fails when *every* member is invalid; if any
+//     member could be a valid receiver the runtime might succeed.
+func (c *Checker) getterReceiverInvalid(t TypeId) bool {
+	id := c.subst.Apply(c.arena, t)
+	n := c.arena.Node(id)
+	switch n.Kind {
+	case TKDict, TKShape, TKGridRow, TKGrid, TKGridView:
+		return false
+	case TKVar:
+		return false
+	case TKBrand:
+		return c.getterReceiverInvalid(TypeId(n.B))
+	case TKUnion:
+		for _, m := range c.arena.UnionMembers(id) {
+			if !c.getterReceiverInvalid(m) {
+				return false
+			}
+		}
+		return true
+	default:
+		return true
+	}
 }
 
 func isSingleElementIndexer(indexers *MShellIndexerList) bool {

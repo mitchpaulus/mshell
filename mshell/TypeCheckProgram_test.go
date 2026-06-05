@@ -905,6 +905,34 @@ func TestTypeCheckProgramGetterOnDict(t *testing.T) {
 	}
 }
 
+func TestTypeCheckProgramGetterOnListRejected(t *testing.T) {
+	// A `:name` getter only works on a Dict/GridRow/Grid/GridView at
+	// runtime. Applying it to a concrete list (e.g. parseExcel's output)
+	// always crashes, so the checker must flag it rather than silently
+	// yielding Maybe[fresh].
+	errs, ok := parseAndCheck(t, `[{"n": 2}] :n`)
+	if ok {
+		t.Fatalf("expected getter-on-list to be rejected; errs=%v", errs)
+	}
+}
+
+func TestTypeCheckProgramGetterOnPrimRejected(t *testing.T) {
+	// Same rule for a primitive receiver.
+	errs, ok := parseAndCheck(t, `2 :n`)
+	if ok {
+		t.Fatalf("expected getter-on-int to be rejected; errs=%v", errs)
+	}
+}
+
+func TestTypeCheckProgramGetterOnMaybeRejected(t *testing.T) {
+	// A getter on a Maybe always crashes at runtime (processGetter has no
+	// Maybe case), so chaining `:a :b` without unwrapping must be flagged.
+	errs, ok := parseAndCheck(t, `{"a": {"b": 2}} :a :b`)
+	if ok {
+		t.Fatalf("expected getter-on-Maybe to be rejected; errs=%v", errs)
+	}
+}
+
 func TestTypeCheckProgramVarStoreThenAtRetrieve(t *testing.T) {
 	// `name!` stores; `@name` retrieves. The VARSTORE lexeme is
 	// `name!` and the VARRETRIEVE lexeme is `@name` — both must
