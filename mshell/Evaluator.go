@@ -1043,35 +1043,54 @@ func (state *EvalState) processMatchBlock(matchBlock *MShellParseMatchBlock, fra
 // matchPattern checks if a subject matches a pattern (list of parse items).
 // Returns (matched bool, bindings map, result EvalResult).
 func (state *EvalState) matchPattern(pattern []MShellParseItem, subject MShellObject, startToken Token) (bool, map[string]MShellObject, EvalResult) {
-	// Handle multi-token patterns (e.g., "just v" for maybe destructuring)
+	// Handle multi-token patterns (e.g., "just v" for maybe destructuring,
+	// or "<typekeyword> name" for type-test binding).
 	if len(pattern) == 2 {
 		first, firstOk := pattern[0].(Token)
 		second, secondOk := pattern[1].(Token)
-		if firstOk && secondOk && first.Type == LITERAL && first.Lexeme == "just" {
-			// Maybe Just destructuring
-			var maybeVal Maybe
-			var ok bool
-			switch m := subject.(type) {
-			case Maybe:
-				maybeVal = m
-				ok = true
-			case *Maybe:
-				maybeVal = *m
-				ok = true
+		if firstOk && secondOk && second.Type == LITERAL {
+			if first.Type == LITERAL && first.Lexeme == "just" {
+				// Maybe Just destructuring
+				var maybeVal Maybe
+				var ok bool
+				switch m := subject.(type) {
+				case Maybe:
+					maybeVal = m
+					ok = true
+				case *Maybe:
+					maybeVal = *m
+					ok = true
+				}
+				if !ok || maybeVal.IsNone() {
+					return false, nil, SimpleSuccess()
+				}
+				bindings := make(map[string]MShellObject)
+				if second.Lexeme != "_" {
+					bindings[second.Lexeme] = maybeVal.obj
+				}
+				return true, bindings, SimpleSuccess()
 			}
-			if !ok || maybeVal.IsNone() {
-				return false, nil, SimpleSuccess()
+			// `<typekeyword> name`: match on the type, then bind the
+			// matched value to name.
+			if isTypeKeywordToken(first) {
+				matched, result := state.matchTokenPattern(first, subject)
+				if !result.Success {
+					return false, nil, result
+				}
+				if !matched {
+					return false, nil, SimpleSuccess()
+				}
+				bindings := make(map[string]MShellObject)
+				if second.Lexeme != "_" {
+					bindings[second.Lexeme] = subject
+				}
+				return true, bindings, SimpleSuccess()
 			}
-			bindings := make(map[string]MShellObject)
-			if second.Type == LITERAL && second.Lexeme != "_" {
-				bindings[second.Lexeme] = maybeVal.obj
-			}
-			return true, bindings, SimpleSuccess()
 		}
 	}
 
 	if len(pattern) != 1 {
-		return false, nil, state.FailWithMessage(fmt.Sprintf("%d:%d: Match arm pattern must be a single item (or 'just <binding>').\n", startToken.Line, startToken.Column))
+		return false, nil, state.FailWithMessage(fmt.Sprintf("%d:%d: Match arm pattern must be a single item, 'just <name>', or '<type> <name>'. %s\n", startToken.Line, startToken.Column, matchPatternFormsHint))
 	}
 
 	patternItem := pattern[0]
@@ -1136,7 +1155,7 @@ func (state *EvalState) matchTokenPattern(p Token, subject MShellObject) (bool, 
 			_, ok := subject.(MShellBinary)
 			return ok, SimpleSuccess()
 		}
-		return false, state.FailWithMessage(fmt.Sprintf("%d:%d: Unknown match pattern literal '%s'.\n", p.Line, p.Column, p.Lexeme))
+		return false, state.FailWithMessage(fmt.Sprintf("%d:%d: Unknown match pattern literal '%s'. %s\n", p.Line, p.Column, p.Lexeme, matchPatternFormsHint))
 
 	case TYPEINT:
 		_, ok := subject.(MShellInt)

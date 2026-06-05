@@ -1022,3 +1022,39 @@ func TestTypeCheckProgramDbgInValidProgramPasses(t *testing.T) {
 		t.Fatalf("expected valid program with dbg to pass; errs=%v", errs)
 	}
 }
+
+func TestTypeCheckMatchTypeKeywordBinding(t *testing.T) {
+	// `str s` matches a string subject and binds `s` to it for the body.
+	errs, ok := parseAndCheck(t, `"hi" match str s : @s wl, _ : "x" wl end`)
+	if !ok || len(errs) != 0 {
+		t.Fatalf("expected `str s` binding to type-check; errs=%v ok=%v", errs, ok)
+	}
+}
+
+func TestTypeCheckMatchInvalidPatternDiagnostic(t *testing.T) {
+	// `string` is not a recognized type keyword (the keyword is `str`),
+	// so the arm pattern is rejected with the forms diagnostic.
+	errs, ok := parseAndCheck(t, `"hi" match string s : @s wl, _ : "x" wl end`)
+	if ok {
+		t.Fatalf("expected `string s` to be rejected; errs=%v", errs)
+	}
+	if len(errs) == 0 || !strings.Contains(errs[0], "unrecognized match arm pattern 'string'") {
+		t.Fatalf("expected unrecognized-pattern diagnostic; errs=%v", errs)
+	}
+}
+
+func TestTypeCheckInterpolationUnknownIdentPosition(t *testing.T) {
+	// The diagnostic for an unbound var inside a `${...}` interpolation
+	// must point at the interpolation, not the format-string's 1:1.
+	errs, ok := parseAndCheck(t, "$\"value {@missing}\"")
+	if ok {
+		t.Fatalf("expected unknown-identifier error; errs=%v", errs)
+	}
+	if len(errs) == 0 || !strings.Contains(errs[0], "@missing") {
+		t.Fatalf("expected @missing diagnostic; errs=%v", errs)
+	}
+	// `@` sits at column 10 of the single source line.
+	if !strings.Contains(errs[0], "line 1, column 10") {
+		t.Fatalf("expected diagnostic at line 1, column 10; got %v", errs)
+	}
+}

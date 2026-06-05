@@ -12,8 +12,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The language server now offers completion on `$` environment variables, drawing
   from the actual process environment as well as any environment variables already
   referenced in the current file.
+- `match` arms can now bind the matched value when matching on a type keyword by
+  following it with a name, e.g. `str s : @s len` (mirroring `just v`). Works for
+  every type keyword (`int`, `float`, `str`, `bool`, `list`, `dict`, `path`,
+  `date`, `quotation`, `maybe`, `binary`).
 
 ### Fixed
+
+- Match arms that are not a recognized pattern form now produce a clear error
+  listing the legal forms, instead of silently failing to bind (and later
+  reporting a confusing "unknown identifier" in the arm body).
+- Type-checker diagnostics for unknown identifiers inside a `$"...{ }"` format
+  string interpolation now point at the interpolation's actual source location
+  rather than line 1, column 1.
 
 - The type checker now joins the arms of a `match` or `if`/`else` block into a
   single union post-state instead of treating each arm as an independent
