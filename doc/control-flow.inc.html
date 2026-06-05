@@ -208,6 +208,18 @@ Supported type patterns: <code>int</code>, <code>float</code>, <code>str</code>,
 <span class="mshellEND">end</span> <span class="mshellLITERAL">wl</span> <span class="mshellLINECOMMENT"># Output: integer</span></code>
 </pre>
 
+<p>
+Follow a type pattern with a name to bind the matched value, just like <code>just v</code>:
+</p>
+
+<pre>
+<code><span class="mshellSTRING">"hello"</span> <span class="mshellMATCH">match</span>
+    <span class="mshellLITERAL">int</span> <span class="mshellLITERAL">n</span> : <span class="mshellVARRETRIEVE">@n</span> <span class="mshellLITERAL">str</span>,
+    <span class="mshellLITERAL">str</span> <span class="mshellLITERAL">s</span> : <span class="mshellVARRETRIEVE">@s</span> <span class="mshellLITERAL">len</span> <span class="mshellLITERAL">str</span>,
+    <span class="mshellLITERAL">_</span>     : <span class="mshellSTRING">"other"</span>,
+<span class="mshellEND">end</span> <span class="mshellLITERAL">wl</span> <span class="mshellLINECOMMENT"># Output: 5</span></code>
+</pre>
+
 <h2>Wildcard</h2>
 
 <p>The <code>_</code> pattern matches any value and acts as a catch-all:</p>

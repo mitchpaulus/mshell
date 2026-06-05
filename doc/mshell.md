@@ -853,6 +853,16 @@ Type keywords match based on the subject's type:
 end wl # Output: integer
 ```
 
+Follow a type keyword with a name to bind the matched value (like `just v`):
+
+```mshell
+"hello" match
+    int n : @n str,
+    str s : @s len str,
+    _     : "other",
+end wl # Output: 5
+```
+
 ### Maybe Destructuring
 
 `just v` matches a Maybe that is Just, binding the inner value to `v`.

@@ -1131,6 +1131,13 @@ func (c *Checker) checkMatchBlock(matchBlock *MShellParseMatchBlock) {
 	var armLabels []string
 	tags := make([]MatchArmTag, 0, len(matchBlock.Arms))
 	for _, arm := range matchBlock.Arms {
+		if len(arm.Pattern) > 0 && !c.armPatternRecognized(arm.Pattern) {
+			c.errors = append(c.errors, TypeError{
+				Kind: TErrInvalidMatchPattern,
+				Pos:  arm.Pattern[0].GetStartToken(),
+				Hint: matchPatternFormsHint,
+			})
+		}
 		c.loadBranch(entry)
 		c.diverged = false
 		// Apply per-arm subject handling.
@@ -1220,13 +1227,127 @@ func (c *Checker) classifyArmPattern(pattern []MShellParseItem) MatchArmTag {
 		}
 	}
 	if len(pattern) == 2 {
-		if t0, ok := pattern[0].(Token); ok && t0.Type == LITERAL && t0.Lexeme == "just" {
-			if _, ok := pattern[1].(Token); ok {
+		t0, ok0 := pattern[0].(Token)
+		t1, ok1 := pattern[1].(Token)
+		if ok0 && ok1 && t1.Type == LITERAL {
+			if t0.Type == LITERAL && t0.Lexeme == "just" {
 				return MatchArmTag{Kind: MatchArmJust}
+			}
+			// `<typekeyword> name` binds the matched value; for
+			// exhaustiveness it covers the same type as the bare keyword.
+			if tid, ok := c.typeKeywordTokenType(t0); ok {
+				return MatchArmTag{Kind: MatchArmType, TypeArm: tid}
+			}
+			if tid := c.LookupType(t0.Lexeme); t0.Type == LITERAL && tid != TidNothing {
+				return MatchArmTag{Kind: MatchArmType, TypeArm: tid}
 			}
 		}
 	}
 	return MatchArmTag{Kind: MatchArmType, TypeArm: TidNothing}
+}
+
+// typeKeywordTokenType maps a match type-keyword token to the concrete
+// TypeId it tests for. Container/other keywords (list, dict, quotation,
+// maybe) have no single primitive id and return ok=false; callers that
+// need a binding type fall back to a fresh var or the subject.
+func (c *Checker) typeKeywordTokenType(tok Token) (TypeId, bool) {
+	switch tok.Type {
+	case TYPEINT:
+		return TidInt, true
+	case TYPEFLOAT:
+		return TidFloat, true
+	case TYPEBOOL:
+		return TidBool, true
+	case STR:
+		return TidStr, true
+	case LITERAL:
+		switch tok.Lexeme {
+		case "path":
+			return TidPath, true
+		case "date":
+			return TidDateTime, true
+		case "binary":
+			return TidBytes, true
+		}
+	}
+	return TidNothing, false
+}
+
+// isTypeKeywordToken reports whether tok is one of the match type-keyword
+// patterns: int, float, str, bool, list, dict, path, date, quotation,
+// maybe, binary.
+func isTypeKeywordToken(tok Token) bool {
+	switch tok.Type {
+	case TYPEINT, TYPEFLOAT, STR, TYPEBOOL:
+		return true
+	case LITERAL:
+		switch tok.Lexeme {
+		case "list", "dict", "path", "date", "quotation", "maybe", "binary":
+			return true
+		}
+	}
+	return false
+}
+
+// matchPatternFormsHint lists the legal match-arm pattern forms, used in
+// the diagnostic raised when an arm pattern is not recognized.
+const matchPatternFormsHint = "expected one of: `_`; a type keyword " +
+	"(int, float, str, bool, list, dict, path, date, quotation, maybe, binary), " +
+	"optionally followed by a binding name; a value literal (42, 1.5, \"text\", true, false, PATH); " +
+	"`none`; `just <name>`; a list pattern `[ ... ]`; or a dict pattern `{ ... }`"
+
+// armPatternRecognized reports whether pattern is one of the legal
+// match-arm forms. Unrecognized patterns get a TErrInvalidMatchPattern
+// diagnostic rather than silently binding nothing.
+func (c *Checker) armPatternRecognized(pattern []MShellParseItem) bool {
+	switch len(pattern) {
+	case 1:
+		switch p := pattern[0].(type) {
+		case *MShellParseList, *MShellParseDict:
+			return true
+		case Token:
+			return c.tokenPatternRecognized(p)
+		}
+		return false
+	case 2:
+		t0, ok0 := pattern[0].(Token)
+		t1, ok1 := pattern[1].(Token)
+		if !ok0 || !ok1 || t1.Type != LITERAL {
+			return false
+		}
+		if t0.Type == LITERAL && t0.Lexeme == "just" {
+			return true
+		}
+		if isTypeKeywordToken(t0) {
+			return true
+		}
+		if t0.Type == LITERAL && c.LookupType(t0.Lexeme) != TidNothing {
+			return true
+		}
+		return false
+	}
+	return false
+}
+
+// tokenPatternRecognized reports whether a single-token pattern is legal:
+// a type keyword, value literal, `_`, `none`, or a user-declared type name.
+func (c *Checker) tokenPatternRecognized(tok Token) bool {
+	switch tok.Type {
+	case TYPEINT, TYPEFLOAT, STR, TYPEBOOL,
+		INTEGER, FLOAT, STRING, SINGLEQUOTESTRING, PATH, TRUE, FALSE:
+		return true
+	case LITERAL:
+		if tok.Lexeme == "_" || tok.Lexeme == "none" {
+			return true
+		}
+		if isTypeKeywordToken(tok) {
+			return true
+		}
+		if c.LookupType(tok.Lexeme) != TidNothing {
+			return true
+		}
+	}
+	return false
 }
 
 // narrowMatchSubject returns the concrete primitive type that a
@@ -1276,20 +1397,34 @@ func (c *Checker) bindPatternName(name string, typ TypeId, bindings *[]patternBi
 func (c *Checker) bindMatchPattern(subject TypeId, pattern []MShellParseItem) []patternBinding {
 	var bindings []patternBinding
 
-	// `just v`
+	// `just v` and `<typekeyword> name`
 	if len(pattern) != 2 {
 		goto single
 	}
 	if first, ok1 := pattern[0].(Token); ok1 {
-		if second, ok2 := pattern[1].(Token); ok2 &&
-			first.Type == LITERAL && first.Lexeme == "just" &&
-			second.Type == LITERAL && second.Lexeme != "_" {
-			resolved := c.subst.Apply(c.arena, subject)
-			n := c.arena.Node(resolved)
-			if n.Kind == TKMaybe {
-				c.bindPatternName(second.Lexeme, TypeId(n.A), &bindings)
+		if second, ok2 := pattern[1].(Token); ok2 && second.Type == LITERAL {
+			if first.Type == LITERAL && first.Lexeme == "just" {
+				if second.Lexeme != "_" {
+					resolved := c.subst.Apply(c.arena, subject)
+					n := c.arena.Node(resolved)
+					if n.Kind == TKMaybe {
+						c.bindPatternName(second.Lexeme, TypeId(n.A), &bindings)
+					}
+				}
+				return bindings
 			}
-			return bindings
+			// `<typekeyword> name` binds the matched value to the type
+			// the keyword tests for. Container/other keywords have no
+			// single primitive id; bind to the subject (the runtime
+			// binds the value as-is) which is sound if wider.
+			if isTypeKeywordToken(first) {
+				bindType, ok := c.typeKeywordTokenType(first)
+				if !ok {
+					bindType = c.subst.Apply(c.arena, subject)
+				}
+				c.bindPatternName(second.Lexeme, bindType, &bindings)
+				return bindings
+			}
 		}
 	}
 
@@ -1371,12 +1506,47 @@ func (c *Checker) checkFormatStringInterpolations(tok Token) {
 		case modeFormat:
 			if ch == '}' {
 				inner := string(runes[startIdx:i])
-				c.checkFormatBlock(inner, tok)
+				// Map the block's first content rune back to its
+				// position in the original source so inner diagnostics
+				// point at the interpolation, not 1:1.
+				baseLine, baseCol := runePosition(runes, startIdx, tok.Line, tok.Column)
+				c.checkFormatBlock(inner, tok, baseLine, baseCol)
 				mode = modeNormal
 				startIdx = -1
 			}
 		}
 	}
+}
+
+// runePosition returns the one-based (line, column) of runes[idx] given
+// that runes[0] sits at (baseLine, baseCol). Newlines reset the column to
+// 1; every other rune advances the column by one.
+func runePosition(runes []rune, idx, baseLine, baseCol int) (int, int) {
+	line, col := baseLine, baseCol
+	for i := 0; i < idx && i < len(runes); i++ {
+		if runes[i] == '\n' {
+			line++
+			col = 1
+		} else {
+			col++
+		}
+	}
+	return line, col
+}
+
+// remapBlockToken rewrites a token's position from format-block-local
+// coordinates (where the block source starts at line 1, column 1) to the
+// surrounding source, given that the block content begins at
+// (baseLine, baseCol). Lines past the first already start at column 1 in
+// both coordinate systems, so only their line number shifts.
+func remapBlockToken(t Token, baseLine, baseCol int) Token {
+	if t.Line == 1 {
+		t.Column = baseCol + (t.Column - 1)
+		t.Line = baseLine
+	} else {
+		t.Line = baseLine + (t.Line - 1)
+	}
+	return t
 }
 
 // checkFormatBlock lexes/parses one interpolation block and walks its
@@ -1385,7 +1555,7 @@ func (c *Checker) checkFormatStringInterpolations(tok Token) {
 // reported against the format-string token's position — finer source
 // mapping inside the block is left for a follow-up. The outer stack
 // and substitution are restored before returning.
-func (c *Checker) checkFormatBlock(src string, callSite Token) {
+func (c *Checker) checkFormatBlock(src string, callSite Token, baseLine, baseCol int) {
 	lex := NewLexer(src, nil)
 	parser := NewMShellParser(lex)
 	file, err := parser.ParseFile()
@@ -1402,8 +1572,14 @@ func (c *Checker) checkFormatBlock(src string, callSite Token) {
 	cp := c.subst.Checkpoint()
 	c.stack.items = nil
 
+	errStart := len(c.errors)
 	for _, item := range file.Items {
 		c.checkParseItem(item)
+	}
+	// Diagnostics raised while walking the block carry block-local
+	// positions; shift them back onto the original source.
+	for i := errStart; i < len(c.errors); i++ {
+		c.errors[i].Pos = remapBlockToken(c.errors[i].Pos, baseLine, baseCol)
 	}
 
 	if c.stack.Len() != 1 {

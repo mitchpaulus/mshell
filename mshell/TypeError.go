@@ -40,6 +40,9 @@ const (
 	TErrInvalidCast
 	TErrTypeParse
 	TErrInterpolationArity
+	// TErrInvalidMatchPattern is emitted when a match arm pattern is not
+	// one of the recognized forms. Hint lists the legal forms.
+	TErrInvalidMatchPattern
 	// TErrDebugDump is emitted by the `dbg` builtin at each branch
 	// that walks past it. Informational severity — does not fail the
 	// type check. Hint holds the formatted snapshot of stack + vars.
@@ -134,6 +137,11 @@ func (e TypeError) Format(arena *TypeArena, names *NameTable) string {
 		fmt.Fprintf(&sb, "type parse error: %s", e.Hint)
 	case TErrInterpolationArity:
 		fmt.Fprintf(&sb, "%s", e.Hint)
+	case TErrInvalidMatchPattern:
+		fmt.Fprintf(&sb, "unrecognized match arm pattern '%s'", e.Pos.Lexeme)
+		if e.Hint != "" {
+			fmt.Fprintf(&sb, " (%s)", e.Hint)
+		}
 	case TErrDefBodyMismatch:
 		// Hint carries the human-readable "declared vs body"
 		// description. Pos is the def's name token (the body could
