@@ -1,0 +1,38 @@
+sortBy bare string
+[{"name": "Bob", "age": 25}, {"name": "Carol", "age": 28}, {"name": "Alice", "age": 30}]
+sortBy single-element list
+[{"name": "Alice", "age": 30}, {"name": "Bob", "age": 25}, {"name": "Carol", "age": 28}]
+sortBy multi-column
+[{"region": "East", "age": 25, "name": "Carol"}, {"region": "East", "age": 30, "name": "Alice"}, {"region": "West", "age": 25, "name": "Bob"}, {"region": "West", "age": 30, "name": "Dave"}]
+sortBy stability
+[{"region": "East", "age": 25}, {"region": "East", "age": 30}, {"region": "West", "age": 25}, {"region": "West", "age": 30}]
+Mixed direction sequenced
+[{"name": "Alice", "age": 30}, {"name": "Alice", "age": 25}, {"name": "Bob", "age": 30}, {"name": "Bob", "age": 25}]
+sortBy string column
+[{"s": "apple"}, {"s": "banana"}, {"s": "cherry"}]
+sortBy float column
+[{"v": 1}, {"v": 2}, {"v": 2.5}, {"v": 3}]
+sortBy datetime column
+[{"t": "2024-01-15T00:00:00"}, {"t": "2024-02-10T00:00:00"}, {"t": "2024-03-01T00:00:00"}]
+sortBy bool column
+[{"b": false}, {"b": false}, {"b": true}, {"b": true}]
+sortBy on GridView
+[{"x": 2}, {"x": 3}, {"x": 4}, {"x": 5}]
+sortBy none last
+[200 300 None]
+sortByCmp on Grid
+[{"name": "Bob", "age": 25}, {"name": "Carol", "age": 28}, {"name": "Alice", "age": 30}]
+sortByCmp on GridView
+[{"x": 2}, {"x": 3}, {"x": 4}, {"x": 5}]
+reverse on Grid
+[{"x": 4}, {"x": 3}, {"x": 2}, {"x": 1}]
+reverse on GridView
+[{"x": 5}, {"x": 4}, {"x": 3}]
+reverse on list
+[5, 4, 3, 2, 1]
+[]
+["c", "b", "a"]
+sortBy empty grid
+[]
+sortBy single row
+[{"x": 42}]

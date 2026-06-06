@@ -1,0 +1,14 @@
+# A `match` type-keyword arm must narrow the subject to the matched type.
+# In the `int` arm the subject is known to be int, so `1 +`
+# (int int -- int) type-checks; before narrowing it saw the full
+# `int | str` union and failed overload resolution.
+
+def classify (int|str -- int)
+    match
+        int :> 1 +,
+        str : 0,
+    end
+end
+
+41 classify wl
+"x" classify wl

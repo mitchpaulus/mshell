@@ -8,25 +8,36 @@ end
 
 def chunkAcc([a] int [[a]] -- [[a]])
     list!, n!, acc!
-    @list len 0 <=
-    (
+    @list len 0 <= if
         @acc
-    )
-    (
+    else
         @list @n skip # new list
         @n # chunk size
         @acc @list @n take append # accumulator
         chunkAcc
-    )
-    iff
+    end
 end
 
-def enumerate ([a] -- )
-    dup len seq (2tuple) zip
+def toCsvCell (str -- str)
+    s!
+    @s "," in or. @s "\n" in end or. @s '"' in end if
+        @s '"' '""' findReplace content!
+        $"\"{@content}\""
+    else
+        @s
+    end
 end
 
-def enumerateN ([a] int -- )
-    i! dup len seq (@i +) map (2tuple) zip
+def toCsv ([[str]] -- str)
+    map. map. toCsvCell end "," join end unlines
+end
+
+def enumerate ([a] -- [{"item": a, "index": int }])
+    dup len seq (a!, i! { "item": @a, "index": @i }) zip
+end
+
+def enumerateN ([a] int -- [{"item": a, "index": int }])
+    start! dup len seq (@start +) map (a!, i! { "item": @a, "index": @i }) zip
 end
 
 def 2each (T T (T -- b) -- b b)
@@ -46,23 +57,11 @@ def 2apply ([a] (a a -- c) -- c)
     swap 2unpack rot x
 end
 
-def each ([T] (T --) --)
-    over len each-len! # Get total length
-    0 each-idx! # index
-    (
-        @each-idx @each-len >= if
-            break
-        end
-        # "Each idx: " w @each-idx w " Each len: " w @each-len wl
-        over @each-idx nth # Get current item
-        over x  # Copy over quote, execute
-        @each-idx 1 + each-idx! # inc index
-        # "Each idx: " w @each-idx wl
-    ) loop
-
-    # Drop list and quote, total length, index
-    drop drop
-end
+# Identity quotes — useful as a no-op value selector for things like
+# `listToDict`, where you want to keep the element as-is.
+def id (T -- T) end
+def 2id (T1 T2 -- T1 T2) end
+def 3id (T1 T2 T3 -- T1 T2 T3) end
 
 def eachWhile ([T] (T -- bool) --)
     over len each-len! # Get total length
@@ -109,24 +108,6 @@ def dropWhile ([T] (T -- bool) -- [T])
     @list @dropWhile-idx skip
 end
 
-# filter (list quote -- list)
-def filter ([T] (T -- bool) -- [T])
-    list!, quote!
-    @list len filter-len! # Get total length
-    0 filter-idx! # Index
-    [] filter-accum! # Accumulator
-    (
-        @filter-idx @filter-len >= (break) iff
-        @list @filter-idx nth item!
-        # $"Item: {@item str}" wl
-        @item @quote x  result!
-        # $"Result: {@result str}" wl
-        @result ( @filter-accum @item append drop ) iff
-        @filter-idx 1 + filter-idx! # inc index
-    ) loop
-    @filter-accum
-end
-
 def linearSearch ([T] (T -- bool) -- Maybe[T])
     list!, quote!
     none linearSearch-result!
@@ -141,6 +122,22 @@ def linearSearch ([T] (T -- bool) -- Maybe[T])
         @linearSearch-idx 1 + linearSearch-idx!
     ) loop
     @linearSearch-result
+end
+
+def linearSearchIndex ([T] (T -- bool) -- Maybe[int])
+    list!, quote!
+    none linearSearchIndex-result!
+    0 linearSearchIndex-idx!
+    (
+        @linearSearchIndex-idx @list len >= (break) iff
+
+        @list @linearSearchIndex-idx nth @quote x if
+            @linearSearchIndex-idx just linearSearchIndex-result!
+            break
+        end
+        @linearSearchIndex-idx 1 + linearSearchIndex-idx!
+    ) loop
+    @linearSearchIndex-result
 end
 
 # foldl (quote initial list -- result)
@@ -159,10 +156,9 @@ def foldl ((T T -- T) T [T] -- T)
     @foldl-accum
 end
 
-# sum (list -- value)
-def sum ([float] -- float)
-    (+) 0 rot foldl
-end
+# sumInt retained as an alias for backwards compatibility; the primary
+# `sum` is now a runtime builtin that handles both [int] and [float].
+def sumInt ([int] -- int) sum end
 
 # [s]tdin [l]ines
 def sl (-- [str]) stdin lines end
@@ -192,6 +188,18 @@ def unlines ([str] -- str)
     @unlines-accum "" join
 end
 
+# unlinesCrLf (list[str] -- str)
+def unlinesCrLf ([str] -- str)
+    [] unlines-accum! # Accumulator
+    (
+       @unlines-accum swap append
+       "\r\n" append
+       drop
+    ) each
+    @unlines-accum "" join
+end
+
+
 # chomp (str -- str)
 # Strip a single trailing newline. Handles both \n and \r\n.
 def chomp (str -- str)
@@ -202,24 +210,7 @@ def chomp (str -- str)
     end
 end
 
-# reverse ([T*]|str -- [T*]|str)
-def reverse ([T] -- [T])
-    dup len 1 - reverse-idx! # Set Idx
-    [] # list accum
-    (
-        @reverse-idx 0 < if
-            break
-        end
-        over @reverse-idx nth append # Get current item
-        @reverse-idx 1 - reverse-idx! # dec index
-    ) loop
-    nip # Drop original list
-end
-
-# abs (int|float -- int|float)
-def abs (float -- float)
-    dup 0 < if -1 * end
-end
+# `abs` is now a runtime builtin (int -- int) | (float -- float).
 
 # This uses the Marsaglia polar method
 # https://en.wikipedia.org/wiki/Marsaglia_polar_method
@@ -252,7 +243,7 @@ def randomTri (float float float -- float)
         @a +
     else
         @b
-            1 @u -
+            1.0 @u -
             @b @a -
             @b @c -
             * * sqrt
@@ -297,7 +288,7 @@ def toSvgPathStr ([[numeric]] -- str)
     end
 end
 
-def scaleLinear ([numeric] [numeric] -- (numeric -- float))
+def scaleLinear ([float] [float] -- (float -- float))
     domain!, range! @domain 2unpack d0!, d1! @range 2unpack r0!, r1!
     @r1 @r0 - toFloat @d1 @d0 toFloat - / slope!
     (@d0 - @slope * @r0 +)
@@ -311,23 +302,8 @@ def readTsvFile (str -- [[str]])
     readFile lines (tsplit) map
 end
 
-def max2 (float float -- float)
-    over over < if swap end drop
-end
-
-# TODO: define actual float/int min
-def max ([float] -- float)
-    (max2) -999999999999 rot foldl
-end
-
-def min2 (float float -- float)
-    over over > if swap end drop
-end
-
-# TODO: define actual float/int max
-def min ([float] -- float)
-    (min2) 999999999999 rot foldl
-end
+# `max`, `min`, `max2`, `min2` are now runtime builtins with proper
+# int/float overload handling.
 
 # This also works for non-square matrices, swapping row-major for column-major
 # Horribly inefficient, but it works
@@ -439,24 +415,25 @@ def findByTag (dict str -- [dict])
 end
 
 def concat ([[a]] -- [a])
-    l! (+) [] @l foldl
+    # Use `extend` (in-place append) rather than `+` so we accumulate into a
+    # single freshly-allocated seed list instead of allocating a new list at
+    # every fold step. The `[]` seed is private to this call so mutation is
+    # safe; the input sublists are unmodified.
+    l! (extend) [] @l foldl
 end
 
-def cartesian ([a] [b] -- [a])
-    listA!, listB! @listA (a! @listB (b! [@a @b]) map) map concat
-end
-
-# groupBy list (a -- str) -- dict
-def groupBy ((a -- str) -- dict)
-    q! list! @list @q map uniq keys!
-    {} d! @keys (@d swap [] set drop) each
-    @list
-    (
-       i! @i @q x key!
-       @d @key get? @i append drop
-    )
-    each
-    @d
+# This is a better form from a typing perspective, because it allows for chaining
+# Can get it started with an identity list [[]]
+def cartesian ([[a]] [a] -- [[a]])
+    listA!, listB!
+    @listA map.
+        a!
+        @listB map.
+            # Need to force new list object with '+', 'extend' won't work here.
+            b! @a [@b] +
+        end
+    end
+    concat
 end
 
 def listToDict ([a] (a -- str) (a -- b) -- c)
@@ -473,7 +450,7 @@ def listToDict ([a] (a -- str) (a -- b) -- c)
     @d
 end
 
-def 2tuple (a b -- [a])
+def 2tuple (a b -- [a | b])
     [] rot append swap append
 end
 
@@ -481,8 +458,8 @@ end
 # msh {{{
 def __mshCompletion { 'complete': ['msh' 'mshell'] } ([str] -- [str])
     input!
-    ['-h' '--help' '--config' '--html' '--lex' '--parse' '--version' '-c'] options!
-    ['lsp' 'bin' 'completions'] subcommands!
+    ['-h' '--help' '--config' '--html' '--lex' '--parse' '--check-types' '--type-check-only' '--version' '-c'] options!
+    ['lsp' 'bin' 'edit' 'completions'] subcommands!
 
     @input len 0 > if
         @input :0: first!
@@ -490,6 +467,8 @@ def __mshCompletion { 'complete': ['msh' 'mshell'] } ([str] -- [str])
             [] # Nothing after lsp
         else* @first 'bin' = *if
             ['add' 'remove' 'list' 'path' 'edit' 'audit' 'debug']
+        else* @first 'edit' = *if
+            ['init']
         else* @first 'completions' = *if
             ['fish' 'bash' 'nushell' 'elvish']
         else

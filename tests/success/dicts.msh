@@ -1,0 +1,84 @@
+{
+    1 : 'is here',
+    00002 : 'also here' # This should get normalized to 2.
+} d!
+
+@d "1" get? wl
+@d "2" get? wl
+
+# Try again with no space around the colon. This is to test the handling of a STARTINDEXER token vs. a INTEGER token.
+{
+    1:'is here',
+    00002:'also here' # This should get normalized to 2.
+} d!
+
+@d "1" get? wl
+@d "2" get? wl
+
+# Now try with negatives
+{
+    -1 : '-1',
+    -00002 : '-2' # This should get normalized to 2.
+} d!
+
+@d "-1" get? wl
+@d "-2" get? wl
+
+# Try again with no space around the colon. This is to test the handling of a STARTINDEXER token vs. a INTEGER token.
+{
+    -1:'-1',
+    -00002:'-2' # This should get normalized to 2.
+} d!
+
+@d "-1" get? wl
+@d "-2" get? wl
+
+
+
+{
+    literalKey: 'Also should work'
+} str wl
+
+{
+    "hello": "world",
+    'single quote "" string': 'should work'
+} d! @d str wl
+@d keys uw
+
+{
+    "key": 1,
+    "other key": 2,
+} str wl
+
+# Test not ending with comma
+{ "key": 1, "other key": 2 3 +} str wl
+
+
+{ "key": 1 2 + } dict2! @dict2 str wl
+
+@dict2 "key" get? 3 + str wl
+
+@dict2 "key" 5 setd
+@dict2 "key" get? 3 + str wl
+
+@dict2 "key"       in ("key found in dict") ("key not found in dict") iff wl
+@dict2 "other key" in ("key found in dict") ("key not found in dict") iff wl
+
+# getDef
+{} "should not be found" 10 getDef str wl
+
+# Test set leaves dict on stack
+{} "key" 10 set str wl
+
+# 'keys' and 'values'
+{ "key1": 1, "key2": 2, "key3": 3 } keys str wl
+{ "key1": 1, "key2": 2, "key3": 3 } values str wl
+
+{} keys str wl
+{} values str wl
+
+[{"a": 1} {"a": 2}] ("a" get? str wl) each
+
+# Dict to List
+{ "a" : 1, "b": 2 } keyValues (pair! @pair :k? key!, @pair :v? value! $"{@key} {@value 1 +}") map uw
+{ "b" : 1, "a": 2 } keyValues (pair! @pair :k? key!, @pair :v? value! $"{@key} {@value 1 +}") map uw

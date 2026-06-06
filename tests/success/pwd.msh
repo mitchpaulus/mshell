@@ -1,0 +1,18 @@
+# This expects the PWD from the outer shell to be passed in as first arg
+# Should end with 'tests' for this test directory.
+args :0: pwd-from-shell!
+pwd pwd-from-mshell!
+
+@pwd-from-shell @pwd-from-mshell =
+("PWD is correct" wl)
+($"PWD is not correct, from shell arg `{@pwd-from-shell}`, from mshell `{@pwd-from-mshell}`" wl)
+iff
+
+'..' cd
+pwd new-pwd!
+@pwd-from-shell "/success" "" findReplace expected-pwd!
+
+@new-pwd @expected-pwd =
+("New PWD is correct" wl)
+($"New PWD is not correct, expected `{@expected-pwd}`, got `{@new-pwd}`." wl)
+ iff

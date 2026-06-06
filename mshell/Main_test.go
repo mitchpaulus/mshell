@@ -2,6 +2,8 @@ package main
 
 import (
 	"os"
+	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -65,5 +67,126 @@ func TestBuildSharedCompletionInsertUsesBacktickForFilePrefixes(t *testing.T) {
 	want = "'Floor "
 	if got != want {
 		t.Fatalf("buildSharedCompletionInsert() = %q, want %q", got, want)
+	}
+}
+
+func TestDefaultAppCommandFallsBackToPlatformDefault(t *testing.T) {
+	tests := []struct {
+		goos       string
+		wantName   string
+		wantArgs   []string
+	}{
+		{goos: "linux", wantName: "xdg-open", wantArgs: []string{"/tmp/init.msh"}},
+		{goos: "darwin", wantName: "open", wantArgs: []string{"/tmp/init.msh"}},
+		{goos: "windows", wantName: "powershell.exe", wantArgs: []string{"-NoProfile", "-Command", "Start-Process -FilePath '/tmp/init.msh'"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.goos, func(t *testing.T) {
+			command, args, err := defaultAppCommand("/tmp/init.msh", tt.goos)
+			if err != nil {
+				t.Fatalf("defaultAppCommand() error = %v", err)
+			}
+
+			if command != tt.wantName {
+				t.Fatalf("command = %q, want %q", command, tt.wantName)
+			}
+
+			if !reflect.DeepEqual(args, tt.wantArgs) {
+				t.Fatalf("args = %v, want %v", args, tt.wantArgs)
+			}
+		})
+	}
+}
+
+func TestOpenPathInEditorOrDefaultAppUsesEditorStringDirectly(t *testing.T) {
+	t.Setenv("EDITOR", `C:\Program Files\Neovim\bin\nvim.exe`)
+
+	oldRunAttachedCommand := runAttachedCommand
+	defer func() {
+		runAttachedCommand = oldRunAttachedCommand
+	}()
+
+	var gotName string
+	var gotArgs []string
+	runAttachedCommand = func(name string, args []string) error {
+		gotName = name
+		gotArgs = append([]string{}, args...)
+		return nil
+	}
+
+	if err := openPathInEditorOrDefaultApp(`C:\Users\me\init.msh`); err != nil {
+		t.Fatalf("openPathInEditorOrDefaultApp() error = %v", err)
+	}
+
+	if gotName != `C:\Program Files\Neovim\bin\nvim.exe` {
+		t.Fatalf("command = %q, want %q", gotName, `C:\Program Files\Neovim\bin\nvim.exe`)
+	}
+
+	wantArgs := []string{`C:\Users\me\init.msh`}
+	if !reflect.DeepEqual(gotArgs, wantArgs) {
+		t.Fatalf("args = %v, want %v", gotArgs, wantArgs)
+	}
+}
+
+func TestRunEditCommandOpensVersionedInitFilePath(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	t.Setenv("EDITOR", "my-editor")
+	t.Setenv("MSHINIT", "")
+
+	oldRunAttachedCommand := runAttachedCommand
+	defer func() {
+		runAttachedCommand = oldRunAttachedCommand
+	}()
+
+	var gotName string
+	var gotArgs []string
+	runAttachedCommand = func(name string, args []string) error {
+		gotName = name
+		gotArgs = append([]string{}, args...)
+		return nil
+	}
+
+	exitCode := runEditCommand([]string{"init"})
+	if exitCode != 0 {
+		t.Fatalf("runEditCommand() = %d, want 0", exitCode)
+	}
+
+	expectedPath := filepath.Join(configHome, "msh", mshellVersion, "init.msh")
+	if gotName != "my-editor" {
+		t.Fatalf("command = %q, want %q", gotName, "my-editor")
+	}
+
+	wantArgs := []string{expectedPath}
+	if !reflect.DeepEqual(gotArgs, wantArgs) {
+		t.Fatalf("args = %v, want %v", gotArgs, wantArgs)
+	}
+}
+
+func TestRunEditCommandUsesMSHINITOverride(t *testing.T) {
+	overridePath := filepath.Join(t.TempDir(), "custom", "init.msh")
+	t.Setenv("MSHINIT", overridePath)
+	t.Setenv("EDITOR", "my-editor")
+
+	oldRunAttachedCommand := runAttachedCommand
+	defer func() {
+		runAttachedCommand = oldRunAttachedCommand
+	}()
+
+	var gotArgs []string
+	runAttachedCommand = func(name string, args []string) error {
+		gotArgs = append([]string{}, args...)
+		return nil
+	}
+
+	exitCode := runEditCommand([]string{"init"})
+	if exitCode != 0 {
+		t.Fatalf("runEditCommand() = %d, want 0", exitCode)
+	}
+
+	wantArgs := []string{overridePath}
+	if !reflect.DeepEqual(gotArgs, wantArgs) {
+		t.Fatalf("args = %v, want %v", gotArgs, wantArgs)
 	}
 }

@@ -1,0 +1,43 @@
+def header (str --)
+    "" wl wl "========" wl
+end
+
+def result (bool --)
+    ("truey") ("falsey") iff wl
+end
+
+true false and ("truey") ("falsey") iff wl
+true true and ("truey") ("falsey") iff wl
+false false and ("truey") ("falsey") iff wl
+true false or ("truey") ("falsey") iff wl
+true true or ("truey") ("falsey") iff wl
+false false or ("truey") ("falsey") iff wl
+
+"" wl
+"Nots" wl
+"========" wl
+true false and not ("truey") ("falsey") iff wl
+true true and not ("truey") ("falsey") iff wl
+false false and not ("truey") ("falsey") iff wl
+true false or not ("truey") ("falsey") iff wl
+true true or not ("truey") ("falsey") iff wl
+false false or not ("truey") ("falsey") iff wl
+
+# Not Equals, TODO: do all combinations
+"Not Equals" header
+"Trues" header
+
+1 2 != result
+"hello" "world" != result
+
+"Falses" header
+1 1 != result
+"hello" 'hello' != result
+2025-02-14 2025-02-14 != result
+
+# Test short-circuit style and/ors
+"Short-circuiting" header
+true ("Should print" wl false) and result
+false ("Should not print" wl true) and result
+true ("Should not print" wl true) or result
+false ("Should print" wl false) or result

@@ -1,0 +1,16 @@
+# Regression: `[]` plus a list pattern with a `...rest` element are
+# jointly exhaustive over a list type. Empty covers the zero-length
+# case, the rest-binding covers every non-empty length. No wildcard
+# arm should be required.
+
+[1 2 3] match
+    [] : ,
+    [a ...rest] : ,
+end
+
+# Same coverage with an explicit prefix in front of the rest-bind.
+[1 2 3] match
+    [] : ,
+    [a b ...rest] : ,
+    [a] : ,
+end

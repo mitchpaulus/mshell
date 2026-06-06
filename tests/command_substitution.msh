@@ -1,3 +1,0 @@
-[echo "Hello,"] os ; wl
-
-[echo "Now\nthis\nshould\nhave\nWorld!"] o ; :4: wl 

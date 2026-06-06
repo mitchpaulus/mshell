@@ -1,0 +1,13 @@
+# mshell: read CSV, filter value > 50, write fingerprint.
+
+`test_dataset.csv` parseCsv toGrid
+"value" (toFloat?) updateCol
+"id" (toInt?) updateCol g!
+
+@g (:value? 50 >) filter result!
+
+@result gridRows rows!
+@result "id" gridCol sum sumId!
+@result "value" gridCol (floor) map sum sumV!
+
+$"rows\t{@rows}\nsum_id\t{@sumId}\nsum_value_floor\t{@sumV}\n" "out/mshell/filter.txt" writeFile

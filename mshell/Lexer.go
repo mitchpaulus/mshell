@@ -58,9 +58,6 @@ const (
 	ENDINDEXER
 	STARTINDEXER
 	SLICEINDEXER
-	STDOUTLINES
-	STDOUTSTRIPPED
-	STDOUTCOMPLETE
 	TILDEEXPANSION
 	STOP_ON_ERROR
 	DEF
@@ -81,6 +78,7 @@ const (
 	LEFT_CURLY
 	RIGHT_CURLY
 	COLON
+	MATCHARMDUP
 	NOTEQUAL // !=
 	BANG // !
 	STDAPPEND // >>
@@ -96,7 +94,21 @@ const (
 	STDOUTANDSTDERRREDIRECT  // &>
 	STDOUTANDSTDERRAPPEND    // &>>
 	INPLACEREDIRECT          // <>
+	GRID_OPEN                // [|
+	GRID_CLOSE               // |]
 	PREFIXQUOTE              // .functionName
+	MATCH
+	VER
+
+	// Reserved for the static type checker (Phase 5/10) and Phase 2 of the
+	// effect system. AS and TYPE are user-visible from Phase 10 onward;
+	// TRY, FAIL_KEYWORD, and PURE are reserved early so future Phase 2
+	// migration doesn't break user identifiers.
+	AS
+	TYPE
+	TRY
+	FAIL_KEYWORD
+	PURE
 )
 
 func (t TokenType) String() string {
@@ -187,12 +199,6 @@ func (t TokenType) String() string {
 		return "STARTINDEXER"
 	case SLICEINDEXER:
 		return "SLICEINDEXER"
-	case STDOUTLINES:
-		return "STDOUTLINES"
-	case STDOUTSTRIPPED:
-		return "STDOUTSTRIPPED"
-	case STDOUTCOMPLETE:
-		return "STDOUTCOMPLETE"
 	case TILDEEXPANSION:
 		return "TILDEEXPANSION"
 	case STOP_ON_ERROR:
@@ -231,6 +237,8 @@ func (t TokenType) String() string {
 		return "RIGHT_CURLY"
 	case COLON:
 		return "COLON"
+	case MATCHARMDUP:
+		return "MATCHARMDUP"
 	case NOTEQUAL:
 		return "NOTEQUAL"
 	case BANG:
@@ -261,8 +269,26 @@ func (t TokenType) String() string {
 		return "STDOUTANDSTDERRAPPEND"
 	case INPLACEREDIRECT:
 		return "INPLACEREDIRECT"
+	case GRID_OPEN:
+		return "GRID_OPEN"
+	case GRID_CLOSE:
+		return "GRID_CLOSE"
 	case PREFIXQUOTE:
 		return "PREFIXQUOTE"
+	case MATCH:
+		return "MATCH"
+	case VER:
+		return "VER"
+	case AS:
+		return "AS"
+	case TYPE:
+		return "TYPE"
+	case TRY:
+		return "TRY"
+	case FAIL_KEYWORD:
+		return "FAIL_KEYWORD"
+	case PURE:
+		return "PURE"
 	default:
 		return "UNKNOWN"
 	}
@@ -451,6 +477,14 @@ func (l *Lexer) parseLiteralOrKeyword() Token {
 		}
 	}
 
+	// If the literal is immediately followed by '!', it's a variable store —
+	// regardless of whether the literal happens to match a keyword. This lets
+	// users name a variable anything, including 'x', 'if', 'def', etc.
+	if l.peek() == '!' {
+		l.advance()
+		return l.makeToken(VARSTORE)
+	}
+
 	// Check for prefix quote syntax: literal ending with '.' (e.g., "filter.", "map.")
 	lexeme := l.input[l.start:l.current]
 	if len(lexeme) > 1 && lexeme[len(lexeme)-1] == '.' {
@@ -469,6 +503,8 @@ func (l *Lexer) literalOrKeywordType() TokenType {
 		}
 	case '+':
 		return l.checkKeyword(1, "", PLUS)
+	case 'a':
+		return l.checkKeyword(1, "s", AS)
 	case 'b':
 		if l.curLen() > 1 {
 			c := l.input[l.start+1]
@@ -502,7 +538,14 @@ func (l *Lexer) literalOrKeywordType() TokenType {
 			c := l.input[l.start+1]
 			switch c {
 			case 'a':
-				return l.checkKeyword(2, "lse", FALSE)
+				if l.curLen() > 2 {
+					switch l.input[l.start+2] {
+					case 'l':
+						return l.checkKeyword(3, "se", FALSE)
+					case 'i':
+						return l.checkKeyword(3, "l", FAIL_KEYWORD)
+					}
+				}
 			case 'l':
 				return l.checkKeyword(2, "oat", TYPEFLOAT)
 			}
@@ -524,20 +567,12 @@ func (l *Lexer) literalOrKeywordType() TokenType {
 		}
 	case 'l':
 		return l.checkKeyword(1, "oop", LOOP)
+	case 'm':
+		return l.checkKeyword(1, "atch", MATCH)
 	case 'n':
 		return l.checkKeyword(1, "ot", NOT)
-	case 'o':
-		if l.curLen() == 1 {
-			return STDOUTLINES
-		}
-
-		c := l.input[l.start+1]
-		switch c {
-		case 'c':
-			return l.checkKeyword(2, "", STDOUTCOMPLETE)
-		case 's':
-			return l.checkKeyword(2, "", STDOUTSTRIPPED)
-		}
+	case 'p':
+		return l.checkKeyword(1, "ure", PURE)
 	case 'r':
 		return l.checkKeyword(1, "ead", READ)
 	case 's':
@@ -551,7 +586,24 @@ func (l *Lexer) literalOrKeywordType() TokenType {
 			}
 		}
 	case 't':
-		return l.checkKeyword(1, "rue", TRUE)
+		if l.curLen() > 1 {
+			c := l.input[l.start+1]
+			switch c {
+			case 'r':
+				if l.curLen() > 2 {
+					switch l.input[l.start+2] {
+					case 'u':
+						return l.checkKeyword(3, "e", TRUE)
+					case 'y':
+						return l.checkKeyword(3, "", TRY)
+					}
+				}
+			case 'y':
+				return l.checkKeyword(2, "pe", TYPE)
+			}
+		}
+	case 'V':
+		return l.checkKeyword(1, "ER", VER)
 	case 'x':
 		if l.curLen() == 1 {
 			return INTERPRET
@@ -645,6 +697,10 @@ func (l *Lexer) scanTokenAll() Token {
 	case '\'':
 		return l.parseSingleQuoteString()
 	case '[':
+		if l.peek() == '|' {
+			l.advance()
+			return l.makeToken(GRID_OPEN)
+		}
 		return l.makeToken(LEFT_SQUARE_BRACKET)
 	case ']':
 		return l.makeToken(RIGHT_SQUARE_BRACKET)
@@ -659,6 +715,10 @@ func (l *Lexer) scanTokenAll() Token {
 	case ';':
 		return l.makeToken(EXECUTE)
 	case '|':
+		if l.peek() == ']' {
+			l.advance()
+			return l.makeToken(GRID_CLOSE)
+		}
 		return l.makeToken(PIPE)
 	case '?':
 		return l.makeToken(QUESTION)
@@ -975,6 +1035,11 @@ func (l *Lexer) parseIndexerOrColon() Token {
 	// Return literal if at end
 	if c == 0 {
 		return l.makeToken(COLON)
+	}
+
+	if c == '>' {
+		l.advance()
+		return l.makeToken(MATCHARMDUP)
 	}
 
 	if unicode.IsDigit(c) || c == '-' {

@@ -1,0 +1,6 @@
+"over" wl
+1 2 over wl wl wl
+"swap" wl
+1 2 swap wl wl
+"drop" wl
+1 2 drop wl

@@ -1,9 +1,15 @@
 package main
 
 import (
+	"slices"
+	"archive/tar"
+	"archive/zip"
 	"bytes"
+	"compress/gzip"
+	"context"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"os/user"
@@ -11,22 +17,45 @@ import (
 	"runtime"
 	"sort"
 	"strings"
-	"sync/atomic"
+	"sync"
+	"time"
 	"unicode/utf8"
 
 	"golang.org/x/term"
 )
 
+type previewRequest struct {
+	path     string
+	entry    os.DirEntry
+	maxLines int
+	gen      uint64
+}
+
 type previewResult struct {
 	path  string
 	lines []string
+	gen   uint64
 }
 
-type inputEvent struct {
-	buf []byte
-	n   int
-	err error
+type archiveListingEntry struct {
+	name     string
+	isDir    bool
+	size     int64
+	modified time.Time
 }
+
+type fileManagerVolumeEntry struct {
+	name string
+}
+
+func (e fileManagerVolumeEntry) Name() string               { return e.name }
+func (e fileManagerVolumeEntry) IsDir() bool                { return true }
+func (e fileManagerVolumeEntry) Type() fs.FileMode          { return fs.ModeDir }
+func (e fileManagerVolumeEntry) Info() (fs.FileInfo, error) { return nil, nil }
+
+// OneDrive may create this hidden lock/metadata file inside synced directories.
+// Hide it from the file manager so it does not clutter listings or previews.
+const oneDriveHiddenMetadataFileName = ".849C9593-D756-4E56-8D6E-42412F2A707B"
 
 type FileManager struct {
 	rows, cols int
@@ -37,18 +66,19 @@ type FileManager struct {
 	entries    []os.DirEntry
 	cursor     int
 	offset     int
+	showingWindowsVolumes bool
 
 	hostname string
 	username string
 
 	lastKey byte // for gg detection
 
-	previewCache   map[string][]string // cached preview lines per file path
-	previewChan    chan previewResult   // channel for async preview results
-	previewLoading string              // path currently being loaded async
-	inputChan      chan inputEvent
-	quitChan       chan struct{}
-	modalActive    atomic.Bool
+	previewCache  map[string][]string // cached preview lines per file path
+	previewReqCh  chan previewRequest  // sends requests to the preview worker
+	previewChan   chan previewResult   // receives results from the preview worker
+	previewDone   chan struct{}        // closed to shut down preview goroutines
+	previewWG     sync.WaitGroup
+	previewGen    uint64               // bumped on selection change; stale results are dropped
 
 	// Search state
 	searching    bool   // true when typing a search query
@@ -71,6 +101,10 @@ type FileManager struct {
 
 	// Status message (shown once at bottom, cleared on first keypress)
 	statusMsg string
+
+	// renderMu serializes render() calls between the main loop and the
+	// preview receiver goroutine.
+	renderMu sync.Mutex
 }
 
 // RunFileManager runs as a standalone subcommand (msh fm).
@@ -248,78 +282,144 @@ func (fm *FileManager) initUserInfo() {
 	}
 }
 
-func (fm *FileManager) mainLoop() {
-	fm.inputChan = make(chan inputEvent, 1)
-	fm.previewChan = make(chan previewResult, 4)
-	fm.quitChan = make(chan struct{}, 1)
+func (fm *FileManager) startPreviewLoop() {
+	fm.previewReqCh = make(chan previewRequest, 1)
+	fm.previewChan = make(chan previewResult, 1)
+	fm.previewDone = make(chan struct{})
 
+	// Worker goroutine: computes previews, coalescing rapid requests.
+	fm.previewWG.Add(1)
 	go func() {
+		defer fm.previewWG.Done()
 		for {
-			buf := make([]byte, 16)
-			n, err := os.Stdin.Read(buf)
-			if err != nil {
-				fm.inputChan <- inputEvent{buf: buf, n: 0, err: err}
+			select {
+			case <-fm.previewDone:
 				return
+			case req := <-fm.previewReqCh:
+				// Drain and keep only the newest request.
+				for {
+					select {
+					case newer := <-fm.previewReqCh:
+						req = newer
+					default:
+						goto COMPUTE
+					}
+				}
+			COMPUTE:
+				lines := computePreview(req.entry, req.path, req.maxLines)
+				select {
+				case <-fm.previewDone:
+					return
+				case fm.previewChan <- previewResult{
+					path:  req.path,
+					lines: lines,
+					gen:   req.gen,
+				}:
+				}
 			}
-			// Check for 'q' quit directly in the reader so we never
-			// block on a channel send after the main loop has exited.
-			if n == 1 && buf[0] == 'q' && !fm.modalActive.Load() && !fm.searching && !fm.renaming && !fm.pendingMark && !fm.showingBookmarks {
-				fm.quitChan <- struct{}{}
-				return
-			}
-			fm.inputChan <- inputEvent{buf: buf, n: n, err: nil}
 		}
 	}()
 
-	for {
-		fm.render()
-
-		select {
-		case ev := <-fm.inputChan:
-			if ev.err != nil || ev.n == 0 {
+	// Receiver goroutine: applies results and re-renders.
+	fm.previewWG.Add(1)
+	go func() {
+		defer fm.previewWG.Done()
+		for {
+			select {
+			case <-fm.previewDone:
 				return
+			case result := <-fm.previewChan:
+				fm.renderMu.Lock()
+				if result.gen == fm.previewGen {
+					fm.previewCache[result.path] = result.lines
+					fm.render()
+				}
+				fm.renderMu.Unlock()
 			}
-			fm.handleInput(ev.buf, ev.n)
-		case <-fm.quitChan:
-			return
-		case result := <-fm.previewChan:
-			fm.handlePreviewResult(result)
 		}
+	}()
+}
+
+func (fm *FileManager) stopPreviewLoop() {
+	close(fm.previewDone)
+	fm.previewWG.Wait()
+}
+
+// schedulePreview sends a preview request for the currently selected entry.
+// Safe to call on every cursor/directory change; the worker coalesces rapid
+// requests and stale results are dropped via the generation number.
+func (fm *FileManager) schedulePreview() {
+	if len(fm.entries) == 0 || fm.cursor >= len(fm.entries) {
+		return
+	}
+	entry := fm.entries[fm.cursor]
+	path := fm.selectedEntryPath(entry)
+
+	if _, ok := fm.previewCache[path]; ok {
+		return // already cached
+	}
+
+	fm.previewGen++
+
+	req := previewRequest{
+		path:     path,
+		entry:    entry,
+		maxLines: fm.visibleRows(),
+		gen:      fm.previewGen,
+	}
+
+	// Non-blocking send; if the channel is full the worker will drain
+	// and pick up the latest request.
+	select {
+	case fm.previewReqCh <- req:
+	default:
+		// Channel full — drain the old request and send the new one.
+		select {
+		case <-fm.previewReqCh:
+		default:
+		}
+		fm.previewReqCh <- req
 	}
 }
 
-func (fm *FileManager) handlePreviewResult(result previewResult) {
-	fm.previewCache[result.path] = result.lines
-	if fm.previewLoading == result.path {
-		fm.previewLoading = ""
+func (fm *FileManager) mainLoop() {
+	fm.startPreviewLoop()
+	defer fm.stopPreviewLoop()
+
+	for {
+		fm.renderMu.Lock()
+		fm.schedulePreview()
+		fm.render()
+		fm.renderMu.Unlock()
+
+		buf := make([]byte, 16)
+		n, err := os.Stdin.Read(buf)
+		if err != nil || n == 0 {
+			return
+		}
+		if fm.handleInput(buf, n) {
+			return
+		}
 	}
 }
 
 func (fm *FileManager) readModalKey() (byte, bool) {
-	fm.modalActive.Store(true)
-	defer fm.modalActive.Store(false)
-
-	for {
-		select {
-		case ev := <-fm.inputChan:
-			if ev.err != nil || ev.n == 0 {
-				return 0, false
-			}
-			return ev.buf[0], true
-		case <-fm.quitChan:
-			return 0, false
-		case result := <-fm.previewChan:
-			fm.handlePreviewResult(result)
-		}
+	buf := make([]byte, 16)
+	n, err := os.Stdin.Read(buf)
+	if err != nil || n == 0 {
+		return 0, false
 	}
+	return buf[0], true
 }
 
 func (fm *FileManager) loadDirectory() {
+	fm.showingWindowsVolumes = false
 	entries, err := os.ReadDir(fm.currentDir)
 	if err != nil {
 		fm.entries = nil
 		return
 	}
+	entries = filterIgnoredFileManagerEntries(entries)
 
 	sort.SliceStable(entries, func(i, j int) bool {
 		iDir := entries[i].IsDir()
@@ -334,6 +434,63 @@ func (fm *FileManager) loadDirectory() {
 	fm.previewCache = make(map[string][]string)
 	fm.searchActive = false
 	fm.searchMatches = fm.searchMatches[:0]
+}
+
+func windowsVolumeRoot(name string) string {
+	return name + `\`
+}
+
+func windowsVolumeName(path string) string {
+	volumeName := filepath.VolumeName(path)
+	if len(volumeName) == 2 && volumeName[1] == ':' {
+		return strings.ToUpper(volumeName)
+	}
+	return ""
+}
+
+func isWindowsVolumeRoot(path string) bool {
+	if runtime.GOOS != "windows" {
+		return false
+	}
+	volumeName := windowsVolumeName(path)
+	if volumeName == "" {
+		return false
+	}
+	return filepath.Clean(path) == filepath.Clean(windowsVolumeRoot(volumeName))
+}
+
+func (fm *FileManager) selectedEntryPath(entry os.DirEntry) string {
+	if fm.showingWindowsVolumes {
+		return windowsVolumeRoot(entry.Name())
+	}
+	return filepath.Join(fm.currentDir, entry.Name())
+}
+
+func (fm *FileManager) showWindowsVolumes() {
+	fm.entries = mountedWindowsVolumes()
+	fm.previewCache = make(map[string][]string)
+	fm.searchActive = false
+	fm.searchMatches = fm.searchMatches[:0]
+	fm.showingWindowsVolumes = true
+	fm.cursor = 0
+	fm.offset = 0
+
+	currentVolume := windowsVolumeName(fm.currentDir)
+	for i, entry := range fm.entries {
+		if entry.Name() == currentVolume {
+			fm.cursor = i
+			fm.adjustScroll()
+			break
+		}
+	}
+}
+
+func (fm *FileManager) requireRealDirectory() bool {
+	if !fm.showingWindowsVolumes {
+		return true
+	}
+	fm.statusMsg = "Select a volume first."
+	return false
 }
 
 func (fm *FileManager) visibleRows() int {
@@ -391,7 +548,7 @@ func (fm *FileManager) leftPaneWidth() int {
 		if fm.entries[i].IsDir() {
 			nameLen++ // for '/'
 		}
-		entryPath := filepath.Join(fm.currentDir, fm.entries[i].Name())
+		entryPath := fm.selectedEntryPath(fm.entries[i])
 		if clipSet[entryPath] {
 			nameLen += 2 // indent for clipboard entries
 		}
@@ -495,7 +652,11 @@ func (fm *FileManager) render() {
 	}
 
 	// Header row
-	header := fmt.Sprintf(" %s@%s: %s", fm.username, fm.hostname, fm.currentDir)
+	headerDir := fm.currentDir
+	if fm.showingWindowsVolumes {
+		headerDir = "Windows volumes"
+	}
+	header := fmt.Sprintf(" %s@%s: %s", fm.username, fm.hostname, headerDir)
 
 	// Clipboard status suffix
 	clipStatus := ""
@@ -551,7 +712,7 @@ func (fm *FileManager) render() {
 				name += "/"
 			}
 
-			entryPath := filepath.Join(fm.currentDir, entry.Name())
+			entryPath := fm.selectedEntryPath(entry)
 			inCut := cutSet[entryPath]
 			inCopy := copySet[entryPath]
 			inClip := inCut || inCopy
@@ -656,35 +817,42 @@ func (fm *FileManager) render() {
 	// Bookmark overlay
 	if fm.pendingMark || fm.showingBookmarks {
 		fm.renderBookmarkOverlay(&buf)
+	} else if fm.lastKey != 0 {
+		fm.renderPrefixOverlay(&buf)
 	}
 
 	fm.ttyOut.Write(buf.Bytes())
 }
 
-func (fm *FileManager) renderBookmarkOverlay(buf *bytes.Buffer) {
-	// Draw a centered overlay box
-	var lines []string
-	if fm.pendingMark {
-		lines = append(lines, " Set bookmark (0-9, a-z): ")
-	} else {
-		lines = append(lines, " Go to bookmark: ")
-	}
-	// List existing bookmarks
-	for c := byte('0'); c <= '9'; c++ {
-		if dir, ok := fm.bookmarks[c]; ok {
-			lines = append(lines, fmt.Sprintf("  %c  %s", c, dir))
+func (fm *FileManager) renderPrefixOverlay(buf *bytes.Buffer) {
+	var title string
+	var bindings [][2]string
+	switch fm.lastKey {
+	case 'y':
+		title = " Yank "
+		bindings = [][2]string{
+			{"y", "copy entry to file-manager clipboard"},
+			{"f", "file name → system clipboard"},
+			{"p", "full path → system clipboard"},
+			{"g", "git-relative path → system clipboard"},
 		}
-	}
-	for c := byte('a'); c <= 'z'; c++ {
-		if dir, ok := fm.bookmarks[c]; ok {
-			lines = append(lines, fmt.Sprintf("  %c  %s", c, dir))
+	case 'g':
+		title = " Go "
+		bindings = [][2]string{
+			{"g", "jump to top"},
 		}
-	}
-	if len(lines) == 1 {
-		lines = append(lines, "  (no bookmarks)")
+	default:
+		return
 	}
 
-	// Find box width
+	lines := []string{title}
+	for _, b := range bindings {
+		lines = append(lines, fmt.Sprintf("  %s  %s", b[0], b[1]))
+	}
+	fm.drawOverlayBox(buf, lines)
+}
+
+func (fm *FileManager) drawOverlayBox(buf *bytes.Buffer, lines []string) {
 	boxW := 0
 	for _, l := range lines {
 		runes := utf8.RuneCountInString(l)
@@ -692,12 +860,11 @@ func (fm *FileManager) renderBookmarkOverlay(buf *bytes.Buffer) {
 			boxW = runes
 		}
 	}
-	boxW += 2 // padding
+	boxW += 2
 	if boxW > fm.cols-4 {
 		boxW = fm.cols - 4
 	}
 
-	// Center position
 	startCol := (fm.cols - boxW) / 2
 	if startCol < 1 {
 		startCol = 1
@@ -713,7 +880,7 @@ func (fm *FileManager) renderBookmarkOverlay(buf *bytes.Buffer) {
 			break
 		}
 		buf.WriteString(fmt.Sprintf("\033[%d;%dH", row, startCol))
-		buf.WriteString("\033[7m") // reverse video
+		buf.WriteString("\033[7m")
 		lineRunes := utf8.RuneCountInString(line)
 		if lineRunes > boxW {
 			line = truncateMiddle(line, boxW)
@@ -728,27 +895,44 @@ func (fm *FileManager) renderBookmarkOverlay(buf *bytes.Buffer) {
 	}
 }
 
+func (fm *FileManager) renderBookmarkOverlay(buf *bytes.Buffer) {
+	var lines []string
+	if fm.pendingMark {
+		lines = append(lines, " Set bookmark (0-9, a-z, A-Z): ")
+	} else {
+		lines = append(lines, " Go to bookmark: ")
+	}
+	for c := byte('0'); c <= '9'; c++ {
+		if dir, ok := fm.bookmarks[c]; ok {
+			lines = append(lines, fmt.Sprintf("  %c  %s", c, dir))
+		}
+	}
+	for c := byte('a'); c <= 'z'; c++ {
+		if dir, ok := fm.bookmarks[c]; ok {
+			lines = append(lines, fmt.Sprintf("  %c  %s", c, dir))
+		}
+	}
+	for c := byte('A'); c <= 'Z'; c++ {
+		if dir, ok := fm.bookmarks[c]; ok {
+			lines = append(lines, fmt.Sprintf("  %c  %s", c, dir))
+		}
+	}
+	if len(lines) == 1 {
+		lines = append(lines, "  (no bookmarks)")
+	}
+	fm.drawOverlayBox(buf, lines)
+}
+
 func (fm *FileManager) getPreview() []string {
 	if len(fm.entries) == 0 || fm.cursor >= len(fm.entries) {
 		return nil
 	}
 
 	entry := fm.entries[fm.cursor]
-	path := filepath.Join(fm.currentDir, entry.Name())
+	path := fm.selectedEntryPath(entry)
 
 	if cached, ok := fm.previewCache[path]; ok {
 		return cached
-	}
-
-	// Start async load if not already loading this path
-	if fm.previewLoading != path {
-		fm.previewLoading = path
-		maxLines := fm.visibleRows()
-		ch := fm.previewChan
-		go func() {
-			lines := computePreview(entry, path, maxLines)
-			ch <- previewResult{path: path, lines: lines}
-		}()
 	}
 
 	return []string{" Loading..."}
@@ -760,6 +944,7 @@ func computePreview(entry os.DirEntry, path string, maxLines int) []string {
 		if err != nil {
 			return []string{" (cannot read)"}
 		}
+		subEntries = filterIgnoredFileManagerEntries(subEntries)
 		sort.SliceStable(subEntries, func(i, j int) bool {
 			iDir := subEntries[i].IsDir()
 			jDir := subEntries[j].IsDir()
@@ -783,15 +968,22 @@ func computePreview(entry os.DirEntry, path string, maxLines int) []string {
 		return lines
 	}
 
-	// PDFs don't always have a null byte, so treat by extension
-	if strings.EqualFold(filepath.Ext(path), ".pdf") {
+	if isZipPreviewPath(path) {
+		return previewZipArchive(path, maxLines)
+	}
+
+	if isTarGzPreviewPath(path) {
+		return previewTarGzArchive(path, maxLines)
+	}
+
+	if hasKnownBinaryPreviewExtension(path) {
 		return []string{" (binary file)"}
 	}
 
 	// Check for binary before reading full file
 	f, err := os.Open(path)
 	if err != nil {
-		return []string{" (cannot read)"}
+		return []string{" (cannot open for reading)"}
 	}
 	defer f.Close()
 
@@ -821,17 +1013,310 @@ func computePreview(entry os.DirEntry, path string, maxLines int) []string {
 	return lines
 }
 
-func (fm *FileManager) handleInput(buf []byte, n int) {
-	fm.statusMsg = ""
+func filterIgnoredFileManagerEntries(entries []os.DirEntry) []os.DirEntry {
+	filtered := make([]os.DirEntry, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Name() == oneDriveHiddenMetadataFileName {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	return filtered
+}
 
+func isZipPreviewPath(path string) bool {
+	return strings.EqualFold(filepath.Ext(path), ".zip")
+}
+
+func isTarGzPreviewPath(path string) bool {
+	lowerPath := strings.ToLower(path)
+	return strings.HasSuffix(lowerPath, ".tar.gz") || strings.HasSuffix(lowerPath, ".tgz")
+}
+
+func hasKnownBinaryPreviewExtension(path string) bool {
+	lowerPath := strings.ToLower(path)
+	for _, suffix := range []string{
+		".aac",
+		".ai",
+		".apk",
+		".appimage",
+		".avi",
+		".bmp",
+		".deb",
+		".dll",
+		".doc",
+		".docx",
+		".dylib",
+		".exe",
+		".flac",
+		".gif",
+		".heic",
+		".ico",
+		".img",
+		".iso",
+		".jar",
+		".jpeg",
+		".jpg",
+		".m4a",
+		".mkv",
+		".mov",
+		".mp3",
+		".mp4",
+		".msi",
+		".ogg",
+		".otf",
+		".pdf",
+		".png",
+		".ppt",
+		".pptx",
+		".rpm",
+		".so",
+		".tif",
+		".tiff",
+		".ttf",
+		".vhd",
+		".vhdx",
+		".wav",
+		".webm",
+		".webp",
+		".wmv",
+		".woff",
+		".woff2",
+		".xls",
+		".xlsb",
+		".xlsm",
+		".xlsx",
+	} {
+		if strings.HasSuffix(lowerPath, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+func previewZipArchive(path string, maxLines int) []string {
+	reader, err := zip.OpenReader(path)
+	if err != nil {
+		return []string{" (cannot read zip archive)"}
+	}
+	defer reader.Close()
+
+	entries := make([]archiveListingEntry, 0, len(reader.File))
+	var totalSize int64
+	fileCount := 0
+	dirCount := 0
+	for _, file := range reader.File {
+		entry := archiveListingEntry{
+			name:     file.Name,
+			isDir:    file.FileInfo().IsDir(),
+			size:     int64(file.UncompressedSize64),
+			modified: file.Modified,
+		}
+		entries = append(entries, entry)
+		if entry.isDir {
+			dirCount++
+		} else {
+			fileCount++
+			totalSize += entry.size
+		}
+	}
+
+	return buildDetailedArchivePreviewLines(path, entries, totalSize, fileCount, dirCount, maxLines)
+}
+
+func buildDetailedArchivePreviewLines(path string, entries []archiveListingEntry, totalSize int64, fileCount int, dirCount int, maxLines int) []string {
+	sizeWidth := len("Length")
+	for _, entry := range entries {
+		sizeLen := len(formatPreviewSize(entry.size))
+		if sizeLen > sizeWidth {
+			sizeWidth = sizeLen
+		}
+	}
+
+	headerLine := fmt.Sprintf(" %*s  %-10s %-8s  %s", sizeWidth, "Length", "Date", "Time", "Name")
+	dashLine := fmt.Sprintf(" %s  %s %s  %s",
+		strings.Repeat("-", sizeWidth),
+		strings.Repeat("-", 10),
+		strings.Repeat("-", 8),
+		strings.Repeat("-", 4),
+	)
+
+	lines := []string{
+		fmt.Sprintf(" Archive:  %s", path),
+		headerLine,
+		dashLine,
+	}
+
+	for _, entry := range entries {
+		name := entry.name
+		if entry.isDir && !strings.HasSuffix(name, "/") {
+			name += "/"
+		}
+
+		dateStr := "----------"
+		timeStr := "--------"
+		if !entry.modified.IsZero() {
+			dateStr = entry.modified.Format("2006-01-02")
+			timeStr = entry.modified.Format("3:04 PM")
+		}
+
+		lines = append(lines, fmt.Sprintf(
+			" %*s  %s %-8s  %s",
+			sizeWidth,
+			formatPreviewSize(entry.size),
+			dateStr,
+			timeStr,
+			name,
+		))
+	}
+
+	summaryLabel := fmt.Sprintf("%d files", fileCount)
+	if dirCount > 0 {
+		summaryLabel = fmt.Sprintf("%s, %d dirs", summaryLabel, dirCount)
+	}
+	lines = append(lines, dashLine)
+	lines = append(lines, fmt.Sprintf(" %*s  %s %s  %s",
+		sizeWidth,
+		formatPreviewSize(totalSize),
+		strings.Repeat(" ", 10),
+		strings.Repeat(" ", 8),
+		summaryLabel,
+	))
+
+	return truncatePreviewMiddle(lines, 3, 2, maxLines)
+}
+
+func truncatePreviewMiddle(lines []string, keepHead int, keepTail int, maxLines int) []string {
+	if maxLines <= 0 || len(lines) <= maxLines {
+		return lines
+	}
+	if maxLines == 1 {
+		return lines[:1]
+	}
+	if keepHead+keepTail >= maxLines {
+		return truncatePreviewLines(lines, maxLines)
+	}
+
+	head := append([]string{}, lines[:keepHead]...)
+	tail := append([]string{}, lines[len(lines)-keepTail:]...)
+	omitted := len(lines) - len(head) - len(tail)
+	head = append(head, fmt.Sprintf(" ... %d more", omitted))
+	head = append(head, tail...)
+	return head
+}
+
+func previewTarGzArchive(path string, maxLines int) []string {
+	file, err := os.Open(path)
+	if err != nil {
+		return []string{" (cannot open archive)"}
+	}
+	defer file.Close()
+
+	gzipReader, err := gzip.NewReader(file)
+	if err != nil {
+		return []string{" (cannot read tar.gz archive)"}
+	}
+	defer gzipReader.Close()
+
+	tarReader := tar.NewReader(gzipReader)
+	entries := make([]archiveListingEntry, 0)
+	var totalSize int64
+	fileCount := 0
+	dirCount := 0
+	for {
+		header, err := tarReader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return []string{" (cannot read tar.gz archive)"}
+		}
+
+		entry := archiveListingEntry{
+			name:  header.Name,
+			isDir: header.FileInfo().IsDir(),
+			size:  header.Size,
+			modified: header.ModTime,
+		}
+		entries = append(entries, entry)
+		if entry.isDir {
+			dirCount++
+		} else {
+			fileCount++
+			totalSize += entry.size
+		}
+	}
+
+	return buildDetailedArchivePreviewLines(path, entries, totalSize, fileCount, dirCount, maxLines)
+}
+
+func truncatePreviewLines(lines []string, maxLines int) []string {
+	if maxLines <= 0 || len(lines) <= maxLines {
+		return lines
+	}
+	if maxLines == 1 {
+		return lines[:1]
+	}
+
+	remaining := len(lines) - maxLines + 1
+	truncated := append([]string{}, lines[:maxLines-1]...)
+	truncated = append(truncated, fmt.Sprintf(" ... %d more", remaining))
+	return truncated
+}
+
+func formatPreviewSize(size int64) string {
+	if size < 1024 {
+		return fmt.Sprintf("%d B", size)
+	}
+
+	value := float64(size)
+	for _, unit := range []string{"KiB", "MiB", "GiB", "TiB"} {
+		value /= 1024
+		if value < 1024 {
+			return fmt.Sprintf("%.1f %s", value, unit)
+		}
+	}
+	return fmt.Sprintf("%.1f PiB", value/1024)
+}
+
+func escapeSequenceLength(buf []byte) int {
+	if len(buf) >= 5 && buf[0] == 0x1b && buf[1] == '[' && buf[2] == '1' && buf[3] == '5' && buf[4] == '~' {
+		return 5
+	}
+	if len(buf) >= 3 && buf[0] == 0x1b && buf[1] == '[' {
+		switch buf[2] {
+		case 'A', 'B', 'C', 'D', 'F', 'H':
+			return 3
+		}
+	}
+	return 1
+}
+
+func (fm *FileManager) handleInput(buf []byte, n int) bool {
+	fm.renderMu.Lock()
+	defer fm.renderMu.Unlock()
+
+	fm.statusMsg = ""
+	for i := 0; i < n; {
+		consumed, quit := fm.handleInputEvent(buf[i:n])
+		if quit {
+			return true
+		}
+		if consumed <= 0 {
+			consumed = 1
+		}
+		i += consumed
+	}
+	return false
+}
+
+func (fm *FileManager) handleInputEvent(buf []byte) (int, bool) {
 	if fm.searching {
-		fm.handleSearchInput(buf, n)
-		return
+		return fm.handleSearchInput(buf), false
 	}
 
 	if fm.renaming {
-		fm.handleRenameInput(buf, n)
-		return
+		return fm.handleRenameInput(buf), false
 	}
 
 	key := buf[0]
@@ -842,7 +1327,7 @@ func (fm *FileManager) handleInput(buf []byte, n int) {
 			fm.bookmarks[key] = fm.currentDir
 			saveBookmarks(fm.bookmarks)
 		}
-		return
+		return 1, false
 	}
 
 	if fm.showingBookmarks {
@@ -855,45 +1340,51 @@ func (fm *FileManager) handleInput(buf []byte, n int) {
 				fm.loadDirectory()
 			}
 		}
-		return
+		return 1, false
 	}
 
 	// Check for escape sequences
-	if n >= 3 && buf[0] == 0x1b && buf[1] == '[' {
+	if len(buf) >= 3 && buf[0] == 0x1b && buf[1] == '[' {
 		switch buf[2] {
 		case 'A': // Up arrow
 			fm.cursor--
 			fm.clampCursor()
 			fm.adjustScroll()
 			fm.lastKey = 0
-			return
+			return 3, false
 		case 'B': // Down arrow
 			fm.cursor++
 			fm.clampCursor()
 			fm.adjustScroll()
 			fm.lastKey = 0
-			return
+			return 3, false
 		case 'C': // Right arrow - enter directory
 			fm.enterSelected()
 			fm.lastKey = 0
-			return
+			return 3, false
 		case 'D': // Left arrow - parent directory
 			fm.goParent()
 			fm.lastKey = 0
-			return
+			return 3, false
 		}
 
 		// F5 = \033[15~
-		if n >= 4 && buf[2] == '1' && buf[3] == '5' {
-			fm.loadDirectory()
+		if len(buf) >= 5 && buf[2] == '1' && buf[3] == '5' && buf[4] == '~' {
+			if fm.showingWindowsVolumes {
+				fm.showWindowsVolumes()
+			} else {
+				fm.loadDirectory()
+			}
 			fm.clampCursor()
 			fm.adjustScroll()
 			fm.lastKey = 0
-			return
+			return 5, false
 		}
 	}
 
 	switch key {
+	case 'q':
+		return 1, true
 	case 'j':
 		fm.cursor++
 		fm.clampCursor()
@@ -911,14 +1402,19 @@ func (fm *FileManager) handleInput(buf []byte, n int) {
 		fm.clampCursor()
 		fm.adjustScroll()
 	case 'g':
+		if fm.lastKey == 'y' {
+			fm.yankSystemClipboard(yankGitPath)
+			fm.lastKey = 0
+			return 1, false
+		}
 		if fm.lastKey == 'g' {
 			fm.cursor = 0
 			fm.offset = 0
 			fm.lastKey = 0
-			return
+			return 1, false
 		}
 		fm.lastKey = 'g'
-		return
+		return 1, false
 	case 4: // Ctrl-d
 		fm.cursor += 10
 		fm.clampCursor()
@@ -928,56 +1424,81 @@ func (fm *FileManager) handleInput(buf []byte, n int) {
 		fm.clampCursor()
 		fm.adjustScroll()
 	case 'e':
-		fm.openEditor()
+		if fm.requireRealDirectory() {
+			fm.openEditor()
+		}
 	case 'r':
+		if !fm.requireRealDirectory() {
+			return 1, false
+		}
 		fm.startRename()
-		return
+		return 1, false
 	case '/':
 		fm.searching = true
 		fm.searchQuery = fm.searchQuery[:0]
 		fm.ttyOut.WriteString("\033[?25h") // show cursor
-		return
+		return 1, false
 	case 'n':
 		fm.searchNext()
 	case 'N':
 		fm.searchPrev()
 	case 'd':
-		fm.clipboardCut()
+		if fm.requireRealDirectory() {
+			fm.clipboardCut()
+		}
 	case 'y':
 		if fm.lastKey == 'y' {
-			fm.clipboardCopy()
+			if fm.requireRealDirectory() {
+				fm.clipboardCopy()
+			}
 			fm.lastKey = 0
-			return
+			return 1, false
 		}
 		fm.lastKey = 'y'
-		return
+		return 1, false
+	case 'f':
+		if fm.lastKey == 'y' {
+			fm.yankSystemClipboard(yankFileName)
+			fm.lastKey = 0
+			return 1, false
+		}
 	case 'p':
-		fm.clipboardPaste()
+		if fm.lastKey == 'y' {
+			fm.yankSystemClipboard(yankFullPath)
+			fm.lastKey = 0
+			return 1, false
+		}
+		if fm.requireRealDirectory() {
+			fm.clipboardPaste()
+		}
 	case 'c':
 		clearClipboard()
 	case 'x':
-		fm.deleteEntry()
+		if fm.requireRealDirectory() {
+			fm.deleteEntry()
+		}
 	case 'm':
 		fm.pendingMark = true
-		return
+		return 1, false
 	case ';':
 		fm.showingBookmarks = true
-		return
+		return 1, false
 	}
 
 	if key != 'g' && key != 'y' {
 		fm.lastKey = 0
 	}
+	return 1, false
 }
 
-func (fm *FileManager) handleSearchInput(buf []byte, _ int) {
+func (fm *FileManager) handleSearchInput(buf []byte) int {
 	key := buf[0]
 
 	// Escape cancels search
 	if key == 0x1b {
 		fm.searching = false
 		fm.ttyOut.WriteString("\033[?25l")
-		return
+		return escapeSequenceLength(buf)
 	}
 
 	// Enter commits search
@@ -985,7 +1506,7 @@ func (fm *FileManager) handleSearchInput(buf []byte, _ int) {
 		fm.searching = false
 		fm.ttyOut.WriteString("\033[?25l")
 		fm.commitSearch()
-		return
+		return 1
 	}
 
 	// Backspace
@@ -994,14 +1515,14 @@ func (fm *FileManager) handleSearchInput(buf []byte, _ int) {
 			fm.searchQuery = fm.searchQuery[:len(fm.searchQuery)-1]
 			fm.updateSearchLive()
 		}
-		return
+		return 1
 	}
 
 	// Ctrl-U clears the search input
 	if key == 21 {
 		fm.searchQuery = fm.searchQuery[:0]
 		fm.updateSearchLive()
-		return
+		return 1
 	}
 
 	// Ctrl-W deletes the last word
@@ -1019,7 +1540,7 @@ func (fm *FileManager) handleSearchInput(buf []byte, _ int) {
 			fm.searchQuery = fm.searchQuery[:i+1]
 			fm.updateSearchLive()
 		}
-		return
+		return 1
 	}
 
 	// Printable characters
@@ -1027,6 +1548,7 @@ func (fm *FileManager) handleSearchInput(buf []byte, _ int) {
 		fm.searchQuery = append(fm.searchQuery, rune(key))
 		fm.updateSearchLive()
 	}
+	return 1
 }
 
 func (fm *FileManager) updateSearchLive() {
@@ -1126,13 +1648,13 @@ func (fm *FileManager) startRename() {
 	}
 }
 
-func (fm *FileManager) handleRenameInput(buf []byte, n int) {
+func (fm *FileManager) handleRenameInput(buf []byte) int {
 	key := buf[0]
 
 	// Escape cancels
 	if key == 0x1b {
 		// Check for arrow keys: ESC [ A/B/C/D
-		if n >= 3 && buf[1] == '[' {
+		if len(buf) >= 3 && buf[1] == '[' {
 			switch buf[2] {
 			case 'C': // Right
 				if fm.renameCursor < len(fm.renameInput) {
@@ -1147,11 +1669,11 @@ func (fm *FileManager) handleRenameInput(buf []byte, n int) {
 			case 'F': // End
 				fm.renameCursor = len(fm.renameInput)
 			}
-			return
+			return 3
 		}
 		fm.renaming = false
 		fm.ttyOut.WriteString("\033[?25l")
-		return
+		return 1
 	}
 
 	// Enter commits rename
@@ -1159,7 +1681,7 @@ func (fm *FileManager) handleRenameInput(buf []byte, n int) {
 		fm.renaming = false
 		fm.ttyOut.WriteString("\033[?25l")
 		fm.commitRename()
-		return
+		return 1
 	}
 
 	// Backspace
@@ -1168,14 +1690,14 @@ func (fm *FileManager) handleRenameInput(buf []byte, n int) {
 			fm.renameInput = append(fm.renameInput[:fm.renameCursor-1], fm.renameInput[fm.renameCursor:]...)
 			fm.renameCursor--
 		}
-		return
+		return 1
 	}
 
 	// Ctrl-U clears to start
 	if key == 21 {
 		fm.renameInput = fm.renameInput[fm.renameCursor:]
 		fm.renameCursor = 0
-		return
+		return 1
 	}
 
 	// Ctrl-W delete word backwards
@@ -1191,25 +1713,25 @@ func (fm *FileManager) handleRenameInput(buf []byte, n int) {
 			fm.renameInput = append(fm.renameInput[:i], fm.renameInput[fm.renameCursor:]...)
 			fm.renameCursor = i
 		}
-		return
+		return 1
 	}
 
 	// Ctrl-A go to start
 	if key == 1 {
 		fm.renameCursor = 0
-		return
+		return 1
 	}
 
 	// Ctrl-E go to end
 	if key == 5 {
 		fm.renameCursor = len(fm.renameInput)
-		return
+		return 1
 	}
 
 	// Ctrl-K delete to end
 	if key == 11 {
 		fm.renameInput = fm.renameInput[:fm.renameCursor]
-		return
+		return 1
 	}
 
 	// Printable characters
@@ -1217,6 +1739,7 @@ func (fm *FileManager) handleRenameInput(buf []byte, n int) {
 		fm.renameInput = append(fm.renameInput[:fm.renameCursor], append([]rune{rune(key)}, fm.renameInput[fm.renameCursor:]...)...)
 		fm.renameCursor++
 	}
+	return 1
 }
 
 func (fm *FileManager) commitRename() {
@@ -1252,6 +1775,13 @@ func (fm *FileManager) enterSelected() {
 		return
 	}
 	entry := fm.entries[fm.cursor]
+	if fm.showingWindowsVolumes {
+		fm.currentDir = windowsVolumeRoot(entry.Name())
+		fm.cursor = 0
+		fm.offset = 0
+		fm.loadDirectory()
+		return
+	}
 	if !entry.IsDir() {
 		switch runtime.GOOS {
 		case "windows":
@@ -1269,6 +1799,13 @@ func (fm *FileManager) enterSelected() {
 }
 
 func (fm *FileManager) goParent() {
+	if fm.showingWindowsVolumes {
+		return
+	}
+	if isWindowsVolumeRoot(fm.currentDir) {
+		fm.showWindowsVolumes()
+		return
+	}
 	parent := filepath.Dir(fm.currentDir)
 	if parent == fm.currentDir {
 		return
@@ -1314,7 +1851,11 @@ func (fm *FileManager) openEditor() {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.Run()
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "editor %q exited with error: %v\nPress Enter to continue...", editor, err)
+		buf := make([]byte, 1)
+		os.Stdin.Read(buf)
+	}
 
 	// Re-enter raw mode and alternate buffer
 	newState, _ := term.MakeRaw(fm.stdInFd)
@@ -1336,7 +1877,7 @@ func (fm *FileManager) openEditor() {
 }
 
 func isBinaryFile(path string) bool {
-	if strings.EqualFold(filepath.Ext(path), ".pdf") {
+	if hasKnownBinaryPreviewExtension(path) || isZipPreviewPath(path) || isTarGzPreviewPath(path) {
 		return true
 	}
 	f, err := os.Open(path)
@@ -1389,11 +1930,18 @@ func (fm *FileManager) openFileWindows(entry os.DirEntry) {
 	}
 
 	// Binary file, no $EDITOR, or editor failed: open with Windows default app
-	escapedPath := strings.ReplaceAll(filePath, "'", "''")
-	psCmd := "Start-Process -FilePath '" + escapedPath + "'"
-	cmd := exec.Command("powershell.exe", "-NoProfile", "-Command", psCmd)
+	command, args, err := defaultAppCommand(filePath, runtime.GOOS)
+	if err != nil {
+		fm.statusMsg = err.Error()
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, command, args...)
 	cmd.Stdin = nil
-	cmd.Run()
+	if err := cmd.Run(); err != nil && ctx.Err() == context.DeadlineExceeded {
+		fm.statusMsg = "Start-Process timed out (OneDrive?)"
+	}
 }
 
 func (fm *FileManager) openFileUnix(entry os.DirEntry) {
@@ -1436,11 +1984,12 @@ func (fm *FileManager) openFileUnix(entry os.DirEntry) {
 	}
 
 	// Binary file, no $EDITOR, or editor failed: open with system default
-	opener := "xdg-open"
-	if runtime.GOOS == "darwin" {
-		opener = "open"
+	command, args, err := defaultAppCommand(filePath, runtime.GOOS)
+	if err != nil {
+		fm.statusMsg = err.Error()
+		return
 	}
-	cmd := exec.Command(opener, filePath)
+	cmd := exec.Command(command, args...)
 	cmd.Stdin = nil
 	cmd.Start()
 }
@@ -1461,6 +2010,67 @@ func (fm *FileManager) clipboardCopy() {
 	}
 	absPath := filepath.Join(fm.currentDir, fm.entries[fm.cursor].Name())
 	_ = addClipboardPath("copy", absPath)
+}
+
+type yankKind int
+
+const (
+	yankFileName yankKind = iota
+	yankFullPath
+	yankGitPath
+)
+
+func (fm *FileManager) yankSystemClipboard(kind yankKind) {
+	if len(fm.entries) == 0 || fm.cursor >= len(fm.entries) {
+		return
+	}
+	name := fm.entries[fm.cursor].Name()
+	absPath := filepath.Join(fm.currentDir, name)
+
+	var text, label string
+	switch kind {
+	case yankFileName:
+		text = name
+		label = "name"
+	case yankFullPath:
+		text = absPath
+		label = "path"
+	case yankGitPath:
+		rel, err := gitRelativePath(absPath)
+		if err != nil {
+			fm.statusMsg = err.Error()
+			return
+		}
+		text = rel
+		label = "git path"
+	}
+
+	if err := writeSystemClipboard(text); err != nil {
+		fm.statusMsg = fmt.Sprintf("Clipboard: %s", err.Error())
+		return
+	}
+	fm.statusMsg = fmt.Sprintf("Copied %s: %s", label, text)
+}
+
+func gitRelativePath(absPath string) (string, error) {
+	dir := absPath
+	if info, err := os.Stat(absPath); err != nil || !info.IsDir() {
+		dir = filepath.Dir(absPath)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			rel, err := filepath.Rel(dir, absPath)
+			if err != nil {
+				return "", err
+			}
+			return filepath.ToSlash(rel), nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", fmt.Errorf("no .git directory found above %s", absPath)
+		}
+		dir = parent
+	}
 }
 
 func (fm *FileManager) clipboardPaste() {
@@ -1639,8 +2249,11 @@ func (fm *FileManager) promptDelete(entry os.DirEntry) bool {
 	// For non-empty directories, show entry count
 	if entry.IsDir() {
 		dirPath := filepath.Join(fm.currentDir, name)
-		if subEntries, err := os.ReadDir(dirPath); err == nil && len(subEntries) > 0 {
+		if subEntries, err := os.ReadDir(dirPath); err == nil {
+			subEntries = filterIgnoredFileManagerEntries(subEntries)
+			if len(subEntries) > 0 {
 			lines = append(lines, fmt.Sprintf(" (directory with %d entries) ", len(subEntries)))
+		}
 		}
 	}
 
@@ -1708,7 +2321,7 @@ func bookmarksFilePath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return dir + bookmarksFileName, nil
+	return filepath.Join(dir, bookmarksFileName), nil
 }
 
 func loadBookmarks() map[byte]string {
@@ -1730,7 +2343,7 @@ func loadBookmarks() map[byte]string {
 }
 
 func isBookmarkChar(c byte) bool {
-	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z')
+	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
 
 // Clipboard
@@ -1742,7 +2355,7 @@ func clipboardFilePath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return dir + clipboardFileName, nil
+	return filepath.Join(dir, clipboardFileName), nil
 }
 
 func loadClipboard() ([]string, []string) {
@@ -1829,11 +2442,9 @@ func clearClipboard() error {
 }
 
 func appendUniquePath(paths []string, path string) []string {
-	for _, existing := range paths {
-		if existing == path {
+	if slices.Contains(paths, path) {
 			return paths
 		}
-	}
 	return append(paths, path)
 }
 
@@ -1873,6 +2484,14 @@ func saveBookmarks(bookmarks map[byte]string) error {
 		}
 	}
 	for c := byte('a'); c <= 'z'; c++ {
+		if dir, ok := bookmarks[c]; ok {
+			sb.WriteByte(c)
+			sb.WriteByte(' ')
+			sb.WriteString(dir)
+			sb.WriteByte('\n')
+		}
+	}
+	for c := byte('A'); c <= 'Z'; c++ {
 		if dir, ok := bookmarks[c]; ok {
 			sb.WriteByte(c)
 			sb.WriteByte(' ')

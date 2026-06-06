@@ -7,6 +7,7 @@ Some key definitions that are part of the standard library here:
 <ul>
   <li><code>w</code> and <code>wl</code>: Writes a string to standard output. <code>w</code> also accepts binary data. <code>wl</code> adds a newline.</li>
   <li><code>sl</code>: Definition for <code>stdin lines</code>. Gets the standard input, splits by lines into list.</li>
+  <li><code>unlinesCrLf</code>: Concatenates a list of lines using <code>\r\n</code> line endings. Useful when generating Windows text files.</li>
   <li><code>uw</code>: Definition for <code>unlines w</code>. Takes a list of lines, concatenates them with newlines, and prints to standard output.</li>
   <li><code>wt</code>: Definition for <code>sl (wsplit) map</code>. Takes standard input and turns it into a list of list of strings, spliting lines on whitespace, essentially what awk does by default.</li>
 </ul>
@@ -27,7 +28,7 @@ awk <span class="mshellSINGLEQUOTESTRING">'END { print NR }'</span> &lt; input_f
 </code>
 </pre>
 
-<p> Note that you'll also need the environment variable <code>MSHSTDLIB</code> pointing to the file at <code>lib/std.msh</code>. </p>
+<p> These examples assume the standard library is installed in the normal startup location for your current <code>msh</code> version. </p>
 
 <table id="awk-table" style="table-layout: fixed; width: 1400px;">
     <colgroup> 
@@ -241,7 +242,7 @@ awk <span class="mshellSINGLEQUOTESTRING">'END { print NR }'</span> &lt; input_f
             <td><code>{ <span class="awk-field">$1</span> = <span class="awk-builtin">NR</span>; <span class="awk-function">print</span> }</code></td>
             <td>
 <code><span class="mshellLITERAL">wt</span> <span class="mshellINTEGER">1</span> <span class="mshellLITERAL">enumerateN</span>
-<span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">2unpack</span> <span class="mshellVARSTORE">fields!</span><span class="mshellCOMMA">,</span> <span class="mshellVARSTORE">row!</span> <span class="mshellVARRETRIEVE">@fields</span> <span class="mshellVARRETRIEVE">@row</span> <span class="mshellSTR">str</span> <span class="mshellINTEGER">0</span> <span class="mshellLITERAL">setAt</span> <span class="mshellLITERAL">wjoin</span><span class="mshellRIGHT_PAREN">)</span>
+<span class="mshellLEFT_PAREN">(</span><span class="mshellVARSTORE">d!</span> <span class="mshellVARRETRIEVE">@d</span> <span class="mshellENDINDEXER">:item?</span> <span class="mshellVARSTORE">fields!</span> <span class="mshellVARRETRIEVE">@d</span> <span class="mshellENDINDEXER">:index?</span> <span class="mshellVARSTORE">row!</span> <span class="mshellVARRETRIEVE">@fields</span> <span class="mshellVARRETRIEVE">@row</span> <span class="mshellSTR">str</span> <span class="mshellINTEGER">0</span> <span class="mshellLITERAL">setAt</span> <span class="mshellLITERAL">wjoin</span><span class="mshellRIGHT_PAREN">)</span>
 <span class="mshellLITERAL">map</span> <span class="mshellLITERAL">uw</span>
 <span class="mshellEOF"></span></code>
             </td>

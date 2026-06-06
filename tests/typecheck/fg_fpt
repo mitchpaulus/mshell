@@ -1,0 +1,75 @@
+#!/usr/bin/env mshell
+
+# Purpose: Process simple markdown like FPT defintions.
+# # Header
+# Sensor: Sensor Name
+# Dev: Device Name : Device Type (Device Type = "OnOff", "OpenClose", "VFD", "Mod")
+# Otherwise normal questionaire item.
+
+{
+    'OnOff': 'Two Position(OnOff)',
+    'OpenClose': 'Two Position',
+    'VFD': 'VFD',
+    'Mod': 'Modulating',
+}
+map!
+
+def processLine (str dict -- [str])
+    map! l!
+    @l "# " startsWith if
+        ["FPT" @l 2: trim "Section"]
+    else* @l "Sensor:" startsWith *if
+        ["SensCal" @l 7: trim ""]
+    else* @l "Dev:" startsWith *if
+        @l ":" split splitLine!
+        @splitLine :1: device!
+        @splitLine :2: eqtype!
+
+        # Adding this fixed type check?
+        @map @eqtype trim get match
+            just devType :,
+            none: $"{@eqtype} is not valid." wle 1 exit
+        end
+
+        ["DevCal" @device trim @devType]
+    else
+        ["FPT" @l "Pass-Fail"]
+    end
+end
+
+false makeExcel!
+"Test FPT" name!
+'' xlsxFile!
+
+0 i!
+(
+    @i args len >= (break) iff
+    args @i nth a!
+    @i 1 + i!
+    @a "-x" = if
+        true makeExcel!
+        args @i nth a!
+        @i 1 + i!
+        @a toPath xlsxFile!
+    else* @a "-n" = *if
+        args @i nth a!
+        @i 1 + i!
+        @a name!
+    end
+) loop
+
+def notEmpty (str -- bool) len 0 != end
+
+args :-1: readFile lines
+(trim) map
+(notEmpty) filter
+(@map processLine tjoin) map
+unlines data!
+
+@makeExcel if
+    $FG_FPT_TEMPLATE_XLSX @xlsxFile cp
+    [xlwrite -w "Sheet1" block C9 @data psub @xlsxFile]!
+    [xlwrite -w "Sheet1" block B6 @name psub @xlsxFile]!
+else
+    @data w
+end

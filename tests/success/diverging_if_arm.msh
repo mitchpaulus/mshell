@@ -1,0 +1,18 @@
+# An if/else chain with two live arms and one diverging (exit) arm,
+# inside a quote used as an `iff` branch. The diverging arm must
+# contribute nothing to the quote's inferred signature. Previously it
+# leaked a `( -- <bottom>)` arm, making the quote overloaded so `iff`
+# (which needs a plain quote) rejected it. This program runs correctly.
+true
+(
+    true if
+        'a'
+    else* false *if
+        'b'
+    else
+        1 exit
+    end
+)
+('c')
+iff
+wl

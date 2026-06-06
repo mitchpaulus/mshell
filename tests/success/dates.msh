@@ -1,0 +1,55 @@
+2025-01-29 str wl
+2025-01-29T10 str wl
+2025-01-29T10:13 str wl
+2025-01-29T10:13:16 str wl
+# 2025-01-asdfasdff # This should be single token  Update: we no longer allow literals outside of lists, so these examples are not valid anymore and would be caught by that check.
+# 2025-01-13asdfasdf # This should be two tokens
+
+"2025_12_23" toDt? str wl # Should write out in ISO format '2025-12-23T00:00:00'
+
+# Test parsing and comparison
+2025-01-29 "Jan 29, 2025" toDt? = str wl
+2025-01-29 "Jan 28, 2025" toDt? = str wl
+
+def testType (datetime str str (datetime datetime -- bool)  -- )
+    date!, dateStr!, opStr!, operator!
+    @date @dateStr toDt? @operator x str result!
+    $"{@date str}{@opStr}{@dateStr}: {@result}" wl
+end
+
+"\nComparing >=" wl
+2025-01-29 "Jan 29, 2025" " >= " (>=) testType
+2025-02-01 "Jan 29, 2025" " >= " (>=) testType
+2025-01-10 "Jan 29, 2025" " >= " (>=) testType
+
+"\nComparing <=" wl
+2025-01-29 "Jan 29, 2025" " <= " (<=) testType
+2025-02-01 "Jan 29, 2025" " <= " (<=) testType
+2025-01-10 "Jan 29, 2025" " <= " (<=) testType
+
+"\nComparing >" wl
+2025-01-29 "Jan 29, 2025" " > " (>) testType
+2025-02-01 "Jan 29, 2025" " > " (>) testType
+2025-01-10 "Jan 29, 2025" " > " (>) testType
+
+"\nComparing <" wl
+2025-01-29 "Jan 29, 2025" " < " (<) testType
+2025-02-01 "Jan 29, 2025" " < " (<) testType
+2025-01-10 "Jan 29, 2025" " < " (<) testType
+
+2025-08-01 1 addDays isoDateFmt wl
+2025-08-31 1 addDays isoDateFmt wl
+2025-12-31 1 addDays isoDateFmt wl
+
+2025-01-02T04:06 date str wl
+
+1899-12-30 toOleDate str wl
+1899-12-30T12 toOleDate str wl
+0 fromOleDate isoDateTimeFmt wl
+1 fromOleDate isoDateTimeFmt wl
+0.5 fromOleDate isoDateTimeFmt wl
+
+2026-01-01 toOleDate fromOleDate isoDateTimeFmt wl
+
+# Subtraction give float number of days.
+2026-05-18 2026-05-16 - 1 toFixed wl

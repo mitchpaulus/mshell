@@ -33,6 +33,56 @@ To initiate execution, you use one of 3 operators:
 </pre>
 
 <p>
+A command that cannot even start (not found, no permission, bad format, &hellip;)
+is no longer a fatal error: under <code>;</code> and <code>?</code> execution
+continues, and <code>?</code> leaves a <em>negative</em> exit code describing
+exactly what went wrong.
+Real processes only return <code>0</code>&ndash;<code>255</code>, so negative
+codes never collide with a genuine exit status, and they still count as a failure
+in <code>if</code>/<code>iff</code> (only <code>0</code> is success).
+The negative codes are organized into bands that carry the underlying OS error
+verbatim:
+</p>
+
+<table>
+  <tr> <th>Code</th> <th>Meaning</th> <th>Decode</th> </tr>
+  <tr> <td><code>0</code>&ndash;<code>255</code></td> <td>Normal exit status from the process.</td> <td>&mdash;</td> </tr>
+  <tr> <td><code>-(128 + N)</code></td> <td>Killed by signal <code>N</code>.</td> <td><code>signal = -code - 128</code></td> </tr>
+  <tr> <td><code>-255</code></td> <td>Command not found while searching <code>PATH</code>.</td> <td>(fixed)</td> </tr>
+  <tr> <td><code>-256</code></td> <td>Failed to start, OS error could not be read.</td> <td>(fixed)</td> </tr>
+  <tr> <td><code>-(256 + errno)</code></td> <td>POSIX start failure, carrying the raw <code>errno</code>.</td> <td><code>errno = -code - 256</code></td> </tr>
+  <tr> <td><code>-(1024 + err)</code></td> <td>Windows start failure, carrying the raw error.</td> <td><code>winErr = -code - 1024</code></td> </tr>
+</table>
+
+<p>
+Because the codes carry the <em>raw</em> OS error number, they are
+platform-specific. Common Linux examples (see <code>man errno</code> /
+<code>asm-generic/errno.h</code> for the full set):
+</p>
+
+<table>
+  <tr> <th>Code</th> <th>errno</th> <th>Meaning</th> </tr>
+  <tr> <td><code>-258</code></td> <td><code>ENOENT</code></td> <td>Not found at exec time (e.g. missing <code>#!</code> interpreter).</td> </tr>
+  <tr> <td><code>-264</code></td> <td><code>ENOEXEC</code></td> <td>Exec format error (not a runnable binary).</td> </tr>
+  <tr> <td><code>-269</code></td> <td><code>EACCES</code></td> <td>Permission denied &mdash; no execute bit, or the target is a directory.</td> </tr>
+  <tr> <td><code>-130</code></td> <td>&mdash;</td> <td>Killed by <code>SIGINT</code> (Ctrl-C); <code>-(128 + 2)</code>.</td> </tr>
+  <tr> <td><code>-137</code></td> <td>&mdash;</td> <td>Killed by <code>SIGKILL</code>; <code>-(128 + 9)</code>.</td> </tr>
+</table>
+
+<p>
+mshell does not normalize these across operating systems &mdash; if you need a
+check that works on more than one platform, OR the relevant codes together
+yourself:
+</p>
+
+<pre>
+<code><span class="mshellLINECOMMENT"># &#34;Was it not found?&#34; on Linux (-258 at exec, -255 on PATH) and Windows (-1026)</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">my-cmd</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellQUESTION">?</span> <span class="mshellVARSTORE">notFound!</span>
+<span class="mshellVARRETRIEVE">@notFound</span> <span class="mshellINTEGER">-255</span> <span class="mshellEQUALS">=</span> <span class="mshellVARRETRIEVE">@notFound</span> <span class="mshellINTEGER">-258</span> <span class="mshellEQUALS">=</span> <span class="mshellVARRETRIEVE">@notFound</span> <span class="mshellINTEGER">-1026</span> <span class="mshellEQUALS">=</span> <span class="mshellLITERAL">or</span> <span class="mshellLITERAL">or</span>
+</code>
+</pre>
+
+<p>
 The other choice you often have when executing commands is what to do with the standard output.
 Sometimes you will want to redirect it to a file, other times you will want to leave the contents on the stack to process further.
 For that, you use the <code>></code>, <code>>></code>, <code>*</code>, and <code>*b</code> operators.
@@ -100,7 +150,7 @@ Standard output will always be pushed first, and then standard error.
   <tbody>
     <tr> <td><code>;</code></td> <td>Execute and continue.</td> <td>No exit code on the stack.</td> </tr>
     <tr> <td><code>!</code></td> <td>Execute and stop on non-zero exit.</td> <td>Uses the command exit code.</td> </tr>
-    <tr> <td><code>?</code></td> <td>Execute and push the exit code.</td> <td>Integer is left on the stack.</td> </tr>
+    <tr> <td><code>?</code></td> <td>Execute and push the exit code.</td> <td>Integer left on the stack; negative if the command could not start (see codes above).</td> </tr>
     <tr> <td><code>></code></td> <td>Redirect stdout to a file.</td> <td>Truncates the file.</td> </tr>
     <tr> <td><code>>></code></td> <td>Redirect stdout to a file.</td> <td>Appends to the file.</td> </tr>
     <tr> <td><code>*</code></td> <td>Capture stdout to the stack.</td> <td>As a string.</td> </tr>
@@ -113,6 +163,7 @@ Standard output will always be pushed first, and then standard error.
     <tr> <td><code>^b</code></td> <td>Capture stderr to the stack.</td> <td>As binary.</td> </tr>
     <tr> <td><code>&lt;</code></td> <td>Feed stdin from a value.</td> <td>String, path, or binary.</td> </tr>
     <tr> <td><code>&lt;&gt;</code></td> <td>In-place file modification.</td> <td>Reads file to stdin, writes stdout back on success.</td> </tr>
+    <tr> <td><code>&amp;</code></td> <td>Mark the command list to run asynchronously.</td> <td>Marks the list; the trailing <code>;</code>/<code>!</code> starts the subprocess and returns immediately without waiting. Stdout and stderr default to discarded.</td> </tr>
   </tbody>
 </table>
 
@@ -239,7 +290,7 @@ First it checks the bin map file for an override, and if none is found it falls 
 </p>
 
 <p>
-The bin map file lives alongside the history files (for example, <code>~/.local/share/msh/msh_bins.txt</code> on Linux/macOS or <code>%LOCALAPPDATA%\mshell\msh_bins.txt</code> on Windows).
+The bin map file lives alongside the history files (for example, <code>$XDG_DATA_HOME/msh/msh_bins.txt</code> or <code>~/.local/share/msh/msh_bins.txt</code> on Linux/macOS, or <code>%LOCALAPPDATA%\msh\msh_bins.txt</code> on Windows).
 Each non-empty line is a tab-separated pair of fields: the binary name and the absolute path to the binary.
 Both fields are trimmed, the name must not contain path separators, and the line must contain exactly two fields.
 </p>
@@ -259,7 +310,7 @@ To manage the file, use the <code>msh bin</code> subcommands:
   <li><code>msh bin remove &lt;name&gt;</code>: remove an entry by name</li>
   <li><code>msh bin list</code>: print the bin map file contents</li>
   <li><code>msh bin path</code>: print the bin map file path</li>
-  <li><code>msh bin edit</code>: edit the file in <code>$EDITOR</code></li>
+  <li><code>msh bin edit</code>: edit the file in <code>$EDITOR</code>, or the platform default opener if <code>$EDITOR</code> is unavailable</li>
   <li><code>msh bin audit</code>: report invalid or missing entries</li>
   <li><code>msh bin debug &lt;name&gt;</code>: show lookup details for a binary</li>
 </ul>

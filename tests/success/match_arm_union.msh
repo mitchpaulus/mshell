@@ -1,0 +1,15 @@
+# Match arms that leave different types on the stack join into a single
+# union value (`int | float`) that flows forward, rather than fanning out
+# as alternative typings. A non-empty list takes the `_ :> sum` arm (int);
+# an empty list takes the `[]` arm (float).
+[1 2 3] match []: 0.0, _ :> sum end full!
+[] match []: 0.0, _ :> sum end empty!
+
+# Overload resolution distributes the `int | float` union across numeric
+# builtins: it checks every member against the candidate overloads, so a
+# generic consumer is not required. numFmt's (int dict) / (float dict)
+# overloads both apply, and toFloat's (int -- float) / (float -- float)
+# arms resolve the union to float for the division below.
+@full { 'decimals': 0 } numFmt wl
+@empty { 'decimals': 1 } numFmt wl
+@full toFloat 2.0 / 1 toFixed wl

@@ -1,26 +1,21 @@
-"*.msh" glob (`test.msh` !=) filter
 false anyFail!
-(
+
+"*.msh" glob (`test.msh` !=) filter
+each.
     f!
-    $"{@f}.stdout" isFile
-    (
+    $"{@f}.stdout" isFile if
         ['mshell' '--lex' @f] * ; output!
-        @output $"{@f}.stdout" readFile =
-        ( $"{@f}: PASS" wl )
-        (
+        @output $"{@f}.stdout" readFile = if
+            $"{@f}: PASS" wl
+        else
             $"{@f}: FAIL" wl
             ['git' 'diff' @output psub $"{@f}.stdout"];
             true anyFail!
-        )
-        iff
-    )
-    (
+        end
+    else
         $"{@f}: FAIL, no .stdout file" wl true anyFail!
-    )
-    iff
-) each
+    end
+end
 
-@anyFail
-(1 exit)
-(0 exit)
-iff
+
+@anyFail if 1 else 0 end exit

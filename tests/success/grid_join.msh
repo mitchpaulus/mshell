@@ -1,0 +1,65 @@
+# Grid join tests
+
+# 1. Basic inner equi-join. Output rows in left-grid order.
+[| id, name; 1, "Alice"; 2, "Bob"; 3, "Carol" |] l!
+[| uid, score; 1, 90; 2, 80; 4, 70 |] r!
+@l @r (:id?) (:uid?) join toJson wl
+
+# 2. Left join: unmatched left rows kept with right side null.
+@l @r (:id?) (:uid?) leftJoin toJson wl
+
+# 3. Outer join: left orphans then right orphans.
+@l @r (:id?) (:uid?) outerJoin toJson wl
+
+# 4. Multi-match cartesian within group: left has duplicate keys.
+[| id; 1; 1; 2 |] dl!
+[| uid, val; 1, "a"; 1, "b"; 2, "c" |] dr!
+@dl @dr (:id?) (:uid?) join toJson wl
+
+# 5. Renamed key — extractors hide the column-name difference.
+[| id; 1; 2 |] ln!
+[| user_id, val; 1, "x"; 2, "y" |] rn!
+@ln @rn (:id?) (:user_id?) join toJson wl
+
+# 6. Compound key via 2tuple.
+[| date, region, lv; 2024-01-01, "E", 10; 2024-01-01, "W", 20; 2024-01-02, "E", 30 |] cl!
+[| dt, rgn, rv;     2024-01-01, "E", 1;  2024-01-02, "E", 2;  2024-01-02, "W", 3 |] cr!
+@cl @cr (dup :date? swap :region? 2tuple) (dup :dt? swap :rgn? 2tuple) join toJson wl
+
+# 7. None keys: never match on inner; appear as orphans on left/outer.
+[| a, name; 1, "x"; 2, "y" |] nl!
+[| b, val;  1, 10           |] nr!
+@nl @nr (drop none) (:b?) join toJson wl
+@nl @nr (drop none) (:b?) leftJoin toJson wl
+@nl @nr (drop none) (:b?) outerJoin toJson wl
+
+# 8. GridView input on left.
+[| id, name; 1, "a"; 2, "b"; 3, "c" |] vl!
+[| uid, val; 1, 10; 3, 30           |] vr!
+@vl (:id? 2 >) filter vlv!
+@vlv @vr (:id?) (:uid?) join toJson wl
+
+# 9. Cross-product idiom: constant extractor on both sides.
+[| x; 1; 2; 3 |] xg!
+[| y; 10; 20  |] yg!
+@xg @yg (drop 1) (drop 1) join toJson wl
+
+# 10. Empty left grid.
+[| id |] el!
+[| uid, val; 1, 10 |] er!
+@el @er (:id?) (:uid?) join toJson wl
+@el @er (:id?) (:uid?) outerJoin toJson wl
+
+# 11. Empty right grid.
+[| id; 1; 2 |] el2!
+[| uid, val |] er2!
+@el2 @er2 (:id?) (:uid?) join toJson wl
+@el2 @er2 (:id?) (:uid?) leftJoin toJson wl
+
+# 12. Existing string join still works (non-quotation top of stack).
+["a" "b" "c"] "," join wl
+
+# 13. Output preserves left grid metadata on the result.
+[| { "src": "l" }; id, name; 1, "a" |] meL!
+[| uid, val;       1, 10            |] meR!
+@meL @meR (:id?) (:uid?) join gridMeta? str wl

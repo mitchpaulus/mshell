@@ -375,3 +375,49 @@ func TestSimpleCliParser_ToMShellFile_ListArgument(t *testing.T) {
 		t.Errorf("Expected fourth item to be MShellParseList, got %T", cmdList.Items[3])
 	}
 }
+
+// The command name (first item) is force-quoted so an executable wins over a
+// builtin of the same name, but argument-position literals are preserved as
+// LITERAL tokens so operators like `glob` still act as operators at runtime.
+func TestSimpleCliParser_ToMShellFile_ArgLiteralsPreserved(t *testing.T) {
+	input := "numargs '*' glob"
+	l := NewLexer(input, nil)
+	p := NewMShellSimpleCliParser(l)
+
+	pipeline, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	file, fileErr := pipeline.ToMShellFile()
+	if fileErr != nil {
+		t.Fatalf("Unexpected error: %v", fileErr)
+	}
+
+	cmdList, ok := file.Items[0].(*MShellParseList)
+	if !ok {
+		t.Fatalf("Expected first item to be MShellParseList, got %T", file.Items[0])
+	}
+
+	if len(cmdList.Items) != 3 {
+		t.Fatalf("Expected 3 items in command list, got %d", len(cmdList.Items))
+	}
+
+	// Command name: bare literal becomes a single-quoted string.
+	cmdName, ok := cmdList.Items[0].(Token)
+	if !ok || cmdName.Type != SINGLEQUOTESTRING {
+		t.Errorf("Expected command name to be SINGLEQUOTESTRING, got %T %v", cmdList.Items[0], cmdList.Items[0])
+	}
+
+	// Already-quoted argument is preserved as-is.
+	starArg, ok := cmdList.Items[1].(Token)
+	if !ok || starArg.Type != SINGLEQUOTESTRING {
+		t.Errorf("Expected '*' arg to be SINGLEQUOTESTRING, got %T %v", cmdList.Items[1], cmdList.Items[1])
+	}
+
+	// Bare literal argument (an operator) is preserved as a LITERAL, NOT quoted.
+	globArg, ok := cmdList.Items[2].(Token)
+	if !ok || globArg.Type != LITERAL {
+		t.Errorf("Expected 'glob' arg to remain LITERAL, got %T %v", cmdList.Items[2], cmdList.Items[2])
+	}
+}

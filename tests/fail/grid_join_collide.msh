@@ -1,0 +1,4 @@
+# Column collision should error before doing any work.
+[| id, x; 1, "a" |] xg!
+[| id, y; 1, "b" |] yg!
+@xg @yg (:id?) (:id?) join wl

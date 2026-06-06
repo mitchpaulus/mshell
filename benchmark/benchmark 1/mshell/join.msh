@@ -1,0 +1,20 @@
+# mshell: read both CSVs, inner-join on id, write fingerprint.
+
+`test_dataset.csv` parseCsv toGrid
+"value" (toFloat?) updateCol
+"id" (toInt?) updateCol left!
+
+`join_sample.csv` parseCsv toGrid
+"id" (toInt?) updateCol
+"id" "id_r" gridRenameCol
+"value" "value_r" gridRenameCol
+"category" "category_r" gridRenameCol
+"timestamp" "timestamp_r" gridRenameCol right!
+
+@left @right (:id?) (:id_r?) join result!
+
+@result gridRows rows!
+@result "id" gridCol sum sumId!
+@result "value" gridCol (floor) map sum sumV!
+
+$"rows\t{@rows}\nsum_id\t{@sumId}\nsum_value_floor\t{@sumV}\n" "out/mshell/join.txt" writeFile

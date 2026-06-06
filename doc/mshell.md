@@ -31,6 +31,44 @@ To initiate execution, you use one of 3 operators:
 $"Exit code was {@exitCode}" wl
 ```
 
+A command that cannot even start (not found, no permission, bad format, ...) is
+no longer a fatal error: under `;` and `?` execution continues, and `?` leaves a
+*negative* exit code describing exactly what went wrong.
+Real processes only return `0`–`255`, so negative codes never collide with a
+genuine exit status, and they still count as a failure in `if`/`iff` (only `0`
+is success).
+The negative codes are organized into bands that carry the underlying OS error
+verbatim:
+
+Code              | Meaning                                          | Decode
+------------------|--------------------------------------------------|------------------------
+`0`–`255`         | Normal exit status from the process.             | —
+`-(128 + N)`      | Killed by signal `N`.                            | `signal = -code - 128`
+`-255`            | Command not found while searching `PATH`.        | (fixed)
+`-256`            | Failed to start, OS error could not be read.     | (fixed)
+`-(256 + errno)`  | POSIX start failure, carrying the raw `errno`.   | `errno = -code - 256`
+`-(1024 + err)`   | Windows start failure, carrying the raw error.   | `winErr = -code - 1024`
+
+Because the codes carry the *raw* OS error number, they are platform-specific.
+Common Linux examples (see `man errno` / `asm-generic/errno.h` for the full set):
+
+Code   | errno      | Meaning
+-------|------------|-------------------------------------------
+`-258` | `ENOENT`   | Not found at exec time (e.g. missing `#!` interpreter).
+`-264` | `ENOEXEC`  | Exec format error (not a runnable binary).
+`-269` | `EACCES`   | Permission denied — no execute bit, or the target is a directory.
+`-130` | —          | Killed by `SIGINT` (Ctrl-C); `-(128 + 2)`.
+`-137` | —          | Killed by `SIGKILL`; `-(128 + 9)`.
+
+mshell does not normalize these across operating systems — if you need a check
+that works on more than one platform, OR the relevant codes together yourself:
+
+```mshell
+# "Was it not found?" on both Linux (-258 at exec, -255 on PATH) and Windows (-1026)
+[my-cmd]? notFound!
+@notFound -255 = @notFound -258 = @notFound -1026 = or or
+```
+
 The other choice you often have when executing commands is what to do with the standard output. Sometimes you will want to redirect it to a file, other times you will want to leave the contents on the stack to process further. For that, you use the `>`, `>>`, `*`, and `*b` operators.
 
 ```mshell
@@ -74,7 +112,7 @@ Operator | Effect on external commands                | Notes
 ---------|--------------------------------------------|-----------------------------------------------------
 `;`      | Execute and continue.                      | No exit code on the stack.
 `!`      | Execute and stop on non-zero exit.         | Uses the command exit code.
-`?`      | Execute and push the exit code.            | Integer is left on the stack.
+`?`      | Execute and push the exit code.            | Integer left on the stack; negative if the command could not start (see codes above).
 `>`      | Redirect stdout to a file.                 | Truncates the file.
 `>>`     | Redirect stdout to a file.                 | Appends to the file.
 `*`      | Capture stdout to the stack.               | As a string.
@@ -87,6 +125,7 @@ Operator | Effect on external commands                | Notes
 `^b`     | Capture stderr to the stack.               | As binary.
 `<`      | Feed stdin from a value.                   | String, path, or binary.
 `<>`     | In-place file modification.                | Reads file to stdin, writes stdout back on success.
+`&`      | Mark the command list to run asynchronously. | Marks the list; the trailing `;`/`!` starts the subprocess and returns immediately without waiting. Stdout and stderr default to discarded.
 
 ### Redirection on quotations
 
@@ -182,7 +221,7 @@ end
 
 When executing an external command, `mshell` resolves the binary name using a two-step process. First it checks the bin map file for an override, and if none is found it falls back to `PATH`.
 
-The bin map file lives alongside the history files (for example, `~/.local/share/msh/msh_bins.txt` on Linux/macOS or `%LOCALAPPDATA%\\mshell\\msh_bins.txt` on Windows). Each non-empty line is a tab-separated pair of fields: the binary name and the absolute path to the binary. Both fields are trimmed, the name must not contain path separators, and the line must contain exactly two fields.
+The bin map file lives alongside the history files (for example, `$XDG_DATA_HOME/msh/msh_bins.txt` or `~/.local/share/msh/msh_bins.txt` on Linux/macOS, or `%LOCALAPPDATA%\\msh\\msh_bins.txt` on Windows). Each non-empty line is a tab-separated pair of fields: the binary name and the absolute path to the binary. Both fields are trimmed, the name must not contain path separators, and the line must contain exactly two fields.
 
 ```
 mytool	/usr/local/bin/mytool
@@ -196,7 +235,7 @@ To manage the file, use the `msh bin` subcommands:
 - `msh bin remove <name>`: remove an entry by name
 - `msh bin list`: print the bin map file contents
 - `msh bin path`: print the bin map file path
-- `msh bin edit`: edit the file in `$EDITOR`
+- `msh bin edit`: edit the file in `$EDITOR`, or the platform default opener if `$EDITOR` is unavailable
 - `msh bin audit`: report invalid or missing entries
 - `msh bin debug <name>`: show lookup details for a binary
 
@@ -207,6 +246,28 @@ Process substitution is done using the `psub` operator.
 ```mshell
 [my_command_needing_file "my test" psub];
 ```
+
+## Startup Files
+
+`msh` loads startup files before running code.
+
+- Startup files are always version-specific.
+- The standard library is loaded from
+  `$XDG_DATA_HOME/msh/<version>/std.msh` on Linux/macOS
+  (falling back to `~/.local/share/msh/<version>/std.msh`)
+  or `%LOCALAPPDATA%\msh\<version>\std.msh` on Windows.
+- The user init file is loaded from
+  `$XDG_CONFIG_HOME/msh/<version>/init.msh` on Linux/macOS
+  (falling back to `~/.config/msh/<version>/init.msh`)
+  or `%LOCALAPPDATA%\msh\<version>\init.msh` on Windows.
+- The standard library is required at the resolved path.
+- For scripts without `VER`, `msh` uses the current executable version.
+- For scripts without `VER` and interactive use, missing `init.msh` is allowed unless `MSHINIT` is explicitly set.
+- If a script declares `VER "vX.Y.Z"` and the current executable is a different version, `msh` looks for `msh-vX.Y.Z` on `PATH` and re-executes the script with that binary.
+- When `VER` is present, the version-specific `init.msh` is required.
+- When `VER` is present, `MSHSTDLIB` and `MSHINIT` are cleared so startup comes from the versioned locations.
+- `MSHSTDLIB` and `MSHINIT` only override startup for interactive use and scripts without `VER`.
+- `msh edit init` opens the current init file path using `$EDITOR`; if `$EDITOR` is unavailable, it falls back to the platform default opener (`xdg-open` on Linux, `open` on macOS, `Start-Process` via PowerShell on Windows).
 
 ## Tilde Substitution
 
@@ -240,6 +301,11 @@ If the indexing is fixed, there is dedicated syntax for it.
 [ 4 3 2 1 ] 1:3  # [ 3 2 ]
 [ 4 3 2 1 ] :3   # [ 4 3 2 ]
 [ 4 3 2 1 ] 2:   # [ 2 1 ]
+# Works on any list element on the stack, not just list literals
+[ 4 3 2 1 ] myList!
+@myList :1:  # 3
+[ [ 'nested' 'list' ] ['is' 'here'] ] nested!
+@nested :1: :0: # 'is'
 ```
 
 For non-fixed indexing, you have the `nth` operator.
@@ -273,8 +339,8 @@ The CLI can use definition metadata to provide argument completions for binaries
 ```mshell
 def mshCompletion { 'complete': ['msh' 'mshell'] } ([str] -- [str])
     input!
-    ['-h' '--help' '--html' '--lex' '--parse' '--version' '-c'] options!
-    ['lsp' 'bin' 'completions'] subcommands!
+    ['-h' '--help' '--html' '--lex' '--parse' '--check-types' '--type-check-only' '--version' '-c'] options!
+    ['lsp' 'bin' 'edit' 'completions'] subcommands!
     @options @subcommands extend
 end
 ```
@@ -309,7 +375,7 @@ use $"($nu.default-config-dir)/completions/msh.nu" *
 
 ### Binary map overrides
 
-mshell supports a simple bin map file that overrides PATH lookups. The file lives alongside the history files (e.g. `~/.local/share/msh/msh_bins.txt` on Linux/macOS or `%LOCALAPPDATA%\mshell\msh_bins.txt` on Windows).
+mshell supports a simple bin map file that overrides PATH lookups. The file lives alongside the history files (e.g. `$XDG_DATA_HOME/msh/msh_bins.txt` or `~/.local/share/msh/msh_bins.txt` on Linux/macOS, or `%LOCALAPPDATA%\msh\msh_bins.txt` on Windows).
 
 Each line is a single mapping in the form:
 
@@ -326,7 +392,7 @@ CLI helpers:
 - `msh bin remove <name>`: remove an entry by binary name
 - `msh bin list`: print the bin map file contents
 - `msh bin path`: print the msh_bins.txt file path
-- `msh bin edit`: edit the bin map file in `$EDITOR`
+- `msh bin edit`: edit the bin map file in `$EDITOR`, or the platform default opener if `$EDITOR` is unavailable
 - `msh bin audit`: report entries that are missing, not absolute, broken symlinks, or not executable (and report if the file is missing)
 - `msh bin debug <name>`: print PATH/bin map lookup details for a binary
 
@@ -416,6 +482,120 @@ Dates can be subtracted from each other, and the result is a floating-point numb
 2023-10-02 2023-10-01 - # 1.0
 ```
 
+## Type System
+
+Use `msh --check-types script.msh` to run static type checking before script execution.
+Use `msh --type-check-only script.msh` to run the same static checks and exit without evaluating the script.
+The checker validates stack effects, definition bodies, quotation arguments, built-ins, variable bindings, and branch reconciliation.
+
+Definitions use stack-effect signatures.
+Inputs are listed before `--`, outputs after it, and the rightmost input is the top stack item consumed first.
+
+```mshell
+def addOne (int -- int)
+    1 +
+end
+
+def fullName (str str -- str)
+    last!, first!
+    $"{@first} {@last}"
+end
+```
+
+Primitive static type names include `int`, `float`, `bool`, `str`, `path`, `datetime`, `bytes`, and `none`.
+Named runtime types such as `Grid`, `GridView`, and `GridRow` are also available.
+
+Type expressions compose with lists, dictionaries, unions, `Maybe`, and quotation types.
+
+```mshell
+[str]                 # list of strings
+{str: int}            # string-keyed dictionary of ints
+{name: str, age: int} # dictionary shape
+Maybe[int]            # optional int
+int | str             # union
+(int int -- bool)     # quotation type
+```
+
+Top-level type declarations name larger type expressions.
+Use them for casts and for naming record-like dictionaries and unions that are reused by other type declarations.
+Current definition signatures still use the historical signature parser, so dictionary shapes in `def` signatures are written with quoted field names.
+
+```mshell
+type Person = {name: str, age: int}
+type Cell = int | float | str | bool | none
+type Row = [Cell]
+
+{ "name": "Ada", "age": 36 } as Person :age? 1 +
+```
+
+Dictionary types are split into homogeneous dictionaries and shapes.
+A homogeneous dictionary is for dynamic keys where every value has the same type.
+In a type expression, write `{str: int}`.
+In older definition signatures, `{ int }` or `{ *: int }` means the same string-keyed dictionary of ints.
+
+```mshell
+{ "passed": 10, "failed": 2 } as {str: int} values len
+```
+
+A shape is for record-like dictionaries with known fields.
+Shapes let `:field?` access preserve the precise field type.
+
+```mshell
+def labelPerson ({ "name": str, "age": int, "active": bool } -- str)
+    person!
+    @person :name? name!
+    @person :age? age!
+    $"{@name} ({@age})"
+end
+```
+
+Lists are homogeneous when every element has one type, such as `[int]` or `[Person]`.
+This is the strongest list type because higher-order functions preserve the element type.
+
+```mshell
+def doubleAll ([int] -- [int])
+    (2 *) map
+end
+
+def names ([{ "name": str, "age": int }] -- [str])
+    (:name?) map
+end
+```
+
+Heterogeneous lists are represented as lists whose element type is a union.
+For example, `[int | str]` means every element is either an int or a string.
+This is useful for JSON-like data, spreadsheet rows, and other shell data where each cell can be one of a fixed set of types.
+
+```mshell
+type Cell = int | float | str | bool
+type Row = [Cell]
+type Table = [Row]
+
+[1 "Ada" true] as [int | str | bool]
+```
+
+The checker currently models heterogeneous lists as lists of unions, not fixed-length tuples with per-index types.
+That means index `:0:` does not by itself prove a specific per-position type unless the value is converted or asserted.
+
+Quotation types describe the stack effect of code values.
+Operators with multiple valid signatures keep an overload set until context resolves them.
+For example, `(>)` can become `(int int -- bool)`, `(float float -- bool)`, `(str str -- bool)`, or `(datetime datetime -- bool)` depending on the expected quotation type.
+
+Control-flow branches must reconcile stack and variable state across reachable paths.
+Branches that diverge with `return`, `break`, or `continue` are excluded from reconciliation.
+When the reachable arms of a `match` or `if`/`else` block leave different types in a
+stack slot, those types are joined into a union for the code that follows.
+For example, `match []: 0.0, _ :> sum end` produces an `int | float`.
+An overloaded operation applied to a union operand is resolved for every member of
+the union; it type-checks when each member is handled, and the result is the union
+of the per-member results.
+So `int | float` through `toFloat` gives `float`, and `int | float { … } numFmt`
+formats fine.
+An operation that is valid for only some members is a type error — dividing an
+`int | float` by a `float` fails, because the `int` member has no matching overload.
+
+For more detail, see the generated Type System help page.
+
 ## Definitions
 
 Definitions use `def` with an optional metadata dictionary before the type signature.
@@ -468,6 +648,292 @@ def sumTo (int -- int)
 end
 ```
 
+## Control Flow
+
+### if / else* / else / end
+
+`if` is the primary conditional. The condition is evaluated before `if` and
+popped from the stack.
+
+```mshell
+true if
+    "condition was true" wl
+end
+```
+
+Add an `else` branch for the false case:
+
+```mshell
+false if
+    "true branch" wl
+else
+    "false branch" wl
+end
+```
+
+Use `else*` and `*if` for else-if chains:
+
+```mshell
+2 n!
+@n 1 = if
+    "one" wl
+else* @n 2 = *if
+    "two" wl
+else* @n 3 = *if
+    "three" wl
+else
+    "other" wl
+end
+```
+
+Conditions can be booleans or integers.
+For integers, `0` is true (like Unix exit codes) and non-zero is false.
+
+```mshell
+0 if "zero is true" wl end
+1 if "not printed" wl end
+```
+
+### iff
+
+`iff` is a postfix conditional that executes quotations based on a condition.
+It has a two-argument form (no false branch) and a three-argument form.
+
+```mshell
+# Two-argument form: condition (true-quote) iff
+true ("was true" wl) iff
+
+# Three-argument form: condition (true-quote) (false-quote) iff
+false ("true" wl) ("false" wl) iff
+```
+
+It is useful for inline conditionals:
+
+```mshell
+@count 0 > (@items process) iff
+```
+
+### loop
+
+`loop` repeatedly executes a quotation until `break` is called.
+
+```mshell
+0 i!
+(
+    @i 5 >= if break end
+    @i wl
+    @i 1 + i!
+) loop
+# Output: 0 1 2 3 4 (one per line)
+```
+
+### break
+
+`break` exits the innermost loop.
+
+```mshell
+0 i!
+(
+    @i 1 + i!
+    @i 3 = if
+        "breaking" wl
+        break
+    end
+    @i wl
+) loop
+"done" wl
+# Output: 1 2 breaking done (one per line)
+```
+
+### continue
+
+`continue` skips the rest of the current iteration and starts the next one.
+
+```mshell
+0 i!
+(
+    @i 5 >= if break end
+    @i 1 + i!
+    @i 3 = if continue end
+    @i wl
+) loop
+# Output: 1 2 4 5 (3 is skipped)
+```
+
+### Prefix Quote Syntax
+
+Prefix quotes are an alternative syntax for applying functions to quotations.
+The syntax `functionName. ... end` (a period appended to the function name) is
+equivalent to `(...) functionName`.
+
+```mshell
+# Traditional postfix syntax
+[1 2 3 4 5] (3 >) filter
+
+# Prefix quote syntax
+[1 2 3 4 5] filter. 3 > end
+```
+
+They work with any function that expects a quotation, including `map`, `filter`,
+`each`, and user-defined functions:
+
+```mshell
+[1 2 3] map. 2 * end        # [2 4 6]
+["a" "b" "c"] each. wl end  # prints a, b, c
+```
+
+Prefix quotes can be chained and nested:
+
+```mshell
+# Filter positives, then double them
+[-1 2 -3 4] filter. 0 > end map. 2 * end   # [4 8]
+
+# For each sublist, filter elements > 5
+[[1 2 3] [4 5 6] [7 8 9]] map. filter. 5 > end end   # [[] [6] [7 8 9]]
+```
+
+This is also handy for turning the boolean operators `and` and `or` into a more
+traditional infix lookup format:
+
+```mshell
+true or. false end and. true end   # Like (true | false) & true = true
+```
+
+## Pattern Matching
+
+The `match ... end` block provides multi-way dispatch.
+Arms are checked top-to-bottom and the first matching arm's body is executed.
+If no arm matches, it is a runtime error.
+
+Each arm has the form: `pattern : body ,` or `pattern :> body ,`
+The trailing comma on the last arm is optional.
+
+`:` consumes the matched subject before the arm body runs.
+`:>` preserves the matched subject on the stack when the arm body runs.
+This is independent of pattern kind and bindings.
+
+### Wildcard
+
+`_` matches any value (catch-all).
+
+### Value Matching
+
+Literal values (integers, floats, strings, booleans, paths) match
+if the subject equals the pattern value.
+
+```mshell
+"hello" match
+    "hello" : "greeting",
+    "bye"   : "farewell",
+    _       : "unknown",
+end wl # Output: greeting
+```
+
+Use `:>` when the arm body needs the matched subject, for example when matching
+on type before sending the value through another function:
+
+```mshell
+[1 2 3] match
+    list :> len str,
+    str  :> len str,
+    _    : "other",
+end wl # Output: 3
+```
+
+### Type Matching
+
+Type keywords match based on the subject's type:
+`int`, `float`, `str`, `bool`, `list`, `dict`, `path`, `date`, `quotation`, `maybe`, `binary`.
+
+```mshell
+42 match
+    int : "integer",
+    str : "string",
+    _   : "other",
+end wl # Output: integer
+```
+
+Follow a type keyword with a name to bind the matched value (like `just v`):
+
+```mshell
+"hello" match
+    int n : @n str,
+    str s : @s len str,
+    _     : "other",
+end wl # Output: 5
+```
+
+### Maybe Destructuring
+
+`just v` matches a Maybe that is Just, binding the inner value to `v`.
+`none` matches a Maybe that is None.
+Use `just _` to match Just without binding.
+
+```mshell
+myDict "key" get match
+    just v : @v,
+    none   : "not found",
+end wl # Output: value
+```
+
+Bindings and separator choice are independent, so preserving the subject is also valid:
+
+```mshell
+myDict "key" get match
+    just v :> ?,
+    none   :  "not found",
+end wl # Output: value
+```
+
+### List Destructuring
+
+A list pattern `[a b c]` matches a list of exactly that length,
+binding elements to the given names.
+Use `_` to discard a position.
+Use `...rest` to capture remaining elements.
+
+```mshell
+myList match
+    [head ...tail] : @head,
+    []             : "empty",
+    _              : "not a list",
+end wl # Output: 1
+```
+
+`...rest` can also appear in the middle of the pattern.
+Items before it match from the front, items after it match from the back,
+and the spread binding receives everything in between.
+
+```mshell
+[1 2 3 4 5] match
+    [first ...middle last] : [@first @middle @last] (str) map " | " join,
+    _                      : "no match",
+end wl # Output: 1 | [2 3 4] | 5
+```
+
+### Dict Destructuring
+
+A dict pattern `{ 'key': v }` matches a dict that contains the given keys,
+binding their values to the given names.
+
+```mshell
+person match
+    { 'name': n, 'age': a } : @n,
+    _                       : "missing fields",
+end wl # Output: Alice
+```
+
+Destructuring bindings are added to the outer variable scope,
+the same as `if` blocks.
+
+```mshell
+1 outerVariable!
+10 match
+    int :> @outerVariable + str,
+    _   : "Not found",
+end wl # Output: 11
+```
+
 ## Built-ins
 
 - `.s`: Print stack at current location (--)
@@ -478,14 +944,13 @@ end
 - `swap`: Swap (a b -- b a)
 - `drop`: Drop (a -- )
 - `over`: Over, copy second element to top `(a b -- a b a)`
-- `pick`: Pick, copy nth element to top, `(a b c int pick` -- `a b c [a | b | c])`
 - `rot`: Rotate the top three items, `( a b c -- b c a )`
 - `-rot`: Rotate the top three items in the opposite direction `( a b c -- c a b )`
 - `nip`: Remove second item, `( a b -- b )`
-- `w`: Write to stdout (str|binary -- )
-- `wl`: Write line to stdout (str -- )
-- `we`: Write error to stderr (str|binary -- )
-- `wle`: Write error line stderr (str -- )
+- `w`: Write to stdout (str|int|binary -- ). Other types must be converted with `str` first.
+- `wl`: Write line to stdout (str|int -- ). Binary is not allowed because trailing newlines after raw bytes are rarely intended; use `w` for binary output. Other types must be converted with `str` first.
+- `we`: Write error to stderr (str|int|binary -- ).
+- `wle`: Write error line stderr (str|int -- ).
 - `len`: Length of string/list `([a] -- int | str -- int)`
 - `args`: List of string arguments. Does not include the name of the executing file. `( -- [str])`
 - `glob`: Run glob against string/literal on top of the stack. Leaves list of strings on the stack. Relies on golang's [filepath.Glob](https://pkg.go.dev/path/filepath#Glob), which in the current implementation, the response is sorted. `(str -- [str])`
@@ -502,17 +967,24 @@ end
 - `wt`: "Whitespace table", puts stdin split by lines and whitespace on the stack. `( -- [[str]])`
 - `tt`: "Tab table", puts stdin split by lines and tabs on the stack. `( -- [[str]])`
 - `ttFile`: "Tab table" from file, puts content from file name split by lines and tabs on the stack. `(str -- [[str]])`
+- `unlines`: Join a list of strings into a single string using `\n` line endings. `([str] -- str)`
+- `unlinesCrLf`: Join a list of strings into a single string using `\r\n` line endings. `([str] -- str)`
 - `uw`: Shorthand for `unlines w` `([str] -- )`
 - `tuw`: Shorthand for `(tjoin) map uw` `([[str]] -- )`
 - `runtime`: Get the current OS runtime. This is the output of the GOOS environment variable. Common possible values are `linux`, `windows`, and `darwin`. `( -- str)`
 - `hostname`: Get the current OS hostname. On failure to get, puts 'unknown' on the stack. `( -- str)`
 - `parseCsv`: Parse a CSV file into a list of lists of strings. Input can be a path/literal file name, or the string contents itself. (`path|str -- [[str]])`
+- `toGrid`: Build a Grid from a list of string rows. The first row supplies column headers and remaining rows become string-valued data rows. (`[[str]] -- Grid`)
+- `gridValues`: Extract Grid or GridView cell values as row-major lists, without a header row and without coercing cell types. (`Grid|GridView -- [[a]]`)
+- `toCsvCell`: Escape a single CSV cell. If the value contains `,`, `"`, or a newline, wraps the value in double quotes and doubles any embedded quotes; otherwise returns the input unchanged. (`str -- str`)
+- `toCsv`: Serialize a list of rows to a CSV string. Each cell is escaped with `toCsvCell`, cells are joined with `,`, and rows are joined with `\n`. (`[[str]] -- str`)
 - `parseJson`: Parse JSON from a string, binary, or file path into mshell objects. (`path|str|binary -- list|dict|numeric|str|bool`)
+- `parseExcel`: Parse an `.xlsx` (OOXML) spreadsheet into a list of sheets in workbook (tab) order. Each sheet is a dict with a `name` key (the worksheet name), a `data` key holding a rectangular list of rows (list of lists), a `hidden` key (bool; `true` for hidden or veryHidden sheets), and a `visibility` key (`"visible"`, `"hidden"`, or `"veryHidden"`). Cell values are typed: numbers become floats (dates appear as Excel serial floats), strings become strings (shared, inline, and formula-string results all resolved), booleans become booleans, error cells (e.g. `#DIV/0!`) become `none`, and empty/padding cells are the empty string. Chartsheets are skipped; hidden worksheets are included. Dates are returned as raw Excel serial floats; apply `fromOleDate` at the call site to convert. `parseExcel` assumes the default 1900-based date system, which matches `fromOleDate`'s OLE epoch (1899-12-30). Workbooks saved with the 1904 date system (`<workbookPr date1904="true"/>`, seen on some files originally authored on older Mac Excel or with the "Use 1904 date system" option enabled) have serials offset by 1462 days; on those files, add 1462 to each serial before calling `fromOleDate`, e.g. `@wb :0: :data? :3: :0: 1462 + fromOleDate`. (`path|binary -- list`)
 - `seq`: Generate a list of integers, starting from 0. Exclusive end to integer on stack. `2 seq` produces `[0 1]`. `(int -- [int])`
 - `repeat`: Create a list containing the provided value repeated `n` times. `(a int -- [a])`
 - `binPaths`: Puts a list of lists with 2 items, first is the executable name, second is the full path to the executable. `(-- [[str]])`
 - `urlEncode`: URL-encode a string or dictionary of parameters. `(str|dict -- str)`
-- `type`: Return the type name of the top stack item `(a -- str)`
+- `typeof`: Return the type name of the top stack item `(a -- str)`
 
 
 ## File/Directory Functions
@@ -537,7 +1009,10 @@ end
 - `pwd`: Get current working directory `( -- str)`
 - `mshFileManager`: Open the built-in file manager.
    Pops a starting directory from the stack.
-   On exit, changes the working directory to the directory the user navigated to. `(str -- )`
+   On exit, changes the working directory to the directory the user navigated to.
+   On Windows, pressing `h` at the root of a drive shows the mounted drive letters so you can switch volumes.
+   The preview pane short-circuits common binary extensions and shows first-level contents for `.zip` and `.tar.gz` archives.
+   Yank bindings copy text about the selected entry to the system clipboard: `yf` (file name), `yp` (full path), `yg` (path relative to the enclosing `.git` directory). `(str -- )`
 - `writeFile`: Write string to file (UTF-8). Overwrites file if it exists. `(str content str file -- )`
 - `appendFile`: Append string to file (UTF-8). `(str content str file -- )`
 - `fileSize`: Get size of file in bytes. Returns a Maybe in case file doesn't exist or other IO error. `(str -- Maybe int)`
@@ -554,10 +1029,10 @@ end
 - `abs`: Absolute value `(numeric -- numeric)`
 - `inc`: Increment integer value in place `(int -- int)`
 - `max2`: Maximum of two numbers `(numeric numeric -- numeric)`
-- `max`: Maximum of list of numbers `([numeric] -- numeric)`
+- `max`: Maximum of list of numbers or datetimes `([numeric] -- numeric) | ([DateTime] -- DateTime)`
 - `transpose`: Transpose list of lists `([[a]] -- [[a]])`
 - `min2`: Minimum of two numbers `(numeric numeric -- numeric)`
-- `min`: Minimum of list of numbers `([numeric] -- numeric)`
+- `min`: Minimum of list of numbers or datetimes `([numeric] -- numeric) | ([DateTime] -- DateTime)`
 - `mod`: Modulus `(numeric numeric -- numeric)`
 - `floor`: Round a number down to the nearest integer. `(numeric -- int)`
 - `ceil`: Round a number up to the nearest integer. `(numeric -- int)`
@@ -572,6 +1047,8 @@ end
 - `split`: Split string into list of strings by delimiter. (str delimiter -- [str])
 - `wsplit`: Split string into list of strings by runs of whitespace. (str -- [str])
 - `join`: Join list of strings into a single string, (list delimiter -- str)
+- `unlines`: Join list of strings into a single string using `\n` line endings. `([str] -- str)`
+- `unlinesCrLf`: Join list of strings into a single string using `\r\n` line endings. `([str] -- str)`
 - `in`: Check for substring in string. (totalString subString -- bool)
 - `index`: Get index of first occurrence of substring in string. Returns Maybe[int] with None for the substring not being found. `(str str -- Maybe[int])`
 - `lastIndexOf`: Get index of last occurrence of substring in string. Returns Maybe[int] with None for the substring not being found. `(str str -- Maybe[int])`
@@ -594,7 +1071,8 @@ end
   - `'thousandsSep'` (str): separator (default `","`, only applied when `'grouping'` is provided).
   - `'grouping'` (list[int]): LC_NUMERIC-style group sizes (reused from the end); if `'thousandsSep'` is set without `'grouping'`, `[3]` is assumed.
 - `countSubStr`: Count occurrences of substring in string. `(str str -- int)`
-- `take`: Take first n characters from string. `(str int -- str)`
+- `skip`: Skip first n characters from string using the same indexing logic as string slicing. `(str int -- str)`
+- `take`: Take first n characters from string using the same indexing logic as string slicing. `(str int -- str)`
 - `base64encode`: Encode binary data as base64. `(binary -- str)`
 - `base64decode`: Decode base64 string into binary data. `(str -- binary)`
 - `utf8Str`: Decode UTF-8 bytes into a string. `(binary -- str)`
@@ -604,8 +1082,8 @@ end
 
 - `append`: Append, `([a] a -- [a])`
 - `map`: Map a quotation over a list, `([a] (a -- b) -- [b])`
-- `enumerate`: Pair each element with its zero-based index, returning `[a, int]` pairs. `([a] -- [[a int]])`
-- `enumerateN`: Pair elements with indices starting from the supplied offset, returning `[a, int]` pairs. `([a] int -- [[a int]])`
+- `enumerate`: Pair each element with its zero-based index, returning `{"item": a, "index": int}` dicts. Access the fields with `:item?` and `:index?`. `([a] -- [{"item": a, "index": int}])`
+- `enumerateN`: Pair elements with indices starting from the supplied offset, returning `{"item": a, "index": int}` dicts. `([a] int -- [{"item": a, "index": int}])`
 - `each`: Execute a quotation for each element in a list, `([a] (a -- ) -- )`
 - `eachWhile`: Execute a quotation for each element in a list, stopping when a false is left on the stack `([a] (a -- bool) -- )`
 - `takeWhile`: Return the leading elements of a list while the predicate remains true. `([a] (a -- bool) -- [a])`
@@ -613,18 +1091,23 @@ end
 - `2unpack`: Unpack a two-element list onto the stack. `([a] -- a a)`
 - `2apply`: Apply a binary quotation to a two-element list. `([a] (a a -- c) -- c)`
 - `2each`: Apply a quotation to the two values on the stack individually, returning results in the original order. `(a b (a -- c) -- c c)`
+- `id`: Identity quote — leaves the top stack value unchanged. Useful as a no-op value selector (e.g. for `listToDict`). `(T -- T)`
+- `2id`: Two-argument identity quote. `(T1 T2 -- T1 T2)`
+- `3id`: Three-argument identity quote. `(T1 T2 T3 -- T1 T2 T3)`
 - `2tuple`: Pack the top two stack values into a new two-element list, `(a b -- [a])`
 - `del`: Delete element from list, `(list index -- list)` or `(index list -- list)`
-- `extend`: Extends an existing list with items from another list. Difference between this and `+` is that it modifies the original list in-place. `(originalList toAddList -- list)`
+- `extend`: Extends an existing list with items from another list, or a `Grid`/`GridView` with rows from another `Grid`/`GridView`. Difference between this and `+` is that it modifies the receiver in place. For grids, see the Grid section below. `(originalList toAddList -- list)` or `(Grid|GridView Grid|GridView -- Grid|GridView)`
 - `insert`: Insert element into list, `(list element index -- list)`
 - `setAt`: Set element at index, negative index is allowed.  `(list element index -- list)`
 - `nth`: Nth element of list (0-based) `([a] int -- a)`
-- `reverse`: Reverse list, `(list -- list)`
+- `reverse`: Reverse a list, Grid, or GridView. See Sorting section. `(list -- list)` / `(Grid|GridView -- Grid)`
 - `sum`: Sum of list, `([numeric] -- numeric)`
-- `filter`: Filter list, `([a] (a -- bool) -- [a])`
+- `filter`: Filter a list or dictionary, returning a new collection. The input list or dictionary is not modified in place. For dictionaries, the quotation is applied to each value and matching entries are preserved. `([a] (a -- bool) -- [a])`, `(dict (a -- bool) -- dict)`
+- `linearSearch`: Return the first element that satisfies the predicate, or `none` if nothing matches. `([a] (a -- bool) -- Maybe[a])`
+- `linearSearchIndex`: Return the zero-based index of the first element that satisfies the predicate, or `none` if nothing matches. `([a] (a -- bool) -- Maybe[int])`
 - `any`: Check if any element in list satisfies a condition, `([a] (a -- bool) -- bool)`
 - `all`: Check if all elements in list satisfy a condition, `([a] (a -- bool) -- bool)`
-- `skip`: Skip first n elements of list, `(list int -- list)`
+- `skip`: Skip first n elements of list, or first n characters of string. `(list int -- list)` / `(str int -- str)`
 - `uniq`: Remove duplicate elements from list. Works for all non-compound types. `([a] -- [a])`
 - `zip`: Zip two lists together. If the two list are different lengths, resulting list will be the same length as the shorter of the two lists. `([a] [b] (a b -- c) -- [c])`
 - `concat`: Flatten list of lists one level. Useful for things like a `flatMap`, which can be defined like `map concat`. `([[a]] -- [a])`
@@ -632,19 +1115,63 @@ end
 - `scaleLinear`: Build a linear scaler from a domain/range pair; returns a quotation that maps input values. `([numeric] [numeric] -- (numeric -- numeric))`
 - `cartesian`: Produces the Cartesian product between two lists. Output is a list of lists, in which the inner list has two elements. `([a] [a] -- [[a]])`
 - `groupBy`: Groups items of a list into a dictionary based on a key function. The key function should take each item as input and produce a string.
-             The output is a dictionary with the unique keys and values that are lists of the corresponding items.
-             `[a] (a -- str) -- dict [a])`
+  The output is a dictionary with the unique keys and values that are lists of the corresponding items. `([a] (a -- str) -- dict)`
 - `listToDict`: Transform a list into a dictionary with a key and value selector function. `([a] (a -- b) (a -- c) -- { b: c })`
-- `take`: Take the first `n` number of elements from list. `([a] int -- [a])`
+- `take`: Take the first `n` number of elements from list, or first n characters of string. `([a] int -- [a])` / `(str int -- str)`
 - `repeat`: Build a list by repeating the value the requested number of times. `(a int -- [a])`
 - `chunk`: Group a list into consecutive sublists of size `n`. The final chunk may be shorter if the list length isn't divisible by `n`. `([a] int -- [[a]])`
 - `pop`: Pop the final element off the list. Returns a Maybe, `none` for the empty list. Leaves the modified list on the stack. `([a] -- [a] a)`
+
+## Grid Functions
+
+The `:name` getter and the `get` built-in accept a `Grid` or `GridView` in addition to `dict` and `GridRow`. On a grid the lookup returns the named column as `Maybe[[T]]` — the materialized column when present, `none` when absent — making `:n?` a shorthand for `"n" gridCol`. On a `GridView` the values are projected through the view's row indices.
+
+- `select`: Project a `Grid` or `GridView` to a requested ordered list of column names, returning a materialized `Grid`. `(Grid|GridView [str] -- Grid)`
+- `exclude`: Drop a list of column names from a `Grid` or `GridView`, returning a materialized `Grid`. `(Grid|GridView [str] -- Grid)`
+- `derive`: Append a derived column to a `Grid` or `GridView`. The metadata dictionary is attached to the new column. `(Grid|GridView str dict (GridRow -- any) -- Grid)`
+- `groupBy`: Group rows by key columns and return a summarized `Grid`. `(Grid|GridView [str]:keys [{"agg": (GridView -- any), "name"?: str, "meta"?: dict}]:aggs -- Grid)`
+- `pivot`: Reshape into a pivot table. Rows are grouped by `rowKeys` (first-seen order); the distinct values of the `colKey` column become new column names, ordered by version-aware natural sort. The aggregation quotation runs once per (row-group, column-value) cell with a `GridView` of matching source rows. Empty cells are filled with `none` and the quotation is not invoked for them. The `colKey` column must contain only strings; column-value collisions with a row-key column name are an error. `(Grid|GridView [str]:rowKeys str:colKey (GridView -- any) -- Grid)`
+- `updateCol`: Mutate a column in a `Grid` by applying a quotation to each cell. When used on a `GridView`, a new `Grid` is materialized from the viewed rows, the quotation is applied to that column, all result columns are retyped, and the backing `Grid` is left unchanged. The quotation must return exactly one non-container value. `(Grid|GridView str (any -- any) -- Grid)`
+- `gridValues`: Extract cell values as row-major lists. The result does not include a header row and does not coerce cell types. `(Grid|GridView -- [[a]])`
+- `join`: Inner equi-join of two grids using key extractor quotations on each side.
+  `join` is polymorphic with the string-join built-in: when the top of the stack is a quotation, the grid form is used.
+  Keys must be a non-container scalar or a flat list of scalars (treated as a tuple key).
+  Quotation results that are `none` never match anything (SQL `NULL ≠ NULL` semantics).
+  Output columns are all left columns followed by all right columns; the output grid carries the left grid's metadata.
+  Column-name collisions on non-key columns raise an error before any work — resolve with `select`, `exclude`, or `gridRenameCol` first.
+  `(Grid|GridView Grid|GridView (GridRow -- a) (GridRow -- a) -- Grid)`
+- `leftJoin`: Left outer equi-join. Same shape as `join`; unmatched left rows are emitted with right-side cells filled with `none`. `(Grid|GridView Grid|GridView (GridRow -- a) (GridRow -- a) -- Grid)`
+- `outerJoin`: Full outer equi-join. Same shape as `join`; unmatched rows from either side appear with the absent side filled with `none`. Affected columns fall back to generic storage. `(Grid|GridView Grid|GridView (GridRow -- a) (GridRow -- a) -- Grid)`
+- `+` (Grid|GridView): Vertical concatenation. Returns a new `Grid` whose rows are the left operand's rows followed by the right operand's rows. Column matching is strict-by-name; the left grid's column order is preserved. Per-column types resolve dynamically: matching non-generic types stay; any other combination (including int+float) becomes `COL_GENERIC` — there is no numeric promotion. Grid-level and column-level metadata merge with left-wins on key conflicts. The result is a deep copy and shares no storage with the inputs. `(Grid|GridView Grid|GridView -- Grid)`
+- `extend` (Grid|GridView): In-place vertical concatenation. Mutates the lower operand to include the upper operand's rows after its own and returns the same object on the stack. Column-name matching, type widening to `COL_GENERIC`, and metadata merging follow the same rules as `+`. Both operands may be `GridView`; when the receiver is a view, the underlying source grid is the storage that grows, and the view's indices extend to include the new row indices — other handles to the same source grid will observe the new rows. `(Grid|GridView Grid|GridView -- Grid|GridView)`
+
+Grid `groupBy` aggregation specs are dictionaries.
+Each spec requires an `agg` quotation and may include `name` and `meta`.
+The `agg` quotation receives a `GridView` for one non-empty group and must return exactly one non-container value.
+`name` defaults to `AggCol<N>`, and `meta` defaults to `{}`.
+Key column metadata is copied from the source grid.
+Groups are emitted in first-seen order, and key comparison is type-aware.
+An empty aggregation list acts like distinct over the key columns.
+An empty key list aggregates the whole table into one group when input has rows.
+For empty input, `groupBy` returns the output schema with zero rows and does not evaluate aggregation quotations.
+
+```mshell
+[| region, sales; "East", 10; "West", 5; "East", 7 |]
+["region"]
+[
+    { "name": "n", "agg": (gridRows) }
+    { "name": "sales_total", "meta": { "unit": "USD" }, "agg": ("sales" gridCol sum) }
+]
+groupBy
+```
 
 ## Sorting
 
 - `sort`: Sort list. Converts all items to strings, then sorts using go's `sort.Strings` `(list -- list)`
 - `sortV`: Version sort list. Converts all items to strings, then sorts like GNU `sort -V` (`list -- list`)
-- `sortByCmp`: Sort a list by a comparison function. The function/quotation should return -1 when a < b, 0 when a = b, or 1 when a > b. `[a] (a a -- int) -- [a]`
+- `sortBy`: Sort a Grid or GridView by one or more columns ascending. Spec is a column name (str) or list of column names ([str]); priority is left-to-right. Stable; `none` cells sort last; cross-type values in a generic column error. Compose with `reverse` for descending. `(Grid|GridView str|[str] -- Grid)`
+- `sortByCmp`: Sort a list, Grid, or GridView using a comparison function. The function/quotation receives two items (or two `GridRow`s) and should return -1 when a < b, 0 when a = b, or 1 when a > b. Stable. `[a] (a a -- int) -- [a]` / `(Grid|GridView (GridRow GridRow -- int) -- Grid)`
+- `reverse`: Reverse a list, Grid, or GridView, returning a new value with elements/rows in reverse order. `(list -- list)` / `(Grid|GridView -- Grid)`
 - `strCmp`: Compare two strings lexicographically using Go's [`strings.Compare`](https://pkg.go.dev/strings#Compare); returns -1, 0, or 1. Useful with `sortByCmp`. `(str str -- int)`
 - `versionSortCmp`: A comparison function for use with `sortByCmp`. Used to implement "version sort" or "natural sort". `(str str -- int)`
 - `floatCmp`: Compare two floats and return -1, 0, or 1. Useful with `sortByCmp` for numeric sorting. `(float float -- int)`
@@ -657,7 +1184,13 @@ end
 - `setd`: Set value in dictionary by key. Drop dict after. `(dict str a --)`
 - `keys`: Get keys from dictionary. Sorted. `(dict -- [str])`
 - `values`: Get values from dictionary. Sorted. `(dict -- [str])`
-- `keyValues`: Get key/value pairs from dictionary as a list of lists. Each inner list is a two-element list with the key and value. Sorted by key. `(dict -- [[str a]])`
+- `keyValues`: Get key/value pairs from dictionary as a list of `{k, v}` dictionaries.
+Each pair dict has a `k` field with the key and a `v` field with the value, so the two halves can be typed independently.
+Sorted by key.
+Access the parts with `:k?` and `:v?`.
+`(dict -- [{k: str, v: a}])`
+- `map`: Map a quotation over dictionary values. Keys are preserved. `(dict (a -- b) -- dict)`
+- `filter`: Filter dictionary values with a predicate quotation, returning a new dictionary. Keys are preserved for matching entries, and the original dictionary is not modified in place. `(dict (a -- bool) -- dict)`
 - `in`: Check if key exists in dictionary. `(dict str -- bool)`
 
 ## Date Functions
@@ -695,11 +1228,19 @@ end
 All regular expression functions use the [Go regular expression syntax](https://pkg.go.dev/regexp/syntax).
 See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syntax.
 
-- `reMatch`: Match a regular expression against a string. Returns boolean true/false. `(str re -- bool)`
-- `reFindAll`: Get all the matches of a regular expression. `(str re -- [[ str ]])`
-- `reFindAllIndex`: Get all match index pairs (start and end offsets) for a regular expression, including capture groups. `(str re -- [[int]])`
-- `reReplace`: Replace all occurrences of a regular expression in a string with a replacement string. `(str:orig re str:replacement -- str)`
-- `reSplit`: Split a string by a regular expression delimiter. `(str re -- [str])`
+- `reMatch`: Match a regular expression against a string. Returns boolean true/false. `(str:string str:re -- bool)`
+- `reFindAll`: Get all matches of a regular expression. Each result row starts with the full match, followed by capture groups. `(str:string str:re -- [[str]])`
+- `reFindAllIndex`: Get all match index pairs (start and end offsets) for a regular expression. Offsets are 0-based, the start offset is inclusive, and the end offset is exclusive. Each result row contains start/end pairs for the full match, followed by capture groups. `(str:string str:re -- [[int]])`
+- `reReplace`: Replace all occurrences of a regular expression in a string with a replacement string. `(str:orig str:re str:replacement -- str)`
+- `reSplit`: Split a string by a regular expression delimiter. `(str:string str:re -- [str])`
+
+```mshell
+"abc 123 def 456" "([a-z]+) ([0-9]+)" reFindAll str wl
+# Output: [["abc 123" "abc" "123"] ["def 456" "def" "456"]]
+
+"abc 123 def 456" "([a-z]+) ([0-9]+)" reFindAllIndex str wl
+# Output: [[0 7 0 3 4 7] [8 15 8 11 12 15]]
+```
 
 ## Paths
 
@@ -731,21 +1272,22 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
 
 ## HTTP Requests
 
-- `httpGet`: Make a HTTP GET request. Signature is `(dict -- dict)`. Takes the request information in a dictionary that should have the following keys:
+- `httpGet`: Make a HTTP GET request. Signature is `({str: T} -- Maybe[{status: int, reason: str, headers: {str: [str]}, body: bytes}])`. Takes the request information in a dictionary that should have the following keys:
 
-  - `url`: Full URL, including all the query parameters
-  - `headers`: A dictionary of key-value pairs for the request headers
+  - `url`: Full URL, including all the query parameters (required, stringable)
+  - `timeout`: Request timeout in seconds (optional, positive integer; default 30)
+  - `headers`: A dictionary of key-value pairs for the request headers (optional)
 
   Returns a Maybe wrapping a response dictionary.
-  The response is `none` is the web request totally fails, like hitting a timeout.
+  The response is `none` if the web request totally fails, like hitting a timeout.
   Otherwise a Just Dictionary is returned, with fields
 
   - `status`: Integer status code
   - `reason`: Full reason line, ex: `"200 OK"`
-  - `headers`: Dictionary of key-value header pairs
-  - `body`: Body of response, read as UTF-8 string.
+  - `headers`: Dictionary of header name to a list of values
+  - `body`: Body of response, as raw `bytes`. Decode with `utf8Str` if you want a UTF-8 string.
 
-- `httpPost`: Make a HTTP POST request. Signature is `(dict -- dict)`. Only difference from `httpGet` is that on the request dictionary, you can also set the `body` field to a string.
+- `httpPost`: Make a HTTP POST request. Signature is the same as `httpGet`. The only difference is that on the request dictionary, you can also set the `body` field to a stringable value.
 
 ## Variables
 

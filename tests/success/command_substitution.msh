@@ -1,0 +1,3 @@
+[echo "Hello,"] * ; chomp wl
+
+[echo "Now\nthis\nshould\nhave\nWorld!"] * ; lines :4: wl

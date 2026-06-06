@@ -1,0 +1,14 @@
+# mshell: parseCsv + toGrid, then compute fingerprint.
+
+`test_dataset.csv` parseCsv toGrid g!
+
+@g gridRows rows!
+@g "id" gridCol (toInt?) map sum sumId!
+@g "value" gridCol (toFloat? floor) map sum sumV!
+
+@g (:category? "A" =) filter gridRows catA!
+@g (:category? "B" =) filter gridRows catB!
+@g (:category? "C" =) filter gridRows catC!
+@g (:category? "D" =) filter gridRows catD!
+
+$"rows\t{@rows}\nsum_id\t{@sumId}\nsum_value_floor\t{@sumV}\ncat_A\t{@catA}\ncat_B\t{@catB}\ncat_C\t{@catC}\ncat_D\t{@catD}\n" "out/mshell/load.txt" writeFile

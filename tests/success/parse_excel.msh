@@ -1,0 +1,16 @@
+`excel_test_file.xlsx` parseExcel wb!
+
+@wb each. sheet!
+    $"=== {@sheet :name?} (hidden: {@sheet :hidden? str}, visibility: {@sheet :visibility?}) ===" wl
+    @sheet :data? 1 enumerateN each.
+        # 2unpack row!, rowNum!
+        row!
+        @row :item? 1 enumerateN each.
+            col!
+            @col :item? cell!
+            # 2unpack cell!, colNum!
+            $"{@row :index?}:{@col :index?}:{@cell typeof}|{@cell str}" wl
+        end
+    "---" wl
+    end
+end

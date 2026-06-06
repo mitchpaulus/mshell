@@ -1,0 +1,10 @@
+[project]
+name = "mshell-bench-1"
+version = "0.0.0"
+description = "Pandas vs Polars vs mshell benchmark"
+requires-python = ">=3.11"
+dependencies = [
+    "pandas>=2.2",
+    "polars>=1.0",
+    "numpy>=2.0",
+]

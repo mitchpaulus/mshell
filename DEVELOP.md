@@ -172,3 +172,6 @@ Short answer: Linux does a raw byte check for #!, parses only the first line int
 [Carapace](https://carapace.sh/): Completion library we may be able to reference?
 
 [Shell Pitfall example](https://gaultier.github.io/blog/shell_pitfall.html)
+[Slap](https://github.com/surprisetalk/slap), [Slap - blog](https://taylor.town/slap-000)
+[Category Theory Illustrated](https://abuseofnotation.github.io/category-theory-illustrated/)
+[Dataframe design](https://mchav.github.io/what-category-theory-teaches-us-about-dataframes/)

@@ -1,0 +1,22 @@
+[
+    [printf "hello\\nEarth!\\n"]
+    [sed "s/Earth/World/"]
+    [grep World]
+] |;
+
+# FILE:pipeline.out
+[
+    [printf "hello\\nEarth!\\n"]
+    [sed "s/Earth/World/"] `pipeline.out` >
+] | ;
+
+[
+    [printf "hello\\nEarth!\\n"]
+    [sed "s/Earth/World/"]
+] | * ; chomp wl
+
+# Swapping order of | and * shouldn't matter
+[
+    [printf "hello\\nEarth!\\n"]
+    [sed "s/Earth/World/"]
+]  * | ; chomp wl

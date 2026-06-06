@@ -1,0 +1,4 @@
+# Strict-by-name matching: differing column sets error with a diff.
+[| name, age; "Alice", 30 |] g1!
+[| name, city; "Bob", "NYC" |] g2!
+@g1 @g2 + r!

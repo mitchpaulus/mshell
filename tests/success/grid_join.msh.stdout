@@ -1,0 +1,17 @@
+[{"id": 1, "name": "Alice", "uid": 1, "score": 90}, {"id": 2, "name": "Bob", "uid": 2, "score": 80}]
+[{"id": 1, "name": "Alice", "uid": 1, "score": 90}, {"id": 2, "name": "Bob", "uid": 2, "score": 80}, {"id": 3, "name": "Carol", "uid": null, "score": null}]
+[{"id": 1, "name": "Alice", "uid": 1, "score": 90}, {"id": 2, "name": "Bob", "uid": 2, "score": 80}, {"id": 3, "name": "Carol", "uid": null, "score": null}, {"id": null, "name": null, "uid": 4, "score": 70}]
+[{"id": 1, "uid": 1, "val": "a"}, {"id": 1, "uid": 1, "val": "b"}, {"id": 1, "uid": 1, "val": "a"}, {"id": 1, "uid": 1, "val": "b"}, {"id": 2, "uid": 2, "val": "c"}]
+[{"id": 1, "user_id": 1, "val": "x"}, {"id": 2, "user_id": 2, "val": "y"}]
+[{"date": "2024-01-01T00:00:00", "region": "E", "lv": 10, "dt": "2024-01-01T00:00:00", "rgn": "E", "rv": 1}, {"date": "2024-01-02T00:00:00", "region": "E", "lv": 30, "dt": "2024-01-02T00:00:00", "rgn": "E", "rv": 2}]
+[]
+[{"a": 1, "name": "x", "b": null, "val": null}, {"a": 2, "name": "y", "b": null, "val": null}]
+[{"a": 1, "name": "x", "b": null, "val": null}, {"a": 2, "name": "y", "b": null, "val": null}, {"a": null, "name": null, "b": 1, "val": 10}]
+[{"id": 3, "name": "c", "uid": 3, "val": 30}]
+[{"x": 1, "y": 10}, {"x": 1, "y": 20}, {"x": 2, "y": 10}, {"x": 2, "y": 20}, {"x": 3, "y": 10}, {"x": 3, "y": 20}]
+[]
+[{"id": null, "uid": 1, "val": 10}]
+[]
+[{"id": 1, "uid": null, "val": null}, {"id": 2, "uid": null, "val": null}]
+a,b,c
+{"src": "l"}

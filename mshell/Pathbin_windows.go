@@ -1,5 +1,6 @@
 package main
 import (
+	"errors"
 	"os"
 	"strings"
 	"sort"
@@ -10,6 +11,24 @@ import (
 	"golang.org/x/sys/windows"
 	"fmt"
 )
+
+// classifyStartError maps a CreateProcess() failure to a negative exit code that
+// carries the raw Windows system error verbatim: -(1024 + winErr). The 1024 base
+// keeps these clear of the POSIX errno band so the two error spaces never collide
+// when codes are compared. No lookup table — the number is the answer.
+func classifyStartError(err error) int {
+	var errno syscall.Errno
+	if errors.As(err, &errno) && errno != 0 {
+		return -(1024 + int(errno))
+	}
+	return ExitStartUnknown
+}
+
+// signalExitCode is a no-op on Windows: there are no POSIX signals, so process
+// termination always surfaces as a normal exit code.
+func signalExitCode(ps *os.ProcessState) (int, bool) {
+	return 0, false
+}
 
 // Windows CTRL-C handling
 // When a subprocess is running, we track its process group ID so we can forward CTRL-C to it.
@@ -323,7 +342,7 @@ func (s *TermState) UpdateSize() {
 	var err error
 	err = windows.GetConsoleScreenBufferInfo(stdout, &info)
 	if err != nil {
-		fmt.Fprintf(s.f, "Error getting console screen buffer info for FD %d: %s\n", stdout, err)
+		s.Logf("Error getting console screen buffer info for FD %d: %s\n", stdout, err)
 	}
 	s.numCols = int(info.Window.Right - info.Window.Left + 1)
 	s.numRows = int(info.Window.Bottom - info.Window.Top + 1)

@@ -1,0 +1,94 @@
+# Grid sort tests
+
+# sortBy with bare string column name
+"sortBy bare string" wl
+[| name, age; "Bob", 25; "Alice", 30; "Carol", 28 |] "age" sortBy toJson wl
+
+# sortBy with single-element list
+"sortBy single-element list" wl
+[| name, age; "Bob", 25; "Alice", 30; "Carol", 28 |] ["name"] sortBy toJson wl
+
+# sortBy with multiple columns, lex priority left-to-right
+"sortBy multi-column" wl
+[|
+   region, age, name;
+   "East", 30, "Alice";
+   "West", 25, "Bob";
+   "East", 25, "Carol";
+   "West", 30, "Dave"
+|] ["region" "age"] sortBy toJson wl
+
+# Stability: sorting by a different column preserves prior order within ties
+"sortBy stability" wl
+[|
+   region, age;
+   "East", 30;
+   "West", 30;
+   "East", 25;
+   "West", 25
+|] "age" sortBy "region" sortBy toJson wl
+
+# Mixed direction via sequenced sorts: name asc, age desc
+# Sort lowest priority first (name asc), then age (desc via reverse).
+"Mixed direction sequenced" wl
+[|
+   name, age;
+   "Alice", 30;
+   "Bob", 25;
+   "Alice", 25;
+   "Bob", 30
+|] "name" sortBy "age" sortBy reverse "name" sortBy toJson wl
+
+# Sort string column lex
+"sortBy string column" wl
+[| s; "banana"; "apple"; "cherry" |] "s" sortBy toJson wl
+
+# Sort float column
+"sortBy float column" wl
+[| v; 3.0; 1.0; 2.5; 2.0 |] "v" sortBy toJson wl
+
+# Sort datetime column chronological
+"sortBy datetime column" wl
+[| t; 2024-03-01; 2024-01-15; 2024-02-10 |] "t" sortBy toJson wl
+
+# Sort bool column false<true
+"sortBy bool column" wl
+[| b; true; false; true; false |] "b" sortBy toJson wl
+
+# sortBy on a GridView
+"sortBy on GridView" wl
+[| x; 5; 1; 4; 2; 3 |] (:x? 2 >=) filter "x" sortBy toJson wl
+
+# none-last via outerJoin produced cells
+"sortBy none last" wl
+[| id, x; 1, 10; 2, 20 |] [| rid, y; 2, 200; 3, 300 |] (:id?) (:rid?) outerJoin "y" sortBy "y" gridCol str wl
+
+# sortByCmp on Grid: ascending by age via comparator
+"sortByCmp on Grid" wl
+[| name, age; "Bob", 25; "Alice", 30; "Carol", 28 |] (swap :age? swap :age? -) sortByCmp toJson wl
+
+# sortByCmp on GridView
+"sortByCmp on GridView" wl
+[| x; 5; 1; 4; 2; 3 |] (:x? 2 >=) filter (swap :x? swap :x? -) sortByCmp toJson wl
+
+# reverse on Grid
+"reverse on Grid" wl
+[| x; 1; 2; 3; 4 |] reverse toJson wl
+
+# reverse on GridView
+"reverse on GridView" wl
+[| x; 1; 2; 3; 4; 5 |] (:x? 2 >) filter reverse toJson wl
+
+# reverse on list still works (no std.msh def)
+"reverse on list" wl
+[1 2 3 4 5] reverse toJson wl
+[] reverse toJson wl
+["a" "b" "c"] reverse toJson wl
+
+# Empty grid sort
+"sortBy empty grid" wl
+[| x; |] "x" sortBy toJson wl
+
+# Single-row sort
+"sortBy single row" wl
+[| x; 42 |] "x" sortBy toJson wl

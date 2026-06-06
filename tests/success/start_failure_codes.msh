@@ -1,0 +1,5 @@
+# Start failures carry the exact OS reason as a negative code.
+# Executing a directory fails with EACCES on Linux/macOS: -(256 + 13) = -269.
+[/tmp]? wl
+# A process killed by SIGKILL reports -(128 + 9) = -137.
+[sh -c 'kill -9 $$']? wl

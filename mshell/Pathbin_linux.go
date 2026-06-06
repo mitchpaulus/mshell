@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"os/signal"
 	"strings"
@@ -13,6 +14,26 @@ import (
 )
 
 const nullDevice = "/dev/null"
+
+// classifyStartError maps a cmd.Start() failure to a negative exit code that
+// carries the raw host errno verbatim: -(256 + errno). No lookup table — the
+// number is the answer, so every errno (even ones we never enumerate) is exact.
+func classifyStartError(err error) int {
+	var errno syscall.Errno
+	if errors.As(err, &errno) && errno != 0 {
+		return -(256 + int(errno))
+	}
+	return ExitStartUnknown
+}
+
+// signalExitCode encodes a signal death as -(128 + signal), mirroring the
+// familiar POSIX 128+N. Returns false if the process was not killed by a signal.
+func signalExitCode(ps *os.ProcessState) (int, bool) {
+	if ws, ok := ps.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		return -(signalBase + int(ws.Signal())), true
+	}
+	return 0, false
+}
 
 type PathBinManager struct {
 	currPath []string
