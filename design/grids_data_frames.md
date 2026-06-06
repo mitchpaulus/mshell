@@ -74,3 +74,5 @@ FROMLABELS         Dataframe	Demote labels back to data
 <https://www2.eecs.berkeley.edu/Pubs/TechRpts/2021/EECS-2021-193.pdf>
 
 <https://www.sumsar.net/blog/pandas-feels-clunky-when-coming-from-r/>
+
+<https://ibis-project.org/>
