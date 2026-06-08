@@ -105,3 +105,5 @@ MShellObject
 [Slap](https://github.com/surprisetalk/slap), [Slap - blog](https://taylor.town/slap-000)
 [Category Theory Illustrated](https://abuseofnotation.github.io/category-theory-illustrated/)
 [Dataframe design](https://mchav.github.io/what-category-theory-teaches-us-about-dataframes/)
+
+[dax shell scripting](https://dax.land/)
