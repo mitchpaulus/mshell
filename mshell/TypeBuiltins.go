@@ -1384,6 +1384,11 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		{Inputs: []TypeId{TidPath}, Outputs: []TypeId{arena.MakeMaybe(TidInt)}},
 		{Inputs: []TypeId{TidStr}, Outputs: []TypeId{arena.MakeMaybe(TidInt)}},
 	}
+	// modTime : (path|str -- Maybe[datetime])
+	out[names.Intern("modTime")] = []QuoteSig{{
+		Inputs:  []TypeId{arena.MakeUnion([]TypeId{TidPath, TidStr}, 0)},
+		Outputs: []TypeId{arena.MakeMaybe(TidDateTime)},
+	}}
 	// fileExists : (path|str -- bool)
 	out[names.Intern("fileExists")] = []QuoteSig{
 		{Inputs: []TypeId{TidPath}, Outputs: []TypeId{TidBool}},

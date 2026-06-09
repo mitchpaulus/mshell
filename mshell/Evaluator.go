@@ -7355,6 +7355,25 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					} else {
 						stack.Push(&Maybe{obj: MShellInt{int(fileInfo.Size())}})
 					}
+				} else if t.Lexeme == "modTime" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'modTime' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					path, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot get the modification time of a %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					var fileInfo os.FileInfo
+					fileInfo, err = os.Stat(path)
+					if err != nil {
+						stack.Push(&Maybe{obj: nil})
+					} else {
+						modTime := fileInfo.ModTime()
+						stack.Push(&Maybe{obj: &MShellDateTime{Time: modTime, OriginalString: modTime.Format(time.RFC3339)}})
+					}
 				} else if t.Lexeme == "lsDir" {
 					obj1, err := stack.Pop()
 					if err != nil {

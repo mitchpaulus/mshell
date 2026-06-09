@@ -1016,6 +1016,7 @@ end wl # Output: 11
 - `writeFile`: Write string to file (UTF-8). Overwrites file if it exists. `(str content str file -- )`
 - `appendFile`: Append string to file (UTF-8). `(str content str file -- )`
 - `fileSize`: Get size of file in bytes. Returns a Maybe in case file doesn't exist or other IO error. `(str -- Maybe int)`
+- `modTime`: Get a file's last modification time. Returns a Maybe (None on missing file or IO error). This is the only file timestamp that is portable across operating systems and filesystems; reported in local time. `(str|path -- Maybe datetime)`
 - `lsDir`: Get list of all items (files and directories) in directory. Full paths to the items. `(str -- [str])`
 - `sha256sum`: Get SHA256 checksum of file. `(path -- str)`
 - `md5`: Get md5 checksum of file or string. `(path|str -- str)`
