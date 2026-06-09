@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `modTime`: Return a file's last modification time as a `datetime`, the one file
+  timestamp portable across operating systems and filesystems. Returns a `Maybe`
+  (`None` when the file is missing or cannot be stat'd). `(str|path -- Maybe[datetime])`
 - The language server now offers completion on `$` environment variables, drawing
   from the actual process environment as well as any environment variables already
   referenced in the current file.

@@ -1,0 +1,5 @@
+`unknownFile` modTime str wl
+`filesize.txt` modTime match
+    just t : now @t - 0.0 >= str wl,
+    none   : "none" wl,
+end
