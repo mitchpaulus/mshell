@@ -114,18 +114,12 @@ type Checker struct {
 
 	// branchSpawn is populated by multi-dispatch sites (resolveAndApply
 	// with multiple viable candidates, prefix-quote handlers, INTERPRET
-	// on an overloaded quote) when the checker is running under the
-	// branching walker. Each entry is one alternative outcome of the
-	// current step. tryBranchStep clears this before invoking the step
-	// and reads it after: a non-empty result fans out the current
+	// on an overloaded quote). Each entry is one alternative outcome of
+	// the current step. tryBranchStep clears this before invoking the
+	// step and reads it after: a non-empty result fans out the current
 	// branch into all the spawned alternatives instead of capturing a
 	// single deterministic continuation.
-	//
-	// When branchingEnabled is false (legacy path: direct CheckTokens,
-	// tests that don't go through the branching walker), multi-dispatch
-	// sites fall back to their pre-branching behavior.
-	branchSpawn      []quoteBranch
-	branchingEnabled bool
+	branchSpawn []quoteBranch
 
 	// listDepth tracks how deeply nested we are inside list literals
 	// (`[...]`). Inside lists, mshell allows bare literals as strings
@@ -160,13 +154,16 @@ func (c *Checker) Stack() *TypeStack {
 	return &c.stack
 }
 
-// CheckTokens runs the Phase-2 checker over a flat token stream. Returns
-// after consuming all tokens regardless of errors — every error is
-// collected for batch reporting.
+// CheckTokens runs the checker over a flat token stream through the
+// branching driver, starting from the checker's current state. Surviving
+// branches are joined back into a single live state. Used by lower-level
+// tests; the program path enters through CheckProgram.
 func (c *Checker) CheckTokens(tokens []Token) {
-	for _, tok := range tokens {
-		c.checkOne(tok)
+	items := make([]MShellParseItem, len(tokens))
+	for i, tok := range tokens {
+		items[i] = tok
 	}
+	c.walkJoined(items)
 }
 
 // checkOne dispatches a single token. Literals push a primitive; tokens

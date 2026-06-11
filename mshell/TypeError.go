@@ -27,7 +27,6 @@ const (
 	TErrBranchVarSet
 	TErrDefBodyMismatch // def's declared sig and body stack effect disagree
 	TErrNonExhaustiveMatch
-	TErrAmbiguousOverload
 	TErrNoMatchingOverload
 	// TErrAmbiguousTyping is emitted when the branching walker reaches
 	// the end of a program (or a synchronization point) with more than
@@ -117,8 +116,6 @@ func (e TypeError) Format(arena *TypeArena, names *NameTable) string {
 		fmt.Fprintf(&sb, "branches bind different variable sets: %s", e.Hint)
 	case TErrNonExhaustiveMatch:
 		fmt.Fprintf(&sb, "non-exhaustive match: %s", e.Hint)
-	case TErrAmbiguousOverload:
-		fmt.Fprintf(&sb, "ambiguous call to '%s': %s", e.Pos.Lexeme, e.Hint)
 	case TErrNoMatchingOverload:
 		fmt.Fprintf(&sb, "no matching overload for '%s': %s", e.Pos.Lexeme, e.Hint)
 	case TErrAmbiguousTyping:

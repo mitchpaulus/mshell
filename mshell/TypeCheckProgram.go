@@ -480,9 +480,7 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 		fields := make([]ShapeField, 0, len(it.Items))
 		for _, kv := range it.Items {
 			scope := c.snapshotStack()
-			for _, sub := range kv.Value {
-				c.checkParseItem(sub)
-			}
+			c.walkJoined(kv.Value)
 			valueT := c.subst.FreshVar(c.arena)
 			if c.stack.Len() > scope.length {
 				valueT = c.stack.items[c.stack.Len()-1]
@@ -546,7 +544,7 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 					continue
 				}
 				scope := c.snapshotStack()
-				c.checkParseItem(row[ci])
+				c.walkJoined(row[ci : ci+1])
 				if c.stack.Len() > scope.length {
 					cellTypes = append(cellTypes, c.stack.items[c.stack.Len()-1])
 				}
@@ -782,9 +780,7 @@ func (c *Checker) checkIfBlock(ifBlock *MShellParseIfBlock) {
 	for i, elseIf := range ifBlock.ElseIfs {
 		c.loadBranch(entry)
 		c.diverged = false
-		for _, sub := range elseIf.Condition {
-			c.checkParseItem(sub)
-		}
+		c.walkJoined(elseIf.Condition)
 		if c.stack.Len() == 0 {
 			c.errors = append(c.errors, TypeError{
 				Kind: TErrStackUnderflow,
@@ -1553,9 +1549,7 @@ func (c *Checker) checkFormatBlock(src string, callSite Token, baseLine, baseCol
 	c.stack.items = nil
 
 	errStart := len(c.errors)
-	for _, item := range file.Items {
-		c.checkParseItem(item)
-	}
+	c.walkJoined(file.Items)
 	// Diagnostics raised while walking the block carry block-local
 	// positions; shift them back onto the original source.
 	for i := errStart; i < len(c.errors); i++ {

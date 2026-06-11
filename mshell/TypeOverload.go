@@ -13,9 +13,8 @@ import (
 // site the checker trial-unifies every candidate against the current
 // stack and keeps the viable set. There is no specificity ranking and
 // no automatic pick: if exactly one candidate is viable it is
-// applied; if more than one is viable the dispatch branches (under
-// the branching walker) or reports TErrAmbiguousOverload (in the
-// legacy direct-call path used by lower-level tests).
+// applied; if more than one is viable the dispatch fans out via
+// branchSpawn and the branching driver explores every alternative.
 //
 // Resolution algorithm:
 //
@@ -30,9 +29,7 @@ import (
 //   3. Restore both snapshots so the actual application starts clean.
 //   4. With one viable, apply it. With zero, report
 //      TErrNoMatchingOverload and recover. With multiple, fan out via
-//      branchSpawn (branching walker) or report TErrAmbiguousOverload
-//      (legacy path), applying the first viable candidate purely for
-//      diagnostic recovery.
+//      branchSpawn.
 
 func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 	if len(candidates) == 1 {
@@ -134,47 +131,34 @@ func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 		return
 	}
 
-	// Multiple candidates remain viable. In branching mode, fan out
-	// every viable continuation into the branchSpawn slice and let
-	// the caller (the branching driver via tryBranchStep) propagate
-	// the alternatives. Downstream constraints prune; if none do,
-	// the end-of-walk reconciler reports TErrAmbiguousTyping.
-	if c.branchingEnabled {
-		// applySig (in inferring mode) mutates c.inferInputs by
-		// prepending freshly-synthesized inputs. Capture the
-		// pre-call value so each fan-out iteration sees the same
-		// starting point — otherwise iteration k's branch would
-		// carry the union of iterations 0..k-1's synthesized inputs.
-		savedInferInputs := append([]TypeId(nil), c.inferInputs...)
-		for _, sig := range viable {
-			c.Fork(stackSnap)
-			c.subst.Rollback(substSnap)
-			c.inferInputs = append([]TypeId(nil), savedInferInputs...)
-			savedErrs := c.errors
-			c.errors = nil
-			c.applySig(sig, callSite)
-			stepErrs := c.errors
-			c.errors = savedErrs
-			if len(stepErrs) == 0 {
-				c.branchSpawn = append(c.branchSpawn, c.captureBranch())
-			}
-		}
+	// Multiple candidates remain viable. Fan out every viable
+	// continuation into the branchSpawn slice and let the caller (the
+	// branching driver via tryBranchStep) propagate the alternatives.
+	// Downstream constraints prune; if none do, the end-of-walk
+	// reconciler joins or reports TErrAmbiguousTyping.
+	//
+	// applySig (in inferring mode) mutates c.inferInputs by
+	// prepending freshly-synthesized inputs. Capture the
+	// pre-call value so each fan-out iteration sees the same
+	// starting point — otherwise iteration k's branch would
+	// carry the union of iterations 0..k-1's synthesized inputs.
+	savedInferInputs := append([]TypeId(nil), c.inferInputs...)
+	for _, sig := range viable {
 		c.Fork(stackSnap)
 		c.subst.Rollback(substSnap)
-		c.inferInputs = savedInferInputs
-		return
+		c.inferInputs = append([]TypeId(nil), savedInferInputs...)
+		savedErrs := c.errors
+		c.errors = nil
+		c.applySig(sig, callSite)
+		stepErrs := c.errors
+		c.errors = savedErrs
+		if len(stepErrs) == 0 {
+			c.branchSpawn = append(c.branchSpawn, c.captureBranch())
+		}
 	}
-
-	// Non-branching mode (legacy / direct CheckTokens path): the
-	// caller can't fan out, so any pick is a magic pick. Surface the
-	// ambiguity as an error and apply the first viable candidate
-	// only for diagnostic recovery.
-	c.errors = append(c.errors, TypeError{
-		Kind: TErrAmbiguousOverload,
-		Pos:  callSite,
-		Hint: c.formatOverloadAmbiguityFromSigs(viable),
-	})
-	c.applySig(viable[0], callSite)
+	c.Fork(stackSnap)
+	c.subst.Rollback(substSnap)
+	c.inferInputs = savedInferInputs
 }
 
 // maxUnionDistributionCombos caps the cartesian product explored by
@@ -332,22 +316,6 @@ func (c *Checker) formatOverloadFailure(candidates []QuoteSig) string {
 	for _, cand := range candidates {
 		sb.WriteString("\n    ")
 		sb.WriteString(FormatType(c.arena, c.names, c.arena.MakeQuote(cand)))
-	}
-	return sb.String()
-}
-
-// formatOverloadAmbiguityFromSigs is the ambiguous-overload counterpart
-// for the legacy (non-branching) path. Every viable candidate is listed
-// since they're all the user needs to disambiguate.
-func (c *Checker) formatOverloadAmbiguityFromSigs(viable []QuoteSig) string {
-	var sb strings.Builder
-	sb.WriteString("multiple overloads match\n")
-	sb.WriteString("  stack (top first):")
-	sb.WriteString(c.formatStackForDiagnostic())
-	sb.WriteString("\n  viable candidates:")
-	for _, sig := range viable {
-		sb.WriteString("\n    ")
-		sb.WriteString(FormatType(c.arena, c.names, c.arena.MakeQuote(sig)))
 	}
 	return sb.String()
 }
