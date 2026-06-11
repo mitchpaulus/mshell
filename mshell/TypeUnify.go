@@ -176,8 +176,6 @@ func (s *Substitution) applyImpl(arena *TypeArena, t TypeId, skip map[TypeVarId]
 		return arena.MakeQuote(QuoteSig{
 			Inputs:   newIn,
 			Outputs:  newOut,
-			Fail:     sig.Fail,
-			Pure:     sig.Pure,
 			Diverges: sig.Diverges,
 			Generics: sig.Generics,
 		})
@@ -192,8 +190,6 @@ func (s *Substitution) applyImpl(arena *TypeArena, t TypeId, skip map[TypeVarId]
 			rebuilt[i] = QuoteSig{
 				Inputs:   newIn,
 				Outputs:  newOut,
-				Fail:     sig.Fail,
-				Pure:     sig.Pure,
 				Diverges: sig.Diverges,
 				Generics: sig.Generics,
 			}
@@ -375,8 +371,6 @@ func (c *Checker) Instantiate(sig QuoteSig) QuoteSig {
 	return QuoteSig{
 		Inputs:   freshIn,
 		Outputs:  freshOut,
-		Fail:     sig.Fail,
-		Pure:     sig.Pure,
 		Diverges: sig.Diverges,
 		Bindings: freshBindings,
 		// Generics intentionally dropped: instantiation consumes them.
@@ -491,8 +485,6 @@ func (c *Checker) renameVars(t TypeId, rename map[TypeVarId]TypeId) TypeId {
 		return c.arena.MakeQuote(QuoteSig{
 			Inputs:   newIn,
 			Outputs:  newOut,
-			Fail:     sig.Fail,
-			Pure:     sig.Pure,
 			Diverges: sig.Diverges,
 			Bindings: bindings,
 			Generics: nil,
@@ -521,8 +513,6 @@ func (c *Checker) renameVars(t TypeId, rename map[TypeVarId]TypeId) TypeId {
 			out[i] = QuoteSig{
 				Inputs:   newIn,
 				Outputs:  newOut,
-				Fail:     sig.Fail,
-				Pure:     sig.Pure,
 				Diverges: sig.Diverges,
 				Generics: nil,
 			}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strconv"
 	"fmt"
 	"strings"
 	"unicode/utf8"
@@ -212,7 +213,7 @@ func formatBranchStacks(c *Checker, branches []quoteBranch) string {
 	for i, b := range branches {
 		c.loadBranch(b)
 		sb.WriteString("\n  branch ")
-		sb.WriteString(intToStr(i + 1))
+		sb.WriteString(strconv.Itoa(i + 1))
 		sb.WriteString(":")
 		if c.stack.Len() == 0 {
 			sb.WriteString(" <empty>")
@@ -353,7 +354,7 @@ func (c *Checker) reconcileDefBodyBranches(def *MShellDefinition, fnCtx *FnConte
 						Expected: want,
 						Actual:   got,
 						ArgIndex: i,
-						Hint: "output position " + intToStr(i) +
+						Hint: "output position " + strconv.Itoa(i) +
 							" — declared " + FormatType(c.arena, c.names, want) +
 							", body produced " + FormatType(c.arena, c.names, got),
 					}
@@ -373,8 +374,8 @@ func (c *Checker) reconcileDefBodyBranches(def *MShellDefinition, fnCtx *FnConte
 }
 
 func defBodyArityHint(c *Checker, _ string, declared, produced []TypeId) string {
-	return "declared " + intToStr(len(declared)) + " output(s) " + formatTypeList(c, declared) +
-		", body produced " + intToStr(len(produced)) + " " + formatTypeList(c, produced)
+	return "declared " + strconv.Itoa(len(declared)) + " output(s) " + formatTypeList(c, declared) +
+		", body produced " + strconv.Itoa(len(produced)) + " " + formatTypeList(c, produced)
 }
 
 // formatTypeList renders a stack/outputs slice as a parenthesized
@@ -396,27 +397,6 @@ func formatTypeList(c *Checker, items []TypeId) string {
 	return sb.String()
 }
 
-func intToStr(i int) string {
-	if i == 0 {
-		return "0"
-	}
-	neg := i < 0
-	if neg {
-		i = -i
-	}
-	var b [20]byte
-	pos := len(b)
-	for i > 0 {
-		pos--
-		b[pos] = byte('0' + i%10)
-		i /= 10
-	}
-	if neg {
-		pos--
-		b[pos] = '-'
-	}
-	return string(b[pos:])
-}
 
 // checkParseItem dispatches a single parse-tree item, advancing the
 // type stack as appropriate. Unknown / not-yet-implemented item
@@ -1381,20 +1361,11 @@ func (c *Checker) narrowMatchSubject(pattern []MShellParseItem) (TypeId, bool) {
 	return TidNothing, false
 }
 
-type patternBinding struct {
-	Name NameId
-	Old  TypeId
-	Had  bool
-}
-
-func (c *Checker) bindPatternName(name string, typ TypeId, bindings *[]patternBinding) {
+func (c *Checker) bindPatternName(name string, typ TypeId) {
 	if name == "_" || name == "" {
 		return
 	}
-	nameId := c.names.Intern(name)
-	old, had := c.vars.bound[nameId]
-	*bindings = append(*bindings, patternBinding{Name: nameId, Old: old, Had: had})
-	c.vars.bound[nameId] = typ
+	c.vars.bound[c.names.Intern(name)] = typ
 }
 
 // bindMatchPattern mirrors runtime match destructuring enough for body
@@ -1404,8 +1375,7 @@ func (c *Checker) bindPatternName(name string, typ TypeId, bindings *[]patternBi
 //   - `{ 'key': name }` binds dictionary value names.
 //
 // Value/type/wildcard patterns do not introduce bindings.
-func (c *Checker) bindMatchPattern(subject TypeId, pattern []MShellParseItem) []patternBinding {
-	var bindings []patternBinding
+func (c *Checker) bindMatchPattern(subject TypeId, pattern []MShellParseItem) {
 
 	// `just v` and `<typekeyword> name`
 	if len(pattern) != 2 {
@@ -1418,10 +1388,10 @@ func (c *Checker) bindMatchPattern(subject TypeId, pattern []MShellParseItem) []
 					resolved := c.subst.Apply(c.arena, subject)
 					n := c.arena.Node(resolved)
 					if n.Kind == TKMaybe {
-						c.bindPatternName(second.Lexeme, TypeId(n.A), &bindings)
+						c.bindPatternName(second.Lexeme, TypeId(n.A))
 					}
 				}
-				return bindings
+				return
 			}
 			// `<typekeyword> name` binds the matched value to the type
 			// the keyword tests for. Container/other keywords have no
@@ -1432,15 +1402,15 @@ func (c *Checker) bindMatchPattern(subject TypeId, pattern []MShellParseItem) []
 				if !ok {
 					bindType = c.subst.Apply(c.arena, subject)
 				}
-				c.bindPatternName(second.Lexeme, bindType, &bindings)
-				return bindings
+				c.bindPatternName(second.Lexeme, bindType)
+				return
 			}
 		}
 	}
 
 single:
 	if len(pattern) != 1 {
-		return bindings
+		return
 	}
 	switch p := pattern[0].(type) {
 	case *MShellParseList:
@@ -1456,9 +1426,9 @@ single:
 				continue
 			}
 			if len(tok.Lexeme) > 3 && tok.Lexeme[:3] == "..." {
-				c.bindPatternName(tok.Lexeme[3:], c.arena.MakeList(elem), &bindings)
+				c.bindPatternName(tok.Lexeme[3:], c.arena.MakeList(elem))
 			} else {
-				c.bindPatternName(tok.Lexeme, elem, &bindings)
+				c.bindPatternName(tok.Lexeme, elem)
 			}
 		}
 	case *MShellParseDict:
@@ -1469,11 +1439,11 @@ single:
 			tok, ok := kv.Value[0].(Token)
 			if ok && tok.Type == LITERAL {
 				value := c.subst.FreshVar(c.arena)
-				c.bindPatternName(tok.Lexeme, value, &bindings)
+				c.bindPatternName(tok.Lexeme, value)
 			}
 		}
 	}
-	return bindings
+	return
 }
 
 // checkFormatStringInterpolations walks each `{...}` block inside a
@@ -1596,7 +1566,7 @@ func (c *Checker) checkFormatBlock(src string, callSite Token, baseLine, baseCol
 		c.errors = append(c.errors, TypeError{
 			Kind: TErrInterpolationArity,
 			Pos:  callSite,
-			Hint: "format-string interpolation `{" + src + "}` must produce exactly one value, got " + intToStr(c.stack.Len()),
+			Hint: "format-string interpolation `{" + src + "}` must produce exactly one value, got " + strconv.Itoa(c.stack.Len()),
 		})
 	}
 

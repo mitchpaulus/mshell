@@ -248,11 +248,6 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		{Inputs: []TypeId{TidInt}, Outputs: []TypeId{TidFloat}},
 		{Inputs: []TypeId{TidFloat}, Outputs: []TypeId{TidFloat}},
 	}
-	// toFixed : (float|int int -- str)  format value with N decimals
-	out[names.Intern("toFixed")] = []QuoteSig{
-		{Inputs: []TypeId{TidFloat, TidInt}, Outputs: []TypeId{TidStr}},
-		{Inputs: []TypeId{TidInt, TidInt}, Outputs: []TypeId{TidStr}},
-	}
 	// toInt : (str -- Maybe[int]) | (float -- int) | (int -- int)
 	// str-first ordering for the same reason as toFloat above.
 	out[names.Intern("toInt")] = []QuoteSig{
@@ -1504,17 +1499,6 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		out[names.Intern("urlEncode")] = []QuoteSig{{
 			Inputs:  []TypeId{inputU},
 			Outputs: []TypeId{TidStr},
-		}}
-	}
-	// zipPack validates entry dictionaries at runtime. The checker
-	// keeps the stack effect broad until dictionary shape tracking is
-	// precise enough to express the required keys.
-	{
-		t := arena.MakeVar(0)
-		u := arena.MakeVar(1)
-		out[names.Intern("zipPack")] = []QuoteSig{{
-			Inputs:   []TypeId{t, u},
-			Generics: []TypeVarId{0, 1},
 		}}
 	}
 	// setAt : ([T] T int -- [T])  positional set on lists

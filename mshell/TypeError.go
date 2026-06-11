@@ -37,6 +37,9 @@ const (
 	TErrAmbiguousTyping
 	TErrReservedTypeName
 	TErrDuplicateTypeName
+	// TErrRebrand is emitted when a `type X = ...` right-hand side is
+	// already a branded type (re-branding is not allowed for unions).
+	TErrRebrand
 	TErrInvalidCast
 	TErrTypeParse
 	TErrInterpolationArity
@@ -129,6 +132,8 @@ func (e TypeError) Format(arena *TypeArena, names *NameTable) string {
 		}
 	case TErrDuplicateTypeName:
 		fmt.Fprintf(&sb, "type '%s' is already declared", e.Name)
+	case TErrRebrand:
+		fmt.Fprintf(&sb, "cannot declare type '%s': right-hand side is already a branded type", e.Name)
 	case TErrInvalidCast:
 		fmt.Fprintf(&sb, "invalid cast: cannot cast %s to %s",
 			FormatType(arena, names, e.Actual),

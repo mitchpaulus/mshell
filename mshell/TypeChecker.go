@@ -333,30 +333,6 @@ func (c *Checker) checkOne(tok Token) {
 		if tok.Lexeme == "return" && c.tryReturn(tok) {
 			return
 		}
-		if tok.Lexeme == "append" && c.tryAppend() {
-			return
-		}
-		if tok.Lexeme == "get" && c.tryGet(tok) {
-			return
-		}
-		if tok.Lexeme == "zipPack" {
-			need := 2
-			if c.stack.Len() < need {
-				need = c.stack.Len()
-			}
-			c.stack.items = c.stack.items[:c.stack.Len()-need]
-			return
-		}
-		if tok.Lexeme == "foldl" {
-			if c.stack.Len() < 3 {
-				c.errors = append(c.errors, TypeError{Kind: TErrStackUnderflow, Pos: tok, Hint: "foldl"})
-				return
-			}
-			acc := c.stack.items[c.stack.Len()-2]
-			c.stack.items = c.stack.items[:c.stack.Len()-3]
-			c.stack.Push(acc)
-			return
-		}
 		if tok.Lexeme == "join" && c.tryGridJoin(tok) {
 			return
 		}
@@ -453,81 +429,6 @@ func (c *Checker) tryReturn(tok Token) bool {
 	}
 	c.stack.items = c.stack.items[:base]
 	c.diverged = true
-	return true
-}
-
-func (c *Checker) tryAppend() bool {
-	if c.stack.Len() >= 2 {
-		top := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-1])
-		second := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-2])
-		if c.arena.Kind(second) == TKList {
-			elem := TypeId(c.arena.Node(second).A)
-			c.stack.items = c.stack.items[:c.stack.Len()-2]
-			c.stack.Push(c.arena.MakeList(c.arena.MakeUnion([]TypeId{elem, top}, 0)))
-			return true
-		}
-		if c.arena.Kind(top) == TKList {
-			elem := TypeId(c.arena.Node(top).A)
-			c.stack.items = c.stack.items[:c.stack.Len()-2]
-			c.stack.Push(c.arena.MakeList(c.arena.MakeUnion([]TypeId{elem, second}, 0)))
-			return true
-		}
-	}
-
-	if c.inferring && c.stack.Len() == 1 {
-		list := c.subst.Apply(c.arena, c.stack.Top())
-		node := c.arena.Node(list)
-		if node.Kind != TKList {
-			return false
-		}
-		item := c.subst.FreshVar(c.arena)
-		c.inferInputs = append([]TypeId{item}, c.inferInputs...)
-		elem := TypeId(node.A)
-		c.stack.items = c.stack.items[:0]
-		c.stack.Push(c.arena.MakeList(c.arena.MakeUnion([]TypeId{elem, item}, 0)))
-		return true
-	}
-
-	return false
-}
-
-func (c *Checker) tryGet(tok Token) bool {
-	if c.inferring && c.stack.Len() < 2 {
-		need := 2 - c.stack.Len()
-		extra := make([]TypeId, need)
-		for i := 0; i < need; i++ {
-			extra[i] = c.subst.FreshVar(c.arena)
-		}
-		c.inferInputs = append(append([]TypeId(nil), extra...), c.inferInputs...)
-		c.stack.items = append(append([]TypeId(nil), extra...), c.stack.items...)
-	}
-	if c.stack.Len() < 2 {
-		return false
-	}
-	key := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-1])
-	receiver := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-2])
-	if !c.unify(key, TidStr) {
-		return false
-	}
-
-	var value TypeId
-	node := c.arena.Node(receiver)
-	switch node.Kind {
-	case TKGridRow, TKShape:
-		value = c.lookupGetterValueType(receiver, c.names.Intern(""))
-	case TKDict:
-		value = TypeId(node.B)
-	case TKVar:
-		value = c.subst.FreshVar(c.arena)
-		if !c.unify(receiver, c.arena.MakeDict(TidStr, value)) {
-			return false
-		}
-	default:
-		return false
-	}
-
-	c.stack.items = c.stack.items[:c.stack.Len()-2]
-	c.stack.Push(c.arena.MakeMaybe(value))
 	return true
 }
 
@@ -1109,8 +1010,7 @@ func (c *Checker) unifyUnion(gn, wn TypeNode) bool {
 
 // unifyQuote unifies two quote signatures. Inputs are contravariant
 // (the actual quote may accept a wider input type than the expected
-// context supplies), while outputs are covariant. Fail/Pure flags must
-// match directly (always default in V1 — Phase-2-of-effects revisits this).
+// context supplies), while outputs are covariant.
 // unifyQuote unifies two TKQuote sigs. Each side may carry a
 // Generics list whose TypeVarIds are symbolic — they refer to
 // nothing in the current substitution and must be renamed to fresh
@@ -1124,7 +1024,7 @@ func (c *Checker) unifyQuote(gn, wn TypeNode) bool {
 	if len(gs.Inputs) != len(ws.Inputs) || len(gs.Outputs) != len(ws.Outputs) {
 		return false
 	}
-	if gs.Fail != ws.Fail || gs.Pure != ws.Pure || gs.Diverges != ws.Diverges {
+	if gs.Diverges != ws.Diverges {
 		return false
 	}
 	for i := range gs.Inputs {

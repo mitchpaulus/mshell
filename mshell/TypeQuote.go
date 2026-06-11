@@ -465,7 +465,7 @@ func mergeableInputDiff(c *Checker, a, b QuoteSig) (int, bool) {
 	if len(a.Inputs) != len(b.Inputs) || len(a.Outputs) != len(b.Outputs) {
 		return 0, false
 	}
-	if a.Diverges != b.Diverges || a.Fail != b.Fail || a.Pure != b.Pure {
+	if a.Diverges != b.Diverges {
 		return 0, false
 	}
 	for i := range a.Outputs {
@@ -582,7 +582,7 @@ func quoteSigEqual(a, b QuoteSig) bool {
 	if len(a.Inputs) != len(b.Inputs) || len(a.Outputs) != len(b.Outputs) {
 		return false
 	}
-	if a.Diverges != b.Diverges || a.Fail != b.Fail || a.Pure != b.Pure {
+	if a.Diverges != b.Diverges {
 		return false
 	}
 	for i := range a.Inputs {
