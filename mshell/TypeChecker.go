@@ -473,22 +473,30 @@ func (c *Checker) tryIff(tok Token) bool {
 	}
 
 	c.stack.items = c.stack.items[:baseLen]
-	snap := c.Snapshot()
 	allowedBindings := c.commonIffBindings(trueQuote, falseQuote, hasFalse)
 
-	c.applyQuoteArm(trueQuote, tok, allowedBindings)
-	arms := []BranchArm{c.CaptureArm(c.diverged)}
-
-	if hasFalse {
-		c.Fork(snap)
-		c.applyQuoteArm(falseQuote, tok, allowedBindings)
-		arms = append(arms, c.CaptureArm(c.diverged))
-	} else {
-		c.Fork(snap)
-		arms = append(arms, c.CaptureArm(false))
+	entry := c.captureBranch()
+	var armBranches []quoteBranch
+	var armLabels []string
+	runArm := func(quote TypeId, label string, apply bool) {
+		c.loadBranch(entry)
+		if apply {
+			c.applyQuoteArm(quote, tok, allowedBindings)
+		}
+		armBranches = append(armBranches, c.captureBranch())
+		armLabels = append(armLabels, label)
 	}
 
-	c.ReconcileArms(arms, tok)
+	runArm(trueQuote, "true", true)
+	if hasFalse {
+		runArm(falseQuote, "false", true)
+	} else {
+		// Implicit do-nothing arm: with one quote, the false case
+		// leaves the entry state untouched.
+		runArm(TidNothing, "no-arm", false)
+	}
+
+	c.reconcileArmBranches(armBranches, armLabels, entry, tok)
 	return true
 }
 
