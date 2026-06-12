@@ -30,7 +30,10 @@ package main
 // Keep every sig in lockstep with the corresponding Evaluator.go switch —
 // a permissive sig silently waves through programs that crash at runtime.
 
-import "sort"
+import (
+	"sort"
+	"sync"
+)
 
 // sigRegistry collects builtin signatures, parsing string sigs through the
 // type-expression parser and rejecting duplicate registrations.
@@ -46,21 +49,40 @@ func newSigRegistry(arena *TypeArena, names *NameTable) *sigRegistry {
 	}
 }
 
+// sigASTCache memoizes the parsed AST per signature string. Sig strings
+// are compile-time constants and the AST is arena-independent and
+// read-only during resolution, so one parse serves every checker
+// construction — table builds after the first (e.g. per LSP diagnostics
+// pass) skip lexing/parsing entirely.
+var sigASTCache sync.Map // string -> sigAST
+
+type sigAST struct {
+	inputs  []MShellParseItem
+	outputs []MShellParseItem
+}
+
 // parseBuiltinSig parses one `(inputs -- outputs)` signature string into a
 // QuoteSig. Generic names must be single lowercase letters; anything else
 // unknown to the resolver is a typo and panics.
 func parseBuiltinSig(c *Checker, src string) QuoteSig {
-	lex := NewLexer(src, nil)
-	parser := NewMShellParser(lex)
-	parser.NextToken()
-	inputs, outputs, err := parser.parseDefSignature()
-	if err != nil {
-		panic("builtin sig " + src + ": " + err.Error())
+	var ast sigAST
+	if cached, ok := sigASTCache.Load(src); ok {
+		ast = cached.(sigAST)
+	} else {
+		lex := NewLexer(src, nil)
+		parser := NewMShellParser(lex)
+		parser.NextToken()
+		inputs, outputs, err := parser.parseDefSignature()
+		if err != nil {
+			panic("builtin sig " + src + ": " + err.Error())
+		}
+		ast = sigAST{inputs: inputs, outputs: outputs}
+		sigASTCache.Store(src, ast)
 	}
 	ctx := &typeResolveCtx{}
 	errStart := len(c.errors)
-	ins := c.resolveSigItems(inputs, ctx)
-	outs := c.resolveSigItems(outputs, ctx)
+	ins := c.resolveSigItems(ast.inputs, ctx)
+	outs := c.resolveSigItems(ast.outputs, ctx)
 	if len(c.errors) > errStart {
 		panic("builtin sig " + src + ": " + c.errors[errStart].Format(c.arena, c.names))
 	}

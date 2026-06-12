@@ -164,6 +164,10 @@ type QuoteSig struct {
 type TypeArena struct {
 	nodes []TypeNode
 	cons  map[string]TypeId
+	// atomCons hashconses the kinds whose data fits entirely in TypeNode
+	// (no side-table content). Keying on the struct itself avoids the
+	// per-construction string key allocation on the checking hot path.
+	atomCons map[TypeNode]TypeId
 
 	shapeFields    [][]ShapeField
 	quoteSigs      []QuoteSig
@@ -178,7 +182,8 @@ type TypeArena struct {
 // to live nodes.
 func NewTypeArena() *TypeArena {
 	a := &TypeArena{
-		cons: make(map[string]TypeId, 64),
+		cons:     make(map[string]TypeId, 64),
+		atomCons: make(map[TypeNode]TypeId, 64),
 	}
 	// Reserve nothing slot at index 0.
 	a.nodes = append(a.nodes, TypeNode{Kind: TKPrim})
@@ -426,12 +431,12 @@ func (a *TypeArena) GridSchema(id TypeId) GridSchema {
 // intern looks up an atomic composite type and returns its id, allocating
 // a new node if none existed.
 func (a *TypeArena) intern(kind TypeKind, x, y, extra uint32) TypeId {
-	key := encodeAtomicKey(kind, x, y, extra)
-	if id, ok := a.cons[key]; ok {
+	key := TypeNode{Kind: kind, A: x, B: y, Extra: extra}
+	if id, ok := a.atomCons[key]; ok {
 		return id
 	}
-	id := a.append(TypeNode{Kind: kind, A: x, B: y, Extra: extra})
-	a.cons[key] = id
+	id := a.append(key)
+	a.atomCons[key] = id
 	return id
 }
 
@@ -476,20 +481,6 @@ func (a *TypeArena) flattenAndCanonicalizeUnion(arms []TypeId) []TypeId {
 		}
 	}
 	return out[:w]
-}
-
-// encodeAtomicKey builds the cons-table key for kinds that have all their
-// data in TypeNode (no side-table content).
-func encodeAtomicKey(kind TypeKind, a, b, extra uint32) string {
-	var sb strings.Builder
-	sb.WriteByte(byte(kind) + 'a')
-	sb.WriteByte(':')
-	sb.WriteString(strconv.FormatUint(uint64(a), 10))
-	sb.WriteByte(':')
-	sb.WriteString(strconv.FormatUint(uint64(b), 10))
-	sb.WriteByte(':')
-	sb.WriteString(strconv.FormatUint(uint64(extra), 10))
-	return sb.String()
 }
 
 // encodeShapeKey builds the cons-table key for a normalized shape.
