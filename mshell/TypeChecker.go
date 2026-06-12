@@ -436,6 +436,16 @@ func (c *Checker) tryIff(tok Token) bool {
 	}
 	second := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-2])
 	secondNode := c.arena.Node(second)
+	// An overloaded quote in the true-branch position needs per-arm
+	// dispatch; treating it as the one-arm form's condition would
+	// misread the program. Defer to the table's iff sigs, where
+	// overloaded-quote operand expansion explores the arms and the
+	// surviving choices fan out through the branching driver. (The
+	// table arms only cover thunk-shaped branches; folding full arm
+	// dispatch into tryIff is the upgrade path if that bites.)
+	if secondNode.Kind == TKOverloadedQuote {
+		return false
+	}
 
 	var trueQuote TypeId
 	var hasFalse bool

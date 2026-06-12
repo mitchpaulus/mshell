@@ -1,0 +1,10 @@
+# A quote closing over a generic def input applied to an overloaded
+# builtin infers as an overloaded thunk — here `(@x toFloat)` is
+# ( -- Maybe[float]) | ( -- float). Using it as an iff branch must pick
+# the arm that agrees with the sibling branch and the declared output
+# (the float arm), not greedily commit to the first arm.
+def pick (a -- float)
+  x!
+  true (@x toFloat) (1.5) iff
+end
+3 pick str wl

@@ -293,3 +293,39 @@ func TestSubstCheckpointRollback(t *testing.T) {
 		t.Fatalf("after rollback, v1 should be unbound (slot dropped)")
 	}
 }
+
+func TestOverloadedQuoteArmChoiceConsidersSiblingOperands(t *testing.T) {
+	// f : (( -- t) ( -- t) -- t)   — two thunks sharing a generic.
+	// Call with an overloaded first thunk ( -- int)|( -- str) and a
+	// plain ( -- str) second thunk. The valid typing picks the str arm
+	// (t = str). Greedy first-arm unification used to commit ( -- int),
+	// bind t = int, and falsely reject the call; overloaded-quote
+	// operand expansion now trials each arm as its own scenario.
+	c := freshChecker()
+	tv := TypeVarId(0)
+	tt := c.arena.MakeVar(tv)
+	thunkT := c.arena.MakeQuote(QuoteSig{Outputs: []TypeId{tt}})
+	registerOverloads(c, "f", QuoteSig{
+		Inputs:   []TypeId{thunkT, thunkT},
+		Outputs:  []TypeId{tt},
+		Generics: []TypeVarId{tv},
+	})
+
+	over := c.arena.MakeOverloadedQuote([]QuoteSig{
+		{Outputs: []TypeId{TidInt}},
+		{Outputs: []TypeId{TidStr}},
+	})
+	plainStr := c.arena.MakeQuote(QuoteSig{Outputs: []TypeId{TidStr}})
+
+	c.stack.Push(over)
+	c.stack.Push(plainStr)
+	c.CheckTokens([]Token{mkTok(LITERAL, "f")})
+
+	if errs := c.Errors(); len(errs) != 0 {
+		t.Fatalf("valid typing exists (str arm, t=str) but checker rejected: %+v", errs)
+	}
+	if c.stack.Len() != 1 || c.subst.Apply(c.arena, c.stack.Top()) != TidStr {
+		t.Fatalf("expected str result, got %s",
+			FormatType(c.arena, c.names, c.stack.Top()))
+	}
+}

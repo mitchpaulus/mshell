@@ -18,23 +18,29 @@ import (
 //
 // Resolution algorithm:
 //
-//   1. Snapshot the stack and the substitution.
-//   2. For each candidate:
-//        a. Restore both snapshots.
+//   1. Expand candidates into trial scenarios: union inputs facing an
+//      unbound-variable operand split per arm, and overloaded-quote
+//      operands facing a quote input split per arm (the operand slot
+//      is pinned to a single-arm quote for that scenario).
+//   2. Snapshot the stack and the substitution.
+//   3. For each scenario:
+//        a. Restore both snapshots and apply the scenario's pins.
 //        b. Instantiate the candidate (fresh-rename its generics).
 //        c. If the candidate's arity exceeds the stack and we are
 //           not in inferring mode, drop it.
 //        d. Trial-unify each input against the matching stack slot.
-//           Any failure drops the candidate.
-//   3. Restore both snapshots so the actual application starts clean.
-//   4. With one viable, apply it. With zero, report
+//           Any failure drops the scenario.
+//   4. Restore both snapshots so the actual application starts clean.
+//   5. With one viable, apply it. With zero, report
 //      TErrNoMatchingOverload and recover. With multiple, fan out via
 //      branchSpawn.
 
 func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 	candidates = c.expandUnionOperands(candidates)
-	if len(candidates) == 1 {
-		c.applySig(candidates[0], callSite)
+	scenarios := c.expandOverloadedQuoteOperands(candidates)
+	if len(scenarios) == 1 {
+		c.applyPins(scenarios[0].pins)
+		c.applySig(scenarios[0].sig, callSite)
 		return
 	}
 	// In quote-body inference mode, the stack may be intentionally
@@ -49,13 +55,14 @@ func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 	stackSnap := c.Snapshot()
 	substSnap := c.subst.Checkpoint()
 
-	var viable []QuoteSig
+	var viable []dispatchScenario
 
-	for _, cand := range candidates {
+	for _, sc := range scenarios {
 		c.Fork(stackSnap)
 		c.subst.Rollback(substSnap)
+		c.applyPins(sc.pins)
 
-		instantiated := c.Instantiate(cand)
+		instantiated := c.Instantiate(sc.sig)
 		if len(c.stack.items) < len(instantiated.Inputs) {
 			if !c.inferring {
 				continue
@@ -78,7 +85,7 @@ func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 		if !match {
 			continue
 		}
-		viable = append(viable, cand)
+		viable = append(viable, sc)
 	}
 
 	c.Fork(stackSnap)
@@ -128,11 +135,12 @@ func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 	}
 
 	if len(viable) == 1 {
-		c.applySig(viable[0], callSite)
+		c.applyPins(viable[0].pins)
+		c.applySig(viable[0].sig, callSite)
 		return
 	}
 
-	// Multiple candidates remain viable. Fan out every viable
+	// Multiple scenarios remain viable. Fan out every viable
 	// continuation into the branchSpawn slice and let the caller (the
 	// branching driver via tryBranchStep) propagate the alternatives.
 	// Downstream constraints prune; if none do, the end-of-walk
@@ -144,13 +152,14 @@ func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 	// starting point — otherwise iteration k's branch would
 	// carry the union of iterations 0..k-1's synthesized inputs.
 	savedInferInputs := append([]TypeId(nil), c.inferInputs...)
-	for _, sig := range viable {
+	for _, sc := range viable {
 		c.Fork(stackSnap)
 		c.subst.Rollback(substSnap)
+		c.applyPins(sc.pins)
 		c.inferInputs = append([]TypeId(nil), savedInferInputs...)
 		savedErrs := c.errors
 		c.errors = nil
-		c.applySig(sig, callSite)
+		c.applySig(sc.sig, callSite)
 		stepErrs := c.errors
 		c.errors = savedErrs
 		if len(stepErrs) == 0 {
@@ -160,6 +169,76 @@ func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 	c.Fork(stackSnap)
 	c.subst.Rollback(substSnap)
 	c.inferInputs = savedInferInputs
+}
+
+// dispatchScenario is one (candidate, operand-arm choice) combination
+// explored by resolveAndApply. pins replace overloaded-quote stack
+// operands with one of their single-arm quotes for the duration of the
+// trial and the eventual application.
+type dispatchScenario struct {
+	sig  QuoteSig
+	pins []slotPin
+}
+
+type slotPin struct {
+	idx int // absolute index into the stack
+	t   TypeId
+}
+
+func (c *Checker) applyPins(pins []slotPin) {
+	for _, p := range pins {
+		c.stack.items[p.idx] = p.t
+	}
+}
+
+// expandOverloadedQuoteOperands turns candidates into trial scenarios.
+// For every input position whose declared type is a quote and whose
+// stack operand is an overloaded quote, the scenario set fans out one
+// alternative per arm. Greedy first-arm unification inside unify cannot
+// account for constraints that arrive from sibling operands or outputs
+// — e.g. `f : (( -- t) ( -- t) -- t)` with an overloaded first thunk
+// must choose the arm under which the second thunk still unifies.
+// Pinning the operand to a single-arm quote per scenario lets the
+// ordinary trial / fan-out machinery make that choice globally instead.
+//
+// Expansion only fires when the candidate input is itself TKQuote: a
+// plain-variable input binds to the whole overloaded quote, preserving
+// the alternatives for the eventual consumer (`x`, iff, ...) to
+// resolve. Combinations beyond maxUnionOperandVariants are kept
+// unexpanded, falling back to greedy unification.
+func (c *Checker) expandOverloadedQuoteOperands(candidates []QuoteSig) []dispatchScenario {
+	scenarios := make([]dispatchScenario, 0, len(candidates))
+	for _, cand := range candidates {
+		variants := []dispatchScenario{{sig: cand}}
+		if len(c.stack.items) >= len(cand.Inputs) {
+			base := len(c.stack.items) - len(cand.Inputs)
+			for i, in := range cand.Inputs {
+				if c.arena.Kind(in) != TKQuote {
+					continue
+				}
+				got := c.subst.Apply(c.arena, c.stack.items[base+i])
+				gn := c.arena.Node(got)
+				if gn.Kind != TKOverloadedQuote {
+					continue
+				}
+				arms := c.arena.overloadedQuoteSigs[gn.Extra]
+				if len(variants)*len(arms) > maxUnionOperandVariants {
+					continue
+				}
+				next := make([]dispatchScenario, 0, len(variants)*len(arms))
+				for _, v := range variants {
+					for _, arm := range arms {
+						pins := append(append([]slotPin(nil), v.pins...),
+							slotPin{idx: base + i, t: c.arena.MakeQuote(arm)})
+						next = append(next, dispatchScenario{sig: v.sig, pins: pins})
+					}
+				}
+				variants = next
+			}
+		}
+		scenarios = append(scenarios, variants...)
+	}
+	return scenarios
 }
 
 // expandUnionOperands splits a candidate whose input is an unbranded
