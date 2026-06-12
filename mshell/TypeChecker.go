@@ -784,7 +784,8 @@ func (c *Checker) applySig(sig QuoteSig, callSite Token) {
 		}
 	}
 	base := len(c.stack.items) - len(sig.Inputs)
-	for i, want := range sig.Inputs {
+	for _, i := range c.inputUnifyOrder(sig.Inputs, base) {
+		want := sig.Inputs[i]
 		got := c.stack.items[base+i]
 		if !c.unify(got, want) {
 			c.errors = append(c.errors, TypeError{

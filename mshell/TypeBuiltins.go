@@ -540,8 +540,9 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 	}
 	// zipPack validates entry dictionaries at runtime; the checker keeps
 	// the entry shape broad until dictionary key tracking can express the
-	// required keys.
-	r.reg("zipPack", "(str | path [{v}] -- )")
+	// required keys. Stack order: entries below, zip path on top
+	// (runtime Pop2 takes the path first).
+	r.reg("zipPack", "([{v}] str | path -- )")
 	r.reg("zipExtract", "(str | path str | path {v} -- )")
 	r.reg("zipExtractEntry",
 		"(str str str {v} -- )",

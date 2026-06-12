@@ -32,6 +32,7 @@ import (
 //      branchSpawn.
 
 func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
+	candidates = c.expandUnionOperands(candidates)
 	if len(candidates) == 1 {
 		c.applySig(candidates[0], callSite)
 		return
@@ -68,8 +69,8 @@ func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 		}
 		base := len(c.stack.items) - len(instantiated.Inputs)
 		match := true
-		for i, want := range instantiated.Inputs {
-			if !c.unify(c.stack.items[base+i], want) {
+		for _, i := range c.inputUnifyOrder(instantiated.Inputs, base) {
+			if !c.unify(c.stack.items[base+i], instantiated.Inputs[i]) {
 				match = false
 				break
 			}
@@ -159,6 +160,91 @@ func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 	c.Fork(stackSnap)
 	c.subst.Rollback(substSnap)
 	c.inferInputs = savedInferInputs
+}
+
+// expandUnionOperands splits a candidate whose input is an unbranded
+// union, while the corresponding stack operand is a still-unbound type
+// variable, into one candidate per union arm. A union input is the
+// compact spelling of same-output overload arms; for concrete operands
+// the two are equivalent, but unifying an unbound variable against the
+// whole union would freeze the variable as that union — downstream ops
+// could then no longer narrow it the way the branching walker narrows
+// overload alternatives. (E.g. inferring `(n! @n wl @n 3 <)`: `wl` is
+// `(str | int -- )`; the bound variable must stay narrowable so the
+// later `<` can prune to the int alternative.) Splitting restores the
+// per-arm fan-out exactly in that case.
+//
+// Candidates whose expansion would exceed maxUnionOperandVariants are
+// kept unsplit — the union-freezing behavior is still sound, just less
+// permissive.
+const maxUnionOperandVariants = 16
+
+func (c *Checker) expandUnionOperands(candidates []QuoteSig) []QuoteSig {
+	out := candidates
+	changed := false
+	for ci, cand := range candidates {
+		variants := []QuoteSig{cand}
+		if len(c.stack.items) >= len(cand.Inputs) {
+			base := len(c.stack.items) - len(cand.Inputs)
+			for i, in := range cand.Inputs {
+				n := c.arena.Node(in)
+				if n.Kind != TKUnion || n.A != 0 {
+					continue
+				}
+				got := c.subst.Apply(c.arena, c.stack.items[base+i])
+				if c.arena.Kind(got) != TKVar {
+					continue
+				}
+				arms := c.arena.unionMembers[n.Extra]
+				if len(variants)*len(arms) > maxUnionOperandVariants {
+					continue
+				}
+				next := make([]QuoteSig, 0, len(variants)*len(arms))
+				for _, v := range variants {
+					for _, arm := range arms {
+						nv := v
+						nv.Inputs = append([]TypeId(nil), v.Inputs...)
+						nv.Inputs[i] = arm
+						next = append(next, nv)
+					}
+				}
+				variants = next
+			}
+		}
+		if len(variants) == 1 {
+			if changed {
+				out = append(out, variants[0])
+			}
+			continue
+		}
+		if !changed {
+			out = append([]QuoteSig(nil), candidates[:ci]...)
+			changed = true
+		}
+		out = append(out, variants...)
+	}
+	return out
+}
+
+// inputUnifyOrder returns the order in which a sig's inputs are unified
+// against the stack: operands that are not quote values first, quote
+// values last. Quote-valued operands (especially overloaded quotes from
+// bare `(+)`-style literals) commit to one arm during unification, so
+// every other operand gets to pin the sig's generics before that choice
+// is made — e.g. foldl's accumulator and list must bind `a` and `t`
+// before the folding quote picks among its overload arms.
+func (c *Checker) inputUnifyOrder(inputs []TypeId, base int) []int {
+	order := make([]int, 0, len(inputs))
+	var quotes []int
+	for i := range inputs {
+		got := c.subst.Apply(c.arena, c.stack.items[base+i])
+		if isQuoteKind(c.arena.Kind(got)) {
+			quotes = append(quotes, i)
+			continue
+		}
+		order = append(order, i)
+	}
+	return append(order, quotes...)
 }
 
 // maxUnionDistributionCombos caps the cartesian product explored by
