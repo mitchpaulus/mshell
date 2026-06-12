@@ -2639,6 +2639,12 @@ func (state *TermState) InteractiveMode() error {
 
 	defer state.TrySaveHistory()
 
+	// Backstop against a hang during the exit/cleanup sequence. Registered last
+	// so it runs first (defers are LIFO): the watchdog timer starts before
+	// TrySaveHistory and term.Restore run, and is cancelled by the eventual
+	// os.Exit on a clean shutdown.
+	defer startShutdownWatchdog(shutdownTimeout())
+
 	var token TerminalToken
 	var end bool
 
@@ -2680,7 +2686,58 @@ func (state *TermState) InteractiveMode() error {
 	return nil
 }
 
+// Default time budgets for the interactive shutdown sequence. These guard
+// against hangs on exit (most commonly slow or stuck filesystem I/O when
+// writing the history files, e.g. on a WSL /mnt drive or a network mount).
+const (
+	defaultHistorySaveTimeout = 2 * time.Second
+	defaultShutdownTimeout    = 5 * time.Second
+)
+
+// shutdownTimeout returns the overall shutdown budget, allowing an override via
+// the MSH_SHUTDOWN_TIMEOUT environment variable (a Go duration such as "3s").
+func shutdownTimeout() time.Duration {
+	if v, ok := os.LookupEnv("MSH_SHUTDOWN_TIMEOUT"); ok {
+		if d, err := time.ParseDuration(strings.TrimSpace(v)); err == nil && d > 0 {
+			return d
+		}
+	}
+	return defaultShutdownTimeout
+}
+
+// startShutdownWatchdog launches a goroutine that forcibly terminates the
+// process if the shutdown/cleanup sequence does not finish within the timeout.
+// It is the last-resort backstop against a hang on exit. A normal exit (the
+// eventual os.Exit) cancels it implicitly by killing the goroutine, so there is
+// nothing to clean up on the happy path. The message uses \r\n so it renders
+// correctly even if the terminal is still in raw mode when the watchdog fires.
+func startShutdownWatchdog(timeout time.Duration) {
+	go func() {
+		time.Sleep(timeout)
+		fmt.Fprintf(os.Stdout, "\r\nmsh: shutdown timed out after %s; forcing exit.\r\n", timeout)
+		os.Exit(1)
+	}()
+}
+
+// TrySaveHistory writes pending history to disk, but never blocks the shutdown
+// for more than defaultHistorySaveTimeout. If the write stalls (e.g. a slow
+// mount), we report it on stdout and return so the terminal can still be
+// restored cleanly; the leaked writer goroutine is reaped by process exit.
 func (state *TermState) TrySaveHistory() {
+	done := make(chan struct{})
+	go func() {
+		state.saveHistory()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(defaultHistorySaveTimeout):
+		fmt.Fprintf(os.Stdout, "\r\nmsh: timed out saving history after %s; skipping.\r\n", defaultHistorySaveTimeout)
+	}
+}
+
+func (state *TermState) saveHistory() {
 	if len(historyToSave) == 0 {
 		state.Logf("No history to save.\n")
 		return
