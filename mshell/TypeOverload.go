@@ -92,6 +92,19 @@ func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 	c.subst.Rollback(substSnap)
 
 	if len(viable) == 0 {
+		// No candidate accepted the operands as-is. If an operand is a
+		// union (e.g. `int | float` from a joined match/if or a
+		// union-typed def input), try distributing: resolve the call
+		// for every member-combination and, when all are covered, push
+		// the union of their outputs. This is sound because each
+		// candidate mirrors its runtime switch, so proving every
+		// member-combination is handled proves every runtime value is
+		// handled. Distribution runs before the inference punt below —
+		// it requires the operands to actually be on the stack, so it
+		// never preempts genuine underflow synthesis.
+		if c.tryDistributeOverUnion(candidates) {
+			return
+		}
 		// In inferring mode (quote body), every candidate may drop
 		// purely because the stack is shorter than its arity. Hand
 		// off to the first candidate so applySig's underflow-as-
@@ -101,16 +114,6 @@ func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 		// so far.
 		if inferringFallback {
 			c.applySig(candidates[0], callSite)
-			return
-		}
-		// No candidate accepted the operands as-is. If an operand is a
-		// union (e.g. `int | float` from a joined match/if), try
-		// distributing: resolve the call for every member-combination
-		// and, when all are covered, push the union of their outputs.
-		// This is sound because each candidate mirrors its runtime
-		// switch, so proving every member-combination is handled proves
-		// every runtime value is handled.
-		if c.tryDistributeOverUnion(candidates) {
 			return
 		}
 		c.errors = append(c.errors, TypeError{

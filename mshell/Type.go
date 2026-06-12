@@ -52,6 +52,7 @@ const (
 	TKBrand                    // A = brand id; B = underlying TypeId
 	TKCommand                  // A = argv list TypeId; B = stdout capture; Extra = stderr capture
 	TKVar                      // A = TypeVarId
+	TKRigid                    // A = NameId of the declared generic; see MakeRigid
 
 	// Grid family — built-in like Maybe; see "Grid types" in ai/type_checker.md.
 	TKGrid     // Extra = index into gridSchemas (0 = unknown schema)
@@ -84,6 +85,8 @@ func (k TypeKind) String() string {
 		return "Command"
 	case TKVar:
 		return "Var"
+	case TKRigid:
+		return "Rigid"
 	case TKGrid:
 		return "Grid"
 	case TKGridView:
@@ -245,6 +248,17 @@ func (a *TypeArena) MakeDict(key, value TypeId) TypeId {
 // Two calls with the same TypeVarId always return the same TypeId.
 func (a *TypeArena) MakeVar(v TypeVarId) TypeId {
 	return a.intern(TKVar, uint32(v), 0, 0)
+}
+
+// MakeRigid returns the canonical TypeId for a rigid (skolem) type
+// standing in for a def's declared generic during body checking. A
+// rigid type unifies only with itself (or a free variable, which it
+// binds): the body must prove the declared signature for EVERY
+// instantiation of the generic, so overload resolution inside the body
+// may not pin it to one concrete type. name is the generic's source
+// name (e.g. `a`), used for diagnostics.
+func (a *TypeArena) MakeRigid(name NameId) TypeId {
+	return a.intern(TKRigid, uint32(name), 0, 0)
 }
 
 // MakeBrand returns a nominal-branded type wrapping underlying.

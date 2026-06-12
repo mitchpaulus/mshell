@@ -113,7 +113,7 @@ func (c *Checker) CheckProgram(file *MShellFile) {
 	}
 	// Pre-pass 3: type-check each def body against its declared sig.
 	for i := range file.Definitions {
-		c.checkDefBody(&file.Definitions[i], defSigs[i])
+		c.checkDefBody(&file.Definitions[i])
 	}
 	// Flow walk of top-level items via the branching driver. Initial
 	// state is the live checker state captured into a single branch;
@@ -265,7 +265,7 @@ func lastBranchingTokenInFile(file *MShellFile) Token {
 // — equivalent for the purposes of the declared sig, even if their
 // intermediate types differed. If no branch matches, the closest
 // mismatch is surfaced via TErrDefBodyMismatch.
-func (c *Checker) checkDefBody(def *MShellDefinition, sig QuoteSig) {
+func (c *Checker) checkDefBody(def *MShellDefinition) {
 	// Save outer state.
 	outerStack := c.stack.items
 	outerVars := c.vars.bound
@@ -283,8 +283,14 @@ func (c *Checker) checkDefBody(def *MShellDefinition, sig QuoteSig) {
 	c.inferring = false
 	c.inferInputs = nil
 
-	// Fresh-rename generics for this body check.
-	instSig := c.Instantiate(sig)
+	// Skolemize the declared generics for this body check: each one
+	// becomes a rigid type that the body's overload resolution cannot
+	// bind. Instantiating with ordinary fresh variables would accept a
+	// body that works for SOME instantiation — e.g. a body whose quote
+	// arm requires `a = str` — while the declared sig promises the
+	// effect for EVERY `a`; the runtime then crashes for the other
+	// instantiations.
+	instSig := c.rigidDefSig(def)
 	fnCtx := &FnContext{Sig: instSig}
 	c.currentFn = fnCtx
 
@@ -314,6 +320,33 @@ func (c *Checker) checkDefBody(def *MShellDefinition, sig QuoteSig) {
 	c.diverged = outerDiverged
 	c.inferring = outerInferring
 	c.inferInputs = outerInferInputs
+}
+
+// rigidDefSig resolves the def's signature AST with every declared
+// generic replaced by a rigid skolem type (named after the generic, so
+// diagnostics read `a` rather than a numbered variable). Re-resolving
+// from the AST is deterministic, so the rigid sig's shape matches the
+// generic sig registered for call sites.
+func (c *Checker) rigidDefSig(def *MShellDefinition) QuoteSig {
+	ctx := &typeResolveCtx{}
+	ins := c.resolveSigItems(def.Inputs, ctx)
+	outs := c.resolveSigItems(def.Outputs, ctx)
+	if len(ctx.generics) == 0 {
+		return QuoteSig{Inputs: ins, Outputs: outs}
+	}
+	rename := make(map[TypeVarId]TypeId, len(ctx.generics))
+	for name, v := range ctx.generics {
+		rename[v] = c.arena.MakeRigid(c.names.Intern(name))
+	}
+	rIns := make([]TypeId, len(ins))
+	for i, t := range ins {
+		rIns[i] = c.renameVars(t, rename)
+	}
+	rOuts := make([]TypeId, len(outs))
+	for i, t := range outs {
+		rOuts[i] = c.renameVars(t, rename)
+	}
+	return QuoteSig{Inputs: rIns, Outputs: rOuts}
 }
 
 // reconcileDefBodyBranches accepts the def body iff at least one

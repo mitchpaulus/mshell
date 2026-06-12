@@ -258,6 +258,8 @@ func FormatType(arena *TypeArena, names *NameTable, id TypeId) string {
 		return sb.String()
 	case TKVar:
 		return fmt.Sprintf("T%d", n.A)
+	case TKRigid:
+		return names.Name(NameId(n.A))
 	case TKGrid:
 		return "Grid"
 	case TKGridView:

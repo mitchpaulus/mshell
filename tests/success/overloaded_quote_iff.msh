@@ -1,10 +1,20 @@
-# A quote closing over a generic def input applied to an overloaded
-# builtin infers as an overloaded thunk — here `(@x toFloat)` is
-# ( -- Maybe[float]) | ( -- float). Using it as an iff branch must pick
-# the arm that agrees with the sibling branch and the declared output
-# (the float arm), not greedily commit to the first arm.
-def pick (a -- float)
+# Overload alternatives must be chosen against ALL surrounding
+# constraints, not greedily.
+#
+# `pick`: with a union-typed input, the quote body `(@x toFloat)`
+# distributes over the union's members (int -> float, float -> float),
+# so the thunk is ( -- float) and both iff branches agree with the
+# declared output. (A fully generic `(a -- float)` declaration is
+# correctly rejected: the body only works for the numeric
+# instantiations, and a generic must hold for every instantiation.)
+def pick (int | float -- float)
   x!
   true (@x toFloat) (1.5) iff
 end
 3 pick str wl
+
+# `(toFloat)` with no pinned input infers as a multi-arm overloaded
+# quote: (str -- Maybe[float]) | (int -- float) | (float -- float).
+# `map` over [int] must select the int arm — the list operand decides,
+# not the first arm that unifies.
+[1 2 3] (toFloat) map (str wl) each

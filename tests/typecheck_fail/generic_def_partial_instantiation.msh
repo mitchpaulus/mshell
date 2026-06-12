@@ -1,0 +1,13 @@
+# Soundness regression: a def's declared generic must hold for EVERY
+# instantiation, not just the one an overload arm happens to pick.
+#
+# The quote `(@x toFloat)` only produces Maybe[float] when `a` is str;
+# for `a` = int it produces a bare float. Accepting this def lets the
+# caller below pass an int, and `?` then crashes at runtime on the
+# non-Maybe value. The checker must reject the def: `toFloat` cannot
+# accept a rigid generic `a`.
+def pick2 (a -- Maybe[float])
+  x!
+  true (@x toFloat) (none) iff
+end
+3 pick2 ? str wl
