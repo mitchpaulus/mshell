@@ -4,13 +4,13 @@ import "testing"
 
 // Overload-dispatch tests.
 //
-// The checker no longer prioritizes candidates by specificity: if more
+// The checker does not prioritize candidates by specificity: if more
 // than one overload remains viable after trial unification against the
-// current stack, the result is ambiguous unless something downstream
-// narrows the set to one. These tests exercise the direct
-// (non-branching) call path used by CheckTokens / lower-level tests,
-// where ambiguity is reported via TErrAmbiguousOverload. The
-// branching-walker integration tests live in
+// current stack, the dispatch fans out under the branching driver and
+// the surviving alternatives are pruned by downstream constraints or
+// joined at the end of the walk. CheckTokens drives that machinery, so
+// these tests observe joined post-states rather than ambiguity errors.
+// The deeper branching-walker integration tests live in
 // TypeCheckProgram_test.go.
 
 // registerOverloads is a test helper that injects a name->[]sig entry
@@ -20,11 +20,12 @@ func registerOverloads(c *Checker, name string, sigs ...QuoteSig) {
 	c.nameBuiltins[id] = append(c.nameBuiltins[id], sigs...)
 }
 
-func TestOverloadConcreteAndGenericBothViableIsAmbiguous(t *testing.T) {
+func TestOverloadConcreteAndGenericBothViableJoins(t *testing.T) {
 	// f : (int -- int)         — concrete
 	// f : (T -- T)             — generic
-	// Calling with int on stack: both overloads unify. With no
-	// specificity ranking, this is ambiguous in the direct-call path.
+	// Calling with int on stack: both overloads unify. The dispatch
+	// fans out, both branches produce int, and the join collapses
+	// them back into a single int — no error.
 	c := freshChecker()
 	tVar := TypeVarId(0)
 	tType := c.arena.MakeVar(tVar)
@@ -34,18 +35,14 @@ func TestOverloadConcreteAndGenericBothViableIsAmbiguous(t *testing.T) {
 		QuoteSig{Inputs: []TypeId{tType}, Outputs: []TypeId{tType}, Generics: []TypeVarId{tVar}},
 	)
 
-	c.checkOne(mkTok(INTEGER, "5"))
-	c.checkOne(mkTok(LITERAL, "f"))
+	c.CheckTokens([]Token{mkTok(INTEGER, "5"), mkTok(LITERAL, "f")})
 
-	found := false
-	for _, e := range c.Errors() {
-		if e.Kind == TErrAmbiguousOverload {
-			found = true
-			break
-		}
+	if errs := c.Errors(); len(errs) != 0 {
+		t.Fatalf("unexpected errors: %+v", errs)
 	}
-	if !found {
-		t.Fatalf("expected TErrAmbiguousOverload, got %+v", c.Errors())
+	if c.stack.Len() != 1 || c.subst.Apply(c.arena, c.stack.Top()) != TidInt {
+		t.Fatalf("expected int after join, got %s",
+			FormatType(c.arena, c.names, c.stack.Top()))
 	}
 }
 
@@ -139,10 +136,11 @@ func TestOverloadNoMatch(t *testing.T) {
 	}
 }
 
-func TestOverloadAmbiguous(t *testing.T) {
+func TestOverloadEquivalentArmsJoin(t *testing.T) {
 	// f : (T -- T)
 	// f : (U -- U)    (different generic, same shape)
-	// Both have the same specificity → ambiguous.
+	// Both viable; the branches agree after substitution, so the join
+	// collapses to a single int.
 	c := freshChecker()
 	tVar := TypeVarId(0)
 	uVar := TypeVarId(0) // separate sigs, separate generics namespaces
@@ -154,26 +152,22 @@ func TestOverloadAmbiguous(t *testing.T) {
 		QuoteSig{Inputs: []TypeId{uType}, Outputs: []TypeId{uType}, Generics: []TypeVarId{uVar}},
 	)
 
-	c.checkOne(mkTok(INTEGER, "5"))
-	c.checkOne(mkTok(LITERAL, "f"))
+	c.CheckTokens([]Token{mkTok(INTEGER, "5"), mkTok(LITERAL, "f")})
 
-	errs := c.Errors()
-	foundAmbig := false
-	for _, e := range errs {
-		if e.Kind == TErrAmbiguousOverload {
-			foundAmbig = true
-			break
-		}
+	if errs := c.Errors(); len(errs) != 0 {
+		t.Fatalf("unexpected errors: %+v", errs)
 	}
-	if !foundAmbig {
-		t.Fatalf("expected TErrAmbiguousOverload, got %+v", errs)
+	if c.stack.Len() != 1 || c.subst.Apply(c.arena, c.stack.Top()) != TidInt {
+		t.Fatalf("expected int after join, got %s",
+			FormatType(c.arena, c.names, c.stack.Top()))
 	}
 }
 
-func TestOverloadShapeAndVarBothViableIsAmbiguous(t *testing.T) {
+func TestOverloadShapeAndVarBothViableJoins(t *testing.T) {
 	// f : ({a: int} -- int)        — concrete shape
 	// f : (T -- int)               — pure variable
-	// Calling with {a: int}: both overloads unify. Ambiguous.
+	// Calling with {a: int}: both overloads unify and both produce
+	// int, so the fan-out joins back to int without an error.
 	c := freshChecker()
 	nA := c.names.Intern("a")
 	shapeAInt := c.arena.MakeShape([]ShapeField{{Name: nA, Type: TidInt}})
@@ -186,24 +180,22 @@ func TestOverloadShapeAndVarBothViableIsAmbiguous(t *testing.T) {
 	)
 
 	c.stack.Push(shapeAInt)
-	c.checkOne(mkTok(LITERAL, "f"))
+	c.CheckTokens([]Token{mkTok(LITERAL, "f")})
 
-	found := false
-	for _, e := range c.Errors() {
-		if e.Kind == TErrAmbiguousOverload {
-			found = true
-			break
-		}
+	if errs := c.Errors(); len(errs) != 0 {
+		t.Fatalf("unexpected errors: %+v", errs)
 	}
-	if !found {
-		t.Fatalf("expected TErrAmbiguousOverload, got %+v", c.Errors())
+	if c.stack.Len() != 1 || c.subst.Apply(c.arena, c.stack.Top()) != TidInt {
+		t.Fatalf("expected int after join, got %s",
+			FormatType(c.arena, c.names, c.stack.Top()))
 	}
 }
 
-func TestOverloadBrandAndVarBothViableIsAmbiguous(t *testing.T) {
+func TestOverloadBrandAndVarBothViableJoins(t *testing.T) {
 	// f : (UserId -- int)         — branded int
 	// f : (T -- int)              — pure variable
-	// Calling with UserId: both overloads unify. Ambiguous.
+	// Calling with UserId: both overloads unify and both produce int,
+	// so the fan-out joins back to int without an error.
 	c := freshChecker()
 	brandU := c.names.Intern("UserId")
 	userId := c.arena.MakeBrand(brandU, TidInt)
@@ -216,17 +208,14 @@ func TestOverloadBrandAndVarBothViableIsAmbiguous(t *testing.T) {
 	)
 
 	c.stack.Push(userId)
-	c.checkOne(mkTok(LITERAL, "f"))
+	c.CheckTokens([]Token{mkTok(LITERAL, "f")})
 
-	found := false
-	for _, e := range c.Errors() {
-		if e.Kind == TErrAmbiguousOverload {
-			found = true
-			break
-		}
+	if errs := c.Errors(); len(errs) != 0 {
+		t.Fatalf("unexpected errors: %+v", errs)
 	}
-	if !found {
-		t.Fatalf("expected TErrAmbiguousOverload, got %+v", c.Errors())
+	if c.stack.Len() != 1 || c.subst.Apply(c.arena, c.stack.Top()) != TidInt {
+		t.Fatalf("expected int after join, got %s",
+			FormatType(c.arena, c.names, c.stack.Top()))
 	}
 }
 
@@ -302,5 +291,41 @@ func TestSubstCheckpointRollback(t *testing.T) {
 	// v1's slot was truncated; Apply on v1 should treat it as unbound.
 	if s.Apply(arena, v1) != v1 {
 		t.Fatalf("after rollback, v1 should be unbound (slot dropped)")
+	}
+}
+
+func TestOverloadedQuoteArmChoiceConsidersSiblingOperands(t *testing.T) {
+	// f : (( -- t) ( -- t) -- t)   — two thunks sharing a generic.
+	// Call with an overloaded first thunk ( -- int)|( -- str) and a
+	// plain ( -- str) second thunk. The valid typing picks the str arm
+	// (t = str). Greedy first-arm unification used to commit ( -- int),
+	// bind t = int, and falsely reject the call; overloaded-quote
+	// operand expansion now trials each arm as its own scenario.
+	c := freshChecker()
+	tv := TypeVarId(0)
+	tt := c.arena.MakeVar(tv)
+	thunkT := c.arena.MakeQuote(QuoteSig{Outputs: []TypeId{tt}})
+	registerOverloads(c, "f", QuoteSig{
+		Inputs:   []TypeId{thunkT, thunkT},
+		Outputs:  []TypeId{tt},
+		Generics: []TypeVarId{tv},
+	})
+
+	over := c.arena.MakeOverloadedQuote([]QuoteSig{
+		{Outputs: []TypeId{TidInt}},
+		{Outputs: []TypeId{TidStr}},
+	})
+	plainStr := c.arena.MakeQuote(QuoteSig{Outputs: []TypeId{TidStr}})
+
+	c.stack.Push(over)
+	c.stack.Push(plainStr)
+	c.CheckTokens([]Token{mkTok(LITERAL, "f")})
+
+	if errs := c.Errors(); len(errs) != 0 {
+		t.Fatalf("valid typing exists (str arm, t=str) but checker rejected: %+v", errs)
+	}
+	if c.stack.Len() != 1 || c.subst.Apply(c.arena, c.stack.Top()) != TidStr {
+		t.Fatalf("expected str result, got %s",
+			FormatType(c.arena, c.names, c.stack.Top()))
 	}
 }

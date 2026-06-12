@@ -13,30 +13,34 @@ import (
 // site the checker trial-unifies every candidate against the current
 // stack and keeps the viable set. There is no specificity ranking and
 // no automatic pick: if exactly one candidate is viable it is
-// applied; if more than one is viable the dispatch branches (under
-// the branching walker) or reports TErrAmbiguousOverload (in the
-// legacy direct-call path used by lower-level tests).
+// applied; if more than one is viable the dispatch fans out via
+// branchSpawn and the branching driver explores every alternative.
 //
 // Resolution algorithm:
 //
-//   1. Snapshot the stack and the substitution.
-//   2. For each candidate:
-//        a. Restore both snapshots.
+//   1. Expand candidates into trial scenarios: union inputs facing an
+//      unbound-variable operand split per arm, and overloaded-quote
+//      operands facing a quote input split per arm (the operand slot
+//      is pinned to a single-arm quote for that scenario).
+//   2. Snapshot the stack and the substitution.
+//   3. For each scenario:
+//        a. Restore both snapshots and apply the scenario's pins.
 //        b. Instantiate the candidate (fresh-rename its generics).
 //        c. If the candidate's arity exceeds the stack and we are
 //           not in inferring mode, drop it.
 //        d. Trial-unify each input against the matching stack slot.
-//           Any failure drops the candidate.
-//   3. Restore both snapshots so the actual application starts clean.
-//   4. With one viable, apply it. With zero, report
+//           Any failure drops the scenario.
+//   4. Restore both snapshots so the actual application starts clean.
+//   5. With one viable, apply it. With zero, report
 //      TErrNoMatchingOverload and recover. With multiple, fan out via
-//      branchSpawn (branching walker) or report TErrAmbiguousOverload
-//      (legacy path), applying the first viable candidate purely for
-//      diagnostic recovery.
+//      branchSpawn.
 
 func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
-	if len(candidates) == 1 {
-		c.applySig(candidates[0], callSite)
+	candidates = c.expandUnionOperands(candidates)
+	scenarios := c.expandOverloadedQuoteOperands(candidates)
+	if len(scenarios) == 1 {
+		c.applyPins(scenarios[0].pins)
+		c.applySig(scenarios[0].sig, callSite)
 		return
 	}
 	// In quote-body inference mode, the stack may be intentionally
@@ -51,13 +55,14 @@ func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 	stackSnap := c.Snapshot()
 	substSnap := c.subst.Checkpoint()
 
-	var viable []QuoteSig
+	var viable []dispatchScenario
 
-	for _, cand := range candidates {
+	for _, sc := range scenarios {
 		c.Fork(stackSnap)
 		c.subst.Rollback(substSnap)
+		c.applyPins(sc.pins)
 
-		instantiated := c.Instantiate(cand)
+		instantiated := c.Instantiate(sc.sig)
 		if len(c.stack.items) < len(instantiated.Inputs) {
 			if !c.inferring {
 				continue
@@ -71,8 +76,8 @@ func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 		}
 		base := len(c.stack.items) - len(instantiated.Inputs)
 		match := true
-		for i, want := range instantiated.Inputs {
-			if !c.unify(c.stack.items[base+i], want) {
+		for _, i := range c.inputUnifyOrder(instantiated.Inputs, base) {
+			if !c.unify(c.stack.items[base+i], instantiated.Inputs[i]) {
 				match = false
 				break
 			}
@@ -80,13 +85,26 @@ func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 		if !match {
 			continue
 		}
-		viable = append(viable, cand)
+		viable = append(viable, sc)
 	}
 
 	c.Fork(stackSnap)
 	c.subst.Rollback(substSnap)
 
 	if len(viable) == 0 {
+		// No candidate accepted the operands as-is. If an operand is a
+		// union (e.g. `int | float` from a joined match/if or a
+		// union-typed def input), try distributing: resolve the call
+		// for every member-combination and, when all are covered, push
+		// the union of their outputs. This is sound because each
+		// candidate mirrors its runtime switch, so proving every
+		// member-combination is handled proves every runtime value is
+		// handled. Distribution runs before the inference punt below —
+		// it requires the operands to actually be on the stack, so it
+		// never preempts genuine underflow synthesis.
+		if c.tryDistributeOverUnion(candidates) {
+			return
+		}
 		// In inferring mode (quote body), every candidate may drop
 		// purely because the stack is shorter than its arity. Hand
 		// off to the first candidate so applySig's underflow-as-
@@ -96,16 +114,6 @@ func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 		// so far.
 		if inferringFallback {
 			c.applySig(candidates[0], callSite)
-			return
-		}
-		// No candidate accepted the operands as-is. If an operand is a
-		// union (e.g. `int | float` from a joined match/if), try
-		// distributing: resolve the call for every member-combination
-		// and, when all are covered, push the union of their outputs.
-		// This is sound because each candidate mirrors its runtime
-		// switch, so proving every member-combination is handled proves
-		// every runtime value is handled.
-		if c.tryDistributeOverUnion(candidates) {
 			return
 		}
 		c.errors = append(c.errors, TypeError{
@@ -130,51 +138,195 @@ func (c *Checker) resolveAndApply(candidates []QuoteSig, callSite Token) {
 	}
 
 	if len(viable) == 1 {
-		c.applySig(viable[0], callSite)
+		c.applyPins(viable[0].pins)
+		c.applySig(viable[0].sig, callSite)
 		return
 	}
 
-	// Multiple candidates remain viable. In branching mode, fan out
-	// every viable continuation into the branchSpawn slice and let
-	// the caller (the branching driver via tryBranchStep) propagate
-	// the alternatives. Downstream constraints prune; if none do,
-	// the end-of-walk reconciler reports TErrAmbiguousTyping.
-	if c.branchingEnabled {
-		// applySig (in inferring mode) mutates c.inferInputs by
-		// prepending freshly-synthesized inputs. Capture the
-		// pre-call value so each fan-out iteration sees the same
-		// starting point — otherwise iteration k's branch would
-		// carry the union of iterations 0..k-1's synthesized inputs.
-		savedInferInputs := append([]TypeId(nil), c.inferInputs...)
-		for _, sig := range viable {
-			c.Fork(stackSnap)
-			c.subst.Rollback(substSnap)
-			c.inferInputs = append([]TypeId(nil), savedInferInputs...)
-			savedErrs := c.errors
-			c.errors = nil
-			c.applySig(sig, callSite)
-			stepErrs := c.errors
-			c.errors = savedErrs
-			if len(stepErrs) == 0 {
-				c.branchSpawn = append(c.branchSpawn, c.captureBranch())
-			}
-		}
+	// Multiple scenarios remain viable. Fan out every viable
+	// continuation into the branchSpawn slice and let the caller (the
+	// branching driver via tryBranchStep) propagate the alternatives.
+	// Downstream constraints prune; if none do, the end-of-walk
+	// reconciler joins or reports TErrAmbiguousTyping.
+	//
+	// applySig (in inferring mode) mutates c.inferInputs by
+	// prepending freshly-synthesized inputs. Capture the
+	// pre-call value so each fan-out iteration sees the same
+	// starting point — otherwise iteration k's branch would
+	// carry the union of iterations 0..k-1's synthesized inputs.
+	savedInferInputs := append([]TypeId(nil), c.inferInputs...)
+	for _, sc := range viable {
 		c.Fork(stackSnap)
 		c.subst.Rollback(substSnap)
-		c.inferInputs = savedInferInputs
-		return
+		c.applyPins(sc.pins)
+		c.inferInputs = append([]TypeId(nil), savedInferInputs...)
+		savedErrs := c.errors
+		c.errors = nil
+		c.applySig(sc.sig, callSite)
+		stepErrs := c.errors
+		c.errors = savedErrs
+		if len(stepErrs) == 0 {
+			c.branchSpawn = append(c.branchSpawn, c.captureBranch())
+		}
 	}
+	c.Fork(stackSnap)
+	c.subst.Rollback(substSnap)
+	c.inferInputs = savedInferInputs
+}
 
-	// Non-branching mode (legacy / direct CheckTokens path): the
-	// caller can't fan out, so any pick is a magic pick. Surface the
-	// ambiguity as an error and apply the first viable candidate
-	// only for diagnostic recovery.
-	c.errors = append(c.errors, TypeError{
-		Kind: TErrAmbiguousOverload,
-		Pos:  callSite,
-		Hint: c.formatOverloadAmbiguityFromSigs(viable),
-	})
-	c.applySig(viable[0], callSite)
+// dispatchScenario is one (candidate, operand-arm choice) combination
+// explored by resolveAndApply. pins replace overloaded-quote stack
+// operands with one of their single-arm quotes for the duration of the
+// trial and the eventual application.
+type dispatchScenario struct {
+	sig  QuoteSig
+	pins []slotPin
+}
+
+type slotPin struct {
+	idx int // absolute index into the stack
+	t   TypeId
+}
+
+func (c *Checker) applyPins(pins []slotPin) {
+	for _, p := range pins {
+		c.stack.items[p.idx] = p.t
+	}
+}
+
+// expandOverloadedQuoteOperands turns candidates into trial scenarios.
+// For every input position whose declared type is a quote and whose
+// stack operand is an overloaded quote, the scenario set fans out one
+// alternative per arm. Greedy first-arm unification inside unify cannot
+// account for constraints that arrive from sibling operands or outputs
+// — e.g. `f : (( -- t) ( -- t) -- t)` with an overloaded first thunk
+// must choose the arm under which the second thunk still unifies.
+// Pinning the operand to a single-arm quote per scenario lets the
+// ordinary trial / fan-out machinery make that choice globally instead.
+//
+// Expansion only fires when the candidate input is itself TKQuote: a
+// plain-variable input binds to the whole overloaded quote, preserving
+// the alternatives for the eventual consumer (`x`, iff, ...) to
+// resolve. Combinations beyond maxUnionOperandVariants are kept
+// unexpanded, falling back to greedy unification.
+func (c *Checker) expandOverloadedQuoteOperands(candidates []QuoteSig) []dispatchScenario {
+	scenarios := make([]dispatchScenario, 0, len(candidates))
+	for _, cand := range candidates {
+		variants := []dispatchScenario{{sig: cand}}
+		if len(c.stack.items) >= len(cand.Inputs) {
+			base := len(c.stack.items) - len(cand.Inputs)
+			for i, in := range cand.Inputs {
+				if c.arena.Kind(in) != TKQuote {
+					continue
+				}
+				got := c.subst.Apply(c.arena, c.stack.items[base+i])
+				gn := c.arena.Node(got)
+				if gn.Kind != TKOverloadedQuote {
+					continue
+				}
+				arms := c.arena.overloadedQuoteSigs[gn.Extra]
+				if len(variants)*len(arms) > maxUnionOperandVariants {
+					continue
+				}
+				next := make([]dispatchScenario, 0, len(variants)*len(arms))
+				for _, v := range variants {
+					for _, arm := range arms {
+						pins := append(append([]slotPin(nil), v.pins...),
+							slotPin{idx: base + i, t: c.arena.MakeQuote(arm)})
+						next = append(next, dispatchScenario{sig: v.sig, pins: pins})
+					}
+				}
+				variants = next
+			}
+		}
+		scenarios = append(scenarios, variants...)
+	}
+	return scenarios
+}
+
+// expandUnionOperands splits a candidate whose input is an unbranded
+// union, while the corresponding stack operand is a still-unbound type
+// variable, into one candidate per union arm. A union input is the
+// compact spelling of same-output overload arms; for concrete operands
+// the two are equivalent, but unifying an unbound variable against the
+// whole union would freeze the variable as that union — downstream ops
+// could then no longer narrow it the way the branching walker narrows
+// overload alternatives. (E.g. inferring `(n! @n wl @n 3 <)`: `wl` is
+// `(str | int -- )`; the bound variable must stay narrowable so the
+// later `<` can prune to the int alternative.) Splitting restores the
+// per-arm fan-out exactly in that case.
+//
+// Candidates whose expansion would exceed maxUnionOperandVariants are
+// kept unsplit — the union-freezing behavior is still sound, just less
+// permissive.
+const maxUnionOperandVariants = 16
+
+func (c *Checker) expandUnionOperands(candidates []QuoteSig) []QuoteSig {
+	out := candidates
+	changed := false
+	for ci, cand := range candidates {
+		variants := []QuoteSig{cand}
+		if len(c.stack.items) >= len(cand.Inputs) {
+			base := len(c.stack.items) - len(cand.Inputs)
+			for i, in := range cand.Inputs {
+				n := c.arena.Node(in)
+				if n.Kind != TKUnion || n.A != 0 {
+					continue
+				}
+				got := c.subst.Apply(c.arena, c.stack.items[base+i])
+				if c.arena.Kind(got) != TKVar {
+					continue
+				}
+				arms := c.arena.unionMembers[n.Extra]
+				if len(variants)*len(arms) > maxUnionOperandVariants {
+					continue
+				}
+				next := make([]QuoteSig, 0, len(variants)*len(arms))
+				for _, v := range variants {
+					for _, arm := range arms {
+						nv := v
+						nv.Inputs = append([]TypeId(nil), v.Inputs...)
+						nv.Inputs[i] = arm
+						next = append(next, nv)
+					}
+				}
+				variants = next
+			}
+		}
+		if len(variants) == 1 {
+			if changed {
+				out = append(out, variants[0])
+			}
+			continue
+		}
+		if !changed {
+			out = append([]QuoteSig(nil), candidates[:ci]...)
+			changed = true
+		}
+		out = append(out, variants...)
+	}
+	return out
+}
+
+// inputUnifyOrder returns the order in which a sig's inputs are unified
+// against the stack: operands that are not quote values first, quote
+// values last. Quote-valued operands (especially overloaded quotes from
+// bare `(+)`-style literals) commit to one arm during unification, so
+// every other operand gets to pin the sig's generics before that choice
+// is made — e.g. foldl's accumulator and list must bind `a` and `t`
+// before the folding quote picks among its overload arms.
+func (c *Checker) inputUnifyOrder(inputs []TypeId, base int) []int {
+	order := make([]int, 0, len(inputs))
+	var quotes []int
+	for i := range inputs {
+		got := c.subst.Apply(c.arena, c.stack.items[base+i])
+		if isQuoteKind(c.arena.Kind(got)) {
+			quotes = append(quotes, i)
+			continue
+		}
+		order = append(order, i)
+	}
+	return append(order, quotes...)
 }
 
 // maxUnionDistributionCombos caps the cartesian product explored by
@@ -332,22 +484,6 @@ func (c *Checker) formatOverloadFailure(candidates []QuoteSig) string {
 	for _, cand := range candidates {
 		sb.WriteString("\n    ")
 		sb.WriteString(FormatType(c.arena, c.names, c.arena.MakeQuote(cand)))
-	}
-	return sb.String()
-}
-
-// formatOverloadAmbiguityFromSigs is the ambiguous-overload counterpart
-// for the legacy (non-branching) path. Every viable candidate is listed
-// since they're all the user needs to disambiguate.
-func (c *Checker) formatOverloadAmbiguityFromSigs(viable []QuoteSig) string {
-	var sb strings.Builder
-	sb.WriteString("multiple overloads match\n")
-	sb.WriteString("  stack (top first):")
-	sb.WriteString(c.formatStackForDiagnostic())
-	sb.WriteString("\n  viable candidates:")
-	for _, sig := range viable {
-		sb.WriteString("\n    ")
-		sb.WriteString(FormatType(c.arena, c.names, c.arena.MakeQuote(sig)))
 	}
 	return sb.String()
 }

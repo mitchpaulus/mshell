@@ -3,7 +3,7 @@
 # to multi_overload_in_if.msh — `checkMatchBlock` had the same
 # single-state walk pattern as the old `checkIfBlock`.
 
-def f (dict --)
+def f ({v} --)
     seen!
     @seen match
         dict :

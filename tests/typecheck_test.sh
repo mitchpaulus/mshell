@@ -18,6 +18,15 @@ for f in success/*.msh; do
     fi
 done
 
+for f in typecheck_fail/*.msh; do
+    if "$MSH" --type-check-only "$f" >/dev/null 2>&1; then
+        fail=$((fail+1))
+        failed_files="$failed_files $f"
+    else
+        pass=$((pass+1))
+    fi
+done
+
 echo "Passed: $pass"
 echo "Failed: $fail"
 if [ "$fail" -gt 0 ]; then

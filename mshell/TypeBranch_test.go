@@ -10,10 +10,12 @@ func freshChecker() *Checker {
 
 // runArm forks the checker to entry, runs body, and captures the arm.
 // Body is a closure so tests can express small token-driven sequences.
-func runArm(c *Checker, entry ScopeSnapshot, diverged bool, body func()) BranchArm {
-	c.Fork(entry)
+func runArm(c *Checker, entry quoteBranch, diverged bool, body func()) quoteBranch {
+	c.loadBranch(entry)
 	body()
-	return c.CaptureArm(diverged)
+	b := c.captureBranch()
+	b.diverged = diverged
+	return b
 }
 
 func TestSnapshotIsDetached(t *testing.T) {
@@ -49,10 +51,10 @@ func TestForkRestoresStateExactly(t *testing.T) {
 
 func TestReconcileSameTypes(t *testing.T) {
 	c := freshChecker()
-	entry := c.Snapshot()
+	entry := c.captureBranch()
 	a1 := runArm(c, entry, false, func() { c.stack.Push(TidInt) })
 	a2 := runArm(c, entry, false, func() { c.stack.Push(TidInt) })
-	c.ReconcileArms([]BranchArm{a1, a2}, mkTok(IF, "if"))
+	c.reconcileArmBranches([]quoteBranch{a1, a2}, []string{"arm 1", "arm 2"}, entry, mkTok(IF, "if"))
 	if errs := c.Errors(); len(errs) != 0 {
 		t.Fatalf("unexpected errors: %+v", errs)
 	}
@@ -63,10 +65,10 @@ func TestReconcileSameTypes(t *testing.T) {
 
 func TestReconcileDifferentTypesUnion(t *testing.T) {
 	c := freshChecker()
-	entry := c.Snapshot()
+	entry := c.captureBranch()
 	a1 := runArm(c, entry, false, func() { c.stack.Push(TidInt) })
 	a2 := runArm(c, entry, false, func() { c.stack.Push(TidStr) })
-	c.ReconcileArms([]BranchArm{a1, a2}, mkTok(IF, "if"))
+	c.reconcileArmBranches([]quoteBranch{a1, a2}, []string{"arm 1", "arm 2"}, entry, mkTok(IF, "if"))
 	if errs := c.Errors(); len(errs) != 0 {
 		t.Fatalf("unexpected errors: %+v", errs)
 	}
@@ -79,13 +81,13 @@ func TestReconcileDifferentTypesUnion(t *testing.T) {
 
 func TestReconcileStackSizeMismatch(t *testing.T) {
 	c := freshChecker()
-	entry := c.Snapshot()
+	entry := c.captureBranch()
 	a1 := runArm(c, entry, false, func() { c.stack.Push(TidInt) })
 	a2 := runArm(c, entry, false, func() {
 		c.stack.Push(TidInt)
 		c.stack.Push(TidStr)
 	})
-	c.ReconcileArms([]BranchArm{a1, a2}, mkTok(IF, "if"))
+	c.reconcileArmBranches([]quoteBranch{a1, a2}, []string{"arm 1", "arm 2"}, entry, mkTok(IF, "if"))
 	errs := c.Errors()
 	if len(errs) != 1 || errs[0].Kind != TErrBranchStackSize {
 		t.Fatalf("expected stack-size error, got %+v", errs)
@@ -97,12 +99,12 @@ func TestReconcileVarSetLiftsToMaybeBound(t *testing.T) {
 	// rather than triggering a hard error. Reading such a name downstream
 	// is what produces a diagnostic (TErrMaybeUnset), not the reconcile itself.
 	c := freshChecker()
-	entry := c.Snapshot()
+	entry := c.captureBranch()
 	x := c.names.Intern("x")
 	y := c.names.Intern("y")
 	a1 := runArm(c, entry, false, func() { c.vars.bound[x] = TidInt })
 	a2 := runArm(c, entry, false, func() { c.vars.bound[y] = TidStr })
-	c.ReconcileArms([]BranchArm{a1, a2}, mkTok(IF, "if"))
+	c.reconcileArmBranches([]quoteBranch{a1, a2}, []string{"arm 1", "arm 2"}, entry, mkTok(IF, "if"))
 	if errs := c.Errors(); len(errs) != 0 {
 		t.Fatalf("unexpected errors: %+v", errs)
 	}
@@ -122,11 +124,11 @@ func TestReconcileVarSetLiftsToMaybeBound(t *testing.T) {
 
 func TestReconcileVarTypeUnion(t *testing.T) {
 	c := freshChecker()
-	entry := c.Snapshot()
+	entry := c.captureBranch()
 	x := c.names.Intern("x")
 	a1 := runArm(c, entry, false, func() { c.vars.bound[x] = TidInt })
 	a2 := runArm(c, entry, false, func() { c.vars.bound[x] = TidStr })
-	c.ReconcileArms([]BranchArm{a1, a2}, mkTok(IF, "if"))
+	c.reconcileArmBranches([]quoteBranch{a1, a2}, []string{"arm 1", "arm 2"}, entry, mkTok(IF, "if"))
 	if errs := c.Errors(); len(errs) != 0 {
 		t.Fatalf("unexpected errors: %+v", errs)
 	}
@@ -143,10 +145,10 @@ func TestReconcilePreBoundStaysBound(t *testing.T) {
 	c := freshChecker()
 	x := c.names.Intern("x")
 	c.vars.bound[x] = TidInt
-	entry := c.Snapshot()
+	entry := c.captureBranch()
 	a1 := runArm(c, entry, false, func() {})
 	a2 := runArm(c, entry, false, func() { c.vars.bound[x] = TidStr })
-	c.ReconcileArms([]BranchArm{a1, a2}, mkTok(IF, "if"))
+	c.reconcileArmBranches([]quoteBranch{a1, a2}, []string{"arm 1", "arm 2"}, entry, mkTok(IF, "if"))
 	if errs := c.Errors(); len(errs) != 0 {
 		t.Fatalf("unexpected errors: %+v", errs)
 	}
@@ -165,11 +167,11 @@ func TestReconcileMaybeFromOneArmLeaks(t *testing.T) {
 	// arm binding + one no-op arm) lifts to maybeBound carrying the
 	// type from the binding arm.
 	c := freshChecker()
-	entry := c.Snapshot()
+	entry := c.captureBranch()
 	x := c.names.Intern("x")
 	a1 := runArm(c, entry, false, func() { c.vars.bound[x] = TidInt })
 	a2 := runArm(c, entry, false, func() {}) // implicit no-else arm
-	c.ReconcileArms([]BranchArm{a1, a2}, mkTok(IF, "if"))
+	c.reconcileArmBranches([]quoteBranch{a1, a2}, []string{"arm 1", "arm 2"}, entry, mkTok(IF, "if"))
 	if errs := c.Errors(); len(errs) != 0 {
 		t.Fatalf("unexpected errors: %+v", errs)
 	}
@@ -184,7 +186,7 @@ func TestReconcileMaybeFromOneArmLeaks(t *testing.T) {
 func TestReconcileDivergedArmDropped(t *testing.T) {
 	// One arm exits, the other produces an int. Result is just int.
 	c := freshChecker()
-	entry := c.Snapshot()
+	entry := c.captureBranch()
 	a1 := runArm(c, entry, false, func() { c.stack.Push(TidInt) })
 	a2 := runArm(c, entry, true, func() {
 		// Diverged arm — its stack is irrelevant. Push something
@@ -192,7 +194,7 @@ func TestReconcileDivergedArmDropped(t *testing.T) {
 		c.stack.Push(TidStr)
 		c.stack.Push(TidStr)
 	})
-	c.ReconcileArms([]BranchArm{a1, a2}, mkTok(IF, "if"))
+	c.reconcileArmBranches([]quoteBranch{a1, a2}, []string{"arm 1", "arm 2"}, entry, mkTok(IF, "if"))
 	if errs := c.Errors(); len(errs) != 0 {
 		t.Fatalf("unexpected errors: %+v", errs)
 	}
@@ -202,22 +204,20 @@ func TestReconcileDivergedArmDropped(t *testing.T) {
 	}
 }
 
-func TestReconcileAllDivergedClearsState(t *testing.T) {
+func TestReconcileAllDivergedMarksDiverged(t *testing.T) {
 	c := freshChecker()
-	c.stack.Push(TidInt) // pre-branch state should be cleared too
-	entry := c.Snapshot()
+	c.stack.Push(TidInt)
+	entry := c.captureBranch()
 	a1 := runArm(c, entry, true, func() {})
 	a2 := runArm(c, entry, true, func() {})
-	c.ReconcileArms([]BranchArm{a1, a2}, mkTok(IF, "if"))
+	c.reconcileArmBranches([]quoteBranch{a1, a2}, []string{"arm 1", "arm 2"}, entry, mkTok(IF, "if"))
 	if errs := c.Errors(); len(errs) != 0 {
 		t.Fatalf("unexpected errors: %+v", errs)
 	}
-	if c.stack.Len() != 0 {
-		t.Fatalf("expected empty stack after all-diverged branch, got %v",
-			c.stack.Snapshot())
-	}
-	if len(c.vars.bound) != 0 {
-		t.Fatalf("expected empty vars after all-diverged branch")
+	// Every arm diverged: the post-branch is dead code, so the checker
+	// itself must be marked diverged regardless of residual state.
+	if !c.diverged {
+		t.Fatalf("expected checker to be diverged after all-diverged branch")
 	}
 }
 
@@ -339,7 +339,7 @@ func TestReconcileWithMaybePattern(t *testing.T) {
 	// Simulate a `match` over Maybe[int]: the just-arm extracts the int,
 	// the none-arm produces a default. Reconciliation should give int.
 	c := freshChecker()
-	entry := c.Snapshot()
+	entry := c.captureBranch()
 	justArm := runArm(c, entry, false, func() {
 		// Imagine: the bound int from `just @v` ends up on the stack.
 		c.stack.Push(TidInt)
@@ -347,12 +347,38 @@ func TestReconcileWithMaybePattern(t *testing.T) {
 	noneArm := runArm(c, entry, false, func() {
 		c.stack.Push(TidInt)
 	})
-	c.ReconcileArms([]BranchArm{justArm, noneArm}, mkTok(MATCH, "match"))
+	c.reconcileArmBranches([]quoteBranch{justArm, noneArm}, []string{"arm 1", "arm 2"}, entry, mkTok(MATCH, "match"))
 	if errs := c.Errors(); len(errs) != 0 {
 		t.Fatalf("unexpected errors: %+v", errs)
 	}
 	if c.stack.Top() != TidInt {
 		t.Fatalf("expected int after match; got %s",
 			FormatType(c.arena, c.names, c.stack.Top()))
+	}
+}
+
+func TestJoinArmBranchesPadsSubstitution(t *testing.T) {
+	// Arm 2 allocates a fresh variable under its own (longer)
+	// substitution checkpoint and leaves it free in its stack slot.
+	// After the join installs on arm 1's shorter checkpoint, a newly
+	// issued FreshVar must not re-use that variable's id — reuse would
+	// silently alias two unrelated variables.
+	c := freshChecker()
+	entry := c.captureBranch()
+
+	c.loadBranch(entry)
+	c.stack.Push(TidInt)
+	b1 := c.captureBranch()
+
+	c.loadBranch(entry)
+	v := c.subst.FreshVar(c.arena)
+	c.stack.Push(v)
+	b2 := c.captureBranch()
+
+	c.joinArmBranches([]quoteBranch{b1, b2})
+
+	fresh := c.subst.FreshVar(c.arena)
+	if fresh == v {
+		t.Fatalf("FreshVar re-issued a variable still referenced by the joined stack")
 	}
 }

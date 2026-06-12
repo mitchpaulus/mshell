@@ -61,66 +61,71 @@ func (s *Substitution) Rollback(snap SubstCheckpoint) {
 // composites and rebuilding them if any inner type changed. Path
 // compression is applied to variable chains so repeated lookups are fast.
 func (s *Substitution) Apply(arena *TypeArena, t TypeId) TypeId {
-	return s.applyImpl(arena, t, nil)
+	return s.rewriter(arena).mapType(t, nil)
 }
 
-// applyImpl is the shared resolver behind Apply. `skip` holds TypeVarIds that
-// must be left untouched: a quote signature's locally-scoped generics are
-// symbolic (renamed by Instantiate at each use site) and don't address the
-// live substitution, so resolving one could bake an unrelated binding for the
-// same TypeVarId into the stored sig — e.g. the `T` in a `(len)` quote
-// inferred as `([T] -- int)`. skip is nil for ordinary Apply and is populated
-// only while rebuilding the inputs/outputs of a quote whose Generics are
-// still in place.
+// typeRewriter is the shared structural walker behind Substitution.Apply
+// and Checker.renameVars. mapType rebuilds composites through the arena
+// (preserving hashconsing) when any inner type resolves to something
+// different; an unchanged subtree returns the original TypeId so callers
+// can compare ids cheaply.
 //
-// Path compression (writing the resolved type back into the bound slice) only
-// happens on full resolves (skip empty); a skipped resolve may leave some
-// vars unresolved, so caching it would be wrong.
-func (s *Substitution) applyImpl(arena *TypeArena, t TypeId, skip map[TypeVarId]struct{}) TypeId {
-	n := arena.Node(t)
+// The two variation points:
+//   - resolve maps a free type variable (one not in `skip`) to its
+//     replacement; ok=false leaves the variable in place.
+//   - mapSig reconstructs a quote signature, returning the rebuilt sig and
+//     whether anything inside it changed. Apply keeps Generics and blocks
+//     resolution of the sig's locally-scoped generics; rename rewrites
+//     Bindings and consumes Generics.
+//
+// `skip` holds TypeVarIds that must be left untouched: a quote signature's
+// locally-scoped generics are symbolic (renamed by Instantiate at each use
+// site) and don't address the live substitution, so resolving one could
+// bake an unrelated binding for the same TypeVarId into the stored sig —
+// e.g. the `T` in a `(len)` quote inferred as `([T] -- int)`.
+type typeRewriter struct {
+	arena   *TypeArena
+	resolve func(v TypeVarId, skip map[TypeVarId]struct{}) (TypeId, bool)
+	mapSig  func(sig QuoteSig, skip map[TypeVarId]struct{}) (QuoteSig, bool)
+}
+
+func (w *typeRewriter) mapType(t TypeId, skip map[TypeVarId]struct{}) TypeId {
+	n := w.arena.Node(t)
 	switch n.Kind {
 	case TKVar:
 		v := TypeVarId(n.A)
 		if _, blocked := skip[v]; blocked {
 			return t
 		}
-		if int(v) >= len(s.bound) {
-			return t
+		if r, ok := w.resolve(v, skip); ok {
+			return r
 		}
-		bv := s.bound[v]
-		if bv == TidNothing {
-			return t
-		}
-		resolved := s.applyImpl(arena, bv, skip)
-		if len(skip) == 0 {
-			s.bound[v] = resolved // path compression
-		}
-		return resolved
+		return t
 	case TKMaybe:
-		inner := s.applyImpl(arena, TypeId(n.A), skip)
+		inner := w.mapType(TypeId(n.A), skip)
 		if inner == TypeId(n.A) {
 			return t
 		}
-		return arena.MakeMaybe(inner)
+		return w.arena.MakeMaybe(inner)
 	case TKList:
-		inner := s.applyImpl(arena, TypeId(n.A), skip)
+		inner := w.mapType(TypeId(n.A), skip)
 		if inner == TypeId(n.A) {
 			return t
 		}
-		return arena.MakeList(inner)
+		return w.arena.MakeList(inner)
 	case TKDict:
-		k := s.applyImpl(arena, TypeId(n.A), skip)
-		v := s.applyImpl(arena, TypeId(n.B), skip)
+		k := w.mapType(TypeId(n.A), skip)
+		v := w.mapType(TypeId(n.B), skip)
 		if k == TypeId(n.A) && v == TypeId(n.B) {
 			return t
 		}
-		return arena.MakeDict(k, v)
+		return w.arena.MakeDict(k, v)
 	case TKShape:
-		fields := arena.shapeFields[n.Extra]
+		fields := w.arena.shapeFields[n.Extra]
 		var rebuilt []ShapeField
 		changed := false
 		for i, f := range fields {
-			rt := s.applyImpl(arena, f.Type, skip)
+			rt := w.mapType(f.Type, skip)
 			if rt != f.Type && !changed {
 				rebuilt = make([]ShapeField, len(fields))
 				copy(rebuilt, fields[:i])
@@ -133,92 +138,60 @@ func (s *Substitution) applyImpl(arena *TypeArena, t TypeId, skip map[TypeVarId]
 		if !changed {
 			return t
 		}
-		return arena.MakeShape(rebuilt)
+		return w.arena.MakeShape(rebuilt)
 	case TKUnion:
-		arms := arena.unionMembers[n.Extra]
-		var rebuilt []TypeId
-		changed := false
-		for i, a := range arms {
-			ra := s.applyImpl(arena, a, skip)
-			if ra != a && !changed {
-				rebuilt = make([]TypeId, len(arms))
-				copy(rebuilt, arms[:i])
-				changed = true
-			}
-			if changed {
-				rebuilt[i] = ra
-			}
-		}
+		arms := w.arena.unionMembers[n.Extra]
+		rebuilt, changed := w.mapSpan(arms, skip)
 		if !changed {
 			return t
 		}
-		return arena.MakeUnion(rebuilt, NameId(n.A))
+		return w.arena.MakeUnion(rebuilt, NameId(n.A))
 	case TKBrand:
-		under := s.applyImpl(arena, TypeId(n.B), skip)
+		under := w.mapType(TypeId(n.B), skip)
 		if under == TypeId(n.B) {
 			return t
 		}
-		return arena.MakeBrand(NameId(n.A), under)
+		return w.arena.MakeBrand(NameId(n.A), under)
 	case TKCommand:
-		argv := s.applyImpl(arena, TypeId(n.A), skip)
+		argv := w.mapType(TypeId(n.A), skip)
 		if argv == TypeId(n.A) {
 			return t
 		}
-		return arena.MakeCommand(argv, CommandCaptureMode(n.B), CommandCaptureMode(n.Extra))
+		return w.arena.MakeCommand(argv, CommandCaptureMode(n.B), CommandCaptureMode(n.Extra))
 	case TKQuote:
-		sig := arena.quoteSigs[n.Extra]
-		inner := genericsSkip(sig)
-		newIn, inChanged := s.mapSpan(arena, sig.Inputs, inner)
-		newOut, outChanged := s.mapSpan(arena, sig.Outputs, inner)
-		if !inChanged && !outChanged {
+		sig, changed := w.mapSig(w.arena.quoteSigs[n.Extra], skip)
+		if !changed {
 			return t
 		}
-		return arena.MakeQuote(QuoteSig{
-			Inputs:   newIn,
-			Outputs:  newOut,
-			Fail:     sig.Fail,
-			Pure:     sig.Pure,
-			Diverges: sig.Diverges,
-			Generics: sig.Generics,
-		})
+		return w.arena.MakeQuote(sig)
 	case TKOverloadedQuote:
-		sigs := arena.overloadedQuoteSigs[n.Extra]
+		sigs := w.arena.overloadedQuoteSigs[n.Extra]
 		rebuilt := make([]QuoteSig, len(sigs))
 		changed := false
 		for i, sig := range sigs {
-			inner := genericsSkip(sig)
-			newIn, inChanged := s.mapSpan(arena, sig.Inputs, inner)
-			newOut, outChanged := s.mapSpan(arena, sig.Outputs, inner)
-			rebuilt[i] = QuoteSig{
-				Inputs:   newIn,
-				Outputs:  newOut,
-				Fail:     sig.Fail,
-				Pure:     sig.Pure,
-				Diverges: sig.Diverges,
-				Generics: sig.Generics,
-			}
-			if inChanged || outChanged {
+			rs, c := w.mapSig(sig, skip)
+			rebuilt[i] = rs
+			if c {
 				changed = true
 			}
 		}
 		if !changed {
 			return t
 		}
-		return arena.MakeOverloadedQuote(rebuilt)
+		return w.arena.MakeOverloadedQuote(rebuilt)
 	}
 	return t
 }
 
-// mapSpan walks a slice of TypeIds through applyImpl, returning a new slice if
-// any element resolved to something different and signaling whether the
-// rebuild happened. The original slice is returned untouched on no-change so
-// callers can compare slice headers cheaply. `skip` is threaded into each
-// element's resolution (empty for the ordinary case).
-func (s *Substitution) mapSpan(arena *TypeArena, span []TypeId, skip map[TypeVarId]struct{}) ([]TypeId, bool) {
+// mapSpan walks a slice of TypeIds through mapType, returning a new slice
+// if any element resolved to something different and signaling whether the
+// rebuild happened. The original slice is returned untouched on no-change
+// so callers can compare slice headers cheaply.
+func (w *typeRewriter) mapSpan(span []TypeId, skip map[TypeVarId]struct{}) ([]TypeId, bool) {
 	var out []TypeId
 	changed := false
 	for i, x := range span {
-		rx := s.applyImpl(arena, x, skip)
+		rx := w.mapType(x, skip)
 		if rx != x && !changed {
 			out = make([]TypeId, len(span))
 			copy(out, span[:i])
@@ -234,6 +207,49 @@ func (s *Substitution) mapSpan(arena *TypeArena, span []TypeId, skip map[TypeVar
 	return out, true
 }
 
+// rewriter returns the typeRewriter implementing Apply semantics: variables
+// resolve through the substitution (recursively, with path compression on
+// full resolves), and a quote's locally-scoped generics replace the skip
+// set while its inputs/outputs are rebuilt. Rebuilt sigs keep their
+// Generics; Bindings are not rewritten (they are use-site state, not part
+// of the structural identity Apply maintains).
+func (s *Substitution) rewriter(arena *TypeArena) *typeRewriter {
+	w := &typeRewriter{arena: arena}
+	w.resolve = func(v TypeVarId, skip map[TypeVarId]struct{}) (TypeId, bool) {
+		if int(v) >= len(s.bound) {
+			return TidNothing, false
+		}
+		bv := s.bound[v]
+		if bv == TidNothing {
+			return TidNothing, false
+		}
+		resolved := w.mapType(bv, skip)
+		// Path compression (writing the resolved type back into the bound
+		// slice) only happens on full resolves (skip empty); a skipped
+		// resolve may leave some vars unresolved, so caching it would be
+		// wrong.
+		if len(skip) == 0 {
+			s.bound[v] = resolved
+		}
+		return resolved, true
+	}
+	w.mapSig = func(sig QuoteSig, _ map[TypeVarId]struct{}) (QuoteSig, bool) {
+		inner := genericsSkip(sig)
+		newIn, inChanged := w.mapSpan(sig.Inputs, inner)
+		newOut, outChanged := w.mapSpan(sig.Outputs, inner)
+		if !inChanged && !outChanged {
+			return sig, false
+		}
+		return QuoteSig{
+			Inputs:   newIn,
+			Outputs:  newOut,
+			Diverges: sig.Diverges,
+			Generics: sig.Generics,
+		}, true
+	}
+	return w
+}
+
 // genericsSkip builds the skip-set for a quote signature's locally-scoped
 // generics, or nil when the sig is monomorphic.
 func genericsSkip(sig QuoteSig) map[TypeVarId]struct{} {
@@ -245,6 +261,16 @@ func genericsSkip(sig QuoteSig) map[TypeVarId]struct{} {
 		skip[v] = struct{}{}
 	}
 	return skip
+}
+
+// PadTo grows the substitution with unbound entries until it holds at
+// least n slots. Used after a cross-branch join: merged types may carry
+// free variables allocated under a sibling branch's (longer) checkpoint,
+// and FreshVar must not re-issue those ids.
+func (s *Substitution) PadTo(n int) {
+	for len(s.bound) < n {
+		s.bound = append(s.bound, TidNothing)
+	}
 }
 
 // Bind sets the variable v's resolution to t. Returns false on occurs-check
@@ -375,8 +401,6 @@ func (c *Checker) Instantiate(sig QuoteSig) QuoteSig {
 	return QuoteSig{
 		Inputs:   freshIn,
 		Outputs:  freshOut,
-		Fail:     sig.Fail,
-		Pure:     sig.Pure,
 		Diverges: sig.Diverges,
 		Bindings: freshBindings,
 		// Generics intentionally dropped: instantiation consumes them.
@@ -385,100 +409,23 @@ func (c *Checker) Instantiate(sig QuoteSig) QuoteSig {
 
 // renameVars walks a type and replaces any TKVar listed in rename with its
 // fresh substitute, rebuilding composites through the arena so hashconsing
-// is preserved.
+// is preserved. Rebuilt quote sigs have their Bindings renamed too and
+// their Generics consumed (set to nil) — instantiation uses them up.
 func (c *Checker) renameVars(t TypeId, rename map[TypeVarId]TypeId) TypeId {
-	n := c.arena.Node(t)
-	switch n.Kind {
-	case TKVar:
-		if fresh, ok := rename[TypeVarId(n.A)]; ok {
-			return fresh
-		}
-		return t
-	case TKMaybe:
-		inner := c.renameVars(TypeId(n.A), rename)
-		if inner == TypeId(n.A) {
-			return t
-		}
-		return c.arena.MakeMaybe(inner)
-	case TKList:
-		inner := c.renameVars(TypeId(n.A), rename)
-		if inner == TypeId(n.A) {
-			return t
-		}
-		return c.arena.MakeList(inner)
-	case TKDict:
-		k := c.renameVars(TypeId(n.A), rename)
-		v := c.renameVars(TypeId(n.B), rename)
-		if k == TypeId(n.A) && v == TypeId(n.B) {
-			return t
-		}
-		return c.arena.MakeDict(k, v)
-	case TKShape:
-		fields := c.arena.shapeFields[n.Extra]
-		out := make([]ShapeField, len(fields))
-		changed := false
-		for i, f := range fields {
-			rt := c.renameVars(f.Type, rename)
-			out[i] = ShapeField{Name: f.Name, Type: rt}
-			if rt != f.Type {
-				changed = true
-			}
-		}
-		if !changed {
-			return t
-		}
-		return c.arena.MakeShape(out)
-	case TKUnion:
-		arms := c.arena.unionMembers[n.Extra]
-		out := make([]TypeId, len(arms))
-		changed := false
-		for i, a := range arms {
-			ra := c.renameVars(a, rename)
-			out[i] = ra
-			if ra != a {
-				changed = true
-			}
-		}
-		if !changed {
-			return t
-		}
-		return c.arena.MakeUnion(out, NameId(n.A))
-	case TKBrand:
-		under := c.renameVars(TypeId(n.B), rename)
-		if under == TypeId(n.B) {
-			return t
-		}
-		return c.arena.MakeBrand(NameId(n.A), under)
-	case TKCommand:
-		argv := c.renameVars(TypeId(n.A), rename)
-		if argv == TypeId(n.A) {
-			return t
-		}
-		return c.arena.MakeCommand(argv, CommandCaptureMode(n.B), CommandCaptureMode(n.Extra))
-	case TKQuote:
-		sig := c.arena.quoteSigs[n.Extra]
-		newIn := make([]TypeId, len(sig.Inputs))
-		newOut := make([]TypeId, len(sig.Outputs))
-		changed := false
-		for i, in := range sig.Inputs {
-			ri := c.renameVars(in, rename)
-			newIn[i] = ri
-			if ri != in {
-				changed = true
-			}
-		}
-		for i, out := range sig.Outputs {
-			ro := c.renameVars(out, rename)
-			newOut[i] = ro
-			if ro != out {
-				changed = true
-			}
-		}
+	w := &typeRewriter{arena: c.arena}
+	w.resolve = func(v TypeVarId, _ map[TypeVarId]struct{}) (TypeId, bool) {
+		fresh, ok := rename[v]
+		return fresh, ok
+	}
+	w.mapSig = func(sig QuoteSig, skip map[TypeVarId]struct{}) (QuoteSig, bool) {
+		newIn, inChanged := w.mapSpan(sig.Inputs, skip)
+		newOut, outChanged := w.mapSpan(sig.Outputs, skip)
+		changed := inChanged || outChanged
 		var bindings map[NameId]TypeId
 		if len(sig.Bindings) > 0 {
 			bindings = make(map[NameId]TypeId, len(sig.Bindings))
 			for name, bindingType := range sig.Bindings {
-				renamed := c.renameVars(bindingType, rename)
+				renamed := w.mapType(bindingType, skip)
 				bindings[name] = renamed
 				if renamed != bindingType {
 					changed = true
@@ -486,51 +433,15 @@ func (c *Checker) renameVars(t TypeId, rename map[TypeVarId]TypeId) TypeId {
 			}
 		}
 		if !changed {
-			return t
+			return sig, false
 		}
-		return c.arena.MakeQuote(QuoteSig{
+		return QuoteSig{
 			Inputs:   newIn,
 			Outputs:  newOut,
-			Fail:     sig.Fail,
-			Pure:     sig.Pure,
 			Diverges: sig.Diverges,
 			Bindings: bindings,
-			Generics: nil,
-		})
-	case TKOverloadedQuote:
-		sigs := c.arena.overloadedQuoteSigs[n.Extra]
-		out := make([]QuoteSig, len(sigs))
-		changed := false
-		for i, sig := range sigs {
-			newIn := make([]TypeId, len(sig.Inputs))
-			newOut := make([]TypeId, len(sig.Outputs))
-			for j, in := range sig.Inputs {
-				ri := c.renameVars(in, rename)
-				newIn[j] = ri
-				if ri != in {
-					changed = true
-				}
-			}
-			for j, outType := range sig.Outputs {
-				ro := c.renameVars(outType, rename)
-				newOut[j] = ro
-				if ro != outType {
-					changed = true
-				}
-			}
-			out[i] = QuoteSig{
-				Inputs:   newIn,
-				Outputs:  newOut,
-				Fail:     sig.Fail,
-				Pure:     sig.Pure,
-				Diverges: sig.Diverges,
-				Generics: nil,
-			}
-		}
-		if !changed {
-			return t
-		}
-		return c.arena.MakeOverloadedQuote(out)
+			// Generics intentionally dropped: instantiation consumes them.
+		}, true
 	}
-	return t
+	return w.mapType(t, nil)
 }

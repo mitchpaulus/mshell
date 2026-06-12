@@ -2,15 +2,11 @@ package main
 
 import "fmt"
 
-// Phase 2 of the type checker: stack simulation and applySig over a small
-// primitive-only token stream.
-//
-// This is a deliberately narrow vertical slice. The Checker consumes a
-// sequence of Tokens directly (no parse-tree pass yet), recognizes integer
-// and boolean literals, and dispatches arithmetic/comparison operators
-// through builtinSigsByToken. Composite types, generics, branching,
-// overloading, and Main.go integration land in later phases per
-// ai/type_checker.md.
+// Core token-level checking: the simulated type stack, the variable
+// environment, per-token dispatch (checkOne), signature application
+// (applySig), and structural unification (unify). The parse-tree walk
+// lives in TypeCheckProgram.go and the branching driver in TypeQuote.go;
+// see ai/type_checker.md for the overall design.
 
 // TypeStack is the checker's simulated runtime stack. The top of the stack
 // is items[len(items)-1]; push/pop are the slice-tail operations. The same
@@ -78,16 +74,16 @@ func NewVarEnv() VarEnv {
 	}
 }
 
-// FnContext is the per-function checking context. In Phase 2 only the
-// declared signature matters; Phase 2 of the deferred effect work adds
-// declared/inferred fail and pure tracking.
+// FnContext is the per-function checking context: the declared signature
+// a def body is checked against, and whether the body used `return`.
 type FnContext struct {
 	Sig       QuoteSig
 	SawReturn bool
 }
 
 // Checker is the top-level type-checking session. It owns the arena, name
-// table, and accumulated errors. Tokens are fed in via Check / CheckTokens.
+// table, and accumulated errors. Programs enter through CheckProgram
+// (parse-tree walk) or CheckTokens (flat token stream, used by tests).
 type Checker struct {
 	arena *TypeArena
 	names *NameTable
@@ -114,18 +110,12 @@ type Checker struct {
 
 	// branchSpawn is populated by multi-dispatch sites (resolveAndApply
 	// with multiple viable candidates, prefix-quote handlers, INTERPRET
-	// on an overloaded quote) when the checker is running under the
-	// branching walker. Each entry is one alternative outcome of the
-	// current step. tryBranchStep clears this before invoking the step
-	// and reads it after: a non-empty result fans out the current
+	// on an overloaded quote). Each entry is one alternative outcome of
+	// the current step. tryBranchStep clears this before invoking the
+	// step and reads it after: a non-empty result fans out the current
 	// branch into all the spawned alternatives instead of capturing a
 	// single deterministic continuation.
-	//
-	// When branchingEnabled is false (legacy path: direct CheckTokens,
-	// tests that don't go through the branching walker), multi-dispatch
-	// sites fall back to their pre-branching behavior.
-	branchSpawn      []quoteBranch
-	branchingEnabled bool
+	branchSpawn []quoteBranch
 
 	// listDepth tracks how deeply nested we are inside list literals
 	// (`[...]`). Inside lists, mshell allows bare literals as strings
@@ -160,13 +150,16 @@ func (c *Checker) Stack() *TypeStack {
 	return &c.stack
 }
 
-// CheckTokens runs the Phase-2 checker over a flat token stream. Returns
-// after consuming all tokens regardless of errors — every error is
-// collected for batch reporting.
+// CheckTokens runs the checker over a flat token stream through the
+// branching driver, starting from the checker's current state. Surviving
+// branches are joined back into a single live state. Used by lower-level
+// tests; the program path enters through CheckProgram.
 func (c *Checker) CheckTokens(tokens []Token) {
-	for _, tok := range tokens {
-		c.checkOne(tok)
+	items := make([]MShellParseItem, len(tokens))
+	for i, tok := range tokens {
+		items[i] = tok
 	}
+	c.walkJoined(items)
 }
 
 // checkOne dispatches a single token. Literals push a primitive; tokens
@@ -333,31 +326,7 @@ func (c *Checker) checkOne(tok Token) {
 		if tok.Lexeme == "return" && c.tryReturn(tok) {
 			return
 		}
-		if tok.Lexeme == "append" && c.tryAppend() {
-			return
-		}
-		if tok.Lexeme == "get" && c.tryGet(tok) {
-			return
-		}
-		if tok.Lexeme == "zipPack" {
-			need := 2
-			if c.stack.Len() < need {
-				need = c.stack.Len()
-			}
-			c.stack.items = c.stack.items[:c.stack.Len()-need]
-			return
-		}
-		if tok.Lexeme == "foldl" {
-			if c.stack.Len() < 3 {
-				c.errors = append(c.errors, TypeError{Kind: TErrStackUnderflow, Pos: tok, Hint: "foldl"})
-				return
-			}
-			acc := c.stack.items[c.stack.Len()-2]
-			c.stack.items = c.stack.items[:c.stack.Len()-3]
-			c.stack.Push(acc)
-			return
-		}
-		if tok.Lexeme == "join" && c.tryGridJoin(tok) {
+		if tok.Lexeme == "join" && c.tryGridJoin() {
 			return
 		}
 		if tok.Lexeme == "pivot" && c.tryPivot(tok) {
@@ -456,81 +425,6 @@ func (c *Checker) tryReturn(tok Token) bool {
 	return true
 }
 
-func (c *Checker) tryAppend() bool {
-	if c.stack.Len() >= 2 {
-		top := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-1])
-		second := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-2])
-		if c.arena.Kind(second) == TKList {
-			elem := TypeId(c.arena.Node(second).A)
-			c.stack.items = c.stack.items[:c.stack.Len()-2]
-			c.stack.Push(c.arena.MakeList(c.arena.MakeUnion([]TypeId{elem, top}, 0)))
-			return true
-		}
-		if c.arena.Kind(top) == TKList {
-			elem := TypeId(c.arena.Node(top).A)
-			c.stack.items = c.stack.items[:c.stack.Len()-2]
-			c.stack.Push(c.arena.MakeList(c.arena.MakeUnion([]TypeId{elem, second}, 0)))
-			return true
-		}
-	}
-
-	if c.inferring && c.stack.Len() == 1 {
-		list := c.subst.Apply(c.arena, c.stack.Top())
-		node := c.arena.Node(list)
-		if node.Kind != TKList {
-			return false
-		}
-		item := c.subst.FreshVar(c.arena)
-		c.inferInputs = append([]TypeId{item}, c.inferInputs...)
-		elem := TypeId(node.A)
-		c.stack.items = c.stack.items[:0]
-		c.stack.Push(c.arena.MakeList(c.arena.MakeUnion([]TypeId{elem, item}, 0)))
-		return true
-	}
-
-	return false
-}
-
-func (c *Checker) tryGet(tok Token) bool {
-	if c.inferring && c.stack.Len() < 2 {
-		need := 2 - c.stack.Len()
-		extra := make([]TypeId, need)
-		for i := 0; i < need; i++ {
-			extra[i] = c.subst.FreshVar(c.arena)
-		}
-		c.inferInputs = append(append([]TypeId(nil), extra...), c.inferInputs...)
-		c.stack.items = append(append([]TypeId(nil), extra...), c.stack.items...)
-	}
-	if c.stack.Len() < 2 {
-		return false
-	}
-	key := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-1])
-	receiver := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-2])
-	if !c.unify(key, TidStr) {
-		return false
-	}
-
-	var value TypeId
-	node := c.arena.Node(receiver)
-	switch node.Kind {
-	case TKGridRow, TKShape:
-		value = c.lookupGetterValueType(receiver, c.names.Intern(""))
-	case TKDict:
-		value = TypeId(node.B)
-	case TKVar:
-		value = c.subst.FreshVar(c.arena)
-		if !c.unify(receiver, c.arena.MakeDict(TidStr, value)) {
-			return false
-		}
-	default:
-		return false
-	}
-
-	c.stack.items = c.stack.items[:c.stack.Len()-2]
-	c.stack.Push(c.arena.MakeMaybe(value))
-	return true
-}
-
 func (c *Checker) tryIff(tok Token) bool {
 	if c.stack.Len() < 2 {
 		return false
@@ -542,6 +436,16 @@ func (c *Checker) tryIff(tok Token) bool {
 	}
 	second := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-2])
 	secondNode := c.arena.Node(second)
+	// An overloaded quote in the true-branch position needs per-arm
+	// dispatch; treating it as the one-arm form's condition would
+	// misread the program. Defer to the table's iff sigs, where
+	// overloaded-quote operand expansion explores the arms and the
+	// surviving choices fan out through the branching driver. (The
+	// table arms only cover thunk-shaped branches; folding full arm
+	// dispatch into tryIff is the upgrade path if that bites.)
+	if secondNode.Kind == TKOverloadedQuote {
+		return false
+	}
 
 	var trueQuote TypeId
 	var hasFalse bool
@@ -572,22 +476,30 @@ func (c *Checker) tryIff(tok Token) bool {
 	}
 
 	c.stack.items = c.stack.items[:baseLen]
-	snap := c.Snapshot()
 	allowedBindings := c.commonIffBindings(trueQuote, falseQuote, hasFalse)
 
-	c.applyQuoteArm(trueQuote, tok, allowedBindings)
-	arms := []BranchArm{c.CaptureArm(c.diverged)}
-
-	if hasFalse {
-		c.Fork(snap)
-		c.applyQuoteArm(falseQuote, tok, allowedBindings)
-		arms = append(arms, c.CaptureArm(c.diverged))
-	} else {
-		c.Fork(snap)
-		arms = append(arms, c.CaptureArm(false))
+	entry := c.captureBranch()
+	var armBranches []quoteBranch
+	var armLabels []string
+	runArm := func(quote TypeId, label string, apply bool) {
+		c.loadBranch(entry)
+		if apply {
+			c.applyQuoteArm(quote, tok, allowedBindings)
+		}
+		armBranches = append(armBranches, c.captureBranch())
+		armLabels = append(armLabels, label)
 	}
 
-	c.ReconcileArms(arms, tok)
+	runArm(trueQuote, "true", true)
+	if hasFalse {
+		runArm(falseQuote, "false", true)
+	} else {
+		// Implicit do-nothing arm: with one quote, the false case
+		// leaves the entry state untouched.
+		runArm(TidNothing, "no-arm", false)
+	}
+
+	c.reconcileArmBranches(armBranches, armLabels, entry, tok)
 	return true
 }
 
@@ -720,7 +632,7 @@ func (c *Checker) tryLoop(tok Token) bool {
 	return true
 }
 
-func (c *Checker) tryGridJoin(tok Token) bool {
+func (c *Checker) tryGridJoin() bool {
 	if c.stack.Len() < 4 {
 		return false
 	}
@@ -878,7 +790,8 @@ func (c *Checker) applySig(sig QuoteSig, callSite Token) {
 		}
 	}
 	base := len(c.stack.items) - len(sig.Inputs)
-	for i, want := range sig.Inputs {
+	for _, i := range c.inputUnifyOrder(sig.Inputs, base) {
+		want := sig.Inputs[i]
 		got := c.stack.items[base+i]
 		if !c.unify(got, want) {
 			c.errors = append(c.errors, TypeError{
@@ -1109,8 +1022,7 @@ func (c *Checker) unifyUnion(gn, wn TypeNode) bool {
 
 // unifyQuote unifies two quote signatures. Inputs are contravariant
 // (the actual quote may accept a wider input type than the expected
-// context supplies), while outputs are covariant. Fail/Pure flags must
-// match directly (always default in V1 — Phase-2-of-effects revisits this).
+// context supplies), while outputs are covariant.
 // unifyQuote unifies two TKQuote sigs. Each side may carry a
 // Generics list whose TypeVarIds are symbolic — they refer to
 // nothing in the current substitution and must be renamed to fresh
@@ -1124,7 +1036,7 @@ func (c *Checker) unifyQuote(gn, wn TypeNode) bool {
 	if len(gs.Inputs) != len(ws.Inputs) || len(gs.Outputs) != len(ws.Outputs) {
 		return false
 	}
-	if gs.Fail != ws.Fail || gs.Pure != ws.Pure || gs.Diverges != ws.Diverges {
+	if gs.Diverges != ws.Diverges {
 		return false
 	}
 	for i := range gs.Inputs {
