@@ -3,10 +3,6 @@ package main
 // Static type-check errors collected by the Checker. Format() materializes
 // human-readable text only at print time, so the hot path can append errors
 // without touching the arena's name machinery.
-//
-// Phase 2 scope: a small set of error kinds for arithmetic-only checking.
-// More kinds (overload ambiguity, generic-instantiation failure, branch
-// mismatch, etc.) land alongside the phases that need them.
 
 import (
 	"fmt"
@@ -24,7 +20,6 @@ const (
 	TErrMaybeUnset // variable bound on some control-flow paths but not others
 	TErrLeftoverStack // top-level program left items on the stack at end (informational; not always an error)
 	TErrBranchStackSize
-	TErrBranchVarSet
 	TErrDefBodyMismatch // def's declared sig and body stack effect disagree
 	TErrNonExhaustiveMatch
 	TErrNoMatchingOverload
@@ -112,8 +107,6 @@ func (e TypeError) Format(arena *TypeArena, names *NameTable) string {
 		fmt.Fprintf(&sb, "values left on stack at end of program: %s", e.Hint)
 	case TErrBranchStackSize:
 		fmt.Fprintf(&sb, "branches produce stacks of differing sizes: %s", e.Hint)
-	case TErrBranchVarSet:
-		fmt.Fprintf(&sb, "branches bind different variable sets: %s", e.Hint)
 	case TErrNonExhaustiveMatch:
 		fmt.Fprintf(&sb, "non-exhaustive match: %s", e.Hint)
 	case TErrNoMatchingOverload:

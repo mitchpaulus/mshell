@@ -780,8 +780,11 @@ func (c *Checker) checkIfBlock(ifBlock *MShellParseIfBlock) {
 	for i, elseIf := range ifBlock.ElseIfs {
 		c.loadBranch(entry)
 		c.diverged = false
-		c.walkJoined(elseIf.Condition)
-		if c.stack.Len() == 0 {
+		condOk := c.walkJoined(elseIf.Condition)
+		if !condOk {
+			// The condition's own error is already recorded; checking
+			// the dead branch's residual stack would only add noise.
+		} else if c.stack.Len() == 0 {
 			c.errors = append(c.errors, TypeError{
 				Kind: TErrStackUnderflow,
 				Pos:  startTok,
@@ -971,6 +974,18 @@ func (c *Checker) joinArmBranches(branches []quoteBranch) {
 	// unioned types are already fully resolved, so they remain valid;
 	// inferInputs / inferring carry over from a representative arm.
 	c.loadBranch(branches[0])
+	// The merged types may carry free variables allocated in sibling
+	// branches whose checkpoints were longer than branch 0's. Pad the
+	// substitution to the longest checkpoint so FreshVar can never
+	// re-issue one of those ids — reuse would silently alias two
+	// unrelated variables.
+	maxLen := 0
+	for _, b := range branches {
+		if n := len(b.substCp.bound); n > maxLen {
+			maxLen = n
+		}
+	}
+	c.subst.PadTo(maxLen)
 	c.stack.items = append(c.stack.items[:0], mergedStack...)
 	c.vars.bound = mergedBound
 	c.vars.maybeBound = mergedMaybe
@@ -1532,14 +1547,17 @@ func (c *Checker) checkFormatBlock(src string, callSite Token, baseLine, baseCol
 	c.stack.items = nil
 
 	errStart := len(c.errors)
-	c.walkJoined(file.Items)
+	walked := c.walkJoined(file.Items)
 	// Diagnostics raised while walking the block carry block-local
 	// positions; shift them back onto the original source.
 	for i := errStart; i < len(c.errors); i++ {
 		c.errors[i].Pos = remapBlockToken(c.errors[i].Pos, baseLine, baseCol)
 	}
 
-	if c.stack.Len() != 1 {
+	// When the walk died, the real error is already recorded and the
+	// stack reflects a mid-step state — an arity complaint on top of it
+	// would only be noise.
+	if walked && c.stack.Len() != 1 {
 		c.errors = append(c.errors, TypeError{
 			Kind: TErrInterpolationArity,
 			Pos:  callSite,

@@ -2,32 +2,20 @@ package main
 
 import "strings"
 
-// Phase 6b: branch reconciliation and variable-environment scoping.
+// Scope save/restore and match exhaustiveness.
 //
-// All branching constructs (`if`/`else`, `match`, the eventual `try:`)
-// share one shape:
-//
-//   1. Snapshot the entry state (stack + vars) before evaluating arms.
-//   2. For each arm, fork: reset stack/vars to the entry copy, run the
-//      arm's body through the checker, then capture its tail state.
-//   3. After all arms, reconcile: stacks must agree on size, var sets
-//      must agree on names, and per-slot / per-var types are unioned.
-//      Diverged arms (exit, infinite loop, propagated fail in Phase 2)
-//      contribute nothing — they are skipped in size/var checks and
-//      drop out of the unions.
-//
-// The substitution is intentionally NOT rolled back between arms. A
-// type-variable binding made inside an arm sticks for the rest of the
-// session. This is a deliberate simplification: alternative arms in
-// the source program are mutually exclusive at runtime, but the
-// substitution is global to the type-check pass; collisions across
-// sibling arms surface as type errors and signal real ambiguity in
-// the program. If this proves too coarse in practice, snapshotting
-// the substitution becomes a localized fix.
+// Branch reconciliation itself lives on the quoteBranch machinery
+// (TypeQuote.go / TypeCheckProgram.go): arms fork via captureBranch /
+// loadBranch, which also checkpoint the substitution per arm, and join
+// through reconcileArmBranches. This file keeps the lighter
+// ScopeSnapshot (stack + vars only, no substitution) used by quote-body
+// inference and overload trials, plus the match-arm exhaustiveness
+// check.
 
-// ScopeSnapshot captures enough state to fork the checker into an arm
-// and to restore its entry state between arms. It does not capture
-// the substitution — that is intentionally global, see file header.
+// ScopeSnapshot captures the checker's stack and variable environment so
+// a trial walk can be sandboxed and undone. It does not capture the
+// substitution — callers that need that pair it with a
+// Substitution.Checkpoint (see resolveAndApply, inferQuoteSigsItems).
 type ScopeSnapshot struct {
 	stack      []TypeId
 	vars       map[NameId]TypeId

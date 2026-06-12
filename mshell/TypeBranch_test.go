@@ -356,3 +356,29 @@ func TestReconcileWithMaybePattern(t *testing.T) {
 			FormatType(c.arena, c.names, c.stack.Top()))
 	}
 }
+
+func TestJoinArmBranchesPadsSubstitution(t *testing.T) {
+	// Arm 2 allocates a fresh variable under its own (longer)
+	// substitution checkpoint and leaves it free in its stack slot.
+	// After the join installs on arm 1's shorter checkpoint, a newly
+	// issued FreshVar must not re-use that variable's id — reuse would
+	// silently alias two unrelated variables.
+	c := freshChecker()
+	entry := c.captureBranch()
+
+	c.loadBranch(entry)
+	c.stack.Push(TidInt)
+	b1 := c.captureBranch()
+
+	c.loadBranch(entry)
+	v := c.subst.FreshVar(c.arena)
+	c.stack.Push(v)
+	b2 := c.captureBranch()
+
+	c.joinArmBranches([]quoteBranch{b1, b2})
+
+	fresh := c.subst.FreshVar(c.arena)
+	if fresh == v {
+		t.Fatalf("FreshVar re-issued a variable still referenced by the joined stack")
+	}
+}

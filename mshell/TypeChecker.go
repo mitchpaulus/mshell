@@ -2,15 +2,11 @@ package main
 
 import "fmt"
 
-// Phase 2 of the type checker: stack simulation and applySig over a small
-// primitive-only token stream.
-//
-// This is a deliberately narrow vertical slice. The Checker consumes a
-// sequence of Tokens directly (no parse-tree pass yet), recognizes integer
-// and boolean literals, and dispatches arithmetic/comparison operators
-// through builtinSigsByToken. Composite types, generics, branching,
-// overloading, and Main.go integration land in later phases per
-// ai/type_checker.md.
+// Core token-level checking: the simulated type stack, the variable
+// environment, per-token dispatch (checkOne), signature application
+// (applySig), and structural unification (unify). The parse-tree walk
+// lives in TypeCheckProgram.go and the branching driver in TypeQuote.go;
+// see ai/type_checker.md for the overall design.
 
 // TypeStack is the checker's simulated runtime stack. The top of the stack
 // is items[len(items)-1]; push/pop are the slice-tail operations. The same
@@ -78,16 +74,16 @@ func NewVarEnv() VarEnv {
 	}
 }
 
-// FnContext is the per-function checking context. In Phase 2 only the
-// declared signature matters; Phase 2 of the deferred effect work adds
-// declared/inferred fail and pure tracking.
+// FnContext is the per-function checking context: the declared signature
+// a def body is checked against, and whether the body used `return`.
 type FnContext struct {
 	Sig       QuoteSig
 	SawReturn bool
 }
 
 // Checker is the top-level type-checking session. It owns the arena, name
-// table, and accumulated errors. Tokens are fed in via Check / CheckTokens.
+// table, and accumulated errors. Programs enter through CheckProgram
+// (parse-tree walk) or CheckTokens (flat token stream, used by tests).
 type Checker struct {
 	arena *TypeArena
 	names *NameTable
@@ -330,7 +326,7 @@ func (c *Checker) checkOne(tok Token) {
 		if tok.Lexeme == "return" && c.tryReturn(tok) {
 			return
 		}
-		if tok.Lexeme == "join" && c.tryGridJoin(tok) {
+		if tok.Lexeme == "join" && c.tryGridJoin() {
 			return
 		}
 		if tok.Lexeme == "pivot" && c.tryPivot(tok) {
@@ -626,7 +622,7 @@ func (c *Checker) tryLoop(tok Token) bool {
 	return true
 }
 
-func (c *Checker) tryGridJoin(tok Token) bool {
+func (c *Checker) tryGridJoin() bool {
 	if c.stack.Len() < 4 {
 		return false
 	}

@@ -31,7 +31,7 @@ package main
 // a permissive sig silently waves through programs that crash at runtime.
 
 import (
-	"sort"
+	"slices"
 	"sync"
 )
 
@@ -93,7 +93,7 @@ func parseBuiltinSig(c *Checker, src string) QuoteSig {
 		}
 		gens = append(gens, v)
 	}
-	sort.Slice(gens, func(i, j int) bool { return gens[i] < gens[j] })
+	slices.Sort(gens)
 	if len(gens) == 0 {
 		gens = nil
 	}
@@ -122,9 +122,13 @@ func (r *sigRegistry) reg(name string, sigs ...string) {
 
 // add appends overload arms to an already-registered name — used where one
 // word spans categories (the dict/grid/Maybe arms of `map`, the grid arm
-// of `join`).
+// of `join`). The name must already be registered; a typo here would
+// otherwise silently mint a new builtin.
 func (r *sigRegistry) add(name string, sigs ...string) {
 	id := r.checker.names.Intern(name)
+	if _, ok := r.out[id]; !ok {
+		panic("add to unregistered builtin: " + name)
+	}
 	r.out[id] = append(r.out[id], parseBuiltinSigs(r.checker, sigs...)...)
 }
 
@@ -140,6 +144,9 @@ func (r *sigRegistry) regGo(name string, sigs ...QuoteSig) {
 // addGo appends hand-built sigs to an already-registered name.
 func (r *sigRegistry) addGo(name string, sigs ...QuoteSig) {
 	id := r.checker.names.Intern(name)
+	if _, ok := r.out[id]; !ok {
+		panic("addGo to unregistered builtin: " + name)
+	}
 	r.out[id] = append(r.out[id], sigs...)
 }
 

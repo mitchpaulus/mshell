@@ -263,6 +263,16 @@ func genericsSkip(sig QuoteSig) map[TypeVarId]struct{} {
 	return skip
 }
 
+// PadTo grows the substitution with unbound entries until it holds at
+// least n slots. Used after a cross-branch join: merged types may carry
+// free variables allocated under a sibling branch's (longer) checkpoint,
+// and FreshVar must not re-issue those ids.
+func (s *Substitution) PadTo(n int) {
+	for len(s.bound) < n {
+		s.bound = append(s.bound, TidNothing)
+	}
+}
+
 // Bind sets the variable v's resolution to t. Returns false on occurs-check
 // failure (binding would create an infinite type) or if v is already bound.
 // Callers should typically have Apply'd both sides first so v is known to

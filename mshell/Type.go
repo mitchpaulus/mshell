@@ -36,10 +36,6 @@ const (
 	TidBottom   // divergent: exit, infinite loop, (Phase 2) propagated fail
 )
 
-// firstCompositeId is the id at which user-constructed composite types begin.
-// Anything below this is a primitive baked into the arena at init time.
-const firstCompositeId TypeId = TidBottom + 1
-
 // TypeKind categorizes a TypeNode. The interpretation of TypeNode.A, B, and
 // Extra depends on the kind.
 type TypeKind uint8
