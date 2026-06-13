@@ -1114,7 +1114,7 @@ end wl # Output: 11
 - `concat`: Flatten list of lists one level. Useful for things like a `flatMap`, which can be defined like `map concat`. `([[a]] -- [a])`
 - `toSvgPathStr`: Build an SVG path `d` string from a list of `[x y]` pairs. First pair uses `M`, remaining pairs use `L`. `([[numeric]] -- str)`
 - `scaleLinear`: Build a linear scaler from a domain/range pair; returns a quotation that maps input values. `([numeric] [numeric] -- (numeric -- numeric))`
-- `cartesian`: Produces the Cartesian product between two lists. Output is a list of lists, in which the inner list has two elements. `([a] [a] -- [[a]])`
+- `cartesian`: Extends each list in an accumulator with every element of a new list, producing the Cartesian product. Designed for chaining: start with the identity `[[]]` and apply `cartesian` once per list. `([[a]] [a] -- [[a]])`
 - `groupBy`: Groups items of a list into a dictionary based on a key function. The key function should take each item as input and produce a string.
   The output is a dictionary with the unique keys and values that are lists of the corresponding items. `([a] (a -- str) -- dict)`
 - `listToDict`: Transform a list into a dictionary with a key and value selector function. `([a] (a -- b) (a -- c) -- { b: c })`
