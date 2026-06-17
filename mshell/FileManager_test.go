@@ -3,8 +3,11 @@ package main
 import (
 	"io/fs"
 	"os"
-	"reflect"
+	"path/filepath"
+	"strings"
 	"testing"
+	"time"
+	"reflect"
 )
 
 type testDirEntry struct {
@@ -73,6 +76,20 @@ func TestHandleInputProcessesBufferedQuit(t *testing.T) {
 	}
 	if fm.cursor != 1 {
 		t.Fatalf("cursor = %d, want 1", fm.cursor)
+	}
+}
+
+func TestComputePreviewWithTimeoutReturnsContent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "note.txt")
+	if err := os.WriteFile(path, []byte("hello\nworld\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	lines := computePreviewWithTimeout(testDirEntry{name: "note.txt"}, path, 10, time.Second, nil)
+
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "hello" {
+		t.Fatalf("preview = %v, want first line 'hello'", lines)
 	}
 }
 
