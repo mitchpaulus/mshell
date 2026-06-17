@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The file manager preview now times out instead of hanging when a file is slow
+  to read. Cloud-backed files (e.g. OneDrive "files on demand") could block the
+  preview worker indefinitely while hydrating, freezing previews for every other
+  entry; a slow preview now gives up after a few seconds and shows a placeholder.
 - Match arms that are not a recognized pattern form now produce a clear error
   listing the legal forms, instead of silently failing to bind (and later
   reporting a confusing "unknown identifier" in the arm body).

@@ -57,6 +57,15 @@ func (e fileManagerVolumeEntry) Info() (fs.FileInfo, error) { return nil, nil }
 // Hide it from the file manager so it does not clutter listings or previews.
 const oneDriveHiddenMetadataFileName = ".849C9593-D756-4E56-8D6E-42412F2A707B"
 
+// previewTimeout bounds how long a single preview computation may block.
+// Reading a file on a cloud-backed filesystem (OneDrive "files on demand")
+// can hang while the file is hydrated from the network. Without a bound a
+// single such file would stall the preview worker indefinitely, freezing
+// previews for every other entry. Go cannot cancel a blocked read on a
+// regular file, so on timeout we abandon the blocked computation (it unwinds
+// when the underlying syscall finally returns) and show a placeholder.
+const previewTimeout = 3 * time.Second
+
 type FileManager struct {
 	rows, cols int
 	stdInFd    int
@@ -306,7 +315,7 @@ func (fm *FileManager) startPreviewLoop() {
 					}
 				}
 			COMPUTE:
-				lines := computePreview(req.entry, req.path, req.maxLines)
+				lines := computePreviewWithTimeout(req.entry, req.path, req.maxLines, previewTimeout, fm.previewDone)
 				select {
 				case <-fm.previewDone:
 					return
@@ -936,6 +945,36 @@ func (fm *FileManager) getPreview() []string {
 	}
 
 	return []string{" Loading..."}
+}
+
+// computePreviewWithTimeout runs computePreview but gives up after timeout.
+// The computation runs in its own goroutine so a read that blocks on cloud
+// file hydration cannot stall the preview worker. On timeout the blocked
+// goroutine is abandoned; it will finish on its own when the syscall returns,
+// and its result is discarded (the buffered channel keeps the send from
+// blocking). A non-positive timeout disables the bound. If done is closed (the
+// manager is shutting down) the wait is abandoned immediately and nil returned.
+func computePreviewWithTimeout(entry os.DirEntry, path string, maxLines int, timeout time.Duration, done <-chan struct{}) []string {
+	resultCh := make(chan []string, 1)
+	go func() {
+		resultCh <- computePreview(entry, path, maxLines)
+	}()
+
+	var timeoutCh <-chan time.Time
+	if timeout > 0 {
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		timeoutCh = timer.C
+	}
+
+	select {
+	case lines := <-resultCh:
+		return lines
+	case <-timeoutCh:
+		return []string{" (preview timed out)"}
+	case <-done:
+		return nil
+	}
 }
 
 func computePreview(entry os.DirEntry, path string, maxLines int) []string {
