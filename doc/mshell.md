@@ -282,6 +282,10 @@ Environment variables are always "exported" to subprocesses.
 
 The presence of an environment variable can be checked using the `?` suffix.
 
+An environment variable can be removed with the `unsetenv` built-in,
+which takes the variable name as a string.
+Unsetting a variable that does not exist is not an error.
+
 ```mshell
 @HOME cd
 
@@ -290,6 +294,9 @@ The presence of an environment variable can be checked using the `?` suffix.
 
 # Checking for variable existence
 [($MY_ENV_VAR?) ("MY_ENV_VAR exists") ("MY_ENV_VAR does not exist")] if wl
+
+# Removing an environment variable
+"MSHELL_VAR" unsetenv
 ```
 
 ## Indexing
@@ -940,6 +947,7 @@ end wl # Output: 11
 - `.b`: Prints paths to all known binaries (--)
 - `.def`: Print available definitions at current location (--)
 - `.env`: Print all environment variables to stderr in sorted order (--)
+- `unsetenv`: Remove an environment variable by name. Unsetting a variable that does not exist is not an error. `(str -- )`
 - `dup`: Duplicate (a -- a a)
 - `swap`: Swap (a b -- b a)
 - `drop`: Drop (a -- )

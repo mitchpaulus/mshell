@@ -6562,6 +6562,26 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(MShellPath{path})
+				} else if t.Lexeme == "unsetenv" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'unsetenv' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					varName, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot use a %s as an environment variable name.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					err = os.Unsetenv(varName)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Could not unset the environment variable '%s'.\n", t.Line, t.Column, varName))
+					}
+
+					// If it was the PATH, refresh all the binaries
+					if varName == "PATH" {
+						context.Pbm.Update()
+					}
 				} else if t.Lexeme == "dateFmt" {
 					obj1, err := stack.Pop()
 					if err != nil {

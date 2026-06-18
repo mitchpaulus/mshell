@@ -1,0 +1,8 @@
+# Set an environment variable, confirm it exists, then unset it.
+"hello" $MSH_UNSETENV_TEST!
+$MSH_UNSETENV_TEST? str wl
+"MSH_UNSETENV_TEST" unsetenv
+$MSH_UNSETENV_TEST? str wl
+# Unsetting a variable that does not exist is not an error.
+"MSH_UNSETENV_TEST" unsetenv
+$MSH_UNSETENV_TEST? str wl
