@@ -55,7 +55,13 @@ They are always strings.
 Use <code><span class="mshellVARSTORE">$NAME!</span></code> to set them and <code><span class="mshellVARRETRIEVE">$NAME</span><span class="mshellQUESTION">?</span></code> to check for existence.
 Reading a missing environment variable with <code><span class="mshellVARRETRIEVE">$NAME</span></code> is an error.
 Environment variables are always exported to subprocesses, so setting them affects subsequent command executions.
+Remove one with the <code>unsetenv</code> built-in, which takes the name as a string.
+Unsetting a variable that does not exist is not an error.
 </p>
+
+<pre>
+<code><span class="mshellSTRING">"LOG_LEVEL"</span> <span class="mshellLITERAL">unsetenv</span></code>
+</pre>
 
 <pre>
 <code><span class="mshellSTRING">"info"</span> <span class="mshellVARSTORE">$LOG_LEVEL!</span>
