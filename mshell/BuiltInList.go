@@ -199,6 +199,8 @@ var BuiltInList = map[string]struct{}{
 	"updateCol": {},
 	"uniq": {},
 	"upper": {},
+	"uuid": {},
+	"uuid7": {},
 	"urlEncode": {},
 	"utcToCst": {},
 	"utf8Bytes": {},

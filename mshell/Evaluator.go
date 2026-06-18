@@ -5,6 +5,7 @@ import (
 	"archive/zip"
 	"bufio"
 	"bytes"
+	crand "crypto/rand"
 	"crypto/sha256"
 	"encoding/csv"
 	"encoding/base64"
@@ -4363,6 +4364,43 @@ func ParseJsonObjToMshell(jsonObj any) MShellObject {
 //	"\\\\?\\UNC\\server\\share\\dir"       -> "dir"
 //	"\\\\?\\Volume{GUID}\\Windows\\Temp"   -> "Windows\\Temp"
 //	"\\\\.\\COM1"                          -> ""  (device path, no remainder)
+// formatUuid renders 16 bytes as the canonical lowercase hyphenated UUID string
+// (8-4-4-4-12), e.g. "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx".
+func formatUuid(b [16]byte) string {
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
+// NewUuidV4 generates a random (version 4) UUID as defined by RFC 9562.
+func NewUuidV4() (string, error) {
+	var b [16]byte
+	if _, err := crand.Read(b[:]); err != nil {
+		return "", err
+	}
+	b[6] = (b[6] & 0x0f) | 0x40 // Version 4
+	b[8] = (b[8] & 0x3f) | 0x80 // Variant 10
+	return formatUuid(b), nil
+}
+
+// NewUuidV7 generates a time-ordered (version 7) UUID as defined by RFC 9562.
+// The first 48 bits are a Unix timestamp in milliseconds, making the values
+// sort chronologically; the remaining bits are random.
+func NewUuidV7() (string, error) {
+	var b [16]byte
+	if _, err := crand.Read(b[:]); err != nil {
+		return "", err
+	}
+	ms := time.Now().UnixMilli()
+	b[0] = byte(ms >> 40)
+	b[1] = byte(ms >> 32)
+	b[2] = byte(ms >> 24)
+	b[3] = byte(ms >> 16)
+	b[4] = byte(ms >> 8)
+	b[5] = byte(ms)
+	b[6] = (b[6] & 0x0f) | 0x70 // Version 7
+	b[8] = (b[8] & 0x3f) | 0x80 // Variant 10
+	return formatUuid(b), nil
+}
+
 func StripVolumePrefix(p string) string {
 	if runtime.GOOS != "windows" {
 		return p
@@ -10233,6 +10271,18 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					} else {
 						stack.Push(MShellString{host})
 					}
+				} else if t.Lexeme == "uuid" {
+					s, err := NewUuidV4()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Failed to generate a UUID: %s\n", t.Line, t.Column, err.Error()))
+					}
+					stack.Push(MShellString{s})
+				} else if t.Lexeme == "uuid7" {
+					s, err := NewUuidV7()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Failed to generate a UUID: %s\n", t.Line, t.Column, err.Error()))
+					}
+					stack.Push(MShellString{s})
 				} else if t.Lexeme == "removeWindowsVolumePrefix" {
 					obj, err := stack.Pop()
 					if err != nil {
