@@ -437,6 +437,8 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		r.reg(name, "(str | path -- )")
 	}
 	r.reg("cd", "(str | path -- )")
+	// unsetenv : remove an environment variable by name
+	r.reg("unsetenv", "(str -- )")
 	// cdh / cdp : interactive directory history / pop navigation
 	for _, name := range []string{"cdh", "cdp"} {
 		r.reg(name, "( -- )")
