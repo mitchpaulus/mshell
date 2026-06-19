@@ -981,6 +981,8 @@ end wl # Output: 11
 - `tuw`: Shorthand for `(tjoin) map uw` `([[str]] -- )`
 - `runtime`: Get the current OS runtime. This is the output of the GOOS environment variable. Common possible values are `linux`, `windows`, and `darwin`. `( -- str)`
 - `hostname`: Get the current OS hostname. On failure to get, puts 'unknown' on the stack. `( -- str)`
+- `uuid`: Generate a random (version 4) UUID per RFC 9562, as a canonical lowercase hyphenated string (e.g. `9a9fc320-8284-440d-a740-d038cf95b667`). `( -- str)`
+- `uuid7`: Generate a time-ordered (version 7) UUID per RFC 9562. The first 48 bits are a Unix millisecond timestamp, so the values sort chronologically; the rest is random. `( -- str)`
 - `parseCsv`: Parse a CSV file into a list of lists of strings. Input can be a path/literal file name, or the string contents itself. (`path|str -- [[str]])`
 - `toGrid`: Build a Grid from a list of string rows. The first row supplies column headers and remaining rows become string-valued data rows. (`[[str]] -- Grid`)
 - `gridValues`: Extract Grid or GridView cell values as row-major lists, without a header row and without coercing cell types. (`Grid|GridView -- [[a]]`)

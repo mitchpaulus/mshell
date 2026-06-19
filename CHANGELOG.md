@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Functions
+  - `uuid`: Generate a random (version 4) UUID per RFC 9562 as a canonical
+    lowercase hyphenated string. `( -- str)`
+  - `uuid7`: Generate a time-ordered (version 7) UUID per RFC 9562, whose leading
+    bits encode a Unix millisecond timestamp so values sort chronologically.
+    `( -- str)`
 - `unsetenv`: Remove an environment variable by name. Unsetting a variable that
   does not exist is not an error. `(str -- )`
 - `modTime`: Return a file's last modification time as a `datetime`, the one file

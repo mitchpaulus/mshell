@@ -508,6 +508,8 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		r.reg(name, "(str str -- int)")
 	}
 	r.reg("hostname", "( -- str)")
+	r.reg("uuid", "( -- str)")
+	r.reg("uuid7", "( -- str)")
 	r.reg("pwd", "( -- path)")
 	r.reg("args", "( -- [str])")
 	r.reg("md5", "(str | path | bytes -- str)")

@@ -200,6 +200,8 @@ var BuiltInList = map[string]struct{}{
 	"uniq": {},
 	"unsetenv": {},
 	"upper": {},
+	"uuid": {},
+	"uuid7": {},
 	"urlEncode": {},
 	"utcToCst": {},
 	"utf8Bytes": {},

@@ -5,6 +5,7 @@ import (
 	"archive/zip"
 	"bufio"
 	"bytes"
+	crand "crypto/rand"
 	"crypto/sha256"
 	"encoding/csv"
 	"encoding/base64"
@@ -4363,6 +4364,99 @@ func ParseJsonObjToMshell(jsonObj any) MShellObject {
 //	"\\\\?\\UNC\\server\\share\\dir"       -> "dir"
 //	"\\\\?\\Volume{GUID}\\Windows\\Temp"   -> "Windows\\Temp"
 //	"\\\\.\\COM1"                          -> ""  (device path, no remainder)
+// UUID generation per RFC 9562. The version-4 and version-7 bit layouts are
+// fixed by the spec. For version 7 we also stash the sub-millisecond fraction
+// of the clock into the rand_a field and bump it on collisions, so that UUIDs
+// minted within the same millisecond still sort in creation order — a
+// monotonicity technique popularized by github.com/google/uuid, implemented
+// here from scratch to avoid taking on a dependency.
+
+var (
+	uuidMu     sync.Mutex
+	uuidLastV7 int64 // previous (unixMilli<<12 | subMilliSeq), guards monotonicity
+)
+
+// randomUuidBytes returns 16 random bytes with the RFC 4122 variant bits set.
+// Callers stamp in the version nibble for their specific UUID version.
+func randomUuidBytes() ([16]byte, error) {
+	var b [16]byte
+	if _, err := crand.Read(b[:]); err != nil {
+		return b, err
+	}
+	b[8] = (b[8] & 0x3f) | 0x80 // variant 10xx
+	return b, nil
+}
+
+// NewUuidV4 returns a random (version 4) UUID as a canonical hyphenated string.
+func NewUuidV4() (string, error) {
+	b, err := randomUuidBytes()
+	if err != nil {
+		return "", err
+	}
+	b[6] = (b[6] & 0x0f) | 0x40 // version 4
+	return formatUuid(b), nil
+}
+
+// NewUuidV7 returns a time-ordered (version 7) UUID as a canonical hyphenated
+// string: a 48-bit Unix-millisecond timestamp, then a 12-bit sub-millisecond
+// sequence in rand_a for in-creation-order sorting, then random bits.
+func NewUuidV7() (string, error) {
+	b, err := randomUuidBytes()
+	if err != nil {
+		return "", err
+	}
+	milli, seq := nextUuidV7Time()
+	b[0] = byte(milli >> 40)
+	b[1] = byte(milli >> 32)
+	b[2] = byte(milli >> 24)
+	b[3] = byte(milli >> 16)
+	b[4] = byte(milli >> 8)
+	b[5] = byte(milli)
+	b[6] = 0x70 | (byte(seq>>8) & 0x0f) // version 7 over the top of rand_a
+	b[7] = byte(seq)
+	return formatUuid(b), nil
+}
+
+// nextUuidV7Time returns the current Unix time in milliseconds plus a 12-bit
+// sequence taken from the sub-millisecond fraction. The combined value
+// (milli<<12 | seq) strictly increases across calls, so two version-7 UUIDs
+// generated in the same millisecond never share a time-ordered prefix.
+func nextUuidV7Time() (milli, seq int64) {
+	const nanosPerMilli = 1_000_000
+
+	uuidMu.Lock()
+	defer uuidMu.Unlock()
+
+	nanos := time.Now().UnixNano()
+	milli = nanos / nanosPerMilli
+	seq = (nanos % nanosPerMilli) >> 8 // 0..3905, fits in 12 bits
+	combined := milli<<12 | seq
+	if combined <= uuidLastV7 {
+		combined = uuidLastV7 + 1
+		milli = combined >> 12
+		seq = combined & 0xfff
+	}
+	uuidLastV7 = combined
+	return milli, seq
+}
+
+// formatUuid renders 16 bytes as the canonical lowercase 8-4-4-4-12 string.
+func formatUuid(b [16]byte) string {
+	const hexDigits = "0123456789abcdef"
+	var out [36]byte
+	i := 0
+	for pos, n := range b {
+		if pos == 4 || pos == 6 || pos == 8 || pos == 10 {
+			out[i] = '-'
+			i++
+		}
+		out[i] = hexDigits[n>>4]
+		out[i+1] = hexDigits[n&0x0f]
+		i += 2
+	}
+	return string(out[:])
+}
+
 func StripVolumePrefix(p string) string {
 	if runtime.GOOS != "windows" {
 		return p
@@ -10253,6 +10347,18 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					} else {
 						stack.Push(MShellString{host})
 					}
+				} else if t.Lexeme == "uuid" {
+					s, err := NewUuidV4()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Failed to generate a UUID: %s\n", t.Line, t.Column, err.Error()))
+					}
+					stack.Push(MShellString{s})
+				} else if t.Lexeme == "uuid7" {
+					s, err := NewUuidV7()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Failed to generate a UUID: %s\n", t.Line, t.Column, err.Error()))
+					}
+					stack.Push(MShellString{s})
 				} else if t.Lexeme == "removeWindowsVolumePrefix" {
 					obj, err := stack.Pop()
 					if err != nil {
