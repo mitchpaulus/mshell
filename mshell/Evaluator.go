@@ -6159,6 +6159,20 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(MShellString{string(content)})
+				} else if t.Lexeme == "clip" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'clip' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					text, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot copy a %s to the clipboard.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					if err := writeSystemClipboard(text); err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error copying to clipboard: %s\n", t.Line, t.Column, err.Error()))
+					}
 				} else if t.Lexeme == "readFileBytes" {
 					obj1, err := stack.Pop()
 					if err != nil {

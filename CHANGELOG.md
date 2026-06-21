@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Functions
+  - `clip`: Copy a string to the system clipboard. Cross-platform, using
+    `pbcopy` on macOS, `clip` on Windows, and `wl-copy`/`xclip`/`xsel` on Linux.
+    `(str -- )`
   - `uuid`: Generate a random (version 4) UUID per RFC 9562 as a canonical
     lowercase hyphenated string. `( -- str)`
   - `uuid7`: Generate a time-ordered (version 7) UUID per RFC 9562, whose leading
