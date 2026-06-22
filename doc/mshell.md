@@ -943,10 +943,10 @@ end wl # Output: 11
 
 ## Built-ins
 
-- `.s`: Print stack at current location (--)
-- `.b`: Prints paths to all known binaries (--)
-- `.def`: Print available definitions at current location (--)
-- `.env`: Print all environment variables to stderr in sorted order (--)
+- `stack`: Print the stack at the current location (--)
+- `defs`: Print available definitions at the current location (--)
+- `env`: Write all environment variables to stderr in sorted order (--)
+- `completionDefs`: Push a dictionary of completion definitions. Keys are command names, values are lists of quotations. `( -- dict)`
 - `unsetenv`: Remove an environment variable by name. Unsetting a variable that does not exist is not an error. `(str -- )`
 - `dup`: Duplicate (a -- a a)
 - `swap`: Swap (a b -- b a)
@@ -959,13 +959,13 @@ end wl # Output: 11
 - `wl`: Write line to stdout (str|int -- ). Binary is not allowed because trailing newlines after raw bytes are rarely intended; use `w` for binary output. Other types must be converted with `str` first.
 - `we`: Write error to stderr (str|int|binary -- ).
 - `wle`: Write error line stderr (str|int -- ).
-- `len`: Length of string/list `([a] -- int | str -- int)`
+- `len`: Length of a string (byte length), list, dictionary, path, `Grid`/`GridView` (row count), or `GridRow` (column count). `([a] -- int)` / `(str -- int)`
 - `args`: List of string arguments. Does not include the name of the executing file. `( -- [str])`
-- `glob`: Run glob against string/literal on top of the stack. Leaves list of strings on the stack. Relies on golang's [filepath.Glob](https://pkg.go.dev/path/filepath#Glob), which in the current implementation, the response is sorted. `(str -- [str])`
+- `glob`: Run glob against string/literal on top of the stack. Leaves a list of paths on the stack. Relies on golang's [filepath.Glob](https://pkg.go.dev/path/filepath#Glob), which in the current implementation, the response is sorted. `(str -- [path])`
 - `/`: Divide numbers or join paths. `(numeric numeric -- numeric)` treats the top of stack as divisor. `(path path -- path)` joins the paths using the OS separator.
 - `x`: Interpret/execute quotation `(quote -- )`
-- `toFloat`: Convert to float. `(numeric -- Maybe[float])`
-- `toInt`: Convert to int. `(numeric -- Mabye[int])`
+- `toFloat`: Convert to float. A `str` is parsed and returns `Maybe[float]` (`none` on parse failure); an `int`/`float` returns a plain `float`. `(str -- Maybe[float])` / `(numeric -- float)`
+- `toInt`: Convert to int. A `str` is parsed and returns `Maybe[int]` (`none` on parse failure); an `int`/`float` returns a plain `int` (floats truncate toward zero). `(str -- Maybe[int])` / `(numeric -- int)`
 - `exit`: Exit the current script with the provided exit code. `(int -- )`
 - `read`: Read a line from stdin. Puts a str and bool of whether the read was successful on the stack. `( -- str bool)`
 - `prompt`: Write a prompt string to the controlling TTY and read a line from the controlling TTY. Fails if no controlling TTY is available. `(str -- str)`
@@ -973,7 +973,6 @@ end wl # Output: 11
 - `::`: Drop stdin onto the stack and split by lines `( -- [str])`. This is a shorthand for `stdin lines`.
 - `foldl`: Fold left. `(quote initial list -- result)`
 - `wt`: "Whitespace table", puts stdin split by lines and whitespace on the stack. `( -- [[str]])`
-- `tt`: "Tab table", puts stdin split by lines and tabs on the stack. `( -- [[str]])`
 - `ttFile`: "Tab table" from file, puts content from file name split by lines and tabs on the stack. `(str -- [[str]])`
 - `unlines`: Join a list of strings into a single string using `\n` line endings. `([str] -- str)`
 - `unlinesCrLf`: Join a list of strings into a single string using `\r\n` line endings. `([str] -- str)`
@@ -994,6 +993,9 @@ end wl # Output: 11
 - `repeat`: Create a list containing the provided value repeated `n` times. `(a int -- [a])`
 - `binPaths`: Puts a list of lists with 2 items, first is the executable name, second is the full path to the executable. `(-- [[str]])`
 - `urlEncode`: URL-encode a string or dictionary of parameters. `(str|dict -- str)`
+- `toJson`: Serialize any value to a JSON string. Binary is base64 encoded; typed wrappers like path, date, Maybe, and pipe preserve their shape. Types that map directly to JSON types round-trip; extended types (like path or date) do not. `(a -- str)`
+- `sleep`: Sleep for a floating-point number of seconds. `(numeric -- )`
+- `nullDevice`: Cross-platform reference to either `/dev/null` or `NUL`. `( -- path)`
 - `typeof`: Return the type name of the top stack item `(a -- str)`
 
 
@@ -1028,18 +1030,18 @@ end wl # Output: 11
 - `appendFile`: Append string to file (UTF-8). `(str content str file -- )`
 - `fileSize`: Get size of file in bytes. Returns a Maybe in case file doesn't exist or other IO error. `(str -- Maybe int)`
 - `modTime`: Get a file's last modification time. Returns a Maybe (None on missing file or IO error). This is the only file timestamp that is portable across operating systems and filesystems; reported in local time. `(str|path -- Maybe datetime)`
-- `lsDir`: Get list of all items (files and directories) in directory. Full paths to the items. `(str -- [str])`
+- `lsDir`: Get list of all items (files and directories) in directory. Full paths to the items. `(str|path -- [path])`
 - `sha256sum`: Get SHA256 checksum of file. `(path -- str)`
-- `md5`: Get md5 checksum of file or string. `(path|str -- str)`
-- `files`: Get list of files in current directory. Not recursive. `(str -- [str])`
-- `dirs`: Get list of directories in current directory. Not recursive. `(str -- [str])`
+- `md5`: Get md5 checksum. A `path` hashes the file's contents; a `str` or `binary` hashes its own bytes. `(path|str|binary -- str)`
+- `files`: Get list of files in the current directory. Not recursive. Takes no argument; entries are paths. `( -- [path])`
+- `dirs`: Get list of directories in the current directory. Not recursive. Takes no argument; entries are paths. `( -- [path])`
 - `isCmd`: Check whether item is a command that can be found in PATH. `(str -- bool)`
 - `removeWindowsVolumePrefix`: Remove volume prefix from a Windows path `(str -- str)`
 
 ## Math Functions
 
 - `abs`: Absolute value `(numeric -- numeric)`
-- `inc`: Increment integer value in place `(int -- int)`
+- `inc`: Increment an integer `(int -- int)`
 - `max2`: Maximum of two numbers `(numeric numeric -- numeric)`
 - `max`: Maximum of list of numbers or datetimes `([numeric] -- numeric) | ([DateTime] -- DateTime)`
 - `transpose`: Transpose list of lists `([[a]] -- [[a]])`
@@ -1049,6 +1051,19 @@ end wl # Output: 11
 - `floor`: Round a number down to the nearest integer. `(numeric -- int)`
 - `ceil`: Round a number up to the nearest integer. `(numeric -- int)`
 - `round`: Round to nearest integer. Rounds half-way away from zero. `(numeric -- int)`
+- `pow`: Raise a base to an exponent. `(float float -- float)`
+- `sqrt`: Square root. `(float -- float)`
+- `ln`: Natural logarithm. `(float -- float)`
+- `ln2`: Logarithm base 2. `(float -- float)`
+- `ln10`: Logarithm base 10. `(float -- float)`
+- `sin`: Sine (input in radians). `(float -- float)`
+- `cos`: Cosine (input in radians). `(float -- float)`
+- `tan`: Tangent (input in radians). `(float -- float)`
+- `arctan`: Arctangent (returns radians). `(float -- float)`
+- `random`: Random float in the range `[0, 1)`. `( -- float)`
+- `randomFixed`: Deterministic random float using the Go default seed. `( -- float)`
+- `randomNorm`: Random float from a standard normal distribution (mean 0, stddev 1). `( -- float)`
+- `randomTri`: Random float from a triangular distribution given `min`, `mode`, and `max`. `(float float float -- float)`
 
 ## String Functions
 
@@ -1061,7 +1076,9 @@ end wl # Output: 11
 - `join`: Join list of strings into a single string, (list delimiter -- str)
 - `unlines`: Join list of strings into a single string using `\n` line endings. `([str] -- str)`
 - `unlinesCrLf`: Join list of strings into a single string using `\r\n` line endings. `([str] -- str)`
-- `in`: Check for substring in string. (totalString subString -- bool)
+- `in`: Check for substring in string, or for key membership in a dictionary. `(str:totalString str:subString -- bool)` / `(dict str:key -- bool)`
+- `chomp`: Strip a single trailing newline from a string. Handles both `\n` and `\r\n`. Similar to bash command-substitution behavior. `(str -- str)`
+- `strEscape`: Transform a string into its double-quoted msh string literal, including the surrounding double quotes (e.g. `a\b` becomes `"a\\b"`). `(str -- str)`
 - `index`: Get index of first occurrence of substring in string. Returns Maybe[int] with None for the substring not being found. `(str str -- Maybe[int])`
 - `lastIndexOf`: Get index of last occurrence of substring in string. Returns Maybe[int] with None for the substring not being found. `(str str -- Maybe[int])`
 - `tab`: Puts a tab character on the stack `( -- str)`
@@ -1102,11 +1119,11 @@ end wl # Output: 11
 - `dropWhile`: Drop leading elements while the predicate remains true. `([a] (a -- bool) -- [a])`
 - `2unpack`: Unpack a two-element list onto the stack. `([a] -- a a)`
 - `2apply`: Apply a binary quotation to a two-element list. `([a] (a a -- c) -- c)`
-- `2each`: Apply a quotation to the two values on the stack individually, returning results in the original order. `(a b (a -- c) -- c c)`
+- `2each`: Apply a quotation to the two values on the stack individually, returning results in the original order. `(a a (a -- c) -- c c)`
 - `id`: Identity quote — leaves the top stack value unchanged. Useful as a no-op value selector (e.g. for `listToDict`). `(T -- T)`
 - `2id`: Two-argument identity quote. `(T1 T2 -- T1 T2)`
 - `3id`: Three-argument identity quote. `(T1 T2 T3 -- T1 T2 T3)`
-- `2tuple`: Pack the top two stack values into a new two-element list, `(a b -- [a])`
+- `2tuple`: Pack the top two stack values into a new two-element list, `(a b -- [a b])`
 - `del`: Delete element from list, `(list index -- list)` or `(index list -- list)`
 - `extend`: Extends an existing list with items from another list, or a `Grid`/`GridView` with rows from another `Grid`/`GridView`. Difference between this and `+` is that it modifies the receiver in place. For grids, see the Grid section below. `(originalList toAddList -- list)` or `(Grid|GridView Grid|GridView -- Grid|GridView)`
 - `insert`: Insert element into list, `(list element index -- list)`
@@ -1124,7 +1141,7 @@ end wl # Output: 11
 - `zip`: Zip two lists together. If the two list are different lengths, resulting list will be the same length as the shorter of the two lists. `([a] [b] (a b -- c) -- [c])`
 - `concat`: Flatten list of lists one level. Useful for things like a `flatMap`, which can be defined like `map concat`. `([[a]] -- [a])`
 - `toSvgPathStr`: Build an SVG path `d` string from a list of `[x y]` pairs. First pair uses `M`, remaining pairs use `L`. `([[numeric]] -- str)`
-- `scaleLinear`: Build a linear scaler from a domain/range pair; returns a quotation that maps input values. `([numeric] [numeric] -- (numeric -- numeric))`
+- `scaleLinear`: Build a linear scaler from a domain/range pair; returns a quotation that maps input values. `([float] [float] -- (float -- float))`
 - `cartesian`: Extends each list in an accumulator with every element of a new list, producing the Cartesian product. Designed for chaining: start with the identity `[[]]` and apply `cartesian` once per list. `([[a]] [a] -- [[a]])`
 - `groupBy`: Groups items of a list into a dictionary based on a key function. The key function should take each item as input and produce a string.
   The output is a dictionary with the unique keys and values that are lists of the corresponding items. `([a] (a -- str) -- dict)`
@@ -1132,12 +1149,22 @@ end wl # Output: 11
 - `take`: Take the first `n` number of elements from list, or first n characters of string. `([a] int -- [a])` / `(str int -- str)`
 - `repeat`: Build a list by repeating the value the requested number of times. `(a int -- [a])`
 - `chunk`: Group a list into consecutive sublists of size `n`. The final chunk may be shorter if the list length isn't divisible by `n`. `([a] int -- [[a]])`
-- `pop`: Pop the final element off the list. Returns a Maybe, `none` for the empty list. Leaves the modified list on the stack. `([a] -- [a] a)`
+- `pop`: Remove the final element from the list in place and return it as a Maybe (`none` for the empty list). The list is mutated, not pushed. `([a] -- Maybe[a])`
 
 ## Grid Functions
 
 The `:name` getter and the `get` built-in accept a `Grid` or `GridView` in addition to `dict` and `GridRow`. On a grid the lookup returns the named column as `Maybe[[T]]` — the materialized column when present, `none` when absent — making `:n?` a shorthand for `"n" gridCol`. On a `GridView` the values are projected through the view's row indices.
 
+- `gridRows`: Get the number of rows in a `Grid` or `GridView`. `(Grid|GridView -- int)`
+- `gridCols`: Get the list of column names from a `Grid` or `GridView`. `(Grid|GridView -- [str])`
+- `gridCol`: Extract a single column as a list of values. Errors if the column is absent. `(Grid|GridView str:colname -- [a])`
+- `gridMeta`: Get the grid-level metadata dictionary. Returns `none` if no metadata. `(Grid|GridView -- Maybe[dict])`
+- `gridColMeta`: Get the metadata dictionary for a named column. Returns `none` if no metadata. `(Grid|GridView str:colname -- Maybe[dict])`
+- `gridSetCell`: Set a single cell value and return the modified grid. Negative `rowIdx` counts from the end. Requires a concrete `Grid` (not a `GridView`). `(Grid str:colname int:rowIdx value -- Grid)`
+- `gridAddCol`: Add a new column to a grid. The third argument is either a list of values (length must equal the row count) or a single default value broadcast to all rows. Requires a concrete `Grid`. `(Grid str:colname [values]|default -- Grid)`
+- `gridRemoveCol`: Remove a column from a grid by name. Requires a concrete `Grid`. `(Grid str:colname -- Grid)`
+- `gridRenameCol`: Rename a column in a grid. Requires a concrete `Grid`. `(Grid str:oldname str:newname -- Grid)`
+- `gridCompact`: Materialize a `GridView` into a real `Grid` (copies the filtered rows). If already a `Grid`, returns it unchanged. `(Grid|GridView -- Grid)`
 - `select`: Project a `Grid` or `GridView` to a requested ordered list of column names, returning a materialized `Grid`. `(Grid|GridView [str] -- Grid)`
 - `exclude`: Drop a list of column names from a `Grid` or `GridView`, returning a materialized `Grid`. `(Grid|GridView [str] -- Grid)`
 - `derive`: Append a derived column to a `Grid` or `GridView`. The metadata dictionary is attached to the new column. `(Grid|GridView str dict (GridRow -- any) -- Grid)`
@@ -1197,7 +1224,7 @@ groupBy
 - `set`: Set value in dictionary by key. `(dict str a -- dict)`
 - `setd`: Set value in dictionary by key. Drop dict after. `(dict str a --)`
 - `keys`: Get keys from dictionary. Sorted. `(dict -- [str])`
-- `values`: Get values from dictionary. Sorted. `(dict -- [str])`
+- `values`: Get values from dictionary. Values keep their original types and are sorted by each value's string representation. `(dict -- [a])`
 - `keyValues`: Get key/value pairs from dictionary as a list of `{k, v}` dictionaries.
 Each pair dict has a `k` field with the key and a `v` field with the value, so the two halves can be typed independently.
 Sorted by key.
@@ -1260,7 +1287,7 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
 
 - `dirname`: Get directory name from path `(path -- path)`
 - `basename`: Get base name (aka file name or not directory portion) from path `(path -- path)`
-- `ext`: Get extension from path, includes period. `(path -- path)`
+- `ext`: Get extension from path, includes period. Returns a string. `(path -- str)`
 - `stem`: Get path without the final extension `(path -- path)`
 
 ## Shell Utilities
@@ -1277,6 +1304,7 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
 - `maybe`: Unwrap a Maybe, returning a default value if it is None. `(Maybe[a] a -- a)`
 - `bind`: This is a monadic bind operation. Allows for chaining operations on Maybe values with functions that themselves return Maybe values. `(Maybe[a] (a -- Maybe[b]) -- Maybe[b])`
 - `map`: Map a function over a Maybe value. If the Maybe is None, it returns None. If it is Just, it applies the function to the value. `(Maybe[a] (a -- b) -- Maybe[b])`
+- `map2`: Map a binary function over a pair of Maybe values. Returns None if either input is None, otherwise applies the function to both inner values. `(Maybe[a] Maybe[b] (a b -- c) -- Maybe[c])`
 
 ## HTML
 
@@ -1302,6 +1330,17 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
   - `body`: Body of response, as raw `bytes`. Decode with `utf8Str` if you want a UTF-8 string.
 
 - `httpPost`: Make a HTTP POST request. Signature is the same as `httpGet`. The only difference is that on the request dictionary, you can also set the `body` field to a stringable value.
+- `parseLinkHeader`: Parse an HTTP `Link` header string into a list of dictionaries. Each dictionary contains `url` and `rel` strings plus a `params` dictionary of any additional attributes. `(str -- [dict])`
+
+## Archive (Zip) Functions
+
+- `zipDirInc`: Create/overwrite a `.zip` from a directory; the archive root contains the directory's contents (no parent folder). `(path:sourceDir path:zipPath -- )`
+- `zipDirExc`: Create/overwrite a `.zip` that includes the source directory itself at the archive root (entries are prefixed with the directory name). `(path:sourceDir path:zipPath -- )`
+- `zipPack`: Create/overwrite a `.zip` by packing a list of dictionaries. Each dictionary must contain `path` plus optional `archivePath` (override the in-archive name) and `mode` (os.FileMode as an int). `([dict] path:zipPath -- )`
+- `zipList`: List archive entries as dictionaries with keys: `name` (string, forward-slash paths, directories end with `/`), `compressedSize` (int bytes), `uncompressedSize` (int bytes), `isDir` (bool), `perm` (int POSIX permission bits), `executable` (bool), and `modified` (datetime from the archive entry). `(path -- [dict])`
+- `zipExtract`: Extract an entire archive. Options dict is required; defaults: `overwrite=false`, `skipExisting=false` (mutually exclusive), `stripComponents=0`, `pattern=""` (glob matched before stripping), `preservePermissions=true`. Destination is created if missing. `(path:zipPath path:destDir dict:options -- )`
+- `zipExtractEntry`: Extract a single entry (file or directory subtree) to a destination path. Options dict is required; defaults: `overwrite=false`, `skipExisting=false` (mutually exclusive), `preservePermissions=true`, `mkdirs=true`. `(path:zipPath str:entry path:dest dict:options -- )`
+- `zipRead`: Read an entry's bytes directly onto the stack without writing to disk. Returns `none` when the entry does not exist. `(path:zipPath str:entry -- Maybe[binary])`
 
 ## Variables
 
