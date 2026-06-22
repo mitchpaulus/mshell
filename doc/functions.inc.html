@@ -299,6 +299,8 @@
         <tr> <td><code>strCmp</code></td> <td>Compare two strings lexicographically using <a href="https://pkg.go.dev/strings#Compare" target="_blank" rel="noopener noreferrer"><code>strings.Compare</code></a>; returns -1, 0, or 1. Useful with <code>sortByCmp</code>.</td> <td><code>(<span class="sig-type sig-type-str">str</span> <span class="sig-type sig-type-str">str</span> -- <span class="sig-type sig-type-int">int</span>)</code></td> </tr>
         <tr> <td><code>versionSortCmp</code></td> <td>Comparison function for version-aware sorting (also known as natural sort). Useful with <code>sortByCmp</code>.</td> <td><code>(<span class="sig-type sig-type-str">str</span> <span class="sig-type sig-type-str">str</span> -- <span class="sig-type sig-type-int">int</span>)</code></td> </tr>
         <tr> <td><code>floatCmp</code></td> <td>Compare two floats and return -1, 0, or 1; useful with <code>sortByCmp</code>.</td> <td><code>(<span class="sig-type sig-type-float">float</span> <span class="sig-type sig-type-float">float</span> -- <span class="sig-type sig-type-int">int</span>)</code></td> </tr>
+        <tr> <td><code>intCmp</code></td> <td>Compare two ints and return -1, 0, or 1; useful with <code>sortByCmp</code>.</td> <td><code>(<span class="sig-type sig-type-int">int</span> <span class="sig-type sig-type-int">int</span> -- <span class="sig-type sig-type-int">int</span>)</code></td> </tr>
+        <tr> <td><code>dateTimeCmp</code></td> <td>Compare two datetimes and return -1, 0, or 1; useful with <code>sortByCmp</code>.</td> <td><code>(<span class="sig-type sig-type-date">datetime</span> <span class="sig-type sig-type-date">datetime</span> -- <span class="sig-type sig-type-int">int</span>)</code></td> </tr>
     </tbody>
 </table>
 

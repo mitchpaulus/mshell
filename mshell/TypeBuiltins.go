@@ -544,6 +544,8 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		r.reg(name, "(str str -- int)")
 	}
 	r.reg("floatCmp", "(float float -- int)")
+	r.reg("intCmp", "(int int -- int)")
+	r.reg("dateTimeCmp", "(datetime datetime -- int)")
 	r.reg("base64encode", "(bytes -- str)")
 	r.reg("base64decode", "(str -- bytes)")
 	// urlEncode: dict values must be a scalar the runtime can CastString,

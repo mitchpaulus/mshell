@@ -10811,6 +10811,56 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					} else {
 						stack.Push(MShellInt{Value: 0})
 					}
+				} else if t.Lexeme == "intCmp" {
+					// Implement compare function for ints
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					// Both objects should be ints
+					int1, ok := obj1.(MShellInt)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second parameter in 'intCmp' is expected to be an int, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
+					}
+					int2, ok := obj2.(MShellInt)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The first parameter in 'intCmp' is expected to be an int, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
+					}
+
+					// Compare the ints
+					if int2.Value < int1.Value {
+						stack.Push(MShellInt{Value: -1})
+					} else if int2.Value > int1.Value {
+						stack.Push(MShellInt{Value: 1})
+					} else {
+						stack.Push(MShellInt{Value: 0})
+					}
+				} else if t.Lexeme == "dateTimeCmp" {
+					// Implement compare function for DateTimes
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					// Both objects should be DateTimes
+					dt1, ok := obj1.(*MShellDateTime)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second parameter in 'dateTimeCmp' is expected to be a DateTime, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
+					}
+					dt2, ok := obj2.(*MShellDateTime)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The first parameter in 'dateTimeCmp' is expected to be a DateTime, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
+					}
+
+					// Compare the DateTimes
+					if dt2.Time.Before(dt1.Time) {
+						stack.Push(MShellInt{Value: -1})
+					} else if dt2.Time.After(dt1.Time) {
+						stack.Push(MShellInt{Value: 1})
+					} else {
+						stack.Push(MShellInt{Value: 0})
+					}
 				} else if t.Lexeme == "nullDevice" {
 					stack.Push(MShellPath{Path: nullDevice})
 				} else if t.Lexeme == "and" || t.Lexeme == "or" {

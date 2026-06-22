@@ -54,6 +54,8 @@ var BuiltInList = map[string]struct{}{
 	"filter": {},
 	"findReplace": {},
 	"floatCmp": {},
+	"intCmp": {},
+	"dateTimeCmp": {},
 	"floor": {},
 	"fromOleDate": {},
 	"fromUnixTime": {},

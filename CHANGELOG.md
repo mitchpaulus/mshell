@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `uuid7`: Generate a time-ordered (version 7) UUID per RFC 9562, whose leading
     bits encode a Unix millisecond timestamp so values sort chronologically.
     `( -- str)`
+  - `intCmp`: Compare two ints and return -1, 0, or 1. Useful with `sortByCmp`.
+    `(int int -- int)`
+  - `dateTimeCmp`: Compare two datetimes and return -1, 0, or 1. Useful with
+    `sortByCmp`. `(datetime datetime -- int)`
 - `unsetenv`: Remove an environment variable by name. Unsetting a variable that
   does not exist is not an error. `(str -- )`
 - `modTime`: Return a file's last modification time as a `datetime`, the one file
