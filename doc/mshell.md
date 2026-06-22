@@ -1187,6 +1187,8 @@ groupBy
 - `strCmp`: Compare two strings lexicographically using Go's [`strings.Compare`](https://pkg.go.dev/strings#Compare); returns -1, 0, or 1. Useful with `sortByCmp`. `(str str -- int)`
 - `versionSortCmp`: A comparison function for use with `sortByCmp`. Used to implement "version sort" or "natural sort". `(str str -- int)`
 - `floatCmp`: Compare two floats and return -1, 0, or 1. Useful with `sortByCmp` for numeric sorting. `(float float -- int)`
+- `intCmp`: Compare two ints and return -1, 0, or 1. Useful with `sortByCmp` for numeric sorting. `(int int -- int)`
+- `dateTimeCmp`: Compare two datetimes and return -1, 0, or 1. Useful with `sortByCmp` for chronological sorting. `(datetime datetime -- int)`
 
 ## Dictionary Functions
 
