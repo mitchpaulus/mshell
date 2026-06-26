@@ -436,8 +436,8 @@ type ExecuteContext struct {
 	ShouldCloseOutput bool
 	ShouldCloseError  bool
 	Pbm               IPathBinManager
-	InPipeline        bool      // True if this is part of a pipeline; foreground handling is done by RunPipeline
-	PipelinePidChan   chan int  // Channel for reporting process PID to pipeline manager (optional, only set for pipelines)
+	InPipeline        bool            // True if this is part of a pipeline; foreground handling is done by RunPipeline
+	PipelineGroup     *PipelineGroup  // Shared process-group coordinator for the pipeline (only set for pipelines)
 }
 
 func (context *ExecuteContext) CloneLessVariables() *ExecuteContext {
@@ -450,7 +450,7 @@ func (context *ExecuteContext) CloneLessVariables() *ExecuteContext {
 		ShouldCloseError:  context.ShouldCloseError,
 		Pbm:               context.Pbm,
 		InPipeline:        context.InPipeline,
-		PipelinePidChan:   context.PipelinePidChan,
+		PipelineGroup:     context.PipelineGroup,
 	}
 
 	newContext.Variables = make(map[string]MShellObject)
@@ -3933,9 +3933,39 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 	var startErr error
 	var exitCode int
 
+	// Pipeline job control: place every external stage in one shared process
+	// group so RunPipeline can make the whole pipeline the terminal's foreground
+	// process group at once. The first stage to reach this point leads the group
+	// (its own new group); the rest join the leader's group. This is what lets an
+	// interactive stage like 'nvim -' or 'less' own the terminal instead of being
+	// stopped by SIGTTIN. SetCommandPgid is a no-op on Windows.
+	pgIsLeader := false
+	if context.InPipeline && context.PipelineGroup != nil {
+		pgIsLeader = context.PipelineGroup.claimLeader()
+		if pgIsLeader {
+			SetCommandPgid(cmd, 0) // 0 => start a new process group led by this child
+		} else {
+			SetCommandPgid(cmd, context.PipelineGroup.leaderPgid())
+		}
+	}
+
+	// publishLeader unblocks the follower stages once the leader has started.
+	// Always called right after the leader's Start (even on failure) so followers
+	// never hang waiting for a pgid that will never arrive.
+	publishLeader := func() {
+		if pgIsLeader {
+			pid := 0
+			if cmd.Process != nil {
+				pid = cmd.Process.Pid
+			}
+			context.PipelineGroup.publishLeaderPid(pid)
+		}
+	}
+
 	if list.RunInBackground {
 		// Print out current stdout and stderr
 		startErr = cmd.Start()
+		publishLeader()
 
 		if startErr != nil {
 			fmt.Fprintf(os.Stderr, "Error starting command: %s\n", startErr.Error())
@@ -3947,6 +3977,7 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 	} else {
 		// Use Start + Wait instead of Run so we can set the foreground process group
 		startErr = cmd.Start()
+		publishLeader()
 		if startErr != nil {
 			fmt.Fprintf(os.Stderr, "Error starting command: %s\n", startErr.Error())
 			fmt.Fprintf(os.Stderr, "Command: '%s'\n", cmd.Path)
@@ -3955,15 +3986,6 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 			}
 			exitCode = classifyStartError(startErr)
 		} else {
-			// If we're in a pipeline, report the PID so RunPipeline can manage foreground
-			if context.InPipeline && context.PipelinePidChan != nil && cmd.Process != nil {
-				select {
-				case context.PipelinePidChan <- cmd.Process.Pid:
-				default:
-					// Channel full or closed, that's fine - first process already reported
-				}
-			}
-
 			// If stdin is a terminal and we're not in a pipeline, set the subprocess as
 			// the foreground process group so that CTRL-C goes to it instead of the shell.
 			// For pipelines, RunPipeline handles foreground process group management.
@@ -4013,6 +4035,70 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 	return SimpleSuccess(), exitCode, commandSubWriter.Bytes(), stderrBuffer.Bytes()
 }
 
+// PipelineGroup coordinates a single, shared process group for every external
+// stage of a pipeline. The first external stage to start becomes the group
+// leader (its own new process group); the remaining external stages join the
+// leader's group. This lets the whole pipeline be made the terminal's
+// foreground process group at once, which is required for an interactive stage
+// (e.g. 'nvim -', 'less', 'fzf') to read the controlling terminal without being
+// stopped by SIGTTIN. On Windows there is no such gating; see SetCommandPgid.
+type PipelineGroup struct {
+	mu      sync.Mutex
+	claimed bool          // whether a leader has been chosen
+	pgid    int           // leader pid == process group id; 0 until known/usable
+	ready   chan struct{} // closed once the leader has started (or failed to)
+}
+
+func NewPipelineGroup() *PipelineGroup {
+	return &PipelineGroup{ready: make(chan struct{})}
+}
+
+// claimLeader returns true for exactly one caller per pipeline: the stage that
+// should start as the group leader. All other callers get false and must join
+// the leader's group via leaderPgid.
+func (pg *PipelineGroup) claimLeader() bool {
+	pg.mu.Lock()
+	defer pg.mu.Unlock()
+	if pg.claimed {
+		return false
+	}
+	pg.claimed = true
+	return true
+}
+
+// publishLeaderPid records the leader's pid (the group id) and unblocks any
+// followers waiting in leaderPgid. A pid of 0 means the leader failed to start;
+// followers then fall back to their own process groups.
+func (pg *PipelineGroup) publishLeaderPid(pid int) {
+	pg.mu.Lock()
+	pg.pgid = pid
+	pg.mu.Unlock()
+	close(pg.ready)
+}
+
+// leaderPgid blocks until the leader has started, then returns the shared pgid
+// (0 if there is no usable leader, meaning "create your own group").
+func (pg *PipelineGroup) leaderPgid() int {
+	<-pg.ready
+	pg.mu.Lock()
+	defer pg.mu.Unlock()
+	return pg.pgid
+}
+
+// foregroundPgid waits up to the given timeout for the leader to start and
+// returns its pgid, or 0 if no external leader started in time (e.g. an
+// all-builtin pipeline).
+func (pg *PipelineGroup) foregroundPgid(timeout time.Duration) int {
+	select {
+	case <-pg.ready:
+		pg.mu.Lock()
+		defer pg.mu.Unlock()
+		return pg.pgid
+	case <-time.After(timeout):
+		return 0
+	}
+}
+
 func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContext, stack *MShellStack) (EvalResult, int, []byte, []byte) {
 	if len(MShellPipe.List.Items) == 0 {
 		return state.FailWithMessage("Cannot execute an empty pipe.\n"), 1, nil, nil
@@ -4050,17 +4136,18 @@ func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContex
 	var buf bytes.Buffer
 	var stdErrBuf bytes.Buffer
 
-	// Create a channel to receive the first process PID for foreground management
-	pidChan := make(chan int, 1)
+	// Coordinator that places all external stages in one process group so the
+	// whole pipeline can be made the terminal's foreground process group.
+	pipelineGroup := NewPipelineGroup()
 
 	for i := 0; i < len(MShellPipe.List.Items); i++ {
 		newContext := ExecuteContext{
-			StandardInput:   nil,
-			StandardOutput:  nil,
-			Variables:       context.Variables,
-			Pbm:             context.Pbm,
-			InPipeline:      true,
-			PipelinePidChan: pidChan,
+			StandardInput:  nil,
+			StandardOutput: nil,
+			Variables:      context.Variables,
+			Pbm:            context.Pbm,
+			InPipeline:     true,
+			PipelineGroup:  pipelineGroup,
 		}
 
 		if i == 0 {
@@ -4128,19 +4215,20 @@ func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContex
 		}(i, item.(Executable))
 	}
 
-	// Set the first process that reports its PID as the foreground process group
-	// so that CTRL-C goes to the pipeline instead of the shell
+	// Make the pipeline's shared process group the terminal foreground so CTRL-C
+	// goes to the pipeline instead of the shell, and so an interactive stage can
+	// read the controlling terminal. Wait briefly for the leader to start; if no
+	// external process starts (e.g. an all-builtin pipeline), skip foreground.
 	stdinFd := int(os.Stdin.Fd())
 	setForeground := IsTerminal(stdinFd)
 	if setForeground {
-		select {
-		case pid := <-pidChan:
+		pgid := pipelineGroup.foregroundPgid(100 * time.Millisecond)
+		if pgid > 0 {
 			// Ignore SIGTTOU/SIGTTIN to prevent shell from stopping when manipulating foreground
 			restoreSignals := IgnoreSignalsForJobControl()
-			SetForegroundProcessGroup(stdinFd, pid)
+			SetForegroundProcessGroup(stdinFd, pgid)
 			restoreSignals()
-		case <-time.After(100 * time.Millisecond):
-			// No external process started within timeout (maybe all are built-ins)
+		} else {
 			setForeground = false
 		}
 	}
