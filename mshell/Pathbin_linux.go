@@ -214,6 +214,18 @@ func (pbm *PathBinManager) SetupCommand(allArgs []string) (*exec.Cmd) {
 	return cmd
 }
 
+// SetCommandPgid configures the process group a pipeline stage joins before it
+// is started. pgid == 0 makes the new process the leader of its own process
+// group; a positive pgid makes it join that existing group so the whole
+// pipeline shares one process group and can be the terminal foreground together.
+func SetCommandPgid(cmd *exec.Cmd, pgid int) {
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.Setpgid = true
+	cmd.SysProcAttr.Pgid = pgid
+}
+
 // IgnoreSignalsForJobControl ignores SIGTTOU and SIGTTIN which would stop the shell
 // when it manipulates the foreground process group. Returns a function to restore signals.
 func IgnoreSignalsForJobControl() func() {

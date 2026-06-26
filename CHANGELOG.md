@@ -37,6 +37,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Interactive programs now work as a stage of a pipeline. A command that drives
+  the terminal (e.g. `... | nvim -`, `... | less`, `... | fzf`) is no longer
+  stopped on startup: every external stage of a pipeline is now placed in one
+  shared process group that becomes the terminal's foreground group, instead of
+  each stage getting its own group with only one (whichever started first)
+  receiving the terminal.
 - The file manager preview now times out instead of hanging when a file is slow
   to read. Cloud-backed files (e.g. OneDrive "files on demand") could block the
   preview worker indefinitely while hydrating, freezing previews for every other
