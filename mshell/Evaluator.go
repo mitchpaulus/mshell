@@ -438,6 +438,7 @@ type ExecuteContext struct {
 	Pbm               IPathBinManager
 	InPipeline        bool            // True if this is part of a pipeline; foreground handling is done by RunPipeline
 	PipelineGroup     *PipelineGroup  // Shared process-group coordinator for the pipeline (only set for pipelines)
+	LaunchOnce        *sync.Once      // Signals this stage launched, exactly once (only set for pipeline stages)
 }
 
 func (context *ExecuteContext) CloneLessVariables() *ExecuteContext {
@@ -451,6 +452,7 @@ func (context *ExecuteContext) CloneLessVariables() *ExecuteContext {
 		Pbm:               context.Pbm,
 		InPipeline:        context.InPipeline,
 		PipelineGroup:     context.PipelineGroup,
+		LaunchOnce:        context.LaunchOnce,
 	}
 
 	newContext.Variables = make(map[string]MShellObject)
@@ -3962,10 +3964,22 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 		}
 	}
 
+	// markLaunched reports that this stage has finished launching (forked, or
+	// failed to). Called right after Start so the leader's launch barrier counts
+	// it whether or not the exec succeeded. Start never blocks on pipe data, so a
+	// follower reports here promptly even though it will later block reading its
+	// input -- the leader therefore never waits on downstream data flow.
+	markLaunched := func() {
+		if context.InPipeline && context.PipelineGroup != nil && context.LaunchOnce != nil {
+			context.LaunchOnce.Do(context.PipelineGroup.markStageLaunched)
+		}
+	}
+
 	if list.RunInBackground {
 		// Print out current stdout and stderr
 		startErr = cmd.Start()
 		publishLeader()
+		markLaunched()
 
 		if startErr != nil {
 			fmt.Fprintf(os.Stderr, "Error starting command: %s\n", startErr.Error())
@@ -3978,6 +3992,7 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 		// Use Start + Wait instead of Run so we can set the foreground process group
 		startErr = cmd.Start()
 		publishLeader()
+		markLaunched()
 		if startErr != nil {
 			fmt.Fprintf(os.Stderr, "Error starting command: %s\n", startErr.Error())
 			fmt.Fprintf(os.Stderr, "Command: '%s'\n", cmd.Path)
@@ -3996,6 +4011,16 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 				restoreSignals := IgnoreSignalsForJobControl()
 				SetForegroundProcessGroup(stdinFd, cmd.Process.Pid)
 				restoreSignals()
+			}
+
+			// As the pipeline group leader, wait until every other stage has
+			// launched (and joined this process group) before reaping ourselves.
+			// Reaping the leader first would tear down the shared process group
+			// while a follower is still calling setpgid to join it, which fails
+			// with EPERM and drops that stage's output. Followers do not need this
+			// barrier: reaping a non-leader never destroys the group.
+			if pgIsLeader && context.PipelineGroup != nil {
+				context.PipelineGroup.waitAllStagesLaunched()
 			}
 
 			waitErr := cmd.Wait()
@@ -4047,10 +4072,44 @@ type PipelineGroup struct {
 	claimed bool          // whether a leader has been chosen
 	pgid    int           // leader pid == process group id; 0 until known/usable
 	ready   chan struct{} // closed once the leader has started (or failed to)
+
+	// Launch barrier: the leader must not reap itself (cmd.Wait) until every
+	// stage has finished launching, otherwise reaping destroys the shared
+	// process group while a follower is still calling setpgid to join it, which
+	// fails with EPERM and silently drops that stage. launchRemaining starts at
+	// the stage count and is decremented once per stage; launchDone closes at 0.
+	launchRemaining int
+	launchDone      chan struct{}
 }
 
-func NewPipelineGroup() *PipelineGroup {
-	return &PipelineGroup{ready: make(chan struct{})}
+func NewPipelineGroup(totalStages int) *PipelineGroup {
+	return &PipelineGroup{
+		ready:           make(chan struct{}),
+		launchRemaining: totalStages,
+		launchDone:      make(chan struct{}),
+	}
+}
+
+// markStageLaunched records that one pipeline stage has finished launching its
+// process (or determined it has none to launch, e.g. a 'cd' stage or a command
+// that was not found). It must be called exactly once per stage; callers use a
+// per-stage sync.Once to guarantee that. When the last stage reports in, the
+// launch barrier opens.
+func (pg *PipelineGroup) markStageLaunched() {
+	pg.mu.Lock()
+	pg.launchRemaining--
+	last := pg.launchRemaining == 0
+	pg.mu.Unlock()
+	if last {
+		close(pg.launchDone)
+	}
+}
+
+// waitAllStagesLaunched blocks until every stage of the pipeline has launched.
+// The group leader calls this before reaping itself so that no follower's
+// setpgid races against the leader's process group going away.
+func (pg *PipelineGroup) waitAllStagesLaunched() {
+	<-pg.launchDone
 }
 
 // claimLeader returns true for exactly one caller per pipeline: the stage that
@@ -4138,7 +4197,7 @@ func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContex
 
 	// Coordinator that places all external stages in one process group so the
 	// whole pipeline can be made the terminal's foreground process group.
-	pipelineGroup := NewPipelineGroup()
+	pipelineGroup := NewPipelineGroup(len(MShellPipe.List.Items))
 
 	for i := 0; i < len(MShellPipe.List.Items); i++ {
 		newContext := ExecuteContext{
@@ -4148,6 +4207,7 @@ func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContex
 			Pbm:            context.Pbm,
 			InPipeline:     true,
 			PipelineGroup:  pipelineGroup,
+			LaunchOnce:     &sync.Once{},
 		}
 
 		if i == 0 {
@@ -4204,6 +4264,15 @@ func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContex
 			defer wg.Done()
 			// fmt.Fprintf(os.Stderr, "Running item %d\n", i)
 			results[i], exitCodes[i], _, _ = item.Execute(state, contexts[i], stack)
+
+			// Fallback for stages that returned before reaching cmd.Start (a 'cd'
+			// stage, a command not found, or a setup error): they never reported
+			// to the launch barrier from RunProcess. Signal here so the leader can
+			// never hang waiting on a stage that has no process to launch. This is
+			// a no-op for stages that already reported after their Start.
+			if contexts[i].LaunchOnce != nil {
+				contexts[i].LaunchOnce.Do(pipelineGroup.markStageLaunched)
+			}
 
 			// Close pipe ends that are no longer needed
 			if i > 0 {

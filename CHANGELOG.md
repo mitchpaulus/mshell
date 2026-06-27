@@ -42,7 +42,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stopped on startup: every external stage of a pipeline is now placed in one
   shared process group that becomes the terminal's foreground group, instead of
   each stage getting its own group with only one (whichever started first)
-  receiving the terminal.
+  receiving the terminal. The pipeline leader now also waits for every stage to
+  start before reaping itself, fixing an intermittent `setpgid` race that could
+  drop a stage with an "operation not permitted" error and lose its output.
 - The file manager preview now times out instead of hanging when a file is slow
   to read. Cloud-backed files (e.g. OneDrive "files on demand") could block the
   preview worker indefinitely while hydrating, freezing previews for every other
