@@ -36,10 +36,6 @@ const (
 	TidBottom   // divergent: exit, infinite loop, (Phase 2) propagated fail
 )
 
-// firstCompositeId is the id at which user-constructed composite types begin.
-// Anything below this is a primitive baked into the arena at init time.
-const firstCompositeId TypeId = TidBottom + 1
-
 // TypeKind categorizes a TypeNode. The interpretation of TypeNode.A, B, and
 // Extra depends on the kind.
 type TypeKind uint8
@@ -56,6 +52,7 @@ const (
 	TKBrand                    // A = brand id; B = underlying TypeId
 	TKCommand                  // A = argv list TypeId; B = stdout capture; Extra = stderr capture
 	TKVar                      // A = TypeVarId
+	TKRigid                    // A = NameId of the declared generic; see MakeRigid
 
 	// Grid family — built-in like Maybe; see "Grid types" in ai/type_checker.md.
 	TKGrid     // Extra = index into gridSchemas (0 = unknown schema)
@@ -88,6 +85,8 @@ func (k TypeKind) String() string {
 		return "Command"
 	case TKVar:
 		return "Var"
+	case TKRigid:
+		return "Rigid"
 	case TKGrid:
 		return "Grid"
 	case TKGridView:
@@ -145,16 +144,10 @@ type GridSchema struct {
 // QuoteSig is a function or quote signature. Inputs are listed bottom-to-top
 // (so the last element is the top of the consumed stack). Outputs are also
 // listed bottom-to-top. Generics names are local to this sig.
-//
-// Fail and Pure are reserved for Phase 2; in V1 they are TidNothing and
-// false respectively. Including them in the struct now means Phase 2 won't
-// require a struct migration.
 type QuoteSig struct {
 	Inputs   []TypeId
 	Outputs  []TypeId
-	Fail     TypeId // Phase 2
-	Pure     bool   // Phase 2
-	Diverges bool   // return/break/continue style control flow
+	Diverges bool // return/break/continue style control flow
 	Bindings map[NameId]TypeId
 	Generics []TypeVarId
 }
@@ -170,6 +163,10 @@ type QuoteSig struct {
 type TypeArena struct {
 	nodes []TypeNode
 	cons  map[string]TypeId
+	// atomCons hashconses the kinds whose data fits entirely in TypeNode
+	// (no side-table content). Keying on the struct itself avoids the
+	// per-construction string key allocation on the checking hot path.
+	atomCons map[TypeNode]TypeId
 
 	shapeFields    [][]ShapeField
 	quoteSigs      []QuoteSig
@@ -184,7 +181,8 @@ type TypeArena struct {
 // to live nodes.
 func NewTypeArena() *TypeArena {
 	a := &TypeArena{
-		cons: make(map[string]TypeId, 64),
+		cons:     make(map[string]TypeId, 64),
+		atomCons: make(map[TypeNode]TypeId, 64),
 	}
 	// Reserve nothing slot at index 0.
 	a.nodes = append(a.nodes, TypeNode{Kind: TKPrim})
@@ -233,37 +231,48 @@ func (a *TypeArena) Kind(id TypeId) TypeKind {
 // MakeMaybe returns the canonical TypeId for Maybe[inner]. If a Maybe of
 // the same inner type was constructed before, the existing id is returned.
 func (a *TypeArena) MakeMaybe(inner TypeId) TypeId {
-	return a.intern(TKMaybe, uint32(inner), 0, 0, "")
+	return a.intern(TKMaybe, uint32(inner), 0, 0)
 }
 
 // MakeList returns the canonical TypeId for [elem].
 func (a *TypeArena) MakeList(elem TypeId) TypeId {
-	return a.intern(TKList, uint32(elem), 0, 0, "")
+	return a.intern(TKList, uint32(elem), 0, 0)
 }
 
 // MakeDict returns the canonical TypeId for {key: value}.
 func (a *TypeArena) MakeDict(key, value TypeId) TypeId {
-	return a.intern(TKDict, uint32(key), uint32(value), 0, "")
+	return a.intern(TKDict, uint32(key), uint32(value), 0)
 }
 
 // MakeVar returns the canonical TypeId for the generic type variable v.
 // Two calls with the same TypeVarId always return the same TypeId.
 func (a *TypeArena) MakeVar(v TypeVarId) TypeId {
-	return a.intern(TKVar, uint32(v), 0, 0, "")
+	return a.intern(TKVar, uint32(v), 0, 0)
+}
+
+// MakeRigid returns the canonical TypeId for a rigid (skolem) type
+// standing in for a def's declared generic during body checking. A
+// rigid type unifies only with itself (or a free variable, which it
+// binds): the body must prove the declared signature for EVERY
+// instantiation of the generic, so overload resolution inside the body
+// may not pin it to one concrete type. name is the generic's source
+// name (e.g. `a`), used for diagnostics.
+func (a *TypeArena) MakeRigid(name NameId) TypeId {
+	return a.intern(TKRigid, uint32(name), 0, 0)
 }
 
 // MakeBrand returns a nominal-branded type wrapping underlying.
 // Two calls with the same brandId always return the same TypeId, even if
 // underlying differs (which is a programmer error caught at higher levels).
 func (a *TypeArena) MakeBrand(brandId NameId, underlying TypeId) TypeId {
-	return a.intern(TKBrand, uint32(brandId), uint32(underlying), 0, "")
+	return a.intern(TKBrand, uint32(brandId), uint32(underlying), 0)
 }
 
 // MakeCommand returns the canonical TypeId for an executable command value.
 // argv is the underlying command-list type. stdout/stderr capture modes
 // determine the stack outputs produced by `?`, `;`, and `!`.
 func (a *TypeArena) MakeCommand(argv TypeId, stdout, stderr CommandCaptureMode) TypeId {
-	return a.intern(TKCommand, uint32(argv), uint32(stdout), uint32(stderr), "")
+	return a.intern(TKCommand, uint32(argv), uint32(stdout), uint32(stderr))
 }
 
 // MakeShape returns the canonical TypeId for a record/shape type with the
@@ -307,8 +316,6 @@ func (a *TypeArena) MakeUnion(arms []TypeId, brandId NameId) TypeId {
 }
 
 // MakeQuote returns the canonical TypeId for a quote/function signature.
-// In V1, sig.Fail must be TidNothing and sig.Pure must be false; Phase 2
-// will populate them.
 func (a *TypeArena) MakeQuote(sig QuoteSig) TypeId {
 	key := encodeQuoteKey(sig)
 	if id, ok := a.cons[key]; ok {
@@ -345,7 +352,7 @@ func (a *TypeArena) MakeOverloadedQuote(sigs []QuoteSig) TypeId {
 // MakeGrid returns the canonical TypeId for a grid type. schemaIdx of 0
 // denotes "schema unknown" (the V1 default until schema tracking lands).
 func (a *TypeArena) MakeGrid(schemaIdx uint32) TypeId {
-	return a.intern(TKGrid, 0, 0, schemaIdx, "")
+	return a.intern(TKGrid, 0, 0, schemaIdx)
 }
 
 // MakeGridSchemaIdx interns a GridSchema and returns the schema index used by
@@ -374,12 +381,12 @@ func (a *TypeArena) MakeGridSchemaIdx(cols []GridSchemaCol) uint32 {
 
 // MakeGridView returns the canonical TypeId for a grid-view type.
 func (a *TypeArena) MakeGridView(schemaIdx uint32) TypeId {
-	return a.intern(TKGridView, 0, 0, schemaIdx, "")
+	return a.intern(TKGridView, 0, 0, schemaIdx)
 }
 
 // MakeGridRow returns the canonical TypeId for a grid-row type.
 func (a *TypeArena) MakeGridRow(schemaIdx uint32) TypeId {
-	return a.intern(TKGridRow, 0, 0, schemaIdx, "")
+	return a.intern(TKGridRow, 0, 0, schemaIdx)
 }
 
 // ShapeFields returns the fields of a shape type. Caller must not mutate.
@@ -432,16 +439,14 @@ func (a *TypeArena) GridSchema(id TypeId) GridSchema {
 }
 
 // intern looks up an atomic composite type and returns its id, allocating
-// a new node if none existed. extraStr is reserved for a future variant
-// where extras might need to participate in the key but no atomic kind uses
-// it today.
-func (a *TypeArena) intern(kind TypeKind, x, y, extra uint32, extraStr string) TypeId {
-	key := encodeAtomicKey(kind, x, y, extra, extraStr)
-	if id, ok := a.cons[key]; ok {
+// a new node if none existed.
+func (a *TypeArena) intern(kind TypeKind, x, y, extra uint32) TypeId {
+	key := TypeNode{Kind: kind, A: x, B: y, Extra: extra}
+	if id, ok := a.atomCons[key]; ok {
 		return id
 	}
-	id := a.append(TypeNode{Kind: kind, A: x, B: y, Extra: extra})
-	a.cons[key] = id
+	id := a.append(key)
+	a.atomCons[key] = id
 	return id
 }
 
@@ -486,24 +491,6 @@ func (a *TypeArena) flattenAndCanonicalizeUnion(arms []TypeId) []TypeId {
 		}
 	}
 	return out[:w]
-}
-
-// encodeAtomicKey builds the cons-table key for kinds that have all their
-// data in TypeNode (no side-table content).
-func encodeAtomicKey(kind TypeKind, a, b, extra uint32, extraStr string) string {
-	var sb strings.Builder
-	sb.WriteByte(byte(kind) + 'a')
-	sb.WriteByte(':')
-	sb.WriteString(strconv.FormatUint(uint64(a), 10))
-	sb.WriteByte(':')
-	sb.WriteString(strconv.FormatUint(uint64(b), 10))
-	sb.WriteByte(':')
-	sb.WriteString(strconv.FormatUint(uint64(extra), 10))
-	if extraStr != "" {
-		sb.WriteByte(':')
-		sb.WriteString(extraStr)
-	}
-	return sb.String()
 }
 
 // encodeShapeKey builds the cons-table key for a normalized shape.
@@ -568,14 +555,6 @@ func encodeQuoteKey(sig QuoteSig) string {
 			sb.WriteByte(',')
 		}
 		sb.WriteString(strconv.FormatUint(uint64(out), 10))
-	}
-	sb.WriteByte(';')
-	sb.WriteString(strconv.FormatUint(uint64(sig.Fail), 10))
-	sb.WriteByte(';')
-	if sig.Pure {
-		sb.WriteByte('P')
-	} else {
-		sb.WriteByte('-')
 	}
 	sb.WriteByte(';')
 	if sig.Diverges {

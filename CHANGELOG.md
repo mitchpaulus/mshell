@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Functions
+  - `clip`: Copy a string to the system clipboard. Cross-platform, using
+    `pbcopy` on macOS, `clip` on Windows, and `wl-copy`/`xclip`/`xsel` on Linux.
+    `(str -- )`
+  - `uuid`: Generate a random (version 4) UUID per RFC 9562 as a canonical
+    lowercase hyphenated string. `( -- str)`
+  - `uuid7`: Generate a time-ordered (version 7) UUID per RFC 9562, whose leading
+    bits encode a Unix millisecond timestamp so values sort chronologically.
+    `( -- str)`
+  - `intCmp`: Compare two ints and return -1, 0, or 1. Useful with `sortByCmp`.
+    `(int int -- int)`
+  - `dateTimeCmp`: Compare two datetimes and return -1, 0, or 1. Useful with
+    `sortByCmp`. `(datetime datetime -- int)`
+- `unsetenv`: Remove an environment variable by name. Unsetting a variable that
+  does not exist is not an error. `(str -- )`
+- `modTime`: Return a file's last modification time as a `datetime`, the one file
+  timestamp portable across operating systems and filesystems. Returns a `Maybe`
+  (`None` when the file is missing or cannot be stat'd). `(str|path -- Maybe[datetime])`
 - The language server now offers completion on `$` environment variables, drawing
   from the actual process environment as well as any environment variables already
   referenced in the current file.
@@ -19,6 +37,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Interactive programs now work as a stage of a pipeline. A command that drives
+  the terminal (e.g. `... | nvim -`, `... | less`, `... | fzf`) is no longer
+  stopped on startup: every external stage of a pipeline is now placed in one
+  shared process group that becomes the terminal's foreground group, instead of
+  each stage getting its own group with only one (whichever started first)
+  receiving the terminal. The pipeline leader now also waits for every stage to
+  start before reaping itself, fixing an intermittent `setpgid` race that could
+  drop a stage with an "operation not permitted" error and lose its output.
+- The file manager preview now times out instead of hanging when a file is slow
+  to read. Cloud-backed files (e.g. OneDrive "files on demand") could block the
+  preview worker indefinitely while hydrating, freezing previews for every other
+  entry; a slow preview now gives up after a few seconds and shows a placeholder.
 - Match arms that are not a recognized pattern form now produce a clear error
   listing the legal forms, instead of silently failing to bind (and later
   reporting a confusing "unknown identifier" in the arm body).

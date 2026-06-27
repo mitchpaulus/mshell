@@ -1498,8 +1498,8 @@ func defaultBuiltinInfo() map[string]*builtinInfo {
 			Description: "Read stdin into a string.",
 			Signatures:  []string{"(-- str)"},
 		},
-		".s": {
-			Name:        ".s",
+		"stack": {
+			Name:        "stack",
 			Description: "Print the stack at the current location.",
 			Signatures:  []string{"(-- )"},
 		},

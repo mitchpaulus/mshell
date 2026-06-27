@@ -330,6 +330,13 @@ func (pbm *PathBinManager) SetupCommand(allArgs []string) (*exec.Cmd) {
 	}
 }
 
+// SetCommandPgid is a no-op on Windows. Console processes share the console and
+// there is no POSIX process-group/foreground gating that would stop a "background"
+// pipeline stage from reading the terminal, so an interactive stage in a pipeline
+// works without any group juggling. Pipeline CTRL-C handling is done via the
+// console control handler and foregroundPgid bookkeeping instead.
+func SetCommandPgid(cmd *exec.Cmd, pgid int) {}
+
 func IsPathSeparator(c uint8) bool {
 	// Windows uses backslash as path separator
 	return c == '\\' || c == '/'

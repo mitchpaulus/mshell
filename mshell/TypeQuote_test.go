@@ -243,19 +243,21 @@ func TestInferAppliesAtCallSite(t *testing.T) {
 func TestInferBranchingOverloadedQuote(t *testing.T) {
 	// The headline case: `(len 0 !=)` should infer as a multi-sig
 	// overloaded quote because `len` itself is overloaded over its
-	// input shape. Verify both the str and list cases survive so a
-	// downstream `filter` on `[str]` or `[T]` can pick the right one.
+	// input shape. The ground receivers (str, path, grids) are one
+	// union arm in the table, so they survive as a single union-input
+	// sig; a downstream `filter` on `[str]` still unifies because the
+	// contravariant input check distributes over the union.
 	c := freshChecker()
 	sigs := c.InferQuoteSig([]Token{
 		mkTok(LITERAL, "len"),
 		mkTok(INTEGER, "0"),
 		mkTok(NOTEQUAL, "!="),
 	})
-	if !sigsContain(sigs, []TypeId{TidStr}, []TypeId{TidBool}) {
-		t.Fatalf("(len 0 !=): missing (str -- bool) among %d sigs", len(sigs))
-	}
-	if !sigsContain(sigs, []TypeId{TidPath}, []TypeId{TidBool}) {
-		t.Fatalf("(len 0 !=): missing (path -- bool) among %d sigs", len(sigs))
+	ground := c.arena.MakeUnion([]TypeId{
+		TidStr, TidPath, c.arena.MakeGrid(0), c.arena.MakeGridView(0), c.arena.MakeGridRow(0),
+	}, 0)
+	if !sigsContain(sigs, []TypeId{ground}, []TypeId{TidBool}) {
+		t.Fatalf("(len 0 !=): missing (str|path|Grid|GridView|GridRow -- bool) among %d sigs", len(sigs))
 	}
 }
 

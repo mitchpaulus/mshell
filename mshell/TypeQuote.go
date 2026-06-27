@@ -153,6 +153,40 @@ func (c *Checker) driveBranchesOverItems(initial []quoteBranch, body []MShellPar
 	})
 }
 
+// walkJoined drives items through the branching driver from the current
+// checker state and reconciles the surviving branches back into a single
+// live state: one survivor is loaded directly; several that agree on
+// stack size join per-slot (per-slot type unions via joinArmBranches);
+// disagreeing sizes fall back to the first survivor. Used by the
+// sub-walks that need a single value/state at the end (dict-literal
+// values, grid cells, format-string blocks, else-if conditions) and by
+// CheckTokens. Returns false when every branch died — the failing
+// step's error is already recorded.
+func (c *Checker) walkJoined(items []MShellParseItem) bool {
+	branches := c.driveBranchesOverItems([]quoteBranch{c.captureBranch()}, items)
+	if len(branches) == 0 {
+		return false
+	}
+	live := filterLiveBranches(branches)
+	if len(live) == 0 {
+		c.loadBranch(branches[0])
+		return true
+	}
+	if len(live) == 1 {
+		c.loadBranch(live[0])
+		return true
+	}
+	wantSize := len(live[0].stack)
+	for _, b := range live[1:] {
+		if len(b.stack) != wantSize {
+			c.loadBranch(live[0])
+			return true
+		}
+	}
+	c.joinArmBranches(live)
+	return true
+}
+
 // driveBranches is the shared core branching driver. At each step the
 // `next` callback supplies a "step" closure that advances one branch.
 // The driver returns the surviving branches (nil if all died at some
@@ -293,8 +327,6 @@ func (c *Checker) tryBranchStep(b quoteBranch, step func()) ([]quoteBranch, []Ty
 	c.loadBranch(b)
 	savedSpawn := c.branchSpawn
 	c.branchSpawn = nil
-	savedEnabled := c.branchingEnabled
-	c.branchingEnabled = true
 	savedErrs := c.errors
 	c.errors = nil
 	step()
@@ -302,7 +334,6 @@ func (c *Checker) tryBranchStep(b quoteBranch, step func()) ([]quoteBranch, []Ty
 	c.errors = savedErrs
 	spawned := c.branchSpawn
 	c.branchSpawn = savedSpawn
-	c.branchingEnabled = savedEnabled
 	// Info-severity diagnostics (e.g. `dbg` dumps) are passthroughs:
 	// they must not kill the branch, since the step still succeeded
 	// type-wise. Split them out and reattach to the parent's errors
@@ -465,7 +496,7 @@ func mergeableInputDiff(c *Checker, a, b QuoteSig) (int, bool) {
 	if len(a.Inputs) != len(b.Inputs) || len(a.Outputs) != len(b.Outputs) {
 		return 0, false
 	}
-	if a.Diverges != b.Diverges || a.Fail != b.Fail || a.Pure != b.Pure {
+	if a.Diverges != b.Diverges {
 		return 0, false
 	}
 	for i := range a.Outputs {
@@ -582,7 +613,7 @@ func quoteSigEqual(a, b QuoteSig) bool {
 	if len(a.Inputs) != len(b.Inputs) || len(a.Outputs) != len(b.Outputs) {
 		return false
 	}
-	if a.Diverges != b.Diverges || a.Fail != b.Fail || a.Pure != b.Pure {
+	if a.Diverges != b.Diverges {
 		return false
 	}
 	for i := range a.Inputs {

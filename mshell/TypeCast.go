@@ -87,9 +87,8 @@ func (c *Checker) brandify(nameId NameId, body TypeId) TypeId {
 		if n.A != 0 {
 			// Already branded; cannot re-brand. Return unchanged.
 			c.errors = append(c.errors, TypeError{
-				Kind: TErrReservedTypeName, // closest existing kind; refined later
+				Kind: TErrRebrand,
 				Name: c.names.Name(nameId),
-				Hint: "right-hand side is already a branded type",
 			})
 			return body
 		}

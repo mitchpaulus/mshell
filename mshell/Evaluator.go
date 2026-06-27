@@ -5,6 +5,7 @@ import (
 	"archive/zip"
 	"bufio"
 	"bytes"
+	crand "crypto/rand"
 	"crypto/sha256"
 	"encoding/csv"
 	"encoding/base64"
@@ -435,8 +436,9 @@ type ExecuteContext struct {
 	ShouldCloseOutput bool
 	ShouldCloseError  bool
 	Pbm               IPathBinManager
-	InPipeline        bool      // True if this is part of a pipeline; foreground handling is done by RunPipeline
-	PipelinePidChan   chan int  // Channel for reporting process PID to pipeline manager (optional, only set for pipelines)
+	InPipeline        bool            // True if this is part of a pipeline; foreground handling is done by RunPipeline
+	PipelineGroup     *PipelineGroup  // Shared process-group coordinator for the pipeline (only set for pipelines)
+	LaunchOnce        *sync.Once      // Signals this stage launched, exactly once (only set for pipeline stages)
 }
 
 func (context *ExecuteContext) CloneLessVariables() *ExecuteContext {
@@ -449,7 +451,8 @@ func (context *ExecuteContext) CloneLessVariables() *ExecuteContext {
 		ShouldCloseError:  context.ShouldCloseError,
 		Pbm:               context.Pbm,
 		InPipeline:        context.InPipeline,
-		PipelinePidChan:   context.PipelinePidChan,
+		PipelineGroup:     context.PipelineGroup,
+		LaunchOnce:        context.LaunchOnce,
 	}
 
 	newContext.Variables = make(map[string]MShellObject)
@@ -3932,9 +3935,51 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 	var startErr error
 	var exitCode int
 
+	// Pipeline job control: place every external stage in one shared process
+	// group so RunPipeline can make the whole pipeline the terminal's foreground
+	// process group at once. The first stage to reach this point leads the group
+	// (its own new group); the rest join the leader's group. This is what lets an
+	// interactive stage like 'nvim -' or 'less' own the terminal instead of being
+	// stopped by SIGTTIN. SetCommandPgid is a no-op on Windows.
+	pgIsLeader := false
+	if context.InPipeline && context.PipelineGroup != nil {
+		pgIsLeader = context.PipelineGroup.claimLeader()
+		if pgIsLeader {
+			SetCommandPgid(cmd, 0) // 0 => start a new process group led by this child
+		} else {
+			SetCommandPgid(cmd, context.PipelineGroup.leaderPgid())
+		}
+	}
+
+	// publishLeader unblocks the follower stages once the leader has started.
+	// Always called right after the leader's Start (even on failure) so followers
+	// never hang waiting for a pgid that will never arrive.
+	publishLeader := func() {
+		if pgIsLeader {
+			pid := 0
+			if cmd.Process != nil {
+				pid = cmd.Process.Pid
+			}
+			context.PipelineGroup.publishLeaderPid(pid)
+		}
+	}
+
+	// markLaunched reports that this stage has finished launching (forked, or
+	// failed to). Called right after Start so the leader's launch barrier counts
+	// it whether or not the exec succeeded. Start never blocks on pipe data, so a
+	// follower reports here promptly even though it will later block reading its
+	// input -- the leader therefore never waits on downstream data flow.
+	markLaunched := func() {
+		if context.InPipeline && context.PipelineGroup != nil && context.LaunchOnce != nil {
+			context.LaunchOnce.Do(context.PipelineGroup.markStageLaunched)
+		}
+	}
+
 	if list.RunInBackground {
 		// Print out current stdout and stderr
 		startErr = cmd.Start()
+		publishLeader()
+		markLaunched()
 
 		if startErr != nil {
 			fmt.Fprintf(os.Stderr, "Error starting command: %s\n", startErr.Error())
@@ -3946,6 +3991,8 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 	} else {
 		// Use Start + Wait instead of Run so we can set the foreground process group
 		startErr = cmd.Start()
+		publishLeader()
+		markLaunched()
 		if startErr != nil {
 			fmt.Fprintf(os.Stderr, "Error starting command: %s\n", startErr.Error())
 			fmt.Fprintf(os.Stderr, "Command: '%s'\n", cmd.Path)
@@ -3954,15 +4001,6 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 			}
 			exitCode = classifyStartError(startErr)
 		} else {
-			// If we're in a pipeline, report the PID so RunPipeline can manage foreground
-			if context.InPipeline && context.PipelinePidChan != nil && cmd.Process != nil {
-				select {
-				case context.PipelinePidChan <- cmd.Process.Pid:
-				default:
-					// Channel full or closed, that's fine - first process already reported
-				}
-			}
-
 			// If stdin is a terminal and we're not in a pipeline, set the subprocess as
 			// the foreground process group so that CTRL-C goes to it instead of the shell.
 			// For pipelines, RunPipeline handles foreground process group management.
@@ -3973,6 +4011,16 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 				restoreSignals := IgnoreSignalsForJobControl()
 				SetForegroundProcessGroup(stdinFd, cmd.Process.Pid)
 				restoreSignals()
+			}
+
+			// As the pipeline group leader, wait until every other stage has
+			// launched (and joined this process group) before reaping ourselves.
+			// Reaping the leader first would tear down the shared process group
+			// while a follower is still calling setpgid to join it, which fails
+			// with EPERM and drops that stage's output. Followers do not need this
+			// barrier: reaping a non-leader never destroys the group.
+			if pgIsLeader && context.PipelineGroup != nil {
+				context.PipelineGroup.waitAllStagesLaunched()
 			}
 
 			waitErr := cmd.Wait()
@@ -4012,6 +4060,104 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 	return SimpleSuccess(), exitCode, commandSubWriter.Bytes(), stderrBuffer.Bytes()
 }
 
+// PipelineGroup coordinates a single, shared process group for every external
+// stage of a pipeline. The first external stage to start becomes the group
+// leader (its own new process group); the remaining external stages join the
+// leader's group. This lets the whole pipeline be made the terminal's
+// foreground process group at once, which is required for an interactive stage
+// (e.g. 'nvim -', 'less', 'fzf') to read the controlling terminal without being
+// stopped by SIGTTIN. On Windows there is no such gating; see SetCommandPgid.
+type PipelineGroup struct {
+	mu      sync.Mutex
+	claimed bool          // whether a leader has been chosen
+	pgid    int           // leader pid == process group id; 0 until known/usable
+	ready   chan struct{} // closed once the leader has started (or failed to)
+
+	// Launch barrier: the leader must not reap itself (cmd.Wait) until every
+	// stage has finished launching, otherwise reaping destroys the shared
+	// process group while a follower is still calling setpgid to join it, which
+	// fails with EPERM and silently drops that stage. launchRemaining starts at
+	// the stage count and is decremented once per stage; launchDone closes at 0.
+	launchRemaining int
+	launchDone      chan struct{}
+}
+
+func NewPipelineGroup(totalStages int) *PipelineGroup {
+	return &PipelineGroup{
+		ready:           make(chan struct{}),
+		launchRemaining: totalStages,
+		launchDone:      make(chan struct{}),
+	}
+}
+
+// markStageLaunched records that one pipeline stage has finished launching its
+// process (or determined it has none to launch, e.g. a 'cd' stage or a command
+// that was not found). It must be called exactly once per stage; callers use a
+// per-stage sync.Once to guarantee that. When the last stage reports in, the
+// launch barrier opens.
+func (pg *PipelineGroup) markStageLaunched() {
+	pg.mu.Lock()
+	pg.launchRemaining--
+	last := pg.launchRemaining == 0
+	pg.mu.Unlock()
+	if last {
+		close(pg.launchDone)
+	}
+}
+
+// waitAllStagesLaunched blocks until every stage of the pipeline has launched.
+// The group leader calls this before reaping itself so that no follower's
+// setpgid races against the leader's process group going away.
+func (pg *PipelineGroup) waitAllStagesLaunched() {
+	<-pg.launchDone
+}
+
+// claimLeader returns true for exactly one caller per pipeline: the stage that
+// should start as the group leader. All other callers get false and must join
+// the leader's group via leaderPgid.
+func (pg *PipelineGroup) claimLeader() bool {
+	pg.mu.Lock()
+	defer pg.mu.Unlock()
+	if pg.claimed {
+		return false
+	}
+	pg.claimed = true
+	return true
+}
+
+// publishLeaderPid records the leader's pid (the group id) and unblocks any
+// followers waiting in leaderPgid. A pid of 0 means the leader failed to start;
+// followers then fall back to their own process groups.
+func (pg *PipelineGroup) publishLeaderPid(pid int) {
+	pg.mu.Lock()
+	pg.pgid = pid
+	pg.mu.Unlock()
+	close(pg.ready)
+}
+
+// leaderPgid blocks until the leader has started, then returns the shared pgid
+// (0 if there is no usable leader, meaning "create your own group").
+func (pg *PipelineGroup) leaderPgid() int {
+	<-pg.ready
+	pg.mu.Lock()
+	defer pg.mu.Unlock()
+	return pg.pgid
+}
+
+// foregroundPgid waits up to the given timeout for the leader to start and
+// returns its pgid, or 0 if no external leader started in time (e.g. an
+// all-builtin pipeline).
+func (pg *PipelineGroup) foregroundPgid(timeout time.Duration) int {
+	select {
+	case <-pg.ready:
+		pg.mu.Lock()
+		defer pg.mu.Unlock()
+		return pg.pgid
+	case <-time.After(timeout):
+		return 0
+	}
+}
+
 func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContext, stack *MShellStack) (EvalResult, int, []byte, []byte) {
 	if len(MShellPipe.List.Items) == 0 {
 		return state.FailWithMessage("Cannot execute an empty pipe.\n"), 1, nil, nil
@@ -4049,17 +4195,19 @@ func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContex
 	var buf bytes.Buffer
 	var stdErrBuf bytes.Buffer
 
-	// Create a channel to receive the first process PID for foreground management
-	pidChan := make(chan int, 1)
+	// Coordinator that places all external stages in one process group so the
+	// whole pipeline can be made the terminal's foreground process group.
+	pipelineGroup := NewPipelineGroup(len(MShellPipe.List.Items))
 
 	for i := 0; i < len(MShellPipe.List.Items); i++ {
 		newContext := ExecuteContext{
-			StandardInput:   nil,
-			StandardOutput:  nil,
-			Variables:       context.Variables,
-			Pbm:             context.Pbm,
-			InPipeline:      true,
-			PipelinePidChan: pidChan,
+			StandardInput:  nil,
+			StandardOutput: nil,
+			Variables:      context.Variables,
+			Pbm:            context.Pbm,
+			InPipeline:     true,
+			PipelineGroup:  pipelineGroup,
+			LaunchOnce:     &sync.Once{},
 		}
 
 		if i == 0 {
@@ -4117,6 +4265,15 @@ func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContex
 			// fmt.Fprintf(os.Stderr, "Running item %d\n", i)
 			results[i], exitCodes[i], _, _ = item.Execute(state, contexts[i], stack)
 
+			// Fallback for stages that returned before reaching cmd.Start (a 'cd'
+			// stage, a command not found, or a setup error): they never reported
+			// to the launch barrier from RunProcess. Signal here so the leader can
+			// never hang waiting on a stage that has no process to launch. This is
+			// a no-op for stages that already reported after their Start.
+			if contexts[i].LaunchOnce != nil {
+				contexts[i].LaunchOnce.Do(pipelineGroup.markStageLaunched)
+			}
+
 			// Close pipe ends that are no longer needed
 			if i > 0 {
 				pipeReaders[i-1].(io.Closer).Close()
@@ -4127,19 +4284,20 @@ func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContex
 		}(i, item.(Executable))
 	}
 
-	// Set the first process that reports its PID as the foreground process group
-	// so that CTRL-C goes to the pipeline instead of the shell
+	// Make the pipeline's shared process group the terminal foreground so CTRL-C
+	// goes to the pipeline instead of the shell, and so an interactive stage can
+	// read the controlling terminal. Wait briefly for the leader to start; if no
+	// external process starts (e.g. an all-builtin pipeline), skip foreground.
 	stdinFd := int(os.Stdin.Fd())
 	setForeground := IsTerminal(stdinFd)
 	if setForeground {
-		select {
-		case pid := <-pidChan:
+		pgid := pipelineGroup.foregroundPgid(100 * time.Millisecond)
+		if pgid > 0 {
 			// Ignore SIGTTOU/SIGTTIN to prevent shell from stopping when manipulating foreground
 			restoreSignals := IgnoreSignalsForJobControl()
-			SetForegroundProcessGroup(stdinFd, pid)
+			SetForegroundProcessGroup(stdinFd, pgid)
 			restoreSignals()
-		case <-time.After(100 * time.Millisecond):
-			// No external process started within timeout (maybe all are built-ins)
+		} else {
 			setForeground = false
 		}
 	}
@@ -4363,6 +4521,99 @@ func ParseJsonObjToMshell(jsonObj any) MShellObject {
 //	"\\\\?\\UNC\\server\\share\\dir"       -> "dir"
 //	"\\\\?\\Volume{GUID}\\Windows\\Temp"   -> "Windows\\Temp"
 //	"\\\\.\\COM1"                          -> ""  (device path, no remainder)
+// UUID generation per RFC 9562. The version-4 and version-7 bit layouts are
+// fixed by the spec. For version 7 we also stash the sub-millisecond fraction
+// of the clock into the rand_a field and bump it on collisions, so that UUIDs
+// minted within the same millisecond still sort in creation order — a
+// monotonicity technique popularized by github.com/google/uuid, implemented
+// here from scratch to avoid taking on a dependency.
+
+var (
+	uuidMu     sync.Mutex
+	uuidLastV7 int64 // previous (unixMilli<<12 | subMilliSeq), guards monotonicity
+)
+
+// randomUuidBytes returns 16 random bytes with the RFC 4122 variant bits set.
+// Callers stamp in the version nibble for their specific UUID version.
+func randomUuidBytes() ([16]byte, error) {
+	var b [16]byte
+	if _, err := crand.Read(b[:]); err != nil {
+		return b, err
+	}
+	b[8] = (b[8] & 0x3f) | 0x80 // variant 10xx
+	return b, nil
+}
+
+// NewUuidV4 returns a random (version 4) UUID as a canonical hyphenated string.
+func NewUuidV4() (string, error) {
+	b, err := randomUuidBytes()
+	if err != nil {
+		return "", err
+	}
+	b[6] = (b[6] & 0x0f) | 0x40 // version 4
+	return formatUuid(b), nil
+}
+
+// NewUuidV7 returns a time-ordered (version 7) UUID as a canonical hyphenated
+// string: a 48-bit Unix-millisecond timestamp, then a 12-bit sub-millisecond
+// sequence in rand_a for in-creation-order sorting, then random bits.
+func NewUuidV7() (string, error) {
+	b, err := randomUuidBytes()
+	if err != nil {
+		return "", err
+	}
+	milli, seq := nextUuidV7Time()
+	b[0] = byte(milli >> 40)
+	b[1] = byte(milli >> 32)
+	b[2] = byte(milli >> 24)
+	b[3] = byte(milli >> 16)
+	b[4] = byte(milli >> 8)
+	b[5] = byte(milli)
+	b[6] = 0x70 | (byte(seq>>8) & 0x0f) // version 7 over the top of rand_a
+	b[7] = byte(seq)
+	return formatUuid(b), nil
+}
+
+// nextUuidV7Time returns the current Unix time in milliseconds plus a 12-bit
+// sequence taken from the sub-millisecond fraction. The combined value
+// (milli<<12 | seq) strictly increases across calls, so two version-7 UUIDs
+// generated in the same millisecond never share a time-ordered prefix.
+func nextUuidV7Time() (milli, seq int64) {
+	const nanosPerMilli = 1_000_000
+
+	uuidMu.Lock()
+	defer uuidMu.Unlock()
+
+	nanos := time.Now().UnixNano()
+	milli = nanos / nanosPerMilli
+	seq = (nanos % nanosPerMilli) >> 8 // 0..3905, fits in 12 bits
+	combined := milli<<12 | seq
+	if combined <= uuidLastV7 {
+		combined = uuidLastV7 + 1
+		milli = combined >> 12
+		seq = combined & 0xfff
+	}
+	uuidLastV7 = combined
+	return milli, seq
+}
+
+// formatUuid renders 16 bytes as the canonical lowercase 8-4-4-4-12 string.
+func formatUuid(b [16]byte) string {
+	const hexDigits = "0123456789abcdef"
+	var out [36]byte
+	i := 0
+	for pos, n := range b {
+		if pos == 4 || pos == 6 || pos == 8 || pos == 10 {
+			out[i] = '-'
+			i++
+		}
+		out[i] = hexDigits[n>>4]
+		out[i+1] = hexDigits[n&0x0f]
+		i += 2
+	}
+	return string(out[:])
+}
+
 func StripVolumePrefix(p string) string {
 	if runtime.GOOS != "windows" {
 		return p
@@ -6065,6 +6316,20 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(MShellString{string(content)})
+				} else if t.Lexeme == "clip" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'clip' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					text, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot copy a %s to the clipboard.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					if err := writeSystemClipboard(text); err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error copying to clipboard: %s\n", t.Line, t.Column, err.Error()))
+					}
 				} else if t.Lexeme == "readFileBytes" {
 					obj1, err := stack.Pop()
 					if err != nil {
@@ -6562,6 +6827,26 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(MShellPath{path})
+				} else if t.Lexeme == "unsetenv" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'unsetenv' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					varName, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot use a %s as an environment variable name.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					err = os.Unsetenv(varName)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Could not unset the environment variable '%s'.\n", t.Line, t.Column, varName))
+					}
+
+					// If it was the PATH, refresh all the binaries
+					if varName == "PATH" {
+						context.Pbm.Update()
+					}
 				} else if t.Lexeme == "dateFmt" {
 					obj1, err := stack.Pop()
 					if err != nil {
@@ -7354,6 +7639,25 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						stack.Push(&Maybe{obj: nil})
 					} else {
 						stack.Push(&Maybe{obj: MShellInt{int(fileInfo.Size())}})
+					}
+				} else if t.Lexeme == "modTime" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'modTime' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					path, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot get the modification time of a %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					var fileInfo os.FileInfo
+					fileInfo, err = os.Stat(path)
+					if err != nil {
+						stack.Push(&Maybe{obj: nil})
+					} else {
+						modTime := fileInfo.ModTime()
+						stack.Push(&Maybe{obj: &MShellDateTime{Time: modTime, OriginalString: modTime.Format(time.RFC3339)}})
 					}
 				} else if t.Lexeme == "lsDir" {
 					obj1, err := stack.Pop()
@@ -10214,6 +10518,18 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					} else {
 						stack.Push(MShellString{host})
 					}
+				} else if t.Lexeme == "uuid" {
+					s, err := NewUuidV4()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Failed to generate a UUID: %s\n", t.Line, t.Column, err.Error()))
+					}
+					stack.Push(MShellString{s})
+				} else if t.Lexeme == "uuid7" {
+					s, err := NewUuidV7()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Failed to generate a UUID: %s\n", t.Line, t.Column, err.Error()))
+					}
+					stack.Push(MShellString{s})
 				} else if t.Lexeme == "removeWindowsVolumePrefix" {
 					obj, err := stack.Pop()
 					if err != nil {
@@ -10648,6 +10964,56 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					if float2.Value < float1.Value {
 						stack.Push(MShellInt{Value: -1})
 					} else if float2.Value > float1.Value {
+						stack.Push(MShellInt{Value: 1})
+					} else {
+						stack.Push(MShellInt{Value: 0})
+					}
+				} else if t.Lexeme == "intCmp" {
+					// Implement compare function for ints
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					// Both objects should be ints
+					int1, ok := obj1.(MShellInt)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second parameter in 'intCmp' is expected to be an int, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
+					}
+					int2, ok := obj2.(MShellInt)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The first parameter in 'intCmp' is expected to be an int, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
+					}
+
+					// Compare the ints
+					if int2.Value < int1.Value {
+						stack.Push(MShellInt{Value: -1})
+					} else if int2.Value > int1.Value {
+						stack.Push(MShellInt{Value: 1})
+					} else {
+						stack.Push(MShellInt{Value: 0})
+					}
+				} else if t.Lexeme == "dateTimeCmp" {
+					// Implement compare function for DateTimes
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					// Both objects should be DateTimes
+					dt1, ok := obj1.(*MShellDateTime)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second parameter in 'dateTimeCmp' is expected to be a DateTime, found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
+					}
+					dt2, ok := obj2.(*MShellDateTime)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The first parameter in 'dateTimeCmp' is expected to be a DateTime, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
+					}
+
+					// Compare the DateTimes
+					if dt2.Time.Before(dt1.Time) {
+						stack.Push(MShellInt{Value: -1})
+					} else if dt2.Time.After(dt1.Time) {
 						stack.Push(MShellInt{Value: 1})
 					} else {
 						stack.Push(MShellInt{Value: 0})

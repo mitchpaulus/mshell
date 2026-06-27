@@ -3,10 +3,6 @@ package main
 // Static type-check errors collected by the Checker. Format() materializes
 // human-readable text only at print time, so the hot path can append errors
 // without touching the arena's name machinery.
-//
-// Phase 2 scope: a small set of error kinds for arithmetic-only checking.
-// More kinds (overload ambiguity, generic-instantiation failure, branch
-// mismatch, etc.) land alongside the phases that need them.
 
 import (
 	"fmt"
@@ -24,10 +20,8 @@ const (
 	TErrMaybeUnset // variable bound on some control-flow paths but not others
 	TErrLeftoverStack // top-level program left items on the stack at end (informational; not always an error)
 	TErrBranchStackSize
-	TErrBranchVarSet
 	TErrDefBodyMismatch // def's declared sig and body stack effect disagree
 	TErrNonExhaustiveMatch
-	TErrAmbiguousOverload
 	TErrNoMatchingOverload
 	// TErrAmbiguousTyping is emitted when the branching walker reaches
 	// the end of a program (or a synchronization point) with more than
@@ -37,6 +31,9 @@ const (
 	TErrAmbiguousTyping
 	TErrReservedTypeName
 	TErrDuplicateTypeName
+	// TErrRebrand is emitted when a `type X = ...` right-hand side is
+	// already a branded type (re-branding is not allowed for unions).
+	TErrRebrand
 	TErrInvalidCast
 	TErrTypeParse
 	TErrInterpolationArity
@@ -110,12 +107,8 @@ func (e TypeError) Format(arena *TypeArena, names *NameTable) string {
 		fmt.Fprintf(&sb, "values left on stack at end of program: %s", e.Hint)
 	case TErrBranchStackSize:
 		fmt.Fprintf(&sb, "branches produce stacks of differing sizes: %s", e.Hint)
-	case TErrBranchVarSet:
-		fmt.Fprintf(&sb, "branches bind different variable sets: %s", e.Hint)
 	case TErrNonExhaustiveMatch:
 		fmt.Fprintf(&sb, "non-exhaustive match: %s", e.Hint)
-	case TErrAmbiguousOverload:
-		fmt.Fprintf(&sb, "ambiguous call to '%s': %s", e.Pos.Lexeme, e.Hint)
 	case TErrNoMatchingOverload:
 		fmt.Fprintf(&sb, "no matching overload for '%s': %s", e.Pos.Lexeme, e.Hint)
 	case TErrAmbiguousTyping:
@@ -129,6 +122,8 @@ func (e TypeError) Format(arena *TypeArena, names *NameTable) string {
 		}
 	case TErrDuplicateTypeName:
 		fmt.Fprintf(&sb, "type '%s' is already declared", e.Name)
+	case TErrRebrand:
+		fmt.Fprintf(&sb, "cannot declare type '%s': right-hand side is already a branded type", e.Name)
 	case TErrInvalidCast:
 		fmt.Fprintf(&sb, "invalid cast: cannot cast %s to %s",
 			FormatType(arena, names, e.Actual),
@@ -263,6 +258,8 @@ func FormatType(arena *TypeArena, names *NameTable, id TypeId) string {
 		return sb.String()
 	case TKVar:
 		return fmt.Sprintf("T%d", n.A)
+	case TKRigid:
+		return names.Name(NameId(n.A))
 	case TKGrid:
 		return "Grid"
 	case TKGridView:

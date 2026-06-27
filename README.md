@@ -69,7 +69,7 @@ These examples assume the standard library is installed in the normal startup lo
 | Objective | `sh` | `mshell` |
 |-----------|-----|----------|
 | Print the number of files in the current directory | `ls \| wc -l`                                                | `"*" glob len wl` |
-| `find`/`xargs`                                     |  `find . -t x -name '*.sh' -print0 \|  xargs -0 mycommand`   | `[mycommand [find . -t x -name "*.sh"]]o;` |
+| `find`/`xargs`                                     |  `find . -t x -name '*.sh' -print0 \|  xargs -0 mycommand`   | `[mycommand [find . -t x -name "*.sh" ]*; lines];` |
 | `head` | `head -n 10` | `sl :10 uw` |
 | `tail` | `tail -n 10` | `sl :-10 uw` |
 | `wc` | `wc -l` | `sl len wl` |

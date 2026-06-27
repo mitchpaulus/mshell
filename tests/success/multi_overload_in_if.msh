@@ -6,7 +6,7 @@
 # silently dropped and the live state rewound to pre-dispatch — `in`
 # effectively became a no-op inside the arm.
 
-def f (dict --)
+def f ({v} --)
     seen!
     true if
         @seen "x" in not if

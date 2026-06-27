@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strconv"
 	"fmt"
 	"strings"
 	"unicode/utf8"
@@ -112,7 +113,7 @@ func (c *Checker) CheckProgram(file *MShellFile) {
 	}
 	// Pre-pass 3: type-check each def body against its declared sig.
 	for i := range file.Definitions {
-		c.checkDefBody(&file.Definitions[i], defSigs[i])
+		c.checkDefBody(&file.Definitions[i])
 	}
 	// Flow walk of top-level items via the branching driver. Initial
 	// state is the live checker state captured into a single branch;
@@ -212,7 +213,7 @@ func formatBranchStacks(c *Checker, branches []quoteBranch) string {
 	for i, b := range branches {
 		c.loadBranch(b)
 		sb.WriteString("\n  branch ")
-		sb.WriteString(intToStr(i + 1))
+		sb.WriteString(strconv.Itoa(i + 1))
 		sb.WriteString(":")
 		if c.stack.Len() == 0 {
 			sb.WriteString(" <empty>")
@@ -264,7 +265,7 @@ func lastBranchingTokenInFile(file *MShellFile) Token {
 // — equivalent for the purposes of the declared sig, even if their
 // intermediate types differed. If no branch matches, the closest
 // mismatch is surfaced via TErrDefBodyMismatch.
-func (c *Checker) checkDefBody(def *MShellDefinition, sig QuoteSig) {
+func (c *Checker) checkDefBody(def *MShellDefinition) {
 	// Save outer state.
 	outerStack := c.stack.items
 	outerVars := c.vars.bound
@@ -282,8 +283,14 @@ func (c *Checker) checkDefBody(def *MShellDefinition, sig QuoteSig) {
 	c.inferring = false
 	c.inferInputs = nil
 
-	// Fresh-rename generics for this body check.
-	instSig := c.Instantiate(sig)
+	// Skolemize the declared generics for this body check: each one
+	// becomes a rigid type that the body's overload resolution cannot
+	// bind. Instantiating with ordinary fresh variables would accept a
+	// body that works for SOME instantiation — e.g. a body whose quote
+	// arm requires `a = str` — while the declared sig promises the
+	// effect for EVERY `a`; the runtime then crashes for the other
+	// instantiations.
+	instSig := c.rigidDefSig(def)
 	fnCtx := &FnContext{Sig: instSig}
 	c.currentFn = fnCtx
 
@@ -313,6 +320,33 @@ func (c *Checker) checkDefBody(def *MShellDefinition, sig QuoteSig) {
 	c.diverged = outerDiverged
 	c.inferring = outerInferring
 	c.inferInputs = outerInferInputs
+}
+
+// rigidDefSig resolves the def's signature AST with every declared
+// generic replaced by a rigid skolem type (named after the generic, so
+// diagnostics read `a` rather than a numbered variable). Re-resolving
+// from the AST is deterministic, so the rigid sig's shape matches the
+// generic sig registered for call sites.
+func (c *Checker) rigidDefSig(def *MShellDefinition) QuoteSig {
+	ctx := &typeResolveCtx{}
+	ins := c.resolveSigItems(def.Inputs, ctx)
+	outs := c.resolveSigItems(def.Outputs, ctx)
+	if len(ctx.generics) == 0 {
+		return QuoteSig{Inputs: ins, Outputs: outs}
+	}
+	rename := make(map[TypeVarId]TypeId, len(ctx.generics))
+	for name, v := range ctx.generics {
+		rename[v] = c.arena.MakeRigid(c.names.Intern(name))
+	}
+	rIns := make([]TypeId, len(ins))
+	for i, t := range ins {
+		rIns[i] = c.renameVars(t, rename)
+	}
+	rOuts := make([]TypeId, len(outs))
+	for i, t := range outs {
+		rOuts[i] = c.renameVars(t, rename)
+	}
+	return QuoteSig{Inputs: rIns, Outputs: rOuts}
 }
 
 // reconcileDefBodyBranches accepts the def body iff at least one
@@ -353,7 +387,7 @@ func (c *Checker) reconcileDefBodyBranches(def *MShellDefinition, fnCtx *FnConte
 						Expected: want,
 						Actual:   got,
 						ArgIndex: i,
-						Hint: "output position " + intToStr(i) +
+						Hint: "output position " + strconv.Itoa(i) +
 							" — declared " + FormatType(c.arena, c.names, want) +
 							", body produced " + FormatType(c.arena, c.names, got),
 					}
@@ -373,8 +407,8 @@ func (c *Checker) reconcileDefBodyBranches(def *MShellDefinition, fnCtx *FnConte
 }
 
 func defBodyArityHint(c *Checker, _ string, declared, produced []TypeId) string {
-	return "declared " + intToStr(len(declared)) + " output(s) " + formatTypeList(c, declared) +
-		", body produced " + intToStr(len(produced)) + " " + formatTypeList(c, produced)
+	return "declared " + strconv.Itoa(len(declared)) + " output(s) " + formatTypeList(c, declared) +
+		", body produced " + strconv.Itoa(len(produced)) + " " + formatTypeList(c, produced)
 }
 
 // formatTypeList renders a stack/outputs slice as a parenthesized
@@ -396,27 +430,6 @@ func formatTypeList(c *Checker, items []TypeId) string {
 	return sb.String()
 }
 
-func intToStr(i int) string {
-	if i == 0 {
-		return "0"
-	}
-	neg := i < 0
-	if neg {
-		i = -i
-	}
-	var b [20]byte
-	pos := len(b)
-	for i > 0 {
-		pos--
-		b[pos] = byte('0' + i%10)
-		i /= 10
-	}
-	if neg {
-		pos--
-		b[pos] = '-'
-	}
-	return string(b[pos:])
-}
 
 // checkParseItem dispatches a single parse-tree item, advancing the
 // type stack as appropriate. Unknown / not-yet-implemented item
@@ -500,9 +513,7 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 		fields := make([]ShapeField, 0, len(it.Items))
 		for _, kv := range it.Items {
 			scope := c.snapshotStack()
-			for _, sub := range kv.Value {
-				c.checkParseItem(sub)
-			}
+			c.walkJoined(kv.Value)
 			valueT := c.subst.FreshVar(c.arena)
 			if c.stack.Len() > scope.length {
 				valueT = c.stack.items[c.stack.Len()-1]
@@ -566,7 +577,7 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 					continue
 				}
 				scope := c.snapshotStack()
-				c.checkParseItem(row[ci])
+				c.walkJoined(row[ci : ci+1])
 				if c.stack.Len() > scope.length {
 					cellTypes = append(cellTypes, c.stack.items[c.stack.Len()-1])
 				}
@@ -802,10 +813,11 @@ func (c *Checker) checkIfBlock(ifBlock *MShellParseIfBlock) {
 	for i, elseIf := range ifBlock.ElseIfs {
 		c.loadBranch(entry)
 		c.diverged = false
-		for _, sub := range elseIf.Condition {
-			c.checkParseItem(sub)
-		}
-		if c.stack.Len() == 0 {
+		condOk := c.walkJoined(elseIf.Condition)
+		if !condOk {
+			// The condition's own error is already recorded; checking
+			// the dead branch's residual stack would only add noise.
+		} else if c.stack.Len() == 0 {
 			c.errors = append(c.errors, TypeError{
 				Kind: TErrStackUnderflow,
 				Pos:  startTok,
@@ -995,6 +1007,18 @@ func (c *Checker) joinArmBranches(branches []quoteBranch) {
 	// unioned types are already fully resolved, so they remain valid;
 	// inferInputs / inferring carry over from a representative arm.
 	c.loadBranch(branches[0])
+	// The merged types may carry free variables allocated in sibling
+	// branches whose checkpoints were longer than branch 0's. Pad the
+	// substitution to the longest checkpoint so FreshVar can never
+	// re-issue one of those ids — reuse would silently alias two
+	// unrelated variables.
+	maxLen := 0
+	for _, b := range branches {
+		if n := len(b.substCp.bound); n > maxLen {
+			maxLen = n
+		}
+	}
+	c.subst.PadTo(maxLen)
 	c.stack.items = append(c.stack.items[:0], mergedStack...)
 	c.vars.bound = mergedBound
 	c.vars.maybeBound = mergedMaybe
@@ -1113,7 +1137,7 @@ func formatPatternItem(it MShellParseItem) string {
 //     Refinement (e.g. inside an `int : ...` arm the subject is known
 //     to be int) is a future improvement.
 //
-// Exhaustiveness is enforced via classifyArmPattern + CheckMatchExhaustive:
+// Exhaustiveness is enforced via analyzeArmPattern + CheckMatchExhaustive:
 // the matched value's static type must be fully covered by the arm patterns,
 // or a wildcard `_` arm must be present. Pattern-driven type narrowing inside
 // arms is still a future improvement.
@@ -1141,31 +1165,34 @@ func (c *Checker) checkMatchBlock(matchBlock *MShellParseMatchBlock) {
 	var armLabels []string
 	tags := make([]MatchArmTag, 0, len(matchBlock.Arms))
 	for _, arm := range matchBlock.Arms {
-		if len(arm.Pattern) > 0 && !c.armPatternRecognized(arm.Pattern) {
+		c.loadBranch(entry)
+		c.diverged = false
+		info := c.analyzeArmPattern(subject, arm.Pattern)
+		if len(arm.Pattern) > 0 && !info.Recognized {
 			c.errors = append(c.errors, TypeError{
 				Kind: TErrInvalidMatchPattern,
 				Pos:  arm.Pattern[0].GetStartToken(),
 				Hint: matchPatternFormsHint,
 			})
 		}
-		c.loadBranch(entry)
-		c.diverged = false
 		// Apply per-arm subject handling.
 		if arm.Consume {
 			// Pop the subject — body sees the stack without it.
 			c.stack.items = c.stack.items[:c.stack.Len()-1]
-		} else if nt, ok := c.narrowMatchSubject(arm.Pattern); ok {
+		} else if info.Narrow != TidNothing {
 			// Preserve (`:>`): narrow the on-stack subject to the arm's
 			// matched type, so a `float`/`int`/... arm body sees that
 			// type rather than the full union it matched against.
-			c.stack.items[c.stack.Len()-1] = nt
+			c.stack.items[c.stack.Len()-1] = info.Narrow
 		}
 		// Pattern-introduced bindings flow into the captured arm
 		// like any other binding. Each surviving branch keeps its
 		// own bindings, so per-arm name disagreements naturally
 		// surface as branch differences rather than maybeBound
 		// lifts.
-		c.bindMatchPattern(subject, arm.Pattern)
+		for _, b := range info.Bindings {
+			c.bindPatternName(b.Name, b.Type)
+		}
 
 		label := truncatePatternSnippet(formatPatternSnippet(arm.Pattern))
 		spawned := c.driveBranchesOverItems([]quoteBranch{c.captureBranch()}, arm.Body)
@@ -1173,87 +1200,220 @@ func (c *Checker) checkMatchBlock(matchBlock *MShellParseMatchBlock) {
 			armBranches = append(armBranches, b)
 			armLabels = append(armLabels, label)
 		}
-		tags = append(tags, c.classifyArmPattern(arm.Pattern))
+		tags = append(tags, info.Tag)
 	}
 	c.CheckMatchExhaustive(subject, tags, startTok)
 	c.reconcileArmBranches(armBranches, armLabels, entry, startTok)
 }
 
-// classifyArmPattern reduces a parsed match arm pattern to the
-// MatchArmTag the exhaustiveness checker understands. Anything not
-// recognized as wildcard / just / none / true / false / a known type
-// name is returned as MatchArmType with TidNothing — it counts as a
-// non-wildcard arm but credits no coverage.
-func (c *Checker) classifyArmPattern(pattern []MShellParseItem) MatchArmTag {
-	if len(pattern) == 1 {
-		if list, ok := pattern[0].(*MShellParseList); ok {
-			// `[]` covers empty lists. `[... ...rest]` (any pattern
-			// element whose LITERAL lexeme starts with `...`) is a
-			// rest-binding form that matches every non-empty list
-			// (or every list of length >= prefix count).
-			if len(list.Items) == 0 {
-				return MatchArmTag{Kind: MatchArmEmptyList}
-			}
-			for _, item := range list.Items {
-				if tok, ok := item.(Token); ok && tok.Type == LITERAL &&
-					strings.HasPrefix(tok.Lexeme, "...") {
-					return MatchArmTag{Kind: MatchArmListWithRest}
+// armPattern is the single interpretation of a match arm pattern. One
+// analysis feeds all four consumers that used to re-pattern-match the
+// arm independently: recognition diagnostics (Recognized), the
+// exhaustiveness check (Tag), subject narrowing (Narrow), and
+// pattern-introduced bindings (Bindings).
+type armPattern struct {
+	// Tag is what the exhaustiveness checker understands. Anything not
+	// recognized as wildcard / just / none / true / false / a known
+	// type name is MatchArmType with TidNothing — it counts as a
+	// non-wildcard arm but credits no coverage.
+	Tag MatchArmTag
+	// Recognized reports whether the pattern is one of the legal
+	// match-arm forms; unrecognized patterns get a
+	// TErrInvalidMatchPattern diagnostic rather than silently binding
+	// nothing.
+	Recognized bool
+	// Narrow, when not TidNothing, is the concrete primitive a
+	// preserve-arm (`:>`) refines the on-stack subject to. These
+	// primitives have no subtypes, so the refinement is sound
+	// regardless of the subject's static type. User-declared union
+	// types and destructuring patterns don't narrow — a follow-up.
+	Narrow TypeId
+	// Bindings are the names the pattern introduces for the arm body:
+	// `just name` binds the Maybe payload, `<typekeyword> name` binds
+	// the matched value, `[a b ...rest]` binds elements and the spread
+	// rest, `{ 'key': name }` binds dictionary value names.
+	Bindings []patternBind
+}
+
+type patternBind struct {
+	Name string
+	Type TypeId
+}
+
+// analyzeArmPattern interprets one match arm pattern against the (already
+// captured) subject type. Fresh vars allocated for destructuring binds
+// land in the current branch's substitution, so call it after forking to
+// the arm's entry state.
+func (c *Checker) analyzeArmPattern(subject TypeId, pattern []MShellParseItem) armPattern {
+	out := c.armPatternOf(subject, pattern)
+	out.computeNarrow()
+	return out
+}
+
+func (c *Checker) armPatternOf(subject TypeId, pattern []MShellParseItem) armPattern {
+	out := armPattern{Tag: MatchArmTag{Kind: MatchArmType, TypeArm: TidNothing}}
+
+	switch len(pattern) {
+	case 1:
+		switch p := pattern[0].(type) {
+		case *MShellParseList:
+			out.Recognized = true
+			// `[]` covers empty lists. Any pattern element whose LITERAL
+			// lexeme starts with `...` is a rest-binding form that matches
+			// every list of length >= the prefix count.
+			if len(p.Items) == 0 {
+				out.Tag = MatchArmTag{Kind: MatchArmEmptyList}
+			} else {
+				for _, item := range p.Items {
+					if tok, ok := item.(Token); ok && tok.Type == LITERAL &&
+						strings.HasPrefix(tok.Lexeme, "...") {
+						out.Tag = MatchArmTag{Kind: MatchArmListWithRest}
+						break
+					}
 				}
 			}
+			elem := c.subst.FreshVar(c.arena)
+			if n := c.arena.Node(c.subst.Apply(c.arena, subject)); n.Kind == TKList {
+				elem = TypeId(n.A)
+			}
+			for _, item := range p.Items {
+				tok, ok := item.(Token)
+				if !ok || tok.Type != LITERAL {
+					continue
+				}
+				if len(tok.Lexeme) > 3 && tok.Lexeme[:3] == "..." {
+					out.Bindings = append(out.Bindings, patternBind{tok.Lexeme[3:], c.arena.MakeList(elem)})
+				} else {
+					out.Bindings = append(out.Bindings, patternBind{tok.Lexeme, elem})
+				}
+			}
+		case *MShellParseDict:
+			out.Recognized = true
+			for _, kv := range p.Items {
+				if len(kv.Value) != 1 {
+					continue
+				}
+				if tok, ok := kv.Value[0].(Token); ok && tok.Type == LITERAL {
+					out.Bindings = append(out.Bindings, patternBind{tok.Lexeme, c.subst.FreshVar(c.arena)})
+				}
+			}
+		case Token:
+			c.analyzeTokenPattern(p, &out)
 		}
-		tok, ok := pattern[0].(Token)
-		if ok {
-			switch tok.Type {
-			case TYPEINT:
-				return MatchArmTag{Kind: MatchArmType, TypeArm: TidInt}
-			case TYPEFLOAT:
-				return MatchArmTag{Kind: MatchArmType, TypeArm: TidFloat}
-			case TYPEBOOL:
-				return MatchArmTag{Kind: MatchArmType, TypeArm: TidBool}
-			case STR:
-				return MatchArmTag{Kind: MatchArmType, TypeArm: TidStr}
-			case TRUE:
-				return MatchArmTag{Kind: MatchArmTrue}
-			case FALSE:
-				return MatchArmTag{Kind: MatchArmFalse}
-			case LITERAL:
-				switch tok.Lexeme {
-				case "_":
-					return MatchArmTag{Kind: MatchArmWildcard}
-				case "none":
-					return MatchArmTag{Kind: MatchArmNone}
-				case "path":
-					return MatchArmTag{Kind: MatchArmType, TypeArm: TidPath}
-				case "date":
-					return MatchArmTag{Kind: MatchArmType, TypeArm: TidDateTime}
-				case "binary":
-					return MatchArmTag{Kind: MatchArmType, TypeArm: TidBytes}
-				}
-				// User-declared named type (e.g. `type X = A | B`).
-				if tid := c.LookupType(tok.Lexeme); tid != TidNothing {
-					return MatchArmTag{Kind: MatchArmType, TypeArm: tid}
-				}
-			}
-		}
-	}
-	if len(pattern) == 2 {
+
+	case 2:
 		t0, ok0 := pattern[0].(Token)
 		t1, ok1 := pattern[1].(Token)
-		if ok0 && ok1 && t1.Type == LITERAL {
-			if t0.Type == LITERAL && t0.Lexeme == "just" {
-				return MatchArmTag{Kind: MatchArmJust}
+		if !ok0 || !ok1 || t1.Type != LITERAL {
+			return out
+		}
+		if t0.Type == LITERAL && t0.Lexeme == "just" {
+			out.Recognized = true
+			out.Tag = MatchArmTag{Kind: MatchArmJust}
+			if t1.Lexeme != "_" {
+				if n := c.arena.Node(c.subst.Apply(c.arena, subject)); n.Kind == TKMaybe {
+					out.Bindings = append(out.Bindings, patternBind{t1.Lexeme, TypeId(n.A)})
+				}
 			}
-			// `<typekeyword> name` binds the matched value; for
-			// exhaustiveness it covers the same type as the bare keyword.
+			return out
+		}
+		// `<typekeyword> name` binds the matched value to the type the
+		// keyword tests for; for exhaustiveness it covers the same type
+		// as the bare keyword. Container/other keywords (list, dict,
+		// quotation, maybe) have no single primitive id, so they bind
+		// the subject as-is (the runtime binds the value unchanged),
+		// which is sound if wider.
+		if isTypeKeywordToken(t0) {
+			out.Recognized = true
 			if tid, ok := c.typeKeywordTokenType(t0); ok {
-				return MatchArmTag{Kind: MatchArmType, TypeArm: tid}
+				out.Tag = MatchArmTag{Kind: MatchArmType, TypeArm: tid}
+				out.Bindings = append(out.Bindings, patternBind{t1.Lexeme, tid})
+			} else {
+				out.Bindings = append(out.Bindings, patternBind{t1.Lexeme, c.subst.Apply(c.arena, subject)})
 			}
-			if tid := c.LookupType(t0.Lexeme); t0.Type == LITERAL && tid != TidNothing {
-				return MatchArmTag{Kind: MatchArmType, TypeArm: tid}
+			return out
+		}
+		if t0.Type == LITERAL {
+			if tid := c.LookupType(t0.Lexeme); tid != TidNothing {
+				out.Recognized = true
+				out.Tag = MatchArmTag{Kind: MatchArmType, TypeArm: tid}
 			}
 		}
 	}
-	return MatchArmTag{Kind: MatchArmType, TypeArm: TidNothing}
+	return out
+}
+
+// analyzeTokenPattern handles the single-token pattern forms: type
+// keywords, value literals, `_`, `none`, and user-declared type names.
+func (c *Checker) analyzeTokenPattern(tok Token, out *armPattern) {
+	switch tok.Type {
+	case TYPEINT:
+		out.Recognized = true
+		out.Tag = MatchArmTag{Kind: MatchArmType, TypeArm: TidInt}
+	case TYPEFLOAT:
+		out.Recognized = true
+		out.Tag = MatchArmTag{Kind: MatchArmType, TypeArm: TidFloat}
+	case TYPEBOOL:
+		out.Recognized = true
+		out.Tag = MatchArmTag{Kind: MatchArmType, TypeArm: TidBool}
+	case STR:
+		out.Recognized = true
+		out.Tag = MatchArmTag{Kind: MatchArmType, TypeArm: TidStr}
+	case TRUE:
+		out.Recognized = true
+		out.Tag = MatchArmTag{Kind: MatchArmTrue}
+	case FALSE:
+		out.Recognized = true
+		out.Tag = MatchArmTag{Kind: MatchArmFalse}
+	case INTEGER, FLOAT, STRING, SINGLEQUOTESTRING, PATH:
+		// Value literals: legal patterns, but they credit no coverage.
+		out.Recognized = true
+	case LITERAL:
+		switch tok.Lexeme {
+		case "_":
+			out.Recognized = true
+			out.Tag = MatchArmTag{Kind: MatchArmWildcard}
+			return
+		case "none":
+			out.Recognized = true
+			out.Tag = MatchArmTag{Kind: MatchArmNone}
+			return
+		case "path":
+			out.Recognized = true
+			out.Tag = MatchArmTag{Kind: MatchArmType, TypeArm: TidPath}
+			return
+		case "date":
+			out.Recognized = true
+			out.Tag = MatchArmTag{Kind: MatchArmType, TypeArm: TidDateTime}
+			return
+		case "binary":
+			out.Recognized = true
+			out.Tag = MatchArmTag{Kind: MatchArmType, TypeArm: TidBytes}
+			return
+		}
+		if isTypeKeywordToken(tok) {
+			// list / dict / quotation / maybe: legal, no coverage tag.
+			out.Recognized = true
+			return
+		}
+		// User-declared named type (e.g. `type X = A | B`).
+		if tid := c.LookupType(tok.Lexeme); tid != TidNothing {
+			out.Recognized = true
+			out.Tag = MatchArmTag{Kind: MatchArmType, TypeArm: tid}
+		}
+	}
+}
+
+// computeNarrow fills armPattern.Narrow for type-pattern arms whose
+// matched type is a concrete primitive.
+func (p *armPattern) computeNarrow() {
+	if p.Tag.Kind != MatchArmType {
+		return
+	}
+	switch p.Tag.TypeArm {
+	case TidInt, TidFloat, TidStr, TidPath, TidBool, TidDateTime, TidBytes:
+		p.Narrow = p.Tag.TypeArm
+	}
 }
 
 // typeKeywordTokenType maps a match type-keyword token to the concrete
@@ -1306,174 +1466,11 @@ const matchPatternFormsHint = "expected one of: `_`; a type keyword " +
 	"optionally followed by a binding name; a value literal (42, 1.5, \"text\", true, false, PATH); " +
 	"`none`; `just <name>`; a list pattern `[ ... ]`; or a dict pattern `{ ... }`"
 
-// armPatternRecognized reports whether pattern is one of the legal
-// match-arm forms. Unrecognized patterns get a TErrInvalidMatchPattern
-// diagnostic rather than silently binding nothing.
-func (c *Checker) armPatternRecognized(pattern []MShellParseItem) bool {
-	switch len(pattern) {
-	case 1:
-		switch p := pattern[0].(type) {
-		case *MShellParseList, *MShellParseDict:
-			return true
-		case Token:
-			return c.tokenPatternRecognized(p)
-		}
-		return false
-	case 2:
-		t0, ok0 := pattern[0].(Token)
-		t1, ok1 := pattern[1].(Token)
-		if !ok0 || !ok1 || t1.Type != LITERAL {
-			return false
-		}
-		if t0.Type == LITERAL && t0.Lexeme == "just" {
-			return true
-		}
-		if isTypeKeywordToken(t0) {
-			return true
-		}
-		if t0.Type == LITERAL && c.LookupType(t0.Lexeme) != TidNothing {
-			return true
-		}
-		return false
-	}
-	return false
-}
-
-// tokenPatternRecognized reports whether a single-token pattern is legal:
-// a type keyword, value literal, `_`, `none`, or a user-declared type name.
-func (c *Checker) tokenPatternRecognized(tok Token) bool {
-	switch tok.Type {
-	case TYPEINT, TYPEFLOAT, STR, TYPEBOOL,
-		INTEGER, FLOAT, STRING, SINGLEQUOTESTRING, PATH, TRUE, FALSE:
-		return true
-	case LITERAL:
-		if tok.Lexeme == "_" || tok.Lexeme == "none" {
-			return true
-		}
-		if isTypeKeywordToken(tok) {
-			return true
-		}
-		if c.LookupType(tok.Lexeme) != TidNothing {
-			return true
-		}
-	}
-	return false
-}
-
-// narrowMatchSubject returns the concrete primitive type that a
-// type-keyword arm pattern matches (int/float/str/path/bool/date/binary),
-// so the arm body can treat a union subject as that single type. These
-// primitives have no subtypes, so replacing the subject with the matched
-// primitive is a sound refinement regardless of the subject's static
-// type. Non-type-keyword patterns (wildcard, just/none, value literals,
-// list/dict destructuring) and user-declared union types return
-// ok=false and leave the subject unrefined — narrowing those is a
-// follow-up.
-func (c *Checker) narrowMatchSubject(pattern []MShellParseItem) (TypeId, bool) {
-	tag := c.classifyArmPattern(pattern)
-	if tag.Kind != MatchArmType {
-		return TidNothing, false
-	}
-	switch tag.TypeArm {
-	case TidInt, TidFloat, TidStr, TidPath, TidBool, TidDateTime, TidBytes:
-		return tag.TypeArm, true
-	}
-	return TidNothing, false
-}
-
-type patternBinding struct {
-	Name NameId
-	Old  TypeId
-	Had  bool
-}
-
-func (c *Checker) bindPatternName(name string, typ TypeId, bindings *[]patternBinding) {
+func (c *Checker) bindPatternName(name string, typ TypeId) {
 	if name == "_" || name == "" {
 		return
 	}
-	nameId := c.names.Intern(name)
-	old, had := c.vars.bound[nameId]
-	*bindings = append(*bindings, patternBinding{Name: nameId, Old: old, Had: had})
-	c.vars.bound[nameId] = typ
-}
-
-// bindMatchPattern mirrors runtime match destructuring enough for body
-// type-checking:
-//   - `just name` binds the Maybe payload.
-//   - `[a b ...rest]` binds element names and spread rest.
-//   - `{ 'key': name }` binds dictionary value names.
-//
-// Value/type/wildcard patterns do not introduce bindings.
-func (c *Checker) bindMatchPattern(subject TypeId, pattern []MShellParseItem) []patternBinding {
-	var bindings []patternBinding
-
-	// `just v` and `<typekeyword> name`
-	if len(pattern) != 2 {
-		goto single
-	}
-	if first, ok1 := pattern[0].(Token); ok1 {
-		if second, ok2 := pattern[1].(Token); ok2 && second.Type == LITERAL {
-			if first.Type == LITERAL && first.Lexeme == "just" {
-				if second.Lexeme != "_" {
-					resolved := c.subst.Apply(c.arena, subject)
-					n := c.arena.Node(resolved)
-					if n.Kind == TKMaybe {
-						c.bindPatternName(second.Lexeme, TypeId(n.A), &bindings)
-					}
-				}
-				return bindings
-			}
-			// `<typekeyword> name` binds the matched value to the type
-			// the keyword tests for. Container/other keywords have no
-			// single primitive id; bind to the subject (the runtime
-			// binds the value as-is) which is sound if wider.
-			if isTypeKeywordToken(first) {
-				bindType, ok := c.typeKeywordTokenType(first)
-				if !ok {
-					bindType = c.subst.Apply(c.arena, subject)
-				}
-				c.bindPatternName(second.Lexeme, bindType, &bindings)
-				return bindings
-			}
-		}
-	}
-
-single:
-	if len(pattern) != 1 {
-		return bindings
-	}
-	switch p := pattern[0].(type) {
-	case *MShellParseList:
-		elem := c.subst.FreshVar(c.arena)
-		resolved := c.subst.Apply(c.arena, subject)
-		n := c.arena.Node(resolved)
-		if n.Kind == TKList {
-			elem = TypeId(n.A)
-		}
-		for _, item := range p.Items {
-			tok, ok := item.(Token)
-			if !ok || tok.Type != LITERAL {
-				continue
-			}
-			if len(tok.Lexeme) > 3 && tok.Lexeme[:3] == "..." {
-				c.bindPatternName(tok.Lexeme[3:], c.arena.MakeList(elem), &bindings)
-			} else {
-				c.bindPatternName(tok.Lexeme, elem, &bindings)
-			}
-		}
-	case *MShellParseDict:
-		for _, kv := range p.Items {
-			if len(kv.Value) != 1 {
-				continue
-			}
-			tok, ok := kv.Value[0].(Token)
-			if ok && tok.Type == LITERAL {
-				value := c.subst.FreshVar(c.arena)
-				c.bindPatternName(tok.Lexeme, value, &bindings)
-			}
-		}
-	}
-	return bindings
+	c.vars.bound[c.names.Intern(name)] = typ
 }
 
 // checkFormatStringInterpolations walks each `{...}` block inside a
@@ -1583,20 +1580,21 @@ func (c *Checker) checkFormatBlock(src string, callSite Token, baseLine, baseCol
 	c.stack.items = nil
 
 	errStart := len(c.errors)
-	for _, item := range file.Items {
-		c.checkParseItem(item)
-	}
+	walked := c.walkJoined(file.Items)
 	// Diagnostics raised while walking the block carry block-local
 	// positions; shift them back onto the original source.
 	for i := errStart; i < len(c.errors); i++ {
 		c.errors[i].Pos = remapBlockToken(c.errors[i].Pos, baseLine, baseCol)
 	}
 
-	if c.stack.Len() != 1 {
+	// When the walk died, the real error is already recorded and the
+	// stack reflects a mid-step state — an arity complaint on top of it
+	// would only be noise.
+	if walked && c.stack.Len() != 1 {
 		c.errors = append(c.errors, TypeError{
 			Kind: TErrInterpolationArity,
 			Pos:  callSite,
-			Hint: "format-string interpolation `{" + src + "}` must produce exactly one value, got " + intToStr(c.stack.Len()),
+			Hint: "format-string interpolation `{" + src + "}` must produce exactly one value, got " + strconv.Itoa(c.stack.Len()),
 		})
 	}
 
