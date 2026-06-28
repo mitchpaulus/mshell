@@ -352,8 +352,14 @@ func (c *Checker) checkDefBody(def *MShellDefinition) {
 // generic sig registered for call sites.
 func (c *Checker) rigidDefSig(def *MShellDefinition) QuoteSig {
 	ctx := &typeResolveCtx{}
+	// The signature was already resolved (and any type-parse errors in it
+	// reported) when the def was registered in CheckProgram's pre-pass. This
+	// re-resolution exists only to skolemize the declared generics for the
+	// body check, so discard the duplicate diagnostics it would re-emit.
+	errMark := len(c.errors)
 	ins := c.resolveSigItems(def.Inputs, ctx)
 	outs := c.resolveSigItems(def.Outputs, ctx)
+	c.errors = c.errors[:errMark]
 	if len(ctx.generics) == 0 {
 		return QuoteSig{Inputs: ins, Outputs: outs}
 	}
