@@ -400,7 +400,8 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 	// as optional fields type-checks each when present (e.g. rejects
 	// `{ 'decimals': "two" }`) while width subtyping still tolerates unknown
 	// keys the runtime ignores.
-	numFmtOpts := "{decimals?: int, sigFigs?: int, preserveInt?: bool, decimalPoint?: str, thousandsSep?: str, grouping?: [int]}"
+	// The runtime accepts both `sigFigs` and the lowercase `sigfigs` alias.
+	numFmtOpts := "{decimals?: int, sigFigs?: int, sigfigs?: int, preserveInt?: bool, decimalPoint?: str, thousandsSep?: str, grouping?: [int]}"
 	r.reg("numFmt", "(int "+numFmtOpts+" -- str)", "(float "+numFmtOpts+" -- str)")
 	r.reg("countSubStr", "(str str -- int)")
 	r.reg("toJson", "(t -- str)") // generic conversion to JSON
@@ -548,7 +549,10 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 	// Output is precise: on a successful request the runtime always builds
 	// a 4-field response dict. Encoding it as a shape lets `:status?` /
 	// `:body?` etc. resolve their value types without fresh vars.
-	httpReq := "{url: str | int | path, timeout?: int, headers?: {str: str}, body?: str | int | path | bytes}"
+	// `url` is a required string. `body` and header values are passed through
+	// CastString at runtime, which succeeds for str/int/path ("stringable");
+	// `timeout` must be a plain int. Everything but `url` is optional.
+	httpReq := "{url: str, timeout?: int, headers?: {str: str | int | path}, body?: str | int | path}"
 	for _, name := range []string{"httpGet", "httpPost"} {
 		r.reg(name, "("+httpReq+" -- Maybe[{status: int, reason: str, headers: {[str]}, body: bytes}])")
 	}
