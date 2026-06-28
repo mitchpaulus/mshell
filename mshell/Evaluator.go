@@ -10661,10 +10661,11 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: The dictionary in '%s' must contain a 'url' key.\n", t.Line, t.Column, t.Lexeme))
 					}
 
-					urlStrValue, err := urlStr.CastString()
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: The 'url' value in '%s' must be stringable, found a %s (%s)\n", t.Line, t.Column, t.Lexeme, urlStr.TypeName(), urlStr.DebugString()))
+					urlString, ok := urlStr.(MShellString)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The 'url' value in '%s' must be a string, found a %s (%s)\n", t.Line, t.Column, t.Lexeme, urlStr.TypeName(), urlStr.DebugString()))
 					}
+					urlStrValue := urlString.Content
 
 					// Create HTTP client
 					client := &http.Client{}

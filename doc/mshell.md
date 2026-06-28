@@ -1348,7 +1348,7 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
 
 - `httpGet`: Make a HTTP GET request. Signature is `({str: T} -- Maybe[{status: int, reason: str, headers: {str: [str]}, body: bytes}])`. Takes the request information in a dictionary that should have the following keys:
 
-  - `url`: Full URL, including all the query parameters (required, stringable)
+  - `url`: Full URL, including all the query parameters (required, string)
   - `timeout`: Request timeout in seconds (optional, positive integer; default 30)
   - `headers`: A dictionary of key-value pairs for the request headers (optional)
 
