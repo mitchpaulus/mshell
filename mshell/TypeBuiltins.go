@@ -156,7 +156,12 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 
 	// ----- Maybe constructors -----
 	r.reg("just", "(t -- Maybe[t])")
-	r.reg("none", "( -- Maybe[t])")
+	// `none` is always Nothing, so its payload is uninhabited: Maybe[bottom].
+	// This stays compatible with any Maybe[T] context (bottom unifies with
+	// anything, and a declared Maybe[T] boundary launders it back to T), but
+	// lets `?` recognize that unwrapping a bare `none` always fails.
+	// `bottom` has no sig-string spelling, so build the sig in Go.
+	r.regGo("none", QuoteSig{Outputs: []TypeId{arena.MakeMaybe(TidBottom)}})
 
 	// ----- JSON null -----
 	r.reg("null", "( -- null)")
@@ -391,7 +396,12 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 	// whose arms produce different numeric types) is accepted via the
 	// overload-resolution union distribution in resolveAndApply, which
 	// checks both the int and float members against these overloads.
-	r.reg("numFmt", "(int {v} -- str)", "(float {v} -- str)")
+	// numFmt options are all optional; an empty `{}` is valid. Listing them
+	// as optional fields type-checks each when present (e.g. rejects
+	// `{ 'decimals': "two" }`) while width subtyping still tolerates unknown
+	// keys the runtime ignores.
+	numFmtOpts := "{decimals?: int, sigFigs?: int, preserveInt?: bool, decimalPoint?: str, thousandsSep?: str, grouping?: [int]}"
+	r.reg("numFmt", "(int "+numFmtOpts+" -- str)", "(float "+numFmtOpts+" -- str)")
 	r.reg("countSubStr", "(str str -- int)")
 	r.reg("toJson", "(t -- str)") // generic conversion to JSON
 
@@ -529,18 +539,18 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 	r.reg("reFindAllIndex", "(str str -- [[int]])")
 	r.reg("parseLinkHeader", "(str -- [{v}])")
 	r.reg("parseHtml", "(str | path -- {v})")
-	// httpGet / httpPost: input stays loose ({str: T}) because the
-	// runtime accepts a dict with one required `url` key plus several
-	// optional ones (`timeout`, `body`, `headers`) — the type system has
-	// no notion of optional shape fields, so requiring `url` would
-	// reject every caller that adds optionals.
+	// httpGet / httpPost: the request dict requires a stringable `url`
+	// plus optional `timeout` (int), `headers` ({str: str}), and `body`
+	// (stringable, used by httpPost). Optional shape fields let the checker
+	// require `url` and type-check the rest when present; width subtyping
+	// still tolerates extra keys the runtime ignores.
 	//
-	// Output, by contrast, is precise: on a successful request the
-	// runtime always builds a 4-field response dict. Encoding it as a
-	// shape lets `:status?` / `:body?` etc. resolve their value types
-	// without falling back to fresh vars.
+	// Output is precise: on a successful request the runtime always builds
+	// a 4-field response dict. Encoding it as a shape lets `:status?` /
+	// `:body?` etc. resolve their value types without fresh vars.
+	httpReq := "{url: str | int | path, timeout?: int, headers?: {str: str}, body?: str | int | path | bytes}"
 	for _, name := range []string{"httpGet", "httpPost"} {
-		r.reg(name, "({v} -- Maybe[{status: int, reason: str, headers: {[str]}, body: bytes}])")
+		r.reg(name, "("+httpReq+" -- Maybe[{status: int, reason: str, headers: {[str]}, body: bytes}])")
 	}
 	r.reg("psub", "(str -- path)")
 	for _, name := range []string{"strCmp", "versionSortCmp"} {
@@ -576,15 +586,18 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 	for _, name := range []string{"zipDirInc", "zipDirExc"} {
 		r.reg(name, "(str | path str | path -- )")
 	}
-	// zipPack validates entry dictionaries at runtime; the checker keeps
-	// the entry shape broad until dictionary key tracking can express the
-	// required keys. Stack order: entries below, zip path on top
-	// (runtime Pop2 takes the path first).
-	r.reg("zipPack", "([{v}] str | path -- )")
-	r.reg("zipExtract", "(str | path str | path {v} -- )")
+	// zipPack entries require `path` plus optional `archivePath` (str) and
+	// `mode` (int). Stack order: entries below, zip path on top (runtime
+	// Pop2 takes the path first).
+	r.reg("zipPack", "([{path: str | path, archivePath?: str, mode?: int}] str | path -- )")
+	// zipExtract / zipExtractEntry options are all optional; the dict is
+	// required positionally but may be empty.
+	zipExtractOpts := "{overwrite?: bool, skipExisting?: bool, stripComponents?: int, pattern?: str, preservePermissions?: bool}"
+	zipEntryOpts := "{overwrite?: bool, skipExisting?: bool, preservePermissions?: bool, mkdirs?: bool}"
+	r.reg("zipExtract", "(str | path str | path "+zipExtractOpts+" -- )")
 	r.reg("zipExtractEntry",
-		"(str str str {v} -- )",
-		"(path str path {v} -- )",
+		"(str str str "+zipEntryOpts+" -- )",
+		"(path str path "+zipEntryOpts+" -- )",
 	)
 	// zipList: runtime metadata includes non-string fields, but the
 	// existing zip-list tests immediately render/join these values as
@@ -620,6 +633,10 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		})
 		aggSpec := arena.MakeShape([]ShapeField{
 			{Name: names.Intern("agg"), Type: aggQuote},
+			// `name` is always a string when present; `meta` (an arbitrary
+			// metadata dict) is left to width subtyping rather than pinned
+			// to a value type here.
+			{Name: names.Intern("name"), Type: TidStr, Optional: true},
 		})
 		r.addGo("groupBy", QuoteSig{
 			Inputs: []TypeId{

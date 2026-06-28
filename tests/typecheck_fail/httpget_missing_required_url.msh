@@ -1,0 +1,3 @@
+# Re-typed builtin: httpGet requires `url`; a request dict with only an optional
+# field must be rejected.
+{ "timeout": 5 } httpGet drop

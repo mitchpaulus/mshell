@@ -127,6 +127,29 @@ func (c *Checker) CheckProgram(file *MShellFile) {
 	c.stack.items = c.stack.items[:0]
 	branches := c.driveBranchesOverItems(initial, file.Items)
 	c.reconcileTopLevelBranches(file, branches)
+	c.dedupeUnwrapDiagnostics()
+}
+
+// dedupeUnwrapDiagnostics collapses identical always-fails unwrap hints.
+// Clearing the mark on first read already prevents per-branch duplicates, but
+// a body re-walked by a separate pass could still emit the same hint twice;
+// keying on position + message keeps one. Genuinely distinct sites are
+// preserved, and other info diagnostics (e.g. per-branch `dbg` dumps) are
+// left untouched.
+func (c *Checker) dedupeUnwrapDiagnostics() {
+	seen := make(map[string]bool)
+	out := c.errors[:0]
+	for _, e := range c.errors {
+		if e.Kind == TErrUnwrapAlwaysFails {
+			key := fmt.Sprintf("%d:%d:%s", e.Pos.Line, e.Pos.Column, e.Hint)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+		}
+		out = append(out, e)
+	}
+	c.errors = out
 }
 
 func (c *Checker) reconcileTopLevelBranches(file *MShellFile, branches []quoteBranch) {
@@ -329,8 +352,14 @@ func (c *Checker) checkDefBody(def *MShellDefinition) {
 // generic sig registered for call sites.
 func (c *Checker) rigidDefSig(def *MShellDefinition) QuoteSig {
 	ctx := &typeResolveCtx{}
+	// The signature was already resolved (and any type-parse errors in it
+	// reported) when the def was registered in CheckProgram's pre-pass. This
+	// re-resolution exists only to skolemize the declared generics for the
+	// body check, so discard the duplicate diagnostics it would re-emit.
+	errMark := len(c.errors)
 	ins := c.resolveSigItems(def.Inputs, ctx)
 	outs := c.resolveSigItems(def.Outputs, ctx)
+	c.errors = c.errors[:errMark]
 	if len(ctx.generics) == 0 {
 		return QuoteSig{Inputs: ins, Outputs: outs}
 	}
@@ -731,6 +760,10 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 					FormatType(c.arena, c.names, applied)),
 			})
 		}
+		// A getter for a field a concrete shape does not declare yields
+		// Maybe[bottom] (see lookupGetterValueType): the result can only be
+		// None. The `?` handler recognizes that operand and flags the unwrap
+		// — at the `?`, after the value has flowed through any bindings.
 		c.stack.Push(c.arena.MakeMaybe(c.lookupGetterValueType(applied, nameId)))
 		return
 	}
@@ -1614,6 +1647,8 @@ func (c *Checker) checkFormatBlock(src string, callSite Token, baseLine, baseCol
 //   - TKGridRow with a tracked schema: look up the column by name.
 //     Hit → its declared type. Miss → fresh var (the runtime would
 //     return None at this site; we keep type-checking permissive).
+//   - TKShape: declared field → its type; undeclared field → bottom
+//     (the key is provably absent, so the result can only be None).
 //   - TKDict[str, V]: V (regardless of name; dict keys are dynamic).
 //   - Anything else (TKVar, unknown-schema GridRow, union, ...):
 //     fresh var.
@@ -1636,6 +1671,14 @@ func (c *Checker) lookupGetterValueType(t TypeId, name NameId) TypeId {
 				return field.Type
 			}
 		}
+		// A concrete shape that does not declare this field proves the key
+		// is absent: `:name` is `Maybe[bottom]`, a Maybe whose Just payload
+		// is uninhabited, i.e. it can only be None. This stays faithful
+		// (still a Maybe, so `?`/match/maybe all type-check and bottom
+		// unifies with anything downstream) while letting `?` recognize an
+		// unwrap that is statically guaranteed to fail — even after the
+		// value flows through bindings or the stack.
+		return TidBottom
 	case TKDict:
 		return TypeId(n.B)
 	case TKGrid, TKGridView:

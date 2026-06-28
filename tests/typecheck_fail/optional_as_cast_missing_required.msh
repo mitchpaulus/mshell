@@ -1,0 +1,4 @@
+# `as` to a shape must still provide every required field; only the optional
+# `timeout` may be omitted, not the required `url`.
+type Req = {url: str, timeout?: int}
+{ "timeout": 30 } as Req

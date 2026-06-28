@@ -1,0 +1,4 @@
+# An optional field that IS present must still match its declared type:
+# `timeout` is `int`, so passing a string must be rejected.
+def doReq ({ "url": str, "timeout"?: int } -- str) :url? end
+{ "url": "x", "timeout": "soon" } doReq wl

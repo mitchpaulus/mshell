@@ -44,6 +44,11 @@ const (
 	// that walks past it. Informational severity — does not fail the
 	// type check. Hint holds the formatted snapshot of stack + vars.
 	TErrDebugDump
+	// TErrUnwrapAlwaysFails is an informational diagnostic emitted when a
+	// `?` unwraps a value the checker can prove is always `None` — a getter
+	// for a field a shape does not declare, or a `none`. Informational
+	// severity (does not fail the type check); Hint holds the message.
+	TErrUnwrapAlwaysFails
 )
 
 // TypeErrorSeverity classifies a diagnostic. Severity-error blocks
@@ -115,6 +120,8 @@ func (e TypeError) Format(arena *TypeArena, names *NameTable) string {
 		fmt.Fprintf(&sb, "ambiguous typing — add an annotation to disambiguate: %s", e.Hint)
 	case TErrDebugDump:
 		fmt.Fprintf(&sb, "dbg: %s", e.Hint)
+	case TErrUnwrapAlwaysFails:
+		fmt.Fprintf(&sb, "%s", e.Hint)
 	case TErrReservedTypeName:
 		fmt.Fprintf(&sb, "cannot redefine reserved type name '%s'", e.Name)
 		if e.Hint != "" {
@@ -192,6 +199,9 @@ func FormatType(arena *TypeArena, names *NameTable, id TypeId) string {
 				sb.WriteString(", ")
 			}
 			sb.WriteString(names.Name(f.Name))
+			if f.Optional {
+				sb.WriteByte('?')
+			}
 			sb.WriteString(": ")
 			sb.WriteString(FormatType(arena, names, f.Type))
 		}
