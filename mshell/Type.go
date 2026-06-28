@@ -125,8 +125,9 @@ type TypeVarId uint32
 // ShapeField is one field in a TKShape's column list. ShapeFields are stored
 // in TypeArena.shapeFields, sorted by Name, with no duplicates.
 type ShapeField struct {
-	Name NameId
-	Type TypeId
+	Name     NameId
+	Type     TypeId
+	Optional bool
 }
 
 // GridSchemaCol is one column in a TKGrid / TKGridView / TKGridRow schema.
@@ -504,6 +505,9 @@ func encodeShapeKey(fields []ShapeField) string {
 			sb.WriteByte(',')
 		}
 		sb.WriteString(strconv.FormatUint(uint64(f.Name), 10))
+		if f.Optional {
+			sb.WriteByte('?')
+		}
 		sb.WriteByte('=')
 		sb.WriteString(strconv.FormatUint(uint64(f.Type), 10))
 	}

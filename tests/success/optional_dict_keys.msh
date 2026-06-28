@@ -1,0 +1,10 @@
+# Optional dictionary shape fields: omit, present, and safe access.
+def describe ({ "url": str, "timeout"?: int } -- str)
+    opts!
+    @opts :url? url!
+    @opts :timeout 30 maybe timeout!
+    $"{@url} @ {@timeout}"
+end
+
+{ "url": "a" } describe wl
+{ "url": "b", "timeout": 5 } describe wl

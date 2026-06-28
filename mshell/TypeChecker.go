@@ -125,6 +125,15 @@ type Checker struct {
 	// being reported as an unknown identifier when listDepth > 0.
 	listDepth int
 
+	// nextItem is the parse item immediately following the one currently
+	// being checked, within the same item body (set by
+	// driveBranchesOverItems). It is used only by best-effort diagnostics
+	// that need to see a trailing operator — specifically the
+	// "this `?` unwrap will always fail" hint, which fires when a getter
+	// for an undeclared shape field (or a `none`) is immediately unwrapped.
+	// It never affects typing.
+	nextItem MShellParseItem
+
 	currentFn *FnContext
 }
 
@@ -970,10 +979,14 @@ func (c *Checker) unifyTypeToUnion(got TypeId, wn TypeNode) bool {
 	return false
 }
 
-// unifyShape implements width subtyping: every field of `want` must appear
-// in `got` with a unifiable type. Extra fields in `got` are allowed.
-// Both field lists are pre-sorted by NameId (see normalizeShapeFields), so
-// the merge is linear.
+// unifyShape implements width subtyping with optional fields: every
+// required field of `want` must appear in `got` with a unifiable type, and a
+// `want` field marked optional may be absent in `got`. Extra fields in `got`
+// are allowed. A required `want` field cannot be satisfied by an optional
+// `got` field (the value might be absent at runtime); when a field is present
+// in both, its value type is checked regardless of optionality. Both field
+// lists are pre-sorted by NameId (see normalizeShapeFields), so the merge is
+// linear.
 func (c *Checker) unifyShape(gn, wn TypeNode) bool {
 	gFields := c.arena.shapeFields[gn.Extra]
 	wFields := c.arena.shapeFields[wn.Extra]
@@ -983,7 +996,17 @@ func (c *Checker) unifyShape(gn, wn TypeNode) bool {
 		for gi < len(gFields) && gFields[gi].Name < wf.Name {
 			gi++
 		}
-		if gi == len(gFields) || gFields[gi].Name != wf.Name {
+		present := gi < len(gFields) && gFields[gi].Name == wf.Name
+		if !present {
+			// Absent in `got` is only acceptable if `want` allows it.
+			if wf.Optional {
+				continue
+			}
+			return false
+		}
+		// A required `want` field is not satisfied by an optional `got`
+		// field — presence is not guaranteed even though the name matches.
+		if !wf.Optional && gFields[gi].Optional {
 			return false
 		}
 		if !c.unify(gFields[gi].Type, wf.Type) {

@@ -208,6 +208,44 @@ The question mark unwraps the <code>Maybe</code> and preserves the plain field t
 
 { "name": "Ada", "age": 36 } as Person :age? 1 +</code></pre>
 
+<h2 id="type-system-dictionary-optional">Optional Fields <a class="section-link" href="#type-system-dictionary-optional" aria-label="Permalink">§</a></h2>
+
+<p>
+A shape field may be marked <em>optional</em> by writing <code>?</code> after its name: <code>name?: T</code>.
+An optional field may be absent from a value; when it is present, its value still has type <code>T</code> and is type-checked.
+This is what lets option-style dictionaries — request options, formatting options, and similar — be typed precisely instead of as a loose <code>{v}</code> dictionary.
+</p>
+
+<pre><code>type Request = {url: str, timeout?: int}
+
+{ "url": "x" } as Request                 # ok: timeout omitted
+{ "url": "x", "timeout": 30 } as Request  # ok: timeout present, an int
+{ "url": "x", "timeout": "soon" }         # error: timeout must be int when present
+{ "timeout": 30 }                         # error: required url missing</code></pre>
+
+<p>
+The <code>?</code> marks the <em>key</em> as possibly-absent.
+This is different from <code>Maybe</code>, which marks the <em>value</em>: <code>timeout?: int</code> means the key may be missing, whereas <code>timeout: Maybe[int]</code> means the key is always present but its value may be <code>none</code>.
+</p>
+
+<p>
+In <code>def</code> signatures the marker follows the quoted field name:
+</p>
+
+<pre><code>def doGet ({ "url": str, "timeout"?: int } -- str)
+    :url?
+end</code></pre>
+
+<p>
+Optional fields follow the same width-subtyping rules as required fields, with one addition: a value whose field is <em>required</em> can be used where an <em>optional</em> field is expected (a present value always satisfies an optional one), but an <em>optional</em> value cannot be used where a <em>required</em> field is expected (it might be absent).
+</p>
+
+<p>
+Reading fields is unchanged: <code>:field</code> returns <code>Maybe[T]</code> and <code>:field?</code> unwraps it (failing at runtime on a missing key), for required and optional fields alike.
+Because of that, the language server emits an informational diagnostic when <code>:field?</code> is used on a field a concrete shape does not declare — that unwrap is guaranteed to fail.
+Homogeneous dictionaries (<code>{str: T}</code>) return a genuine <code>Maybe[T]</code> for any key and are never flagged.
+</p>
+
 <h2 id="type-system-dictionary-nesting">Nested Dictionaries <a class="section-link" href="#type-system-dictionary-nesting" aria-label="Permalink">§</a></h2>
 
 <p>

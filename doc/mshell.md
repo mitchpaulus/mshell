@@ -561,6 +561,26 @@ def labelPerson ({ "name": str, "age": int, "active": bool } -- str)
 end
 ```
 
+A shape field may be optional, written `name?: T` (and `"name"?: T` in `def`
+signatures). An optional field may be absent from a value; when present, its
+value is type `T` and is still type-checked. This is the precise way to type
+option dictionaries (e.g. `numFmt`, `httpGet`, grid `groupBy` aggregation specs,
+the `zip*` option dicts) instead of a loose `{v}`. The `?` marks the *key* as
+possibly-absent, which differs from `Maybe[T]` marking the *value*: `timeout?:
+int` means the key may be missing, while `timeout: Maybe[int]` means the key is
+always present with a possibly-`none` value. A required value satisfies an
+optional parameter, but an optional value does not satisfy a required one.
+Reading is unchanged (`:field` is `Maybe[T]`, `:field?` unwraps it); the language
+server flags `:field?` on a field a concrete shape does not declare, since that
+unwrap always fails.
+
+```mshell
+type Request = {url: str, timeout?: int}
+
+{ "url": "x" } as Request                # ok: timeout omitted
+{ "url": "x", "timeout": 30 } as Request # ok: timeout present and an int
+```
+
 Lists are homogeneous when every element has one type, such as `[int]` or `[Person]`.
 This is the strongest list type because higher-order functions preserve the element type.
 

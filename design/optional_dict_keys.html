@@ -161,9 +161,13 @@
 
   <div class="doc-header">
     <h1>Optional Dictionary Keys</h1>
-    <p class="status"><strong>Status:</strong> design. The subtyping core was validated with a working
-      prototype (passed the full test suite); the access semantics below are deliberately a
-      <em>no-op</em> on the current implementation.</p>
+    <p class="status"><strong>Status:</strong> implemented on
+      <code>optional_dict_keys_typing_design</code>. Optional shape fields
+      (<code>name?: T</code>), the always-fails unwrap diagnostic, and the
+      re-typed option-dict builtins (<code>numFmt</code>,
+      <code>httpGet</code>/<code>httpPost</code>, grid <code>groupBy</code> aggs,
+      <code>zip*</code>) all ship; access semantics are unchanged as designed.
+      Full test suite (typecheck, runtime, <code>go test</code>) passes.</p>
   </div>
 
   <p class="lead">Optional keys are a property of a <strong>dictionary shape type</strong> only. They change
