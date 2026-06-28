@@ -37,7 +37,7 @@ func TestTypeExprPrimitives(t *testing.T) {
 		"bool":  TidBool,
 		"str":   TidStr,
 		"bytes": TidBytes,
-		"none":  TidNone,
+		"null":  TidNull,
 	}
 	for src, want := range cases {
 		c := newCheckerForTypeExpr(t)
@@ -48,6 +48,16 @@ func TestTypeExprPrimitives(t *testing.T) {
 		if got != want {
 			t.Errorf("%q: got %d, want %d", src, got, want)
 		}
+	}
+}
+
+// `none` is the empty constructor of Maybe, not a type. Naming it in a
+// type expression must be rejected (callers should use Maybe[T] or null).
+func TestTypeExprNoneIsNotAType(t *testing.T) {
+	c := newCheckerForTypeExpr(t)
+	_, errs := parseTypeExprSrc(t, c, "none")
+	if len(errs) == 0 {
+		t.Fatalf("expected an error for 'none' used as a type, got none")
 	}
 }
 

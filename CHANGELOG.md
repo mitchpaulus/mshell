@@ -34,6 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   following it with a name, e.g. `str s : @s len` (mirroring `just v`). Works for
   every type keyword (`int`, `float`, `str`, `bool`, `list`, `dict`, `path`,
   `date`, `quotation`, `maybe`, `binary`).
+- A new `null` type representing the JSON null value, distinct from `none` (the
+  empty case of `Maybe`). `parseJson` now produces `null` for JSON `null`, the
+  `null` literal pushes one, and `null` can be used in union types (e.g.
+  `int | null`) and matched with a `null` arm. `( -- null)`
 
 ### Fixed
 

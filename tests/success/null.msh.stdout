@@ -1,0 +1,10 @@
+null
+null
+true
+null
+{"a": 1, "b": null}
+[1, null, 3]
+int
+null
+null
+{"missing": null, "present": 1}

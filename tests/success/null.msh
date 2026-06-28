@@ -1,0 +1,37 @@
+# The `null` type models JSON null. It is distinct from `none` (the empty
+# case of the Maybe type).
+
+# A literal null serializes back to JSON null.
+null toJson wl
+
+# `str` on a null yields "null".
+null str wl
+
+# null equals null.
+null null = str wl
+
+# JSON null parses into a null, which round-trips back to `null`.
+'null' parseJson toJson wl
+
+# null appears inside parsed objects and arrays, distinct from missing.
+'{"a": 1, "b": null}' parseJson toJson wl
+'[1, null, 3]' parseJson toJson wl
+
+# A `null` arm in a union-typed match. `int | null` is exhaustively covered
+# by `int` and `null` arms with no wildcard, proving null is a finite arm.
+def classify (int | null -- str)
+    match
+        int: 'int',
+        null: 'null',
+    end
+end
+
+5 classify wl
+null classify wl
+'null' parseJson classify wl
+
+# Building JSON with an explicit null value.
+{
+    'present': 1,
+    'missing': null,
+} toJson wl

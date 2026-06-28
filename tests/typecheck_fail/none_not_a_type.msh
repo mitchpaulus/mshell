@@ -1,0 +1,10 @@
+# `none` is the empty constructor of Maybe, not a type. Using it in a type
+# expression must be rejected (use `Maybe[T]` or `null` instead).
+def classifyMaybe (int | none -- str)
+    match
+        int: 'i',
+        none: 'n',
+    end
+end
+
+5 classifyMaybe wl

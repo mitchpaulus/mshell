@@ -1,0 +1,9 @@
+# A match on `int | null` must cover both arms (or include a wildcard).
+# Omitting the `null` arm is a non-exhaustive match and must be rejected.
+def classify (int | null -- str)
+    match
+        int: 'int',
+    end
+end
+
+5 classify wl

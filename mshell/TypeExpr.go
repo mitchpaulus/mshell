@@ -616,7 +616,7 @@ func (parser *MShellParser) applyMaybeArgs(node *TypeNamed, errs *[]TypeError) {
 // shape with that field name.
 func isPrimitiveLiteralType(lex string) bool {
 	switch lex {
-	case "bytes", "none", "Maybe", "Grid", "GridView", "GridRow":
+	case "bytes", "null", "Maybe", "Grid", "GridView", "GridRow":
 		return true
 	}
 	return false
@@ -703,7 +703,17 @@ func (c *Checker) resolveTypeExpr(node MShellParseItem, ctx *typeResolveCtx) Typ
 		case "bytes":
 			return TidBytes
 		case "none":
-			return TidNone
+			// `none` is the empty constructor of Maybe (like Haskell's
+			// Nothing), not a type. Reject it in type position with a
+			// pointer to the right tool. Without this case it would
+			// silently become an implicit generic inside a def signature.
+			c.errors = append(c.errors, TypeError{
+				Kind: TErrTypeParse, Pos: n.Tok,
+				Hint: "'none' is not a type; it is the empty constructor of Maybe. Use 'Maybe[T]' for an optional value, or 'null' for the JSON null type",
+			})
+			return TidNothing
+		case "null":
+			return TidNull
 		case "path":
 			return TidPath
 		case "datetime":
