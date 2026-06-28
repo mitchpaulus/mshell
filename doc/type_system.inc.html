@@ -83,7 +83,8 @@ Named runtime types such as <code>Grid</code>, <code>GridView</code>, and <code>
 </p>
 
 <p>
-<code>null</code> is the JSON null type and is distinct from <code>none</code>, the empty case of <code>Maybe</code>.
+<code>null</code> is the JSON null type.
+It is distinct from <code>none</code>, which is only a value constructor (the empty case of <code>Maybe</code>) and is <em>not</em> a type &mdash; using <code>none</code> in a type expression is an error.
 Use <code>int | null</code> for a value that is an integer or a literal JSON null; that is different in meaning from <code>Maybe[int]</code>, a value that may be missing.
 </p>
 

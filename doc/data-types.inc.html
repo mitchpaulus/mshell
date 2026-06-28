@@ -270,9 +270,10 @@ It's a value that can either be <code>none</code> or a <code>just[type]</code> v
 </p>
 
 <p>
-Note that <code>none</code> is <em>not</em> the same as the <a href="#data-type-null"><code>null</code></a> type.
-<code>none</code> is the empty case of <code>Maybe</code>; <code>null</code> is the dedicated JSON null value.
-Use <code>Maybe[int]</code> for a value that may be missing, and <code>int | null</code> for a value that is an integer or a literal JSON null.
+Note that <code>none</code> is <em>not</em> a type.
+It is only a value constructor (the empty case of <code>Maybe</code>, like <code>Nothing</code> in Haskell), so it cannot appear in a type expression.
+Write <code>Maybe[int]</code> for a value that may be missing.
+If you need a standalone null <em>type</em> &mdash; for example a value that is an integer or a literal JSON null &mdash; use the <a href="#data-type-null"><code>null</code></a> type, as in <code>int | null</code>.
 </p>
 
 <p>

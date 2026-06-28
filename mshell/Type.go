@@ -30,7 +30,7 @@ const (
 	TidFloat
 	TidStr
 	TidBytes
-	TidNone
+	TidNone     // reserved slot; `none` is a Maybe constructor, NOT a nameable type (use Maybe[T] or null). Kept to preserve primitive ids.
 	TidPath     // path literal (`...`) and the path runtime type
 	TidDateTime // date/time literal (YYYY-MM-DD[THH:MM[:SS]]) and now/date ops
 	TidBottom   // divergent: exit, infinite loop, (Phase 2) propagated fail

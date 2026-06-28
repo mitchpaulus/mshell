@@ -512,7 +512,7 @@ end
 Primitive static type names include `int`, `float`, `bool`, `str`, `path`, `datetime`, `bytes`, `none`, and `null`.
 Named runtime types such as `Grid`, `GridView`, and `GridRow` are also available.
 
-`null` is the JSON null type and is distinct from `none`, the empty case of `Maybe`.
+`null` is the JSON null type. It is distinct from `none`, which is only a value constructor (the empty case of `Maybe`, like `Nothing` in Haskell) and is **not** a type — writing `none` in a type expression is an error.
 `parseJson` produces a `null` for each JSON `null`, and the `null` literal pushes one.
 Use `int | null` for "an integer or a literal JSON null"; that differs in meaning from `Maybe[int]`, "an int that may be missing".
 
@@ -534,7 +534,7 @@ Current definition signatures still use the historical signature parser, so dict
 
 ```mshell
 type Person = {name: str, age: int}
-type Cell = int | float | str | bool | none
+type Cell = int | float | str | bool | null
 type Row = [Cell]
 
 { "name": "Ada", "age": 36 } as Person :age? 1 +
