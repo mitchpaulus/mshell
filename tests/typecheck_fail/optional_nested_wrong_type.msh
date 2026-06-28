@@ -1,0 +1,5 @@
+# Optional fields compose: a present optional nested shape is checked too.
+# `addr.zip` is declared `str`, so an int must be rejected.
+type Addr = {city: str, zip?: str}
+def label ({ "name": str, "addr"?: Addr } -- str) :name? end
+{ "name": "Ada", "addr": { "city": "London", "zip": 90210 } } label wl

@@ -1,0 +1,4 @@
+# A required field cannot be omitted just because another (optional) field is
+# present: `url` is required, so a dict with only `timeout` must be rejected.
+def doReq ({ "url": str, "timeout"?: int } -- str) :url? end
+{ "timeout": 30 } doReq wl
