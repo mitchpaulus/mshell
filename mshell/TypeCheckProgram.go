@@ -130,12 +130,12 @@ func (c *Checker) CheckProgram(file *MShellFile) {
 	c.dedupeUnwrapDiagnostics()
 }
 
-// dedupeUnwrapDiagnostics collapses identical always-fails unwrap hints. A
-// `:k?` reached through several fanned-out branches would otherwise be
-// reported once per branch (tryBranchStep reattaches info diagnostics from
-// every branch). Keyed on position + message so genuinely distinct sites are
-// preserved; other info diagnostics (e.g. per-branch `dbg` dumps) are left
-// untouched.
+// dedupeUnwrapDiagnostics collapses identical always-fails unwrap hints.
+// Clearing the mark on first read already prevents per-branch duplicates, but
+// a body re-walked by a separate pass could still emit the same hint twice;
+// keying on position + message keeps one. Genuinely distinct sites are
+// preserved, and other info diagnostics (e.g. per-branch `dbg` dumps) are
+// left untouched.
 func (c *Checker) dedupeUnwrapDiagnostics() {
 	seen := make(map[string]bool)
 	out := c.errors[:0]
@@ -754,20 +754,10 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 					FormatType(c.arena, c.names, applied)),
 			})
 		}
-		// Best-effort hint: `:k?` (a getter immediately unwrapped) on a
-		// concrete shape that does not declare `k` will always fail at
-		// runtime, because the getter yields `none` for an absent field.
-		// Only a closed shape can prove absence — homogeneous dicts return
-		// a genuine Maybe[T] and are never flagged.
-		if !c.inferring && c.nextIsUnwrap() && c.shapeFieldAbsent(applied, nameId) {
-			c.errors = append(c.errors, TypeError{
-				Severity: SeverityInfo,
-				Kind:     TErrUnwrapAlwaysFails,
-				Pos:      it.Token,
-				Hint: fmt.Sprintf("field '%s' is not part of %s, so ':%s?' will fail",
-					c.names.Name(nameId), FormatType(c.arena, c.names, applied), it.String),
-			})
-		}
+		// A getter for a field a concrete shape does not declare yields
+		// Maybe[bottom] (see lookupGetterValueType): the result can only be
+		// None. The `?` handler recognizes that operand and flags the unwrap
+		// — at the `?`, after the value has flowed through any bindings.
 		c.stack.Push(c.arena.MakeMaybe(c.lookupGetterValueType(applied, nameId)))
 		return
 	}
@@ -1651,40 +1641,11 @@ func (c *Checker) checkFormatBlock(src string, callSite Token, baseLine, baseCol
 //   - TKGridRow with a tracked schema: look up the column by name.
 //     Hit → its declared type. Miss → fresh var (the runtime would
 //     return None at this site; we keep type-checking permissive).
+//   - TKShape: declared field → its type; undeclared field → bottom
+//     (the key is provably absent, so the result can only be None).
 //   - TKDict[str, V]: V (regardless of name; dict keys are dynamic).
 //   - Anything else (TKVar, unknown-schema GridRow, union, ...):
 //     fresh var.
-// nextIsUnwrap reports whether the item immediately following the one being
-// checked is the `?` (Maybe-unwrap) operator. Used only by the best-effort
-// "this unwrap always fails" diagnostic; never affects typing.
-func (c *Checker) nextIsUnwrap() bool {
-	if tok, ok := c.nextItem.(Token); ok {
-		return tok.Type == QUESTION
-	}
-	return false
-}
-
-// shapeFieldAbsent reports whether t is a concrete shape (or a brand wrapping
-// one) that does not declare the named field. Homogeneous dicts, grids, and
-// unknown/inferred receivers are never "absent" — only a closed shape can
-// prove a field cannot be present.
-func (c *Checker) shapeFieldAbsent(t TypeId, name NameId) bool {
-	r := c.subst.Apply(c.arena, t)
-	n := c.arena.Node(r)
-	switch n.Kind {
-	case TKShape:
-		for _, field := range c.arena.shapeFields[n.Extra] {
-			if field.Name == name {
-				return false
-			}
-		}
-		return true
-	case TKBrand:
-		return c.shapeFieldAbsent(TypeId(n.B), name)
-	}
-	return false
-}
-
 func (c *Checker) lookupGetterValueType(t TypeId, name NameId) TypeId {
 	r := c.subst.Apply(c.arena, t)
 	n := c.arena.Node(r)
@@ -1704,6 +1665,14 @@ func (c *Checker) lookupGetterValueType(t TypeId, name NameId) TypeId {
 				return field.Type
 			}
 		}
+		// A concrete shape that does not declare this field proves the key
+		// is absent: `:name` is `Maybe[bottom]`, a Maybe whose Just payload
+		// is uninhabited, i.e. it can only be None. This stays faithful
+		// (still a Maybe, so `?`/match/maybe all type-check and bottom
+		// unifies with anything downstream) while letting `?` recognize an
+		// unwrap that is statically guaranteed to fail — even after the
+		// value flows through bindings or the stack.
+		return TidBottom
 	case TKDict:
 		return TypeId(n.B)
 	case TKGrid, TKGridView:

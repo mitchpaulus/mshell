@@ -149,14 +149,7 @@ func (c *Checker) inferQuoteSigsItems(body []MShellParseItem) []QuoteSig {
 func (c *Checker) driveBranchesOverItems(initial []quoteBranch, body []MShellParseItem) []quoteBranch {
 	return c.driveBranches(initial, len(body), func(i int) func() {
 		item := body[i]
-		var next MShellParseItem
-		if i+1 < len(body) {
-			next = body[i+1]
-		}
-		return func() {
-			c.nextItem = next
-			c.checkParseItem(item)
-		}
+		return func() { c.checkParseItem(item) }
 	})
 }
 

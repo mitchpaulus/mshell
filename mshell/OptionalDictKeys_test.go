@@ -103,6 +103,27 @@ func TestUnwrapDiagnosticUndeclaredShapeField(t *testing.T) {
 	}
 }
 
+func TestUnwrapDiagnosticFlagsAtUnwrapThroughBinding(t *testing.T) {
+	// The None value flows through a variable before being unwrapped; the
+	// diagnostic must still fire (the failure happens at the `?`, wherever
+	// the value came from).
+	errs := allCheckerErrors(t, `{ "a": 1 } :b val! @val ?`)
+	if fatalErrorCount(errs) != 0 {
+		t.Fatalf("must not be a fatal error; got %d", fatalErrorCount(errs))
+	}
+	if got := infoCount(errs, TErrUnwrapAlwaysFails); got != 1 {
+		t.Fatalf("expected the always-fails hint to survive the binding, got %d", got)
+	}
+}
+
+func TestUnwrapDiagnosticDirectUnwrapThroughBinding(t *testing.T) {
+	// Same value, never unwrapped → no hint even though it is always None.
+	errs := allCheckerErrors(t, `{ "a": 1 } :b val! @val drop`)
+	if got := infoCount(errs, TErrUnwrapAlwaysFails); got != 0 {
+		t.Fatalf("a value that is never unwrapped must not be flagged, got %d", got)
+	}
+}
+
 func TestUnwrapDiagnosticDeclaredFieldSilent(t *testing.T) {
 	errs := allCheckerErrors(t, `{ "a": 1 } :a? drop`)
 	if got := infoCount(errs, TErrUnwrapAlwaysFails); got != 0 {

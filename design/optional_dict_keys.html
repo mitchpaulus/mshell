@@ -269,36 +269,44 @@
     (<code>SeverityInfo</code>, the severity <code>dbg</code> already uses — it never fails
     <code>--check-types</code>), not a type error.</p>
 
-  <p>The signal is a small three-state <em>variant</em> tag carried beside each value:</p>
-  <pre><code>JustKnown   definitely present     &lt;- `just x`; a required field of a shape
-Unknown     could be either        &lt;- the default
-NoneKnown   definitely Nothing     &lt;- `none`; an undeclared field of a shape</code></pre>
+  <p>The "always None" fact is encoded <strong>in the value's type</strong>, so it rides through
+    variable bindings and arbitrary stack flow for free, and the failure is reported at the
+    <code>?</code> — exactly where it happens at runtime. A getter for a field a concrete shape does not
+    declare yields <code><strong>Maybe[bottom]</strong></code>: still a real <code>Maybe</code> (so
+    <code>?</code>, <code>match</code>, and <code>maybe</code> all type-check, and <code>bottom</code>
+    unifies with anything downstream — access stays faithful), but its <code>Just</code> payload is
+    uninhabited, meaning the value can only be <code>None</code>. The <code>?</code> handler inspects its
+    operand: if it is <code>Maybe[bottom]</code>, the unwrap is statically guaranteed to fail and a
+    <code>SeverityInfo</code> hint is emitted on the <code>?</code> token. This is why
+    <code>{ 'a': 1 } :b val! @val ?</code> is flagged even though the getter and the unwrap are far
+    apart — the <code>Maybe[bottom]</code> type flows through <code>val</code>.</p>
 
-  <p>The variant is fully determined by the receiver kind and field status — the concrete-vs-open
+  <p>The element type is fully determined by the receiver kind and field status — the concrete-vs-open
     distinction is exactly <strong>shape (<code>TKShape</code>) vs homogeneous dict
     (<code>TKDict</code>)</strong>, which the type system already tracks:</p>
 
   <table>
     <thead>
-      <tr><th>receiver</th><th>field</th><th>variant</th><th><code>?</code> diagnostic</th></tr>
+      <tr><th>receiver</th><th>field</th><th><code>:k</code> getter type</th><th><code>?</code> diagnostic</th></tr>
     </thead>
     <tbody>
-      <tr><td>homogeneous dict <code>{str: T}</code></td><td>any key</td><td>Unknown</td><td>never</td></tr>
-      <tr><td>shape, required field</td><td>declared</td><td>JustKnown</td><td>never (safe)</td></tr>
-      <tr><td>shape, optional field</td><td>declared <code>k?:</code></td><td>Unknown</td><td>never ("always" can't be claimed)</td></tr>
-      <tr><td>shape, undeclared field</td><td>not in shape</td><td>NoneKnown</td><td class="yes">yes</td></tr>
+      <tr><td>homogeneous dict <code>{str: T}</code></td><td>any key</td><td><code>Maybe[T]</code></td><td>never</td></tr>
+      <tr><td>shape, required field</td><td>declared</td><td><code>Maybe[T]</code></td><td>never (safe)</td></tr>
+      <tr><td>shape, optional field</td><td>declared <code>k?:</code></td><td><code>Maybe[T]</code></td><td>never ("always" can't be claimed)</td></tr>
+      <tr><td>shape, undeclared field</td><td>not in shape</td><td><code>Maybe[bottom]</code></td><td class="yes">yes</td></tr>
     </tbody>
   </table>
 
-  <p>Rule: <strong><code>?</code> applied to a <code>NoneKnown</code> value emits the
+  <p>Rule: <strong><code>?</code> applied to a <code>Maybe[bottom]</code> operand emits the
     diagnostic.</strong> Open dictionaries return the genuine <code>Maybe[T]</code> for any key, so they
-    are <code>Unknown</code> and never hinted — a statement is only possible against a concrete shape.</p>
+    are never hinted — a statement is only possible against a concrete shape.</p>
 
-  <p>Wording is contract-flavored, not an absolute claim about every runtime value: width subtyping means
+  <p>The hint is contract-flavored, not an absolute claim about every runtime value: width subtyping means
     a wider value <em>could</em> carry an undeclared field, but a value typed <code>{a: int}</code> only
     <em>guarantees</em> <code>a</code>, so <code>:b?</code> cannot be relied on (a function that needs
-    <code>b</code> should declare it). Example: <code>field 'b' is not part of {a: int}, so ':b?' will
-    fail</code>.</p>
+    <code>b</code> should declare it). The hint is placed on the <code>?</code> token: <code>'?' unwraps a
+    value that can only be None (e.g. a getter for a field the shape does not declare); this will fail at
+    runtime</code>.</p>
 
   <h2>Implementation</h2>
   <p>The feature itself is one small, self-contained change set:</p>
@@ -315,9 +323,13 @@ NoneKnown   definitely Nothing     &lt;- `none`; an undeclared field of a shape<
     <li><code>TypeChecker.go</code>: extend <code>unifyShape</code> with the subtyping table above. Casts
       inherit it via <code>castOk</code> &rarr; <code>unify</code>.</li>
   </ol>
-  <p>The diagnostic is a separable add-on: track the three-state variant alongside the type stack, and
-    emit a <code>SeverityInfo</code> when <code>?</code> consumes a <code>NoneKnown</code>. Surfaced by
-    <code>lsp.go</code>; ignored by pass/fail.</p>
+  <p>The diagnostic is a separable add-on with no lookahead. <code>lookupGetterValueType</code> returns
+    <code>bottom</code> for an undeclared concrete-shape field, so the getter pushes
+    <code>Maybe[bottom]</code>; the <code>?</code> handler in <code>checkOne</code> inspects its operand
+    and emits a <code>SeverityInfo</code> when it is <code>Maybe[bottom]</code>. Because the signal lives
+    in the operand's type, it survives variable bindings and arbitrary stack flow and is reported at the
+    <code>?</code> itself. Duplicate hints from branch fan-out (or a re-walked body) are collapsed by
+    position. Surfaced by <code>lsp.go</code>; ignored by pass/fail.</p>
   <p>Supporting work (per <code>CLAUDE.md</code>): re-type the motivating builtins (<code>numFmt</code>,
     <code>httpGet</code>/<code>httpPost</code>, grid <code>groupBy</code> aggs, <code>zip*</code> options)
     from <code>{v}</code> to honest optional shapes; docs

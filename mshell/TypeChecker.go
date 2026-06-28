@@ -125,15 +125,6 @@ type Checker struct {
 	// being reported as an unknown identifier when listDepth > 0.
 	listDepth int
 
-	// nextItem is the parse item immediately following the one currently
-	// being checked, within the same item body (set by
-	// driveBranchesOverItems). It is used only by best-effort diagnostics
-	// that need to see a trailing operator — specifically the
-	// "this `?` unwrap will always fail" hint, which fires when a getter
-	// for an undeclared shape field (or a `none`) is immediately unwrapped.
-	// It never affects typing.
-	nextItem MShellParseItem
-
 	currentFn *FnContext
 }
 
@@ -174,6 +165,32 @@ func (c *Checker) CheckTokens(tokens []Token) {
 // checkOne dispatches a single token. Literals push a primitive; tokens
 // in the builtin table apply the corresponding sig. Anything else is
 // reported as an unknown identifier (Phase 2 surface is intentionally tiny).
+// flagAlwaysFailUnwrap emits a non-fatal hint when `?` is applied to a value
+// that can only be None — a Maybe whose payload is bottom (uninhabited), which
+// a getter for an undeclared concrete-shape field produces. The hint is placed
+// on the `?` token, where the runtime failure occurs, and works regardless of
+// how the value reached the top of stack (it is a property of the operand's
+// type, so it survives variable bindings). Never affects typing.
+func (c *Checker) flagAlwaysFailUnwrap(tok Token) {
+	if c.inferring || c.stack.Len() == 0 {
+		return
+	}
+	top := c.subst.Apply(c.arena, c.stack.Top())
+	n := c.arena.Node(top)
+	if n.Kind != TKMaybe {
+		return
+	}
+	if c.subst.Apply(c.arena, TypeId(n.A)) != TidBottom {
+		return
+	}
+	c.errors = append(c.errors, TypeError{
+		Severity: SeverityInfo,
+		Kind:     TErrUnwrapAlwaysFails,
+		Pos:      tok,
+		Hint:     "'?' unwraps a value that can only be None (e.g. a getter for a field the shape does not declare); this will fail at runtime",
+	})
+}
+
 func (c *Checker) checkOne(tok Token) {
 	if c.diverged {
 		return
@@ -310,6 +327,16 @@ func (c *Checker) checkOne(tok Token) {
 		case BREAK, CONTINUE:
 			c.diverged = true
 			return
+		case QUESTION:
+			// `?` is fromJust. If its operand is a Maybe whose payload is
+			// uninhabited (Maybe[bottom] — e.g. a getter for a field a
+			// concrete shape does not declare), the value can only be None,
+			// so this unwrap is statically guaranteed to fail at runtime.
+			// Flag it at the `?` (where the failure happens) as a non-fatal
+			// hint, then fall through to normal `?` typing. The bottom
+			// payload flows through bindings, so this fires even when the
+			// getter and the `?` are far apart.
+			c.flagAlwaysFailUnwrap(tok)
 		}
 		if tok.Type == LOOP && c.tryLoop(tok) {
 			return
