@@ -253,10 +253,11 @@
     no type called <code>Nothing</code>. mshell matches this for values:
     <code>none : ( -- Maybe[a])</code> is <code>Nothing</code>, <code>just : (a -- Maybe[a])</code> is
     <code>Just</code>. A getter returning <code>Maybe[T]</code> and <code>?</code> being a partial
-    <code>fromJust</code> is the faithful model. (mshell <em>also</em> has a standalone <code>none</code>
-    <em>type</em> used for JSON null in unions; see "Related" below — it is a separate concern and the
-    reason an earlier "type the absent getter as <code>none</code>" idea was rejected: it only worked by
-    being un-ADT-like.)</p>
+    <code>fromJust</code> is the faithful model. (mshell historically overloaded <code>none</code> as
+    both this constructor <em>and</em> a JSON-null type; that split has since been done — <code>none</code>
+    is now only the constructor, and <code>null</code> is the JSON null type. See "Related" below. This
+    also confirms why an earlier "type the absent getter as <code>none</code>" idea was rejected: it only
+    worked by being un-ADT-like.)</p>
 
   <h2>LSP diagnostic: "this unwrap will always fail"</h2>
   <p>Faithful types don't say whether a given <code>Maybe</code> is <code>Just</code> or
@@ -335,21 +336,32 @@ NoneKnown   definitely Nothing     &lt;- `none`; an undeclared field of a shape<
 
   <hr>
 
-  <h2>Related (separate design): a distinct <code>null</code> type</h2>
-  <p>Today one word "none" does two jobs over one runtime object (<code>Maybe{nil}</code>): the
-    <code>Maybe</code> <code>Nothing</code> <em>value</em> (<code>Maybe[a]</code>), and a standalone
-    <code>none</code> <em>type</em> used for JSON null in unions like <code>int | str | none</code>. These
-    are different concepts — <code>{"x": null}</code> has <code>x</code> <strong>present</strong> with a
-    null value; <code>{}</code> has <code>x</code> <strong>absent</strong> — and the overlap is the root
-    of much confusion (it is why the <code>none</code> <em>type</em> is not a <code>Maybe</code>).</p>
-  <p>Recommendation: introduce a first-class <code>null</code> value/type and keep
-    <code>none</code>/<code>Maybe</code> as a pure optionality ADT. Benefits: honest JSON modeling
-    (<code>:x</code> on <code>{"x": null}</code> is <code>Just(null)</code>, not <code>Just(None)</code>),
-    a clean <code>Maybe</code>, and a crisper "always-fails" diagnostic (a <code>NoneKnown</code> value is
-    then unambiguously absence). Costs: a new runtime type plus
-    equality/truthiness/display/<code>toJson</code>, and migrating
-    <code>parseJson</code>/<code>parseExcel</code> and <code>… | none</code> JSON unions to
-    <code>null</code>. This is a larger, independent change and should be its own design note.</p>
+  <h2>Related (done): the distinct <code>null</code> type</h2>
+  <p class="status"><strong>Status:</strong> implemented and merged (PR #258, "Add null"). This section
+    records the outcome; it is no longer a proposal.</p>
+  <p>Previously one word "none" did two jobs over one runtime object (<code>Maybe{nil}</code>): the
+    <code>Maybe</code> <code>Nothing</code> <em>value</em>, and a standalone <code>none</code>
+    <em>type</em> used for JSON null in unions like <code>int | str | none</code>. Those are different
+    concepts — <code>{"x": null}</code> has <code>x</code> <strong>present</strong> with a null value;
+    <code>{}</code> has <code>x</code> <strong>absent</strong> — and the overlap was the root of much
+    confusion (it is why the old <code>none</code> <em>type</em> was not a <code>Maybe</code>).</p>
+  <p>That split is now in place:</p>
+  <ul>
+    <li><code>null</code> is a first-class primitive type and value for the JSON null. The <code>null</code>
+      literal pushes one (<code>( -- null)</code>), <code>parseJson</code> produces <code>null</code> for
+      JSON <code>null</code>, it can appear in unions (<code>int | null</code>), and it can be matched
+      with a <code>null</code> arm.</li>
+    <li><code>none</code> is now <strong>only</strong> the empty-case constructor of <code>Maybe</code>.
+      It is no longer a nameable type — using <code>none</code> in a type expression is an error. So
+      <code>Maybe</code>/<code>none</code> is a clean optionality ADT.</li>
+    <li><code>int | null</code> (an integer or a literal JSON null) is deliberately distinct in meaning
+      from <code>Maybe[int]</code> (an integer that may be absent). The canonical JSON scalar is now
+      <code>type JsonScalar = str | int | float | bool | null</code>.</li>
+  </ul>
+  <p>This directly benefits the design above. The <code>Maybe</code>/<code>none</code> story is now
+    unambiguous, and the "always-fails" diagnostic's <code>NoneKnown</code> tag means <em>absence</em>
+    only — a value of type <code>null</code> is a real value and is never confused with
+    <code>Nothing</code>, so the diagnostic can never misfire on legitimately-readable JSON nulls.</p>
 
 </main>
 </body>
