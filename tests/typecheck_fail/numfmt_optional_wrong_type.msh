@@ -1,0 +1,3 @@
+# Re-typed builtin: numFmt's options are optional but typed. `decimals` is int,
+# so a string value must be rejected (previously the loose {v} dict allowed it).
+1.0 { 'decimals': "two" } numFmt wl

@@ -242,7 +242,7 @@ func TestNameTable(t *testing.T) {
 }
 
 func TestReservedTypeNames(t *testing.T) {
-	for _, name := range []string{"int", "float", "str", "bool", "bytes", "none",
+	for _, name := range []string{"int", "float", "str", "bool", "bytes", "none", "null",
 		"Maybe", "Grid", "GridView", "GridRow"} {
 		if !IsReservedTypeName(name) {
 			t.Errorf("expected %q to be reserved", name)

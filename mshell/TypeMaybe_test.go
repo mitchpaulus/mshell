@@ -51,7 +51,7 @@ func TestJustOnDifferentTypesAtTwoCallSites(t *testing.T) {
 	}
 }
 
-func TestNoneProducesUnboundMaybe(t *testing.T) {
+func TestNoneProducesEmptyMaybe(t *testing.T) {
 	c := runTokens(mkTok(LITERAL, "none"))
 	if errs := c.Errors(); len(errs) != 0 {
 		t.Fatalf("unexpected errors: %+v", errs)
@@ -64,10 +64,10 @@ func TestNoneProducesUnboundMaybe(t *testing.T) {
 	if n.Kind != TKMaybe {
 		t.Fatalf("expected Maybe kind, got %v", n.Kind)
 	}
-	// The inner should be a fresh, unbound variable.
-	innerNode := c.arena.Node(TypeId(n.A))
-	if innerNode.Kind != TKVar {
-		t.Fatalf("none's inner should be a TKVar, got %v", innerNode.Kind)
+	// `none` is always Nothing, so its payload is uninhabited: Maybe[bottom].
+	// (It still unifies with any Maybe[T] context — see TestNoneInferredFromContext.)
+	if inner := c.subst.Apply(c.arena, TypeId(n.A)); inner != TidBottom {
+		t.Fatalf("none's inner should be bottom, got %s", FormatType(c.arena, c.names, inner))
 	}
 }
 

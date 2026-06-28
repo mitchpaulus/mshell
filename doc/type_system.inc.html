@@ -78,8 +78,14 @@ end</code></pre>
 <h1 id="type-system-type-expressions">Type Expressions <a class="section-link" href="#type-system-type-expressions" aria-label="Permalink">§</a> <a class="back-to-top" href="#type-system-top">Back to top</a></h1>
 
 <p>
-The primitive static type names are <code>int</code>, <code>float</code>, <code>bool</code>, <code>str</code>, <code>path</code>, <code>datetime</code>, <code>bytes</code>, and <code>none</code>.
+The primitive static type names are <code>int</code>, <code>float</code>, <code>bool</code>, <code>str</code>, <code>path</code>, <code>datetime</code>, <code>bytes</code>, <code>none</code>, and <code>null</code>.
 Named runtime types such as <code>Grid</code>, <code>GridView</code>, and <code>GridRow</code> are also available.
+</p>
+
+<p>
+<code>null</code> is the JSON null type.
+It is distinct from <code>none</code>, which is only a value constructor (the empty case of <code>Maybe</code>) and is <em>not</em> a type &mdash; using <code>none</code> in a type expression is an error.
+Use <code>int | null</code> for a value that is an integer or a literal JSON null; that is different in meaning from <code>Maybe[int]</code>, a value that may be missing.
 </p>
 
 <table>
@@ -136,7 +142,7 @@ Current definition signatures still use the historical signature parser, so dict
 </p>
 
 <pre><code>type Person = {name: str, age: int}
-type JsonScalar = str | int | float | bool | none
+type JsonScalar = str | int | float | bool | null
 type JsonDict = {str: JsonScalar}
 
 { "name": "Ada", "age": 36 } as Person :age? 1 +</code></pre>
@@ -201,6 +207,44 @@ The question mark unwraps the <code>Maybe</code> and preserves the plain field t
 <pre><code>type Person = {name: str, age: int}
 
 { "name": "Ada", "age": 36 } as Person :age? 1 +</code></pre>
+
+<h2 id="type-system-dictionary-optional">Optional Fields <a class="section-link" href="#type-system-dictionary-optional" aria-label="Permalink">§</a></h2>
+
+<p>
+A shape field may be marked <em>optional</em> by writing <code>?</code> after its name: <code>name?: T</code>.
+An optional field may be absent from a value; when it is present, its value still has type <code>T</code> and is type-checked.
+This is what lets option-style dictionaries — request options, formatting options, and similar — be typed precisely instead of as a loose <code>{v}</code> dictionary.
+</p>
+
+<pre><code>type Request = {url: str, timeout?: int}
+
+{ "url": "x" } as Request                 # ok: timeout omitted
+{ "url": "x", "timeout": 30 } as Request  # ok: timeout present, an int
+{ "url": "x", "timeout": "soon" }         # error: timeout must be int when present
+{ "timeout": 30 }                         # error: required url missing</code></pre>
+
+<p>
+The <code>?</code> marks the <em>key</em> as possibly-absent.
+This is different from <code>Maybe</code>, which marks the <em>value</em>: <code>timeout?: int</code> means the key may be missing, whereas <code>timeout: Maybe[int]</code> means the key is always present but its value may be <code>none</code>.
+</p>
+
+<p>
+In <code>def</code> signatures the marker follows the quoted field name:
+</p>
+
+<pre><code>def doGet ({ "url": str, "timeout"?: int } -- str)
+    :url?
+end</code></pre>
+
+<p>
+Optional fields follow the same width-subtyping rules as required fields, with one addition: a value whose field is <em>required</em> can be used where an <em>optional</em> field is expected (a present value always satisfies an optional one), but an <em>optional</em> value cannot be used where a <em>required</em> field is expected (it might be absent).
+</p>
+
+<p>
+Reading fields is unchanged: <code>:field</code> returns <code>Maybe[T]</code> and <code>:field?</code> unwraps it (failing at runtime on a missing key), for required and optional fields alike.
+Because of that, the language server emits an informational diagnostic when <code>:field?</code> is used on a field a concrete shape does not declare — that unwrap is guaranteed to fail.
+Homogeneous dictionaries (<code>{str: T}</code>) return a genuine <code>Maybe[T]</code> for any key and are never flagged.
+</p>
 
 <h2 id="type-system-dictionary-nesting">Nested Dictionaries <a class="section-link" href="#type-system-dictionary-nesting" aria-label="Permalink">§</a></h2>
 

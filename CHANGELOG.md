@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Optional fields in dictionary shape types, written `name?: T` (and
+  `"name"?: T` in `def` signatures). An optional field may be absent from a
+  value; when present, its value is still type-checked. This lets option-style
+  APIs be typed precisely instead of as a loose `{v}` dict — e.g. `numFmt`,
+  `httpGet`/`httpPost`, grid `groupBy` aggregation specs, and the `zip*` option
+  dicts now declare their required and optional keys. A required value satisfies
+  an optional parameter, but an optional value does not satisfy a required one.
+- The language server now reports an informational diagnostic when a `?` unwrap
+  is statically guaranteed to fail — unwrapping a getter (`:k?`) for a field a
+  concrete shape does not declare, or unwrapping a bare `none`. The hint is
+  placed on the `?` and fires even when the value flows through a variable first
+  (e.g. `:b val! @val ?`). Homogeneous dictionaries (`{str: T}`) return a genuine
+  `Maybe[T]` for any key and are never flagged, and a value with a declared
+  `Maybe[T]` type is never flagged.
 - Functions
   - `clip`: Copy a string to the system clipboard. Cross-platform, using
     `pbcopy` on macOS, `clip` on Windows, and `wl-copy`/`xclip`/`xsel` on Linux.
@@ -34,6 +48,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   following it with a name, e.g. `str s : @s len` (mirroring `just v`). Works for
   every type keyword (`int`, `float`, `str`, `bool`, `list`, `dict`, `path`,
   `date`, `quotation`, `maybe`, `binary`).
+- A new `null` type representing the JSON null value, distinct from `none` (the
+  empty case of `Maybe`). `parseJson` now produces `null` for JSON `null`, the
+  `null` literal pushes one, and `null` can be used in union types (e.g.
+  `int | null`) and matched with a `null` arm. `( -- null)`
 
 ### Fixed
 

@@ -30,10 +30,11 @@ const (
 	TidFloat
 	TidStr
 	TidBytes
-	TidNone
+	TidNone     // reserved slot; `none` is a Maybe constructor, NOT a nameable type (use Maybe[T] or null). Kept to preserve primitive ids.
 	TidPath     // path literal (`...`) and the path runtime type
 	TidDateTime // date/time literal (YYYY-MM-DD[THH:MM[:SS]]) and now/date ops
 	TidBottom   // divergent: exit, infinite loop, (Phase 2) propagated fail
+	TidNull     // JSON `null`; distinct from `none` (the empty Maybe case)
 )
 
 // TypeKind categorizes a TypeNode. The interpretation of TypeNode.A, B, and
@@ -124,8 +125,9 @@ type TypeVarId uint32
 // ShapeField is one field in a TKShape's column list. ShapeFields are stored
 // in TypeArena.shapeFields, sorted by Name, with no duplicates.
 type ShapeField struct {
-	Name NameId
-	Type TypeId
+	Name     NameId
+	Type     TypeId
+	Optional bool
 }
 
 // GridSchemaCol is one column in a TKGrid / TKGridView / TKGridRow schema.
@@ -197,6 +199,7 @@ func NewTypeArena() *TypeArena {
 		TKPrim, // TidPath
 		TKPrim, // TidDateTime
 		TKPrim, // TidBottom
+		TKPrim, // TidNull
 	}
 	for i := range primitives {
 		// Encode the primitive id directly in A so the cons key stays unique.
@@ -502,6 +505,9 @@ func encodeShapeKey(fields []ShapeField) string {
 			sb.WriteByte(',')
 		}
 		sb.WriteString(strconv.FormatUint(uint64(f.Name), 10))
+		if f.Optional {
+			sb.WriteByte('?')
+		}
 		sb.WriteByte('=')
 		sb.WriteString(strconv.FormatUint(uint64(f.Type), 10))
 	}
@@ -673,7 +679,7 @@ func (t *NameTable) Name(id NameId) string {
 // cannot be shadowed by a user `type` declaration.
 func IsReservedTypeName(name string) bool {
 	switch name {
-	case "int", "float", "str", "bool", "bytes", "none",
+	case "int", "float", "str", "bool", "bytes", "none", "null",
 		"path", "datetime", "Maybe", "Grid", "GridView", "GridRow":
 		return true
 	}

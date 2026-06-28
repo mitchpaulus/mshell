@@ -165,6 +165,32 @@ func (c *Checker) CheckTokens(tokens []Token) {
 // checkOne dispatches a single token. Literals push a primitive; tokens
 // in the builtin table apply the corresponding sig. Anything else is
 // reported as an unknown identifier (Phase 2 surface is intentionally tiny).
+// flagAlwaysFailUnwrap emits a non-fatal hint when `?` is applied to a value
+// that can only be None — a Maybe whose payload is bottom (uninhabited), which
+// a getter for an undeclared concrete-shape field produces. The hint is placed
+// on the `?` token, where the runtime failure occurs, and works regardless of
+// how the value reached the top of stack (it is a property of the operand's
+// type, so it survives variable bindings). Never affects typing.
+func (c *Checker) flagAlwaysFailUnwrap(tok Token) {
+	if c.inferring || c.stack.Len() == 0 {
+		return
+	}
+	top := c.subst.Apply(c.arena, c.stack.Top())
+	n := c.arena.Node(top)
+	if n.Kind != TKMaybe {
+		return
+	}
+	if c.subst.Apply(c.arena, TypeId(n.A)) != TidBottom {
+		return
+	}
+	c.errors = append(c.errors, TypeError{
+		Severity: SeverityInfo,
+		Kind:     TErrUnwrapAlwaysFails,
+		Pos:      tok,
+		Hint:     "'?' unwraps a value that can only be None (e.g. a getter for a field the shape does not declare); this will fail at runtime",
+	})
+}
+
 func (c *Checker) checkOne(tok Token) {
 	if c.diverged {
 		return
@@ -301,6 +327,16 @@ func (c *Checker) checkOne(tok Token) {
 		case BREAK, CONTINUE:
 			c.diverged = true
 			return
+		case QUESTION:
+			// `?` is fromJust. If its operand is a Maybe whose payload is
+			// uninhabited (Maybe[bottom] — e.g. a getter for a field a
+			// concrete shape does not declare), the value can only be None,
+			// so this unwrap is statically guaranteed to fail at runtime.
+			// Flag it at the `?` (where the failure happens) as a non-fatal
+			// hint, then fall through to normal `?` typing. The bottom
+			// payload flows through bindings, so this fires even when the
+			// getter and the `?` are far apart.
+			c.flagAlwaysFailUnwrap(tok)
 		}
 		if tok.Type == LOOP && c.tryLoop(tok) {
 			return
@@ -970,10 +1006,14 @@ func (c *Checker) unifyTypeToUnion(got TypeId, wn TypeNode) bool {
 	return false
 }
 
-// unifyShape implements width subtyping: every field of `want` must appear
-// in `got` with a unifiable type. Extra fields in `got` are allowed.
-// Both field lists are pre-sorted by NameId (see normalizeShapeFields), so
-// the merge is linear.
+// unifyShape implements width subtyping with optional fields: every
+// required field of `want` must appear in `got` with a unifiable type, and a
+// `want` field marked optional may be absent in `got`. Extra fields in `got`
+// are allowed. A required `want` field cannot be satisfied by an optional
+// `got` field (the value might be absent at runtime); when a field is present
+// in both, its value type is checked regardless of optionality. Both field
+// lists are pre-sorted by NameId (see normalizeShapeFields), so the merge is
+// linear.
 func (c *Checker) unifyShape(gn, wn TypeNode) bool {
 	gFields := c.arena.shapeFields[gn.Extra]
 	wFields := c.arena.shapeFields[wn.Extra]
@@ -983,7 +1023,17 @@ func (c *Checker) unifyShape(gn, wn TypeNode) bool {
 		for gi < len(gFields) && gFields[gi].Name < wf.Name {
 			gi++
 		}
-		if gi == len(gFields) || gFields[gi].Name != wf.Name {
+		present := gi < len(gFields) && gFields[gi].Name == wf.Name
+		if !present {
+			// Absent in `got` is only acceptable if `want` allows it.
+			if wf.Optional {
+				continue
+			}
+			return false
+		}
+		// A required `want` field is not satisfied by an optional `got`
+		// field — presence is not guaranteed even though the name matches.
+		if !wf.Optional && gFields[gi].Optional {
 			return false
 		}
 		if !c.unify(gFields[gi].Type, wf.Type) {

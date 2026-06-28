@@ -1,0 +1,7 @@
+# An optional field does not satisfy a required parameter: the value might be
+# absent at runtime, so { "timeout"?: int } cannot be passed where
+# { "timeout": int } is required.
+def needsReq ({ "timeout": int } -- int) :timeout? end
+def passesOptional ({ "timeout"?: int } -- int)
+    needsReq
+end

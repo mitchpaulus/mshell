@@ -142,9 +142,10 @@ func (a *TypeDictExpr) DebugString() string {
 
 // TypeShapeField is one entry in a shape literal.
 type TypeShapeField struct {
-	Tok  Token
-	Name string
-	Type MShellParseItem
+	Tok      Token
+	Name     string
+	Type     MShellParseItem
+	Optional bool
 }
 
 // TypeShapeExpr is a structural record `{a: T, b: U, ...}`. A
@@ -346,14 +347,23 @@ func (parser *MShellParser) parseTypeDictOrShape(errs *[]TypeError) MShellParseI
 			// dict key by peeking one token past the LITERAL.
 			lit := parser.curr
 			next := parser.scanToken()
-			if next.Type == COLON {
+			optional := false
+			if next.Type == QUESTION {
+				optional = true
+				next = parser.scanToken()
+			}
+			if next.Type == COLON || optional {
 				parser.curr = next
-				parser.NextToken() // consume :
+				if parser.curr.Type == COLON {
+					parser.NextToken() // consume :
+				} else {
+					*errs = append(*errs, TypeError{Kind: TErrTypeParse, Pos: parser.curr, Hint: "expected ':' after optional shape field name '" + lit.Lexeme + "', got " + tokDesc(parser.curr)})
+				}
 				fieldType, subErrs := parser.parseTypeExpr()
 				*errs = append(*errs, subErrs...)
 				shape := &TypeShapeExpr{
 					OpenTok: open,
-					Fields:  []TypeShapeField{{Tok: lit, Name: lit.Lexeme, Type: fieldType}},
+					Fields:  []TypeShapeField{{Tok: lit, Name: lit.Lexeme, Type: fieldType, Optional: optional}},
 				}
 				parser.continueTypeShapeBody(shape, errs)
 				return shape
@@ -505,6 +515,11 @@ func (parser *MShellParser) continueTypeShapeBody(shape *TypeShapeExpr, errs *[]
 			parser.skipToShapeSync()
 			continue
 		}
+		optional := false
+		if parser.curr.Type == QUESTION {
+			optional = true
+			parser.NextToken()
+		}
 		if parser.curr.Type != COLON {
 			*errs = append(*errs, TypeError{Kind: TErrTypeParse, Pos: parser.curr, Hint: "expected ':' after shape field name '" + name + "', got " + tokDesc(parser.curr)})
 		} else {
@@ -522,7 +537,7 @@ func (parser *MShellParser) continueTypeShapeBody(shape *TypeShapeExpr, errs *[]
 		if duplicate {
 			*errs = append(*errs, TypeError{Kind: TErrTypeParse, Pos: nameTok, Hint: "duplicate shape field '" + name + "'"})
 		} else {
-			shape.Fields = append(shape.Fields, TypeShapeField{Tok: nameTok, Name: name, Type: fieldType})
+			shape.Fields = append(shape.Fields, TypeShapeField{Tok: nameTok, Name: name, Type: fieldType, Optional: optional})
 		}
 	}
 	if parser.curr.Type != RIGHT_CURLY {
@@ -616,7 +631,7 @@ func (parser *MShellParser) applyMaybeArgs(node *TypeNamed, errs *[]TypeError) {
 // shape with that field name.
 func isPrimitiveLiteralType(lex string) bool {
 	switch lex {
-	case "bytes", "none", "Maybe", "Grid", "GridView", "GridRow":
+	case "bytes", "null", "Maybe", "Grid", "GridView", "GridRow":
 		return true
 	}
 	return false
@@ -677,8 +692,9 @@ func (c *Checker) resolveTypeExpr(node MShellParseItem, ctx *typeResolveCtx) Typ
 		fields := make([]ShapeField, 0, len(n.Fields))
 		for _, f := range n.Fields {
 			fields = append(fields, ShapeField{
-				Name: c.names.Intern(f.Name),
-				Type: c.resolveTypeExpr(f.Type, ctx),
+				Name:     c.names.Intern(f.Name),
+				Type:     c.resolveTypeExpr(f.Type, ctx),
+				Optional: f.Optional,
 			})
 		}
 		return c.arena.MakeShape(fields)
@@ -703,7 +719,17 @@ func (c *Checker) resolveTypeExpr(node MShellParseItem, ctx *typeResolveCtx) Typ
 		case "bytes":
 			return TidBytes
 		case "none":
-			return TidNone
+			// `none` is the empty constructor of Maybe (like Haskell's
+			// Nothing), not a type. Reject it in type position with a
+			// pointer to the right tool. Without this case it would
+			// silently become an implicit generic inside a def signature.
+			c.errors = append(c.errors, TypeError{
+				Kind: TErrTypeParse, Pos: n.Tok,
+				Hint: "'none' is not a type; it is the empty constructor of Maybe. Use 'Maybe[T]' for an optional value, or 'null' for the JSON null type",
+			})
+			return TidNothing
+		case "null":
+			return TidNull
 		case "path":
 			return TidPath
 		case "datetime":
