@@ -156,7 +156,12 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 
 	// ----- Maybe constructors -----
 	r.reg("just", "(t -- Maybe[t])")
-	r.reg("none", "( -- Maybe[t])")
+	// `none` is always Nothing, so its payload is uninhabited: Maybe[bottom].
+	// This stays compatible with any Maybe[T] context (bottom unifies with
+	// anything, and a declared Maybe[T] boundary launders it back to T), but
+	// lets `?` recognize that unwrapping a bare `none` always fails.
+	// `bottom` has no sig-string spelling, so build the sig in Go.
+	r.regGo("none", QuoteSig{Outputs: []TypeId{arena.MakeMaybe(TidBottom)}})
 
 	// ----- JSON null -----
 	r.reg("null", "( -- null)")

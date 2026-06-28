@@ -18,8 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an optional parameter, but an optional value does not satisfy a required one.
 - The language server now reports an informational diagnostic when a `?` unwrap
   is statically guaranteed to fail — unwrapping a getter (`:k?`) for a field a
-  concrete shape does not declare. Homogeneous dictionaries (`{str: T}`) return a
-  genuine `Maybe[T]` for any key and are never flagged.
+  concrete shape does not declare, or unwrapping a bare `none`. The hint is
+  placed on the `?` and fires even when the value flows through a variable first
+  (e.g. `:b val! @val ?`). Homogeneous dictionaries (`{str: T}`) return a genuine
+  `Maybe[T]` for any key and are never flagged, and a value with a declared
+  `Maybe[T]` type is never flagged.
 - Functions
   - `clip`: Copy a string to the system clipboard. Cross-platform, using
     `pbcopy` on macOS, `clip` on Windows, and `wl-copy`/`xclip`/`xsel` on Linux.

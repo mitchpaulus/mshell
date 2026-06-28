@@ -281,6 +281,13 @@
     <code>{ 'a': 1 } :b val! @val ?</code> is flagged even though the getter and the unwrap are far
     apart — the <code>Maybe[bottom]</code> type flows through <code>val</code>.</p>
 
+  <p>The <code>none</code> constructor is typed the same way — <code>none : ( -- Maybe[bottom])</code>,
+    since it is always Nothing — so <code>none ?</code> (and <code>none</code> unwrapped after flowing
+    through a binding) is flagged too. It still satisfies any <code>Maybe[T]</code> context: a declared
+    <code>Maybe[T]</code> boundary (e.g. a function's output type) launders <code>Maybe[bottom]</code>
+    back to <code>Maybe[T]</code>, so only a <em>bare</em> <code>none</code> reaching a <code>?</code>
+    is flagged, never a <code>?</code> on a properly-typed optional result.</p>
+
   <p>The element type is fully determined by the receiver kind and field status — the concrete-vs-open
     distinction is exactly <strong>shape (<code>TKShape</code>) vs homogeneous dict
     (<code>TKDict</code>)</strong>, which the type system already tracks:</p>

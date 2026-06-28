@@ -124,6 +124,28 @@ func TestUnwrapDiagnosticDirectUnwrapThroughBinding(t *testing.T) {
 	}
 }
 
+func TestUnwrapDiagnosticBareNone(t *testing.T) {
+	// `none` is always Nothing, so unwrapping it always fails — flag it,
+	// including when it flows through a binding first.
+	for _, src := range []string{`none ?`, `none val! @val ?`} {
+		errs := allCheckerErrors(t, src)
+		if fatalErrorCount(errs) != 0 {
+			t.Fatalf("%q: must not be a fatal error; got %d", src, fatalErrorCount(errs))
+		}
+		if got := infoCount(errs, TErrUnwrapAlwaysFails); got != 1 {
+			t.Fatalf("%q: expected the always-fails hint, got %d", src, got)
+		}
+	}
+}
+
+func TestNoneSafeUsesNotFlagged(t *testing.T) {
+	for _, src := range []string{`none 5 maybe drop`, `none drop`, `none isNone drop`} {
+		if got := infoCount(allCheckerErrors(t, src), TErrUnwrapAlwaysFails); got != 0 {
+			t.Fatalf("%q: safe none use must not be flagged, got %d", src, got)
+		}
+	}
+}
+
 func TestUnwrapDiagnosticDeclaredFieldSilent(t *testing.T) {
 	errs := allCheckerErrors(t, `{ "a": 1 } :a? drop`)
 	if got := infoCount(errs, TErrUnwrapAlwaysFails); got != 0 {
