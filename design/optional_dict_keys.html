@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Optional Dictionary Keys — mshell design</title>
+  <style>
+    :root {
+      --ink: #1f2933;
+      --muted: #52606d;
+      --accent: #0F4C81;
+      --accent-soft: #e8eef5;
+      --bg: #fdfdfd;
+      --panel: #f4f5f7;
+      --border: #dcdfe3;
+      --code-bg: #f6f8fa;
+      --code-ink: #24292f;
+      --string: #b00020;
+    }
+
+    html { height: 100%; }
+
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      color: var(--ink);
+      background: var(--bg);
+      line-height: 1.6;
+    }
+
+    main {
+      max-width: 52rem;
+      margin: 0 auto;
+      padding: 3.5rem 1.5rem 6rem;
+    }
+
+    .doc-header {
+      border-bottom: 2px solid var(--accent-soft);
+      padding-bottom: 1.25rem;
+      margin-bottom: 2rem;
+    }
+
+    h1 {
+      font-size: 2.1rem;
+      font-weight: 650;
+      letter-spacing: 0.01em;
+      color: #111827;
+      margin: 0 0 0.5rem;
+    }
+
+    h2 {
+      font-size: 1.45rem;
+      font-weight: 620;
+      color: var(--accent);
+      margin: 2.75rem 0 0.9rem;
+      padding-bottom: 0.3rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    h3 {
+      font-size: 1.1rem;
+      font-weight: 620;
+      color: #243b53;
+      margin: 1.9rem 0 0.6rem;
+    }
+
+    p { margin: 0.85rem 0; }
+
+    .status {
+      display: inline-block;
+      font-size: 0.85rem;
+      color: var(--muted);
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 0.6rem;
+      padding: 0.5rem 0.85rem;
+      margin: 0;
+    }
+
+    .lead {
+      font-size: 1.08rem;
+      color: var(--ink);
+      background: var(--accent-soft);
+      border-left: 4px solid var(--accent);
+      border-radius: 0 0.5rem 0.5rem 0;
+      padding: 0.9rem 1.1rem;
+      margin: 1.5rem 0 0;
+    }
+
+    code {
+      font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+      font-size: 0.92em;
+      background: var(--code-bg);
+      color: var(--code-ink);
+      padding: 0.12em 0.38em;
+      border-radius: 0.35em;
+      border: 1px solid #eaecef;
+    }
+
+    pre {
+      background: var(--code-bg);
+      border: 1px solid #e1e4e8;
+      border-radius: 0.6rem;
+      padding: 1rem 1.15rem;
+      overflow-x: auto;
+      margin: 1.1rem 0;
+    }
+
+    pre code {
+      background: none;
+      border: none;
+      padding: 0;
+      font-size: 0.9rem;
+      line-height: 1.55;
+      color: var(--code-ink);
+    }
+
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      margin: 1.2rem 0;
+      font-size: 0.95rem;
+    }
+
+    th, td {
+      border: 1px solid var(--border);
+      padding: 0.55rem 0.8rem;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    thead th {
+      background: var(--accent);
+      color: #fff;
+      font-weight: 600;
+    }
+
+    tbody tr:nth-child(even) { background: var(--panel); }
+
+    td code, th code { font-size: 0.88em; }
+
+    ul { margin: 0.8rem 0; padding-left: 1.4rem; }
+    li { margin: 0.3rem 0; }
+
+    strong { font-weight: 640; }
+
+    .yes { color: #1a7f37; font-weight: 600; }
+    .no { color: #b00020; font-weight: 600; }
+
+    hr {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 2.5rem 0;
+    }
+
+    .footnote { color: var(--muted); font-size: 0.95rem; }
+  </style>
+</head>
+<body>
+<main>
+
+  <div class="doc-header">
+    <h1>Optional Dictionary Keys</h1>
+    <p class="status"><strong>Status:</strong> design. The subtyping core was validated with a working
+      prototype (passed the full test suite); the access semantics below are deliberately a
+      <em>no-op</em> on the current implementation.</p>
+  </div>
+
+  <p class="lead">Optional keys are a property of a <strong>dictionary shape type</strong> only. They change
+    how a value binds against a declared shape (function signatures, <code>as</code> casts). They do
+    <strong>not</strong> change getters, <code>?</code>, <code>none</code>, or <code>Maybe</code> — those
+    already represent the runtime faithfully.</p>
+
+  <h2>Motivation</h2>
+  <p>Shapes today require every listed field to be present, so APIs with optional keys can't be typed
+    precisely. The only fallback is the loose homogeneous dict <code>{v}</code> (<code>{str: v}</code>),
+    which discards all per-field information. This is the documented workaround in the source for
+    <code>httpGet</code> ("the type system has no notion of optional shape fields"). Real cases:
+    <code>numFmt</code> options (all optional), <code>httpGet</code>/<code>httpPost</code> requests
+    (<code>url</code> required, rest optional), grid <code>groupBy</code> agg specs (<code>agg</code>
+    required, <code>name</code>/<code>meta</code> optional), the <code>zip*</code> options dicts, and
+    JSON/spreadsheet records.</p>
+
+  <h2>Syntax</h2>
+  <p>Mark an optional field with <code>?</code> after the field <strong>name</strong>:</p>
+  <pre><code>type Req = {url: str, timeout?: int, headers?: {str: str}}</code></pre>
+
+  <p>In <code>def</code> signatures (historical quoted-field spelling), the <code>?</code> follows the quote:</p>
+  <pre><code>def doGet ({ "url": str, "timeout"?: int } -- str) :url? end</code></pre>
+
+  <p>The marker sits between name and colon: <code>name?: T</code>. <code>FormatType</code> renders it the
+    same way, so errors read back as written.</p>
+
+  <p><code>?</code> marks the <strong>key</strong> as possibly-absent. This is orthogonal to
+    <code>Maybe</code>, which marks the <strong>value</strong>. Both compose:</p>
+
+  <table>
+    <thead><tr><th>Type</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>timeout?: int</code></td><td>key may be absent; if present, value is <code>int</code></td></tr>
+      <tr><td><code>timeout: Maybe[int]</code></td><td>key always present; value is <code>just int</code> or <code>none</code></td></tr>
+      <tr><td><code>timeout?: Maybe[int]</code></td><td>key may be absent; if present, <code>just int</code> or <code>none</code></td></tr>
+    </tbody>
+  </table>
+
+  <h2>What optional keys do: subtyping only</h2>
+  <p>The feature lives entirely in shape unification — i.e. when a value is bound or passed against a
+    declared shape. For each field <code>f</code> of the <strong>expected</strong> shape:</p>
+
+  <table>
+    <thead>
+      <tr><th>expected <code>f</code></th><th>actual has it (required)</th><th>actual has it (optional)</th><th>actual lacks it</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>f: T</code> (required)</td><td>unify value types</td><td class="no">reject (may be absent)</td><td class="no">reject</td></tr>
+      <tr><td><code>f?: T</code> (optional)</td><td>unify value types</td><td>unify value types</td><td class="yes">accept</td></tr>
+    </tbody>
+  </table>
+
+  <p>Extra fields in the actual value are always allowed (existing width subtyping). The two
+    asymmetries: a required value satisfies an optional parameter; an optional value does not satisfy a
+    required parameter. Critically, <strong>a present optional field is still type-checked</strong> —
+    that is the win over <code>{v}</code>: <code>{ "timeout": "soon" }</code> is rejected against
+    <code>{timeout?: int}</code> because <code>str</code> &ne; <code>int</code>.</p>
+
+  <p>Prototype results (full suite passed with zero edits to tests or stdlib):</p>
+  <ul>
+    <li>omit an optional key when building/passing &rarr; <span class="yes">accepted</span></li>
+    <li>present optional key, wrong type &rarr; <span class="no">rejected</span></li>
+    <li>present optional key, right type &rarr; <span class="yes">accepted</span></li>
+    <li>missing a required key &rarr; <span class="no">rejected</span></li>
+    <li>required value &rarr; optional parameter &rarr; <span class="yes">accepted</span>; optional value
+      &rarr; required parameter &rarr; <span class="no">rejected</span></li>
+  </ul>
+
+  <h2>What optional keys do NOT do: access is unchanged</h2>
+  <p>Getters already represent the runtime, so nothing here changes:</p>
+  <ul>
+    <li><code>:k</code> (the getter) never fails at runtime — it returns a <code>Maybe</code>. So its type
+      is <strong><code>Maybe[T]</code></strong>, for required <em>and</em> optional fields alike.</li>
+    <li><code>?</code> is <code>fromJust</code>: it unwraps <code>Just</code>, fails on <code>None</code>.
+      So <code>:k?</code> is <strong><code>T</code></strong>, a partial operation. The checker types the
+      success case; it does not promise the unwrap won't fail — exactly as
+      <code>fromJust Nothing :: a</code> type-checks in Haskell.</li>
+  </ul>
+  <p>So required vs optional fields differ only in subtyping/construction, never in how you read them.
+    There are no access-site type errors, and <code>none</code>/<code>Maybe</code>/<code>?</code> keep
+    their faithful ADT meaning.</p>
+
+  <h3>Relationship to Haskell's <code>Maybe</code></h3>
+  <p><code>data Maybe a = Just a | Nothing</code> introduces one <em>type</em> (<code>Maybe</code>) and two
+    <em>values</em> (<code>Just</code>, <code>Nothing</code>). <code>Nothing :: Maybe a</code> — there is
+    no type called <code>Nothing</code>. mshell matches this for values:
+    <code>none : ( -- Maybe[a])</code> is <code>Nothing</code>, <code>just : (a -- Maybe[a])</code> is
+    <code>Just</code>. A getter returning <code>Maybe[T]</code> and <code>?</code> being a partial
+    <code>fromJust</code> is the faithful model. (mshell <em>also</em> has a standalone <code>none</code>
+    <em>type</em> used for JSON null in unions; see "Related" below — it is a separate concern and the
+    reason an earlier "type the absent getter as <code>none</code>" idea was rejected: it only worked by
+    being un-ADT-like.)</p>
+
+  <h2>LSP diagnostic: "this unwrap will always fail"</h2>
+  <p>Faithful types don't say whether a given <code>Maybe</code> is <code>Just</code> or
+    <code>Nothing</code>, so the "always fails" signal is a <strong>non-fatal diagnostic</strong>
+    (<code>SeverityInfo</code>, the severity <code>dbg</code> already uses — it never fails
+    <code>--check-types</code>), not a type error.</p>
+
+  <p>The signal is a small three-state <em>variant</em> tag carried beside each value:</p>
+  <pre><code>JustKnown   definitely present     &lt;- `just x`; a required field of a shape
+Unknown     could be either        &lt;- the default
+NoneKnown   definitely Nothing     &lt;- `none`; an undeclared field of a shape</code></pre>
+
+  <p>The variant is fully determined by the receiver kind and field status — the concrete-vs-open
+    distinction is exactly <strong>shape (<code>TKShape</code>) vs homogeneous dict
+    (<code>TKDict</code>)</strong>, which the type system already tracks:</p>
+
+  <table>
+    <thead>
+      <tr><th>receiver</th><th>field</th><th>variant</th><th><code>?</code> diagnostic</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>homogeneous dict <code>{str: T}</code></td><td>any key</td><td>Unknown</td><td>never</td></tr>
+      <tr><td>shape, required field</td><td>declared</td><td>JustKnown</td><td>never (safe)</td></tr>
+      <tr><td>shape, optional field</td><td>declared <code>k?:</code></td><td>Unknown</td><td>never ("always" can't be claimed)</td></tr>
+      <tr><td>shape, undeclared field</td><td>not in shape</td><td>NoneKnown</td><td class="yes">yes</td></tr>
+    </tbody>
+  </table>
+
+  <p>Rule: <strong><code>?</code> applied to a <code>NoneKnown</code> value emits the
+    diagnostic.</strong> Open dictionaries return the genuine <code>Maybe[T]</code> for any key, so they
+    are <code>Unknown</code> and never hinted — a statement is only possible against a concrete shape.</p>
+
+  <p>Wording is contract-flavored, not an absolute claim about every runtime value: width subtyping means
+    a wider value <em>could</em> carry an undeclared field, but a value typed <code>{a: int}</code> only
+    <em>guarantees</em> <code>a</code>, so <code>:b?</code> cannot be relied on (a function that needs
+    <code>b</code> should declare it). Example: <code>field 'b' is not part of {a: int}, so ':b?' will
+    fail</code>.</p>
+
+  <h2>Implementation</h2>
+  <p>The feature itself is one small, self-contained change set:</p>
+  <ol>
+    <li><code>Type.go</code>: add <code>Optional bool</code> to <code>ShapeField</code>; include it in
+      <code>encodeShapeKey</code> so <code>{k: T}</code> and <code>{k?: T}</code> intern distinctly.
+      (Sorting/dedup unaffected.)</li>
+    <li><code>TypeExpr.go</code>: add <code>Optional bool</code> to <code>TypeShapeField</code>; accept
+      <code>?</code> between a field name and its colon (fast path and
+      <code>continueTypeShapeBody</code>, covering quoted names); propagate in
+      <code>resolveTypeExpr</code>. (No lexer change — <code>QUESTION</code> already tokenizes; no
+      value-parser/getter change.)</li>
+    <li><code>TypeError.go</code>: render <code>?</code> on optional fields in <code>FormatType</code>.</li>
+    <li><code>TypeChecker.go</code>: extend <code>unifyShape</code> with the subtyping table above. Casts
+      inherit it via <code>castOk</code> &rarr; <code>unify</code>.</li>
+  </ol>
+  <p>The diagnostic is a separable add-on: track the three-state variant alongside the type stack, and
+    emit a <code>SeverityInfo</code> when <code>?</code> consumes a <code>NoneKnown</code>. Surfaced by
+    <code>lsp.go</code>; ignored by pass/fail.</p>
+  <p>Supporting work (per <code>CLAUDE.md</code>): re-type the motivating builtins (<code>numFmt</code>,
+    <code>httpGet</code>/<code>httpPost</code>, grid <code>groupBy</code> aggs, <code>zip*</code> options)
+    from <code>{v}</code> to honest optional shapes; docs
+    (<code>doc/type_system.inc.html</code>, <code>doc/mshell.md</code>, rebuild); <code>CHANGELOG.md</code>
+    under Unreleased/Added.</p>
+
+  <h2>Approaches considered and rejected</h2>
+  <ul>
+    <li><strong>Merge <code>:k?</code> into one "checked getter" at parse time.</strong> Worked and passed
+      the suite, but changes the value parser/AST and absorbs <code>?</code> (a uniform standalone
+      operator) into the getter. Unnecessary once access stays faithful.</li>
+    <li><strong>Type an absent getter as the <code>none</code> primitive so <code>?</code> rejects
+      it.</strong> Catches the case with no parser change, but only by making the result
+      un-<code>Maybe</code> — it breaks the ADT (a missing field is <code>Nothing : Maybe a</code>) and
+      the safe <code>match</code>/<code>maybe</code> accessors. Rejected.</li>
+    <li><strong>Make undeclared-field access a hard type error.</strong> Conflicts with the guiding
+      principle: the runtime returns <code>None</code> (it does not fail), so the type system must not
+      fail either. Demoted to the non-fatal diagnostic above.</li>
+  </ul>
+
+  <hr>
+
+  <h2>Related (separate design): a distinct <code>null</code> type</h2>
+  <p>Today one word "none" does two jobs over one runtime object (<code>Maybe{nil}</code>): the
+    <code>Maybe</code> <code>Nothing</code> <em>value</em> (<code>Maybe[a]</code>), and a standalone
+    <code>none</code> <em>type</em> used for JSON null in unions like <code>int | str | none</code>. These
+    are different concepts — <code>{"x": null}</code> has <code>x</code> <strong>present</strong> with a
+    null value; <code>{}</code> has <code>x</code> <strong>absent</strong> — and the overlap is the root
+    of much confusion (it is why the <code>none</code> <em>type</em> is not a <code>Maybe</code>).</p>
+  <p>Recommendation: introduce a first-class <code>null</code> value/type and keep
+    <code>none</code>/<code>Maybe</code> as a pure optionality ADT. Benefits: honest JSON modeling
+    (<code>:x</code> on <code>{"x": null}</code> is <code>Just(null)</code>, not <code>Just(None)</code>),
+    a clean <code>Maybe</code>, and a crisper "always-fails" diagnostic (a <code>NoneKnown</code> value is
+    then unambiguously absence). Costs: a new runtime type plus
+    equality/truthiness/display/<code>toJson</code>, and migrating
+    <code>parseJson</code>/<code>parseExcel</code> and <code>… | none</code> JSON unions to
+    <code>null</code>. This is a larger, independent change and should be its own design note.</p>
+
+</main>
+</body>
+</html>
