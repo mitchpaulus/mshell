@@ -78,8 +78,13 @@ end</code></pre>
 <h1 id="type-system-type-expressions">Type Expressions <a class="section-link" href="#type-system-type-expressions" aria-label="Permalink">§</a> <a class="back-to-top" href="#type-system-top">Back to top</a></h1>
 
 <p>
-The primitive static type names are <code>int</code>, <code>float</code>, <code>bool</code>, <code>str</code>, <code>path</code>, <code>datetime</code>, <code>bytes</code>, and <code>none</code>.
+The primitive static type names are <code>int</code>, <code>float</code>, <code>bool</code>, <code>str</code>, <code>path</code>, <code>datetime</code>, <code>bytes</code>, <code>none</code>, and <code>null</code>.
 Named runtime types such as <code>Grid</code>, <code>GridView</code>, and <code>GridRow</code> are also available.
+</p>
+
+<p>
+<code>null</code> is the JSON null type and is distinct from <code>none</code>, the empty case of <code>Maybe</code>.
+Use <code>int | null</code> for a value that is an integer or a literal JSON null; that is different in meaning from <code>Maybe[int]</code>, a value that may be missing.
 </p>
 
 <table>
@@ -136,7 +141,7 @@ Current definition signatures still use the historical signature parser, so dict
 </p>
 
 <pre><code>type Person = {name: str, age: int}
-type JsonScalar = str | int | float | bool | none
+type JsonScalar = str | int | float | bool | null
 type JsonDict = {str: JsonScalar}
 
 { "name": "Ada", "age": 36 } as Person :age? 1 +</code></pre>

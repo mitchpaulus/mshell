@@ -509,8 +509,12 @@ def fullName (str str -- str)
 end
 ```
 
-Primitive static type names include `int`, `float`, `bool`, `str`, `path`, `datetime`, `bytes`, and `none`.
+Primitive static type names include `int`, `float`, `bool`, `str`, `path`, `datetime`, `bytes`, `none`, and `null`.
 Named runtime types such as `Grid`, `GridView`, and `GridRow` are also available.
+
+`null` is the JSON null type and is distinct from `none`, the empty case of `Maybe`.
+`parseJson` produces a `null` for each JSON `null`, and the `null` literal pushes one.
+Use `int | null` for "an integer or a literal JSON null"; that differs in meaning from `Maybe[int]`, "an int that may be missing".
 
 Type expressions compose with lists, dictionaries, unions, `Maybe`, and quotation types.
 
@@ -519,6 +523,7 @@ Type expressions compose with lists, dictionaries, unions, `Maybe`, and quotatio
 {str: int}            # string-keyed dictionary of ints
 {name: str, age: int} # dictionary shape
 Maybe[int]            # optional int
+int | null            # int or JSON null
 int | str             # union
 (int int -- bool)     # quotation type
 ```
@@ -850,7 +855,10 @@ end wl # Output: 3
 ### Type Matching
 
 Type keywords match based on the subject's type:
-`int`, `float`, `str`, `bool`, `list`, `dict`, `path`, `date`, `quotation`, `maybe`, `binary`.
+`int`, `float`, `str`, `bool`, `list`, `dict`, `path`, `date`, `quotation`, `maybe`, `binary`, `null`.
+
+A `null` arm matches the JSON null value (the `null` type), which is distinct from a `none` arm (the empty case of a `Maybe`).
+For a union such as `int | null`, the `int` and `null` arms cover it exhaustively with no wildcard needed.
 
 ```mshell
 42 match
@@ -987,7 +995,7 @@ end wl # Output: 11
 - `gridValues`: Extract Grid or GridView cell values as row-major lists, without a header row and without coercing cell types. (`Grid|GridView -- [[a]]`)
 - `toCsvCell`: Escape a single CSV cell. If the value contains `,`, `"`, or a newline, wraps the value in double quotes and doubles any embedded quotes; otherwise returns the input unchanged. (`str -- str`)
 - `toCsv`: Serialize a list of rows to a CSV string. Each cell is escaped with `toCsvCell`, cells are joined with `,`, and rows are joined with `\n`. (`[[str]] -- str`)
-- `parseJson`: Parse JSON from a string, binary, or file path into mshell objects. (`path|str|binary -- list|dict|numeric|str|bool`)
+- `parseJson`: Parse JSON from a string, binary, or file path into mshell objects. JSON `null` becomes the `null` type (distinct from `none`). (`path|str|binary -- list|dict|numeric|str|bool|null`)
 - `parseExcel`: Parse an `.xlsx` (OOXML) spreadsheet into a list of sheets in workbook (tab) order. Each sheet is a dict with a `name` key (the worksheet name), a `data` key holding a rectangular list of rows (list of lists), a `hidden` key (bool; `true` for hidden or veryHidden sheets), and a `visibility` key (`"visible"`, `"hidden"`, or `"veryHidden"`). Cell values are typed: numbers become floats (dates appear as Excel serial floats), strings become strings (shared, inline, and formula-string results all resolved), booleans become booleans, error cells (e.g. `#DIV/0!`) become `none`, and empty/padding cells are the empty string. Chartsheets are skipped; hidden worksheets are included. Dates are returned as raw Excel serial floats; apply `fromOleDate` at the call site to convert. `parseExcel` assumes the default 1900-based date system, which matches `fromOleDate`'s OLE epoch (1899-12-30). Workbooks saved with the 1904 date system (`<workbookPr date1904="true"/>`, seen on some files originally authored on older Mac Excel or with the "Use 1904 date system" option enabled) have serials offset by 1462 days; on those files, add 1462 to each serial before calling `fromOleDate`, e.g. `@wb :0: :data? :3: :0: 1462 + fromOleDate`. (`path|binary -- list`)
 - `seq`: Generate a list of integers, starting from 0. Exclusive end to integer on stack. `2 seq` produces `[0 1]`. `(int -- [int])`
 - `repeat`: Create a list containing the provided value repeated `n` times. `(a int -- [a])`
@@ -1305,6 +1313,10 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
 - `bind`: This is a monadic bind operation. Allows for chaining operations on Maybe values with functions that themselves return Maybe values. `(Maybe[a] (a -- Maybe[b]) -- Maybe[b])`
 - `map`: Map a function over a Maybe value. If the Maybe is None, it returns None. If it is Just, it applies the function to the value. `(Maybe[a] (a -- b) -- Maybe[b])`
 - `map2`: Map a binary function over a pair of Maybe values. Returns None if either input is None, otherwise applies the function to both inner values. `(Maybe[a] Maybe[b] (a b -- c) -- Maybe[c])`
+
+## Null
+
+- `null`: Push the JSON null value. Distinct from `none` (the empty case of `Maybe`); serializes to `null` via `toJson`. `( -- null)`
 
 ## HTML
 
