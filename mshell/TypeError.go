@@ -167,6 +167,8 @@ func FormatType(arena *TypeArena, names *NameTable, id TypeId) string {
 		return "bytes"
 	case TidNone:
 		return "none"
+	case TidNull:
+		return "null"
 	case TidPath:
 		return "path"
 	case TidDateTime:

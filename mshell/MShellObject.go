@@ -266,6 +266,81 @@ func (m Maybe) CastString() (string, error) {
 
 // }}}
 
+// Null {{{
+// MShellNull is the JSON `null` value. It is deliberately distinct from a
+// `none` (the empty case of the Maybe type): `null` models the JSON literal
+// and the `null` arm of union types like `int | null`, while `none` is the
+// absence value of Maybe[T]. JSON parsing produces MShellNull; serializing it
+// back with toJson yields `null`.
+type MShellNull struct{}
+
+func (n MShellNull) TypeName() string {
+	return "Null"
+}
+
+func (n MShellNull) IsCommandLineable() bool {
+	return false
+}
+
+func (n MShellNull) IsNumeric() bool {
+	return false
+}
+
+func (n MShellNull) FloatNumeric() float64 {
+	return 0
+}
+
+func (n MShellNull) CommandLine() string {
+	return ""
+}
+
+func (n MShellNull) DebugString() string {
+	return "null"
+}
+
+func (n MShellNull) Index(index int) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot index into a null.\n")
+}
+
+func (n MShellNull) SliceStart(startInclusive int) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot slice a null.\n")
+}
+
+func (n MShellNull) SliceEnd(end int) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot slice a null.\n")
+}
+
+func (n MShellNull) Slice(startInc int, endExc int) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot slice a null.\n")
+}
+
+func (n MShellNull) ToJson() string {
+	return "null"
+}
+
+func (n MShellNull) ToString() string {
+	return "null"
+}
+
+func (n MShellNull) IndexErrStr() string {
+	return ""
+}
+
+func (n MShellNull) Concat(other MShellObject) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot concatenate a null.\n")
+}
+
+func (n MShellNull) Equals(other MShellObject) (bool, error) {
+	_, ok := other.(MShellNull)
+	return ok, nil
+}
+
+func (n MShellNull) CastString() (string, error) {
+	return "", fmt.Errorf("Cannot cast a null to a string.\n")
+}
+
+// }}}
+
 // Date time {{{
 
 type MShellDateTime struct {
