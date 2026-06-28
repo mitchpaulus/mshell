@@ -1131,6 +1131,10 @@ func (state *EvalState) matchTokenPattern(p Token, subject MShellObject) (bool, 
 			}
 			return false, SimpleSuccess()
 		}
+		if p.Lexeme == "null" {
+			_, ok := subject.(MShellNull)
+			return ok, SimpleSuccess()
+		}
 		// Type matching keywords
 		switch p.Lexeme {
 		case "list":
@@ -4497,7 +4501,7 @@ func ParseJsonObjToMshell(jsonObj any) MShellObject {
 			return MShellBool{false}
 		}
 	case nil:
-		return &Maybe{obj: nil}
+		return MShellNull{}
 	default:
 		panic(fmt.Sprintf("Unknown JSON object type: %T", jsonObj))
 		// There should be no other types in JSON, but if there are, we can handle them here
@@ -9608,6 +9612,8 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					stack.Push(newList)
 				} else if t.Lexeme == "none" {
 					stack.Push(&Maybe{obj: nil})
+				} else if t.Lexeme == "null" {
+					stack.Push(MShellNull{})
 				} else if t.Lexeme == "just" {
 					o, err := stack.Pop()
 					if err != nil {

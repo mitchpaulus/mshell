@@ -34,6 +34,7 @@ const (
 	TidPath     // path literal (`...`) and the path runtime type
 	TidDateTime // date/time literal (YYYY-MM-DD[THH:MM[:SS]]) and now/date ops
 	TidBottom   // divergent: exit, infinite loop, (Phase 2) propagated fail
+	TidNull     // JSON `null`; distinct from `none` (the empty Maybe case)
 )
 
 // TypeKind categorizes a TypeNode. The interpretation of TypeNode.A, B, and
@@ -197,6 +198,7 @@ func NewTypeArena() *TypeArena {
 		TKPrim, // TidPath
 		TKPrim, // TidDateTime
 		TKPrim, // TidBottom
+		TKPrim, // TidNull
 	}
 	for i := range primitives {
 		// Encode the primitive id directly in A so the cons key stays unique.
@@ -673,7 +675,7 @@ func (t *NameTable) Name(id NameId) string {
 // cannot be shadowed by a user `type` declaration.
 func IsReservedTypeName(name string) bool {
 	switch name {
-	case "int", "float", "str", "bool", "bytes", "none",
+	case "int", "float", "str", "bool", "bytes", "none", "null",
 		"path", "datetime", "Maybe", "Grid", "GridView", "GridRow":
 		return true
 	}

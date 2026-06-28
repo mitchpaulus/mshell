@@ -158,6 +158,9 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 	r.reg("just", "(t -- Maybe[t])")
 	r.reg("none", "( -- Maybe[t])")
 
+	// ----- JSON null -----
+	r.reg("null", "( -- null)")
+
 	// ----- Stack manipulation (polymorphic) -----
 	r.reg("dup", "(t -- t t)")
 	r.reg("drop", "(t -- )")

@@ -616,7 +616,7 @@ func (parser *MShellParser) applyMaybeArgs(node *TypeNamed, errs *[]TypeError) {
 // shape with that field name.
 func isPrimitiveLiteralType(lex string) bool {
 	switch lex {
-	case "bytes", "none", "Maybe", "Grid", "GridView", "GridRow":
+	case "bytes", "none", "null", "Maybe", "Grid", "GridView", "GridRow":
 		return true
 	}
 	return false
@@ -704,6 +704,8 @@ func (c *Checker) resolveTypeExpr(node MShellParseItem, ctx *typeResolveCtx) Typ
 			return TidBytes
 		case "none":
 			return TidNone
+		case "null":
+			return TidNull
 		case "path":
 			return TidPath
 		case "datetime":

@@ -1378,6 +1378,10 @@ func (c *Checker) analyzeTokenPattern(tok Token, out *armPattern) {
 			out.Recognized = true
 			out.Tag = MatchArmTag{Kind: MatchArmNone}
 			return
+		case "null":
+			out.Recognized = true
+			out.Tag = MatchArmTag{Kind: MatchArmType, TypeArm: TidNull}
+			return
 		case "path":
 			out.Recognized = true
 			out.Tag = MatchArmTag{Kind: MatchArmType, TypeArm: TidPath}
@@ -1411,7 +1415,7 @@ func (p *armPattern) computeNarrow() {
 		return
 	}
 	switch p.Tag.TypeArm {
-	case TidInt, TidFloat, TidStr, TidPath, TidBool, TidDateTime, TidBytes:
+	case TidInt, TidFloat, TidStr, TidPath, TidBool, TidDateTime, TidBytes, TidNull:
 		p.Narrow = p.Tag.TypeArm
 	}
 }

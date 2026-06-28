@@ -124,6 +124,7 @@ var BuiltInList = map[string]struct{}{
 	"none": {},
 	"now": {},
 	"nth": {},
+	"null": {},
 	"nullDevice": {},
 	"numFmt": {},
 	"outerJoin": {},
