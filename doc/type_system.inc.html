@@ -11,6 +11,7 @@ It does not change the runtime data model described in <a href="data-types.html"
     <li><a href="#type-system-type-expressions">Type Expressions</a></li>
     <li><a href="#type-system-dictionaries">Dictionaries</a></li>
     <li><a href="#type-system-lists">Lists</a></li>
+    <li><a href="#type-system-enums">Enums</a></li>
     <li><a href="#type-system-quotes">Quotations</a></li>
     <li><a href="#type-system-control-flow">Control Flow</a></li>
     <li><a href="#type-system-current-boundaries">Current Boundaries</a></li>
@@ -338,6 +339,55 @@ type CsvRows = [CsvRow]
 The checker currently treats heterogeneous lists as lists of unions, not as fixed-length tuples with per-index types.
 That means <code>[1 "Ada"]</code> can be understood as <code>[int | str]</code>, but the checker does not use index <code>:0:</code> to prove "this position is always int" unless the value is converted or asserted in another way.
 </p>
+
+<h1 id="type-system-enums">Enums <a class="section-link" href="#type-system-enums" aria-label="Permalink">§</a> <a class="back-to-top" href="#type-system-top">Back to top</a></h1>
+
+<p>
+An <code>enum</code> declares a named type whose values are a fixed set of <em>members</em> (constructors).
+It is written like a <code>type</code> declaration, with the members separated by <code>|</code>.
+Unlike a union, an enum is <em>generative</em>: each member is a brand-new value that the language tags, so two enums with the same members are still distinct types, and a member can carry data that another member does not.
+</p>
+
+<pre><code>enum Color = red | green | blue</code></pre>
+
+<p>
+A member name is written bare to construct that value.
+Member names are ordinary identifiers (they may not be language keywords), and every member name is unique across all enums.
+</p>
+
+<pre><code>green                  # a value of type Color</code></pre>
+
+<p>
+Members may carry a <em>payload</em>: a parenthesized list of types the member holds.
+The constructor then consumes those values from the stack, just like any other word.
+A member with no payload is nullary and takes no parentheses.
+</p>
+
+<pre><code>enum CmdResult = ok(str) | failed(int str) | timeout
+
+"output"        ok       # ( str -- CmdResult )
+404 "not found" failed   # ( int str -- CmdResult )
+timeout                  # ( -- CmdResult )</code></pre>
+
+<p>
+A payload may reference the enum itself, so recursive enums are allowed.
+</p>
+
+<pre><code>enum Tree = leaf(int) | node(Tree Tree)</code></pre>
+
+<p>
+Use <code>match</code> to dispatch on the member.
+A payload member binds its values to names in the arm body, the same way <code>just&nbsp;v</code> binds a <code>Maybe</code> payload.
+The match must cover every member, or include a wildcard <code>_</code> arm; a match that omits a member is a static error, so adding a member later forces every match to handle it.
+</p>
+
+<pre><code>def render (CmdResult -- str)
+    match
+        ok out     : @out,
+        failed c e : $"{@e} ({@c})",
+        timeout    : "timed out",
+    end
+end</code></pre>
 
 <h1 id="type-system-quotes">Quotations <a class="section-link" href="#type-system-quotes" aria-label="Permalink">§</a> <a class="back-to-top" href="#type-system-top">Back to top</a></h1>
 

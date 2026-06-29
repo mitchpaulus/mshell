@@ -94,13 +94,20 @@ func (c *Checker) RegisterStdlibSigs(defs []MShellDefinition) {
 // parse tree driving the type stack. Error accumulation lives on the
 // Checker.
 func (c *Checker) CheckProgram(file *MShellFile) {
-	// Pre-pass 0: register all `enum` declarations (nominal types +
-	// constructor words). Done before `type` decls so a `type` body may
-	// reference an enum by name.
+	// Pre-pass 0: register all `enum` declarations. Names are predeclared
+	// first so member payloads can reference any enum (including the enum
+	// itself) regardless of order; bodies and constructor words follow. Done
+	// before `type` decls so a `type` body may reference an enum by name.
+	var enumDecls []*MShellEnumDecl
 	for _, item := range file.Items {
 		if d, ok := item.(*MShellEnumDecl); ok {
-			c.DeclareEnum(d)
+			if c.predeclareEnum(d) {
+				enumDecls = append(enumDecls, d)
+			}
 		}
+	}
+	for _, d := range enumDecls {
+		c.defineEnum(d)
 	}
 	// Pre-pass 1: register all `type` declarations.
 	for _, item := range file.Items {
@@ -1294,6 +1301,14 @@ func (c *Checker) analyzeArmPattern(subject TypeId, pattern []MShellParseItem) a
 func (c *Checker) armPatternOf(subject TypeId, pattern []MShellParseItem) armPattern {
 	out := armPattern{Tag: MatchArmTag{Kind: MatchArmType, TypeArm: TidNothing}}
 
+	// Enum constructor pattern: `member` or `member b1 b2 ...`, when the
+	// subject is an enum and the first token names one of its members. This
+	// can be any length (one token per payload binding), so it is handled
+	// before the length-based switch.
+	if ep, ok := c.enumMemberPattern(subject, pattern); ok {
+		return ep
+	}
+
 	switch len(pattern) {
 	case 1:
 		switch p := pattern[0].(type) {
@@ -1382,6 +1397,67 @@ func (c *Checker) armPatternOf(subject TypeId, pattern []MShellParseItem) armPat
 		}
 	}
 	return out
+}
+
+// enumMemberPattern recognizes an enum constructor arm: `member` (nullary) or
+// `member b1 b2 ...` (one binding name per payload). It returns ok=false when
+// the subject is not an enum or the first token is not one of its members, so
+// the caller falls back to the ordinary pattern forms. A payload-arity mismatch
+// is recognized (so no "invalid pattern" cascade) but reported.
+func (c *Checker) enumMemberPattern(subject TypeId, pattern []MShellParseItem) (armPattern, bool) {
+	if len(pattern) == 0 {
+		return armPattern{}, false
+	}
+	tok, ok := pattern[0].(Token)
+	if !ok || tok.Type != LITERAL {
+		return armPattern{}, false
+	}
+	resolved := c.subst.Apply(c.arena, subject)
+	sn := c.arena.Node(resolved)
+	if sn.Kind != TKEnum {
+		return armPattern{}, false
+	}
+	memberId := c.names.Intern(tok.Lexeme)
+	var payload []TypeId
+	found := false
+	for _, v := range c.arena.enumVariants[sn.Extra] {
+		if v.Name == memberId {
+			payload = v.Payload
+			found = true
+			break
+		}
+	}
+	if !found {
+		return armPattern{}, false
+	}
+	out := armPattern{
+		Recognized: true,
+		Tag:        MatchArmTag{Kind: MatchArmEnumMember, TypeArm: resolved, EnumMember: memberId},
+	}
+	binds := pattern[1:]
+	if len(binds) != len(payload) {
+		c.errors = append(c.errors, TypeError{
+			Kind: TErrInvalidMatchPattern,
+			Pos:  tok,
+			Hint: fmt.Sprintf("enum member '%s' binds %d payload value(s), got %d", tok.Lexeme, len(payload), len(binds)),
+		})
+		return out, true
+	}
+	for i, b := range binds {
+		bt, ok := b.(Token)
+		if !ok || bt.Type != LITERAL {
+			c.errors = append(c.errors, TypeError{
+				Kind: TErrInvalidMatchPattern,
+				Pos:  tok,
+				Hint: "enum payload bindings must be names",
+			})
+			return out, true
+		}
+		if bt.Lexeme != "_" {
+			out.Bindings = append(out.Bindings, patternBind{bt.Lexeme, payload[i]})
+		}
+	}
+	return out, true
 }
 
 // analyzeTokenPattern handles the single-token pattern forms: type

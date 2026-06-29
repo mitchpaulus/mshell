@@ -1,0 +1,33 @@
+# Enum: declaration, construction, match, and payload-carrying variants.
+enum Color = red | green | blue
+
+green match
+    red   : "red" wl,
+    green : "green" wl,
+    blue  : "blue" wl,
+end
+
+enum CmdResult = ok(str) | failed(int str) | timeout
+
+404 "not found" failed match
+    ok out     : @out wl,
+    failed c e : [@e " " @c str] "" join wl,
+    timeout    : "timeout" wl,
+end
+
+timeout match
+    ok _       : "ok" wl,
+    failed _ _ : "failed" wl,
+    timeout    : "timed out" wl,
+end
+
+# Enum used in a def signature, distinct from other enums.
+def label (Color -- str)
+    match
+        red   : "is red",
+        green : "is green",
+        blue  : "is blue",
+    end
+end
+
+blue label wl

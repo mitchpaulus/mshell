@@ -3,6 +3,14 @@
 Companion to `design/literal_or_enum_typing.html` (the design + rationale). This is the
 file-by-file build plan. Plans live here in `ai/`; the design lives in `design/`.
 
+**Status: implemented on branch `enum-types`** — nullary + payload-carrying members,
+construction, nominal distinctness, and `match` (member dispatch, payload binding,
+exhaustiveness) all ship in one PR. Payloads use a parenthesized list (`member(T..)`)
+rather than the space-separated form originally sketched, because mshell has no statement
+terminator and space-separated payloads are ambiguous against following code.
+Out of scope, as agreed: derived `decode`/`encode`/`values`, backing strings, qualified
+`Enum.member` names, generics, and `Result` (Maybe suffices). JSON stays a structural union.
+
 ## Scope & non-goals
 
 In scope (a generative tagged sum type declared with `enum`, inline `= a | b | c`):

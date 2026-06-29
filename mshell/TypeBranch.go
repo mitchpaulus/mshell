@@ -76,6 +76,10 @@ const (
 	MatchArmFalse // bool literal `false` pattern
 	// MatchArmEmptyList: `[]` pattern. Covers empty lists.
 	MatchArmEmptyList
+	// MatchArmEnumMember: an enum constructor pattern (`member` or
+	// `member b1 b2 ...`). TypeArm holds the enum type, EnumMember the
+	// member's NameId.
+	MatchArmEnumMember
 	// MatchArmListWithRest: `[a ...rest]`, `[a b ...rest]`, or
 	// `[...rest]` — any list pattern with a `...name` element.
 	// Covers all lists whose length is at least the number of
@@ -87,8 +91,9 @@ const (
 // type effects flow through ReconcileArms; this struct only feeds
 // the exhaustiveness check.
 type MatchArmTag struct {
-	Kind    MatchArmKind
-	TypeArm TypeId // valid when Kind == MatchArmType
+	Kind       MatchArmKind
+	TypeArm    TypeId // valid when Kind == MatchArmType or MatchArmEnumMember
+	EnumMember NameId // valid when Kind == MatchArmEnumMember
 }
 
 // CheckMatchExhaustive verifies that arms cover every inhabitant of
@@ -177,6 +182,30 @@ func (c *Checker) CheckMatchExhaustive(matched TypeId, arms []MatchArmTag, callS
 				return true
 			}
 		}
+
+	case TKEnum:
+		variants := c.arena.enumVariants[n.Extra]
+		covered := make(map[NameId]bool, len(variants))
+		for _, arm := range arms {
+			if arm.Kind == MatchArmEnumMember && c.subst.Apply(c.arena, arm.TypeArm) == matched {
+				covered[arm.EnumMember] = true
+			}
+		}
+		var missing []string
+		for _, v := range variants {
+			if !covered[v.Name] {
+				missing = append(missing, c.names.Name(v.Name))
+			}
+		}
+		if len(missing) == 0 {
+			return true
+		}
+		c.errors = append(c.errors, TypeError{
+			Kind: TErrNonExhaustiveMatch,
+			Pos:  callSite,
+			Hint: "enum match must cover every member or include a wildcard; missing: " + strings.Join(missing, ", "),
+		})
+		return false
 
 	case TKList:
 		// A list's inhabitants split by length: zero (empty) vs

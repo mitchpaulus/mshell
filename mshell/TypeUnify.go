@@ -159,8 +159,8 @@ func (w *typeRewriter) mapType(t TypeId, skip map[TypeVarId]struct{}) TypeId {
 		}
 		return w.arena.MakeCommand(argv, CommandCaptureMode(n.B), CommandCaptureMode(n.Extra))
 	case TKEnum:
-		// Nominal and (in v1) ground: no type variables to rewrite, and
-		// identity is the declaration name, so return unchanged.
+		// Nominal and ground: identity is the declaration name and payloads
+		// carry no type variables, so there is nothing to rewrite.
 		return t
 	case TKQuote:
 		sig, changed := w.mapSig(w.arena.quoteSigs[n.Extra], skip)

@@ -344,13 +344,14 @@ func (n MShellNull) CastString() (string, error) {
 // Enum {{{
 
 // MShellEnum is a value of a user-declared `enum` (a generative tagged sum
-// type). In v1 every member is nullary, so the value is just the enum's
-// declared name plus the member's name. Member names are unique across enums,
-// so the member is the identity; the enum name rides along for diagnostics and
-// `match`.
+// type): the enum's declared name, the chosen member, and the member's payload
+// values (nil for a nullary member). Member names are unique across enums, so
+// the member identifies the value; the enum name rides along for diagnostics
+// and `match`.
 type MShellEnum struct {
 	EnumName string
 	Member   string
+	Payload  []MShellObject
 }
 
 func (e *MShellEnum) TypeName() string         { return e.EnumName }
@@ -358,7 +359,16 @@ func (e *MShellEnum) IsCommandLineable() bool   { return true }
 func (e *MShellEnum) IsNumeric() bool           { return false }
 func (e *MShellEnum) FloatNumeric() float64     { return 0 }
 func (e *MShellEnum) CommandLine() string       { return e.Member }
-func (e *MShellEnum) DebugString() string       { return e.EnumName + "." + e.Member }
+func (e *MShellEnum) DebugString() string {
+	if len(e.Payload) == 0 {
+		return e.EnumName + "." + e.Member
+	}
+	parts := make([]string, len(e.Payload))
+	for i, p := range e.Payload {
+		parts[i] = p.DebugString()
+	}
+	return e.EnumName + "." + e.Member + "(" + strings.Join(parts, " ") + ")"
+}
 
 func (e *MShellEnum) Index(index int) (MShellObject, error) {
 	return nil, fmt.Errorf("Cannot index into an enum.\n")
@@ -385,10 +395,17 @@ func (e *MShellEnum) Concat(other MShellObject) (MShellObject, error) {
 }
 
 func (e *MShellEnum) Equals(other MShellObject) (bool, error) {
-	if o, ok := other.(*MShellEnum); ok {
-		return e.EnumName == o.EnumName && e.Member == o.Member, nil
+	o, ok := other.(*MShellEnum)
+	if !ok || e.EnumName != o.EnumName || e.Member != o.Member || len(e.Payload) != len(o.Payload) {
+		return false, nil
 	}
-	return false, nil
+	for i := range e.Payload {
+		eq, err := e.Payload[i].Equals(o.Payload[i])
+		if err != nil || !eq {
+			return false, err
+		}
+	}
+	return true, nil
 }
 
 func (e *MShellEnum) CastString() (string, error) { return e.Member, nil }

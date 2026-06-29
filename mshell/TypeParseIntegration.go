@@ -35,15 +35,17 @@ func (d *MShellTypeDecl) DebugString() string {
 func (d *MShellTypeDecl) GetStartToken() Token { return d.StartTok }
 func (d *MShellTypeDecl) GetEndToken() Token   { return d.NameToken }
 
-// MShellEnumDecl is a top-level `enum Name = c1 | c2 | ...` declaration:
-// a generative tagged sum type. In v1 every member is nullary (a bare
-// constructor name); payload-carrying variants land in a later phase.
+// MShellEnumDecl is a top-level `enum Name = c1 | c2(T..) | ...`
+// declaration: a generative tagged sum type. Each member is a constructor
+// name with an optional parenthesized payload type list. MemberPayloads is
+// parallel to Members; an entry is empty for a nullary member.
 type MShellEnumDecl struct {
-	Name       string
-	NameToken  Token
-	StartTok   Token // the ENUM keyword
-	Members    []string
-	MemberToks []Token
+	Name           string
+	NameToken      Token
+	StartTok       Token // the ENUM keyword
+	Members        []string
+	MemberToks     []Token
+	MemberPayloads [][]MShellParseItem
 }
 
 func (d *MShellEnumDecl) ToJson() string {
@@ -66,10 +68,12 @@ func (d *MShellEnumDecl) GetEndToken() Token {
 	return d.NameToken
 }
 
-// ParseEnumDecl handles a top-level `enum Name = member (| member)*`. The
-// ENUM keyword is the current token on entry; on return, parser.curr is
-// positioned past the last member. Members must be bare identifiers
-// (LITERAL); a keyword used as a member name is a parse error.
+// ParseEnumDecl handles a top-level `enum Name = member (| member)*`, where a
+// member is a bare identifier (LITERAL) optionally followed by a parenthesized
+// payload type list `(T1 T2 ...)`. The parentheses delimit the payload so the
+// member set is unambiguous against following code (mshell has no statement
+// terminator). The ENUM keyword is the current token on entry; on return,
+// parser.curr is positioned past the last member.
 func (parser *MShellParser) ParseEnumDecl() (*MShellEnumDecl, error) {
 	startTok := parser.curr
 	parser.NextToken() // consume ENUM
@@ -86,19 +90,44 @@ func (parser *MShellParser) ParseEnumDecl() (*MShellEnumDecl, error) {
 	parser.NextToken() // consume =
 
 	decl := &MShellEnumDecl{Name: nameTok.Lexeme, NameToken: nameTok, StartTok: startTok}
+	var errs []TypeError
 	for {
 		if parser.curr.Type != LITERAL {
 			return nil, fmt.Errorf("%d:%d: expected an enum member name (an identifier), got %s",
 				parser.curr.Line, parser.curr.Column, parser.curr.Type)
 		}
-		decl.Members = append(decl.Members, parser.curr.Lexeme)
+		memberName := parser.curr.Lexeme
+		decl.Members = append(decl.Members, memberName)
 		decl.MemberToks = append(decl.MemberToks, parser.curr)
 		parser.NextToken() // consume member
+
+		var payloads []MShellParseItem
+		if parser.curr.Type == LEFT_PAREN {
+			openTok := parser.curr
+			parser.NextToken() // consume (
+			for parser.curr.Type != RIGHT_PAREN && parser.curr.Type != EOF {
+				payloads = append(payloads, parser.parseTypePrimary(&errs))
+			}
+			if parser.curr.Type != RIGHT_PAREN {
+				return nil, fmt.Errorf("%d:%d: expected ')' to close the payload list for enum member '%s'",
+					openTok.Line, openTok.Column, memberName)
+			}
+			parser.NextToken() // consume )
+			if len(payloads) == 0 {
+				return nil, fmt.Errorf("%d:%d: enum member '%s' has an empty payload list '()'; omit the parentheses for a nullary member",
+					openTok.Line, openTok.Column, memberName)
+			}
+		}
+		decl.MemberPayloads = append(decl.MemberPayloads, payloads)
+
 		if parser.curr.Type == PIPE {
 			parser.NextToken() // consume |
 			continue
 		}
 		break
+	}
+	if len(errs) > 0 {
+		return nil, fmt.Errorf("enum declaration body: %s", joinTypeErrs(errs))
 	}
 	return decl, nil
 }

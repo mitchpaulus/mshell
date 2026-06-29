@@ -1,0 +1,8 @@
+# A match on an enum that omits a member (and has no wildcard) is
+# non-exhaustive and must be rejected.
+enum Color = red | green | blue
+
+red match
+    red  : "r" wl,
+    blue : "b" wl,
+end

@@ -295,25 +295,26 @@
 
   <h3>Declaration form &mdash; inline, mirroring <code>type</code></h3>
   <p>The chosen surface is a one-token delta from the existing <code>type Name = A | B</code>: swap
-    <code>type</code> for <code>enum</code>, and each arm is a <strong>constructor name followed by its
-    payload type expression</strong> (zero or more), <code>|</code>-separated.</p>
+    <code>type</code> for <code>enum</code>, and each arm is a <strong>constructor name with an optional
+    parenthesized payload type list</strong>, <code>|</code>-separated. A nullary member takes no
+    parentheses, so a plain enumeration is identical to the approved form.</p>
 
   <pre><code>enum Mode   = read | write | readwrite           # nullary: a plain enumeration
-enum Shape  = circle float | rect float float | point
-enum CmdResult = ok str | failed int str | timeout</code></pre>
+enum Shape  = circle(float) | rect(float float) | point
+enum CmdResult = ok(str) | failed(int str) | timeout</code></pre>
 
-  <p>Generic enums use the same <code>[..]</code> parameter syntax as <code>Maybe[t]</code>, and thereby
-    generalize the built-ins:</p>
-  <pre><code>enum Result[t, e] = ok t | err e
-# Maybe[t] is the built-in `enum Maybe[t] = just t | none`</code></pre>
+  <p>The parentheses delimit the payload because mshell has <strong>no statement terminator</strong>: with
+    space-separated payloads, a nullary member followed by ordinary code (<code>... | blue</code> then
+    <code>green describe</code>) is ambiguous &mdash; the parser cannot tell whether <code>green</code> is a
+    payload type of <code>blue</code> or the next statement. Parentheses make the member set
+    self-delimiting. (Recursive payloads work: <code>enum Tree = leaf(int) | node(Tree Tree)</code>.)</p>
 
-  <p>Grammar, stated against the existing type-expression parser
-    (<code>parseTypeExpr</code> / <code>TypeUnionExpr</code>):</p>
+  <p>Grammar:</p>
   <ul>
-    <li><code>enum</code> <code>Name</code> (<code>[</code> params <code>]</code>)<sub>opt</sub>
-      <code>=</code> arm (<code>|</code> arm)*</li>
-    <li>arm ::= constructorName typeExpr* &nbsp; (the constructor name is a bare identifier; the rest of the
-      arm is parsed with the ordinary type-expression productions)</li>
+    <li><code>enum</code> <code>Name</code> <code>=</code> arm (<code>|</code> arm)*</li>
+    <li>arm ::= constructorName (<code>(</code> typePrimary+ <code>)</code>)<sub>opt</sub> &nbsp; (the
+      constructor name is a bare identifier; each payload is a type primary, so a union payload must be
+      named via a <code>type</code> alias)</li>
   </ul>
   <p>The only new wrinkle vs. a structural union is that an arm's <strong>first token is a binding
     occurrence</strong> (a constructor being declared) rather than a reference to an existing type. The

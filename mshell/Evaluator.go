@@ -326,11 +326,18 @@ type EvalState struct {
 	defIndex    map[string]int
 	defIndexLen int
 
-	// EnumMembers maps a member name to its enum's declared name. Populated
-	// from `enum` declarations (RegisterEnums) before evaluation; member
-	// names are unique across enums in v1, so this flat member -> enum
-	// lookup is enough to construct a value from a bare member word.
-	EnumMembers map[string]string
+	// EnumMembers maps a member name to its enum and payload arity. Populated
+	// from `enum` declarations (RegisterEnums) before evaluation; member names
+	// are unique across enums, so this flat lookup is enough to construct a
+	// value from a bare member word, including consuming its payload.
+	EnumMembers map[string]EnumMemberInfo
+}
+
+// EnumMemberInfo records where a member came from and how many payload values
+// its constructor consumes from the stack.
+type EnumMemberInfo struct {
+	EnumName string
+	Arity    int
 }
 
 // RegisterEnums scans parse items for `enum` declarations and records each
@@ -344,13 +351,13 @@ func (state *EvalState) RegisterEnums(items []MShellParseItem) {
 			continue
 		}
 		if state.EnumMembers == nil {
-			state.EnumMembers = make(map[string]string)
+			state.EnumMembers = make(map[string]EnumMemberInfo)
 		}
-		for _, m := range d.Members {
+		for i, m := range d.Members {
 			if _, exists := state.EnumMembers[m]; exists {
 				continue
 			}
-			state.EnumMembers[m] = d.Name
+			state.EnumMembers[m] = EnumMemberInfo{EnumName: d.Name, Arity: len(d.MemberPayloads[i])}
 		}
 	}
 }
@@ -1079,6 +1086,29 @@ func (state *EvalState) processMatchBlock(matchBlock *MShellParseMatchBlock, fra
 // matchPattern checks if a subject matches a pattern (list of parse items).
 // Returns (matched bool, bindings map, result EvalResult).
 func (state *EvalState) matchPattern(pattern []MShellParseItem, subject MShellObject, startToken Token) (bool, map[string]MShellObject, EvalResult) {
+	// Enum constructor pattern: `member` or `member b1 b2 ...`. Only a member
+	// name matches an enum value (a sibling member just fails this arm and the
+	// next is tried); `_` and `none` fall through to the generic handling.
+	if enumVal, ok := subject.(*MShellEnum); ok && len(pattern) >= 1 {
+		if tok, okTok := pattern[0].(Token); okTok && tok.Type == LITERAL && tok.Lexeme != "_" && tok.Lexeme != "none" {
+			if tok.Lexeme != enumVal.Member {
+				return false, nil, SimpleSuccess()
+			}
+			binds := pattern[1:]
+			if len(binds) != len(enumVal.Payload) {
+				return false, nil, state.FailWithMessage(fmt.Sprintf("%d:%d: enum member '%s' binds %d payload value(s), got %d.\n",
+					tok.Line, tok.Column, tok.Lexeme, len(enumVal.Payload), len(binds)))
+			}
+			bindings := make(map[string]MShellObject)
+			for i, b := range binds {
+				if bt, okBt := b.(Token); okBt && bt.Lexeme != "_" {
+					bindings[bt.Lexeme] = enumVal.Payload[i]
+				}
+			}
+			return true, bindings, SimpleSuccess()
+		}
+	}
+
 	// Handle multi-token patterns (e.g., "just v" for maybe destructuring,
 	// or "<typekeyword> name" for type-test binding).
 	if len(pattern) == 2 {
@@ -5809,10 +5839,21 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					return SimpleSuccess()
 				}
 
-				// Enum constructor: a bare member word pushes its enum value.
+				// Enum constructor: a bare member word consumes its payload
+				// (if any) from the stack and pushes the enum value.
 				if state.EnumMembers != nil {
-					if enumName, ok := state.EnumMembers[t.Lexeme]; ok {
-						stack.Push(&MShellEnum{EnumName: enumName, Member: t.Lexeme})
+					if info, ok := state.EnumMembers[t.Lexeme]; ok {
+						var payload []MShellObject
+						if info.Arity > 0 {
+							if len(*stack) < info.Arity {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: enum constructor '%s' needs %d payload value(s) on the stack.\n", t.Line, t.Column, t.Lexeme, info.Arity))
+							}
+							payload = make([]MShellObject, info.Arity)
+							for i := info.Arity - 1; i >= 0; i-- {
+								payload[i], _ = stack.Pop()
+							}
+						}
+						stack.Push(&MShellEnum{EnumName: info.EnumName, Member: t.Lexeme, Payload: payload})
 						return SimpleSuccess()
 					}
 				}

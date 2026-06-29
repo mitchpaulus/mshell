@@ -139,8 +139,8 @@ type ShapeField struct {
 
 // EnumVariant is one constructor of a TKEnum. Payload is the (ordered)
 // list of payload types the constructor carries; it is empty for a
-// nullary member (the only kind in v1). Order is meaningful — it sets
-// member order for diagnostics and exhaustiveness.
+// nullary member. Order is meaningful — it sets member order for
+// diagnostics and exhaustiveness.
 type EnumVariant struct {
 	Name    NameId
 	Payload []TypeId
@@ -389,6 +389,20 @@ func (a *TypeArena) MakeEnum(nameId NameId, variants []EnumVariant) TypeId {
 	id := a.append(TypeNode{Kind: TKEnum, A: uint32(nameId), Extra: idx})
 	a.cons[key] = id
 	return id
+}
+
+// SetEnumVariants replaces the variant list of an already-created enum type.
+// Used to finalize an enum after its name was registered with a placeholder
+// (empty) variant list, so member payloads can reference the enum itself or
+// other enums regardless of declaration order.
+func (a *TypeArena) SetEnumVariants(id TypeId, variants []EnumVariant) {
+	n := a.Node(id)
+	if n.Kind != TKEnum {
+		panic("TypeArena.SetEnumVariants: not an enum")
+	}
+	cp := make([]EnumVariant, len(variants))
+	copy(cp, variants)
+	a.enumVariants[n.Extra] = cp
 }
 
 // EnumNameId returns the declaration NameId of an enum type.

@@ -628,6 +628,39 @@ An operation that is valid for only some members is a type error — dividing an
 
 For more detail, see the generated Type System help page.
 
+## Enums
+
+An `enum` declares a generative tagged sum type, written like `type` with members separated by `|`:
+
+```
+enum Color = red | green | blue
+```
+
+A bare member name constructs that value (`green` pushes a `Color`).
+Member names are identifiers (not keywords) and are unique across all enums.
+Unlike a union, an enum is nominal — two enums with the same members are distinct types.
+
+Members may carry a payload in parentheses; the constructor consumes those values from the stack.
+A nullary member takes no parentheses. Payloads may reference the enum itself (recursive enums).
+
+```
+enum CmdResult = ok(str) | failed(int str) | timeout
+404 "not found" failed   # ( int str -- CmdResult )
+
+enum Tree = leaf(int) | node(Tree Tree)
+```
+
+`match` dispatches on the member and binds payload values (like `just v`).
+A match must cover every member or include a `_` arm; omitting a member is a static error.
+
+```
+result match
+    ok out     : @out wl,
+    failed c e : $"{@e} ({@c})" wl,
+    timeout    : "timed out" wl,
+end
+```
+
 ## Definitions
 
 Definitions use `def` with an optional metadata dictionary before the type signature.
