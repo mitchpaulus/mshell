@@ -325,6 +325,34 @@ type EvalState struct {
 
 	defIndex    map[string]int
 	defIndexLen int
+
+	// EnumMembers maps a member name to its enum's declared name. Populated
+	// from `enum` declarations (RegisterEnums) before evaluation; member
+	// names are unique across enums in v1, so this flat member -> enum
+	// lookup is enough to construct a value from a bare member word.
+	EnumMembers map[string]string
+}
+
+// RegisterEnums scans parse items for `enum` declarations and records each
+// member, so a bare member word can be constructed at evaluation time. Called
+// once before top-level evaluation; mirrors the checker's enum pre-pass so the
+// two agree regardless of declaration order.
+func (state *EvalState) RegisterEnums(items []MShellParseItem) {
+	for _, item := range items {
+		d, ok := item.(*MShellEnumDecl)
+		if !ok {
+			continue
+		}
+		if state.EnumMembers == nil {
+			state.EnumMembers = make(map[string]string)
+		}
+		for _, m := range d.Members {
+			if _, exists := state.EnumMembers[m]; exists {
+				continue
+			}
+			state.EnumMembers[m] = d.Name
+		}
+	}
 }
 
 // RebuildDefinitionIndex records the first index for each name, matching
@@ -836,6 +864,11 @@ func (state *EvalState) processToken(token MShellParseItem, frame *EvaluationFra
 
 	case *MShellTypeDecl:
 		// Static-only: type declarations have no runtime effect by design.
+		return SimpleSuccess()
+
+	case *MShellEnumDecl:
+		// Static-only: enum declarations have no runtime effect; members are
+		// pre-registered via RegisterEnums.
 		return SimpleSuccess()
 
 	case *MShellAsCast:
@@ -5774,6 +5807,14 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					return SimpleSuccess()
+				}
+
+				// Enum constructor: a bare member word pushes its enum value.
+				if state.EnumMembers != nil {
+					if enumName, ok := state.EnumMembers[t.Lexeme]; ok {
+						stack.Push(&MShellEnum{EnumName: enumName, Member: t.Lexeme})
+						return SimpleSuccess()
+					}
 				}
 
 				if t.Lexeme == "stack" {

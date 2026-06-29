@@ -857,6 +857,10 @@ func main() {
 		os.Exit(0)
 	}
 
+	// Register enum constructors before evaluation so bare member words can
+	// be constructed (mirrors the checker's enum pre-pass).
+	state.RegisterEnums(file.Items)
+
 	callStackItem := CallStackItem{
 		MShellParseItem: nil,
 		Name:            "main",

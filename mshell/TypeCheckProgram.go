@@ -94,6 +94,14 @@ func (c *Checker) RegisterStdlibSigs(defs []MShellDefinition) {
 // parse tree driving the type stack. Error accumulation lives on the
 // Checker.
 func (c *Checker) CheckProgram(file *MShellFile) {
+	// Pre-pass 0: register all `enum` declarations (nominal types +
+	// constructor words). Done before `type` decls so a `type` body may
+	// reference an enum by name.
+	for _, item := range file.Items {
+		if d, ok := item.(*MShellEnumDecl); ok {
+			c.DeclareEnum(d)
+		}
+	}
 	// Pre-pass 1: register all `type` declarations.
 	for _, item := range file.Items {
 		if d, ok := item.(*MShellTypeDecl); ok {

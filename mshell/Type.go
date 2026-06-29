@@ -59,6 +59,11 @@ const (
 	TKGrid     // Extra = index into gridSchemas (0 = unknown schema)
 	TKGridView // Extra = index into gridSchemas (0 = unknown schema)
 	TKGridRow  // Extra = index into gridSchemas (0 = unknown schema)
+
+	// Generative tagged sum type (a user `enum`). Nominal: identity is the
+	// declaration NameId, not the member set. A = decl NameId; Extra = index
+	// into enumVariants. See design/literal_or_enum_typing.html.
+	TKEnum
 )
 
 // String returns a debug name for a TypeKind.
@@ -94,6 +99,8 @@ func (k TypeKind) String() string {
 		return "GridView"
 	case TKGridRow:
 		return "GridRow"
+	case TKEnum:
+		return "Enum"
 	}
 	return "Unknown"
 }
@@ -128,6 +135,15 @@ type ShapeField struct {
 	Name     NameId
 	Type     TypeId
 	Optional bool
+}
+
+// EnumVariant is one constructor of a TKEnum. Payload is the (ordered)
+// list of payload types the constructor carries; it is empty for a
+// nullary member (the only kind in v1). Order is meaningful — it sets
+// member order for diagnostics and exhaustiveness.
+type EnumVariant struct {
+	Name    NameId
+	Payload []TypeId
 }
 
 // GridSchemaCol is one column in a TKGrid / TKGridView / TKGridRow schema.
@@ -176,6 +192,7 @@ type TypeArena struct {
 	unionMembers   [][]TypeId // each slice is sorted, deduped
 	gridSchemas    []GridSchema
 	gridSchemaCons map[string]uint32
+	enumVariants   [][]EnumVariant
 }
 
 // NewTypeArena constructs an arena pre-populated with the primitive ids
@@ -213,6 +230,8 @@ func NewTypeArena() *TypeArena {
 	a.shapeFields = append(a.shapeFields, nil)
 	a.quoteSigs = append(a.quoteSigs, QuoteSig{})
 	a.overloadedQuoteSigs = append(a.overloadedQuoteSigs, nil)
+	// Reserve enumVariants[0] as a placeholder so non-zero Extra is meaningful.
+	a.enumVariants = append(a.enumVariants, nil)
 	return a
 }
 
@@ -350,6 +369,44 @@ func (a *TypeArena) MakeOverloadedQuote(sigs []QuoteSig) TypeId {
 	id := a.append(TypeNode{Kind: TKOverloadedQuote, Extra: idx})
 	a.cons[key] = id
 	return id
+}
+
+// MakeEnum returns the canonical TypeId for a user enum named by nameId,
+// with the given variants. Identity is nominal: it keys on the declaration
+// NameId alone, so two enums with identical members are distinct types and
+// the same enum always interns to the same TypeId. A duplicate declaration
+// is caught higher up (DeclareEnum); reaching here with a name already
+// interned returns the existing id.
+func (a *TypeArena) MakeEnum(nameId NameId, variants []EnumVariant) TypeId {
+	key := "E:" + strconv.FormatUint(uint64(nameId), 10)
+	if id, ok := a.cons[key]; ok {
+		return id
+	}
+	cp := make([]EnumVariant, len(variants))
+	copy(cp, variants)
+	idx := uint32(len(a.enumVariants))
+	a.enumVariants = append(a.enumVariants, cp)
+	id := a.append(TypeNode{Kind: TKEnum, A: uint32(nameId), Extra: idx})
+	a.cons[key] = id
+	return id
+}
+
+// EnumNameId returns the declaration NameId of an enum type.
+func (a *TypeArena) EnumNameId(id TypeId) NameId {
+	n := a.Node(id)
+	if n.Kind != TKEnum {
+		panic("TypeArena.EnumNameId: not an enum")
+	}
+	return NameId(n.A)
+}
+
+// EnumVariants returns the variants of an enum type. Caller must not mutate.
+func (a *TypeArena) EnumVariants(id TypeId) []EnumVariant {
+	n := a.Node(id)
+	if n.Kind != TKEnum {
+		panic("TypeArena.EnumVariants: not an enum")
+	}
+	return a.enumVariants[n.Extra]
 }
 
 // MakeGrid returns the canonical TypeId for a grid type. schemaIdx of 0

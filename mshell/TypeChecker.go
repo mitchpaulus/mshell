@@ -930,6 +930,11 @@ func (c *Checker) unify(got, want TypeId) bool {
 		return c.unifyQuote(gn, wn)
 	case TKOverloadedQuote:
 		return false
+	case TKEnum:
+		// Nominal: two enum types unify only when identical. Equal ids were
+		// already accepted at the top of unify; reaching here means distinct
+		// enums, which never unify.
+		return false
 	case TKGrid, TKGridView, TKGridRow:
 		// Phase-3 grids are opaque. Equality-by-id is the only way two grid
 		// types match; if we got here with same kind but different ids,

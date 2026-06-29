@@ -35,6 +35,74 @@ func (d *MShellTypeDecl) DebugString() string {
 func (d *MShellTypeDecl) GetStartToken() Token { return d.StartTok }
 func (d *MShellTypeDecl) GetEndToken() Token   { return d.NameToken }
 
+// MShellEnumDecl is a top-level `enum Name = c1 | c2 | ...` declaration:
+// a generative tagged sum type. In v1 every member is nullary (a bare
+// constructor name); payload-carrying variants land in a later phase.
+type MShellEnumDecl struct {
+	Name       string
+	NameToken  Token
+	StartTok   Token // the ENUM keyword
+	Members    []string
+	MemberToks []Token
+}
+
+func (d *MShellEnumDecl) ToJson() string {
+	parts := make([]string, len(d.Members))
+	for i, m := range d.Members {
+		parts[i] = fmt.Sprintf("%q", m)
+	}
+	return fmt.Sprintf("{\"kind\": \"enumDecl\", \"name\": %q, \"members\": [%s]}", d.Name, strings.Join(parts, ", "))
+}
+
+func (d *MShellEnumDecl) DebugString() string {
+	return fmt.Sprintf("enum %s = %s", d.Name, strings.Join(d.Members, " | "))
+}
+
+func (d *MShellEnumDecl) GetStartToken() Token { return d.StartTok }
+func (d *MShellEnumDecl) GetEndToken() Token {
+	if len(d.MemberToks) > 0 {
+		return d.MemberToks[len(d.MemberToks)-1]
+	}
+	return d.NameToken
+}
+
+// ParseEnumDecl handles a top-level `enum Name = member (| member)*`. The
+// ENUM keyword is the current token on entry; on return, parser.curr is
+// positioned past the last member. Members must be bare identifiers
+// (LITERAL); a keyword used as a member name is a parse error.
+func (parser *MShellParser) ParseEnumDecl() (*MShellEnumDecl, error) {
+	startTok := parser.curr
+	parser.NextToken() // consume ENUM
+	if parser.curr.Type != LITERAL {
+		return nil, fmt.Errorf("%d:%d: expected an enum name after 'enum', got %s",
+			parser.curr.Line, parser.curr.Column, parser.curr.Type)
+	}
+	nameTok := parser.curr
+	parser.NextToken() // consume name
+	if parser.curr.Type != EQUALS {
+		return nil, fmt.Errorf("%d:%d: expected '=' in enum declaration, got %s",
+			parser.curr.Line, parser.curr.Column, parser.curr.Type)
+	}
+	parser.NextToken() // consume =
+
+	decl := &MShellEnumDecl{Name: nameTok.Lexeme, NameToken: nameTok, StartTok: startTok}
+	for {
+		if parser.curr.Type != LITERAL {
+			return nil, fmt.Errorf("%d:%d: expected an enum member name (an identifier), got %s",
+				parser.curr.Line, parser.curr.Column, parser.curr.Type)
+		}
+		decl.Members = append(decl.Members, parser.curr.Lexeme)
+		decl.MemberToks = append(decl.MemberToks, parser.curr)
+		parser.NextToken() // consume member
+		if parser.curr.Type == PIPE {
+			parser.NextToken() // consume |
+			continue
+		}
+		break
+	}
+	return decl, nil
+}
+
 // MShellAsCast is a `<value> as <typeExpr>` postfix cast.
 type MShellAsCast struct {
 	AsToken Token

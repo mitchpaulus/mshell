@@ -158,6 +158,10 @@ func (w *typeRewriter) mapType(t TypeId, skip map[TypeVarId]struct{}) TypeId {
 			return t
 		}
 		return w.arena.MakeCommand(argv, CommandCaptureMode(n.B), CommandCaptureMode(n.Extra))
+	case TKEnum:
+		// Nominal and (in v1) ground: no type variables to rewrite, and
+		// identity is the declaration name, so return unchanged.
+		return t
 	case TKQuote:
 		sig, changed := w.mapSig(w.arena.quoteSigs[n.Extra], skip)
 		if !changed {
@@ -340,6 +344,14 @@ func (a *TypeArena) walkTypeVars(t TypeId, visit func(TypeVarId) bool) bool {
 		for _, m := range a.unionMembers[n.Extra] {
 			if a.walkTypeVars(m, visit) {
 				return true
+			}
+		}
+	case TKEnum:
+		for _, v := range a.enumVariants[n.Extra] {
+			for _, p := range v.Payload {
+				if a.walkTypeVars(p, visit) {
+					return true
+				}
 			}
 		}
 	case TKQuote:

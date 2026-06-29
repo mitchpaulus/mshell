@@ -109,6 +109,7 @@ const (
 	TRY
 	FAIL_KEYWORD
 	PURE
+	ENUM
 )
 
 func (t TokenType) String() string {
@@ -283,6 +284,8 @@ func (t TokenType) String() string {
 		return "AS"
 	case TYPE:
 		return "TYPE"
+	case ENUM:
+		return "ENUM"
 	case TRY:
 		return "TRY"
 	case FAIL_KEYWORD:
@@ -530,6 +533,14 @@ func (l *Lexer) literalOrKeywordType() TokenType {
 				}
 				return l.checkKeyword(2, "se", ELSE)
 			case 'n':
+				if l.curLen() > 2 {
+					switch l.input[l.start+2] {
+					case 'd':
+						return l.checkKeyword(3, "", END)
+					case 'u':
+						return l.checkKeyword(3, "m", ENUM)
+					}
+				}
 				return l.checkKeyword(2, "d", END)
 			}
 		}

@@ -341,6 +341,60 @@ func (n MShellNull) CastString() (string, error) {
 
 // }}}
 
+// Enum {{{
+
+// MShellEnum is a value of a user-declared `enum` (a generative tagged sum
+// type). In v1 every member is nullary, so the value is just the enum's
+// declared name plus the member's name. Member names are unique across enums,
+// so the member is the identity; the enum name rides along for diagnostics and
+// `match`.
+type MShellEnum struct {
+	EnumName string
+	Member   string
+}
+
+func (e *MShellEnum) TypeName() string         { return e.EnumName }
+func (e *MShellEnum) IsCommandLineable() bool   { return true }
+func (e *MShellEnum) IsNumeric() bool           { return false }
+func (e *MShellEnum) FloatNumeric() float64     { return 0 }
+func (e *MShellEnum) CommandLine() string       { return e.Member }
+func (e *MShellEnum) DebugString() string       { return e.EnumName + "." + e.Member }
+
+func (e *MShellEnum) Index(index int) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot index into an enum.\n")
+}
+
+func (e *MShellEnum) SliceStart(startInclusive int) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot slice an enum.\n")
+}
+
+func (e *MShellEnum) SliceEnd(end int) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot slice an enum.\n")
+}
+
+func (e *MShellEnum) Slice(startInc int, endExc int) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot slice an enum.\n")
+}
+
+func (e *MShellEnum) ToJson() string   { return fmt.Sprintf("%q", e.Member) }
+func (e *MShellEnum) ToString() string { return e.Member }
+func (e *MShellEnum) IndexErrStr() string { return "" }
+
+func (e *MShellEnum) Concat(other MShellObject) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot concatenate an enum.\n")
+}
+
+func (e *MShellEnum) Equals(other MShellObject) (bool, error) {
+	if o, ok := other.(*MShellEnum); ok {
+		return e.EnumName == o.EnumName && e.Member == o.Member, nil
+	}
+	return false, nil
+}
+
+func (e *MShellEnum) CastString() (string, error) { return e.Member, nil }
+
+// }}}
+
 // Date time {{{
 
 type MShellDateTime struct {
