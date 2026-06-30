@@ -1,0 +1,11 @@
+# gridSetCell stores the value even when its type differs from the column's
+# original type: the column is promoted to mixed (generic) storage rather than
+# silently dropping the value, and the other rows are preserved.
+enum C = red | green end
+
+# int column, row 0 set to an enum; row 1 (int 2) is preserved.
+[| "c" ; 1 ; 2 |] "c" 0 red gridSetCell toJson wl
+
+# int column receiving a string, and a string column receiving an int.
+[| "n" ; 1 |] "n" 0 "X" gridSetCell toJson wl
+[| "s" ; "a" |] "s" 0 99 gridSetCell toJson wl

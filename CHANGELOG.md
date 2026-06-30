@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `gridSetCell` no longer silently drops a value whose type differs from the
+  column's original type (e.g. setting a string, enum, or bool into an int
+  column). The column is promoted to mixed storage so the value is stored, and
+  the other rows are preserved.
 - Equality (`=`) is now total and defined for every value type. Lists,
   quotations, pipes, and grids previously raised "equality not defined" at
   runtime; lists/pipes/grids now compare structurally (element- and cell-wise)

@@ -2295,28 +2295,59 @@ func (col *GridColumn) Get(index int) MShellObject {
 	}
 }
 
-// Set sets the value at the given row index
+// Set sets the value at the given row index. If a typed column is given a value
+// of a different type, the column is promoted to generic storage so the value
+// is stored rather than silently dropped.
 func (col *GridColumn) Set(index int, value MShellObject) {
 	switch col.ColType {
 	case COL_INT:
 		if intVal, ok := value.(MShellInt); ok {
 			col.IntData[index] = int64(intVal.Value)
+			return
 		}
 	case COL_FLOAT:
 		if floatVal, ok := value.(MShellFloat); ok {
 			col.FloatData[index] = floatVal.Value
+			return
 		}
 	case COL_STRING:
 		if strVal, ok := value.(MShellString); ok {
 			col.StringData[index] = strVal.Content
+			return
 		}
 	case COL_DATETIME:
 		if dtVal, ok := value.(*MShellDateTime); ok {
 			col.DateTimeData[index] = dtVal.Time
+			return
 		}
-	default:
+	case COL_GENERIC:
 		col.GenericData[index] = value
+		return
 	}
+	// Typed column received a value of a different type: promote the whole
+	// column to generic storage, then store the value.
+	col.promoteToGeneric()
+	col.GenericData[index] = value
+}
+
+// promoteToGeneric materializes a typed column's data into generic storage so
+// the column can hold values of any type. It is a no-op for an already-generic
+// column.
+func (col *GridColumn) promoteToGeneric() {
+	if col.ColType == COL_GENERIC {
+		return
+	}
+	n := col.Len()
+	generic := make([]MShellObject, n)
+	for i := 0; i < n; i++ {
+		generic[i] = col.Get(i)
+	}
+	col.ColType = COL_GENERIC
+	col.GenericData = generic
+	col.IntData = nil
+	col.FloatData = nil
+	col.StringData = nil
+	col.DateTimeData = nil
 }
 
 // Len returns the number of rows in the column
