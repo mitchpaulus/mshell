@@ -344,11 +344,11 @@ That means <code>[1 "Ada"]</code> can be understood as <code>[int | str]</code>,
 
 <p>
 An <code>enum</code> declares a named type whose values are a fixed set of <em>members</em> (constructors).
-It is written like a <code>type</code> declaration, with the members separated by <code>|</code>.
+The members are separated by <code>|</code>, and the declaration is closed by <code>end</code> &mdash; like <code>def</code>, <code>if</code>, and <code>match</code>.
 Unlike a union, an enum is <em>generative</em>: each member is a brand-new value that the language tags, so two enums with the same members are still distinct types, and a member can carry data that another member does not.
 </p>
 
-<pre><code>enum Color = red | green | blue</code></pre>
+<pre><code>enum Color = red | green | blue end</code></pre>
 
 <p>
 A member name is written bare to construct that value.
@@ -358,12 +358,13 @@ Member names are ordinary identifiers (they may not be language keywords), and e
 <pre><code>green                  # a value of type Color</code></pre>
 
 <p>
-Members may carry a <em>payload</em>: a parenthesized list of types the member holds.
+Members may carry a <em>payload</em>: a list of types written after the member name.
 The constructor then consumes those values from the stack, just like any other word.
-A member with no payload is nullary and takes no parentheses.
+A member with no payload is nullary.
+The closing <code>end</code> marks where the member list stops, so a payload list is never confused with the code that follows.
 </p>
 
-<pre><code>enum CmdResult = ok(str) | failed(int str) | timeout
+<pre><code>enum CmdResult = ok str | failed int str | timeout end
 
 "output"        ok       # ( str -- CmdResult )
 404 "not found" failed   # ( int str -- CmdResult )
@@ -373,7 +374,7 @@ timeout                  # ( -- CmdResult )</code></pre>
 A payload may reference the enum itself, so recursive enums are allowed.
 </p>
 
-<pre><code>enum Tree = leaf(int) | node(Tree Tree)</code></pre>
+<pre><code>enum Tree = leaf int | node Tree Tree end</code></pre>
 
 <p>
 Use <code>match</code> to dispatch on the member.

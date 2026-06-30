@@ -35,9 +35,10 @@ func (d *MShellTypeDecl) DebugString() string {
 func (d *MShellTypeDecl) GetStartToken() Token { return d.StartTok }
 func (d *MShellTypeDecl) GetEndToken() Token   { return d.NameToken }
 
-// MShellEnumDecl is a top-level `enum Name = c1 | c2(T..) | ...`
+// MShellEnumDecl is a top-level `enum Name = c1 | c2 T.. | ... end`
 // declaration: a generative tagged sum type. Each member is a constructor
-// name with an optional parenthesized payload type list. MemberPayloads is
+// name followed by zero or more space-separated payload types, members are
+// separated by `|`, and the body is closed by `end`. MemberPayloads is
 // parallel to Members; an entry is empty for a nullary member.
 type MShellEnumDecl struct {
 	Name           string
@@ -57,7 +58,7 @@ func (d *MShellEnumDecl) ToJson() string {
 }
 
 func (d *MShellEnumDecl) DebugString() string {
-	return fmt.Sprintf("enum %s = %s", d.Name, strings.Join(d.Members, " | "))
+	return fmt.Sprintf("enum %s = %s end", d.Name, strings.Join(d.Members, " | "))
 }
 
 func (d *MShellEnumDecl) GetStartToken() Token { return d.StartTok }
@@ -68,12 +69,18 @@ func (d *MShellEnumDecl) GetEndToken() Token {
 	return d.NameToken
 }
 
-// ParseEnumDecl handles a top-level `enum Name = member (| member)*`, where a
-// member is a bare identifier (LITERAL) optionally followed by a parenthesized
-// payload type list `(T1 T2 ...)`. The parentheses delimit the payload so the
-// member set is unambiguous against following code (mshell has no statement
-// terminator). The ENUM keyword is the current token on entry; on return,
-// parser.curr is positioned past the last member.
+// ParseEnumDecl handles a top-level enum declaration:
+//
+//	enum Name = m1 | m2 T1 T2 | m3 ... end
+//
+// Each member is a bare identifier (LITERAL) followed by zero or more
+// space-separated payload type expressions; members are separated by `|` and
+// the body is closed by `end`. The `end` terminator is what makes the grammar
+// whitespace-insensitive and unambiguous against the following code: a member's
+// payload list runs until the next `|` or the closing `end`, so a nullary
+// member can be followed by an arbitrary `(...)`/`[...]` statement without it
+// being mistaken for a payload. The ENUM keyword is the current token on entry;
+// on return, parser.curr is positioned past the closing `end`.
 func (parser *MShellParser) ParseEnumDecl() (*MShellEnumDecl, error) {
 	startTok := parser.curr
 	parser.NextToken() // consume ENUM
@@ -93,38 +100,18 @@ func (parser *MShellParser) ParseEnumDecl() (*MShellEnumDecl, error) {
 	var errs []TypeError
 	for {
 		if parser.curr.Type != LITERAL {
-			return nil, fmt.Errorf("%d:%d: expected an enum member name (an identifier), got %s",
+			return nil, fmt.Errorf("%d:%d: expected an enum member name (an identifier), got %s. An enum is written `enum Name = m1 | m2 T ... end`",
 				parser.curr.Line, parser.curr.Column, parser.curr.Type)
 		}
 		memberTok := parser.curr
-		memberName := memberTok.Lexeme
-		decl.Members = append(decl.Members, memberName)
+		decl.Members = append(decl.Members, memberTok.Lexeme)
 		decl.MemberToks = append(decl.MemberToks, memberTok)
-		parser.NextToken() // consume member
+		parser.NextToken() // consume member name
 
-		// A payload list's `(` must be attached to the member name
-		// (`failed(int str)`), with no space. mshell has no statement
-		// terminator, so a detached `(` — `green (q) x` or a `(...)`
-		// starting the next line — belongs to the following code, not the
-		// enum, and the member is nullary.
+		// Payload types run until the next `|`, the closing `end`, or EOF.
 		var payloads []MShellParseItem
-		if parser.curr.Type == LEFT_PAREN &&
-			parser.curr.Line == memberTok.Line &&
-			parser.curr.Column == memberTok.Column+len(memberTok.Lexeme) {
-			openTok := parser.curr
-			parser.NextToken() // consume (
-			for parser.curr.Type != RIGHT_PAREN && parser.curr.Type != EOF {
-				payloads = append(payloads, parser.parseTypePrimary(&errs))
-			}
-			if parser.curr.Type != RIGHT_PAREN {
-				return nil, fmt.Errorf("%d:%d: expected ')' to close the payload list for enum member '%s'",
-					openTok.Line, openTok.Column, memberName)
-			}
-			parser.NextToken() // consume )
-			if len(payloads) == 0 {
-				return nil, fmt.Errorf("%d:%d: enum member '%s' has an empty payload list '()'; omit the parentheses for a nullary member",
-					openTok.Line, openTok.Column, memberName)
-			}
+		for parser.curr.Type != PIPE && parser.curr.Type != END && parser.curr.Type != EOF {
+			payloads = append(payloads, parser.parseTypePrimary(&errs))
 		}
 		decl.MemberPayloads = append(decl.MemberPayloads, payloads)
 
@@ -132,7 +119,13 @@ func (parser *MShellParser) ParseEnumDecl() (*MShellEnumDecl, error) {
 			parser.NextToken() // consume |
 			continue
 		}
-		break
+		if parser.curr.Type == END {
+			parser.NextToken() // consume end
+			break
+		}
+		// EOF before `end`.
+		return nil, fmt.Errorf("%d:%d: expected 'end' to close the enum declaration '%s'",
+			parser.curr.Line, parser.curr.Column, decl.Name)
 	}
 	if len(errs) > 0 {
 		return nil, fmt.Errorf("enum declaration body: %s", joinTypeErrs(errs))

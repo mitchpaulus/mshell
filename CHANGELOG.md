@@ -9,17 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `enum` declarations: a generative tagged sum type, written
-  `enum Name = a | b | c`, mirroring `type`. Members are bare constructor names,
-  optionally carrying a payload in parentheses: `enum CmdResult = ok(str) |
-  failed(int str) | timeout`. A bare member word constructs a value (consuming
-  any payload from the stack, e.g. `404 "x" failed`), and `match` dispatches on
-  members with binding (`failed code msg : ...`) and exhaustiveness checking — a
-  match that omits a member is rejected unless it has a `_` arm. Enums are
-  nominal: two enums with the same members are distinct types. Member names are
-  identifiers (not keywords) and are unique across all enums. Payloads may
-  reference the enum itself, so recursive enums like
-  `enum Tree = leaf(int) | node(Tree Tree)` are supported.
+- `enum` declarations: a generative tagged sum type. Members are separated by
+  `|` and the declaration is closed by `end` (like `def`/`if`/`match`):
+  `enum CmdResult = ok str | failed int str | timeout end`. A member is a bare
+  constructor name optionally followed by payload types; a bare member word
+  constructs a value (consuming any payload from the stack, e.g.
+  `404 "x" failed`), and `match` dispatches on members with binding
+  (`failed code msg : ...`) and exhaustiveness checking — a match that omits a
+  member (or is empty) is rejected unless it has a `_` arm. Enums are nominal:
+  two enums with the same members are distinct types. Member names are
+  identifiers (not keywords) and are unique across all enums. `str` renders a
+  value as `member(payload ...)` and `toJson` uses the externally-tagged
+  convention. Payloads may reference the enum itself, so recursive enums like
+  `enum Tree = leaf int | node Tree Tree end` are supported.
 - Optional fields in dictionary shape types, written `name?: T` (and
   `"name"?: T` in `def` signatures). An optional field may be absent from a
   value; when present, its value is still type-checked. This lets option-style

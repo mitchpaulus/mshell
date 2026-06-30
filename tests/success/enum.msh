@@ -1,5 +1,5 @@
 # Enum: declaration, construction, match, and payload-carrying variants.
-enum Color = red | green | blue
+enum Color = red | green | blue end
 
 green match
     red   : "red" wl,
@@ -7,7 +7,7 @@ green match
     blue  : "blue" wl,
 end
 
-enum CmdResult = ok(str) | failed(int str) | timeout
+enum CmdResult = ok str | failed int str | timeout end
 
 404 "not found" failed match
     ok out     : @out wl,

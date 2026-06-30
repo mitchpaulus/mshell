@@ -630,24 +630,24 @@ For more detail, see the generated Type System help page.
 
 ## Enums
 
-An `enum` declares a generative tagged sum type, written like `type` with members separated by `|`:
+An `enum` declares a generative tagged sum type: members separated by `|`, closed by `end` (like `def`/`if`/`match`):
 
 ```
-enum Color = red | green | blue
+enum Color = red | green | blue end
 ```
 
 A bare member name constructs that value (`green` pushes a `Color`).
 Member names are identifiers (not keywords) and are unique across all enums.
 Unlike a union, an enum is nominal — two enums with the same members are distinct types.
 
-Members may carry a payload in parentheses; the constructor consumes those values from the stack.
-A nullary member takes no parentheses. Payloads may reference the enum itself (recursive enums).
+Members may carry a payload — types written after the member name; the constructor consumes those values from the stack.
+A nullary member has no payload. The closing `end` bounds the member list, so payloads are never confused with the following code. Payloads may reference the enum itself (recursive enums).
 
 ```
-enum CmdResult = ok(str) | failed(int str) | timeout
+enum CmdResult = ok str | failed int str | timeout end
 404 "not found" failed   # ( int str -- CmdResult )
 
-enum Tree = leaf(int) | node(Tree Tree)
+enum Tree = leaf int | node Tree Tree end
 ```
 
 `match` dispatches on the member and binds payload values (like `just v`).

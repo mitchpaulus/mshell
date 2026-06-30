@@ -1,7 +1,7 @@
 # Two enums are nominally distinct even with parallel members: a value of one
 # cannot be used where the other is expected.
-enum A = a1 | a2
-enum B = b1 | b2
+enum A = a1 | a2 end
+enum B = b1 | b2 end
 
 def takesA (A -- str)
     c!

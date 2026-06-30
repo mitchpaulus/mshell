@@ -350,7 +350,7 @@ func (a *TypeArena) walkTypeVars(t TypeId, visit func(TypeVarId) bool) bool {
 		// Enums are nominal and ground — payloads are resolved without a
 		// generic scope, so they never contain a type variable. Treat the
 		// enum as a leaf; recursing into payloads would loop forever on a
-		// self-referential enum (e.g. `node(Tree Tree)`).
+		// self-referential enum (e.g. `node Tree Tree`).
 	case TKQuote:
 		if a.walkSigVars(a.quoteSigs[n.Extra], visit) {
 			return true

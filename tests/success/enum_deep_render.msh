@@ -2,7 +2,7 @@
 # enum payloads with an explicit work stack, not function recursion. Build a
 # 50000-deep tree and print the length of its rendering (deterministic, and a
 # recursive renderer would overflow the stack well before this depth).
-enum Tree = leaf(int) | node(Tree Tree)
+enum Tree = leaf int | node Tree Tree end
 0 leaf t!
 0 i!
 (

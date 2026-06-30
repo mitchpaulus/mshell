@@ -293,40 +293,44 @@
     </tbody>
   </table>
 
-  <h3>Declaration form &mdash; inline, mirroring <code>type</code></h3>
-  <p>The chosen surface is a one-token delta from the existing <code>type Name = A | B</code>: swap
-    <code>type</code> for <code>enum</code>, and each arm is a <strong>constructor name with an optional
-    parenthesized payload type list</strong>, <code>|</code>-separated. A nullary member takes no
-    parentheses, so a plain enumeration is identical to the approved form.</p>
+  <h3>Declaration form &mdash; <code>|</code>-separated members, closed by <code>end</code></h3>
+  <p>Each arm is a <strong>constructor name followed by zero or more space-separated payload types</strong>,
+    arms are <code>|</code>-separated, and the body is closed by <code>end</code> &mdash; the same block
+    terminator <code>def</code>, <code>if</code>, <code>match</code>, and <code>loop</code> already use. A
+    nullary member is just a bare name.</p>
 
-  <pre><code>enum Mode   = read | write | readwrite           # nullary: a plain enumeration
-enum Shape  = circle(float) | rect(float float) | point
-enum CmdResult = ok(str) | failed(int str) | timeout</code></pre>
+  <pre><code>enum Mode   = read | write | readwrite end
+enum Shape  = circle float | rect float float | point end
+enum CmdResult = ok str | failed int str | timeout end</code></pre>
 
-  <p>The parentheses delimit the payload because mshell has <strong>no statement terminator</strong>: with
-    space-separated payloads, a nullary member followed by ordinary code (<code>... | blue</code> then
-    <code>green describe</code>) is ambiguous &mdash; the parser cannot tell whether <code>green</code> is a
-    payload type of <code>blue</code> or the next statement. Parentheses make the member set
-    self-delimiting. (Recursive payloads work: <code>enum Tree = leaf(int) | node(Tree Tree)</code>.)</p>
+  <p>The <code>end</code> terminator is what keeps the grammar <strong>whitespace-insensitive</strong>. mshell
+    has no statement terminator, so an open-ended, space-separated payload list has no way to mark its end:
+    after a nullary member, the parser otherwise cannot tell a following <code>(...)</code> /
+    <code>[...]</code> statement from a payload. Delimiters attached to the member name
+    (<code>failed(int&nbsp;str)</code>) would fix it only by making whitespace significant, which we reject.
+    <code>end</code> bounds the whole member list instead &mdash; and because every payload <em>type</em> is
+    itself self-delimiting (a quote type <code>(a -- b)</code> closes at its <code>)</code>), space-separated
+    payloads inside the body are unambiguous. This is exactly why <code>type X = (a -- b)</code> already has
+    no boundary problem: a type body is one self-bounded expression, whereas an enum body is an open list
+    that needs a terminator.</p>
 
   <p>Grammar:</p>
   <ul>
-    <li><code>enum</code> <code>Name</code> <code>=</code> arm (<code>|</code> arm)*</li>
-    <li>arm ::= constructorName (<code>(</code> typePrimary+ <code>)</code>)<sub>opt</sub> &nbsp; (the
-      constructor name is a bare identifier; each payload is a type primary, so a union payload must be
-      named via a <code>type</code> alias)</li>
+    <li><code>enum</code> <code>Name</code> <code>=</code> arm (<code>|</code> arm)* <code>end</code></li>
+    <li>arm ::= constructorName typePrimary* &nbsp; (the constructor name is a bare identifier; each payload
+      is a type primary, so a union payload must be named via a <code>type</code> alias)</li>
   </ul>
   <p>The only new wrinkle vs. a structural union is that an arm's <strong>first token is a binding
     occurrence</strong> (a constructor being declared) rather than a reference to an existing type. The
     <code>enum</code> keyword is what tells the parser to read it that way &mdash; no capitalization rule.</p>
 
   <h3>A long block is still fine</h3>
-  <p>The inline form wraps naturally; arms may be placed one per line, with an optional leading
-    <code>|</code> for alignment (a small additive allowance over the current <code>type</code> grammar):</p>
+  <p>Arms may be placed one per line, with an optional leading <code>|</code> for alignment:</p>
   <pre><code>enum Event =
     | click int int
     | key int
-    | close</code></pre>
+    | close
+end</code></pre>
 
   <h2>7. Construction and matching (use sites)</h2>
   <p>Both reuse the existing <code>Maybe</code> machinery verbatim &mdash; the whole point of "<code>Maybe</code>
