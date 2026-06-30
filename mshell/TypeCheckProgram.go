@@ -94,10 +94,9 @@ func (c *Checker) RegisterStdlibSigs(defs []MShellDefinition) {
 // parse tree driving the type stack. Error accumulation lives on the
 // Checker.
 func (c *Checker) CheckProgram(file *MShellFile) {
-	// Pre-pass 0: register all `enum` declarations. Names are predeclared
-	// first so member payloads can reference any enum (including the enum
-	// itself) regardless of order; bodies and constructor words follow. Done
-	// before `type` decls so a `type` body may reference an enum by name.
+	// Pre-pass 0: predeclare every `enum` name with a placeholder type, so a
+	// `type` body (next) and an enum payload (after that) can reference any
+	// enum by name, in any order.
 	var enumDecls []*MShellEnumDecl
 	for _, item := range file.Items {
 		if d, ok := item.(*MShellEnumDecl); ok {
@@ -106,15 +105,19 @@ func (c *Checker) CheckProgram(file *MShellFile) {
 			}
 		}
 	}
-	for _, d := range enumDecls {
-		c.defineEnum(d)
-	}
-	// Pre-pass 1: register all `type` declarations.
+	// Pre-pass 1: register all `type` declarations. Enum names are already
+	// available, so a `type` body may reference an enum.
 	for _, item := range file.Items {
 		if d, ok := item.(*MShellTypeDecl); ok {
 			body := c.resolveTypeExpr(d.Body, nil)
 			c.DeclareType(d.Name, body)
 		}
+	}
+	// Pre-pass 1b: resolve enum payload bodies and register constructor words.
+	// Both enum names and `type` aliases are now registered, so a payload may
+	// reference either.
+	for _, d := range enumDecls {
+		c.defineEnum(d)
 	}
 	// Pre-pass 2: register all `def` signatures so call sites (and
 	// recursive self-calls inside def bodies) can resolve them.
