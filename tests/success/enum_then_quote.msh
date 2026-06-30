@@ -1,0 +1,10 @@
+# Regression: a `(...)` statement after an enum declaration must NOT be parsed
+# as a payload list for the preceding nullary member. A payload `(` is a payload
+# only when attached to the member name (`failed(int str)`); a detached paren
+# (whitespace or newline before it) belongs to the following code, and the
+# member is nullary. Before the fix, the quotation below was swallowed by the
+# enum declaration.
+enum C = red | green | blue
+
+(green) x str wl
+[1 2 3] (0 >) filter len str wl

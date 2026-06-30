@@ -96,13 +96,21 @@ func (parser *MShellParser) ParseEnumDecl() (*MShellEnumDecl, error) {
 			return nil, fmt.Errorf("%d:%d: expected an enum member name (an identifier), got %s",
 				parser.curr.Line, parser.curr.Column, parser.curr.Type)
 		}
-		memberName := parser.curr.Lexeme
+		memberTok := parser.curr
+		memberName := memberTok.Lexeme
 		decl.Members = append(decl.Members, memberName)
-		decl.MemberToks = append(decl.MemberToks, parser.curr)
+		decl.MemberToks = append(decl.MemberToks, memberTok)
 		parser.NextToken() // consume member
 
+		// A payload list's `(` must be attached to the member name
+		// (`failed(int str)`), with no space. mshell has no statement
+		// terminator, so a detached `(` — `green (q) x` or a `(...)`
+		// starting the next line — belongs to the following code, not the
+		// enum, and the member is nullary.
 		var payloads []MShellParseItem
-		if parser.curr.Type == LEFT_PAREN {
+		if parser.curr.Type == LEFT_PAREN &&
+			parser.curr.Line == memberTok.Line &&
+			parser.curr.Column == memberTok.Column+len(memberTok.Lexeme) {
 			openTok := parser.curr
 			parser.NextToken() // consume (
 			for parser.curr.Type != RIGHT_PAREN && parser.curr.Type != EOF {
