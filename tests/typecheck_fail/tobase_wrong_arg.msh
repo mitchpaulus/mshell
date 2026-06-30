@@ -1,0 +1,3 @@
+# toBase formats an int; passing a string for the value must be rejected.
+# (The base argument is the int on top; the value below must also be int.)
+"hello" 16 toBase wl
