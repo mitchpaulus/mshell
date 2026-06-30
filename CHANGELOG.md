@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- `uniq` now accepts a list of any value type (matching its `([t] -- [t])`
+  signature) and deduplicates by structural equality, instead of throwing at
+  runtime for non-primitive elements such as enums, dicts, and booleans.
+
 ### Added
 
 - `enum` declarations: a generative tagged sum type. Members are separated by

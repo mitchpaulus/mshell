@@ -9648,7 +9648,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					floatsSeen := make(map[float64]any)
 					dateTimesSeen := make(map[time.Time]any)
 
-					for i, item := range listObj.Items {
+					for _, item := range listObj.Items {
 						switch itemTyped := item.(type) {
 						case MShellString:
 							strItem := itemTyped
@@ -9689,7 +9689,23 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 								stringsSeen[literalItem.LiteralText] = nil
 							}
 						default:
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot remove duplicates from a list with a %s at index %d (%s).\n", t.Line, t.Column, item.TypeName(), i, item.DebugString()))
+							// Any value without a fast hash path (enum, list,
+							// dict, bool, bytes, ...) is deduplicated by
+							// structural equality against the values kept so
+							// far. O(n^2) for these, but it lets `uniq` accept
+							// every value type, matching its `([t] -- [t])`
+							// signature so the type checker never accepts a
+							// `uniq` that fails at runtime.
+							seen := false
+							for _, kept := range newList.Items {
+								if eq, _ := item.Equals(kept); eq {
+									seen = true
+									break
+								}
+							}
+							if !seen {
+								newList.Items = append(newList.Items, item)
+							}
 						}
 					}
 
