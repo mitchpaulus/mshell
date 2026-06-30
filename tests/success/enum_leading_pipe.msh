@@ -1,0 +1,15 @@
+# Members may be written ML-style: one per line, each prefixed with an optional
+# leading `|`.
+enum Suit =
+  | hearts
+  | diamonds
+  | clubs
+  | spades
+end
+
+clubs match
+    hearts   : "H" wl,
+    diamonds : "D" wl,
+    clubs    : "C" wl,
+    spades   : "S" wl,
+end

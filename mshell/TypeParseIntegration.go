@@ -96,6 +96,12 @@ func (parser *MShellParser) ParseEnumDecl() (*MShellEnumDecl, error) {
 	}
 	parser.NextToken() // consume =
 
+	// Allow an optional leading `|` so members can be written ML-style, one
+	// per line each prefixed with `|`.
+	if parser.curr.Type == PIPE {
+		parser.NextToken()
+	}
+
 	decl := &MShellEnumDecl{Name: nameTok.Lexeme, NameToken: nameTok, StartTok: startTok}
 	var errs []TypeError
 	for {
