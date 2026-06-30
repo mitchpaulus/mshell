@@ -160,7 +160,7 @@ func (b MShellBinary) Equals(other MShellObject) (bool, error) {
 			return true, nil
 		}
 	}
-	return false, fmt.Errorf("Cannot compare Binary with %s.\n", other.TypeName())
+	return false, nil
 }
 
 func (b MShellBinary) CastString() (string, error) {
@@ -2074,62 +2074,87 @@ func (obj MShellLiteral) Equals(other MShellObject) (bool, error) {
 	case MShellPath:
 		return obj.LiteralText == o.Path, nil
 	default:
-		return false, fmt.Errorf("Cannot compare a literal with a %s.\n", other.TypeName())
+		return false, nil
 	}
 }
 
 func (obj MShellBool) Equals(other MShellObject) (bool, error) {
 	asBool, ok := other.(MShellBool)
 	if !ok {
-		return false, fmt.Errorf("Cannot compare a boolean with a %s.\n", other.TypeName())
+		return false, nil
 	}
 	return obj.Value == asBool.Value, nil
 }
 
+// itemsEqual compares two object slices element-wise by structural equality.
+func itemsEqual(a, b []MShellObject) (bool, error) {
+	if len(a) != len(b) {
+		return false, nil
+	}
+	for i := range a {
+		eq, err := a[i].Equals(b[i])
+		if err != nil || !eq {
+			return eq, err
+		}
+	}
+	return true, nil
+}
+
 func (obj *MShellQuotation) Equals(other MShellObject) (bool, error) {
-	return false, fmt.Errorf("Equality currently not defined for quotations.\n")
+	// Quotations are code values; two are equal only when they are the same
+	// quotation object (reference identity).
+	o, ok := other.(*MShellQuotation)
+	return ok && obj == o, nil
 }
 
 func (obj *MShellList) Equals(other MShellObject) (bool, error) {
-	return false, fmt.Errorf("Equality currently not defined for lists.\n")
+	o, ok := other.(*MShellList)
+	if !ok {
+		return false, nil
+	}
+	return itemsEqual(obj.Items, o.Items)
 }
 
 func (obj MShellString) Equals(other MShellObject) (bool, error) {
-	// Define equality for other as string or as literal.
-	switch other.(type) {
+	// str/path/literal compare by their text content (the `=` overloads
+	// permit str/path comparison); any other type is simply not equal.
+	switch o := other.(type) {
 	case MShellString:
-		asString, _ := other.(MShellString)
-		return obj.Content == asString.Content, nil
+		return obj.Content == o.Content, nil
 	case MShellLiteral:
-		asLiteral, _ := other.(MShellLiteral)
-		return obj.Content == asLiteral.LiteralText, nil
+		return obj.Content == o.LiteralText, nil
+	case MShellPath:
+		return obj.Content == o.Path, nil
 	default:
-		return false, fmt.Errorf("Cannot compare a string with a %s.\n", other.TypeName())
+		return false, nil
 	}
 }
 
 func (obj MShellPath) Equals(other MShellObject) (bool, error) {
-	// Define equality for other as string or as literal.
-	switch other.(type) {
+	switch o := other.(type) {
 	case MShellPath:
-		asPath, _ := other.(MShellPath)
-		return obj.Path == asPath.Path, nil
+		return obj.Path == o.Path, nil
 	case MShellLiteral:
-		asLiteral, _ := other.(MShellLiteral)
-		return obj.Path == asLiteral.LiteralText, nil
+		return obj.Path == o.LiteralText, nil
+	case MShellString:
+		return obj.Path == o.Content, nil
 	default:
-		return false, fmt.Errorf("Cannot compare a path with a %s.\n", other.TypeName())
+		return false, nil
 	}
 }
 
 func (obj *MShellPipe) Equals(other MShellObject) (bool, error) {
-	return false, fmt.Errorf("Equality currently not defined for pipes.\n")
+	o, ok := other.(*MShellPipe)
+	if !ok {
+		return false, nil
+	}
+	return itemsEqual(obj.List.Items, o.List.Items)
 }
 
 func (obj MShellInt) Equals(other MShellObject) (bool, error) {
 	asInt, ok := other.(MShellInt)
 	if !ok {
-		return false, fmt.Errorf("Cannot compare an integer with a %s.\n", other.TypeName())
+		return false, nil
 	}
 	return obj.Value == asInt.Value, nil
 }
@@ -2137,7 +2162,7 @@ func (obj MShellInt) Equals(other MShellObject) (bool, error) {
 func (obj MShellFloat) Equals(other MShellObject) (bool, error) {
 	asFloat, ok := other.(MShellFloat)
 	if !ok {
-		return false, fmt.Errorf("Cannot compare a float with a %s.\n", other.TypeName())
+		return false, nil
 	}
 	return obj.Value == asFloat.Value, nil
 }
@@ -2493,7 +2518,25 @@ func (g *MShellGrid) Concat(other MShellObject) (MShellObject, error) {
 }
 
 func (g *MShellGrid) Equals(other MShellObject) (bool, error) {
-	return false, fmt.Errorf("Equality currently not defined for grids.\n")
+	o, ok := other.(*MShellGrid)
+	if !ok {
+		return false, nil
+	}
+	if g.RowCount != o.RowCount || len(g.Columns) != len(o.Columns) {
+		return false, nil
+	}
+	for i, col := range g.Columns {
+		if col.Name != o.Columns[i].Name {
+			return false, nil
+		}
+	}
+	for i := 0; i < g.RowCount; i++ {
+		eq, err := g.GetRow(i).ToDict().Equals(o.GetRow(i).ToDict())
+		if err != nil || !eq {
+			return eq, err
+		}
+	}
+	return true, nil
 }
 
 func (g *MShellGrid) CastString() (string, error) {
@@ -2609,7 +2652,20 @@ func (v *MShellGridView) Concat(other MShellObject) (MShellObject, error) {
 }
 
 func (v *MShellGridView) Equals(other MShellObject) (bool, error) {
-	return false, fmt.Errorf("Equality currently not defined for grid views.\n")
+	o, ok := other.(*MShellGridView)
+	if !ok {
+		return false, nil
+	}
+	if len(v.Indices) != len(o.Indices) {
+		return false, nil
+	}
+	for i := range v.Indices {
+		eq, err := v.GetRow(i).ToDict().Equals(o.GetRow(i).ToDict())
+		if err != nil || !eq {
+			return eq, err
+		}
+	}
+	return true, nil
 }
 
 func (v *MShellGridView) CastString() (string, error) {
@@ -2718,7 +2774,11 @@ func (r *MShellGridRow) Concat(other MShellObject) (MShellObject, error) {
 }
 
 func (r *MShellGridRow) Equals(other MShellObject) (bool, error) {
-	return false, fmt.Errorf("Equality currently not defined for grid rows.\n")
+	o, ok := other.(*MShellGridRow)
+	if !ok {
+		return false, nil
+	}
+	return r.ToDict().Equals(o.ToDict())
 }
 
 func (r *MShellGridRow) CastString() (string, error) {

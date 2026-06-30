@@ -1,0 +1,33 @@
+# Equality is total and structural for every value type: containers compare
+# element-wise, and at runtime a type mismatch yields false rather than an
+# error (comparing two different concrete types is itself a static type error,
+# caught by the checker, so this matters for unions and unchecked code).
+
+# Lists (structural, nested, length-sensitive)
+[1 2 3] [1 2 3]   = str wl
+[1 2 3] [1 2 4]   = str wl
+[[1] [2]] [[1] [2]] = str wl
+[1 2] [1 2 3]     = str wl
+
+# str / path / literal compare by text content
+"foo" `foo` = str wl
+
+# Dicts compare structurally, independent of key order
+{ "a": 1, "b": 2 } { "b": 2, "a": 1 } = str wl
+
+# Maybe
+"x" just "x" just = str wl
+none none = str wl
+
+# Enums
+enum C = red | green end
+red red   = str wl
+red green = str wl
+
+# uniq now deduplicates any equatable value (lists, enums, ...)
+[[1] [1] [2]] uniq len str wl
+[red green red green] uniq len str wl
+
+# Quotations compare by identity
+(1 +) dup = str wl
+(1 +) (1 +) = str wl

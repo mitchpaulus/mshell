@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Equality (`=`) is now total and defined for every value type. Lists,
+  quotations, pipes, and grids previously raised "equality not defined" at
+  runtime; lists/pipes/grids now compare structurally (element- and cell-wise)
+  and quotations compare by identity. Comparing values of different runtime
+  types yields `false` rather than an error (a genuinely incompatible
+  comparison is already a static type error), so the result no longer depends
+  on operand order and union members like `int | null` compare cleanly.
 - `uniq` now accepts a list of any value type (matching its `([t] -- [t])`
   signature) and deduplicates by structural equality, instead of throwing at
   runtime for non-primitive elements such as enums, dicts, and booleans.
