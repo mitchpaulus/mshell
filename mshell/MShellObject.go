@@ -354,20 +354,57 @@ type MShellEnum struct {
 	Payload  []MShellObject
 }
 
-func (e *MShellEnum) TypeName() string         { return e.EnumName }
-func (e *MShellEnum) IsCommandLineable() bool   { return true }
-func (e *MShellEnum) IsNumeric() bool           { return false }
-func (e *MShellEnum) FloatNumeric() float64     { return 0 }
-func (e *MShellEnum) CommandLine() string       { return e.Member }
-func (e *MShellEnum) DebugString() string {
-	if len(e.Payload) == 0 {
-		return e.EnumName + "." + e.Member
+func (e *MShellEnum) TypeName() string       { return e.EnumName }
+func (e *MShellEnum) IsCommandLineable() bool { return true }
+func (e *MShellEnum) IsNumeric() bool         { return false }
+func (e *MShellEnum) FloatNumeric() float64   { return 0 }
+func (e *MShellEnum) CommandLine() string     { return enumRender(e) }
+func (e *MShellEnum) DebugString() string     { return e.EnumName + "." + enumRender(e) }
+
+// enumRender renders an enum value as `member` (nullary) or
+// `member(p0 p1 ...)`. Nested enum payloads are expanded with an explicit
+// work stack rather than function recursion, so an arbitrarily deep value
+// (e.g. a long `node(node(... ) ...)` chain) cannot overflow the call stack.
+// Non-enum payloads use their own ToString.
+func enumRender(top *MShellEnum) string {
+	var sb strings.Builder
+	type task struct {
+		lit   string
+		obj   MShellObject
+		isLit bool
 	}
-	parts := make([]string, len(e.Payload))
-	for i, p := range e.Payload {
-		parts[i] = p.DebugString()
+	stack := []task{{obj: top}}
+	for len(stack) > 0 {
+		t := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if t.isLit {
+			sb.WriteString(t.lit)
+			continue
+		}
+		en, ok := t.obj.(*MShellEnum)
+		if !ok {
+			sb.WriteString(t.obj.ToString())
+			continue
+		}
+		if len(en.Payload) == 0 {
+			sb.WriteString(en.Member)
+			continue
+		}
+		// Emit `member ( p0 " " p1 ... )`; push reversed so it pops in order.
+		seq := make([]task, 0, len(en.Payload)*2+3)
+		seq = append(seq, task{lit: en.Member, isLit: true}, task{lit: "(", isLit: true})
+		for i, p := range en.Payload {
+			if i > 0 {
+				seq = append(seq, task{lit: " ", isLit: true})
+			}
+			seq = append(seq, task{obj: p})
+		}
+		seq = append(seq, task{lit: ")", isLit: true})
+		for i := len(seq) - 1; i >= 0; i-- {
+			stack = append(stack, seq[i])
+		}
 	}
-	return e.EnumName + "." + e.Member + "(" + strings.Join(parts, " ") + ")"
+	return sb.String()
 }
 
 func (e *MShellEnum) Index(index int) (MShellObject, error) {
@@ -386,8 +423,25 @@ func (e *MShellEnum) Slice(startInc int, endExc int) (MShellObject, error) {
 	return nil, fmt.Errorf("Cannot slice an enum.\n")
 }
 
-func (e *MShellEnum) ToJson() string   { return fmt.Sprintf("%q", e.Member) }
-func (e *MShellEnum) ToString() string { return e.Member }
+// ToJson uses serde's externally-tagged convention — the de-facto standard for
+// tagged unions in JSON: a nullary member is the bare member string; a member
+// with a single payload is `{"member": value}`; with several, `{"member":
+// [v0, v1, ...]}`.
+func (e *MShellEnum) ToJson() string {
+	if len(e.Payload) == 0 {
+		return fmt.Sprintf("%q", e.Member)
+	}
+	if len(e.Payload) == 1 {
+		return fmt.Sprintf("{%q: %s}", e.Member, e.Payload[0].ToJson())
+	}
+	parts := make([]string, len(e.Payload))
+	for i, p := range e.Payload {
+		parts[i] = p.ToJson()
+	}
+	return fmt.Sprintf("{%q: [%s]}", e.Member, strings.Join(parts, ", "))
+}
+
+func (e *MShellEnum) ToString() string    { return enumRender(e) }
 func (e *MShellEnum) IndexErrStr() string { return "" }
 
 func (e *MShellEnum) Concat(other MShellObject) (MShellObject, error) {

@@ -1203,9 +1203,11 @@ func (c *Checker) checkMatchBlock(matchBlock *MShellParseMatchBlock) {
 	entry := c.captureBranch()
 
 	if len(matchBlock.Arms) == 0 {
-		// Empty match block: no arms could fire. Treat as a no-op.
-		// The runtime would error at first use; the checker keeps
-		// the subject on the stack.
+		// An empty match can never fire — it always errors at runtime. Run
+		// exhaustiveness with no arms so the static check rejects it (no type
+		// is covered and there is no wildcard) instead of letting it crash at
+		// runtime.
+		c.CheckMatchExhaustive(subject, nil, startTok)
 		return
 	}
 
