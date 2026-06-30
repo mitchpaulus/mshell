@@ -1,0 +1,10 @@
+# `_` is the wildcard token, reserved as a name, so it cannot be an enum
+# member. (Previously it was accepted and then mis-dispatched at runtime,
+# because the checker treated `_` as a member while the matcher treated it as
+# the catch-all wildcard.)
+enum C = _ | red end
+
+red match
+    _   : "u" wl,
+    red : "r" wl,
+end

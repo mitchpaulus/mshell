@@ -1362,7 +1362,7 @@ func (c *Checker) armPatternOf(subject TypeId, pattern []MShellParseItem) armPat
 	case 2:
 		t0, ok0 := pattern[0].(Token)
 		t1, ok1 := pattern[1].(Token)
-		if !ok0 || !ok1 || t1.Type != LITERAL {
+		if !ok0 || !ok1 || (t1.Type != LITERAL && t1.Type != UNDERSCORE) {
 			return out
 		}
 		if t0.Type == LITERAL && t0.Lexeme == "just" {
@@ -1447,7 +1447,7 @@ func (c *Checker) enumMemberPattern(subject TypeId, pattern []MShellParseItem) (
 	}
 	for i, b := range binds {
 		bt, ok := b.(Token)
-		if !ok || bt.Type != LITERAL {
+		if !ok || (bt.Type != LITERAL && bt.Type != UNDERSCORE) {
 			c.errors = append(c.errors, TypeError{
 				Kind: TErrInvalidMatchPattern,
 				Pos:  tok,
@@ -1487,6 +1487,9 @@ func (c *Checker) analyzeTokenPattern(tok Token, out *armPattern) {
 	case INTEGER, FLOAT, STRING, SINGLEQUOTESTRING, PATH:
 		// Value literals: legal patterns, but they credit no coverage.
 		out.Recognized = true
+	case UNDERSCORE:
+		out.Recognized = true
+		out.Tag = MatchArmTag{Kind: MatchArmWildcard}
 	case LITERAL:
 		switch tok.Lexeme {
 		case "_":

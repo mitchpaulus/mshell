@@ -384,7 +384,7 @@ func (c *Checker) checkOne(tok Token) {
 	// values, and it's load-bearing for `[cmd args] ;`-style
 	// pipelines where forcing the user to quote every word
 	// would defeat the point.
-	if c.listDepth > 0 && tok.Type == LITERAL {
+	if c.listDepth > 0 && (tok.Type == LITERAL || tok.Type == UNDERSCORE) {
 		c.stack.Push(TidStr)
 		return
 	}

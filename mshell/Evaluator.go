@@ -1114,7 +1114,7 @@ func (state *EvalState) matchPattern(pattern []MShellParseItem, subject MShellOb
 	if len(pattern) == 2 {
 		first, firstOk := pattern[0].(Token)
 		second, secondOk := pattern[1].(Token)
-		if firstOk && secondOk && second.Type == LITERAL {
+		if firstOk && secondOk && (second.Type == LITERAL || second.Type == UNDERSCORE) {
 			if first.Type == LITERAL && first.Lexeme == "just" {
 				// Maybe Just destructuring
 				var maybeVal Maybe
@@ -1177,6 +1177,8 @@ func (state *EvalState) matchPattern(pattern []MShellParseItem, subject MShellOb
 // matchTokenPattern matches a single token pattern against a subject.
 func (state *EvalState) matchTokenPattern(p Token, subject MShellObject) (bool, EvalResult) {
 	switch p.Type {
+	case UNDERSCORE:
+		return true, SimpleSuccess()
 	case LITERAL:
 		if p.Lexeme == "_" {
 			return true, SimpleSuccess()
@@ -1415,7 +1417,7 @@ func (state *EvalState) matchDictPattern(pattern *MShellParseDict, subject MShel
 			return false, nil, state.FailWithMessage(fmt.Sprintf("%d:%d: Dict pattern value must be a single binding name.\n", startToken.Line, startToken.Column))
 		}
 		tok, ok := kv.Value[0].(Token)
-		if !ok || tok.Type != LITERAL {
+		if !ok || (tok.Type != LITERAL && tok.Type != UNDERSCORE) {
 			return false, nil, state.FailWithMessage(fmt.Sprintf("%d:%d: Dict pattern value must be a literal binding name.\n", startToken.Line, startToken.Column))
 		}
 		if tok.Lexeme != "_" {
@@ -11210,6 +11212,13 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 					stack.Push(MShellLiteral{t.Lexeme})
 				}
+			} else if t.Type == UNDERSCORE {
+				// A lone `_` is the pattern wildcard; in a list it is the
+				// literal argv word "_", and nowhere else does it have meaning.
+				if callStackItem.CallStackType != CALLSTACKLIST {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: '_' is reserved as the match wildcard; use \"_\" for a literal underscore string.\n", t.Line, t.Column))
+				}
+				stack.Push(MShellLiteral{"_"})
 			} else if t.Type == ASTERISK {
 				obj1, err := stack.Pop()
 				if err != nil {

@@ -110,6 +110,7 @@ const (
 	FAIL_KEYWORD
 	PURE
 	ENUM
+	UNDERSCORE // a lone `_`: the match/binding wildcard, reserved as a name
 )
 
 func (t TokenType) String() string {
@@ -286,6 +287,8 @@ func (t TokenType) String() string {
 		return "TYPE"
 	case ENUM:
 		return "ENUM"
+	case UNDERSCORE:
+		return "UNDERSCORE"
 	case TRY:
 		return "TRY"
 	case FAIL_KEYWORD:
@@ -624,6 +627,13 @@ func (l *Lexer) literalOrKeywordType() TokenType {
 	if l.peek() == '!' {
 		l.advance()
 		return VARSTORE
+	}
+
+	// A lone `_` is the wildcard token, not an identifier — this is what
+	// reserves it as a name (it can't be an enum member, def, etc.) and keeps
+	// the checker and runtime from disagreeing about what `_` means.
+	if l.current-l.start == 1 && l.input[l.start] == '_' {
+		return UNDERSCORE
 	}
 
 	return LITERAL
