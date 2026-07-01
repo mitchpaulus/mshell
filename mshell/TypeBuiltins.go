@@ -245,6 +245,10 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 	r.reg("toFixed", "(int int -- str)", "(float int -- str)")
 	// str-first ordering for the same reason as toFloat above.
 	r.reg("toInt", "(str -- Maybe[int])", "(float -- int)", "(int -- int)")
+	// Format an int in an arbitrary base (2-36) as bare digits; parse a string
+	// in a given base back to Maybe[int]. The int carries no base of its own.
+	r.reg("toBase", "(int int -- str)")
+	r.reg("fromBase", "(str int -- Maybe[int])")
 
 	// ----- Path / DateTime / File ops -----
 

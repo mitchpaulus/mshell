@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Octal, hexadecimal, and binary integer literals via `0o`, `0x`, and `0b`
+  prefixes (case-insensitive), e.g. `0o644`, `0xFF`, `0b101`. The base is purely
+  a way of writing the literal; the value is an ordinary integer and prints in
+  decimal. There are no digit separators.
+- Functions
+  - `toBase` / `fromBase`: format an integer in / parse a string from an
+    arbitrary base (2–36). `fromBase` returns `Maybe[int]`.
+  - `toHex` / `toOctal` / `toBin` and `parseHex` / `parseOctal` / `parseBin`:
+    convenience wrappers over `toBase` / `fromBase` for the common bases.
 - Optional fields in dictionary shape types, written `name?: T` (and
   `"name"?: T` in `def` signatures). An optional field may be absent from a
   value; when present, its value is still type-checked. This lets option-style
