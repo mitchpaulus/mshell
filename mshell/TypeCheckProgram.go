@@ -1184,7 +1184,10 @@ func (c *Checker) checkMatchBlock(matchBlock *MShellParseMatchBlock) {
 		})
 		return
 	}
-	subject := c.stack.items[c.stack.Len()-1]
+	// Widen a string-literal subject to `str`: match arms and the
+	// exhaustiveness check compare against `str` by type id, and the literal
+	// value carries no meaning for pattern matching.
+	subject := c.arena.WidenStrLit(c.stack.items[c.stack.Len()-1])
 	entry := c.captureBranch()
 
 	if len(matchBlock.Arms) == 0 {
@@ -1637,6 +1640,78 @@ func (c *Checker) checkFormatBlock(src string, callSite Token, baseLine, baseCol
 
 	c.subst.Rollback(cp)
 	c.stack.items = outerStack
+}
+
+// stringLiteralValue returns the parsed content of a STRING /
+// SINGLEQUOTESTRING token — the same key value the runtime would compute —
+// or ("", false) if the token is not a string literal or fails to parse.
+func (c *Checker) stringLiteralValue(tok Token) (string, bool) {
+	switch tok.Type {
+	case STRING:
+		v, err := ParseRawString(tok.Lexeme)
+		if err != nil {
+			return "", false
+		}
+		return v, true
+	case SINGLEQUOTESTRING:
+		if len(tok.Lexeme) < 2 {
+			return "", false
+		}
+		return tok.Lexeme[1 : len(tok.Lexeme)-1], true
+	}
+	return "", false
+}
+
+// tryGetLiteralKey resolves a `get` whose key is a known string literal
+// (a TKStrLit on top of the stack) against a shape receiver — so `"body" get`
+// reads the declared `body` field type exactly like the `:body` getter,
+// instead of collapsing the shape to a dict and yielding the union of every
+// field type. Because the key's value rides the stack as a type, this also
+// fires when the literal reached `get` through a variable (`k! ... @k get`),
+// not only when it is written inline. It only fires for a shape (or a brand
+// over one); dicts, GridRows, and still-generic receivers fall through to the
+// ordinary `get` overloads.
+func (c *Checker) tryGetLiteralKey() bool {
+	if c.inferring || c.stack.Len() < 2 {
+		return false
+	}
+	key := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-1])
+	name, ok := c.arena.StrLitName(key)
+	if !ok {
+		return false
+	}
+	recv := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-2])
+	fieldType, ok := c.shapeFieldType(recv, name)
+	if !ok {
+		return false
+	}
+	// Pop the key and the receiver; push Maybe[field]. An absent field
+	// resolves to Maybe[bottom] (see shapeFieldType), so a following `?`
+	// is flagged as an always-failing unwrap, matching the getter.
+	c.stack.items = c.stack.items[:c.stack.Len()-2]
+	c.stack.Push(c.arena.MakeMaybe(fieldType))
+	return true
+}
+
+// shapeFieldType resolves field `name` on a shape receiver, mirroring the
+// TKShape/TKBrand handling in lookupGetterValueType: a declared field yields
+// its type; an undeclared field on a concrete shape yields bottom (the key is
+// provably absent, so the get can only be None). Returns ok=false for any
+// receiver that is not a shape, so callers defer to generic dispatch.
+func (c *Checker) shapeFieldType(recv TypeId, name NameId) (TypeId, bool) {
+	n := c.arena.Node(recv)
+	switch n.Kind {
+	case TKShape:
+		for _, field := range c.arena.shapeFields[n.Extra] {
+			if field.Name == name {
+				return field.Type, true
+			}
+		}
+		return TidBottom, true
+	case TKBrand:
+		return c.shapeFieldType(c.subst.Apply(c.arena, TypeId(n.B)), name)
+	}
+	return TidNothing, false
 }
 
 // lookupGetterValueType returns the value type produced by a `:name`

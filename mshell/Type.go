@@ -59,6 +59,14 @@ const (
 	TKGrid     // Extra = index into gridSchemas (0 = unknown schema)
 	TKGridView // Extra = index into gridSchemas (0 = unknown schema)
 	TKGridRow  // Extra = index into gridSchemas (0 = unknown schema)
+
+	// TKStrLit is a `str` refined with a statically known value: A holds the
+	// interned NameId of the literal content. It is a subtype of `str` —
+	// unify and every container constructor widen it back to TidStr — so it
+	// behaves exactly like `str` everywhere except where a known key matters:
+	// `get` reads it off the stack to resolve a shape field by name, the same
+	// resolution the `:name` getter does from its token.
+	TKStrLit // A = NameId of the literal string content
 )
 
 // String returns a debug name for a TypeKind.
@@ -94,6 +102,8 @@ func (k TypeKind) String() string {
 		return "GridView"
 	case TKGridRow:
 		return "GridRow"
+	case TKStrLit:
+		return "StrLit"
 	}
 	return "Unknown"
 }
@@ -234,17 +244,44 @@ func (a *TypeArena) Kind(id TypeId) TypeKind {
 // MakeMaybe returns the canonical TypeId for Maybe[inner]. If a Maybe of
 // the same inner type was constructed before, the existing id is returned.
 func (a *TypeArena) MakeMaybe(inner TypeId) TypeId {
-	return a.intern(TKMaybe, uint32(inner), 0, 0)
+	return a.intern(TKMaybe, uint32(a.WidenStrLit(inner)), 0, 0)
 }
 
 // MakeList returns the canonical TypeId for [elem].
 func (a *TypeArena) MakeList(elem TypeId) TypeId {
-	return a.intern(TKList, uint32(elem), 0, 0)
+	return a.intern(TKList, uint32(a.WidenStrLit(elem)), 0, 0)
 }
 
 // MakeDict returns the canonical TypeId for {key: value}.
 func (a *TypeArena) MakeDict(key, value TypeId) TypeId {
-	return a.intern(TKDict, uint32(key), uint32(value), 0)
+	return a.intern(TKDict, uint32(a.WidenStrLit(key)), uint32(a.WidenStrLit(value)), 0)
+}
+
+// MakeStrLit returns the canonical TypeId for a `str` refined to the literal
+// value named by `name`. It is a subtype of TidStr.
+func (a *TypeArena) MakeStrLit(name NameId) TypeId {
+	return a.intern(TKStrLit, uint32(name), 0, 0)
+}
+
+// StrLitName returns the interned literal value of a TKStrLit type, or
+// (0, false) if id is not a string literal.
+func (a *TypeArena) StrLitName(id TypeId) (NameId, bool) {
+	n := a.Node(id)
+	if n.Kind != TKStrLit {
+		return 0, false
+	}
+	return NameId(n.A), true
+}
+
+// WidenStrLit widens a top-level string-literal refinement to plain `str`;
+// any other type is returned unchanged. Container constructors and unify
+// funnel through this so a literal never escapes the stack slot it was
+// produced on — it stays observable only where a known key is read.
+func (a *TypeArena) WidenStrLit(id TypeId) TypeId {
+	if a.Node(id).Kind == TKStrLit {
+		return TidStr
+	}
+	return id
 }
 
 // MakeVar returns the canonical TypeId for the generic type variable v.
@@ -283,6 +320,18 @@ func (a *TypeArena) MakeCommand(argv TypeId, stdout, stderr CommandCaptureMode) 
 // before lookup so two equivalent shapes always share a TypeId. A duplicate
 // field name is a programmer error and panics.
 func (a *TypeArena) MakeShape(fields []ShapeField) TypeId {
+	// A field never holds a string-literal refinement; widen so shapes stay
+	// keyed on plain value types (and hash-cons identically regardless of
+	// whether a field value arrived as a literal).
+	for i := range fields {
+		if w := a.WidenStrLit(fields[i].Type); w != fields[i].Type {
+			fields = append([]ShapeField(nil), fields...)
+			for j := range fields {
+				fields[j].Type = a.WidenStrLit(fields[j].Type)
+			}
+			break
+		}
+	}
 	normalized := normalizeShapeFields(fields)
 	key := encodeShapeKey(normalized)
 	if id, ok := a.cons[key]; ok {
@@ -471,6 +520,7 @@ func (a *TypeArena) Len() int {
 func (a *TypeArena) flattenAndCanonicalizeUnion(arms []TypeId) []TypeId {
 	out := make([]TypeId, 0, len(arms))
 	for _, arm := range arms {
+		arm = a.WidenStrLit(arm)
 		n := a.Node(arm)
 		if n.Kind == TKUnion && n.A == 0 {
 			// Unbranded inner union: flatten its arms.
