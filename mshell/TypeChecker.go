@@ -203,7 +203,14 @@ func (c *Checker) checkOne(tok Token) {
 		c.stack.Push(TidFloat)
 		return
 	case STRING, SINGLEQUOTESTRING:
-		c.stack.Push(TidStr)
+		// Carry the known value as a `str` refinement so a later `get` (or the
+		// `:name` getter) can resolve a shape field by key. It behaves as `str`
+		// everywhere else — unify and every container constructor widen it.
+		if v, ok := c.stringLiteralValue(tok); ok {
+			c.stack.Push(c.arena.MakeStrLit(c.names.Intern(v)))
+		} else {
+			c.stack.Push(TidStr)
+		}
 		return
 	case TRUE, FALSE:
 		c.stack.Push(TidBool)
@@ -363,6 +370,9 @@ func (c *Checker) checkOne(tok Token) {
 			return
 		}
 		if tok.Lexeme == "join" && c.tryGridJoin() {
+			return
+		}
+		if tok.Lexeme == "get" && c.tryGetLiteralKey() {
 			return
 		}
 		if tok.Lexeme == "pivot" && c.tryPivot(tok) {
@@ -770,7 +780,7 @@ func (c *Checker) tryRedirect(tok Token) bool {
 	if c.stack.Len() < 2 {
 		return false
 	}
-	target := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-1])
+	target := c.arena.WidenStrLit(c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-1]))
 	if target != TidStr && target != TidPath && target != TidBytes {
 		return false
 	}
@@ -878,6 +888,25 @@ func (c *Checker) unify(got, want TypeId) bool {
 
 	gn := c.arena.Node(got)
 	wn := c.arena.Node(want)
+
+	// A string literal is a subtype of `str`; widen both sides so a literal
+	// unifies exactly as `str` (including binding a free variable to `str`,
+	// not the narrower literal). Reusing the nodes loaded just above, the
+	// common case — neither side a literal — costs only two kind checks.
+	if gn.Kind == TKStrLit {
+		got = TidStr
+		if got == want {
+			return true
+		}
+		gn = c.arena.Node(TidStr)
+	}
+	if wn.Kind == TKStrLit {
+		want = TidStr
+		if got == want {
+			return true
+		}
+		wn = c.arena.Node(TidStr)
+	}
 
 	// Variable cases: bind whichever side is still a free variable. After
 	// Apply above, a TKVar here is guaranteed unbound.

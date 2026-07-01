@@ -882,7 +882,7 @@ func (parser *MShellParser) parseDictKeyValue() (MShellParseDictKeyValue, error)
 	} else if keyToken == LITERAL {
 		key = parser.curr.Lexeme
 	} else if keyToken == INTEGER {
-		intVal, _ := strconv.Atoi(parser.curr.Lexeme) // This normalizes the integer to not have leading 0's etc.
+		intVal, _ := parseIntLiteral(parser.curr.Lexeme) // This normalizes the integer to not have leading 0's etc.
 		key = strconv.Itoa(intVal)
 	} else if keyToken == STARTINDEXER {
 		indexStr := parser.curr.Lexeme[:len(parser.curr.Lexeme)-1]
@@ -942,7 +942,7 @@ func (parser *MShellParser) parseStaticDictKeyValue() (MShellParseDictKeyValue, 
 	} else if keyToken == LITERAL {
 		key = parser.curr.Lexeme
 	} else if keyToken == INTEGER {
-		intVal, _ := strconv.Atoi(parser.curr.Lexeme)
+		intVal, _ := parseIntLiteral(parser.curr.Lexeme)
 		key = strconv.Itoa(intVal)
 	} else if keyToken == STARTINDEXER {
 		indexStr := parser.curr.Lexeme[:len(parser.curr.Lexeme)-1]

@@ -47,6 +47,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   value as `member(payload ...)` and `toJson` uses the externally-tagged
   convention. Payloads may reference the enum itself, so recursive enums like
   `enum Tree = leaf int | node Tree Tree end` are supported.
+- Octal, hexadecimal, and binary integer literals via `0o`, `0x`, and `0b`
+  prefixes (case-insensitive), e.g. `0o644`, `0xFF`, `0b101`. The base is purely
+  a way of writing the literal; the value is an ordinary integer and prints in
+  decimal. There are no digit separators.
+- Functions
+  - `toBase` / `fromBase`: format an integer in / parse a string from an
+    arbitrary base (2–36). `fromBase` returns `Maybe[int]`.
+  - `toHex` / `toOctal` / `toBin` and `parseHex` / `parseOctal` / `parseBin`:
+    convenience wrappers over `toBase` / `fromBase` for the common bases.
 - Optional fields in dictionary shape types, written `name?: T` (and
   `"name"?: T` in `def` signatures). An optional field may be absent from a
   value; when present, its value is still type-checked. This lets option-style
@@ -54,6 +63,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `httpGet`/`httpPost`, grid `groupBy` aggregation specs, and the `zip*` option
   dicts now declare their required and optional keys. A required value satisfies
   an optional parameter, but an optional value does not satisfy a required one.
+- The type checker now tracks the value of a string literal (as a `str`
+  refinement) so a `get` with a known key resolves a shape field the same way
+  the `:name` getter does: `resp "body" get` yields the declared `body` field's
+  type instead of the union of every field type, so `httpGet? "body" get?`
+  type-checks as `bytes`. Because the key rides the stack as a type, it resolves
+  even when the literal reaches `get` through a variable; a key computed at
+  runtime still returns the generic `Maybe[value]`.
 - The language server now reports an informational diagnostic when a `?` unwrap
   is statically guaranteed to fail — unwrapping a getter (`:k?`) for a field a
   concrete shape does not declare, or unwrapping a bare `none`. The hint is
@@ -132,6 +148,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Breaking: the type checker no longer accepts an empty quote `()` as the
+  predicate to `any` / `all`.
+  Pass `(id)` instead, e.g. `[true false] (id) any`.
+  Both now carry the single signature `([T] (T -- bool) -- bool)`, matching their
+  `std.msh` definitions.
 - A command that cannot start (not found, permission denied, bad format, ...) run
   with `?` or `;` no longer aborts the script.
   Instead, `?` leaves a negative exit code carrying the exact reason: `-(256+errno)`

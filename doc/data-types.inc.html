@@ -242,6 +242,34 @@ Any literal number with a decimal will be lexed as a float, otherwise it will be
 </pre>
 
 <p>
+Integer literals may also be written in octal, hexadecimal, or binary using a
+<code>0o</code>, <code>0x</code>, or <code>0b</code> prefix (the letters are
+case-insensitive, so <code>0O</code>/<code>0X</code>/<code>0B</code> work too).
+The base is purely a way of writing the literal; the value on the stack is an
+ordinary integer with no record of how it was entered, and it prints back in
+decimal. There are no digit separators, so <code>0o6_44</code> is not a number.
+</p>
+
+<pre>
+<code><span class="mshellINTEGER">0o644</span> <span class="mshellLINECOMMENT"># 420 (octal, e.g. a file mode)</span>
+<span class="mshellINTEGER">0xFF</span>  <span class="mshellLINECOMMENT"># 255 (hexadecimal)</span>
+<span class="mshellINTEGER">0b101</span> <span class="mshellLINECOMMENT"># 5   (binary)</span></code>
+</pre>
+
+<p>
+To go the other way, format an integer to a base-N string with
+<code>toBase</code> (or the <code>toHex</code>/<code>toOctal</code>/<code>toBin</code>
+convenience words), and parse a string in a given base with <code>fromBase</code>
+(or <code>parseHex</code>/<code>parseOctal</code>/<code>parseBin</code>), which
+returns a <code>Maybe[int]</code>. Formatted output is bare digits with no prefix.
+</p>
+
+<pre>
+<code><span class="mshellINTEGER">420</span> <span class="mshellLITERAL">toOctal</span> <span class="mshellLINECOMMENT"># "644"</span>
+<span class="mshellSTRING">&#34;644&#34;</span> <span class="mshellLITERAL">parseOctal</span> <span class="mshellLINECOMMENT"># Some 420</span></code>
+</pre>
+
+<p>
 Division for integers will result in an integer without the remainder.
 </p>
 

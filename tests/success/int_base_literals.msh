@@ -1,0 +1,29 @@
+# Base-prefixed integer literals all push plain ints.
+0o644 wl
+0x1a4 wl
+0b110100100 wl
+-0o10 wl
+0xFF wl
+0B101 wl
+0O17 wl
+
+# Generic builtins.
+420 16 toBase wl
+420 8 toBase wl
+420 2 toBase wl
+-8 16 toBase wl
+"1a4" 16 fromBase -1 maybe wl
+"zzz" 16 fromBase -1 maybe wl
+
+# Named std-lib wrappers.
+420 toHex wl
+420 toOctal wl
+420 toBin wl
+"1a4" parseHex -1 maybe wl
+"644" parseOctal -1 maybe wl
+"0o644" parseOctal -1 maybe wl
+"110100100" parseBin -1 maybe wl
+"nope" parseOctal -1 maybe wl
+
+# Round trip.
+255 toHex parseHex -1 maybe wl

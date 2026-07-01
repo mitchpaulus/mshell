@@ -39,6 +39,70 @@ func TestTypeCheckerKeywords(t *testing.T) {
 	}
 }
 
+// Base-prefixed integer literals (0o/0x/0b) tokenize as INTEGER, while
+// malformed or separator-bearing forms fall back to LITERAL (mshell has no
+// digit separators in numeric literals).
+func TestBaseIntegerLiterals(t *testing.T) {
+	cases := []struct {
+		input string
+		want  TokenType
+	}{
+		{"0o644", INTEGER},
+		{"0O17", INTEGER},
+		{"0x1a4", INTEGER},
+		{"0XFF", INTEGER},
+		{"0b101", INTEGER},
+		{"0B0", INTEGER},
+		{"-0o10", INTEGER},
+		{"42", INTEGER},
+		// Malformed / not octal-hex-bin: stay literals.
+		{"0o", LITERAL},      // no digits after prefix
+		{"0o8", LITERAL},     // 8 is not an octal digit
+		{"0xG", LITERAL},     // G is not a hex digit
+		{"0b2", LITERAL},     // 2 is not a binary digit
+		{"0o6_44", LITERAL},  // no digit separators
+		{"0o644g", LITERAL},  // trailing literal char
+		{"10o", LITERAL},     // prefix only valid right after a lone 0
+	}
+	for _, tc := range cases {
+		l := NewLexer(tc.input, nil)
+		toks, _ := l.Tokenize()
+		if len(toks) < 1 {
+			t.Errorf("%q: no tokens produced", tc.input)
+			continue
+		}
+		if toks[0].Type != tc.want {
+			t.Errorf("%q: got %s, want %s", tc.input, toks[0].Type, tc.want)
+		}
+	}
+}
+
+func TestParseIntLiteral(t *testing.T) {
+	cases := []struct {
+		input string
+		want  int
+	}{
+		{"0o644", 420},
+		{"0x1a4", 420},
+		{"0b110100100", 420},
+		{"-0o10", -8},
+		{"0xFF", 255},
+		{"42", 42},
+		{"-42", -42},
+		{"0", 0},
+	}
+	for _, tc := range cases {
+		got, err := parseIntLiteral(tc.input)
+		if err != nil {
+			t.Errorf("%q: unexpected error %v", tc.input, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("%q: got %d, want %d", tc.input, got, tc.want)
+		}
+	}
+}
+
 func TestUnterminatedString(t *testing.T) {
 	input := `"Hello, world!`
 	l := NewLexer(input, nil)

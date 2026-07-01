@@ -82,3 +82,11 @@
 # Dict to List
 { "a" : 1, "b": 2 } keyValues (pair! @pair :k? key!, @pair :v? value! $"{@key} {@value 1 +}") map uw
 { "b" : 1, "a": 2 } keyValues (pair! @pair :k? key!, @pair :v? value! $"{@key} {@value 1 +}") map uw
+
+# A literal `get` key resolves the specific shape field type, not the union of
+# every field value type. Both spellings resolve `count` to `int` (so `2 +`
+# type-checks); a dynamic/unknown key would type as `int | str` and be rejected.
+{ "count": 3, "label": "widgets" } rec!
+@rec "count" get? 2 + str wl              # inline literal key
+"count" ckey! @rec @ckey get? 2 + str wl  # key bound to a variable
+@rec "label" get? wl                      # str field

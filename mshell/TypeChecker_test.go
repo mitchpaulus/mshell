@@ -118,7 +118,9 @@ func TestCheckerLiteralsPushPrimitives(t *testing.T) {
 		t.Fatalf("stack len: want %d, got %d", len(want), len(got))
 	}
 	for i := range want {
-		if got[i] != want[i] {
+		// A string literal pushes a `str` refined with its value (TKStrLit);
+		// widen it before comparing, since it behaves as `str` everywhere.
+		if c.arena.WidenStrLit(got[i]) != want[i] {
 			t.Fatalf("stack[%d]: want %v, got %v", i, want[i], got[i])
 		}
 	}

@@ -185,6 +185,10 @@ func FormatType(arena *TypeArena, names *NameTable, id TypeId) string {
 	}
 	n := arena.Node(id)
 	switch n.Kind {
+	case TKStrLit:
+		// A literal is a `str` subtype; present it as `str` so diagnostics
+		// read the same whether a value arrived as a literal or not.
+		return "str"
 	case TKMaybe:
 		return "Maybe[" + FormatType(arena, names, TypeId(n.A)) + "]"
 	case TKList:

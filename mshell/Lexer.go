@@ -462,6 +462,32 @@ var notAllowedLiteralChars = map[rune]bool{
 	'^': true, // Used for stderr [command]^;
 }
 
+// baseFromPrefix maps the letter following a leading "0" to its numeric base.
+func baseFromPrefix(r rune) (int, bool) {
+	switch r {
+	case 'o', 'O':
+		return 8, true
+	case 'x', 'X':
+		return 16, true
+	case 'b', 'B':
+		return 2, true
+	}
+	return 0, false
+}
+
+// isBaseDigit reports whether r is a valid digit in the given base (8, 16, 2).
+func isBaseDigit(base int, r rune) bool {
+	switch base {
+	case 8:
+		return r >= '0' && r <= '7'
+	case 16:
+		return (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')
+	case 2:
+		return r == '0' || r == '1'
+	}
+	return false
+}
+
 func isAllowedLiteral(r rune) bool {
 	if unicode.IsSpace(r) {
 		return false
@@ -932,6 +958,28 @@ func (l *Lexer) parseNumberOrStartIndexer() Token {
 	}
 
 	peek := l.peek()
+
+	// Base-prefixed integer literals: 0o... (octal), 0x... (hex), 0b... (binary).
+	// Only valid when the digits read so far are exactly "0" (optionally negated,
+	// i.e. "-0"), and at least one valid base digit follows the prefix letter.
+	// The integer value itself carries no base information; the prefix is purely
+	// lexical sugar and the token is a normal INTEGER (see parseIntLiteral).
+	if base, ok := baseFromPrefix(peek); ok {
+		intPart := l.curLexeme()
+		if (intPart == "0" || intPart == "-0") && isBaseDigit(base, l.peekNext()) {
+			l.advance() // consume the prefix letter
+			for !l.atEnd() && isBaseDigit(base, l.peek()) {
+				l.advance()
+			}
+			// Mirror plain-integer behavior: a trailing literal char (e.g.
+			// "0xffg") makes the whole token a literal rather than an integer.
+			if isAllowedLiteral(l.peek()) {
+				return l.consumeLiteral()
+			}
+			return l.makeToken(INTEGER)
+		}
+	}
+
 	if peek == ':' {
 		l.advance()
 

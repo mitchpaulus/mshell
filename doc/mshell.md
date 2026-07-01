@@ -489,6 +489,28 @@ Dates can be subtracted from each other, and the result is a floating-point numb
 2023-10-02 2023-10-01 - # 1.0
 ```
 
+### Integers and Floats
+
+Any literal number containing a decimal point is a float; otherwise it is an integer.
+
+Integer literals may be written in octal, hexadecimal, or binary with a `0o`, `0x`, or `0b` prefix (case-insensitive).
+The base is only a way of writing the literal — the stack value is a plain integer with no record of its base, and it prints in decimal.
+There are no digit separators (`0o6_44` is not a number).
+
+```mshell
+0o644 # 420 (octal, e.g. a file mode)
+0xFF  # 255 (hexadecimal)
+0b101 # 5   (binary)
+```
+
+Format an integer to a base-N string with `toBase` / `toHex` / `toOctal` / `toBin` (bare digits, no prefix),
+and parse a string in a given base with `fromBase` / `parseHex` / `parseOctal` / `parseBin` (returns `Maybe[int]`).
+
+```mshell
+420 toOctal      # "644"
+"644" parseOctal # Some 420
+```
+
 ## Type System
 
 Use `msh --check-types script.msh` to run static type checking before script execution.
@@ -572,7 +594,12 @@ always present with a possibly-`none` value. A required value satisfies an
 optional parameter, but an optional value does not satisfy a required one.
 Reading is unchanged (`:field` is `Maybe[T]`, `:field?` unwraps it); the language
 server flags `:field?` on a field a concrete shape does not declare, since that
-unwrap always fails.
+unwrap always fails. A string literal carries its value as a `str` refinement,
+so a `get` with a known key resolves the same way as the getter: `resp "body"
+get` reads the declared `body` field's type, not the union of every field type,
+so it is interchangeable with `resp :body`. The key resolves even when it
+reaches `get` through a variable (`"body" k! resp @k get`); a key computed at
+runtime returns the generic `Maybe[value]`.
 
 ```mshell
 type Request = {url: str, timeout?: int}
@@ -1041,6 +1068,10 @@ end wl # Output: 11
 - `x`: Interpret/execute quotation `(quote -- )`
 - `toFloat`: Convert to float. A `str` is parsed and returns `Maybe[float]` (`none` on parse failure); an `int`/`float` returns a plain `float`. `(str -- Maybe[float])` / `(numeric -- float)`
 - `toInt`: Convert to int. A `str` is parsed and returns `Maybe[int]` (`none` on parse failure); an `int`/`float` returns a plain `int` (floats truncate toward zero). `(str -- Maybe[int])` / `(numeric -- int)`
+- `toBase`: Format an integer in the given base (2–36) as bare digits (no `0o`/`0x`/`0b` prefix). `(int int -- str)`
+- `fromBase`: Parse a string as an integer in the given base (2–36), returning `none` on failure. Whitespace, an optional sign, and a redundant matching `0o`/`0x`/`0b` prefix are accepted. `(str int -- Maybe[int])`
+- `toHex` / `toOctal` / `toBin`: Format an int as a bare hex/octal/binary string (`16`/`8`/`2 toBase`). `(int -- str)`
+- `parseHex` / `parseOctal` / `parseBin`: Parse a hex/octal/binary string to `Maybe[int]` (`16`/`8`/`2 fromBase`); an optional matching prefix is accepted. `(str -- Maybe[int])`
 - `exit`: Exit the current script with the provided exit code. `(int -- )`
 - `read`: Read a line from stdin. Puts a str and bool of whether the read was successful on the stack. `( -- str bool)`
 - `prompt`: Write a prompt string to the controlling TTY and read a line from the controlling TTY. Fails if no controlling TTY is available. `(str -- str)`
@@ -1415,7 +1446,16 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
 
 - `zipDirInc`: Create/overwrite a `.zip` from a directory; the archive root contains the directory's contents (no parent folder). `(path:sourceDir path:zipPath -- )`
 - `zipDirExc`: Create/overwrite a `.zip` that includes the source directory itself at the archive root (entries are prefixed with the directory name). `(path:sourceDir path:zipPath -- )`
-- `zipPack`: Create/overwrite a `.zip` by packing a list of dictionaries. Each dictionary must contain `path` plus optional `archivePath` (override the in-archive name) and `mode` (os.FileMode as an int). `([dict] path:zipPath -- )`
+- `zipPack`: Create/overwrite a `.zip` by packing a list of dictionaries.
+  Each entry requires `path` (the file or directory to add);
+  `archivePath` (override the in-archive name) and `mode` are optional.
+  `mode` is a Go `os.FileMode`; write it with an octal literal,
+  e.g. `0o644` (`rw-r--r--`), `0o755` (`rwxr-xr-x`), `0o600`.
+  On Linux/macOS these are the POSIX permission bits restored on extraction;
+  on Windows file permissions are synthesized by Go and largely ignored
+  (the executable bit is still preserved for Unix consumers).
+  If `mode` is omitted, the entry keeps the source file's own mode.
+  Type: `([{path: str | path, archivePath?: str, mode?: int}] str | path -- )`
 - `zipList`: List archive entries as dictionaries with keys: `name` (string, forward-slash paths, directories end with `/`), `compressedSize` (int bytes), `uncompressedSize` (int bytes), `isDir` (bool), `perm` (int POSIX permission bits), `executable` (bool), and `modified` (datetime from the archive entry). `(path -- [dict])`
 - `zipExtract`: Extract an entire archive. Options dict is required; defaults: `overwrite=false`, `skipExisting=false` (mutually exclusive), `stripComponents=0`, `pattern=""` (glob matched before stripping), `preservePermissions=true`. Destination is created if missing. `(path:zipPath path:destDir dict:options -- )`
 - `zipExtractEntry`: Extract a single entry (file or directory subtree) to a destination path. Options dict is required; defaults: `overwrite=false`, `skipExisting=false` (mutually exclusive), `preservePermissions=true`, `mkdirs=true`. `(path:zipPath str:entry path:dest dict:options -- )`

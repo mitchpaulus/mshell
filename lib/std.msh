@@ -454,6 +454,18 @@ def 2tuple (a b -- [a | b])
     [] rot append swap append
 end
 
+# Integer base formatting/parsing. The integer itself never records a base;
+# these wrap the generic `toBase`/`fromBase` builtins for the common bases.
+# Output is bare digits (no 0o/0x/0b prefix); parsing accepts an optional
+# matching prefix, so both "0o644" and "644" work with parseOctal.
+def toHex (int -- str) 16 toBase end
+def toOctal (int -- str) 8 toBase end
+def toBin (int -- str) 2 toBase end
+
+def parseHex (str -- Maybe[int]) 16 fromBase end
+def parseOctal (str -- Maybe[int]) 8 fromBase end
+def parseBin (str -- Maybe[int]) 2 fromBase end
+
 # COMPLETIONS {{{
 # msh {{{
 def __mshCompletion { 'complete': ['msh' 'mshell'] } ([str] -- [str])

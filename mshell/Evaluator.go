@@ -76,6 +76,77 @@ func (objList *MShellStack) Pop1(t Token) (MShellObject, error) {
 	return obj1, nil
 }
 
+// parseIntLiteral converts an integer literal lexeme to its value, honoring the
+// 0o/0x/0b base prefixes the lexer accepts (in addition to plain decimal). The
+// resulting int carries no record of which base was written; the prefix is
+// purely a source-level convenience.
+func parseIntLiteral(s string) (int, error) {
+	body := s
+	neg := false
+	if strings.HasPrefix(body, "-") {
+		neg = true
+		body = body[1:]
+	}
+	base := 10
+	if len(body) > 2 && body[0] == '0' {
+		switch body[1] {
+		case 'o', 'O':
+			base, body = 8, body[2:]
+		case 'x', 'X':
+			base, body = 16, body[2:]
+		case 'b', 'B':
+			base, body = 2, body[2:]
+		}
+	}
+	v, err := strconv.ParseInt(body, base, 64)
+	if err != nil {
+		return 0, err
+	}
+	if neg {
+		v = -v
+	}
+	return int(v), nil
+}
+
+// parseInBase parses a string as an integer in the given base (2-36), used by
+// the 'fromBase' builtin. Surrounding whitespace and an optional sign are
+// tolerated, as is a redundant 0o/0x/0b prefix when it matches the base (so
+// "0o644" and "644" both parse under base 8).
+func parseInBase(s string, base int) (int, error) {
+	body := strings.TrimSpace(s)
+	neg := false
+	if strings.HasPrefix(body, "-") {
+		neg = true
+		body = body[1:]
+	} else if strings.HasPrefix(body, "+") {
+		body = body[1:]
+	}
+	if len(body) > 2 && body[0] == '0' {
+		switch body[1] {
+		case 'o', 'O':
+			if base == 8 {
+				body = body[2:]
+			}
+		case 'x', 'X':
+			if base == 16 {
+				body = body[2:]
+			}
+		case 'b', 'B':
+			if base == 2 {
+				body = body[2:]
+			}
+		}
+	}
+	v, err := strconv.ParseInt(body, base, 64)
+	if err != nil {
+		return 0, err
+	}
+	if neg {
+		v = -v
+	}
+	return int(v), nil
+}
+
 // Returns two objects from the stack.
 // obj1, obj2 := stack.Pop2(t)
 // obj1 was on top of the stack, obj2 was below it.
@@ -1298,7 +1369,7 @@ func (state *EvalState) matchTokenPattern(p Token, subject MShellObject) (bool, 
 		return ok, SimpleSuccess()
 
 	case INTEGER:
-		intVal, err := strconv.Atoi(p.Lexeme)
+		intVal, err := parseIntLiteral(p.Lexeme)
 		if err != nil {
 			return false, state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing integer in match pattern: %s\n", p.Line, p.Column, err.Error()))
 		}
@@ -6668,6 +6739,53 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert a %s to an int.\n", t.Line, t.Column, obj.TypeName()))
 					}
+				} else if t.Lexeme == "toBase" {
+					// (int:value int:base -- str) Format an integer in the given
+					// base (2-36) as bare digits (no 0o/0x/0b prefix).
+					baseObj, valObj, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+					baseInt, ok := baseObj.(MShellInt)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: 'toBase' requires the base as an integer on top of the stack. Found %s.\n", t.Line, t.Column, baseObj.TypeName()))
+					}
+					valInt, ok := valObj.(MShellInt)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: 'toBase' requires an integer to format. Found %s.\n", t.Line, t.Column, valObj.TypeName()))
+					}
+					if baseInt.Value < 2 || baseInt.Value > 36 {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: 'toBase' base must be between 2 and 36. Found %d.\n", t.Line, t.Column, baseInt.Value))
+					}
+					stack.Push(MShellString{strconv.FormatInt(int64(valInt.Value), baseInt.Value)})
+				} else if t.Lexeme == "fromBase" {
+					// (str int:base -- Maybe[int]) Parse a string in the given base
+					// (2-36). Returns none when the string is not a valid number.
+					baseObj, strObj, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+					baseInt, ok := baseObj.(MShellInt)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: 'fromBase' requires the base as an integer on top of the stack. Found %s.\n", t.Line, t.Column, baseObj.TypeName()))
+					}
+					if baseInt.Value < 2 || baseInt.Value > 36 {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: 'fromBase' base must be between 2 and 36. Found %d.\n", t.Line, t.Column, baseInt.Value))
+					}
+					var s string
+					switch strTyped := strObj.(type) {
+					case MShellString:
+						s = strTyped.Content
+					case MShellLiteral:
+						s = strTyped.LiteralText
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: 'fromBase' requires a string to parse. Found %s.\n", t.Line, t.Column, strObj.TypeName()))
+					}
+					if intVal, perr := parseInBase(s, baseInt.Value); perr != nil {
+						stack.Push(&Maybe{obj: nil})
+					} else {
+						stack.Push(&Maybe{obj: MShellInt{intVal}})
+					}
 				} else if t.Lexeme == "toDt" {
 					dateStrObj, err := stack.Pop()
 					if err != nil {
@@ -11500,7 +11618,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 			} else if t.Type == FALSE { // Token Type
 				stack.Push(MShellBool{false})
 			} else if t.Type == INTEGER { // Token Type
-				intVal, err := strconv.Atoi(t.Lexeme)
+				intVal, err := parseIntLiteral(t.Lexeme)
 				if err != nil {
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing integer: %s\n", t.Line, t.Column, err.Error()))
 				}
