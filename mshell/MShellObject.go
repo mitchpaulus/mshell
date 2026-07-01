@@ -364,7 +364,7 @@ func (e *MShellEnum) IsCommandLineable() bool { return true }
 func (e *MShellEnum) IsNumeric() bool         { return false }
 func (e *MShellEnum) FloatNumeric() float64   { return 0 }
 func (e *MShellEnum) CommandLine() string     { return enumRender(e) }
-func (e *MShellEnum) DebugString() string     { return e.EnumName + "." + enumRender(e) }
+func (e *MShellEnum) DebugString() string     { return enumRender(e) }
 
 // enumRender renders an enum value as `member` (nullary) or
 // `member(p0 p1 ...)`. Nested enum payloads are expanded with an explicit
