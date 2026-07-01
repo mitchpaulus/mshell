@@ -236,11 +236,23 @@ func TestGetLiteralKeyIsFieldPrecise(t *testing.T) {
 	}
 }
 
-// The literal must directly precede `get`; an intervening op breaks the
-// association and `get` falls back to the generic dict overload.
-func TestGetLiteralKeyRequiresAdjacency(t *testing.T) {
-	src := `{ "url": "https://example.com" } httpGet? "status" dup drop get? "out.bin" writeFile`
+// The key value rides the stack as a `str` refinement, so it resolves even
+// when it reaches `get` through a variable rather than inline — the literal
+// need not be adjacent to `get`.
+func TestGetLiteralKeyThroughVariable(t *testing.T) {
+	src := `{ "url": "https://example.com" } httpGet? "body" k! @k get? "out.bin" writeFile`
+	if n := fatalErrorCount(allCheckerErrors(t, src)); n != 0 {
+		t.Fatalf("a literal key bound to a variable should still resolve `body` to bytes; got %d errors", n)
+	}
+}
+
+// A key whose value is not statically known (here an env var, a plain `str`)
+// cannot resolve a specific field, so `get` falls back to the generic dict
+// overload and yields the union of every field value type — which writeFile
+// rejects.
+func TestGetDynamicKeyStaysGeneric(t *testing.T) {
+	src := `{ "url": "https://example.com" } httpGet? $KEY get? "out.bin" writeFile`
 	if n := fatalErrorCount(allCheckerErrors(t, src)); n == 0 {
-		t.Fatal("non-adjacent literal should fall back to the union-typed get and be rejected by writeFile")
+		t.Fatal("a non-literal key should fall back to the union-typed get and be rejected by writeFile")
 	}
 }

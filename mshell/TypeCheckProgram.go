@@ -469,12 +469,6 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 	if c.diverged {
 		return
 	}
-	// A pending string literal is consumable only by a `get` token that
-	// directly follows it. The Token case routes through checkOne, which
-	// manages pendingStr itself; any non-Token item breaks the adjacency.
-	if _, isTok := item.(Token); !isTok {
-		c.pendingStr = nil
-	}
 	switch it := item.(type) {
 
 	case *MShellTypeDecl:
@@ -1190,7 +1184,10 @@ func (c *Checker) checkMatchBlock(matchBlock *MShellParseMatchBlock) {
 		})
 		return
 	}
-	subject := c.stack.items[c.stack.Len()-1]
+	// Widen a string-literal subject to `str`: match arms and the
+	// exhaustiveness check compare against `str` by type id, and the literal
+	// value carries no meaning for pattern matching.
+	subject := c.arena.WidenStrLit(c.stack.items[c.stack.Len()-1])
 	entry := c.captureBranch()
 
 	if len(matchBlock.Arms) == 0 {
@@ -1665,22 +1662,26 @@ func (c *Checker) stringLiteralValue(tok Token) (string, bool) {
 	return "", false
 }
 
-// tryGetLiteralKey resolves a `get` whose key is a string literal that
-// directly precedes it, against a shape receiver — so `"body" get` reads the
-// declared `body` field type exactly like the `:body` getter, instead of
-// collapsing the shape to a dict and yielding the union of every field type.
-// It only fires for a shape (or a brand over one); dicts, GridRows, and
-// still-generic receivers fall through to the ordinary `get` overloads.
-func (c *Checker) tryGetLiteralKey(lit *pendingStrLit) bool {
-	if lit == nil || c.inferring {
+// tryGetLiteralKey resolves a `get` whose key is a known string literal
+// (a TKStrLit on top of the stack) against a shape receiver — so `"body" get`
+// reads the declared `body` field type exactly like the `:body` getter,
+// instead of collapsing the shape to a dict and yielding the union of every
+// field type. Because the key's value rides the stack as a type, this also
+// fires when the literal reached `get` through a variable (`k! ... @k get`),
+// not only when it is written inline. It only fires for a shape (or a brand
+// over one); dicts, GridRows, and still-generic receivers fall through to the
+// ordinary `get` overloads.
+func (c *Checker) tryGetLiteralKey() bool {
+	if c.inferring || c.stack.Len() < 2 {
 		return false
 	}
-	// The literal must still be the top of stack, with a receiver beneath it.
-	if c.stack.Len() < 2 || lit.index != c.stack.Len()-1 {
+	key := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-1])
+	name, ok := c.arena.StrLitName(key)
+	if !ok {
 		return false
 	}
 	recv := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-2])
-	fieldType, ok := c.shapeFieldType(recv, c.names.Intern(lit.value))
+	fieldType, ok := c.shapeFieldType(recv, name)
 	if !ok {
 		return false
 	}

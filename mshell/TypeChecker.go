@@ -125,23 +125,7 @@ type Checker struct {
 	// being reported as an unknown identifier when listDepth > 0.
 	listDepth int
 
-	// pendingStr records a string literal that was just pushed onto the
-	// stack, so an immediately following `get` can resolve a shape field by
-	// its literal key — matching what the `:name` getter already does. It is
-	// set only by a STRING/SINGLEQUOTESTRING token and cleared at the start
-	// of the next token (or any non-Token parse item), so it is valid only
-	// for a literal that directly precedes its consumer.
-	pendingStr *pendingStrLit
-
 	currentFn *FnContext
-}
-
-// pendingStrLit is a string literal sitting on top of the type stack. index
-// is the stack position it occupies; value is the parsed string content
-// (escapes resolved, quotes stripped) — the same key the runtime would use.
-type pendingStrLit struct {
-	index int
-	value string
 }
 
 // NewChecker constructs a fresh checker with the given arena and name table.
@@ -211,11 +195,6 @@ func (c *Checker) checkOne(tok Token) {
 	if c.diverged {
 		return
 	}
-	// A pending string literal is only usable by a `get` that directly
-	// follows it. Capture it for this token, then clear it so it never
-	// leaks past the immediately following op.
-	prevStr := c.pendingStr
-	c.pendingStr = nil
 	switch tok.Type {
 	case INTEGER:
 		c.stack.Push(TidInt)
@@ -224,9 +203,13 @@ func (c *Checker) checkOne(tok Token) {
 		c.stack.Push(TidFloat)
 		return
 	case STRING, SINGLEQUOTESTRING:
-		c.stack.Push(TidStr)
+		// Carry the known value as a `str` refinement so a later `get` (or the
+		// `:name` getter) can resolve a shape field by key. It behaves as `str`
+		// everywhere else — unify and every container constructor widen it.
 		if v, ok := c.stringLiteralValue(tok); ok {
-			c.pendingStr = &pendingStrLit{index: c.stack.Len() - 1, value: v}
+			c.stack.Push(c.arena.MakeStrLit(c.names.Intern(v)))
+		} else {
+			c.stack.Push(TidStr)
 		}
 		return
 	case TRUE, FALSE:
@@ -389,7 +372,7 @@ func (c *Checker) checkOne(tok Token) {
 		if tok.Lexeme == "join" && c.tryGridJoin() {
 			return
 		}
-		if tok.Lexeme == "get" && c.tryGetLiteralKey(prevStr) {
+		if tok.Lexeme == "get" && c.tryGetLiteralKey() {
 			return
 		}
 		if tok.Lexeme == "pivot" && c.tryPivot(tok) {
@@ -797,7 +780,7 @@ func (c *Checker) tryRedirect(tok Token) bool {
 	if c.stack.Len() < 2 {
 		return false
 	}
-	target := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-1])
+	target := c.arena.WidenStrLit(c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-1]))
 	if target != TidStr && target != TidPath && target != TidBytes {
 		return false
 	}
@@ -905,6 +888,25 @@ func (c *Checker) unify(got, want TypeId) bool {
 
 	gn := c.arena.Node(got)
 	wn := c.arena.Node(want)
+
+	// A string literal is a subtype of `str`; widen both sides so a literal
+	// unifies exactly as `str` (including binding a free variable to `str`,
+	// not the narrower literal). Reusing the nodes loaded just above, the
+	// common case — neither side a literal — costs only two kind checks.
+	if gn.Kind == TKStrLit {
+		got = TidStr
+		if got == want {
+			return true
+		}
+		gn = c.arena.Node(TidStr)
+	}
+	if wn.Kind == TKStrLit {
+		want = TidStr
+		if got == want {
+			return true
+		}
+		wn = c.arena.Node(TidStr)
+	}
 
 	// Variable cases: bind whichever side is still a free variable. After
 	// Apply above, a TKVar here is guaranteed unbound.
