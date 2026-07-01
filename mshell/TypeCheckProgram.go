@@ -1206,6 +1206,15 @@ func (c *Checker) checkMatchBlock(matchBlock *MShellParseMatchBlock) {
 	// exhaustiveness check compare against `str` by type id, and the literal
 	// value carries no meaning for pattern matching.
 	subject := c.arena.WidenStrLit(c.stack.items[c.stack.Len()-1])
+	// See through a `type X = ...` brand once, here, so every arm form (enum
+	// member, `just`/`<type> name` binding, list/dict pattern) and the
+	// exhaustiveness check match against the underlying type. A brand is
+	// nominal for typing but has no runtime representation, so a branded enum
+	// matches its members, a branded Maybe its `just`/`none`, etc. — exactly
+	// as the unbranded types do, which is what the runtime already does.
+	if resolved := c.subst.Apply(c.arena, subject); c.arena.Node(resolved).Kind == TKBrand {
+		subject = c.underlying(resolved)
+	}
 	entry := c.captureBranch()
 
 	if len(matchBlock.Arms) == 0 {
@@ -1420,12 +1429,9 @@ func (c *Checker) enumMemberPattern(subject TypeId, pattern []MShellParseItem) (
 	if !ok || tok.Type != LITERAL {
 		return armPattern{}, false
 	}
+	// The subject is already brand-unwrapped by checkMatchBlock, so a branded
+	// enum (`type X = Enum`) arrives here as its underlying TKEnum.
 	resolved := c.subst.Apply(c.arena, subject)
-	// Unwrap a `type X = Enum` brand so a branded enum matches by its members,
-	// just as a branded union (`type T = int | str`) matches by its arms.
-	if c.arena.Node(resolved).Kind == TKBrand {
-		resolved = c.underlying(resolved)
-	}
 	sn := c.arena.Node(resolved)
 	if sn.Kind != TKEnum {
 		return armPattern{}, false

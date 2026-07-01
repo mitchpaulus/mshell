@@ -1,0 +1,28 @@
+# A `Maybe` (or enum, or any type) named via a `type` alias is a distinct brand,
+# but `match` sees through the brand to the underlying type — so a branded
+# Maybe matches by `just v` / `none`, a branded enum by its members, and a
+# branded primitive by a type-keyword arm. The brand is nominal for typing but
+# has no runtime form, matching what the runtime already does.
+enum C = red | green | blue end
+type MC = Maybe[C]
+
+red just as MC match
+    just v : @v str wl,
+    none   : "n" wl,
+end
+
+none as MC match
+    just v : @v str wl,
+    none   : "n" wl,
+end
+
+# Branded Maybe of a primitive, with a type-keyword binding inside.
+type MI = Maybe[int]
+7 just as MI match
+    just n : @n 1 + str wl,
+    none   : "n" wl,
+end
+
+# Branded primitive, matched with a type-keyword + binding.
+type MyInt = int
+5 as MyInt match int n : @n str wl, _ : "o" wl, end
