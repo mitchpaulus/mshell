@@ -1101,6 +1101,15 @@ func (state *EvalState) processMatchBlock(matchBlock *MShellParseMatchBlock, fra
 	return state.FailWithMessage(fmt.Sprintf("%d:%d: No matching arm found in match block and no wildcard '_' arm provided.\n", startToken.Line, startToken.Column))
 }
 
+// parseItemLexeme renders a parse item for a diagnostic: a token's lexeme, or a
+// non-token pattern's debug form.
+func parseItemLexeme(item MShellParseItem) string {
+	if tok, ok := item.(Token); ok {
+		return tok.Lexeme
+	}
+	return item.DebugString()
+}
+
 // matchPattern checks if a subject matches a pattern (list of parse items).
 // Returns (matched bool, bindings map, result EvalResult).
 func (state *EvalState) matchPattern(pattern []MShellParseItem, subject MShellObject, startToken Token) (bool, map[string]MShellObject, EvalResult) {
@@ -1119,8 +1128,20 @@ func (state *EvalState) matchPattern(pattern []MShellParseItem, subject MShellOb
 						tok.Line, tok.Column, tok.Lexeme, len(enumVal.Payload), len(binds)))
 				}
 				bindings := make(map[string]MShellObject)
+				for _, b := range binds {
+					// A payload binding must be a plain name (a LITERAL) or the
+					// `_` wildcard — not a keyword/operator token (`end`, `x`,
+					// ...) or a nested pattern. This mirrors the type checker
+					// (enumMemberPattern) and the `just`/type-test binding forms,
+					// so the runtime never accepts an arm the checker rejects.
+					bt, okBt := b.(Token)
+					if !okBt || (bt.Type != LITERAL && bt.Type != UNDERSCORE) {
+						return false, nil, state.FailWithMessage(fmt.Sprintf("%d:%d: enum member '%s' payload bindings must be names, not '%s'.\n",
+							tok.Line, tok.Column, tok.Lexeme, parseItemLexeme(b)))
+					}
+				}
 				for i, b := range binds {
-					if bt, okBt := b.(Token); okBt && bt.Lexeme != "_" {
+					if bt := b.(Token); bt.Lexeme != "_" {
 						bindings[bt.Lexeme] = enumVal.Payload[i]
 					}
 				}
