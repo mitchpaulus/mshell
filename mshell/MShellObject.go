@@ -351,7 +351,12 @@ func (n MShellNull) CastString() (string, error) {
 type MShellEnum struct {
 	EnumName string
 	Member   string
-	Payload  []MShellObject
+	// MemberIndex is the member's 0-based position in its enum declaration.
+	// Sorting orders enum values by this (declaration order) rather than by
+	// member name, so an ordered enum (`low | medium | high`) sorts in the
+	// author's intended order. Stamped at construction from the enum registry.
+	MemberIndex int
+	Payload     []MShellObject
 }
 
 func (e *MShellEnum) TypeName() string       { return e.EnumName }
@@ -426,19 +431,58 @@ func (e *MShellEnum) Slice(startInc int, endExc int) (MShellObject, error) {
 // ToJson uses serde's externally-tagged convention — the de-facto standard for
 // tagged unions in JSON: a nullary member is the bare member string; a member
 // with a single payload is `{"member": value}`; with several, `{"member":
-// [v0, v1, ...]}`.
+// [v0, v1, ...]}`. Like enumRender, nested enum payloads are expanded with an
+// explicit work stack rather than function recursion, so an arbitrarily deep
+// value cannot overflow the call stack; output is appended to a single builder
+// (no intermediate per-subtree strings), making it O(total output size).
+// Non-enum payloads delegate to their own ToJson.
 func (e *MShellEnum) ToJson() string {
-	if len(e.Payload) == 0 {
-		return fmt.Sprintf("%q", e.Member)
+	var sb strings.Builder
+	type task struct {
+		lit   string
+		obj   MShellObject
+		isLit bool
 	}
-	if len(e.Payload) == 1 {
-		return fmt.Sprintf("{%q: %s}", e.Member, e.Payload[0].ToJson())
+	stack := []task{{obj: e}}
+	for len(stack) > 0 {
+		t := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if t.isLit {
+			sb.WriteString(t.lit)
+			continue
+		}
+		en, ok := t.obj.(*MShellEnum)
+		if !ok {
+			sb.WriteString(t.obj.ToJson())
+			continue
+		}
+		if len(en.Payload) == 0 {
+			fmt.Fprintf(&sb, "%q", en.Member)
+			continue
+		}
+		// Emit `{"member": value}` (single payload) or
+		// `{"member": [v0, v1, ...]}` (several); push reversed so it pops in
+		// order, with enum payloads re-expanded by this same loop.
+		seq := make([]task, 0, len(en.Payload)*2+4)
+		seq = append(seq, task{lit: fmt.Sprintf("{%q: ", en.Member), isLit: true})
+		if len(en.Payload) == 1 {
+			seq = append(seq, task{obj: en.Payload[0]})
+		} else {
+			seq = append(seq, task{lit: "[", isLit: true})
+			for i, p := range en.Payload {
+				if i > 0 {
+					seq = append(seq, task{lit: ", ", isLit: true})
+				}
+				seq = append(seq, task{obj: p})
+			}
+			seq = append(seq, task{lit: "]", isLit: true})
+		}
+		seq = append(seq, task{lit: "}", isLit: true})
+		for i := len(seq) - 1; i >= 0; i-- {
+			stack = append(stack, seq[i])
+		}
 	}
-	parts := make([]string, len(e.Payload))
-	for i, p := range e.Payload {
-		parts[i] = p.ToJson()
-	}
-	return fmt.Sprintf("{%q: [%s]}", e.Member, strings.Join(parts, ", "))
+	return sb.String()
 }
 
 func (e *MShellEnum) ToString() string    { return enumRender(e) }
@@ -448,13 +492,32 @@ func (e *MShellEnum) Concat(other MShellObject) (MShellObject, error) {
 	return nil, fmt.Errorf("Cannot concatenate an enum.\n")
 }
 
+// Equals compares two enum values structurally. Nested enum payloads are
+// walked with an explicit pair stack rather than function recursion, so two
+// arbitrarily deep values cannot overflow the call stack; only non-enum
+// payloads (the leaves) delegate to their own Equals.
 func (e *MShellEnum) Equals(other MShellObject) (bool, error) {
-	o, ok := other.(*MShellEnum)
-	if !ok || e.EnumName != o.EnumName || e.Member != o.Member || len(e.Payload) != len(o.Payload) {
-		return false, nil
-	}
-	for i := range e.Payload {
-		eq, err := e.Payload[i].Equals(o.Payload[i])
+	type pair struct{ a, b MShellObject }
+	stack := []pair{{a: e, b: other}}
+	for len(stack) > 0 {
+		p := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		ea, aok := p.a.(*MShellEnum)
+		eb, bok := p.b.(*MShellEnum)
+		if aok || bok {
+			// At least one side is an enum: equal only if both are enums with
+			// the same name, member, and arity. Payloads are deferred onto the
+			// stack so this never re-enters Equals on an enum.
+			if !aok || !bok || ea.EnumName != eb.EnumName || ea.Member != eb.Member || len(ea.Payload) != len(eb.Payload) {
+				return false, nil
+			}
+			for i := range ea.Payload {
+				stack = append(stack, pair{a: ea.Payload[i], b: eb.Payload[i]})
+			}
+			continue
+		}
+		// Neither side is an enum: compare by their own equality.
+		eq, err := p.a.Equals(p.b)
 		if err != nil || !eq {
 			return false, err
 		}
@@ -927,46 +990,268 @@ func NewList(initLength int) *MShellList {
 }
 
 // Sort the list. Returns an error if any item cannot be cast to a string.
-func SortList(list *MShellList) (*MShellList, error) {
-	stringsToSort := make([]string, len(list.Items))
-	for i, item := range list.Items {
-		str, err := item.CastString()
-		if err != nil {
-			return nil, fmt.Errorf("Cannot sort a list with a %s inside (%s).\n", item.TypeName(), item.DebugString())
+// valueTypeRank assigns each value kind a fixed slot in the cross-type sort
+// order, so a list mixing types still sorts totally and deterministically. The
+// exact sequence is arbitrary but stable; within a rank, compareValues uses the
+// value's natural order. Text kinds (str/path/literal) share a rank and compare
+// by content, matching structural equality.
+func valueTypeRank(obj MShellObject) int {
+	switch obj.(type) {
+	case MShellNull:
+		return 0
+	case MShellBool:
+		return 1
+	case MShellInt, MShellFloat:
+		return 2
+	case MShellString, MShellPath, MShellLiteral:
+		return 3
+	case *MShellDateTime:
+		return 4
+	case MShellBinary:
+		return 5
+	case Maybe, *Maybe:
+		return 6
+	case *MShellList:
+		return 7
+	case *MShellDict:
+		return 8
+	case *MShellEnum:
+		return 9
+	default:
+		return 10
+	}
+}
+
+func cmpInt(a, b int) int {
+	if a < b {
+		return -1
+	}
+	if a > b {
+		return 1
+	}
+	return 0
+}
+
+func cmpFloat(a, b float64) int {
+	if a < b {
+		return -1
+	}
+	if a > b {
+		return 1
+	}
+	return 0
+}
+
+// numericFloat returns an int/float value as a float64 for cross-type numeric
+// comparison. Only called for MShellInt / MShellFloat.
+func numericFloat(obj MShellObject) float64 {
+	switch v := obj.(type) {
+	case MShellInt:
+		return float64(v.Value)
+	case MShellFloat:
+		return v.Value
+	}
+	return 0
+}
+
+// textContent returns the underlying string of a text-kind value
+// (str / path / literal). Only called for those types.
+func textContent(obj MShellObject) string {
+	switch v := obj.(type) {
+	case MShellString:
+		return v.Content
+	case MShellPath:
+		return v.Path
+	case MShellLiteral:
+		return v.LiteralText
+	}
+	return ""
+}
+
+func asMaybe(obj MShellObject) (Maybe, bool) {
+	switch v := obj.(type) {
+	case Maybe:
+		return v, true
+	case *Maybe:
+		return *v, true
+	}
+	return Maybe{}, false
+}
+
+func sortedDictKeys(m map[string]MShellObject) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// compareValues returns -1, 0, or 1, giving a total order over every value
+// type. Different kinds are ordered by a fixed type rank (valueTypeRank); within
+// a kind the natural order is used (numbers numerically with int/float
+// interleaved, text lexically, dates chronologically, bytes bytewise).
+// Structured values compare lexicographically: lists positionally (shorter
+// prefix first), dicts by sorted key then value, enums by name then declaration
+// order then payloads. The order agrees with structural equality: compareValues
+// returns 0 exactly when the two values are Equals.
+//
+// The comparison is driven by an explicit work stack rather than recursion, so
+// arbitrarily deep values (e.g. a long `node(node(...))` enum chain) cannot
+// overflow the call stack. Each task is either a pair of values to compare or a
+// precomputed literal result (used for length tiebreaks and dict key / enum
+// name comparisons). Pending tasks pop in lexicographic order; the first
+// non-zero result short-circuits. Children of a compound value are pushed on top
+// of that value's own length-tiebreak, so the tiebreak is only reached when the
+// whole prefix compared equal.
+func compareValues(a, b MShellObject) int {
+	type task struct {
+		a, b  MShellObject
+		lit   int
+		isLit bool
+	}
+	stack := []task{{a: a, b: b}}
+	for len(stack) > 0 {
+		t := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if t.isLit {
+			if t.lit != 0 {
+				return t.lit
+			}
+			continue
 		}
-		stringsToSort[i] = str
+		ra, rb := valueTypeRank(t.a), valueTypeRank(t.b)
+		if ra != rb {
+			return cmpInt(ra, rb)
+		}
+		switch av := t.a.(type) {
+		case MShellNull:
+			// Two nulls are equal; move to the next task.
+		case MShellBool:
+			bv := t.b.(MShellBool)
+			if av.Value != bv.Value {
+				if !av.Value { // false < true
+					return -1
+				}
+				return 1
+			}
+		case MShellInt:
+			if bv, ok := t.b.(MShellInt); ok {
+				if c := cmpInt(av.Value, bv.Value); c != 0 {
+					return c
+				}
+			} else if c := cmpFloat(numericFloat(t.a), numericFloat(t.b)); c != 0 {
+				return c
+			}
+		case MShellFloat:
+			if c := cmpFloat(numericFloat(t.a), numericFloat(t.b)); c != 0 {
+				return c
+			}
+		case MShellString, MShellPath, MShellLiteral:
+			if c := strings.Compare(textContent(t.a), textContent(t.b)); c != 0 {
+				return c
+			}
+		case *MShellDateTime:
+			bt := t.b.(*MShellDateTime).Time
+			if av.Time.Before(bt) {
+				return -1
+			}
+			if av.Time.After(bt) {
+				return 1
+			}
+		case MShellBinary:
+			if c := bytes.Compare(av, t.b.(MShellBinary)); c != 0 {
+				return c
+			}
+		case Maybe, *Maybe:
+			am, _ := asMaybe(t.a)
+			bm, _ := asMaybe(t.b)
+			an, bn := am.IsNone(), bm.IsNone()
+			if an != bn {
+				if an { // none < just
+					return -1
+				}
+				return 1
+			}
+			if !an { // both `just`: compare payloads
+				stack = append(stack, task{a: am.obj, b: bm.obj})
+			}
+		case *MShellList:
+			bl := t.b.(*MShellList)
+			n := min(len(av.Items), len(bl.Items))
+			stack = append(stack, task{lit: cmpInt(len(av.Items), len(bl.Items)), isLit: true})
+			for i := n - 1; i >= 0; i-- {
+				stack = append(stack, task{a: av.Items[i], b: bl.Items[i]})
+			}
+		case *MShellDict:
+			bd := t.b.(*MShellDict)
+			ak := sortedDictKeys(av.Items)
+			bk := sortedDictKeys(bd.Items)
+			n := min(len(ak), len(bk))
+			stack = append(stack, task{lit: cmpInt(len(ak), len(bk)), isLit: true})
+			for i := n - 1; i >= 0; i-- {
+				// Pushed so `key compare` pops before its `value compare`.
+				stack = append(stack, task{a: av.Items[ak[i]], b: bd.Items[bk[i]]})
+				stack = append(stack, task{lit: strings.Compare(ak[i], bk[i]), isLit: true})
+			}
+		case *MShellEnum:
+			be := t.b.(*MShellEnum)
+			n := min(len(av.Payload), len(be.Payload))
+			stack = append(stack, task{lit: cmpInt(len(av.Payload), len(be.Payload)), isLit: true})
+			for i := n - 1; i >= 0; i-- {
+				stack = append(stack, task{a: av.Payload[i], b: be.Payload[i]})
+			}
+			// Name and member (declaration order) compare before any payload.
+			stack = append(stack, task{lit: cmpInt(av.MemberIndex, be.MemberIndex), isLit: true})
+			stack = append(stack, task{lit: strings.Compare(av.EnumName, be.EnumName), isLit: true})
+		default:
+			// Unorderable kinds (quotation, pipe, grid, ...) share a rank and
+			// compare equal, so a stable sort leaves them in their original
+			// relative order.
+		}
 	}
+	return 0
+}
 
-	// Sort the strings
-	sort.Strings(stringsToSort)
-
-	// Create a new list and add the sorted strings to it
+// SortList returns a new list with the same elements sorted by the total order
+// compareValues defines. Element identity and type are preserved (a list of
+// ints stays ints, enum payloads are kept) — sorting only reorders.
+func SortList(list *MShellList) (*MShellList, error) {
+	newItems := make([]MShellObject, len(list.Items))
+	copy(newItems, list.Items)
+	sort.SliceStable(newItems, func(i, j int) bool {
+		return compareValues(newItems[i], newItems[j]) < 0
+	})
 	newList := NewList(0)
-	for _, str := range stringsToSort {
-		newList.Items = append(newList.Items, MShellString{str})
-	}
+	newList.Items = newItems
 	CopyListParams(list, newList)
 	return newList, nil
 }
 
-// Sort the list. Returns an error if any item cannot be cast to a string.
+// SortListFunc sorts by a string key (each element's CastString) using the given
+// string comparer — used for version sort. Original elements are preserved in
+// the result. Returns an error if any element cannot be cast to a string.
 func SortListFunc(list *MShellList, cmp func(a string, b string) int) (*MShellList, error) {
-	stringsToSort := make([]string, len(list.Items))
+	type keyed struct {
+		key string
+		obj MShellObject
+	}
+	items := make([]keyed, len(list.Items))
 	for i, item := range list.Items {
 		str, err := item.CastString()
 		if err != nil {
 			return nil, fmt.Errorf("Cannot sort a list with a %s inside (%s).\n", item.TypeName(), item.DebugString())
 		}
-		stringsToSort[i] = str
+		items[i] = keyed{key: str, obj: item}
 	}
 
-	// Sort the strings to function
-	slices.SortFunc(stringsToSort, cmp)
+	slices.SortStableFunc(items, func(a, b keyed) int {
+		return cmp(a.key, b.key)
+	})
 
-	// Create a new list and add the sorted strings to it
 	newList := NewList(0)
-	for _, str := range stringsToSort {
-		newList.Items = append(newList.Items, MShellString{str})
+	for _, it := range items {
+		newList.Items = append(newList.Items, it.obj)
 	}
 	CopyListParams(list, newList)
 	return newList, nil

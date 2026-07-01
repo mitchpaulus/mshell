@@ -661,6 +661,20 @@ result match
 end
 ```
 
+An enum may also be a member of a `type` union (e.g. `type T = Color | int`).
+A `match` on such a union discriminates it with the enum's *type name* as an arm,
+which matches any value of that enum:
+
+```
+enum Color = red | green | blue end
+type T = Color | int
+
+x match
+    Color : "a color" wl,
+    int   : "an int" wl,
+end
+```
+
 ## Definitions
 
 Definitions use `def` with an optional metadata dictionary before the type signature.
@@ -1267,8 +1281,8 @@ groupBy
 
 ## Sorting
 
-- `sort`: Sort list. Converts all items to strings, then sorts using go's `sort.Strings` `(list -- list)`
-- `sortV`: Version sort list. Converts all items to strings, then sorts like GNU `sort -V` (`list -- list`)
+- `sort`: Sort a list by a total structural order, preserving each element's type (numbers sort numerically and stay numbers; a list of enums keeps its payloads). The order is: numbers numerically, text (str/path/literal) lexically, dates chronologically, bytes bytewise, lists positionally, dicts by sorted key then value, enums by declaration order then payload, and values of different types by a fixed type rank. `([t] -- [t])`
+- `sortV`: Version sort list. Converts each item to a string, then sorts like GNU `sort -V`, keeping the original elements. `([t] -- [t])`
 - `sortBy`: Sort a Grid or GridView by one or more columns ascending. Spec is a column name (str) or list of column names ([str]); priority is left-to-right. Stable; `none` cells sort last; cross-type values in a generic column error. Compose with `reverse` for descending. `(Grid|GridView str|[str] -- Grid)`
 - `sortByCmp`: Sort a list, Grid, or GridView using a comparison function. The function/quotation receives two items (or two `GridRow`s) and should return -1 when a < b, 0 when a = b, or 1 when a > b. Stable. `[a] (a a -- int) -- [a]` / `(Grid|GridView (GridRow GridRow -- int) -- Grid)`
 - `reverse`: Reverse a list, Grid, or GridView, returning a new value with elements/rows in reverse order. `(list -- list)` / `(Grid|GridView -- Grid)`

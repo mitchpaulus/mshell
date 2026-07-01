@@ -1,0 +1,31 @@
+# An enum can be a member of a `type` union, and a `match` discriminates the
+# union by the enum's type name: a bare enum type name (`C`) is a type-test arm
+# that matches any value of that enum, while a non-matching value (here an int,
+# or a value of a different enum) falls through to the next arm.
+enum C = red | green | blue end
+type T = C | int
+
+red as T match
+    C   : "a color" wl,
+    int : "an int" wl,
+end
+
+42 as T match
+    C   : "a color" wl,
+    int : "an int" wl,
+end
+
+# A union of two enums, discriminated by each enum's type name.
+enum A = a1 | a2 end
+enum B = b1 | b2 end
+type AB = A | B
+
+b1 as AB match
+    A : "an A" wl,
+    B : "a B" wl,
+end
+
+a2 as AB match
+    A : "an A" wl,
+    B : "a B" wl,
+end

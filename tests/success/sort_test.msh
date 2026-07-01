@@ -1,5 +1,7 @@
 "# Basic sort test" wl
-[hello 1 'c' 'A'] sort uw
+# sort preserves element types (the int stays an int), so stringify for display.
+# Across types the sort order is by a fixed type rank (numbers before text).
+[hello 1 'c' 'A'] sort (str) map uw
 
 "# Unique sort test" wl
 [z y 'x' y z] uniq sort uw

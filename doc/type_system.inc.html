@@ -390,6 +390,19 @@ The match must cover every member, or include a wildcard <code>_</code> arm; a m
     end
 end</code></pre>
 
+<p>
+An enum can also be one member of a <code>type</code> union, such as <code>type T = Color | int</code>.
+A <code>match</code> on the union discriminates it with the enum's <em>type name</em> as an arm, which matches any value of that enum:
+</p>
+
+<pre><code>enum Color = red | green | blue end
+type T = Color | int
+
+x match
+    Color : "a color",
+    int   : "an int",
+end</code></pre>
+
 <h1 id="type-system-quotes">Quotations <a class="section-link" href="#type-system-quotes" aria-label="Permalink">§</a> <a class="back-to-top" href="#type-system-top">Back to top</a></h1>
 
 <p>

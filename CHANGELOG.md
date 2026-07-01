@@ -23,6 +23,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `uniq` now accepts a list of any value type (matching its `([t] -- [t])`
   signature) and deduplicates by structural equality, instead of throwing at
   runtime for non-primitive elements such as enums, dicts, and booleans.
+- `sort` now reorders the original elements and preserves their type, instead of
+  replacing every element with its string form. Previously `[10 2 1] sort` gave
+  the strings `1 10 2` (lexical order), and sorting a list of enums silently
+  dropped their payloads; now numbers sort numerically and stay numbers, and
+  every value keeps its type. Ordering is a total structural order: numbers
+  numerically, text lexically, lists positionally, dicts by sorted key/value,
+  enums by declaration order then payload, and different types by a fixed type
+  rank. (Use `sortV` for version/string sorting.)
 
 ### Added
 
