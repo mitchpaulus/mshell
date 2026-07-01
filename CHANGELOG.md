@@ -110,6 +110,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Breaking: the type checker no longer accepts an empty quote `()` as the
+  predicate to `any` / `all`.
+  Pass `(id)` instead, e.g. `[true false] (id) any`.
+  Both now carry the single signature `([T] (T -- bool) -- bool)`, matching their
+  `std.msh` definitions.
 - A command that cannot start (not found, permission denied, bad format, ...) run
   with `?` or `;` no longer aborts the script.
   Instead, `?` leaves a negative exit code carrying the exact reason: `-(256+errno)`

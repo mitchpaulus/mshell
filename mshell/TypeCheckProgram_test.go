@@ -134,7 +134,6 @@ func TestTypeCheckProgramStringOps(t *testing.T) {
 		`["a" "b"] "," join wl`,
 		`"a,b,c" "," split drop`,
 		`"hello\nworld" lines drop`,
-		`["a" "b"] unlines wl`,
 		`" hi " trim wl`,
 		`"hi" upper wl`,
 	}

@@ -1,0 +1,4 @@
+# uw joins a list of strings via unlines, which crashes at runtime on a
+# non-str element. A nested map produces [[str]], so `uw` must be rejected
+# rather than passing the type check and blowing up at runtime.
+["a" "b"] map. x! ["hi" @x] end uw

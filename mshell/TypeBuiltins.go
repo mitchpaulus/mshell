@@ -194,9 +194,6 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 	r.reg("defs", "( -- )")
 	r.reg("env", "( -- )")
 	r.reg("completionDefs", "( -- {[( -- t)]})")
-	// uw : ([T] -- )  unlines/write; runtime stringifies elements.
-	r.reg("uw", "([t] -- )")
-
 	// ----- Boolean ops -----
 	// `not` lexes as NOT (token type), not LITERAL — see byToken table.
 
@@ -325,13 +322,11 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 	// ----- Higher-order list ops -----
 
 	r.reg("map", "([t] (t -- u) -- [u])")
-	// any / all : list-of-T with a predicate, plus a bool-list shorthand
-	// accepting an empty quote.
+	// any / all : list-of-T with a predicate. Matches the std.msh sig
+	// `([T] (T -- bool) -- bool)`. For a bool list, pass `(id)` as the
+	// predicate rather than an empty quote.
 	for _, name := range []string{"any", "all"} {
-		r.reg(name,
-			"([t] (t -- bool) -- bool)",
-			"([bool] ( -- ) -- bool)",
-		)
+		r.reg(name, "([t] (t -- bool) -- bool)")
 	}
 	// The Grid|GridView predicate uses `:col?`-style getters against the
 	// implicit row.
@@ -380,17 +375,13 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		"(str str -- bool)",
 	)
 
-	// ----- List unpack -----
-	r.reg("2unpack", "([t] -- t t)")
-
 	// ----- String ops -----
 
 	r.reg("join", "([str] str -- str)")
 	r.reg("wsplit", "(str -- [str])")
 	r.reg("split", "(str str -- [str])")
 	r.reg("lines", "(str -- [str])")
-	r.reg("unlines", "([str] -- str)")
-	for _, name := range []string{"trim", "trimStart", "trimEnd", "upper", "lower", "title", "chomp"} {
+	for _, name := range []string{"trim", "trimStart", "trimEnd", "upper", "lower", "title"} {
 		r.reg(name, "(str -- str)")
 	}
 
