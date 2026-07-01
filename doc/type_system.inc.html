@@ -244,6 +244,8 @@ Optional fields follow the same width-subtyping rules as required fields, with o
 Reading fields is unchanged: <code>:field</code> returns <code>Maybe[T]</code> and <code>:field?</code> unwraps it (failing at runtime on a missing key), for required and optional fields alike.
 Because of that, the language server emits an informational diagnostic when <code>:field?</code> is used on a field a concrete shape does not declare — that unwrap is guaranteed to fail.
 Homogeneous dictionaries (<code>{str: T}</code>) return a genuine <code>Maybe[T]</code> for any key and are never flagged.
+A string literal passed to the <code>get</code> built-in resolves the same way as the getter — <code>resp "body" get</code> reads the declared <code>body</code> field's type rather than the union of every field type, so it is interchangeable with <code>resp :body</code>.
+This applies only when the literal directly precedes <code>get</code>; a key computed at runtime returns the generic <code>Maybe[value]</code>.
 </p>
 
 <h2 id="type-system-dictionary-nesting">Nested Dictionaries <a class="section-link" href="#type-system-dictionary-nesting" aria-label="Permalink">§</a></h2>

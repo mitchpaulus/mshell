@@ -469,6 +469,12 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 	if c.diverged {
 		return
 	}
+	// A pending string literal is consumable only by a `get` token that
+	// directly follows it. The Token case routes through checkOne, which
+	// manages pendingStr itself; any non-Token item breaks the adjacency.
+	if _, isTok := item.(Token); !isTok {
+		c.pendingStr = nil
+	}
 	switch it := item.(type) {
 
 	case *MShellTypeDecl:
@@ -1637,6 +1643,74 @@ func (c *Checker) checkFormatBlock(src string, callSite Token, baseLine, baseCol
 
 	c.subst.Rollback(cp)
 	c.stack.items = outerStack
+}
+
+// stringLiteralValue returns the parsed content of a STRING /
+// SINGLEQUOTESTRING token — the same key value the runtime would compute —
+// or ("", false) if the token is not a string literal or fails to parse.
+func (c *Checker) stringLiteralValue(tok Token) (string, bool) {
+	switch tok.Type {
+	case STRING:
+		v, err := ParseRawString(tok.Lexeme)
+		if err != nil {
+			return "", false
+		}
+		return v, true
+	case SINGLEQUOTESTRING:
+		if len(tok.Lexeme) < 2 {
+			return "", false
+		}
+		return tok.Lexeme[1 : len(tok.Lexeme)-1], true
+	}
+	return "", false
+}
+
+// tryGetLiteralKey resolves a `get` whose key is a string literal that
+// directly precedes it, against a shape receiver — so `"body" get` reads the
+// declared `body` field type exactly like the `:body` getter, instead of
+// collapsing the shape to a dict and yielding the union of every field type.
+// It only fires for a shape (or a brand over one); dicts, GridRows, and
+// still-generic receivers fall through to the ordinary `get` overloads.
+func (c *Checker) tryGetLiteralKey(lit *pendingStrLit) bool {
+	if lit == nil || c.inferring {
+		return false
+	}
+	// The literal must still be the top of stack, with a receiver beneath it.
+	if c.stack.Len() < 2 || lit.index != c.stack.Len()-1 {
+		return false
+	}
+	recv := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-2])
+	fieldType, ok := c.shapeFieldType(recv, c.names.Intern(lit.value))
+	if !ok {
+		return false
+	}
+	// Pop the key and the receiver; push Maybe[field]. An absent field
+	// resolves to Maybe[bottom] (see shapeFieldType), so a following `?`
+	// is flagged as an always-failing unwrap, matching the getter.
+	c.stack.items = c.stack.items[:c.stack.Len()-2]
+	c.stack.Push(c.arena.MakeMaybe(fieldType))
+	return true
+}
+
+// shapeFieldType resolves field `name` on a shape receiver, mirroring the
+// TKShape/TKBrand handling in lookupGetterValueType: a declared field yields
+// its type; an undeclared field on a concrete shape yields bottom (the key is
+// provably absent, so the get can only be None). Returns ok=false for any
+// receiver that is not a shape, so callers defer to generic dispatch.
+func (c *Checker) shapeFieldType(recv TypeId, name NameId) (TypeId, bool) {
+	n := c.arena.Node(recv)
+	switch n.Kind {
+	case TKShape:
+		for _, field := range c.arena.shapeFields[n.Extra] {
+			if field.Name == name {
+				return field.Type, true
+			}
+		}
+		return TidBottom, true
+	case TKBrand:
+		return c.shapeFieldType(c.subst.Apply(c.arena, TypeId(n.B)), name)
+	}
+	return TidNothing, false
 }
 
 // lookupGetterValueType returns the value type produced by a `:name`

@@ -215,3 +215,32 @@ func TestHttpGetUrlOnlyAccepted(t *testing.T) {
 		t.Fatalf("httpGet with only a url should type-check; got %d", n)
 	}
 }
+
+// A string literal key to `get` resolves the shape field just like the
+// `:name` getter: `"body" get?` yields the response body's `bytes`, which
+// writeFile accepts — it must NOT collapse the shape to the union of all
+// field value types.
+func TestGetLiteralKeyResolvesShapeField(t *testing.T) {
+	src := `{ "url": "https://example.com" } httpGet? "body" get? "out.bin" writeFile`
+	if n := fatalErrorCount(allCheckerErrors(t, src)); n != 0 {
+		t.Fatalf("`\"body\" get?` should resolve to bytes and satisfy writeFile; got %d errors", n)
+	}
+}
+
+// The literal-key path is precise, not permissive: `"status" get?` resolves
+// to the field's `int`, so feeding it to writeFile (str | bytes) is rejected.
+func TestGetLiteralKeyIsFieldPrecise(t *testing.T) {
+	src := `{ "url": "https://example.com" } httpGet? "status" get? "out.bin" writeFile`
+	if n := fatalErrorCount(allCheckerErrors(t, src)); n == 0 {
+		t.Fatal("`\"status\" get?` resolves to int, which writeFile must reject")
+	}
+}
+
+// The literal must directly precede `get`; an intervening op breaks the
+// association and `get` falls back to the generic dict overload.
+func TestGetLiteralKeyRequiresAdjacency(t *testing.T) {
+	src := `{ "url": "https://example.com" } httpGet? "status" dup drop get? "out.bin" writeFile`
+	if n := fatalErrorCount(allCheckerErrors(t, src)); n == 0 {
+		t.Fatal("non-adjacent literal should fall back to the union-typed get and be rejected by writeFile")
+	}
+}

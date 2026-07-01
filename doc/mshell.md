@@ -594,7 +594,11 @@ always present with a possibly-`none` value. A required value satisfies an
 optional parameter, but an optional value does not satisfy a required one.
 Reading is unchanged (`:field` is `Maybe[T]`, `:field?` unwraps it); the language
 server flags `:field?` on a field a concrete shape does not declare, since that
-unwrap always fails.
+unwrap always fails. A string literal passed to `get` resolves the same way as
+the getter: `resp "body" get` reads the declared `body` field's type, not the
+union of every field type, so it is interchangeable with `resp :body`. This
+applies only when the literal directly precedes `get`; a key computed at runtime
+returns the generic `Maybe[value]`.
 
 ```mshell
 type Request = {url: str, timeout?: int}

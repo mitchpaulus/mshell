@@ -125,7 +125,23 @@ type Checker struct {
 	// being reported as an unknown identifier when listDepth > 0.
 	listDepth int
 
+	// pendingStr records a string literal that was just pushed onto the
+	// stack, so an immediately following `get` can resolve a shape field by
+	// its literal key — matching what the `:name` getter already does. It is
+	// set only by a STRING/SINGLEQUOTESTRING token and cleared at the start
+	// of the next token (or any non-Token parse item), so it is valid only
+	// for a literal that directly precedes its consumer.
+	pendingStr *pendingStrLit
+
 	currentFn *FnContext
+}
+
+// pendingStrLit is a string literal sitting on top of the type stack. index
+// is the stack position it occupies; value is the parsed string content
+// (escapes resolved, quotes stripped) — the same key the runtime would use.
+type pendingStrLit struct {
+	index int
+	value string
 }
 
 // NewChecker constructs a fresh checker with the given arena and name table.
@@ -195,6 +211,11 @@ func (c *Checker) checkOne(tok Token) {
 	if c.diverged {
 		return
 	}
+	// A pending string literal is only usable by a `get` that directly
+	// follows it. Capture it for this token, then clear it so it never
+	// leaks past the immediately following op.
+	prevStr := c.pendingStr
+	c.pendingStr = nil
 	switch tok.Type {
 	case INTEGER:
 		c.stack.Push(TidInt)
@@ -204,6 +225,9 @@ func (c *Checker) checkOne(tok Token) {
 		return
 	case STRING, SINGLEQUOTESTRING:
 		c.stack.Push(TidStr)
+		if v, ok := c.stringLiteralValue(tok); ok {
+			c.pendingStr = &pendingStrLit{index: c.stack.Len() - 1, value: v}
+		}
 		return
 	case TRUE, FALSE:
 		c.stack.Push(TidBool)
@@ -363,6 +387,9 @@ func (c *Checker) checkOne(tok Token) {
 			return
 		}
 		if tok.Lexeme == "join" && c.tryGridJoin() {
+			return
+		}
+		if tok.Lexeme == "get" && c.tryGetLiteralKey(prevStr) {
 			return
 		}
 		if tok.Lexeme == "pivot" && c.tryPivot(tok) {

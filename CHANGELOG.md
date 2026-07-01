@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `httpGet`/`httpPost`, grid `groupBy` aggregation specs, and the `zip*` option
   dicts now declare their required and optional keys. A required value satisfies
   an optional parameter, but an optional value does not satisfy a required one.
+- The type checker now resolves a string-literal key to `get` against a shape
+  the same way the `:name` getter does: `resp "body" get` yields the declared
+  `body` field's type instead of the union of every field type, so
+  `httpGet? "body" get?` type-checks as `bytes`. The literal must directly
+  precede `get`; a key computed at runtime still returns the generic
+  `Maybe[value]`.
 - The language server now reports an informational diagnostic when a `?` unwrap
   is statically guaranteed to fail — unwrapping a getter (`:k?`) for a field a
   concrete shape does not declare, or unwrapping a bare `none`. The hint is
