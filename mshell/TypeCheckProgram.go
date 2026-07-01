@@ -1418,6 +1418,11 @@ func (c *Checker) enumMemberPattern(subject TypeId, pattern []MShellParseItem) (
 		return armPattern{}, false
 	}
 	resolved := c.subst.Apply(c.arena, subject)
+	// Unwrap a `type X = Enum` brand so a branded enum matches by its members,
+	// just as a branded union (`type T = int | str`) matches by its arms.
+	if c.arena.Node(resolved).Kind == TKBrand {
+		resolved = c.underlying(resolved)
+	}
 	sn := c.arena.Node(resolved)
 	if sn.Kind != TKEnum {
 		return armPattern{}, false

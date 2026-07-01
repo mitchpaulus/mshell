@@ -117,7 +117,14 @@ func (c *Checker) CheckMatchExhaustive(matched TypeId, arms []MatchArmTag, callS
 		}
 	}
 
+	// Unwrap a `type X = Enum` brand so exhaustiveness dispatches on the
+	// underlying enum and checks coverage over its members — mirroring how a
+	// branded union (still a TKUnion node) is checked over its arms.
 	n := c.arena.Node(matched)
+	if n.Kind == TKBrand {
+		matched = c.underlying(matched)
+		n = c.arena.Node(matched)
+	}
 	switch n.Kind {
 	case TKMaybe:
 		hasJust, hasNone := false, false

@@ -1,0 +1,27 @@
+# An enum named via a `type` alias is a distinct branded type, but it can still
+# be `match`ed by its members — just as a branded union (`type T = int | str`)
+# is matched by its arms. Exhaustiveness is enforced over the members, payload
+# binding works through the brand, and the brand stays nominal at call
+# boundaries (an explicit `as` is needed to pass an enum where the alias is).
+enum C = red | green | blue end
+type Color2 = C
+
+red as Color2 match
+    red   : "r" wl,
+    green : "g" wl,
+    blue  : "b" wl,
+end
+
+enum R = ok int | failed str | z end
+type R2 = R
+404 as int drop
+5 ok as R2 match
+    ok n     : @n str wl,
+    failed m : @m wl,
+    z        : "z" wl,
+end
+
+def paint (Color2 -- str)
+    match red: "is red", green: "is green", blue: "is blue", end
+end
+blue as Color2 paint wl
