@@ -243,7 +243,10 @@ func (m Maybe) Concat(other MShellObject) (MShellObject, error) {
 }
 
 func (m Maybe) Equals(other MShellObject) (bool, error) {
-	otherMaybe, ok := other.(Maybe)
+	// Maybe values are constructed as *Maybe at runtime, so accept either the
+	// value or pointer form — a plain other.(Maybe) misses every *Maybe and
+	// would make all Maybe-vs-Maybe comparisons (including None==None) false.
+	otherMaybe, ok := asMaybe(other)
 	if !ok {
 		return false, nil
 	}

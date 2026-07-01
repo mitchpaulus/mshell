@@ -15,14 +15,21 @@
 # Dicts compare structurally, independent of key order
 { "a": 1, "b": 2 } { "b": 2, "a": 1 } = str wl
 
-# Maybe
-"x" just "x" just = str wl
+# Maybe: None==None, Just==Just (equal / unequal payloads), Just != None, and
+# a Maybe nested in a list all compare structurally.
 none none = str wl
+"x" just "x" just = str wl
+5 just 5 just = str wl
+5 just 6 just = str wl
+5 just none = str wl
+[5 just] [5 just] = str wl
 
-# Enums
+# Enums (including Maybe[enum], the common optional-enum case)
 enum C = red | green end
 red red   = str wl
 red green = str wl
+red just red just   = str wl
+red just green just = str wl
 
 # uniq now deduplicates any equatable value (lists, enums, ...)
 [[1] [1] [2]] uniq len str wl
