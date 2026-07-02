@@ -151,7 +151,7 @@ func TestLoadStartupDefinitionsLoadsVersionedStdlibAndInit(t *testing.T) {
 
 	stack, context, state := newStartupTestContext()
 
-	definitions, err := loadStartupDefinitions(startupLoadOptions{
+	definitions, _, err := loadStartupDefinitions(startupLoadOptions{
 		version:           version,
 		allowEnvOverrides: false,
 		requireInit:       true,
@@ -215,7 +215,7 @@ func TestLoadStartupDefinitionsRequiresInitForExplicitVersion(t *testing.T) {
 
 	stack, context, state := newStartupTestContext()
 
-	_, err := loadStartupDefinitions(startupLoadOptions{
+	_, _, err := loadStartupDefinitions(startupLoadOptions{
 		version:           version,
 		allowEnvOverrides: false,
 		requireInit:       true,
@@ -251,7 +251,7 @@ func TestLoadStartupDefinitionsAllowsMissingInitForImplicitVersion(t *testing.T)
 
 	stack, context, state := newStartupTestContext()
 
-	definitions, err := loadStartupDefinitions(startupLoadOptions{
+	definitions, _, err := loadStartupDefinitions(startupLoadOptions{
 		version:           version,
 		allowEnvOverrides: true,
 		requireInit:       false,
@@ -415,5 +415,55 @@ func TestEnvWithoutStartupOverridesRemovesOnlyStartupVars(t *testing.T) {
 
 	if !strings.Contains(filteredJoined, "KEEP_ME=1") {
 		t.Fatalf("filtered env missing KEEP_ME: %q", filteredJoined)
+	}
+}
+
+func TestStartupFileEnumRegistersConstructors(t *testing.T) {
+	// An `enum` declared in a startup file (stdlib / init) must register its
+	// constructors on the EvalState, so a member word in the main program (or
+	// at the interactive prompt) constructs a value instead of falling through
+	// to the bare-literal path.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "init.msh")
+	if err := os.WriteFile(path, []byte("enum Status = active | inactive end\n"), 0644); err != nil {
+		t.Fatalf("WriteFile(init) error = %v", err)
+	}
+
+	stack, context, state := newStartupTestContext()
+	var defs []MShellDefinition
+	var items []MShellParseItem
+	if err := loadStartupFile(path, "test init", &stack, context, &state, &defs, &items); err != nil {
+		t.Fatalf("loadStartupFile() error = %v", err)
+	}
+
+	info, ok := state.EnumMembers["active"]
+	if !ok {
+		t.Fatalf("expected member 'active' registered from startup file")
+	}
+	if info.EnumName != "Status" || info.Arity != 0 {
+		t.Fatalf("EnumMembers[active] = %+v, want Status arity 0", info)
+	}
+	if len(items) == 0 {
+		t.Fatalf("expected startup items to be retained for the checker")
+	}
+
+	parsed, err := parseMShellInput("active", &TokenFile{"main"})
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+	callStackItem := CallStackItem{MShellParseItem: parsed.Items[0], Name: "main", CallStackType: CALLSTACKFILE}
+	result := state.Evaluate(parsed.Items, &stack, context, defs, callStackItem)
+	if !result.Success {
+		t.Fatalf("evaluating member word failed")
+	}
+	if len(stack) != 1 {
+		t.Fatalf("len(stack) = %d, want 1", len(stack))
+	}
+	en, ok := stack[0].(*MShellEnum)
+	if !ok {
+		t.Fatalf("stack top = %T (%s), want *MShellEnum", stack[0], stack[0].DebugString())
+	}
+	if en.EnumName != "Status" || en.Member != "active" {
+		t.Fatalf("enum value = %s.%s, want Status.active", en.EnumName, en.Member)
 	}
 }

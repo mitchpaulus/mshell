@@ -43,12 +43,18 @@ import (
 // type-checked here — std.msh exercises features (process lists,
 // format strings, dynamic exec) the v1 checker does not yet model,
 // and we trust the runtime tests catch breakage there.
-func TypeCheckProgram(file *MShellFile, stdlibDefs []MShellDefinition) (errors []string, ok bool) {
+//
+// startupItems is the startup files' top-level parse items; their `type`
+// and `enum` declarations are registered (bodies are not checked, matching
+// the def treatment) so the checker sees the same declarations the runtime
+// does.
+func TypeCheckProgram(file *MShellFile, stdlibDefs []MShellDefinition, startupItems []MShellParseItem) (errors []string, ok bool) {
 	arena := NewTypeArena()
 	names := NewNameTable()
 	checker := NewChecker(arena, names)
 
 	checker.RegisterStdlibSigs(stdlibDefs)
+	checker.RegisterStartupTypes(startupItems)
 	checker.CheckProgram(file)
 
 	out := make([]string, 0, len(checker.errors))
@@ -86,6 +92,34 @@ func (c *Checker) RegisterStdlibSigs(defs []MShellDefinition) {
 		}
 		sig := c.ResolveDefSig(def.Inputs, def.Outputs)
 		c.nameBuiltins[nameId] = append(c.nameBuiltins[nameId], sig)
+	}
+}
+
+// RegisterStartupTypes registers the `type` and `enum` declarations found in
+// the startup files' top-level items (the stdlib, then the user init file),
+// so the checked program sees the same declarations the runtime does. It runs
+// the same three-phase order as CheckProgram's own pre-passes — enum names,
+// then type aliases, then enum payload bodies + constructor words — so
+// startup declarations may reference each other in any order. Call after
+// RegisterStdlibSigs (so a member colliding with a startup def is caught) and
+// before CheckProgram (whose def pre-pass catches the reverse collision).
+func (c *Checker) RegisterStartupTypes(items []MShellParseItem) {
+	var enumDecls []*MShellEnumDecl
+	for _, item := range items {
+		if d, ok := item.(*MShellEnumDecl); ok {
+			if c.predeclareEnum(d) {
+				enumDecls = append(enumDecls, d)
+			}
+		}
+	}
+	for _, item := range items {
+		if d, ok := item.(*MShellTypeDecl); ok {
+			body := c.resolveTypeExpr(d.Body, nil)
+			c.DeclareType(d.Name, body)
+		}
+	}
+	for _, d := range enumDecls {
+		c.defineEnum(d)
 	}
 }
 

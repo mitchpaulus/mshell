@@ -1328,7 +1328,7 @@ func TestCompletionWordIncludesBuiltinAndStdlib(t *testing.T) {
 }
 
 func TestBuildHoverIndexCoversTypedBuiltinsAndStdlib(t *testing.T) {
-	stdlibDefs, err := loadStdlibDefsForLSP()
+	stdlibDefs, _, err := loadStdlibDefsForLSP()
 	if err != nil {
 		t.Skipf("stdlib not available in test environment: %v", err)
 	}

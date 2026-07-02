@@ -121,3 +121,50 @@ func TestEnumRecursivePayload(t *testing.T) {
 		t.Fatalf("self-referential enum payload should type-check; errs=%v ok=%v", errs, ok)
 	}
 }
+
+// parseItemsForTest parses source and returns its top-level items, for tests
+// that feed startup-file declarations to the checker.
+func parseItemsForTest(t *testing.T, src string) []MShellParseItem {
+	t.Helper()
+	l := NewLexer(src, nil)
+	p := NewMShellParser(l)
+	file, err := p.ParseFile()
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+	return file.Items
+}
+
+func TestStartupEnumAndTypeVisibleToChecker(t *testing.T) {
+	// `enum` and `type` declarations in a startup file (stdlib / init) are
+	// registered before the main program is checked, so the program can
+	// construct members, match on them, and reference the alias — the same
+	// declarations the runtime registers.
+	startup := parseItemsForTest(t, "enum Status = active | inactive end\ntype Tagged = {name: str, s: Status}")
+	l := NewLexer("active match\n active : \"A\" wl,\n inactive : \"I\" wl,\nend\n{ \"name\": \"x\", \"s\": active } as Tagged drop", nil)
+	p := NewMShellParser(l)
+	file, err := p.ParseFile()
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+	errs, ok := TypeCheckProgram(file, nil, startup)
+	if !ok || len(errs) != 0 {
+		t.Fatalf("startup enum/type should be visible to the checker; errs=%v ok=%v", errs, ok)
+	}
+}
+
+func TestDefCollidingWithStartupEnumMemberRejected(t *testing.T) {
+	// The member/def collision check spans files: a program def reusing a
+	// startup enum's member name is rejected, same as a same-file collision.
+	startup := parseItemsForTest(t, "enum E = foo | zz end")
+	l := NewLexer("def foo ( -- int) 42 end\nfoo drop", nil)
+	p := NewMShellParser(l)
+	file, err := p.ParseFile()
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+	errs, ok := TypeCheckProgram(file, nil, startup)
+	if ok {
+		t.Fatalf("def colliding with startup enum member should fail; errs=%v", errs)
+	}
+}
