@@ -1,0 +1,7 @@
+# A `(...)` statement after an enum declaration is the following code, not a
+# payload of the last member: the enum body is closed by `end`, so the boundary
+# is unambiguous and whitespace-insensitive.
+enum C = red | green | blue end
+
+(green) x str wl
+[1 2 3] (0 >) filter len str wl

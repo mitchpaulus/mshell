@@ -1,0 +1,23 @@
+# `sort` reorders the original elements by a total structural order and never
+# changes their type (the old implementation replaced every element with a
+# string, dropping enum payloads). Numbers sort numerically and stay numbers,
+# enums sort by declaration order then payload, dicts by sorted key/value, and a
+# mixed-type list sorts deterministically by a fixed type rank (numbers < text).
+
+# Numbers keep their type (sum works) and sort numerically, not lexically.
+[10 2 1] sort (str) map "," join wl
+[10 2 1] sort sum str wl
+
+# Enums sort by member declaration order (low < medium < high), not by name.
+enum Priority = low | medium | high end
+[high low medium high low] sort (str) map "," join wl
+
+# Same member: payloads break the tie.
+enum Tree = leaf int | node Tree Tree end
+[3 leaf 1 leaf 2 leaf] sort (str) map "," join wl
+
+# Dicts compare by sorted key then value.
+[ { "b": 2, "a": 9 } { "a": 1, "b": 1 } { "a": 1, "b": 2 } ] sort (toJson) map " | " join wl
+
+# Mixed types: fixed type rank (numbers before text), deterministic.
+[hello 1 'c' 'A'] sort (str) map "," join wl

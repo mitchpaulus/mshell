@@ -1,0 +1,9 @@
+# `uniq` accepts any value type (matching its `([t] -- [t])` signature) and
+# deduplicates by structural equality, so a list of enums dedupes instead of
+# throwing at runtime. First-occurrence order is preserved.
+enum C = red | green | blue end
+
+[red green red blue green red] uniq (str) map "," join wl
+
+# Other equatable values dedupe too (previously a runtime error).
+[true false true true] uniq len str wl

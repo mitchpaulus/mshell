@@ -1,0 +1,8 @@
+# An enum payload binding must be a plain name (or `_`). A nested pattern (or a
+# keyword/operator token) is rejected at runtime, matching the type checker and
+# the `just`/type-test binding forms.
+enum Box = items [int] | z end
+[1 2 3] items match
+  items [a b] : "matched" wl,
+  z : "z" wl,
+end

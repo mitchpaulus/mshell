@@ -396,6 +396,59 @@ type EvalState struct {
 
 	defIndex    map[string]int
 	defIndexLen int
+
+	// EnumMembers maps a member name to its enum and payload arity. Populated
+	// from `enum` declarations (RegisterEnums) before evaluation; member names
+	// are unique across enums, so this flat lookup is enough to construct a
+	// value from a bare member word, including consuming its payload.
+	EnumMembers map[string]EnumMemberInfo
+
+	// EnumTypeNames is the set of declared enum type names. A bare enum type
+	// name is a valid match-arm pattern (a type test that any member of that
+	// enum satisfies), e.g. matching a `C | int` union value against `C`.
+	EnumTypeNames map[string]bool
+}
+
+// EnumMemberInfo records where a member came from and how many payload values
+// its constructor consumes from the stack.
+type EnumMemberInfo struct {
+	EnumName string
+	Arity    int
+	// Ordinal is the member's 0-based position in its enum declaration, stamped
+	// onto constructed values (MShellEnum.MemberIndex) so sorting can order by
+	// declaration order.
+	Ordinal int
+}
+
+// RegisterEnums scans parse items for `enum` declarations and records each
+// member, so a bare member word can be constructed at evaluation time. Called
+// once before top-level evaluation; mirrors the checker's enum pre-pass so the
+// two agree regardless of declaration order.
+func (state *EvalState) RegisterEnums(items []MShellParseItem) {
+	for _, item := range items {
+		d, ok := item.(*MShellEnumDecl)
+		if !ok {
+			continue
+		}
+		if state.EnumMembers == nil {
+			state.EnumMembers = make(map[string]EnumMemberInfo)
+		}
+		if state.EnumTypeNames == nil {
+			state.EnumTypeNames = make(map[string]bool)
+		}
+		state.EnumTypeNames[d.Name] = true
+		for i, m := range d.Members {
+			if _, exists := state.EnumMembers[m]; exists {
+				continue
+			}
+			state.EnumMembers[m] = EnumMemberInfo{EnumName: d.Name, Arity: len(d.MemberPayloads[i]), Ordinal: i}
+		}
+	}
+}
+
+// isEnumTypeName reports whether name is a declared enum type name.
+func (state *EvalState) isEnumTypeName(name string) bool {
+	return state.EnumTypeNames != nil && state.EnumTypeNames[name]
 }
 
 // RebuildDefinitionIndex records the first index for each name, matching
@@ -909,6 +962,11 @@ func (state *EvalState) processToken(token MShellParseItem, frame *EvaluationFra
 		// Static-only: type declarations have no runtime effect by design.
 		return SimpleSuccess()
 
+	case *MShellEnumDecl:
+		// Static-only: enum declarations have no runtime effect; members are
+		// pre-registered via RegisterEnums.
+		return SimpleSuccess()
+
 	case *MShellAsCast:
 		// Static-only: `as` is a checker hint; no runtime work.
 		return SimpleSuccess()
@@ -1114,15 +1172,68 @@ func (state *EvalState) processMatchBlock(matchBlock *MShellParseMatchBlock, fra
 	return state.FailWithMessage(fmt.Sprintf("%d:%d: No matching arm found in match block and no wildcard '_' arm provided.\n", startToken.Line, startToken.Column))
 }
 
+// parseItemLexeme renders a parse item for a diagnostic: a token's lexeme, or a
+// non-token pattern's debug form.
+func parseItemLexeme(item MShellParseItem) string {
+	if tok, ok := item.(Token); ok {
+		return tok.Lexeme
+	}
+	return item.DebugString()
+}
+
 // matchPattern checks if a subject matches a pattern (list of parse items).
 // Returns (matched bool, bindings map, result EvalResult).
 func (state *EvalState) matchPattern(pattern []MShellParseItem, subject MShellObject, startToken Token) (bool, map[string]MShellObject, EvalResult) {
+	// Enum patterns against an enum value. A member name (`member` or
+	// `member b1 b2 ...`) matches that member and binds its payload; a sibling
+	// member just fails this arm and the next is tried. A bare enum *type name*
+	// (`C`) is a type-test arm that matches any member of that enum — this is
+	// how a `C | int` union value is discriminated. `_` and `none` fall through
+	// to the generic handling.
+	if enumVal, ok := subject.(*MShellEnum); ok && len(pattern) >= 1 {
+		if tok, okTok := pattern[0].(Token); okTok && tok.Type == LITERAL && tok.Lexeme != "_" && tok.Lexeme != "none" {
+			if tok.Lexeme == enumVal.Member {
+				binds := pattern[1:]
+				if len(binds) != len(enumVal.Payload) {
+					return false, nil, state.FailWithMessage(fmt.Sprintf("%d:%d: enum member '%s' binds %d payload value(s), got %d.\n",
+						tok.Line, tok.Column, tok.Lexeme, len(enumVal.Payload), len(binds)))
+				}
+				bindings := make(map[string]MShellObject)
+				for _, b := range binds {
+					// A payload binding must be a plain name (a LITERAL) or the
+					// `_` wildcard — not a keyword/operator token (`end`, `x`,
+					// ...) or a nested pattern. This mirrors the type checker
+					// (enumMemberPattern) and the `just`/type-test binding forms,
+					// so the runtime never accepts an arm the checker rejects.
+					bt, okBt := b.(Token)
+					if !okBt || (bt.Type != LITERAL && bt.Type != UNDERSCORE) {
+						return false, nil, state.FailWithMessage(fmt.Sprintf("%d:%d: enum member '%s' payload bindings must be names, not '%s'.\n",
+							tok.Line, tok.Column, tok.Lexeme, parseItemLexeme(b)))
+					}
+				}
+				for i, b := range binds {
+					if bt := b.(Token); bt.Lexeme != "_" {
+						bindings[bt.Lexeme] = enumVal.Payload[i]
+					}
+				}
+				return true, bindings, SimpleSuccess()
+			}
+			// Not this value's member. A single bare enum type name is a type
+			// test: it matches iff the value belongs to that enum.
+			if len(pattern) == 1 && state.isEnumTypeName(tok.Lexeme) {
+				return tok.Lexeme == enumVal.EnumName, nil, SimpleSuccess()
+			}
+			// A sibling member name (or any other literal): this arm fails.
+			return false, nil, SimpleSuccess()
+		}
+	}
+
 	// Handle multi-token patterns (e.g., "just v" for maybe destructuring,
 	// or "<typekeyword> name" for type-test binding).
 	if len(pattern) == 2 {
 		first, firstOk := pattern[0].(Token)
 		second, secondOk := pattern[1].(Token)
-		if firstOk && secondOk && second.Type == LITERAL {
+		if firstOk && secondOk && (second.Type == LITERAL || second.Type == UNDERSCORE) {
 			if first.Type == LITERAL && first.Lexeme == "just" {
 				// Maybe Just destructuring
 				var maybeVal Maybe
@@ -1185,6 +1296,8 @@ func (state *EvalState) matchPattern(pattern []MShellParseItem, subject MShellOb
 // matchTokenPattern matches a single token pattern against a subject.
 func (state *EvalState) matchTokenPattern(p Token, subject MShellObject) (bool, EvalResult) {
 	switch p.Type {
+	case UNDERSCORE:
+		return true, SimpleSuccess()
 	case LITERAL:
 		if p.Lexeme == "_" {
 			return true, SimpleSuccess()
@@ -1232,6 +1345,13 @@ func (state *EvalState) matchTokenPattern(p Token, subject MShellObject) (bool, 
 		case "binary":
 			_, ok := subject.(MShellBinary)
 			return ok, SimpleSuccess()
+		}
+		// A bare enum type name is a type test: it matches an enum value of
+		// that enum, and simply fails (try the next arm) for any other value.
+		// This lets a union like `C | int` be discriminated by the arm `C`.
+		if state.isEnumTypeName(p.Lexeme) {
+			en, ok := subject.(*MShellEnum)
+			return ok && en.EnumName == p.Lexeme, SimpleSuccess()
 		}
 		return false, state.FailWithMessage(fmt.Sprintf("%d:%d: Unknown match pattern literal '%s'. %s\n", p.Line, p.Column, p.Lexeme, matchPatternFormsHint))
 
@@ -1423,7 +1543,7 @@ func (state *EvalState) matchDictPattern(pattern *MShellParseDict, subject MShel
 			return false, nil, state.FailWithMessage(fmt.Sprintf("%d:%d: Dict pattern value must be a single binding name.\n", startToken.Line, startToken.Column))
 		}
 		tok, ok := kv.Value[0].(Token)
-		if !ok || tok.Type != LITERAL {
+		if !ok || (tok.Type != LITERAL && tok.Type != UNDERSCORE) {
 			return false, nil, state.FailWithMessage(fmt.Sprintf("%d:%d: Dict pattern value must be a literal binding name.\n", startToken.Line, startToken.Column))
 		}
 		if tok.Lexeme != "_" {
@@ -5847,6 +5967,25 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					return SimpleSuccess()
 				}
 
+				// Enum constructor: a bare member word consumes its payload
+				// (if any) from the stack and pushes the enum value.
+				if state.EnumMembers != nil {
+					if info, ok := state.EnumMembers[t.Lexeme]; ok {
+						var payload []MShellObject
+						if info.Arity > 0 {
+							if len(*stack) < info.Arity {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: enum constructor '%s' needs %d payload value(s) on the stack.\n", t.Line, t.Column, t.Lexeme, info.Arity))
+							}
+							payload = make([]MShellObject, info.Arity)
+							for i := info.Arity - 1; i >= 0; i-- {
+								payload[i], _ = stack.Pop()
+							}
+						}
+						stack.Push(&MShellEnum{EnumName: info.EnumName, Member: t.Lexeme, MemberIndex: info.Ordinal, Payload: payload})
+						return SimpleSuccess()
+					}
+				}
+
 				if t.Lexeme == "stack" {
 					// Print current stack
 					fmt.Fprint(os.Stderr, stack.String())
@@ -9682,7 +9821,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					floatsSeen := make(map[float64]any)
 					dateTimesSeen := make(map[time.Time]any)
 
-					for i, item := range listObj.Items {
+					for _, item := range listObj.Items {
 						switch itemTyped := item.(type) {
 						case MShellString:
 							strItem := itemTyped
@@ -9723,7 +9862,23 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 								stringsSeen[literalItem.LiteralText] = nil
 							}
 						default:
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot remove duplicates from a list with a %s at index %d (%s).\n", t.Line, t.Column, item.TypeName(), i, item.DebugString()))
+							// Any value without a fast hash path (enum, list,
+							// dict, bool, bytes, ...) is deduplicated by
+							// structural equality against the values kept so
+							// far. O(n^2) for these, but it lets `uniq` accept
+							// every value type, matching its `([t] -- [t])`
+							// signature so the type checker never accepts a
+							// `uniq` that fails at runtime.
+							seen := false
+							for _, kept := range newList.Items {
+								if eq, _ := item.Equals(kept); eq {
+									seen = true
+									break
+								}
+							}
+							if !seen {
+								newList.Items = append(newList.Items, item)
+							}
 						}
 					}
 
@@ -11246,6 +11401,13 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 					stack.Push(MShellLiteral{t.Lexeme})
 				}
+			} else if t.Type == UNDERSCORE {
+				// A lone `_` is the pattern wildcard; in a list it is the
+				// literal argv word "_", and nowhere else does it have meaning.
+				if callStackItem.CallStackType != CALLSTACKLIST {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: '_' is reserved as the match wildcard; use \"_\" for a literal underscore string.\n", t.Line, t.Column))
+				}
+				stack.Push(MShellLiteral{"_"})
 			} else if t.Type == ASTERISK {
 				obj1, err := stack.Pop()
 				if err != nil {

@@ -7,8 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- `gridSetCell` no longer silently drops a value whose type differs from the
+  column's original type (e.g. setting a string, enum, or bool into an int
+  column). The column is promoted to mixed storage so the value is stored, and
+  the other rows are preserved.
+- Equality (`=`) is now total and defined for every value type. Lists,
+  quotations, pipes, and grids previously raised "equality not defined" at
+  runtime; lists/pipes/grids now compare structurally (element- and cell-wise)
+  and quotations compare by identity. Comparing values of different runtime
+  types yields `false` rather than an error (a genuinely incompatible
+  comparison is already a static type error), so the result no longer depends
+  on operand order and union members like `int | null` compare cleanly.
+- `uniq` now accepts a list of any value type (matching its `([t] -- [t])`
+  signature) and deduplicates by structural equality, instead of throwing at
+  runtime for non-primitive elements such as enums, dicts, and booleans.
+- `sort` now reorders the original elements and preserves their type, instead of
+  replacing every element with its string form. Previously `[10 2 1] sort` gave
+  the strings `1 10 2` (lexical order), and sorting a list of enums silently
+  dropped their payloads; now numbers sort numerically and stay numbers, and
+  every value keeps its type. Ordering is a total structural order: numbers
+  numerically, text lexically, lists positionally, dicts by sorted key/value,
+  enums by declaration order then payload, and different types by a fixed type
+  rank. (Use `sortV` for version/string sorting.)
+
 ### Added
 
+- `enum` declarations: a generative tagged sum type. Members are separated by
+  `|` and the declaration is closed by `end` (like `def`/`if`/`match`):
+  `enum CmdResult = ok str | failed int str | timeout end`. A member is a bare
+  constructor name optionally followed by payload types; a bare member word
+  constructs a value (consuming any payload from the stack, e.g.
+  `404 "x" failed`), and `match` dispatches on members with binding
+  (`failed code msg : ...`) and exhaustiveness checking — a match that omits a
+  member (or is empty) is rejected unless it has a `_` arm. Enums are nominal:
+  two enums with the same members are distinct types. Member names are
+  identifiers (not keywords) and are unique across all enums. `str` renders a
+  value as `member(payload ...)` and `toJson` uses the externally-tagged
+  convention. Payloads may reference the enum itself, so recursive enums like
+  `enum Tree = leaf int | node Tree Tree end` are supported.
 - Octal, hexadecimal, and binary integer literals via `0o`, `0x`, and `0b`
   prefixes (case-insensitive), e.g. `0o644`, `0xFF`, `0b101`. The base is purely
   a way of writing the literal; the value is an ordinary integer and prints in

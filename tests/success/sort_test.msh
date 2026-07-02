@@ -1,7 +1,7 @@
-# TODO: re-enable once the sort fix (sort -> [str]) lands; with the uw
-# fix ([str]) this [int | str] input fails type-check until then.
-# "# Basic sort test" wl
-# [hello 1 'c' 'A'] sort uw
+"# Basic sort test" wl
+# sort preserves element types (the int stays an int), so stringify for display.
+# Across types the sort order is by a fixed type rank (numbers before text).
+[hello 1 'c' 'A'] sort (str) map uw
 
 "# Unique sort test" wl
 [z y 'x' y z] uniq sort uw

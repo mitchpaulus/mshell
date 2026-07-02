@@ -1,0 +1,6 @@
+red
+[red green blue]
+red,green,blue
+leaf(3)
+[leaf(3) leaf(1)]
+node(leaf(1) leaf(2))

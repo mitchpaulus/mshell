@@ -1,0 +1,16 @@
+# Stringifying enum values. `str` renders the member, with payloads after the
+# member name; `toJson` uses the externally-tagged convention. Nullary members
+# render as the bare member name / string.
+enum R = ok str | failed int str | timeout end
+
+"hi"    ok     str wl
+404 "nf" failed str wl
+timeout        str wl
+
+"hi"    ok     toJson wl
+404 "nf" failed toJson wl
+timeout        toJson wl
+
+# Nested payloads render through, member-first.
+enum Tree = leaf int | node Tree Tree end
+1 leaf 2 leaf node 3 leaf node str wl

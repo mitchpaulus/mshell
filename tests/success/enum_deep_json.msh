@@ -1,0 +1,14 @@
+# A deeply nested enum value must serialize to JSON without overflowing:
+# `toJson` renders enum payloads with an explicit work stack, not function
+# recursion (mirroring `str`/enum_deep_render). Build a 50000-deep tree and
+# print the length of its JSON; a recursive serializer would overflow the
+# stack well before this depth.
+enum Tree = leaf int | node Tree Tree end
+0 leaf t!
+0 i!
+(
+    @i 50000 >= if break end
+    @t 0 leaf node t!
+    @i 1 + i!
+) loop
+@t toJson len str wl

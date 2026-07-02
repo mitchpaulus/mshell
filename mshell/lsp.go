@@ -41,6 +41,7 @@ type lspServer struct {
 	envNames     map[string]struct{}
 	candsBuf     []string
 	stdlibDefs   []MShellDefinition
+	stdlibItems  []MShellParseItem // stdlib top-level items; `type`/`enum` decls registered per diagnostics pass
 	builtinSigs  map[string][]string // name -> formatted "(in -- out)" sigs from the type checker
 	stdlibHover  map[string][]string // name -> formatted sigs for stdlib defs
 }
@@ -134,10 +135,11 @@ func RunLSP(in io.Reader, out io.Writer) error {
 		envNames:  make(map[string]struct{}),
 	}
 
-	if defs, err := loadStdlibDefsForLSP(); err != nil {
+	if defs, items, err := loadStdlibDefsForLSP(); err != nil {
 		logLSP(fmt.Sprintf("type-check diagnostics: stdlib unavailable (%v); proceeding without stdlib sigs", err))
 	} else {
 		server.stdlibDefs = defs
+		server.stdlibItems = items
 	}
 
 	server.builtinSigs, server.stdlibHover = buildHoverIndex(server.stdlibDefs)
@@ -181,23 +183,23 @@ func buildHoverIndex(stdlibDefs []MShellDefinition) (map[string][]string, map[st
 // MSHSTDLIB if set, else the version-keyed install path), parses it,
 // and returns its definitions. The bodies are not evaluated; we only
 // need the signatures to register as builtins for the type-checker.
-func loadStdlibDefsForLSP() ([]MShellDefinition, error) {
+func loadStdlibDefsForLSP() ([]MShellDefinition, []MShellParseItem, error) {
 	stdlibSpec, _, err := getStartupFileSpecs(startupLoadOptions{
 		version:           mshellVersion,
 		allowEnvOverrides: true,
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	source, err := os.ReadFile(stdlibSpec.path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	parsed, err := parseMShellInput(string(source), &TokenFile{stdlibSpec.path})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return parsed.Definitions, nil
+	return parsed.Definitions, parsed.Items, nil
 }
 
 func (s *lspServer) run() error {
@@ -548,6 +550,7 @@ func (s *lspServer) computeDiagnostics(text string) []protocol.Diagnostic {
 	names := NewNameTable()
 	checker := NewChecker(arena, names)
 	checker.RegisterStdlibSigs(s.stdlibDefs)
+	checker.RegisterStartupTypes(s.stdlibItems)
 	checker.CheckProgram(file)
 
 	errs := checker.Errors()

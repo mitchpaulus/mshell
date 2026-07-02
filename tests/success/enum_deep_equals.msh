@@ -1,0 +1,17 @@
+# Deeply nested enum values must compare for equality without overflowing:
+# `=` walks enum payloads with an explicit pair stack, not function recursion
+# (mirroring `str`/`toJson`). Build two independent 50000-deep trees and a
+# third that differs only at the very tip; a recursive comparator would
+# overflow the stack on values this deep.
+enum Tree = leaf int | node Tree Tree end
+0 leaf a! 0 leaf b! 0 leaf c! 0 i!
+(
+    @i 50000 >= if break end
+    @a 0 leaf node a!
+    @b 0 leaf node b!
+    @c 0 leaf node c!
+    @i 1 + i!
+) loop
+@c 0 leaf 99 leaf node node c!
+@a @b = str wl
+@a @c = str wl

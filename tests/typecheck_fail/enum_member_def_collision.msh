@@ -1,0 +1,8 @@
+# Enum constructors and defs share the word namespace, so a def reusing a
+# member name must be rejected (in either textual order — enums register
+# first regardless). Without this, the checker resolves the word to the
+# constructor while the runtime runs the def, and a type-checked program
+# fails at runtime.
+enum E = foo | z end
+def foo ( -- int) 42 end
+foo str wl

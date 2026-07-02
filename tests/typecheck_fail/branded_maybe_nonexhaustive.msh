@@ -1,0 +1,7 @@
+# Exhaustiveness is enforced through a `type` alias of a Maybe: a branded Maybe
+# match must still cover both `just` and `none` (or use `_`). Here `none` is
+# missing, so it is rejected — the brand does not hide the cases.
+type MI = Maybe[int]
+5 just as MI match
+    just v : @v str wl,
+end

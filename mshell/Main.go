@@ -166,7 +166,7 @@ func getStartupFileSpecs(options startupLoadOptions) (startupFileSpec, startupFi
 	return stdlibSpec, initSpec, nil
 }
 
-func loadStartupFile(path string, description string, stack *MShellStack, context ExecuteContext, state *EvalState, definitions *[]MShellDefinition) error {
+func loadStartupFile(path string, description string, stack *MShellStack, context ExecuteContext, state *EvalState, definitions *[]MShellDefinition, items *[]MShellParseItem) error {
 	sourceBytes, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -182,6 +182,13 @@ func loadStartupFile(path string, description string, stack *MShellStack, contex
 
 	*definitions = append(*definitions, parsedFile.Definitions...)
 	state.AddCompletionDefinitions(parsedFile.Definitions)
+	// Register enum constructors declared in this startup file, and retain the
+	// top-level items so the type checker can register the file's `type` and
+	// `enum` declarations — startup declarations behave like the main file's.
+	state.RegisterEnums(parsedFile.Items)
+	if items != nil {
+		*items = append(*items, parsedFile.Items...)
+	}
 
 	if len(parsedFile.Items) > 0 {
 		callStackItem := CallStackItem{
@@ -257,16 +264,17 @@ func preflightStartupFile(spec startupFileSpec) string {
 	return fmt.Sprintf("present at %s (parses ok; not evaluated because the other startup file failed first)", spec.path)
 }
 
-func loadStartupDefinitions(options startupLoadOptions, stack *MShellStack, context ExecuteContext, state *EvalState) ([]MShellDefinition, error) {
+func loadStartupDefinitions(options startupLoadOptions, stack *MShellStack, context ExecuteContext, state *EvalState) ([]MShellDefinition, []MShellParseItem, error) {
 	stdlibSpec, initSpec, err := getStartupFileSpecs(options)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	definitions := make([]MShellDefinition, 0)
-	if err := loadStartupFile(stdlibSpec.path, stdlibSpec.description, stack, context, state, &definitions); err != nil {
+	var items []MShellParseItem
+	if err := loadStartupFile(stdlibSpec.path, stdlibSpec.description, stack, context, state, &definitions, &items); err != nil {
 		initStatus := preflightStartupFile(initSpec)
-		return nil, &startupLoadError{
+		return nil, nil, &startupLoadError{
 			which:       "stdlib",
 			spec:        stdlibSpec,
 			options:     options,
@@ -276,14 +284,14 @@ func loadStartupDefinitions(options startupLoadOptions, stack *MShellStack, cont
 		}
 	}
 
-	if err := loadStartupFile(initSpec.path, initSpec.description, stack, context, state, &definitions); err != nil {
+	if err := loadStartupFile(initSpec.path, initSpec.description, stack, context, state, &definitions, &items); err != nil {
 		if !initSpec.required && errors.Is(err, os.ErrNotExist) {
-			return definitions, nil
+			return definitions, items, nil
 		}
-		return nil, &startupLoadError{which: "init", spec: initSpec, options: options, cause: err}
+		return nil, nil, &startupLoadError{which: "init", spec: initSpec, options: options, cause: err}
 	}
 
-	return definitions, nil
+	return definitions, items, nil
 }
 
 // formatStartupErrorMessage builds a multi-line explanation of how msh searches
@@ -821,7 +829,7 @@ func main() {
 
 	var allDefinitions []MShellDefinition
 
-	startupDefinitions, err := loadStartupDefinitions(startupLoadOptions{
+	startupDefinitions, startupItems, err := loadStartupDefinitions(startupLoadOptions{
 		version:           effectiveVersion,
 		allowEnvOverrides: allowStartupEnvOverrides,
 		requireInit:       requireVersionedInit,
@@ -836,7 +844,7 @@ func main() {
 	state.AddCompletionDefinitions(file.Definitions)
 
 	if checkTypes {
-		errs, ok := TypeCheckProgram(file, startupDefinitions)
+		errs, ok := TypeCheckProgram(file, startupDefinitions, startupItems)
 		if !ok {
 			for _, e := range errs {
 				fmt.Fprintln(os.Stderr, e)
@@ -856,6 +864,10 @@ func main() {
 	if len(file.Items) == 0 {
 		os.Exit(0)
 	}
+
+	// Register enum constructors before evaluation so bare member words can
+	// be constructed (mirrors the checker's enum pre-pass).
+	state.RegisterEnums(file.Items)
 
 	callStackItem := CallStackItem{
 		MShellParseItem: nil,
@@ -2972,6 +2984,11 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 		state.evalState.AddCompletionDefinitions(parsed.Definitions)
 	}
 
+	// Register enum constructors declared on this line, so an interactive
+	// `enum` declaration works like one in a script: its member words
+	// construct values on subsequent lines.
+	state.evalState.RegisterEnums(parsed.Items)
+
 	if len(parsed.Items) > 0 {
 		state.initCallStackItem.MShellParseItem = parsed.Items[0]
 		result := state.evalState.Evaluate(parsed.Items, &state.stack, state.context, state.stdLibDefs, state.initCallStackItem)
@@ -3158,11 +3175,15 @@ func (state *TermState) getCurrentPos() (int, int, error) {
 }
 
 func stdLibDefinitions(stack *MShellStack, context ExecuteContext, state *EvalState) ([]MShellDefinition, error) {
-	return loadStartupDefinitions(startupLoadOptions{
+	// The interactive path has no whole-program type-check pass, so the
+	// startup items (already registered on the EvalState for runtime enum
+	// construction inside loadStartupFile) are not needed here.
+	defs, _, err := loadStartupDefinitions(startupLoadOptions{
 		version:           mshellVersion,
 		allowEnvOverrides: true,
 		requireInit:       false,
 	}, stack, context, state)
+	return defs, err
 }
 
 func registerTempFileForCleanup(tempFileName string) {
