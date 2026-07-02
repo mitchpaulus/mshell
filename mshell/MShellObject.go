@@ -501,10 +501,18 @@ func (e *MShellEnum) Concat(other MShellObject) (MShellObject, error) {
 // payloads (the leaves) delegate to their own Equals.
 func (e *MShellEnum) Equals(other MShellObject) (bool, error) {
 	type pair struct{ a, b MShellObject }
+	var guard dagGuard
 	stack := []pair{{a: e, b: other}}
 	for len(stack) > 0 {
 		p := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
+		// Shared substructure: a pointer-identical pair is equal by
+		// definition, and a pair this walk already expanded compared equal
+		// (see dagGuard). Skipping both keeps DAG-shaped values (a subtree
+		// reused twice per level) linear instead of 2^n.
+		if sameRef(p.a, p.b) || guard.skip(p.a, p.b) {
+			continue
+		}
 		ea, aok := p.a.(*MShellEnum)
 		eb, bok := p.b.(*MShellEnum)
 		if aok || bok {
@@ -1090,6 +1098,108 @@ func sortedDictKeys(m map[string]MShellObject) []string {
 	return keys
 }
 
+// sameRef reports whether a and b are the identical heap object, for the kinds
+// that can form shared substructure (a value built as `@t @t node` reuses one
+// subtree twice). A pointer-identical pair is equal by definition, so equality
+// and ordering walks skip it instead of expanding it — without this, walking a
+// value with n levels of sharing costs 2^n. Only pointer kinds are compared:
+// comparing interfaces holding non-comparable dynamic types (e.g. MShellBinary,
+// a []byte) panics at runtime.
+func sameRef(a, b MShellObject) bool {
+	switch av := a.(type) {
+	case *MShellEnum:
+		bv, ok := b.(*MShellEnum)
+		return ok && av == bv
+	case *MShellList:
+		bv, ok := b.(*MShellList)
+		return ok && av == bv
+	case *MShellDict:
+		bv, ok := b.(*MShellDict)
+		return ok && av == bv
+	case *Maybe:
+		bv, ok := b.(*Maybe)
+		return ok && av == bv
+	case *MShellDateTime:
+		bv, ok := b.(*MShellDateTime)
+		return ok && av == bv
+	case *MShellQuotation:
+		bv, ok := b.(*MShellQuotation)
+		return ok && av == bv
+	}
+	return false
+}
+
+// dagGuard bounds a comparison walk over values with shared substructure that
+// sameRef alone cannot catch: two *independently built* DAGs share no pointers
+// across operands, so every level re-expands and the walk goes exponential.
+// The guard counts pops; once a walk runs long enough to suggest blowup, it
+// memoizes the pointer pairs it has already expanded and skips repeats.
+//
+// Skipping a repeated pair is sound in a LIFO walk: the first occurrence's
+// entire expansion resolves before any later duplicate (which sat lower in the
+// stack) pops, and a mismatch anywhere returns from the walk immediately — so
+// if a duplicate pops at all, its subtree already compared equal.
+//
+// Ordinary comparisons never allocate: below the step threshold the guard is
+// one integer increment. The memo is capped so a legitimately huge linear
+// value (millions of distinct pairs, no repeats) cannot balloon memory; a
+// blowup DAG has few distinct pairs and fits far below the cap.
+type dagGuard struct {
+	steps int
+	memo  map[refPair]bool
+}
+
+type refPair struct{ a, b MShellObject }
+
+const dagStepThreshold = 1 << 19
+const dagMemoCap = 1 << 18
+
+// skip reports whether this pair was already expanded earlier in the walk.
+// Call once per popped pair; it records the pair (past the threshold) so
+// later duplicates skip.
+func (g *dagGuard) skip(a, b MShellObject) bool {
+	g.steps++
+	if g.steps < dagStepThreshold {
+		return false
+	}
+	key, ok := refPairKey(a, b)
+	if !ok {
+		return false
+	}
+	if g.memo == nil {
+		g.memo = make(map[refPair]bool, 1024)
+	}
+	if g.memo[key] {
+		return true
+	}
+	if len(g.memo) < dagMemoCap {
+		g.memo[key] = true
+	}
+	return false
+}
+
+// refPairKey returns a comparable identity key when both values are the same
+// container pointer kind — the kinds whose repeated pairs cause blowup.
+// Interface keys are only safe when the dynamic values are comparable, which
+// pointers are; scalar kinds are cheap to compare directly and get no key.
+func refPairKey(a, b MShellObject) (refPair, bool) {
+	switch a.(type) {
+	case *MShellEnum:
+		if _, ok := b.(*MShellEnum); ok {
+			return refPair{a, b}, true
+		}
+	case *MShellList:
+		if _, ok := b.(*MShellList); ok {
+			return refPair{a, b}, true
+		}
+	case *MShellDict:
+		if _, ok := b.(*MShellDict); ok {
+			return refPair{a, b}, true
+		}
+	}
+	return refPair{}, false
+}
+
 // compareValues returns -1, 0, or 1, giving a total order over every value
 // type. Different kinds are ordered by a fixed type rank (valueTypeRank); within
 // a kind the natural order is used (numbers numerically with int/float
@@ -1113,6 +1223,7 @@ func compareValues(a, b MShellObject) int {
 		lit   int
 		isLit bool
 	}
+	var guard dagGuard
 	stack := []task{{a: a, b: b}}
 	for len(stack) > 0 {
 		t := stack[len(stack)-1]
@@ -1121,6 +1232,13 @@ func compareValues(a, b MShellObject) int {
 			if t.lit != 0 {
 				return t.lit
 			}
+			continue
+		}
+		// Shared substructure: a pointer-identical pair compares 0 by
+		// definition, and a pair this walk already expanded proved 0 (any
+		// non-zero would have returned; see dagGuard). Skipping both keeps
+		// DAG-shaped values linear instead of 2^n.
+		if sameRef(t.a, t.b) || guard.skip(t.a, t.b) {
 			continue
 		}
 		ra, rb := valueTypeRank(t.a), valueTypeRank(t.b)
@@ -2380,6 +2498,11 @@ func itemsEqual(a, b []MShellObject) (bool, error) {
 		return false, nil
 	}
 	for i := range a {
+		// Pointer-identical elements are equal by definition; skipping them
+		// keeps lists with shared substructure from re-walking it.
+		if sameRef(a[i], b[i]) {
+			continue
+		}
 		eq, err := a[i].Equals(b[i])
 		if err != nil || !eq {
 			return eq, err
