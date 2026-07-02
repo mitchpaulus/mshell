@@ -973,6 +973,9 @@ type renderTask struct {
 	obj    MShellObject
 	flavor renderFlavor
 	isLit  bool
+	// isExit marks the sentinel popped after a container's children have
+	// rendered; it removes the container from the on-path cycle set.
+	isExit bool
 }
 
 func renderLit(s string) renderTask { return renderTask{lit: s, isLit: true} }
@@ -996,16 +999,47 @@ func renderJoin(open, sep, close string, items []MShellObject, flavor renderFlav
 	return seq
 }
 
-// renderValue renders a value in the requested flavor with one explicit work
-// stack instead of method recursion, expanding every container kind — enum,
-// Maybe, list, dict, pipe — inline. Arbitrarily deep values therefore cannot
-// overflow the call stack even when kinds alternate (enum→Maybe→enum, ...),
-// which per-type iterative renderers could not guarantee: each one delegated
-// other kinds to the child's own recursive method. Leaf kinds (scalars,
-// grids, quotations) still render via their own methods; their nesting depth
-// is bounded by their own structure.
+// cycleTrackable reports whether obj is a heap container that could sit on a
+// reference cycle (built via in-place list/dict mutation, e.g. a list appended
+// to itself). Only pointer kinds qualify — value kinds are copied and cannot
+// be revisited by identity.
+func cycleTrackable(obj MShellObject) bool {
+	switch obj.(type) {
+	case *MShellEnum, *MShellList, *MShellDict, *Maybe, *MShellPipe:
+		return true
+	}
+	return false
+}
+
+// renderValue renders a value in the requested flavor. It is total: a cyclic
+// value renders with a `<cycle>` marker at the back-reference, which keeps
+// internal rendering (error messages, stack dumps) from hanging. User-facing
+// operations (`str`, `toJson`) call renderValueDetect instead and report a
+// cyclic value as an error — mshell is strict, so a cycle is always the
+// degenerate result of appending a container into itself, not a value with a
+// meaningful rendering.
 func renderValue(root MShellObject, flavor renderFlavor) string {
+	s, _ := renderValueDetect(root, flavor)
+	return s
+}
+
+// renderValueDetect renders a value in the requested flavor with one explicit
+// work stack instead of method recursion, expanding every container kind —
+// enum, Maybe, list, dict, pipe — inline. Arbitrarily deep values therefore
+// cannot overflow the call stack even when kinds alternate (enum→Maybe→enum,
+// ...), which per-type iterative renderers could not guarantee: each one
+// delegated other kinds to the child's own recursive method. Leaf kinds
+// (scalars, grids, quotations) still render via their own methods; their
+// nesting depth is bounded by their own structure.
+//
+// Containers currently being expanded are tracked as an on-path set; reaching
+// one again is a true reference cycle (a DAG merely revisits a finished
+// pointer, which is fine), so the walk emits `<cycle>` instead of descending
+// and reports cycled=true.
+func renderValueDetect(root MShellObject, flavor renderFlavor) (string, bool) {
 	var sb strings.Builder
+	cycled := false
+	var onPath map[MShellObject]bool
 	stack := []renderTask{{obj: root, flavor: flavor}}
 	// push schedules seq to pop in order (reversed onto the LIFO stack).
 	push := func(seq []renderTask) {
@@ -1013,11 +1047,35 @@ func renderValue(root MShellObject, flavor renderFlavor) string {
 			stack = append(stack, seq[i])
 		}
 	}
+	// enter marks t.obj as on the current path and schedules its removal
+	// after seq (the container's children) has fully rendered.
+	enter := func(obj MShellObject, seq []renderTask) []renderTask {
+		if !cycleTrackable(obj) {
+			return seq
+		}
+		if onPath == nil {
+			onPath = make(map[MShellObject]bool, 8)
+		}
+		onPath[obj] = true
+		return append(seq, renderTask{obj: obj, isExit: true})
+	}
 	for len(stack) > 0 {
 		t := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
 		if t.isLit {
 			sb.WriteString(t.lit)
+			continue
+		}
+		if t.isExit {
+			delete(onPath, t.obj)
+			continue
+		}
+		// Only pointer kinds are ever on the path; the guard also keeps
+		// unhashable dynamic types (MShellBinary, a []byte) away from the
+		// map lookup, which would panic even on a read.
+		if cycleTrackable(t.obj) && onPath[t.obj] {
+			sb.WriteString("<cycle>")
+			cycled = true
 			continue
 		}
 		if m, ok := asMaybe(t.obj); ok {
@@ -1027,11 +1085,11 @@ func renderValue(root MShellObject, flavor renderFlavor) string {
 			case m.IsNone():
 				sb.WriteString("None")
 			case t.flavor == flavorJson:
-				push([]renderTask{{obj: m.obj, flavor: flavorJson}})
+				push(enter(t.obj, []renderTask{{obj: m.obj, flavor: flavorJson}}))
 			case t.flavor == flavorDebug:
-				push([]renderTask{renderLit("Maybe("), {obj: m.obj, flavor: flavorDebug}, renderLit(")")})
+				push(enter(t.obj, []renderTask{renderLit("Maybe("), {obj: m.obj, flavor: flavorDebug}, renderLit(")")}))
 			default:
-				push([]renderTask{renderLit("Just("), {obj: m.obj, flavor: flavorStr}, renderLit(")")})
+				push(enter(t.obj, []renderTask{renderLit("Just("), {obj: m.obj, flavor: flavorStr}, renderLit(")")}))
 			}
 			continue
 		}
@@ -1053,7 +1111,7 @@ func renderValue(root MShellObject, flavor renderFlavor) string {
 					seq = append(seq, renderJoin("[", ", ", "]", v.Payload, flavorJson)...)
 				}
 				seq = append(seq, renderLit("}"))
-				push(seq)
+				push(enter(t.obj, seq))
 				continue
 			}
 			// `member` (nullary) or `member(p0 p1 ...)`, payloads as ToString.
@@ -1061,18 +1119,18 @@ func renderValue(root MShellObject, flavor renderFlavor) string {
 				sb.WriteString(v.Member)
 				continue
 			}
-			push(renderJoin(v.Member+"(", " ", ")", v.Payload, flavorStr))
+			push(enter(t.obj, renderJoin(v.Member+"(", " ", ")", v.Payload, flavorStr)))
 		case *MShellList:
 			if t.flavor == flavorJson {
-				push(renderJoin("[", ", ", "]", v.Items, flavorJson))
+				push(enter(t.obj, renderJoin("[", ", ", "]", v.Items, flavorJson)))
 			} else {
-				push(renderJoin("[", " ", "]", v.Items, flavorDebug))
+				push(enter(t.obj, renderJoin("[", " ", "]", v.Items, flavorDebug)))
 			}
 		case *MShellPipe:
 			if t.flavor == flavorJson {
-				push(renderJoin("[", ", ", "]", v.List.Items, flavorJson))
+				push(enter(t.obj, renderJoin("[", ", ", "]", v.List.Items, flavorJson)))
 			} else {
-				push(renderJoin("", " | ", "", v.List.Items, flavorDebug))
+				push(enter(t.obj, renderJoin("", " | ", "", v.List.Items, flavorDebug)))
 			}
 		case *MShellDict:
 			keys := sortedDictKeys(v.Items)
@@ -1083,7 +1141,7 @@ func renderValue(root MShellObject, flavor renderFlavor) string {
 					seq = append(seq, renderLit(k+": "), renderTask{obj: v.Items[k], flavor: flavorDebug}, renderLit(", "))
 				}
 				seq = append(seq, renderLit("}"))
-				push(seq)
+				push(enter(t.obj, seq))
 				continue
 			}
 			// The `str` form of a dict is its JSON form.
@@ -1101,7 +1159,7 @@ func renderValue(root MShellObject, flavor renderFlavor) string {
 				seq = append(seq, renderLit(string(keyEnc)+": "), renderTask{obj: v.Items[k], flavor: flavorJson})
 			}
 			seq = append(seq, renderLit("}"))
-			push(seq)
+			push(enter(t.obj, seq))
 		default:
 			switch t.flavor {
 			case flavorDebug:
@@ -1113,7 +1171,7 @@ func renderValue(root MShellObject, flavor renderFlavor) string {
 			}
 		}
 	}
-	return sb.String()
+	return sb.String(), cycled
 }
 
 // equalsIter is structural equality over any two values, walked with one

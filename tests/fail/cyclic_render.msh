@@ -1,0 +1,10 @@
+# mshell is strict: a cyclic value (a container appended into itself) is a
+# degenerate artifact of in-place mutation, so converting one to a string or
+# JSON is an error rather than a hang. Equality and sorting on cyclic values
+# still terminate (pointer-identity fast path + pair memoization).
+enum Box = wrap [Box] | z end
+[] x!
+@x wrap e!
+@x @e append drop
+@e dup = str wl
+@e str wl

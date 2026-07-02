@@ -9442,7 +9442,10 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'toJson' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
-					jsonStr := obj1.ToJson()
+					jsonStr, cycled := renderValueDetect(obj1, flavorJson)
+					if cycled {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert a cyclic value (a container that contains itself) to JSON.\n", t.Line, t.Column))
+					}
 					stack.Push(MShellString{jsonStr})
 				} else if t.Lexeme == "typeof" {
 					obj1, err := stack.Pop()
@@ -12481,7 +12484,11 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert an empty stack to a string.\n", t.Line, t.Column))
 				}
 
-				stack.Push(MShellString{obj.ToString()})
+				strVal, cycled := renderValueDetect(obj, flavorStr)
+				if cycled {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert a cyclic value (a container that contains itself) to a string.\n", t.Line, t.Column))
+				}
+				stack.Push(MShellString{strVal})
 			} else if t.Type == INDEXER { // Token Type
 				obj1, err := stack.Pop()
 				if err != nil {
