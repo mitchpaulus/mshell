@@ -101,6 +101,14 @@ type Checker struct {
 	// type names are NOT stored here — they are recognized directly.
 	typeEnv map[NameId]TypeId
 
+	// enumMemberToks records every registered enum member name (value: the
+	// member's declaration token). Enum constructors and user defs share the
+	// word namespace, and enums register before same-file defs — so def
+	// registration checks this to reject a def whose name collides with a
+	// member, mirroring defineEnum rejecting a member that collides with an
+	// existing def or builtin.
+	enumMemberToks map[NameId]Token
+
 	// Quote-body inference state (Phase 7). When inferring is true,
 	// applySig responds to stack underflow by synthesizing fresh type
 	// variables instead of reporting an error; those vars accumulate

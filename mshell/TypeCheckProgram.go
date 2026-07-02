@@ -127,6 +127,18 @@ func (c *Checker) CheckProgram(file *MShellFile) {
 		sig := c.ResolveDefSig(def.Inputs, def.Outputs)
 		defSigs[i] = sig
 		nameId := c.names.Intern(def.Name)
+		// Enum constructors share the word namespace and registered in
+		// pre-pass 1b; a def reusing a member name would resolve to the
+		// constructor in the checker but to the def at runtime, so reject it —
+		// the mirror of defineEnum rejecting a member that collides with an
+		// existing def or builtin.
+		if _, isMember := c.enumMemberToks[nameId]; isMember {
+			c.errors = append(c.errors, TypeError{
+				Kind: TErrTypeParse, Pos: def.NameToken,
+				Hint: "definition '" + def.Name + "' conflicts with an enum member of the same name",
+			})
+			continue
+		}
 		c.nameBuiltins[nameId] = append(c.nameBuiltins[nameId], sig)
 	}
 	// Pre-pass 3: type-check each def body against its declared sig.

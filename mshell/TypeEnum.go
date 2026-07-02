@@ -80,5 +80,9 @@ func (c *Checker) defineEnum(d *MShellEnumDecl) {
 			continue
 		}
 		c.nameBuiltins[mid] = append(c.nameBuiltins[mid], QuoteSig{Inputs: u.payloads, Outputs: []TypeId{enumType}})
+		if c.enumMemberToks == nil {
+			c.enumMemberToks = make(map[NameId]Token, len(uniq))
+		}
+		c.enumMemberToks[mid] = u.tok
 	}
 }
