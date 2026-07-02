@@ -199,10 +199,7 @@ func (m Maybe) CommandLine() string {
 
 // This is meant for things like error messages, should be limited in length to 30 chars or so.
 func (m Maybe) DebugString() string {
-	if m.obj == nil {
-		return "None"
-	}
-	return fmt.Sprintf("Maybe(%s)", m.obj.DebugString())
+	return renderValue(m, flavorDebug)
 }
 func (m Maybe) Index(index int) (MShellObject, error) {
 	return nil, fmt.Errorf("Cannot index into a Maybe.\n")
@@ -221,17 +218,11 @@ func (m Maybe) Slice(startInc int, endExc int) (MShellObject, error) {
 }
 
 func (m Maybe) ToJson() string {
-	if m.obj == nil {
-		return "null"
-	}
-	return m.obj.ToJson()
+	return renderValue(m, flavorJson)
 }
 
 func (m Maybe) ToString() string {
-	if m.obj == nil {
-		return "None"
-	}
-	return fmt.Sprintf("Just(%s)", m.obj.ToString())
+	return renderValue(m, flavorStr)
 }
 
 func (m Maybe) IndexErrStr() string {
@@ -243,24 +234,7 @@ func (m Maybe) Concat(other MShellObject) (MShellObject, error) {
 }
 
 func (m Maybe) Equals(other MShellObject) (bool, error) {
-	// Maybe values are constructed as *Maybe at runtime, so accept either the
-	// value or pointer form — a plain other.(Maybe) misses every *Maybe and
-	// would make all Maybe-vs-Maybe comparisons (including None==None) false.
-	otherMaybe, ok := asMaybe(other)
-	if !ok {
-		return false, nil
-	}
-
-	if m.obj == nil && otherMaybe.obj == nil {
-		return true, nil
-	}
-
-	if m.obj == nil || otherMaybe.obj == nil {
-		return false, nil
-	}
-
-	equal, err := m.obj.Equals(otherMaybe.obj)
-	return equal, err
+	return equalsIter(m, other)
 }
 
 func (m Maybe) CastString() (string, error) {
@@ -366,54 +340,8 @@ func (e *MShellEnum) TypeName() string       { return e.EnumName }
 func (e *MShellEnum) IsCommandLineable() bool { return true }
 func (e *MShellEnum) IsNumeric() bool         { return false }
 func (e *MShellEnum) FloatNumeric() float64   { return 0 }
-func (e *MShellEnum) CommandLine() string     { return enumRender(e) }
-func (e *MShellEnum) DebugString() string     { return enumRender(e) }
-
-// enumRender renders an enum value as `member` (nullary) or
-// `member(p0 p1 ...)`. Nested enum payloads are expanded with an explicit
-// work stack rather than function recursion, so an arbitrarily deep value
-// (e.g. a long `node(node(... ) ...)` chain) cannot overflow the call stack.
-// Non-enum payloads use their own ToString.
-func enumRender(top *MShellEnum) string {
-	var sb strings.Builder
-	type task struct {
-		lit   string
-		obj   MShellObject
-		isLit bool
-	}
-	stack := []task{{obj: top}}
-	for len(stack) > 0 {
-		t := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-		if t.isLit {
-			sb.WriteString(t.lit)
-			continue
-		}
-		en, ok := t.obj.(*MShellEnum)
-		if !ok {
-			sb.WriteString(t.obj.ToString())
-			continue
-		}
-		if len(en.Payload) == 0 {
-			sb.WriteString(en.Member)
-			continue
-		}
-		// Emit `member ( p0 " " p1 ... )`; push reversed so it pops in order.
-		seq := make([]task, 0, len(en.Payload)*2+3)
-		seq = append(seq, task{lit: en.Member, isLit: true}, task{lit: "(", isLit: true})
-		for i, p := range en.Payload {
-			if i > 0 {
-				seq = append(seq, task{lit: " ", isLit: true})
-			}
-			seq = append(seq, task{obj: p})
-		}
-		seq = append(seq, task{lit: ")", isLit: true})
-		for i := len(seq) - 1; i >= 0; i-- {
-			stack = append(stack, seq[i])
-		}
-	}
-	return sb.String()
-}
+func (e *MShellEnum) CommandLine() string     { return renderValue(e, flavorStr) }
+func (e *MShellEnum) DebugString() string     { return renderValue(e, flavorStr) }
 
 func (e *MShellEnum) Index(index int) (MShellObject, error) {
 	return nil, fmt.Errorf("Cannot index into an enum.\n")
@@ -434,106 +362,21 @@ func (e *MShellEnum) Slice(startInc int, endExc int) (MShellObject, error) {
 // ToJson uses serde's externally-tagged convention — the de-facto standard for
 // tagged unions in JSON: a nullary member is the bare member string; a member
 // with a single payload is `{"member": value}`; with several, `{"member":
-// [v0, v1, ...]}`. Like enumRender, nested enum payloads are expanded with an
-// explicit work stack rather than function recursion, so an arbitrarily deep
-// value cannot overflow the call stack; output is appended to a single builder
-// (no intermediate per-subtree strings), making it O(total output size).
-// Non-enum payloads delegate to their own ToJson.
+// [v0, v1, ...]}`. Rendering runs on renderValue's shared work stack, so an
+// arbitrarily deep value cannot overflow the call stack.
 func (e *MShellEnum) ToJson() string {
-	var sb strings.Builder
-	type task struct {
-		lit   string
-		obj   MShellObject
-		isLit bool
-	}
-	stack := []task{{obj: e}}
-	for len(stack) > 0 {
-		t := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-		if t.isLit {
-			sb.WriteString(t.lit)
-			continue
-		}
-		en, ok := t.obj.(*MShellEnum)
-		if !ok {
-			sb.WriteString(t.obj.ToJson())
-			continue
-		}
-		if len(en.Payload) == 0 {
-			fmt.Fprintf(&sb, "%q", en.Member)
-			continue
-		}
-		// Emit `{"member": value}` (single payload) or
-		// `{"member": [v0, v1, ...]}` (several); push reversed so it pops in
-		// order, with enum payloads re-expanded by this same loop.
-		seq := make([]task, 0, len(en.Payload)*2+4)
-		seq = append(seq, task{lit: fmt.Sprintf("{%q: ", en.Member), isLit: true})
-		if len(en.Payload) == 1 {
-			seq = append(seq, task{obj: en.Payload[0]})
-		} else {
-			seq = append(seq, task{lit: "[", isLit: true})
-			for i, p := range en.Payload {
-				if i > 0 {
-					seq = append(seq, task{lit: ", ", isLit: true})
-				}
-				seq = append(seq, task{obj: p})
-			}
-			seq = append(seq, task{lit: "]", isLit: true})
-		}
-		seq = append(seq, task{lit: "}", isLit: true})
-		for i := len(seq) - 1; i >= 0; i-- {
-			stack = append(stack, seq[i])
-		}
-	}
-	return sb.String()
+	return renderValue(e, flavorJson)
 }
 
-func (e *MShellEnum) ToString() string    { return enumRender(e) }
+func (e *MShellEnum) ToString() string    { return renderValue(e, flavorStr) }
 func (e *MShellEnum) IndexErrStr() string { return "" }
 
 func (e *MShellEnum) Concat(other MShellObject) (MShellObject, error) {
 	return nil, fmt.Errorf("Cannot concatenate an enum.\n")
 }
 
-// Equals compares two enum values structurally. Nested enum payloads are
-// walked with an explicit pair stack rather than function recursion, so two
-// arbitrarily deep values cannot overflow the call stack; only non-enum
-// payloads (the leaves) delegate to their own Equals.
 func (e *MShellEnum) Equals(other MShellObject) (bool, error) {
-	type pair struct{ a, b MShellObject }
-	var guard dagGuard
-	stack := []pair{{a: e, b: other}}
-	for len(stack) > 0 {
-		p := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-		// Shared substructure: a pointer-identical pair is equal by
-		// definition, and a pair this walk already expanded compared equal
-		// (see dagGuard). Skipping both keeps DAG-shaped values (a subtree
-		// reused twice per level) linear instead of 2^n.
-		if sameRef(p.a, p.b) || guard.skip(p.a, p.b) {
-			continue
-		}
-		ea, aok := p.a.(*MShellEnum)
-		eb, bok := p.b.(*MShellEnum)
-		if aok || bok {
-			// At least one side is an enum: equal only if both are enums with
-			// the same name, member, and arity. Payloads are deferred onto the
-			// stack so this never re-enters Equals on an enum.
-			if !aok || !bok || ea.EnumName != eb.EnumName || ea.Member != eb.Member || len(ea.Payload) != len(eb.Payload) {
-				return false, nil
-			}
-			for i := range ea.Payload {
-				stack = append(stack, pair{a: ea.Payload[i], b: eb.Payload[i]})
-			}
-			continue
-		}
-		// Neither side is an enum: compare by their own equality.
-		eq, err := p.a.Equals(p.b)
-		if err != nil || !eq {
-			return false, err
-		}
-	}
-	return true, nil
+	return equalsIter(e, other)
 }
 
 func (e *MShellEnum) CastString() (string, error) { return e.Member, nil }
@@ -662,16 +505,7 @@ func (*MShellDict) CommandLine() string {
 
 // This is meant for things like error messages, should be limited in length to 30 chars or so.
 func (d *MShellDict) DebugString() string {
-	// TODO: implement this
-
-	sb := strings.Builder{}
-	sb.WriteString("Dictionary{")
-	for key, value := range d.Items {
-		sb.WriteString(fmt.Sprintf("%s: %s, ", key, value.DebugString()))
-	}
-	sb.WriteString("}")
-	return sb.String()
-
+	return renderValue(d, flavorDebug)
 }
 func (*MShellDict) Index(index int) (MShellObject, error) {
 	return nil, fmt.Errorf("Cannot index into a dictionary.\n")
@@ -687,43 +521,7 @@ func (*MShellDict) Slice(startInc int, endExc int) (MShellObject, error) {
 	return nil, fmt.Errorf("Cannot slice a dictionary.\n")
 }
 func (d *MShellDict) ToJson() string {
-	var sb strings.Builder
-
-	if len(d.Items) == 0 {
-		return "{}"
-	}
-
-	if len(d.Items) == 1 {
-		for key, value := range d.Items {
-			keyEnc, _ := json.Marshal(key)
-			return fmt.Sprintf("{%s: %s}", string(keyEnc), value.ToJson())
-		}
-	}
-
-	keys := make([]string, 0, len(d.Items))
-	for key := range d.Items {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-
-	sb.WriteString("{")
-
-	// Write the first key-value pair
-	firstKey := keys[0]
-	firstValue := d.Items[firstKey]
-
-	firstKeyEnc, _ := json.Marshal(firstKey)
-	sb.WriteString(fmt.Sprintf("%s: %s", string(firstKeyEnc), firstValue.ToJson()))
-
-	for _, key := range keys[1:] {
-		value := d.Items[key]
-		keyEnc, _ := json.Marshal(key)
-		sb.WriteString(fmt.Sprintf(", %s: %s", string(keyEnc), value.ToJson()))
-	}
-
-	sb.WriteString("}")
-
-	return sb.String()
+	return renderValue(d, flavorJson)
 }
 
 func (d *MShellDict) ToString() string { // This is what is used with 'str' command
@@ -739,51 +537,7 @@ func (*MShellDict) Concat(other MShellObject) (MShellObject, error) {
 }
 
 func (thisDict *MShellDict) Equals(other MShellObject) (bool, error) {
-	thisKeys := make([]string, 0, len(thisDict.Items))
-	for key := range thisDict.Items {
-		thisKeys = append(thisKeys, key)
-	}
-	sort.Strings(thisKeys)
-
-	otherDict, ok := other.(*MShellDict)
-	if !ok {
-		return false, nil
-	}
-
-	otherKeys := make([]string, 0, len(otherDict.Items))
-	for key := range otherDict.Items {
-		otherKeys = append(otherKeys, key)
-	}
-	sort.Strings(otherKeys)
-
-	if len(thisKeys) != len(otherKeys) {
-		return false, nil
-	}
-
-	for i, key := range thisKeys {
-		if key != otherKeys[i] {
-			return false, nil
-		}
-	}
-
-	for _, key := range thisKeys {
-		thisValue := thisDict.Items[key]
-		otherValue := otherDict.Items[key]
-
-		if thisValue.TypeName() != otherValue.TypeName() {
-			return false, nil
-		}
-
-		equal, err := thisValue.Equals(otherValue)
-		if err != nil {
-			return false, err
-		}
-		if !equal {
-			return false, nil
-		}
-	}
-
-	return true, nil
+	return equalsIter(thisDict, other)
 }
 
 // This is meant for completely unambiougous conversion to a string value.
@@ -1198,6 +952,242 @@ func refPairKey(a, b MShellObject) (refPair, bool) {
 		}
 	}
 	return refPair{}, false
+}
+
+// renderFlavor selects which of a value's three textual forms renderValue
+// emits: flavorStr is ToString (the `str` form), flavorDebug is DebugString
+// (stack dumps, list display), flavorJson is ToJson. Containers pick their
+// children's flavor the same way the per-type methods always did: a list
+// renders children as DebugString, a dict's `str` form is its JSON form, an
+// enum renders payloads with ToString, and Maybe keeps its own flavor.
+type renderFlavor uint8
+
+const (
+	flavorStr renderFlavor = iota
+	flavorDebug
+	flavorJson
+)
+
+type renderTask struct {
+	lit    string
+	obj    MShellObject
+	flavor renderFlavor
+	isLit  bool
+}
+
+func renderLit(s string) renderTask { return renderTask{lit: s, isLit: true} }
+
+// renderJoin builds the task sequence `open item0 sep item1 sep ... close`,
+// rendering each item in the given flavor.
+func renderJoin(open, sep, close string, items []MShellObject, flavor renderFlavor) []renderTask {
+	seq := make([]renderTask, 0, len(items)*2+2)
+	if open != "" {
+		seq = append(seq, renderLit(open))
+	}
+	for i, it := range items {
+		if i > 0 {
+			seq = append(seq, renderLit(sep))
+		}
+		seq = append(seq, renderTask{obj: it, flavor: flavor})
+	}
+	if close != "" {
+		seq = append(seq, renderLit(close))
+	}
+	return seq
+}
+
+// renderValue renders a value in the requested flavor with one explicit work
+// stack instead of method recursion, expanding every container kind — enum,
+// Maybe, list, dict, pipe — inline. Arbitrarily deep values therefore cannot
+// overflow the call stack even when kinds alternate (enum→Maybe→enum, ...),
+// which per-type iterative renderers could not guarantee: each one delegated
+// other kinds to the child's own recursive method. Leaf kinds (scalars,
+// grids, quotations) still render via their own methods; their nesting depth
+// is bounded by their own structure.
+func renderValue(root MShellObject, flavor renderFlavor) string {
+	var sb strings.Builder
+	stack := []renderTask{{obj: root, flavor: flavor}}
+	// push schedules seq to pop in order (reversed onto the LIFO stack).
+	push := func(seq []renderTask) {
+		for i := len(seq) - 1; i >= 0; i-- {
+			stack = append(stack, seq[i])
+		}
+	}
+	for len(stack) > 0 {
+		t := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if t.isLit {
+			sb.WriteString(t.lit)
+			continue
+		}
+		if m, ok := asMaybe(t.obj); ok {
+			switch {
+			case m.IsNone() && t.flavor == flavorJson:
+				sb.WriteString("null")
+			case m.IsNone():
+				sb.WriteString("None")
+			case t.flavor == flavorJson:
+				push([]renderTask{{obj: m.obj, flavor: flavorJson}})
+			case t.flavor == flavorDebug:
+				push([]renderTask{renderLit("Maybe("), {obj: m.obj, flavor: flavorDebug}, renderLit(")")})
+			default:
+				push([]renderTask{renderLit("Just("), {obj: m.obj, flavor: flavorStr}, renderLit(")")})
+			}
+			continue
+		}
+		switch v := t.obj.(type) {
+		case *MShellEnum:
+			if t.flavor == flavorJson {
+				// serde's externally-tagged convention: a nullary member is
+				// the bare member string, one payload is {"member": value},
+				// several are {"member": [v0, v1, ...]}.
+				if len(v.Payload) == 0 {
+					fmt.Fprintf(&sb, "%q", v.Member)
+					continue
+				}
+				seq := make([]renderTask, 0, len(v.Payload)*2+4)
+				seq = append(seq, renderLit(fmt.Sprintf("{%q: ", v.Member)))
+				if len(v.Payload) == 1 {
+					seq = append(seq, renderTask{obj: v.Payload[0], flavor: flavorJson})
+				} else {
+					seq = append(seq, renderJoin("[", ", ", "]", v.Payload, flavorJson)...)
+				}
+				seq = append(seq, renderLit("}"))
+				push(seq)
+				continue
+			}
+			// `member` (nullary) or `member(p0 p1 ...)`, payloads as ToString.
+			if len(v.Payload) == 0 {
+				sb.WriteString(v.Member)
+				continue
+			}
+			push(renderJoin(v.Member+"(", " ", ")", v.Payload, flavorStr))
+		case *MShellList:
+			if t.flavor == flavorJson {
+				push(renderJoin("[", ", ", "]", v.Items, flavorJson))
+			} else {
+				push(renderJoin("[", " ", "]", v.Items, flavorDebug))
+			}
+		case *MShellPipe:
+			if t.flavor == flavorJson {
+				push(renderJoin("[", ", ", "]", v.List.Items, flavorJson))
+			} else {
+				push(renderJoin("", " | ", "", v.List.Items, flavorDebug))
+			}
+		case *MShellDict:
+			keys := sortedDictKeys(v.Items)
+			if t.flavor == flavorDebug {
+				seq := make([]renderTask, 0, len(keys)*3+2)
+				seq = append(seq, renderLit("Dictionary{"))
+				for _, k := range keys {
+					seq = append(seq, renderLit(k+": "), renderTask{obj: v.Items[k], flavor: flavorDebug}, renderLit(", "))
+				}
+				seq = append(seq, renderLit("}"))
+				push(seq)
+				continue
+			}
+			// The `str` form of a dict is its JSON form.
+			if len(keys) == 0 {
+				sb.WriteString("{}")
+				continue
+			}
+			seq := make([]renderTask, 0, len(keys)*2+2)
+			seq = append(seq, renderLit("{"))
+			for i, k := range keys {
+				keyEnc, _ := json.Marshal(k)
+				if i > 0 {
+					seq = append(seq, renderLit(", "))
+				}
+				seq = append(seq, renderLit(string(keyEnc)+": "), renderTask{obj: v.Items[k], flavor: flavorJson})
+			}
+			seq = append(seq, renderLit("}"))
+			push(seq)
+		default:
+			switch t.flavor {
+			case flavorDebug:
+				sb.WriteString(t.obj.DebugString())
+			case flavorJson:
+				sb.WriteString(t.obj.ToJson())
+			default:
+				sb.WriteString(t.obj.ToString())
+			}
+		}
+	}
+	return sb.String()
+}
+
+// equalsIter is structural equality over any two values, walked with one
+// explicit pair stack that expands every container kind — enum, Maybe, list,
+// dict, pipe — inline, so deep values cannot overflow the call stack even
+// when kinds alternate. Pointer-identical pairs are skipped (equal by
+// definition), and past a step threshold already-expanded pairs are memoized
+// (see dagGuard), so shared substructure cannot blow up exponentially. Leaf
+// kinds compare via their own Equals.
+func equalsIter(a, b MShellObject) (bool, error) {
+	type pair struct{ a, b MShellObject }
+	var guard dagGuard
+	stack := []pair{{a: a, b: b}}
+	for len(stack) > 0 {
+		p := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if sameRef(p.a, p.b) || guard.skip(p.a, p.b) {
+			continue
+		}
+		if am, aok := asMaybe(p.a); aok {
+			bm, bok := asMaybe(p.b)
+			if !bok || am.IsNone() != bm.IsNone() {
+				return false, nil
+			}
+			if !am.IsNone() {
+				stack = append(stack, pair{a: am.obj, b: bm.obj})
+			}
+			continue
+		}
+		switch av := p.a.(type) {
+		case *MShellEnum:
+			bv, ok := p.b.(*MShellEnum)
+			if !ok || av.EnumName != bv.EnumName || av.Member != bv.Member || len(av.Payload) != len(bv.Payload) {
+				return false, nil
+			}
+			for i := range av.Payload {
+				stack = append(stack, pair{a: av.Payload[i], b: bv.Payload[i]})
+			}
+		case *MShellList:
+			bv, ok := p.b.(*MShellList)
+			if !ok || len(av.Items) != len(bv.Items) {
+				return false, nil
+			}
+			for i := range av.Items {
+				stack = append(stack, pair{a: av.Items[i], b: bv.Items[i]})
+			}
+		case *MShellPipe:
+			bv, ok := p.b.(*MShellPipe)
+			if !ok || len(av.List.Items) != len(bv.List.Items) {
+				return false, nil
+			}
+			for i := range av.List.Items {
+				stack = append(stack, pair{a: av.List.Items[i], b: bv.List.Items[i]})
+			}
+		case *MShellDict:
+			bv, ok := p.b.(*MShellDict)
+			if !ok || len(av.Items) != len(bv.Items) {
+				return false, nil
+			}
+			for key, aval := range av.Items {
+				bval, ok := bv.Items[key]
+				if !ok {
+					return false, nil
+				}
+				stack = append(stack, pair{a: aval, b: bval})
+			}
+		default:
+			eq, err := p.a.Equals(p.b)
+			if err != nil || !eq {
+				return eq, err
+			}
+		}
+	}
+	return true, nil
 }
 
 // compareValues returns -1, 0, or 1, giving a total order over every value
@@ -1660,19 +1650,6 @@ func (obj MShellFloat) CommandLine() string {
 	return strconv.FormatFloat(obj.Value, 'f', -1, 64)
 }
 
-// DebugString
-func DebugStrs(objs []MShellObject) []string {
-	debugStrs := make([]string, len(objs))
-	for i, obj := range objs {
-		if obj == nil {
-			debugStrs[i] = "nil"
-		} else {
-			debugStrs[i] = obj.DebugString()
-		}
-	}
-	return debugStrs
-}
-
 func (obj MShellLiteral) DebugString() string {
 	return obj.LiteralText
 }
@@ -1706,8 +1683,8 @@ func (obj *MShellQuotation) DebugString() string {
 }
 
 func (obj *MShellList) DebugString() string {
-	// Join the tokens with a space, surrounded by '[' and ']'
-	return "[" + strings.Join(DebugStrs(obj.Items), " ") + "]"
+	// Elements joined with a space, surrounded by '[' and ']'
+	return renderValue(obj, flavorDebug)
 }
 
 func cleanStringForTerminal(input string) string {
@@ -1752,8 +1729,8 @@ func (obj MShellPath) DebugString() string {
 }
 
 func (obj *MShellPipe) DebugString() string {
-	// Join each item with a ' | '
-	return strings.Join(DebugStrs(obj.List.Items), " | ")
+	// Each item joined with ' | '
+	return renderValue(obj, flavorDebug)
 }
 
 func (obj MShellInt) DebugString() string {
@@ -2249,17 +2226,7 @@ func (obj *MShellQuotation) ToJson() string {
 }
 
 func (obj *MShellList) ToJson() string {
-	builder := strings.Builder{}
-	builder.WriteString("[")
-	if len(obj.Items) > 0 {
-		builder.WriteString(obj.Items[0].ToJson())
-		for _, item := range obj.Items[1:] {
-			builder.WriteString(", ")
-			builder.WriteString(item.ToJson())
-		}
-	}
-	builder.WriteString("]")
-	return builder.String()
+	return renderValue(obj, flavorJson)
 }
 
 func (obj MShellString) ToJson() string {
@@ -2492,24 +2459,6 @@ func (obj MShellBool) Equals(other MShellObject) (bool, error) {
 	return obj.Value == asBool.Value, nil
 }
 
-// itemsEqual compares two object slices element-wise by structural equality.
-func itemsEqual(a, b []MShellObject) (bool, error) {
-	if len(a) != len(b) {
-		return false, nil
-	}
-	for i := range a {
-		// Pointer-identical elements are equal by definition; skipping them
-		// keeps lists with shared substructure from re-walking it.
-		if sameRef(a[i], b[i]) {
-			continue
-		}
-		eq, err := a[i].Equals(b[i])
-		if err != nil || !eq {
-			return eq, err
-		}
-	}
-	return true, nil
-}
 
 func (obj *MShellQuotation) Equals(other MShellObject) (bool, error) {
 	// Quotations are code values; two are equal only when they are the same
@@ -2519,11 +2468,7 @@ func (obj *MShellQuotation) Equals(other MShellObject) (bool, error) {
 }
 
 func (obj *MShellList) Equals(other MShellObject) (bool, error) {
-	o, ok := other.(*MShellList)
-	if !ok {
-		return false, nil
-	}
-	return itemsEqual(obj.Items, o.Items)
+	return equalsIter(obj, other)
 }
 
 func (obj MShellString) Equals(other MShellObject) (bool, error) {
@@ -2555,11 +2500,7 @@ func (obj MShellPath) Equals(other MShellObject) (bool, error) {
 }
 
 func (obj *MShellPipe) Equals(other MShellObject) (bool, error) {
-	o, ok := other.(*MShellPipe)
-	if !ok {
-		return false, nil
-	}
-	return itemsEqual(obj.List.Items, o.List.Items)
+	return equalsIter(obj, other)
 }
 
 func (obj MShellInt) Equals(other MShellObject) (bool, error) {
