@@ -44,3 +44,16 @@ enum T = leaf int | node T T end
     @i 1 + i!
 ) loop
 @p @q = str wl
+
+# Dict-shaped self-doubling past the cap: the dict arms dedupe consecutive
+# identical value pairs the same way (an enum with a dict payload closes the
+# same doubling structure through {str: E}).
+enum D = md {str: D} | zd end
+zd u! zd v! 0 i!
+(
+    @i 300000 >= if break end
+    { "l": @u, "r": @u } md u!
+    { "l": @v, "r": @v } md v!
+    @i 1 + i!
+) loop
+@u @v = str wl

@@ -1254,11 +1254,21 @@ func equalsIter(a, b MShellObject) (bool, error) {
 			if !ok || len(av.Items) != len(bv.Items) {
 				return false, nil
 			}
+			// Track the last pushed pair to skip consecutive identical ones —
+			// the dict-shaped self-doubling value ({ "l": @d, "r": @d })
+			// pushes the same pointer pair once per key, and without dedup
+			// that doubles the walk per level (same cliff pushPairsDedup
+			// closes for lists and enum payloads).
+			var lastA, lastB MShellObject
 			for key, aval := range av.Items {
 				bval, ok := bv.Items[key]
 				if !ok {
 					return false, nil
 				}
+				if sameRef(aval, lastA) && sameRef(bval, lastB) {
+					continue
+				}
+				lastA, lastB = aval, bval
 				stack = append(stack, eqPair{a: aval, b: bval})
 			}
 		default:
@@ -1386,9 +1396,18 @@ func compareValues(a, b MShellObject) int {
 			bk := sortedDictKeys(bd.Items)
 			n := min(len(ak), len(bk))
 			stack = append(stack, task{lit: cmpInt(len(ak), len(bk)), isLit: true})
+			var lastVA, lastVB MShellObject
 			for i := n - 1; i >= 0; i-- {
 				// Pushed so `key compare` pops before its `value compare`.
-				stack = append(stack, task{a: av.Items[ak[i]], b: bd.Items[bk[i]]})
+				// A value pair pointer-identical to the neighboring key's is
+				// skipped (it compares 0) — the dict-shaped self-doubling
+				// value would otherwise double the walk per level. The key
+				// comparison itself always stays.
+				va, vb := av.Items[ak[i]], bd.Items[bk[i]]
+				if !(sameRef(va, lastVA) && sameRef(vb, lastVB)) {
+					stack = append(stack, task{a: va, b: vb})
+					lastVA, lastVB = va, vb
+				}
 				stack = append(stack, task{lit: strings.Compare(ak[i], bk[i]), isLit: true})
 			}
 		case *MShellEnum:
