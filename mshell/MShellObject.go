@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"golang.org/x/net/html"
 	"os"
+	"reflect"
 	"regexp"
 	"slices"
 	"sort"
@@ -852,42 +853,37 @@ func sortedDictKeys(m map[string]MShellObject) []string {
 	return keys
 }
 
-// sameRef reports whether a and b are the identical heap object, for the kinds
-// that can form shared substructure (a value built as `@t @t node` reuses one
-// subtree twice). A pointer-identical pair is equal by definition, so equality
-// and ordering walks skip it instead of expanding it — without this, walking a
-// value with n levels of sharing costs 2^n. Only pointer kinds are compared:
-// comparing interfaces holding non-comparable dynamic types (e.g. MShellBinary,
-// a []byte) panics at runtime.
+// isRefKind reports whether obj's dynamic type is a pointer — a value with
+// heap identity. Only these kinds can form shared substructure or reference
+// cycles, and only these are safe in interface comparisons and as map keys: a
+// value kind may wrap a non-comparable type (MShellBinary, a []byte), which
+// panics at runtime. Checking the dynamic kind instead of enumerating types
+// means a newly added pointer kind is covered with no list to keep in sync.
+func isRefKind(obj MShellObject) bool {
+	return obj != nil && reflect.TypeOf(obj).Kind() == reflect.Pointer
+}
+
+// sameRef reports whether a and b are the identical heap object (a value built
+// as `@t @t node` reuses one subtree twice). A pointer-identical pair is equal
+// by definition, so equality and ordering walks skip it instead of expanding
+// it — without this, walking a value with n levels of sharing costs 2^n.
+// Interface equality is safe here: if b's dynamic type differs from a's the
+// comparison is false without inspecting values, and if it matches, isRefKind
+// guarantees it is a comparable pointer type.
 func sameRef(a, b MShellObject) bool {
-	switch av := a.(type) {
-	case *MShellEnum:
-		bv, ok := b.(*MShellEnum)
-		return ok && av == bv
-	case *MShellList:
-		bv, ok := b.(*MShellList)
-		return ok && av == bv
-	case *MShellDict:
-		bv, ok := b.(*MShellDict)
-		return ok && av == bv
-	case *Maybe:
-		bv, ok := b.(*Maybe)
-		return ok && av == bv
-	case *MShellDateTime:
-		bv, ok := b.(*MShellDateTime)
-		return ok && av == bv
-	case *MShellQuotation:
-		bv, ok := b.(*MShellQuotation)
-		return ok && av == bv
-	}
-	return false
+	return isRefKind(a) && a == b
 }
 
 // dagGuard bounds a comparison walk over values with shared substructure that
-// sameRef alone cannot catch: two *independently built* DAGs share no pointers
-// across operands, so every level re-expands and the walk goes exponential.
-// The guard counts pops; once a walk runs long enough to suggest blowup, it
-// memoizes the pointer pairs it has already expanded and skips repeats.
+// sameRef alone cannot catch: whenever the two operands are not the same
+// pointer (a value compared against an independently built copy, or two
+// distinct subtrees each shared internally), repeated substructure produces
+// repeated *pairs*, every one re-expands, and the walk goes exponential. The
+// guard counts pops; once a walk runs long enough to suggest blowup, it
+// memoizes the pointer pairs it has already expanded and skips repeats. This
+// is the single mechanism for the whole blowup class: duplicate expansion
+// below the threshold is capped by the threshold itself, and past it every
+// repeated pair memo-hits.
 //
 // Skipping a repeated pair is sound in a LIFO walk: the first occurrence's
 // entire expansion resolves before any later duplicate (which sat lower in the
@@ -926,10 +922,12 @@ func (g *dagGuard) skip(a, b MShellObject) bool {
 	if g.steps < dagStepThreshold {
 		return false
 	}
-	key, ok := refPairKey(a, b)
-	if !ok {
+	// Only pointer kinds get keys: repeated pairs of anything else cannot
+	// cause blowup, and only pointers are guaranteed comparable as map keys.
+	if !isRefKind(a) || !isRefKind(b) {
 		return false
 	}
+	key := refPair{a, b}
 	if g.memo == nil {
 		g.memo = make(map[refPair]bool, 1024)
 	}
@@ -938,28 +936,6 @@ func (g *dagGuard) skip(a, b MShellObject) bool {
 	}
 	g.memo[key] = true
 	return false
-}
-
-// refPairKey returns a comparable identity key when both values are the same
-// container pointer kind — the kinds whose repeated pairs cause blowup.
-// Interface keys are only safe when the dynamic values are comparable, which
-// pointers are; scalar kinds are cheap to compare directly and get no key.
-func refPairKey(a, b MShellObject) (refPair, bool) {
-	switch a.(type) {
-	case *MShellEnum:
-		if _, ok := b.(*MShellEnum); ok {
-			return refPair{a, b}, true
-		}
-	case *MShellList:
-		if _, ok := b.(*MShellList); ok {
-			return refPair{a, b}, true
-		}
-	case *MShellDict:
-		if _, ok := b.(*MShellDict); ok {
-			return refPair{a, b}, true
-		}
-	}
-	return refPair{}, false
 }
 
 // renderFlavor selects which of a value's three textual forms renderValue
@@ -1007,18 +983,6 @@ func renderJoin(open, sep, close string, items []MShellObject, flavor renderFlav
 	return seq
 }
 
-// cycleTrackable reports whether obj is a heap container that could sit on a
-// reference cycle (built via in-place list/dict mutation, e.g. a list appended
-// to itself). Only pointer kinds qualify — value kinds are copied and cannot
-// be revisited by identity.
-func cycleTrackable(obj MShellObject) bool {
-	switch obj.(type) {
-	case *MShellEnum, *MShellList, *MShellDict, *Maybe, *MShellPipe:
-		return true
-	}
-	return false
-}
-
 // renderValue renders a value in the requested flavor. It is total: a cyclic
 // value renders with a `<cycle>` marker at the back-reference, which keeps
 // internal rendering (error messages, stack dumps) from hanging. User-facing
@@ -1056,9 +1020,11 @@ func renderValueDetect(root MShellObject, flavor renderFlavor) (string, bool) {
 		}
 	}
 	// enter marks t.obj as on the current path and schedules its removal
-	// after seq (the container's children) has fully rendered.
+	// after seq (the container's children) has fully rendered. Only pointer
+	// kinds are tracked — value kinds are copied and cannot be revisited by
+	// identity, so they cannot sit on a reference cycle.
 	enter := func(obj MShellObject, seq []renderTask) []renderTask {
-		if !cycleTrackable(obj) {
+		if !isRefKind(obj) {
 			return seq
 		}
 		if onPath == nil {
@@ -1081,7 +1047,7 @@ func renderValueDetect(root MShellObject, flavor renderFlavor) (string, bool) {
 		// Only pointer kinds are ever on the path; the guard also keeps
 		// unhashable dynamic types (MShellBinary, a []byte) away from the
 		// map lookup, which would panic even on a read.
-		if cycleTrackable(t.obj) && onPath[t.obj] {
+		if isRefKind(t.obj) && onPath[t.obj] {
 			sb.WriteString("<cycle>")
 			cycled = true
 			continue
@@ -1191,21 +1157,12 @@ func renderValueDetect(root MShellObject, flavor renderFlavor) (string, bool) {
 // kinds compare via their own Equals.
 type eqPair struct{ a, b MShellObject }
 
-// pushPairsDedup pushes element-wise comparison pairs, skipping a pair that is
-// pointer-identical to the one just pushed. A self-doubling value
-// (`@t @t node`, `[ @x @x ]`) expands to the SAME pair twice; pushing it once
-// makes that whole family linear at any depth, with no reliance on the
-// bounded dagGuard memo (whose eviction cannot cover a working set larger
-// than its cap).
-func pushPairsDedup(stack []eqPair, as, bs []MShellObject) []eqPair {
-	var lastA, lastB MShellObject
+// pushPairs pushes element-wise comparison pairs onto the walk stack.
+// Duplicate pairs from shared substructure are not filtered here; the
+// dagGuard memo handles them (see dagGuard).
+func pushPairs(stack []eqPair, as, bs []MShellObject) []eqPair {
 	for i := range as {
-		ca, cb := as[i], bs[i]
-		if i > 0 && sameRef(ca, lastA) && sameRef(cb, lastB) {
-			continue
-		}
-		lastA, lastB = ca, cb
-		stack = append(stack, eqPair{a: ca, b: cb})
+		stack = append(stack, eqPair{a: as[i], b: bs[i]})
 	}
 	return stack
 }
@@ -1235,39 +1192,29 @@ func equalsIter(a, b MShellObject) (bool, error) {
 			if !ok || av.EnumName != bv.EnumName || av.Member != bv.Member || len(av.Payload) != len(bv.Payload) {
 				return false, nil
 			}
-			stack = pushPairsDedup(stack, av.Payload, bv.Payload)
+			stack = pushPairs(stack, av.Payload, bv.Payload)
 		case *MShellList:
 			bv, ok := p.b.(*MShellList)
 			if !ok || len(av.Items) != len(bv.Items) {
 				return false, nil
 			}
-			stack = pushPairsDedup(stack, av.Items, bv.Items)
+			stack = pushPairs(stack, av.Items, bv.Items)
 		case *MShellPipe:
 			bv, ok := p.b.(*MShellPipe)
 			if !ok || len(av.List.Items) != len(bv.List.Items) {
 				return false, nil
 			}
-			stack = pushPairsDedup(stack, av.List.Items, bv.List.Items)
+			stack = pushPairs(stack, av.List.Items, bv.List.Items)
 		case *MShellDict:
 			bv, ok := p.b.(*MShellDict)
 			if !ok || len(av.Items) != len(bv.Items) {
 				return false, nil
 			}
-			// Track the last pushed pair to skip consecutive identical ones —
-			// the dict-shaped self-doubling value ({ "l": @d, "r": @d })
-			// pushes the same pointer pair once per key, and without dedup
-			// that doubles the walk per level (same cliff pushPairsDedup
-			// closes for lists and enum payloads).
-			var lastA, lastB MShellObject
 			for key, aval := range av.Items {
 				bval, ok := bv.Items[key]
 				if !ok {
 					return false, nil
 				}
-				if sameRef(aval, lastA) && sameRef(bval, lastB) {
-					continue
-				}
-				lastA, lastB = aval, bval
 				stack = append(stack, eqPair{a: aval, b: bval})
 			}
 		default:
@@ -1382,11 +1329,6 @@ func compareValues(a, b MShellObject) int {
 			n := min(len(av.Items), len(bl.Items))
 			stack = append(stack, task{lit: cmpInt(len(av.Items), len(bl.Items)), isLit: true})
 			for i := n - 1; i >= 0; i-- {
-				// Skip a pair pointer-identical to its neighbor: it compares 0
-				// and would double the walk on self-doubling values.
-				if i > 0 && sameRef(av.Items[i], av.Items[i-1]) && sameRef(bl.Items[i], bl.Items[i-1]) {
-					continue
-				}
 				stack = append(stack, task{a: av.Items[i], b: bl.Items[i]})
 			}
 		case *MShellDict:
@@ -1395,18 +1337,9 @@ func compareValues(a, b MShellObject) int {
 			bk := sortedDictKeys(bd.Items)
 			n := min(len(ak), len(bk))
 			stack = append(stack, task{lit: cmpInt(len(ak), len(bk)), isLit: true})
-			var lastVA, lastVB MShellObject
 			for i := n - 1; i >= 0; i-- {
 				// Pushed so `key compare` pops before its `value compare`.
-				// A value pair pointer-identical to the neighboring key's is
-				// skipped (it compares 0) — the dict-shaped self-doubling
-				// value would otherwise double the walk per level. The key
-				// comparison itself always stays.
-				va, vb := av.Items[ak[i]], bd.Items[bk[i]]
-				if !(sameRef(va, lastVA) && sameRef(vb, lastVB)) {
-					stack = append(stack, task{a: va, b: vb})
-					lastVA, lastVB = va, vb
-				}
+				stack = append(stack, task{a: av.Items[ak[i]], b: bd.Items[bk[i]]})
 				stack = append(stack, task{lit: strings.Compare(ak[i], bk[i]), isLit: true})
 			}
 		case *MShellEnum:
@@ -1414,10 +1347,6 @@ func compareValues(a, b MShellObject) int {
 			n := min(len(av.Payload), len(be.Payload))
 			stack = append(stack, task{lit: cmpInt(len(av.Payload), len(be.Payload)), isLit: true})
 			for i := n - 1; i >= 0; i-- {
-				// Skip a pair pointer-identical to its neighbor (see list arm).
-				if i > 0 && sameRef(av.Payload[i], av.Payload[i-1]) && sameRef(be.Payload[i], be.Payload[i-1]) {
-					continue
-				}
 				stack = append(stack, task{a: av.Payload[i], b: be.Payload[i]})
 			}
 			// Name and member (declaration order) compare before any payload.
