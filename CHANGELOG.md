@@ -110,6 +110,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `zipPack` entries can now be a bare string or path in addition to the
+  dictionary form. A bare entry adds the file or directory under its base name,
+  keeping its own mode:
+  `([str | path | {path: str | path, archivePath?: str | path, mode?: int}] str | path -- )`
 - Breaking: the type checker no longer accepts an empty quote `()` as the
   predicate to `any` / `all`.
   Pass `(id)` instead, e.g. `[true false] (id) any`.

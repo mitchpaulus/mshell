@@ -12,6 +12,8 @@ tempFile pack-zip!
         archivePath: "extras/extra.txt",
         mode: 493
     }
+    `zip/base/repeat.txt`
+    "zip/base/nested"
 ] pack-items!
 
 @pack-items @pack-zip zipPack
