@@ -45,6 +45,46 @@
         {
             "name": "variable.other.set.mshell",
             "match": "@[a-zA-Z0-9_]+"
+        },
+        {
+            "name": "keyword.control.mshell",
+            "match": "else\\*|\\*if"
+        },
+        {
+            "name": "keyword.control.mshell",
+            "match": "\\b(def|end|if|iff|loop|read|str|break|continue|else|match|enum|type)\\b"
+        },
+        {
+            "name": "keyword.operator.word.mshell",
+            "match": "\\b(and|or|not)\\b"
+        },
+        {
+            "name": "keyword.other.mshell",
+            "match": "\\bsoe\\b"
+        },
+        {
+            "name": "storage.type.mshell",
+            "match": "\\b(int|float|bool)\\b"
+        },
+        {
+            "name": "constant.numeric.integer.hex.mshell",
+            "match": "\\b0[xX][0-9A-Fa-f]+\\b"
+        },
+        {
+            "name": "constant.numeric.integer.octal.mshell",
+            "match": "\\b0[oO][0-7]+\\b"
+        },
+        {
+            "name": "constant.numeric.integer.binary.mshell",
+            "match": "\\b0[bB][01]+\\b"
+        },
+        {
+            "name": "constant.numeric.float.mshell",
+            "match": "\\b\\d+\\.\\d*(?:[eE][+-]?\\d+)?\\b"
+        },
+        {
+            "name": "constant.numeric.integer.mshell",
+            "match": "\\b\\d+(?:[eE][+-]?\\d+)?\\b"
         }
     ],
     "repository": {
