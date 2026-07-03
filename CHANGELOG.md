@@ -31,6 +31,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   types yields `false` rather than an error (a genuinely incompatible
   comparison is already a static type error), so the result no longer depends
   on operand order and union members like `int | null` compare cleanly.
+- Converting a cyclic value (a container appended into itself) with `str` or
+  `toJson` now fails with a clear error instead of hanging forever. Internal
+  rendering (error messages, stack dumps) prints a `<cycle>` marker at the
+  back-reference instead.
+- A `match` used as the body of an inferred quotation (e.g.
+  `(match leaf n : @n, node a b : 0, end) map`) now type-checks; it previously
+  always failed with "stack underflow at 'match'", rejecting the canonical way
+  to consume enums and Maybe values inside `map`/`filter`/`each`.
 - `uniq` now accepts a list of any value type (matching its `([t] -- [t])`
   signature) and deduplicates by structural equality, instead of throwing at
   runtime for non-primitive elements such as enums, dicts, and booleans.

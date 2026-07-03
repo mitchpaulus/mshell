@@ -1233,8 +1233,12 @@ func equalsIter(a, b MShellObject) (bool, error) {
 // interleaved, text lexically, dates chronologically, bytes bytewise).
 // Structured values compare lexicographically: lists positionally (shorter
 // prefix first), dicts by sorted key then value, enums by name then declaration
-// order then payloads. The order agrees with structural equality: compareValues
-// returns 0 exactly when the two values are Equals.
+// order then payloads. For those kinds the order agrees with structural
+// equality: compareValues returns 0 exactly when the two values are Equals.
+// Unorderable kinds (quotation, grid, ...) are the exception — they share a
+// rank and always compare 0, so a stable sort preserves their original order,
+// while Equals still distinguishes them (identity for quotations, cell-wise
+// for grids).
 //
 // The comparison is driven by an explicit work stack rather than recursion, so
 // arbitrarily deep values (e.g. a long `node(node(...))` enum chain) cannot
