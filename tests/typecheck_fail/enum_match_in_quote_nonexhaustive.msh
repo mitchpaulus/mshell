@@ -1,0 +1,4 @@
+# Exhaustiveness is enforced inside inferred quotations too: the subject is
+# pinned to the member's enum, so a match that omits a member is rejected.
+enum C = red | green | blue end
+[ red ] (match red : 1, green : 2, end) map drop

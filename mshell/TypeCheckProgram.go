@@ -1241,12 +1241,21 @@ func formatPatternItem(it MShellParseItem) string {
 func (c *Checker) checkMatchBlock(matchBlock *MShellParseMatchBlock) {
 	startTok := matchBlock.GetStartToken()
 	if c.stack.Len() == 0 {
-		c.errors = append(c.errors, TypeError{
-			Kind: TErrStackUnderflow,
-			Pos:  startTok,
-			Hint: "match subject",
-		})
-		return
+		if !c.inferring {
+			c.errors = append(c.errors, TypeError{
+				Kind: TErrStackUnderflow,
+				Pos:  startTok,
+				Hint: "match subject",
+			})
+			return
+		}
+		// Quote-body inference: the subject is the quote's own input.
+		// Synthesize a fresh var exactly as applySig's underflow path does —
+		// at the bottom of the stack and the front of inferInputs — so
+		// `(match ... end) map` infers a one-input quote instead of erroring.
+		v := c.subst.FreshVar(c.arena)
+		c.inferInputs = append([]TypeId{v}, c.inferInputs...)
+		c.stack.items = append([]TypeId{v}, c.stack.items...)
 	}
 	// Widen a string-literal subject to `str`: match arms and the
 	// exhaustiveness check compare against `str` by type id, and the literal
@@ -1260,6 +1269,16 @@ func (c *Checker) checkMatchBlock(matchBlock *MShellParseMatchBlock) {
 	// as the unbranded types do, which is what the runtime already does.
 	if resolved := c.subst.Apply(c.arena, subject); c.arena.Node(resolved).Kind == TKBrand {
 		subject = c.underlying(resolved)
+	}
+	// An unresolved subject (a quote input under inference) is pinned from the
+	// first arm pattern that names a type: an enum member determines its enum
+	// (member names are global) and `just`/`none` determine Maybe. Pinning
+	// happens before the entry branch is captured so every arm and the
+	// exhaustiveness check see the resolved subject.
+	if c.arena.Node(c.subst.Apply(c.arena, subject)).Kind == TKVar {
+		if pin, ok := c.matchSubjectPin(matchBlock); ok {
+			c.unify(subject, pin)
+		}
 	}
 	entry := c.captureBranch()
 
@@ -1315,6 +1334,36 @@ func (c *Checker) checkMatchBlock(matchBlock *MShellParseMatchBlock) {
 	}
 	c.CheckMatchExhaustive(subject, tags, startTok)
 	c.reconcileArmBranches(armBranches, armLabels, entry, startTok)
+}
+
+// matchSubjectPin returns the concrete type a match's arm patterns determine
+// for an as-yet-unresolved subject. An enum-member head names its enum (member
+// names are unique across enums), and a `just`/`none` head names Maybe[T] with
+// a fresh T. ok=false when no arm determines a type — value literals and type
+// keywords deliberately do not pin, since a type-keyword match may be
+// discriminating a union and pinning would wrongly narrow the input.
+func (c *Checker) matchSubjectPin(matchBlock *MShellParseMatchBlock) (TypeId, bool) {
+	for _, arm := range matchBlock.Arms {
+		if len(arm.Pattern) == 0 {
+			continue
+		}
+		tok, ok := arm.Pattern[0].(Token)
+		if !ok || tok.Type != LITERAL {
+			continue
+		}
+		if tok.Lexeme == "just" || tok.Lexeme == "none" {
+			return c.arena.MakeMaybe(c.subst.FreshVar(c.arena)), true
+		}
+		mid := c.names.Intern(tok.Lexeme)
+		if _, isMember := c.enumMemberToks[mid]; isMember {
+			// A member's constructor sig has the enum as its only output.
+			sigs := c.nameBuiltins[mid]
+			if len(sigs) > 0 && len(sigs[0].Outputs) == 1 && c.arena.Node(sigs[0].Outputs[0]).Kind == TKEnum {
+				return sigs[0].Outputs[0], true
+			}
+		}
+	}
+	return TidNothing, false
 }
 
 // armPattern is the single interpretation of a match arm pattern. One

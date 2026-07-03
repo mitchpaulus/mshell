@@ -1,0 +1,16 @@
+# A `match` may be the body of an inferred quotation: the checker synthesizes
+# the quote's input as the match subject (like any other underflow under
+# inference) and pins it from the first arm that names a type — an enum member
+# determines its enum, `just`/`none` determine Maybe. This is the canonical
+# way to consume a list of enum values.
+enum T = leaf int | node T T end
+[ 1 leaf 2 leaf ] (match leaf n : @n, node a b : 0, end) map (str) map "," join wl
+
+enum C = red | green | blue end
+[ red green blue ] (match red : true, green : false, blue : true, end) filter len str wl
+
+[ 5 just  none ] (match just v : @v, none : 0, end) map (str) map "," join wl
+
+[1 2 3] (match 1 : "one", _ : "other", end) map "," join wl
+
+[ red green ] (match red : "r" wl, green : "g" wl, blue : "b" wl, end) each
