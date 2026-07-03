@@ -7542,7 +7542,15 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					for idx, item := range list.Items {
 						entryDict, ok := item.(*MShellDict)
 						if !ok {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: zipPack entry %d is not a dictionary. Found %s.\n", t.Line, t.Column, idx, item.TypeName()))
+							switch pathItem := item.(type) {
+							case MShellString:
+								entries = append(entries, zipPackItem{SourcePath: pathItem.Content, PreserveRoot: true})
+								continue
+							case MShellPath:
+								entries = append(entries, zipPackItem{SourcePath: pathItem.Path, PreserveRoot: true})
+								continue
+							}
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: zipPack entry %d is not a string, path, or dictionary. Found %s.\n", t.Line, t.Column, idx, item.TypeName()))
 						}
 
 						sourceObj, ok := entryDict.Items["path"]

@@ -1,6 +1,9 @@
 zipPack entries
 extras/extra.txt	493	true
+nested/	493	false
+nested/bravo.txt	420	false
 packed/alpha.txt	420	false
+repeat.txt	420	false
 
 zipPack alpha
 ALPHA-DATA

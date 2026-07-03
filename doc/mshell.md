@@ -1399,8 +1399,10 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
 
 - `zipDirInc`: Create/overwrite a `.zip` from a directory; the archive root contains the directory's contents (no parent folder). `(path:sourceDir path:zipPath -- )`
 - `zipDirExc`: Create/overwrite a `.zip` that includes the source directory itself at the archive root (entries are prefixed with the directory name). `(path:sourceDir path:zipPath -- )`
-- `zipPack`: Create/overwrite a `.zip` by packing a list of dictionaries.
-  Each entry requires `path` (the file or directory to add);
+- `zipPack`: Create/overwrite a `.zip` by packing a list of entries.
+  Each entry is either a bare string/path (the file or directory to add,
+  keeping its base name and mode) or a dictionary.
+  Each dictionary entry requires `path` (the file or directory to add);
   `archivePath` (override the in-archive name) and `mode` are optional.
   `mode` is a Go `os.FileMode`; write it with an octal literal,
   e.g. `0o644` (`rw-r--r--`), `0o755` (`rwxr-xr-x`), `0o600`.
@@ -1408,7 +1410,7 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
   on Windows file permissions are synthesized by Go and largely ignored
   (the executable bit is still preserved for Unix consumers).
   If `mode` is omitted, the entry keeps the source file's own mode.
-  Type: `([{path: str | path, archivePath?: str, mode?: int}] str | path -- )`
+  Type: `([str | path | {path: str | path, archivePath?: str | path, mode?: int}] str | path -- )`
 - `zipList`: List archive entries as dictionaries with keys: `name` (string, forward-slash paths, directories end with `/`), `compressedSize` (int bytes), `uncompressedSize` (int bytes), `isDir` (bool), `perm` (int POSIX permission bits), `executable` (bool), and `modified` (datetime from the archive entry). `(path -- [dict])`
 - `zipExtract`: Extract an entire archive. Options dict is required; defaults: `overwrite=false`, `skipExisting=false` (mutually exclusive), `stripComponents=0`, `pattern=""` (glob matched before stripping), `preservePermissions=true`. Destination is created if missing. `(path:zipPath path:destDir dict:options -- )`
 - `zipExtractEntry`: Extract a single entry (file or directory subtree) to a destination path. Options dict is required; defaults: `overwrite=false`, `skipExisting=false` (mutually exclusive), `preservePermissions=true`, `mkdirs=true`. `(path:zipPath str:entry path:dest dict:options -- )`
