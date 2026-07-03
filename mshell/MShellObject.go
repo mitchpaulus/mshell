@@ -895,9 +895,9 @@ func sameRef(a, b MShellObject) bool {
 // if a duplicate pops at all, its subtree already compared equal.
 //
 // Ordinary comparisons never allocate: below the step threshold the guard is
-// one integer increment. The memo is capped so a legitimately huge linear
-// value (millions of distinct pairs, no repeats) cannot balloon memory; a
-// blowup DAG has few distinct pairs and fits far below the cap.
+// one integer increment. Past it, the memo grows without bound — see skip for
+// why an unbounded memo is the correct trade (a bounded one turns "assumption
+// exceeded" into exponential time).
 type dagGuard struct {
 	steps int
 	memo  map[refPair]bool
@@ -906,11 +906,21 @@ type dagGuard struct {
 type refPair struct{ a, b MShellObject }
 
 const dagStepThreshold = 1 << 19
-const dagMemoCap = 1 << 18
 
 // skip reports whether this pair was already expanded earlier in the walk.
 // Call once per popped pair; it records the pair (past the threshold) so
 // later duplicates skip.
+//
+// The memo is deliberately UNBOUNDED. Every revisited pointer pair memo-hits,
+// which makes a comparison polynomial in actual heap nodes for any sharing
+// pattern — self-doubling, alternating, cross-parent diamonds, any container
+// mix, any depth. Earlier versions capped the memo to bound memory and then
+// patched the resulting exponential cliffs case by case (generational
+// eviction, per-container dedup); any bounded memo loses to a working set
+// larger than its bound (measured, not theorized), so no cap. Memory tracks
+// pairs actually walked: it activates only past the step threshold, so
+// ordinary comparisons never allocate, and a comparison large enough to build
+// a big memo already holds operands larger than the memo itself.
 func (g *dagGuard) skip(a, b MShellObject) bool {
 	g.steps++
 	if g.steps < dagStepThreshold {
@@ -925,17 +935,6 @@ func (g *dagGuard) skip(a, b MShellObject) bool {
 	}
 	if g.memo[key] {
 		return true
-	}
-	// Generational overflow: when the memo is full, clear it and keep
-	// inserting rather than stopping (stopping would freeze the memo on the
-	// walk's earliest pairs). Note the memo is NOT the defense against
-	// self-doubling values — a walk whose pending-duplicate working set
-	// exceeds the cap defeats any bounded memo (measured, not theorized).
-	// That family is handled structurally by push-time pair dedup
-	// (pushPairsDedup); the memo covers cross-parent duplicate pairs
-	// (diamond-shaped sharing) up to the cap.
-	if len(g.memo) >= dagMemoCap {
-		g.memo = make(map[refPair]bool, 1024)
 	}
 	g.memo[key] = true
 	return false

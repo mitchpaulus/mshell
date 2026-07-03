@@ -57,3 +57,16 @@ zd u! zd v! 0 i!
     @i 1 + i!
 ) loop
 @u @v = str wl
+
+# Class closure: a NON-consecutive alternating sharing pattern ([x y x] per
+# level) defeats push-time dedup entirely and, past any bounded memo, every
+# such pattern re-explodes — so the pair memo is unbounded. Any sharing
+# pattern, any container mix, any depth is polynomial in actual nodes.
+[0] xa! [1] ya! [0] xb! [1] yb! 0 i!
+(
+    @i 300000 >= if break end
+    [ @xa @ya @xa ] t!  [ @ya @xa @ya ] ya!  @t xa!
+    [ @xb @yb @xb ] t!  [ @yb @xb @yb ] yb!  @t xb!
+    @i 1 + i!
+) loop
+@xa @xb = str wl
