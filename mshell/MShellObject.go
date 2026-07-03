@@ -926,9 +926,18 @@ func (g *dagGuard) skip(a, b MShellObject) bool {
 	if g.memo[key] {
 		return true
 	}
-	if len(g.memo) < dagMemoCap {
-		g.memo[key] = true
+	// Generational overflow: when the memo is full, clear it and keep
+	// inserting rather than stopping (stopping would freeze the memo on the
+	// walk's earliest pairs). Note the memo is NOT the defense against
+	// self-doubling values — a walk whose pending-duplicate working set
+	// exceeds the cap defeats any bounded memo (measured, not theorized).
+	// That family is handled structurally by push-time pair dedup
+	// (pushPairsDedup); the memo covers cross-parent duplicate pairs
+	// (diamond-shaped sharing) up to the cap.
+	if len(g.memo) >= dagMemoCap {
+		g.memo = make(map[refPair]bool, 1024)
 	}
+	g.memo[key] = true
 	return false
 }
 
@@ -1181,10 +1190,30 @@ func renderValueDetect(root MShellObject, flavor renderFlavor) (string, bool) {
 // definition), and past a step threshold already-expanded pairs are memoized
 // (see dagGuard), so shared substructure cannot blow up exponentially. Leaf
 // kinds compare via their own Equals.
+type eqPair struct{ a, b MShellObject }
+
+// pushPairsDedup pushes element-wise comparison pairs, skipping a pair that is
+// pointer-identical to the one just pushed. A self-doubling value
+// (`@t @t node`, `[ @x @x ]`) expands to the SAME pair twice; pushing it once
+// makes that whole family linear at any depth, with no reliance on the
+// bounded dagGuard memo (whose eviction cannot cover a working set larger
+// than its cap).
+func pushPairsDedup(stack []eqPair, as, bs []MShellObject) []eqPair {
+	var lastA, lastB MShellObject
+	for i := range as {
+		ca, cb := as[i], bs[i]
+		if i > 0 && sameRef(ca, lastA) && sameRef(cb, lastB) {
+			continue
+		}
+		lastA, lastB = ca, cb
+		stack = append(stack, eqPair{a: ca, b: cb})
+	}
+	return stack
+}
+
 func equalsIter(a, b MShellObject) (bool, error) {
-	type pair struct{ a, b MShellObject }
 	var guard dagGuard
-	stack := []pair{{a: a, b: b}}
+	stack := []eqPair{{a: a, b: b}}
 	for len(stack) > 0 {
 		p := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
@@ -1197,7 +1226,7 @@ func equalsIter(a, b MShellObject) (bool, error) {
 				return false, nil
 			}
 			if !am.IsNone() {
-				stack = append(stack, pair{a: am.obj, b: bm.obj})
+				stack = append(stack, eqPair{a: am.obj, b: bm.obj})
 			}
 			continue
 		}
@@ -1207,25 +1236,19 @@ func equalsIter(a, b MShellObject) (bool, error) {
 			if !ok || av.EnumName != bv.EnumName || av.Member != bv.Member || len(av.Payload) != len(bv.Payload) {
 				return false, nil
 			}
-			for i := range av.Payload {
-				stack = append(stack, pair{a: av.Payload[i], b: bv.Payload[i]})
-			}
+			stack = pushPairsDedup(stack, av.Payload, bv.Payload)
 		case *MShellList:
 			bv, ok := p.b.(*MShellList)
 			if !ok || len(av.Items) != len(bv.Items) {
 				return false, nil
 			}
-			for i := range av.Items {
-				stack = append(stack, pair{a: av.Items[i], b: bv.Items[i]})
-			}
+			stack = pushPairsDedup(stack, av.Items, bv.Items)
 		case *MShellPipe:
 			bv, ok := p.b.(*MShellPipe)
 			if !ok || len(av.List.Items) != len(bv.List.Items) {
 				return false, nil
 			}
-			for i := range av.List.Items {
-				stack = append(stack, pair{a: av.List.Items[i], b: bv.List.Items[i]})
-			}
+			stack = pushPairsDedup(stack, av.List.Items, bv.List.Items)
 		case *MShellDict:
 			bv, ok := p.b.(*MShellDict)
 			if !ok || len(av.Items) != len(bv.Items) {
@@ -1236,7 +1259,7 @@ func equalsIter(a, b MShellObject) (bool, error) {
 				if !ok {
 					return false, nil
 				}
-				stack = append(stack, pair{a: aval, b: bval})
+				stack = append(stack, eqPair{a: aval, b: bval})
 			}
 		default:
 			eq, err := p.a.Equals(p.b)
@@ -1350,6 +1373,11 @@ func compareValues(a, b MShellObject) int {
 			n := min(len(av.Items), len(bl.Items))
 			stack = append(stack, task{lit: cmpInt(len(av.Items), len(bl.Items)), isLit: true})
 			for i := n - 1; i >= 0; i-- {
+				// Skip a pair pointer-identical to its neighbor: it compares 0
+				// and would double the walk on self-doubling values.
+				if i > 0 && sameRef(av.Items[i], av.Items[i-1]) && sameRef(bl.Items[i], bl.Items[i-1]) {
+					continue
+				}
 				stack = append(stack, task{a: av.Items[i], b: bl.Items[i]})
 			}
 		case *MShellDict:
@@ -1368,6 +1396,10 @@ func compareValues(a, b MShellObject) int {
 			n := min(len(av.Payload), len(be.Payload))
 			stack = append(stack, task{lit: cmpInt(len(av.Payload), len(be.Payload)), isLit: true})
 			for i := n - 1; i >= 0; i-- {
+				// Skip a pair pointer-identical to its neighbor (see list arm).
+				if i > 0 && sameRef(av.Payload[i], av.Payload[i-1]) && sameRef(be.Payload[i], be.Payload[i-1]) {
+					continue
+				}
 				stack = append(stack, task{a: av.Payload[i], b: be.Payload[i]})
 			}
 			// Name and member (declaration order) compare before any payload.

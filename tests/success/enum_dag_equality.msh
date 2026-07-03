@@ -32,3 +32,15 @@ enum T = leaf int | node T T end
 @a @c = str wl
 [ @a @c @b ] sort len str wl
 [ @a @c @b ] uniq len str wl
+
+# Past the dagGuard memo cap (2^18): self-doubling pairs are deduplicated at
+# push time, so independent DAGs deeper than the cap stay linear — a bounded
+# memo alone cannot cover a pending-duplicate working set larger than itself.
+0 leaf p! 0 leaf q! 0 i!
+(
+    @i 300000 >= if break end
+    @p @p node p!
+    @q @q node q!
+    @i 1 + i!
+) loop
+@p @q = str wl
