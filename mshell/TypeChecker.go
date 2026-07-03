@@ -109,6 +109,14 @@ type Checker struct {
 	// existing def or builtin.
 	enumMemberToks map[NameId]Token
 
+	// defNameToks records every registered definition name (value: the def's
+	// name token). Runtime definition lookup is first-match-wins, so a second
+	// def of a name is silently dead code, not an override; def registration
+	// checks this and rejects the duplicate, mirroring the runtime's
+	// FindDuplicateDefinition. Stdlib/init defs register before file defs,
+	// so a script redefining a stdlib name is caught too.
+	defNameToks map[NameId]Token
+
 	// Quote-body inference state (Phase 7). When inferring is true,
 	// applySig responds to stack underflow by synthesizing fresh type
 	// variables instead of reporting an error; those vars accumulate

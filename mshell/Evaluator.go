@@ -475,6 +475,38 @@ func (state *EvalState) lookupDefinition(definitions []MShellDefinition, name st
 	return definitions[i], true
 }
 
+// tokenPosStr formats a token's position as `path:line:col` (or `line:col`
+// when the source file is unknown, e.g. stdin) for use in error messages.
+func tokenPosStr(t Token) string {
+	if t.TokenFile != nil && t.TokenFile.Path != "" {
+		return fmt.Sprintf("%s:%d:%d", t.TokenFile.Path, t.Line, t.Column)
+	}
+	return fmt.Sprintf("%d:%d", t.Line, t.Column)
+}
+
+// FindDuplicateDefinition scans the given definition slices, in order, and
+// returns an error for the first name defined twice. Definition lookup is
+// first-match-wins, so a second definition of a name is never an override —
+// it would be silently dead code. Erroring keeps a script (or init file, or
+// interactive input) from redefining a name already taken by the standard
+// library, an earlier startup file, or itself.
+func FindDuplicateDefinition(defLists ...[]MShellDefinition) error {
+	seen := make(map[string]Token)
+	for _, defs := range defLists {
+		for i := range defs {
+			name := defs[i].Name
+			prev, exists := seen[name]
+			if !exists {
+				seen[name] = defs[i].NameToken
+				continue
+			}
+			return fmt.Errorf("%s: Duplicate definition '%s'; already defined at %s.\n",
+				tokenPosStr(defs[i].NameToken), name, tokenPosStr(prev))
+		}
+	}
+	return nil
+}
+
 func (state *EvalState) AddCompletionDefinitions(definitions []MShellDefinition) {
 	if state.CompletionDefinitions == nil {
 		state.CompletionDefinitions = make(map[string][]MShellDefinition)

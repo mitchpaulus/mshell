@@ -400,6 +400,7 @@ func (l *Lexer) makeToken(tokenType TokenType) Token {
 		Start:  l.start,
 		Lexeme: lexeme,
 		Type:   tokenType,
+		TokenFile: l.tokenFile,
 	}
 }
 

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- Breaking: defining a name that is already defined is now an error, at runtime
+  and in the type checker. This covers a second `def` in the same file, a
+  script `def` whose name is already taken by the standard library or an init
+  file, and an interactive redefinition. Definition lookup is first-match-wins,
+  so a duplicate never took effect anyway — it was silently dead code while the
+  first definition kept running; the error makes that visible. The message
+  reports both positions: `Duplicate definition 'id'; already defined at
+  lib/std.msh:62:5.`
+
 ### Fixed
 
 - `gridSetCell` no longer silently drops a value whose type differs from the

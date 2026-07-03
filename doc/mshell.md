@@ -714,6 +714,11 @@ end
 
 Metadata values must be static: strings (single or double quoted), integers, floats, booleans, or nested lists/dicts of the same. Interpolated strings are not allowed.
 
+Definition names must be unique.
+Defining a name that is already defined — by the same file, the standard library, or an init file — is an error,
+both at runtime and in the type checker.
+(Lookup is first-match-wins, so a duplicate would never take effect; the error makes that visible.)
+
 ### Tail-Call Optimization
 
 Recursive definitions in tail position are optimized to avoid stack overflow.

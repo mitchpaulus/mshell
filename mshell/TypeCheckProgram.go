@@ -87,12 +87,37 @@ func (c *Checker) RegisterStdlibSigs(defs []MShellDefinition) {
 	for i := range defs {
 		def := &defs[i]
 		nameId := c.names.Intern(def.Name)
+		// Record the name even when the sig registration below is skipped:
+		// the runtime's first-match-wins lookup still resolves to this def,
+		// so a later def of the same name is a duplicate regardless.
+		if c.recordDefName(nameId, def) {
+			continue
+		}
 		if _, exists := c.nameBuiltins[nameId]; exists {
 			continue
 		}
 		sig := c.ResolveDefSig(def.Inputs, def.Outputs)
 		c.nameBuiltins[nameId] = append(c.nameBuiltins[nameId], sig)
 	}
+}
+
+// recordDefName registers a definition's name for duplicate detection. If the
+// name is already taken by an earlier definition, it records an error and
+// returns true (mirroring the runtime's FindDuplicateDefinition, where the
+// first definition wins and a duplicate would be silently dead code).
+func (c *Checker) recordDefName(nameId NameId, def *MShellDefinition) bool {
+	if prev, exists := c.defNameToks[nameId]; exists {
+		c.errors = append(c.errors, TypeError{
+			Kind: TErrTypeParse, Pos: def.NameToken,
+			Hint: "duplicate definition '" + def.Name + "'; already defined at " + tokenPosStr(prev),
+		})
+		return true
+	}
+	if c.defNameToks == nil {
+		c.defNameToks = make(map[NameId]Token)
+	}
+	c.defNameToks[nameId] = def.NameToken
+	return false
 }
 
 // RegisterStartupTypes registers the `type` and `enum` declarations found in
@@ -171,6 +196,9 @@ func (c *Checker) CheckProgram(file *MShellFile) {
 				Kind: TErrTypeParse, Pos: def.NameToken,
 				Hint: "definition '" + def.Name + "' conflicts with an enum member of the same name",
 			})
+			continue
+		}
+		if c.recordDefName(nameId, def) {
 			continue
 		}
 		c.nameBuiltins[nameId] = append(c.nameBuiltins[nameId], sig)

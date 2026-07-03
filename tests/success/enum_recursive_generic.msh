@@ -4,7 +4,7 @@
 # payload (`node Tree Tree`) forever and overflows the stack.
 enum Tree = leaf int | node Tree Tree end
 
-def id (q -- q) end
+def ident (q -- q) end
 
-3 leaf id drop
+3 leaf ident drop
 "ok" wl

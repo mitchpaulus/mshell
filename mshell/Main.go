@@ -181,6 +181,9 @@ func loadStartupFile(path string, description string, stack *MShellStack, contex
 	}
 
 	*definitions = append(*definitions, parsedFile.Definitions...)
+	if err := FindDuplicateDefinition(*definitions); err != nil {
+		return fmt.Errorf("error loading %s at %s: %w", description, path, err)
+	}
 	state.AddCompletionDefinitions(parsedFile.Definitions)
 	// Register enum constructors declared in this startup file, and retain the
 	// top-level items so the type checker can register the file's `type` and
@@ -859,6 +862,14 @@ func main() {
 		if !ok {
 			os.Exit(1)
 		}
+	}
+
+	// Definition lookup is first-match-wins, so a script def whose name is
+	// already taken (by the stdlib, the init file, or the script itself)
+	// would be silently dead code. Reject it instead.
+	if err := FindDuplicateDefinition(allDefinitions); err != nil {
+		fmt.Fprint(os.Stderr, err.Error())
+		os.Exit(1)
 	}
 
 	if len(file.Items) == 0 {
@@ -2980,6 +2991,12 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 	term.Restore(state.stdInFd, &state.oldState)
 
 	if len(parsed.Definitions) > 0 {
+		// Definition lookup is first-match-wins, so a redefinition would be
+		// silently ignored rather than take effect; reject the input instead.
+		if err := FindDuplicateDefinition(state.stdLibDefs, parsed.Definitions); err != nil {
+			fmt.Fprint(os.Stderr, err.Error())
+			goto PromptPrint
+		}
 		state.stdLibDefs = append(state.stdLibDefs, parsed.Definitions...)
 		state.evalState.AddCompletionDefinitions(parsed.Definitions)
 	}
