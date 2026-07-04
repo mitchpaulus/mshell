@@ -1085,8 +1085,8 @@ end wl # Output: 11
    The preview pane short-circuits common binary extensions and shows first-level contents for `.zip` and `.tar.gz` archives.
    Yank bindings copy text about the selected entry to the system clipboard: `yf` (file name), `yp` (full path), `yg` (path relative to the enclosing `.git` directory). `(str -- )`
 - `clip`: Copy a string to the system clipboard. Cross-platform: uses `pbcopy` on macOS, `clip` on Windows, and the first available of `wl-copy`, `xclip`, or `xsel` on Linux. `(str -- )`
-- `writeFile`: Write string to file (UTF-8). Overwrites file if it exists. `(str content str file -- )`
-- `appendFile`: Append string to file (UTF-8). `(str content str file -- )`
+- `writeFile`: Write a string (UTF-8) or raw binary data to file. Overwrites file if it exists. `(str|bytes content str|path file -- )`
+- `appendFile`: Append a string (UTF-8) or raw binary data to file. `(str|bytes content str|path file -- )`
 - `fileSize`: Get size of file in bytes. Returns a Maybe in case file doesn't exist or other IO error. `(str -- Maybe int)`
 - `modTime`: Get a file's last modification time. Returns a Maybe (None on missing file or IO error). This is the only file timestamp that is portable across operating systems and filesystems; reported in local time. `(str|path -- Maybe datetime)`
 - `lsDir`: Get list of all items (files and directories) in directory. Full paths to the items. `(str|path -- [path])`
