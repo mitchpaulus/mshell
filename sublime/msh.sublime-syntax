@@ -26,7 +26,7 @@ contexts:
       scope: keyword.control.msh
     - match: '\\*if'
       scope: keyword.control.msh
-    - match: '\\b(def|end|if|iff|loop|read|str|break|continue|else)\\b'
+    - match: '\\b(def|end|if|iff|loop|read|str|break|continue|else|match|enum|type)\\b'
       scope: keyword.control.msh
     - match: '\\b(and|or|not)\\b'
       scope: keyword.operator.word.msh
@@ -48,6 +48,10 @@ contexts:
   numbers:
     - match: '\\b0[xX][0-9A-Fa-f]+\\b'
       scope: constant.numeric.integer.hex.msh
+    - match: '\\b0[oO][0-7]+\\b'
+      scope: constant.numeric.integer.octal.msh
+    - match: '\\b0[bB][01]+\\b'
+      scope: constant.numeric.integer.binary.msh
     - match: '\\b\\d+\\.\\d*(?:[eE][+-]?\\d+)?\\b'
       scope: constant.numeric.float.msh
     - match: '\\b\\d+(?:[eE][+-]?\\d+)?\\b'

@@ -282,6 +282,8 @@ func FormatType(arena *TypeArena, names *NameTable, id TypeId) string {
 		return "GridView"
 	case TKGridRow:
 		return "GridRow"
+	case TKEnum:
+		return names.Name(NameId(n.A))
 	}
 	return fmt.Sprintf("<%s #%d>", n.Kind, uint32(id))
 }

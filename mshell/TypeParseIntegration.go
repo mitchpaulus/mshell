@@ -35,6 +35,110 @@ func (d *MShellTypeDecl) DebugString() string {
 func (d *MShellTypeDecl) GetStartToken() Token { return d.StartTok }
 func (d *MShellTypeDecl) GetEndToken() Token   { return d.NameToken }
 
+// MShellEnumDecl is a top-level `enum Name = c1 | c2 T.. | ... end`
+// declaration: a generative tagged sum type. Each member is a constructor
+// name followed by zero or more space-separated payload types, members are
+// separated by `|`, and the body is closed by `end`. MemberPayloads is
+// parallel to Members; an entry is empty for a nullary member.
+type MShellEnumDecl struct {
+	Name           string
+	NameToken      Token
+	StartTok       Token // the ENUM keyword
+	Members        []string
+	MemberToks     []Token
+	MemberPayloads [][]MShellParseItem
+}
+
+func (d *MShellEnumDecl) ToJson() string {
+	parts := make([]string, len(d.Members))
+	for i, m := range d.Members {
+		parts[i] = fmt.Sprintf("%q", m)
+	}
+	return fmt.Sprintf("{\"kind\": \"enumDecl\", \"name\": %q, \"members\": [%s]}", d.Name, strings.Join(parts, ", "))
+}
+
+func (d *MShellEnumDecl) DebugString() string {
+	return fmt.Sprintf("enum %s = %s end", d.Name, strings.Join(d.Members, " | "))
+}
+
+func (d *MShellEnumDecl) GetStartToken() Token { return d.StartTok }
+func (d *MShellEnumDecl) GetEndToken() Token {
+	if len(d.MemberToks) > 0 {
+		return d.MemberToks[len(d.MemberToks)-1]
+	}
+	return d.NameToken
+}
+
+// ParseEnumDecl handles a top-level enum declaration:
+//
+//	enum Name = m1 | m2 T1 T2 | m3 ... end
+//
+// Each member is a bare identifier (LITERAL) followed by zero or more
+// space-separated payload type expressions; members are separated by `|` and
+// the body is closed by `end`. The `end` terminator is what makes the grammar
+// whitespace-insensitive and unambiguous against the following code: a member's
+// payload list runs until the next `|` or the closing `end`, so a nullary
+// member can be followed by an arbitrary `(...)`/`[...]` statement without it
+// being mistaken for a payload. The ENUM keyword is the current token on entry;
+// on return, parser.curr is positioned past the closing `end`.
+func (parser *MShellParser) ParseEnumDecl() (*MShellEnumDecl, error) {
+	startTok := parser.curr
+	parser.NextToken() // consume ENUM
+	if parser.curr.Type != LITERAL {
+		return nil, fmt.Errorf("%d:%d: expected an enum name after 'enum', got %s",
+			parser.curr.Line, parser.curr.Column, parser.curr.Type)
+	}
+	nameTok := parser.curr
+	parser.NextToken() // consume name
+	if parser.curr.Type != EQUALS {
+		return nil, fmt.Errorf("%d:%d: expected '=' in enum declaration, got %s",
+			parser.curr.Line, parser.curr.Column, parser.curr.Type)
+	}
+	parser.NextToken() // consume =
+
+	// Allow an optional leading `|` so members can be written ML-style, one
+	// per line each prefixed with `|`.
+	if parser.curr.Type == PIPE {
+		parser.NextToken()
+	}
+
+	decl := &MShellEnumDecl{Name: nameTok.Lexeme, NameToken: nameTok, StartTok: startTok}
+	var errs []TypeError
+	for {
+		if parser.curr.Type != LITERAL {
+			return nil, fmt.Errorf("%d:%d: expected an enum member name (an identifier), got %s. An enum is written `enum Name = m1 | m2 T ... end`",
+				parser.curr.Line, parser.curr.Column, parser.curr.Type)
+		}
+		memberTok := parser.curr
+		decl.Members = append(decl.Members, memberTok.Lexeme)
+		decl.MemberToks = append(decl.MemberToks, memberTok)
+		parser.NextToken() // consume member name
+
+		// Payload types run until the next `|`, the closing `end`, or EOF.
+		var payloads []MShellParseItem
+		for parser.curr.Type != PIPE && parser.curr.Type != END && parser.curr.Type != EOF {
+			payloads = append(payloads, parser.parseTypePrimary(&errs))
+		}
+		decl.MemberPayloads = append(decl.MemberPayloads, payloads)
+
+		if parser.curr.Type == PIPE {
+			parser.NextToken() // consume |
+			continue
+		}
+		if parser.curr.Type == END {
+			parser.NextToken() // consume end
+			break
+		}
+		// EOF before `end`.
+		return nil, fmt.Errorf("%d:%d: expected 'end' to close the enum declaration '%s'",
+			parser.curr.Line, parser.curr.Column, decl.Name)
+	}
+	if len(errs) > 0 {
+		return nil, fmt.Errorf("enum declaration body: %s", joinTypeErrs(errs))
+	}
+	return decl, nil
+}
+
 // MShellAsCast is a `<value> as <typeExpr>` postfix cast.
 type MShellAsCast struct {
 	AsToken Token

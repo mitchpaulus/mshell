@@ -1,0 +1,4 @@
+# A name defined twice in one file is rejected by the checker.
+def greet (-- str) "hi" end
+def greet (-- str) "yo" end
+greet wl

@@ -15,7 +15,7 @@ func parseAndCheck(t *testing.T, src string) ([]string, bool) {
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
-	return TypeCheckProgram(file, nil)
+	return TypeCheckProgram(file, nil, nil)
 }
 
 func TestTypeCheckProgramEmpty(t *testing.T) {

@@ -1,0 +1,5 @@
+# An empty match covers no members and has no wildcard, so it can never fire
+# and always crashes at runtime. It must be rejected as non-exhaustive.
+enum Color = red | green | blue end
+
+red match end

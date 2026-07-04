@@ -1,0 +1,5 @@
+# Defining the same name twice is an error: definition lookup is
+# first-match-wins, so the second def would be silently dead code.
+def greet (-- str) "hi" end
+def greet (-- str) "yo" end
+greet wl

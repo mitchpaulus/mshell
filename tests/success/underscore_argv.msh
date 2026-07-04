@@ -1,0 +1,7 @@
+# A lone `_` is the match wildcard, but it remains usable as a bare argv word
+# (the literal string "_") inside a list. The two roles coexist.
+[echo _ arg _] ;
+
+5 match
+    _ : "wild" wl,
+end

@@ -1,0 +1,1 @@
+6:3: enum member 'items' payload bindings must be names, not '['a', 'b']'.

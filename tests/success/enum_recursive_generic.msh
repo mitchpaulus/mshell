@@ -1,0 +1,10 @@
+# Regression: a self-referential enum flowing through a generic parameter
+# triggers the type checker's occurs check. The checker must treat an enum as a
+# leaf when scanning for type variables; otherwise it recurses into the cyclic
+# payload (`node Tree Tree`) forever and overflows the stack.
+enum Tree = leaf int | node Tree Tree end
+
+def ident (q -- q) end
+
+3 leaf ident drop
+"ok" wl

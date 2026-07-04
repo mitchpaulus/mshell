@@ -1,0 +1,17 @@
+# Sorting a list of deeply nested enum values must not overflow: compareValues
+# walks payloads with an explicit work stack, not recursion (mirroring `=`,
+# `toJson`, and `str`). Two 50000-deep trees share their whole prefix and differ
+# only at the tip, so comparing them descends the full depth. A recursive
+# comparator would overflow the stack on values this deep.
+enum Tree = leaf int | node Tree Tree end
+0 leaf a! 0 leaf c! 0 i!
+(
+    @i 50000 >= if break end
+    @a 0 leaf node a!
+    @c 0 leaf node c!
+    @i 1 + i!
+) loop
+@c 0 leaf 99 leaf node node c!
+# Sorting is deterministic regardless of input order, and leaves 2 elements.
+[@c @a] sort len str wl
+[@c @a] sort [@a @c] sort = str wl

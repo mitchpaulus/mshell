@@ -1,0 +1,19 @@
+# An enum payload may reference a user `type` alias (here a shape), in either
+# declaration order. Previously this failed with "unknown type" because enum
+# payloads were resolved before `type` declarations were registered.
+type Person = {name: str, age: int}
+enum Record = person Person | empty end
+
+{ "name": "Ada", "age": 36 } as Person person match
+    person p : @p :name? wl,
+    empty    : "empty" wl,
+end
+
+# Order-independent: enum declared before the type alias it uses.
+enum Cell = num Count | blank end
+type Count = int
+
+5 as Count num match
+    num n : @n str wl,
+    blank : "blank" wl,
+end

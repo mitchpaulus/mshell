@@ -1,0 +1,10 @@
+# Exhaustiveness is enforced through a `type` alias of an enum: matching a
+# branded enum must still cover every member (or use `_`). Here `blue` is
+# missing, so the match is rejected — the brand does not hide the members.
+enum C = red | green | blue end
+type Color2 = C
+
+red as Color2 match
+    red   : "r" wl,
+    green : "g" wl,
+end

@@ -158,6 +158,10 @@ func (w *typeRewriter) mapType(t TypeId, skip map[TypeVarId]struct{}) TypeId {
 			return t
 		}
 		return w.arena.MakeCommand(argv, CommandCaptureMode(n.B), CommandCaptureMode(n.Extra))
+	case TKEnum:
+		// Nominal and ground: identity is the declaration name and payloads
+		// carry no type variables, so there is nothing to rewrite.
+		return t
 	case TKQuote:
 		sig, changed := w.mapSig(w.arena.quoteSigs[n.Extra], skip)
 		if !changed {
@@ -342,6 +346,11 @@ func (a *TypeArena) walkTypeVars(t TypeId, visit func(TypeVarId) bool) bool {
 				return true
 			}
 		}
+	case TKEnum:
+		// Enums are nominal and ground — payloads are resolved without a
+		// generic scope, so they never contain a type variable. Treat the
+		// enum as a leaf; recursing into payloads would loop forever on a
+		// self-referential enum (e.g. `node Tree Tree`).
 	case TKQuote:
 		if a.walkSigVars(a.quoteSigs[n.Extra], visit) {
 			return true

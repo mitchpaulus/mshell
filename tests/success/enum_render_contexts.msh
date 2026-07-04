@@ -1,0 +1,12 @@
+# An enum value renders the same way in every context: standalone, inside a
+# list, and via `map` all use the member form (`red`, `leaf(3)`) with no
+# `EnumName.` prefix. (A dict / toJson still use the JSON-tagged form.)
+enum C = red | green | blue end
+red str wl
+[red green blue] str wl
+[red green blue] (str) map "," join wl
+
+enum T = leaf int | node T T end
+3 leaf str wl
+[ 3 leaf  1 leaf ] str wl
+1 leaf 2 leaf node str wl

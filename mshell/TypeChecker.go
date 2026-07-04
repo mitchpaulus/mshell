@@ -101,6 +101,22 @@ type Checker struct {
 	// type names are NOT stored here — they are recognized directly.
 	typeEnv map[NameId]TypeId
 
+	// enumMemberToks records every registered enum member name (value: the
+	// member's declaration token). Enum constructors and user defs share the
+	// word namespace, and enums register before same-file defs — so def
+	// registration checks this to reject a def whose name collides with a
+	// member, mirroring defineEnum rejecting a member that collides with an
+	// existing def or builtin.
+	enumMemberToks map[NameId]Token
+
+	// defNameToks records every registered definition name (value: the def's
+	// name token). Runtime definition lookup is first-match-wins, so a second
+	// def of a name is silently dead code, not an override; def registration
+	// checks this and rejects the duplicate, mirroring the runtime's
+	// FindDuplicateDefinition. Stdlib/init defs register before file defs,
+	// so a script redefining a stdlib name is caught too.
+	defNameToks map[NameId]Token
+
 	// Quote-body inference state (Phase 7). When inferring is true,
 	// applySig responds to stack underflow by synthesizing fresh type
 	// variables instead of reporting an error; those vars accumulate
@@ -394,7 +410,7 @@ func (c *Checker) checkOne(tok Token) {
 	// values, and it's load-bearing for `[cmd args] ;`-style
 	// pipelines where forcing the user to quote every word
 	// would defeat the point.
-	if c.listDepth > 0 && tok.Type == LITERAL {
+	if c.listDepth > 0 && (tok.Type == LITERAL || tok.Type == UNDERSCORE) {
 		c.stack.Push(TidStr)
 		return
 	}
@@ -958,6 +974,11 @@ func (c *Checker) unify(got, want TypeId) bool {
 	case TKQuote:
 		return c.unifyQuote(gn, wn)
 	case TKOverloadedQuote:
+		return false
+	case TKEnum:
+		// Nominal: two enum types unify only when identical. Equal ids were
+		// already accepted at the top of unify; reaching here means distinct
+		// enums, which never unify.
 		return false
 	case TKGrid, TKGridView, TKGridRow:
 		// Phase-3 grids are opaque. Equality-by-id is the only way two grid

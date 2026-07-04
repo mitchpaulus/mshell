@@ -1,0 +1,25 @@
+# Deeply nested values must render, serialize, and compare without overflowing
+# even when container kinds alternate: rendering/JSON/equality all run on one
+# shared work-stack walker (renderValue / equalsIter) that expands enum, Maybe,
+# list, dict, and pipe inline. Per-type iterative walkers were not enough — an
+# enum→Maybe→enum chain re-entered each type's recursive method and overflowed
+# the Go stack well before this depth.
+enum E = m Maybe[E] | z end
+z e!
+0 i!
+(
+    @i 50000 >= if break end
+    @e just m e!
+    @i 1 + i!
+) loop
+@e str len str wl
+@e toJson len str wl
+z e2!
+0 i!
+(
+    @i 50000 >= if break end
+    @e2 just m e2!
+    @i 1 + i!
+) loop
+@e @e2 = str wl
+@e @e2 just m = str wl

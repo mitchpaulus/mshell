@@ -43,12 +43,18 @@ import (
 // type-checked here — std.msh exercises features (process lists,
 // format strings, dynamic exec) the v1 checker does not yet model,
 // and we trust the runtime tests catch breakage there.
-func TypeCheckProgram(file *MShellFile, stdlibDefs []MShellDefinition) (errors []string, ok bool) {
+//
+// startupItems is the startup files' top-level parse items; their `type`
+// and `enum` declarations are registered (bodies are not checked, matching
+// the def treatment) so the checker sees the same declarations the runtime
+// does.
+func TypeCheckProgram(file *MShellFile, stdlibDefs []MShellDefinition, startupItems []MShellParseItem) (errors []string, ok bool) {
 	arena := NewTypeArena()
 	names := NewNameTable()
 	checker := NewChecker(arena, names)
 
 	checker.RegisterStdlibSigs(stdlibDefs)
+	checker.RegisterStartupTypes(startupItems)
 	checker.CheckProgram(file)
 
 	out := make([]string, 0, len(checker.errors))
@@ -81,6 +87,12 @@ func (c *Checker) RegisterStdlibSigs(defs []MShellDefinition) {
 	for i := range defs {
 		def := &defs[i]
 		nameId := c.names.Intern(def.Name)
+		// Record the name even when the sig registration below is skipped:
+		// the runtime's first-match-wins lookup still resolves to this def,
+		// so a later def of the same name is a duplicate regardless.
+		if c.recordDefName(nameId, def) {
+			continue
+		}
 		if _, exists := c.nameBuiltins[nameId]; exists {
 			continue
 		}
@@ -89,17 +101,82 @@ func (c *Checker) RegisterStdlibSigs(defs []MShellDefinition) {
 	}
 }
 
+// recordDefName registers a definition's name for duplicate detection. If the
+// name is already taken by an earlier definition, it records an error and
+// returns true (mirroring the runtime's FindDuplicateDefinition, where the
+// first definition wins and a duplicate would be silently dead code).
+func (c *Checker) recordDefName(nameId NameId, def *MShellDefinition) bool {
+	if prev, exists := c.defNameToks[nameId]; exists {
+		c.errors = append(c.errors, TypeError{
+			Kind: TErrTypeParse, Pos: def.NameToken,
+			Hint: "duplicate definition '" + def.Name + "'; already defined at " + tokenPosStr(prev),
+		})
+		return true
+	}
+	if c.defNameToks == nil {
+		c.defNameToks = make(map[NameId]Token)
+	}
+	c.defNameToks[nameId] = def.NameToken
+	return false
+}
+
+// RegisterStartupTypes registers the `type` and `enum` declarations found in
+// the startup files' top-level items (the stdlib, then the user init file),
+// so the checked program sees the same declarations the runtime does. It runs
+// the same three-phase order as CheckProgram's own pre-passes — enum names,
+// then type aliases, then enum payload bodies + constructor words — so
+// startup declarations may reference each other in any order. Call after
+// RegisterStdlibSigs (so a member colliding with a startup def is caught) and
+// before CheckProgram (whose def pre-pass catches the reverse collision).
+func (c *Checker) RegisterStartupTypes(items []MShellParseItem) {
+	var enumDecls []*MShellEnumDecl
+	for _, item := range items {
+		if d, ok := item.(*MShellEnumDecl); ok {
+			if c.predeclareEnum(d) {
+				enumDecls = append(enumDecls, d)
+			}
+		}
+	}
+	for _, item := range items {
+		if d, ok := item.(*MShellTypeDecl); ok {
+			body := c.resolveTypeExpr(d.Body, nil)
+			c.DeclareType(d.Name, body)
+		}
+	}
+	for _, d := range enumDecls {
+		c.defineEnum(d)
+	}
+}
+
 // CheckProgram is the file-level type-check pass. It registers all
 // type declarations and user-defined function sigs, then walks the
 // parse tree driving the type stack. Error accumulation lives on the
 // Checker.
 func (c *Checker) CheckProgram(file *MShellFile) {
-	// Pre-pass 1: register all `type` declarations.
+	// Pre-pass 0: predeclare every `enum` name with a placeholder type, so a
+	// `type` body (next) and an enum payload (after that) can reference any
+	// enum by name, in any order.
+	var enumDecls []*MShellEnumDecl
+	for _, item := range file.Items {
+		if d, ok := item.(*MShellEnumDecl); ok {
+			if c.predeclareEnum(d) {
+				enumDecls = append(enumDecls, d)
+			}
+		}
+	}
+	// Pre-pass 1: register all `type` declarations. Enum names are already
+	// available, so a `type` body may reference an enum.
 	for _, item := range file.Items {
 		if d, ok := item.(*MShellTypeDecl); ok {
 			body := c.resolveTypeExpr(d.Body, nil)
 			c.DeclareType(d.Name, body)
 		}
+	}
+	// Pre-pass 1b: resolve enum payload bodies and register constructor words.
+	// Both enum names and `type` aliases are now registered, so a payload may
+	// reference either.
+	for _, d := range enumDecls {
+		c.defineEnum(d)
 	}
 	// Pre-pass 2: register all `def` signatures so call sites (and
 	// recursive self-calls inside def bodies) can resolve them.
@@ -109,6 +186,21 @@ func (c *Checker) CheckProgram(file *MShellFile) {
 		sig := c.ResolveDefSig(def.Inputs, def.Outputs)
 		defSigs[i] = sig
 		nameId := c.names.Intern(def.Name)
+		// Enum constructors share the word namespace and registered in
+		// pre-pass 1b; a def reusing a member name would resolve to the
+		// constructor in the checker but to the def at runtime, so reject it —
+		// the mirror of defineEnum rejecting a member that collides with an
+		// existing def or builtin.
+		if _, isMember := c.enumMemberToks[nameId]; isMember {
+			c.errors = append(c.errors, TypeError{
+				Kind: TErrTypeParse, Pos: def.NameToken,
+				Hint: "definition '" + def.Name + "' conflicts with an enum member of the same name",
+			})
+			continue
+		}
+		if c.recordDefName(nameId, def) {
+			continue
+		}
 		c.nameBuiltins[nameId] = append(c.nameBuiltins[nameId], sig)
 	}
 	// Pre-pass 3: type-check each def body against its declared sig.
@@ -1177,23 +1269,53 @@ func formatPatternItem(it MShellParseItem) string {
 func (c *Checker) checkMatchBlock(matchBlock *MShellParseMatchBlock) {
 	startTok := matchBlock.GetStartToken()
 	if c.stack.Len() == 0 {
-		c.errors = append(c.errors, TypeError{
-			Kind: TErrStackUnderflow,
-			Pos:  startTok,
-			Hint: "match subject",
-		})
-		return
+		if !c.inferring {
+			c.errors = append(c.errors, TypeError{
+				Kind: TErrStackUnderflow,
+				Pos:  startTok,
+				Hint: "match subject",
+			})
+			return
+		}
+		// Quote-body inference: the subject is the quote's own input.
+		// Synthesize a fresh var exactly as applySig's underflow path does —
+		// at the bottom of the stack and the front of inferInputs — so
+		// `(match ... end) map` infers a one-input quote instead of erroring.
+		v := c.subst.FreshVar(c.arena)
+		c.inferInputs = append([]TypeId{v}, c.inferInputs...)
+		c.stack.items = append([]TypeId{v}, c.stack.items...)
 	}
 	// Widen a string-literal subject to `str`: match arms and the
 	// exhaustiveness check compare against `str` by type id, and the literal
 	// value carries no meaning for pattern matching.
 	subject := c.arena.WidenStrLit(c.stack.items[c.stack.Len()-1])
+	// See through a `type X = ...` brand once, here, so every arm form (enum
+	// member, `just`/`<type> name` binding, list/dict pattern) and the
+	// exhaustiveness check match against the underlying type. A brand is
+	// nominal for typing but has no runtime representation, so a branded enum
+	// matches its members, a branded Maybe its `just`/`none`, etc. — exactly
+	// as the unbranded types do, which is what the runtime already does.
+	if resolved := c.subst.Apply(c.arena, subject); c.arena.Node(resolved).Kind == TKBrand {
+		subject = c.underlying(resolved)
+	}
+	// An unresolved subject (a quote input under inference) is pinned from the
+	// first arm pattern that names a type: an enum member determines its enum
+	// (member names are global) and `just`/`none` determine Maybe. Pinning
+	// happens before the entry branch is captured so every arm and the
+	// exhaustiveness check see the resolved subject.
+	if c.arena.Node(c.subst.Apply(c.arena, subject)).Kind == TKVar {
+		if pin, ok := c.matchSubjectPin(matchBlock); ok {
+			c.unify(subject, pin)
+		}
+	}
 	entry := c.captureBranch()
 
 	if len(matchBlock.Arms) == 0 {
-		// Empty match block: no arms could fire. Treat as a no-op.
-		// The runtime would error at first use; the checker keeps
-		// the subject on the stack.
+		// An empty match can never fire — it always errors at runtime. Run
+		// exhaustiveness with no arms so the static check rejects it (no type
+		// is covered and there is no wildcard) instead of letting it crash at
+		// runtime.
+		c.CheckMatchExhaustive(subject, nil, startTok)
 		return
 	}
 
@@ -1242,6 +1364,36 @@ func (c *Checker) checkMatchBlock(matchBlock *MShellParseMatchBlock) {
 	c.reconcileArmBranches(armBranches, armLabels, entry, startTok)
 }
 
+// matchSubjectPin returns the concrete type a match's arm patterns determine
+// for an as-yet-unresolved subject. An enum-member head names its enum (member
+// names are unique across enums), and a `just`/`none` head names Maybe[T] with
+// a fresh T. ok=false when no arm determines a type — value literals and type
+// keywords deliberately do not pin, since a type-keyword match may be
+// discriminating a union and pinning would wrongly narrow the input.
+func (c *Checker) matchSubjectPin(matchBlock *MShellParseMatchBlock) (TypeId, bool) {
+	for _, arm := range matchBlock.Arms {
+		if len(arm.Pattern) == 0 {
+			continue
+		}
+		tok, ok := arm.Pattern[0].(Token)
+		if !ok || tok.Type != LITERAL {
+			continue
+		}
+		if tok.Lexeme == "just" || tok.Lexeme == "none" {
+			return c.arena.MakeMaybe(c.subst.FreshVar(c.arena)), true
+		}
+		mid := c.names.Intern(tok.Lexeme)
+		if _, isMember := c.enumMemberToks[mid]; isMember {
+			// A member's constructor sig has the enum as its only output.
+			sigs := c.nameBuiltins[mid]
+			if len(sigs) > 0 && len(sigs[0].Outputs) == 1 && c.arena.Node(sigs[0].Outputs[0]).Kind == TKEnum {
+				return sigs[0].Outputs[0], true
+			}
+		}
+	}
+	return TidNothing, false
+}
+
 // armPattern is the single interpretation of a match arm pattern. One
 // analysis feeds all four consumers that used to re-pattern-match the
 // arm independently: recognition diagnostics (Recognized), the
@@ -1288,6 +1440,14 @@ func (c *Checker) analyzeArmPattern(subject TypeId, pattern []MShellParseItem) a
 
 func (c *Checker) armPatternOf(subject TypeId, pattern []MShellParseItem) armPattern {
 	out := armPattern{Tag: MatchArmTag{Kind: MatchArmType, TypeArm: TidNothing}}
+
+	// Enum constructor pattern: `member` or `member b1 b2 ...`, when the
+	// subject is an enum and the first token names one of its members. This
+	// can be any length (one token per payload binding), so it is handled
+	// before the length-based switch.
+	if ep, ok := c.enumMemberPattern(subject, pattern); ok {
+		return ep
+	}
 
 	switch len(pattern) {
 	case 1:
@@ -1340,7 +1500,7 @@ func (c *Checker) armPatternOf(subject TypeId, pattern []MShellParseItem) armPat
 	case 2:
 		t0, ok0 := pattern[0].(Token)
 		t1, ok1 := pattern[1].(Token)
-		if !ok0 || !ok1 || t1.Type != LITERAL {
+		if !ok0 || !ok1 || (t1.Type != LITERAL && t1.Type != UNDERSCORE) {
 			return out
 		}
 		if t0.Type == LITERAL && t0.Lexeme == "just" {
@@ -1379,6 +1539,69 @@ func (c *Checker) armPatternOf(subject TypeId, pattern []MShellParseItem) armPat
 	return out
 }
 
+// enumMemberPattern recognizes an enum constructor arm: `member` (nullary) or
+// `member b1 b2 ...` (one binding name per payload). It returns ok=false when
+// the subject is not an enum or the first token is not one of its members, so
+// the caller falls back to the ordinary pattern forms. A payload-arity mismatch
+// is recognized (so no "invalid pattern" cascade) but reported.
+func (c *Checker) enumMemberPattern(subject TypeId, pattern []MShellParseItem) (armPattern, bool) {
+	if len(pattern) == 0 {
+		return armPattern{}, false
+	}
+	tok, ok := pattern[0].(Token)
+	if !ok || tok.Type != LITERAL {
+		return armPattern{}, false
+	}
+	// The subject is already brand-unwrapped by checkMatchBlock, so a branded
+	// enum (`type X = Enum`) arrives here as its underlying TKEnum.
+	resolved := c.subst.Apply(c.arena, subject)
+	sn := c.arena.Node(resolved)
+	if sn.Kind != TKEnum {
+		return armPattern{}, false
+	}
+	memberId := c.names.Intern(tok.Lexeme)
+	var payload []TypeId
+	found := false
+	for _, v := range c.arena.enumVariants[sn.Extra] {
+		if v.Name == memberId {
+			payload = v.Payload
+			found = true
+			break
+		}
+	}
+	if !found {
+		return armPattern{}, false
+	}
+	out := armPattern{
+		Recognized: true,
+		Tag:        MatchArmTag{Kind: MatchArmEnumMember, TypeArm: resolved, EnumMember: memberId},
+	}
+	binds := pattern[1:]
+	if len(binds) != len(payload) {
+		c.errors = append(c.errors, TypeError{
+			Kind: TErrInvalidMatchPattern,
+			Pos:  tok,
+			Hint: fmt.Sprintf("enum member '%s' binds %d payload value(s), got %d", tok.Lexeme, len(payload), len(binds)),
+		})
+		return out, true
+	}
+	for i, b := range binds {
+		bt, ok := b.(Token)
+		if !ok || (bt.Type != LITERAL && bt.Type != UNDERSCORE) {
+			c.errors = append(c.errors, TypeError{
+				Kind: TErrInvalidMatchPattern,
+				Pos:  tok,
+				Hint: "enum payload bindings must be names",
+			})
+			return out, true
+		}
+		if bt.Lexeme != "_" {
+			out.Bindings = append(out.Bindings, patternBind{bt.Lexeme, payload[i]})
+		}
+	}
+	return out, true
+}
+
 // analyzeTokenPattern handles the single-token pattern forms: type
 // keywords, value literals, `_`, `none`, and user-declared type names.
 func (c *Checker) analyzeTokenPattern(tok Token, out *armPattern) {
@@ -1404,6 +1627,9 @@ func (c *Checker) analyzeTokenPattern(tok Token, out *armPattern) {
 	case INTEGER, FLOAT, STRING, SINGLEQUOTESTRING, PATH:
 		// Value literals: legal patterns, but they credit no coverage.
 		out.Recognized = true
+	case UNDERSCORE:
+		out.Recognized = true
+		out.Tag = MatchArmTag{Kind: MatchArmWildcard}
 	case LITERAL:
 		switch tok.Lexeme {
 		case "_":

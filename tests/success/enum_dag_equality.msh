@@ -1,0 +1,72 @@
+# Equality and ordering on enum values with shared substructure must not blow
+# up: `@t @t node` reuses one subtree twice per level, so after 64 levels the
+# value is a DAG with 65 nodes but 2^64 tree paths. The comparison walks skip
+# pointer-identical pairs (and, past a step threshold, memoize already-expanded
+# pairs), so these finish instantly; a naive structural walk would run for
+# centuries.
+enum T = leaf int | node T T end
+
+# One DAG, compared against itself / its own reference.
+0 leaf t!
+0 i!
+( @i 64 >= if break end  @t @t node t!  @i 1 + i! ) loop
+@t @t = str wl
+@t dup = str wl
+[ @t @t ] uniq len str wl
+[ @t @t ] sort len str wl
+
+# Two DAGs built independently: no pointers are shared across the operands, so
+# the pointer fast path never fires — this exercises the memoized mode.
+0 leaf a!
+0 i!
+( @i 64 >= if break end  @a @a node a!  @i 1 + i! ) loop
+0 leaf b!
+0 i!
+( @i 64 >= if break end  @b @b node b!  @i 1 + i! ) loop
+@a @b = str wl
+
+# A third DAG differing at the bottom leaf: unequal, found without blowup.
+1 leaf c!
+0 i!
+( @i 64 >= if break end  @c @c node c!  @i 1 + i! ) loop
+@a @c = str wl
+[ @a @c @b ] sort len str wl
+[ @a @c @b ] uniq len str wl
+
+# Past the dagGuard memo cap (2^18): self-doubling pairs are deduplicated at
+# push time, so independent DAGs deeper than the cap stay linear — a bounded
+# memo alone cannot cover a pending-duplicate working set larger than itself.
+0 leaf p! 0 leaf q! 0 i!
+(
+    @i 300000 >= if break end
+    @p @p node p!
+    @q @q node q!
+    @i 1 + i!
+) loop
+@p @q = str wl
+
+# Dict-shaped self-doubling past the cap: the dict arms dedupe consecutive
+# identical value pairs the same way (an enum with a dict payload closes the
+# same doubling structure through {str: E}).
+enum D = md {str: D} | zd end
+zd u! zd v! 0 i!
+(
+    @i 300000 >= if break end
+    { "l": @u, "r": @u } md u!
+    { "l": @v, "r": @v } md v!
+    @i 1 + i!
+) loop
+@u @v = str wl
+
+# Class closure: a NON-consecutive alternating sharing pattern ([x y x] per
+# level) defeats push-time dedup entirely and, past any bounded memo, every
+# such pattern re-explodes — so the pair memo is unbounded. Any sharing
+# pattern, any container mix, any depth is polynomial in actual nodes.
+[0] xa! [1] ya! [0] xb! [1] yb! 0 i!
+(
+    @i 300000 >= if break end
+    [ @xa @ya @xa ] t!  [ @ya @xa @ya ] ya!  @t xa!
+    [ @xb @yb @xb ] t!  [ @yb @xb @yb ] yb!  @t xb!
+    @i 1 + i!
+) loop
+@xa @xb = str wl

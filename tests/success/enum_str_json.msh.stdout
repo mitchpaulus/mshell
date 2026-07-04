@@ -1,0 +1,7 @@
+ok(hi)
+failed(404 nf)
+timeout
+{"ok": "hi"}
+{"failed": [404, "nf"]}
+"timeout"
+node(node(leaf(1) leaf(2)) leaf(3))

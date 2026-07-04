@@ -1,0 +1,4 @@
+# Redefining a name already defined by the standard library is rejected:
+# lookup is first-match-wins, so this def could never take effect.
+def id (q -- q) end
+3 id drop
