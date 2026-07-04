@@ -163,11 +163,14 @@
 
   <div class="doc-header">
     <h1>Enums &amp; Generative Types</h1>
-    <p class="status"><strong>Status:</strong> design exploration / not implemented. Records the decision to
+    <p class="status"><strong>Status:</strong> implemented (V1). Records the decision to
       add a single <strong>generative tagged sum type</strong> (declared with <code>enum</code>), the
       reasoning that got there (the structural-vs-generative distinction and the Haskell / Rust / TypeScript
-      prior art), the chosen surface syntax, and a sketch of representation, ergonomic sugar, and open
-      questions. For review.</p>
+      prior art), and the shipped surface syntax. The core shipped as designed: payload-carrying members,
+      recursive references, exhaustive <code>match</code> with payload binding, structural
+      equality/ordering/JSON. §8 records where the shipped name-resolution rule replaced this doc's draft,
+      §10 marks each sugar tier's status (A is the shipped base form; B&ndash;F remain future work), and
+      §12 records how each open question resolved.</p>
   </div>
 
   <p class="lead">The motivating request was <code>type ConfigOption = "string1" | "string2"</code>. Working
@@ -198,7 +201,7 @@
       <tr><td>Surface <code>type Name = &lt;expr&gt;</code>, <code>|</code> unions, <code>as</code> casts</td><td class="yes">have</td><td><code>TypeExpr.go</code>, <code>TypeParseIntegration.go</code></td></tr>
       <tr><td>One <em>generative</em> tagged sum type: <code>Maybe[t] = just t | none</code></td><td class="yes">have</td><td><code>MShellObject.go:172</code>; <code>just</code>/<code>none</code></td></tr>
       <tr><td>Match with constructor destructuring + exhaustiveness</td><td class="yes">have</td><td><code>TypeBranch.go</code>; <code>match</code></td></tr>
-      <tr><td>A declaration that introduces <strong>new constructors</strong></td><td class="no">missing</td><td>&mdash; (this proposal)</td></tr>
+      <tr><td>A declaration that introduces <strong>new constructors</strong></td><td class="yes">have</td><td><code>enum</code> &mdash; <code>TypeEnum.go</code>, <code>MShellEnum</code> in <code>MShellObject.go</code></td></tr>
     </tbody>
   </table>
 
@@ -274,9 +277,10 @@
   <h2>5. Decision</h2>
   <p>Add a single <strong>generative tagged sum type</strong> declaration. Keep <code>type</code> exactly as
     it is (the transparent / branded structural form). The colloquial "enum of constants" is the all-nullary
-    special case of the one mechanism &mdash; not a second concept. This subsumes <code>Maybe</code> (which
-    becomes "the built-in <code>enum Maybe[t] = just t | none</code>") and unlocks "make illegal states
-    unrepresentable" for command results, parse results, and JSON.</p>
+    special case of the one mechanism &mdash; not a second concept. This conceptually subsumes <code>Maybe</code>
+    ("the built-in <code>enum Maybe[t] = just t | none</code>"; it stays a distinct built-in until enums
+    grow type parameters &mdash; see §10.E) and unlocks "make illegal states unrepresentable" for command
+    results, parse results, and JSON.</p>
 
   <h2>6. Syntax</h2>
 
@@ -299,7 +303,7 @@
     terminator <code>def</code>, <code>if</code>, <code>match</code>, and <code>loop</code> already use. A
     nullary member is just a bare name.</p>
 
-  <pre><code>enum Mode   = read | write | readwrite end
+  <pre><code>enum Mode   = readonly | writeonly | readwrite end
 enum Shape  = circle float | rect float float | point end
 enum CmdResult = ok str | failed int str | timeout end</code></pre>
 
@@ -317,8 +321,10 @@ enum CmdResult = ok str | failed int str | timeout end</code></pre>
   <p>Grammar:</p>
   <ul>
     <li><code>enum</code> <code>Name</code> <code>=</code> arm (<code>|</code> arm)* <code>end</code></li>
-    <li>arm ::= constructorName typePrimary* &nbsp; (the constructor name is a bare identifier; each payload
-      is a type primary, so a union payload must be named via a <code>type</code> alias)</li>
+    <li>arm ::= constructorName typePrimary* &nbsp; (the constructor name is a bare identifier &mdash; not a
+      language keyword such as <code>read</code> or <code>str</code>, and not a name already taken by a
+      <code>def</code> or another enum's member, see §8; each payload is a type primary, so a union payload
+      must be named via a <code>type</code> alias)</li>
   </ul>
   <p>The only new wrinkle vs. a structural union is that an arm's <strong>first token is a binding
     occurrence</strong> (a constructor being declared) rather than a reference to an existing type. The
@@ -355,21 +361,27 @@ end</code></pre>
   <p>The payoff: add a fourth constructor later and <em>every</em> <code>match</code> that forgot it becomes a
     compile error.</p>
 
-  <h2>8. Namespacing, not case</h2>
+  <h2>8. Unique member names, not case, not namespacing</h2>
   <p>Capitalization is deliberately given no meaning anywhere. The one job case used to do &mdash; telling a
-    bare constructor apart from a bare variable / <code>def</code> &mdash; is handled by
-    <strong>namespacing plus checker context</strong>, the same way <code>just</code>/<code>none</code> and
-    branded unions already resolve:</p>
+    bare constructor apart from a bare variable / <code>def</code> &mdash; had a draft answer here
+    (a qualified <code>CmdResult.ok</code> form plus checker-context resolution). <strong>What shipped is
+    simpler and stricter: collisions are declaration errors, so a bare member name is always
+    unambiguous</strong> and no qualified form exists:</p>
   <ul>
-    <li>A <strong>qualified</strong> form <code>CmdResult.ok</code> is always available and unambiguous.</li>
-    <li>The <strong>bare</strong> form <code>ok</code> is allowed when the checker can infer the expected enum
-      type from context &mdash; the <code>match</code> subject, a signature slot, or an <code>as</code>. This
-      is the deferred-to-checker disambiguation already flagged for branded unions in
-      <code>ai/type_checker.md</code>.</li>
-    <li>A nullary constructor (e.g. <code>timeout</code>) that would collide with a <code>def</code> of the
-      same name resolves to the <code>def</code> unless context expects the enum; write
-      <code>CmdResult.timeout</code> to force the constructor.</li>
+    <li><strong>Member names are unique across all enums.</strong> Declaring a member another enum already
+      uses is a static error, so a bare <code>ok</code> identifies its enum by itself.</li>
+    <li><strong>Members and <code>def</code>s share the word namespace, and a collision in either direction
+      is an error</strong>: an enum member may not reuse an existing <code>def</code>/builtin name, and a
+      <code>def</code> may not reuse a member name. (The same rule applies between <code>def</code>s
+      themselves &mdash; a duplicate definition name is an error, since lookup is first-match-wins and a
+      duplicate would be silently dead code.)</li>
+    <li><strong>Member names may not be language keywords</strong> (<code>read</code>, <code>str</code>,
+      <code>type</code>, &hellip;), and a lone <code>_</code> is reserved as the <code>match</code>
+      wildcard.</li>
   </ul>
+  <p><code>match</code> arms need no qualification either: the checker identifies the subject's enum from
+    the member names in the arms, including when the <code>match</code> is the body of an inferred
+    quotation (<code>(match &hellip; end) map</code>).</p>
 
   <h2>9. Representation &amp; implementation sketch</h2>
   <ol>
@@ -390,21 +402,27 @@ end</code></pre>
       <code>just v</code> path (<code>TypeCheckProgram.go:1348</code>).</li>
     <li><strong>Forward / recursive types</strong> work via the existing top-level pre-pass that reserves
       placeholder <code>TypeId</code>s for <code>type</code> headers (extend it to <code>enum</code>):
-      <code>enum Json = jnull | jbool bool | jnum float | jstr str | jarr [Json] | jobj {str: Json}</code>.</li>
-    <li><strong>Serialization.</strong> Payload variants have no canonical string form, so JSON/argv I/O needs
-      explicit encode/decode (serde-style). The all-nullary case is special-cased &mdash; see §10.B.</li>
+      <code>enum Json = jnull | jbool bool | jnum float | jstr str | jarr [Json] | jobj {str: Json} end</code>.</li>
+    <li><strong>Serialization (as shipped).</strong> <code>str</code> renders <code>member</code> /
+      <code>member(p0 p1 ...)</code>; <code>toJson</code> uses serde's externally-tagged convention (a
+      nullary member is the bare member string, one payload is <code>{"member": value}</code>, several are
+      <code>{"member": [v0, v1, ...]}</code>); equality is structural and total; <code>sort</code> orders
+      members by declaration order (a stored member index), so <code>low | medium | high</code> sorts as
+      the author intended. Parsing JSON/argv strings <em>back into</em> an enum still needs an explicit
+      decode word &mdash; see §10.B and §11.</li>
   </ol>
 
   <h2>10. Conciseness sugar for common cases</h2>
-  <p>Ranked by value-for-effort. Tiers A&ndash;C are cheap and high-value; D&ndash;F are speculative until
-    usage demands them.</p>
+  <p>Ranked by value-for-effort. <strong>Status: A is the shipped base form, and the payload half of C
+    (a shape as a payload type) shipped for free; B, C's destructuring sugar, and D&ndash;F remain future
+    work</strong> &mdash; recorded here as designed so they can land without re-deciding.</p>
 
-  <h3>A. The nullary one-liner (already the base form)</h3>
-  <pre><code>enum Env   = dev | staging | prod
-enum Level = debug | info | warn | error</code></pre>
+  <h3>A. The nullary one-liner (already the base form) &mdash; shipped</h3>
+  <pre><code>enum Env   = dev | staging | prod end
+enum Level = debug | info | warn | error end</code></pre>
   <p>This is the everyday "configuration option" case, and it is already as terse as it can be.</p>
 
-  <h3>B. Auto string backing + derived <code>decode</code> / <code>encode</code> / <code>values</code></h3>
+  <h3>B. Auto string backing + derived <code>decode</code> / <code>encode</code> / <code>values</code> &mdash; future</h3>
   <p>For an all-nullary enum, auto-back each constructor by its name and derive three functions, since config
     crosses a string boundary. Override the backing with <code>=</code> when the wire format differs:</p>
   <pre><code>enum Method = get = "GET" | post = "POST" | put = "PUT"
@@ -445,8 +463,11 @@ end</code></pre>
     bare-literal coercion is explicitly <strong>not</strong> a goal &mdash; it would be mshell's first
     implicit coercion and would leak the wire format into program logic.</p>
 
-  <h3>C. Shape payloads &rarr; free named destructuring</h3>
-  <p>Let a variant's payload be a shape; this reuses <code>TKShape</code> and the existing
+  <h3>C. Shape payloads &rarr; free named destructuring &mdash; half shipped</h3>
+  <p><strong>Shipped:</strong> a payload may already be any type expression, including a shape &mdash;
+    <code>enum Event = click {"x": int} | close end</code> works today, with a match arm binding the whole
+    dict (<code>click d : @d :x? &hellip;</code>). <strong>Future:</strong> the sugar below, destructuring
+    the shape into named bindings in the pattern itself; it reuses <code>TKShape</code> and the existing
     <code>{ 'k': name }</code> dict-pattern matcher (including optional <code>?:</code> fields) for both
     construction and destructuring:</p>
   <pre><code>enum Event = click {x: int, y: int} | key {code: int, shift?: bool} | close
@@ -457,15 +478,17 @@ ev match
     close              : "bye" wl,
 end</code></pre>
 
-  <h3>D. Combined arms (<code>|</code>) for fan-in</h3>
+  <h3>D. Combined arms (<code>|</code>) for fan-in &mdash; future</h3>
   <pre><code>status match
     pending | running : "in progress" wl,
     done              : "complete" wl,
     failed e          : @e wl,
 end</code></pre>
 
-  <h3>E. Generic enums subsume the built-ins</h3>
-  <pre><code>enum Result[t, e] = ok t | err e
+  <h3>E. Generic enums subsume the built-ins &mdash; future</h3>
+  <p>Enums are not yet generic: a recursive payload (<code>node Tree Tree</code>) works, type parameters do
+    not, so <code>Maybe</code> remains the built-in instance rather than being literally subsumed.</p>
+  <pre><code>enum Result[t, e] = ok t | err e end
 # and Maybe[t] = just t | none is simply built in</code></pre>
 
   <h3>F. <code>?</code>-style propagation (speculative)</h3>
@@ -474,44 +497,62 @@ end</code></pre>
     <code>@x parseInt match just v : @v, none : return end</code> to something like <code>@x parseInt!?</code>.
     Defer until <code>Result</code> is idiomatic.</p>
 
-  <h2>11. End-to-end example</h2>
-  <pre><code>enum Mode = read | write | readwrite = "rw"
+  <h2>11. End-to-end example (as shipped)</h2>
+  <p>The wire boundary is an explicit <code>match</code> on the string; §10.B's derived
+    <code>Mode.decode</code> / <code>Mode.values</code> would replace <code>parseMode</code> if backing
+    ever lands:</p>
+  <pre><code>enum Mode = readonly | writeonly | readwrite end
+
+def parseMode (str -- Maybe[Mode])
+    match
+        "ro" : readonly just,
+        "wo" : writeonly just,
+        "rw" : readwrite just,
+        _    : none,
+    end
+end
 
 def openFile (path Mode -- Handle)
     mode!
     @mode match
-        read      : @path openRead,
-        write     : @path openWrite,
+        readonly  : @path openRead,
+        writeonly : @path openWrite,
         readwrite : @path openRW,
     end
 end
 
 # at the boundary: a string from argv, validated exactly once
-$1 Mode.decode match
+$1 parseMode match
     just m : somePath @m openFile use,
-    none   : $"--mode must be one of {Mode.values}" wl 1 exit,
+    none   : "--mode must be one of ro, wo, rw" wl 1 exit,
 end</code></pre>
   <p>The checker guarantees <code>openFile</code> handles every mode, that no unvalidated string reaches it,
-    and that adding a <code>append</code> constructor breaks the build at <code>openFile</code> until it is
+    and that adding an <code>append</code> constructor breaks the build at <code>openFile</code> until it is
     handled.</p>
 
-  <h2>12. Open questions</h2>
+  <h2>12. Open questions &mdash; as resolved</h2>
   <ul>
-    <li><strong>Backing types &amp; defaults:</strong> auto-back nullary enums by constructor name verbatim,
-      or lowercased? Allow <code>int</code> backings as well as <code>str</code>?</li>
-    <li><strong>Ergonomics &mdash; decided (V1):</strong> a value is produced only by a constructor or
-      <code>decode</code>; a bare backing literal does <em>not</em> stand in for a member and
-      <code>str as Method</code> is rejected (see §10.B). A checked <code>as</code> remains a clean,
+    <li><strong>Backing types &amp; defaults &mdash; still open:</strong> auto-back nullary enums by
+      constructor name verbatim, or lowercased? Allow <code>int</code> backings as well as
+      <code>str</code>? Deferred with the rest of §10.B; nothing shipped constrains the answer.</li>
+    <li><strong>Ergonomics &mdash; decided (V1), holds as shipped:</strong> a value is produced only by a
+      constructor (or a hand-written parse word returning <code>Maybe</code>, as in §11; §10.B's derived
+      <code>decode</code> would join them). A bare backing literal does <em>not</em> stand in for a member
+      and <code>str as Method</code> is rejected (see §10.B). A checked <code>as</code> remains a clean,
       additive follow-on gated on literal types; implicit coercion is ruled out.</li>
-    <li><strong>Constructor namespace collisions:</strong> confirm the "bare resolves to <code>def</code>
-      unless context expects the enum; qualified forces the constructor" rule (§8) is the one we want.</li>
-    <li><strong>Match-form ambiguity</strong> (already a noted risk in <code>ai/type_checker.md</code>): the
-      parser must not commit constructor-pattern vs. type-pattern vs. <code>Maybe</code>-pattern; defer to the
-      checker, which knows the static subject type.</li>
-    <li><strong>Sequencing:</strong> ship nullary + backed enums first (covers config, low runtime cost), then
-      add payload variants? Both are the same declaration form, so this is a staging choice, not a fork.</li>
-    <li><strong>Reserved word:</strong> adding <code>enum</code> as a keyword &mdash; audit for existing user
-      identifiers / completions.</li>
+    <li><strong>Constructor namespace collisions &mdash; resolved, differently than §8's draft:</strong>
+      member names are globally unique and member/<code>def</code> collisions are declaration errors in
+      both directions; there is no qualified form and bare names are always unambiguous (§8).</li>
+    <li><strong>Match-form ambiguity &mdash; resolved as designed:</strong> the parser stays uncommitted;
+      the checker discriminates constructor-pattern vs. type-pattern vs. <code>Maybe</code>-pattern by the
+      subject's static type, inferring the subject even when the <code>match</code> is an inferred
+      quotation's body. A bare enum <em>type</em> name is a valid arm for an enum inside a
+      <code>type</code> union.</li>
+    <li><strong>Sequencing &mdash; resolved:</strong> nullary and payload variants shipped together (one
+      declaration form); backed enums remain future work.</li>
+    <li><strong>Reserved word &mdash; done:</strong> <code>enum</code> is a lexer keyword, covered in the
+      docs highlighter and the Sublime / VS Code grammars; a lone <code>_</code> is reserved as the
+      <code>match</code> wildcard at the same time.</li>
   </ul>
 
   <hr>
