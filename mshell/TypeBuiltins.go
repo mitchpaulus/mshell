@@ -536,7 +536,8 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 	r.reg("parseLinkHeader", "(str -- [{v}])")
 	r.reg("parseHtml", "(str | path -- {v})")
 	// httpGet / httpPost: the request dict requires a stringable `url`
-	// plus optional `timeout` (int), `headers` ({str: str}), and `body`
+	// plus optional `timeout` (int), `followRedirects` (bool), `headers`
+	// ({str: str}), and `body`
 	// (stringable, used by httpPost). Optional shape fields let the checker
 	// require `url` and type-check the rest when present; width subtyping
 	// still tolerates extra keys the runtime ignores.
@@ -546,8 +547,9 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 	// `:body?` etc. resolve their value types without fresh vars.
 	// `url` is a required string. `body` and header values are passed through
 	// CastString at runtime, which succeeds for str/int/path ("stringable");
-	// `timeout` must be a plain int. Everything but `url` is optional.
-	httpReq := "{url: str, timeout?: int, headers?: {str: str | int | path}, body?: str | int | path}"
+	// `timeout` must be a plain int and `followRedirects` a plain bool.
+	// Everything but `url` is optional.
+	httpReq := "{url: str, timeout?: int, followRedirects?: bool, headers?: {str: str | int | path}, body?: str | int | path}"
 	for _, name := range []string{"httpGet", "httpPost"} {
 		r.reg(name, "("+httpReq+" -- Maybe[{status: int, reason: str, headers: {[str]}, body: bytes}])")
 	}

@@ -216,6 +216,18 @@ func TestHttpGetUrlOnlyAccepted(t *testing.T) {
 	}
 }
 
+func TestHttpGetFollowRedirectsBoolAccepted(t *testing.T) {
+	if n := fatalErrorCount(allCheckerErrors(t, `{ "url": "https://example.com", "followRedirects": false } httpGet drop`)); n != 0 {
+		t.Fatalf("httpGet with a bool `followRedirects` should type-check; got %d", n)
+	}
+}
+
+func TestHttpGetFollowRedirectsNonBoolRejected(t *testing.T) {
+	if n := fatalErrorCount(allCheckerErrors(t, `{ "url": "https://example.com", "followRedirects": 1 } httpGet drop`)); n == 0 {
+		t.Fatal("httpGet with a non-bool `followRedirects` must be rejected")
+	}
+}
+
 // A string literal key to `get` resolves the shape field just like the
 // `:name` getter: `"body" get?` yields the response body's `bytes`, which
 // writeFile accepts — it must NOT collapse the shape to the union of all

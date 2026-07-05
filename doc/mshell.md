@@ -1381,6 +1381,9 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
 
   - `url`: Full URL, including all the query parameters (required, string)
   - `timeout`: Request timeout in seconds (optional, positive integer; default 30)
+  - `followRedirects`: Whether to follow redirects (optional, bool; default `true`).
+    Set to `false` to get the first response back as-is,
+    e.g. to inspect the `Location` or `Set-Cookie` headers of a `3xx` response after a login POST.
   - `headers`: A dictionary of key-value pairs for the request headers (optional)
 
   Returns a Maybe wrapping a response dictionary.

@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Optional `followRedirects` key (bool, default `true`) on the `httpGet` /
+  `httpPost` request dictionary. Set it to `false` to get the first response
+  back as-is instead of following redirects, e.g. to inspect the `Location` or
+  `Set-Cookie` headers of a `3xx` response after a login POST.
 - Octal, hexadecimal, and binary integer literals via `0o`, `0x`, and `0b`
   prefixes (case-insensitive), e.g. `0o644`, `0xFF`, `0b101`. The base is purely
   a way of writing the literal; the value is an ordinary integer and prints in

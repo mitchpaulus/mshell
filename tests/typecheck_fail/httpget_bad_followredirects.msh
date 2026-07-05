@@ -1,0 +1,3 @@
+# `followRedirects` is typed as a bool; a request dict with a non-bool value
+# must be rejected.
+{ "url": "https://example.com", "followRedirects": 1 } httpGet drop
