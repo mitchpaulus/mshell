@@ -10812,6 +10812,21 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						client.Timeout = time.Duration(timeoutInt.Value) * time.Second
 					}
 
+					// Check for optional 'followRedirects' (default true).
+					followValue, ok := dict.Items["followRedirects"]
+					if ok {
+						followBool, ok := followValue.(MShellBool)
+						if !ok {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: The 'followRedirects' value in '%s' must be a bool, found a %s (%s)\n", t.Line, t.Column, t.Lexeme, followValue.TypeName(), followValue.DebugString()))
+						}
+
+						if !followBool.Value {
+							client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+								return http.ErrUseLastResponse
+							}
+						}
+					}
+
 					// Create request
 					var method string
 					switch t.Lexeme {
