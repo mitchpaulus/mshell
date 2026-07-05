@@ -287,7 +287,7 @@ which takes the variable name as a string.
 Unsetting a variable that does not exist is not an error.
 
 ```mshell
-@HOME cd
+$HOME cd
 
 # Setting and exporting for subprocesses
 "Hello, World!" $MSHELL_VAR!
