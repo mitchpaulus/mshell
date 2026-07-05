@@ -888,6 +888,18 @@ if the subject equals the pattern value.
 end wl # Output: greeting
 ```
 
+An arm may list several literals in a row; it matches if the subject equals any of them (OR).
+All alternatives in one arm must be the same literal kind: all strings, all integers, or all paths.
+Floats, booleans, and other pattern forms are not allowed as OR alternatives.
+
+```mshell
+arg match
+    '-h' '--help'    : help,
+    '-v' '--version' : version,
+    _                : unknownArg,
+end
+```
+
 Use `:>` when the arm body needs the matched subject, for example when matching
 on type before sending the value through another function:
 

@@ -1164,7 +1164,7 @@ func (state *EvalState) matchPattern(pattern []MShellParseItem, subject MShellOb
 	}
 
 	if len(pattern) != 1 {
-		return false, nil, state.FailWithMessage(fmt.Sprintf("%d:%d: Match arm pattern must be a single item, 'just <name>', or '<type> <name>'. %s\n", startToken.Line, startToken.Column, matchPatternFormsHint))
+		return false, nil, state.FailWithMessage(fmt.Sprintf("%d:%d: Match arm pattern must be a single item, 'just <name>', '<type> <name>', or multiple same-kind literals (OR). %s\n", startToken.Line, startToken.Column, matchPatternFormsHint))
 	}
 
 	patternItem := pattern[0]
@@ -1173,6 +1173,18 @@ func (state *EvalState) matchPattern(pattern []MShellParseItem, subject MShellOb
 	case Token:
 		matched, result := state.matchTokenPattern(p, subject)
 		return matched, nil, result
+	case *MShellParseOrPattern:
+		// OR alternatives: match if the subject equals any literal.
+		for _, tok := range p.Tokens {
+			matched, result := state.matchTokenPattern(tok, subject)
+			if !result.Success {
+				return false, nil, result
+			}
+			if matched {
+				return true, nil, SimpleSuccess()
+			}
+		}
+		return false, nil, SimpleSuccess()
 	case *MShellParseList:
 		return state.matchListPattern(p, subject)
 	case *MShellParseDict:

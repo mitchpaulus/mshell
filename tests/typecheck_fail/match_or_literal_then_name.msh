@@ -1,0 +1,5 @@
+# A value literal cannot be followed by a binding name
+"str1" match
+    "str1" a : @a wl,
+    _        : "no" wl,
+end
