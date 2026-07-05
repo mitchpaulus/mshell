@@ -888,9 +888,9 @@ if the subject equals the pattern value.
 end wl # Output: greeting
 ```
 
-An arm may list several literals in a row; it matches if the subject equals any of them (OR).
-All alternatives in one arm must be the same literal kind: all strings, all integers, or all paths.
-Floats, booleans, and other pattern forms are not allowed as OR alternatives.
+An arm may list several strings, integers, or paths in a row; it matches if the subject equals any of them.
+All alternatives in one arm must be the same kind: all strings, all integers, or all paths.
+Other types are not allowed. For strings, they must be quoted, they cannot be literals.
 
 ```mshell
 arg match
