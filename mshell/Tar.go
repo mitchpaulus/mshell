@@ -266,8 +266,16 @@ func addDirectoryToTar(tw *tar.Writer, sourcePath, archivePrefix string, modeOve
 // Regular files, directories, and symlinks are supported; symlinks are stored
 // as symlinks (preserving the target) rather than being dereferenced.
 func addFileToTar(tw *tar.Writer, sourcePath, entryName string, info os.FileInfo, modeOverride *os.FileMode) error {
+	// Reject anything that is not a regular file, directory, or symlink before
+	// writing a header, so we never emit a partial entry and never os.Open a
+	// fifo/device/socket (which could block indefinitely).
+	isSymlink := info.Mode()&os.ModeSymlink != 0
+	if !info.IsDir() && !info.Mode().IsRegular() && !isSymlink {
+		return fmt.Errorf("tarPack cannot archive %s: unsupported file type", sourcePath)
+	}
+
 	linkTarget := ""
-	if info.Mode()&os.ModeSymlink != 0 {
+	if isSymlink {
 		target, err := os.Readlink(sourcePath)
 		if err != nil {
 			return fmt.Errorf("Error reading symlink %s: %w", sourcePath, err)
@@ -291,11 +299,8 @@ func addFileToTar(tw *tar.Writer, sourcePath, entryName string, info os.FileInfo
 		return err
 	}
 
-	if info.Mode()&os.ModeSymlink != 0 || info.IsDir() {
+	if isSymlink || info.IsDir() {
 		return nil
-	}
-	if !info.Mode().IsRegular() {
-		return fmt.Errorf("tarPack cannot archive %s: unsupported file type", sourcePath)
 	}
 
 	file, err := os.Open(sourcePath)
@@ -376,6 +381,7 @@ func extractTarArchive(tarPath, destDir string, options zipExtractOptions) error
 		return fmt.Errorf("Error creating destination %s: %w", absDest, err)
 	}
 	baseWithSep := ensureTrailingSeparator(absDest)
+	budget := newByteBudget(options.maxBytes)
 
 	for {
 		header, err := reader.Next()
@@ -415,7 +421,7 @@ func extractTarArchive(tarPath, destDir string, options zipExtractOptions) error
 			return err
 		}
 
-		if err := writeTarEntryToDisk(reader, header, target, options.zipWriteOptions, true, absDest, baseWithSep); err != nil {
+		if err := writeTarEntryToDisk(reader, header, target, options.zipWriteOptions, true, absDest, baseWithSep, budget); err != nil {
 			return err
 		}
 	}
@@ -448,6 +454,7 @@ func extractTarEntry(tarPath, entryPath, destPath string, options zipExtractEntr
 	fileFound := false
 	dirCreated := false
 	baseWithSep := ""
+	budget := newByteBudget(options.maxBytes)
 
 	for {
 		header, err := reader.Next()
@@ -462,7 +469,7 @@ func extractTarEntry(tarPath, entryPath, destPath string, options zipExtractEntr
 
 		if name == targetName && !header.FileInfo().IsDir() {
 			// Single file entry: dest is the file path.
-			if err := extractTarSingleFile(reader, header, absDest, options); err != nil {
+			if err := extractTarSingleFile(reader, header, absDest, options, budget); err != nil {
 				return err
 			}
 			fileFound = true
@@ -509,7 +516,7 @@ func extractTarEntry(tarPath, entryPath, destPath string, options zipExtractEntr
 			return err
 		}
 
-		if err := writeTarEntryToDisk(reader, header, target, options.zipWriteOptions, true, absDest, baseWithSep); err != nil {
+		if err := writeTarEntryToDisk(reader, header, target, options.zipWriteOptions, true, absDest, baseWithSep, budget); err != nil {
 			return err
 		}
 	}
@@ -520,7 +527,7 @@ func extractTarEntry(tarPath, entryPath, destPath string, options zipExtractEntr
 	return nil
 }
 
-func extractTarSingleFile(reader *tar.Reader, header *tar.Header, absDest string, options zipExtractEntryOptions) error {
+func extractTarSingleFile(reader *tar.Reader, header *tar.Header, absDest string, options zipExtractEntryOptions, budget *byteBudget) error {
 	parent := filepath.Dir(absDest)
 	if options.mkdirs {
 		if err := os.MkdirAll(parent, 0755); err != nil {
@@ -533,13 +540,19 @@ func extractTarSingleFile(reader *tar.Reader, header *tar.Header, absDest string
 	}
 
 	baseWithSep := ensureTrailingSeparator(parent)
-	return writeTarEntryToDisk(reader, header, absDest, options.zipWriteOptions, false, parent, baseWithSep)
+	return writeTarEntryToDisk(reader, header, absDest, options.zipWriteOptions, false, parent, baseWithSep, budget)
 }
 
 // writeTarEntryToDisk writes one tar entry (directory, file, or symlink) to
 // destPath. For symlinks it validates that the link target cannot escape the
-// destination root before creating it.
-func writeTarEntryToDisk(reader *tar.Reader, header *tar.Header, destPath string, options zipWriteOptions, ensureParents bool, base, baseWithSep string) error {
+// destination root before creating it. The archive-symlink target guard and
+// the ensureRealParentWithinBase guard together stop a path component from
+// redirecting a write outside the destination.
+func writeTarEntryToDisk(reader *tar.Reader, header *tar.Header, destPath string, options zipWriteOptions, ensureParents bool, base, baseWithSep string, budget *byteBudget) error {
+	if err := ensureRealParentWithinBase(destPath, base); err != nil {
+		return err
+	}
+
 	switch header.Typeflag {
 	case tar.TypeDir:
 		if ensureParents {
@@ -558,7 +571,7 @@ func writeTarEntryToDisk(reader *tar.Reader, header *tar.Header, destPath string
 	case tar.TypeSymlink:
 		return writeTarSymlink(header, destPath, options, ensureParents, base, baseWithSep)
 	case tar.TypeReg, '\x00': // '\x00' is the legacy TypeRegA (deprecated) regular-file flag
-		return writeTarRegularFile(reader, header, destPath, options, ensureParents)
+		return writeTarRegularFile(reader, header, destPath, options, ensureParents, budget)
 	default:
 		return fmt.Errorf("tarExtract cannot handle entry %s (unsupported type %q)", header.Name, string(header.Typeflag))
 	}
@@ -607,7 +620,7 @@ func writeTarSymlink(header *tar.Header, destPath string, options zipWriteOption
 	return nil
 }
 
-func writeTarRegularFile(reader *tar.Reader, header *tar.Header, destPath string, options zipWriteOptions, ensureParents bool) error {
+func writeTarRegularFile(reader *tar.Reader, header *tar.Header, destPath string, options zipWriteOptions, ensureParents bool, budget *byteBudget) error {
 	parentDir := filepath.Dir(destPath)
 	if ensureParents {
 		if err := os.MkdirAll(parentDir, 0755); err != nil {
@@ -640,7 +653,7 @@ func writeTarRegularFile(reader *tar.Reader, header *tar.Header, destPath string
 	}
 	defer outFile.Close()
 
-	if _, err := io.Copy(outFile, reader); err != nil {
+	if err := budget.copy(outFile, reader, header.Name); err != nil {
 		return err
 	}
 

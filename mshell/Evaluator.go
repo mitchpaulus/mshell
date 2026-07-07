@@ -4822,6 +4822,68 @@ type zipWriteOptions struct {
 	overwrite           bool
 	skipExisting        bool
 	preservePermissions bool
+	maxBytes            int64 // 0 = unlimited; total uncompressed bytes for the extraction
+}
+
+// byteBudget bounds the total number of uncompressed bytes written during a
+// single archive extraction, defending against decompression bombs. A limit of
+// zero (or negative) means unlimited.
+type byteBudget struct {
+	limit int64
+	used  int64
+}
+
+func newByteBudget(limit int64) *byteBudget {
+	return &byteBudget{limit: limit}
+}
+
+// copy streams src to dst while enforcing the budget. When a limit is set it
+// copies at most one byte past the remaining allowance so an overflow is
+// detected deterministically, then reports which entry blew the budget.
+func (b *byteBudget) copy(dst io.Writer, src io.Reader, entryName string) error {
+	if b == nil || b.limit <= 0 {
+		_, err := io.Copy(dst, src)
+		return err
+	}
+	remaining := b.limit - b.used
+	n, err := io.Copy(dst, io.LimitReader(src, remaining+1))
+	b.used += n
+	if err != nil {
+		return err
+	}
+	if b.used > b.limit {
+		return fmt.Errorf("extraction exceeded maxBytes limit of %d bytes at entry %s", b.limit, entryName)
+	}
+	return nil
+}
+
+// ensureRealParentWithinBase defends against writing through a symlink that
+// already exists in the destination tree (for example, extracting into a
+// directory that legitimately contains a symlink). It resolves the deepest
+// already-existing ancestor directory of destPath, following every symlink,
+// and refuses when that real location falls outside the destination root.
+func ensureRealParentWithinBase(destPath, base string) error {
+	realBase, err := filepath.EvalSymlinks(base)
+	if err != nil {
+		return fmt.Errorf("Error resolving destination %s: %w", base, err)
+	}
+	realBaseWithSep := ensureTrailingSeparator(realBase)
+
+	ancestor := filepath.Dir(destPath)
+	for {
+		real, err := filepath.EvalSymlinks(ancestor)
+		if err == nil {
+			return ensureWithinBase(real, realBase, realBaseWithSep)
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		parent := filepath.Dir(ancestor)
+		if parent == ancestor {
+			return nil
+		}
+		ancestor = parent
+	}
 }
 
 type zipExtractOptions struct {
@@ -5107,7 +5169,25 @@ func parseZipExtractOptions(dict *MShellDict) (zipExtractOptions, error) {
 		options.pattern = val
 	}
 
+	if err := parseMaxBytesOption(dict, &options.zipWriteOptions); err != nil {
+		return options, err
+	}
+
 	return options, nil
+}
+
+// parseMaxBytesOption reads the optional `maxBytes` cap (total uncompressed
+// bytes for the extraction). 0 means unlimited; negative is rejected.
+func parseMaxBytesOption(dict *MShellDict, opts *zipWriteOptions) error {
+	if val, ok, err := intOption(dict, "maxBytes"); err != nil {
+		return err
+	} else if ok {
+		if val < 0 {
+			return fmt.Errorf("option 'maxBytes' must be >= 0")
+		}
+		opts.maxBytes = int64(val)
+	}
+	return nil
 }
 
 func parseZipExtractEntryOptions(dict *MShellDict) (zipExtractEntryOptions, error) {
@@ -5146,6 +5226,10 @@ func parseZipExtractEntryOptions(dict *MShellDict) (zipExtractEntryOptions, erro
 		return options, err
 	} else if ok {
 		options.mkdirs = val
+	}
+
+	if err := parseMaxBytesOption(dict, &options.zipWriteOptions); err != nil {
+		return options, err
 	}
 
 	return options, nil
@@ -5203,6 +5287,7 @@ func extractZipArchive(zipPath, destDir string, options zipExtractOptions) error
 		return fmt.Errorf("Error creating destination %s: %w", absDest, err)
 	}
 	baseWithSep := ensureTrailingSeparator(absDest)
+	budget := newByteBudget(options.maxBytes)
 
 	for _, file := range reader.File {
 		if file.FileInfo().Mode()&os.ModeSymlink != 0 {
@@ -5238,7 +5323,7 @@ func extractZipArchive(zipPath, destDir string, options zipExtractOptions) error
 			return err
 		}
 
-		if err := writeZipFileToDisk(file, target, options.zipWriteOptions, true); err != nil {
+		if err := writeZipFileToDisk(file, target, options.zipWriteOptions, true, absDest, budget); err != nil {
 			return err
 		}
 	}
@@ -5321,6 +5406,7 @@ func extractZipDirectoryEntries(files []*zip.File, targetName, destPath string, 
 
 	baseWithSep := ensureTrailingSeparator(absDest)
 	prefix := targetName + "/"
+	budget := newByteBudget(options.maxBytes)
 
 	for _, file := range files {
 		if file.FileInfo().Mode()&os.ModeSymlink != 0 {
@@ -5346,7 +5432,7 @@ func extractZipDirectoryEntries(files []*zip.File, targetName, destPath string, 
 			return err
 		}
 
-		if err := writeZipFileToDisk(file, target, options.zipWriteOptions, true); err != nil {
+		if err := writeZipFileToDisk(file, target, options.zipWriteOptions, true, absDest, budget); err != nil {
 			return err
 		}
 	}
@@ -5375,10 +5461,14 @@ func extractZipFileEntry(file *zip.File, destPath string, options zipExtractEntr
 		}
 	}
 
-	return writeZipFileToDisk(file, absDest, options.zipWriteOptions, false)
+	return writeZipFileToDisk(file, absDest, options.zipWriteOptions, false, parent, newByteBudget(options.maxBytes))
 }
 
-func writeZipFileToDisk(file *zip.File, destPath string, options zipWriteOptions, ensureParents bool) error {
+func writeZipFileToDisk(file *zip.File, destPath string, options zipWriteOptions, ensureParents bool, base string, budget *byteBudget) error {
+	if err := ensureRealParentWithinBase(destPath, base); err != nil {
+		return err
+	}
+
 	info := file.FileInfo()
 
 	if info.IsDir() {
@@ -5435,7 +5525,7 @@ func writeZipFileToDisk(file *zip.File, destPath string, options zipWriteOptions
 	}
 	defer outFile.Close()
 
-	if _, err := io.Copy(outFile, reader); err != nil {
+	if err := budget.copy(outFile, reader, file.Name); err != nil {
 		return err
 	}
 

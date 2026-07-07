@@ -31,6 +31,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     transparently. Symlinks are preserved on pack and recreated on extract
     (with a guard against targets escaping the destination); hard links and
     device nodes are rejected.
+- Optional `maxBytes` key (int, default `0` = unlimited) on the `zipExtract` /
+  `zipExtractEntry` / `tarExtract` / `tarExtractEntry` options dict: caps the
+  total uncompressed bytes written during an extraction to guard against
+  decompression bombs.
+- Archive extraction (both `zip*` and `tar*`) now refuses to write through a
+  symlink that already exists in the destination directory and points outside
+  it, closing a path-traversal vector when extracting into a directory that
+  contains symlinks.
 - Optional fields in dictionary shape types, written `name?: T` (and
   `"name"?: T` in `def` signatures). An optional field may be absent from a
   value; when present, its value is still type-checked. This lets option-style

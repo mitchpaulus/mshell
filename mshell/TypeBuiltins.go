@@ -594,8 +594,8 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 	r.reg("zipPack", "([str | path | {path: str | path, archivePath?: str | path, mode?: int}] str | path -- )")
 	// zipExtract / zipExtractEntry options are all optional; the dict is
 	// required positionally but may be empty.
-	zipExtractOpts := "{overwrite?: bool, skipExisting?: bool, stripComponents?: int, pattern?: str, preservePermissions?: bool}"
-	zipEntryOpts := "{overwrite?: bool, skipExisting?: bool, preservePermissions?: bool, mkdirs?: bool}"
+	zipExtractOpts := "{overwrite?: bool, skipExisting?: bool, stripComponents?: int, pattern?: str, preservePermissions?: bool, maxBytes?: int}"
+	zipEntryOpts := "{overwrite?: bool, skipExisting?: bool, preservePermissions?: bool, mkdirs?: bool, maxBytes?: int}"
 	r.reg("zipExtract", "(str | path str | path "+zipExtractOpts+" -- )")
 	r.reg("zipExtractEntry",
 		"(str str str "+zipEntryOpts+" -- )",
