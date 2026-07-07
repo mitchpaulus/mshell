@@ -163,7 +163,7 @@ def sumInt ([int] -- int) sum end
 # [s]tdin [l]ines
 def sl (-- [str]) stdin lines end
 
-def ttFile (str -- [[str]])
+def ttFile (str|path -- [[str]])
     readFile lines (tab split) map
 end
 

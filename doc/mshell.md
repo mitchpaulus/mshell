@@ -1421,7 +1421,9 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
 
 ## Variables
 
-You can store to several variables in one go by separating the store tokens with commas. Values are consumed from the stack for each store, and an optional trailing comma is ignored.
+You can store to several variables in one go by separating the store tokens with commas.
+Values are consumed from the stack for each store, and an optional trailing comma is ignored.
+When storing with the comma separated list, make sure you understand the ordering!
 
 ```mshell
 # Storing
@@ -1429,7 +1431,7 @@ You can store to several variables in one go by separating the store tokens with
 # Retrieving
 @my_var
 
-# Storing multiple values at once
+# Storing multiple values at once. Note the order!
 1 2 3 a!, b!, c!  # a is 1, b is 2, c is 3.
 @a @b @c
 
