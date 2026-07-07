@@ -4896,6 +4896,20 @@ func createExtractedFile(destPath string, mode os.FileMode, options zipWriteOpti
 	return f, nil
 }
 
+// rejectNULInPath refuses an archive entry name or link target that contains
+// an embedded NUL byte before it is used as a filesystem path. The OS would
+// reject it too, but rejecting early keeps the failure clear and avoids
+// relying on that behavior. (A crafted PAX path/linkpath record can carry a
+// NUL that Go's archive/tar does not necessarily strip.)
+func rejectNULInPath(fields ...string) error {
+	for _, f := range fields {
+		if strings.IndexByte(f, 0) >= 0 {
+			return fmt.Errorf("Refusing entry with embedded NUL byte in path %q", f)
+		}
+	}
+	return nil
+}
+
 // ensureRealParentWithinBase defends against writing through a symlink that
 // already exists in the destination tree (for example, extracting into a
 // directory that legitimately contains a symlink). It resolves the deepest
@@ -5504,6 +5518,9 @@ func extractZipFileEntry(file *zip.File, destPath string, options zipExtractEntr
 }
 
 func writeZipFileToDisk(file *zip.File, destPath string, options zipWriteOptions, ensureParents bool, base string, budget *byteBudget) error {
+	if err := rejectNULInPath(file.Name); err != nil {
+		return err
+	}
 	if err := ensureRealParentWithinBase(destPath, base); err != nil {
 		return err
 	}
@@ -5558,7 +5575,9 @@ func writeZipFileToDisk(file *zip.File, destPath string, options zipWriteOptions
 	}
 
 	if options.preservePermissions {
-		if err := os.Chmod(destPath, info.Mode()); err != nil && !errors.Is(err, os.ErrPermission) {
+		// Chmod via the open descriptor, not the path, so permissions can
+		// never be redirected onto a symlink target.
+		if err := outFile.Chmod(info.Mode()); err != nil && !errors.Is(err, os.ErrPermission) {
 			return fmt.Errorf("Error setting permissions on %s: %w", destPath, err)
 		}
 	}

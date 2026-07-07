@@ -139,6 +139,43 @@ func TestTarExtractRejectsEscapingSymlink(t *testing.T) {
 	}
 }
 
+// TestTarExtractRejectsSymlinkTargets covers both flavors of an escaping
+// symlink target: an absolute path and a relative "../" path.
+func TestTarExtractRejectsSymlinkTargets(t *testing.T) {
+	cases := map[string]string{
+		"absolute": "/etc/passwd",
+		"relative": "../../../../etc/passwd",
+	}
+	for name, target := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			archive := filepath.Join(dir, "s.tar")
+			writeTarArchive(t, archive, false, func(tw *tar.Writer) {
+				addTarSymlink(t, tw, "link", target)
+			})
+			if err := extractAll(archive, filepath.Join(dir, "dest")); err == nil {
+				t.Fatalf("expected symlink with escaping target %q to be refused", target)
+			}
+		})
+	}
+}
+
+// TestRejectNULInPath verifies the NUL-byte guard directly. (Go's own
+// archive/tar refuses to encode a NUL in a name, so such an entry cannot be
+// produced through its writer; the guard defends against a hand-crafted PAX
+// record whose value survives decoding.)
+func TestRejectNULInPath(t *testing.T) {
+	if err := rejectNULInPath("ok/name.txt", "also/fine"); err != nil {
+		t.Fatalf("clean paths should pass: %v", err)
+	}
+	if err := rejectNULInPath("bad\x00name.txt"); err == nil {
+		t.Fatal("expected embedded NUL in name to be rejected")
+	}
+	if err := rejectNULInPath("fine", "link\x00target"); err == nil {
+		t.Fatal("expected embedded NUL in link target to be rejected")
+	}
+}
+
 func TestTarExtractRejectsHardlink(t *testing.T) {
 	dir := t.TempDir()
 	archive := filepath.Join(dir, "hl.tar")

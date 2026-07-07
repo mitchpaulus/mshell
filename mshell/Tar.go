@@ -549,6 +549,9 @@ func extractTarSingleFile(reader *tar.Reader, header *tar.Header, absDest string
 // the ensureRealParentWithinBase guard together stop a path component from
 // redirecting a write outside the destination.
 func writeTarEntryToDisk(reader *tar.Reader, header *tar.Header, destPath string, options zipWriteOptions, ensureParents bool, base, baseWithSep string, budget *byteBudget) error {
+	if err := rejectNULInPath(header.Name, header.Linkname); err != nil {
+		return err
+	}
 	if err := ensureRealParentWithinBase(destPath, base); err != nil {
 		return err
 	}
@@ -647,7 +650,9 @@ func writeTarRegularFile(reader *tar.Reader, header *tar.Header, destPath string
 	}
 
 	if options.preservePermissions {
-		if err := os.Chmod(destPath, mode); err != nil && !errors.Is(err, os.ErrPermission) {
+		// Chmod via the open descriptor, not the path, so permissions can
+		// never be redirected onto a symlink target.
+		if err := outFile.Chmod(mode); err != nil && !errors.Is(err, os.ErrPermission) {
 			return fmt.Errorf("Error setting permissions on %s: %w", destPath, err)
 		}
 	}
