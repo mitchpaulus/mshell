@@ -59,6 +59,42 @@ func TestZipExtractRejectsWriteThroughPreexistingSymlink(t *testing.T) {
 	}
 }
 
+// TestZipExtractOverwriteDoesNotFollowFinalSymlink is the zip analog of the
+// tar test: overwriting a destination name that is a symlink must not write
+// through it.
+func TestZipExtractOverwriteDoesNotFollowFinalSymlink(t *testing.T) {
+	dir := t.TempDir()
+	outside := filepath.Join(dir, "outside.txt")
+	if err := os.WriteFile(outside, []byte("ORIGINAL"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(dir, "dest")
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dest, "victim")); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+
+	archive := filepath.Join(dir, "v.zip")
+	writeZipArchive(t, archive, func(zw *zip.Writer) {
+		w, err := zw.Create("victim")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write([]byte("REPLACED")); err != nil {
+			t.Fatal(err)
+		}
+	})
+	opts := zipExtractOptions{zipWriteOptions: zipWriteOptions{overwrite: true, preservePermissions: true}}
+	if err := extractZipArchive(archive, dest, opts); err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	if got, _ := os.ReadFile(outside); string(got) != "ORIGINAL" {
+		t.Fatalf("zip wrote THROUGH the symlink: outside file is now %q", got)
+	}
+}
+
 func TestZipExtractMaxBytesCapsBomb(t *testing.T) {
 	dir := t.TempDir()
 	archive := filepath.Join(dir, "big.zip")

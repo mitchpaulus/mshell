@@ -4857,6 +4857,45 @@ func (b *byteBudget) copy(dst io.Writer, src io.Reader, entryName string) error 
 	return nil
 }
 
+// createExtractedFile opens the destination for a regular-file entry without
+// ever following a symlink at the final path component. It mirrors GNU tar's
+// open_output_file / maybe_recoverable logic: O_EXCL means an existing name
+// (regular file, symlink — even dangling — or directory) never gets written
+// through. On collision it honors the skip/overwrite options, and for
+// overwrite it removes the existing name itself (os.Remove unlinks a symlink
+// rather than following it) before creating a fresh file. Returns (nil, nil)
+// when skipExisting applies and the entry should be skipped.
+func createExtractedFile(destPath string, mode os.FileMode, options zipWriteOptions) (*os.File, error) {
+	flags := os.O_CREATE | os.O_WRONLY | os.O_EXCL
+	f, err := os.OpenFile(destPath, flags, mode)
+	if err == nil {
+		return f, nil
+	}
+	if !errors.Is(err, os.ErrExist) {
+		return nil, err
+	}
+
+	if options.skipExisting {
+		return nil, nil
+	}
+	if !options.overwrite {
+		return nil, fmt.Errorf("Destination %s already exists", destPath)
+	}
+
+	// Overwrite: unlink the existing name (not its symlink target), then
+	// create a fresh regular file. O_EXCL keeps the recreate atomic, so a
+	// symlink slipped back in after the remove causes a clean failure rather
+	// than a write-through.
+	if err := os.Remove(destPath); err != nil {
+		return nil, fmt.Errorf("Error replacing %s: %w", destPath, err)
+	}
+	f, err = os.OpenFile(destPath, flags, mode)
+	if err != nil {
+		return nil, err
+	}
+	return f, nil
+}
+
 // ensureRealParentWithinBase defends against writing through a symlink that
 // already exists in the destination tree (for example, extracting into a
 // directory that legitimately contains a symlink). It resolves the deepest
@@ -5499,31 +5538,20 @@ func writeZipFileToDisk(file *zip.File, destPath string, options zipWriteOptions
 		}
 	}
 
-	if options.skipExisting {
-		if _, err := os.Stat(destPath); err == nil {
-			return nil
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-	} else {
-		if _, err := os.Stat(destPath); err == nil && !options.overwrite {
-			return fmt.Errorf("Destination %s already exists", destPath)
-		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
+	outFile, err := createExtractedFile(destPath, info.Mode().Perm(), options)
+	if err != nil {
+		return err
 	}
+	if outFile == nil {
+		return nil // skipExisting: the destination already exists
+	}
+	defer outFile.Close()
 
 	reader, err := file.Open()
 	if err != nil {
 		return err
 	}
 	defer reader.Close()
-
-	outFile, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode().Perm())
-	if err != nil {
-		return err
-	}
-	defer outFile.Close()
 
 	if err := budget.copy(outFile, reader, file.Name); err != nil {
 		return err

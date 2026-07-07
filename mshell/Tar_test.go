@@ -237,6 +237,43 @@ func errString(err error) string {
 	return err.Error()
 }
 
+// TestTarExtractOverwriteDoesNotFollowFinalSymlink checks that extracting with
+// overwrite over a destination name that is already a symlink to an outside
+// file replaces the symlink with a fresh file rather than writing through it.
+func TestTarExtractOverwriteDoesNotFollowFinalSymlink(t *testing.T) {
+	dir := t.TempDir()
+	outside := filepath.Join(dir, "outside.txt")
+	if err := os.WriteFile(outside, []byte("ORIGINAL"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(dir, "dest")
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dest, "victim")); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+
+	archive := filepath.Join(dir, "v.tar")
+	writeTarArchive(t, archive, false, func(tw *tar.Writer) {
+		addTarFile(t, tw, "victim", "REPLACED")
+	})
+	opts := zipExtractOptions{zipWriteOptions: zipWriteOptions{overwrite: true, preservePermissions: true}}
+	if err := extractTarArchive(archive, dest, opts); err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	if got, _ := os.ReadFile(outside); string(got) != "ORIGINAL" {
+		t.Fatalf("wrote THROUGH the symlink: outside file is now %q", got)
+	}
+	fi, err := os.Lstat(filepath.Join(dest, "victim"))
+	if err != nil || fi.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("dest/victim should be a fresh regular file, got mode %v err %v", fi.Mode(), err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dest, "victim")); string(got) != "REPLACED" {
+		t.Fatalf("dest/victim content = %q, want REPLACED", got)
+	}
+}
+
 func TestTarExtractMaxBytesCapsBomb(t *testing.T) {
 	dir := t.TempDir()
 	archive := filepath.Join(dir, "big.tar")

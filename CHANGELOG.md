@@ -39,6 +39,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   symlink that already exists in the destination directory and points outside
   it, closing a path-traversal vector when extracting into a directory that
   contains symlinks.
+- Archive extraction (both `zip*` and `tar*`) no longer follows a symlink at
+  the final path component: regular files are created with `O_EXCL`, and in
+  `overwrite` mode an existing name is unlinked (never dereferenced) before a
+  fresh file is created. This mirrors GNU tar's behavior and prevents an
+  `overwrite` extraction from writing through a pre-existing symlink at the
+  destination name (e.g. `dest/report` -> `/etc/passwd`).
 - Optional fields in dictionary shape types, written `name?: T` (and
   `"name"?: T` in `def` signatures). An optional field may be absent from a
   value; when present, its value is still type-checked. This lets option-style

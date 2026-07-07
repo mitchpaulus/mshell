@@ -632,24 +632,13 @@ func writeTarRegularFile(reader *tar.Reader, header *tar.Header, destPath string
 		}
 	}
 
-	if options.skipExisting {
-		if _, err := os.Stat(destPath); err == nil {
-			return nil
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-	} else {
-		if _, err := os.Stat(destPath); err == nil && !options.overwrite {
-			return fmt.Errorf("Destination %s already exists", destPath)
-		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-	}
-
 	mode := header.FileInfo().Mode().Perm()
-	outFile, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	outFile, err := createExtractedFile(destPath, mode, options)
 	if err != nil {
 		return err
+	}
+	if outFile == nil {
+		return nil // skipExisting: the destination already exists
 	}
 	defer outFile.Close()
 
