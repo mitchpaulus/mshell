@@ -1,0 +1,24 @@
+# tarDir basic coverage plus listing, tarRead, and gzip round-trip.
+tempFile newTarName!
+`zip/base` @newTarName tarDirExc
+
+"tarDir entries" wl
+@newTarName tarList tarEntries!
+@tarEntries :0: keys ("modified" !=) filter keys! # Filter out modified because that breaks unit tests
+@keys tjoin wl
+@tarEntries (
+    entry! @keys (@entry swap get? str) map
+) map tuw
+
+"tarDir alpha" wl
+@newTarName "alpha.txt" tarRead ? utf8Str wl
+
+"tarDir missing isNone" wl
+@newTarName "missing.txt" tarRead isNone str wl
+
+# Gzip round-trip: pack to a .tar.gz, then read back through magic-byte sniffing.
+".tar.gz" tempFileExt gzName!
+`zip/base` @gzName tarDirExc
+
+"tarGz alpha" wl
+@gzName "alpha.txt" tarRead ? utf8Str wl

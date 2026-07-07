@@ -594,8 +594,8 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 	r.reg("zipPack", "([str | path | {path: str | path, archivePath?: str | path, mode?: int}] str | path -- )")
 	// zipExtract / zipExtractEntry options are all optional; the dict is
 	// required positionally but may be empty.
-	zipExtractOpts := "{overwrite?: bool, skipExisting?: bool, stripComponents?: int, pattern?: str, preservePermissions?: bool}"
-	zipEntryOpts := "{overwrite?: bool, skipExisting?: bool, preservePermissions?: bool, mkdirs?: bool}"
+	zipExtractOpts := "{overwrite?: bool, skipExisting?: bool, stripComponents?: int, pattern?: str, preservePermissions?: bool, maxBytes?: int}"
+	zipEntryOpts := "{overwrite?: bool, skipExisting?: bool, preservePermissions?: bool, mkdirs?: bool, maxBytes?: int}"
 	r.reg("zipExtract", "(str | path str | path "+zipExtractOpts+" -- )")
 	r.reg("zipExtractEntry",
 		"(str str str "+zipEntryOpts+" -- )",
@@ -607,6 +607,22 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 	// as string-valued metadata so `name get?` and keyed row rendering
 	// type-check without forcing every call site to add `str`.
 	r.reg("zipList", "(str | path -- [{str: str}])")
+
+	// Tar ops mirror the zip surface exactly (same argument order and option
+	// dicts). Compression is chosen from the destination extension on write
+	// (.tar.gz / .tgz -> gzip) and sniffed from the gzip magic bytes on read.
+	r.reg("tarRead", "(str | path str | path -- Maybe[bytes])")
+	for _, name := range []string{"tarDirInc", "tarDirExc"} {
+		r.reg(name, "(str | path str | path -- )")
+	}
+	r.reg("tarPack", "([str | path | {path: str | path, archivePath?: str | path, mode?: int}] str | path -- )")
+	r.reg("tarExtract", "(str | path str | path "+zipExtractOpts+" -- )")
+	r.reg("tarExtractEntry",
+		"(str str str "+zipEntryOpts+" -- )",
+		"(path str path "+zipEntryOpts+" -- )",
+	)
+	// tarList: same widened string-valued metadata modeling as zipList.
+	r.reg("tarList", "(str | path -- [{str: str}])")
 
 	// groupBy list form: bucket by a str key.
 	r.reg("groupBy", "([t] (t -- str) -- {[t]})")

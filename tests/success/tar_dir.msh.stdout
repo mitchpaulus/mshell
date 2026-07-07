@@ -1,0 +1,14 @@
+tarDir entries
+compressedSize	executable	isDir	linkTarget	name	perm	type	uncompressedSize
+11	false	false		alpha.txt	420	file	11
+0	false	true		nested/	493	dir	0
+11	false	false		nested/bravo.txt	420	file	11
+60	false	false		repeat.txt	420	file	60
+tarDir alpha
+ALPHA-DATA
+
+tarDir missing isNone
+true
+tarGz alpha
+ALPHA-DATA
+

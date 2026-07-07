@@ -22,6 +22,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     arbitrary base (2–36). `fromBase` returns `Maybe[int]`.
   - `toHex` / `toOctal` / `toBin` and `parseHex` / `parseOctal` / `parseBin`:
     convenience wrappers over `toBase` / `fromBase` for the common bases.
+  - `tarDirInc` / `tarDirExc` / `tarPack` / `tarList` / `tarExtract` /
+    `tarExtractEntry` / `tarRead`: create, list, extract, and read `.tar`
+    archives, mirroring the existing `zip*` functions (same argument order and
+    option dicts). Compression is chosen from the destination extension when
+    writing (`.tar.gz` / `.tgz` → gzip, `.tar` → uncompressed) and auto-detected
+    from the gzip magic bytes when reading, so `.tar.gz` is handled
+    transparently. Symlinks are preserved on pack and recreated on extract
+    (with a guard against targets escaping the destination); hard links and
+    device nodes are rejected.
+- Optional `maxBytes` key (int, default `0` = unlimited) on the `zipExtract` /
+  `zipExtractEntry` / `tarExtract` / `tarExtractEntry` options dict: caps the
+  total uncompressed bytes written during an extraction to guard against
+  decompression bombs.
+- Archive extraction (both `zip*` and `tar*`) now refuses to write through a
+  symlink that already exists in the destination directory and points outside
+  it, closing a path-traversal vector when extracting into a directory that
+  contains symlinks.
+- Archive extraction (both `zip*` and `tar*`) no longer follows a symlink at
+  the final path component: regular files are created with `O_EXCL`, and in
+  `overwrite` mode an existing name is unlinked (never dereferenced) before a
+  fresh file is created. This mirrors GNU tar's behavior and prevents an
+  `overwrite` extraction from writing through a pre-existing symlink at the
+  destination name (e.g. `dest/report` -> `/etc/passwd`).
+- Archive extraction (both `zip*` and `tar*`) now performs every write through
+  an `os.Root` anchored at the destination directory. The kernel enforces that
+  no path can escape the destination via `..` or a symlink component (using
+  `openat2`/`RESOLVE_BENEATH` on Linux), closing the time-of-check/time-of-use
+  race that a purely lexical containment check leaves open. Legitimate symlinks
+  that stay within the destination continue to work.
 - Optional fields in dictionary shape types, written `name?: T` (and
   `"name"?: T` in `def` signatures). An optional field may be absent from a
   value; when present, its value is still type-checked. This lets option-style

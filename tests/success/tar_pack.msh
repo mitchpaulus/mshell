@@ -1,0 +1,29 @@
+# tarPack custom entry coverage (mirrors zip_pack).
+tempFile pack-tar!
+
+[
+    {
+        path: `zip/base/alpha.txt`,
+        archivePath: "packed/alpha.txt",
+        mode: 420 # '0b110100100'
+    }
+    {
+        path: `zip/extra/extra.txt`,
+        archivePath: "extras/extra.txt",
+        mode: 493
+    }
+    `zip/base/repeat.txt`
+    "zip/base/nested"
+] pack-items!
+
+@pack-items @pack-tar tarPack
+
+"tarPack entries" wl
+@pack-tar tarList (i! [@i "name" get? @i "perm" get? str @i "type" get? @i "executable" get? str] tjoin) map sortV uw
+'' wl
+
+"tarPack alpha" wl
+@pack-tar "packed/alpha.txt" tarRead ? utf8Str wl
+
+"tarPack extra" wl
+@pack-tar "extras/extra.txt" tarRead ? utf8Str wl

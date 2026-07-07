@@ -1,0 +1,13 @@
+tarPack entries
+extras/extra.txt	493	file	true
+nested/	493	dir	false
+nested/bravo.txt	420	file	false
+packed/alpha.txt	420	file	false
+repeat.txt	420	file	false
+
+tarPack alpha
+ALPHA-DATA
+
+tarPack extra
+EXTRA-DATA
+
