@@ -363,9 +363,11 @@ func collectTarMetadata(tarPath string) ([]tarEntryMetadata, error) {
 	return entries, nil
 }
 
-// extractTarArchive extracts an entire tarball, honoring the same option set as
-// extractZipArchive (overwrite/skipExisting/stripComponents/pattern/
-// preservePermissions). Symlinks are recreated with an escape guard.
+// extractTarArchive extracts an entire tarball into destDir. Every write goes
+// through an os.Root anchored at destDir, so the kernel refuses any path that
+// escapes the destination (via ".." or a symlink component), race-free.
+// Options overwrite/skipExisting/stripComponents/pattern/preservePermissions/
+// maxBytes are honored; symlinks are recreated with an escape guard.
 func extractTarArchive(tarPath, destDir string, options zipExtractOptions) error {
 	reader, closer, err := openTarReader(tarPath)
 	if err != nil {
@@ -380,6 +382,12 @@ func extractTarArchive(tarPath, destDir string, options zipExtractOptions) error
 	if err := os.MkdirAll(absDest, 0755); err != nil {
 		return fmt.Errorf("Error creating destination %s: %w", absDest, err)
 	}
+	root, err := os.OpenRoot(absDest)
+	if err != nil {
+		return fmt.Errorf("Error opening destination %s: %w", absDest, err)
+	}
+	defer root.Close()
+
 	baseWithSep := ensureTrailingSeparator(absDest)
 	budget := newByteBudget(options.maxBytes)
 
@@ -415,13 +423,14 @@ func extractTarArchive(tarPath, destDir string, options zipExtractOptions) error
 			continue
 		}
 
-		target := filepath.Join(absDest, filepath.FromSlash(stripped))
-		target = filepath.Clean(target)
+		// Lexical containment as a cheap first layer; os.Root is the
+		// authoritative, kernel-enforced check performed by the write below.
+		target := filepath.Clean(filepath.Join(absDest, filepath.FromSlash(stripped)))
 		if err := ensureWithinBase(target, absDest, baseWithSep); err != nil {
 			return err
 		}
 
-		if err := writeTarEntryToDisk(reader, header, target, options.zipWriteOptions, true, absDest, baseWithSep, budget); err != nil {
+		if err := writeTarEntryToRoot(root, absDest, reader, header, stripped, options.zipWriteOptions, budget); err != nil {
 			return err
 		}
 	}
@@ -431,7 +440,8 @@ func extractTarArchive(tarPath, destDir string, options zipExtractOptions) error
 
 // extractTarEntry extracts a single named entry (a file or a directory subtree)
 // mirroring extractZipEntry. Because tar is a stream format it makes a single
-// pass, collecting the file entry or the subtree as it goes.
+// pass, collecting the file entry or the subtree as it goes. Writes are
+// performed through an os.Root anchored at the destination.
 func extractTarEntry(tarPath, entryPath, destPath string, options zipExtractEntryOptions) error {
 	targetName := normalizeZipEntryName(entryPath)
 	if targetName == "" {
@@ -452,7 +462,12 @@ func extractTarEntry(tarPath, entryPath, destPath string, options zipExtractEntr
 	}
 
 	fileFound := false
-	dirCreated := false
+	var root *os.Root
+	defer func() {
+		if root != nil {
+			root.Close()
+		}
+	}()
 	baseWithSep := ""
 	budget := newByteBudget(options.maxBytes)
 
@@ -483,7 +498,7 @@ func extractTarEntry(tarPath, entryPath, destPath string, options zipExtractEntr
 		}
 
 		// Directory subtree: dest is a directory that receives the subtree.
-		if !dirCreated {
+		if root == nil {
 			if options.mkdirs {
 				if err := os.MkdirAll(absDest, 0755); err != nil {
 					return fmt.Errorf("Error creating destination %s: %w", absDest, err)
@@ -497,8 +512,12 @@ func extractTarEntry(tarPath, entryPath, destPath string, options zipExtractEntr
 					return fmt.Errorf("Destination %s is not a directory", absDest)
 				}
 			}
+			r, err := os.OpenRoot(absDest)
+			if err != nil {
+				return fmt.Errorf("Error opening destination %s: %w", absDest, err)
+			}
+			root = r
 			baseWithSep = ensureTrailingSeparator(absDest)
-			dirCreated = true
 		}
 
 		if isSelfDir {
@@ -510,18 +529,17 @@ func extractTarEntry(tarPath, entryPath, destPath string, options zipExtractEntr
 			continue
 		}
 
-		target := filepath.Join(absDest, filepath.FromSlash(relative))
-		target = filepath.Clean(target)
+		target := filepath.Clean(filepath.Join(absDest, filepath.FromSlash(relative)))
 		if err := ensureWithinBase(target, absDest, baseWithSep); err != nil {
 			return err
 		}
 
-		if err := writeTarEntryToDisk(reader, header, target, options.zipWriteOptions, true, absDest, baseWithSep, budget); err != nil {
+		if err := writeTarEntryToRoot(root, absDest, reader, header, relative, options.zipWriteOptions, budget); err != nil {
 			return err
 		}
 	}
 
-	if !fileFound && !dirCreated {
+	if !fileFound && root == nil {
 		return fmt.Errorf("Entry '%s' not found in %s", entryPath, tarPath)
 	}
 	return nil
@@ -539,104 +557,104 @@ func extractTarSingleFile(reader *tar.Reader, header *tar.Header, absDest string
 		}
 	}
 
-	baseWithSep := ensureTrailingSeparator(parent)
-	return writeTarEntryToDisk(reader, header, absDest, options.zipWriteOptions, false, parent, baseWithSep, budget)
+	root, err := os.OpenRoot(parent)
+	if err != nil {
+		return fmt.Errorf("Error opening destination %s: %w", parent, err)
+	}
+	defer root.Close()
+
+	return writeTarEntryToRoot(root, parent, reader, header, filepath.Base(absDest), options.zipWriteOptions, budget)
 }
 
-// writeTarEntryToDisk writes one tar entry (directory, file, or symlink) to
-// destPath. For symlinks it validates that the link target cannot escape the
-// destination root before creating it. The archive-symlink target guard and
-// the ensureRealParentWithinBase guard together stop a path component from
-// redirecting a write outside the destination.
-func writeTarEntryToDisk(reader *tar.Reader, header *tar.Header, destPath string, options zipWriteOptions, ensureParents bool, base, baseWithSep string, budget *byteBudget) error {
+// writeTarEntryToRoot writes one tar entry (directory, file, or symlink) at the
+// root-relative path relSlash (forward-slash form). All filesystem operations
+// go through root, so the kernel guarantees the write cannot escape the
+// destination via ".." or a symlink component. base is used only to build
+// human-readable paths for error messages.
+func writeTarEntryToRoot(root *os.Root, base string, reader *tar.Reader, header *tar.Header, relSlash string, options zipWriteOptions, budget *byteBudget) error {
 	if err := rejectNULInPath(header.Name, header.Linkname); err != nil {
 		return err
 	}
-	if err := ensureRealParentWithinBase(destPath, base); err != nil {
-		return err
-	}
+	rel := filepath.FromSlash(relSlash)
+	display := filepath.Join(base, rel)
 
 	switch header.Typeflag {
 	case tar.TypeDir:
-		if ensureParents {
-			if err := os.MkdirAll(destPath, 0755); err != nil {
-				return fmt.Errorf("Error creating directory %s: %w", destPath, err)
-			}
-		} else if err := os.Mkdir(destPath, 0755); err != nil && !errors.Is(err, os.ErrExist) {
-			return fmt.Errorf("Error creating directory %s: %w", destPath, err)
+		if err := root.MkdirAll(rel, 0755); err != nil {
+			return fmt.Errorf("Error creating directory %s: %w", display, err)
 		}
 		if options.preservePermissions {
-			if err := os.Chmod(destPath, header.FileInfo().Mode().Perm()); err != nil && !errors.Is(err, os.ErrPermission) {
-				return fmt.Errorf("Error setting permissions on %s: %w", destPath, err)
+			if err := root.Chmod(rel, header.FileInfo().Mode().Perm()); err != nil && !errors.Is(err, os.ErrPermission) {
+				return fmt.Errorf("Error setting permissions on %s: %w", display, err)
 			}
 		}
 		return nil
 	case tar.TypeSymlink:
-		return writeTarSymlink(header, destPath, options, ensureParents, base, baseWithSep)
+		return writeTarSymlinkToRoot(root, base, header, relSlash, options)
 	case tar.TypeReg, '\x00': // '\x00' is the legacy TypeRegA (deprecated) regular-file flag
-		return writeTarRegularFile(reader, header, destPath, options, ensureParents, budget)
+		return writeTarRegularFileToRoot(root, base, reader, header, relSlash, options, budget)
 	default:
 		return fmt.Errorf("tarExtract cannot handle entry %s (unsupported type %q)", header.Name, string(header.Typeflag))
 	}
 }
 
-func writeTarSymlink(header *tar.Header, destPath string, options zipWriteOptions, ensureParents bool, base, baseWithSep string) error {
-	// Resolve the link target relative to the symlink's own directory and
-	// ensure it stays within the destination root.
-	linkDir := filepath.Dir(destPath)
-	var resolved string
-	if filepath.IsAbs(header.Linkname) {
-		resolved = filepath.Clean(header.Linkname)
-	} else {
-		resolved = filepath.Clean(filepath.Join(linkDir, filepath.FromSlash(header.Linkname)))
+// mkdirAllParent creates the parent directories of a root-relative slash path.
+func mkdirAllParent(root *os.Root, relSlash, display string) error {
+	dir := path.Dir(relSlash)
+	if dir == "." || dir == "/" {
+		return nil
 	}
-	if err := ensureWithinBase(resolved, base, baseWithSep); err != nil {
+	if err := root.MkdirAll(filepath.FromSlash(dir), 0755); err != nil {
+		return fmt.Errorf("Error creating parent directory for %s: %w", display, err)
+	}
+	return nil
+}
+
+func writeTarSymlinkToRoot(root *os.Root, base string, header *tar.Header, relSlash string, options zipWriteOptions) error {
+	rel := filepath.FromSlash(relSlash)
+	display := filepath.Join(base, rel)
+
+	// os.Root blocks *traversal* through an escaping symlink at use time but
+	// does not validate a link target at creation, so refuse escaping targets
+	// here to fail closed and match the zip behavior.
+	if symlinkTargetEscapes(header.Linkname, relSlash) {
 		return fmt.Errorf("Refusing to extract symlink %s pointing outside destination (%s)", header.Name, header.Linkname)
 	}
 
-	parentDir := filepath.Dir(destPath)
-	if ensureParents {
-		if err := os.MkdirAll(parentDir, 0755); err != nil {
-			return fmt.Errorf("Error creating parent directory %s: %w", parentDir, err)
-		}
-	} else if _, err := os.Stat(parentDir); err != nil {
-		return fmt.Errorf("Parent directory %s does not exist", parentDir)
+	if err := mkdirAllParent(root, relSlash, display); err != nil {
+		return err
 	}
 
-	if _, err := os.Lstat(destPath); err == nil {
+	if _, err := root.Lstat(rel); err == nil {
 		if options.skipExisting {
 			return nil
 		}
 		if !options.overwrite {
-			return fmt.Errorf("Destination %s already exists", destPath)
+			return fmt.Errorf("Destination %s already exists", display)
 		}
-		if err := os.Remove(destPath); err != nil {
-			return fmt.Errorf("Error replacing %s: %w", destPath, err)
+		if err := root.Remove(rel); err != nil {
+			return fmt.Errorf("Error replacing %s: %w", display, err)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 
-	if err := os.Symlink(header.Linkname, destPath); err != nil {
-		return fmt.Errorf("Error creating symlink %s: %w", destPath, err)
+	if err := root.Symlink(header.Linkname, rel); err != nil {
+		return fmt.Errorf("Error creating symlink %s: %w", display, err)
 	}
 	return nil
 }
 
-func writeTarRegularFile(reader *tar.Reader, header *tar.Header, destPath string, options zipWriteOptions, ensureParents bool, budget *byteBudget) error {
-	parentDir := filepath.Dir(destPath)
-	if ensureParents {
-		if err := os.MkdirAll(parentDir, 0755); err != nil {
-			return fmt.Errorf("Error creating parent directory %s: %w", parentDir, err)
-		}
-	} else {
-		if _, err := os.Stat(parentDir); err != nil {
-			return fmt.Errorf("Parent directory %s does not exist", parentDir)
-		}
+func writeTarRegularFileToRoot(root *os.Root, base string, reader *tar.Reader, header *tar.Header, relSlash string, options zipWriteOptions, budget *byteBudget) error {
+	rel := filepath.FromSlash(relSlash)
+	display := filepath.Join(base, rel)
+
+	if err := mkdirAllParent(root, relSlash, display); err != nil {
+		return err
 	}
 
 	mode := header.FileInfo().Mode().Perm()
-	outFile, err := createExtractedFile(destPath, mode, options)
+	outFile, err := createExtractedFileInRoot(root, rel, mode, options, display)
 	if err != nil {
 		return err
 	}
@@ -650,13 +668,25 @@ func writeTarRegularFile(reader *tar.Reader, header *tar.Header, destPath string
 	}
 
 	if options.preservePermissions {
-		// Chmod via the open descriptor, not the path, so permissions can
-		// never be redirected onto a symlink target.
+		// Chmod via the open descriptor, not the path.
 		if err := outFile.Chmod(mode); err != nil && !errors.Is(err, os.ErrPermission) {
-			return fmt.Errorf("Error setting permissions on %s: %w", destPath, err)
+			return fmt.Errorf("Error setting permissions on %s: %w", display, err)
 		}
 	}
 	return nil
+}
+
+// symlinkTargetEscapes reports whether a symlink target would point outside the
+// extraction root, given the link's own root-relative location (slash form).
+// Absolute targets, and relative targets that resolve above the root, are
+// refused. The target is not otherwise simplified — its meaning depends on
+// where the link lives.
+func symlinkTargetEscapes(linkname, relSlash string) bool {
+	if strings.HasPrefix(filepath.ToSlash(linkname), "/") || filepath.IsAbs(linkname) {
+		return true
+	}
+	joined := path.Join(path.Dir(relSlash), filepath.ToSlash(linkname))
+	return joined == ".." || strings.HasPrefix(joined, "../")
 }
 
 // readTarEntry reads a single entry's bytes without writing to disk, mirroring

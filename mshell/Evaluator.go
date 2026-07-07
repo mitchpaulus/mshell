@@ -4857,45 +4857,6 @@ func (b *byteBudget) copy(dst io.Writer, src io.Reader, entryName string) error 
 	return nil
 }
 
-// createExtractedFile opens the destination for a regular-file entry without
-// ever following a symlink at the final path component. It mirrors GNU tar's
-// open_output_file / maybe_recoverable logic: O_EXCL means an existing name
-// (regular file, symlink — even dangling — or directory) never gets written
-// through. On collision it honors the skip/overwrite options, and for
-// overwrite it removes the existing name itself (os.Remove unlinks a symlink
-// rather than following it) before creating a fresh file. Returns (nil, nil)
-// when skipExisting applies and the entry should be skipped.
-func createExtractedFile(destPath string, mode os.FileMode, options zipWriteOptions) (*os.File, error) {
-	flags := os.O_CREATE | os.O_WRONLY | os.O_EXCL
-	f, err := os.OpenFile(destPath, flags, mode)
-	if err == nil {
-		return f, nil
-	}
-	if !errors.Is(err, os.ErrExist) {
-		return nil, err
-	}
-
-	if options.skipExisting {
-		return nil, nil
-	}
-	if !options.overwrite {
-		return nil, fmt.Errorf("Destination %s already exists", destPath)
-	}
-
-	// Overwrite: unlink the existing name (not its symlink target), then
-	// create a fresh regular file. O_EXCL keeps the recreate atomic, so a
-	// symlink slipped back in after the remove causes a clean failure rather
-	// than a write-through.
-	if err := os.Remove(destPath); err != nil {
-		return nil, fmt.Errorf("Error replacing %s: %w", destPath, err)
-	}
-	f, err = os.OpenFile(destPath, flags, mode)
-	if err != nil {
-		return nil, err
-	}
-	return f, nil
-}
-
 // rejectNULInPath refuses an archive entry name or link target that contains
 // an embedded NUL byte before it is used as a filesystem path. The OS would
 // reject it too, but rejecting early keeps the failure clear and avoids
@@ -4910,33 +4871,36 @@ func rejectNULInPath(fields ...string) error {
 	return nil
 }
 
-// ensureRealParentWithinBase defends against writing through a symlink that
-// already exists in the destination tree (for example, extracting into a
-// directory that legitimately contains a symlink). It resolves the deepest
-// already-existing ancestor directory of destPath, following every symlink,
-// and refuses when that real location falls outside the destination root.
-func ensureRealParentWithinBase(destPath, base string) error {
-	realBase, err := filepath.EvalSymlinks(base)
-	if err != nil {
-		return fmt.Errorf("Error resolving destination %s: %w", base, err)
+// createExtractedFileInRoot is the os.Root-relative form of createExtractedFile:
+// it opens rel (a root-relative path) with O_EXCL so an existing name is never
+// written through, and for overwrite removes the existing name (via root, which
+// cannot follow an escaping symlink) before an exclusive recreate. Returns
+// (nil, nil) when skipExisting applies. display is only for error messages.
+func createExtractedFileInRoot(root *os.Root, rel string, mode os.FileMode, options zipWriteOptions, display string) (*os.File, error) {
+	flags := os.O_CREATE | os.O_WRONLY | os.O_EXCL
+	f, err := root.OpenFile(rel, flags, mode)
+	if err == nil {
+		return f, nil
 	}
-	realBaseWithSep := ensureTrailingSeparator(realBase)
+	if !errors.Is(err, os.ErrExist) {
+		return nil, err
+	}
 
-	ancestor := filepath.Dir(destPath)
-	for {
-		real, err := filepath.EvalSymlinks(ancestor)
-		if err == nil {
-			return ensureWithinBase(real, realBase, realBaseWithSep)
-		}
-		if !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		parent := filepath.Dir(ancestor)
-		if parent == ancestor {
-			return nil
-		}
-		ancestor = parent
+	if options.skipExisting {
+		return nil, nil
 	}
+	if !options.overwrite {
+		return nil, fmt.Errorf("Destination %s already exists", display)
+	}
+
+	if err := root.Remove(rel); err != nil {
+		return nil, fmt.Errorf("Error replacing %s: %w", display, err)
+	}
+	f, err = root.OpenFile(rel, flags, mode)
+	if err != nil {
+		return nil, err
+	}
+	return f, nil
 }
 
 type zipExtractOptions struct {
@@ -5339,6 +5303,11 @@ func extractZipArchive(zipPath, destDir string, options zipExtractOptions) error
 	if err := os.MkdirAll(absDest, 0755); err != nil {
 		return fmt.Errorf("Error creating destination %s: %w", absDest, err)
 	}
+	root, err := os.OpenRoot(absDest)
+	if err != nil {
+		return fmt.Errorf("Error opening destination %s: %w", absDest, err)
+	}
+	defer root.Close()
 	baseWithSep := ensureTrailingSeparator(absDest)
 	budget := newByteBudget(options.maxBytes)
 
@@ -5370,13 +5339,13 @@ func extractZipArchive(zipPath, destDir string, options zipExtractOptions) error
 			continue
 		}
 
-		target := filepath.Join(absDest, filepath.FromSlash(stripped))
-		target = filepath.Clean(target)
+		// Lexical containment as a cheap first layer; os.Root is authoritative.
+		target := filepath.Clean(filepath.Join(absDest, filepath.FromSlash(stripped)))
 		if err := ensureWithinBase(target, absDest, baseWithSep); err != nil {
 			return err
 		}
 
-		if err := writeZipFileToDisk(file, target, options.zipWriteOptions, true, absDest, budget); err != nil {
+		if err := writeZipEntryToRoot(root, absDest, file, stripped, options.zipWriteOptions, budget); err != nil {
 			return err
 		}
 	}
@@ -5457,6 +5426,11 @@ func extractZipDirectoryEntries(files []*zip.File, targetName, destPath string, 
 		}
 	}
 
+	root, err := os.OpenRoot(absDest)
+	if err != nil {
+		return fmt.Errorf("Error opening destination %s: %w", absDest, err)
+	}
+	defer root.Close()
 	baseWithSep := ensureTrailingSeparator(absDest)
 	prefix := targetName + "/"
 	budget := newByteBudget(options.maxBytes)
@@ -5479,13 +5453,12 @@ func extractZipDirectoryEntries(files []*zip.File, targetName, destPath string, 
 			continue
 		}
 
-		target := filepath.Join(absDest, filepath.FromSlash(relative))
-		target = filepath.Clean(target)
+		target := filepath.Clean(filepath.Join(absDest, filepath.FromSlash(relative)))
 		if err := ensureWithinBase(target, absDest, baseWithSep); err != nil {
 			return err
 		}
 
-		if err := writeZipFileToDisk(file, target, options.zipWriteOptions, true, absDest, budget); err != nil {
+		if err := writeZipEntryToRoot(root, absDest, file, relative, options.zipWriteOptions, budget); err != nil {
 			return err
 		}
 	}
@@ -5514,48 +5487,44 @@ func extractZipFileEntry(file *zip.File, destPath string, options zipExtractEntr
 		}
 	}
 
-	return writeZipFileToDisk(file, absDest, options.zipWriteOptions, false, parent, newByteBudget(options.maxBytes))
+	root, err := os.OpenRoot(parent)
+	if err != nil {
+		return fmt.Errorf("Error opening destination %s: %w", parent, err)
+	}
+	defer root.Close()
+
+	return writeZipEntryToRoot(root, parent, file, filepath.Base(absDest), options.zipWriteOptions, newByteBudget(options.maxBytes))
 }
 
-func writeZipFileToDisk(file *zip.File, destPath string, options zipWriteOptions, ensureParents bool, base string, budget *byteBudget) error {
+// writeZipEntryToRoot writes a zip entry (directory or regular file — zip
+// symlinks are refused by the callers) at the root-relative path relSlash. All
+// filesystem operations go through root, so the write cannot escape the
+// destination. base is used only for error-message paths.
+func writeZipEntryToRoot(root *os.Root, base string, file *zip.File, relSlash string, options zipWriteOptions, budget *byteBudget) error {
 	if err := rejectNULInPath(file.Name); err != nil {
 		return err
 	}
-	if err := ensureRealParentWithinBase(destPath, base); err != nil {
-		return err
-	}
-
+	rel := filepath.FromSlash(relSlash)
+	display := filepath.Join(base, rel)
 	info := file.FileInfo()
 
 	if info.IsDir() {
-		if ensureParents {
-			if err := os.MkdirAll(destPath, 0755); err != nil {
-				return fmt.Errorf("Error creating directory %s: %w", destPath, err)
-			}
-		} else if err := os.Mkdir(destPath, 0755); err != nil && !errors.Is(err, os.ErrExist) {
-			return fmt.Errorf("Error creating directory %s: %w", destPath, err)
+		if err := root.MkdirAll(rel, 0755); err != nil {
+			return fmt.Errorf("Error creating directory %s: %w", display, err)
 		}
-
 		if options.preservePermissions {
-			if err := os.Chmod(destPath, info.Mode()); err != nil && !errors.Is(err, os.ErrPermission) {
-				return fmt.Errorf("Error setting permissions on %s: %w", destPath, err)
+			if err := root.Chmod(rel, info.Mode().Perm()); err != nil && !errors.Is(err, os.ErrPermission) {
+				return fmt.Errorf("Error setting permissions on %s: %w", display, err)
 			}
 		}
 		return nil
 	}
 
-	parentDir := filepath.Dir(destPath)
-	if ensureParents {
-		if err := os.MkdirAll(parentDir, 0755); err != nil {
-			return fmt.Errorf("Error creating parent directory %s: %w", parentDir, err)
-		}
-	} else {
-		if _, err := os.Stat(parentDir); err != nil {
-			return fmt.Errorf("Parent directory %s does not exist", parentDir)
-		}
+	if err := mkdirAllParent(root, relSlash, display); err != nil {
+		return err
 	}
 
-	outFile, err := createExtractedFile(destPath, info.Mode().Perm(), options)
+	outFile, err := createExtractedFileInRoot(root, rel, info.Mode().Perm(), options, display)
 	if err != nil {
 		return err
 	}
@@ -5575,10 +5544,9 @@ func writeZipFileToDisk(file *zip.File, destPath string, options zipWriteOptions
 	}
 
 	if options.preservePermissions {
-		// Chmod via the open descriptor, not the path, so permissions can
-		// never be redirected onto a symlink target.
+		// Chmod via the open descriptor, not the path.
 		if err := outFile.Chmod(info.Mode()); err != nil && !errors.Is(err, os.ErrPermission) {
-			return fmt.Errorf("Error setting permissions on %s: %w", destPath, err)
+			return fmt.Errorf("Error setting permissions on %s: %w", display, err)
 		}
 	}
 	return nil

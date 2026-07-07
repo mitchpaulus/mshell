@@ -45,6 +45,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fresh file is created. This mirrors GNU tar's behavior and prevents an
   `overwrite` extraction from writing through a pre-existing symlink at the
   destination name (e.g. `dest/report` -> `/etc/passwd`).
+- Archive extraction (both `zip*` and `tar*`) now performs every write through
+  an `os.Root` anchored at the destination directory. The kernel enforces that
+  no path can escape the destination via `..` or a symlink component (using
+  `openat2`/`RESOLVE_BENEATH` on Linux), closing the time-of-check/time-of-use
+  race that a purely lexical containment check leaves open. Legitimate symlinks
+  that stay within the destination continue to work.
 - Optional fields in dictionary shape types, written `name?: T` (and
   `"name"?: T` in `def` signatures). An optional field may be absent from a
   value; when present, its value is still type-checked. This lets option-style
