@@ -1419,6 +1419,37 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
 - `zipExtractEntry`: Extract a single entry (file or directory subtree) to a destination path. Options dict is required; defaults: `overwrite=false`, `skipExisting=false` (mutually exclusive), `preservePermissions=true`, `mkdirs=true`. `(path:zipPath str:entry path:dest dict:options -- )`
 - `zipRead`: Read an entry's bytes directly onto the stack without writing to disk. Returns `none` when the entry does not exist. `(path:zipPath str:entry -- Maybe[binary])`
 
+## Archive (Tar) Functions
+
+The tar functions mirror the `zip*` surface exactly: same names with a `tar`
+prefix, same argument order, and the same option dictionaries.
+Two things differ, both driven by the tar format:
+
+- Compression is selected by the destination extension when writing:
+  `.tar.gz` or `.tgz` produce a gzip-compressed tarball, `.tar` is uncompressed.
+  When reading, the gzip magic bytes are auto-detected, so a gzipped tarball is
+  read transparently regardless of its filename.
+- Symlinks are preserved: `tarPack`/`tarDir*` store symlinks as symlink entries,
+  and `tarExtract`/`tarExtractEntry` recreate them (rejecting any whose target
+  would escape the destination directory). Hard links and device/fifo nodes are
+  rejected with an error.
+
+- `tarDirInc`: Create/overwrite a `.tar`/`.tar.gz` from a directory; the archive root contains the directory's contents (no parent folder). `(path:sourceDir path:tarPath -- )`
+- `tarDirExc`: Create/overwrite a `.tar`/`.tar.gz` that includes the source directory itself at the archive root (entries are prefixed with the directory name). `(path:sourceDir path:tarPath -- )`
+- `tarPack`: Create/overwrite a `.tar`/`.tar.gz` by packing a list of entries.
+  Each entry is either a bare string/path (the file or directory to add,
+  keeping its base name and mode) or a dictionary.
+  Each dictionary entry requires `path` (the file or directory to add);
+  `archivePath` (override the in-archive name) and `mode` are optional.
+  `mode` is a Go `os.FileMode`; write it with an octal literal,
+  e.g. `0o644` (`rw-r--r--`), `0o755` (`rwxr-xr-x`), `0o600`.
+  If `mode` is omitted, the entry keeps the source file's own mode.
+  Type: `([str | path | {path: str | path, archivePath?: str | path, mode?: int}] str | path -- )`
+- `tarList`: List archive entries as dictionaries with keys: `name` (string, forward-slash paths, directories end with `/`), `compressedSize` and `uncompressedSize` (int bytes; equal, since tar has no per-entry compressed size), `isDir` (bool), `perm` (int POSIX permission bits), `executable` (bool), `modified` (datetime from the archive entry), `type` (`"file"`/`"dir"`/`"symlink"`), and `linkTarget` (symlink target, empty otherwise). `(path -- [dict])`
+- `tarExtract`: Extract an entire archive. Options dict is required; defaults: `overwrite=false`, `skipExisting=false` (mutually exclusive), `stripComponents=0`, `pattern=""` (glob matched before stripping), `preservePermissions=true`. Destination is created if missing. `(path:tarPath path:destDir dict:options -- )`
+- `tarExtractEntry`: Extract a single entry (file or directory subtree) to a destination path. Options dict is required; defaults: `overwrite=false`, `skipExisting=false` (mutually exclusive), `preservePermissions=true`, `mkdirs=true`. `(path:tarPath str:entry path:dest dict:options -- )`
+- `tarRead`: Read an entry's bytes directly onto the stack without writing to disk. Returns `none` when the entry does not exist. `(path:tarPath str:entry -- Maybe[binary])`
+
 ## Variables
 
 You can store to several variables in one go by separating the store tokens with commas.

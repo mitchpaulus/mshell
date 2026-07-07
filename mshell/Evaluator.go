@@ -5083,7 +5083,7 @@ func parseZipExtractOptions(dict *MShellDict) (zipExtractOptions, error) {
 	}
 
 	if options.overwrite && options.skipExisting {
-		return options, fmt.Errorf("zipExtract options 'overwrite' and 'skipExisting' are mutually exclusive")
+		return options, fmt.Errorf("options 'overwrite' and 'skipExisting' are mutually exclusive")
 	}
 
 	if val, ok, err := boolOption(dict, "preservePermissions"); err != nil {
@@ -5133,7 +5133,7 @@ func parseZipExtractEntryOptions(dict *MShellDict) (zipExtractEntryOptions, erro
 	}
 
 	if options.overwrite && options.skipExisting {
-		return options, fmt.Errorf("zipExtractEntry options 'overwrite' and 'skipExisting' are mutually exclusive")
+		return options, fmt.Errorf("options 'overwrite' and 'skipExisting' are mutually exclusive")
 	}
 
 	if val, ok, err := boolOption(dict, "preservePermissions"); err != nil {
@@ -7707,6 +7707,221 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					data, found, err := readZipEntry(zipPath, entryPath)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
+					}
+					if !found {
+						stack.Push(&Maybe{obj: nil})
+					} else {
+						stack.Push(&Maybe{obj: MShellBinary(data)})
+					}
+				} else if t.Lexeme == "tarDirInc" || t.Lexeme == "tarDirExc" {
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					tarPath, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot tar into a %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					sourceDir, err := obj2.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot tar from a %s.\n", t.Line, t.Column, obj2.TypeName()))
+					}
+
+					preserveRoot := t.Lexeme == "tarDirInc"
+					if err := tarDirectory(sourceDir, tarPath, preserveRoot); err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
+					}
+				} else if t.Lexeme == "tarPack" {
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					tarPath, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot tar into a %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					list, ok := obj2.(*MShellList)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: tarPack expects a list of dictionaries describing the entries to add. Found %s.\n", t.Line, t.Column, obj2.TypeName()))
+					}
+
+					entries := make([]zipPackItem, 0, len(list.Items))
+					for idx, item := range list.Items {
+						entryDict, ok := item.(*MShellDict)
+						if !ok {
+							switch pathItem := item.(type) {
+							case MShellString:
+								entries = append(entries, zipPackItem{SourcePath: pathItem.Content, PreserveRoot: true})
+								continue
+							case MShellPath:
+								entries = append(entries, zipPackItem{SourcePath: pathItem.Path, PreserveRoot: true})
+								continue
+							}
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: tarPack entry %d is not a string, path, or dictionary. Found %s.\n", t.Line, t.Column, idx, item.TypeName()))
+						}
+
+						sourceObj, ok := entryDict.Items["path"]
+						if !ok {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: tarPack entry %d is missing required 'path'.\n", t.Line, t.Column, idx))
+						}
+
+						sourcePath, err := sourceObj.CastString()
+						if err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: tarPack entry %d had a non-string path (%s).\n", t.Line, t.Column, idx, sourceObj.TypeName()))
+						}
+
+						packItem := zipPackItem{SourcePath: sourcePath, PreserveRoot: true}
+						if archiveObj, ok := entryDict.Items["archivePath"]; ok {
+							archivePath, err := archiveObj.CastString()
+							if err != nil {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: tarPack entry %d had an invalid archivePath (%s).\n", t.Line, t.Column, idx, archiveObj.TypeName()))
+							}
+							packItem.ArchivePath = archivePath
+							packItem.PreserveRoot = false
+						}
+						if modeObj, ok := entryDict.Items["mode"]; ok {
+							modeInt, ok := modeObj.(MShellInt)
+							if !ok {
+								return state.FailWithMessage(fmt.Sprintf("%d:%d: tarPack entry %d had a non-integer mode (%s).\n", t.Line, t.Column, idx, modeObj.TypeName()))
+							}
+							mode := os.FileMode(modeInt.Value)
+							packItem.ModeOverride = &mode
+						}
+						entries = append(entries, packItem)
+					}
+
+					if err := buildTarFromEntries(entries, tarPath); err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
+					}
+				} else if t.Lexeme == "tarList" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'tarList' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					tarPath, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot list entries in a %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					entries, err := collectTarMetadata(tarPath)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
+					}
+
+					result := NewList(0)
+					for _, entry := range entries {
+						dict := NewDict()
+						dict.Items["name"] = MShellString{entry.Name}
+						dict.Items["compressedSize"] = MShellInt{entry.Size}
+						dict.Items["uncompressedSize"] = MShellInt{entry.Size}
+						dict.Items["isDir"] = MShellBool{entry.IsDir}
+						dict.Items["perm"] = MShellInt{int(entry.Mode.Perm())}
+						dict.Items["executable"] = MShellBool{entry.Type == "file" && entry.Mode.Perm()&0o111 != 0}
+						dict.Items["modified"] = &MShellDateTime{Time: entry.Modified, OriginalString: entry.Modified.Format("2006-01-02T15:04:05")}
+						dict.Items["type"] = MShellString{entry.Type}
+						dict.Items["linkTarget"] = MShellString{entry.LinkTarget}
+						result.Items = append(result.Items, dict)
+					}
+					stack.Push(result)
+				} else if t.Lexeme == "tarExtract" {
+					obj1, obj2, obj3, err := stack.Pop3(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					optionsDict, ok := obj1.(*MShellDict)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: tarExtract expects an options dictionary. Found %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					destDir, err := obj2.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: tarExtract destination must be a string/path. Found %s.\n", t.Line, t.Column, obj2.TypeName()))
+					}
+
+					tarPath, err := obj3.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: tarExtract source must be a string/path. Found %s.\n", t.Line, t.Column, obj3.TypeName()))
+					}
+
+					options, err := parseZipExtractOptions(optionsDict)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
+					}
+
+					if err := extractTarArchive(tarPath, destDir, options); err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
+					}
+				} else if t.Lexeme == "tarExtractEntry" {
+					optionsObj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'tarExtractEntry' operation on an empty stack.\n", t.Line, t.Column))
+					}
+					destObj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: tarExtractEntry requires four arguments.\n", t.Line, t.Column))
+					}
+					entryObj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: tarExtractEntry requires four arguments.\n", t.Line, t.Column))
+					}
+					tarObj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: tarExtractEntry requires four arguments.\n", t.Line, t.Column))
+					}
+
+					optionsDict, ok := optionsObj.(*MShellDict)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: tarExtractEntry expects an options dictionary. Found %s.\n", t.Line, t.Column, optionsObj.TypeName()))
+					}
+
+					destPath, err := destObj.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: tarExtractEntry destination must be a string/path. Found %s.\n", t.Line, t.Column, destObj.TypeName()))
+					}
+
+					entryPath, err := entryObj.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: tarExtractEntry entry name must be a string/path. Found %s.\n", t.Line, t.Column, entryObj.TypeName()))
+					}
+
+					tarPath, err := tarObj.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: tarExtractEntry source must be a string/path. Found %s.\n", t.Line, t.Column, tarObj.TypeName()))
+					}
+
+					options, err := parseZipExtractEntryOptions(optionsDict)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
+					}
+
+					if err := extractTarEntry(tarPath, entryPath, destPath, options); err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
+					}
+				} else if t.Lexeme == "tarRead" {
+					obj1, obj2, err := stack.Pop2(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+
+					entryPath, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: tarRead entry name must be a string/path. Found %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					tarPath, err := obj2.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: tarRead archive path must be a string/path. Found %s.\n", t.Line, t.Column, obj2.TypeName()))
+					}
+
+					data, found, err := readTarEntry(tarPath, entryPath)
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
 					}

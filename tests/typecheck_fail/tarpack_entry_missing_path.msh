@@ -1,0 +1,3 @@
+# Re-typed builtin: tarPack entries require `path`; an entry with only the
+# optional `archivePath` must be rejected.
+[ { 'archivePath': "packed.txt" } ] `out.tar` tarPack
