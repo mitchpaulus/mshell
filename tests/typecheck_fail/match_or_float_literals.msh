@@ -1,0 +1,5 @@
+# Float literals are not allowed as OR pattern alternatives
+1.5 match
+    1.5 2.5 : "small" wl,
+    _       : "big" wl,
+end

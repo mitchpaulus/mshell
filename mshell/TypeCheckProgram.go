@@ -1143,6 +1143,8 @@ func formatPatternItem(it MShellParseItem) string {
 	switch v := it.(type) {
 	case Token:
 		return v.Lexeme
+	case *MShellParseOrPattern:
+		return v.DebugString()
 	case *MShellParseList:
 		return "[" + formatPatternSnippet(v.Items) + "]"
 	default:
@@ -1335,6 +1337,10 @@ func (c *Checker) armPatternOf(subject TypeId, pattern []MShellParseItem) armPat
 			}
 		case Token:
 			c.analyzeTokenPattern(p, &out)
+		case *MShellParseOrPattern:
+			// OR of value literals: like single value literals it
+			// credits no coverage, narrows nothing, and binds nothing.
+			out.Recognized = true
 		}
 
 	case 2:
@@ -1504,6 +1510,7 @@ func isTypeKeywordToken(tok Token) bool {
 const matchPatternFormsHint = "expected one of: `_`; a type keyword " +
 	"(int, float, str, bool, list, dict, path, date, quotation, maybe, binary), " +
 	"optionally followed by a binding name; a value literal (42, 1.5, \"text\", true, false, PATH); " +
+	"two or more value literals of the same kind (strings, ints, or paths) matched as OR alternatives; " +
 	"`none`; `just <name>`; a list pattern `[ ... ]`; or a dict pattern `{ ... }`"
 
 func (c *Checker) bindPatternName(name string, typ TypeId) {

@@ -1,0 +1,5 @@
+# OR pattern alternatives must all be the same literal kind
+"auto" match
+    'auto' 0 : "default" wl,
+    _        : "other" wl,
+end
