@@ -240,3 +240,44 @@ end
     '-h' '--help' :> wl,
     _             : "other" wl,
 end
+
+# OR patterns - quote style combinatorics: single/double quotes are
+# interchangeable in every position, hitting first and second alternative.
+"a" match
+    'a' 'b' : "ss-first" wl,
+    _       : "other" wl,
+end
+"b" match
+    'a' 'b' : "ss-second" wl,
+    _       : "other" wl,
+end
+"a" match
+    "a" "b" : "dd-first" wl,
+    _       : "other" wl,
+end
+"b" match
+    "a" "b" : "dd-second" wl,
+    _       : "other" wl,
+end
+"a" match
+    'a' "b" : "sd-first" wl,
+    _       : "other" wl,
+end
+"b" match
+    'a' "b" : "sd-second" wl,
+    _       : "other" wl,
+end
+"a" match
+    "a" 'b' : "ds-first" wl,
+    _       : "other" wl,
+end
+"b" match
+    "a" 'b' : "ds-second" wl,
+    _       : "other" wl,
+end
+
+# Subject quoting style is also irrelevant
+'a' match
+    "a" "b" : "single-quoted subject" wl,
+    _       : "other" wl,
+end
