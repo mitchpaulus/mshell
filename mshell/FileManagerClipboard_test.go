@@ -159,7 +159,8 @@ func TestRefreshClipboard(t *testing.T) {
 
 // TestClipboardWatchPropagates checks the full push pipeline: a mutation by
 // another instance reaches an idle FileManager (no keystrokes) through the
-// directory watch, or at worst through the bounded poll fallback.
+// directory watch — via an event, or via the one-time reconcile that runs
+// right after the watch is established (which covers writes racing startup).
 func TestClipboardWatchPropagates(t *testing.T) {
 	useTempHistoryDir(t)
 
@@ -230,5 +231,163 @@ func TestClipboardPasteMergesConcurrentEntries(t *testing.T) {
 	}
 	if len(copyPaths) != 1 || copyPaths[0] != "/other/instance/entry" {
 		t.Errorf("concurrent copy entry lost: %v", copyPaths)
+	}
+}
+
+// TestClipboardLockWaitIsBounded holds the clipboard lock and checks that a
+// second acquire fails after its timeout instead of hanging: a stuck or
+// hostile lock holder must never freeze another instance's keystroke.
+func TestClipboardLockWaitIsBounded(t *testing.T) {
+	useTempHistoryDir(t)
+	dir, err := GetHistoryDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(dir, clipboardLockFileName)
+
+	held, err := acquireFileLock(lockPath, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.release()
+
+	start := time.Now()
+	if _, err := acquireFileLock(lockPath, 150*time.Millisecond); err == nil {
+		t.Fatal("second acquire should time out while the lock is held")
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("timed-out acquire took %v; the wait is not bounded", elapsed)
+	}
+}
+
+// TestClipboardLoadEntryCap writes more entries than the cap and checks the
+// load degrades to exactly the cap instead of doing unbounded work.
+func TestClipboardLoadEntryCap(t *testing.T) {
+	useTempHistoryDir(t)
+	path, err := clipboardFilePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var sb strings.Builder
+	for i := 0; i < maxClipboardEntries+100; i++ {
+		fmt.Fprintf(&sb, "copy\t/bulk/file%05d\n", i)
+	}
+	if err := os.WriteFile(path, []byte(sb.String()), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cutPaths, copyPaths := loadClipboard()
+	if got := len(cutPaths) + len(copyPaths); got != maxClipboardEntries {
+		t.Fatalf("loaded %d entries, want cap of %d", got, maxClipboardEntries)
+	}
+}
+
+// TestClipboardLoadByteCap writes a file past the byte cap (using paths long
+// enough that the entry cap is not hit first) and checks that the load is
+// partial rather than empty, and that the line straddling the cap is dropped
+// whole — a truncated fragment must never surface as a real path.
+func TestClipboardLoadByteCap(t *testing.T) {
+	useTempHistoryDir(t)
+	path, err := clipboardFilePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	longSeg := strings.Repeat("x", 4096)
+	written := make(map[string]bool)
+	var sb strings.Builder
+	for i := 0; sb.Len() <= maxClipboardBytes+8192; i++ {
+		p := fmt.Sprintf("/bulk/%s/%05d", longSeg, i)
+		written[p] = true
+		sb.WriteString("copy\t" + p + "\n")
+	}
+	if err := os.WriteFile(path, []byte(sb.String()), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, copyPaths := loadClipboard()
+	if len(copyPaths) == 0 {
+		t.Fatal("byte cap should degrade to a partial load, not an empty one")
+	}
+	if len(copyPaths) >= len(written) {
+		t.Fatalf("loaded all %d entries; the byte cap did not bound the read", len(written))
+	}
+	for _, p := range copyPaths {
+		if !written[p] {
+			t.Fatalf("loaded a path that was never written (truncated fragment?): %.80q", p)
+		}
+	}
+}
+
+// TestClipboardSaveSweepsStaleTemps checks that a save removes temp files
+// orphaned by a crashed writer (old mtime) while leaving recent ones alone,
+// so orphans cannot accumulate forever.
+func TestClipboardSaveSweepsStaleTemps(t *testing.T) {
+	useTempHistoryDir(t)
+	path, err := clipboardFilePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Dir(path)
+
+	stale := filepath.Join(dir, clipboardFileName+".tmp-stale")
+	fresh := filepath.Join(dir, clipboardFileName+".tmp-fresh")
+	for _, p := range []string{stale, fresh} {
+		if err := os.WriteFile(p, []byte("orphan"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := time.Now().Add(-2 * time.Minute)
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	err = withClipboardLock(func() error {
+		return saveClipboard([]string{"/a"}, nil)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Errorf("stale temp file should have been swept")
+	}
+	if _, err := os.Stat(fresh); err != nil {
+		t.Errorf("recent temp file should have been left alone: %v", err)
+	}
+}
+
+// TestClipboardReadSingleFlight simulates a hung read by occupying the read
+// gate and checks that further reads fail fast — and, critically, that a
+// mutation aborts instead of saving an empty clipboard over real entries.
+func TestClipboardReadSingleFlight(t *testing.T) {
+	useTempHistoryDir(t)
+
+	if err := addClipboardPath("cut", "/existing/entry"); err != nil {
+		t.Fatal(err)
+	}
+
+	clipboardReadGate <- struct{}{}
+	defer func() { <-clipboardReadGate }()
+
+	start := time.Now()
+	if _, _, ok := readClipboard(); ok {
+		t.Fatal("read should fail while another read is in flight")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("gated read took %v, want fail-fast", elapsed)
+	}
+
+	if err := addClipboardPath("copy", "/new/entry"); err == nil {
+		t.Fatal("mutation must abort when the clipboard cannot be read")
+	}
+
+	// The existing entry survived the aborted mutation.
+	<-clipboardReadGate
+	cutPaths, _ := loadClipboard()
+	clipboardReadGate <- struct{}{}
+	if len(cutPaths) != 1 || cutPaths[0] != "/existing/entry" {
+		t.Fatalf("existing entry lost after aborted mutation: %v", cutPaths)
 	}
 }

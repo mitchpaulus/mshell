@@ -134,16 +134,18 @@ func (w *dirWatcher) readLoop() {
 // NextEntryOffset uint32, Action uint32, FileNameLength uint32 (bytes),
 // FileName []uint16 (not NUL-terminated).
 func (w *dirWatcher) parseAndSend(buf []byte) {
-	offset := uint32(0)
+	// All arithmetic is in int (64-bit) so a malformed length or chain
+	// offset can never wrap and loop forever or slice out of range.
+	offset := 0
 	for {
-		if int(offset)+12 > len(buf) {
+		if offset+12 > len(buf) {
 			return
 		}
-		next := binary.LittleEndian.Uint32(buf[offset:])
-		nameLen := binary.LittleEndian.Uint32(buf[offset+8:])
+		next := int(binary.LittleEndian.Uint32(buf[offset:]))
+		nameLen := int(binary.LittleEndian.Uint32(buf[offset+8:]))
 		nameStart := offset + 12
 		nameEnd := nameStart + nameLen
-		if int(nameEnd) > len(buf) {
+		if nameEnd > len(buf) {
 			return
 		}
 		nameBytes := buf[nameStart:nameEnd]
@@ -153,6 +155,11 @@ func (w *dirWatcher) parseAndSend(buf []byte) {
 		}
 		w.send(string(utf16.Decode(codeUnits)))
 		if next == 0 {
+			return
+		}
+		if next < 12 || offset+next > len(buf) {
+			// A chain offset that is too small or points past the buffer is
+			// malformed; stop parsing rather than spin on it.
 			return
 		}
 		offset += next

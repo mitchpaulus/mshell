@@ -66,6 +66,12 @@ func (w *dirWatcher) readLoop() {
 				return
 			}
 			nameLen := int(event.Len)
+			if offset+unix.SizeofInotifyEvent+nameLen > n {
+				// A record claiming to extend past the read is malformed;
+				// the kernel never splits events, so stop parsing rather
+				// than slice past the data (which would panic the process).
+				break
+			}
 			name := ""
 			if nameLen > 0 {
 				nameBytes := buf[offset+unix.SizeofInotifyEvent : offset+unix.SizeofInotifyEvent+nameLen]

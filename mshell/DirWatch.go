@@ -70,6 +70,12 @@ func (fm *FileManager) clipboardWatchLoop() {
 	}
 	defer watcher.Close()
 
+	// The watch only now exists: anything written before this point (startup,
+	// or the dormant gap before a restart) produced no event, so reconcile
+	// with the actual on-disk state once. Every later write is covered by an
+	// event because the watch was established before this refresh.
+	fm.applyClipboardChange(false)
+
 	for {
 		select {
 		case <-fm.watchDone:
