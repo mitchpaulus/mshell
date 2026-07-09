@@ -1095,7 +1095,8 @@ end wl # Output: 11
    On exit, changes the working directory to the directory the user navigated to.
    On Windows, pressing `h` at the root of a drive shows the mounted drive letters so you can switch volumes.
    The preview pane short-circuits common binary extensions and shows first-level contents for `.zip` and `.tar.gz` archives.
-   Yank bindings copy text about the selected entry to the system clipboard: `yf` (file name), `yp` (full path), `yg` (path relative to the enclosing `.git` directory). `(str -- )`
+   Yank bindings copy text about the selected entry to the system clipboard: `yf` (file name), `yp` (full path), `yg` (path relative to the enclosing `.git` directory).
+   The cut/copy clipboard (`d` / `yy` / `p`) is shared across all running mshell instances and propagates between them immediately. `(str -- )`
 - `clip`: Copy a string to the system clipboard. Cross-platform: uses `pbcopy` on macOS, `clip` on Windows, and the first available of `wl-copy`, `xclip`, or `xsel` on Linux. `(str -- )`
 - `writeFile`: Write a string (UTF-8) or raw binary data to file. Overwrites file if it exists. `(str|bytes content str|path file -- )`
 - `appendFile`: Append a string (UTF-8) or raw binary data to file. `(str|bytes content str|path file -- )`
