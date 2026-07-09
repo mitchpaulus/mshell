@@ -13,7 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `go install github.com/mitchpaulus/mshell/mshell@latest`.
   This only installs the binary;
   the standard library still needs to be set up separately.
-
+- Match arms may list several literals in a row, matching if the subject equals
+  any of them (OR), e.g. `'-h' '--help' : ...`. All alternatives in one arm
+  must be the same literal kind: all strings, all integers, or all paths.
 - Optional `followRedirects` key (bool, default `true`) on the `httpGet` /
   `httpPost` request dictionary. Set it to `false` to get the first response
   back as-is instead of following redirects, e.g. to inspect the `Location` or

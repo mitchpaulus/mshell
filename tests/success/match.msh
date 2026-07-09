@@ -203,3 +203,57 @@ end
     { 'name': n, 'age': a } :> keys len @a + str wl,
     _                       :> keys len str wl,
 end
+
+# OR patterns - string literals, first alternative hit
+"-h" match
+    '-h' '--help' : "help" wl,
+    _             : "other" wl,
+end
+
+# OR patterns - string literals, last alternative hit (mixed quoting styles)
+"--help" match
+    "-h" '--help' : "help" wl,
+    _             : "other" wl,
+end
+
+# OR patterns - no alternative hit falls through to later arm
+"-v" match
+    '-h' '--help' : "help" wl,
+    '-v' '--version' : "version" wl,
+    _             : "other" wl,
+end
+
+# OR patterns - int literals
+5 match
+    1 2 5 : "small" wl,
+    _     : "big" wl,
+end
+
+# OR patterns - path literals
+`/a/b` match
+    `/x` `/a/b` : "known path" wl,
+    _           : "other" wl,
+end
+
+# OR patterns - preserve subject with :>
+"-h" match
+    '-h' '--help' :> wl,
+    _             : "other" wl,
+end
+
+# OR patterns - quote style combinatorics: single/double quotes are
+# interchangeable in every position, hitting first and second alternative.
+"a" match 'a' 'b' : "ss-first" wl, _ : "other" wl, end
+"b" match 'a' 'b' : "ss-second" wl, _ : "other" wl, end
+"a" match "a" "b" : "dd-first" wl, _ : "other" wl, end
+"b" match "a" "b" : "dd-second" wl, _ : "other" wl, end
+"a" match 'a' "b" : "sd-first" wl, _ : "other" wl, end
+"b" match 'a' "b" : "sd-second" wl, _ : "other" wl, end
+"a" match "a" 'b' : "ds-first" wl, _ : "other" wl, end
+"b" match "a" 'b' : "ds-second" wl, _ : "other" wl, end
+
+# Subject quoting style is also irrelevant
+'a' match
+    "a" "b" : "single-quoted subject" wl,
+    _       : "other" wl,
+end

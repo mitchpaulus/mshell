@@ -181,6 +181,20 @@ If no arm matches and no wildcard <code>_</code> arm is provided, a runtime erro
 <span class="mshellEND">end</span></code>
 </pre>
 
+<p>
+An arm may list several strings, integers, or paths in a row; it matches if the subject equals any of them.
+All alternatives in one arm must be the same kind: all strings, all integers, or all paths.
+Other types are not allowed. For strings, they must be quoted, they cannot be literals.
+</p>
+
+<pre>
+<code><span class="mshellVARRETRIEVE">@arg</span> <span class="mshellMATCH">match</span>
+    <span class="mshellSINGLEQUOTESTRING">'-h'</span> <span class="mshellSINGLEQUOTESTRING">'--help'</span>    : <span class="mshellLITERAL">help</span>,
+    <span class="mshellSINGLEQUOTESTRING">'-v'</span> <span class="mshellSINGLEQUOTESTRING">'--version'</span> : <span class="mshellLITERAL">version</span>,
+    <span class="mshellLITERAL">_</span>                : <span class="mshellLITERAL">unknownArg</span>,
+<span class="mshellEND">end</span></code>
+</pre>
+
 <p>Use <code>:&gt;</code> when the arm body needs the matched subject, for example when matching on type before sending the value through another function:</p>
 
 <pre>

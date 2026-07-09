@@ -375,6 +375,45 @@ func (ifBlock *MShellParseIfBlock) DebugString() string {
 	return builder.String()
 }
 
+// MShellParseOrPattern is a match-arm pattern of two or more value
+// literals of the same kind (all quoted strings, all integers, or all
+// paths), matching if the subject equals any of them.
+type MShellParseOrPattern struct {
+	Tokens []Token
+}
+
+func (o *MShellParseOrPattern) GetStartToken() Token {
+	return o.Tokens[0]
+}
+
+func (o *MShellParseOrPattern) GetEndToken() Token {
+	return o.Tokens[len(o.Tokens)-1]
+}
+
+func (o *MShellParseOrPattern) ToJson() string {
+	var sb strings.Builder
+	sb.WriteString("{\"orPattern\": [")
+	for i, tok := range o.Tokens {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString(tok.ToJson())
+	}
+	sb.WriteString("]}")
+	return sb.String()
+}
+
+func (o *MShellParseOrPattern) DebugString() string {
+	var sb strings.Builder
+	for i, tok := range o.Tokens {
+		if i > 0 {
+			sb.WriteString(" ")
+		}
+		sb.WriteString(tok.DebugString())
+	}
+	return sb.String()
+}
+
 // MShellParseMatchArm represents a single arm of a match block
 type MShellParseMatchArm struct {
 	Pattern []MShellParseItem
@@ -1543,6 +1582,46 @@ ColDefLoop:
 	return grid, nil
 }
 
+// orLiteralKind classifies tokens that may appear in a match-arm OR
+// pattern, collapsing double- and single-quoted strings into one kind.
+// Interpolated strings, floats, bools, and bare words are excluded: the
+// parser can compare these literal tokens without knowing definitions
+// or types.
+func orLiteralKind(t TokenType) (TokenType, bool) {
+	switch t {
+	case STRING, SINGLEQUOTESTRING:
+		return STRING, true
+	case INTEGER, PATH:
+		return t, true
+	}
+	return t, false
+}
+
+// parseMatchOrLiterals consumes one or more consecutive value-literal
+// tokens in a match arm pattern. A single literal stays a plain Token
+// item; two or more become an MShellParseOrPattern (OR alternatives),
+// which must all be the same literal kind.
+func (parser *MShellParser) parseMatchOrLiterals() (MShellParseItem, error) {
+	firstKind, _ := orLiteralKind(parser.curr.Type)
+	tokens := []Token{parser.curr}
+	parser.NextToken()
+	for {
+		kind, ok := orLiteralKind(parser.curr.Type)
+		if !ok {
+			break
+		}
+		if kind != firstKind {
+			return nil, fmt.Errorf("%d:%d: Literals in a match arm OR pattern must all be the same kind (all strings, all ints, or all paths), but found %s after %s.", parser.curr.Line, parser.curr.Column, parser.curr.Lexeme, tokens[len(tokens)-1].Lexeme)
+		}
+		tokens = append(tokens, parser.curr)
+		parser.NextToken()
+	}
+	if len(tokens) == 1 {
+		return tokens[0], nil
+	}
+	return &MShellParseOrPattern{Tokens: tokens}, nil
+}
+
 func (parser *MShellParser) ParseMatchBlock() (*MShellParseMatchBlock, error) {
 	matchBlock := &MShellParseMatchBlock{StartToken: parser.curr}
 	err := parser.Match(parser.curr, MATCH)
@@ -1570,6 +1649,14 @@ func (parser *MShellParser) ParseMatchBlock() (*MShellParseMatchBlock, error) {
 			}
 			if parser.curr.Type == END {
 				return matchBlock, fmt.Errorf("Did not find ':' or ':>' for match arm in match block beginning at line %d, column %d.", matchBlock.StartToken.Line, matchBlock.StartToken.Column)
+			}
+			if _, ok := orLiteralKind(parser.curr.Type); ok {
+				item, err := parser.parseMatchOrLiterals()
+				if err != nil {
+					return matchBlock, err
+				}
+				arm.Pattern = append(arm.Pattern, item)
+				continue
 			}
 			item, err := parser.ParseItem()
 			if err != nil {
