@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The CLI can now be installed with the Go toolchain:
+  `go install github.com/mitchpaulus/mshell/mshell@latest`.
+  This only installs the binary;
+  the standard library still needs to be set up separately.
+
 - Optional `followRedirects` key (bool, default `true`) on the `httpGet` /
   `httpPost` request dictionary. Set it to `false` to get the first response
   back as-is instead of following redirects, e.g. to inspect the `Location` or

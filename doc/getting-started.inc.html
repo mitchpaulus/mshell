@@ -35,6 +35,23 @@ tar -xvf windows_amd64.tar.gz
 Move-Item msh.exe <span class="mshellSTRING">"$env:USERPROFILE\\bin\\"</span></code>
 </pre>
 
+<h3 id="getting-started-installation-go">Alternative: <code>go install</code></h3>
+
+<p>
+If you have a Go toolchain (1.25 or later), you can build and install the binary directly:
+</p>
+
+<pre>
+<code>go install github.com/mitchpaulus/mshell/mshell@latest</code>
+</pre>
+
+<p>
+Note that <code>@latest</code> installs the tip of the <code>main</code> branch.
+To pin a released version, use the tag, e.g. <code>@v0.14.0</code> (works for releases after v0.13.0).
+The installed binary is named <code>mshell</code>; rename it or symlink it to <code>msh</code> if you prefer the short name.
+<code>go install</code> only installs the binary, so you still need to set up the standard library as described below.
+</p>
+
 <h2 id="getting-started-installation-stdlib">2) Set up the standard library</h2>
 
 <p>
