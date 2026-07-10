@@ -28,6 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `loop` quotations now honor stderr redirects, append mode, and merges, and
   inherit the enclosing quotation's redirected streams (previously a loop
   body wrote straight to the terminal even inside a redirected quotation).
+- Quotations accept only the redirects that don't change the stack: file
+  redirects, stdin, and the merges. Captures (`*`, `*b`, `^`, `^b`) on a
+  quotation now give a clear error at both layers instead of falling into
+  the multiplication error, and the type checker now rejects `<>` on a
+  quotation (the runtime always did). Capture individual command lists
+  instead, e.g. `[[cmd1] [cmd2]] (* !) map`.
 
 ### Added
 

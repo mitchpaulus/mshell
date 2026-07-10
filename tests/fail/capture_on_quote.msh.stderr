@@ -1,0 +1,1 @@
+2:12: '*' capture is not supported on quotations; it would change the quotation's stack effect. Capture the individual command lists inside instead, or redirect the quotation to a file with '>'.

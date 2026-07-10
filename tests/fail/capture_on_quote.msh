@@ -1,0 +1,2 @@
+# Captures are not allowed on quotations; they would change the stack effect
+( "a" wl ) * x

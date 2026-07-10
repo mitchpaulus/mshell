@@ -11634,6 +11634,8 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 					asPipe.StdoutBehavior = STDOUT_COMPLETE
 					stack.Push(asPipe)
+				} else if _, ok := obj1.(*MShellQuotation); ok {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: '%s' capture is not supported on quotations; it would change the quotation's stack effect. Capture the individual command lists inside instead, or redirect the quotation to a file with '>'.\n", t.Line, t.Column, t.Lexeme))
 				} else {
 					obj2, err := stack.Pop()
 					if err != nil {
@@ -11678,6 +11680,8 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stdout already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
 					}
 					objTyped.StdoutBehavior = STDOUT_BINARY
+				case *MShellQuotation:
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: '%s' capture is not supported on quotations; it would change the quotation's stack effect. Capture the individual command lists inside instead, or redirect the quotation to a file with '>'.\n", t.Line, t.Column, t.Lexeme))
 				default:
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot capture binary stdout for a %s.\n", t.Line, t.Column, obj1.TypeName()))
 				}
@@ -11701,6 +11705,8 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stderr already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
 					}
 					objTyped.StderrBehavior = STDERR_COMPLETE
+				case *MShellQuotation:
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: '%s' capture is not supported on quotations; it would change the quotation's stack effect. Capture the individual command lists inside instead, or redirect the quotation to a file with '2>'.\n", t.Line, t.Column, t.Lexeme))
 				default:
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot capture stderr for a %s.\n", t.Line, t.Column, obj1.TypeName()))
 				}
@@ -11722,6 +11728,8 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stderr already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
 					}
 					objTyped.StderrBehavior = STDERR_BINARY
+				case *MShellQuotation:
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: '%s' capture is not supported on quotations; it would change the quotation's stack effect. Capture the individual command lists inside instead, or redirect the quotation to a file with '2>'.\n", t.Line, t.Column, t.Lexeme))
 				default:
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot capture binary stderr for a %s.\n", t.Line, t.Column, obj1.TypeName()))
 				}

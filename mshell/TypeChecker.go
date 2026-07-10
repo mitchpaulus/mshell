@@ -854,6 +854,16 @@ func (c *Checker) tryRedirect(tok Token) bool {
 	}
 	operand := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-2])
 	if isQuoteKind(c.arena.Kind(operand)) {
+		// Quotations accept only the redirects that don't change their
+		// stack effect; destination conflicts on quotations are enforced
+		// at runtime. In-place redirects are list-only, as at runtime.
+		if tok.Type == INPLACEREDIRECT {
+			c.errors = append(c.errors, TypeError{
+				Kind: TErrTypeMismatch,
+				Pos:  tok,
+				Hint: "In-place redirect (<>) requires a List, found a quotation.",
+			})
+		}
 		c.stack.items = c.stack.items[:c.stack.Len()-1]
 		return true
 	}
@@ -942,6 +952,20 @@ func (c *Checker) tryCapture(tok Token) bool {
 		return false
 	}
 	operand := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-1])
+	if isQuoteKind(c.arena.Kind(operand)) {
+		// Captures are not allowed on quotations: they would change the
+		// quotation's stack effect. Mirrors the runtime rejection.
+		redirectOp := "'>'"
+		if !isStdout {
+			redirectOp = "'2>'"
+		}
+		c.errors = append(c.errors, TypeError{
+			Kind: TErrTypeMismatch,
+			Pos:  tok,
+			Hint: fmt.Sprintf("'%s' capture is not supported on quotations; it would change the quotation's stack effect. Capture the individual command lists inside instead, or redirect the quotation to a file with %s.", tok.Lexeme, redirectOp),
+		})
+		return true
+	}
 	argv, stdoutState, stderrState, ok := c.commandParts(operand)
 	if !ok {
 		return false

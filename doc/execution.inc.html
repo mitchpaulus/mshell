@@ -202,9 +202,34 @@ and <code>[cmd] 2>&amp;1 1>&amp;2</code> (circular merge) are all rejected.
 <h2 id="quotation-redirection">Redirection on quotations</h2>
 
 <p>
-All of the redirection operators above also work on quotations.
+The redirection operators that don't change the stack also work on quotations:
+file redirects (<code>></code>, <code>>></code>, <code>2></code>, <code>2>></code>, <code>&amp;></code>, <code>&amp;>></code>),
+stdin (<code>&lt;</code>), and the merges (<code>2>&amp;1</code>, <code>1>&amp;2</code>).
 This is useful when you want to redirect the output of mshell code that uses <code>wl</code>, <code>wle</code>, or other built-in functions that write to stdout or stderr.
 It is also useful when you have many commands that you want to run while appending all the outputs to a single file, without having to put the redirection on each command invocation.
+</p>
+
+<p>
+The captures (<code>*</code>, <code>*b</code>, <code>^</code>, <code>^b</code>) and the in-place redirect (<code>&lt;&gt;</code>) are <em>not</em> allowed on quotations,
+because they would change the quotation's stack effect.
+Capture the individual command lists inside the quotation instead — for example, run a list of commands and collect each stdout:
+</p>
+
+<pre>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">cmd1</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">cmd2</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellASTERISK">*</span> <span class="mshellBANG">!</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">map</span> <span class="mshellLINECOMMENT"># Run each command, collect stdouts as a list of strings.</span>
+</code>
+</pre>
+
+<p>
+Destination conflicts on quotations (e.g. two <code>></code> redirects, or <code>2>&amp;1</code> plus <code>2></code>) are caught at runtime.
+Since redirects never change a quotation's stack effect, they are invisible to the static type checker.
+</p>
+
+<p>
+A quotation's redirect is resolved each time the quotation executes.
+So a <code>></code>-redirected quotation run repeatedly — stored and executed with <code>x</code> several times, or passed to <code>each</code> or <code>map</code> — truncates the file on every execution, leaving only the last run's output.
+Use <code>>></code> when a repeatedly-executed quotation should accumulate output.
+The exception is <code>loop</code>: the file is opened once when the loop starts, so all iterations write to the same open file.
 </p>
 
 <pre>

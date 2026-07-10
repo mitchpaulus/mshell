@@ -155,7 +155,22 @@ Operator | Effect on external commands                | Notes
 
 ### Redirection on quotations
 
-All of the redirection operators above also work on quotations. This is useful when you want to redirect the output of mshell code that uses `wl`, `wle`, or other built-in functions that write to stdout or stderr. It is also useful when you have many commands that you want to run while appending all the outputs to a single file, without having to put the redirection on each command invocation.
+The redirection operators that don't change the stack also work on quotations:
+file redirects (`>`, `>>`, `2>`, `2>>`, `&>`, `&>>`), stdin (`<`), and the merges (`2>&1`, `1>&2`).
+This is useful when you want to redirect the output of mshell code that uses `wl`, `wle`, or other built-in functions that write to stdout or stderr.
+It is also useful when you have many commands that you want to run while appending all the outputs to a single file, without having to put the redirection on each command invocation.
+
+The captures (`*`, `*b`, `^`, `^b`) and the in-place redirect (`<>`) are *not* allowed on quotations,
+because they would change the quotation's stack effect.
+Capture the individual command lists inside the quotation instead, e.g. `[[cmd1] [cmd2]] (* !) map` to run each command and collect stdouts.
+
+Destination conflicts on quotations (e.g. two `>` redirects, or `2>&1` plus `2>`) are caught at runtime.
+Since redirects never change a quotation's stack effect, they are invisible to the static type checker.
+
+A quotation's redirect is resolved each time the quotation executes.
+So a `>`-redirected quotation run repeatedly — stored and executed with `x` several times, or passed to `each` or `map` — truncates the file on every execution, leaving only the last run's output.
+Use `>>` when a repeatedly-executed quotation should accumulate output.
+The exception is `loop`: the file is opened once when the loop starts, so all iterations write to the same open file.
 
 ```mshell
 (
