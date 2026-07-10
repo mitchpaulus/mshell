@@ -1,0 +1,4 @@
+# A cyclic runtime type declaration must exhaust the tryAs depth
+# budget and fail loudly instead of overflowing the Go stack.
+type Loop = Loop
+1 tryAs Loop

@@ -590,6 +590,7 @@ Shape validation allows extra keys, requires all non-optional fields, and valida
 A `none` conforms to `Maybe[T]` for every `T`; quotation types are checked by kind only (signatures are not verified at runtime).
 Named types must be declared before the cast runs.
 Note that `parseJson` produces a `float` for every JSON number, so validate JSON numbers as `float`, not `int`.
+Validation depth is limited to 1024 nested levels; exceeding it (a cyclic value, a cyclic `type` declaration, or absurdly deep data) fails the script with a clear error rather than producing `none`.
 
 Dictionary types are split into homogeneous dictionaries and shapes.
 A homogeneous dictionary is for dynamic keys where every value has the same type.

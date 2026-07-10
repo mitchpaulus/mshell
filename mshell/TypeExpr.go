@@ -75,11 +75,32 @@ func (parser *MShellParser) skipToShapeSync() {
 // introduced without implementing runtime validation — the program will
 // not compile. validateObj is the runtime half of `tryAs`: it reports
 // whether a value conforms to the type. Its error return is reserved for
-// malformed casts (an unknown type name), which fail the script rather
-// than producing a `none`.
+// malformed casts (an unknown type name, or a blown depth budget), which
+// fail the script rather than producing a `none`.
+//
+// depth is the remaining recursion budget. Every node checks it on entry
+// and passes depth-1 to child validations, so the walk is bounded even
+// against a cyclic value (a list appended to itself) or a runtime type
+// environment with a cyclic declaration (`type Loop = Loop`), both of
+// which would otherwise overflow the Go stack and kill the process.
+// Entry points start at maxTryAsValidateDepth.
 type TypeExpression interface {
 	MShellParseItem
-	validateObj(state *EvalState, obj MShellObject) (bool, error)
+	validateObj(state *EvalState, obj MShellObject, depth int) (bool, error)
+}
+
+// maxTryAsValidateDepth bounds validateObj recursion. Structural nesting,
+// named-type expansion, and union dispatch each consume one level, so a
+// recursive union type like `type T = [float | T]` spends about four
+// levels per level of value nesting — 1024 still admits values nested
+// ~250 deep, well past any real boundary data (serde, for comparison,
+// caps JSON at 128), while turning cyclic values and cyclic type
+// declarations into a loud, catchable script failure instead of a fatal
+// stack overflow.
+const maxTryAsValidateDepth = 1024
+
+func errTryAsDepth() error {
+	return fmt.Errorf("tryAs validation exceeded the maximum depth of %d; the value or a 'type' declaration is likely cyclic", maxTryAsValidateDepth)
 }
 
 // TypePrim is a primitive type keyword (int, float, bool, str).
@@ -855,7 +876,10 @@ var builtinNamedTypes = map[string]builtinNamedType{
 // validation allows extra keys (width subtyping), requires all
 // non-optional fields, and validates optional fields only when present.
 
-func (a *TypePrim) validateObj(state *EvalState, obj MShellObject) (bool, error) {
+func (a *TypePrim) validateObj(state *EvalState, obj MShellObject, depth int) (bool, error) {
+	if depth <= 0 {
+		return false, errTryAsDepth()
+	}
 	switch a.Tid {
 	case TidInt:
 		_, ok := obj.(MShellInt)
@@ -876,7 +900,10 @@ func (a *TypePrim) validateObj(state *EvalState, obj MShellObject) (bool, error)
 	return false, fmt.Errorf("tryAs cannot check the type '%s'", a.Tok.Lexeme)
 }
 
-func (a *TypeNamed) validateObj(state *EvalState, obj MShellObject) (bool, error) {
+func (a *TypeNamed) validateObj(state *EvalState, obj MShellObject, depth int) (bool, error) {
+	if depth <= 0 {
+		return false, errTryAsDepth()
+	}
 	if bt, ok := builtinNamedTypes[a.Name]; ok {
 		return bt.runtimeCheck(obj), nil
 	}
@@ -897,22 +924,25 @@ func (a *TypeNamed) validateObj(state *EvalState, obj MShellObject) (bool, error
 		if len(a.Args) != 1 {
 			return false, fmt.Errorf("Maybe requires a type argument: Maybe[T]")
 		}
-		return a.Args[0].validateObj(state, inner)
+		return a.Args[0].validateObj(state, inner, depth-1)
 	}
 	body, ok := state.typeDefs[a.Name]
 	if !ok {
 		return false, fmt.Errorf("unknown type '%s' in tryAs; a `type %s = ...` declaration must run before the cast", a.Name, a.Name)
 	}
-	return body.validateObj(state, obj)
+	return body.validateObj(state, obj, depth-1)
 }
 
-func (a *TypeListExpr) validateObj(state *EvalState, obj MShellObject) (bool, error) {
+func (a *TypeListExpr) validateObj(state *EvalState, obj MShellObject, depth int) (bool, error) {
+	if depth <= 0 {
+		return false, errTryAsDepth()
+	}
 	list, ok := obj.(*MShellList)
 	if !ok {
 		return false, nil
 	}
 	for _, item := range list.Items {
-		itemOk, err := a.Elem.validateObj(state, item)
+		itemOk, err := a.Elem.validateObj(state, item, depth-1)
 		if err != nil || !itemOk {
 			return itemOk, err
 		}
@@ -920,13 +950,16 @@ func (a *TypeListExpr) validateObj(state *EvalState, obj MShellObject) (bool, er
 	return true, nil
 }
 
-func (a *TypeDictExpr) validateObj(state *EvalState, obj MShellObject) (bool, error) {
+func (a *TypeDictExpr) validateObj(state *EvalState, obj MShellObject, depth int) (bool, error) {
+	if depth <= 0 {
+		return false, errTryAsDepth()
+	}
 	dict, ok := obj.(*MShellDict)
 	if !ok {
 		return false, nil
 	}
 	for _, val := range dict.Items {
-		valOk, err := a.Value.validateObj(state, val)
+		valOk, err := a.Value.validateObj(state, val, depth-1)
 		if err != nil || !valOk {
 			return valOk, err
 		}
@@ -934,7 +967,10 @@ func (a *TypeDictExpr) validateObj(state *EvalState, obj MShellObject) (bool, er
 	return true, nil
 }
 
-func (a *TypeShapeExpr) validateObj(state *EvalState, obj MShellObject) (bool, error) {
+func (a *TypeShapeExpr) validateObj(state *EvalState, obj MShellObject, depth int) (bool, error) {
+	if depth <= 0 {
+		return false, errTryAsDepth()
+	}
 	dict, ok := obj.(*MShellDict)
 	if !ok {
 		return false, nil
@@ -947,7 +983,7 @@ func (a *TypeShapeExpr) validateObj(state *EvalState, obj MShellObject) (bool, e
 			}
 			return false, nil
 		}
-		fieldOk, err := f.Type.validateObj(state, val)
+		fieldOk, err := f.Type.validateObj(state, val, depth-1)
 		if err != nil || !fieldOk {
 			return fieldOk, err
 		}
@@ -955,14 +991,20 @@ func (a *TypeShapeExpr) validateObj(state *EvalState, obj MShellObject) (bool, e
 	return true, nil
 }
 
-func (a *TypeQuoteExpr) validateObj(state *EvalState, obj MShellObject) (bool, error) {
+func (a *TypeQuoteExpr) validateObj(state *EvalState, obj MShellObject, depth int) (bool, error) {
+	if depth <= 0 {
+		return false, errTryAsDepth()
+	}
 	_, ok := obj.(*MShellQuotation)
 	return ok, nil
 }
 
-func (a *TypeUnionExpr) validateObj(state *EvalState, obj MShellObject) (bool, error) {
+func (a *TypeUnionExpr) validateObj(state *EvalState, obj MShellObject, depth int) (bool, error) {
+	if depth <= 0 {
+		return false, errTryAsDepth()
+	}
 	for _, arm := range a.Arms {
-		armOk, err := arm.validateObj(state, obj)
+		armOk, err := arm.validateObj(state, obj, depth-1)
 		if err != nil {
 			return false, err
 		}

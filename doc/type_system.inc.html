@@ -189,6 +189,7 @@ Shape validation allows extra keys (width subtyping), requires all non-optional 
 A <code>none</code> conforms to <code>Maybe[T]</code> for every <code>T</code>; a <code>just</code> validates its inner value.
 Quotation types are checked by kind only — signatures are not verified at runtime.
 A named type must have been declared before the cast runs.
+Validation depth is limited to 1024 nested levels (structural nesting, named-type expansion, and union dispatch each consume one); exceeding the limit fails the script with a clear error rather than producing <code>none</code>, which turns a cyclic value or a cyclic <code>type</code> declaration into a diagnosable failure.
 </p>
 
 <h1 id="type-system-dictionaries">Dictionaries <a class="section-link" href="#type-system-dictionaries" aria-label="Permalink">§</a> <a class="back-to-top" href="#type-system-top">Back to top</a></h1>

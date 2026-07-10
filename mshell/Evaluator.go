@@ -947,7 +947,7 @@ func (state *EvalState) processTryAsCast(cast *MShellTryAsCast, stack *MShellSta
 	if err != nil {
 		return state.FailWithMessage(fmt.Sprintf("%d:%d: 'tryAs' requires a value on the stack.\n", cast.TryAsToken.Line, cast.TryAsToken.Column))
 	}
-	conforms, verr := cast.Target.validateObj(state, obj)
+	conforms, verr := cast.Target.validateObj(state, obj, maxTryAsValidateDepth)
 	if verr != nil {
 		return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", cast.TryAsToken.Line, cast.TryAsToken.Column, verr.Error()))
 	}
