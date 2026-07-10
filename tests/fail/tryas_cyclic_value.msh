@@ -1,0 +1,5 @@
+# A cyclic value (a list containing itself) reached through a
+# recursive type must exhaust the tryAs depth budget and fail
+# loudly instead of overflowing the Go stack.
+type T = [int | T]
+[1] l! @l @l append tryAs T

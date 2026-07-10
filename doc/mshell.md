@@ -564,6 +564,34 @@ type Row = [Cell]
 { "name": "Ada", "age": 36 } as Person :age? 1 +
 ```
 
+`as` is a static-only assertion: a hint to the checker with no runtime work.
+Use it when the value originates inside typed code and the checker just needs help — typing an empty literal (`[] as [str]`), narrowing an inferred union, or tagging a literal into a named type.
+
+`tryAs` is the checked cast for data crossing a trust boundary (parseJson output, process output, spreadsheet rows).
+It validates the value against the type at runtime and pushes a `Maybe`: `just value` when it conforms, `none` when it does not.
+This is the "parse, don't validate" pattern: one check at the boundary, and everything downstream is precisely typed with no match boilerplate.
+Compose with the existing `?` unwrap for the die-loud form.
+
+```mshell
+type Manifest = {packages: [{name: str}]}
+
+# Recoverable: handle bad input with one match at the boundary.
+"pkgs.json" parseJson tryAs Manifest match
+    just m : @m :packages? (:name?) map,
+    none   : [],
+end
+
+# Die-loud: unwrap immediately when malformed input should stop the script.
+"pkgs.json" parseJson tryAs Manifest ? :packages? (:name?) map
+```
+
+A `tryAs` whose source type can never be the target (e.g. `5 tryAs str`) is flagged by the checker, since it would always produce `none`.
+Shape validation allows extra keys, requires all non-optional fields, and validates optional fields only when present.
+A `none` conforms to `Maybe[T]` for every `T`; quotation types are checked by kind only (signatures are not verified at runtime).
+Named types must be declared before the cast runs.
+Note that `parseJson` produces a `float` for every JSON number, so validate JSON numbers as `float`, not `int`.
+Validation depth is limited to 1024 nested levels; exceeding it (a cyclic value, a cyclic `type` declaration, or absurdly deep data) fails the script with a clear error rather than producing `none`.
+
 Dictionary types are split into homogeneous dictionaries and shapes.
 A homogeneous dictionary is for dynamic keys where every value has the same type.
 In a type expression, write `{str: int}`.
@@ -1060,7 +1088,7 @@ end wl # Output: 11
 - `gridValues`: Extract Grid or GridView cell values as row-major lists, without a header row and without coercing cell types. (`Grid|GridView -- [[a]]`)
 - `toCsvCell`: Escape a single CSV cell. If the value contains `,`, `"`, or a newline, wraps the value in double quotes and doubles any embedded quotes; otherwise returns the input unchanged. (`str -- str`)
 - `toCsv`: Serialize a list of rows to a CSV string. Each cell is escaped with `toCsvCell`, cells are joined with `,`, and rows are joined with `\n`. (`[[str]] -- str`)
-- `parseJson`: Parse JSON from a string, binary, or file path into mshell objects. JSON `null` becomes the `null` type (distinct from `none`). (`path|str|binary -- list|dict|numeric|str|bool|null`)
+- `parseJson`: Parse JSON from a string, binary, or file path into mshell objects. JSON `null` becomes the `null` type (distinct from `none`); every JSON number becomes a `float`. Narrow the result with `tryAs` (checked, boundary data) or `as` (static hint). (`path|str|binary -- list|dict|numeric|str|bool|null`)
 - `parseExcel`: Parse an `.xlsx` (OOXML) spreadsheet into a list of sheets in workbook (tab) order. Each sheet is a dict with a `name` key (the worksheet name), a `data` key holding a rectangular list of rows (list of lists), a `hidden` key (bool; `true` for hidden or veryHidden sheets), and a `visibility` key (`"visible"`, `"hidden"`, or `"veryHidden"`). Cell values are typed: numbers become floats (dates appear as Excel serial floats), strings become strings (shared, inline, and formula-string results all resolved), booleans become booleans, error cells (e.g. `#DIV/0!`) become `none`, and empty/padding cells are the empty string. Chartsheets are skipped; hidden worksheets are included. Dates are returned as raw Excel serial floats; apply `fromOleDate` at the call site to convert. `parseExcel` assumes the default 1900-based date system, which matches `fromOleDate`'s OLE epoch (1899-12-30). Workbooks saved with the 1904 date system (`<workbookPr date1904="true"/>`, seen on some files originally authored on older Mac Excel or with the "Use 1904 date system" option enabled) have serials offset by 1462 days; on those files, add 1462 to each serial before calling `fromOleDate`, e.g. `@wb :0: :data? :3: :0: 1462 + fromOleDate`. (`path|binary -- list`)
 - `seq`: Generate a list of integers, starting from 0. Exclusive end to integer on stack. `2 seq` produces `[0 1]`. `(int -- [int])`
 - `repeat`: Create a list containing the provided value repeated `n` times. `(a int -- [a])`

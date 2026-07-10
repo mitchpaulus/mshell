@@ -153,6 +153,45 @@ Use <code>as</code> to make an explicit assertion when the checker needs help wi
 
 <pre><code>{ "name": "Ada", "age": 36 } as Person</code></pre>
 
+<h2 id="type-system-tryas">Checked casts with <code>tryAs</code> <a class="section-link" href="#type-system-tryas" aria-label="Permalink">§</a></h2>
+
+<p>
+<code>as</code> is a static-only assertion: a hint to the checker with no runtime work.
+That is the right tool when the value originates inside typed code — typing an empty literal (<code>[] as [str]</code>), narrowing an inferred union, or tagging a literal into a named type — because the checker can already see everything it needs.
+</p>
+
+<p>
+<code>tryAs</code> is the checked cast for data crossing a trust boundary, such as <code>parseJson</code> output, process output, or spreadsheet rows.
+It validates the value against the type expression at runtime and pushes a <code>Maybe</code>: <code>just value</code> when the value conforms, <code>none</code> when it does not.
+This is the "parse, don't validate" pattern: one check at the boundary hands the checker a precise type, so everything downstream needs no further matching.
+The existing <code>?</code> unwrap composes for the die-loud form.
+</p>
+
+<pre><code>type Manifest = {packages: [{name: str}]}
+
+# Recoverable: handle bad input with one match at the boundary.
+"pkgs.json" parseJson tryAs Manifest match
+    just m : @m :packages? (:name?) map,
+    none   : [],
+end
+
+# Die-loud: unwrap immediately when malformed input should stop the script.
+"pkgs.json" parseJson tryAs Manifest ? :packages? (:name?) map</code></pre>
+
+<p>
+A <code>tryAs</code> whose source type can never be the target (for example <code>5 tryAs str</code>) is a type error, since the runtime check would always produce <code>none</code>.
+</p>
+
+<p>
+Validation semantics mirror the <code>match</code> block's type arms.
+<code>int</code> matches an integer only — note that <code>parseJson</code> produces a <code>float</code> for every JSON number, so validate JSON numbers as <code>float</code>.
+Shape validation allows extra keys (width subtyping), requires all non-optional fields, and validates optional fields only when present.
+A <code>none</code> conforms to <code>Maybe[T]</code> for every <code>T</code>; a <code>just</code> validates its inner value.
+Quotation types are checked by kind only — signatures are not verified at runtime.
+A named type must have been declared before the cast runs.
+Validation depth is limited to 1024 nested levels (structural nesting, named-type expansion, and union dispatch each consume one); exceeding the limit fails the script with a clear error rather than producing <code>none</code>, which turns a cyclic value or a cyclic <code>type</code> declaration into a diagnosable failure.
+</p>
+
 <h1 id="type-system-dictionaries">Dictionaries <a class="section-link" href="#type-system-dictionaries" aria-label="Permalink">§</a> <a class="back-to-top" href="#type-system-top">Back to top</a></h1>
 
 <p>

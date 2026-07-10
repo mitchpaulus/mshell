@@ -396,6 +396,11 @@ type EvalState struct {
 
 	defIndex    map[string]int
 	defIndexLen int
+
+	// typeDefs is the runtime type environment: `type Name = <typeExpr>`
+	// declarations register their body AST here so `tryAs Name` can
+	// resolve named types during validation.
+	typeDefs map[string]TypeExpression
 }
 
 // RebuildDefinitionIndex records the first index for each name, matching
@@ -906,16 +911,52 @@ func (state *EvalState) processToken(token MShellParseItem, frame *EvaluationFra
 		return state.processTokenToken(t, frame, frames)
 
 	case *MShellTypeDecl:
-		// Static-only: type declarations have no runtime effect by design.
+		// Registers the declaration for `tryAs`; otherwise static-only.
+		state.registerTypeDecl(t)
 		return SimpleSuccess()
 
 	case *MShellAsCast:
 		// Static-only: `as` is a checker hint; no runtime work.
 		return SimpleSuccess()
 
+	case *MShellTryAsCast:
+		return state.processTryAsCast(t, stack)
+
 	default:
 		return state.FailWithMessage(fmt.Sprintf("Unknown token type: %T\n", token))
 	}
+}
+
+// registerTypeDecl records a `type Name = <typeExpr>` declaration in the
+// runtime type environment for `tryAs`. The checker flags duplicate
+// declarations; at runtime the latest evaluation wins.
+func (state *EvalState) registerTypeDecl(decl *MShellTypeDecl) {
+	if state.typeDefs == nil {
+		state.typeDefs = make(map[string]TypeExpression, 8)
+	}
+	state.typeDefs[decl.Name] = decl.Body
+}
+
+// processTryAsCast implements the runtime of `tryAs`: pop a value,
+// validate it structurally against the type expression, and push
+// `just value` when it conforms or `none` when it does not. The
+// validation error return is reserved for malformed casts (an unknown
+// type name), which fail the script rather than producing a `none`.
+func (state *EvalState) processTryAsCast(cast *MShellTryAsCast, stack *MShellStack) EvalResult {
+	obj, err := stack.Pop()
+	if err != nil {
+		return state.FailWithMessage(fmt.Sprintf("%d:%d: 'tryAs' requires a value on the stack.\n", cast.TryAsToken.Line, cast.TryAsToken.Column))
+	}
+	conforms, verr := cast.Target.validateObj(state, obj, maxTryAsValidateDepth)
+	if verr != nil {
+		return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", cast.TryAsToken.Line, cast.TryAsToken.Column, verr.Error()))
+	}
+	if conforms {
+		stack.Push(&Maybe{obj: obj})
+	} else {
+		stack.Push(&Maybe{obj: nil})
+	}
+	return SimpleSuccess()
 }
 
 // callDefinition handles calling a definition with TCO support
@@ -3222,8 +3263,14 @@ func (state *EvalState) evaluateItems(objects []MShellParseItem, stack *MShellSt
 			}
 		case *MShellAsCast:
 			// Static-only: `as` is a checker hint; no runtime work.
+		case *MShellTryAsCast:
+			result := state.processTryAsCast(t, stack)
+			if result.ShouldPassResultUpStack() {
+				return result
+			}
 		case *MShellTypeDecl:
-			// Static-only: type declarations have no runtime effect by design.
+			// Registers the declaration for `tryAs`; otherwise static-only.
+			state.registerTypeDecl(t)
 		default:
 			return state.FailWithMessage(fmt.Sprintf("We haven't implemented the type '%T' yet.\n", t))
 		}

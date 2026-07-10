@@ -13,6 +13,7 @@ func TestTypeCheckerKeywords(t *testing.T) {
 		{"as", AS},
 		{"type", TYPE},
 		{"try", TRY},
+		{"tryAs", TRYAS},
 		{"fail", FAIL_KEYWORD},
 		{"pure", PURE},
 		// Make sure neighbors still tokenize as before.
@@ -23,6 +24,8 @@ func TestTypeCheckerKeywords(t *testing.T) {
 		{"types", LITERAL},
 		{"asx", LITERAL},
 		{"trying", LITERAL},
+		{"tryAsX", LITERAL},
+		{"tryas", LITERAL},
 		{"failed", LITERAL},
 		{"purest", LITERAL},
 	}

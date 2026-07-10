@@ -1102,6 +1102,8 @@ func (parser *MShellParser) ParseItem() (MShellParseItem, error) {
 		return parser.ParsePrefixQuote()
 	case AS:
 		return parser.ParseAsCast()
+	case TRYAS:
+		return parser.ParseTryAsCast()
 	default:
 		return parser.ParseSimple(), nil
 	}
