@@ -3870,8 +3870,10 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 	var allArgs []string
 	var cmdPath string
 
-	// Check if there is a directory separator in the name of the command trying to execute
-	if strings.Contains(commandLineArgs[0], string(os.PathSeparator)) {
+	// Check if there is a directory separator in the name of the command trying to execute.
+	// Use the platform IsPathSeparator so that './script' is a file reference on Windows too,
+	// where os.PathSeparator alone would miss the forward slash.
+	if strings.ContainsFunc(commandLineArgs[0], func(r rune) bool { return r < 256 && IsPathSeparator(uint8(r)) }) {
 		cmdPath = commandLineArgs[0]
 	} else {
 		var found bool

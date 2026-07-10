@@ -144,6 +144,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- On Windows, a command name containing a forward slash (e.g. `./script.msh`)
+  is now treated as a file reference instead of being searched for on `PATH`,
+  matching the behavior on Linux/macOS. Previously only backslashes were
+  recognized as path separators in command position on Windows, so
+  cross-platform scripts invoking local scripts with `./` failed.
 - Interactive programs now work as a stage of a pipeline. A command that drives
   the terminal (e.g. `... | nvim -`, `... | less`, `... | fzf`) is no longer
   stopped on startup: every external stage of a pipeline is now placed in one
