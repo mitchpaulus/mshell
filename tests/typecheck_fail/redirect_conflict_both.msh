@@ -1,0 +1,2 @@
+# Static conflict: each stream has exactly one destination
+[ls] `f.txt` &> 2>&1 ;

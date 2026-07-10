@@ -1,0 +1,3 @@
+# FILE:merge_file.txt
+# Test 2>&1 with a stdout file redirect: both streams into the file
+[sh -c "echo file-out; echo file-err 1>&2"] `merge_file.txt` > 2>&1 !

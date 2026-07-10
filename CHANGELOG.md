@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Stream merge redirects `2>&1` (stderr to stdout's destination) and `1>&2`
+  (stdout to stderr's destination). Each is a single token with no internal
+  spaces, and works on command lists, pipeline stages, and quotations.
+  Unlike POSIX, they are not order-sensitive fd duplication: the merged
+  stream follows the other stream's *final* destination, so `2>&1 *` captures
+  both streams interleaved and `[[make] 2>&1 [grep err]] |;` sends stderr
+  through the pipe, cross-platform.
+
+### Changed
+
+- Each of stdout/stderr now has exactly one destination: combining two
+  destinations on the same stream (e.g. capture `*` plus file redirect `>`,
+  `&>` plus `2>`, a second `>`, or a merge plus anything else on that stream)
+  is now an error, caught both by the static type checker and at runtime.
+  Previously the extra redirect was silently ignored (capture won over file
+  redirects) or last-wins. `2>&1` combined with `<>` is also rejected.
+- `loop` quotations now honor stderr redirects, append mode, and merges, and
+  inherit the enclosing quotation's redirected streams (previously a loop
+  body wrote straight to the terminal even inside a redirected quotation).
+- Quotations accept only the redirects that don't change the stack: file
+  redirects, stdin, and the merges. Captures (`*`, `*b`, `^`, `^b`) on a
+  quotation now give a clear error at both layers instead of falling into
+  the multiplication error, and the type checker now rejects `<>` on a
+  quotation (the runtime always did). Capture individual command lists
+  instead, e.g. `[[cmd1] [cmd2]] (* !) map`.
+
+### Added
+
 - CLI completions for `cargo`: subcommands (including installed third-party
   ones via `cargo --list`), per-subcommand options, and dynamic values for
   `--target`, `--features`, `-p`/`--package`, `--bin`/`--example`/`--test`/`--bench`

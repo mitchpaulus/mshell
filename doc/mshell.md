@@ -106,6 +106,30 @@ So the following are equivalent:
 [yourCommand] ^b *b !
 ```
 
+#### Merging one stream into the other
+
+Use `2>&1` to send stderr to wherever stdout ends up, or `1>&2` to send stdout to wherever stderr ends up.
+These are complete tokens: no spaces are allowed inside them.
+Unlike POSIX shells, they are not order-sensitive fd duplication:
+a merge means "this stream goes to the other stream's *final* destination",
+so there is no `> file 2>&1` vs `2>&1 > file` ordering trap.
+Both streams share a single destination, preserving output order, on every platform.
+
+```mshell
+[yourCommand] 2>&1 * !                 # Captures stdout and stderr interleaved as one string.
+[[make] 2>&1 [grep -i error]] |;       # stderr flows through the pipe.
+[yourCommand] 1>&2 ;                   # stdout appears on stderr.
+[yourCommand] `output.log` > 2>&1 !    # Both streams into output.log; equivalent to &>.
+```
+
+#### Each stream has exactly one destination
+
+A stream's destination can be set once: a file redirect, a capture, an in-place redirect, or a merge.
+Applying a second destination to the same stream is an error, caught both by the static type checker and at runtime.
+For example, ``[cmd] * `f` >`` (capture and file redirect on stdout), `[cmd] 2>&1 ^` (merge and capture on stderr),
+and `[cmd] 2>&1 1>&2` (circular merge) are all rejected.
+`2>&1` also cannot be combined with `<>`, since stderr text would be written back into the edited file.
+
 Summary of external command operators:
 
 Operator | Effect on external commands                | Notes
@@ -123,13 +147,30 @@ Operator | Effect on external commands                | Notes
 `&>>`    | Redirect both stdout and stderr to a file. | Appends to the file.
 `^`      | Capture stderr to the stack.               | As a string.
 `^b`     | Capture stderr to the stack.               | As binary.
+`2>&1`   | Merge stderr into stdout's destination.    | Single token, no spaces. Not order-sensitive: stderr follows stdout's final destination.
+`1>&2`   | Merge stdout into stderr's destination.    | Single token, no spaces.
 `<`      | Feed stdin from a value.                   | String, path, or binary.
 `<>`     | In-place file modification.                | Reads file to stdin, writes stdout back on success.
 `&`      | Mark the command list to run asynchronously. | Marks the list; the trailing `;`/`!` starts the subprocess and returns immediately without waiting. Stdout and stderr default to discarded.
 
 ### Redirection on quotations
 
-All of the redirection operators above also work on quotations. This is useful when you want to redirect the output of mshell code that uses `wl`, `wle`, or other built-in functions that write to stdout or stderr. It is also useful when you have many commands that you want to run while appending all the outputs to a single file, without having to put the redirection on each command invocation.
+The redirection operators that don't change the stack also work on quotations:
+file redirects (`>`, `>>`, `2>`, `2>>`, `&>`, `&>>`), stdin (`<`), and the merges (`2>&1`, `1>&2`).
+This is useful when you want to redirect the output of mshell code that uses `wl`, `wle`, or other built-in functions that write to stdout or stderr.
+It is also useful when you have many commands that you want to run while appending all the outputs to a single file, without having to put the redirection on each command invocation.
+
+The captures (`*`, `*b`, `^`, `^b`) and the in-place redirect (`<>`) are *not* allowed on quotations,
+because they would change the quotation's stack effect.
+Capture the individual command lists inside the quotation instead, e.g. `[[cmd1] [cmd2]] (* !) map` to run each command and collect stdouts.
+
+Destination conflicts on quotations (e.g. two `>` redirects, or `2>&1` plus `2>`) are caught at runtime.
+Since redirects never change a quotation's stack effect, they are invisible to the static type checker.
+
+A quotation's redirect is resolved each time the quotation executes.
+So a `>`-redirected quotation run repeatedly — stored and executed with `x` several times, or passed to `each` or `map` — truncates the file on every execution, leaving only the last run's output.
+Use `>>` when a repeatedly-executed quotation should accumulate output.
+The exception is `loop`: the file is opened once when the loop starts, so all iterations write to the same open file.
 
 ```mshell
 (

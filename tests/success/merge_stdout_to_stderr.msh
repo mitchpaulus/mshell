@@ -1,0 +1,2 @@
+# Test 1>&2: stdout merged into stderr's destination (captured via ^)
+[sh -c "echo through-stderr"] 1>&2 ^ ; chomp wl
