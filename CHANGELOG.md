@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- CLI completions for `cargo`: subcommands (including installed third-party
+  ones via `cargo --list`), per-subcommand options, and dynamic values for
+  `--target`, `--features`, `-p`/`--package`, `--bin`/`--example`/`--test`/`--bench`
+  target names, and installed crates for `cargo uninstall`.
 - Match arms may list several literals in a row, matching if the subject equals
   any of them (OR), e.g. `'-h' '--help' : ...`. All alternatives in one arm
   must be the same literal kind: all strings, all integers, or all paths.
