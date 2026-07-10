@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The tar write functions (`tarDirInc`, `tarDirExc`, `tarPack`) now accept a
+  dictionary destination `{path: str|path, compress?: bool}`, where `compress`
+  overrides the extension-based gzip inference in either direction — useful
+  for destinations without a meaningful extension (e.g. `redo`'s `$3` temp files).
+
 - Stream merge redirects `2>&1` (stderr to stdout's destination) and `1>&2`
   (stdout to stderr's destination). Each is a single token with no internal
   spaces, and works on command lists, pipeline stages, and quotations.

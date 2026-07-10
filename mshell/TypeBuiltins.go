@@ -611,11 +611,15 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 	// Tar ops mirror the zip surface exactly (same argument order and option
 	// dicts). Compression is chosen from the destination extension on write
 	// (.tar.gz / .tgz -> gzip) and sniffed from the gzip magic bytes on read.
+	// The write destination also accepts a dict form {path, compress?} that
+	// overrides the extension inference (for extensionless targets like redo's
+	// $3 temp files).
+	tarDest := "str | path | {path: str | path, compress?: bool}"
 	r.reg("tarRead", "(str | path str | path -- Maybe[bytes])")
 	for _, name := range []string{"tarDirInc", "tarDirExc"} {
-		r.reg(name, "(str | path str | path -- )")
+		r.reg(name, "(str | path "+tarDest+" -- )")
 	}
-	r.reg("tarPack", "([str | path | {path: str | path, archivePath?: str | path, mode?: int}] str | path -- )")
+	r.reg("tarPack", "([str | path | {path: str | path, archivePath?: str | path, mode?: int}] "+tarDest+" -- )")
 	r.reg("tarExtract", "(str | path str | path "+zipExtractOpts+" -- )")
 	r.reg("tarExtractEntry",
 		"(str str str "+zipEntryOpts+" -- )",

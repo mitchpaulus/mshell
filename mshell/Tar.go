@@ -73,10 +73,10 @@ func openTarReader(tarPath string) (*tar.Reader, io.Closer, error) {
 	return tar.NewReader(br), file, nil
 }
 
-// createTarWriter creates a tar archive for writing, gzip-compressing when the
-// destination extension calls for it. The returned finish function must be
-// called (not deferred with a discarded error) to flush and close every layer.
-func createTarWriter(tarPath string) (*tar.Writer, func() error, error) {
+// createTarWriter creates a tar archive for writing, gzip-compressing when
+// compress is true. The returned finish function must be called (not deferred
+// with a discarded error) to flush and close every layer.
+func createTarWriter(tarPath string, compress bool) (*tar.Writer, func() error, error) {
 	if err := os.MkdirAll(filepath.Dir(tarPath), 0755); err != nil {
 		return nil, nil, fmt.Errorf("Error creating parent directory for %s: %w", tarPath, err)
 	}
@@ -86,7 +86,7 @@ func createTarWriter(tarPath string) (*tar.Writer, func() error, error) {
 		return nil, nil, fmt.Errorf("Error creating %s: %w", tarPath, err)
 	}
 
-	if isGzipTarget(tarPath) {
+	if compress {
 		gz := gzip.NewWriter(output)
 		tw := tar.NewWriter(gz)
 		finish := func() error {
@@ -117,7 +117,7 @@ func createTarWriter(tarPath string) (*tar.Writer, func() error, error) {
 // tarDirectory packs a single directory into a tarball, mirroring zipDirectory.
 // preserveRoot controls whether the directory itself appears at the archive
 // root (tarDirExc) or only its contents (tarDirInc).
-func tarDirectory(sourceDir, tarPath string, preserveRoot bool) error {
+func tarDirectory(sourceDir, tarPath string, preserveRoot bool, compress bool) error {
 	info, err := os.Stat(sourceDir)
 	if err != nil {
 		return fmt.Errorf("Error stating %s: %w", sourceDir, err)
@@ -138,7 +138,7 @@ func tarDirectory(sourceDir, tarPath string, preserveRoot bool) error {
 		SourcePath:   sourceDir,
 		PreserveRoot: preserveRoot,
 	}
-	return buildTarFromEntries([]zipPackItem{packItem}, tarPath)
+	return buildTarFromEntries([]zipPackItem{packItem}, tarPath, compress)
 }
 
 func ensureTarTargetNotInsideSource(sourceAbs string, tarPath string) error {
@@ -155,7 +155,7 @@ func ensureTarTargetNotInsideSource(sourceAbs string, tarPath string) error {
 
 // buildTarFromEntries mirrors buildZipFromEntries, reusing the zipPackItem
 // model so the tarPack dispatch parsing is identical to zipPack.
-func buildTarFromEntries(items []zipPackItem, tarPath string) error {
+func buildTarFromEntries(items []zipPackItem, tarPath string, compress bool) error {
 	if len(items) == 0 {
 		return fmt.Errorf("tarPack requires at least one entry")
 	}
@@ -165,7 +165,7 @@ func buildTarFromEntries(items []zipPackItem, tarPath string) error {
 		return fmt.Errorf("Error resolving %s: %w", tarPath, err)
 	}
 
-	tw, finish, err := createTarWriter(tarPath)
+	tw, finish, err := createTarWriter(tarPath, compress)
 	if err != nil {
 		return err
 	}
