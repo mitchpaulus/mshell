@@ -1103,4 +1103,313 @@ def __journalctlCompletion { 'complete': ['journalctl'] } ([str] -- [str])
     end
 end
 # }}}
+# cargo {{{
+# Options valid both at the top level and after any subcommand.
+def __cargoCommonOptions ( -- [str])
+    ['-h' '--help' '-V' '--version' '-v' '--verbose' '-q' '--quiet'
+     '--color' '--config' '-Z' '--frozen' '--locked' '--offline']
+end
+
+# Parse `cargo --list` for the available subcommands (includes installed third-party ones).
+def __cargoSubcommands ( -- [str])
+    ['cargo' '--list'] * ^ ; drop lines
+    (' ' startsWith) filter
+    (trim) map
+    (len 0 >) filter
+    (wsplit :0:) map
+end
+
+# Installed targets from rustup if available, otherwise all targets known to rustc.
+def __cargoTargets ( -- [str])
+    ['rustup' 'target' 'list'] * ^ ? code! drop out!
+    @code 0 = if
+        @out lines ('(installed)' in) filter (wsplit :0:) map
+    else
+        ['rustc' '--print' 'target-list'] * ^ ; drop lines (len 0 >) filter
+    end
+end
+
+# Feature names from the current crate's manifest.
+def __cargoFeatures ( -- [str])
+    ['cargo' 'read-manifest'] * ^ ; drop out!
+    @out trim len 0 > if
+        @out parseJson match
+            dict d : @d 'features' {} getDef match
+                dict features : @features keys,
+                _ : [] as [str],
+            end,
+            _ : [] as [str],
+        end
+    else
+        [] as [str]
+    end
+end
+
+# Workspace package names from cargo metadata.
+def __cargoPackages ( -- [str])
+    ['cargo' 'metadata' '--no-deps' '--format-version' '1'] * ^ ; drop out!
+    @out trim len 0 > if
+        @out parseJson match
+            dict d : @d 'packages' [] getDef match
+                list packages :
+                    @packages
+                    (pkg! @pkg match
+                        dict p : @p 'name' '' getDef match str name : @name, _ : '', end,
+                        _ : '',
+                    end) map
+                    (len 0 >) filter,
+                _ : [] as [str],
+            end,
+            _ : [] as [str],
+        end
+    else
+        [] as [str]
+    end
+end
+
+# cargo prints the available target names to stderr when the flag is given no value,
+# e.g. `cargo run --bin` lists "Available binaries:" with one indented name per line.
+def __cargoTargetNames (str -- [str])
+    flag!
+    { 'bin': 'run', 'example': 'run', 'test': 'test', 'bench': 'bench' } @flag 'run' getDef subcmd!
+    ['cargo' @subcmd $"--{@flag}"] * ^ ; err! drop
+    @err lines (' ' startsWith) filter (trim) map (len 0 >) filter
+end
+
+# Crates listed by `cargo install --list`; unindented lines are "name vX.Y.Z:".
+def __cargoInstalled ( -- [str])
+    ['cargo' 'install' '--list'] * ^ ; drop lines
+    (len 0 >) filter
+    (' ' startsWith not) filter
+    (wsplit :0:) map
+end
+
+def __cargoOptionsForSubcmd (str -- [str])
+    cmd!
+    {
+        'add': [
+            '--dev' '--build' '--dry-run' '--optional' '--no-optional' '--rename'
+            '--features' '--default-features' '--no-default-features'
+            '--path' '--git' '--branch' '--tag' '--rev' '--registry'
+            '-p' '--package' '--manifest-path'
+        ],
+        'bench': [
+            '-p' '--package' '--exclude' '-j' '--jobs' '--lib' '--bin' '--bins'
+            '--example' '--examples' '--test' '--tests' '--bench' '--benches'
+            '--all-targets' '--no-run' '--no-fail-fast' '--workspace'
+            '--features' '--all-features' '--no-default-features'
+            '--target' '--target-dir' '--manifest-path' '--message-format'
+            '--profile' '--ignore-rust-version' '--unit-graph'
+        ],
+        'build': [
+            '-p' '--package' '--exclude' '-j' '--jobs' '--lib' '--bin' '--bins'
+            '--example' '--examples' '--test' '--tests' '--bench' '--benches'
+            '--all-targets' '--workspace' '--release' '--profile'
+            '--features' '--all-features' '--no-default-features'
+            '--target' '--target-dir' '--out-dir' '--manifest-path' '--message-format'
+            '--build-plan' '--unit-graph' '--future-incompat-report' '--ignore-rust-version'
+        ],
+        'check': [
+            '-p' '--package' '--exclude' '-j' '--jobs' '--lib' '--bin' '--bins'
+            '--example' '--examples' '--test' '--tests' '--bench' '--benches'
+            '--all-targets' '--workspace' '--release' '--profile'
+            '--features' '--all-features' '--no-default-features'
+            '--target' '--target-dir' '--manifest-path' '--message-format'
+            '--unit-graph' '--future-incompat-report' '--ignore-rust-version'
+        ],
+        'clean': [
+            '-p' '--package' '--manifest-path' '--target' '--target-dir'
+            '--profile' '--release' '--doc' '--dry-run'
+        ],
+        'doc': [
+            '-p' '--package' '--exclude' '-j' '--jobs' '--lib' '--bin' '--bins'
+            '--open' '--no-deps' '--document-private-items' '--workspace'
+            '--release' '--profile' '--features' '--all-features' '--no-default-features'
+            '--target' '--target-dir' '--manifest-path' '--message-format'
+            '--ignore-rust-version' '--unit-graph'
+        ],
+        'fetch': [
+            '--manifest-path' '--target'
+        ],
+        'fix': [
+            '-p' '--package' '--exclude' '-j' '--jobs' '--lib' '--bin' '--bins'
+            '--example' '--examples' '--test' '--tests' '--bench' '--benches'
+            '--all-targets' '--workspace' '--release' '--profile'
+            '--features' '--all-features' '--no-default-features'
+            '--target' '--target-dir' '--manifest-path' '--message-format'
+            '--broken-code' '--edition' '--edition-idioms'
+            '--allow-no-vcs' '--allow-dirty' '--allow-staged' '--ignore-rust-version'
+        ],
+        'generate-lockfile': [
+            '--manifest-path'
+        ],
+        'init': [
+            '--registry' '--vcs' '--edition' '--name' '--bin' '--lib'
+        ],
+        'install': [
+            '--version' '--git' '--branch' '--tag' '--rev' '--path'
+            '-j' '--jobs' '--features' '--all-features' '--no-default-features'
+            '--profile' '--bin' '--bins' '--example' '--examples'
+            '--target' '--target-dir' '--root' '--index' '--registry'
+            '--list' '-f' '--force' '--no-track' '--debug'
+        ],
+        'locate-project': [
+            '--manifest-path' '--message-format' '--workspace'
+        ],
+        'login': [
+            '--registry'
+        ],
+        'logout': [
+            '--registry'
+        ],
+        'metadata': [
+            '--features' '--all-features' '--no-default-features'
+            '--filter-platform' '--manifest-path' '--format-version' '--no-deps'
+        ],
+        'new': [
+            '--registry' '--vcs' '--edition' '--name' '--bin' '--lib'
+        ],
+        'owner': [
+            '-a' '--add' '-r' '--remove' '-l' '--list' '--index' '--token' '--registry'
+        ],
+        'package': [
+            '-l' '--list' '--no-verify' '--no-metadata' '--allow-dirty'
+            '--target' '--target-dir' '--features' '--all-features' '--no-default-features'
+            '--manifest-path' '-j' '--jobs'
+        ],
+        'pkgid': [
+            '-p' '--package' '--manifest-path'
+        ],
+        'publish': [
+            '--index' '--token' '--no-verify' '--allow-dirty' '--dry-run' '--registry'
+            '--target' '--target-dir' '--manifest-path'
+            '--features' '--all-features' '--no-default-features' '-j' '--jobs'
+        ],
+        'remove': [
+            '--dev' '--build' '--dry-run' '-p' '--package' '--manifest-path'
+        ],
+        'run': [
+            '--bin' '--example' '-p' '--package' '-j' '--jobs' '--release' '--profile'
+            '--features' '--all-features' '--no-default-features'
+            '--target' '--target-dir' '--manifest-path' '--message-format'
+            '--unit-graph' '--ignore-rust-version'
+        ],
+        'rustc': [
+            '-p' '--package' '-j' '--jobs' '--lib' '--bin' '--bins'
+            '--example' '--examples' '--test' '--tests' '--bench' '--benches'
+            '--all-targets' '--release' '--profile'
+            '--features' '--all-features' '--no-default-features'
+            '--target' '--target-dir' '--print' '--manifest-path' '--message-format'
+            '--unit-graph' '--ignore-rust-version' '--future-incompat-report'
+        ],
+        'rustdoc': [
+            '-p' '--package' '-j' '--jobs' '--lib' '--bin' '--bins'
+            '--example' '--examples' '--test' '--tests' '--bench' '--benches'
+            '--all-targets' '--open' '--release' '--profile'
+            '--features' '--all-features' '--no-default-features'
+            '--target' '--target-dir' '--manifest-path' '--message-format'
+            '--unit-graph' '--ignore-rust-version'
+        ],
+        'search': [
+            '--index' '--limit' '--registry'
+        ],
+        'test': [
+            '--lib' '--bin' '--bins' '--example' '--examples' '--test' '--tests'
+            '--bench' '--benches' '--all-targets' '--doc'
+            '-p' '--package' '--exclude' '-j' '--jobs' '--no-run' '--no-fail-fast'
+            '--workspace' '--release' '--profile'
+            '--features' '--all-features' '--no-default-features'
+            '--target' '--target-dir' '--manifest-path' '--message-format'
+            '--ignore-rust-version' '--unit-graph' '--future-incompat-report'
+        ],
+        'tree': [
+            '-p' '--package' '--exclude' '--features' '--all-features' '--no-default-features'
+            '--target' '-e' '--edges' '-i' '--invert' '--prefix' '--charset'
+            '-f' '--format' '--workspace' '--no-dedupe' '-d' '--duplicates' '--manifest-path'
+        ],
+        'uninstall': [
+            '-p' '--package' '--bin' '--root'
+        ],
+        'update': [
+            '-p' '--package' '--precise' '-w' '--workspace' '--aggressive' '--dry-run'
+            '--manifest-path' '--ignore-rust-version'
+        ],
+        'vendor': [
+            '-s' '--sync' '--no-delete' '--respect-source-config' '--versioned-dirs'
+            '--manifest-path'
+        ],
+        'verify-project': [
+            '--manifest-path'
+        ],
+        'yank': [
+            '--vers' '--undo' '--index' '--token' '--registry'
+        ]
+    }
+    @cmd [] getDef
+end
+
+# Default completions after a subcommand: common options plus the subcommand-specific ones.
+def __cargoSubcmdCompletions (str -- [str])
+    cmd!
+    __cargoCommonOptions @cmd __cargoOptionsForSubcmd extend
+end
+
+def __cargoCompletion { 'complete': ['cargo'] } ([str] -- [str])
+    input!
+    @input len 0 > if
+        @input :0: rawSubcmd!
+        @rawSubcmd match
+            'b' : 'build',
+            'c' : 'check',
+            'r' : 'run',
+            't' : 'test',
+            'd' : 'doc',
+            _   : @rawSubcmd,
+        end subcmd!
+        @input :-1: last!
+
+        # Subcommands where --bin/--example (and --test/--bench) take a target name.
+        ['bench' 'build' 'check' 'run' 'rustc' 'test'] binExampleCmds!
+        ['bench' 'build' 'check' 'rustc' 'test'] testBenchCmds!
+
+        @last match
+            '-p' '--package' '--exclude' : __cargoPackages,
+            '--target'          : __cargoTargets,
+            '--features'        : __cargoFeatures,
+            '--color'           : ['auto' 'always' 'never'],
+            '--vcs'             : ['git' 'hg' 'pijul' 'fossil' 'none'],
+            '--edition'         : ['2015' '2018' '2021' '2024'],
+            '--message-format'  : ['human' 'short' 'json' 'json-diagnostic-short' 'json-diagnostic-rendered-ansi' 'json-render-diagnostics'],
+            '--profile'         : ['dev' 'release' 'test' 'bench'],
+            '--bin' '--example' :
+                @binExampleCmds (@subcmd =) any
+                (@last 2: __cargoTargetNames)
+                (@subcmd __cargoSubcmdCompletions) iff,
+            '--test' '--bench'  :
+                @testBenchCmds (@subcmd =) any
+                (@last 2: __cargoTargetNames)
+                (@subcmd __cargoSubcmdCompletions) iff,
+            '-e' '--edges'      :
+                @subcmd 'tree' =
+                (['features' 'normal' 'build' 'dev' 'all' 'no-dev' 'no-build' 'no-normal'])
+                (@subcmd __cargoSubcmdCompletions) iff,
+            '--prefix'          :
+                @subcmd 'tree' =
+                (['depth' 'indent' 'none'])
+                (@subcmd __cargoSubcmdCompletions) iff,
+            '--charset'         :
+                @subcmd 'tree' =
+                (['utf8' 'ascii'])
+                (@subcmd __cargoSubcmdCompletions) iff,
+            _ : @subcmd match
+                'help'      : __cargoSubcommands,
+                'uninstall' : __cargoInstalled @subcmd __cargoSubcmdCompletions extend,
+                _           : @subcmd __cargoSubcmdCompletions,
+            end,
+        end
+    else
+        __cargoSubcommands ['--list' '--explain' '-C'] extend __cargoCommonOptions extend
+    end
+end
+# }}}
 # }}}
