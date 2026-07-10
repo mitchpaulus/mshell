@@ -151,6 +151,37 @@ func (c *Checker) Cast(target TypeId, callSite Token) {
 	c.stack.Push(target)
 }
 
+// TryCast implements `<value> tryAs <target>`. It pops the top of the
+// stack and pushes Maybe[target]. The same compatibility rule as Cast
+// applies, but for the opposite reason: a source that could never be the
+// target makes the runtime check always-none, which is almost certainly
+// a bug, so it is reported. The runtime narrowing itself (wide union in,
+// precise type out wrapped in Maybe) is exactly the case Cast's generous
+// direction already blesses.
+func (c *Checker) TryCast(target TypeId, callSite Token) {
+	if c.stack.Len() == 0 {
+		c.errors = append(c.errors, TypeError{
+			Kind: TErrStackUnderflow,
+			Pos:  callSite,
+			Hint: "tryAs",
+		})
+		c.stack.Push(c.arena.MakeMaybe(target))
+		return
+	}
+	top := c.stack.items[len(c.stack.items)-1]
+	c.stack.items = c.stack.items[:len(c.stack.items)-1]
+
+	if !c.castOk(top, target) {
+		c.errors = append(c.errors, TypeError{
+			Kind:     TErrInvalidCast,
+			Pos:      callSite,
+			Expected: target,
+			Actual:   top,
+		})
+	}
+	c.stack.Push(c.arena.MakeMaybe(target))
+}
+
 // castOk reports whether `src` can be cast to `dst`.
 //
 // Trials, in order (each isolated by a substitution checkpoint):

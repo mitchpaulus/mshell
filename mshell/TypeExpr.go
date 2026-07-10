@@ -70,6 +70,18 @@ func (parser *MShellParser) skipToShapeSync() {
 
 // Node types ---------------------------------------------------------------
 
+// TypeExpression is the interface every type-expression node must satisfy.
+// The parser productions below return it, so a new node kind cannot be
+// introduced without implementing runtime validation — the program will
+// not compile. validateObj is the runtime half of `tryAs`: it reports
+// whether a value conforms to the type. Its error return is reserved for
+// malformed casts (an unknown type name), which fail the script rather
+// than producing a `none`.
+type TypeExpression interface {
+	MShellParseItem
+	validateObj(state *EvalState, obj MShellObject) (bool, error)
+}
+
 // TypePrim is a primitive type keyword (int, float, bool, str).
 type TypePrim struct {
 	Tok Token
@@ -87,7 +99,7 @@ func (a *TypePrim) DebugString() string  { return a.Tok.Lexeme }
 type TypeNamed struct {
 	Tok  Token
 	Name string
-	Args []MShellParseItem // populated only for `Maybe[T]`-style application
+	Args []TypeExpression // populated only for `Maybe[T]`-style application
 }
 
 func (a *TypeNamed) GetStartToken() Token { return a.Tok }
@@ -116,7 +128,7 @@ func (a *TypeNamed) DebugString() string {
 // TypeListExpr is a homogeneous list type `[T]`.
 type TypeListExpr struct {
 	OpenTok Token
-	Elem    MShellParseItem
+	Elem    TypeExpression
 }
 
 func (a *TypeListExpr) GetStartToken() Token { return a.OpenTok }
@@ -127,8 +139,8 @@ func (a *TypeListExpr) DebugString() string  { return "[" + a.Elem.DebugString()
 // TypeDictExpr is a single key:value pair dict type `{K: V}`.
 type TypeDictExpr struct {
 	OpenTok Token
-	Key     MShellParseItem
-	Value   MShellParseItem
+	Key     TypeExpression
+	Value   TypeExpression
 }
 
 func (a *TypeDictExpr) GetStartToken() Token { return a.OpenTok }
@@ -144,7 +156,7 @@ func (a *TypeDictExpr) DebugString() string {
 type TypeShapeField struct {
 	Tok      Token
 	Name     string
-	Type     MShellParseItem
+	Type     TypeExpression
 	Optional bool
 }
 
@@ -156,7 +168,7 @@ type TypeShapeField struct {
 type TypeShapeExpr struct {
 	OpenTok  Token
 	Fields   []TypeShapeField
-	Wildcard MShellParseItem
+	Wildcard TypeExpression
 }
 
 func (a *TypeShapeExpr) GetStartToken() Token { return a.OpenTok }
@@ -218,7 +230,7 @@ func (a *TypeQuoteExpr) DebugString() string {
 // TypeUnionExpr is a union `A | B | C`.
 type TypeUnionExpr struct {
 	StartTok Token
-	Arms     []MShellParseItem
+	Arms     []TypeExpression
 }
 
 func (a *TypeUnionExpr) GetStartToken() Token { return a.StartTok }
@@ -255,14 +267,14 @@ func (a *TypeUnionExpr) DebugString() string {
 
 // parseTypeExpr is the top-level entry point. It parses a union (which
 // degrades to a single term when there's no `|`).
-func (parser *MShellParser) parseTypeExpr() (MShellParseItem, []TypeError) {
+func (parser *MShellParser) parseTypeExpr() (TypeExpression, []TypeError) {
 	var errs []TypeError
 	first := parser.parseTypePrimary(&errs)
 	if parser.curr.Type != PIPE {
 		return first, errs
 	}
 	start := first.GetStartToken()
-	arms := []MShellParseItem{first}
+	arms := []TypeExpression{first}
 	for parser.curr.Type == PIPE {
 		parser.NextToken() // consume |
 		arms = append(arms, parser.parseTypePrimary(&errs))
@@ -270,7 +282,7 @@ func (parser *MShellParser) parseTypeExpr() (MShellParseItem, []TypeError) {
 	return &TypeUnionExpr{StartTok: start, Arms: arms}, errs
 }
 
-func (parser *MShellParser) parseTypePrimary(errs *[]TypeError) MShellParseItem {
+func (parser *MShellParser) parseTypePrimary(errs *[]TypeError) TypeExpression {
 	tok := parser.curr
 	switch tok.Type {
 	case TYPEINT:
@@ -301,7 +313,7 @@ func (parser *MShellParser) parseTypePrimary(errs *[]TypeError) MShellParseItem 
 	return &TypePrim{Tok: tok, Tid: TidNothing}
 }
 
-func (parser *MShellParser) parseTypeList(errs *[]TypeError) MShellParseItem {
+func (parser *MShellParser) parseTypeList(errs *[]TypeError) TypeExpression {
 	open := parser.curr
 	parser.NextToken() // consume [
 	elem, subErrs := parser.parseTypeExpr()
@@ -329,7 +341,7 @@ func (parser *MShellParser) parseTypeList(errs *[]TypeError) MShellParseItem {
 // Disambiguation is single-token at the top of the body, with one
 // extra peek inside the LITERAL branch (to tell a shape field name
 // from a named type used as the dict key).
-func (parser *MShellParser) parseTypeDictOrShape(errs *[]TypeError) MShellParseItem {
+func (parser *MShellParser) parseTypeDictOrShape(errs *[]TypeError) TypeExpression {
 	open := parser.curr
 	parser.NextToken() // consume {
 	if parser.curr.Type == RIGHT_CURLY {
@@ -389,7 +401,7 @@ func (parser *MShellParser) parseTypeDictOrShape(errs *[]TypeError) MShellParseI
 // accepted only if it is literally `str` (for parity with prior sig
 // syntax); other key types are rejected with TErrTypeParse so the
 // type system can't pretend to support {int: V} / {path: V} etc.
-func (parser *MShellParser) finishDictOrBareType(open Token, first MShellParseItem, errs *[]TypeError) MShellParseItem {
+func (parser *MShellParser) finishDictOrBareType(open Token, first TypeExpression, errs *[]TypeError) TypeExpression {
 	if parser.curr.Type == RIGHT_CURLY {
 		// Bare-type sugar: `{T}` -> wildcard dict keyed by str.
 		parser.NextToken()
@@ -432,7 +444,7 @@ func (parser *MShellParser) finishDictOrBareType(open Token, first MShellParseIt
 
 // parseWildcardDictBody parses `*: T` (with optional trailing comma)
 // and the closing `}`. The `*` is the current token on entry.
-func (parser *MShellParser) parseWildcardDictBody(open Token, errs *[]TypeError) MShellParseItem {
+func (parser *MShellParser) parseWildcardDictBody(open Token, errs *[]TypeError) TypeExpression {
 	parser.NextToken() // consume *
 	if parser.curr.Type != COLON {
 		*errs = append(*errs, TypeError{Kind: TErrTypeParse, Pos: parser.curr, Hint: "expected ':' after '*', got " + tokDesc(parser.curr)})
@@ -454,7 +466,7 @@ func (parser *MShellParser) parseWildcardDictBody(open Token, errs *[]TypeError)
 
 // parseTypeShapeBody handles the case where the first key inside `{`
 // is a quoted string. continueTypeShapeBody does the heavy lifting.
-func (parser *MShellParser) parseTypeShapeBody(open Token, errs *[]TypeError) MShellParseItem {
+func (parser *MShellParser) parseTypeShapeBody(open Token, errs *[]TypeError) TypeExpression {
 	shape := &TypeShapeExpr{OpenTok: open}
 	parser.continueTypeShapeBody(shape, errs)
 	return shape
@@ -550,7 +562,7 @@ func (parser *MShellParser) continueTypeShapeBody(shape *TypeShapeExpr, errs *[]
 // synthStrKey returns a synthetic `str` TypePrim positioned at the
 // `{` opener — used as the key of bare-type sugar `{T}` and pure
 // wildcard `{*: T}`, both of which resolve to `Dict[str, T]`.
-func synthStrKey(open Token) MShellParseItem {
+func synthStrKey(open Token) TypeExpression {
 	tok := open
 	tok.Type = STR
 	tok.Lexeme = "str"
@@ -572,7 +584,7 @@ func isStrKeyExpr(item MShellParseItem) bool {
 	return false
 }
 
-func (parser *MShellParser) parseTypeQuote(errs *[]TypeError) MShellParseItem {
+func (parser *MShellParser) parseTypeQuote(errs *[]TypeError) TypeExpression {
 	open := parser.curr
 	parser.NextToken() // consume (
 	var inputs, outputs []MShellParseItem
@@ -599,7 +611,7 @@ func (parser *MShellParser) parseTypeQuote(errs *[]TypeError) MShellParseItem {
 	return &TypeQuoteExpr{OpenTok: open, Inputs: inputs, Outputs: outputs}
 }
 
-func (parser *MShellParser) parseTypeNamed(errs *[]TypeError) MShellParseItem {
+func (parser *MShellParser) parseTypeNamed(errs *[]TypeError) TypeExpression {
 	tok := parser.curr
 	parser.NextToken()
 	node := &TypeNamed{Tok: tok, Name: tok.Lexeme}
@@ -622,7 +634,7 @@ func (parser *MShellParser) applyMaybeArgs(node *TypeNamed, errs *[]TypeError) {
 	} else {
 		parser.NextToken()
 	}
-	node.Args = []MShellParseItem{inner}
+	node.Args = []TypeExpression{inner}
 }
 
 // isPrimitiveLiteralType reports whether a LITERAL lexeme names a built-in
@@ -715,9 +727,10 @@ func (c *Checker) resolveTypeExpr(node MShellParseItem, ctx *typeResolveCtx) Typ
 		}
 		return c.arena.MakeUnion(arms, NameNone)
 	case *TypeNamed:
+		if bt, ok := builtinNamedTypes[n.Name]; ok {
+			return bt.resolve(c)
+		}
 		switch n.Name {
-		case "bytes":
-			return TidBytes
 		case "none":
 			// `none` is the empty constructor of Maybe (like Haskell's
 			// Nothing), not a type. Reject it in type position with a
@@ -728,18 +741,6 @@ func (c *Checker) resolveTypeExpr(node MShellParseItem, ctx *typeResolveCtx) Typ
 				Hint: "'none' is not a type; it is the empty constructor of Maybe. Use 'Maybe[T]' for an optional value, or 'null' for the JSON null type",
 			})
 			return TidNothing
-		case "null":
-			return TidNull
-		case "path":
-			return TidPath
-		case "datetime":
-			return TidDateTime
-		case "Grid":
-			return c.arena.MakeGrid(0)
-		case "GridView":
-			return c.arena.MakeGridView(0)
-		case "GridRow":
-			return c.arena.MakeGridRow(0)
 		case "Maybe":
 			if len(n.Args) != 1 {
 				return TidNothing
@@ -793,4 +794,181 @@ func (c *Checker) ResolveDefSig(inputs, outputs []MShellParseItem) QuoteSig {
 		gens = append(gens, v)
 	}
 	return QuoteSig{Inputs: ins, Outputs: outs, Generics: gens}
+}
+
+// Built-in named types ------------------------------------------------------
+
+// builtinNamedType couples the two halves of a built-in named type: how
+// the checker resolves the name to a TypeId, and how the `tryAs` runtime
+// checks a value against it. Both resolveTypeExpr and
+// (*TypeNamed).validateObj consult this single table, so a new built-in
+// type cannot be half-added — registering it here wires up the checker
+// and the runtime together, and a name missing from the table does not
+// exist statically either.
+//
+// `Maybe` (parametric) and `none` (a constructor, not a type) are handled
+// specially by both consumers and do not belong in the table.
+type builtinNamedType struct {
+	resolve      func(c *Checker) TypeId
+	runtimeCheck func(obj MShellObject) bool
+}
+
+var builtinNamedTypes = map[string]builtinNamedType{
+	"bytes": {
+		resolve:      func(*Checker) TypeId { return TidBytes },
+		runtimeCheck: func(obj MShellObject) bool { _, ok := obj.(MShellBinary); return ok },
+	},
+	"null": {
+		resolve:      func(*Checker) TypeId { return TidNull },
+		runtimeCheck: func(obj MShellObject) bool { _, ok := obj.(MShellNull); return ok },
+	},
+	"path": {
+		resolve:      func(*Checker) TypeId { return TidPath },
+		runtimeCheck: func(obj MShellObject) bool { _, ok := obj.(MShellPath); return ok },
+	},
+	"datetime": {
+		resolve:      func(*Checker) TypeId { return TidDateTime },
+		runtimeCheck: func(obj MShellObject) bool { _, ok := obj.(*MShellDateTime); return ok },
+	},
+	"Grid": {
+		resolve:      func(c *Checker) TypeId { return c.arena.MakeGrid(0) },
+		runtimeCheck: func(obj MShellObject) bool { _, ok := obj.(*MShellGrid); return ok },
+	},
+	"GridView": {
+		resolve:      func(c *Checker) TypeId { return c.arena.MakeGridView(0) },
+		runtimeCheck: func(obj MShellObject) bool { _, ok := obj.(*MShellGridView); return ok },
+	},
+	"GridRow": {
+		resolve:      func(c *Checker) TypeId { return c.arena.MakeGridRow(0) },
+		runtimeCheck: func(obj MShellObject) bool { _, ok := obj.(*MShellGridRow); return ok },
+	},
+}
+
+// Runtime validation (`tryAs`) ----------------------------------------------
+//
+// Each node's validateObj checks a runtime value structurally against the
+// type expression; the TypeExpression interface forces every node kind to
+// implement one. Semantics mirror the match block's type arms where both
+// exist: `str` matches MShellString only, `int` matches MShellInt (a float
+// with an integral value does not conform), and quotation types are
+// checked by kind only — signatures are not verified at runtime. Shape
+// validation allows extra keys (width subtyping), requires all
+// non-optional fields, and validates optional fields only when present.
+
+func (a *TypePrim) validateObj(state *EvalState, obj MShellObject) (bool, error) {
+	switch a.Tid {
+	case TidInt:
+		_, ok := obj.(MShellInt)
+		return ok, nil
+	case TidFloat:
+		_, ok := obj.(MShellFloat)
+		return ok, nil
+	case TidBool:
+		_, ok := obj.(MShellBool)
+		return ok, nil
+	case TidStr:
+		_, ok := obj.(MShellString)
+		return ok, nil
+	}
+	// parseTypePrimary only constructs TypePrim with the four Tids above;
+	// its error fallback (TidNothing) records a parse error that aborts
+	// the cast before evaluation, so this is unreachable by construction.
+	return false, fmt.Errorf("tryAs cannot check the type '%s'", a.Tok.Lexeme)
+}
+
+func (a *TypeNamed) validateObj(state *EvalState, obj MShellObject) (bool, error) {
+	if bt, ok := builtinNamedTypes[a.Name]; ok {
+		return bt.runtimeCheck(obj), nil
+	}
+	if a.Name == "Maybe" {
+		var inner MShellObject
+		switch m := obj.(type) {
+		case Maybe:
+			inner = m.obj
+		case *Maybe:
+			inner = m.obj
+		default:
+			return false, nil
+		}
+		if inner == nil {
+			// `none` conforms to Maybe[T] for every T.
+			return true, nil
+		}
+		if len(a.Args) != 1 {
+			return false, fmt.Errorf("Maybe requires a type argument: Maybe[T]")
+		}
+		return a.Args[0].validateObj(state, inner)
+	}
+	body, ok := state.typeDefs[a.Name]
+	if !ok {
+		return false, fmt.Errorf("unknown type '%s' in tryAs; a `type %s = ...` declaration must run before the cast", a.Name, a.Name)
+	}
+	return body.validateObj(state, obj)
+}
+
+func (a *TypeListExpr) validateObj(state *EvalState, obj MShellObject) (bool, error) {
+	list, ok := obj.(*MShellList)
+	if !ok {
+		return false, nil
+	}
+	for _, item := range list.Items {
+		itemOk, err := a.Elem.validateObj(state, item)
+		if err != nil || !itemOk {
+			return itemOk, err
+		}
+	}
+	return true, nil
+}
+
+func (a *TypeDictExpr) validateObj(state *EvalState, obj MShellObject) (bool, error) {
+	dict, ok := obj.(*MShellDict)
+	if !ok {
+		return false, nil
+	}
+	for _, val := range dict.Items {
+		valOk, err := a.Value.validateObj(state, val)
+		if err != nil || !valOk {
+			return valOk, err
+		}
+	}
+	return true, nil
+}
+
+func (a *TypeShapeExpr) validateObj(state *EvalState, obj MShellObject) (bool, error) {
+	dict, ok := obj.(*MShellDict)
+	if !ok {
+		return false, nil
+	}
+	for _, f := range a.Fields {
+		val, present := dict.Items[f.Name]
+		if !present {
+			if f.Optional {
+				continue
+			}
+			return false, nil
+		}
+		fieldOk, err := f.Type.validateObj(state, val)
+		if err != nil || !fieldOk {
+			return fieldOk, err
+		}
+	}
+	return true, nil
+}
+
+func (a *TypeQuoteExpr) validateObj(state *EvalState, obj MShellObject) (bool, error) {
+	_, ok := obj.(*MShellQuotation)
+	return ok, nil
+}
+
+func (a *TypeUnionExpr) validateObj(state *EvalState, obj MShellObject) (bool, error) {
+	for _, arm := range a.Arms {
+		armOk, err := arm.validateObj(state, obj)
+		if err != nil {
+			return false, err
+		}
+		if armOk {
+			return true, nil
+		}
+	}
+	return false, nil
 }

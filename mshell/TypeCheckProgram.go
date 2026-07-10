@@ -482,6 +482,13 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 		}
 		return
 
+	case *MShellTryAsCast:
+		target := c.resolveTypeExpr(it.Target, nil)
+		if target != TidNothing {
+			c.TryCast(target, it.TryAsToken)
+		}
+		return
+
 	case Token:
 		c.checkOne(it)
 		return
