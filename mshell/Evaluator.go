@@ -1523,55 +1523,32 @@ func (state *EvalState) processLoop(t Token, frame *EvaluationFrame, frames *[]E
 		return state.FailWithMessage(fmt.Sprintf("%d:%d: Loop quotation needs a minimum of one token.\n", t.Line, t.Column))
 	}
 
-	// Build loop context
-	loopContext := ExecuteContext{
-		StandardInput:  nil,
-		StandardOutput: nil,
-		Variables:      context.Variables,
-		Pbm:            context.Pbm,
+	// Build loop context. BuildExecutionContext handles all the quotation's
+	// redirections (stdin, stdout, stderr, merges) and propagates the outer
+	// context's streams when the quotation has none of its own.
+	loopContext, err := quotation.BuildExecutionContext(&context)
+	if err != nil {
+		return state.FailWithMessage(err.Error())
 	}
-
-	if quotation.StdinBehavior != STDIN_NONE {
-		switch quotation.StdinBehavior {
-		case STDIN_CONTENT:
-			loopContext.StandardInput = strings.NewReader(quotation.StandardInputContents)
-		case STDIN_BINARY:
-			loopContext.StandardInput = bytes.NewReader(quotation.StandardInputBinary)
-		case STDIN_FILE:
-			file, err := os.Open(quotation.StandardInputFile)
-			if err != nil {
-				return state.FailWithMessage(fmt.Sprintf("%d:%d: Error opening file %s for reading: %s\n", t.Line, t.Column, quotation.StandardInputFile, err.Error()))
-			}
-			loopContext.StandardInput = file
-			loopContext.ShouldCloseInput = true
-		}
-	}
-
-	if quotation.StandardOutputFile != "" {
-		file, err := os.Create(quotation.StandardOutputFile)
-		if err != nil {
-			return state.FailWithMessage(fmt.Sprintf("%d:%d: Error opening file %s for writing: %s\n", t.Line, t.Column, quotation.StandardOutputFile, err.Error()))
-		}
-		loopContext.StandardOutput = file
-		loopContext.ShouldCloseOutput = true
-	}
+	loopContext.Variables = context.Variables
 
 	// Push FRAME_LOOP
 	state.LoopDepth++
 	callStackItem := CallStackItem{MShellParseItem: quotation, Name: "loop", CallStackType: CALLSTACKQUOTE}
 	state.CallStack.Push(callStackItem)
 	newFrame := EvaluationFrame{
-		Objects:          quotation.Tokens,
-		Index:            0,
-		Context:          loopContext,
-		Stack:            stack,
-		Definitions:      definitions,
-		CallStackItem:    callStackItem,
-		FrameType:        FRAME_LOOP,
-		LoopMax:          15000000,
-		LoopCount:        0,
-		LoopQuotation:    quotation,
-		InitialStackSize: len(*stack),
+		Objects:            quotation.Tokens,
+		Index:              0,
+		Context:            *loopContext,
+		Stack:              stack,
+		Definitions:        definitions,
+		CallStackItem:      callStackItem,
+		FrameType:          FRAME_LOOP,
+		LoopMax:            15000000,
+		LoopCount:          0,
+		LoopQuotation:      quotation,
+		InitialStackSize:   len(*stack),
+		ShouldCloseContext: true,
 	}
 	*frames = append(*frames, newFrame)
 	return SimpleSuccess()
@@ -3350,6 +3327,33 @@ type Executable interface {
 	GetStandardOutputFile() string
 }
 
+// stdoutDestinationDescOf / stderrDestinationDescOf describe the operator
+// that already claimed the stream on a redirectable object, or "" when the
+// stream is unclaimed (or the object is not redirectable).
+func stdoutDestinationDescOf(obj MShellObject) string {
+	switch o := obj.(type) {
+	case *MShellList:
+		return o.StdoutDestinationDesc()
+	case *MShellQuotation:
+		return o.StdoutDestinationDesc()
+	case *MShellPipe:
+		return o.StdoutDestinationDesc()
+	}
+	return ""
+}
+
+func stderrDestinationDescOf(obj MShellObject) string {
+	switch o := obj.(type) {
+	case *MShellList:
+		return o.StderrDestinationDesc()
+	case *MShellQuotation:
+		return o.StderrDestinationDesc()
+	case *MShellPipe:
+		return o.StderrDestinationDesc()
+	}
+	return ""
+}
+
 func (list *MShellList) Execute(state *EvalState, context ExecuteContext, stack *MShellStack) (EvalResult, int, []byte, []byte) {
 	result, exitCode, stdoutResult, stderrResult := RunProcess(*list, context, state)
 	return result, exitCode, stdoutResult, stderrResult
@@ -4017,6 +4021,17 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 			// Default to stderr of this process itself
 			cmd.Stderr = os.Stderr
 		}
+	}
+
+	// MERGE REDIRECTS: at most one of these is set (enforced when the token
+	// is applied). The merged stream aliases the other stream's resolved
+	// destination. os/exec passes a duplicated fd when both are the same
+	// *os.File and serializes Writes when both are the same writer, so this
+	// is safe on every platform.
+	if list.StdoutToStderr {
+		cmd.Stdout = cmd.Stderr
+	} else if list.StderrToStdout {
+		cmd.Stderr = cmd.Stdout
 	}
 
 	var startErr error
@@ -11608,9 +11623,15 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 				}
 
 				if asList, ok := obj1.(*MShellList); ok {
+					if desc := asList.StdoutDestinationDesc(); desc != "" {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stdout already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+					}
 					asList.StdoutBehavior = STDOUT_COMPLETE
 					stack.Push(asList)
 				} else if asPipe, ok := obj1.(*MShellPipe); ok {
+					if desc := asPipe.StdoutDestinationDesc(); desc != "" {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stdout already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+					}
 					asPipe.StdoutBehavior = STDOUT_COMPLETE
 					stack.Push(asPipe)
 				} else {
@@ -11648,8 +11669,14 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 				switch objTyped := obj1.(type) {
 				case *MShellList:
+					if desc := objTyped.StdoutDestinationDesc(); desc != "" {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stdout already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+					}
 					objTyped.StdoutBehavior = STDOUT_BINARY
 				case *MShellPipe:
+					if desc := objTyped.StdoutDestinationDesc(); desc != "" {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stdout already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+					}
 					objTyped.StdoutBehavior = STDOUT_BINARY
 				default:
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot capture binary stdout for a %s.\n", t.Line, t.Column, obj1.TypeName()))
@@ -11665,8 +11692,14 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 				switch objTyped := obj1.(type) {
 				case *MShellList:
+					if desc := objTyped.StderrDestinationDesc(); desc != "" {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stderr already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+					}
 					objTyped.StderrBehavior = STDERR_COMPLETE
 				case *MShellPipe:
+					if desc := objTyped.StderrDestinationDesc(); desc != "" {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stderr already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+					}
 					objTyped.StderrBehavior = STDERR_COMPLETE
 				default:
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot capture stderr for a %s.\n", t.Line, t.Column, obj1.TypeName()))
@@ -11680,8 +11713,14 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 				switch objTyped := obj1.(type) {
 				case *MShellList:
+					if desc := objTyped.StderrDestinationDesc(); desc != "" {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stderr already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+					}
 					objTyped.StderrBehavior = STDERR_BINARY
 				case *MShellPipe:
+					if desc := objTyped.StderrDestinationDesc(); desc != "" {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stderr already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+					}
 					objTyped.StderrBehavior = STDERR_BINARY
 				default:
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot capture binary stderr for a %s.\n", t.Line, t.Column, obj1.TypeName()))
@@ -11704,10 +11743,16 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 				switch obj2Typed := obj2.(type) {
 				case *MShellList:
+					if desc := obj2Typed.StdoutDestinationDesc(); desc != "" {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stdout already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+					}
 					obj2Typed.StandardOutputFile = path
 					obj2Typed.AppendOutput = true
 					stack.Push(obj2Typed)
 				case *MShellQuotation:
+					if desc := obj2Typed.StdoutDestinationDesc(); desc != "" {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stdout already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+					}
 					obj2Typed.StandardOutputFile = path
 					obj2Typed.AppendOutput = true
 					stack.Push(obj2Typed)
@@ -12110,6 +12155,11 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' across numeric types %s and %s. Use 'toFloat' / 'toInt' to convert explicitly.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
 					}
 				} else {
+					if t.Type == GREATERTHAN {
+						if desc := stdoutDestinationDescOf(obj2); desc != "" {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stdout already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+						}
+					}
 					switch obj1.(type) {
 					case MShellString:
 						path := obj1.(MShellString).Content
@@ -12247,10 +12297,16 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 				switch obj2Typed := obj2.(type) {
 				case *MShellList:
+					if desc := obj2Typed.StderrDestinationDesc(); desc != "" {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stderr already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+					}
 					obj2Typed.StandardErrorFile = redirectFile
 					obj2Typed.AppendError = t.Type == STDERRAPPEND
 					stack.Push(obj2Typed)
 				case *MShellQuotation:
+					if desc := obj2Typed.StderrDestinationDesc(); desc != "" {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stderr already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+					}
 					obj2Typed.StandardErrorFile = redirectFile
 					obj2Typed.AppendError = t.Type == STDERRAPPEND
 					stack.Push(obj2Typed)
@@ -12277,6 +12333,13 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 				}
 
 				appendMode := t.Type == STDOUTANDSTDERRAPPEND
+
+				if desc := stdoutDestinationDescOf(obj2); desc != "" {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stdout already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+				}
+				if desc := stderrDestinationDescOf(obj2); desc != "" {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stderr already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+				}
 
 				switch obj2Typed := obj2.(type) {
 				case *MShellList:
@@ -12314,6 +12377,15 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						t.Line, t.Column, obj2.TypeName()))
 				}
 
+				if desc := list.StdoutDestinationDesc(); desc != "" {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stdout already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+				}
+				// stderr merged into stdout would write error text back into
+				// the edited file; reject the combination.
+				if list.StderrToStdout {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stderr is merged into stdout ('2>&1'), which would write stderr back into the edited file.\n", t.Line, t.Column, t.Lexeme))
+				}
+
 				// Read file contents immediately
 				fileContents, err := os.ReadFile(pathObj.Path)
 				if err != nil {
@@ -12326,6 +12398,59 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 				list.StandardInputBinary = fileContents
 				list.InPlaceFile = pathObj.Path
 				stack.Push(list)
+			} else if t.Type == STDERRTOSTDOUT || t.Type == STDOUTTOSTDERR { // Token Type
+				obj, err := stack.Pop()
+				if err != nil {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
+				}
+
+				if t.Type == STDERRTOSTDOUT {
+					if desc := stderrDestinationDescOf(obj); desc != "" {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stderr already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+					}
+				} else {
+					if desc := stdoutDestinationDescOf(obj); desc != "" {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stdout already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+					}
+				}
+
+				// The two merges together are circular: neither stream would
+				// have a real destination.
+				circularMsg := "%d:%d: Cannot apply '%s': the other stream is already merged with '%s'; merging both streams into each other is circular.\n"
+
+				switch objTyped := obj.(type) {
+				case *MShellList:
+					if t.Type == STDERRTOSTDOUT {
+						if objTyped.StdoutToStderr {
+							return state.FailWithMessage(fmt.Sprintf(circularMsg, t.Line, t.Column, t.Lexeme, "1>&2"))
+						}
+						if objTyped.InPlaceFile != "" {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' with an in-place redirect ('<>'): stderr would be written back into the edited file.\n", t.Line, t.Column, t.Lexeme))
+						}
+						objTyped.StderrToStdout = true
+					} else {
+						if objTyped.StderrToStdout {
+							return state.FailWithMessage(fmt.Sprintf(circularMsg, t.Line, t.Column, t.Lexeme, "2>&1"))
+						}
+						objTyped.StdoutToStderr = true
+					}
+					stack.Push(objTyped)
+				case *MShellQuotation:
+					if t.Type == STDERRTOSTDOUT {
+						if objTyped.StdoutToStderr {
+							return state.FailWithMessage(fmt.Sprintf(circularMsg, t.Line, t.Column, t.Lexeme, "1>&2"))
+						}
+						objTyped.StderrToStdout = true
+					} else {
+						if objTyped.StderrToStdout {
+							return state.FailWithMessage(fmt.Sprintf(circularMsg, t.Line, t.Column, t.Lexeme, "2>&1"))
+						}
+						objTyped.StdoutToStderr = true
+					}
+					stack.Push(objTyped)
+				default:
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s; expected a list or quotation.\n", t.Line, t.Column, t.Lexeme, obj.TypeName()))
+				}
 			} else if t.Type == ENVSTORE { // Token Type
 				obj, err := stack.Pop()
 				if err != nil {
@@ -12402,41 +12527,15 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Loop quotation needs a minimum of one token.\n", t.Line, t.Column))
 				}
 
-				loopContext := ExecuteContext{
-					StandardInput:  nil,
-					StandardOutput: nil,
-					Variables:      context.Variables,
-					Pbm:            context.Pbm,
+				// BuildExecutionContext handles all the quotation's
+				// redirections (stdin, stdout, stderr, merges).
+				builtContext, err := quotation.BuildExecutionContext(&context)
+				if err != nil {
+					return state.FailWithMessage(err.Error())
 				}
-
-				if quotation.StdinBehavior != STDIN_NONE {
-					switch quotation.StdinBehavior {
-					case STDIN_CONTENT:
-						loopContext.StandardInput = strings.NewReader(quotation.StandardInputContents)
-					case STDIN_BINARY:
-						loopContext.StandardInput = bytes.NewReader(quotation.StandardInputBinary)
-					case STDIN_FILE:
-						file, err := os.Open(quotation.StandardInputFile)
-						if err != nil {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error opening file %s for reading: %s\n", t.Line, t.Column, quotation.StandardInputFile, err.Error()))
-						}
-						loopContext.StandardInput = file
-						// TODO: This probably shouldn't be done here like this
-						defer file.Close()
-					default:
-						panic("Unknown stdin behavior")
-					}
-				}
-
-				if quotation.StandardOutputFile != "" {
-					file, err := os.Create(quotation.StandardOutputFile)
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error opening file %s for writing: %s\n", t.Line, t.Column, quotation.StandardOutputFile, err.Error()))
-					}
-					loopContext.StandardOutput = file
-					// TODO: This probably shouldn't be done here like this
-					defer file.Close()
-				}
+				builtContext.Variables = context.Variables
+				loopContext := *builtContext
+				defer loopContext.Close()
 
 				maxLoops := 15000000
 				loopCount := 0

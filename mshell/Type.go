@@ -118,6 +118,12 @@ type TypeNode struct {
 	Extra uint32
 }
 
+// CommandCaptureMode is really a per-stream *destination state*: unset,
+// captured to the stack (str/bytes/lines), redirected to a file, used for an
+// in-place edit, or merged into the other stream. The checker uses it to
+// enforce that each stream has exactly one destination, mirroring the
+// runtime's conflict errors. Only the capture states produce stack outputs
+// at `;` / `!` / `?`.
 type CommandCaptureMode uint32
 
 const (
@@ -125,6 +131,9 @@ const (
 	CommandCaptureStr
 	CommandCaptureBytes
 	CommandCaptureLines
+	CommandDestFile    // stream redirected to a file (>, >>, 2>, 2>>, &>, &>>)
+	CommandDestInPlace // stdout claimed by an in-place redirect (<>)
+	CommandDestMerged  // stream merged into the other stream (2>&1 / 1>&2)
 )
 
 // TypeVarId identifies a generic type variable. Fresh ids are issued at

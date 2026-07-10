@@ -1,0 +1,1 @@
+2:11: Cannot apply '^': stderr already has a merge to stdout ('2>&1'). Each stream has exactly one destination.

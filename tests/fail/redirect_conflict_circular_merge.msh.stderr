@@ -1,0 +1,1 @@
+2:11: Cannot apply '1>&2': the other stream is already merged with '2>&1'; merging both streams into each other is circular.

@@ -613,6 +613,8 @@ type MShellQuotation struct {
 	AppendOutput          bool
 	StandardErrorFile     string
 	AppendError           bool
+	StdoutToStderr        bool // 1>&2: stdout goes to stderr's destination
+	StderrToStdout        bool // 2>&1: stderr goes to stdout's destination
 	Variables             map[string]MShellObject
 }
 
@@ -718,6 +720,17 @@ func (q *MShellQuotation) BuildExecutionContext(context *ExecuteContext) (*Execu
 		quoteContext.StandardError = os.Stderr
 	}
 
+	// Merge redirects: at most one is set (enforced when the token is
+	// applied). The merged stream aliases the other stream's resolved
+	// destination. The merged side never opened its own file (a file
+	// redirect on it would have been a conflict), so the ShouldClose flags
+	// are already correct.
+	if q.StdoutToStderr {
+		quoteContext.StandardOutput = quoteContext.StandardError
+	} else if q.StderrToStdout {
+		quoteContext.StandardError = quoteContext.StandardOutput
+	}
+
 	return &quoteContext, nil
 }
 
@@ -772,6 +785,8 @@ type MShellList struct {
 	StderrBehavior  StderrBehavior
 	RunInBackground bool
 	InPlaceFile     string // File path for in-place modification with <>
+	StdoutToStderr  bool   // 1>&2: stdout goes to stderr's destination
+	StderrToStdout  bool   // 2>&1: stderr goes to stdout's destination
 }
 
 // initLength creates list like: make([]MShellObject, initLength)
@@ -853,11 +868,67 @@ func CopyListParams(copyFromList *MShellList, copyToList *MShellList) {
 	copyToList.StandardInputBinary = copyFromList.StandardInputBinary
 	copyToList.StandardInputFile = copyFromList.StandardInputFile
 	copyToList.StandardOutputFile = copyFromList.StandardOutputFile
+	copyToList.AppendOutput = copyFromList.AppendOutput
 	copyToList.StandardErrorFile = copyFromList.StandardErrorFile
 	copyToList.AppendError = copyFromList.AppendError
 	copyToList.StdoutBehavior = copyFromList.StdoutBehavior
 	copyToList.StderrBehavior = copyFromList.StderrBehavior
 	copyToList.InPlaceFile = copyFromList.InPlaceFile
+	copyToList.StdoutToStderr = copyFromList.StdoutToStderr
+	copyToList.StderrToStdout = copyFromList.StderrToStdout
+}
+
+// StdoutDestinationDesc describes the operator that already claimed stdout,
+// or "" when stdout is still unclaimed. Each stream has exactly one
+// destination; redirect ops use this to reject a second claim.
+func (list *MShellList) StdoutDestinationDesc() string {
+	switch {
+	case list.StdoutBehavior != STDOUT_NONE:
+		return "a capture ('*')"
+	case list.InPlaceFile != "":
+		return "an in-place redirect ('<>')"
+	case list.StandardOutputFile != "":
+		return "a file redirect ('>')"
+	case list.StdoutToStderr:
+		return "a merge to stderr ('1>&2')"
+	}
+	return ""
+}
+
+// StderrDestinationDesc describes the operator that already claimed stderr,
+// or "" when stderr is still unclaimed.
+func (list *MShellList) StderrDestinationDesc() string {
+	switch {
+	case list.StderrBehavior != STDERR_NONE:
+		return "a capture ('^')"
+	case list.StandardErrorFile != "":
+		return "a file redirect ('2>')"
+	case list.StderrToStdout:
+		return "a merge to stdout ('2>&1')"
+	}
+	return ""
+}
+
+// StdoutDestinationDesc for quotations; quotations support file redirects
+// and merges but not captures or in-place redirects.
+func (q *MShellQuotation) StdoutDestinationDesc() string {
+	switch {
+	case q.StandardOutputFile != "":
+		return "a file redirect ('>')"
+	case q.StdoutToStderr:
+		return "a merge to stderr ('1>&2')"
+	}
+	return ""
+}
+
+func (q *MShellQuotation) StderrDestinationDesc() string {
+	switch {
+	case q.StandardErrorFile != "":
+		return "a file redirect ('2>')"
+	case q.StderrToStdout:
+		return "a merge to stdout ('2>&1')"
+	}
+	return ""
 }
 
 type MShellString struct {
@@ -872,6 +943,21 @@ type MShellPipe struct {
 	List           MShellList
 	StdoutBehavior StdoutBehavior
 	StderrBehavior StderrBehavior
+}
+
+// Pipes only support captures as stream destinations.
+func (p *MShellPipe) StdoutDestinationDesc() string {
+	if p.StdoutBehavior != STDOUT_NONE {
+		return "a capture ('*')"
+	}
+	return ""
+}
+
+func (p *MShellPipe) StderrDestinationDesc() string {
+	if p.StderrBehavior != STDERR_NONE {
+		return "a capture ('^')"
+	}
+	return ""
 }
 
 type MShellInt struct {

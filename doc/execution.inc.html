@@ -142,6 +142,36 @@ Standard output will always be pushed first, and then standard error.
 </code>
 </pre>
 
+<h2 id="stream-merging">Merging one stream into the other</h2>
+
+<p>
+Use <code>2>&amp;1</code> to send standard error to wherever standard output ends up,
+or <code>1>&amp;2</code> to send standard output to wherever standard error ends up.
+These are complete tokens: no spaces are allowed inside them.
+Unlike POSIX shells, they are <em>not</em> order-sensitive file descriptor duplication:
+a merge means "this stream goes to the other stream's <em>final</em> destination",
+so there is no <code>> file 2>&amp;1</code> vs <code>2>&amp;1 > file</code> ordering trap.
+Both streams share a single destination, preserving output order, and this works the same on every platform.
+</p>
+
+<pre>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellSTDERRTOSTDOUT">2&gt;&amp;1</span> <span class="mshellASTERISK">*</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Captures stdout and stderr interleaved as one string.</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">make</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellSTDERRTOSTDOUT">2&gt;&amp;1</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">grep</span> <span class="mshellLITERAL">-i</span> <span class="mshellLITERAL">error</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPIPE">|</span><span class="mshellEXECUTE">;</span> <span class="mshellLINECOMMENT"># stderr flows through the pipe.</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellSTDOUTTOSTDERR">1&gt;&amp;2</span> <span class="mshellEXECUTE">;</span> <span class="mshellLINECOMMENT"># stdout appears on stderr, e.g. visible even when the surrounding output is captured.</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">yourCommand</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellPATH">`output.log`</span> <span class="mshellGREATERTHAN">&gt;</span> <span class="mshellSTDERRTOSTDOUT">2&gt;&amp;1</span> <span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Both streams into output.log; equivalent to &amp;&gt;.</span>
+</code>
+</pre>
+
+<h2 id="one-destination-per-stream">Each stream has exactly one destination</h2>
+
+<p>
+A stream's destination can be set once: a file redirect, a capture, an in-place redirect, or a merge.
+Applying a second destination to the same stream is an error, caught both by the static type checker and at runtime.
+For example, <code>[cmd] * `f` ></code> (capture and file redirect on stdout), <code>[cmd] 2>&amp;1 ^</code> (merge and capture on stderr),
+and <code>[cmd] 2>&amp;1 1>&amp;2</code> (circular merge) are all rejected.
+<code>2>&amp;1</code> also cannot be combined with <code>&lt;&gt;</code>, since stderr text would be written back into the edited file.
+</p>
+
 <table>
   <caption>Summary of external command operators</caption>
   <thead>
@@ -161,6 +191,8 @@ Standard output will always be pushed first, and then standard error.
     <tr> <td><code>&amp;>></code></td> <td>Redirect both stdout and stderr to a file.</td> <td>Appends to the file.</td> </tr>
     <tr> <td><code>^</code></td> <td>Capture stderr to the stack.</td> <td>As a string.</td> </tr>
     <tr> <td><code>^b</code></td> <td>Capture stderr to the stack.</td> <td>As binary.</td> </tr>
+    <tr> <td><code>2>&amp;1</code></td> <td>Merge stderr into stdout's destination.</td> <td>Single token, no spaces. Not order-sensitive: stderr follows stdout's final destination.</td> </tr>
+    <tr> <td><code>1>&amp;2</code></td> <td>Merge stdout into stderr's destination.</td> <td>Single token, no spaces.</td> </tr>
     <tr> <td><code>&lt;</code></td> <td>Feed stdin from a value.</td> <td>String, path, or binary.</td> </tr>
     <tr> <td><code>&lt;&gt;</code></td> <td>In-place file modification.</td> <td>Reads file to stdin, writes stdout back on success.</td> </tr>
     <tr> <td><code>&amp;</code></td> <td>Mark the command list to run asynchronously.</td> <td>Marks the list; the trailing <code>;</code>/<code>!</code> starts the subprocess and returns immediately without waiting. Stdout and stderr default to discarded.</td> </tr>

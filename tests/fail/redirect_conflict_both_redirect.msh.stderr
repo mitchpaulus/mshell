@@ -1,0 +1,1 @@
+2:29: Cannot apply '2>&1': stderr already has a file redirect ('2>'). Each stream has exactly one destination.
