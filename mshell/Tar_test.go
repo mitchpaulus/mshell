@@ -78,7 +78,7 @@ func TestTarRoundTripAndGzipAutodetect(t *testing.T) {
 
 	for _, name := range []string{"out.tar", "out.tar.gz"} {
 		archive := filepath.Join(dir, name)
-		if err := buildTarFromEntries([]zipPackItem{{SourcePath: src, PreserveRoot: true}}, archive); err != nil {
+		if err := buildTarFromEntries([]zipPackItem{{SourcePath: src, PreserveRoot: true}}, archive, isGzipTarget(archive)); err != nil {
 			t.Fatalf("%s pack: %v", name, err)
 		}
 		entries, err := collectTarMetadata(archive)

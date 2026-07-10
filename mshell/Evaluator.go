@@ -5279,6 +5279,36 @@ func parseZipExtractEntryOptions(dict *MShellDict) (zipExtractEntryOptions, erro
 	return options, nil
 }
 
+// parseTarDestination interprets the destination argument of the tar write
+// builtins. A plain string/path infers gzip compression from the extension
+// (isGzipTarget); a dict form {path, compress?} makes the choice explicit,
+// overriding the extension in either direction.
+func parseTarDestination(obj MShellObject) (string, bool, error) {
+	if dict, ok := obj.(*MShellDict); ok {
+		pathObj, ok := dict.Items["path"]
+		if !ok {
+			return "", false, fmt.Errorf("destination dict is missing required 'path'")
+		}
+		tarPath, err := pathObj.CastString()
+		if err != nil {
+			return "", false, fmt.Errorf("destination 'path' must be a string or path, found %s", pathObj.TypeName())
+		}
+		compress := isGzipTarget(tarPath)
+		if val, ok, err := boolOption(dict, "compress"); err != nil {
+			return "", false, err
+		} else if ok {
+			compress = val
+		}
+		return tarPath, compress, nil
+	}
+
+	tarPath, err := obj.CastString()
+	if err != nil {
+		return "", false, fmt.Errorf("Cannot tar into a %s", obj.TypeName())
+	}
+	return tarPath, isGzipTarget(tarPath), nil
+}
+
 func boolOption(dict *MShellDict, key string) (bool, bool, error) {
 	item, ok := dict.Items[key]
 	if !ok {
@@ -7853,9 +7883,9 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						return state.FailWithMessage(err.Error())
 					}
 
-					tarPath, err := obj1.CastString()
+					tarPath, compress, err := parseTarDestination(obj1)
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot tar into a %s.\n", t.Line, t.Column, obj1.TypeName()))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s: %s\n", t.Line, t.Column, t.Lexeme, err.Error()))
 					}
 
 					sourceDir, err := obj2.CastString()
@@ -7864,7 +7894,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					preserveRoot := t.Lexeme == "tarDirInc"
-					if err := tarDirectory(sourceDir, tarPath, preserveRoot); err != nil {
+					if err := tarDirectory(sourceDir, tarPath, preserveRoot, compress); err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
 					}
 				} else if t.Lexeme == "tarPack" {
@@ -7873,9 +7903,9 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						return state.FailWithMessage(err.Error())
 					}
 
-					tarPath, err := obj1.CastString()
+					tarPath, compress, err := parseTarDestination(obj1)
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot tar into a %s.\n", t.Line, t.Column, obj1.TypeName()))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: tarPack: %s\n", t.Line, t.Column, err.Error()))
 					}
 
 					list, ok := obj2.(*MShellList)
@@ -7928,7 +7958,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						entries = append(entries, packItem)
 					}
 
-					if err := buildTarFromEntries(entries, tarPath); err != nil {
+					if err := buildTarFromEntries(entries, tarPath, compress); err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
 					}
 				} else if t.Lexeme == "tarList" {

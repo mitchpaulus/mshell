@@ -1,0 +1,17 @@
+forced gzip magic
+true
+forced gzip alpha
+ALPHA-DATA
+
+forced plain magic
+false
+default plain magic
+false
+tarPack alpha
+ALPHA-DATA
+
+tarPack gzip magic
+true
+tarPack gzip alpha
+ALPHA-DATA
+
