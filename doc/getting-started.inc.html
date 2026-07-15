@@ -96,6 +96,21 @@ To pin a specific version:
 The action downloads the pre-built binary for the runner platform and installs the matching startup files automatically.
 </p>
 
+<p>
+To use a build that has not been released yet, pass a commit SHA or branch name as the version.
+Anything that is not <code>latest</code> and does not start with <code>v</code> is treated as a git ref:
+the action clones the repository at that ref and builds from source with Go
+(installed automatically via <code>actions/setup-go</code>).
+</p>
+
+<pre>
+<code><span class="yaml-key">steps:</span>
+  - <span class="yaml-key">uses:</span> mitchpaulus/mshell@main
+    <span class="yaml-key">with:</span>
+      <span class="yaml-key">version:</span> a087dc2f
+  - <span class="yaml-key">run:</span> msh script.msh</code>
+</pre>
+
 <h1 id="getting-started-editor-support">Editor Support <a class="section-link" href="#getting-started-editor-support" aria-label="Permalink">§</a> <a class="back-to-top" href="#getting-started-top">Back to top</a></h1>
 
 <p>

@@ -2,14 +2,29 @@ name: 'Setup mshell'
 description: 'Install the mshell concatenative shell language'
 inputs:
   version:
-    description: 'Version to install (e.g., v0.1.0). Defaults to latest.'
+    description: >
+      Version to install. A release tag (e.g., v0.1.0) or 'latest' downloads a
+      pre-built binary. Anything else (a commit SHA or branch name) is built
+      from source with Go. Defaults to latest.
     required: false
     default: 'latest'
 runs:
   using: 'composite'
   steps:
+    - name: Determine install mode
+      id: mode
+      shell: bash
+      run: |
+        VERSION="${{ inputs.version }}"
+        if [ "$VERSION" = "latest" ] || [ "${VERSION#v}" != "$VERSION" ]; then
+          echo "mode=release" >> $GITHUB_OUTPUT
+        else
+          echo "mode=source" >> $GITHUB_OUTPUT
+        fi
+
     - name: Determine platform
       id: platform
+      if: steps.mode.outputs.mode == 'release'
       shell: bash
       run: |
         case "${{ runner.os }}-${{ runner.arch }}" in
@@ -21,7 +36,8 @@ runs:
           *) echo "Unsupported platform: ${{ runner.os }}-${{ runner.arch }}" && exit 1 ;;
         esac
 
-    - name: Download and install mshell
+    - name: Download mshell release
+      if: steps.mode.outputs.mode == 'release'
       shell: bash
       env:
         ACTION_REPO: ${{ github.action_repository }}
@@ -38,6 +54,47 @@ runs:
         mkdir -p "$HOME/.mshell/bin"
         curl -sL "$URL" | tar -xz -C "$HOME/.mshell/bin"
 
+    - name: Checkout mshell source
+      if: steps.mode.outputs.mode == 'source'
+      shell: bash
+      env:
+        ACTION_REPO: ${{ github.action_repository }}
+      run: |
+        VERSION="${{ inputs.version }}"
+        SRC_DIR="$RUNNER_TEMP/mshell-src"
+        rm -rf "$SRC_DIR"
+        git clone "https://github.com/${ACTION_REPO}" "$SRC_DIR"
+        git -C "$SRC_DIR" checkout "$VERSION"
+
+    - name: Set up Go
+      if: steps.mode.outputs.mode == 'source'
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: ${{ runner.temp }}/mshell-src/mshell/go.mod
+        cache: false
+
+    - name: Build mshell from source
+      if: steps.mode.outputs.mode == 'source'
+      shell: bash
+      run: |
+        SRC_DIR="$RUNNER_TEMP/mshell-src"
+        mkdir -p "$HOME/.mshell/bin"
+
+        if [ "${{ runner.os }}" = "Windows" ]; then
+          BIN="mshell.exe"
+        else
+          BIN="mshell"
+        fi
+
+        cd "$SRC_DIR/mshell"
+        go build -o "$HOME/.mshell/bin/$BIN"
+
+        # Releases ship std.msh in the tarball; for source builds take it from the repo.
+        cp "$SRC_DIR/lib/std.msh" "$HOME/.mshell/bin/std.msh"
+
+    - name: Install mshell
+      shell: bash
+      run: |
         # Create symlinks so both msh and mshell work
         cd "$HOME/.mshell/bin"
         if [ -f mshell ]; then
@@ -76,7 +133,7 @@ runs:
         mkdir -p "$DATA_DIR/$MSH_VERSION"
         mkdir -p "$CONFIG_DIR/$MSH_VERSION"
 
-        # std.msh is included in the release tarball; move it into the versioned startup location.
+        # std.msh is placed in the bin directory by both install modes; move it into the versioned startup location.
         mv "$HOME/.mshell/bin/std.msh" "$DATA_DIR/$MSH_VERSION/std.msh"
 
         # Create an empty init.msh so startup succeeds on first run.

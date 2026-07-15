@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The GitHub action can now install unreleased builds:
+  passing a commit SHA or branch name as `version` clones the repository at that ref and builds from source with Go.
+  Release tags (`vX.Y.Z`) and `latest` still download pre-built binaries.
+
 - The tar write functions (`tarDirInc`, `tarDirExc`, `tarPack`) now accept a
   dictionary destination `{path: str|path, compress?: bool}`, where `compress`
   overrides the extension-based gzip inference in either direction — useful
