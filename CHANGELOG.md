@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- File manager: cut/copy clipboard changes made in one mshell instance now
+  appear in all other running instances immediately, via a native directory
+  watch (inotify on Linux, kqueue on macOS, `ReadDirectoryChangesW` on
+  Windows) with a bounded stat-poll fallback. Clipboard writes are now atomic
+  and serialized with an OS file lock, so concurrent instances can no longer
+  lose or corrupt clipboard entries. Lock waits time out and clipboard reads
+  are capped in size and time, so a stuck or hostile process sharing the
+  clipboard file cannot hang or bloat other instances.
+
 ### Added
 
 - The GitHub action can now install unreleased builds:
