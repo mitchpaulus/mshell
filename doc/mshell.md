@@ -1202,6 +1202,7 @@ end wl # Output: 11
 - `trimEnd`: Trim whitespace from end of string. `(str -- str)`
 - `startsWith`: Check if string starts with substring. `(str str -- bool)`
 - `endsWith`: Check if string ends with substring. `(str str -- bool)`
+- `longestCommonPrefix`: Longest leading substring shared by every string in the list. Byte-based; an empty list gives `""`. `([str] -- str)`
 - `title`: Convert string to title case (English, uses [`cases.Title`](https://pkg.go.dev/golang.org/x/text/cases#Title)). `(str -- str)`
 - `lower`: Convert string to lowercase. `(str -- str)`
 - `upper`: Convert string to uppercase. `(str -- str)`
