@@ -191,6 +191,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A number immediately followed by a literal character now lexes as a single
+  literal token instead of a float/int plus a separate literal, so bare file
+  arguments like `redo 1.pdf` work. Floats still end at token-ending
+  characters, e.g. `(1.5)`, `[2.5]`, `3.5;`, and `4.5,` lex as floats.
+
 - Each of stdout/stderr now has exactly one destination: combining two
   destinations on the same stream (e.g. capture `*` plus file redirect `>`,
   `&>` plus `2>`, a second `>`, or a merge plus anything else on that stream)
