@@ -1034,18 +1034,13 @@ func (l *Lexer) parseNumberOrStartIndexer() Token {
 		for unicode.IsDigit(l.peek()) {
 			l.advance()
 		}
-		// We have to check whether we have whitespace or end of file,
-		// Otherwise we have a literal. For example `1.pdf`.
-		if l.atEnd() {
+		// Mirror plain-integer behavior: a trailing literal char (e.g.
+		// `1.pdf`, `1.5x`) makes the whole token a literal rather than a
+		// float, while token-ending chars like `)`, `]`, `;` end the float.
+		if !isAllowedLiteral(l.peek()) {
 			return l.makeToken(FLOAT)
-		} else {
-			switch l.peek() {
-			case ' ', '\t', '\r', '\v', '\f', 0x85, 0xA0, '\n':
-				return l.makeToken(FLOAT)
-			default:
-				return l.parseLiteralOrKeyword()
-			}
 		}
+		return l.consumeLiteral()
 	} else if l.curLen() == 4 && peek == '-' {
 		l.advance()
 		// Month

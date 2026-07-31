@@ -210,6 +210,26 @@ def chomp (str -- str)
     end
 end
 
+# longestCommonPrefix ([str] -- str)
+# Longest leading substring shared by every string in the list.
+# Byte-based, like the other string functions. Empty list gives "".
+def longestCommonPrefix ([str] -- str)
+    lcp-list!
+    @lcp-list len 0 = if
+        ""
+    else
+        @lcp-list :0: lcp-prefix!
+        @lcp-list 1: (
+            lcp-item!
+            (
+                @lcp-item @lcp-prefix startsWith (break) iff
+                @lcp-prefix :-1 lcp-prefix!
+            ) loop
+        ) each
+        @lcp-prefix
+    end
+end
+
 # `abs` is now a runtime builtin (int -- int) | (float -- float).
 
 # This uses the Marsaglia polar method
