@@ -1,97 +1,18 @@
-Grammar:
+# Configuration
+
+In shells, configuration is nearly always done at *runtime* and is dynamic.
+Things like 'aliases' are typically added using a built in command.
+
+Things to exist in configuration:
 
 ```
-file : (item | definition)* ;
-item : simple | list | quote ;
-list : '[' item* ']' ;
-quote : '(' item* ')' ;
-definition : 'def' literal file 'end' ;
-simple
-    | INTEGER
-    | LITERAL
-    | BOOLEAN
-    | STRING
-    | EXECUTE ('x')
-    | PIPE ('|')
-    | QUESTION ('?')
-    | POSITIONAL
-    | STRING
-    | SINGLEQUOTESTRING
-    | MINUS ('-')
-    | PLUS ('+')
-    | EQUALS ('=')
-    | INTERPRET
-    | IF ('if')
-    | LOOP ('loop')
-    | READ ('read')
-    | STR ('str')
-    | BREAK ('break')
-    | NOT ('not')
-    | AND ('and')
-    | OR ('or')
-    | GREATERTHANOREQUAL
-    | LESSTHANOREQUAL
-    | LESSTHAN
-    | GREATERTHAN
-    | TRUE ('true')
-    | FALSE ('false')
-    | VARRETRIEVE
-    | VARSTORE
-    | INTEGER
-    | DOUBLE
-    | LITERAL
-    | INDEXER
-    | ENDINDEXER
-    | STARTINDEXER
-    | SLICEINDEXER
-    | STDOUTLINES
-    | STDOUTSTRIPPED
-    | STDOUTCOMPLETE
-    | EXPORT
-    | TILDEEXPANSION
-    | STOP_ON_ERROR
-    | DEF
-    | END
-    | STDERRREDIRECT
-    ;
+'
+{
+  'prompt' : ( -- str),
+  'abbreviations' : [
 
-type : typeItem ('|' typeItem)* ':' identifier;
-
-typeItem
-    : 'int'
-    | 'float'
-    | 'str'
-    | 'bool'
-    | 'binary'
-    | 'path'
-    | typeList
-    | typeQuote
-    | typeMaybe
-    | genericType
-    | typeDict
-    ;
-
-typeQuote : '(' type* -- type* ')' ;
-typeDict : '{' keyPair (',' keyPair )* '}' | '{' type '}'
-typeMaybe : 'Maybe[' type ']'
-
-keyPair : string ':' type
-        | '*" ':' type
-
-typeList : '[' type+  ']'  # If just one item assume all in homogeneous list. Otherwise, assume tuple of exact length.
-
-```
-
-Key Types:
-
-```
-MShellObject
-    MShellSimple
-    MShellLiteral
-    MShellBool
-    MShellQuotation
-    MShellString
-    MShellFloat
+  ]
+'
 ```
 
 # Executable Lookups
@@ -163,17 +84,3 @@ Short answer: Linux does a raw byte check for #!, parses only the first line int
   So your “splits on whitespace and adds the filepath as the last argument” is close but not quite: it splits only once (interpreter
   vs optional-arg), and the script path is inserted before the original argv[1...], not always last (only last if no extra args were
   supplied). (man7.org (https://man7.org/linux/man-pages/man2/execve.2.html?utm_source=openai))
-
-## References
-
-[fish shell built in](https://github.com/fish-shell/fish-shell/tree/master/src/builtins)
-[Stroustrop's Rule](https://buttondown.com/hillelwayne/archive/stroustrops-rule/)
-[WebAssembly Type Checking](https://binji.github.io/posts/webassembly-type-checking/)
-[Carapace](https://carapace.sh/): Completion library we may be able to reference?
-
-[Shell Pitfall example](https://gaultier.github.io/blog/shell_pitfall.html)
-[Slap](https://github.com/surprisetalk/slap), [Slap - blog](https://taylor.town/slap-000)
-[Category Theory Illustrated](https://abuseofnotation.github.io/category-theory-illustrated/)
-[Dataframe design](https://mchav.github.io/what-category-theory-teaches-us-about-dataframes/)
-
-[dax shell scripting](https://dax.land/)
