@@ -512,6 +512,23 @@ type ExecuteContext struct {
 	LaunchOnce        *sync.Once      // Signals this stage launched, exactly once (only set for pipeline stages)
 }
 
+type fileDescriptorProvider interface {
+	Fd() uintptr
+}
+
+func streamIsTerminal(stream any, fallback *os.File) bool {
+	if stream == nil {
+		stream = fallback
+	}
+
+	fdProvider, ok := stream.(fileDescriptorProvider)
+	if !ok {
+		return false
+	}
+
+	return IsTerminal(int(fdProvider.Fd()))
+}
+
 func (context *ExecuteContext) CloneLessVariables() *ExecuteContext {
 	newContext := &ExecuteContext{
 		StandardInput:     context.StandardInput,
@@ -6134,6 +6151,12 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error reading from stdin: %s\n", t.Line, t.Column, err.Error()))
 					}
 					stack.Push(MShellString{buffer.String()})
+				} else if t.Lexeme == "stdinIsTerminal" {
+					stack.Push(MShellBool{streamIsTerminal(context.StandardInput, os.Stdin)})
+				} else if t.Lexeme == "stdoutIsTerminal" {
+					stack.Push(MShellBool{streamIsTerminal(context.StandardOutput, os.Stdout)})
+				} else if t.Lexeme == "stderrIsTerminal" {
+					stack.Push(MShellBool{streamIsTerminal(context.StandardError, os.Stderr)})
 				} else if t.Lexeme == "prompt" {
 					obj1, err := stack.Pop1(t)
 					if err != nil {

@@ -1,0 +1,3 @@
+stdinIsTerminal str wl
+stdoutIsTerminal str wl
+stderrIsTerminal str wl

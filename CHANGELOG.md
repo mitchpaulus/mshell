@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Functions
   - `longestCommonPrefix`: Longest leading substring shared by every string in a list. `([str] -- str)`
+  - `stdinIsTerminal`, `stdoutIsTerminal`, and `stderrIsTerminal`: Report whether
+    the current effective standard stream is connected to a terminal or Windows
+    console. Redirected, piped, captured, and non-file streams return false.
 
 - The GitHub action can now install unreleased builds:
   passing a commit SHA or branch name as `version` clones the repository at that ref and builds from source with Go.

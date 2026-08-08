@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"os"
@@ -93,5 +94,27 @@ func TestReadPromptFromTTYWritesPromptAndReadsLine(t *testing.T) {
 	}
 	if string(promptBytes) != "Enter value: " {
 		t.Fatalf("prompt mismatch: got %q want %q", string(promptBytes), "Enter value: ")
+	}
+}
+
+func TestStreamIsTerminalReturnsFalseForAbstractStreams(t *testing.T) {
+	if streamIsTerminal(&bytes.Buffer{}, os.Stdout) {
+		t.Fatal("an in-memory byte stream must not be reported as a terminal")
+	}
+}
+
+func TestStreamIsTerminalReturnsFalseForPipe(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("failed to create pipe: %v", err)
+	}
+	defer reader.Close()
+	defer writer.Close()
+
+	if streamIsTerminal(reader, os.Stdin) {
+		t.Fatal("a pipe reader must not be reported as a terminal")
+	}
+	if streamIsTerminal(writer, os.Stdout) {
+		t.Fatal("a pipe writer must not be reported as a terminal")
 	}
 }

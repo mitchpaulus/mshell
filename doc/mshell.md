@@ -1084,6 +1084,9 @@ end wl # Output: 11
 - `read`: Read a line from stdin. Puts a str and bool of whether the read was successful on the stack. `( -- str bool)`
 - `prompt`: Write a prompt string to the controlling TTY and read a line from the controlling TTY. Fails if no controlling TTY is available. `(str -- str)`
 - `stdin`: Drop stdin onto the stack `( -- str)`
+- `stdinIsTerminal`: Return whether the current effective stdin is connected to a terminal or Windows console. Redirected, piped, and non-file input streams return false. `( -- bool)`
+- `stdoutIsTerminal`: Return whether the current effective stdout is connected to a terminal or Windows console. Redirected, piped, captured, and non-file output streams return false. `( -- bool)`
+- `stderrIsTerminal`: Return whether the current effective stderr is connected to a terminal or Windows console. Redirected, piped, captured, and non-file error streams return false. `( -- bool)`
 - `::`: Drop stdin onto the stack and split by lines `( -- [str])`. This is a shorthand for `stdin lines`.
 - `foldl`: Fold left. `(quote initial list -- result)`
 - `wt`: "Whitespace table", puts stdin split by lines and whitespace on the stack. `( -- [[str]])`
