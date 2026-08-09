@@ -42,6 +42,9 @@ The model suite is deliberately split:
 Run every bounded check with `./check.sh`.  Set `TLA2TOOLS_JAR` to use a jar in a
 different location.
 
+Production conformance progress is tracked in
+[IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md).
+
 ## Proof roadmap
 
 1. Keep the TLC models executable alongside implementation work and add every

@@ -254,15 +254,58 @@ func SetForegroundProcessGroup(ttyFd int, pgid int) (int, error) {
 	return oldPgid, nil
 }
 
-// RestoreForegroundProcessGroup restores the shell's process group as foreground
+// RestoreForegroundProcessGroup restores the previous process group as foreground
 // IMPORTANT: Call IgnoreSignalsForJobControl() before this to avoid SIGTTOU stopping the shell.
-func RestoreForegroundProcessGroup(ttyFd int) error {
-	return unix.IoctlSetPointerInt(ttyFd, unix.TIOCSPGRP, syscall.Getpgrp())
+func RestoreForegroundProcessGroup(ttyFd int, pgid int) error {
+	return unix.IoctlSetPointerInt(ttyFd, unix.TIOCSPGRP, pgid)
+}
+
+// ContinueProcessGroup resumes a process group that may have stopped on an
+// early terminal read before it became foreground.
+func ContinueProcessGroup(pgid int) error {
+	return syscall.Kill(-pgid, syscall.SIGCONT)
+}
+
+// KillProcessGroup terminates every process in a failed foreground launch.
+func KillProcessGroup(pgid int) error {
+	return syscall.Kill(-pgid, syscall.SIGKILL)
 }
 
 // IsTerminal returns true if the file descriptor is connected to a terminal
 func IsTerminal(fd int) bool {
 	return term.IsTerminal(fd)
+}
+
+// CanControlTerminal reports whether fd names this session's controlling
+// terminal, rather than merely some terminal device.
+func CanControlTerminal(fd int) bool {
+	_, err := unix.IoctlGetInt(fd, unix.TIOCGPGRP)
+	return err == nil
+}
+
+func DuplicateTerminalHandle(fd int) (int, error) {
+	return unix.Dup(fd)
+}
+
+func CloseTerminalHandle(fd int) error {
+	return syscall.Close(fd)
+}
+
+type posixTerminalModeSnapshot struct {
+	fd    int
+	state *term.State
+}
+
+func CaptureTerminalMode(fd int) (TerminalModeSnapshot, error) {
+	state, err := term.GetState(fd)
+	if err != nil {
+		return nil, err
+	}
+	return &posixTerminalModeSnapshot{fd: fd, state: state}, nil
+}
+
+func (snapshot *posixTerminalModeSnapshot) Restore() error {
+	return term.Restore(snapshot.fd, snapshot.state)
 }
 
 func IsPathSeparator(c uint8) bool {

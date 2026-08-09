@@ -517,16 +517,7 @@ type fileDescriptorProvider interface {
 }
 
 func streamIsTerminal(stream any, fallback *os.File) bool {
-	if stream == nil {
-		stream = fallback
-	}
-
-	fdProvider, ok := stream.(fileDescriptorProvider)
-	if !ok {
-		return false
-	}
-
-	return IsTerminal(int(fdProvider.Fd()))
+	return resolveTerminalEndpoint(stream, fallback) != nil
 }
 
 func (context *ExecuteContext) CloneLessVariables() *ExecuteContext {
@@ -4053,6 +4044,13 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 		cmd.Stderr = cmd.Stdout
 	}
 
+	resolvedStdio := resolveProcessStdio(cmd.Stdin, cmd.Stdout, cmd.Stderr)
+	if context.InPipeline && context.PipelineGroup != nil {
+		if err := context.PipelineGroup.registerTerminal(resolvedStdio.ControlTerminal()); err != nil {
+			return state.FailWithMessage(fmt.Sprintf("Error retaining pipeline terminal: %s\n", err)), 1, commandSubWriter.Bytes(), stderrBuffer.Bytes()
+		}
+	}
+
 	var startErr error
 	var exitCode int
 
@@ -4100,6 +4098,9 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 		// Print out current stdout and stderr
 		startErr = cmd.Start()
 		publishLeader()
+		if startErr == nil && context.InPipeline && context.PipelineGroup != nil {
+			context.PipelineGroup.registerProcess(cmd.Process)
+		}
 		markLaunched()
 
 		if startErr != nil {
@@ -4113,6 +4114,9 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 		// Use Start + Wait instead of Run so we can set the foreground process group
 		startErr = cmd.Start()
 		publishLeader()
+		if startErr == nil && context.InPipeline && context.PipelineGroup != nil {
+			context.PipelineGroup.registerProcess(cmd.Process)
+		}
 		markLaunched()
 		if startErr != nil {
 			fmt.Fprintf(os.Stderr, "Error starting command: %s\n", startErr.Error())
@@ -4122,16 +4126,20 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 			}
 			exitCode = classifyStartError(startErr)
 		} else {
-			// If stdin is a terminal and we're not in a pipeline, set the subprocess as
-			// the foreground process group so that CTRL-C goes to it instead of the shell.
-			// For pipelines, RunPipeline handles foreground process group management.
-			stdinFd := int(os.Stdin.Fd())
-			shouldSetForeground := !context.InPipeline && IsTerminal(stdinFd) && cmd.Process != nil
-			if shouldSetForeground {
-				// Ignore SIGTTOU/SIGTTIN to prevent shell from stopping when manipulating foreground
-				restoreSignals := IgnoreSignalsForJobControl()
-				SetForegroundProcessGroup(stdinFd, cmd.Process.Pid)
-				restoreSignals()
+			// The child endpoint was resolved after redirection.  It may be a terminal
+			// even when mshell's inherited os.Stdin is a pipe.
+			var foregroundLease *ForegroundLease
+			if !context.InPipeline && cmd.Process != nil {
+				foregroundLease, err = acquireForeground(resolvedStdio.ControlTerminal(), cmd.Process.Pid)
+				if err != nil {
+					// A terminal-reading child can otherwise remain stopped in SIGTTIN
+					// forever.  Terminate the group and reap the immediate child before
+					// returning the failed control transaction.
+					KillProcessGroup(cmd.Process.Pid)
+					cmd.Process.Kill()
+					cmd.Wait()
+					return state.FailWithMessage(fmt.Sprintf("Error acquiring terminal control: %s\n", err)), 1, commandSubWriter.Bytes(), stderrBuffer.Bytes()
+				}
 			}
 
 			// As the pipeline group leader, wait until every other stage has
@@ -4146,11 +4154,10 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 
 			waitErr := cmd.Wait()
 
-			// Restore the shell as the foreground process group
-			if shouldSetForeground {
-				restoreSignals := IgnoreSignalsForJobControl()
-				RestoreForegroundProcessGroup(stdinFd)
-				restoreSignals()
+			// Reclaim the exact terminal and previous process group recorded by the
+			// acquisition transaction before evaluation can resume shell input.
+			if err := foregroundLease.Release(); err != nil {
+				return state.FailWithMessage(fmt.Sprintf("Error reclaiming terminal control: %s\n", err)), 1, commandSubWriter.Bytes(), stderrBuffer.Bytes()
 			}
 
 			if waitErr != nil {
@@ -4193,6 +4200,8 @@ type PipelineGroup struct {
 	claimed bool          // whether a leader has been chosen
 	pgid    int           // leader pid == process group id; 0 until known/usable
 	ready   chan struct{} // closed once the leader has started (or failed to)
+	terminal  *TerminalEndpoint // resolved controlling terminal for the job, if any
+	processes []*os.Process     // immediate processes retained for failed-launch cleanup
 
 	// Launch barrier: the leader must not reap itself (cmd.Wait) until every
 	// stage has finished launching, otherwise reaping destroys the shared
@@ -4201,6 +4210,64 @@ type PipelineGroup struct {
 	// the stage count and is decremented once per stage; launchDone closes at 0.
 	launchRemaining int
 	launchDone      chan struct{}
+}
+
+func (pg *PipelineGroup) registerProcess(process *os.Process) {
+	if process == nil {
+		return
+	}
+	pg.mu.Lock()
+	pg.processes = append(pg.processes, process)
+	pg.mu.Unlock()
+}
+
+func (pg *PipelineGroup) killProcesses() {
+	pg.mu.Lock()
+	processes := append([]*os.Process(nil), pg.processes...)
+	pg.mu.Unlock()
+	for _, process := range processes {
+		process.Kill()
+	}
+}
+
+// registerTerminal records a controlling terminal from a stage's resolved stdio.
+// A pipeline is one job, so RunPipeline performs one foreground transaction.
+func (pg *PipelineGroup) registerTerminal(endpoint *TerminalEndpoint) error {
+	if endpoint == nil {
+		return nil
+	}
+	terminal, err := duplicateTerminalEndpoint(endpoint)
+	if err != nil {
+		return err
+	}
+	pg.mu.Lock()
+	if pg.terminal == nil {
+		pg.terminal = terminal
+		terminal = nil
+	}
+	pg.mu.Unlock()
+	if terminal != nil {
+		return terminal.Close()
+	}
+	return nil
+}
+
+func (pg *PipelineGroup) foregroundTerminal() *TerminalEndpoint {
+	pg.mu.Lock()
+	defer pg.mu.Unlock()
+	if pg.terminal == nil {
+		return nil
+	}
+	terminal := *pg.terminal
+	return &terminal
+}
+
+func (pg *PipelineGroup) closeTerminal() error {
+	pg.mu.Lock()
+	terminal := pg.terminal
+	pg.terminal = nil
+	pg.mu.Unlock()
+	return terminal.Close()
 }
 
 func NewPipelineGroup(totalStages int) *PipelineGroup {
@@ -4405,33 +4472,27 @@ func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContex
 		}(i, item.(Executable))
 	}
 
-	// Make the pipeline's shared process group the terminal foreground so CTRL-C
-	// goes to the pipeline instead of the shell, and so an interactive stage can
-	// read the controlling terminal. Wait briefly for the leader to start; if no
-	// external process starts (e.g. an all-builtin pipeline), skip foreground.
-	stdinFd := int(os.Stdin.Fd())
-	setForeground := IsTerminal(stdinFd)
-	if setForeground {
-		pgid := pipelineGroup.foregroundPgid(100 * time.Millisecond)
+	// Wait until every stage has either started or failed before choosing the
+	// resolved terminal endpoint.  This is also the pipeline launch barrier in
+	// the formal stream-lifecycle model.
+	pipelineGroup.waitAllStagesLaunched()
+	pgid := pipelineGroup.foregroundPgid(100 * time.Millisecond)
+	foregroundLease, foregroundErr := acquireForeground(pipelineGroup.foregroundTerminal(), pgid)
+	if foregroundErr != nil {
 		if pgid > 0 {
-			// Ignore SIGTTOU/SIGTTIN to prevent shell from stopping when manipulating foreground
-			restoreSignals := IgnoreSignalsForJobControl()
-			SetForegroundProcessGroup(stdinFd, pgid)
-			restoreSignals()
-		} else {
-			setForeground = false
+			KillProcessGroup(pgid)
 		}
+		pipelineGroup.killProcesses()
 	}
 
 	// Wait for all processes to complete
 	wg.Wait()
 
-	// Restore the shell as the foreground process group
-	if setForeground {
-		restoreSignals := IgnoreSignalsForJobControl()
-		RestoreForegroundProcessGroup(stdinFd)
-		restoreSignals()
+	var reclaimErr error
+	if foregroundLease != nil {
+		reclaimErr = foregroundLease.Release()
 	}
+	closeTerminalErr := pipelineGroup.closeTerminal()
 
 	var stdoutBytes []byte
 	var stderrBytes []byte
@@ -4446,6 +4507,16 @@ func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContex
 		stderrBytes = stdErrBuf.Bytes()
 	} else {
 		stderrBytes = nil
+	}
+
+	if foregroundErr != nil {
+		return state.FailWithMessage(fmt.Sprintf("Error acquiring pipeline terminal control: %s\n", foregroundErr)), 1, stdoutBytes, stderrBytes
+	}
+	if reclaimErr != nil {
+		return state.FailWithMessage(fmt.Sprintf("Error reclaiming pipeline terminal control: %s\n", reclaimErr)), 1, stdoutBytes, stderrBytes
+	}
+	if closeTerminalErr != nil {
+		return state.FailWithMessage(fmt.Sprintf("Error closing retained pipeline terminal: %s\n", closeTerminalErr)), 1, stdoutBytes, stderrBytes
 	}
 
 	// Check for errors

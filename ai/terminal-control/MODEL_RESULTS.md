@@ -10,7 +10,7 @@ Last complete run: 2026-08-09.
 | `POSIXTerminalControl` | 2 processes; shell stdin non-TTY, child stdin TTY | 58 | all configured invariants hold |
 | `POSIXTerminalControl` | 2 processes; child stdin non-TTY | 2 | all configured invariants hold |
 | `WindowsTerminalControl` | one foreground job | 11 | all configured invariants hold |
-| `StreamLifecycle` | 2 processes, 5 abstract handles | 36 | all configured invariants hold |
+| `StreamLifecycle` | 2 processes, 5 stream handles, retained terminal | 36 | all configured invariants hold |
 
 `check.sh` uses `-deadlock` because terminal `done` and explicitly failed states
 are expected to have no enabled action.  Invariant checking still explores their
@@ -44,8 +44,16 @@ a modeling convenience.
   larger ConPTY relay model is required before claiming full Windows isolation.
 - Terminal resize, nested shells, signal masks, per-process stopped/continued
   aggregation, mode-snapshot failure, and shutdown policy need additional state.
-- The Go code has not yet been proven to implement these transitions.  A single
-  controller plus trace-replay tests is the next conformance step.
+- The Go controller and failure-injection tests mirror the principal ownership
+  transitions, but no refinement checker has mechanically proved that every Go
+  execution implements the TLA+ specification.  Generated trace replay remains
+  a next conformance step.
+
+The stream model now also requires a duplicated controlling-terminal handle to
+remain live from endpoint resolution through job completion and to be closed in
+terminal states.  This invariant was added after the Go integration tests found
+that retaining only a borrowed pipeline descriptor allowed a stage to close it
+before terminal reclamation.
 
 Accordingly, the present result should be described as a checked formal design
 foundation, not as “mshell terminal handling is formally verified.”

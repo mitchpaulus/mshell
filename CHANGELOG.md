@@ -266,6 +266,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Foreground terminal control now follows each job's resolved standard streams
+  instead of assuming `os.Stdin` is the controlling terminal. Interactive
+  programs can therefore use an explicit terminal input (such as `/dev/tty`)
+  while msh itself reads a pipe. Foreground acquisition and restoration errors
+  are checked, terminal modes are transactionally restored, early `SIGTTIN`
+  stops are continued after handoff, and pipeline terminal handles remain open
+  until the shell has reclaimed control.
 - On Windows, a command name containing a forward slash (e.g. `./script.msh`)
   is now treated as a file reference instead of being searched for on `PATH`,
   matching the behavior on Linux/macOS. Previously only backslashes were

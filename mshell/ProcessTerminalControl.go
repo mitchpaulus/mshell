@@ -1,0 +1,294 @@
+package main
+
+import (
+	"fmt"
+	"io"
+	"os"
+	"sync"
+)
+
+// TerminalEndpoint is a resolved terminal used by a child process.  The file
+// descriptor/handle belongs to the already-resolved standard stream; it is not
+// inferred from os.Stdin after redirection has been applied.
+type TerminalEndpoint struct {
+	fd                 int
+	controlsForeground bool
+	owned              bool
+}
+
+func duplicateTerminalEndpoint(endpoint *TerminalEndpoint) (*TerminalEndpoint, error) {
+	if endpoint == nil {
+		return nil, nil
+	}
+	fd, err := DuplicateTerminalHandle(endpoint.fd)
+	if err != nil {
+		return nil, err
+	}
+	return &TerminalEndpoint{
+		fd:                 fd,
+		controlsForeground: endpoint.controlsForeground,
+		owned:              true,
+	}, nil
+}
+
+func (endpoint *TerminalEndpoint) Close() error {
+	if endpoint == nil || !endpoint.owned {
+		return nil
+	}
+	endpoint.owned = false
+	return CloseTerminalHandle(endpoint.fd)
+}
+
+// ResolvedProcessStdio records the final streams passed to exec.Cmd together
+// with any terminal identity they preserve.  Keeping this metadata beside the
+// streams prevents process control from re-resolving a different default.
+type ResolvedProcessStdio struct {
+	Stdin          io.Reader
+	Stdout         io.Writer
+	Stderr         io.Writer
+	StdinTerminal  *TerminalEndpoint
+	StdoutTerminal *TerminalEndpoint
+	StderrTerminal *TerminalEndpoint
+}
+
+func resolveTerminalEndpoint(stream any, fallback *os.File) *TerminalEndpoint {
+	if stream == nil {
+		stream = fallback
+	}
+	if stream == nil {
+		return nil
+	}
+
+	fdProvider, ok := stream.(fileDescriptorProvider)
+	if !ok {
+		return nil
+	}
+
+	fd := int(fdProvider.Fd())
+	if !IsTerminal(fd) {
+		return nil
+	}
+
+	return &TerminalEndpoint{
+		fd:                 fd,
+		controlsForeground: CanControlTerminal(fd),
+	}
+}
+
+func resolveProcessStdio(stdin io.Reader, stdout, stderr io.Writer) ResolvedProcessStdio {
+	return ResolvedProcessStdio{
+		Stdin:          stdin,
+		Stdout:         stdout,
+		Stderr:         stderr,
+		StdinTerminal:  resolveTerminalEndpoint(stdin, os.Stdin),
+		StdoutTerminal: resolveTerminalEndpoint(stdout, os.Stdout),
+		StderrTerminal: resolveTerminalEndpoint(stderr, os.Stderr),
+	}
+}
+
+// ControlTerminal returns the terminal governing the job.  Stdin is preferred
+// because it is the endpoint whose read access is gated by foreground control.
+// A synchronous job with redirected stdin can still need foreground signal and
+// output semantics, so terminal stdout/stderr are valid fallbacks.
+func (stdio ResolvedProcessStdio) ControlTerminal() *TerminalEndpoint {
+	if stdio.StdinTerminal != nil && stdio.StdinTerminal.controlsForeground {
+		return stdio.StdinTerminal
+	}
+	if stdio.StdoutTerminal != nil && stdio.StdoutTerminal.controlsForeground {
+		return stdio.StdoutTerminal
+	}
+	if stdio.StderrTerminal != nil && stdio.StderrTerminal.controlsForeground {
+		return stdio.StderrTerminal
+	}
+	return nil
+}
+
+// TerminalModeSnapshot is platform-specific saved state for every console/TTY
+// mode affected by a foreground job.
+type TerminalModeSnapshot interface {
+	Restore() error
+}
+
+type terminalControlBackend interface {
+	captureMode(terminalFd int) (TerminalModeSnapshot, error)
+	setForeground(terminalFd, pgid int) (int, error)
+	restoreForeground(terminalFd, pgid int) error
+	continueProcessGroup(pgid int) error
+}
+
+type platformTerminalControlBackend struct{}
+
+func (platformTerminalControlBackend) captureMode(terminalFd int) (TerminalModeSnapshot, error) {
+	return CaptureTerminalMode(terminalFd)
+}
+
+func (platformTerminalControlBackend) setForeground(terminalFd, pgid int) (int, error) {
+	restoreSignals := IgnoreSignalsForJobControl()
+	previousPgid, err := SetForegroundProcessGroup(terminalFd, pgid)
+	restoreSignals()
+	return previousPgid, err
+}
+
+func (platformTerminalControlBackend) restoreForeground(terminalFd, pgid int) error {
+	restoreSignals := IgnoreSignalsForJobControl()
+	err := RestoreForegroundProcessGroup(terminalFd, pgid)
+	restoreSignals()
+	return err
+}
+
+func (platformTerminalControlBackend) continueProcessGroup(pgid int) error {
+	return ContinueProcessGroup(pgid)
+}
+
+// shellInputGate makes the no-competing-reads invariant executable.  Today the
+// interactive reader is synchronous, but keeping this gate at the actual Read
+// boundary preserves the invariant if input later moves to a worker goroutine.
+type shellInputGate struct {
+	mu               sync.Mutex
+	readInProgress   bool
+	foregroundActive bool
+}
+
+func (gate *shellInputGate) beginRead() error {
+	gate.mu.Lock()
+	defer gate.mu.Unlock()
+	if gate.foregroundActive {
+		return fmt.Errorf("shell input read attempted while a foreground job owns the terminal")
+	}
+	if gate.readInProgress {
+		return fmt.Errorf("concurrent shell input reads are not allowed")
+	}
+	gate.readInProgress = true
+	return nil
+}
+
+func (gate *shellInputGate) endRead() {
+	gate.mu.Lock()
+	gate.readInProgress = false
+	gate.mu.Unlock()
+}
+
+func (gate *shellInputGate) beginForeground() error {
+	gate.mu.Lock()
+	defer gate.mu.Unlock()
+	if gate.readInProgress {
+		return fmt.Errorf("cannot foreground a job while a shell input read is outstanding")
+	}
+	if gate.foregroundActive {
+		return fmt.Errorf("another foreground job already owns shell input")
+	}
+	gate.foregroundActive = true
+	return nil
+}
+
+func (gate *shellInputGate) endForeground() {
+	gate.mu.Lock()
+	gate.foregroundActive = false
+	gate.mu.Unlock()
+}
+
+var processShellInputGate = &shellInputGate{}
+
+// foregroundController implements the single controlJob reservation in the
+// formal model.  Its mutex remains held from acquisition through reclamation.
+type foregroundController struct {
+	mu        sync.Mutex
+	backend   terminalControlBackend
+	inputGate *shellInputGate
+}
+
+var processForegroundController = foregroundController{
+	backend: platformTerminalControlBackend{},
+	inputGate: processShellInputGate,
+}
+
+type ForegroundLease struct {
+	controller   *foregroundController
+	terminal     TerminalEndpoint
+	previousPgid int
+	modeSnapshot TerminalModeSnapshot
+	released     bool
+	releaseErr   error
+}
+
+func acquireForeground(endpoint *TerminalEndpoint, pgid int) (*ForegroundLease, error) {
+	return processForegroundController.acquire(endpoint, pgid)
+}
+
+func (controller *foregroundController) acquire(endpoint *TerminalEndpoint, pgid int) (*ForegroundLease, error) {
+	if endpoint == nil || pgid <= 0 {
+		return nil, nil
+	}
+
+	controller.mu.Lock()
+	if err := controller.inputGate.beginForeground(); err != nil {
+		controller.mu.Unlock()
+		return nil, err
+	}
+	modeSnapshot, err := controller.backend.captureMode(endpoint.fd)
+	if err != nil {
+		controller.inputGate.endForeground()
+		controller.mu.Unlock()
+		return nil, fmt.Errorf("capture terminal fd %d mode: %w", endpoint.fd, err)
+	}
+	previousPgid, err := controller.backend.setForeground(endpoint.fd, pgid)
+	if err != nil {
+		controller.inputGate.endForeground()
+		controller.mu.Unlock()
+		return nil, fmt.Errorf("give terminal fd %d to process group %d: %w", endpoint.fd, pgid, err)
+	}
+
+	// A process that attempted a terminal read between Start and tcsetpgrp may
+	// already have been stopped by SIGTTIN.  Foreground it before continuing it.
+	if err := controller.backend.continueProcessGroup(pgid); err != nil {
+		restoreErr := controller.backend.restoreForeground(endpoint.fd, previousPgid)
+		var modeRestoreErr error
+		if restoreErr == nil {
+			modeRestoreErr = modeSnapshot.Restore()
+		}
+		if restoreErr == nil && modeRestoreErr == nil {
+			controller.inputGate.endForeground()
+		}
+		controller.mu.Unlock()
+		if restoreErr != nil {
+			return nil, fmt.Errorf("continue process group %d: %w; terminal rollback also failed: %v", pgid, err, restoreErr)
+		}
+		if modeRestoreErr != nil {
+			return nil, fmt.Errorf("continue process group %d: %w; terminal-mode rollback also failed: %v", pgid, err, modeRestoreErr)
+		}
+		return nil, fmt.Errorf("continue process group %d: %w", pgid, err)
+	}
+
+	return &ForegroundLease{
+		controller:   controller,
+		terminal:     *endpoint,
+		previousPgid: previousPgid,
+		modeSnapshot: modeSnapshot,
+	}, nil
+}
+
+func (lease *ForegroundLease) Release() error {
+	if lease == nil {
+		return nil
+	}
+	if lease.released {
+		return lease.releaseErr
+	}
+	lease.released = true
+
+	err := lease.controller.backend.restoreForeground(lease.terminal.fd, lease.previousPgid)
+	var modeRestoreErr error
+	if err == nil {
+		modeRestoreErr = lease.modeSnapshot.Restore()
+	}
+	if err == nil && modeRestoreErr == nil {
+		lease.controller.inputGate.endForeground()
+	}
+	lease.controller.mu.Unlock()
+	if err != nil {
+		lease.releaseErr = fmt.Errorf("restore terminal fd %d to process group %d: %w", lease.terminal.fd, lease.previousPgid, err)
+	} else if modeRestoreErr != nil {
+		lease.releaseErr = fmt.Errorf("restore terminal fd %d mode: %w", lease.terminal.fd, modeRestoreErr)
+	}
+	return lease.releaseErr
+}
