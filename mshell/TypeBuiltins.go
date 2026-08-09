@@ -253,6 +253,9 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 	r.reg("toDt", "(str -- Maybe[datetime])", "(datetime -- datetime)")
 	r.reg("now", "( -- datetime)")
 	r.reg("stdin", "( -- str)")
+	for _, name := range []string{"stdinIsTerminal", "stdoutIsTerminal", "stderrIsTerminal"} {
+		r.reg(name, "( -- bool)")
+	}
 	r.reg("runtime", "( -- str)")
 	r.reg("nullDevice", "( -- path)")
 

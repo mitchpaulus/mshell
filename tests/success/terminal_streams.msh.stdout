@@ -1,0 +1,28 @@
+top-level streams
+false
+false
+false
+quotation stdin from memory
+false
+quotation stdin from file
+false
+quotation stdout to file
+false
+quotation stderr to file
+false
+stdout merged into redirected stderr
+false
+stderr merged into redirected stdout
+false
+nested quotation inherits stdout
+false
+iff quotation uses redirected stdout
+false
+loop quotation uses redirected stdout
+false
+captured child stdout
+false
+captured child stderr
+false
+redirected child stdin
+false
