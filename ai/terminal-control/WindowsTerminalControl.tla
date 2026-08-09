@@ -1,19 +1,22 @@
 ---------------------- MODULE WindowsTerminalControl ----------------------
 EXTENDS TLC
 
-VARIABLES phase, shellRead, childRead, inputOwner, consoleMode,
-          ctrlGroup, failure
+VARIABLES phase, shellRead, relayRead, inputOwner, consoleMode,
+          conpty, job, child, outputDrain, failure
 
-vars == <<phase, shellRead, childRead, inputOwner, consoleMode,
-          ctrlGroup, failure>>
+vars == <<phase, shellRead, relayRead, inputOwner, consoleMode,
+          conpty, job, child, outputDrain, failure>>
 
 Init ==
     /\ phase = "idle"
     /\ shellRead = "outstanding"
-    /\ childRead = "none"
+    /\ relayRead = "none"
     /\ inputOwner = "shell"
     /\ consoleMode = "shellRaw"
-    /\ ctrlGroup = "none"
+    /\ conpty = "none"
+    /\ job = "none"
+    /\ child = "none"
+    /\ outputDrain = "none"
     /\ failure = "none"
 
 BeginHandoff ==
@@ -21,15 +24,16 @@ BeginHandoff ==
     /\ shellRead = "outstanding"
     /\ shellRead' = "cancelPending"
     /\ phase' = "quiescing"
-    /\ UNCHANGED <<childRead, inputOwner, consoleMode, ctrlGroup, failure>>
+    /\ UNCHANGED <<relayRead, inputOwner, consoleMode, conpty, job,
+                   child, outputDrain, failure>>
 
 ShellReadQuiesces ==
     /\ phase = "quiescing"
     /\ shellRead = "cancelPending"
     /\ shellRead' = "none"
-    /\ consoleMode' = "shellCooked"
     /\ phase' = "ready"
-    /\ UNCHANGED <<childRead, inputOwner, ctrlGroup, failure>>
+    /\ UNCHANGED <<relayRead, inputOwner, consoleMode, conpty, job,
+                   child, outputDrain, failure>>
 
 QuiesceFails ==
     /\ phase = "quiescing"
@@ -37,91 +41,181 @@ QuiesceFails ==
     /\ shellRead' = "outstanding"
     /\ phase' = "failed"
     /\ failure' = "quiesce"
-    /\ UNCHANGED <<childRead, inputOwner, consoleMode, ctrlGroup>>
+    /\ UNCHANGED <<relayRead, inputOwner, consoleMode, conpty, job,
+                   child, outputDrain>>
 
-CreateChildGroup ==
+CreateConPTY ==
     /\ phase = "ready"
-    /\ shellRead = "none"
-    /\ ctrlGroup' = "job"
-    /\ phase' = "created"
-    /\ UNCHANGED <<shellRead, childRead, inputOwner, consoleMode, failure>>
+    /\ conpty' = "open"
+    /\ outputDrain' = "active"
+    /\ phase' = "conptyCreated"
+    /\ UNCHANGED <<shellRead, relayRead, inputOwner, consoleMode, job,
+                   child, failure>>
 
-CreateFails ==
-    /\ phase = "ready"
-    /\ phase' = "reclaiming"
-    /\ failure' = "create"
-    /\ UNCHANGED <<shellRead, childRead, inputOwner, consoleMode, ctrlGroup>>
+CreateJob ==
+    /\ phase = "conptyCreated"
+    /\ job' = "open"
+    /\ phase' = "jobCreated"
+    /\ UNCHANGED <<shellRead, relayRead, inputOwner, consoleMode, conpty,
+                   child, outputDrain, failure>>
 
-ActivateChild ==
-    /\ phase = "created"
+CreateSuspendedChild ==
+    /\ phase = "jobCreated"
+    /\ child' = "suspendedUncontained"
+    /\ phase' = "childCreated"
+    /\ UNCHANGED <<shellRead, relayRead, inputOwner, consoleMode, conpty,
+                   job, outputDrain, failure>>
+
+AssignChildToJob ==
+    /\ phase = "childCreated"
+    /\ child = "suspendedUncontained"
+    /\ child' = "suspendedContained"
+    /\ phase' = "contained"
+    /\ UNCHANGED <<shellRead, relayRead, inputOwner, consoleMode, conpty,
+                   job, outputDrain, failure>>
+
+ActivateRelays ==
+    /\ phase = "contained"
     /\ shellRead = "none"
-    /\ inputOwner = "shell"
+    /\ child = "suspendedContained"
+    /\ relayRead' = "outstanding"
     /\ inputOwner' = "job"
-    /\ childRead' = "outstanding"
-    /\ consoleMode' = "jobMode"
+    /\ consoleMode' = "relayVT"
+    /\ phase' = "relaying"
+    /\ UNCHANGED <<shellRead, conpty, job, child, outputDrain, failure>>
+
+ResumeChild ==
+    /\ phase = "relaying"
+    /\ child = "suspendedContained"
+    /\ child' = "runningContained"
     /\ phase' = "foreground"
-    /\ UNCHANGED <<shellRead, ctrlGroup, failure>>
+    /\ UNCHANGED <<shellRead, relayRead, inputOwner, consoleMode, conpty,
+                   job, outputDrain, failure>>
 
-ChildReadCompletes ==
+RelayReadCompletes ==
     /\ phase = "foreground"
-    /\ childRead = "outstanding"
-    /\ childRead' = "none"
-    /\ UNCHANGED <<phase, shellRead, inputOwner, consoleMode, ctrlGroup, failure>>
+    /\ relayRead = "outstanding"
+    /\ relayRead' = "none"
+    /\ UNCHANGED <<phase, shellRead, inputOwner, consoleMode, conpty, job,
+                   child, outputDrain, failure>>
 
-ChildStartsAnotherRead ==
+RelayStartsAnotherRead ==
     /\ phase = "foreground"
-    /\ childRead = "none"
-    /\ childRead' = "outstanding"
-    /\ UNCHANGED <<phase, shellRead, inputOwner, consoleMode, ctrlGroup, failure>>
+    /\ relayRead = "none"
+    /\ relayRead' = "outstanding"
+    /\ UNCHANGED <<phase, shellRead, inputOwner, consoleMode, conpty, job,
+                   child, outputDrain, failure>>
 
-ChildStopsOrExits ==
+ChildExits ==
     /\ phase = "foreground"
-    /\ childRead \in {"none", "outstanding"}
-    /\ childRead' = "none"
+    /\ child' = "exited"
+    /\ relayRead' = IF relayRead = "outstanding" THEN "cancelPending" ELSE "none"
+    /\ phase' = "stoppingRelays"
+    /\ UNCHANGED <<shellRead, inputOwner, consoleMode, conpty, job,
+                   outputDrain, failure>>
+
+CancelInputRelay ==
+    /\ phase = "stoppingRelays"
+    /\ relayRead \in {"none", "cancelPending"}
+    /\ relayRead' = "joined"
+    /\ phase' = "closingConPTY"
+    /\ UNCHANGED <<shellRead, inputOwner, consoleMode, conpty, job,
+                   child, outputDrain, failure>>
+
+DrainOutputAndCloseConPTY ==
+    /\ phase = "closingConPTY"
+    /\ relayRead = "joined"
+    /\ outputDrain = "active"
+    /\ outputDrain' = "joined"
+    /\ conpty' = "closed"
+    /\ phase' = "closingJob"
+    /\ UNCHANGED <<shellRead, relayRead, inputOwner, consoleMode, job,
+                   child, failure>>
+
+CloseJob ==
+    /\ phase = "closingJob"
+    /\ child = "exited"
+    /\ job' = "closed"
+    /\ child' = "none"
     /\ phase' = "reclaiming"
-    /\ UNCHANGED <<shellRead, inputOwner, consoleMode, ctrlGroup, failure>>
+    /\ UNCHANGED <<shellRead, relayRead, inputOwner, consoleMode, conpty,
+                   outputDrain, failure>>
 
 Reclaim ==
     /\ phase = "reclaiming"
-    /\ shellRead = "none"
-    /\ childRead = "none"
+    /\ relayRead = "joined"
+    /\ conpty = "closed"
+    /\ job = "closed"
+    /\ child = "none"
     /\ inputOwner' = "shell"
     /\ consoleMode' = "shellRaw"
-    /\ ctrlGroup' = "none"
     /\ shellRead' = "outstanding"
     /\ phase' = "done"
-    /\ UNCHANGED <<childRead, failure>>
+    /\ UNCHANGED <<relayRead, conpty, job, child, outputDrain, failure>>
+
+CreateFails ==
+    /\ phase \in {"ready", "conptyCreated", "jobCreated", "childCreated",
+                    "contained", "relaying"}
+    /\ failure' = phase
+    /\ child' = "none"
+    /\ relayRead' = "joined"
+    /\ conpty' = "closed"
+    /\ job' = "closed"
+    /\ outputDrain' = "joined"
+    /\ phase' = "reclaiming"
+    /\ UNCHANGED <<shellRead, inputOwner, consoleMode>>
 
 Next == BeginHandoff \/ ShellReadQuiesces \/ QuiesceFails \/
-        CreateChildGroup \/ CreateFails \/ ActivateChild \/
-        ChildReadCompletes \/ ChildStartsAnotherRead \/
-        ChildStopsOrExits \/ Reclaim
+        CreateConPTY \/ CreateJob \/ CreateSuspendedChild \/
+        AssignChildToJob \/ ActivateRelays \/ ResumeChild \/
+        RelayReadCompletes \/ RelayStartsAnotherRead \/ ChildExits \/
+        CancelInputRelay \/ DrainOutputAndCloseConPTY \/ CloseJob \/
+        Reclaim \/ CreateFails
 
 Spec == Init /\ [][Next]_vars
 
 TypeOK ==
-    /\ phase \in {"idle", "quiescing", "ready", "created", "foreground",
-                   "reclaiming", "failed", "done"}
+    /\ phase \in {"idle", "quiescing", "ready", "conptyCreated",
+                   "jobCreated", "childCreated", "contained", "relaying",
+                   "foreground", "stoppingRelays", "closingConPTY",
+                   "closingJob", "reclaiming", "failed", "done"}
     /\ shellRead \in {"none", "outstanding", "cancelPending"}
-    /\ childRead \in {"none", "outstanding"}
+    /\ relayRead \in {"none", "outstanding", "cancelPending", "joined"}
     /\ inputOwner \in {"shell", "job"}
-    /\ consoleMode \in {"shellRaw", "shellCooked", "jobMode"}
-    /\ ctrlGroup \in {"none", "job"}
-    /\ failure \in {"none", "quiesce", "create"}
+    /\ consoleMode \in {"shellRaw", "relayVT"}
+    /\ conpty \in {"none", "open", "closed"}
+    /\ job \in {"none", "open", "closed"}
+    /\ child \in {"none", "suspendedUncontained", "suspendedContained",
+                    "runningContained", "exited"}
+    /\ outputDrain \in {"none", "active", "joined"}
+    /\ failure \in {"none", "ready", "conptyCreated", "jobCreated",
+                     "childCreated", "contained", "relaying", "quiesce"}
 
 NoCompetingReads ==
-    ~(shellRead = "outstanding" /\ childRead = "outstanding")
+    ~(shellRead = "outstanding" /\ relayRead \in {"outstanding", "cancelPending"})
 
 ShellReadRequiresOwnership ==
     shellRead = "outstanding" => inputOwner = "shell"
 
 ChildReadRequiresOwnership ==
-    childRead = "outstanding" => inputOwner = "job"
+    relayRead \in {"outstanding", "cancelPending"} => inputOwner = "job"
 
 ChildActivationRequiresQuiescence ==
     inputOwner = "job" => shellRead = "none"
 
 CtrlGroupIsNotInputOwnership ==
-    ctrlGroup = "job" /\ phase = "created" => inputOwner = "shell"
+    job = "open" /\ phase = "jobCreated" => inputOwner = "shell"
+
+ResumeRequiresContainment ==
+    child = "runningContained" => job = "open"
+
+RelayRequiresConPTY ==
+    relayRead \in {"outstanding", "cancelPending"} => conpty = "open"
+
+ReclaimRequiresJoinedRelays ==
+    phase \in {"reclaiming", "done"} => relayRead = "joined"
+
+JobCloseRequiresChildExit ==
+    job = "closed" => child = "none"
 
 =============================================================================

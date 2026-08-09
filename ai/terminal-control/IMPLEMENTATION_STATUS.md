@@ -29,6 +29,17 @@ Last updated: 2026-08-09.
   foreground child for the shared console queue.
 - Windows and POSIX restore the exact previous foreground marker/process group
   recorded during acquisition.
+- A foreground Windows command with terminal-backed stdin, stdout, and stderr
+  runs in a per-command ConPTY.  The host relays VT input/output without parsing
+  it and propagates outer-console size changes.
+- The Windows child is created suspended, assigned to a kill-on-close Job
+  Object, and only then resumed.  This closes the process-tree escape race.
+- The Windows input relay is pinned to one OS thread and cancelled with
+  `CancelSynchronousIo` before shell input is released.  The output relay stays
+  active during `ClosePseudoConsole` to avoid the documented shutdown deadlock.
+- Windows commands with a redirected stream or pipeline endpoint retain normal
+  `os/exec` handles.  This preserves separate stdout/stderr and pipeline bytes,
+  which cannot be represented by ConPTY's one merged output channel.
 
 ## Verification currently passing
 
@@ -40,7 +51,9 @@ Last updated: 2026-08-09.
 - A second PTY test covers an interactive pipeline stage and terminal-handle
   lifetime through pipeline completion.
 - Linux package tests pass.
-- Windows amd64 and macOS amd64 test binaries cross-compile.
+- Windows amd64 and arm64 test binaries cross-compile.
+- The Windows test binary includes a native ConPTY lifecycle test whose helper
+  process has a hard deadline.  It skips when no Windows console is attached.
 - All five bounded TLC configurations pass after the implementation changes.
   `StreamLifecycle` was strengthened with the retained-terminal-handle invariant
   discovered during implementation.
@@ -51,8 +64,11 @@ Last updated: 2026-08-09.
 - Stopped/continued process aggregation and terminal-mode snapshots per stopped
   job.
 - Asynchronous reaping for background jobs.
-- Per-job Windows ConPTY isolation, relay workers, resizing, and Job Object
-  cleanup.  The direct-console profile cannot enforce background-input isolation.
+- Windows Job Objects for redirected commands, multi-process pipelines, and
+  background jobs.  Those stream shapes currently use the direct-console/
+  ordinary-handle compatibility profile.
+- Native Windows validation of the ConPTY input relay with full-screen editors,
+  Ctrl+C, resize, and forced process-tree teardown.
 - Mechanical trace replay or refinement checking between Go and TLA+.
 - Conditional liveness checks and unbounded TLAPS proofs.
 

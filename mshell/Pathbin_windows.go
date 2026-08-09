@@ -489,6 +489,8 @@ type windowsConsoleMode struct {
 
 type windowsTerminalModeSnapshot struct {
 	modes []windowsConsoleMode
+	inputCodePage  uint32
+	outputCodePage uint32
 }
 
 func CaptureTerminalMode(fd int) (TerminalModeSnapshot, error) {
@@ -513,6 +515,16 @@ func CaptureTerminalMode(fd int) (TerminalModeSnapshot, error) {
 	if len(snapshot.modes) == 0 {
 		return nil, fmt.Errorf("no console mode available for handle %d", fd)
 	}
+	inputCodePage, err := windows.GetConsoleCP()
+	if err != nil {
+		return nil, fmt.Errorf("get console input code page: %w", err)
+	}
+	snapshot.inputCodePage = inputCodePage
+	outputCodePage, err := windows.GetConsoleOutputCP()
+	if err != nil {
+		return nil, fmt.Errorf("get console output code page: %w", err)
+	}
+	snapshot.outputCodePage = outputCodePage
 	return snapshot, nil
 }
 
@@ -522,6 +534,12 @@ func (snapshot *windowsTerminalModeSnapshot) Restore() error {
 		if err := windows.SetConsoleMode(consoleMode.handle, consoleMode.mode); err != nil && firstErr == nil {
 			firstErr = err
 		}
+	}
+	if err := windows.SetConsoleCP(snapshot.inputCodePage); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	if err := windows.SetConsoleOutputCP(snapshot.outputCodePage); err != nil && firstErr == nil {
+		firstErr = err
 	}
 	return firstErr
 }
