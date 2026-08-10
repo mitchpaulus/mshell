@@ -29,17 +29,14 @@ Last updated: 2026-08-09.
   foreground child for the shared console queue.
 - Windows and POSIX restore the exact previous foreground marker/process group
   recorded during acquisition.
-- A foreground Windows command with terminal-backed stdin, stdout, and stderr
-  runs in a per-command ConPTY.  The host relays VT input/output without parsing
-  it and propagates outer-console size changes.
-- The Windows child is created suspended, assigned to a kill-on-close Job
-  Object, and only then resumed.  This closes the process-tree escape race.
-- The Windows input relay is pinned to one OS thread and cancelled with
-  `CancelSynchronousIo` before shell input is released.  The output relay stays
-  active during `ClosePseudoConsole` to avoid the documented shutdown deadlock.
-- Windows commands with a redirected stream or pipeline endpoint retain normal
-  `os/exec` handles.  This preserves separate stdout/stderr and pipeline bytes,
-  which cannot be represented by ConPTY's one merged output channel.
+- Foreground Windows commands inherit their resolved console and standard
+  handles directly.  The surrounding console host remains responsible for
+  keyboard input, output, escape sequences, Unicode, and resize events while
+  mshell stops reading and waits.
+- A nested foreground ConPTY was implemented and then removed because it made
+  mshell an unnecessary terminal proxy.  ConPTY remains a possible future
+  isolation mechanism for interactive background jobs, not the foreground
+  handoff mechanism.
 
 ## Verification currently passing
 
@@ -51,9 +48,7 @@ Last updated: 2026-08-09.
 - A second PTY test covers an interactive pipeline stage and terminal-handle
   lifetime through pipeline completion.
 - Linux package tests pass.
-- Windows amd64 and arm64 test binaries cross-compile.
-- The Windows test binary includes a native ConPTY lifecycle test whose helper
-  process has a hard deadline.  It skips when no Windows console is attached.
+- Windows amd64 and macOS amd64 test binaries cross-compile.
 - All five bounded TLC configurations pass after the implementation changes.
   `StreamLifecycle` was strengthened with the retained-terminal-handle invariant
   discovered during implementation.
@@ -64,11 +59,9 @@ Last updated: 2026-08-09.
 - Stopped/continued process aggregation and terminal-mode snapshots per stopped
   job.
 - Asynchronous reaping for background jobs.
-- Windows Job Objects for redirected commands, multi-process pipelines, and
-  background jobs.  Those stream shapes currently use the direct-console/
-  ordinary-handle compatibility profile.
-- Native Windows validation of the ConPTY input relay with full-screen editors,
-  Ctrl+C, resize, and forced process-tree teardown.
+- Per-job Windows ConPTY isolation, relay workers, resizing, and Job Object
+  cleanup.  These are future background-job facilities; foreground jobs should
+  continue to use direct console inheritance.
 - Mechanical trace replay or refinement checking between Go and TLA+.
 - Conditional liveness checks and unbounded TLAPS proofs.
 

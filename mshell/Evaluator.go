@@ -4111,23 +4111,6 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 			exitCode = 0
 		}
 	} else {
-		// A foreground Windows command whose three streams all target the
-		// console is isolated in a per-job ConPTY and Job Object.  Other
-		// stream shapes retain os/exec semantics, including redirections and
-		// pipelines.  POSIX builds always report handled=false here.
-		if !context.InPipeline {
-			handled, terminalExitCode, terminalErr := runIsolatedTerminalCommand(cmd, resolvedStdio)
-			if handled {
-				publishLeader()
-				markLaunched()
-				if terminalErr != nil {
-					fmt.Fprintf(os.Stderr, "Error running terminal command: %s\n", terminalErr)
-				}
-				exitCode = terminalExitCode
-				goto processComplete
-			}
-		}
-
 		// Use Start + Wait instead of Run so we can set the foreground process group
 		startErr = cmd.Start()
 		publishLeader()
@@ -4194,7 +4177,6 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 		}
 	}
 
-	processComplete:
 	// In-place file modification: write stdout back to file on success (exit code 0)
 	if list.InPlaceFile != "" && exitCode == 0 {
 		err := os.WriteFile(list.InPlaceFile, commandSubWriter.Bytes(), inPlaceFileMode)

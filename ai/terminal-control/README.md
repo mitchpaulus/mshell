@@ -44,6 +44,9 @@ different location.
 
 Production conformance progress is tracked in
 [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md).
+The chosen Windows foreground architecture and the rejected nested-ConPTY
+alternative are recorded in
+[WINDOWS_DIRECT_HANDOFF.md](WINDOWS_DIRECT_HANDOFF.md).
 
 ## Proof roadmap
 

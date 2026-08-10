@@ -113,33 +113,6 @@ func TestResolvedProcessStdioPrefersInputTerminal(t *testing.T) {
 	}
 }
 
-func TestResolvedProcessStdioRequiresEveryTerminalForMergedPseudoconsole(t *testing.T) {
-	terminal := &TerminalEndpoint{fd: 1, controlsForeground: true}
-	stdio := ResolvedProcessStdio{
-		StdinTerminal:  terminal,
-		StdoutTerminal: terminal,
-		StderrTerminal: terminal,
-	}
-	if !stdio.HasTerminalStdio() {
-		t.Fatal("three terminal streams should be eligible for the merged pseudoconsole channel")
-	}
-
-	stdio.StdinTerminal = nil
-	if stdio.HasTerminalStdio() {
-		t.Fatal("redirected stdin must preserve ordinary process handles")
-	}
-	stdio.StdinTerminal = terminal
-	stdio.StdoutTerminal = nil
-	if stdio.HasTerminalStdio() {
-		t.Fatal("redirected stdout must preserve ordinary process handles")
-	}
-	stdio.StdoutTerminal = terminal
-	stdio.StderrTerminal = nil
-	if stdio.HasTerminalStdio() {
-		t.Fatal("redirected stderr must preserve ordinary process handles")
-	}
-}
-
 func TestForegroundControllerRollsBackContinueFailure(t *testing.T) {
 	backend := &fakeTerminalControlBackend{
 		previousPgid: 7,

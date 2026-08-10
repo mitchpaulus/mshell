@@ -15,15 +15,6 @@ Instead of it being the main syntactical construct, in `mshell` you build up a l
 ['my-program' 'arg1' 'arg2'];
 ```
 
-On Windows, a synchronous foreground command whose stdin, stdout, and stderr
-all target the console runs in an isolated pseudoconsole (ConPTY).
-This gives an interactive program exclusive input while it runs, forwards
-terminal resize changes, and cleans up its process tree before `mshell` resumes
-reading input.
-Commands with redirects, captures, or pipeline streams retain their ordinary
-standard handles so stdout and stderr remain separate and pipeline bytes are not
-changed.
-
 Often there are different things you want out of your execution, or you want different behavior depending on the exit code.
 `mshell` gives you full flexibility to decide with concise syntax.
 

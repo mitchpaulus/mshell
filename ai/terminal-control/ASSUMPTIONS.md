@@ -43,17 +43,6 @@ Sources:
   close its copies of handles given to the pseudoconsole after child creation so
   broken-channel/EOF detection works.  Teardown output must continue to be
   drained while closing the pseudoconsole.
-- ConPTY communication channels are UTF-8.  When relaying through a classic
-  console handle, the outer input and output code pages must be set to UTF-8 for
-  the transaction and restored with the console modes afterward.
-- A new process can be created with its primary thread suspended.  Assigning
-  that process to a Job Object before `ResumeThread` prevents it from creating
-  descendants outside the job.  With `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`,
-  closing the final job handle terminates every associated process, including
-  nested child jobs.
-- `CancelSynchronousIo` cancels pending synchronous I/O issued by a specified
-  thread.  A real thread handle is required, so the relay duplicates its pinned
-  goroutine's current-thread pseudo handle before it starts reading.
 - Windows handle inheritance requires both an inheritable handle and inheritance
   at `CreateProcess`; `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` restricts the exact
   inherited set.  Inherited handles refer to the same underlying objects.
@@ -67,10 +56,6 @@ Sources:
 - https://learn.microsoft.com/en-us/windows/console/setconsolectrlhandler
 - https://learn.microsoft.com/en-us/windows/console/creating-a-pseudoconsole-session
 - https://learn.microsoft.com/en-us/windows/win32/procthread/inheritance
-- https://learn.microsoft.com/en-us/windows/win32/api/ioapiset/nf-ioapiset-cancelsynchronousio
-- https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects
-- https://learn.microsoft.com/en-us/windows/win32/procthread/nested-jobs
-- https://learn.microsoft.com/en-us/windows/win32/procthread/process-creation-flags
 
 ## Go process creation
 

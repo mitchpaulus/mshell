@@ -103,14 +103,6 @@ func (stdio ResolvedProcessStdio) ControlTerminal() *TerminalEndpoint {
 	return nil
 }
 
-// HasTerminalStdio reports whether all three standard streams resolve to a
-// terminal.  A Windows pseudoconsole has one input channel and one merged
-// output channel, so it is only semantics-preserving for this shape.  Commands
-// with redirections and pipeline endpoints continue to use ordinary handles.
-func (stdio ResolvedProcessStdio) HasTerminalStdio() bool {
-	return stdio.StdinTerminal != nil && stdio.StdoutTerminal != nil && stdio.StderrTerminal != nil
-}
-
 // TerminalModeSnapshot is platform-specific saved state for every console/TTY
 // mode affected by a foreground job.
 type TerminalModeSnapshot interface {

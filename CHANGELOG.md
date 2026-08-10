@@ -7,13 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
-### Fixed
-
-- Foreground terminal programs on Windows now run in an isolated ConPTY and
-  race-free Job Object transaction, with input/output relays, resize
-  propagation, process-tree cleanup, and exact console-mode restoration.
-  Redirections and pipelines retain their ordinary separate stream handles.
-
 ### Added
 
 - Functions
