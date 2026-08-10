@@ -162,6 +162,7 @@ var BuiltInList = map[string]struct{}{
 	"set": {},
 	"setAt": {},
 	"setd": {},
+	"setenv": {},
 	"sha256sum": {},
 	"skip": {},
 	"sleep": {},

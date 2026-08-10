@@ -327,6 +327,10 @@ An environment variable can be removed with the `unsetenv` built-in,
 which takes the variable name as a string.
 Unsetting a variable that does not exist is not an error.
 
+When the variable name is not known statically,
+an environment variable can be set with the `setenv` built-in,
+which takes the value then the name as strings.
+
 ```mshell
 $HOME cd
 
@@ -338,6 +342,9 @@ $HOME cd
 
 # Removing an environment variable
 "MSHELL_VAR" unsetenv
+
+# Setting with a dynamic name, value then name
+"Hello, World!" "MSHELL_VAR" setenv
 ```
 
 ## Indexing
@@ -1057,6 +1064,7 @@ end wl # Output: 11
 - `defs`: Print available definitions at the current location (--)
 - `env`: Write all environment variables to stderr in sorted order (--)
 - `completionDefs`: Push a dictionary of completion definitions. Keys are command names, values are lists of quotations. `( -- dict)`
+- `setenv`: Set an environment variable by name, value then name. Use when the name is not known statically; otherwise prefer `$NAME!`. `(str str -- )`
 - `unsetenv`: Remove an environment variable by name. Unsetting a variable that does not exist is not an error. `(str -- )`
 - `dup`: Duplicate (a -- a a)
 - `swap`: Swap (a b -- b a)

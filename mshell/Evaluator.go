@@ -7216,6 +7216,36 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(MShellPath{path})
+				} else if t.Lexeme == "setenv" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'setenv' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					varName, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot use a %s as an environment variable name.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					obj2, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'setenv' operation on a stack with less than two items.\n", t.Line, t.Column))
+					}
+
+					varValue, err := obj2.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot use a %s as an environment variable value.\n", t.Line, t.Column, obj2.TypeName()))
+					}
+
+					err = os.Setenv(varName, varValue)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Could not set the environment variable '%s' to '%s'.\n", t.Line, t.Column, varName, varValue))
+					}
+
+					// If it was the PATH, refresh all the binaries
+					if varName == "PATH" {
+						context.Pbm.Update()
+					}
 				} else if t.Lexeme == "unsetenv" {
 					obj1, err := stack.Pop()
 					if err != nil {
