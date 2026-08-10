@@ -51,7 +51,10 @@ type ResolvedProcessStdio struct {
 	StderrTerminal *TerminalEndpoint
 }
 
-func resolveTerminalEndpoint(stream any, fallback *os.File) *TerminalEndpoint {
+// resolveControlTerminalEndpoint checks whether a resolved stream can control
+// this process's foreground job.  The platform probe also establishes terminal
+// identity, so a separate IsTerminal call would duplicate the same OS work.
+func resolveControlTerminalEndpoint(stream any, fallback *os.File) *TerminalEndpoint {
 	if stream == nil {
 		stream = fallback
 	}
@@ -65,25 +68,36 @@ func resolveTerminalEndpoint(stream any, fallback *os.File) *TerminalEndpoint {
 	}
 
 	fd := int(fdProvider.Fd())
-	if !IsTerminal(fd) {
+	if !CanControlTerminal(fd) {
 		return nil
 	}
 
 	return &TerminalEndpoint{
 		fd:                 fd,
-		controlsForeground: CanControlTerminal(fd),
+		controlsForeground: true,
 	}
 }
 
 func resolveProcessStdio(stdin io.Reader, stdout, stderr io.Writer) ResolvedProcessStdio {
-	return ResolvedProcessStdio{
+	stdio := ResolvedProcessStdio{
 		Stdin:          stdin,
 		Stdout:         stdout,
 		Stderr:         stderr,
-		StdinTerminal:  resolveTerminalEndpoint(stdin, os.Stdin),
-		StdoutTerminal: resolveTerminalEndpoint(stdout, os.Stdout),
-		StderrTerminal: resolveTerminalEndpoint(stderr, os.Stderr),
 	}
+
+	// Terminal selection is ordered, so stop probing as soon as the governing
+	// endpoint is known.  This avoids repeated ioctls/GetConsoleMode calls for
+	// the usual case where all three streams share one terminal.
+	stdio.StdinTerminal = resolveControlTerminalEndpoint(stdin, os.Stdin)
+	if stdio.StdinTerminal != nil {
+		return stdio
+	}
+	stdio.StdoutTerminal = resolveControlTerminalEndpoint(stdout, os.Stdout)
+	if stdio.StdoutTerminal != nil {
+		return stdio
+	}
+	stdio.StderrTerminal = resolveControlTerminalEndpoint(stderr, os.Stderr)
+	return stdio
 }
 
 // ControlTerminal returns the terminal governing the job.  Stdin is preferred

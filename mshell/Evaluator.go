@@ -517,7 +517,16 @@ type fileDescriptorProvider interface {
 }
 
 func streamIsTerminal(stream any, fallback *os.File) bool {
-	return resolveTerminalEndpoint(stream, fallback) != nil
+	if stream == nil {
+		stream = fallback
+	}
+
+	fdProvider, ok := stream.(fileDescriptorProvider)
+	if !ok {
+		return false
+	}
+
+	return IsTerminal(int(fdProvider.Fd()))
 }
 
 func (context *ExecuteContext) CloneLessVariables() *ExecuteContext {
