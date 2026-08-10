@@ -266,6 +266,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Attempted to formally improve the semantics of job control and terminal control on both Linux and Windows.
+  Should fix potential bugs when running TUI programs from within mshell scripts.
 - On Windows, a command name containing a forward slash (e.g. `./script.msh`)
   is now treated as a file reference instead of being searched for on `PATH`,
   matching the behavior on Linux/macOS. Previously only backslashes were

@@ -2189,7 +2189,11 @@ func (state *StdinReaderState) ReadByte() (byte, error) {
 		// Do fresh read
 		// fmt.Fprintf(f, "Reading from stdin...\n")
 		// fmt.Fprintf(f, "%s", debug.Stack())
+		if err := processShellInputGate.beginRead(); err != nil {
+			return 0, err
+		}
 		n, err := os.Stdin.Read(state.array)
+		processShellInputGate.endRead()
 		// fmt.Fprintf(f, "Read %d from stdin...\n", n)
 
 		if err != nil {
@@ -2230,7 +2234,12 @@ func (state *TermState) StdinReader(stdInChan chan byte, pauseChan chan bool) {
 			}
 		default:
 			// Read char
+			if err := processShellInputGate.beginRead(); err != nil {
+				fmt.Fprintf(os.Stderr, "Error acquiring shell input: %s\n", err)
+				return
+			}
 			n, err := os.Stdin.Read(readBuffer)
+			processShellInputGate.endRead()
 			if err != nil {
 				if err == io.EOF {
 					os.Exit(0)
