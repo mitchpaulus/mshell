@@ -68,7 +68,7 @@ runs:
 
     - name: Set up Go
       if: steps.mode.outputs.mode == 'source'
-      uses: actions/setup-go@v5
+      uses: actions/setup-go@v7
       with:
         go-version-file: ${{ runner.temp }}/mshell-src/mshell/go.mod
         cache: false

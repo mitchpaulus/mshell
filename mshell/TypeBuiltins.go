@@ -449,7 +449,7 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		r.reg(name, "(str | path -- )")
 	}
 	r.reg("cd", "(str | path -- )")
-	// setenv : set an environment variable, value then name
+	// setenv : set an environment variable, name then value
 	r.reg("setenv", "(str str -- )")
 	// unsetenv : remove an environment variable by name
 	r.reg("unsetenv", "(str -- )")

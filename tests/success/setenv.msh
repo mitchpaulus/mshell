@@ -1,9 +1,9 @@
-# Set an environment variable with a dynamic name, value then name.
-"hello" "MSH_SETENV_TEST" setenv
+# Set an environment variable with a dynamic name, name then value.
+"MSH_SETENV_TEST" "hello" setenv
 $MSH_SETENV_TEST? str wl
 $MSH_SETENV_TEST wl
 # Overwriting an existing variable.
-"world" "MSH_SETENV_TEST" setenv
+"MSH_SETENV_TEST" "world" setenv
 $MSH_SETENV_TEST wl
 "MSH_SETENV_TEST" unsetenv
 $MSH_SETENV_TEST? str wl

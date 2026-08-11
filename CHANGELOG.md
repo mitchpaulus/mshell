@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Functions
   - `longestCommonPrefix`: Longest leading substring shared by every string in a list. `([str] -- str)`
-  - `setenv`: Set an environment variable by name, taking the value then the name.
+  - `setenv`: Set an environment variable by name, taking the name then the value.
     Use when the name is not known statically; otherwise prefer `$NAME!`. `(str str -- )`
   - `stdinIsTerminal`, `stdoutIsTerminal`, and `stderrIsTerminal`: Report whether
     the current effective standard stream is connected to a terminal or Windows
