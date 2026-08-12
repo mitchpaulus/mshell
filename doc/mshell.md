@@ -1440,6 +1440,7 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
 - `bind`: This is a monadic bind operation. Allows for chaining operations on Maybe values with functions that themselves return Maybe values. `(Maybe[a] (a -- Maybe[b]) -- Maybe[b])`
 - `map`: Map a function over a Maybe value. If the Maybe is None, it returns None. If it is Just, it applies the function to the value. `(Maybe[a] (a -- b) -- Maybe[b])`
 - `map2`: Map a binary function over a pair of Maybe values. Returns None if either input is None, otherwise applies the function to both inner values. `(Maybe[a] Maybe[b] (a b -- c) -- Maybe[c])`
+- `whenJust`: Run a quotation on the inner value for its side effects if the Maybe is Just; does nothing on None. `(Maybe[a] (a -- ) -- )`
 
 ## Null
 

@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Functions
   - `longestCommonPrefix`: Longest leading substring shared by every string in a list. `([str] -- str)`
+  - `whenJust`: Run a quotation on the inner value for its side effects when the Maybe is Just;
+    does nothing on None. `(Maybe[a] (a -- ) -- )`
   - `setenv`: Set an environment variable by name, taking the value then the name.
     Use when the name is not known statically; otherwise prefer `$NAME!`. `(str str -- )`
   - `stdinIsTerminal`, `stdoutIsTerminal`, and `stderrIsTerminal`: Report whether
