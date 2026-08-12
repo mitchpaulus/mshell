@@ -474,6 +474,8 @@ def 2tuple (a b -- [a | b])
     [] rot append swap append
 end
 
+def whenJust (Maybe[T] (T -- ) -- ) f! match just v: @v @f x, _: end end
+
 # Integer base formatting/parsing. The integer itself never records a base;
 # these wrap the generic `toBase`/`fromBase` builtins for the common bases.
 # Output is bare digits (no 0o/0x/0b prefix); parsing accepts an optional
@@ -882,7 +884,7 @@ def __sshDefaultOptions ( -- [str])
     ]
 end
 
-def __sshOptionArgs ( -- dict)
+def __sshOptionArgs ( -- {[str]})
     {
         '-c': ['aes128-ctr' 'aes192-ctr' 'aes256-ctr' 'aes128-gcm@openssh.com' 'aes256-gcm@openssh.com' 'chacha20-poly1305@openssh.com'],
         '-e': ['^' 'none'],
