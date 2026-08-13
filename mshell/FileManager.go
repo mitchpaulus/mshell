@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -111,8 +112,25 @@ type FileManager struct {
 	// Status message (shown once at bottom, cleared on first keypress)
 	statusMsg string
 
+	// Clipboard cache. The shared on-disk clipboard file is re-read only
+	// when its mtime/size change (see refreshClipboard).
+	clipCut    []string
+	clipCopy   []string
+	clipMod    time.Time
+	clipSize   int64
+	clipLoaded bool
+
+	// Clipboard watch state (see DirWatch.go).
+	watchDir     string
+	watchDone    chan struct{}
+	watchWG      sync.WaitGroup
+	watchDormant atomic.Bool
+
 	// renderMu serializes render() calls between the main loop and the
-	// preview receiver goroutine.
+	// goroutines that render asynchronously (preview receiver, clipboard
+	// watcher). handleInput holds it for its full duration — including
+	// modal prompts and editor sessions — which is what keeps those
+	// goroutines from painting over an overlay or an external editor.
 	renderMu sync.Mutex
 }
 
@@ -394,6 +412,8 @@ func (fm *FileManager) schedulePreview() {
 func (fm *FileManager) mainLoop() {
 	fm.startPreviewLoop()
 	defer fm.stopPreviewLoop()
+	fm.startClipboardWatch()
+	defer fm.stopClipboardWatch()
 
 	for {
 		fm.renderMu.Lock()
@@ -409,6 +429,7 @@ func (fm *FileManager) mainLoop() {
 		if fm.handleInput(buf, n) {
 			return
 		}
+		fm.restartClipboardWatchIfDormant()
 	}
 }
 
@@ -536,12 +557,11 @@ func (fm *FileManager) adjustScroll() {
 }
 
 func (fm *FileManager) leftPaneWidth() int {
-	cutPaths, copyPaths := loadClipboard()
 	clipSet := make(map[string]bool)
-	for _, p := range cutPaths {
+	for _, p := range fm.clipCut {
 		clipSet[p] = true
 	}
-	for _, p := range copyPaths {
+	for _, p := range fm.clipCopy {
 		clipSet[p] = true
 	}
 
@@ -643,14 +663,16 @@ func (fm *FileManager) render() {
 	// Move cursor to top-left, clear screen
 	buf.WriteString("\033[H\033[2J")
 
+	// Pick up shared clipboard changes (cheap stat unless the file changed).
+	fm.refreshClipboard(false)
+	cutPaths, copyPaths := fm.clipCut, fm.clipCopy
+
 	leftW := fm.leftPaneWidth()
 	rightW := fm.cols - leftW - 3 // 3 for " │ " separator
 	if rightW < 0 {
 		rightW = 0
 	}
 
-	// Load clipboard for display
-	cutPaths, copyPaths := loadClipboard()
 	cutSet := make(map[string]bool)
 	copySet := make(map[string]bool)
 	for _, p := range cutPaths {
@@ -1511,7 +1533,9 @@ func (fm *FileManager) handleInputEvent(buf []byte) (int, bool) {
 			fm.clipboardPaste()
 		}
 	case 'c':
-		clearClipboard()
+		if err := clearClipboard(); err != nil {
+			fm.statusMsg = fmt.Sprintf("Clipboard: %s", err.Error())
+		}
 	case 'x':
 		if fm.requireRealDirectory() {
 			fm.deleteEntry()
@@ -2040,7 +2064,9 @@ func (fm *FileManager) clipboardCut() {
 		return
 	}
 	absPath := filepath.Join(fm.currentDir, fm.entries[fm.cursor].Name())
-	_ = addClipboardPath("cut", absPath)
+	if err := addClipboardPath("cut", absPath); err != nil {
+		fm.statusMsg = fmt.Sprintf("Clipboard: %s", err.Error())
+	}
 }
 
 func (fm *FileManager) clipboardCopy() {
@@ -2048,7 +2074,9 @@ func (fm *FileManager) clipboardCopy() {
 		return
 	}
 	absPath := filepath.Join(fm.currentDir, fm.entries[fm.cursor].Name())
-	_ = addClipboardPath("copy", absPath)
+	if err := addClipboardPath("copy", absPath); err != nil {
+		fm.statusMsg = fmt.Sprintf("Clipboard: %s", err.Error())
+	}
 }
 
 type yankKind int
@@ -2113,32 +2141,54 @@ func gitRelativePath(absPath string) (string, error) {
 }
 
 func (fm *FileManager) clipboardPaste() {
+	// Snapshot without the lock: reads are safe against atomic writers, and
+	// the paste itself may prompt the user or copy large files, which must
+	// never happen while holding the clipboard lock.
 	cutPaths, copyPaths := loadClipboard()
 	if len(cutPaths) == 0 && len(copyPaths) == 0 {
 		return
 	}
 
-	if !fm.pasteClipboardPaths("cut", cutPaths) {
-		return
-	}
-	if !fm.pasteClipboardPaths("copy", copyPaths) {
-		return
+	handled, ok := fm.pasteClipboardPaths("cut", cutPaths)
+	if ok {
+		fm.pasteClipboardPaths("copy", copyPaths)
 	}
 
-	if len(cutPaths) > 0 {
-		_ = saveClipboard(nil, copyPaths)
+	// Remove the cut entries that were actually handled, merging against the
+	// current clipboard state: another instance may have added entries while
+	// this paste was running, and those must survive.
+	if len(handled) > 0 {
+		err := withClipboardLock(func() error {
+			curCut, curCopy, ok := readClipboard()
+			if !ok {
+				return fmt.Errorf("clipboard read failed or timed out; cut entries left in place")
+			}
+			for _, p := range handled {
+				curCut = removePath(curCut, p)
+			}
+			return saveClipboard(curCut, curCopy)
+		})
+		if err != nil {
+			fm.statusMsg = fmt.Sprintf("Clipboard: %s", err.Error())
+		}
 	}
+
 	fm.loadDirectory()
 	fm.clampCursor()
 	fm.adjustScroll()
 }
 
-func (fm *FileManager) pasteClipboardPaths(op string, paths []string) bool {
+// pasteClipboardPaths pastes paths into the current directory. For "cut" it
+// returns the source paths that no longer need a clipboard entry (moved, or
+// already in place); the bool reports whether the whole batch completed.
+func (fm *FileManager) pasteClipboardPaths(op string, paths []string) ([]string, bool) {
+	var handled []string
 	for _, src := range paths {
 		base := filepath.Base(src)
 		dest := filepath.Join(fm.currentDir, base)
 		if src == dest {
 			if op == "cut" {
+				handled = append(handled, src)
 				continue
 			}
 			// Copy to same directory: go straight to versioned name
@@ -2148,7 +2198,7 @@ func (fm *FileManager) pasteClipboardPaths(op string, paths []string) bool {
 			choice := fm.promptConflict(base)
 			if choice == 0 {
 				// Cancel
-				return false
+				return handled, false
 			}
 			if choice == 2 {
 				// Version number
@@ -2159,15 +2209,16 @@ func (fm *FileManager) pasteClipboardPaths(op string, paths []string) bool {
 
 		if op == "cut" {
 			if err := os.Rename(src, dest); err != nil {
-				return false
+				return handled, false
 			}
+			handled = append(handled, src)
 		} else {
 			if err := CopyFile(src, dest); err != nil {
-				return false
+				return handled, false
 			}
 		}
 	}
-	return true
+	return handled, true
 }
 
 // promptConflict shows an overlay asking the user how to handle a name conflict.
@@ -2386,8 +2437,28 @@ func isBookmarkChar(c byte) bool {
 }
 
 // Clipboard
+//
+// The clipboard file is shared state between concurrently running mshell
+// instances, so it is handled with three rules:
+//  - Loads are read-only and tolerant: malformed lines are skipped, never
+//    "repaired" back to disk.
+//  - Writes are atomic: content goes to a temp file in the same directory,
+//    which is then renamed over the real file, so a reader can never observe
+//    a torn write.
+//  - Read-modify-write sequences run under an exclusive OS file lock
+//    (withClipboardLock), so concurrent mutations from two instances cannot
+//    lose entries.
+//  - Everything is bounded: the lock wait times out, reads time out (and
+//    refuse non-regular files, so a planted FIFO cannot block forever), and
+//    loads cap both bytes read and entries parsed. A hostile or runaway
+//    process sharing the file can never hang an instance or force unbounded
+//    work.
 
 const clipboardFileName = "fm_clipboard"
+const clipboardLockFileName = "fm_clipboard.lock"
+const clipboardLockTimeout = 2 * time.Second
+const maxClipboardBytes = 1 << 20 // 1 MiB
+const maxClipboardEntries = 1024
 
 func clipboardFilePath() (string, error) {
 	dir, err := GetHistoryDir()
@@ -2397,62 +2468,177 @@ func clipboardFilePath() (string, error) {
 	return filepath.Join(dir, clipboardFileName), nil
 }
 
+// withClipboardLock runs fn while holding the exclusive clipboard lock.
+// Callers must not hold the lock across user prompts or slow file copies —
+// only across the load/modify/save itself — or they block every other
+// instance's cut/copy keystrokes.
+func withClipboardLock(fn func() error) error {
+	dir, err := GetHistoryDir()
+	if err != nil {
+		return err
+	}
+	lock, err := acquireFileLock(filepath.Join(dir, clipboardLockFileName), clipboardLockTimeout)
+	if err != nil {
+		return err
+	}
+	defer lock.release()
+	return fn()
+}
+
+// loadClipboard reads the shared clipboard for display purposes. Any failure
+// — unreadable file, timed-out read — degrades to an empty clipboard. Callers
+// that read-modify-write must use readClipboard and honor ok instead.
 func loadClipboard() ([]string, []string) {
+	cutPaths, copyPaths, _ := readClipboard()
+	return cutPaths, copyPaths
+}
+
+// clipboardReadGate makes clipboard reads single-flight. A read hung on a
+// pathological filesystem (dead network mount, wedged FUSE daemon) cannot be
+// cancelled, only abandoned — the gate keeps each render from stacking
+// another blocked goroutine on top, bounding hung readers to one per process.
+var clipboardReadGate = make(chan struct{}, 1)
+
+const clipboardReadTimeout = 2 * time.Second
+
+// readClipboard reads the shared clipboard with a bounded wait: the file read
+// runs in a goroutine and is abandoned after clipboardReadTimeout. ok is
+// false when the read failed or timed out. Read-modify-write callers MUST
+// abort on !ok rather than proceed — treating a transient read failure as an
+// empty clipboard would save emptiness over other instances' entries.
+func readClipboard() (cutPaths []string, copyPaths []string, ok bool) {
+	select {
+	case clipboardReadGate <- struct{}{}:
+	default:
+		// A previous read is still hung; fail fast instead of joining it.
+		return nil, nil, false
+	}
+
+	type clipResult struct {
+		cut, copy []string
+		ok        bool
+	}
+	resCh := make(chan clipResult, 1)
+	go func() {
+		defer func() { <-clipboardReadGate }()
+		cut, copy, ok := readClipboardFile()
+		resCh <- clipResult{cut, copy, ok}
+	}()
+
+	timer := time.NewTimer(clipboardReadTimeout)
+	defer timer.Stop()
+	select {
+	case r := <-resCh:
+		return r.cut, r.copy, r.ok
+	case <-timer.C:
+		return nil, nil, false
+	}
+}
+
+// readClipboardFile reads and parses the clipboard file. It never writes:
+// with atomic saves in place, an unparseable line can only be an old format
+// or a hand-edit, and destroying other instances' state over that is worse
+// than ignoring it. ok is false only when the file exists but could not be
+// read; a missing file is a normal empty clipboard.
+func readClipboardFile() ([]string, []string, bool) {
 	path, err := clipboardFilePath()
 	if err != nil {
-		return nil, nil
+		return nil, nil, false
 	}
-	data, err := os.ReadFile(path)
+	// Non-blocking open: a FIFO planted at this path would otherwise block
+	// open(2) forever waiting for a writer.
+	f, err := os.OpenFile(path, os.O_RDONLY|openNonBlock, 0)
 	if err != nil {
-		return nil, nil
+		if os.IsNotExist(err) {
+			return nil, nil, true
+		}
+		return nil, nil, false
 	}
-	trimmed := strings.TrimRight(string(data), "\n")
-	if trimmed == "" {
-		return nil, nil
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, nil, false
 	}
-	lines := strings.Split(trimmed, "\n")
-	if len(lines) == 0 {
-		return nil, nil
+	if !info.Mode().IsRegular() {
+		// Reading a FIFO or device node could block forever. Treat it as an
+		// empty clipboard: the next save atomically renames a regular file
+		// over it, healing the path.
+		return nil, nil, true
+	}
+	// Bounded read: any process can write this file, so a huge one must
+	// degrade to a partial load, never an unbounded allocation. Reading one
+	// byte past the cap detects truncation, and the possibly mid-line tail is
+	// dropped so a partial path can never be mistaken for a real entry.
+	data, err := io.ReadAll(io.LimitReader(f, maxClipboardBytes+1))
+	if err != nil {
+		return nil, nil, false
+	}
+	if len(data) > maxClipboardBytes {
+		if i := bytes.LastIndexByte(data[:maxClipboardBytes], '\n'); i >= 0 {
+			data = data[:i]
+		} else {
+			data = nil
+		}
 	}
 
 	var cutPaths []string
 	var copyPaths []string
-	dirty := false
-	for _, line := range lines {
-		if line == "" {
-			dirty = true
-			continue
+	for _, line := range strings.Split(string(data), "\n") {
+		if len(cutPaths)+len(copyPaths) >= maxClipboardEntries {
+			break
 		}
 		parts := strings.SplitN(line, "\t", 2)
-		if len(parts) != 2 {
-			dirty = true
+		if len(parts) != 2 || parts[1] == "" {
 			continue
 		}
 		op := parts[0]
 		path := parts[1]
-		if path == "" {
-			dirty = true
-			continue
-		}
 		if op == "cut" {
 			copyPaths = removePath(copyPaths, path)
 			cutPaths = appendUniquePath(cutPaths, path)
 		} else if op == "copy" {
 			cutPaths = removePath(cutPaths, path)
 			copyPaths = appendUniquePath(copyPaths, path)
-		} else {
-			dirty = true
 		}
 	}
-	if dirty {
-		_ = saveClipboard(cutPaths, copyPaths)
-	}
-	return cutPaths, copyPaths
+	return cutPaths, copyPaths, true
 }
 
+// refreshClipboard reloads the clipboard cache if the file changed on disk
+// since the last load; force skips the stat comparison. Returns true if the
+// cache was reloaded. Callers must hold renderMu.
+func (fm *FileManager) refreshClipboard(force bool) bool {
+	path, err := clipboardFilePath()
+	if err != nil {
+		return false
+	}
+	var mod time.Time
+	var size int64
+	if info, err := os.Stat(path); err == nil {
+		mod = info.ModTime()
+		size = info.Size()
+	}
+	if !force && fm.clipLoaded && mod.Equal(fm.clipMod) && size == fm.clipSize {
+		return false
+	}
+	cutPaths, copyPaths, ok := readClipboard()
+	if !ok {
+		// Keep the stale cache. clipMod/clipSize are left untouched, so the
+		// next call re-detects the mismatch and retries the read.
+		return false
+	}
+	fm.clipCut, fm.clipCopy = cutPaths, copyPaths
+	fm.clipMod = mod
+	fm.clipSize = size
+	fm.clipLoaded = true
+	return true
+}
+
+// saveClipboard atomically replaces the clipboard file. Callers must hold the
+// clipboard lock (withClipboardLock).
 func saveClipboard(cutPaths []string, copyPaths []string) error {
 	if len(cutPaths) == 0 && len(copyPaths) == 0 {
-		return clearClipboard()
+		return removeClipboardFile()
 	}
 	path, err := clipboardFilePath()
 	if err != nil {
@@ -2469,15 +2655,73 @@ func saveClipboard(cutPaths []string, copyPaths []string) error {
 		sb.WriteString(p)
 		sb.WriteByte('\n')
 	}
-	return os.WriteFile(path, []byte(sb.String()), 0644)
+
+	sweepStaleClipboardTemps(filepath.Dir(path))
+
+	tmp, err := os.CreateTemp(filepath.Dir(path), clipboardFileName+".tmp-*")
+	if err != nil {
+		return err
+	}
+	if _, err := tmp.WriteString(sb.String()); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return err
+	}
+	// Chmod through the descriptor, not the name, so the mode can only ever
+	// land on the file this process created.
+	if err := tmp.Chmod(0644); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmp.Name())
+		return err
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		os.Remove(tmp.Name())
+		return err
+	}
+	return nil
 }
 
-func clearClipboard() error {
+// sweepStaleClipboardTemps removes fm_clipboard.tmp-* files orphaned by a
+// process that died between CreateTemp and Rename, so they cannot accumulate
+// forever. Only files older than a minute are touched: a live writer holds
+// its temp file for milliseconds, and the caller holds the clipboard lock, so
+// anything that old is guaranteed abandoned. Best-effort: errors are ignored.
+func sweepStaleClipboardTemps(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-time.Minute)
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), clipboardFileName+".tmp-") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || info.ModTime().After(cutoff) {
+			continue
+		}
+		os.Remove(filepath.Join(dir, e.Name()))
+	}
+}
+
+func removeClipboardFile() error {
 	path, err := clipboardFilePath()
 	if err != nil {
 		return err
 	}
-	return os.Remove(path)
+	err = os.Remove(path)
+	if err != nil && os.IsNotExist(err) {
+		return nil
+	}
+	return err
+}
+
+func clearClipboard() error {
+	return withClipboardLock(removeClipboardFile)
 }
 
 func appendUniquePath(paths []string, path string) []string {
@@ -2497,15 +2741,20 @@ func removePath(paths []string, path string) []string {
 }
 
 func addClipboardPath(op string, path string) error {
-	cutPaths, copyPaths := loadClipboard()
-	if op == "cut" {
-		copyPaths = removePath(copyPaths, path)
-		cutPaths = appendUniquePath(cutPaths, path)
-	} else if op == "copy" {
-		cutPaths = removePath(cutPaths, path)
-		copyPaths = appendUniquePath(copyPaths, path)
-	}
-	return saveClipboard(cutPaths, copyPaths)
+	return withClipboardLock(func() error {
+		cutPaths, copyPaths, ok := readClipboard()
+		if !ok {
+			return fmt.Errorf("clipboard read failed or timed out; not saving")
+		}
+		if op == "cut" {
+			copyPaths = removePath(copyPaths, path)
+			cutPaths = appendUniquePath(cutPaths, path)
+		} else if op == "copy" {
+			cutPaths = removePath(cutPaths, path)
+			copyPaths = appendUniquePath(copyPaths, path)
+		}
+		return saveClipboard(cutPaths, copyPaths)
+	})
 }
 
 func saveBookmarks(bookmarks map[byte]string) error {
