@@ -1440,6 +1440,221 @@ func TestHoverForInFileUserDef(t *testing.T) {
 	}
 }
 
+func TestCodeActionQuotesAllLiteralsInInnermostList(t *testing.T) {
+	uri := protocol.DocumentURI("file:///quote-list.msh")
+	doc := "[outer arg [echo café😀 \"already quoted\" @value 3] tail]"
+	server := &lspServer{
+		documents: map[protocol.DocumentURI]*lspDocument{
+			uri: {Text: doc},
+		},
+	}
+
+	actions := server.codeActions(protocol.CodeActionParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+		Range: protocol.Range{
+			Start: protocol.Position{Line: 0, Character: 24},
+			End:   protocol.Position{Line: 0, Character: 24},
+		},
+	})
+
+	if len(actions) != 1 {
+		t.Fatalf("expected one code action, got %d", len(actions))
+	}
+	if actions[0].Title != "Quote all literals in list" {
+		t.Fatalf("unexpected code action title: %q", actions[0].Title)
+	}
+	if actions[0].Kind != protocol.RefactorRewrite {
+		t.Fatalf("unexpected code action kind: %q", actions[0].Kind)
+	}
+	if actions[0].Edit == nil {
+		t.Fatal("expected code action to contain an edit")
+	}
+
+	edits := actions[0].Edit.Changes[uri]
+	if len(edits) != 2 {
+		t.Fatalf("expected two edits for the inner list, got %+v", edits)
+	}
+	if edits[0].NewText != "'echo'" || edits[1].NewText != "'café😀'" {
+		t.Fatalf("unexpected edits: %+v", edits)
+	}
+	if edits[1].Range.Start.Character != 17 || edits[1].Range.End.Character != 23 {
+		t.Fatalf("unexpected UTF-16 range for café😀: %+v", edits[1].Range)
+	}
+}
+
+func TestCodeActionQuotesNestedLiteralsFromOuterList(t *testing.T) {
+	uri := protocol.DocumentURI("file:///quote-outer-list.msh")
+	doc := "[outer [inner value] tail]"
+	server := &lspServer{
+		documents: map[protocol.DocumentURI]*lspDocument{
+			uri: {Text: doc},
+		},
+	}
+
+	actions := server.codeActions(protocol.CodeActionParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+		Range: protocol.Range{
+			Start: protocol.Position{Line: 0, Character: 6},
+			End:   protocol.Position{Line: 0, Character: 6},
+		},
+	})
+
+	if len(actions) != 1 || actions[0].Edit == nil {
+		t.Fatalf("expected one code action with edits, got %+v", actions)
+	}
+	edits := actions[0].Edit.Changes[uri]
+	want := []string{"'outer'", "'inner'", "'value'", "'tail'"}
+	if len(edits) != len(want) {
+		t.Fatalf("expected %d edits, got %+v", len(want), edits)
+	}
+	for i := range want {
+		if edits[i].NewText != want[i] {
+			t.Fatalf("edit %d = %q, want %q", i, edits[i].NewText, want[i])
+		}
+	}
+}
+
+func TestCodeActionUnavailableOutsideListOrForQuickFix(t *testing.T) {
+	uri := protocol.DocumentURI("file:///no-quote-list.msh")
+	doc := "word [echo arg]"
+	server := &lspServer{
+		documents: map[protocol.DocumentURI]*lspDocument{
+			uri: {Text: doc},
+		},
+	}
+
+	outside := server.codeActions(protocol.CodeActionParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+		Range: protocol.Range{
+			Start: protocol.Position{Line: 0, Character: 2},
+			End:   protocol.Position{Line: 0, Character: 2},
+		},
+	})
+	if len(outside) != 0 {
+		t.Fatalf("expected no action outside a list, got %+v", outside)
+	}
+
+	quickFixOnly := server.codeActions(protocol.CodeActionParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+		Range: protocol.Range{
+			Start: protocol.Position{Line: 0, Character: 8},
+			End:   protocol.Position{Line: 0, Character: 8},
+		},
+		Context: protocol.CodeActionContext{Only: []protocol.CodeActionKind{protocol.QuickFix}},
+	})
+	if len(quickFixOnly) != 0 {
+		t.Fatalf("expected no refactor for a quick-fix-only request, got %+v", quickFixOnly)
+	}
+}
+
+func TestCodeActionOnlyTargetsParsedListValues(t *testing.T) {
+	uri := protocol.DocumentURI("file:///parsed-lists.msh")
+	doc := strings.Join([]string{
+		"type CustomType = str",
+		"type CustomTypes = [CustomType]",
+		"def f ([CustomType] -- [CustomType])",
+		"    [] match",
+		"        [head ...tail] : [echo arg],",
+		"        _ : [],",
+		"    end",
+		"end",
+	}, "\n")
+	server := &lspServer{
+		documents: map[protocol.DocumentURI]*lspDocument{
+			uri: {Text: doc},
+		},
+	}
+
+	positionOf := func(needle string) protocol.Position {
+		offset := strings.Index(doc, needle)
+		if offset < 0 {
+			t.Fatalf("expected to find %q in document", needle)
+		}
+		return runeOffsetToLSPPosition(doc, len([]rune(doc[:offset])))
+	}
+	actionsAt := func(needle string) []protocol.CodeAction {
+		position := positionOf(needle)
+		return server.codeActions(protocol.CodeActionParams{
+			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+			Range: protocol.Range{
+				Start: position,
+				End:   position,
+			},
+		})
+	}
+
+	if actions := actionsAt("[CustomType]"); len(actions) != 0 {
+		t.Fatalf("expected no action in a type declaration, got %+v", actions)
+	}
+	if actions := actionsAt("[CustomType] --"); len(actions) != 0 {
+		t.Fatalf("expected no action in a definition signature, got %+v", actions)
+	}
+	if actions := actionsAt("[head ...tail]"); len(actions) != 0 {
+		t.Fatalf("expected no action in a list pattern, got %+v", actions)
+	}
+
+	actions := actionsAt("[echo arg]")
+	if len(actions) != 1 || actions[0].Edit == nil {
+		t.Fatalf("expected an action in the match-arm list value, got %+v", actions)
+	}
+	edits := actions[0].Edit.Changes[uri]
+	if len(edits) != 2 || edits[0].NewText != "'echo'" || edits[1].NewText != "'arg'" {
+		t.Fatalf("unexpected list-value edits: %+v", edits)
+	}
+}
+
+func TestCodeActionDoesNotCrossIntoOtherParseConstructs(t *testing.T) {
+	uri := protocol.DocumentURI("file:///list-children.msh")
+	doc := "[(danger) { 'key': risky } [inner arg] outer]"
+	server := &lspServer{
+		documents: map[protocol.DocumentURI]*lspDocument{
+			uri: {Text: doc},
+		},
+	}
+
+	actions := server.codeActions(protocol.CodeActionParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+		Range: protocol.Range{
+			Start: protocol.Position{Line: 0, Character: 1},
+			End:   protocol.Position{Line: 0, Character: 1},
+		},
+	})
+	if len(actions) != 1 || actions[0].Edit == nil {
+		t.Fatalf("expected one code action with edits, got %+v", actions)
+	}
+	edits := actions[0].Edit.Changes[uri]
+	want := []string{"'inner'", "'arg'", "'outer'"}
+	if len(edits) != len(want) {
+		t.Fatalf("expected %d edits, got %+v", len(want), edits)
+	}
+	for i := range want {
+		if edits[i].NewText != want[i] {
+			t.Fatalf("edit %d = %q, want %q", i, edits[i].NewText, want[i])
+		}
+	}
+}
+
+func TestCodeActionUnavailableForUnclosedList(t *testing.T) {
+	uri := protocol.DocumentURI("file:///unclosed-list.msh")
+	doc := "[echo arg"
+	server := &lspServer{
+		documents: map[protocol.DocumentURI]*lspDocument{
+			uri: {Text: doc},
+		},
+	}
+
+	actions := server.codeActions(protocol.CodeActionParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+		Range: protocol.Range{
+			Start: protocol.Position{Line: 0, Character: 5},
+			End:   protocol.Position{Line: 0, Character: 5},
+		},
+	})
+	if len(actions) != 0 {
+		t.Fatalf("expected no action without a parsed list node, got %+v", actions)
+	}
+}
+
 func sendLSPMessage(t *testing.T, w io.Writer, payload any) {
 	t.Helper()
 	data, err := json.Marshal(payload)

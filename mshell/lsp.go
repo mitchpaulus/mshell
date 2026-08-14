@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf16"
 	"unicode/utf8"
 
 	"go.lsp.dev/protocol"
@@ -294,8 +295,9 @@ func (s *lspServer) handleMessage(msg *jsonrpcMessage) (bool, error) {
 		}
 		result := protocol.InitializeResult{
 			Capabilities: protocol.ServerCapabilities{
-				TextDocumentSync: protocol.TextDocumentSyncKindFull,
-				HoverProvider:    true,
+				TextDocumentSync:  protocol.TextDocumentSyncKindFull,
+				HoverProvider:     true,
+				CodeActionProvider: true,
 				CompletionProvider: &protocol.CompletionOptions{
 					TriggerCharacters: []string{"@", "$"},
 				},
@@ -385,6 +387,17 @@ func (s *lspServer) handleMessage(msg *jsonrpcMessage) (bool, error) {
 			return false, s.sendResult(msg.ID, []protocol.CompletionItem{})
 		}
 		return false, s.sendResult(msg.ID, items)
+	case "textDocument/codeAction":
+		if msg.ID == nil {
+			logLSP("codeAction request missing id")
+			return false, nil
+		}
+		var params protocol.CodeActionParams
+		if err := json.Unmarshal(msg.Params, &params); err != nil {
+			_ = s.sendErrorResponse(msg.ID, jsonrpcCodeInvalidParams, fmt.Sprintf("invalid codeAction params: %v", err))
+			return false, nil
+		}
+		return false, s.sendResult(msg.ID, s.codeActions(params))
 	case "textDocument/prepareRename":
 		if msg.ID == nil {
 			logLSP("prepareRename request missing id")
@@ -429,6 +442,184 @@ func (s *lspServer) handleMessage(msg *jsonrpcMessage) (bool, error) {
 		}
 		return false, nil
 	}
+}
+
+func (s *lspServer) codeActions(params protocol.CodeActionParams) []protocol.CodeAction {
+	doc, ok := s.documents[params.TextDocument.URI]
+	if !ok || !codeActionKindRequested(params.Context.Only, protocol.RefactorRewrite) {
+		return []protocol.CodeAction{}
+	}
+
+	cursor, ok := lspPositionToRuneOffset(doc.Text, params.Range.Start)
+	if !ok {
+		return []protocol.CodeAction{}
+	}
+
+	parser := NewMShellParser(NewLexer(doc.Text, nil))
+	file, err := parser.ParseFile()
+	if err != nil {
+		return []protocol.CodeAction{}
+	}
+	lists := collectRuntimeLists(file)
+
+	var selected *MShellParseList
+	for _, list := range lists {
+		start := list.StartToken.Start
+		end := list.EndToken.Start + utf8.RuneCountInString(list.EndToken.Lexeme)
+		if cursor < start || cursor >= end {
+			continue
+		}
+		if selected == nil || start > selected.StartToken.Start {
+			selected = list
+		}
+	}
+	if selected == nil {
+		return []protocol.CodeAction{}
+	}
+
+	literals := collectListLiterals(selected)
+	if len(literals) == 0 {
+		return []protocol.CodeAction{}
+	}
+	edits := make([]protocol.TextEdit, 0, len(literals))
+	for _, tok := range literals {
+		edits = append(edits, protocol.TextEdit{
+			Range:   tokenLSPRange(doc.Text, tok),
+			NewText: "'" + tok.Lexeme + "'",
+		})
+	}
+
+	return []protocol.CodeAction{{
+		Title: "Quote all literals in list",
+		Kind:  protocol.RefactorRewrite,
+		Edit: &protocol.WorkspaceEdit{
+			Changes: map[protocol.DocumentURI][]protocol.TextEdit{
+				params.TextDocument.URI: edits,
+			},
+		},
+	}}
+}
+
+func collectRuntimeLists(file *MShellFile) []*MShellParseList {
+	lists := make([]*MShellParseList, 0)
+	collectRuntimeListsFromItems(&lists, file.Items)
+	for i := range file.Definitions {
+		collectRuntimeListsFromItems(&lists, file.Definitions[i].Items)
+	}
+	return lists
+}
+
+func collectRuntimeListsFromItems(dst *[]*MShellParseList, items []MShellParseItem) {
+	for _, item := range items {
+		switch v := item.(type) {
+		case *MShellParseList:
+			*dst = append(*dst, v)
+			collectRuntimeListsFromItems(dst, v.Items)
+		case *MShellParseDict:
+			for _, kv := range v.Items {
+				collectRuntimeListsFromItems(dst, kv.Value)
+			}
+		case *MShellParseQuote:
+			collectRuntimeListsFromItems(dst, v.Items)
+		case *MShellParsePrefixQuote:
+			collectRuntimeListsFromItems(dst, v.Items)
+		case *MShellParseIfBlock:
+			collectRuntimeListsFromItems(dst, v.IfBody)
+			for _, elseIf := range v.ElseIfs {
+				collectRuntimeListsFromItems(dst, elseIf.Condition)
+				collectRuntimeListsFromItems(dst, elseIf.Body)
+			}
+			collectRuntimeListsFromItems(dst, v.ElseBody)
+		case *MShellParseMatchBlock:
+			for _, arm := range v.Arms {
+				collectRuntimeListsFromItems(dst, arm.Body)
+			}
+		case *MShellParseGrid:
+			for _, row := range v.Rows {
+				collectRuntimeListsFromItems(dst, row)
+			}
+		case *MShellIndexerList:
+			collectRuntimeListsFromItems(dst, v.Indexers)
+		}
+	}
+}
+
+func collectListLiterals(list *MShellParseList) []Token {
+	literals := make([]Token, 0)
+	var collect func(*MShellParseList)
+	collect = func(current *MShellParseList) {
+		for _, item := range current.Items {
+			switch v := item.(type) {
+			case Token:
+				if v.Type == LITERAL {
+					literals = append(literals, v)
+				}
+			case *MShellParseList:
+				collect(v)
+			}
+		}
+	}
+	collect(list)
+	return literals
+}
+
+func codeActionKindRequested(only []protocol.CodeActionKind, action protocol.CodeActionKind) bool {
+	if len(only) == 0 {
+		return true
+	}
+	for _, requested := range only {
+		if action == requested || strings.HasPrefix(string(action), string(requested)+".") {
+			return true
+		}
+	}
+	return false
+}
+
+func lspPositionToRuneOffset(text string, position protocol.Position) (int, bool) {
+	line := uint32(0)
+	character := uint32(0)
+	runes := []rune(text)
+	for offset, r := range runes {
+		if line == position.Line && character == position.Character {
+			return offset, true
+		}
+		if r == '\n' {
+			if line == position.Line {
+				return 0, false
+			}
+			line++
+			character = 0
+			continue
+		}
+		character += uint32(utf16.RuneLen(r))
+	}
+	if line == position.Line && character == position.Character {
+		return len(runes), true
+	}
+	return 0, false
+}
+
+func tokenLSPRange(text string, tok Token) protocol.Range {
+	start := runeOffsetToLSPPosition(text, tok.Start)
+	end := runeOffsetToLSPPosition(text, tok.Start+utf8.RuneCountInString(tok.Lexeme))
+	return protocol.Range{Start: start, End: end}
+}
+
+func runeOffsetToLSPPosition(text string, target int) protocol.Position {
+	line := uint32(0)
+	character := uint32(0)
+	for offset, r := range []rune(text) {
+		if offset >= target {
+			break
+		}
+		if r == '\n' {
+			line++
+			character = 0
+			continue
+		}
+		character += uint32(utf16.RuneLen(r))
+	}
+	return protocol.Position{Line: line, Character: character}
 }
 
 func (s *lspServer) sendResult(id *json.RawMessage, result any) error {

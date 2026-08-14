@@ -145,7 +145,8 @@ use <span class="mshellFORMATSTRING">$"</span><span class="mshellVARRETRIEVE">($
 
 <p>
 A language server is bundled with the CLI, providing builtin hover information, completion on <code>@</code> variables
-and <code>$</code> environment variables, and scope-aware variable renaming.
+and <code>$</code> environment variables, scope-aware variable renaming,
+and a code action that single-quotes every bare literal in the parsed list value containing the cursor.
 Environment variable completion draws from the actual process environment as well as any environment variables already
 referenced in the current file.
 </p>

@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The language server now offers a `Quote all literals in list` code action that
+  single-quotes every bare literal in the innermost list containing the cursor.
+
 - Functions
   - `longestCommonPrefix`: Longest leading substring shared by every string in a list. `([str] -- str)`
   - `whenJust`: Run a quotation on the inner value for its side effects when the Maybe is Just;
