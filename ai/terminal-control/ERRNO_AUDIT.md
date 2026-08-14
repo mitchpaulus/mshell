@@ -120,18 +120,21 @@ Resolutions (maintainer decisions 2026-08-13):
 
 - **R1 (applied):** `closeTerminal` failure is now a warning; a successful
   pipeline is never failed over it.
-- **R2 (open, trade-off analysis delivered):** non-`ESRCH` acquisition
+- **R2 (decided 2026-08-13: keep the kill):** non-`ESRCH` acquisition
   failures (`ENOTTY`/`EIO` after a hangup in the resolve→acquire window,
-  `EPERM`) kill a healthy child and fail the command.  bash degrades to
-  running the job without foreground ownership — but bash can afford to: it
-  has a job table and `WUNTRACED` waits, so a child that later stops on
-  `SIGTTIN` becomes a recoverable stopped job.  mshell's synchronous
-  `cmd.Wait` would hang forever on such a child.  Degrading is only clearly
-  safe for errnos proving the terminal is dead (`ENOTTY`/`EBADF`/`EIO`, where
-  reads return `EIO` instead of raising `SIGTTIN`).  Options: keep kill
-  (never hangs, predictable), degrade only on dead-terminal errnos (bash-like
-  where provably hang-free), or full degrade (needs stopped-job recovery
-  first — the future `jobs`/`fg` work).
+  `EPERM`) kill the child and fail the command.  bash degrades to running the
+  job without foreground ownership — but bash can afford to: it has a job
+  table and `WUNTRACED` waits, so a child that later stops on `SIGTTIN`
+  becomes a recoverable stopped job.  mshell's synchronous `cmd.Wait` would
+  hang forever on such a child, and a silent hang is worse than a wrong kill.
+  The kill also approximates `SIGHUP` semantics for children in their own
+  process groups when the terminal dies, and never leaves orphans.
+  Alternatives considered and declined for now: degrade only on
+  dead-terminal errnos (`ENOTTY`/`EBADF`/`EIO`, provably hang-free because
+  reads return `EIO` instead of raising `SIGTTIN`) — rejected as an extra
+  policy fork whose benefit (a rare race) does not outweigh orphaned
+  processes; full bash-style degrade — deferred.  **Revisit when the
+  `jobs`/`fg`/`WUNTRACED` milestone lands, which makes full degrade safe.**
 - **R3 (applied, modeled):** `POSIXTerminalControl.tla` now has a `reaped`
   state distinct from zombie `exited`, early `ProcExits`, concurrent
   `ReapProc`, the `~GroupDead` kernel contract on `GiveTerminal`, and the

@@ -42,12 +42,13 @@ explicit policy or a finding.  Two further gaps found and fixed:
   failed a job whose children exited 0.  Acquisition-time ESRCH now means
   "already finished": roll back any partial handoff and run without a lease.
 
-R1 has since been applied (closeTerminal failure is a warning, never a
-pipeline failure) and R3 modeled (reaped-vs-zombie states in
-POSIXTerminalControl.tla).  R2 remains open pending a maintainer decision;
-the trade-off is recorded in ERRNO_AUDIT.md — degrading like bash is only
-hang-safe once stopped children are recoverable (`jobs`/`fg`) or when the
-errno proves the terminal is dead.
+All three audit recommendations are resolved: R1 applied (closeTerminal
+failure is a warning, never a pipeline failure), R3 modeled
+(reaped-vs-zombie states in POSIXTerminalControl.tla), and R2 decided as
+keep-the-kill — a non-ESRCH acquisition failure kills the child rather than
+risking an unrecoverable SIGTTIN hang, since mshell has no stopped-job
+recovery yet.  R2 must be revisited when the `jobs`/`fg`/`WUNTRACED`
+milestone lands; the full trade-off is in ERRNO_AUDIT.md.
 
 ### 2026-08-09 milestone
 
