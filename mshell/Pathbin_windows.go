@@ -463,6 +463,19 @@ func CanControlTerminal(fd int) bool {
 	return IsTerminal(fd)
 }
 
+// ShellOwnsTerminal is always true on Windows: the foreground state is an
+// in-process Ctrl-C routing marker, not shared kernel terminal ownership, so
+// there is no cross-process foreground owner to defer to.
+func ShellOwnsTerminal(ttyFd int) bool {
+	return true
+}
+
+// ShellProcessGroup returns the marker's idle value.  Restoring the in-memory
+// marker never fails, so the fallback hand-back path is unreachable on Windows.
+func ShellProcessGroup() int {
+	return 0
+}
+
 func DuplicateTerminalHandle(fd int) (int, error) {
 	process := windows.CurrentProcess()
 	var duplicate windows.Handle

@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -16,8 +17,11 @@ type fakeTerminalControlBackend struct {
 	captureErr    error
 	setErr       error
 	continueErr    error
-	restoreErr     error
+	restoreErrs    []error // popped once per restoreForeground call; nil entries succeed
+	restoreTargets []int
 	modeRestoreErr error
+	notOwner       bool
+	shellPgid      int
 }
 
 type fakeTerminalModeSnapshot struct {
@@ -51,7 +55,29 @@ func (backend *fakeTerminalControlBackend) setForeground(terminalFd, pgid int) (
 
 func (backend *fakeTerminalControlBackend) restoreForeground(terminalFd, pgid int) error {
 	backend.record("restore")
-	return backend.restoreErr
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	backend.restoreTargets = append(backend.restoreTargets, pgid)
+	if len(backend.restoreErrs) == 0 {
+		return nil
+	}
+	err := backend.restoreErrs[0]
+	backend.restoreErrs = backend.restoreErrs[1:]
+	return err
+}
+
+func (backend *fakeTerminalControlBackend) shellOwnsTerminal(terminalFd int) bool {
+	return !backend.notOwner
+}
+
+func (backend *fakeTerminalControlBackend) shellProcessGroup() int {
+	return backend.shellPgid
+}
+
+func (backend *fakeTerminalControlBackend) recordedRestoreTargets() []int {
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	return append([]int(nil), backend.restoreTargets...)
 }
 
 func (backend *fakeTerminalControlBackend) continueProcessGroup(pgid int) error {
@@ -238,8 +264,83 @@ func TestForegroundControllerRejectsOutstandingShellRead(t *testing.T) {
 	}
 }
 
-func TestReclaimFailureKeepsShellInputBlocked(t *testing.T) {
-	backend := &fakeTerminalControlBackend{restoreErr: errors.New("restore failed")}
+func TestAcquireSkipsWhenShellDoesNotOwnTerminal(t *testing.T) {
+	backend := &fakeTerminalControlBackend{notOwner: true}
+	gate := &shellInputGate{}
+	controller := foregroundController{backend: backend, inputGate: gate}
+
+	lease, err := controller.acquire(&TerminalEndpoint{fd: 3}, 13)
+	if err != nil {
+		t.Fatalf("acquire while not terminal owner returned error: %v", err)
+	}
+	if lease != nil {
+		t.Fatal("acquire while not terminal owner returned a lease")
+	}
+	if got := backend.recordedOperations(); len(got) != 0 {
+		t.Fatalf("backend operations = %v, want none for a non-owner shell", got)
+	}
+	// The skipped transaction must leave shell input usable.
+	if err := gate.beginRead(); err != nil {
+		t.Fatalf("shell input blocked after skipped acquisition: %v", err)
+	}
+	gate.endRead()
+}
+
+func TestAcquireSkipsWhenChildGroupReapedBeforeForeground(t *testing.T) {
+	backend := &fakeTerminalControlBackend{setErr: syscall.ESRCH}
+	gate := &shellInputGate{}
+	controller := foregroundController{backend: backend, inputGate: gate}
+
+	lease, err := controller.acquire(&TerminalEndpoint{fd: 3}, 13)
+	if err != nil {
+		t.Fatalf("acquire with a reaped child group returned error: %v", err)
+	}
+	if lease != nil {
+		t.Fatal("acquire with a reaped child group returned a lease")
+	}
+	want := []string{"capture", "set"}
+	if got := backend.recordedOperations(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("operations = %v, want %v", got, want)
+	}
+	if err := gate.beginRead(); err != nil {
+		t.Fatalf("shell input blocked after skipped acquisition: %v", err)
+	}
+	gate.endRead()
+}
+
+func TestAcquireSkipsWhenChildGroupReapedBeforeContinue(t *testing.T) {
+	backend := &fakeTerminalControlBackend{previousPgid: 7, continueErr: syscall.ESRCH}
+	gate := &shellInputGate{}
+	controller := foregroundController{backend: backend, inputGate: gate}
+
+	lease, err := controller.acquire(&TerminalEndpoint{fd: 3}, 13)
+	if err != nil {
+		t.Fatalf("acquire with group reaped before SIGCONT returned error: %v", err)
+	}
+	if lease != nil {
+		t.Fatal("acquire with group reaped before SIGCONT returned a lease")
+	}
+	// The terminal was handed over before SIGCONT failed, so the rollback
+	// sequence must still run.
+	want := []string{"capture", "set", "continue", "restore", "restoreMode"}
+	if got := backend.recordedOperations(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("operations = %v, want rollback sequence %v", got, want)
+	}
+	if got, want := backend.recordedRestoreTargets(), []int{7}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("restore targets = %v, want previous group %v", got, want)
+	}
+	if err := gate.beginRead(); err != nil {
+		t.Fatalf("shell input blocked after skipped acquisition: %v", err)
+	}
+	gate.endRead()
+}
+
+func TestReleaseFallsBackToOwnGroupWhenPreviousGroupIsGone(t *testing.T) {
+	backend := &fakeTerminalControlBackend{
+		previousPgid: 41,
+		shellPgid:    77,
+		restoreErrs:  []error{errors.New("no such process")},
+	}
 	gate := &shellInputGate{}
 	controller := foregroundController{backend: backend, inputGate: gate}
 
@@ -247,16 +348,48 @@ func TestReclaimFailureKeepsShellInputBlocked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("acquire: %v", err)
 	}
-	if err := lease.Release(); err == nil {
-		t.Fatal("release succeeded despite injected restore failure")
+	if err := lease.Release(); err != nil {
+		t.Fatalf("release with a dead previous group returned error: %v", err)
+	}
+	if got, want := backend.recordedRestoreTargets(), []int{41, 77}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("restore targets = %v, want dead previous group then own group %v", got, want)
+	}
+	want := []string{"capture", "set", "continue", "restore", "restore", "restoreMode"}
+	if got := backend.recordedOperations(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("operations = %v, want %v", got, want)
+	}
+	if err := gate.beginRead(); err != nil {
+		t.Fatalf("shell input blocked after successful fallback restore: %v", err)
+	}
+	gate.endRead()
+}
+
+func TestReleaseReportsErrorWhenFallbackRestoreAlsoFails(t *testing.T) {
+	backend := &fakeTerminalControlBackend{
+		previousPgid: 41,
+		shellPgid:    77,
+		restoreErrs:  []error{errors.New("restore failed"), errors.New("terminal gone")},
+	}
+	gate := &shellInputGate{}
+	controller := foregroundController{backend: backend, inputGate: gate}
+
+	lease, err := controller.acquire(&TerminalEndpoint{fd: 3}, 13)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	releaseErr := lease.Release()
+	if releaseErr == nil || !strings.Contains(releaseErr.Error(), "own process group also failed") {
+		t.Fatalf("release error = %v, want combined restore failure", releaseErr)
 	}
 	if err := lease.Release(); err == nil {
 		t.Fatal("repeated release hid the prior restoration failure")
 	}
-	if err := gate.beginRead(); err == nil {
-		gate.endRead()
-		t.Fatal("shell input was unblocked after terminal restoration failed")
+	// Both hand-back targets failing means the terminal itself is unusable, so
+	// shell input must not stay wedged behind it.
+	if err := gate.beginRead(); err != nil {
+		t.Fatalf("shell input blocked after unrecoverable terminal loss: %v", err)
 	}
+	gate.endRead()
 }
 
 func TestModeRestoreFailureKeepsShellInputBlocked(t *testing.T) {

@@ -17,6 +17,12 @@ system versions change.
 - A shell foregrounds a job with `tcsetpgrp()`, observes stopped children with
   `waitpid(..., WUNTRACED)`, reclaims the terminal, and foregrounds a stopped job
   before sending `SIGCONT`.
+- A process-group ID passed to `tcsetpgrp()` is a snapshot, not a stable handle:
+  the group can cease to exist at any time.  POSIX documents `EPERM` for a group
+  ID with no member in the caller's session; Linux's `TIOCSPGRP` returns `ESRCH`
+  for a nonexistent group (observed in production, 2026-08-13, when restoring a
+  sibling shell's exited child group).  Terminal hand-back must therefore treat
+  a dead target as an expected outcome, not an exceptional command failure.
 
 Sources:
 

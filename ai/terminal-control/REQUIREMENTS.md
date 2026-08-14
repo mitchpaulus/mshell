@@ -41,6 +41,17 @@ the target of a control event.
     partial pipeline completion does not destroy the job prematurely.
 12. Shutdown and cancellation terminate or detach jobs according to an explicit
     policy and do not leak goroutines, handles, processes, or terminal modes.
+13. The shell transfers terminal ownership only while its own process group is
+    the terminal's current foreground process group (`tcgetpgrp == getpgrp`),
+    the same gate bash and fish apply.  A shell that shares a terminal it does
+    not own — one of several parallel shells under `redo`/`make -j`, or a
+    backgrounded script — runs its children without a foreground transaction.
+14. The recorded previous foreground process group is a snapshot of a pgid, not
+    a stable handle: it may belong to a sibling's transient child and be dead by
+    hand-back time.  A failed hand-back (ESRCH) is bookkeeping, not a command
+    failure; the shell falls back to restoring its own process group, and a
+    child's successful exit status is never overridden by reclaim errors.
+    (Both added 2026-08-13 after parallel `redo` builds hit the reclaim race.)
 
 ## Progress requirements
 

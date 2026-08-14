@@ -15,3 +15,6 @@ done
 
 java -XX:+UseParallelGC -cp "$jar" tlc2.TLC -workers 1 -deadlock \
     -config POSIXNonTerminal.cfg POSIXTerminalControl.tla
+
+java -XX:+UseParallelGC -cp "$jar" tlc2.TLC -workers 1 -deadlock \
+    -config POSIXSharedTerminal.cfg POSIXTerminalControl.tla

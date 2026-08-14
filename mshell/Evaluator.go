@@ -4163,10 +4163,11 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 
 			waitErr := cmd.Wait()
 
-			// Reclaim the exact terminal and previous process group recorded by the
-			// acquisition transaction before evaluation can resume shell input.
+			// Reclaim the terminal before evaluation can resume shell input.  A
+			// reclaim failure is shell bookkeeping and must not override the
+			// child's own result: the child may have exited 0.
 			if err := foregroundLease.Release(); err != nil {
-				return state.FailWithMessage(fmt.Sprintf("Error reclaiming terminal control: %s\n", err)), 1, commandSubWriter.Bytes(), stderrBuffer.Bytes()
+				fmt.Fprintf(os.Stderr, "Warning: reclaiming terminal control: %s\n", err)
 			}
 
 			if waitErr != nil {
@@ -4521,11 +4522,13 @@ func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContex
 	if foregroundErr != nil {
 		return state.FailWithMessage(fmt.Sprintf("Error acquiring pipeline terminal control: %s\n", foregroundErr)), 1, stdoutBytes, stderrBytes
 	}
+	// Reclaim and handle-close failures are shell bookkeeping and must not
+	// override the pipeline's own result.
 	if reclaimErr != nil {
-		return state.FailWithMessage(fmt.Sprintf("Error reclaiming pipeline terminal control: %s\n", reclaimErr)), 1, stdoutBytes, stderrBytes
+		fmt.Fprintf(os.Stderr, "Warning: reclaiming pipeline terminal control: %s\n", reclaimErr)
 	}
 	if closeTerminalErr != nil {
-		return state.FailWithMessage(fmt.Sprintf("Error closing retained pipeline terminal: %s\n", closeTerminalErr)), 1, stdoutBytes, stderrBytes
+		fmt.Fprintf(os.Stderr, "Warning: closing retained pipeline terminal: %s\n", closeTerminalErr)
 	}
 
 	// Check for errors

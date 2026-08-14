@@ -270,6 +270,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Commands no longer fail with "Error reclaiming terminal control: ... no such process"
+  when several mshell processes share one terminal, as under parallel build runners
+  (`redo`, `make -j`) or when a script is backgrounded.
+  mshell now transfers terminal control only when it is itself the terminal's current
+  foreground process group (the same gate bash and fish use), and a hand-back to a
+  previous foreground group that has since exited falls back to mshell's own group
+  instead of failing the command.
+  A reclaim problem is now at most a warning on stderr; the command's own exit code always stands.
+- A fast pipeline whose processes finished before mshell could transfer terminal
+  control is no longer killed and reported as failed; the transfer is skipped,
+  since the work is already done.
+  Restoring terminal modes is now also protected from `SIGTTOU`,
+  which could previously stop the shell mid-cleanup when another process group owned the terminal.
+  A failure while closing the retained pipeline terminal handle is likewise now a warning,
+  never a failure of a pipeline whose commands succeeded.
 - Attempted to formally improve the semantics of job control and terminal control on both Linux and Windows.
   Should fix potential bugs when running TUI programs from within mshell scripts.
 - On Windows, a command name containing a forward slash (e.g. `./script.msh`)
