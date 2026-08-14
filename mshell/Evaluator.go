@@ -4522,13 +4522,13 @@ func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContex
 	if foregroundErr != nil {
 		return state.FailWithMessage(fmt.Sprintf("Error acquiring pipeline terminal control: %s\n", foregroundErr)), 1, stdoutBytes, stderrBytes
 	}
-	// A reclaim failure is shell bookkeeping and must not override the
-	// pipeline's own result.
+	// Reclaim and handle-close failures are shell bookkeeping and must not
+	// override the pipeline's own result.
 	if reclaimErr != nil {
 		fmt.Fprintf(os.Stderr, "Warning: reclaiming pipeline terminal control: %s\n", reclaimErr)
 	}
 	if closeTerminalErr != nil {
-		return state.FailWithMessage(fmt.Sprintf("Error closing retained pipeline terminal: %s\n", closeTerminalErr)), 1, stdoutBytes, stderrBytes
+		fmt.Fprintf(os.Stderr, "Warning: closing retained pipeline terminal: %s\n", closeTerminalErr)
 	}
 
 	// Check for errors

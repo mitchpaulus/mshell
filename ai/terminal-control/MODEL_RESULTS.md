@@ -7,9 +7,9 @@ Last complete run: 2026-08-13.
 | Model | Configured size | Distinct states | Result |
 | --- | ---: | ---: | --- |
 | `TerminalControl` | 2 jobs | 204 | all configured invariants hold |
-| `POSIXTerminalControl` | 2 processes; shell non-owner start allowed as below; shell stdin non-TTY, child stdin TTY | 284 | all configured invariants hold |
+| `POSIXTerminalControl` | 2 processes; shell non-owner start allowed as below; shell stdin non-TTY, child stdin TTY | 720 | all configured invariants hold |
 | `POSIXTerminalControl` | 2 processes; child stdin non-TTY | 4 | all configured invariants hold |
-| `POSIXTerminalControl` (`POSIXSharedTerminal.cfg`) | 2 processes; shell does not own the terminal; child stdin TTY | 62 | all configured invariants hold |
+| `POSIXTerminalControl` (`POSIXSharedTerminal.cfg`) | 2 processes; shell does not own the terminal; child stdin TTY | 152 | all configured invariants hold |
 | `WindowsTerminalControl` | one foreground job | 11 | all configured invariants hold |
 | `StreamLifecycle` | 2 processes, 5 stream handles, retained terminal | 36 | all configured invariants hold |
 
@@ -68,17 +68,26 @@ back to the shell's own group).  The new invariant
 `NonOwnerShellNeverForegrounds` fails within seconds if the ownership gate is
 removed from the model (verified by mutation).
 
+## Counterexample found by the errno audit (2026-08-13, F3)
+
+The audit's second revision adds early reaping: processes may exit from the
+moment they launch, and `ReapProc` may turn a zombie into a fully reaped
+process at any time (pipelines reap concurrently).  A zombie keeps its pgid —
+`tcsetpgrp` to a zombie-only group succeeds — while a fully reaped group makes
+it fail with Linux's undocumented ESRCH.  `GiveTerminal` now carries the
+kernel contract as a `~GroupDead` guard, and `GiveTerminalTargetGone` models
+the production fix: an ESRCH handoff means the job already finished, so the
+shell runs it unsupervised instead of killing and failing it.  The invariant
+`UnsupervisedJobNeverOwnsTerminal` covers both skip paths (non-owner shell,
+reaped group); mutating `GiveTerminalTargetGone` to point the terminal at the
+job violates it immediately, confirming the reaped-at-handoff states are
+reachable and the invariant is not vacuous.
+
 ## Boundaries and unfinished proof work
 
 - These are exhaustive finite-state safety checks, not unbounded TLAPS proofs.
 - The current platform modules are contract models, not yet mechanically checked
   refinement mappings to `TerminalControl`.
-- The models cannot yet express early reaping: process exit is only enabled
-  after the foreground/unsupervised split, and there is no zombie-vs-reaped
-  distinction, so "the job's group vanishes before acquisition" (finding F3
-  in ERRNO_AUDIT.md, handled in code by treating acquisition-time ESRCH as
-  already-finished) has no modeled transition.  Needs a `reaped` process
-  state and earlier `ProcExits` enabling.
 - The external-steal window is deliberately limited to the `ownedReady` and
   `foreground` phases.  A fully adversarial environment that can take the
   terminal at any time makes every reader-ownership invariant unsatisfiable;

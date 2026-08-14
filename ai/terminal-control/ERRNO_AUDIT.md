@@ -80,7 +80,7 @@ owns reaping for started commands.  Non-`ExitError` failures map to
 | Errno | Trigger | Policy | Verdict |
 | --- | --- | --- | --- |
 | dup: `EMFILE`, `ENOMEM`, `EBADF` | fd exhaustion / bad fd. | `registerTerminal` fails before the stage starts; command fails fast, nothing orphaned. | OK |
-| close: `EBADF`, `EINTR`, `EIO` | On Linux the fd is closed even when `close` reports `EINTR`/`EIO`; the code correctly does not retry. | `closeTerminal` error currently **fails the whole pipeline** even when every stage exited 0. | REC (R1) |
+| close: `EBADF`, `EINTR`, `EIO` | On Linux the fd is closed even when `close` reports `EINTR`/`EIO`; the code correctly does not retry. | `closeTerminal` error is a stderr warning; the pipeline's own result stands. | FIXED (was R1) |
 
 ### SIGTTOU/SIGTTIN protection — `IgnoreSignalsForJobControl`
 
@@ -116,17 +116,25 @@ infallible and `ESRCH`/SIGTTOU have no analogue.
   `ESRCH` during acquisition now means "already finished, run without a
   handoff" (with rollback where the handoff partially happened).
 
-Recommendations (not applied; policy calls for the maintainer):
+Resolutions (maintainer decisions 2026-08-13):
 
-- **R1:** `closeTerminal` failure fails a successful pipeline — same
-  bookkeeping-vs-result class as the reclaim fix; should probably warn only.
-- **R2:** non-`ESRCH` acquisition failures (`ENOTTY`/`EIO` after a hangup in
-  the resolve→acquire window) kill a healthy child and fail the command.
-  bash degrades to running the job without foreground ownership.  The kill is
-  only clearly right when the handoff partially happened and the child may be
-  SIGTTIN-stopped; before `tcsetpgrp`, skip-and-run would match bash.
-- **R3 (model):** the POSIX model cannot express F3 — process exit is only
-  enabled after the foreground/unsupervised split, and there is no
-  zombie-vs-reaped distinction, so "group vanishes before acquisition" has no
-  transition.  Needs a `reaped` process state and earlier `ProcExits`
-  enabling.  Recorded in MODEL_RESULTS.md boundaries.
+- **R1 (applied):** `closeTerminal` failure is now a warning; a successful
+  pipeline is never failed over it.
+- **R2 (open, trade-off analysis delivered):** non-`ESRCH` acquisition
+  failures (`ENOTTY`/`EIO` after a hangup in the resolve→acquire window,
+  `EPERM`) kill a healthy child and fail the command.  bash degrades to
+  running the job without foreground ownership — but bash can afford to: it
+  has a job table and `WUNTRACED` waits, so a child that later stops on
+  `SIGTTIN` becomes a recoverable stopped job.  mshell's synchronous
+  `cmd.Wait` would hang forever on such a child.  Degrading is only clearly
+  safe for errnos proving the terminal is dead (`ENOTTY`/`EBADF`/`EIO`, where
+  reads return `EIO` instead of raising `SIGTTIN`).  Options: keep kill
+  (never hangs, predictable), degrade only on dead-terminal errnos (bash-like
+  where provably hang-free), or full degrade (needs stopped-job recovery
+  first — the future `jobs`/`fg` work).
+- **R3 (applied, modeled):** `POSIXTerminalControl.tla` now has a `reaped`
+  state distinct from zombie `exited`, early `ProcExits`, concurrent
+  `ReapProc`, the `~GroupDead` kernel contract on `GiveTerminal`, and the
+  `GiveTerminalTargetGone` skip transition; invariant
+  `UnsupervisedJobNeverOwnsTerminal` verified non-vacuous by mutation.  See
+  MODEL_RESULTS.md.

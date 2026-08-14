@@ -26,6 +26,15 @@ EXTENDS FiniteSets, TLC
 (* ownership invariant unsatisfiable; in reality the kernel answers that   *)
 (* case with SIGTTIN/SIGTTOU, which this model does not simulate for the   *)
 (* shell's own reads.                                                      *)
+(*                                                                         *)
+(* Revision 2 (errno audit finding F3): processes may exit as soon as they *)
+(* are launched, and pipelines reap concurrently, so the job's own group   *)
+(* can be fully reaped before the handoff.  "exited" is a zombie — it      *)
+(* still holds its pgid, so tcsetpgrp to the group succeeds — while        *)
+(* "reaped" does not, and tcsetpgrp to a fully reaped group fails with     *)
+(* the (undocumented on Linux) ESRCH.  The production fix models as        *)
+(* GiveTerminalTargetGone: an ESRCH handoff means the job already          *)
+(* finished, so the shell runs it unsupervised instead of failing it.      *)
 (***************************************************************************)
 
 CONSTANTS Procs, ShellPgrp, JobPgrp, OtherPgrp,
@@ -44,9 +53,14 @@ VARIABLES phase, shellReader, ttyForeground, procState, grouped,
 vars == <<phase, shellReader, ttyForeground, procState, grouped,
           terminalMode, failure, otherAlive, savedPrev>>
 
-ProcStates == {"idle", "running", "stopped", "exited", "startFailed"}
+ProcStates == {"idle", "running", "stopped", "exited", "reaped", "startFailed"}
 
 NoSave == "none"
+
+\* "exited" is a zombie: it still occupies its pgid, so the group remains a
+\* valid tcsetpgrp/kill target.  Only when every started member is reaped does
+\* the group cease to exist (kernel returns ESRCH).
+GroupDead == \A p \in Procs: procState[p] \in {"reaped", "startFailed"}
 
 Init ==
     /\ phase = "idle"
@@ -102,7 +116,9 @@ StartProcFails(p) ==
 LaunchComplete ==
     /\ phase = "launching"
     /\ \A p \in Procs: procState[p] # "idle"
-    /\ \E p \in Procs: procState[p] = "running"
+    \* A member that already exited (or was even reaped) still counts as
+    \* launched; the barrier counts launches, not survivors.
+    /\ \E p \in Procs: procState[p] \in {"running", "exited", "reaped"}
     /\ phase' = "groupReady"
     /\ UNCHANGED <<shellReader, ttyForeground, procState, grouped,
                     terminalMode, failure, otherAlive, savedPrev>>
@@ -155,15 +171,30 @@ OtherGroupExits ==
 
 \* tcsetpgrp succeeds even if a sibling stole the terminal inside the window;
 \* the snapshot of the previous owner is whatever tcgetpgrp returned then.
+\* The ~GroupDead guard is the kernel contract, not a shell decision: a group
+\* kept alive by zombies is a valid target, a fully reaped one is ESRCH.
 GiveTerminal ==
     /\ phase = "ownedReady"
     /\ shellReader = "paused"
+    /\ ~GroupDead
     /\ \A p \in Procs: procState[p] = "running" => grouped[p]
     /\ savedPrev' = ttyForeground
     /\ ttyForeground' = JobPgrp
     /\ terminalMode' = "jobMode"
     /\ phase' = "foreground"
     /\ UNCHANGED <<shellReader, procState, grouped, failure, otherAlive>>
+
+\* Errno-audit fix F3: the handoff tcsetpgrp fails with ESRCH because the
+\* job's own group was fully reaped (fast pipeline, concurrent reaping).  The
+\* job already finished; the shell runs it unsupervised instead of killing a
+\* job whose children exited 0.  The terminal was not touched.
+GiveTerminalTargetGone ==
+    /\ phase = "ownedReady"
+    /\ shellReader = "paused"
+    /\ GroupDead
+    /\ phase' = "unsupervised"
+    /\ UNCHANGED <<shellReader, ttyForeground, procState, grouped,
+                    terminalMode, failure, otherAlive, savedPrev>>
 
 TcsetpgrpFails ==
     /\ phase = "ownedReady"
@@ -172,10 +203,23 @@ TcsetpgrpFails ==
     /\ UNCHANGED <<shellReader, ttyForeground, procState, grouped,
                     terminalMode, otherAlive, savedPrev>>
 
+\* A process may exit the instant it is launched, well before the shell
+\* checks ownership or hands the terminal over (errno-audit finding F3).
 ProcExits(p) ==
-    /\ phase \in {"foreground", "unsupervised"}
+    /\ phase \in {"launching", "groupReady", "ownedReady",
+                   "foreground", "unsupervised"}
     /\ procState[p] = "running"
     /\ procState' = [procState EXCEPT ![p] = "exited"]
+    /\ UNCHANGED <<phase, shellReader, ttyForeground, grouped,
+                    terminalMode, failure, otherAlive, savedPrev>>
+
+\* Pipelines reap concurrently (per-stage goroutines), so a zombie can turn
+\* into a fully reaped process at any point, including mid-transaction.  The
+\* single-command path reaps only after release; the model checks the worst
+\* case.
+ReapProc(p) ==
+    /\ procState[p] = "exited"
+    /\ procState' = [procState EXCEPT ![p] = "reaped"]
     /\ UNCHANGED <<phase, shellReader, ttyForeground, grouped,
                     terminalMode, failure, otherAlive, savedPrev>>
 
@@ -190,7 +234,7 @@ JobStops ==
 
 JobExited ==
     /\ phase = "foreground"
-    /\ \A p \in Procs: procState[p] \in {"exited", "startFailed"}
+    /\ \A p \in Procs: procState[p] \in {"exited", "reaped", "startFailed"}
     /\ phase' = "reclaiming"
     /\ UNCHANGED <<shellReader, ttyForeground, procState, grouped,
                     terminalMode, failure, otherAlive, savedPrev>>
@@ -200,7 +244,7 @@ JobExited ==
 \* stopped by SIGTTIN, which this model leaves out of scope.
 UnsupervisedComplete ==
     /\ phase = "unsupervised"
-    /\ \A p \in Procs: procState[p] \in {"exited", "startFailed"}
+    /\ \A p \in Procs: procState[p] \in {"exited", "reaped", "startFailed"}
     /\ phase' = "resuming"
     /\ UNCHANGED <<shellReader, ttyForeground, procState, grouped,
                     terminalMode, failure, otherAlive, savedPrev>>
@@ -265,11 +309,12 @@ ResumeShell ==
 
 Next ==
     ResolveTerminalEndpoint \/ ResolveNonTerminalEndpoint \/ PauseShell \/
-    (\E p \in Procs: StartProc(p) \/ StartProcFails(p) \/ ProcExits(p)) \/
+    (\E p \in Procs: StartProc(p) \/ StartProcFails(p) \/ ProcExits(p)
+                     \/ ReapProc(p)) \/
     LaunchComplete \/ AllStartFailed \/
     CheckOwnershipPasses \/ CheckOwnershipFails \/
     ExternalTakesTerminal \/ OtherGroupExits \/
-    GiveTerminal \/ TcsetpgrpFails \/
+    GiveTerminal \/ GiveTerminalTargetGone \/ TcsetpgrpFails \/
     JobStops \/ JobExited \/ UnsupervisedComplete \/
     ReclaimNoHandoff \/ ReclaimRestoresPrev \/ ReclaimHandBackFails \/
     ReclaimFallbackToOwnGroup \/ ResumeShell
@@ -320,5 +365,12 @@ NonOwnerShellNeverForegrounds ==
         /\ ttyForeground # JobPgrp
         /\ terminalMode # "jobMode"
         /\ savedPrev = NoSave
+
+\* Both skip paths (non-owner shell, ESRCH on a reaped group) run the job
+\* without ever pointing the terminal at it or applying job terminal modes.
+UnsupervisedJobNeverOwnsTerminal ==
+    phase = "unsupervised" =>
+        /\ ttyForeground # JobPgrp
+        /\ terminalMode # "jobMode"
 
 =============================================================================

@@ -42,9 +42,12 @@ explicit policy or a finding.  Two further gaps found and fixed:
   failed a job whose children exited 0.  Acquisition-time ESRCH now means
   "already finished": roll back any partial handoff and run without a lease.
 
-Open recommendations R1 (closeTerminal failure fails a successful pipeline)
-and R2 (non-ESRCH acquisition failure kills a healthy child where bash would
-degrade) are recorded in the audit for a maintainer decision.
+R1 has since been applied (closeTerminal failure is a warning, never a
+pipeline failure) and R3 modeled (reaped-vs-zombie states in
+POSIXTerminalControl.tla).  R2 remains open pending a maintainer decision;
+the trade-off is recorded in ERRNO_AUDIT.md — degrading like bash is only
+hang-safe once stopped children are recoverable (`jobs`/`fg`) or when the
+errno proves the terminal is dead.
 
 ### 2026-08-09 milestone
 
