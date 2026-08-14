@@ -1,8 +1,35 @@
 # Implementation status
 
-Last updated: 2026-08-09.
+Last updated: 2026-08-13.
 
 ## Implemented
+
+### 2026-08-13 parallel-shell hardening
+
+Parallel `redo` builds exposed a cross-process race the 2026-08-09 milestone
+missed: with several mshells sharing one PTY, each shell's recorded "previous
+foreground process group" could be a sibling's transient child group, dead by
+release time, so the restoring `tcsetpgrp` failed with ESRCH and the command
+was failed even though its child exited 0.  Changes:
+
+- Acquisition is gated on `tcgetpgrp(tty) == getpgrp()` (the bash/fish gate).
+  A shell that is not the terminal's current foreground owner skips the
+  foreground transaction entirely; its child runs as an ordinary background
+  process group.  On Windows the gate is always open because the foreground
+  state is an in-process Ctrl-C marker, not shared kernel ownership.
+- A failed hand-back to the recorded previous group falls back to restoring
+  the shell's own process group (the group bash and fish restore).  Only if
+  both targets fail does `Release` report an error.
+- Reclaim errors are warnings on stderr, never command failures; the child's
+  exit status always stands.  This supersedes the earlier "restore the exact
+  previous foreground marker or fail" behavior.
+- Policy change: after a double restore failure the shell input gate is now
+  released rather than held.  Both targets failing means the terminal itself
+  is unusable (for example a closed PTY); holding the gate wedged every later
+  command behind a terminal that no longer exists.  Mode-restore failure with
+  a live terminal still blocks shell input as before.
+
+### 2026-08-09 milestone
 
 - Resolved stdin/stdout/stderr metadata remains attached to the `exec.Cmd`
   streams after redirects and merges are applied.
@@ -37,6 +64,20 @@ Last updated: 2026-08-09.
   mshell an unnecessary terminal proxy.  ConPTY remains a possible future
   isolation mechanism for interactive background jobs, not the foreground
   handoff mechanism.
+
+Verification added with the hardening:
+
+- A PTY integration test starts six shells sharing one PTY, each running a
+  staggered short external command, and requires all six to succeed.  Before
+  the fix it reproduced the production failure exactly (three to four of six
+  failing with "no such process" on reclaim).
+- Controller unit tests cover the skipped acquisition for a non-owner shell,
+  the fallback restore order (dead previous group, then own group), and the
+  combined error when both hand-back targets fail.
+- `POSIXTerminalControl.tla` now models the foreign owner, the steal window,
+  the dying previous-owner group, the ownership gate, and the fallback; all
+  six bounded TLC configurations pass, including the new shared-terminal
+  profile.  See MODEL_RESULTS.md.
 
 ## Verification currently passing
 

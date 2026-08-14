@@ -292,6 +292,23 @@ func CanControlTerminal(fd int) bool {
 	return err == nil
 }
 
+// ShellOwnsTerminal reports whether this process's group is the terminal's
+// current foreground process group.  This is the standard bash/fish gate: a
+// shell that is not the foreground owner (a script under redo/make -j, a
+// backgrounded script) must not hand the terminal to its children, because
+// grabbing a terminal owned by someone else is exactly how parallel shells
+// clobber each other's foreground state.
+func ShellOwnsTerminal(ttyFd int) bool {
+	pgid, err := unix.IoctlGetInt(ttyFd, unix.TIOCGPGRP)
+	return err == nil && pgid == syscall.Getpgrp()
+}
+
+// ShellProcessGroup returns this shell's own process group, the fallback
+// hand-back target when the recorded previous foreground group has exited.
+func ShellProcessGroup() int {
+	return syscall.Getpgrp()
+}
+
 func DuplicateTerminalHandle(fd int) (int, error) {
 	return unix.Dup(fd)
 }

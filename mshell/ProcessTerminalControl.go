@@ -128,6 +128,8 @@ type terminalControlBackend interface {
 	setForeground(terminalFd, pgid int) (int, error)
 	restoreForeground(terminalFd, pgid int) error
 	continueProcessGroup(pgid int) error
+	shellOwnsTerminal(terminalFd int) bool
+	shellProcessGroup() int
 }
 
 type platformTerminalControlBackend struct{}
@@ -152,6 +154,14 @@ func (platformTerminalControlBackend) restoreForeground(terminalFd, pgid int) er
 
 func (platformTerminalControlBackend) continueProcessGroup(pgid int) error {
 	return ContinueProcessGroup(pgid)
+}
+
+func (platformTerminalControlBackend) shellOwnsTerminal(terminalFd int) bool {
+	return ShellOwnsTerminal(terminalFd)
+}
+
+func (platformTerminalControlBackend) shellProcessGroup() int {
+	return ShellProcessGroup()
 }
 
 // shellInputGate makes the no-competing-reads invariant executable.  Today the
@@ -235,6 +245,17 @@ func (controller *foregroundController) acquire(endpoint *TerminalEndpoint, pgid
 	}
 
 	controller.mu.Lock()
+	// Only run the foreground transaction when this shell currently owns the
+	// terminal, the same gate bash and fish apply.  A shell that is not the
+	// foreground owner (one of several parallel shells sharing a terminal under
+	// redo or make -j, or a backgrounded script) taking the terminal is exactly
+	// how the cross-process reclaim race starts.  Its child simply runs without
+	// a handoff; a child that reads the terminal is stopped by SIGTTIN, which is
+	// standard background-job behavior.
+	if !controller.backend.shellOwnsTerminal(endpoint.fd) {
+		controller.mu.Unlock()
+		return nil, nil
+	}
 	if err := controller.inputGate.beginForeground(); err != nil {
 		controller.mu.Unlock()
 		return nil, err
@@ -290,17 +311,37 @@ func (lease *ForegroundLease) Release() error {
 	}
 	lease.released = true
 
-	err := lease.controller.backend.restoreForeground(lease.terminal.fd, lease.previousPgid)
+	backend := lease.controller.backend
+	err := backend.restoreForeground(lease.terminal.fd, lease.previousPgid)
+	if err != nil {
+		// The recorded previous owner is a snapshot, not a stable handle: under
+		// a parallel runner it can be a sibling shell's transient child group
+		// that has already exited, so the hand-back fails with ESRCH.  That is
+		// bookkeeping, not a command failure.  Hand the terminal to this shell's
+		// own group instead, which is the group bash and fish restore.
+		if fallbackErr := backend.restoreForeground(lease.terminal.fd, backend.shellProcessGroup()); fallbackErr == nil {
+			err = nil
+		} else {
+			err = fmt.Errorf("restore terminal fd %d to process group %d: %w; restore to own process group also failed: %v", lease.terminal.fd, lease.previousPgid, err, fallbackErr)
+		}
+	}
 	var modeRestoreErr error
 	if err == nil {
 		modeRestoreErr = lease.modeSnapshot.Restore()
-	}
-	if err == nil && modeRestoreErr == nil {
+		if modeRestoreErr == nil {
+			lease.controller.inputGate.endForeground()
+		}
+	} else {
+		// Both hand-back targets failed, so the terminal itself is unusable
+		// (for example a closed PTY).  Keeping shell input blocked would wedge
+		// every later command behind a gate protecting a terminal that no
+		// longer exists; later commands re-probe the terminal themselves and
+		// skip control when it is gone.
 		lease.controller.inputGate.endForeground()
 	}
 	lease.controller.mu.Unlock()
 	if err != nil {
-		lease.releaseErr = fmt.Errorf("restore terminal fd %d to process group %d: %w", lease.terminal.fd, lease.previousPgid, err)
+		lease.releaseErr = err
 	} else if modeRestoreErr != nil {
 		lease.releaseErr = fmt.Errorf("restore terminal fd %d mode: %w", lease.terminal.fd, modeRestoreErr)
 	}

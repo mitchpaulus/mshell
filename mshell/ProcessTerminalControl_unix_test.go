@@ -146,6 +146,93 @@ func runPipedStdinPTYHelper(t *testing.T, helperName, terminalInput string, expe
 	}
 }
 
+const parallelReclaimSleepEnv = "MSHELL_PARALLEL_RECLAIM_SLEEP"
+
+// TestParallelTerminalReclaimHelper runs only inside the shared PTY session
+// created by TestParallelShellsSharingPTYSucceed.  Each helper is one msh-like
+// process running a single external command whose stdio is the shared terminal.
+func TestParallelTerminalReclaimHelper(t *testing.T) {
+	if os.Getenv(terminalHandoffHelperEnv) != "1" {
+		t.Skip("parallel terminal reclaim helper")
+	}
+	duration := os.Getenv(parallelReclaimSleepEnv)
+	if duration == "" {
+		duration = "0.2"
+	}
+
+	list := NewList(2)
+	list.Items[0] = MShellString{Content: "sleep"}
+	list.Items[1] = MShellString{Content: duration}
+
+	pbm := NewPathBinManager()
+	state := &EvalState{}
+	context := ExecuteContext{
+		StandardOutput: os.Stdout,
+		StandardError:  os.Stderr,
+		Pbm:            pbm,
+	}
+
+	result, exitCode, _, _ := RunProcess(*list, context, state)
+	if !result.Success || exitCode != 0 {
+		t.Fatalf("RunProcess result.Success = %v, exitCode = %d", result.Success, exitCode)
+	}
+	fmt.Fprintln(os.Stdout, "PARALLEL_OK")
+}
+
+// TestParallelShellsSharingPTYSucceed reproduces the race hit under parallel
+// runners such as redo or make -j: several shells share one terminal, each
+// wraps its child in a foreground transaction, and the "previous foreground
+// process group" each records is a sibling's transient child group.  By release
+// time that group has exited, so the restoring tcsetpgrp fails with ESRCH.
+// Every helper's child exits 0, so every helper must succeed.
+func TestParallelShellsSharingPTYSucceed(t *testing.T) {
+	if testing.Short() {
+		t.Skip("PTY integration test")
+	}
+
+	// The staggered durations make earlier siblings' child groups reliably dead
+	// by the time later helpers hand the terminal back to them.
+	script := `for d in 0.15 0.3 0.45 0.6 0.75 0.9; do ` +
+		parallelReclaimSleepEnv + `="$d" "$1" -test.run '^TestParallelTerminalReclaimHelper$' & ` +
+		`done; wait; printf 'WRAPPER_DONE\n'`
+	command := exec.Command("sh", "-c", script, "sh", os.Args[0])
+	command.Env = append(os.Environ(), terminalHandoffHelperEnv+"=1")
+	ptmx, err := pty.Start(command)
+	if err != nil {
+		t.Fatalf("start parallel helpers in PTY: %v", err)
+	}
+
+	readDone := make(chan []byte, 1)
+	go func() {
+		output, _ := io.ReadAll(ptmx)
+		readDone <- output
+	}()
+
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- command.Wait()
+	}()
+
+	select {
+	case err := <-waitDone:
+		ptmx.Close()
+		output := <-readDone
+		if err != nil {
+			t.Fatalf("PTY wrapper failed: %v\noutput:\n%s", err, output)
+		}
+		if !bytes.Contains(output, []byte("WRAPPER_DONE")) {
+			t.Fatalf("PTY output does not contain WRAPPER_DONE; output:\n%s", output)
+		}
+		if got := bytes.Count(output, []byte("PARALLEL_OK")); got != 6 {
+			t.Fatalf("PARALLEL_OK count = %d, want 6; output:\n%s", got, output)
+		}
+	case <-time.After(30 * time.Second):
+		terminatePTYProcess(t, command, ptmx)
+		output := <-readDone
+		t.Fatalf("parallel reclaim test hung; killed helper process group\noutput:\n%s", output)
+	}
+}
+
 func terminatePTYProcess(t *testing.T, command *exec.Cmd, ptmx *os.File) {
 	t.Helper()
 	if command.Process != nil {
