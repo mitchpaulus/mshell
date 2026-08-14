@@ -29,6 +29,23 @@ was failed even though its child exited 0.  Changes:
   command behind a terminal that no longer exists.  Mode-restore failure with
   a live terminal still blocks shell input as before.
 
+### 2026-08-13 errno audit
+
+ERRNO_AUDIT.md traces every errno of every syscall the controller makes to an
+explicit policy or a finding.  Two further gaps found and fixed:
+
+- `term.Restore` (`tcsetattr`) ran without SIGTTOU protection and could stop
+  the shell when the terminal had been handed back to a live foreign group;
+  it is now wrapped in `IgnoreSignalsForJobControl` like the tcsetpgrp calls.
+- A fast pipeline whose stages were reaped concurrently could have its whole
+  process group vanish before acquisition; the resulting ESRCH killed and
+  failed a job whose children exited 0.  Acquisition-time ESRCH now means
+  "already finished": roll back any partial handoff and run without a lease.
+
+Open recommendations R1 (closeTerminal failure fails a successful pipeline)
+and R2 (non-ESRCH acquisition failure kills a healthy child where bash would
+degrade) are recorded in the audit for a maintainer decision.
+
 ### 2026-08-09 milestone
 
 - Resolved stdin/stdout/stderr metadata remains attached to the `exec.Cmd`

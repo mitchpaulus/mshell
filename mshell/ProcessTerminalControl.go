@@ -1,10 +1,12 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"sync"
+	"syscall"
 )
 
 // TerminalEndpoint is a resolved terminal used by a child process.  The file
@@ -270,6 +272,13 @@ func (controller *foregroundController) acquire(endpoint *TerminalEndpoint, pgid
 	if err != nil {
 		controller.inputGate.endForeground()
 		controller.mu.Unlock()
+		// ESRCH: the child group is already fully reaped (a fast pipeline's
+		// stages are waited concurrently, so this races with acquisition).
+		// There is nothing left to foreground and the terminal was not touched;
+		// run without a handoff instead of killing a job that already finished.
+		if errors.Is(err, syscall.ESRCH) {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("give terminal fd %d to process group %d: %w", endpoint.fd, pgid, err)
 	}
 
@@ -290,6 +299,12 @@ func (controller *foregroundController) acquire(endpoint *TerminalEndpoint, pgid
 		}
 		if modeRestoreErr != nil {
 			return nil, fmt.Errorf("continue process group %d: %w; terminal-mode rollback also failed: %v", pgid, err, modeRestoreErr)
+		}
+		// ESRCH: the group vanished between tcsetpgrp and SIGCONT because its
+		// members were reaped concurrently.  The rollback above already returned
+		// the terminal; a job that has already finished needs no foregrounding.
+		if errors.Is(err, syscall.ESRCH) {
+			return nil, nil
 		}
 		return nil, fmt.Errorf("continue process group %d: %w", pgid, err)
 	}

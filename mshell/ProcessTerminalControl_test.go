@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -279,6 +280,55 @@ func TestAcquireSkipsWhenShellDoesNotOwnTerminal(t *testing.T) {
 		t.Fatalf("backend operations = %v, want none for a non-owner shell", got)
 	}
 	// The skipped transaction must leave shell input usable.
+	if err := gate.beginRead(); err != nil {
+		t.Fatalf("shell input blocked after skipped acquisition: %v", err)
+	}
+	gate.endRead()
+}
+
+func TestAcquireSkipsWhenChildGroupReapedBeforeForeground(t *testing.T) {
+	backend := &fakeTerminalControlBackend{setErr: syscall.ESRCH}
+	gate := &shellInputGate{}
+	controller := foregroundController{backend: backend, inputGate: gate}
+
+	lease, err := controller.acquire(&TerminalEndpoint{fd: 3}, 13)
+	if err != nil {
+		t.Fatalf("acquire with a reaped child group returned error: %v", err)
+	}
+	if lease != nil {
+		t.Fatal("acquire with a reaped child group returned a lease")
+	}
+	want := []string{"capture", "set"}
+	if got := backend.recordedOperations(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("operations = %v, want %v", got, want)
+	}
+	if err := gate.beginRead(); err != nil {
+		t.Fatalf("shell input blocked after skipped acquisition: %v", err)
+	}
+	gate.endRead()
+}
+
+func TestAcquireSkipsWhenChildGroupReapedBeforeContinue(t *testing.T) {
+	backend := &fakeTerminalControlBackend{previousPgid: 7, continueErr: syscall.ESRCH}
+	gate := &shellInputGate{}
+	controller := foregroundController{backend: backend, inputGate: gate}
+
+	lease, err := controller.acquire(&TerminalEndpoint{fd: 3}, 13)
+	if err != nil {
+		t.Fatalf("acquire with group reaped before SIGCONT returned error: %v", err)
+	}
+	if lease != nil {
+		t.Fatal("acquire with group reaped before SIGCONT returned a lease")
+	}
+	// The terminal was handed over before SIGCONT failed, so the rollback
+	// sequence must still run.
+	want := []string{"capture", "set", "continue", "restore", "restoreMode"}
+	if got := backend.recordedOperations(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("operations = %v, want rollback sequence %v", got, want)
+	}
+	if got, want := backend.recordedRestoreTargets(), []int{7}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("restore targets = %v, want previous group %v", got, want)
+	}
 	if err := gate.beginRead(); err != nil {
 		t.Fatalf("shell input blocked after skipped acquisition: %v", err)
 	}

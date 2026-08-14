@@ -44,6 +44,8 @@ different location.
 
 Production conformance progress is tracked in
 [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md).
+Every errno of every controller syscall is traced to a policy in
+[ERRNO_AUDIT.md](ERRNO_AUDIT.md); re-run that audit when a syscall is added.
 The chosen Windows foreground architecture and the rejected nested-ConPTY
 alternative are recorded in
 [WINDOWS_DIRECT_HANDOFF.md](WINDOWS_DIRECT_HANDOFF.md).

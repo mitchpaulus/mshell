@@ -73,6 +73,12 @@ removed from the model (verified by mutation).
 - These are exhaustive finite-state safety checks, not unbounded TLAPS proofs.
 - The current platform modules are contract models, not yet mechanically checked
   refinement mappings to `TerminalControl`.
+- The models cannot yet express early reaping: process exit is only enabled
+  after the foreground/unsupervised split, and there is no zombie-vs-reaped
+  distinction, so "the job's group vanishes before acquisition" (finding F3
+  in ERRNO_AUDIT.md, handled in code by treating acquisition-time ESRCH as
+  already-finished) has no modeled transition.  Needs a `reaped` process
+  state and earlier `ProcExits` enabling.
 - The external-steal window is deliberately limited to the `ownedReady` and
   `foreground` phases.  A fully adversarial environment that can take the
   terminal at any time makes every reader-ownership invariant unsatisfiable;

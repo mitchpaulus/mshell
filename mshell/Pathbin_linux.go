@@ -322,6 +322,11 @@ func CaptureTerminalMode(fd int) (TerminalModeSnapshot, error) {
 }
 
 func (snapshot *posixTerminalModeSnapshot) Restore() error {
+	// tcsetattr from a background process group raises SIGTTOU (default action:
+	// stop).  At restore time the terminal may already belong to another group,
+	// so the same protection used around tcsetpgrp applies here.
+	restoreSignals := IgnoreSignalsForJobControl()
+	defer restoreSignals()
 	return term.Restore(snapshot.fd, snapshot.state)
 }
 
