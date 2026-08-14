@@ -430,6 +430,12 @@ msh completions nushell | save --force $"($nu.default-config-dir)/completions/ms
 use $"($nu.default-config-dir)/completions/msh.nu" *
 ```
 
+### Language Server
+
+The bundled language server provides a code action named `Quote all literals in list` when the cursor is inside a parsed list value containing bare literal tokens.
+The action single-quotes every bare literal in the innermost containing list, including literals in nested child lists.
+Existing strings, numbers, variables, paths, and operators are unchanged.
+
 ### Binary map overrides
 
 mshell supports a simple bin map file that overrides PATH lookups. The file lives alongside the history files (e.g. `$XDG_DATA_HOME/msh/msh_bins.txt` or `~/.local/share/msh/msh_bins.txt` on Linux/macOS, or `%LOCALAPPDATA%\msh\msh_bins.txt` on Windows).
