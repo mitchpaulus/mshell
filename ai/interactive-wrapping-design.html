@@ -205,7 +205,7 @@ nav a:hover{color:var(--accent-ink)}
   <div class="meta">
     <span class="chip">draft for discussion</span>
     <span class="chip">2026-08-14</span>
-    <span class="chip">ai/interactive-wrapping-design.md</span>
+    <span class="chip">ai/interactive-wrapping-design.html</span>
     <span class="chip">no code changed</span>
   </div>
   <nav>
@@ -277,7 +277,7 @@ nav a:hover{color:var(--accent-ink)}
       <ul style="font-size:.9rem; padding-left:1.1rem; margin:.4rem 0">
         <li>The terminal's width and height. The kernel reports it; poll it or catch <i class="t" data-t="sigwinch">SIGWINCH</i>.</li>
         <li>Where the cursor is <em>relative to where we started</em> — if we account for every byte we write. This is dead reckoning. All three shells run on it.</li>
-        <li>ASCII is one column per character. Everywhere, always.</li>
+        <li><em>Printable</em> ASCII is one column per character. Everywhere, always. (TAB is the reason for the qualifier — §05.)</li>
         <li>Once a <b>complete</b> <i class="t" data-t="grapheme">grapheme cluster</i> is printed, the cursor delta is fixed (given the right width model for this terminal).</li>
         <li><i class="t" data-t="cr">CR</i> always returns to column 1 and always clears the <i class="t" data-t="pendingwrap">pending-wrap</i> flag.</li>
         <li>Printing past the last column always lands at column 1 of the next row — eventually.</li>
@@ -502,17 +502,54 @@ nav a:hover{color:var(--accent-ink)}
 <span class="cm">// pure; `cluster` is one extended grapheme cluster (uniseg segmentation)</span>
 <span class="kw">func</span> clusterWidth(cluster, p) int:
     <span class="kw">if</span> allPrintableASCII(cluster): <span class="kw">return</span> len(cluster)    <span class="cm">// fast path, no tables</span>
-    <span class="kw">if</span> isControl(cluster):         <span class="kw">return</span> ctrlWidth       <span class="cm">// ^X=2 or ␉=1 (open Q4)</span>
+    <span class="kw">if</span> isTab(cluster):             <span class="kw">return</span> 1               <span class="cm">// stand-in ▸ U+25B8 — a raw TAB never reaches layout (below)</span>
+    <span class="kw">if</span> isControl(cluster):         <span class="kw">return</span> 2               <span class="cm">// stand-in ^X — kept total (Q4: resolved)</span>
     cps = codepoints(cluster)
     <span class="kw">if</span> p.zwjJoins:                         <span class="cm">// ── cluster school ──</span>
         <span class="kw">if</span> contains(cps, VS15): <span class="kw">return</span> 1
-        <span class="kw">if</span> contains(cps, VS16): <span class="kw">return</span> 2
+        <span class="kw">if</span> contains(cps, VS16): <span class="kw">return</span> p.vs16Wide ? 2 : baseWidth(cps)   <span class="cm">// vs16Wide is independent of zwjJoins</span>
         <span class="kw">if</span> flagPair(cps):       <span class="kw">return</span> 2
         w = eawWidth(firstNonZeroWidth(cps), p.ambW)   <span class="cm">// uniseg table: 1 or 2</span>
         <span class="kw">return</span> min(w, 2)                               <span class="cm">// clusters cap at 2 cells</span>
     <span class="kw">else</span>:                                  <span class="cm">// ── legacy wcwidth school ──</span>
         <span class="kw">return</span> sum over cps: perCodepointWidth(cp, p.ambW)
         <span class="cm">// ZWJ, VS, combining = 0 · EAW Wide/Fullwidth = 2 · ambiguous = p.ambW · else 1</span></pre>
+
+  <h3>TAB: the character with no width</h3>
+  <p>The 2-cell cluster cap invites an objection: what about a literal TAB — doesn't the terminal
+  advance it several columns? It does, and that is exactly why TAB can never be treated as a
+  character with a width. A raw TAB is not a glyph; the terminal performs <b>cursor motion</b> to
+  the next <i class="t" data-t="hts">tab stop</i>. Its "width" is
+  <code>nextTabStop(col) − col</code> — one to eight columns depending on where the cursor already
+  is (stops default to every 8; the "4 spaces" intuition is an editor convention, not the
+  terminal's). Three properties make it poison for a repainting editor:</p>
+  <ul style="font-size:.92rem; padding-left:1.2rem">
+    <li><b>Column-dependent.</b> The same byte has a different width at every position — a pure
+    <code>clusterWidth(cluster)</code> has no column argument and cannot answer it.</li>
+    <li><b>Mutable terminal state.</b> Programs move tab stops with
+    <i class="t" data-t="hts">HTS</i>/<code>TBC</code>, and <code>tabs(1)</code> exists to do
+    exactly that. Dead reckoning over state another program can silently change is how vertical
+    drift starts.</li>
+    <li><b>Non-destructive motion.</b> TAB skips over cells <em>without writing them</em>, so
+    repainting a row "through" a tab leaves the previous frame's glyphs showing underneath — the
+    one way a repaint can fail to erase the past.</li>
+  </ul>
+  <p>The incumbents all refuse to send it: readline expands tabs to spaces at display time; fish
+  and zsh substitute a fixed-width printable stand-in. msh goes one step further and makes it an
+  <b>input invariant: raw control bytes never enter the edit buffer</b>. Keystrokes already arrive
+  as editing commands (today's lexer consumes control bytes without inserting). That leaves two
+  entry points to sanitize: <i class="t" data-t="bracketedpaste">bracketed paste</i> — the big
+  one, since text copied from a Makefile or log is full of tabs — and history-file load. Paste
+  maps TAB → one space, normalizes <code>\r\n</code> and <code>\r</code> to <code>\n</code> and
+  <em>keeps</em> the newline as a literal buffer character (multiline editing, Q5 — a pasted
+  script becomes one editable buffer, never a burst of self-executing Enters), and strips the
+  rest of C0. Mapping tab, not dropping it: deleting the tab in <code>foo⇥bar</code> would join
+  two words and change what the command <em>means</em>.</p>
+  <p class="tcap">When a control byte must be <em>shown</em> anyway — a future quoted-insert
+  binding, a debug view — the stand-ins are fixed: TAB renders as <code>▸</code> (U+25B8,
+  1 cell), every other control as caret notation <code>^X</code> (2 cells). The width function
+  stays <b>total</b> over these stand-ins even though sanitization drops the raw bytes early:
+  the policy may change, and the arithmetic must not care. This resolves open question 4.</p>
 
   <h3>How msh picks the parameters at startup</h3>
   <p><b>Measurement is the primary source of truth</b> — it asks the only authority that knows.
@@ -697,12 +734,13 @@ nav a:hover{color:var(--accent-ink)}
 <section id="questions">
   <div class="eyebrow">09</div>
   <h2>Open questions</h2>
-  <div class="qcard"><b>1 · Calibration probe in v1?</b> Measurement is the design's primary truth source (§05), but the editor works before it exists: env vars + the mode 2027 query + the legacy fallback cover the interim (ghostty and Windows Terminal declare 2027; alacritty correctly gets legacy by default). <div class="lean">lean: ship those first; add measurement + cache + msh recalibrate once the editor is correct</div></div>
-  <div class="qcard"><b>2 · The <code>⏎</code> partial-line mark:</b> fish's zero-query forced-wrap trick vs deriving it from the CPR we already make each prompt. <div class="lean">lean: derive from the existing CPR — zero extra cost, less trickery</div></div>
-  <div class="qcard"><b>3 · ISIG off (in-band ^C, status quo) or on (fish/readline/zsh convention)?</b> <div class="lean">lean: keep off — working code, cleaner editor semantics</div></div>
-  <div class="qcard"><b>4 · Control chars in the buffer:</b> <code>^X</code> (readline/zsh, 2 cells) or Control Pictures <code>␉</code> (fish, 1 cell)? Baked into layout tests, so pick once. <div class="lean">cosmetic — your call</div></div>
-  <div class="qcard"><b>5 · Multiline editing</b> (embedded <code>\n</code>): the layout model supports it by design. Wire a key in v1 (Alt-Enter?) or defer the UX? <div class="lean">model supports either</div></div>
-  <div class="qcard"><b>6 · tmux:</b> multiplexers answer queries from their own model. Proposal treats tmux as its own terminal identity (legacy widths). Care, or out of scope? <div class="lean">lean: treat as its own identity</div></div>
+  <p class="sub">All six resolved 2026-08-15 — each card records its decision.</p>
+  <div class="qcard"><b>1 · Calibration probe in v1 — resolved: yes.</b> The daily-driver terminal is konsole — the exact residue class the interim ladder mispredicts (clusters, but stays silent on mode 2027), so without measurement, dogfooding happens on wrong emoji widths. v1 ships measurement + cache + <code>msh recalibrate</code>. Build order within v1 still holds: editor first on the env-var/2027/legacy ladder, calibration as the last phase — a probe should be debugged against a renderer that is already trusted, not alongside one that isn't. <div class="lean">resolved 2026-08-15 · measurement in v1 · built last, after the editor is correct</div></div>
+  <div class="qcard"><b>2 · The <code>⏎</code> partial-line mark — resolved.</b> Derive it from the per-prompt CPR: the reply we already make for the absolute row carries the column too, and <code>col ≠ 1</code> → emit <code>⏎\r\n</code> before the prompt. Zero extra round-trips; on a CPR timeout the mark is skipped (we're in the degraded no-row path anyway, and the mark is cosmetic). Treat a reply of "last column with pending output" as mid-line. fish's forced-wrap trick stays on the shelf — it writes a full row of padding every prompt and leans on the least-portable wrap semantics. <div class="lean">resolved 2026-08-15 · read the column from the existing per-prompt CPR</div></div>
+  <div class="qcard"><b>3 · ISIG off or on — resolved.</b> Stays off: msh keeps full control and reads <code>^C</code> as an ordinary byte, dispatched in-band. Working code, cleaner editor semantics, no signal racing a repaint. <div class="lean">resolved 2026-08-15 · ISIG off · full control</div></div>
+  <div class="qcard"><b>4 · Control chars in the buffer — resolved.</b> Neither raw byte is ever stored: input is sanitized at the entry points (paste maps TAB → one space, strips other C0), so the buffer holds only printable clusters — see §05, <em>TAB: the character with no width</em>. Where a control byte must be shown anyway, the stand-ins are TAB → <code>▸</code> U+25B8 (1 cell) and caret notation <code>^X</code> (2 cells) for the rest. <code>clusterWidth</code> stays total over the stand-ins even while sanitization drops them early — the policy may change, and the arithmetic must not care. <div class="lean">resolved 2026-08-15 · sanitize early · ▸ for tab, ^X for the rest · width stays total</div></div>
+  <div class="qcard"><b>5 · Multiline editing — resolved.</b> Allowed in v1. <b>Alt-Enter</b> inserts a literal newline; pasted newlines are <em>kept</em> as buffer newlines (see §05 sanitization) — a pasted multi-line script lands in the editor as one editable buffer and must never self-execute line by line. Enter alone still submits. <div class="lean">resolved 2026-08-15 · alt-enter inserts \n · paste keeps \n · enter submits</div></div>
+  <div class="qcard"><b>6 · tmux — resolved.</b> No special-casing. tmux goes through the same ladder as every other terminal (env vars → 2027 → measure → fallback). This is principled, not just simple: tmux <em>is</em> the terminal msh talks to — it interposes its own width model between msh and the outer terminal, so measuring "the terminal in front of us" measures the right thing. <div class="lean">resolved 2026-08-15 · same ladder as any terminal</div></div>
 </section>
 
 <section id="glossary">
@@ -727,7 +765,6 @@ nav a:hover{color:var(--accent-ink)}
     <li><a href="https://github.com/rivo/uniseg">rivo/uniseg — Go grapheme segmentation + widths</a></li>
     <li><a href="https://github.com/akinomyoga/ble.sh">ble.sh — CPR width calibration prior art</a></li>
     <li><a href="https://fishshell.com/docs/current/terminal-compatibility.html">fish Terminal Compatibility doc</a></li>
-    <li>Full design doc: <code>ai/interactive-wrapping-design.md</code></li>
   </ul>
 </section>
 </main>
@@ -746,6 +783,7 @@ const G = {
   ed:{c:'esc',n:'ED — Erase in Display',b:'ESC[J',d:'Clear from the cursor to the end of the screen. fish issues it before writing into the last column, never after (the sticky right edge can eat the character).'},
   sgr:{c:'esc',n:'SGR — Select Graphic Rendition',b:'ESC[<params>m',d:'Colors and text attributes (the syntax-highlighting escapes). Zero width on screen — prompt measurement must skip them, the failure behind bash’s \\[ \\] bugs.'},
   cr:{c:'esc',n:'CR — Carriage Return',b:'\\r',d:'Move to column 0 of the current row. Universally clears the pending-wrap flag, which makes it the safe anchor before any repositioning.'},
+  hts:{c:'esc',n:'HTS — Horizontal Tab Set (and tab stops)',b:'set: ESC H · clear: TBC ESC[3g · shell tool: tabs(1)',d:'Tab stops are terminal state, default every 8 columns, and any program can move them. A literal TAB is cursor motion to the next stop — its width depends on the current column, and it skips cells without writing them. Both properties are why raw TAB never reaches the renderer.'},
   decawm:{c:'esc',n:'DECAWM — Auto-Wrap Mode',b:'DECSET: ESC[?7h (on by default)',d:'When on, printing past the last column continues on the next row. Modern terminals implement the deferred variant: the wrap happens lazily, on the next printed character (see pending wrap).'},
   decrqm:{c:'esc',n:'DECRQM — Request Mode',b:'ESC[?<mode>$p → reply ESC[?<mode>;<v>$y',d:'Ask whether a private mode is set. Reply values: 1/3 = set, 2/4 = reset, 0 = unrecognized. Needs a timeout: konsole never answers, iTerm2 answers wrong.'},
   mode2027:{c:'esc',n:'Mode 2027 — grapheme cluster processing',b:'ESC[?2027$p to query',d:'A declared contract: "I advance the cursor one width per grapheme cluster, not per codepoint." Supported by ghostty, foot, contour, WezTerm, Windows Terminal 1.22+. kitty declined it in favor of its text-sizing protocol.'},
