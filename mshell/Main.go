@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"time"
 	"unicode/utf8"
+	"github.com/rivo/uniseg"
 )
 
 type CliCommand int
@@ -947,6 +948,164 @@ type TermState struct {
 	// pathBinManager IPathBinManager
 }
 
+type WidthParams struct {
+	WidthOnClusters bool // terminal merges ZWJ sequences into one 2-cell glyph
+	Vs16Wide bool // VS16 promotes a text-default char to 2 cells
+	AmbiguousWidth int // East Asian ambiguous characters: 1 or 2.
+}
+
+func allPrintableASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 || s[i] > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
+func clusterWidth(cluster string, p WidthParams) int {
+	if len(cluster) == 0 {
+		return 0
+	}
+	if b := cluster[0]; b < 0x80 { // First character is ASCII
+		if len(cluster) == 1 {
+			if b >= 0x20 && b != 0x7f {
+				return 1 // Printable ASCII
+			}
+			if b == '\t' {
+				return 1 // Use single ▸ character U+25B8 BLACK RIGHT-POINTING SMALL TRIANGLE
+			}
+			return 2 // Control Char or DEL, use things like ^X
+		}
+		// Multi-byte cluster with ASCII lead (example: "\r\n")
+		if allPrintableASCII(cluster) {
+			return len(cluster)
+		}
+	}
+	if p.WidthOnClusters {
+		return widthByCluster(cluster, p)
+	} else {
+		return widthByCodepoints(cluster, p)
+	}
+}
+
+// Feeding uniseg one rune at time yields the per-codepoint table.
+func widthByCodepoints(cluster string, p WidthParams) int {
+	uniseg.EastAsianAmbiguousWidth = p.AmbiguousWidth
+	total := 0
+	var buf [4]byte
+	for _, r := range cluster {
+		n := utf8.EncodeRune(buf[:], r)
+		_, _, w, _ := uniseg.FirstGraphemeCluster(buf[:n], -1)
+		total += w
+	}
+	return total
+}
+
+func widthByCluster(cluster string, p WidthParams) int {
+	uniseg.EastAsianAmbiguousWidth = p.AmbiguousWidth
+	if !p.Vs16Wide {
+		cluster = strings.ReplaceAll(cluster, "\uFE0F", "")
+		if cluster == "" {
+			return 0 // Only selectors in the cluster?
+		}
+	}
+	_, _, w, _ := uniseg.FirstGraphemeClusterInString(cluster, -1)
+	return w
+}
+
+func stringWidth(s string, p WidthParams) int {
+	total := 0
+	state := -1
+	var cl string
+	for len(s) > 0 {
+		cl, s, _, state = uniseg.FirstGraphemeClusterInString(s, state)
+		total += clusterWidth(cl, p)
+	}
+	return total
+}
+
+type RowEnd int
+
+const (
+	RowEndFinal RowEnd = iota // Final row
+	RowEndSoftExact  	// Filled to exactly the perfect width
+	RowEndSoftEarly  	// We had a wide character at the end, at it didn't fit, so had to end early.
+	RowEndHard   		// A literal new line has caused us to move
+)
+
+type LayoutRow struct {
+	Text string // slice of the original input, no copy
+	Width int   // total cells occupied
+	EndType RowEnd
+}
+
+type LayoutResult struct {
+	Row []LayoutRow
+	CursorRow int
+	CursorCol int // [0 .. width] Equals width only when PendingWrap and cursor is at the end, a deferred move.
+	PendingWrap bool
+}
+
+func layoutInto(dst []LayoutRow, text string, cursor int, width int, p WidthParams) LayoutResult {
+	if width < 1 {
+		width = 1
+	}
+	res := LayoutResult{}
+	rows := dst[:0] // Reuse the slice
+	rowStart := 0 // byte offset of the current row's first cluster
+	col := 0
+	offset := 0 // byte offset of the current cluster
+	state := -1
+	s := text
+	var cluster string
+	for len(s) > 0 {
+		cluster, s, _, state = uniseg.FirstGraphemeClusterInString(s, state)
+
+		if cluster == "\n" || cluster == "\r\n" { // Hard line break
+			if offset == cursor {
+				res.CursorRow = len(rows)
+				res.CursorCol = col
+			}
+
+			rows = append(rows, LayoutRow{Text: text[rowStart:offset], Width: col, EndType: RowEndHard })
+			offset += len(cluster)
+			rowStart = offset
+			col = 0
+			continue
+		}
+
+		w := clusterWidth(cluster, p)
+		if col + w > width && col > 0 { // wrap before this cluster
+			var end RowEnd
+			if col == width {
+				end = RowEndSoftExact
+			} else {
+				end = RowEndSoftEarly
+			}
+
+			rows = append(rows, LayoutRow{Text: text[rowStart:offset], Width: col, EndType: end})
+			rowStart = offset
+			col = 0
+		}
+		if offset == cursor {
+			res.CursorRow = len(rows)
+			res.CursorCol = col
+		}
+		col += w
+		offset += len(cluster)
+	}
+	rows = append(rows, LayoutRow{Text: text[rowStart:], Width: col, EndType: RowEndFinal})
+	if cursor >= len(text) {
+		res.CursorRow = len(rows) - 1
+		res.CursorCol = col
+	}
+
+	res.PendingWrap = col == width
+	res.Row = rows
+	return res
+}
+
 func newLogInstanceID() string {
 	return strconv.FormatInt(time.Now().UnixNano(), 10)
 }
@@ -1283,6 +1442,7 @@ func (state *TermState) clearTabCompletionsDisplay() {
 	fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index)
 }
 
+// TODO: Why is this necessary.
 func (state *TermState) isTabToken(token TerminalToken) bool {
 	if t, ok := token.(AsciiToken); ok && t.Char == 9 {
 		return true
