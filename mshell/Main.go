@@ -1041,7 +1041,7 @@ type LayoutRow struct {
 }
 
 type LayoutResult struct {
-	Row []LayoutRow
+	Rows []LayoutRow
 	CursorRow int
 	CursorCol int // [0 .. width] Equals width only when PendingWrap and cursor is at the end, a deferred move.
 	PendingWrap bool
@@ -1102,7 +1102,7 @@ func layoutInto(dst []LayoutRow, text string, cursor int, width int, p WidthPara
 	}
 
 	res.PendingWrap = col == width
-	res.Row = rows
+	res.Rows = rows
 	return res
 }
 

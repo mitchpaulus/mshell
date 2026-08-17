@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"math/rand"
+	"strings"
 )
 
 func TestHistory(t *testing.T) {
@@ -284,10 +286,10 @@ func TestLayout(t *testing.T) {
 
 	// Exact fill: "abcdef" at width 3 → two full rows, pending wrap.
 	r := layoutInto(nil, "abcdef", 6, 3, p)
-	if len(r.Row) != 2 || r.Row[0].Text != "abc" || r.Row[1].Text != "def" {
-		t.Fatalf("rows = %+v", r.Row)
+	if len(r.Rows) != 2 || r.Rows[0].Text != "abc" || r.Rows[1].Text != "def" {
+		t.Fatalf("rows = %+v", r.Rows)
 	}
-	if r.Row[0].EndType != RowEndSoftExact || !r.PendingWrap {
+	if r.Rows[0].EndType != RowEndSoftExact || !r.PendingWrap {
 		t.Errorf("want SoftExact + PendingWrap, got %+v", r)
 	}
 	if r.CursorRow != 1 || r.CursorCol != 3 {
@@ -296,11 +298,11 @@ func TestLayout(t *testing.T) {
 
 	// Early wrap: 世 (2 cells) doesn't fit after "ab" at width 3.
 	r = layoutInto(nil, "ab世", 0, 3, p)
-	if len(r.Row) != 2 || r.Row[0].Text != "ab" || r.Row[0].EndType != RowEndSoftEarly {
-		t.Fatalf("early wrap rows = %+v", r.Row)
+	if len(r.Rows) != 2 || r.Rows[0].Text != "ab" || r.Rows[0].EndType != RowEndSoftEarly {
+		t.Fatalf("early wrap rows = %+v", r.Rows)
 	}
-	if r.Row[1].Text != "世" || r.Row[1].Width != 2 || r.PendingWrap {
-		t.Errorf("second row = %+v", r.Row[1])
+	if r.Rows[1].Text != "世" || r.Rows[1].Width != 2 || r.PendingWrap {
+		t.Errorf("second row = %+v", r.Rows[1])
 	}
 
 	// Cursor on the wrap boundary belongs to the new row.
@@ -311,14 +313,14 @@ func TestLayout(t *testing.T) {
 
 	// Empty text: one empty row, cursor at origin.
 	r = layoutInto(nil, "", 0, 80, p)
-	if len(r.Row) != 1 || r.CursorRow != 0 || r.CursorCol != 0 || r.PendingWrap {
+	if len(r.Rows) != 1 || r.CursorRow != 0 || r.CursorCol != 0 || r.PendingWrap {
 		t.Errorf("empty = %+v", r)
 	}
 
 	// Reuse contract: second call must not grow a new backing array.
 	first := layoutInto(nil, "abcdef", 0, 3, p)
-	second := layoutInto(first.Row, "xyzuvw", 0, 3, p)
-	if &first.Row[0] != &second.Row[0] {
+	second := layoutInto(first.Rows, "xyzuvw", 0, 3, p)
+	if &first.Rows[0] != &second.Rows[0] {
 		t.Error("dst backing array was not reused")
 	}
 }
@@ -328,11 +330,11 @@ func TestLayoutHardNewline(t *testing.T) {
 
 	// Basic split; newline is in neither row's text nor width.
 	r := layoutInto(nil, "ab\ncd", 5, 80, p)
-	if len(r.Row) != 2 || r.Row[0].Text != "ab" || r.Row[1].Text != "cd" {
-		t.Fatalf("rows = %+v", r.Row)
+	if len(r.Rows) != 2 || r.Rows[0].Text != "ab" || r.Rows[1].Text != "cd" {
+		t.Fatalf("rows = %+v", r.Rows)
 	}
-	if r.Row[0].EndType != RowEndHard || r.Row[0].Width != 2 {
-		t.Errorf("first row = %+v", r.Row[0])
+	if r.Rows[0].EndType != RowEndHard || r.Rows[0].Width != 2 {
+		t.Errorf("first row = %+v", r.Rows[0])
 	}
 	if r.CursorRow != 1 || r.CursorCol != 2 {
 		t.Errorf("cursor at end = (%d,%d), want (1,2)", r.CursorRow, r.CursorCol)
@@ -348,20 +350,188 @@ func TestLayoutHardNewline(t *testing.T) {
 
 	// Trailing newline yields an empty final row, cursor lands on it.
 	r = layoutInto(nil, "ab\n", 3, 80, p)
-	if len(r.Row) != 2 || r.Row[1].Text != "" || r.CursorRow != 1 || r.CursorCol != 0 {
+	if len(r.Rows) != 2 || r.Rows[1].Text != "" || r.CursorRow != 1 || r.CursorCol != 0 {
 		t.Errorf("trailing newline = %+v", r)
 	}
 
 	// Consecutive newlines produce an empty middle row.
 	r = layoutInto(nil, "a\n\nb", 0, 80, p)
-	if len(r.Row) != 3 || r.Row[1].Text != "" || r.Row[1].EndType != RowEndHard {
-		t.Errorf("blank line = %+v", r.Row)
+	if len(r.Rows) != 3 || r.Rows[1].Text != "" || r.Rows[1].EndType != RowEndHard {
+		t.Errorf("blank line = %+v", r.Rows)
 	}
 
 	// Hard break composes with soft wrapping.
 	r = layoutInto(nil, "abcd\nef", 0, 3, p)
-	if len(r.Row) != 3 || r.Row[0].EndType != RowEndSoftExact ||
-		r.Row[1].Text != "d" || r.Row[1].EndType != RowEndHard || r.Row[2].Text != "ef" {
-		t.Errorf("wrap+hard = %+v", r.Row)
+	if len(r.Rows) != 3 || r.Rows[0].EndType != RowEndSoftExact ||
+		r.Rows[1].Text != "d" || r.Rows[1].EndType != RowEndHard || r.Rows[2].Text != "ef" {
+		t.Errorf("wrap+hard = %+v", r.Rows)
+	}
+}
+
+func getClusterBoundaries(text string) []int {
+	s := text
+	state := -1
+	offset := 0
+	var cl string
+	boundaries := make([]int, 0, len(text))
+	for len(s) > 0 {
+		boundaries = append(boundaries, offset)
+		cl, s, _, state = uniseg.FirstGraphemeClusterInString(s, state)
+		offset += len(cl)
+	}
+	boundaries = append(boundaries, len(text))
+
+	return boundaries
+}
+
+func TestLayoutProperties(t *testing.T) {
+	pieces := []string{
+		"a", "Z", " ", "\t", "\x01", "\x7f", // ASCII, tab stand-in, control stand-ins
+		"\n", "\r\n", // hard breaks
+		"世", "界", // wide CJK
+		"é", "e\u0301", // precomposed vs combining
+		"👨‍👩‍👧‍👦", "❤️", "☂\uFE0F", "☂\uFE0E", // ZWJ family, VS16, VS15
+		"🇺🇸", "±", // flag pair, East Asian ambiguous
+	}
+	widths := []int{2, 3, 5, 10, 80}
+
+	// Build up all parameter combinitorics.
+	var params []WidthParams
+	for _, onClusters := range[]bool{false, true} {
+		for _, vs16 := range []bool{false, true} {
+			for _, amb := range[]int{1, 2} {
+				params = append(params, WidthParams { WidthOnClusters: onClusters, Vs16Wide: vs16, AmbiguousWidth: amb})
+			}
+		}
+	}
+
+	rng := rand.New(rand.NewSource(1))
+
+	var dst []LayoutRow
+
+	for i := 0; i < 300; i++ {
+		var sb strings.Builder
+		for n := rng.Intn(31); n > 0; n-- {
+			sb.WriteString(pieces[rng.Intn(len(pieces))])
+		}
+		text := sb.String()
+
+		// Every cluster boundary is valid cursor position
+		boundaries := getClusterBoundaries(text)
+
+		for _, width := range widths {
+			for _, p := range params {
+				for _, cursor := range boundaries {
+					r := layoutInto(dst, text, cursor, width, p)
+					dst = r.Rows
+					checkLayoutProperties(t, text, cursor, width, p, r)
+					if t.Failed() {
+						t.Fatalf("input %q cursor=%d width=%d params=%+v", text, cursor, width, p)
+					}
+				}
+			}
+		}
+	}
+}
+
+func checkLayoutProperties(t *testing.T, text string, cursor int, terminalWidth int, p WidthParams, r LayoutResult) {
+	t.Helper()
+
+	rows := r.Rows
+	if len(rows) == 0 {
+		t.Error("no rows")
+		return
+	}
+
+	// 1. Rows tile the input; a RowEndHard row skips exactly one newline cluster
+	offset := 0
+	for i, row := range rows {
+		if offset+len(row.Text) > len(text) || text[offset:offset+len(row.Text)] != row.Text {
+			t.Errorf("row %d text %q does not match input at offset %d", i, row.Text, offset)
+			return
+		}
+		offset += len(row.Text)
+
+		// The '\r\n' or '\n' is not part of the *Rows* text, so we need to handle moving the offset in that case.
+		if row.EndType == RowEndHard {
+			rest := text[offset:]
+			if strings.HasPrefix(rest, "\r\n") {
+				offset += 2
+			} else if strings.HasPrefix(rest, "\n") {
+				offset += 1
+			} else {
+				t.Errorf("row %d is RowEndHard but input at offset %d is not a newline", i, offset)
+				return
+			}
+		}
+	}
+
+	if offset != len(text) {
+		t.Errorf("rows cover %d bytes, but input is %d bytes", offset, len(text))
+	}
+
+	checkWidth := func(i int, row LayoutRow) {
+		if got := stringWidth(row.Text, p); row.Width != got {
+			t.Errorf("row %d Width=%d but stringWidth=%d", i, row.Width, got)
+		}
+		if row.Width > terminalWidth {
+			cl, rest, _, _ := uniseg.FirstGraphemeClusterInString(row.Text, -1)
+			if cl != row.Text || rest != "" {
+				t.Errorf("row %d Width=%d exceeds terminal width %d on a multi-cluster row %q", i, row.Width, terminalWidth, row.Text)
+			}
+		}
+	}
+
+	// 2 + 3 for every row but the last: never Final, soft rows justified by the next row.
+	for i, row := range rows[:len(rows)-1] {
+		checkWidth(i, row)
+		switch row.EndType {
+		case RowEndFinal:
+			t.Errorf("row %d of %d is RowEndFinal but not last", i, len(rows))
+		case RowEndSoftExact:
+			if row.Width != terminalWidth {
+				t.Errorf("row %d SoftExact but Width=%d, terminal width %d", i, row.Width, terminalWidth)
+			}
+		case RowEndSoftEarly:
+			if row.Width >= terminalWidth {
+				t.Errorf("row %d SoftEarly but Width=%d, terminal width %d", i, row.Width, terminalWidth)
+			}
+		}
+		if row.EndType == RowEndSoftExact || row.EndType == RowEndSoftEarly {
+			if row.Text == "" {
+				t.Errorf("row %d soft-wrapped but empty", i)
+			} else {
+				next, _, _, _ := uniseg.FirstGraphemeClusterInString(rows[i+1].Text, -1)
+				if w := clusterWidth(next, p); row.Width+w <= terminalWidth {
+					t.Errorf("row %d ended soft at width %d but next cluster %q (width %d) would have fit in %d",
+						i, row.Width, next, w, terminalWidth)
+				}
+			}
+		}
+	}
+
+	// The last row: same width rules, and it must be the one Final row.
+	lastRow := rows[len(rows)-1]
+	checkWidth(len(rows)-1, lastRow)
+	if lastRow.EndType != RowEndFinal {
+		t.Errorf("last row EndType=%d, want RowEndFinal", lastRow.EndType)
+	}
+
+	// 4. Cursor Checks
+	if r.CursorRow < 0 || r.CursorRow >= len(rows) {
+		t.Errorf("cursor row %d out of bounds [0,%d]", r.CursorRow, len(rows))
+	} else {
+		if r.CursorCol < 0 || r.CursorCol > rows[r.CursorRow].Width {
+			t.Errorf("cursor col %d out of bounds [0,%d] for row %d", r.CursorCol, rows[r.CursorRow].Width, r.CursorRow)
+		}
+
+		if r.CursorCol == terminalWidth && rows[r.CursorRow].Width != terminalWidth {
+			t.Errorf("cursor col %d at terminal width but row width is %d", r.CursorCol, rows[r.CursorRow].Width)
+		}
+	}
+
+	// 5. PendingWrap tracks the final row exactly filling the terminal
+	if r.PendingWrap != (rows[len(rows)-1].Width == terminalWidth) {
+		t.Errorf("PendingWrap = %v, but last row width = %d, terminal width = %d", r.PendingWrap, rows[len(rows)-1].Width, terminalWidth)
 	}
 }
