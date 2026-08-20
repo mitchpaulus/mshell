@@ -948,81 +948,39 @@ type TermState struct {
 	// pathBinManager IPathBinManager
 }
 
-type WidthParams struct {
-	WidthOnClusters bool // terminal merges ZWJ sequences into one 2-cell glyph
-	Vs16Wide bool // VS16 promotes a text-default char to 2 cells
-	AmbiguousWidth int // East Asian ambiguous characters: 1 or 2.
+type SourceText string
+type ByteOffset int
+type Cells int
+const UnresolvedWidth Cells = 0
+
+type AtomKind int
+
+const (
+	AtomAscii AtomKind = iota
+	AtomControl
+	AtomGrapheme
+	AtomPlaceholder
+	AtomHardBreak
+)
+
+type DisplayAtom struct {
+	SourceStart ByteOffset
+	SourceEnd ByteOffset
+	Text string
+	Width Cells
+	Kind AtomKind
 }
 
-func allPrintableASCII(s string) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] < 0x20 || s[i] > 0x7e {
-			return false
-		}
-	}
-	return true
+type WidthCache struct {
+	Epoch uint64
+	Entries map[string]Cells
 }
 
-func clusterWidth(cluster string, p WidthParams) int {
-	if len(cluster) == 0 {
-		return 0
+func controlCaretText(b byte) string {
+	if b == 0x7f {
+		return "^?"
 	}
-	if b := cluster[0]; b < 0x80 { // First character is ASCII
-		if len(cluster) == 1 {
-			if b >= 0x20 && b != 0x7f {
-				return 1 // Printable ASCII
-			}
-			if b == '\t' {
-				return 1 // Use single ▸ character U+25B8 BLACK RIGHT-POINTING SMALL TRIANGLE
-			}
-			return 2 // Control Char or DEL, use things like ^X
-		}
-		// Multi-byte cluster with ASCII lead (example: "\r\n")
-		if allPrintableASCII(cluster) {
-			return len(cluster)
-		}
-	}
-	if p.WidthOnClusters {
-		return widthByCluster(cluster, p)
-	} else {
-		return widthByCodepoints(cluster, p)
-	}
-}
-
-// Feeding uniseg one rune at time yields the per-codepoint table.
-func widthByCodepoints(cluster string, p WidthParams) int {
-	uniseg.EastAsianAmbiguousWidth = p.AmbiguousWidth
-	total := 0
-	var buf [4]byte
-	for _, r := range cluster {
-		n := utf8.EncodeRune(buf[:], r)
-		_, _, w, _ := uniseg.FirstGraphemeCluster(buf[:n], -1)
-		total += w
-	}
-	return total
-}
-
-func widthByCluster(cluster string, p WidthParams) int {
-	uniseg.EastAsianAmbiguousWidth = p.AmbiguousWidth
-	if !p.Vs16Wide {
-		cluster = strings.ReplaceAll(cluster, "\uFE0F", "")
-		if cluster == "" {
-			return 0 // Only selectors in the cluster?
-		}
-	}
-	_, _, w, _ := uniseg.FirstGraphemeClusterInString(cluster, -1)
-	return w
-}
-
-func stringWidth(s string, p WidthParams) int {
-	total := 0
-	state := -1
-	var cl string
-	for len(s) > 0 {
-		cl, s, _, state = uniseg.FirstGraphemeClusterInString(s, state)
-		total += clusterWidth(cl, p)
-	}
-	return total
+	return string([]byte{'^', b + 0x40})
 }
 
 type RowEnd int
@@ -1047,7 +1005,7 @@ type LayoutResult struct {
 	PendingWrap bool
 }
 
-func layoutInto(dst []LayoutRow, text string, cursor int, width int, p WidthParams) LayoutResult {
+func layoutInto(dst []LayoutRow, text string, cursor int, width int, widthOf func(string) int) LayoutResult {
 	if width < 1 {
 		width = 1
 	}
@@ -1075,7 +1033,7 @@ func layoutInto(dst []LayoutRow, text string, cursor int, width int, p WidthPara
 			continue
 		}
 
-		w := clusterWidth(cluster, p)
+		w := widthOf(cluster)
 		if col + w > width && col > 0 { // wrap before this cluster
 			var end RowEnd
 			if col == width {

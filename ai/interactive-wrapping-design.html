@@ -465,17 +465,18 @@ footer {
   <div class="flow" aria-label="Input-to-render pipeline">
     <div class="box"><strong>source buffer</strong><span>UTF-8 + byte cursor</span></div>
     <div class="arrow">→</div>
-    <div class="box"><strong>segment</strong><span>boundaries only</span></div>
+    <div class="box branch"><strong>classify</strong><span>all printable ASCII?</span></div>
     <div class="arrow">→</div>
-    <div class="box branch"><strong>resolve widths</strong><span>ASCII or exact cache</span></div>
+    <div class="box"><strong>two paths</strong><span>yes: direct layout · no: segment + resolve + atom layout</span></div>
     <div class="arrow">→</div>
-    <div class="box"><strong>pure layout</strong><span>rows + cursor</span></div>
+    <div class="box"><strong>layout rows</strong><span>paint-ready geometry</span></div>
   </div>
 
   <p>
-    The key boundary is between width resolution and layout.
-    Width resolution is impure and may talk to the terminal.
-    Layout accepts only resolved display atoms and performs no I/O.
+    The first boundary is a classification of the complete command buffer.
+    A command containing only printable ASCII bypasses atomization and width resolution and is laid out directly from its source bytes.
+    Every other command takes the general path, where width resolution is impure and may talk to the terminal before layout accepts resolved display atoms.
+    Both layout paths perform no I/O.
     Rendering accepts only a completed layout.
   </p>
 
@@ -484,8 +485,8 @@ footer {
       <tr><th>Domain</th><th>Meaning</th><th>May contain</th></tr>
     </thead>
     <tbody>
-      <tr><td><code>SourceText</code></td><td>The command bytes that will be submitted.</td><td>UTF-8 text and literal newlines after input sanitization.</td></tr>
-      <tr><td><code>DisplayAtom</code></td><td>One indivisible thing the renderer may paint.</td><td>An ASCII byte, a complete measured grapheme, a hard break, or a known-width placeholder.</td></tr>
+      <tr><td><code>SourceText</code></td><td>The exact command bytes that will be submitted.</td><td>UTF-8 text, literal newlines, and source control bytes that must never be emitted raw.</td></tr>
+      <tr><td><code>DisplayAtom</code></td><td>One indivisible thing the renderer may paint.</td><td>A printable ASCII byte, a safe control representation, a complete measured grapheme, a hard break, or a known-width placeholder.</td></tr>
       <tr><td><code>Cells</code></td><td>Terminal screen columns.</td><td>Integers used only for layout and cursor placement.</td></tr>
       <tr><td><code>ScreenBytes</code></td><td>The final output transaction.</td><td>Text, SGR styling, erasure, and cursor movement.</td></tr>
     </tbody>
@@ -494,12 +495,22 @@ footer {
   <pre><code>type ByteOffset int
 type Cells      int
 
+type AtomKind int
+
+const (
+    AtomAscii AtomKind = iota
+    AtomControl
+    AtomGrapheme
+    AtomPlaceholder
+    AtomHardBreak
+)
+
 type DisplayAtom struct {
     SourceStart ByteOffset
     SourceEnd   ByteOffset
-    Text        string      // source slice or fixed ASCII placeholder
+    Text        string      // source slice or generated safe display text
     Width       Cells       // resolved before Layout
-    Kind        AtomKind    // text, placeholder, hard break
+    Kind        AtomKind
 }
 
 type WidthCache struct {
@@ -511,13 +522,25 @@ type WidthCache struct {
     Defined offset and cell types prevent the original bug class: adding a byte or rune index directly to a terminal column.
     The cursor is always a byte offset at a grapheme boundary.
   </p>
+  <p>
+    <code>AtomAscii</code> and <code>AtomGrapheme</code> use a source slice as <code>Text</code>.
+    <code>AtomControl</code> uses generated safe display text, and a placeholder uses one fixed printable ASCII character.
+    Both retain the original source range; neither emits those source bytes raw.
+  </p>
+
+  <h3>Reuse is part of the interface</h3>
+  <p>
+    Resolution and layout accept destination slices owned by the editor state and reuse their backing arrays across generations.
+    Cache keys are cloned only when inserted into the session cache, so a short measured cluster cannot retain an entire pasted command buffer.
+    The first implementation uses straightforward scalar loops; representation or scan optimizations require benchmark evidence.
+  </p>
 
   <h3>The prompt is opaque</h3>
   <p>
     The prompt may contain SGR, OSC, arbitrary user code, or cursor movement.
     Do not parse it into the command layout.
     Print it, issue one fenced CPR, and treat the reported position as the editing region's origin.
-    The layout input is therefore <code>(command atoms, cursor, origin column, terminal width)</code>, not <code>prompt + command</code>.
+    The layout input is therefore either <code>(printable command source, cursor, origin column, terminal width)</code> or <code>(resolved command atoms, cursor, origin column, terminal width)</code>, never <code>prompt + command</code>.
   </p>
   <p>
     If the prompt anchor query fails, emit a real newline and start the editing region at column one.
@@ -527,7 +550,7 @@ type WidthCache struct {
 
 <section id="oracle">
   <span class="section-number">03</span>
-  <h2>The width oracle has three answers</h2>
+  <h2>The width oracle has four answers</h2>
 
   <table>
     <thead>
@@ -535,21 +558,23 @@ type WidthCache struct {
     </thead>
     <tbody>
       <tr><td>Printable ASCII</td><td>One cell per byte.</td><td>None.</td></tr>
+      <tr><td>C0 control or DEL other than tab</td><td>Two-cell ASCII caret notation.</td><td>None.</td></tr>
       <tr><td>Cached non-ASCII cluster</td><td>The previously observed one- or two-cell width.</td><td>None.</td></tr>
       <tr><td>Unknown non-ASCII cluster</td><td>Measure it, validate it, then cache the exact byte string.</td><td>One DSR/CPR observation.</td></tr>
     </tbody>
   </table>
 
-  <h3>ASCII fast path</h3>
+  <h3>Printable-ASCII layout bypass</h3>
   <p>
-    If the complete command buffer is printable ASCII plus explicitly supported newlines, bypass grapheme segmentation and width lookup entirely.
-    Bytes and cells coincide.
-    This covers the overwhelmingly common editing path with a small loop and no Unicode tables.
+    If every byte in the complete command buffer is in the printable ASCII range <code>0x20</code> through <code>0x7e</code>, bypass atomization and width resolution entirely.
+    The ASCII layout function consumes <code>SourceText</code> directly: every byte occupies one cell, every byte boundary is a valid wrapping and cursor boundary, and rows can refer directly to slices of the original command.
+    The normal interactive command therefore needs one validation scan and no per-character atom construction.
   </p>
   <p>
-    If any non-ASCII byte is present, segment the complete command buffer.
-    Do not independently fast-scan an ASCII prefix immediately followed by non-ASCII text: a combining codepoint may join the preceding ASCII base.
-    Whole-buffer segmentation avoids that boundary error and remains off the normal ASCII path.
+    A tab, newline, other control byte, DEL, or non-ASCII byte fails this classification and sends the complete command through the general atomizer.
+    That path maps tab to <code>▸</code> (U+25B8 BLACK RIGHT-POINTING SMALL TRIANGLE), represents other controls safely, and segments Unicode graphemes.
+    Its display atoms are indivisible; there is no exceptional atom type that layout may sometimes split.
+    Do not retain an independently scanned ASCII prefix when classification fails: a combining codepoint may join its final ASCII base, and the common path should not build general-path state speculatively.
   </p>
 
   <h3>Uniseg has one job</h3>
@@ -570,16 +595,12 @@ type WidthCache struct {
   <h3>Why the two-cell bound matters</h3>
   <p>
     The one-or-two-cell contract removes the old oversized-cluster splitting design completely.
-    A complete printable atom always fits on an empty row when the terminal is at least two columns wide.
+    A complete non-ASCII grapheme atom always fits on an empty row when the terminal is at least two columns wide.
     It also turns measurement validation into a closed check: a result outside one or two is unsupported, not another layout case.
   </p>
 
-  <pre><code>func Resolve(command SourceText, cache *WidthCache) ([]DisplayAtom, []string) {
-    if commandIsASCII(command) {
-        return asciiAtoms(command), nil
-    }
-
-    atoms := segmentIntoAtoms(command) // boundaries from uniseg
+  <pre><code>func ResolveGeneralInto(dst []DisplayAtom, command SourceText, cache *WidthCache) ([]DisplayAtom, []string) {
+    atoms := segmentIntoAtoms(dst, command)
     misses := distinctUncachedClusters(atoms, cache)
     return atoms, misses
 }</code></pre>
@@ -628,7 +649,7 @@ type WidthCache struct {
   <p>
     There is one CPR response per distinct unknown cluster, but the requests are not serialized.
     On SSH or ConPTY the batch can travel as roughly one additional transport round trip, independent of the number of misses in that batch.
-    Ordinary cached or ASCII edits pay no round trip.
+    Ordinary cached or printable-ASCII edits pay no round trip.
   </p>
 
   <h3>Probe from a known cell</h3>
@@ -648,7 +669,8 @@ require measuredWidth == 1 || measuredWidth == 2</code></pre>
 
   <p>
     The sentinel forces a clean grapheme boundary for ordinary candidates and makes the arithmetic independent of the cursor position before the scratch transaction.
-    Newlines, tabs, C0/C1 controls, ESC, and renderer-generated bytes never enter this protocol.
+    Raw newlines, tabs, C0/C1 controls, and ESC never enter this protocol.
+    The generated tab glyph <code>▸</code> may enter as an ordinary measurement candidate.
     A degenerate cluster that measures zero or modifies the sentinel is not self-contained and is rendered with the failure placeholder instead.
   </p>
   <p>
@@ -687,7 +709,7 @@ generation 42: resolve remaining misses, layout once, render once</code></pre>
     </thead>
     <tbody>
       <tr><td>New prompt</td><td>One fenced anchor query after the opaque prompt.</td></tr>
-      <tr><td>ASCII edit</td><td>None.</td></tr>
+      <tr><td>Printable ASCII edit</td><td>None.</td></tr>
       <tr><td>Repeated measured cluster</td><td>None.</td></tr>
       <tr><td>Distinct unknown cluster</td><td>One observation, batched with all other misses in the state.</td></tr>
       <tr><td>Repaint or cursor motion</td><td>None.</td></tr>
@@ -698,14 +720,23 @@ generation 42: resolve remaining misses, layout once, render once</code></pre>
 
 <section id="layout">
   <span class="section-number">05</span>
-  <h2>Layout is boring by design</h2>
+  <h2>Two pure layout paths</h2>
 
   <p>
-    Once every display atom has a known width, wrapping is integer arithmetic.
-    The layout function is deterministic, allocation-conscious, and incapable of querying the terminal.
+    Printable ASCII layout is direct byte and cell arithmetic.
+    General layout begins only after every display atom has a known width, then uses integer arithmetic over indivisible atoms.
+    Both functions are deterministic, allocation-conscious, and incapable of querying the terminal.
   </p>
 
-  <pre><code>func LayoutInto(
+  <pre><code>func LayoutPrintableAsciiInto(
+    dst       []LayoutRow,
+    command   SourceText,
+    cursor    ByteOffset,
+    startCol  Cells,
+    columns   Cells,
+) LayoutResult
+
+func LayoutAtomsInto(
     dst       []LayoutRow,
     atoms     []DisplayAtom,
     cursor    ByteOffset,
@@ -714,12 +745,14 @@ generation 42: resolve remaining misses, layout once, render once</code></pre>
 ) LayoutResult</code></pre>
 
   <ul class="invariants">
-    <li>Every text atom is a complete grapheme cluster or printable ASCII unit with a resolved width.</li>
-    <li>No atom is split across rows. With the supported-terminal contract and terminal width at least two, every printable atom fits on an empty row.</li>
+    <li>The printable-ASCII path may wrap at any byte boundary because each source byte is exactly one cell.</li>
+    <li>Every general-path text atom is a complete grapheme cluster, printable ASCII byte, generated control representation, or placeholder with a resolved width.</li>
+    <li>No general-path atom is split across rows. With the supported-terminal contract and terminal width at least two, every first-implementation atom fits on an empty row.</li>
     <li>The first row begins at the measured prompt column; subsequent soft-wrapped rows begin at column one.</li>
     <li>Hard newlines are source atoms with explicit row semantics and zero printable width.</li>
-    <li>The cursor may land only at source grapheme boundaries and maps to exactly one row and cell gap.</li>
+    <li>The cursor may land at any byte boundary on the printable-ASCII path and only at source grapheme boundaries on the general path; either maps to exactly one row and cell gap.</li>
     <li>Every row width is at most the available terminal width.</li>
+    <li>For printable-ASCII input, both paths produce identical rows and cursor placement.</li>
   </ul>
 
   <h3>Soft wrap remains terminal-owned</h3>
@@ -737,7 +770,7 @@ generation 42: resolve remaining misses, layout once, render once</code></pre>
   <h3>Full-region repaint first</h3>
   <p>
     Start with a whole-region repaint assembled into one output buffer.
-    Home to the known origin with relative movement, paint complete atoms with natural autowrap, erase renderer-owned leftovers, and park the cursor from the layout result.
+    Home to the known origin with relative movement, paint source slices and fixed placeholders with natural autowrap, erase renderer-owned leftovers, and park the cursor from the layout result.
     A later desired-versus-actual diff renderer can consume the same layout without changing width resolution.
   </p>
 
@@ -785,12 +818,15 @@ generation 42: resolve remaining misses, layout once, render once</code></pre>
     A placeholder atom retains the source start/end offsets of the cluster it represents, so cursor movement and editing remain structurally correct.
   </p>
 
-  <h3>Controls are not width questions</h3>
+  <h3>Raw controls are never painted</h3>
   <p>
     Raw terminal controls cannot be allowed into the paint stream.
-    Input sanitization handles tabs, ESC, C0, and C1 before display atoms are built.
+    They remain in <code>SourceText</code> because editing and submission operate on the exact command.
+    Resolution turns C0 controls and DEL into <code>AtomControl</code> values using two-cell ASCII caret notation: NUL is <code>^@</code>, Ctrl-Z is <code>^Z</code>, ESC is <code>^[</code>, and DEL is <code>^?</code>.
+    Tab is the exception: it paints as <code>▸</code>, whose exact one-or-two-cell width is measured and cached for the terminal epoch.
+    C1 controls use a fixed printable ASCII fallback in the first implementation; their source bytes are still preserved.
     Literal newlines are explicit hard-break atoms.
-    If a future quoted-insert feature preserves a control byte, render an ASCII representation with known width rather than measuring or emitting it.
+    The painter must never copy an <code>AtomControl</code>'s source slice to the terminal device.
   </p>
 
   <h3>What correctness means here</h3>
@@ -824,7 +860,7 @@ generation 42: resolve remaining misses, layout once, render once</code></pre>
       <tr><td>uniseg width calls</td><td class="bad">Delete</td><td>Use uniseg boundaries only.</td></tr>
       <tr><td><code>LayoutRow</code> and row-end types</td><td class="good">Keep and adapt</td><td>Consume atoms and the measured prompt-origin column.</td></tr>
       <tr><td>Property-test structure</td><td class="good">Keep</td><td>Inject deterministic width maps instead of parameter combinations.</td></tr>
-      <tr><td>Oversize codepoint-model splitting</td><td class="bad">Delete</td><td>The 1–2 cell atom contract and minimum two-column terminal remove the case.</td></tr>
+      <tr><td>Oversize codepoint-model splitting</td><td class="bad">Delete</td><td>The 1–2 cell grapheme contract and minimum two-column terminal remove the case.</td></tr>
       <tr><td>Opaque prompt measurement</td><td class="good">Keep</td><td>One fenced anchor CPR per prompt.</td></tr>
       <tr><td>Region-relative renderer</td><td class="good">Keep</td><td>Full repaint driven by resolved layout.</td></tr>
     </tbody>
@@ -833,8 +869,9 @@ generation 42: resolve remaining misses, layout once, render once</code></pre>
   <h3>Implementation order</h3>
   <ol>
     <li>Replace width parameters with an injected exact width lookup in layout tests.</li>
-    <li>Introduce <code>DisplayAtom</code>, whole-buffer segmentation, and the all-ASCII bypass.</li>
-    <li>Convert layout to accept atoms and a measured prompt-origin column.</li>
+    <li>Add the scalar printable-ASCII classifier and direct ASCII layout path.</li>
+    <li>Introduce reusable <code>DisplayAtom</code> slices and whole-buffer general atomization for every input that fails printable-ASCII classification.</li>
+    <li>Convert general layout to accept indivisible atoms and both layout paths to accept a measured prompt-origin column.</li>
     <li>Build the batch measurement protocol against a fake terminal and PTY tests.</li>
     <li>Add the session cache, generation handling, timeouts, and placeholder fallback.</li>
     <li>Swap the interactive renderer to region-relative repainting.</li>
@@ -854,7 +891,11 @@ generation 42: resolve remaining misses, layout once, render once</code></pre>
 
   <h3>Pure unit and property tests</h3>
   <ul>
-    <li>ASCII bypass produces the same atoms and layout as the general path for ASCII inputs.</li>
+    <li>Printable-ASCII classification accepts exactly bytes <code>0x20</code> through <code>0x7e</code>; tab, newline, other controls, DEL, and every non-ASCII byte select the general path.</li>
+    <li>Direct printable-ASCII layout creates no display atoms and produces the same rows and cursor placement as the general atom path for printable-ASCII inputs.</li>
+    <li>Every C0 control and DEL retains its byte range, resolves to the correct safe representation, and can never place the raw control byte in <code>ScreenBytes</code>.</li>
+    <li>Tab paints as <code>▸</code>; cache hit, exact measurement, timeout fallback, and one- versus two-cell observations all preserve its source offsets.</li>
+    <li>At a mixed ASCII/non-ASCII boundary, classify without constructing partial atoms and segment the complete buffer so combining marks can join the final ASCII base.</li>
     <li>Segment every stress string and verify atoms tile source bytes exactly.</li>
     <li>Inject arbitrary width maps containing only one and two; never call a terminal from layout tests.</li>
     <li>For every grapheme-boundary cursor position and terminal width at least two, rows stay within bounds and the cursor lands on a valid cell gap.</li>
@@ -862,6 +903,16 @@ generation 42: resolve remaining misses, layout once, render once</code></pre>
     <li>Cache deduplication measures each exact cluster once per epoch.</li>
     <li>Probe, cache-entry, and candidate-length limits always produce placeholders rather than unbounded work.</li>
     <li>Editing that changes segmentation re-derives boundaries and does not reuse a cache entry for a different byte string.</li>
+    <li>Resolution and layout reuse caller-provided backing arrays without retaining stale atoms or rows.</li>
+  </ul>
+
+  <h3>Performance benchmarks</h3>
+  <ul>
+    <li>Benchmark short all-ASCII commands representative of interactive typing, not only large throughput inputs.</li>
+    <li>Benchmark mixed input whose first non-ASCII byte occurs near the beginning and near the end.</li>
+    <li>Benchmark large ASCII and Unicode pastes with allocation counts and bytes per operation reported.</li>
+    <li>Use the scalar printable-ASCII classifier as the baseline; compare word-at-a-time or SIMD validation against it before increasing complexity.</li>
+    <li>Keep the direct ASCII path allocation-free apart from caller-owned row capacity; optimize the general path independently when profiles justify it.</li>
   </ul>
 
   <h3>Protocol tests with a fake terminal</h3>
@@ -897,6 +948,7 @@ generation 42: resolve remaining misses, layout once, render once</code></pre>
 
   <h3>References retained</h3>
   <ul>
+    <li><a href="https://unicode.org/reports/tr29/">Unicode Standard Annex #29</a> — extended grapheme-boundary rules used for whole-buffer segmentation.</li>
     <li><a href="https://github.com/rivo/uniseg">rivo/uniseg</a> — extended grapheme segmentation.</li>
     <li><a href="https://github.com/fish-shell/fish-shell/blob/master/src/screen.rs">fish screen renderer</a> — desired/actual rendering and query fencing precedent.</li>
     <li><a href="https://ftp.gnu.org/gnu/readline/">GNU Readline</a> — row breaks and pending-wrap handling.</li>

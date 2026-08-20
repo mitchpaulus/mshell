@@ -8,6 +8,7 @@ import (
 	"testing"
 	"math/rand"
 	"strings"
+	"slices"
 )
 
 func TestHistory(t *testing.T) {
@@ -194,54 +195,6 @@ func TestRunEditCommandUsesMSHINITOverride(t *testing.T) {
 	}
 }
 
-func TestWidthByCodepoints(t *testing.T) {
-	p := WidthParams{AmbiguousWidth: 1}
-	if w := widthByCodepoints("👨‍👩‍👦", p); w != 6 {
-		t.Errorf("family = %d, want 6", w)
-	}
-	if w := widthByCodepoints("❤️", p); w != 1 {
-		t.Errorf("heart+VS16 = %d, want 1", w)
-	}
-	if w := widthByCodepoints("°", WidthParams{AmbiguousWidth: 2}); w != 2 {
-		t.Errorf("degree ambW=2 = %d, want 2", w)
-	}
-}
-
-func TestWidthByCluster(t *testing.T) {
-	p := WidthParams{WidthOnClusters: true, Vs16Wide: true, AmbiguousWidth: 1}
-	tests := []struct {
-		cluster string
-		want    int
-	}{
-		{"👨‍👩‍👦", 2}, // ZWJ family joins to one glyph
-		{"❤️", 2},    // VS16 promotes to emoji width
-		{"❤", 1},     // bare text-default heart
-		{"❤︎", 1},    // VS15 forces text width
-		{"🇺🇸", 2},    // regional-indicator flag pair
-		{"°", 1},     // ambiguous at AmbW=1
-		{"世", 2},     // EAW Wide
-	}
-	for _, tt := range tests {
-		if got := widthByCluster(tt.cluster, p); got != tt.want {
-			t.Errorf("widthByCluster(%q) = %d, want %d", tt.cluster, got, tt.want)
-		}
-	}
-	// The two parameters that vary independently of ZwjJoins:
-	if w := widthByCluster("❤️", WidthParams{WidthOnClusters: true, Vs16Wide: false, AmbiguousWidth: 1}); w != 1 {
-		t.Errorf("VS16 with Vs16Wide=false = %d, want 1", w)
-	}
-	if w := widthByCluster("°", WidthParams{WidthOnClusters: true, Vs16Wide: true, AmbiguousWidth: 2}); w != 2 {
-		t.Errorf("degree AmbW=2 = %d, want 2", w)
-	}
-	// End to end through the dispatcher: the disagreement that matters.
-	if w := clusterWidth("👨‍👩‍👦", p); w != 2 {
-		t.Errorf("clusterWidth by cluster = %d, want 2", w)
-	}
-	if w := clusterWidth("👨‍👩‍👦", WidthParams{AmbiguousWidth: 1}); w != 6 {
-		t.Errorf("clusterWidth by codepoint = %d, want 6", w)
-	}
-}
-
 func TestClusterSegmentation(t *testing.T) {
 	// Two flags must segment as two 2-rune clusters, not one 4-rune blob.
 	var got []string
@@ -257,35 +210,63 @@ func TestClusterSegmentation(t *testing.T) {
 	}
 }
 
-func TestStringWidth(t *testing.T) {
-	p := WidthParams{WidthOnClusters: true, Vs16Wide: true, AmbiguousWidth: 1}
-	tests := []struct {
-		s    string
-		want int
-	}{
-		{"", 0},
-		{"hello", 5},
-		{"héllo", 5},     // e + combining acute = one 1-cell cluster
-		{"ab👨‍👩‍👦cd", 6}, // 4 ASCII + 2-cell family
-		{"世界", 4},        // two EAW-wide chars
-	}
-	for _, tt := range tests {
-		if w := stringWidth(tt.s, p); w != tt.want {
-			t.Errorf("stringWidth(%q) = %d, want %d", tt.s, w, tt.want)
-		}
+func TestAsciiAtomsInto(t *testing.T) {
+	command := SourceText("a\t\x1a\n")
+	got, allAscii := asciiAtomsInto(nil, command)
+	if !allAscii {
+		t.Fatal("seven-bit source should use the Ascii atomizer")
 	}
 
-	// Same string, two width models — the row-count disagreement Layout must respect.
-	if w := stringWidth("ab👨‍👩‍👦cd", WidthParams{AmbiguousWidth: 1}); w != 10 {
-		t.Errorf("codepoint-model width = %d, want 10 (4 ASCII + 6)", w)
+	want := []DisplayAtom{
+		{SourceStart: 0, SourceEnd: 1, Text: "a", Width: 1, Kind: AtomAscii},
+		{SourceStart: 1, SourceEnd: 2, Text: "\u25B8", Width: UnresolvedWidth, Kind: AtomControl},
+		{SourceStart: 2, SourceEnd: 3, Text: "^Z", Width: 2, Kind: AtomControl},
+		{SourceStart: 3, SourceEnd: 4, Text: "\n", Width: 0, Kind: AtomHardBreak},
+	}
+
+	if !slices.Equal(got, want) {
+		t.Errorf("atoms = %+v, want %+v", got, want)
+	}
+
+	got, allAscii = asciiAtomsInto(got, SourceText("a\u00e9"))
+	if allAscii || len(got) != 0 {
+		t.Errorf("non-ASCII input returned atoms=%+v, ok=%v", got, allAscii)
 	}
 }
 
+func testWidthLookup(widths map[string]int) func(string) int {
+	return func(cluster string) int {
+		if len(cluster) == 1 && cluster[0] >= 0x20 && cluster[0] <= 0x7e {
+			return 1
+		}
+
+		width, ok := widths[cluster]
+		if !ok {
+			panic("missing test width for cluster: " + cluster)
+		}
+		return width
+	}
+}
+
+func sumTestWidths(text string, widthOf func(string) int) int {
+	total := 0
+	state := -1
+
+	for len(text) > 0 {
+		cluster, rest, _, nextState := uniseg.FirstGraphemeClusterInString(text, state)
+		total += widthOf(cluster)
+		text = rest
+		state = nextState
+	}
+
+	return total
+}
+
 func TestLayout(t *testing.T) {
-	p := WidthParams{AmbiguousWidth: 1}
+	widthOf := testWidthLookup(map[string]int{"世": 2,})
 
 	// Exact fill: "abcdef" at width 3 → two full rows, pending wrap.
-	r := layoutInto(nil, "abcdef", 6, 3, p)
+	r := layoutInto(nil, "abcdef", 6, 3, widthOf)
 	if len(r.Rows) != 2 || r.Rows[0].Text != "abc" || r.Rows[1].Text != "def" {
 		t.Fatalf("rows = %+v", r.Rows)
 	}
@@ -297,7 +278,7 @@ func TestLayout(t *testing.T) {
 	}
 
 	// Early wrap: 世 (2 cells) doesn't fit after "ab" at width 3.
-	r = layoutInto(nil, "ab世", 0, 3, p)
+	r = layoutInto(nil, "ab世", 0, 3, widthOf)
 	if len(r.Rows) != 2 || r.Rows[0].Text != "ab" || r.Rows[0].EndType != RowEndSoftEarly {
 		t.Fatalf("early wrap rows = %+v", r.Rows)
 	}
@@ -306,30 +287,30 @@ func TestLayout(t *testing.T) {
 	}
 
 	// Cursor on the wrap boundary belongs to the new row.
-	r = layoutInto(nil, "abcd", 3, 3, p)
+	r = layoutInto(nil, "abcd", 3, 3, widthOf)
 	if r.CursorRow != 1 || r.CursorCol != 0 {
 		t.Errorf("boundary cursor = (%d,%d), want (1,0)", r.CursorRow, r.CursorCol)
 	}
 
 	// Empty text: one empty row, cursor at origin.
-	r = layoutInto(nil, "", 0, 80, p)
+	r = layoutInto(nil, "", 0, 80, widthOf)
 	if len(r.Rows) != 1 || r.CursorRow != 0 || r.CursorCol != 0 || r.PendingWrap {
 		t.Errorf("empty = %+v", r)
 	}
 
 	// Reuse contract: second call must not grow a new backing array.
-	first := layoutInto(nil, "abcdef", 0, 3, p)
-	second := layoutInto(first.Rows, "xyzuvw", 0, 3, p)
+	first := layoutInto(nil, "abcdef", 0, 3, widthOf)
+	second := layoutInto(first.Rows, "xyzuvw", 0, 3, widthOf)
 	if &first.Rows[0] != &second.Rows[0] {
 		t.Error("dst backing array was not reused")
 	}
 }
 
 func TestLayoutHardNewline(t *testing.T) {
-	p := WidthParams{AmbiguousWidth: 1}
+	widthOf := testWidthLookup(nil)
 
 	// Basic split; newline is in neither row's text nor width.
-	r := layoutInto(nil, "ab\ncd", 5, 80, p)
+	r := layoutInto(nil, "ab\ncd", 5, 80, widthOf)
 	if len(r.Rows) != 2 || r.Rows[0].Text != "ab" || r.Rows[1].Text != "cd" {
 		t.Fatalf("rows = %+v", r.Rows)
 	}
@@ -341,27 +322,27 @@ func TestLayoutHardNewline(t *testing.T) {
 	}
 
 	// Cursor on the newline = end of first row; just after it = start of second.
-	if r := layoutInto(nil, "ab\ncd", 2, 80, p); r.CursorRow != 0 || r.CursorCol != 2 {
+	if r := layoutInto(nil, "ab\ncd", 2, 80, widthOf); r.CursorRow != 0 || r.CursorCol != 2 {
 		t.Errorf("cursor on \\n = (%d,%d), want (0,2)", r.CursorRow, r.CursorCol)
 	}
-	if r := layoutInto(nil, "ab\ncd", 3, 80, p); r.CursorRow != 1 || r.CursorCol != 0 {
+	if r := layoutInto(nil, "ab\ncd", 3, 80, widthOf); r.CursorRow != 1 || r.CursorCol != 0 {
 		t.Errorf("cursor after \\n = (%d,%d), want (1,0)", r.CursorRow, r.CursorCol)
 	}
 
 	// Trailing newline yields an empty final row, cursor lands on it.
-	r = layoutInto(nil, "ab\n", 3, 80, p)
+	r = layoutInto(nil, "ab\n", 3, 80, widthOf)
 	if len(r.Rows) != 2 || r.Rows[1].Text != "" || r.CursorRow != 1 || r.CursorCol != 0 {
 		t.Errorf("trailing newline = %+v", r)
 	}
 
 	// Consecutive newlines produce an empty middle row.
-	r = layoutInto(nil, "a\n\nb", 0, 80, p)
+	r = layoutInto(nil, "a\n\nb", 0, 80, widthOf)
 	if len(r.Rows) != 3 || r.Rows[1].Text != "" || r.Rows[1].EndType != RowEndHard {
 		t.Errorf("blank line = %+v", r.Rows)
 	}
 
 	// Hard break composes with soft wrapping.
-	r = layoutInto(nil, "abcd\nef", 0, 3, p)
+	r = layoutInto(nil, "abcd\nef", 0, 3, widthOf)
 	if len(r.Rows) != 3 || r.Rows[0].EndType != RowEndSoftExact ||
 		r.Rows[1].Text != "d" || r.Rows[1].EndType != RowEndHard || r.Rows[2].Text != "ef" {
 		t.Errorf("wrap+hard = %+v", r.Rows)
@@ -386,7 +367,7 @@ func getClusterBoundaries(text string) []int {
 
 func TestLayoutProperties(t *testing.T) {
 	pieces := []string{
-		"a", "Z", " ", "\t", "\x01", "\x7f", // ASCII, tab stand-in, control stand-ins
+		"a", "Z", " ", // printable ASCII
 		"\n", "\r\n", // hard breaks
 		"世", "界", // wide CJK
 		"é", "e\u0301", // precomposed vs combining
@@ -395,14 +376,21 @@ func TestLayoutProperties(t *testing.T) {
 	}
 	widths := []int{2, 3, 5, 10, 80}
 
-	// Build up all parameter combinitorics.
-	var params []WidthParams
-	for _, onClusters := range[]bool{false, true} {
-		for _, vs16 := range []bool{false, true} {
-			for _, amb := range[]int{1, 2} {
-				params = append(params, WidthParams { WidthOnClusters: onClusters, Vs16Wide: vs16, AmbiguousWidth: amb})
-			}
-		}
+	widthMaps := []map[string]int{
+		{
+			"世": 2, "界": 2,
+			"é": 1, "e\u0301": 1,
+			"👨‍👩‍👧‍👦": 2, "❤️": 2,
+			"☂\uFE0F": 2, "☂\uFE0E": 1,
+			"🇺🇸": 2, "±": 1,
+		},
+		{
+			"世": 1, "界": 1,
+			"é": 2, "e\u0301": 2,
+			"👨‍👩‍👧‍👦": 1, "❤️": 1,
+			"☂\uFE0F": 1, "☂\uFE0E": 2,
+			"🇺🇸": 1, "±": 2,
+		},
 	}
 
 	rng := rand.New(rand.NewSource(1))
@@ -420,13 +408,14 @@ func TestLayoutProperties(t *testing.T) {
 		boundaries := getClusterBoundaries(text)
 
 		for _, width := range widths {
-			for _, p := range params {
+			for widthMapIndex, widthMap := range widthMaps {
+				widthOf := testWidthLookup(widthMap)
 				for _, cursor := range boundaries {
-					r := layoutInto(dst, text, cursor, width, p)
+					r := layoutInto(dst, text, cursor, width, widthOf)
 					dst = r.Rows
-					checkLayoutProperties(t, text, cursor, width, p, r)
+					checkLayoutProperties(t, text, cursor, width, widthOf, r)
 					if t.Failed() {
-						t.Fatalf("input %q cursor=%d width=%d params=%+v", text, cursor, width, p)
+						t.Fatalf("input %q cursor=%d width=%d widthMap=%d", text, cursor, width, widthMapIndex)
 					}
 				}
 			}
@@ -434,7 +423,7 @@ func TestLayoutProperties(t *testing.T) {
 	}
 }
 
-func checkLayoutProperties(t *testing.T, text string, cursor int, terminalWidth int, p WidthParams, r LayoutResult) {
+func checkLayoutProperties(t *testing.T, text string, cursor int, terminalWidth int, widthOf func(string) int, r LayoutResult) {
 	t.Helper()
 
 	rows := r.Rows
@@ -471,8 +460,8 @@ func checkLayoutProperties(t *testing.T, text string, cursor int, terminalWidth 
 	}
 
 	checkWidth := func(i int, row LayoutRow) {
-		if got := stringWidth(row.Text, p); row.Width != got {
-			t.Errorf("row %d Width=%d but stringWidth=%d", i, row.Width, got)
+		if got := sumTestWidths(row.Text, widthOf); row.Width != got {
+			t.Errorf("row %d Width=%d but summed widths=%d", i, row.Width, got)
 		}
 		if row.Width > terminalWidth {
 			cl, rest, _, _ := uniseg.FirstGraphemeClusterInString(row.Text, -1)
@@ -502,7 +491,7 @@ func checkLayoutProperties(t *testing.T, text string, cursor int, terminalWidth 
 				t.Errorf("row %d soft-wrapped but empty", i)
 			} else {
 				next, _, _, _ := uniseg.FirstGraphemeClusterInString(rows[i+1].Text, -1)
-				if w := clusterWidth(next, p); row.Width+w <= terminalWidth {
+				if w := widthOf(next); row.Width+w <= terminalWidth {
 					t.Errorf("row %d ended soft at width %d but next cluster %q (width %d) would have fit in %d",
 						i, row.Width, next, w, terminalWidth)
 				}
