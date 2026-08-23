@@ -909,6 +909,74 @@ func TestTypeCheckProgramAssertiveDestructuringBindingsFlowForward(t *testing.T)
 	}
 }
 
+func TestTypeCheckProgramAssertiveDictBindingsKeepFieldTypes(t *testing.T) {
+	cases := []string{
+		"{\"name\": \"Ada\", \"age\": 36} => {'name': name, 'age': age} @name len @age +",
+		"{\"left\": 1, \"right\": 2} as {str: int} => {'left': left} @left 1 +",
+	}
+	for _, src := range cases {
+		errs, ok := parseAndCheck(t, src)
+		if !ok || len(errs) != 0 {
+			t.Errorf("%q: expected precise dict binding types; errs=%v ok=%v", src, errs, ok)
+		}
+	}
+}
+
+func TestTypeCheckProgramAssertiveDictBindingRejectsWrongConsumer(t *testing.T) {
+	src := "{\"name\": \"Ada\"} => {'name': name} @name 1 +"
+	errs, ok := parseAndCheck(t, src)
+	if ok || len(errs) == 0 {
+		t.Fatalf("expected string dict field used as int to fail; errs=%v ok=%v", errs, ok)
+	}
+	if !strings.Contains(errs[0], "no matching overload for '+'") {
+		t.Fatalf("unexpected diagnostic: %v", errs)
+	}
+}
+
+func TestTypeCheckProgramAssertiveMissingDictKeyDoesNotInventBinding(t *testing.T) {
+	src := "{\"present\": 1} => {'missing': value}"
+	errs, ok := parseAndCheck(t, src)
+	if ok || len(errs) == 0 {
+		t.Fatalf("expected impossible shape pattern to fail; errs=%v ok=%v", errs, ok)
+	}
+	if !strings.Contains(errs[0], "cannot match subject type") {
+		t.Fatalf("unexpected diagnostic: %v", errs)
+	}
+}
+
+func TestTypeCheckProgramAssertiveRejectsImpossibleSubjectKinds(t *testing.T) {
+	cases := []string{
+		"42 => [value]",
+		"[1] => {'key': value}",
+		"none => just value",
+	}
+	for _, src := range cases {
+		errs, ok := parseAndCheck(t, src)
+		if ok || len(errs) == 0 || !strings.Contains(errs[0], "cannot match subject type") {
+			t.Errorf("%q: expected guaranteed mismatch diagnostic; errs=%v ok=%v", src, errs, ok)
+		}
+	}
+}
+
+func TestDictPatternFieldTypeAcrossUnion(t *testing.T) {
+	arena := NewTypeArena()
+	names := NewNameTable()
+	checker := NewChecker(arena, names)
+	valueName := names.Intern("value")
+	left := arena.MakeShape([]ShapeField{{Name: valueName, Type: TidInt}})
+	right := arena.MakeShape([]ShapeField{{Name: valueName, Type: TidStr}})
+	subject := arena.MakeUnion([]TypeId{right, left}, 0)
+
+	got := checker.dictPatternFieldType(subject, "value")
+	want := arena.MakeUnion([]TypeId{TidInt, TidStr}, 0)
+	if got != want {
+		t.Fatalf("union field type: got %s, want %s", FormatType(arena, names, got), FormatType(arena, names, want))
+	}
+	if got := checker.dictPatternFieldType(subject, "missing"); got != TidNothing {
+		t.Fatalf("missing union field: got %s, want TidNothing", FormatType(arena, names, got))
+	}
+}
+
 func TestTypeCheckProgramGetterOnDict(t *testing.T) {
 	// `:name` pops a Dict (or GridRow) off the stack and pushes
 	// Maybe[V]. Here {"n": 2} ":n" yields Maybe[int]; we just check

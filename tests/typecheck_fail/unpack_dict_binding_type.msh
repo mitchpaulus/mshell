@@ -1,0 +1,3 @@
+# Dictionary destructuring must preserve the concrete field type.
+{"name": "Ada"} => {'name': name}
+@name 1 +
