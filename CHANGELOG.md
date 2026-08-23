@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Assertive destructuring with `unpack` and its terse alias `=>`.
   Both consume a list, dictionary, or Just value, bind its structural pattern names,
   and fail at runtime when the pattern does not match.
+  Structural patterns reject duplicate bindings and are limited to 256 positions or entries.
 
 - The language server now offers a `Quote all literals in list` code action that
   single-quotes every bare literal in the innermost list containing the cursor.

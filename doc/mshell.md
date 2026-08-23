@@ -945,6 +945,7 @@ They use the existing match semantics: an exact list pattern requires the same l
 a spread accepts the remaining list elements, a dictionary pattern requires its named
 keys but permits extra keys, and `just name` unwraps a Just value.
 If the pattern does not match, execution fails before any bindings are installed.
+The static checker rejects a pattern when the subject type proves that it can never match.
 
 ```mshell
 [1 2 3 4] => [first ...middle last]
@@ -955,6 +956,8 @@ If the pattern does not match, execution fails before any bindings are installed
 This form is intentionally binding-only, not a general inline switch.
 Its pattern must bind at least one name and may be a list, dictionary, or `just name` pattern.
 Use `_` or `..._` inside list and dictionary patterns to discard values.
+Each binding name may appear only once in a structural pattern.
+List patterns are limited to 256 positions, and dictionary patterns are limited to 256 entries.
 Value, type, and OR tests remain part of normal `match` syntax.
 A composite value-and-binding pattern such as `['copy' source destination]` is not
 supported: list and dictionary destructuring positions are binding names, not value tests.
