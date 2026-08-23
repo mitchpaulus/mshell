@@ -429,6 +429,15 @@ type MShellParseMatchBlock struct {
 	Assertive  bool
 }
 
+func (m *MShellParseMatchBlock) assertAssertiveInvariant() {
+	if !m.Assertive {
+		return
+	}
+	if len(m.Arms) != 1 || !m.Arms[0].Consume || len(m.Arms[0].Body) != 0 || len(m.Arms[0].Pattern) == 0 {
+		panic("assertive match must have one consuming arm with a non-empty pattern and empty body")
+	}
+}
+
 func (m *MShellParseMatchBlock) GetStartToken() Token {
 	return m.StartToken
 }
@@ -1764,20 +1773,33 @@ func (parser *MShellParser) ParseAssertiveMatch() (*MShellParseMatchBlock, error
 	}
 	matchBlock.Arms = append(matchBlock.Arms, arm)
 	matchBlock.EndToken = arm.Pattern[len(arm.Pattern)-1].GetEndToken()
+	matchBlock.assertAssertiveInvariant()
 	return matchBlock, nil
 }
 
+const maxStructuralPatternItems = 256
+
 func validateStructuralBindingPattern(pattern []MShellParseItem, requireBinding bool) error {
-	bindings := 0
+	bindings := make(map[string]struct{})
+	addBinding := func(tok Token, name string) error {
+		if name == "_" {
+			return nil
+		}
+		if _, exists := bindings[name]; exists {
+			return fmt.Errorf("%d:%d: A destructuring pattern cannot bind '%s' more than once.", tok.Line, tok.Column, name)
+		}
+		bindings[name] = struct{}{}
+		return nil
+	}
 
 	if len(pattern) == 2 {
 		first, firstOK := pattern[0].(Token)
 		second, secondOK := pattern[1].(Token)
 		if firstOK && secondOK && first.Type == LITERAL && first.Lexeme == "just" && second.Type == LITERAL {
-			if second.Lexeme != "_" {
-				bindings++
+			if err := addBinding(second, second.Lexeme); err != nil {
+				return err
 			}
-			if requireBinding && bindings == 0 {
+			if requireBinding && len(bindings) == 0 {
 				return fmt.Errorf("%d:%d: Assertive destructuring must bind at least one variable.", first.Line, first.Column)
 			}
 		}
@@ -1790,6 +1812,9 @@ func validateStructuralBindingPattern(pattern []MShellParseItem, requireBinding 
 
 	switch structural := pattern[0].(type) {
 	case *MShellParseList:
+		if len(structural.Items) > maxStructuralPatternItems {
+			return fmt.Errorf("%d:%d: A list destructuring pattern may contain at most %d positions.", structural.StartToken.Line, structural.StartToken.Column, maxStructuralPatternItems)
+		}
 		spreadSeen := false
 		for _, item := range structural.Items {
 			tok, ok := item.(Token)
@@ -1802,14 +1827,17 @@ func validateStructuralBindingPattern(pattern []MShellParseItem, requireBinding 
 					return fmt.Errorf("%d:%d: A list destructuring pattern may contain one named spread binding such as '...rest'.", tok.Line, tok.Column)
 				}
 				spreadSeen = true
-				if tok.Lexeme[3:] != "_" {
-					bindings++
+				if err := addBinding(tok, tok.Lexeme[3:]); err != nil {
+					return err
 				}
-			} else if tok.Lexeme != "_" {
-				bindings++
+			} else if err := addBinding(tok, tok.Lexeme); err != nil {
+				return err
 			}
 		}
 	case *MShellParseDict:
+		if len(structural.Items) > maxStructuralPatternItems {
+			return fmt.Errorf("%d:%d: A dictionary destructuring pattern may contain at most %d entries.", structural.StartToken.Line, structural.StartToken.Column, maxStructuralPatternItems)
+		}
 		for _, kv := range structural.Items {
 			if len(kv.Value) != 1 {
 				return fmt.Errorf("%d:%d: Each dictionary destructuring value must be one binding name or '_'.", structural.StartToken.Line, structural.StartToken.Column)
@@ -1819,15 +1847,15 @@ func validateStructuralBindingPattern(pattern []MShellParseItem, requireBinding 
 				start := kv.Value[0].GetStartToken()
 				return fmt.Errorf("%d:%d: Each dictionary destructuring value must be one binding name or '_'.", start.Line, start.Column)
 			}
-			if tok.Lexeme != "_" {
-				bindings++
+			if err := addBinding(tok, tok.Lexeme); err != nil {
+				return err
 			}
 		}
 	default:
 		return nil
 	}
 
-	if requireBinding && bindings == 0 {
+	if requireBinding && len(bindings) == 0 {
 		start := pattern[0].GetStartToken()
 		return fmt.Errorf("%d:%d: Assertive destructuring must bind at least one variable.", start.Line, start.Column)
 	}

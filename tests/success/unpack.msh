@@ -14,3 +14,23 @@
 
 "payload" just => just value
 @value wl
+
+# Spreads at either edge and an empty middle.
+[1 2] => [...prefix last]
+@prefix len wl
+@last wl
+[1 2] => [first ...suffix]
+@first wl
+@suffix len wl
+[1 2] => [left ...empty right]
+@left wl
+@empty len wl
+@right wl
+
+# Discards do not install variables, and the subject is consumed.
+99 [1 2 3] => [_ kept ..._]
+@kept + wl
+
+# Dictionary discards still require the key and allow extra keys.
+{"required": 7, "discarded": 8, "extra": 9} unpack {'required': required, 'discarded': _}
+@required wl

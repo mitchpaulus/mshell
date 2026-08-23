@@ -64,7 +64,13 @@ func TestParseRejectsInvalidStructuralBindingPatterns(t *testing.T) {
 	}{
 		{"['copy'] match ['copy'] : end", "List destructuring patterns may contain only binding names"},
 		{"[1] => [_]", "must bind at least one variable"},
+		{"[1 2] => [value value]", "cannot bind 'value' more than once"},
+		{"[1 2] => [value ...value]", "cannot bind 'value' more than once"},
+		{"{'a': 1, 'b': 2} => {'a': value, 'b': value}", "cannot bind 'value' more than once"},
 		{"[1] => [first ...middle ...last]", "one named spread binding"},
+		{"[1] => [[nested]]", "List destructuring patterns may contain only binding names"},
+		{"{'a': 1} => {'a': first second}", "must be one binding name"},
+		{"none => just _", "must bind at least one variable"},
 		{"42 => int", "Expected a list, dictionary, or 'just <name>' pattern"},
 	}
 	for _, tc := range cases {
@@ -78,4 +84,35 @@ func TestParseRejectsInvalidStructuralBindingPatterns(t *testing.T) {
 			t.Errorf("%q: got error %q, want it to contain %q", tc.input, err, tc.want)
 		}
 	}
+}
+
+func TestStructuralBindingPatternItemLimit(t *testing.T) {
+	atLimit := "[1] => [" + strings.Repeat("_ ", maxStructuralPatternItems-1) + "value]"
+	parser := NewMShellParser(NewLexer(atLimit, nil))
+	if _, err := parser.ParseFile(); err != nil {
+		t.Fatalf("pattern at item limit should parse: %v", err)
+	}
+
+	overLimit := "[1] => [" + strings.Repeat("_ ", maxStructuralPatternItems) + "value]"
+	parser = NewMShellParser(NewLexer(overLimit, nil))
+	_, err := parser.ParseFile()
+	if err == nil || !strings.Contains(err.Error(), "at most 256 positions") {
+		t.Fatalf("pattern over item limit: got %v", err)
+	}
+}
+
+func TestAssertiveMatchInvariantPanicsOnMalformedAST(t *testing.T) {
+	block := &MShellParseMatchBlock{
+		Assertive: true,
+		Arms: []MShellParseMatchArm{{
+			Consume: false,
+			Pattern: []MShellParseItem{Token{Type: LITERAL, Lexeme: "value"}},
+		}},
+	}
+	defer func() {
+		if recover() == nil {
+			t.Fatal("malformed assertive match AST did not panic")
+		}
+	}()
+	block.assertAssertiveInvariant()
 }

@@ -1091,6 +1091,7 @@ func (state *EvalState) processIfBlock(ifBlock *MShellParseIfBlock, frame *Evalu
 
 // processMatchBlock handles match...end blocks
 func (state *EvalState) processMatchBlock(matchBlock *MShellParseMatchBlock, frame *EvaluationFrame, frames *[]EvaluationFrame) EvalResult {
+	matchBlock.assertAssertiveInvariant()
 	stack := frame.Stack
 	context := frame.Context
 	definitions := frame.Definitions
@@ -1389,7 +1390,7 @@ func (state *EvalState) matchListPattern(pattern *MShellParseList, subject MShel
 			return false, nil, SimpleSuccess()
 		}
 
-		bindings := make(map[string]MShellObject)
+		bindings := make(map[string]MShellObject, len(pattern.Items))
 		// Bind elements before spread
 		for i := range beforeCount {
 			tok, ok := pattern.Items[i].(Token)
@@ -1433,7 +1434,7 @@ func (state *EvalState) matchListPattern(pattern *MShellParseList, subject MShel
 		return false, nil, SimpleSuccess()
 	}
 
-	bindings := make(map[string]MShellObject)
+	bindings := make(map[string]MShellObject, len(pattern.Items))
 	for i, item := range pattern.Items {
 		tok, ok := item.(Token)
 		if !ok || tok.Type != LITERAL {
@@ -1454,7 +1455,7 @@ func (state *EvalState) matchDictPattern(pattern *MShellParseDict, subject MShel
 		return false, nil, SimpleSuccess()
 	}
 
-	bindings := make(map[string]MShellObject)
+	bindings := make(map[string]MShellObject, len(pattern.Items))
 	for _, kv := range pattern.Items {
 		val, exists := dict.Items[kv.Key]
 		if !exists {
@@ -3022,6 +3023,7 @@ func (state *EvalState) evaluateItems(objects []MShellParseItem, stack *MShellSt
 				}
 			}
 		case *MShellParseMatchBlock:
+			t.assertAssertiveInvariant()
 			startToken := t.GetStartToken()
 			subject, err := stack.Peek()
 			if err != nil {

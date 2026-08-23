@@ -1,0 +1,1 @@
+Error parsing file stdin: 1:17: A destructuring pattern cannot bind 'value' more than once.
