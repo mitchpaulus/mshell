@@ -1172,17 +1172,19 @@ func formatPatternItem(it MShellParseItem) string {
 //     Refinement (e.g. inside an `int : ...` arm the subject is known
 //     to be int) is a future improvement.
 //
-// Exhaustiveness is enforced via analyzeArmPattern + CheckMatchExhaustive:
+// Normal match-block exhaustiveness is enforced via analyzeArmPattern + CheckMatchExhaustive:
 // the matched value's static type must be fully covered by the arm patterns,
 // or a wildcard `_` arm must be present. Pattern-driven type narrowing inside
-// arms is still a future improvement.
+// arms is still a future improvement. Assertive destructuring skips that check
+// because its unmatched path is a runtime failure and does not flow forward.
 func (c *Checker) checkMatchBlock(matchBlock *MShellParseMatchBlock) {
 	startTok := matchBlock.GetStartToken()
 	if c.stack.Len() == 0 {
+		hint := startTok.Lexeme + " subject"
 		c.errors = append(c.errors, TypeError{
 			Kind: TErrStackUnderflow,
 			Pos:  startTok,
-			Hint: "match subject",
+			Hint: hint,
 		})
 		return
 	}
@@ -1240,7 +1242,9 @@ func (c *Checker) checkMatchBlock(matchBlock *MShellParseMatchBlock) {
 		}
 		tags = append(tags, info.Tag)
 	}
-	c.CheckMatchExhaustive(subject, tags, startTok)
+	if !matchBlock.Assertive {
+		c.CheckMatchExhaustive(subject, tags, startTok)
+	}
 	c.reconcileArmBranches(armBranches, armLabels, entry, startTok)
 }
 

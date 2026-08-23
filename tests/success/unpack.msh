@@ -1,0 +1,16 @@
+["copy" "source.txt" "destination.txt"] => [command source destination]
+@command wl
+@source wl
+@destination wl
+
+[1 2 3 4] unpack [first ...middle last]
+@first wl
+@middle len wl
+@last wl
+
+{"name": "Ada", "age": 36, "active": true} => {'name': name, 'age': age}
+@name wl
+@age wl
+
+"payload" just => just value
+@value wl

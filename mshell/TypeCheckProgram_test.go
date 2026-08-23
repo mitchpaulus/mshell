@@ -894,6 +894,21 @@ end
 	}
 }
 
+func TestTypeCheckProgramAssertiveDestructuringBindingsFlowForward(t *testing.T) {
+	cases := []string{
+		"[1 2] => [a b] @a @b +",
+		"[1 2 3 4] unpack [first ...middle last] @first @middle len + @last +",
+		"\"value\" just => just value @value len",
+		"{\"name\": \"Ada\", \"age\": 36} => {'name': name, 'age': age} @name len @age +",
+	}
+	for _, src := range cases {
+		errs, ok := parseAndCheck(t, src)
+		if !ok || len(errs) != 0 {
+			t.Errorf("%q: expected clean check; errs=%v ok=%v", src, errs, ok)
+		}
+	}
+}
+
 func TestTypeCheckProgramGetterOnDict(t *testing.T) {
 	// `:name` pops a Dict (or GridRow) off the stack and pushes
 	// Maybe[V]. Here {"n": 2} ":n" yields Maybe[int]; we just check

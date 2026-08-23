@@ -927,6 +927,39 @@ The trailing comma on the last arm is optional.
 `:>` preserves the matched subject on the stack when the arm body runs.
 This is independent of pattern kind and bindings.
 
+### Assertive Destructuring: `unpack` and `=>`
+
+When the goal is only to bind parts of a value, `unpack` is a compact,
+single-pattern form of `match`.
+The `=>` operator is an exact, terser alias.
+
+```mshell
+args unpack [command source destination]
+
+# Exactly equivalent:
+args => [command source destination]
+```
+
+Both forms consume the subject and make bindings available to the following code.
+They use the existing match semantics: an exact list pattern requires the same length,
+a spread accepts the remaining list elements, a dictionary pattern requires its named
+keys but permits extra keys, and `just name` unwraps a Just value.
+If the pattern does not match, execution fails before any bindings are installed.
+
+```mshell
+[1 2 3 4] => [first ...middle last]
+{ 'name': "Ada", 'age': 36 } unpack { 'name': name }
+"value" just => just value
+```
+
+This form is intentionally binding-only, not a general inline switch.
+Its pattern must bind at least one name and may be a list, dictionary, or `just name` pattern.
+Use `_` or `..._` inside list and dictionary patterns to discard values.
+Value, type, and OR tests remain part of normal `match` syntax.
+A composite value-and-binding pattern such as `['copy' source destination]` is not
+supported: list and dictionary destructuring positions are binding names, not value tests.
+Nested patterns are also deferred.
+
 ### Wildcard
 
 `_` matches any value (catch-all).

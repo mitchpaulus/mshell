@@ -15,6 +15,7 @@ func TestTypeCheckerKeywords(t *testing.T) {
 		{"try", TRY},
 		{"fail", FAIL_KEYWORD},
 		{"pure", PURE},
+		{"unpack", UNPACK},
 		// Make sure neighbors still tokenize as before.
 		{"true", TRUE},
 		{"false", FALSE},
@@ -25,6 +26,7 @@ func TestTypeCheckerKeywords(t *testing.T) {
 		{"trying", LITERAL},
 		{"failed", LITERAL},
 		{"purest", LITERAL},
+		{"unpacked", LITERAL},
 	}
 	for _, tc := range cases {
 		l := NewLexer(tc.input, nil)
@@ -35,6 +37,20 @@ func TestTypeCheckerKeywords(t *testing.T) {
 		}
 		if toks[0].Type != tc.want {
 			t.Errorf("%q: got %s, want %s", tc.input, toks[0].Type, tc.want)
+		}
+	}
+}
+
+func TestFatArrowToken(t *testing.T) {
+	l := NewLexer("=> = >=", nil)
+	toks, _ := l.Tokenize()
+	want := []TokenType{FATARROW, EQUALS, GREATERTHANOREQUAL, EOF}
+	if len(toks) != len(want) {
+		t.Fatalf("got %d tokens, want %d", len(toks), len(want))
+	}
+	for i, tokenType := range want {
+		if toks[i].Type != tokenType {
+			t.Errorf("token %d: got %s, want %s", i, toks[i].Type, tokenType)
 		}
 	}
 }
