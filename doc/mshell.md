@@ -955,7 +955,8 @@ The static checker rejects a pattern when the subject type proves that it can ne
 
 This form is intentionally binding-only, not a general inline switch.
 Its pattern must bind at least one name and may be a list, dictionary, or `just name` pattern.
-Use `_` or `..._` inside list and dictionary patterns to discard values.
+Use `_` to discard one list element or a named dictionary value.
+In list patterns, use `..._` to accept and discard zero or more elements.
 Each binding name may appear only once in a structural pattern.
 List patterns are limited to 256 positions, and dictionary patterns are limited to 256 entries.
 Value, type, and OR tests remain part of normal `match` syntax.
@@ -1057,6 +1058,7 @@ A list pattern `[a b c]` matches a list of exactly that length,
 binding elements to the given names.
 Use `_` to discard a position.
 Use `...rest` to capture remaining elements.
+Use `..._` to accept and discard remaining elements.
 
 ```mshell
 myList match
@@ -1081,6 +1083,8 @@ end wl # Output: 1 | [2 3 4] | 5
 
 A dict pattern `{ 'key': v }` matches a dict that contains the given keys,
 binding their values to the given names.
+Use `_` in place of a binding name to require a key without binding its value.
+Dictionary patterns permit extra keys, so they have no spread binding.
 
 ```mshell
 person match

@@ -70,6 +70,8 @@ func TestParseRejectsInvalidStructuralBindingPatterns(t *testing.T) {
 		{"[1] => [first ...middle ...last]", "one named spread binding"},
 		{"[1] => [[nested]]", "List destructuring patterns may contain only binding names"},
 		{"{'a': 1} => {'a': first second}", "must be one binding name"},
+		{"{'a': 1} => {'a': ..._}", "Dictionary destructuring does not support spread patterns"},
+		{"{'a': 1} match {'a': ...rest} : end", "Dictionary destructuring does not support spread patterns"},
 		{"none => just _", "must bind at least one variable"},
 		{"42 => int", "Expected a list, dictionary, or 'just <name>' pattern"},
 	}

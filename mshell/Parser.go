@@ -1847,6 +1847,9 @@ func validateStructuralBindingPattern(pattern []MShellParseItem, requireBinding 
 				start := kv.Value[0].GetStartToken()
 				return fmt.Errorf("%d:%d: Each dictionary destructuring value must be one binding name or '_'.", start.Line, start.Column)
 			}
+			if strings.HasPrefix(tok.Lexeme, "...") {
+				return fmt.Errorf("%d:%d: Dictionary destructuring does not support spread patterns; use '_' to discard a named value.", tok.Line, tok.Column)
+			}
 			if err := addBinding(tok, tok.Lexeme); err != nil {
 				return err
 			}
