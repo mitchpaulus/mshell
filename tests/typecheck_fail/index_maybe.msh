@@ -1,0 +1,2 @@
+# 'index' returns Maybe[int], not int, so arithmetic on the result must fail.
+"abc" "b" index 1 +

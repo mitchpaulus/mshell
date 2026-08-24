@@ -273,6 +273,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The type checker gave `index` and `lastIndexOf` a result type of `int`, but both
+  return `Maybe[int]` at runtime (`none` when the substring is not found). The
+  signature is now `(str str -- Maybe[int])`.
+
 - Commands no longer fail with "Error reclaiming terminal control: ... no such process"
   when several mshell processes share one terminal, as under parallel build runners
   (`redo`, `make -j`) or when a script is backgrounded.

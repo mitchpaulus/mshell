@@ -519,7 +519,7 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		r.reg(name, "(str str int -- str)")
 	}
 	for _, name := range []string{"index", "lastIndexOf"} {
-		r.reg(name, "(str str -- int)")
+		r.reg(name, "(str str -- Maybe[int])")
 	}
 	r.reg("hostname", "( -- str)")
 	r.reg("uuid", "( -- str)")
