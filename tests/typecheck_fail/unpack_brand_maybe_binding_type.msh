@@ -1,0 +1,4 @@
+# Maybe destructuring must project through a brand.
+type Parsed = Maybe[int]
+"3" toInt as Parsed unpack just value
+@value len

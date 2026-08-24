@@ -1194,17 +1194,6 @@ func (c *Checker) checkMatchBlock(matchBlock *MShellParseMatchBlock) {
 	// exhaustiveness check compare against `str` by type id, and the literal
 	// value carries no meaning for pattern matching.
 	subject := c.arena.WidenStrLit(c.stack.items[c.stack.Len()-1])
-	if matchBlock.Assertive && !c.assertivePatternCanMatch(subject, matchBlock.Arms[0].Pattern) {
-		c.errors = append(c.errors, TypeError{
-			Kind:   TErrTypeMismatch,
-			Pos:    startTok,
-			Actual: subject,
-			Hint: "assertive destructuring pattern " +
-				truncatePatternSnippet(formatPatternSnippet(matchBlock.Arms[0].Pattern)) +
-				" cannot match subject type " + FormatType(c.arena, c.names, subject),
-		})
-		return
-	}
 	entry := c.captureBranch()
 
 	if len(matchBlock.Arms) == 0 {
@@ -1221,6 +1210,17 @@ func (c *Checker) checkMatchBlock(matchBlock *MShellParseMatchBlock) {
 		c.loadBranch(entry)
 		c.diverged = false
 		info := c.analyzeArmPattern(subject, arm.Pattern)
+		if matchBlock.Assertive && !info.CanMatch {
+			c.errors = append(c.errors, TypeError{
+				Kind:   TErrTypeMismatch,
+				Pos:    startTok,
+				Actual: subject,
+				Hint: "assertive destructuring pattern " +
+					truncatePatternSnippet(formatPatternSnippet(arm.Pattern)) +
+					" cannot match subject type " + FormatType(c.arena, c.names, subject),
+			})
+			return
+		}
 		if len(arm.Pattern) > 0 && !info.Recognized {
 			c.errors = append(c.errors, TypeError{
 				Kind: TErrInvalidMatchPattern,
@@ -1261,59 +1261,18 @@ func (c *Checker) checkMatchBlock(matchBlock *MShellParseMatchBlock) {
 	c.reconcileArmBranches(armBranches, armLabels, entry, startTok)
 }
 
-func (c *Checker) assertivePatternCanMatch(subject TypeId, pattern []MShellParseItem) bool {
-	subject = c.subst.Apply(c.arena, subject)
-	node := c.arena.Node(subject)
-	switch node.Kind {
-	case TKVar:
-		return true
-	case TKBrand:
-		return c.assertivePatternCanMatch(TypeId(node.B), pattern)
-	case TKUnion:
-		for _, member := range c.arena.UnionMembers(subject) {
-			if c.assertivePatternCanMatch(member, pattern) {
-				return true
-			}
-		}
-		return false
-	}
-
-	if len(pattern) == 2 {
-		first, firstOK := pattern[0].(Token)
-		if firstOK && first.Type == LITERAL && first.Lexeme == "just" {
-			return node.Kind == TKMaybe && c.subst.Apply(c.arena, TypeId(node.A)) != TidBottom
-		}
-		return false
-	}
-	if len(pattern) != 1 {
-		return false
-	}
-
-	switch structural := pattern[0].(type) {
-	case *MShellParseList:
-		return node.Kind == TKList
-	case *MShellParseDict:
-		switch node.Kind {
-		case TKDict:
-			return true
-		case TKShape:
-			for _, kv := range structural.Items {
-				if c.dictPatternFieldType(subject, kv.Key) == TidNothing {
-					return false
-				}
-			}
-			return true
-		}
-	}
-	return false
-}
-
 // armPattern is the single interpretation of a match arm pattern. One
-// analysis feeds all four consumers that used to re-pattern-match the
-// arm independently: recognition diagnostics (Recognized), the
-// exhaustiveness check (Tag), subject narrowing (Narrow), and
-// pattern-introduced bindings (Bindings).
+// analysis feeds the consumers that used to re-pattern-match the arm
+// independently: recognition diagnostics (Recognized), matchability
+// (CanMatch), the exhaustiveness check (Tag), subject narrowing (Narrow),
+// and pattern-introduced bindings (Bindings).
 type armPattern struct {
+	// CanMatch reports whether at least one inhabitant of the subject type
+	// can match this pattern. Assertive destructuring uses it to reject a
+	// statically impossible assertion. Bindings are projected from exactly
+	// those union members that can match, so their types describe the
+	// successful continuation rather than the whole subject union.
+	CanMatch bool
 	// Tag is what the exhaustiveness checker understands. Anything not
 	// recognized as wildcard / just / none / true / false / a known
 	// type name is MatchArmType with TidNothing — it counts as a
@@ -1353,7 +1312,10 @@ func (c *Checker) analyzeArmPattern(subject TypeId, pattern []MShellParseItem) a
 }
 
 func (c *Checker) armPatternOf(subject TypeId, pattern []MShellParseItem) armPattern {
-	out := armPattern{Tag: MatchArmTag{Kind: MatchArmType, TypeArm: TidNothing}}
+	out := armPattern{
+		CanMatch: true,
+		Tag:      MatchArmTag{Kind: MatchArmType, TypeArm: TidNothing},
+	}
 
 	switch len(pattern) {
 	case 1:
@@ -1374,35 +1336,10 @@ func (c *Checker) armPatternOf(subject TypeId, pattern []MShellParseItem) armPat
 					}
 				}
 			}
-			elem := c.subst.FreshVar(c.arena)
-			if n := c.arena.Node(c.subst.Apply(c.arena, subject)); n.Kind == TKList {
-				elem = TypeId(n.A)
-			}
-			for _, item := range p.Items {
-				tok, ok := item.(Token)
-				if !ok || tok.Type != LITERAL {
-					continue
-				}
-				if len(tok.Lexeme) > 3 && tok.Lexeme[:3] == "..." {
-					if tok.Lexeme[3:] != "_" {
-						out.Bindings = append(out.Bindings, patternBind{tok.Lexeme[3:], c.arena.MakeList(elem)})
-					}
-				} else if tok.Lexeme != "_" {
-					out.Bindings = append(out.Bindings, patternBind{tok.Lexeme, elem})
-				}
-			}
+			out.Bindings, out.CanMatch = c.structuralPatternBindings(subject, pattern)
 		case *MShellParseDict:
 			out.Recognized = true
-			for _, kv := range p.Items {
-				if len(kv.Value) != 1 {
-					continue
-				}
-				if tok, ok := kv.Value[0].(Token); ok && tok.Type == LITERAL && tok.Lexeme != "_" {
-					if fieldType := c.dictPatternFieldType(subject, kv.Key); fieldType != TidNothing {
-						out.Bindings = append(out.Bindings, patternBind{tok.Lexeme, fieldType})
-					}
-				}
-			}
+			out.Bindings, out.CanMatch = c.structuralPatternBindings(subject, pattern)
 		case Token:
 			c.analyzeTokenPattern(p, &out)
 		case *MShellParseOrPattern:
@@ -1420,11 +1357,7 @@ func (c *Checker) armPatternOf(subject TypeId, pattern []MShellParseItem) armPat
 		if t0.Type == LITERAL && t0.Lexeme == "just" {
 			out.Recognized = true
 			out.Tag = MatchArmTag{Kind: MatchArmJust}
-			if t1.Lexeme != "_" {
-				if n := c.arena.Node(c.subst.Apply(c.arena, subject)); n.Kind == TKMaybe {
-					out.Bindings = append(out.Bindings, patternBind{t1.Lexeme, TypeId(n.A)})
-				}
-			}
+			out.Bindings, out.CanMatch = c.structuralPatternBindings(subject, pattern)
 			return out
 		}
 		// `<typekeyword> name` binds the matched value to the type the
@@ -1453,52 +1386,170 @@ func (c *Checker) armPatternOf(subject TypeId, pattern []MShellParseItem) armPat
 	return out
 }
 
-// dictPatternFieldType returns the type a successful dictionary pattern binds
-// for key. TidNothing means the subject has no statically possible dictionary
-// value containing that key, so there is no successful arm in which to bind.
-func (c *Checker) dictPatternFieldType(subject TypeId, key string) TypeId {
+// structuralPatternBindings returns the bindings installed on a successful
+// list, dictionary, or `just name` pattern and whether the pattern can match
+// the subject at all. For a union it analyzes the complete pattern against
+// each member, discards members that cannot match, and unions corresponding
+// binding types across the remaining members. Filtering by the complete
+// pattern preserves correlations between fields of shape-union members.
+func (c *Checker) structuralPatternBindings(subject TypeId, pattern []MShellParseItem) ([]patternBind, bool) {
+	bindings, canMatch := c.structuralPatternBindingsOf(subject, pattern)
+	if canMatch {
+		return bindings, true
+	}
+	// Normal match still checks unreachable arm bodies. Give those bodies
+	// placeholder bindings so the useful diagnostic stays at the pattern
+	// instead of cascading into an unrelated "unknown identifier" error.
+	return c.unknownStructuralPatternBindings(pattern), false
+}
+
+func (c *Checker) structuralPatternBindingsOf(subject TypeId, pattern []MShellParseItem) ([]patternBind, bool) {
 	subject = c.subst.Apply(c.arena, subject)
 	node := c.arena.Node(subject)
 	switch node.Kind {
 	case TKVar:
-		return c.subst.FreshVar(c.arena)
-	case TKDict:
-		return c.subst.Apply(c.arena, TypeId(node.B))
-	case TKShape:
-		name := c.names.Intern(key)
-		fields := c.arena.ShapeFields(subject)
-		i := sort.Search(len(fields), func(i int) bool { return fields[i].Name >= name })
-		if i < len(fields) && fields[i].Name == name {
-			return c.subst.Apply(c.arena, fields[i].Type)
-		}
-		return TidNothing
+		return c.unknownStructuralPatternBindings(pattern), true
+	case TKBrand:
+		return c.structuralPatternBindingsOf(TypeId(node.B), pattern)
 	case TKUnion:
 		members := c.arena.UnionMembers(subject)
-		fieldTypes := make([]TypeId, 0, len(members))
+		alternatives := make([][]patternBind, 0, len(members))
 		for _, member := range members {
-			if fieldType := c.dictPatternFieldType(member, key); fieldType != TidNothing {
-				fieldNode := c.arena.Node(fieldType)
-				if fieldNode.Kind == TKUnion && fieldNode.A == 0 {
-					fieldTypes = append(fieldTypes, c.arena.UnionMembers(fieldType)...)
-				} else {
-					fieldTypes = append(fieldTypes, fieldType)
-				}
+			if bindings, ok := c.structuralPatternBindingsOf(member, pattern); ok {
+				alternatives = append(alternatives, bindings)
 			}
 		}
-		if len(fieldTypes) == 0 {
-			return TidNothing
+		if len(alternatives) == 0 {
+			return nil, false
 		}
-		// TypeArena.MakeUnion uses insertion sort. Pre-sorting here keeps
-		// dictionary patterns over unions at O(keys * arms log arms) instead
-		// of O(keys * arms^2), which would become cubic when both dimensions
-		// grow together.
-		sort.Slice(fieldTypes, func(i, j int) bool { return fieldTypes[i] < fieldTypes[j] })
-		return c.arena.MakeUnion(fieldTypes, 0)
-	case TKBrand:
-		return c.dictPatternFieldType(TypeId(node.B), key)
-	default:
-		return TidNothing
+		return c.mergePatternBindingAlternatives(alternatives), true
 	}
+
+	if len(pattern) == 2 {
+		first, firstOK := pattern[0].(Token)
+		name, nameOK := pattern[1].(Token)
+		if !firstOK || !nameOK || first.Type != LITERAL || first.Lexeme != "just" || node.Kind != TKMaybe {
+			return nil, false
+		}
+		payload := c.subst.Apply(c.arena, TypeId(node.A))
+		if payload == TidBottom {
+			return nil, false
+		}
+		if name.Lexeme == "_" {
+			return nil, true
+		}
+		return []patternBind{{Name: name.Lexeme, Type: payload}}, true
+	}
+	if len(pattern) != 1 {
+		return nil, false
+	}
+
+	switch p := pattern[0].(type) {
+	case *MShellParseList:
+		if node.Kind != TKList {
+			return nil, false
+		}
+		return c.listPatternBindings(p, c.subst.Apply(c.arena, TypeId(node.A))), true
+	case *MShellParseDict:
+		switch node.Kind {
+		case TKDict:
+			fieldType := c.subst.Apply(c.arena, TypeId(node.B))
+			return c.dictPatternBindings(p, func(string) (TypeId, bool) { return fieldType, true })
+		case TKShape:
+			fields := c.arena.ShapeFields(subject)
+			return c.dictPatternBindings(p, func(key string) (TypeId, bool) {
+				name := c.names.Intern(key)
+				i := sort.Search(len(fields), func(i int) bool { return fields[i].Name >= name })
+				if i >= len(fields) || fields[i].Name != name {
+					return TidNothing, false
+				}
+				return c.subst.Apply(c.arena, fields[i].Type), true
+			})
+		}
+	}
+	return nil, false
+}
+
+func (c *Checker) listPatternBindings(pattern *MShellParseList, elem TypeId) []patternBind {
+	bindings := make([]patternBind, 0, len(pattern.Items))
+	for _, item := range pattern.Items {
+		tok, ok := item.(Token)
+		if !ok || tok.Type != LITERAL {
+			continue
+		}
+		if strings.HasPrefix(tok.Lexeme, "...") {
+			if tok.Lexeme[3:] != "_" {
+				bindings = append(bindings, patternBind{tok.Lexeme[3:], c.arena.MakeList(elem)})
+			}
+		} else if tok.Lexeme != "_" {
+			bindings = append(bindings, patternBind{tok.Lexeme, elem})
+		}
+	}
+	return bindings
+}
+
+func (c *Checker) dictPatternBindings(pattern *MShellParseDict, fieldType func(string) (TypeId, bool)) ([]patternBind, bool) {
+	bindings := make([]patternBind, 0, len(pattern.Items))
+	for _, kv := range pattern.Items {
+		typeOfField, ok := fieldType(kv.Key)
+		if !ok {
+			return nil, false
+		}
+		if len(kv.Value) != 1 {
+			continue
+		}
+		if tok, ok := kv.Value[0].(Token); ok && tok.Type == LITERAL && tok.Lexeme != "_" {
+			bindings = append(bindings, patternBind{tok.Lexeme, typeOfField})
+		}
+	}
+	return bindings, true
+}
+
+func (c *Checker) unknownStructuralPatternBindings(pattern []MShellParseItem) []patternBind {
+	if len(pattern) == 2 {
+		if name, ok := pattern[1].(Token); ok && name.Lexeme != "_" {
+			return []patternBind{{Name: name.Lexeme, Type: c.subst.FreshVar(c.arena)}}
+		}
+		return nil
+	}
+	if len(pattern) != 1 {
+		return nil
+	}
+	switch p := pattern[0].(type) {
+	case *MShellParseList:
+		return c.listPatternBindings(p, c.subst.FreshVar(c.arena))
+	case *MShellParseDict:
+		bindings, _ := c.dictPatternBindings(p, func(string) (TypeId, bool) {
+			return c.subst.FreshVar(c.arena), true
+		})
+		return bindings
+	}
+	return nil
+}
+
+func (c *Checker) mergePatternBindingAlternatives(alternatives [][]patternBind) []patternBind {
+	if len(alternatives) == 1 {
+		return alternatives[0]
+	}
+	merged := make([]patternBind, len(alternatives[0]))
+	for i, binding := range alternatives[0] {
+		types := make([]TypeId, 0, len(alternatives))
+		for _, alternative := range alternatives {
+			if len(alternative) != len(merged) || alternative[i].Name != binding.Name {
+				panic("structural pattern alternatives produced different bindings")
+			}
+			t := c.subst.Apply(c.arena, alternative[i].Type)
+			n := c.arena.Node(t)
+			if n.Kind == TKUnion && n.A == 0 {
+				types = append(types, c.arena.UnionMembers(t)...)
+			} else {
+				types = append(types, t)
+			}
+		}
+		sort.Slice(types, func(i, j int) bool { return types[i] < types[j] })
+		merged[i] = patternBind{Name: binding.Name, Type: c.arena.MakeUnion(types, 0)}
+	}
+	return merged
 }
 
 // analyzeTokenPattern handles the single-token pattern forms: type

@@ -1,0 +1,4 @@
+# A field present in every viable shape retains the union of its types.
+true ({"value": 1}) ({"value": "x"}) iff
+unpack {'value': value}
+@value 1 +

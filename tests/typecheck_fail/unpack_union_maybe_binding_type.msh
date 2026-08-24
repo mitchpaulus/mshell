@@ -1,0 +1,4 @@
+# A union of Maybe payloads must not collapse to one member.
+true ("3" toInt) ("1.5" toFloat) iff
+unpack just value
+@value 1 +

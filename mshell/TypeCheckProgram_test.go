@@ -958,25 +958,6 @@ func TestTypeCheckProgramAssertiveRejectsImpossibleSubjectKinds(t *testing.T) {
 	}
 }
 
-func TestDictPatternFieldTypeAcrossUnion(t *testing.T) {
-	arena := NewTypeArena()
-	names := NewNameTable()
-	checker := NewChecker(arena, names)
-	valueName := names.Intern("value")
-	left := arena.MakeShape([]ShapeField{{Name: valueName, Type: TidInt}})
-	right := arena.MakeShape([]ShapeField{{Name: valueName, Type: TidStr}})
-	subject := arena.MakeUnion([]TypeId{right, left}, 0)
-
-	got := checker.dictPatternFieldType(subject, "value")
-	want := arena.MakeUnion([]TypeId{TidInt, TidStr}, 0)
-	if got != want {
-		t.Fatalf("union field type: got %s, want %s", FormatType(arena, names, got), FormatType(arena, names, want))
-	}
-	if got := checker.dictPatternFieldType(subject, "missing"); got != TidNothing {
-		t.Fatalf("missing union field: got %s, want TidNothing", FormatType(arena, names, got))
-	}
-}
-
 func TestTypeCheckProgramGetterOnDict(t *testing.T) {
 	// `:name` pops a Dict (or GridRow) off the stack and pushes
 	// Maybe[V]. Here {"n": 2} ":n" yields Maybe[int]; we just check

@@ -1,0 +1,4 @@
+# A union of list element types must not become an unconstrained binding.
+true ([1]) (["x"]) iff
+unpack [value]
+@value 1 +
