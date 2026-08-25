@@ -273,6 +273,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The GitHub action now produces `msh.exe` on Windows.
+  Previously, Git Bash's transparent `.exe` handling made `[ -f mshell ]` succeed when only `mshell.exe` existed,
+  so the install step created an extensionless `msh` copy that native Windows PATH lookup could not resolve,
+  and `shell: msh {0}` steps failed with "command not found".
+  The install checks are now gated on the runner OS.
 - Commands no longer fail with "Error reclaiming terminal control: ... no such process"
   when several mshell processes share one terminal, as under parallel build runners
   (`redo`, `make -j`) or when a script is backgrounded.
