@@ -107,7 +107,14 @@ runs:
           cp msh.exe mshell.exe
         fi
 
-        echo "$HOME/.mshell/bin" >> $GITHUB_PATH
+        # GITHUB_PATH entries must be resolvable by native Windows path lookup,
+        # so a POSIX-style $HOME path from Git Bash won't work there.
+        # This assumes that $HOME in git bash resolves to $USERPROFILE.
+        if [ "${{ runner.os }}" = "Windows" ]; then
+          echo "$USERPROFILE\\.mshell\\bin" >> "$GITHUB_PATH"
+        else
+          echo "$HOME/.mshell/bin" >> "$GITHUB_PATH"
+        fi
 
         if [ -f "$HOME/.mshell/bin/msh" ]; then
           MSH_BIN="$HOME/.mshell/bin/msh"
