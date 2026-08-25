@@ -1,4 +1,4 @@
 # List destructuring must project through a brand.
 type Numbers = [int]
-[1] as Numbers unpack [value]
+[1] as Numbers => [value]
 @value len

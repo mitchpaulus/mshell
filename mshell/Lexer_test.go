@@ -15,7 +15,6 @@ func TestTypeCheckerKeywords(t *testing.T) {
 		{"try", TRY},
 		{"fail", FAIL_KEYWORD},
 		{"pure", PURE},
-		{"unpack", UNPACK},
 		// Make sure neighbors still tokenize as before.
 		{"true", TRUE},
 		{"false", FALSE},
@@ -26,7 +25,6 @@ func TestTypeCheckerKeywords(t *testing.T) {
 		{"trying", LITERAL},
 		{"failed", LITERAL},
 		{"purest", LITERAL},
-		{"unpacked", LITERAL},
 	}
 	for _, tc := range cases {
 		l := NewLexer(tc.input, nil)

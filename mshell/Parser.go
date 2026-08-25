@@ -1118,7 +1118,7 @@ func (parser *MShellParser) ParseItem() (MShellParseItem, error) {
 		return parser.ParseIfBlock()
 	case MATCH:
 		return parser.ParseMatchBlock()
-	case UNPACK, FATARROW:
+	case FATARROW:
 		return parser.ParseAssertiveMatch()
 	case PREFIXQUOTE:
 		return parser.ParsePrefixQuote()
@@ -1734,7 +1734,7 @@ func (parser *MShellParser) ParseMatchBlock() (*MShellParseMatchBlock, error) {
 	return matchBlock, nil
 }
 
-// ParseAssertiveMatch turns `unpack <pattern>` and `=> <pattern>` into a
+// ParseAssertiveMatch turns `=> <pattern>` into a
 // consuming, single-arm match with an empty body. The Assertive marker tells
 // the type checker that the implicit unmatched path diverges at runtime.
 func (parser *MShellParser) ParseAssertiveMatch() (*MShellParseMatchBlock, error) {

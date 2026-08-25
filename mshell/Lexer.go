@@ -99,7 +99,6 @@ const (
 	GRID_CLOSE               // |]
 	PREFIXQUOTE              // .functionName
 	MATCH
-	UNPACK
 	VER
 	STDERRTOSTDOUT           // 2>&1, merge stderr into stdout's destination
 	STDOUTTOSTDERR           // 1>&2, merge stdout into stderr's destination
@@ -287,8 +286,6 @@ func (t TokenType) String() string {
 		return "PREFIXQUOTE"
 	case MATCH:
 		return "MATCH"
-	case UNPACK:
-		return "UNPACK"
 	case VER:
 		return "VER"
 	case AS:
@@ -647,8 +644,6 @@ func (l *Lexer) literalOrKeywordType() TokenType {
 				return l.checkKeyword(2, "pe", TYPE)
 			}
 		}
-	case 'u':
-		return l.checkKeyword(1, "npack", UNPACK)
 	case 'V':
 		return l.checkKeyword(1, "ER", VER)
 	case 'x':

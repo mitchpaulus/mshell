@@ -19,34 +19,32 @@ func TestParseFile_LexerErrorStopsParsing(t *testing.T) {
 	}
 }
 
-func TestParseAssertiveDestructuringAliases(t *testing.T) {
-	for _, operator := range []string{"=>", "unpack"} {
-		input := "[1 2] " + operator + " [first second]"
-		parser := NewMShellParser(NewLexer(input, nil))
-		file, err := parser.ParseFile()
-		if err != nil {
-			t.Fatalf("%s: unexpected parse error: %v", operator, err)
-		}
-		if len(file.Items) != 2 {
-			t.Fatalf("%s: got %d items, want 2", operator, len(file.Items))
-		}
-		block, ok := file.Items[1].(*MShellParseMatchBlock)
-		if !ok {
-			t.Fatalf("%s: second item is %T, want *MShellParseMatchBlock", operator, file.Items[1])
-		}
-		if !block.Assertive || len(block.Arms) != 1 || !block.Arms[0].Consume || len(block.Arms[0].Body) != 0 {
-			t.Fatalf("%s: unexpected assertive match AST: %#v", operator, block)
-		}
-		if _, ok := block.Arms[0].Pattern[0].(*MShellParseList); !ok {
-			t.Fatalf("%s: pattern is %T, want list pattern", operator, block.Arms[0].Pattern[0])
-		}
+func TestParseAssertiveDestructuring(t *testing.T) {
+	input := "[1 2] => [first second]"
+	parser := NewMShellParser(NewLexer(input, nil))
+	file, err := parser.ParseFile()
+	if err != nil {
+		t.Fatalf("unexpected parse error: %v", err)
+	}
+	if len(file.Items) != 2 {
+		t.Fatalf("got %d items, want 2", len(file.Items))
+	}
+	block, ok := file.Items[1].(*MShellParseMatchBlock)
+	if !ok {
+		t.Fatalf("second item is %T, want *MShellParseMatchBlock", file.Items[1])
+	}
+	if !block.Assertive || len(block.Arms) != 1 || !block.Arms[0].Consume || len(block.Arms[0].Body) != 0 {
+		t.Fatalf("unexpected assertive match AST: %#v", block)
+	}
+	if _, ok := block.Arms[0].Pattern[0].(*MShellParseList); !ok {
+		t.Fatalf("pattern is %T, want list pattern", block.Arms[0].Pattern[0])
 	}
 }
 
 func TestParseAssertiveDestructuringForms(t *testing.T) {
 	inputs := []string{
 		"{'name': 'Ada'} => {'name': name}",
-		"'value' just unpack just value",
+		"'value' just => just value",
 		"[1 2 3] => [first ...middle last]",
 	}
 	for _, input := range inputs {

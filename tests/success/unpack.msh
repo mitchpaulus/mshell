@@ -3,7 +3,7 @@
 @source wl
 @destination wl
 
-[1 2 3 4] unpack [first ...middle last]
+[1 2 3 4] => [first ...middle last]
 @first wl
 @middle len wl
 @last wl
@@ -32,5 +32,5 @@
 @kept + wl
 
 # Dictionary discards still require the key and allow extra keys.
-{"required": 7, "discarded": 8, "extra": 9} unpack {'required': required, 'discarded': _}
+{"required": 7, "discarded": 8, "extra": 9} => {'required': required, 'discarded': _}
 @required wl

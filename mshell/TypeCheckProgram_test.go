@@ -897,7 +897,7 @@ end
 func TestTypeCheckProgramAssertiveDestructuringBindingsFlowForward(t *testing.T) {
 	cases := []string{
 		"[1 2] => [a b] @a @b +",
-		"[1 2 3 4] unpack [first ...middle last] @first @middle len + @last +",
+		"[1 2 3 4] => [first ...middle last] @first @middle len + @last +",
 		"\"value\" just => just value @value len",
 		"{\"name\": \"Ada\", \"age\": 36} => {'name': name, 'age': age} @name len @age +",
 	}

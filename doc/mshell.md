@@ -927,21 +927,17 @@ The trailing comma on the last arm is optional.
 `:>` preserves the matched subject on the stack when the arm body runs.
 This is independent of pattern kind and bindings.
 
-### Assertive Destructuring: `unpack` and `=>`
+### Assertive Destructuring: `=>`
 
-When the goal is only to bind parts of a value, `unpack` is a compact,
+When the goal is only to bind parts of a value, `=>` is a compact,
 single-pattern form of `match`.
-The `=>` operator is an exact, terser alias.
 
 ```mshell
-args unpack [command source destination]
-
-# Exactly equivalent:
 args => [command source destination]
 ```
 
-Both forms consume the subject and make bindings available to the following code.
-They use the existing match semantics: an exact list pattern requires the same length,
+It consumes the subject and makes bindings available to the following code.
+It uses the existing match semantics: an exact list pattern requires the same length,
 a spread accepts the remaining list elements, a dictionary pattern requires its named
 keys but permits extra keys, and `just name` unwraps a Just value.
 If the pattern does not match, execution fails before any bindings are installed.
@@ -949,7 +945,7 @@ The static checker rejects a pattern when the subject type proves that it can ne
 
 ```mshell
 [1 2 3 4] => [first ...middle last]
-{ 'name': "Ada", 'age': 36 } unpack { 'name': name }
+{ 'name': "Ada", 'age': 36 } => { 'name': name }
 "value" just => just value
 ```
 

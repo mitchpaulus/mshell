@@ -169,30 +169,26 @@ This is independent of pattern kind and bindings.
 If no arm matches and no wildcard <code>_</code> arm is provided, a runtime error occurs.
 </p>
 
-<h2 id="control-flow-unpack">Assertive Destructuring with <code>unpack</code> and <code>=&gt;</code></h2>
+<h2 id="control-flow-unpack">Assertive Destructuring with <code>=&gt;</code></h2>
 
 <p>
-When the goal is only to bind parts of a value, <code>unpack</code> is a compact, single-pattern form of <code>match</code>.
-The <code>=&gt;</code> operator is an exact, terser alias.
+When the goal is only to bind parts of a value, <code>=&gt;</code> is a compact, single-pattern form of <code>match</code>.
 </p>
 
 <pre>
-<code><span class="mshellLITERAL">args</span> <span class="mshellUNPACK">unpack</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">command</span> <span class="mshellLITERAL">source</span> <span class="mshellLITERAL">destination</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span>
-
-<span class="mshellLINECOMMENT"># Exactly equivalent:</span>
-<span class="mshellLITERAL">args</span> <span class="mshellFATARROW">=&gt;</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">command</span> <span class="mshellLITERAL">source</span> <span class="mshellLITERAL">destination</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code>
+<code><span class="mshellLITERAL">args</span> <span class="mshellFATARROW">=&gt;</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">command</span> <span class="mshellLITERAL">source</span> <span class="mshellLITERAL">destination</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code>
 </pre>
 
 <p>
-Both forms consume the subject and make bindings available to the following code.
-They use the existing match semantics: an exact list pattern requires the same length, a spread accepts the remaining list elements, a dictionary pattern requires its named keys but permits extra keys, and <code>just name</code> unwraps a Just value.
+It consumes the subject and makes bindings available to the following code.
+It uses the existing match semantics: an exact list pattern requires the same length, a spread accepts the remaining list elements, a dictionary pattern requires its named keys but permits extra keys, and <code>just name</code> unwraps a Just value.
 If the pattern does not match, execution fails before any bindings are installed.
 The static checker rejects a pattern when the subject type proves that it can never match.
 </p>
 
 <pre>
 <code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span> <span class="mshellINTEGER">3</span> <span class="mshellINTEGER">4</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellFATARROW">=&gt;</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">first</span> <span class="mshellLITERAL">...middle</span> <span class="mshellLITERAL">last</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span>
-{ <span class="mshellSINGLEQUOTESTRING">'name'</span>: <span class="mshellSTRING">"Ada"</span>, <span class="mshellSINGLEQUOTESTRING">'age'</span>: <span class="mshellINTEGER">36</span> } <span class="mshellUNPACK">unpack</span> { <span class="mshellSINGLEQUOTESTRING">'name'</span>: <span class="mshellLITERAL">name</span> }
+{ <span class="mshellSINGLEQUOTESTRING">'name'</span>: <span class="mshellSTRING">"Ada"</span>, <span class="mshellSINGLEQUOTESTRING">'age'</span>: <span class="mshellINTEGER">36</span> } <span class="mshellFATARROW">=&gt;</span> { <span class="mshellSINGLEQUOTESTRING">'name'</span>: <span class="mshellLITERAL">name</span> }
 <span class="mshellSTRING">"value"</span> <span class="mshellLITERAL">just</span> <span class="mshellFATARROW">=&gt;</span> <span class="mshellLITERAL">just</span> <span class="mshellLITERAL">value</span></code>
 </pre>
 

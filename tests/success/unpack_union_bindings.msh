@@ -1,22 +1,22 @@
 # A union of Maybe values binds the union of their payload types.
 true ("3" toInt) ("1.5" toFloat) iff
-unpack just maybeValue
+=> just maybeValue
 @maybeValue toFloat drop
 
 # List element and rest bindings retain the union of element types.
 true ([1 2]) ([1.5 2.5]) iff
-unpack [head ...rest]
+=> [head ...rest]
 @head toFloat drop
 @rest (toFloat) map drop
 
 # Non-list union members cannot reach the successful continuation.
 true ([1]) ("not a list") iff
-unpack [only]
+=> [only]
 @only 1 + drop
 
 # Bindings only include shapes capable of satisfying the whole pattern.
 true ({"a": 1, "b": "x"}) ({"a": 1.5}) iff
-unpack {'a': a, 'b': b}
+=> {'a': a, 'b': b}
 @a 1 + drop
 @b len drop
 
@@ -28,9 +28,9 @@ end drop
 
 # Brands are transparent to structural patterns at runtime.
 type Numbers = [int]
-[1] as Numbers unpack [number]
+[1] as Numbers => [number]
 @number 1 + drop
 
 type Parsed = Maybe[int]
-"3" toInt as Parsed unpack just parsed
+"3" toInt as Parsed => just parsed
 @parsed 1 + drop
