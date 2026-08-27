@@ -1,0 +1,65 @@
+def printFileAndRemove (path -- )
+    file!
+    @file readFile w
+    @file rm
+end
+
+"top-level streams" wl
+stdinIsTerminal str wl
+stdoutIsTerminal str wl
+stderrIsTerminal str wl
+
+"quotation stdin from memory" wl
+(stdinIsTerminal str wl) "input" < x
+
+"quotation stdin from file" wl
+tempFile input-file!
+(stdinIsTerminal str wl) @input-file < x
+@input-file rm
+
+"quotation stdout to file" wl
+tempFile output-file!
+(stdoutIsTerminal str wl) @output-file > x
+@output-file printFileAndRemove
+
+"quotation stderr to file" wl
+tempFile error-file!
+(stderrIsTerminal str wle) @error-file 2> x
+@error-file printFileAndRemove
+
+"stdout merged into redirected stderr" wl
+tempFile merged-error-file!
+(stdoutIsTerminal str wl) @merged-error-file 2> 1>&2 x
+@merged-error-file printFileAndRemove
+
+"stderr merged into redirected stdout" wl
+tempFile merged-output-file!
+(stderrIsTerminal str wle) @merged-output-file > 2>&1 x
+@merged-output-file printFileAndRemove
+
+"nested quotation inherits stdout" wl
+tempFile nested-output-file!
+((stdoutIsTerminal str wl) x) @nested-output-file > x
+@nested-output-file printFileAndRemove
+
+"iff quotation uses redirected stdout" wl
+tempFile iff-output-file!
+true (stdoutIsTerminal str wl) @iff-output-file > iff
+@iff-output-file printFileAndRemove
+
+"loop quotation uses redirected stdout" wl
+tempFile loop-output-file!
+(
+    stdoutIsTerminal str wl
+    break
+) @loop-output-file > loop
+@loop-output-file printFileAndRemove
+
+"captured child stdout" wl
+['msh' '-c' 'stdoutIsTerminal str wl'] * ; chomp wl
+
+"captured child stderr" wl
+['msh' '-c' 'stderrIsTerminal str wle'] ^ ; chomp wl
+
+"redirected child stdin" wl
+['msh' '-c' 'stdinIsTerminal str wl'] "input" < * ; chomp wl

@@ -294,6 +294,12 @@ func formatCommandCapture(mode CommandCaptureMode) string {
 		return "bytes"
 	case CommandCaptureLines:
 		return "[str]"
+	case CommandDestFile:
+		return "file"
+	case CommandDestInPlace:
+		return "in-place"
+	case CommandDestMerged:
+		return "merged"
 	default:
 		return "none"
 	}

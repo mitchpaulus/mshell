@@ -80,6 +80,43 @@ func TestBaseIntegerLiterals(t *testing.T) {
 	}
 }
 
+// A float ends at any token-ending character, not just whitespace, while a
+// trailing literal char (e.g. `1.pdf`) makes the whole token a literal.
+func TestFloatVsLiteral(t *testing.T) {
+	cases := []struct {
+		input      string
+		want       TokenType
+		wantLexeme string
+	}{
+		{"1.5", FLOAT, "1.5"},
+		{"7.", FLOAT, "7."},
+		{"1.5 x", FLOAT, "1.5"},
+		{"1.5)", FLOAT, "1.5"},
+		{"2.5]", FLOAT, "2.5"},
+		{"3.5;", FLOAT, "3.5"},
+		{"4.5,", FLOAT, "4.5"},
+		{"5.5}", FLOAT, "5.5"},
+		{"6.5!", FLOAT, "6.5"},
+		{"1.pdf", LITERAL, "1.pdf"},
+		{"1.5x", LITERAL, "1.5x"},
+		{"1.5.6", LITERAL, "1.5.6"},
+	}
+	for _, tc := range cases {
+		l := NewLexer(tc.input, nil)
+		toks, _ := l.Tokenize()
+		if len(toks) < 1 {
+			t.Errorf("%q: no tokens produced", tc.input)
+			continue
+		}
+		if toks[0].Type != tc.want {
+			t.Errorf("%q: got %s, want %s", tc.input, toks[0].Type, tc.want)
+		}
+		if toks[0].Lexeme != tc.wantLexeme {
+			t.Errorf("%q: got lexeme %q, want %q", tc.input, toks[0].Lexeme, tc.wantLexeme)
+		}
+	}
+}
+
 func TestParseIntLiteral(t *testing.T) {
 	cases := []struct {
 		input string

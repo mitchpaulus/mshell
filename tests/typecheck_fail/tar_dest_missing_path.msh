@@ -1,0 +1,3 @@
+# The dict destination form requires `path`; a dict with only the optional
+# `compress` must be rejected.
+`zip/base` { 'compress': true } tarDirExc

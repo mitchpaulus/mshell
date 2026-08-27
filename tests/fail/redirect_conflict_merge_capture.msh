@@ -1,0 +1,2 @@
+# Conflict: stderr merged to stdout, then stderr capture must error
+[ls] 2>&1 ^ ;

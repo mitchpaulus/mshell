@@ -1,0 +1,2 @@
+# Static: in-place redirect requires a List
+( "a" wl ) `f.txt` <> x

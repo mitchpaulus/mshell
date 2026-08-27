@@ -325,6 +325,13 @@ func (c *Checker) checkOne(tok Token) {
 		return
 	}
 
+	// Merge redirects are nullary state transforms on the command value;
+	// they have no sig representation.
+	if tok.Type == STDERRTOSTDOUT || tok.Type == STDOUTTOSTDERR {
+		c.applyMergeRedirect(tok)
+		return
+	}
+
 	if sigs, ok := c.builtins[tok.Type]; ok {
 		switch tok.Type {
 		case IFF:
@@ -348,7 +355,7 @@ func (c *Checker) checkOne(tok Token) {
 		if tok.Type == LOOP && c.tryLoop(tok) {
 			return
 		}
-		if tok.Type == PIPE && c.stack.Len() > 0 {
+		if (tok.Type == PIPE || tok.Type == AMPERSAND) && c.stack.Len() > 0 {
 			top := c.subst.Apply(c.arena, c.stack.Top())
 			if c.arena.Kind(top) == TKCommand {
 				return
@@ -356,6 +363,14 @@ func (c *Checker) checkOne(tok Token) {
 		}
 		if c.tryRedirect(tok) {
 			return
+		}
+		if c.tryCapture(tok) {
+			return
+		}
+		if tok.Type == EXECUTE || tok.Type == BANG || tok.Type == QUESTION {
+			if c.tryExecCommand(tok) {
+				return
+			}
 		}
 		c.resolveAndApply(sigs, tok)
 		return
@@ -764,12 +779,65 @@ func (c *Checker) tryPivot(tok Token) bool {
 	return true
 }
 
-// tryRedirect handles a redirect op (`>`, `<`, `>e`, ...) applied to a
-// `<operand> <target>` stack, where operand is a quote (single or overloaded)
-// or a command-like value (list/command) and target is a writable path
-// (str/path/bytes). It pops the target, leaving the operand on top. Returns
-// false (no effect) when the op or stack shape doesn't match, so the caller
-// falls through to ordinary builtin dispatch.
+// commandParts decomposes a command-like operand into its argv type and
+// per-stream destination states. A plain list is a command with both
+// streams unclaimed.
+func (c *Checker) commandParts(t TypeId) (argv TypeId, stdout, stderr CommandCaptureMode, ok bool) {
+	n := c.arena.Node(t)
+	switch n.Kind {
+	case TKList:
+		return t, CommandCaptureNone, CommandCaptureNone, true
+	case TKCommand:
+		return TypeId(n.A), CommandCaptureMode(n.B), CommandCaptureMode(n.Extra), true
+	}
+	return 0, 0, 0, false
+}
+
+// streamStateDesc mirrors the runtime's StdoutDestinationDesc /
+// StderrDestinationDesc strings so static and runtime conflict errors read
+// identically. Returns "" for an unclaimed stream.
+func streamStateDesc(mode CommandCaptureMode, isStdout bool) string {
+	switch mode {
+	case CommandCaptureStr, CommandCaptureBytes, CommandCaptureLines:
+		if isStdout {
+			return "a capture ('*')"
+		}
+		return "a capture ('^')"
+	case CommandDestFile:
+		if isStdout {
+			return "a file redirect ('>')"
+		}
+		return "a file redirect ('2>')"
+	case CommandDestInPlace:
+		return "an in-place redirect ('<>')"
+	case CommandDestMerged:
+		if isStdout {
+			return "a merge to stderr ('1>&2')"
+		}
+		return "a merge to stdout ('2>&1')"
+	}
+	return ""
+}
+
+func (c *Checker) streamConflictError(tok Token, stream string, desc string) {
+	c.errors = append(c.errors, TypeError{
+		Kind: TErrTypeMismatch,
+		Pos:  tok,
+		Hint: fmt.Sprintf("Cannot apply '%s': %s already has %s. Each stream has exactly one destination.", tok.Lexeme, stream, desc),
+	})
+}
+
+// tryRedirect handles a redirect op (`>`, `<`, `2>`, `&>`, `<>`, ...) applied
+// to a `<operand> <target>` stack, where operand is a quote (single or
+// overloaded) or a command-like value (list/command) and target is a writable
+// path (str/path/bytes). It pops the target and replaces the operand with a
+// command type whose stream destination states reflect the redirect, erroring
+// on a stream that already has a destination (mirroring the runtime).
+// Returns false (no effect) when the op or stack shape doesn't match, so the
+// caller falls through to ordinary builtin dispatch.
+//
+// Quote operands are still a known gap: the target is popped but no
+// destination state is tracked, so conflicts on quotations are runtime-only.
 func (c *Checker) tryRedirect(tok Token) bool {
 	switch tok.Type {
 	case LESSTHAN, GREATERTHAN, STDERRREDIRECT, STDERRAPPEND,
@@ -785,23 +853,239 @@ func (c *Checker) tryRedirect(tok Token) bool {
 		return false
 	}
 	operand := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-2])
-	if !isQuoteKind(c.arena.Kind(operand)) && !c.isCommandLike(operand) {
+	if isQuoteKind(c.arena.Kind(operand)) {
+		// Quotations accept only the redirects that don't change their
+		// stack effect; destination conflicts on quotations are enforced
+		// at runtime. In-place redirects are list-only, as at runtime.
+		if tok.Type == INPLACEREDIRECT {
+			c.errors = append(c.errors, TypeError{
+				Kind: TErrTypeMismatch,
+				Pos:  tok,
+				Hint: "In-place redirect (<>) requires a List, found a quotation.",
+			})
+		}
+		c.stack.items = c.stack.items[:c.stack.Len()-1]
+		return true
+	}
+	argv, stdoutState, stderrState, ok := c.commandParts(operand)
+	if !ok {
 		return false
 	}
+
+	conflict := false
+	switch tok.Type {
+	case GREATERTHAN, STDAPPEND:
+		if desc := streamStateDesc(stdoutState, true); desc != "" {
+			c.streamConflictError(tok, "stdout", desc)
+			conflict = true
+		}
+		stdoutState = CommandDestFile
+	case STDERRREDIRECT, STDERRAPPEND:
+		if desc := streamStateDesc(stderrState, false); desc != "" {
+			c.streamConflictError(tok, "stderr", desc)
+			conflict = true
+		}
+		stderrState = CommandDestFile
+	case STDOUTANDSTDERRREDIRECT, STDOUTANDSTDERRAPPEND:
+		if desc := streamStateDesc(stdoutState, true); desc != "" {
+			c.streamConflictError(tok, "stdout", desc)
+			conflict = true
+		} else if desc := streamStateDesc(stderrState, false); desc != "" {
+			c.streamConflictError(tok, "stderr", desc)
+			conflict = true
+		}
+		stdoutState = CommandDestFile
+		stderrState = CommandDestFile
+	case INPLACEREDIRECT:
+		// The runtime requires a Path for <>.
+		if target != TidPath {
+			c.errors = append(c.errors, TypeError{
+				Kind: TErrTypeMismatch,
+				Pos:  tok,
+				Hint: "In-place redirect (<>) requires a Path target (`...`).",
+			})
+		}
+		if desc := streamStateDesc(stdoutState, true); desc != "" {
+			c.streamConflictError(tok, "stdout", desc)
+			conflict = true
+		} else if stderrState == CommandDestMerged {
+			c.errors = append(c.errors, TypeError{
+				Kind: TErrTypeMismatch,
+				Pos:  tok,
+				Hint: fmt.Sprintf("Cannot apply '%s' with '2>&1': stderr would be written back into the edited file.", tok.Lexeme),
+			})
+			conflict = true
+		}
+		stdoutState = CommandDestInPlace
+	case LESSTHAN:
+		// stdin redirect: no stream destination state change.
+	}
+
 	c.stack.items = c.stack.items[:c.stack.Len()-1]
+	if !conflict && tok.Type != LESSTHAN {
+		c.stack.items[c.stack.Len()-1] = c.arena.MakeCommand(argv, stdoutState, stderrState)
+	}
 	return true
 }
 
-func (c *Checker) isCommandLike(t TypeId) bool {
-	n := c.arena.Node(t)
-	switch n.Kind {
-	case TKList:
-		return true
-	case TKCommand:
-		return true
+// tryCapture handles `*` / `*b` / `^` / `^b` applied to a command-like
+// operand, transforming its stream destination state and erroring when the
+// stream already has a destination. Returns false for non-command operands
+// (e.g. numeric `*` multiplication) so the caller falls through to overload
+// dispatch.
+func (c *Checker) tryCapture(tok Token) bool {
+	var isStdout bool
+	var mode CommandCaptureMode
+	switch tok.Type {
+	case ASTERISK:
+		isStdout, mode = true, CommandCaptureStr
+	case ASTERISKBINARY:
+		isStdout, mode = true, CommandCaptureBytes
+	case CARET:
+		isStdout, mode = false, CommandCaptureStr
+	case CARETBINARY:
+		isStdout, mode = false, CommandCaptureBytes
 	default:
 		return false
 	}
+	if c.stack.Len() < 1 {
+		return false
+	}
+	operand := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-1])
+	if isQuoteKind(c.arena.Kind(operand)) {
+		// Captures are not allowed on quotations: they would change the
+		// quotation's stack effect. Mirrors the runtime rejection.
+		redirectOp := "'>'"
+		if !isStdout {
+			redirectOp = "'2>'"
+		}
+		c.errors = append(c.errors, TypeError{
+			Kind: TErrTypeMismatch,
+			Pos:  tok,
+			Hint: fmt.Sprintf("'%s' capture is not supported on quotations; it would change the quotation's stack effect. Capture the individual command lists inside instead, or redirect the quotation to a file with %s.", tok.Lexeme, redirectOp),
+		})
+		return true
+	}
+	argv, stdoutState, stderrState, ok := c.commandParts(operand)
+	if !ok {
+		return false
+	}
+
+	if isStdout {
+		if desc := streamStateDesc(stdoutState, true); desc != "" {
+			c.streamConflictError(tok, "stdout", desc)
+			return true
+		}
+		stdoutState = mode
+	} else {
+		if desc := streamStateDesc(stderrState, false); desc != "" {
+			c.streamConflictError(tok, "stderr", desc)
+			return true
+		}
+		stderrState = mode
+	}
+	c.stack.items[c.stack.Len()-1] = c.arena.MakeCommand(argv, stdoutState, stderrState)
+	return true
+}
+
+// applyMergeRedirect handles the nullary merge tokens `2>&1` and `1>&2`,
+// mirroring the runtime conflict rules: the merged stream must be unclaimed,
+// the two merges are mutually exclusive (circular), and `2>&1` cannot be
+// combined with an in-place redirect.
+func (c *Checker) applyMergeRedirect(tok Token) {
+	if c.stack.Len() < 1 {
+		c.errors = append(c.errors, TypeError{
+			Kind: TErrStackUnderflow,
+			Pos:  tok,
+		})
+		return
+	}
+	operand := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-1])
+	if isQuoteKind(c.arena.Kind(operand)) {
+		// Known gap, same as tryRedirect: no destination tracking on quotes.
+		return
+	}
+	argv, stdoutState, stderrState, ok := c.commandParts(operand)
+	if !ok {
+		c.errors = append(c.errors, TypeError{
+			Kind: TErrTypeMismatch,
+			Pos:  tok,
+			Hint: fmt.Sprintf("Cannot apply '%s' to a %s; expected a list or quotation.", tok.Lexeme, FormatType(c.arena, c.names, operand)),
+		})
+		return
+	}
+
+	if tok.Type == STDERRTOSTDOUT {
+		if stdoutState == CommandDestMerged {
+			c.errors = append(c.errors, TypeError{
+				Kind: TErrTypeMismatch,
+				Pos:  tok,
+				Hint: fmt.Sprintf("Cannot apply '%s': the other stream is already merged with '1>&2'; merging both streams into each other is circular.", tok.Lexeme),
+			})
+			return
+		}
+		if stdoutState == CommandDestInPlace {
+			c.errors = append(c.errors, TypeError{
+				Kind: TErrTypeMismatch,
+				Pos:  tok,
+				Hint: fmt.Sprintf("Cannot apply '%s' with an in-place redirect ('<>'): stderr would be written back into the edited file.", tok.Lexeme),
+			})
+			return
+		}
+		if desc := streamStateDesc(stderrState, false); desc != "" {
+			c.streamConflictError(tok, "stderr", desc)
+			return
+		}
+		stderrState = CommandDestMerged
+	} else {
+		if stderrState == CommandDestMerged {
+			c.errors = append(c.errors, TypeError{
+				Kind: TErrTypeMismatch,
+				Pos:  tok,
+				Hint: fmt.Sprintf("Cannot apply '%s': the other stream is already merged with '2>&1'; merging both streams into each other is circular.", tok.Lexeme),
+			})
+			return
+		}
+		if desc := streamStateDesc(stdoutState, true); desc != "" {
+			c.streamConflictError(tok, "stdout", desc)
+			return
+		}
+		stdoutState = CommandDestMerged
+	}
+	c.stack.items[c.stack.Len()-1] = c.arena.MakeCommand(argv, stdoutState, stderrState)
+}
+
+// tryExecCommand types `;` / `!` / `?` applied to a command value with
+// destination states. Stack outputs come only from capture states; file,
+// in-place, and merge destinations produce nothing. `?` additionally pushes
+// the exit code. Returns false when the top of stack is not a command, so
+// plain lists and Maybe (`?` as fromJust) fall through to the sig overloads.
+func (c *Checker) tryExecCommand(tok Token) bool {
+	if c.stack.Len() < 1 {
+		return false
+	}
+	top := c.subst.Apply(c.arena, c.stack.items[c.stack.Len()-1])
+	n := c.arena.Node(top)
+	if n.Kind != TKCommand {
+		return false
+	}
+	c.stack.items = c.stack.items[:c.stack.Len()-1]
+	pushCapture := func(mode CommandCaptureMode) {
+		switch mode {
+		case CommandCaptureLines:
+			c.stack.Push(c.arena.MakeList(TidStr))
+		case CommandCaptureStr:
+			c.stack.Push(TidStr)
+		case CommandCaptureBytes:
+			c.stack.Push(TidBytes)
+		}
+	}
+	pushCapture(CommandCaptureMode(n.B))
+	pushCapture(CommandCaptureMode(n.Extra))
+	if tok.Type == QUESTION {
+		c.stack.Push(TidInt)
+	}
+	return true
 }
 
 // applySig is the hot path. It validates arity, unifies each input against

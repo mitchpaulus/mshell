@@ -20,6 +20,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Validation depth is limited to 1024 nested levels; exceeding it (a cyclic
   value, a cyclic `type` declaration, or absurdly deep data) fails the script
   with a clear error rather than producing `none`.
+- The language server now offers a `Quote all literals in list` code action that
+  single-quotes every bare literal in the innermost list containing the cursor.
+
+- Functions
+  - `longestCommonPrefix`: Longest leading substring shared by every string in a list. `([str] -- str)`
+  - `whenJust`: Run a quotation on the inner value for its side effects when the Maybe is Just;
+    does nothing on None. `(Maybe[a] (a -- ) -- )`
+  - `setenv`: Set an environment variable by name, taking the value then the name.
+    Use when the name is not known statically; otherwise prefer `$NAME!`. `(str str -- )`
+  - `stdinIsTerminal`, `stdoutIsTerminal`, and `stderrIsTerminal`: Report whether
+    the current effective standard stream is connected to a terminal or Windows
+    console. Regular files, pipes, captures, and non-file streams return false.
+    Redirections and symlinks are classified by their opened target.
+
+- The GitHub action can now install unreleased builds:
+  passing a commit SHA or branch name as `version` clones the repository at that ref and builds from source with Go.
+  Release tags (`vX.Y.Z`) and `latest` still download pre-built binaries.
+
+- The tar write functions (`tarDirInc`, `tarDirExc`, `tarPack`) now accept a
+  dictionary destination `{path: str|path, compress?: bool}`, where `compress`
+  overrides the extension-based gzip inference in either direction — useful
+  for destinations without a meaningful extension (e.g. `redo`'s `$3` temp files).
+
+- Stream merge redirects `2>&1` (stderr to stdout's destination) and `1>&2`
+  (stdout to stderr's destination). Each is a single token with no internal
+  spaces, and works on command lists, pipeline stages, and quotations.
+  Unlike POSIX, they are not order-sensitive fd duplication: the merged
+  stream follows the other stream's *final* destination, so `2>&1 *` captures
+  both streams interleaved and `[[make] 2>&1 [grep err]] |;` sends stderr
+  through the pipe, cross-platform.
 
 - CLI completions for `cargo`: subcommands (including installed third-party
   ones via `cargo --list`), per-subcommand options, and dynamic values for
@@ -121,72 +151,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `null` literal pushes one, and `null` can be used in union types (e.g.
   `int | null`) and matched with a `null` arm. `( -- null)`
 
-### Fixed
-
-- Interactive programs now work as a stage of a pipeline. A command that drives
-  the terminal (e.g. `... | nvim -`, `... | less`, `... | fzf`) is no longer
-  stopped on startup: every external stage of a pipeline is now placed in one
-  shared process group that becomes the terminal's foreground group, instead of
-  each stage getting its own group with only one (whichever started first)
-  receiving the terminal. The pipeline leader now also waits for every stage to
-  start before reaping itself, fixing an intermittent `setpgid` race that could
-  drop a stage with an "operation not permitted" error and lose its output.
-- The file manager preview now times out instead of hanging when a file is slow
-  to read. Cloud-backed files (e.g. OneDrive "files on demand") could block the
-  preview worker indefinitely while hydrating, freezing previews for every other
-  entry; a slow preview now gives up after a few seconds and shows a placeholder.
-- Match arms that are not a recognized pattern form now produce a clear error
-  listing the legal forms, instead of silently failing to bind (and later
-  reporting a confusing "unknown identifier" in the arm body).
-- Type-checker diagnostics for unknown identifiers inside a `$"...{ }"` format
-  string interpolation now point at the interpolation's actual source location
-  rather than line 1, column 1.
-
-- The type checker now joins the arms of a `match` or `if`/`else` block into a
-  single union post-state instead of treating each arm as an independent
-  alternative typing. Previously, arms that left different types on the stack
-  (e.g. `match []: 0.0, _ :> sum end`, which yields `int | float`) fanned out, and
-  a later operation that was valid for only one arm let the whole program pass —
-  hiding a real type error that would crash at runtime. Such usage is now reported.
-- Overloaded built-ins now accept a union operand (such as the `int | float` a
-  `match`/`if` join produces) when every member of the union is handled. The
-  checker resolves the call for each member and yields the union of the results,
-  so `int | float toFloat` gives `float` and `int | float { … } numFmt` formats.
-  An unsafe combination is still rejected — e.g. `int | float` divided by a
-  `float` fails, because the `int` case has no matching overload.
-- In the interactive `::` CLI shorthand, bare literals in argument position are no
-  longer turned into strings, so operators work again (e.g. `:: numargs '*' glob`
-  now runs `glob` as the wildcard operator instead of passing the word `glob`).
-  The leading command name is still treated as a command, so an executable continues
-  to win over a builtin of the same name (e.g. `date`, `sort`).
-
-### Changed
-
-- `zipPack` entries can now be a bare string or path in addition to the
-  dictionary form. A bare entry adds the file or directory under its base name,
-  keeping its own mode:
-  `([str | path | {path: str | path, archivePath?: str | path, mode?: int}] str | path -- )`
-- Breaking: the type checker no longer accepts an empty quote `()` as the
-  predicate to `any` / `all`.
-  Pass `(id)` instead, e.g. `[true false] (id) any`.
-  Both now carry the single signature `([T] (T -- bool) -- bool)`, matching their
-  `std.msh` definitions.
-- A command that cannot start (not found, permission denied, bad format, ...) run
-  with `?` or `;` no longer aborts the script.
-  Instead, `?` leaves a negative exit code carrying the exact reason: `-(256+errno)`
-  for POSIX start failures, `-(1024+winerror)` on Windows, `-(128+signal)` for a
-  process killed by a signal (replacing the old flat `-1`), `-255` for a command
-  not found on `PATH`, and `-256` when the OS error cannot be read.
-  Negative codes never collide with a real exit status (`0`-`255`).
-  `!` still stops on these, exiting `msh` itself with the conventional 127/126/128+N.
-
-### Removed
-
-- The `pick` stack operator was removed.
-  Its stack effect depends on a runtime integer, so it could not be expressed in the static type checker, and it saw no real use.
-
-### Added
-
 - Type checking v1!
   - Quotes built from overloaded builtins whose arms all produce the same
     output (e.g. the `str|path` file ops like `cd`, `toPath`, `readFile`)
@@ -249,6 +213,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A number immediately followed by a literal character now lexes as a single
+  literal token instead of a float/int plus a separate literal, so bare file
+  arguments like `redo 1.pdf` work. Floats still end at token-ending
+  characters, e.g. `(1.5)`, `[2.5]`, `3.5;`, and `4.5,` lex as floats.
+
+- Each of stdout/stderr now has exactly one destination: combining two
+  destinations on the same stream (e.g. capture `*` plus file redirect `>`,
+  `&>` plus `2>`, a second `>`, or a merge plus anything else on that stream)
+  is now an error, caught both by the static type checker and at runtime.
+  Previously the extra redirect was silently ignored (capture won over file
+  redirects) or last-wins. `2>&1` combined with `<>` is also rejected.
+- `loop` quotations now honor stderr redirects, append mode, and merges, and
+  inherit the enclosing quotation's redirected streams (previously a loop
+  body wrote straight to the terminal even inside a redirected quotation).
+- Quotations accept only the redirects that don't change the stack: file
+  redirects, stdin, and the merges. Captures (`*`, `*b`, `^`, `^b`) on a
+  quotation now give a clear error at both layers instead of falling into
+  the multiplication error, and the type checker now rejects `<>` on a
+  quotation (the runtime always did). Capture individual command lists
+  instead, e.g. `[[cmd1] [cmd2]] (* !) map`.
+
+- `zipPack` entries can now be a bare string or path in addition to the
+  dictionary form. A bare entry adds the file or directory under its base name,
+  keeping its own mode:
+  `([str | path | {path: str | path, archivePath?: str | path, mode?: int}] str | path -- )`
+- Breaking: the type checker no longer accepts an empty quote `()` as the
+  predicate to `any` / `all`.
+  Pass `(id)` instead, e.g. `[true false] (id) any`.
+  Both now carry the single signature `([T] (T -- bool) -- bool)`, matching their
+  `std.msh` definitions.
+- A command that cannot start (not found, permission denied, bad format, ...) run
+  with `?` or `;` no longer aborts the script.
+  Instead, `?` leaves a negative exit code carrying the exact reason: `-(256+errno)`
+  for POSIX start failures, `-(1024+winerror)` on Windows, `-(128+signal)` for a
+  process killed by a signal (replacing the old flat `-1`), `-255` for a command
+  not found on `PATH`, and `-256` when the OS error cannot be read.
+  Negative codes never collide with a real exit status (`0`-`255`).
+  `!` still stops on these, exiting `msh` itself with the conventional 127/126/128+N.
+
 - **Breaking:** `keyValues` now returns a list of `{k, v}` dictionaries instead of a list of two-element lists.
   Each pair has a `k` field holding the key and a `v` field holding the value, so the key and value types stay distinct (previously they were collapsed into a single shared type, which forced overload-resolution ambiguity downstream).
   Update existing callers from `2unpack key!, value!` to `pair! @pair :k? key!, @pair :v? value!` (or use `:k?`/`:v?` directly).
@@ -274,6 +277,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The type checker now rejects `pivot` aggregation quotations whose return type resolves to a container (`[T]`, `{V}`, shape, `Grid`, `GridView`, `GridRow`), mirroring the runtime constraint that pivoted cells must be scalars. The check fires only when the quote's output is concretely a container after substitution; if the output stays as an unconstrained type variable (e.g. `(:foo?)` quotes that infer through a synthesized fresh input), the call still type-checks and the runtime still catches it.
 - Tightened the `w` / `wl` / `we` / `wle` write-builtin type signatures to match the runtime: `wl` / `wle` are now `(str -- ) | (int -- )`, and `w` / `we` are now `(str -- ) | (int -- ) | (bytes -- )`. Previously these were typed as `(T -- )` and silently accepted floats, bools, datetimes, lists, etc. — all of which crash at runtime. Convert with `str` first (`1.5 str wl`) for other types.
 
+### Removed
+
+- The `pick` stack operator was removed.
+  Its stack effect depends on a runtime integer, so it could not be expressed in the static type checker, and it saw no real use.
+
+### Fixed
+
+- The type checker gave `index` and `lastIndexOf` a result type of `int`, but both
+  return `Maybe[int]` at runtime (`none` when the substring is not found). The
+  signature is now `(str str -- Maybe[int])`
+- The GitHub action now produces `msh.exe` on Windows.
+  Previously, Git Bash's transparent `.exe` handling made `[ -f mshell ]` succeed when only `mshell.exe` existed,
+  so the install step created an extensionless `msh` copy that native Windows PATH lookup could not resolve,
+  and `shell: msh {0}` steps failed with "command not found".
+  The install checks are now gated on the runner OS.
+- Commands no longer fail with "Error reclaiming terminal control: ... no such process"
+  when several mshell processes share one terminal, as under parallel build runners
+  (`redo`, `make -j`) or when a script is backgrounded.
+  mshell now transfers terminal control only when it is itself the terminal's current
+  foreground process group (the same gate bash and fish use), and a hand-back to a
+  previous foreground group that has since exited falls back to mshell's own group
+  instead of failing the command.
+  A reclaim problem is now at most a warning on stderr; the command's own exit code always stands.
+- A fast pipeline whose processes finished before mshell could transfer terminal
+  control is no longer killed and reported as failed; the transfer is skipped,
+  since the work is already done.
+  Restoring terminal modes is now also protected from `SIGTTOU`,
+  which could previously stop the shell mid-cleanup when another process group owned the terminal.
+  A failure while closing the retained pipeline terminal handle is likewise now a warning,
+  never a failure of a pipeline whose commands succeeded.
+- Attempted to formally improve the semantics of job control and terminal control on both Linux and Windows.
+  Should fix potential bugs when running TUI programs from within mshell scripts.
+- On Windows, a command name containing a forward slash (e.g. `./script.msh`)
+  is now treated as a file reference instead of being searched for on `PATH`,
+  matching the behavior on Linux/macOS. Previously only backslashes were
+  recognized as path separators in command position on Windows, so
+  cross-platform scripts invoking local scripts with `./` failed.
+- Interactive programs now work as a stage of a pipeline. A command that drives
+  the terminal (e.g. `... | nvim -`, `... | less`, `... | fzf`) is no longer
+  stopped on startup: every external stage of a pipeline is now placed in one
+  shared process group that becomes the terminal's foreground group, instead of
+  each stage getting its own group with only one (whichever started first)
+  receiving the terminal. The pipeline leader now also waits for every stage to
+  start before reaping itself, fixing an intermittent `setpgid` race that could
+  drop a stage with an "operation not permitted" error and lose its output.
+- The file manager preview now times out instead of hanging when a file is slow
+  to read. Cloud-backed files (e.g. OneDrive "files on demand") could block the
+  preview worker indefinitely while hydrating, freezing previews for every other
+  entry; a slow preview now gives up after a few seconds and shows a placeholder.
+- Match arms that are not a recognized pattern form now produce a clear error
+  listing the legal forms, instead of silently failing to bind (and later
+  reporting a confusing "unknown identifier" in the arm body).
+- Type-checker diagnostics for unknown identifiers inside a `$"...{ }"` format
+  string interpolation now point at the interpolation's actual source location
+  rather than line 1, column 1.
+
+- The type checker now joins the arms of a `match` or `if`/`else` block into a
+  single union post-state instead of treating each arm as an independent
+  alternative typing. Previously, arms that left different types on the stack
+  (e.g. `match []: 0.0, _ :> sum end`, which yields `int | float`) fanned out, and
+  a later operation that was valid for only one arm let the whole program pass —
+  hiding a real type error that would crash at runtime. Such usage is now reported.
+- Overloaded built-ins now accept a union operand (such as the `int | float` a
+  `match`/`if` join produces) when every member of the union is handled. The
+  checker resolves the call for each member and yields the union of the results,
+  so `int | float toFloat` gives `float` and `int | float { … } numFmt` formats.
+  An unsafe combination is still rejected — e.g. `int | float` divided by a
+  `float` fails, because the `int` case has no matching overload.
+- In the interactive `::` CLI shorthand, bare literals in argument position are no
+  longer turned into strings, so operators work again (e.g. `:: numargs '*' glob`
+  now runs `glob` as the wildcard operator instead of passing the word `glob`).
+  The leading command name is still treated as a command, so an executable continues
+  to win over a builtin of the same name (e.g. `date`, `sort`).
 
 ## v0.13.0 - 2026-04-07
 
@@ -501,7 +577,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `take`
   - `skip`
 
-
 ### Fixed
 
 - Handling of `.cmd` and `.bat`
@@ -518,7 +593,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - No escaping in path literals
 - In JSON mappings, null now goes to `none`, not 0.
 - `fileSize` now returns Maybe
-
 
 ## v0.6.0 - 2025-07-17
 
@@ -577,11 +651,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - dictionaries
 - `PATH` searching
 
-
 ### Changed
 
 - Allow standard output redirection to any string-like item.
-
 
 ## v0.1.0 through 0.3.0
 

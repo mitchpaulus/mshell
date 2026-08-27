@@ -13,6 +13,10 @@
             "match": "\\b(true|false)\\b"
         },
         {
+            "name": "keyword.operator.redirect.merge.mshell",
+            "match": "2>&1|1>&2"
+        },
+        {
             "name": "string.quoted.single.mshell",
             "begin": "'",
             "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.mshell" } },

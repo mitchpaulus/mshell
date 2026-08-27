@@ -1,0 +1,2 @@
+# Test 2>&1: combined interleaved capture of stdout and stderr
+[sh -c "echo out1; echo err1 1>&2; echo out2"] 2>&1 * ; chomp wl

@@ -99,6 +99,8 @@ const (
 	PREFIXQUOTE              // .functionName
 	MATCH
 	VER
+	STDERRTOSTDOUT           // 2>&1, merge stderr into stdout's destination
+	STDOUTTOSTDERR           // 1>&2, merge stdout into stderr's destination
 
 	// Reserved for the static type checker (Phase 5/10) and Phase 2 of the
 	// effect system. AS and TYPE are user-visible from Phase 10 onward;
@@ -270,6 +272,10 @@ func (t TokenType) String() string {
 		return "STDOUTANDSTDERRAPPEND"
 	case INPLACEREDIRECT:
 		return "INPLACEREDIRECT"
+	case STDERRTOSTDOUT:
+		return "STDERRTOSTDOUT"
+	case STDOUTTOSTDERR:
+		return "STDOUTTOSTDERR"
 	case GRID_OPEN:
 		return "GRID_OPEN"
 	case GRID_CLOSE:
@@ -425,6 +431,13 @@ func (l *Lexer) peekNext() rune {
 		return 0
 	}
 	return l.input[l.current+1]
+}
+
+func (l *Lexer) peekAt(offset int) rune {
+	if l.current+offset >= len(l.input) {
+		return 0
+	}
+	return l.input[l.current+offset]
 }
 
 // Increments line, resets col. Make sure this is called after the newline has been consumed.
@@ -1003,6 +1016,23 @@ func (l *Lexer) parseNumberOrStartIndexer() Token {
 			l.advance()
 			return l.makeToken(STDERRAPPEND)
 		}
+		// Merge redirects are complete tokens with no internal spaces:
+		// exactly "2>&1" (stderr to stdout) or "1>&2" (stdout to stderr).
+		if l.peekNext() == '&' {
+			intPart := l.curLexeme()
+			if intPart == "2" && l.peekAt(2) == '1' {
+				l.advance()
+				l.advance()
+				l.advance()
+				return l.makeToken(STDERRTOSTDOUT)
+			}
+			if intPart == "1" && l.peekAt(2) == '2' {
+				l.advance()
+				l.advance()
+				l.advance()
+				return l.makeToken(STDOUTTOSTDERR)
+			}
+		}
 		l.advance()
 		return l.makeToken(STDERRREDIRECT)
 	} else if peek == '.' {
@@ -1010,7 +1040,13 @@ func (l *Lexer) parseNumberOrStartIndexer() Token {
 		for unicode.IsDigit(l.peek()) {
 			l.advance()
 		}
-		return l.makeToken(FLOAT)
+		// Mirror plain-integer behavior: a trailing literal char (e.g.
+		// `1.pdf`, `1.5x`) makes the whole token a literal rather than a
+		// float, while token-ending chars like `)`, `]`, `;` end the float.
+		if !isAllowedLiteral(l.peek()) {
+			return l.makeToken(FLOAT)
+		}
+		return l.consumeLiteral()
 	} else if l.curLen() == 4 && peek == '-' {
 		l.advance()
 		// Month

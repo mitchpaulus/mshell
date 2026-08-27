@@ -1,0 +1,16 @@
+# longestCommonPrefix is byte-based, not rune- or grapheme-based.
+
+# A fully shared multibyte prefix survives intact.
+["Straße1" "Straße2"] longestCommonPrefix strEscape wl
+
+# ü (C3 BC) and ö (C3 B6) share their first byte, so the common
+# prefix of "Grüße"/"Größe" ends mid-rune: 47 72 C3, an invalid
+# UTF-8 tail. Its byte length is 3 (not 2 characters) and it is not "Gr".
+["Grüße" "Größe"] longestCommonPrefix lcp!
+@lcp len wl
+@lcp utf8Bytes base64encode wl
+@lcp "Gr" = str wl
+
+# No Unicode canonicalization: NFC "über" (U+00FC = C3 BC) and NFD "über"
+# (u + combining U+0308 = 75 CC 88) look identical but share no bytes.
+["über" "über"] longestCommonPrefix strEscape wl

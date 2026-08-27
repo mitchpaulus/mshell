@@ -29,7 +29,7 @@ func TestTarPackRejectsFifoWithoutHanging(t *testing.T) {
 	archive := filepath.Join(dir, "out.tar")
 	done := make(chan error, 1)
 	go func() {
-		done <- buildTarFromEntries([]zipPackItem{{SourcePath: src, PreserveRoot: true}}, archive)
+		done <- buildTarFromEntries([]zipPackItem{{SourcePath: src, PreserveRoot: true}}, archive, isGzipTarget(archive))
 	}()
 
 	select {

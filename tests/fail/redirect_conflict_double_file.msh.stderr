@@ -1,0 +1,1 @@
+2:42: Cannot apply '>': stdout already has a file redirect ('>'). Each stream has exactly one destination.

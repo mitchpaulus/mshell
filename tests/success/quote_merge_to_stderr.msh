@@ -1,0 +1,3 @@
+# FILE:quote_merge_err.txt
+# Test 1>&2 on a quotation with a stderr file redirect: wl output follows
+( "q2-out" wl "q2-err" wle ) 1>&2 `quote_merge_err.txt` 2> x

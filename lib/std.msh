@@ -210,6 +210,26 @@ def chomp (str -- str)
     end
 end
 
+# longestCommonPrefix ([str] -- str)
+# Longest leading substring shared by every string in the list.
+# Byte-based, like the other string functions. Empty list gives "".
+def longestCommonPrefix ([str] -- str)
+    lcp-list!
+    @lcp-list len 0 = if
+        ""
+    else
+        @lcp-list :0: lcp-prefix!
+        @lcp-list 1: (
+            lcp-item!
+            (
+                @lcp-item @lcp-prefix startsWith (break) iff
+                @lcp-prefix :-1 lcp-prefix!
+            ) loop
+        ) each
+        @lcp-prefix
+    end
+end
+
 # `abs` is now a runtime builtin (int -- int) | (float -- float).
 
 # This uses the Marsaglia polar method
@@ -453,6 +473,8 @@ end
 def 2tuple (a b -- [a | b])
     [] rot append swap append
 end
+
+def whenJust (Maybe[T] (T -- ) -- ) f! match just v: @v @f x, _: end end
 
 # Integer base formatting/parsing. The integer itself never records a base;
 # these wrap the generic `toBase`/`fromBase` builtins for the common bases.
@@ -862,7 +884,7 @@ def __sshDefaultOptions ( -- [str])
     ]
 end
 
-def __sshOptionArgs ( -- dict)
+def __sshOptionArgs ( -- {[str]})
     {
         '-c': ['aes128-ctr' 'aes192-ctr' 'aes256-ctr' 'aes128-gcm@openssh.com' 'aes256-gcm@openssh.com' 'chacha20-poly1305@openssh.com'],
         '-e': ['^' 'none'],

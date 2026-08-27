@@ -1,0 +1,2 @@
+# Conflict: stdout capture then file redirect must error
+[ls] * `conflict_out.txt` > ;

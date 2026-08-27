@@ -106,6 +106,30 @@ So the following are equivalent:
 [yourCommand] ^b *b !
 ```
 
+#### Merging one stream into the other
+
+Use `2>&1` to send stderr to wherever stdout ends up, or `1>&2` to send stdout to wherever stderr ends up.
+These are complete tokens: no spaces are allowed inside them.
+Unlike POSIX shells, they are not order-sensitive fd duplication:
+a merge means "this stream goes to the other stream's *final* destination",
+so there is no `> file 2>&1` vs `2>&1 > file` ordering trap.
+Both streams share a single destination, preserving output order, on every platform.
+
+```mshell
+[yourCommand] 2>&1 * !                 # Captures stdout and stderr interleaved as one string.
+[[make] 2>&1 [grep -i error]] |;       # stderr flows through the pipe.
+[yourCommand] 1>&2 ;                   # stdout appears on stderr.
+[yourCommand] `output.log` > 2>&1 !    # Both streams into output.log; equivalent to &>.
+```
+
+#### Each stream has exactly one destination
+
+A stream's destination can be set once: a file redirect, a capture, an in-place redirect, or a merge.
+Applying a second destination to the same stream is an error, caught both by the static type checker and at runtime.
+For example, ``[cmd] * `f` >`` (capture and file redirect on stdout), `[cmd] 2>&1 ^` (merge and capture on stderr),
+and `[cmd] 2>&1 1>&2` (circular merge) are all rejected.
+`2>&1` also cannot be combined with `<>`, since stderr text would be written back into the edited file.
+
 Summary of external command operators:
 
 Operator | Effect on external commands                | Notes
@@ -123,13 +147,30 @@ Operator | Effect on external commands                | Notes
 `&>>`    | Redirect both stdout and stderr to a file. | Appends to the file.
 `^`      | Capture stderr to the stack.               | As a string.
 `^b`     | Capture stderr to the stack.               | As binary.
+`2>&1`   | Merge stderr into stdout's destination.    | Single token, no spaces. Not order-sensitive: stderr follows stdout's final destination.
+`1>&2`   | Merge stdout into stderr's destination.    | Single token, no spaces.
 `<`      | Feed stdin from a value.                   | String, path, or binary.
 `<>`     | In-place file modification.                | Reads file to stdin, writes stdout back on success.
 `&`      | Mark the command list to run asynchronously. | Marks the list; the trailing `;`/`!` starts the subprocess and returns immediately without waiting. Stdout and stderr default to discarded.
 
 ### Redirection on quotations
 
-All of the redirection operators above also work on quotations. This is useful when you want to redirect the output of mshell code that uses `wl`, `wle`, or other built-in functions that write to stdout or stderr. It is also useful when you have many commands that you want to run while appending all the outputs to a single file, without having to put the redirection on each command invocation.
+The redirection operators that don't change the stack also work on quotations:
+file redirects (`>`, `>>`, `2>`, `2>>`, `&>`, `&>>`), stdin (`<`), and the merges (`2>&1`, `1>&2`).
+This is useful when you want to redirect the output of mshell code that uses `wl`, `wle`, or other built-in functions that write to stdout or stderr.
+It is also useful when you have many commands that you want to run while appending all the outputs to a single file, without having to put the redirection on each command invocation.
+
+The captures (`*`, `*b`, `^`, `^b`) and the in-place redirect (`<>`) are *not* allowed on quotations,
+because they would change the quotation's stack effect.
+Capture the individual command lists inside the quotation instead, e.g. `[[cmd1] [cmd2]] (* !) map` to run each command and collect stdouts.
+
+Destination conflicts on quotations (e.g. two `>` redirects, or `2>&1` plus `2>`) are caught at runtime.
+Since redirects never change a quotation's stack effect, they are invisible to the static type checker.
+
+A quotation's redirect is resolved each time the quotation executes.
+So a `>`-redirected quotation run repeatedly — stored and executed with `x` several times, or passed to `each` or `map` — truncates the file on every execution, leaving only the last run's output.
+Use `>>` when a repeatedly-executed quotation should accumulate output.
+The exception is `loop`: the file is opened once when the loop starts, so all iterations write to the same open file.
 
 ```mshell
 (
@@ -286,6 +327,10 @@ An environment variable can be removed with the `unsetenv` built-in,
 which takes the variable name as a string.
 Unsetting a variable that does not exist is not an error.
 
+When the variable name is not known statically,
+an environment variable can be set with the `setenv` built-in,
+which takes the value then the name as strings.
+
 ```mshell
 $HOME cd
 
@@ -297,6 +342,9 @@ $HOME cd
 
 # Removing an environment variable
 "MSHELL_VAR" unsetenv
+
+# Setting with a dynamic name, value then name
+"Hello, World!" "MSHELL_VAR" setenv
 ```
 
 ## Indexing
@@ -381,6 +429,12 @@ msh completions elvish | eval
 msh completions nushell | save --force $"($nu.default-config-dir)/completions/msh.nu"
 use $"($nu.default-config-dir)/completions/msh.nu" *
 ```
+
+### Language Server
+
+The bundled language server provides a code action named `Quote all literals in list` when the cursor is inside a parsed list value containing bare literal tokens.
+The action single-quotes every bare literal in the innermost containing list, including literals in nested child lists.
+Existing strings, numbers, variables, paths, and operators are unchanged.
 
 ### Binary map overrides
 
@@ -1044,6 +1098,7 @@ end wl # Output: 11
 - `defs`: Print available definitions at the current location (--)
 - `env`: Write all environment variables to stderr in sorted order (--)
 - `completionDefs`: Push a dictionary of completion definitions. Keys are command names, values are lists of quotations. `( -- dict)`
+- `setenv`: Set an environment variable by name, value then name. Use when the name is not known statically; otherwise prefer `$NAME!`. `(str str -- )`
 - `unsetenv`: Remove an environment variable by name. Unsetting a variable that does not exist is not an error. `(str -- )`
 - `dup`: Duplicate (a -- a a)
 - `swap`: Swap (a b -- b a)
@@ -1071,6 +1126,18 @@ end wl # Output: 11
 - `read`: Read a line from stdin. Puts a str and bool of whether the read was successful on the stack. `( -- str bool)`
 - `prompt`: Write a prompt string to the controlling TTY and read a line from the controlling TTY. Fails if no controlling TTY is available. `(str -- str)`
 - `stdin`: Drop stdin onto the stack `( -- str)`
+- `stdinIsTerminal`: Return whether the current effective stdin is connected to a terminal or Windows console.
+  Regular files, pipes, and non-file streams return false.
+  Redirections and symlinks are classified by their opened target, so one that resolves to a terminal returns true.
+  `( -- bool)`
+- `stdoutIsTerminal`: Return whether the current effective stdout is connected to a terminal or Windows console.
+  Regular files, pipes, captures, and non-file streams return false.
+  Redirections and symlinks are classified by their opened target, so one that resolves to a terminal returns true.
+  `( -- bool)`
+- `stderrIsTerminal`: Return whether the current effective stderr is connected to a terminal or Windows console.
+  Regular files, pipes, captures, and non-file streams return false.
+  Redirections and symlinks are classified by their opened target, so one that resolves to a terminal returns true.
+  `( -- bool)`
 - `::`: Drop stdin onto the stack and split by lines `( -- [str])`. This is a shorthand for `stdin lines`.
 - `foldl`: Fold left. `(quote initial list -- result)`
 - `wt`: "Whitespace table", puts stdin split by lines and whitespace on the stack. `( -- [[str]])`
@@ -1189,6 +1256,7 @@ end wl # Output: 11
 - `trimEnd`: Trim whitespace from end of string. `(str -- str)`
 - `startsWith`: Check if string starts with substring. `(str str -- bool)`
 - `endsWith`: Check if string ends with substring. `(str str -- bool)`
+- `longestCommonPrefix`: Longest leading substring shared by every string in the list. Byte-based; an empty list gives `""`. `([str] -- str)`
 - `title`: Convert string to title case (English, uses [`cases.Title`](https://pkg.go.dev/golang.org/x/text/cases#Title)). `(str -- str)`
 - `lower`: Convert string to lowercase. `(str -- str)`
 - `upper`: Convert string to uppercase. `(str -- str)`
@@ -1406,6 +1474,7 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
 - `bind`: This is a monadic bind operation. Allows for chaining operations on Maybe values with functions that themselves return Maybe values. `(Maybe[a] (a -- Maybe[b]) -- Maybe[b])`
 - `map`: Map a function over a Maybe value. If the Maybe is None, it returns None. If it is Just, it applies the function to the value. `(Maybe[a] (a -- b) -- Maybe[b])`
 - `map2`: Map a binary function over a pair of Maybe values. Returns None if either input is None, otherwise applies the function to both inner values. `(Maybe[a] Maybe[b] (a b -- c) -- Maybe[c])`
+- `whenJust`: Run a quotation on the inner value for its side effects if the Maybe is Just; does nothing on None. `(Maybe[a] (a -- ) -- )`
 
 ## Null
 
@@ -1471,6 +1540,11 @@ Two things differ, both driven by the tar format:
   `.tar.gz` or `.tgz` produce a gzip-compressed tarball, `.tar` is uncompressed.
   When reading, the gzip magic bytes are auto-detected, so a gzipped tarball is
   read transparently regardless of its filename.
+  The write destination (`tarDirInc`/`tarDirExc`/`tarPack`) may also be a dictionary
+  `{path: str|path, compress?: bool}`, where `compress` overrides the extension
+  inference in either direction.
+  This is useful for destinations without a meaningful extension,
+  e.g. `redo`'s `$3` temp files: `` `src` { "path": @dest, "compress": true } tarDirExc ``.
 - Symlinks are preserved: `tarPack`/`tarDir*` store symlinks as symlink entries,
   and `tarExtract`/`tarExtractEntry` recreate them (rejecting any whose target
   would escape the destination directory). Extraction also refuses to write
@@ -1482,8 +1556,8 @@ bytes; `0` = unlimited) to guard against decompression bombs, and packing never
 follows a source symlink, so a symlink loop or a link to `/dev/zero` cannot hang
 or inflate the archive.
 
-- `tarDirInc`: Create/overwrite a `.tar`/`.tar.gz` from a directory; the archive root contains the directory's contents (no parent folder). `(path:sourceDir path:tarPath -- )`
-- `tarDirExc`: Create/overwrite a `.tar`/`.tar.gz` that includes the source directory itself at the archive root (entries are prefixed with the directory name). `(path:sourceDir path:tarPath -- )`
+- `tarDirInc`: Create/overwrite a `.tar`/`.tar.gz` from a directory; the archive root contains the directory's contents (no parent folder). `(str | path str | path | {path: str | path, compress?: bool} -- )`
+- `tarDirExc`: Create/overwrite a `.tar`/`.tar.gz` that includes the source directory itself at the archive root (entries are prefixed with the directory name). `(str | path str | path | {path: str | path, compress?: bool} -- )`
 - `tarPack`: Create/overwrite a `.tar`/`.tar.gz` by packing a list of entries.
   Each entry is either a bare string/path (the file or directory to add,
   keeping its base name and mode) or a dictionary.
@@ -1492,7 +1566,7 @@ or inflate the archive.
   `mode` is a Go `os.FileMode`; write it with an octal literal,
   e.g. `0o644` (`rw-r--r--`), `0o755` (`rwxr-xr-x`), `0o600`.
   If `mode` is omitted, the entry keeps the source file's own mode.
-  Type: `([str | path | {path: str | path, archivePath?: str | path, mode?: int}] str | path -- )`
+  Type: `([str | path | {path: str | path, archivePath?: str | path, mode?: int}] str | path | {path: str | path, compress?: bool} -- )`
 - `tarList`: List archive entries as dictionaries with keys: `name` (string, forward-slash paths, directories end with `/`), `compressedSize` and `uncompressedSize` (int bytes; equal, since tar has no per-entry compressed size), `isDir` (bool), `perm` (int POSIX permission bits), `executable` (bool), `modified` (datetime from the archive entry), `type` (`"file"`/`"dir"`/`"symlink"`), and `linkTarget` (symlink target, empty otherwise). `(path -- [dict])`
 - `tarExtract`: Extract an entire archive. Options dict is required; defaults: `overwrite=false`, `skipExisting=false` (mutually exclusive), `stripComponents=0`, `pattern=""` (glob matched before stripping), `preservePermissions=true`, `maxBytes=0` (0 = unlimited; caps the total uncompressed bytes written to guard against decompression bombs). Destination is created if missing. `(path:tarPath path:destDir dict:options -- )`
 - `tarExtractEntry`: Extract a single entry (file or directory subtree) to a destination path. Options dict is required; defaults: `overwrite=false`, `skipExisting=false` (mutually exclusive), `preservePermissions=true`, `mkdirs=true`, `maxBytes=0` (0 = unlimited uncompressed-byte cap). `(path:tarPath str:entry path:dest dict:options -- )`

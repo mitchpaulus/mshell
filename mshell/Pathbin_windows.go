@@ -364,6 +364,7 @@ const (
 var (
 	kernel32                  = syscall.NewLazyDLL("kernel32.dll")
 	procSetConsoleCtrlHandler = kernel32.NewProc("SetConsoleCtrlHandler")
+	consoleCtrlCallback       = syscall.NewCallback(consoleCtrlHandler)
 )
 
 // consoleCtrlHandler handles console control events (CTRL-C, CTRL-BREAK, etc.)
@@ -386,16 +387,24 @@ func consoleCtrlHandler(ctrlType uint32) uintptr {
 	return 0
 }
 
-// installCtrlHandler installs the console control handler if not already installed
-func installCtrlHandler() {
+// installCtrlHandler installs the console control handler if not already installed.
+// Installation failure is part of the foreground transaction and must not be hidden.
+func installCtrlHandler() error {
 	foregroundPgidMu.Lock()
 	defer foregroundPgidMu.Unlock()
 
 	if !ctrlHandlerInstalled {
 		// SetConsoleCtrlHandler with add=true (1) adds the handler to the list
-		procSetConsoleCtrlHandler.Call(syscall.NewCallback(consoleCtrlHandler), 1)
+		result, _, callErr := procSetConsoleCtrlHandler.Call(consoleCtrlCallback, 1)
+		if result == 0 {
+			if callErr != nil && callErr != syscall.Errno(0) {
+				return callErr
+			}
+			return fmt.Errorf("SetConsoleCtrlHandler returned failure")
+		}
 		ctrlHandlerInstalled = true
 	}
+	return nil
 }
 
 // IgnoreSignalsForJobControl is a no-op on Windows.
@@ -408,7 +417,9 @@ func IgnoreSignalsForJobControl() func() {
 // On Windows, this causes the console control handler to ignore CTRL-C for the shell,
 // allowing only the child to be terminated.
 func SetForegroundProcessGroup(ttyFd int, pgid int) (int, error) {
-	installCtrlHandler()
+	if err := installCtrlHandler(); err != nil {
+		return 0, err
+	}
 
 	foregroundPgidMu.Lock()
 	oldPgid := foregroundPgid
@@ -418,12 +429,22 @@ func SetForegroundProcessGroup(ttyFd int, pgid int) (int, error) {
 	return int(oldPgid), nil
 }
 
-// RestoreForegroundProcessGroup marks that no child process is running.
-// CTRL-C will now terminate the shell again.
-func RestoreForegroundProcessGroup(ttyFd int) error {
+// RestoreForegroundProcessGroup restores the prior in-memory foreground marker.
+func RestoreForegroundProcessGroup(ttyFd int, pgid int) error {
 	foregroundPgidMu.Lock()
-	foregroundPgid = 0
+	foregroundPgid = uint32(pgid)
 	foregroundPgidMu.Unlock()
+	return nil
+}
+
+// ContinueProcessGroup is a no-op for the direct-console compatibility backend.
+func ContinueProcessGroup(pgid int) error {
+	return nil
+}
+
+// KillProcessGroup cannot terminate a Windows process tree without a Job Object.
+// Callers still kill the immediate os.Process while the isolated backend is built.
+func KillProcessGroup(pgid int) error {
 	return nil
 }
 
@@ -434,4 +455,86 @@ func IsTerminal(fd int) bool {
 	var mode uint32
 	err := windows.GetConsoleMode(handle, &mode)
 	return err == nil
+}
+
+// CanControlTerminal is equivalent to console membership for the direct-console
+// backend.  Windows has no kernel foreground process-group gate.
+func CanControlTerminal(fd int) bool {
+	return IsTerminal(fd)
+}
+
+// ShellOwnsTerminal is always true on Windows: the foreground state is an
+// in-process Ctrl-C routing marker, not shared kernel terminal ownership, so
+// there is no cross-process foreground owner to defer to.
+func ShellOwnsTerminal(ttyFd int) bool {
+	return true
+}
+
+// ShellProcessGroup returns the marker's idle value.  Restoring the in-memory
+// marker never fails, so the fallback hand-back path is unreachable on Windows.
+func ShellProcessGroup() int {
+	return 0
+}
+
+func DuplicateTerminalHandle(fd int) (int, error) {
+	process := windows.CurrentProcess()
+	var duplicate windows.Handle
+	err := windows.DuplicateHandle(
+		process,
+		windows.Handle(fd),
+		process,
+		&duplicate,
+		0,
+		false,
+		windows.DUPLICATE_SAME_ACCESS,
+	)
+	return int(duplicate), err
+}
+
+func CloseTerminalHandle(fd int) error {
+	return windows.CloseHandle(windows.Handle(fd))
+}
+
+type windowsConsoleMode struct {
+	handle windows.Handle
+	mode   uint32
+}
+
+type windowsTerminalModeSnapshot struct {
+	modes []windowsConsoleMode
+}
+
+func CaptureTerminalMode(fd int) (TerminalModeSnapshot, error) {
+	handles := []windows.Handle{
+		windows.Handle(fd),
+		windows.Handle(os.Stdin.Fd()),
+		windows.Handle(os.Stdout.Fd()),
+		windows.Handle(os.Stderr.Fd()),
+	}
+	seen := make(map[windows.Handle]struct{})
+	snapshot := &windowsTerminalModeSnapshot{}
+	for _, handle := range handles {
+		if _, exists := seen[handle]; exists {
+			continue
+		}
+		seen[handle] = struct{}{}
+		var mode uint32
+		if err := windows.GetConsoleMode(handle, &mode); err == nil {
+			snapshot.modes = append(snapshot.modes, windowsConsoleMode{handle: handle, mode: mode})
+		}
+	}
+	if len(snapshot.modes) == 0 {
+		return nil, fmt.Errorf("no console mode available for handle %d", fd)
+	}
+	return snapshot, nil
+}
+
+func (snapshot *windowsTerminalModeSnapshot) Restore() error {
+	var firstErr error
+	for _, consoleMode := range snapshot.modes {
+		if err := windows.SetConsoleMode(consoleMode.handle, consoleMode.mode); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }

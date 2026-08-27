@@ -1,0 +1,8 @@
+["flower" "flow" "flight"] longestCommonPrefix strEscape wl
+["dog" "racecar" "car"] longestCommonPrefix strEscape wl
+["interspecies" "interstellar" "interstate"] longestCommonPrefix strEscape wl
+["single"] longestCommonPrefix strEscape wl
+[] longestCommonPrefix strEscape wl
+["" "abc"] longestCommonPrefix strEscape wl
+["abc" "abc" "abc"] longestCommonPrefix strEscape wl
+["abc" "abcdef" "abcx"] longestCommonPrefix strEscape wl

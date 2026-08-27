@@ -253,6 +253,9 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 	r.reg("toDt", "(str -- Maybe[datetime])", "(datetime -- datetime)")
 	r.reg("now", "( -- datetime)")
 	r.reg("stdin", "( -- str)")
+	for _, name := range []string{"stdinIsTerminal", "stdoutIsTerminal", "stderrIsTerminal"} {
+		r.reg(name, "( -- bool)")
+	}
 	r.reg("runtime", "( -- str)")
 	r.reg("nullDevice", "( -- path)")
 
@@ -446,6 +449,8 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		r.reg(name, "(str | path -- )")
 	}
 	r.reg("cd", "(str | path -- )")
+	// setenv : set an environment variable, value then name
+	r.reg("setenv", "(str str -- )")
 	// unsetenv : remove an environment variable by name
 	r.reg("unsetenv", "(str -- )")
 	// cdh / cdp : interactive directory history / pop navigation
@@ -514,7 +519,7 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		r.reg(name, "(str str int -- str)")
 	}
 	for _, name := range []string{"index", "lastIndexOf"} {
-		r.reg(name, "(str str -- int)")
+		r.reg(name, "(str str -- Maybe[int])")
 	}
 	r.reg("hostname", "( -- str)")
 	r.reg("uuid", "( -- str)")
@@ -611,11 +616,15 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 	// Tar ops mirror the zip surface exactly (same argument order and option
 	// dicts). Compression is chosen from the destination extension on write
 	// (.tar.gz / .tgz -> gzip) and sniffed from the gzip magic bytes on read.
+	// The write destination also accepts a dict form {path, compress?} that
+	// overrides the extension inference (for extensionless targets like redo's
+	// $3 temp files).
+	tarDest := "str | path | {path: str | path, compress?: bool}"
 	r.reg("tarRead", "(str | path str | path -- Maybe[bytes])")
 	for _, name := range []string{"tarDirInc", "tarDirExc"} {
-		r.reg(name, "(str | path str | path -- )")
+		r.reg(name, "(str | path "+tarDest+" -- )")
 	}
-	r.reg("tarPack", "([str | path | {path: str | path, archivePath?: str | path, mode?: int}] str | path -- )")
+	r.reg("tarPack", "([str | path | {path: str | path, archivePath?: str | path, mode?: int}] "+tarDest+" -- )")
 	r.reg("tarExtract", "(str | path str | path "+zipExtractOpts+" -- )")
 	r.reg("tarExtractEntry",
 		"(str str str "+zipEntryOpts+" -- )",

@@ -1,0 +1,39 @@
+# Destination dict form {path, compress?}: explicit compress overrides
+# extension inference (for extensionless targets like redo's $3 temp files).
+
+# Extensionless temp file, forced gzip.
+tempFile gzTar!
+`zip/base` { "path": @gzTar, "compress": true } tarDirExc
+
+"forced gzip magic" wl
+@gzTar readFileBytes str "1f8b" startsWith str wl
+
+"forced gzip alpha" wl
+@gzTar "alpha.txt" tarRead ? utf8Str wl
+
+# .tar.gz-named file, forced uncompressed.
+".tar.gz" tempFileExt plainTar!
+`zip/base` { "path": @plainTar, "compress": false } tarDirExc
+
+"forced plain magic" wl
+@plainTar readFileBytes str "1f8b" startsWith str wl
+
+# Dict without compress falls back to extension inference (extensionless -> plain).
+tempFile defTar!
+[`zip/base/alpha.txt`] { "path": @defTar } tarPack
+
+"default plain magic" wl
+@defTar readFileBytes str "1f8b" startsWith str wl
+
+"tarPack alpha" wl
+@defTar "alpha.txt" tarRead ? utf8Str wl
+
+# tarPack with forced gzip on an extensionless path.
+tempFile gzPack!
+[`zip/base/alpha.txt`] { "path": @gzPack, "compress": true } tarPack
+
+"tarPack gzip magic" wl
+@gzPack readFileBytes str "1f8b" startsWith str wl
+
+"tarPack gzip alpha" wl
+@gzPack "alpha.txt" tarRead ? utf8Str wl

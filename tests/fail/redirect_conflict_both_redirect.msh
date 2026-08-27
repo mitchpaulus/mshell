@@ -1,0 +1,2 @@
+# Conflict: &> then 2>&1 must error
+[ls] `conflict_both.txt` &> 2>&1 ;

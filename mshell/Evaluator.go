@@ -517,6 +517,23 @@ type ExecuteContext struct {
 	LaunchOnce        *sync.Once      // Signals this stage launched, exactly once (only set for pipeline stages)
 }
 
+type fileDescriptorProvider interface {
+	Fd() uintptr
+}
+
+func streamIsTerminal(stream any, fallback *os.File) bool {
+	if stream == nil {
+		stream = fallback
+	}
+
+	fdProvider, ok := stream.(fileDescriptorProvider)
+	if !ok {
+		return false
+	}
+
+	return IsTerminal(int(fdProvider.Fd()))
+}
+
 func (context *ExecuteContext) CloneLessVariables() *ExecuteContext {
 	newContext := &ExecuteContext{
 		StandardInput:     context.StandardInput,
@@ -1564,55 +1581,32 @@ func (state *EvalState) processLoop(t Token, frame *EvaluationFrame, frames *[]E
 		return state.FailWithMessage(fmt.Sprintf("%d:%d: Loop quotation needs a minimum of one token.\n", t.Line, t.Column))
 	}
 
-	// Build loop context
-	loopContext := ExecuteContext{
-		StandardInput:  nil,
-		StandardOutput: nil,
-		Variables:      context.Variables,
-		Pbm:            context.Pbm,
+	// Build loop context. BuildExecutionContext handles all the quotation's
+	// redirections (stdin, stdout, stderr, merges) and propagates the outer
+	// context's streams when the quotation has none of its own.
+	loopContext, err := quotation.BuildExecutionContext(&context)
+	if err != nil {
+		return state.FailWithMessage(err.Error())
 	}
-
-	if quotation.StdinBehavior != STDIN_NONE {
-		switch quotation.StdinBehavior {
-		case STDIN_CONTENT:
-			loopContext.StandardInput = strings.NewReader(quotation.StandardInputContents)
-		case STDIN_BINARY:
-			loopContext.StandardInput = bytes.NewReader(quotation.StandardInputBinary)
-		case STDIN_FILE:
-			file, err := os.Open(quotation.StandardInputFile)
-			if err != nil {
-				return state.FailWithMessage(fmt.Sprintf("%d:%d: Error opening file %s for reading: %s\n", t.Line, t.Column, quotation.StandardInputFile, err.Error()))
-			}
-			loopContext.StandardInput = file
-			loopContext.ShouldCloseInput = true
-		}
-	}
-
-	if quotation.StandardOutputFile != "" {
-		file, err := os.Create(quotation.StandardOutputFile)
-		if err != nil {
-			return state.FailWithMessage(fmt.Sprintf("%d:%d: Error opening file %s for writing: %s\n", t.Line, t.Column, quotation.StandardOutputFile, err.Error()))
-		}
-		loopContext.StandardOutput = file
-		loopContext.ShouldCloseOutput = true
-	}
+	loopContext.Variables = context.Variables
 
 	// Push FRAME_LOOP
 	state.LoopDepth++
 	callStackItem := CallStackItem{MShellParseItem: quotation, Name: "loop", CallStackType: CALLSTACKQUOTE}
 	state.CallStack.Push(callStackItem)
 	newFrame := EvaluationFrame{
-		Objects:          quotation.Tokens,
-		Index:            0,
-		Context:          loopContext,
-		Stack:            stack,
-		Definitions:      definitions,
-		CallStackItem:    callStackItem,
-		FrameType:        FRAME_LOOP,
-		LoopMax:          15000000,
-		LoopCount:        0,
-		LoopQuotation:    quotation,
-		InitialStackSize: len(*stack),
+		Objects:            quotation.Tokens,
+		Index:              0,
+		Context:            *loopContext,
+		Stack:              stack,
+		Definitions:        definitions,
+		CallStackItem:      callStackItem,
+		FrameType:          FRAME_LOOP,
+		LoopMax:            15000000,
+		LoopCount:          0,
+		LoopQuotation:      quotation,
+		InitialStackSize:   len(*stack),
+		ShouldCloseContext: true,
 	}
 	*frames = append(*frames, newFrame)
 	return SimpleSuccess()
@@ -3397,6 +3391,33 @@ type Executable interface {
 	GetStandardOutputFile() string
 }
 
+// stdoutDestinationDescOf / stderrDestinationDescOf describe the operator
+// that already claimed the stream on a redirectable object, or "" when the
+// stream is unclaimed (or the object is not redirectable).
+func stdoutDestinationDescOf(obj MShellObject) string {
+	switch o := obj.(type) {
+	case *MShellList:
+		return o.StdoutDestinationDesc()
+	case *MShellQuotation:
+		return o.StdoutDestinationDesc()
+	case *MShellPipe:
+		return o.StdoutDestinationDesc()
+	}
+	return ""
+}
+
+func stderrDestinationDescOf(obj MShellObject) string {
+	switch o := obj.(type) {
+	case *MShellList:
+		return o.StderrDestinationDesc()
+	case *MShellQuotation:
+		return o.StderrDestinationDesc()
+	case *MShellPipe:
+		return o.StderrDestinationDesc()
+	}
+	return ""
+}
+
 func (list *MShellList) Execute(state *EvalState, context ExecuteContext, stack *MShellStack) (EvalResult, int, []byte, []byte) {
 	result, exitCode, stdoutResult, stderrResult := RunProcess(*list, context, state)
 	return result, exitCode, stdoutResult, stderrResult
@@ -3913,8 +3934,10 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 	var allArgs []string
 	var cmdPath string
 
-	// Check if there is a directory separator in the name of the command trying to execute
-	if strings.Contains(commandLineArgs[0], string(os.PathSeparator)) {
+	// Check if there is a directory separator in the name of the command trying to execute.
+	// Use the platform IsPathSeparator so that './script' is a file reference on Windows too,
+	// where os.PathSeparator alone would miss the forward slash.
+	if strings.ContainsFunc(commandLineArgs[0], func(r rune) bool { return r < 256 && IsPathSeparator(uint8(r)) }) {
 		cmdPath = commandLineArgs[0]
 	} else {
 		var found bool
@@ -4066,6 +4089,24 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 		}
 	}
 
+	// MERGE REDIRECTS: at most one of these is set (enforced when the token
+	// is applied). The merged stream aliases the other stream's resolved
+	// destination. os/exec passes a duplicated fd when both are the same
+	// *os.File and serializes Writes when both are the same writer, so this
+	// is safe on every platform.
+	if list.StdoutToStderr {
+		cmd.Stdout = cmd.Stderr
+	} else if list.StderrToStdout {
+		cmd.Stderr = cmd.Stdout
+	}
+
+	resolvedStdio := resolveProcessStdio(cmd.Stdin, cmd.Stdout, cmd.Stderr)
+	if context.InPipeline && context.PipelineGroup != nil {
+		if err := context.PipelineGroup.registerTerminal(resolvedStdio.ControlTerminal()); err != nil {
+			return state.FailWithMessage(fmt.Sprintf("Error retaining pipeline terminal: %s\n", err)), 1, commandSubWriter.Bytes(), stderrBuffer.Bytes()
+		}
+	}
+
 	var startErr error
 	var exitCode int
 
@@ -4113,6 +4154,9 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 		// Print out current stdout and stderr
 		startErr = cmd.Start()
 		publishLeader()
+		if startErr == nil && context.InPipeline && context.PipelineGroup != nil {
+			context.PipelineGroup.registerProcess(cmd.Process)
+		}
 		markLaunched()
 
 		if startErr != nil {
@@ -4126,6 +4170,9 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 		// Use Start + Wait instead of Run so we can set the foreground process group
 		startErr = cmd.Start()
 		publishLeader()
+		if startErr == nil && context.InPipeline && context.PipelineGroup != nil {
+			context.PipelineGroup.registerProcess(cmd.Process)
+		}
 		markLaunched()
 		if startErr != nil {
 			fmt.Fprintf(os.Stderr, "Error starting command: %s\n", startErr.Error())
@@ -4135,16 +4182,20 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 			}
 			exitCode = classifyStartError(startErr)
 		} else {
-			// If stdin is a terminal and we're not in a pipeline, set the subprocess as
-			// the foreground process group so that CTRL-C goes to it instead of the shell.
-			// For pipelines, RunPipeline handles foreground process group management.
-			stdinFd := int(os.Stdin.Fd())
-			shouldSetForeground := !context.InPipeline && IsTerminal(stdinFd) && cmd.Process != nil
-			if shouldSetForeground {
-				// Ignore SIGTTOU/SIGTTIN to prevent shell from stopping when manipulating foreground
-				restoreSignals := IgnoreSignalsForJobControl()
-				SetForegroundProcessGroup(stdinFd, cmd.Process.Pid)
-				restoreSignals()
+			// The child endpoint was resolved after redirection.  It may be a terminal
+			// even when mshell's inherited os.Stdin is a pipe.
+			var foregroundLease *ForegroundLease
+			if !context.InPipeline && cmd.Process != nil {
+				foregroundLease, err = acquireForeground(resolvedStdio.ControlTerminal(), cmd.Process.Pid)
+				if err != nil {
+					// A terminal-reading child can otherwise remain stopped in SIGTTIN
+					// forever.  Terminate the group and reap the immediate child before
+					// returning the failed control transaction.
+					KillProcessGroup(cmd.Process.Pid)
+					cmd.Process.Kill()
+					cmd.Wait()
+					return state.FailWithMessage(fmt.Sprintf("Error acquiring terminal control: %s\n", err)), 1, commandSubWriter.Bytes(), stderrBuffer.Bytes()
+				}
 			}
 
 			// As the pipeline group leader, wait until every other stage has
@@ -4159,11 +4210,11 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 
 			waitErr := cmd.Wait()
 
-			// Restore the shell as the foreground process group
-			if shouldSetForeground {
-				restoreSignals := IgnoreSignalsForJobControl()
-				RestoreForegroundProcessGroup(stdinFd)
-				restoreSignals()
+			// Reclaim the terminal before evaluation can resume shell input.  A
+			// reclaim failure is shell bookkeeping and must not override the
+			// child's own result: the child may have exited 0.
+			if err := foregroundLease.Release(); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: reclaiming terminal control: %s\n", err)
 			}
 
 			if waitErr != nil {
@@ -4206,6 +4257,8 @@ type PipelineGroup struct {
 	claimed bool          // whether a leader has been chosen
 	pgid    int           // leader pid == process group id; 0 until known/usable
 	ready   chan struct{} // closed once the leader has started (or failed to)
+	terminal  *TerminalEndpoint // resolved controlling terminal for the job, if any
+	processes []*os.Process     // immediate processes retained for failed-launch cleanup
 
 	// Launch barrier: the leader must not reap itself (cmd.Wait) until every
 	// stage has finished launching, otherwise reaping destroys the shared
@@ -4214,6 +4267,64 @@ type PipelineGroup struct {
 	// the stage count and is decremented once per stage; launchDone closes at 0.
 	launchRemaining int
 	launchDone      chan struct{}
+}
+
+func (pg *PipelineGroup) registerProcess(process *os.Process) {
+	if process == nil {
+		return
+	}
+	pg.mu.Lock()
+	pg.processes = append(pg.processes, process)
+	pg.mu.Unlock()
+}
+
+func (pg *PipelineGroup) killProcesses() {
+	pg.mu.Lock()
+	processes := append([]*os.Process(nil), pg.processes...)
+	pg.mu.Unlock()
+	for _, process := range processes {
+		process.Kill()
+	}
+}
+
+// registerTerminal records a controlling terminal from a stage's resolved stdio.
+// A pipeline is one job, so RunPipeline performs one foreground transaction.
+func (pg *PipelineGroup) registerTerminal(endpoint *TerminalEndpoint) error {
+	if endpoint == nil {
+		return nil
+	}
+	terminal, err := duplicateTerminalEndpoint(endpoint)
+	if err != nil {
+		return err
+	}
+	pg.mu.Lock()
+	if pg.terminal == nil {
+		pg.terminal = terminal
+		terminal = nil
+	}
+	pg.mu.Unlock()
+	if terminal != nil {
+		return terminal.Close()
+	}
+	return nil
+}
+
+func (pg *PipelineGroup) foregroundTerminal() *TerminalEndpoint {
+	pg.mu.Lock()
+	defer pg.mu.Unlock()
+	if pg.terminal == nil {
+		return nil
+	}
+	terminal := *pg.terminal
+	return &terminal
+}
+
+func (pg *PipelineGroup) closeTerminal() error {
+	pg.mu.Lock()
+	terminal := pg.terminal
+	pg.terminal = nil
+	pg.mu.Unlock()
+	return terminal.Close()
 }
 
 func NewPipelineGroup(totalStages int) *PipelineGroup {
@@ -4418,33 +4529,27 @@ func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContex
 		}(i, item.(Executable))
 	}
 
-	// Make the pipeline's shared process group the terminal foreground so CTRL-C
-	// goes to the pipeline instead of the shell, and so an interactive stage can
-	// read the controlling terminal. Wait briefly for the leader to start; if no
-	// external process starts (e.g. an all-builtin pipeline), skip foreground.
-	stdinFd := int(os.Stdin.Fd())
-	setForeground := IsTerminal(stdinFd)
-	if setForeground {
-		pgid := pipelineGroup.foregroundPgid(100 * time.Millisecond)
+	// Wait until every stage has either started or failed before choosing the
+	// resolved terminal endpoint.  This is also the pipeline launch barrier in
+	// the formal stream-lifecycle model.
+	pipelineGroup.waitAllStagesLaunched()
+	pgid := pipelineGroup.foregroundPgid(100 * time.Millisecond)
+	foregroundLease, foregroundErr := acquireForeground(pipelineGroup.foregroundTerminal(), pgid)
+	if foregroundErr != nil {
 		if pgid > 0 {
-			// Ignore SIGTTOU/SIGTTIN to prevent shell from stopping when manipulating foreground
-			restoreSignals := IgnoreSignalsForJobControl()
-			SetForegroundProcessGroup(stdinFd, pgid)
-			restoreSignals()
-		} else {
-			setForeground = false
+			KillProcessGroup(pgid)
 		}
+		pipelineGroup.killProcesses()
 	}
 
 	// Wait for all processes to complete
 	wg.Wait()
 
-	// Restore the shell as the foreground process group
-	if setForeground {
-		restoreSignals := IgnoreSignalsForJobControl()
-		RestoreForegroundProcessGroup(stdinFd)
-		restoreSignals()
+	var reclaimErr error
+	if foregroundLease != nil {
+		reclaimErr = foregroundLease.Release()
 	}
+	closeTerminalErr := pipelineGroup.closeTerminal()
 
 	var stdoutBytes []byte
 	var stderrBytes []byte
@@ -4459,6 +4564,18 @@ func (state *EvalState) RunPipeline(MShellPipe MShellPipe, context ExecuteContex
 		stderrBytes = stdErrBuf.Bytes()
 	} else {
 		stderrBytes = nil
+	}
+
+	if foregroundErr != nil {
+		return state.FailWithMessage(fmt.Sprintf("Error acquiring pipeline terminal control: %s\n", foregroundErr)), 1, stdoutBytes, stderrBytes
+	}
+	// Reclaim and handle-close failures are shell bookkeeping and must not
+	// override the pipeline's own result.
+	if reclaimErr != nil {
+		fmt.Fprintf(os.Stderr, "Warning: reclaiming pipeline terminal control: %s\n", reclaimErr)
+	}
+	if closeTerminalErr != nil {
+		fmt.Fprintf(os.Stderr, "Warning: closing retained pipeline terminal: %s\n", closeTerminalErr)
 	}
 
 	// Check for errors
@@ -5311,6 +5428,36 @@ func parseZipExtractEntryOptions(dict *MShellDict) (zipExtractEntryOptions, erro
 	return options, nil
 }
 
+// parseTarDestination interprets the destination argument of the tar write
+// builtins. A plain string/path infers gzip compression from the extension
+// (isGzipTarget); a dict form {path, compress?} makes the choice explicit,
+// overriding the extension in either direction.
+func parseTarDestination(obj MShellObject) (string, bool, error) {
+	if dict, ok := obj.(*MShellDict); ok {
+		pathObj, ok := dict.Items["path"]
+		if !ok {
+			return "", false, fmt.Errorf("destination dict is missing required 'path'")
+		}
+		tarPath, err := pathObj.CastString()
+		if err != nil {
+			return "", false, fmt.Errorf("destination 'path' must be a string or path, found %s", pathObj.TypeName())
+		}
+		compress := isGzipTarget(tarPath)
+		if val, ok, err := boolOption(dict, "compress"); err != nil {
+			return "", false, err
+		} else if ok {
+			compress = val
+		}
+		return tarPath, compress, nil
+	}
+
+	tarPath, err := obj.CastString()
+	if err != nil {
+		return "", false, fmt.Errorf("Cannot tar into a %s", obj.TypeName())
+	}
+	return tarPath, isGzipTarget(tarPath), nil
+}
+
 func boolOption(dict *MShellDict, key string) (bool, bool, error) {
 	item, ok := dict.Items[key]
 	if !ok {
@@ -6134,6 +6281,12 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error reading from stdin: %s\n", t.Line, t.Column, err.Error()))
 					}
 					stack.Push(MShellString{buffer.String()})
+				} else if t.Lexeme == "stdinIsTerminal" {
+					stack.Push(MShellBool{streamIsTerminal(context.StandardInput, os.Stdin)})
+				} else if t.Lexeme == "stdoutIsTerminal" {
+					stack.Push(MShellBool{streamIsTerminal(context.StandardOutput, os.Stdout)})
+				} else if t.Lexeme == "stderrIsTerminal" {
+					stack.Push(MShellBool{streamIsTerminal(context.StandardError, os.Stderr)})
 				} else if t.Lexeme == "prompt" {
 					obj1, err := stack.Pop1(t)
 					if err != nil {
@@ -7113,6 +7266,36 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(MShellPath{path})
+				} else if t.Lexeme == "setenv" {
+					obj1, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'setenv' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					varName, err := obj1.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot use a %s as an environment variable name.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
+					obj2, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'setenv' operation on a stack with less than two items.\n", t.Line, t.Column))
+					}
+
+					varValue, err := obj2.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot use a %s as an environment variable value.\n", t.Line, t.Column, obj2.TypeName()))
+					}
+
+					err = os.Setenv(varName, varValue)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Could not set the environment variable '%s' to '%s'.\n", t.Line, t.Column, varName, varValue))
+					}
+
+					// If it was the PATH, refresh all the binaries
+					if varName == "PATH" {
+						context.Pbm.Update()
+					}
 				} else if t.Lexeme == "unsetenv" {
 					obj1, err := stack.Pop()
 					if err != nil {
@@ -7885,9 +8068,9 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						return state.FailWithMessage(err.Error())
 					}
 
-					tarPath, err := obj1.CastString()
+					tarPath, compress, err := parseTarDestination(obj1)
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot tar into a %s.\n", t.Line, t.Column, obj1.TypeName()))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s: %s\n", t.Line, t.Column, t.Lexeme, err.Error()))
 					}
 
 					sourceDir, err := obj2.CastString()
@@ -7896,7 +8079,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					preserveRoot := t.Lexeme == "tarDirInc"
-					if err := tarDirectory(sourceDir, tarPath, preserveRoot); err != nil {
+					if err := tarDirectory(sourceDir, tarPath, preserveRoot, compress); err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
 					}
 				} else if t.Lexeme == "tarPack" {
@@ -7905,9 +8088,9 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						return state.FailWithMessage(err.Error())
 					}
 
-					tarPath, err := obj1.CastString()
+					tarPath, compress, err := parseTarDestination(obj1)
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot tar into a %s.\n", t.Line, t.Column, obj1.TypeName()))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: tarPack: %s\n", t.Line, t.Column, err.Error()))
 					}
 
 					list, ok := obj2.(*MShellList)
@@ -7960,7 +8143,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						entries = append(entries, packItem)
 					}
 
-					if err := buildTarFromEntries(entries, tarPath); err != nil {
+					if err := buildTarFromEntries(entries, tarPath, compress); err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
 					}
 				} else if t.Lexeme == "tarList" {
@@ -11655,11 +11838,19 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 				}
 
 				if asList, ok := obj1.(*MShellList); ok {
+					if desc := asList.StdoutDestinationDesc(); desc != "" {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stdout already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+					}
 					asList.StdoutBehavior = STDOUT_COMPLETE
 					stack.Push(asList)
 				} else if asPipe, ok := obj1.(*MShellPipe); ok {
+					if desc := asPipe.StdoutDestinationDesc(); desc != "" {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stdout already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+					}
 					asPipe.StdoutBehavior = STDOUT_COMPLETE
 					stack.Push(asPipe)
+				} else if _, ok := obj1.(*MShellQuotation); ok {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: '%s' capture is not supported on quotations; it would change the quotation's stack effect. Capture the individual command lists inside instead, or redirect the quotation to a file with '>'.\n", t.Line, t.Column, t.Lexeme))
 				} else {
 					obj2, err := stack.Pop()
 					if err != nil {
@@ -11695,9 +11886,17 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 				switch objTyped := obj1.(type) {
 				case *MShellList:
+					if desc := objTyped.StdoutDestinationDesc(); desc != "" {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stdout already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+					}
 					objTyped.StdoutBehavior = STDOUT_BINARY
 				case *MShellPipe:
+					if desc := objTyped.StdoutDestinationDesc(); desc != "" {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stdout already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+					}
 					objTyped.StdoutBehavior = STDOUT_BINARY
+				case *MShellQuotation:
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: '%s' capture is not supported on quotations; it would change the quotation's stack effect. Capture the individual command lists inside instead, or redirect the quotation to a file with '>'.\n", t.Line, t.Column, t.Lexeme))
 				default:
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot capture binary stdout for a %s.\n", t.Line, t.Column, obj1.TypeName()))
 				}
@@ -11712,9 +11911,17 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 				switch objTyped := obj1.(type) {
 				case *MShellList:
+					if desc := objTyped.StderrDestinationDesc(); desc != "" {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stderr already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+					}
 					objTyped.StderrBehavior = STDERR_COMPLETE
 				case *MShellPipe:
+					if desc := objTyped.StderrDestinationDesc(); desc != "" {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stderr already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+					}
 					objTyped.StderrBehavior = STDERR_COMPLETE
+				case *MShellQuotation:
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: '%s' capture is not supported on quotations; it would change the quotation's stack effect. Capture the individual command lists inside instead, or redirect the quotation to a file with '2>'.\n", t.Line, t.Column, t.Lexeme))
 				default:
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot capture stderr for a %s.\n", t.Line, t.Column, obj1.TypeName()))
 				}
@@ -11727,9 +11934,17 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 				switch objTyped := obj1.(type) {
 				case *MShellList:
+					if desc := objTyped.StderrDestinationDesc(); desc != "" {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stderr already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+					}
 					objTyped.StderrBehavior = STDERR_BINARY
 				case *MShellPipe:
+					if desc := objTyped.StderrDestinationDesc(); desc != "" {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stderr already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+					}
 					objTyped.StderrBehavior = STDERR_BINARY
+				case *MShellQuotation:
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: '%s' capture is not supported on quotations; it would change the quotation's stack effect. Capture the individual command lists inside instead, or redirect the quotation to a file with '2>'.\n", t.Line, t.Column, t.Lexeme))
 				default:
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot capture binary stderr for a %s.\n", t.Line, t.Column, obj1.TypeName()))
 				}
@@ -11751,10 +11966,16 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 				switch obj2Typed := obj2.(type) {
 				case *MShellList:
+					if desc := obj2Typed.StdoutDestinationDesc(); desc != "" {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stdout already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+					}
 					obj2Typed.StandardOutputFile = path
 					obj2Typed.AppendOutput = true
 					stack.Push(obj2Typed)
 				case *MShellQuotation:
+					if desc := obj2Typed.StdoutDestinationDesc(); desc != "" {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stdout already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+					}
 					obj2Typed.StandardOutputFile = path
 					obj2Typed.AppendOutput = true
 					stack.Push(obj2Typed)
@@ -12157,6 +12378,11 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' across numeric types %s and %s. Use 'toFloat' / 'toInt' to convert explicitly.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
 					}
 				} else {
+					if t.Type == GREATERTHAN {
+						if desc := stdoutDestinationDescOf(obj2); desc != "" {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stdout already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+						}
+					}
 					switch obj1.(type) {
 					case MShellString:
 						path := obj1.(MShellString).Content
@@ -12294,10 +12520,16 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 				switch obj2Typed := obj2.(type) {
 				case *MShellList:
+					if desc := obj2Typed.StderrDestinationDesc(); desc != "" {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stderr already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+					}
 					obj2Typed.StandardErrorFile = redirectFile
 					obj2Typed.AppendError = t.Type == STDERRAPPEND
 					stack.Push(obj2Typed)
 				case *MShellQuotation:
+					if desc := obj2Typed.StderrDestinationDesc(); desc != "" {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stderr already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+					}
 					obj2Typed.StandardErrorFile = redirectFile
 					obj2Typed.AppendError = t.Type == STDERRAPPEND
 					stack.Push(obj2Typed)
@@ -12324,6 +12556,13 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 				}
 
 				appendMode := t.Type == STDOUTANDSTDERRAPPEND
+
+				if desc := stdoutDestinationDescOf(obj2); desc != "" {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stdout already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+				}
+				if desc := stderrDestinationDescOf(obj2); desc != "" {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stderr already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+				}
 
 				switch obj2Typed := obj2.(type) {
 				case *MShellList:
@@ -12361,6 +12600,15 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						t.Line, t.Column, obj2.TypeName()))
 				}
 
+				if desc := list.StdoutDestinationDesc(); desc != "" {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stdout already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+				}
+				// stderr merged into stdout would write error text back into
+				// the edited file; reject the combination.
+				if list.StderrToStdout {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stderr is merged into stdout ('2>&1'), which would write stderr back into the edited file.\n", t.Line, t.Column, t.Lexeme))
+				}
+
 				// Read file contents immediately
 				fileContents, err := os.ReadFile(pathObj.Path)
 				if err != nil {
@@ -12373,6 +12621,59 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 				list.StandardInputBinary = fileContents
 				list.InPlaceFile = pathObj.Path
 				stack.Push(list)
+			} else if t.Type == STDERRTOSTDOUT || t.Type == STDOUTTOSTDERR { // Token Type
+				obj, err := stack.Pop()
+				if err != nil {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
+				}
+
+				if t.Type == STDERRTOSTDOUT {
+					if desc := stderrDestinationDescOf(obj); desc != "" {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stderr already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+					}
+				} else {
+					if desc := stdoutDestinationDescOf(obj); desc != "" {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stdout already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+					}
+				}
+
+				// The two merges together are circular: neither stream would
+				// have a real destination.
+				circularMsg := "%d:%d: Cannot apply '%s': the other stream is already merged with '%s'; merging both streams into each other is circular.\n"
+
+				switch objTyped := obj.(type) {
+				case *MShellList:
+					if t.Type == STDERRTOSTDOUT {
+						if objTyped.StdoutToStderr {
+							return state.FailWithMessage(fmt.Sprintf(circularMsg, t.Line, t.Column, t.Lexeme, "1>&2"))
+						}
+						if objTyped.InPlaceFile != "" {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' with an in-place redirect ('<>'): stderr would be written back into the edited file.\n", t.Line, t.Column, t.Lexeme))
+						}
+						objTyped.StderrToStdout = true
+					} else {
+						if objTyped.StderrToStdout {
+							return state.FailWithMessage(fmt.Sprintf(circularMsg, t.Line, t.Column, t.Lexeme, "2>&1"))
+						}
+						objTyped.StdoutToStderr = true
+					}
+					stack.Push(objTyped)
+				case *MShellQuotation:
+					if t.Type == STDERRTOSTDOUT {
+						if objTyped.StdoutToStderr {
+							return state.FailWithMessage(fmt.Sprintf(circularMsg, t.Line, t.Column, t.Lexeme, "1>&2"))
+						}
+						objTyped.StderrToStdout = true
+					} else {
+						if objTyped.StderrToStdout {
+							return state.FailWithMessage(fmt.Sprintf(circularMsg, t.Line, t.Column, t.Lexeme, "2>&1"))
+						}
+						objTyped.StdoutToStderr = true
+					}
+					stack.Push(objTyped)
+				default:
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s; expected a list or quotation.\n", t.Line, t.Column, t.Lexeme, obj.TypeName()))
+				}
 			} else if t.Type == ENVSTORE { // Token Type
 				obj, err := stack.Pop()
 				if err != nil {
@@ -12449,41 +12750,15 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Loop quotation needs a minimum of one token.\n", t.Line, t.Column))
 				}
 
-				loopContext := ExecuteContext{
-					StandardInput:  nil,
-					StandardOutput: nil,
-					Variables:      context.Variables,
-					Pbm:            context.Pbm,
+				// BuildExecutionContext handles all the quotation's
+				// redirections (stdin, stdout, stderr, merges).
+				builtContext, err := quotation.BuildExecutionContext(&context)
+				if err != nil {
+					return state.FailWithMessage(err.Error())
 				}
-
-				if quotation.StdinBehavior != STDIN_NONE {
-					switch quotation.StdinBehavior {
-					case STDIN_CONTENT:
-						loopContext.StandardInput = strings.NewReader(quotation.StandardInputContents)
-					case STDIN_BINARY:
-						loopContext.StandardInput = bytes.NewReader(quotation.StandardInputBinary)
-					case STDIN_FILE:
-						file, err := os.Open(quotation.StandardInputFile)
-						if err != nil {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error opening file %s for reading: %s\n", t.Line, t.Column, quotation.StandardInputFile, err.Error()))
-						}
-						loopContext.StandardInput = file
-						// TODO: This probably shouldn't be done here like this
-						defer file.Close()
-					default:
-						panic("Unknown stdin behavior")
-					}
-				}
-
-				if quotation.StandardOutputFile != "" {
-					file, err := os.Create(quotation.StandardOutputFile)
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error opening file %s for writing: %s\n", t.Line, t.Column, quotation.StandardOutputFile, err.Error()))
-					}
-					loopContext.StandardOutput = file
-					// TODO: This probably shouldn't be done here like this
-					defer file.Close()
-				}
+				builtContext.Variables = context.Variables
+				loopContext := *builtContext
+				defer loopContext.Close()
 
 				maxLoops := 15000000
 				loopCount := 0

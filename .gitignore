@@ -41,6 +41,9 @@ cover.html
 cover.out
 cover_funcs.txt
 
+# TLA+ model checker artifacts
+**/states/
+
 # REDOGI
 doc/all
 doc/build/**/*.html
