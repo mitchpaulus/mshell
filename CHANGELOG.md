@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `tryAs` checked cast: `<value> tryAs <type>` validates the value against the
+  type at runtime and pushes a `Maybe` — `just value` when it conforms, `none`
+  when it does not. Unlike `as` (a static-only checker hint), `tryAs` is meant
+  for data crossing a trust boundary such as `parseJson` output: one check at
+  the boundary and everything downstream is precisely typed. Compose with the
+  existing `?` unwrap for a die-loud form, e.g.
+  `"pkgs.json" parseJson tryAs Manifest ? :packages? (:name?) map`.
+  A `tryAs` whose source type could never be the target is a type error.
+  Validation depth is limited to 1024 nested levels; exceeding it (a cyclic
+  value, a cyclic `type` declaration, or absurdly deep data) fails the script
+  with a clear error rather than producing `none`.
 - The language server now offers a `Quote all literals in list` code action that
   single-quotes every bare literal in the innermost list containing the cursor.
 

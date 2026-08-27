@@ -1,0 +1,6 @@
+# A `tryAs` whose source type can never be the target is always none at
+# runtime, which is almost certainly a bug — the checker rejects it.
+5 tryAs str match
+    just _ : "yes" wl,
+    none   : "no" wl,
+end

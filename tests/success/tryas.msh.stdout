@@ -1,0 +1,14 @@
+a, b
+rejected
+0
+cells ok
+http://x
+cfg2 rejected
+cfg3 ok
+counts ok
+str is not list
+path ok
+dt ok
+quote ok
+maybe ok
+none is maybe

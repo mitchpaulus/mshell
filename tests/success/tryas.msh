@@ -1,0 +1,68 @@
+# `tryAs` is the checked cast: it validates the value against the type
+# at runtime and pushes a Maybe — `just value` on success, `none` on
+# mismatch. Unlike `as` (a static-only hint), it is the tool for data
+# crossing a trust boundary like parseJson output.
+
+type Manifest = {packages: [{name: str}]}
+type Cell = int | float | str | bool | null
+type Config = {url: str, timeout?: float}
+
+# Conforming JSON narrows to the precise shape; getters need no matching.
+"{\"packages\": [{\"name\": \"a\"}, {\"name\": \"b\"}]}" parseJson tryAs Manifest match
+    just m : @m :packages? (:name?) map ", " join wl,
+    none   : "no match" wl,
+end
+
+# Non-conforming JSON (name is a number) is none.
+"{\"packages\": [{\"name\": 42}]}" parseJson tryAs Manifest match
+    just _ : "matched" wl,
+    none   : "rejected" wl,
+end
+
+# The existing `?` unwrap composes for the die-loud form.
+"{\"packages\": []}" parseJson tryAs Manifest ? :packages? len wl
+
+# Union arms: any arm conforms. parseJson numbers are floats.
+"[1, 2.5, \"x\", true, null]" parseJson tryAs [Cell] match
+    just _ : "cells ok" wl,
+    none   : "cells bad" wl,
+end
+
+# Optional shape field may be absent...
+"{\"url\": \"http://x\"}" parseJson tryAs Config match
+    just c : @c :url? wl,
+    none   : "cfg1 bad" wl,
+end
+
+# ...but when present it must have the declared type.
+"{\"url\": \"http://x\", \"timeout\": \"soon\"}" parseJson tryAs Config match
+    just _ : "cfg2 matched" wl,
+    none   : "cfg2 rejected" wl,
+end
+
+# Extra keys are allowed, matching shape width subtyping.
+"{\"url\": \"x\", \"other\": 1}" parseJson tryAs Config match
+    just _ : "cfg3 ok" wl,
+    none   : "cfg3 bad" wl,
+end
+
+# Homogeneous dictionary values are each validated.
+"{\"a\": 1, \"b\": 2}" parseJson tryAs {str: float} match
+    just _ : "counts ok" wl,
+    none   : "counts bad" wl,
+end
+
+# Kind mismatch on boundary data is a none, not an error.
+"\"x\"" parseJson tryAs [float] match
+    just _ : "?!" wl,
+    none   : "str is not list" wl,
+end
+
+# Non-JSON runtime types validate by kind.
+`/tmp` tryAs path match just _ : "path ok" wl, none : "path bad" wl, end
+2024-01-15 tryAs datetime match just _ : "dt ok" wl, none : "dt bad" wl, end
+(1 +) tryAs (int -- int) match just _ : "quote ok" wl, none : "quote bad" wl, end
+
+# A none conforms to Maybe[T] for every T; a just validates its inner value.
+1 just tryAs Maybe[int] match just _ : "maybe ok" wl, none : "maybe bad" wl, end
+none tryAs Maybe[int] match just _ : "none is maybe" wl, none : "hm" wl, end

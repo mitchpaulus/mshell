@@ -111,6 +111,7 @@ const (
 	TRY
 	FAIL_KEYWORD
 	PURE
+	TRYAS
 )
 
 func (t TokenType) String() string {
@@ -289,6 +290,8 @@ func (t TokenType) String() string {
 		return "AS"
 	case TYPE:
 		return "TYPE"
+	case TRYAS:
+		return "TRYAS"
 	case TRY:
 		return "TRY"
 	case FAIL_KEYWORD:
@@ -634,6 +637,9 @@ func (l *Lexer) literalOrKeywordType() TokenType {
 					case 'u':
 						return l.checkKeyword(3, "e", TRUE)
 					case 'y':
+						if l.curLen() > 3 {
+							return l.checkKeyword(3, "As", TRYAS)
+						}
 						return l.checkKeyword(3, "", TRY)
 					}
 				}
