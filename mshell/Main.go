@@ -515,6 +515,7 @@ func main() {
 	inputFilePath := ""
 	checkTypes := false // --check-types: gate execution with the new Checker (Phase 10 step 3)
 	typeCheckOnly := false
+	inputFromStdin := false
 
 	if len(os.Args) == 1 {
 		// Enter interactive mode
@@ -539,8 +540,9 @@ func main() {
 			command = CLIHTML
 		} else if arg == "-h" || arg == "--help" {
 			fmt.Println("Usage: mshell [OPTION].. FILE [ARG]..")
-			fmt.Println("Usage: mshell [OPTION].. [ARG].. < FILE")
+			fmt.Println("Usage: mshell [OPTION].. < FILE")
 			fmt.Println("Usage: mshell [OPTION].. -c INPUT [ARG]..")
+			fmt.Println("Usage: mshell [OPTION].. - [ARG].. < FILE")
 			fmt.Println("Usage: msh bin <command>")
 			fmt.Println("Usage: msh edit <target>")
 			fmt.Println("Usage: msh completions <shell>")
@@ -556,6 +558,7 @@ func main() {
 			// fmt.Println("  --typecheck  Type check the input and report any errors") Ignore this for now.
 			fmt.Println("  --version    Print version information and exit")
 			fmt.Println("  -c INPUT     Execute INPUT as the program, before positional args")
+			fmt.Println("  -            Read the program from standard input, before positional args")
 			fmt.Println("  -h, --help   Print this help message")
 			fmt.Println("  bin          Manage msh_bins.txt entries")
 			fmt.Println("  edit         Edit common msh files")
@@ -575,6 +578,18 @@ func main() {
 
 			input = os.Args[i]
 			inputSet = true
+			positionalArgs = append(positionalArgs, os.Args[i:]...)
+			break
+		} else if arg == "-" {
+			inputBytes, err := io.ReadAll(os.Stdin)
+			if err != nil {
+				fmt.Println(err)
+				os.Exit(1)
+				return
+			}
+			input = string(inputBytes)
+			inputSet = true
+			inputFromStdin = true
 			positionalArgs = append(positionalArgs, os.Args[i:]...)
 			break
 		} else {
@@ -745,7 +760,7 @@ func main() {
 		sourceName = inputFilePath
 	} else if inputFile != nil {
 		sourceName = inputFile.Path
-	} else if inputSet {
+	} else if inputSet && !inputFromStdin {
 		sourceName = "-c input"
 	}
 
