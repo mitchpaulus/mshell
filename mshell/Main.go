@@ -2714,16 +2714,22 @@ func shutdownTimeout() time.Duration {
 	return defaultShutdownTimeout
 }
 
-// startShutdownWatchdog launches a goroutine that forcibly terminates the
-// process if the shutdown/cleanup sequence does not finish within the timeout.
-// It is the last-resort backstop against a hang on exit. A normal exit (the
-// eventual os.Exit) cancels it implicitly by killing the goroutine, so there is
-// nothing to clean up on the happy path. The message uses \r\n so it renders
-// correctly even if the terminal is still in raw mode when the watchdog fires.
+// startShutdownWatchdog starts a goroutine that kills the process if shutdown
+// does not finish within the timeout. On a normal exit, os.Exit ends the whole
+// process, this goroutine included, so nothing needs to be cleaned up here.
+//
+// The warning is printed from a separate goroutine because a write to stdout
+// can block forever (on Windows, for example, while text is selected in the
+// console window). If the print were inline and blocked, os.Exit would never
+// run and the watchdog itself would hang. The 250ms sleep gives the print a
+// chance to appear before the process dies; if the print is still blocked
+// after that, we exit without it. The message uses \r\n because the terminal
+// may still be in raw mode, where \n alone does not return to column 1.
 func startShutdownWatchdog(timeout time.Duration) {
 	go func() {
 		time.Sleep(timeout)
-		fmt.Fprintf(os.Stdout, "\r\nmsh: shutdown timed out after %s; forcing exit.\r\n", timeout)
+		go fmt.Fprintf(os.Stdout, "\r\nmsh: shutdown timed out after %s; forcing exit.\r\n", timeout)
+		time.Sleep(250 * time.Millisecond)
 		os.Exit(1)
 	}()
 }
