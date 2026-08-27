@@ -374,6 +374,15 @@ For non-fixed indexing, you have the `nth` operator.
 By default, executing a process that returns with a non-zero exit code does not stop the execution of the script.
 If the desired behavior is to stop the execution on any non-zero exit code, the keyword `soe` can be used.
 
+## Script Input
+
+The program to run can come from a file (`msh script.msh [ARG]..`),
+from the command line (`msh -c 'INPUT' [ARG]..`),
+or from standard input.
+Standard input is used when no file or `-c` is given and stdin is not a terminal,
+or explicitly with `-` (`some-command | msh - [ARG]..`).
+With `-`, arguments after the `-` are positional arguments to the script.
+
 ## Interactive CLI
 
 History search is prefix-based and case-insensitive. The prefix is whatever is currently in the input buffer; editing the buffer resets the prefix for the next search.
@@ -394,7 +403,7 @@ The CLI can use definition metadata to provide argument completions for binaries
 ```mshell
 def mshCompletion { 'complete': ['msh' 'mshell'] } ([str] -- [str])
     input!
-    ['-h' '--help' '--html' '--lex' '--parse' '--check-types' '--type-check-only' '--version' '-c'] options!
+    ['-h' '--help' '--html' '--lex' '--parse' '--check-types' '--type-check-only' '--version' '-c' '-'] options!
     ['lsp' 'bin' 'edit' 'completions'] subcommands!
     @options @subcommands extend
 end
