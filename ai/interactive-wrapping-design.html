@@ -1,0 +1,967 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Measure the Unknown — mshell interactive wrapping</title>
+<style>
+:root {
+  color-scheme: dark;
+  --bg: #111418;
+  --panel: #191e24;
+  --panel-2: #202731;
+  --line: #34404d;
+  --text: #e8edf2;
+  --muted: #a5b0bc;
+  --accent: #75d5c7;
+  --accent-2: #f0c36a;
+  --danger: #ef8a7a;
+  --code: #0c0f12;
+  --max: 74rem;
+}
+
+* { box-sizing: border-box; }
+
+html {
+  scroll-behavior: smooth;
+  background: var(--bg);
+}
+
+body {
+  margin: 0;
+  color: var(--text);
+  background:
+    radial-gradient(circle at 12% -8%, rgba(117, 213, 199, .12), transparent 28rem),
+    var(--bg);
+  font: 16px/1.62 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+a { color: var(--accent); }
+a:hover { color: #a7eee4; }
+
+code, pre, .mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+code {
+  padding: .08em .32em;
+  border: 1px solid rgba(117, 213, 199, .16);
+  border-radius: .3rem;
+  background: rgba(12, 15, 18, .72);
+  font-size: .94em;
+}
+
+pre {
+  margin: 1rem 0;
+  padding: 1rem 1.1rem;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: .65rem;
+  background: var(--code);
+  color: #d8e3ec;
+  line-height: 1.48;
+}
+
+pre code {
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+header {
+  padding: 5rem 1.5rem 3.4rem;
+  border-bottom: 1px solid var(--line);
+}
+
+header > div,
+main,
+footer {
+  width: min(100%, var(--max));
+  margin: 0 auto;
+}
+
+.eyebrow {
+  margin: 0 0 .8rem;
+  color: var(--accent);
+  font: 600 .78rem/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: .13em;
+  text-transform: uppercase;
+}
+
+h1, h2, h3 {
+  line-height: 1.14;
+  text-wrap: balance;
+}
+
+h1 {
+  max-width: 13ch;
+  margin: 0;
+  font-size: clamp(3rem, 9vw, 6.8rem);
+  letter-spacing: -.055em;
+}
+
+.lede {
+  max-width: 54rem;
+  margin: 1.6rem 0 0;
+  color: #cbd5df;
+  font-size: clamp(1.1rem, 2.4vw, 1.42rem);
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .55rem 1rem;
+  margin-top: 1.5rem;
+  color: var(--muted);
+  font-size: .9rem;
+}
+
+nav {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--line);
+  background: rgba(17, 20, 24, .92);
+  backdrop-filter: blur(12px);
+}
+
+nav ol {
+  display: flex;
+  width: min(100%, var(--max));
+  margin: 0 auto;
+  padding: .65rem 1.5rem;
+  gap: .25rem;
+  list-style: none;
+}
+
+nav a {
+  display: block;
+  padding: .45rem .7rem;
+  border-radius: .4rem;
+  color: var(--muted);
+  text-decoration: none;
+  white-space: nowrap;
+  font-size: .88rem;
+}
+
+nav a:hover {
+  color: var(--text);
+  background: var(--panel-2);
+}
+
+main { padding: 1rem 1.5rem 5rem; }
+
+section {
+  padding: 4.6rem 0 2rem;
+  border-bottom: 1px solid var(--line);
+}
+
+section:last-child { border-bottom: 0; }
+
+.section-number {
+  color: var(--accent-2);
+  font: 700 .8rem/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: .1em;
+}
+
+h2 {
+  max-width: 24ch;
+  margin: .45rem 0 1.3rem;
+  font-size: clamp(2rem, 4.8vw, 3.5rem);
+  letter-spacing: -.035em;
+}
+
+h3 {
+  margin: 2.3rem 0 .75rem;
+  font-size: 1.38rem;
+}
+
+p, li { max-width: 69ch; }
+
+.decision {
+  margin: 2rem 0;
+  padding: 1.3rem 1.5rem;
+  border-left: .3rem solid var(--accent);
+  border-radius: .2rem .7rem .7rem .2rem;
+  background: linear-gradient(90deg, rgba(117, 213, 199, .13), rgba(117, 213, 199, .03));
+  font-size: 1.14rem;
+}
+
+.warning {
+  border-left-color: var(--danger);
+  background: linear-gradient(90deg, rgba(239, 138, 122, .13), rgba(239, 138, 122, .03));
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 1rem;
+  margin: 1.5rem 0;
+}
+
+.card {
+  padding: 1.15rem 1.25rem;
+  border: 1px solid var(--line);
+  border-radius: .75rem;
+  background: var(--panel);
+}
+
+.card h3 {
+  margin: 0 0 .45rem;
+  font-size: 1.05rem;
+}
+
+.card p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.flow {
+  display: grid;
+  grid-template-columns: repeat(7, auto);
+  align-items: center;
+  justify-content: start;
+  gap: .55rem;
+  margin: 2rem 0;
+  overflow-x: auto;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: .75rem;
+  background: var(--panel);
+}
+
+.flow .box {
+  min-width: 8.8rem;
+  padding: .8rem .9rem;
+  border: 1px solid #4a5968;
+  border-radius: .55rem;
+  background: var(--panel-2);
+  text-align: center;
+}
+
+.flow .box strong,
+.flow .box span { display: block; }
+
+.flow .box span {
+  margin-top: .2rem;
+  color: var(--muted);
+  font-size: .78rem;
+}
+
+.arrow {
+  color: var(--accent-2);
+  font-size: 1.35rem;
+}
+
+.branch {
+  border-color: var(--accent) !important;
+  box-shadow: inset 0 0 0 1px rgba(117, 213, 199, .18);
+}
+
+table {
+  width: 100%;
+  margin: 1.3rem 0;
+  border-collapse: collapse;
+  font-size: .94rem;
+}
+
+th, td {
+  padding: .8rem .85rem;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  color: var(--accent);
+  font-size: .78rem;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+td:first-child { white-space: nowrap; }
+
+.timeline {
+  display: grid;
+  grid-template-columns: 7.5rem minmax(34rem, 1fr);
+  gap: .65rem 1rem;
+  margin: 1.5rem 0;
+  overflow-x: auto;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: .75rem;
+  background: var(--panel);
+}
+
+.timeline .label {
+  color: var(--muted);
+  font: .8rem/1.8 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.track {
+  display: flex;
+  align-items: center;
+  min-width: 34rem;
+  min-height: 2rem;
+  gap: .35rem;
+}
+
+.event {
+  padding: .28rem .5rem;
+  border: 1px solid var(--line);
+  border-radius: .35rem;
+  background: var(--panel-2);
+  font: .76rem/1.25 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: nowrap;
+}
+
+.event.query { border-color: var(--accent-2); }
+.event.reply { border-color: var(--accent); }
+.wire { flex: 1; height: 1px; min-width: 1rem; background: var(--line); }
+
+.invariants {
+  counter-reset: invariant;
+  display: grid;
+  gap: .75rem;
+  padding: 0;
+  list-style: none;
+}
+
+.invariants li {
+  position: relative;
+  max-width: none;
+  padding: .9rem 1rem .9rem 3.6rem;
+  border: 1px solid var(--line);
+  border-radius: .6rem;
+  background: var(--panel);
+}
+
+.invariants li::before {
+  counter-increment: invariant;
+  content: "I" counter(invariant);
+  position: absolute;
+  left: 1rem;
+  top: .9rem;
+  color: var(--accent-2);
+  font: 700 .82rem/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.strike { color: var(--muted); text-decoration: line-through; }
+.good { color: var(--accent); }
+.bad { color: var(--danger); }
+
+footer {
+  padding: 0 1.5rem 4rem;
+  color: var(--muted);
+  font-size: .9rem;
+}
+
+@media (max-width: 700px) {
+  header { padding-top: 3.4rem; }
+  nav ol { padding-inline: .75rem; }
+  main { padding-inline: 1rem; }
+  .flow { grid-template-columns: 1fr; }
+  .flow .box { width: 100%; }
+  .arrow { transform: rotate(90deg); text-align: center; }
+  td:first-child { white-space: normal; }
+}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <p class="eyebrow">mshell · interactive prompt · replacement design</p>
+    <h1>Measure the unknown.</h1>
+    <p class="lede">
+      Printable ASCII is computed.
+      Complete non-ASCII grapheme clusters are measured once, cached for the terminal session, and never guessed.
+      Layout remains pure because all terminal I/O happens before layout begins.
+    </p>
+    <div class="meta">
+      <span>design of record</span>
+      <span>2026-08-18</span>
+      <span>supersedes the predictive width-model proposal</span>
+    </div>
+  </div>
+</header>
+
+<nav aria-label="Document sections">
+  <ol>
+    <li><a href="#contract">01 contract</a></li>
+    <li><a href="#architecture">02 architecture</a></li>
+    <li><a href="#oracle">03 width oracle</a></li>
+    <li><a href="#protocol">04 protocol</a></li>
+    <li><a href="#layout">05 layout</a></li>
+    <li><a href="#failure">06 failure</a></li>
+    <li><a href="#migration">07 migration</a></li>
+    <li><a href="#testing">08 testing</a></li>
+  </ol>
+</nav>
+
+<main>
+<section id="contract">
+  <span class="section-number">01</span>
+  <h2>The contract is intentionally small</h2>
+
+  <div class="decision">
+    Width is not a Unicode property owned by mshell.
+    It is an observed property of the terminal currently in front of mshell.
+  </div>
+
+  <p>
+    The previous design attempted to classify terminals with three parameters and then predict every cluster from that classification.
+    That is attractive but not correct: partial clusterers, Unicode-version drift, configuration, and individual terminal quirks do not form eight clean equivalence classes.
+    This design removes the classification problem.
+  </p>
+
+  <div class="cards">
+    <article class="card">
+      <h3>Assumption A</h3>
+      <p>A complete, self-contained printable grapheme cluster occupies one or two cells on supported terminals.</p>
+    </article>
+    <article class="card">
+      <h3>Assumption B</h3>
+      <p>Printable ASCII occupies one cell per byte. Newline and renderer controls are handled explicitly.</p>
+    </article>
+    <article class="card">
+      <h3>Assumption C</h3>
+      <p>The width of a complete printable cluster is stable during one terminal-width cache epoch.</p>
+    </article>
+    <article class="card">
+      <h3>Assumption D</h3>
+      <p>The terminal answers a standard cursor-position request when exact non-ASCII display is enabled.</p>
+    </article>
+  </div>
+
+  <p>
+    These are runtime contracts, not universal claims about Unicode or every historical terminal.
+    Violations are detected and have a defined fallback.
+  </p>
+
+  <h3>Terminology</h3>
+  <p>
+    <code>CSI 6 n</code>, commonly written <code>ESC[6n</code>, is a Device Status Report request.
+    The terminal answers with a Cursor Position Report, <code>CSI row ; column R</code>.
+    This document calls the exchange <strong>DSR/CPR</strong>.
+    SGR is reserved for styling such as color and bold; it is unrelated to measurement.
+  </p>
+
+  <h3>Explicit non-goals</h3>
+  <ul>
+    <li>No terminal identity database.</li>
+    <li>No cluster-versus-codepoint model selection.</li>
+    <li>No Mode 2027 inference ladder.</li>
+    <li>No use of the width returned by <code>uniseg.FirstGraphemeCluster…</code>.</li>
+    <li>No persistent width cache whose correctness depends on identifying a terminal across sessions.</li>
+    <li>No query during ordinary ASCII typing, cursor motion, or repaint.</li>
+  </ul>
+</section>
+
+<section id="architecture">
+  <span class="section-number">02</span>
+  <h2>Resolve first, then lay out</h2>
+
+  <div class="flow" aria-label="Input-to-render pipeline">
+    <div class="box"><strong>source buffer</strong><span>UTF-8 + byte cursor</span></div>
+    <div class="arrow">→</div>
+    <div class="box branch"><strong>classify</strong><span>all printable ASCII?</span></div>
+    <div class="arrow">→</div>
+    <div class="box"><strong>two paths</strong><span>yes: direct layout · no: segment + resolve + atom layout</span></div>
+    <div class="arrow">→</div>
+    <div class="box"><strong>layout rows</strong><span>paint-ready geometry</span></div>
+  </div>
+
+  <p>
+    The first boundary is a classification of the complete command buffer.
+    A command containing only printable ASCII bypasses atomization and width resolution and is laid out directly from its source bytes.
+    Every other command takes the general path, where width resolution is impure and may talk to the terminal before layout accepts resolved display atoms.
+    Both layout paths perform no I/O.
+    Rendering accepts only a completed layout.
+  </p>
+
+  <table>
+    <thead>
+      <tr><th>Domain</th><th>Meaning</th><th>May contain</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>SourceText</code></td><td>The exact command bytes that will be submitted.</td><td>UTF-8 text, literal newlines, and source control bytes that must never be emitted raw.</td></tr>
+      <tr><td><code>DisplayAtom</code></td><td>One indivisible thing the renderer may paint.</td><td>A printable ASCII byte, a safe control representation, a complete measured grapheme, a hard break, or a known-width placeholder.</td></tr>
+      <tr><td><code>Cells</code></td><td>Terminal screen columns.</td><td>Integers used only for layout and cursor placement.</td></tr>
+      <tr><td><code>ScreenBytes</code></td><td>The final output transaction.</td><td>Text, SGR styling, erasure, and cursor movement.</td></tr>
+    </tbody>
+  </table>
+
+  <pre><code>type ByteOffset int
+type Cells      int
+
+type AtomKind int
+
+const (
+    AtomAscii AtomKind = iota
+    AtomControl
+    AtomGrapheme
+    AtomPlaceholder
+    AtomHardBreak
+)
+
+type DisplayAtom struct {
+    SourceStart ByteOffset
+    SourceEnd   ByteOffset
+    Text        string      // source slice or generated safe display text
+    Width       Cells       // resolved before Layout
+    Kind        AtomKind
+}
+
+type WidthCache struct {
+    Epoch   uint64
+    Entries map[string]Cells
+}</code></pre>
+
+  <p>
+    Defined offset and cell types prevent the original bug class: adding a byte or rune index directly to a terminal column.
+    The cursor is always a byte offset at a grapheme boundary.
+  </p>
+  <p>
+    <code>AtomAscii</code> and <code>AtomGrapheme</code> use a source slice as <code>Text</code>.
+    <code>AtomControl</code> uses generated safe display text, and a placeholder uses one fixed printable ASCII character.
+    Both retain the original source range; neither emits those source bytes raw.
+  </p>
+
+  <h3>Reuse is part of the interface</h3>
+  <p>
+    Resolution and layout accept destination slices owned by the editor state and reuse their backing arrays across generations.
+    Cache keys are cloned only when inserted into the session cache, so a short measured cluster cannot retain an entire pasted command buffer.
+    The first implementation uses straightforward scalar loops; representation or scan optimizations require benchmark evidence.
+  </p>
+
+  <h3>The prompt is opaque</h3>
+  <p>
+    The prompt may contain SGR, OSC, arbitrary user code, or cursor movement.
+    Do not parse it into the command layout.
+    Print it, issue one fenced CPR, and treat the reported position as the editing region's origin.
+    The layout input is therefore either <code>(printable command source, cursor, origin column, terminal width)</code> or <code>(resolved command atoms, cursor, origin column, terminal width)</code>, never <code>prompt + command</code>.
+  </p>
+  <p>
+    If the prompt anchor query fails, emit a real newline and start the editing region at column one.
+    That fallback changes presentation but preserves geometry.
+  </p>
+</section>
+
+<section id="oracle">
+  <span class="section-number">03</span>
+  <h2>The width oracle has four answers</h2>
+
+  <table>
+    <thead>
+      <tr><th>Input</th><th>Answer</th><th>Terminal work</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Printable ASCII</td><td>One cell per byte.</td><td>None.</td></tr>
+      <tr><td>C0 control or DEL other than tab</td><td>Two-cell ASCII caret notation.</td><td>None.</td></tr>
+      <tr><td>Cached non-ASCII cluster</td><td>The previously observed one- or two-cell width.</td><td>None.</td></tr>
+      <tr><td>Unknown non-ASCII cluster</td><td>Measure it, validate it, then cache the exact byte string.</td><td>One DSR/CPR observation.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Printable-ASCII layout bypass</h3>
+  <p>
+    If every byte in the complete command buffer is in the printable ASCII range <code>0x20</code> through <code>0x7e</code>, bypass atomization and width resolution entirely.
+    The ASCII layout function consumes <code>SourceText</code> directly: every byte occupies one cell, every byte boundary is a valid wrapping and cursor boundary, and rows can refer directly to slices of the original command.
+    The normal interactive command therefore needs one validation scan and no per-character atom construction.
+  </p>
+  <p>
+    A tab, newline, other control byte, DEL, or non-ASCII byte fails this classification and sends the complete command through the general atomizer.
+    That path maps tab to <code>▸</code> (U+25B8 BLACK RIGHT-POINTING SMALL TRIANGLE), represents other controls safely, and segments Unicode graphemes.
+    Its display atoms are indivisible; there is no exceptional atom type that layout may sometimes split.
+    Do not retain an independently scanned ASCII prefix when classification fails: a combining codepoint may join its final ASCII base, and the common path should not build general-path state speculatively.
+  </p>
+
+  <h3>Uniseg has one job</h3>
+  <p>
+    Use <code>uniseg</code> to identify extended grapheme-cluster boundaries and valid cursor gaps.
+    Ignore every width it reports.
+    After every edit, derive boundaries again; edits can change segmentation, particularly for regional indicators and joiner sequences.
+  </p>
+
+  <h3>Exact cache keys</h3>
+  <p>
+    Cache by the exact UTF-8 bytes of the complete cluster.
+    A measured family emoji says nothing about a different family emoji.
+    A measured VS16 sequence says nothing about every sequence containing VS16.
+    This refusal to generalize is what makes the cache an observation rather than another predictive model.
+  </p>
+
+  <h3>Why the two-cell bound matters</h3>
+  <p>
+    The one-or-two-cell contract removes the old oversized-cluster splitting design completely.
+    A complete non-ASCII grapheme atom always fits on an empty row when the terminal is at least two columns wide.
+    It also turns measurement validation into a closed check: a result outside one or two is unsupported, not another layout case.
+  </p>
+
+  <pre><code>func ResolveGeneralInto(dst []DisplayAtom, command SourceText, cache *WidthCache) ([]DisplayAtom, []string) {
+    atoms := segmentIntoAtoms(dst, command)
+    misses := distinctUncachedClusters(atoms, cache)
+    return atoms, misses
+}</code></pre>
+
+  <h3>Cache lifetime</h3>
+  <p>
+    The cache lives in memory and normally spans prompts.
+    It is tied to a width epoch: the period during which mshell owns and reasserts its terminal modes and assumes the terminal's width behavior is stable.
+    Start a new epoch after terminal reattachment, resume when state cannot be trusted, or any explicit recalibration command.
+    Resize alone does not change cluster width and does not clear the cache.
+  </p>
+  <p>
+    Do not write the cache to disk in the first implementation.
+    Correct invalidation across terminal upgrades, tmux attachments, font changes, and configuration is harder than remeasuring the small set of clusters a user actually types.
+  </p>
+</section>
+
+<section id="protocol">
+  <span class="section-number">04</span>
+  <h2>Measure a batch in one transaction</h2>
+
+  <p>
+    Resolve every distinct cache miss in the newest editor state before layout.
+    A paste containing repeated clusters measures each distinct byte string once.
+    All probes are emitted in one buffered write and all replies are then collected by the normal terminal-input lexer.
+  </p>
+
+  <p>
+    Resolution is resource-bounded.
+    Measure at most a fixed number of distinct misses in one editor generation and cap both cache entries and candidate byte length.
+    Overflow candidates use the known-width placeholder; they are not allowed to create an unbounded query burst or cache from an adversarial paste.
+    A first implementation can use conservative constants such as 256 probes per generation and 4096 cache entries.
+  </p>
+
+  <div class="timeline" aria-label="Pipelined query timeline">
+    <div class="label">server / msh</div>
+    <div class="track">
+      <span class="event query">probe A + CPR</span><span class="event query">probe B + CPR</span><span class="event query">probe C + CPR</span><span class="wire"></span><span class="event">wait</span>
+    </div>
+    <div class="label">terminal</div>
+    <div class="track">
+      <span class="wire"></span><span class="event reply">A reply</span><span class="event reply">B reply</span><span class="event reply">C reply</span><span class="wire"></span>
+    </div>
+  </div>
+
+  <p>
+    There is one CPR response per distinct unknown cluster, but the requests are not serialized.
+    On SSH or ConPTY the batch can travel as roughly one additional transport round trip, independent of the number of misses in that batch.
+    Ordinary cached or printable-ASCII edits pay no round trip.
+  </p>
+
+  <h3>Probe from a known cell</h3>
+  <p>
+    The renderer provides one owned scratch row outside the visible edit contents.
+    Each probe begins at column one, clears pending wrap with CR, writes a known one-cell ASCII sentinel, writes exactly one complete candidate cluster, and requests CPR.
+  </p>
+
+  <pre><code>for cluster in misses:
+    write(CR + EL + "A" + cluster + CPR)
+    write(CR + EL)
+
+// Column numbers are one-based.
+measuredWidth = replyColumn - 2
+require replyRow == scratchRow
+require measuredWidth == 1 || measuredWidth == 2</code></pre>
+
+  <p>
+    The sentinel forces a clean grapheme boundary for ordinary candidates and makes the arithmetic independent of the cursor position before the scratch transaction.
+    Raw newlines, tabs, C0/C1 controls, and ESC never enter this protocol.
+    The generated tab glyph <code>▸</code> may enter as an ordinary measurement candidate.
+    A degenerate cluster that measures zero or modifies the sentinel is not self-contained and is rendered with the failure placeholder instead.
+  </p>
+  <p>
+    This sentinel protocol requires at least four terminal columns: three cells for the sentinel plus a two-cell candidate, and one further column so the probe never ends in pending wrap.
+    At widths two or three, already cached atoms may still be laid out, but new non-ASCII atoms use placeholders until the terminal is wider.
+  </p>
+
+  <h3>Scratch-row ownership</h3>
+  <p>
+    Do not use terminal save/restore-cursor state.
+    Move relative to the renderer's known region, create or reuse a row immediately below the previous editing region, and account for a scroll if creating that row reaches the bottom of the screen.
+    Clear the scratch row before leaving it.
+    After replies are validated, repaint the editing region from its tracked origin.
+  </p>
+  <p>
+    The initial prompt can perform capability validation before showing editable text.
+    Later cache misses temporarily leave the previous correct frame visible; mshell does not optimistically paint a layout with guessed widths.
+  </p>
+
+  <h3>Replies share the keyboard stream</h3>
+  <p>
+    While a batch is outstanding, the lexer routes exactly the expected number of valid CPR tokens to the resolver and queues ordinary input tokens.
+    A generation number associates a requested layout with the editor state that requested it.
+    If more input arrives before resolution completes, keep the valid cache entries, discard the stale layout, apply queued input, and resolve the newest state.
+  </p>
+
+  <pre><code>generation 41: measure ["❤️"]
+keypress arrives: editor becomes generation 42
+generation 41 reply: cache "❤️" = 2; do not render generation 41
+generation 42: resolve remaining misses, layout once, render once</code></pre>
+
+  <h3>Query budget</h3>
+  <table>
+    <thead>
+      <tr><th>Event</th><th>DSR/CPR use</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>New prompt</td><td>One fenced anchor query after the opaque prompt.</td></tr>
+      <tr><td>Printable ASCII edit</td><td>None.</td></tr>
+      <tr><td>Repeated measured cluster</td><td>None.</td></tr>
+      <tr><td>Distinct unknown cluster</td><td>One observation, batched with all other misses in the state.</td></tr>
+      <tr><td>Repaint or cursor motion</td><td>None.</td></tr>
+      <tr><td>Resize with possible terminal reflow</td><td>One re-anchor query; cached widths remain valid.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="layout">
+  <span class="section-number">05</span>
+  <h2>Two pure layout paths</h2>
+
+  <p>
+    Printable ASCII layout is direct byte and cell arithmetic.
+    General layout begins only after every display atom has a known width, then uses integer arithmetic over indivisible atoms.
+    Both functions are deterministic, allocation-conscious, and incapable of querying the terminal.
+  </p>
+
+  <pre><code>func LayoutPrintableAsciiInto(
+    dst       []LayoutRow,
+    command   SourceText,
+    cursor    ByteOffset,
+    startCol  Cells,
+    columns   Cells,
+) LayoutResult
+
+func LayoutAtomsInto(
+    dst       []LayoutRow,
+    atoms     []DisplayAtom,
+    cursor    ByteOffset,
+    startCol  Cells,
+    columns   Cells,
+) LayoutResult</code></pre>
+
+  <ul class="invariants">
+    <li>The printable-ASCII path may wrap at any byte boundary because each source byte is exactly one cell.</li>
+    <li>Every general-path text atom is a complete grapheme cluster, printable ASCII byte, generated control representation, or placeholder with a resolved width.</li>
+    <li>No general-path atom is split across rows. With the supported-terminal contract and terminal width at least two, every first-implementation atom fits on an empty row.</li>
+    <li>The first row begins at the measured prompt column; subsequent soft-wrapped rows begin at column one.</li>
+    <li>Hard newlines are source atoms with explicit row semantics and zero printable width.</li>
+    <li>The cursor may land at any byte boundary on the printable-ASCII path and only at source grapheme boundaries on the general path; either maps to exactly one row and cell gap.</li>
+    <li>Every row width is at most the available terminal width.</li>
+    <li>For printable-ASCII input, both paths produce identical rows and cursor placement.</li>
+  </ul>
+
+  <h3>Soft wrap remains terminal-owned</h3>
+  <p>
+    The renderer does not insert CRLF at calculated soft-wrap boundaries.
+    It streams the row contents and lets terminal autowrap create soft breaks, preserving selection rejoin and resize reflow.
+    Hard newlines in the source remain hard breaks.
+  </p>
+  <p>
+    Filling the final column arms the terminal's hidden pending-wrap state.
+    The layout records that state explicitly.
+    When another row follows, printing its first real atom forces the wrap; CR cancels pending wrap when returning to the region origin.
+  </p>
+
+  <h3>Full-region repaint first</h3>
+  <p>
+    Start with a whole-region repaint assembled into one output buffer.
+    Home to the known origin with relative movement, paint source slices and fixed placeholders with natural autowrap, erase renderer-owned leftovers, and park the cursor from the layout result.
+    A later desired-versus-actual diff renderer can consume the same layout without changing width resolution.
+  </p>
+
+  <h3>Styling is orthogonal</h3>
+  <p>
+    Syntax highlighting produces style spans over source byte offsets.
+    The painter intersects those spans with layout atoms and emits SGR only while painting.
+    SGR bytes have no width and never appear in <code>SourceText</code>, segmentation, the width cache, or layout arithmetic.
+  </p>
+
+  <p>
+    The more detailed paint-domain vocabulary and region-rendering figures remain in
+    <a href="render-pipeline.html">render-pipeline.html</a>.
+    Where that document refers to predictive cluster/codepoint width parameters, this document now supersedes it.
+  </p>
+</section>
+
+<section id="failure">
+  <span class="section-number">06</span>
+  <h2>Correct failure beats plausible drift</h2>
+
+  <div class="decision warning">
+    If mshell cannot establish a width, it must not silently substitute a Unicode width prediction and continue as though the geometry were exact.
+  </div>
+
+  <table>
+    <thead>
+      <tr><th>Failure</th><th>Required behavior</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>No CPR support</td><td>Continue exact ASCII editing; display unresolved non-ASCII atoms as a fixed one-cell ASCII placeholder.</td></tr>
+      <tr><td>Query timeout</td><td>Cancel the batch, restore the owned terminal region, and use placeholders for unresolved atoms.</td></tr>
+      <tr><td>Width outside 1–2</td><td>Treat the terminal contract as violated for that atom; use a placeholder and log the observed reply.</td></tr>
+      <tr><td>Wrong row or malformed reply</td><td>Reject the complete batch. Never populate the cache from ambiguous measurements.</td></tr>
+      <tr><td>Probe or cache resource limit</td><td>Use placeholders for overflow candidates; never issue an unbounded batch.</td></tr>
+      <tr><td>Terminal only two or three cells wide</td><td>Do not run the sentinel protocol; cached atoms remain usable and unknown atoms use placeholders.</td></tr>
+      <tr><td>Terminal narrower than two cells</td><td>Do not paint interactive contents; continue accepting editing keys or report that the terminal is too narrow.</td></tr>
+      <tr><td>Untrusted state after resume/reattach</td><td>Start a new cache epoch, re-anchor, and measure future misses again.</td></tr>
+    </tbody>
+  </table>
+
+  <p>
+    The placeholder changes display text but not source text.
+    Submission still uses the original UTF-8 bytes.
+    A placeholder atom retains the source start/end offsets of the cluster it represents, so cursor movement and editing remain structurally correct.
+  </p>
+
+  <h3>Raw controls are never painted</h3>
+  <p>
+    Raw terminal controls cannot be allowed into the paint stream.
+    They remain in <code>SourceText</code> because editing and submission operate on the exact command.
+    Resolution turns C0 controls and DEL into <code>AtomControl</code> values using two-cell ASCII caret notation: NUL is <code>^@</code>, Ctrl-Z is <code>^Z</code>, ESC is <code>^[</code>, and DEL is <code>^?</code>.
+    Tab is the exception: it paints as <code>▸</code>, whose exact one-or-two-cell width is measured and cached for the terminal epoch.
+    C1 controls use a fixed printable ASCII fallback in the first implementation; their source bytes are still preserved.
+    Literal newlines are explicit hard-break atoms.
+    The painter must never copy an <code>AtomControl</code>'s source slice to the terminal device.
+  </p>
+
+  <h3>What correctness means here</h3>
+  <ul class="invariants">
+    <li>mshell never calls a Unicode table's width estimate an observed terminal width.</li>
+    <li>Every painted non-ASCII cluster has either an exact cache entry from this terminal epoch or a known-width ASCII placeholder.</li>
+    <li>Every layout is computed from the same widths the painter will emit.</li>
+    <li>A failed or stale measurement can delay or degrade one frame, but cannot corrupt future row bookkeeping.</li>
+    <li>Terminal-specific behavior is contained in one resolver instead of leaking through layout and rendering.</li>
+  </ul>
+</section>
+
+<section id="migration">
+  <span class="section-number">07</span>
+  <h2>Be ruthless with the current branch</h2>
+
+  <p>
+    The existing Phase 1 work proved useful layout invariants, but its width abstraction is now the wrong abstraction.
+    Preserve tests and row semantics where they still express terminal geometry; remove the predictive model rather than adapting it.
+  </p>
+
+  <table>
+    <thead>
+      <tr><th>Current element</th><th>Decision</th><th>Replacement</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>WidthParams</code></td><td class="bad">Delete</td><td><code>WidthCache</code> plus resolved <code>DisplayAtom.Width</code>.</td></tr>
+      <tr><td><code>widthByCluster</code></td><td class="bad">Delete</td><td>Exact DSR/CPR measurement.</td></tr>
+      <tr><td><code>widthByCodepoints</code></td><td class="bad">Delete</td><td>No codepoint-width model.</td></tr>
+      <tr><td><code>Vs16Wide</code> / ambiguous-width parameters</td><td class="bad">Delete</td><td>The exact cluster cache needs no category parameters.</td></tr>
+      <tr><td>uniseg width calls</td><td class="bad">Delete</td><td>Use uniseg boundaries only.</td></tr>
+      <tr><td><code>LayoutRow</code> and row-end types</td><td class="good">Keep and adapt</td><td>Consume atoms and the measured prompt-origin column.</td></tr>
+      <tr><td>Property-test structure</td><td class="good">Keep</td><td>Inject deterministic width maps instead of parameter combinations.</td></tr>
+      <tr><td>Oversize codepoint-model splitting</td><td class="bad">Delete</td><td>The 1–2 cell grapheme contract and minimum two-column terminal remove the case.</td></tr>
+      <tr><td>Opaque prompt measurement</td><td class="good">Keep</td><td>One fenced anchor CPR per prompt.</td></tr>
+      <tr><td>Region-relative renderer</td><td class="good">Keep</td><td>Full repaint driven by resolved layout.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Implementation order</h3>
+  <ol>
+    <li>Replace width parameters with an injected exact width lookup in layout tests.</li>
+    <li>Add the scalar printable-ASCII classifier and direct ASCII layout path.</li>
+    <li>Introduce reusable <code>DisplayAtom</code> slices and whole-buffer general atomization for every input that fails printable-ASCII classification.</li>
+    <li>Convert general layout to accept indivisible atoms and both layout paths to accept a measured prompt-origin column.</li>
+    <li>Build the batch measurement protocol against a fake terminal and PTY tests.</li>
+    <li>Add the session cache, generation handling, timeouts, and placeholder fallback.</li>
+    <li>Swap the interactive renderer to region-relative repainting.</li>
+    <li>Add terminal-mode lifecycle and platform backends without changing the width/layout interfaces.</li>
+    <li>Run the real-terminal matrix and only then remove the old renderer.</li>
+  </ol>
+
+  <p>
+    <code>ai/interactive-wrapping-plan.md</code> and <code>ai/interactive-wrapping-progress.md</code> describe the superseded predictive-width implementation sequence.
+    They must be rewritten before implementation resumes; they are historical notes until then.
+  </p>
+</section>
+
+<section id="testing">
+  <span class="section-number">08</span>
+  <h2>Test the boundaries, not a model</h2>
+
+  <h3>Pure unit and property tests</h3>
+  <ul>
+    <li>Printable-ASCII classification accepts exactly bytes <code>0x20</code> through <code>0x7e</code>; tab, newline, other controls, DEL, and every non-ASCII byte select the general path.</li>
+    <li>Direct printable-ASCII layout creates no display atoms and produces the same rows and cursor placement as the general atom path for printable-ASCII inputs.</li>
+    <li>Every C0 control and DEL retains its byte range, resolves to the correct safe representation, and can never place the raw control byte in <code>ScreenBytes</code>.</li>
+    <li>Tab paints as <code>▸</code>; cache hit, exact measurement, timeout fallback, and one- versus two-cell observations all preserve its source offsets.</li>
+    <li>At a mixed ASCII/non-ASCII boundary, classify without constructing partial atoms and segment the complete buffer so combining marks can join the final ASCII base.</li>
+    <li>Segment every stress string and verify atoms tile source bytes exactly.</li>
+    <li>Inject arbitrary width maps containing only one and two; never call a terminal from layout tests.</li>
+    <li>For every grapheme-boundary cursor position and terminal width at least two, rows stay within bounds and the cursor lands on a valid cell gap.</li>
+    <li>Hard breaks, exact soft fills, early soft wraps, trailing newlines, and first-row prompt offsets retain explicit invariants.</li>
+    <li>Cache deduplication measures each exact cluster once per epoch.</li>
+    <li>Probe, cache-entry, and candidate-length limits always produce placeholders rather than unbounded work.</li>
+    <li>Editing that changes segmentation re-derives boundaries and does not reuse a cache entry for a different byte string.</li>
+    <li>Resolution and layout reuse caller-provided backing arrays without retaining stale atoms or rows.</li>
+  </ul>
+
+  <h3>Performance benchmarks</h3>
+  <ul>
+    <li>Benchmark short all-ASCII commands representative of interactive typing, not only large throughput inputs.</li>
+    <li>Benchmark mixed input whose first non-ASCII byte occurs near the beginning and near the end.</li>
+    <li>Benchmark large ASCII and Unicode pastes with allocation counts and bytes per operation reported.</li>
+    <li>Use the scalar printable-ASCII classifier as the baseline; compare word-at-a-time or SIMD validation against it before increasing complexity.</li>
+    <li>Keep the direct ASCII path allocation-free apart from caller-owned row capacity; optimize the general path independently when profiles justify it.</li>
+  </ul>
+
+  <h3>Protocol tests with a fake terminal</h3>
+  <ul>
+    <li>Several probes are written before any reply is required.</li>
+    <li>Replies populate the correct cache keys even when keypress tokens are interleaved.</li>
+    <li>Timeout, malformed reply, wrong row, width zero, and width greater than two leave the cache unchanged.</li>
+    <li>A stale generation retains valid measurements but never paints its stale layout.</li>
+    <li>The scratch row is cleared and terminal mode is restored on every exit path.</li>
+  </ul>
+
+  <h3>Real-terminal matrix</h3>
+  <p>
+    Run the existing <code>tests/terminal_tests/width_report.py</code> and the new DSR/CPR latency harness in each target environment.
+    Then exercise the actual editor through a PTY with ASCII, combining text, CJK, VS15/VS16, flags, skin tones, keycaps, ZWJ sequences, paste, resize, tmux, SSH, ConPTY, and a terminal that ignores CPR.
+  </p>
+
+  <h3>Rejected designs</h3>
+  <table>
+    <thead>
+      <tr><th>Approach</th><th>Reason</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Infer a terminal-wide width profile from representative probes.</td><td>Fewer queries, but correctness depends on unproved equivalence classes.</td></tr>
+      <tr><td>Use uniseg's cluster width after segmentation.</td><td>It describes uniseg's tables, not the current terminal.</td></tr>
+      <tr><td>Measure every occurrence.</td><td>Correct but needlessly repeats I/O; exact session caching is simpler.</td></tr>
+      <tr><td>Serialize one probe and wait before sending the next.</td><td>Turns a paste into many network round trips.</td></tr>
+      <tr><td>Optimistically render predicted widths, then repair.</td><td>Allows a wrong wrap to corrupt the frame and complicates recovery.</td></tr>
+      <tr><td>Persist measurements by terminal identity.</td><td>Invalidation is harder than remeasurement and silently risks stale geometry.</td></tr>
+      <tr><td>Split an oversized grapheme into codepoints.</td><td>Violates the complete-cluster rendering invariant.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>References retained</h3>
+  <ul>
+    <li><a href="https://unicode.org/reports/tr29/">Unicode Standard Annex #29</a> — extended grapheme-boundary rules used for whole-buffer segmentation.</li>
+    <li><a href="https://github.com/rivo/uniseg">rivo/uniseg</a> — extended grapheme segmentation.</li>
+    <li><a href="https://github.com/fish-shell/fish-shell/blob/master/src/screen.rs">fish screen renderer</a> — desired/actual rendering and query fencing precedent.</li>
+    <li><a href="https://ftp.gnu.org/gnu/readline/">GNU Readline</a> — row breaks and pending-wrap handling.</li>
+    <li><a href="https://github.com/zsh-users/zsh/blob/master/Src/Zle/zle_refresh.c">zsh ZLE refresh</a> — cell grids and soft-wrap preservation.</li>
+    <li><a href="https://github.com/mattiase/wraptest">wraptest</a> — pending-wrap behavior across terminals.</li>
+  </ul>
+</section>
+</main>
+
+<footer>
+  <p>
+    Design rule: prediction may be an explicit degraded mode, but it is never mislabeled as correctness.
+  </p>
+</footer>
+</body>
+</html>

@@ -9,6 +9,7 @@ tests/test_quote_stderr.txt
 tests/msh-scripts/
 
 tests/msh-scripts/
+*.pyc
 
 .codex
 __pycache__/
