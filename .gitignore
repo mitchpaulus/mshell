@@ -11,6 +11,7 @@ tests/msh-scripts/
 tests/msh-scripts/
 
 .codex
+__pycache__/
 
 code/node_modules/
 code/out/
