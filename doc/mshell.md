@@ -331,6 +331,14 @@ When the variable name is not known statically,
 an environment variable can be set with the `setenv` built-in,
 which takes the value then the name as strings.
 
+Use `envInspect` to get the change history for an environment variable.
+It returns events from oldest to newest with `dt`, `kind`, `source`, and `changed` fields.
+The `kind` is `inherited`, `set`, or `unset`.
+The `changed` field is false when a set writes the existing value or an unset removes a variable that is already absent.
+Inherited variables use the time mshell observed them at startup, because mshell cannot know when the parent process originally set them.
+History is session-local and limited to the latest 256 events per variable; older events, including the inherited event, are discarded.
+Values are not retained in the history.
+
 ```mshell
 $HOME cd
 
@@ -345,6 +353,9 @@ $HOME cd
 
 # Setting with a dynamic name, value then name
 "Hello, World!" "MSHELL_VAR" setenv
+
+# Inspecting recent changes
+"MSHELL_VAR" envInspect
 ```
 
 ## Indexing
@@ -1078,6 +1089,7 @@ end wl # Output: 11
 - `stack`: Print the stack at the current location (--)
 - `defs`: Print available definitions at the current location (--)
 - `env`: Write all environment variables to stderr in sorted order (--)
+- `envInspect`: Get the session-local change history for an environment variable, oldest to newest. Each event contains `dt`, `kind`, `source`, and `changed`. Only the latest 256 events per variable are retained, and values are never included. `(str -- [{dt: datetime, kind: str, source: str, changed: bool}])`
 - `completionDefs`: Push a dictionary of completion definitions. Keys are command names, values are lists of quotations. `( -- dict)`
 - `setenv`: Set an environment variable by name, value then name. Use when the name is not known statically; otherwise prefer `$NAME!`. `(str str -- )`
 - `unsetenv`: Remove an environment variable by name. Unsetting a variable that does not exist is not an error. `(str -- )`

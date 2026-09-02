@@ -60,9 +60,19 @@ Unsetting a variable that does not exist is not an error.
 When the variable name is not known statically, set one with the <code>setenv</code> built-in, which takes the value then the name.
 </p>
 
+<p>
+Use <code>envInspect</code> to get the session-local change history for an environment variable.
+Events are returned from oldest to newest with <code>dt</code>, <code>kind</code>, <code>source</code>, and <code>changed</code> fields.
+The kind is <code>inherited</code>, <code>set</code>, or <code>unset</code>.
+The changed field is false when a set writes the existing value or an unset removes a variable that is already absent.
+For inherited variables, the timestamp is when mshell observed the value at startup; mshell cannot know when the parent process originally set it.
+Only the latest 256 events per variable are retained, older events are discarded normally, and values are never stored in the history.
+</p>
+
 <pre>
 <code><span class="mshellSTRING">"LOG_LEVEL"</span> <span class="mshellLITERAL">unsetenv</span>
-<span class="mshellSTRING">"info"</span> <span class="mshellSTRING">"LOG_LEVEL"</span> <span class="mshellLITERAL">setenv</span></code>
+<span class="mshellSTRING">"info"</span> <span class="mshellSTRING">"LOG_LEVEL"</span> <span class="mshellLITERAL">setenv</span>
+<span class="mshellSTRING">"LOG_LEVEL"</span> <span class="mshellLITERAL">envInspect</span></code>
 </pre>
 
 <pre>

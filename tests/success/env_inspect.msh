@@ -1,0 +1,15 @@
+"value" $MSH_ENV_INSPECT_TEST_9B4F4E0A!
+"MSH_ENV_INSPECT_TEST_9B4F4E0A" envInspect reverse :0: event!
+@event :kind? wl
+@event :source? len 0 > str wl
+@event :changed? str wl
+@event :dt? typeof wl
+
+"value" "MSH_ENV_INSPECT_TEST_9B4F4E0A" setenv
+"MSH_ENV_INSPECT_TEST_9B4F4E0A" envInspect reverse :0: event!
+@event :changed? str wl
+
+"MSH_ENV_INSPECT_TEST_9B4F4E0A" unsetenv
+"MSH_ENV_INSPECT_TEST_9B4F4E0A" envInspect reverse :0: event!
+@event :kind? wl
+@event :changed? str wl

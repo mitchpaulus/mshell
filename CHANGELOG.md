@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   single-quotes every bare literal in the innermost list containing the cursor.
 
 - Functions
+  - `envInspect`: Get the session-local change history for an environment variable, including when and where it was inherited, set, or unset. The latest 256 events per variable are retained. `(str -- [{dt: datetime, kind: str, source: str, changed: bool}])`
   - `longestCommonPrefix`: Longest leading substring shared by every string in a list. `([str] -- str)`
   - `whenJust`: Run a quotation on the inner value for its side effects when the Maybe is Just;
     does nothing on None. `(Maybe[a] (a -- ) -- )`
