@@ -31,6 +31,7 @@ const (
 	MINUS
 	PLUS
 	EQUALS
+	FATARROW
 	INTERPRET
 	IF
 	IFF // This is just temporary as I work to remove the old if.
@@ -149,6 +150,8 @@ func (t TokenType) String() string {
 		return "PLUS"
 	case EQUALS:
 		return "EQUALS"
+	case FATARROW:
+		return "FATARROW"
 	case INTERPRET:
 		return "INTERPRET"
 	case IF:
@@ -784,6 +787,10 @@ func (l *Lexer) scanTokenAll() Token {
 			return l.parseLiteralOrKeyword()
 		}
 	case '=':
+		if l.peek() == '>' {
+			l.advance()
+			return l.makeToken(FATARROW)
+		}
 		return l.makeToken(EQUALS)
 	case ',':
 		return l.makeToken(COMMA)

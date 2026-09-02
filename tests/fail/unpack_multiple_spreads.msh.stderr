@@ -1,0 +1,1 @@
+Error parsing file stdin: 1:20: A list destructuring pattern may contain one named spread binding such as '...rest'.

@@ -9,9 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Assertive destructuring with the `=>` operator.
+  It consumes a list, dictionary, or Just value, binds its structural pattern names,
+  and fails at runtime when the pattern does not match.
+  Structural patterns reject duplicate bindings and are limited to 256 positions or entries.
 - CLI: an explicit `-` argument reads the program from standard input,
   with arguments after the `-` passed as positional arguments (`some-command | msh - arg1`).
-
 - The language server now offers a `Quote all literals in list` code action that
   single-quotes every bare literal in the innermost list containing the cursor.
 

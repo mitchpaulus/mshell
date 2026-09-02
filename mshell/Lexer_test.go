@@ -39,6 +39,20 @@ func TestTypeCheckerKeywords(t *testing.T) {
 	}
 }
 
+func TestFatArrowToken(t *testing.T) {
+	l := NewLexer("=> = >=", nil)
+	toks, _ := l.Tokenize()
+	want := []TokenType{FATARROW, EQUALS, GREATERTHANOREQUAL, EOF}
+	if len(toks) != len(want) {
+		t.Fatalf("got %d tokens, want %d", len(toks), len(want))
+	}
+	for i, tokenType := range want {
+		if toks[i].Type != tokenType {
+			t.Errorf("token %d: got %s, want %s", i, toks[i].Type, tokenType)
+		}
+	}
+}
+
 // Base-prefixed integer literals (0o/0x/0b) tokenize as INTEGER, while
 // malformed or separator-bearing forms fall back to LITERAL (mshell has no
 // digit separators in numeric literals).

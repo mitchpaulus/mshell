@@ -947,6 +947,37 @@ The trailing comma on the last arm is optional.
 `:>` preserves the matched subject on the stack when the arm body runs.
 This is independent of pattern kind and bindings.
 
+### Assertive Destructuring: `=>`
+
+When the goal is only to bind parts of a value, `=>` is a compact,
+single-pattern form of `match`.
+
+```mshell
+# Bind a exactly length 3 arg list to 3 variable names
+args => [command source destination]
+```
+
+It consumes the subject and makes bindings available to the following code.
+It uses the existing match semantics: an exact list pattern requires the same length,
+a spread accepts the remaining list elements, a dictionary pattern requires its named
+keys but permits extra keys, and `just name` unwraps a Just value.
+If the pattern does not match, execution fails before any bindings are installed.
+The static checker rejects a pattern when the subject type proves that it can never match.
+
+```mshell
+[1 2 3 4] => [first ...middle last]
+{ 'name': "Ada", 'age': 36 } => { 'name': name }
+"value" just => just value
+```
+
+This form is intentionally binding-only, not a general inline switch.
+Its pattern must bind at least one name and may be a list, dictionary, or `just name` pattern.
+Use `_` to discard one list element or a named dictionary value.
+In list patterns, use `..._` to accept and discard zero or more elements.
+Each binding name may appear only once in a structural pattern.
+List patterns are limited to 256 positions, and dictionary patterns are limited to 256 entries.
+Value, type, and OR tests remain part of normal `match` syntax.
+
 ### Wildcard
 
 `_` matches any value (catch-all).
@@ -1041,6 +1072,7 @@ A list pattern `[a b c]` matches a list of exactly that length,
 binding elements to the given names.
 Use `_` to discard a position.
 Use `...rest` to capture remaining elements.
+Use `..._` to accept and discard remaining elements.
 
 ```mshell
 myList match
@@ -1065,6 +1097,8 @@ end wl # Output: 1 | [2 3 4] | 5
 
 A dict pattern `{ 'key': v }` matches a dict that contains the given keys,
 binding their values to the given names.
+Use `_` in place of a binding name to require a key without binding its value.
+Dictionary patterns permit extra keys, so they have no spread binding.
 
 ```mshell
 person match

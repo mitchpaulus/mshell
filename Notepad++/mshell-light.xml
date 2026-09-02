@@ -14,7 +14,7 @@
             <Keywords name="Numbers, extras2" />
             <Keywords name="Numbers, suffix1" />
             <Keywords name="Numbers, suffix2" />
-            <Keywords name="Operators1">+ - = -- != *</Keywords>
+            <Keywords name="Operators1">+ - = =&gt; -- != *</Keywords>
             <Keywords name="Operators2">&amp; | ; , :</Keywords>
             <Keywords name="Operators3">&lt; &lt;= &gt; &gt;= &gt;&gt; ! ? ~ @ $</Keywords>
             <Keywords name="Operators4">[ ] ( ) { }</Keywords>

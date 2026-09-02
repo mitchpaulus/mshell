@@ -1099,6 +1099,7 @@ func (state *EvalState) processIfBlock(ifBlock *MShellParseIfBlock, frame *Evalu
 
 // processMatchBlock handles match...end blocks
 func (state *EvalState) processMatchBlock(matchBlock *MShellParseMatchBlock, frame *EvaluationFrame, frames *[]EvaluationFrame) EvalResult {
+	matchBlock.assertAssertiveInvariant()
 	stack := frame.Stack
 	context := frame.Context
 	definitions := frame.Definitions
@@ -1106,7 +1107,7 @@ func (state *EvalState) processMatchBlock(matchBlock *MShellParseMatchBlock, fra
 
 	subject, err := stack.Peek()
 	if err != nil {
-		return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot evaluate 'match' on an empty stack.\n", startToken.Line, startToken.Column))
+		return state.emptyMatchSubjectFailure(matchBlock)
 	}
 
 	for _, arm := range matchBlock.Arms {
@@ -1136,7 +1137,20 @@ func (state *EvalState) processMatchBlock(matchBlock *MShellParseMatchBlock, fra
 		}
 	}
 
+	return state.matchBlockFailure(matchBlock)
+}
+
+func (state *EvalState) matchBlockFailure(matchBlock *MShellParseMatchBlock) EvalResult {
+	startToken := matchBlock.GetStartToken()
+	if matchBlock.Assertive {
+		return state.FailWithMessage(fmt.Sprintf("%d:%d: Pattern after '%s' did not match.\n", startToken.Line, startToken.Column, startToken.Lexeme))
+	}
 	return state.FailWithMessage(fmt.Sprintf("%d:%d: No matching arm found in match block and no wildcard '_' arm provided.\n", startToken.Line, startToken.Column))
+}
+
+func (state *EvalState) emptyMatchSubjectFailure(matchBlock *MShellParseMatchBlock) EvalResult {
+	startToken := matchBlock.GetStartToken()
+	return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot evaluate '%s' on an empty stack.\n", startToken.Line, startToken.Column, startToken.Lexeme))
 }
 
 // matchPattern checks if a subject matches a pattern (list of parse items).
@@ -1384,12 +1398,12 @@ func (state *EvalState) matchListPattern(pattern *MShellParseList, subject MShel
 			return false, nil, SimpleSuccess()
 		}
 
-		bindings := make(map[string]MShellObject)
+		bindings := make(map[string]MShellObject, len(pattern.Items))
 		// Bind elements before spread
 		for i := range beforeCount {
 			tok, ok := pattern.Items[i].(Token)
-			if !ok {
-				return false, nil, state.FailWithMessage("List pattern element must be a literal.\n")
+			if !ok || tok.Type != LITERAL {
+				return false, nil, state.FailWithMessage("List pattern element must be a binding name, '_', or '...rest'.\n")
 			}
 			if tok.Type == LITERAL && tok.Lexeme != "_" {
 				bindings[tok.Lexeme] = list.Items[i]
@@ -1412,8 +1426,8 @@ func (state *EvalState) matchListPattern(pattern *MShellParseList, subject MShel
 		// Bind elements after spread
 		for i := range afterCount {
 			tok, ok := pattern.Items[spreadIndex+1+i].(Token)
-			if !ok {
-				return false, nil, state.FailWithMessage("List pattern element must be a literal.\n")
+			if !ok || tok.Type != LITERAL {
+				return false, nil, state.FailWithMessage("List pattern element must be a binding name, '_', or '...rest'.\n")
 			}
 			if tok.Type == LITERAL && tok.Lexeme != "_" {
 				bindings[tok.Lexeme] = list.Items[len(list.Items)-afterCount+i]
@@ -1428,11 +1442,11 @@ func (state *EvalState) matchListPattern(pattern *MShellParseList, subject MShel
 		return false, nil, SimpleSuccess()
 	}
 
-	bindings := make(map[string]MShellObject)
+	bindings := make(map[string]MShellObject, len(pattern.Items))
 	for i, item := range pattern.Items {
 		tok, ok := item.(Token)
-		if !ok {
-			return false, nil, state.FailWithMessage("List pattern element must be a literal.\n")
+		if !ok || tok.Type != LITERAL {
+			return false, nil, state.FailWithMessage("List pattern element must be a binding name, '_', or '...rest'.\n")
 		}
 		if tok.Type == LITERAL && tok.Lexeme != "_" {
 			bindings[tok.Lexeme] = list.Items[i]
@@ -1449,7 +1463,7 @@ func (state *EvalState) matchDictPattern(pattern *MShellParseDict, subject MShel
 		return false, nil, SimpleSuccess()
 	}
 
-	bindings := make(map[string]MShellObject)
+	bindings := make(map[string]MShellObject, len(pattern.Items))
 	for _, kv := range pattern.Items {
 		val, exists := dict.Items[kv.Key]
 		if !exists {
@@ -3017,10 +3031,11 @@ func (state *EvalState) evaluateItems(objects []MShellParseItem, stack *MShellSt
 				}
 			}
 		case *MShellParseMatchBlock:
+			t.assertAssertiveInvariant()
 			startToken := t.GetStartToken()
 			subject, err := stack.Peek()
 			if err != nil {
-				return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot evaluate 'match' on an empty stack.\n", startToken.Line, startToken.Column))
+				return state.emptyMatchSubjectFailure(t)
 			}
 
 			matched := false
@@ -3045,7 +3060,7 @@ func (state *EvalState) evaluateItems(objects []MShellParseItem, stack *MShellSt
 			}
 
 			if !matched {
-				return state.FailWithMessage(fmt.Sprintf("%d:%d: No matching arm found in match block and no wildcard '_' arm provided.\n", startToken.Line, startToken.Column))
+				return state.matchBlockFailure(t)
 			}
 		case *MShellIndexerList:
 			obj1, err := stack.Pop()
