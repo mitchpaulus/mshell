@@ -199,11 +199,11 @@ func loadStartupFile(path string, description string, stack *MShellStack, contex
 	return nil
 }
 
-func clearStartupOverrideEnv() error {
-	if err := os.Unsetenv("MSHSTDLIB"); err != nil {
+func clearStartupOverrideEnv(state *EvalState) error {
+	if err := state.EnvironmentHistory().Unset("MSHSTDLIB", "msh startup"); err != nil {
 		return err
 	}
-	if err := os.Unsetenv("MSHINIT"); err != nil {
+	if err := state.EnvironmentHistory().Unset("MSHINIT", "msh startup"); err != nil {
 		return err
 	}
 	return nil
@@ -721,6 +721,7 @@ func main() {
 				CallStackType:   CALLSTACKFILE,
 			},
 		}
+		termState.evalState.EnvironmentHistory()
 
 		err = termState.InteractiveMode()
 		if err != nil {
@@ -762,6 +763,9 @@ func main() {
 		sourceName = inputFile.Path
 	} else if inputSet && !inputFromStdin {
 		sourceName = "-c input"
+	}
+	if inputFile == nil {
+		inputFile = &TokenFile{sourceName}
 	}
 
 	file, err := parseMShellInput(input, inputFile)
@@ -808,14 +812,6 @@ func main() {
 		os.Exit(0)
 	}
 
-	if file.Version != "" {
-		if err := clearStartupOverrideEnv(); err != nil {
-			fmt.Fprintf(os.Stderr, "Error clearing startup override environment variables: %s\n", err)
-			os.Exit(1)
-			return
-		}
-	}
-
 	var callStack CallStack
 	callStack = make([]CallStackItem, 0, 10)
 
@@ -823,6 +819,15 @@ func main() {
 		PositionalArgs: positionalArgs,
 		LoopDepth:      0,
 		CallStack:      callStack,
+	}
+	state.EnvironmentHistory()
+
+	if file.Version != "" {
+		if err := clearStartupOverrideEnv(&state); err != nil {
+			fmt.Fprintf(os.Stderr, "Error clearing startup override environment variables: %s\n", err)
+			os.Exit(1)
+			return
+		}
 	}
 
 	var stack MShellStack
@@ -2626,7 +2631,7 @@ func (state *TermState) InteractiveMode() error {
 
 	defer term.Restore(state.stdInFd, &state.oldState)
 
-	state.l = NewLexer("", nil)
+	state.l = NewLexer("", &TokenFile{"REPL"})
 	state.p = &MShellParser{lexer: state.l}
 
 	stdLibDefs, err := stdLibDefinitions(&state.stack, state.context, &state.evalState)
@@ -3736,11 +3741,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 		} else if t.Char == 15 { // Ctrl-O - file manager
 			newDir := RunFileManagerInteractive(state.stdInFd, &state.oldState, "")
 			if newDir != "" {
-				cwd, cwdErr := os.Getwd()
-				if err := os.Chdir(newDir); err == nil && cwdErr == nil {
-					os.Setenv("OLDPWD", cwd)
-					os.Setenv("PWD", newDir)
-				}
+				state.evalState.ChangeDirectory(newDir, "file manager")
 			}
 			// Refresh terminal size
 			cols, rows, sizeErr := term.GetSize(int(os.Stdout.Fd()))
