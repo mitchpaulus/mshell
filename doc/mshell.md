@@ -933,6 +933,7 @@ When the goal is only to bind parts of a value, `=>` is a compact,
 single-pattern form of `match`.
 
 ```mshell
+# Bind a exactly length 3 arg list to 3 variable names
 args => [command source destination]
 ```
 
@@ -956,9 +957,6 @@ In list patterns, use `..._` to accept and discard zero or more elements.
 Each binding name may appear only once in a structural pattern.
 List patterns are limited to 256 positions, and dictionary patterns are limited to 256 entries.
 Value, type, and OR tests remain part of normal `match` syntax.
-A composite value-and-binding pattern such as `['copy' source destination]` is not
-supported: list and dictionary destructuring positions are binding names, not value tests.
-Nested patterns are also deferred.
 
 ### Wildcard
 

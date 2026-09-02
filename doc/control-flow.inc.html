@@ -175,9 +175,10 @@ If no arm matches and no wildcard <code>_</code> arm is provided, a runtime erro
 When the goal is only to bind parts of a value, <code>=&gt;</code> is a compact, single-pattern form of <code>match</code>.
 </p>
 
-<pre>
-<code><span class="mshellLITERAL">args</span> <span class="mshellFATARROW">=&gt;</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">command</span> <span class="mshellLITERAL">source</span> <span class="mshellLITERAL">destination</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span></code>
-</pre>
+<pre><code><span class="mshellLINECOMMENT"># Binding a exact length 3 argument list to 3 arbitrary variable names</span>
+<span class="mshellLITERAL">args</span> <span class="mshellEQUALS">=</span><span class="mshellGREATERTHAN">&gt;</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">command</span> <span class="mshellLITERAL">source</span> <span class="mshellLITERAL">destination</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span>
+<span class="mshellEOF"></span></code></pre>
+
 
 <p>
 It consumes the subject and makes bindings available to the following code.
@@ -199,9 +200,6 @@ Use <code>_</code> to discard one list element or a named dictionary value.
 In list patterns, use <code>..._</code> to accept and discard zero or more elements.
 Each binding name may appear only once in a structural pattern.
 List patterns are limited to 256 positions, and dictionary patterns are limited to 256 entries.
-Value, type, and OR tests remain part of normal <code>match</code> syntax.
-A composite value-and-binding pattern such as <code>['copy' source destination]</code> is not supported: list and dictionary destructuring positions are binding names, not value tests.
-Nested patterns are also deferred.
 </p>
 
 <h2>Value Matching</h2>
