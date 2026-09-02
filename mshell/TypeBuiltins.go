@@ -449,6 +449,8 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		r.reg(name, "(str | path -- )")
 	}
 	r.reg("cd", "(str | path -- )")
+	// mshFileManager : open the built-in file manager at a starting directory
+	r.reg("mshFileManager", "(str | path -- )")
 	// setenv : set an environment variable, value then name
 	r.reg("setenv", "(str str -- )")
 	// unsetenv : remove an environment variable by name

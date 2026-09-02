@@ -1085,3 +1085,19 @@ func TestTypeCheckInterpolationUnknownIdentPosition(t *testing.T) {
 		t.Fatalf("expected diagnostic at line 1, column 10; got %v", errs)
 	}
 }
+
+func TestTypeCheckProgramMshFileManager(t *testing.T) {
+	// mshFileManager takes a starting directory (str or path) and
+	// pushes nothing; it must be registered so scripts that open the
+	// file manager pass the checker.
+	for _, src := range []string{`"." mshFileManager`, `"." toPath mshFileManager`} {
+		errs, ok := parseAndCheck(t, src)
+		if !ok || len(errs) != 0 {
+			t.Fatalf("expected %q to pass; errs=%v", src, errs)
+		}
+	}
+	errs, ok := parseAndCheck(t, `42 mshFileManager`)
+	if ok {
+		t.Fatalf("expected int argument to mshFileManager to fail; errs=%v", errs)
+	}
+}
