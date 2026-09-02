@@ -393,9 +393,17 @@ type EvalState struct {
 	CallStack             CallStack
 	CompletionDefinitions map[string][]MShellDefinition
 	PreviousDirectories   []string
+	environmentHistory    *EnvironmentHistory
 
 	defIndex    map[string]int
 	defIndexLen int
+}
+
+func (state *EvalState) EnvironmentHistory() *EnvironmentHistory {
+	if state.environmentHistory == nil {
+		state.environmentHistory = NewEnvironmentHistory()
+	}
+	return state.environmentHistory
 }
 
 // RebuildDefinitionIndex records the first index for each name, matching
@@ -3461,7 +3469,7 @@ func (quotation *MShellQuotation) GetStandardOutputFile() string {
 	return quotation.StandardOutputFile
 }
 
-func (state *EvalState) ChangeDirectory(dir string) (EvalResult, int, []byte, []byte) {
+func (state *EvalState) ChangeDirectory(dir string, source string) (EvalResult, int, []byte, []byte) {
 	cwd, currDirErr := os.Getwd()
 
 	err := os.Chdir(dir)
@@ -3471,12 +3479,12 @@ func (state *EvalState) ChangeDirectory(dir string) (EvalResult, int, []byte, []
 
 	if currDirErr == nil {
 		// Update OLDPWD and PWD
-		err = os.Setenv("OLDPWD", cwd)
+		err = state.EnvironmentHistory().Set("OLDPWD", cwd, source)
 		if err != nil {
 			return state.FailWithMessage(fmt.Sprintf("Error setting OLDPWD: %s\n", err.Error())), 1, nil, nil
 		}
 
-		err = os.Setenv("PWD", dir)
+		err = state.EnvironmentHistory().Set("PWD", dir, source)
 		if err != nil {
 			return state.FailWithMessage(fmt.Sprintf("Error setting PWD: %s\n", err.Error())), 1, nil, nil
 		}
@@ -3760,7 +3768,7 @@ func (state *EvalState) RunCdh(context ExecuteContext) (EvalResult, error) {
 	}
 
 	targetDir := selectableDirs[len(selectableDirs)-selectionIndex]
-	result, exitCode, _, _ := state.ChangeDirectory(targetDir)
+	result, exitCode, _, _ := state.ChangeDirectory(targetDir, "cdh")
 	if exitCode != 0 {
 		return result, fmt.Errorf("cdh change directory failed")
 	}
@@ -3773,7 +3781,7 @@ func (state *EvalState) RunCdp() (EvalResult, error) {
 	}
 
 	targetDir := state.PreviousDirectories[len(state.PreviousDirectories)-1]
-	result, exitCode, _, _ := state.ChangeDirectory(targetDir)
+	result, exitCode, _, _ := state.ChangeDirectory(targetDir, "cdp")
 	if exitCode != 0 {
 		return result, fmt.Errorf("cdp change directory failed")
 	}
@@ -3845,7 +3853,7 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 				fmt.Fprint(os.Stderr, "cd: cd [dir]\nChange the shell working directory.\n")
 				return SimpleSuccess(), 0, nil, nil
 			} else {
-				return state.ChangeDirectory(commandLineArgs[1])
+				return state.ChangeDirectory(commandLineArgs[1], "cd command")
 			}
 		} else {
 			// else cd to home directory
@@ -3854,7 +3862,7 @@ func RunProcess(list MShellList, context ExecuteContext, state *EvalState) (Eval
 				return state.FailWithMessage(fmt.Sprintf("Error getting home directory: %s\n", err.Error())), 1, nil, nil
 			}
 
-			return state.ChangeDirectory(homeDir)
+			return state.ChangeDirectory(homeDir, "cd command")
 		}
 
 		return SimpleSuccess(), 0, nil, nil
@@ -6156,6 +6164,28 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					for _, envVar := range envVars {
 						fmt.Fprintf(os.Stderr, "%s\n", envVar)
 					}
+				} else if t.Lexeme == "envInspect" {
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'envInspect' operation on an empty stack.\n", t.Line, t.Column))
+					}
+
+					name, err := obj.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot use a %s as an environment variable name.\n", t.Line, t.Column, obj.TypeName()))
+					}
+
+					events := state.EnvironmentHistory().Inspect(name)
+					result := NewList(len(events))
+					for i, event := range events {
+						result.Items[i] = &MShellDict{Items: map[string]MShellObject{
+							"dt":      &MShellDateTime{Time: event.DateTime, OriginalString: event.DateTime.Format("2006-01-02T15:04:05")},
+							"kind":    MShellString{Content: event.Kind},
+							"source":  MShellString{Content: event.Source},
+							"changed": MShellBool{Value: event.Changed},
+						}}
+					}
+					stack.Push(result)
 				} else if t.Lexeme == "dup" {
 					top, err := stack.Peek()
 					if err != nil {
@@ -6718,7 +6748,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot cd to a %s.\n", t.Line, t.Column, obj.TypeName()))
 					}
 
-					result, _, _, _ := state.ChangeDirectory(dir)
+					result, _, _, _ := state.ChangeDirectory(dir, environmentSource(t))
 					if !result.Success {
 						return result
 					}
@@ -6745,7 +6775,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 					newDir := RunFileManagerBuiltin(dir)
 					if newDir != "" {
-						result, _, _, _ := state.ChangeDirectory(newDir)
+						result, _, _, _ := state.ChangeDirectory(newDir, environmentSource(t))
 						if !result.Success {
 							return result
 						}
@@ -7255,7 +7285,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot use a %s as an environment variable value.\n", t.Line, t.Column, obj2.TypeName()))
 					}
 
-					err = os.Setenv(varName, varValue)
+					err = state.EnvironmentHistory().Set(varName, varValue, environmentSource(t))
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Could not set the environment variable '%s' to '%s'.\n", t.Line, t.Column, varName, varValue))
 					}
@@ -7275,7 +7305,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot use a %s as an environment variable name.\n", t.Line, t.Column, obj1.TypeName()))
 					}
 
-					err = os.Unsetenv(varName)
+					err = state.EnvironmentHistory().Unset(varName, environmentSource(t))
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Could not unset the environment variable '%s'.\n", t.Line, t.Column, varName))
 					}
@@ -12656,7 +12686,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot export a %s.\n", t.Line, t.Column, obj.TypeName()))
 				}
 
-				err = os.Setenv(varName, varValue)
+				err = state.EnvironmentHistory().Set(varName, varValue, environmentSource(t))
 				if err != nil {
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Could not set the environment variable '%s' to '%s'.\n", t.Line, t.Column, varName, varValue))
 				}

@@ -13,11 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   It consumes a list, dictionary, or Just value, binds its structural pattern names,
   and fails at runtime when the pattern does not match.
   Structural patterns reject duplicate bindings and are limited to 256 positions or entries.
-
+- CLI: an explicit `-` argument reads the program from standard input,
+  with arguments after the `-` passed as positional arguments (`some-command | msh - arg1`).
 - The language server now offers a `Quote all literals in list` code action that
   single-quotes every bare literal in the innermost list containing the cursor.
 
 - Functions
+  - `envInspect`: Get the session-local change history for an environment variable, including when and where it was inherited, set, or unset. The latest 256 events per variable are retained. `(str -- [{dt: datetime, kind: str, source: str, changed: bool}])`
   - `longestCommonPrefix`: Longest leading substring shared by every string in a list. `([str] -- str)`
   - `whenJust`: Run a quotation on the inner value for its side effects when the Maybe is Just;
     does nothing on None. `(Maybe[a] (a -- ) -- )`
@@ -278,6 +280,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The type checker gave `index` and `lastIndexOf` a result type of `int`, but both
+  return `Maybe[int]` at runtime (`none` when the substring is not found). The
+  signature is now `(str str -- Maybe[int])`
+- The GitHub action now produces `msh.exe` on Windows.
+  Previously, Git Bash's transparent `.exe` handling made `[ -f mshell ]` succeed when only `mshell.exe` existed,
+  so the install step created an extensionless `msh` copy that native Windows PATH lookup could not resolve,
+  and `shell: msh {0}` steps failed with "command not found".
+  The install checks are now gated on the runner OS.
 - Commands no longer fail with "Error reclaiming terminal control: ... no such process"
   when several mshell processes share one terminal, as under parallel build runners
   (`redo`, `make -j`) or when a script is backgrounded.

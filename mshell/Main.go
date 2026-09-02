@@ -199,11 +199,11 @@ func loadStartupFile(path string, description string, stack *MShellStack, contex
 	return nil
 }
 
-func clearStartupOverrideEnv() error {
-	if err := os.Unsetenv("MSHSTDLIB"); err != nil {
+func clearStartupOverrideEnv(state *EvalState) error {
+	if err := state.EnvironmentHistory().Unset("MSHSTDLIB", "msh startup"); err != nil {
 		return err
 	}
-	if err := os.Unsetenv("MSHINIT"); err != nil {
+	if err := state.EnvironmentHistory().Unset("MSHINIT", "msh startup"); err != nil {
 		return err
 	}
 	return nil
@@ -515,6 +515,7 @@ func main() {
 	inputFilePath := ""
 	checkTypes := false // --check-types: gate execution with the new Checker (Phase 10 step 3)
 	typeCheckOnly := false
+	inputFromStdin := false
 
 	if len(os.Args) == 1 {
 		// Enter interactive mode
@@ -539,8 +540,9 @@ func main() {
 			command = CLIHTML
 		} else if arg == "-h" || arg == "--help" {
 			fmt.Println("Usage: mshell [OPTION].. FILE [ARG]..")
-			fmt.Println("Usage: mshell [OPTION].. [ARG].. < FILE")
+			fmt.Println("Usage: mshell [OPTION].. < FILE")
 			fmt.Println("Usage: mshell [OPTION].. -c INPUT [ARG]..")
+			fmt.Println("Usage: mshell [OPTION].. - [ARG].. < FILE")
 			fmt.Println("Usage: msh bin <command>")
 			fmt.Println("Usage: msh edit <target>")
 			fmt.Println("Usage: msh completions <shell>")
@@ -556,6 +558,7 @@ func main() {
 			// fmt.Println("  --typecheck  Type check the input and report any errors") Ignore this for now.
 			fmt.Println("  --version    Print version information and exit")
 			fmt.Println("  -c INPUT     Execute INPUT as the program, before positional args")
+			fmt.Println("  -            Read the program from standard input, before positional args")
 			fmt.Println("  -h, --help   Print this help message")
 			fmt.Println("  bin          Manage msh_bins.txt entries")
 			fmt.Println("  edit         Edit common msh files")
@@ -575,6 +578,18 @@ func main() {
 
 			input = os.Args[i]
 			inputSet = true
+			positionalArgs = append(positionalArgs, os.Args[i:]...)
+			break
+		} else if arg == "-" {
+			inputBytes, err := io.ReadAll(os.Stdin)
+			if err != nil {
+				fmt.Println(err)
+				os.Exit(1)
+				return
+			}
+			input = string(inputBytes)
+			inputSet = true
+			inputFromStdin = true
 			positionalArgs = append(positionalArgs, os.Args[i:]...)
 			break
 		} else {
@@ -706,6 +721,7 @@ func main() {
 				CallStackType:   CALLSTACKFILE,
 			},
 		}
+		termState.evalState.EnvironmentHistory()
 
 		err = termState.InteractiveMode()
 		if err != nil {
@@ -745,8 +761,11 @@ func main() {
 		sourceName = inputFilePath
 	} else if inputFile != nil {
 		sourceName = inputFile.Path
-	} else if inputSet {
+	} else if inputSet && !inputFromStdin {
 		sourceName = "-c input"
+	}
+	if inputFile == nil {
+		inputFile = &TokenFile{sourceName}
 	}
 
 	file, err := parseMShellInput(input, inputFile)
@@ -793,14 +812,6 @@ func main() {
 		os.Exit(0)
 	}
 
-	if file.Version != "" {
-		if err := clearStartupOverrideEnv(); err != nil {
-			fmt.Fprintf(os.Stderr, "Error clearing startup override environment variables: %s\n", err)
-			os.Exit(1)
-			return
-		}
-	}
-
 	var callStack CallStack
 	callStack = make([]CallStackItem, 0, 10)
 
@@ -808,6 +819,15 @@ func main() {
 		PositionalArgs: positionalArgs,
 		LoopDepth:      0,
 		CallStack:      callStack,
+	}
+	state.EnvironmentHistory()
+
+	if file.Version != "" {
+		if err := clearStartupOverrideEnv(&state); err != nil {
+			fmt.Fprintf(os.Stderr, "Error clearing startup override environment variables: %s\n", err)
+			os.Exit(1)
+			return
+		}
 	}
 
 	var stack MShellStack
@@ -2611,7 +2631,7 @@ func (state *TermState) InteractiveMode() error {
 
 	defer term.Restore(state.stdInFd, &state.oldState)
 
-	state.l = NewLexer("", nil)
+	state.l = NewLexer("", &TokenFile{"REPL"})
 	state.p = &MShellParser{lexer: state.l}
 
 	stdLibDefs, err := stdLibDefinitions(&state.stack, state.context, &state.evalState)
@@ -2714,16 +2734,22 @@ func shutdownTimeout() time.Duration {
 	return defaultShutdownTimeout
 }
 
-// startShutdownWatchdog launches a goroutine that forcibly terminates the
-// process if the shutdown/cleanup sequence does not finish within the timeout.
-// It is the last-resort backstop against a hang on exit. A normal exit (the
-// eventual os.Exit) cancels it implicitly by killing the goroutine, so there is
-// nothing to clean up on the happy path. The message uses \r\n so it renders
-// correctly even if the terminal is still in raw mode when the watchdog fires.
+// startShutdownWatchdog starts a goroutine that kills the process if shutdown
+// does not finish within the timeout. On a normal exit, os.Exit ends the whole
+// process, this goroutine included, so nothing needs to be cleaned up here.
+//
+// The warning is printed from a separate goroutine because a write to stdout
+// can block forever (on Windows, for example, while text is selected in the
+// console window). If the print were inline and blocked, os.Exit would never
+// run and the watchdog itself would hang. The 250ms sleep gives the print a
+// chance to appear before the process dies; if the print is still blocked
+// after that, we exit without it. The message uses \r\n because the terminal
+// may still be in raw mode, where \n alone does not return to column 1.
 func startShutdownWatchdog(timeout time.Duration) {
 	go func() {
 		time.Sleep(timeout)
-		fmt.Fprintf(os.Stdout, "\r\nmsh: shutdown timed out after %s; forcing exit.\r\n", timeout)
+		go fmt.Fprintf(os.Stdout, "\r\nmsh: shutdown timed out after %s; forcing exit.\r\n", timeout)
+		time.Sleep(250 * time.Millisecond)
 		os.Exit(1)
 	}()
 }
@@ -3715,11 +3741,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 		} else if t.Char == 15 { // Ctrl-O - file manager
 			newDir := RunFileManagerInteractive(state.stdInFd, &state.oldState, "")
 			if newDir != "" {
-				cwd, cwdErr := os.Getwd()
-				if err := os.Chdir(newDir); err == nil && cwdErr == nil {
-					os.Setenv("OLDPWD", cwd)
-					os.Setenv("PWD", newDir)
-				}
+				state.evalState.ChangeDirectory(newDir, "file manager")
 			}
 			// Refresh terminal size
 			cols, rows, sizeErr := term.GetSize(int(os.Stdout.Fd()))

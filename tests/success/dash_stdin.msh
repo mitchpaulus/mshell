@@ -1,0 +1,3 @@
+# Run via `mshell - Hello World < dash_stdin.msh` (see test_file.sh),
+# checking that '-' reads the program from stdin and passes positional args.
+args str wl

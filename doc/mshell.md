@@ -331,6 +331,14 @@ When the variable name is not known statically,
 an environment variable can be set with the `setenv` built-in,
 which takes the value then the name as strings.
 
+Use `envInspect` to get the change history for an environment variable.
+It returns events from oldest to newest with `dt`, `kind`, `source`, and `changed` fields.
+The `kind` is `inherited`, `set`, or `unset`.
+The `changed` field is false when a set writes the existing value or an unset removes a variable that is already absent.
+Inherited variables use the time mshell observed them at startup, because mshell cannot know when the parent process originally set them.
+History is session-local and limited to the latest 256 events per variable; older events, including the inherited event, are discarded.
+Values are not retained in the history.
+
 ```mshell
 $HOME cd
 
@@ -345,6 +353,9 @@ $HOME cd
 
 # Setting with a dynamic name, value then name
 "Hello, World!" "MSHELL_VAR" setenv
+
+# Inspecting recent changes
+"MSHELL_VAR" envInspect
 ```
 
 ## Indexing
@@ -374,6 +385,15 @@ For non-fixed indexing, you have the `nth` operator.
 By default, executing a process that returns with a non-zero exit code does not stop the execution of the script.
 If the desired behavior is to stop the execution on any non-zero exit code, the keyword `soe` can be used.
 
+## Script Input
+
+The program to run can come from a file (`msh script.msh [ARG]..`),
+from the command line (`msh -c 'INPUT' [ARG]..`),
+or from standard input.
+Standard input is used when no file or `-c` is given and stdin is not a terminal,
+or explicitly with `-` (`some-command | msh - [ARG]..`).
+With `-`, arguments after the `-` are positional arguments to the script.
+
 ## Interactive CLI
 
 History search is prefix-based and case-insensitive. The prefix is whatever is currently in the input buffer; editing the buffer resets the prefix for the next search.
@@ -394,7 +414,7 @@ The CLI can use definition metadata to provide argument completions for binaries
 ```mshell
 def mshCompletion { 'complete': ['msh' 'mshell'] } ([str] -- [str])
     input!
-    ['-h' '--help' '--html' '--lex' '--parse' '--check-types' '--type-check-only' '--version' '-c'] options!
+    ['-h' '--help' '--html' '--lex' '--parse' '--check-types' '--type-check-only' '--version' '-c' '-'] options!
     ['lsp' 'bin' 'edit' 'completions'] subcommands!
     @options @subcommands extend
 end
@@ -1103,6 +1123,7 @@ end wl # Output: 11
 - `stack`: Print the stack at the current location (--)
 - `defs`: Print available definitions at the current location (--)
 - `env`: Write all environment variables to stderr in sorted order (--)
+- `envInspect`: Get the session-local change history for an environment variable, oldest to newest. Each event contains `dt`, `kind`, `source`, and `changed`. Only the latest 256 events per variable are retained, and values are never included. `(str -- [{dt: datetime, kind: str, source: str, changed: bool}])`
 - `completionDefs`: Push a dictionary of completion definitions. Keys are command names, values are lists of quotations. `( -- dict)`
 - `setenv`: Set an environment variable by name, value then name. Use when the name is not known statically; otherwise prefer `$NAME!`. `(str str -- )`
 - `unsetenv`: Remove an environment variable by name. Unsetting a variable that does not exist is not an error. `(str -- )`
