@@ -169,6 +169,39 @@ This is independent of pattern kind and bindings.
 If no arm matches and no wildcard <code>_</code> arm is provided, a runtime error occurs.
 </p>
 
+<h2 id="control-flow-unpack">Assertive Destructuring with <code>=&gt;</code></h2>
+
+<p>
+When the goal is only to bind parts of a value, <code>=&gt;</code> is a compact, single-pattern form of <code>match</code>.
+</p>
+
+<pre><code><span class="mshellLINECOMMENT"># Binding a exact length 3 argument list to 3 arbitrary variable names</span>
+<span class="mshellLITERAL">args</span> <span class="mshellEQUALS">=</span><span class="mshellGREATERTHAN">&gt;</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">command</span> <span class="mshellLITERAL">source</span> <span class="mshellLITERAL">destination</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span>
+<span class="mshellEOF"></span></code></pre>
+
+
+<p>
+It consumes the subject and makes bindings available to the following code.
+It uses the existing match semantics: an exact list pattern requires the same length, a spread accepts the remaining list elements, a dictionary pattern requires its named keys but permits extra keys, and <code>just name</code> unwraps a Just value.
+If the pattern does not match, execution fails before any bindings are installed.
+The static checker rejects a pattern when the subject type proves that it can never match.
+</p>
+
+<pre>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span> <span class="mshellINTEGER">3</span> <span class="mshellINTEGER">4</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellFATARROW">=&gt;</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">first</span> <span class="mshellLITERAL">...middle</span> <span class="mshellLITERAL">last</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span>
+{ <span class="mshellSINGLEQUOTESTRING">'name'</span>: <span class="mshellSTRING">"Ada"</span>, <span class="mshellSINGLEQUOTESTRING">'age'</span>: <span class="mshellINTEGER">36</span> } <span class="mshellFATARROW">=&gt;</span> { <span class="mshellSINGLEQUOTESTRING">'name'</span>: <span class="mshellLITERAL">name</span> }
+<span class="mshellSTRING">"value"</span> <span class="mshellLITERAL">just</span> <span class="mshellFATARROW">=&gt;</span> <span class="mshellLITERAL">just</span> <span class="mshellLITERAL">value</span></code>
+</pre>
+
+<p>
+This form is intentionally binding-only, not a general inline switch.
+Its pattern must bind at least one name and may be a list, dictionary, or <code>just name</code> pattern.
+Use <code>_</code> to discard one list element or a named dictionary value.
+In list patterns, use <code>..._</code> to accept and discard zero or more elements.
+Each binding name may appear only once in a structural pattern.
+List patterns are limited to 256 positions, and dictionary patterns are limited to 256 entries.
+</p>
+
 <h2>Value Matching</h2>
 
 <p>Match against literal values — integers, strings, booleans, and paths:</p>
@@ -281,6 +314,11 @@ The <code>just</code> pattern binds the inner value to a variable:
 
 <p>Match lists by shape and bind elements to variables:</p>
 
+<p>
+Use <code>_</code> to discard one element, <code>...rest</code> to capture zero or more elements,
+and <code>..._</code> to accept and discard zero or more elements.
+</p>
+
 <pre>
 <code><span class="mshellLINECOMMENT"># Exact match — binds each element</span>
 <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span> <span class="mshellINTEGER">3</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellMATCH">match</span>
@@ -320,6 +358,8 @@ The <code>just</code> pattern binds the inner value to a variable:
 
 <p>
 Match dictionaries by required keys and bind their values.
+Use <code>_</code> in place of a binding name to require a key without binding its value.
+Dictionary patterns have no spread binding.
 Extra keys in the subject are allowed — only the specified keys must be present:
 </p>
 

@@ -6,6 +6,7 @@ var BuiltInList = map[string]struct{}{
 	"/": {},
 	"defs": {},
 	"env": {},
+	"envInspect": {},
 	"stack": {},
 	"abs": {},
 	"absPath": {},

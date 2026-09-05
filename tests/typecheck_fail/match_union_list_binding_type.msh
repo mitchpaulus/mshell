@@ -1,0 +1,5 @@
+# Normal match shares structural binding inference with '=>'.
+true ([1]) (["x"]) iff match
+    [value] : @value 1 +,
+    _ : 0,
+end

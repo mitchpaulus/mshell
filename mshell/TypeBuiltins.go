@@ -449,10 +449,14 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		r.reg(name, "(str | path -- )")
 	}
 	r.reg("cd", "(str | path -- )")
+	// mshFileManager : open the built-in file manager at a starting directory
+	r.reg("mshFileManager", "(str | path -- )")
 	// setenv : set an environment variable, value then name
 	r.reg("setenv", "(str str -- )")
 	// unsetenv : remove an environment variable by name
 	r.reg("unsetenv", "(str -- )")
+	// envInspect : get the recent change history for an environment variable
+	r.reg("envInspect", "(str -- [{dt: datetime, kind: str, source: str, changed: bool}])")
 	// cdh / cdp : interactive directory history / pop navigation
 	for _, name := range []string{"cdh", "cdp"} {
 		r.reg(name, "( -- )")
@@ -519,7 +523,7 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		r.reg(name, "(str str int -- str)")
 	}
 	for _, name := range []string{"index", "lastIndexOf"} {
-		r.reg(name, "(str str -- int)")
+		r.reg(name, "(str str -- Maybe[int])")
 	}
 	r.reg("hostname", "( -- str)")
 	r.reg("uuid", "( -- str)")

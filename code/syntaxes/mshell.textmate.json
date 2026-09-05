@@ -13,6 +13,10 @@
             "match": "\\b(true|false)\\b"
         },
         {
+            "name": "keyword.operator.unpack.mshell",
+            "match": "=>"
+        },
+        {
             "name": "keyword.operator.redirect.merge.mshell",
             "match": "2>&1|1>&2"
         },

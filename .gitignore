@@ -8,10 +8,11 @@ tests/quote_stderr_redirect.txt
 tests/test_quote_stderr.txt
 tests/msh-scripts/
 
-tests/msh-scripts/
 *.pyc
+__pycache__
 
 .codex
+__pycache__/
 
 code/node_modules/
 code/out/

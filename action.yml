@@ -68,7 +68,7 @@ runs:
 
     - name: Set up Go
       if: steps.mode.outputs.mode == 'source'
-      uses: actions/setup-go@v5
+      uses: actions/setup-go@v7
       with:
         go-version-file: ${{ runner.temp }}/mshell-src/mshell/go.mod
         cache: false
@@ -95,28 +95,46 @@ runs:
     - name: Install mshell
       shell: bash
       run: |
-        # Create symlinks so both msh and mshell work
+        # Create symlinks so both msh and mshell work.
+        # Gate on OS: MSYS2/Git Bash makes `[ -f mshell ]` true when only
+        # mshell.exe exists, so extension-based checks pick the wrong branch on
+        # Windows and never produce the msh.exe that native PATH lookup needs.
         cd "$HOME/.mshell/bin"
-        if [ -f mshell ]; then
-          ln -sf mshell msh
-        elif [ -f msh ]; then
-          ln -sf msh mshell
-        elif [ -f mshell.exe ]; then
-          cp mshell.exe msh.exe
-        elif [ -f msh.exe ]; then
-          cp msh.exe mshell.exe
+        if [ "${{ runner.os }}" = "Windows" ]; then
+          if [ -f mshell.exe ]; then
+            cp mshell.exe msh.exe
+          elif [ -f msh.exe ]; then
+            cp msh.exe mshell.exe
+          fi
+        else
+          if [ -f mshell ]; then
+            ln -sf mshell msh
+          elif [ -f msh ]; then
+            ln -sf msh mshell
+          fi
         fi
 
-        echo "$HOME/.mshell/bin" >> $GITHUB_PATH
-
-        if [ -f "$HOME/.mshell/bin/msh" ]; then
-          MSH_BIN="$HOME/.mshell/bin/msh"
-        elif [ -f "$HOME/.mshell/bin/msh.exe" ]; then
-          MSH_BIN="$HOME/.mshell/bin/msh.exe"
-        elif [ -f "$HOME/.mshell/bin/mshell" ]; then
-          MSH_BIN="$HOME/.mshell/bin/mshell"
+        # GITHUB_PATH entries must be resolvable by native Windows path lookup,
+        # so a POSIX-style $HOME path from Git Bash won't work there.
+        # This assumes that $HOME in git bash resolves to $USERPROFILE.
+        if [ "${{ runner.os }}" = "Windows" ]; then
+          echo "$USERPROFILE\\.mshell\\bin" >> "$GITHUB_PATH"
         else
-          MSH_BIN="$HOME/.mshell/bin/mshell.exe"
+          echo "$HOME/.mshell/bin" >> "$GITHUB_PATH"
+        fi
+
+        if [ "${{ runner.os }}" = "Windows" ]; then
+          if [ -f "$HOME/.mshell/bin/msh.exe" ]; then
+            MSH_BIN="$HOME/.mshell/bin/msh.exe"
+          else
+            MSH_BIN="$HOME/.mshell/bin/mshell.exe"
+          fi
+        else
+          if [ -f "$HOME/.mshell/bin/msh" ]; then
+            MSH_BIN="$HOME/.mshell/bin/msh"
+          else
+            MSH_BIN="$HOME/.mshell/bin/mshell"
+          fi
         fi
 
         MSH_VERSION="$("$MSH_BIN" --version)"

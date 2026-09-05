@@ -192,6 +192,12 @@ end
     _                       : "other" wl,
 end
 
+# Dict destructuring - bindings remain available while type checking an impossible arm
+{a: 1} match
+    {b: n} : @n wl,
+    _      : "no" wl,
+end
+
 # Dict destructuring - extra keys is fine for match
 { 'name': "Charlie", 'age': 25, 'city': "NY" } match
     { 'name': n, 'age': a } : [@n " is " @a str] "" join wl,

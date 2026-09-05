@@ -13,6 +13,8 @@ if printf %s "$1" | grep -q 'positional'; then
     $BINARY "$1" Hello World > "$TMP_FILE" 2>"$TMP_ERR"
 elif test "$(basename "$1")" = "args.msh"; then
     $BINARY "$1" Hello World > "$TMP_FILE" 2>"$TMP_ERR"
+elif test "$(basename "$1")" = "dash_stdin.msh"; then
+    $BINARY - Hello World < "$1" > "$TMP_FILE" 2>"$TMP_ERR"
 elif test "$(basename "$1")" = "stdin_keyword.msh"; then
     $BINARY stdin_keyword.msh < stdin_for_test.txt > "$TMP_FILE" 2>"$TMP_ERR"
 elif test "$(basename "$1")" = "pwd.msh"; then

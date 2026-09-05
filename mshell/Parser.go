@@ -426,6 +426,16 @@ type MShellParseMatchBlock struct {
 	Arms       []MShellParseMatchArm
 	StartToken Token
 	EndToken   Token
+	Assertive  bool
+}
+
+func (m *MShellParseMatchBlock) assertAssertiveInvariant() {
+	if !m.Assertive {
+		return
+	}
+	if len(m.Arms) != 1 || !m.Arms[0].Consume || len(m.Arms[0].Body) != 0 || len(m.Arms[0].Pattern) == 0 {
+		panic("assertive match must have one consuming arm with a non-empty pattern and empty body")
+	}
 }
 
 func (m *MShellParseMatchBlock) GetStartToken() Token {
@@ -451,11 +461,21 @@ func (m *MShellParseMatchBlock) ToJson() string {
 		sb.WriteString(ToJson(arm.Body))
 		sb.WriteString("}")
 	}
-	sb.WriteString("]}")
+	sb.WriteString("]")
+	if m.Assertive {
+		sb.WriteString(", \"assertive\": true")
+	}
+	sb.WriteString("}")
 	return sb.String()
 }
 
 func (m *MShellParseMatchBlock) DebugString() string {
+	if m.Assertive {
+		if len(m.Arms) == 0 {
+			return m.StartToken.Lexeme
+		}
+		return m.StartToken.Lexeme + " " + formatPatternSnippet(m.Arms[0].Pattern)
+	}
 	var sb strings.Builder
 	sb.WriteString("match ")
 	for _, arm := range m.Arms {
@@ -1098,6 +1118,8 @@ func (parser *MShellParser) ParseItem() (MShellParseItem, error) {
 		return parser.ParseIfBlock()
 	case MATCH:
 		return parser.ParseMatchBlock()
+	case FATARROW:
+		return parser.ParseAssertiveMatch()
 	case PREFIXQUOTE:
 		return parser.ParsePrefixQuote()
 	case AS:
@@ -1668,6 +1690,9 @@ func (parser *MShellParser) ParseMatchBlock() (*MShellParseMatchBlock, error) {
 		if len(arm.Pattern) == 0 {
 			return matchBlock, fmt.Errorf("Empty pattern in match arm at line %d, column %d.", parser.curr.Line, parser.curr.Column)
 		}
+		if err := validateStructuralBindingPattern(arm.Pattern, false); err != nil {
+			return matchBlock, err
+		}
 
 		arm.Consume = parser.curr.Type == COLON
 
@@ -1707,4 +1732,135 @@ func (parser *MShellParser) ParseMatchBlock() (*MShellParseMatchBlock, error) {
 	}
 
 	return matchBlock, nil
+}
+
+// ParseAssertiveMatch turns `=> <pattern>` into a
+// consuming, single-arm match with an empty body. The Assertive marker tells
+// the type checker that the implicit unmatched path diverges at runtime.
+func (parser *MShellParser) ParseAssertiveMatch() (*MShellParseMatchBlock, error) {
+	operator := parser.curr
+	matchBlock := &MShellParseMatchBlock{StartToken: operator, Assertive: true}
+	parser.NextToken()
+
+	arm := MShellParseMatchArm{Consume: true}
+	switch {
+	case parser.curr.Type == LEFT_SQUARE_BRACKET:
+		list, err := parser.ParseList()
+		if err != nil {
+			return matchBlock, err
+		}
+		arm.Pattern = append(arm.Pattern, list)
+	case parser.curr.Type == LEFT_CURLY:
+		dict, err := parser.ParseDict()
+		if err != nil {
+			return matchBlock, err
+		}
+		arm.Pattern = append(arm.Pattern, dict)
+	case parser.curr.Type == LITERAL && parser.curr.Lexeme == "just":
+		arm.Pattern = append(arm.Pattern, parser.curr)
+		parser.NextToken()
+		if parser.curr.Type != LITERAL {
+			return matchBlock, fmt.Errorf("%d:%d: Expected a binding name after 'just' in an assertive destructuring pattern.", parser.curr.Line, parser.curr.Column)
+		}
+		arm.Pattern = append(arm.Pattern, parser.curr)
+		parser.NextToken()
+	default:
+		return matchBlock, fmt.Errorf("%d:%d: Expected a list, dictionary, or 'just <name>' pattern after '%s'.", parser.curr.Line, parser.curr.Column, operator.Lexeme)
+	}
+
+	if err := validateStructuralBindingPattern(arm.Pattern, true); err != nil {
+		return matchBlock, err
+	}
+	matchBlock.Arms = append(matchBlock.Arms, arm)
+	matchBlock.EndToken = arm.Pattern[len(arm.Pattern)-1].GetEndToken()
+	matchBlock.assertAssertiveInvariant()
+	return matchBlock, nil
+}
+
+const maxStructuralPatternItems = 256
+
+func validateStructuralBindingPattern(pattern []MShellParseItem, requireBinding bool) error {
+	bindings := make(map[string]struct{})
+	addBinding := func(tok Token, name string) error {
+		if name == "_" {
+			return nil
+		}
+		if _, exists := bindings[name]; exists {
+			return fmt.Errorf("%d:%d: A destructuring pattern cannot bind '%s' more than once.", tok.Line, tok.Column, name)
+		}
+		bindings[name] = struct{}{}
+		return nil
+	}
+
+	if len(pattern) == 2 {
+		first, firstOK := pattern[0].(Token)
+		second, secondOK := pattern[1].(Token)
+		if firstOK && secondOK && first.Type == LITERAL && first.Lexeme == "just" && second.Type == LITERAL {
+			if err := addBinding(second, second.Lexeme); err != nil {
+				return err
+			}
+			if requireBinding && len(bindings) == 0 {
+				return fmt.Errorf("%d:%d: Assertive destructuring must bind at least one variable.", first.Line, first.Column)
+			}
+		}
+		return nil
+	}
+
+	if len(pattern) != 1 {
+		return nil
+	}
+
+	switch structural := pattern[0].(type) {
+	case *MShellParseList:
+		if len(structural.Items) > maxStructuralPatternItems {
+			return fmt.Errorf("%d:%d: A list destructuring pattern may contain at most %d positions.", structural.StartToken.Line, structural.StartToken.Column, maxStructuralPatternItems)
+		}
+		spreadSeen := false
+		for _, item := range structural.Items {
+			tok, ok := item.(Token)
+			if !ok || tok.Type != LITERAL {
+				start := item.GetStartToken()
+				return fmt.Errorf("%d:%d: List destructuring patterns may contain only binding names, '_', and one '...rest' binding.", start.Line, start.Column)
+			}
+			if strings.HasPrefix(tok.Lexeme, "...") {
+				if spreadSeen || len(tok.Lexeme) == 3 {
+					return fmt.Errorf("%d:%d: A list destructuring pattern may contain one named spread binding such as '...rest'.", tok.Line, tok.Column)
+				}
+				spreadSeen = true
+				if err := addBinding(tok, tok.Lexeme[3:]); err != nil {
+					return err
+				}
+			} else if err := addBinding(tok, tok.Lexeme); err != nil {
+				return err
+			}
+		}
+	case *MShellParseDict:
+		if len(structural.Items) > maxStructuralPatternItems {
+			return fmt.Errorf("%d:%d: A dictionary destructuring pattern may contain at most %d entries.", structural.StartToken.Line, structural.StartToken.Column, maxStructuralPatternItems)
+		}
+		for _, kv := range structural.Items {
+			if len(kv.Value) != 1 {
+				return fmt.Errorf("%d:%d: Each dictionary destructuring value must be one binding name or '_'.", structural.StartToken.Line, structural.StartToken.Column)
+			}
+			tok, ok := kv.Value[0].(Token)
+			if !ok || tok.Type != LITERAL {
+				start := kv.Value[0].GetStartToken()
+				return fmt.Errorf("%d:%d: Each dictionary destructuring value must be one binding name or '_'.", start.Line, start.Column)
+			}
+			if strings.HasPrefix(tok.Lexeme, "...") {
+				return fmt.Errorf("%d:%d: Dictionary destructuring does not support spread patterns; use '_' to discard a named value.", tok.Line, tok.Column)
+			}
+			if err := addBinding(tok, tok.Lexeme); err != nil {
+				return err
+			}
+		}
+	default:
+		return nil
+	}
+
+	if requireBinding && len(bindings) == 0 {
+		start := pattern[0].GetStartToken()
+		return fmt.Errorf("%d:%d: Assertive destructuring must bind at least one variable.", start.Line, start.Column)
+	}
+	return nil
 }
