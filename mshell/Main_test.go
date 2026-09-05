@@ -218,14 +218,31 @@ func TestAsciiAtomsInto(t *testing.T) {
 	}
 
 	want := []DisplayAtom{
-		{SourceStart: 0, SourceEnd: 1, Text: "a", Width: 1, Kind: AtomAscii},
-		{SourceStart: 1, SourceEnd: 2, Text: "\u25B8", Width: UnresolvedWidth, Kind: AtomControl},
-		{SourceStart: 2, SourceEnd: 3, Text: "^Z", Width: 2, Kind: AtomControl},
-		{SourceStart: 3, SourceEnd: 4, Text: "\n", Width: 0, Kind: AtomHardBreak},
+		{SourceStart: 0, SourceEnd: 1, Width: 1, Kind: AtomAscii},
+		{SourceStart: 1, SourceEnd: 2, Width: UnresolvedWidth, Kind: AtomControl},
+		{SourceStart: 2, SourceEnd: 3, Width: 2, Kind: AtomControl},
+		{SourceStart: 3, SourceEnd: 4, Width: 0, Kind: AtomHardBreak},
 	}
 
 	if !slices.Equal(got, want) {
 		t.Errorf("atoms = %+v, want %+v", got, want)
+	}
+
+	wantText := []string{"a", "\u25B8", "^Z", ""}
+	for i, atom := range got {
+		if s := atom.displayText(command); s != wantText[i] {
+			t.Errorf("atom %d displayText = %q, want %q", i, s, wantText[i])
+		}
+	}
+
+	got, allAscii = asciiAtomsInto(got, SourceText("a\r\nb"))
+	wantCRLF := []DisplayAtom{
+		{SourceStart: 0, SourceEnd: 1, Width: 1, Kind: AtomAscii},
+		{SourceStart: 1, SourceEnd: 3, Width: 0, Kind: AtomHardBreak},
+		{SourceStart: 3, SourceEnd: 4, Width: 1, Kind: AtomAscii},
+	}
+	if !allAscii || !slices.Equal(got, wantCRLF) {
+		t.Errorf("crlf atoms = %+v, want %+v", got, wantCRLF)
 	}
 
 	got, allAscii = asciiAtomsInto(got, SourceText("a\u00e9"))

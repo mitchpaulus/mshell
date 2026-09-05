@@ -986,9 +986,27 @@ const (
 type DisplayAtom struct {
 	SourceStart ByteOffset
 	SourceEnd ByteOffset
-	Text string
 	Width Cells
 	Kind AtomKind
+}
+
+const tabGlyph = "\u25B8"
+const placeholderGlyph = "?"
+
+func (a DisplayAtom) displayText(src SourceText) string {
+	switch a.Kind {
+	case AtomAscii, AtomGrapheme:
+		return string(src[a.SourceStart:a.SourceEnd])
+	case AtomControl:
+		if src[a.SourceStart] == '\t' {
+			return tabGlyph
+		}
+		return controlCaretText(src[a.SourceStart])
+	case AtomPlaceholder:
+		return placeholderGlyph
+	default: // AtomHardBreak
+		return ""
+	}
 }
 
 type WidthCache struct {
@@ -996,11 +1014,57 @@ type WidthCache struct {
 	Entries map[string]Cells
 }
 
+var caretText [32]string
+
+func init() {
+	for i := range caretText {
+		caretText[i] = string([]byte{'^', byte(i) + 0x40})
+	}
+}
+
 func controlCaretText(b byte) string {
 	if b == 0x7f {
 		return "^?"
 	}
-	return string([]byte{'^', b + 0x40})
+	return caretText[b]
+}
+
+// asciiAtomsInto atomizes a seven-bit command without segmentation: every byte is its own atom,
+// except \r\n, which is one hard break. Reports false and an empty slice when any byte is outside ASCII;
+// the caller then takes the general (uniseg) path over the complete buffer. No prefix is retained on failure.
+func asciiAtomsInto(dst []DisplayAtom, command SourceText) ([]DisplayAtom, bool) {
+	atoms := dst[:0]
+	for i := 0; i < len(command); i++ {
+		if command[i] >= 0x80 {
+			return atoms, false
+		}
+	}
+
+	for i := 0; i < len(command); i++ {
+		b := command[i]
+		atom := DisplayAtom{SourceStart: ByteOffset(i), SourceEnd: ByteOffset(i + 1)}
+		switch {
+		case b >= 0x20 && b <= 0x7e:
+			atom.Width = 1
+			atom.Kind = AtomAscii
+		case b == '\n':
+			atom.Width = 0
+			atom.Kind = AtomHardBreak
+		case b == '\r' && i + 1 < len(command) && command[i+1] == '\n':
+			atom.Width = 0
+			atom.SourceEnd++
+			atom.Kind = AtomHardBreak
+			i++
+		case b == '\t':
+			atom.Width = UnresolvedWidth
+			atom.Kind = AtomControl
+		default:
+			atom.Width = 2
+			atom.Kind = AtomControl
+		}
+		atoms = append(atoms, atom)
+	}
+	return atoms, true
 }
 
 type RowEnd int
