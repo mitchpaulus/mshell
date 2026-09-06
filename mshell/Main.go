@@ -1133,13 +1133,13 @@ func layoutPrintableAsciiInto(dst []LayoutRow, command SourceText, cursor ByteOf
 		}
 
 		if cursor >= start && (cursor < end || final) {
-			res.CursorRow = len(rows)
-			res.CursorCol = int(col) + int(cursor-start)
+			res.CursorRow = RowIndex(len(rows))
+			res.CursorCol = col + Cells(cursor-start)
 		}
 
 		rows = append(rows, LayoutRow{
 			Text:    string(command[start:end]),
-			Width:   count,
+			Width:   Cells(count),
 			EndType: endType,
 		})
 
@@ -1254,6 +1254,8 @@ func finishWidthResolution(command SourceText, atoms []DisplayAtom, cache *Width
 }
 
 type RowEnd int
+type AtomIndex int
+type RowIndex int
 
 const (
 	RowEndFinal RowEnd = iota // Final row
@@ -1263,16 +1265,73 @@ const (
 )
 
 type LayoutRow struct {
-	Text string // slice of the original input, no copy
-	Width int   // total cells occupied
-	EndType RowEnd
+	Text      string    //  direct source slice for ASCII layout and legacy layout
+	AtomStart AtomIndex // general layout: first atom inclusive
+	AtomEnd   AtomIndex // general layout: exclusive; excludes a hard-break atom
+	Width     Cells     // terminal cells occupied, excluding the prompt
+	EndType   RowEnd
 }
 
 type LayoutResult struct {
 	Rows []LayoutRow
-	CursorRow int
-	CursorCol int // [0 .. width] Equals width only when PendingWrap and cursor is at the end, a deferred move.
+	CursorRow RowIndex
+	CursorCol Cells // zero-based screen column; may equal terminal width at a full row's end
 	PendingWrap bool
+}
+
+// layoutAtomRowsInto wraps resolved atoms without splitting them.
+// Hard breaks must have width zero; every other atom must have width one or two.
+func layoutAtomRowsInto(dst []LayoutRow, atoms []DisplayAtom, startCol Cells, columns Cells) []LayoutRow {
+	if columns < 2 || startCol < 0 || startCol >= columns {
+		panic("layoutAtomRowsInto: invalid terminal geometry")
+	}
+
+	rows := dst[:0]
+	rowStart := AtomIndex(0)
+	rowStartCol := startCol
+	col := startCol
+
+	endRow := func(end AtomIndex, kind RowEnd) {
+		rows = append(rows, LayoutRow{
+			AtomStart: rowStart,
+			AtomEnd:   end,
+			Width:     col - rowStartCol,
+			EndType:   kind,
+		})
+		rowStart = end
+		rowStartCol = 0
+		col = 0
+	}
+
+	for i, atom := range atoms {
+		index := AtomIndex(i)
+
+		if atom.Kind == AtomHardBreak {
+			if atom.Width != 0 {
+				panic("layoutAtomRowsInto: nonzero hard-break width")
+			}
+			endRow(index, RowEndHard)
+			rowStart = index + 1
+			continue
+		}
+
+		if atom.Width != 1 && atom.Width != 2 {
+			panic("layoutAtomRowsInto: unresolved or unsupported atom width")
+		}
+
+		if col+atom.Width > columns {
+			kind := RowEndSoftEarly
+			if col == columns {
+				kind = RowEndSoftExact
+			}
+			endRow(index, kind)
+		}
+
+		col += atom.Width
+	}
+
+	endRow(AtomIndex(len(atoms)), RowEndFinal)
+	return rows
 }
 
 func layoutInto(dst []LayoutRow, text string, cursor int, width int, widthOf func(string) int) LayoutResult {
@@ -1292,11 +1351,11 @@ func layoutInto(dst []LayoutRow, text string, cursor int, width int, widthOf fun
 
 		if cluster == "\n" || cluster == "\r\n" { // Hard line break
 			if offset == cursor {
-				res.CursorRow = len(rows)
-				res.CursorCol = col
+				res.CursorRow = RowIndex(len(rows))
+				res.CursorCol = Cells(col)
 			}
 
-			rows = append(rows, LayoutRow{Text: text[rowStart:offset], Width: col, EndType: RowEndHard })
+			rows = append(rows, LayoutRow{Text: text[rowStart:offset], Width: Cells(col), EndType: RowEndHard })
 			offset += len(cluster)
 			rowStart = offset
 			col = 0
@@ -1312,21 +1371,21 @@ func layoutInto(dst []LayoutRow, text string, cursor int, width int, widthOf fun
 				end = RowEndSoftEarly
 			}
 
-			rows = append(rows, LayoutRow{Text: text[rowStart:offset], Width: col, EndType: end})
+			rows = append(rows, LayoutRow{Text: text[rowStart:offset], Width: Cells(col), EndType: end})
 			rowStart = offset
 			col = 0
 		}
 		if offset == cursor {
-			res.CursorRow = len(rows)
-			res.CursorCol = col
+			res.CursorRow = RowIndex(len(rows))
+			res.CursorCol = Cells(col)
 		}
 		col += w
 		offset += len(cluster)
 	}
-	rows = append(rows, LayoutRow{Text: text[rowStart:], Width: col, EndType: RowEndFinal})
+	rows = append(rows, LayoutRow{Text: text[rowStart:], Width: Cells(col), EndType: RowEndFinal})
 	if cursor >= len(text) {
-		res.CursorRow = len(rows) - 1
-		res.CursorCol = col
+		res.CursorRow = RowIndex(len(rows) - 1)
+		res.CursorCol = Cells(col)
 	}
 
 	res.PendingWrap = col == width

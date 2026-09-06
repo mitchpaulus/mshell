@@ -430,7 +430,7 @@ func TestLayoutProperties(t *testing.T) {
 		"👨‍👩‍👧‍👦", "❤️", "☂\uFE0F", "☂\uFE0E", // ZWJ family, VS16, VS15
 		"🇺🇸", "±", // flag pair, East Asian ambiguous
 	}
-	widths := []int{2, 3, 5, 10, 80}
+	widths := []Cells{2, 3, 5, 10, 80}
 
 	widthMaps := []map[string]int{
 		{
@@ -467,7 +467,7 @@ func TestLayoutProperties(t *testing.T) {
 			for widthMapIndex, widthMap := range widthMaps {
 				widthOf := testWidthLookup(widthMap)
 				for _, cursor := range boundaries {
-					r := layoutInto(dst, text, cursor, width, widthOf)
+					r := layoutInto(dst, text, cursor, int(width), widthOf)
 					dst = r.Rows
 					checkLayoutProperties(t, text, cursor, width, widthOf, r)
 					if t.Failed() {
@@ -479,7 +479,7 @@ func TestLayoutProperties(t *testing.T) {
 	}
 }
 
-func checkLayoutProperties(t *testing.T, text string, cursor int, terminalWidth int, widthOf func(string) int, r LayoutResult) {
+func checkLayoutProperties(t *testing.T, text string, cursor int, terminalWidth Cells, widthOf func(string) int, r LayoutResult) {
 	t.Helper()
 
 	rows := r.Rows
@@ -516,7 +516,7 @@ func checkLayoutProperties(t *testing.T, text string, cursor int, terminalWidth 
 	}
 
 	checkWidth := func(i int, row LayoutRow) {
-		if got := sumTestWidths(row.Text, widthOf); row.Width != got {
+		if got := Cells(sumTestWidths(row.Text, widthOf)); row.Width != got {
 			t.Errorf("row %d Width=%d but summed widths=%d", i, row.Width, got)
 		}
 		if row.Width > terminalWidth {
@@ -547,7 +547,7 @@ func checkLayoutProperties(t *testing.T, text string, cursor int, terminalWidth 
 				t.Errorf("row %d soft-wrapped but empty", i)
 			} else {
 				next, _, _, _ := uniseg.FirstGraphemeClusterInString(rows[i+1].Text, -1)
-				if w := widthOf(next); row.Width+w <= terminalWidth {
+				if w := Cells(widthOf(next)); row.Width+w <= terminalWidth {
 					t.Errorf("row %d ended soft at width %d but next cluster %q (width %d) would have fit in %d",
 						i, row.Width, next, w, terminalWidth)
 				}
@@ -563,7 +563,7 @@ func checkLayoutProperties(t *testing.T, text string, cursor int, terminalWidth 
 	}
 
 	// 4. Cursor Checks
-	if r.CursorRow < 0 || r.CursorRow >= len(rows) {
+	if r.CursorRow < 0 || r.CursorRow >= RowIndex(len(rows)) {
 		t.Errorf("cursor row %d out of bounds [0,%d]", r.CursorRow, len(rows))
 	} else {
 		if r.CursorCol < 0 || r.CursorCol > rows[r.CursorRow].Width {
