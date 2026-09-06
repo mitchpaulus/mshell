@@ -1029,6 +1029,17 @@ func controlCaretText(b byte) string {
 	return caretText[b]
 }
 
+func asciiAtom(b byte) (Cells, AtomKind) {
+	switch {
+	case b >= 0x20 && b <= 0x7e:
+		return 1, AtomAscii
+	case b == '\t':
+		return UnresolvedWidth, AtomControl
+	default:
+		return 2, AtomControl
+	}
+}
+
 // asciiAtomsInto atomizes a seven-bit command without segmentation: every byte is its own atom,
 // except \r\n, which is one hard break. Reports false and an empty slice when any byte is outside ASCII;
 // the caller then takes the general (uniseg) path over the complete buffer. No prefix is retained on failure.
@@ -1044,9 +1055,6 @@ func asciiAtomsInto(dst []DisplayAtom, command SourceText) ([]DisplayAtom, bool)
 		b := command[i]
 		atom := DisplayAtom{SourceStart: ByteOffset(i), SourceEnd: ByteOffset(i + 1)}
 		switch {
-		case b >= 0x20 && b <= 0x7e:
-			atom.Width = 1
-			atom.Kind = AtomAscii
 		case b == '\n':
 			atom.Width = 0
 			atom.Kind = AtomHardBreak
@@ -1055,16 +1063,45 @@ func asciiAtomsInto(dst []DisplayAtom, command SourceText) ([]DisplayAtom, bool)
 			atom.SourceEnd++
 			atom.Kind = AtomHardBreak
 			i++
-		case b == '\t':
-			atom.Width = UnresolvedWidth
-			atom.Kind = AtomControl
 		default:
-			atom.Width = 2
-			atom.Kind = AtomControl
+			atom.Width, atom.Kind = asciiAtom(b)
 		}
 		atoms = append(atoms, atom)
 	}
 	return atoms, true
+}
+
+func isC1(cluster string) bool {
+	return len(cluster) == 2 && cluster[0] == 0xc2 && cluster[1] < 0xa0
+}
+
+// segmentAtomsInto atomizes any command by extended grapheme cluster,
+// so a combining mark joins its ASCII base. Grapheme widths (and the tab glyph) are
+// left unresolved for the width cache to fill before layout.
+// Lone invalid bytes and C1 controls become fixed one-cell placeholders; they are never measured or painted raw.
+func segmentAtomsInto(dst []DisplayAtom, command SourceText) []DisplayAtom {
+	atoms := dst[:0]
+	rest := string(command)
+	offset := 0
+	state := -1
+	var cluster string
+	for len(rest) > 0 {
+		cluster, rest, _, state = uniseg.FirstGraphemeClusterInString(rest, state)
+		atom := DisplayAtom{SourceStart: ByteOffset(offset), SourceEnd: ByteOffset(offset + len(cluster))}
+		switch {
+		case cluster == "\n" || cluster == "\r\n":
+			atom.Width, atom.Kind = 0, AtomHardBreak
+		case len(cluster) == 1 && cluster[0] < 0x80:
+			atom.Width, atom.Kind = asciiAtom(cluster[0])
+		case len(cluster) == 1 || isC1(cluster):
+			atom.Width, atom.Kind = 1, AtomPlaceholder
+		default:
+			atom.Width, atom.Kind = UnresolvedWidth, AtomGrapheme
+		}
+		atoms = append(atoms, atom)
+		offset += len(cluster)
+	}
+	return atoms
 }
 
 type RowEnd int

@@ -541,3 +541,38 @@ func checkLayoutProperties(t *testing.T, text string, cursor int, terminalWidth 
 		t.Errorf("PendingWrap = %v, but last row width = %d, terminal width = %d", r.PendingWrap, rows[len(rows)-1].Width, terminalWidth)
 	}
 }
+
+func TestSegmentAtomsInto(t *testing.T) {
+	command := SourceText("e\u0301\t\r\n\x00\xff\u0085🇺🇸🇺🇸")
+	got := segmentAtomsInto(nil, command)
+	want := []DisplayAtom{
+		{SourceStart: 0, SourceEnd: 3, Width: UnresolvedWidth, Kind: AtomGrapheme},   // e + combining acute
+		{SourceStart: 3, SourceEnd: 4, Width: UnresolvedWidth, Kind: AtomControl},    // tab
+		{SourceStart: 4, SourceEnd: 6, Width: 0, Kind: AtomHardBreak},                // \r\n
+		{SourceStart: 6, SourceEnd: 7, Width: 2, Kind: AtomControl},                  // NUL
+		{SourceStart: 7, SourceEnd: 8, Width: 1, Kind: AtomPlaceholder},              // invalid byte
+		{SourceStart: 8, SourceEnd: 10, Width: 1, Kind: AtomPlaceholder},             // C1 NEL
+		{SourceStart: 10, SourceEnd: 18, Width: UnresolvedWidth, Kind: AtomGrapheme}, // first flag
+		{SourceStart: 18, SourceEnd: 26, Width: UnresolvedWidth, Kind: AtomGrapheme}, // second flag
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("atoms = %+v, want %+v", got, want)
+	}
+
+	wantText := []string{"e\u0301", "\u25B8", "", "^@", "?", "?", "🇺🇸", "🇺🇸"}
+	for i, atom := range got {
+		if s := atom.displayText(command); s != wantText[i] {
+			t.Errorf("atom %d displayText = %q, want %q", i, s, wantText[i])
+		}
+	}
+
+	// Both atomizers agree on seven-bit input.
+	ascii := SourceText("a\t\x1a\r\nb\x7f")
+	fromAscii, ok := asciiAtomsInto(nil, ascii)
+	if !ok {
+		t.Fatal("expected seven-bit input")
+	}
+	if fromGeneral := segmentAtomsInto(nil, ascii); !slices.Equal(fromAscii, fromGeneral) {
+		t.Errorf("ascii path %+v != general path %+v", fromAscii, fromGeneral)
+	}
+}
