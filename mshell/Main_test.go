@@ -279,6 +279,45 @@ func sumTestWidths(text string, widthOf func(string) int) int {
 	return total
 }
 
+func TestPrintableAsciiLayout(t *testing.T) {
+	// Five columns, with the prompt occupying the first three.
+	r := layoutPrintableAsciiInto(nil, "ab", 2, 3, 5)
+	want := []LayoutRow{
+		{Text: "ab", Width: 2, EndType: RowEndFinal},
+	}
+	if !slices.Equal(r.Rows, want) {
+		t.Fatalf("rows = %+v, want %+v", r.Rows, want)
+	}
+	if r.CursorRow != 0 || r.CursorCol != 5 || !r.PendingWrap {
+		t.Errorf("exact fill = %+v", r)
+	}
+
+	// More text makes the same cursor offset belong to the next row.
+	r = layoutPrintableAsciiInto(nil, "abc", 2, 3, 5)
+	want = []LayoutRow{
+		{Text: "ab", Width: 2, EndType: RowEndSoftExact},
+		{Text: "c", Width: 1, EndType: RowEndFinal},
+	}
+	if !slices.Equal(r.Rows, want) {
+		t.Fatalf("rows = %+v, want %+v", r.Rows, want)
+	}
+	if r.CursorRow != 1 || r.CursorCol != 0 || r.PendingWrap {
+		t.Errorf("wrap boundary = %+v", r)
+	}
+
+	// Empty input keeps the cursor immediately after the prompt.
+	r = layoutPrintableAsciiInto(nil, "", 0, 3, 5)
+	want = []LayoutRow{
+		{Text: "", Width: 0, EndType: RowEndFinal},
+	}
+	if !slices.Equal(r.Rows, want) {
+		t.Fatalf("rows = %+v, want %+v", r.Rows, want)
+	}
+	if r.CursorRow != 0 || r.CursorCol != 3 || r.PendingWrap {
+		t.Errorf("empty command = %+v", r)
+	}
+}
+
 func TestLayout(t *testing.T) {
 	widthOf := testWidthLookup(map[string]int{"世": 2,})
 
@@ -574,5 +613,49 @@ func TestSegmentAtomsInto(t *testing.T) {
 	}
 	if fromGeneral := segmentAtomsInto(nil, ascii); !slices.Equal(fromAscii, fromGeneral) {
 		t.Errorf("ascii path %+v != general path %+v", fromAscii, fromGeneral)
+	}
+}
+
+func TestWidthResolution(t *testing.T) {
+	command := SourceText("😀😀🚀🍕\n")
+	atoms := segmentAtomsInto(nil, command)
+	original := slices.Clone(atoms)
+	cache := &WidthCache{}
+
+	if !cache.remember("🚀", 2) {
+		t.Fatal("could not cache rocket width")
+	}
+
+	misses := resolveCachedWidths(nil, command, atoms, cache)
+	if !slices.Equal(misses, []string{"😀", "🍕"}) {
+		t.Fatalf("misses = %q, want smile and pizza once each", misses)
+	}
+	if atoms[2].Width != 2 {
+		t.Error("cached rocket width was not applied")
+	}
+
+	// Simulate successful measurement of the smile, but not the pizza.
+	if !cache.remember("😀", 2) {
+		t.Fatal("could not cache smile width")
+	}
+	finishWidthResolution(command, atoms, cache)
+
+	wantWidths := []Cells{2, 2, 2, 1, 0}
+	for i, atom := range atoms {
+		if atom.Width != wantWidths[i] {
+			t.Errorf("atom %d width = %d, want %d", i, atom.Width, wantWidths[i])
+		}
+		if atom.SourceStart != original[i].SourceStart ||
+			atom.SourceEnd != original[i].SourceEnd {
+			t.Errorf("atom %d source range changed", i)
+		}
+
+		wantKind := original[i].Kind
+		if i == 3 {
+			wantKind = AtomPlaceholder
+		}
+		if atom.Kind != wantKind {
+			t.Errorf("atom %d kind = %v, want %v", i, atom.Kind, wantKind)
+		}
 	}
 }

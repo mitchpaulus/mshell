@@ -971,7 +971,7 @@ type TermState struct {
 type SourceText string
 type ByteOffset int
 type Cells int
-const UnresolvedWidth Cells = 0
+const UnresolvedWidth Cells = -1
 
 type AtomKind int
 
@@ -1012,6 +1012,33 @@ func (a DisplayAtom) displayText(src SourceText) string {
 type WidthCache struct {
 	Epoch uint64
 	Entries map[string]Cells
+}
+
+const maxWidthCacheEntries = 4096
+const maxWidthProbes = 256
+const maxWidthCandidateBytes = 256
+
+// remember accepts a validated measurement of complete display text.
+// It returns false for unsupported widths, conflicting entries, or a full cache.
+func (cache *WidthCache) remember(text string, width Cells) bool {
+	if len(text) == 0 || len(text) > maxWidthCandidateBytes || (width != 1 && width != 2) {
+		return false
+	}
+
+	if previous, ok := cache.Entries[text]; ok {
+		return previous == width
+	}
+
+	if len(cache.Entries) >= maxWidthCacheEntries {
+		return false
+	}
+
+	if cache.Entries == nil {
+		cache.Entries = make(map[string]Cells)
+	}
+
+	cache.Entries[strings.Clone(text)] = width
+	return true
 }
 
 var caretText [32]string
@@ -1071,6 +1098,65 @@ func asciiAtomsInto(dst []DisplayAtom, command SourceText) ([]DisplayAtom, bool)
 	return atoms, true
 }
 
+func isAllPrintableAscii(command SourceText) bool {
+	for i := 0; i < len(command); i++ {
+		if command[i] < 0x20 || command[i] > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
+// layoutPrintableAsciiInto requires printable ASCII, columns >= 2,
+// 0 <= startCol < columns, and 0 <= cursor <= len(command).
+func layoutPrintableAsciiInto(dst []LayoutRow, command SourceText, cursor ByteOffset, startCol Cells, columns Cells) LayoutResult {
+	if columns < 2 || startCol < 0 || startCol >= columns {
+		panic("layoutPrintableAsciiInto: invalid terminal geometry")
+	}
+	if cursor < 0 || int(cursor) > len(command) {
+		panic("layoutPrintableAsciiInto: cursor outside command")
+	}
+
+	rows := dst[:0]
+	res := LayoutResult{}
+	start := ByteOffset(0)
+	col := startCol
+
+	for {
+		count := min(len(command)-int(start), int(columns-col))
+		end := start + ByteOffset(count)
+		final := int(end) == len(command)
+
+		endType := RowEndSoftExact
+		if final {
+			endType = RowEndFinal
+		}
+
+		if cursor >= start && (cursor < end || final) {
+			res.CursorRow = len(rows)
+			res.CursorCol = int(col) + int(cursor-start)
+		}
+
+		rows = append(rows, LayoutRow{
+			Text:    string(command[start:end]),
+			Width:   count,
+			EndType: endType,
+		})
+
+		if final {
+			res.PendingWrap = col+Cells(count) == columns
+			break
+		}
+
+		start = end
+		col = 0
+	}
+
+	res.Rows = rows
+	return res
+}
+
+
 func isC1(cluster string) bool {
 	return len(cluster) == 2 && cluster[0] == 0xc2 && cluster[1] < 0xa0
 }
@@ -1102,6 +1188,69 @@ func segmentAtomsInto(dst []DisplayAtom, command SourceText) []DisplayAtom {
 		offset += len(cluster)
 	}
 	return atoms
+}
+
+// resolveCachedWidths updates atoms in place and returns distinct cache misses.
+// Hard breaks remain zero-width. Uncached display text remains unresolved.
+func resolveCachedWidths(dst []string, command SourceText, atoms []DisplayAtom, cache *WidthCache) []string {
+	clear(dst)
+	misses := dst[:0]
+	seen := make(map[string]bool)
+	limit := min(maxWidthProbes, max(0, maxWidthCacheEntries - len(cache.Entries)))
+
+	for i := range atoms {
+		atom := &atoms[i]
+		if atom.Width != UnresolvedWidth {
+			continue
+		}
+
+		text := atom.displayText(command)
+		if len(text) > maxWidthCandidateBytes {
+			continue
+		}
+
+		if width, ok := cache.Entries[text]; ok {
+			atom.Width = width
+			continue
+		}
+
+		if len(misses) >= limit {
+			continue
+		}
+
+		if !seen[text] {
+			seen[text] = true
+			misses = append(misses, text)
+		}
+	}
+
+	return misses
+}
+
+// finishWidthResolution applies newly cached widths and replaces remaining
+// unresolved display atoms with placeholders, preserving their source ranges.
+func finishWidthResolution(command SourceText, atoms []DisplayAtom, cache *WidthCache) {
+	for i := range atoms {
+		atom := &atoms[i]
+		if atom.Width != UnresolvedWidth {
+			continue
+		}
+
+		text := atom.displayText(command)
+
+		if len(text) > maxWidthCandidateBytes {
+			atom.Kind = AtomPlaceholder
+			atom.Width = 1
+			continue
+		}
+
+		if width, ok := cache.Entries[text]; ok {
+			atom.Width = width
+		} else {
+			atom.Kind = AtomPlaceholder
+			atom.Width = 1
+		}
+	}
 }
 
 type RowEnd int
