@@ -2947,9 +2947,10 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 						}
 
 						if c >= 64 && c <= 126 {
-							if len(byteArray) == 3 && byteArray[0] == 51 && byteArray[1] == 59 && byteArray[2] == 53 {
+							if c == '~' && len(byteArray) == 3 &&
+								byteArray[0] == '3' && byteArray[1] == ';' && byteArray[2] == '5' {
 								return KEY_CTRL_DELETE, nil
-							} else if len(byteArray) == 1 && byteArray[0] == 51 {
+							} else if c == '~' && len(byteArray) == 1 && byteArray[0] == '3' {
 								return KEY_DELETE, nil
 							} else {
 								// fmt.Fprintf(f, "Sent CSI token: %d %d\n", c, byteArray)

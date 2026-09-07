@@ -840,3 +840,40 @@ func TestLayoutAtomsRejectsInvalidCursor(t *testing.T) {
 		})
 	}
 }
+
+func TestInteractiveLexerDeleteRequiresTilde(t *testing.T) {
+	tests := []struct {
+		name string
+		sequence string
+		want TerminalToken
+	}{
+		{"delete", "\x1b[3~", KEY_DELETE},
+		{"ctrl delete", "\x1b[3;5~", KEY_CTRL_DELETE},
+		{"cursor report", "\x1b[3;5R", CsiToken{FinalChar: 'R', Params: []byte("3;5")}},
+		{"incomplete report parameters", "\x1b[3R", CsiToken{FinalChar: 'R', Params: []byte("3")}},
+		{"other CSI with one parameter", "\x1b[3A", CsiToken{FinalChar: 'A', Params: []byte("3")}},
+		{"other CSI with two parameters", "\x1b[3;5A", CsiToken{FinalChar: 'A', Params: []byte("3;5")}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Preload a complete sequence and a following key; no terminal I/O is needed.
+			input := []byte(tt.sequence + "x")
+			reader := &StdinReaderState{array: input, n: len(input)}
+			state := &TermState{}
+			got, err := state.InteractiveLexer(reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("token = %#v, want %#v", got, tt.want)
+			}
+			if reader.i != len(tt.sequence) {
+				t.Fatalf("consumed %d bytes, want %d", reader.i, len(tt.sequence))
+			}
+			got, err = state.InteractiveLexer(reader)
+			if err != nil || !reflect.DeepEqual(got, AsciiToken{Char: 'x'}) {
+				t.Fatalf("following key = %#v, error = %v", got, err)
+			}
+		})
+	}
+}
