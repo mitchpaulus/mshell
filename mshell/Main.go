@@ -1334,6 +1334,74 @@ func layoutAtomRowsInto(dst []LayoutRow, atoms []DisplayAtom, startCol Cells, co
 	return rows
 }
 
+func layoutAtomsInto(dst []LayoutRow, atoms []DisplayAtom, cursor ByteOffset, startCol Cells, columns Cells) LayoutResult {
+	if len(atoms) == 0 {
+		if columns < 2 || startCol < 0 || startCol >= columns {
+			panic("layoutAtomsInto: invalid terminal geometry")
+		}
+		if cursor != 0 {
+			panic("layoutAtomsInto: cursor outside command")
+		}
+
+		return LayoutResult{
+			Rows: append(dst[:0], LayoutRow{
+				EndType: RowEndFinal,
+			}),
+			CursorCol: startCol,
+		}
+	}
+
+	rows := layoutAtomRowsInto(dst, atoms, startCol, columns)
+	res := LayoutResult{Rows: rows}
+
+	sourceEnd := atoms[len(atoms) - 1].SourceEnd
+
+	if cursor < 0 {
+		panic(fmt.Sprintf("cursor < 0; cursor=%d", cursor))
+	} else if cursor > sourceEnd {
+		panic(fmt.Sprintf("cursor %d is beyond source end %d", cursor, sourceEnd))
+	}
+
+	lastCol := rows[len(rows) - 1].Width
+	if len(rows) == 1 {
+		lastCol += startCol // Remember we might not have started at 0 from prompt.
+	}
+	res.PendingWrap = lastCol == columns
+
+	for i, row := range rows {
+		col := Cells(0)
+		if i == 0 {
+			col = startCol
+		}
+
+		for j := row.AtomStart; j < row.AtomEnd; j++ {
+			atom := atoms[j]
+			if cursor == atom.SourceStart {
+				res.CursorRow = RowIndex(i)
+				res.CursorCol = col
+				return res
+			}
+			col += atom.Width
+		}
+
+		// The gap before a newline belongs to the row it ends.
+		if row.EndType == RowEndHard && cursor == atoms[row.AtomEnd].SourceStart {
+			// atoms[row.AtomEnd] is the newline atom excluded from this row.
+			res.CursorRow = RowIndex(i)
+			res.CursorCol = col
+			return res
+		}
+
+		if row.EndType == RowEndFinal && cursor == sourceEnd {
+			res.CursorRow = RowIndex(i)
+			res.CursorCol = col
+			return res
+		}
+	}
+
+	panic(fmt.Sprintf("layoutAtomsInto: cursor %d not found in any row (source end %d)", cursor, sourceEnd))
+}
+
 func layoutInto(dst []LayoutRow, text string, cursor int, width int, widthOf func(string) int) LayoutResult {
 	if width < 1 {
 		width = 1

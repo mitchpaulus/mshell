@@ -659,3 +659,184 @@ func TestWidthResolution(t *testing.T) {
 		}
 	}
 }
+
+func TestLayoutAtomsHardBreakCursor(t *testing.T) {
+	// The prompt occupies three of five columns.
+	// "ab" fills row zero; the newline creates an empty final row.
+	atoms := segmentAtomsInto(nil, SourceText("ab\n"))
+
+	wantRows := []LayoutRow{
+		{AtomStart: 0, AtomEnd: 2, Width: 2, EndType: RowEndHard},
+		{AtomStart: 3, AtomEnd: 3, Width: 0, EndType: RowEndFinal},
+	}
+
+	tests := []struct {
+		name   string
+		cursor ByteOffset
+		row    RowIndex
+		col    Cells
+	}{
+		{"before a", 0, 0, 3},
+		{"before b", 1, 0, 4},
+		{"before newline", 2, 0, 5},
+		{"after newline", 3, 1, 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := layoutAtomsInto(nil, atoms, tt.cursor, 3, 5)
+
+			if !slices.Equal(got.Rows, wantRows) {
+				t.Fatalf("rows = %+v, want %+v", got.Rows, wantRows)
+			}
+			if got.CursorRow != tt.row || got.CursorCol != tt.col {
+				t.Errorf("cursor = (%d, %d), want (%d, %d)",
+					got.CursorRow, got.CursorCol, tt.row, tt.col)
+			}
+			if got.PendingWrap {
+				t.Error("empty final row must not have pending wrap")
+			}
+		})
+	}
+}
+
+func TestLayoutAtomsSoftEarlyCursor(t *testing.T) {
+	// Explicit resolved widths isolate layout from segmentation and measurement.
+	atoms := []DisplayAtom{
+		{SourceStart: 0, SourceEnd: 1, Width: 1, Kind: AtomAscii},
+		{SourceStart: 1, SourceEnd: 4, Width: 2, Kind: AtomGrapheme},
+		{SourceStart: 4, SourceEnd: 5, Width: 1, Kind: AtomAscii},
+	}
+
+	wantRows := []LayoutRow{
+		{AtomStart: 0, AtomEnd: 1, Width: 1, EndType: RowEndSoftEarly},
+		{AtomStart: 1, AtomEnd: 3, Width: 3, EndType: RowEndFinal},
+	}
+
+	tests := []struct {
+		name   string
+		cursor ByteOffset
+		row    RowIndex
+		col    Cells
+	}{
+		{"before a", 0, 0, 3},
+		{"before wide atom", 1, 1, 0},
+		{"after wide atom", 4, 1, 2},
+		{"end of command", 5, 1, 3},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := layoutAtomsInto(nil, atoms, tt.cursor, 3, 5)
+
+			if !slices.Equal(got.Rows, wantRows) {
+				t.Fatalf("rows = %+v, want %+v", got.Rows, wantRows)
+			}
+			if got.CursorRow != tt.row || got.CursorCol != tt.col {
+				t.Errorf("cursor = (%d, %d), want (%d, %d)",
+					got.CursorRow, got.CursorCol, tt.row, tt.col)
+			}
+			if got.PendingWrap {
+				t.Error("partially filled final row must not have pending wrap")
+			}
+		})
+	}
+}
+
+func TestLayoutAtomsMatchesPrintableAscii(t *testing.T) {
+	for length := 0; length <= 20; length++ {
+		command := SourceText(strings.Repeat("x", length))
+		atoms := segmentAtomsInto(nil, command)
+
+		for columns := Cells(2); columns <= 8; columns++ {
+			for startCol := Cells(0); startCol < columns; startCol++ {
+				for cursor := ByteOffset(0); cursor <= ByteOffset(length); cursor++ {
+					direct := layoutPrintableAsciiInto(nil, command, cursor, startCol, columns)
+					general := layoutAtomsInto(nil, atoms, cursor, startCol, columns)
+
+					if direct.CursorRow != general.CursorRow ||
+						direct.CursorCol != general.CursorCol ||
+						direct.PendingWrap != general.PendingWrap {
+						t.Fatalf(
+							"length=%d columns=%d startCol=%d cursor=%d: direct=%+v general=%+v",
+							length, columns, startCol, cursor, direct, general)
+					}
+
+					if len(direct.Rows) != len(general.Rows) {
+						t.Fatalf("row count: direct=%d general=%d",
+							len(direct.Rows), len(general.Rows))
+					}
+
+					nextAtom := AtomIndex(0)
+					for i, want := range direct.Rows {
+						got := general.Rows[i]
+						endAtom := nextAtom + AtomIndex(len(want.Text))
+
+						if got.AtomStart != nextAtom || got.AtomEnd != endAtom ||
+							got.Width != want.Width || got.EndType != want.EndType {
+							t.Fatalf(
+								"length=%d columns=%d startCol=%d row=%d: direct=%+v general=%+v",
+								length, columns, startCol, i, want, got)
+						}
+
+						nextAtom = endAtom
+					}
+				}
+			}
+		}
+	}
+}
+
+// This test if the prompt basically filled the entire first row.
+func TestLayoutAtomsEmptyFirstRow(t *testing.T) {
+	atoms := []DisplayAtom{
+		{SourceStart: 0, SourceEnd: 3, Width: 2, Kind: AtomGrapheme},
+	}
+
+	got := layoutAtomsInto(nil, atoms, 0, 4, 5)
+
+	wantRows := []LayoutRow{
+		{AtomStart: 0, AtomEnd: 0, Width: 0, EndType: RowEndSoftEarly},
+		{AtomStart: 0, AtomEnd: 1, Width: 2, EndType: RowEndFinal},
+	}
+
+	if !slices.Equal(got.Rows, wantRows) {
+		t.Fatalf("rows = %+v, want %+v", got.Rows, wantRows)
+	}
+	if got.CursorRow != 1 || got.CursorCol != 0 {
+		t.Errorf("cursor = (%d, %d), want (1, 0)",
+			got.CursorRow, got.CursorCol)
+	}
+	if got.PendingWrap {
+		t.Error("partially filled final row must not have pending wrap")
+	}
+}
+
+func TestLayoutAtomsRejectsInvalidCursor(t *testing.T) {
+	// One complete grapheme: "e" + combining acute accent.
+	atoms := []DisplayAtom{
+		{SourceStart: 0, SourceEnd: 3, Width: 1, Kind: AtomGrapheme},
+	}
+
+	tests := []struct {
+		name   string
+		cursor ByteOffset
+	}{
+		{"negative offset", -1},
+		{"inside grapheme", 1},
+		{"inside UTF-8 codepoint", 2},
+		{"past source end", 4},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("cursor %d: expected panic", tt.cursor)
+				}
+			}()
+
+			layoutAtomsInto(nil, atoms, tt.cursor, 0, 5)
+		})
+	}
+}
