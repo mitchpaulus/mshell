@@ -11,6 +11,47 @@ import (
 	"slices"
 )
 
+func TestParseCursorReport(t *testing.T) {
+	valid := []struct {
+		params string
+		want CursorReport
+	}{
+		{"1;1", CursorReport{Row: 1, Column: 1}},
+		{"12;34", CursorReport{Row: 12, Column: 34}},
+		{"3;5", CursorReport{Row: 3, Column: 5}},
+		{"0001;0020", CursorReport{Row: 1, Column: 20}},
+		{"9999;9999", CursorReport{Row: 9999, Column: 9999}},
+	}
+	for _, tt := range valid {
+		t.Run(tt.params, func(t *testing.T) {
+			got, err := parseCursorReport(CsiToken{FinalChar: 'R', Params: []byte(tt.params)})
+			if err != nil || got != tt.want {
+				t.Fatalf("got %+v, error %v; want %+v", got, err, tt.want)
+			}
+		})
+	}
+
+	invalid := []string{
+		"", "1", ";", ";1", "1;", "1;2;3", "1;;2", "1;2;",
+		"0;1", "1;0", "000;1", "1;000",
+		"-1;2", "1;-2", "+1;2", "1;+2", " 1;2", "1;2 ",
+		"1:2", "?1;2", "1;2\n", "1;\x00", "1;\xff", "１;2",
+		"10000;1", "1;10000", "99990;1", "1;99990",
+		strings.Repeat("9", 100) + ";1", "1;" + strings.Repeat("9", 100),
+	}
+	for _, params := range invalid {
+		t.Run(params, func(t *testing.T) {
+			got, err := parseCursorReport(CsiToken{FinalChar: 'R', Params: []byte(params)})
+			if err == nil || got != (CursorReport{}) {
+				t.Fatalf("invalid report returned %+v, error %v", got, err)
+			}
+		})
+	}
+	if got, err := parseCursorReport(CsiToken{FinalChar: '~', Params: []byte("3;5")}); err == nil || got != (CursorReport{}) {
+		t.Fatalf("Delete key parsed as report: %+v, error %v", got, err)
+	}
+}
+
 func TestHistory(t *testing.T) {
 	path := "test.mshell_history"
 	_ = WriteToHistory(os.Getenv("HOME"), "echo hello", path)

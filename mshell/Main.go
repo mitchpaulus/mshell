@@ -2598,6 +2598,50 @@ type CsiToken struct {
 	Params    []byte
 }
 
+// OneBasedTerminalCoord is a terminal-reported row or column, starting at 1.
+type OneBasedTerminalCoord int
+
+// This is a supported-terminal limit, not a limit imposed by the CSI protocol.
+const maxTerminalCoordinate OneBasedTerminalCoord = 9999
+
+type CursorReport struct {
+	Row    OneBasedTerminalCoord
+	Column OneBasedTerminalCoord
+}
+
+func parseCursorReport(token CsiToken) (CursorReport, error) {
+	if token.FinalChar != 'R' {
+		return CursorReport{}, fmt.Errorf("cursor report: expected final R")
+	}
+
+	var coordinates [2]OneBasedTerminalCoord
+	field := 0
+	for _, b := range token.Params {
+		if b == ';' {
+			if field != 0 || coordinates[0] == 0 {
+				return CursorReport{}, fmt.Errorf("cursor report: expected positive row;column")
+			}
+			field = 1
+			continue
+		}
+		if b < '0' || b > '9' {
+			return CursorReport{}, fmt.Errorf("cursor report: invalid coordinate byte %q", b)
+		}
+
+		// Each previous value is at most 9999, so this cannot overflow an int.
+		value := coordinates[field]*10 + OneBasedTerminalCoord(b-'0')
+		if value > maxTerminalCoordinate {
+			return CursorReport{}, fmt.Errorf("cursor report: coordinate exceeds %d", maxTerminalCoordinate)
+		}
+		coordinates[field] = value
+	}
+	if field != 1 || coordinates[1] == 0 {
+		return CursorReport{}, fmt.Errorf("cursor report: expected positive row;column")
+	}
+
+	return CursorReport{Row: coordinates[0], Column: coordinates[1]}, nil
+}
+
 func (t CsiToken) String() string {
 	chars := make([]string, len(t.Params))
 	for i, b := range t.Params {
