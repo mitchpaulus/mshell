@@ -2694,7 +2694,7 @@ func parseCursorReport(token CsiToken) (CursorReport, error) {
 }
 
 // widthFromCursorReport interprets a probe started at column one.
-// The caller must use a cleared scratch row and at least three columns.
+// The caller must use a cleared scratch row and at least four columns.
 // This validates one observation; it does not update the width cache.
 func widthFromCursorReport(report CursorReport, scratchRow OneBasedTerminalCoord) (Cells, error) {
 	if scratchRow < 1 || scratchRow > maxTerminalCoordinate {
@@ -2712,6 +2712,41 @@ func widthFromCursorReport(report CursorReport, scratchRow OneBasedTerminalCoord
 	default:
 		return 0, fmt.Errorf("width probe: unsupported reply column %d", report.Column)
 	}
+}
+
+type WidthProbeBatch struct {
+	ScratchRow OneBasedTerminalCoord
+	Candidates []string // Frozen in the order probes were sent.
+	Widths []Cells      // Staged observations, matching Candidates.
+	Failure error       // First failure; prevents accepting further results.
+}
+
+// acceptReply receives a token routed to this batch by the query coordinator.
+// Ordinary keyboard tokens must be handled separately.
+func (batch *WidthProbeBatch) acceptReply(token CsiToken) error {
+	if batch.Failure != nil {
+		return batch.Failure
+	}
+
+	if len(batch.Widths) >= len(batch.Candidates) {
+		batch.Failure = fmt.Errorf("width batch: unexpected extra reply")
+		return batch.Failure
+	}
+
+	report, err := parseCursorReport(token)
+	if err != nil {
+		batch.Failure = err
+		return err
+	}
+
+	width, err := widthFromCursorReport(report, batch.ScratchRow)
+	if err != nil {
+		batch.Failure = err
+		return err
+	}
+
+	batch.Widths = append(batch.Widths, width)
+	return nil
 }
 
 func (t CsiToken) String() string {
