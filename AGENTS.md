@@ -86,6 +86,7 @@ For markdown files, prefer to have sentences on their own line.
 Only wrap really long lines, and try to wrap on a comma or other punctuation.
 
 Also update the `doc/mshell.md` markdown file. This is documentation for agents like yourself.
+The `doc/mshell.html` file is generated, do not edit.
 
 ## VS Code
 

@@ -15,6 +15,20 @@ Instead of it being the main syntactical construct, in `mshell` you build up a l
 ['my-program' 'arg1' 'arg2'];
 ```
 
+An important feature is that nested lists are flattened before execution.
+
+```
+['my-cmd' ['a.pdf' 'b.pdf']]! # Executes: my-cmd a.pdf b.pdf
+```
+
+This is most useful when you have a command or definition that *produces* a list of arguments.
+You can just leave that nested list on the stack and it all works out.
+
+```
+# Assume myVar variable is a list with ['1.pdf' '2.pdf']
+['my-cmd' @myVar]! # Executes: my-cmd 1.pdf 2.pdf
+```
+
 Often there are different things you want out of your execution, or you want different behavior depending on the exit code.
 `mshell` gives you full flexibility to decide with concise syntax.
 
