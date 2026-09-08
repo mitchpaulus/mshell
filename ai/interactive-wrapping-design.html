@@ -426,7 +426,7 @@ footer {
     </article>
     <article class="card">
       <h3>Assumption C</h3>
-      <p>The width of a complete printable cluster is stable during one terminal-width cache epoch.</p>
+      <p>Supported terminals preserve accepted grapheme boundaries, and an accepted cluster has the same cell advance in the probe and in surrounding text throughout one terminal-width cache epoch.</p>
     </article>
     <article class="card">
       <h3>Assumption D</h3>
@@ -436,7 +436,9 @@ footer {
 
   <p>
     These are runtime contracts, not universal claims about Unicode or every historical terminal.
-    Violations are detected and have a defined fallback.
+    Invalid cursor reports and unsupported observed advances have a defined fallback.
+    CPR reports cursor position, not screen contents; it cannot prove visual isolation or context-independent width.
+    Those remain supported-terminal assumptions, not properties established by a successful probe.
   </p>
 
   <h3>Terminology</h3>
@@ -550,7 +552,7 @@ type WidthCache struct {
 
 <section id="oracle">
   <span class="section-number">03</span>
-  <h2>The width oracle has four answers</h2>
+  <h2>Check eligibility, then resolve width</h2>
 
   <table>
     <thead>
@@ -558,9 +560,10 @@ type WidthCache struct {
     </thead>
     <tbody>
       <tr><td>Printable ASCII</td><td>One cell per byte.</td><td>None.</td></tr>
-      <tr><td>C0 control or DEL other than tab</td><td>Two-cell ASCII caret notation.</td><td>None.</td></tr>
-      <tr><td>Cached non-ASCII cluster</td><td>The previously observed one- or two-cell width.</td><td>None.</td></tr>
-      <tr><td>Unknown non-ASCII cluster</td><td>Measure it, validate it, then cache the exact byte string.</td><td>One DSR/CPR observation.</td></tr>
+      <tr><td>C0 control or DEL other than tab and hard breaks</td><td>Two-cell ASCII caret notation.</td><td>None.</td></tr>
+      <tr><td>Ineligible measurement candidate</td><td>A fixed one-cell ASCII placeholder, preserving source offsets.</td><td>None.</td></tr>
+      <tr><td>Eligible cluster with cached width</td><td>The previously observed one- or two-cell width.</td><td>None.</td></tr>
+      <tr><td>Eligible cluster with unknown width</td><td>Measure it, validate it, then cache the exact byte string.</td><td>One DSR/CPR observation when geometry and resource limits permit.</td></tr>
     </tbody>
   </table>
 
@@ -584,6 +587,31 @@ type WidthCache struct {
     After every edit, derive boundaries again; edits can change segmentation, particularly for regional indicators and joiner sequences.
   </p>
 
+  <h3>Candidate eligibility is a separate cached decision</h3>
+  <p>
+    Uniseg returns boundaries even for degenerate clusters such as a standalone combining accent.
+    It does not return an independently-displayable flag.
+    Before width lookup or measurement, segment <code>"A" + candidate + "A"</code> and require exactly three clusters whose bytes are <code>"A"</code>, the unchanged candidate, and <code>"A"</code>.
+    These sentinels exist only in memory; they are not printed by the terminal probe.
+  </p>
+  <p>
+    For example, <code>e + U+0301</code> remains one separate cluster and passes.
+    A standalone <code>U+0301 COMBINING ACUTE ACCENT</code> joins the preceding sentinel and fails.
+    This is a conservative eligibility policy under uniseg's segmentation rules, not proof of terminal rendering behavior.
+  </p>
+  <p>
+    <code>CandidateEligibilityCache</code> stores both acceptance and rejection by exact candidate bytes.
+    A cached false value must be distinguished from a missing entry.
+    Entries use cloned keys, preventing a small candidate from retaining an entire source buffer.
+    The cache holds at most 4096 entries; empty candidates and candidates longer than 256 bytes are rejected without insertion.
+    Once full, existing decisions remain usable and unseen candidates are rejected without repeating segmentation.
+  </p>
+  <p>
+    Eligibility lasts for the editor session and survives terminal width-cache epoch changes because it depends on the editor's segmentation rules.
+    A measurement timeout does not change an accepted eligibility decision.
+    <code>resolveCachedWidths</code> changes rejected atoms to one-cell placeholders immediately, retaining their source ranges; only eligible candidates proceed to width lookup or the miss list.
+  </p>
+
   <h3>Exact cache keys</h3>
   <p>
     Cache by the exact UTF-8 bytes of the complete cluster.
@@ -599,15 +627,16 @@ type WidthCache struct {
     It also turns measurement validation into a closed check: a result outside one or two is unsupported, not another layout case.
   </p>
 
-  <pre><code>func ResolveGeneralInto(dst []DisplayAtom, command SourceText, cache *WidthCache) ([]DisplayAtom, []string) {
-    atoms := segmentIntoAtoms(dst, command)
-    misses := distinctUncachedClusters(atoms, cache)
+  <pre><code>func ResolveGeneralInto(dst []DisplayAtom, missDst []string, command SourceText,
+    cache *WidthCache, eligibility *CandidateEligibilityCache) ([]DisplayAtom, []string) {
+    atoms := segmentAtomsInto(dst, command)
+    misses := resolveCachedWidths(missDst, command, atoms, cache, eligibility)
     return atoms, misses
 }</code></pre>
 
   <h3>Cache lifetime</h3>
   <p>
-    The cache lives in memory and normally spans prompts.
+    The width cache lives in memory and normally spans prompts.
     It is tied to a width epoch: the period during which mshell owns and reasserts its terminal modes and assumes the terminal's width behavior is stable.
     Start a new epoch after terminal reattachment, resume when state cannot be trusted, or any explicit recalibration command.
     Resize alone does not change cluster width and does not clear the cache.
@@ -655,27 +684,37 @@ type WidthCache struct {
   <h3>Probe from a known cell</h3>
   <p>
     The renderer provides one owned scratch row outside the visible edit contents.
-    Each probe begins at column one, clears pending wrap with CR, writes a known one-cell ASCII sentinel, writes exactly one complete candidate cluster, and requests CPR.
+    Each probe clears pending wrap and moves to column one with CR, clears the scratch row, writes exactly one eligible candidate cluster, and requests CPR.
+    There is no printed ASCII prefix.
   </p>
 
   <pre><code>for cluster in misses:
-    write(CR + EL + "A" + cluster + CPR)
+    write(CR + EL + cluster + CPR)
     write(CR + EL)
 
 // Column numbers are one-based.
-measuredWidth = replyColumn - 2
+measuredWidth = replyColumn - 1
 require replyRow == scratchRow
 require measuredWidth == 1 || measuredWidth == 2</code></pre>
 
   <p>
-    The sentinel forces a clean grapheme boundary for ordinary candidates and makes the arithmetic independent of the cursor position before the scratch transaction.
     Raw newlines, tabs, C0/C1 controls, and ESC never enter this protocol.
-    The generated tab glyph <code>▸</code> may enter as an ordinary measurement candidate.
-    A degenerate cluster that measures zero or modifies the sentinel is not self-contained and is rendered with the failure placeholder instead.
+    The generated tab glyph <code>▸</code> goes through the same eligibility check and width resolution as other candidates.
+    CPR observes cursor advance only; neither the eligibility check nor the probe can detect arbitrary visual changes or prove behavior with every possible neighbor.
   </p>
   <p>
-    This sentinel protocol requires at least four terminal columns: three cells for the sentinel plus a two-cell candidate, and one further column so the probe never ends in pending wrap.
-    At widths two or three, already cached atoms may still be laid out, but new non-ASCII atoms use placeholders until the terminal is wider.
+    This protocol requires at least three terminal columns: two cells for a supported candidate and one further column so a supported probe never ends in pending wrap.
+    At width two, already cached eligible atoms may still be laid out, but unknown widths use placeholders until the terminal is wider.
+  </p>
+  <p>
+    Open protocol issue: on a three-column terminal, an unsupported three-cell candidate can fill the row and leave pending wrap while reporting column three, indistinguishable by CPR from a supported two-cell advance.
+    The three-column minimum therefore avoids pending wrap only under the one-or-two-cell assumption; it does not validate that assumption for arbitrary candidates.
+    Resolve this ambiguity before enabling live probes; the current observation helper does not inspect pending-wrap state.
+  </p>
+  <p>
+    <code>parseCursorReport</code> validates CPR syntax and positive coordinates up to the supported limit of 9999.
+    <code>widthFromCursorReport</code> then requires the expected scratch row and accepts only reply column two (width one) or three (width two).
+    It performs no I/O and makes no cache changes; the batch collector must establish reply ownership and decide whether measurements can be committed.
   </p>
 
   <h3>Scratch-row ownership</h3>
@@ -803,14 +842,21 @@ func LayoutAtomsInto(
     <tbody>
       <tr><td>No CPR support</td><td>Continue exact ASCII editing; display unresolved non-ASCII atoms as a fixed one-cell ASCII placeholder.</td></tr>
       <tr><td>Query timeout</td><td>Cancel the batch, restore the owned terminal region, and use placeholders for unresolved atoms.</td></tr>
-      <tr><td>Width outside 1–2</td><td>Treat the terminal contract as violated for that atom; use a placeholder and log the observed reply.</td></tr>
+      <tr><td>Width outside 1–2</td><td>Reject the observation; never cache the unsupported width. Use a placeholder and log the observed reply.</td></tr>
       <tr><td>Wrong row or malformed reply</td><td>Reject the complete batch. Never populate the cache from ambiguous measurements.</td></tr>
       <tr><td>Probe or cache resource limit</td><td>Use placeholders for overflow candidates; never issue an unbounded batch.</td></tr>
-      <tr><td>Terminal only two or three cells wide</td><td>Do not run the sentinel protocol; cached atoms remain usable and unknown atoms use placeholders.</td></tr>
+      <tr><td>Eligibility rejected or eligibility cache full for an unseen candidate</td><td>Use a placeholder before width lookup or measurement, preserving the original source range.</td></tr>
+      <tr><td>Terminal only two cells wide</td><td>Do not run width probes; cached eligible atoms remain usable and unknown widths use placeholders.</td></tr>
       <tr><td>Terminal narrower than two cells</td><td>Do not paint interactive contents; continue accepting editing keys or report that the terminal is too narrow.</td></tr>
       <tr><td>Untrusted state after resume/reattach</td><td>Start a new cache epoch, re-anchor, and measure future misses again.</td></tr>
     </tbody>
   </table>
+
+  <p>
+    Before implementing the batch collector, settle whether an unsupported width also discards otherwise valid observations from that batch.
+    The current helpers reject the individual observation without committing any cache entry.
+    Wrong-row or malformed replies invalidate the complete batch because reply association is ambiguous.
+  </p>
 
   <p>
     The placeholder changes display text but not source text.
@@ -881,7 +927,15 @@ func LayoutAtomsInto(
 
   <p>
     <code>ai/interactive-wrapping-plan.md</code> and <code>ai/interactive-wrapping-progress.md</code> describe the superseded predictive-width implementation sequence.
-    They must be rewritten before implementation resumes; they are historical notes until then.
+    They are historical notes, not prerequisites or instructions for the current implementation.
+  </p>
+
+  <h3>Current implementation checkpoint</h3>
+  <p>
+    Pure ASCII and atom layout, segmentation, width-cache helpers, and placeholder resolution are implemented.
+    Candidate eligibility is now cached and integrated into width resolution, with a test covering a standalone combining accent and an accent with its base.
+    CPR parsing and conversion to a one-or-two-cell observation are implemented and tested for probes without an ASCII prefix.
+    Session ownership of these caches, the batch collector, terminal probes, and integration with the interactive renderer remain to be implemented.
   </p>
 </section>
 
@@ -901,6 +955,8 @@ func LayoutAtomsInto(
     <li>For every grapheme-boundary cursor position and terminal width at least two, rows stay within bounds and the cursor lands on a valid cell gap.</li>
     <li>Hard breaks, exact soft fills, early soft wraps, trailing newlines, and first-row prompt offsets retain explicit invariants.</li>
     <li>Cache deduplication measures each exact cluster once per epoch.</li>
+    <li>Eligibility accepts an accent with its base and rejects a standalone accent; rejected atoms never enter the probe list and retain their source ranges.</li>
+    <li>Eligibility caches both true and false decisions, survives width-cache epoch changes, and rejects unseen candidates without segmentation when full.</li>
     <li>Probe, cache-entry, and candidate-length limits always produce placeholders rather than unbounded work.</li>
     <li>Editing that changes segmentation re-derives boundaries and does not reuse a cache entry for a different byte string.</li>
     <li>Resolution and layout reuse caller-provided backing arrays without retaining stale atoms or rows.</li>
@@ -919,7 +975,9 @@ func LayoutAtomsInto(
   <ul>
     <li>Several probes are written before any reply is required.</li>
     <li>Replies populate the correct cache keys even when keypress tokens are interleaved.</li>
-    <li>Timeout, malformed reply, wrong row, width zero, and width greater than two leave the cache unchanged.</li>
+    <li>Timeout, malformed reply, and wrong row leave the batch's cache entries uncommitted.</li>
+    <li>Width zero and width greater than two are rejected and never cached; test the treatment of other observations once the batch failure policy is settled.</li>
+    <li>Probes contain no ASCII prefix; reply columns two and three resolve to widths one and two. Width two forbids probes, while width three permits supported candidates without pending wrap.</li>
     <li>A stale generation retains valid measurements but never paints its stale layout.</li>
     <li>The scratch row is cleared and terminal mode is restored on every exit path.</li>
   </ul>

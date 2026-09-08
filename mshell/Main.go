@@ -1190,9 +1190,57 @@ func segmentAtomsInto(dst []DisplayAtom, command SourceText) []DisplayAtom {
 	return atoms
 }
 
+const maxCandidateEligibilityEntries = 4096
+
+type CandidateEligibilityCache struct {
+	Entries map[string]bool
+}
+
+// allows checks segmentation eligibility, not terminal rendering behavior.
+// Cache overflow and oversized candidates conservatively use placeholders.
+func (cache *CandidateEligibilityCache) allows(candidate string) bool {
+	if len(candidate) == 0 || len(candidate) > maxWidthCandidateBytes {
+		return false
+	}
+
+	if allowed, found := cache.Entries[candidate]; found {
+		return allowed
+	}
+
+	if len(cache.Entries) >= maxCandidateEligibilityEntries {
+		return false
+	}
+
+	rest := "A" + candidate + "A"
+	state := -1
+	allowed := true
+
+	for _, expected := range [...]string{"A", candidate, "A"} {
+		if len(rest) == 0 {
+			allowed = false
+			break
+		}
+
+		var cluster string
+		cluster, rest, _, state = uniseg.FirstGraphemeClusterInString(rest, state)
+		if cluster != expected {
+			allowed = false
+			break
+		}
+	}
+
+	allowed = allowed && len(rest) == 0
+
+	if cache.Entries == nil {
+		cache.Entries = make(map[string]bool)
+	}
+	cache.Entries[strings.Clone(candidate)] = allowed
+	return allowed
+}
+
 // resolveCachedWidths updates atoms in place and returns distinct cache misses.
 // Hard breaks remain zero-width. Uncached display text remains unresolved.
-func resolveCachedWidths(dst []string, command SourceText, atoms []DisplayAtom, cache *WidthCache) []string {
+func resolveCachedWidths(dst []string, command SourceText, atoms []DisplayAtom, cache *WidthCache, eligibility *CandidateEligibilityCache) []string {
 	clear(dst)
 	misses := dst[:0]
 	seen := make(map[string]bool)
@@ -1205,7 +1253,10 @@ func resolveCachedWidths(dst []string, command SourceText, atoms []DisplayAtom, 
 		}
 
 		text := atom.displayText(command)
-		if len(text) > maxWidthCandidateBytes {
+		// allows also checks text length
+		if !eligibility.allows(text) {
+			atom.Kind = AtomPlaceholder
+			atom.Width = 1
 			continue
 		}
 
@@ -2640,6 +2691,27 @@ func parseCursorReport(token CsiToken) (CursorReport, error) {
 	}
 
 	return CursorReport{Row: coordinates[0], Column: coordinates[1]}, nil
+}
+
+// widthFromCursorReport interprets a probe started at column one.
+// The caller must use a cleared scratch row and at least three columns.
+// This validates one observation; it does not update the width cache.
+func widthFromCursorReport(report CursorReport, scratchRow OneBasedTerminalCoord) (Cells, error) {
+	if scratchRow < 1 || scratchRow > maxTerminalCoordinate {
+		return 0, fmt.Errorf("width probe: invalid scratch row %d", scratchRow)
+	}
+	if report.Row != scratchRow {
+		return 0, fmt.Errorf("width probe: expected row %d, got %d", scratchRow, report.Row)
+	}
+
+	switch report.Column {
+	case 2:
+		return 1, nil
+	case 3:
+		return 2, nil
+	default:
+		return 0, fmt.Errorf("width probe: unsupported reply column %d", report.Column)
+	}
 }
 
 func (t CsiToken) String() string {

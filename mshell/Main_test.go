@@ -52,6 +52,46 @@ func TestParseCursorReport(t *testing.T) {
 	}
 }
 
+func TestWidthFromCursorReport(t *testing.T) {
+	tests := []struct {
+		name string
+		row OneBasedTerminalCoord
+		column OneBasedTerminalCoord
+		scratchRow OneBasedTerminalCoord
+		want Cells // Zero means an error is expected.
+	}{
+		{"one cell", 5, 2, 5, 1},
+		{"two cells", 5, 3, 5, 2},
+		{"last supported row", 9999, 3, 9999, 2},
+		{"no advance", 5, 1, 5, 0},
+		{"too wide", 5, 4, 5, 0},
+		{"wrong row", 6, 2, 5, 0},
+		{"zero column", 5, 0, 5, 0},
+		{"negative column", 5, -1, 5, 0},
+		{"zero scratch row", 0, 2, 0, 0},
+		{"negative scratch row", -1, 2, -1, 0},
+		{"oversized scratch row", 10000, 2, 10000, 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			report := CursorReport{Row: tt.row, Column: tt.column}
+			got, err := widthFromCursorReport(report, tt.scratchRow)
+
+			if tt.want == 0 {
+				if err == nil || got != 0 {
+					t.Fatalf("got width %d, error %v; want rejection", got, err)
+				}
+				return
+			}
+
+			if err != nil || got != tt.want {
+				t.Fatalf("got width %d, error %v; want %d", got, err, tt.want)
+			}
+		})
+	}
+}
+
 func TestHistory(t *testing.T) {
 	path := "test.mshell_history"
 	_ = WriteToHistory(os.Getenv("HOME"), "echo hello", path)
@@ -667,7 +707,8 @@ func TestWidthResolution(t *testing.T) {
 		t.Fatal("could not cache rocket width")
 	}
 
-	misses := resolveCachedWidths(nil, command, atoms, cache)
+	eligilibily := &CandidateEligibilityCache{}
+	misses := resolveCachedWidths(nil, command, atoms, cache, eligilibily)
 	if !slices.Equal(misses, []string{"😀", "🍕"}) {
 		t.Fatalf("misses = %q, want smile and pizza once each", misses)
 	}
@@ -697,6 +738,44 @@ func TestWidthResolution(t *testing.T) {
 		}
 		if atom.Kind != wantKind {
 			t.Errorf("atom %d kind = %v, want %v", i, atom.Kind, wantKind)
+		}
+	}
+}
+
+func TestWidthResolutionCandidateEligibility(t *testing.T) {
+	command := SourceText("\u0301 e\u0301")
+	atoms := segmentAtomsInto(nil, command)
+	original := slices.Clone(atoms)
+	cache := &WidthCache{}
+	eligibility := &CandidateEligibilityCache{}
+
+	misses := resolveCachedWidths(nil, command, atoms, cache, eligibility)
+	if !slices.Equal(misses, []string{"e\u0301"}) {
+		t.Fatalf("misses = %q, want only the accent with its base", misses)
+	}
+
+	if atoms[0].Kind != AtomPlaceholder || atoms[0].Width != 1 {
+		t.Fatalf("standalone accent was not replaced: %+v", atoms[0])
+	}
+	if atoms[0].displayText(command) != placeholderGlyph {
+		t.Fatal("standalone accent would be painted raw")
+	}
+
+	for candidate, want := range map[string]bool{
+		"\u0301": false,
+		"e\u0301": true,
+	} {
+		got, found := eligibility.Entries[candidate]
+		if !found || got != want {
+			t.Errorf("eligibility[%q] = %v, found %v; want %v",
+				candidate, got, found, want)
+		}
+	}
+
+	for i, atom := range atoms {
+		if atom.SourceStart != original[i].SourceStart ||
+			atom.SourceEnd != original[i].SourceEnd {
+			t.Errorf("atom %d source range changed", i)
 		}
 	}
 }
