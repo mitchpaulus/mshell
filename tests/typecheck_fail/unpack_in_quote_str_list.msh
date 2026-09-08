@@ -1,0 +1,2 @@
+# The pattern pins the subject to a list, and the body treats it as [int]; a list of strings cannot be mapped over it.
+[['a' 'b']] map. => [p q] @p 1 + end str wl

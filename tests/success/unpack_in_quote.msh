@@ -1,0 +1,6 @@
+# `=>` as the first item of a quote body: the subject is the quote's input.
+[[1 2 3] [4 5 6]] map. => [a b c] @b 1 + end str wl
+[[1 2 3]] map. => [first ...rest] @rest len end str wl
+[1 just 2 just] map. => just v @v 10 * end str wl
+[{'name': "Ada", 'age': 36}] map. => {'name': name} @name end str wl
+[[1 2 3]] (=> [a b c] @a @c +) map str wl
