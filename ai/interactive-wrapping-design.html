@@ -436,6 +436,7 @@ footer {
 
   <p>
     These are runtime contracts, not universal claims about Unicode or every historical terminal.
+    Interactive editing and width probing require a terminal at least four columns wide.
     Invalid cursor reports and unsupported observed advances have a defined fallback.
     CPR reports cursor position, not screen contents; it cannot prove visual isolation or context-independent width.
     Those remain supported-terminal assumptions, not properties established by a successful probe.
@@ -623,7 +624,7 @@ type WidthCache struct {
   <h3>Why the two-cell bound matters</h3>
   <p>
     The one-or-two-cell contract removes the old oversized-cluster splitting design completely.
-    A complete non-ASCII grapheme atom always fits on an empty row when the terminal is at least two columns wide.
+    A complete non-ASCII grapheme atom always fits on an empty row at the supported minimum of four terminal columns.
     It also turns measurement validation into a closed check: a result outside one or two is unsupported, not another layout case.
   </p>
 
@@ -703,13 +704,13 @@ require measuredWidth == 1 || measuredWidth == 2</code></pre>
     CPR observes cursor advance only; neither the eligibility check nor the probe can detect arbitrary visual changes or prove behavior with every possible neighbor.
   </p>
   <p>
-    This protocol requires at least three terminal columns: two cells for a supported candidate and one further column so a supported probe never ends in pending wrap.
-    At width two, already cached eligible atoms may still be laid out, but unknown widths use placeholders until the terminal is wider.
+    Four columns is the absolute minimum supported terminal width for both interactive painting and width probing.
+    Below four columns, do not paint interactive contents or issue width probes; continue accepting editing keys or report that the terminal is too narrow.
   </p>
   <p>
-    Open protocol issue: on a three-column terminal, an unsupported three-cell candidate can fill the row and leave pending wrap while reporting column three, indistinguishable by CPR from a supported two-cell advance.
-    The three-column minimum therefore avoids pending wrap only under the one-or-two-cell assumption; it does not validate that assumption for arbitrary candidates.
-    Resolve this ambiguity before enabling live probes; the current observation helper does not inspect pending-wrap state.
+    The four-column minimum avoids the three-column ambiguity: a two-cell candidate reports column three, while an unsupported three-cell candidate reports column four and is rejected.
+    Supported one-or-two-cell candidates cannot leave pending wrap in the probe.
+    CPR still does not expose pending-wrap state or prove arbitrary terminal behavior; the supported-terminal assumptions continue to apply.
   </p>
   <p>
     <code>parseCursorReport</code> validates CPR syntax and positive coordinates up to the supported limit of 9999.
@@ -733,7 +734,7 @@ require measuredWidth == 1 || measuredWidth == 2</code></pre>
   <p>
     While a batch is outstanding, the lexer routes exactly the expected number of valid CPR tokens to the resolver and queues ordinary input tokens.
     A generation number associates a requested layout with the editor state that requested it.
-    If more input arrives before resolution completes, keep the valid cache entries, discard the stale layout, apply queued input, and resolve the newest state.
+    If more input arrives before resolution completes and the complete batch validates, commit its measurements, discard the stale layout, apply queued input, and resolve the newest state.
   </p>
 
   <pre><code>generation 41: measure ["❤️"]
@@ -750,7 +751,8 @@ generation 42: resolve remaining misses, layout once, render once</code></pre>
       <tr><td>New prompt</td><td>One fenced anchor query after the opaque prompt.</td></tr>
       <tr><td>Printable ASCII edit</td><td>None.</td></tr>
       <tr><td>Repeated measured cluster</td><td>None.</td></tr>
-      <tr><td>Distinct unknown cluster</td><td>One observation, batched with all other misses in the state.</td></tr>
+      <tr><td>Distinct unknown cluster</td><td>One observation, batched with all other misses in the state, when width probes are allowed.</td></tr>
+      <tr><td>Edit after a failed width batch</td><td>No width probes for the remainder of the current command; use cached widths and placeholders.</td></tr>
       <tr><td>Repaint or cursor motion</td><td>None.</td></tr>
       <tr><td>Resize with possible terminal reflow</td><td>One re-anchor query; cached widths remain valid.</td></tr>
     </tbody>
@@ -786,7 +788,7 @@ func LayoutAtomsInto(
   <ul class="invariants">
     <li>The printable-ASCII path may wrap at any byte boundary because each source byte is exactly one cell.</li>
     <li>Every general-path text atom is a complete grapheme cluster, printable ASCII byte, generated control representation, or placeholder with a resolved width.</li>
-    <li>No general-path atom is split across rows. With the supported-terminal contract and terminal width at least two, every first-implementation atom fits on an empty row.</li>
+    <li>No general-path atom is split across rows. With the supported-terminal contract and terminal width at least four, every first-implementation atom fits on an empty row.</li>
     <li>The first row begins at the measured prompt column; subsequent soft-wrapped rows begin at column one.</li>
     <li>Hard newlines are source atoms with explicit row semantics and zero printable width.</li>
     <li>The cursor may land at any byte boundary on the printable-ASCII path and only at source grapheme boundaries on the general path; either maps to exactly one row and cell gap.</li>
@@ -841,21 +843,38 @@ func LayoutAtomsInto(
     </thead>
     <tbody>
       <tr><td>No CPR support</td><td>Continue exact ASCII editing; display unresolved non-ASCII atoms as a fixed one-cell ASCII placeholder.</td></tr>
-      <tr><td>Query timeout</td><td>Cancel the batch, restore the owned terminal region, and use placeholders for unresolved atoms.</td></tr>
-      <tr><td>Width outside 1–2</td><td>Reject the observation; never cache the unsupported width. Use a placeholder and log the observed reply.</td></tr>
+      <tr><td>Query timeout or terminal I/O failure</td><td>Reject the complete batch, block further width probes for the current command, and recover the owned terminal region.</td></tr>
+      <tr><td>Width outside 1–2</td><td>Reject the complete batch, block further width probes for the current command, and log the observed reply.</td></tr>
       <tr><td>Wrong row or malformed reply</td><td>Reject the complete batch. Never populate the cache from ambiguous measurements.</td></tr>
       <tr><td>Probe or cache resource limit</td><td>Use placeholders for overflow candidates; never issue an unbounded batch.</td></tr>
       <tr><td>Eligibility rejected or eligibility cache full for an unseen candidate</td><td>Use a placeholder before width lookup or measurement, preserving the original source range.</td></tr>
-      <tr><td>Terminal only two cells wide</td><td>Do not run width probes; cached eligible atoms remain usable and unknown widths use placeholders.</td></tr>
-      <tr><td>Terminal narrower than two cells</td><td>Do not paint interactive contents; continue accepting editing keys or report that the terminal is too narrow.</td></tr>
+      <tr><td>Terminal narrower than four cells</td><td>Do not paint interactive contents or run width probes; continue accepting editing keys or report that the terminal is too narrow.</td></tr>
       <tr><td>Untrusted state after resume/reattach</td><td>Start a new cache epoch, re-anchor, and measure future misses again.</td></tr>
     </tbody>
   </table>
 
+  <h3>Atomic batch rejection</h3>
   <p>
-    Before implementing the batch collector, settle whether an unsupported width also discards otherwise valid observations from that batch.
-    The current helpers reject the individual observation without committing any cache entry.
-    Wrong-row or malformed replies invalidate the complete batch because reply association is ambiguous.
+    Stage observations outside the width cache until every expected reply has arrived and the complete batch has validated.
+    A malformed reply, unexpected row, unsupported observed width, timeout, or terminal I/O failure rejects all measurements from that batch, including individually valid observations.
+    Previously cached widths and all candidate eligibility decisions remain intact.
+    Recover the owned terminal region and use placeholders for widths that remain unknown.
+    An editor generation change alone is not a measurement failure: commit a valid batch but discard its stale layout.
+  </p>
+
+  <h3>Retry only after command submission</h3>
+  <p>
+    A failed width batch sets a per-command <code>widthProbesBlocked</code> flag.
+    Subsequent edits continue using cached widths and placeholders without issuing new width probes.
+    Clear the flag when the command is submitted and the editor begins a new prompt, allowing unknown widths needed by the next command to be measured again.
+    Enter that merely inserts a newline into an unfinished command does not clear the flag.
+    Neither cache is cleared by this reset, and failed measurements remain unknown rather than becoming permanently rejected eligibility entries.
+  </p>
+  <p>
+    There is no retry timer or cooldown.
+    An outstanding query still needs a timeout, and recovery must account for late replies before any subsequent query, including prompt anchoring, can start.
+    Clearing the flag permits another measurement attempt; it does not bypass query recovery.
+    Eligibility rejection, resource limits, and insufficient terminal width skip candidates or probes without constituting a failed batch.
   </p>
 
   <p>
@@ -906,7 +925,7 @@ func LayoutAtomsInto(
       <tr><td>uniseg width calls</td><td class="bad">Delete</td><td>Use uniseg boundaries only.</td></tr>
       <tr><td><code>LayoutRow</code> and row-end types</td><td class="good">Keep and adapt</td><td>Consume atoms and the measured prompt-origin column.</td></tr>
       <tr><td>Property-test structure</td><td class="good">Keep</td><td>Inject deterministic width maps instead of parameter combinations.</td></tr>
-      <tr><td>Oversize codepoint-model splitting</td><td class="bad">Delete</td><td>The 1–2 cell grapheme contract and minimum two-column terminal remove the case.</td></tr>
+      <tr><td>Oversize codepoint-model splitting</td><td class="bad">Delete</td><td>The 1–2 cell grapheme contract and minimum four-column terminal remove the case.</td></tr>
       <tr><td>Opaque prompt measurement</td><td class="good">Keep</td><td>One fenced anchor CPR per prompt.</td></tr>
       <tr><td>Region-relative renderer</td><td class="good">Keep</td><td>Full repaint driven by resolved layout.</td></tr>
     </tbody>
@@ -936,6 +955,8 @@ func LayoutAtomsInto(
     Candidate eligibility is now cached and integrated into width resolution, with a test covering a standalone combining accent and an accent with its base.
     CPR parsing and conversion to a one-or-two-cell observation are implemented and tested for probes without an ASCII prefix.
     Session ownership of these caches, the batch collector, terminal probes, and integration with the interactive renderer remain to be implemented.
+    Existing pure layout helpers still accept widths of two or more as mathematical inputs; that does not imply interactive support below four columns.
+    Enforcing the four-column minimum at the editor and probe boundaries remains integration work.
   </p>
 </section>
 
@@ -952,7 +973,7 @@ func LayoutAtomsInto(
     <li>At a mixed ASCII/non-ASCII boundary, classify without constructing partial atoms and segment the complete buffer so combining marks can join the final ASCII base.</li>
     <li>Segment every stress string and verify atoms tile source bytes exactly.</li>
     <li>Inject arbitrary width maps containing only one and two; never call a terminal from layout tests.</li>
-    <li>For every grapheme-boundary cursor position and terminal width at least two, rows stay within bounds and the cursor lands on a valid cell gap.</li>
+    <li>For every grapheme-boundary cursor position and supported terminal width at least four, rows stay within bounds and the cursor lands on a valid cell gap. Pure layout tests may additionally exercise widths two and three.</li>
     <li>Hard breaks, exact soft fills, early soft wraps, trailing newlines, and first-row prompt offsets retain explicit invariants.</li>
     <li>Cache deduplication measures each exact cluster once per epoch.</li>
     <li>Eligibility accepts an accent with its base and rejects a standalone accent; rejected atoms never enter the probe list and retain their source ranges.</li>
@@ -975,9 +996,11 @@ func LayoutAtomsInto(
   <ul>
     <li>Several probes are written before any reply is required.</li>
     <li>Replies populate the correct cache keys even when keypress tokens are interleaved.</li>
-    <li>Timeout, malformed reply, and wrong row leave the batch's cache entries uncommitted.</li>
-    <li>Width zero and width greater than two are rejected and never cached; test the treatment of other observations once the batch failure policy is settled.</li>
-    <li>Probes contain no ASCII prefix; reply columns two and three resolve to widths one and two. Width two forbids probes, while width three permits supported candidates without pending wrap.</li>
+    <li>Malformed reply, wrong row, unsupported observed width, timeout, and terminal I/O failure discard the entire batch, including otherwise valid observations; preexisting width and eligibility entries remain intact.</li>
+    <li>A failed batch blocks new width probes during subsequent edits of the same command; cached widths and placeholders remain usable.</li>
+    <li>Submitting a command and beginning the next prompt clears the probe block; inserting a multiline newline does not. Retry requires completed query recovery and uses no cooldown timer.</li>
+    <li>Late replies from a rejected batch cannot be mistaken for replies to a new batch or prompt-anchor query.</li>
+    <li>Probes contain no ASCII prefix; reply columns two and three resolve to widths one and two. Below four columns, neither interactive painting nor width probing is allowed. At four columns, an unsupported three-cell candidate reports column four and is rejected.</li>
     <li>A stale generation retains valid measurements but never paints its stale layout.</li>
     <li>The scratch row is cleared and terminal mode is restored on every exit path.</li>
   </ul>
