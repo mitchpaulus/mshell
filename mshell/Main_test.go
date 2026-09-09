@@ -119,6 +119,43 @@ func TestWidthProbeBatchFailureIsSticky(t *testing.T) {
 	}
 }
 
+func TestQueuedInputLookahead(t *testing.T) {
+	state := TermState{
+		queuedInput: []TerminalToken{
+			AsciiToken{Char: 'j'},
+			AsciiToken{Char: 'x'},
+		},
+		stdInState: &StdinReaderState{
+			array: []byte{'z'},
+			n: 1,
+		},
+	}
+
+	token, err := state.readInputToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	end, err := state.HandleToken(token)
+	if err != nil || end {
+		t.Fatalf("HandleToken: end=%v, err=%v", end, err)
+	}
+
+	if got := string(state.currentCommand); got != "jx" {
+		t.Fatalf("command = %q, want jx", got)
+	}
+	if len(state.queuedInput) != 0 || state.queuedInputIndex != 0 {
+		t.Fatal("consumed queue was not reset")
+	}
+	if state.stdInState.i != 0 {
+		t.Fatal("lookahead consumed terminal input before queued input")
+	}
+
+	token, err = state.readInputToken()
+	if err != nil || token != (AsciiToken{Char: 'z'}) {
+		t.Fatalf("next token = %v, err=%v; want z", token, err)
+	}
+}
+
 func TestHistory(t *testing.T) {
 	path := "test.mshell_history"
 	_ = WriteToHistory(os.Getenv("HOME"), "echo hello", path)

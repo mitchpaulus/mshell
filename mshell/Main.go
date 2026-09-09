@@ -2859,9 +2859,14 @@ type StdinReaderState struct {
 	array []byte
 	i     int
 	n     int
+	deadline time.Time // Zero means no deadline
 }
 
 func (state *StdinReaderState) ReadByte() (byte, error) {
+	if !state.deadline.IsZero() && !time.Now().Before(state.deadline) {
+		return 0, os.ErrDeadlineExceeded
+	}
+
 	if state.i >= state.n {
 		// Do fresh read
 		// fmt.Fprintf(f, "Reading from stdin...\n")
@@ -3008,7 +3013,7 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 			if err == io.EOF {
 				return EofTerminalToken{}, nil
 			} else {
-				return nil, fmt.Errorf("Error reading from stdin: %s", err)
+				return nil, fmt.Errorf("Error reading from stdin: %w", err)
 				// fmt.Fprintf(state.f, "Error reading from stdin: %s\n", err)
 			}
 		}
@@ -3023,7 +3028,7 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 				if err == io.EOF {
 					return EofTerminalToken{}, nil
 				} else {
-					return nil, fmt.Errorf("Error reading from stdin: %s", err)
+					return nil, fmt.Errorf("Error reading from stdin: %w", err)
 				}
 			}
 
@@ -3034,7 +3039,7 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 					if err == io.EOF {
 						return EofTerminalToken{}, nil
 					} else {
-						return nil, fmt.Errorf("Error reading from stdin: %s", err)
+						return nil, fmt.Errorf("Error reading from stdin: %w", err)
 					}
 				}
 
@@ -3067,7 +3072,7 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 					if err == io.EOF {
 						return EofTerminalToken{}, nil
 					} else {
-						return nil, fmt.Errorf("Error reading from stdin: %s", err)
+						return nil, fmt.Errorf("Error reading from stdin: %w", err)
 					}
 				}
 
@@ -3079,7 +3084,7 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 							if err == io.EOF {
 								return EofTerminalToken{}, nil
 							} else {
-								return nil, fmt.Errorf("Error reading from stdin: %s", err)
+								return nil, fmt.Errorf("Error reading from stdin: %w", err)
 							}
 						}
 
@@ -3121,7 +3126,7 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 							if err == io.EOF {
 								return EofTerminalToken{}, nil
 							} else {
-								return nil, fmt.Errorf("Error reading from stdin: %s", err)
+								return nil, fmt.Errorf("Error reading from stdin: %w", err)
 							}
 						}
 
@@ -3167,7 +3172,7 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 				if err == io.EOF {
 					return EofTerminalToken{}, nil
 				} else {
-					return nil, fmt.Errorf("Error reading from stdin: %s", err)
+					return nil, fmt.Errorf("Error reading from stdin: %w", err)
 				}
 			}
 
@@ -3186,7 +3191,7 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 				if err == io.EOF {
 					return EofTerminalToken{}, nil
 				} else {
-					return nil, fmt.Errorf("Error reading from stdin: %s", err)
+					return nil, fmt.Errorf("Error reading from stdin: %w", err)
 				}
 			}
 			if b2 >= 128 && b2 <= 191 { // 128-191 are the second byte of a 2-byte UTF-8 character
@@ -3195,7 +3200,7 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 					if err == io.EOF {
 						return EofTerminalToken{}, nil
 					} else {
-						return nil, fmt.Errorf("Error reading from stdin: %s", err)
+						return nil, fmt.Errorf("Error reading from stdin: %w", err)
 					}
 				}
 
@@ -3219,7 +3224,7 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 				if err == io.EOF {
 					return EofTerminalToken{}, nil
 				} else {
-					return nil, fmt.Errorf("Error reading from stdin: %s", err)
+					return nil, fmt.Errorf("Error reading from stdin: %w", err)
 				}
 			}
 			if b2 >= 128 && b2 <= 191 { // 128-191 are the second byte of a 2-byte UTF-8 character
@@ -3228,7 +3233,7 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 					if err == io.EOF {
 						return EofTerminalToken{}, nil
 					} else {
-						return nil, fmt.Errorf("Error reading from stdin: %s", err)
+						return nil, fmt.Errorf("Error reading from stdin: %w", err)
 					}
 				}
 
@@ -3238,7 +3243,7 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 						if err == io.EOF {
 							return EofTerminalToken{}, nil
 						} else {
-							return nil, fmt.Errorf("Error reading from stdin: %s", err)
+							return nil, fmt.Errorf("Error reading from stdin: %w", err)
 						}
 					}
 
