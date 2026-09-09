@@ -92,6 +92,33 @@ func TestWidthFromCursorReport(t *testing.T) {
 	}
 }
 
+func TestWidthProbeBatchFailureIsSticky(t *testing.T) {
+	batch := WidthProbeBatch{
+		ScratchRow: 5,
+		Candidates: []string{"é", "世"},
+	}
+
+	err := batch.acceptReply(CsiToken{FinalChar: 'R', Params: []byte("5;2")})
+	if err != nil {
+		t.Fatalf("first reply failed: %v", err)
+	}
+
+	// A valid width reported on the wrong row rejects the batch.
+	firstFailure := batch.acceptReply(CsiToken{FinalChar: 'R', Params: []byte("6;3")})
+	if firstFailure == nil {
+		t.Fatal("wrong-row reply was accepted")
+	}
+
+	// A later valid reply must not revive the failed batch.
+	err = batch.acceptReply(CsiToken{FinalChar: 'R', Params: []byte("5;3")})
+	if err != firstFailure || batch.Failure != firstFailure {
+		t.Fatal("batch did not preserve its first failure")
+	}
+	if !slices.Equal(batch.Widths, []Cells{1}) {
+		t.Fatalf("staged widths = %v, want [1]", batch.Widths)
+	}
+}
+
 func TestHistory(t *testing.T) {
 	path := "test.mshell_history"
 	_ = WriteToHistory(os.Getenv("HOME"), "echo hello", path)

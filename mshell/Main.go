@@ -966,6 +966,9 @@ type TermState struct {
 	stdLibDefs        []MShellDefinition
 	initCallStackItem CallStackItem
 	// pathBinManager IPathBinManager
+
+	queuedInput []TerminalToken
+	queuedInputIndex int
 }
 
 type SourceText string
@@ -1010,7 +1013,6 @@ func (a DisplayAtom) displayText(src SourceText) string {
 }
 
 type WidthCache struct {
-	Epoch uint64
 	Entries map[string]Cells
 }
 
@@ -2721,6 +2723,15 @@ type WidthProbeBatch struct {
 	Failure error       // First failure; prevents accepting further results.
 }
 
+func (batch *WidthProbeBatch) Clear() {
+	clear(batch.Candidates)
+	batch.Candidates = batch.Candidates[:0]
+	batch.Widths = batch.Widths[:0]
+	batch.ScratchRow = 0
+	batch.Failure = nil
+}
+
+
 // acceptReply receives a token routed to this batch by the query coordinator.
 // Ordinary keyboard tokens must be handled separately.
 func (batch *WidthProbeBatch) acceptReply(token CsiToken) error {
@@ -2933,6 +2944,23 @@ func (state *TermState) StdinReader(stdInChan chan byte, pauseChan chan bool) {
 			}
 		}
 	}
+}
+
+func (state *TermState) readInputToken() (TerminalToken, error) {
+	if state.queuedInputIndex < len(state.queuedInput) {
+		token := state.queuedInput[state.queuedInputIndex]
+		state.queuedInputIndex++
+
+		if state.queuedInputIndex == len(state.queuedInput) {
+			clear(state.queuedInput)
+			state.queuedInput = state.queuedInput[:0]
+			state.queuedInputIndex = 0
+		}
+
+		return token, nil
+	}
+
+	return state.InteractiveLexer(state.stdInState)
 }
 
 // Common Pn Values for ESC [ Pn ~:
@@ -3324,6 +3352,11 @@ func (state *TermState) InteractiveMode() error {
 	var token TerminalToken
 	var end bool
 
+	widthCache := WidthCache { Entries: make(map[string]Cells) }
+	var widthBatch WidthProbeBatch
+	var widthBatchActive bool
+
+
 	for {
 		if state.currentTabComplete == 0 {
 			state.tabCompletions0 = state.tabCompletions0[:0]
@@ -3333,16 +3366,39 @@ func (state *TermState) InteractiveMode() error {
 
 		// state.Logf("Waiting for token...\n")
 		state.f.Sync()
-		token, err = state.InteractiveLexer(stdInState) // token = <- tokenChan
+
+		if widthBatchActive {
+			token, err = state.InteractiveLexer(state.stdInState)
+		} else {
+			token, err = state.readInputToken()
+		}
+
 		if err != nil {
 			state.Logf("Got err from interactive lexer: %s\n", err)
 			return err
 		}
 
 		// state.Logf("Got token: %s\n", token)
-
 		if _, ok := token.(EofTerminalToken); ok {
 			return nil
+		}
+
+		if widthBatchActive {
+			if report, ok := token.(CsiToken); ok && report.FinalChar == 'R' { // We've gotten a CPR
+				widthBatch.acceptReply(report)
+			} else {
+				state.queuedInput = append(state.queuedInput, token)
+			}
+
+			if widthBatch.Failure == nil && len(widthBatch.Widths) == len(widthBatch.Candidates) {
+				for i, candidate := range widthBatch.Candidates {
+					widthCache.Entries[strings.Clone(candidate)] = widthBatch.Widths[i]
+				}
+				widthBatch.Clear()
+				widthBatchActive = false
+			}
+
+			continue
 		}
 
 		end, err = state.HandleToken(token)
@@ -3985,7 +4041,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			if t.Char == ';' {
 				// Check next token, if it's a 'r', open REPOs with lf
 				// TODO: Handle EOF token case
-				token, err = state.InteractiveLexer(state.stdInState)
+				token, err = state.readInputToken()
 				if err != nil {
 					return false, err
 				}
@@ -4016,7 +4072,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 					return state.HandleToken(token)
 				}
 			} else if t.Char == 'j' {
-				token, err = state.InteractiveLexer(state.stdInState)
+				token, err = state.readInputToken()
 				if err != nil {
 					return false, err
 				}
@@ -4036,7 +4092,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				}
 			} else if t.Char == 'v' {
 				// Check if next token is 'l', then clear screen
-				token, err = state.InteractiveLexer(state.stdInState)
+				token, err = state.readInputToken()
 				if err != nil {
 					return false, err
 				}
@@ -4057,7 +4113,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				}
 			} else if t.Char == 'q' {
 				// Check if next token is 'l', then clear screen
-				token, err = state.InteractiveLexer(state.stdInState)
+				token, err = state.readInputToken()
 				if err != nil {
 					return false, err
 				}
