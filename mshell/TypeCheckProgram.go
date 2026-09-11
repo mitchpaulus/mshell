@@ -95,13 +95,16 @@ func (c *Checker) RegisterStdlibSigs(defs []MShellDefinition) {
 // parse tree driving the type stack. Error accumulation lives on the
 // Checker.
 func (c *Checker) CheckProgram(file *MShellFile) {
-	// Pre-pass 1: register all `type` declarations.
+	// Pre-pass 1: register all `type` declarations. Names are bound
+	// before any body is resolved so declarations may refer to themselves
+	// and to each other in any order.
+	var decls []*MShellTypeDecl
 	for _, item := range file.Items {
 		if d, ok := item.(*MShellTypeDecl); ok {
-			body := c.resolveTypeExpr(d.Body, nil)
-			c.DeclareType(d.Name, body)
+			decls = append(decls, d)
 		}
 	}
+	c.declareTypes(decls)
 	// Pre-pass 2: register all `def` signatures so call sites (and
 	// recursive self-calls inside def bodies) can resolve them.
 	defSigs := make([]QuoteSig, len(file.Definitions))
@@ -1390,7 +1393,7 @@ func (c *Checker) armPatternOf(subject TypeId, pattern []MShellParseItem) armPat
 				out.Tag = MatchArmTag{Kind: MatchArmType, TypeArm: tid}
 				out.Bindings = append(out.Bindings, patternBind{t1.Lexeme, tid})
 			} else {
-				out.Bindings = append(out.Bindings, patternBind{t1.Lexeme, c.subst.Apply(c.arena, subject)})
+				out.Bindings = append(out.Bindings, patternBind{t1.Lexeme, c.narrowKeywordBinding(t0, subject)})
 			}
 			return out
 		}
@@ -1645,6 +1648,45 @@ func (p *armPattern) computeNarrow() {
 	case TidInt, TidFloat, TidStr, TidPath, TidBool, TidDateTime, TidBytes, TidNull:
 		p.Narrow = p.Tag.TypeArm
 	}
+}
+
+// narrowKeywordBinding returns the type bound by `<keyword> name` for the
+// container keywords `list` and `dict`. When the subject is a union, the
+// binding keeps only the members the keyword can match at runtime: lists
+// for `list`; dicts and shapes for `dict`, looking through a declared
+// name's brand. This is what makes a recursive union such as
+// `type Json = ... | [Json] | {str: Json}` usable: `list l` inside a match
+// on a Json binds `[Json]`, not the whole union. A subject that is not a
+// union, or a union with no member of that kind, binds unchanged.
+func (c *Checker) narrowKeywordBinding(keyword Token, subject TypeId) TypeId {
+	subject = c.subst.Apply(c.arena, subject)
+	if keyword.Type != LITERAL || (keyword.Lexeme != "list" && keyword.Lexeme != "dict") {
+		return subject
+	}
+	if c.arena.Kind(subject) != TKUnion {
+		return subject
+	}
+	var kept []TypeId
+	for _, m := range c.arena.UnionMembers(subject) {
+		k := c.arena.Kind(m)
+		for k == TKBrand {
+			k = c.arena.Kind(TypeId(c.arena.Node(m).B))
+		}
+		switch keyword.Lexeme {
+		case "list":
+			if k == TKList {
+				kept = append(kept, m)
+			}
+		case "dict":
+			if k == TKDict || k == TKShape {
+				kept = append(kept, m)
+			}
+		}
+	}
+	if len(kept) == 0 {
+		return subject
+	}
+	return c.arena.MakeUnion(kept, 0)
 }
 
 // typeKeywordTokenType maps a match type-keyword token to the concrete

@@ -1,0 +1,2 @@
+# Static: parseHtml returns an HtmlNode, whose fields have different types.
+"<p>x</p>" parseHtml as {str: int} drop

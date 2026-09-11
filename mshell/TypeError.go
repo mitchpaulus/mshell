@@ -159,6 +159,14 @@ func (e TypeError) Format(arena *TypeArena, names *NameTable) string {
 // Phase-3 composite kinds are covered. Type variables (Phase 6) and grid
 // schemas (Phase 8) extend this further.
 func FormatType(arena *TypeArena, names *NameTable, id TypeId) string {
+	return formatType(arena, names, id, nil)
+}
+
+// formatType is FormatType with the set of declared named types currently
+// being printed. A named type's body is printed once, in full, under its
+// name; a reference back to a type already being printed (a recursive
+// declaration) prints the name alone.
+func formatType(arena *TypeArena, names *NameTable, id TypeId, printing map[TypeId]bool) string {
 	switch id {
 	case TidNothing:
 		return "<nothing>"
@@ -190,11 +198,11 @@ func FormatType(arena *TypeArena, names *NameTable, id TypeId) string {
 		// read the same whether a value arrived as a literal or not.
 		return "str"
 	case TKMaybe:
-		return "Maybe[" + FormatType(arena, names, TypeId(n.A)) + "]"
+		return "Maybe[" + formatType(arena, names, TypeId(n.A), printing) + "]"
 	case TKList:
-		return "[" + FormatType(arena, names, TypeId(n.A)) + "]"
+		return "[" + formatType(arena, names, TypeId(n.A), printing) + "]"
 	case TKDict:
-		return "{" + FormatType(arena, names, TypeId(n.A)) + ": " + FormatType(arena, names, TypeId(n.B)) + "}"
+		return "{" + formatType(arena, names, TypeId(n.A), printing) + ": " + formatType(arena, names, TypeId(n.B), printing) + "}"
 	case TKShape:
 		var sb strings.Builder
 		sb.WriteByte('{')
@@ -207,13 +215,17 @@ func FormatType(arena *TypeArena, names *NameTable, id TypeId) string {
 				sb.WriteByte('?')
 			}
 			sb.WriteString(": ")
-			sb.WriteString(FormatType(arena, names, f.Type))
+			sb.WriteString(formatType(arena, names, f.Type, printing))
 		}
 		sb.WriteByte('}')
 		return sb.String()
 	case TKUnion:
 		var sb strings.Builder
 		if n.A != 0 {
+			if printing[id] {
+				return names.Name(NameId(n.A))
+			}
+			printing = withPrinting(printing, id)
 			sb.WriteString(names.Name(NameId(n.A)))
 			sb.WriteByte('(')
 		}
@@ -221,14 +233,18 @@ func FormatType(arena *TypeArena, names *NameTable, id TypeId) string {
 			if i > 0 {
 				sb.WriteString(" | ")
 			}
-			sb.WriteString(FormatType(arena, names, arm))
+			sb.WriteString(formatType(arena, names, arm, printing))
 		}
 		if n.A != 0 {
 			sb.WriteByte(')')
 		}
 		return sb.String()
 	case TKBrand:
-		return names.Name(NameId(n.A)) + "(" + FormatType(arena, names, TypeId(n.B)) + ")"
+		if printing[id] {
+			return names.Name(NameId(n.A))
+		}
+		printing = withPrinting(printing, id)
+		return names.Name(NameId(n.A)) + "(" + formatType(arena, names, TypeId(n.B), printing) + ")"
 	case TKCommand:
 		var parts []string
 		if n.B != uint32(CommandCaptureNone) {
@@ -238,9 +254,9 @@ func FormatType(arena *TypeArena, names *NameTable, id TypeId) string {
 			parts = append(parts, "stderr="+formatCommandCapture(CommandCaptureMode(n.Extra)))
 		}
 		if len(parts) == 0 {
-			return "Command[" + FormatType(arena, names, TypeId(n.A)) + "]"
+			return "Command[" + formatType(arena, names, TypeId(n.A), printing) + "]"
 		}
-		return "Command[" + FormatType(arena, names, TypeId(n.A)) + "; " + strings.Join(parts, ", ") + "]"
+		return "Command[" + formatType(arena, names, TypeId(n.A), printing) + "; " + strings.Join(parts, ", ") + "]"
 	case TKQuote:
 		sig := arena.quoteSigs[n.Extra]
 		var sb strings.Builder
@@ -249,14 +265,14 @@ func FormatType(arena *TypeArena, names *NameTable, id TypeId) string {
 			if i > 0 {
 				sb.WriteByte(' ')
 			}
-			sb.WriteString(FormatType(arena, names, in))
+			sb.WriteString(formatType(arena, names, in, printing))
 		}
 		sb.WriteString(" -- ")
 		for i, out := range sig.Outputs {
 			if i > 0 {
 				sb.WriteByte(' ')
 			}
-			sb.WriteString(FormatType(arena, names, out))
+			sb.WriteString(formatType(arena, names, out, printing))
 		}
 		sb.WriteByte(')')
 		return sb.String()
@@ -268,7 +284,7 @@ func FormatType(arena *TypeArena, names *NameTable, id TypeId) string {
 			if i > 0 {
 				sb.WriteString(" | ")
 			}
-			sb.WriteString(FormatType(arena, names, arena.MakeQuote(sig)))
+			sb.WriteString(formatType(arena, names, arena.MakeQuote(sig), printing))
 		}
 		sb.WriteByte('}')
 		return sb.String()
@@ -284,6 +300,18 @@ func FormatType(arena *TypeArena, names *NameTable, id TypeId) string {
 		return "GridRow"
 	}
 	return fmt.Sprintf("<%s #%d>", n.Kind, uint32(id))
+}
+
+// withPrinting returns a copy of printing with id added. Copying keeps
+// sibling subtrees independent: a type printed twice side by side (not
+// nested inside itself) is printed in full both times.
+func withPrinting(printing map[TypeId]bool, id TypeId) map[TypeId]bool {
+	next := make(map[TypeId]bool, len(printing)+1)
+	for k, v := range printing {
+		next[k] = v
+	}
+	next[id] = true
+	return next
 }
 
 func formatCommandCapture(mode CommandCaptureMode) string {

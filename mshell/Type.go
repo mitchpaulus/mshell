@@ -195,6 +195,15 @@ type TypeArena struct {
 	unionMembers   [][]TypeId // each slice is sorted, deduped
 	gridSchemas    []GridSchema
 	gridSchemaCons map[string]uint32
+
+	// named holds the TypeIds of declared named types (`type X = ...` and
+	// the built-in named types such as HtmlNode). Each is a TKBrand or a
+	// branded TKUnion whose body was resolved with no type variables in
+	// scope, so the body is closed. Recursive declarations point back at
+	// their own id through the body; structural walkers that only care
+	// about type variables stop at these ids, and FormatType prints the
+	// name instead of re-entering the body.
+	named map[TypeId]struct{}
 }
 
 // NewTypeArena constructs an arena pre-populated with the primitive ids
@@ -469,6 +478,83 @@ func (a *TypeArena) UnionMembers(id TypeId) []TypeId {
 	return a.unionMembers[n.Extra]
 }
 
+// Named types -------------------------------------------------------------
+//
+// A `type X = body` declaration is registered in two steps so the body can
+// mention X (directly or through other declarations): first a placeholder
+// node for X is reserved, then the resolved body is patched into it. The
+// placeholder id is the final id of the type, so every reference resolved
+// while the body was being built stays valid.
+//
+// Two node shapes are used, chosen from the declaration's syntax before the
+// body is resolved: a union body becomes a branded TKUnion whose member list
+// is filled in later; any other body becomes a TKBrand whose underlying is
+// filled in later.
+
+// IsNamed reports whether id is a declared named type (see TypeArena.named).
+func (a *TypeArena) IsNamed(id TypeId) bool {
+	_, ok := a.named[id]
+	return ok
+}
+
+func (a *TypeArena) markNamed(id TypeId) {
+	if a.named == nil {
+		a.named = make(map[TypeId]struct{}, 8)
+	}
+	a.named[id] = struct{}{}
+}
+
+// NewBrandPlaceholder reserves the node for a named non-union type. The
+// underlying is TidNothing until PatchBrand fills it in. Calling it twice
+// for the same name returns the same id.
+func (a *TypeArena) NewBrandPlaceholder(name NameId) TypeId {
+	id := a.intern(TKBrand, uint32(name), uint32(TidNothing), 0)
+	a.markNamed(id)
+	return id
+}
+
+// PatchBrand sets the underlying of a brand placeholder. The (name,
+// underlying) hashcons key is registered too, so a later MakeBrand with the
+// same arguments resolves to this node instead of minting a second one.
+func (a *TypeArena) PatchBrand(id TypeId, underlying TypeId) {
+	n := a.nodes[id]
+	if n.Kind != TKBrand {
+		panic("TypeArena.PatchBrand: not a brand")
+	}
+	a.nodes[id].B = uint32(underlying)
+	a.atomCons[TypeNode{Kind: TKBrand, A: n.A, B: uint32(underlying)}] = id
+}
+
+// NewUnionPlaceholder reserves the node for a named union type. The member
+// list is empty until PatchUnion fills it in. Calling it twice for the same
+// name returns the same id.
+func (a *TypeArena) NewUnionPlaceholder(name NameId) TypeId {
+	key := "named-union:" + strconv.Itoa(int(name))
+	if id, ok := a.cons[key]; ok {
+		return id
+	}
+	idx := uint32(len(a.unionMembers))
+	a.unionMembers = append(a.unionMembers, nil)
+	id := a.append(TypeNode{Kind: TKUnion, A: uint32(name), Extra: idx})
+	a.cons[key] = id
+	a.markNamed(id)
+	return id
+}
+
+// PatchUnion sets the arms of a union placeholder. Arms are canonicalized
+// the same way MakeUnion does (nested unbranded unions dissolved, sorted,
+// deduplicated), and the hashcons key for (arms, brand) is registered so a
+// later MakeUnion with the same arms and brand resolves to this node.
+func (a *TypeArena) PatchUnion(id TypeId, arms []TypeId) {
+	n := a.nodes[id]
+	if n.Kind != TKUnion || n.A == 0 {
+		panic("TypeArena.PatchUnion: not a branded union")
+	}
+	flat := a.flattenAndCanonicalizeUnion(arms)
+	a.unionMembers[n.Extra] = flat
+	a.cons[encodeUnionKey(flat, NameId(n.A))] = id
+}
+
 // QuoteSig returns the signature of a quote type.
 func (a *TypeArena) QuoteSig(id TypeId) QuoteSig {
 	n := a.Node(id)
@@ -739,7 +825,8 @@ func (t *NameTable) Name(id NameId) string {
 func IsReservedTypeName(name string) bool {
 	switch name {
 	case "int", "float", "str", "bool", "bytes", "none", "null",
-		"path", "datetime", "Maybe", "Grid", "GridView", "GridRow":
+		"path", "datetime", "Maybe", "Grid", "GridView", "GridRow",
+		"HtmlNode":
 		return true
 	}
 	return false

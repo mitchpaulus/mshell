@@ -97,6 +97,11 @@ type Checker struct {
 	builtins     map[TokenType][]QuoteSig
 	nameBuiltins map[NameId][]QuoteSig
 
+	// casting is non-zero while castOk is testing an `as` cast. unify
+	// then lets a structural value satisfy a brand at any depth (see the
+	// kind-mismatch branch in unify).
+	casting int
+
 	// typeEnv holds named type declarations (Phase 5). Built-in / reserved
 	// type names are NOT stored here — they are recognized directly.
 	typeEnv map[NameId]TypeId
@@ -137,6 +142,7 @@ func NewChecker(arena *TypeArena, names *NameTable) *Checker {
 		vars:         NewVarEnv(),
 		builtins:     builtinSigsByToken(arena, names),
 		nameBuiltins: builtinSigsByName(arena, names),
+		typeEnv:      builtinNamedTypes(arena, names),
 	}
 }
 
@@ -1202,6 +1208,15 @@ func (c *Checker) unify(got, want TypeId) bool {
 	}
 
 	if gn.Kind != wn.Kind {
+		// Inside an `as` cast an unbranded value of the underlying
+		// structural form may be tagged into a brand at any depth, not
+		// only at the top: `{"ms": [{"n": 1}]} as T` with `type T = {ms:
+		// [P]}` needs the inner literal to satisfy P's body. Outside a
+		// cast brands stay nominal, and a value that already carries a
+		// different brand never re-brands.
+		if c.casting > 0 && wn.Kind == TKBrand && !(gn.Kind == TKUnion && gn.A != 0) {
+			return c.unify(got, TypeId(wn.B))
+		}
 		if gn.Kind == TKOverloadedQuote && wn.Kind == TKQuote {
 			return c.unifyOverloadedQuoteToQuote(gn, want)
 		}
@@ -1231,6 +1246,12 @@ func (c *Checker) unify(got, want TypeId) bool {
 	case TKShape:
 		return c.unifyShape(gn, wn)
 	case TKUnion:
+		if c.casting > 0 && gn.A == 0 && wn.A != 0 {
+			// Casting an unbranded union into a branded union at depth:
+			// compare against the arms. A branded source never
+			// re-brands (no brand-to-brand teleport).
+			return c.unifyUnion(gn, TypeNode{Kind: TKUnion, A: 0, Extra: wn.Extra})
+		}
 		return c.unifyUnion(gn, wn)
 	case TKBrand:
 		// Nominal wrapper: brand ids must match, but the wrapped

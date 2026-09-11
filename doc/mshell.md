@@ -622,7 +622,11 @@ end
 ```
 
 Primitive static type names include `int`, `float`, `bool`, `str`, `path`, `datetime`, `bytes`, `none`, and `null`.
-Named runtime types such as `Grid`, `GridView`, and `GridRow` are also available.
+Named runtime types such as `Grid`, `GridView`, `GridRow`, and `HtmlNode` are also available.
+In a definition signature, the runtime keywords `dict` and `list` mean a string-keyed dictionary or a list with an unknown value type,
+the same as `{str: T}` or `[T]` with a fresh generic `T`.
+`date` and `binary` mean `datetime` and `bytes`.
+These keywords need a generic scope, so they are not accepted in a `type` body or an `as` cast; write the explicit form there.
 
 `null` is the JSON null type. It is distinct from `none`, which is only a value constructor (the empty case of `Maybe`, like `Nothing` in Haskell) and is **not** a type — writing `none` in a type expression is an error.
 `parseJson` produces a `null` for each JSON `null`, and the `null` literal pushes one.
@@ -650,6 +654,42 @@ type Cell = int | float | str | bool | null
 type Row = [Cell]
 
 { "name": "Ada", "age": 36 } as Person :age? 1 +
+```
+
+A type declaration may refer to its own name, or to a name declared later in the file, as long as the reference sits inside a list, dict, shape field, `Maybe`, or quotation.
+This is how tree-shaped data is typed.
+A reference with nothing in between, such as `type T = int | T` or two unions that list each other directly, is an error.
+
+```mshell
+type Json = null | bool | int | float | str | [Json] | {str: Json}
+
+def depth (Json -- int)
+  match
+    list l : @l (depth) map 0 append max 1 +,
+    dict d : @d values (depth) map 0 append max 1 +,
+    _ : 1,
+  end
+end
+
+"[1,[2,[3]]]" parseJson as Json depth wl # Output: 4
+```
+
+In a `match` on a union, `list l` binds only the list members of the union and `dict d` binds only the dict and shape members,
+so a recursive call on the bound value type-checks without a cast.
+
+An `as` cast checks a literal against the named type at every depth,
+so `{"trees": [{"name": "a", "kids": []}]} as Forest` is accepted when the inner dictionaries satisfy the nested declarations.
+Outside a cast, declared names stay nominal: a bare `{"n": 1}` is not a `P` until it is cast.
+
+`HtmlNode` is a built-in recursive type: `{tag: str, attr: {str: str}, children: [HtmlNode], text: str}`.
+`parseHtml` returns it, so `:children?` on a node is `[HtmlNode]` and `:tag?` is `str` with no cast.
+
+```mshell
+def childCount (HtmlNode -- int)
+    :children? len
+end
+
+"<p>x</p>" parseHtml childCount wl # Output: 1
 ```
 
 Dictionary types are split into homogeneous dictionaries and shapes.
@@ -1523,9 +1563,9 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
 
 ## HTML
 
-- `parseHtml`: Parse HTML from string or file. Returns a dictionary of node data. The dictionaries have keys `tag`, `attr`, `children`, and `text`. `(str | path -- dict)`
-- `htmlDescendents`: Get all descendants of a node. Returns a list of dictionaries with the same keys as `parseHtml`. Includes the starting node.  `(dict -- [dict])`
-- `findByTag`: Find all nodes with a given tag name. `(dict str -- [dict])`
+- `parseHtml`: Parse HTML from string or file. Returns an `HtmlNode`, a dictionary with keys `tag`, `attr`, `children`, and `text`, where `children` is a list of `HtmlNode`. `(str | path -- HtmlNode)`
+- `htmlDescendents`: Get all descendants of a node. Includes the starting node.  `(HtmlNode -- [HtmlNode])`
+- `findByTag`: Find all nodes with a given tag name. `(HtmlNode str -- [HtmlNode])`
 
 ## HTTP Requests
 

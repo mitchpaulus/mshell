@@ -153,6 +153,50 @@ Use <code>as</code> to make an explicit assertion when the checker needs help wi
 
 <pre><code>{ "name": "Ada", "age": 36 } as Person</code></pre>
 
+<h2 id="type-system-recursive-types">Recursive Types <a class="section-link" href="#type-system-recursive-types" aria-label="Permalink">§</a></h2>
+
+<p>
+A type declaration may refer to its own name, or to a name declared later in the file,
+as long as the reference sits inside a list, dict, shape field, <code>Maybe</code>, or quotation.
+This is how tree-shaped data is typed.
+A reference with nothing in between, such as <code>type T = int | T</code> or two unions that list each other directly, is an error.
+</p>
+
+<pre><code>type Json = null | bool | int | float | str | [Json] | {str: Json}
+
+def depth (Json -- int)
+  match
+    list l : @l (depth) map 0 append max 1 +,
+    dict d : @d values (depth) map 0 append max 1 +,
+    _ : 1,
+  end
+end
+
+"[1,[2,[3]]]" parseJson as Json depth wl # Output: 4</code></pre>
+
+<p>
+In a <code>match</code> on a union, <code>list l</code> binds only the list members of the union and <code>dict d</code> binds only the dict and shape members,
+so a recursive call on the bound value type-checks without a cast.
+</p>
+
+<p>
+An <code>as</code> cast checks a literal against the named type at every depth,
+so <code>{"trees": [{"name": "a", "kids": []}]} as Forest</code> is accepted when the inner dictionaries satisfy the nested declarations.
+Outside a cast, declared names stay nominal: a bare <code>{"n": 1}</code> is not a <code>P</code> until it is cast.
+</p>
+
+<p>
+<code>HtmlNode</code> is a built-in recursive type:
+<code>{tag: str, attr: {str: str}, children: [HtmlNode], text: str}</code>.
+<code>parseHtml</code> returns it, so <code>:children?</code> on a node is <code>[HtmlNode]</code> and <code>:tag?</code> is <code>str</code> with no cast.
+</p>
+
+<pre><code>def childCount (HtmlNode -- int)
+    :children? len
+end
+
+"&lt;p&gt;x&lt;/p&gt;" parseHtml childCount wl # Output: 1</code></pre>
+
 <h1 id="type-system-dictionaries">Dictionaries <a class="section-link" href="#type-system-dictionaries" aria-label="Permalink">§</a> <a class="back-to-top" href="#type-system-top">Back to top</a></h1>
 
 <p>

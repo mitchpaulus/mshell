@@ -467,9 +467,9 @@
         <tr> <th>Name</th> <th>Description</th> <th>Signature</th> </tr>
     </thead>
     <tbody>
-        <tr> <td><code>parseHtml</code></td> <td>Parse HTML from a string or file into node dictionaries with <code>tag</code>, <code>attr</code>, <code>children</code>, and <code>text</code>.</td> <td><code>(<span class="sig-type sig-type-str">str</span>|<span class="sig-type sig-type-path">path</span> -- <span class="sig-type sig-type-dict">dict</span>)</code></td> </tr>
-        <tr> <td><code>htmlDescendents</code></td> <td>Return all descendant nodes (including the root) from a parsed HTML node.</td> <td><code>(<span class="sig-type sig-type-dict">dict</span> -- [<span class="sig-type sig-type-dict">dict</span>])</code></td> </tr>
-        <tr> <td><code>findByTag</code></td> <td>Find all nodes with the given tag name.</td> <td><code>(<span class="sig-type sig-type-dict">dict</span> <span class="sig-type sig-type-str">str</span> -- [<span class="sig-type sig-type-dict">dict</span>])</code></td> </tr>
+        <tr> <td><code>parseHtml</code></td> <td>Parse HTML from a string or file into an <code>HtmlNode</code>: a dictionary with <code>tag</code>, <code>attr</code>, <code>children</code> (a list of <code>HtmlNode</code>), and <code>text</code>.</td> <td><code>(<span class="sig-type sig-type-str">str</span>|<span class="sig-type sig-type-path">path</span> -- <span class="sig-type sig-type-dict">HtmlNode</span>)</code></td> </tr>
+        <tr> <td><code>htmlDescendents</code></td> <td>Return all descendant nodes (including the root) from a parsed HTML node.</td> <td><code>(<span class="sig-type sig-type-dict">HtmlNode</span> -- [<span class="sig-type sig-type-dict">HtmlNode</span>])</code></td> </tr>
+        <tr> <td><code>findByTag</code></td> <td>Find all nodes with the given tag name.</td> <td><code>(<span class="sig-type sig-type-dict">HtmlNode</span> <span class="sig-type sig-type-str">str</span> -- [<span class="sig-type sig-type-dict">HtmlNode</span>])</code></td> </tr>
     </tbody>
 </table>
 

@@ -60,8 +60,143 @@ func (c *Checker) DeclareType(name string, body TypeId) (TypeId, bool) {
 	}
 
 	branded := c.brandify(nameId, body)
+	c.arena.markNamed(branded)
 	c.typeEnv[nameId] = branded
 	return branded, true
+}
+
+// declareTypes registers every top-level `type` declaration of a file so
+// that bodies may refer to any declared name, including their own
+// (recursive types) and names declared later in the file (mutual
+// recursion). It replaces the resolve-then-DeclareType sequence for the
+// program path; DeclareType stays for callers that already hold a
+// resolved body.
+//
+// Steps:
+//
+//  1. Reserve a placeholder id per declaration and bind the name. A union
+//     body gets a branded-union placeholder, anything else a brand
+//     placeholder, so the final node kind matches what brandify would
+//     have produced.
+//  2. Resolve each body with every name visible and patch it into its
+//     placeholder. The placeholder id is the type's id for good, so every
+//     reference resolved during this step stays valid.
+//  3. Reject unguarded cycles. A declaration may reach itself only through
+//     a list, dict, shape field, Maybe, or quotation; `type T = int | T`
+//     or `type A = B` with `type B = A` has no value that terminates and
+//     would make the checker's one-layer unfolding loop. A cycle is
+//     reported on each declaration in it and the offending bodies are
+//     emptied so later checking stays finite.
+func (c *Checker) declareTypes(decls []*MShellTypeDecl) {
+	type pending struct {
+		decl    *MShellTypeDecl
+		nameId  NameId
+		id      TypeId
+		isUnion bool
+	}
+	if c.typeEnv == nil {
+		c.typeEnv = make(map[NameId]TypeId, 8)
+	}
+	var pend []pending
+	for _, d := range decls {
+		if IsReservedTypeName(d.Name) {
+			c.errors = append(c.errors, TypeError{Kind: TErrReservedTypeName, Pos: d.NameToken, Name: d.Name})
+			continue
+		}
+		nameId := c.names.Intern(d.Name)
+		if _, exists := c.typeEnv[nameId]; exists {
+			c.errors = append(c.errors, TypeError{Kind: TErrDuplicateTypeName, Pos: d.NameToken, Name: d.Name})
+			continue
+		}
+		_, isUnion := d.Body.(*TypeUnionExpr)
+		var id TypeId
+		if isUnion {
+			id = c.arena.NewUnionPlaceholder(nameId)
+		} else {
+			id = c.arena.NewBrandPlaceholder(nameId)
+		}
+		c.typeEnv[nameId] = id
+		pend = append(pend, pending{decl: d, nameId: nameId, id: id, isUnion: isUnion})
+	}
+
+	inBatch := make(map[TypeId]int, len(pend))
+	for i, p := range pend {
+		inBatch[p.id] = i
+	}
+	// direct[i] lists the batch indices that declaration i refers to with
+	// nothing in between: its whole body, or one of its union arms.
+	direct := make([][]int, len(pend))
+	for i, p := range pend {
+		if p.isUnion {
+			union := p.decl.Body.(*TypeUnionExpr)
+			arms := make([]TypeId, 0, len(union.Arms))
+			for _, a := range union.Arms {
+				arms = append(arms, c.resolveTypeExpr(a, nil))
+			}
+			c.arena.PatchUnion(p.id, arms)
+			for _, a := range c.arena.UnionMembers(p.id) {
+				if j, ok := inBatch[a]; ok {
+					direct[i] = append(direct[i], j)
+				}
+			}
+			continue
+		}
+		body := c.resolveTypeExpr(p.decl.Body, nil)
+		c.arena.PatchBrand(p.id, body)
+		if j, ok := inBatch[body]; ok {
+			direct[i] = append(direct[i], j)
+		}
+	}
+
+	// Cycle detection over the direct-reference graph (three-colour DFS).
+	const (
+		white = iota
+		grey
+		black
+	)
+	colour := make([]int, len(pend))
+	onCycle := make([]bool, len(pend))
+	var stack []int
+	var visit func(i int)
+	visit = func(i int) {
+		colour[i] = grey
+		stack = append(stack, i)
+		for _, j := range direct[i] {
+			switch colour[j] {
+			case white:
+				visit(j)
+			case grey:
+				for k := len(stack) - 1; k >= 0; k-- {
+					onCycle[stack[k]] = true
+					if stack[k] == j {
+						break
+					}
+				}
+			}
+		}
+		stack = stack[:len(stack)-1]
+		colour[i] = black
+	}
+	for i := range pend {
+		if colour[i] == white {
+			visit(i)
+		}
+	}
+	for i, p := range pend {
+		if !onCycle[i] {
+			continue
+		}
+		c.errors = append(c.errors, TypeError{
+			Kind: TErrTypeParse,
+			Pos:  p.decl.NameToken,
+			Hint: "type '" + p.decl.Name + "' refers to itself with nothing in between; a recursive reference must sit inside a list, dict, shape field, Maybe, or quotation",
+		})
+		if p.isUnion {
+			c.arena.PatchUnion(p.id, nil)
+		} else {
+			c.arena.PatchBrand(p.id, TidNothing)
+		}
+	}
 }
 
 // LookupType returns the TypeId previously registered for `name` via
@@ -167,6 +302,8 @@ func (c *Checker) castOk(src, dst TypeId) bool {
 	if src == dst {
 		return true
 	}
+	c.casting++
+	defer func() { c.casting-- }()
 	cp := c.subst.Checkpoint()
 	if c.unify(src, dst) {
 		return true

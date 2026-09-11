@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Recursive named types.
+  A `type` declaration may now refer to its own name, or to a name declared later in the file,
+  as long as the reference sits inside a list, dict, shape field, `Maybe`, or quotation.
+  This allows tree-shaped types such as `type Json = null | bool | int | float | str | [Json] | {str: Json}`.
+  Inside a `match` on such a union, `list l` and `dict d` bind only the list or dict members.
+- `HtmlNode`: built-in named type for the nodes `parseHtml` produces,
+  `{tag: str, attr: {str: str}, children: [HtmlNode], text: str}`.
+  `parseHtml`, `htmlDescendents`, and `findByTag` are now typed with it.
+- `dict` and `list` are accepted in definition signatures as a string-keyed dict / list with an unknown value type.
+  `date` and `binary` are accepted as `datetime` and `bytes`.
+  Previously these words were silently treated as generic type variables.
+
+### Fixed
+
+- An `as` cast now accepts a literal whose nested values satisfy a named type at any depth,
+  such as `{"ms": [{"n": 1}]} as T` with `type P = {n: int}` and `type T = {ms: [P]}`.
+  Previously only the top level of the cast could take on a declared name.
+
 - Assertive destructuring with the `=>` operator.
   It consumes a list, dictionary, or Just value, binds its structural pattern names,
   and fails at runtime when the pattern does not match.

@@ -90,6 +90,12 @@ type typeRewriter struct {
 }
 
 func (w *typeRewriter) mapType(t TypeId, skip map[TypeVarId]struct{}) TypeId {
+	// A declared named type has a closed body (no type variables), so
+	// there is nothing to rewrite inside it. Stopping here also keeps the
+	// walk finite for a recursive declaration, whose body points back at t.
+	if w.arena.IsNamed(t) {
+		return t
+	}
 	n := w.arena.Node(t)
 	switch n.Kind {
 	case TKVar:
@@ -318,6 +324,11 @@ func (s *Substitution) occurs(arena *TypeArena, v TypeVarId, t TypeId) bool {
 // visit callback owns any substitution-chain following — it has the context
 // to decide whether a bound variable's binding should be chased.
 func (a *TypeArena) walkTypeVars(t TypeId, visit func(TypeVarId) bool) bool {
+	// Declared named types are closed: no variables inside, and a
+	// recursive body would otherwise loop.
+	if a.IsNamed(t) {
+		return false
+	}
 	n := a.Node(t)
 	switch n.Kind {
 	case TKVar:
