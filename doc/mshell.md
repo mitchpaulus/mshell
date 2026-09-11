@@ -622,7 +622,11 @@ end
 ```
 
 Primitive static type names include `int`, `float`, `bool`, `str`, `path`, `datetime`, `bytes`, `none`, and `null`.
-Named runtime types such as `Grid`, `GridView`, and `GridRow` are also available.
+Named runtime types such as `Grid`, `GridView`, and `GridRow` are also available, as are the built-in recursive types `Json` and `HtmlNode` described below.
+In a definition signature, the runtime keywords `dict` and `list` mean a string-keyed dictionary or a list with an unknown value type,
+the same as `{str: T}` or `[T]` with a fresh generic `T`.
+`date` and `binary` mean `datetime` and `bytes`.
+These keywords need a generic scope, so they are not accepted in a `type` body or an `as` cast; write the explicit form there.
 
 `null` is the JSON null type. It is distinct from `none`, which is only a value constructor (the empty case of `Maybe`, like `Nothing` in Haskell) and is **not** a type — writing `none` in a type expression is an error.
 `parseJson` produces a `null` for each JSON `null`, and the `null` literal pushes one.
@@ -650,6 +654,50 @@ type Cell = int | float | str | bool | null
 type Row = [Cell]
 
 { "name": "Ada", "age": 36 } as Person :age? 1 +
+```
+
+A type declaration may refer to its own name, or to a name declared later in the file, as long as the reference sits inside a list, dict, shape field, `Maybe`, or quotation.
+This is how tree-shaped data is typed.
+A reference with nothing in between, such as `type T = int | T` or two unions that list each other directly, is an error.
+
+`Json` is a built-in recursive type declared as `null | bool | int | float | str | [Json] | {str: Json}`.
+It is the return type of `parseJson`.
+Take it apart with `match` on the runtime kind, as in `depth` below; `dict d :` and `list l :` arms bind the dict or list members of the union.
+`as` cannot narrow it: `as` is static only and never fails, so `parseJson as Config` is rejected.
+
+```mshell
+def depth (Json -- int)
+  match
+    list l : @l (depth) map 0 append max 1 +,
+    dict d : @d values (depth) map 0 append max 1 +,
+    _ : 1,
+  end
+end
+
+"[1,[2,[3]]]" parseJson depth wl # Output: 4
+```
+
+In a `match` on a union, `list l` binds only the list members of the union and `dict d` binds only the dict and shape members,
+so a recursive call on the bound value type-checks without a cast.
+
+`as` is static only: the runtime does no work for it, so the checker only accepts a cast it can prove never fails.
+That means widening and naming: a value flows into a union that contains its type, a literal takes on a declared name when its inner values satisfy the nested declarations (`{"trees": [{"name": "a", "kids": []}]} as Forest`), and an empty literal is pinned (`[] as [str]`).
+`as` never narrows: `int | float as int` and `parseJson as Config` are rejected, because only a `match` checks the value at runtime.
+Outside a cast, declared names stay nominal: a bare `{"n": 1}` is not a `P` until it is cast, and two names over the same body never cast into each other.
+
+A `match` arm cannot name a declared type either.
+Type declarations are erased at runtime, so the evaluator has nothing to test the value against; the checker rejects `Manifest :> ...` as an arm.
+Match on the runtime kind (`dict d :`, `list l :`, `int n :`) or on a list or dict pattern.
+
+`HtmlNode` is a built-in recursive type: `{tag: str, attr: {str: str}, children: [HtmlNode], text: str}`.
+`parseHtml` returns it, so `:children?` on a node is `[HtmlNode]` and `:tag?` is `str` with no cast.
+
+```mshell
+def childCount (HtmlNode -- int)
+    :children? len
+end
+
+"<p>x</p>" parseHtml childCount wl # Output: 1
 ```
 
 Dictionary types are split into homogeneous dictionaries and shapes.
@@ -1196,7 +1244,7 @@ end wl # Output: 11
 - `gridValues`: Extract Grid or GridView cell values as row-major lists, without a header row and without coercing cell types. (`Grid|GridView -- [[a]]`)
 - `toCsvCell`: Escape a single CSV cell. If the value contains `,`, `"`, or a newline, wraps the value in double quotes and doubles any embedded quotes; otherwise returns the input unchanged. (`str -- str`)
 - `toCsv`: Serialize a list of rows to a CSV string. Each cell is escaped with `toCsvCell`, cells are joined with `,`, and rows are joined with `\n`. (`[[str]] -- str`)
-- `parseJson`: Parse JSON from a string, binary, or file path into mshell objects. JSON `null` becomes the `null` type (distinct from `none`). (`path|str|binary -- list|dict|numeric|str|bool|null`)
+- `parseJson`: Parse JSON from a string, binary, or file path into mshell objects. JSON `null` becomes the `null` type (distinct from `none`). The static return type is the built-in recursive type `Json` (`null | bool | int | float | str | [Json] | {str: Json}`). Take it apart with `match` on the runtime kind (`dict d :`, `list l :`, ...); `as` cannot narrow it. `(str | path | bytes -- Json)`
 - `parseExcel`: Parse an `.xlsx` (OOXML) spreadsheet into a list of sheets in workbook (tab) order. Each sheet is a dict with a `name` key (the worksheet name), a `data` key holding a rectangular list of rows (list of lists), a `hidden` key (bool; `true` for hidden or veryHidden sheets), and a `visibility` key (`"visible"`, `"hidden"`, or `"veryHidden"`). Cell values are typed: numbers become floats (dates appear as Excel serial floats), strings become strings (shared, inline, and formula-string results all resolved), booleans become booleans, error cells (e.g. `#DIV/0!`) become `none`, and empty/padding cells are the empty string. Chartsheets are skipped; hidden worksheets are included. Dates are returned as raw Excel serial floats; apply `fromOleDate` at the call site to convert. `parseExcel` assumes the default 1900-based date system, which matches `fromOleDate`'s OLE epoch (1899-12-30). Workbooks saved with the 1904 date system (`<workbookPr date1904="true"/>`, seen on some files originally authored on older Mac Excel or with the "Use 1904 date system" option enabled) have serials offset by 1462 days; on those files, add 1462 to each serial before calling `fromOleDate`, e.g. `@wb :0: :data? :3: :0: 1462 + fromOleDate`. (`path|binary -- list`)
 - `seq`: Generate a list of integers, starting from 0. Exclusive end to integer on stack. `2 seq` produces `[0 1]`. `(int -- [int])`
 - `repeat`: Create a list containing the provided value repeated `n` times. `(a int -- [a])`
@@ -1523,9 +1571,9 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
 
 ## HTML
 
-- `parseHtml`: Parse HTML from string or file. Returns a dictionary of node data. The dictionaries have keys `tag`, `attr`, `children`, and `text`. `(str | path -- dict)`
-- `htmlDescendents`: Get all descendants of a node. Returns a list of dictionaries with the same keys as `parseHtml`. Includes the starting node.  `(dict -- [dict])`
-- `findByTag`: Find all nodes with a given tag name. `(dict str -- [dict])`
+- `parseHtml`: Parse HTML from string or file. Returns an `HtmlNode`, a dictionary with keys `tag`, `attr`, `children`, and `text`, where `children` is a list of `HtmlNode`. `(str | path -- HtmlNode)`
+- `htmlDescendents`: Get all descendants of a node. Includes the starting node.  `(HtmlNode -- [HtmlNode])`
+- `findByTag`: Find all nodes with a given tag name. `(HtmlNode str -- [HtmlNode])`
 
 ## HTTP Requests
 

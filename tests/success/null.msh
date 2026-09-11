@@ -28,7 +28,10 @@ end
 
 5 classify wl
 null classify wl
-'null' parseJson classify wl
+'null' parseJson match
+    null : null classify wl,
+    _ : 1 exit,
+end
 
 # Building JSON with an explicit null value.
 {

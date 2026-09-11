@@ -419,18 +419,18 @@ def repeat (a int -- [a])
     @count seq (drop @item) map
 end
 
-def htmlDescendents (dict -- [dict])
+def htmlDescendents (HtmlNode -- [HtmlNode])
     [] htmlDescendentsAcc
 end
 
 # Accumulator version
-def htmlDescendentsAcc (dict [dict] -- [dict])
+def htmlDescendentsAcc (HtmlNode [HtmlNode] -- [HtmlNode])
     node!, accum!
     @node "children" get? (c! @c @accum htmlDescendentsAcc drop) each
     @accum @node append
 end
 
-def findByTag (dict str -- [dict])
+def findByTag (HtmlNode str -- [HtmlNode])
   tag! htmlDescendents ("tag" get (@tag =) map false maybe) filter
 end
 

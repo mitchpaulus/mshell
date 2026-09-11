@@ -1,0 +1,45 @@
+# Recursive named types: a type may refer to itself through a list, dict,
+# shape field, Maybe, or quotation. `list l` / `dict d` in a match on a
+# union bind only the members of that kind.
+type JsonLike = null | bool | int | float | str | [JsonLike] | {str: JsonLike}
+
+def depth (JsonLike -- int)
+  match
+    list l : @l (depth) map 0 append max 1 +,
+    dict d : @d values (depth) map 0 append max 1 +,
+    _ : 1,
+  end
+end
+
+[1 [2 [3]]] as JsonLike depth wl
+{"a": {"b": 1}} as JsonLike depth wl
+7 as JsonLike depth wl
+
+# Mutual recursion with a forward reference.
+type Tree = {name: str, kids: [Forest]}
+type Forest = {trees: [Tree]}
+
+def treeCount (Forest -- int)
+    :trees? (:kids? (treeCount) map 0 append sum) map 0 append sum 1 +
+end
+
+{"trees": [{"name": "a", "kids": [{"trees": []}]}]} as Forest treeCount wl
+
+# HtmlNode is a built-in recursive type returned by parseHtml.
+def childCount (HtmlNode -- int)
+    :children? len
+end
+
+"<p>x</p>" parseHtml childCount wl
+"<ul><li>a</li><li>b</li></ul>" parseHtml "li" findByTag (:text?) map ", " join wl
+
+# Json is the built-in recursive type parseJson returns.
+def jsonDepth (Json -- int)
+  match
+    list l : @l (jsonDepth) map 0 append max 1 +,
+    dict d : @d values (jsonDepth) map 0 append max 1 +,
+    _ : 1,
+  end
+end
+
+"{\"a\": [1, [2]]}" parseJson jsonDepth wl

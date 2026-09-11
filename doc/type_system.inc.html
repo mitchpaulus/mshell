@@ -153,6 +153,62 @@ Use <code>as</code> to make an explicit assertion when the checker needs help wi
 
 <pre><code>{ "name": "Ada", "age": 36 } as Person</code></pre>
 
+<h2 id="type-system-recursive-types">Recursive Types <a class="section-link" href="#type-system-recursive-types" aria-label="Permalink">§</a></h2>
+
+<p>
+A type declaration may refer to its own name, or to a name declared later in the file,
+as long as the reference sits inside a list, dict, shape field, <code>Maybe</code>, or quotation.
+This is how tree-shaped data is typed.
+A reference with nothing in between, such as <code>type T = int | T</code> or two unions that list each other directly, is an error.
+</p>
+
+<p>
+<code>Json</code> is a built-in recursive type declared as <code>null | bool | int | float | str | [Json] | {str: Json}</code>.
+It is the return type of <code>parseJson</code>.
+Take it apart with <code>match</code> on the runtime kind, as in <code>depth</code> below; <code>dict d :</code> and <code>list l :</code> arms bind the dict or list members of the union.
+<code>as</code> cannot narrow it: <code>as</code> is static only and never fails, so <code>parseJson as Config</code> is rejected.
+</p>
+
+<pre><code>def depth (Json -- int)
+  match
+    list l : @l (depth) map 0 append max 1 +,
+    dict d : @d values (depth) map 0 append max 1 +,
+    _ : 1,
+  end
+end
+
+"[1,[2,[3]]]" parseJson depth wl # Output: 4</code></pre>
+
+<p>
+In a <code>match</code> on a union, <code>list l</code> binds only the list members of the union and <code>dict d</code> binds only the dict and shape members,
+so a recursive call on the bound value type-checks without a cast.
+</p>
+
+<p>
+<code>as</code> is static only: the runtime does no work for it, so the checker only accepts a cast it can prove never fails.
+That means widening and naming: a value flows into a union that contains its type, a literal takes on a declared name when its inner values satisfy the nested declarations (<code>{"trees": [{"name": "a", "kids": []}]} as Forest</code>), and an empty literal is pinned (<code>[] as [str]</code>).
+<code>as</code> never narrows: <code>int | float as int</code> and <code>parseJson as Config</code> are rejected, because only a <code>match</code> checks the value at runtime.
+Outside a cast, declared names stay nominal: a bare <code>{"n": 1}</code> is not a <code>P</code> until it is cast, and two names over the same body never cast into each other.
+</p>
+
+<p>
+A <code>match</code> arm cannot name a declared type either.
+Type declarations are erased at runtime, so the evaluator has nothing to test the value against; the checker rejects <code>Manifest :&gt; ...</code> as an arm.
+Match on the runtime kind (<code>dict d :</code>, <code>list l :</code>, <code>int n :</code>) or on a list or dict pattern.
+</p>
+
+<p>
+<code>HtmlNode</code> is a built-in recursive type:
+<code>{tag: str, attr: {str: str}, children: [HtmlNode], text: str}</code>.
+<code>parseHtml</code> returns it, so <code>:children?</code> on a node is <code>[HtmlNode]</code> and <code>:tag?</code> is <code>str</code> with no cast.
+</p>
+
+<pre><code>def childCount (HtmlNode -- int)
+    :children? len
+end
+
+"&lt;p&gt;x&lt;/p&gt;" parseHtml childCount wl # Output: 1</code></pre>
+
 <h1 id="type-system-dictionaries">Dictionaries <a class="section-link" href="#type-system-dictionaries" aria-label="Permalink">§</a> <a class="back-to-top" href="#type-system-top">Back to top</a></h1>
 
 <p>
