@@ -1243,10 +1243,14 @@ func (c *Checker) checkMatchBlock(matchBlock *MShellParseMatchBlock) {
 			return
 		}
 		if len(arm.Pattern) > 0 && !info.Recognized {
+			hint := matchPatternFormsHint
+			if info.RejectHint != "" {
+				hint = info.RejectHint
+			}
 			c.errors = append(c.errors, TypeError{
 				Kind: TErrInvalidMatchPattern,
 				Pos:  arm.Pattern[0].GetStartToken(),
-				Hint: matchPatternFormsHint,
+				Hint: hint,
 			})
 		}
 		// Apply per-arm subject handling.
@@ -1304,6 +1308,9 @@ type armPattern struct {
 	// TErrInvalidMatchPattern diagnostic rather than silently binding
 	// nothing.
 	Recognized bool
+	// RejectHint, when set on an unrecognized pattern, replaces the
+	// generic list of legal forms with a reason specific to this pattern.
+	RejectHint string
 	// Narrow, when not TidNothing, is the concrete primitive a
 	// preserve-arm (`:>`) refines the on-stack subject to. These
 	// primitives have no subtypes, so the refinement is sound
@@ -1399,12 +1406,20 @@ func (c *Checker) armPatternOf(subject TypeId, pattern []MShellParseItem) armPat
 		}
 		if t0.Type == LITERAL {
 			if tid := c.LookupType(t0.Lexeme); tid != TidNothing {
-				out.Recognized = true
-				out.Tag = MatchArmTag{Kind: MatchArmType, TypeArm: tid}
+				out.RejectHint = namedTypeArmHint(t0.Lexeme)
 			}
 		}
 	}
 	return out
+}
+
+// namedTypeArmHint explains why a declared type name is not a match arm:
+// type declarations are erased at runtime, so the evaluator has nothing
+// to test the value against. Only runtime kinds and structural patterns
+// can be matched.
+func namedTypeArmHint(name string) string {
+	return "'" + name + "' is a declared type; type declarations are erased at runtime, so a match cannot test for one. " +
+		"Match on the runtime kind instead (`dict d :`, `list l :`, `int n :`, ...) or on a list/dict pattern"
 }
 
 // structuralPatternBindings returns the bindings installed on a successful
@@ -1630,10 +1645,10 @@ func (c *Checker) analyzeTokenPattern(tok Token, out *armPattern) {
 			out.Recognized = true
 			return
 		}
-		// User-declared named type (e.g. `type X = A | B`).
+		// A declared type name (e.g. `type X = A | B`) is not matchable:
+		// declarations are erased at runtime.
 		if tid := c.LookupType(tok.Lexeme); tid != TidNothing {
-			out.Recognized = true
-			out.Tag = MatchArmTag{Kind: MatchArmType, TypeArm: tid}
+			out.RejectHint = namedTypeArmHint(tok.Lexeme)
 		}
 	}
 }
@@ -1663,7 +1678,18 @@ func (c *Checker) narrowKeywordBinding(keyword Token, subject TypeId) TypeId {
 	if keyword.Type != LITERAL || (keyword.Lexeme != "list" && keyword.Lexeme != "dict") {
 		return subject
 	}
-	if c.arena.Kind(subject) != TKUnion {
+	switch c.arena.Kind(subject) {
+	case TKVar, TKRigid:
+		// The runtime guarantees the kind once the arm is taken; the
+		// value type is still unknown. A def generic (rigid) stays
+		// abstract for the caller, but inside the arm the value is a
+		// list / dict of something.
+		if keyword.Lexeme == "list" {
+			return c.arena.MakeList(c.subst.FreshVar(c.arena))
+		}
+		return c.arena.MakeDict(TidStr, c.subst.FreshVar(c.arena))
+	case TKUnion:
+	default:
 		return subject
 	}
 	var kept []TypeId

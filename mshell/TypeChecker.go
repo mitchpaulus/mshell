@@ -1248,8 +1248,8 @@ func (c *Checker) unify(got, want TypeId) bool {
 	case TKUnion:
 		if c.casting > 0 && gn.A == 0 && wn.A != 0 {
 			// Casting an unbranded union into a branded union at depth:
-			// compare against the arms. A branded source never
-			// re-brands (no brand-to-brand teleport).
+			// every source arm must fit (widening). `as` never narrows;
+			// the runtime does not check it, so narrowing needs a match.
 			return c.unifyUnion(gn, TypeNode{Kind: TKUnion, A: 0, Extra: wn.Extra})
 		}
 		return c.unifyUnion(gn, wn)

@@ -54,17 +54,18 @@ def count (A -- int) :b? len end
 
 func TestRecursiveUnionDeclWithKeywordNarrowing(t *testing.T) {
 	// `list l` on a union subject binds only the list members, so the
-	// recursive call sees `[Json]`, not the whole union.
+	// recursive call sees `[JsonLike]`, not the whole union. A literal
+	// widens into the recursive union at every depth.
 	expectTypeOk(t, `
-type Json = null | bool | int | float | str | [Json] | {str: Json}
-def depth (Json -- int)
+type JsonLike = null | bool | int | float | str | [JsonLike] | {str: JsonLike}
+def depth (JsonLike -- int)
   match
     list l : @l (depth) map 0 append max 1 +,
     dict d : @d values (depth) map 0 append max 1 +,
     _ : 1,
   end
 end
-"[1,[2,[3]]]" parseJson as Json depth wl
+[1 [2 [3]]] as JsonLike depth wl
 `)
 }
 
@@ -164,4 +165,69 @@ type B = {n: int}
 type T = {ms: [B]}
 {"ms": [{"n": 1} as A]} as T drop
 `, "invalid cast")
+}
+
+func TestKeywordArmNarrowsUnknownSubject(t *testing.T) {
+	// `list l` on a value of unknown type (a def generic here) binds a
+	// list, so list operations inside the arm type-check.
+	expectTypeOk(t, `
+def childCount (dict -- int)
+  :children? match
+    list l : @l len,
+    _ : 0,
+  end
+end
+{"children": [1 2]} childCount wl
+`)
+}
+
+func TestBuiltinJsonType(t *testing.T) {
+	expectTypeOk(t, `
+def depth (Json -- int)
+  match
+    list l : @l (depth) map 0 append max 1 +,
+    dict d : @d values (depth) map 0 append max 1 +,
+    _ : 1,
+  end
+end
+"[1,[2,[3]]]" parseJson depth wl
+` + "`[1, 2]`" + ` parseJson depth wl
+`)
+	expectTypeErr(t, "type Json = int", "")
+}
+
+func TestParseJsonReturnsJsonAndAsCannotNarrow(t *testing.T) {
+	// `as` is static only and never fails, so it cannot pick one arm of
+	// the Json union; the runtime check is a match on the kind.
+	expectTypeErr(t, `"{}" parseJson as {name: str, port: int} drop`, "cannot narrow a union")
+	expectTypeErr(t, `"null" parseJson as int | null drop`, "cannot narrow a union")
+	expectTypeErr(t, `"1" parseJson 1 + wl`, "")
+	expectTypeOk(t, `
+"{}" parseJson match
+    dict d : @d :name? match
+        str s : @s wl,
+        _ : 1 exit,
+    end,
+    _ : 1 exit,
+end
+`)
+}
+
+func TestNamedTypeMatchArmRejected(t *testing.T) {
+	// Type declarations are erased at runtime, so the evaluator cannot
+	// test a value against one; the checker refuses the arm up front.
+	expectTypeErr(t, `
+type Manifest = {packages: [{name: str}]}
+"{}" parseJson match
+    Manifest :> :packages? len wl,
+    _ : 1 exit,
+end
+`, "erased at runtime")
+	expectTypeErr(t, `
+type Cell = int | str
+1 match
+    Cell c : @c drop,
+    _ : drop,
+end
+`, "erased at runtime")
 }

@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as long as the reference sits inside a list, dict, shape field, `Maybe`, or quotation.
   This allows tree-shaped types such as `type Json = null | bool | int | float | str | [Json] | {str: Json}`.
   Inside a `match` on such a union, `list l` and `dict d` bind only the list or dict members.
+- `Json`: built-in named type for every value `parseJson` can produce,
+  `null | bool | int | float | str | [Json] | {str: Json}`.
+  `parseJson` now returns `Json` instead of a free type, so its result must be taken apart
+  with a `match` on the runtime kind (`dict d :`, `list l :`, ...) before it is used as a specific type.
+  `as` cannot do this: it is static only and never fails, so it only widens or names a type.
 - `HtmlNode`: built-in named type for the nodes `parseHtml` produces,
   `{tag: str, attr: {str: str}, children: [HtmlNode], text: str}`.
   `parseHtml`, `htmlDescendents`, and `findByTag` are now typed with it.
@@ -23,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The type checker no longer accepts a declared type name as a `match` arm.
+  Type declarations are erased at runtime, so such an arm always failed when the script ran.
 - An `as` cast now accepts a literal whose nested values satisfy a named type at any depth,
   such as `{"ms": [{"n": 1}]} as T` with `type P = {n: int}` and `type T = {ms: [P]}`.
   Previously only the top level of the cast could take on a declared name.

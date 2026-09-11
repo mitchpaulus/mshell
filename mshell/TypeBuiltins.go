@@ -50,8 +50,8 @@ func newSigRegistry(arena *TypeArena, names *NameTable) *sigRegistry {
 }
 
 // builtinNamedTypes declares the named types that builtin signatures and
-// user programs can refer to without a `type` declaration. Every name
-// here is also in IsReservedTypeName. Construction is idempotent per
+// user programs can refer to without a `type` declaration: HtmlNode and
+// Json. Every name here is also in IsReservedTypeName. Construction is idempotent per
 // arena: placeholders hashcons on the name, so a second call on the same
 // arena returns the same ids.
 //
@@ -71,6 +71,21 @@ func builtinNamedTypes(arena *TypeArena, names *NameTable) map[NameId]TypeId {
 		{Name: names.Intern("text"), Type: TidStr},
 	}))
 	env[htmlName] = htmlNode
+
+	// Json = null | bool | int | float | str | [Json] | {str: Json}
+	//
+	// Every value parseJson can produce, and parseJson's return type. A
+	// call site that knows the layout narrows with a cast
+	// (`parseJson as Config`), which the checker accepts when the target
+	// is reachable from Json's arms.
+	jsonName := names.Intern("Json")
+	json := arena.NewUnionPlaceholder(jsonName)
+	arena.PatchUnion(json, []TypeId{
+		TidNull, TidBool, TidInt, TidFloat, TidStr,
+		arena.MakeList(json),
+		arena.MakeDict(TidStr, json),
+	})
+	env[jsonName] = json
 
 	return env
 }
@@ -463,7 +478,7 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		"(GridView (GridRow GridRow -- int) -- GridView)",
 	)
 	r.reg("parseCsv", "(str | path -- [[str]])")
-	r.reg("parseJson", "(str | path | bytes -- t)")
+	r.reg("parseJson", "(str | path | bytes -- Json)")
 	// parseExcel: a cell is a string, a float (numbers and dates), a
 	// bool, or a None Maybe (error cells like #DIV/0!). The Maybe carries
 	// a free inner type because an error cell is always None, mirroring

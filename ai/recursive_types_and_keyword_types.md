@@ -214,3 +214,16 @@ stdlib will catch the next `(dict -- ...)` before a user does.
   arms are accepted by the checker but rejected by the runtime ("Unknown
   match pattern literal"), which is a separate pre-existing gap.
 - Not done: stdlib bodies are still not type-checked (follow-up 4).
+- Reopened 2026-09-11 at the user's request: `parseJson` now returns the
+  built-in `Json` instead of a free variable. A first attempt let `as`
+  narrow a union to one arm; that was reverted the same day because `as`
+  is static only and must never fail. Semantics settled: `as` widens or
+  names (including into nested brands at depth), never narrows; narrowing
+  external data is `match` on the runtime kind today and `tryAs` (PR #275)
+  once it lands. The checker now rejects a declared type name as a match
+  arm, since declarations are erased at runtime; #275's validator is the
+  natural way to make such arms real later. The brand-to-brand rule is
+  explicit in `castOk`.
+- Open for the user: the runtime turns every JSON number into a float, so
+  the `int` arm of `Json` never occurs at runtime. Either drop it or make
+  `parseJson` produce ints for integral numbers (#275 lists this too).

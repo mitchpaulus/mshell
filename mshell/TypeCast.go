@@ -277,12 +277,19 @@ func (c *Checker) Cast(target TypeId, callSite Token) {
 		c.stack.Push(target)
 		return
 	}
-	c.errors = append(c.errors, TypeError{
+	err := TypeError{
 		Kind:     TErrInvalidCast,
 		Pos:      callSite,
 		Expected: target,
 		Actual:   top,
-	})
+	}
+	if c.arena.Kind(c.subst.Apply(c.arena, top)) == TKUnion {
+		// The common mistake: trying to pick one arm of a union with `as`.
+		// `as` is static only and never fails, so it cannot narrow; the
+		// runtime check happens in a match.
+		err.Hint = "'as' only widens or names a type, it cannot narrow a union; take the value apart with match (`dict d :`, `list l :`, `int n :`, ...)"
+	}
+	c.errors = append(c.errors, err)
 	c.stack.Push(target)
 }
 
@@ -301,6 +308,12 @@ func (c *Checker) Cast(target TypeId, callSite Token) {
 func (c *Checker) castOk(src, dst TypeId) bool {
 	if src == dst {
 		return true
+	}
+	// No brand-to-brand teleport: two names over the same body are
+	// different types on purpose, and a cast between them is not a
+	// widening, only a rename.
+	if c.isBranded(src) && c.isBranded(dst) && c.underlying(src) == c.underlying(dst) {
+		return false
 	}
 	c.casting++
 	defer func() { c.casting-- }()
@@ -369,4 +382,11 @@ func (c *Checker) underlying(id TypeId) TypeId {
 		return TypeId(n.B)
 	}
 	return id
+}
+
+// isBranded reports whether id carries a declared name: a TKBrand or a
+// branded union.
+func (c *Checker) isBranded(id TypeId) bool {
+	n := c.arena.Node(id)
+	return n.Kind == TKBrand || (n.Kind == TKUnion && n.A != 0)
 }

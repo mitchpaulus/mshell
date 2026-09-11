@@ -135,6 +135,9 @@ func (e TypeError) Format(arena *TypeArena, names *NameTable) string {
 		fmt.Fprintf(&sb, "invalid cast: cannot cast %s to %s",
 			FormatType(arena, names, e.Actual),
 			FormatType(arena, names, e.Expected))
+		if e.Hint != "" {
+			fmt.Fprintf(&sb, " (%s)", e.Hint)
+		}
 	case TErrTypeParse:
 		fmt.Fprintf(&sb, "type parse error: %s", e.Hint)
 	case TErrInterpolationArity:
