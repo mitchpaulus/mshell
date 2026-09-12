@@ -80,7 +80,8 @@ Left Arrow and Right Arrow move across complete grapheme clusters, keeping combi
 Ctrl-B moves left; Ctrl-F moves right, or accepts the history suggestion at the end of the command.
 Backspace removes the preceding cluster, and Delete removes the cluster at the cursor.
 If the cursor is inside a cluster, either deletion key removes that entire cluster.
-If deletion joins the surrounding text into a new cluster, the cursor moves to the end of that cluster.
+If typing, replacement, or deletion joins surrounding text into a new cluster, the cursor moves to the end of that cluster.
+Alt-B and Alt-F move by space-delimited words, and Ctrl-W deletes the preceding word, keeping whole grapheme clusters intact.
 During tab-completion cycling, Left Arrow and Right Arrow navigate completion columns instead.
 </p>
 

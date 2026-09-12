@@ -76,7 +76,7 @@ func TestWidthFromCursorReport(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			report := CursorReport{Row: tt.row, Column: tt.column}
-			got, err := widthFromCursorReport(report, tt.scratchRow)
+			got, err := widthFromCursorReport(report, tt.scratchRow, 2)
 
 			if tt.want == 0 {
 				if err == nil || got != 0 {
@@ -182,14 +182,14 @@ func TestRightArrowGraphemeBoundaries(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			state := TermState{
-				currentCommand: []rune(tt.command),
-				index: tt.cursor,
+				currentCommand: SourceText(tt.command),
+				index: sourceByteOffset(SourceText(tt.command), tt.cursor),
 			}
 			end, err := state.HandleToken(KEY_RIGHT)
 			if err != nil || end {
 				t.Fatalf("HandleToken: end=%v, err=%v", end, err)
 			}
-			if state.index != tt.want {
+			if state.index != sourceByteOffset(SourceText(tt.command), tt.want) {
 				t.Fatalf("cursor = %d, want %d", state.index, tt.want)
 			}
 			if string(state.currentCommand) != tt.command {
@@ -223,15 +223,15 @@ func TestLeftMovementGraphemeBoundaries(t *testing.T) {
 			t.Run(token.String()+"/"+tt.name, func(t *testing.T) {
 				_, ctrlB := token.(AsciiToken)
 				state := TermState{
-					currentCommand: []rune(tt.command),
-					index: tt.cursor,
+					currentCommand: SourceText(tt.command),
+					index: sourceByteOffset(SourceText(tt.command), tt.cursor),
 					tabCycleActive: ctrlB,
 				}
 				end, err := state.HandleToken(token)
 				if err != nil || end {
 					t.Fatalf("HandleToken: end=%v, err=%v", end, err)
 				}
-				if state.index != tt.want {
+				if state.index != sourceByteOffset(SourceText(tt.command), tt.want) {
 					t.Fatalf("cursor = %d, want %d", state.index, tt.want)
 				}
 				if string(state.currentCommand) != tt.command {
@@ -258,16 +258,16 @@ func TestCtrlFGraphemeMovementAndHistory(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			state := TermState{
-				currentCommand: []rune("e\u0301"),
-				index: tt.cursor,
-				historyComplete: []rune("e\u0301x"),
+				currentCommand: "e\u0301",
+				index: sourceByteOffset(SourceText("e\u0301"), tt.cursor),
+				historyComplete: "e\u0301x",
 				tabCycleActive: true,
 			}
 			end, err := state.HandleToken(AsciiToken{Char: 6})
 			if err != nil || end {
 				t.Fatalf("HandleToken: end=%v, err=%v", end, err)
 			}
-			if state.index != tt.wantCursor || string(state.currentCommand) != tt.wantCommand {
+			if state.index != sourceByteOffset(SourceText(tt.wantCommand), tt.wantCursor) || string(state.currentCommand) != tt.wantCommand {
 				t.Fatalf("command=%q cursor=%d; want command=%q cursor=%d",
 					string(state.currentCommand), state.index, tt.wantCommand, tt.wantCursor)
 			}
@@ -310,8 +310,8 @@ func TestGraphemeDeletion(t *testing.T) {
 					cursor = tt.backspaceCursor
 				}
 				state := TermState{
-					currentCommand: []rune(tt.command),
-					index: cursor,
+					currentCommand: SourceText(tt.command),
+					index: sourceByteOffset(SourceText(tt.command), cursor),
 					tabCycleActive: true,
 					historySearchActive: true,
 					historySearchPrefix: "old prefix",
@@ -320,7 +320,7 @@ func TestGraphemeDeletion(t *testing.T) {
 				if err != nil || end {
 					t.Fatalf("HandleToken: end=%v, err=%v", end, err)
 				}
-				if string(state.currentCommand) != tt.wantCommand || state.index != tt.wantCursor {
+				if string(state.currentCommand) != tt.wantCommand || state.index != sourceByteOffset(SourceText(tt.wantCommand), tt.wantCursor) {
 					t.Fatalf("command=%q cursor=%d; want command=%q cursor=%d",
 						string(state.currentCommand), state.index, tt.wantCommand, tt.wantCursor)
 				}
@@ -336,11 +336,11 @@ func TestGraphemeDeletionAtBufferEdges(t *testing.T) {
 	for _, command := range []string{"", "e\u0301"} {
 		for _, token := range []TerminalToken{AsciiToken{Char: 127}, KEY_DELETE} {
 			t.Run(token.String()+"/"+command, func(t *testing.T) {
-				cursor := 0
+				cursor := ByteOffset(0)
 				if token == KEY_DELETE {
-					cursor = len([]rune(command))
+					cursor = ByteOffset(len(command))
 				}
-				state := TermState{currentCommand: []rune(command), index: cursor}
+				state := TermState{currentCommand: SourceText(command), index: cursor}
 				end, err := state.HandleToken(token)
 				if err != nil || end || string(state.currentCommand) != command || state.index != cursor {
 					t.Fatalf("edge deletion: command=%q cursor=%d end=%v err=%v",
@@ -558,9 +558,9 @@ func TestAsciiAtomsInto(t *testing.T) {
 	}
 
 	want := []DisplayAtom{
-		{SourceStart: 0, SourceEnd: 1, Width: 1, Kind: AtomAscii},
-		{SourceStart: 1, SourceEnd: 2, Width: UnresolvedWidth, Kind: AtomControl},
-		{SourceStart: 2, SourceEnd: 3, Width: 2, Kind: AtomControl},
+		{SourceStart: 0, SourceEnd: 1, Width: 1, RequiredCells: 1, Kind: AtomAscii},
+		{SourceStart: 1, SourceEnd: 2, Width: UnresolvedWidth, RequiredCells: UnresolvedWidth, Kind: AtomControl},
+		{SourceStart: 2, SourceEnd: 3, Width: 2, RequiredCells: 2, Kind: AtomControl},
 		{SourceStart: 3, SourceEnd: 4, Width: 0, Kind: AtomHardBreak},
 	}
 
@@ -577,9 +577,9 @@ func TestAsciiAtomsInto(t *testing.T) {
 
 	got, allAscii = asciiAtomsInto(got, SourceText("a\r\nb"))
 	wantCRLF := []DisplayAtom{
-		{SourceStart: 0, SourceEnd: 1, Width: 1, Kind: AtomAscii},
+		{SourceStart: 0, SourceEnd: 1, Width: 1, RequiredCells: 1, Kind: AtomAscii},
 		{SourceStart: 1, SourceEnd: 3, Width: 0, Kind: AtomHardBreak},
-		{SourceStart: 3, SourceEnd: 4, Width: 1, Kind: AtomAscii},
+		{SourceStart: 3, SourceEnd: 4, Width: 1, RequiredCells: 1, Kind: AtomAscii},
 	}
 	if !allAscii || !slices.Equal(got, wantCRLF) {
 		t.Errorf("crlf atoms = %+v, want %+v", got, wantCRLF)
@@ -925,14 +925,14 @@ func TestSegmentAtomsInto(t *testing.T) {
 	command := SourceText("e\u0301\t\r\n\x00\xff\u0085🇺🇸🇺🇸")
 	got := segmentAtomsInto(nil, command)
 	want := []DisplayAtom{
-		{SourceStart: 0, SourceEnd: 3, Width: UnresolvedWidth, Kind: AtomGrapheme},   // e + combining acute
-		{SourceStart: 3, SourceEnd: 4, Width: UnresolvedWidth, Kind: AtomControl},    // tab
+		{SourceStart: 0, SourceEnd: 3, Width: UnresolvedWidth, RequiredCells: UnresolvedWidth, Kind: AtomGrapheme},   // e + combining acute
+		{SourceStart: 3, SourceEnd: 4, Width: UnresolvedWidth, RequiredCells: UnresolvedWidth, Kind: AtomControl},    // tab
 		{SourceStart: 4, SourceEnd: 6, Width: 0, Kind: AtomHardBreak},                // \r\n
-		{SourceStart: 6, SourceEnd: 7, Width: 2, Kind: AtomControl},                  // NUL
-		{SourceStart: 7, SourceEnd: 8, Width: 1, Kind: AtomPlaceholder},              // invalid byte
-		{SourceStart: 8, SourceEnd: 10, Width: 1, Kind: AtomPlaceholder},             // C1 NEL
-		{SourceStart: 10, SourceEnd: 18, Width: UnresolvedWidth, Kind: AtomGrapheme}, // first flag
-		{SourceStart: 18, SourceEnd: 26, Width: UnresolvedWidth, Kind: AtomGrapheme}, // second flag
+		{SourceStart: 6, SourceEnd: 7, Width: 2, RequiredCells: 2, Kind: AtomControl},                  // NUL
+		{SourceStart: 7, SourceEnd: 8, Width: 1, RequiredCells: 1, Kind: AtomPlaceholder},              // invalid byte
+		{SourceStart: 8, SourceEnd: 10, Width: 1, RequiredCells: 1, Kind: AtomPlaceholder},             // C1 NEL
+		{SourceStart: 10, SourceEnd: 18, Width: UnresolvedWidth, RequiredCells: UnresolvedWidth, Kind: AtomGrapheme}, // first flag
+		{SourceStart: 18, SourceEnd: 26, Width: UnresolvedWidth, RequiredCells: UnresolvedWidth, Kind: AtomGrapheme}, // second flag
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("atoms = %+v, want %+v", got, want)
@@ -967,7 +967,7 @@ func TestWidthResolution(t *testing.T) {
 	}
 
 	eligilibily := &CandidateEligibilityCache{}
-	misses := resolveCachedWidths(nil, command, atoms, cache, eligilibily)
+	misses := resolveCachedWidths(nil, command, atoms, cache, eligilibily, 80)
 	if !slices.Equal(misses, []string{"😀", "🍕"}) {
 		t.Fatalf("misses = %q, want smile and pizza once each", misses)
 	}
@@ -1008,7 +1008,7 @@ func TestWidthResolutionCandidateEligibility(t *testing.T) {
 	cache := &WidthCache{}
 	eligibility := &CandidateEligibilityCache{}
 
-	misses := resolveCachedWidths(nil, command, atoms, cache, eligibility)
+	misses := resolveCachedWidths(nil, command, atoms, cache, eligibility, 80)
 	if !slices.Equal(misses, []string{"e\u0301"}) {
 		t.Fatalf("misses = %q, want only the accent with its base", misses)
 	}
@@ -1079,16 +1079,16 @@ func TestLayoutAtomsHardBreakCursor(t *testing.T) {
 	}
 }
 
-func TestLayoutAtomsSoftEarlyCursor(t *testing.T) {
+func TestLayoutAtomsForcedWrapCursor(t *testing.T) {
 	// Explicit resolved widths isolate layout from segmentation and measurement.
 	atoms := []DisplayAtom{
-		{SourceStart: 0, SourceEnd: 1, Width: 1, Kind: AtomAscii},
-		{SourceStart: 1, SourceEnd: 4, Width: 2, Kind: AtomGrapheme},
-		{SourceStart: 4, SourceEnd: 5, Width: 1, Kind: AtomAscii},
+		{SourceStart: 0, SourceEnd: 1, Width: 1, RequiredCells: 1, Kind: AtomAscii},
+		{SourceStart: 1, SourceEnd: 4, Width: 2, RequiredCells: 3, Kind: AtomGrapheme},
+		{SourceStart: 4, SourceEnd: 5, Width: 1, RequiredCells: 1, Kind: AtomAscii},
 	}
 
 	wantRows := []LayoutRow{
-		{AtomStart: 0, AtomEnd: 1, Width: 1, EndType: RowEndSoftEarly},
+		{AtomStart: 0, AtomEnd: 1, Width: 1, EndType: RowEndForcedHardWrap},
 		{AtomStart: 1, AtomEnd: 3, Width: 3, EndType: RowEndFinal},
 	}
 
@@ -1169,13 +1169,13 @@ func TestLayoutAtomsMatchesPrintableAscii(t *testing.T) {
 // This test if the prompt basically filled the entire first row.
 func TestLayoutAtomsEmptyFirstRow(t *testing.T) {
 	atoms := []DisplayAtom{
-		{SourceStart: 0, SourceEnd: 3, Width: 2, Kind: AtomGrapheme},
+		{SourceStart: 0, SourceEnd: 3, Width: 2, RequiredCells: 3, Kind: AtomGrapheme},
 	}
 
 	got := layoutAtomsInto(nil, atoms, 0, 4, 5)
 
 	wantRows := []LayoutRow{
-		{AtomStart: 0, AtomEnd: 0, Width: 0, EndType: RowEndSoftEarly},
+		{AtomStart: 0, AtomEnd: 0, Width: 0, EndType: RowEndForcedHardWrap},
 		{AtomStart: 0, AtomEnd: 1, Width: 2, EndType: RowEndFinal},
 	}
 
@@ -1194,7 +1194,7 @@ func TestLayoutAtomsEmptyFirstRow(t *testing.T) {
 func TestLayoutAtomsRejectsInvalidCursor(t *testing.T) {
 	// One complete grapheme: "e" + combining acute accent.
 	atoms := []DisplayAtom{
-		{SourceStart: 0, SourceEnd: 3, Width: 1, Kind: AtomGrapheme},
+		{SourceStart: 0, SourceEnd: 3, Width: 1, RequiredCells: 3, Kind: AtomGrapheme},
 	}
 
 	tests := []struct {

@@ -26,6 +26,13 @@ func checkAtomLayout(t *testing.T, atoms []DisplayAtom, cursor ByteOffset, start
 			if atoms[j].Kind == AtomHardBreak {
 				t.Fatalf("row %d includes hard-break atom %d", i, j)
 			}
+			origin := Cells(0)
+			if i == 0 {
+				origin = startCol
+			}
+			if atoms[j].RequiredCells > columns-origin-width {
+				t.Fatalf("row %d atom %d lacks required space", i, j)
+			}
 			width += atoms[j].Width
 		}
 		origin := Cells(0)
@@ -46,14 +53,14 @@ func checkAtomLayout(t *testing.T, atoms []DisplayAtom, cursor ByteOffset, start
 				t.Fatalf("row %d ends hard without a newline atom", i)
 			}
 			next++
-		case RowEndSoftExact, RowEndSoftEarly:
+		case RowEndSoftExact, RowEndForcedHardWrap:
 			if next == AtomIndex(len(atoms)) || atoms[next].Kind == AtomHardBreak {
 				t.Fatalf("row %d soft-wraps without a following printable atom", i)
 			}
-			if origin+width+atoms[next].Width <= columns {
+			if origin+width+atoms[next].RequiredCells <= columns {
 				t.Fatalf("row %d wrapped despite room for its next atom", i)
 			}
-			if (row.EndType == RowEndSoftExact) != (origin+width == columns) {
+			if (row.EndType == RowEndSoftExact) != (origin+width == columns && atoms[next].RequiredCells == 1) {
 				t.Fatalf("row %d has incorrect soft-wrap kind: %+v", i, row)
 			}
 		case RowEndFinal:
@@ -115,25 +122,26 @@ func TestAtomLayoutMixedProperties(t *testing.T) {
 		}
 		command := SourceText(text.String())
 		for model := 0; model < 2; model++ {
-			atoms := segmentAtomsInto(nil, command)
-			widths := make(map[string]Cells)
-			for i := range atoms {
-				if atoms[i].Width == UnresolvedWidth {
-					text := atoms[i].displayText(command)
-					width, ok := widths[text]
-					if !ok {
-						width = Cells(1 + (len(widths)+model)%2)
-						widths[text] = width
+			for _, columns := range []Cells{2, 3, 4, 5, 10, 15, 20} {
+				atoms := segmentAtomsInto(nil, command)
+				cache := &WidthCache{}
+				for _, atom := range atoms {
+					if atom.Width == UnresolvedWidth {
+						candidate := atom.displayText(command)
+						width := Cells(1)
+						if model == 1 {
+							width = candidateWidthBound(candidate)
+						}
+						cache.remember(candidate, width)
 					}
-					atoms[i].Width = width
 				}
-			}
-			original := slices.Clone(atoms)
-			boundaries := []ByteOffset{0}
-			for _, atom := range atoms {
-				boundaries = append(boundaries, atom.SourceEnd)
-			}
-			for _, columns := range []Cells{2, 3, 5, 10} {
+				resolveCachedWidths(nil, command, atoms, cache, &CandidateEligibilityCache{}, columns)
+				finishWidthResolution(command, atoms, cache)
+				original := slices.Clone(atoms)
+				boundaries := []ByteOffset{0}
+				for _, atom := range atoms {
+					boundaries = append(boundaries, atom.SourceEnd)
+				}
 				for startCol := Cells(0); startCol < columns; startCol++ {
 					t.Run(fmt.Sprintf("sample%d/widths%d/columns%d/start%d", sample, model, columns, startCol), func(t *testing.T) {
 						for _, cursor := range boundaries {
@@ -143,9 +151,9 @@ func TestAtomLayoutMixedProperties(t *testing.T) {
 						}
 					})
 				}
-			}
-			if !slices.Equal(atoms, original) {
-				t.Fatalf("layout mutated atoms for source %q", command)
+				if !slices.Equal(atoms, original) {
+					t.Fatalf("layout mutated atoms for source %q", command)
+				}
 			}
 		}
 	}
@@ -199,6 +207,12 @@ func TestAtomLayoutInvalidInputs(t *testing.T) {
 		atoms := []DisplayAtom{{SourceEnd: 1, Width: width, Kind: AtomGrapheme}}
 		requireLayoutPanic(t, func() { layoutAtomsInto(nil, atoms, 0, 0, 5) })
 	}
+	for _, required := range []Cells{UnresolvedWidth, 0, 1, 6} {
+		atoms := []DisplayAtom{{SourceEnd: 1, Width: 2, RequiredCells: required, Kind: AtomGrapheme}}
+		requireLayoutPanic(t, func() { layoutAtomsInto(nil, atoms, 0, 0, 5) })
+	}
+	atoms := []DisplayAtom{{SourceEnd: 1, RequiredCells: 1, Kind: AtomHardBreak}}
+	requireLayoutPanic(t, func() { layoutAtomsInto(nil, atoms, 0, 0, 5) })
 	for _, width := range []Cells{UnresolvedWidth, 1, 2} {
 		atoms := []DisplayAtom{{SourceEnd: 1, Width: width, Kind: AtomHardBreak}}
 		requireLayoutPanic(t, func() { layoutAtomsInto(nil, atoms, 0, 0, 5) })

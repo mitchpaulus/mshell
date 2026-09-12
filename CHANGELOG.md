@@ -280,7 +280,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Interactive Left/Right Arrow, Ctrl-B/Ctrl-F, Backspace, and Delete respect grapheme boundaries, keeping combining accents and joined emoji intact.
+- Interactive movement, word deletion, typing, and completion replacement respect grapheme boundaries, keeping combining accents and joined emoji intact.
+  Unicode aliases and multiline completion prefixes use the correct source positions; cycling completions preserves adjacent text even when it joins the inserted grapheme.
 
 - The type checker gave `index` and `lastIndexOf` a result type of `int`, but both
   return `Maybe[int]` at runtime (`none` when the substring is not found). The
