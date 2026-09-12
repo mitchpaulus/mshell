@@ -95,7 +95,7 @@ func TestWidthFromCursorReport(t *testing.T) {
 func TestWidthProbeBatchFailureIsSticky(t *testing.T) {
 	batch := WidthProbeBatch{
 		ScratchRow: 5,
-		Candidates: []string{"é", "世"},
+		Candidates: []string{"é", "世", "界"},
 	}
 
 	err := batch.acceptReply(CsiToken{FinalChar: 'R', Params: []byte("5;2")})
@@ -116,6 +116,9 @@ func TestWidthProbeBatchFailureIsSticky(t *testing.T) {
 	}
 	if !slices.Equal(batch.Widths, []Cells{1}) {
 		t.Fatalf("staged widths = %v, want [1]", batch.Widths)
+	}
+	if batch.RepliesReceived != 3 {
+		t.Fatalf("received %d replies, want 3", batch.RepliesReceived)
 	}
 }
 
@@ -153,6 +156,198 @@ func TestQueuedInputLookahead(t *testing.T) {
 	token, err = state.readInputToken()
 	if err != nil || token != (AsciiToken{Char: 'z'}) {
 		t.Fatalf("next token = %v, err=%v; want z", token, err)
+	}
+}
+
+func TestRightArrowGraphemeBoundaries(t *testing.T) {
+	tests := []struct {
+		name string
+		command string
+		cursor int
+		want int
+	}{
+		{"empty", "", 0, 0},
+		{"ascii", "abc", 1, 2},
+		{"end", "abc", 3, 3},
+		{"combining accent", "e\u0301x", 0, 2},
+		{"inside combining cluster", "e\u0301x", 1, 2},
+		{"after combining cluster", "e\u0301x", 2, 3},
+		{"wide rune", "世x", 0, 1},
+		{"joined emoji", "\U0001F469\u200D\U0001F4BBx", 0, 3},
+		{"inside flag", "\U0001F1FA\U0001F1F8\U0001F1E8\U0001F1E6", 1, 2},
+		{"second flag", "\U0001F1FA\U0001F1F8\U0001F1E8\U0001F1E6", 2, 4},
+		{"hard break", "a\r\nb", 1, 3},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state := TermState{
+				currentCommand: []rune(tt.command),
+				index: tt.cursor,
+			}
+			end, err := state.HandleToken(KEY_RIGHT)
+			if err != nil || end {
+				t.Fatalf("HandleToken: end=%v, err=%v", end, err)
+			}
+			if state.index != tt.want {
+				t.Fatalf("cursor = %d, want %d", state.index, tt.want)
+			}
+			if string(state.currentCommand) != tt.command {
+				t.Fatal("Right Arrow changed the command")
+			}
+		})
+	}
+}
+
+func TestLeftMovementGraphemeBoundaries(t *testing.T) {
+	tests := []struct {
+		name string
+		command string
+		cursor int
+		want int
+	}{
+		{"empty", "", 0, 0},
+		{"start", "abc", 0, 0},
+		{"ascii", "abc", 2, 1},
+		{"combining accent", "e\u0301x", 2, 0},
+		{"inside combining cluster", "e\u0301x", 1, 0},
+		{"after combining cluster", "e\u0301x", 3, 2},
+		{"wide rune", "世x", 1, 0},
+		{"joined emoji", "\U0001F469\u200D\U0001F4BBx", 3, 0},
+		{"inside flag", "\U0001F1FA\U0001F1F8\U0001F1E8\U0001F1E6", 3, 2},
+		{"second flag", "\U0001F1FA\U0001F1F8\U0001F1E8\U0001F1E6", 4, 2},
+		{"hard break", "a\r\nb", 3, 1},
+	}
+	for _, token := range []TerminalToken{KEY_LEFT, AsciiToken{Char: 2}} {
+		for _, tt := range tests {
+			t.Run(token.String()+"/"+tt.name, func(t *testing.T) {
+				_, ctrlB := token.(AsciiToken)
+				state := TermState{
+					currentCommand: []rune(tt.command),
+					index: tt.cursor,
+					tabCycleActive: ctrlB,
+				}
+				end, err := state.HandleToken(token)
+				if err != nil || end {
+					t.Fatalf("HandleToken: end=%v, err=%v", end, err)
+				}
+				if state.index != tt.want {
+					t.Fatalf("cursor = %d, want %d", state.index, tt.want)
+				}
+				if string(state.currentCommand) != tt.command {
+					t.Fatal("left movement changed the command")
+				}
+				if state.tabCycleActive {
+					t.Fatal("Ctrl-B did not leave tab-cycle mode")
+				}
+			})
+		}
+	}
+}
+
+func TestCtrlFGraphemeMovementAndHistory(t *testing.T) {
+	tests := []struct {
+		name string
+		cursor int
+		wantCursor int
+		wantCommand string
+	}{
+		{"move across accent", 0, 2, "e\u0301"},
+		{"accept history at end", 2, 3, "e\u0301x"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state := TermState{
+				currentCommand: []rune("e\u0301"),
+				index: tt.cursor,
+				historyComplete: []rune("e\u0301x"),
+				tabCycleActive: true,
+			}
+			end, err := state.HandleToken(AsciiToken{Char: 6})
+			if err != nil || end {
+				t.Fatalf("HandleToken: end=%v, err=%v", end, err)
+			}
+			if state.index != tt.wantCursor || string(state.currentCommand) != tt.wantCommand {
+				t.Fatalf("command=%q cursor=%d; want command=%q cursor=%d",
+					string(state.currentCommand), state.index, tt.wantCommand, tt.wantCursor)
+			}
+			if state.tabCycleActive {
+				t.Fatal("Ctrl-F did not leave tab-cycle mode")
+			}
+		})
+	}
+}
+
+func TestGraphemeDeletion(t *testing.T) {
+	tests := []struct {
+		name string
+		command string
+		backspaceCursor int
+		deleteCursor int
+		wantCommand string
+		wantCursor int
+	}{
+		{"ascii", "abc", 2, 1, "ac", 1},
+		{"accent", "ae\u0301b", 3, 1, "ab", 1},
+		{"inside accent", "ae\u0301b", 2, 2, "ab", 1},
+		{"wide rune", "a世b", 2, 1, "ab", 1},
+		{"joined emoji", "a\U0001F469\u200D\U0001F4BBb", 4, 1, "ab", 1},
+		{"flag", "a\U0001F1FA\U0001F1F8b", 3, 1, "ab", 1},
+		{"skin tone", "a\U0001F44D\U0001F3FDb", 3, 1, "ab", 1},
+		{"variation selector", "a\u2764\uFE0Fb", 3, 1, "ab", 1},
+		{"CRLF", "a\r\nb", 3, 1, "ab", 1},
+		{"standalone accent", "\u0301x", 1, 0, "x", 0},
+		{"whole command", "e\u0301", 2, 0, "", 0},
+		{"last cluster", "ae\u0301", 3, 1, "a", 1},
+		{"joining accent", "a\n\u0301", 2, 1, "a\u0301", 2},
+		{"joining flag", "\U0001F1E6x\U0001F1E7", 2, 1, "\U0001F1E6\U0001F1E7", 2},
+	}
+	for _, token := range []TerminalToken{AsciiToken{Char: 127}, KEY_DELETE} {
+		for _, tt := range tests {
+			t.Run(token.String()+"/"+tt.name, func(t *testing.T) {
+				cursor := tt.deleteCursor
+				if _, backspace := token.(AsciiToken); backspace {
+					cursor = tt.backspaceCursor
+				}
+				state := TermState{
+					currentCommand: []rune(tt.command),
+					index: cursor,
+					tabCycleActive: true,
+					historySearchActive: true,
+					historySearchPrefix: "old prefix",
+				}
+				end, err := state.HandleToken(token)
+				if err != nil || end {
+					t.Fatalf("HandleToken: end=%v, err=%v", end, err)
+				}
+				if string(state.currentCommand) != tt.wantCommand || state.index != tt.wantCursor {
+					t.Fatalf("command=%q cursor=%d; want command=%q cursor=%d",
+						string(state.currentCommand), state.index, tt.wantCommand, tt.wantCursor)
+				}
+				if state.tabCycleActive || state.historySearchActive || state.historySearchPrefix != "" {
+					t.Fatal("deletion did not reset completion and history search")
+				}
+			})
+		}
+	}
+}
+
+func TestGraphemeDeletionAtBufferEdges(t *testing.T) {
+	for _, command := range []string{"", "e\u0301"} {
+		for _, token := range []TerminalToken{AsciiToken{Char: 127}, KEY_DELETE} {
+			t.Run(token.String()+"/"+command, func(t *testing.T) {
+				cursor := 0
+				if token == KEY_DELETE {
+					cursor = len([]rune(command))
+				}
+				state := TermState{currentCommand: []rune(command), index: cursor}
+				end, err := state.HandleToken(token)
+				if err != nil || end || string(state.currentCommand) != command || state.index != cursor {
+					t.Fatalf("edge deletion: command=%q cursor=%d end=%v err=%v",
+						string(state.currentCommand), state.index, end, err)
+				}
+			})
+		}
 	}
 }
 

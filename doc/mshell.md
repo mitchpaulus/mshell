@@ -396,6 +396,14 @@ With `-`, arguments after the `-` are positional arguments to the script.
 
 ## Interactive CLI
 
+Interactive use requires a terminal that answers cursor-position requests (CPR).
+The editor waits without a timeout and queues keyboard input while waiting for replies.
+Left/Right Arrow and Ctrl-B/Ctrl-F move across complete grapheme clusters; Ctrl-F accepts the history suggestion at the end of the command.
+Backspace removes the preceding cluster, and Delete removes the cluster at the cursor.
+If the cursor is inside a cluster, either deletion key removes that entire cluster.
+If deletion joins surrounding text into a new cluster, the cursor moves to its end.
+Left/Right Arrow navigate completion columns while tab-completion cycling is active.
+
 History search is prefix-based and case-insensitive. The prefix is whatever is currently in the input buffer; editing the buffer resets the prefix for the next search.
 
 - Ctrl-P: search backward through history by prefix

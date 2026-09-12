@@ -68,6 +68,22 @@ An example installer script is available at
 <a href="https://github.com/mitchpaulus/mshell/blob/main/install.sh" target="_blank" rel="noopener noreferrer">install.sh</a>.
 </p>
 
+<h1 id="getting-started-interactive">Interactive Editing <a class="section-link" href="#getting-started-interactive" aria-label="Permalink">§</a> <a class="back-to-top" href="#getting-started-top">Back to top</a></h1>
+
+<p>
+Interactive use requires a terminal that answers cursor-position requests (CPR).
+The editor waits for responses without a timeout and queues keyboard input while waiting.
+</p>
+
+<p>
+Left Arrow and Right Arrow move across complete grapheme clusters, keeping combining accents and joined emoji together.
+Ctrl-B moves left; Ctrl-F moves right, or accepts the history suggestion at the end of the command.
+Backspace removes the preceding cluster, and Delete removes the cluster at the cursor.
+If the cursor is inside a cluster, either deletion key removes that entire cluster.
+If deletion joins the surrounding text into a new cluster, the cursor moves to the end of that cluster.
+During tab-completion cycling, Left Arrow and Right Arrow navigate completion columns instead.
+</p>
+
 <h1 id="getting-started-github-actions">GitHub Actions <a class="section-link" href="#getting-started-github-actions" aria-label="Permalink">§</a> <a class="back-to-top" href="#getting-started-top">Back to top</a></h1>
 
 <p>

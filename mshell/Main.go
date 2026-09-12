@@ -969,6 +969,14 @@ type TermState struct {
 
 	queuedInput []TerminalToken
 	queuedInputIndex int
+	widthProbesBlocked bool
+	widthCache WidthCache
+	eligibilityCache CandidateEligibilityCache
+
+	displaySource SourceText
+	displayAtoms []DisplayAtom
+	widthMisses []string
+	displayLayout LayoutResult
 }
 
 type SourceText string
@@ -2721,6 +2729,7 @@ type WidthProbeBatch struct {
 	Candidates []string // Frozen in the order probes were sent.
 	Widths []Cells      // Staged observations, matching Candidates.
 	Failure error       // First failure; prevents accepting further results.
+	RepliesReceived int
 }
 
 func (batch *WidthProbeBatch) Clear() {
@@ -2729,12 +2738,15 @@ func (batch *WidthProbeBatch) Clear() {
 	batch.Widths = batch.Widths[:0]
 	batch.ScratchRow = 0
 	batch.Failure = nil
+	batch.RepliesReceived = 0
 }
 
 
 // acceptReply receives a token routed to this batch by the query coordinator.
 // Ordinary keyboard tokens must be handled separately.
 func (batch *WidthProbeBatch) acceptReply(token CsiToken) error {
+	batch.RepliesReceived++
+
 	if batch.Failure != nil {
 		return batch.Failure
 	}
@@ -2859,14 +2871,9 @@ type StdinReaderState struct {
 	array []byte
 	i     int
 	n     int
-	deadline time.Time // Zero means no deadline
 }
 
 func (state *StdinReaderState) ReadByte() (byte, error) {
-	if !state.deadline.IsZero() && !time.Now().Before(state.deadline) {
-		return 0, os.ErrDeadlineExceeded
-	}
-
 	if state.i >= state.n {
 		// Do fresh read
 		// fmt.Fprintf(f, "Reading from stdin...\n")
@@ -3357,7 +3364,7 @@ func (state *TermState) InteractiveMode() error {
 	var token TerminalToken
 	var end bool
 
-	widthCache := WidthCache { Entries: make(map[string]Cells) }
+	state.widthCache = WidthCache{Entries: make(map[string]Cells)}
 	var widthBatch WidthProbeBatch
 	var widthBatchActive bool
 
@@ -3395,10 +3402,16 @@ func (state *TermState) InteractiveMode() error {
 				state.queuedInput = append(state.queuedInput, token)
 			}
 
-			if widthBatch.Failure == nil && len(widthBatch.Widths) == len(widthBatch.Candidates) {
-				for i, candidate := range widthBatch.Candidates {
-					widthCache.Entries[strings.Clone(candidate)] = widthBatch.Widths[i]
+			if widthBatch.RepliesReceived == len(widthBatch.Candidates) {
+				if widthBatch.Failure == nil {
+					for i, candidate := range widthBatch.Candidates {
+						state.widthCache.Entries[strings.Clone(candidate)] = widthBatch.Widths[i]
+					}
+				} else {
+					state.Logf("Width batch rejected: %s\n", widthBatch.Failure)
+					state.widthProbesBlocked = true
 				}
+
 				widthBatch.Clear()
 				widthBatchActive = false
 			}
@@ -3413,6 +3426,39 @@ func (state *TermState) InteractiveMode() error {
 
 		if end {
 			break
+		}
+		state.displaySource = SourceText(string(state.currentCommand))
+		state.displayLayout = LayoutResult{
+			Rows: state.displayLayout.Rows[:0],
+		}
+
+		if isAllPrintableAscii(state.displaySource) {
+			state.displayAtoms = state.displayAtoms[:0]
+			clear(state.widthMisses)
+			state.widthMisses = state.widthMisses[:0]
+			if state.numCols >= 4 &&
+				state.promptLength >= 0 &&
+				state.promptLength < state.numCols {
+				state.displayLayout = layoutPrintableAsciiInto(
+					state.displayLayout.Rows,
+					state.displaySource,
+					ByteOffset(state.index),
+					Cells(state.promptLength),
+					Cells(state.numCols),
+				)
+			}
+		} else {
+			state.displayAtoms = segmentAtomsInto(
+				state.displayAtoms,
+				state.displaySource,
+			)
+			state.widthMisses = resolveCachedWidths(
+				state.widthMisses,
+				state.displaySource,
+				state.displayAtoms,
+				&state.widthCache,
+				&state.eligibilityCache,
+			)
 		}
 		state.Render(true)
 
@@ -3632,6 +3678,7 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 
 	// Reset current command
 	state.currentCommand = state.currentCommand[:0]
+	state.widthProbesBlocked = false
 	state.resetHistorySearch()
 
 	if len(currentCommandStr) > 0 {
@@ -3859,45 +3906,74 @@ func (state *TermState) getCurrentPos() (int, int, error) {
 	// defer f.Close()
 	// }
 
+	// for {
+	// fmt.Fprintf(os.Stdout, "\033[6n")
+	// // TODO: This needs to handle case where terminal doesn't respond.
+	// token, err := state.InteractiveLexer(state.stdInState) // token = <- tokenChan
+	// if err != nil {
+	// return 0, 0, err
+	// }
+
+	// switch t := token.(type) {
+	// case CsiToken:
+	// if t.FinalChar == 'R' {
+	// parsedStr := string(t.Params)
+	// // Split on semicolon or colon
+	// parts := strings.Split(parsedStr, ";")
+	// if len(parts) != 2 {
+	// return 0, 0, fmt.Errorf("Invalid response for cursor position")
+	// }
+	// // Parse row
+	// row, err := strconv.Atoi(parts[0])
+	// if err != nil {
+	// return 0, 0, fmt.Errorf("Invalid response for cursor position")
+	// }
+	// // Parse column
+	// col, err := strconv.Atoi(parts[1])
+	// if err != nil {
+	// return 0, 0, fmt.Errorf("Invalid response for cursor position")
+	// }
+
+	// return row, col, nil
+	// }
+	// default:
+	// state.Logf("Got other token: %v\n", t)
+	// // Ignore getting a token that ends the program for now.
+	// _, err = state.HandleToken(t)
+	// if err != nil {
+	// return 0, 0, err
+	// }
+	// }
+	// }
+
+	if _, err := fmt.Fprint(os.Stdout, "\033[6n"); err != nil {
+		return 0, 0, err
+	}
+
 	for {
-		fmt.Fprintf(os.Stdout, "\033[6n")
-		// TODO: This needs to handle case where terminal doesn't respond.
-		token, err := state.InteractiveLexer(state.stdInState) // token = <- tokenChan
+		// Read the terminal directly; queued keys belong to the editor.
+		token, err := state.InteractiveLexer(state.stdInState)
 		if err != nil {
 			return 0, 0, err
 		}
 
-		switch t := token.(type) {
-		case CsiToken:
-			if t.FinalChar == 'R' {
-				parsedStr := string(t.Params)
-				// Split on semicolon or colon
-				parts := strings.Split(parsedStr, ";")
-				if len(parts) != 2 {
-					return 0, 0, fmt.Errorf("Invalid response for cursor position")
-				}
-				// Parse row
-				row, err := strconv.Atoi(parts[0])
-				if err != nil {
-					return 0, 0, fmt.Errorf("Invalid response for cursor position")
-				}
-				// Parse column
-				col, err := strconv.Atoi(parts[1])
-				if err != nil {
-					return 0, 0, fmt.Errorf("Invalid response for cursor position")
-				}
+		if _, ok := token.(EofTerminalToken); ok {
+			return 0, 0, io.EOF
+		}
 
-				return row, col, nil
-			}
-		default:
-			state.Logf("Got other token: %v\n", t)
-			// Ignore getting a token that ends the program for now.
-			_, err = state.HandleToken(t)
+		if reportToken, ok := token.(CsiToken); ok &&
+			reportToken.FinalChar == 'R' {
+			report, err := parseCursorReport(reportToken)
 			if err != nil {
 				return 0, 0, err
 			}
+
+			return int(report.Row), int(report.Column), nil
 		}
+
+		state.queuedInput = append(state.queuedInput, token)
 	}
+
 }
 
 func stdLibDefinitions(stack *MShellStack, context ExecuteContext, state *EvalState) ([]MShellDefinition, error) {
@@ -4217,11 +4293,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
 			state.index = 0
 		} else if t.Char == 2 { // CTRL-B
-			// Move cursor left
-			if state.index > 0 {
-				state.index--
-				// fmt.Fprintf(os.Stdout, "\033[D")
-			}
+			return state.HandleToken(KEY_LEFT)
 		} else if t.Char == 3 || t.Char == 4 {
 			// Ctrl-C or Ctrl-D
 			fmt.Fprintf(os.Stdout, "\r\n") // Print a nice clean newline.
@@ -4234,9 +4306,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			if state.index == len(state.currentCommand) {
 				state.acceptHistoryCompletion()
 			} else if state.index < len(state.currentCommand) {
-				// Move cursor right
-				state.index++
-				// fmt.Fprintf(os.Stdout, "\033[C")
+				return state.HandleToken(KEY_RIGHT)
 			}
 		} else if t.Char == 14 { // Ctrl-N
 			if state.tabCycleActive {
@@ -4526,9 +4596,10 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 		} else if t.Char == 127 { // Backspace
 			// Erase last char
 			if state.index > 0 {
-				state.currentCommand = append(state.currentCommand[:state.index-1], state.currentCommand[state.index:]...)
-				state.index--
-				state.resetHistorySearch()
+				if end, err := state.HandleToken(KEY_LEFT); err != nil || end {
+					return end, err
+				}
+				return state.HandleToken(KEY_DELETE)
 
 				// fmt.Fprintf(os.Stdout, "\033[D")
 				// fmt.Fprintf(os.Stdout, "\033[K")
@@ -4657,8 +4728,21 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			}
 			// Right arrow
 			if state.index < len(state.currentCommand) {
-				state.index++
-				// fmt.Fprintf(os.Stdout, "\033[C")
+				rest := string(state.currentCommand)
+				segmentState := -1
+				next := 0
+
+				for len(rest) > 0 {
+					var cluster string
+					cluster, rest, _, segmentState =
+						uniseg.FirstGraphemeClusterInString(rest, segmentState)
+					next += utf8.RuneCountInString(cluster)
+
+					if next > state.index {
+						state.index = next
+						break
+					}
+				}
 			}
 		} else if t == KEY_LEFT {
 			if state.tabCycleActive {
@@ -4667,8 +4751,23 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			}
 			// Left arrow
 			if state.index > 0 {
-				state.index--
-				// fmt.Fprintf(os.Stdout, "\033[D")
+				rest := string(state.currentCommand)
+				segmentState := -1
+				previous := 0
+				next := 0
+
+				for len(rest) > 0 {
+					var cluster string
+					cluster, rest, _, segmentState =
+						uniseg.FirstGraphemeClusterInString(rest, segmentState)
+					next += utf8.RuneCountInString(cluster)
+
+					if next >= state.index {
+						state.index = previous
+						break
+					}
+					previous = next
+				}
 			}
 		} else if t == KEY_HOME {
 			// Move cursor to beginning of line.
@@ -4684,7 +4783,42 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				// fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index + 1:]))
 				// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index)
 
-				state.currentCommand = append(state.currentCommand[:state.index], state.currentCommand[state.index+1:]...)
+				rest := string(state.currentCommand)
+				segmentState := -1
+				start := 0
+				next := 0
+
+				for len(rest) > 0 {
+					var cluster string
+					cluster, rest, _, segmentState =
+						uniseg.FirstGraphemeClusterInString(rest, segmentState)
+					next += utf8.RuneCountInString(cluster)
+
+					if next > state.index {
+						state.currentCommand = append(state.currentCommand[:start], state.currentCommand[next:]...)
+						state.index = start
+						break
+					}
+					start = next
+				}
+
+				// Deletion can join the surrounding text into a new grapheme.
+				// Keep the cursor at the deletion gap, or the next boundary if it vanished.
+				if state.index > 0 {
+					rest = string(state.currentCommand)
+					segmentState = -1
+					next = 0
+					for len(rest) > 0 {
+						var cluster string
+						cluster, rest, _, segmentState =
+							uniseg.FirstGraphemeClusterInString(rest, segmentState)
+						next += utf8.RuneCountInString(cluster)
+						if next >= state.index {
+							state.index = next
+							break
+						}
+					}
+				}
 				state.resetHistorySearch()
 			}
 		}
