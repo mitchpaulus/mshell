@@ -2616,6 +2616,11 @@ func (state *TermState) ClearScreen() {
 	}
 
 	rowsToScroll := curRow - state.numPromptLines
+	if state.regionRender {
+		// The cursor may sit on a later row of a wrapped command; scroll so
+		// the prompt's first line reaches the top, not the cursor's row.
+		rowsToScroll = int(state.commandRegion.OriginRow) - state.numPromptLines
+	}
 	state.ScrollDown(rowsToScroll)
 	state.Logf("Cleared screen, scrolled %d rows\n", rowsToScroll)
 	// fmt.Fprintf(state.f, "%d %d %d\n", curRow, state.numPromptLines, rowsToScroll)
@@ -2852,6 +2857,7 @@ var SpecialKeyName = []string{
 	"KEY_ALT_F",
 	"KEY_ALT_O",
 	"KEY_ALT_DOT",
+	"KEY_ALT_SHIFT_R",
 	"KEY_CTRL_DELETE",
 	"KEY_SHIFT_TAB",
 }
@@ -2885,6 +2891,7 @@ const (
 	KEY_ALT_F
 	KEY_ALT_O
 	KEY_ALT_DOT
+	KEY_ALT_SHIFT_R
 
 	KEY_CTRL_DELETE
 	KEY_SHIFT_TAB
@@ -3190,6 +3197,8 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 				return KEY_ALT_F, nil
 			} else if c == 111 { // Alt-O
 				return KEY_ALT_O, nil
+			} else if c == 'R' { // Alt-Shift-R
+				return KEY_ALT_SHIFT_R, nil
 			} else if c == 46 { // Alt-.
 				return KEY_ALT_DOT, nil
 				// Quit
@@ -4469,6 +4478,12 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 		} else if t == KEY_ALT_D {
 			dateStr := time.Now().Format("2006-01-02")
 			state.PushChars([]rune(dateStr))
+		} else if t == KEY_ALT_SHIFT_R {
+			// The user's reset for measured widths after a reattach, font change,
+			// or any odd frame: forget every observation and measure again on
+			// the next repaint. There is no automatic epoch tracking.
+			clear(state.widthCache.Entries)
+			state.widthProbesBlocked = false
 		} else if t == KEY_ALT_DOT {
 			state.cycleLastArgument()
 		} else if t == KEY_SHIFT_TAB {

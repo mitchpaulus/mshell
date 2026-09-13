@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Alt-Shift-R in the interactive editor forgets measured text widths and measures them again,
+  for use after reattaching from a different terminal or changing fonts.
 - Assertive destructuring with the `=>` operator.
   It consumes a list, dictionary, or Just value, binds its structural pattern names,
   and fails at runtime when the pattern does not match.
