@@ -1025,6 +1025,7 @@ func (a DisplayAtom) displayText(src SourceText) string {
 
 type WidthCache struct {
 	Entries map[string]Cells
+	missSeen map[string]bool // Reused resolution scratch; cleared before returning.
 }
 
 const maxWidthCacheEntries = 4096
@@ -1264,7 +1265,8 @@ func (cache *CandidateEligibilityCache) allows(candidate string) bool {
 func resolveCachedWidths(dst []string, command SourceText, atoms []DisplayAtom, cache *WidthCache, eligibility *CandidateEligibilityCache, columns Cells) []string {
 	clear(dst)
 	misses := dst[:0]
-	seen := make(map[string]bool)
+	seen := cache.missSeen
+	defer func() { clear(cache.missSeen) }()
 	limit := min(maxWidthProbes, max(0, maxWidthCacheEntries - len(cache.Entries)))
 
 	for i := range atoms {
@@ -1293,6 +1295,10 @@ func resolveCachedWidths(dst []string, command SourceText, atoms []DisplayAtom, 
 		}
 
 		if !seen[text] {
+			if seen == nil {
+				seen = make(map[string]bool)
+				cache.missSeen = seen
+			}
 			seen[text] = true
 			misses = append(misses, text)
 		}
@@ -2719,6 +2725,8 @@ func widthFromCursorReport(report CursorReport, scratchRow OneBasedTerminalCoord
 }
 
 type WidthProbeBatch struct {
+	output []byte // Reused for the probe burst and subsequent cleanup write.
+	seen map[string]bool // Reused candidate deduplication scratch.
 	ScratchRow OneBasedTerminalCoord
 	Candidates []string // Frozen in the order probes were sent.
 	Widths []Cells      // Staged observations, matching Candidates.
@@ -2727,6 +2735,8 @@ type WidthProbeBatch struct {
 }
 
 func (batch *WidthProbeBatch) Clear() {
+	batch.output = batch.output[:0]
+	clear(batch.seen)
 	clear(batch.Candidates)
 	batch.Candidates = batch.Candidates[:0]
 	batch.Widths = batch.Widths[:0]
@@ -3359,8 +3369,6 @@ func (state *TermState) InteractiveMode() error {
 	var end bool
 
 	state.widthCache = WidthCache{Entries: make(map[string]Cells)}
-	var widthBatch WidthProbeBatch
-	var widthBatchActive bool
 
 
 	for {
@@ -3373,11 +3381,7 @@ func (state *TermState) InteractiveMode() error {
 		// state.Logf("Waiting for token...\n")
 		state.f.Sync()
 
-		if widthBatchActive {
-			token, err = state.InteractiveLexer(state.stdInState)
-		} else {
-			token, err = state.readInputToken()
-		}
+		token, err = state.readInputToken()
 
 		if err != nil {
 			state.Logf("Got err from interactive lexer: %s\n", err)
@@ -3389,29 +3393,6 @@ func (state *TermState) InteractiveMode() error {
 			return nil
 		}
 
-		if widthBatchActive {
-			if report, ok := token.(CsiToken); ok && report.FinalChar == 'R' { // We've gotten a CPR
-				widthBatch.acceptReply(report)
-			} else {
-				state.queuedInput = append(state.queuedInput, token)
-			}
-
-			if widthBatch.RepliesReceived == len(widthBatch.Candidates) {
-				if widthBatch.Failure == nil {
-					for i, candidate := range widthBatch.Candidates {
-						state.widthCache.Entries[strings.Clone(candidate)] = widthBatch.Widths[i]
-					}
-				} else {
-					state.Logf("Width batch rejected: %s\n", widthBatch.Failure)
-					state.widthProbesBlocked = true
-				}
-
-				widthBatch.Clear()
-				widthBatchActive = false
-			}
-
-			continue
-		}
 
 		end, err = state.HandleToken(token)
 		if err != nil {

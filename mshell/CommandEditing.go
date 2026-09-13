@@ -136,7 +136,18 @@ func completionTokenPrefix(source SourceText, cursor ByteOffset, token Token) (s
 // A shared byte prefix can end inside a UTF-8 codepoint or grapheme. Only insert
 // the prefix shared at a complete grapheme boundary in every candidate.
 func completionGraphemePrefix(matches []string) string {
-	prefix := getLongestCommonPrefix(matches)
+	if len(matches) == 0 {
+		return ""
+	}
+	prefix := matches[0]
+	for _, match := range matches[1:] {
+		length := min(len(prefix), len(match))
+		i := 0
+		for i < length && prefix[i] == match[i] {
+			i++
+		}
+		prefix = prefix[:i]
+	}
 	end := ByteOffset(len(prefix))
 	for {
 		previous := end
