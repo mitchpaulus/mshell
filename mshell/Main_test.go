@@ -974,6 +974,7 @@ func TestInteractiveLexerDeleteRequiresTilde(t *testing.T) {
 		{"end rxvt", "\x1b[8~", KEY_END},
 		{"home ctrl xterm", "\x1b[1;5H", KEY_HOME},
 		{"end shift xterm", "\x1b[1;2F", KEY_END},
+		{"alt b", "\x1bb", KEY_ALT_B},
 		{"cursor report", "\x1b[3;5R", CsiToken{FinalChar: 'R', Params: []byte("3;5")}},
 		{"incomplete report parameters", "\x1b[3R", CsiToken{FinalChar: 'R', Params: []byte("3")}},
 		{"other CSI with one parameter", "\x1b[3A", CsiToken{FinalChar: 'A', Params: []byte("3")}},
@@ -998,6 +999,41 @@ func TestInteractiveLexerDeleteRequiresTilde(t *testing.T) {
 			got, err = state.InteractiveLexer(reader)
 			if err != nil || !reflect.DeepEqual(got, AsciiToken{Char: 'x'}) {
 				t.Fatalf("following key = %#v, error = %v", got, err)
+			}
+		})
+	}
+}
+
+// A lone Escape has no binding. The byte after it is lexed as its own key
+// instead of being swallowed as an unknown Alt chord.
+func TestInteractiveLexerLoneEscapeKeepsNextKey(t *testing.T) {
+	tests := []struct {
+		name string
+		input string
+		want []TerminalToken
+	}{
+		{"letter", "\x1bax", []TerminalToken{AsciiToken{Char: 'a'}, AsciiToken{Char: 'x'}}},
+		{"tab", "\x1b\tx", []TerminalToken{AsciiToken{Char: '\t'}, AsciiToken{Char: 'x'}}},
+		{"enter", "\x1b\rx", []TerminalToken{AsciiToken{Char: '\r'}, AsciiToken{Char: 'x'}}},
+		{"multibyte", "\x1b\xe4\xb8\x96x", []TerminalToken{MutliByteToken{Char: '世'}, AsciiToken{Char: 'x'}}},
+		{"double escape then arrow", "\x1b\x1b[Ax", []TerminalToken{KEY_UP, AsciiToken{Char: 'x'}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := []byte(tt.input)
+			reader := &StdinReaderState{array: input, n: len(input)}
+			state := &TermState{}
+			for i, want := range tt.want {
+				got, err := state.InteractiveLexer(reader)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(got, want) {
+					t.Fatalf("token %d = %#v, want %#v", i, got, want)
+				}
+			}
+			if reader.i != len(input) {
+				t.Fatalf("consumed %d bytes, want %d", reader.i, len(input))
 			}
 		})
 	}

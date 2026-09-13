@@ -2647,6 +2647,15 @@ type StdinReaderState struct {
 	n     int
 }
 
+// UnreadByte pushes back the byte most recently returned by ReadByte so the
+// next ReadByte returns it again. Every returned byte came from the buffer,
+// so one step back is always valid; calling this twice in a row is not.
+func (state *StdinReaderState) UnreadByte() {
+	if state.i > 0 {
+		state.i--
+	}
+}
+
 func (state *StdinReaderState) ReadByte() (byte, error) {
 	if state.i >= state.n {
 		// Do fresh read
@@ -2971,11 +2980,13 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 				return KEY_ALT_DOT, nil
 				// Quit
 			} else {
-				// Unknown escape sequence
-				state.Logf("Unknown escape sequence: ESC %d\n", c)
-				return UnknownToken{}, nil
-				// return AsciiToken{Char: 27}
-				// return AsciiToken{Char: c}
+				// A lone Escape: the next byte is not a CSI, SS3, or bound Alt
+				// chord, so it is an ordinary key typed after Esc. Push it back
+				// and lex it on its own rather than swallowing it. Escape itself
+				// has no binding, so nothing is returned for it.
+				state.Logf("Ignoring lone ESC before byte %d\n", c)
+				stdinReaderState.UnreadByte()
+				continue
 			}
 		} else if c >= 192 && c <= 223 { // 192-223 are the first byte of a 2-byte UTF-8 character{
 			// Read the next byte

@@ -519,11 +519,11 @@ héllo.txt</div></dd>
   </div>
 
   <div class="defect">
-    <h3>6. A lone Escape swallows the next key <span class="tag lexer">lexer</span></h3>
+    <h3>6. A lone Escape swallows the next key <span class="tag fixed">fixed 2026-09-13</span></h3>
     <dl>
       <dt>Repro 9, 40</dt><dd>Press Esc, then <code>a</code>; the <code>a</code> is consumed as an unknown Alt chord and never inserted. Esc then Tab drops the Tab.</dd>
       <dt>Cause</dt><dd>After ESC the lexer blocks on the next byte and treats it as a modifier.</dd>
-      <dt>Fix</dt><dd>No timer needed: when the byte after ESC is not <code>[</code>, <code>O</code>, or a bound Alt letter, discard the ESC and process that byte normally.</dd>
+      <dt>Fix</dt><dd>Applied, no timer needed: when the byte after ESC is not <code>[</code>, <code>O</code>, or a bound Alt letter, the lexer pushes that byte back and lexes it on its own; the ESC itself produces no token. Covered by a lexer test for letters, Tab, Enter, multibyte text, and a doubled ESC before an arrow.</dd>
       <dt>Family</dt><dd>readline keyseq-timeout, zsh KEYTIMEOUT, fish #6590, #6996, #7338, prompt_toolkit #1181, #1655.</dd>
     </dl>
   </div>
@@ -616,7 +616,7 @@ héllo.txt</div></dd>
   <h2>Suggested order</h2>
   <ol>
     <li>Defects 1 and 2: fixed on this branch.</li>
-    <li>Defect 5: fixed on this branch. Defect 6 is a lexer-only change.</li>
+    <li>Defects 5 and 6: fixed on this branch.</li>
     <li>Defect 7, bracketed paste, is the largest real gap and the one every shell tracker has the most traffic on.</li>
     <li>Defect 8 is a design decision; the change is a few lines in the reply acceptor but contradicts the written contract, so decide it rather than patch it.</li>
     <li>Defect 4's partial fix, <code>ESC[J</code> on re-anchor, is one line; SIGWINCH handling is a separate design item.</li>
