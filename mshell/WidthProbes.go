@@ -9,10 +9,11 @@ import (
 )
 
 // ProbeRegion describes a fully visible region owned by the replacement
-// renderer. All rows are relative to OriginRow except terminal coordinates.
+// renderer. Physical rows are relative to OriginRow except terminal coordinates;
+// ViewportStart identifies the first visible row in the full command layout.
 // The caller must establish a valid anchor and serialize queries and resize
-// handling before probing. A region filling the screen needs viewport support
-// before it can reserve a scratch row.
+// handling before probing. The command viewport reserves a scratch row on
+// screens with at least two rows; a full-screen legacy region must shrink first.
 type ProbeRegion struct {
 	OriginRow OneBasedTerminalCoord
 	OriginCol OneBasedTerminalCoord
@@ -29,6 +30,19 @@ type ProbeRegion struct {
 	// The caller must invalidate ownership if repaint or resize changes the
 	// region so that this row is no longer available as scratch space.
 	ScratchOwned bool
+	// Logical row at the top of the visible command window. CursorRow and
+	// PaintedRows remain physical, region-relative coordinates for probing.
+	ViewportStart RowIndex
+	// Once a tall command takes over the screen, the opaque prompt is gone.
+	// Keep its original command offset so moving the viewport does not reflow
+	// logical rows. Returning to row zero leaves that prefix blank.
+	PromptHidden bool
+	CommandStartCol Cells
+}
+
+func (region *ProbeRegion) commandStartCol() Cells {
+	if region.PromptHidden { return region.CommandStartCol }
+	return Cells(region.OriginCol)-1
 }
 
 func (region *ProbeRegion) validate() error {

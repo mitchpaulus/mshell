@@ -192,7 +192,7 @@ func TestCommandRefreshQueuesKeysBeforePaint(t *testing.T) {
 	if !ready || err != nil || screen.line(2) != "> 世·x   " || len(screen.writes) != 3 { t.Fatalf("latest frame: %v", err) }
 }
 
-func TestCommandPaintRefusesStaleOrOversizeFrames(t *testing.T) {
+func TestCommandPaintRefusesStaleFrames(t *testing.T) {
 	state := TermState{currentCommand: "hello", index: 5}
 	region := ProbeRegion{OriginRow: 1, OriginCol: 1, PaintedRows: 1, ScreenRows: 2, Columns: 4}
 	state.prepareCommandDisplay(0, 4, nil)
@@ -209,11 +209,6 @@ func TestCommandPaintRefusesStaleOrOversizeFrames(t *testing.T) {
 		writer := &failingProbeWriter{failAt: 1}
 		if err := state.paintCommandDisplay(writer, &region); err == nil || writer.calls != 0 { t.Fatalf("stale frame reached terminal: %v", err) }
 	}
-	state.queuedInput = nil
-	state.currentCommand, state.index, region = "12345678", 8, before
-	state.prepareCommandDisplay(0, 4, nil)
-	writer := &failingProbeWriter{failAt: 1}
-	if err := state.paintCommandDisplay(writer, &region); !errors.Is(err, errCommandViewportRequired) || writer.calls != 0 || region != before { t.Fatalf("oversize frame wrote or changed geometry: %v", err) }
 }
 
 func TestCommandRefreshFullScreenAndNarrow(t *testing.T) {
@@ -232,7 +227,7 @@ func TestCommandRefreshFullScreenAndNarrow(t *testing.T) {
 
 func TestCommandPaintWriteFailureDoesNotPublishRegion(t *testing.T) {
 	for _, short := range []bool{false, true} {
-		state := TermState{currentCommand: "long command", index: 12}
+		state := TermState{currentCommand: SourceText(strings.Repeat("x", 80)), index: 80}
 		state.prepareCommandDisplay(0, 8, nil)
 		region := ProbeRegion{OriginRow: 4, OriginCol: 1, PaintedRows: 1, ScreenRows: 4, Columns: 8}
 		before := region
@@ -241,6 +236,101 @@ func TestCommandPaintWriteFailureDoesNotPublishRegion(t *testing.T) {
 		if err == nil || region != before || writer.calls != 1 { t.Fatalf("partial write published geometry: %v", err) }
 		if short && !errors.Is(err, io.ErrShortWrite) { t.Fatal("short write not detected") }
 	}
+}
+
+func TestCommandViewportFollowsCursorAndKeepsWraps(t *testing.T) {
+	screen := newCommandScreen(t, 4, 8)
+	screen.cells[3][0], screen.row, screen.col = ">", 3, 2
+	region := ProbeRegion{OriginRow: 4, OriginCol: 3, PaintedRows: 1, ScreenRows: 4, Columns: 8}
+	state := TermState{currentCommand: "aa\nbb\ncc\ndd\nee"}
+	for _, tt := range []struct {
+		cursor ByteOffset
+		start RowIndex
+		lines [3]string
+		cursorRow, cursorCol int
+	}{
+		{14, 2, [3]string{"cc      ", "dd      ", "ee      "}, 2, 2},
+		{9, 2, [3]string{"cc      ", "dd      ", "ee      "}, 1, 0},
+		{3, 1, [3]string{"bb      ", "cc      ", "dd      "}, 0, 0},
+		{0, 0, [3]string{"  aa    ", "bb      ", "cc      "}, 0, 2},
+		{14, 2, [3]string{"cc      ", "dd      ", "ee      "}, 2, 2},
+	} {
+		state.index = tt.cursor
+		ready, err := state.refreshCommandDisplay(screen, screen.read, &region)
+		if !ready || err != nil { t.Fatalf("cursor %d: %v", tt.cursor, err) }
+		if region.ViewportStart != tt.start || region.OriginRow != 1 || region.OriginCol != 1 || region.CommandStartCol != 2 || !region.PromptHidden || !region.ScratchOwned || region.PaintedRows != 3 { t.Fatalf("cursor %d: viewport %+v", tt.cursor, region) }
+		for row, want := range tt.lines { if screen.line(row) != want { t.Fatalf("cursor %d row %d: %q, want %q", tt.cursor, row, screen.line(row), want) } }
+		if screen.line(3) != "        " || screen.scrolls != 3 || screen.row != tt.cursorRow || screen.col != tt.cursorCol || screen.pending { t.Fatalf("cursor %d: screen %+v", tt.cursor, screen) }
+	}
+	// A short replacement clears the old window and leaves the prompt hidden.
+	state.currentCommand, state.index = "x", 1
+	ready, err := state.refreshCommandDisplay(screen, screen.read, &region)
+	if !ready || err != nil || region.ViewportStart != 0 || region.PaintedRows != 1 || !region.PromptHidden || screen.line(0) != "  x     " { t.Fatalf("shrink: %+v, %v", region, err) }
+	for row := 1; row < 4; row++ { if screen.line(row) != "        " { t.Fatal("old viewport text survived shrink") } }
+	if state.currentCommand != "x" || state.displayStartCol != 2 { t.Fatal("viewport changed source or logical wrapping") }
+}
+
+func TestCommandViewportClipsSoftWrapsAndFinalGap(t *testing.T) {
+	screen := newCommandScreen(t, 3, 4)
+	screen.cells[1][0], screen.row, screen.col = ">", 1, 1
+	region := ProbeRegion{OriginRow: 2, OriginCol: 2, PaintedRows: 1, ScreenRows: 3, Columns: 4}
+	state := TermState{currentCommand: "abcdefghijklmnopqrs"}
+	for _, tt := range []struct {
+		cursor ByteOffset
+		start RowIndex
+		lines [2]string
+		row, col int
+	}{
+		{19, 4, [2]string{"pqrs", "    "}, 1, 0},
+		{18, 3, [2]string{"lmno", "pqrs"}, 1, 3},
+		{3, 1, [2]string{"defg", "hijk"}, 0, 0},
+		{0, 0, [2]string{" abc", "defg"}, 0, 1},
+	} {
+		state.index = tt.cursor
+		ready, err := state.refreshCommandDisplay(screen, screen.read, &region)
+		if !ready || err != nil { t.Fatal(err) }
+		if region.ViewportStart != tt.start || screen.row != tt.row || screen.col != tt.col || screen.pending { t.Fatalf("cursor %d: region %+v, screen %+v", tt.cursor, region, screen) }
+		for row, want := range tt.lines { if screen.line(row) != want { t.Fatalf("cursor %d row %d: %q, want %q", tt.cursor, row, screen.line(row), want) } }
+		if screen.scrolls != 1 || screen.line(2) != "    " { t.Fatal("viewport scrolled physical screen or damaged scratch") }
+	}
+}
+
+func TestCommandViewportProbesWithHiddenPrompt(t *testing.T) {
+	screen := newCommandScreen(t, 4, 8)
+	screen.row, screen.col = 3, 2
+	region := ProbeRegion{OriginRow: 4, OriginCol: 3, PaintedRows: 1, ScreenRows: 4, Columns: 8}
+	state := TermState{currentCommand: "a\nb\nc\nd\ne", index: 9}
+	if ready, err := state.refreshCommandDisplay(screen, screen.read, &region); !ready || err != nil { t.Fatal(err) }
+	state.currentCommand = "a\nb\nc\n123456世\nz"
+	state.index = state.commandEnd()
+	ready, err := state.refreshCommandDisplay(screen, screen.read, &region)
+	if !ready || err != nil || state.widthCache.Entries["世"] != 2 { t.Fatalf("viewport probe failed: %v", err) }
+	for row, want := range []string{"123456  ", "世·      ", "z       ", "        "} {
+		if screen.line(row) != want { t.Fatalf("row %d: %q, want %q", row, screen.line(row), want) }
+	}
+	if region.ViewportStart != 3 || region.CommandStartCol != 2 || state.displayStartCol != 2 || !region.ScratchOwned || screen.scrolls != 3 || len(screen.writes) != 4 { t.Fatalf("probe disturbed viewport/geometry: %+v", region) }
+	// Going back to the beginning uses the original prompt offset, while
+	// probe cleanup and physical cursor movement continue to use column one.
+	state.index = 0
+	ready, err = state.refreshCommandDisplay(screen, screen.read, &region)
+	if !ready || err != nil || screen.line(0) != "  a     " || screen.col != 2 || region.ViewportStart != 0 || len(screen.writes) != 5 { t.Fatalf("return to hidden prompt: %v", err) }
+}
+
+func TestCommandViewportOneRowTerminal(t *testing.T) {
+	screen := newCommandScreen(t, 1, 4)
+	region := ProbeRegion{OriginRow: 1, OriginCol: 2, PaintedRows: 1, ScreenRows: 1, Columns: 4}
+	state := TermState{}
+	for _, tt := range []struct { source SourceText; cursor ByteOffset; text string; col int }{
+		{"abcdef", 6, "def ", 3},
+		{"abcdef", 0, " abc", 1},
+		{"abc", 3, "    ", 0},
+		{"世", 3, " ?  ", 2},
+	} {
+		state.currentCommand, state.index = tt.source, tt.cursor
+		ready, err := state.refreshCommandDisplay(screen, screen.read, &region)
+		if !ready || err != nil || screen.line(0) != tt.text || screen.col != tt.col || screen.row != 0 || screen.pending || region.ScratchOwned || state.widthProbesBlocked { t.Fatalf("%q cursor %d: %q, region %+v, %v", tt.source, tt.cursor, screen.line(0), region, err) }
+	}
+	if screen.scrolls != 0 || len(screen.writes) != 4 { t.Fatal("one-row viewport probed or scrolled") }
 }
 
 func TestCommandPaintAssemblyDoesNotMutateRegion(t *testing.T) {
@@ -271,20 +361,24 @@ func TestCommandRefreshRejectedBatchPaintsOnlyFallbacks(t *testing.T) {
 }
 
 func BenchmarkCommandRefresh(b *testing.B) {
-	for _, source := range []SourceText{"echo hello", "echo e\u0301 世", SourceText(strings.Repeat("x", 4096))} {
-		name := "ASCII"
-		if len(source) > 100 { name = "Paste" } else if !isAllPrintableAscii(source) { name = "CachedUnicode" }
-		b.Run(name, func(b *testing.B) {
-			state := TermState{currentCommand: source, index: ByteOffset(len(source))}
+	for _, tt := range []struct { name string; source SourceText; rows int }{
+		{"ASCII", "echo hello", 100},
+		{"CachedUnicode", "echo e\u0301 世", 100},
+		{"Paste", SourceText(strings.Repeat("x", 4096)), 100},
+		{"TallPaste", SourceText(strings.Repeat("x", 4096)), 8},
+	} {
+		b.Run(tt.name, func(b *testing.B) {
+			state := TermState{currentCommand: tt.source, index: ByteOffset(len(tt.source))}
 			state.widthCache.remember("e\u0301", 1)
 			state.widthCache.remember("世", 2)
-			region := ProbeRegion{OriginRow: 1, OriginCol: 3, PaintedRows: 1, ScreenRows: 100, Columns: 80}
+			region := ProbeRegion{OriginRow: 1, OriginCol: 3, PaintedRows: 1, ScreenRows: tt.rows, Columns: 80}
 			read := func() (TerminalToken, error) { b.Fatal("cached repaint issued a query"); return nil, io.EOF }
 			if ready, err := state.refreshCommandDisplay(io.Discard, read, &region); !ready || err != nil { b.Fatal(err) }
 			b.ReportAllocs()
 			for b.Loop() {
 				if ready, err := state.refreshCommandDisplay(io.Discard, read, &region); !ready || err != nil { b.Fatal(err) }
 			}
+			b.ReportMetric(float64(len(state.renderBuffer)), "paint-bytes/op")
 		})
 	}
 }

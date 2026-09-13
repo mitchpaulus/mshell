@@ -1,12 +1,40 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"io"
 )
 
-var errCommandViewportRequired = errors.New("command paint: frame exceeds terminal height; viewport required")
+type commandViewport struct {
+	Start RowIndex
+	Rows int
+	CursorRow RowIndex
+	CursorCol Cells
+	HidePrompt bool
+	ReserveScratch bool
+}
+
+// Move the window only when the cursor leaves it, or shrinking the command
+// removes its last rows. Logical wrapping is independent of viewport movement.
+// A tall command reserves one scratch row when the screen has at least two.
+func commandViewportFor(layout LayoutResult, region ProbeRegion) commandViewport {
+	cursorRow, cursorCol := layout.CursorRow, layout.CursorCol
+	if cursorCol == region.Columns { cursorRow++; cursorCol = 0 }
+	totalRows := max(len(layout.Rows), int(cursorRow)+1)
+	capacity := max(1, region.ScreenRows-1)
+	rows := min(totalRows, capacity)
+	start := min(max(0, region.ViewportStart), RowIndex(totalRows-rows))
+	if cursorRow < start { start = cursorRow }
+	if cursorRow >= start+RowIndex(rows) { start = cursorRow-RowIndex(rows)+1 }
+	return commandViewport{
+		Start: start,
+		Rows: rows,
+		CursorRow: cursorRow-start,
+		CursorCol: cursorCol,
+		HidePrompt: region.PromptHidden || totalRows > capacity,
+		ReserveScratch: totalRows > capacity && region.ScreenRows > 1,
+	}
+}
 
 // Painting may occupy the whole screen. Probing additionally requires room
 // for a scratch row, which ProbeRegion.validate checks separately.
@@ -14,11 +42,14 @@ func (region *ProbeRegion) validatePaintRegion() error {
 	if region.Columns < 4 || region.Columns > Cells(maxTerminalCoordinate) || region.ScreenRows < 1 || region.ScreenRows > int(maxTerminalCoordinate) {
 		return fmt.Errorf("command paint: unsupported terminal geometry")
 	}
-	if region.OriginRow < 1 || region.OriginCol < 1 || Cells(region.OriginCol) > region.Columns {
+	if region.OriginRow < 1 || int(region.OriginRow) > region.ScreenRows || region.OriginCol < 1 || Cells(region.OriginCol) > region.Columns {
 		return fmt.Errorf("command paint: invalid region origin")
 	}
-	if region.PaintedRows < 1 || region.CursorRow < 0 || int(region.CursorRow) >= region.PaintedRows {
+	if region.PaintedRows < 1 || region.PaintedRows > region.ScreenRows || region.CursorRow < 0 || int(region.CursorRow) >= region.PaintedRows || region.ViewportStart < 0 {
 		return fmt.Errorf("command paint: invalid previous frame")
+	}
+	if region.PromptHidden && (region.OriginCol != 1 || region.CommandStartCol < 0 || region.CommandStartCol >= region.Columns) {
+		return fmt.Errorf("command paint: invalid hidden prompt geometry")
 	}
 	ownedRows := region.PaintedRows
 	if region.ScratchOwned { ownedRows++ }
@@ -31,47 +62,50 @@ func (region *ProbeRegion) validatePaintRegion() error {
 // appendCommandPaint assembles a full repaint without terminal I/O. The region
 // describes the previous physical cursor and owned rows, not the new layout.
 // Reserve additional rows before painting so natural wraps cannot scroll away
-// the origin. Only the command suffix of the first row belongs to the painter.
+// the origin. The prompt prefix is preserved until a tall command takes over
+// the screen. After that, every cell in the first physical row is owned.
 func (state *TermState) appendCommandPaint(dst []byte, region ProbeRegion) ([]byte, ProbeRegion, error) {
 	if err := region.validatePaintRegion(); err != nil { return dst, region, err }
 	layout := state.displayLayout
 	if len(layout.Rows) == 0 || state.queuedInputIndex < len(state.queuedInput) || state.displaySource != state.currentCommand || state.displayCursor != state.index {
 		return dst, region, fmt.Errorf("command paint: no current prepared frame")
 	}
-	if state.displayColumns != region.Columns || state.displayStartCol != Cells(region.OriginCol)-1 {
+	if state.displayColumns != region.Columns || state.displayStartCol != region.commandStartCol() {
 		return dst, region, fmt.Errorf("command paint: geometry changed since preparation")
 	}
 	if layout.CursorRow < 0 || int(layout.CursorRow) >= len(layout.Rows) || layout.CursorCol < 0 || layout.CursorCol > region.Columns {
 		return dst, region, fmt.Errorf("command paint: invalid layout cursor")
 	}
 
-	// The gap after a full row has no addressable terminal column. Materialize
-	// it at column one of the next row, including a blank row at command end.
-	// Every parked cursor is an ordinary cell position with pending wrap off.
-	cursorRow, cursorCol := layout.CursorRow, layout.CursorCol
-	if cursorCol == region.Columns { cursorRow++; cursorCol = 0 }
-	paintedRows := max(len(layout.Rows), int(cursorRow)+1)
-	if paintedRows > region.ScreenRows { return dst, region, errCommandViewportRequired }
+	view := commandViewportFor(layout, region)
 
 	previousOwned := region.PaintedRows
 	if region.ScratchOwned { previousOwned++ }
-	ownedRows := max(previousOwned, paintedRows)
+	wantedRows := view.Rows
+	if view.ReserveScratch { wantedRows++ }
+	ownedRows := max(previousOwned, wantedRows)
 	next := region
 	next.OriginRow -= OneBasedTerminalCoord(max(0, int(region.OriginRow)+ownedRows-1-region.ScreenRows))
-	next.CursorRow = cursorRow
-	next.PaintedRows = paintedRows
+	next.CursorRow = view.CursorRow
+	next.PaintedRows = view.Rows
+	next.ViewportStart = view.Start
+	if view.HidePrompt {
+		next.CommandStartCol = region.commandStartCol()
+		next.PromptHidden = true
+		next.OriginCol = 1
+	}
 	// A cleared leftover row can be reused as scratch immediately below the
 	// new contents. Any further cleared rows are relinquished.
-	next.ScratchOwned = ownedRows > paintedRows
+	next.ScratchOwned = ownedRows > view.Rows
 
 	dst = append(dst, "\033[0m\r"...)
 	if region.CursorRow > 0 { dst = appendProbeCursorControl(dst, int(region.CursorRow), 'A') }
-	dst = appendProbeCursorControl(dst, int(region.OriginCol), 'G')
+	dst = appendProbeCursorControl(dst, int(next.OriginCol), 'G')
 	if ownedRows > previousOwned {
 		if previousOwned > 1 { dst = appendProbeCursorControl(dst, previousOwned-1, 'B') }
 		for i := previousOwned; i < ownedRows; i++ { dst = append(dst, '\r', '\n') }
 		if ownedRows > 1 { dst = appendProbeCursorControl(dst, ownedRows-1, 'A') }
-		dst = appendProbeCursorControl(dst, int(region.OriginCol), 'G')
+		dst = appendProbeCursorControl(dst, int(next.OriginCol), 'G')
 	}
 
 	// Clear only owned cells, including old scratch and rows left by a longer
@@ -81,11 +115,16 @@ func (state *TermState) appendCommandPaint(dst []byte, region ProbeRegion) ([]by
 	for i := 1; i < ownedRows; i++ { dst = append(dst, "\r\033[1B\033[2K"...) }
 	if ownedRows > 1 {
 		dst = appendProbeCursorControl(dst, ownedRows-1, 'A')
-		dst = appendProbeCursorControl(dst, int(region.OriginCol), 'G')
+		dst = appendProbeCursorControl(dst, int(next.OriginCol), 'G')
 	}
 
-	for i, row := range layout.Rows {
-		if i > 0 {
+	if view.Start == 0 && next.PromptHidden {
+		dst = appendProbeCursorControl(dst, int(next.CommandStartCol)+1, 'G')
+	}
+	visibleEnd := min(len(layout.Rows), int(view.Start)+view.Rows)
+	for i := int(view.Start); i < visibleEnd; i++ {
+		row := layout.Rows[i]
+		if i > int(view.Start) {
 			switch layout.Rows[i-1].EndType {
 			case RowEndSoftExact: // The next one-cell atom triggers autowrap.
 			case RowEndHard, RowEndForcedHardWrap:
@@ -102,12 +141,15 @@ func (state *TermState) appendCommandPaint(dst []byte, region ProbeRegion) ([]by
 			}
 		}
 	}
-	if paintedRows > len(layout.Rows) { dst = append(dst, '\r', '\n') }
+	// A full final row can put the cursor in a blank logical row after the
+	// command. It may be the entire viewport on a one-row terminal.
+	paintedLayoutRows := visibleEnd-int(view.Start)
+	if view.Rows > paintedLayoutRows && paintedLayoutRows > 0 { dst = append(dst, '\r', '\n') }
 	// CR cancels pending wrap without advancing a row. Cursor movement cannot
 	// accidentally trigger a second wrap after an exact fill or forced CRLF.
 	dst = append(dst, "\033[0m\r"...)
-	if distance := paintedRows-1-int(cursorRow); distance > 0 { dst = appendProbeCursorControl(dst, distance, 'A') }
-	dst = appendProbeCursorControl(dst, int(cursorCol)+1, 'G')
+	if distance := view.Rows-1-int(view.CursorRow); distance > 0 { dst = appendProbeCursorControl(dst, distance, 'A') }
+	dst = appendProbeCursorControl(dst, int(view.CursorCol)+1, 'G')
 	return dst, next, nil
 }
 
@@ -128,7 +170,7 @@ func (state *TermState) paintCommandDisplay(writer io.Writer, region *ProbeRegio
 // join this region before replacing the legacy interactive renderer.
 func (state *TermState) refreshCommandDisplay(writer io.Writer, readTerminal func() (TerminalToken, error), region *ProbeRegion) (bool, error) {
 	if region.Columns < 4 {
-		return state.prepareCommandDisplay(Cells(region.OriginCol)-1, region.Columns, nil)
+		return state.prepareCommandDisplay(region.commandStartCol(), region.Columns, nil)
 	}
 	if err := region.validatePaintRegion(); err != nil { return false, err }
 	var ready bool
@@ -138,9 +180,61 @@ func (state *TermState) refreshCommandDisplay(writer io.Writer, readTerminal fun
 	} else {
 		// A full-screen frame has no scratch row. Keep cached measurements and
 		// placeholders until editing frees room; this is not a failed batch.
-		ready, err = state.prepareCommandDisplay(Cells(region.OriginCol)-1, region.Columns, nil)
+		ready, err = state.prepareCommandDisplay(region.commandStartCol(), region.Columns, nil)
 	}
 	if !ready || err != nil { return false, err }
 	if err = state.paintCommandDisplay(writer, region); err != nil { return false, err }
 	return true, nil
+}
+
+// prepareCommandDisplay completes one serialized editor frame. measure, when
+// supplied, must finish/drain its transaction and queue input without applying
+// edits. The caller applies queued tokens through the normal editor loop and
+// prepares again before painting. No layout from an obsolete frame is exposed.
+// A nil measure uses cached widths and placeholders without terminal I/O.
+func (state *TermState) prepareCommandDisplay(startCol, columns Cells, measure func([]string) error) (bool, error) {
+	clear(state.displayLayout.Rows)
+	state.displayLayout = LayoutResult{Rows: state.displayLayout.Rows[:0]}
+	state.displayAtoms = state.displayAtoms[:0]
+	clear(state.widthMisses)
+	state.widthMisses = state.widthMisses[:0]
+	state.displaySource = state.currentCommand
+	state.displayCursor = state.index
+	state.displayStartCol = startCol
+	state.displayColumns = columns
+
+	if state.queuedInputIndex < len(state.queuedInput) || columns < 4 || columns > Cells(maxTerminalCoordinate) || startCol < 0 || startCol >= columns {
+		return false, nil
+	}
+
+	if isAllPrintableAscii(state.displaySource) {
+		state.displayLayout = layoutPrintableAsciiInto(state.displayLayout.Rows, state.displaySource, state.index, startCol, columns)
+		return true, nil
+	}
+
+	state.displayAtoms = segmentAtomsInto(state.displayAtoms, state.displaySource)
+	state.widthMisses = resolveCachedWidths(state.widthMisses, state.displaySource, state.displayAtoms, &state.widthCache, &state.eligibilityCache, columns)
+	if measure != nil && !state.widthProbesBlocked && len(state.widthMisses) > 0 {
+		if err := measure(state.widthMisses); err != nil {
+			return false, err
+		}
+		// A valid batch still populates the session cache when keys arrived in
+		// flight. Defer layout until those keys have been applied, including
+		// submission and its prompt query, after all reports have drained.
+		if state.queuedInputIndex < len(state.queuedInput) {
+			return false, nil
+		}
+	}
+	finishWidthResolution(state.displaySource, state.displayAtoms, &state.widthCache)
+	state.displayLayout = layoutAtomsInto(state.displayLayout.Rows, state.displayAtoms, state.index, startCol, columns)
+	return true, nil
+}
+
+// The replacement painter supplies its previously painted, anchored region.
+// Keep this entry point separate from the legacy painter, which cannot yet
+// guarantee scratch ownership. The batch storage belongs to the editor session.
+func (state *TermState) prepareMeasuredCommandDisplay(writer io.Writer, readTerminal func() (TerminalToken, error), region *ProbeRegion) (bool, error) {
+	return state.prepareCommandDisplay(region.commandStartCol(), region.Columns, func(candidates []string) error {
+		return state.measureWidths(writer, readTerminal, region, &state.widthBatch, candidates)
+	})
 }
