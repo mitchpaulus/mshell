@@ -969,29 +969,76 @@ type TermState struct {
 	initCallStackItem CallStackItem
 	// pathBinManager IPathBinManager
 
+	// Keyboard tokens that arrived while the terminal was being read for a
+	// cursor report (a width probe batch or a prompt position query). They are
+	// replayed by readInputToken, in arrival order, before any new stdin is
+	// read, so measurement never drops or reorders keystrokes.
 	queuedInput []TerminalToken
+	// Next queuedInput entry to replay. A frame is only painted when the queue
+	// has been fully drained, since queued keys may still edit the command.
 	queuedInputIndex int
+	// Set when a probe batch produced an invalid observation or failed I/O.
+	// While true no further widths are probed for the current command and
+	// unknown clusters render as placeholders. Cleared on the next command
+	// submission and by the user's width reset (Alt+Shift+R).
 	widthProbesBlocked bool
+	// Session-wide grapheme cluster -> terminal cell width, populated from
+	// committed probe batches. Never expires on its own; the user's width
+	// reset clears it after a font change or reattach.
 	widthCache WidthCache
+	// Remembers whether a candidate string is even worth probing (well formed,
+	// under the size limit). Avoids re-segmenting rejected candidates on every
+	// frame. Independent of what the terminal actually reports.
 	eligibilityCache CandidateEligibilityCache
+	// Reusable storage for one in-flight measureWidths transaction: the probe
+	// burst bytes, the frozen candidate order, and the staged replies that are
+	// committed to widthCache only when every reply validates.
 	widthBatch WidthProbeBatch
 	// Anchored editing region for the replacement renderer. Valid after
 	// printPrompt until the next prompt, screen clear, or resize re-anchor.
 	commandRegion ProbeRegion
 
+	// The fields below describe the most recently prepared display frame
+	// (see prepareCommandDisplay). They are inputs and outputs of layout,
+	// kept on the state so slices are reused across frames. paintCommandDisplay
+	// refuses to paint unless they still match the live editor and region.
+
+	// Exact text that was laid out: currentCommand plus any ghost suggestion.
+	// Compared against the editor before painting to detect a stale frame.
 	displaySource SourceText
+	// Value of state.index when the frame was prepared; the layout's cursor
+	// position is only valid for this byte offset.
 	displayCursor ByteOffset
+	// Column where the command text begins (after the prompt) on the first
+	// row, as of preparation. Painting checks it against the region.
 	displayStartCol Cells
+	// Terminal width used for wrapping this frame; a mismatch with the region
+	// means a resize happened and the frame must be prepared again.
 	displayColumns Cells
+	// Segmented clusters of displaySource with resolved widths. Empty for the
+	// all-printable-ASCII fast path, which lays out directly from text.
 	displayAtoms []DisplayAtom
+	// Cluster strings in this frame (command and completion trailer) whose
+	// width is not yet in widthCache. Handed to measureWidths as candidates.
 	widthMisses []string
+	// Wrapped rows plus cursor row/column produced by layout; what the painter
+	// actually emits.
 	displayLayout LayoutResult
+	// Syntax highlighting spans over displaySource, sorted and non-overlapping.
+	// Applied while painting; they never affect width or wrapping.
 	displayStyles []styleSpan
-	trailerSource []byte       // Completion matches joined for width resolution.
-	trailerAtoms  []DisplayAtom
-	trailerLayout []LayoutRow
-	trailerMisses []string
-	displaySuggestion int // Ghost suggestion bytes at the end of displaySource.
+	// Scratch for the completion-match trailer painted under the command.
+	// Trailer rows use only cached widths; their misses are folded into
+	// widthMisses so they are measured alongside the command's clusters.
+	trailerSource []byte       // Completion matches joined with '\n' for width resolution.
+	trailerAtoms  []DisplayAtom // Segmented clusters of trailerSource, or of one trailer row.
+	trailerLayout []LayoutRow   // Single-row layout of the trailer line being painted.
+	trailerMisses []string      // Unknown cluster widths found in the trailer.
+	// Number of bytes at the end of displaySource that are history ghost
+	// text rather than the command itself. Zero when no suggestion is shown.
+	displaySuggestion int
+	// Whether the ghost history suggestion is rendered this frame. False on
+	// submission so the command runs and is painted without the suggestion.
 	showSuggestion bool
 }
 
