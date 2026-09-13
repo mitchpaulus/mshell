@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"os"
 )
 
 type commandViewport struct {
@@ -237,4 +238,80 @@ func (state *TermState) prepareMeasuredCommandDisplay(writer io.Writer, readTerm
 	return state.prepareCommandDisplay(region.commandStartCol(), region.Columns, func(candidates []string) error {
 		return state.measureWidths(writer, readTerminal, region, &state.widthBatch, candidates)
 	})
+}
+
+// Region rendering is opt-in until suggestions, completions and styling join
+// the anchored region. Set MSH_REGION_RENDER=1 to exercise it on a terminal.
+func regionRenderEnabled() bool {
+	v, ok := os.LookupEnv("MSH_REGION_RENDER")
+	return ok && v != "" && v != "0"
+}
+
+// anchorCommandRegion starts a fresh editing region at the reported prompt
+// cursor. The first frame owns exactly the prompt row; nothing is painted yet.
+func (state *TermState) anchorCommandRegion(row int, col int) {
+	state.commandRegion = ProbeRegion{
+		OriginRow: OneBasedTerminalCoord(row),
+		OriginCol: OneBasedTerminalCoord(col),
+		PaintedRows: 1,
+		ScreenRows: state.numRows,
+		Columns: Cells(state.numCols),
+	}
+}
+
+// updateHistoryCompletion refreshes the ghost suggestion for the current
+// command and returns how many suffix bytes it adds, negative when none.
+func (s *TermState) updateHistoryCompletion() int {
+	s.historyComplete = SourceText(SearchHistory(string(s.currentCommand), historyToSave))
+	numToAdd := len(s.historyComplete) - len(s.currentCommand)
+	if numToAdd < 0 {
+		s.historyComplete = SourceText(SearchHistory(string(s.currentCommand), s.previousHistory))
+		numToAdd = len(s.historyComplete) - len(s.currentCommand)
+	}
+	return numToAdd
+}
+
+// refreshInteractiveDisplay paints the editor after a token is handled. The
+// legacy renderer remains the default; the region renderer measures widths
+// through the anchored region and leaves a frame unpainted only while keys
+// queued during measurement still wait for the editor loop.
+func (state *TermState) refreshInteractiveDisplay(renderHistory bool) error {
+	if !state.regionRender {
+		// Complete both layout paths while the legacy painter remains active.
+		if _, err := state.prepareCommandDisplay(Cells(state.promptLength), Cells(state.numCols), nil); err != nil {
+			return err
+		}
+		state.Render(renderHistory)
+		return nil
+	}
+	if renderHistory {
+		state.updateHistoryCompletion()
+	}
+
+	// A resize reflows rows the region no longer describes. Re-anchor from a
+	// fresh prompt rather than trusting the terminal's reflow.
+	previousCols, previousRows := state.numCols, state.numRows
+	state.UpdateSize()
+	if Cells(state.numCols) != state.commandRegion.Columns || state.numRows != state.commandRegion.ScreenRows {
+		state.Logf("Terminal resized %dx%d -> %dx%d; re-anchoring prompt\n", previousCols, previousRows, state.numCols, state.numRows)
+		if _, err := os.Stdout.WriteString("\r\n"); err != nil { return err }
+		if err := state.printPrompt(); err != nil { return err }
+	}
+
+	read := func() (TerminalToken, error) { return state.InteractiveLexer(state.stdInState) }
+	var ready bool
+	var err error
+	if renderHistory {
+		ready, err = state.refreshCommandDisplay(os.Stdout, read, &state.commandRegion)
+	} else {
+		// Submission paints from cached widths only; no measurement can queue
+		// keys past the command that is about to run.
+		ready, err = state.prepareCommandDisplay(state.commandRegion.commandStartCol(), state.commandRegion.Columns, nil)
+		if ready && err == nil { err = state.paintCommandDisplay(os.Stdout, &state.commandRegion) }
+	}
+	if err != nil { return err }
+	if !ready && state.queuedInputIndex >= len(state.queuedInput) {
+		state.Logf("Region renderer skipped frame: %dx%d\n", state.numCols, state.numRows)
+	}
+	return nil
 }

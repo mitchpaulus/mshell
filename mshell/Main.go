@@ -975,6 +975,10 @@ type TermState struct {
 	widthCache WidthCache
 	eligibilityCache CandidateEligibilityCache
 	widthBatch WidthProbeBatch
+	// Anchored editing region for the replacement renderer. Valid after
+	// printPrompt until the next prompt, screen clear, or resize re-anchor.
+	commandRegion ProbeRegion
+	regionRender  bool
 
 	displaySource SourceText
 	displayCursor ByteOffset
@@ -2231,14 +2235,7 @@ func (s *TermState) Render(renderHistory bool) {
 
 	// Search for history
 	if (renderHistory) {
-		historySearchNew := SearchHistory(string(s.currentCommand), historyToSave)
-		s.historyComplete = SourceText(historySearchNew)
-		numToAdd := len(s.historyComplete) - len(s.currentCommand)
-		if numToAdd < 0 {
-			historySearch := SearchHistory(string(s.currentCommand), s.previousHistory)
-			s.historyComplete = SourceText(historySearch)
-			numToAdd = len(s.historyComplete) - len(s.currentCommand)
-		}
+		numToAdd := s.updateHistoryCompletion()
 
 		// Print escape code for light gray
 		s.renderBuffer = append(s.renderBuffer, "\033[90m"...)
@@ -2577,6 +2574,7 @@ func (state *TermState) ScrollDown(numLines int) {
 	// Move cursor
 	fmt.Fprintf(os.Stdout, "\033[%d;%dH", curRow-numLines, curCol)
 	state.promptRow = state.promptRow - numLines
+	state.commandRegion.OriginRow -= OneBasedTerminalCoord(numLines)
 }
 
 func (state *TermState) ClearScreen() {
@@ -3373,6 +3371,7 @@ func (state *TermState) InteractiveMode() error {
 	var end bool
 
 	state.widthCache = WidthCache{Entries: make(map[string]Cells)}
+	state.regionRender = regionRenderEnabled()
 
 
 	for {
@@ -3406,13 +3405,10 @@ func (state *TermState) InteractiveMode() error {
 		if end {
 			break
 		}
-		// Complete both layout paths while the legacy painter remains active.
-		// Live probes require the replacement painter's owned region.
-		_, err = state.prepareCommandDisplay(Cells(state.promptLength), Cells(state.numCols), nil)
+		err = state.refreshInteractiveDisplay(true)
 		if err != nil {
 			return err
 		}
-		state.Render(true)
 
 		// Swap tab completions
 		state.currentTabComplete = 1 - state.currentTabComplete
@@ -3610,7 +3606,9 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 	}
 
 	// This render should handle stored tokens on aliases, cleared out history completion/tab completion.
-	state.Render(false)
+	if err := state.refreshInteractiveDisplay(false); err != nil {
+		state.Logf("Error painting submitted command: %s\n", err)
+	}
 
 	currentCommandStr = strings.TrimSpace(currentCommandStr)
 	if len(currentCommandStr) > 0 {
@@ -3816,6 +3814,7 @@ func (state *TermState) printPrompt() error {
 	state.UpdateSize()
 
 	state.promptLength = col - 1
+	state.anchorCommandRegion(state.promptRow, col)
 	return nil
 }
 
