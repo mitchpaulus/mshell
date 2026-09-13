@@ -1113,7 +1113,9 @@ col += atom.Width         // No padding for unused bound or guard space.</code><
 
   <h3>Real-terminal matrix</h3>
   <p>
-    Run the existing <code>tests/terminal_tests/width_report.py</code> and the new DSR/CPR latency harness in each target environment.
+    Run <code>msh --check-terminal</code> in each target environment: it paints a fixed input list through the real region renderer and probe transaction, then asks the terminal where the cursor landed and compares with the layout's prediction, printing one PASS/FAIL row per input and leaving the frames on screen.
+    The flag is deliberately absent from --help.
+    <code>tests/terminal_tests/width_report.py</code> and the DSR/CPR latency harness remain for raw observations and reply timing.
     Then exercise the actual editor through a PTY with ASCII, combining text, CJK, VS15/VS16, flags, skin tones, keycaps, ZWJ sequences, paste, resize, tmux, SSH, and ConPTY.
     Include terminals that cluster and terminals that render components separately, clusters wider than two cells, narrow-window fallback, delayed CPR, bottom-row probing, and hard-wrap selection/reflow behavior.
     A terminal that ignores CPR is outside the supported contract and is not expected to recover automatically.

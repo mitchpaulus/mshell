@@ -570,6 +570,8 @@ func main() {
 		} else if arg == "--version" {
 			fmt.Fprintln(os.Stdout, mshellVersion)
 			os.Exit(0)
+		} else if arg == "--check-terminal" {
+			os.Exit(runTerminalCheck())
 		} else if arg == "-c" {
 			if i >= len(os.Args) {
 				fmt.Println("Error: -c requires an argument")
