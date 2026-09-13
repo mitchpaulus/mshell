@@ -3568,7 +3568,7 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 	}
 ParseError:
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error parsing input: %s\n", err)
+		fmt.Fprintf(os.Stderr, "Error parsing input: %s\n", terminalSafeText(err.Error(), true))
 		// State.index reset must be before ensurePromptNewline and printPrompt as those can consume typed characters while waiting for terminal response
 		state.index = 0
 		err = state.printPrompt()
@@ -3644,13 +3644,20 @@ func (state *TermState) printPrompt() error {
 
 	// Print out escape sequence for Windows Terminal/others.
 	// Check if we are in windows terminal by looking for WT_SESSION env variable.
+	// The directory name is filesystem data: any byte but '/' and NUL is
+	// legal in it, so it is never written to the terminal raw. Inside an
+	// escape sequence a control byte or ESC \ would end the sequence early
+	// and emit the rest as terminal commands.
 	if wtSession, ok := os.LookupEnv("WT_SESSION"); ok && len(wtSession) > 0 {
-		fmt.Fprintf(os.Stdout, "\033]9;9;%s\033\\", cwd)
-	} else {
+		// Windows Terminal takes a plain path; there is no encoding to hide
+		// a control byte in, so such a directory is simply not reported.
+		if err == nil && !containsTerminalControl(cwd) {
+			fmt.Fprintf(os.Stdout, "\033]9;9;%s\033\\", cwd)
+		}
+	} else if err == nil {
 		// Print using OSC 7
-		hostname, err := os.Hostname()
-		if err != nil {
-			fmt.Fprintf(os.Stdout, "\033]7;file://%s%s\033\\", hostname, cwd)
+		if hostname, hostErr := os.Hostname(); hostErr == nil {
+			fmt.Fprintf(os.Stdout, "\033]7;%s\033\\", directoryFileURL(hostname, cwd))
 		}
 	}
 
@@ -3662,7 +3669,7 @@ func (state *TermState) printPrompt() error {
 	if err != nil {
 		promptText = "??? >"
 	} else {
-		promptText = fmt.Sprintf("%s (%d)> \n:: ", cwd, len(state.stack))
+		promptText = fmt.Sprintf("%s (%d)> \n:: ", terminalSafeText(cwd, false), len(state.stack))
 	}
 
 	fmt.Fprint(os.Stdout, promptText)

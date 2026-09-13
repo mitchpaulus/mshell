@@ -394,7 +394,7 @@ footer {
     <h1>Did we ship their bugs?</h1>
     <p class="lede">
       Six shells' issue trackers, about 390 distinct line-editing failure modes, checked against the region renderer and reproduced against the real binary in tmux.
-      Eight defects confirmed; the two visible on every session are now fixed.
+      Nine defects confirmed; six are fixed on the branch, including the one with security impact.
       The width-table complaint class that dominates every other tracker is gone by construction.
     </p>
     <div class="meta">
@@ -547,6 +547,18 @@ héllo.txt</div></dd>
       <dt>Cause</dt><dd>The design rejects a zero advance as an invalid observation, which rejects the whole batch and sets <code>widthProbesBlocked</code> for the rest of the command.</dd>
       <dt>Recommendation</dt><dd>A well-formed same-row reply of column 1 is a genuine observation of width 0 and should be cached as such, or at least should placeholder only that candidate rather than fail the batch. Batch atomicity is justified for wrong-row and malformed replies, which make every reply suspect; a zero advance does not. This contradicts the written contract in the design doc, so decide it rather than patch it.</dd>
       <dt>Family</dt><dd>fish #4571 (ZWSP corruption), zsh U+FE0E column shift, nushell #15256 (VS16 wrap loop).</dd>
+    </dl>
+  </div>
+
+  <div class="defect">
+    <h3>9. Terminal string replies were typed into the command, and the prompt emitted the directory raw <span class="tag fixed">fixed 2026-09-13</span></h3>
+    <dl>
+      <dt>Repro</dt><dd>Injecting an OSC 11 colour reply (<code>ESC]11;rgb:…ESC\</code>) into the editor typed <code>]11;rgb:…</code>, and the <code>;r</code> chord inside it executed the <code>r</code> command. Starting msh in a directory named with <code>ESC[6n</code> made every prompt send a cursor query, shifting the anchor; a name carrying an OSC colour query would, on terminals that answer it, execute a command on every prompt.
+<div class="screen">:: cat
+mitch@mitch-manjaro: /home/mitch/repos     ← lf launched by an injected reply</div></dd>
+      <dt>Cause</dt><dd>The lexer knew CSI but not OSC/DCS/APC/PM/SOS, so string bodies became keystrokes; chords turn letters into actions. <code>printPrompt</code> printed the working directory unescaped in the visible prompt and inside OSC 7, whose emission was also gated on the wrong error check and had never fired.</dd>
+      <dt>Fix</dt><dd>Applied: the lexer consumes string sequences to BEL or ST and drops them, with a 4096-byte bound. The prompt shows control bytes as caret notation, OSC 7 percent-encodes the path, and the Windows Terminal path report is skipped for names with control bytes. <code>FailWithMessage</code> and the parse-error print escape their text. Numeric CSI replies were already dropped. Chords remain a design decision.</dd>
+      <dt>Family</dt><dd>fish #10987, #12379, #1924; reedline #860; prompt_toolkit #482; the 2023 terminal answerback CVEs on the terminal side.</dd>
     </dl>
   </div>
 

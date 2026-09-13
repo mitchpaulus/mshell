@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"github.com/rivo/uniseg"
 	"os"
 	"path/filepath"
@@ -1036,5 +1037,108 @@ func TestInteractiveLexerLoneEscapeKeepsNextKey(t *testing.T) {
 				t.Fatalf("consumed %d bytes, want %d", reader.i, len(input))
 			}
 		})
+	}
+}
+
+// Terminal replies that are strings, not CSI, are consumed whole and dropped.
+// Their bodies must never reach the editor as keystrokes: a colour reply
+// contains ";r", which is a bound chord.
+func TestInteractiveLexerDropsControlStrings(t *testing.T) {
+	tests := []struct {
+		name string
+		sequence string
+	}{
+		{"OSC colour reply, BEL", "\x1b]11;rgb:2424/2424/2424\x07"},
+		{"OSC colour reply, ST", "\x1b]11;rgb:2424/2424/2424\x1b\\"},
+		{"OSC clipboard reply", "\x1b]52;c;aGVsbG8=\x07"},
+		{"DCS version reply", "\x1bP>|WezTerm 20240203\x1b\\"},
+		{"DCS status reply", "\x1bP1$r0m\x1b\\"},
+		{"APC", "\x1b_Gi=1;OK\x1b\\"},
+		{"PM", "\x1b^private\x1b\\"},
+		{"SOS", "\x1bXstart of string\x1b\\"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := []byte(tt.sequence + "x")
+			reader := &StdinReaderState{array: input, n: len(input)}
+			state := &TermState{}
+			got, err := state.InteractiveLexer(reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, UnknownToken{}) {
+				t.Fatalf("token = %#v, want UnknownToken", got)
+			}
+			if reader.i != len(tt.sequence) {
+				t.Fatalf("consumed %d bytes, want %d", reader.i, len(tt.sequence))
+			}
+			got, err = state.InteractiveLexer(reader)
+			if err != nil || !reflect.DeepEqual(got, AsciiToken{Char: 'x'}) {
+				t.Fatalf("following key = %#v, error = %v", got, err)
+			}
+		})
+	}
+}
+
+// A string cut short by an ESC that does not start ST ends there, and the
+// byte after the ESC is lexed normally. An unterminated string stops
+// swallowing input after a bound.
+func TestInteractiveLexerControlStringLimits(t *testing.T) {
+	input := []byte("\x1b]11;rgb:24\x1bq")
+	reader := &StdinReaderState{array: input, n: len(input)}
+	state := &TermState{}
+	got, err := state.InteractiveLexer(reader)
+	if err != nil || !reflect.DeepEqual(got, UnknownToken{}) {
+		t.Fatalf("cut string = %#v, error = %v", got, err)
+	}
+	got, err = state.InteractiveLexer(reader)
+	if err != nil || !reflect.DeepEqual(got, AsciiToken{Char: 'q'}) {
+		t.Fatalf("byte after ESC = %#v, error = %v", got, err)
+	}
+
+	long := append([]byte("\x1b]"), bytes.Repeat([]byte{'a'}, maxControlStringBytes+10)...)
+	reader = &StdinReaderState{array: long, n: len(long)}
+	got, err = state.InteractiveLexer(reader)
+	if err != nil || !reflect.DeepEqual(got, UnknownToken{}) {
+		t.Fatalf("unterminated string = %#v, error = %v", got, err)
+	}
+	if reader.i != 2+maxControlStringBytes {
+		t.Fatalf("consumed %d bytes, want %d", reader.i, 2+maxControlStringBytes)
+	}
+}
+
+func TestTerminalSafeText(t *testing.T) {
+	tests := []struct {
+		in string
+		keepLayout bool
+		want string
+	}{
+		{"plain/dir", false, "plain/dir"},
+		{"evil\x1b]11;?\x1b\\dir", false, "evil^[]11;?^[\\dir"},
+		{"cpr\x1b[6n", false, "cpr^[[6n"},
+		{"bell\x07 del\x7f", false, "bell^G del^?"},
+		{"line\nbreak\ttab", false, "line^Jbreak^Itab"},
+		{"line\nbreak\ttab", true, "line\nbreak\ttab"},
+		{"c1 \u009b6n csi", false, "c1 ?6n csi"},
+		{"bad \xff\xfe bytes", false, "bad ?? bytes"},
+		{"unicode 世界 é", false, "unicode 世界 é"},
+	}
+	for _, tt := range tests {
+		if got := terminalSafeText(tt.in, tt.keepLayout); got != tt.want {
+			t.Errorf("terminalSafeText(%q, %v) = %q, want %q", tt.in, tt.keepLayout, got, tt.want)
+		}
+	}
+	if !containsTerminalControl("a\x1bb") || containsTerminalControl("ab") {
+		t.Error("containsTerminalControl")
+	}
+}
+
+func TestDirectoryFileURL(t *testing.T) {
+	got := directoryFileURL("host", "/home/me/evil\x1b]11;?\x1b\\ dir/世界")
+	if strings.ContainsAny(got, "\x1b\\ \x07") {
+		t.Fatalf("URL still carries raw bytes: %q", got)
+	}
+	if !strings.HasPrefix(got, "file://host/home/me/evil%1B%5D11;%3F%1B%5C%20dir/") {
+		t.Fatalf("unexpected URL %q", got)
 	}
 }

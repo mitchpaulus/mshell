@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Security
+
+- Terminal replies that are strings (OSC, DCS, APC, PM, SOS), such as colour or version reports,
+  are consumed and dropped by the interactive editor instead of being typed into the command,
+  where their text could trigger key chords.
+- The prompt no longer writes the working directory to the terminal raw.
+  Control bytes in a directory name display as caret notation, and the OSC 7 directory report
+  percent-encodes the path, so a directory name can no longer inject terminal queries.
+- Error messages escape control bytes from quoted input and file names.
+
+### Fixed
+
+- The OSC 7 working-directory report is now actually emitted; a reversed check meant it was
+  only sent when the hostname lookup failed.
+
 ### Changed
 
 - The interactive editor lays out and repaints commands from widths measured on the current terminal.
