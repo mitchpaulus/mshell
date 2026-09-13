@@ -68,7 +68,7 @@ func (region *ProbeRegion) validatePaintRegion() error {
 func (state *TermState) appendCommandPaint(dst []byte, region ProbeRegion) ([]byte, ProbeRegion, error) {
 	if err := region.validatePaintRegion(); err != nil { return dst, region, err }
 	layout := state.displayLayout
-	if len(layout.Rows) == 0 || state.queuedInputIndex < len(state.queuedInput) || state.displaySource != state.currentCommand || state.displayCursor != state.index {
+	if len(layout.Rows) == 0 || state.queuedInputIndex < len(state.queuedInput) || !state.displayFrameCurrent() || state.displayCursor != state.index {
 		return dst, region, fmt.Errorf("command paint: no current prepared frame")
 	}
 	if state.displayColumns != region.Columns || state.displayStartCol != region.commandStartCol() {
@@ -123,6 +123,11 @@ func (state *TermState) appendCommandPaint(dst []byte, region ProbeRegion) ([]by
 		dst = appendProbeCursorControl(dst, int(next.CommandStartCol)+1, 'G')
 	}
 	visibleEnd := min(len(layout.Rows), int(view.Start)+view.Rows)
+	// Printable-ASCII rows tile the source, so byte offsets accumulate; rows
+	// above the viewport still advance the offset without painting.
+	styles := stylePainter{spans: state.displayStyles}
+	var offset ByteOffset
+	for i := 0; i < int(view.Start) && len(state.displayAtoms) == 0; i++ { offset += ByteOffset(len(layout.Rows[i].Text)) }
 	for i := int(view.Start); i < visibleEnd; i++ {
 		row := layout.Rows[i]
 		if i > int(view.Start) {
@@ -135,10 +140,12 @@ func (state *TermState) appendCommandPaint(dst []byte, region ProbeRegion) ([]by
 			}
 		}
 		if len(state.displayAtoms) == 0 {
-			dst = append(dst, row.Text...)
+			dst = styles.appendText(dst, offset, row.Text)
+			offset += ByteOffset(len(row.Text))
 		} else {
 			for j := row.AtomStart; j < row.AtomEnd; j++ {
-				dst = append(dst, state.displayAtoms[j].displayText(state.displaySource)...)
+				atom := state.displayAtoms[j]
+				dst = styles.appendText(dst, atom.SourceStart, atom.displayText(state.displaySource))
 			}
 		}
 	}
@@ -200,6 +207,15 @@ func (state *TermState) prepareCommandDisplay(startCol, columns Cells, measure f
 	clear(state.widthMisses)
 	state.widthMisses = state.widthMisses[:0]
 	state.displaySource = state.currentCommand
+	state.displaySuggestion = 0
+	if suffix := state.suggestionSuffix(); len(suffix) > 0 {
+		state.displaySource += suffix
+		state.displaySuggestion = len(suffix)
+	}
+	state.displayStyles = state.commandStyleSpansInto(state.displayStyles[:0], state.currentCommand)
+	if state.displaySuggestion > 0 {
+		state.displayStyles = append(state.displayStyles, styleSpan{Start: ByteOffset(len(state.currentCommand)), End: ByteOffset(len(state.displaySource)), SGR: "\033[90m"})
+	}
 	state.displayCursor = state.index
 	state.displayStartCol = startCol
 	state.displayColumns = columns
@@ -284,6 +300,7 @@ func (state *TermState) refreshInteractiveDisplay(renderHistory bool) error {
 		state.Render(renderHistory)
 		return nil
 	}
+	state.showSuggestion = renderHistory
 	if renderHistory {
 		state.updateHistoryCompletion()
 	}
@@ -314,4 +331,128 @@ func (state *TermState) refreshInteractiveDisplay(renderHistory bool) error {
 		state.Logf("Region renderer skipped frame: %dx%d\n", state.numCols, state.numRows)
 	}
 	return nil
+}
+
+// A style span covers source bytes [Start, End) with one SGR sequence. Spans
+// are sorted, non-overlapping, and never enter layout or width arithmetic.
+type styleSpan struct {
+	Start ByteOffset
+	End   ByteOffset
+	SGR   string
+}
+
+// stylePainter walks spans in source order while painting. It resets before
+// switching styles so each span stands alone; the painter resets again at end.
+type stylePainter struct {
+	spans   []styleSpan
+	next    int
+	current string
+}
+
+func (p *stylePainter) styleAt(offset ByteOffset) string {
+	for p.next < len(p.spans) && p.spans[p.next].End <= offset { p.next++ }
+	if p.next < len(p.spans) && p.spans[p.next].Start <= offset { return p.spans[p.next].SGR }
+	return ""
+}
+
+func (p *stylePainter) switchTo(dst []byte, sgr string) []byte {
+	if sgr == p.current { return dst }
+	if p.current != "" { dst = append(dst, "\033[0m"...) }
+	dst = append(dst, sgr...)
+	p.current = sgr
+	return dst
+}
+
+// appendText paints text whose first byte sits at offset in the display
+// source. Atoms take the style at their first byte; ASCII rows may split.
+func (p *stylePainter) appendText(dst []byte, offset ByteOffset, text string) []byte {
+	for len(text) > 0 {
+		sgr := p.styleAt(offset)
+		end := len(text)
+		if p.next < len(p.spans) {
+			if sgr == "" {
+				end = min(end, int(p.spans[p.next].Start-offset))
+			} else {
+				end = min(end, int(p.spans[p.next].End-offset))
+			}
+		}
+		if end <= 0 { end = len(text) }
+		dst = p.switchTo(dst, sgr)
+		dst = append(dst, text[:end]...)
+		offset += ByteOffset(end)
+		text = text[end:]
+	}
+	return dst
+}
+
+// suggestionSuffix is the history ghost text after the current command, or
+// empty when suggestions are hidden or the completion no longer matches.
+func (state *TermState) suggestionSuffix() SourceText {
+	if !state.showSuggestion || len(state.historyComplete) <= len(state.currentCommand) || state.historyComplete[:len(state.currentCommand)] != state.currentCommand {
+		return ""
+	}
+	return state.historyComplete[len(state.currentCommand):]
+}
+
+func (state *TermState) displayFrameCurrent() bool {
+	suffix := state.suggestionSuffix()
+	return len(state.displaySource) == len(state.currentCommand)+len(suffix) &&
+		state.displaySource[:len(state.currentCommand)] == state.currentCommand &&
+		state.displaySource[len(state.currentCommand):] == suffix
+}
+
+// commandStyleSpansInto tokenizes the command for syntax highlighting. Tokens
+// tile the input when whitespace and comments are emitted, so byte offsets
+// accumulate from lexeme lengths. A lex error leaves the command unstyled.
+func (s *TermState) commandStyleSpansInto(dst []styleSpan, command SourceText) []styleSpan {
+	if len(command) == 0 { return dst }
+	if s.l == nil { s.l = NewLexer("", &TokenFile{"REPL"}) }
+	s.l.allowUnterminatedString = true
+	s.l.emitWhitespace = true
+	s.l.emitComments = true
+	s.l.resetInput(string(command))
+	defer func() {
+		s.l.allowUnterminatedString = false
+		s.l.emitWhitespace = false
+		s.l.emitComments = false
+	}()
+	tokens, err := s.l.Tokenize()
+	if err != nil { return dst }
+
+	commandLiteralIndex := -1
+	firstTokenIsBinary := false
+	if s.context.Pbm != nil {
+		commandLiteralIndex = s.commandLiteralTokenIndex(tokens)
+		_, firstTokenIsBinary = s.isFirstTokenBinary(tokens)
+	}
+	var offset ByteOffset
+	for i, t := range tokens {
+		var sgr string
+		switch t.Type {
+		case STRING, SINGLEQUOTESTRING, FORMATSTRING: sgr = "\033[31m"
+		case UNFINISHEDSTRING, UNFINISHEDSINGLEQUOTESTRING: sgr = "\033[91m"
+		case UNFINISHEDPATH: sgr = "\033[95m"
+		case PATH: sgr = "\033[35m"
+		case DATETIME: sgr = "\033[36m"
+		case TRUE, FALSE: sgr = "\033[34m"
+		case VARSTORE, ENVSTORE: sgr = "\033[32m"
+		case VARRETRIEVE, ENVRETREIVE, ENVCHECK: sgr = "\033[33m"
+		case LITERAL:
+			underline := false
+			if firstTokenIsBinary {
+				if _, ok := BuiltInList[t.Lexeme]; ok || IsDefinitionDefined(t.Lexeme, s.stdLibDefs) { underline = true }
+			}
+			if i == commandLiteralIndex {
+				sgr = "\033[4;34m"
+			} else if underline {
+				sgr = "\033[4m"
+			}
+		default:
+			if i == commandLiteralIndex { sgr = "\033[4;34m" }
+		}
+		end := offset + ByteOffset(len(t.Lexeme))
+		if sgr != "" { dst = append(dst, styleSpan{Start: offset, End: end, SGR: sgr}) }
+		offset = end
+	}
+	return dst
 }

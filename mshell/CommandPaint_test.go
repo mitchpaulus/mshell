@@ -25,6 +25,7 @@ type commandScreen struct {
 	widths map[string]int
 	writes []string
 	replies []TerminalToken
+	styles []string
 }
 
 func newCommandScreen(t *testing.T, rows, columns int) *commandScreen {
@@ -55,9 +56,10 @@ func (screen *commandScreen) Write(output []byte) (int, error) {
 		case '\x1b':
 			if !strings.HasPrefix(rest, "\x1b[") { screen.t.Fatalf("non-CSI output: %q", rest) }
 			end := 2
-			for end < len(rest) && rest[end] >= '0' && rest[end] <= '9' { end++ }
+			for end < len(rest) && (rest[end] >= '0' && rest[end] <= '9' || rest[end] == ';') { end++ }
 			if end == len(rest) { screen.t.Fatal("incomplete CSI") }
 			n, _ := strconv.Atoi(rest[2:end])
+			if rest[end] == 'm' { screen.styles = append(screen.styles, rest[2:end]) }
 			switch rest[end] {
 			case 'A': screen.row = max(0, screen.row-max(1, n)); screen.pending = false
 			case 'B': screen.row = min(len(screen.cells)-1, screen.row+max(1, n)); screen.pending = false
@@ -67,7 +69,6 @@ func (screen *commandScreen) Write(output []byte) (int, error) {
 				if n == 2 { start = 0 } else if n != 0 { screen.t.Fatal("unsupported erase") }
 				for col := start; col < columns; col++ { screen.cells[screen.row][col] = " " }
 			case 'm':
-				if n != 0 { screen.t.Fatal("unexpected style") }
 			case 'n':
 				if n != 6 || screen.pending { screen.t.Fatal("invalid query or probe touched margin") }
 				screen.replies = append(screen.replies, CsiToken{FinalChar: 'R', Params: []byte(fmt.Sprintf("%d;%d", screen.row+1, screen.col+1))})
@@ -381,4 +382,25 @@ func BenchmarkCommandRefresh(b *testing.B) {
 			b.ReportMetric(float64(len(state.renderBuffer)), "paint-bytes/op")
 		})
 	}
+}
+
+// Styles and the ghost suggestion never change geometry: a string token is
+// painted red, the suggestion suffix gray, and both wrap like plain text.
+func TestCommandPaintStylesAndSuggestion(t *testing.T) {
+	state := TermState{currentCommand: `x "ab`, index: 5, historyComplete: `x "abc" d`, showSuggestion: true}
+	screen := newCommandScreen(t, 6, 6)
+	screen.cells[2][0] = ">"
+	screen.row, screen.col = 2, 1
+	region := ProbeRegion{OriginRow: 3, OriginCol: 2, PaintedRows: 1, ScreenRows: 6, Columns: 6}
+	ready, err := state.refreshCommandDisplay(screen, screen.read, &region)
+	if !ready || err != nil { t.Fatalf("paint: %v", err) }
+	if got := screen.line(2) + "|" + screen.line(3); got != `>x "ab|c" d  ` { t.Fatalf("lines %q", got) }
+	if screen.row != 3 || screen.col != 0 { t.Fatalf("cursor after full row, got %d,%d", screen.row, screen.col) }
+	want := `\x1b[0m\r\x1b[2G\r\n\x1b[1A\x1b[2G\x1b[K\r\x1b[1B\x1b[2K\x1b[1A\x1b[2Gx \x1b[91m\"ab\x1b[0m\x1b[90mc\" d\x1b[0m\r\x1b[1G`
+	if got := fmt.Sprintf("%q", screen.writes[0]); got != `"`+want+`"` { t.Fatalf("styled paint %s", got) }
+
+	state.showSuggestion = false
+	ready, err = state.refreshCommandDisplay(screen, screen.read, &region)
+	if !ready || err != nil { t.Fatalf("repaint: %v", err) }
+	if got := screen.line(2) + "|" + screen.line(3); got != `>x "ab|      ` { t.Fatalf("suggestion not cleared: %q", got) }
 }

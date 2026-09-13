@@ -987,6 +987,9 @@ type TermState struct {
 	displayAtoms []DisplayAtom
 	widthMisses []string
 	displayLayout LayoutResult
+	displayStyles []styleSpan
+	displaySuggestion int // Ghost suggestion bytes at the end of displaySource.
+	showSuggestion bool
 }
 
 type SourceText string
