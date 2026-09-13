@@ -279,11 +279,11 @@ func (state *TermState) prepareMeasuredCommandDisplay(writer io.Writer, readTerm
 	})
 }
 
-// Region rendering is opt-in until suggestions, completions and styling join
-// the anchored region. Set MSH_REGION_RENDER=1 to exercise it on a terminal.
+// The region renderer is the default. MSH_LEGACY_RENDER=1 selects the old
+// painter as an escape hatch until it is deleted after the terminal pass.
 func regionRenderEnabled() bool {
-	v, ok := os.LookupEnv("MSH_REGION_RENDER")
-	return ok && v != "" && v != "0"
+	v, ok := os.LookupEnv("MSH_LEGACY_RENDER")
+	return !(ok && v != "" && v != "0")
 }
 
 // anchorCommandRegion starts a fresh editing region at the reported prompt

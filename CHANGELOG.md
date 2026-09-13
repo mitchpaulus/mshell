@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- The interactive editor lays out and repaints commands from widths measured on the current terminal.
+  Long commands wrap across rows, wide and multi-codepoint clusters such as emoji stay whole,
+  tab and control bytes display safely, and completion rows repaint with the command.
+  Set `MSH_LEGACY_RENDER=1` to use the previous renderer.
+
 ### Added
 
 - Alt-Shift-R in the interactive editor forgets measured text widths and measures them again,
