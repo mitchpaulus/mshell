@@ -974,6 +974,7 @@ type TermState struct {
 	widthProbesBlocked bool
 	widthCache WidthCache
 	eligibilityCache CandidateEligibilityCache
+	widthBatch WidthProbeBatch
 
 	displaySource SourceText
 	displayAtoms []DisplayAtom
@@ -3402,39 +3403,11 @@ func (state *TermState) InteractiveMode() error {
 		if end {
 			break
 		}
-		state.displaySource = state.currentCommand
-		state.displayLayout = LayoutResult{
-			Rows: state.displayLayout.Rows[:0],
-		}
-
-		if isAllPrintableAscii(state.displaySource) {
-			state.displayAtoms = state.displayAtoms[:0]
-			clear(state.widthMisses)
-			state.widthMisses = state.widthMisses[:0]
-			if state.numCols >= 4 &&
-				state.promptLength >= 0 &&
-				state.promptLength < state.numCols {
-				state.displayLayout = layoutPrintableAsciiInto(
-					state.displayLayout.Rows,
-					state.displaySource,
-					state.index,
-					Cells(state.promptLength),
-					Cells(state.numCols),
-				)
-			}
-		} else {
-			state.displayAtoms = segmentAtomsInto(
-				state.displayAtoms,
-				state.displaySource,
-			)
-			state.widthMisses = resolveCachedWidths(
-				state.widthMisses,
-				state.displaySource,
-				state.displayAtoms,
-				&state.widthCache,
-				&state.eligibilityCache,
-				Cells(state.numCols),
-			)
+		// Complete both layout paths while the legacy painter remains active.
+		// Live probes require the replacement painter's owned region.
+		_, err = state.prepareCommandDisplay(Cells(state.promptLength), Cells(state.numCols), nil)
+		if err != nil {
+			return err
 		}
 		state.Render(true)
 
