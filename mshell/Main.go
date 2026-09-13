@@ -2799,6 +2799,38 @@ func (state *TermState) readInputToken() (TerminalToken, error) {
 // 33	F19 (Shift+F7)	Sometimes, varies
 // 34	F20 (Shift+F8)	Sometimes, varies
 
+// maxControlStringBytes bounds how much of an unterminated control string
+// the lexer will swallow before giving up, so a stray ESC ] in pasted text
+// cannot eat every following keystroke.
+const maxControlStringBytes = 4096
+
+// skipControlString consumes the body of an OSC, DCS, APC, PM, or SOS string
+// whose introducer has already been read. The string ends at BEL or at the
+// ST sequence ESC \. An ESC followed by anything else also ends it; that
+// byte is pushed back so it is lexed normally. Returns the read error, if any.
+func skipControlString(reader *StdinReaderState) error {
+	for n := 0; n < maxControlStringBytes; n++ {
+		c, err := reader.ReadByte()
+		if err != nil {
+			return err
+		}
+		if c == 0x07 {
+			return nil
+		}
+		if c == 0x1b {
+			next, err := reader.ReadByte()
+			if err != nil {
+				return err
+			}
+			if next != '\\' {
+				reader.UnreadByte()
+			}
+			return nil
+		}
+	}
+	return nil
+}
+
 // homeEndKey recognizes the Home and End encodings that carry CSI
 // parameters. Terminals never agreed on one: the VT220 editing keypad
 // numbering gives ESC[1~ and ESC[4~ (Linux console, screen, tmux, PuTTY),
@@ -2974,6 +3006,19 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 						byteArray = append(byteArray, c)
 					}
 				}
+			} else if c == ']' || c == 'P' || c == '_' || c == '^' || c == 'X' {
+				// OSC, DCS, APC, PM, SOS: a string the terminal is sending,
+				// such as a colour or version reply. Consume it whole and
+				// drop it. Typing its body would hand terminal output to
+				// the editor as keystrokes. None of these Alt chords are
+				// bound, so no key is lost.
+				if err = skipControlString(stdinReaderState); err != nil {
+					if err == io.EOF {
+						return EofTerminalToken{}, nil
+					}
+					return nil, fmt.Errorf("Error reading from stdin: %w", err)
+				}
+				return UnknownToken{}, nil
 			} else if c == 98 { // Alt-B
 				// Move cursor left by word
 				return KEY_ALT_B, nil
