@@ -3372,6 +3372,13 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 		// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.legacyCursorColumn()+1)
 	}
 
+	// Park the cursor after the last byte so the final echo leaves the
+	// terminal cursor on the command's last painted row. The newline below
+	// moves down from wherever the cursor is; submitting from an earlier row
+	// of a wrapped command would otherwise let output overwrite the rows
+	// after it.
+	state.index = state.commandEnd()
+
 	// This render should handle stored tokens on aliases, cleared out history completion/tab completion.
 	if err := state.refreshInteractiveDisplay(false); err != nil {
 		state.Logf("Error painting submitted command: %s\n", err)
@@ -3399,10 +3406,11 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 	state.widthProbesBlocked = false
 	state.resetHistorySearch()
 
-	if len(currentCommandStr) > 0 {
-		state.leaveRawMode()
-		fmt.Fprintln(os.Stdout)
-	}
+	// Always leave the command row, even for an empty command. Otherwise the
+	// cursor stays after the prompt and ensurePromptNewline mistakes it for
+	// unterminated program output and prints the marker.
+	state.leaveRawMode()
+	fmt.Fprintln(os.Stdout)
 
 	p := state.p
 	l := state.l
