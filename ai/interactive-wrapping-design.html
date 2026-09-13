@@ -1039,18 +1039,17 @@ col += atom.Width         // No padding for unused bound or guard space.</code><
 
   <h3>Current implementation checkpoint</h3>
   <p>
-    As of commit <code>2132e97</code>, pure ASCII and atom layout, segmentation, eligibility/cache helpers, and placeholder resolution exist.
-    Session-owned display storage and caches, command preparation, and guarded ASCII layout are connected to the interactive loop alongside the old renderer.
-    Prompt queries send one request and queue keyboard input; the unused read deadline has been removed.
-    Batch collection counts reports independently of accepted widths, drains rejected batches, and sets a probe block that resets on command submission.
-    Left/Right Arrow, Ctrl-B/Ctrl-F, Backspace, and Delete use grapheme boundaries, including resegmentation after deletion.
+    As of commit <code>a206d4a</code>, both pure layout paths, segmentation, eligibility/cache helpers, RequiredCells geometry gating, widths above two, and forced hard-wrap row endings are implemented and tested.
+    The cursor is a byte offset; arrow, word, backspace, delete, insertion, and history acceptance keep grapheme boundaries.
+    Bounded whole-cluster probe batches own a scratch row, count and drain replies, commit atomically, and block further probes for the command on failure.
+    The region-relative painter repaints from the anchored prompt origin with explicit CRLF for forced breaks, a viewport for commands taller than the screen, syntax style spans, and the gray history suggestion.
+    The interactive loop anchors a region after each prompt and, with <code>MSH_REGION_RENDER=1</code>, measures and paints through it; a resize re-anchors from a fresh prompt.
   </p>
   <p>
-    This revision is a target design, not a claim that conservative wrapping is already implemented.
-    Observation/cache helpers and general layout still impose the old one-or-two-cell limits; RequiredCells, bound-plus-guard gates, and forced hard-wrap row endings are not implemented yet.
-    No code starts a width batch or emits the proposed probes, and the live renderer still uses the old painting and cursor-position arithmetic.
-    General layout integration, remaining editing paths, byte-offset migration, scratch ownership, resize, and terminal-mode lifecycle remain work.
-    Existing pure helpers accept terminal widths two and three as mathematical test cases, but interactive support still starts at four columns.
+    The legacy renderer remains the default.
+    Tab-completion rows are still drawn only by the legacy renderer and must join the region below the command before the swap.
+    A malformed prompt anchor still exits interactive mode instead of falling back to CRLF and column one.
+    A new width-cache epoch on reattach or resume, terminal-mode lifecycle backends, and the real-terminal matrix remain work, after which the legacy renderer can be removed.
   </p>
 </section>
 
