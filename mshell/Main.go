@@ -2780,6 +2780,30 @@ func (state *TermState) readInputToken() (TerminalToken, error) {
 // 33	F19 (Shift+F7)	Sometimes, varies
 // 34	F20 (Shift+F8)	Sometimes, varies
 
+// homeEndKey recognizes the Home and End encodings that carry CSI
+// parameters. Terminals never agreed on one: the VT220 editing keypad
+// numbering gives ESC[1~ and ESC[4~ (Linux console, screen, tmux, PuTTY),
+// rxvt uses ESC[7~ and ESC[8~, and xterm sends ESC[1;<mod>H and
+// ESC[1;<mod>F when a modifier is held. The plain xterm forms ESC[H,
+// ESC[F, ESC O H, and ESC O F are matched before parameters are read.
+// Modifiers are ignored: a modified Home is still Home.
+func homeEndKey(final byte, params string) (SpecialKey, bool) {
+	switch final {
+	case '~':
+		switch params {
+		case "1", "7":
+			return KEY_HOME, true
+		case "4", "8":
+			return KEY_END, true
+		}
+	case 'H':
+		return KEY_HOME, true
+	case 'F':
+		return KEY_END, true
+	}
+	return 0, false
+}
+
 // This is intended to a be a lexer for the interactive mode.
 // It should be operating in a goroutine.
 func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (TerminalToken, error) {
@@ -2840,6 +2864,10 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 					return KEY_RIGHT, nil
 				} else if c == 68 { // Left arrow
 					return KEY_LEFT, nil
+				} else if c == 72 { // ESC O H, Home in application cursor-key mode
+					return KEY_HOME, nil
+				} else if c == 70 { // ESC O F, End in application cursor-key mode
+					return KEY_END, nil
 				} else {
 					// Unknown escape sequence
 					state.Logf("Unknown escape sequence: ESC O %d\n", c)
@@ -2885,9 +2913,9 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 					} else if c == 68 {
 						// Left arrow
 						return KEY_LEFT, nil
-					} else if c == 70 {
+					} else if c == 70 { // ESC [ F, xterm End
 						return KEY_END, nil
-					} else if c == 72 {
+					} else if c == 72 { // ESC [ H, xterm Home
 						return KEY_HOME, nil
 					} else if c == 90 {
 						return KEY_SHIFT_TAB, nil
@@ -2912,11 +2940,13 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 						}
 
 						if c >= 64 && c <= 126 {
-							if c == '~' && len(byteArray) == 3 &&
-								byteArray[0] == '3' && byteArray[1] == ';' && byteArray[2] == '5' {
+							params := string(byteArray)
+							if c == '~' && params == "3;5" {
 								return KEY_CTRL_DELETE, nil
-							} else if c == '~' && len(byteArray) == 1 && byteArray[0] == '3' {
+							} else if c == '~' && params == "3" {
 								return KEY_DELETE, nil
+							} else if key, ok := homeEndKey(c, params); ok {
+								return key, nil
 							} else {
 								// fmt.Fprintf(f, "Sent CSI token: %d %d\n", c, byteArray)
 								return CsiToken{FinalChar: c, Params: byteArray}, nil

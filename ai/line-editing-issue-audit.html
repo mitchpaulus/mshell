@@ -510,10 +510,10 @@ héllo.txt</div></dd>
   </div>
 
   <div class="defect">
-    <h3>5. Home and End are only recognized in one encoding <span class="tag lexer">lexer</span></h3>
+    <h3>5. Home and End are only recognized in one encoding <span class="tag fixed">fixed 2026-09-13</span></h3>
     <dl>
       <dt>Repro 14</dt><dd><code>ESC[1~</code>, <code>ESC[4~</code>, <code>ESC[7~</code>, <code>ESC[8~</code>, <code>ESC O H</code>, <code>ESC O F</code> do nothing; only <code>ESC[H</code> and <code>ESC[F</code> work. tmux, rxvt, the Linux console, PuTTY, and application-cursor mode send the other forms, so Home and End are dead keys there.</dd>
-      <dt>Fix</dt><dd>Add the variants in the lexer's CSI branch and its <code>ESC O</code> branch in <code>Main.go</code>.</dd>
+      <dt>Fix</dt><dd>Applied: the lexer now accepts <code>ESC[1~</code>, <code>ESC[4~</code>, <code>ESC[7~</code>, <code>ESC[8~</code>, <code>ESC O H</code>, <code>ESC O F</code>, and the modified xterm forms <code>ESC[1;n H</code> and <code>ESC[1;n F</code>, in addition to <code>ESC[H</code> and <code>ESC[F</code>. Covered by the lexer table test and verified in tmux.</dd>
       <dt>Family</dt><dd>elvish #579, zsh FAQ on cursor-key mode, bash kdch1 mismatch, prompt_toolkit #1437.</dd>
     </dl>
   </div>
@@ -616,7 +616,7 @@ héllo.txt</div></dd>
   <h2>Suggested order</h2>
   <ol>
     <li>Defects 1 and 2: fixed on this branch.</li>
-    <li>Defects 5 and 6 are lexer-only changes.</li>
+    <li>Defect 5: fixed on this branch. Defect 6 is a lexer-only change.</li>
     <li>Defect 7, bracketed paste, is the largest real gap and the one every shell tracker has the most traffic on.</li>
     <li>Defect 8 is a design decision; the change is a few lines in the reply acceptor but contradicts the written contract, so decide it rather than patch it.</li>
     <li>Defect 4's partial fix, <code>ESC[J</code> on re-anchor, is one line; SIGWINCH handling is a separate design item.</li>
