@@ -977,6 +977,9 @@ type TermState struct {
 	widthBatch WidthProbeBatch
 
 	displaySource SourceText
+	displayCursor ByteOffset
+	displayStartCol Cells
+	displayColumns Cells
 	displayAtoms []DisplayAtom
 	widthMisses []string
 	displayLayout LayoutResult

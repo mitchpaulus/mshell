@@ -14,6 +14,9 @@ func (state *TermState) prepareCommandDisplay(startCol, columns Cells, measure f
 	clear(state.widthMisses)
 	state.widthMisses = state.widthMisses[:0]
 	state.displaySource = state.currentCommand
+	state.displayCursor = state.index
+	state.displayStartCol = startCol
+	state.displayColumns = columns
 
 	if state.queuedInputIndex < len(state.queuedInput) || columns < 4 || columns > Cells(maxTerminalCoordinate) || startCol < 0 || startCol >= columns {
 		return false, nil
