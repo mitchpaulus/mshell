@@ -46,15 +46,16 @@ func (region *ProbeRegion) validatePaintRegion() error {
 	if region.OriginRow < 1 || int(region.OriginRow) > region.ScreenRows || region.OriginCol < 1 || Cells(region.OriginCol) > region.Columns {
 		return fmt.Errorf("command paint: invalid region origin")
 	}
-	if region.PaintedRows < 1 || region.PaintedRows > region.ScreenRows || region.CursorRow < 0 || int(region.CursorRow) >= region.PaintedRows || region.ViewportStart < 0 {
+	if region.PaintedRows < 1 || region.PaintedRows > region.ScreenRows || region.CursorRow < 0 || int(region.CursorRow) >= region.PaintedRows || region.ViewportStart < 0 || region.TrailerRows < 0 {
 		return fmt.Errorf("command paint: invalid previous frame")
+	}
+	if region.TrailerRows > 0 && !region.ScratchOwned {
+		return fmt.Errorf("command paint: trailer rows must own scratch")
 	}
 	if region.PromptHidden && (region.OriginCol != 1 || region.CommandStartCol < 0 || region.CommandStartCol >= region.Columns) {
 		return fmt.Errorf("command paint: invalid hidden prompt geometry")
 	}
-	ownedRows := region.PaintedRows
-	if region.ScratchOwned { ownedRows++ }
-	if int(region.OriginRow)+ownedRows-1 > region.ScreenRows {
+	if int(region.OriginRow)+region.ownedRows()-1 > region.ScreenRows {
 		return fmt.Errorf("command paint: owned region extends beyond terminal")
 	}
 	return nil
@@ -80,15 +81,20 @@ func (state *TermState) appendCommandPaint(dst []byte, region ProbeRegion) ([]by
 
 	view := commandViewportFor(layout, region)
 
-	previousOwned := region.PaintedRows
-	if region.ScratchOwned { previousOwned++ }
-	wantedRows := view.Rows
-	if view.ReserveScratch { wantedRows++ }
+	// Completion rows fill whatever the command leaves, one row per line, and
+	// never appear once a tall command owns the screen.
+	trailerLines, trailerHighlights := state.completionTrailerLines(region.ScreenRows-view.Rows, view.HidePrompt, region.Columns)
+	trailers := len(trailerLines)
+
+	previousOwned := region.ownedRows()
+	wantedRows := view.Rows + trailers
+	if view.ReserveScratch && trailers == 0 { wantedRows++ }
 	ownedRows := max(previousOwned, wantedRows)
 	next := region
 	next.OriginRow -= OneBasedTerminalCoord(max(0, int(region.OriginRow)+ownedRows-1-region.ScreenRows))
 	next.CursorRow = view.CursorRow
 	next.PaintedRows = view.Rows
+	next.TrailerRows = trailers
 	next.ViewportStart = view.Start
 	if view.HidePrompt {
 		next.CommandStartCol = region.commandStartCol()
@@ -97,7 +103,7 @@ func (state *TermState) appendCommandPaint(dst []byte, region ProbeRegion) ([]by
 	}
 	// A cleared leftover row can be reused as scratch immediately below the
 	// new contents. Any further cleared rows are relinquished.
-	next.ScratchOwned = ownedRows > view.Rows
+	next.ScratchOwned = trailers > 0 || ownedRows > view.Rows
 
 	dst = append(dst, "\033[0m\r"...)
 	if region.CursorRow > 0 { dst = appendProbeCursorControl(dst, int(region.CursorRow), 'A') }
@@ -153,10 +159,16 @@ func (state *TermState) appendCommandPaint(dst []byte, region ProbeRegion) ([]by
 	// command. It may be the entire viewport on a one-row terminal.
 	paintedLayoutRows := visibleEnd-int(view.Start)
 	if view.Rows > paintedLayoutRows && paintedLayoutRows > 0 { dst = append(dst, '\r', '\n') }
+	// Each trailer row is truncated to atoms that fit one row, so painting it
+	// can never wrap. CRLF first cancels any pending wrap from the row above.
+	for i, line := range trailerLines {
+		dst = append(dst, "\033[0m\r\n"...)
+		dst = state.appendTrailerRow(dst, SourceText(line), trailerHighlights[i], region.Columns)
+	}
 	// CR cancels pending wrap without advancing a row. Cursor movement cannot
 	// accidentally trigger a second wrap after an exact fill or forced CRLF.
 	dst = append(dst, "\033[0m\r"...)
-	if distance := view.Rows-1-int(view.CursorRow); distance > 0 { dst = appendProbeCursorControl(dst, distance, 'A') }
+	if distance := view.Rows+trailers-1-int(view.CursorRow); distance > 0 { dst = appendProbeCursorControl(dst, distance, 'A') }
 	dst = appendProbeCursorControl(dst, int(view.CursorCol)+1, 'G')
 	return dst, next, nil
 }
@@ -225,12 +237,22 @@ func (state *TermState) prepareCommandDisplay(startCol, columns Cells, measure f
 	}
 
 	if isAllPrintableAscii(state.displaySource) {
+		state.widthMisses = state.appendCompletionMisses(state.widthMisses, columns)
+		if measure != nil && !state.widthProbesBlocked && len(state.widthMisses) > 0 {
+			if err := measure(state.widthMisses); err != nil {
+				return false, err
+			}
+			if state.queuedInputIndex < len(state.queuedInput) {
+				return false, nil
+			}
+		}
 		state.displayLayout = layoutPrintableAsciiInto(state.displayLayout.Rows, state.displaySource, state.index, startCol, columns)
 		return true, nil
 	}
 
 	state.displayAtoms = segmentAtomsInto(state.displayAtoms, state.displaySource)
 	state.widthMisses = resolveCachedWidths(state.widthMisses, state.displaySource, state.displayAtoms, &state.widthCache, &state.eligibilityCache, columns)
+	state.widthMisses = state.appendCompletionMisses(state.widthMisses, columns)
 	if measure != nil && !state.widthProbesBlocked && len(state.widthMisses) > 0 {
 		if err := measure(state.widthMisses); err != nil {
 			return false, err
@@ -453,6 +475,61 @@ func (s *TermState) commandStyleSpansInto(dst []styleSpan, command SourceText) [
 		end := offset + ByteOffset(len(t.Lexeme))
 		if sgr != "" { dst = append(dst, styleSpan{Start: offset, End: end, SGR: sgr}) }
 		offset = end
+	}
+	return dst
+}
+
+// currentCompletions returns the matches to show below the command and the
+// index highlighted while cycling, mirroring the legacy renderer's choice.
+func (state *TermState) currentCompletions() ([]string, int) {
+	matches := state.tabCompletions0
+	if state.currentTabComplete != 0 { matches = state.tabCompletions1 }
+	highlight := -1
+	if state.tabCycleActive { highlight = state.tabCycleIndex }
+	return matches, highlight
+}
+
+// appendCompletionMisses adds unknown cluster widths from completion matches
+// to the frame's width batch so trailer rows can be painted exactly. Matches
+// are joined with hard breaks, which resolve to nothing.
+func (state *TermState) appendCompletionMisses(misses []string, columns Cells) []string {
+	matches, _ := state.currentCompletions()
+	if len(matches) == 0 { return misses }
+	state.trailerSource = state.trailerSource[:0]
+	for _, match := range matches {
+		state.trailerSource = append(state.trailerSource, match...)
+		state.trailerSource = append(state.trailerSource, '\n')
+	}
+	source := SourceText(state.trailerSource)
+	if isAllPrintableAscii(source) { return misses }
+	state.trailerAtoms = segmentAtomsInto(state.trailerAtoms[:0], source)
+	state.trailerMisses = resolveCachedWidths(state.trailerMisses, source, state.trailerAtoms, &state.widthCache, &state.eligibilityCache, columns)
+	return append(misses, state.trailerMisses...)
+}
+
+func (state *TermState) completionTrailerLines(availableRows int, hidden bool, columns Cells) ([]string, []highlightRange) {
+	matches, highlight := state.currentCompletions()
+	if hidden || availableRows <= 0 || len(matches) == 0 { return nil, nil }
+	return completionDisplayRowsPlain(matches, highlight, min(tabCompletionColumnLimit, availableRows), availableRows, int(columns))
+}
+
+// appendTrailerRow paints the atoms of line that fit in one row from column
+// one. Widths come from the session cache or placeholders; nothing is probed.
+func (state *TermState) appendTrailerRow(dst []byte, line SourceText, highlight highlightRange, columns Cells) []byte {
+	state.trailerAtoms = segmentAtomsInto(state.trailerAtoms[:0], line)
+	state.trailerMisses = resolveCachedWidths(state.trailerMisses, line, state.trailerAtoms, &state.widthCache, &state.eligibilityCache, columns)
+	finishWidthResolution(line, state.trailerAtoms, &state.widthCache)
+	state.trailerLayout = layoutAtomRowsInto(state.trailerLayout[:0], state.trailerAtoms, 0, columns)
+	if len(state.trailerLayout) == 0 { return dst }
+	styles := stylePainter{}
+	if highlight.End > highlight.Start {
+		styles.spans = []styleSpan{{Start: ByteOffset(highlight.Start), End: ByteOffset(highlight.End), SGR: "\033[7m"}}
+	}
+	row := state.trailerLayout[0]
+	for j := row.AtomStart; j < row.AtomEnd; j++ {
+		atom := state.trailerAtoms[j]
+		if atom.Kind == AtomHardBreak { break }
+		dst = styles.appendText(dst, atom.SourceStart, atom.displayText(line))
 	}
 	return dst
 }

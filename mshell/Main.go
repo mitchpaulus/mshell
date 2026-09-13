@@ -988,6 +988,10 @@ type TermState struct {
 	widthMisses []string
 	displayLayout LayoutResult
 	displayStyles []styleSpan
+	trailerSource []byte       // Completion matches joined for width resolution.
+	trailerAtoms  []DisplayAtom
+	trailerLayout []LayoutRow
+	trailerMisses []string
 	displaySuggestion int // Ghost suggestion bytes at the end of displaySource.
 	showSuggestion bool
 }
@@ -1793,46 +1797,65 @@ func completionRowsNeeded(matches []string, rowLimit int, maxWidth int) int {
 	return layout.rows
 }
 
+type highlightRange struct{ Start, End int }
+
 func completionDisplayRows(matches []string, highlightIndex int, rowLimit int, availableRows int, maxWidth int) []string {
+	lines, highlights := completionDisplayRowsPlain(matches, highlightIndex, rowLimit, availableRows, maxWidth)
+	for i, h := range highlights {
+		if h.End > h.Start {
+			lines[i] = lines[i][:h.Start] + "\033[7m" + lines[i][h.Start:h.End] + "\033[0m" + lines[i][h.End:]
+		}
+	}
+	return lines
+}
+
+// completionDisplayRowsPlain returns unstyled rows and, per row, the byte
+// range of the highlighted item (empty when none). Callers apply styling.
+func completionDisplayRowsPlain(matches []string, highlightIndex int, rowLimit int, availableRows int, maxWidth int) ([]string, []highlightRange) {
 	if len(matches) == 0 || availableRows <= 0 {
-		return nil
+		return nil, nil
 	}
 
 	layout := completionLayoutFor(matches, rowLimit, maxWidth)
 	if layout.rows <= availableRows {
-		return completionRows(matches, highlightIndex, layout, layout.rows)
+		return completionRowsPlain(matches, highlightIndex, layout, layout.rows)
 	}
 
 	rowsToShow := availableRows - 1
 	if rowsToShow <= 0 {
-		return []string{fmt.Sprintf("[%d] more items..", len(matches))}
+		return []string{fmt.Sprintf("[%d] more items..", len(matches))}, []highlightRange{{}}
 	}
 
-	rows := completionRows(matches, highlightIndex, layout, rowsToShow)
+	rows, highlights := completionRowsPlain(matches, highlightIndex, layout, rowsToShow)
 	hiddenCount := len(matches) - completionDisplayedCount(layout, rowsToShow)
 	rows = append(rows, fmt.Sprintf("[%d] more items..", hiddenCount))
-	return rows
+	highlights = append(highlights, highlightRange{})
+	return rows, highlights
 }
 
-func completionRows(matches []string, highlightIndex int, layout completionLayout, rows int) []string {
+func completionRowsPlain(matches []string, highlightIndex int, layout completionLayout, rows int) ([]string, []highlightRange) {
 	if rows <= 0 {
-		return nil
+		return nil, nil
 	}
 	if rows > layout.rows {
 		rows = layout.rows
 	}
 
 	lines := make([]string, 0, rows)
+	highlights := make([]highlightRange, 0, rows)
 	for row := 0; row < rows; row++ {
 		line := ""
+		highlight := highlightRange{}
 		for col := 0; col < layout.columns; col++ {
 			index := col*layout.rows + row
 			if index >= len(matches) {
 				break
 			}
 			raw := matches[index]
-			display := completionItemDisplay(raw, index == highlightIndex)
-			line += display
+			if index == highlightIndex {
+				highlight = highlightRange{Start: len(line), End: len(line) + len(raw)}
+			}
+			line += raw
 			nextIndex := index + layout.rows
 			if nextIndex < len(matches) {
 				pad := layout.colWidths[col] - utf8.RuneCountInString(raw)
@@ -1844,10 +1867,11 @@ func completionRows(matches []string, highlightIndex int, layout completionLayou
 		}
 		if len(line) > 0 {
 			lines = append(lines, line)
+			highlights = append(highlights, highlight)
 		}
 	}
 
-	return lines
+	return lines, highlights
 }
 
 func completionDisplayedCount(layout completionLayout, rows int) int {
@@ -1861,14 +1885,10 @@ func completionDisplayedCount(layout completionLayout, rows int) int {
 	return displayed
 }
 
-func completionItemDisplay(value string, highlight bool) string {
-	if !highlight {
-		return value
-	}
-	return "\033[7m" + value + "\033[0m"
-}
-
 func (state *TermState) clearTabCompletionsDisplay() {
+	if state.regionRender {
+		return // The region repaint erases every owned row.
+	}
 	var displayed []string
 	if state.currentTabComplete == 0 {
 		displayed = state.tabCompletions1

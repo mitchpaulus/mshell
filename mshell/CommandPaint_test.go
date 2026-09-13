@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"errors"
 	"fmt"
 	"io"
@@ -403,4 +404,35 @@ func TestCommandPaintStylesAndSuggestion(t *testing.T) {
 	ready, err = state.refreshCommandDisplay(screen, screen.read, &region)
 	if !ready || err != nil { t.Fatalf("repaint: %v", err) }
 	if got := screen.line(2) + "|" + screen.line(3); got != `>x "ab|      ` { t.Fatalf("suggestion not cleared: %q", got) }
+}
+
+// Completion rows are owned trailer rows below the command: painted with
+// every frame, truncated to one row each, erased when gone, and their first
+// row doubles as the probe scratch row.
+func TestCommandPaintCompletionTrailerRows(t *testing.T) {
+	state := TermState{currentCommand: "ab", index: 2, tabCompletions0: []string{"alpha", "世x"}, tabCycleActive: true, tabCycleIndex: 1}
+	screen := newCommandScreen(t, 6, 10)
+	screen.cells[2][0] = ">"
+	screen.row, screen.col = 2, 1
+	region := ProbeRegion{OriginRow: 3, OriginCol: 2, PaintedRows: 1, ScreenRows: 6, Columns: 10}
+	ready, err := state.refreshCommandDisplay(screen, screen.read, &region)
+	if !ready || err != nil { t.Fatalf("paint: %v", err) }
+	if got := screen.line(2) + "|" + screen.line(3) + "|" + screen.line(4); got != ">ab       |alpha     |世·x       " { t.Fatalf("lines %q", got) }
+	if region.PaintedRows != 1 || region.TrailerRows != 2 || !region.ScratchOwned || screen.row != 2 || screen.col != 3 || screen.scrolls != 0 { t.Fatalf("region %+v cursor %d,%d", region, screen.row, screen.col) }
+	if state.widthCache.Entries["世"] != 2 || !slices.Contains(screen.styles, "7") { t.Fatalf("highlight/probe: cache %v styles %v", state.widthCache.Entries, screen.styles) }
+
+	// A new miss probes on the first trailer row, then the frame restores it.
+	state.tabCompletions0 = []string{"é", "a-very-long-name-that-cannot-fit"}
+	state.tabCycleActive = false
+	writes := len(screen.writes)
+	ready, err = state.refreshCommandDisplay(screen, screen.read, &region)
+	if !ready || err != nil { t.Fatalf("repaint: %v", err) }
+	if got := screen.line(3) + "|" + screen.line(4) + "|" + screen.line(5); got != "é         |a-very-lon|          " { t.Fatalf("lines %q", got) }
+	if len(screen.writes) != writes+3 || region.TrailerRows != 2 || screen.scrolls != 0 { t.Fatalf("probe via trailer row: writes %d region %+v", len(screen.writes)-writes, region) }
+
+	state.tabCompletions0 = nil
+	ready, err = state.refreshCommandDisplay(screen, screen.read, &region)
+	if !ready || err != nil { t.Fatalf("clear: %v", err) }
+	if got := screen.line(2) + "|" + screen.line(3) + "|" + screen.line(4); got != ">ab       |          |          " { t.Fatalf("lines %q", got) }
+	if region.TrailerRows != 0 || !region.ScratchOwned || region.PaintedRows != 1 || screen.row != 2 || screen.col != 3 { t.Fatalf("region after clear %+v", region) }
 }

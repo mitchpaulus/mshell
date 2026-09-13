@@ -30,6 +30,9 @@ type ProbeRegion struct {
 	// The caller must invalidate ownership if repaint or resize changes the
 	// region so that this row is no longer available as scratch space.
 	ScratchOwned bool
+	// Completion rows painted immediately below PaintedRows. They are owned
+	// rows repainted with every frame; the first one doubles as scratch.
+	TrailerRows int
 	// Logical row at the top of the visible command window. CursorRow and
 	// PaintedRows remain physical, region-relative coordinates for probing.
 	ViewportStart RowIndex
@@ -38,6 +41,13 @@ type ProbeRegion struct {
 	// logical rows. Returning to row zero leaves that prefix blank.
 	PromptHidden bool
 	CommandStartCol Cells
+}
+
+// ownedRows counts every screen row the renderer must clear and repaint.
+func (region *ProbeRegion) ownedRows() int {
+	owned := region.PaintedRows + region.TrailerRows
+	if region.ScratchOwned && region.TrailerRows == 0 { owned++ }
+	return owned
 }
 
 func (region *ProbeRegion) commandStartCol() Cells {

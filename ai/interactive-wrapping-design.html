@@ -1047,7 +1047,7 @@ col += atom.Width         // No padding for unused bound or guard space.</code><
   </p>
   <p>
     The legacy renderer remains the default.
-    Tab-completion rows are still drawn only by the legacy renderer and must join the region below the command before the swap.
+    Tab-completion rows are owned trailer rows below the command: repainted with every frame, one truncated row per line, with the first doubling as the probe scratch row.
     A malformed prompt anchor still exits interactive mode instead of falling back to CRLF and column one.
     A new width-cache epoch on reattach or resume, terminal-mode lifecycle backends, and the real-terminal matrix remain work, after which the legacy renderer can be removed.
   </p>
