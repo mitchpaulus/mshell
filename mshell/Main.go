@@ -3346,15 +3346,16 @@ func (state *TermState) InteractiveMode() error {
 		"fp": "git fetch --prune",
 	}
 
-	// Put terminal into raw mode
-	oldState, err := term.MakeRaw(state.stdInFd)
-	if err != nil {
+	// Save the cooked state once, then apply the explicit raw definition.
+	if err := state.saveTerminalState(); err != nil {
+		return fmt.Errorf("Error reading terminal state at beginning of interactive mode: %s", err)
+	}
+	if err := state.enterRawMode(); err != nil {
 		return fmt.Errorf("Error setting terminal to raw mode at beginning of interactive mode: %s", err)
 	}
-	state.oldState = *oldState
 	state.Logf("Old state: %v\n", state.oldState)
 
-	defer term.Restore(state.stdInFd, &state.oldState)
+	defer state.leaveRawMode()
 
 	state.l = NewLexer("", &TokenFile{"REPL"})
 	state.p = &MShellParser{lexer: state.l}
@@ -3597,9 +3598,7 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 
 	// Defer putting the terminal back in raw mode
 	defer func() {
-		// Put terminal back into raw mode
-		_, err := term.MakeRaw(state.stdInFd)
-		if err != nil {
+		if err := state.enterRawMode(); err != nil {
 			fmt.Fprintf(os.Stderr, "Error setting terminal to raw mode: %s\n", err)
 		}
 	}()
@@ -3665,7 +3664,7 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 	state.resetHistorySearch()
 
 	if len(currentCommandStr) > 0 {
-		state.toCooked()
+		state.leaveRawMode()
 		fmt.Fprintln(os.Stdout)
 	}
 
@@ -3738,7 +3737,7 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 
 	// During evaluation, normal terminal output can happen, or TUI apps can be run.
 	// So want them to see non-raw mode terminal state.
-	term.Restore(state.stdInFd, &state.oldState)
+	state.leaveRawMode()
 
 	if len(parsed.Definitions) > 0 {
 		state.stdLibDefs = append(state.stdLibDefs, parsed.Definitions...)
@@ -3773,13 +3772,12 @@ PromptPrint:
 }
 
 func (state *TermState) ensurePromptNewline() {
-	_, err := term.MakeRaw(state.stdInFd)
-	if err != nil {
+	if err := state.enterRawMode(); err != nil {
 		return
 	}
 
 	_, col, err := state.getCurrentPos()
-	term.Restore(state.stdInFd, &state.oldState)
+	state.leaveRawMode()
 	if err != nil {
 		return
 	}
@@ -3789,13 +3787,9 @@ func (state *TermState) ensurePromptNewline() {
 	}
 }
 
-func (state *TermState) toCooked() {
-	term.Restore(state.stdInFd, &state.oldState)
-}
-
 func (state *TermState) printPrompt() error {
 	// Get out of raw mode
-	state.toCooked()
+	state.leaveRawMode()
 
 	// My hard-coded color for now.
 	fmt.Fprintf(os.Stdout, "\033[35m")
@@ -3832,8 +3826,7 @@ func (state *TermState) printPrompt() error {
 
 	// fmt.Fprintf(os.Stdout, "mshell> ")
 
-	_, err = term.MakeRaw(state.stdInFd)
-	if err != nil {
+	if err = state.enterRawMode(); err != nil {
 		return fmt.Errorf("Error setting terminal to raw mode: %s", err)
 	}
 

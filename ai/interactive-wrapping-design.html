@@ -1050,7 +1050,9 @@ col += atom.Width         // No padding for unused bound or guard space.</code><
     The legacy renderer remains the default.
     Tab-completion rows are owned trailer rows below the command: repainted with every frame, one truncated row per line, with the first doubling as the probe scratch row.
     A malformed prompt anchor moves to a fresh line and re-anchors once before exiting.
-    A new width-cache epoch on reattach or resume, terminal-mode lifecycle backends, and the real-terminal matrix remain work, after which the legacy renderer can be removed.
+    There is no automatic width-cache epoch: Alt-Shift-R forgets measured widths, and the user presses it after a reattach or font change.
+    Raw mode is an explicit termios definition per platform with the cooked state saved once at interactive start; the editor enters and leaves through one pair of functions.
+    The real-terminal matrix remains work, after which the legacy renderer can be removed.
   </p>
 </section>
 
