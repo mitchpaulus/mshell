@@ -2263,6 +2263,16 @@ func (state *TermState) runCompletionDefinitions(defs []MShellDefinition, args [
 	matches := make([]string, 0)
 	seen := map[string]struct{}{}
 
+	// A completion definition answers on the stack. Anything it or the
+	// processes it runs would print belongs to nobody: the editor owns the
+	// screen while a completion runs, so a stray "fatal: not a git
+	// repository" from a helper command would land in the command area.
+	completionContext := state.context
+	completionContext.StandardOutput = io.Discard
+	completionContext.StandardError = io.Discard
+	completionContext.ShouldCloseOutput = false
+	completionContext.ShouldCloseError = false
+
 	for _, def := range defs {
 		completionList := NewList(len(args))
 		for i, arg := range args {
@@ -2270,7 +2280,7 @@ func (state *TermState) runCompletionDefinitions(defs []MShellDefinition, args [
 		}
 		completionStack := MShellStack{completionList}
 		callStackItem := CallStackItem{MShellParseItem: def.NameToken, Name: def.Name, CallStackType: CALLSTACKDEF}
-		result := state.evalState.Evaluate(def.Items, &completionStack, state.context, state.stdLibDefs, callStackItem)
+		result := state.evalState.Evaluate(def.Items, &completionStack, completionContext, state.stdLibDefs, callStackItem)
 		if !result.Success {
 			state.Logf("Completion definition '%s' failed to evaluate\n", def.Name)
 			continue

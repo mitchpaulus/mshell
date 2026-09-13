@@ -556,6 +556,7 @@ héllo.txt</div></dd>
     <li>Ctrl-H deletes the previous word (repro 42). Terminals that send <code>^H</code> for Backspace (some xterm and console setups, elvish #55 and #328) will delete words instead of characters.</li>
     <li>Two-key chords (<code>j</code>, <code>q</code>, <code>v</code>, <code>;</code>) block in <code>readInputToken</code>, so the first key is not painted until the next key arrives (repro 44). This is the mshell chord design, noted only because it looks like dropped input.</li>
     <li>The ghost suggestion is truncated at the end of the first row rather than wrapping (repro 27). fish wraps; zsh-autosuggestions has open bugs both ways. Acceptable as a choice, worth documenting.</li>
+    <li>A completion definition's helper command could print onto the editor: <code>git add c</code> then Tab outside a repository showed <code>fatal: not a git repository</code> in the command area. Fixed 2026-09-13: completion definitions now run with stdout and stderr discarded, since they answer on the stack. Family: fish #3093.</li>
     <li>Ctrl-C and Ctrl-D exit the shell even with text on the line (repro 12; same on <code>main</code>). Every other shell clears the line on Ctrl-C.</li>
   </ul>
 </section>
