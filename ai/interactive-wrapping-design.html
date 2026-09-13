@@ -1045,14 +1045,13 @@ col += atom.Width         // No padding for unused bound or guard space.</code><
     Bounded whole-cluster probe batches own a scratch row, count and drain replies, commit atomically, and block further probes for the command on failure.
     The region-relative painter repaints from the anchored prompt origin with explicit CRLF for forced breaks, a viewport for commands taller than the screen, syntax style spans, and the gray history suggestion.
     The interactive loop anchors a region after each prompt and measures and paints through it by default; a resize re-anchors from a fresh prompt.
-    <code>MSH_LEGACY_RENDER=1</code> selects the old painter until it is deleted after the real-terminal pass.
   </p>
   <p>
     Tab-completion rows are owned trailer rows below the command: repainted with every frame, one truncated row per line, with the first doubling as the probe scratch row.
     A malformed prompt anchor moves to a fresh line and re-anchors once before exiting.
     There is no automatic width-cache epoch: Alt-Shift-R forgets measured widths, and the user presses it after a reattach or font change.
     Raw mode is an explicit termios definition per platform with the cooked state saved once at interactive start; the editor enters and leaves through one pair of functions.
-    The real-terminal matrix remains work, after which the legacy renderer can be removed.
+    The legacy renderer, its cursor-column arithmetic, and the predictive layout helper are deleted; <code>msh --check-terminal</code> is the tool for verifying a new terminal environment.
   </p>
 </section>
 

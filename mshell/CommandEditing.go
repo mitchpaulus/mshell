@@ -1,19 +1,12 @@
 package main
 
 import (
-	"unicode/utf8"
 
 	"github.com/rivo/uniseg"
 )
 
 func (state *TermState) commandEnd() ByteOffset {
 	return ByteOffset(len(state.currentCommand))
-}
-
-// The old painter still positions by rune count. Keep that conversion here
-// until it is replaced by cell positions from resolved layout.
-func (state *TermState) legacyCursorColumn() int {
-	return utf8.RuneCountInString(string(state.currentCommand[:state.index]))
 }
 
 // The lexer uses rune offsets; editing and layout use source byte offsets.

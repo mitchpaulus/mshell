@@ -52,7 +52,6 @@ func runTerminalCheck() int {
 	state := TermState{
 		stdInFd:      stdInFd,
 		stdInState:   &StdinReaderState{array: make([]byte, 1024)},
-		regionRender: true,
 		widthCache:   WidthCache{Entries: make(map[string]Cells)},
 	}
 	state.UpdateSize()

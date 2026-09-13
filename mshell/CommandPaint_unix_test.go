@@ -95,7 +95,7 @@ func TestAnchorPromptRetriesAfterMalformedReportPTY(t *testing.T) {
 	state := TermState{stdInState: &StdinReaderState{array: make([]byte, 1)}, numRows: 24, numCols: 80}
 	if err := state.anchorPrompt(slave); err != nil { t.Fatalf("anchor: %v", err) }
 	if err := <-done; err != nil { t.Fatal(err) }
-	if state.promptRow != 8 || state.promptLength != 0 || state.commandRegion.OriginRow != 8 || state.commandRegion.OriginCol != 1 { t.Fatalf("anchor state: row %d length %d region %+v", state.promptRow, state.promptLength, state.commandRegion) }
+	if state.promptRow != 8 || state.commandRegion.OriginRow != 8 || state.commandRegion.OriginCol != 1 { t.Fatalf("anchor state: row %d region %+v", state.promptRow, state.commandRegion) }
 	token, err := state.readInputToken()
 	if err != nil || token != (AsciiToken{Char: 'k'}) { t.Fatalf("queued key: %v, %v", token, err) }
 }

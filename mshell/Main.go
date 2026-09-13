@@ -687,7 +687,6 @@ func main() {
 			stdInFd:        stdInFd,
 			numRows:        numRows,
 			numCols:        numCols,
-			promptLength:   0,
 			currentCommand: "",
 			index:          0,
 			readBuffer:     make([]byte, 1024),
@@ -920,7 +919,6 @@ type TermState struct {
 	numRows        int // Number of rows in the terminal
 	numCols        int // Number of columns in the terminal
 	promptRow      int // Row where the prompt ends, 1-based
-	promptLength   int // Length of
 	numPromptLines int // Number of lines the prompt takes up
 	currentCommand SourceText
 	index          ByteOffset // Source byte offset at a grapheme boundary.
@@ -980,7 +978,6 @@ type TermState struct {
 	// Anchored editing region for the replacement renderer. Valid after
 	// printPrompt until the next prompt, screen clear, or resize re-anchor.
 	commandRegion ProbeRegion
-	regionRender  bool
 
 	displaySource SourceText
 	displayCursor ByteOffset
@@ -1367,7 +1364,7 @@ const (
 )
 
 type LayoutRow struct {
-	Text      string    //  direct source slice for ASCII layout and legacy layout
+	Text      string    // direct source slice for ASCII layout
 	AtomStart AtomIndex // general layout: first atom inclusive
 	AtomEnd   AtomIndex // general layout: exclusive; excludes a hard-break atom
 	Width     Cells     // terminal cells occupied, excluding the prompt
@@ -1503,65 +1500,6 @@ func layoutAtomsInto(dst []LayoutRow, atoms []DisplayAtom, cursor ByteOffset, st
 	}
 
 	panic(fmt.Sprintf("layoutAtomsInto: cursor %d not found in any row (source end %d)", cursor, sourceEnd))
-}
-
-func layoutInto(dst []LayoutRow, text string, cursor int, width int, widthOf func(string) int) LayoutResult {
-	if width < 1 {
-		width = 1
-	}
-	res := LayoutResult{}
-	rows := dst[:0] // Reuse the slice
-	rowStart := 0 // byte offset of the current row's first cluster
-	col := 0
-	offset := 0 // byte offset of the current cluster
-	state := -1
-	s := text
-	var cluster string
-	for len(s) > 0 {
-		cluster, s, _, state = uniseg.FirstGraphemeClusterInString(s, state)
-
-		if cluster == "\n" || cluster == "\r\n" { // Hard line break
-			if offset == cursor {
-				res.CursorRow = RowIndex(len(rows))
-				res.CursorCol = Cells(col)
-			}
-
-			rows = append(rows, LayoutRow{Text: text[rowStart:offset], Width: Cells(col), EndType: RowEndHard })
-			offset += len(cluster)
-			rowStart = offset
-			col = 0
-			continue
-		}
-
-		w := widthOf(cluster)
-		if col + w > width && col > 0 { // wrap before this cluster
-			var end RowEnd
-			if col == width {
-				end = RowEndSoftExact
-			} else {
-				end = RowEndSoftEarly
-			}
-
-			rows = append(rows, LayoutRow{Text: text[rowStart:offset], Width: Cells(col), EndType: end})
-			rowStart = offset
-			col = 0
-		}
-		if offset == cursor {
-			res.CursorRow = RowIndex(len(rows))
-			res.CursorCol = Cells(col)
-		}
-		col += w
-		offset += len(cluster)
-	}
-	rows = append(rows, LayoutRow{Text: text[rowStart:], Width: Cells(col), EndType: RowEndFinal})
-	if cursor >= len(text) {
-		res.CursorRow = RowIndex(len(rows) - 1)
-		res.CursorCol = Cells(col)
-	}
-
-	res.PendingWrap = col == width
-	res.Rows = rows
-	return res
 }
 
 func newLogInstanceID() string {
@@ -1791,25 +1729,7 @@ func completionMaxWidth(matches []string) int {
 	return maxWidth
 }
 
-func completionRowsNeeded(matches []string, rowLimit int, maxWidth int) int {
-	if len(matches) == 0 {
-		return 0
-	}
-	layout := completionLayoutFor(matches, rowLimit, maxWidth)
-	return layout.rows
-}
-
 type highlightRange struct{ Start, End int }
-
-func completionDisplayRows(matches []string, highlightIndex int, rowLimit int, availableRows int, maxWidth int) []string {
-	lines, highlights := completionDisplayRowsPlain(matches, highlightIndex, rowLimit, availableRows, maxWidth)
-	for i, h := range highlights {
-		if h.End > h.Start {
-			lines[i] = lines[i][:h.Start] + "\033[7m" + lines[i][h.Start:h.End] + "\033[0m" + lines[i][h.End:]
-		}
-	}
-	return lines
-}
 
 // completionDisplayRowsPlain returns unstyled rows and, per row, the byte
 // range of the highlighted item (empty when none). Callers apply styling.
@@ -1885,38 +1805,6 @@ func completionDisplayedCount(layout completionLayout, rows int) int {
 		displayed += min(rows, height)
 	}
 	return displayed
-}
-
-func (state *TermState) clearTabCompletionsDisplay() {
-	if state.regionRender {
-		return // The region repaint erases every owned row.
-	}
-	var displayed []string
-	if state.currentTabComplete == 0 {
-		displayed = state.tabCompletions1
-	} else {
-		displayed = state.tabCompletions0
-	}
-
-	if len(displayed) == 0 {
-		return
-	}
-
-	availableRows := state.numRows - state.promptRow
-	if availableRows < 0 {
-		availableRows = 0
-	}
-	columnLimit := min(tabCompletionColumnLimit, availableRows)
-	clearLines := completionDisplayRows(displayed, -1, columnLimit, availableRows, state.numCols)
-	clearCount := len(clearLines)
-	for i := 0; i < clearCount; i++ {
-		fmt.Fprintf(os.Stdout, "\n\033[2K")
-	}
-	for i := 0; i < clearCount; i++ {
-		fmt.Fprintf(os.Stdout, "\033[A")
-	}
-
-	fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.legacyCursorColumn())
 }
 
 // TODO: Why is this necessary.
@@ -2154,191 +2042,6 @@ func (state *TermState) historySearch(direction int) {
 	fmt.Fprintf(os.Stdout, "\a")
 }
 
-func (s *TermState) Render(renderHistory bool) {
-	s.renderBuffer = s.renderBuffer[:0] // Clear the buffer
-	// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
-	// state.index = 0
-	// ClearToEnd()
-	s.renderBuffer = append(s.renderBuffer, fmt.Sprintf("\033[%dG", s.promptLength+1)...)
-	s.renderBuffer = append(s.renderBuffer, "\033[K"...)
-
-	// Lex current command
-	s.l.allowUnterminatedString = true
-	s.l.emitWhitespace = true
-	s.l.emitComments = true
-	s.l.resetInput(string(s.currentCommand))
-	defer func() {
-		s.l.allowUnterminatedString = false
-		s.l.emitWhitespace = false
-		s.l.emitComments = false
-	}()
-
-	tokens, err := s.l.Tokenize()
-	commandLiteralIndex := -1
-	firstTokenIsBinary := false
-	if err != nil {
-		for _, r := range s.currentCommand {
-			s.renderBuffer = utf8.AppendRune(s.renderBuffer, r)
-		}
-	} else {
-		commandLiteralIndex = s.commandLiteralTokenIndex(tokens)
-		_, firstTokenIsBinary = s.isFirstTokenBinary(tokens)
-
-		for i, t := range tokens {
-			if t.Type == STRING || t.Type == SINGLEQUOTESTRING || t.Type == FORMATSTRING {
-				s.renderBuffer = append(s.renderBuffer, "\033[31m"...)
-				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
-				s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
-			} else if t.Type == UNFINISHEDSTRING || t.Type == UNFINISHEDSINGLEQUOTESTRING {
-				s.renderBuffer = append(s.renderBuffer, "\033[91m"...)
-				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
-				s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
-			} else if t.Type == UNFINISHEDPATH {
-				s.renderBuffer = append(s.renderBuffer, "\033[95m"...)
-				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
-				s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
-			} else if t.Type == PATH {
-				s.renderBuffer = append(s.renderBuffer, "\033[35m"...)
-				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
-				s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
-			} else if t.Type == DATETIME {
-				s.renderBuffer = append(s.renderBuffer, "\033[36m"...)
-				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
-				s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
-			} else if t.Type == TRUE || t.Type == FALSE {
-				s.renderBuffer = append(s.renderBuffer, "\033[34m"...)
-				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
-				s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
-			} else if t.Type == VARSTORE {
-				s.renderBuffer = append(s.renderBuffer, "\033[32m"...)
-				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
-				s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
-			} else if t.Type == VARRETRIEVE {
-				s.renderBuffer = append(s.renderBuffer, "\033[33m"...)
-				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
-				s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
-			} else if t.Type == ENVSTORE {
-				s.renderBuffer = append(s.renderBuffer, "\033[32m"...)
-				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
-				s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
-			} else if t.Type == ENVRETREIVE || t.Type == ENVCHECK {
-				s.renderBuffer = append(s.renderBuffer, "\033[33m"...)
-				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
-				s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
-			} else if t.Type == LITERAL {
-				underlineLiteral := false
-				if firstTokenIsBinary {
-					if _, ok := BuiltInList[t.Lexeme]; ok || IsDefinitionDefined(t.Lexeme, s.stdLibDefs) {
-						underlineLiteral = true
-					}
-				}
-				if i == commandLiteralIndex {
-					s.renderBuffer = append(s.renderBuffer, "\033[4;34m"...)
-				} else if underlineLiteral {
-					s.renderBuffer = append(s.renderBuffer, "\033[4m"...)
-				}
-				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
-				if i == commandLiteralIndex || underlineLiteral {
-					s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
-				}
-			} else {
-				if i == commandLiteralIndex {
-					s.renderBuffer = append(s.renderBuffer, "\033[4;34m"...)
-				}
-				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
-				if i == commandLiteralIndex {
-					s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
-				}
-			}
-		}
-	}
-
-	// Print the current command
-	// for _, r := range s.currentCommand {
-	// s.renderBuffer = utf8.AppendRune(s.renderBuffer, r)
-	// }
-
-	// Search for history
-	if (renderHistory) {
-		numToAdd := s.updateHistoryCompletion()
-
-		// Print escape code for light gray
-		s.renderBuffer = append(s.renderBuffer, "\033[90m"...)
-		for i := 0; i < numToAdd; i++ {
-			s.renderBuffer = append(s.renderBuffer, s.historyComplete[len(s.currentCommand)+i])
-		}
-		// Reset color
-		s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
-	}
-
-	var currentTabCompletion []string
-	var previousTabCompletion []string
-	if s.currentTabComplete == 0 {
-		currentTabCompletion = s.tabCompletions0
-		previousTabCompletion = s.tabCompletions1
-	} else {
-		currentTabCompletion = s.tabCompletions1
-		previousTabCompletion = s.tabCompletions0
-	}
-
-	availableRows := s.numRows - s.promptRow
-	if availableRows < 0 {
-		availableRows = 0
-	}
-	columnLimit := min(tabCompletionColumnLimit, availableRows)
-	rowsNeeded := completionRowsNeeded(currentTabCompletion, columnLimit, s.numCols)
-	if rowsNeeded > availableRows {
-		linesPossible := max(0, s.promptRow-s.numPromptLines)
-		diff := rowsNeeded - availableRows
-		if diff > 0 && linesPossible > 0 {
-			s.ScrollDown(min(diff, linesPossible))
-			availableRows = s.numRows - s.promptRow
-			if availableRows < 0 {
-				availableRows = 0
-			}
-			columnLimit = min(tabCompletionColumnLimit, availableRows)
-		}
-	}
-
-	highlightIndex := -1
-	if s.tabCycleActive {
-		highlightIndex = s.tabCycleIndex
-	}
-
-	previousLines := completionDisplayRows(previousTabCompletion, -1, columnLimit, availableRows, s.numCols)
-	for i := 0; i < len(previousLines); i++ {
-		s.renderBuffer = append(s.renderBuffer, "\n"...)
-		s.renderBuffer = append(s.renderBuffer, "\033[2K"...)
-	}
-	for i := 0; i < len(previousLines); i++ {
-		s.renderBuffer = append(s.renderBuffer, "\033[A"...)
-	}
-
-	currentLines := completionDisplayRows(currentTabCompletion, highlightIndex, columnLimit, availableRows, s.numCols)
-	for i := 0; i < len(currentLines); i++ {
-		s.renderBuffer = append(s.renderBuffer, "\r\n"...)
-		s.renderBuffer = append(s.renderBuffer, []byte(currentLines[i])...)
-	}
-
-	for i := 0; i < len(currentLines); i++ {
-		s.renderBuffer = append(s.renderBuffer, "\033[A"...)
-	}
-
-	// Move cursor to correct position. This often will backtrack because of history completion.
-	pos := s.promptLength + 1 + s.legacyCursorColumn()
-	s.renderBuffer = append(s.renderBuffer, fmt.Sprintf("\033[%dG", pos)...)
-
-	// s.Logf("Term index: %d, command length: %d, num completions: %d, available rows: %d, prompt row: %d, numRows: %d\n", s.index, len(s.currentCommand), len(currentTabCompletion), availableRows, s.promptRow, s.numRows)
-
-	// Push the buffer to stdout
-	// fmt.Fprintf(s.f, "Rendering buffer: %s\n", string(s.renderBuffer))
-	os.Stdout.Write(s.renderBuffer)
-
-	// Move cursor back to the beginning of the line.
-	// s.clearToPrompt()
-	// fmt.Fprintf(os.Stdout, "%s", string(s.currentCommand))
-}
-
 func (s *TermState) commandLiteralTokenIndex(tokens []Token) int {
 	for i, t := range tokens {
 		if t.Type == WHITESPACE || t.Type == LINECOMMENT {
@@ -2559,16 +2262,6 @@ func (state *TermState) runCompletionDefinitions(defs []MShellDefinition, args [
 	return matches
 }
 
-func (state *TermState) clearToPrompt() {
-	fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1)
-	// state.index = 0
-	ClearToEnd()
-}
-
-func ClearToEnd() {
-	fmt.Fprintf(os.Stdout, "\033[K")
-}
-
 func (state *TermState) ScrollDown(numLines int) {
 	// See https://github.com/microsoft/terminal/issues/17320
 	// and https://github.com/microsoft/terminal/issues/11078
@@ -2611,18 +2304,14 @@ func (state *TermState) ClearScreen() {
 
 	// Send off cursor position request
 	state.UpdateSize()
-	curRow, _, err := state.getCurrentPos()
-	if err != nil {
+	if _, _, err := state.getCurrentPos(); err != nil {
 		state.Logf("Error getting cursor position: %s\n", err)
 		return
 	}
 
-	rowsToScroll := curRow - state.numPromptLines
-	if state.regionRender {
-		// The cursor may sit on a later row of a wrapped command; scroll so
-		// the prompt's first line reaches the top, not the cursor's row.
-		rowsToScroll = int(state.commandRegion.OriginRow) - state.numPromptLines
-	}
+	// The cursor may sit on a later row of a wrapped command; scroll so the
+	// prompt's first line reaches the top, not the cursor's row.
+	rowsToScroll := int(state.commandRegion.OriginRow) - state.numPromptLines
 	state.ScrollDown(rowsToScroll)
 	state.Logf("Cleared screen, scrolled %d rows\n", rowsToScroll)
 	// fmt.Fprintf(state.f, "%d %d %d\n", curRow, state.numPromptLines, rowsToScroll)
@@ -3406,7 +3095,6 @@ func (state *TermState) InteractiveMode() error {
 	var end bool
 
 	state.widthCache = WidthCache{Entries: make(map[string]Cells)}
-	state.regionRender = regionRenderEnabled()
 
 
 	for {
@@ -3605,7 +3293,6 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 		}
 	}()
 
-	state.clearTabCompletionsDisplay()
 	state.resetTabCycle()
 	state.tabCompletions0 = state.tabCompletions0[:0]
 	state.tabCompletions1 = state.tabCompletions1[:0]
@@ -4089,14 +3776,12 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 					if t.Char == 'r' {
 						// Open REPOs with lf
 						// fmt.Fprintf(state.f, "Opening REPOs with lf...\n")
-						state.clearToPrompt()
 						state.currentCommand = ""
 						state.index = 0
 						state.PushChars([]rune{'r'})
 						shouldExit, _ := state.ExecuteCurrentCommand()
 						return shouldExit, nil
 					} else if t.Char == 'j' {
-						state.clearToPrompt()
 						state.currentCommand = ""
 						state.index = 0
 						state.PushChars([]rune{'j'})
@@ -4161,7 +3846,6 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 
 				if t, ok := token.(AsciiToken); ok {
 					if t.Char == 'q' {
-						state.clearToPrompt()
 						state.currentCommand = ""
 						state.index = 0
 						state.PushChars([]rune("0 exit"))
@@ -4420,7 +4104,6 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 		} else if t.Char == 13 { // Enter
 			// If in tab completion mode, accept the completion without executing
 			if state.tabCycleActive {
-				state.clearTabCompletionsDisplay()
 				state.resetTabCycle()
 				state.tabCompletions0 = state.tabCompletions0[:0]
 				state.tabCompletions1 = state.tabCompletions1[:0]

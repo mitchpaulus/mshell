@@ -279,13 +279,6 @@ func (state *TermState) prepareMeasuredCommandDisplay(writer io.Writer, readTerm
 	})
 }
 
-// The region renderer is the default. MSH_LEGACY_RENDER=1 selects the old
-// painter as an escape hatch until it is deleted after the terminal pass.
-func regionRenderEnabled() bool {
-	v, ok := os.LookupEnv("MSH_LEGACY_RENDER")
-	return !(ok && v != "" && v != "0")
-}
-
 // anchorCommandRegion starts a fresh editing region at the reported prompt
 // cursor. The first frame owns exactly the prompt row; nothing is painted yet.
 func (state *TermState) anchorCommandRegion(row int, col int) {
@@ -310,19 +303,10 @@ func (s *TermState) updateHistoryCompletion() int {
 	return numToAdd
 }
 
-// refreshInteractiveDisplay paints the editor after a token is handled. The
-// legacy renderer remains the default; the region renderer measures widths
-// through the anchored region and leaves a frame unpainted only while keys
-// queued during measurement still wait for the editor loop.
+// refreshInteractiveDisplay paints the editor after a token is handled. It
+// measures widths through the anchored region and leaves a frame unpainted
+// only while keys queued during measurement still wait for the editor loop.
 func (state *TermState) refreshInteractiveDisplay(renderHistory bool) error {
-	if !state.regionRender {
-		// Complete both layout paths while the legacy painter remains active.
-		if _, err := state.prepareCommandDisplay(Cells(state.promptLength), Cells(state.numCols), nil); err != nil {
-			return err
-		}
-		state.Render(renderHistory)
-		return nil
-	}
 	state.showSuggestion = renderHistory
 	if renderHistory {
 		state.updateHistoryCompletion()
@@ -548,7 +532,6 @@ func (state *TermState) anchorPrompt(writer io.Writer) error {
 	}
 	if err != nil { return err }
 	state.promptRow = row
-	state.promptLength = col - 1
 	state.anchorCommandRegion(row, col)
 	return nil
 }
