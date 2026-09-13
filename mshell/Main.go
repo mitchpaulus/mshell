@@ -3363,10 +3363,12 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 	state.Logf("Executing Command: '%s'\n", currentCommandStr)
 	state.l.resetInput(currentCommandStr)
 
-	state.p.NextToken()
-
 	var parsed *MShellFile
 	var err error
+
+	if err = state.p.PeekFirstToken(); err != nil {
+		goto ParseError
+	}
 
 	if p.curr.Type == LITERAL {
 		// Check for known commands. If so, we'll essentially wrap the entire command in a list to execute
@@ -3402,7 +3404,9 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 			} else {
 				// Empty pipeline, reset to original
 				l.resetInput(currentCommandStr)
-				p.NextToken()
+				if err = p.PeekFirstToken(); err != nil {
+					goto ParseError
+				}
 			}
 		}
 	}
@@ -3411,6 +3415,7 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 	if parsed == nil {
 		parsed, err = p.ParseFile()
 	}
+ParseError:
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error parsing input: %s\n", err)
 		// State.index reset must be before ensurePromptNewline and printPrompt as those can consume typed characters while waiting for terminal response

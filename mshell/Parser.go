@@ -617,6 +617,18 @@ func (parser *MShellParser) NextToken() {
 	parser.initialized = true
 }
 
+// PeekFirstToken loads the first token of fresh input without panicking.
+// The interactive prompt calls this outside any parse entry point, so a lexer
+// error (for example an unterminated quote) must come back as an error.
+func (parser *MShellParser) PeekFirstToken() error {
+	parser.curr = parser.lexer.scanToken()
+	parser.initialized = true
+	if parser.curr.Type == ERROR {
+		return errors.New(parser.curr.Lexeme)
+	}
+	return nil
+}
+
 // Checks for the desired match, and then advances the parser.
 func (parser *MShellParser) Match(token Token, tokenType TokenType) error {
 	if token.Type != tokenType {
