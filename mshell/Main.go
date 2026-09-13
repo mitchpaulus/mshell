@@ -3828,16 +3828,10 @@ func (state *TermState) printPrompt() error {
 		return fmt.Errorf("Error setting terminal to raw mode: %s", err)
 	}
 
-	var col int
-	state.promptRow, col, err = state.getCurrentPos()
-	if err != nil {
+	state.UpdateSize()
+	if err = state.anchorPrompt(os.Stdout); err != nil {
 		return fmt.Errorf("Error getting cursor position: %s", err)
 	}
-
-	state.UpdateSize()
-
-	state.promptLength = col - 1
-	state.anchorCommandRegion(state.promptRow, col)
 	return nil
 }
 
@@ -3921,7 +3915,16 @@ func (state *TermState) getCurrentPos() (int, int, error) {
 	// }
 	// }
 
-	if _, err := fmt.Fprint(os.Stdout, "\033[6n"); err != nil {
+	return state.queryCursorPosition(os.Stdout)
+}
+
+var errMalformedCursorReport = errors.New("malformed cursor report")
+
+// queryCursorPosition sends one request and blocks until its reply. Keys that
+// arrive first are queued for the editor. A garbled reply is reported as
+// errMalformedCursorReport; the reply has still been consumed.
+func (state *TermState) queryCursorPosition(writer io.Writer) (int, int, error) {
+	if _, err := io.WriteString(writer, "\033[6n"); err != nil {
 		return 0, 0, err
 	}
 
@@ -3940,7 +3943,7 @@ func (state *TermState) getCurrentPos() (int, int, error) {
 			reportToken.FinalChar == 'R' {
 			report, err := parseCursorReport(reportToken)
 			if err != nil {
-				return 0, 0, err
+				return 0, 0, fmt.Errorf("%w: %w", errMalformedCursorReport, err)
 			}
 
 			return int(report.Row), int(report.Column), nil

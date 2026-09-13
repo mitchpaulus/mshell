@@ -566,7 +566,8 @@ type WidthCache struct {
   </p>
   <p>
     Send one anchor request and queue ordinary input until its response arrives; do not send another request for each intervening keypress.
-    On a malformed anchor response, emit CRLF and begin the editing region at column one, using region-relative bookkeeping rather than guessing an absolute row.
+    On a malformed anchor response, emit CRLF and send one further anchor request from column one of the fresh line; a second malformed response means the terminal is unsupported and interactive mode exits.
+    The absolute row from the second reply is required because scroll accounting at the bottom of the screen depends on it.
     Any subsequent scratch-row query must establish its actual row before probing.
     EOF or terminal I/O errors exit interactive mode through cleanup; silence alone is not an error or a fallback trigger.
   </p>
@@ -1048,7 +1049,7 @@ col += atom.Width         // No padding for unused bound or guard space.</code><
   <p>
     The legacy renderer remains the default.
     Tab-completion rows are owned trailer rows below the command: repainted with every frame, one truncated row per line, with the first doubling as the probe scratch row.
-    A malformed prompt anchor still exits interactive mode instead of falling back to CRLF and column one.
+    A malformed prompt anchor moves to a fresh line and re-anchors once before exiting.
     A new width-cache epoch on reattach or resume, terminal-mode lifecycle backends, and the real-terminal matrix remain work, after which the legacy renderer can be removed.
   </p>
 </section>

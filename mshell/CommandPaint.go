@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -532,4 +533,22 @@ func (state *TermState) appendTrailerRow(dst []byte, line SourceText, highlight 
 		dst = styles.appendText(dst, atom.SourceStart, atom.displayText(line))
 	}
 	return dst
+}
+
+// anchorPrompt establishes the editing origin after the opaque prompt. A
+// garbled reply cannot anchor anything, so move to a fresh line at column one
+// and ask once more; a second bad reply means the terminal is unsupported.
+// Silence is never an error here: the query blocks until a reply arrives.
+func (state *TermState) anchorPrompt(writer io.Writer) error {
+	row, col, err := state.queryCursorPosition(writer)
+	if errors.Is(err, errMalformedCursorReport) {
+		state.Logf("Prompt anchor: %s; re-anchoring on a fresh line\n", err)
+		if _, err = io.WriteString(writer, "\r\n"); err != nil { return err }
+		row, col, err = state.queryCursorPosition(writer)
+	}
+	if err != nil { return err }
+	state.promptRow = row
+	state.promptLength = col - 1
+	state.anchorCommandRegion(row, col)
+	return nil
 }
