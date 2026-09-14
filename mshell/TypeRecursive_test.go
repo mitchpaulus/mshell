@@ -140,6 +140,12 @@ func TestDictAndListKeywordsInSignatures(t *testing.T) {
 	expectTypeErr(t, "def f (maybe -- ) drop end", "'maybe' is not a type name")
 }
 
+func TestTypeKeywordsAreReservedTypeNames(t *testing.T) {
+	for _, name := range []string{"dict", "list", "date", "binary", "quotation", "maybe"} {
+		expectTypeErr(t, "type "+name+" = int", "cannot redefine reserved type name '"+name+"'")
+	}
+}
+
 func TestCastLiteralIntoRecursiveTypeAtDepth(t *testing.T) {
 	// A nested literal satisfies the brand's body at every depth inside a
 	// cast; nominal checking still applies outside casts and a value that

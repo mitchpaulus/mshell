@@ -826,7 +826,8 @@ func IsReservedTypeName(name string) bool {
 	switch name {
 	case "int", "float", "str", "bool", "bytes", "none", "null",
 		"path", "datetime", "Maybe", "Grid", "GridView", "GridRow",
-		"HtmlNode", "Json":
+		"HtmlNode", "Json", "dict", "list", "date", "binary",
+		"quotation", "maybe":
 		return true
 	}
 	return false
