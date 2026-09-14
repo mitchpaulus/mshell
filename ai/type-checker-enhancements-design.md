@@ -2,7 +2,7 @@
 
 Date: 2026-09-14.
 Branch: `type-checker-enhancements`, created from local `main` at `2d60ee1` (also the local `origin/main` tip).
-Status: design proposal for review; no implementation changes have been made.
+Status: decisions recorded (section 0); implementation not started.
 Implementation guide: [type-checker-enhancements-plan.md](type-checker-enhancements-plan.md).
 
 ## Read this first
@@ -13,60 +13,111 @@ Do not interpret the desire for fewer constructs as permission to remove nominal
 Do not merge the three source branches wholesale.
 Their individual tests pass, but their rules conflict in important places.
 
-This document specifies a recommended destination, not a claim that every decision below has already been approved.
-Before implementing behavior changes, obtain the decisions in the review gates below unless the user has subsequently approved them.
-Approval to write this plan was not approval to change container semantics or migrate existing nominal declarations.
-Do not ask again for decisions already answered in subsequent conversation.
+Section 0 records the user's decisions on every question this document raised.
+Sections 1 onward are the destination and its rationale; where a later section still reads as a proposal, section 0 is the answer.
+Do not ask again for decisions already recorded there.
 
 Repository rules still apply: use a feature branch; never run gofmt without permission; do not edit `design/`; rebuild the binary before testing.
 Older files in `ai/` and the enum branch's design document contain historical decisions and outdated syntax.
 Use them as evidence, not as instructions that override this document or the user.
 
-## 1. Review gates
+## 0. Decisions recorded 2026-09-14
+
+These answers supersede the recommendations and open questions below.
+Later sections are kept as the rationale; where they conflict with this section, this section wins.
+
+| Topic | Decision |
+|---|---|
+| G1 declarations | Approved as recommended: `type` is a transparent structural alias, `enum` is the only nominal form, `as` is static ascription only. Migrate the five existing test files that declare types. |
+| G2 mutation | Containers keep shared reference semantics. No copy-on-validate, no value semantics. Container types are invariant and every in-place write is checked against the container's static type; see the policy below. |
+| G3 typed patterns | Keep `is TypeExpr binding`. It marks the one pattern class that performs full structural validation. Bare primitive keywords stay as they are. No further bare-name sugar for aliases in V1. |
+| JSON numbers | A JSON number with no fraction and no exponent parses as `int`; others parse as `float`. The built-in `Json` alias includes both `int` and `float`. Update parser, `Json`, runtime tests, and docs together. |
+| Operations on raw `Json` | None. `Json` is an ordinary union; getters, `map`, `len`, and similar are type errors on it. Narrow with `match`, `tryAs`, or `=> is`. |
+| Validation failure diagnostics | Unchanged for V1. `tryAs` yields a bare `none`; a failing `?` is the signal that the data did not conform. |
+| Enum value behavior | As shipped on the enum branch: `toJson` uses the externally tagged form (`"member"`, `{"member": v}`, `{"member": [v0, v1]}`); `str` prints `member` or `member(p0 p1)`; equality compares enum name, member, then payloads; ordering compares enum name, member declaration index, then payloads. |
+| Type parsers | Share the type parser between `type`, `is`, `tryAs`, and `def` signatures wherever the grammars agree. Do not maintain two spellings for the same shape. |
+| Coverage of `is` arms | An `is T` arm covers a union member only when that member is equivalent to `T`. Anything else contributes no coverage and the match needs `_`. |
+| Redeclaration | No special cases. A duplicate declaration is an error everywhere, including interactive sessions. |
+| Name collisions | No shadowing in any direction. A constructor, type name, or definition that collides with an existing name is an error. Namespacing is future work. |
+| Checking by default | Work as if `--check-types` will become the default, including in the interactive REPL. It may be a while before the switch is made, but every decision here is judged as if all user code is checked. |
+
+### G2 policy: shared mutable containers, invariant container types
+
+Decided 2026-09-14 after reviewing how Java, C#, Dart, TypeScript, and Python handled the same question.
+Containers keep shared reference semantics at runtime.
+The checker keeps every container's static type fixed, so a write through one name can never invalidate what another name knows.
+
+1. List element types and dictionary value types are invariant.
+   Wherever a value meets a declared type (definition parameters, `as`, quotation signatures, enum payloads), `[int]` is not accepted for `[int | str]`, and `[int | str]` is not accepted for `[int]`.
+   A read-only function over lists is declared generically, `([a] -- str)`; that is the covariant read-only view, and most of the standard library already reads this way.
+   A literal passed to a union-typed parameter is written `[1 2 3] as [int | str] f`, because a postfix language types the literal before the word that consumes it.
+2. Every in-place write is checked against the container's static type.
+   `setAt`, `insert`, `extend`, and dict `set` already do this on main.
+   Remove the two widening overloads of `append` (`([t] u -- [t | u])` and `(t [u] -- [t | u])`) so `append` does too.
+   Audit every other mutating list and dict builtin for the same property.
+3. An empty literal gets a type variable for its element type, and the first unification fixes it.
+   Later writes must match.
+   A mixed list is declared up front with `[] as [int | str]`.
+   This is the same rule ML applies to a mutable cell created empty.
+4. Shape width subtyping is allowed: `{name: str, age: int}` is accepted where `{name: str}` is declared.
+   Writing a key the static shape does not declare is an error unless the shape declares a `*: T` remainder, in which case the value is checked against `T`.
+   Declared field types are invariant.
+   Reading an undeclared key through an open shape yields `Maybe[value]` with the unknown remainder, never a declared field's type.
+5. `Maybe[T]` is covariant because it is immutable.
+   Quotation inputs are contravariant and outputs covariant, with the container rules applied inside.
+6. Typed patterns and `tryAs` bind a new name at the target type and leave the subject binding at its original type.
+   Known hole, documented rather than prevented: narrowing the same container twice to two different container types and writing through the wider name.
+   This is not reachable through plain assignability because of rule 1.
+   The runtime's per-operation checks still stop the wrong operation.
+
+No loop re-check is needed under this policy, because no static type changes after it is fixed.
+
+Because checking is intended to become the default, three things follow for this work:
+
+- Every read-only list or dictionary function in `lib/std.msh` must be declared generically (`[a]`, `{str: a}`), so a user never meets a spurious invariance rejection from the standard library. This audit is part of P6, not optional cleanup.
+- The REPL will check each line against the state left by earlier lines, so the checker's variable environment, substitution, and declaration graph must persist across lines in the same way the evaluator's state does. P1 must design the declaration graph with that in mind.
+- The deferred literal-widening rule below moves up in priority if `as` on literals turns out to be common once the stdlib is generic.
+
+Deferred, not rejected: letting a literal's element type variable widen when the literal meets a wider declared parameter, so `[1 2 3] f` works without `as`.
+It is sound (every name shares the variable, and declared types never widen) but needs a rebindable type variable, a widening rule in container unification, and a loop re-check to a fixpoint.
+Build it only if `as` on literals turns out to be common in real scripts.
+
+The acceptance rows A34 and A35 are covered by rules 1 and 2: the write through the wider binding is rejected at the call site or at the write, and the documented hole in rule 6 is the only accepted exception.
+
+## 1. Decided questions (formerly review gates)
 
 ### G1: declarations and migration
 
-Recommended destination:
+Decided: approved.
 
 - `type Name = Expr` is a transparent structural alias, including guarded recursive aliases.
 - `enum Name = constructor Payload ... | ... end` is the only nominal declaration mechanism.
 - A one-constructor enum is the nominal wrapper/record form.
 - Remove erased `TKBrand` types and brand IDs on unions after migration.
-- `as` becomes static ascription only; it does not construct nominal values.
+- `as` is static ascription only; it does not construct nominal values.
 
-This changes the meaning of existing `type` declarations on main.
-The user supports nominal typing but has not explicitly approved this spelling/migration choice.
-Ask for approval of this destination before changing declaration semantics.
-If the user wants `type` to remain a nominal spelling, propose an explicit constructor-bearing sugar and a separate alias spelling, then update this document with its exact grammar and expansion.
-Do not silently keep the old erased-brand semantics alongside the new core.
-Do not generate constructor names by capitalization: mshell is intentionally case-independent.
+This changes the meaning of the `type` declarations on main.
+No `type` declaration exists in `lib/std.msh`; five test files declare types and are migrated as part of P2.
+Do not keep the old erased-brand semantics alongside the new core.
+Do not generate constructor names by capitalization; identifiers are case-sensitive and capitalization carries no meaning.
 
-### G2: mutable containers and persistent refinements
+### G2: mutable containers and refinements
 
-Recommended for minimum type-system complexity: value semantics for ordinary lists and dictionaries, including nested containers.
-An update returns a new logical value; another reference retains its old logical value.
-This is a significant runtime migration, not an incidental checker fix, and requires explicit user approval.
-Grid/GridView/GridRow have separate reference semantics; this recommendation does not silently change them.
+Decided: containers keep shared reference semantics at runtime, and container types are invariant in the checker.
+The full policy is in section 0.
+Value semantics, copy-on-validate, ownership, and alias-aware refinement invalidation were considered and rejected.
+Do not claim soundness by returning a read-only view of a shared object, and do not special-case `tryAs` to copy.
 
-If shared mutation must remain, a complete storage/alias/refinement policy is required before shipping persistent typed refinements.
-Possible policies include ownership, alias-aware refinement invalidation, or runtime-enforced storage contracts.
-The implementation agent must write and obtain approval of that policy as an addendum before implementing it.
-It is not specified by this plan because the user has not selected it.
-Do not claim soundness by merely returning a read-only view: another alias can still mutate the object.
-Do not special-case `tryAs` to copy while equivalent typed patterns share the object.
-Do not regard a shallow copy as isolation for nested mutable containers.
+### G3: typed-pattern spelling
 
-### G3: proposed typed-pattern spelling
+Decided: `is TypeExpr binding`.
 
-This plan proposes `is TypeExpr binding` as a typed pattern.
 `is` is contextual in pattern-head position, not a new globally reserved word.
 The binding is mandatory and may be `_`.
 Example: `is [int] items : ...`.
-Approve this spelling along with G1, or replace it consistently in the parser plan and examples.
-The semantics do not depend on the spelling.
-
-Implementation may inspect code, prepare source-selection notes, and establish baselines before these gates are answered.
-Do not fill unresolved decisions with ad hoc permissive behavior.
+`is` marks the one pattern class that performs full structural validation of the subject; the other pattern heads test a kind, a tag, a literal, or a length or key presence.
+Bare primitive keywords (`int n`) keep their existing meaning; for primitives the kind test and the full check coincide.
+No further bare-name sugar for aliases in V1.
 
 ## 2. Minimal semantic core
 
@@ -90,7 +141,7 @@ Unions describe alternatives already present in the runtime value.
 Enums distinguish constructors even when their payload types are identical.
 Neither subsumes the other without changing runtime representations.
 
-Recommended alias examples (depend on G1):
+Alias examples:
 
 ```mshell
 type Names = [str]
@@ -141,7 +192,7 @@ Extend assertive destructuring to constructor and typed patterns through the sam
 Bindings must be valid names or `_`; reject duplicate non-wildcard bindings before executing any arm.
 On mismatch or malformed pattern, never install partial bindings.
 
-Typed patterns use the proposed form:
+Typed patterns use this form:
 
 ```mshell
 @input match
@@ -230,7 +281,7 @@ Do not add accessor-generation syntax in V1; ordinary definitions suffice.
 ## 6. Static ascription, validation, and construction
 
 `value as T` requires assignability from the source to T.
-It can guide empty-literal inference and widen a type; it cannot pick one union alternative.
+It can guide empty-literal inference and, for a fresh literal, declare a wider element type (`[1 2 3] as [int | str]`); it cannot pick one union alternative, and it cannot change the container type of a value that already has one.
 Checking a call to a nominal constructor checks its payload types and produces its declared enum type.
 There is no special "casting mode" in generic unification.
 
@@ -240,7 +291,7 @@ An optional diagnostic may reject or warn about tests proved disjoint, but the i
 Do not reuse `castOk` as an overlap check.
 Do not infer disjointness of `[int]` and `[str]`: empty lists can satisfy both structural predicates.
 
-The key laws, subject to the approved storage policy:
+The key laws:
 
 - Alias replacement does not change acceptance.
 - A constructor's result fits its nominal type, never another enum solely because payloads match.
@@ -251,7 +302,7 @@ The key laws, subject to the approved storage policy:
 
 Keep semantic equivalence, directional assignability, generic inference, and pattern refinement as distinct APIs/concepts.
 Function applications instantiate generics; function bodies check rigid generics.
-Quotation inputs are contravariant and outputs covariant under the permitted storage rules.
+Quotation inputs are contravariant and outputs covariant; list element and dictionary value types inside them are invariant (section 0, G2 policy).
 Preserve occurs checks for inference variables; explicit declaration recursion is not permission to infer `a = [a]`.
 Audit `TidBottom`: actual bottom can flow into any expected type, but arbitrary actual values must not satisfy expected bottom.
 Preserve bottom as the empty/divergent case, not an unchecked wildcard.
@@ -273,7 +324,7 @@ Validate the whole target descriptor eagerly before inspecting data.
 Unknown names and invalid targets must fail even for empty lists, `none`, or a union whose first arm matches.
 Do not make declaration errors value-dependent.
 
-For V1 boundary validation, recommend rejecting cyclic value/type traversal paths with a resource/validation error; finite recursive trees remain supported.
+For V1 boundary validation, reject cyclic value/type traversal paths with a resource/validation error; finite recursive trees remain supported.
 Use an iterative worklist and active-path tracking keyed by value identity and resolved target ID.
 Repeated sharing in a DAG is not a cycle; completed pair results may be memoized.
 Resource budgets count bounded work and must be shared by `match is` and `tryAs`.
@@ -297,14 +348,14 @@ Store and check this remainder in both static and runtime models.
 Do not parse a wildcard constraint and discard it.
 A homogeneous dictionary does not prove any particular required key exists.
 Remove the current unsound general dict-to-required-shape compatibility rule.
-Shape-to-dictionary compatibility must respect complete value information and the G2 write policy.
+Shape-to-dictionary compatibility must respect complete value information and the G2 policy: an open shape with an unknown remainder is not a `{str: T}`.
 
-Preserve main's actual JSON number behavior in this work unless separately approved: current parsing produces floats for JSON numbers.
-Give the built-in Json descriptor precisely the alternatives the parser produces; omit int if the parser remains float-only.
+JSON number parsing changes as part of this work (approved 2026-09-14): a number with no fraction and no exponent parses as `int`, all others as `float`.
+The built-in Json descriptor includes both `int` and `float`.
 Do not make `tryAs int` silently convert integral floats.
-If integer parsing is changed separately, update Json, runtime tests, documentation, and validation expectations together.
+Update parser, Json, runtime tests, documentation, and validation expectations together.
 
-For HTML, the recommended minimal migration preserves the existing dictionary runtime:
+For HTML, the minimal migration preserves the existing dictionary runtime:
 define built-in HtmlNode as a transparent recursive structural alias with the precise node fields.
 This preserves keys/getters/serialization and does not force a new tag into parseHtml output.
 Nominal domain wrappers can contain an HtmlNode through constructors if callers want that distinction.
@@ -370,6 +421,6 @@ Important references:
 
 ## 11. Completion criterion
 
-The result is complete only when the implementation plan's acceptance matrix passes, migration documentation matches runtime behavior, and the approved G2 policy prevents stale refinements.
+The result is complete only when the implementation plan's acceptance matrix passes, migration documentation matches runtime behavior, and the G2 policy in section 0 is enforced: invariant container types and every in-place write checked against the container's static type.
 Deleting duplicated helpers without establishing those properties is not completion.
 Do not ship a mechanically merged branch with a promise to reconcile the core semantics later.

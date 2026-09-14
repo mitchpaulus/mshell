@@ -2,8 +2,8 @@
 
 Read [the design](type-checker-enhancements-design.md) completely first.
 This guide is intended to be executable by an agent with limited prior mshell context.
-Do not implement until the relevant review gates are answered.
-Record answers and update examples before coding; the recommended alias spelling and value semantics are not yet approved changes.
+Every review gate and open question is answered in design section 0; read it before coding.
+Do not implement until the user gives the implementation instruction.
 
 ## 1. Scope and operating instructions
 
@@ -76,7 +76,7 @@ Source: `fix/recursive-named-type-narrow-hang` at `4328701`.
 
 Do not import branded-union placeholders, `casting` mode, recursive tag-in casts, or getter-specific nominal transparency.
 Alias placeholders and closed-type traversal optimizations should be implemented against the new reference kind.
-If main's Json numbers remain floats, do not copy the int alternative from the recursive branch's Json descriptor.
+JSON integer parsing was approved 2026-09-14 (design section 0), so the Json descriptor includes both `int` and `float`; the recursive branch's int alternative is the intended shape.
 
 ### try-as branch: reuse syntax, boundary tests, and runtime cases
 
@@ -128,7 +128,7 @@ Do not force every static type to provide a successful validator: explicitly rep
 
 ### P0: decisions and baseline
 
-- Resolve G1/G2/G3 and amend the design with exact decisions.
+- G1/G2/G3 and the other open questions are answered in design section 0; re-read it before starting.
 - Inventory existing uses of type/as, especially in lib/std.msh, tests, startup handling, docs, and editor support.
 - Record which existing tests must intentionally change because they assert old nominal-brand behavior.
 - Rebuild and run all three required test commands; record pre-existing failures without masking them.
@@ -141,6 +141,7 @@ Exit: approved target semantics and a baseline report.
 - Predeclare all names before body resolution.
 - Validate guarded alias cycles and reject duplicates/unknown names deterministically.
 - Wire startup, file execution, checker, and LSP to the same resolved declarations.
+- Keep checker state (variable environment, substitution, declaration graph) able to persist across REPL lines; the REPL is intended to check by default.
 - Preserve scope; do not expose later files' declarations prematurely or add local generativity.
 - Implement finite formatting for recursive descriptors.
 
@@ -157,18 +158,34 @@ Exit: forward/self/mutual declaration tests, invalid-cycle tests, and diagnostic
 
 Exit: nominal ID/list/record/tree cases work, wrong nominal arguments fail, recursive runtime operations terminate.
 
-### P3: relations and storage policy
+### P3: relations and the G2 policy
 
 - Separate alias-aware equivalence/assignability from inference variable binding.
 - Implement guarded pair reasoning for recursive aliases with transactional union/overload trials.
 - Keep generic-body variables rigid and preserve inference occurs checks.
 - Fix shape presence/remainder handling and bottom directionality.
-- Implement the approved G2 policy and its aliasing tests before returning persistent new refinements.
-- If value semantics were selected, audit ALL mutating list/dict operations and variable/reference paths; do not change just append/set.
-- Explicitly audit lists/dicts reachable through Grid cells or other reference-bearing values; isolate or reject unsupported refinement paths until safe.
+- Make list element and dictionary value types invariant in assignability: `[int]` is rejected where `[int | str]` is declared, and the reverse.
+- Remove the two widening `append` overloads (`([t] u -- [t | u])`, `(t [u] -- [t | u])`) and audit every other mutating list/dict builtin so each write is checked against the container's static type.
+- Keep the bind-once rule for an empty literal's element type; a mixed list is declared with `[] as [int | str]`.
+- Reject writes to keys an open shape does not declare, unless a `*: T` remainder is declared.
+- Explicitly audit lists/dicts reachable through Grid cells or other reference-bearing values; reject unsupported refinement paths until safe.
 
-Exit: negative aliasing/refinement tests fail safely, ordinary collection workflows pass, and no global cast mode remains.
-If G2 is unresolved, stop this phase and report that gate; do not mark the feature complete.
+These two programs pass the checker on main and fail at runtime; both become `typecheck_fail` cases:
+
+```mshell
+[1 2 3] xs!
+@xs "a" append drop
+@xs (1 +) map
+```
+
+```mshell
+def addLabel ([int | str] -- [int | str]) "total" append end
+[1 2 3] nums!
+@nums addLabel drop
+@nums (1 +) map
+```
+
+Exit: both programs are rejected, a read-only generic `([a] -- str)` accepts a `[int]`, ordinary collection workflows pass, and no global cast mode remains.
 
 ### P4: shared patterns and typed validation
 
@@ -196,6 +213,7 @@ Exit: paired sugar/expansion tests agree on stack, bindings, results, evaluation
 ### P6: builtins, migration, and handoff
 
 - Register Json and HtmlNode using the shared graph and actual parser representations.
+- Audit every read-only list and dictionary definition in lib/std.msh and declare it generically (`[a]`, `{str: a}`); a definition that writes keeps its concrete element type. Checking is intended to become the default, so spurious invariance rejections from the standard library are bugs.
 - Keep HTML helpers typed precisely and migrate nominal usages to constructors where intended.
 - Update documentation source and doc/mshell.md, and rebuild docs.
 - Update editor grammars and relevant completions if syntax/CLI surfaces changed.
@@ -245,8 +263,8 @@ Do not merely assert implementation details.
 | A31 | Inference variable required to equal [itself] | Occurs-check rejection; declared recursion unaffected |
 | A32 | Failed union/overload trial involving recursion | Does not leave successful memo assumptions or bindings behind |
 | A33 | Empty lists tested against element types | Do not diagnose definitely disjoint solely from different element types |
-| A34 | Aliased mutable data changed after successful refinement | Cannot subsequently use a stale certified type unsafely |
-| A35 | Nested mutation through an alias | Same protection as A34; shallow-only isolation fails this test |
+| A34 | `[int]` passed where `[int | str]` is declared, or a str appended to a `[int]` | Rejected at the call site or at the write |
+| A35 | Nested container: `[[int]]` element passed to a `([int | str] -- ...)` definition, or written to through `nth` | Rejected by the same invariance rule; a `[[int]]` is not a `[[int | str]]` |
 | A36 | Actual bottom vs expected bottom | Directional subtyping; arbitrary actual values do not satisfy bottom |
 | A37 | Enum runtime str/JSON/equality/sort on deep data | Correct specified tagged behavior and termination |
 | A38 | parseJson numbers | Runtime representation, Json descriptor, and typed checks agree |
@@ -255,7 +273,7 @@ Do not merely assert implementation details.
 
 ### Concrete seed programs
 
-These use the recommended G1/G3 spellings.
+These use the decided G1/G3 spellings.
 They are target acceptance programs, not claims of compatibility with main today.
 
 ```mshell
@@ -291,17 +309,18 @@ def selectInt (int | str -- Maybe[int]) tryAs int end
 "bad" selectInt match just _ : 1 exit, none : , end
 ```
 
-Storage/refinement adversarial scenario (encode with the approved mutation policy):
+Refinement scenario under the G2 policy:
 
-1. Create a container with a field whose declared storage type allows int or str, currently holding an int.
-2. Keep two references to it.
-3. Use tryAs or a typed pattern to establish a required int field through one reference.
-4. Write a str through the other reference, including a nested-container variant.
-5. Attempt integer arithmetic through the refined reference.
+1. Create a container whose declared type allows int or str in a field, currently holding an int.
+2. Keep two names for it.
+3. Use `tryAs` or `is` to establish a required int field through one name, binding a new name at the narrower type.
+4. Write a str through the other name.
+5. Attempt integer arithmetic through the narrowed name.
 
-The program must be rejected, the unsafe write prevented, the refinement invalidated, or the references isolated according to G2.
-It must not type-check and then fail because a certified int became a str.
-Run equivalent scenarios for direct match, tryAs, constructor payloads, callbacks, and nested lists.
+Step 4 is legal for the wider name and step 5 is legal for the narrower one, so this program type-checks and fails at runtime.
+This is the documented hole in section 0, rule 6: it requires narrowing a value already held under a wider container type, and the runtime's per-operation check stops the arithmetic.
+Add it as a runtime test that documents the behavior, not as a checker test.
+Every other route to the same state, plain assignability, `as`, and in-place writes, must be rejected by the checker; test those as `typecheck_fail` cases for direct match, `tryAs`, constructor payloads, callbacks, and nested lists.
 
 ## 6. Build and verification commands
 
