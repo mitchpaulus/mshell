@@ -181,6 +181,24 @@ end
 `)
 }
 
+func TestKeywordArmNarrowingThroughNestedBrandsTerminates(t *testing.T) {
+	// Inspect each successive underlying brand when deciding whether a
+	// union member can match a runtime container keyword. Re-reading the
+	// outer brand at every step loops forever for an alias of an alias.
+	expectTypeOk(t, `
+type Ints = [int]
+type IntsAlias = Ints
+type Value = IntsAlias | str
+def classify (Value -- int)
+  match
+    list items : @items drop 1,
+    _ : 0,
+  end
+end
+[1 2] as Ints as IntsAlias as Value classify drop
+`)
+}
+
 func TestBuiltinJsonType(t *testing.T) {
 	expectTypeOk(t, `
 def depth (Json -- int)

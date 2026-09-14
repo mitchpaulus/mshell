@@ -1694,9 +1694,11 @@ func (c *Checker) narrowKeywordBinding(keyword Token, subject TypeId) TypeId {
 	}
 	var kept []TypeId
 	for _, m := range c.arena.UnionMembers(subject) {
-		k := c.arena.Kind(m)
+		underlying := m
+		k := c.arena.Kind(underlying)
 		for k == TKBrand {
-			k = c.arena.Kind(TypeId(c.arena.Node(m).B))
+			underlying = TypeId(c.arena.Node(underlying).B)
+			k = c.arena.Kind(underlying)
 		}
 		switch keyword.Lexeme {
 		case "list":
