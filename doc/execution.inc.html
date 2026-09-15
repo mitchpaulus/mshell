@@ -9,6 +9,26 @@ For example:
 </pre>
 
 <p>
+An important feature is that nested lists are flattened before execution.
+</p>
+
+<pre>
+<code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;my-cmd&#39;</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;a.pdf&#39;</span> <span class="mshellSINGLEQUOTESTRING">&#39;b.pdf&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Executes: my-cmd a.pdf b.pdf</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+<p>
+This is most useful when you have a command or definition that <em>produces</em> a list of arguments.
+You can just leave that nested list on the stack and it all works out.
+</p>
+
+<pre>
+<code><span class="mshellLINECOMMENT"># Assume myVar variable is a list with [&#39;1.pdf&#39; &#39;2.pdf&#39;]</span>
+<span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;my-cmd&#39;</span> <span class="mshellVARRETRIEVE">@myVar</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellBANG">!</span> <span class="mshellLINECOMMENT"># Executes: my-cmd 1.pdf 2.pdf</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+<p>
 Often there are different things you want out of your execution,
 or you want different behavior depending on the exit code.
 <code>mshell</code> gives you full flexibility to decide with concise syntax.

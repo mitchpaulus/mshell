@@ -8,9 +8,9 @@ tests/quote_stderr_redirect.txt
 tests/test_quote_stderr.txt
 tests/msh-scripts/
 
-*.pyc
-__pycache__
+.redom/
 
+*.pyc
 .codex
 __pycache__/
 
