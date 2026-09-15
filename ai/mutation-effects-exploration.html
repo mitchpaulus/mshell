@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>Mutation-aware checking for mshell</title>
+  <style>
+
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: 1.5em;}
+div.column{flex: auto;}
+@media screen {
+div.columns{gap: min(4vw, 1.5em);}
+div.column{overflow-x: auto;}
+}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+
+ul.task-list[class]{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+font-size: inherit;
+width: 0.8em;
+margin: 0 0.8em 0.2em -1.6em;
+vertical-align: middle;
+}
+.display.math{display: block; text-align: center; margin: 0.5rem auto;}
+</style>
+  <style type="text/css">:root {
+color-scheme: light dark;
+--page: #f7f8fa;
+--paper: #ffffff;
+--text: #233044;
+--muted: #556579;
+--line: #dce3ec;
+--accent: #195caa;
+--soft: #edf4fd;
+--code: #f1f4f8;
+--warning: #fff7e8;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: 2rem; }
+body {
+margin: 0 auto;
+padding: 3.5rem 3rem 5rem 20rem;
+max-width: 88rem;
+background: var(--page);
+color: var(--text);
+font: 17px/1.75 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+header, body > section, body > aside { max-width: 52rem; }
+header { margin-bottom: 2rem; }
+h1 { font-size: clamp(2rem, 4vw, 3rem); line-height: 1.15; letter-spacing: -.035em; margin: 0 0 1rem; }
+h2 { font-size: 1.55rem; line-height: 1.3; letter-spacing: -.02em; margin: 0 0 1.5rem; }
+h3 { font-size: 1.15rem; line-height: 1.45; margin-top: 2rem; }
+p { margin: 1rem 0; }
+a { color: var(--accent); text-underline-offset: .18em; }
+a:hover { text-decoration-thickness: 2px; }
+a:focus-visible { outline: 3px solid var(--accent); outline-offset: 4px; }
+section.level2 {
+margin: 2rem 0;
+padding: 2rem;
+background: var(--paper);
+border: 1px solid var(--line);
+border-radius: 12px;
+}
+#TOC {
+position: fixed;
+top: 2rem;
+left: max(1.5rem, calc((100vw - 88rem) / 2 + 1.5rem));
+width: 16rem;
+max-height: calc(100vh - 4rem);
+overflow-y: auto;
+padding: 1rem;
+font-size: .85rem;
+line-height: 1.5;
+}
+#TOC::before { content: "IN THIS EXPLORATION"; display: block; font-size: .72rem; font-weight: 750; letter-spacing: .09em; color: var(--muted); margin-bottom: 1rem; }
+#TOC ul { list-style: none; padding: 0; margin: 0; }
+#TOC li { margin: 0 0 .65rem; }
+#TOC a { text-decoration: none; display: block; }
+#TOC a:hover { text-decoration: underline; }
+code { font: .88em/1.6 ui-monospace, "Cascadia Code", "SFMono-Regular", Consolas, monospace; background: var(--code); padding: .12em .3em; border-radius: 4px; overflow-wrap: anywhere; }
+pre { background: var(--code); border: 1px solid var(--line); border-radius: 8px; padding: 1.2rem; overflow-x: auto; line-height: 1.65; }
+pre code { padding: 0; background: transparent; overflow-wrap: normal; }
+pre.mshell::before { content: "MSHELL EXAMPLE"; }
+pre.text::before { content: "CHECKER MODEL · ILLUSTRATIVE NOTATION"; }
+pre.mshell::before, pre.text::before { display: block; margin-bottom: .85rem; color: var(--muted); font: 650 .65rem/1.5 system-ui, sans-serif; letter-spacing: .08em; }
+blockquote, .notice { margin: 1.5rem 0; padding: 1rem 1.3rem; background: var(--soft); border-left: 4px solid var(--accent); border-radius: 0 8px 8px 0; }
+blockquote { font-size: 1.08rem; font-weight: 550; }
+blockquote p, .notice p { margin: .4rem 0; }
+.notice { font-size: .93rem; }
+.notice strong { display: block; margin-bottom: .5rem; }
+table { display: block; overflow-x: auto; width: 100%; border-collapse: collapse; font-size: .88rem; margin: 1.5rem 0; }
+th { text-align: left; background: var(--soft); }
+th, td { padding: .8rem; border: 1px solid var(--line); vertical-align: top; min-width: 7rem; }
+td:last-child { min-width: 14rem; }
+li { margin-bottom: .55rem; }
+section[id*="persistent-promises"] { border-top: 4px solid #b78328; }
+section[id*="persistent-promises"] > h2::before { content: "OPEN DESIGN DECISION"; display: block; color: var(--muted); font: 700 .7rem/1.5 system-ui, sans-serif; letter-spacing: .08em; margin-bottom: .7rem; }
+section[id*="bounded-experiment"] { border-top: 4px solid var(--accent); }
+@media (prefers-color-scheme: dark) {
+:root { --page: #131b27; --paper: #1a2534; --text: #e1e8f2; --muted: #adbed1; --line: #34455a; --accent: #89beff; --soft: #23364e; --code: #142031; --warning: #352d20; }
+}
+@media (max-width: 1000px) {
+body { padding: 2rem 1.2rem 3rem; max-width: 56rem; }
+#TOC { position: static; width: auto; max-height: none; padding: 1.3rem; border: 1px solid var(--line); border-radius: 8px; }
+#TOC ul { columns: 2; column-gap: 2rem; }
+#TOC li { break-inside: avoid; }
+}
+@media (max-width: 560px) {
+body { font-size: 16px; padding: 1.5rem .8rem; }
+section.level2 { padding: 1.2rem; }
+#TOC ul { columns: 1; }
+}
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+@media print {
+:root { --page: white; --paper: white; --text: black; --muted: #444; --line: #bbb; --accent: #234b73; --soft: #f3f5f7; --code: #f6f6f6; }
+body { padding: 0; max-width: none; font-size: 10.5pt; }
+#TOC { position: static; width: auto; max-height: none; columns: 2; }
+#TOC::before { column-span: all; }
+section.level2 { padding: 1rem 0; border: 0; border-top: 1px solid var(--line); border-radius: 0; }
+h2, h3 { break-after: avoid; }
+pre, blockquote, tr { break-inside: avoid; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+table { display: table; font-size: 9pt; }
+a { color: inherit; }
+}
+</style>
+</head>
+<body>
+<header id="title-block-header">
+  <h1>Mutation-aware checking for mshell</h1>
+  <p>Where the exploration has landed: signature checks plus symbolic execution of definition bodies.</p>
+</header>
+<nav id="TOC" aria-label="Contents">
+  <ul>
+    <li><a href="#direction">1. Agreed direction</a></li>
+    <li><a href="#two-checks">2. Both checks on definitions</a></li>
+    <li><a href="#validation-example">3. Validation and a shared list</a></li>
+    <li><a href="#definition-example">4. Mutation inside a definition</a></li>
+    <li><a href="#storage">5. Shared storage, not copied types</a></li>
+    <li><a href="#control-flow">6. Branches, loops, and recursion</a></li>
+    <li><a href="#contracts">7. Persistent payload contracts</a></li>
+    <li><a href="#diagnostics">8. Errors with useful locations</a></li>
+    <li><a href="#other-effects">9. I/O and possible failures</a></li>
+    <li><a href="#boundaries">10. Guarantee and boundaries</a></li>
+    <li><a href="#prototype">11. A bounded prototype</a></li>
+  </ul>
+</nav>
+<aside class="notice">
+  <strong>Exploration update · 2026-09-14</strong>
+  <p>This records the direction reached in discussion, not an implemented feature or a completed soundness proof.
+  The original type-checker design and implementation plan remain unchanged; their accepted aliasing hole conflicts with the stricter goal recorded here.</p>
+  <p>mshell examples involving <code>tryAs</code> and the proposed structural type syntax describe intended behavior.
+  Checker-state displays are explanatory notation, not new language syntax.</p>
+</aside>
+
+<section id="direction" class="level2">
+  <h2>1. Agreed direction</h2>
+  <blockquote><p>A program that passes checking must not later fail with an actual type error because a mutation invalidated a fact the checker relied on.</p></blockquote>
+  <p>Rejecting some programs that would run successfully is acceptable.
+  Accepting a program that later adds an integer to a string because of stale container information is not.</p>
+  <p>The preferred experiment is an evaluator-style checker: follow definition bodies at calls, using abstract values and shared storage identities.
+  Retain declared signatures to check intent and catch bad inputs at useful boundaries.</p>
+  <ul>
+    <li>Keep shared mutable containers at runtime.</li>
+    <li>Track changes to the facts about those containers.</li>
+    <li>Invalidate facts when a potentially conflicting write occurs.</li>
+    <li>Reject operations whose required facts can no longer be established.</li>
+    <li>Start without public effect annotations or a system of reusable mutation summaries.</li>
+  </ul>
+  <p>This is symbolic execution over an approximation of program state, also called abstract interpretation.
+  It executes neither external commands nor file operations during checking.</p>
+</section>
+
+<section id="two-checks" class="level2">
+  <h2>2. Both checks on definitions</h2>
+  <table>
+    <thead><tr><th>Stage</th><th>Purpose</th></tr></thead>
+    <tbody>
+      <tr><td>Definition check</td><td>Analyze the body against declared inputs and outputs to check its contract.</td></tr>
+      <tr><td>Call boundary check</td><td>Reject immediately when actual arguments do not satisfy the input requirements.</td></tr>
+      <tr><td>Call-specific body analysis</td><td>Follow the body using the caller's actual reference relationships; propagate mutations and output references back to the caller.</td></tr>
+    </tbody>
+  </table>
+  <p>A signature remains useful documentation and an enforced contract.
+  It is not a complete account of what happens to shared storage during a call.</p>
+  <p>For this exploration, an ordinary container parameter describes requirements at entry.
+  A body may change those contents if the checker accounts for the change and no persistent obligation is violated.
+  Declared outputs must hold at successful return.</p>
+  <h3>Definition parameters might alias</h3>
+  <p>The initial check cannot assume that two parameters represent different objects.
+  It must analyze possible aliasing conservatively, or retain an explicit obligation for call-specific checking.
+  Passing the signature check alone cannot discharge a deferred alias-dependent obligation.</p>
+  <pre class="mshell"><code>def writeThenRead ({age: int} {age: int} -- int)
+    left!, right!
+    @left "age" "old" set drop
+    @right :age? 1 +
+end
+
+{"age": 42} dup writeThenRead</code></pre>
+  <p>At this call, both arguments reference the same dictionary.
+  The write therefore makes the subsequent arithmetic invalid inside the body.
+  A later implementation could accept calls with definitely distinct dictionaries by checking their actual alias relationships.</p>
+  <p>Optional signatures were discussed, but are not needed to test this approach.
+  Keep the existing signature surface for the initial prototype; signature omission is a separate decision.</p>
+</section>
+
+<section id="validation-example" class="level2">
+  <h2>3. Validation and a shared list</h2>
+  <pre class="mshell"><code>[1 2 3] as [int | str] mixed!
+@mixed tryAs [int] ? integers!
+@mixed "hello" append drop
+@integers (1 +) map</code></pre>
+  <p>The declaration permits strings, but validation establishes that the current contents are integers.
+  Validation returns the same list, so both names reference storage L.</p>
+  <table>
+    <thead><tr><th>Point in program</th><th>Shared state</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>Before validation</td><td><code>mixed → L</code></td><td>List described as <code>[int | str]</code>.</td></tr>
+      <tr><td>Successful validation and unwrap</td><td><code>mixed → L; integers → L</code></td><td>Current contents known to be integers.</td></tr>
+      <tr><td>Append string through <code>mixed</code></td><td>L now contains <code>int | str</code>.</td><td>The integer-only fact is invalidated for every reference.</td></tr>
+      <tr><td>Integer-only <code>map</code></td><td>The read still reaches L.</td><td>Rejected before execution.</td></tr>
+    </tbody>
+  </table>
+  <h3>A saved successful check is not a permanent certificate</h3>
+  <pre class="mshell"><code>@mixed tryAs [int] result!
+@mixed "hello" append drop
+@result ? (1 +) map</code></pre>
+  <p>Even if <code>result</code> is <code>just</code>, its payload still references L.
+  Unwrapping it later must not restore the old integer-only fact.
+  Evidence of a successful check must remain associated with the storage it checked and be invalidated by relevant writes.</p>
+  <p>If a scalar integer was extracted before a mutation, that scalar stays an integer.
+  An extracted child list or dictionary remains a tracked reference.</p>
+</section>
+
+<section id="definition-example" class="level2">
+  <h2>4. Mutation inside a definition</h2>
+  <pre class="mshell"><code>def overwriteAge ({name: str, *: int | str} --)
+    "age" "old" set drop
+end
+
+{"name": "Ada", "age": 42}
+dup overwriteAge
+:age? 1 +</code></pre>
+  <p>The parameter permits the write, so checking only the body against that parameter type misses the caller's later problem.
+  Call-specific analysis preserves the dictionary's identity through the call.</p>
+  <pre class="text"><code>Before call:
+    Stack: D D
+    Storage: D → {name: str, age: int}
+
+Follow overwriteAge:
+    "age" "old" set → D.age becomes str
+    drop            → consume one reference to D
+
+After call:
+    Stack: D
+    Storage: D → {name: str, age: str}
+
+:age? → str
+1 +   → type error</code></pre>
+  <p>The call can be allowed while the later arithmetic is rejected.
+  No effect annotation is necessary to discover the write.</p>
+</section>
+
+<section id="storage" class="level2">
+  <h2>5. Shared storage, not copied types</h2>
+  <p>The checker needs more than a stack of type descriptions.</p>
+  <pre class="text"><code>Stack and variables: abstract values and references to storage
+Storage:             current fields, element types, and child references
+Evidence:            validation facts and their storage dependencies
+Provenance:          where facts were established or changed
+Effects:             possible I/O and failure paths, as a later extension</code></pre>
+  <p><code>dup</code>, variable retrieval, getters, indexing, Maybe payloads, and enum payloads must preserve reference relationships.
+  Returning a new outer container does not imply that its children are new.</p>
+  <pre class="mshell"><code>[1 2] child!
+[@child] outer!
+@outer :0: "bad" append drop
+@child (1 +) map</code></pre>
+  <p>The getter reaches the same child list as <code>@child</code>.
+  Its mutation invalidates integer-only facts about the child and any deep validation of the outer list that depends on those facts.</p>
+  <h3>Precise and uncertain writes</h3>
+  <ul>
+    <li>A known-key write to one definitely identified dictionary can replace that field's current type.</li>
+    <li>An append adds the new element's type to the list's possible contents.</li>
+    <li>A dynamic-key write conservatively affects every field the key could name, plus possible extra entries.</li>
+    <li>If a reference might point to A or B, account for a possible write to either; do not assume both were definitely overwritten.</li>
+    <li>A checker location representing multiple runtime allocations requires conservative updates, even though it has one internal ID.</li>
+  </ul>
+  <h3>Values that carry relevant references</h3>
+  <table>
+    <thead><tr><th>Value</th><th>Relevant state</th></tr></thead>
+    <tbody>
+      <tr><td>List / dictionary</td><td>Mutable entries and potentially mutable children.</td></tr>
+      <tr><td>Grid</td><td>Cells, columns, schema, and grid/column metadata dictionaries.</td></tr>
+      <tr><td>GridView / GridRow</td><td>References to a backing Grid whose state may change.</td></tr>
+      <tr><td>Maybe / proposed enum</td><td>A stable wrapper or tag can hold a reference to mutable storage.</td></tr>
+      <tr><td>Quotation</td><td>Captured variable cells and effects when executed.</td></tr>
+    </tbody>
+  </table>
+  <p>Even scalar-only Grid cells would not eliminate schema effects or metadata aliases.
+  The current implementation does not uniformly enforce scalar-only cells: generic column storage accepts arbitrary objects through some paths, while operations such as <code>updateCol</code> reject container results.</p>
+  <p>Quotations capture a variable map by reference.
+  Rebinding a captured variable can change the object a quotation accesses later, so tracking only container identities at quotation creation is insufficient.</p>
+</section>
+
+<section id="control-flow" class="level2">
+  <h2>6. Branches, loops, and recursion</h2>
+  <p>Following bodies directly is the preferred starting point for small scripts.
+  The checker does not reproduce runtime iteration counts or perform actual I/O.</p>
+  <table>
+    <thead><tr><th>Construct</th><th>Analysis</th></tr></thead>
+    <tbody>
+      <tr><td>Ordinary call</td><td>Follow the body with caller-specific references and a fresh local scope.</td></tr>
+      <tr><td>Unknown condition</td><td>Analyze both reachable alternatives and combine possible storage states.</td></tr>
+      <tr><td>Loop</td><td>Include changes from previous iterations and reanalyze until a conservative state stabilizes.</td></tr>
+      <tr><td>Recursive call</td><td>Use an evolving approximation at the recursion boundary rather than expand forever.</td></tr>
+      <tr><td>Callback</td><td>Apply the quotation's effects when it executes, accounting for captures and repeated invocation.</td></tr>
+    </tbody>
+  </table>
+  <pre class="mshell"><code>[1] xs!
+(
+    @xs (1 +) map drop
+    @xs "bad" append drop
+    @stop if break end
+) loop</code></pre>
+  <p>Assuming <code>stop</code> is a bound boolean, a second iteration might perform arithmetic after the string append.
+  Checking just the first iteration would be unsound.</p>
+  <p>A recursive signature can bound stack inputs and outputs, but it does not describe mutations to other live references.
+  Recursion therefore needs storage approximations too, or must be rejected when those effects are unsupported.</p>
+  <p>Analysis limits must produce conservative loss of precision or an explicit rejection, never acceptance with incomplete facts.
+  Cache summaries only if measurements justify it, and include the relevant alias and storage context in any reuse rule.</p>
+</section>
+
+<section id="contracts" class="level2">
+  <h2>7. Persistent payload contracts</h2>
+  <p><strong>Recommended rule, still requiring detailed design:</strong> preserve an enum's declared mutable-payload contract through every alias.</p>
+  <p>If an enum promises a dictionary payload with <code>age: int</code>, wrapping D introduces an obligation that D's age remain an integer while that promise can be observed.
+  A conflicting write through another reference must be rejected.</p>
+  <p>This differs from an ordinary local validation fact, which can be invalidated when storage changes.
+  Constructor patterns rely on the declared payload type, so silently forgetting that contract would be unsafe.</p>
+  <p>Obligations must extend through nested mutable children.
+  A conservative first version could keep an obligation once introduced rather than attempt to prove when the final dependent reference disappears.</p>
+  <p>The prototype can exclude mutable enum payloads initially.
+  Supporting them safely is a required follow-on before claiming the complete nominal-plus-validation design is covered.</p>
+</section>
+
+<section id="diagnostics" class="level2">
+  <h2>8. Errors with useful locations</h2>
+  <p>Retain signatures to reject obvious input mismatches at the call boundary.
+  For mutation-related errors, keep the origin of type changes alongside their current descriptions.</p>
+  <pre class="text"><code>Cannot add int to str.
+  At: :age? 1 +
+
+The dictionary's "age" field became str at:
+  dup overwriteAge
+
+Inside overwriteAge:
+  "age" "old" set</code></pre>
+  <p>A call stack alone is insufficient: the mutation may have occurred in an earlier call that has already returned.
+  Report the incompatible use, the write that invalidated its assumption, and the reference relationship connecting them.</p>
+  <p>Distinguish a demonstrated conflict from a conservative rejection such as “this callback may change the validated list; its element type is no longer known.”</p>
+</section>
+
+<section id="other-effects" class="level2">
+  <h2>9. I/O and possible failures</h2>
+  <p>The same traversal can collect effects beyond mutation.
+  This is a planned extension point, not a requirement to add public effect syntax now.</p>
+  <pre class="mshell"><code>def loadNames (path -- [str])
+    readFile lines
+end</code></pre>
+  <pre class="text"><code>Stack:       path → [str]
+I/O:         reads a file
+May fail:    file read
+Mutation:    no changes to caller-owned containers</code></pre>
+  <pre class="mshell"><code>def requireInt (str -- int)
+    toInt ?
+end</code></pre>
+  <p><code>requireInt</code> may fail when unwrapping a missing parse result.
+  This is an intentional operational failure, not evidence that an integer operation received a string after successful checking.</p>
+  <ul>
+    <li>Calls include effects from the called body.</li>
+    <li>Creating a quotation records its latent effects; executing it applies them.</li>
+    <li>Unknown branches contribute every possible effect.</li>
+    <li>If failure handlers are supported, remove only the failure cases actually handled and retain effects of the handler itself.</li>
+    <li>External command execution has opaque behavior beyond its declared interface; record execution and failure possibilities conservatively.</li>
+  </ul>
+  <p>Go builtins need an explicit inventory of their effects and failure paths.
+  Symbolic traversal propagates those descriptions; it does not automatically derive them from arbitrary Go code.</p>
+  <p>Initially, possible I/O and operational failures should be reportable information.
+  Mandatory handling or optional “no I/O” and “no unhandled failures” contracts can be separate future decisions.</p>
+</section>
+
+<section id="boundaries" class="level2">
+  <h2>10. Guarantee and boundaries</h2>
+  <p>The desired guarantee excludes actual type errors in accepted programs, including stale assumptions about shared containers.
+  It does not promise successful file access, successful validation, valid indexes in every execution, or unlimited resources.</p>
+  <p>A terminating automatic checker for unrestricted programs cannot accept every semantically safe program while rejecting every unsafe one.
+  We choose conservative rejection when proof is unavailable.
+  This does not make the simple aliasing examples undecidable; it constrains what can be promised for all possible programs.</p>
+  <p>The guarantee requires every relevant mutation path to be modeled or rejected.
+  Unknown code, untracked concurrent writes, and unchecked execution cannot be allowed to invalidate typed facts silently.</p>
+  <h3>Partial execution and the REPL</h3>
+  <p>Persist shared storage and variable relationships between successful REPL lines.
+  A failed line can leave partial mutations behind, so its old state and predicted successful post-state may both be wrong.
+  Conservatively invalidate affected facts, reconstruct them through supported inspection, or reset the checked session.</p>
+  <p>If an operational failure can be caught and execution resumes, its intermediate storage effects must similarly reach the handler.
+  A whole-program type-safety claim also requires auditing existing inference rules, builtin signatures, and runtime representations beyond mutation.</p>
+</section>
+
+<section id="prototype" class="level2">
+  <h2>11. A bounded prototype</h2>
+  <p>Build a separate experimental checker before replacing the existing implementation.
+  Keep the language surface small and make the abstract storage state inspectable.</p>
+  <ol>
+    <li>Represent scalar values, lists, dictionaries, shared references, and variable bindings.</li>
+    <li>Implement known-key reads/writes, list writes, <code>dup</code>, stores, and retrieves.</li>
+    <li>Retain signature boundary checks and walk nonrecursive definitions at calls.</li>
+    <li>Add validation facts, invalidation, and reference-preserving Maybe results.</li>
+    <li>Add conservative branch joins and a bounded, sound loop analysis.</li>
+    <li>Expand to nested containers, quotations, recursion, Grids, and persistent payload obligations.</li>
+    <li>Collect I/O and failure information after mutation safety works.</li>
+  </ol>
+  <p>Unsupported cases must be rejected explicitly while the prototype is incomplete.</p>
+  <table>
+    <thead><tr><th>Acceptance case</th><th>Expected result</th></tr></thead>
+    <tbody>
+      <tr><td>Validated integer list, then string append through another name</td><td>Reject later integer-only use.</td></tr>
+      <tr><td><code>overwriteAge</code> with another reference retained</td><td>Reject later integer arithmetic.</td></tr>
+      <tr><td>Integer append followed by integer arithmetic</td><td>Accept.</td></tr>
+      <tr><td>Mutation through a nested reference</td><td>Update or invalidate every dependent fact.</td></tr>
+      <tr><td>Saved successful validation unwrapped after mutation</td><td>Do not restore stale facts.</td></tr>
+      <tr><td>Two aliased arguments; write through one, read through the other</td><td>Detect the conflict inside the call.</td></tr>
+      <tr><td>A possible later loop iteration sees changed contents</td><td>Reject unsafe use.</td></tr>
+      <tr><td>Write violates an enum's persistent payload contract</td><td>Reject the write, or reject unsupported payloads.</td></tr>
+      <tr><td>File read or <code>tryAs T ?</code> may fail</td><td>Track operational failure separately from type errors.</td></tr>
+    </tbody>
+  </table>
+  <p>Measure real scripts before adding summary caching or public effect annotations.
+  The first question is whether this direct model gives useful guarantees, understandable diagnostics, and tolerable conservative rejections.</p>
+</section>
+
+</body>
+</html>
