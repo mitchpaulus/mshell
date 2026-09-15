@@ -7,8 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Security
+
+- Terminal replies that are strings (OSC, DCS, APC, PM, SOS), such as colour or version reports,
+  are consumed and dropped by the interactive editor instead of being typed into the command,
+  where their text could trigger key chords.
+- The prompt no longer writes the working directory to the terminal raw.
+  Control bytes in a directory name display as caret notation, and the OSC 7 directory report
+  percent-encodes the path, so a directory name can no longer inject terminal queries.
+- Error messages escape control bytes from quoted input and file names.
+
+### Fixed
+
+- The OSC 7 working-directory report is now actually emitted; a reversed check meant it was
+  only sent when the hostname lookup failed.
+
+### Changed
+
+- The interactive editor lays out and repaints commands from widths measured on the current terminal.
+  Long commands wrap across rows, wide and multi-codepoint clusters such as emoji stay whole,
+  tab and control bytes display safely, and completion rows repaint with the command.
+
 ### Added
 
+- Alt-Shift-R in the interactive editor forgets measured text widths and measures them again,
+  for use after reattaching from a different terminal or changing fonts.
 - Assertive destructuring with the `=>` operator.
   It consumes a list, dictionary, or Just value, binds its structural pattern names,
   and fails at runtime when the pattern does not match.
@@ -279,6 +302,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Its stack effect depends on a runtime integer, so it could not be expressed in the static type checker, and it saw no real use.
 
 ### Fixed
+
+- A command whose first token is a lexer error, such as a lone quote, no longer crashes the interactive shell. It reports the parse error and prompts again.
+- Interactive movement, word deletion, typing, and completion replacement respect grapheme boundaries, keeping combining accents and joined emoji intact.
+  Unicode aliases and multiline completion prefixes use the correct source positions; cycling completions preserves adjacent text even when it joins the inserted grapheme.
 
 - The type checker gave `index` and `lastIndexOf` a result type of `int`, but both
   return `Maybe[int]` at runtime (`none` when the substring is not found). The

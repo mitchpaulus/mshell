@@ -1,0 +1,645 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Line-editing issue audit — mshell region renderer</title>
+<style>
+:root {
+  color-scheme: dark;
+  --bg: #111418;
+  --panel: #191e24;
+  --panel-2: #202731;
+  --line: #34404d;
+  --text: #e8edf2;
+  --muted: #a5b0bc;
+  --accent: #75d5c7;
+  --accent-2: #f0c36a;
+  --danger: #ef8a7a;
+  --code: #0c0f12;
+  --max: 74rem;
+}
+
+* { box-sizing: border-box; }
+
+html {
+  scroll-behavior: smooth;
+  background: var(--bg);
+}
+
+body {
+  margin: 0;
+  color: var(--text);
+  background:
+    radial-gradient(circle at 12% -8%, rgba(117, 213, 199, .12), transparent 28rem),
+    var(--bg);
+  font: 16px/1.62 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+a { color: var(--accent); }
+a:hover { color: #a7eee4; }
+
+code, pre, .mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+code {
+  padding: .08em .32em;
+  border: 1px solid rgba(117, 213, 199, .16);
+  border-radius: .3rem;
+  background: rgba(12, 15, 18, .72);
+  font-size: .94em;
+}
+
+pre {
+  margin: 1rem 0;
+  padding: 1rem 1.1rem;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: .65rem;
+  background: var(--code);
+  color: #d8e3ec;
+  line-height: 1.48;
+}
+
+pre code {
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+header {
+  padding: 5rem 1.5rem 3.4rem;
+  border-bottom: 1px solid var(--line);
+}
+
+header > div,
+main,
+footer {
+  width: min(100%, var(--max));
+  margin: 0 auto;
+}
+
+.eyebrow {
+  margin: 0 0 .8rem;
+  color: var(--accent);
+  font: 600 .78rem/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: .13em;
+  text-transform: uppercase;
+}
+
+h1, h2, h3 {
+  line-height: 1.14;
+  text-wrap: balance;
+}
+
+h1 {
+  max-width: 13ch;
+  margin: 0;
+  font-size: clamp(3rem, 9vw, 6.8rem);
+  letter-spacing: -.055em;
+}
+
+.lede {
+  max-width: 54rem;
+  margin: 1.6rem 0 0;
+  color: #cbd5df;
+  font-size: clamp(1.1rem, 2.4vw, 1.42rem);
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .55rem 1rem;
+  margin-top: 1.5rem;
+  color: var(--muted);
+  font-size: .9rem;
+}
+
+nav {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--line);
+  background: rgba(17, 20, 24, .92);
+  backdrop-filter: blur(12px);
+}
+
+nav ol {
+  display: flex;
+  width: min(100%, var(--max));
+  margin: 0 auto;
+  padding: .65rem 1.5rem;
+  gap: .25rem;
+  list-style: none;
+}
+
+nav a {
+  display: block;
+  padding: .45rem .7rem;
+  border-radius: .4rem;
+  color: var(--muted);
+  text-decoration: none;
+  white-space: nowrap;
+  font-size: .88rem;
+}
+
+nav a:hover {
+  color: var(--text);
+  background: var(--panel-2);
+}
+
+main { padding: 1rem 1.5rem 5rem; }
+
+section {
+  padding: 4.6rem 0 2rem;
+  border-bottom: 1px solid var(--line);
+}
+
+section:last-child { border-bottom: 0; }
+
+.section-number {
+  color: var(--accent-2);
+  font: 700 .8rem/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: .1em;
+}
+
+h2 {
+  max-width: 24ch;
+  margin: .45rem 0 1.3rem;
+  font-size: clamp(2rem, 4.8vw, 3.5rem);
+  letter-spacing: -.035em;
+}
+
+h3 {
+  margin: 2.3rem 0 .75rem;
+  font-size: 1.38rem;
+}
+
+p, li { max-width: 69ch; }
+
+.decision {
+  margin: 2rem 0;
+  padding: 1.3rem 1.5rem;
+  border-left: .3rem solid var(--accent);
+  border-radius: .2rem .7rem .7rem .2rem;
+  background: linear-gradient(90deg, rgba(117, 213, 199, .13), rgba(117, 213, 199, .03));
+  font-size: 1.14rem;
+}
+
+.warning {
+  border-left-color: var(--danger);
+  background: linear-gradient(90deg, rgba(239, 138, 122, .13), rgba(239, 138, 122, .03));
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 1rem;
+  margin: 1.5rem 0;
+}
+
+.card {
+  padding: 1.15rem 1.25rem;
+  border: 1px solid var(--line);
+  border-radius: .75rem;
+  background: var(--panel);
+}
+
+.card h3 {
+  margin: 0 0 .45rem;
+  font-size: 1.05rem;
+}
+
+.card p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.flow {
+  display: grid;
+  grid-template-columns: repeat(7, auto);
+  align-items: center;
+  justify-content: start;
+  gap: .55rem;
+  margin: 2rem 0;
+  overflow-x: auto;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: .75rem;
+  background: var(--panel);
+}
+
+.flow .box {
+  min-width: 8.8rem;
+  padding: .8rem .9rem;
+  border: 1px solid #4a5968;
+  border-radius: .55rem;
+  background: var(--panel-2);
+  text-align: center;
+}
+
+.flow .box strong,
+.flow .box span { display: block; }
+
+.flow .box span {
+  margin-top: .2rem;
+  color: var(--muted);
+  font-size: .78rem;
+}
+
+.arrow {
+  color: var(--accent-2);
+  font-size: 1.35rem;
+}
+
+.branch {
+  border-color: var(--accent) !important;
+  box-shadow: inset 0 0 0 1px rgba(117, 213, 199, .18);
+}
+
+table {
+  width: 100%;
+  margin: 1.3rem 0;
+  border-collapse: collapse;
+  font-size: .94rem;
+}
+
+th, td {
+  padding: .8rem .85rem;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  color: var(--accent);
+  font-size: .78rem;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+td:first-child { white-space: nowrap; }
+
+.timeline {
+  display: grid;
+  grid-template-columns: 7.5rem minmax(34rem, 1fr);
+  gap: .65rem 1rem;
+  margin: 1.5rem 0;
+  overflow-x: auto;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: .75rem;
+  background: var(--panel);
+}
+
+.timeline .label {
+  color: var(--muted);
+  font: .8rem/1.8 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.track {
+  display: flex;
+  align-items: center;
+  min-width: 34rem;
+  min-height: 2rem;
+  gap: .35rem;
+}
+
+.event {
+  padding: .28rem .5rem;
+  border: 1px solid var(--line);
+  border-radius: .35rem;
+  background: var(--panel-2);
+  font: .76rem/1.25 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: nowrap;
+}
+
+.event.query { border-color: var(--accent-2); }
+.event.reply { border-color: var(--accent); }
+.wire { flex: 1; height: 1px; min-width: 1rem; background: var(--line); }
+
+.invariants {
+  counter-reset: invariant;
+  display: grid;
+  gap: .75rem;
+  padding: 0;
+  list-style: none;
+}
+
+.invariants li {
+  position: relative;
+  max-width: none;
+  padding: .9rem 1rem .9rem 3.6rem;
+  border: 1px solid var(--line);
+  border-radius: .6rem;
+  background: var(--panel);
+}
+
+.invariants li::before {
+  counter-increment: invariant;
+  content: "I" counter(invariant);
+  position: absolute;
+  left: 1rem;
+  top: .9rem;
+  color: var(--accent-2);
+  font: 700 .82rem/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.strike { color: var(--muted); text-decoration: line-through; }
+.good { color: var(--accent); }
+.bad { color: var(--danger); }
+
+footer {
+  padding: 0 1.5rem 4rem;
+  color: var(--muted);
+  font-size: .9rem;
+}
+
+@media (max-width: 700px) {
+  header { padding-top: 3.4rem; }
+  nav ol { padding-inline: .75rem; }
+  main { padding-inline: 1rem; }
+  .flow { grid-template-columns: 1fr; }
+  .flow .box { width: 100%; }
+  .arrow { transform: rotate(90deg); text-align: center; }
+  td:first-child { white-space: normal; }
+}
+</style>
+
+<style>
+.defect { margin: 2.2rem 0; padding: 1.2rem 1.4rem; border: 1px solid var(--line); border-radius: .75rem; background: var(--panel); }
+.defect h3 { margin: 0 0 .7rem; }
+.defect .tag { display: inline-block; margin-left: .6rem; padding: .15rem .55rem; border-radius: .4rem; font: 600 .72rem/1.4 ui-monospace, Menlo, monospace; letter-spacing: .08em; text-transform: uppercase; vertical-align: middle; }
+.tag.bug { color: #ffd0c8; background: rgba(239,138,122,.18); }
+.tag.decision-tag { color: #ffe6a8; background: rgba(240,195,106,.18); }
+.tag.lexer { color: #c9f3ec; background: rgba(117,213,199,.18); }
+.tag.fixed { color: #c9f3ec; background: rgba(117,213,199,.28); }
+.defect dl { display: grid; grid-template-columns: 6.5rem 1fr; gap: .45rem 1rem; margin: 0; }
+.defect dt { color: var(--accent); font: 600 .74rem/1.9 ui-monospace, Menlo, monospace; letter-spacing: .08em; text-transform: uppercase; }
+.defect dd { margin: 0; max-width: 69ch; }
+.screen { margin: .6rem 0; padding: .7rem .9rem; border: 1px solid var(--line); border-radius: .5rem; background: var(--code); color: #d8e3ec; font: .84rem/1.45 ui-monospace, Menlo, monospace; white-space: pre; overflow-x: auto; }
+.check { list-style: none; padding: 0; display: grid; gap: .5rem; }
+.check li { max-width: none; padding: .7rem .9rem .7rem 2.4rem; position: relative; border: 1px solid var(--line); border-radius: .55rem; background: var(--panel); }
+.check li::before { content: "✓"; position: absolute; left: .9rem; top: .7rem; color: var(--accent); font-weight: 700; }
+.check .ref { color: var(--muted); font-size: .84rem; }
+@media (max-width: 700px) { .defect dl { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <p class="eyebrow">mshell · interactive prompt · issue audit</p>
+    <h1>Did we ship their bugs?</h1>
+    <p class="lede">
+      Six shells' issue trackers, about 390 distinct line-editing failure modes, checked against the region renderer and reproduced against the real binary in tmux.
+      Nine defects confirmed; six are fixed on the branch, including the one with security impact.
+      The width-table complaint class that dominates every other tracker is gone by construction.
+    </p>
+    <div class="meta">
+      <span>audit date 2026-09-13</span>
+      <span>branch prompt-wrapping-design at 3fe371b</span>
+      <span>sources: fish, zsh, bash/readline, nushell/reedline, elvish, xonsh/prompt_toolkit</span>
+    </div>
+  </div>
+</header>
+
+<nav aria-label="Document sections">
+  <ol>
+    <li><a href="#method">01 method</a></li>
+    <li><a href="#defects">02 defects</a></li>
+    <li><a href="#verified">03 verified</a></li>
+    <li><a href="#na">04 not applicable</a></li>
+    <li><a href="#order">05 order</a></li>
+  </ol>
+</nav>
+
+<main>
+<section id="method">
+  <span class="section-number">01</span>
+  <h2>How the audit was run</h2>
+  <p>
+    Six research passes mined the public trackers of fish, zsh, bash/readline, nushell/reedline, elvish, and xonsh/prompt_toolkit for interactive line-editing complaints.
+    Each pass deduplicated its findings into distinct failure modes with issue links.
+    The raw reports are in <code>ai/line-editing-issues/</code>: about 390 failure modes and more than 500 issue URLs.
+  </p>
+  <p>
+    Every family that can apply to msh was checked against the code, and where possible reproduced against the real binary inside tmux 3.7c.
+    tmux was chosen because it is a real terminal emulator that exposes the screen and the cursor position for inspection.
+    The harness is <code>ai/line-editing-issues/tmux-harness.sh</code>.
+  </p>
+  <pre><code>h.sh start 40 10        # fresh msh in a 40x10 pane, isolated HOME and history
+h.sh send '世界'         # literal keys
+h.sh hex 1b 5b 31 7e    # raw bytes
+h.sh key BSpace         # tmux key names
+h.sh screen             # capture-pane with cat -A
+h.sh cursor             # cursor_x cursor_y WxH
+h.sh resize 30 10</code></pre>
+  <p>
+    Scenario numbers below refer to those runs; each is reproducible with the harness.
+    Families about other shells' architecture (wcwidth tables, delta renderers, plugin hooks, Windows console API, kitty protocol regressions) are listed in section 04 as not applicable.
+  </p>
+  <div class="cards">
+    <div class="card"><h3>fish</h3><p>86 failure modes, 153 issues. No grapheme clustering (#9964), recurring multi-line prompt reprints, CPR parser panic.</p></div>
+    <div class="card"><h3>zsh</h3><p>48 failure modes. wcwidth drift, ZLE per-codepoint editing, resize storms, autosuggestion redraw races.</p></div>
+    <div class="card"><h3>bash / readline</h3><p>37 failure modes. The <code>\[ \]</code> prompt bug, SIGWINCH deferral, bracketed paste, horizontal-scroll-mode.</p></div>
+    <div class="card"><h3>nushell / reedline</h3><p>78 failure modes. Tracked prompt row plus blocking <code>ESC[6n</code>; anything that desyncs the row duplicates the prompt.</p></div>
+    <div class="card"><h3>elvish</h3><p>67 failure modes. Delta-redraw invalidation, urxvt key sequences, paste lockups, tiny-terminal panics.</p></div>
+    <div class="card"><h3>xonsh / prompt_toolkit</h3><p>77 failure modes. CPR timeouts and leaked replies, app-side soft wrap breaking copy and resize.</p></div>
+  </div>
+</section>
+
+<section id="defects">
+  <span class="section-number">02</span>
+  <h2>Confirmed defects, ranked</h2>
+
+  <div class="defect">
+    <h3>1. Submitting from an earlier row of a wrapped command lets output overwrite the command <span class="tag fixed">fixed 2026-09-13</span></h3>
+    <dl>
+      <dt>Repro 53</dt><dd>Type <code>[1 2 3 … 20] len</code> so it wraps to two rows, press Ctrl-A, press Enter. The newline is emitted from row 1, so the output and next prompt land on row 2 and clobber the command's tail.
+<div class="screen">~ (0)>
+:: [1 2 3 4 5 6 7 8 9 10 11 12 13 14 15
+~ (1)> 8 19 20] len
+::</div></dd>
+      <dt>Cause</dt><dd><code>ExecuteCurrentCommand</code> paints the submission frame with the cursor at <code>state.index</code>, then <code>fmt.Fprintln</code> moves down one row from wherever the cursor is.</dd>
+      <dt>Fix</dt><dd>Applied: <code>ExecuteCurrentCommand</code> sets <code>state.index = state.commandEnd()</code> before the submission paint, so the final echo parks the cursor on the last painted row. Verified with the cursor on row 1 and mid row 2.</dd>
+      <dt>Family</dt><dd>reedline #261, fish #6826, prompt_toolkit #254 ("top lines shaved on execution").</dd>
+    </dl>
+  </div>
+
+  <div class="defect">
+    <h3>2. Enter on an empty line prints the <code>⏎</code> marker <span class="tag fixed">fixed 2026-09-13</span></h3>
+    <dl>
+      <dt>Repro 52</dt><dd>Fresh prompt, press Enter.
+<div class="screen">~ (0)>
+:: ⏎
+~ (0)>
+::</div></dd>
+      <dt>Cause</dt><dd>For an empty command no newline is printed, then <code>ensurePromptNewline</code> sees the cursor at column 4 and assumes a program left the line unterminated.</dd>
+      <dt>Fix</dt><dd>Applied: the newline after the submission paint is now unconditional, so empty and whitespace-only Enter leave the prompt row before the marker check runs.</dd>
+      <dt>Family</dt><dd>fish #789, #1411, #4717, #12476 (stray <code>⏎</code> glyph).</dd>
+    </dl>
+  </div>
+
+  <div class="defect">
+    <h3>3. A stray cursor report from a command's output becomes the prompt anchor <span class="tag decision-tag">decision</span></h3>
+    <dl>
+      <dt>Repro 46</dt><dd>Run <code>printf '\033[6n'</code>, then type <code>abc</code>. The terminal's reply is echoed by the tty in cooked mode, the stale <code>ESC[3;1R</code> is consumed by the anchor query, and the command paints at the wrong column until the next prompt.
+<div class="screen">:: printf '\033[6n'
+^[[3;1R~ (0)>
+::     abc</div></dd>
+      <dt>Cause</dt><dd>CPR replies carry no identity, so anything already queued when <code>anchorPrompt</code> sends its request is taken as the answer. The same path lets input typed at a killed foreground program leak into the next prompt, the "TTY echoback" class in fish #10987.</dd>
+      <dt>Options</dt><dd><code>tcflush(TCIFLUSH)</code> before the anchor query, which drops typeahead that bash and zsh preserve; or move the cursor to a known position first and reject a reply that does not match it. The current behavior self-corrects at the next prompt.</dd>
+      <dt>Family</dt><dd>reedline #860, prompt_toolkit #482 and #456, fish #12379.</dd>
+    </dl>
+  </div>
+
+  <div class="defect">
+    <h3>4. Resize repaint leaves stale rows and only happens on the next keypress <span class="tag decision-tag">partial fix + decision</span></h3>
+    <dl>
+      <dt>Repro 34c, 35c</dt><dd>Type a wrapped command or open a completion trailer, resize 40 to 30 columns, then press a key. The fresh prompt is printed at the reflowed cursor without clearing, so old trailer rows and the old command rows remain.
+<div class="screen">:: cat
+~ (0)> long_directory_name_for
+:: cat p
+héllo.txt</div></dd>
+      <dt>Cause</dt><dd>There is no SIGWINCH handling; the resize is noticed after the next token, and the re-anchor path prints <code>\r\n</code> plus the prompt without an erase.</dd>
+      <dt>Fix</dt><dd>Emit <code>ESC[J</code> after the <code>\r\n</code> when re-anchoring so everything below the new prompt is cleared. Rows above the cursor after a terminal reflow cannot be recovered without trusting the reflow, which the design rejects; that is the same trade-off readline makes. Immediate repaint on SIGWINCH would need the signal to inject a token into the input loop.</dd>
+      <dt>Family</dt><dd>tmux #516, ohmyzsh #10750, powerlevel10k #1358, reedline #42, #157, #477, prompt_toolkit #1933, #29.</dd>
+    </dl>
+  </div>
+
+  <div class="defect">
+    <h3>5. Home and End are only recognized in one encoding <span class="tag fixed">fixed 2026-09-13</span></h3>
+    <dl>
+      <dt>Repro 14</dt><dd><code>ESC[1~</code>, <code>ESC[4~</code>, <code>ESC[7~</code>, <code>ESC[8~</code>, <code>ESC O H</code>, <code>ESC O F</code> do nothing; only <code>ESC[H</code> and <code>ESC[F</code> work. tmux, rxvt, the Linux console, PuTTY, and application-cursor mode send the other forms, so Home and End are dead keys there.</dd>
+      <dt>Fix</dt><dd>Applied: the lexer now accepts <code>ESC[1~</code>, <code>ESC[4~</code>, <code>ESC[7~</code>, <code>ESC[8~</code>, <code>ESC O H</code>, <code>ESC O F</code>, and the modified xterm forms <code>ESC[1;n H</code> and <code>ESC[1;n F</code>, in addition to <code>ESC[H</code> and <code>ESC[F</code>. Covered by the lexer table test and verified in tmux.</dd>
+      <dt>Family</dt><dd>elvish #579, zsh FAQ on cursor-key mode, bash kdch1 mismatch, prompt_toolkit #1437.</dd>
+    </dl>
+  </div>
+
+  <div class="defect">
+    <h3>6. A lone Escape swallows the next key <span class="tag fixed">fixed 2026-09-13</span></h3>
+    <dl>
+      <dt>Repro 9, 40</dt><dd>Press Esc, then <code>a</code>; the <code>a</code> is consumed as an unknown Alt chord and never inserted. Esc then Tab drops the Tab.</dd>
+      <dt>Cause</dt><dd>After ESC the lexer blocks on the next byte and treats it as a modifier.</dd>
+      <dt>Fix</dt><dd>Applied, no timer needed: when the byte after ESC is not <code>[</code>, <code>O</code>, or a bound Alt letter, the lexer pushes that byte back and lexes it on its own; the ESC itself produces no token. Covered by a lexer test for letters, Tab, Enter, multibyte text, and a doubled ESC before an arrow.</dd>
+      <dt>Family</dt><dd>readline keyseq-timeout, zsh KEYTIMEOUT, fish #6590, #6996, #7338, prompt_toolkit #1181, #1655.</dd>
+    </dl>
+  </div>
+
+  <div class="defect">
+    <h3>7. No bracketed paste: pasted newlines execute or vanish, pasted tabs trigger completion <span class="tag bug">gap</span></h3>
+    <dl>
+      <dt>Repro 6, 37</dt><dd>Pasting <code>echo a&lt;CR&gt;echo&lt;TAB&gt;b</code> runs the first line immediately and turns the tab into a completion. A literal LF byte is silently dropped, so <code>echo a&lt;LF&gt;echo b</code> becomes <code>echo aecho b</code>.
+<div class="screen">:: echo aecho b</div></dd>
+      <dt>Cause</dt><dd><code>ESC[?2004h</code> is never sent, <code>ESC[200~</code> is an ignored CSI token, and <code>AsciiToken{10}</code> matches no branch in <code>HandleToken</code>.</dd>
+      <dt>Fix</dt><dd>Enable bracketed paste inside <code>enterRawMode</code> and disable it in <code>leaveRawMode</code>; treat the bracketed payload as one literal insertion with CR normalized to LF. The renderer side already exists: hard-break atoms and multi-row layout are implemented and were verified via history recall of multi-row commands.</dd>
+      <dt>Family</dt><dd>readline "pasted multi-line auto-executes", zsh trailing-newline debate, reedline #543, #576, elvish #890, #887, fish #5888.</dd>
+    </dl>
+  </div>
+
+  <div class="defect">
+    <h3>8. One zero-width cluster degrades the rest of the command to placeholders <span class="tag decision-tag">design decision</span></h3>
+    <dl>
+      <dt>Repro 17c, 17e</dt><dd>Type <code>a</code> + U+200B + <code>b</code>, then <code>é世</code>; everything after the zero-width space paints as <code>?</code>. U+200E, a lone U+FE0F, and a lone ZWJ behave the same. These are common paste artifacts: BOM, ZWSP from web pages, bidi marks in Arabic text.
+<div class="screen">:: a?b??</div></dd>
+      <dt>Cause</dt><dd>The design rejects a zero advance as an invalid observation, which rejects the whole batch and sets <code>widthProbesBlocked</code> for the rest of the command.</dd>
+      <dt>Recommendation</dt><dd>A well-formed same-row reply of column 1 is a genuine observation of width 0 and should be cached as such, or at least should placeholder only that candidate rather than fail the batch. Batch atomicity is justified for wrong-row and malformed replies, which make every reply suspect; a zero advance does not. This contradicts the written contract in the design doc, so decide it rather than patch it.</dd>
+      <dt>Family</dt><dd>fish #4571 (ZWSP corruption), zsh U+FE0E column shift, nushell #15256 (VS16 wrap loop).</dd>
+    </dl>
+  </div>
+
+  <div class="defect">
+    <h3>9. Terminal string replies were typed into the command, and the prompt emitted the directory raw <span class="tag fixed">fixed 2026-09-13</span></h3>
+    <dl>
+      <dt>Repro</dt><dd>Injecting an OSC 11 colour reply (<code>ESC]11;rgb:…ESC\</code>) into the editor typed <code>]11;rgb:…</code>, and the <code>;r</code> chord inside it executed the <code>r</code> command. Starting msh in a directory named with <code>ESC[6n</code> made every prompt send a cursor query, shifting the anchor; a name carrying an OSC colour query would, on terminals that answer it, execute a command on every prompt.
+<div class="screen">:: cat
+mitch@mitch-manjaro: /home/mitch/repos     ← lf launched by an injected reply</div></dd>
+      <dt>Cause</dt><dd>The lexer knew CSI but not OSC/DCS/APC/PM/SOS, so string bodies became keystrokes; chords turn letters into actions. <code>printPrompt</code> printed the working directory unescaped in the visible prompt and inside OSC 7, whose emission was also gated on the wrong error check and had never fired.</dd>
+      <dt>Fix</dt><dd>Applied: the lexer consumes string sequences to BEL or ST and drops them, with a 4096-byte bound. The prompt shows control bytes as caret notation, OSC 7 percent-encodes the path, and the Windows Terminal path report is skipped for names with control bytes. <code>FailWithMessage</code> and the parse-error print escape their text. Numeric CSI replies were already dropped. Chords remain a design decision.</dd>
+      <dt>Family</dt><dd>fish #10987, #12379, #1924; reedline #860; prompt_toolkit #482; the 2023 terminal answerback CVEs on the terminal side.</dd>
+    </dl>
+  </div>
+
+  <h3>Smaller items</h3>
+  <ul>
+    <li>A stray UTF-8 lead byte swallows the following ASCII byte (repro 41: <code>0xE4</code> then <code>ab</code> gives <code>b</code>). Readline 8.3 fixed the equivalent. Low priority.</li>
+    <li>Ctrl-H deletes the previous word (repro 42). Terminals that send <code>^H</code> for Backspace (some xterm and console setups, elvish #55 and #328) will delete words instead of characters.</li>
+    <li>Two-key chords (<code>j</code>, <code>q</code>, <code>v</code>, <code>;</code>) block in <code>readInputToken</code>, so the first key is not painted until the next key arrives (repro 44). This is the mshell chord design, noted only because it looks like dropped input.</li>
+    <li>The ghost suggestion is truncated at the end of the first row rather than wrapping (repro 27). fish wraps; zsh-autosuggestions has open bugs both ways. Acceptable as a choice, worth documenting.</li>
+    <li>A completion definition's helper command could print onto the editor: <code>git add c</code> then Tab outside a repository showed <code>fatal: not a git repository</code> in the command area. Fixed 2026-09-13: completion definitions now run with stdout and stderr discarded, since they answer on the stack. Family: fish #3093.</li>
+    <li>Ctrl-C and Ctrl-D exit the shell even with text on the line (repro 12; same on <code>main</code>). Every other shell clears the line on Ctrl-C.</li>
+  </ul>
+</section>
+
+<section id="verified">
+  <span class="section-number">03</span>
+  <h2>Verified correct</h2>
+  <p>Each item names the shells' complaint and the msh scenario that exercised it.</p>
+  <ul class="check">
+    <li>Wide CJK backspace removes the whole cell pair and the cursor lands correctly. <span class="ref">readline multibyte backspace, fish CJK · scenarios 1, 28</span></li>
+    <li>ZWJ family, flag, skin tone, VS16 heart, keycap, and base+combining are each one movement and one deletion, with measured widths. <span class="ref">fish #9964, zsh ZWJ per-codepoint, prompt_toolkit #274 · scenario 5</span></li>
+    <li>Insertion in the middle of wide text; word motion across accents and CJK. <span class="ref">readline 6.1 forward-word · scenarios 16, 30</span></li>
+    <li>Exact fill of the last column: cursor placement is consistent through insert and delete. <span class="ref">readline pending-wrap, zsh #575, fish #6826 · scenario 3</span></li>
+    <li>A wide atom that would straddle the margin is hard-wrapped before any byte is emitted. <span class="ref">zsh WEOF/ich1, elvish #108 · scenarios 4, 23</span></li>
+    <li>Commands taller than the screen use a viewport; Ctrl-A, Right, Ctrl-E, and Backspace stay in sync. <span class="ref">readline horizontal-scroll-mode, reedline #183, fish #7296, elvish #578 · scenarios 8, 8b, 32</span></li>
+    <li>Prompt wider than the terminal. <span class="ref">readline 5.2, nushell #439, xonsh #213 · scenario 31</span></li>
+    <li>Prompt on the bottom row: wrapping, width probes, and completion trailers scroll cleanly. <span class="ref">reedline #176, #119, #527, fish #4532 · scenarios 47, 48, 49</span></li>
+    <li>Resize while idle is harmless; after the next key the command reflows at the new width with the cursor on the right byte, apart from the stale rows in defect 4. <span class="ref">scenarios 7, 7b, 34</span></li>
+    <li>A 3000-character paste lays out and edits correctly. <span class="ref">fish #7837 CPU, elvish #887 lockup · scenario 32</span></li>
+    <li>Bytes of one multibyte character arriving in separate reads. <span class="ref">readline 8.3 · scenario 29</span></li>
+    <li>Invalid UTF-8 in a filename completes and paints as placeholders; typed invalid bytes are dropped. <span class="ref">elvish #1528 · scenario 38</span></li>
+    <li>3 or 4 column terminals and a 0x0 window size do not crash or paint. <span class="ref">elvish #1820, #40 · scenarios 24, 39, pexpect run</span></li>
+    <li>Esc then Tab does not crash. <span class="ref">elvish #1511 · scenario 40</span></li>
+    <li>History recall of a wrapped CJK command, then editing in the middle. <span class="ref">psql/readline recall bug, reedline #113 · scenarios 13, 28</span></li>
+    <li>Ctrl-P prefix search with CJK history. <span class="ref">fish #12444 · scenario 36</span></li>
+    <li>The ghost suggestion is cleared by Ctrl-U and never submitted with Enter. <span class="ref">zsh-autosuggestions #114, #162 · scenarios 27b, 27c</span></li>
+    <li>Ctrl-L with a wrapped command scrolls the whole prompt to the top. <span class="ref">elvish #95 · scenario 20</span></li>
+    <li>Output without a trailing newline gets the <code>⏎</code> marker and a fresh line. <span class="ref">zsh PROMPT_SP, reedline #398, prompt_toolkit #453 · scenario 19</span></li>
+    <li>Typeahead during a running command is preserved in order. <span class="ref">prompt_toolkit #515 · scenario 26</span></li>
+    <li>Rapid Enter bursts and multi-command bursts stay in sync. <span class="ref">xonsh #1955 · scenario 51</span></li>
+    <li>Delete key <code>ESC[3~</code> and Ctrl-Delete <code>ESC[3;5~</code>. <span class="ref">readline kdch1 · scenarios 22, 43</span></li>
+    <li>Completion trailer with Unicode names, taller than the screen, and at 4 columns. <span class="ref">reedline #997, #793, #972 · scenarios 11, 25, 39</span></li>
+    <li>An SGR reset precedes every paint. <span class="ref">elvish #120 background bleed · paint bytes begin with ESC[0m</span></li>
+    <li>Alt-Shift-R width reset keeps editing working. <span class="ref">scenario 21</span></li>
+    <li>Control bytes other than NUL are ignored on input; NUL maps to a space by design. <span class="ref">readline quoted-insert class · control byte probe</span></li>
+  </ul>
+</section>
+
+<section id="na">
+  <span class="section-number">04</span>
+  <h2>Not applicable to this design</h2>
+  <table>
+    <thead><tr><th>Family</th><th>Why it does not apply</th></tr></thead>
+    <tbody>
+      <tr><td>wcwidth tables</td><td>Emoji width, ambiguous width, VS16, Nerd Font glyphs, Unicode version skew: widths are measured, so the whole class is gone by construction. The residual risk is the zero-advance policy in defect 8.</td></tr>
+      <tr><td>Prompt escape counting</td><td><code>\[ \]</code> and <code>%{ %}</code> bugs: the prompt is opaque and anchored by CPR.</td></tr>
+      <tr><td>Delta-renderer invalidation</td><td>elvish and prompt_toolkit break when an external program paints; msh repaints the full region.</td></tr>
+      <tr><td>Unimplemented features</td><td>Right prompts, transient prompts, vi mode, mouse, kitty keyboard protocol, OSC 133.</td></tr>
+      <tr><td>Windows console</td><td>Console API and ConPTY specifics are outside this PR; the design's ConPTY round-trip claim was not exercised here.</td></tr>
+      <tr><td>Plugin machinery</td><td>zsh redraw hooks, async prompt segments, external completion UIs.</td></tr>
+      <tr><td>CPR timeouts</td><td>The design requires CPR and blocks; terminals that never answer hang by contract. reedline #1010 and prompt_toolkit #535 show users hit exactly this on Termius and Emacs shell mode. <code>msh --check-terminal</code> is the intended answer and is worth a line in the docs.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="order">
+  <span class="section-number">05</span>
+  <h2>Suggested order</h2>
+  <ol>
+    <li>Defects 1 and 2: fixed on this branch.</li>
+    <li>Defects 5 and 6: fixed on this branch.</li>
+    <li>Defect 7, bracketed paste, is the largest real gap and the one every shell tracker has the most traffic on.</li>
+    <li>Defect 8 is a design decision; the change is a few lines in the reply acceptor but contradicts the written contract, so decide it rather than patch it.</li>
+    <li>Defect 4's partial fix, <code>ESC[J</code> on re-anchor, is one line; SIGWINCH handling is a separate design item.</li>
+    <li>Defect 3 needs a decision on typeahead versus safety.</li>
+  </ol>
+</section>
+</main>
+
+<footer>
+  Source reports and the tmux harness live in <code>ai/line-editing-issues/</code>.
+</footer>
+</body>
+</html>

@@ -10,8 +10,7 @@ tests/msh-scripts/
 
 .redom/
 
-__pycache__
-
+*.pyc
 .codex
 __pycache__/
 
