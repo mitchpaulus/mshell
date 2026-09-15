@@ -1,0 +1,3 @@
+# Static: a recursive type reference must sit inside a list, dict, shape field, Maybe, or quotation.
+type T = int | T
+1 as T drop

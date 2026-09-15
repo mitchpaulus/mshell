@@ -1,0 +1,6 @@
+# Static: type declarations are erased at runtime, so a match arm cannot name one.
+type Manifest = {packages: [{name: str}]}
+"{}" parseJson match
+    Manifest :> :packages? len wl,
+    _ : 1 exit,
+end

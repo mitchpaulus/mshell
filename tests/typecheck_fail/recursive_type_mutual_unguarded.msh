@@ -1,0 +1,4 @@
+# Static: two unions that contain each other directly never terminate.
+type A = int | B
+type B = str | A
+1 as A drop

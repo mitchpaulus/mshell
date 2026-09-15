@@ -18,6 +18,7 @@ package main
 // `type` declarations work in declaration order.
 
 import (
+	"strconv"
 	"fmt"
 	"strings"
 )
@@ -680,6 +681,20 @@ type typeResolveCtx struct {
 	next     uint32
 }
 
+// freshAnonymous allocates a generic that no source name can refer to,
+// for the value type of a bare `dict` or `list` keyword. The synthetic
+// name starts with `_` so it never collides with a user generic and so
+// builtin-sig validation can tell it apart from a typo.
+func (ctx *typeResolveCtx) freshAnonymous() TypeVarId {
+	id := TypeVarId(ctx.next)
+	ctx.next++
+	if ctx.generics == nil {
+		ctx.generics = map[string]TypeVarId{}
+	}
+	ctx.generics["_v"+strconv.Itoa(int(id))] = id
+	return id
+}
+
 func (c *Checker) resolveTypeExpr(node MShellParseItem, ctx *typeResolveCtx) TypeId {
 	switch n := node.(type) {
 	case *TypePrim:
@@ -745,6 +760,41 @@ func (c *Checker) resolveTypeExpr(node MShellParseItem, ctx *typeResolveCtx) Typ
 				return TidNothing
 			}
 			return c.arena.MakeMaybe(c.resolveTypeExpr(n.Args[0], ctx))
+		case "date":
+			return TidDateTime
+		case "binary":
+			return TidBytes
+		case "dict", "list":
+			// The runtime type keywords `dict` and `list` name a container
+			// with an unknown value type. In a signature that is a
+			// string-keyed dict / a list over a fresh generic, one per
+			// occurrence. Without a generic scope (a `type` body or an
+			// `as` cast) there is nothing to bind the value type to, so
+			// the explicit form is required.
+			if ctx == nil {
+				c.errors = append(c.errors, TypeError{
+					Kind: TErrTypeParse, Pos: n.Tok,
+					Hint: "'" + n.Name + "' needs a value type here; write `{str: T}` for a dict or `[T]` for a list",
+				})
+				return TidNothing
+			}
+			elem := c.arena.MakeVar(ctx.freshAnonymous())
+			if n.Name == "dict" {
+				return c.arena.MakeDict(TidStr, elem)
+			}
+			return c.arena.MakeList(elem)
+		case "quotation":
+			c.errors = append(c.errors, TypeError{
+				Kind: TErrTypeParse, Pos: n.Tok,
+				Hint: "'quotation' is not a type name; write the quotation's stack effect, e.g. `(int -- str)`",
+			})
+			return TidNothing
+		case "maybe":
+			c.errors = append(c.errors, TypeError{
+				Kind: TErrTypeParse, Pos: n.Tok,
+				Hint: "'maybe' is not a type name; write `Maybe[T]`",
+			})
+			return TidNothing
 		}
 		if id := c.LookupType(n.Name); id != TidNothing {
 			return id

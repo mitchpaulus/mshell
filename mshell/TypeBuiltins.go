@@ -44,9 +44,50 @@ type sigRegistry struct {
 
 func newSigRegistry(arena *TypeArena, names *NameTable) *sigRegistry {
 	return &sigRegistry{
-		checker: &Checker{arena: arena, names: names},
+		checker: &Checker{arena: arena, names: names, typeEnv: builtinNamedTypes(arena, names)},
 		out:     make(map[NameId][]QuoteSig, 256),
 	}
+}
+
+// builtinNamedTypes declares the named types that builtin signatures and
+// user programs can refer to without a `type` declaration: HtmlNode and
+// Json. Every name here is also in IsReservedTypeName. Construction is idempotent per
+// arena: placeholders hashcons on the name, so a second call on the same
+// arena returns the same ids.
+//
+//	HtmlNode = {tag: str, attr: {str: str}, children: [HtmlNode], text: str}
+//
+// HtmlNode is the record parseHtml builds for every element (see
+// nodeToDict in MShellObject.go). It is recursive through `children`.
+func builtinNamedTypes(arena *TypeArena, names *NameTable) map[NameId]TypeId {
+	env := make(map[NameId]TypeId, 2)
+
+	htmlName := names.Intern("HtmlNode")
+	htmlNode := arena.NewBrandPlaceholder(htmlName)
+	arena.PatchBrand(htmlNode, arena.MakeShape([]ShapeField{
+		{Name: names.Intern("tag"), Type: TidStr},
+		{Name: names.Intern("attr"), Type: arena.MakeDict(TidStr, TidStr)},
+		{Name: names.Intern("children"), Type: arena.MakeList(htmlNode)},
+		{Name: names.Intern("text"), Type: TidStr},
+	}))
+	env[htmlName] = htmlNode
+
+	// Json = null | bool | int | float | str | [Json] | {str: Json}
+	//
+	// Every value parseJson can produce, and parseJson's return type. A
+	// call site that knows the layout narrows with a cast
+	// (`parseJson as Config`), which the checker accepts when the target
+	// is reachable from Json's arms.
+	jsonName := names.Intern("Json")
+	json := arena.NewUnionPlaceholder(jsonName)
+	arena.PatchUnion(json, []TypeId{
+		TidNull, TidBool, TidInt, TidFloat, TidStr,
+		arena.MakeList(json),
+		arena.MakeDict(TidStr, json),
+	})
+	env[jsonName] = json
+
+	return env
 }
 
 // sigASTCache memoizes the parsed AST per signature string. Sig strings
@@ -88,7 +129,7 @@ func parseBuiltinSig(c *Checker, src string) QuoteSig {
 	}
 	gens := make([]TypeVarId, 0, len(ctx.generics))
 	for name, v := range ctx.generics {
-		if len(name) != 1 || name[0] < 'a' || name[0] > 'z' {
+		if name[0] != '_' && (len(name) != 1 || name[0] < 'a' || name[0] > 'z') {
 			panic("builtin sig " + src + ": unknown type '" + name + "' (generics must be single lowercase letters)")
 		}
 		gens = append(gens, v)
@@ -437,7 +478,7 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		"(GridView (GridRow GridRow -- int) -- GridView)",
 	)
 	r.reg("parseCsv", "(str | path -- [[str]])")
-	r.reg("parseJson", "(str | path | bytes -- t)")
+	r.reg("parseJson", "(str | path | bytes -- Json)")
 	// parseExcel: a cell is a string, a float (numbers and dates), a
 	// bool, or a None Maybe (error cells like #DIV/0!). The Maybe carries
 	// a free inner type because an error cell is always None, mirroring
@@ -543,7 +584,7 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 	// reFindAllIndex : match → [start, end] pairs
 	r.reg("reFindAllIndex", "(str str -- [[int]])")
 	r.reg("parseLinkHeader", "(str -- [{v}])")
-	r.reg("parseHtml", "(str | path -- {v})")
+	r.reg("parseHtml", "(str | path -- HtmlNode)")
 	// httpGet / httpPost: the request dict requires a stringable `url`
 	// plus optional `timeout` (int), `followRedirects` (bool), `headers`
 	// ({str: str}), and `body`
