@@ -1,0 +1,1 @@
+Error parsing file stdin: 1:11: Expected a variable store after ',' but got VARRETRIEVE. Trailing commas are not allowed after a variable store.
