@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"errors"
+	"io"
 	"github.com/rivo/uniseg"
 	"os"
 	"path/filepath"
@@ -954,6 +956,88 @@ func TestLayoutAtomsRejectsInvalidCursor(t *testing.T) {
 
 			layoutAtomsInto(nil, atoms, tt.cursor, 0, 5)
 		})
+	}
+}
+
+func TestBracketedPasteLiteralEdit(t *testing.T) {
+	tests := []struct {
+		name string
+		input string
+		want string
+	}{
+		{"empty", "", ""},
+		{"shortcuts", "jf ;r ;j\t\x03\x04\x7f", "jf ;r ;j\t\x03\x04\x7f"},
+		{"line endings", "one\r\ntwo\rthree\n", "one\ntwo\nthree\n"},
+		{"unicode", "世é👨‍👩‍👧‍👦", "世é👨‍👩‍👧‍👦"},
+		{"escapes", "\x1b[A\x1b]11;rgb:x\a\x1b[200~\x1b[201x\x1b\x1b[201", "\x1b[A\x1b]11;rgb:x\a\x1b[200~\x1b[201x\x1b\x1b[201"},
+		{"large", strings.Repeat("hello\n", 10000), strings.Repeat("hello\n", 10000)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := []byte("\x1b[200~" + tt.input + "\x1b[201~x")
+			reader := &StdinReaderState{array: input, n: len(input)}
+			state := &TermState{currentCommand: "ab", index: 1}
+			token, err := state.InteractiveLexer(reader)
+			if err != nil { t.Fatal(err) }
+			if token != (PasteToken{Text: tt.want}) { t.Fatalf("paste = %#v", token) }
+			end, err := state.HandleToken(token)
+			if end || err != nil { t.Fatalf("paste triggered action: end %v, error %v", end, err) }
+			if state.currentCommand != SourceText("a" + tt.want + "b") || state.index != ByteOffset(1+len(tt.want)) {
+				t.Fatalf("edit = %q at %d", state.currentCommand, state.index)
+			}
+			token, err = state.InteractiveLexer(reader)
+			if err != nil || token != (AsciiToken{Char: 'x'}) { t.Fatalf("following key = %v, %v", token, err) }
+		})
+	}
+}
+
+// One-byte reads split every marker and UTF-8 character across buffer fills.
+// EOF inside a paste must never release its contents as executable keys.
+func TestBracketedPasteFragmentedAndTruncated(t *testing.T) {
+	for _, complete := range []bool{true, false} {
+		input := "\x1b[200~世\r\njf\x1b[201"
+		if complete { input += "~\r" }
+		file, err := os.CreateTemp(t.TempDir(), "input")
+		if err != nil { t.Fatal(err) }
+		defer file.Close()
+		if _, err := file.WriteString(input); err != nil { t.Fatal(err) }
+		if _, err := file.Seek(0, io.SeekStart); err != nil { t.Fatal(err) }
+		oldStdin := os.Stdin
+		os.Stdin = file
+		func() {
+			defer func() { os.Stdin = oldStdin }()
+			state := &TermState{}
+			reader := &StdinReaderState{array: make([]byte, 1)}
+			token, err := state.InteractiveLexer(reader)
+			if !complete {
+				if !errors.Is(err, io.ErrUnexpectedEOF) || token != nil { t.Fatalf("truncated paste = %v, %v", token, err) }
+				return
+			}
+			if err != nil || token != (PasteToken{Text: "世\njf"}) { t.Fatalf("fragmented paste = %v, %v", token, err) }
+			token, err = state.InteractiveLexer(reader)
+			if err != nil || token != (AsciiToken{Char: '\r'}) { t.Fatalf("following Enter = %v, %v", token, err) }
+		}()
+	}
+}
+
+func TestBracketedPasteQueuedDuringCursorQuery(t *testing.T) {
+	// A cursor-report-shaped sequence inside pasted text is not a reply.
+	input := []byte("\x1b[200~\x1b[9;9Rjf\r\x1b[201~\x1b[2;3R")
+	state := &TermState{stdInState: &StdinReaderState{array: input, n: len(input)}}
+	var output bytes.Buffer
+	row, col, err := state.queryCursorPosition(&output)
+	if err != nil || row != 2 || col != 3 { t.Fatalf("cursor = %d,%d, %v", row, col, err) }
+	token, err := state.readInputToken()
+	if err != nil || token != (PasteToken{Text: "\x1b[9;9Rjf\n"}) { t.Fatalf("queued paste = %v, %v", token, err) }
+}
+
+func TestBracketedPasteAdjacentAndStrayEnd(t *testing.T) {
+	input := []byte("\x1b[201~\x1b[200~a\x1b[201~\x1b[200~b\x1b[201~")
+	reader := &StdinReaderState{array: input, n: len(input)}
+	state := &TermState{}
+	for _, want := range []TerminalToken{UnknownToken{}, PasteToken{Text: "a"}, PasteToken{Text: "b"}} {
+		token, err := state.InteractiveLexer(reader)
+		if err != nil || token != want { t.Fatalf("token = %v, %v; want %v", token, err, want) }
 	}
 }
 

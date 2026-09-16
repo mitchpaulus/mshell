@@ -3,6 +3,7 @@
 package main
 
 import (
+	"os"
 	"testing"
 
 	"github.com/creack/pty"
@@ -22,8 +23,15 @@ func TestRawTerminalModeFlagsPTY(t *testing.T) {
 	if err != nil { t.Fatal(err) }
 
 	state := TermState{stdInFd: fd}
+	output, err := os.CreateTemp(t.TempDir(), "terminal-output")
+	if err != nil { t.Fatal(err) }
+	defer output.Close()
+	oldStdout := os.Stdout
+	os.Stdout = output
+	defer func() { os.Stdout = oldStdout }()
 	if err := state.saveTerminalState(); err != nil { t.Fatal(err) }
 	if err := state.enterRawMode(); err != nil { t.Fatal(err) }
+	defer state.leaveRawMode()
 	raw, err := unix.IoctlGetTermios(fd, ioctlReadTermios)
 	if err != nil { t.Fatal(err) }
 	if raw.Lflag&(unix.ICANON|unix.ECHO|unix.ECHONL|unix.ISIG|unix.IEXTEN) != 0 { t.Fatalf("local flags still set: %#x", raw.Lflag) }
@@ -37,4 +45,13 @@ func TestRawTerminalModeFlagsPTY(t *testing.T) {
 	if err != nil { t.Fatal(err) }
 	if *after != *before { t.Fatalf("cooked state not restored: %+v vs %+v", after, before) }
 	if term.IsTerminal(fd) != true { t.Fatal("slave is not a terminal") }
+	// Returning from a child enables paste again; a repeated raw-mode call
+	// does not change ownership or send a duplicate enable.
+	if err := state.enterRawMode(); err != nil { t.Fatal(err) }
+	if err := state.enterRawMode(); err != nil { t.Fatal(err) }
+	state.leaveRawMode()
+	got, err := os.ReadFile(output.Name())
+	if err != nil { t.Fatal(err) }
+	const want = "\x1b[?2004h\x1b[?2004l\x1b[?2004h\x1b[?2004l"
+	if string(got) != want { t.Fatalf("paste mode lifecycle = %q, want %q", got, want) }
 }

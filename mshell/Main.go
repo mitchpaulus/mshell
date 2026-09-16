@@ -932,6 +932,7 @@ type TermState struct {
 	logInstanceID  string
 	// tokenChan chan TerminalToken
 	stdInState *StdinReaderState
+	bracketedPasteEnabled bool
 
 	previousHistory []HistoryItem // Previous history items loaded from file
 
@@ -2418,6 +2419,16 @@ type TerminalToken interface {
 	String() string
 }
 
+// PasteToken is one literal edit. Its contents must never pass through key
+// bindings, even when they contain Enter, Tab, escape sequences, or chords.
+type PasteToken struct {
+	Text string
+}
+
+func (t PasteToken) String() string {
+	return fmt.Sprintf("PasteToken: %q", t.Text)
+}
+
 type AsciiToken struct {
 	Char byte
 }
@@ -2799,6 +2810,30 @@ func (state *TermState) readInputToken() (TerminalToken, error) {
 // 33	F19 (Shift+F7)	Sometimes, varies
 // 34	F20 (Shift+F8)	Sometimes, varies
 
+// The start marker has already been consumed. Read raw bytes until the exact
+// end marker, including across input-buffer boundaries. Similar escape
+// sequences and nested start markers are ordinary pasted text.
+func readBracketedPaste(reader *StdinReaderState) (TerminalToken, error) {
+	const end = "\x1b[201~"
+	text := make([]byte, 0, 1024)
+	for {
+		c, err := reader.ReadByte()
+		if err != nil {
+			if err == io.EOF {
+				err = io.ErrUnexpectedEOF
+			}
+			return nil, fmt.Errorf("Error reading bracketed paste: %w", err)
+		}
+		text = append(text, c)
+		if len(text) >= len(end) && string(text[len(text)-len(end):]) == end {
+			value := string(text[:len(text)-len(end)])
+			value = strings.ReplaceAll(value, "\r\n", "\n")
+			value = strings.ReplaceAll(value, "\r", "\n")
+			return PasteToken{Text: value}, nil
+		}
+	}
+}
+
 // maxControlStringBytes bounds how much of an unterminated control string
 // the lexer will swallow before giving up, so a stray ESC ] in pasted text
 // cannot eat every following keystroke.
@@ -2992,7 +3027,11 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 
 						if c >= 64 && c <= 126 {
 							params := string(byteArray)
-							if c == '~' && params == "3;5" {
+							if c == '~' && params == "200" {
+								return readBracketedPaste(stdinReaderState)
+							} else if c == '~' && params == "201" {
+								return UnknownToken{}, nil
+							} else if c == '~' && params == "3;5" {
 								return KEY_CTRL_DELETE, nil
 							} else if c == '~' && params == "3" {
 								return KEY_DELETE, nil
@@ -3922,6 +3961,10 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 	}
 
 	switch t := token.(type) {
+	case PasteToken:
+		if t.Text != "" {
+			state.replaceText(t.Text, state.index, state.index)
+		}
 	case MutliByteToken:
 		state.PushChars([]rune{t.Char})
 	case AsciiToken:
@@ -4247,6 +4290,9 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 		} else if t.Char == 12 { // Ctrl-L
 			state.ClearScreen()
 		} else if t.Char == 15 { // Ctrl-O - file manager
+			if err := state.setBracketedPaste(false); err != nil {
+				return false, err
+			}
 			newDir := RunFileManagerInteractive(state.stdInFd, &state.oldState, "")
 			if newDir != "" {
 				state.evalState.ChangeDirectory(newDir, "file manager")
