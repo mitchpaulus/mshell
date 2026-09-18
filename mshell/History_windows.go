@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -26,4 +27,30 @@ func GetHistoryDir() (string, error) {
 
 	return "", os.ErrNotExist
 
+}
+
+// Windows privacy comes from the ACL inherited from LOCALAPPDATA, not Unix modes.
+func ensureHistoryDir(dir string) error {
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("unexpected history directory type: %s", dir)
+	}
+	return nil
+}
+
+func openHistoryFile(path string, flags int) (*os.File, error) {
+	info, err := os.Lstat(path)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	if err == nil && !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("unexpected history file type: %s", path)
+	}
+	return os.OpenFile(path, flags, 0600)
 }
