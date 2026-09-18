@@ -2654,11 +2654,13 @@ func (state *TermState) InteractiveMode() error {
 				history = append(history, item.Command)
 			}
 		} else {
-			state.Logf("Error reading history file %s: %s\n", filepath.Join(historyDir, "msh_history"), err)
+			if !os.IsNotExist(err) {
+				fmt.Fprintf(os.Stderr, "Error reading history: %s\n", err)
+			}
 		}
 		state.Logf("%d items loaded from history file %s\n", len(state.previousHistory), filepath.Join(historyDir, "msh_history"))
 	} else {
-		state.Logf("Error getting history directory: %s\n", err)
+		fmt.Fprintf(os.Stderr, "Error getting history directory: %s\n", err)
 	}
 
 	err = state.printPrompt()
@@ -2784,6 +2786,11 @@ func (state *TermState) saveHistory() {
 		return
 	}
 
+	if err := prepareHistoryStorage(historyDir); err != nil {
+		fmt.Fprintf(os.Stderr, "Error preparing history storage: %s\n", err)
+		return
+	}
+
 	// We are going to save 3 files.
 	// File 1: Main history made up of records of
 	//   1. 8 byte unix timestamp in UTC
@@ -2797,7 +2804,7 @@ func (state *TermState) saveHistory() {
 	directoryFile := filepath.Join(historyDir, "msh_dirs")
 
 	// Open history file for appending
-	historyF, err := os.OpenFile(historyFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	historyF, err := openHistoryFile(historyFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error opening history file %s: %s\n", historyFile, err)
 		return
@@ -2805,7 +2812,7 @@ func (state *TermState) saveHistory() {
 	defer historyF.Close()
 
 	// Open command file for appending
-	commandF, err := os.OpenFile(commandFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	commandF, err := openHistoryFile(commandFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error opening command file %s: %s\n", commandFile, err)
 		return
@@ -2813,7 +2820,7 @@ func (state *TermState) saveHistory() {
 	defer commandF.Close()
 
 	// Open directory file for appending
-	directoryF, err := os.OpenFile(directoryFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	directoryF, err := openHistoryFile(directoryFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error opening directory file %s: %s\n", directoryFile, err)
 		return
