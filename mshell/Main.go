@@ -1995,7 +1995,7 @@ func (state *TermState) cycleTabCompletionColumn(direction int) {
 	}
 
 	state.UpdateSize()
-	availableRows := state.numRows - state.promptRow
+	availableRows := state.numRows - state.commandRegion.PaintedRows
 	if availableRows < 0 {
 		availableRows = 0
 	}
@@ -2362,14 +2362,19 @@ func (state *TermState) ClearScreen() {
 
 	// Send off cursor position request
 	state.UpdateSize()
-	if _, _, err := state.getCurrentPos(); err != nil {
+	row, _, err := state.getCurrentPos()
+	if err != nil {
 		state.Logf("Error getting cursor position: %s\n", err)
 		return
 	}
+	// Clearing needs an absolute row; ordinary prompt painting does not.
+	state.commandRegion.OriginRow = OneBasedTerminalCoord(row-int(state.commandRegion.CursorRow))
+	state.commandRegion.RelativeOrigin = false
+	state.promptRow = int(state.commandRegion.OriginRow)
 
 	// The cursor may sit on a later row of a wrapped command; scroll so the
 	// prompt's first line reaches the top, not the cursor's row.
-	rowsToScroll := int(state.commandRegion.OriginRow) - state.numPromptLines
+	rowsToScroll := max(0, int(state.commandRegion.OriginRow) - state.numPromptLines)
 	state.ScrollDown(rowsToScroll)
 	state.Logf("Cleared screen, scrolled %d rows\n", rowsToScroll)
 	// fmt.Fprintf(state.f, "%d %d %d\n", curRow, state.numPromptLines, rowsToScroll)
@@ -2517,6 +2522,8 @@ type WidthProbeBatch struct {
 	output []byte // Reused for the probe burst and subsequent cleanup write.
 	seen map[string]bool // Reused candidate deduplication scratch.
 	ScratchRow OneBasedTerminalCoord
+	ScratchMinRow OneBasedTerminalCoord // Nonzero permits learning the row from the first width reply.
+	ScratchMaxRow OneBasedTerminalCoord
 	Candidates []string // Frozen in the order probes were sent.
 	Widths []Cells      // Staged observations, matching Candidates.
 	Failure error       // First failure; prevents accepting further results.
@@ -2530,6 +2537,8 @@ func (batch *WidthProbeBatch) Clear() {
 	batch.Candidates = batch.Candidates[:0]
 	batch.Widths = batch.Widths[:0]
 	batch.ScratchRow = 0
+	batch.ScratchMinRow = 0
+	batch.ScratchMaxRow = 0
 	batch.Failure = nil
 	batch.RepliesReceived = 0
 }
@@ -2555,6 +2564,13 @@ func (batch *WidthProbeBatch) acceptReply(token CsiToken) error {
 		return err
 	}
 
+	if batch.ScratchRow == 0 && batch.ScratchMinRow > 0 {
+		if report.Row < batch.ScratchMinRow || report.Row > batch.ScratchMaxRow {
+			batch.Failure = fmt.Errorf("width probe: scratch row %d outside visible region", report.Row)
+			return batch.Failure
+		}
+		batch.ScratchRow = report.Row
+	}
 	width, err := widthFromCursorReport(report, batch.ScratchRow, candidateWidthBound(batch.Candidates[len(batch.Widths)]))
 	if err != nil {
 		batch.Failure = err
@@ -3644,7 +3660,6 @@ ParseError:
 PromptPrint:
 	// Reset before printPrompt, which can queue keys while querying the terminal.
 	state.index = 0
-	state.ensurePromptNewline()
 	err = state.printPrompt()
 	if err != nil {
 		fmt.Fprint(os.Stderr, err.Error())
@@ -3676,9 +3691,7 @@ func promptNewlineSequence(columns int) string {
 func (state *TermState) printPrompt() error {
 	// Get out of raw mode
 	state.leaveRawMode()
-
-	// My hard-coded color for now.
-	fmt.Fprintf(os.Stdout, "\033[35m")
+	state.ensurePromptNewline()
 
 	// Print PWD
 	cwd, err := os.Getwd()
@@ -3713,21 +3726,13 @@ func (state *TermState) printPrompt() error {
 		promptText = fmt.Sprintf("%s (%d)> \n:: ", terminalSafeText(cwd, false), len(state.stack))
 	}
 
-	fmt.Fprint(os.Stdout, promptText)
-	state.numPromptLines = strings.Count(promptText, "\n") + 1
-	fmt.Fprintf(os.Stdout, "\033[0m")
-
-	// fmt.Fprintf(os.Stdout, "mshell> ")
-
 	if err = state.enterRawMode(); err != nil {
 		return fmt.Errorf("Error setting terminal to raw mode: %s", err)
 	}
 
 	state.UpdateSize()
-	if err = state.anchorPrompt(os.Stdout); err != nil {
-		return fmt.Errorf("Error getting cursor position: %s", err)
-	}
-	return nil
+	read := func() (TerminalToken, error) { return state.InteractiveLexer(state.stdInState) }
+	return state.paintPrompt(os.Stdout, read, SourceText(promptText))
 }
 
 // Returns the current cursor position as (row, col)

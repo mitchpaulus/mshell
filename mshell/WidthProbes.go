@@ -16,6 +16,9 @@ import (
 // screens with at least two rows; a full-screen legacy region must shrink first.
 type ProbeRegion struct {
 	OriginRow OneBasedTerminalCoord
+	// The prompt layout establishes columns and relative rows without a CPR.
+	// Until a width probe learns the absolute row, OriginRow is zero.
+	RelativeOrigin bool
 	OriginCol OneBasedTerminalCoord
 	CursorRow RowIndex
 	PaintedRows int // Rows occupied by the previous paint, including suggestions and completions; excludes scratch.
@@ -67,9 +70,10 @@ func (region *ProbeRegion) validate() error {
 	if region.PaintedRows < 1 || region.PaintedRows >= region.ScreenRows {
 		return fmt.Errorf("width probe: painted row count %d must be between 1 and %d", region.PaintedRows, region.ScreenRows-1)
 	}
-	if region.OriginRow < 1 {
+	if region.OriginRow < 1 && !(region.RelativeOrigin && region.OriginRow == 0) {
 		return fmt.Errorf("width probe: origin row %d must be positive", region.OriginRow)
 	}
+	if region.RelativeOrigin && region.OriginRow != 0 { return fmt.Errorf("width probe: relative origin has an absolute row") }
 	if region.OriginCol < 1 || Cells(region.OriginCol) > region.Columns {
 		return fmt.Errorf("width probe: origin column %d outside terminal columns 1..%d", region.OriginCol, region.Columns)
 	}
@@ -103,12 +107,13 @@ func (region *ProbeRegion) enterScratch(dst []byte) ([]byte, OneBasedTerminalCoo
 			dst = appendProbeCursorControl(dst, distance, 'B')
 		}
 		dst = append(dst, '\r', '\n')
-		if int(region.OriginRow)+region.PaintedRows > region.ScreenRows {
+		if !region.RelativeOrigin && int(region.OriginRow)+region.PaintedRows > region.ScreenRows {
 			region.OriginRow--
 		}
 		region.ScratchOwned = true
 	}
 	dst = append(dst, "\033[2K"...)
+	if region.RelativeOrigin { return dst, 0 }
 	return dst, region.OriginRow + OneBasedTerminalCoord(region.PaintedRows)
 }
 
@@ -221,6 +226,10 @@ func (state *TermState) measureWidths(writer io.Writer, readTerminal func() (Ter
 
 	output, row := region.enterScratch(batch.output[:0])
 	batch.ScratchRow = row
+	if region.RelativeOrigin {
+		batch.ScratchMinRow = OneBasedTerminalCoord(region.PaintedRows+1)
+		batch.ScratchMaxRow = OneBasedTerminalCoord(region.ScreenRows)
+	}
 	for _, candidate := range batch.Candidates {
 		output = append(output, "\r\033[2K"...)
 		output = append(output, candidate...)
@@ -246,6 +255,10 @@ func (state *TermState) measureWidths(writer io.Writer, readTerminal func() (Ter
 		} else {
 			region.CursorRow = 0
 			batch.Failure = batch.commit(&state.widthCache)
+			if batch.Failure == nil && region.RelativeOrigin {
+				region.OriginRow = batch.ScratchRow - OneBasedTerminalCoord(region.PaintedRows)
+				region.RelativeOrigin = false
+			}
 		}
 		if batch.Failure != nil {
 			state.widthProbesBlocked = true

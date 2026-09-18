@@ -124,6 +124,16 @@ func TestWidthProbeBatchFailureIsSticky(t *testing.T) {
 	}
 }
 
+func TestWidthProbeLearnsScratchRow(t *testing.T) {
+	for _, replies := range [][]string{{"3;2", "3;3"}, {"1;2", "1;3"}, {"6;2", "6;3"}, {"3;2", "4;3"}} {
+		batch := WidthProbeBatch{ScratchMinRow: 2, ScratchMaxRow: 5, Candidates: []string{"é", "世"}}
+		for _, reply := range replies { batch.acceptReply(CsiToken{FinalChar: 'R', Params: []byte(reply)}) }
+		wantSuccess := replies[0] == "3;2" && replies[1] == "3;3"
+		if (batch.Failure == nil) != wantSuccess { t.Fatalf("replies %v: failure %v", replies, batch.Failure) }
+		if batch.RepliesReceived != 2 { t.Fatal("failed batch did not drain") }
+	}
+}
+
 func TestQueuedInputLookahead(t *testing.T) {
 	state := TermState{
 		queuedInput: []TerminalToken{

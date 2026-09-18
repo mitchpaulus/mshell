@@ -230,3 +230,104 @@ func TestPromptNewlineUnusableWidth(t *testing.T) {
 		}
 	}
 }
+
+func TestPromptLayoutWithoutCursorQuery(t *testing.T) {
+	for _, columns := range []int{4, 8, 20} {
+		for _, startRow := range []int{0, 2, 4} {
+			for _, prompt := range []SourceText{"~ (0)> \n:: ", "/a/very/long/path (3)> \n:: ", "世/é (0)> \n:: ", "??? >", "abcd"} {
+				t.Run(fmt.Sprintf("%dx5/row%d/%s", columns, startRow, prompt), func(t *testing.T) {
+					screen := newCommandScreen(t, 5, columns)
+					screen.row = startRow
+					state := TermState{numRows: 5, numCols: columns, currentCommand: "abc", index: 3}
+					state.widthCache.remember("世", 2)
+					state.widthCache.remember("é", 1)
+					read := func() (TerminalToken, error) { t.Fatal("known prompt requested input"); return nil, io.EOF }
+					if err := state.paintPrompt(screen, read, prompt); err != nil { t.Fatal(err) }
+					if len(screen.replies) != 0 || !state.commandRegion.RelativeOrigin || state.commandRegion.OriginRow != 0 {
+						t.Fatal("prompt obtained an absolute row")
+					}
+					if screen.pending || int(state.commandRegion.OriginCol) != screen.col+1 {
+						t.Fatalf("incorrect origin: region %+v, screen column %d", state.commandRegion, screen.col)
+					}
+					if state.numPromptLines != screen.row+screen.scrolls-startRow+1 {
+						t.Fatalf("prompt height %d does not match rendered rows", state.numPromptLines)
+					}
+					if state.currentCommand != "abc" || state.index != 3 { t.Fatal("prompt changed editor text") }
+					// Repainting and scrolling work without an absolute origin.
+					for _, command := range []SourceText{"abc", SourceText(strings.Repeat("x", columns*6)), "a"} {
+						state.currentCommand, state.index = command, ByteOffset(len(command))
+						ready, err := state.refreshCommandDisplay(screen, read, &state.commandRegion)
+						if !ready || err != nil { t.Fatalf("repaint: ready %v, error %v", ready, err) }
+						view := commandViewportFor(state.displayLayout, state.commandRegion)
+						if screen.col != int(view.CursorCol) || screen.pending { t.Fatal("repaint misplaced cursor") }
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestPromptMeasuresUnknownWidths(t *testing.T) {
+	for _, startRow := range []int{0, 4} {
+		screen := newCommandScreen(t, 5, 20)
+		screen.row = startRow
+		state := TermState{numRows: 5, numCols: 20}
+		if err := state.paintPrompt(screen, screen.read, "~/世 (0)> \n:: "); err != nil { t.Fatal(err) }
+		if state.widthCache.Entries["世"] != 2 || state.widthBatch.RepliesReceived != 1 {
+			t.Fatal("prompt did not use the width measurement pipeline")
+		}
+		if state.commandRegion.RelativeOrigin || int(state.commandRegion.OriginRow) != screen.row+1 || state.commandRegion.OriginCol != 4 {
+			t.Fatalf("measured prompt origin does not match screen: %+v", state.commandRegion)
+		}
+		// A later command can use the measured width without another query.
+		state.currentCommand, state.index = "世", ByteOffset(len("世"))
+		read := func() (TerminalToken, error) { t.Fatal("cached command requested input"); return nil, io.EOF }
+		if ready, err := state.refreshCommandDisplay(screen, read, &state.commandRegion); !ready || err != nil { t.Fatalf("repaint: %v", err) }
+		if screen.col != 5 { t.Fatalf("command cursor column %d, want 5", screen.col) }
+	}
+}
+
+func TestPromptPreservesQueuedInput(t *testing.T) {
+	state := TermState{numRows: 5, numCols: 20, queuedInput: []TerminalToken{AsciiToken{Char: 'a'}}}
+	var output bytes.Buffer
+	read := func() (TerminalToken, error) { t.Fatal("ASCII prompt read input"); return nil, io.EOF }
+	if err := state.paintPrompt(&output, read, "~ (0)> \n:: "); err != nil { t.Fatal(err) }
+	if strings.Contains(output.String(), "\033[6n") { t.Fatal("prompt requested cursor position") }
+	if len(state.queuedInput) != 1 || state.queuedInputIndex != 0 { t.Fatal("prompt consumed queued input") }
+}
+
+func TestCommandMeasuresAfterRelativePrompt(t *testing.T) {
+	for _, startRow := range []int{0, 4} {
+		screen := newCommandScreen(t, 5, 20)
+		screen.row = startRow
+		state := TermState{numRows: 5, numCols: 20}
+		if err := state.paintPrompt(screen, screen.read, "~ (0)> \n:: "); err != nil { t.Fatal(err) }
+		// Grow the command before the first probe so scratch is relative to a
+		// multi-row region, including when growth has already scrolled it.
+		state.currentCommand = SourceText(strings.Repeat("a", 30))
+		state.index = state.commandEnd()
+		if ready, err := state.refreshCommandDisplay(screen, screen.read, &state.commandRegion); !ready || err != nil { t.Fatalf("ASCII repaint: %v", err) }
+		state.currentCommand += "世é"
+		state.index = state.commandEnd()
+		keySent := false
+		read := func() (TerminalToken, error) {
+			if !keySent { keySent = true; return AsciiToken{Char: 'k'}, nil }
+			return screen.read()
+		}
+		if ready, err := state.refreshCommandDisplay(screen, read, &state.commandRegion); ready || err != nil { t.Fatalf("queued frame: ready %v, error %v", ready, err) }
+		if state.commandRegion.RelativeOrigin || int(state.commandRegion.OriginRow) != screen.row+1 || state.widthCache.Entries["世"] != 2 || state.widthCache.Entries["é"] != 1 {
+			t.Fatalf("relative probe did not learn screen geometry and widths: %+v", state.commandRegion)
+		}
+		if token, err := state.readInputToken(); err != nil || token != (AsciiToken{Char: 'k'}) { t.Fatalf("queued key: %v, %v", token, err) }
+		if ready, err := state.refreshCommandDisplay(screen, screen.read, &state.commandRegion); !ready || err != nil { t.Fatalf("measured repaint: %v", err) }
+		if int(state.commandRegion.OriginRow)+int(state.commandRegion.CursorRow) != screen.row+1 { t.Fatal("cursor row lost after measuring") }
+	}
+}
+
+func TestPromptUnknownWidthOnOneRow(t *testing.T) {
+	screen := newCommandScreen(t, 1, 20)
+	state := TermState{numRows: 1, numCols: 20}
+	read := func() (TerminalToken, error) { t.Fatal("one-row prompt attempted a probe"); return nil, io.EOF }
+	if err := state.paintPrompt(screen, read, "世\n:: "); err != nil { t.Fatal(err) }
+	if !state.commandRegion.RelativeOrigin || screen.col != 3 || screen.line(0) != "::                  " { t.Fatal("one-row prompt misplaced") }
+}

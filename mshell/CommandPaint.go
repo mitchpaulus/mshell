@@ -44,9 +44,10 @@ func (region *ProbeRegion) validatePaintRegion() error {
 	if region.Columns < 4 || region.Columns > Cells(maxTerminalCoordinate) || region.ScreenRows < 1 || region.ScreenRows > int(maxTerminalCoordinate) {
 		return fmt.Errorf("command paint: unsupported terminal geometry")
 	}
-	if region.OriginRow < 1 || int(region.OriginRow) > region.ScreenRows || region.OriginCol < 1 || Cells(region.OriginCol) > region.Columns {
+	if (region.OriginRow < 1 && !(region.RelativeOrigin && region.OriginRow == 0)) || int(region.OriginRow) > region.ScreenRows || region.OriginCol < 1 || Cells(region.OriginCol) > region.Columns {
 		return fmt.Errorf("command paint: invalid region origin")
 	}
+	if region.RelativeOrigin && region.OriginRow != 0 { return fmt.Errorf("command paint: relative origin has an absolute row") }
 	if region.PaintedRows < 1 || region.PaintedRows > region.ScreenRows || region.CursorRow < 0 || int(region.CursorRow) >= region.PaintedRows || region.ViewportStart < 0 || region.TrailerRows < 0 {
 		return fmt.Errorf("command paint: invalid previous frame")
 	}
@@ -56,7 +57,7 @@ func (region *ProbeRegion) validatePaintRegion() error {
 	if region.PromptHidden && (region.OriginCol != 1 || region.CommandStartCol < 0 || region.CommandStartCol >= region.Columns) {
 		return fmt.Errorf("command paint: invalid hidden prompt geometry")
 	}
-	if int(region.OriginRow)+region.ownedRows()-1 > region.ScreenRows {
+	if region.ownedRows() > region.ScreenRows || int(region.OriginRow)+region.ownedRows()-1 > region.ScreenRows {
 		return fmt.Errorf("command paint: owned region extends beyond terminal")
 	}
 	return nil
@@ -92,7 +93,9 @@ func (state *TermState) appendCommandPaint(dst []byte, region ProbeRegion) ([]by
 	if view.ReserveScratch && trailers == 0 { wantedRows++ }
 	ownedRows := max(previousOwned, wantedRows)
 	next := region
-	next.OriginRow -= OneBasedTerminalCoord(max(0, int(region.OriginRow)+ownedRows-1-region.ScreenRows))
+	if !region.RelativeOrigin {
+		next.OriginRow -= OneBasedTerminalCoord(max(0, int(region.OriginRow)+ownedRows-1-region.ScreenRows))
+	}
 	next.CursorRow = view.CursorRow
 	next.PaintedRows = view.Rows
 	next.TrailerRows = trailers
@@ -277,6 +280,50 @@ func (state *TermState) prepareMeasuredCommandDisplay(writer io.Writer, readTerm
 	return state.prepareCommandDisplay(region.commandStartCol(), region.Columns, func(candidates []string) error {
 		return state.measureWidths(writer, readTerminal, region, &state.widthBatch, candidates)
 	})
+}
+
+// paintPrompt lays out the known prompt text with the same atoms, measured
+// widths, placeholders and wrap rules as command text. The caller is in raw
+// mode. Starting at column one and ending at the layout's cursor establishes
+// the command origin without asking the terminal for its position.
+func (state *TermState) paintPrompt(writer io.Writer, readTerminal func() (TerminalToken, error), source SourceText) error {
+	columns := Cells(state.numCols)
+	if columns < 4 || columns > Cells(maxTerminalCoordinate) || state.numRows < 1 || state.numRows > int(maxTerminalCoordinate) {
+		return fmt.Errorf("prompt: unsupported terminal geometry")
+	}
+	if err := writeProbeOutput(writer, []byte("\r\033[0m")); err != nil { return err }
+	region := ProbeRegion{RelativeOrigin: true, OriginCol: 1, PaintedRows: 1, ScreenRows: state.numRows, Columns: columns}
+	atoms := segmentAtomsInto(nil, source)
+	misses := resolveCachedWidths(nil, source, atoms, &state.widthCache, &state.eligibilityCache, columns)
+	if len(misses) > 0 && state.numRows > 1 {
+		if err := state.measureWidths(writer, readTerminal, &region, &state.widthBatch, misses); err != nil { return err }
+	}
+	finishWidthResolution(source, atoms, &state.widthCache)
+	layout := layoutAtomsInto(nil, atoms, ByteOffset(len(source)), 0, columns)
+	output := []byte("\033[35m")
+	for i, row := range layout.Rows {
+		if i > 0 && layout.Rows[i-1].EndType != RowEndSoftExact {
+			output = append(output, '\r', '\n')
+		}
+		for j := row.AtomStart; j < row.AtomEnd; j++ {
+			output = append(output, atoms[j].displayText(source)...)
+		}
+	}
+	row, col := int(layout.CursorRow), int(layout.CursorCol)
+	if layout.PendingWrap {
+		output = append(output, '\r', '\n')
+		row++
+		col = 0
+	}
+	output = append(output, "\033[0m"...)
+	if err := writeProbeOutput(writer, output); err != nil { return err }
+	state.numPromptLines = row+1
+	origin := 0
+	if !region.RelativeOrigin { origin = min(state.numRows, int(region.OriginRow)+row) }
+	state.anchorCommandRegion(origin, col+1)
+	state.commandRegion.RelativeOrigin = region.RelativeOrigin
+	state.promptRow = origin
+	return nil
 }
 
 // anchorCommandRegion starts a fresh editing region at the reported prompt
