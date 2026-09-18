@@ -15,7 +15,7 @@ func GetHistoryDir() (string, error) {
 		if stat, err := os.Stat(localAppData); err == nil && stat.IsDir() {
 			// Create dir 'msh' if it doesn't exist
 			dir := filepath.Join(localAppData, "msh")
-			err := os.MkdirAll(dir, 0755)
+			err := ensureHistoryDir(dir)
 			if err != nil {
 				return "", err
 			}

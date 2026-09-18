@@ -14,7 +14,7 @@ func GetHistoryDir() (string, error) {
 		// Check that the directory exists
 		if stat, err := os.Stat(xdgDataHome); err == nil && stat.IsDir() {
 			dir = filepath.Join(xdgDataHome, "msh")
-			if err := os.MkdirAll(dir, 0755); err != nil {
+			if err := ensureHistoryDir(dir); err != nil {
 				return "", err
 			}
 			return dir, nil
@@ -27,7 +27,7 @@ func GetHistoryDir() (string, error) {
 		return "", err
 	} else {
 		dir = filepath.Join(homeDir, ".local", "share", "msh")
-		if err := os.MkdirAll(dir, 0755); err != nil {
+		if err := ensureHistoryDir(dir); err != nil {
 			return "", err
 		}
 	}

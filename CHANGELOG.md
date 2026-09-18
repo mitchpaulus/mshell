@@ -283,6 +283,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Unix command history is now private by default, with existing owned storage permissions repaired on load/save.
+  Unsafe history objects are rejected and permission errors are reported.
+
 - The type checker gave `index` and `lastIndexOf` a result type of `int`, but both
   return `Maybe[int]` at runtime (`none` when the substring is not found). The
   signature is now `(str str -- Maybe[int])`
