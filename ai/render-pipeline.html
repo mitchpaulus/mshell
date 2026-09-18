@@ -1,0 +1,724 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mshell Render Pipeline</title>
+<style>
+  :root {
+    --bg: #FAFAF7;
+    --ink: #1F2823;
+    --muted: #5C6660;
+    --line: #D8DCD6;
+    --panel: #F1F2ED;
+    --accent: #0E7A5F;
+    --accent-soft: #E3EFE9;
+    --rust: #A6512B;
+    --rust-soft: #F4E7DE;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #141715;
+      --ink: #E4E8E3;
+      --muted: #97A19A;
+      --line: #333B36;
+      --panel: #1B201D;
+      --accent: #3FBF96;
+      --accent-soft: #1B2C26;
+      --rust: #D98959;
+      --rust-soft: #2E211A;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #141715;
+    --ink: #E4E8E3;
+    --muted: #97A19A;
+    --line: #333B36;
+    --panel: #1B201D;
+    --accent: #3FBF96;
+    --accent-soft: #1B2C26;
+    --rust: #D98959;
+    --rust-soft: #2E211A;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: Charter, 'Bitstream Charter', 'Sitka Text', Cambria, Georgia, serif;
+    font-size: 1.06rem;
+    line-height: 1.6;
+    margin: 0;
+    padding: 3rem 1.25rem 5rem;
+  }
+  main { max-width: 46rem; margin: 0 auto; }
+
+  code, pre, h1, h2, .stage, .fig-label, table {
+    font-family: ui-monospace, 'Cascadia Code', 'JetBrains Mono', 'Source Code Pro', Menlo, Consolas, monospace;
+  }
+
+  h1 {
+    font-size: 1.7rem;
+    line-height: 1.25;
+    letter-spacing: -0.01em;
+    margin: 0 0 0.4rem;
+    text-wrap: balance;
+  }
+  .subtitle {
+    color: var(--muted);
+    margin: 0 0 0.75rem;
+  }
+  .meta {
+    color: var(--muted);
+    font-size: 0.82rem;
+    font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace;
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    padding: 0.5rem 0;
+    margin-bottom: 3rem;
+  }
+
+  section { margin-bottom: 3.25rem; }
+  .stage {
+    color: var(--accent);
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    margin-bottom: 0.2rem;
+  }
+  h2 {
+    font-size: 1.22rem;
+    line-height: 1.3;
+    margin: 0 0 0.9rem;
+    text-wrap: balance;
+  }
+  p { margin: 0 0 1rem; }
+
+  code {
+    font-size: 0.88em;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    padding: 0.08em 0.32em;
+    white-space: nowrap;
+  }
+  pre {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 0.85rem 1rem;
+    overflow-x: auto;
+    font-size: 0.85rem;
+    line-height: 1.55;
+  }
+  pre code { background: none; border: none; padding: 0; white-space: pre; }
+
+  figure {
+    margin: 1.5rem 0 1.75rem;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--panel);
+    padding: 1.1rem 1.1rem 0.8rem;
+    overflow-x: auto;
+  }
+  figure svg { display: block; max-width: 100%; height: auto; margin: 0 auto; min-width: 620px; }
+  figcaption {
+    font-size: 0.86rem;
+    color: var(--muted);
+    margin-top: 0.75rem;
+    line-height: 1.5;
+  }
+  .fig-label { color: var(--accent); }
+
+  table {
+    border-collapse: collapse;
+    font-size: 0.85rem;
+    width: 100%;
+    margin: 1.25rem 0;
+  }
+  th, td {
+    text-align: left;
+    border-bottom: 1px solid var(--line);
+    padding: 0.45rem 1rem 0.45rem 0;
+    vertical-align: top;
+  }
+  th {
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    font-size: 0.72rem;
+    letter-spacing: 0.1em;
+  }
+  td.cells { font-variant-numeric: tabular-nums; }
+
+  ul { padding-left: 1.2rem; margin: 0 0 1rem; }
+  li { margin-bottom: 0.45rem; }
+  li::marker { color: var(--muted); }
+
+  .dies {
+    border-left: 3px solid var(--rust);
+    background: var(--rust-soft);
+    border-radius: 0 4px 4px 0;
+    padding: 0.8rem 1rem;
+    margin: 1.25rem 0;
+  }
+  .dies p { margin: 0 0 0.5rem; font-weight: 600; }
+  .dies ul { margin: 0; }
+  .keeps {
+    border-left: 3px solid var(--accent);
+    background: var(--accent-soft);
+    border-radius: 0 4px 4px 0;
+    padding: 0.8rem 1rem;
+    margin: 1.25rem 0;
+  }
+  .keeps p { margin: 0; }
+
+  a { color: var(--accent); }
+</style>
+
+<main>
+  <h1>mshell Render Pipeline</h1>
+  <p class="subtitle">From keystroke to painted prompt — today's column-math renderer, and where <code>layoutInto</code> takes over in Phase&nbsp;2.</p>
+  <p class="meta">branch prompt-wrapping-design &middot; Phase 1 (width + layout) complete &middot; Phase 2 (renderer swap) planned &middot; 2026-08-16</p>
+
+  <!-- ============================== 1 ============================== -->
+  <section>
+    <p class="stage">Stage 1 · Input</p>
+    <h2>Keystroke → TermState</h2>
+    <p>
+      Interactive mode is one loop (<code>InteractiveMode</code>, Main.go:2820): read a token, apply it to state, repaint, repeat.
+      Raw bytes from the terminal are buffered by <code>StdinReaderState.ReadByte</code> and parsed by <code>InteractiveLexer</code>,
+      which assembles escape sequences (arrows, Alt-chords, bracketed paste) into a single <code>TerminalToken</code>.
+      <code>HandleToken</code> is the only mutator: it edits <code>currentCommand []rune</code> and the cursor
+      <code>index</code> (a <em>rune</em> index), plus history and tab-completion state. Nothing in this stage touches the screen.
+    </p>
+
+    <figure>
+      <svg viewBox="0 0 960 200" role="img" aria-label="The interactive event loop: terminal bytes flow through ReadByte, InteractiveLexer, and HandleToken into TermState; Render reads TermState and writes one buffer back to the terminal.">
+        <defs>
+          <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+          </marker>
+        </defs>
+        <g fill="none" stroke="currentColor" stroke-width="1.2">
+          <rect x="10"  y="50" width="100" height="52" rx="3"/>
+          <rect x="160" y="50" width="110" height="52" rx="3"/>
+          <rect x="320" y="50" width="130" height="52" rx="3"/>
+          <rect x="500" y="50" width="120" height="52" rx="3"/>
+          <rect x="670" y="40" width="150" height="72" rx="3"/>
+          <rect x="862" y="50" width="88"  height="52" rx="3" stroke-width="2"/>
+        </g>
+        <g font-size="12" fill="currentColor" text-anchor="middle">
+          <text x="60"  y="80">terminal</text>
+          <text x="215" y="74">ReadByte</text>
+          <text x="215" y="90" font-size="10" opacity="0.65">Main.go:2347</text>
+          <text x="385" y="74">InteractiveLexer</text>
+          <text x="385" y="90" font-size="10" opacity="0.65">Main.go:2465</text>
+          <text x="560" y="74">HandleToken</text>
+          <text x="560" y="90" font-size="10" opacity="0.65">only mutator</text>
+          <text x="745" y="66">TermState</text>
+          <text x="745" y="84" font-size="10" opacity="0.75">currentCommand []rune</text>
+          <text x="745" y="99" font-size="10" opacity="0.75">index (rune idx)</text>
+          <text x="906" y="80">Render</text>
+        </g>
+        <g stroke="currentColor" stroke-width="1.2" marker-end="url(#arr)" fill="none">
+          <line x1="110" y1="76" x2="156" y2="76"/>
+          <line x1="270" y1="76" x2="316" y2="76"/>
+          <line x1="450" y1="76" x2="496" y2="76"/>
+          <line x1="620" y1="76" x2="666" y2="76"/>
+          <line x1="820" y1="76" x2="858" y2="76"/>
+          <path d="M 906 102 L 906 160 L 60 160 L 60 106"/>
+        </g>
+        <g font-size="10.5" fill="currentColor" opacity="0.7" text-anchor="middle">
+          <text x="133" y="68">bytes</text>
+          <text x="293" y="68">byte</text>
+          <text x="473" y="60">Terminal-</text>
+          <text x="473" y="71">Token</text>
+          <text x="643" y="68">mutates</text>
+          <text x="839" y="68">reads</text>
+          <text x="483" y="153">renderBuffer — one os.Stdout.Write per keystroke</text>
+        </g>
+      </svg>
+      <figcaption><span class="fig-label">Fig 1.</span>
+        The event loop. Editing and painting are already cleanly separated — Phase 2 replaces only the rightmost box's internals.
+      </figcaption>
+    </figure>
+  </section>
+
+  <!-- ============================== 2 ============================== -->
+  <section>
+    <p class="stage">Stage 2 · Render today</p>
+    <h2>Column math, one row</h2>
+    <p>
+      <code>Render</code> (Main.go:1680) rebuilds the whole visible command every keystroke into <code>renderBuffer</code>:
+      jump to the column after the prompt (<code>\033[{promptLength+1}G</code>), clear to end of line, re-lex
+      <code>currentCommand</code> and emit each token wrapped in SGR color codes, append the gray history ghost,
+      draw tab-completion rows below, then park the cursor.
+    </p>
+    <p>
+      The geometry lives in two expressions, and both encode the same pair of assumptions:
+    </p>
+    <pre><code>s.renderBuffer = append(..., fmt.Sprintf("\033[%dG", s.promptLength+1)...)  // :1685
+pos := s.promptLength + 1 + s.index                                          // :1858</code></pre>
+    <p>
+      <code>index</code> is a rune count used as a column offset — so <em>one rune = one cell</em> — and
+      <code>\033[G</code> is an absolute column move on the current row — so <em>the prompt is one row</em>.
+      Wide CJK, emoji, and any command longer than the terminal width break both at once: the terminal auto-wraps
+      where it pleases, and the renderer's idea of the cursor drifts from the screen's.
+    </p>
+  </section>
+
+  <!-- ============================== 3 ============================== -->
+  <section>
+    <p class="stage">Stage 3 · Render in Phase 2</p>
+    <h2>layoutInto becomes the geometry source</h2>
+    <p>
+      The swap replaces arithmetic with a model. <code>Render</code> builds the layout text —
+      command + history ghost, rune <code>index</code> converted to a byte offset — and hands it to
+      <code>layoutInto(dst, text, cursor, numCols, params)</code>. What comes back is the complete screen geometry:
+      rows that tile the input, an end type per row, and the cursor as <code>(CursorRow, CursorCol)</code>.
+      Painting is then a walk over rows — no guessing, no CPR round-trips mid-render.
+    </p>
+    <p>
+      The prompt itself is <em>opaque</em>: it may contain arbitrary ANSI escapes, so mshell never measures its bytes.
+      It is printed verbatim, and the per-prompt CPR that the design already sends (Q2, batched in the Phase 4
+      fenced query) reports where the cursor actually landed. That measured column seeds the first layout row
+      (a small <code>startCol</code> parameter on <code>layoutInto</code>). This is stronger than what bash
+      (<code>\[ \]</code> markers), zsh (<code>%{ %}</code>), or fish (escape-stripping parser) do — all three
+      <em>assume</em> net-zero cursor movement; the CPR measures it, so even a cursor-moving prompt yields a correct
+      anchor. Content a prompt paints elsewhere on screen (the corner-clock hack) goes stale in every shell alike.
+    </p>
+
+    <figure>
+      <svg viewBox="0 0 880 330" role="img" aria-label="Before and after comparison of Render internals: today the cursor column is computed as promptLength plus one plus index; in Phase 2, layoutInto computes rows and a two-dimensional cursor, and a row painter emits stand-ins and colors.">
+        <defs>
+          <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+          </marker>
+        </defs>
+        <!-- panel titles -->
+        <g font-size="12" fill="currentColor" font-weight="bold">
+          <text x="110" y="24" text-anchor="middle">Render today</text>
+          <text x="640" y="24" text-anchor="middle">Render, Phase 2</text>
+        </g>
+        <line x1="330" y1="10" x2="330" y2="320" stroke="currentColor" stroke-width="0.6" opacity="0.35" stroke-dasharray="3 4"/>
+
+        <!-- LEFT: today -->
+        <g fill="none" stroke="currentColor" stroke-width="1.2">
+          <rect x="20" y="40"  width="180" height="40" rx="3"/>
+          <rect x="20" y="112" width="180" height="40" rx="3"/>
+          <rect x="20" y="256" width="180" height="40" rx="3"/>
+        </g>
+        <rect x="20" y="184" width="290" height="40" rx="3" fill="none" stroke="var(--rust)" stroke-width="1.6"/>
+        <g font-size="11.5" fill="currentColor" text-anchor="middle">
+          <text x="110" y="64">currentCommand []rune</text>
+          <text x="110" y="130">tokenize + SGR colors</text>
+          <text x="110" y="146" font-size="10" opacity="0.65">per-token \033[3xm</text>
+          <text x="110" y="280">renderBuffer → stdout</text>
+        </g>
+        <g font-size="11.5" fill="var(--rust)" text-anchor="middle">
+          <text x="165" y="201">cursor col = promptLength + 1 + index</text>
+          <text x="165" y="216" font-size="10">assumes 1 rune = 1 cell, single row</text>
+        </g>
+        <g stroke="currentColor" stroke-width="1.2" marker-end="url(#arr2)" fill="none">
+          <line x1="110" y1="80"  x2="110" y2="108"/>
+          <line x1="110" y1="152" x2="110" y2="180"/>
+          <line x1="110" y1="224" x2="110" y2="252"/>
+        </g>
+
+        <!-- RIGHT: phase 2 -->
+        <g fill="none" stroke="currentColor" stroke-width="1.2">
+          <rect x="460" y="40"  width="360" height="40" rx="3"/>
+          <rect x="460" y="256" width="360" height="40" rx="3"/>
+        </g>
+        <rect x="460" y="112" width="360" height="40" rx="3" fill="none" stroke="var(--accent)" stroke-width="1.8"/>
+        <rect x="460" y="184" width="360" height="40" rx="3" fill="none" stroke="var(--accent)" stroke-width="1.8" stroke-dasharray="5 3"/>
+        <g font-size="11.5" fill="currentColor" text-anchor="middle">
+          <text x="640" y="58">text = command + history ghost</text>
+          <text x="640" y="74" font-size="10" opacity="0.65">rune index → byte offset; prompt opaque, CPR → startCol</text>
+          <text x="640" y="280">renderBuffer → stdout (unchanged)</text>
+        </g>
+        <g font-size="11.5" fill="var(--accent)" text-anchor="middle">
+          <text x="640" y="130">layoutInto(text, cursor, numCols, params)</text>
+          <text x="640" y="146" font-size="10">rows + EndType + (CursorRow, CursorCol)</text>
+          <text x="640" y="201">row painter: rows × style spans × stand-ins</text>
+          <text x="640" y="216" font-size="10">SGR at emit time; advance per EndType; cursor move last</text>
+        </g>
+        <g stroke="currentColor" stroke-width="1.2" marker-end="url(#arr2)" fill="none">
+          <line x1="640" y1="80"  x2="640" y2="108"/>
+          <line x1="640" y1="152" x2="640" y2="180"/>
+          <line x1="640" y1="224" x2="640" y2="252"/>
+        </g>
+      </svg>
+      <figcaption><span class="fig-label">Fig 2.</span>
+        Only the geometry source changes. The rust box is the pair of assumptions being deleted; the solid green box
+        exists today (Phase 1, tested); the dashed green box is the Phase 2 work. First and last steps are shared.
+      </figcaption>
+    </figure>
+
+    <p>
+      Syntax highlighting survives unchanged in spirit but moves to emit time: <code>layoutInto</code> measures the
+      <em>plain</em> text, and the painter injects SGR escapes between clusters as it copies each row out
+      (Stage&nbsp;5). Escape codes never enter width math — command-side by construction, prompt-side by never
+      measuring the prompt at all. The "SGR-aware width" open flag closes on both fronts.
+    </p>
+  </section>
+
+  <!-- ============================== 4 ============================== -->
+  <section>
+    <p class="stage">Stage 4 · The representation rule</p>
+    <h2>Representations, splitting, and the width-2 floor</h2>
+    <p>
+      The screen never shows raw buffer bytes — it shows a <em>representation</em> of each cluster, and the width layer
+      already measures that representation rather than the raw text:
+    </p>
+
+    <table>
+      <thead>
+        <tr><th>cluster in buffer</th><th>painted as</th><th>cells</th><th>status</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>TAB</td><td>▸ (U+25B8)</td><td class="cells">1</td><td>in <code>clusterWidth</code> today</td></tr>
+        <tr><td>C0 control / DEL</td><td>^X</td><td class="cells">2</td><td>in <code>clusterWidth</code> today</td></tr>
+      </tbody>
+    </table>
+
+    <p>
+      A cluster wider than the whole terminal (codepoint model only: the family emoji sums to 8; adversarial ZWJ
+      chains are unbounded) is not replaced by a filler — it <strong>splits at codepoint-segment boundaries</strong>
+      and flows across rows, which is exactly what a codepoint-model terminal does with the raw bytes anyway.
+      A segment is a nonzero-width codepoint plus its zero-width followers (combining marks, ZWJ, selectors), so
+      every segment is 1 or 2 cells and no row ever starts with a zero-width mark. Whole-cluster placement stays
+      the default — a family at an ordinary line end wraps whole; splitting engages only when the cluster exceeds
+      the <em>total</em> width. Codepoint-model widths are additive across any byte range, so rows that begin
+      mid-cluster still satisfy the honesty property unchanged.
+    </p>
+    <p>
+      This works because of a hard floor: <strong>terminal width ≥ 2</strong>. Every placement unit — cluster
+      (≤ 2 in the cluster model) or segment (≤ 2 in the codepoint model) — fits by construction. The ≤ 2 bound
+      holds <em>after</em> one override in <code>clusterWidth</code>: uniseg deliberately widths U+2E3A/U+2E3B
+      (two-/three-em dash) as 3/4, but both are East Asian Neutral with <code>wcwidth</code> = 1, and terminals do
+      cell accounting with wcwidth-family tables — so our wrapper returns 1 for both, or any command containing
+      ⸻ would misdraw at every width. A calibration-probe candidate for Phase&nbsp;5. Below width 2,
+      the renderer bails: paints nothing, input still works, a resize repaints. A one-column terminal is not a
+      supported surface; refusing it honestly beats rendering garbage into it. The guard lives in
+      <code>Render</code>; <code>layoutInto</code> documents width ≥ 2 as a precondition (defensive clamp, not a
+      panic, so a racing resize degrades). The buffer keeps the original bytes throughout — only painting changes,
+      so editing, history, and submission see the real text.
+    </p>
+
+    <figure>
+      <svg viewBox="0 0 760 210" role="img" aria-label="One representation rule is consulted by two callers: layoutInto measures cell counts with it, and the row painter emits glyphs with it, so measurement and screen agree by construction.">
+        <defs>
+          <marker id="arr3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+          </marker>
+        </defs>
+        <rect x="255" y="20" width="250" height="62" rx="3" fill="none" stroke="var(--accent)" stroke-width="1.8"/>
+        <g font-size="12" fill="var(--accent)" text-anchor="middle">
+          <text x="380" y="45">representation rule</text>
+          <text x="380" y="63" font-size="10.5">f(cluster, params, termWidth)</text>
+        </g>
+        <g fill="none" stroke="currentColor" stroke-width="1.2">
+          <rect x="60"  y="140" width="240" height="52" rx="3"/>
+          <rect x="460" y="140" width="240" height="52" rx="3"/>
+        </g>
+        <g font-size="12" fill="currentColor" text-anchor="middle">
+          <text x="180" y="162">clusterWidth → layoutInto</text>
+          <text x="180" y="180" font-size="10.5" opacity="0.7">counts cells (Phase 1)</text>
+          <text x="580" y="162">row painter</text>
+          <text x="580" y="180" font-size="10.5" opacity="0.7">emits glyph bytes (Phase 2)</text>
+        </g>
+        <g stroke="currentColor" stroke-width="1.2" marker-end="url(#arr3)" fill="none">
+          <path d="M 320 82 L 200 136"/>
+          <path d="M 440 82 L 560 136"/>
+        </g>
+        <g font-size="10.5" fill="currentColor" opacity="0.7">
+          <text x="212" y="105" text-anchor="end">measures with it</text>
+          <text x="548" y="105" text-anchor="start">emits with it</text>
+        </g>
+      </svg>
+      <figcaption><span class="fig-label">Fig 3.</span>
+        The rule is a pure function of what both callers already know, so the layout needs no extra flags for the
+        painter — a cell counted is a cell drawn, by construction. If the two ever consult different rules, cursor
+        drift returns; keep them one function.
+      </figcaption>
+    </figure>
+
+    <p>
+      Concretely, the oversize branch at the placement site in <code>layoutInto</code> becomes: if
+      <code>clusterWidth(cluster, p) &gt; width</code>, iterate the cluster's codepoint segments and place each
+      through the normal wrap logic (a small segment iterator next to <code>clusterWidth</code>); the painter walks
+      the same segments when emitting. With the width-2 floor, <em>every</em> placement unit fits, the property
+      test's overflow exemption disappears, and <code>row.Width ≤ termWidth</code> becomes unconditional.
+    </p>
+  </section>
+
+  <!-- ============================== 5 ============================== -->
+  <section>
+    <p class="stage">Stage 5 · Highlighting</p>
+    <h2>Rows × spans: two interval sets, one byte string</h2>
+    <p>
+      Today highlighting <em>is</em> the render loop: <code>Render</code> iterates tokens and prints each lexeme
+      wrapped in SGR codes. In Phase 2 the emission inverts: tokens become a <strong>style map</strong> — ordered
+      <code>(startByte, endByte, style)</code> spans that tile the text (the if/else chain at Main.go:1710 becomes a
+      pure <code>tokenStyle(t)</code>) — and the painter walks each layout row's clusters, looking the style up
+      <em>by byte offset</em>. Rows and spans are two independent interval sets over the same string; the painter is
+      their intersection.
+    </p>
+
+    <figure>
+      <svg viewBox="0 0 880 440" role="img" aria-label="Tokenize and layoutInto independently produce style spans and rows over the same byte string; the painter intersects them, re-applying the active style when a wrap lands inside a token.">
+        <defs>
+          <marker id="arr4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+          </marker>
+        </defs>
+
+        <!-- sources -->
+        <rect x="340" y="14" width="200" height="40" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/>
+        <text x="440" y="38" font-size="12" fill="currentColor" text-anchor="middle">text = command + ghost</text>
+        <rect x="90"  y="92" width="220" height="40" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/>
+        <text x="200" y="116" font-size="12" fill="currentColor" text-anchor="middle">tokenize → style spans</text>
+        <rect x="570" y="92" width="220" height="40" rx="3" fill="none" stroke="var(--accent)" stroke-width="1.6"/>
+        <text x="680" y="116" font-size="12" fill="var(--accent)" text-anchor="middle">layoutInto → rows + cursor</text>
+        <g stroke="currentColor" stroke-width="1.2" marker-end="url(#arr4)" fill="none">
+          <path d="M 360 54 L 220 88"/>
+          <path d="M 520 54 L 660 88"/>
+          <line x1="200" y1="132" x2="200" y2="184"/>
+          <line x1="680" y1="132" x2="680" y2="276"/>
+        </g>
+
+        <!-- spans track -->
+        <text x="90" y="208" font-size="10.5" fill="currentColor" opacity="0.7" text-anchor="end">spans</text>
+        <g fill="none" stroke="currentColor" stroke-width="1.2">
+          <rect x="100" y="190" width="140" height="30"/>
+          <rect x="240" y="190" width="40"  height="30"/>
+          <rect x="600" y="190" width="180" height="30" opacity="0.55"/>
+        </g>
+        <rect x="280" y="190" width="320" height="30" fill="none" stroke="var(--accent)" stroke-width="1.6"/>
+        <g font-size="10.5" text-anchor="middle">
+          <text x="170" y="209" fill="currentColor">literal · 4m</text>
+          <text x="260" y="209" fill="currentColor" opacity="0.6">ws</text>
+          <text x="440" y="209" fill="var(--accent)">string · 31m</text>
+          <text x="690" y="209" fill="currentColor" opacity="0.6">ghost · 90m</text>
+        </g>
+
+        <!-- byte string bar -->
+        <rect x="100" y="238" width="680" height="26" rx="2" fill="none" stroke="currentColor" stroke-width="1.4"/>
+        <text x="440" y="255" font-size="10.5" fill="currentColor" opacity="0.7" text-anchor="middle">text bytes →</text>
+        <text x="100" y="280" font-size="9.5" fill="currentColor" opacity="0.55" text-anchor="start">0</text>
+        <text x="780" y="280" font-size="9.5" fill="currentColor" opacity="0.55" text-anchor="end">len(text)</text>
+
+        <!-- rows track -->
+        <text x="90" y="302" font-size="10.5" fill="currentColor" opacity="0.7" text-anchor="end">rows</text>
+        <g fill="none" stroke="var(--accent)" stroke-width="1.4">
+          <rect x="100" y="284" width="350" height="30"/>
+          <rect x="450" y="284" width="330" height="30"/>
+        </g>
+        <g font-size="10.5" fill="var(--accent)" text-anchor="middle">
+          <text x="275" y="303">row 0 · SoftExact</text>
+          <text x="615" y="303">row 1 · Final</text>
+        </g>
+
+        <!-- wrap boundary through the string token -->
+        <line x1="450" y1="182" x2="450" y2="322" stroke="var(--rust)" stroke-width="1.4" stroke-dasharray="4 3"/>
+        <text x="450" y="338" font-size="10.5" fill="var(--rust)" text-anchor="middle">wrap lands inside the string token</text>
+
+        <!-- painter -->
+        <g stroke="currentColor" stroke-width="1.2" marker-end="url(#arr4)" fill="none">
+          <line x1="330" y1="322" x2="365" y2="366"/>
+          <line x1="560" y1="322" x2="515" y2="366"/>
+        </g>
+        <rect x="270" y="370" width="340" height="52" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/>
+        <g font-size="11.5" fill="currentColor" text-anchor="middle">
+          <text x="440" y="391">painter: style by byte offset → renderBuffer</text>
+          <text x="440" y="408" font-size="10" opacity="0.7">\033[0m at row end · re-apply 31m at row 1 start · stand-ins emitted here</text>
+        </g>
+      </svg>
+      <figcaption><span class="fig-label">Fig 4.</span>
+        Rows and style spans are independent interval sets over one byte string. A token wrapping across rows needs no
+        special case — row 1's first clusters still land in the string span, so the painter re-applies its style.
+        Full <code>\033[0m</code> at every row end keeps SGR state from bleeding across row-advance bytes (and stops
+        background colors flood-filling on wrap); reset-and-reapply beats attribute diffing — a few bytes, always correct.
+      </figcaption>
+    </figure>
+
+    <ul>
+      <li><strong>History ghost</strong> stops being an append-after hack: it joins the layout text with one gray
+        span, so it wraps correctly — which it can't today. The cursor clamp (<code>cursor ≤ len(command)</code>)
+        already keeps the cursor out of it.</li>
+      <li><strong>Underlines</strong> (command literal <code>4;34m</code>, known builtins <code>4m</code>) are just
+        spans; the style map doesn't care they came from <code>BuiltInList</code> rather than the token type.</li>
+      <li><strong>Lexer-error path</strong> (unterminated input) degrades to one unstyled span — the painter doesn't
+        branch.</li>
+      <li><strong>Stand-ins inherit the token's style</strong> automatically — lookup is by the cluster's original
+        byte offset — or take a deliberate override (dim/reverse) to read as "not the real glyph".</li>
+      <li><strong>Testable alone:</strong> <code>text → spans</code> is pure, with the same tiling property as rows
+        (property 1's checker shape).</li>
+    </ul>
+  </section>
+
+  <!-- ============================== 6 ============================== -->
+  <section>
+    <p class="stage">Stage 6 · The total picture</p>
+    <h2>Four domains, typed at the boundaries</h2>
+    <p>
+      Everything above reduces to four kinds of data, and the render bugs this project exists to kill are all
+      <em>domain-crossing</em> bugs — the old cursor math added screen cells to a rune count
+      (<code>promptLength + 1 + index</code>, Main.go:1858). Go <strong>defined types</strong> (not aliases:
+      <code>type SourceText = string</code> checks nothing; <code>type SourceText string</code> makes cross-domain
+      assignment a compile error) let the signatures enforce the picture. Slicing preserves a defined string type —
+      <code>t[a:b]</code> is still <code>SourceText</code> — so <code>LayoutRow.Text</code> stays a typed, no-copy
+      subslice for free; only library boundaries (uniseg) need an explicit <code>string(t)</code>, contained inside
+      <code>clusterWidth</code> and the cluster walk.
+    </p>
+    <pre><code>type SourceText  string  // mshell source: command + ghost. Rows and spans slice it.
+type PromptBytes []byte  // opaque escapes; printed verbatim, measured only by CPR
+type ScreenBytes []byte  // renderBuffer: write-only output, never measured or re-read
+type Cells       int     // screen geometry: widths, columns, startCol, CursorCol
+type ByteOffset  int     // offset into SourceText: cursor, span and row bounds</code></pre>
+    <p>
+      The typed integers are the higher-value half: <code>Cells</code> and <code>ByteOffset</code> can never be added
+      to each other by accident, which retires the 1858-class bug at compile time. The typed strings then make the
+      flow itself readable: <code>layoutInto(text SourceText, cursor ByteOffset, width Cells, p) → LayoutResult</code>
+      says in its signature which domain every argument lives in.
+    </p>
+
+    <figure>
+      <svg viewBox="0 0 900 560" role="img" aria-label="Typed dataflow of the full renderer: rune-domain edit state and opaque prompt bytes convert into SourceText, cells, and byte offsets; tokenize and layoutInto produce spans and rows over SourceText; the painter consumes both plus the representation rule and emits write-only ScreenBytes.">
+        <defs>
+          <marker id="arr5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+          </marker>
+        </defs>
+
+        <!-- legend -->
+        <g font-size="10.5">
+          <rect x="600" y="14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.2"/>
+          <text x="620" y="25" fill="currentColor">SourceText / ByteOffset</text>
+          <rect x="600" y="36" width="14" height="14" fill="none" stroke="var(--accent)" stroke-width="1.6"/>
+          <text x="620" y="47" fill="var(--accent)">Cells (geometry)</text>
+          <rect x="600" y="58" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="4 3"/>
+          <text x="620" y="69" fill="currentColor" opacity="0.75">opaque bytes (never measured)</text>
+        </g>
+
+        <!-- sources -->
+        <rect x="40" y="20" width="230" height="46" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/>
+        <text x="155" y="39" font-size="11.5" fill="currentColor" text-anchor="middle">currentCommand []rune · index</text>
+        <text x="155" y="55" font-size="10" fill="currentColor" opacity="0.65" text-anchor="middle">edit domain (rune indices)</text>
+
+        <rect x="330" y="20" width="180" height="46" rx="3" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="4 3"/>
+        <text x="420" y="39" font-size="11.5" fill="currentColor" text-anchor="middle">prompt PromptBytes</text>
+        <text x="420" y="55" font-size="10" fill="currentColor" opacity="0.65" text-anchor="middle">printed verbatim</text>
+
+        <!-- conversions -->
+        <rect x="40" y="110" width="230" height="46" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/>
+        <text x="155" y="129" font-size="11.5" fill="currentColor" text-anchor="middle">+ ghost · rune → ByteOffset</text>
+        <text x="155" y="145" font-size="10" fill="currentColor" opacity="0.65" text-anchor="middle">text SourceText · cursor ByteOffset</text>
+
+        <rect x="330" y="110" width="180" height="46" rx="3" fill="none" stroke="var(--accent)" stroke-width="1.6"/>
+        <text x="420" y="129" font-size="11.5" fill="var(--accent)" text-anchor="middle">CPR reply</text>
+        <text x="420" y="145" font-size="10" fill="var(--accent)" text-anchor="middle">startCol Cells · promptRow</text>
+
+        <g stroke="currentColor" stroke-width="1.2" marker-end="url(#arr5)" fill="none">
+          <line x1="155" y1="66" x2="155" y2="106"/>
+          <line x1="420" y1="66" x2="420" y2="106"/>
+        </g>
+        <text x="432" y="90" font-size="10" fill="currentColor" opacity="0.65">measured by terminal</text>
+
+        <!-- parallel producers -->
+        <rect x="40" y="210" width="250" height="52" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/>
+        <text x="165" y="230" font-size="11.5" fill="currentColor" text-anchor="middle">tokenize → spans</text>
+        <text x="165" y="247" font-size="10" fill="currentColor" opacity="0.65" text-anchor="middle">[](start, end ByteOffset, style)</text>
+
+        <rect x="330" y="210" width="290" height="52" rx="3" fill="none" stroke="var(--accent)" stroke-width="1.8"/>
+        <text x="475" y="230" font-size="11.5" fill="var(--accent)" text-anchor="middle">layoutInto(text, cursor, startCol, width, p)</text>
+        <text x="475" y="247" font-size="10" fill="var(--accent)" text-anchor="middle">rows: Text SourceText + Width Cells · cursor (row, Cells)</text>
+
+        <rect x="670" y="210" width="200" height="52" rx="3" fill="none" stroke="var(--accent)" stroke-width="1.6"/>
+        <text x="770" y="230" font-size="11.5" fill="var(--accent)" text-anchor="middle">clusterWidth + segments</text>
+        <text x="770" y="247" font-size="10" fill="var(--accent)" text-anchor="middle">cluster/segment SourceText → Cells</text>
+
+        <g stroke="currentColor" stroke-width="1.2" marker-end="url(#arr5)" fill="none">
+          <path d="M 120 156 L 120 206"/>
+          <path d="M 200 156 L 340 208"/>
+          <line x1="420" y1="156" x2="440" y2="206" stroke="var(--accent)"/>
+          <path d="M 670 226 L 624 226" stroke="var(--accent)"/>
+        </g>
+        <text x="647" y="218" font-size="10" fill="var(--accent)" text-anchor="middle">measures</text>
+
+        <!-- painter -->
+        <rect x="180" y="330" width="380" height="56" rx="3" fill="none" stroke="currentColor" stroke-width="1.4"/>
+        <text x="370" y="351" font-size="11.5" fill="currentColor" text-anchor="middle">painter: rows × spans, style by ByteOffset</text>
+        <text x="370" y="368" font-size="10" fill="currentColor" opacity="0.65" text-anchor="middle">stand-ins + SGR injected between clusters</text>
+
+        <g stroke="currentColor" stroke-width="1.2" marker-end="url(#arr5)" fill="none">
+          <line x1="165" y1="262" x2="280" y2="326"/>
+          <line x1="475" y1="262" x2="420" y2="326" stroke="var(--accent)"/>
+          <path d="M 770 262 L 770 358 L 564 358" stroke="var(--accent)"/>
+        </g>
+        <text x="700" y="348" font-size="10" fill="var(--accent)" text-anchor="middle">emits with same rule</text>
+
+        <!-- output -->
+        <rect x="180" y="440" width="380" height="46" rx="3" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="4 3"/>
+        <text x="370" y="459" font-size="11.5" fill="currentColor" text-anchor="middle">renderBuffer ScreenBytes → os.Stdout.Write</text>
+        <text x="370" y="475" font-size="10" fill="currentColor" opacity="0.65" text-anchor="middle">write-only: nothing downstream ever measures it</text>
+
+        <g stroke="currentColor" stroke-width="1.2" marker-end="url(#arr5)" fill="none">
+          <line x1="370" y1="386" x2="370" y2="436"/>
+        </g>
+
+        <text x="370" y="530" font-size="10.5" fill="currentColor" opacity="0.7" text-anchor="middle">every arrow that changes color is a conversion — the only places a domain bug can now live</text>
+      </svg>
+      <figcaption><span class="fig-label">Fig 5.</span>
+        The functional flowchart, typed. Plain boxes carry <code>SourceText</code>/<code>ByteOffset</code>; green carries
+        <code>Cells</code>; dashed boxes are opaque byte streams that are never measured (prompt in, screen out).
+        <code>SourceText</code> flows top to bottom unchanged — stand-ins never rewrite it — while the geometry
+        (<code>Cells</code>) is derived beside it and joins it only inside the painter.
+      </figcaption>
+    </figure>
+
+    <p>
+      Reading the figure gives the answer to "when do the bytes change": <strong>never</strong>. <code>SourceText</code>
+      is immutable through the whole pipeline — rows and spans are views into it, and the only transformation
+      (stand-ins, SGR) happens in the painter's one-way emission into <code>ScreenBytes</code>, which nothing ever
+      reads back. The two dashed boxes are mirror images: prompt bytes enter unmeasured (the CPR measures their
+      <em>effect</em>), screen bytes leave unmeasured (the layout already predicted their effect).
+    </p>
+  </section>
+
+  <!-- ============================== 7 ============================== -->
+  <section>
+    <p class="stage">Stage 7 · Consequences</p>
+    <h2>What the swap deletes, what it must respect</h2>
+
+    <div class="dies">
+      <p>Deleted with the swap</p>
+      <ul>
+        <li>Both column-math expressions (<code>promptLength+1</code>, <code>promptLength+1+index</code>)</li>
+        <li>Render-path CPR queries and the <code>getCurrentPos</code> re-entrancy they cause</li>
+        <li><code>ScrollDown</code> / prompt-row guesswork as measurement — becomes bookkeeping off the per-prompt CPR</li>
+        <li>The dead <code>StdinReader</code> / pause-channel code (per the Phase 2 plan)</li>
+      </ul>
+    </div>
+
+    <div class="keeps">
+      <p><strong>Row-end semantics the painter must honor:</strong> <code>SoftExact</code> — the terminal's auto-wrap
+      already advanced; do not advance again. <code>SoftEarly</code> and <code>Hard</code> — reposition explicitly.
+      <code>Final</code> — stop, then place the cursor from <code>(CursorRow, CursorCol)</code>; a cursor col equal to
+      the terminal width is the deferred-move state, and it can occur at the end of <em>any</em> exactly-full row,
+      not just under <code>PendingWrap</code>.</p>
+    </div>
+
+    <p>
+      Resolved by design since first draft: ANSI-colored prompts (opaque prompt + per-prompt CPR → <code>startCol</code>,
+      Stage&nbsp;3) and the history ghost (joins the layout text as a gray span, Stage&nbsp;5). Still open for
+      Phase&nbsp;2: the tab-completion block below the prompt (today's row accounting stays, anchored to the layout's
+      last row) and resize handling (reprint prompt, re-query CPR, re-layout). If right-aligned prompt content is ever
+      wanted, follow zsh/fish: offer it as a structured feature mshell draws itself, never via raw cursor movement.
+    </p>
+  </section>
+</main>
+
+</html>
