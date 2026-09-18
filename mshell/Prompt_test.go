@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -178,5 +179,54 @@ func TestStreamIsTerminalFollowsSymlinkTarget(t *testing.T) {
 
 	if streamIsTerminal(regularFile, os.Stdout) {
 		t.Fatal("a symlink to a regular file must not be reported as a terminal")
+	}
+}
+
+func TestPromptNewlineScreen(t *testing.T) {
+	for _, columns := range []int{2, 4, 8, 80} {
+		for _, startRow := range []int{1, 4} {
+			for count := 0; count <= columns; count++ {
+				t.Run(fmt.Sprintf("width%d/row%d/output%d", columns, startRow, count), func(t *testing.T) {
+					screen := newCommandScreen(t, 5, columns)
+					screen.row = startRow
+					io.WriteString(screen, strings.Repeat("x", count))
+					// Model the existing one-cell marker as ASCII so the screen's
+					// Unicode width-probe safety checks don't forbid margin placement.
+					sequence := strings.ReplaceAll(promptNewlineSequence(columns), "⏎", "%")
+					io.WriteString(screen, sequence)
+					wantRow, wantScrolls := startRow, 0
+					if count > 0 {
+						wantRow++
+						if wantRow == 5 { wantRow--; wantScrolls++ }
+						wantOutput := strings.Repeat("x", count)
+						if count < columns { wantOutput += "%" }
+						wantOutput += strings.Repeat(" ", columns-len(wantOutput))
+						if got := screen.line(wantRow-1); got != wantOutput {
+							t.Fatalf("output %q, want %q", got, wantOutput)
+						}
+					}
+					if screen.row != wantRow || screen.col != 0 || screen.pending || screen.scrolls != wantScrolls {
+						t.Fatalf("cursor (%d,%d), pending %v, scrolls %d; want (%d,0), no pending wrap, scrolls %d", screen.row, screen.col, screen.pending, screen.scrolls, wantRow, wantScrolls)
+					}
+					if got := screen.line(wantRow); got != strings.Repeat(" ", columns) {
+						t.Fatalf("prompt line not cleared: %q", got)
+					}
+					if len(screen.replies) != 0 { t.Fatal("newline handling requested terminal input") }
+					// A second prompt preparation at column one must not add a line.
+					io.WriteString(screen, sequence)
+					if screen.row != wantRow || screen.col != 0 || screen.pending || screen.scrolls != wantScrolls {
+						t.Fatal("repeated preparation moved the prompt")
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestPromptNewlineUnusableWidth(t *testing.T) {
+	for _, columns := range []int{-1, 0, 1, int(maxTerminalCoordinate)+1} {
+		if got := promptNewlineSequence(columns); got != "\r\n" {
+			t.Fatalf("width %d: got %q, want unconditional newline", columns, got)
+		}
 	}
 }

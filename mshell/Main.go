@@ -3608,7 +3608,7 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 ParseError:
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error parsing input: %s\n", terminalSafeText(err.Error(), true))
-		// State.index reset must be before ensurePromptNewline and printPrompt as those can consume typed characters while waiting for terminal response
+		// Reset before printPrompt, which can queue keys while querying the terminal.
 		state.index = 0
 		err = state.printPrompt()
 		if err != nil {
@@ -3642,7 +3642,7 @@ ParseError:
 	}
 
 PromptPrint:
-	// State.index reset must be before ensurePromptNewline and printPrompt as those can consume typed characters while waiting for terminal response
+	// Reset before printPrompt, which can queue keys while querying the terminal.
 	state.index = 0
 	state.ensurePromptNewline()
 	err = state.printPrompt()
@@ -3656,19 +3656,21 @@ PromptPrint:
 }
 
 func (state *TermState) ensurePromptNewline() {
-	if err := state.enterRawMode(); err != nil {
-		return
-	}
+	state.UpdateSize()
+	fmt.Fprint(os.Stdout, promptNewlineSequence(state.numCols))
+}
 
-	_, col, err := state.getCurrentPos()
-	state.leaveRawMode()
-	if err != nil {
-		return
+// Like fish's PROMPT_SP sequence, fill one screen width from the current
+// position. At column one this only sets delayed autowrap, cancelled by CR;
+// elsewhere it wraps, leaving the omitted-newline marker after the output.
+// Then clear the new prompt line. No terminal input or mode change is needed.
+func promptNewlineSequence(columns int) string {
+	if columns <= 1 || columns > int(maxTerminalCoordinate) {
+		// Without a usable width, preserve output by unconditionally advancing.
+		return "\r\n"
 	}
-
-	if col != 1 {
-		fmt.Fprint(os.Stdout, "⏎\r\n")
-	}
+	// The existing omitted-newline marker occupies one terminal cell.
+	return "\033[0m⏎" + strings.Repeat(" ", columns-1) + "\r⏎ \r\033[K"
 }
 
 func (state *TermState) printPrompt() error {
