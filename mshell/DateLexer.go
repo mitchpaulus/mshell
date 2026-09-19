@@ -750,14 +750,26 @@ func ParseDateTimeTokens(dateTimeTokens []DateToken) (time.Time, error) {
 		return time.Time{}, err
 	}
 
+	hour, minute, second := 0, 0, 0
 	if !parser.AtEnd() {
-		hour, minute, second, err := parser.ParseTime()
+		hour, minute, second, err = parser.ParseTime()
 		if err != nil {
 			return time.Time{}, err
 		}
-
-		return time.Date(year, time.Month(month), day, hour, minute, second, 0, time.UTC), nil
 	}
 
-	return time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.UTC), nil
+	if !parser.AtEnd() {
+		return time.Time{}, fmt.Errorf("Unexpected trailing token '%s'", parser.CurrentToken().Lexeme)
+	}
+
+	result := time.Date(year, time.Month(month), day, hour, minute, second, 0, time.UTC)
+
+	// time.Date normalizes out of range values (month 16 becomes April of the next
+	// year, Feb 30 becomes Mar 2). Reject anything that did not round trip exactly.
+	if result.Year() != year || int(result.Month()) != month || result.Day() != day ||
+		result.Hour() != hour || result.Minute() != minute || result.Second() != second {
+		return time.Time{}, fmt.Errorf("Date/time component out of range: %d-%d-%d %d:%d:%d", year, month, day, hour, minute, second)
+	}
+
+	return result, nil
 }
