@@ -80,6 +80,16 @@ func TestDate2(t *testing.T) {
 	HelpTestDate("1 august 23", 2023, time.August, 1, t)
 	HelpTestDate("24 Sep. 23", 2023, time.September, 24, t)
 	HelpTestDate("10/2/2022", 2022, time.October, 2, t)
+	HelpTestDate("12/16/25", 2025, time.December, 16, t)
+
+	for _, bad := range []string{"13/45/2025", "2025-16-12", "2/30/2025", "12/16/2025 25:00", "12/16/2025 10:61"} {
+		if _, err := ParseDateTime(bad); err == nil {
+			t.Errorf("Expected '%s' to fail to parse", bad)
+		}
+	}
+	HelpTestDate("1/2/25", 2025, time.January, 2, t)
+	HelpTestDate("25-12-16", 2025, time.December, 16, t)
+	HelpTestDateTime("12/16/25 2:56 PM", 2025, time.December, 16, 14, 56, 0, t)
 
 	HelpTestDateTime("1/12/2025 12:56:13 AM", 2025, time.January, 12, 0, 56, 13, t)
 	HelpTestDateTime("1/12/2025 12:56:13 PM", 2025, time.January, 12, 12, 56, 13, t)
