@@ -11439,6 +11439,18 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						}
 					}
 
+					var cookieJar *httpListCookieJar
+					if jarValue, ok := dict.Items["cookieJar"]; ok {
+						cookieJar, err = newHTTPListCookieJar(jarValue)
+						if err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Invalid cookie jar in '%s': %s\n", t.Line, t.Column, t.Lexeme, err))
+						}
+						if _, present := req.Header["Cookie"]; present {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot combine 'cookieJar' with a 'Cookie' header in '%s'.\n", t.Line, t.Column, t.Lexeme))
+						}
+						client.Jar = cookieJar
+					}
+
 					// Dump the request to stderr for debugging
 					// dump, _ := httputil.DumpRequestOut(req, true)
 					// fmt.Fprintf(os.Stderr, "HTTP Request:\n%s\n", dump)
@@ -11450,6 +11462,9 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						stack.Push(&Maybe{obj: nil}) // No response
 					} else {
 						responseDict := NewDict()
+						if cookieJar != nil {
+							responseDict.Items["cookieJar"] = cookieJar.list
+						}
 						responseDict.Items["status"] = MShellInt{Value: resp.StatusCode}
 						responseDict.Items["reason"] = MShellString{Content: resp.Status}
 						responseHeaders := NewDict()
@@ -11465,10 +11480,10 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 						// Read body as a UTF-8 encoded string
 						bodyBytes, err := io.ReadAll(resp.Body)
+						resp.Body.Close()
 						if err != nil {
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error reading response body in '%s': %s\n", t.Line, t.Column, t.Lexeme, err.Error()))
 						}
-						resp.Body.Close() // Close the response body
 						responseDict.Items["body"] = MShellBinary(bodyBytes)
 
 						// Push the response dictionary onto the stack
