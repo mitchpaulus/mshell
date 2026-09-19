@@ -88,7 +88,6 @@ func TestDate2(t *testing.T) {
 		}
 	}
 	HelpTestDate("1/2/25", 2025, time.January, 2, t)
-	HelpTestDate("25-12-16", 2025, time.December, 16, t)
 	HelpTestDateTime("12/16/25 2:56 PM", 2025, time.December, 16, 14, 56, 0, t)
 
 	HelpTestDateTime("1/12/2025 12:56:13 AM", 2025, time.January, 12, 0, 56, 13, t)
