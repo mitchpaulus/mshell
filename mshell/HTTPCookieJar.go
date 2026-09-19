@@ -22,7 +22,7 @@ import (
 // goroutine, one request at a time, and each invocation has its own adapter.
 type httpListCookieJar struct {
 	list *MShellList
-	now  func() time.Time
+	now  func() time.Time // This is here for deterministic testing
 }
 
 var _ http.CookieJar = (*httpListCookieJar)(nil)
