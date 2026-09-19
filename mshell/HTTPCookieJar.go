@@ -6,9 +6,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"sort"
+	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"golang.org/x/net/idna"
@@ -18,10 +17,12 @@ import (
 // httpListCookieJar adapts a normal mshell list to http.CookieJar. The list is
 // the entire persistent state; its order records creation order. Each HTTP
 // invocation makes a new adapter, so edits and JSON round trips are respected.
+//
+// No locking: http.Client calls Cookies and SetCookies from the request's own
+// goroutine, one request at a time, and each invocation has its own adapter.
 type httpListCookieJar struct {
 	list *MShellList
-	mu sync.Mutex
-	now func() time.Time
+	now  func() time.Time
 }
 
 var _ http.CookieJar = (*httpListCookieJar)(nil)
@@ -31,7 +32,6 @@ func newHTTPListCookieJar(obj MShellObject) (*httpListCookieJar, error) {
 	if !ok {
 		return nil, fmt.Errorf("'cookieJar' must be a list of cookie dictionaries")
 	}
-	seen := make(map[[3]string]bool)
 	for i, obj := range list.Items {
 		d, ok := obj.(*MShellDict)
 		if !ok {
@@ -40,11 +40,9 @@ func newHTTPListCookieJar(obj MShellObject) (*httpListCookieJar, error) {
 		if err := validateHTTPCookieRecord(d); err != nil {
 			return nil, fmt.Errorf("cookieJar[%d]: %w", i, err)
 		}
-		key := httpCookieKey(d)
-		if seen[key] {
+		if j := httpCookieIndex(list.Items[:i], httpCookieKey(d)); j >= 0 {
 			return nil, fmt.Errorf("cookieJar[%d]: duplicate domain/path/name", i)
 		}
-		seen[key] = true
 	}
 	return &httpListCookieJar{list: list, now: time.Now}, nil
 }
@@ -61,6 +59,15 @@ func httpCookieKey(d *MShellDict) [3]string {
 	return [3]string{cookieString(d, "domain"), cookieString(d, "path"), cookieString(d, "name")}
 }
 
+func httpCookieIndex(items []MShellObject, key [3]string) int {
+	for i, obj := range items {
+		if httpCookieKey(obj.(*MShellDict)) == key {
+			return i
+		}
+	}
+	return -1
+}
+
 // parseJson produces floats even for whole JSON numbers. Accept those without
 // allowing fractional, non-finite, or overflowing timestamps.
 func httpCookieTimestamp(obj MShellObject) (int64, bool) {
@@ -68,7 +75,7 @@ func httpCookieTimestamp(obj MShellObject) (int64, bool) {
 	case MShellInt:
 		return int64(value.Value), true
 	case MShellFloat:
-		if value.Value >= -9223372036854775808.0 && value.Value < 9223372036854775808.0 && math.Trunc(value.Value) == value.Value {
+		if value.Value >= math.MinInt64 && value.Value < math.MaxInt64 && math.Trunc(value.Value) == value.Value {
 			return int64(value.Value), true
 		}
 	}
@@ -191,41 +198,39 @@ func httpCookiePathMatches(requestPath, cookiePath string) bool {
 		(strings.HasSuffix(cookiePath, "/") || requestPath[len(cookiePath)] == '/'))
 }
 
-// Only the list identity is promised. Allocate a new backing slice so a list
-// slice held elsewhere does not have its elements overwritten by compaction.
-func (j *httpListCookieJar) prune(now int64) {
-	items := make([]MShellObject, 0, len(j.list.Items))
-	for _, obj := range j.list.Items {
-		d := obj.(*MShellDict)
-		if expires, ok := httpCookieTimestamp(d.Items["expires"]); ok && expires <= now {
-			continue
-		}
-		items = append(items, obj)
-	}
-	j.list.Items = items
-}
-
-func (j *httpListCookieJar) Cookies(u *url.URL) []*http.Cookie {
-	j.mu.Lock()
-	defer j.mu.Unlock()
+// Returns the canonical request host and the current time, dropping expired
+// cookies from the list in place, as the other list builtins do.
+func (j *httpListCookieJar) begin(u *url.URL) (string, int64, bool) {
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return nil
+		return "", 0, false
 	}
 	host, err := httpCookieHost(u.Hostname())
 	if err != nil {
-		return nil
+		return "", 0, false
 	}
 	now := j.now().Unix()
-	j.prune(now)
+	j.list.Items = slices.DeleteFunc(j.list.Items, func(obj MShellObject) bool {
+		expires, ok := httpCookieTimestamp(obj.(*MShellDict).Items["expires"])
+		return ok && expires <= now
+	})
+	return host, now, true
+}
+
+func (j *httpListCookieJar) Cookies(u *url.URL) []*http.Cookie {
+	host, now, ok := j.begin(u)
+	if !ok {
+		return nil
+	}
 	path := u.Path
 	if path == "" {
 		path = "/"
 	}
-	selected := []*MShellDict{}
+	hostIsIP := httpCookieIsIP(host)
+	var selected []*MShellDict
 	for _, obj := range j.list.Items {
 		d := obj.(*MShellDict)
 		domain := cookieString(d, "domain")
-		if host != domain && (cookieBool(d, "hostOnly") || httpCookieIsIP(host) || !strings.HasSuffix(host, "."+domain)) {
+		if host != domain && (cookieBool(d, "hostOnly") || hostIsIP || !strings.HasSuffix(host, "."+domain)) {
 			continue
 		}
 		if cookieBool(d, "secure") && u.Scheme != "https" {
@@ -237,31 +242,22 @@ func (j *httpListCookieJar) Cookies(u *url.URL) []*http.Cookie {
 		d.Items["lastAccess"] = MShellInt{Value: int(now)}
 		selected = append(selected, d)
 	}
-	// Sort a separate selection, preserving the jar's creation order.
-	sort.SliceStable(selected, func(a, b int) bool {
-		return len(cookieString(selected[a], "path")) > len(cookieString(selected[b], "path"))
+	// Longest path first; the stable sort keeps the list's creation order.
+	slices.SortStableFunc(selected, func(a, b *MShellDict) int {
+		return len(cookieString(b, "path")) - len(cookieString(a, "path"))
 	})
-	cookies := make([]*http.Cookie, 0, len(selected))
-	for _, d := range selected {
-		cookies = append(cookies, &http.Cookie{
-			Name: cookieString(d, "name"), Value: cookieString(d, "value"), Quoted: cookieBool(d, "quoted"),
-		})
+	cookies := make([]*http.Cookie, len(selected))
+	for i, d := range selected {
+		cookies[i] = &http.Cookie{Name: cookieString(d, "name"), Value: cookieString(d, "value"), Quoted: cookieBool(d, "quoted")}
 	}
 	return cookies
 }
 
 func (j *httpListCookieJar) SetCookies(u *url.URL, cookies []*http.Cookie) {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	if u.Scheme != "http" && u.Scheme != "https" {
+	host, now, ok := j.begin(u)
+	if !ok {
 		return
 	}
-	host, err := httpCookieHost(u.Hostname())
-	if err != nil {
-		return
-	}
-	now := j.now().Unix()
-	j.prune(now)
 	for _, c := range cookies {
 		// There is no top-level browsing site with which to partition a jar.
 		if c.Partitioned {
@@ -284,7 +280,7 @@ func (j *httpListCookieJar) SetCookies(u *url.URL, cookies []*http.Cookie) {
 		var expires MShellObject = MShellNull{}
 		remove := c.MaxAge < 0
 		if c.MaxAge > 0 {
-			// Avoid time.Duration overflow for Max-Age values over ~290 years.
+			// Avoid overflow for Max-Age values over ~290 years.
 			const latest = int64(253402300799) // 9999-12-31T23:59:59Z
 			deadline := latest
 			if int64(c.MaxAge) < latest-now {
@@ -304,31 +300,23 @@ func (j *httpListCookieJar) SetCookies(u *url.URL, cookies []*http.Cookie) {
 		case http.SameSiteNoneMode:
 			sameSite = "none"
 		}
-		d := NewDict()
-		d.Items = map[string]MShellObject{
+		key := [3]string{domain, path, c.Name}
+		index := httpCookieIndex(j.list.Items, key)
+		if remove {
+			if index >= 0 {
+				j.list.Items = slices.Delete(j.list.Items, index, index+1)
+			}
+			continue
+		}
+		d := &MShellDict{Items: map[string]MShellObject{
 			"name": MShellString{Content: c.Name}, "value": MShellString{Content: c.Value},
 			"domain": MShellString{Content: domain}, "path": MShellString{Content: path},
 			"hostOnly": MShellBool{Value: hostOnly}, "secure": MShellBool{Value: c.Secure},
 			"httpOnly": MShellBool{Value: c.HttpOnly}, "quoted": MShellBool{Value: c.Quoted},
 			"sameSite": MShellString{Content: sameSite}, "expires": expires,
 			"lastAccess": MShellInt{Value: int(now)},
-		}
-		if validateHTTPCookieRecord(d) != nil {
-			continue
-		}
-		key := httpCookieKey(d)
-		index := -1
-		for i, obj := range j.list.Items {
-			if httpCookieKey(obj.(*MShellDict)) == key {
-				index = i
-				break
-			}
-		}
-		if remove {
-			if index >= 0 {
-				j.list.Items = append(j.list.Items[:index:index], j.list.Items[index+1:]...)
-			}
-		} else if index >= 0 {
+		}}
+		if index >= 0 {
 			j.list.Items[index] = d
 		} else {
 			j.list.Items = append(j.list.Items, d)
