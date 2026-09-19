@@ -423,6 +423,9 @@ type DateParser struct {
 	Tokens []DateToken
 	Current int
 	Error error
+	// Separator found between the first two tokens, e.g. '/' or '-'. Used to
+	// disambiguate all-numeric dates like 12/16/25 (m/d/y) vs 25-12-16 (y-m-d).
+	FirstSep string
 }
 
 func (p *DateParser) CurrentToken() DateToken {
@@ -492,8 +495,9 @@ func (p *DateParser) ParseDate() (year int, month int, day int, err error) {
 				return 0, 0, 0, err
 			}
 			return year, month, day, nil
-		} else if p.Peek2().Type == DATEINT4 {
-			// month, day, year
+		} else if p.Peek2().Type == DATEINT4 || (p.FirstSep == "/" && (p.Peek2().Type == DATEINT2 || p.Peek2().Type == DATEINT1)) {
+			// month, day, year. A slash separated date is always taken as US style m/d/y,
+			// so 12/16/25 is Dec 16 2025 rather than year 2012.
 			month, err = p.ParseMonth()
 			if err != nil {
 				return 0, 0, 0, err
@@ -729,7 +733,17 @@ func ParseDateTimeTokens(dateTimeTokens []DateToken) (time.Time, error) {
 		}
 	}
 
-	parser := DateParser{Tokens: nonSepTokens, Current: 0}
+	firstSep := ""
+	for i, token := range dateTimeTokens {
+		if token.Type != DATESEP && token.Type != DATEDOW {
+			if i+1 < len(dateTimeTokens) && dateTimeTokens[i+1].Type == DATESEP {
+				firstSep = strings.TrimSpace(dateTimeTokens[i+1].Lexeme)
+			}
+			break
+		}
+	}
+
+	parser := DateParser{Tokens: nonSepTokens, Current: 0, FirstSep: firstSep}
 
 	year, month, day, err := parser.ParseDate()
 	if err != nil {

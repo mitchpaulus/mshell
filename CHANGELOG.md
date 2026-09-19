@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- `toDt` now parses slash separated dates with two digit years like `12/16/25` as month/day/year.
+  Previously the year was taken first, so the parse failed and returned `none`.
+
 ### Added
 
 - HTTP cookie jars: pass a shared list as `cookieJar` to `httpGet` / `httpPost`.
