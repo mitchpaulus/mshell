@@ -1,0 +1,9 @@
+# This quotation is checked but never executed; no network is needed.
+(
+    [] jar!
+    {'url': 'https://example.com/login', 'cookieJar': @jar} httpPost ? login!
+    {'url': 'https://example.com/account', 'cookieJar': @jar} httpGet ? account!
+    @login :cookieJar? :0: :name? 'session' = drop
+    @account :cookieJar? :0: :secure? not drop
+    @account :cookieJar? :0: :expires? drop
+) drop

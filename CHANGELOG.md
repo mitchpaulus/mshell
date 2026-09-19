@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- HTTP cookie jars: pass a shared list as `cookieJar` to `httpGet` / `httpPost`.
+  Requests and responses reuse and update the same list, including across redirects,
+  with domain/path scoping, expiration, deletion, creation ordering, and JSON persistence.
 - Assertive destructuring with the `=>` operator.
   It consumes a list, dictionary, or Just value, binds its structural pattern names,
   and fails at runtime when the pattern does not match.
