@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- `toDt` no longer guesses the order of ambiguous numeric dates.
+  Every date is tried as year-month-day, month-day-year, and day-month-year.
+  A single valid reading is accepted, so `12/16/25` and `16/06/2025` now parse
+  (`12/16/25` previously became `2013-04-25`). When several readings are valid, like
+  `01/02/2026`, the order learned from the most recent unambiguous non-ISO date in the same
+  evaluation is used. With no such evidence the result is `none`, where it previously
+  assumed US month/day/year. Dates with a leading four digit year are unaffected.
+- `toDt` now returns `none` for out of range components such as month 13, Feb 30, or hour 25,
+  instead of silently rolling them over into the next month or day.
+
 ### Added
 
 - HTTP cookie jars: pass a shared list as `cookieJar` to `httpGet` / `httpPost`.

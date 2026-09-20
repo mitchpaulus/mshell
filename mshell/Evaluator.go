@@ -397,6 +397,9 @@ type EvalState struct {
 
 	defIndex    map[string]int
 	defIndexLen int
+
+	// Numeric date order (m/d/y vs d/m/y vs y/m/d) learned from the first unambiguous toDt.
+	DateOrder DateOrder
 }
 
 func (state *EvalState) EnvironmentHistory() *EnvironmentHistory {
@@ -6982,7 +6985,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					// TODO: Don't make a new lexer object each time.
-					parsedTime, err := ParseDateTime(dateStr)
+					parsedTime, err := ParseDateTime(dateStr, &state.DateOrder)
 					if err != nil {
 						stack.Push(&Maybe{obj: nil})
 						// return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing date time '%s': %s\n", t.Line, t.Column, dateStr, err.Error()))
