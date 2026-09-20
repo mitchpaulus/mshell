@@ -7,8 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Security
+
+- Terminal replies that are strings (OSC, DCS, APC, PM, SOS), such as colour or version reports,
+  are consumed and dropped by the interactive editor instead of being typed into the command,
+  where their text could trigger key chords.
+- The prompt no longer writes the working directory to the terminal raw.
+  Control bytes in a directory name display as caret notation, and the OSC 7 directory report
+  percent-encodes the path, so a directory name can no longer inject terminal queries.
+- Error messages escape control bytes from quoted input and file names.
+
 ### Fixed
 
+- The OSC 7 working-directory report is now actually emitted; a reversed check meant it was
+  only sent when the hostname lookup failed.
 - `toDt` no longer guesses the order of ambiguous numeric dates.
   Every date is tried as year-month-day, month-day-year, and day-month-year.
   A single valid reading is accepted, so `12/16/25` and `16/06/2025` now parse
@@ -21,6 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Bracketed paste in the interactive editor: pasted multiline text, tabs, and key chords are inserted literally without executing commands.
+- Alt-Shift-R in the interactive editor forgets measured text widths and measures them again,
+  for use after reattaching from a different terminal or changing fonts.
 - HTTP cookie jars: pass a shared list as `cookieJar` to `httpGet` / `httpPost`.
   Requests and responses reuse and update the same list, including across redirects,
   with domain/path scoping, expiration, deletion, creation ordering, and JSON persistence.
@@ -224,6 +239,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The interactive editor lays out and repaints commands from widths measured on the current terminal.
+  Long commands wrap across rows, wide and multi-codepoint clusters such as emoji stay whole,
+  tab and control bytes display safely, and completion rows repaint with the command.
+
 - A trailing comma after a comma-separated variable store list (`a!, b!,`) is now a parse error.
   Commas also separate `match` arms, so the trailing comma was ambiguous.
 
@@ -298,8 +317,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+<<<<<<< HEAD
+- A command whose first token is a lexer error, such as a lone quote, no longer crashes the interactive shell. It reports the parse error and prompts again.
+- Interactive movement, word deletion, typing, and completion replacement respect grapheme boundaries, keeping combining accents and joined emoji intact.
+  Unicode aliases and multiline completion prefixes use the correct source positions; cycling completions preserves adjacent text even when it joins the inserted grapheme.
+=======
 - Unix command history is now private by default, with existing owned storage permissions repaired on load/save.
   Unsafe history objects are rejected and permission errors are reported.
+>>>>>>> main
 
 - The type checker gave `index` and `lastIndexOf` a result type of `int`, but both
   return `Maybe[int]` at runtime (`none` when the substring is not found). The

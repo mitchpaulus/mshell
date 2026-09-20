@@ -590,6 +590,9 @@ func SimpleSuccess() EvalResult {
 }
 
 func (state *EvalState) FailWithMessage(message string) EvalResult {
+	// Messages quote user input and file names, which may hold bytes a
+	// terminal would execute. Print them visibly instead.
+	message = terminalSafeText(message, true)
 	// Log message to stderr
 	if state.CallStack == nil {
 		fmt.Fprintf(os.Stderr, "No call stack available.\n")
@@ -601,14 +604,15 @@ func (state *EvalState) FailWithMessage(message string) EvalResult {
 	for _, callStackItem := range state.CallStack {
 		parseItem := callStackItem.MShellParseItem
 
+		name := terminalSafeText(callStackItem.Name, false)
 		if parseItem == nil {
-			fmt.Fprintf(os.Stderr, "%s\n", callStackItem.Name)
+			fmt.Fprintf(os.Stderr, "%s\n", name)
 		} else {
 			startToken := parseItem.GetStartToken()
 			if startToken.TokenFile != nil {
-				fmt.Fprintf(os.Stderr, "%s:%d:%d %s\n", startToken.TokenFile.Path, startToken.Line, startToken.Column, callStackItem.Name)
+				fmt.Fprintf(os.Stderr, "%s:%d:%d %s\n", terminalSafeText(startToken.TokenFile.Path, false), startToken.Line, startToken.Column, name)
 			} else {
-				fmt.Fprintf(os.Stderr, "%d:%d %s\n", startToken.Line, startToken.Column, callStackItem.Name)
+				fmt.Fprintf(os.Stderr, "%d:%d %s\n", startToken.Line, startToken.Column, name)
 			}
 		}
 	}

@@ -408,9 +408,9 @@ Standard input is used when no file or `-c` is given and stdin is not a terminal
 or explicitly with `-` (`some-command | msh - [ARG]..`).
 With `-`, arguments after the `-` are positional arguments to the script.
 
-## Interactive CLI
-
-History search is prefix-based and case-insensitive. The prefix is whatever is currently in the input buffer; editing the buffer resets the prefix for the next search.
+History search is prefix-based and case-insensitive.
+The prefix is whatever is currently in the input buffer;
+editing the buffer resets the prefix for the next search.
 
 - Ctrl-P: search backward through history by prefix
 - Ctrl-N: search forward through history by prefix
@@ -419,6 +419,7 @@ History search is prefix-based and case-insensitive. The prefix is whatever is c
 - Alt-.: insert the last argument from history; repeat to cycle older entries
 - Tab: complete the current token; press Tab again to cycle matches and fill the input
 - Shift-Tab: cycle completion backward when matches are active
+- Alt-Shift-R: forget measured text widths and measure again; use it after reattaching, changing fonts, or when the line looks wrong
 - Ctrl-N/Ctrl-P: when cycling completions, move forward/backward through matches
 
 ### Definition-based completions
