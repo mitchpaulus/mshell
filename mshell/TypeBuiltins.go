@@ -552,15 +552,16 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 	// still tolerates extra keys the runtime ignores.
 	//
 	// Output is precise: on a successful request the runtime always builds
-	// a 4-field response dict. Encoding it as a shape lets `:status?` /
+	// a response dict (with cookieJar only when supplied). A shape lets `:status?` /
 	// `:body?` etc. resolve their value types without fresh vars.
 	// `url` is a required string. `body` and header values are passed through
 	// CastString at runtime, which succeeds for str/int/path ("stringable");
 	// `timeout` must be a plain int and `followRedirects` a plain bool.
 	// Everything but `url` is optional.
-	httpReq := "{url: str, timeout?: int, followRedirects?: bool, headers?: {str: str | int | path}, body?: str | int | path}"
+	httpCookie := "{name: str, value: str, domain: str, path: str, hostOnly: bool, secure: bool, httpOnly: bool, sameSite: str, expires: int | float | null, lastAccess: int | float, quoted: bool}"
+	httpReq := "{url: str, timeout?: int, followRedirects?: bool, headers?: {str: str | int | path}, body?: str | int | path, cookieJar?: ["+httpCookie+"]}"
 	for _, name := range []string{"httpGet", "httpPost"} {
-		r.reg(name, "("+httpReq+" -- Maybe[{status: int, reason: str, headers: {[str]}, body: bytes}])")
+		r.reg(name, "("+httpReq+" -- Maybe[{status: int, reason: str, headers: {[str]}, body: bytes, cookieJar?: ["+httpCookie+"]}])")
 	}
 	r.reg("psub", "(str -- path)")
 	for _, name := range []string{"strCmp", "versionSortCmp"} {

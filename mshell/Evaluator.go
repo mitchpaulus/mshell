@@ -397,6 +397,9 @@ type EvalState struct {
 
 	defIndex    map[string]int
 	defIndexLen int
+
+	// Numeric date order (m/d/y vs d/m/y vs y/m/d) learned from the first unambiguous toDt.
+	DateOrder DateOrder
 }
 
 func (state *EvalState) EnvironmentHistory() *EnvironmentHistory {
@@ -6986,7 +6989,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					// TODO: Don't make a new lexer object each time.
-					parsedTime, err := ParseDateTime(dateStr)
+					parsedTime, err := ParseDateTime(dateStr, &state.DateOrder)
 					if err != nil {
 						stack.Push(&Maybe{obj: nil})
 						// return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing date time '%s': %s\n", t.Line, t.Column, dateStr, err.Error()))
@@ -7274,9 +7277,9 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'setenv' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
-					varName, err := obj1.CastString()
+					varValue, err := obj1.CastString()
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot use a %s as an environment variable name.\n", t.Line, t.Column, obj1.TypeName()))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot use a %s as an environment variable value.\n", t.Line, t.Column, obj1.TypeName()))
 					}
 
 					obj2, err := stack.Pop()
@@ -7284,9 +7287,9 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'setenv' operation on a stack with less than two items.\n", t.Line, t.Column))
 					}
 
-					varValue, err := obj2.CastString()
+					varName, err := obj2.CastString()
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot use a %s as an environment variable value.\n", t.Line, t.Column, obj2.TypeName()))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot use a %s as an environment variable key.\n", t.Line, t.Column, obj2.TypeName()))
 					}
 
 					err = state.EnvironmentHistory().Set(varName, varValue, environmentSource(t))
@@ -11443,6 +11446,18 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						}
 					}
 
+					var cookieJar *httpListCookieJar
+					if jarValue, ok := dict.Items["cookieJar"]; ok {
+						cookieJar, err = newHTTPListCookieJar(jarValue)
+						if err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Invalid cookie jar in '%s': %s\n", t.Line, t.Column, t.Lexeme, err))
+						}
+						if _, present := req.Header["Cookie"]; present {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot combine 'cookieJar' with a 'Cookie' header in '%s'.\n", t.Line, t.Column, t.Lexeme))
+						}
+						client.Jar = cookieJar
+					}
+
 					// Dump the request to stderr for debugging
 					// dump, _ := httputil.DumpRequestOut(req, true)
 					// fmt.Fprintf(os.Stderr, "HTTP Request:\n%s\n", dump)
@@ -11454,6 +11469,9 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						stack.Push(&Maybe{obj: nil}) // No response
 					} else {
 						responseDict := NewDict()
+						if cookieJar != nil {
+							responseDict.Items["cookieJar"] = cookieJar.list
+						}
 						responseDict.Items["status"] = MShellInt{Value: resp.StatusCode}
 						responseDict.Items["reason"] = MShellString{Content: resp.Status}
 						responseHeaders := NewDict()
@@ -11469,10 +11487,10 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 						// Read body as a UTF-8 encoded string
 						bodyBytes, err := io.ReadAll(resp.Body)
+						resp.Body.Close()
 						if err != nil {
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error reading response body in '%s': %s\n", t.Line, t.Column, t.Lexeme, err.Error()))
 						}
-						resp.Body.Close() // Close the response body
 						responseDict.Items["body"] = MShellBinary(bodyBytes)
 
 						// Push the response dictionary onto the stack

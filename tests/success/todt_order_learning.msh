@@ -1,0 +1,29 @@
+# toDt learns the numeric date order from unambiguous dates within an evaluation.
+# With nothing learned, an ambiguous date is none.
+'06/05/2025' toDt match just d: @d isoDateFmt, none: 'none', end wl
+
+# ISO dates are always year-month-day and teach nothing.
+'2025-06-16' toDt match just d: @d isoDateFmt, none: 'none', end wl
+'06/05/2025' toDt match just d: @d isoDateFmt, none: 'none', end wl
+
+# A day above 12 in first position can only be day-month-year. That teaches the order.
+'16/06/2025' toDt match just d: @d isoDateFmt, none: 'none', end wl
+'06/05/2025' toDt match just d: @d isoDateFmt, none: 'none', end wl
+'01/02/2026' toDt match just d: @d isoDateFmt, none: 'none', end wl
+
+# ISO is unaffected by the learned order.
+'2026-01-02' toDt match just d: @d isoDateFmt, none: 'none', end wl
+
+# The most recent unambiguous date wins: month-day-year evidence flips the order.
+'12/16/2025' toDt match just d: @d isoDateFmt, none: 'none', end wl
+'06/05/2025' toDt match just d: @d isoDateFmt, none: 'none', end wl
+'01/02/2026' toDt match just d: @d isoDateFmt, none: 'none', end wl
+
+# A month word in the middle with a two digit year is ambiguous between d-Mon-yy and yy-Mon-d,
+# and the learned m-d-y order is not one of its readings, so it is none.
+'24 Sep 23' toDt match just d: @d isoDateFmt, none: 'none', end wl
+# But a day above 31 in third position makes it unique.
+'24 Sep 45' toDt match just d: @d isoDateFmt, none: 'none', end wl
+
+# Time portions ride along. The order is now day-month-year again, from the line above.
+'1/12/2025 2:56:13 PM' toDt match just d: @d isoDateTimeFmt, none: 'none', end wl

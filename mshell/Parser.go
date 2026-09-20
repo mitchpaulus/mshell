@@ -812,7 +812,7 @@ func (parser *MShellParser) ParseIndexer() *MShellIndexerList {
 	return indexerList
 }
 
-func (parser *MShellParser) ParseVarstoreList() (MShellVarstoreList) {
+func (parser *MShellParser) ParseVarstoreList() (MShellVarstoreList, error) {
 	varStoreList := MShellVarstoreList{}
 	varStoreList.VarStores = []Token{}
 	varStoreList.VarStores = append(varStoreList.VarStores, parser.curr)
@@ -820,20 +820,22 @@ func (parser *MShellParser) ParseVarstoreList() (MShellVarstoreList) {
 
 	for {
 		if parser.curr.Type == COMMA {
+			commaToken := parser.curr
 			parser.NextToken()
 			if parser.curr.Type == VARSTORE {
 				varStoreList.VarStores = append(varStoreList.VarStores, parser.curr)
 				parser.NextToken()
 			} else {
-				// No error here, just a trailing comma which is fine.
-				break
+				// A comma after a variable store must be followed by another store.
+				// A trailing comma is not allowed, since commas also separate match arms.
+				return varStoreList, fmt.Errorf("%d:%d: Expected a variable store after ',' but got %s. Trailing commas are not allowed after a variable store.", commaToken.Line, commaToken.Column, parser.curr.Type)
 			}
 		} else {
 			break
 		}
 	}
 
-	return varStoreList
+	return varStoreList, nil
 }
 
 
@@ -1121,7 +1123,11 @@ func (parser *MShellParser) ParseItem() (MShellParseItem, error) {
 	case INDEXER, ENDINDEXER, STARTINDEXER, SLICEINDEXER:
 		return parser.ParseIndexer(), nil
 	case VARSTORE:
-		return parser.ParseVarstoreList(), nil
+		varStoreList, err := parser.ParseVarstoreList()
+		if err != nil {
+			return nil, err
+		}
+		return varStoreList, nil
 	case EOF:
 		return nil, errors.New("Unexpected EOF while parsing item")
 	case COLON:

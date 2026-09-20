@@ -1447,7 +1447,14 @@ Access the parts with `:k?` and `:v?`.
 
 ## Date Functions
 
-- `toDt`: Convert string to date/time `(str -- Maybe[date])`
+- `toDt`: Convert string to date/time `(str -- Maybe[date])`.
+  Separators are ignored, month names are accepted, and a time with optional AM/PM may follow.
+  A leading four digit year is always year-month-day, so ISO dates like `2026-01-02` are never ambiguous.
+  Other dates are tried as year-month-day, month-day-year, and day-month-year.
+  If exactly one reading is a valid date, it is used (`16/06/2025`, `12/16/25`).
+  If several readings are valid (`01/02/2026`), the order learned from the most recent unambiguous
+  non-ISO date in this evaluation decides. With no such date yet, the result is `none`.
+  Out of range components (month 13, Feb 30, hour 25) give `none` rather than rolling over.
 - `now`: Push current local date/time onto the stack `( -- date)`
 - `date`: Drop the time portion from a datetime `(date -- date)`
 - `year`: Get year from date `(date -- int)`
@@ -1530,7 +1537,7 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
 
 ## HTTP Requests
 
-- `httpGet`: Make a HTTP GET request. Signature is `({str: T} -- Maybe[{status: int, reason: str, headers: {str: [str]}, body: bytes}])`. Takes the request information in a dictionary that should have the following keys:
+- `httpGet`: Make a HTTP GET request. Signature is `(dict -- Maybe[{status: int, reason: str, headers: {str: [str]}, body: bytes, cookieJar?: [dict]}])`. Takes the request information in a dictionary that should have the following keys:
 
   - `url`: Full URL, including all the query parameters (required, string)
   - `timeout`: Request timeout in seconds (optional, positive integer; default 30)
@@ -1538,6 +1545,9 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
     Set to `false` to get the first response back as-is,
     e.g. to inspect the `Location` or `Set-Cookie` headers of a `3xx` response after a login POST.
   - `headers`: A dictionary of key-value pairs for the request headers (optional)
+  - `cookieJar`: A shared list of cookie dictionaries (optional); start with `[]`.
+    The list is updated in place and reused across GET and POST requests.
+    See [Cookie jars](#cookie-jars) for the record format and behavior.
 
   Returns a Maybe wrapping a response dictionary.
   The response is `none` if the web request totally fails, like hitting a timeout.
@@ -1547,9 +1557,81 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
   - `reason`: Full reason line, ex: `"200 OK"`
   - `headers`: Dictionary of header name to a list of values
   - `body`: Body of response, as raw `bytes`. Decode with `utf8Str` if you want a UTF-8 string.
+  - `cookieJar`: Present only when supplied on the request, referencing the same list.
 
 - `httpPost`: Make a HTTP POST request. Signature is the same as `httpGet`. The only difference is that on the request dictionary, you can also set the `body` field to a stringable value.
 - `parseLinkHeader`: Parse an HTTP `Link` header string into a list of dictionaries. Each dictionary contains `url` and `rel` strings plus a `params` dictionary of any additional attributes. `(str -- [dict])`
+
+### Cookie jars
+
+A cookie jar is an ordinary list of dictionaries, with no new runtime type or constructor.
+The list is the complete state; there is no hidden jar attached to it.
+
+```mshell
+[] jar!
+{'url': 'https://example.com/login', 'body': @form,
+ 'cookieJar': @jar} httpPost ? login!
+{'url': 'https://example.com/account',
+ 'cookieJar': @jar} httpGet ? account!
+```
+
+The request sends only cookies matching the destination domain, path, and transport.
+Secure cookies are sent only over HTTPS, including on localhost.
+Cookies are accepted and updated on every response, including redirects and HTTP error statuses.
+With `followRedirects: false`, cookies from the first response are still stored.
+If a later redirect or body read fails, updates from responses already received remain in the list.
+Omitting `cookieJar` leaves automatic cookie management disabled and omits the response field.
+Combining a jar with an explicit `Cookie` request header is an error, regardless of header capitalization.
+
+The response's `cookieJar` is a live reference, not a snapshot.
+Later requests change the list visible through earlier responses too.
+Only the list identity is guaranteed; individual cookie dictionaries may be replaced.
+
+Each stored dictionary has all of the following fields:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `name` | `str` | Cookie name. |
+| `value` | `str` | Cookie value. |
+| `domain` | `str` | Normalized lowercase ASCII hostname (IDNs use punycode), or IP address; no leading dot or port. |
+| `path` | `str` | Effective cookie path, starting with `/`; a default is calculated when the response omits a valid path. |
+| `hostOnly` | `bool` | If true, send only to the exact hostname; otherwise eligible subdomains also match. |
+| `secure` | `bool` | Send only over HTTPS. |
+| `httpOnly` | `bool` | Preserved attribute; does not prevent mshell scripts from inspecting the record. |
+| `sameSite` | `str` | `""` (unspecified/unrecognized), `"lax"`, `"strict"`, or `"none"`; preserved metadata. |
+| `expires` | `int \| float \| null` | Absolute whole Unix seconds, or `null` for a session cookie. |
+| `lastAccess` | `int \| float` | Whole Unix seconds when received or last selected for a request. |
+| `quoted` | `bool` | Whether the value was quoted in the response; preserved when sending. |
+
+Cookies are identified by `(domain, path, name)`, so a name can occur more than once.
+New cookies are appended; replacements keep the original list position; expired or deleted cookies are removed.
+The list therefore preserves creation order, without a counter or creation-order field.
+Sending sorts a separate selection by decreasing path length, preserving list order for equal lengths.
+It does not reorder the jar.
+`Max-Age` takes precedence over `Expires` and is converted to an absolute deadline once, when received.
+Reusing or restoring the jar never restarts that countdown.
+Expiration is checked when using the jar; there is no background expiration timer.
+
+Domain validation rejects unrelated domains and public-suffix cookies (including private suffixes such as `github.io`).
+The `__Secure-` and `__Host-` cookie prefix requirements are enforced.
+These HTTP methods have no browser top-level site or navigation context, so browser `SameSite` policies are not enforced.
+Incoming `Partitioned` cookies are ignored rather than stored as unpartitioned cookies.
+
+You may inspect or edit records using normal list/dictionary operations.
+Supplied records must contain the fields above with valid types and values; duplicate `(domain, path, name)` entries are errors.
+Validation happens before sending the request.
+The whole jar round-trips through `toJson` and `parseJson`:
+
+```mshell
+@jar toJson `cookies.json` writeFile
+`cookies.json` parseJson restoredJar!
+{'url': 'https://example.com/account',
+ 'cookieJar': @restoredJar} httpGet ?
+```
+
+New timestamps are integers; whole-number floats are also accepted because `parseJson` decodes JSON numbers as floats.
+Session cookies live as long as the caller retains them in the jar.
+Explicitly saving and restoring the list also saves session cookies; discard those records if starting a new session is desired.
 
 ## Archive (Zip) Functions
 
@@ -1617,7 +1699,8 @@ or inflate the archive.
 ## Variables
 
 You can store to several variables in one go by separating the store tokens with commas.
-Values are consumed from the stack for each store, and an optional trailing comma is ignored.
+Values are consumed from the stack for each store.
+A trailing comma after the last store is a parse error, since commas also separate `match` arms.
 When storing with the comma separated list, make sure you understand the ordering!
 
 ```mshell
@@ -1629,9 +1712,6 @@ When storing with the comma separated list, make sure you understand the orderin
 # Storing multiple values at once. Note the order!
 1 2 3 a!, b!, c!  # a is 1, b is 2, c is 3.
 @a @b @c
-
-# A trailing comma after the last store is ignored
-4 5 a!, b!,
 ```
 
 
