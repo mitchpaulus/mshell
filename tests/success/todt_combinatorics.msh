@@ -1,5 +1,7 @@
 # Every combination of token kinds in positions 1, 2, 3 for toDt.
-# Kinds: 1 digit=5, 2 digit <= 12=06, 2 digit 13-28=16, 2 digit > 31=45, month word=Sep, 4 digit=2025
+# Kinds: 1 digit, 2 digit <= 12, 2 digit 13-28, 2 digit > 31, month word, 4 digit.
+# Each slot uses different values (5 6 7, 08 09 10, 14 15 16, 44 45 46, Sep Oct Nov, 2025 2026 2027)
+# so that two readings can never coincide by accident.
 # Separators are stripped before parsing, so a space stands in for '/', '-', etc.
 # Rules: the orders y-m-d, m-d-y, d-m-y are all tried. A single valid distinct date is accepted.
 # Several distinct valid dates is ambiguous and gives none, since no order has been established.
@@ -7,222 +9,230 @@
 # The file runs as one evaluation. A failed parse never teaches an order and a unique reading is
 # never affected by one, so all none results come first, followed by all the unique dates.
 
+def show (str --)
+    s!
+    @s toDt match
+        just d : $"{@s} -> {@d isoDateFmt}",
+        none   : $"{@s} -> none",
+    end wl
+end
+
 # ---- ambiguous or invalid: none ----
-'5 5 5' toDt match just d: $"5 5 5 -> {@d isoDateFmt}", none: "5 5 5 -> none", end wl
-'5 5 Sep' toDt match just d: $"5 5 Sep -> {@d isoDateFmt}", none: "5 5 Sep -> none", end wl
-'5 06 5' toDt match just d: $"5 06 5 -> {@d isoDateFmt}", none: "5 06 5 -> none", end wl
-'5 06 06' toDt match just d: $"5 06 06 -> {@d isoDateFmt}", none: "5 06 06 -> none", end wl
-'5 06 16' toDt match just d: $"5 06 16 -> {@d isoDateFmt}", none: "5 06 16 -> none", end wl
-'5 06 45' toDt match just d: $"5 06 45 -> {@d isoDateFmt}", none: "5 06 45 -> none", end wl
-'5 06 Sep' toDt match just d: $"5 06 Sep -> {@d isoDateFmt}", none: "5 06 Sep -> none", end wl
-'5 06 2025' toDt match just d: $"5 06 2025 -> {@d isoDateFmt}", none: "5 06 2025 -> none", end wl
-'5 16 5' toDt match just d: $"5 16 5 -> {@d isoDateFmt}", none: "5 16 5 -> none", end wl
-'5 16 Sep' toDt match just d: $"5 16 Sep -> {@d isoDateFmt}", none: "5 16 Sep -> none", end wl
-'5 45 5' toDt match just d: $"5 45 5 -> {@d isoDateFmt}", none: "5 45 5 -> none", end wl
-'5 45 06' toDt match just d: $"5 45 06 -> {@d isoDateFmt}", none: "5 45 06 -> none", end wl
-'5 45 16' toDt match just d: $"5 45 16 -> {@d isoDateFmt}", none: "5 45 16 -> none", end wl
-'5 45 45' toDt match just d: $"5 45 45 -> {@d isoDateFmt}", none: "5 45 45 -> none", end wl
-'5 45 Sep' toDt match just d: $"5 45 Sep -> {@d isoDateFmt}", none: "5 45 Sep -> none", end wl
-'5 45 2025' toDt match just d: $"5 45 2025 -> {@d isoDateFmt}", none: "5 45 2025 -> none", end wl
-'5 Sep 5' toDt match just d: $"5 Sep 5 -> {@d isoDateFmt}", none: "5 Sep 5 -> none", end wl
-'5 Sep Sep' toDt match just d: $"5 Sep Sep -> {@d isoDateFmt}", none: "5 Sep Sep -> none", end wl
-'5 2025 5' toDt match just d: $"5 2025 5 -> {@d isoDateFmt}", none: "5 2025 5 -> none", end wl
-'5 2025 06' toDt match just d: $"5 2025 06 -> {@d isoDateFmt}", none: "5 2025 06 -> none", end wl
-'5 2025 16' toDt match just d: $"5 2025 16 -> {@d isoDateFmt}", none: "5 2025 16 -> none", end wl
-'5 2025 45' toDt match just d: $"5 2025 45 -> {@d isoDateFmt}", none: "5 2025 45 -> none", end wl
-'5 2025 Sep' toDt match just d: $"5 2025 Sep -> {@d isoDateFmt}", none: "5 2025 Sep -> none", end wl
-'5 2025 2025' toDt match just d: $"5 2025 2025 -> {@d isoDateFmt}", none: "5 2025 2025 -> none", end wl
-'06 5 06' toDt match just d: $"06 5 06 -> {@d isoDateFmt}", none: "06 5 06 -> none", end wl
-'06 5 16' toDt match just d: $"06 5 16 -> {@d isoDateFmt}", none: "06 5 16 -> none", end wl
-'06 5 45' toDt match just d: $"06 5 45 -> {@d isoDateFmt}", none: "06 5 45 -> none", end wl
-'06 5 Sep' toDt match just d: $"06 5 Sep -> {@d isoDateFmt}", none: "06 5 Sep -> none", end wl
-'06 5 2025' toDt match just d: $"06 5 2025 -> {@d isoDateFmt}", none: "06 5 2025 -> none", end wl
-'06 06 16' toDt match just d: $"06 06 16 -> {@d isoDateFmt}", none: "06 06 16 -> none", end wl
-'06 06 Sep' toDt match just d: $"06 06 Sep -> {@d isoDateFmt}", none: "06 06 Sep -> none", end wl
-'06 16 5' toDt match just d: $"06 16 5 -> {@d isoDateFmt}", none: "06 16 5 -> none", end wl
-'06 16 Sep' toDt match just d: $"06 16 Sep -> {@d isoDateFmt}", none: "06 16 Sep -> none", end wl
-'06 45 5' toDt match just d: $"06 45 5 -> {@d isoDateFmt}", none: "06 45 5 -> none", end wl
-'06 45 06' toDt match just d: $"06 45 06 -> {@d isoDateFmt}", none: "06 45 06 -> none", end wl
-'06 45 16' toDt match just d: $"06 45 16 -> {@d isoDateFmt}", none: "06 45 16 -> none", end wl
-'06 45 45' toDt match just d: $"06 45 45 -> {@d isoDateFmt}", none: "06 45 45 -> none", end wl
-'06 45 Sep' toDt match just d: $"06 45 Sep -> {@d isoDateFmt}", none: "06 45 Sep -> none", end wl
-'06 45 2025' toDt match just d: $"06 45 2025 -> {@d isoDateFmt}", none: "06 45 2025 -> none", end wl
-'06 Sep 16' toDt match just d: $"06 Sep 16 -> {@d isoDateFmt}", none: "06 Sep 16 -> none", end wl
-'06 Sep Sep' toDt match just d: $"06 Sep Sep -> {@d isoDateFmt}", none: "06 Sep Sep -> none", end wl
-'06 2025 5' toDt match just d: $"06 2025 5 -> {@d isoDateFmt}", none: "06 2025 5 -> none", end wl
-'06 2025 06' toDt match just d: $"06 2025 06 -> {@d isoDateFmt}", none: "06 2025 06 -> none", end wl
-'06 2025 16' toDt match just d: $"06 2025 16 -> {@d isoDateFmt}", none: "06 2025 16 -> none", end wl
-'06 2025 45' toDt match just d: $"06 2025 45 -> {@d isoDateFmt}", none: "06 2025 45 -> none", end wl
-'06 2025 Sep' toDt match just d: $"06 2025 Sep -> {@d isoDateFmt}", none: "06 2025 Sep -> none", end wl
-'06 2025 2025' toDt match just d: $"06 2025 2025 -> {@d isoDateFmt}", none: "06 2025 2025 -> none", end wl
-'16 5 06' toDt match just d: $"16 5 06 -> {@d isoDateFmt}", none: "16 5 06 -> none", end wl
-'16 5 Sep' toDt match just d: $"16 5 Sep -> {@d isoDateFmt}", none: "16 5 Sep -> none", end wl
-'16 06 06' toDt match just d: $"16 06 06 -> {@d isoDateFmt}", none: "16 06 06 -> none", end wl
-'16 06 Sep' toDt match just d: $"16 06 Sep -> {@d isoDateFmt}", none: "16 06 Sep -> none", end wl
-'16 16 5' toDt match just d: $"16 16 5 -> {@d isoDateFmt}", none: "16 16 5 -> none", end wl
-'16 16 06' toDt match just d: $"16 16 06 -> {@d isoDateFmt}", none: "16 16 06 -> none", end wl
-'16 16 16' toDt match just d: $"16 16 16 -> {@d isoDateFmt}", none: "16 16 16 -> none", end wl
-'16 16 45' toDt match just d: $"16 16 45 -> {@d isoDateFmt}", none: "16 16 45 -> none", end wl
-'16 16 Sep' toDt match just d: $"16 16 Sep -> {@d isoDateFmt}", none: "16 16 Sep -> none", end wl
-'16 16 2025' toDt match just d: $"16 16 2025 -> {@d isoDateFmt}", none: "16 16 2025 -> none", end wl
-'16 45 5' toDt match just d: $"16 45 5 -> {@d isoDateFmt}", none: "16 45 5 -> none", end wl
-'16 45 06' toDt match just d: $"16 45 06 -> {@d isoDateFmt}", none: "16 45 06 -> none", end wl
-'16 45 16' toDt match just d: $"16 45 16 -> {@d isoDateFmt}", none: "16 45 16 -> none", end wl
-'16 45 45' toDt match just d: $"16 45 45 -> {@d isoDateFmt}", none: "16 45 45 -> none", end wl
-'16 45 Sep' toDt match just d: $"16 45 Sep -> {@d isoDateFmt}", none: "16 45 Sep -> none", end wl
-'16 45 2025' toDt match just d: $"16 45 2025 -> {@d isoDateFmt}", none: "16 45 2025 -> none", end wl
-'16 Sep 06' toDt match just d: $"16 Sep 06 -> {@d isoDateFmt}", none: "16 Sep 06 -> none", end wl
-'16 Sep Sep' toDt match just d: $"16 Sep Sep -> {@d isoDateFmt}", none: "16 Sep Sep -> none", end wl
-'16 2025 5' toDt match just d: $"16 2025 5 -> {@d isoDateFmt}", none: "16 2025 5 -> none", end wl
-'16 2025 06' toDt match just d: $"16 2025 06 -> {@d isoDateFmt}", none: "16 2025 06 -> none", end wl
-'16 2025 16' toDt match just d: $"16 2025 16 -> {@d isoDateFmt}", none: "16 2025 16 -> none", end wl
-'16 2025 45' toDt match just d: $"16 2025 45 -> {@d isoDateFmt}", none: "16 2025 45 -> none", end wl
-'16 2025 Sep' toDt match just d: $"16 2025 Sep -> {@d isoDateFmt}", none: "16 2025 Sep -> none", end wl
-'16 2025 2025' toDt match just d: $"16 2025 2025 -> {@d isoDateFmt}", none: "16 2025 2025 -> none", end wl
-'45 5 45' toDt match just d: $"45 5 45 -> {@d isoDateFmt}", none: "45 5 45 -> none", end wl
-'45 5 Sep' toDt match just d: $"45 5 Sep -> {@d isoDateFmt}", none: "45 5 Sep -> none", end wl
-'45 5 2025' toDt match just d: $"45 5 2025 -> {@d isoDateFmt}", none: "45 5 2025 -> none", end wl
-'45 06 45' toDt match just d: $"45 06 45 -> {@d isoDateFmt}", none: "45 06 45 -> none", end wl
-'45 06 Sep' toDt match just d: $"45 06 Sep -> {@d isoDateFmt}", none: "45 06 Sep -> none", end wl
-'45 06 2025' toDt match just d: $"45 06 2025 -> {@d isoDateFmt}", none: "45 06 2025 -> none", end wl
-'45 16 5' toDt match just d: $"45 16 5 -> {@d isoDateFmt}", none: "45 16 5 -> none", end wl
-'45 16 06' toDt match just d: $"45 16 06 -> {@d isoDateFmt}", none: "45 16 06 -> none", end wl
-'45 16 16' toDt match just d: $"45 16 16 -> {@d isoDateFmt}", none: "45 16 16 -> none", end wl
-'45 16 45' toDt match just d: $"45 16 45 -> {@d isoDateFmt}", none: "45 16 45 -> none", end wl
-'45 16 Sep' toDt match just d: $"45 16 Sep -> {@d isoDateFmt}", none: "45 16 Sep -> none", end wl
-'45 16 2025' toDt match just d: $"45 16 2025 -> {@d isoDateFmt}", none: "45 16 2025 -> none", end wl
-'45 45 5' toDt match just d: $"45 45 5 -> {@d isoDateFmt}", none: "45 45 5 -> none", end wl
-'45 45 06' toDt match just d: $"45 45 06 -> {@d isoDateFmt}", none: "45 45 06 -> none", end wl
-'45 45 16' toDt match just d: $"45 45 16 -> {@d isoDateFmt}", none: "45 45 16 -> none", end wl
-'45 45 45' toDt match just d: $"45 45 45 -> {@d isoDateFmt}", none: "45 45 45 -> none", end wl
-'45 45 Sep' toDt match just d: $"45 45 Sep -> {@d isoDateFmt}", none: "45 45 Sep -> none", end wl
-'45 45 2025' toDt match just d: $"45 45 2025 -> {@d isoDateFmt}", none: "45 45 2025 -> none", end wl
-'45 Sep 45' toDt match just d: $"45 Sep 45 -> {@d isoDateFmt}", none: "45 Sep 45 -> none", end wl
-'45 Sep Sep' toDt match just d: $"45 Sep Sep -> {@d isoDateFmt}", none: "45 Sep Sep -> none", end wl
-'45 Sep 2025' toDt match just d: $"45 Sep 2025 -> {@d isoDateFmt}", none: "45 Sep 2025 -> none", end wl
-'45 2025 5' toDt match just d: $"45 2025 5 -> {@d isoDateFmt}", none: "45 2025 5 -> none", end wl
-'45 2025 06' toDt match just d: $"45 2025 06 -> {@d isoDateFmt}", none: "45 2025 06 -> none", end wl
-'45 2025 16' toDt match just d: $"45 2025 16 -> {@d isoDateFmt}", none: "45 2025 16 -> none", end wl
-'45 2025 45' toDt match just d: $"45 2025 45 -> {@d isoDateFmt}", none: "45 2025 45 -> none", end wl
-'45 2025 Sep' toDt match just d: $"45 2025 Sep -> {@d isoDateFmt}", none: "45 2025 Sep -> none", end wl
-'45 2025 2025' toDt match just d: $"45 2025 2025 -> {@d isoDateFmt}", none: "45 2025 2025 -> none", end wl
-'Sep 5 5' toDt match just d: $"Sep 5 5 -> {@d isoDateFmt}", none: "Sep 5 5 -> none", end wl
-'Sep 5 Sep' toDt match just d: $"Sep 5 Sep -> {@d isoDateFmt}", none: "Sep 5 Sep -> none", end wl
-'Sep 06 5' toDt match just d: $"Sep 06 5 -> {@d isoDateFmt}", none: "Sep 06 5 -> none", end wl
-'Sep 06 Sep' toDt match just d: $"Sep 06 Sep -> {@d isoDateFmt}", none: "Sep 06 Sep -> none", end wl
-'Sep 16 5' toDt match just d: $"Sep 16 5 -> {@d isoDateFmt}", none: "Sep 16 5 -> none", end wl
-'Sep 16 Sep' toDt match just d: $"Sep 16 Sep -> {@d isoDateFmt}", none: "Sep 16 Sep -> none", end wl
-'Sep 45 5' toDt match just d: $"Sep 45 5 -> {@d isoDateFmt}", none: "Sep 45 5 -> none", end wl
-'Sep 45 06' toDt match just d: $"Sep 45 06 -> {@d isoDateFmt}", none: "Sep 45 06 -> none", end wl
-'Sep 45 16' toDt match just d: $"Sep 45 16 -> {@d isoDateFmt}", none: "Sep 45 16 -> none", end wl
-'Sep 45 45' toDt match just d: $"Sep 45 45 -> {@d isoDateFmt}", none: "Sep 45 45 -> none", end wl
-'Sep 45 Sep' toDt match just d: $"Sep 45 Sep -> {@d isoDateFmt}", none: "Sep 45 Sep -> none", end wl
-'Sep 45 2025' toDt match just d: $"Sep 45 2025 -> {@d isoDateFmt}", none: "Sep 45 2025 -> none", end wl
-'Sep Sep 5' toDt match just d: $"Sep Sep 5 -> {@d isoDateFmt}", none: "Sep Sep 5 -> none", end wl
-'Sep Sep 06' toDt match just d: $"Sep Sep 06 -> {@d isoDateFmt}", none: "Sep Sep 06 -> none", end wl
-'Sep Sep 16' toDt match just d: $"Sep Sep 16 -> {@d isoDateFmt}", none: "Sep Sep 16 -> none", end wl
-'Sep Sep 45' toDt match just d: $"Sep Sep 45 -> {@d isoDateFmt}", none: "Sep Sep 45 -> none", end wl
-'Sep Sep Sep' toDt match just d: $"Sep Sep Sep -> {@d isoDateFmt}", none: "Sep Sep Sep -> none", end wl
-'Sep Sep 2025' toDt match just d: $"Sep Sep 2025 -> {@d isoDateFmt}", none: "Sep Sep 2025 -> none", end wl
-'Sep 2025 5' toDt match just d: $"Sep 2025 5 -> {@d isoDateFmt}", none: "Sep 2025 5 -> none", end wl
-'Sep 2025 06' toDt match just d: $"Sep 2025 06 -> {@d isoDateFmt}", none: "Sep 2025 06 -> none", end wl
-'Sep 2025 16' toDt match just d: $"Sep 2025 16 -> {@d isoDateFmt}", none: "Sep 2025 16 -> none", end wl
-'Sep 2025 45' toDt match just d: $"Sep 2025 45 -> {@d isoDateFmt}", none: "Sep 2025 45 -> none", end wl
-'Sep 2025 Sep' toDt match just d: $"Sep 2025 Sep -> {@d isoDateFmt}", none: "Sep 2025 Sep -> none", end wl
-'Sep 2025 2025' toDt match just d: $"Sep 2025 2025 -> {@d isoDateFmt}", none: "Sep 2025 2025 -> none", end wl
-'2025 5 45' toDt match just d: $"2025 5 45 -> {@d isoDateFmt}", none: "2025 5 45 -> none", end wl
-'2025 5 Sep' toDt match just d: $"2025 5 Sep -> {@d isoDateFmt}", none: "2025 5 Sep -> none", end wl
-'2025 5 2025' toDt match just d: $"2025 5 2025 -> {@d isoDateFmt}", none: "2025 5 2025 -> none", end wl
-'2025 06 45' toDt match just d: $"2025 06 45 -> {@d isoDateFmt}", none: "2025 06 45 -> none", end wl
-'2025 06 Sep' toDt match just d: $"2025 06 Sep -> {@d isoDateFmt}", none: "2025 06 Sep -> none", end wl
-'2025 06 2025' toDt match just d: $"2025 06 2025 -> {@d isoDateFmt}", none: "2025 06 2025 -> none", end wl
-'2025 16 5' toDt match just d: $"2025 16 5 -> {@d isoDateFmt}", none: "2025 16 5 -> none", end wl
-'2025 16 06' toDt match just d: $"2025 16 06 -> {@d isoDateFmt}", none: "2025 16 06 -> none", end wl
-'2025 16 16' toDt match just d: $"2025 16 16 -> {@d isoDateFmt}", none: "2025 16 16 -> none", end wl
-'2025 16 45' toDt match just d: $"2025 16 45 -> {@d isoDateFmt}", none: "2025 16 45 -> none", end wl
-'2025 16 Sep' toDt match just d: $"2025 16 Sep -> {@d isoDateFmt}", none: "2025 16 Sep -> none", end wl
-'2025 16 2025' toDt match just d: $"2025 16 2025 -> {@d isoDateFmt}", none: "2025 16 2025 -> none", end wl
-'2025 45 5' toDt match just d: $"2025 45 5 -> {@d isoDateFmt}", none: "2025 45 5 -> none", end wl
-'2025 45 06' toDt match just d: $"2025 45 06 -> {@d isoDateFmt}", none: "2025 45 06 -> none", end wl
-'2025 45 16' toDt match just d: $"2025 45 16 -> {@d isoDateFmt}", none: "2025 45 16 -> none", end wl
-'2025 45 45' toDt match just d: $"2025 45 45 -> {@d isoDateFmt}", none: "2025 45 45 -> none", end wl
-'2025 45 Sep' toDt match just d: $"2025 45 Sep -> {@d isoDateFmt}", none: "2025 45 Sep -> none", end wl
-'2025 45 2025' toDt match just d: $"2025 45 2025 -> {@d isoDateFmt}", none: "2025 45 2025 -> none", end wl
-'2025 Sep 45' toDt match just d: $"2025 Sep 45 -> {@d isoDateFmt}", none: "2025 Sep 45 -> none", end wl
-'2025 Sep Sep' toDt match just d: $"2025 Sep Sep -> {@d isoDateFmt}", none: "2025 Sep Sep -> none", end wl
-'2025 Sep 2025' toDt match just d: $"2025 Sep 2025 -> {@d isoDateFmt}", none: "2025 Sep 2025 -> none", end wl
-'2025 2025 5' toDt match just d: $"2025 2025 5 -> {@d isoDateFmt}", none: "2025 2025 5 -> none", end wl
-'2025 2025 06' toDt match just d: $"2025 2025 06 -> {@d isoDateFmt}", none: "2025 2025 06 -> none", end wl
-'2025 2025 16' toDt match just d: $"2025 2025 16 -> {@d isoDateFmt}", none: "2025 2025 16 -> none", end wl
-'2025 2025 45' toDt match just d: $"2025 2025 45 -> {@d isoDateFmt}", none: "2025 2025 45 -> none", end wl
-'2025 2025 Sep' toDt match just d: $"2025 2025 Sep -> {@d isoDateFmt}", none: "2025 2025 Sep -> none", end wl
-'2025 2025 2025' toDt match just d: $"2025 2025 2025 -> {@d isoDateFmt}", none: "2025 2025 2025 -> none", end wl
+'5 6 7' show
+'5 6 10' show
+'5 6 16' show
+'5 6 46' show
+'5 6 Nov' show
+'5 6 2027' show
+'5 09 7' show
+'5 09 10' show
+'5 09 16' show
+'5 09 46' show
+'5 09 Nov' show
+'5 09 2027' show
+'5 15 7' show
+'5 15 Nov' show
+'5 45 7' show
+'5 45 10' show
+'5 45 16' show
+'5 45 46' show
+'5 45 Nov' show
+'5 45 2027' show
+'5 Oct 7' show
+'5 Oct Nov' show
+'5 2026 7' show
+'5 2026 10' show
+'5 2026 16' show
+'5 2026 46' show
+'5 2026 Nov' show
+'5 2026 2027' show
+'08 6 10' show
+'08 6 16' show
+'08 6 46' show
+'08 6 Nov' show
+'08 6 2027' show
+'08 09 10' show
+'08 09 16' show
+'08 09 46' show
+'08 09 Nov' show
+'08 09 2027' show
+'08 15 7' show
+'08 15 Nov' show
+'08 45 7' show
+'08 45 10' show
+'08 45 16' show
+'08 45 46' show
+'08 45 Nov' show
+'08 45 2027' show
+'08 Oct 10' show
+'08 Oct 16' show
+'08 Oct Nov' show
+'08 2026 7' show
+'08 2026 10' show
+'08 2026 16' show
+'08 2026 46' show
+'08 2026 Nov' show
+'08 2026 2027' show
+'14 6 10' show
+'14 6 16' show
+'14 6 Nov' show
+'14 09 10' show
+'14 09 16' show
+'14 09 Nov' show
+'14 15 7' show
+'14 15 10' show
+'14 15 16' show
+'14 15 46' show
+'14 15 Nov' show
+'14 15 2027' show
+'14 45 7' show
+'14 45 10' show
+'14 45 16' show
+'14 45 46' show
+'14 45 Nov' show
+'14 45 2027' show
+'14 Oct 10' show
+'14 Oct 16' show
+'14 Oct Nov' show
+'14 2026 7' show
+'14 2026 10' show
+'14 2026 16' show
+'14 2026 46' show
+'14 2026 Nov' show
+'14 2026 2027' show
+'44 6 46' show
+'44 6 Nov' show
+'44 6 2027' show
+'44 09 46' show
+'44 09 Nov' show
+'44 09 2027' show
+'44 15 7' show
+'44 15 10' show
+'44 15 16' show
+'44 15 46' show
+'44 15 Nov' show
+'44 15 2027' show
+'44 45 7' show
+'44 45 10' show
+'44 45 16' show
+'44 45 46' show
+'44 45 Nov' show
+'44 45 2027' show
+'44 Oct 46' show
+'44 Oct Nov' show
+'44 Oct 2027' show
+'44 2026 7' show
+'44 2026 10' show
+'44 2026 16' show
+'44 2026 46' show
+'44 2026 Nov' show
+'44 2026 2027' show
+'Sep 6 7' show
+'Sep 6 Nov' show
+'Sep 09 7' show
+'Sep 09 Nov' show
+'Sep 15 7' show
+'Sep 15 Nov' show
+'Sep 45 7' show
+'Sep 45 10' show
+'Sep 45 16' show
+'Sep 45 46' show
+'Sep 45 Nov' show
+'Sep 45 2027' show
+'Sep Oct 7' show
+'Sep Oct 10' show
+'Sep Oct 16' show
+'Sep Oct 46' show
+'Sep Oct Nov' show
+'Sep Oct 2027' show
+'Sep 2026 7' show
+'Sep 2026 10' show
+'Sep 2026 16' show
+'Sep 2026 46' show
+'Sep 2026 Nov' show
+'Sep 2026 2027' show
+'2025 6 46' show
+'2025 6 Nov' show
+'2025 6 2027' show
+'2025 09 46' show
+'2025 09 Nov' show
+'2025 09 2027' show
+'2025 15 7' show
+'2025 15 10' show
+'2025 15 16' show
+'2025 15 46' show
+'2025 15 Nov' show
+'2025 15 2027' show
+'2025 45 7' show
+'2025 45 10' show
+'2025 45 16' show
+'2025 45 46' show
+'2025 45 Nov' show
+'2025 45 2027' show
+'2025 Oct 46' show
+'2025 Oct Nov' show
+'2025 Oct 2027' show
+'2025 2026 7' show
+'2025 2026 10' show
+'2025 2026 16' show
+'2025 2026 46' show
+'2025 2026 Nov' show
+'2025 2026 2027' show
 
 # ---- exactly one valid reading ----
-'5 5 06' toDt match just d: $"5 5 06 -> {@d isoDateFmt}", none: "5 5 06 -> none", end wl
-'5 5 16' toDt match just d: $"5 5 16 -> {@d isoDateFmt}", none: "5 5 16 -> none", end wl
-'5 5 45' toDt match just d: $"5 5 45 -> {@d isoDateFmt}", none: "5 5 45 -> none", end wl
-'5 5 2025' toDt match just d: $"5 5 2025 -> {@d isoDateFmt}", none: "5 5 2025 -> none", end wl
-'5 16 06' toDt match just d: $"5 16 06 -> {@d isoDateFmt}", none: "5 16 06 -> none", end wl
-'5 16 16' toDt match just d: $"5 16 16 -> {@d isoDateFmt}", none: "5 16 16 -> none", end wl
-'5 16 45' toDt match just d: $"5 16 45 -> {@d isoDateFmt}", none: "5 16 45 -> none", end wl
-'5 16 2025' toDt match just d: $"5 16 2025 -> {@d isoDateFmt}", none: "5 16 2025 -> none", end wl
-'5 Sep 06' toDt match just d: $"5 Sep 06 -> {@d isoDateFmt}", none: "5 Sep 06 -> none", end wl
-'5 Sep 16' toDt match just d: $"5 Sep 16 -> {@d isoDateFmt}", none: "5 Sep 16 -> none", end wl
-'5 Sep 45' toDt match just d: $"5 Sep 45 -> {@d isoDateFmt}", none: "5 Sep 45 -> none", end wl
-'5 Sep 2025' toDt match just d: $"5 Sep 2025 -> {@d isoDateFmt}", none: "5 Sep 2025 -> none", end wl
-'06 5 5' toDt match just d: $"06 5 5 -> {@d isoDateFmt}", none: "06 5 5 -> none", end wl
-'06 06 5' toDt match just d: $"06 06 5 -> {@d isoDateFmt}", none: "06 06 5 -> none", end wl
-'06 06 06' toDt match just d: $"06 06 06 -> {@d isoDateFmt}", none: "06 06 06 -> none", end wl
-'06 06 45' toDt match just d: $"06 06 45 -> {@d isoDateFmt}", none: "06 06 45 -> none", end wl
-'06 06 2025' toDt match just d: $"06 06 2025 -> {@d isoDateFmt}", none: "06 06 2025 -> none", end wl
-'06 16 06' toDt match just d: $"06 16 06 -> {@d isoDateFmt}", none: "06 16 06 -> none", end wl
-'06 16 16' toDt match just d: $"06 16 16 -> {@d isoDateFmt}", none: "06 16 16 -> none", end wl
-'06 16 45' toDt match just d: $"06 16 45 -> {@d isoDateFmt}", none: "06 16 45 -> none", end wl
-'06 16 2025' toDt match just d: $"06 16 2025 -> {@d isoDateFmt}", none: "06 16 2025 -> none", end wl
-'06 Sep 5' toDt match just d: $"06 Sep 5 -> {@d isoDateFmt}", none: "06 Sep 5 -> none", end wl
-'06 Sep 06' toDt match just d: $"06 Sep 06 -> {@d isoDateFmt}", none: "06 Sep 06 -> none", end wl
-'06 Sep 45' toDt match just d: $"06 Sep 45 -> {@d isoDateFmt}", none: "06 Sep 45 -> none", end wl
-'06 Sep 2025' toDt match just d: $"06 Sep 2025 -> {@d isoDateFmt}", none: "06 Sep 2025 -> none", end wl
-'16 5 5' toDt match just d: $"16 5 5 -> {@d isoDateFmt}", none: "16 5 5 -> none", end wl
-'16 5 16' toDt match just d: $"16 5 16 -> {@d isoDateFmt}", none: "16 5 16 -> none", end wl
-'16 5 45' toDt match just d: $"16 5 45 -> {@d isoDateFmt}", none: "16 5 45 -> none", end wl
-'16 5 2025' toDt match just d: $"16 5 2025 -> {@d isoDateFmt}", none: "16 5 2025 -> none", end wl
-'16 06 5' toDt match just d: $"16 06 5 -> {@d isoDateFmt}", none: "16 06 5 -> none", end wl
-'16 06 16' toDt match just d: $"16 06 16 -> {@d isoDateFmt}", none: "16 06 16 -> none", end wl
-'16 06 45' toDt match just d: $"16 06 45 -> {@d isoDateFmt}", none: "16 06 45 -> none", end wl
-'16 06 2025' toDt match just d: $"16 06 2025 -> {@d isoDateFmt}", none: "16 06 2025 -> none", end wl
-'16 Sep 5' toDt match just d: $"16 Sep 5 -> {@d isoDateFmt}", none: "16 Sep 5 -> none", end wl
-'16 Sep 16' toDt match just d: $"16 Sep 16 -> {@d isoDateFmt}", none: "16 Sep 16 -> none", end wl
-'16 Sep 45' toDt match just d: $"16 Sep 45 -> {@d isoDateFmt}", none: "16 Sep 45 -> none", end wl
-'16 Sep 2025' toDt match just d: $"16 Sep 2025 -> {@d isoDateFmt}", none: "16 Sep 2025 -> none", end wl
-'45 5 5' toDt match just d: $"45 5 5 -> {@d isoDateFmt}", none: "45 5 5 -> none", end wl
-'45 5 06' toDt match just d: $"45 5 06 -> {@d isoDateFmt}", none: "45 5 06 -> none", end wl
-'45 5 16' toDt match just d: $"45 5 16 -> {@d isoDateFmt}", none: "45 5 16 -> none", end wl
-'45 06 5' toDt match just d: $"45 06 5 -> {@d isoDateFmt}", none: "45 06 5 -> none", end wl
-'45 06 06' toDt match just d: $"45 06 06 -> {@d isoDateFmt}", none: "45 06 06 -> none", end wl
-'45 06 16' toDt match just d: $"45 06 16 -> {@d isoDateFmt}", none: "45 06 16 -> none", end wl
-'45 Sep 5' toDt match just d: $"45 Sep 5 -> {@d isoDateFmt}", none: "45 Sep 5 -> none", end wl
-'45 Sep 06' toDt match just d: $"45 Sep 06 -> {@d isoDateFmt}", none: "45 Sep 06 -> none", end wl
-'45 Sep 16' toDt match just d: $"45 Sep 16 -> {@d isoDateFmt}", none: "45 Sep 16 -> none", end wl
-'Sep 5 06' toDt match just d: $"Sep 5 06 -> {@d isoDateFmt}", none: "Sep 5 06 -> none", end wl
-'Sep 5 16' toDt match just d: $"Sep 5 16 -> {@d isoDateFmt}", none: "Sep 5 16 -> none", end wl
-'Sep 5 45' toDt match just d: $"Sep 5 45 -> {@d isoDateFmt}", none: "Sep 5 45 -> none", end wl
-'Sep 5 2025' toDt match just d: $"Sep 5 2025 -> {@d isoDateFmt}", none: "Sep 5 2025 -> none", end wl
-'Sep 06 06' toDt match just d: $"Sep 06 06 -> {@d isoDateFmt}", none: "Sep 06 06 -> none", end wl
-'Sep 06 16' toDt match just d: $"Sep 06 16 -> {@d isoDateFmt}", none: "Sep 06 16 -> none", end wl
-'Sep 06 45' toDt match just d: $"Sep 06 45 -> {@d isoDateFmt}", none: "Sep 06 45 -> none", end wl
-'Sep 06 2025' toDt match just d: $"Sep 06 2025 -> {@d isoDateFmt}", none: "Sep 06 2025 -> none", end wl
-'Sep 16 06' toDt match just d: $"Sep 16 06 -> {@d isoDateFmt}", none: "Sep 16 06 -> none", end wl
-'Sep 16 16' toDt match just d: $"Sep 16 16 -> {@d isoDateFmt}", none: "Sep 16 16 -> none", end wl
-'Sep 16 45' toDt match just d: $"Sep 16 45 -> {@d isoDateFmt}", none: "Sep 16 45 -> none", end wl
-'Sep 16 2025' toDt match just d: $"Sep 16 2025 -> {@d isoDateFmt}", none: "Sep 16 2025 -> none", end wl
-'2025 5 5' toDt match just d: $"2025 5 5 -> {@d isoDateFmt}", none: "2025 5 5 -> none", end wl
-'2025 5 06' toDt match just d: $"2025 5 06 -> {@d isoDateFmt}", none: "2025 5 06 -> none", end wl
-'2025 5 16' toDt match just d: $"2025 5 16 -> {@d isoDateFmt}", none: "2025 5 16 -> none", end wl
-'2025 06 5' toDt match just d: $"2025 06 5 -> {@d isoDateFmt}", none: "2025 06 5 -> none", end wl
-'2025 06 06' toDt match just d: $"2025 06 06 -> {@d isoDateFmt}", none: "2025 06 06 -> none", end wl
-'2025 06 16' toDt match just d: $"2025 06 16 -> {@d isoDateFmt}", none: "2025 06 16 -> none", end wl
-'2025 Sep 5' toDt match just d: $"2025 Sep 5 -> {@d isoDateFmt}", none: "2025 Sep 5 -> none", end wl
-'2025 Sep 06' toDt match just d: $"2025 Sep 06 -> {@d isoDateFmt}", none: "2025 Sep 06 -> none", end wl
-'2025 Sep 16' toDt match just d: $"2025 Sep 16 -> {@d isoDateFmt}", none: "2025 Sep 16 -> none", end wl
+'5 15 10' show
+'5 15 16' show
+'5 15 46' show
+'5 15 2027' show
+'5 Oct 10' show
+'5 Oct 16' show
+'5 Oct 46' show
+'5 Oct 2027' show
+'08 6 7' show
+'08 09 7' show
+'08 15 10' show
+'08 15 16' show
+'08 15 46' show
+'08 15 2027' show
+'08 Oct 7' show
+'08 Oct 46' show
+'08 Oct 2027' show
+'14 6 7' show
+'14 6 46' show
+'14 6 2027' show
+'14 09 7' show
+'14 09 46' show
+'14 09 2027' show
+'14 Oct 7' show
+'14 Oct 46' show
+'14 Oct 2027' show
+'44 6 7' show
+'44 6 10' show
+'44 6 16' show
+'44 09 7' show
+'44 09 10' show
+'44 09 16' show
+'44 Oct 7' show
+'44 Oct 10' show
+'44 Oct 16' show
+'Sep 6 10' show
+'Sep 6 16' show
+'Sep 6 46' show
+'Sep 6 2027' show
+'Sep 09 10' show
+'Sep 09 16' show
+'Sep 09 46' show
+'Sep 09 2027' show
+'Sep 15 10' show
+'Sep 15 16' show
+'Sep 15 46' show
+'Sep 15 2027' show
+'2025 6 7' show
+'2025 6 10' show
+'2025 6 16' show
+'2025 09 7' show
+'2025 09 10' show
+'2025 09 16' show
+'2025 Oct 7' show
+'2025 Oct 10' show
+'2025 Oct 16' show
