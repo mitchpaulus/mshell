@@ -47,26 +47,6 @@ func (token DateToken) Month() time.Month {
 	return time.Month(token.Type)
 }
 
-func (token DateToken) ParseDay() (int, error) {
-	dayInt, err := strconv.Atoi(token.Lexeme)
-	if err != nil {
-		return -1, err
-	}
-
-	if dayInt < 0 || dayInt > 31 {
-		return -1, fmt.Errorf("Day integer found to be '%d'", dayInt)
-	}
-	return dayInt, nil
-}
-
-func (token DateToken) ParseYear() (int) {
-	yearInt, _ := strconv.Atoi(token.Lexeme)
-	if len(token.Lexeme) == 2 {
-		yearInt += 2000
-	}
-	return yearInt
-}
-
 func (token DateToken) String() string {
 	return fmt.Sprintf("'%s' %v", token.Lexeme, token.Type)
 }
@@ -402,7 +382,18 @@ func (l *DateLexer) consumeAlpha() DateToken {
 	return l.makeToken(DATESEP)
 }
 
-func ParseDateTime(dateTimeStr string) (time.Time, error) {
+// DateOrder is the numeric date order learned during an evaluation.
+// It starts unset and is set by each unambiguous date that is not a leading 4 digit year.
+type DateOrder int
+
+const (
+	ORDER_UNSET DateOrder = iota
+	ORDER_YMD
+	ORDER_MDY
+	ORDER_DMY
+)
+
+func ParseDateTime(dateTimeStr string, order *DateOrder) (time.Time, error) {
 	l := NewDateLexer(dateTimeStr)
 	tokens := make([]DateToken, 0)
 
@@ -415,7 +406,7 @@ func ParseDateTime(dateTimeStr string) (time.Time, error) {
 		tokens = append(tokens, token)
 	}
 
-	time, err := ParseDateTimeTokens(tokens)
+	time, err := ParseDateTimeTokens(tokens, order)
 	return time, err
 }
 
@@ -423,6 +414,7 @@ type DateParser struct {
 	Tokens []DateToken
 	Current int
 	Error error
+	Order *DateOrder
 }
 
 func (p *DateParser) CurrentToken() DateToken {
@@ -450,160 +442,103 @@ func (p *DateParser) Peek2() DateToken {
 	return p.Tokens[p.Current + 2]
 }
 
+// Interpret a token as a year. 4 digit is taken literally, 2 digit is 2000+. 1 digit is not a year.
+func (token DateToken) asYear() (int, bool) {
+	if token.Type == DATEINT4 {
+		y, _ := strconv.Atoi(token.Lexeme)
+		return y, true
+	} else if token.Type == DATEINT2 {
+		y, _ := strconv.Atoi(token.Lexeme)
+		return y + 2000, true
+	}
+	return 0, false
+}
+
+func (token DateToken) asMonth() (int, bool) {
+	if token.IsMonth() {
+		return int(token.Type), true
+	} else if token.Type == DATEINT1 || token.Type == DATEINT2 {
+		m, _ := strconv.Atoi(token.Lexeme)
+		return m, m >= 1 && m <= 12
+	}
+	return 0, false
+}
+
+func (token DateToken) asDay() (int, bool) {
+	if token.Type == DATEINT1 || token.Type == DATEINT2 {
+		d, _ := strconv.Atoi(token.Lexeme)
+		return d, d >= 1 && d <= 31
+	}
+	return 0, false
+}
+
+type dateReading struct {
+	year, month, day int
+}
+
+// Try to read tokens y, m, d as a full date, checking that the day exists in that month.
+func tryReading(y DateToken, m DateToken, d DateToken) (dateReading, bool) {
+	year, okY := y.asYear()
+	month, okM := m.asMonth()
+	day, okD := d.asDay()
+	if !(okY && okM && okD) {
+		return dateReading{}, false
+	}
+	t := time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.UTC)
+	if t.Year() != year || int(t.Month()) != month || t.Day() != day {
+		return dateReading{}, false
+	}
+	return dateReading{year, month, day}, true
+}
+
+// ParseDate consumes three tokens and tries the three orders in real world use:
+// year-month-day, month-day-year, day-month-year.
+// If exactly one distinct date is valid, that is the answer, and it sets the order used for
+// later ambiguous dates, unless it was forced by a leading 4 digit year (ISO is universal).
+// If several distinct dates are valid, the learned order decides. With no learned order the
+// date is ambiguous and an error is returned.
 func (p *DateParser) ParseDate() (year int, month int, day int, err error) {
-	if p.CurrentToken().Type == DATEINT4 {
-		year, _ = p.ParseYear()
-
-		month, err = p.ParseMonth()
-		if err != nil {
-			return 0, 0, 0, err
-		}
-
-		day, err = p.ParseDay()
-		if err != nil {
-			return 0, 0, 0, err
-		}
-
-		return year, month, day, nil
-	} else if p.CurrentToken().IsMonth() {
-		month, _ = p.ParseMonth()
-
-		day, err = p.ParseDay()
-		if err != nil {
-			return 0, 0, 0, err
-		}
-
-		year, err = p.ParseYear()
-		if err != nil {
-			return 0, 0, 0, err
-		}
-
-		return year, month, day, nil
-	} else if p.CurrentToken().Type == DATEINT2 {
-		// Here we get some ambiguity.
-		if p.Peek().IsMonth() {
-			day, _ = p.ParseDay()
-			month, err = p.ParseMonth()
-			if err != nil {
-				return 0, 0, 0, err
-			}
-			year, err = p.ParseYear()
-			if err != nil {
-				return 0, 0, 0, err
-			}
-			return year, month, day, nil
-		} else {
-			// month, day, year
-			month, err = p.ParseMonth()
-			if err != nil {
-				return 0, 0, 0, err
-			}
-
-			day, err = p.ParseDay()
-			if err != nil {
-				return 0, 0, 0, err
-			}
-
-			year, err = p.ParseYear()
-			if err != nil {
-				return 0, 0, 0, err
-			}
-			return year, month, day, nil
-		}
-	} else if p.CurrentToken().Type == DATEINT1 {
-		// Here we get some ambiguity.
-		if p.Peek().IsMonth() {
-			day, _ = p.ParseDay()
-			month, err = p.ParseMonth()
-			if err != nil {
-				return 0, 0, 0, err
-			}
-			year, err = p.ParseYear()
-			if err != nil {
-				return 0, 0, 0, err
-			}
-			return year, month, day, nil
-		} else {
-			// month, day, year
-			month, err = p.ParseMonth()
-			if err != nil {
-				return 0, 0, 0, err
-			}
-
-			day, err = p.ParseDay()
-			if err != nil {
-				return 0, 0, 0, err
-			}
-
-			year, err = p.ParseYear()
-			if err != nil {
-				return 0, 0, 0, err
-			}
-
-			return year, month, day, nil
-		}
-	} else {
-		err = fmt.Errorf("Expected 4 digit year or month name")
-		return 0, 0, 0, err
+	t0, t1, t2 := p.CurrentToken(), p.Peek(), p.Peek2()
+	if t0.Type == DATEEOF || t1.Type == DATEEOF || t2.Type == DATEEOF {
+		return 0, 0, 0, fmt.Errorf("Expected three date components")
 	}
-}
 
-func (p *DateParser) ParseYear() (int, error) {
-	if p.CurrentToken().Type == DATEINT4 {
-		year, err := strconv.Atoi(p.CurrentToken().Lexeme)
-		if err != nil {
-			return 0, err
-		}
-		p.Current++
-		return year, nil
-	} else if p.CurrentToken().Type == DATEINT2 {
-		year, err := strconv.Atoi(p.CurrentToken().Lexeme)
-		if err != nil {
-			return 0, err
-		}
-		p.Current++
-		return year + 2000, nil
-	} else {
-		return 0, fmt.Errorf("Expected 4 or 2 digit year, received '%s' (%d)", p.CurrentToken().Lexeme, p.CurrentToken().Type)
-	}
-}
+	readings := make(map[DateOrder]dateReading)
+	if r, ok := tryReading(t0, t1, t2); ok { readings[ORDER_YMD] = r }
+	if r, ok := tryReading(t2, t0, t1); ok { readings[ORDER_MDY] = r }
+	if r, ok := tryReading(t2, t1, t0); ok { readings[ORDER_DMY] = r }
 
-func (p *DateParser) ParseMonth() (int, error) {
-	if p.CurrentToken().IsMonth() {
-		month := int(p.CurrentToken().Type)
-		p.Current++
-		return month, nil
-	} else if p.CurrentToken().Type == DATEINT2 {
-		month, err := strconv.Atoi(p.CurrentToken().Lexeme)
-		if err != nil {
-			return 0, err
-		}
-		p.Current++
-		return month, nil
-	} else if  p.CurrentToken().Type == DATEINT1 {
-		month, _ := strconv.Atoi(p.CurrentToken().Lexeme)
-		p.Current++
-		return month, nil
-	} else {
-		return 0, fmt.Errorf("Expected 2 digit month or month name")
-	}
-}
+	distinct := make(map[dateReading]bool)
+	for _, r := range readings { distinct[r] = true }
 
-func (p *DateParser) ParseDay() (int, error) {
-	if p.CurrentToken().Type == DATEINT2 {
-		day, err := strconv.Atoi(p.CurrentToken().Lexeme)
-		if err != nil {
-			return 0, err
+	var chosen dateReading
+	if len(distinct) == 0 {
+		return 0, 0, 0, fmt.Errorf("No valid date reading for '%s %s %s'", t0.Lexeme, t1.Lexeme, t2.Lexeme)
+	} else if len(distinct) == 1 {
+		for r := range distinct { chosen = r }
+		if p.Order != nil && t0.Type != DATEINT4 {
+			// Record the order as evidence; the most recent unambiguous date wins.
+			// Prefer the non-YMD reading when two orders produce the same date,
+			// since that is the one that says something about m/d.
+			for _, o := range []DateOrder{ORDER_MDY, ORDER_DMY, ORDER_YMD} {
+				if _, ok := readings[o]; ok {
+					*p.Order = o
+					break
+				}
+			}
 		}
-		p.Current++
-		return day, nil
-	} else if p.CurrentToken().Type == DATEINT1 {
-		day, _ := strconv.Atoi(p.CurrentToken().Lexeme)
-		p.Current++
-		return day, nil
+	} else if p.Order != nil && *p.Order != ORDER_UNSET {
+		r, ok := readings[*p.Order]
+		if !ok {
+			return 0, 0, 0, fmt.Errorf("Date '%s %s %s' is not valid in the established order", t0.Lexeme, t1.Lexeme, t2.Lexeme)
+		}
+		chosen = r
 	} else {
-		return 0, fmt.Errorf("Expected 2 or 1 digit day")
+		return 0, 0, 0, fmt.Errorf("Ambiguous date '%s %s %s' with no prior unambiguous date to establish the order", t0.Lexeme, t1.Lexeme, t2.Lexeme)
 	}
+
+	p.Current += 3
+	return chosen.year, chosen.month, chosen.day, nil
 }
 
 func (p *DateParser) ParseTime() (int, int, int, error) {
@@ -702,8 +637,7 @@ func (p *DateParser) ParseSecond() (int, error) {
 	}
 }
 
-
-func ParseDateTimeTokens(dateTimeTokens []DateToken) (time.Time, error) {
+func ParseDateTimeTokens(dateTimeTokens []DateToken, order *DateOrder) (time.Time, error) {
 	nonSepTokens := make([]DateToken, 0, len(dateTimeTokens))
 
 	for _, token := range dateTimeTokens {
@@ -712,7 +646,7 @@ func ParseDateTimeTokens(dateTimeTokens []DateToken) (time.Time, error) {
 		}
 	}
 
-	parser := DateParser{Tokens: nonSepTokens, Current: 0}
+	parser := DateParser{Tokens: nonSepTokens, Current: 0, Order: order}
 
 	year, month, day, err := parser.ParseDate()
 	if err != nil {

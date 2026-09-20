@@ -1446,7 +1446,14 @@ Access the parts with `:k?` and `:v?`.
 
 ## Date Functions
 
-- `toDt`: Convert string to date/time `(str -- Maybe[date])`
+- `toDt`: Convert string to date/time `(str -- Maybe[date])`.
+  Separators are ignored, month names are accepted, and a time with optional AM/PM may follow.
+  A leading four digit year is always year-month-day, so ISO dates like `2026-01-02` are never ambiguous.
+  Other dates are tried as year-month-day, month-day-year, and day-month-year.
+  If exactly one reading is a valid date, it is used (`16/06/2025`, `12/16/25`).
+  If several readings are valid (`01/02/2026`), the order learned from the most recent unambiguous
+  non-ISO date in this evaluation decides. With no such date yet, the result is `none`.
+  Out of range components (month 13, Feb 30, hour 25) give `none` rather than rolling over.
 - `now`: Push current local date/time onto the stack `( -- date)`
 - `date`: Drop the time portion from a datetime `(date -- date)`
 - `year`: Get year from date `(date -- int)`
