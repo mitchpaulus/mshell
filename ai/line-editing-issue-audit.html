@@ -383,7 +383,7 @@ footer {
 .check { list-style: none; padding: 0; display: grid; gap: .5rem; }
 .check li { max-width: none; padding: .7rem .9rem .7rem 2.4rem; position: relative; border: 1px solid var(--line); border-radius: .55rem; background: var(--panel); }
 .check li::before { content: "✓"; position: absolute; left: .9rem; top: .7rem; color: var(--accent); font-weight: 700; }
-.check .ref { color: var(--muted); font-size: .84rem; }
+.check .ref, .defect .ref { color: var(--muted); font-size: .84rem; }
 @media (max-width: 700px) { .defect dl { grid-template-columns: 1fr; } }
 </style>
 </head>
@@ -394,12 +394,12 @@ footer {
     <h1>Did we ship their bugs?</h1>
     <p class="lede">
       Six shells' issue trackers, about 390 distinct line-editing failure modes, checked against the region renderer and reproduced against the real binary in tmux.
-      Nine defects confirmed; six are fixed on the branch, including the one with security impact.
+      Nine defects confirmed; eight are fixed on the branch, including the one with security impact.
       The width-table complaint class that dominates every other tracker is gone by construction.
     </p>
     <div class="meta">
-      <span>audit date 2026-09-13</span>
-      <span>branch prompt-wrapping-design at 3fe371b</span>
+      <span>audit date 2026-09-13, updated 2026-09-20</span>
+      <span>branch prompt-wrapping-design at 3fe371b, re-checked at a768dee</span>
       <span>sources: fish, zsh, bash/readline, nushell/reedline, elvish, xonsh/prompt_toolkit</span>
     </div>
   </div>
@@ -483,14 +483,14 @@ h.sh resize 30 10</code></pre>
   </div>
 
   <div class="defect">
-    <h3>3. A stray cursor report from a command's output becomes the prompt anchor <span class="tag decision-tag">decision</span></h3>
+    <h3>3. A stray cursor report from a command's output becomes the prompt anchor <span class="tag fixed">fixed 2026-09-17</span></h3>
     <dl>
       <dt>Repro 46</dt><dd>Run <code>printf '\033[6n'</code>, then type <code>abc</code>. The terminal's reply is echoed by the tty in cooked mode, the stale <code>ESC[3;1R</code> is consumed by the anchor query, and the command paints at the wrong column until the next prompt.
 <div class="screen">:: printf '\033[6n'
 ^[[3;1R~ (0)>
 ::     abc</div></dd>
       <dt>Cause</dt><dd>CPR replies carry no identity, so anything already queued when <code>anchorPrompt</code> sends its request is taken as the answer. The same path lets input typed at a killed foreground program leak into the next prompt, the "TTY echoback" class in fish #10987.</dd>
-      <dt>Options</dt><dd><code>tcflush(TCIFLUSH)</code> before the anchor query, which drops typeahead that bash and zsh preserve; or move the cursor to a known position first and reject a reply that does not match it. The current behavior self-corrects at the next prompt.</dd>
+      <dt>Fix</dt><dd>Applied: the prompt no longer asks the terminal where the cursor is. <code>paintPrompt</code> lays out the prompt text with the same atoms, measured widths and wrap rules as command text, starting from column one, so the command origin is known from the layout and the region runs with a relative origin. There is no anchor query for a stale reply to satisfy, and typeahead is left untouched. Width probes are the only remaining CPR consumers; a batch learns its scratch row from the first reply and rejects any reply whose row is outside the visible region, so a stale report cannot silently become a width. Ctrl-L still queries once, since clearing needs an absolute row. <span class="ref">TestPromptLayoutWithoutCursorQuery, TestPromptPreservesQueuedInput, TestCommandMeasuresAfterRelativePrompt</span></dd>
       <dt>Family</dt><dd>reedline #860, prompt_toolkit #482 and #456, fish #12379.</dd>
     </dl>
   </div>
@@ -529,12 +529,12 @@ héllo.txt</div></dd>
   </div>
 
   <div class="defect">
-    <h3>7. No bracketed paste: pasted newlines execute or vanish, pasted tabs trigger completion <span class="tag bug">gap</span></h3>
+    <h3>7. No bracketed paste: pasted newlines execute or vanish, pasted tabs trigger completion <span class="tag fixed">fixed 2026-09-15</span></h3>
     <dl>
       <dt>Repro 6, 37</dt><dd>Pasting <code>echo a&lt;CR&gt;echo&lt;TAB&gt;b</code> runs the first line immediately and turns the tab into a completion. A literal LF byte is silently dropped, so <code>echo a&lt;LF&gt;echo b</code> becomes <code>echo aecho b</code>.
 <div class="screen">:: echo aecho b</div></dd>
       <dt>Cause</dt><dd><code>ESC[?2004h</code> is never sent, <code>ESC[200~</code> is an ignored CSI token, and <code>AsciiToken{10}</code> matches no branch in <code>HandleToken</code>.</dd>
-      <dt>Fix</dt><dd>Enable bracketed paste inside <code>enterRawMode</code> and disable it in <code>leaveRawMode</code>; treat the bracketed payload as one literal insertion with CR normalized to LF. The renderer side already exists: hard-break atoms and multi-row layout are implemented and were verified via history recall of multi-row commands.</dd>
+      <dt>Fix</dt><dd>Applied: <code>enterRawMode</code> sends <code>ESC[?2004h</code> and <code>leaveRawMode</code> sends <code>ESC[?2004l</code>, so child programs never see the mode. The lexer reads from <code>ESC[200~</code> to the exact <code>ESC[201~</code> end marker, across read boundaries, and returns one <code>PasteToken</code>; the payload is inserted as a single literal edit with CRLF and CR normalized to LF, so it never passes through key handling. Nested start markers and lookalike escapes inside the paste are ordinary text. The renderer side, hard-break atoms and multi-row layout, was already in place. <span class="ref">TestBracketedPasteLiteralEdit, TestBracketedPasteFragmentedAndTruncated, TestBracketedPasteQueuedDuringCursorQuery, TestBracketedPasteAdjacentAndStrayEnd</span></dd>
       <dt>Family</dt><dd>readline "pasted multi-line auto-executes", zsh trailing-newline debate, reedline #543, #576, elvish #890, #887, fish #5888.</dd>
     </dl>
   </div>
@@ -614,12 +614,12 @@ mitch@mitch-manjaro: /home/mitch/repos     ← lf launched by an injected reply<
     <thead><tr><th>Family</th><th>Why it does not apply</th></tr></thead>
     <tbody>
       <tr><td>wcwidth tables</td><td>Emoji width, ambiguous width, VS16, Nerd Font glyphs, Unicode version skew: widths are measured, so the whole class is gone by construction. The residual risk is the zero-advance policy in defect 8.</td></tr>
-      <tr><td>Prompt escape counting</td><td><code>\[ \]</code> and <code>%{ %}</code> bugs: the prompt is opaque and anchored by CPR.</td></tr>
+      <tr><td>Prompt escape counting</td><td><code>\[ \]</code> and <code>%{ %}</code> bugs: the prompt is laid out by the same measured-width renderer as the command, so its width is observed rather than counted.</td></tr>
       <tr><td>Delta-renderer invalidation</td><td>elvish and prompt_toolkit break when an external program paints; msh repaints the full region.</td></tr>
       <tr><td>Unimplemented features</td><td>Right prompts, transient prompts, vi mode, mouse, kitty keyboard protocol, OSC 133.</td></tr>
       <tr><td>Windows console</td><td>Console API and ConPTY specifics are outside this PR; the design's ConPTY round-trip claim was not exercised here.</td></tr>
       <tr><td>Plugin machinery</td><td>zsh redraw hooks, async prompt segments, external completion UIs.</td></tr>
-      <tr><td>CPR timeouts</td><td>The design requires CPR and blocks; terminals that never answer hang by contract. reedline #1010 and prompt_toolkit #535 show users hit exactly this on Termius and Emacs shell mode. <code>msh --check-terminal</code> is the intended answer and is worth a line in the docs.</td></tr>
+      <tr><td>CPR timeouts</td><td>Width probes require CPR and block; terminals that never answer hang by contract. The prompt itself no longer sends a CPR since 2026-09-17, so a fully cached session never queries. reedline #1010 and prompt_toolkit #535 show users hit exactly this on Termius and Emacs shell mode. <code>msh --check-terminal</code> is the intended answer and is worth a line in the docs.</td></tr>
     </tbody>
   </table>
 </section>
@@ -628,12 +628,11 @@ mitch@mitch-manjaro: /home/mitch/repos     ← lf launched by an injected reply<
   <span class="section-number">05</span>
   <h2>Suggested order</h2>
   <ol>
-    <li>Defects 1 and 2: fixed on this branch.</li>
-    <li>Defects 5 and 6: fixed on this branch.</li>
-    <li>Defect 7, bracketed paste, is the largest real gap and the one every shell tracker has the most traffic on.</li>
+    <li>Defects 1, 2, 5, 6 and 9: fixed on this branch.</li>
+    <li>Defect 7, bracketed paste: fixed on this branch.</li>
+    <li>Defect 3, stray cursor reports: fixed on this branch by removing the prompt anchor query entirely, which also sidesteps the typeahead trade-off.</li>
     <li>Defect 8 is a design decision; the change is a few lines in the reply acceptor but contradicts the written contract, so decide it rather than patch it.</li>
     <li>Defect 4's partial fix, <code>ESC[J</code> on re-anchor, is one line; SIGWINCH handling is a separate design item.</li>
-    <li>Defect 3 needs a decision on typeahead versus safety.</li>
   </ol>
 </section>
 </main>
