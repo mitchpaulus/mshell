@@ -1,2 +1,0 @@
-"MSH_READ_LIMIT" "1M" setenv
-(stdin len wl) "x" 1048577 repeat "" join < x

@@ -16,42 +16,14 @@ const readLimitEnvVar = "MSH_READ_LIMIT"
 // defaultReadLimit is the cap used when MSH_READ_LIMIT is unset: 100 MiB.
 const defaultReadLimit int64 = 100 * 1024 * 1024
 
-// parseReadLimit parses a MSH_READ_LIMIT value. It accepts a whole number of
-// bytes with an optional K, M, or G suffix (powers of 1024, case-insensitive,
-// with an optional trailing B or iB). A value of 0 removes the limit.
+// parseReadLimit parses a MSH_READ_LIMIT value: a whole number of bytes.
+// A value of 0 removes the limit.
 func parseReadLimit(value string) (int64, error) {
-	s := strings.TrimSpace(value)
-	if s == "" {
-		return 0, fmt.Errorf("%s is empty", readLimitEnvVar)
-	}
-
-	upper := strings.ToUpper(s)
-	upper = strings.TrimSuffix(upper, "IB")
-	upper = strings.TrimSuffix(upper, "B")
-
-	multiplier := int64(1)
-	switch {
-	case strings.HasSuffix(upper, "K"):
-		multiplier = 1024
-		upper = strings.TrimSuffix(upper, "K")
-	case strings.HasSuffix(upper, "M"):
-		multiplier = 1024 * 1024
-		upper = strings.TrimSuffix(upper, "M")
-	case strings.HasSuffix(upper, "G"):
-		multiplier = 1024 * 1024 * 1024
-		upper = strings.TrimSuffix(upper, "G")
-	}
-
-	n, err := strconv.ParseInt(strings.TrimSpace(upper), 10, 64)
+	n, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
 	if err != nil || n < 0 {
-		return 0, fmt.Errorf("%s must be a whole number of bytes with an optional K, M, or G suffix, got '%s'", readLimitEnvVar, value)
+		return 0, fmt.Errorf("%s must be a whole number of bytes, got '%s'", readLimitEnvVar, value)
 	}
-
-	if multiplier > 1 && n > (1<<63-1)/multiplier {
-		return 0, fmt.Errorf("%s value '%s' is too large", readLimitEnvVar, value)
-	}
-
-	return n * multiplier, nil
+	return n, nil
 }
 
 // readLimit returns the effective bulk-read cap in bytes, or 0 for no limit.

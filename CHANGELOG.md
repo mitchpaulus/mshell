@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `stdin` fails if the input exceeds `MSH_READ_LIMIT` bytes (default 100 MiB, `0` for no limit).
+- `stdin` fails if the input exceeds `MSH_READ_LIMIT` bytes (default 104857600, `0` for no limit).
 
 ### Security
 

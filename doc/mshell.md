@@ -223,11 +223,6 @@ Use `<` to feed data into stdin. The type of the value on top of the stack deter
 [md5sum] `binary_stdin.bin` readFileBytes < ; # Streams raw bytes into the command
 ```
 
-#### Input size limit
-
-`stdin` fails if the input exceeds `MSH_READ_LIMIT` bytes (default 100 MiB).
-Accepts a `K`, `M`, or `G` suffix (powers of 1024). `0` means no limit.
-
 ### In-place file modification
 
 The `<>` operator enables in-place file modification. It reads a file's contents, passes them to the command's stdin, and on successful completion (exit code 0), writes the command's stdout back to the same file. This is similar to the `sponge` command from moreutils.
@@ -1172,7 +1167,7 @@ end wl # Output: 11
 - `exit`: Exit the current script with the provided exit code. `(int -- )`
 - `read`: Read a line from stdin. Puts a str and bool of whether the read was successful on the stack. `( -- str bool)`
 - `prompt`: Write a prompt string to the controlling TTY and read a line from the controlling TTY. Fails if no controlling TTY is available. `(str -- str)`
-- `stdin`: Drop stdin onto the stack `( -- str)`. Fails past `MSH_READ_LIMIT` bytes (default 100 MiB, `0` for no limit).
+- `stdin`: Drop stdin onto the stack `( -- str)`. Fails if the input exceeds `MSH_READ_LIMIT` bytes (default 104857600, `0` for no limit).
 - `stdinIsTerminal`: Return whether the current effective stdin is connected to a terminal or Windows console.
   Regular files, pipes, and non-file streams return false.
   Redirections and symlinks are classified by their opened target, so one that resolves to a terminal returns true.

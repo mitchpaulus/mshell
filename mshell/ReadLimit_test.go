@@ -15,21 +15,12 @@ func TestParseReadLimit(t *testing.T) {
 		{"0", 0, true},
 		{"123", 123, true},
 		{" 4096 ", 4096, true},
-		{"1k", 1024, true},
-		{"1K", 1024, true},
-		{"1KB", 1024, true},
-		{"1KiB", 1024, true},
-		{"2M", 2 * 1024 * 1024, true},
-		{"2MB", 2 * 1024 * 1024, true},
-		{"1G", 1024 * 1024 * 1024, true},
-		{"50MiB", 50 * 1024 * 1024, true},
 		{"", 0, false},
 		{"-1", 0, false},
 		{"abc", 0, false},
-		{"1.5M", 0, false},
-		{"1T", 0, false},
+		{"1k", 0, false},
+		{"1.5", 0, false},
 		{"99999999999999999999", 0, false},
-		{"9999999999G", 0, false},
 	}
 	for _, c := range cases {
 		got, err := parseReadLimit(c.in)
