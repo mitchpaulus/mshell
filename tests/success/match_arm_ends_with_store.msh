@@ -1,0 +1,7 @@
+# A match arm body may end with a variable store. The comma then separates the arms.
+1 match 1 : 2 a!, _ : 3 a! end @a wl
+5 match 1 : 2 a!, _ : 3 a! end @a wl
+# Same inside a dict entry.
+{ "x": 10 dup b!, "y": 20 } :y? wl @b wl
+# Comma-separated stores still work in an arm.
+7 match 7 : 7 8 c!, d!, _ : 0 0 c!, d! end @c wl @d wl
