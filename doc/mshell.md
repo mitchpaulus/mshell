@@ -324,13 +324,6 @@ Process substitution is done using the `psub` operator.
 - `MSHSTDLIB` and `MSHINIT` only override startup for interactive use and scripts without `VER`.
 - `msh edit init` opens the current init file path using `$EDITOR`; if `$EDITOR` is unavailable, it falls back to the platform default opener (`xdg-open` on Linux, `open` on macOS, `Start-Process` via PowerShell on Windows).
 
-## Terminal Resize
-
-When the terminal is resized during interactive use, the prompt and command are redrawn in place at the new width.
-Most terminals rejoin rows that were wrapped at the old width and wrap them again at the new one, and `msh` assumes this.
-Set `MSHREFLOW=0` for a terminal such as xterm that keeps the old rows instead.
-The setting only matters when the prompt or command was already wrapped before the resize.
-
 ## Tilde Substitution
 
 When encountering a literal token that begins with `~/` or is `~` alone,
