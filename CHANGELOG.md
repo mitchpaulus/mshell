@@ -253,9 +253,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tab and control bytes display safely, and completion rows repaint with the command.
 
 - A trailing comma after a comma-separated variable store list (`a!, b!,`) is now a parse error.
-  A comma after a store now only joins the store list when another store follows it,
-  so a `match` arm or dict entry can end with a store: `1 : 2 a!, _ : 3 a!`.
-  A stray comma anywhere else is reported by the parser instead of failing at runtime.
+  Commas also separate `match` arms, so the trailing comma was ambiguous.
 
 - A number immediately followed by a literal character now lexes as a single
   literal token instead of a float/int plus a separate literal, so bare file

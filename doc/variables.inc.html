@@ -21,9 +21,7 @@ Storing pops the top of the stack; retrieval pushes the stored value back onto t
 
 <p>
 You can store multiple values at once by separating the store tokens with commas.
-A comma after a store only continues the list when another store follows it.
-A <code>match</code> arm or dict entry may end with a store, and the comma then separates the arms or entries.
-A trailing comma anywhere else, such as <code>a!, b!,</code> at the end of a line, is a parse error.
+A trailing comma after the last store is not allowed, since commas also separate <code>match</code> arms.
 </p>
 
 <pre>

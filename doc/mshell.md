@@ -1700,9 +1700,7 @@ or inflate the archive.
 
 You can store to several variables in one go by separating the store tokens with commas.
 Values are consumed from the stack for each store.
-A comma after a store only continues the list when another store follows it.
-A `match` arm or dict entry may end with a store, `1 : 2 a!, _ : 3 a!`, and the comma separates the arms.
-A trailing comma anywhere else, such as `a!, b!,` at the end of a line, is a parse error.
+A trailing comma after the last store is a parse error, since commas also separate `match` arms.
 When storing with the comma separated list, make sure you understand the ordering!
 
 ```mshell
