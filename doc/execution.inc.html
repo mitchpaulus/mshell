@@ -302,7 +302,7 @@ Use <code>&lt;</code> to feed data into stdin. The type of the value on top of t
 The <code>stdin</code> builtin (and the shorthands built on it such as <code>::</code>, <code>sl</code>, and <code>wt</code>)
 reads the whole of the current standard input into memory.
 To keep a huge file or a nonterminating stream such as <code>/dev/zero</code> from exhausting memory,
-the read is capped at <code>MSH_READ_LIMIT</code> bytes, 50 MiB by default.
+the read is capped at <code>MSH_READ_LIMIT</code> bytes, 100 MiB by default.
 </p>
 
 <p>

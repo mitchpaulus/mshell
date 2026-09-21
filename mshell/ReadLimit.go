@@ -13,8 +13,8 @@ import (
 // bulk read into memory (the `stdin` builtin) will accept before failing.
 const readLimitEnvVar = "MSH_READ_LIMIT"
 
-// defaultReadLimit is the cap used when MSH_READ_LIMIT is unset: 50 MiB.
-const defaultReadLimit int64 = 50 * 1024 * 1024
+// defaultReadLimit is the cap used when MSH_READ_LIMIT is unset: 100 MiB.
+const defaultReadLimit int64 = 100 * 1024 * 1024
 
 // parseReadLimit parses a MSH_READ_LIMIT value. It accepts a whole number of
 // bytes with an optional K, M, or G suffix (powers of 1024, case-insensitive,

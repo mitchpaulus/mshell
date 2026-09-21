@@ -6274,7 +6274,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					stack.Push(newList)
 				} else if t.Lexeme == "stdin" {
 					// Dump all of current stdin onto the stack as a string.
-					// The read is capped by MSH_READ_LIMIT (default 50 MiB) so a
+					// The read is capped by MSH_READ_LIMIT (default 100 MiB) so a
 					// huge or nonterminating input fails instead of exhausting memory.
 					var reader io.Reader
 					if context.StandardInput == nil {

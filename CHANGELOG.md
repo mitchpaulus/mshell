@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `stdin` (and `::`, `sl`, `wt`) now fails instead of growing without bound when the input is larger
-  than `MSH_READ_LIMIT` bytes, 50 MiB by default. Values accept a `K`, `M`, or `G` suffix, and `0` removes the limit.
+  than `MSH_READ_LIMIT` bytes, 100 MiB by default. Values accept a `K`, `M`, or `G` suffix, and `0` removes the limit.
 
 ### Security
 
