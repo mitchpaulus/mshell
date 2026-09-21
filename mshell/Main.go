@@ -636,7 +636,7 @@ func main() {
 
 	if !inputSet && term.IsTerminal(stdOutFd) && term.IsTerminal(int(os.Stdin.Fd())) {
 		// fmt.Fprintf(os.Stdout, "Got here\n")
-		numRows, numCols, err := term.GetSize(stdOutFd)
+		numCols, numRows, err := term.GetSize(stdOutFd)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error getting terminal size: %s\n", err)
 			os.Exit(1)
@@ -920,6 +920,10 @@ type TermState struct {
 	numCols        int // Number of columns in the terminal
 	promptRow      int // Row where the prompt ends, 1-based
 	numPromptLines int // Number of lines the prompt takes up
+	// Widest prompt row in cells when every prompt row ended at a hard break,
+	// so a terminal reflow after a resize cannot rearrange it. UnresolvedWidth
+	// when the prompt was opaque or wrapped, which forces a fresh prompt.
+	promptMaxWidth Cells
 	currentCommand SourceText
 	index          ByteOffset // Source byte offset at a grapheme boundary.
 	readBuffer     []byte

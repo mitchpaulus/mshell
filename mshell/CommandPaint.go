@@ -323,7 +323,58 @@ func (state *TermState) paintPrompt(writer io.Writer, readTerminal func() (Termi
 	state.anchorCommandRegion(origin, col+1)
 	state.commandRegion.RelativeOrigin = region.RelativeOrigin
 	state.promptRow = origin
+	state.promptMaxWidth = reflowSafeWidth(layout.Rows, 0)
+	if layout.PendingWrap { state.promptMaxWidth = UnresolvedWidth }
 	return nil
+}
+
+// reflowSafeWidth returns the widest row of a layout whose rows a terminal
+// reflow cannot rejoin or split: every row ends at a hard break or is the last
+// one. Any soft wrap returns UnresolvedWidth. startCol is the first row's
+// offset, since it shares the row with the prompt.
+func reflowSafeWidth(rows []LayoutRow, startCol Cells) Cells {
+	widest := Cells(0)
+	for i, row := range rows {
+		if row.EndType != RowEndHard && row.EndType != RowEndFinal { return UnresolvedWidth }
+		width := row.Width
+		if i == 0 { width += startCol }
+		widest = max(widest, width)
+	}
+	return widest
+}
+
+// adoptResizedGeometry keeps the painted prompt and command in place after a
+// resize when the terminal cannot have reflowed them: no row was soft-wrapped
+// and every row is narrower than both the old and the new width. Shrinking the
+// height keeps the cursor visible, so rows below it may be gone; only a cursor
+// on the last painted row is trusted then. The absolute origin is dropped
+// because rows above may have scrolled; painting only needs relative rows.
+// Returns false when a fresh prompt is required instead.
+func (state *TermState) adoptResizedGeometry(columns Cells, rows int) bool {
+	region := &state.commandRegion
+	if columns < 4 || rows < 1 || region.PromptHidden || region.TrailerRows > 0 || region.ViewportStart != 0 {
+		return false
+	}
+	if state.promptMaxWidth == UnresolvedWidth || state.promptMaxWidth >= min(columns, region.Columns) {
+		return false
+	}
+	layout := state.displayLayout
+	if len(layout.Rows) > 0 {
+		if state.displayColumns != region.Columns || len(layout.Rows) != region.PaintedRows { return false }
+		width := reflowSafeWidth(layout.Rows, region.commandStartCol())
+		if width == UnresolvedWidth || width >= min(columns, region.Columns) { return false }
+	} else if region.PaintedRows != 1 {
+		return false
+	}
+	if rows < region.ScreenRows && int(region.CursorRow) < region.PaintedRows-1 { return false }
+	if region.PaintedRows > rows { return false }
+
+	region.Columns = columns
+	region.ScreenRows = rows
+	region.OriginRow = 0
+	region.RelativeOrigin = true
+	region.ScratchOwned = false
+	return region.validatePaintRegion() == nil
 }
 
 // anchorCommandRegion starts a fresh editing region at the reported prompt
@@ -336,6 +387,7 @@ func (state *TermState) anchorCommandRegion(row int, col int) {
 		ScreenRows: state.numRows,
 		Columns: Cells(state.numCols),
 	}
+	state.promptMaxWidth = UnresolvedWidth
 }
 
 // updateHistoryCompletion refreshes the ghost suggestion for the current
@@ -360,13 +412,19 @@ func (state *TermState) refreshInteractiveDisplay(renderHistory bool) error {
 	}
 
 	// A resize reflows rows the region no longer describes. Re-anchor from a
-	// fresh prompt rather than trusting the terminal's reflow.
+	// fresh prompt rather than trusting the terminal's reflow, unless nothing
+	// painted could have reflowed. A new pane often reports its parent's size
+	// until the first key arrives, and that must not draw a second prompt.
 	previousCols, previousRows := state.numCols, state.numRows
 	state.UpdateSize()
 	if Cells(state.numCols) != state.commandRegion.Columns || state.numRows != state.commandRegion.ScreenRows {
-		state.Logf("Terminal resized %dx%d -> %dx%d; re-anchoring prompt\n", previousCols, previousRows, state.numCols, state.numRows)
-		if _, err := os.Stdout.WriteString("\r\n"); err != nil { return err }
-		if err := state.printPrompt(); err != nil { return err }
+		if state.adoptResizedGeometry(Cells(state.numCols), state.numRows) {
+			state.Logf("Terminal resized %dx%d -> %dx%d; kept prompt in place\n", previousCols, previousRows, state.numCols, state.numRows)
+		} else {
+			state.Logf("Terminal resized %dx%d -> %dx%d; re-anchoring prompt\n", previousCols, previousRows, state.numCols, state.numRows)
+			if _, err := os.Stdout.WriteString("\r\n"); err != nil { return err }
+			if err := state.printPrompt(); err != nil { return err }
+		}
 	}
 
 	read := func() (TerminalToken, error) { return state.InteractiveLexer(state.stdInState) }
