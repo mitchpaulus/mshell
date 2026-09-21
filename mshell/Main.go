@@ -687,6 +687,7 @@ func main() {
 			stdInFd:        stdInFd,
 			numRows:        numRows,
 			numCols:        numCols,
+			resizeReflow:   os.Getenv("MSHREFLOW") != "0",
 			currentCommand: "",
 			index:          0,
 			readBuffer:     make([]byte, 1024),
@@ -920,6 +921,10 @@ type TermState struct {
 	numCols        int // Number of columns in the terminal
 	promptRow      int // Row where the prompt ends, 1-based
 	numPromptLines int // Number of lines the prompt takes up
+	promptText     SourceText // Text of the prompt on screen, repainted after a resize.
+	// Whether the terminal rejoins autowrapped rows on resize. Default true;
+	// MSHREFLOW=0 for terminals like xterm that keep the old rows.
+	resizeReflow   bool
 	currentCommand SourceText
 	index          ByteOffset // Source byte offset at a grapheme boundary.
 	readBuffer     []byte

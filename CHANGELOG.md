@@ -19,9 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- A terminal resize no longer prints another prompt; the command is repainted in place.
+- A terminal resize no longer prints another prompt. The prompt and command are redrawn
+  in place at the new width.
   In particular, a new Windows Terminal pane reports its parent's size until the first key
   arrives, which used to print a duplicate prompt on that first keystroke.
+  Set `MSHREFLOW=0` for terminals such as xterm that do not rejoin wrapped rows on resize.
 - The OSC 7 working-directory report is now actually emitted; a reversed check meant it was
   only sent when the hostname lookup failed.
 - `toDt` no longer guesses the order of ambiguous numeric dates.

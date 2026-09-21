@@ -332,30 +332,38 @@ func TestPromptUnknownWidthOnOneRow(t *testing.T) {
 	if !state.commandRegion.RelativeOrigin || screen.col != 3 || screen.line(0) != "::                  " { t.Fatal("one-row prompt misplaced") }
 }
 
-// A resize never prints another prompt. The region takes the new size and
-// the next frame repaints the command in place at the new width.
-func TestResizeRepaintsInPlace(t *testing.T) {
+// A resize never prints another prompt. The same prompt is redrawn in place
+// after moving up to its first row and clearing from there down.
+func TestResizeRedrawsPromptInPlace(t *testing.T) {
 	read := func() (TerminalToken, error) { t.Fatal("unexpected read"); return nil, io.EOF }
+	prompt := SourceText("~ (0)> \n:: ")
+
+	// The reported case: a new pane shrinks from its parent's size before the
+	// first key. Earlier output above the prompt must survive.
 	screen := newCommandScreen(t, 5, 312)
-	state := &TermState{numRows: 5, numCols: 312}
-	if err := state.paintPrompt(screen, read, "~ (0)> \n:: "); err != nil { t.Fatal(err) }
-
-	// The reported case: a new pane shrinks from its parent's size before the first key.
+	screen.Write([]byte("earlier output\r\n"))
+	state := &TermState{numRows: 5, numCols: 312, resizeReflow: true}
+	if err := state.paintPrompt(screen, read, prompt); err != nil { t.Fatal(err) }
 	state.currentCommand, state.index = "a", 1
-	state.resizeCommandRegion(155, 5)
-	if state.commandRegion.Columns != 155 || !state.commandRegion.RelativeOrigin || state.commandRegion.OriginCol != 4 { t.Fatalf("region after resize: %+v", state.commandRegion) }
-	screen = newCommandScreen(t, 5, 155)
-	screen.row, screen.col = 1, 3
-	if ready, err := state.refreshCommandDisplay(screen, read, &state.commandRegion); !ready || err != nil { t.Fatalf("repaint: %v", err) }
-	if strings.TrimRight(screen.line(1), " ") != "   a" || screen.col != 4 { t.Fatalf("repaint after resize: %q col %d", screen.line(1), screen.col) }
+	narrow := newCommandScreen(t, 5, 155)
+	for row := 0; row < 3; row++ { copy(narrow.cells[row], screen.cells[row][:155]) }
+	narrow.row, narrow.col = screen.row, screen.col
+	if err := state.redrawPromptAfterResize(narrow, read, 155, 5); err != nil { t.Fatal(err) }
+	if ready, err := state.refreshCommandDisplay(narrow, read, &state.commandRegion); !ready || err != nil { t.Fatalf("repaint: %v", err) }
+	want := []string{"earlier output", "~ (0)>", ":: a", "", ""}
+	for row, text := range want {
+		if got := strings.TrimRight(narrow.line(row), " "); got != text { t.Fatalf("row %d after resize: %q, want %q", row, got, text) }
+	}
+	if narrow.row != 2 || narrow.col != 4 || state.commandRegion.Columns != 155 { t.Fatalf("cursor %d,%d region %+v", narrow.row, narrow.col, state.commandRegion) }
 
-	// A frame taller than the new screen is clamped so painting stays valid.
-	state.currentCommand = SourceText(strings.Repeat("x", 155*4))
-	state.index = state.commandEnd()
-	if ready, err := state.refreshCommandDisplay(screen, read, &state.commandRegion); !ready || err != nil { t.Fatalf("tall paint: %v", err) }
-	state.resizeCommandRegion(155, 2)
-	if err := state.commandRegion.validatePaintRegion(); err != nil { t.Fatalf("clamped region invalid: %v", err) }
-	screen = newCommandScreen(t, 2, 155)
-	screen.row = 1
-	if ready, err := state.refreshCommandDisplay(screen, read, &state.commandRegion); !ready || err != nil { t.Fatalf("repaint after shrink: %v", err) }
+	// A path wider than the terminal autowrapped, and the two models count
+	// the rows above the cursor differently after the width changes.
+	long := SourceText("/" + strings.Repeat("d", 50) + " (0)> \n:: ")
+	screen = newCommandScreen(t, 6, 40)
+	state = &TermState{numRows: 6, numCols: 40, resizeReflow: true}
+	if err := state.paintPrompt(screen, read, long); err != nil { t.Fatal(err) }
+	if state.numPromptLines != 3 { t.Fatalf("long prompt rows: %d", state.numPromptLines) }
+	if up := state.rowsToPromptTop(80); up != 1 { t.Fatalf("reflow model rows above cursor: %d", up) }
+	state.resizeReflow = false
+	if up := state.rowsToPromptTop(80); up != 2 { t.Fatalf("no-reflow model rows above cursor: %d", up) }
 }

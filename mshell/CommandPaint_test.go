@@ -69,6 +69,10 @@ func (screen *commandScreen) Write(output []byte) (int, error) {
 				start := screen.col
 				if n == 2 { start = 0 } else if n != 0 { screen.t.Fatal("unsupported erase") }
 				for col := start; col < columns; col++ { screen.cells[screen.row][col] = " " }
+			case 'J':
+				if n != 0 { screen.t.Fatal("unsupported erase") }
+				for col := screen.col; col < columns; col++ { screen.cells[screen.row][col] = " " }
+				for row := screen.row+1; row < len(screen.cells); row++ { screen.cells[row] = strings.Split(strings.Repeat(" ", columns), "") }
 			case 'm':
 			case 'n':
 				if n != 6 || screen.pending { screen.t.Fatal("invalid query or probe touched margin") }
