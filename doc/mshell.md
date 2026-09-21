@@ -1167,7 +1167,7 @@ end wl # Output: 11
 - `exit`: Exit the current script with the provided exit code. `(int -- )`
 - `read`: Read a line from stdin. Puts a str and bool of whether the read was successful on the stack. `( -- str bool)`
 - `prompt`: Write a prompt string to the controlling TTY and read a line from the controlling TTY. Fails if no controlling TTY is available. `(str -- str)`
-- `stdin`: Drop stdin onto the stack `( -- str)`
+- `stdin`: Drop stdin onto the stack `( -- str)`. Fails if the input exceeds `MSH_READ_LIMIT` bytes (default 104857600, `0` for no limit).
 - `stdinIsTerminal`: Return whether the current effective stdin is connected to a terminal or Windows console.
   Regular files, pipes, and non-file streams return false.
   Redirections and symlinks are classified by their opened target, so one that resolves to a terminal returns true.
