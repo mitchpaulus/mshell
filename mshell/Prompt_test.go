@@ -332,61 +332,30 @@ func TestPromptUnknownWidthOnOneRow(t *testing.T) {
 	if !state.commandRegion.RelativeOrigin || screen.col != 3 || screen.line(0) != "::                  " { t.Fatal("one-row prompt misplaced") }
 }
 
-// A new pane may report its parent's size until the first key arrives. When
-// nothing painted could have reflowed, the region adopts the new size and
-// keeps painting in place; otherwise a fresh prompt is needed.
-func TestResizeKeepsUnwrappedPromptInPlace(t *testing.T) {
+// A resize never prints another prompt. The region takes the new size and
+// the next frame repaints the command in place at the new width.
+func TestResizeRepaintsInPlace(t *testing.T) {
 	read := func() (TerminalToken, error) { t.Fatal("unexpected read"); return nil, io.EOF }
-	setup := func(columns int, prompt SourceText, command SourceText, index int) (*TermState, *commandScreen) {
-		screen := newCommandScreen(t, 5, columns)
-		state := &TermState{numRows: 5, numCols: columns}
-		if err := state.paintPrompt(screen, read, prompt); err != nil { t.Fatal(err) }
-		state.currentCommand, state.index = command, ByteOffset(index)
-		if ready, err := state.refreshCommandDisplay(screen, read, &state.commandRegion); !ready || err != nil { t.Fatalf("paint: %v", err) }
-		return state, screen
-	}
+	screen := newCommandScreen(t, 5, 312)
+	state := &TermState{numRows: 5, numCols: 312}
+	if err := state.paintPrompt(screen, read, "~ (0)> \n:: "); err != nil { t.Fatal(err) }
 
-	// The reported case: a wide parent pane shrinks before the first key.
-	state, _ := setup(312, "~ (0)> \n:: ", "", 0)
-	state.displayLayout = LayoutResult{}
-	if !state.adoptResizedGeometry(155, 5) { t.Fatal("empty command refused an in-place resize") }
+	// The reported case: a new pane shrinks from its parent's size before the first key.
+	state.currentCommand, state.index = "a", 1
+	state.resizeCommandRegion(155, 5)
 	if state.commandRegion.Columns != 155 || !state.commandRegion.RelativeOrigin || state.commandRegion.OriginCol != 4 { t.Fatalf("region after resize: %+v", state.commandRegion) }
-	// The kept region still paints correctly at the new width.
-	screen := newCommandScreen(t, 5, 155)
+	screen = newCommandScreen(t, 5, 155)
 	screen.row, screen.col = 1, 3
-	state.currentCommand, state.index = "abc", 3
 	if ready, err := state.refreshCommandDisplay(screen, read, &state.commandRegion); !ready || err != nil { t.Fatalf("repaint: %v", err) }
-	if strings.TrimRight(screen.line(1), " ") != "   abc" || screen.col != 6 { t.Fatalf("repaint after resize: %q col %d", screen.line(1), screen.col) }
+	if strings.TrimRight(screen.line(1), " ") != "   a" || screen.col != 4 { t.Fatalf("repaint after resize: %q col %d", screen.line(1), screen.col) }
 
-	state, _ = setup(40, "~ (0)> \n:: ", "abc", 3)
-	if !state.adoptResizedGeometry(20, 5) { t.Fatal("short command refused a narrower width") }
-	// The layout still describes the old width until the next paint, so a
-	// second resize before painting is not trusted.
-	if state.adoptResizedGeometry(60, 9) { t.Fatal("resize adopted against a stale layout") }
-	state, _ = setup(40, "~ (0)> \n:: ", "abc", 3)
-	if !state.adoptResizedGeometry(60, 9) { t.Fatal("short command refused a wider size") }
-	if state.commandRegion.Columns != 60 || state.commandRegion.ScreenRows != 9 { t.Fatalf("region after resize: %+v", state.commandRegion) }
-
-	// Rows that would not fit the new width, soft wraps, and wide prompts reflow.
-	state, _ = setup(40, "~ (0)> \n:: ", SourceText(strings.Repeat("x", 30)), 30)
-	if state.adoptResizedGeometry(20, 5) { t.Fatal("command wider than the new width kept in place") }
-	state, _ = setup(40, "~ (0)> \n:: ", SourceText(strings.Repeat("x", 50)), 50)
-	if state.adoptResizedGeometry(80, 5) { t.Fatal("soft-wrapped command kept in place") }
-	state, _ = setup(40, "/a/very/long/path (3)> \n:: ", "abc", 3)
-	if state.adoptResizedGeometry(20, 5) { t.Fatal("prompt wider than the new width kept in place") }
-	state, _ = setup(40, SourceText(strings.Repeat("p", 40)), "abc", 3)
-	if state.adoptResizedGeometry(80, 5) { t.Fatal("prompt filling the row kept in place") }
-
-	// Shrinking the height may drop rows below the cursor.
-	state, _ = setup(40, "~ (0)> \n:: ", "a\nb", 0)
-	if len(state.displayLayout.Rows) != 2 { t.Fatalf("expected two rows: %+v", state.displayLayout) }
-	if state.adoptResizedGeometry(40, 3) { t.Fatal("cursor above the last row kept in place while shrinking") }
-	if !state.adoptResizedGeometry(40, 6) { t.Fatal("growing the height refused") }
-	state, _ = setup(40, "~ (0)> \n:: ", "a\nb", 3)
-	if !state.adoptResizedGeometry(40, 3) { t.Fatal("cursor on the last row refused while shrinking") }
-
-	// An opaque prompt anchored by a cursor query has an unknown width.
-	state = &TermState{numRows: 5, numCols: 40}
-	state.anchorCommandRegion(2, 4)
-	if state.adoptResizedGeometry(20, 5) { t.Fatal("opaque prompt kept in place") }
+	// A frame taller than the new screen is clamped so painting stays valid.
+	state.currentCommand = SourceText(strings.Repeat("x", 155*4))
+	state.index = state.commandEnd()
+	if ready, err := state.refreshCommandDisplay(screen, read, &state.commandRegion); !ready || err != nil { t.Fatalf("tall paint: %v", err) }
+	state.resizeCommandRegion(155, 2)
+	if err := state.commandRegion.validatePaintRegion(); err != nil { t.Fatalf("clamped region invalid: %v", err) }
+	screen = newCommandScreen(t, 2, 155)
+	screen.row = 1
+	if ready, err := state.refreshCommandDisplay(screen, read, &state.commandRegion); !ready || err != nil { t.Fatalf("repaint after shrink: %v", err) }
 }

@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- A terminal resize no longer draws a second prompt when nothing on screen could have reflowed.
+- A terminal resize no longer prints another prompt; the command is repainted in place.
   In particular, a new Windows Terminal pane reports its parent's size until the first key
   arrives, which used to print a duplicate prompt on that first keystroke.
 - The OSC 7 working-directory report is now actually emitted; a reversed check meant it was
