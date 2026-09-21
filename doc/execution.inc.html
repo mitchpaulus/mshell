@@ -296,6 +296,38 @@ Use <code>&lt;</code> to feed data into stdin. The type of the value on top of t
 <span class="mshellEOF"></span></code>
 </pre>
 
+<h2 id="input-size-limit">Input size limit</h2>
+
+<p>
+The <code>stdin</code> builtin (and the shorthands built on it such as <code>::</code>, <code>sl</code>, and <code>wt</code>)
+reads the whole of the current standard input into memory.
+To keep a huge file or a nonterminating stream such as <code>/dev/zero</code> from exhausting memory,
+the read is capped at <code>MSH_READ_LIMIT</code> bytes, 50 MiB by default.
+</p>
+
+<p>
+When the input holds more bytes than the limit, <code>stdin</code> fails with an error naming the limit
+instead of returning truncated data. Reading stops as soon as the limit is passed, so memory use stays bounded
+and an upstream producer sees a closed pipe. Input of exactly the limit succeeds.
+The limit applies to inherited stdin as well as to input fed with <code>&lt;</code> on a quotation.
+</p>
+
+<p>
+<code>MSH_READ_LIMIT</code> is a whole number of bytes with an optional <code>K</code>, <code>M</code>, or <code>G</code> suffix
+(powers of 1024, case-insensitive, a trailing <code>B</code> or <code>iB</code> is allowed).
+A value of <code>0</code> removes the limit. An invalid value makes <code>stdin</code> fail with a message describing the expected form.
+The variable is looked up each time <code>stdin</code> runs, so <code>setenv</code> inside a script takes effect immediately.
+</p>
+
+<pre>
+<code><span class="mshellSTRING">&#34;MSH_READ_LIMIT&#34;</span> <span class="mshellSTRING">&#34;200M&#34;</span> <span class="mshellLITERAL">setenv</span> <span class="mshellLINECOMMENT"># Allow a 200 MiB input for the rest of this script</span>
+<span class="mshellEOF"></span></code>
+</pre>
+
+<p>
+The line-oriented <code>read</code> builtin is not affected; use it to process input one line at a time without holding everything in memory.
+</p>
+
 <h1 id="in-place-modification">In-place file modification</h1>
 
 <p>

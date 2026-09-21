@@ -6273,19 +6273,24 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 					stack.Push(newList)
 				} else if t.Lexeme == "stdin" {
-					// Dump all of current stdin onto the stack as a string
-					var buffer bytes.Buffer
+					// Dump all of current stdin onto the stack as a string.
+					// The read is capped by MSH_READ_LIMIT (default 50 MiB) so a
+					// huge or nonterminating input fails instead of exhausting memory.
 					var reader io.Reader
 					if context.StandardInput == nil {
 						reader = os.Stdin
 					} else {
 						reader = context.StandardInput
 					}
-					_, err := buffer.ReadFrom(reader)
+					limit, err := readLimit()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot read stdin: %s\n", t.Line, t.Column, err.Error()))
+					}
+					data, err := readAllBounded(reader, limit)
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error reading from stdin: %s\n", t.Line, t.Column, err.Error()))
 					}
-					stack.Push(MShellString{buffer.String()})
+					stack.Push(MShellString{string(data)})
 				} else if t.Lexeme == "stdinIsTerminal" {
 					stack.Push(MShellBool{streamIsTerminal(context.StandardInput, os.Stdin)})
 				} else if t.Lexeme == "stdoutIsTerminal" {

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- `stdin` (and `::`, `sl`, `wt`) now fails instead of growing without bound when the input is larger
+  than `MSH_READ_LIMIT` bytes, 50 MiB by default. Values accept a `K`, `M`, or `G` suffix, and `0` removes the limit.
+
 ### Security
 
 - Terminal replies that are strings (OSC, DCS, APC, PM, SOS), such as colour or version reports,

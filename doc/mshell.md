@@ -223,6 +223,29 @@ Use `<` to feed data into stdin. The type of the value on top of the stack deter
 [md5sum] `binary_stdin.bin` readFileBytes < ; # Streams raw bytes into the command
 ```
 
+#### Input size limit
+
+The `stdin` builtin (and the shorthands built on it such as `::`, `sl`, and `wt`) reads the whole of the current standard input into memory.
+To keep a huge file or a nonterminating stream such as `/dev/zero` from exhausting memory,
+the read is capped at `MSH_READ_LIMIT` bytes, 50 MiB by default.
+
+When the input holds more bytes than the limit, `stdin` fails with an error naming the limit instead of returning truncated data.
+Reading stops as soon as the limit is passed, so memory use stays bounded and an upstream producer sees a closed pipe.
+Input of exactly the limit succeeds.
+The limit applies to inherited stdin as well as to input fed with `<` on a quotation.
+
+`MSH_READ_LIMIT` is a whole number of bytes with an optional `K`, `M`, or `G` suffix
+(powers of 1024, case-insensitive, a trailing `B` or `iB` is allowed).
+A value of `0` removes the limit.
+An invalid value makes `stdin` fail with a message describing the expected form.
+The variable is looked up each time `stdin` runs, so `setenv` inside a script takes effect immediately.
+
+```mshell
+"MSH_READ_LIMIT" "200M" setenv # Allow a 200 MiB input for the rest of this script
+```
+
+The line-oriented `read` builtin is not affected; use it to process input one line at a time without holding everything in memory.
+
 ### In-place file modification
 
 The `<>` operator enables in-place file modification. It reads a file's contents, passes them to the command's stdin, and on successful completion (exit code 0), writes the command's stdout back to the same file. This is similar to the `sponge` command from moreutils.
@@ -1167,7 +1190,7 @@ end wl # Output: 11
 - `exit`: Exit the current script with the provided exit code. `(int -- )`
 - `read`: Read a line from stdin. Puts a str and bool of whether the read was successful on the stack. `( -- str bool)`
 - `prompt`: Write a prompt string to the controlling TTY and read a line from the controlling TTY. Fails if no controlling TTY is available. `(str -- str)`
-- `stdin`: Drop stdin onto the stack `( -- str)`
+- `stdin`: Drop stdin onto the stack `( -- str)`. Fails if the input exceeds `MSH_READ_LIMIT` bytes (default 50 MiB, `0` for no limit).
 - `stdinIsTerminal`: Return whether the current effective stdin is connected to a terminal or Windows console.
   Regular files, pipes, and non-file streams return false.
   Redirections and symlinks are classified by their opened target, so one that resolves to a terminal returns true.
