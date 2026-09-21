@@ -692,6 +692,15 @@ func (l *Lexer) scanToken() Token {
 	}
 }
 
+// peekToken returns the next token without advancing the lexer.
+// Only current, line, and col move during a scan, so those are put back.
+func (l *Lexer) peekToken() Token {
+	current, line, col := l.current, l.line, l.col
+	token := l.scanToken()
+	l.current, l.line, l.col = current, line, col
+	return token
+}
+
 func (l *Lexer) scanTokenAll() Token {
 	l.start = l.current
 	l.startLine = l.line

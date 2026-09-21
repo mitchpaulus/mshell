@@ -617,6 +617,15 @@ func (parser *MShellParser) NextToken() {
 	parser.initialized = true
 }
 
+// Peek returns the token after curr without advancing the parser.
+func (parser *MShellParser) Peek() Token {
+	token := parser.lexer.peekToken()
+	if token.Type == ERROR {
+		panic(parserPanic{err: errors.New(token.Lexeme)})
+	}
+	return token
+}
+
 // PeekFirstToken loads the first token of fresh input without panicking.
 // The interactive prompt calls this outside any parse entry point, so a lexer
 // error (for example an unterminated quote) must come back as an error.
@@ -812,30 +821,22 @@ func (parser *MShellParser) ParseIndexer() *MShellIndexerList {
 	return indexerList
 }
 
-func (parser *MShellParser) ParseVarstoreList() (MShellVarstoreList, error) {
+func (parser *MShellParser) ParseVarstoreList() MShellVarstoreList {
 	varStoreList := MShellVarstoreList{}
 	varStoreList.VarStores = []Token{}
 	varStoreList.VarStores = append(varStoreList.VarStores, parser.curr)
 	parser.NextToken()
 
-	for {
-		if parser.curr.Type == COMMA {
-			commaToken := parser.curr
-			parser.NextToken()
-			if parser.curr.Type == VARSTORE {
-				varStoreList.VarStores = append(varStoreList.VarStores, parser.curr)
-				parser.NextToken()
-			} else {
-				// A comma after a variable store must be followed by another store.
-				// A trailing comma is not allowed, since commas also separate match arms.
-				return varStoreList, fmt.Errorf("%d:%d: Expected a variable store after ',' but got %s. Trailing commas are not allowed after a variable store.", commaToken.Line, commaToken.Column, parser.curr.Type)
-			}
-		} else {
-			break
-		}
+	// A comma belongs to the store list only when another store follows it.
+	// Otherwise it is left for the enclosing construct (a match arm or a
+	// dict entry). Anywhere else, ParseItem reports it as unexpected.
+	for parser.curr.Type == COMMA && parser.Peek().Type == VARSTORE {
+		parser.NextToken()
+		varStoreList.VarStores = append(varStoreList.VarStores, parser.curr)
+		parser.NextToken()
 	}
 
-	return varStoreList, nil
+	return varStoreList
 }
 
 
@@ -1123,11 +1124,9 @@ func (parser *MShellParser) ParseItem() (MShellParseItem, error) {
 	case INDEXER, ENDINDEXER, STARTINDEXER, SLICEINDEXER:
 		return parser.ParseIndexer(), nil
 	case VARSTORE:
-		varStoreList, err := parser.ParseVarstoreList()
-		if err != nil {
-			return nil, err
-		}
-		return varStoreList, nil
+		return parser.ParseVarstoreList(), nil
+	case COMMA:
+		return nil, fmt.Errorf("%d:%d: Unexpected ','. Commas only separate match arms, dict entries, and variable stores like a!, b!.", parser.curr.Line, parser.curr.Column)
 	case EOF:
 		return nil, errors.New("Unexpected EOF while parsing item")
 	case COLON:
