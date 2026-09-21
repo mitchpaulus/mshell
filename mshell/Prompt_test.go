@@ -331,3 +331,39 @@ func TestPromptUnknownWidthOnOneRow(t *testing.T) {
 	if err := state.paintPrompt(screen, read, "世\n:: "); err != nil { t.Fatal(err) }
 	if !state.commandRegion.RelativeOrigin || screen.col != 3 || screen.line(0) != "::                  " { t.Fatal("one-row prompt misplaced") }
 }
+
+// A resize never prints another prompt. The same prompt is redrawn in place
+// after moving up to its first row and clearing from there down.
+func TestResizeRedrawsPromptInPlace(t *testing.T) {
+	read := func() (TerminalToken, error) { t.Fatal("unexpected read"); return nil, io.EOF }
+	prompt := SourceText("~ (0)> \n:: ")
+
+	// The reported case: a new pane shrinks from its parent's size before the
+	// first key. Earlier output above the prompt must survive.
+	screen := newCommandScreen(t, 5, 312)
+	screen.Write([]byte("earlier output\r\n"))
+	state := &TermState{numRows: 5, numCols: 312, resizeReflow: true}
+	if err := state.paintPrompt(screen, read, prompt); err != nil { t.Fatal(err) }
+	state.currentCommand, state.index = "a", 1
+	narrow := newCommandScreen(t, 5, 155)
+	for row := 0; row < 3; row++ { copy(narrow.cells[row], screen.cells[row][:155]) }
+	narrow.row, narrow.col = screen.row, screen.col
+	if err := state.redrawPromptAfterResize(narrow, read, 155, 5); err != nil { t.Fatal(err) }
+	if ready, err := state.refreshCommandDisplay(narrow, read, &state.commandRegion); !ready || err != nil { t.Fatalf("repaint: %v", err) }
+	want := []string{"earlier output", "~ (0)>", ":: a", "", ""}
+	for row, text := range want {
+		if got := strings.TrimRight(narrow.line(row), " "); got != text { t.Fatalf("row %d after resize: %q, want %q", row, got, text) }
+	}
+	if narrow.row != 2 || narrow.col != 4 || state.commandRegion.Columns != 155 { t.Fatalf("cursor %d,%d region %+v", narrow.row, narrow.col, state.commandRegion) }
+
+	// A path wider than the terminal autowrapped, and the two models count
+	// the rows above the cursor differently after the width changes.
+	long := SourceText("/" + strings.Repeat("d", 50) + " (0)> \n:: ")
+	screen = newCommandScreen(t, 6, 40)
+	state = &TermState{numRows: 6, numCols: 40, resizeReflow: true}
+	if err := state.paintPrompt(screen, read, long); err != nil { t.Fatal(err) }
+	if state.numPromptLines != 3 { t.Fatalf("long prompt rows: %d", state.numPromptLines) }
+	if up := state.rowsToPromptTop(80); up != 1 { t.Fatalf("reflow model rows above cursor: %d", up) }
+	state.resizeReflow = false
+	if up := state.rowsToPromptTop(80); up != 2 { t.Fatalf("no-reflow model rows above cursor: %d", up) }
+}

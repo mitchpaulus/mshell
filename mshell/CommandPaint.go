@@ -292,6 +292,7 @@ func (state *TermState) paintPrompt(writer io.Writer, readTerminal func() (Termi
 		return fmt.Errorf("prompt: unsupported terminal geometry")
 	}
 	if err := writeProbeOutput(writer, []byte("\r\033[0m")); err != nil { return err }
+	state.promptText = source
 	region := ProbeRegion{RelativeOrigin: true, OriginCol: 1, PaintedRows: 1, ScreenRows: state.numRows, Columns: columns}
 	atoms := segmentAtomsInto(nil, source)
 	misses := resolveCachedWidths(nil, source, atoms, &state.widthCache, &state.eligibilityCache, columns)
@@ -324,6 +325,56 @@ func (state *TermState) paintPrompt(writer io.Writer, readTerminal func() (Termi
 	state.commandRegion.RelativeOrigin = region.RelativeOrigin
 	state.promptRow = origin
 	return nil
+}
+
+// resizeCommandRegion keeps a command that has taken over the whole screen
+// where it is after a size change; the prompt is already gone, so there is
+// nothing to redraw above it. Rows above may have scrolled, so the absolute
+// origin is dropped; painting only needs relative rows. A frame taller than
+// the new screen is clamped to what still fits.
+func (state *TermState) resizeCommandRegion(columns Cells, rows int) {
+	region := &state.commandRegion
+	region.Columns, region.ScreenRows = columns, rows
+	region.OriginRow, region.RelativeOrigin = 0, true
+	region.PaintedRows = max(1, min(region.PaintedRows, rows))
+	region.CursorRow = min(region.CursorRow, RowIndex(region.PaintedRows-1))
+	region.TrailerRows = min(region.TrailerRows, rows-region.PaintedRows)
+	region.ScratchOwned = region.TrailerRows > 0
+}
+
+// rowsToPromptTop counts the rows between the cursor and the prompt's first
+// row after a size change. Terminals differ in what they do to rows that
+// autowrapped before the resize. Most rejoin them and wrap again at the new
+// width, so laying out the prompt and the painted command up to the cursor at
+// the new width gives the count. xterm keeps the old rows, so the count is
+// the one already painted. MSHREFLOW=0 selects the second model.
+func (state *TermState) rowsToPromptTop(columns Cells) int {
+	if !state.resizeReflow {
+		return state.numPromptLines - 1 + int(state.commandRegion.CursorRow)
+	}
+	painted := state.displaySource[:min(int(state.displayCursor), len(state.displaySource))]
+	source := state.promptText + painted
+	atoms := segmentAtomsInto(nil, source)
+	resolveCachedWidths(nil, source, atoms, &state.widthCache, &state.eligibilityCache, columns)
+	finishWidthResolution(source, atoms, &state.widthCache)
+	return int(layoutAtomsInto(nil, atoms, ByteOffset(len(source)), 0, columns).CursorRow)
+}
+
+// redrawPromptAfterResize moves to the prompt's first row, clears everything
+// from there down, and paints the same prompt again at the new width. The
+// command is repainted by the frame that follows. No new prompt is ever
+// printed for a resize.
+func (state *TermState) redrawPromptAfterResize(writer io.Writer, readTerminal func() (TerminalToken, error), columns Cells, rows int) error {
+	state.numCols, state.numRows = int(columns), rows
+	if state.commandRegion.PromptHidden {
+		state.resizeCommandRegion(columns, rows)
+		return nil
+	}
+	output := []byte("\033[0m\r")
+	if up := state.rowsToPromptTop(columns); up > 0 { output = appendProbeCursorControl(output, up, 'A') }
+	output = append(output, "\033[J"...)
+	if err := writeProbeOutput(writer, output); err != nil { return err }
+	return state.paintPrompt(writer, readTerminal, state.promptText)
 }
 
 // anchorCommandRegion starts a fresh editing region at the reported prompt
@@ -359,17 +410,14 @@ func (state *TermState) refreshInteractiveDisplay(renderHistory bool) error {
 		state.updateHistoryCompletion()
 	}
 
-	// A resize reflows rows the region no longer describes. Re-anchor from a
-	// fresh prompt rather than trusting the terminal's reflow.
+	read := func() (TerminalToken, error) { return state.InteractiveLexer(state.stdInState) }
 	previousCols, previousRows := state.numCols, state.numRows
 	state.UpdateSize()
 	if Cells(state.numCols) != state.commandRegion.Columns || state.numRows != state.commandRegion.ScreenRows {
-		state.Logf("Terminal resized %dx%d -> %dx%d; re-anchoring prompt\n", previousCols, previousRows, state.numCols, state.numRows)
-		if _, err := os.Stdout.WriteString("\r\n"); err != nil { return err }
-		if err := state.printPrompt(); err != nil { return err }
+		state.Logf("Terminal resized %dx%d -> %dx%d; redrawing prompt in place\n", previousCols, previousRows, state.numCols, state.numRows)
+		if err := state.redrawPromptAfterResize(os.Stdout, read, Cells(state.numCols), state.numRows); err != nil { return err }
 	}
 
-	read := func() (TerminalToken, error) { return state.InteractiveLexer(state.stdInState) }
 	var ready bool
 	var err error
 	if renderHistory {
