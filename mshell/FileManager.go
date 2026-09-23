@@ -157,10 +157,10 @@ func cloudStateMarker(state cloudFileState) (string, string) {
 	return "", ""
 }
 
-// cloudMarkerCols is the extra width a marker takes in the left pane: one
-// more space of left margin, the two column marker slot, and one space before
-// the name.
-const cloudMarkerCols = 4
+// cloudMarkerCols is the width of the left margin plus the two column marker
+// slot. The space between the marker and the name belongs to the name, so it
+// takes the name's highlight on the selected row.
+const cloudMarkerCols = 3
 
 type FileManager struct {
 	rows, cols int
@@ -589,7 +589,7 @@ func (fm *FileManager) schedulePreview() {
 		path:       path,
 		entry:      entry,
 		maxLines:   fm.visibleRows(),
-		onlineOnly: fm.cloudState(entry) == cloudFileOnlineOnly,
+		onlineOnly: !entry.IsDir() && fm.cloudState(entry) == cloudFileOnlineOnly,
 		gen:        fm.previewGen,
 	}
 
@@ -967,17 +967,17 @@ func (fm *FileManager) render() {
 				// then draw the marker and jump to the name column. The jump keeps
 				// the name aligned whether the terminal draws the marker one or
 				// two columns wide.
-				buf.WriteString(strings.Repeat(" ", 1+markerW))
+				buf.WriteString(strings.Repeat(" ", markerW))
 				marker, color := cloudStateMarker(fm.cloudState(entry))
 				if marker != "" {
-					buf.WriteString("\033[3G")
+					buf.WriteString("\033[2G")
 					if idx != fm.cursor {
 						buf.WriteString(color)
 					}
 					buf.WriteString(marker)
 					buf.WriteString("\033[39m")
 				}
-				fmt.Fprintf(&buf, "\033[%dG", 2+markerW)
+				fmt.Fprintf(&buf, "\033[%dG", 1+markerW)
 			}
 
 			if inCut {
@@ -988,14 +988,12 @@ func (fm *FileManager) render() {
 				buf.WriteString("\033[34m") // blue for directories
 			}
 
-			availW := leftW - 1 - indent - markerW // 1 for leading space
+			availW := leftW - 1 - indent - markerW // 1 for the space before the name
 			if nameRunes > availW {
 				name = truncateMiddle(name, availW)
 				nameRunes = availW
 			}
-			if markerW == 0 {
-				buf.WriteString(" ")
-			}
+			buf.WriteString(" ")
 			if indent > 0 {
 				buf.WriteString(strings.Repeat(" ", indent))
 			}

@@ -161,6 +161,27 @@ func TestLeftPaneWidthIncludesCloudMarker(t *testing.T) {
 	}
 }
 
+func TestSchedulePreviewReadsCloudOnlyFolder(t *testing.T) {
+	dir := t.TempDir()
+	fm := &FileManager{
+		rows:              20,
+		cols:              80,
+		currentDir:        dir,
+		entries:           []os.DirEntry{testDirEntry{name: "Data", isDir: true}},
+		previewCache:      map[string][]string{},
+		previewReqCh:      make(chan previewRequest, 1),
+		inCloudSyncRoot:   true,
+		folderCloudStates: map[string]cloudFileState{filepath.Join(dir, "Data"): cloudFileOnlineOnly},
+	}
+
+	fm.schedulePreview()
+
+	// Listing a folder does not download its files, so it is still previewed.
+	if req := <-fm.previewReqCh; req.onlineOnly {
+		t.Fatalf("folder preview request marked online only")
+	}
+}
+
 func TestEnterSelectedWindowsVolumeSwitchesCurrentDirectory(t *testing.T) {
 	fm := &FileManager{
 		showingWindowsVolumes: true,
