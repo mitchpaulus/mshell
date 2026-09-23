@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 	"reflect"
 )
 
@@ -79,17 +78,55 @@ func TestHandleInputProcessesBufferedQuit(t *testing.T) {
 	}
 }
 
-func TestComputePreviewWithTimeoutReturnsContent(t *testing.T) {
+func TestComputePreviewReturnsContent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "note.txt")
 	if err := os.WriteFile(path, []byte("hello\nworld\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	lines := computePreviewWithTimeout(testDirEntry{name: "note.txt"}, path, 10, time.Second, nil)
+	lines := computePreview(testDirEntry{name: "note.txt"}, path, 10, false)
 
 	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "hello" {
 		t.Fatalf("preview = %v, want first line 'hello'", lines)
+	}
+}
+
+func TestComputePreviewSkipsCloudOnlyFile(t *testing.T) {
+	// The path does not exist, so any attempt to read it would report an error
+	// instead of the cloud only placeholder.
+	path := filepath.Join(t.TempDir(), "missing.txt")
+
+	lines := computePreview(testDirEntry{name: "missing.txt"}, path, 10, true)
+
+	if len(lines) != 1 || !strings.Contains(lines[0], "cloud only") {
+		t.Fatalf("preview = %v, want cloud only placeholder", lines)
+	}
+}
+
+func TestCloudFileStateFromAttributes(t *testing.T) {
+	const archive = 0x20
+	const directory = 0x10
+	tests := []struct {
+		name       string
+		attrs      uint32
+		isDir      bool
+		inSyncRoot bool
+		want       cloudFileState
+	}{
+		{"plain file outside sync root", archive, false, false, cloudFileNotManaged},
+		{"downloaded file in sync root", archive, false, true, cloudFileLocal},
+		{"cloud only file", archive | fileAttributeRecallOnDataAccess, false, true, cloudFileOnlineOnly},
+		{"legacy offline file", archive | fileAttributeOffline, false, true, cloudFileOnlineOnly},
+		{"pinned file", archive | fileAttributePinned, false, true, cloudFilePinned},
+		{"pinned file still downloading", archive | fileAttributePinned | fileAttributeRecallOnDataAccess, false, true, cloudFileOnlineOnly},
+		{"folder in sync root", directory, true, true, cloudFileNotManaged},
+		{"pinned folder", directory | fileAttributePinned, true, true, cloudFilePinned},
+	}
+	for _, tt := range tests {
+		if got := cloudFileStateFromAttributes(tt.attrs, tt.isDir, tt.inSyncRoot); got != tt.want {
+			t.Errorf("%s: got %v, want %v", tt.name, got, tt.want)
+		}
 	}
 }
 

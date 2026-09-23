@@ -11,9 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The file manager preview shows PDF details: version, page count, page size, encryption, and document info such as title and author.
   It reads only the parts of the file that hold this, so it stays fast on large PDFs.
+- On Windows, the file manager shows OneDrive status in cloud sync folders:
+  `☁` cloud only, `✓` on this device, `●` always keep on this device.
+  Cloud only files are not previewed, so scrolling past them no longer downloads them.
 
 ### Changed
 
+- The file manager preview no longer times out after 3 seconds.
+  The timeout existed for OneDrive files, which are now detected and skipped instead.
 - `stdin` fails if the input exceeds `MSH_READ_LIMIT` bytes (default 104857600, `0` for no limit).
 
 ### Security

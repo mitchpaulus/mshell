@@ -25,10 +25,11 @@ import (
 )
 
 type previewRequest struct {
-	path     string
-	entry    os.DirEntry
-	maxLines int
-	gen      uint64
+	path       string
+	entry      os.DirEntry
+	maxLines   int
+	onlineOnly bool // file data is only in the cloud; do not read it
+	gen        uint64
 }
 
 type previewResult struct {
@@ -57,14 +58,62 @@ func (e fileManagerVolumeEntry) Info() (fs.FileInfo, error) { return nil, nil }
 // Hide it from the file manager so it does not clutter listings or previews.
 const oneDriveHiddenMetadataFileName = ".849C9593-D756-4E56-8D6E-42412F2A707B"
 
-// previewTimeout bounds how long a single preview computation may block.
-// Reading a file on a cloud-backed filesystem (OneDrive "files on demand")
-// can hang while the file is hydrated from the network. Without a bound a
-// single such file would stall the preview worker indefinitely, freezing
-// previews for every other entry. Go cannot cancel a blocked read on a
-// regular file, so on timeout we abandon the blocked computation (it unwinds
-// when the underlying syscall finally returns) and show a placeholder.
-const previewTimeout = 3 * time.Second
+// Windows file attributes set by the cloud files driver (OneDrive and other
+// sync providers). They are reported in directory listings, so reading them
+// never downloads the file.
+const (
+	fileAttributeOffline            = 0x1000
+	fileAttributePinned             = 0x80000
+	fileAttributeRecallOnDataAccess = 0x400000
+)
+
+// cloudFileState describes where the data of a file in a cloud sync folder lives.
+type cloudFileState int
+
+const (
+	cloudFileNotManaged cloudFileState = iota // not in a cloud sync folder
+	cloudFileOnlineOnly                       // only in the cloud; reading it downloads it
+	cloudFileLocal                            // downloaded; the provider may free it later
+	cloudFilePinned                           // "Always keep on this device"
+)
+
+// cloudFileStateFromAttributes classifies a file from its Windows attributes.
+// inSyncRoot says whether the containing folder is managed by a sync provider,
+// which is the only way to tell a downloaded cloud file from a plain local file.
+func cloudFileStateFromAttributes(attrs uint32, isDir bool, inSyncRoot bool) cloudFileState {
+	// A pinned file that is still downloading has both the pinned and the
+	// recall bits. Treat it as online only until its data is here.
+	if !isDir && attrs&(fileAttributeRecallOnDataAccess|fileAttributeOffline) != 0 {
+		return cloudFileOnlineOnly
+	}
+	if attrs&fileAttributePinned != 0 {
+		return cloudFilePinned
+	}
+	if inSyncRoot && !isDir {
+		return cloudFileLocal
+	}
+	return cloudFileNotManaged
+}
+
+func (fm *FileManager) cloudState(entry os.DirEntry) cloudFileState {
+	if fm.showingWindowsVolumes {
+		return cloudFileNotManaged
+	}
+	return cloudFileStateFromAttributes(fileAttributes(entry), entry.IsDir(), fm.inCloudSyncRoot)
+}
+
+// cloudStateMarker returns a one column marker and its color for the left pane.
+func cloudStateMarker(state cloudFileState) (string, string) {
+	switch state {
+	case cloudFileOnlineOnly:
+		return "\u2601", "\033[36m" // cloud, cyan
+	case cloudFileLocal:
+		return "\u2713", "\033[32m" // check, green
+	case cloudFilePinned:
+		return "\u25cf", "\033[32m" // filled circle, green
+	}
+	return " ", ""
+}
 
 type FileManager struct {
 	rows, cols int
@@ -76,6 +125,7 @@ type FileManager struct {
 	cursor     int
 	offset     int
 	showingWindowsVolumes bool
+	inCloudSyncRoot       bool // currentDir is managed by OneDrive or another sync provider
 
 	hostname string
 	username string
@@ -315,7 +365,7 @@ func (fm *FileManager) startPreviewLoop() {
 					}
 				}
 			COMPUTE:
-				lines := computePreviewWithTimeout(req.entry, req.path, req.maxLines, previewTimeout, fm.previewDone)
+				lines := computePreview(req.entry, req.path, req.maxLines, req.onlineOnly)
 				select {
 				case <-fm.previewDone:
 					return
@@ -371,10 +421,11 @@ func (fm *FileManager) schedulePreview() {
 	fm.previewGen++
 
 	req := previewRequest{
-		path:     path,
-		entry:    entry,
-		maxLines: fm.visibleRows(),
-		gen:      fm.previewGen,
+		path:       path,
+		entry:      entry,
+		maxLines:   fm.visibleRows(),
+		onlineOnly: fm.cloudState(entry) == cloudFileOnlineOnly,
+		gen:        fm.previewGen,
 	}
 
 	// Non-blocking send; if the channel is full the worker will drain
@@ -423,6 +474,7 @@ func (fm *FileManager) readModalKey() (byte, bool) {
 
 func (fm *FileManager) loadDirectory() {
 	fm.showingWindowsVolumes = false
+	fm.inCloudSyncRoot = isCloudSyncRoot(fm.currentDir)
 	entries, err := os.ReadDir(fm.currentDir)
 	if err != nil {
 		fm.entries = nil
@@ -736,6 +788,21 @@ func (fm *FileManager) render() {
 				buf.WriteString("\033[7m") // reverse video for selected
 			}
 
+			// In a cloud sync folder, a marker column shows where each file's data lives.
+			markerW := 0
+			if fm.inCloudSyncRoot {
+				markerW = 2
+				marker, color := cloudStateMarker(fm.cloudState(entry))
+				buf.WriteString(" ")
+				if color != "" {
+					buf.WriteString(color)
+					buf.WriteString(marker)
+					buf.WriteString("\033[39m")
+				} else {
+					buf.WriteString(marker)
+				}
+			}
+
 			if inCut {
 				buf.WriteString("\033[31m") // red
 			} else if inCopy {
@@ -744,7 +811,7 @@ func (fm *FileManager) render() {
 				buf.WriteString("\033[34m") // blue for directories
 			}
 
-			availW := leftW - 1 - indent // 1 for leading space
+			availW := leftW - 1 - indent - markerW // 1 for leading space
 			if nameRunes > availW {
 				name = truncateMiddle(name, availW)
 				nameRunes = availW
@@ -947,37 +1014,13 @@ func (fm *FileManager) getPreview() []string {
 	return []string{" Loading..."}
 }
 
-// computePreviewWithTimeout runs computePreview but gives up after timeout.
-// The computation runs in its own goroutine so a read that blocks on cloud
-// file hydration cannot stall the preview worker. On timeout the blocked
-// goroutine is abandoned; it will finish on its own when the syscall returns,
-// and its result is discarded (the buffered channel keeps the send from
-// blocking). A non-positive timeout disables the bound. If done is closed (the
-// manager is shutting down) the wait is abandoned immediately and nil returned.
-func computePreviewWithTimeout(entry os.DirEntry, path string, maxLines int, timeout time.Duration, done <-chan struct{}) []string {
-	resultCh := make(chan []string, 1)
-	go func() {
-		resultCh <- computePreview(entry, path, maxLines)
-	}()
-
-	var timeoutCh <-chan time.Time
-	if timeout > 0 {
-		timer := time.NewTimer(timeout)
-		defer timer.Stop()
-		timeoutCh = timer.C
+func computePreview(entry os.DirEntry, path string, maxLines int, onlineOnly bool) []string {
+	// Reading a cloud only file would download it, which can take a long time
+	// and fills the disk with files the user was only scrolling past.
+	if onlineOnly {
+		return []string{" (cloud only, not downloaded)"}
 	}
 
-	select {
-	case lines := <-resultCh:
-		return lines
-	case <-timeoutCh:
-		return []string{" (preview timed out)"}
-	case <-done:
-		return nil
-	}
-}
-
-func computePreview(entry os.DirEntry, path string, maxLines int) []string {
 	if entry.IsDir() {
 		subEntries, err := os.ReadDir(path)
 		if err != nil {
