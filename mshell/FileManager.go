@@ -139,8 +139,8 @@ func (fm *FileManager) cloudState(entry os.DirEntry) cloudFileState {
 }
 
 // cloudStateMarker returns the marker and its color for the left pane.
-// Some terminals draw the cloud two columns wide, so the renderer gives the
-// marker a two column slot and moves the cursor past it explicitly.
+// Terminals disagree on how wide the cloud is, so the renderer gives the marker
+// a fixed slot and moves the cursor past it explicitly.
 func cloudStateMarker(state cloudFileState) (string, string) {
 	switch state {
 	case cloudFileOnlineOnly:
@@ -157,10 +157,12 @@ func cloudStateMarker(state cloudFileState) (string, string) {
 	return "", ""
 }
 
-// cloudMarkerCols is the width of the left margin plus the two column marker
-// slot. The space between the marker and the name belongs to the name, so it
-// takes the name's highlight on the selected row.
-const cloudMarkerCols = 3
+// cloudMarkerCols is the width of the left margin plus the marker slot. The
+// slot is three columns because Windows Terminal draws the cloud with the color
+// emoji font, which spills past two columns. The space between the marker and
+// the name belongs to the name, so it takes the name's highlight on the
+// selected row.
+const cloudMarkerCols = 4
 
 type FileManager struct {
 	rows, cols int
@@ -965,8 +967,7 @@ func (fm *FileManager) render() {
 				markerW = cloudMarkerCols
 				// Paint the slot first so the selected row's highlight covers it,
 				// then draw the marker and jump to the name column. The jump keeps
-				// the name aligned whether the terminal draws the marker one or
-				// two columns wide.
+				// the name aligned however wide the terminal draws the marker.
 				buf.WriteString(strings.Repeat(" ", markerW))
 				marker, color := cloudStateMarker(fm.cloudState(entry))
 				if marker != "" {
