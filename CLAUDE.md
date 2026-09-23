@@ -88,6 +88,11 @@ Only wrap really long lines, and try to wrap on a comma or other punctuation.
 Also update the `doc/mshell.md` markdown file. This is documentation for agents like yourself.
 The `doc/mshell.html` file is generated, do not edit.
 
+You tend to want to update `mshell.md` when it's not necessary.
+`mshell.md` is for agents, and it really shouldn't have any focus on interactive mode.
+
+The documentation doesn't concern itself with internal implementation details, just user facing concerns.
+
 ## VS Code
 
 Code for the VS Code extension is at `code/`.

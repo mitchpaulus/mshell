@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 	"reflect"
 )
 
@@ -79,17 +78,107 @@ func TestHandleInputProcessesBufferedQuit(t *testing.T) {
 	}
 }
 
-func TestComputePreviewWithTimeoutReturnsContent(t *testing.T) {
+func TestComputePreviewReturnsContent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "note.txt")
 	if err := os.WriteFile(path, []byte("hello\nworld\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	lines := computePreviewWithTimeout(testDirEntry{name: "note.txt"}, path, 10, time.Second, nil)
+	lines := computePreview(testDirEntry{name: "note.txt"}, path, 10, false)
 
 	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "hello" {
 		t.Fatalf("preview = %v, want first line 'hello'", lines)
+	}
+}
+
+func TestComputePreviewSkipsCloudOnlyFile(t *testing.T) {
+	// The path does not exist, so any attempt to read it would report an error
+	// instead of the cloud only placeholder.
+	path := filepath.Join(t.TempDir(), "missing.txt")
+
+	lines := computePreview(testDirEntry{name: "missing.txt"}, path, 10, true)
+
+	if len(lines) != 1 || !strings.Contains(lines[0], "cloud only") {
+		t.Fatalf("preview = %v, want cloud only placeholder", lines)
+	}
+}
+
+func TestCloudFileStateFromAttributes(t *testing.T) {
+	const archive = 0x20
+	const directory = 0x10
+	tests := []struct {
+		name       string
+		attrs      uint32
+		isDir      bool
+		inSyncRoot bool
+		want       cloudFileState
+	}{
+		{"plain file outside sync root", archive, false, false, cloudFileNotManaged},
+		{"downloaded file in sync root", archive, false, true, cloudFileLocal},
+		{"cloud only file", archive | fileAttributeRecallOnDataAccess, false, true, cloudFileOnlineOnly},
+		{"legacy offline file", archive | fileAttributeOffline, false, true, cloudFileOnlineOnly},
+		{"pinned file", archive | fileAttributePinned, false, true, cloudFilePinned},
+		{"pinned file still downloading", archive | fileAttributePinned | fileAttributeRecallOnDataAccess, false, true, cloudFileOnlineOnly},
+		{"folder in sync root", directory, true, true, cloudFileNotManaged},
+		{"pinned folder", directory | fileAttributePinned, true, true, cloudFilePinned},
+	}
+	for _, tt := range tests {
+		if got := cloudFileStateFromAttributes(tt.attrs, tt.isDir, tt.inSyncRoot); got != tt.want {
+			t.Errorf("%s: got %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestCloudFileStateFromStorageProvider(t *testing.T) {
+	tests := map[uint32]cloudFileState{
+		0:  cloudFileNotManaged,
+		1:  cloudFileOnlineOnly,
+		2:  cloudFileLocal,
+		3:  cloudFilePinned,
+		4:  cloudFileSyncing,
+		5:  cloudFileSyncing,
+		6:  cloudFileSyncing,
+		7:  cloudFileError,
+		8:  cloudFileError,
+		9:  cloudFileNotManaged,
+		10: cloudFileSyncing,
+	}
+	for value, want := range tests {
+		if got := cloudFileStateFromStorageProvider(value); got != want {
+			t.Errorf("state %d: got %v, want %v", value, got, want)
+		}
+	}
+}
+
+func TestLeftPaneWidthIncludesCloudMarker(t *testing.T) {
+	fm := &FileManager{rows: 20, cols: 200, currentDir: t.TempDir()}
+	fm.entries = []os.DirEntry{testDirEntry{name: "1 Project", isDir: true}}
+	plain := fm.leftPaneWidth()
+	fm.inCloudSyncRoot = true
+	if got := fm.leftPaneWidth(); got != plain+cloudMarkerCols {
+		t.Fatalf("leftPaneWidth() = %d, want %d", got, plain+cloudMarkerCols)
+	}
+}
+
+func TestSchedulePreviewReadsCloudOnlyFolder(t *testing.T) {
+	dir := t.TempDir()
+	fm := &FileManager{
+		rows:              20,
+		cols:              80,
+		currentDir:        dir,
+		entries:           []os.DirEntry{testDirEntry{name: "Data", isDir: true}},
+		previewCache:      map[string][]string{},
+		previewReqCh:      make(chan previewRequest, 1),
+		inCloudSyncRoot:   true,
+		folderCloudStates: map[string]cloudFileState{filepath.Join(dir, "Data"): cloudFileOnlineOnly},
+	}
+
+	fm.schedulePreview()
+
+	// Listing a folder does not download its files, so it is still previewed.
+	if req := <-fm.previewReqCh; req.onlineOnly {
+		t.Fatalf("folder preview request marked online only")
 	}
 }
 
