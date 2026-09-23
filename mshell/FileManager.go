@@ -157,8 +157,9 @@ func cloudStateMarker(state cloudFileState) (string, string) {
 	return "", ""
 }
 
-// cloudMarkerCols is the width of the two column marker slot plus the two
-// spaces between it and the name.
+// cloudMarkerCols is the extra width a marker takes in the left pane: one
+// more space of left margin, the two column marker slot, and one space before
+// the name.
 const cloudMarkerCols = 4
 
 type FileManager struct {
@@ -969,7 +970,7 @@ func (fm *FileManager) render() {
 				buf.WriteString(strings.Repeat(" ", 1+markerW))
 				marker, color := cloudStateMarker(fm.cloudState(entry))
 				if marker != "" {
-					buf.WriteString("\033[2G")
+					buf.WriteString("\033[3G")
 					if idx != fm.cursor {
 						buf.WriteString(color)
 					}
