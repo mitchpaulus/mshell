@@ -1234,9 +1234,6 @@ end wl # Output: 11
    On exit, changes the working directory to the directory the user navigated to.
    On Windows, pressing `h` at the root of a drive shows the mounted drive letters so you can switch volumes.
    The preview pane short-circuits common binary extensions and shows first-level contents for `.zip` and `.tar.gz` archives.
-   On Windows, inside a OneDrive (or other cloud sync) folder, a marker column shows the same sync status as Explorer: `☁` cloud only, `✓` on this device, `●` always keep on this device, `↻` syncing, `✗` sync error.
-   File status is read from the directory listing; folder status is looked up in the background and appears shortly after the listing.
-   Cloud only files are not previewed, since reading them would download them.
    Yank bindings copy text about the selected entry to the system clipboard: `yf` (file name), `yp` (full path), `yg` (path relative to the enclosing `.git` directory). `(str -- )`
 - `clip`: Copy a string to the system clipboard. Cross-platform: uses `pbcopy` on macOS, `clip` on Windows, and the first available of `wl-copy`, `xclip`, or `xsel` on Linux. `(str -- )`
 - `writeFile`: Write a string (UTF-8) or raw binary data to file. Overwrites file if it exists. `(str|bytes content str|path file -- )`
