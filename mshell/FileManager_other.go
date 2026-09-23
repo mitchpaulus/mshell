@@ -15,3 +15,7 @@ func isCloudSyncRoot(dir string) bool {
 func fileAttributes(entry os.DirEntry) uint32 {
 	return 0
 }
+
+func newStorageProviderStateLookup() (func(path string) (uint32, bool), func()) {
+	return nil, nil
+}

@@ -130,6 +130,37 @@ func TestCloudFileStateFromAttributes(t *testing.T) {
 	}
 }
 
+func TestCloudFileStateFromStorageProvider(t *testing.T) {
+	tests := map[uint32]cloudFileState{
+		0:  cloudFileNotManaged,
+		1:  cloudFileOnlineOnly,
+		2:  cloudFileLocal,
+		3:  cloudFilePinned,
+		4:  cloudFileSyncing,
+		5:  cloudFileSyncing,
+		6:  cloudFileSyncing,
+		7:  cloudFileError,
+		8:  cloudFileError,
+		9:  cloudFileNotManaged,
+		10: cloudFileSyncing,
+	}
+	for value, want := range tests {
+		if got := cloudFileStateFromStorageProvider(value); got != want {
+			t.Errorf("state %d: got %v, want %v", value, got, want)
+		}
+	}
+}
+
+func TestLeftPaneWidthIncludesCloudMarker(t *testing.T) {
+	fm := &FileManager{rows: 20, cols: 200, currentDir: t.TempDir()}
+	fm.entries = []os.DirEntry{testDirEntry{name: "1 Project", isDir: true}}
+	plain := fm.leftPaneWidth()
+	fm.inCloudSyncRoot = true
+	if got := fm.leftPaneWidth(); got != plain+cloudMarkerCols {
+		t.Fatalf("leftPaneWidth() = %d, want %d", got, plain+cloudMarkerCols)
+	}
+}
+
 func TestEnterSelectedWindowsVolumeSwitchesCurrentDirectory(t *testing.T) {
 	fm := &FileManager{
 		showingWindowsVolumes: true,

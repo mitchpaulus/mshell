@@ -67,14 +67,16 @@ const (
 	fileAttributeRecallOnDataAccess = 0x400000
 )
 
-// cloudFileState describes where the data of a file in a cloud sync folder lives.
+// cloudFileState describes the sync status of a file or folder in a cloud sync folder.
 type cloudFileState int
 
 const (
-	cloudFileNotManaged cloudFileState = iota // not in a cloud sync folder
+	cloudFileNotManaged cloudFileState = iota // not in a cloud sync folder, or no status
 	cloudFileOnlineOnly                       // only in the cloud; reading it downloads it
 	cloudFileLocal                            // downloaded; the provider may free it later
 	cloudFilePinned                           // "Always keep on this device"
+	cloudFileSyncing                          // upload or download pending or in progress
+	cloudFileError                            // the provider reports an error or warning
 )
 
 // cloudFileStateFromAttributes classifies a file from its Windows attributes.
@@ -95,14 +97,40 @@ func cloudFileStateFromAttributes(attrs uint32, isDir bool, inSyncRoot bool) clo
 	return cloudFileNotManaged
 }
 
+// cloudFileStateFromStorageProvider maps the shell's System.StorageProviderState
+// value (the status icon Explorer shows) to a cloudFileState. Folder attributes
+// say nothing about the files inside, so this is how folders get a status.
+func cloudFileStateFromStorageProvider(value uint32) cloudFileState {
+	switch value {
+	case 1: // STORAGEPROVIDERSTATE_SPARSE
+		return cloudFileOnlineOnly
+	case 2: // STORAGEPROVIDERSTATE_IN_SYNC
+		return cloudFileLocal
+	case 3: // STORAGEPROVIDERSTATE_PINNED
+		return cloudFilePinned
+	case 4, 5, 6, 10: // PENDING_UPLOAD, PENDING_DOWNLOAD, TRANSFERRING, PENDING_UNSPECIFIED
+		return cloudFileSyncing
+	case 7, 8: // ERROR, WARNING
+		return cloudFileError
+	}
+	return cloudFileNotManaged // NONE, EXCLUDED, or unknown
+}
+
 func (fm *FileManager) cloudState(entry os.DirEntry) cloudFileState {
 	if fm.showingWindowsVolumes {
 		return cloudFileNotManaged
 	}
+	if entry.IsDir() {
+		if state, ok := fm.folderCloudStates[fm.selectedEntryPath(entry)]; ok {
+			return state
+		}
+	}
 	return cloudFileStateFromAttributes(fileAttributes(entry), entry.IsDir(), fm.inCloudSyncRoot)
 }
 
-// cloudStateMarker returns a one column marker and its color for the left pane.
+// cloudStateMarker returns the marker and its color for the left pane.
+// Some terminals draw the cloud two columns wide, so the renderer gives the
+// marker a two column slot and moves the cursor past it explicitly.
 func cloudStateMarker(state cloudFileState) (string, string) {
 	switch state {
 	case cloudFileOnlineOnly:
@@ -111,9 +139,16 @@ func cloudStateMarker(state cloudFileState) (string, string) {
 		return "\u2713", "\033[32m" // check, green
 	case cloudFilePinned:
 		return "\u25cf", "\033[32m" // filled circle, green
+	case cloudFileSyncing:
+		return "\u21bb", "\033[34m" // clockwise arrow, blue
+	case cloudFileError:
+		return "\u2717", "\033[31m" // cross, red
 	}
-	return " ", ""
+	return "", ""
 }
+
+// cloudMarkerCols is the width of the marker slot plus the space after it.
+const cloudMarkerCols = 3
 
 type FileManager struct {
 	rows, cols int
@@ -126,6 +161,12 @@ type FileManager struct {
 	offset     int
 	showingWindowsVolumes bool
 	inCloudSyncRoot       bool // currentDir is managed by OneDrive or another sync provider
+
+	// Folder sync status comes from a shell lookup that is too slow to run
+	// while rendering, so a background worker fills this map by folder path.
+	folderCloudStates     map[string]cloudFileState
+	folderStateReqCh      chan []string
+	folderStatesRequested bool // the current listing's folders were sent to the worker
 
 	hostname string
 	username string
@@ -399,6 +440,90 @@ func (fm *FileManager) startPreviewLoop() {
 	}()
 }
 
+// startFolderStateWorker looks up the sync status of folders in cloud sync
+// folders and re-renders as each result arrives. It shares the preview loop's
+// shutdown channel and wait group.
+func (fm *FileManager) startFolderStateWorker() {
+	fm.folderStateReqCh = make(chan []string, 1)
+	fm.previewWG.Add(1)
+	go func() {
+		defer fm.previewWG.Done()
+		// The shell lookup uses COM, which is tied to one OS thread. The thread
+		// is left locked so it is discarded when this goroutine exits.
+		runtime.LockOSThread()
+		lookup, closeLookup := newStorageProviderStateLookup()
+		if lookup == nil {
+			return
+		}
+		defer closeLookup()
+
+		for {
+			var paths []string
+			select {
+			case <-fm.previewDone:
+				return
+			case paths = <-fm.folderStateReqCh:
+			}
+			for i := 0; i < len(paths); i++ {
+				select {
+				case <-fm.previewDone:
+					return
+				case newer := <-fm.folderStateReqCh:
+					// The user moved to another directory; start on its folders.
+					paths = newer
+					i = -1
+					continue
+				default:
+				}
+				value, ok := lookup(paths[i])
+				if !ok {
+					continue
+				}
+				state := cloudFileStateFromStorageProvider(value)
+				fm.renderMu.Lock()
+				if old, seen := fm.folderCloudStates[paths[i]]; !seen || old != state {
+					fm.folderCloudStates[paths[i]] = state
+					fm.render()
+				}
+				fm.renderMu.Unlock()
+			}
+		}
+	}()
+}
+
+// scheduleFolderStates sends the folders of the current listing to the folder
+// state worker, once per directory load.
+func (fm *FileManager) scheduleFolderStates() {
+	if fm.folderStatesRequested || fm.folderStateReqCh == nil {
+		return
+	}
+	fm.folderStatesRequested = true
+	if !fm.inCloudSyncRoot || fm.showingWindowsVolumes {
+		return
+	}
+	if fm.folderCloudStates == nil {
+		fm.folderCloudStates = make(map[string]cloudFileState)
+	}
+	var paths []string
+	for _, entry := range fm.entries {
+		if entry.IsDir() {
+			paths = append(paths, fm.selectedEntryPath(entry))
+		}
+	}
+	if len(paths) == 0 {
+		return
+	}
+	select {
+	case fm.folderStateReqCh <- paths:
+	default:
+		select {
+		case <-fm.folderStateReqCh:
+		default:
+		}
+		fm.folderStateReqCh <- paths
+	}
+}
+
 func (fm *FileManager) stopPreviewLoop() {
 	close(fm.previewDone)
 	fm.previewWG.Wait()
@@ -444,11 +569,13 @@ func (fm *FileManager) schedulePreview() {
 
 func (fm *FileManager) mainLoop() {
 	fm.startPreviewLoop()
+	fm.startFolderStateWorker()
 	defer fm.stopPreviewLoop()
 
 	for {
 		fm.renderMu.Lock()
 		fm.schedulePreview()
+		fm.scheduleFolderStates()
 		fm.render()
 		fm.renderMu.Unlock()
 
@@ -475,6 +602,7 @@ func (fm *FileManager) readModalKey() (byte, bool) {
 func (fm *FileManager) loadDirectory() {
 	fm.showingWindowsVolumes = false
 	fm.inCloudSyncRoot = isCloudSyncRoot(fm.currentDir)
+	fm.folderStatesRequested = false
 	entries, err := os.ReadDir(fm.currentDir)
 	if err != nil {
 		fm.entries = nil
@@ -618,6 +746,9 @@ func (fm *FileManager) leftPaneWidth() int {
 		}
 	}
 	maxLen += 1 // padding
+	if fm.inCloudSyncRoot && !fm.showingWindowsVolumes {
+		maxLen += cloudMarkerCols
+	}
 	maxWidth := fm.cols / 2
 	if maxLen > maxWidth {
 		maxLen = maxWidth
@@ -788,19 +919,25 @@ func (fm *FileManager) render() {
 				buf.WriteString("\033[7m") // reverse video for selected
 			}
 
-			// In a cloud sync folder, a marker column shows where each file's data lives.
+			// In a cloud sync folder, a marker slot shows each entry's sync status.
 			markerW := 0
-			if fm.inCloudSyncRoot {
-				markerW = 2
+			if fm.inCloudSyncRoot && !fm.showingWindowsVolumes {
+				markerW = cloudMarkerCols
+				// Paint the slot first so the selected row's highlight covers it,
+				// then draw the marker and jump to the name column. The jump keeps
+				// the name aligned whether the terminal draws the marker one or
+				// two columns wide.
+				buf.WriteString(strings.Repeat(" ", 1+markerW))
 				marker, color := cloudStateMarker(fm.cloudState(entry))
-				buf.WriteString(" ")
-				if color != "" {
-					buf.WriteString(color)
+				if marker != "" {
+					buf.WriteString("\033[2G")
+					if idx != fm.cursor {
+						buf.WriteString(color)
+					}
 					buf.WriteString(marker)
 					buf.WriteString("\033[39m")
-				} else {
-					buf.WriteString(marker)
 				}
+				fmt.Fprintf(&buf, "\033[%dG", 2+markerW)
 			}
 
 			if inCut {
@@ -816,7 +953,9 @@ func (fm *FileManager) render() {
 				name = truncateMiddle(name, availW)
 				nameRunes = availW
 			}
-			buf.WriteString(" ")
+			if markerW == 0 {
+				buf.WriteString(" ")
+			}
 			if indent > 0 {
 				buf.WriteString(strings.Repeat(" ", indent))
 			}

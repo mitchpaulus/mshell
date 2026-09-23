@@ -12,7 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The file manager preview shows PDF details: version, page count, page size, encryption, and document info such as title and author.
   It reads only the parts of the file that hold this, so it stays fast on large PDFs.
 - On Windows, the file manager shows OneDrive status in cloud sync folders:
-  `☁` cloud only, `✓` on this device, `●` always keep on this device.
+  `☁` cloud only, `✓` on this device, `●` always keep on this device, `↻` syncing, `✗` sync error.
+  Folders show the same status as in Explorer.
   Cloud only files are not previewed, so scrolling past them no longer downloads them.
 
 ### Changed
