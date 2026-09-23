@@ -157,8 +157,9 @@ func cloudStateMarker(state cloudFileState) (string, string) {
 	return "", ""
 }
 
-// cloudMarkerCols is the width of the marker slot plus the space after it.
-const cloudMarkerCols = 3
+// cloudMarkerCols is the width of the two column marker slot plus the two
+// spaces between it and the name.
+const cloudMarkerCols = 4
 
 type FileManager struct {
 	rows, cols int
