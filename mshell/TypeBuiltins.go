@@ -279,6 +279,7 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 	// exit : (int -- Bottom)  — divergent; Bottom has no sig syntax.
 	r.regGo("exit", QuoteSig{Inputs: []TypeId{TidInt}, Outputs: []TypeId{TidBottom}})
 	r.reg("readFileBytes", "(str | path -- bytes)")
+	r.reg("clip", "(str | path -- )")
 	for _, name := range []string{"files", "dirs"} {
 		r.reg(name, "( -- [path])")
 	}

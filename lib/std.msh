@@ -318,7 +318,7 @@ def uw ([str] --) unlines w end
 # tuw = tab unlines write
 def tuw ([[str]] -- ) (tjoin) map uw end
 
-def readTsvFile (str -- [[str]])
+def readTsvFile (str | path -- [[str]])
     readFile lines (tsplit) map
 end
 
