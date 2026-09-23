@@ -16,6 +16,6 @@ func fileAttributes(entry os.DirEntry) uint32 {
 	return 0
 }
 
-func newStorageProviderStateLookup() (func(path string) (uint32, bool), func()) {
+func newStorageProviderStateLookup() (func(dir string, names []string, stop func() bool, found func(name string, value uint32)), func()) {
 	return nil, nil
 }

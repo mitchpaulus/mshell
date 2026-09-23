@@ -38,6 +38,16 @@ type previewResult struct {
 	gen   uint64
 }
 
+// folderStateRequest asks the folder state worker for the sync status of the
+// named folders inside dir.
+type folderStateRequest struct {
+	dir   string
+	names []string
+}
+
+// folderStateRenderInterval limits how often arriving folder states redraw the screen.
+const folderStateRenderInterval = 30 * time.Millisecond
+
 type archiveListingEntry struct {
 	name     string
 	isDir    bool
@@ -165,7 +175,7 @@ type FileManager struct {
 	// Folder sync status comes from a shell lookup that is too slow to run
 	// while rendering, so a background worker fills this map by folder path.
 	folderCloudStates     map[string]cloudFileState
-	folderStateReqCh      chan []string
+	folderStateReqCh      chan folderStateRequest
 	folderStatesRequested bool // the current listing's folders were sent to the worker
 
 	hostname string
@@ -441,10 +451,10 @@ func (fm *FileManager) startPreviewLoop() {
 }
 
 // startFolderStateWorker looks up the sync status of folders in cloud sync
-// folders and re-renders as each result arrives. It shares the preview loop's
+// folders and re-renders as results arrive. It shares the preview loop's
 // shutdown channel and wait group.
 func (fm *FileManager) startFolderStateWorker() {
-	fm.folderStateReqCh = make(chan []string, 1)
+	fm.folderStateReqCh = make(chan folderStateRequest, 1)
 	fm.previewWG.Add(1)
 	go func() {
 		defer fm.previewWG.Done()
@@ -457,34 +467,56 @@ func (fm *FileManager) startFolderStateWorker() {
 		}
 		defer closeLookup()
 
+		var pending *folderStateRequest
 		for {
-			var paths []string
-			select {
-			case <-fm.previewDone:
-				return
-			case paths = <-fm.folderStateReqCh:
-			}
-			for i := 0; i < len(paths); i++ {
+			var req folderStateRequest
+			if pending != nil {
+				req, pending = *pending, nil
+			} else {
 				select {
 				case <-fm.previewDone:
 					return
+				case req = <-fm.folderStateReqCh:
+				}
+			}
+
+			// Stop early when shutting down or when the user has moved to
+			// another directory; a newer request is picked up on the next loop.
+			stop := func() bool {
+				select {
+				case <-fm.previewDone:
+					return true
 				case newer := <-fm.folderStateReqCh:
-					// The user moved to another directory; start on its folders.
-					paths = newer
-					i = -1
-					continue
+					pending = &newer
+					return true
 				default:
+					return false
 				}
-				value, ok := lookup(paths[i])
-				if !ok {
-					continue
-				}
+			}
+
+			var lastRender time.Time
+			dirty := false
+			found := func(name string, value uint32) {
+				path := filepath.Join(req.dir, name)
 				state := cloudFileStateFromStorageProvider(value)
 				fm.renderMu.Lock()
-				if old, seen := fm.folderCloudStates[paths[i]]; !seen || old != state {
-					fm.folderCloudStates[paths[i]] = state
-					fm.render()
+				defer fm.renderMu.Unlock()
+				if old, seen := fm.folderCloudStates[path]; seen && old == state {
+					return
 				}
+				fm.folderCloudStates[path] = state
+				dirty = true
+				if time.Since(lastRender) >= folderStateRenderInterval {
+					fm.render()
+					lastRender = time.Now()
+					dirty = false
+				}
+			}
+			lookup(req.dir, req.names, stop, found)
+
+			if dirty {
+				fm.renderMu.Lock()
+				fm.render()
 				fm.renderMu.Unlock()
 			}
 		}
@@ -492,7 +524,7 @@ func (fm *FileManager) startFolderStateWorker() {
 }
 
 // scheduleFolderStates sends the folders of the current listing to the folder
-// state worker, once per directory load.
+// state worker, once per directory load. Folders on screen are sent first.
 func (fm *FileManager) scheduleFolderStates() {
 	if fm.folderStatesRequested || fm.folderStateReqCh == nil {
 		return
@@ -504,23 +536,29 @@ func (fm *FileManager) scheduleFolderStates() {
 	if fm.folderCloudStates == nil {
 		fm.folderCloudStates = make(map[string]cloudFileState)
 	}
-	var paths []string
-	for _, entry := range fm.entries {
-		if entry.IsDir() {
-			paths = append(paths, fm.selectedEntryPath(entry))
+	req := folderStateRequest{dir: fm.currentDir}
+	visibleEnd := fm.offset + fm.visibleRows()
+	for i, entry := range fm.entries {
+		if entry.IsDir() && i >= fm.offset && i < visibleEnd {
+			req.names = append(req.names, entry.Name())
 		}
 	}
-	if len(paths) == 0 {
+	for i, entry := range fm.entries {
+		if entry.IsDir() && (i < fm.offset || i >= visibleEnd) {
+			req.names = append(req.names, entry.Name())
+		}
+	}
+	if len(req.names) == 0 {
 		return
 	}
 	select {
-	case fm.folderStateReqCh <- paths:
+	case fm.folderStateReqCh <- req:
 	default:
 		select {
 		case <-fm.folderStateReqCh:
 		default:
 		}
-		fm.folderStateReqCh <- paths
+		fm.folderStateReqCh <- req
 	}
 }
 
