@@ -106,32 +106,30 @@ func releaseShellItem(item unsafe.Pointer) {
 // each one that has a value and returning early when stop reports true. The
 // second function releases COM. Both must be called on the OS thread that
 // called this function. It returns nil if COM cannot be initialized.
+//
+// Every failure (a missing DLL, COM already set up differently on the thread,
+// a path the shell cannot parse, an entry the provider has no status for)
+// just leaves that entry without a status.
 func newStorageProviderStateLookup() (func(dir string, names []string, stop func() bool, found func(name string, value uint32)), func()) {
 	if procSHCreateItemFromParsingName.Find() != nil || procSHCreateItemFromRelativeName.Find() != nil {
 		return nil, nil
 	}
-	// S_FALSE (1) means COM was already initialized on this thread; it still
-	// needs a matching CoUninitialize.
-	if err := windows.CoInitializeEx(0, windows.COINIT_APARTMENTTHREADED); err != nil && err != syscall.Errno(1) {
+	// Multithreaded mode, because this thread never processes window messages,
+	// which single threaded mode expects. S_FALSE (1) means COM was already set
+	// up in this mode on the thread and still needs a matching CoUninitialize.
+	// Any other error, such as RPC_E_CHANGED_MODE, must not be paired with
+	// CoUninitialize.
+	err := windows.CoInitializeEx(0, windows.COINIT_MULTITHREADED|windows.COINIT_DISABLE_OLE1DDE)
+	if err != nil && err != syscall.Errno(1) {
 		return nil, nil
 	}
 
 	lookup := func(dir string, names []string, stop func() bool, found func(name string, value uint32)) {
-		dirPtr, err := windows.UTF16PtrFromString(dir)
-		if err != nil {
-			return
-		}
 		// Parsing a full path costs several milliseconds per item, most of the
 		// lookup time. Parsing the directory once and creating each entry
 		// relative to it takes a fraction of a millisecond per entry.
-		var parent unsafe.Pointer
-		hr, _, _ := procSHCreateItemFromParsingName.Call(
-			uintptr(unsafe.Pointer(dirPtr)),
-			0,
-			uintptr(unsafe.Pointer(&iidIShellItem2)),
-			uintptr(unsafe.Pointer(&parent)),
-		)
-		if hr != 0 || parent == nil {
+		parent := shellItemFromPath(dir)
+		if parent == nil {
 			return
 		}
 		defer releaseShellItem(parent)
@@ -140,30 +138,65 @@ func newStorageProviderStateLookup() (func(dir string, names []string, stop func
 			if stop() {
 				return
 			}
-			namePtr, err := windows.UTF16PtrFromString(name)
-			if err != nil {
-				continue
-			}
-			var item unsafe.Pointer
-			hr, _, _ := procSHCreateItemFromRelativeName.Call(
-				uintptr(parent),
-				uintptr(unsafe.Pointer(namePtr)),
-				0,
-				uintptr(unsafe.Pointer(&iidIShellItem2)),
-				uintptr(unsafe.Pointer(&item)),
-			)
-			if hr != 0 || item == nil {
-				continue
-			}
-			var value uint32
-			hr, _, _ = syscall.SyscallN(shellItemMethod(item, shellItemGetUInt32), uintptr(item),
-				uintptr(unsafe.Pointer(&pkeyStorageProviderState)),
-				uintptr(unsafe.Pointer(&value)))
-			releaseShellItem(item)
-			if hr == 0 {
+			if value, ok := storageProviderState(parent, name); ok {
 				found(name, value)
 			}
 		}
 	}
 	return lookup, windows.CoUninitialize
+}
+
+// shellItemFromPath returns an IShellItem2 for path, or nil. The caller must
+// release it.
+func shellItemFromPath(path string) unsafe.Pointer {
+	pathPtr, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return nil
+	}
+	var item unsafe.Pointer
+	hr, _, _ := procSHCreateItemFromParsingName.Call(
+		uintptr(unsafe.Pointer(pathPtr)),
+		0,
+		uintptr(unsafe.Pointer(&iidIShellItem2)),
+		uintptr(unsafe.Pointer(&item)),
+	)
+	if hr != 0 && item != nil {
+		// Not expected, but do not leak an object returned with an error.
+		releaseShellItem(item)
+		return nil
+	}
+	return item
+}
+
+// storageProviderState reads System.StorageProviderState for the entry name
+// inside parent.
+func storageProviderState(parent unsafe.Pointer, name string) (uint32, bool) {
+	namePtr, err := windows.UTF16PtrFromString(name)
+	if err != nil {
+		return 0, false
+	}
+	var item unsafe.Pointer
+	hr, _, _ := procSHCreateItemFromRelativeName.Call(
+		uintptr(parent),
+		uintptr(unsafe.Pointer(namePtr)),
+		0,
+		uintptr(unsafe.Pointer(&iidIShellItem2)),
+		uintptr(unsafe.Pointer(&item)),
+	)
+	if item == nil {
+		return 0, false
+	}
+	defer releaseShellItem(item)
+	if hr != 0 {
+		return 0, false
+	}
+
+	var value uint32
+	hr, _, _ = syscall.SyscallN(shellItemMethod(item, shellItemGetUInt32), uintptr(item),
+		uintptr(unsafe.Pointer(&pkeyStorageProviderState)),
+		uintptr(unsafe.Pointer(&value)))
+	if hr != 0 {
+		return 0, false
+	}
+	return value, true
 }

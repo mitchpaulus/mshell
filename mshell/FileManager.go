@@ -190,8 +190,8 @@ type FileManager struct {
 	previewCache  map[string][]string // cached preview lines per file path
 	previewReqCh  chan previewRequest  // sends requests to the preview worker
 	previewChan   chan previewResult   // receives results from the preview worker
-	previewDone   chan struct{}        // closed to shut down preview goroutines
-	previewWG     sync.WaitGroup
+	previewDone   chan struct{}        // closed, under renderMu, to shut down background goroutines
+	previewWG     sync.WaitGroup       // the preview receiver; the workers are not waited for
 	previewGen    uint64               // bumped on selection change; stale results are dropped
 
 	// Search state
@@ -402,9 +402,10 @@ func (fm *FileManager) startPreviewLoop() {
 	fm.previewDone = make(chan struct{})
 
 	// Worker goroutine: computes previews, coalescing rapid requests.
-	fm.previewWG.Add(1)
+	// Shutdown does not wait for it: a read can block for a long time (a file
+	// being downloaded, a network drive that stopped responding) and Go cannot
+	// cancel it. When the read returns, the worker sees previewDone and exits.
 	go func() {
-		defer fm.previewWG.Done()
 		for {
 			select {
 			case <-fm.previewDone:
@@ -444,7 +445,7 @@ func (fm *FileManager) startPreviewLoop() {
 				return
 			case result := <-fm.previewChan:
 				fm.renderMu.Lock()
-				if result.gen == fm.previewGen {
+				if !fm.backgroundStopped() && result.gen == fm.previewGen {
 					fm.previewCache[result.path] = result.lines
 					fm.render()
 				}
@@ -454,18 +455,28 @@ func (fm *FileManager) startPreviewLoop() {
 	}()
 }
 
+// storageProviderStateLookupFactory creates the folder status lookup. Tests
+// replace it to simulate lookups that fail, hang, or panic.
+var storageProviderStateLookupFactory = newStorageProviderStateLookup
+
 // startFolderStateWorker looks up the sync status of folders in cloud sync
-// folders and re-renders as results arrive. It shares the preview loop's
-// shutdown channel and wait group.
+// folders and re-renders as results arrive. It stops when previewDone is
+// closed. Shutdown does not wait for it, because a COM call into the sync
+// provider can hang (for example while OneDrive is unresponsive). If that
+// happens, folder markers stop appearing, the file manager keeps working, and
+// the goroutine exits whenever the call returns.
 func (fm *FileManager) startFolderStateWorker() {
 	fm.folderStateReqCh = make(chan folderStateRequest, 1)
-	fm.previewWG.Add(1)
+	newLookup := storageProviderStateLookupFactory
 	go func() {
-		defer fm.previewWG.Done()
-		// The shell lookup uses COM, which is tied to one OS thread. The thread
-		// is left locked so it is discarded when this goroutine exits.
+		// Folder markers are optional. A panic here turns them off for the rest
+		// of this session instead of taking down the shell.
+		defer func() { _ = recover() }()
+
+		// COM is set up per OS thread, so keep this goroutine on one thread.
+		// The thread is left locked so it is discarded when the goroutine exits.
 		runtime.LockOSThread()
-		lookup, closeLookup := newStorageProviderStateLookup()
+		lookup, closeLookup := newLookup()
 		if lookup == nil {
 			return
 		}
@@ -505,6 +516,9 @@ func (fm *FileManager) startFolderStateWorker() {
 				state := cloudFileStateFromStorageProvider(value)
 				fm.renderMu.Lock()
 				defer fm.renderMu.Unlock()
+				if fm.backgroundStopped() {
+					return
+				}
 				if old, seen := fm.folderCloudStates[path]; seen && old == state {
 					return
 				}
@@ -518,11 +532,14 @@ func (fm *FileManager) startFolderStateWorker() {
 			}
 			lookup(req.dir, req.names, stop, found)
 
-			if dirty {
+			func() {
+				// Unlock with defer so a panic in render cannot leave the lock held.
 				fm.renderMu.Lock()
-				fm.render()
-				fm.renderMu.Unlock()
-			}
+				defer fm.renderMu.Unlock()
+				if dirty && !fm.backgroundStopped() {
+					fm.render()
+				}
+			}()
 		}
 	}()
 }
@@ -566,9 +583,25 @@ func (fm *FileManager) scheduleFolderStates() {
 	}
 }
 
+// stopPreviewLoop shuts down background work. previewDone is closed while
+// holding renderMu, so once this returns no background goroutine will draw on
+// the terminal again, even one that is still stuck in a slow call.
 func (fm *FileManager) stopPreviewLoop() {
+	fm.renderMu.Lock()
 	close(fm.previewDone)
+	fm.renderMu.Unlock()
 	fm.previewWG.Wait()
+}
+
+// backgroundStopped reports whether stopPreviewLoop has run. Callers must hold
+// renderMu.
+func (fm *FileManager) backgroundStopped() bool {
+	select {
+	case <-fm.previewDone:
+		return true
+	default:
+		return false
+	}
 }
 
 // schedulePreview sends a preview request for the currently selected entry.
