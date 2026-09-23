@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- The file manager preview shows PDF details: version, page count, page size, encryption, and document info such as title and author.
+  It reads only the parts of the file that hold this, so it stays fast on large PDFs.
+
 ### Changed
 
 - `stdin` fails if the input exceeds `MSH_READ_LIMIT` bytes (default 104857600, `0` for no limit).
