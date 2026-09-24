@@ -1182,18 +1182,36 @@ func (c *Checker) checkMatchBlock(matchBlock *MShellParseMatchBlock) {
 	matchBlock.assertAssertiveInvariant()
 	startTok := matchBlock.GetStartToken()
 	if c.stack.Len() == 0 {
-		hint := startTok.Lexeme + " subject"
-		c.errors = append(c.errors, TypeError{
-			Kind: TErrStackUnderflow,
-			Pos:  startTok,
-			Hint: hint,
-		})
-		return
+		if !c.inferring {
+			hint := startTok.Lexeme + " subject"
+			c.errors = append(c.errors, TypeError{
+				Kind: TErrStackUnderflow,
+				Pos:  startTok,
+				Hint: hint,
+			})
+			return
+		}
+		// Quote body that starts with a match: the subject is the quote's
+		// caller-supplied input. Synthesize it as a fresh var, the same
+		// way varstore and applySig do on underflow.
+		fresh := c.subst.FreshVar(c.arena)
+		c.inferInputs = append([]TypeId{fresh}, c.inferInputs...)
+		c.stack.Push(fresh)
 	}
 	// Widen a string-literal subject to `str`: match arms and the
 	// exhaustiveness check compare against `str` by type id, and the literal
 	// value carries no meaning for pattern matching.
 	subject := c.arena.WidenStrLit(c.stack.items[c.stack.Len()-1])
+	if matchBlock.Assertive && len(matchBlock.Arms) == 1 {
+		// `=>` asserts the subject has the pattern's shape. When the
+		// subject is still an unknown var, pin it to that shape so the
+		// bindings share its element type instead of getting unrelated
+		// fresh vars.
+		if refined, ok := c.refineVarSubject(subject, matchBlock.Arms[0].Pattern); ok {
+			subject = refined
+			c.stack.items[c.stack.Len()-1] = refined
+		}
+	}
 	entry := c.captureBranch()
 
 	if len(matchBlock.Arms) == 0 {
@@ -2049,4 +2067,35 @@ func (c *Checker) restoreStack(s stackSnapshotMarker) {
 	if c.stack.Len() > s.length {
 		c.stack.items = c.stack.items[:s.length]
 	}
+}
+
+// refineVarSubject unifies a type-variable subject with the container
+// shape an assertive structural pattern requires: `[..]` pins it to a
+// list of a fresh element var and `just name` to a Maybe of one. Dict
+// patterns are left alone since they permit extra keys.
+func (c *Checker) refineVarSubject(subject TypeId, pattern []MShellParseItem) (TypeId, bool) {
+	subject = c.subst.Apply(c.arena, subject)
+	if c.arena.Node(subject).Kind != TKVar {
+		return subject, false
+	}
+	var want TypeId
+	switch {
+	case len(pattern) == 1:
+		if _, isList := pattern[0].(*MShellParseList); !isList {
+			return subject, false
+		}
+		want = c.arena.MakeList(c.subst.FreshVar(c.arena))
+	case len(pattern) == 2:
+		first, ok := pattern[0].(Token)
+		if !ok || first.Lexeme != "just" {
+			return subject, false
+		}
+		want = c.arena.MakeMaybe(c.subst.FreshVar(c.arena))
+	default:
+		return subject, false
+	}
+	if !c.unify(subject, want) {
+		return subject, false
+	}
+	return c.subst.Apply(c.arena, subject), true
 }

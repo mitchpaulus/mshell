@@ -1015,6 +1015,10 @@ func computePreview(entry os.DirEntry, path string, maxLines int) []string {
 		return previewTarGzArchive(path, maxLines)
 	}
 
+	if isPdfPreviewPath(path) {
+		return previewPdf(path, maxLines)
+	}
+
 	if hasKnownBinaryPreviewExtension(path) {
 		return []string{" (binary file)"}
 	}

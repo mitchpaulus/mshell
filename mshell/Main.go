@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"time"
 	"unicode/utf8"
+	"github.com/rivo/uniseg"
 )
 
 type CliCommand int
@@ -569,6 +570,8 @@ func main() {
 		} else if arg == "--version" {
 			fmt.Fprintln(os.Stdout, mshellVersion)
 			os.Exit(0)
+		} else if arg == "--check-terminal" {
+			os.Exit(runTerminalCheck())
 		} else if arg == "-c" {
 			if i >= len(os.Args) {
 				fmt.Println("Error: -c requires an argument")
@@ -633,7 +636,7 @@ func main() {
 
 	if !inputSet && term.IsTerminal(stdOutFd) && term.IsTerminal(int(os.Stdin.Fd())) {
 		// fmt.Fprintf(os.Stdout, "Got here\n")
-		numRows, numCols, err := term.GetSize(stdOutFd)
+		numCols, numRows, err := term.GetSize(stdOutFd)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error getting terminal size: %s\n", err)
 			os.Exit(1)
@@ -684,8 +687,8 @@ func main() {
 			stdInFd:        stdInFd,
 			numRows:        numRows,
 			numCols:        numCols,
-			promptLength:   0,
-			currentCommand: make([]rune, 0, 100),
+			resizeReflow:   os.Getenv("MSHREFLOW") != "0",
+			currentCommand: "",
 			index:          0,
 			readBuffer:     make([]byte, 1024),
 			homeDir:        os.Getenv("HOME"),
@@ -917,10 +920,13 @@ type TermState struct {
 	numRows        int // Number of rows in the terminal
 	numCols        int // Number of columns in the terminal
 	promptRow      int // Row where the prompt ends, 1-based
-	promptLength   int // Length of
 	numPromptLines int // Number of lines the prompt takes up
-	currentCommand []rune
-	index          int // index of cursor, starts at 0
+	promptText     SourceText // Text of the prompt on screen, repainted after a resize.
+	// Whether the terminal rejoins autowrapped rows on resize. Default true;
+	// MSHREFLOW=0 for terminals like xterm that keep the old rows.
+	resizeReflow   bool
+	currentCommand SourceText
+	index          ByteOffset // Source byte offset at a grapheme boundary.
 	readBuffer     []byte
 	oldState       term.State
 	homeDir        string
@@ -931,10 +937,11 @@ type TermState struct {
 	logInstanceID  string
 	// tokenChan chan TerminalToken
 	stdInState *StdinReaderState
+	bracketedPasteEnabled bool
 
 	previousHistory []HistoryItem // Previous history items loaded from file
 
-	historyComplete []rune // Completed history search for current command
+	historyComplete SourceText // Completed history search for current command
 	completeHistory bool
 
 	renderBuffer []byte // Buffer for rendering the current command
@@ -944,15 +951,17 @@ type TermState struct {
 	currentTabComplete int
 	tabCycleActive     bool
 	tabCycleIndex      int
-	tabCycleStart      int
-	tabCycleEnd        int
+	tabCycleStart      ByteOffset
+	tabCycleEnd        ByteOffset
+	tabCycleSource SourceText
 	tabCycleTokenType  TokenType
 	tabCycleAllFiles   bool
 	tabCycleMatches    []string
 	lastArgCycleActive bool
 	lastArgCycleIndex  int
-	lastArgCycleStart  int
-	lastArgCycleEnd    int
+	lastArgCycleStart  ByteOffset
+	lastArgCycleEnd    ByteOffset
+	lastArgCycleSource SourceText
 	historySearchPrefix string
 	historySearchIndex  int
 	historySearchActive bool
@@ -965,6 +974,585 @@ type TermState struct {
 	stdLibDefs        []MShellDefinition
 	initCallStackItem CallStackItem
 	// pathBinManager IPathBinManager
+
+	// Keyboard tokens that arrived while the terminal was being read for a
+	// cursor report (a width probe batch or a prompt position query). They are
+	// replayed by readInputToken, in arrival order, before any new stdin is
+	// read, so measurement never drops or reorders keystrokes.
+	queuedInput []TerminalToken
+	// Next queuedInput entry to replay. A frame is only painted when the queue
+	// has been fully drained, since queued keys may still edit the command.
+	queuedInputIndex int
+	// Set when a probe batch produced an invalid observation or failed I/O.
+	// While true no further widths are probed for the current command and
+	// unknown clusters render as placeholders. Cleared on the next command
+	// submission and by the user's width reset (Alt+Shift+R).
+	widthProbesBlocked bool
+	// Session-wide grapheme cluster -> terminal cell width, populated from
+	// committed probe batches. Never expires on its own; the user's width
+	// reset clears it after a font change or reattach.
+	widthCache WidthCache
+	// Remembers whether a candidate string is even worth probing (well formed,
+	// under the size limit). Avoids re-segmenting rejected candidates on every
+	// frame. Independent of what the terminal actually reports.
+	eligibilityCache CandidateEligibilityCache
+	// Reusable storage for one in-flight measureWidths transaction: the probe
+	// burst bytes, the frozen candidate order, and the staged replies that are
+	// committed to widthCache only when every reply validates.
+	widthBatch WidthProbeBatch
+	// Anchored editing region for the replacement renderer. Valid after
+	// printPrompt until the next prompt, screen clear, or resize re-anchor.
+	commandRegion ProbeRegion
+
+	// The fields below describe the most recently prepared display frame
+	// (see prepareCommandDisplay). They are inputs and outputs of layout,
+	// kept on the state so slices are reused across frames. paintCommandDisplay
+	// refuses to paint unless they still match the live editor and region.
+
+	// Exact text that was laid out: currentCommand plus any ghost suggestion.
+	// Compared against the editor before painting to detect a stale frame.
+	displaySource SourceText
+	// Value of state.index when the frame was prepared; the layout's cursor
+	// position is only valid for this byte offset.
+	displayCursor ByteOffset
+	// Column where the command text begins (after the prompt) on the first
+	// row, as of preparation. Painting checks it against the region.
+	displayStartCol Cells
+	// Terminal width used for wrapping this frame; a mismatch with the region
+	// means a resize happened and the frame must be prepared again.
+	displayColumns Cells
+	// Segmented clusters of displaySource with resolved widths. Empty for the
+	// all-printable-ASCII fast path, which lays out directly from text.
+	displayAtoms []DisplayAtom
+	// Cluster strings in this frame (command and completion trailer) whose
+	// width is not yet in widthCache. Handed to measureWidths as candidates.
+	widthMisses []string
+	// Wrapped rows plus cursor row/column produced by layout; what the painter
+	// actually emits.
+	displayLayout LayoutResult
+	// Syntax highlighting spans over displaySource, sorted and non-overlapping.
+	// Applied while painting; they never affect width or wrapping.
+	displayStyles []styleSpan
+	// Scratch for the completion-match trailer painted under the command.
+	// Trailer rows use only cached widths; their misses are folded into
+	// widthMisses so they are measured alongside the command's clusters.
+	trailerSource []byte       // Completion matches joined with '\n' for width resolution.
+	trailerAtoms  []DisplayAtom // Segmented clusters of trailerSource, or of one trailer row.
+	trailerLayout []LayoutRow   // Single-row layout of the trailer line being painted.
+	trailerMisses []string      // Unknown cluster widths found in the trailer.
+	// Number of bytes at the end of displaySource that are history ghost
+	// text rather than the command itself. Zero when no suggestion is shown.
+	displaySuggestion int
+	// Whether the ghost history suggestion is rendered this frame. False on
+	// submission so the command runs and is painted without the suggestion.
+	showSuggestion bool
+}
+
+type SourceText string
+type ByteOffset int
+type Cells int
+const UnresolvedWidth Cells = -1
+
+type AtomKind int
+
+const (
+	AtomAscii AtomKind = iota
+	AtomControl
+	AtomGrapheme
+	AtomPlaceholder
+	AtomHardBreak
+)
+
+type DisplayAtom struct {
+	SourceStart ByteOffset
+	SourceEnd ByteOffset
+	Width Cells
+	RequiredCells Cells // Space needed before painting, including a guard for measured text.
+	Kind AtomKind
+}
+
+const tabGlyph = "\u25B8"
+const placeholderGlyph = "?"
+
+func (a DisplayAtom) displayText(src SourceText) string {
+	switch a.Kind {
+	case AtomAscii, AtomGrapheme:
+		return string(src[a.SourceStart:a.SourceEnd])
+	case AtomControl:
+		if src[a.SourceStart] == '\t' {
+			return tabGlyph
+		}
+		return controlCaretText(src[a.SourceStart])
+	case AtomPlaceholder:
+		return placeholderGlyph
+	default: // AtomHardBreak
+		return ""
+	}
+}
+
+type WidthCache struct {
+	Entries map[string]Cells
+	missSeen map[string]bool // Reused resolution scratch; cleared before returning.
+}
+
+const maxWidthCacheEntries = 4096
+const maxWidthProbes = 256
+const maxWidthCandidateBytes = 256
+
+// candidateWidthBound bounds every prefix advance, not just the final width.
+func candidateWidthBound(text string) Cells {
+	return 2 * Cells(utf8.RuneCountInString(text))
+}
+
+// remember accepts a validated measurement of complete display text.
+// It returns false for unsupported widths, conflicting entries, or a full cache.
+func (cache *WidthCache) remember(text string, width Cells) bool {
+	if len(text) == 0 || len(text) > maxWidthCandidateBytes || (width < 1 || width > candidateWidthBound(text)) {
+		return false
+	}
+
+	if previous, ok := cache.Entries[text]; ok {
+		return previous == width
+	}
+
+	if len(cache.Entries) >= maxWidthCacheEntries {
+		return false
+	}
+
+	if cache.Entries == nil {
+		cache.Entries = make(map[string]Cells)
+	}
+
+	cache.Entries[strings.Clone(text)] = width
+	return true
+}
+
+var caretText [32]string
+
+func init() {
+	for i := range caretText {
+		caretText[i] = string([]byte{'^', byte(i) + 0x40})
+	}
+}
+
+func controlCaretText(b byte) string {
+	if b == 0x7f {
+		return "^?"
+	}
+	return caretText[b]
+}
+
+func asciiAtom(b byte) (Cells, AtomKind) {
+	switch {
+	case b >= 0x20 && b <= 0x7e:
+		return 1, AtomAscii
+	case b == '\t':
+		return UnresolvedWidth, AtomControl
+	default:
+		return 2, AtomControl
+	}
+}
+
+// asciiAtomsInto atomizes a seven-bit command without segmentation: every byte is its own atom,
+// except \r\n, which is one hard break. Reports false and an empty slice when any byte is outside ASCII;
+// the caller then takes the general (uniseg) path over the complete buffer. No prefix is retained on failure.
+func asciiAtomsInto(dst []DisplayAtom, command SourceText) ([]DisplayAtom, bool) {
+	atoms := dst[:0]
+	for i := 0; i < len(command); i++ {
+		if command[i] >= 0x80 {
+			return atoms, false
+		}
+	}
+
+	for i := 0; i < len(command); i++ {
+		b := command[i]
+		atom := DisplayAtom{SourceStart: ByteOffset(i), SourceEnd: ByteOffset(i + 1)}
+		switch {
+		case b == '\n':
+			atom.Width = 0
+			atom.Kind = AtomHardBreak
+		case b == '\r' && i + 1 < len(command) && command[i+1] == '\n':
+			atom.Width = 0
+			atom.SourceEnd++
+			atom.Kind = AtomHardBreak
+			i++
+		default:
+			atom.Width, atom.Kind = asciiAtom(b)
+		}
+		atom.RequiredCells = atom.Width
+		atoms = append(atoms, atom)
+	}
+	return atoms, true
+}
+
+func isAllPrintableAscii(command SourceText) bool {
+	for i := 0; i < len(command); i++ {
+		if command[i] < 0x20 || command[i] > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
+// layoutPrintableAsciiInto requires printable ASCII, columns >= 2,
+// 0 <= startCol < columns, and 0 <= cursor <= len(command).
+func layoutPrintableAsciiInto(dst []LayoutRow, command SourceText, cursor ByteOffset, startCol Cells, columns Cells) LayoutResult {
+	if columns < 2 || startCol < 0 || startCol >= columns {
+		panic("layoutPrintableAsciiInto: invalid terminal geometry")
+	}
+	if cursor < 0 || int(cursor) > len(command) {
+		panic("layoutPrintableAsciiInto: cursor outside command")
+	}
+
+	rows := dst[:0]
+	res := LayoutResult{}
+	start := ByteOffset(0)
+	col := startCol
+
+	for {
+		count := min(len(command)-int(start), int(columns-col))
+		end := start + ByteOffset(count)
+		final := int(end) == len(command)
+
+		endType := RowEndSoftExact
+		if final {
+			endType = RowEndFinal
+		}
+
+		if cursor >= start && (cursor < end || final) {
+			res.CursorRow = RowIndex(len(rows))
+			res.CursorCol = col + Cells(cursor-start)
+		}
+
+		rows = append(rows, LayoutRow{
+			Text:    string(command[start:end]),
+			Width:   Cells(count),
+			EndType: endType,
+		})
+
+		if final {
+			res.PendingWrap = col+Cells(count) == columns
+			break
+		}
+
+		start = end
+		col = 0
+	}
+
+	res.Rows = rows
+	return res
+}
+
+
+func isC1(cluster string) bool {
+	return len(cluster) == 2 && cluster[0] == 0xc2 && cluster[1] < 0xa0
+}
+
+// segmentAtomsInto atomizes any command by extended grapheme cluster,
+// so a combining mark joins its ASCII base. Grapheme widths (and the tab glyph) are
+// left unresolved for the width cache to fill before layout.
+// Lone invalid bytes and C1 controls become fixed one-cell placeholders; they are never measured or painted raw.
+func segmentAtomsInto(dst []DisplayAtom, command SourceText) []DisplayAtom {
+	atoms := dst[:0]
+	rest := string(command)
+	offset := 0
+	state := -1
+	var cluster string
+	for len(rest) > 0 {
+		cluster, rest, _, state = uniseg.FirstGraphemeClusterInString(rest, state)
+		atom := DisplayAtom{SourceStart: ByteOffset(offset), SourceEnd: ByteOffset(offset + len(cluster))}
+		switch {
+		case cluster == "\n" || cluster == "\r\n":
+			atom.Width, atom.Kind = 0, AtomHardBreak
+		case len(cluster) == 1 && cluster[0] < 0x80:
+			atom.Width, atom.Kind = asciiAtom(cluster[0])
+		case len(cluster) == 1 || isC1(cluster):
+			atom.Width, atom.Kind = 1, AtomPlaceholder
+		default:
+			atom.Width, atom.Kind = UnresolvedWidth, AtomGrapheme
+		}
+		atom.RequiredCells = atom.Width
+		atoms = append(atoms, atom)
+		offset += len(cluster)
+	}
+	return atoms
+}
+
+const maxCandidateEligibilityEntries = 4096
+
+type CandidateEligibilityCache struct {
+	Entries map[string]bool
+}
+
+// allows checks segmentation eligibility, not terminal rendering behavior.
+// Cache overflow and oversized candidates conservatively use placeholders.
+func (cache *CandidateEligibilityCache) allows(candidate string) bool {
+	if len(candidate) == 0 || len(candidate) > maxWidthCandidateBytes {
+		return false
+	}
+
+	if allowed, found := cache.Entries[candidate]; found {
+		return allowed
+	}
+
+	if len(cache.Entries) >= maxCandidateEligibilityEntries {
+		return false
+	}
+
+	rest := "A" + candidate + "A"
+	state := -1
+	allowed := true
+
+	for _, expected := range [...]string{"A", candidate, "A"} {
+		if len(rest) == 0 {
+			allowed = false
+			break
+		}
+
+		var cluster string
+		cluster, rest, _, state = uniseg.FirstGraphemeClusterInString(rest, state)
+		if cluster != expected {
+			allowed = false
+			break
+		}
+	}
+
+	allowed = allowed && len(rest) == 0
+
+	if cache.Entries == nil {
+		cache.Entries = make(map[string]bool)
+	}
+	cache.Entries[strings.Clone(candidate)] = allowed
+	return allowed
+}
+
+// resolveCachedWidths updates atoms in place and returns distinct cache misses.
+// Hard breaks remain zero-width. Uncached display text remains unresolved.
+// Re-segment the source before each call, including after a geometry change.
+func resolveCachedWidths(dst []string, command SourceText, atoms []DisplayAtom, cache *WidthCache, eligibility *CandidateEligibilityCache, columns Cells) []string {
+	clear(dst)
+	misses := dst[:0]
+	seen := cache.missSeen
+	defer func() { clear(cache.missSeen) }()
+	limit := min(maxWidthProbes, max(0, maxWidthCacheEntries - len(cache.Entries)))
+
+	for i := range atoms {
+		atom := &atoms[i]
+		if atom.Width != UnresolvedWidth {
+			continue
+		}
+
+		text := atom.displayText(command)
+		// allows also checks text length
+		if !eligibility.allows(text) || columns < 4 || candidateWidthBound(text) >= columns {
+			atom.Kind = AtomPlaceholder
+			atom.Width = 1
+			atom.RequiredCells = 1
+			continue
+		}
+
+		atom.RequiredCells = candidateWidthBound(text) + 1
+		if width, ok := cache.Entries[text]; ok {
+			atom.Width = width
+			continue
+		}
+
+		if len(misses) >= limit {
+			continue
+		}
+
+		if !seen[text] {
+			if seen == nil {
+				seen = make(map[string]bool)
+				cache.missSeen = seen
+			}
+			seen[text] = true
+			misses = append(misses, text)
+		}
+	}
+
+	return misses
+}
+
+// finishWidthResolution applies newly cached widths and replaces remaining
+// unresolved display atoms with placeholders, preserving their source ranges.
+// Atoms must first pass resolveCachedWidths for the same terminal geometry.
+func finishWidthResolution(command SourceText, atoms []DisplayAtom, cache *WidthCache) {
+	for i := range atoms {
+		atom := &atoms[i]
+		if atom.Width != UnresolvedWidth {
+			continue
+		}
+
+		text := atom.displayText(command)
+
+		if len(text) > maxWidthCandidateBytes {
+			atom.Kind = AtomPlaceholder
+			atom.Width = 1
+			atom.RequiredCells = 1
+			continue
+		}
+
+		atom.RequiredCells = candidateWidthBound(text) + 1
+		if width, ok := cache.Entries[text]; ok {
+			atom.Width = width
+		} else {
+			atom.Kind = AtomPlaceholder
+			atom.Width = 1
+			atom.RequiredCells = 1
+		}
+	}
+}
+
+type RowEnd int
+type AtomIndex int
+type RowIndex int
+
+const (
+	RowEndFinal RowEnd = iota // Final row
+	RowEndSoftExact  	// Filled to exactly the perfect width
+	RowEndSoftEarly  	// We had a wide character at the end, at it didn't fit, so had to end early.
+	RowEndForcedHardWrap // Renderer emits CRLF before the next atom.
+	RowEndHard   		// A literal new line has caused us to move
+)
+
+type LayoutRow struct {
+	Text      string    // direct source slice for ASCII layout
+	AtomStart AtomIndex // general layout: first atom inclusive
+	AtomEnd   AtomIndex // general layout: exclusive; excludes a hard-break atom
+	Width     Cells     // terminal cells occupied, excluding the prompt
+	EndType   RowEnd
+}
+
+type LayoutResult struct {
+	Rows []LayoutRow
+	CursorRow RowIndex
+	CursorCol Cells // zero-based screen column; may equal terminal width at a full row's end
+	PendingWrap bool
+}
+
+// layoutAtomRowsInto wraps resolved atoms without splitting them.
+// Hard breaks have zero width and required space. Printable atoms require
+// 1 <= Width <= RequiredCells <= columns; resolution handles oversized candidates.
+func layoutAtomRowsInto(dst []LayoutRow, atoms []DisplayAtom, startCol Cells, columns Cells) []LayoutRow {
+	if columns < 2 || startCol < 0 || startCol >= columns {
+		panic("layoutAtomRowsInto: invalid terminal geometry")
+	}
+
+	rows := dst[:0]
+	rowStart := AtomIndex(0)
+	rowStartCol := startCol
+	col := startCol
+
+	endRow := func(end AtomIndex, kind RowEnd) {
+		rows = append(rows, LayoutRow{
+			AtomStart: rowStart,
+			AtomEnd:   end,
+			Width:     col - rowStartCol,
+			EndType:   kind,
+		})
+		rowStart = end
+		rowStartCol = 0
+		col = 0
+	}
+
+	for i, atom := range atoms {
+		index := AtomIndex(i)
+
+		if atom.Kind == AtomHardBreak {
+			if atom.Width != 0 || atom.RequiredCells != 0 {
+				panic("layoutAtomRowsInto: nonzero hard-break width")
+			}
+			endRow(index, RowEndHard)
+			rowStart = index + 1
+			continue
+		}
+
+		if atom.Width < 1 || atom.RequiredCells < atom.Width || atom.RequiredCells > columns {
+			panic("layoutAtomRowsInto: unresolved or unsupported atom width")
+		}
+
+		if atom.RequiredCells > columns-col {
+			kind := RowEndForcedHardWrap
+			if atom.RequiredCells == 1 && col == columns {
+				kind = RowEndSoftExact
+			}
+			endRow(index, kind)
+		}
+
+		col += atom.Width
+	}
+
+	endRow(AtomIndex(len(atoms)), RowEndFinal)
+	return rows
+}
+
+func layoutAtomsInto(dst []LayoutRow, atoms []DisplayAtom, cursor ByteOffset, startCol Cells, columns Cells) LayoutResult {
+	if len(atoms) == 0 {
+		if columns < 2 || startCol < 0 || startCol >= columns {
+			panic("layoutAtomsInto: invalid terminal geometry")
+		}
+		if cursor != 0 {
+			panic("layoutAtomsInto: cursor outside command")
+		}
+
+		return LayoutResult{
+			Rows: append(dst[:0], LayoutRow{
+				EndType: RowEndFinal,
+			}),
+			CursorCol: startCol,
+		}
+	}
+
+	rows := layoutAtomRowsInto(dst, atoms, startCol, columns)
+	res := LayoutResult{Rows: rows}
+
+	sourceEnd := atoms[len(atoms) - 1].SourceEnd
+
+	if cursor < 0 {
+		panic(fmt.Sprintf("cursor < 0; cursor=%d", cursor))
+	} else if cursor > sourceEnd {
+		panic(fmt.Sprintf("cursor %d is beyond source end %d", cursor, sourceEnd))
+	}
+
+	lastCol := rows[len(rows) - 1].Width
+	if len(rows) == 1 {
+		lastCol += startCol // Remember we might not have started at 0 from prompt.
+	}
+	res.PendingWrap = lastCol == columns
+
+	for i, row := range rows {
+		col := Cells(0)
+		if i == 0 {
+			col = startCol
+		}
+
+		for j := row.AtomStart; j < row.AtomEnd; j++ {
+			atom := atoms[j]
+			if cursor == atom.SourceStart {
+				res.CursorRow = RowIndex(i)
+				res.CursorCol = col
+				return res
+			}
+			col += atom.Width
+		}
+
+		// The gap before a newline belongs to the row it ends.
+		if row.EndType == RowEndHard && cursor == atoms[row.AtomEnd].SourceStart {
+			// atoms[row.AtomEnd] is the newline atom excluded from this row.
+			res.CursorRow = RowIndex(i)
+			res.CursorCol = col
+			return res
+		}
+
+		if row.EndType == RowEndFinal && cursor == sourceEnd {
+			res.CursorRow = RowIndex(i)
+			res.CursorCol = col
+			return res
+		}
+	}
+
+	panic(fmt.Sprintf("layoutAtomsInto: cursor %d not found in any row (source end %d)", cursor, sourceEnd))
 }
 
 func newLogInstanceID() string {
@@ -1001,6 +1589,7 @@ func (state *TermState) resetHistorySearch() {
 func (state *TermState) resetTabCycle() {
 	state.tabCycleActive = false
 	state.tabCycleIndex = -1
+	state.tabCycleSource = ""
 	state.tabCycleStart = 0
 	state.tabCycleEnd = 0
 	state.tabCycleTokenType = EOF
@@ -1013,6 +1602,7 @@ func (state *TermState) resetTabCycle() {
 func (state *TermState) resetLastArgCycle() {
 	state.lastArgCycleActive = false
 	state.lastArgCycleIndex = 0
+	state.lastArgCycleSource = ""
 	state.lastArgCycleStart = 0
 	state.lastArgCycleEnd = 0
 }
@@ -1057,6 +1647,7 @@ func (state *TermState) cycleLastArgument() {
 	if !state.lastArgCycleActive {
 		state.lastArgCycleActive = true
 		state.lastArgCycleIndex = 0
+		state.lastArgCycleSource = state.currentCommand
 		state.lastArgCycleStart = state.index
 		state.lastArgCycleEnd = state.index
 	}
@@ -1068,8 +1659,8 @@ func (state *TermState) cycleLastArgument() {
 			continue
 		}
 
+		state.currentCommand = state.lastArgCycleSource
 		state.replaceText(lastArg, state.lastArgCycleStart, state.lastArgCycleEnd)
-		state.lastArgCycleEnd = state.index
 		state.lastArgCycleIndex = i + 1
 		return
 	}
@@ -1191,54 +1782,55 @@ func completionMaxWidth(matches []string) int {
 	return maxWidth
 }
 
-func completionRowsNeeded(matches []string, rowLimit int, maxWidth int) int {
-	if len(matches) == 0 {
-		return 0
-	}
-	layout := completionLayoutFor(matches, rowLimit, maxWidth)
-	return layout.rows
-}
+type highlightRange struct{ Start, End int }
 
-func completionDisplayRows(matches []string, highlightIndex int, rowLimit int, availableRows int, maxWidth int) []string {
+// completionDisplayRowsPlain returns unstyled rows and, per row, the byte
+// range of the highlighted item (empty when none). Callers apply styling.
+func completionDisplayRowsPlain(matches []string, highlightIndex int, rowLimit int, availableRows int, maxWidth int) ([]string, []highlightRange) {
 	if len(matches) == 0 || availableRows <= 0 {
-		return nil
+		return nil, nil
 	}
 
 	layout := completionLayoutFor(matches, rowLimit, maxWidth)
 	if layout.rows <= availableRows {
-		return completionRows(matches, highlightIndex, layout, layout.rows)
+		return completionRowsPlain(matches, highlightIndex, layout, layout.rows)
 	}
 
 	rowsToShow := availableRows - 1
 	if rowsToShow <= 0 {
-		return []string{fmt.Sprintf("[%d] more items..", len(matches))}
+		return []string{fmt.Sprintf("[%d] more items..", len(matches))}, []highlightRange{{}}
 	}
 
-	rows := completionRows(matches, highlightIndex, layout, rowsToShow)
+	rows, highlights := completionRowsPlain(matches, highlightIndex, layout, rowsToShow)
 	hiddenCount := len(matches) - completionDisplayedCount(layout, rowsToShow)
 	rows = append(rows, fmt.Sprintf("[%d] more items..", hiddenCount))
-	return rows
+	highlights = append(highlights, highlightRange{})
+	return rows, highlights
 }
 
-func completionRows(matches []string, highlightIndex int, layout completionLayout, rows int) []string {
+func completionRowsPlain(matches []string, highlightIndex int, layout completionLayout, rows int) ([]string, []highlightRange) {
 	if rows <= 0 {
-		return nil
+		return nil, nil
 	}
 	if rows > layout.rows {
 		rows = layout.rows
 	}
 
 	lines := make([]string, 0, rows)
+	highlights := make([]highlightRange, 0, rows)
 	for row := 0; row < rows; row++ {
 		line := ""
+		highlight := highlightRange{}
 		for col := 0; col < layout.columns; col++ {
 			index := col*layout.rows + row
 			if index >= len(matches) {
 				break
 			}
 			raw := matches[index]
-			display := completionItemDisplay(raw, index == highlightIndex)
-			line += display
+			if index == highlightIndex {
+				highlight = highlightRange{Start: len(line), End: len(line) + len(raw)}
+			}
+			line += raw
 			nextIndex := index + layout.rows
 			if nextIndex < len(matches) {
 				pad := layout.colWidths[col] - utf8.RuneCountInString(raw)
@@ -1250,10 +1842,11 @@ func completionRows(matches []string, highlightIndex int, layout completionLayou
 		}
 		if len(line) > 0 {
 			lines = append(lines, line)
+			highlights = append(highlights, highlight)
 		}
 	}
 
-	return lines
+	return lines, highlights
 }
 
 func completionDisplayedCount(layout completionLayout, rows int) int {
@@ -1267,42 +1860,7 @@ func completionDisplayedCount(layout completionLayout, rows int) int {
 	return displayed
 }
 
-func completionItemDisplay(value string, highlight bool) string {
-	if !highlight {
-		return value
-	}
-	return "\033[7m" + value + "\033[0m"
-}
-
-func (state *TermState) clearTabCompletionsDisplay() {
-	var displayed []string
-	if state.currentTabComplete == 0 {
-		displayed = state.tabCompletions1
-	} else {
-		displayed = state.tabCompletions0
-	}
-
-	if len(displayed) == 0 {
-		return
-	}
-
-	availableRows := state.numRows - state.promptRow
-	if availableRows < 0 {
-		availableRows = 0
-	}
-	columnLimit := min(tabCompletionColumnLimit, availableRows)
-	clearLines := completionDisplayRows(displayed, -1, columnLimit, availableRows, state.numCols)
-	clearCount := len(clearLines)
-	for i := 0; i < clearCount; i++ {
-		fmt.Fprintf(os.Stdout, "\n\033[2K")
-	}
-	for i := 0; i < clearCount; i++ {
-		fmt.Fprintf(os.Stdout, "\033[A")
-	}
-
-	fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index)
-}
-
+// TODO: Why is this necessary.
 func (state *TermState) isTabToken(token TerminalToken) bool {
 	if t, ok := token.(AsciiToken); ok && t.Char == 9 {
 		return true
@@ -1414,8 +1972,8 @@ func (state *TermState) cycleTabCompletion(direction int) {
 		state.tabCycleIndex = len(state.tabCycleMatches) - 1
 	}
 	insertString := state.buildCompletionInsert(state.tabCycleMatches[state.tabCycleIndex], state.tabCycleTokenType, state.tabCycleAllFiles)
+	state.currentCommand = state.tabCycleSource
 	state.replaceText(insertString, state.tabCycleStart, state.tabCycleEnd)
-	state.tabCycleEnd = state.index
 	state.setTabCompletions(state.tabCycleMatches)
 }
 
@@ -1431,8 +1989,8 @@ func (state *TermState) selectTabCompletion(index int) {
 	}
 	state.tabCycleIndex = index
 	insertString := state.buildCompletionInsert(state.tabCycleMatches[state.tabCycleIndex], state.tabCycleTokenType, state.tabCycleAllFiles)
+	state.currentCommand = state.tabCycleSource
 	state.replaceText(insertString, state.tabCycleStart, state.tabCycleEnd)
-	state.tabCycleEnd = state.index
 	state.setTabCompletions(state.tabCycleMatches)
 }
 
@@ -1442,7 +2000,7 @@ func (state *TermState) cycleTabCompletionColumn(direction int) {
 	}
 
 	state.UpdateSize()
-	availableRows := state.numRows - state.promptRow
+	availableRows := state.numRows - state.commandRegion.PaintedRows
 	if availableRows < 0 {
 		availableRows = 0
 	}
@@ -1506,8 +2064,8 @@ func (state *TermState) historySearch(direction int) {
 				continue
 			}
 			state.historySearchIndex = i
-			state.currentCommand = []rune(history[i])
-			state.index = len(state.currentCommand)
+			state.currentCommand = SourceText(history[i])
+			state.index = state.commandEnd()
 			state.historyIndex = len(history) - i
 			return
 		}
@@ -1520,213 +2078,21 @@ func (state *TermState) historySearch(direction int) {
 				continue
 			}
 			state.historySearchIndex = i
-			state.currentCommand = []rune(history[i])
-			state.index = len(state.currentCommand)
+			state.currentCommand = SourceText(history[i])
+			state.index = state.commandEnd()
 			state.historyIndex = len(history) - i
 			return
 		}
 	}
 
 	if direction > 0 && current != state.historySearchOriginal {
-		state.currentCommand = []rune(state.historySearchOriginal)
-		state.index = len(state.currentCommand)
+		state.currentCommand = SourceText(state.historySearchOriginal)
+		state.index = state.commandEnd()
 		state.resetHistorySearch()
 		return
 	}
 
 	fmt.Fprintf(os.Stdout, "\a")
-}
-
-func (s *TermState) Render(renderHistory bool) {
-	s.renderBuffer = s.renderBuffer[:0] // Clear the buffer
-	// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
-	// state.index = 0
-	// ClearToEnd()
-	s.renderBuffer = append(s.renderBuffer, fmt.Sprintf("\033[%dG", s.promptLength+1)...)
-	s.renderBuffer = append(s.renderBuffer, "\033[K"...)
-
-	// Lex current command
-	s.l.allowUnterminatedString = true
-	s.l.emitWhitespace = true
-	s.l.emitComments = true
-	s.l.resetInput(string(s.currentCommand))
-	defer func() {
-		s.l.allowUnterminatedString = false
-		s.l.emitWhitespace = false
-		s.l.emitComments = false
-	}()
-
-	tokens, err := s.l.Tokenize()
-	commandLiteralIndex := -1
-	firstTokenIsBinary := false
-	if err != nil {
-		for _, r := range s.currentCommand {
-			s.renderBuffer = utf8.AppendRune(s.renderBuffer, r)
-		}
-	} else {
-		commandLiteralIndex = s.commandLiteralTokenIndex(tokens)
-		_, firstTokenIsBinary = s.isFirstTokenBinary(tokens)
-
-		for i, t := range tokens {
-			if t.Type == STRING || t.Type == SINGLEQUOTESTRING || t.Type == FORMATSTRING {
-				s.renderBuffer = append(s.renderBuffer, "\033[31m"...)
-				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
-				s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
-			} else if t.Type == UNFINISHEDSTRING || t.Type == UNFINISHEDSINGLEQUOTESTRING {
-				s.renderBuffer = append(s.renderBuffer, "\033[91m"...)
-				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
-				s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
-			} else if t.Type == UNFINISHEDPATH {
-				s.renderBuffer = append(s.renderBuffer, "\033[95m"...)
-				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
-				s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
-			} else if t.Type == PATH {
-				s.renderBuffer = append(s.renderBuffer, "\033[35m"...)
-				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
-				s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
-			} else if t.Type == DATETIME {
-				s.renderBuffer = append(s.renderBuffer, "\033[36m"...)
-				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
-				s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
-			} else if t.Type == TRUE || t.Type == FALSE {
-				s.renderBuffer = append(s.renderBuffer, "\033[34m"...)
-				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
-				s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
-			} else if t.Type == VARSTORE {
-				s.renderBuffer = append(s.renderBuffer, "\033[32m"...)
-				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
-				s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
-			} else if t.Type == VARRETRIEVE {
-				s.renderBuffer = append(s.renderBuffer, "\033[33m"...)
-				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
-				s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
-			} else if t.Type == ENVSTORE {
-				s.renderBuffer = append(s.renderBuffer, "\033[32m"...)
-				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
-				s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
-			} else if t.Type == ENVRETREIVE || t.Type == ENVCHECK {
-				s.renderBuffer = append(s.renderBuffer, "\033[33m"...)
-				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
-				s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
-			} else if t.Type == LITERAL {
-				underlineLiteral := false
-				if firstTokenIsBinary {
-					if _, ok := BuiltInList[t.Lexeme]; ok || IsDefinitionDefined(t.Lexeme, s.stdLibDefs) {
-						underlineLiteral = true
-					}
-				}
-				if i == commandLiteralIndex {
-					s.renderBuffer = append(s.renderBuffer, "\033[4;34m"...)
-				} else if underlineLiteral {
-					s.renderBuffer = append(s.renderBuffer, "\033[4m"...)
-				}
-				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
-				if i == commandLiteralIndex || underlineLiteral {
-					s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
-				}
-			} else {
-				if i == commandLiteralIndex {
-					s.renderBuffer = append(s.renderBuffer, "\033[4;34m"...)
-				}
-				s.renderBuffer = append(s.renderBuffer, t.Lexeme...)
-				if i == commandLiteralIndex {
-					s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
-				}
-			}
-		}
-	}
-
-	// Print the current command
-	// for _, r := range s.currentCommand {
-	// s.renderBuffer = utf8.AppendRune(s.renderBuffer, r)
-	// }
-
-	// Search for history
-	if (renderHistory) {
-		historySearchNew := SearchHistory(string(s.currentCommand), historyToSave)
-		s.historyComplete = []rune(historySearchNew)
-		numToAdd := len(s.historyComplete) - len(s.currentCommand)
-		if numToAdd < 0 {
-			historySearch := SearchHistory(string(s.currentCommand), s.previousHistory)
-			s.historyComplete = []rune(historySearch)
-			numToAdd = len(s.historyComplete) - len(s.currentCommand)
-		}
-
-		// Print escape code for light gray
-		s.renderBuffer = append(s.renderBuffer, "\033[90m"...)
-		for i := 0; i < numToAdd; i++ {
-			s.renderBuffer = utf8.AppendRune(s.renderBuffer, s.historyComplete[len(s.currentCommand)+i])
-		}
-		// Reset color
-		s.renderBuffer = append(s.renderBuffer, "\033[0m"...)
-	}
-
-	var currentTabCompletion []string
-	var previousTabCompletion []string
-	if s.currentTabComplete == 0 {
-		currentTabCompletion = s.tabCompletions0
-		previousTabCompletion = s.tabCompletions1
-	} else {
-		currentTabCompletion = s.tabCompletions1
-		previousTabCompletion = s.tabCompletions0
-	}
-
-	availableRows := s.numRows - s.promptRow
-	if availableRows < 0 {
-		availableRows = 0
-	}
-	columnLimit := min(tabCompletionColumnLimit, availableRows)
-	rowsNeeded := completionRowsNeeded(currentTabCompletion, columnLimit, s.numCols)
-	if rowsNeeded > availableRows {
-		linesPossible := max(0, s.promptRow-s.numPromptLines)
-		diff := rowsNeeded - availableRows
-		if diff > 0 && linesPossible > 0 {
-			s.ScrollDown(min(diff, linesPossible))
-			availableRows = s.numRows - s.promptRow
-			if availableRows < 0 {
-				availableRows = 0
-			}
-			columnLimit = min(tabCompletionColumnLimit, availableRows)
-		}
-	}
-
-	highlightIndex := -1
-	if s.tabCycleActive {
-		highlightIndex = s.tabCycleIndex
-	}
-
-	previousLines := completionDisplayRows(previousTabCompletion, -1, columnLimit, availableRows, s.numCols)
-	for i := 0; i < len(previousLines); i++ {
-		s.renderBuffer = append(s.renderBuffer, "\n"...)
-		s.renderBuffer = append(s.renderBuffer, "\033[2K"...)
-	}
-	for i := 0; i < len(previousLines); i++ {
-		s.renderBuffer = append(s.renderBuffer, "\033[A"...)
-	}
-
-	currentLines := completionDisplayRows(currentTabCompletion, highlightIndex, columnLimit, availableRows, s.numCols)
-	for i := 0; i < len(currentLines); i++ {
-		s.renderBuffer = append(s.renderBuffer, "\r\n"...)
-		s.renderBuffer = append(s.renderBuffer, []byte(currentLines[i])...)
-	}
-
-	for i := 0; i < len(currentLines); i++ {
-		s.renderBuffer = append(s.renderBuffer, "\033[A"...)
-	}
-
-	// Move cursor to correct position. This often will backtrack because of history completion.
-	pos := s.promptLength + 1 + s.index
-	s.renderBuffer = append(s.renderBuffer, fmt.Sprintf("\033[%dG", pos)...)
-
-	// s.Logf("Term index: %d, command length: %d, num completions: %d, available rows: %d, prompt row: %d, numRows: %d\n", s.index, len(s.currentCommand), len(currentTabCompletion), availableRows, s.promptRow, s.numRows)
-
-	// Push the buffer to stdout
-	// fmt.Fprintf(s.f, "Rendering buffer: %s\n", string(s.renderBuffer))
-	os.Stdout.Write(s.renderBuffer)
-
-	// Move cursor back to the beginning of the line.
-	// s.clearToPrompt()
-	// fmt.Fprintf(os.Stdout, "%s", string(s.currentCommand))
 }
 
 func (s *TermState) commandLiteralTokenIndex(tokens []Token) int {
@@ -1903,6 +2269,16 @@ func (state *TermState) runCompletionDefinitions(defs []MShellDefinition, args [
 	matches := make([]string, 0)
 	seen := map[string]struct{}{}
 
+	// A completion definition answers on the stack. Anything it or the
+	// processes it runs would print belongs to nobody: the editor owns the
+	// screen while a completion runs, so a stray "fatal: not a git
+	// repository" from a helper command would land in the command area.
+	completionContext := state.context
+	completionContext.StandardOutput = io.Discard
+	completionContext.StandardError = io.Discard
+	completionContext.ShouldCloseOutput = false
+	completionContext.ShouldCloseError = false
+
 	for _, def := range defs {
 		completionList := NewList(len(args))
 		for i, arg := range args {
@@ -1910,7 +2286,7 @@ func (state *TermState) runCompletionDefinitions(defs []MShellDefinition, args [
 		}
 		completionStack := MShellStack{completionList}
 		callStackItem := CallStackItem{MShellParseItem: def.NameToken, Name: def.Name, CallStackType: CALLSTACKDEF}
-		result := state.evalState.Evaluate(def.Items, &completionStack, state.context, state.stdLibDefs, callStackItem)
+		result := state.evalState.Evaluate(def.Items, &completionStack, completionContext, state.stdLibDefs, callStackItem)
 		if !result.Success {
 			state.Logf("Completion definition '%s' failed to evaluate\n", def.Name)
 			continue
@@ -1949,16 +2325,6 @@ func (state *TermState) runCompletionDefinitions(defs []MShellDefinition, args [
 	return matches
 }
 
-func (state *TermState) clearToPrompt() {
-	fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1)
-	// state.index = 0
-	ClearToEnd()
-}
-
-func ClearToEnd() {
-	fmt.Fprintf(os.Stdout, "\033[K")
-}
-
 func (state *TermState) ScrollDown(numLines int) {
 	// See https://github.com/microsoft/terminal/issues/17320
 	// and https://github.com/microsoft/terminal/issues/11078
@@ -1989,6 +2355,7 @@ func (state *TermState) ScrollDown(numLines int) {
 	// Move cursor
 	fmt.Fprintf(os.Stdout, "\033[%d;%dH", curRow-numLines, curCol)
 	state.promptRow = state.promptRow - numLines
+	state.commandRegion.OriginRow -= OneBasedTerminalCoord(numLines)
 }
 
 func (state *TermState) ClearScreen() {
@@ -2000,13 +2367,19 @@ func (state *TermState) ClearScreen() {
 
 	// Send off cursor position request
 	state.UpdateSize()
-	curRow, _, err := state.getCurrentPos()
+	row, _, err := state.getCurrentPos()
 	if err != nil {
 		state.Logf("Error getting cursor position: %s\n", err)
 		return
 	}
+	// Clearing needs an absolute row; ordinary prompt painting does not.
+	state.commandRegion.OriginRow = OneBasedTerminalCoord(row-int(state.commandRegion.CursorRow))
+	state.commandRegion.RelativeOrigin = false
+	state.promptRow = int(state.commandRegion.OriginRow)
 
-	rowsToScroll := curRow - state.numPromptLines
+	// The cursor may sit on a later row of a wrapped command; scroll so the
+	// prompt's first line reaches the top, not the cursor's row.
+	rowsToScroll := max(0, int(state.commandRegion.OriginRow) - state.numPromptLines)
 	state.ScrollDown(rowsToScroll)
 	state.Logf("Cleared screen, scrolled %d rows\n", rowsToScroll)
 	// fmt.Fprintf(state.f, "%d %d %d\n", curRow, state.numPromptLines, rowsToScroll)
@@ -2034,52 +2407,36 @@ var knownCommands = map[string]struct{}{
 	"cdp": {},
 }
 
-// // printText prints the text at the current cursor position, moving existing text to the right.
-// func (state *TermState) printText(text string) {
-// fmt.Fprintf(os.Stdout, "\033[K") // Delete to end of line
-// fmt.Fprintf(os.Stdout, "%s", text)
-// fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
-// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + state.index + len(text))
-
-// state.currentCommand = append(state.currentCommand[:state.index], append([]rune(text), state.currentCommand[state.index:]...)...)
-// state.index = state.index + len(text)
-// }
-
-func (state *TermState) replaceText(newText string, replaceStart int, replaceEnd int) {
-	// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + replaceStart)
-	// fmt.Fprintf(os.Stdout, "\033[K") // Delete to end of line
-	// fmt.Fprintf(os.Stdout, "%s", newText)
-	// fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[replaceEnd:]))
-	// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + replaceStart + len(newText))
-
-	commandLength := len(state.currentCommand)
-	if replaceStart < 0 {
-		replaceStart = 0
+// replaceText expands a nonempty selection to whole source graphemes.
+// Insertion and the resulting cursor snap forward if resegmentation joins text.
+func (state *TermState) replaceText(newText string, replaceStart ByteOffset, replaceEnd ByteOffset) {
+	replaceStart = max(0, min(replaceStart, state.commandEnd()))
+	replaceEnd = max(0, min(replaceEnd, state.commandEnd()))
+	replaceStart = min(replaceStart, replaceEnd)
+	if replaceStart == replaceEnd {
+		replaceStart = graphemeCeil(state.currentCommand, replaceStart)
+		replaceEnd = replaceStart
+	} else {
+		replaceStart = graphemeFloor(state.currentCommand, replaceStart)
+		replaceEnd = graphemeCeil(state.currentCommand, replaceEnd)
 	}
-	if replaceEnd < 0 {
-		replaceEnd = 0
-	}
-	if replaceStart > commandLength {
-		replaceStart = commandLength
-	}
-	if replaceEnd > commandLength {
-		replaceEnd = commandLength
-	}
-	if replaceStart > replaceEnd {
-		replaceStart = replaceEnd
-	}
-
-	insertRunes := []rune(newText)
-	state.currentCommand = append(state.currentCommand[:replaceStart], append(insertRunes, state.currentCommand[replaceEnd:]...)...)
-	state.index = replaceStart + len(insertRunes)
-	if state.index > len(state.currentCommand) {
-		state.index = len(state.currentCommand)
-	}
+	state.currentCommand = state.currentCommand[:replaceStart] + SourceText(newText) + state.currentCommand[replaceEnd:]
+	state.index = graphemeCeil(state.currentCommand, replaceStart + ByteOffset(len(newText)))
 	state.resetHistorySearch()
 }
 
 type TerminalToken interface {
 	String() string
+}
+
+// PasteToken is one literal edit. Its contents must never pass through key
+// bindings, even when they contain Enter, Tab, escape sequences, or chords.
+type PasteToken struct {
+	Text string
+}
+
+func (t PasteToken) String() string {
+	return fmt.Sprintf("PasteToken: %q", t.Text)
 }
 
 type AsciiToken struct {
@@ -2101,6 +2458,132 @@ func (t AsciiToken) String() string {
 type CsiToken struct {
 	FinalChar byte
 	Params    []byte
+}
+
+// OneBasedTerminalCoord is a terminal-reported row or column, starting at 1.
+type OneBasedTerminalCoord int
+
+// This is a supported-terminal limit, not a limit imposed by the CSI protocol.
+const maxTerminalCoordinate OneBasedTerminalCoord = 9999
+
+type CursorReport struct {
+	Row    OneBasedTerminalCoord
+	Column OneBasedTerminalCoord
+}
+
+func parseCursorReport(token CsiToken) (CursorReport, error) {
+	if token.FinalChar != 'R' {
+		return CursorReport{}, fmt.Errorf("cursor report: expected final R")
+	}
+
+	var coordinates [2]OneBasedTerminalCoord
+	field := 0
+	for _, b := range token.Params {
+		if b == ';' {
+			if field != 0 || coordinates[0] == 0 {
+				return CursorReport{}, fmt.Errorf("cursor report: expected positive row;column")
+			}
+			field = 1
+			continue
+		}
+		if b < '0' || b > '9' {
+			return CursorReport{}, fmt.Errorf("cursor report: invalid coordinate byte %q", b)
+		}
+
+		// Each previous value is at most 9999, so this cannot overflow an int.
+		value := coordinates[field]*10 + OneBasedTerminalCoord(b-'0')
+		if value > maxTerminalCoordinate {
+			return CursorReport{}, fmt.Errorf("cursor report: coordinate exceeds %d", maxTerminalCoordinate)
+		}
+		coordinates[field] = value
+	}
+	if field != 1 || coordinates[1] == 0 {
+		return CursorReport{}, fmt.Errorf("cursor report: expected positive row;column")
+	}
+
+	return CursorReport{Row: coordinates[0], Column: coordinates[1]}, nil
+}
+
+// widthFromCursorReport interprets a probe started at column one.
+// The caller must use a cleared scratch row, at least four columns, and
+// candidateWidthBound(candidate) < columns before emitting any probe bytes.
+// This validates one observation; it does not update the width cache.
+func widthFromCursorReport(report CursorReport, scratchRow OneBasedTerminalCoord, bound Cells) (Cells, error) {
+	if scratchRow < 1 || scratchRow > maxTerminalCoordinate {
+		return 0, fmt.Errorf("width probe: invalid scratch row %d", scratchRow)
+	}
+	if report.Row != scratchRow {
+		return 0, fmt.Errorf("width probe: expected row %d, got %d", scratchRow, report.Row)
+	}
+
+	width := Cells(report.Column) - 1
+	if bound < 1 || report.Column > maxTerminalCoordinate || width < 1 || width > bound {
+		return 0, fmt.Errorf("width probe: reply column %d exceeds supported advance 1..%d", report.Column, bound)
+	}
+	return width, nil
+}
+
+type WidthProbeBatch struct {
+	output []byte // Reused for the probe burst and subsequent cleanup write.
+	seen map[string]bool // Reused candidate deduplication scratch.
+	ScratchRow OneBasedTerminalCoord
+	ScratchMinRow OneBasedTerminalCoord // Nonzero permits learning the row from the first width reply.
+	ScratchMaxRow OneBasedTerminalCoord
+	Candidates []string // Frozen in the order probes were sent.
+	Widths []Cells      // Staged observations, matching Candidates.
+	Failure error       // First failure; prevents accepting further results.
+	RepliesReceived int
+}
+
+func (batch *WidthProbeBatch) Clear() {
+	batch.output = batch.output[:0]
+	clear(batch.seen)
+	clear(batch.Candidates)
+	batch.Candidates = batch.Candidates[:0]
+	batch.Widths = batch.Widths[:0]
+	batch.ScratchRow = 0
+	batch.ScratchMinRow = 0
+	batch.ScratchMaxRow = 0
+	batch.Failure = nil
+	batch.RepliesReceived = 0
+}
+
+
+// acceptReply receives a token routed to this batch by the query coordinator.
+// Ordinary keyboard tokens must be handled separately.
+func (batch *WidthProbeBatch) acceptReply(token CsiToken) error {
+	batch.RepliesReceived++
+
+	if batch.Failure != nil {
+		return batch.Failure
+	}
+
+	if len(batch.Widths) >= len(batch.Candidates) {
+		batch.Failure = fmt.Errorf("width batch: unexpected extra reply")
+		return batch.Failure
+	}
+
+	report, err := parseCursorReport(token)
+	if err != nil {
+		batch.Failure = err
+		return err
+	}
+
+	if batch.ScratchRow == 0 && batch.ScratchMinRow > 0 {
+		if report.Row < batch.ScratchMinRow || report.Row > batch.ScratchMaxRow {
+			batch.Failure = fmt.Errorf("width probe: scratch row %d outside visible region", report.Row)
+			return batch.Failure
+		}
+		batch.ScratchRow = report.Row
+	}
+	width, err := widthFromCursorReport(report, batch.ScratchRow, candidateWidthBound(batch.Candidates[len(batch.Widths)]))
+	if err != nil {
+		batch.Failure = err
+		return err
+	}
+
+	batch.Widths = append(batch.Widths, width)
+	return nil
 }
 
 func (t CsiToken) String() string {
@@ -2154,6 +2637,7 @@ var SpecialKeyName = []string{
 	"KEY_ALT_F",
 	"KEY_ALT_O",
 	"KEY_ALT_DOT",
+	"KEY_ALT_SHIFT_R",
 	"KEY_CTRL_DELETE",
 	"KEY_SHIFT_TAB",
 }
@@ -2187,6 +2671,7 @@ const (
 	KEY_ALT_F
 	KEY_ALT_O
 	KEY_ALT_DOT
+	KEY_ALT_SHIFT_R
 
 	KEY_CTRL_DELETE
 	KEY_SHIFT_TAB
@@ -2202,6 +2687,15 @@ type StdinReaderState struct {
 	array []byte
 	i     int
 	n     int
+}
+
+// UnreadByte pushes back the byte most recently returned by ReadByte so the
+// next ReadByte returns it again. Every returned byte came from the buffer,
+// so one step back is always valid; calling this twice in a row is not.
+func (state *StdinReaderState) UnreadByte() {
+	if state.i > 0 {
+		state.i--
+	}
 }
 
 func (state *StdinReaderState) ReadByte() (byte, error) {
@@ -2289,6 +2783,23 @@ func (state *TermState) StdinReader(stdInChan chan byte, pauseChan chan bool) {
 	}
 }
 
+func (state *TermState) readInputToken() (TerminalToken, error) {
+	if state.queuedInputIndex < len(state.queuedInput) {
+		token := state.queuedInput[state.queuedInputIndex]
+		state.queuedInputIndex++
+
+		if state.queuedInputIndex == len(state.queuedInput) {
+			clear(state.queuedInput)
+			state.queuedInput = state.queuedInput[:0]
+			state.queuedInputIndex = 0
+		}
+
+		return token, nil
+	}
+
+	return state.InteractiveLexer(state.stdInState)
+}
+
 // Common Pn Values for ESC [ Pn ~:
 // Pn Value	Key	Notes
 // 1	Home	Sometimes ESC [ H or ESC [ 7 ~
@@ -2320,6 +2831,86 @@ func (state *TermState) StdinReader(stdInChan chan byte, pauseChan chan bool) {
 // 33	F19 (Shift+F7)	Sometimes, varies
 // 34	F20 (Shift+F8)	Sometimes, varies
 
+// The start marker has already been consumed. Read raw bytes until the exact
+// end marker, including across input-buffer boundaries. Similar escape
+// sequences and nested start markers are ordinary pasted text.
+func readBracketedPaste(reader *StdinReaderState) (TerminalToken, error) {
+	const end = "\x1b[201~"
+	text := make([]byte, 0, 1024)
+	for {
+		c, err := reader.ReadByte()
+		if err != nil {
+			if err == io.EOF {
+				err = io.ErrUnexpectedEOF
+			}
+			return nil, fmt.Errorf("Error reading bracketed paste: %w", err)
+		}
+		text = append(text, c)
+		if len(text) >= len(end) && string(text[len(text)-len(end):]) == end {
+			value := string(text[:len(text)-len(end)])
+			value = strings.ReplaceAll(value, "\r\n", "\n")
+			value = strings.ReplaceAll(value, "\r", "\n")
+			return PasteToken{Text: value}, nil
+		}
+	}
+}
+
+// maxControlStringBytes bounds how much of an unterminated control string
+// the lexer will swallow before giving up, so a stray ESC ] in pasted text
+// cannot eat every following keystroke.
+const maxControlStringBytes = 4096
+
+// skipControlString consumes the body of an OSC, DCS, APC, PM, or SOS string
+// whose introducer has already been read. The string ends at BEL or at the
+// ST sequence ESC \. An ESC followed by anything else also ends it; that
+// byte is pushed back so it is lexed normally. Returns the read error, if any.
+func skipControlString(reader *StdinReaderState) error {
+	for n := 0; n < maxControlStringBytes; n++ {
+		c, err := reader.ReadByte()
+		if err != nil {
+			return err
+		}
+		if c == 0x07 {
+			return nil
+		}
+		if c == 0x1b {
+			next, err := reader.ReadByte()
+			if err != nil {
+				return err
+			}
+			if next != '\\' {
+				reader.UnreadByte()
+			}
+			return nil
+		}
+	}
+	return nil
+}
+
+// homeEndKey recognizes the Home and End encodings that carry CSI
+// parameters. Terminals never agreed on one: the VT220 editing keypad
+// numbering gives ESC[1~ and ESC[4~ (Linux console, screen, tmux, PuTTY),
+// rxvt uses ESC[7~ and ESC[8~, and xterm sends ESC[1;<mod>H and
+// ESC[1;<mod>F when a modifier is held. The plain xterm forms ESC[H,
+// ESC[F, ESC O H, and ESC O F are matched before parameters are read.
+// Modifiers are ignored: a modified Home is still Home.
+func homeEndKey(final byte, params string) (SpecialKey, bool) {
+	switch final {
+	case '~':
+		switch params {
+		case "1", "7":
+			return KEY_HOME, true
+		case "4", "8":
+			return KEY_END, true
+		}
+	case 'H':
+		return KEY_HOME, true
+	case 'F':
+		return KEY_END, true
+	}
+	return 0, false
+}
+
 // This is intended to a be a lexer for the interactive mode.
 // It should be operating in a goroutine.
 func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (TerminalToken, error) {
@@ -2334,7 +2925,7 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 			if err == io.EOF {
 				return EofTerminalToken{}, nil
 			} else {
-				return nil, fmt.Errorf("Error reading from stdin: %s", err)
+				return nil, fmt.Errorf("Error reading from stdin: %w", err)
 				// fmt.Fprintf(state.f, "Error reading from stdin: %s\n", err)
 			}
 		}
@@ -2349,7 +2940,7 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 				if err == io.EOF {
 					return EofTerminalToken{}, nil
 				} else {
-					return nil, fmt.Errorf("Error reading from stdin: %s", err)
+					return nil, fmt.Errorf("Error reading from stdin: %w", err)
 				}
 			}
 
@@ -2360,7 +2951,7 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 					if err == io.EOF {
 						return EofTerminalToken{}, nil
 					} else {
-						return nil, fmt.Errorf("Error reading from stdin: %s", err)
+						return nil, fmt.Errorf("Error reading from stdin: %w", err)
 					}
 				}
 
@@ -2380,6 +2971,10 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 					return KEY_RIGHT, nil
 				} else if c == 68 { // Left arrow
 					return KEY_LEFT, nil
+				} else if c == 72 { // ESC O H, Home in application cursor-key mode
+					return KEY_HOME, nil
+				} else if c == 70 { // ESC O F, End in application cursor-key mode
+					return KEY_END, nil
 				} else {
 					// Unknown escape sequence
 					state.Logf("Unknown escape sequence: ESC O %d\n", c)
@@ -2393,7 +2988,7 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 					if err == io.EOF {
 						return EofTerminalToken{}, nil
 					} else {
-						return nil, fmt.Errorf("Error reading from stdin: %s", err)
+						return nil, fmt.Errorf("Error reading from stdin: %w", err)
 					}
 				}
 
@@ -2405,7 +3000,7 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 							if err == io.EOF {
 								return EofTerminalToken{}, nil
 							} else {
-								return nil, fmt.Errorf("Error reading from stdin: %s", err)
+								return nil, fmt.Errorf("Error reading from stdin: %w", err)
 							}
 						}
 
@@ -2425,9 +3020,9 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 					} else if c == 68 {
 						// Left arrow
 						return KEY_LEFT, nil
-					} else if c == 70 {
+					} else if c == 70 { // ESC [ F, xterm End
 						return KEY_END, nil
-					} else if c == 72 {
+					} else if c == 72 { // ESC [ H, xterm Home
 						return KEY_HOME, nil
 					} else if c == 90 {
 						return KEY_SHIFT_TAB, nil
@@ -2447,15 +3042,22 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 							if err == io.EOF {
 								return EofTerminalToken{}, nil
 							} else {
-								return nil, fmt.Errorf("Error reading from stdin: %s", err)
+								return nil, fmt.Errorf("Error reading from stdin: %w", err)
 							}
 						}
 
 						if c >= 64 && c <= 126 {
-							if len(byteArray) == 3 && byteArray[0] == 51 && byteArray[1] == 59 && byteArray[2] == 53 {
+							params := string(byteArray)
+							if c == '~' && params == "200" {
+								return readBracketedPaste(stdinReaderState)
+							} else if c == '~' && params == "201" {
+								return UnknownToken{}, nil
+							} else if c == '~' && params == "3;5" {
 								return KEY_CTRL_DELETE, nil
-							} else if len(byteArray) == 1 && byteArray[0] == 51 {
+							} else if c == '~' && params == "3" {
 								return KEY_DELETE, nil
+							} else if key, ok := homeEndKey(c, params); ok {
+								return key, nil
 							} else {
 								// fmt.Fprintf(f, "Sent CSI token: %d %d\n", c, byteArray)
 								return CsiToken{FinalChar: c, Params: byteArray}, nil
@@ -2464,6 +3066,19 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 						byteArray = append(byteArray, c)
 					}
 				}
+			} else if c == ']' || c == 'P' || c == '_' || c == '^' || c == 'X' {
+				// OSC, DCS, APC, PM, SOS: a string the terminal is sending,
+				// such as a colour or version reply. Consume it whole and
+				// drop it. Typing its body would hand terminal output to
+				// the editor as keystrokes. None of these Alt chords are
+				// bound, so no key is lost.
+				if err = skipControlString(stdinReaderState); err != nil {
+					if err == io.EOF {
+						return EofTerminalToken{}, nil
+					}
+					return nil, fmt.Errorf("Error reading from stdin: %w", err)
+				}
+				return UnknownToken{}, nil
 			} else if c == 98 { // Alt-B
 				// Move cursor left by word
 				return KEY_ALT_B, nil
@@ -2474,15 +3089,19 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 				return KEY_ALT_F, nil
 			} else if c == 111 { // Alt-O
 				return KEY_ALT_O, nil
+			} else if c == 'R' { // Alt-Shift-R
+				return KEY_ALT_SHIFT_R, nil
 			} else if c == 46 { // Alt-.
 				return KEY_ALT_DOT, nil
 				// Quit
 			} else {
-				// Unknown escape sequence
-				state.Logf("Unknown escape sequence: ESC %d\n", c)
-				return UnknownToken{}, nil
-				// return AsciiToken{Char: 27}
-				// return AsciiToken{Char: c}
+				// A lone Escape: the next byte is not a CSI, SS3, or bound Alt
+				// chord, so it is an ordinary key typed after Esc. Push it back
+				// and lex it on its own rather than swallowing it. Escape itself
+				// has no binding, so nothing is returned for it.
+				state.Logf("Ignoring lone ESC before byte %d\n", c)
+				stdinReaderState.UnreadByte()
+				continue
 			}
 		} else if c >= 192 && c <= 223 { // 192-223 are the first byte of a 2-byte UTF-8 character{
 			// Read the next byte
@@ -2492,7 +3111,7 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 				if err == io.EOF {
 					return EofTerminalToken{}, nil
 				} else {
-					return nil, fmt.Errorf("Error reading from stdin: %s", err)
+					return nil, fmt.Errorf("Error reading from stdin: %w", err)
 				}
 			}
 
@@ -2511,7 +3130,7 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 				if err == io.EOF {
 					return EofTerminalToken{}, nil
 				} else {
-					return nil, fmt.Errorf("Error reading from stdin: %s", err)
+					return nil, fmt.Errorf("Error reading from stdin: %w", err)
 				}
 			}
 			if b2 >= 128 && b2 <= 191 { // 128-191 are the second byte of a 2-byte UTF-8 character
@@ -2520,7 +3139,7 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 					if err == io.EOF {
 						return EofTerminalToken{}, nil
 					} else {
-						return nil, fmt.Errorf("Error reading from stdin: %s", err)
+						return nil, fmt.Errorf("Error reading from stdin: %w", err)
 					}
 				}
 
@@ -2544,7 +3163,7 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 				if err == io.EOF {
 					return EofTerminalToken{}, nil
 				} else {
-					return nil, fmt.Errorf("Error reading from stdin: %s", err)
+					return nil, fmt.Errorf("Error reading from stdin: %w", err)
 				}
 			}
 			if b2 >= 128 && b2 <= 191 { // 128-191 are the second byte of a 2-byte UTF-8 character
@@ -2553,7 +3172,7 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 					if err == io.EOF {
 						return EofTerminalToken{}, nil
 					} else {
-						return nil, fmt.Errorf("Error reading from stdin: %s", err)
+						return nil, fmt.Errorf("Error reading from stdin: %w", err)
 					}
 				}
 
@@ -2563,7 +3182,7 @@ func (state *TermState) InteractiveLexer(stdinReaderState *StdinReaderState) (Te
 						if err == io.EOF {
 							return EofTerminalToken{}, nil
 						} else {
-							return nil, fmt.Errorf("Error reading from stdin: %s", err)
+							return nil, fmt.Errorf("Error reading from stdin: %w", err)
 						}
 					}
 
@@ -2621,15 +3240,16 @@ func (state *TermState) InteractiveMode() error {
 		"fp": "git fetch --prune",
 	}
 
-	// Put terminal into raw mode
-	oldState, err := term.MakeRaw(state.stdInFd)
-	if err != nil {
+	// Save the cooked state once, then apply the explicit raw definition.
+	if err := state.saveTerminalState(); err != nil {
+		return fmt.Errorf("Error reading terminal state at beginning of interactive mode: %s", err)
+	}
+	if err := state.enterRawMode(); err != nil {
 		return fmt.Errorf("Error setting terminal to raw mode at beginning of interactive mode: %s", err)
 	}
-	state.oldState = *oldState
 	state.Logf("Old state: %v\n", state.oldState)
 
-	defer term.Restore(state.stdInFd, &state.oldState)
+	defer state.leaveRawMode()
 
 	state.l = NewLexer("", &TokenFile{"REPL"})
 	state.p = &MShellParser{lexer: state.l}
@@ -2654,11 +3274,13 @@ func (state *TermState) InteractiveMode() error {
 				history = append(history, item.Command)
 			}
 		} else {
-			state.Logf("Error reading history file %s: %s\n", filepath.Join(historyDir, "msh_history"), err)
+			if !os.IsNotExist(err) {
+				fmt.Fprintf(os.Stderr, "Error reading history: %s\n", err)
+			}
 		}
 		state.Logf("%d items loaded from history file %s\n", len(state.previousHistory), filepath.Join(historyDir, "msh_history"))
 	} else {
-		state.Logf("Error getting history directory: %s\n", err)
+		fmt.Fprintf(os.Stderr, "Error getting history directory: %s\n", err)
 	}
 
 	err = state.printPrompt()
@@ -2677,6 +3299,9 @@ func (state *TermState) InteractiveMode() error {
 	var token TerminalToken
 	var end bool
 
+	state.widthCache = WidthCache{Entries: make(map[string]Cells)}
+
+
 	for {
 		if state.currentTabComplete == 0 {
 			state.tabCompletions0 = state.tabCompletions0[:0]
@@ -2686,17 +3311,19 @@ func (state *TermState) InteractiveMode() error {
 
 		// state.Logf("Waiting for token...\n")
 		state.f.Sync()
-		token, err = state.InteractiveLexer(stdInState) // token = <- tokenChan
+
+		token, err = state.readInputToken()
+
 		if err != nil {
 			state.Logf("Got err from interactive lexer: %s\n", err)
 			return err
 		}
 
 		// state.Logf("Got token: %s\n", token)
-
 		if _, ok := token.(EofTerminalToken); ok {
 			return nil
 		}
+
 
 		end, err = state.HandleToken(token)
 		if err != nil {
@@ -2706,7 +3333,10 @@ func (state *TermState) InteractiveMode() error {
 		if end {
 			break
 		}
-		state.Render(true)
+		err = state.refreshInteractiveDisplay(true)
+		if err != nil {
+			return err
+		}
 
 		// Swap tab completions
 		state.currentTabComplete = 1 - state.currentTabComplete
@@ -2784,6 +3414,11 @@ func (state *TermState) saveHistory() {
 		return
 	}
 
+	if err := prepareHistoryStorage(historyDir); err != nil {
+		fmt.Fprintf(os.Stderr, "Error preparing history storage: %s\n", err)
+		return
+	}
+
 	// We are going to save 3 files.
 	// File 1: Main history made up of records of
 	//   1. 8 byte unix timestamp in UTC
@@ -2797,7 +3432,7 @@ func (state *TermState) saveHistory() {
 	directoryFile := filepath.Join(historyDir, "msh_dirs")
 
 	// Open history file for appending
-	historyF, err := os.OpenFile(historyFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	historyF, err := openHistoryFile(historyFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error opening history file %s: %s\n", historyFile, err)
 		return
@@ -2805,7 +3440,7 @@ func (state *TermState) saveHistory() {
 	defer historyF.Close()
 
 	// Open command file for appending
-	commandF, err := os.OpenFile(commandFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	commandF, err := openHistoryFile(commandFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error opening command file %s: %s\n", commandFile, err)
 		return
@@ -2813,7 +3448,7 @@ func (state *TermState) saveHistory() {
 	defer commandF.Close()
 
 	// Open directory file for appending
-	directoryF, err := os.OpenFile(directoryFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	directoryF, err := openHistoryFile(directoryFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error opening directory file %s: %s\n", directoryFile, err)
 		return
@@ -2863,22 +3498,19 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 
 	// Defer putting the terminal back in raw mode
 	defer func() {
-		// Put terminal back into raw mode
-		_, err := term.MakeRaw(state.stdInFd)
-		if err != nil {
+		if err := state.enterRawMode(); err != nil {
 			fmt.Fprintf(os.Stderr, "Error setting terminal to raw mode: %s\n", err)
 		}
 	}()
 
-	state.clearTabCompletionsDisplay()
 	state.resetTabCycle()
 	state.tabCompletions0 = state.tabCompletions0[:0]
 	state.tabCompletions1 = state.tabCompletions1[:0]
 
 	// Add command to history
-	currentCommandStr := strings.TrimSpace(string(state.currentCommand))
+	currentCommandStr := string(state.currentCommand)
 
-	if state.index == len(state.currentCommand) {
+	if state.index == state.commandEnd() {
 		// Walk back to last whitespace, check if final element is an alias.
 		i := state.index
 		for {
@@ -2891,22 +3523,31 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 		lastWord := string(state.currentCommand[i:state.index])
 		alias, aliasSet := aliases[lastWord]
 		if aliasSet {
-			currentCommandStr = currentCommandStr[:i] + alias
-			state.currentCommand = []rune(currentCommandStr)
-			state.index = len(state.currentCommand)
+			state.replaceText(alias, i, state.index)
+			currentCommandStr = string(state.currentCommand)
 		}
 
 		// // Update the UI.
 		// state.clearToPrompt()
 		// fmt.Fprintf(os.Stdout, "%s", currentCommandStr)
-		// state.currentCommand = []rune(currentCommandStr)
+		// state.currentCommand = SourceText(currentCommandStr)
 		// // Move cursor to end
-		// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index+1)
+		// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.legacyCursorColumn()+1)
 	}
 
-	// This render should handle stored tokens on aliases, cleared out history completion/tab completion.
-	state.Render(false)
+	// Park the cursor after the last byte so the final echo leaves the
+	// terminal cursor on the command's last painted row. The newline below
+	// moves down from wherever the cursor is; submitting from an earlier row
+	// of a wrapped command would otherwise let output overwrite the rows
+	// after it.
+	state.index = state.commandEnd()
 
+	// This render should handle stored tokens on aliases, cleared out history completion/tab completion.
+	if err := state.refreshInteractiveDisplay(false); err != nil {
+		state.Logf("Error painting submitted command: %s\n", err)
+	}
+
+	currentCommandStr = strings.TrimSpace(currentCommandStr)
 	if len(currentCommandStr) > 0 {
 		history = append(history, currentCommandStr)
 
@@ -2923,13 +3564,16 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 	state.historyIndex = 0
 
 	// Reset current command
-	state.currentCommand = state.currentCommand[:0]
+	state.currentCommand = ""
+	state.index = 0
+	state.widthProbesBlocked = false
 	state.resetHistorySearch()
 
-	if len(currentCommandStr) > 0 {
-		state.toCooked()
-		fmt.Fprintln(os.Stdout)
-	}
+	// Always leave the command row, even for an empty command. Otherwise the
+	// cursor stays after the prompt and ensurePromptNewline mistakes it for
+	// unterminated program output and prints the marker.
+	state.leaveRawMode()
+	fmt.Fprintln(os.Stdout)
 
 	p := state.p
 	l := state.l
@@ -2937,10 +3581,12 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 	state.Logf("Executing Command: '%s'\n", currentCommandStr)
 	state.l.resetInput(currentCommandStr)
 
-	state.p.NextToken()
-
 	var parsed *MShellFile
 	var err error
+
+	if err = state.p.PeekFirstToken(); err != nil {
+		goto ParseError
+	}
 
 	if p.curr.Type == LITERAL {
 		// Check for known commands. If so, we'll essentially wrap the entire command in a list to execute
@@ -2976,7 +3622,9 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 			} else {
 				// Empty pipeline, reset to original
 				l.resetInput(currentCommandStr)
-				p.NextToken()
+				if err = p.PeekFirstToken(); err != nil {
+					goto ParseError
+				}
 			}
 		}
 	}
@@ -2985,9 +3633,10 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 	if parsed == nil {
 		parsed, err = p.ParseFile()
 	}
+ParseError:
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error parsing input: %s\n", err)
-		// State.index reset must be before ensurePromptNewline and printPrompt as those can consume typed characters while waiting for terminal response
+		fmt.Fprintf(os.Stderr, "Error parsing input: %s\n", terminalSafeText(err.Error(), true))
+		// Reset before printPrompt, which can queue keys while querying the terminal.
 		state.index = 0
 		err = state.printPrompt()
 		if err != nil {
@@ -3000,7 +3649,7 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 
 	// During evaluation, normal terminal output can happen, or TUI apps can be run.
 	// So want them to see non-raw mode terminal state.
-	term.Restore(state.stdInFd, &state.oldState)
+	state.leaveRawMode()
 
 	if len(parsed.Definitions) > 0 {
 		state.stdLibDefs = append(state.stdLibDefs, parsed.Definitions...)
@@ -3021,9 +3670,8 @@ func (state *TermState) ExecuteCurrentCommand() (bool, int) {
 	}
 
 PromptPrint:
-	// State.index reset must be before ensurePromptNewline and printPrompt as those can consume typed characters while waiting for terminal response
+	// Reset before printPrompt, which can queue keys while querying the terminal.
 	state.index = 0
-	state.ensurePromptNewline()
 	err = state.printPrompt()
 	if err != nil {
 		fmt.Fprint(os.Stderr, err.Error())
@@ -3035,45 +3683,47 @@ PromptPrint:
 }
 
 func (state *TermState) ensurePromptNewline() {
-	_, err := term.MakeRaw(state.stdInFd)
-	if err != nil {
-		return
-	}
-
-	_, col, err := state.getCurrentPos()
-	term.Restore(state.stdInFd, &state.oldState)
-	if err != nil {
-		return
-	}
-
-	if col != 1 {
-		fmt.Fprint(os.Stdout, "⏎\r\n")
-	}
+	state.UpdateSize()
+	fmt.Fprint(os.Stdout, promptNewlineSequence(state.numCols))
 }
 
-func (state *TermState) toCooked() {
-	term.Restore(state.stdInFd, &state.oldState)
+// Like fish's PROMPT_SP sequence, fill one screen width from the current
+// position. At column one this only sets delayed autowrap, cancelled by CR;
+// elsewhere it wraps, leaving the omitted-newline marker after the output.
+// Then clear the new prompt line. No terminal input or mode change is needed.
+func promptNewlineSequence(columns int) string {
+	if columns <= 1 || columns > int(maxTerminalCoordinate) {
+		// Without a usable width, preserve output by unconditionally advancing.
+		return "\r\n"
+	}
+	// The existing omitted-newline marker occupies one terminal cell.
+	return "\033[0m⏎" + strings.Repeat(" ", columns-1) + "\r⏎ \r\033[K"
 }
 
 func (state *TermState) printPrompt() error {
 	// Get out of raw mode
-	state.toCooked()
-
-	// My hard-coded color for now.
-	fmt.Fprintf(os.Stdout, "\033[35m")
+	state.leaveRawMode()
+	state.ensurePromptNewline()
 
 	// Print PWD
 	cwd, err := os.Getwd()
 
 	// Print out escape sequence for Windows Terminal/others.
 	// Check if we are in windows terminal by looking for WT_SESSION env variable.
+	// The directory name is filesystem data: any byte but '/' and NUL is
+	// legal in it, so it is never written to the terminal raw. Inside an
+	// escape sequence a control byte or ESC \ would end the sequence early
+	// and emit the rest as terminal commands.
 	if wtSession, ok := os.LookupEnv("WT_SESSION"); ok && len(wtSession) > 0 {
-		fmt.Fprintf(os.Stdout, "\033]9;9;%s\033\\", cwd)
-	} else {
+		// Windows Terminal takes a plain path; there is no encoding to hide
+		// a control byte in, so such a directory is simply not reported.
+		if err == nil && !containsTerminalControl(cwd) {
+			fmt.Fprintf(os.Stdout, "\033]9;9;%s\033\\", cwd)
+		}
+	} else if err == nil {
 		// Print using OSC 7
-		hostname, err := os.Hostname()
-		if err != nil {
-			fmt.Fprintf(os.Stdout, "\033]7;file://%s%s\033\\", hostname, cwd)
+		if hostname, hostErr := os.Hostname(); hostErr == nil {
+			fmt.Fprintf(os.Stdout, "\033]7;%s\033\\", directoryFileURL(hostname, cwd))
 		}
 	}
 
@@ -3085,30 +3735,16 @@ func (state *TermState) printPrompt() error {
 	if err != nil {
 		promptText = "??? >"
 	} else {
-		promptText = fmt.Sprintf("%s (%d)> \n:: ", cwd, len(state.stack))
+		promptText = fmt.Sprintf("%s (%d)> \n:: ", terminalSafeText(cwd, false), len(state.stack))
 	}
 
-	fmt.Fprint(os.Stdout, promptText)
-	state.numPromptLines = strings.Count(promptText, "\n") + 1
-	fmt.Fprintf(os.Stdout, "\033[0m")
-
-	// fmt.Fprintf(os.Stdout, "mshell> ")
-
-	_, err = term.MakeRaw(state.stdInFd)
-	if err != nil {
+	if err = state.enterRawMode(); err != nil {
 		return fmt.Errorf("Error setting terminal to raw mode: %s", err)
 	}
 
-	var col int
-	state.promptRow, col, err = state.getCurrentPos()
-	if err != nil {
-		return fmt.Errorf("Error getting cursor position: %s", err)
-	}
-
 	state.UpdateSize()
-
-	state.promptLength = col - 1
-	return nil
+	read := func() (TerminalToken, error) { return state.InteractiveLexer(state.stdInState) }
+	return state.paintPrompt(os.Stdout, read, SourceText(promptText))
 }
 
 // Returns the current cursor position as (row, col)
@@ -3151,45 +3787,83 @@ func (state *TermState) getCurrentPos() (int, int, error) {
 	// defer f.Close()
 	// }
 
+	// for {
+	// fmt.Fprintf(os.Stdout, "\033[6n")
+	// // TODO: This needs to handle case where terminal doesn't respond.
+	// token, err := state.InteractiveLexer(state.stdInState) // token = <- tokenChan
+	// if err != nil {
+	// return 0, 0, err
+	// }
+
+	// switch t := token.(type) {
+	// case CsiToken:
+	// if t.FinalChar == 'R' {
+	// parsedStr := string(t.Params)
+	// // Split on semicolon or colon
+	// parts := strings.Split(parsedStr, ";")
+	// if len(parts) != 2 {
+	// return 0, 0, fmt.Errorf("Invalid response for cursor position")
+	// }
+	// // Parse row
+	// row, err := strconv.Atoi(parts[0])
+	// if err != nil {
+	// return 0, 0, fmt.Errorf("Invalid response for cursor position")
+	// }
+	// // Parse column
+	// col, err := strconv.Atoi(parts[1])
+	// if err != nil {
+	// return 0, 0, fmt.Errorf("Invalid response for cursor position")
+	// }
+
+	// return row, col, nil
+	// }
+	// default:
+	// state.Logf("Got other token: %v\n", t)
+	// // Ignore getting a token that ends the program for now.
+	// _, err = state.HandleToken(t)
+	// if err != nil {
+	// return 0, 0, err
+	// }
+	// }
+	// }
+
+	return state.queryCursorPosition(os.Stdout)
+}
+
+var errMalformedCursorReport = errors.New("malformed cursor report")
+
+// queryCursorPosition sends one request and blocks until its reply. Keys that
+// arrive first are queued for the editor. A garbled reply is reported as
+// errMalformedCursorReport; the reply has still been consumed.
+func (state *TermState) queryCursorPosition(writer io.Writer) (int, int, error) {
+	if _, err := io.WriteString(writer, "\033[6n"); err != nil {
+		return 0, 0, err
+	}
+
 	for {
-		fmt.Fprintf(os.Stdout, "\033[6n")
-		// TODO: This needs to handle case where terminal doesn't respond.
-		token, err := state.InteractiveLexer(state.stdInState) // token = <- tokenChan
+		// Read the terminal directly; queued keys belong to the editor.
+		token, err := state.InteractiveLexer(state.stdInState)
 		if err != nil {
 			return 0, 0, err
 		}
 
-		switch t := token.(type) {
-		case CsiToken:
-			if t.FinalChar == 'R' {
-				parsedStr := string(t.Params)
-				// Split on semicolon or colon
-				parts := strings.Split(parsedStr, ";")
-				if len(parts) != 2 {
-					return 0, 0, fmt.Errorf("Invalid response for cursor position")
-				}
-				// Parse row
-				row, err := strconv.Atoi(parts[0])
-				if err != nil {
-					return 0, 0, fmt.Errorf("Invalid response for cursor position")
-				}
-				// Parse column
-				col, err := strconv.Atoi(parts[1])
-				if err != nil {
-					return 0, 0, fmt.Errorf("Invalid response for cursor position")
-				}
-
-				return row, col, nil
-			}
-		default:
-			state.Logf("Got other token: %v\n", t)
-			// Ignore getting a token that ends the program for now.
-			_, err = state.HandleToken(t)
-			if err != nil {
-				return 0, 0, err
-			}
+		if _, ok := token.(EofTerminalToken); ok {
+			return 0, 0, io.EOF
 		}
+
+		if reportToken, ok := token.(CsiToken); ok &&
+			reportToken.FinalChar == 'R' {
+			report, err := parseCursorReport(reportToken)
+			if err != nil {
+				return 0, 0, fmt.Errorf("%w: %w", errMalformedCursorReport, err)
+			}
+
+			return int(report.Row), int(report.Column), nil
+		}
+
+		state.queuedInput = append(state.queuedInput, token)
 	}
+
 }
 
 func stdLibDefinitions(stack *MShellStack, context ExecuteContext, state *EvalState) ([]MShellDefinition, error) {
@@ -3213,41 +3887,17 @@ func cleanupTempFiles() {
 	}
 }
 
-// This function pushes characters to the terminal and to the backing command.
 func (state *TermState) PushChars(chars []rune) {
-	// Push at the correct index
-	// TODO: Figure out why I need this.
-	state.index = min(state.index, len(state.currentCommand))
-	state.currentCommand = append(state.currentCommand[:state.index], append(chars, state.currentCommand[state.index:]...)...)
-	state.index += len(chars)
-	state.resetHistorySearch()
-
-	// // Push chars to current command
-	// ClearToEnd()
-	// fmt.Fprintf(os.Stdout, "%s", string(chars))
-	// // Add back what may have been deleted.
-	// if state.index <= len(state.currentCommand) {
-	// fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
-	// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index+len(chars))
-	// state.currentCommand = append(state.currentCommand[:state.index], append(chars, state.currentCommand[state.index:]...)...)
-	// }
-	// state.index = state.index + len(chars)
+	state.replaceText(string(chars), state.index, state.index)
 }
 
 func (state *TermState) acceptHistoryCompletion() {
 	if len(state.historyComplete) < len(state.currentCommand) {
 		return
 	}
-
 	state.Logf("History complete: %s\n", string(state.historyComplete))
-	if cap(state.currentCommand) < cap(state.historyComplete) {
-		state.currentCommand = make([]rune, len(state.historyComplete), cap(state.historyComplete))
-	} else {
-		state.currentCommand = state.currentCommand[:len(state.historyComplete)]
-	}
-
-	copy(state.currentCommand, state.historyComplete)
-	state.index = len(state.currentCommand)
+	state.currentCommand = state.historyComplete
+	state.index = state.commandEnd()
 	state.resetHistorySearch()
 }
 
@@ -3330,6 +3980,10 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 	}
 
 	switch t := token.(type) {
+	case PasteToken:
+		if t.Text != "" {
+			state.replaceText(t.Text, state.index, state.index)
+		}
 	case MutliByteToken:
 		state.PushChars([]rune{t.Char})
 	case AsciiToken:
@@ -3338,7 +3992,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			if t.Char == ';' {
 				// Check next token, if it's a 'r', open REPOs with lf
 				// TODO: Handle EOF token case
-				token, err = state.InteractiveLexer(state.stdInState)
+				token, err = state.readInputToken()
 				if err != nil {
 					return false, err
 				}
@@ -3347,14 +4001,14 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 					if t.Char == 'r' {
 						// Open REPOs with lf
 						// fmt.Fprintf(state.f, "Opening REPOs with lf...\n")
-						state.clearToPrompt()
-						state.currentCommand = state.currentCommand[:0]
+						state.currentCommand = ""
+						state.index = 0
 						state.PushChars([]rune{'r'})
 						shouldExit, _ := state.ExecuteCurrentCommand()
 						return shouldExit, nil
 					} else if t.Char == 'j' {
-						state.clearToPrompt()
-						state.currentCommand = state.currentCommand[:0]
+						state.currentCommand = ""
+						state.index = 0
 						state.PushChars([]rune{'j'})
 						shouldExit, _ := state.ExecuteCurrentCommand()
 						return shouldExit, nil
@@ -3369,7 +4023,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 					return state.HandleToken(token)
 				}
 			} else if t.Char == 'j' {
-				token, err = state.InteractiveLexer(state.stdInState)
+				token, err = state.readInputToken()
 				if err != nil {
 					return false, err
 				}
@@ -3389,7 +4043,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				}
 			} else if t.Char == 'v' {
 				// Check if next token is 'l', then clear screen
-				token, err = state.InteractiveLexer(state.stdInState)
+				token, err = state.readInputToken()
 				if err != nil {
 					return false, err
 				}
@@ -3410,15 +4064,15 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				}
 			} else if t.Char == 'q' {
 				// Check if next token is 'l', then clear screen
-				token, err = state.InteractiveLexer(state.stdInState)
+				token, err = state.readInputToken()
 				if err != nil {
 					return false, err
 				}
 
 				if t, ok := token.(AsciiToken); ok {
 					if t.Char == 'q' {
-						state.clearToPrompt()
-						state.currentCommand = state.currentCommand[:0]
+						state.currentCommand = ""
+						state.index = 0
 						state.PushChars([]rune("0 exit"))
 						shouldExit, _ := state.ExecuteCurrentCommand()
 						return shouldExit, nil
@@ -3442,7 +4096,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			// fmt.Fprintf(os.Stdout, "\033[K")
 			// fmt.Fprintf(os.Stdout, "%c", t.Char)
 			// fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
-			// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index+1)
+			// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.legacyCursorColumn()+1)
 
 			// state.currentCommand = append(state.currentCommand[:state.index], append([]rune{rune(t.Char)}, state.currentCommand[state.index:]...)...)
 			// state.index++
@@ -3467,40 +4121,8 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 
 			aliasValue, aliasSet := aliases[lastWord]
 			if aliasSet {
-				// Erase starting at beginning of last word
-				// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+i+1)
-				// fmt.Fprintf(os.Stdout, "\033[K")
-
-				// Print alias value
-				// fmt.Fprint(os.Stdout, aliasValue)
-
-				// Print the space
-				// fmt.Fprintf(os.Stdout, " ")
-
-				// Print the rest of the command
-				// fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
-
-				// Update current command
-				startText := state.currentCommand[:i+1]
-				endText := state.currentCommand[state.index:]
-
-				state.currentCommand = state.currentCommand[:0]
-
-				state.currentCommand = append(state.currentCommand, startText...)
-				state.currentCommand = append(state.currentCommand, []rune(aliasValue)...)
-				state.currentCommand = append(state.currentCommand, ' ')
-				state.currentCommand = append(state.currentCommand, endText...)
-
-				// state.currentCommand = append(state.currentCommand, ' ')
-				// state.currentCommand = append(state.currentCommand, state.currentCommand[state.index:]...)
-
+				state.replaceText(aliasValue + " ", i + 1, state.index)
 				state.Logf("Alias: %s -> %s\n", lastWord, aliasValue)
-				state.Logf("Current command: %s\n", string(state.currentCommand))
-
-				// Move cursor to end of the alias
-				state.index = i + 1 + len(aliasValue) + 1
-				// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index)
-				state.resetHistorySearch()
 			} else {
 				state.PushChars([]rune{rune(t.Char)})
 			}
@@ -3509,11 +4131,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
 			state.index = 0
 		} else if t.Char == 2 { // CTRL-B
-			// Move cursor left
-			if state.index > 0 {
-				state.index--
-				// fmt.Fprintf(os.Stdout, "\033[D")
-			}
+			return state.HandleToken(KEY_LEFT)
 		} else if t.Char == 3 || t.Char == 4 {
 			// Ctrl-C or Ctrl-D
 			fmt.Fprintf(os.Stdout, "\r\n") // Print a nice clean newline.
@@ -3521,14 +4139,12 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 		} else if t.Char == 5 { // Ctrl-E
 			// Move cursor to end of line
 			// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + len(state.currentCommand))
-			state.index = len(state.currentCommand)
+			state.index = state.commandEnd()
 		} else if t.Char == 6 { // Ctrl-F
-			if state.index == len(state.currentCommand) {
+			if state.index == state.commandEnd() {
 				state.acceptHistoryCompletion()
-			} else if state.index < len(state.currentCommand) {
-				// Move cursor right
-				state.index++
-				// fmt.Fprintf(os.Stdout, "\033[C")
+			} else if state.index < state.commandEnd() {
+				return state.HandleToken(KEY_RIGHT)
 			}
 		} else if t.Char == 14 { // Ctrl-N
 			if state.tabCycleActive {
@@ -3543,35 +4159,10 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				state.historySearch(-1)
 			}
 		} else if t.Char == 8 { // Backspace (or more typically CTRL-Backspace)
-			// Do same as CTRL-W
-			// Erase last word
-			if state.index > 0 {
-				origIndex := state.index
-				// First consume all whitespace
-				for state.index > 0 && state.currentCommand[state.index-1] == ' ' {
-					state.index--
-				}
-
-				// Then consume all non-whitespace
-				for state.index > 0 && state.currentCommand[state.index-1] != ' ' {
-					state.index--
-				}
-
-				state.currentCommand = append(state.currentCommand[:state.index], state.currentCommand[origIndex:]...)
-				state.resetHistorySearch()
-
-				// Erase the word
-				// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + state.index)
-				// fmt.Fprintf(os.Stdout, "\033[K")
-
-				// // Print the rest of the command
-				// fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
-				// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + state.index)
-			}
+			state.deletePreviousWord()
 		} else if t.Char == 9 { // Tab complete
 			// Get all files in the current directory
 
-			var prefix string
 			state.l.allowUnterminatedString = true
 			defer func() {
 				state.l.allowUnterminatedString = false
@@ -3590,37 +4181,16 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			if err != nil {
 				return false, nil
 			}
-			lastTokenLength := 0
-
-			var lastToken Token
-
-			if len(tokens) == 1 { // 1 token = EOF
-				prefix = ""
-				lastToken = tokens[0]
-			} else {
+			lastToken := tokens[len(tokens)-1] // EOF when the command has no tokens.
+			if len(tokens) > 1 {
 				lastToken = tokens[len(tokens)-2]
-
-				zeroBasedStartOfToken := lastToken.Column - 1
-				lastTokenRuneLength := utf8.RuneCountInString(lastToken.Lexeme)
-
-				if state.index > zeroBasedStartOfToken+lastTokenRuneLength {
-					prefix = ""
-				} else {
-
-					lastTokenLength = lastTokenRuneLength
-
-					if lastToken.Type == UNFINISHEDSTRING || lastToken.Type == UNFINISHEDSINGLEQUOTESTRING || lastToken.Type == UNFINISHEDPATH {
-						prefix = string(state.currentCommand[zeroBasedStartOfToken+1 : state.index])
-					} else {
-						prefix = string(state.currentCommand[zeroBasedStartOfToken:state.index])
-					}
-				}
 			}
+			prefix, replaceStart := completionTokenPrefix(state.currentCommand, state.index, lastToken)
 
 			// Check if we are in binary completion
 			binaryToken, binaryCompletion := state.isFirstTokenBinary(tokens)
 
-			replaceStart := state.index - lastTokenLength
+			completionSource := state.currentCommand
 			replaceEnd := state.index
 
 			state.Logf("Last token: %s %d\n", lastToken, len(tokens))
@@ -3671,7 +4241,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 
 			prevTokenType := EOF
 			if len(tokens) > 1 {
-				if lastTokenLength == 0 {
+				if replaceStart == state.index {
 					prevTokenType = lastToken.Type
 				} else if len(tokens) >= 3 {
 					prevTokenType = tokens[len(tokens)-3].Type
@@ -3708,7 +4278,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				state.replaceText(insertString, replaceStart, replaceEnd)
 			} else {
 				// Print out the longest common prefix
-				longestCommonPrefix := getLongestCommonPrefix(GetMatchTexts(matches))
+				longestCommonPrefix := completionGraphemePrefix(GetMatchTexts(matches))
 				state.Logf("Longest common prefix: '%s'\n", longestCommonPrefix)
 
 				if len(longestCommonPrefix) <= len(prefix) {
@@ -3724,8 +4294,9 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				tabMatchTexts := GetMatchTexts(matches)
 				state.tabCycleActive = true
 				state.tabCycleIndex = -1
+				state.tabCycleSource = completionSource
 				state.tabCycleStart = replaceStart
-				state.tabCycleEnd = state.index
+				state.tabCycleEnd = replaceEnd
 				state.tabCycleTokenType = lastToken.Type
 				state.tabCycleAllFiles = allFileMatches
 				state.tabCycleMatches = append(state.tabCycleMatches[:0], tabMatchTexts...)
@@ -3734,11 +4305,13 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 		} else if t.Char == 11 { // Ctrl-K
 			// Erase to end of line
 			// fmt.Fprintf(os.Stdout, "\033[K")
-			state.currentCommand = state.currentCommand[:state.index]
-			state.resetHistorySearch()
+			state.replaceText("", state.index, state.commandEnd())
 		} else if t.Char == 12 { // Ctrl-L
 			state.ClearScreen()
 		} else if t.Char == 15 { // Ctrl-O - file manager
+			if err := state.setBracketedPaste(false); err != nil {
+				return false, err
+			}
 			newDir := RunFileManagerInteractive(state.stdInFd, &state.oldState, "")
 			if newDir != "" {
 				state.evalState.ChangeDirectory(newDir, "file manager")
@@ -3750,7 +4323,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				state.numCols = cols
 			}
 			fmt.Fprintf(os.Stdout, "\033[H\033[2J")
-			state.currentCommand = state.currentCommand[:0]
+			state.currentCommand = ""
 			state.index = 0
 			err = state.printPrompt()
 			if err != nil {
@@ -3759,7 +4332,6 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 		} else if t.Char == 13 { // Enter
 			// If in tab completion mode, accept the completion without executing
 			if state.tabCycleActive {
-				state.clearTabCompletionsDisplay()
 				state.resetTabCycle()
 				state.tabCompletions0 = state.tabCompletions0[:0]
 				state.tabCompletions1 = state.tabCompletions1[:0]
@@ -3771,101 +4343,39 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				return true, nil
 			}
 		} else if t.Char == 21 { // Ctrl-U
-			// Erase back to prompt start
-			// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
-			// fmt.Fprintf(os.Stdout, "\033[K")
-			// fmt.Fprintf(os.Stdout, "\033[2K\033[1G")
-			// fmt.Fprintf(os.Stdout, "mshell> ")
-			// state.printPrompt()
-
-			// // Remaining chars in current command
-			state.currentCommand = state.currentCommand[state.index:]
-			state.resetHistorySearch()
-			// for i := 0; i < len(state.currentCommand); i++ {
-			// fmt.Fprintf(os.Stdout, "%c", state.currentCommand[i])
-			// }
-
-			// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
-			state.index = 0
+			state.replaceText("", 0, state.index)
 		} else if t.Char == 23 { // Ctrl-W
-			// Erase last word
-			if state.index > 0 {
-				origIndex := state.index
-				// First consume all whitespace
-				for state.index > 0 && state.currentCommand[state.index-1] == ' ' {
-					state.index--
-				}
-
-				// Then consume all non-whitespace
-				for state.index > 0 && state.currentCommand[state.index-1] != ' ' {
-					state.index--
-				}
-
-				state.currentCommand = append(state.currentCommand[:state.index], state.currentCommand[origIndex:]...)
-				state.resetHistorySearch()
-
-				// // Erase the word
-				// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + state.index)
-				// fmt.Fprintf(os.Stdout, "\033[K")
-
-				// Print the rest of the command
-				// fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
-				// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + state.index)
-			}
+			state.deletePreviousWord()
 		} else if t.Char == 25 { // Ctrl-Y
 			// Ctrl-y to complete history
 			state.acceptHistoryCompletion()
 		} else if t.Char == 127 { // Backspace
 			// Erase last char
 			if state.index > 0 {
-				state.currentCommand = append(state.currentCommand[:state.index-1], state.currentCommand[state.index:]...)
-				state.index--
-				state.resetHistorySearch()
+				if end, err := state.HandleToken(KEY_LEFT); err != nil || end {
+					return end, err
+				}
+				return state.HandleToken(KEY_DELETE)
 
 				// fmt.Fprintf(os.Stdout, "\033[D")
 				// fmt.Fprintf(os.Stdout, "\033[K")
 				// fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index:]))
-				// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index)
+				// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.legacyCursorColumn())
 			}
 		}
 	case SpecialKey:
 		if t == KEY_F1 {
 			// Set state.currentCommand to "lf"
-			state.currentCommand = []rune{'l', 'f'}
+			state.currentCommand = "lf"
+			state.index = state.commandEnd()
 			shouldExit, _ := state.ExecuteCurrentCommand()
 			if shouldExit {
 				return true, nil
 			}
 		} else if t == KEY_ALT_B {
-			// Move cursor left by word
-			if state.index > 0 {
-				// First consume all whitespace
-				for state.index > 0 && state.currentCommand[state.index-1] == ' ' {
-					state.index--
-				}
-
-				// Then consume all non-whitespace
-				for state.index > 0 && state.currentCommand[state.index-1] != ' ' {
-					state.index--
-				}
-
-				// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index)
-			}
+			state.index = wordLeft(state.currentCommand, state.index)
 		} else if t == KEY_ALT_F { // Alt-F
-			// Move cursor right by word
-			if state.index < len(state.currentCommand) {
-				// First consume all whitespace
-				for state.index < len(state.currentCommand) && state.currentCommand[state.index] == ' ' {
-					state.index++
-				}
-
-				// Then consume all non-whitespace
-				for state.index < len(state.currentCommand) && state.currentCommand[state.index] != ' ' {
-					state.index++
-				}
-			}
-
-			// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index)
+			state.index = wordRight(state.currentCommand, state.index)
 		} else if t == KEY_ALT_O { // Alt-O
 			// Quit
 			fmt.Fprintf(os.Stdout, "\r\n")
@@ -3874,6 +4384,12 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 		} else if t == KEY_ALT_D {
 			dateStr := time.Now().Format("2006-01-02")
 			state.PushChars([]rune(dateStr))
+		} else if t == KEY_ALT_SHIFT_R {
+			// The user's reset for measured widths after a reattach, font change,
+			// or any odd frame: forget every observation and measure again on
+			// the next repaint. There is no automatic epoch tracking.
+			clear(state.widthCache.Entries)
+			state.widthProbesBlocked = false
 		} else if t == KEY_ALT_DOT {
 			state.cycleLastArgument()
 		} else if t == KEY_SHIFT_TAB {
@@ -3901,8 +4417,8 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				// state.printPrompt()
 				// fmt.Fprint(os.Stdout, history[reverseIndex])
 				// fmt.Fprintf(os.Stdout, "mshell> %s", history[reverseIndex])
-				state.currentCommand = []rune(history[reverseIndex])
-				state.index = len(state.currentCommand)
+				state.currentCommand = SourceText(history[reverseIndex])
+				state.index = state.commandEnd()
 				state.resetHistorySearch()
 				break
 			}
@@ -3923,7 +4439,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 					if state.historyIndex == 0 {
 						// state.printPrompt()
 						// fmt.Fprintf(os.Stdout, "mshell> ")
-						state.currentCommand = []rune{}
+						state.currentCommand = ""
 						state.index = 0
 						state.resetHistorySearch()
 					} else {
@@ -3935,8 +4451,8 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 						// fmt.Fprintf(os.Stdout, "mshell> %s", history[reverseIndex])
 						// state.printPrompt()
 						// fmt.Fprint(os.Stdout, history[reverseIndex])
-						state.currentCommand = []rune(history[reverseIndex])
-						state.index = len(state.currentCommand)
+						state.currentCommand = SourceText(history[reverseIndex])
+						state.index = state.commandEnd()
 						state.resetHistorySearch()
 					}
 					break
@@ -3947,21 +4463,13 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				state.cycleTabCompletionColumn(1)
 				return false, nil
 			}
-			// Right arrow
-			if state.index < len(state.currentCommand) {
-				state.index++
-				// fmt.Fprintf(os.Stdout, "\033[C")
-			}
+			state.index = graphemeNext(state.currentCommand, state.index)
 		} else if t == KEY_LEFT {
 			if state.tabCycleActive {
 				state.cycleTabCompletionColumn(-1)
 				return false, nil
 			}
-			// Left arrow
-			if state.index > 0 {
-				state.index--
-				// fmt.Fprintf(os.Stdout, "\033[D")
-			}
+			state.index = graphemePrevious(state.currentCommand, state.index)
 		} else if t == KEY_HOME {
 			// Move cursor to beginning of line.
 			// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1)
@@ -3969,15 +4477,12 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 		} else if t == KEY_END {
 			// Move cursor to end of line
 			// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength + 1 + len(state.currentCommand))
-			state.index = len(state.currentCommand)
+			state.index = state.commandEnd()
 		} else if t == KEY_DELETE {
-			if state.index < len(state.currentCommand) {
-				// fmt.Fprintf(os.Stdout, "\033[K")
-				// fmt.Fprintf(os.Stdout, "%s", string(state.currentCommand[state.index + 1:]))
-				// fmt.Fprintf(os.Stdout, "\033[%dG", state.promptLength+1+state.index)
-
-				state.currentCommand = append(state.currentCommand[:state.index], state.currentCommand[state.index+1:]...)
-				state.resetHistorySearch()
+			if state.index < state.commandEnd() {
+				start := graphemeFloor(state.currentCommand, state.index)
+				end := graphemeNext(state.currentCommand, state.index)
+				state.replaceText("", start, end)
 			}
 		}
 	}

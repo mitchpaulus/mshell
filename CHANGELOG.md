@@ -9,6 +9,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The file manager preview shows PDF details: version, page count, page size, encryption, and document info such as title and author.
+  It reads only the parts of the file that hold this, so it stays fast on large PDFs.
+
+### Changed
+
+- `stdin` fails if the input exceeds `MSH_READ_LIMIT` bytes (default 104857600, `0` for no limit).
+
+### Security
+
+- Terminal replies that are strings (OSC, DCS, APC, PM, SOS), such as colour or version reports,
+  are consumed and dropped by the interactive editor instead of being typed into the command,
+  where their text could trigger key chords.
+- The prompt no longer writes the working directory to the terminal raw.
+  Control bytes in a directory name display as caret notation, and the OSC 7 directory report
+  percent-encodes the path, so a directory name can no longer inject terminal queries.
+- Error messages escape control bytes from quoted input and file names.
+
+### Fixed
+
+- A terminal resize no longer prints another prompt. The prompt and command are redrawn
+  in place at the new width.
+  In particular, a new Windows Terminal pane reports its parent's size until the first key
+  arrives, which used to print a duplicate prompt on that first keystroke.
+  Set `MSHREFLOW=0` for terminals such as xterm that do not rejoin wrapped rows on resize.
+- The OSC 7 working-directory report is now actually emitted; a reversed check meant it was
+  only sent when the hostname lookup failed.
+- `toDt` no longer guesses the order of ambiguous numeric dates.
+  Every date is tried as year-month-day, month-day-year, and day-month-year.
+  A single valid reading is accepted, so `12/16/25` and `16/06/2025` now parse
+  (`12/16/25` previously became `2013-04-25`). When several readings are valid, like
+  `01/02/2026`, the order learned from the most recent unambiguous non-ISO date in the same
+  evaluation is used. With no such evidence the result is `none`, where it previously
+  assumed US month/day/year. Dates with a leading four digit year are unaffected.
+- `toDt` now returns `none` for out of range components such as month 13, Feb 30, or hour 25,
+  instead of silently rolling them over into the next month or day.
+
+### Added
+
+- Bracketed paste in the interactive editor: pasted multiline text, tabs, and key chords are inserted literally without executing commands.
+- Alt-Shift-R in the interactive editor forgets measured text widths and measures them again,
+  for use after reattaching from a different terminal or changing fonts.
+- HTTP cookie jars: pass a shared list as `cookieJar` to `httpGet` / `httpPost`.
+  Requests and responses reuse and update the same list, including across redirects,
+  with domain/path scoping, expiration, deletion, creation ordering, and JSON persistence.
 - Assertive destructuring with the `=>` operator.
   It consumes a list, dictionary, or Just value, binds its structural pattern names,
   and fails at runtime when the pattern does not match.
@@ -209,6 +253,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The interactive editor lays out and repaints commands from widths measured on the current terminal.
+  Long commands wrap across rows, wide and multi-codepoint clusters such as emoji stay whole,
+  tab and control bytes display safely, and completion rows repaint with the command.
+
+- A trailing comma after a comma-separated variable store list (`a!, b!,`) is now a parse error.
+  Commas also separate `match` arms, so the trailing comma was ambiguous.
+
 - A number immediately followed by a literal character now lexes as a single
   literal token instead of a float/int plus a separate literal, so bare file
   arguments like `redo 1.pdf` work. Floats still end at token-ending
@@ -279,6 +330,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Its stack effect depends on a runtime integer, so it could not be expressed in the static type checker, and it saw no real use.
 
 ### Fixed
+
+<<<<<<< HEAD
+- A command whose first token is a lexer error, such as a lone quote, no longer crashes the interactive shell. It reports the parse error and prompts again.
+- Interactive movement, word deletion, typing, and completion replacement respect grapheme boundaries, keeping combining accents and joined emoji intact.
+  Unicode aliases and multiline completion prefixes use the correct source positions; cycling completions preserves adjacent text even when it joins the inserted grapheme.
+=======
+- Unix command history is now private by default, with existing owned storage permissions repaired on load/save.
+  Unsafe history objects are rejected and permission errors are reported.
+>>>>>>> main
 
 - The type checker gave `index` and `lastIndexOf` a result type of `int`, but both
   return `Maybe[int]` at runtime (`none` when the substring is not found). The

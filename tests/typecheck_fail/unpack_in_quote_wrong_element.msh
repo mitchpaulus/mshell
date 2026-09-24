@@ -1,0 +1,2 @@
+# Element type is pinned by map's list, so b is int and cannot be added to a string.
+[[1 2 3]] map. => [a b c] @b '1' + end str wl

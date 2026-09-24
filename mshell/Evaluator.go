@@ -397,6 +397,9 @@ type EvalState struct {
 
 	defIndex    map[string]int
 	defIndexLen int
+
+	// Numeric date order (m/d/y vs d/m/y vs y/m/d) learned from the first unambiguous toDt.
+	DateOrder DateOrder
 }
 
 func (state *EvalState) EnvironmentHistory() *EnvironmentHistory {
@@ -587,6 +590,9 @@ func SimpleSuccess() EvalResult {
 }
 
 func (state *EvalState) FailWithMessage(message string) EvalResult {
+	// Messages quote user input and file names, which may hold bytes a
+	// terminal would execute. Print them visibly instead.
+	message = terminalSafeText(message, true)
 	// Log message to stderr
 	if state.CallStack == nil {
 		fmt.Fprintf(os.Stderr, "No call stack available.\n")
@@ -598,14 +604,15 @@ func (state *EvalState) FailWithMessage(message string) EvalResult {
 	for _, callStackItem := range state.CallStack {
 		parseItem := callStackItem.MShellParseItem
 
+		name := terminalSafeText(callStackItem.Name, false)
 		if parseItem == nil {
-			fmt.Fprintf(os.Stderr, "%s\n", callStackItem.Name)
+			fmt.Fprintf(os.Stderr, "%s\n", name)
 		} else {
 			startToken := parseItem.GetStartToken()
 			if startToken.TokenFile != nil {
-				fmt.Fprintf(os.Stderr, "%s:%d:%d %s\n", startToken.TokenFile.Path, startToken.Line, startToken.Column, callStackItem.Name)
+				fmt.Fprintf(os.Stderr, "%s:%d:%d %s\n", terminalSafeText(startToken.TokenFile.Path, false), startToken.Line, startToken.Column, name)
 			} else {
-				fmt.Fprintf(os.Stderr, "%d:%d %s\n", startToken.Line, startToken.Column, callStackItem.Name)
+				fmt.Fprintf(os.Stderr, "%d:%d %s\n", startToken.Line, startToken.Column, name)
 			}
 		}
 	}
@@ -6266,19 +6273,24 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 					stack.Push(newList)
 				} else if t.Lexeme == "stdin" {
-					// Dump all of current stdin onto the stack as a string
-					var buffer bytes.Buffer
+					// Dump all of current stdin onto the stack as a string.
+					// The read is capped by MSH_READ_LIMIT (default 100 MiB) so a
+					// huge or nonterminating input fails instead of exhausting memory.
 					var reader io.Reader
 					if context.StandardInput == nil {
 						reader = os.Stdin
 					} else {
 						reader = context.StandardInput
 					}
-					_, err := buffer.ReadFrom(reader)
+					limit, err := readLimit()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot read stdin: %s\n", t.Line, t.Column, err.Error()))
+					}
+					data, err := readAllBounded(reader, limit)
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error reading from stdin: %s\n", t.Line, t.Column, err.Error()))
 					}
-					stack.Push(MShellString{buffer.String()})
+					stack.Push(MShellString{string(data)})
 				} else if t.Lexeme == "stdinIsTerminal" {
 					stack.Push(MShellBool{streamIsTerminal(context.StandardInput, os.Stdin)})
 				} else if t.Lexeme == "stdoutIsTerminal" {
@@ -6982,7 +6994,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					// TODO: Don't make a new lexer object each time.
-					parsedTime, err := ParseDateTime(dateStr)
+					parsedTime, err := ParseDateTime(dateStr, &state.DateOrder)
 					if err != nil {
 						stack.Push(&Maybe{obj: nil})
 						// return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing date time '%s': %s\n", t.Line, t.Column, dateStr, err.Error()))
@@ -7270,9 +7282,9 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'setenv' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
-					varName, err := obj1.CastString()
+					varValue, err := obj1.CastString()
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot use a %s as an environment variable name.\n", t.Line, t.Column, obj1.TypeName()))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot use a %s as an environment variable value.\n", t.Line, t.Column, obj1.TypeName()))
 					}
 
 					obj2, err := stack.Pop()
@@ -7280,9 +7292,9 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'setenv' operation on a stack with less than two items.\n", t.Line, t.Column))
 					}
 
-					varValue, err := obj2.CastString()
+					varName, err := obj2.CastString()
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot use a %s as an environment variable value.\n", t.Line, t.Column, obj2.TypeName()))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot use a %s as an environment variable key.\n", t.Line, t.Column, obj2.TypeName()))
 					}
 
 					err = state.EnvironmentHistory().Set(varName, varValue, environmentSource(t))
@@ -11439,6 +11451,18 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						}
 					}
 
+					var cookieJar *httpListCookieJar
+					if jarValue, ok := dict.Items["cookieJar"]; ok {
+						cookieJar, err = newHTTPListCookieJar(jarValue)
+						if err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Invalid cookie jar in '%s': %s\n", t.Line, t.Column, t.Lexeme, err))
+						}
+						if _, present := req.Header["Cookie"]; present {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot combine 'cookieJar' with a 'Cookie' header in '%s'.\n", t.Line, t.Column, t.Lexeme))
+						}
+						client.Jar = cookieJar
+					}
+
 					// Dump the request to stderr for debugging
 					// dump, _ := httputil.DumpRequestOut(req, true)
 					// fmt.Fprintf(os.Stderr, "HTTP Request:\n%s\n", dump)
@@ -11450,6 +11474,9 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						stack.Push(&Maybe{obj: nil}) // No response
 					} else {
 						responseDict := NewDict()
+						if cookieJar != nil {
+							responseDict.Items["cookieJar"] = cookieJar.list
+						}
 						responseDict.Items["status"] = MShellInt{Value: resp.StatusCode}
 						responseDict.Items["reason"] = MShellString{Content: resp.Status}
 						responseHeaders := NewDict()
@@ -11465,10 +11492,10 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 						// Read body as a UTF-8 encoded string
 						bodyBytes, err := io.ReadAll(resp.Body)
+						resp.Body.Close()
 						if err != nil {
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error reading response body in '%s': %s\n", t.Line, t.Column, t.Lexeme, err.Error()))
 						}
-						resp.Body.Close() // Close the response body
 						responseDict.Items["body"] = MShellBinary(bodyBytes)
 
 						// Push the response dictionary onto the stack
@@ -13138,4 +13165,63 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 			}
 
 	return EvalResult{true, false, -1, 0, false}
+}
+
+// readLimitEnvVar names the environment variable that caps how many bytes a
+// bulk read into memory (the `stdin` builtin) will accept before failing.
+const readLimitEnvVar = "MSH_READ_LIMIT"
+
+// defaultReadLimit is the cap used when MSH_READ_LIMIT is unset: 100 MiB.
+const defaultReadLimit int64 = 100 * 1024 * 1024
+
+// parseReadLimit parses a MSH_READ_LIMIT value: a whole number of bytes.
+// A value of 0 removes the limit.
+func parseReadLimit(value string) (int64, error) {
+	n, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("%s must be a whole number of bytes, got '%s'", readLimitEnvVar, value)
+	}
+	return n, nil
+}
+
+// readLimit returns the effective bulk-read cap in bytes, or 0 for no limit.
+// The environment is consulted on every call so that `setenv` within a script
+// takes effect immediately.
+func readLimit() (int64, error) {
+	value, ok := os.LookupEnv(readLimitEnvVar)
+	if !ok {
+		return defaultReadLimit, nil
+	}
+	return parseReadLimit(value)
+}
+
+// errReadLimitExceeded is returned by readAllBounded when the input holds more
+// bytes than the limit allows.
+type errReadLimitExceeded struct {
+	limit int64
+}
+
+func (e errReadLimitExceeded) Error() string {
+	return fmt.Sprintf("input exceeds the %s of %d bytes", readLimitEnvVar, e.limit)
+}
+
+// readAllBounded reads r until EOF, failing as soon as more than limit bytes
+// have been seen. It reads at most limit+1 bytes, so an overflowing or
+// nonterminating stream never grows memory past the cap. A limit of 0 means
+// no limit. Input of exactly limit bytes succeeds.
+func readAllBounded(r io.Reader, limit int64) ([]byte, error) {
+	var buffer bytes.Buffer
+	if limit <= 0 {
+		_, err := buffer.ReadFrom(r)
+		return buffer.Bytes(), err
+	}
+
+	n, err := buffer.ReadFrom(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if n > limit {
+		return nil, errReadLimitExceeded{limit}
+	}
+	return buffer.Bytes(), nil
 }

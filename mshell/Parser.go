@@ -617,6 +617,27 @@ func (parser *MShellParser) NextToken() {
 	parser.initialized = true
 }
 
+// Peek returns the token after curr without advancing the parser.
+func (parser *MShellParser) Peek() Token {
+	token := parser.lexer.peekToken()
+	if token.Type == ERROR {
+		panic(parserPanic{err: errors.New(token.Lexeme)})
+	}
+	return token
+}
+
+// PeekFirstToken loads the first token of fresh input without panicking.
+// The interactive prompt calls this outside any parse entry point, so a lexer
+// error (for example an unterminated quote) must come back as an error.
+func (parser *MShellParser) PeekFirstToken() error {
+	parser.curr = parser.lexer.scanToken()
+	parser.initialized = true
+	if parser.curr.Type == ERROR {
+		return errors.New(parser.curr.Lexeme)
+	}
+	return nil
+}
+
 // Checks for the desired match, and then advances the parser.
 func (parser *MShellParser) Match(token Token, tokenType TokenType) error {
 	if token.Type != tokenType {
@@ -800,25 +821,19 @@ func (parser *MShellParser) ParseIndexer() *MShellIndexerList {
 	return indexerList
 }
 
-func (parser *MShellParser) ParseVarstoreList() (MShellVarstoreList) {
+func (parser *MShellParser) ParseVarstoreList() MShellVarstoreList {
 	varStoreList := MShellVarstoreList{}
 	varStoreList.VarStores = []Token{}
 	varStoreList.VarStores = append(varStoreList.VarStores, parser.curr)
 	parser.NextToken()
 
-	for {
-		if parser.curr.Type == COMMA {
-			parser.NextToken()
-			if parser.curr.Type == VARSTORE {
-				varStoreList.VarStores = append(varStoreList.VarStores, parser.curr)
-				parser.NextToken()
-			} else {
-				// No error here, just a trailing comma which is fine.
-				break
-			}
-		} else {
-			break
-		}
+	// A comma belongs to the store list only when another store follows it.
+	// Otherwise it is left for the enclosing construct (a match arm or a
+	// dict entry). Anywhere else, ParseItem reports it as unexpected.
+	for parser.curr.Type == COMMA && parser.Peek().Type == VARSTORE {
+		parser.NextToken()
+		varStoreList.VarStores = append(varStoreList.VarStores, parser.curr)
+		parser.NextToken()
 	}
 
 	return varStoreList
@@ -1110,6 +1125,8 @@ func (parser *MShellParser) ParseItem() (MShellParseItem, error) {
 		return parser.ParseIndexer(), nil
 	case VARSTORE:
 		return parser.ParseVarstoreList(), nil
+	case COMMA:
+		return nil, fmt.Errorf("%d:%d: Unexpected ','. Commas only separate match arms, dict entries, and variable stores like a!, b!.", parser.curr.Line, parser.curr.Column)
 	case EOF:
 		return nil, errors.New("Unexpected EOF while parsing item")
 	case COLON:

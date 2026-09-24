@@ -63,7 +63,7 @@
         <tr> <td><code>return</code></td> <td>Stop executing the current definition or quotation immediately, leaving the stack as-is for the caller.</td> <td><code>(--)</code></td> </tr>
         <tr> <td><code>read</code></td> <td>Read a line from stdin. Leaves the line and a success flag.</td> <td><code>(-- <span class="sig-type sig-type-str">str</span> <span class="sig-type sig-type-bool">bool</span>)</code></td> </tr>
         <tr> <td><code>prompt</code></td> <td>Write a prompt string to the controlling TTY and read a line from the controlling TTY. Fails if no controlling TTY is available.</td> <td><code>(<span class="sig-type sig-type-str">str</span> -- <span class="sig-type sig-type-str">str</span>)</code></td> </tr>
-        <tr> <td><code>stdin</code></td> <td>Read stdin into a string.</td> <td><code>(-- <span class="sig-type sig-type-str">str</span>)</code></td> </tr>
+        <tr> <td><code>stdin</code></td> <td>Read stdin into a string. Fails if the input exceeds <code>MSH_READ_LIMIT</code> bytes (default 104857600, <code>0</code> for no limit).</td> <td><code>(-- <span class="sig-type sig-type-str">str</span>)</code></td> </tr>
         <tr> <td><code>stdinIsTerminal</code></td> <td>Return whether the current effective stdin is connected to a terminal or Windows console. Regular files, pipes, and non-file streams return false. Redirections and symlinks are classified by their opened target, so one that resolves to a terminal returns true.</td> <td><code>(-- <span class="sig-type sig-type-bool">bool</span>)</code></td> </tr>
         <tr> <td><code>stdoutIsTerminal</code></td> <td>Return whether the current effective stdout is connected to a terminal or Windows console. Regular files, pipes, captures, and non-file streams return false. Redirections and symlinks are classified by their opened target, so one that resolves to a terminal returns true.</td> <td><code>(-- <span class="sig-type sig-type-bool">bool</span>)</code></td> </tr>
         <tr> <td><code>stderrIsTerminal</code></td> <td>Return whether the current effective stderr is connected to a terminal or Windows console. Regular files, pipes, captures, and non-file streams return false. Redirections and symlinks are classified by their opened target, so one that resolves to a terminal returns true.</td> <td><code>(-- <span class="sig-type sig-type-bool">bool</span>)</code></td> </tr>
@@ -354,6 +354,7 @@
     </thead>
     <tbody>
         <tr> <td><code>toDt</code></td> <td>Parse a string into a date/time (<code><span class="sig-type sig-type-maybe">Maybe</span></code> result).</td> <td><code>(<span class="sig-type sig-type-str">str</span> -- <span class="sig-type sig-type-maybe">Maybe</span>[<span class="sig-type sig-type-date">date</span>])</code></td> </tr>
+        <tr> <td colspan="3"><em>Separators are ignored, month names are accepted, and a time with optional AM/PM may follow. A leading four digit year is always year-month-day, so ISO dates like <code>2026-01-02</code> are never ambiguous. Other dates are tried as year-month-day, month-day-year, and day-month-year. If exactly one reading is a valid date, it is used (<code>16/06/2025</code>, <code>12/16/25</code>). If several readings are valid (<code>01/02/2026</code>), the order learned from the most recent unambiguous non-ISO date in this evaluation decides. With no such date yet, the result is <code>none</code>. Out of range components (month 13, Feb 30, hour 25) give <code>none</code> rather than rolling over.</em></td> </tr>
         <tr> <td><code>now</code></td> <td>Push the current local date/time.</td> <td><code>(-- <span class="sig-type sig-type-date">date</span>)</code></td> </tr>
         <tr> <td><code>date</code></td> <td>Drop the time portion from a datetime.</td> <td><code>(<span class="sig-type sig-type-date">date</span> -- <span class="sig-type sig-type-date">date</span>)</code></td> </tr>
         <tr> <td><code>year</code></td> <td>Get the year component.</td> <td><code>(<span class="sig-type sig-type-date">date</span> -- <span class="sig-type sig-type-int">int</span>)</code></td> </tr>
@@ -476,6 +477,77 @@
 
 <h1 id="functions-http">HTTP Requests <a class="section-link" href="#functions-http" aria-label="Permalink">§</a> <a class="back-to-top" href="#functions-top">Back to top</a></h1>
 
+<h2 id="http-cookie-jars">Cookie jars</h2>
+<p>
+Pass an ordinary list as <code>cookieJar</code> to opt into automatic cookie management.
+The list contains the complete state, with no new data type, constructor, or hidden jar.
+</p>
+<pre><code>[] jar!
+{'url': 'https://example.com/login', 'body': @form,
+ 'cookieJar': @jar} httpPost ? login!
+{'url': 'https://example.com/account',
+ 'cookieJar': @jar} httpGet ? account!</code></pre>
+<p>
+Each request sends only cookies matching its destination domain, path, and transport.
+Secure cookies are sent only over HTTPS, including on localhost.
+Every response updates the list, including intermediate redirects and HTTP error statuses.
+With <code>followRedirects: false</code>, cookies from the first response are still stored.
+Updates already received remain if a later redirect or body read fails.
+Omitting <code>cookieJar</code> disables automatic cookie management and omits the response field.
+Combining a jar with an explicit <code>Cookie</code> header is an error, regardless of header capitalization.
+</p>
+<p>
+The response references the same list: later requests also change the jar visible through earlier responses.
+Only the list identity is guaranteed; individual cookie dictionaries may be replaced.
+Each stored cookie has all these fields:
+</p>
+<table class="function-table">
+    <thead><tr><th>Field</th><th>Type</th><th>Meaning</th></tr></thead>
+    <tbody>
+        <tr><td><code>name</code></td><td>str</td><td>Cookie name.</td></tr>
+        <tr><td><code>value</code></td><td>str</td><td>Cookie value.</td></tr>
+        <tr><td><code>domain</code></td><td>str</td><td>Normalized lowercase ASCII hostname (IDNs use punycode), or IP address; no leading dot or port.</td></tr>
+        <tr><td><code>path</code></td><td>str</td><td>Effective path starting with <code>/</code>; a default is calculated when the response omits a valid path.</td></tr>
+        <tr><td><code>hostOnly</code></td><td>bool</td><td>Send only to the exact hostname; otherwise eligible subdomains also match.</td></tr>
+        <tr><td><code>secure</code></td><td>bool</td><td>Send only over HTTPS.</td></tr>
+        <tr><td><code>httpOnly</code></td><td>bool</td><td>Preserved attribute; mshell scripts can still inspect the record.</td></tr>
+        <tr><td><code>sameSite</code></td><td>str</td><td><code>""</code> (unspecified/unrecognized), <code>"lax"</code>, <code>"strict"</code>, or <code>"none"</code>; preserved metadata.</td></tr>
+        <tr><td><code>expires</code></td><td>int | float | null</td><td>Absolute whole Unix seconds, or <code>null</code> for a session cookie.</td></tr>
+        <tr><td><code>lastAccess</code></td><td>int | float</td><td>Whole Unix seconds when received or last selected for a request.</td></tr>
+        <tr><td><code>quoted</code></td><td>bool</td><td>Whether the value was quoted; preserved when sending.</td></tr>
+    </tbody>
+</table>
+<p>
+Identity is the combination of domain, path, and name, so multiple cookies can share a name.
+New cookies are appended; replacements keep their position; expired or deleted cookies are removed.
+List order records creation order, with no separate counter or creation-order field.
+Sending sorts a separate selection by decreasing path length, preserving list order for ties; the jar itself is not reordered.
+<code>Max-Age</code> takes precedence over <code>Expires</code> and becomes an absolute deadline when received.
+Reusing or restoring the jar never restarts its countdown.
+Expiration is checked when using the jar, not by a background timer.
+</p>
+<p>
+Domain validation rejects unrelated domains and public suffixes, including private suffixes such as <code>github.io</code>.
+The <code>__Secure-</code> and <code>__Host-</code> prefix requirements are enforced.
+These methods have no browser top-level site or navigation context: <code>SameSite</code> is preserved but browser policies are not enforced.
+Incoming <code>Partitioned</code> cookies are ignored rather than stored as unpartitioned cookies.
+</p>
+<p>
+Inspect or edit records with ordinary list/dictionary operations.
+Supplied records must contain all fields above with valid types and values; duplicate domain/path/name entries are errors.
+Validation occurs before sending the request.
+The jar round-trips through <code>toJson</code> and <code>parseJson</code>:
+</p>
+<pre><code>@jar toJson `cookies.json` writeFile
+`cookies.json` parseJson restoredJar!
+{'url': 'https://example.com/account',
+ 'cookieJar': @restoredJar} httpGet ?</code></pre>
+<p>
+New timestamps are integers; whole-number floats are also accepted because <code>parseJson</code> decodes JSON numbers as floats.
+Session cookies live as long as the caller retains them.
+Saving and restoring the list also saves session cookies; discard those records to start a new session.
+</p>
+
 <table class="function-table">
     <thead>
         <tr> <th>Name</th> <th>Description</th> <th>Signature</th> </tr>
@@ -490,6 +562,7 @@
                     <li><code>headers</code>: dictionary of request headers.</li>
                     <li><code>timeout</code>: Optional integer number of seconds before the request will timeout. Default is 30 seconds.</li>
                     <li><code>followRedirects</code>: Optional boolean, default <code>true</code>. Set to <code>false</code> to return the first response as-is instead of following redirects, for example to inspect the <code>Location</code> or <code>Set-Cookie</code> headers of a <code>3xx</code> response.</li>
+                    <li><code>cookieJar</code>: Optional shared list of cookie dictionaries, updated in place. Start with <code>[]</code> and reuse it across requests. See <a href="#http-cookie-jars">Cookie jars</a>.</li>
                 </ul>
                 <p>The result is a <code><span class="sig-type sig-type-maybe">Maybe</span></code>; it is <code>none</code> when the request fails entirely (for example, a timeout). When successful it wraps a response dictionary with:</p>
                 <ul>
@@ -497,6 +570,7 @@
                     <li><code>reason</code>: status line (for example <code>"200 OK"</code>).</li>
                     <li><code>headers</code>: dictionary of response headers.</li>
                     <li><code>body</code>: binary response body.</li>
+                    <li><code>cookieJar</code>: present only when supplied on the request; references that same list.</li>
                 </ul>
             </td>
             <td><code>(<span class="sig-type sig-type-dict">dict</span> -- <span class="sig-type sig-type-maybe">Maybe</span>[<span class="sig-type sig-type-dict">dict</span>])</code></td>

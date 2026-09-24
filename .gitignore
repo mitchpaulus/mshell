@@ -8,8 +8,11 @@ tests/quote_stderr_redirect.txt
 tests/test_quote_stderr.txt
 tests/msh-scripts/
 
-__pycache__
+ai/fish-priority-issues/*
 
+.redom/
+
+*.pyc
 .codex
 __pycache__/
 
