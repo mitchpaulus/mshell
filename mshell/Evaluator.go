@@ -851,7 +851,7 @@ func (state *EvalState) isTailPosition(frame *EvaluationFrame) bool {
 // It returns an EvalResult that may have special flags for control flow
 func (state *EvalState) processToken(token MShellParseItem, frame *EvaluationFrame, frames *[]EvaluationFrame) *EvalResult {
 	stack := frame.Stack
-	context := frame.Context
+	context := &frame.Context
 	definitions := frame.Definitions
 
 	switch t := token.(type) {
@@ -863,7 +863,7 @@ func (state *EvalState) processToken(token MShellParseItem, frame *EvaluationFra
 		newFrame := EvaluationFrame{
 			Objects:       t.Items,
 			Index:         0,
-			Context:       context,
+			Context:       *context,
 			Stack:         &listStack,
 			Definitions:   definitions,
 			CallStackItem: callStackItem,
@@ -893,7 +893,7 @@ func (state *EvalState) processToken(token MShellParseItem, frame *EvaluationFra
 		newFrame := EvaluationFrame{
 			Objects:       keyValues[0].Value,
 			Index:         0,
-			Context:       context,
+			Context:       *context,
 			Stack:         &dictStack,
 			Definitions:   definitions,
 			CallStackItem: callStackItem,
@@ -908,7 +908,7 @@ func (state *EvalState) processToken(token MShellParseItem, frame *EvaluationFra
 		return nil
 
 	case *MShellParseGrid:
-		return stepOf(state.evaluateParseGrid(t, stack, context, definitions))
+		return stepOf(state.evaluateParseGrid(t, stack, *context, definitions))
 
 	case *MShellParseQuote:
 		q := MShellQuotation{Tokens: t.Items, StandardInputFile: "", StandardOutputFile: "", StandardErrorFile: "", Variables: context.Variables, MShellParseQuote: t}
@@ -963,7 +963,7 @@ func (state *EvalState) processToken(token MShellParseItem, frame *EvaluationFra
 		if result, handled := state.evalSimpleToken(&t, frame.Stack, &frame.Context); handled {
 			return result
 		}
-		return state.processTokenToken(t, frame, frames)
+		return state.processTokenToken(&t, frame, frames)
 
 	case *MShellTypeDecl:
 		// Static-only: type declarations have no runtime effect by design.
@@ -1026,7 +1026,7 @@ func (state *EvalState) callDefinition(def *MShellDefinition, token Token, frame
 // processIfBlock handles if/else-if/else blocks
 func (state *EvalState) processIfBlock(ifBlock *MShellParseIfBlock, frame *EvaluationFrame, frames *[]EvaluationFrame) *EvalResult {
 	stack := frame.Stack
-	context := frame.Context
+	context := &frame.Context
 	definitions := frame.Definitions
 	startToken := ifBlock.GetStartToken()
 
@@ -1054,7 +1054,7 @@ func (state *EvalState) processIfBlock(ifBlock *MShellParseIfBlock, frame *Evalu
 		newFrame := EvaluationFrame{
 			Objects:       ifBlock.IfBody,
 			Index:         0,
-			Context:       context,
+			Context:       *context,
 			Stack:         stack,
 			Definitions:   definitions,
 			CallStackItem: callStackItem,
@@ -1069,7 +1069,7 @@ func (state *EvalState) processIfBlock(ifBlock *MShellParseIfBlock, frame *Evalu
 		// Evaluate condition using the old Evaluate method for now
 		// This is a temporary solution - ideally we'd push a frame for the condition
 		callStackItem := CallStackItem{MShellParseItem: ifBlock, Name: "else-if-condition", CallStackType: CALLSTACKIF}
-		result := state.evaluateItems(elseIf.Condition, stack, context, definitions, callStackItem)
+		result := state.evaluateItems(elseIf.Condition, stack, *context, definitions, callStackItem)
 		if !result.Success || result.ExitCalled {
 			return stepOf(result)
 		}
@@ -1102,7 +1102,7 @@ func (state *EvalState) processIfBlock(ifBlock *MShellParseIfBlock, frame *Evalu
 			newFrame := EvaluationFrame{
 				Objects:       elseIf.Body,
 				Index:         0,
-				Context:       context,
+				Context:       *context,
 				Stack:         stack,
 				Definitions:   definitions,
 				CallStackItem: callStackItem,
@@ -1120,7 +1120,7 @@ func (state *EvalState) processIfBlock(ifBlock *MShellParseIfBlock, frame *Evalu
 		newFrame := EvaluationFrame{
 			Objects:       ifBlock.ElseBody,
 			Index:         0,
-			Context:       context,
+			Context:       *context,
 			Stack:         stack,
 			Definitions:   definitions,
 			CallStackItem: callStackItem,
@@ -1136,7 +1136,7 @@ func (state *EvalState) processIfBlock(ifBlock *MShellParseIfBlock, frame *Evalu
 func (state *EvalState) processMatchBlock(matchBlock *MShellParseMatchBlock, frame *EvaluationFrame, frames *[]EvaluationFrame) *EvalResult {
 	matchBlock.assertAssertiveInvariant()
 	stack := frame.Stack
-	context := frame.Context
+	context := &frame.Context
 	definitions := frame.Definitions
 	startToken := matchBlock.GetStartToken()
 
@@ -1161,7 +1161,7 @@ func (state *EvalState) processMatchBlock(matchBlock *MShellParseMatchBlock, fra
 			newFrame := EvaluationFrame{
 				Objects:       arm.Body,
 				Index:         0,
-				Context:       context,
+				Context:       *context,
 				Stack:         stack,
 				Definitions:   definitions,
 				CallStackItem: callStackItem,
@@ -1521,9 +1521,9 @@ func (state *EvalState) matchDictPattern(pattern *MShellParseDict, subject MShel
 }
 
 // processTokenToken handles Token types in the frame-based evaluator
-func (state *EvalState) processTokenToken(t Token, frame *EvaluationFrame, frames *[]EvaluationFrame) *EvalResult {
+func (state *EvalState) processTokenToken(t *Token, frame *EvaluationFrame, frames *[]EvaluationFrame) *EvalResult {
 	stack := frame.Stack
-	context := frame.Context
+	context := &frame.Context
 	definitions := frame.Definitions
 
 	if t.Type == EOF {
@@ -1539,10 +1539,10 @@ func (state *EvalState) processTokenToken(t Token, frame *EvaluationFrame, frame
 
 		// Check for definitions first (with TCO)
 		if def, ok := state.lookupDefinition(definitions, t.Lexeme); ok {
-			return state.callDefinition(def, t, frame, frames)
+			return state.callDefinition(def, *t, frame, frames)
 		}
 		// Not a definition - process as regular literal
-		return stepOf(state.evaluateBuiltinToken(t, frame.Stack, frame.Context, frame.Definitions, frame.CallStackItem))
+		return stepOf(state.evaluateBuiltinToken(*t, frame.Stack, frame.Context, frame.Definitions, frame.CallStackItem))
 	}
 
 	if t.Type == BREAK {
@@ -1564,23 +1564,23 @@ func (state *EvalState) processTokenToken(t Token, frame *EvaluationFrame, frame
 	}
 
 	if t.Type == LOOP {
-		return state.processLoop(t, frame, frames)
+		return state.processLoop(*t, frame, frames)
 	}
 
 	if t.Type == IFF {
-		return state.processIff(t, frame, frames)
+		return state.processIff(*t, frame, frames)
 	}
 
-	// Direct dispatch into evaluateToken — avoids per-token slice allocation.
+	// Direct dispatch into evaluateBuiltinToken — avoids per-token slice allocation.
 	// Preserve the call stack type from the frame.
 	callStackItem := CallStackItem{MShellParseItem: nil, Name: "token", CallStackType: frame.CallStackItem.CallStackType}
-	return stepOf(state.evaluateBuiltinToken(t, stack, context, definitions, callStackItem))
+	return stepOf(state.evaluateBuiltinToken(*t, stack, *context, definitions, callStackItem))
 }
 
 // processLoop handles the loop construct
 func (state *EvalState) processLoop(t Token, frame *EvaluationFrame, frames *[]EvaluationFrame) *EvalResult {
 	stack := frame.Stack
-	context := frame.Context
+	context := &frame.Context
 	definitions := frame.Definitions
 
 	obj, err := stack.Pop()
@@ -1600,7 +1600,7 @@ func (state *EvalState) processLoop(t Token, frame *EvaluationFrame, frames *[]E
 	// Build loop context. BuildExecutionContext handles all the quotation's
 	// redirections (stdin, stdout, stderr, merges) and propagates the outer
 	// context's streams when the quotation has none of its own.
-	loopContext, err := quotation.BuildExecutionContext(&context)
+	loopContext, err := quotation.BuildExecutionContext(context)
 	if err != nil {
 		return stepOf(state.FailWithMessage(err.Error()))
 	}
@@ -1632,7 +1632,7 @@ func (state *EvalState) processLoop(t Token, frame *EvaluationFrame, frames *[]E
 // by pushing the selected quotation body as a frame instead of recursing
 func (state *EvalState) processIff(t Token, frame *EvaluationFrame, frames *[]EvaluationFrame) *EvalResult {
 	stack := frame.Stack
-	context := frame.Context
+	context := &frame.Context
 	definitions := frame.Definitions
 
 	iff_name := "iff"
@@ -1691,7 +1691,7 @@ func (state *EvalState) processIff(t Token, frame *EvaluationFrame, frames *[]Ev
 	}
 
 	if quoteToExecute != nil {
-		qContext, err := quoteToExecute.BuildExecutionContext(&context)
+		qContext, err := quoteToExecute.BuildExecutionContext(context)
 		if err != nil {
 			return stepOf(state.FailWithMessage(err.Error()))
 		}
@@ -1717,12 +1717,12 @@ func (state *EvalState) processIff(t Token, frame *EvaluationFrame, frames *[]Ev
 // processIndexerList handles indexer operations
 func (state *EvalState) processIndexerList(indexerList *MShellIndexerList, frame *EvaluationFrame) *EvalResult {
 	stack := frame.Stack
-	context := frame.Context
+	context := &frame.Context
 	definitions := frame.Definitions
 
 	// Fall back to old Evaluate for indexer handling
 	callStackItem := CallStackItem{MShellParseItem: nil, Name: "indexer", CallStackType: CALLSTACKFILE}
-	result := state.evaluateItems([]MShellParseItem{indexerList}, stack, context, definitions, callStackItem)
+	result := state.evaluateItems([]MShellParseItem{indexerList}, stack, *context, definitions, callStackItem)
 	return stepOf(result)
 }
 
