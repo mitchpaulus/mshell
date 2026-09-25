@@ -317,6 +317,7 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		"(int str -- str)",
 	)
 	r.reg("foldl", "((a t -- a) a [t] -- a)")
+	r.reg("seq", "(int -- [int])")
 	r.reg("reverse",
 		"([t] -- [t])",
 		"(str -- str)",

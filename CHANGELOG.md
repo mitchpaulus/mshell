@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `seq` is now built in and much faster: about 25x faster and a third of the memory for 10 million items.
 - The file manager preview no longer times out after 3 seconds.
   The timeout existed for OneDrive files, which are now detected and skipped instead.
 - `stdin` fails if the input exceeds `MSH_READ_LIMIT` bytes (default 104857600, `0` for no limit).
