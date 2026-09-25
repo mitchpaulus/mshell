@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -164,6 +165,14 @@ func cloudStateMarker(state cloudFileState) (string, string) {
 // selected row.
 const cloudMarkerCols = 4
 
+// sizeCols is the width of the size column at the right of the left pane: a
+// space, then the size right aligned in four columns.
+const sizeCols = 5
+
+// minNameColsWithSize is the narrowest name column that still gets a size
+// column. On a narrower pane the size is dropped so names stay readable.
+const minNameColsWithSize = 8
+
 type FileManager struct {
 	rows, cols int
 	stdInFd    int
@@ -181,6 +190,10 @@ type FileManager struct {
 	folderCloudStates     map[string]cloudFileState
 	folderStateReqCh      chan folderStateRequest
 	folderStatesRequested bool // the current listing's folders were sent to the worker
+
+	// Formatted file sizes by path, filled as entries are drawn. Sizes need a
+	// stat call per file, so they are cached until the directory is reloaded.
+	entrySizes map[string]string
 
 	hostname string
 	username string
@@ -696,6 +709,7 @@ func (fm *FileManager) loadDirectory() {
 
 	fm.entries = entries
 	fm.previewCache = make(map[string][]string)
+	fm.entrySizes = make(map[string]string)
 	fm.searchActive = false
 	fm.searchMatches = fm.searchMatches[:0]
 }
@@ -733,6 +747,7 @@ func (fm *FileManager) selectedEntryPath(entry os.DirEntry) string {
 func (fm *FileManager) showWindowsVolumes() {
 	fm.entries = mountedWindowsVolumes()
 	fm.previewCache = make(map[string][]string)
+	fm.entrySizes = make(map[string]string)
 	fm.searchActive = false
 	fm.searchMatches = fm.searchMatches[:0]
 	fm.showingWindowsVolumes = true
@@ -824,6 +839,9 @@ func (fm *FileManager) leftPaneWidth() int {
 	if fm.inCloudSyncRoot && !fm.showingWindowsVolumes {
 		maxLen += cloudMarkerCols
 	}
+	if !fm.showingWindowsVolumes {
+		maxLen += sizeCols
+	}
 	maxWidth := fm.cols / 2
 	if maxLen > maxWidth {
 		maxLen = maxWidth
@@ -832,6 +850,86 @@ func (fm *FileManager) leftPaneWidth() int {
 		maxLen = 10
 	}
 	return maxLen
+}
+
+// showSizeColumn reports whether the left pane has room for the size column.
+func (fm *FileManager) showSizeColumn(leftW int, markerW int) bool {
+	if fm.showingWindowsVolumes {
+		return false
+	}
+	// 1 for the space before the name, 2 for a clipboard indent.
+	return leftW-1-2-markerW-sizeCols >= minNameColsWithSize
+}
+
+// entrySize returns the formatted size of a file, or "" for a directory or a
+// file whose size cannot be read. Symbolic links show the size of their target.
+// On Windows the size comes from the directory listing, so reading it never
+// downloads a cloud only file.
+func (fm *FileManager) entrySize(entry os.DirEntry) string {
+	if entry.IsDir() {
+		return ""
+	}
+	path := fm.selectedEntryPath(entry)
+	if size, ok := fm.entrySizes[path]; ok {
+		return size
+	}
+	size := ""
+	var info fs.FileInfo
+	var err error
+	if entry.Type()&fs.ModeSymlink != 0 {
+		info, err = os.Stat(path)
+	} else {
+		info, err = entry.Info()
+	}
+	if err == nil && info != nil && !info.IsDir() {
+		size = formatColumnSize(info.Size())
+	}
+	if fm.entrySizes == nil {
+		fm.entrySizes = make(map[string]string)
+	}
+	fm.entrySizes[path] = size
+	return size
+}
+
+// formatColumnSize formats a byte count in at most four columns, like ls -h:
+// bytes as a plain number, then K, M, G, T, P in powers of 1024, with one
+// decimal below 10.
+func formatColumnSize(size int64) string {
+	if size < 1024 {
+		return strconv.FormatInt(size, 10)
+	}
+	value := float64(size)
+	for _, unit := range []string{"K", "M", "G", "T", "P", "E"} {
+		value /= 1024
+		// Move to the next unit where rounding would reach four digits.
+		if value < 999.5 || unit == "E" {
+			if value < 9.95 {
+				return fmt.Sprintf("%.1f%s", value, unit)
+			}
+			return fmt.Sprintf("%.0f%s", value, unit)
+		}
+	}
+	return ""
+}
+
+// sizeColor returns the color for a size from formatColumnSize, so each unit
+// stands out from the next: bytes are dim, then kilobytes plain, megabytes
+// cyan, gigabytes yellow, and anything larger magenta.
+func sizeColor(size string) string {
+	if size == "" {
+		return "\033[39m"
+	}
+	switch size[len(size)-1] {
+	case 'K':
+		return "\033[39m" // default
+	case 'M':
+		return "\033[36m" // cyan
+	case 'G':
+		return "\033[33m" // yellow
+	case 'T', 'P', 'E':
+		return "\033[35m" // magenta
+	}
+	return "\033[90m" // bytes, dim gray
 }
 
 // truncateMiddle truncates s to maxRunes by replacing the middle with "..".
@@ -902,6 +1000,14 @@ func (fm *FileManager) render() {
 	buf.WriteString("\033[H\033[2J")
 
 	leftW := fm.leftPaneWidth()
+	markerW := 0
+	if fm.inCloudSyncRoot && !fm.showingWindowsVolumes {
+		markerW = cloudMarkerCols
+	}
+	sizeW := 0
+	if fm.showSizeColumn(leftW, markerW) {
+		sizeW = sizeCols
+	}
 	rightW := fm.cols - leftW - 3 // 3 for " │ " separator
 	if rightW < 0 {
 		rightW = 0
@@ -995,9 +1101,7 @@ func (fm *FileManager) render() {
 			}
 
 			// In a cloud sync folder, a marker slot shows each entry's sync status.
-			markerW := 0
-			if fm.inCloudSyncRoot && !fm.showingWindowsVolumes {
-				markerW = cloudMarkerCols
+			if markerW > 0 {
 				// Paint the slot first so the selected row's highlight covers it,
 				// then draw the marker and jump to the name column. The jump keeps
 				// the name aligned however wide the terminal draws the marker.
@@ -1022,7 +1126,10 @@ func (fm *FileManager) render() {
 				buf.WriteString("\033[34m") // blue for directories
 			}
 
-			availW := leftW - 1 - indent - markerW // 1 for the space before the name
+			availW := leftW - 1 - indent - markerW - sizeW // 1 for the space before the name
+			if availW < 0 {
+				availW = 0
+			}
 			if nameRunes > availW {
 				name = truncateMiddle(name, availW)
 				nameRunes = availW
@@ -1036,6 +1143,20 @@ func (fm *FileManager) render() {
 			padLeft := availW - nameRunes
 			if padLeft > 0 {
 				buf.WriteString(strings.Repeat(" ", padLeft))
+			}
+
+			if sizeW > 0 {
+				// Colored by unit on normal rows. The selected row is reverse
+				// video, where the name's color is the highlight, so leave it
+				// alone to keep the highlight one color across the row.
+				size := fm.entrySize(entry)
+				if idx != fm.cursor {
+					buf.WriteString(sizeColor(size))
+				}
+				fmt.Fprintf(&buf, "%*s", sizeW, size)
+				if idx != fm.cursor {
+					buf.WriteString("\033[39m")
+				}
 			}
 
 			if idx == fm.cursor || inClip {
