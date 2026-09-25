@@ -8,7 +8,7 @@ tests/quote_stderr_redirect.txt
 tests/test_quote_stderr.txt
 tests/msh-scripts/
 
-Screenshot *.png
+Screenshot*.png
 
 ai/fish-priority-issues/*
 
