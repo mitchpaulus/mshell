@@ -606,6 +606,12 @@ func stepOf(result EvalResult) *EvalResult {
 	return &escaped
 }
 
+// failStep is FailWithMessage for functions that return *EvalResult.
+func (state *EvalState) failStep(message string) *EvalResult {
+	result := state.FailWithMessage(message)
+	return &result
+}
+
 func (state *EvalState) FailWithMessage(message string) EvalResult {
 	// Messages quote user input and file names, which may hold bytes a
 	// terminal would execute. Print them visibly instead.
@@ -954,6 +960,9 @@ func (state *EvalState) processToken(token MShellParseItem, frame *EvaluationFra
 		return state.processGetter(t, frame)
 
 	case Token:
+		if result, handled := state.evalSimpleToken(&t, frame.Stack, &frame.Context); handled {
+			return result
+		}
 		return state.processTokenToken(t, frame, frames)
 
 	case *MShellTypeDecl:
@@ -3259,6 +3268,12 @@ func (state *EvalState) evaluateItems(objects []MShellParseItem, stack *MShellSt
 			}
 
 		case Token:
+			if result, handled := state.evalSimpleToken(&t, stack, &context); handled {
+				if result != nil {
+					return *result
+				}
+				continue
+			}
 			result := state.evaluateToken(t, stack, context, definitions, callStackItem)
 			if result.ShouldPassResultUpStack() {
 				return result
@@ -12119,24 +12134,25 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					stack.Push(MShellInt{exitCode})
 				}
 			} else if t.Type == TRUE { // Token Type
-				stack.Push(MShellBool{true})
+				if result := state.evalTrueToken(&t, stack, &context); result != nil {
+					return *result
+				}
 			} else if t.Type == FALSE { // Token Type
-				stack.Push(MShellBool{false})
+				if result := state.evalFalseToken(&t, stack, &context); result != nil {
+					return *result
+				}
 			} else if t.Type == INTEGER { // Token Type
-				intVal, err := parseIntLiteral(t.Lexeme)
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing integer: %s\n", t.Line, t.Column, err.Error()))
+				if result := state.evalIntegerToken(&t, stack, &context); result != nil {
+					return *result
 				}
-
-				stack.Push(MShellInt{intVal})
 			} else if t.Type == STRING { // Token Type
-				parsedString, err := ParseRawString(t.Lexeme)
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing string: %s\n", t.Line, t.Column, err.Error()))
+				if result := state.evalStringToken(&t, stack, &context); result != nil {
+					return *result
 				}
-				stack.Push(MShellString{parsedString})
 			} else if t.Type == SINGLEQUOTESTRING { // Token Type
-				stack.Push(MShellString{t.Lexeme[1 : len(t.Lexeme)-1]})
+				if result := state.evalSingleQuoteStringToken(&t, stack, &context); result != nil {
+					return *result
+				}
 			} else if t.Type == IFF {
 				iff_name := "iff"
 				firstObj, err := stack.Pop()
@@ -12208,340 +12224,24 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 				}
 
 			} else if t.Type == PLUS { // Token Type
-				obj1, err := stack.Pop()
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '+' operation on an empty stack.\n", t.Line, t.Column))
-				}
-
-				obj2, err := stack.Pop()
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '+' operation on a stack with only one item.\n", t.Line, t.Column))
-				}
-
-				switch obj1.(type) {
-				case MShellInt:
-					switch obj2.(type) {
-					case MShellInt:
-						stack.Push(MShellInt{obj2.(MShellInt).Value + obj1.(MShellInt).Value})
-					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot add an integer to a %s (%s). Use 'toFloat' / 'toInt' to convert explicitly — '+' does not coerce numeric types.\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
-					}
-				case MShellFloat:
-					switch obj2.(type) {
-					case MShellFloat:
-						stack.Push(MShellFloat{obj2.(MShellFloat).Value + obj1.(MShellFloat).Value})
-					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot add a float to a %s. Use 'toFloat' / 'toInt' to convert explicitly — '+' does not coerce numeric types.\n", t.Line, t.Column, obj2.TypeName()))
-					}
-				case MShellString:
-					switch obj2.(type) {
-					case MShellString:
-						stack.Push(MShellString{obj2.(MShellString).Content + obj1.(MShellString).Content})
-					case MShellLiteral:
-						stack.Push(MShellString{obj2.(MShellLiteral).LiteralText + obj1.(MShellString).Content})
-					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot add a string ('%s') to a %s (%s).\n", t.Line, t.Column, obj1.(MShellString).Content, obj2.TypeName(), obj2.DebugString()))
-					}
-				case MShellLiteral:
-					switch obj2.(type) {
-					case MShellString:
-						stack.Push(MShellString{obj2.(MShellString).Content + obj1.(MShellLiteral).LiteralText})
-					case MShellLiteral:
-						stack.Push(MShellString{obj2.(MShellLiteral).LiteralText + obj1.(MShellLiteral).LiteralText})
-					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot add a literal (%s) to a %s.\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName()))
-					}
-				case *MShellList:
-					switch obj2.(type) {
-					case *MShellList:
-						newList := NewList(len(obj2.(*MShellList).Items) + len(obj1.(*MShellList).Items))
-						copy(newList.Items, obj2.(*MShellList).Items)
-						copy(newList.Items[len(obj2.(*MShellList).Items):], obj1.(*MShellList).Items)
-						stack.Push(newList)
-					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot add a list to a %s.\n", t.Line, t.Column, obj2.TypeName()))
-					}
-				case MShellPath:
-					switch obj2.(type) {
-					case MShellPath:
-						// Do string join, not path join. Concat the strings
-						stack.Push(MShellPath{obj2.(MShellPath).Path + obj1.(MShellPath).Path})
-					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot add a path to a %s.\n", t.Line, t.Column, obj2.TypeName()))
-					}
-				case *MShellGrid, *MShellGridView:
-					switch obj2.(type) {
-					case *MShellGrid, *MShellGridView:
-						newGrid, err := concatGrids(obj2, obj1)
-						if err != nil {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: %s", t.Line, t.Column, err.Error()))
-						}
-						stack.Push(newGrid)
-					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot add a %s to a %s.\n", t.Line, t.Column, obj1.TypeName(), obj2.TypeName()))
-					}
-				default:
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '+' between a %s and a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
+				if result := state.evalPlusToken(&t, stack, &context); result != nil {
+					return *result
 				}
 			} else if t.Type == MINUS { // Token Type
-				obj1, err := stack.Pop()
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '-' operation on an empty stack.\n", t.Line, t.Column))
-				}
-
-				obj2, err := stack.Pop()
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '-' operation on a stack with only one item.\n", t.Line, t.Column))
-				}
-
-				switch obj1.(type) {
-				case MShellInt:
-					switch obj2.(type) {
-					case MShellInt:
-						stack.Push(MShellInt{obj2.(MShellInt).Value - obj1.(MShellInt).Value})
-					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot subtract an integer from a %s. Use 'toFloat' / 'toInt' to convert explicitly — '-' does not coerce numeric types.\n", t.Line, t.Column, obj2.TypeName()))
-					}
-				case MShellFloat:
-					switch obj2.(type) {
-					case MShellFloat:
-						stack.Push(MShellFloat{obj2.(MShellFloat).Value - obj1.(MShellFloat).Value})
-					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot subtract a float from a %s. Use 'toFloat' / 'toInt' to convert explicitly — '-' does not coerce numeric types.\n", t.Line, t.Column, obj2.TypeName()))
-					}
-				case *MShellDateTime:
-					switch obj2.(type) {
-					case *MShellDateTime:
-						// Return a float with the difference in days.
-						days := obj2.(*MShellDateTime).Time.Sub(obj1.(*MShellDateTime).Time).Hours() / 24
-						stack.Push(MShellFloat{days})
-					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot subtract a %s from a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
-					}
-				default:
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '-' to a %s and %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
+				if result := state.evalMinusToken(&t, stack, &context); result != nil {
+					return *result
 				}
 			} else if t.Type == NOT { // Token Type
-				obj, err := stack.Pop()
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
-				}
-
-				switch objTyped := obj.(type) {
-				case MShellBool:
-					stack.Push(MShellBool{!objTyped.Value})
-				case MShellInt:
-					if objTyped.Value == 0 {
-						stack.Push(MShellBool{false})
-					} else {
-						stack.Push(MShellBool{true})
-					}
-				default:
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s.\n", t.Line, t.Column, t.Lexeme, obj.TypeName()))
+				if result := state.evalNotToken(&t, stack, &context); result != nil {
+					return *result
 				}
 			} else if t.Type == GREATERTHANOREQUAL || t.Type == LESSTHANOREQUAL { // Token Type
-				obj1, err := stack.Pop()
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
-				}
-
-				obj2, err := stack.Pop()
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on a stack with only one item.\n", t.Line, t.Column, t.Lexeme))
-				}
-
-				if obj1.IsNumeric() && obj2.IsNumeric() {
-					// No implicit numeric coercion: both must be the same type.
-					obj1Int, isInt1 := obj1.(MShellInt)
-					obj2Int, isInt2 := obj2.(MShellInt)
-					obj1Flt, isFlt1 := obj1.(MShellFloat)
-					obj2Flt, isFlt2 := obj2.(MShellFloat)
-					switch {
-					case isInt1 && isInt2:
-						if t.Type == GREATERTHANOREQUAL {
-							stack.Push(MShellBool{obj2Int.Value >= obj1Int.Value})
-						} else {
-							stack.Push(MShellBool{obj2Int.Value <= obj1Int.Value})
-						}
-					case isFlt1 && isFlt2:
-						if t.Type == GREATERTHANOREQUAL {
-							stack.Push(MShellBool{obj2Flt.Value >= obj1Flt.Value})
-						} else {
-							stack.Push(MShellBool{obj2Flt.Value <= obj1Flt.Value})
-						}
-					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' across numeric types %s and %s. Use 'toFloat' / 'toInt' to convert explicitly.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
-					}
-				} else {
-
-					obj1Date, ok1 := obj1.(*MShellDateTime)
-					obj2Date, ok2 := obj2.(*MShellDateTime)
-
-					if ok1 && ok2 {
-						if t.Type == GREATERTHANOREQUAL {
-							stack.Push(MShellBool{obj2Date.Time.After(obj1Date.Time) || obj2Date.Time.Equal(obj1Date.Time)})
-						} else {
-							stack.Push(MShellBool{obj2Date.Time.Before(obj1Date.Time) || obj2Date.Time.Equal(obj1Date.Time)})
-						}
-					} else {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s and a %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
-					}
+				if result := state.evalGreaterLessEqualToken(&t, stack, &context); result != nil {
+					return *result
 				}
 			} else if t.Type == GREATERTHAN || t.Type == LESSTHAN { // Token Type
-				// This can either be normal comparison for numerics, or it's a redirect on a list or quotation.
-				obj1, err := stack.Pop()
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
-				}
-
-				obj2, err := stack.Pop()
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on a stack with only one item.\n", t.Line, t.Column, t.Lexeme))
-				}
-
-				if obj1.IsNumeric() && obj2.IsNumeric() {
-					// No implicit numeric coercion: both must be the same type.
-					obj1Int, isInt1 := obj1.(MShellInt)
-					obj2Int, isInt2 := obj2.(MShellInt)
-					obj1Flt, isFlt1 := obj1.(MShellFloat)
-					obj2Flt, isFlt2 := obj2.(MShellFloat)
-					switch {
-					case isInt1 && isInt2:
-						if t.Type == GREATERTHAN {
-							stack.Push(MShellBool{obj2Int.Value > obj1Int.Value})
-						} else {
-							stack.Push(MShellBool{obj2Int.Value < obj1Int.Value})
-						}
-					case isFlt1 && isFlt2:
-						if t.Type == GREATERTHAN {
-							stack.Push(MShellBool{obj2Flt.Value > obj1Flt.Value})
-						} else {
-							stack.Push(MShellBool{obj2Flt.Value < obj1Flt.Value})
-						}
-					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' across numeric types %s and %s. Use 'toFloat' / 'toInt' to convert explicitly.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
-					}
-				} else {
-					if t.Type == GREATERTHAN {
-						if desc := stdoutDestinationDescOf(obj2); desc != "" {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stdout already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
-						}
-					}
-					switch obj1.(type) {
-					case MShellString:
-						path := obj1.(MShellString).Content
-						if containsNullByte(path) {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Found a null byte in the redirection file path. This is almost certainly not intended. You may have built the file name from UTF-16. Please ensure that your string is UTF-8 for the most predictable results.\n", t.Line, t.Column))
-						}
-						switch obj2 := obj2.(type) {
-						case *MShellList:
-							if t.Type == GREATERTHAN {
-								obj2.StandardOutputFile = path
-							} else { // LESSTHAN, input redirection
-								obj2.StdinBehavior = STDIN_CONTENT
-								obj2.StandardInputContents = path
-							}
-							stack.Push(obj2)
-						case *MShellQuotation:
-							if t.Type == GREATERTHAN {
-								obj2.StandardOutputFile = path
-							} else { // LESSTHAN, input redirection
-								obj2.StdinBehavior = STDIN_CONTENT
-								obj2.StandardInputContents = path
-							}
-							stack.Push(obj2)
-						case *MShellPipe:
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a string (%s) to a Pipe (%s). Add the redirection to the final item in the pipeline.\n", t.Line, t.Column, obj1.DebugString(), obj2.DebugString()))
-						default:
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a string (%s) to a %s (%s).\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
-						}
-					case MShellBinary:
-						if t.Type == LESSTHAN {
-							switch obj2.(type) {
-							case *MShellList:
-								obj2.(*MShellList).StdinBehavior = STDIN_BINARY
-								obj2.(*MShellList).StandardInputBinary = obj1.(MShellBinary)
-								obj2.(*MShellList).StandardInputContents = ""
-								obj2.(*MShellList).StandardInputFile = ""
-								stack.Push(obj2)
-							case *MShellQuotation:
-								obj2.(*MShellQuotation).StdinBehavior = STDIN_BINARY
-								obj2.(*MShellQuotation).StandardInputBinary = obj1.(MShellBinary)
-								obj2.(*MShellQuotation).StandardInputContents = ""
-								obj2.(*MShellQuotation).StandardInputFile = ""
-								stack.Push(obj2)
-							case *MShellPipe:
-								return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect binary data (%s) to a Pipe (%s). Add the redirection to the final item in the pipeline.\n", t.Line, t.Column, obj1.DebugString(), obj2.DebugString()))
-							default:
-								return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect binary data (%s) to a %s (%s).\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
-							}
-						} else {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect binary data (%s) to a %s (%s). Use '<' for input redirection.\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
-						}
-					case MShellLiteral:
-						path := obj1.(MShellLiteral).LiteralText
-						if containsNullByte(path) {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Found a null byte in the redirection file path. This is almost certainly not intended. You may have built the file name from UTF-16. Please ensure that your string is UTF-8 for the most predictable results.\n", t.Line, t.Column))
-						}
-						switch obj2 := obj2.(type) {
-						case *MShellList:
-							if t.Type == GREATERTHAN {
-								obj2.StandardOutputFile = path
-							} else { // LESSTHAN, input redirection
-								obj2.StdinBehavior = STDIN_CONTENT
-								obj2.StandardInputFile = path
-							}
-							stack.Push(obj2)
-						case *MShellQuotation:
-							if t.Type == GREATERTHAN {
-								obj2.StandardOutputFile = path
-							} else {
-								obj2.StdinBehavior = STDIN_CONTENT
-								obj2.StandardInputContents = path
-							}
-						default:
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a %s (%s) to a %s (%s).\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
-						}
-
-					case MShellPath:
-						path := obj1.(MShellPath).Path
-						if containsNullByte(path) {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Found a null byte in the redirection file path. This is almost certainly not intended. You may have built the file name from UTF-16. Please ensure that your string is UTF-8 for the most predictable results.\n", t.Line, t.Column))
-						}
-						switch obj2 := obj2.(type) {
-						case *MShellList:
-							if t.Type == GREATERTHAN {
-								obj2.StandardOutputFile = path
-							} else { // LESSTHAN, input redirection
-								obj2.StdinBehavior = STDIN_FILE
-								obj2.StandardInputFile = path
-							}
-							stack.Push(obj2)
-						case *MShellQuotation:
-							if t.Type == GREATERTHAN {
-								obj2.StandardOutputFile = path
-							} else {
-								obj2.StdinBehavior = STDIN_FILE
-								obj2.StandardInputFile = path
-							}
-							stack.Push(obj2)
-						default:
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a path (%s) to a %s (%s).\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
-						}
-					case *MShellDateTime:
-						switch obj2.(type) {
-						case *MShellDateTime:
-							if t.Type == GREATERTHAN {
-								stack.Push(MShellBool{obj2.(*MShellDateTime).Time.After(obj1.(*MShellDateTime).Time)})
-							} else {
-								stack.Push(MShellBool{obj2.(*MShellDateTime).Time.Before(obj1.(*MShellDateTime).Time)})
-							}
-						default:
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot %s a datetime (%s) to a %s (%s).\n", t.Line, t.Column, t.Lexeme, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
-						}
-					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do a %s operation with a %s (%s) and a %s (%s).\n", t.Line, t.Column, t.Lexeme, obj1.TypeName(), obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
-					}
+				if result := state.evalGreaterLessToken(&t, stack, &context); result != nil {
+					return *result
 				}
 			} else if t.Type == STDERRREDIRECT || t.Type == STDERRAPPEND { // Token Type
 				obj1, err := stack.Pop()
@@ -12757,27 +12457,12 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 				stack.Push(MShellString{varValue})
 
 			} else if t.Type == VARSTORE { // Token Type
-				obj, err := stack.Pop()
-				varName := t.Lexeme[0 : len(t.Lexeme)-1] // Remove the trailing !
-
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Nothing on stack to store into variable %s.\n", t.Line, t.Column, varName))
+				if result := state.evalVarStoreToken(&t, stack, &context); result != nil {
+					return *result
 				}
-
-				context.Variables[varName] = obj
 			} else if t.Type == VARRETRIEVE { // Token Type
-				name := t.Lexeme[1:] // Remove the leading @
-				obj, found_mshell_variable := context.Variables[name]
-				if found_mshell_variable {
-					stack.Push(obj)
-				} else {
-					var message strings.Builder
-					fmt.Fprintf(&message, "%d:%d: Variable %s not found.\n", t.Line, t.Column, name)
-					message.WriteString("Variables:\n")
-					for key := range context.Variables {
-						fmt.Fprintf(&message, "  %s\n", key)
-					}
-					return state.FailWithMessage(message.String())
+				if result := state.evalVarRetrieveToken(&t, stack, &context); result != nil {
+					return *result
 				}
 			} else if t.Type == LOOP { // Token Type
 				obj, err := stack.Pop()
@@ -12871,21 +12556,9 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 				}
 				return EvalResult{true, true, 0, 0, false}
 			} else if t.Type == EQUALS { // Token Type
-				obj1, err := stack.Pop()
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '=' operation on an empty stack.\n", t.Line, t.Column))
+				if result := state.evalEqualsToken(&t, stack, &context); result != nil {
+					return *result
 				}
-				obj2, err := stack.Pop()
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '=' operation on a stack with only one item.\n", t.Line, t.Column))
-				}
-
-				doesEqual, err := obj1.Equals(obj2)
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot compare '=' between %s (%s) and %s (%s): %s\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString(), obj2.TypeName(), obj2.DebugString(), err.Error()))
-				}
-
-				stack.Push(MShellBool{doesEqual})
 			} else if t.Type == INTERPRET { // Token Type
 				obj, err := stack.Pop()
 				if err != nil {
@@ -13112,13 +12785,13 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 			} else if t.Type == STOP_ON_ERROR { // Token Type
 				state.StopOnError = true
 			} else if t.Type == FLOAT { // Token Type
-				floatVal, err := strconv.ParseFloat(t.Lexeme, 64)
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing float: %s\n", t.Line, t.Column, err.Error()))
+				if result := state.evalFloatToken(&t, stack, &context); result != nil {
+					return *result
 				}
-				stack.Push(MShellFloat{floatVal})
 			} else if t.Type == PATH { // Token Type
-				stack.Push(MShellPath{t.Lexeme[1 : len(t.Lexeme)-1]})
+				if result := state.evalPathToken(&t, stack, &context); result != nil {
+					return *result
+				}
 			} else if t.Type == DATETIME { // Token Type
 				year, _ := strconv.Atoi(t.Lexeme[0:4])
 				month, _ := strconv.Atoi(t.Lexeme[5:7])
@@ -13162,28 +12835,542 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 				list.RunInBackground = true
 				stack.Push(list)
 			} else if t.Type == NOTEQUAL { // Token Type
-				obj1, err := stack.Pop()
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '!=' operation on an empty stack.\n", t.Line, t.Column))
+				if result := state.evalNotEqualToken(&t, stack, &context); result != nil {
+					return *result
 				}
-
-				obj2, err := stack.Pop()
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '!=' operation on a stack with only one item.\n", t.Line, t.Column))
-				}
-
-				doesEqual, err := obj1.Equals(obj2)
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot compare '!=' between %s and %s: %s\n", t.Line, t.Column, obj1.TypeName(), obj2.TypeName(), err.Error()))
-				}
-
-				stack.Push(MShellBool{!doesEqual})
 			} else {
 				return state.FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' ('%s') yet.\n", t.Line, t.Column, t.Type, t.Lexeme))
 			}
 
 	return EvalResult{true, false, -1, 0, false}
 }
+
+// evalSimpleToken evaluates the token kinds that only work on the stack and
+// variables: literals, arithmetic, comparisons, and variable reads and
+// writes. These are the most common tokens, and calling them directly
+// avoids the cost of entering evaluateToken. handled is false for every
+// other kind of token.
+func (state *EvalState) evalSimpleToken(t *Token, stack *MShellStack, context *ExecuteContext) (result *EvalResult, handled bool) {
+	switch t.Type {
+	case TRUE:
+		return state.evalTrueToken(t, stack, context), true
+	case FALSE:
+		return state.evalFalseToken(t, stack, context), true
+	case INTEGER:
+		return state.evalIntegerToken(t, stack, context), true
+	case STRING:
+		return state.evalStringToken(t, stack, context), true
+	case SINGLEQUOTESTRING:
+		return state.evalSingleQuoteStringToken(t, stack, context), true
+	case PLUS:
+		return state.evalPlusToken(t, stack, context), true
+	case MINUS:
+		return state.evalMinusToken(t, stack, context), true
+	case NOT:
+		return state.evalNotToken(t, stack, context), true
+	case GREATERTHANOREQUAL, LESSTHANOREQUAL:
+		return state.evalGreaterLessEqualToken(t, stack, context), true
+	case GREATERTHAN, LESSTHAN:
+		return state.evalGreaterLessToken(t, stack, context), true
+	case VARSTORE:
+		return state.evalVarStoreToken(t, stack, context), true
+	case VARRETRIEVE:
+		return state.evalVarRetrieveToken(t, stack, context), true
+	case EQUALS:
+		return state.evalEqualsToken(t, stack, context), true
+	case FLOAT:
+		return state.evalFloatToken(t, stack, context), true
+	case PATH:
+		return state.evalPathToken(t, stack, context), true
+	case NOTEQUAL:
+		return state.evalNotEqualToken(t, stack, context), true
+	}
+	return nil, false
+}
+
+// evalTrueToken evaluates a TRUE token.
+func (state *EvalState) evalTrueToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
+	stack.Push(MShellBool{true})
+	return nil
+}
+
+// evalFalseToken evaluates a FALSE token.
+func (state *EvalState) evalFalseToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
+	stack.Push(MShellBool{false})
+	return nil
+}
+
+// evalIntegerToken evaluates a INTEGER token.
+func (state *EvalState) evalIntegerToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
+	intVal, err := parseIntLiteral(t.Lexeme)
+	if err != nil {
+		return state.failStep(fmt.Sprintf("%d:%d: Error parsing integer: %s\n", t.Line, t.Column, err.Error()))
+	}
+
+	stack.Push(MShellInt{intVal})
+	return nil
+}
+
+// evalStringToken evaluates a STRING token.
+func (state *EvalState) evalStringToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
+	parsedString, err := ParseRawString(t.Lexeme)
+	if err != nil {
+		return state.failStep(fmt.Sprintf("%d:%d: Error parsing string: %s\n", t.Line, t.Column, err.Error()))
+	}
+	stack.Push(MShellString{parsedString})
+	return nil
+}
+
+// evalSingleQuoteStringToken evaluates a SINGLEQUOTESTRING token.
+func (state *EvalState) evalSingleQuoteStringToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
+	stack.Push(MShellString{t.Lexeme[1 : len(t.Lexeme)-1]})
+	return nil
+}
+
+// evalPlusToken evaluates a PLUS token.
+func (state *EvalState) evalPlusToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
+	obj1, err := stack.Pop()
+	if err != nil {
+		return state.failStep(fmt.Sprintf("%d:%d: Cannot do '+' operation on an empty stack.\n", t.Line, t.Column))
+	}
+
+	obj2, err := stack.Pop()
+	if err != nil {
+		return state.failStep(fmt.Sprintf("%d:%d: Cannot do '+' operation on a stack with only one item.\n", t.Line, t.Column))
+	}
+
+	switch obj1.(type) {
+	case MShellInt:
+		switch obj2.(type) {
+		case MShellInt:
+			stack.Push(MShellInt{obj2.(MShellInt).Value + obj1.(MShellInt).Value})
+		default:
+			return state.failStep(fmt.Sprintf("%d:%d: Cannot add an integer to a %s (%s). Use 'toFloat' / 'toInt' to convert explicitly — '+' does not coerce numeric types.\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
+		}
+	case MShellFloat:
+		switch obj2.(type) {
+		case MShellFloat:
+			stack.Push(MShellFloat{obj2.(MShellFloat).Value + obj1.(MShellFloat).Value})
+		default:
+			return state.failStep(fmt.Sprintf("%d:%d: Cannot add a float to a %s. Use 'toFloat' / 'toInt' to convert explicitly — '+' does not coerce numeric types.\n", t.Line, t.Column, obj2.TypeName()))
+		}
+	case MShellString:
+		switch obj2.(type) {
+		case MShellString:
+			stack.Push(MShellString{obj2.(MShellString).Content + obj1.(MShellString).Content})
+		case MShellLiteral:
+			stack.Push(MShellString{obj2.(MShellLiteral).LiteralText + obj1.(MShellString).Content})
+		default:
+			return state.failStep(fmt.Sprintf("%d:%d: Cannot add a string ('%s') to a %s (%s).\n", t.Line, t.Column, obj1.(MShellString).Content, obj2.TypeName(), obj2.DebugString()))
+		}
+	case MShellLiteral:
+		switch obj2.(type) {
+		case MShellString:
+			stack.Push(MShellString{obj2.(MShellString).Content + obj1.(MShellLiteral).LiteralText})
+		case MShellLiteral:
+			stack.Push(MShellString{obj2.(MShellLiteral).LiteralText + obj1.(MShellLiteral).LiteralText})
+		default:
+			return state.failStep(fmt.Sprintf("%d:%d: Cannot add a literal (%s) to a %s.\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName()))
+		}
+	case *MShellList:
+		switch obj2.(type) {
+		case *MShellList:
+			newList := NewList(len(obj2.(*MShellList).Items) + len(obj1.(*MShellList).Items))
+			copy(newList.Items, obj2.(*MShellList).Items)
+			copy(newList.Items[len(obj2.(*MShellList).Items):], obj1.(*MShellList).Items)
+			stack.Push(newList)
+		default:
+			return state.failStep(fmt.Sprintf("%d:%d: Cannot add a list to a %s.\n", t.Line, t.Column, obj2.TypeName()))
+		}
+	case MShellPath:
+		switch obj2.(type) {
+		case MShellPath:
+			// Do string join, not path join. Concat the strings
+			stack.Push(MShellPath{obj2.(MShellPath).Path + obj1.(MShellPath).Path})
+		default:
+			return state.failStep(fmt.Sprintf("%d:%d: Cannot add a path to a %s.\n", t.Line, t.Column, obj2.TypeName()))
+		}
+	case *MShellGrid, *MShellGridView:
+		switch obj2.(type) {
+		case *MShellGrid, *MShellGridView:
+			newGrid, err := concatGrids(obj2, obj1)
+			if err != nil {
+				return state.failStep(fmt.Sprintf("%d:%d: %s", t.Line, t.Column, err.Error()))
+			}
+			stack.Push(newGrid)
+		default:
+			return state.failStep(fmt.Sprintf("%d:%d: Cannot add a %s to a %s.\n", t.Line, t.Column, obj1.TypeName(), obj2.TypeName()))
+		}
+	default:
+		return state.failStep(fmt.Sprintf("%d:%d: Cannot apply '+' between a %s and a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
+	}
+	return nil
+}
+
+// evalMinusToken evaluates a MINUS token.
+func (state *EvalState) evalMinusToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
+	obj1, err := stack.Pop()
+	if err != nil {
+		return state.failStep(fmt.Sprintf("%d:%d: Cannot do '-' operation on an empty stack.\n", t.Line, t.Column))
+	}
+
+	obj2, err := stack.Pop()
+	if err != nil {
+		return state.failStep(fmt.Sprintf("%d:%d: Cannot do '-' operation on a stack with only one item.\n", t.Line, t.Column))
+	}
+
+	switch obj1.(type) {
+	case MShellInt:
+		switch obj2.(type) {
+		case MShellInt:
+			stack.Push(MShellInt{obj2.(MShellInt).Value - obj1.(MShellInt).Value})
+		default:
+			return state.failStep(fmt.Sprintf("%d:%d: Cannot subtract an integer from a %s. Use 'toFloat' / 'toInt' to convert explicitly — '-' does not coerce numeric types.\n", t.Line, t.Column, obj2.TypeName()))
+		}
+	case MShellFloat:
+		switch obj2.(type) {
+		case MShellFloat:
+			stack.Push(MShellFloat{obj2.(MShellFloat).Value - obj1.(MShellFloat).Value})
+		default:
+			return state.failStep(fmt.Sprintf("%d:%d: Cannot subtract a float from a %s. Use 'toFloat' / 'toInt' to convert explicitly — '-' does not coerce numeric types.\n", t.Line, t.Column, obj2.TypeName()))
+		}
+	case *MShellDateTime:
+		switch obj2.(type) {
+		case *MShellDateTime:
+			// Return a float with the difference in days.
+			days := obj2.(*MShellDateTime).Time.Sub(obj1.(*MShellDateTime).Time).Hours() / 24
+			stack.Push(MShellFloat{days})
+		default:
+			return state.failStep(fmt.Sprintf("%d:%d: Cannot subtract a %s from a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
+		}
+	default:
+		return state.failStep(fmt.Sprintf("%d:%d: Cannot apply '-' to a %s and %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
+	}
+	return nil
+}
+
+// evalNotToken evaluates a NOT token.
+func (state *EvalState) evalNotToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
+	obj, err := stack.Pop()
+	if err != nil {
+		return state.failStep(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
+	}
+
+	switch objTyped := obj.(type) {
+	case MShellBool:
+		stack.Push(MShellBool{!objTyped.Value})
+	case MShellInt:
+		if objTyped.Value == 0 {
+			stack.Push(MShellBool{false})
+		} else {
+			stack.Push(MShellBool{true})
+		}
+	default:
+		return state.failStep(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s.\n", t.Line, t.Column, t.Lexeme, obj.TypeName()))
+	}
+	return nil
+}
+
+// evalGreaterLessEqualToken evaluates a GREATERTHANOREQUAL / LESSTHANOREQUAL token.
+func (state *EvalState) evalGreaterLessEqualToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
+	obj1, err := stack.Pop()
+	if err != nil {
+		return state.failStep(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
+	}
+
+	obj2, err := stack.Pop()
+	if err != nil {
+		return state.failStep(fmt.Sprintf("%d:%d: Cannot do '%s' operation on a stack with only one item.\n", t.Line, t.Column, t.Lexeme))
+	}
+
+	if obj1.IsNumeric() && obj2.IsNumeric() {
+		// No implicit numeric coercion: both must be the same type.
+		obj1Int, isInt1 := obj1.(MShellInt)
+		obj2Int, isInt2 := obj2.(MShellInt)
+		obj1Flt, isFlt1 := obj1.(MShellFloat)
+		obj2Flt, isFlt2 := obj2.(MShellFloat)
+		switch {
+		case isInt1 && isInt2:
+			if t.Type == GREATERTHANOREQUAL {
+				stack.Push(MShellBool{obj2Int.Value >= obj1Int.Value})
+			} else {
+				stack.Push(MShellBool{obj2Int.Value <= obj1Int.Value})
+			}
+		case isFlt1 && isFlt2:
+			if t.Type == GREATERTHANOREQUAL {
+				stack.Push(MShellBool{obj2Flt.Value >= obj1Flt.Value})
+			} else {
+				stack.Push(MShellBool{obj2Flt.Value <= obj1Flt.Value})
+			}
+		default:
+			return state.failStep(fmt.Sprintf("%d:%d: Cannot apply '%s' across numeric types %s and %s. Use 'toFloat' / 'toInt' to convert explicitly.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
+		}
+	} else {
+
+		obj1Date, ok1 := obj1.(*MShellDateTime)
+		obj2Date, ok2 := obj2.(*MShellDateTime)
+
+		if ok1 && ok2 {
+			if t.Type == GREATERTHANOREQUAL {
+				stack.Push(MShellBool{obj2Date.Time.After(obj1Date.Time) || obj2Date.Time.Equal(obj1Date.Time)})
+			} else {
+				stack.Push(MShellBool{obj2Date.Time.Before(obj1Date.Time) || obj2Date.Time.Equal(obj1Date.Time)})
+			}
+		} else {
+			return state.failStep(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s and a %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
+		}
+	}
+	return nil
+}
+
+// evalGreaterLessToken evaluates a GREATERTHAN / LESSTHAN token.
+func (state *EvalState) evalGreaterLessToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
+	// This can either be normal comparison for numerics, or it's a redirect on a list or quotation.
+	obj1, err := stack.Pop()
+	if err != nil {
+		return state.failStep(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
+	}
+
+	obj2, err := stack.Pop()
+	if err != nil {
+		return state.failStep(fmt.Sprintf("%d:%d: Cannot do '%s' operation on a stack with only one item.\n", t.Line, t.Column, t.Lexeme))
+	}
+
+	if obj1.IsNumeric() && obj2.IsNumeric() {
+		// No implicit numeric coercion: both must be the same type.
+		obj1Int, isInt1 := obj1.(MShellInt)
+		obj2Int, isInt2 := obj2.(MShellInt)
+		obj1Flt, isFlt1 := obj1.(MShellFloat)
+		obj2Flt, isFlt2 := obj2.(MShellFloat)
+		switch {
+		case isInt1 && isInt2:
+			if t.Type == GREATERTHAN {
+				stack.Push(MShellBool{obj2Int.Value > obj1Int.Value})
+			} else {
+				stack.Push(MShellBool{obj2Int.Value < obj1Int.Value})
+			}
+		case isFlt1 && isFlt2:
+			if t.Type == GREATERTHAN {
+				stack.Push(MShellBool{obj2Flt.Value > obj1Flt.Value})
+			} else {
+				stack.Push(MShellBool{obj2Flt.Value < obj1Flt.Value})
+			}
+		default:
+			return state.failStep(fmt.Sprintf("%d:%d: Cannot apply '%s' across numeric types %s and %s. Use 'toFloat' / 'toInt' to convert explicitly.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
+		}
+	} else {
+		if t.Type == GREATERTHAN {
+			if desc := stdoutDestinationDescOf(obj2); desc != "" {
+				return state.failStep(fmt.Sprintf("%d:%d: Cannot apply '%s': stdout already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+			}
+		}
+		switch obj1.(type) {
+		case MShellString:
+			path := obj1.(MShellString).Content
+			if containsNullByte(path) {
+				return state.failStep(fmt.Sprintf("%d:%d: Found a null byte in the redirection file path. This is almost certainly not intended. You may have built the file name from UTF-16. Please ensure that your string is UTF-8 for the most predictable results.\n", t.Line, t.Column))
+			}
+			switch obj2 := obj2.(type) {
+			case *MShellList:
+				if t.Type == GREATERTHAN {
+					obj2.StandardOutputFile = path
+				} else { // LESSTHAN, input redirection
+					obj2.StdinBehavior = STDIN_CONTENT
+					obj2.StandardInputContents = path
+				}
+				stack.Push(obj2)
+			case *MShellQuotation:
+				if t.Type == GREATERTHAN {
+					obj2.StandardOutputFile = path
+				} else { // LESSTHAN, input redirection
+					obj2.StdinBehavior = STDIN_CONTENT
+					obj2.StandardInputContents = path
+				}
+				stack.Push(obj2)
+			case *MShellPipe:
+				return state.failStep(fmt.Sprintf("%d:%d: Cannot redirect a string (%s) to a Pipe (%s). Add the redirection to the final item in the pipeline.\n", t.Line, t.Column, obj1.DebugString(), obj2.DebugString()))
+			default:
+				return state.failStep(fmt.Sprintf("%d:%d: Cannot redirect a string (%s) to a %s (%s).\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
+			}
+		case MShellBinary:
+			if t.Type == LESSTHAN {
+				switch obj2.(type) {
+				case *MShellList:
+					obj2.(*MShellList).StdinBehavior = STDIN_BINARY
+					obj2.(*MShellList).StandardInputBinary = obj1.(MShellBinary)
+					obj2.(*MShellList).StandardInputContents = ""
+					obj2.(*MShellList).StandardInputFile = ""
+					stack.Push(obj2)
+				case *MShellQuotation:
+					obj2.(*MShellQuotation).StdinBehavior = STDIN_BINARY
+					obj2.(*MShellQuotation).StandardInputBinary = obj1.(MShellBinary)
+					obj2.(*MShellQuotation).StandardInputContents = ""
+					obj2.(*MShellQuotation).StandardInputFile = ""
+					stack.Push(obj2)
+				case *MShellPipe:
+					return state.failStep(fmt.Sprintf("%d:%d: Cannot redirect binary data (%s) to a Pipe (%s). Add the redirection to the final item in the pipeline.\n", t.Line, t.Column, obj1.DebugString(), obj2.DebugString()))
+				default:
+					return state.failStep(fmt.Sprintf("%d:%d: Cannot redirect binary data (%s) to a %s (%s).\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
+				}
+			} else {
+				return state.failStep(fmt.Sprintf("%d:%d: Cannot redirect binary data (%s) to a %s (%s). Use '<' for input redirection.\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
+			}
+		case MShellLiteral:
+			path := obj1.(MShellLiteral).LiteralText
+			if containsNullByte(path) {
+				return state.failStep(fmt.Sprintf("%d:%d: Found a null byte in the redirection file path. This is almost certainly not intended. You may have built the file name from UTF-16. Please ensure that your string is UTF-8 for the most predictable results.\n", t.Line, t.Column))
+			}
+			switch obj2 := obj2.(type) {
+			case *MShellList:
+				if t.Type == GREATERTHAN {
+					obj2.StandardOutputFile = path
+				} else { // LESSTHAN, input redirection
+					obj2.StdinBehavior = STDIN_CONTENT
+					obj2.StandardInputFile = path
+				}
+				stack.Push(obj2)
+			case *MShellQuotation:
+				if t.Type == GREATERTHAN {
+					obj2.StandardOutputFile = path
+				} else {
+					obj2.StdinBehavior = STDIN_CONTENT
+					obj2.StandardInputContents = path
+				}
+			default:
+				return state.failStep(fmt.Sprintf("%d:%d: Cannot redirect a %s (%s) to a %s (%s).\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
+			}
+
+		case MShellPath:
+			path := obj1.(MShellPath).Path
+			if containsNullByte(path) {
+				return state.failStep(fmt.Sprintf("%d:%d: Found a null byte in the redirection file path. This is almost certainly not intended. You may have built the file name from UTF-16. Please ensure that your string is UTF-8 for the most predictable results.\n", t.Line, t.Column))
+			}
+			switch obj2 := obj2.(type) {
+			case *MShellList:
+				if t.Type == GREATERTHAN {
+					obj2.StandardOutputFile = path
+				} else { // LESSTHAN, input redirection
+					obj2.StdinBehavior = STDIN_FILE
+					obj2.StandardInputFile = path
+				}
+				stack.Push(obj2)
+			case *MShellQuotation:
+				if t.Type == GREATERTHAN {
+					obj2.StandardOutputFile = path
+				} else {
+					obj2.StdinBehavior = STDIN_FILE
+					obj2.StandardInputFile = path
+				}
+				stack.Push(obj2)
+			default:
+				return state.failStep(fmt.Sprintf("%d:%d: Cannot redirect a path (%s) to a %s (%s).\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
+			}
+		case *MShellDateTime:
+			switch obj2.(type) {
+			case *MShellDateTime:
+				if t.Type == GREATERTHAN {
+					stack.Push(MShellBool{obj2.(*MShellDateTime).Time.After(obj1.(*MShellDateTime).Time)})
+				} else {
+					stack.Push(MShellBool{obj2.(*MShellDateTime).Time.Before(obj1.(*MShellDateTime).Time)})
+				}
+			default:
+				return state.failStep(fmt.Sprintf("%d:%d: Cannot %s a datetime (%s) to a %s (%s).\n", t.Line, t.Column, t.Lexeme, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
+			}
+		default:
+			return state.failStep(fmt.Sprintf("%d:%d: Cannot do a %s operation with a %s (%s) and a %s (%s).\n", t.Line, t.Column, t.Lexeme, obj1.TypeName(), obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
+		}
+	}
+	return nil
+}
+
+// evalVarStoreToken evaluates a VARSTORE token.
+func (state *EvalState) evalVarStoreToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
+	obj, err := stack.Pop()
+	varName := t.Lexeme[0 : len(t.Lexeme)-1] // Remove the trailing !
+
+	if err != nil {
+		return state.failStep(fmt.Sprintf("%d:%d: Nothing on stack to store into variable %s.\n", t.Line, t.Column, varName))
+	}
+
+	context.Variables[varName] = obj
+	return nil
+}
+
+// evalVarRetrieveToken evaluates a VARRETRIEVE token.
+func (state *EvalState) evalVarRetrieveToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
+	name := t.Lexeme[1:] // Remove the leading @
+	obj, found_mshell_variable := context.Variables[name]
+	if found_mshell_variable {
+		stack.Push(obj)
+	} else {
+		var message strings.Builder
+		fmt.Fprintf(&message, "%d:%d: Variable %s not found.\n", t.Line, t.Column, name)
+		message.WriteString("Variables:\n")
+		for key := range context.Variables {
+			fmt.Fprintf(&message, "  %s\n", key)
+		}
+		return state.failStep(message.String())
+	}
+	return nil
+}
+
+// evalEqualsToken evaluates a EQUALS token.
+func (state *EvalState) evalEqualsToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
+	obj1, err := stack.Pop()
+	if err != nil {
+		return state.failStep(fmt.Sprintf("%d:%d: Cannot do '=' operation on an empty stack.\n", t.Line, t.Column))
+	}
+	obj2, err := stack.Pop()
+	if err != nil {
+		return state.failStep(fmt.Sprintf("%d:%d: Cannot do '=' operation on a stack with only one item.\n", t.Line, t.Column))
+	}
+
+	doesEqual, err := obj1.Equals(obj2)
+	if err != nil {
+		return state.failStep(fmt.Sprintf("%d:%d: Cannot compare '=' between %s (%s) and %s (%s): %s\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString(), obj2.TypeName(), obj2.DebugString(), err.Error()))
+	}
+
+	stack.Push(MShellBool{doesEqual})
+	return nil
+}
+
+// evalFloatToken evaluates a FLOAT token.
+func (state *EvalState) evalFloatToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
+	floatVal, err := strconv.ParseFloat(t.Lexeme, 64)
+	if err != nil {
+		return state.failStep(fmt.Sprintf("%d:%d: Error parsing float: %s\n", t.Line, t.Column, err.Error()))
+	}
+	stack.Push(MShellFloat{floatVal})
+	return nil
+}
+
+// evalPathToken evaluates a PATH token.
+func (state *EvalState) evalPathToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
+	stack.Push(MShellPath{t.Lexeme[1 : len(t.Lexeme)-1]})
+	return nil
+}
+
+// evalNotEqualToken evaluates a NOTEQUAL token.
+func (state *EvalState) evalNotEqualToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
+	obj1, err := stack.Pop()
+	if err != nil {
+		return state.failStep(fmt.Sprintf("%d:%d: Cannot do '!=' operation on an empty stack.\n", t.Line, t.Column))
+	}
+
+	obj2, err := stack.Pop()
+	if err != nil {
+		return state.failStep(fmt.Sprintf("%d:%d: Cannot do '!=' operation on a stack with only one item.\n", t.Line, t.Column))
+	}
+
+	doesEqual, err := obj1.Equals(obj2)
+	if err != nil {
+		return state.failStep(fmt.Sprintf("%d:%d: Cannot compare '!=' between %s and %s: %s\n", t.Line, t.Column, obj1.TypeName(), obj2.TypeName(), err.Error()))
+	}
+
+	stack.Push(MShellBool{!doesEqual})
+	return nil
+}
+
 
 // readLimitEnvVar names the environment variable that caps how many bytes a
 // bulk read into memory (the `stdin` builtin) will accept before failing.
