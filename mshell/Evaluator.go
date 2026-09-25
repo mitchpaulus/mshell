@@ -1585,7 +1585,7 @@ func (state *EvalState) processLoop(t Token, frame *EvaluationFrame, frames *[]E
 	newFrame := EvaluationFrame{
 		Objects:            quotation.Tokens,
 		Index:              0,
-		Context:            *loopContext,
+		Context:            loopContext,
 		Stack:              stack,
 		Definitions:        definitions,
 		CallStackItem:      callStackItem,
@@ -1673,7 +1673,7 @@ func (state *EvalState) processIff(t Token, frame *EvaluationFrame, frames *[]Ev
 		newFrame := EvaluationFrame{
 			Objects:            quoteToExecute.Tokens,
 			Index:              0,
-			Context:            *qContext,
+			Context:            qContext,
 			Stack:              stack,
 			Definitions:        definitions,
 			CallStackItem:      callStackItem,
@@ -1792,7 +1792,7 @@ func (state *EvalState) EvaluateQuote(quotation *MShellQuotation, stack *MShellS
 	}
 	defer qContext.Close()
 	callStackItem := CallStackItem{MShellParseItem: quotation, Name: "Quote", CallStackType: CALLSTACKQUOTE}
-	return state.evaluateItems(quotation.Tokens, stack, (*qContext), definitions, callStackItem), nil
+	return state.evaluateItems(quotation.Tokens, stack, qContext, definitions, callStackItem), nil
 }
 
 // Evaluate evaluates a list of parsed items using the frame-based evaluator with TCO support
@@ -12777,12 +12777,11 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 				// BuildExecutionContext handles all the quotation's
 				// redirections (stdin, stdout, stderr, merges).
-				builtContext, err := quotation.BuildExecutionContext(&context)
+				loopContext, err := quotation.BuildExecutionContext(&context)
 				if err != nil {
 					return state.FailWithMessage(err.Error())
 				}
-				builtContext.Variables = context.Variables
-				loopContext := *builtContext
+				loopContext.Variables = context.Variables
 				defer loopContext.Close()
 
 				maxLoops := 15000000
