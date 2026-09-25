@@ -1,0 +1,474 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Call Options Design</title>
+<style>
+:root {
+  --bg: #f7f6f3;
+  --panel: #ffffff;
+  --line: #dedad2;
+  --text: #1f2328;
+  --muted: #5f6670;
+  --accent: #0f766e;
+  --accent-soft: rgba(15, 118, 110, .08);
+  --warn: #b45309;
+  --warn-soft: rgba(180, 83, 9, .08);
+  --bad: #b42318;
+  --code-bg: #f0eee9;
+  --code-text: #1f2328;
+  --max: 60rem;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111418;
+    --panel: #191e24;
+    --line: #313b46;
+    --text: #e6ebf0;
+    --muted: #9ea9b5;
+    --accent: #6fd3c5;
+    --accent-soft: rgba(111, 211, 197, .10);
+    --warn: #f0c36a;
+    --warn-soft: rgba(240, 195, 106, .09);
+    --bad: #ef8a7a;
+    --code-bg: #0c0f12;
+    --code-text: #d8e3ec;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111418;
+  --panel: #191e24;
+  --line: #313b46;
+  --text: #e6ebf0;
+  --muted: #9ea9b5;
+  --accent: #6fd3c5;
+  --accent-soft: rgba(111, 211, 197, .10);
+  --warn: #f0c36a;
+  --warn-soft: rgba(240, 195, 106, .09);
+  --bad: #ef8a7a;
+  --code-bg: #0c0f12;
+  --code-text: #d8e3ec;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+a { color: var(--accent); }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+code {
+  padding: .05em .3em;
+  border-radius: .25rem;
+  background: var(--code-bg);
+  font-size: .92em;
+}
+pre {
+  margin: 1rem 0;
+  padding: .9rem 1rem;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: .5rem;
+  background: var(--code-bg);
+  color: var(--code-text);
+  line-height: 1.5;
+  font-size: .9rem;
+}
+pre code { padding: 0; background: none; font-size: inherit; }
+.c { color: var(--muted); }
+
+header {
+  padding: 3.5rem 16px 2rem;
+  border-bottom: 1px solid var(--line);
+}
+header > div, main { width: min(100%, var(--max)); margin: 0 auto; }
+.eyebrow {
+  margin: 0 0 .5rem;
+  color: var(--accent);
+  font: 600 .78rem/1.2 ui-monospace, monospace;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+h1 { margin: 0; font-size: clamp(2rem, 6vw, 3rem); letter-spacing: -.03em; line-height: 1.1; }
+.lede { margin: 1rem 0 0; color: var(--muted); font-size: 1.12rem; max-width: 48rem; }
+.meta { margin-top: 1rem; color: var(--muted); font-size: .88rem; }
+
+nav {
+  position: sticky; top: 0; z-index: 5;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+  overflow-x: auto;
+}
+nav ol {
+  display: flex; gap: .15rem;
+  width: min(100%, var(--max)); margin: 0 auto;
+  padding: .45rem 16px; list-style: none;
+}
+nav a {
+  display: block; padding: .3rem .55rem; border-radius: .35rem;
+  color: var(--muted); text-decoration: none; white-space: nowrap; font-size: .85rem;
+}
+nav a:hover { color: var(--text); background: var(--accent-soft); }
+
+main { padding: 0 16px 4rem; }
+section { padding: 2.8rem 0 1rem; border-bottom: 1px solid var(--line); }
+section:last-child { border-bottom: 0; }
+.num { color: var(--accent); font: 700 .78rem/1 ui-monospace, monospace; letter-spacing: .1em; }
+h2 { margin: .35rem 0 1rem; font-size: 1.7rem; letter-spacing: -.02em; line-height: 1.2; }
+h3 { margin: 1.8rem 0 .5rem; font-size: 1.15rem; }
+p, li { max-width: 70ch; }
+li { margin: .3rem 0; }
+
+.callout {
+  margin: 1.4rem 0; padding: 1rem 1.2rem;
+  border-left: 4px solid var(--accent);
+  border-radius: .2rem .5rem .5rem .2rem;
+  background: var(--accent-soft);
+}
+.callout.warn { border-left-color: var(--warn); background: var(--warn-soft); }
+.callout p { margin: .3rem 0; }
+.callout strong:first-child { display: block; margin-bottom: .2rem; }
+
+.table-wrap { overflow-x: auto; margin: 1rem 0; }
+table { border-collapse: collapse; width: 100%; font-size: .93rem; }
+th, td { padding: .55rem .7rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: .82rem; text-transform: uppercase; letter-spacing: .05em; }
+td:first-child { white-space: nowrap; font-weight: 600; }
+
+.rules { counter-reset: rule; list-style: none; padding: 0; }
+.rules li {
+  counter-increment: rule; position: relative;
+  margin: .7rem 0; padding: .8rem 1rem .8rem 3rem;
+  border: 1px solid var(--line); border-radius: .5rem; background: var(--panel);
+}
+.rules li::before {
+  content: counter(rule); position: absolute; left: 1rem; top: .8rem;
+  color: var(--accent); font: 700 1rem/1.6 ui-monospace, monospace;
+}
+
+.flow {
+  display: flex; flex-wrap: wrap; align-items: stretch; gap: .5rem;
+  margin: 1.2rem 0;
+}
+.flow .box {
+  flex: 1 1 11rem; padding: .8rem 1rem;
+  border: 1px solid var(--line); border-radius: .5rem; background: var(--panel);
+  font-size: .92rem;
+}
+.flow .box b { display: block; margin-bottom: .2rem; }
+.flow .arrow { align-self: center; color: var(--muted); font-size: 1.2rem; }
+
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: .8rem; margin: 1rem 0; }
+.card { padding: .9rem 1.1rem; border: 1px solid var(--line); border-radius: .5rem; background: var(--panel); }
+.card h4 { margin: 0 0 .3rem; font-size: .98rem; }
+.card p { margin: .2rem 0; font-size: .92rem; }
+.tag { display: inline-block; padding: .05rem .45rem; border-radius: 1rem; font-size: .75rem; font-weight: 600; background: var(--accent-soft); color: var(--accent); }
+.tag.warn { background: var(--warn-soft); color: var(--warn); }
+
+.questions li { margin: .7rem 0; }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <p class="eyebrow">mshell design · draft</p>
+    <h1>Call Options: <code>.{ … } word</code></h1>
+    <p class="lede">A way to attach named settings to a single call, without touching the stack. Nothing changes for programs that don't use it.</p>
+    <p class="meta">Status: early design, not implemented · Branch <code>default-def-parameters</code> · Prior work: <code>design/optional_args.md</code> on <code>codex/optional-args-design</code> (the <code>%</code> proposal)</p>
+  </div>
+</header>
+
+<nav>
+  <ol>
+    <li><a href="#problem">Problem</a></li>
+    <li><a href="#verdict">Verdict</a></li>
+    <li><a href="#rules">Rules</a></li>
+    <li><a href="#syntax">Syntax</a></li>
+    <li><a href="#runtime">Runtime</a></li>
+    <li><a href="#parallel">Threads</a></li>
+    <li><a href="#typing">Typing</a></li>
+    <li><a href="#migration">Migration</a></li>
+    <li><a href="#compare">vs <code>%</code></a></li>
+    <li><a href="#questions">Questions</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<section id="problem">
+  <div class="num">01</div>
+  <h2>The problem</h2>
+  <p>Some functions have one or two essential inputs and several settings that rarely change. Today the settings go on the stack as a required dictionary:</p>
+<pre><code>`myzip.zip` `out` {} zipExtract
+`myzip.zip` `out` { "overwrite": true } zipExtract</code></pre>
+  <p>That has three costs:</p>
+  <ol>
+    <li><strong>Every call pays for the rare case.</strong> Callers write <code>{}</code> every time, and each call allocates a dict.</li>
+    <li><strong>Adding a setting can break callers.</strong> If a function had no settings before, adding the dict changes its stack effect.</li>
+    <li><strong>Misspelled keys pass.</strong> Shape types accept extra keys, so this type-checks cleanly today:</li>
+  </ol>
+<pre><code>`a.zip` `out` { "overwrite": true, "overwrit": 1 } zipExtract   <span class="c"># --type-check-only: rc=0</span></code></pre>
+  <div class="callout">
+    <strong>Goal</strong>
+    <p>A word keeps a fixed stack effect for its required inputs. Callers can optionally attach named settings that never touch the stack.</p>
+  </div>
+</section>
+
+<section id="verdict">
+  <div class="num">02</div>
+  <h2>Is this the right approach?</h2>
+  <p>Yes, with the constraints in the next section. I looked for something more fundamental. Here are the alternatives:</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Approach</th><th>Why not</th></tr></thead>
+    <tbody>
+      <tr><td>Required dict on the stack (today)</td><td>Every call pays for <code>{}</code>, misspelled keys pass, and adding settings to a function that had none is a breaking change.</td></tr>
+      <tr><td>Two names per function (Factor-style <code>foo</code> / <code>foo*</code>)</td><td>No new syntax, but it doubles the builtins, does nothing for user definitions, and still needs a dict.</td></tr>
+      <tr><td>Builder objects (like command lists with <code>&gt;</code> <code>*</code> <code>;</code>)</td><td>This works for commands because commands are values. Making every function a value you configure and then run is too heavy.</td></tr>
+      <tr><td>Settings scoped to a block: <code>{…} (body) withOptions</code></td><td>Settings leak into every nested call. Hard to type. Bad for threads.</td></tr>
+      <tr><td><code>% item word</code> (codex branch)</td><td>The same core idea. See <a href="#compare">section 09</a> for the differences.</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="callout">
+    <strong>The primitive underneath</strong>
+    <p>A call to one word can carry a <em>read-only</em> set of named values. That set lives in the call's frame, not on the stack.</p>
+    <p>Syntax, defaults, and typing all build on this. I don't see a simpler primitive that gives no cost to programs that don't use it, compile-time typo checking, and thread safety all at once.</p>
+  </div>
+</section>
+
+<section id="rules">
+  <div class="num">03</div>
+  <h2>Rules I'd keep fixed</h2>
+  <ol class="rules">
+    <li><strong>Options never change the stack effect.</strong> Not the number of inputs or outputs, and not their types. If a setting would change what comes back, that is a different function. This keeps the type checker simple.</li>
+    <li><strong>Options attach to exactly one word, chosen by the parser.</strong> <code>.{…}</code> must be immediately followed by a word. Nothing waits in interpreter-wide state for "the next call".</li>
+    <li><strong>The called word can't modify what it receives.</strong> It never gets an <code>MShellDict</code> that shares memory with a constant built at parse time.</li>
+    <li><strong>Required inputs stay on the stack.</strong> <code>.{ }</code> is only for things with a sensible default. <code>httpGet</code>'s <code>url</code> stays on the stack.</li>
+    <li><strong>Unknown keys are an error</strong>, both in the type checker and at runtime.</li>
+  </ol>
+</section>
+
+<section id="syntax">
+  <div class="num">04</div>
+  <h2>Syntax</h2>
+
+  <h3>Call site</h3>
+<pre><code>optionCall : ".{" dictEntries "}" LITERAL</code></pre>
+<pre><code>`myzip.zip` zipExtract
+`myzip.zip` .{ "overwrite": true, "destDir": `otherDir` } zipExtract</code></pre>
+  <ul>
+    <li><code>.{</code> is one token only when there is no space between <code>.</code> and <code>{</code>. Today it lexes as the literal <code>.</code> followed by a dict. I found no uses of that in <code>lib/</code> or <code>tests/</code>. A lone <code>.</code> (<code>[ls .]</code>) is unaffected.</li>
+    <li>After <code>}</code> must come a <code>LITERAL</code> token (a function name), not a quote, variable, or number. Anything else is a parse error.</li>
+    <li>Values are ordinary expressions that each push exactly one value, as in dict literals: <code>.{ "destDir": @out }</code>, <code>.{ "maxBytes": 10 1024 * 1024 * }</code>.</li>
+    <li>Keys are always written out. They can't be computed.</li>
+  </ul>
+  <div class="callout warn">
+    <strong>Breaking change inside command lists</strong>
+    <p>The meaning of <code>[foo .{"a": 1}]</code> changes. I think that's acceptable, but it needs a CHANGELOG note.</p>
+  </div>
+
+  <h3>Declaring options on a definition</h3>
+  <p>A definition declares its options once, with types and defaults. This is the "implicit default dictionary" the body reads from. I'd reuse the shape syntax and add <code>= value</code> for defaults:</p>
+<pre><code>def extract (path -- ) .{ overwrite: bool = false, destDir?: path, strip: int = 0 }
+    ...
+end</code></pre>
+  <div class="grid2">
+    <div class="card">
+      <h4><code>name: T = literal</code></h4>
+      <p>The key has a default. Reading it always gives a <code>T</code>.</p>
+    </div>
+    <div class="card">
+      <h4><code>name?: T</code></h4>
+      <p>No default. Reading it gives <code>Maybe[T]</code>. This covers defaults that depend on other inputs, like "destDir defaults to the zip's own directory".</p>
+    </div>
+  </div>
+  <ul>
+    <li>Default values must be fixed literals, with the same rules as definition metadata.</li>
+    <li>The declaration goes after the signature. Inside the parens it would look like a stack input, which it isn't.</li>
+    <li>Why not infer types from the default values (<code>.{ "overwrite": false }</code>)? That can't express "no default" or a union type, and both come up right away (<code>destDir</code>).</li>
+  </ul>
+
+  <h3>Reading options in the body</h3>
+<pre><code>"overwrite" opt   <span class="c"># bool, from the caller or the default</span>
+"destDir" opt     <span class="c"># Maybe[path]</span></code></pre>
+  <p>The type checker requires the key to be a string literal that the definition declares, so each key can be resolved to a slot index ahead of time. <code>.name</code> can't be the shorthand, because literals like <code>.gitignore</code> are common inside command lists.</p>
+  <p>Getting all the options at once (to loop over or pass along) would be <code>opts</code>. It builds a <strong>new</strong> dict. The author chooses to pay that cost.</p>
+</section>
+
+<section id="runtime">
+  <div class="num">05</div>
+  <h2>Runtime design</h2>
+
+  <h3>No cost when unused</h3>
+  <ul>
+    <li><strong>Lexer:</strong> one extra check when a token starts with <code>.</code>.</li>
+    <li><strong>Parser:</strong> a new node, <code>*MShellParseOptionCall</code>, appears only when <code>.{</code> does. Other programs produce the same parse trees as today.</li>
+    <li><strong>Evaluator:</strong> a new <code>case</code> in the dispatch on parse-item type. It only runs for the new node.</li>
+    <li><strong><code>EvaluationFrame</code></strong> gets one pointer, <code>Opts *CallOptions</code>, which is nil for normal calls. <code>callDefinition</code> already allocates a new context and a variables map for every call, so this won't show up in measurements.</li>
+    <li><strong><code>evaluateToken</code></strong> (the builtins) gets one extra <code>*CallOptions</code> argument, nil at every existing call site.</li>
+  </ul>
+  <p>No dictionary is allocated whether or not options are used.</p>
+
+  <h3>Data structure</h3>
+  <p>Not an <code>MShellDict</code>. Option sets are small (usually 1–6 keys), so a slice is faster and smaller than a map.</p>
+<pre><code><span class="c">// Built at parse time, shared, never modified.</span>
+type OptionKeys struct {
+    Names []string        <span class="c">// sorted</span>
+}
+
+type CallOptions struct {
+    Keys   *OptionKeys
+    Values []MShellObject <span class="c">// same order as Keys.Names</span>
+}</code></pre>
+  <p>To look up a key, scan <code>Names</code>, or use a slot index the type checker worked out ahead of time.</p>
+
+  <div class="grid2">
+    <div class="card">
+      <span class="tag">Tier 1 · no per-call allocation</span>
+      <h4>Every value is a simple literal</h4>
+      <p>str, int, float, bool, path, datetime, <code>none</code>. The parser builds one <code>CallOptions</code> for the call site, and every call reuses that pointer.</p>
+    </div>
+    <div class="card">
+      <span class="tag warn">Tier 2 · one small allocation</span>
+      <h4>Any value is computed</h4>
+      <p><code>@var</code>, an expression, or a list/dict literal. Each call allocates one slice of length n. Single-token values are looked up directly. Only multi-token values go through the dict-literal frame machinery.</p>
+    </div>
+  </div>
+  <p>List and dict literals always go in tier 2. Each call builds a new list, as the language does today. That stops one call from <code>append</code>ing to a list that the next call would see.</p>
+
+  <h3>How the callee reads a value</h3>
+  <div class="flow">
+    <div class="box"><b><code>"k" opt</code></b>issued in the definition body</div>
+    <div class="arrow">→</div>
+    <div class="box"><b>1. Call-site options</b><code>frame.Opts</code>: if <code>k</code> is present, return it</div>
+    <div class="arrow">→</div>
+    <div class="box"><b>2. Declared default</b>stored with the definition when parsed. Returns <code>none</code> for <code>?:</code> keys</div>
+  </div>
+  <p>Nothing is merged or copied. Both sources are shared across calls, and later across threads, so they are only ever read. <code>opt</code> returns the values themselves, and <code>opts</code> returns a copy.</p>
+  <p><strong>Builtins:</strong> today the option parsers (<code>parseZipExtractOptions</code> and others) read keys through helpers like <code>boolOption(dict, …)</code>. Change those helpers to take a small interface that both <code>*MShellDict</code> and <code>*CallOptions</code> implement, so each builtin's option parsing is written once. A later optimization: a tier-1 call site could cache the builtin's parsed Go options struct on the parse node.</p>
+
+  <h3>Easy to get wrong</h3>
+  <div class="table-wrap">
+  <table>
+    <tbody>
+      <tr><td>Tail calls</td><td><code>callDefinition</code> reuses the frame for a tail call. It must set <code>frame.Opts</code> to the new call's options, or nil. Otherwise the caller's options leak into the definition it tail-calls.</td></tr>
+      <tr><td>Nested calls</td><td>In <code>.{ } a</code> where <code>a</code> calls <code>b</code>, <code>b</code> sees no options. Options are never inherited. A wrapper passes them on explicitly: <code>.{ overwrite: "overwrite" opt } zipExtract</code>.</td></tr>
+      <tr><td>if / loop / match frames</td><td>These run inside a definition and must still find the definition's options. Copying the pointer into child frames is simplest and allocates nothing.</td></tr>
+      <tr><td>Unknown keys at runtime</td><td>Without <code>--check-types</code>, check the keys when the call is made, against the definition's declared keys or the builtin's list of accepted keys. This only runs when options are used.</td></tr>
+      <tr><td>Existing parsers</td><td><code>parseZipExtractOptions</code> accepts <code>"overwrit"</code> without complaint. The new path should reject it.</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<section id="parallel">
+  <div class="num">06</div>
+  <h2>Parallel execution</h2>
+  <p>The design needs no locks:</p>
+  <ul>
+    <li>Call options live on the evaluation frame. Each thread will have its own <code>EvalState</code> and frames.</li>
+    <li>The only shared data is built at parse time: key tables, tier-1 <code>CallOptions</code>, and declared defaults. These hold simple values and are only ever read, so any number of threads can use them.</li>
+    <li>Tier-2 values are created by the calling thread in a new slice that belongs to that one call.</li>
+    <li>List and dict literals are rebuilt on every call, so no list is shared between threads.</li>
+    <li>Nothing is added to <code>EvalState</code>. Its <code>CallStack</code> and <code>LoopDepth</code> will need to become per-thread anyway.</li>
+  </ul>
+  <div class="callout warn">
+    <strong>Unrelated, but noticed</strong>
+    <p><code>lookupDefinition</code> rebuilds <code>defIndex</code> the first time it's needed. Once there are threads, that's a data race.</p>
+  </div>
+</section>
+
+<section id="typing">
+  <div class="num">07</div>
+  <h2>Typing</h2>
+
+  <h3>Declarations</h3>
+  <ul>
+    <li>Builtins register an options shape next to their signature, e.g. <code>r.regOptions("zipExtract", "{overwrite?: bool, skipExisting?: bool, stripComponents?: int, …}")</code>.</li>
+    <li>Definitions get their options shape from the <code>.{ … }</code> declaration.</li>
+    <li>Using <code>.{ }</code> on a word that declares no options is an error: <em>"zipList does not take options"</em>.</li>
+  </ul>
+
+  <h3>Call site</h3>
+  <ul>
+    <li>The <code>.{}</code> literal is checked against the word's options shape as a <strong>closed</strong> shape, which rejects unknown keys (dicts on the stack accept them today). This is the typo check.</li>
+    <li>Each value is checked against its field's type.</li>
+    <li>The call's stack effect is the word's normal signature. The checker handles <code>.{…} word</code> as "check the options, then check <code>word</code>".</li>
+    <li>A word with several overloaded signatures has <strong>one</strong> options shape for all of them. Options never choose an overload.</li>
+  </ul>
+
+  <h3>Inside the body</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Expression</th><th>Type</th></tr></thead>
+    <tbody>
+      <tr><td><code>"k" opt</code>, declared <code>k: T = v</code></td><td><code>T</code></td></tr>
+      <tr><td><code>"k" opt</code>, declared <code>k?: T</code></td><td><code>Maybe[T]</code></td></tr>
+      <tr><td><code>"k" opt</code>, key not declared or not a literal</td><td>error</td></tr>
+      <tr><td><code>opts</code></td><td>the declared shape, with fields that have defaults always present</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>Quotations</h3>
+  <p><code>.{ } x</code>, or options on any quotation value, is <strong>not</strong> supported in v1. A quotation type <code>(a -- b)</code> has nowhere to record options, and adding that would affect every quotation type. <code>.{ … } sortBy</code> is fine, because the options belong to <code>sortBy</code>, not to the quotation it runs.</p>
+</section>
+
+<section id="migration">
+  <div class="num">08</div>
+  <h2>Migration</h2>
+  <p>Moving the existing builtins that take an options dict (<code>zipExtract</code>, <code>zipExtractEntry</code>, <code>tar*</code>, <code>numFmt</code>, …) to <code>.{ }</code> changes their stack effects, which breaks callers.</p>
+  <div class="grid2">
+    <div class="card">
+      <span class="tag">Recommended for zip/tar</span>
+      <h4>1. Change them in one release</h4>
+      <p>Add a CHANGELOG entry. The number of inputs changes, so the type checker points to every call site.</p>
+    </div>
+    <div class="card">
+      <h4>2. Keep old forms, add new names</h4>
+      <p>Brings back the two-names-per-function problem.</p>
+    </div>
+  </div>
+  <p>Your example also makes <code>destDir</code> an option, so <code>zipExtract</code> would become <code>(path -- )</code>. Each of the other functions needs its own decision.</p>
+</section>
+
+<section id="compare">
+  <div class="num">09</div>
+  <h2>Compared with the <code>%</code> proposal</h2>
+  <p>The same core: the parser attaches the options to one word, and nothing is stored in interpreter-wide state.</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th></th><th><code>%</code> (codex)</th><th><code>.{</code> (this)</th></tr></thead>
+    <tbody>
+      <tr><td>Right side</td><td>dict literal <strong>or</strong> <code>@var</code></td><td>dict literal only</td></tr>
+      <tr><td>Defaults</td><td>written in the body: <code>@opt :k 5 maybe</code></td><td>declared once, read with <code>"k" opt</code></td></tr>
+      <tr><td>Typo checking</td><td>not possible for <code>@var</code></td><td>closed-shape check</td></tr>
+      <tr><td>Lexer impact</td><td>reserves <code>%</code> entirely</td><td>only <code>.{</code> with no space</td></tr>
+      <tr><td>Built at parse time</td><td>no</td><td>yes, when all values are simple literals</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>The real cost of <code>.{</code> is losing <code>@var</code>, the ability to reuse a saved set of options. If we need it later, <code>.@var word</code> could be added, with the key check done at runtime for that form. I'd leave it out of v1.</p>
+</section>
+
+<section id="questions">
+  <div class="num">10</div>
+  <h2>Open questions for you</h2>
+  <ol class="questions">
+    <li><strong>Declaration syntax.</strong> Shape plus <code>= default</code>, placed after the signature. OK?</li>
+    <li><strong>Reading options.</strong> Is <code>"key" opt</code> short enough, or should it have its own syntax?</li>
+    <li><strong>Bare keys at the call site.</strong> Allow <code>.{ overwrite: true }</code> to match type-expression syntax?</li>
+    <li><strong>Breaking change.</strong> Is it acceptable to change the stack effects of the zip/tar functions that take an options dict?</li>
+    <li><strong>Saved option sets.</strong> Leave <code>.@var</code> out of v1?</li>
+  </ol>
+</section>
+
+</main>
+</body>
+</html>
