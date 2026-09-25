@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"io/fs"
 	"os"
 	"strings"
@@ -195,61 +196,134 @@ func GenerateCompletions(input CompletionInput, deps CompletionDeps) []TabMatch 
 // generateFileCompletions handles file/directory completion.
 func generateFileCompletions(input CompletionInput, cfs CompletionFS) []TabMatch {
 	var matches []TabMatch
-	prefix := input.Prefix
+	forEachPathCompletion(cfs, input.Prefix, false, func(match string) {
+		matches = append(matches, TabMatch{TABMATCHFILE, match})
+	})
+	return matches
+}
 
-	if prefix == "" {
-		// Complete all files in current directory
-		cwd, err := cfs.Getwd()
-		if err != nil {
-			return matches
-		}
-		entries, err := cfs.ReadDir(cwd)
-		if err != nil {
-			return matches
-		}
-		for _, entry := range entries {
-			if entry.IsDir() {
-				matches = append(matches, TabMatch{TABMATCHFILE, entry.Name() + string(os.PathSeparator)})
-			} else {
-				matches = append(matches, TabMatch{TABMATCHFILE, entry.Name()})
-			}
-		}
-	} else {
-		// Split on last path separator
-		indexOfLastSeparator := -1
-		for i := len(prefix) - 1; i >= 0; i-- {
-			if IsPathSeparator(prefix[i]) {
-				indexOfLastSeparator = i
-				break
-			}
-		}
-
-		dir := prefix[0 : indexOfLastSeparator+1]
-		filename := prefix[indexOfLastSeparator+1:]
-
-		var searchDir string
-		if len(dir) == 0 {
-			searchDir = "."
-		} else {
-			searchDir = dir
-		}
-
-		entries, err := cfs.ReadDir(searchDir)
-		if err != nil {
-			return matches
-		}
-		for _, entry := range entries {
-			if strings.HasPrefix(entry.Name(), filename) {
-				if entry.IsDir() {
-					matches = append(matches, TabMatch{TABMATCHFILE, dir + entry.Name() + string(os.PathSeparator)})
-				} else {
-					matches = append(matches, TabMatch{TABMATCHFILE, dir + entry.Name()})
-				}
-			}
+// forEachPathCompletion calls add with each file and directory the prefix can complete to:
+// the entries of the directory named by the prefix up to its last path separator
+// whose names start with the rest of the prefix.
+// Each is spelled with that directory part so it can replace the prefix,
+// and directories end in a path separator.
+// With dirsOnly, files are skipped.
+func forEachPathCompletion(cfs CompletionFS, prefix string, dirsOnly bool, add func(string)) {
+	dirEnd := 0
+	for i := len(prefix) - 1; i >= 0; i-- {
+		if IsPathSeparator(prefix[i]) {
+			dirEnd = i + 1
+			break
 		}
 	}
+	dir := prefix[:dirEnd]
+	namePrefix := prefix[dirEnd:]
 
-	return matches
+	searchDir := dir
+	if prefix == "" {
+		cwd, err := cfs.Getwd()
+		if err != nil {
+			return
+		}
+		searchDir = cwd
+	} else if dir == "" {
+		searchDir = "."
+	}
+
+	entries, err := cfs.ReadDir(searchDir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasPrefix(name, namePrefix) {
+			continue
+		}
+		if entry.IsDir() {
+			add(dir + name + string(os.PathSeparator))
+		} else if !dirsOnly {
+			add(dir + name)
+		}
+	}
+}
+
+// completionIsPath reports whether a completion names a directory (it ends in a path separator)
+// or an existing file, so it is quoted as a path when inserted.
+func completionIsPath(match string) bool {
+	if match != "" && IsPathSeparator(match[len(match)-1]) {
+		return true
+	}
+	_, err := os.Lstat(match)
+	return err == nil
+}
+
+// allCompletionsArePaths reports whether every completion is a path by completionIsPath.
+func allCompletionsArePaths(matches []string) bool {
+	for _, match := range matches {
+		if !completionIsPath(match) {
+			return false
+		}
+	}
+	return len(matches) > 0
+}
+
+// RunCompletionDefinitions runs the completion definitions registered for a command.
+// Each gets a fresh stack holding the command's finished arguments and,
+// on top, the word being typed, and leaves a list of candidates.
+// Candidates that do not start with that word are dropped,
+// and so are options (starting with '-') unless the word starts with '-'.
+// Output from the definitions and the commands they run is discarded,
+// because the line editor owns the screen while a completion runs.
+// ok is false when no definition ran successfully.
+func (state *EvalState) RunCompletionDefinitions(defs []MShellDefinition, args []string, prefix string, context ExecuteContext, definitions []MShellDefinition) (matches []string, ok bool) {
+	context.StandardOutput = io.Discard
+	context.StandardError = io.Discard
+	context.ShouldCloseOutput = false
+	context.ShouldCloseError = false
+
+	optionsWanted := strings.HasPrefix(prefix, "-")
+	// Each definition's own list is its responsibility; only candidates from
+	// different definitions of the same command can repeat.
+	var seen map[string]struct{}
+	if len(defs) > 1 {
+		seen = make(map[string]struct{})
+	}
+
+	for _, def := range defs {
+		// A definition may change its argument list in place, so each gets its own.
+		argList := NewList(len(args))
+		for i, arg := range args {
+			argList.Items[i] = MShellString{Content: arg}
+		}
+		stack := MShellStack{argList, MShellString{Content: prefix}}
+		callStackItem := CallStackItem{MShellParseItem: def.NameToken, Name: def.Name, CallStackType: CALLSTACKDEF}
+		result := state.Evaluate(def.Items, &stack, context, definitions, callStackItem)
+		if !result.Success || result.ExitCalled || len(stack) == 0 {
+			continue
+		}
+		list, isList := stack[len(stack)-1].(*MShellList)
+		if !isList {
+			continue
+		}
+		ok = true
+		for _, item := range list.Items {
+			candidate, err := item.CastString()
+			if err != nil || !strings.HasPrefix(candidate, prefix) {
+				continue
+			}
+			if !optionsWanted && strings.HasPrefix(candidate, "-") {
+				continue
+			}
+			if seen != nil {
+				if _, repeated := seen[candidate]; repeated {
+					continue
+				}
+				seen[candidate] = struct{}{}
+			}
+			matches = append(matches, candidate)
+		}
+	}
+	return matches, ok
 }
 
 // OSCompletionFS implements CompletionFS using the real filesystem.

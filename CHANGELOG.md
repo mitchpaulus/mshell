@@ -15,12 +15,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `☁` cloud only, `✓` on this device, `●` always keep on this device, `↻` syncing, `✗` sync error.
   Folders show the same status as in Explorer.
   Cloud only files are not previewed, so scrolling past them no longer downloads them.
+- Tab completions for `redo`, `uv`, `uvx`, `typst`, and `winget`, covering their subcommands, options, and option values.
+  `redo` completes the targets its `.do` files can build in the directory being typed, including `default.*.do` rules from parent directories.
+  `uv` completes installed tools, Python versions, and packages where a command takes them.
+- Functions
+  - `completeFiles`, `completeDirs`, and `completeBinaries`: candidates for the word being completed.
+  - `completeCommand`: complete a command line as Tab does, for completion definitions that wrap another command.
 - The file manager shows file sizes in a column next to the file names, in `ls -h` style (`556`, `5.4K`, `41K`, `1.2M`).
   Each unit has its own color: bytes dim, kilobytes plain, megabytes cyan, gigabytes yellow, and larger magenta.
   Directories have no size.
 
 ### Changed
 
+- Completion definitions take the word being completed as a second input, `([str] str -- [str])`, and return every candidate.
+  Files are no longer added to their results, so a command only offers what fits, like just the values after `uv --color`.
+  Definitions in `init.msh` need the new signature, with `completeFiles` where the command takes paths.
 - `seq` is now built in and much faster: about 25x faster and a third of the memory for 10 million items.
 - The file manager preview no longer times out after 3 seconds.
   The timeout existed for OneDrive files, which are now detected and skipped instead.

@@ -47,8 +47,8 @@ func (pbm *PathBinManager) Matches(search string) []string {
 
 	// Iterate over the binaryPaths map and find matches
 	for binName := range pbm.binaryPaths {
-		// Case insensitive search
-		if strings.HasPrefix(strings.ToLower(binName), strings.ToLower(search)) {
+		// Case-insensitive prefix match, without lowercasing (and allocating) every name.
+		if len(binName) >= len(search) && strings.EqualFold(binName[:len(search)], search) {
 			matches = append(matches, binName)
 		}
 	}

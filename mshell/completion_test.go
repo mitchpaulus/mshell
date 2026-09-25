@@ -2,6 +2,7 @@ package main
 
 import (
 	"io/fs"
+	"os"
 	"os/exec"
 	"sort"
 	"strings"
@@ -725,5 +726,60 @@ func TestUnfinishedPathOnlyReturnsFiles(t *testing.T) {
 		if m.TabMatchType != TABMATCHFILE {
 			t.Errorf("expected all matches to be TABMATCHFILE, got %v", m)
 		}
+	}
+}
+
+func runDemoCompletion(t *testing.T, source string, args []string, prefix string) ([]string, bool) {
+	t.Helper()
+	parsed, err := parseMShellInput(source, &TokenFile{"demo.msh"})
+	if err != nil {
+		t.Fatalf("parseMShellInput() error = %v", err)
+	}
+	_, context, state := newStartupTestContext()
+	state.AddCompletionDefinitions(parsed.Definitions)
+	return state.RunCompletionDefinitions(state.CompletionDefinitions["demo"], args, prefix, context, parsed.Definitions)
+}
+
+func TestRunCompletionDefinitionsFiltersByPrefix(t *testing.T) {
+	source := "def __demoCompletion { 'complete': ['demo'] } ([str] str -- [str])\n" +
+		"    prefix! args!\n" +
+		"    ['build' 'bench' '--bin' 'clean' @prefix] @args extend\n" +
+		"end\n"
+
+	matches, ok := runDemoCompletion(t, source, []string{"b-arg"}, "b")
+	if !ok {
+		t.Fatal("RunCompletionDefinitions() ok = false, want true")
+	}
+	// The definition sees the prefix and the finished arguments; options are hidden without '-'.
+	want := []string{"build", "bench", "b", "b-arg"}
+	if strings.Join(matches, " ") != strings.Join(want, " ") {
+		t.Errorf("matches = %v, want %v", matches, want)
+	}
+
+	matches, _ = runDemoCompletion(t, source, nil, "--")
+	if strings.Join(matches, " ") != "--bin --" {
+		t.Errorf("matches = %v, want [--bin --]", matches)
+	}
+}
+
+func TestRunCompletionDefinitionsReportsFailure(t *testing.T) {
+	source := "def __demoCompletion { 'complete': ['demo'] } ([str] str -- [str])\n" +
+		"    drop drop 'not a list'\n" +
+		"end\n"
+	if _, ok := runDemoCompletion(t, source, nil, ""); ok {
+		t.Error("RunCompletionDefinitions() ok = true for a definition that left a string")
+	}
+}
+
+func TestForEachPathCompletionDirsOnly(t *testing.T) {
+	cfs := FakeCompletionFS{Cwd: "/home/user", Entries: map[string][]FakeDirEntry{
+		"src/": {{"main.go", false}, {"mshell", true}, {"misc", true}},
+	}}
+	var got []string
+	forEachPathCompletion(cfs, "src/m", true, func(match string) { got = append(got, match) })
+	sep := string(os.PathSeparator)
+	want := []string{"src/mshell" + sep, "src/misc" + sep}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("got %v, want %v", got, want)
 	}
 }

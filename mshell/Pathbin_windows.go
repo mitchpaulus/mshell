@@ -53,8 +53,9 @@ type WinBinaryPath struct {
 
 func (pbm *PathBinManager) Matches(search string) ([]string) {
 	var matches []string
+	upperSearch := strings.ToUpper(search)
 	for binName, winBinaryPath := range pbm.binaryPaths {
-		if strings.HasPrefix(binName, strings.ToUpper(search)) {
+		if strings.HasPrefix(binName, upperSearch) {
 			matches = append(matches, winBinaryPath.OriginalFileName)
 		}
 	}

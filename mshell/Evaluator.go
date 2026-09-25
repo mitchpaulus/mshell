@@ -5832,6 +5832,82 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					for _, definition := range definitions {
 						fmt.Fprintf(os.Stderr, "%s\n", definition.Name)
 					}
+				case "completeFiles", "completeDirs":
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
+					}
+					prefix, err := obj.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot complete files from a %s.\n", t.Line, t.Column, obj.TypeName()))
+					}
+					list := NewList(0)
+					forEachPathCompletion(OSCompletionFS{}, prefix, t.Lexeme == "completeDirs", func(match string) {
+						list.Items = append(list.Items, MShellString{Content: match})
+					})
+					stack.Push(list)
+				case "completeBinaries":
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'completeBinaries' operation on an empty stack.\n", t.Line, t.Column))
+					}
+					prefix, err := obj.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot complete binaries from a %s.\n", t.Line, t.Column, obj.TypeName()))
+					}
+					names := context.Pbm.Matches(prefix)
+					list := NewList(len(names))
+					for i, name := range names {
+						list.Items[i] = MShellString{Content: name}
+					}
+					stack.Push(list)
+				case "completeCommand":
+					// Complete a command line the way Tab does: the first argument names the
+					// command and the rest are its finished arguments. With no command, complete
+					// binary names; without a working completion definition, complete files.
+					prefixObj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'completeCommand' operation on an empty stack.\n", t.Line, t.Column))
+					}
+					prefix, err := prefixObj.CastString()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: 'completeCommand' expected the word being completed to be a string, got a %s.\n", t.Line, t.Column, prefixObj.TypeName()))
+					}
+					argsObj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'completeCommand' operation on a stack with only one item.\n", t.Line, t.Column))
+					}
+					argsList, ok := argsObj.(*MShellList)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: 'completeCommand' expected a list of arguments, got a %s.\n", t.Line, t.Column, argsObj.TypeName()))
+					}
+					args := make([]string, len(argsList.Items))
+					for i, item := range argsList.Items {
+						args[i], err = item.CastString()
+						if err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: 'completeCommand' expected string arguments, got a %s.\n", t.Line, t.Column, item.TypeName()))
+						}
+					}
+
+					var matches []string
+					if len(args) == 0 {
+						matches = context.Pbm.Matches(prefix)
+					} else {
+						ran := false
+						if defs := state.CompletionDefinitions[args[0]]; len(defs) > 0 {
+							matches, ran = state.RunCompletionDefinitions(defs, args[1:], prefix, context, definitions)
+						}
+						if !ran {
+							forEachPathCompletion(OSCompletionFS{}, prefix, false, func(match string) {
+								matches = append(matches, match)
+							})
+						}
+					}
+					list := NewList(len(matches))
+					for i, match := range matches {
+						list.Items[i] = MShellString{Content: match}
+					}
+					stack.Push(list)
 				case "completionDefs":
 					dict := &MShellDict{Items: make(map[string]MShellObject)}
 					for name, defs := range state.CompletionDefinitions {

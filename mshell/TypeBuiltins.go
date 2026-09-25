@@ -193,7 +193,12 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 	r.reg("stack", "( -- )")
 	r.reg("defs", "( -- )")
 	r.reg("env", "( -- )")
-	r.reg("completionDefs", "( -- {[( -- t)]})")
+	r.reg("completionDefs", "( -- {[([str] str -- [str])]})")
+	r.reg("completeFiles", "(str -- [str])")
+	r.reg("completeDirs", "(str -- [str])")
+	r.reg("completeBinaries", "(str -- [str])")
+	r.reg("completeCommand", "([str] str -- [str])")
+	r.reg("binPaths", "( -- [[str]])")
 	// ----- Boolean ops -----
 	// `not` lexes as NOT (token type), not LITERAL — see byToken table.
 

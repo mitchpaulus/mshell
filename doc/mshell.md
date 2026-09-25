@@ -424,19 +424,32 @@ editing the buffer resets the prefix for the next search.
 
 ### Definition-based completions
 
-The CLI can use definition metadata to provide argument completions for binaries. Add a `complete` key in the metadata dictionary of a `def` to register it for one or more command names. The definition is invoked with a clean stack containing a single list of argument tokens (excluding the binary name and the current prefix), and it should return a list of strings.
+The CLI can use definition metadata to provide argument completions for binaries.
+Add a `complete` key in the metadata dictionary of a `def` to register it for one or more command names.
+The definition is invoked with a clean stack holding the finished argument tokens (excluding the binary name) as a list,
+and on top of that the word being completed, without any opening quote or backtick.
+It returns a list of candidates, which should not repeat.
+
+The candidates are the whole answer: file names are not added.
+Use `completeFiles` or `completeDirs` where the command takes a path,
+`completeBinaries` for a command name, and `completeCommand` to complete the arguments of a wrapped command, as `sudo` does.
+Candidates that do not start with the word being completed are dropped,
+and so are options (starting with `-`) unless the word starts with `-`.
+So a definition can skip slow work, like running a command, when the word starts with `-`.
+If every definition for a command fails, files are completed instead.
 
 ```mshell
-def mshCompletion { 'complete': ['msh' 'mshell'] } ([str] -- [str])
-    input!
-    ['-h' '--help' '--html' '--lex' '--parse' '--check-types' '--type-check-only' '--version' '-c' '-'] options!
-    ['lsp' 'bin' 'edit' 'completions'] subcommands!
-    @options @subcommands extend
+def mshCompletion { 'complete': ['msh' 'mshell'] } ([str] str -- [str])
+    prefix! input!
+    @prefix '-' startsWith
+    (['-h' '--help' '--html' '--lex' '--parse' '--check-types' '--type-check-only' '--version' '-c' '-'])
+    (['lsp' 'bin' 'edit' 'completions'] @prefix completeFiles extend) iff
 end
 ```
 
 The standard library includes completion definitions for
 `git`, `fd`, `ssh`, `rg`, `sudo`, `systemctl`, `journalctl`, `cargo`,
+`redo`, `uv`, `uvx`, `typst`, `winget`,
 and `msh` itself (e.g. `__gitCompletion`, `__cargoCompletion`).
 
 ### Shell completions
@@ -1140,6 +1153,10 @@ end wl # Output: 11
 - `env`: Write all environment variables to stderr in sorted order (--)
 - `envInspect`: Get the session-local change history for an environment variable, oldest to newest. Each event contains `dt`, `kind`, `source`, and `changed`. Only the latest 256 events per variable are retained, and values are never included. `(str -- [{dt: datetime, kind: str, source: str, changed: bool}])`
 - `completionDefs`: Push a dictionary of completion definitions. Keys are command names, values are lists of quotations. `( -- dict)`
+- `completeFiles`: Files and directories the word can complete to, spelled with the word's directory part. Directories end in a path separator. `(str -- [str])`
+- `completeDirs`: Like `completeFiles`, but only directories. `(str -- [str])`
+- `completeBinaries`: Names of executables on the path that start with the word. `(str -- [str])`
+- `completeCommand`: Complete a command line as Tab does. The list holds the command and its finished arguments, and the string is the word being completed. With an empty list, completes executable names. For a command without a working completion definition, completes files. `([str] str -- [str])`
 - `setenv`: Set an environment variable by name, value then name. Use when the name is not known statically; otherwise prefer `$NAME!`. `(str str -- )`
 - `unsetenv`: Remove an environment variable by name. Unsetting a variable that does not exist is not an error. `(str -- )`
 - `dup`: Duplicate (a -- a a)

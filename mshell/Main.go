@@ -955,7 +955,7 @@ type TermState struct {
 	tabCycleEnd        ByteOffset
 	tabCycleSource SourceText
 	tabCycleTokenType  TokenType
-	tabCycleAllFiles   bool
+	tabCycleQuoting    completionQuoting
 	tabCycleMatches    []string
 	lastArgCycleActive bool
 	lastArgCycleIndex  int
@@ -1593,7 +1593,7 @@ func (state *TermState) resetTabCycle() {
 	state.tabCycleStart = 0
 	state.tabCycleEnd = 0
 	state.tabCycleTokenType = EOF
-	state.tabCycleAllFiles = false
+	state.tabCycleQuoting = quoteAsString
 	if state.tabCycleMatches != nil {
 		state.tabCycleMatches = state.tabCycleMatches[:0]
 	}
@@ -1912,7 +1912,16 @@ func allMatchesAreFiles(matches []TabMatch) bool {
 	return true
 }
 
-func (state *TermState) buildCompletionInsert(match string, tokenType TokenType, preferPathQuote bool) string {
+// completionQuoting says how a completion that needs quotes is quoted.
+type completionQuoting int
+
+const (
+	quoteAsString completionQuoting = iota // 'single quotes'
+	quoteAsPath                            // `backticks`
+	quoteIfPath                            // backticks when completionIsPath says it is a path
+)
+
+func (state *TermState) buildCompletionInsert(match string, tokenType TokenType, quoting completionQuoting) string {
 	switch tokenType {
 	case UNFINISHEDSINGLEQUOTESTRING:
 		return "'" + match
@@ -1927,7 +1936,7 @@ func (state *TermState) buildCompletionInsert(match string, tokenType TokenType,
 		tokens, err := state.l.Tokenize()
 		if len(tokens) > 2 && err == nil {
 			// Quote when the completion needs multiple tokens to parse.
-			if preferPathQuote {
+			if quoting == quoteAsPath || (quoting == quoteIfPath && completionIsPath(match)) {
 				insertString := "`" + match
 				if !strings.HasSuffix(match, string(os.PathSeparator)) {
 					insertString += "` "
@@ -1940,7 +1949,7 @@ func (state *TermState) buildCompletionInsert(match string, tokenType TokenType,
 	}
 }
 
-func (state *TermState) buildSharedCompletionInsert(longestCommonPrefix string, tokenType TokenType, allFileMatches bool) string {
+func (state *TermState) buildSharedCompletionInsert(longestCommonPrefix string, tokenType TokenType, quoting completionQuoting, matches []string) string {
 	switch tokenType {
 	case UNFINISHEDSINGLEQUOTESTRING:
 		return "'" + longestCommonPrefix
@@ -1952,7 +1961,7 @@ func (state *TermState) buildSharedCompletionInsert(longestCommonPrefix string, 
 		tokens, err := state.l.Tokenize()
 		if (len(tokens) > 2 && err == nil) || needsQuoteForWhitespace {
 			// Add only the opening quote while user keeps typing to disambiguate.
-			if allFileMatches {
+			if quoting == quoteAsPath || (quoting == quoteIfPath && allCompletionsArePaths(matches)) {
 				return "`" + longestCommonPrefix
 			}
 			return "'" + longestCommonPrefix
@@ -1971,7 +1980,7 @@ func (state *TermState) cycleTabCompletion(direction int) {
 	} else if state.tabCycleIndex < 0 {
 		state.tabCycleIndex = len(state.tabCycleMatches) - 1
 	}
-	insertString := state.buildCompletionInsert(state.tabCycleMatches[state.tabCycleIndex], state.tabCycleTokenType, state.tabCycleAllFiles)
+	insertString := state.buildCompletionInsert(state.tabCycleMatches[state.tabCycleIndex], state.tabCycleTokenType, state.tabCycleQuoting)
 	state.currentCommand = state.tabCycleSource
 	state.replaceText(insertString, state.tabCycleStart, state.tabCycleEnd)
 	state.setTabCompletions(state.tabCycleMatches)
@@ -1988,7 +1997,7 @@ func (state *TermState) selectTabCompletion(index int) {
 		index = len(state.tabCycleMatches) - 1
 	}
 	state.tabCycleIndex = index
-	insertString := state.buildCompletionInsert(state.tabCycleMatches[state.tabCycleIndex], state.tabCycleTokenType, state.tabCycleAllFiles)
+	insertString := state.buildCompletionInsert(state.tabCycleMatches[state.tabCycleIndex], state.tabCycleTokenType, state.tabCycleQuoting)
 	state.currentCommand = state.tabCycleSource
 	state.replaceText(insertString, state.tabCycleStart, state.tabCycleEnd)
 	state.setTabCompletions(state.tabCycleMatches)
@@ -2260,69 +2269,6 @@ func (state *TermState) completionArgsFromTokens(tokens []Token, prefix string) 
 	}
 
 	return args
-}
-
-func (state *TermState) runCompletionDefinitions(defs []MShellDefinition, args []string) []string {
-	if len(defs) == 0 {
-		return nil
-	}
-	matches := make([]string, 0)
-	seen := map[string]struct{}{}
-
-	// A completion definition answers on the stack. Anything it or the
-	// processes it runs would print belongs to nobody: the editor owns the
-	// screen while a completion runs, so a stray "fatal: not a git
-	// repository" from a helper command would land in the command area.
-	completionContext := state.context
-	completionContext.StandardOutput = io.Discard
-	completionContext.StandardError = io.Discard
-	completionContext.ShouldCloseOutput = false
-	completionContext.ShouldCloseError = false
-
-	for _, def := range defs {
-		completionList := NewList(len(args))
-		for i, arg := range args {
-			completionList.Items[i] = MShellString{Content: arg}
-		}
-		completionStack := MShellStack{completionList}
-		callStackItem := CallStackItem{MShellParseItem: def.NameToken, Name: def.Name, CallStackType: CALLSTACKDEF}
-		result := state.evalState.Evaluate(def.Items, &completionStack, completionContext, state.stdLibDefs, callStackItem)
-		if !result.Success {
-			state.Logf("Completion definition '%s' failed to evaluate\n", def.Name)
-			continue
-		}
-		if result.ExitCalled {
-			state.Logf("Completion definition '%s' called exit\n", def.Name)
-			continue
-		}
-		if len(completionStack) == 0 {
-			state.Logf("Completion definition '%s' left an empty stack\n", def.Name)
-			continue
-		}
-		if len(completionStack) > 1 {
-			state.Logf("Completion definition '%s' left %d items on the stack\n", def.Name, len(completionStack))
-		}
-		top := completionStack[len(completionStack)-1]
-		list, ok := top.(*MShellList)
-		if !ok {
-			state.Logf("Completion definition '%s' did not return a list\n", def.Name)
-			continue
-		}
-		for _, item := range list.Items {
-			str, err := item.CastString()
-			if err != nil {
-				state.Logf("Completion definition '%s' returned a non-string: %s\n", def.Name, err)
-				continue
-			}
-			if _, ok := seen[str]; ok {
-				continue
-			}
-			seen[str] = struct{}{}
-			matches = append(matches, str)
-		}
-	}
-
-	return matches
 }
 
 func (state *TermState) ScrollDown(numLines int) {
@@ -4197,68 +4143,84 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			state.Logf("Prefix: %s\n", prefix)
 
 			var matches []TabMatch
+			// A binary's completion definitions return every candidate, files included,
+			// so the general completions below only run when there are none.
+			definitionsRan := false
 
-			// Binary specific completions should come first
 			if binaryCompletion {
 				isCompletingBinary := prefix != "" && lastToken.Start == binaryToken.Start && lastToken.Line == binaryToken.Line
 				if !isCompletingBinary {
 					defs := state.evalState.CompletionDefinitions[binaryToken.Lexeme]
 					if len(defs) > 0 {
 						args := state.completionArgsFromTokens(tokens, prefix)
-						completionMatches := state.runCompletionDefinitions(defs, args)
-						for _, match := range completionMatches {
-							if strings.HasPrefix(match, prefix) {
-								// Only show options (starting with '-') if the prefix also starts with '-'
-								if strings.HasPrefix(match, "-") && !strings.HasPrefix(prefix, "-") {
-									continue
-								}
-								matches = append(matches, TabMatch{TABMATCHCMD, match})
+						definitionMatches, ok := state.evalState.RunCompletionDefinitions(defs, args, prefix, state.context, state.stdLibDefs)
+						if ok {
+							definitionsRan = true
+							matches = make([]TabMatch, len(definitionMatches))
+							for i, match := range definitionMatches {
+								matches[i] = TabMatch{TABMATCHCMD, match}
 							}
+						} else {
+							state.Logf("Completion definitions for '%s' failed\n", binaryToken.Lexeme)
 						}
 					}
 				}
 			}
 
-			// Build completion dependencies from current state
-			variables := make(map[string]struct{}, len(state.context.Variables))
-			for v := range state.context.Variables {
-				variables[v] = struct{}{}
+			if !definitionsRan {
+				// Build completion dependencies from current state
+				variables := make(map[string]struct{}, len(state.context.Variables))
+				for v := range state.context.Variables {
+					variables[v] = struct{}{}
+				}
+
+				definitions := make([]string, len(state.stdLibDefs))
+				for i, def := range state.stdLibDefs {
+					definitions[i] = def.Name
+				}
+
+				deps := CompletionDeps{
+					FS:          OSCompletionFS{},
+					Env:         OSCompletionEnv{},
+					Binaries:    state.context.Pbm,
+					Variables:   variables,
+					BuiltIns:    BuiltInList,
+					Definitions: definitions,
+				}
+
+				prevTokenType := EOF
+				if len(tokens) > 1 {
+					if replaceStart == state.index {
+						prevTokenType = lastToken.Type
+					} else if len(tokens) >= 3 {
+						prevTokenType = tokens[len(tokens)-3].Type
+					}
+				}
+
+				input := CompletionInput{
+					Prefix:        prefix,
+					LastTokenType: lastToken.Type,
+					PrevTokenType: prevTokenType,
+					NumTokens:     len(tokens),
+					InBinaryMode:  binaryCompletion,
+				}
+
+				matches = GenerateCompletions(input, deps)
 			}
 
-			definitions := make([]string, len(state.stdLibDefs))
-			for i, def := range state.stdLibDefs {
-				definitions[i] = def.Name
-			}
-
-			deps := CompletionDeps{
-				FS:          OSCompletionFS{},
-				Env:         OSCompletionEnv{},
-				Binaries:    state.context.Pbm,
-				Variables:   variables,
-				BuiltIns:    BuiltInList,
-				Definitions: definitions,
-			}
-
-			prevTokenType := EOF
-			if len(tokens) > 1 {
-				if replaceStart == state.index {
-					prevTokenType = lastToken.Type
-				} else if len(tokens) >= 3 {
-					prevTokenType = tokens[len(tokens)-3].Type
+			// Definition candidates are plain strings, so whether one is a path is
+			// only looked up on disk when inserting it needs quotes.
+			singleQuoting, sharedQuoting := quoteAsString, quoteAsString
+			if definitionsRan {
+				singleQuoting, sharedQuoting = quoteIfPath, quoteIfPath
+			} else {
+				if len(matches) > 0 && matches[0].TabMatchType == TABMATCHFILE {
+					singleQuoting = quoteAsPath
+				}
+				if allMatchesAreFiles(matches) {
+					sharedQuoting = quoteAsPath
 				}
 			}
-
-			input := CompletionInput{
-				Prefix:        prefix,
-				LastTokenType: lastToken.Type,
-				PrevTokenType: prevTokenType,
-				NumTokens:     len(tokens),
-				InBinaryMode:  binaryCompletion,
-			}
-
-			// Generate completions using the extracted function
-			matches = append(matches, GenerateCompletions(input, deps)...)
-			allFileMatches := allMatchesAreFiles(matches)
 
 			var insertString string
 			state.Logf("Len matches: '%d'\n", len(matches))
@@ -4272,33 +4234,34 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				fmt.Fprintf(os.Stdout, "\a")
 			} else if len(matches) == 1 {
 				// Lex the match and check if we have to quote around it
-				insertString = state.buildCompletionInsert(matches[0].Match, lastToken.Type, matches[0].TabMatchType == TABMATCHFILE)
+				insertString = state.buildCompletionInsert(matches[0].Match, lastToken.Type, singleQuoting)
 
 				// Replace the prefex
 				state.replaceText(insertString, replaceStart, replaceEnd)
 			} else {
+				tabMatchTexts := GetMatchTexts(matches)
+
 				// Print out the longest common prefix
-				longestCommonPrefix := completionGraphemePrefix(GetMatchTexts(matches))
+				longestCommonPrefix := completionGraphemePrefix(tabMatchTexts)
 				state.Logf("Longest common prefix: '%s'\n", longestCommonPrefix)
 
 				if len(longestCommonPrefix) <= len(prefix) {
 					// Print bell
 					fmt.Fprintf(os.Stdout, "\a")
 				} else {
-					longestCommonPrefix = state.buildSharedCompletionInsert(longestCommonPrefix, lastToken.Type, allFileMatches)
+					longestCommonPrefix = state.buildSharedCompletionInsert(longestCommonPrefix, lastToken.Type, sharedQuoting, tabMatchTexts)
 
 					// Replace the prefix
 					state.replaceText(longestCommonPrefix, replaceStart, replaceEnd)
 				}
 
-				tabMatchTexts := GetMatchTexts(matches)
 				state.tabCycleActive = true
 				state.tabCycleIndex = -1
 				state.tabCycleSource = completionSource
 				state.tabCycleStart = replaceStart
 				state.tabCycleEnd = replaceEnd
 				state.tabCycleTokenType = lastToken.Type
-				state.tabCycleAllFiles = allFileMatches
+				state.tabCycleQuoting = sharedQuoting
 				state.tabCycleMatches = append(state.tabCycleMatches[:0], tabMatchTexts...)
 				state.setTabCompletions(tabMatchTexts)
 			}

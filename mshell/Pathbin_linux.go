@@ -43,8 +43,8 @@ type PathBinManager struct {
 func (pbm *PathBinManager) Matches(search string) ([]string) {
 	var matches []string
 	for binName := range pbm.binaryPaths {
-		// Do case-insensitive search prefix match
-		if strings.HasPrefix(strings.ToLower(binName), strings.ToLower(search)) {
+		// Case-insensitive prefix match, without lowercasing (and allocating) every name.
+		if len(binName) >= len(search) && strings.EqualFold(binName[:len(search)], search) {
 			matches = append(matches, binName)
 		}
 	}

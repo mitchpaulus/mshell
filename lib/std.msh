@@ -476,95 +476,93 @@ def parseBin (str -- Maybe[int]) 2 fromBase end
 
 # COMPLETIONS {{{
 # msh {{{
-def __mshCompletion { 'complete': ['msh' 'mshell'] } ([str] -- [str])
-    input!
-    ['-h' '--help' '--html' '--lex' '--parse' '--check-types' '--type-check-only' '--version' '-c' '-'] options!
-    ['lsp' 'bin' 'edit' 'completions'] subcommands!
-
+def __mshCompletion { 'complete': ['msh' 'mshell'] } ([str] str -- [str])
+    prefix! input!
     @input len 0 > if
-        @input :0: first!
-        @first 'lsp' = if
-            [] # Nothing after lsp
-        else* @first 'bin' = *if
-            ['add' 'remove' 'list' 'path' 'edit' 'audit' 'debug']
-        else* @first 'edit' = *if
-            ['init']
-        else* @first 'completions' = *if
-            ['fish' 'bash' 'nushell' 'elvish']
-        else
-            []
+        @input len 1 = firstArgument!
+        @input :0: match
+            'lsp' : [] as [str],
+            'bin' : @firstArgument
+                (['add' 'remove' 'list' 'path' 'edit' 'audit' 'debug'])
+                (@input :1: 'add' = (@prefix completeFiles) ([] as [str]) iff) iff,
+            'edit' : @firstArgument (['init']) ([] as [str]) iff,
+            'completions' : @firstArgument (['fish' 'bash' 'nushell' 'elvish']) ([] as [str]) iff,
+            # Everything else is a script and its arguments.
+            _ : @prefix completeFiles,
         end
+    else* @prefix '-' startsWith *if
+        ['-h' '--help' '--html' '--lex' '--parse' '--check-types' '--type-check-only' '--version' '-c' '-']
     else
-        @options @subcommands extend
+        ['lsp' 'bin' 'edit' 'completions'] @prefix completeFiles extend
     end
 end
 # }}}
 # git {{{
 def __gitOptionsForSubcmd (str -- [str])
     cmd!
-    {
-        "add": [
+    @cmd match
+        "add" : [
             "-n" "--dry-run" "-v" "--verbose" "-f" "--force" "-i" "--interactive" "-p" "--patch"
             "-e" "--edit" "-u" "--update" "-A" "--all" "-N" "--intent-to-add" "--refresh"
             "--ignore-errors" "--ignore-missing" "--pathspec-from-file" "--pathspec-file-nul"
         ],
-        "am": [
+        "am" : [
             "-s" "--signoff" "-k" "--keep" "--keep-non-patch" "--no-keep-cr" "-c" "--scissors"
             "--no-scissors" "-q" "--quiet" "--no-utf8" "-3" "--3way" "--no-3way"
             "--rerere-autoupdate" "--ignore-space-change" "--directory" "--exclude" "--include"
             "--reject" "-i" "--interactive" "--committer-date-is-author-date" "--ignore-date"
             "--skip" "--continue" "--abort" "--quit" "--whitespace" "--quoted-cr"
         ],
-        "annotate": [
+        "annotate" : [
             "-b" "--root" "-c" "-C" "-M" "-L" "-l" "-t" "-p" "--porcelain" "--line-porcelain"
             "--incremental" "--contents" "-S" "--reverse" "-w" "-f" "--show-name" "-n" "--show-number"
             "-s" "--suppress" "-e" "--show-email" "--date"
         ],
-        "apply": [
+        "apply" : [
             "--stat" "--numstat" "--summary" "--check" "--index" "--cached" "--intent-to-add"
             "-3" "--3way" "-R" "--reverse" "--reject" "--unidiff-zero" "--apply" "--no-add"
             "--allow-binary-replacement" "--binary" "--exclude" "--include" "--directory"
             "--ignore-space-change" "--ignore-whitespace" "--whitespace" "--inaccurate-eof"
             "-v" "--verbose" "--recount" "--unsafe-paths"
         ],
-        "archive": [
+        "archive" : [
             "-l" "--list" "-v" "--verbose" "--worktree-attributes" "--format" "--prefix"
             "-o" "--output" "--add-file" "--remote" "--exec"
         ],
-        "bisect": [
+        "bisect" : [
             "start" "bad" "new" "good" "old" "terms" "skip" "reset" "visualize" "replay" "log" "run" "help"
             "--no-checkout" "--first-parent" "--term-new" "--term-bad" "--term-old" "--term-good"
         ],
-        "blame": [
+        "blame" : [
             "-b" "--root" "-c" "-C" "-M" "-L" "-l" "-t" "-p" "--porcelain" "--line-porcelain"
             "--incremental" "--contents" "-S" "--reverse" "-w" "-f" "--show-name" "-n" "--show-number"
             "-s" "--suppress" "-e" "--show-email" "--date"
         ],
-        "branch": [
+        "branch" : [
             "-d" "--delete" "-D" "-m" "--move" "-M" "-c" "--copy" "-C" "-f" "--force"
             "-a" "--all" "-r" "--remotes" "-t" "--track" "--no-track" "--set-upstream-to"
             "--unset-upstream" "--merged" "--no-merged" "--contains" "--no-contains"
             "--edit-description" "-l" "--list" "--sort" "--color"
         ],
-        "checkout": [
+        "checkout" : [
             "-b" "-B" "-t" "--track" "--no-track" "-f" "--force" "-q" "--quiet" "--detach"
             "--guess" "--no-guess" "--overlay" "--no-overlay" "--recurse-submodules" "--no-recurse-submodules"
             "--progress" "--no-progress" "--conflict=merge" "--conflict=diff3" "--ours" "--theirs"
             "--pathspec-from-file" "--pathspec-file-nul"
         ],
-        "cherry": [
+        "cherry" : [
             "-v"
         ],
-        "cherry-pick": [
+        "cherry-pick" : [
             "-e" "--edit" "-x" "-n" "--no-commit" "-s" "--signoff" "--ff" "--continue" "--abort"
             "--skip" "--quit" "-m" "--mainline" "-S" "--gpg-sign" "--no-gpg-sign"
             "--strategy" "-X" "--strategy-option"
         ],
-        "clean": [
+        "clean" : [
             "-n" "--dry-run" "-f" "--force" "-i" "--interactive" "-q" "--quiet" "-d" "-x" "-X"
             "-e" "--exclude"
         ],
-        "clone": [
+        "clone" : [
             "-q" "--quiet" "-v" "--verbose" "-n" "--no-checkout" "--bare" "--mirror" "-o" "--origin"
             "-b" "--branch" "--depth" "--filter" "--single-branch" "--no-single-branch" "--recursive"
             "--recurse-submodules" "--jobs" "--shallow-submodules" "--no-shallow-submodules"
@@ -573,7 +571,7 @@ def __gitOptionsForSubcmd (str -- [str])
             "--no-reject-shallow" "--reject-shallow" "--sparse" "--separate-git-dir" "--template"
             "--upload-pack" "--config"
         ],
-        "commit": [
+        "commit" : [
             "--amend" "-a" "--all" "-p" "--patch" "-m" "--message" "-c" "--reedit-message"
             "-C" "--reuse-message" "-F" "--file" "-e" "--edit" "-q" "--quiet" "-v" "--verbose"
             "-n" "--no-verify" "-S" "--gpg-sign" "--no-gpg-sign" "--fixup" "--squash"
@@ -581,11 +579,11 @@ def __gitOptionsForSubcmd (str -- [str])
             "--cleanup" "--status" "--no-status" "--allow-empty" "--allow-empty-message"
             "--only" "--include" "--pathspec-from-file" "--pathspec-file-nul"
         ],
-        "describe": [
+        "describe" : [
             "--dirty" "--broken" "--all" "--tags" "--contains" "--abbrev" "--candidates"
             "--exact-match" "--debug" "--long" "--match" "--exclude" "--always" "--first-parent"
         ],
-        "diff": [
+        "diff" : [
             "--cached" "--staged" "--stat" "--numstat" "--shortstat" "--summary" "-p" "--patch"
             "--name-only" "--name-status" "--color" "--no-color" "-U" "--unified" "--word-diff"
             "--word-diff-regex" "-b" "--ignore-space-change" "-w" "--ignore-all-space"
@@ -594,7 +592,7 @@ def __gitOptionsForSubcmd (str -- [str])
             "--src-prefix" "--dst-prefix" "--no-prefix" "--submodule" "--dirstat" "--patience"
             "--histogram"
         ],
-        "fetch": [
+        "fetch" : [
             "-q" "--quiet" "-v" "--verbose" "-a" "--append" "-f" "--force" "-p" "--prune"
             "--all" "-t" "--tags" "--no-tags" "-P" "--prune-tags" "--prefetch" "--refetch"
             "--dry-run" "--depth" "--deepen" "--shallow-since" "--shallow-exclude" "--unshallow"
@@ -602,17 +600,17 @@ def __gitOptionsForSubcmd (str -- [str])
             "--refmap" "--filter" "-4" "--ipv4" "-6" "--ipv6" "--negotiation-tip"
             "--recurse-submodules" "--jobs" "--show-forced-updates" "--no-show-forced-updates"
         ],
-        "format-patch": [
+        "format-patch" : [
             "-o" "--output-directory" "--stdout" "-p" "--no-stat" "--stat" "--numstat"
             "--shortstat" "--summary" "--no-renames" "--full-index" "--binary" "-a" "--text"
             "--ignore-space-at-eol" "-b" "--ignore-space-change" "-w" "--ignore-all-space"
             "--ignore-blank-lines" "-W" "--function-context" "--no-prefix" "--numbered"
             "--no-numbered"
         ],
-        "gc": [
+        "gc" : [
             "--aggressive" "--auto" "--prune" "--no-prune" "--quiet" "--force" "--keep-largest-pack"
         ],
-        "grep": [
+        "grep" : [
             "--cached" "--no-index" "--untracked" "--exclude-standard" "--recurse-submodules"
             "-a" "--text" "--textconv" "--no-textconv" "-i" "--ignore-case" "-I"
             "-r" "--recursive" "--no-recursive" "-w" "--word-regexp" "-v" "--invert-match"
@@ -622,34 +620,34 @@ def __gitOptionsForSubcmd (str -- [str])
             "-p" "--show-function" "-W" "--function-context" "-e" "--and" "--or" "--not" "--all-match"
             "--max-depth" "--threads" "-C" "--context" "-A" "--after-context" "-B" "--before-context"
         ],
-        "init": [
+        "init" : [
             "-q" "--quiet" "--bare" "--template" "--separate-git-dir" "--shared"
             "-b" "--initial-branch" "--object-format"
         ],
-        "log": [
+        "log" : [
             "--follow" "--no-decorate" "--decorate" "--source" "--stat" "--numstat" "--shortstat"
             "--summary" "-p" "--patch" "--name-only" "--name-status" "--abbrev-commit" "--no-abbrev-commit"
             "--oneline" "--pretty" "--format" "--graph" "--since" "--until" "--author" "--committer"
             "--grep" "--all" "--branches" "--tags" "--remotes" "-n" "--max-count" "--skip"
             "--reverse" "--no-merges" "--merges" "--first-parent" "--diff-filter" "--relative"
         ],
-        "merge": [
+        "merge" : [
             "--commit" "--no-commit" "-e" "--edit" "--no-edit" "--ff" "--no-ff" "--ff-only"
             "--log" "--no-log" "--stat" "-n" "--no-stat" "--squash" "--no-squash"
             "-s" "--strategy" "-X" "--strategy-option" "--verify-signatures" "--no-verify-signatures"
             "-q" "--quiet" "-v" "--verbose" "--progress" "--no-progress" "--allow-unrelated-histories"
             "--signoff" "--no-signoff" "--autostash" "--no-autostash" "--abort" "--continue"
         ],
-        "mv": [
+        "mv" : [
             "-f" "--force" "-k" "-n" "--dry-run" "-v" "--verbose"
         ],
-        "notes": [
+        "notes" : [
             "add" "copy" "append" "edit" "show" "merge" "remove" "prune" "get-ref" "list"
             "-f" "--force" "-m" "--message" "-F" "--file" "-C" "--reuse-message"
             "-c" "--reedit-message" "--stdin" "-v" "--verbose" "-q" "--quiet" "--allow-empty"
             "--commit" "--abort" "-s" "--strategy"
         ],
-        "pull": [
+        "pull" : [
             "-q" "--quiet" "-v" "--verbose" "-a" "--append" "-f" "--force" "-p" "--prune"
             "--all" "--no-tags" "--tags" "--progress" "--no-progress" "--rebase" "--no-rebase"
             "--ff" "--no-ff" "--ff-only" "--squash" "--no-squash" "--autostash" "--no-autostash"
@@ -657,7 +655,7 @@ def __gitOptionsForSubcmd (str -- [str])
             "--depth" "--deepen" "--shallow-since" "--shallow-exclude" "--unshallow" "--update-shallow"
             "--jobs" "-4" "--ipv4" "-6" "--ipv6" "--upload-pack" "--recurse-submodules"
         ],
-        "push": [
+        "push" : [
             "--all" "--prune" "--mirror" "--delete" "--tags" "--follow-tags" "-n" "--dry-run"
             "--porcelain" "-f" "--force" "--force-with-lease" "--force-if-includes"
             "-u" "--set-upstream" "-q" "--quiet" "-v" "--verbose" "--progress" "--no-progress"
@@ -665,80 +663,80 @@ def __gitOptionsForSubcmd (str -- [str])
             "--atomic" "--no-atomic" "--push-option" "-o" "--repo" "--receive-pack" "--exec"
             "-4" "--ipv4" "-6" "--ipv6"
         ],
-        "rebase": [
+        "rebase" : [
             "--continue" "--abort" "--skip" "--edit-todo" "-i" "--interactive" "-m" "--merge"
             "-q" "--quiet" "-v" "--verbose" "--stat" "-n" "--no-stat" "--verify" "--no-verify"
             "-f" "--force-rebase" "--committer-date-is-author-date" "--ignore-date"
             "-p" "--preserve-merges" "-r" "--rebase-merges" "--root" "--autosquash"
             "--no-autosquash" "--autostash" "--no-autostash" "--no-ff" "--onto" "--exec"
         ],
-        "reset": [
+        "reset" : [
             "--soft" "--mixed" "--hard" "--merge" "--keep" "-q" "--quiet" "-p" "--patch"
             "--pathspec-from-file" "--pathspec-file-nul"
         ],
-        "restore": [
+        "restore" : [
             "-s" "--source" "-p" "--patch" "-W" "--worktree" "-S" "--staged"
             "--ours" "--theirs" "-m" "--merge" "--ignore-unmerged" "--ignore-skip-worktree-bits"
             "--overlay" "--no-overlay" "--pathspec-from-file" "--pathspec-file-nul"
         ],
-        "revert": [
+        "revert" : [
             "--continue" "--abort" "--skip" "--quit" "-n" "--no-commit" "-e" "--edit" "--no-edit"
             "-m" "--mainline" "-S" "--gpg-sign" "--no-gpg-sign" "-s" "--signoff"
             "--rerere-autoupdate" "--no-rerere-autoupdate" "--strategy" "-X" "--strategy-option"
         ],
-        "rm": [
+        "rm" : [
             "--cached" "--ignore-unmatch" "-r" "-q" "-f" "-n" "--dry-run" "--sparse"
             "--pathspec-from-file" "--pathspec-file-nul"
         ],
-        "show": [
+        "show" : [
             "--pretty" "--format" "--abbrev-commit" "--no-abbrev-commit" "--oneline" "--encoding"
             "--expand-tabs" "--no-expand-tabs" "--notes" "--no-notes" "--show-signature"
             "-s" "--no-patch" "-p" "--patch" "--stat" "--numstat" "--shortstat" "--summary"
             "--name-only" "--name-status"
         ],
-        "shortlog": [
+        "shortlog" : [
             "-n" "--numbered" "-s" "--summary" "-e" "--email" "-c" "--committer" "--group" "--no-group"
             "-w"
         ],
-        "stash": [
+        "stash" : [
             "list" "show" "pop" "apply" "clear" "drop" "branch" "push"
             "-a" "--all" "-u" "--include-untracked" "-k" "--keep-index" "-p" "--patch"
             "-m" "--message" "-S" "--staged" "--no-keep-index"
         ],
-        "status": [
+        "status" : [
             "-s" "--short" "-b" "--branch" "--porcelain" "-z" "-u" "--untracked-files"
             "--ignore-submodules" "-v" "--verbose" "--no-ahead-behind" "--renames" "--no-renames"
             "--show-stash" "--column" "--no-column" "--pathspec-from-file" "--pathspec-file-nul"
         ],
-        "switch": [
+        "switch" : [
             "-c" "--create" "-C" "--force-create" "-d" "--detach" "-f" "--force" "--discard-changes"
             "-m" "--merge" "-t" "--track" "--no-track" "--guess" "--no-guess" "--orphan"
             "--recurse-submodules" "--no-recurse-submodules" "--progress" "--no-progress" "-q" "--quiet"
         ],
-        "tag": [
+        "tag" : [
             "-a" "--annotate" "-s" "--sign" "-d" "--delete" "-v" "--verify" "-f" "--force"
             "-l" "--list" "--contains" "--no-contains" "-m" "--message" "-F" "--file"
             "-u" "--local-user" "--cleanup" "--create-reflog" "--no-create-reflog" "--sort"
             "--merged" "--no-merged" "--points-at" "--color" "--column" "--no-column"
         ],
-        "worktree": [
+        "worktree" : [
             "add" "list" "lock" "move" "prune" "remove" "unlock"
             "-f" "--force" "-b" "-B" "--detach" "--checkout" "--no-checkout" "--guess-remote"
             "--no-guess-remote" "--track" "--no-track" "--lock" "-q" "--quiet" "--porcelain"
             "-n" "--dry-run" "-v" "--verbose" "--expire"
         ],
-        "submodule": [
+        "submodule" : [
             "add" "status" "init" "deinit" "update" "set-branch" "set-url" "summary" "foreach" "sync" "absorbgitdirs"
             "--init" "--recursive" "--checkout" "--merge" "--rebase" "--remote" "--force" "--filter"
             "--depth" "--jobs" "-q" "--quiet" "-b" "--branch"
         ],
-        "remote": [
+        "remote" : [
             "-v" "--verbose" "add" "rm" "remove" "show" "prune" "update" "rename" "set-head" "set-url"
             "get-url" "set-branches" "--tags" "--no-tags" "-f" "--force" "--add" "--delete" "--push"
             "--all" "--dry-run" "--prune"
-        ]
-    }
-    @cmd get [] maybe
+        ],
+        _ : [] as [str],
+    end
 end
 
 # Prefer untracked files for git add completions, then changed files, then repo files.
@@ -746,77 +744,66 @@ def __gitAddFilePaths ( -- [str])
     ['git' 'status' '--porcelain'] * ; lines (trim len 0 >) filter ('->' in not) filter (3:) map
 end
 
-def __gitCompletion { 'complete': ['git'] } ([str] -- [str])
-    input!
+def __gitCompletion { 'complete': ['git'] } ([str] str -- [str])
+    prefix! input!
     ['-h' '--help' '-v' '--version' '-C' '-c' '--git-dir' '--work-tree' '--namespace' '--paginate' '--no-pager'] globalOptions!
+    @prefix '-' startsWith wantOptions!
+    @input len 0 > if @input :0: else '' end subcmd!
+    @input len 0 > if @input :-1: else '' end last!
 
-    @input len 0 > if
-        @input :0: subcmd!
-        @subcmd "-" startsWith if
-            @globalOptions ['git' '--list-cmds=main'] * ; lines extend
-        else
-            ['add' 'am' 'annotate' 'apply' 'archive' 'bisect' 'blame' 'branch' 'checkout' 'cherry' 'cherry-pick' 'clean' 'clone' 'commit' 'describe' 'diff' 'fetch' 'format-patch' 'gc' 'grep' 'init' 'log' 'merge' 'mv' 'notes' 'pull' 'push' 'rebase' 'reset' 'restore' 'revert' 'rm' 'show' 'shortlog' 'stash' 'status' 'switch' 'tag' 'worktree' 'submodule' 'remote'] porcelainCommands!
-            ['checkout' 'switch' 'branch' 'merge' 'rebase' 'reset' 'restore' 'show' 'log' 'diff' 'cherry-pick' 'revert' 'tag' 'describe' 'notes'] refCommands!
-            ['fetch' 'pull' 'push'] remoteCommands!
-            ['list' 'show' 'pop' 'apply' 'drop' 'clear' 'branch' 'push'] stashSubcommands!
-            ['add' 'rm' 'remove' 'show' 'prune' 'update' 'rename' 'set-head' 'set-url' 'get-url' 'set-branches'] remoteSubcommands!
-            ['add' 'rm' 'mv' 'restore' 'checkout' 'reset' 'diff' 'status' 'commit' 'grep' 'show' 'log'] fileCommands!
-
-            @porcelainCommands (@subcmd =) any if
-                @subcmd __gitOptionsForSubcmd subcmdOptions!
+    @last match
+        '-C' '--git-dir' '--work-tree' : @prefix completeDirs,
+        _ :
+            @input len 0 = @subcmd '-' startsWith or if
+                @wantOptions (@globalOptions) (['git' '--list-cmds=main'] * ; lines) iff
+            else* @wantOptions *if
+                @globalOptions @subcmd __gitOptionsForSubcmd extend
             else
-                [] subcmdOptions!
-            end
+                @input @prefix __gitArguments
+            end,
+    end
+end
 
-            @globalOptions @subcmdOptions extend options!
-
-            @subcmd 'remote' = if
-                @input len 1 = if
-                    @options @remoteSubcommands extend
-                else
-                    @options ['git' 'remote'] * ; lines extend
-                end
-            else* @subcmd 'stash' = *if
-                @input len 1 = if
-                    @options @stashSubcommands extend
-                else
-                    @input :1: stashCmd!
-                    ['apply' 'pop' 'drop' 'show' 'branch'] needStash!
-                    @needStash (@stashCmd =) any if
-                        @options ['git' 'stash' 'list' '--format=%gd'] * ; lines extend
-                    else
-                        @options
-                    end
-                end
+# Completions for the arguments of a git subcommand that are not options.
+def __gitArguments ([str] str -- [str])
+    prefix! input!
+    @input :0: subcmd!
+    @subcmd match
+        'remote' : @input len 1 =
+            (['add' 'rm' 'remove' 'show' 'prune' 'update' 'rename' 'set-head' 'set-url' 'get-url' 'set-branches'])
+            (['git' 'remote'] * ; lines) iff,
+        'stash' :
+            @input len 1 = if
+                ['list' 'show' 'pop' 'apply' 'drop' 'clear' 'branch' 'push']
             else
-                @subcmd 'add' = if
-                    [] completions!
-                else
-                    @options completions!
+                @input :1: match
+                    'apply' 'pop' 'drop' 'show' 'branch' : ['git' 'stash' 'list' '--format=%gd'] * ; lines,
+                    _ : [] as [str],
                 end
-
-                @remoteCommands (@subcmd =) any if
-                    @completions ['git' 'remote'] * ; lines extend completions!
-                end
-
-                @refCommands (@subcmd =) any if
-                    @completions ['git' 'for-each-ref' '--format=%(refname:short)' 'refs/heads' 'refs/remotes' 'refs/tags'] * ; lines extend completions!
-                end
-
-                @fileCommands (@subcmd =) any if
-                    @subcmd 'add' = if
-                        @completions __gitAddFilePaths extend completions!
-                    end
-                end
-
-                @subcmd 'add' = if
-                    @completions @options extend completions!
-                end
-                @completions
+            end,
+        _ :
+            [] as [str] completions!
+            @subcmd match
+                'fetch' 'pull' 'push' : @completions ['git' 'remote'] * ; lines extend drop,
+                _ : ,
             end
-        end
-    else
-        @globalOptions ['git' '--list-cmds=main'] * ; lines extend
+            @subcmd match
+                'checkout' 'switch' 'branch' 'merge' 'rebase' 'reset' 'restore' 'show' 'log' 'diff'
+                'cherry-pick' 'revert' 'tag' 'describe' 'notes' :
+                    @completions
+                    ['git' 'for-each-ref' '--format=%(refname:short)' 'refs/heads' 'refs/remotes' 'refs/tags'] * ; lines
+                    extend drop,
+                _ : ,
+            end
+            @subcmd match
+                # Untracked and changed files first, then every file.
+                'add' : @completions __gitAddFilePaths extend @prefix completeFiles extend uniq completions!,
+                'rm' 'mv' 'restore' 'checkout' 'reset' 'diff' 'status' 'commit' 'grep' 'show' 'log'
+                'blame' 'annotate' 'apply' 'am' 'clone' 'init' :
+                    @completions @prefix completeFiles extend drop,
+                _ : ,
+            end
+            @completions,
     end
 end
 # }}}
@@ -833,16 +820,17 @@ def __fdDefaultOptions ( -- [str])
     ]
 end
 
-def __fdCompletion { 'complete': ['fd'] } ([str] -- [str])
-    input! @input len 0 > if
-        @input :-1: last!
-        ['-t' '--type'] (@last =) any if
-            ['file' 'directory' 'symlink' 'executable' 'empty' 'socket' 'pipe' 'char-device' 'block-device']
-        else
-            ['-c' '--color'] (@last =) any if ['auto' 'always' 'never'] else  __fdDefaultOptions end
-        end
-    else
-        __fdDefaultOptions
+def __fdCompletion { 'complete': ['fd'] } ([str] str -- [str])
+    prefix! input!
+    @input len 0 > if @input :-1: else '' end match
+        '-t' '--type' : ['file' 'directory' 'symlink' 'executable' 'empty' 'socket' 'pipe' 'char-device' 'block-device'],
+        '-c' '--color' : ['auto' 'always' 'never'],
+        '--base-directory' '--search-path' : @prefix completeDirs,
+        '--ignore-file' : @prefix completeFiles,
+        '-x' '--exec' '-X' '--exec-batch' : @prefix completeBinaries,
+        '-e' '--extension' '-E' '--exclude' '-d' '--max-depth' '--min-depth' '-S' '--size' '--threads'
+        '--path-separator' '--changed-within' '--changed-before' '--max-results' : [] as [str],
+        _ : @prefix '-' startsWith (__fdDefaultOptions) (@prefix completeFiles) iff,
     end
 end
 # }}}
@@ -881,18 +869,17 @@ def __sshOptionArgs ( -- {[str]})
     }
 end
 
-def __sshCompletion { 'complete': ['ssh'] } ([str] -- [str])
-    input!
-    @input len 0 > if
-        @input :-1: last!
+def __sshCompletion { 'complete': ['ssh'] } ([str] str -- [str])
+    prefix! input!
+    @input len 0 > if @input :-1: else '' end last!
+    @last match
         # -J (jump host) needs dynamic lookup
-        '-J' @last = if
-            __sshHosts
-        else
-            __sshOptionArgs @last get (__sshDefaultOptions __sshHosts extend) maybe
-        end
-    else
-        __sshDefaultOptions __sshHosts extend
+        '-J' : __sshHosts,
+        '-i' '-F' '-E' '-S' : @prefix completeFiles,
+        _ : __sshOptionArgs @last get match
+            just values : @values,
+            none : @prefix '-' startsWith (__sshDefaultOptions) (__sshHosts) iff,
+        end,
     end
 end
 # }}}
@@ -914,22 +901,22 @@ def __rgDefaultOptions ( -- [str])
     ]
 end
 
-def __rgCompletion { 'complete': ['rg'] } ([str] -- [str])
-    input!
-    @input len 0 > if
-        @input :-1: last!
-
-        ['-t' '--type'] (@last =) any if
-            ['rg' '--type-list'] * ; lines (":" split :0:) map
-        else
-            ['--color'] (@last =) any ( ['auto' 'always' 'never'] ) ( __rgDefaultOptions ) iff
-        end
-    else __rgDefaultOptions end
+def __rgCompletion { 'complete': ['rg'] } ([str] str -- [str])
+    prefix! input!
+    @input len 0 > if @input :-1: else '' end match
+        '-t' '--type' '-T' '--type-not' : ['rg' '--type-list'] * ; lines (":" split :0:) map,
+        '--color' : ['auto' 'always' 'never'],
+        '-f' '--file' '--ignore-file' : @prefix completeFiles,
+        '-g' '--glob' '-e' '--regexp' '-C' '--context' '-B' '--before-context' '-A' '--after-context'
+        '-m' '--max-count' '--max-depth' '--max-filesize' '--max-columns' '--threads' '--colors'
+        '--sort' '--sortr' '--type-add' : [] as [str],
+        _ : @prefix '-' startsWith (__rgDefaultOptions) (@prefix completeFiles) iff,
+    end
 end
 # }}}
 # sudo {{{
-def __sudoCompletion { 'complete': ['sudo'] } ([str] -- [str])
-    input!
+def __sudoCompletion { 'complete': ['sudo'] } ([str] str -- [str])
+    prefix! input!
     ['-A' '--askpass' '-b' '--background' '-E' '--preserve-env'
      '-H' '--set-home' '-i' '--login' '-K' '--remove-timestamp'
      '-k' '--reset-timestamp' '-l' '--list' '-n' '--non-interactive'
@@ -940,11 +927,10 @@ def __sudoCompletion { 'complete': ['sudo'] } ([str] -- [str])
      '-p' '--prompt' '-u' '--user' '-U' '--other-user'
      '-T' '--command-timeout'] argOptions!
 
-    # Walk through input to find the subcommand (first non-option, non-option-value token)
+    # Walk through input to find the command (first non-option, non-option-value token)
     0 i!
     false skipNext!
-    [] subcmdArgs!
-    "" subcmd!
+    [] as [str] commandLine!
     @input len inputLen!
 
     (
@@ -953,39 +939,37 @@ def __sudoCompletion { 'complete': ['sudo'] } ([str] -- [str])
         @skipNext if
             false skipNext!
         else
-            @subcmd len 0 > if
-                @subcmdArgs @tok append subcmdArgs!
+            @commandLine len 0 > if
+                @commandLine @tok append drop
             else
                 @argOptions (@tok =) any if
                     true skipNext!
-                else* @noArgOptions (@tok =) any *if
-                    # skip
                 else* @tok "-" startsWith *if
-                    # Unknown option, skip
+                    # Option without a value, or an unknown option
                 else
-                    @tok subcmd!
+                    @commandLine @tok append drop
                 end
             end
         end
         @i 1 + i!
     ) loop
 
-    @subcmd len 0 > if
-        # Found a subcommand, try to delegate to its completion definition
-        completionDefs @subcmd [] getDef delegateQuotes!
-        @delegateQuotes len 0 > if
-            @subcmdArgs @delegateQuotes :0: x
-        else
-            []
-        end
+    @commandLine len 0 > if
+        # Complete the command's own arguments.
+        @commandLine @prefix completeCommand
+    else* @skipNext *if
+        # The value of an option like -u
+        [] as [str]
+    else* @prefix '-' startsWith *if
+        @noArgOptions @argOptions extend
     else
-        @noArgOptions @argOptions extend binPaths (:0: str) map extend
+        @prefix completeBinaries
     end
 end
 # }}}
 # systemctl {{{
-def __systemctlCompletion { 'complete': ['systemctl'] } ([str] -- [str])
-    input!
+def __systemctlCompletion { 'complete': ['systemctl'] } ([str] str -- [str])
+    prefix! input!
     ['list-units' 'list-sockets' 'start' 'stop' 'reload' 'restart'
      'try-restart' 'reload-or-restart' 'reload-or-try-restart' 'try-reload-or-restart'
      'isolate' 'kill' 'is-active' 'is-failed' 'status' 'show' 'cat' 'edit'
@@ -1048,22 +1032,22 @@ def __systemctlCompletion { 'complete': ['systemctl'] } ([str] -- [str])
         @i 1 + i!
     ) loop
 
-    @subcmd len 0 > if
-        @unitCommands (@subcmd =) any if
-            # Return unit names for commands that operate on units
-            ['systemctl' 'list-unit-files' '--no-legend' '--no-pager'] * ;
-            lines (" " split :0:) map
-        else
-            @noArgOptions @argOptions extend
-        end
+    @prefix '-' startsWith if
+        @noArgOptions @argOptions extend
+    else* @subcmd len 0 = *if
+        @subcommands
+    else* @unitCommands (@subcmd =) any *if
+        # Unit names for commands that operate on units
+        ['systemctl' 'list-unit-files' '--no-legend' '--no-pager'] * ;
+        lines (" " split :0:) map
     else
-        @subcommands @noArgOptions extend @argOptions extend
+        [] as [str]
     end
 end
 # }}}
 # journalctl {{{
-def __journalctlCompletion { 'complete': ['journalctl'] } ([str] -- [str])
-    input!
+def __journalctlCompletion { 'complete': ['journalctl'] } ([str] str -- [str])
+    prefix! input!
     ['-h' '--help' '--version' '--no-pager' '-a' '--all'
      '-f' '--follow' '-e' '--pager-end' '--no-tail'
      '-q' '--quiet' '-m' '--merge' '--this-boot'
@@ -1086,28 +1070,22 @@ def __journalctlCompletion { 'complete': ['journalctl'] } ([str] -- [str])
      '--vacuum-size' '--vacuum-time' '--vacuum-files'
      '-N' '--fields' '-s' '--signal'] argOptions!
 
-    @input len 0 > if
-        @input :-1: last!
-
-        # Context-sensitive completions for options that take values
-        ['-p' '--priority'] (@last =) any if
+    @input len 0 > if @input :-1: else '' end match
+        '-p' '--priority' :
             ['emerg' '0' 'alert' '1' 'crit' '2' 'err' '3'
-             'warning' '4' 'notice' '5' 'info' '6' 'debug' '7']
-        else* ['-o' '--output'] (@last =) any *if
+             'warning' '4' 'notice' '5' 'info' '6' 'debug' '7'],
+        '-o' '--output' :
             ['short' 'short-precise' 'short-iso' 'short-iso-precise'
              'short-full' 'short-monotonic' 'short-unix'
              'verbose' 'export' 'json' 'json-pretty' 'json-sse'
-             'json-seq' 'cat' 'with-unit']
-        else* ['-u' '--unit'] (@last =) any *if
+             'json-seq' 'cat' 'with-unit'],
+        '-u' '--unit' '--user-unit' :
             ['systemctl' 'list-unit-files' '--no-legend' '--no-pager'] * ;
-            lines (" " split :0:) map
-        else* ['--since' '--until'] (@last =) any *if
-            ['yesterday' 'today' 'tomorrow' 'now']
-        else
-            @noArgOptions @argOptions extend
-        end
-    else
-        @noArgOptions @argOptions extend
+            lines (" " split :0:) map,
+        '--since' '--until' : ['yesterday' 'today' 'tomorrow' 'now'],
+        '--file' '--cursor-file' '--verify-key' : @prefix completeFiles,
+        '-D' '--directory' '--root' : @prefix completeDirs,
+        _ : @prefix '-' startsWith (@noArgOptions @argOptions extend) ([] as [str]) iff,
     end
 end
 # }}}
@@ -1194,14 +1172,14 @@ end
 
 def __cargoOptionsForSubcmd (str -- [str])
     cmd!
-    {
-        'add': [
+    @cmd match
+        'add' : [
             '--dev' '--build' '--dry-run' '--optional' '--no-optional' '--rename'
             '--features' '--default-features' '--no-default-features'
             '--path' '--git' '--branch' '--tag' '--rev' '--registry'
             '-p' '--package' '--manifest-path'
         ],
-        'bench': [
+        'bench' : [
             '-p' '--package' '--exclude' '-j' '--jobs' '--lib' '--bin' '--bins'
             '--example' '--examples' '--test' '--tests' '--bench' '--benches'
             '--all-targets' '--no-run' '--no-fail-fast' '--workspace'
@@ -1209,7 +1187,7 @@ def __cargoOptionsForSubcmd (str -- [str])
             '--target' '--target-dir' '--manifest-path' '--message-format'
             '--profile' '--ignore-rust-version' '--unit-graph'
         ],
-        'build': [
+        'build' : [
             '-p' '--package' '--exclude' '-j' '--jobs' '--lib' '--bin' '--bins'
             '--example' '--examples' '--test' '--tests' '--bench' '--benches'
             '--all-targets' '--workspace' '--release' '--profile'
@@ -1217,7 +1195,7 @@ def __cargoOptionsForSubcmd (str -- [str])
             '--target' '--target-dir' '--out-dir' '--manifest-path' '--message-format'
             '--build-plan' '--unit-graph' '--future-incompat-report' '--ignore-rust-version'
         ],
-        'check': [
+        'check' : [
             '-p' '--package' '--exclude' '-j' '--jobs' '--lib' '--bin' '--bins'
             '--example' '--examples' '--test' '--tests' '--bench' '--benches'
             '--all-targets' '--workspace' '--release' '--profile'
@@ -1225,21 +1203,21 @@ def __cargoOptionsForSubcmd (str -- [str])
             '--target' '--target-dir' '--manifest-path' '--message-format'
             '--unit-graph' '--future-incompat-report' '--ignore-rust-version'
         ],
-        'clean': [
+        'clean' : [
             '-p' '--package' '--manifest-path' '--target' '--target-dir'
             '--profile' '--release' '--doc' '--dry-run'
         ],
-        'doc': [
+        'doc' : [
             '-p' '--package' '--exclude' '-j' '--jobs' '--lib' '--bin' '--bins'
             '--open' '--no-deps' '--document-private-items' '--workspace'
             '--release' '--profile' '--features' '--all-features' '--no-default-features'
             '--target' '--target-dir' '--manifest-path' '--message-format'
             '--ignore-rust-version' '--unit-graph'
         ],
-        'fetch': [
+        'fetch' : [
             '--manifest-path' '--target'
         ],
-        'fix': [
+        'fix' : [
             '-p' '--package' '--exclude' '-j' '--jobs' '--lib' '--bin' '--bins'
             '--example' '--examples' '--test' '--tests' '--bench' '--benches'
             '--all-targets' '--workspace' '--release' '--profile'
@@ -1248,61 +1226,61 @@ def __cargoOptionsForSubcmd (str -- [str])
             '--broken-code' '--edition' '--edition-idioms'
             '--allow-no-vcs' '--allow-dirty' '--allow-staged' '--ignore-rust-version'
         ],
-        'generate-lockfile': [
+        'generate-lockfile' : [
             '--manifest-path'
         ],
-        'init': [
+        'init' : [
             '--registry' '--vcs' '--edition' '--name' '--bin' '--lib'
         ],
-        'install': [
+        'install' : [
             '--version' '--git' '--branch' '--tag' '--rev' '--path'
             '-j' '--jobs' '--features' '--all-features' '--no-default-features'
             '--profile' '--bin' '--bins' '--example' '--examples'
             '--target' '--target-dir' '--root' '--index' '--registry'
             '--list' '-f' '--force' '--no-track' '--debug'
         ],
-        'locate-project': [
+        'locate-project' : [
             '--manifest-path' '--message-format' '--workspace'
         ],
-        'login': [
+        'login' : [
             '--registry'
         ],
-        'logout': [
+        'logout' : [
             '--registry'
         ],
-        'metadata': [
+        'metadata' : [
             '--features' '--all-features' '--no-default-features'
             '--filter-platform' '--manifest-path' '--format-version' '--no-deps'
         ],
-        'new': [
+        'new' : [
             '--registry' '--vcs' '--edition' '--name' '--bin' '--lib'
         ],
-        'owner': [
+        'owner' : [
             '-a' '--add' '-r' '--remove' '-l' '--list' '--index' '--token' '--registry'
         ],
-        'package': [
+        'package' : [
             '-l' '--list' '--no-verify' '--no-metadata' '--allow-dirty'
             '--target' '--target-dir' '--features' '--all-features' '--no-default-features'
             '--manifest-path' '-j' '--jobs'
         ],
-        'pkgid': [
+        'pkgid' : [
             '-p' '--package' '--manifest-path'
         ],
-        'publish': [
+        'publish' : [
             '--index' '--token' '--no-verify' '--allow-dirty' '--dry-run' '--registry'
             '--target' '--target-dir' '--manifest-path'
             '--features' '--all-features' '--no-default-features' '-j' '--jobs'
         ],
-        'remove': [
+        'remove' : [
             '--dev' '--build' '--dry-run' '-p' '--package' '--manifest-path'
         ],
-        'run': [
+        'run' : [
             '--bin' '--example' '-p' '--package' '-j' '--jobs' '--release' '--profile'
             '--features' '--all-features' '--no-default-features'
             '--target' '--target-dir' '--manifest-path' '--message-format'
             '--unit-graph' '--ignore-rust-version'
         ],
-        'rustc': [
+        'rustc' : [
             '-p' '--package' '-j' '--jobs' '--lib' '--bin' '--bins'
             '--example' '--examples' '--test' '--tests' '--bench' '--benches'
             '--all-targets' '--release' '--profile'
@@ -1310,7 +1288,7 @@ def __cargoOptionsForSubcmd (str -- [str])
             '--target' '--target-dir' '--print' '--manifest-path' '--message-format'
             '--unit-graph' '--ignore-rust-version' '--future-incompat-report'
         ],
-        'rustdoc': [
+        'rustdoc' : [
             '-p' '--package' '-j' '--jobs' '--lib' '--bin' '--bins'
             '--example' '--examples' '--test' '--tests' '--bench' '--benches'
             '--all-targets' '--open' '--release' '--profile'
@@ -1318,10 +1296,10 @@ def __cargoOptionsForSubcmd (str -- [str])
             '--target' '--target-dir' '--manifest-path' '--message-format'
             '--unit-graph' '--ignore-rust-version'
         ],
-        'search': [
+        'search' : [
             '--index' '--limit' '--registry'
         ],
-        'test': [
+        'test' : [
             '--lib' '--bin' '--bins' '--example' '--examples' '--test' '--tests'
             '--bench' '--benches' '--all-targets' '--doc'
             '-p' '--package' '--exclude' '-j' '--jobs' '--no-run' '--no-fail-fast'
@@ -1330,30 +1308,30 @@ def __cargoOptionsForSubcmd (str -- [str])
             '--target' '--target-dir' '--manifest-path' '--message-format'
             '--ignore-rust-version' '--unit-graph' '--future-incompat-report'
         ],
-        'tree': [
+        'tree' : [
             '-p' '--package' '--exclude' '--features' '--all-features' '--no-default-features'
             '--target' '-e' '--edges' '-i' '--invert' '--prefix' '--charset'
             '-f' '--format' '--workspace' '--no-dedupe' '-d' '--duplicates' '--manifest-path'
         ],
-        'uninstall': [
+        'uninstall' : [
             '-p' '--package' '--bin' '--root'
         ],
-        'update': [
+        'update' : [
             '-p' '--package' '--precise' '-w' '--workspace' '--aggressive' '--dry-run'
             '--manifest-path' '--ignore-rust-version'
         ],
-        'vendor': [
+        'vendor' : [
             '-s' '--sync' '--no-delete' '--respect-source-config' '--versioned-dirs'
             '--manifest-path'
         ],
-        'verify-project': [
+        'verify-project' : [
             '--manifest-path'
         ],
-        'yank': [
+        'yank' : [
             '--vers' '--undo' '--index' '--token' '--registry'
-        ]
-    }
-    @cmd [] getDef
+        ],
+        _ : [] as [str],
+    end
 end
 
 # Default completions after a subcommand: common options plus the subcommand-specific ones.
@@ -1362,23 +1340,33 @@ def __cargoSubcmdCompletions (str -- [str])
     __cargoCommonOptions @cmd __cargoOptionsForSubcmd extend
 end
 
-def __cargoCompletion { 'complete': ['cargo'] } ([str] -- [str])
-    input!
+# Completions after a cargo subcommand when the previous word does not take a value.
+def __cargoArguments (str str -- [str])
+    prefix! subcmd!
+    @prefix '-' startsWith if
+        @subcmd __cargoSubcmdCompletions
+    else
+        @subcmd match
+            'help'       : __cargoSubcommands,
+            'uninstall'  : __cargoInstalled,
+            'new' 'init' : @prefix completeDirs,
+            _            : [] as [str],
+        end
+    end
+end
+
+def __cargoCompletion { 'complete': ['cargo'] } ([str] str -- [str])
+    prefix! input!
     @input len 0 > if
-        @input :0: rawSubcmd!
-        @rawSubcmd match
+        @input :0: match
             'b' : 'build',
             'c' : 'check',
             'r' : 'run',
             't' : 'test',
             'd' : 'doc',
-            _   : @rawSubcmd,
+            _   :> ,
         end subcmd!
         @input :-1: last!
-
-        # Subcommands where --bin/--example (and --test/--bench) take a target name.
-        ['bench' 'build' 'check' 'run' 'rustc' 'test'] binExampleCmds!
-        ['bench' 'build' 'check' 'rustc' 'test'] testBenchCmds!
 
         @last match
             '-p' '--package' '--exclude' : __cargoPackages,
@@ -1389,34 +1377,1255 @@ def __cargoCompletion { 'complete': ['cargo'] } ([str] -- [str])
             '--edition'         : ['2015' '2018' '2021' '2024'],
             '--message-format'  : ['human' 'short' 'json' 'json-diagnostic-short' 'json-diagnostic-rendered-ansi' 'json-render-diagnostics'],
             '--profile'         : ['dev' 'release' 'test' 'bench'],
-            '--bin' '--example' :
-                @binExampleCmds (@subcmd =) any
-                (@last 2: __cargoTargetNames)
-                (@subcmd __cargoSubcmdCompletions) iff,
-            '--test' '--bench'  :
-                @testBenchCmds (@subcmd =) any
-                (@last 2: __cargoTargetNames)
-                (@subcmd __cargoSubcmdCompletions) iff,
+            '--manifest-path'   : @prefix completeFiles,
+            '--target-dir' '--out-dir' '--root' '--path' : @prefix completeDirs,
+            # --bin and --example take a target name in these subcommands, as do --test and --bench.
+            '--bin' '--example' : @subcmd match
+                'bench' 'build' 'check' 'run' 'rustc' 'test' : @last 2: __cargoTargetNames,
+                _ : @subcmd @prefix __cargoArguments,
+            end,
+            '--test' '--bench'  : @subcmd match
+                'bench' 'build' 'check' 'rustc' 'test' : @last 2: __cargoTargetNames,
+                _ : @subcmd @prefix __cargoArguments,
+            end,
             '-e' '--edges'      :
                 @subcmd 'tree' =
                 (['features' 'normal' 'build' 'dev' 'all' 'no-dev' 'no-build' 'no-normal'])
-                (@subcmd __cargoSubcmdCompletions) iff,
+                (@subcmd @prefix __cargoArguments) iff,
             '--prefix'          :
                 @subcmd 'tree' =
                 (['depth' 'indent' 'none'])
-                (@subcmd __cargoSubcmdCompletions) iff,
+                (@subcmd @prefix __cargoArguments) iff,
             '--charset'         :
                 @subcmd 'tree' =
                 (['utf8' 'ascii'])
-                (@subcmd __cargoSubcmdCompletions) iff,
-            _ : @subcmd match
-                'help'      : __cargoSubcommands,
-                'uninstall' : __cargoInstalled @subcmd __cargoSubcmdCompletions extend,
-                _           : @subcmd __cargoSubcmdCompletions,
-            end,
+                (@subcmd @prefix __cargoArguments) iff,
+            _ : @subcmd @prefix __cargoArguments,
         end
+    else* @prefix '-' startsWith *if
+        ['--list' '--explain' '-C'] __cargoCommonOptions extend
     else
-        __cargoSubcommands ['--list' '--explain' '-C'] extend __cargoCommonOptions extend
+        __cargoSubcommands
+    end
+end
+# }}}
+# Subcommand paths {{{
+# Walk the arguments of a command with nested subcommands, like `uv pip install`.
+# `subcommands` gives the subcommands under a space-joined path, with '' for the top level.
+# `alias` gives the subcommand an alias path stands for, or '' when it is not an alias.
+# `takesValue` tells whether an option under a path consumes the next argument,
+# so that value is not read as a subcommand.
+# Leaves the subcommand path, then every argument from the first one that is not a subcommand.
+def __subcommandPath ([str] (str -- [str]) (str -- str) (str str -- bool) -- [str] [str])
+    takesValue! alias! subcommands! input!
+    [] as [str] path!
+    [] as [str] rest!
+    '' pathKey!
+    false skipNext!
+    0 i!
+    @input len n!
+    (
+        @i @n >= if break end
+        @input @i nth tok!
+        @i 1 + i!
+        @rest len 0 > if
+            @rest @tok append drop
+        else* @skipNext *if
+            false skipNext!
+        else* @tok '-' startsWith *if
+            @tok '=' in not if @pathKey @tok @takesValue x skipNext! end
+        else
+            @pathKey len 0 > if $"{@pathKey} {@tok}" else @tok end @alias x canonical!
+            @pathKey @subcommands x (@tok =) any if
+                @path @tok append drop
+            else* @canonical len 0 > *if
+                @path @canonical append drop
+            else
+                @rest @tok append drop
+            end
+            @path ' ' join pathKey!
+        end
+    ) loop
+    @path @rest
+end
+
+# The part of a completion prefix up to and including its last path separator.
+def __completionDir (str -- str)
+    '[^/\\]*$' '' reReplace
+end
+# }}}
+# redo {{{
+# Whether a directory is a redo project root: it has .git or .redom/redo-msh.db.
+def __redoIsRoot (path -- bool)
+    dir!
+    @dir '.git' toPath / fileExists
+    @dir '.redom' toPath / 'redo-msh.db' toPath / isFile or
+end
+
+# Extensions of the `default.ext.do` rules above a directory that apply to it:
+# rules in each parent directory up to the redo project root.
+def __redoParentRuleExts (str -- [str])
+    dir!
+    @dir len 0 = ('.') (@dir) iff toPath absPath current!
+    [] as [str] exts!
+    (
+        @current __redoIsRoot if break end
+        @current dirname parent!
+        # The filesystem root is its own parent.
+        @parent str @current str = if break end
+        @parent current!
+        @exts @current 'default.*.do' toPath / str glob (basename stem str 8 skip) map extend drop
+    ) loop
+    @exts
+end
+
+# Targets redo can build in the directory the prefix names:
+# `name` for each `name.do` there,
+# and `name.ext` for each file `name.*` there and each `default.ext.do` rule that applies,
+# where name stops at the file name's first period.
+# So `plot.mplot` with `default.svg.do` gives `plot.svg`.
+def __redoTargets (str -- [str])
+    __completionDir dir!
+    # One directory listing gives the .do files and the files the rules build from.
+    @dir len start!
+    @dir completeFiles
+    (dup '/' endsWith swap '\' endsWith or not) filter
+    (@start skip) map names!
+
+    @names ('.do' endsWith) filter doFiles!
+    @doFiles ('default.' startsWith not) filter (toPath stem str) map targets!
+    # `default.do` matches every target, so it names no extension to build.
+    @doFiles ('default.' startsWith) filter (toPath stem str 8 skip) map (len 0 >) filter
+    @dir __redoParentRuleExts extend uniq exts!
+
+    @exts len 0 > if
+        @names ('.' startsWith not) filter ('.do' endsWith not) filter ('.' split :0:) map uniq
+        (name! @exts (ext! $"{@name}.{@ext}") map) map concat
+        @targets swap extend uniq targets!
+    end
+    @targets (target! $"{@dir}{@target}") map
+end
+
+def __redoCompletion { 'complete': ['redo'] } ([str] str -- [str])
+    prefix! input!
+    @input len 0 > if @input :-1: else '' end match
+        # Job counts are not completed.
+        '-j' '--jobs' : [] as [str],
+        _ :
+            @prefix '-' startsWith
+            (['-j' '--jobs' '-y' '--yes' '-v' '--verbose' '--debug-jobs' '-h' '--help' '--version'])
+            (@prefix __redoTargets @prefix completeDirs extend) iff,
+    end
+end
+# }}}
+# uv {{{
+# Options accepted by every uv command.
+def __uvGlobalOptions ( -- [str])
+    [
+        '-n' '--no-cache' '--cache-dir' '--managed-python' '--no-managed-python' '-q' '--quiet'
+        '-v' '--verbose' '--color' '--system-certs' '--offline' '--allow-insecure-host'
+        '--no-progress' '--directory' '--project' '--config-file' '-h' '--help'
+    ]
+end
+
+# The "Index options" section of `uv help`, shared by the commands that resolve or install packages.
+def __uvIndexOptions ( -- [str])
+    [
+        '--index' '--default-index' '-i' '--index-url' '--extra-index-url' '-f' '--find-links'
+        '--no-index' '--index-strategy' '--keyring-provider'
+    ]
+end
+
+# The "Resolver options" section of `uv help`, shared by the commands that resolve or install packages.
+def __uvResolverOptions ( -- [str])
+    [
+        '-U' '--upgrade' '-P' '--upgrade-package' '--upgrade-group' '--resolution' '--prerelease'
+        '--prerelease-package' '--fork-strategy' '--exclude-newer' '--exclude-newer-package'
+        '--no-sources' '--no-sources-package'
+    ]
+end
+
+# The "Build options" section of `uv help`, shared by the commands that resolve or install packages.
+def __uvBuildOptions ( -- [str])
+    [
+        '-C' '--config-setting' '--config-settings-package' '--no-build-isolation'
+        '--no-build-isolation-package' '--no-build' '--no-build-package' '--no-binary'
+        '--no-binary-package'
+    ]
+end
+
+# The "Installer options" section of `uv help`, shared by the commands that resolve or install packages.
+def __uvInstallerOptions ( -- [str])
+    ['--reinstall' '--reinstall-package' '--link-mode' '--compile-bytecode']
+end
+
+# The option lists of the named option groups.
+def __uvGroupOptions (str -- [str])
+    match
+        'index' : __uvIndexOptions,
+        'resolver' : __uvResolverOptions,
+        'build' : __uvBuildOptions,
+        'installer' : __uvInstallerOptions,
+        _ : [] as [str],
+    end
+end
+
+# Subcommands under a space-joined uv subcommand path; the top level is the empty string.
+def __uvSubcommands (str -- [str])
+    match
+        '' :
+            [
+                'auth' 'run' 'init' 'add' 'remove' 'version' 'sync' 'lock' 'export' 'tree' 'format'
+                'check' 'audit' 'tool' 'python' 'pip' 'venv' 'build' 'publish' 'workspace' 'cache'
+                'self' 'help'
+            ],
+        'auth' : ['login' 'logout' 'token' 'dir'],
+        'tool' : ['run' 'install' 'upgrade' 'list' 'audit' 'uninstall' 'update-shell' 'dir'],
+        'python' : ['list' 'install' 'upgrade' 'find' 'pin' 'dir' 'uninstall' 'update-shell'],
+        'pip' : ['compile' 'sync' 'install' 'uninstall' 'freeze' 'list' 'show' 'tree' 'check'],
+        'workspace' : ['metadata' 'dir' 'list'],
+        'cache' : ['clean' 'prune' 'dir' 'size'],
+        'self' : ['update' 'version'],
+        _ : [] as [str],
+    end
+end
+
+# The option groups each subcommand accepts, by the names __uvGroupOptions takes.
+def __uvOptionGroups (str -- [str])
+    match
+        'run' 'add' 'remove' 'version' 'sync' 'check' 'tool run' 'tool install' :
+            ['index' 'resolver' 'build' 'installer'],
+        'lock' 'export' 'build' 'workspace metadata' : ['index' 'resolver' 'build'],
+        'tree' 'audit' 'pip compile' : ['index' 'resolver'],
+        'tool upgrade' 'pip sync' : ['index' 'installer'],
+        'pip install' : ['index' 'resolver' 'installer'],
+        'pip list' 'pip tree' 'venv' : ['index'],
+        _ : [] as [str],
+    end
+end
+
+# Options of each subcommand beyond the global options and its option groups.
+def __uvOwnOptions (str -- [str])
+    match
+        '' : ['--no-python-downloads' '--no-config' '-V' '--version'],
+        'auth' 'auth dir' 'tool' 'tool update-shell' 'python' 'python update-shell' 'workspace'
+        'cache' 'cache dir' 'self' :
+            ['--no-python-downloads' '--no-config'],
+        'auth login' :
+            [
+                '-u' '--username' '--password' '-t' '--token' '--keyring-provider'
+                '--no-python-downloads' '--no-config'
+            ],
+        'auth logout' 'auth token' :
+            ['-u' '--username' '--keyring-provider' '--no-python-downloads' '--no-config'],
+        'run' :
+            [
+                '--extra' '--all-extras' '--no-extra' '--no-dev' '--only-dev' '--group'
+                '--no-group' '--no-default-groups' '--only-group' '--all-groups' '-m' '--module'
+                '--no-editable' '--no-editable-package' '--exact' '--env-file' '--no-env-file' '-w'
+                '--with' '--with-editable' '--with-requirements' '--isolated' '--active'
+                '--no-sync' '--locked' '--frozen' '-s' '--script' '--gui-script' '--all-packages'
+                '--package' '--no-project' '--python-platform' '--refresh' '--refresh-package' '-p'
+                '--python' '--no-python-downloads' '--no-config'
+            ],
+        'init' :
+            [
+                '--name' '--bare' '--package' '--no-package' '--app' '--lib' '--script'
+                '--description' '--no-description' '--vcs' '--build-backend' '--no-readme'
+                '--author-from' '--no-pin-python' '--no-workspace' '-p' '--python'
+                '--no-python-downloads' '--no-config'
+            ],
+        'add' :
+            [
+                '-r' '--requirements' '-c' '--constraints' '-m' '--marker' '--dev' '--optional'
+                '--group' '--editable' '--raw' '--bounds' '--rev' '--tag' '--branch' '--lfs'
+                '--extra' '--no-sync' '--locked' '--frozen' '--active' '--package' '--script'
+                '--workspace' '--no-workspace' '--no-install-project' '--no-install-workspace'
+                '--no-install-local' '--no-install-package' '--refresh' '--refresh-package' '-p'
+                '--python' '--no-python-downloads' '--no-config'
+            ],
+        'remove' :
+            [
+                '--dev' '--optional' '--group' '--no-sync' '--active' '--locked' '--frozen'
+                '--package' '--script' '--refresh' '--refresh-package' '-p' '--python'
+                '--no-python-downloads' '--no-config'
+            ],
+        'version' :
+            [
+                '--bump' '--dry-run' '--short' '--output-format' '--no-sync' '--active' '--locked'
+                '--frozen' '--package' '--refresh' '--refresh-package' '-p' '--python'
+                '--no-python-downloads' '--no-config'
+            ],
+        'sync' :
+            [
+                '--extra' '--output-format' '--all-extras' '--no-extra' '--no-dev' '--only-dev'
+                '--group' '--no-group' '--no-default-groups' '--only-group' '--all-groups'
+                '--no-editable' '--no-editable-package' '--inexact' '--active'
+                '--no-install-project' '--no-install-workspace' '--no-install-local'
+                '--no-install-package' '--locked' '--frozen' '--dry-run' '--all-packages'
+                '--package' '--script' '--python-platform' '--check' '--refresh'
+                '--refresh-package' '-p' '--python' '--no-python-downloads' '--no-config'
+            ],
+        'lock' :
+            [
+                '--check' '--check-exists' '--dry-run' '--script' '--link-mode' '--refresh'
+                '--refresh-package' '-p' '--python' '--no-python-downloads' '--no-config'
+            ],
+        'export' :
+            [
+                '--format' '--all-packages' '--package' '--prune' '--extra' '--all-extras'
+                '--no-extra' '--no-dev' '--only-dev' '--group' '--no-group' '--no-default-groups'
+                '--only-group' '--all-groups' '--no-annotate' '--no-header' '--emit-index-url'
+                '--emit-find-links' '--no-editable' '--no-editable-package' '--no-hashes' '-o'
+                '--output-file' '--no-emit-project' '--no-emit-workspace' '--no-emit-local'
+                '--no-emit-package' '--locked' '--frozen' '--script' '--link-mode' '--refresh'
+                '--refresh-package' '-p' '--python' '--no-python-downloads' '--no-config'
+            ],
+        'tree' :
+            [
+                '--universal' '--format' '-d' '--depth' '--prune' '--package' '--no-dedupe'
+                '--invert' '--outdated' '--show-sizes' '--no-dev' '--only-dev' '--group'
+                '--no-group' '--no-default-groups' '--only-group' '--all-groups' '--locked'
+                '--frozen' '--script' '--python-version' '--python-platform' '--no-build'
+                '--no-build-package' '--no-binary' '--no-binary-package' '-C' '--config-setting'
+                '--config-settings-package' '--no-build-isolation' '--no-build-isolation-package'
+                '--link-mode' '-p' '--python' '--no-python-downloads' '--no-config'
+            ],
+        'format' :
+            [
+                '--check' '--diff' '--version' '--exclude-newer' '--no-project'
+                '--no-python-downloads' '--no-config'
+            ],
+        'check' :
+            [
+                '--fix' '--all-packages' '--package' '--script' '--extra' '--all-extras'
+                '--no-extra' '--no-dev' '--only-dev' '--group' '--no-group' '--no-default-groups'
+                '--only-group' '--all-groups' '--locked' '--frozen' '--no-sync'
+                '--no-install-project' '--isolated' '-p' '--python' '--ty-version' '--no-project'
+                '--refresh' '--refresh-package' '--no-python-downloads' '--no-config'
+            ],
+        'audit' :
+            [
+                '--no-extra' '--no-dev' '--no-group' '--no-default-groups' '--only-group'
+                '--only-dev' '--locked' '--frozen' '--output-format' '--ignore'
+                '--ignore-until-fixed' '--service-format' '--service-url' '--script'
+                '--python-version' '--python-platform' '--no-build' '--no-build-package'
+                '--no-binary' '--no-binary-package' '-C' '--config-setting'
+                '--config-settings-package' '--no-build-isolation' '--no-build-isolation-package'
+                '--link-mode' '--no-python-downloads' '--no-config'
+            ],
+        'tool run' :
+            [
+                '--from' '-w' '--with' '--with-editable' '--with-requirements' '-c' '--constraints'
+                '-b' '--build-constraints' '--overrides' '--isolated' '--env-file' '--no-env-file'
+                '--lfs' '--python-platform' '--torch-backend' '--refresh' '--refresh-package' '-p'
+                '--python' '--no-python-downloads' '--no-config'
+            ],
+        'tool install' :
+            [
+                '-w' '--with' '--with-requirements' '-e' '--editable' '--with-editable'
+                '--with-executables-from' '-c' '--constraints' '--overrides' '--excludes' '-b'
+                '--build-constraints' '--force' '--lfs' '--python-platform' '--torch-backend'
+                '--refresh' '--refresh-package' '-p' '--python' '--no-python-downloads'
+                '--no-config'
+            ],
+        'tool upgrade' :
+            [
+                '--all' '--python-platform' '-p' '--python' '--no-python-downloads' '--resolution'
+                '--prerelease' '--prerelease-package' '--fork-strategy' '--exclude-newer'
+                '--exclude-newer-package' '--no-sources' '--no-sources-package' '-C'
+                '--config-setting' '--config-setting-package' '--no-build-isolation'
+                '--no-build-isolation-package' '--no-build' '--no-build-package' '--no-binary'
+                '--no-binary-package' '--no-config'
+            ],
+        'tool list' :
+            [
+                '--show-paths' '--show-version-specifiers' '--show-with' '--show-extras'
+                '--show-python' '--outdated' '--exclude-newer' '--exclude-newer-package'
+                '--no-config'
+            ],
+        'tool audit' :
+            [
+                '--all' '--output-format' '--ignore' '--ignore-until-fixed' '--service-format'
+                '--service-url' '--no-python-downloads' '--no-config'
+            ],
+        'tool uninstall' : ['--all' '--no-python-downloads' '--no-config'],
+        'tool dir' 'python dir' : ['--bin' '--no-python-downloads' '--no-config'],
+        'python list' :
+            [
+                '--all-versions' '--all-platforms' '--all-arches' '--only-installed'
+                '--only-downloads' '--show-urls' '--output-format' '--python-downloads-json-url'
+                '--no-python-downloads' '--no-config'
+            ],
+        'python install' :
+            [
+                '-i' '--install-dir' '--no-bin' '--no-registry' '--mirror' '--pypy-mirror'
+                '--python-downloads-json-url' '-r' '--reinstall' '-f' '--force' '-U' '--upgrade'
+                '--default' '--compile-bytecode' '--no-python-downloads' '--no-config'
+            ],
+        'python upgrade' :
+            [
+                '-i' '--install-dir' '--mirror' '--pypy-mirror' '-r' '--reinstall'
+                '--python-downloads-json-url' '--compile-bytecode' '--no-python-downloads'
+                '--no-config'
+            ],
+        'python find' :
+            [
+                '--no-project' '--system' '--script' '--show-version' '--resolve-links'
+                '--python-downloads-json-url' '--no-python-downloads' '--no-config'
+            ],
+        'python pin' :
+            [
+                '--resolved' '--no-project' '--global' '--rm' '--python-downloads-json-url'
+                '--no-python-downloads' '--no-config'
+            ],
+        'python uninstall' : ['-i' '--install-dir' '--all' '--no-python-downloads' '--no-config'],
+        'pip' : ['--cert' '--no-python-downloads' '--no-config'],
+        'pip compile' :
+            [
+                '-c' '--constraints' '--overrides' '--excludes' '-b' '--build-constraints'
+                '--extra' '--all-extras' '--group' '--cert' '--no-deps' '-o' '--output-file'
+                '--format' '--no-strip-extras' '--no-strip-markers' '--no-annotate' '--no-header'
+                '--annotation-style' '--custom-compile-command' '--system' '--generate-hashes'
+                '--no-build' '--no-binary' '--only-binary' '--python-platform' '--universal'
+                '--no-emit-package' '--emit-index-url' '--emit-find-links' '--emit-build-options'
+                '--emit-index-annotation' '--torch-backend' '-C' '--config-setting'
+                '--config-settings-package' '--no-build-isolation' '--no-build-isolation-package'
+                '--link-mode' '--refresh' '--refresh-package' '-p' '--python' '--python-version'
+                '--no-python-downloads'
+            ],
+        'pip sync' :
+            [
+                '-c' '--constraints' '-b' '--build-constraints' '--extra' '--all-extras' '--group'
+                '--cert' '--require-hashes' '--no-verify-hashes' '--system'
+                '--break-system-packages' '--no-break-system-packages' '-t' '--target' '--prefix'
+                '--no-build' '--no-binary' '--only-binary' '--allow-empty-requirements'
+                '--no-allow-empty-requirements' '--python-version' '--python-platform' '--strict'
+                '--dry-run' '--torch-backend' '-C' '--config-setting' '--config-settings-package'
+                '--no-build-isolation' '--exclude-newer' '--exclude-newer-package' '--no-sources'
+                '--no-sources-package' '--refresh' '--refresh-package' '-p' '--python'
+                '--no-python-downloads'
+            ],
+        'pip install' :
+            [
+                '-r' '--requirements' '-e' '--editable' '--no-editable' '--no-editable-package'
+                '-c' '--constraints' '--overrides' '--excludes' '-b' '--build-constraints'
+                '--extra' '--all-extras' '--cert' '--group' '--no-deps' '--require-hashes'
+                '--no-verify-hashes' '--system' '--break-system-packages'
+                '--no-break-system-packages' '-t' '--target' '--prefix' '--no-build' '--no-binary'
+                '--only-binary' '--python-version' '--python-platform' '--exact' '--strict'
+                '--dry-run' '--torch-backend' '--user' '-C' '--config-setting'
+                '--config-settings-package' '--no-build-isolation' '--no-build-isolation-package'
+                '--refresh' '--refresh-package' '-p' '--python' '--no-python-downloads'
+                '--no-config'
+            ],
+        'pip uninstall' :
+            [
+                '-r' '--requirements' '--keyring-provider' '--system' '--break-system-packages'
+                '--no-break-system-packages' '-t' '--target' '--prefix' '--dry-run' '--cert' '-p'
+                '--python' '--no-python-downloads' '--no-config'
+            ],
+        'pip freeze' :
+            [
+                '--exclude-editable' '--exclude' '--strict' '--path' '--system' '-t' '--target'
+                '--prefix' '--cert' '-p' '--python' '--no-python-downloads' '--no-config'
+            ],
+        'pip list' :
+            [
+                '-e' '--editable' '--exclude-editable' '--exclude' '--format' '--outdated'
+                '--strict' '--cert' '--system' '-t' '--target' '--prefix' '--exclude-newer'
+                '--exclude-newer-package' '-p' '--python' '--no-python-downloads' '--no-config'
+            ],
+        'pip show' :
+            [
+                '--strict' '-f' '--files' '--system' '-t' '--target' '--prefix' '--cert' '-p'
+                '--python' '--no-python-downloads' '--no-config'
+            ],
+        'pip tree' :
+            [
+                '--show-version-specifiers' '-d' '--depth' '--prune' '--package' '--no-dedupe'
+                '--invert' '--outdated' '--show-sizes' '--strict' '--cert' '--system'
+                '--exclude-newer' '--exclude-newer-package' '-p' '--python' '--no-python-downloads'
+                '--no-config'
+            ],
+        'pip check' :
+            [
+                '--system' '--python-version' '--python-platform' '--cert' '-p' '--python'
+                '--no-python-downloads' '--no-config'
+            ],
+        'venv' :
+            [
+                '--no-project' '--seed' '-c' '--clear' '--force' '--allow-existing' '--prompt'
+                '--system-site-packages' '--relocatable' '--link-mode' '-p' '--python'
+                '--no-python-downloads' '--exclude-newer' '--exclude-newer-package' '--refresh'
+                '--refresh-package' '--no-config'
+            ],
+        'build' :
+            [
+                '--package' '--all-packages' '-o' '--out-dir' '--sdist' '--wheel' '--no-build-logs'
+                '--force-pep517' '--clear' '--no-create-gitignore' '-b' '--build-constraints'
+                '--require-hashes' '--no-verify-hashes' '-p' '--python' '--no-python-downloads'
+                '--link-mode' '--refresh' '--refresh-package' '--no-config'
+            ],
+        'publish' :
+            [
+                '--index' '-u' '--username' '-p' '--password' '-t' '--token' '--trusted-publishing'
+                '--keyring-provider' '--publish-url' '--check-url' '--dry-run' '--no-attestations'
+                '--no-python-downloads' '--no-config'
+            ],
+        'workspace metadata' :
+            [
+                '--script' '--locked' '--frozen' '--dry-run' '--sync' '--active' '--link-mode'
+                '--refresh' '--refresh-package' '-p' '--python' '--no-python-downloads'
+                '--no-config'
+            ],
+        'workspace dir' : ['--package' '--no-python-downloads' '--no-config'],
+        'workspace list' : ['--paths' '--scripts' '--no-python-downloads' '--no-config'],
+        'cache clean' : ['--force' '--no-python-downloads' '--no-config'],
+        'cache prune' : ['--ci' '--force' '--no-python-downloads' '--no-config'],
+        'cache size' : ['--output-format' '-H' '--human' '--no-python-downloads' '--no-config'],
+        'self update' : ['--token' '--dry-run' '--no-python-downloads' '--no-config'],
+        'self version' : ['--short' '--output-format' '--no-python-downloads' '--no-config'],
+        _ : [] as [str],
+    end
+end
+
+# Whether an option of a subcommand consumes the next argument.
+def __uvTakesValue (str str -- bool)
+    opt! cmd!
+    $"{@cmd} {@opt}" trim match
+        '--version' 'add --editable' 'add --no-binary' 'audit --no-binary' 'build --no-binary'
+        'check --no-binary' 'export --no-binary' 'init --package' 'init --script'
+        'lock --no-binary' 'pip list --editable' 'pip list -e' 'pip show -f' 'python install -f'
+        'python install -r' 'python upgrade -r' 'remove --no-binary' 'run --no-binary'
+        'run --script' 'run -m' 'sync --no-binary' 'tool install --editable'
+        'tool install --no-binary' 'tool install -e' 'tool run --no-binary'
+        'tool upgrade --no-binary' 'tree --no-binary' 'venv -c' 'version --no-binary'
+        'workspace metadata --no-binary' : false,
+        _ : @opt match
+            '--allow-insecure-host' '--annotation-style' '--author-from' '--bounds' '--branch'
+            '--build-backend' '--build-constraints' '--bump' '--cache-dir' '--cert' '--check-url'
+            '--color' '--config-file' '--config-setting' '--config-setting-package'
+            '--config-settings-package' '--constraints' '--custom-compile-command'
+            '--default-index' '--depth' '--description' '--directory' '--editable' '--env-file'
+            '--exclude' '--exclude-newer' '--exclude-newer-package' '--excludes' '--extra'
+            '--extra-index-url' '--find-links' '--fork-strategy' '--format' '--from' '--group'
+            '--ignore' '--ignore-until-fixed' '--index' '--index-strategy' '--index-url'
+            '--install-dir' '--keyring-provider' '--link-mode' '--marker' '--mirror' '--name'
+            '--no-binary' '--no-binary-package' '--no-build-isolation-package' '--no-build-package'
+            '--no-editable-package' '--no-emit-package' '--no-extra' '--no-group'
+            '--no-install-package' '--no-sources-package' '--only-binary' '--only-group'
+            '--optional' '--out-dir' '--output-file' '--output-format' '--overrides' '--package'
+            '--password' '--path' '--prefix' '--prerelease' '--prerelease-package' '--project'
+            '--prompt' '--prune' '--publish-url' '--pypy-mirror' '--python'
+            '--python-downloads-json-url' '--python-platform' '--python-version'
+            '--refresh-package' '--reinstall-package' '--requirements' '--resolution' '--rev'
+            '--script' '--service-format' '--service-url' '--tag' '--target' '--token'
+            '--torch-backend' '--trusted-publishing' '--ty-version' '--upgrade-group'
+            '--upgrade-package' '--username' '--vcs' '--version' '--with' '--with-editable'
+            '--with-executables-from' '--with-requirements' '-C' '-P' '-b' '-c' '-d' '-e' '-f' '-i'
+            '-m' '-o' '-p' '-r' '-t' '-u' '-w' : true,
+            _ : false,
+        end,
+    end
+end
+
+# The fixed values an option accepts, some of which differ between subcommands.
+def __uvOptionChoices (str str -- [str])
+    opt! cmd!
+    $"{@cmd} {@opt}" trim match
+        'version --output-format' 'sync --output-format' 'python list --output-format'
+        'self version --output-format' 'tree --format' :
+            ['text' 'json'],
+        'audit --output-format' 'tool audit --output-format' : ['text' 'json' 'sarif'],
+        'cache size --output-format' : ['auto' 'human' 'machine'],
+        'export --format' : ['requirements.txt' 'pylock.toml' 'cyclonedx1.5'],
+        'pip compile --format' : ['requirements.txt' 'pylock.toml'],
+        'pip list --format' : ['columns' 'freeze' 'json'],
+        _ : @opt match
+            '--color' : ['auto' 'always' 'never'],
+            '--keyring-provider' : ['disabled' 'subprocess'],
+            '--python-platform' :
+                [
+                    'windows' 'linux' 'macos' 'x86_64-pc-windows-msvc' 'aarch64-pc-windows-msvc'
+                    'i686-pc-windows-msvc' 'x86_64-unknown-linux-gnu' 'aarch64-apple-darwin'
+                    'x86_64-apple-darwin' 'aarch64-unknown-linux-gnu' 'aarch64-unknown-linux-musl'
+                    'x86_64-unknown-linux-musl' 'riscv64-unknown-linux' 'x86_64-manylinux2014'
+                    'x86_64-manylinux_2_17' 'x86_64-manylinux_2_28' 'x86_64-manylinux_2_31'
+                    'x86_64-manylinux_2_32' 'x86_64-manylinux_2_33' 'x86_64-manylinux_2_34'
+                    'x86_64-manylinux_2_35' 'x86_64-manylinux_2_36' 'x86_64-manylinux_2_37'
+                    'x86_64-manylinux_2_38' 'x86_64-manylinux_2_39' 'x86_64-manylinux_2_40'
+                    'aarch64-manylinux2014' 'aarch64-manylinux_2_17' 'aarch64-manylinux_2_28'
+                    'aarch64-manylinux_2_31' 'aarch64-manylinux_2_32' 'aarch64-manylinux_2_33'
+                    'aarch64-manylinux_2_34' 'aarch64-manylinux_2_35' 'aarch64-manylinux_2_36'
+                    'aarch64-manylinux_2_37' 'aarch64-manylinux_2_38' 'aarch64-manylinux_2_39'
+                    'aarch64-manylinux_2_40' 'aarch64-linux-android' 'x86_64-linux-android'
+                    'wasm32-pyodide2024' 'wasm32-pyodide2025' 'arm64-apple-ios'
+                    'arm64-apple-ios-simulator' 'x86_64-apple-ios-simulator'
+                ],
+            '--index-strategy' : ['first-index' 'unsafe-first-match' 'unsafe-best-match'],
+            '--resolution' : ['highest' 'lowest' 'lowest-direct'],
+            '--prerelease' :
+                ['disallow' 'allow' 'if-necessary' 'explicit' 'if-necessary-or-explicit'],
+            '--fork-strategy' : ['fewest' 'requires-python'],
+            '--link-mode' : ['clone' 'copy' 'hardlink' 'symlink'],
+            '--vcs' : ['git' 'none'],
+            '--build-backend' :
+                ['uv' 'hatch' 'flit' 'pdm' 'poetry' 'setuptools' 'maturin' 'scikit'],
+            '--author-from' : ['auto' 'git' 'none'],
+            '--bounds' : ['lower' 'major' 'minor' 'exact'],
+            '--bump' : ['major' 'minor' 'patch' 'stable' 'alpha' 'beta' 'rc' 'post' 'dev'],
+            '--service-format' : ['osv'],
+            '--torch-backend' :
+                [
+                    'auto' 'cpu' 'cu132' 'cu130' 'cu129' 'cu128' 'cu126' 'cu125' 'cu124' 'cu123'
+                    'cu122' 'cu121' 'cu120' 'cu118' 'cu117' 'cu116' 'cu115' 'cu114' 'cu113' 'cu112'
+                    'cu111' 'cu110' 'cu102' 'cu101' 'cu100' 'cu92' 'cu91' 'cu90' 'cu80' 'rocm7.2'
+                    'rocm7.1' 'rocm7.0' 'rocm6.4' 'rocm6.3' 'rocm6.2.4' 'rocm6.2' 'rocm6.1'
+                    'rocm6.0' 'rocm5.7' 'rocm5.6' 'rocm5.5' 'rocm5.4.2' 'rocm5.4' 'rocm5.3'
+                    'rocm5.2' 'rocm5.1.1' 'rocm4.2' 'rocm4.1' 'rocm4.0.1' 'xpu'
+                ],
+            '--annotation-style' : ['line' 'split'],
+            '--trusted-publishing' : ['automatic' 'always' 'never'],
+            _ : [] as [str],
+        end,
+    end
+end
+
+
+# Python versions from the listing of `uv python list`, both as 3.12 and as 3.12.4.
+def __uvPythonVersions ([str] -- [str])
+    args!
+    ['uv' 'python' 'list' @args] * ; out!
+    @out '(?m)^[a-z]+-(([0-9]+\.[0-9]+)\.[0-9]+[a-z0-9]*)-' reFindAll
+    (row! [@row :2: @row :1:]) map concat uniq
+end
+
+# Tools installed with `uv tool install`; their executables are the indented lines.
+def __uvTools ( -- [str])
+    ['uv' 'tool' 'list'] * ; '(?m)^([A-Za-z0-9._-]+) v' reFindAll (:1:) map
+end
+
+# Packages installed in the current environment.
+def __uvPipPackages ( -- [str])
+    ['uv' 'pip' 'list' '--format' 'freeze'] * ; '(?m)^([A-Za-z0-9._-]+)' reFindAll (:1:) map
+end
+
+# Direct dependencies of the current project, read from its lockfile.
+def __uvProjectDependencies ( -- [str])
+    ['uv' 'tree' '--depth' '1' '--frozen'] * ; '── ([A-Za-z0-9._-]+)' reFindAll (:1:) map uniq
+end
+
+# Commands installed in the project's virtual environment, for `uv run`.
+def __uvVenvCommands ( -- [str])
+    runtime 'windows' = if
+        '.venv\Scripts\*.exe' glob (basename stem str) map
+    else
+        '.venv/bin/*' glob (basename str) map (dup 'activate' startsWith swap 'deactivate' startsWith or not) filter
+    end
+end
+
+# Completions for the value of an option.
+def __uvOptionValues (str str str -- [str])
+    prefix! opt! cmd!
+    @opt match
+        '-p' '--python' : @cmd 'publish' = ([] as [str]) (['--only-installed'] __uvPythonVersions) iff,
+        '--from' : __uvTools,
+        # Options that take a file or directory
+        '--directory' '--project' '--cache-dir' '--config-file' '--install-dir' '--out-dir'
+        '-o' '--output-file' '-t' '--target' '--prefix' '-r' '--requirements' '-c' '--constraints'
+        '--overrides' '--excludes' '-b' '--build-constraints' '--with-requirements' '--env-file'
+        '-e' '--editable' '--with-editable' '-f' '--find-links' '--cert' '--script'
+        '--python-downloads-json-url' '--path' : @prefix completeFiles,
+        _ : @cmd @opt __uvOptionChoices,
+    end
+end
+
+# Completions for the arguments of a subcommand that are not options.
+def __uvArguments (str str -- [str])
+    prefix! cmd!
+    @cmd match
+        'run' : __uvVenvCommands @prefix completeFiles extend,
+        'remove' : __uvProjectDependencies,
+        'tool run' 'tool upgrade' 'tool uninstall' : __uvTools,
+        'python uninstall' 'python pin' 'python find' 'python upgrade' : ['--only-installed'] __uvPythonVersions,
+        'python install' : [] as [str] __uvPythonVersions,
+        'pip uninstall' 'pip show' : __uvPipPackages,
+        # Packages given by path, requirements files, and scripts
+        'add' 'pip install' 'pip compile' 'pip sync' 'publish' 'format' : @prefix completeFiles,
+        'init' 'venv' 'build' : @prefix completeDirs,
+        _ : [] as [str],
+    end
+end
+
+def __uvCompletion { 'complete': ['uv'] } ([str] str -- [str])
+    prefix! input!
+    @input (__uvSubcommands) (drop '') (__uvTakesValue) __subcommandPath rest! path!
+    @path ' ' join cmd!
+    @input len 0 > if @input :-1: else '' end last!
+
+    @cmd 'help' = if
+        # `uv help pip install`: the words after help name a subcommand.
+        @rest ' ' join __uvSubcommands
+    else* @rest len 0 > @cmd 'run' = @cmd 'tool run' = or and *if
+        # Everything after the command to run belongs to that command.
+        @rest @prefix completeCommand
+    else* @cmd @last __uvTakesValue *if
+        @cmd @last @prefix __uvOptionValues
+    else* @prefix '-' startsWith *if
+        __uvGlobalOptions
+        @cmd __uvOwnOptions extend
+        @cmd __uvOptionGroups (__uvGroupOptions) map concat extend
+    else
+        @cmd __uvSubcommands @cmd @prefix __uvArguments extend
+    end
+end
+
+# `uvx` is `uv tool run`.
+def __uvxCompletion { 'complete': ['uvx'] } ([str] str -- [str])
+    prefix! input!
+    ['tool' 'run'] @input + @prefix __uvCompletion
+end
+# }}}
+# typst {{{
+def __typstSubcommands (str -- [str])
+    match
+        '' : ['compile' 'watch' 'init' 'eval' 'fonts' 'update' 'completions' 'info' 'help'],
+        _ : [] as [str],
+    end
+end
+
+def __typstAlias (str -- str)
+    match
+        'c' : 'compile',
+        'w' : 'watch',
+        _ : '',
+    end
+end
+
+# typst options that consume the next argument.
+# `--open` takes an optional viewer only when written as `--open=viewer`, so it is a flag here.
+def __typstTakesValue (str str -- bool)
+    opt! cmd!
+    @opt match
+        '--color' '--cert' '-f' '--format' '--root' '--input' '--font-path' '--package-path'
+        '--package-cache-path' '--creation-timestamp' '--pages' '--pdf-standard' '--ppi' '--deps'
+        '--deps-format' '-j' '--jobs' '--features' '--diagnostic-format' '--timings' '--port'
+        '--in' '--target' '--backup-path' : true,
+        _ : false,
+    end
+end
+
+def __typstOptions (str -- [str])
+    match
+        '' : ['--color' '--cert' '-h' '--help' '-V' '--version'],
+        'compile' 'watch' :
+            [
+                '-f' '--format' '--root' '--input' '--font-path' '--ignore-system-fonts'
+                '--ignore-embedded-fonts' '--package-path' '--package-cache-path'
+                '--creation-timestamp' '--pretty' '--pages' '--pdf-standard' '--no-pdf-tags' '--ppi'
+                '--deps' '--deps-format' '-j' '--jobs' '--features' '--diagnostic-format' '--open'
+                '--timings' '-h' '--help'
+            ],
+        'init' : ['--package-path' '--package-cache-path' '-h' '--help'],
+        'eval' :
+            [
+                '--in' '--target' '--format' '--pretty' '--root' '--input' '--font-path'
+                '--ignore-system-fonts' '--ignore-embedded-fonts' '--package-path'
+                '--package-cache-path' '--creation-timestamp' '-j' '--jobs' '--features'
+                '--diagnostic-format' '-h' '--help'
+            ],
+        'fonts' : ['--font-path' '--ignore-system-fonts' '--ignore-embedded-fonts' '--variants' '-h' '--help'],
+        'update' : ['--force' '--revert' '--backup-path' '-h' '--help'],
+        'info' : ['-f' '--format' '--pretty' '-h' '--help'],
+        _ : ['-h' '--help'],
+    end
+end
+
+def __typstOptionValues (str str str -- [str])
+    prefix! opt! cmd!
+    @opt match
+        '--color' : ['auto' 'always' 'never'],
+        '-f' '--format' : @cmd match
+            'compile' 'watch' : ['pdf' 'png' 'svg' 'html' 'bundle'],
+            _ : ['json' 'yaml'],
+        end,
+        '--pdf-standard' :
+            [
+                '1.4' '1.5' '1.6' '1.7' '2.0' 'a-1b' 'a-1a' 'a-2b' 'a-2u' 'a-2a' 'a-3b' 'a-3u' 'a-3a'
+                'a-4' 'a-4f' 'a-4e' 'ua-1'
+            ],
+        '--deps-format' : ['json' 'zero' 'make'],
+        '--features' : ['html' 'bundle' 'a11y-extras'],
+        '--diagnostic-format' : ['human' 'short'],
+        '--target' : ['paged' 'html' 'bundle'],
+        '--root' '--font-path' '--package-path' '--package-cache-path' : @prefix completeDirs,
+        '--cert' '--deps' '--timings' '--backup-path' : @prefix completeFiles,
+        _ : [] as [str],
+    end
+end
+
+def __typstCompletion { 'complete': ['typst'] } ([str] str -- [str])
+    prefix! input!
+    @input (__typstSubcommands) (__typstAlias) (__typstTakesValue) __subcommandPath rest! path!
+    @path ' ' join cmd!
+    @input len 0 > if @input :-1: else '' end last!
+
+    @cmd @last __typstTakesValue if
+        @cmd @last @prefix __typstOptionValues
+    else* @prefix '-' startsWith *if
+        @cmd __typstOptions
+    else
+        @cmd match
+            '' 'help' : '' __typstSubcommands,
+            'compile' 'watch' :
+                @prefix completeFiles files!
+                # The input file comes first, so list .typ files before the rest.
+                @rest len 0 = if
+                    @files ('.typ' endsWith) filter @files ('.typ' endsWith not) filter extend
+                else
+                    @files
+                end,
+            'init' : @rest len 0 > (@prefix completeDirs) ([] as [str]) iff,
+            'completions' : ['bash' 'elvish' 'fish' 'powershell' 'zsh'],
+            _ : [] as [str],
+        end
+    end
+end
+# }}}
+# winget {{{
+# Options accepted by every winget command.
+def __wingetGlobalOptions ( -- [str])
+    [
+        '-?' '--help' '--wait' '--logs' '--open-logs' '--verbose' '--verbose-logs' '--nowarn'
+        '--ignore-warnings' '--disable-interactivity' '--proxy' '--no-proxy'
+    ]
+end
+
+# Subcommands under a space-joined winget subcommand path; the top level is the empty string.
+def __wingetSubcommands (str -- [str])
+    match
+        '' :
+            [
+                'install' 'show' 'source' 'search' 'list' 'upgrade' 'uninstall' 'hash' 'validate'
+                'settings' 'features' 'export' 'import' 'pin' 'configure' 'download' 'repair'
+                'dscv3' 'mcp'
+            ],
+        'source' : ['add' 'list' 'update' 'remove' 'edit' 'reset' 'export'],
+        'settings' : ['export' 'set' 'reset'],
+        'pin' : ['add' 'remove' 'list' 'reset'],
+        'configure' : ['show' 'list' 'test' 'validate' 'export'],
+        'dscv3' : ['package' 'source' 'user-settings-file' 'admin-settings'],
+        _ : [] as [str],
+    end
+end
+
+# The subcommand an alias stands for, keyed by the space-joined alias path, or the empty string.
+def __wingetAlias (str -- str)
+    match
+        'add' : 'install',
+        'view' : 'show',
+        'source ls' : 'list',
+        'source refresh' : 'update',
+        'source rm' : 'remove',
+        'source config' : 'edit',
+        'source set' : 'edit',
+        'find' : 'search',
+        'ls' : 'list',
+        'update' : 'upgrade',
+        'remove' : 'uninstall',
+        'rm' : 'uninstall',
+        'config' : 'settings',
+        'configuration' : 'configure',
+        'dsc' : 'configure',
+        'configure view' : 'show',
+        'configure ls' : 'list',
+        'fix' : 'repair',
+        _ : '',
+    end
+end
+
+# Options of each subcommand beyond the global options.
+def __wingetOptions (str -- [str])
+    match
+        '' : ['-v' '--version' '--info'],
+        'install' :
+            [
+                '-q' '--query' '-m' '--manifest' '--id' '--name' '--moniker' '-v' '--version' '-s'
+                '--source' '--scope' '-a' '--architecture' '--installer-type' '-e' '--exact' '-i'
+                '--interactive' '-h' '--silent' '--locale' '-o' '--log' '--custom' '--override'
+                '-l' '--location' '--ignore-security-hash' '--allow-reboot' '--skip-dependencies'
+                '--dependencies-only' '--ignore-local-archive-malware-scan' '--dependency-source'
+                '--accept-package-agreements' '--no-upgrade' '--header' '--authentication-mode'
+                '--authentication-account' '--accept-source-agreements' '-r' '--rename'
+                '--uninstall-previous' '--force'
+            ],
+        'show' :
+            [
+                '-q' '--query' '-m' '--manifest' '--id' '--name' '--moniker' '-v' '--version' '-s'
+                '--source' '-e' '--exact' '--scope' '-a' '--architecture' '--installer-type'
+                '--locale' '--versions' '--header' '--authentication-mode'
+                '--authentication-account' '--accept-source-agreements'
+            ],
+        'source add' :
+            [
+                '-n' '--name' '-a' '--arg' '-t' '--type' '--trust-level' '--header'
+                '--accept-source-agreements' '--explicit'
+            ],
+        'source list' 'source update' 'source remove' 'source export' : ['-n' '--name'],
+        'source edit' : ['-n' '--name' '-e' '--explicit'],
+        'source reset' : ['-n' '--name' '--force'],
+        'search' :
+            [
+                '-q' '--query' '--id' '--name' '--moniker' '--tag' '--cmd' '--command' '-s'
+                '--source' '-n' '--count' '-e' '--exact' '--header' '--authentication-mode'
+                '--authentication-account' '--accept-source-agreements' '--versions'
+            ],
+        'list' :
+            [
+                '-q' '--query' '--id' '--name' '--moniker' '-s' '--source' '--tag' '--cmd'
+                '--command' '-n' '--count' '-e' '--exact' '--scope' '--header'
+                '--authentication-mode' '--authentication-account' '--accept-source-agreements'
+                '--upgrade-available' '-u' '--unknown' '--include-unknown' '--pinned'
+                '--include-pinned' '--details' '--sort' '--asc' '--ascending' '--desc'
+                '--descending'
+            ],
+        'upgrade' :
+            [
+                '-q' '--query' '-m' '--manifest' '--id' '--name' '--moniker' '-v' '--version' '-s'
+                '--source' '-e' '--exact' '-i' '--interactive' '-h' '--silent' '--purge' '-o'
+                '--log' '--custom' '--override' '-l' '--location' '--scope' '-a' '--architecture'
+                '--installer-type' '--locale' '--ignore-security-hash' '--allow-reboot'
+                '--skip-dependencies' '--ignore-local-archive-malware-scan'
+                '--accept-package-agreements' '--accept-source-agreements' '--header'
+                '--authentication-mode' '--authentication-account' '-r' '--recurse' '--all' '-u'
+                '--unknown' '--include-unknown' '--pinned' '--include-pinned'
+                '--uninstall-previous' '--force'
+            ],
+        'uninstall' :
+            [
+                '-q' '--query' '-m' '--manifest' '--id' '--name' '--moniker' '--product-code' '-v'
+                '--version' '--all' '--all-versions' '-s' '--source' '-e' '--exact' '--scope' '-i'
+                '--interactive' '-h' '--silent' '--force' '--purge' '--preserve' '-o' '--log'
+                '--header' '--authentication-mode' '--authentication-account'
+                '--accept-source-agreements'
+            ],
+        'hash' : ['-f' '--file' '-m' '--msix'],
+        'validate' : ['--manifest'],
+        'settings' 'mcp' : ['--enable' '--disable'],
+        'settings set' : ['--setting' '--value'],
+        'settings reset' : ['--setting' '-r' '--recurse' '--all'],
+        'export' :
+            ['-o' '--output' '-s' '--source' '--include-versions' '--accept-source-agreements'],
+        'import' :
+            [
+                '-i' '--import-file' '--ignore-unavailable' '--ignore-versions' '--no-upgrade'
+                '--accept-package-agreements' '--accept-source-agreements'
+            ],
+        'pin add' :
+            [
+                '-q' '--query' '--id' '--name' '--moniker' '--tag' '--cmd' '--command' '-e'
+                '--exact' '-v' '--version' '-s' '--source' '--header' '--authentication-mode'
+                '--authentication-account' '--accept-source-agreements' '--force' '--blocking'
+                '--installed'
+            ],
+        'pin remove' :
+            [
+                '-q' '--query' '--id' '--name' '--moniker' '-s' '--source' '--tag' '--cmd'
+                '--command' '-e' '--exact' '--header' '--authentication-mode'
+                '--authentication-account' '--accept-source-agreements' '--installed'
+            ],
+        'pin list' :
+            [
+                '-q' '--query' '--id' '--name' '--moniker' '-s' '--source' '--tag' '--cmd'
+                '--command' '-e' '--exact' '--header' '--authentication-mode'
+                '--authentication-account' '--accept-source-agreements'
+            ],
+        'pin reset' : ['--force' '-s' '--source'],
+        'configure' :
+            [
+                '-f' '--file' '--module-path' '--processor-path' '-h' '--history'
+                '--accept-configuration-agreements' '--suppress-initial-details' '--enable'
+                '--disable'
+            ],
+        'configure show' : ['-f' '--file' '--module-path' '--processor-path' '-h' '--history'],
+        'configure list' : ['-h' '--history' '-o' '--output' '--remove'],
+        'configure test' :
+            [
+                '-f' '--file' '--module-path' '--processor-path' '-h' '--history'
+                '--suppress-initial-details' '--accept-configuration-agreements'
+            ],
+        'configure validate' : ['-f' '--file' '--module-path' '--processor-path'],
+        'configure export' :
+            [
+                '-o' '--output' '--package-id' '--module' '--resource' '--module-path'
+                '--processor-path' '-s' '--source' '--include-versions' '-r' '--recurse' '--all'
+                '--accept-source-agreements'
+            ],
+        'download' :
+            [
+                '-q' '--query' '-d' '--download-directory' '-m' '--manifest' '--id' '--name'
+                '--moniker' '-v' '--version' '-s' '--source' '--scope' '-a' '--architecture'
+                '--installer-type' '-e' '--exact' '--locale' '--ignore-security-hash'
+                '--skip-dependencies' '--header' '--authentication-mode' '--authentication-account'
+                '--accept-package-agreements' '--accept-source-agreements' '--skip-license'
+                '--skip-microsoft-store-package-license' '--platform' '--os-version'
+            ],
+        'repair' :
+            [
+                '-q' '--query' '-m' '--manifest' '--id' '--name' '--moniker' '-v' '--version'
+                '--product-code' '-a' '--architecture' '--scope' '-s' '--source' '-i'
+                '--interactive' '-h' '--silent' '-o' '--log' '--ignore-local-archive-malware-scan'
+                '--accept-source-agreements' '--accept-package-agreements' '--locale' '--header'
+                '--authentication-mode' '--authentication-account' '--force'
+                '--ignore-security-hash' '-e' '--exact'
+            ],
+        'dscv3' : ['--manifest' '-o' '--output'],
+        'dscv3 package' 'dscv3 source' 'dscv3 user-settings-file' 'dscv3 admin-settings' :
+            ['--get' '--set' '--test' '--export' '--schema' '--manifest' '-o' '--output'],
+        _ : [] as [str],
+    end
+end
+
+# Whether an option of a subcommand consumes the next argument.
+# The same short option can be a flag in one subcommand and take a value in another,
+# like -i for --interactive in install and --import-file in import.
+def __wingetTakesValue (str str -- bool)
+    opt! cmd!
+    @opt match
+        '--proxy' : true,
+        _ : @cmd match
+            'install' :
+                @opt match
+                    '-q' '--query' '-m' '--manifest' '--id' '--name' '--moniker' '-v' '--version'
+                    '-s' '--source' '--scope' '-a' '--architecture' '--installer-type' '--locale'
+                    '-o' '--log' '--custom' '--override' '-l' '--location' '--dependency-source'
+                    '--header' '--authentication-mode' '--authentication-account' '-r' '--rename' : true,
+                    _ : false,
+                end,
+            'show' :
+                @opt match
+                    '-q' '--query' '-m' '--manifest' '--id' '--name' '--moniker' '-v' '--version'
+                    '-s' '--source' '--scope' '-a' '--architecture' '--installer-type' '--locale'
+                    '--header' '--authentication-mode' '--authentication-account' : true,
+                    _ : false,
+                end,
+            'source add' :
+                @opt match
+                    '-n' '--name' '-a' '--arg' '-t' '--type' '--trust-level' '--header' : true,
+                    _ : false,
+                end,
+            'source list' 'source update' 'source remove' 'source reset' 'source export' :
+                @opt match
+                    '-n' '--name' : true,
+                    _ : false,
+                end,
+            'source edit' :
+                @opt match
+                    '-n' '--name' '-e' '--explicit' : true,
+                    _ : false,
+                end,
+            'search' :
+                @opt match
+                    '-q' '--query' '--id' '--name' '--moniker' '--tag' '--cmd' '--command' '-s'
+                    '--source' '-n' '--count' '--header' '--authentication-mode'
+                    '--authentication-account' : true,
+                    _ : false,
+                end,
+            'list' :
+                @opt match
+                    '-q' '--query' '--id' '--name' '--moniker' '-s' '--source' '--tag' '--cmd'
+                    '--command' '-n' '--count' '--scope' '--header' '--authentication-mode'
+                    '--authentication-account' '--sort' : true,
+                    _ : false,
+                end,
+            'upgrade' :
+                @opt match
+                    '-q' '--query' '-m' '--manifest' '--id' '--name' '--moniker' '-v' '--version'
+                    '-s' '--source' '-o' '--log' '--custom' '--override' '-l' '--location'
+                    '--scope' '-a' '--architecture' '--installer-type' '--locale' '--header'
+                    '--authentication-mode' '--authentication-account' : true,
+                    _ : false,
+                end,
+            'uninstall' :
+                @opt match
+                    '-q' '--query' '-m' '--manifest' '--id' '--name' '--moniker' '--product-code'
+                    '-v' '--version' '-s' '--source' '--scope' '-o' '--log' '--header'
+                    '--authentication-mode' '--authentication-account' : true,
+                    _ : false,
+                end,
+            'hash' :
+                @opt match
+                    '-f' '--file' : true,
+                    _ : false,
+                end,
+            'validate' :
+                @opt match
+                    '--manifest' : true,
+                    _ : false,
+                end,
+            'settings' :
+                @opt match
+                    '--enable' '--disable' : true,
+                    _ : false,
+                end,
+            'settings set' :
+                @opt match
+                    '--setting' '--value' : true,
+                    _ : false,
+                end,
+            'settings reset' :
+                @opt match
+                    '--setting' : true,
+                    _ : false,
+                end,
+            'export' :
+                @opt match
+                    '-o' '--output' '-s' '--source' : true,
+                    _ : false,
+                end,
+            'import' :
+                @opt match
+                    '-i' '--import-file' : true,
+                    _ : false,
+                end,
+            'pin add' :
+                @opt match
+                    '-q' '--query' '--id' '--name' '--moniker' '--tag' '--cmd' '--command' '-v'
+                    '--version' '-s' '--source' '--header' '--authentication-mode'
+                    '--authentication-account' : true,
+                    _ : false,
+                end,
+            'pin remove' 'pin list' :
+                @opt match
+                    '-q' '--query' '--id' '--name' '--moniker' '-s' '--source' '--tag' '--cmd'
+                    '--command' '--header' '--authentication-mode' '--authentication-account' : true,
+                    _ : false,
+                end,
+            'pin reset' :
+                @opt match
+                    '-s' '--source' : true,
+                    _ : false,
+                end,
+            'configure' 'configure show' 'configure test' :
+                @opt match
+                    '-f' '--file' '--module-path' '--processor-path' '-h' '--history' : true,
+                    _ : false,
+                end,
+            'configure list' :
+                @opt match
+                    '-h' '--history' '-o' '--output' : true,
+                    _ : false,
+                end,
+            'configure validate' :
+                @opt match
+                    '-f' '--file' '--module-path' '--processor-path' : true,
+                    _ : false,
+                end,
+            'configure export' :
+                @opt match
+                    '-o' '--output' '--package-id' '--module' '--resource' '--module-path'
+                    '--processor-path' '-s' '--source' : true,
+                    _ : false,
+                end,
+            'download' :
+                @opt match
+                    '-q' '--query' '-d' '--download-directory' '-m' '--manifest' '--id' '--name'
+                    '--moniker' '-v' '--version' '-s' '--source' '--scope' '-a' '--architecture'
+                    '--installer-type' '--locale' '--header' '--authentication-mode'
+                    '--authentication-account' '--platform' '--os-version' : true,
+                    _ : false,
+                end,
+            'repair' :
+                @opt match
+                    '-q' '--query' '-m' '--manifest' '--id' '--name' '--moniker' '-v' '--version'
+                    '--product-code' '-a' '--architecture' '--scope' '-s' '--source' '-o' '--log'
+                    '--locale' '--header' '--authentication-mode' '--authentication-account' : true,
+                    _ : false,
+                end,
+            'dscv3' 'dscv3 package' 'dscv3 source' 'dscv3 user-settings-file'
+            'dscv3 admin-settings' :
+                @opt match
+                    '--manifest' '-o' '--output' : true,
+                    _ : false,
+                end,
+            _ : false,
+        end,
+    end
+end
+
+
+# Names of the configured package sources: the first column of `winget source list`,
+# on the lines after the dashed line under its header.
+def __wingetSources ( -- [str])
+    ['winget' 'source' 'list'] * ; '(?s)-{5,}\r?\n(.*)' reFindAll rows!
+    @rows len 0 > if
+        @rows :0: :1: lines (trim) map (len 0 >) filter (wsplit :0:) map
+    else
+        [] as [str]
+    end
+end
+
+# Administrator settings for `winget settings --enable` and `--disable`.
+def __wingetAdminSettings ( -- [str])
+    [
+        'LocalManifestFiles' 'BypassCertificatePinningForMicrosoftStore' 'InstallerHashOverride'
+        'LocalArchiveMalwareScanOverride' 'ProxyCommandLineOptions' 'ConfigurationProcessorPath'
+    ]
+end
+
+# Completions for the value of an option.
+def __wingetOptionValues (str str str -- [str])
+    prefix! opt! cmd!
+    @opt match
+        '-s' '--source' '--dependency-source' : __wingetSources,
+        '-n' '--name' : @cmd 'source' startsWith @cmd 'source add' = not and (__wingetSources) ([] as [str]) iff,
+        '--scope' : ['user' 'machine'],
+        '-a' '--architecture' : @cmd 'source add' = ([] as [str]) (['x86' 'x64' 'arm' 'arm64' 'neutral']) iff,
+        '--installer-type' :
+            ['msix' 'msi' 'appx' 'exe' 'zip' 'inno' 'nullsoft' 'wix' 'burn' 'pwa' 'portable'],
+        '--authentication-mode' : ['silent' 'silentPreferred' 'interactive'],
+        '--sort' : ['name' 'id' 'version' 'source' 'available' 'relevance'],
+        '--platform' :
+            ['Windows.Universal' 'Windows.Desktop' 'Windows.IoT' 'Windows.Team' 'Windows.Holographic'],
+        '--trust-level' : ['none' 'trusted'],
+        '-t' '--type' : ['Microsoft.PreIndexed.Package' 'Microsoft.Rest'],
+        '-e' '--explicit' : ['true' 'false'],
+        '--enable' '--disable' : __wingetAdminSettings,
+        '--setting' : @cmd 'settings set' = (['DefaultProxy']) (__wingetAdminSettings ['DefaultProxy'] extend) iff,
+        # Options that take a file or directory
+        '-m' '--manifest' '-o' '--log' '--output' '-f' '--file' '-i' '--import-file' '-l' '--location'
+        '-d' '--download-directory' '--module-path' '--processor-path' : @prefix completeFiles,
+        _ : [] as [str],
+    end
+end
+
+# Completions for the arguments of a subcommand that are not options.
+def __wingetArguments (str [str] str -- [str])
+    prefix! rest! cmd!
+    @cmd match
+        'source list' 'source update' 'source remove' 'source edit' 'source reset' 'source export' :
+            __wingetSources,
+        'settings set' : @rest len 0 = (['DefaultProxy']) ([] as [str]) iff,
+        'settings reset' : __wingetAdminSettings ['DefaultProxy'] extend,
+        'hash' 'validate' 'import' 'configure' 'configure show' 'configure test' 'configure validate' :
+            @prefix completeFiles,
+        _ : [] as [str],
+    end
+end
+
+def __wingetCompletion { 'complete': ['winget' 'winget.exe'] } ([str] str -- [str])
+    prefix! input!
+    @input (__wingetSubcommands) (__wingetAlias) (__wingetTakesValue) __subcommandPath rest! path!
+    @path ' ' join cmd!
+    @input len 0 > if @input :-1: else '' end last!
+
+    @cmd @last __wingetTakesValue if
+        @cmd @last @prefix __wingetOptionValues
+    else* @prefix '-' startsWith *if
+        __wingetGlobalOptions @cmd __wingetOptions extend
+    else
+        @cmd __wingetSubcommands @cmd @rest @prefix __wingetArguments extend
     end
 end
 # }}}
