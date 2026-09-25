@@ -1,0 +1,10 @@
+# Should fail: return inside an else-if condition.
+def early (int -- str)
+    n!
+    @n 1 = if
+        "one"
+    else* "cond" return *if
+        "two"
+    end
+end
+2 early wl

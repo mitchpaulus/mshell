@@ -283,11 +283,11 @@ end
 	}
 }
 
-func TestTypeCheckProgramIffReturnBranchDiverges(t *testing.T) {
+func TestTypeCheckProgramIfReturnBranchDiverges(t *testing.T) {
 	src := `
 def returnTest (str -- str)
     a!
-    @a "a" = ("Found a" return) iff
+    @a "a" = if "Found a" return end
     @a
 end
 
@@ -295,7 +295,7 @@ end
 `
 	errs, ok := parseAndCheck(t, src)
 	if !ok || len(errs) != 0 {
-		t.Fatalf("expected iff return branch to type-check as divergent; errs=%v", errs)
+		t.Fatalf("expected if return branch to type-check as divergent; errs=%v", errs)
 	}
 }
 

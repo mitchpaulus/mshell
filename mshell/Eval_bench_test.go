@@ -48,6 +48,10 @@ var evalBenchmarks = []struct {
 	{"SeqEachStd", `100000 seq each. drop end`},
 	{"DefCall", "def inc (int -- int) 1 + end\n" + `0 i! ( @i 100000 >= if break end @i inc i! ) loop`},
 	{"MapQuote", `100000 seq (1 +) map drop`},
+	// Builtins that come late in evaluateBuiltinToken's dispatch.
+	{"LateBuiltins", `0 i! ( @i 100000 >= if break end @i abs just isNone drop @i 1 + i! ) loop`},
+	{"XInMap", `100000 seq ((1 +) x) map drop`},
+	{"DefCallsMap", "def addOne ([int] -- [int]) (1 +) map end\n" + `0 i! ( @i 30000 >= if break end [1 2 3] addOne drop @i 1 + i! ) loop`},
 }
 
 func loadBenchStdlib(b *testing.B) []MShellDefinition {

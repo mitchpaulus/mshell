@@ -25,6 +25,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The file manager preview no longer times out after 3 seconds.
   The timeout existed for OneDrive files, which are now detected and skipped instead.
 - `stdin` fails if the input exceeds `MSH_READ_LIMIT` bytes (default 104857600, `0` for no limit).
+- Scripts run faster, especially calls to definitions and quotations run by functions like `each`, `map`, and `filter`.
+  Calling a definition allocates less than half as much, and looking up a built-in function no longer slows down the later it appears in the list.
+- `return` is only allowed directly in a definition, or in the body of an `if` or `match` there.
+  Anywhere else is now an error: inside a quotation (including ones run by `x`, `iff`, `loop`, or `each`),
+  a list or dict literal, an else-if condition, or a grid cell.
+  These are the places where the type checker can check what `return` leaves against the definition's outputs.
+  Write `cond (value return) iff` as `cond if value return end`, and leave a loop early with `break`.
+- The type checker rejects a `return` that leaves more values than the definition declares,
+  such as `def name (-- str) 5 "a" return end`.
 
 ### Security
 
@@ -54,6 +63,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   assumed US month/day/year. Dates with a leading four digit year are unaffected.
 - `toDt` now returns `none` for out of range components such as month 13, Feb 30, or hour 25,
   instead of silently rolling them over into the next month or day.
+- `return` inside an `if` or `match` now leaves the whole definition when the definition was called from a quotation run by a function like `map` or `each`.
+  It used to leave only the `if` or `match`, and the rest of the definition kept running.
+- A definition called as the last item of a redirected quotation run by `iff`, such as ``true (myDef) `out.txt` > iff``, now writes to the file.
+  The file used to be closed before the definition ran.
 
 ### Added
 

@@ -1,0 +1,6 @@
+# A return in an if must also leave exactly the declared outputs.
+def extra (bool -- str)
+    5 swap if "a" return end
+    drop "b"
+end
+true extra wl

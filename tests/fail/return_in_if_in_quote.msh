@@ -1,0 +1,6 @@
+# Should fail: an if inside a quotation is still inside the quotation.
+def early (-- str)
+    (true if "a" return end) x
+    "b"
+end
+early wl

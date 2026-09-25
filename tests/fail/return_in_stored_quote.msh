@@ -1,0 +1,5 @@
+# Should fail: return inside a quotation that is stored and run later.
+def makeQuote (-- quote)
+    ("a" return)
+end
+makeQuote x

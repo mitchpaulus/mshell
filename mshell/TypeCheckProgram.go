@@ -315,7 +315,7 @@ func (c *Checker) checkDefBody(def *MShellDefinition) {
 	// effect for EVERY `a`; the runtime then crashes for the other
 	// instantiations.
 	instSig := c.rigidDefSig(def)
-	fnCtx := &FnContext{Sig: instSig}
+	fnCtx := &FnContext{Name: def.Name, Sig: instSig}
 	c.currentFn = fnCtx
 
 	// Build the initial branch from a stack pre-loaded with declared inputs.
@@ -1798,6 +1798,10 @@ func (c *Checker) checkFormatBlock(src string, callSite Token, baseLine, baseCol
 	lex := NewLexer(src, nil)
 	parser := NewMShellParser(lex)
 	file, err := parser.ParseFile()
+	if err == nil {
+		// The code sits inside a string, not directly in a body.
+		err = checkReturnPlacement(file.Items, false)
+	}
 	if err != nil {
 		c.errors = append(c.errors, TypeError{
 			Kind: TErrUnknownIdentifier,

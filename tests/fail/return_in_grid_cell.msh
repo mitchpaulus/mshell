@@ -1,0 +1,6 @@
+# Should fail: return inside a grid cell.
+def early (-- int)
+    [| a; 1 return |] drop
+    0
+end
+early str wl

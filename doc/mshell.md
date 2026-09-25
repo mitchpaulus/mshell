@@ -1165,6 +1165,7 @@ end wl # Output: 11
 - `toHex` / `toOctal` / `toBin`: Format an int as a bare hex/octal/binary string (`16`/`8`/`2 toBase`). `(int -- str)`
 - `parseHex` / `parseOctal` / `parseBin`: Parse a hex/octal/binary string to `Maybe[int]` (`16`/`8`/`2 fromBase`); an optional matching prefix is accepted. `(str -- Maybe[int])`
 - `exit`: Exit the current script with the provided exit code. `(int -- )`
+- `return`: Leave the current definition immediately, with the stack as it is, which must match the definition's outputs. Only allowed directly in a definition, or in the body of an `if` or `match` there; it is an error inside a quotation (including ones run by `x`, `iff`, `loop`, or `each`), a list or dict literal, or an else-if condition. To leave a loop early, use `break` and continue after the loop. In top-level code it ends the script. `( -- )`
 - `read`: Read a line from stdin. Puts a str and bool of whether the read was successful on the stack. `( -- str bool)`
 - `prompt`: Write a prompt string to the controlling TTY and read a line from the controlling TTY. Fails if no controlling TTY is available. `(str -- str)`
 - `stdin`: Drop stdin onto the stack `( -- str)`. Fails if the input exceeds `MSH_READ_LIMIT` bytes (default 104857600, `0` for no limit).

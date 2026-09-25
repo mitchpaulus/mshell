@@ -1,0 +1,7 @@
+# Should fail when the string is built: the code in a format string is
+# inside the string, not directly in the definition.
+def early (-- str)
+    $"{'a' return}"
+end
+"before" wl
+early wl

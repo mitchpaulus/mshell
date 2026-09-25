@@ -626,24 +626,34 @@ func (q *MShellQuotation) GetEndToken() Token {
 	return q.MShellParseQuote.EndToken
 }
 
-// This function expects the caller to be the one to close the return context.
-func (q *MShellQuotation) BuildExecutionContext(context *ExecuteContext) (ExecuteContext, error) {
-	quoteContext := ExecuteContext{
-		StandardInput:     nil,
-		StandardOutput:    nil,
-		StandardError:     nil,
-		Variables:         q.Variables,
-		ShouldCloseInput:  false,
-		ShouldCloseOutput: false,
-		ShouldCloseError:  false,
-		Pbm:               context.Pbm,
+// BuildExecutionContext sets dst to the context for running q from inside
+// context: q's redirects applied, otherwise context's streams, and q's
+// captured variables. The caller must Close dst. On error dst is left with
+// nothing to close. dst and context must not be the same.
+//
+// It fills dst in place rather than returning a context, because returning
+// the struct by value was a large share of the cost of running a quotation.
+func (q *MShellQuotation) BuildExecutionContext(dst *ExecuteContext, context *ExecuteContext) error {
+	if err := q.buildExecutionContext(dst, context); err != nil {
+		// A later redirect failed after an earlier one opened its file.
+		dst.Close()
+		*dst = ExecuteContext{}
+		return err
+	}
+	return nil
+}
+
+func (q *MShellQuotation) buildExecutionContext(quoteContext *ExecuteContext, context *ExecuteContext) error {
+	*quoteContext = ExecuteContext{
+		Variables: q.Variables,
+		Pbm:       context.Pbm,
 	}
 
 	// Check for same-path stdout/stderr redirection
 	samePath := q.StandardOutputFile != "" && q.StandardOutputFile == q.StandardErrorFile
 	if samePath && q.AppendOutput != q.AppendError {
 		t := q.GetStartToken()
-		return ExecuteContext{}, fmt.Errorf("%d:%d: Cannot redirect stdout and stderr to the same file '%s' with different append modes.\n", t.Line, t.Column, q.StandardOutputFile)
+		return fmt.Errorf("%d:%d: Cannot redirect stdout and stderr to the same file '%s' with different append modes.\n", t.Line, t.Column, q.StandardOutputFile)
 	}
 
 	if q.StdinBehavior != STDIN_NONE {
@@ -655,7 +665,7 @@ func (q *MShellQuotation) BuildExecutionContext(context *ExecuteContext) (Execut
 			file, err := os.Open(q.StandardInputFile)
 			if err != nil {
 				t := q.GetStartToken()
-				return ExecuteContext{}, fmt.Errorf("%d:%d: Error opening file %s for reading: %s\n", t.Line, t.Column, q.StandardInputFile, err.Error())
+				return fmt.Errorf("%d:%d: Error opening file %s for reading: %s\n", t.Line, t.Column, q.StandardInputFile, err.Error())
 			}
 			quoteContext.StandardInput = file
 			quoteContext.ShouldCloseInput = true
@@ -680,7 +690,7 @@ func (q *MShellQuotation) BuildExecutionContext(context *ExecuteContext) (Execut
 		}
 		if err != nil {
 			t := q.GetStartToken()
-			return ExecuteContext{}, fmt.Errorf("%d:%d: Error opening file %s for writing: %s\n", t.Line, t.Column, q.StandardOutputFile, err.Error())
+			return fmt.Errorf("%d:%d: Error opening file %s for writing: %s\n", t.Line, t.Column, q.StandardOutputFile, err.Error())
 		}
 		quoteContext.StandardOutput = file
 		quoteContext.ShouldCloseOutput = true
@@ -709,7 +719,7 @@ func (q *MShellQuotation) BuildExecutionContext(context *ExecuteContext) (Execut
 		}
 		if err != nil {
 			t := q.GetStartToken()
-			return ExecuteContext{}, fmt.Errorf("%d:%d: Error opening file %s for writing: %s\n", t.Line, t.Column, q.StandardErrorFile, err.Error())
+			return fmt.Errorf("%d:%d: Error opening file %s for writing: %s\n", t.Line, t.Column, q.StandardErrorFile, err.Error())
 		}
 		quoteContext.StandardError = file
 		quoteContext.ShouldCloseError = true
@@ -731,7 +741,7 @@ func (q *MShellQuotation) BuildExecutionContext(context *ExecuteContext) (Execut
 		quoteContext.StandardError = quoteContext.StandardOutput
 	}
 
-	return quoteContext, nil
+	return nil
 }
 
 // type MShellQuotation2 struct {

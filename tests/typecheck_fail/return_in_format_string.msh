@@ -1,0 +1,5 @@
+# return inside the code of a format string is rejected.
+def early (-- str)
+    $"{'a' return}"
+end
+early wl

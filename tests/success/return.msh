@@ -1,8 +1,8 @@
 def returnTest (str -- str)
     a!
-    @a "a" = ("Found a" return) iff
-    @a "b" = ("Found b" return) iff
-    @a "c" = ("Found c" return) iff
+    @a "a" = if "Found a" return end
+    @a "b" = if "Found b" return end
+    "Found c"
 end
 
 def skipAfterReturn (-- str)

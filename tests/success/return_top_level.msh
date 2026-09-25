@@ -1,0 +1,7 @@
+# 'return' in top-level code ends the script.
+"before" wl
+true if
+    "in if" wl
+    return
+end
+"not reached" wl
