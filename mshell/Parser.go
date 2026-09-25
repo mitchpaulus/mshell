@@ -505,6 +505,131 @@ type MShellDefinition struct {
 	Inputs    []MShellParseItem // type-expression AST for signature inputs
 	Outputs   []MShellParseItem // type-expression AST for signature outputs
 	Metadata  MShellParseDict
+
+	// NeverUsesVariables is true when the body cannot store a variable or
+	// hand its variable map to anything that might. A call to such a
+	// definition skips allocating a variable map. The parser sets it; the
+	// zero value (false) is always safe.
+	NeverUsesVariables bool
+}
+
+// checkReturnPlacement reports a 'return' that is not directly in a body
+// (a definition's, or top-level code), or in an if or match there. Code in
+// those places runs on the body's own stack, so the type checker can check
+// the return against the definition's outputs. A 'return' anywhere else (a
+// quotation, a list or dict literal, an else-if condition, a grid cell) is
+// an error. allowed is whether items are in one of the allowed places.
+func checkReturnPlacement(items []MShellParseItem, allowed bool) error {
+	for _, item := range items {
+		var err error
+		switch it := item.(type) {
+		case Token:
+			if !allowed && it.Type == LITERAL && it.Lexeme == "return" {
+				return fmt.Errorf("%d:%d: 'return' can only be used directly in a definition, or in the body of an if or match there. To leave a loop early, use 'break'", it.Line, it.Column)
+			}
+		case *MShellParseQuote:
+			err = checkReturnPlacement(it.Items, false)
+		case *MShellParsePrefixQuote:
+			err = checkReturnPlacement(it.Items, false)
+		case *MShellParseList:
+			err = checkReturnPlacement(it.Items, false)
+		case *MShellParseDict:
+			err = checkDictReturnPlacement(it)
+		case *MShellParseIfBlock:
+			err = checkReturnPlacement(it.IfBody, allowed)
+			for _, elseIf := range it.ElseIfs {
+				if err == nil {
+					err = checkReturnPlacement(elseIf.Condition, false)
+				}
+				if err == nil {
+					err = checkReturnPlacement(elseIf.Body, allowed)
+				}
+			}
+			if err == nil {
+				err = checkReturnPlacement(it.ElseBody, allowed)
+			}
+		case *MShellParseMatchBlock:
+			for _, arm := range it.Arms {
+				if err = checkReturnPlacement(arm.Body, allowed); err != nil {
+					break
+				}
+			}
+		case *MShellParseGrid:
+			if it.GridMeta != nil {
+				err = checkDictReturnPlacement(it.GridMeta)
+			}
+			for _, col := range it.Columns {
+				if err == nil && col.Meta != nil {
+					err = checkDictReturnPlacement(col.Meta)
+				}
+			}
+			for _, row := range it.Rows {
+				if err == nil {
+					err = checkReturnPlacement(row, false)
+				}
+			}
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func checkDictReturnPlacement(dict *MShellParseDict) error {
+	for _, kv := range dict.Items {
+		if err := checkReturnPlacement(kv.Value, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// itemsMayUseVariables reports whether running items could store into, or
+// capture, the variable map of the definition they are in. It errs toward
+// true: anything it does not recognize counts as using variables.
+func itemsMayUseVariables(items []MShellParseItem) bool {
+	for _, item := range items {
+		switch it := item.(type) {
+		case Token:
+			switch it.Type {
+			// A loop runs its quotation with the current variable map, and
+			// a format string runs arbitrary code in the current context.
+			case VARSTORE, LOOP, FORMATSTRING:
+				return true
+			case LITERAL:
+				// Builds quotations that capture the current variable map.
+				if it.Lexeme == "completionDefs" {
+					return true
+				}
+			}
+		case *MShellParseList:
+			if itemsMayUseVariables(it.Items) {
+				return true
+			}
+		case *MShellParseDict:
+			for _, kv := range it.Items {
+				if itemsMayUseVariables(kv.Value) {
+					return true
+				}
+			}
+		case *MShellParseIfBlock:
+			if itemsMayUseVariables(it.IfBody) || itemsMayUseVariables(it.ElseBody) {
+				return true
+			}
+			for _, elseIf := range it.ElseIfs {
+				if itemsMayUseVariables(elseIf.Condition) || itemsMayUseVariables(elseIf.Body) {
+					return true
+				}
+			}
+		case *MShellGetter, *MShellTypeDecl, *MShellAsCast:
+		default:
+			// Quotations capture the map, match arms and varstore lists
+			// store into it, and indexing a quotation builds one.
+			return true
+		}
+	}
+	return false
 }
 
 func (def *MShellDefinition) ToJson() string {
@@ -750,6 +875,10 @@ func (parser *MShellParser) ParseFile() (file *MShellFile, err error) {
 				}
 			}
 
+			if err := checkReturnPlacement(def.Items, true); err != nil {
+				return file, err
+			}
+			def.NeverUsesVariables = !itemsMayUseVariables(def.Items)
 			file.Definitions = append(file.Definitions, def)
 			_ = parser.Match(parser.curr, END)
 			// return file, errors.New("DEF Not implemented")
@@ -793,6 +922,9 @@ func (parser *MShellParser) ParseFile() (file *MShellFile, err error) {
 			}
 			file.Items = append(file.Items, item)
 		}
+	}
+	if err := checkReturnPlacement(file.Items, true); err != nil {
+		return file, err
 	}
 	return file, nil
 }

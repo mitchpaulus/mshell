@@ -1,6 +1,9 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"strconv"
+)
 
 // Core token-level checking: the simulated type stack, the variable
 // environment, per-token dispatch (checkOne), signature application
@@ -77,6 +80,7 @@ func NewVarEnv() VarEnv {
 // FnContext is the per-function checking context: the declared signature
 // a def body is checked against, and whether the body used `return`.
 type FnContext struct {
+	Name      string
 	Sig       QuoteSig
 	SawReturn bool
 }
@@ -465,6 +469,20 @@ func (c *Checker) tryReturn(tok Token) bool {
 			Pos:  tok,
 			Hint: "return",
 		})
+		c.diverged = true
+		return true
+	}
+	// The parser only allows 'return' where the checker is tracking the
+	// whole definition stack, so everything on it is what the caller gets.
+	if c.stack.Len() > len(expected) {
+		c.errors = append(c.errors, TypeError{
+			Kind: TErrDefBodyMismatch,
+			Pos:  tok,
+			Name: c.currentFn.Name,
+			Hint: "declared " + strconv.Itoa(len(expected)) + " output(s) " + formatTypeList(c, expected) +
+				", 'return' leaves " + strconv.Itoa(c.stack.Len()) + " " + formatTypeList(c, c.stack.items),
+		})
+		c.stack.items = c.stack.items[:0]
 		c.diverged = true
 		return true
 	}

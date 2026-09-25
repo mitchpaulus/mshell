@@ -1,0 +1,6 @@
+# return inside a quotation is rejected.
+def early (-- str)
+    ("a" return) x
+    "b"
+end
+early wl

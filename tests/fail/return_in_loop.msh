@@ -1,0 +1,8 @@
+# Should fail: return inside a loop body, which is a quotation. Use break.
+def firstOver (int -- int)
+    n!
+    0 i!
+    ( @i @n > if @i return end @i 1 + i! ) loop
+    -1
+end
+3 firstOver str wl

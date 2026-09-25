@@ -1,0 +1,2 @@
+7:1 early
+4:5: Error parsing format string '$"{'a' return}"': Error parsing format string 'a' return: 1:5: 'return' can only be used directly in a definition, or in the body of an if or match there. To leave a loop early, use 'break'

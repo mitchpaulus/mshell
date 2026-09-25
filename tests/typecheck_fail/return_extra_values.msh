@@ -1,0 +1,5 @@
+# A return must leave exactly the declared outputs: here it leaves an extra int.
+def extra (-- str)
+    5 "a" return
+end
+extra wl
