@@ -589,15 +589,15 @@ func SimpleSuccess() EvalResult {
 	return EvalResult{true, false, -1, 0, false}
 }
 
-// stepOf converts an EvalResult into the form returned by the per-token
-// functions that Run calls: nil when evaluation should simply carry on with
-// the next token, otherwise a pointer to the result (failure, exit, break,
-// or continue).
+// nilIfNothingToDo converts an EvalResult into the form returned by the
+// per-token functions that Run calls. It returns nil when Run has nothing to
+// do but move on to the next token. Otherwise it returns a pointer to the
+// result, which Run must act on: a failure, an exit, a break, or a continue.
 //
 // Run's callees return a pointer rather than an EvalResult because passing
 // the 32-byte struct back up through each layer of the dispatch, once per
 // token, was the largest cost in the interpreter loop.
-func stepOf(result EvalResult) *EvalResult {
+func nilIfNothingToDo(result EvalResult) *EvalResult {
 	if result.Success && !result.ExitCalled && result.BreakNum <= 0 && !result.Continue {
 		return nil
 	}
@@ -606,8 +606,8 @@ func stepOf(result EvalResult) *EvalResult {
 	return &escaped
 }
 
-// failStep is FailWithMessage for functions that return *EvalResult.
-func (state *EvalState) failStep(message string) *EvalResult {
+// failPtr is FailWithMessage for functions that return *EvalResult.
+func (state *EvalState) failPtr(message string) *EvalResult {
 	result := state.FailWithMessage(message)
 	return &result
 }
@@ -787,10 +787,10 @@ func (state *EvalState) completeFrame(frames *[]EvaluationFrame) *EvalResult {
 	case FRAME_DICT:
 		// Store result for current key
 		if len(*frame.Stack) == 0 {
-			return stepOf(state.FailWithMessage(fmt.Sprintf("Dictionary key '%s' evaluated to an empty stack.\n", frame.DictKey)))
+			return nilIfNothingToDo(state.FailWithMessage(fmt.Sprintf("Dictionary key '%s' evaluated to an empty stack.\n", frame.DictKey)))
 		}
 		if len(*frame.Stack) > 1 {
-			return stepOf(state.FailWithMessage(fmt.Sprintf("Dictionary key '%s' evaluated to a stack with more than one item.\n", frame.DictKey)))
+			return nilIfNothingToDo(state.FailWithMessage(fmt.Sprintf("Dictionary key '%s' evaluated to a stack with more than one item.\n", frame.DictKey)))
 		}
 		frame.Dict.Items[frame.DictKey] = (*frame.Stack)[0]
 
@@ -816,7 +816,7 @@ func (state *EvalState) completeFrame(frames *[]EvaluationFrame) *EvalResult {
 	case FRAME_LOOP:
 		// Check stack size hasn't changed
 		if len(*frame.Stack) != frame.InitialStackSize {
-			return stepOf(state.FailWithMessage(fmt.Sprintf("Stack size changed from %d to %d in loop.\n", frame.InitialStackSize, len(*frame.Stack))))
+			return nilIfNothingToDo(state.FailWithMessage(fmt.Sprintf("Stack size changed from %d to %d in loop.\n", frame.InitialStackSize, len(*frame.Stack))))
 		}
 
 		frame.LoopCount++
@@ -825,7 +825,7 @@ func (state *EvalState) completeFrame(frames *[]EvaluationFrame) *EvalResult {
 			frame.Index = 0
 		} else {
 			// Loop exceeded max iterations
-			return stepOf(state.FailWithMessage(fmt.Sprintf("Loop exceeded maximum number of iterations (%d).\n", frame.LoopMax)))
+			return nilIfNothingToDo(state.FailWithMessage(fmt.Sprintf("Loop exceeded maximum number of iterations (%d).\n", frame.LoopMax)))
 		}
 
 	case FRAME_NORMAL:
@@ -908,7 +908,7 @@ func (state *EvalState) processToken(token MShellParseItem, frame *EvaluationFra
 		return nil
 
 	case *MShellParseGrid:
-		return stepOf(state.evaluateParseGrid(t, stack, *context, definitions))
+		return nilIfNothingToDo(state.evaluateParseGrid(t, stack, *context, definitions))
 
 	case *MShellParseQuote:
 		q := MShellQuotation{Tokens: t.Items, StandardInputFile: "", StandardOutputFile: "", StandardErrorFile: "", Variables: context.Variables, MShellParseQuote: t}
@@ -942,7 +942,7 @@ func (state *EvalState) processToken(token MShellParseItem, frame *EvaluationFra
 
 		// Not a definition - dispatch directly to token evaluation
 		callStackItem := CallStackItem{MShellParseItem: nil, Name: "literal", CallStackType: frame.CallStackItem.CallStackType}
-		return stepOf(state.evaluateBuiltinToken(funcToken, frame.Stack, frame.Context, frame.Definitions, callStackItem))
+		return nilIfNothingToDo(state.evaluateBuiltinToken(funcToken, frame.Stack, frame.Context, frame.Definitions, callStackItem))
 
 	case *MShellParseIfBlock:
 		return state.processIfBlock(t, frame, frames)
@@ -974,7 +974,7 @@ func (state *EvalState) processToken(token MShellParseItem, frame *EvaluationFra
 		return nil
 
 	default:
-		return stepOf(state.FailWithMessage(fmt.Sprintf("Unknown token type: %T\n", token)))
+		return nilIfNothingToDo(state.FailWithMessage(fmt.Sprintf("Unknown token type: %T\n", token)))
 	}
 }
 
@@ -1033,7 +1033,7 @@ func (state *EvalState) processIfBlock(ifBlock *MShellParseIfBlock, frame *Evalu
 	// Pop the condition from the stack
 	condObj, err := stack.Pop()
 	if err != nil {
-		return stepOf(state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot evaluate 'if' on an empty stack.\n", startToken.Line, startToken.Column)))
+		return nilIfNothingToDo(state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot evaluate 'if' on an empty stack.\n", startToken.Line, startToken.Column)))
 	}
 
 	// Evaluate condition
@@ -1044,7 +1044,7 @@ func (state *EvalState) processIfBlock(ifBlock *MShellParseIfBlock, frame *Evalu
 	case MShellInt:
 		condition = condTyped.Value == 0
 	default:
-		return stepOf(state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a boolean or integer for if condition, received a %s.\n", startToken.Line, startToken.Column, condObj.TypeName())))
+		return nilIfNothingToDo(state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a boolean or integer for if condition, received a %s.\n", startToken.Line, startToken.Column, condObj.TypeName())))
 	}
 
 	if condition {
@@ -1071,18 +1071,18 @@ func (state *EvalState) processIfBlock(ifBlock *MShellParseIfBlock, frame *Evalu
 		callStackItem := CallStackItem{MShellParseItem: ifBlock, Name: "else-if-condition", CallStackType: CALLSTACKIF}
 		result := state.evaluateItems(elseIf.Condition, stack, *context, definitions, callStackItem)
 		if !result.Success || result.ExitCalled {
-			return stepOf(result)
+			return nilIfNothingToDo(result)
 		}
 		if result.BreakNum > 0 {
-			return stepOf(state.FailWithMessage("Encountered break within else-if condition.\n"))
+			return nilIfNothingToDo(state.FailWithMessage("Encountered break within else-if condition.\n"))
 		}
 		if result.Continue {
-			return stepOf(state.FailWithMessage("Encountered continue within else-if condition.\n"))
+			return nilIfNothingToDo(state.FailWithMessage("Encountered continue within else-if condition.\n"))
 		}
 
 		elseIfCondObj, err := stack.Pop()
 		if err != nil {
-			return stepOf(state.FailWithMessage(fmt.Sprintf("%d:%d: Found an empty stack when evaluating else-if condition.\n", startToken.Line, startToken.Column)))
+			return nilIfNothingToDo(state.FailWithMessage(fmt.Sprintf("%d:%d: Found an empty stack when evaluating else-if condition.\n", startToken.Line, startToken.Column)))
 		}
 
 		var elseIfCondition bool
@@ -1092,7 +1092,7 @@ func (state *EvalState) processIfBlock(ifBlock *MShellParseIfBlock, frame *Evalu
 		case MShellInt:
 			elseIfCondition = elseIfCondTyped.Value == 0
 		default:
-			return stepOf(state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a boolean or integer for else-if condition, received a %s.\n", startToken.Line, startToken.Column, elseIfCondObj.TypeName())))
+			return nilIfNothingToDo(state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a boolean or integer for else-if condition, received a %s.\n", startToken.Line, startToken.Column, elseIfCondObj.TypeName())))
 		}
 
 		if elseIfCondition {
@@ -1142,13 +1142,13 @@ func (state *EvalState) processMatchBlock(matchBlock *MShellParseMatchBlock, fra
 
 	subject, err := stack.Peek()
 	if err != nil {
-		return stepOf(state.emptyMatchSubjectFailure(matchBlock))
+		return nilIfNothingToDo(state.emptyMatchSubjectFailure(matchBlock))
 	}
 
 	for _, arm := range matchBlock.Arms {
 		matched, bindings, result := state.matchPattern(arm.Pattern, subject, startToken)
 		if !result.Success {
-			return stepOf(result)
+			return nilIfNothingToDo(result)
 		}
 		if matched {
 			if arm.Consume {
@@ -1172,7 +1172,7 @@ func (state *EvalState) processMatchBlock(matchBlock *MShellParseMatchBlock, fra
 		}
 	}
 
-	return stepOf(state.matchBlockFailure(matchBlock))
+	return nilIfNothingToDo(state.matchBlockFailure(matchBlock))
 }
 
 func (state *EvalState) matchBlockFailure(matchBlock *MShellParseMatchBlock) EvalResult {
@@ -1542,12 +1542,12 @@ func (state *EvalState) processTokenToken(t *Token, frame *EvaluationFrame, fram
 			return state.callDefinition(def, *t, frame, frames)
 		}
 		// Not a definition - process as regular literal
-		return stepOf(state.evaluateBuiltinToken(*t, frame.Stack, frame.Context, frame.Definitions, frame.CallStackItem))
+		return nilIfNothingToDo(state.evaluateBuiltinToken(*t, frame.Stack, frame.Context, frame.Definitions, frame.CallStackItem))
 	}
 
 	if t.Type == BREAK {
 		if state.LoopDepth == 0 {
-			return stepOf(state.FailWithMessage(fmt.Sprintf("%d:%d: break used outside of loop.\n", t.Line, t.Column)))
+			return nilIfNothingToDo(state.FailWithMessage(fmt.Sprintf("%d:%d: break used outside of loop.\n", t.Line, t.Column)))
 		}
 		// Handle break by unwinding frames
 		state.handleBreak(frames, 1)
@@ -1556,7 +1556,7 @@ func (state *EvalState) processTokenToken(t *Token, frame *EvaluationFrame, fram
 
 	if t.Type == CONTINUE {
 		if state.LoopDepth == 0 {
-			return stepOf(state.FailWithMessage(fmt.Sprintf("%d:%d: continue used outside of loop.\n", t.Line, t.Column)))
+			return nilIfNothingToDo(state.FailWithMessage(fmt.Sprintf("%d:%d: continue used outside of loop.\n", t.Line, t.Column)))
 		}
 		// Handle continue by unwinding to loop
 		state.handleContinue(frames)
@@ -1574,7 +1574,7 @@ func (state *EvalState) processTokenToken(t *Token, frame *EvaluationFrame, fram
 	// Direct dispatch into evaluateBuiltinToken — avoids per-token slice allocation.
 	// Preserve the call stack type from the frame.
 	callStackItem := CallStackItem{MShellParseItem: nil, Name: "token", CallStackType: frame.CallStackItem.CallStackType}
-	return stepOf(state.evaluateBuiltinToken(*t, stack, *context, definitions, callStackItem))
+	return nilIfNothingToDo(state.evaluateBuiltinToken(*t, stack, *context, definitions, callStackItem))
 }
 
 // processLoop handles the loop construct
@@ -1585,16 +1585,16 @@ func (state *EvalState) processLoop(t Token, frame *EvaluationFrame, frames *[]E
 
 	obj, err := stack.Pop()
 	if err != nil {
-		return stepOf(state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do a loop on an empty stack.\n", t.Line, t.Column)))
+		return nilIfNothingToDo(state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do a loop on an empty stack.\n", t.Line, t.Column)))
 	}
 
 	quotation, ok := obj.(*MShellQuotation)
 	if !ok {
-		return stepOf(state.FailWithMessage(fmt.Sprintf("%d:%d: Argument for loop expected to be a quotation, received a %s\n", t.Line, t.Column, obj.TypeName())))
+		return nilIfNothingToDo(state.FailWithMessage(fmt.Sprintf("%d:%d: Argument for loop expected to be a quotation, received a %s\n", t.Line, t.Column, obj.TypeName())))
 	}
 
 	if len(quotation.Tokens) == 0 {
-		return stepOf(state.FailWithMessage(fmt.Sprintf("%d:%d: Loop quotation needs a minimum of one token.\n", t.Line, t.Column)))
+		return nilIfNothingToDo(state.FailWithMessage(fmt.Sprintf("%d:%d: Loop quotation needs a minimum of one token.\n", t.Line, t.Column)))
 	}
 
 	// Build loop context. BuildExecutionContext handles all the quotation's
@@ -1602,7 +1602,7 @@ func (state *EvalState) processLoop(t Token, frame *EvaluationFrame, frames *[]E
 	// context's streams when the quotation has none of its own.
 	loopContext, err := quotation.BuildExecutionContext(context)
 	if err != nil {
-		return stepOf(state.FailWithMessage(err.Error()))
+		return nilIfNothingToDo(state.FailWithMessage(err.Error()))
 	}
 	loopContext.Variables = context.Variables
 
@@ -1638,17 +1638,17 @@ func (state *EvalState) processIff(t Token, frame *EvaluationFrame, frames *[]Ev
 	iff_name := "iff"
 	firstObj, err := stack.Pop()
 	if err != nil {
-		return stepOf(state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do an '%s' on a stack with only two items.\n", t.Line, t.Column, iff_name)))
+		return nilIfNothingToDo(state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do an '%s' on a stack with only two items.\n", t.Line, t.Column, iff_name)))
 	}
 
 	firstQuote, ok := firstObj.(*MShellQuotation)
 	if !ok {
-		return stepOf(state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a quotation on top of stack for %s, received a %s.\n", t.Line, t.Column, iff_name, firstObj.TypeName())))
+		return nilIfNothingToDo(state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a quotation on top of stack for %s, received a %s.\n", t.Line, t.Column, iff_name, firstObj.TypeName())))
 	}
 
 	secondObj, err := stack.Pop()
 	if err != nil {
-		return stepOf(state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do an '%s' on a stack with only one item.\n", t.Line, t.Column, iff_name)))
+		return nilIfNothingToDo(state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do an '%s' on a stack with only one item.\n", t.Line, t.Column, iff_name)))
 	}
 
 	var trueQuote *MShellQuotation
@@ -1662,7 +1662,7 @@ func (state *EvalState) processIff(t Token, frame *EvaluationFrame, frames *[]Ev
 
 		thrirdObj, err := stack.Pop()
 		if err != nil {
-			return stepOf(state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do an '%s' on a stack with only two quotes.\n", t.Line, t.Column, iff_name)))
+			return nilIfNothingToDo(state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do an '%s' on a stack with only two quotes.\n", t.Line, t.Column, iff_name)))
 		}
 
 		switch thirdTyped := thrirdObj.(type) {
@@ -1671,7 +1671,7 @@ func (state *EvalState) processIff(t Token, frame *EvaluationFrame, frames *[]Ev
 		case MShellInt:
 			condition = thirdTyped.Value == 0
 		default:
-			return stepOf(state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a boolean or integer for %s condition, received a %s.\n", t.Line, t.Column, iff_name, thrirdObj.TypeName())))
+			return nilIfNothingToDo(state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a boolean or integer for %s condition, received a %s.\n", t.Line, t.Column, iff_name, thrirdObj.TypeName())))
 		}
 	case MShellBool:
 		trueQuote = firstQuote
@@ -1680,7 +1680,7 @@ func (state *EvalState) processIff(t Token, frame *EvaluationFrame, frames *[]Ev
 		trueQuote = firstQuote
 		condition = secondTyped.Value == 0
 	default:
-		return stepOf(state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a quotation or boolean for %s, received a %s.\n", t.Line, t.Column, iff_name, secondObj.TypeName())))
+		return nilIfNothingToDo(state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a quotation or boolean for %s, received a %s.\n", t.Line, t.Column, iff_name, secondObj.TypeName())))
 	}
 
 	var quoteToExecute *MShellQuotation
@@ -1693,7 +1693,7 @@ func (state *EvalState) processIff(t Token, frame *EvaluationFrame, frames *[]Ev
 	if quoteToExecute != nil {
 		qContext, err := quoteToExecute.BuildExecutionContext(context)
 		if err != nil {
-			return stepOf(state.FailWithMessage(err.Error()))
+			return nilIfNothingToDo(state.FailWithMessage(err.Error()))
 		}
 
 		callStackItem := CallStackItem{MShellParseItem: quoteToExecute, Name: "Quote", CallStackType: CALLSTACKQUOTE}
@@ -1723,7 +1723,7 @@ func (state *EvalState) processIndexerList(indexerList *MShellIndexerList, frame
 	// Fall back to old Evaluate for indexer handling
 	callStackItem := CallStackItem{MShellParseItem: nil, Name: "indexer", CallStackType: CALLSTACKFILE}
 	result := state.evaluateItems([]MShellParseItem{indexerList}, stack, *context, definitions, callStackItem)
-	return stepOf(result)
+	return nilIfNothingToDo(result)
 }
 
 // processVarstoreList handles variable storage
@@ -1733,9 +1733,9 @@ func (state *EvalState) processVarstoreList(varstoreList MShellVarstoreList, fra
 	// First check lengths
 	if len(varstoreList.VarStores) > len(*stack) {
 		if len(varstoreList.VarStores) == 1 {
-			return stepOf(state.FailWithMessage(fmt.Sprintf("%d:%d: Nothing on the stack to store into variable %s.\n", varstoreList.GetStartToken().Line, varstoreList.GetStartToken().Column, varstoreList.VarStores[0].Lexeme)))
+			return nilIfNothingToDo(state.FailWithMessage(fmt.Sprintf("%d:%d: Nothing on the stack to store into variable %s.\n", varstoreList.GetStartToken().Line, varstoreList.GetStartToken().Column, varstoreList.VarStores[0].Lexeme)))
 		} else {
-			return stepOf(state.FailWithMessage(fmt.Sprintf("%d:%d: Not enough items on stack (%d) to store into %d variables (%s).\n", varstoreList.GetStartToken().Line, varstoreList.GetStartToken().Column, len(*stack), len(varstoreList.VarStores), varstoreList.DebugString())))
+			return nilIfNothingToDo(state.FailWithMessage(fmt.Sprintf("%d:%d: Not enough items on stack (%d) to store into %d variables (%s).\n", varstoreList.GetStartToken().Line, varstoreList.GetStartToken().Column, len(*stack), len(varstoreList.VarStores), varstoreList.DebugString())))
 		}
 	}
 
@@ -1785,7 +1785,7 @@ func (state *EvalState) processGetter(getter *MShellGetter, frame *EvaluationFra
 
 	obj, err := stack.Pop()
 	if err != nil {
-		return stepOf(state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do ':' operation on an empty stack.\n", getter.Token.Line, getter.Token.Column)))
+		return nilIfNothingToDo(state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do ':' operation on an empty stack.\n", getter.Token.Line, getter.Token.Column)))
 	}
 
 	var value MShellObject
@@ -1801,7 +1801,7 @@ func (state *EvalState) processGetter(getter *MShellGetter, frame *EvaluationFra
 	case *MShellGridView:
 		value, ok = gridViewColumnAsList(objTyped, getter.String)
 	default:
-		return stepOf(state.FailWithMessage(fmt.Sprintf("%d:%d: The stack parameter for ':' is not a dictionary, GridRow, Grid, or GridView. Found a %s (%s). Key: %s\n", getter.Token.Line, getter.Token.Column, obj.TypeName(), obj.DebugString(), getter.String)))
+		return nilIfNothingToDo(state.FailWithMessage(fmt.Sprintf("%d:%d: The stack parameter for ':' is not a dictionary, GridRow, Grid, or GridView. Found a %s (%s). Key: %s\n", getter.Token.Line, getter.Token.Column, obj.TypeName(), obj.DebugString(), getter.String)))
 	}
 
 	if !ok {
@@ -12919,7 +12919,7 @@ func (state *EvalState) evalFalseToken(t *Token, stack *MShellStack, context *Ex
 func (state *EvalState) evalIntegerToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
 	intVal, err := parseIntLiteral(t.Lexeme)
 	if err != nil {
-		return state.failStep(fmt.Sprintf("%d:%d: Error parsing integer: %s\n", t.Line, t.Column, err.Error()))
+		return state.failPtr(fmt.Sprintf("%d:%d: Error parsing integer: %s\n", t.Line, t.Column, err.Error()))
 	}
 
 	stack.Push(MShellInt{intVal})
@@ -12930,7 +12930,7 @@ func (state *EvalState) evalIntegerToken(t *Token, stack *MShellStack, context *
 func (state *EvalState) evalStringToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
 	parsedString, err := ParseRawString(t.Lexeme)
 	if err != nil {
-		return state.failStep(fmt.Sprintf("%d:%d: Error parsing string: %s\n", t.Line, t.Column, err.Error()))
+		return state.failPtr(fmt.Sprintf("%d:%d: Error parsing string: %s\n", t.Line, t.Column, err.Error()))
 	}
 	stack.Push(MShellString{parsedString})
 	return nil
@@ -12946,12 +12946,12 @@ func (state *EvalState) evalSingleQuoteStringToken(t *Token, stack *MShellStack,
 func (state *EvalState) evalPlusToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
 	obj1, err := stack.Pop()
 	if err != nil {
-		return state.failStep(fmt.Sprintf("%d:%d: Cannot do '+' operation on an empty stack.\n", t.Line, t.Column))
+		return state.failPtr(fmt.Sprintf("%d:%d: Cannot do '+' operation on an empty stack.\n", t.Line, t.Column))
 	}
 
 	obj2, err := stack.Pop()
 	if err != nil {
-		return state.failStep(fmt.Sprintf("%d:%d: Cannot do '+' operation on a stack with only one item.\n", t.Line, t.Column))
+		return state.failPtr(fmt.Sprintf("%d:%d: Cannot do '+' operation on a stack with only one item.\n", t.Line, t.Column))
 	}
 
 	switch obj1.(type) {
@@ -12960,14 +12960,14 @@ func (state *EvalState) evalPlusToken(t *Token, stack *MShellStack, context *Exe
 		case MShellInt:
 			stack.Push(MShellInt{obj2.(MShellInt).Value + obj1.(MShellInt).Value})
 		default:
-			return state.failStep(fmt.Sprintf("%d:%d: Cannot add an integer to a %s (%s). Use 'toFloat' / 'toInt' to convert explicitly — '+' does not coerce numeric types.\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
+			return state.failPtr(fmt.Sprintf("%d:%d: Cannot add an integer to a %s (%s). Use 'toFloat' / 'toInt' to convert explicitly — '+' does not coerce numeric types.\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
 		}
 	case MShellFloat:
 		switch obj2.(type) {
 		case MShellFloat:
 			stack.Push(MShellFloat{obj2.(MShellFloat).Value + obj1.(MShellFloat).Value})
 		default:
-			return state.failStep(fmt.Sprintf("%d:%d: Cannot add a float to a %s. Use 'toFloat' / 'toInt' to convert explicitly — '+' does not coerce numeric types.\n", t.Line, t.Column, obj2.TypeName()))
+			return state.failPtr(fmt.Sprintf("%d:%d: Cannot add a float to a %s. Use 'toFloat' / 'toInt' to convert explicitly — '+' does not coerce numeric types.\n", t.Line, t.Column, obj2.TypeName()))
 		}
 	case MShellString:
 		switch obj2.(type) {
@@ -12976,7 +12976,7 @@ func (state *EvalState) evalPlusToken(t *Token, stack *MShellStack, context *Exe
 		case MShellLiteral:
 			stack.Push(MShellString{obj2.(MShellLiteral).LiteralText + obj1.(MShellString).Content})
 		default:
-			return state.failStep(fmt.Sprintf("%d:%d: Cannot add a string ('%s') to a %s (%s).\n", t.Line, t.Column, obj1.(MShellString).Content, obj2.TypeName(), obj2.DebugString()))
+			return state.failPtr(fmt.Sprintf("%d:%d: Cannot add a string ('%s') to a %s (%s).\n", t.Line, t.Column, obj1.(MShellString).Content, obj2.TypeName(), obj2.DebugString()))
 		}
 	case MShellLiteral:
 		switch obj2.(type) {
@@ -12985,7 +12985,7 @@ func (state *EvalState) evalPlusToken(t *Token, stack *MShellStack, context *Exe
 		case MShellLiteral:
 			stack.Push(MShellString{obj2.(MShellLiteral).LiteralText + obj1.(MShellLiteral).LiteralText})
 		default:
-			return state.failStep(fmt.Sprintf("%d:%d: Cannot add a literal (%s) to a %s.\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName()))
+			return state.failPtr(fmt.Sprintf("%d:%d: Cannot add a literal (%s) to a %s.\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName()))
 		}
 	case *MShellList:
 		switch obj2.(type) {
@@ -12995,7 +12995,7 @@ func (state *EvalState) evalPlusToken(t *Token, stack *MShellStack, context *Exe
 			copy(newList.Items[len(obj2.(*MShellList).Items):], obj1.(*MShellList).Items)
 			stack.Push(newList)
 		default:
-			return state.failStep(fmt.Sprintf("%d:%d: Cannot add a list to a %s.\n", t.Line, t.Column, obj2.TypeName()))
+			return state.failPtr(fmt.Sprintf("%d:%d: Cannot add a list to a %s.\n", t.Line, t.Column, obj2.TypeName()))
 		}
 	case MShellPath:
 		switch obj2.(type) {
@@ -13003,21 +13003,21 @@ func (state *EvalState) evalPlusToken(t *Token, stack *MShellStack, context *Exe
 			// Do string join, not path join. Concat the strings
 			stack.Push(MShellPath{obj2.(MShellPath).Path + obj1.(MShellPath).Path})
 		default:
-			return state.failStep(fmt.Sprintf("%d:%d: Cannot add a path to a %s.\n", t.Line, t.Column, obj2.TypeName()))
+			return state.failPtr(fmt.Sprintf("%d:%d: Cannot add a path to a %s.\n", t.Line, t.Column, obj2.TypeName()))
 		}
 	case *MShellGrid, *MShellGridView:
 		switch obj2.(type) {
 		case *MShellGrid, *MShellGridView:
 			newGrid, err := concatGrids(obj2, obj1)
 			if err != nil {
-				return state.failStep(fmt.Sprintf("%d:%d: %s", t.Line, t.Column, err.Error()))
+				return state.failPtr(fmt.Sprintf("%d:%d: %s", t.Line, t.Column, err.Error()))
 			}
 			stack.Push(newGrid)
 		default:
-			return state.failStep(fmt.Sprintf("%d:%d: Cannot add a %s to a %s.\n", t.Line, t.Column, obj1.TypeName(), obj2.TypeName()))
+			return state.failPtr(fmt.Sprintf("%d:%d: Cannot add a %s to a %s.\n", t.Line, t.Column, obj1.TypeName(), obj2.TypeName()))
 		}
 	default:
-		return state.failStep(fmt.Sprintf("%d:%d: Cannot apply '+' between a %s and a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
+		return state.failPtr(fmt.Sprintf("%d:%d: Cannot apply '+' between a %s and a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
 	}
 	return nil
 }
@@ -13026,12 +13026,12 @@ func (state *EvalState) evalPlusToken(t *Token, stack *MShellStack, context *Exe
 func (state *EvalState) evalMinusToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
 	obj1, err := stack.Pop()
 	if err != nil {
-		return state.failStep(fmt.Sprintf("%d:%d: Cannot do '-' operation on an empty stack.\n", t.Line, t.Column))
+		return state.failPtr(fmt.Sprintf("%d:%d: Cannot do '-' operation on an empty stack.\n", t.Line, t.Column))
 	}
 
 	obj2, err := stack.Pop()
 	if err != nil {
-		return state.failStep(fmt.Sprintf("%d:%d: Cannot do '-' operation on a stack with only one item.\n", t.Line, t.Column))
+		return state.failPtr(fmt.Sprintf("%d:%d: Cannot do '-' operation on a stack with only one item.\n", t.Line, t.Column))
 	}
 
 	switch obj1.(type) {
@@ -13040,14 +13040,14 @@ func (state *EvalState) evalMinusToken(t *Token, stack *MShellStack, context *Ex
 		case MShellInt:
 			stack.Push(MShellInt{obj2.(MShellInt).Value - obj1.(MShellInt).Value})
 		default:
-			return state.failStep(fmt.Sprintf("%d:%d: Cannot subtract an integer from a %s. Use 'toFloat' / 'toInt' to convert explicitly — '-' does not coerce numeric types.\n", t.Line, t.Column, obj2.TypeName()))
+			return state.failPtr(fmt.Sprintf("%d:%d: Cannot subtract an integer from a %s. Use 'toFloat' / 'toInt' to convert explicitly — '-' does not coerce numeric types.\n", t.Line, t.Column, obj2.TypeName()))
 		}
 	case MShellFloat:
 		switch obj2.(type) {
 		case MShellFloat:
 			stack.Push(MShellFloat{obj2.(MShellFloat).Value - obj1.(MShellFloat).Value})
 		default:
-			return state.failStep(fmt.Sprintf("%d:%d: Cannot subtract a float from a %s. Use 'toFloat' / 'toInt' to convert explicitly — '-' does not coerce numeric types.\n", t.Line, t.Column, obj2.TypeName()))
+			return state.failPtr(fmt.Sprintf("%d:%d: Cannot subtract a float from a %s. Use 'toFloat' / 'toInt' to convert explicitly — '-' does not coerce numeric types.\n", t.Line, t.Column, obj2.TypeName()))
 		}
 	case *MShellDateTime:
 		switch obj2.(type) {
@@ -13056,10 +13056,10 @@ func (state *EvalState) evalMinusToken(t *Token, stack *MShellStack, context *Ex
 			days := obj2.(*MShellDateTime).Time.Sub(obj1.(*MShellDateTime).Time).Hours() / 24
 			stack.Push(MShellFloat{days})
 		default:
-			return state.failStep(fmt.Sprintf("%d:%d: Cannot subtract a %s from a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
+			return state.failPtr(fmt.Sprintf("%d:%d: Cannot subtract a %s from a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
 		}
 	default:
-		return state.failStep(fmt.Sprintf("%d:%d: Cannot apply '-' to a %s and %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
+		return state.failPtr(fmt.Sprintf("%d:%d: Cannot apply '-' to a %s and %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
 	}
 	return nil
 }
@@ -13068,7 +13068,7 @@ func (state *EvalState) evalMinusToken(t *Token, stack *MShellStack, context *Ex
 func (state *EvalState) evalNotToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
 	obj, err := stack.Pop()
 	if err != nil {
-		return state.failStep(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
+		return state.failPtr(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
 	}
 
 	switch objTyped := obj.(type) {
@@ -13081,7 +13081,7 @@ func (state *EvalState) evalNotToken(t *Token, stack *MShellStack, context *Exec
 			stack.Push(MShellBool{true})
 		}
 	default:
-		return state.failStep(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s.\n", t.Line, t.Column, t.Lexeme, obj.TypeName()))
+		return state.failPtr(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s.\n", t.Line, t.Column, t.Lexeme, obj.TypeName()))
 	}
 	return nil
 }
@@ -13090,12 +13090,12 @@ func (state *EvalState) evalNotToken(t *Token, stack *MShellStack, context *Exec
 func (state *EvalState) evalGreaterLessEqualToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
 	obj1, err := stack.Pop()
 	if err != nil {
-		return state.failStep(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
+		return state.failPtr(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
 	}
 
 	obj2, err := stack.Pop()
 	if err != nil {
-		return state.failStep(fmt.Sprintf("%d:%d: Cannot do '%s' operation on a stack with only one item.\n", t.Line, t.Column, t.Lexeme))
+		return state.failPtr(fmt.Sprintf("%d:%d: Cannot do '%s' operation on a stack with only one item.\n", t.Line, t.Column, t.Lexeme))
 	}
 
 	if obj1.IsNumeric() && obj2.IsNumeric() {
@@ -13118,7 +13118,7 @@ func (state *EvalState) evalGreaterLessEqualToken(t *Token, stack *MShellStack, 
 				stack.Push(MShellBool{obj2Flt.Value <= obj1Flt.Value})
 			}
 		default:
-			return state.failStep(fmt.Sprintf("%d:%d: Cannot apply '%s' across numeric types %s and %s. Use 'toFloat' / 'toInt' to convert explicitly.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
+			return state.failPtr(fmt.Sprintf("%d:%d: Cannot apply '%s' across numeric types %s and %s. Use 'toFloat' / 'toInt' to convert explicitly.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
 		}
 	} else {
 
@@ -13132,7 +13132,7 @@ func (state *EvalState) evalGreaterLessEqualToken(t *Token, stack *MShellStack, 
 				stack.Push(MShellBool{obj2Date.Time.Before(obj1Date.Time) || obj2Date.Time.Equal(obj1Date.Time)})
 			}
 		} else {
-			return state.failStep(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s and a %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
+			return state.failPtr(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s and a %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
 		}
 	}
 	return nil
@@ -13143,12 +13143,12 @@ func (state *EvalState) evalGreaterLessToken(t *Token, stack *MShellStack, conte
 	// This can either be normal comparison for numerics, or it's a redirect on a list or quotation.
 	obj1, err := stack.Pop()
 	if err != nil {
-		return state.failStep(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
+		return state.failPtr(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
 	}
 
 	obj2, err := stack.Pop()
 	if err != nil {
-		return state.failStep(fmt.Sprintf("%d:%d: Cannot do '%s' operation on a stack with only one item.\n", t.Line, t.Column, t.Lexeme))
+		return state.failPtr(fmt.Sprintf("%d:%d: Cannot do '%s' operation on a stack with only one item.\n", t.Line, t.Column, t.Lexeme))
 	}
 
 	if obj1.IsNumeric() && obj2.IsNumeric() {
@@ -13171,19 +13171,19 @@ func (state *EvalState) evalGreaterLessToken(t *Token, stack *MShellStack, conte
 				stack.Push(MShellBool{obj2Flt.Value < obj1Flt.Value})
 			}
 		default:
-			return state.failStep(fmt.Sprintf("%d:%d: Cannot apply '%s' across numeric types %s and %s. Use 'toFloat' / 'toInt' to convert explicitly.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
+			return state.failPtr(fmt.Sprintf("%d:%d: Cannot apply '%s' across numeric types %s and %s. Use 'toFloat' / 'toInt' to convert explicitly.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
 		}
 	} else {
 		if t.Type == GREATERTHAN {
 			if desc := stdoutDestinationDescOf(obj2); desc != "" {
-				return state.failStep(fmt.Sprintf("%d:%d: Cannot apply '%s': stdout already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+				return state.failPtr(fmt.Sprintf("%d:%d: Cannot apply '%s': stdout already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
 			}
 		}
 		switch obj1.(type) {
 		case MShellString:
 			path := obj1.(MShellString).Content
 			if containsNullByte(path) {
-				return state.failStep(fmt.Sprintf("%d:%d: Found a null byte in the redirection file path. This is almost certainly not intended. You may have built the file name from UTF-16. Please ensure that your string is UTF-8 for the most predictable results.\n", t.Line, t.Column))
+				return state.failPtr(fmt.Sprintf("%d:%d: Found a null byte in the redirection file path. This is almost certainly not intended. You may have built the file name from UTF-16. Please ensure that your string is UTF-8 for the most predictable results.\n", t.Line, t.Column))
 			}
 			switch obj2 := obj2.(type) {
 			case *MShellList:
@@ -13203,9 +13203,9 @@ func (state *EvalState) evalGreaterLessToken(t *Token, stack *MShellStack, conte
 				}
 				stack.Push(obj2)
 			case *MShellPipe:
-				return state.failStep(fmt.Sprintf("%d:%d: Cannot redirect a string (%s) to a Pipe (%s). Add the redirection to the final item in the pipeline.\n", t.Line, t.Column, obj1.DebugString(), obj2.DebugString()))
+				return state.failPtr(fmt.Sprintf("%d:%d: Cannot redirect a string (%s) to a Pipe (%s). Add the redirection to the final item in the pipeline.\n", t.Line, t.Column, obj1.DebugString(), obj2.DebugString()))
 			default:
-				return state.failStep(fmt.Sprintf("%d:%d: Cannot redirect a string (%s) to a %s (%s).\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
+				return state.failPtr(fmt.Sprintf("%d:%d: Cannot redirect a string (%s) to a %s (%s).\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
 			}
 		case MShellBinary:
 			if t.Type == LESSTHAN {
@@ -13223,17 +13223,17 @@ func (state *EvalState) evalGreaterLessToken(t *Token, stack *MShellStack, conte
 					obj2.(*MShellQuotation).StandardInputFile = ""
 					stack.Push(obj2)
 				case *MShellPipe:
-					return state.failStep(fmt.Sprintf("%d:%d: Cannot redirect binary data (%s) to a Pipe (%s). Add the redirection to the final item in the pipeline.\n", t.Line, t.Column, obj1.DebugString(), obj2.DebugString()))
+					return state.failPtr(fmt.Sprintf("%d:%d: Cannot redirect binary data (%s) to a Pipe (%s). Add the redirection to the final item in the pipeline.\n", t.Line, t.Column, obj1.DebugString(), obj2.DebugString()))
 				default:
-					return state.failStep(fmt.Sprintf("%d:%d: Cannot redirect binary data (%s) to a %s (%s).\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
+					return state.failPtr(fmt.Sprintf("%d:%d: Cannot redirect binary data (%s) to a %s (%s).\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
 				}
 			} else {
-				return state.failStep(fmt.Sprintf("%d:%d: Cannot redirect binary data (%s) to a %s (%s). Use '<' for input redirection.\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
+				return state.failPtr(fmt.Sprintf("%d:%d: Cannot redirect binary data (%s) to a %s (%s). Use '<' for input redirection.\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
 			}
 		case MShellLiteral:
 			path := obj1.(MShellLiteral).LiteralText
 			if containsNullByte(path) {
-				return state.failStep(fmt.Sprintf("%d:%d: Found a null byte in the redirection file path. This is almost certainly not intended. You may have built the file name from UTF-16. Please ensure that your string is UTF-8 for the most predictable results.\n", t.Line, t.Column))
+				return state.failPtr(fmt.Sprintf("%d:%d: Found a null byte in the redirection file path. This is almost certainly not intended. You may have built the file name from UTF-16. Please ensure that your string is UTF-8 for the most predictable results.\n", t.Line, t.Column))
 			}
 			switch obj2 := obj2.(type) {
 			case *MShellList:
@@ -13252,13 +13252,13 @@ func (state *EvalState) evalGreaterLessToken(t *Token, stack *MShellStack, conte
 					obj2.StandardInputContents = path
 				}
 			default:
-				return state.failStep(fmt.Sprintf("%d:%d: Cannot redirect a %s (%s) to a %s (%s).\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
+				return state.failPtr(fmt.Sprintf("%d:%d: Cannot redirect a %s (%s) to a %s (%s).\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
 			}
 
 		case MShellPath:
 			path := obj1.(MShellPath).Path
 			if containsNullByte(path) {
-				return state.failStep(fmt.Sprintf("%d:%d: Found a null byte in the redirection file path. This is almost certainly not intended. You may have built the file name from UTF-16. Please ensure that your string is UTF-8 for the most predictable results.\n", t.Line, t.Column))
+				return state.failPtr(fmt.Sprintf("%d:%d: Found a null byte in the redirection file path. This is almost certainly not intended. You may have built the file name from UTF-16. Please ensure that your string is UTF-8 for the most predictable results.\n", t.Line, t.Column))
 			}
 			switch obj2 := obj2.(type) {
 			case *MShellList:
@@ -13278,7 +13278,7 @@ func (state *EvalState) evalGreaterLessToken(t *Token, stack *MShellStack, conte
 				}
 				stack.Push(obj2)
 			default:
-				return state.failStep(fmt.Sprintf("%d:%d: Cannot redirect a path (%s) to a %s (%s).\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
+				return state.failPtr(fmt.Sprintf("%d:%d: Cannot redirect a path (%s) to a %s (%s).\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
 			}
 		case *MShellDateTime:
 			switch obj2.(type) {
@@ -13289,10 +13289,10 @@ func (state *EvalState) evalGreaterLessToken(t *Token, stack *MShellStack, conte
 					stack.Push(MShellBool{obj2.(*MShellDateTime).Time.Before(obj1.(*MShellDateTime).Time)})
 				}
 			default:
-				return state.failStep(fmt.Sprintf("%d:%d: Cannot %s a datetime (%s) to a %s (%s).\n", t.Line, t.Column, t.Lexeme, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
+				return state.failPtr(fmt.Sprintf("%d:%d: Cannot %s a datetime (%s) to a %s (%s).\n", t.Line, t.Column, t.Lexeme, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
 			}
 		default:
-			return state.failStep(fmt.Sprintf("%d:%d: Cannot do a %s operation with a %s (%s) and a %s (%s).\n", t.Line, t.Column, t.Lexeme, obj1.TypeName(), obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
+			return state.failPtr(fmt.Sprintf("%d:%d: Cannot do a %s operation with a %s (%s) and a %s (%s).\n", t.Line, t.Column, t.Lexeme, obj1.TypeName(), obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
 		}
 	}
 	return nil
@@ -13304,7 +13304,7 @@ func (state *EvalState) evalVarStoreToken(t *Token, stack *MShellStack, context 
 	varName := t.Lexeme[0 : len(t.Lexeme)-1] // Remove the trailing !
 
 	if err != nil {
-		return state.failStep(fmt.Sprintf("%d:%d: Nothing on stack to store into variable %s.\n", t.Line, t.Column, varName))
+		return state.failPtr(fmt.Sprintf("%d:%d: Nothing on stack to store into variable %s.\n", t.Line, t.Column, varName))
 	}
 
 	context.Variables[varName] = obj
@@ -13324,7 +13324,7 @@ func (state *EvalState) evalVarRetrieveToken(t *Token, stack *MShellStack, conte
 		for key := range context.Variables {
 			fmt.Fprintf(&message, "  %s\n", key)
 		}
-		return state.failStep(message.String())
+		return state.failPtr(message.String())
 	}
 	return nil
 }
@@ -13333,16 +13333,16 @@ func (state *EvalState) evalVarRetrieveToken(t *Token, stack *MShellStack, conte
 func (state *EvalState) evalEqualsToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
 	obj1, err := stack.Pop()
 	if err != nil {
-		return state.failStep(fmt.Sprintf("%d:%d: Cannot do '=' operation on an empty stack.\n", t.Line, t.Column))
+		return state.failPtr(fmt.Sprintf("%d:%d: Cannot do '=' operation on an empty stack.\n", t.Line, t.Column))
 	}
 	obj2, err := stack.Pop()
 	if err != nil {
-		return state.failStep(fmt.Sprintf("%d:%d: Cannot do '=' operation on a stack with only one item.\n", t.Line, t.Column))
+		return state.failPtr(fmt.Sprintf("%d:%d: Cannot do '=' operation on a stack with only one item.\n", t.Line, t.Column))
 	}
 
 	doesEqual, err := obj1.Equals(obj2)
 	if err != nil {
-		return state.failStep(fmt.Sprintf("%d:%d: Cannot compare '=' between %s (%s) and %s (%s): %s\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString(), obj2.TypeName(), obj2.DebugString(), err.Error()))
+		return state.failPtr(fmt.Sprintf("%d:%d: Cannot compare '=' between %s (%s) and %s (%s): %s\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString(), obj2.TypeName(), obj2.DebugString(), err.Error()))
 	}
 
 	stack.Push(MShellBool{doesEqual})
@@ -13353,7 +13353,7 @@ func (state *EvalState) evalEqualsToken(t *Token, stack *MShellStack, context *E
 func (state *EvalState) evalFloatToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
 	floatVal, err := strconv.ParseFloat(t.Lexeme, 64)
 	if err != nil {
-		return state.failStep(fmt.Sprintf("%d:%d: Error parsing float: %s\n", t.Line, t.Column, err.Error()))
+		return state.failPtr(fmt.Sprintf("%d:%d: Error parsing float: %s\n", t.Line, t.Column, err.Error()))
 	}
 	stack.Push(MShellFloat{floatVal})
 	return nil
@@ -13369,17 +13369,17 @@ func (state *EvalState) evalPathToken(t *Token, stack *MShellStack, context *Exe
 func (state *EvalState) evalNotEqualToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
 	obj1, err := stack.Pop()
 	if err != nil {
-		return state.failStep(fmt.Sprintf("%d:%d: Cannot do '!=' operation on an empty stack.\n", t.Line, t.Column))
+		return state.failPtr(fmt.Sprintf("%d:%d: Cannot do '!=' operation on an empty stack.\n", t.Line, t.Column))
 	}
 
 	obj2, err := stack.Pop()
 	if err != nil {
-		return state.failStep(fmt.Sprintf("%d:%d: Cannot do '!=' operation on a stack with only one item.\n", t.Line, t.Column))
+		return state.failPtr(fmt.Sprintf("%d:%d: Cannot do '!=' operation on a stack with only one item.\n", t.Line, t.Column))
 	}
 
 	doesEqual, err := obj1.Equals(obj2)
 	if err != nil {
-		return state.failStep(fmt.Sprintf("%d:%d: Cannot compare '!=' between %s and %s: %s\n", t.Line, t.Column, obj1.TypeName(), obj2.TypeName(), err.Error()))
+		return state.failPtr(fmt.Sprintf("%d:%d: Cannot compare '!=' between %s and %s: %s\n", t.Line, t.Column, obj1.TypeName(), obj2.TypeName(), err.Error()))
 	}
 
 	stack.Push(MShellBool{!doesEqual})
