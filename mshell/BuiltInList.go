@@ -160,6 +160,7 @@ var BuiltInList = map[string]struct{}{
 	"round": {},
 	"runtime": {},
 	"select": {},
+	"seq": {},
 	"set": {},
 	"setAt": {},
 	"setd": {},

@@ -8518,6 +8518,24 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					}
 
 					stack.Push(projectGridAllColumns(sourceGrid, permutation))
+				} else if t.Lexeme == "seq" {
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'seq' operation on an empty stack.\n", t.Line, t.Column))
+					}
+					countObj, ok := obj.(MShellInt)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: 'seq' requires an int, found a %s.\n", t.Line, t.Column, obj.TypeName()))
+					}
+					// Negative counts produce an empty list, matching the old std.msh definition.
+					count := max(countObj.Value, 0)
+					// The final length is known, so fill one slice of exactly that size
+					// instead of growing it with append.
+					newList := NewList(count)
+					for i := range newList.Items {
+						newList.Items[i] = MShellInt{i}
+					}
+					stack.Push(newList)
 				} else if t.Lexeme == "reverse" {
 					obj, err := stack.Pop()
 					if err != nil {

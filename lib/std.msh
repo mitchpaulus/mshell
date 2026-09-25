@@ -400,20 +400,6 @@ def zip ([a] [b] (a b -- c) -- [c])
     @accum
 end
 
-# Builds a sequence of length of input, starting at 0.
-def seq (int -- [int])
-    max!
-    0 current!
-    [] seq-accum! # Accumulator
-    (
-        @current @max >= (break) iff
-        @seq-accum @current append drop
-        @current 1 + current!
-    ) loop
-
-    @seq-accum
-end
-
 def repeat (a int -- [a])
     item!, count!
     @count seq (drop @item) map
