@@ -1785,13 +1785,13 @@ func (state *EvalState) processGetter(getter *MShellGetter, frame *EvaluationFra
 	return SimpleSuccess()
 }
 
-func (state *EvalState) EvaluateQuote(quotation MShellQuotation, stack *MShellStack, outerContext ExecuteContext, definitions []MShellDefinition) (EvalResult, error) {
+func (state *EvalState) EvaluateQuote(quotation *MShellQuotation, stack *MShellStack, outerContext ExecuteContext, definitions []MShellDefinition) (EvalResult, error) {
 	qContext, err := quotation.BuildExecutionContext(&outerContext)
-	defer qContext.Close()
 	if err != nil {
 		return EvalResult{}, err
 	}
-	callStackItem := CallStackItem{MShellParseItem: &quotation, Name: "Quote", CallStackType: CALLSTACKQUOTE}
+	defer qContext.Close()
+	callStackItem := CallStackItem{MShellParseItem: quotation, Name: "Quote", CallStackType: CALLSTACKQUOTE}
 	return state.evaluateItems(quotation.Tokens, stack, (*qContext), definitions, callStackItem), nil
 }
 
@@ -2105,7 +2105,7 @@ func (state *EvalState) mergeSortMShellByQuotation(t Token, items []MShellObject
 						cmpStack.Push(sorted_array[leftIndex])
 						cmpStack.Push(sorted_array[rightIndex])
 
-						result, err := state.EvaluateQuote(*quotation, &cmpStack, context, definitions)
+						result, err := state.EvaluateQuote(quotation, &cmpStack, context, definitions)
 						if err != nil {
 							return nil, state.FailWithMessage(err.Error())
 						}
@@ -2696,7 +2696,7 @@ func (state *EvalState) evaluateJoinKeys(t Token, side string, sourceGrid *MShel
 	for i, srcIdx := range sourceIndices {
 		row := &MShellGridRow{Grid: sourceGrid, RowIndex: srcIdx}
 		var qStack MShellStack = []MShellObject{row}
-		result, err := state.EvaluateQuote(*quote, &qStack, context, definitions)
+		result, err := state.EvaluateQuote(quote, &qStack, context, definitions)
 		if err != nil {
 			return nil, nil, state.FailWithMessage(err.Error())
 		}
@@ -9068,7 +9068,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 							var updateStack MShellStack
 							updateStack = []MShellObject{oldCol.Get(sourceRowIdx)}
 
-							result, err := state.EvaluateQuote(*quote, &updateStack, context, definitions)
+							result, err := state.EvaluateQuote(quote, &updateStack, context, definitions)
 							if err != nil {
 								return state.FailWithMessage(err.Error())
 							}
@@ -9101,7 +9101,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						var updateStack MShellStack
 						updateStack = []MShellObject{oldCol.Get(rowIdx)}
 
-						result, err := state.EvaluateQuote(*quote, &updateStack, context, definitions)
+						result, err := state.EvaluateQuote(quote, &updateStack, context, definitions)
 						if err != nil {
 							return state.FailWithMessage(err.Error())
 						}
@@ -9239,7 +9239,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						var deriveStack MShellStack
 						deriveStack = []MShellObject{row}
 
-						result, err := state.EvaluateQuote(*quote, &deriveStack, context, definitions)
+						result, err := state.EvaluateQuote(quote, &deriveStack, context, definitions)
 						if err != nil {
 							return state.FailWithMessage(err.Error())
 						}
@@ -9283,7 +9283,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 							var groupStack MShellStack
 							groupStack = []MShellObject{item}
 
-							result, err := state.EvaluateQuote(*quote, &groupStack, context, definitions)
+							result, err := state.EvaluateQuote(quote, &groupStack, context, definitions)
 							if err != nil {
 								return state.FailWithMessage(err.Error())
 							}
@@ -9409,7 +9409,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 							var aggStack MShellStack
 							aggStack = []MShellObject{groupView}
 
-							result, err := state.EvaluateQuote(*aggSpec.Quote, &aggStack, context, definitions)
+							result, err := state.EvaluateQuote(aggSpec.Quote, &aggStack, context, definitions)
 							if err != nil {
 								return state.FailWithMessage(err.Error())
 							}
@@ -9563,7 +9563,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 							var aggStack MShellStack
 							aggStack = []MShellObject{groupView}
 
-							result, err := state.EvaluateQuote(*quote, &aggStack, context, definitions)
+							result, err := state.EvaluateQuote(quote, &aggStack, context, definitions)
 							if err != nil {
 								return state.FailWithMessage(err.Error())
 							}
@@ -10339,7 +10339,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 						for _, item := range listObj.Items {
 							filterStack.Push(item)
-							result, err := state.EvaluateQuote(*fn, &filterStack, context, definitions)
+							result, err := state.EvaluateQuote(fn, &filterStack, context, definitions)
 							if err != nil {
 								return state.FailWithMessage(err.Error())
 							}
@@ -10370,7 +10370,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 						for key, value := range dictObj.Items {
 							filterStack.Push(value)
-							result, err := state.EvaluateQuote(*fn, &filterStack, context, definitions)
+							result, err := state.EvaluateQuote(fn, &filterStack, context, definitions)
 							if err != nil {
 								return state.FailWithMessage(err.Error())
 							}
@@ -10414,7 +10414,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 							var filterStack MShellStack
 							filterStack = []MShellObject{row}
-							result, err := state.EvaluateQuote(*fn, &filterStack, context, definitions)
+							result, err := state.EvaluateQuote(fn, &filterStack, context, definitions)
 							if err != nil {
 								return state.FailWithMessage(err.Error())
 							}
@@ -10465,7 +10465,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 						for i, item := range listObj.Items {
 							mapStack.Push(item)
-							result, err := state.EvaluateQuote(*fn, &mapStack, context, definitions)
+							result, err := state.EvaluateQuote(fn, &mapStack, context, definitions)
 							if err != nil {
 								return state.FailWithMessage(err.Error())
 							}
@@ -10486,7 +10486,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						} else {
 							stack.Push(maybe.obj) // Push the object inside the Maybe
 							preStackLen := len(*stack)
-							result, err := state.EvaluateQuote(*fn, stack, context, definitions)
+							result, err := state.EvaluateQuote(fn, stack, context, definitions)
 							if err != nil {
 								return state.FailWithMessage(err.Error())
 							}
@@ -10524,7 +10524,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 							var mapStack MShellStack
 							mapStack = []MShellObject{row}
 
-							result, err := state.EvaluateQuote(*fn, &mapStack, context, definitions)
+							result, err := state.EvaluateQuote(fn, &mapStack, context, definitions)
 							if err != nil {
 								return state.FailWithMessage(err.Error())
 							}
@@ -10617,7 +10617,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						for key, value := range dictObj.Items {
 							mapStack.Push(value)
 
-							result, err := state.EvaluateQuote(*fn, &mapStack, context, definitions)
+							result, err := state.EvaluateQuote(fn, &mapStack, context, definitions)
 							if err != nil {
 								return state.FailWithMessage(err.Error())
 							}
@@ -10665,7 +10665,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						stack.Push(maybe2.obj)
 						stack.Push(maybe1.obj)
 
-						result, err := state.EvaluateQuote(*fn, stack, context, definitions)
+						result, err := state.EvaluateQuote(fn, stack, context, definitions)
 						if err != nil {
 							return state.FailWithMessage(err.Error())
 						}
@@ -10700,7 +10700,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						for _, item := range obj2Typed.Items {
 							var filterStack MShellStack
 							filterStack = []MShellObject{item}
-							result, err := state.EvaluateQuote(*quote, &filterStack, context, definitions)
+							result, err := state.EvaluateQuote(quote, &filterStack, context, definitions)
 							if err != nil {
 								return state.FailWithMessage(err.Error())
 							}
@@ -10750,7 +10750,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 							var filterStack MShellStack
 							filterStack = []MShellObject{row}
-							result, err := state.EvaluateQuote(*quote, &filterStack, context, definitions)
+							result, err := state.EvaluateQuote(quote, &filterStack, context, definitions)
 							if err != nil {
 								return state.FailWithMessage(err.Error())
 							}
@@ -10800,7 +10800,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						for _, item := range obj2Typed.Items {
 							var eachStack MShellStack
 							eachStack = []MShellObject{item}
-							result, err := state.EvaluateQuote(*quote, &eachStack, context, definitions)
+							result, err := state.EvaluateQuote(quote, &eachStack, context, definitions)
 							if err != nil {
 								return state.FailWithMessage(err.Error())
 							}
@@ -10830,7 +10830,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 							var eachStack MShellStack
 							eachStack = []MShellObject{row}
-							result, err := state.EvaluateQuote(*quote, &eachStack, context, definitions)
+							result, err := state.EvaluateQuote(quote, &eachStack, context, definitions)
 							if err != nil {
 								return state.FailWithMessage(err.Error())
 							}
@@ -11083,7 +11083,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						stack.Push(maybeObj.obj) // Push the object inside the Maybe
 						preStackLen := len(*stack)
 
-						result, err := state.EvaluateQuote(*fn, stack, context, definitions)
+						result, err := state.EvaluateQuote(fn, stack, context, definitions)
 						if err != nil {
 							return state.FailWithMessage(err.Error())
 						}
@@ -11782,7 +11782,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					case *MShellQuotation:
 						if t.Lexeme == "and" {
 							if obj2.(MShellBool).Value {
-								result, err := state.EvaluateQuote(*obj1.(*MShellQuotation), stack, context, definitions)
+								result, err := state.EvaluateQuote(obj1.(*MShellQuotation), stack, context, definitions)
 								if err != nil {
 									return state.FailWithMessage(err.Error())
 								}
@@ -11811,7 +11811,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 								stack.Push(MShellBool{true})
 							} else {
 
-								result, err := state.EvaluateQuote(*obj1.(*MShellQuotation), stack, context, definitions)
+								result, err := state.EvaluateQuote(obj1.(*MShellQuotation), stack, context, definitions)
 								if err != nil {
 									return state.FailWithMessage(err.Error())
 								}
@@ -12178,7 +12178,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 				// False quote could be nil in the true only style of iff
 				if quoteToExecute != nil {
-					result, err := state.EvaluateQuote(*quoteToExecute, stack, context, definitions)
+					result, err := state.EvaluateQuote(quoteToExecute, stack, context, definitions)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
 					}
@@ -12879,7 +12879,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Argument for interpret expected to be a quotation, received a %s (%s)\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
 				}
 
-				result, err := state.EvaluateQuote(*quotation, stack, context, definitions)
+				result, err := state.EvaluateQuote(quotation, stack, context, definitions)
 				if err != nil {
 					return state.FailWithMessage(err.Error())
 				}
