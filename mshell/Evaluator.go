@@ -12465,86 +12465,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					return *result
 				}
 			} else if t.Type == LOOP { // Token Type
-				obj, err := stack.Pop()
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do a loop on an empty stack.\n", t.Line, t.Column))
-				}
-
-				quotation, ok := obj.(*MShellQuotation)
-				if !ok {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Argument for loop expected to be a quotation, received a %s\n", t.Line, t.Column, obj.TypeName()))
-				}
-
-				if len(quotation.Tokens) == 0 {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Loop quotation needs a minimum of one token.\n", t.Line, t.Column))
-				}
-
-				// BuildExecutionContext handles all the quotation's
-				// redirections (stdin, stdout, stderr, merges).
-				loopContext, err := quotation.BuildExecutionContext(&context)
-				if err != nil {
-					return state.FailWithMessage(err.Error())
-				}
-				loopContext.Variables = context.Variables
-				defer loopContext.Close()
-
-				maxLoops := 15000000
-				loopCount := 0
-				state.LoopDepth++
-
-				// breakDiff := 0
-
-				initialStackSize := len(*stack)
-
-				for loopCount < maxLoops {
-					result := state.evaluateItems(quotation.Tokens, stack, loopContext, definitions, CallStackItem{quotation, "quote", CALLSTACKQUOTE})
-					if !result.Success || result.ExitCalled {
-						return result
-					}
-
-					if len(*stack) != initialStackSize {
-						// If the stack size changed, we have an error.
-						var errorMessage strings.Builder
-						errorMessage.WriteString(fmt.Sprintf("%d:%d: Stack size changed from %d to %d in loop.\n", t.Line, t.Column, initialStackSize, len(*stack)))
-
-						errorMessage.WriteString("Stack:\n")
-						for i, item := range *stack {
-							errorMessage.WriteString(fmt.Sprintf("  %d: %s\n", i, item.DebugString()))
-						}
-
-						return state.FailWithMessage(errorMessage.String())
-					}
-
-					// Assert that we never get into state in which we have a breakNum > 0 and continue == true
-					if result.BreakNum > 0 && result.Continue {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot have both break and continue in the same loop.\n", t.Line, t.Column))
-					}
-
-					if result.BreakNum > 0 {
-						// breakDiff = state.LoopDepth - result.BreakNum
-						// if breakDiff >= 0 {
-						break
-						// }
-					}
-
-					if result.Continue {
-						continue
-					}
-
-					loopCount++
-				}
-
-				if loopCount == maxLoops {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Loop exceeded maximum number of iterations (%d).\n", t.Line, t.Column, maxLoops))
-				}
-
-				state.LoopDepth--
-				// // If we are breaking out of an inner loop to an outer loop (breakDiff - 1 > 0), then we need to return and go up the call stack.
-				// // Else just continue on with tokens after the loop.
-				// if breakDiff-1 > 0 {
-				// fmt.Fprintf(os.Stderr, "Breaking out of loop %d, loop depth %d\n", breakDiff-1, state.LoopDepth)
-				// return EvalResult{true, breakDiff - 1, 0, false}
-				// }
+				return state.evaluateLoopToken(&t, stack, &context, definitions)
 			} else if t.Type == BREAK { // Token Type
 				if state.LoopDepth == 0 {
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: break used outside of loop.\n", t.Line, t.Column))
@@ -12844,6 +12765,94 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 	return EvalResult{true, false, -1, 0, false}
 }
+
+// evaluateLoopToken runs a loop for the recursive evaluator (evaluateItems).
+// It is kept out of evaluateToken because its defer would otherwise add a
+// deferred-call check to every evaluateToken call.
+func (state *EvalState) evaluateLoopToken(t *Token, stack *MShellStack, context *ExecuteContext, definitions []MShellDefinition) EvalResult {
+	obj, err := stack.Pop()
+	if err != nil {
+		return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do a loop on an empty stack.\n", t.Line, t.Column))
+	}
+
+	quotation, ok := obj.(*MShellQuotation)
+	if !ok {
+		return state.FailWithMessage(fmt.Sprintf("%d:%d: Argument for loop expected to be a quotation, received a %s\n", t.Line, t.Column, obj.TypeName()))
+	}
+
+	if len(quotation.Tokens) == 0 {
+		return state.FailWithMessage(fmt.Sprintf("%d:%d: Loop quotation needs a minimum of one token.\n", t.Line, t.Column))
+	}
+
+	// BuildExecutionContext handles all the quotation's
+	// redirections (stdin, stdout, stderr, merges).
+	loopContext, err := quotation.BuildExecutionContext(context)
+	if err != nil {
+		return state.FailWithMessage(err.Error())
+	}
+	loopContext.Variables = context.Variables
+	defer loopContext.Close()
+
+	maxLoops := 15000000
+	loopCount := 0
+	state.LoopDepth++
+
+	// breakDiff := 0
+
+	initialStackSize := len(*stack)
+
+	for loopCount < maxLoops {
+		result := state.evaluateItems(quotation.Tokens, stack, loopContext, definitions, CallStackItem{quotation, "quote", CALLSTACKQUOTE})
+		if !result.Success || result.ExitCalled {
+			return result
+		}
+
+		if len(*stack) != initialStackSize {
+			// If the stack size changed, we have an error.
+			var errorMessage strings.Builder
+			errorMessage.WriteString(fmt.Sprintf("%d:%d: Stack size changed from %d to %d in loop.\n", t.Line, t.Column, initialStackSize, len(*stack)))
+
+			errorMessage.WriteString("Stack:\n")
+			for i, item := range *stack {
+				errorMessage.WriteString(fmt.Sprintf("  %d: %s\n", i, item.DebugString()))
+			}
+
+			return state.FailWithMessage(errorMessage.String())
+		}
+
+		// Assert that we never get into state in which we have a breakNum > 0 and continue == true
+		if result.BreakNum > 0 && result.Continue {
+			return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot have both break and continue in the same loop.\n", t.Line, t.Column))
+		}
+
+		if result.BreakNum > 0 {
+			// breakDiff = state.LoopDepth - result.BreakNum
+			// if breakDiff >= 0 {
+			break
+			// }
+		}
+
+		if result.Continue {
+			continue
+		}
+
+		loopCount++
+	}
+
+	if loopCount == maxLoops {
+		return state.FailWithMessage(fmt.Sprintf("%d:%d: Loop exceeded maximum number of iterations (%d).\n", t.Line, t.Column, maxLoops))
+	}
+
+	state.LoopDepth--
+	// // If we are breaking out of an inner loop to an outer loop (breakDiff - 1 > 0), then we need to return and go up the call stack.
+	// // Else just continue on with tokens after the loop.
+	// if breakDiff-1 > 0 {
+	// fmt.Fprintf(os.Stderr, "Breaking out of loop %d, loop depth %d\n", breakDiff-1, state.LoopDepth)
+	// return EvalResult{true, breakDiff - 1, 0, false}
+	// }
+	return SimpleSuccess()
+}
+
 
 // evalSimpleToken evaluates the token kinds that only work on the stack and
 // variables: literals, arithmetic, comparisons, and variable reads and
