@@ -422,15 +422,15 @@ func (state *EvalState) RebuildDefinitionIndex(definitions []MShellDefinition) {
 	state.defIndexLen = len(definitions)
 }
 
-func (state *EvalState) lookupDefinition(definitions []MShellDefinition, name string) (MShellDefinition, bool) {
+func (state *EvalState) lookupDefinition(definitions []MShellDefinition, name string) (*MShellDefinition, bool) {
 	if state.defIndex == nil || state.defIndexLen != len(definitions) {
 		state.RebuildDefinitionIndex(definitions)
 	}
 	i, ok := state.defIndex[name]
 	if !ok || i >= len(definitions) {
-		return MShellDefinition{}, false
+		return nil, false
 	}
-	return definitions[i], true
+	return &definitions[i], true
 }
 
 func (state *EvalState) AddCompletionDefinitions(definitions []MShellDefinition) {
@@ -942,7 +942,7 @@ func (state *EvalState) processToken(token MShellParseItem, frame *EvaluationFra
 
 		// Not a definition - dispatch directly to token evaluation
 		callStackItem := CallStackItem{MShellParseItem: nil, Name: "literal", CallStackType: frame.CallStackItem.CallStackType}
-		return stepOf(state.evaluateToken(funcToken, frame.Stack, frame.Context, frame.Definitions, callStackItem))
+		return stepOf(state.evaluateBuiltinToken(funcToken, frame.Stack, frame.Context, frame.Definitions, callStackItem))
 
 	case *MShellParseIfBlock:
 		return state.processIfBlock(t, frame, frames)
@@ -979,7 +979,7 @@ func (state *EvalState) processToken(token MShellParseItem, frame *EvaluationFra
 }
 
 // callDefinition handles calling a definition with TCO support
-func (state *EvalState) callDefinition(def MShellDefinition, token Token, frame *EvaluationFrame, frames *[]EvaluationFrame) *EvalResult {
+func (state *EvalState) callDefinition(def *MShellDefinition, token Token, frame *EvaluationFrame, frames *[]EvaluationFrame) *EvalResult {
 	newContext := frame.Context.CloneLessVariables()
 	callStackItem := CallStackItem{MShellParseItem: token, Name: def.Name, CallStackType: CALLSTACKDEF}
 
@@ -1542,7 +1542,7 @@ func (state *EvalState) processTokenToken(t Token, frame *EvaluationFrame, frame
 			return state.callDefinition(def, t, frame, frames)
 		}
 		// Not a definition - process as regular literal
-		return stepOf(state.evaluateToken(t, frame.Stack, frame.Context, frame.Definitions, frame.CallStackItem))
+		return stepOf(state.evaluateBuiltinToken(t, frame.Stack, frame.Context, frame.Definitions, frame.CallStackItem))
 	}
 
 	if t.Type == BREAK {
@@ -1574,7 +1574,7 @@ func (state *EvalState) processTokenToken(t Token, frame *EvaluationFrame, frame
 	// Direct dispatch into evaluateToken — avoids per-token slice allocation.
 	// Preserve the call stack type from the frame.
 	callStackItem := CallStackItem{MShellParseItem: nil, Name: "token", CallStackType: frame.CallStackItem.CallStackType}
-	return stepOf(state.evaluateToken(t, stack, context, definitions, callStackItem))
+	return stepOf(state.evaluateBuiltinToken(t, stack, context, definitions, callStackItem))
 }
 
 // processLoop handles the loop construct
@@ -6156,25 +6156,31 @@ func optimizeColumnStorage(col *GridColumn) {
 	// If none of the above, keep as generic
 }
 
+// evaluateToken evaluates a token for the recursive evaluator
+// (evaluateItems), calling a definition when a literal names one.
 func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context ExecuteContext, definitions []MShellDefinition, callStackItem CallStackItem) EvalResult {
+	if t.Type == LITERAL {
+		if definition, ok := state.lookupDefinition(definitions, t.Lexeme); ok {
+			newContext := context.CloneLessVariables()
+			callStackItem := CallStackItem{MShellParseItem: t, Name: definition.Name, CallStackType: CALLSTACKDEF}
+			result := state.evaluateItems(definition.Items, stack, *newContext, definitions, callStackItem)
+
+			if result.ShouldPassResultUpStack() {
+				return result
+			}
+
+			return SimpleSuccess()
+		}
+	}
+	return state.evaluateBuiltinToken(t, stack, context, definitions, callStackItem)
+}
+
+// evaluateBuiltinToken evaluates a token that is not a call to a
+// definition. Callers must have already checked for a definition.
+func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, context ExecuteContext, definitions []MShellDefinition, callStackItem CallStackItem) EvalResult {
 			if t.Type == EOF {
 				return SimpleSuccess()
 			} else if t.Type == LITERAL {
-
-				// Check for definitions
-				if definition, ok := state.lookupDefinition(definitions, t.Lexeme); ok {
-					// Evaluate the definition
-					newContext := context.CloneLessVariables()
-					callStackItem := CallStackItem{MShellParseItem: t, Name: definition.Name, CallStackType: CALLSTACKDEF}
-					result := state.evaluateItems(definition.Items, stack, *newContext, definitions, callStackItem)
-
-					if result.ShouldPassResultUpStack() {
-						return result
-					}
-
-					return SimpleSuccess()
-				}
-
 				if t.Lexeme == "stack" {
 					// Print current stack
 					fmt.Fprint(os.Stderr, stack.String())
