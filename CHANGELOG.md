@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `☁` cloud only, `✓` on this device, `●` always keep on this device, `↻` syncing, `✗` sync error.
   Folders show the same status as in Explorer.
   Cloud only files are not previewed, so scrolling past them no longer downloads them.
+- The file manager shows file sizes in a column next to the file names, in `ls -h` style (`556`, `5.4K`, `41K`, `1.2M`).
+  Each unit has its own color: bytes dim, kilobytes plain, megabytes cyan, gigabytes yellow, and larger magenta.
+  Directories have no size.
 
 ### Changed
 
