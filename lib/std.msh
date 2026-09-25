@@ -476,7 +476,7 @@ def parseBin (str -- Maybe[int]) 2 fromBase end
 
 # COMPLETIONS {{{
 # msh {{{
-def __mshCompletion { 'complete': ['msh' 'mshell'] } ([str] str -- [str])
+def __mshCompletion { 'complete': ['msh' 'mshell'] } ([str] str -- [str] | {'values'?: [str], 'files'?: str | [str], 'dirs'?: bool, 'binaries'?: bool})
     prefix! input!
     @input len 0 > if
         @input len 1 = firstArgument!
@@ -484,16 +484,16 @@ def __mshCompletion { 'complete': ['msh' 'mshell'] } ([str] str -- [str])
             'lsp' : [] as [str],
             'bin' : @firstArgument
                 (['add' 'remove' 'list' 'path' 'edit' 'audit' 'debug'])
-                (@input :1: 'add' = (@prefix completeFiles) ([] as [str]) iff) iff,
+                (@input :1: 'add' = ({ 'files': '*' }) ([] as [str]) iff) iff,
             'edit' : @firstArgument (['init']) ([] as [str]) iff,
             'completions' : @firstArgument (['fish' 'bash' 'nushell' 'elvish']) ([] as [str]) iff,
             # Everything else is a script and its arguments.
-            _ : @prefix completeFiles,
+            _ : { 'files': '*' },
         end
     else* @prefix '-' startsWith *if
         ['-h' '--help' '--html' '--lex' '--parse' '--check-types' '--type-check-only' '--version' '-c' '-']
     else
-        ['lsp' 'bin' 'edit' 'completions'] @prefix completeFiles extend
+        { 'values': ['lsp' 'bin' 'edit' 'completions'], 'files': '*' }
     end
 end
 # }}}
@@ -744,7 +744,7 @@ def __gitAddFilePaths ( -- [str])
     ['git' 'status' '--porcelain'] * ; lines (trim len 0 >) filter ('->' in not) filter (3:) map
 end
 
-def __gitCompletion { 'complete': ['git'] } ([str] str -- [str])
+def __gitCompletion { 'complete': ['git'] } ([str] str -- [str] | {'values'?: [str], 'files'?: str | [str], 'dirs'?: bool, 'binaries'?: bool})
     prefix! input!
     ['-h' '--help' '-v' '--version' '-C' '-c' '--git-dir' '--work-tree' '--namespace' '--paginate' '--no-pager'] globalOptions!
     @prefix '-' startsWith wantOptions!
@@ -752,7 +752,7 @@ def __gitCompletion { 'complete': ['git'] } ([str] str -- [str])
     @input len 0 > if @input :-1: else '' end last!
 
     @last match
-        '-C' '--git-dir' '--work-tree' : @prefix completeDirs,
+        '-C' '--git-dir' '--work-tree' : { 'dirs': true },
         _ :
             @input len 0 = @subcmd '-' startsWith or if
                 @wantOptions (@globalOptions) (['git' '--list-cmds=main'] * ; lines) iff
@@ -765,7 +765,7 @@ def __gitCompletion { 'complete': ['git'] } ([str] str -- [str])
 end
 
 # Completions for the arguments of a git subcommand that are not options.
-def __gitArguments ([str] str -- [str])
+def __gitArguments ([str] str -- [str] | {'values'?: [str], 'files'?: str | [str], 'dirs'?: bool, 'binaries'?: bool})
     prefix! input!
     @input :0: subcmd!
     @subcmd match
@@ -797,13 +797,12 @@ def __gitArguments ([str] str -- [str])
             end
             @subcmd match
                 # Untracked and changed files first, then every file.
-                'add' : @completions __gitAddFilePaths extend @prefix completeFiles extend uniq completions!,
+                'add' : { 'values': @completions __gitAddFilePaths extend, 'files': '*' },
                 'rm' 'mv' 'restore' 'checkout' 'reset' 'diff' 'status' 'commit' 'grep' 'show' 'log'
                 'blame' 'annotate' 'apply' 'am' 'clone' 'init' :
-                    @completions @prefix completeFiles extend drop,
-                _ : ,
-            end
-            @completions,
+                    { 'values': @completions, 'files': '*' },
+                _ : @completions,
+            end,
     end
 end
 # }}}
@@ -820,17 +819,17 @@ def __fdDefaultOptions ( -- [str])
     ]
 end
 
-def __fdCompletion { 'complete': ['fd'] } ([str] str -- [str])
+def __fdCompletion { 'complete': ['fd'] } ([str] str -- [str] | {'values'?: [str], 'files'?: str | [str], 'dirs'?: bool, 'binaries'?: bool})
     prefix! input!
     @input len 0 > if @input :-1: else '' end match
         '-t' '--type' : ['file' 'directory' 'symlink' 'executable' 'empty' 'socket' 'pipe' 'char-device' 'block-device'],
         '-c' '--color' : ['auto' 'always' 'never'],
-        '--base-directory' '--search-path' : @prefix completeDirs,
-        '--ignore-file' : @prefix completeFiles,
-        '-x' '--exec' '-X' '--exec-batch' : @prefix completeBinaries,
+        '--base-directory' '--search-path' : { 'dirs': true },
+        '--ignore-file' : { 'files': '*' },
+        '-x' '--exec' '-X' '--exec-batch' : { 'binaries': true },
         '-e' '--extension' '-E' '--exclude' '-d' '--max-depth' '--min-depth' '-S' '--size' '--threads'
         '--path-separator' '--changed-within' '--changed-before' '--max-results' : [] as [str],
-        _ : @prefix '-' startsWith (__fdDefaultOptions) (@prefix completeFiles) iff,
+        _ : @prefix '-' startsWith (__fdDefaultOptions) ({ 'files': '*' }) iff,
     end
 end
 # }}}
@@ -869,13 +868,13 @@ def __sshOptionArgs ( -- {[str]})
     }
 end
 
-def __sshCompletion { 'complete': ['ssh'] } ([str] str -- [str])
+def __sshCompletion { 'complete': ['ssh'] } ([str] str -- [str] | {'values'?: [str], 'files'?: str | [str], 'dirs'?: bool, 'binaries'?: bool})
     prefix! input!
     @input len 0 > if @input :-1: else '' end last!
     @last match
         # -J (jump host) needs dynamic lookup
         '-J' : __sshHosts,
-        '-i' '-F' '-E' '-S' : @prefix completeFiles,
+        '-i' '-F' '-E' '-S' : { 'files': '*' },
         _ : __sshOptionArgs @last get match
             just values : @values,
             none : @prefix '-' startsWith (__sshDefaultOptions) (__sshHosts) iff,
@@ -901,21 +900,21 @@ def __rgDefaultOptions ( -- [str])
     ]
 end
 
-def __rgCompletion { 'complete': ['rg'] } ([str] str -- [str])
+def __rgCompletion { 'complete': ['rg'] } ([str] str -- [str] | {'values'?: [str], 'files'?: str | [str], 'dirs'?: bool, 'binaries'?: bool})
     prefix! input!
     @input len 0 > if @input :-1: else '' end match
         '-t' '--type' '-T' '--type-not' : ['rg' '--type-list'] * ; lines (":" split :0:) map,
         '--color' : ['auto' 'always' 'never'],
-        '-f' '--file' '--ignore-file' : @prefix completeFiles,
+        '-f' '--file' '--ignore-file' : { 'files': '*' },
         '-g' '--glob' '-e' '--regexp' '-C' '--context' '-B' '--before-context' '-A' '--after-context'
         '-m' '--max-count' '--max-depth' '--max-filesize' '--max-columns' '--threads' '--colors'
         '--sort' '--sortr' '--type-add' : [] as [str],
-        _ : @prefix '-' startsWith (__rgDefaultOptions) (@prefix completeFiles) iff,
+        _ : @prefix '-' startsWith (__rgDefaultOptions) ({ 'files': '*' }) iff,
     end
 end
 # }}}
 # sudo {{{
-def __sudoCompletion { 'complete': ['sudo'] } ([str] str -- [str])
+def __sudoCompletion { 'complete': ['sudo'] } ([str] str -- [str] | {'values'?: [str], 'files'?: str | [str], 'dirs'?: bool, 'binaries'?: bool})
     prefix! input!
     ['-A' '--askpass' '-b' '--background' '-E' '--preserve-env'
      '-H' '--set-home' '-i' '--login' '-K' '--remove-timestamp'
@@ -963,7 +962,7 @@ def __sudoCompletion { 'complete': ['sudo'] } ([str] str -- [str])
     else* @prefix '-' startsWith *if
         @noArgOptions @argOptions extend
     else
-        @prefix completeBinaries
+        { 'binaries': true }
     end
 end
 # }}}
@@ -1046,7 +1045,7 @@ def __systemctlCompletion { 'complete': ['systemctl'] } ([str] str -- [str])
 end
 # }}}
 # journalctl {{{
-def __journalctlCompletion { 'complete': ['journalctl'] } ([str] str -- [str])
+def __journalctlCompletion { 'complete': ['journalctl'] } ([str] str -- [str] | {'values'?: [str], 'files'?: str | [str], 'dirs'?: bool, 'binaries'?: bool})
     prefix! input!
     ['-h' '--help' '--version' '--no-pager' '-a' '--all'
      '-f' '--follow' '-e' '--pager-end' '--no-tail'
@@ -1083,8 +1082,8 @@ def __journalctlCompletion { 'complete': ['journalctl'] } ([str] str -- [str])
             ['systemctl' 'list-unit-files' '--no-legend' '--no-pager'] * ;
             lines (" " split :0:) map,
         '--since' '--until' : ['yesterday' 'today' 'tomorrow' 'now'],
-        '--file' '--cursor-file' '--verify-key' : @prefix completeFiles,
-        '-D' '--directory' '--root' : @prefix completeDirs,
+        '--file' '--cursor-file' '--verify-key' : { 'files': '*' },
+        '-D' '--directory' '--root' : { 'dirs': true },
         _ : @prefix '-' startsWith (@noArgOptions @argOptions extend) ([] as [str]) iff,
     end
 end
@@ -1341,7 +1340,7 @@ def __cargoSubcmdCompletions (str -- [str])
 end
 
 # Completions after a cargo subcommand when the previous word does not take a value.
-def __cargoArguments (str str -- [str])
+def __cargoArguments (str str -- [str] | {'values'?: [str], 'files'?: str | [str], 'dirs'?: bool, 'binaries'?: bool})
     prefix! subcmd!
     @prefix '-' startsWith if
         @subcmd __cargoSubcmdCompletions
@@ -1349,13 +1348,13 @@ def __cargoArguments (str str -- [str])
         @subcmd match
             'help'       : __cargoSubcommands,
             'uninstall'  : __cargoInstalled,
-            'new' 'init' : @prefix completeDirs,
+            'new' 'init' : { 'dirs': true },
             _            : [] as [str],
         end
     end
 end
 
-def __cargoCompletion { 'complete': ['cargo'] } ([str] str -- [str])
+def __cargoCompletion { 'complete': ['cargo'] } ([str] str -- [str] | {'values'?: [str], 'files'?: str | [str], 'dirs'?: bool, 'binaries'?: bool})
     prefix! input!
     @input len 0 > if
         @input :0: match
@@ -1377,8 +1376,8 @@ def __cargoCompletion { 'complete': ['cargo'] } ([str] str -- [str])
             '--edition'         : ['2015' '2018' '2021' '2024'],
             '--message-format'  : ['human' 'short' 'json' 'json-diagnostic-short' 'json-diagnostic-rendered-ansi' 'json-render-diagnostics'],
             '--profile'         : ['dev' 'release' 'test' 'bench'],
-            '--manifest-path'   : @prefix completeFiles,
-            '--target-dir' '--out-dir' '--root' '--path' : @prefix completeDirs,
+            '--manifest-path'   : { 'files': 'Cargo.toml' },
+            '--target-dir' '--out-dir' '--root' '--path' : { 'dirs': true },
             # --bin and --example take a target name in these subcommands, as do --test and --bench.
             '--bin' '--example' : @subcmd match
                 'bench' 'build' 'check' 'run' 'rustc' 'test' : @last 2: __cargoTargetNames,
@@ -1486,11 +1485,9 @@ end
 # So `plot.mplot` with `default.svg.do` gives `plot.svg`.
 def __redoTargets (str -- [str])
     __completionDir dir!
-    # One directory listing gives the .do files and the files the rules build from.
-    @dir len start!
-    @dir completeFiles
-    (dup '/' endsWith swap '\' endsWith or not) filter
-    (@start skip) map names!
+    # One listing gives the .do files and the files the rules build from.
+    # Only names with a period can be either, which also leaves out most directories.
+    $"{@dir}*.*" glob (basename str) map names!
 
     @names ('.do' endsWith) filter doFiles!
     @doFiles ('default.' startsWith not) filter (toPath stem str) map targets!
@@ -1506,7 +1503,7 @@ def __redoTargets (str -- [str])
     @targets (target! $"{@dir}{@target}") map
 end
 
-def __redoCompletion { 'complete': ['redo'] } ([str] str -- [str])
+def __redoCompletion { 'complete': ['redo'] } ([str] str -- [str] | {'values'?: [str], 'files'?: str | [str], 'dirs'?: bool, 'binaries'?: bool})
     prefix! input!
     @input len 0 > if @input :-1: else '' end match
         # Job counts are not completed.
@@ -1514,7 +1511,7 @@ def __redoCompletion { 'complete': ['redo'] } ([str] str -- [str])
         _ :
             @prefix '-' startsWith
             (['-j' '--jobs' '-y' '--yes' '-v' '--verbose' '--debug-jobs' '-h' '--help' '--version'])
-            (@prefix __redoTargets @prefix completeDirs extend) iff,
+            ({ 'values': @prefix __redoTargets, 'dirs': true }) iff,
     end
 end
 # }}}
@@ -2026,7 +2023,7 @@ def __uvVenvCommands ( -- [str])
 end
 
 # Completions for the value of an option.
-def __uvOptionValues (str str str -- [str])
+def __uvOptionValues (str str str -- [str] | {'values'?: [str], 'files'?: str | [str], 'dirs'?: bool, 'binaries'?: bool})
     prefix! opt! cmd!
     @opt match
         '-p' '--python' : @cmd 'publish' = ([] as [str]) (['--only-installed'] __uvPythonVersions) iff,
@@ -2036,29 +2033,31 @@ def __uvOptionValues (str str str -- [str])
         '-o' '--output-file' '-t' '--target' '--prefix' '-r' '--requirements' '-c' '--constraints'
         '--overrides' '--excludes' '-b' '--build-constraints' '--with-requirements' '--env-file'
         '-e' '--editable' '--with-editable' '-f' '--find-links' '--cert' '--script'
-        '--python-downloads-json-url' '--path' : @prefix completeFiles,
+        '--python-downloads-json-url' '--path' : { 'files': '*' },
         _ : @cmd @opt __uvOptionChoices,
     end
 end
 
 # Completions for the arguments of a subcommand that are not options.
-def __uvArguments (str str -- [str])
+def __uvArguments (str str -- [str] | {'values'?: [str], 'files'?: str | [str], 'dirs'?: bool, 'binaries'?: bool})
     prefix! cmd!
     @cmd match
-        'run' : __uvVenvCommands @prefix completeFiles extend,
+        # Commands in the project's environment, and Python scripts
+        'run' : { 'values': __uvVenvCommands, 'files': ['*.py' '*.pyw'] },
         'remove' : __uvProjectDependencies,
         'tool run' 'tool upgrade' 'tool uninstall' : __uvTools,
         'python uninstall' 'python pin' 'python find' 'python upgrade' : ['--only-installed'] __uvPythonVersions,
         'python install' : [] as [str] __uvPythonVersions,
         'pip uninstall' 'pip show' : __uvPipPackages,
         # Packages given by path, requirements files, and scripts
-        'add' 'pip install' 'pip compile' 'pip sync' 'publish' 'format' : @prefix completeFiles,
-        'init' 'venv' 'build' : @prefix completeDirs,
+        'add' 'pip install' 'pip compile' 'pip sync' 'publish' : { 'files': '*' },
+        'format' : { 'files': ['*.py' '*.pyi'] },
+        'init' 'venv' 'build' : { 'dirs': true },
         _ : [] as [str],
     end
 end
 
-def __uvCompletion { 'complete': ['uv'] } ([str] str -- [str])
+def __uvCompletion { 'complete': ['uv'] } ([str] str -- [str] | {'values'?: [str], 'files'?: str | [str], 'dirs'?: bool, 'binaries'?: bool})
     prefix! input!
     @input (__uvSubcommands) (drop '') (__uvTakesValue) __subcommandPath rest! path!
     @path ' ' join cmd!
@@ -2077,12 +2076,14 @@ def __uvCompletion { 'complete': ['uv'] } ([str] str -- [str])
         @cmd __uvOwnOptions extend
         @cmd __uvOptionGroups (__uvGroupOptions) map concat extend
     else
-        @cmd __uvSubcommands @cmd @prefix __uvArguments extend
+        # A path has subcommands under it or takes arguments, not both.
+        @cmd __uvSubcommands subcommands!
+        @subcommands len 0 > (@subcommands) (@cmd @prefix __uvArguments) iff
     end
 end
 
 # `uvx` is `uv tool run`.
-def __uvxCompletion { 'complete': ['uvx'] } ([str] str -- [str])
+def __uvxCompletion { 'complete': ['uvx'] } ([str] str -- [str] | {'values'?: [str], 'files'?: str | [str], 'dirs'?: bool, 'binaries'?: bool})
     prefix! input!
     ['tool' 'run'] @input + @prefix __uvCompletion
 end
@@ -2142,7 +2143,7 @@ def __typstOptions (str -- [str])
     end
 end
 
-def __typstOptionValues (str str str -- [str])
+def __typstOptionValues (str str str -- [str] | {'values'?: [str], 'files'?: str | [str], 'dirs'?: bool, 'binaries'?: bool})
     prefix! opt! cmd!
     @opt match
         '--color' : ['auto' 'always' 'never'],
@@ -2159,13 +2160,13 @@ def __typstOptionValues (str str str -- [str])
         '--features' : ['html' 'bundle' 'a11y-extras'],
         '--diagnostic-format' : ['human' 'short'],
         '--target' : ['paged' 'html' 'bundle'],
-        '--root' '--font-path' '--package-path' '--package-cache-path' : @prefix completeDirs,
-        '--cert' '--deps' '--timings' '--backup-path' : @prefix completeFiles,
+        '--root' '--font-path' '--package-path' '--package-cache-path' : { 'dirs': true },
+        '--cert' '--deps' '--timings' '--backup-path' : { 'files': '*' },
         _ : [] as [str],
     end
 end
 
-def __typstCompletion { 'complete': ['typst'] } ([str] str -- [str])
+def __typstCompletion { 'complete': ['typst'] } ([str] str -- [str] | {'values'?: [str], 'files'?: str | [str], 'dirs'?: bool, 'binaries'?: bool})
     prefix! input!
     @input (__typstSubcommands) (__typstAlias) (__typstTakesValue) __subcommandPath rest! path!
     @path ' ' join cmd!
@@ -2178,15 +2179,9 @@ def __typstCompletion { 'complete': ['typst'] } ([str] str -- [str])
     else
         @cmd match
             '' 'help' : '' __typstSubcommands,
-            'compile' 'watch' :
-                @prefix completeFiles files!
-                # The input file comes first, so list .typ files before the rest.
-                @rest len 0 = if
-                    @files ('.typ' endsWith) filter @files ('.typ' endsWith not) filter extend
-                else
-                    @files
-                end,
-            'init' : @rest len 0 > (@prefix completeDirs) ([] as [str]) iff,
+            # The input file comes first; the output path after it can be any name.
+            'compile' 'watch' : @rest len 0 = ({ 'files': '*.typ' }) ({ 'files': '*' }) iff,
+            'init' : @rest len 0 > ({ 'dirs': true }) ([] as [str]) iff,
             'completions' : ['bash' 'elvish' 'fish' 'powershell' 'zsh'],
             _ : [] as [str],
         end
@@ -2575,7 +2570,7 @@ def __wingetAdminSettings ( -- [str])
 end
 
 # Completions for the value of an option.
-def __wingetOptionValues (str str str -- [str])
+def __wingetOptionValues (str str str -- [str] | {'values'?: [str], 'files'?: str | [str], 'dirs'?: bool, 'binaries'?: bool})
     prefix! opt! cmd!
     @opt match
         '-s' '--source' '--dependency-source' : __wingetSources,
@@ -2594,27 +2589,32 @@ def __wingetOptionValues (str str str -- [str])
         '--enable' '--disable' : __wingetAdminSettings,
         '--setting' : @cmd 'settings set' = (['DefaultProxy']) (__wingetAdminSettings ['DefaultProxy'] extend) iff,
         # Options that take a file or directory
-        '-m' '--manifest' '-o' '--log' '--output' '-f' '--file' '-i' '--import-file' '-l' '--location'
-        '-d' '--download-directory' '--module-path' '--processor-path' : @prefix completeFiles,
+        '-m' '--manifest' : { 'files': ['*.yaml' '*.yml'] },
+        '-i' '--import-file' : { 'files': '*.json' },
+        '-f' '--file' '-o' '--log' '--output' '--processor-path' : { 'files': '*' },
+        '-l' '--location' '-d' '--download-directory' '--module-path' : { 'dirs': true },
         _ : [] as [str],
     end
 end
 
 # Completions for the arguments of a subcommand that are not options.
-def __wingetArguments (str [str] str -- [str])
+def __wingetArguments (str [str] str -- [str] | {'values'?: [str], 'files'?: str | [str], 'dirs'?: bool, 'binaries'?: bool})
     prefix! rest! cmd!
     @cmd match
         'source list' 'source update' 'source remove' 'source edit' 'source reset' 'source export' :
             __wingetSources,
         'settings set' : @rest len 0 = (['DefaultProxy']) ([] as [str]) iff,
         'settings reset' : __wingetAdminSettings ['DefaultProxy'] extend,
-        'hash' 'validate' 'import' 'configure' 'configure show' 'configure test' 'configure validate' :
-            @prefix completeFiles,
+        'hash' : { 'files': '*' },
+        'import' : { 'files': '*.json' },
+        # Manifests and configuration files are YAML.
+        'validate' 'configure' 'configure show' 'configure test' 'configure validate' :
+            { 'files': ['*.yaml' '*.yml'] },
         _ : [] as [str],
     end
 end
 
-def __wingetCompletion { 'complete': ['winget' 'winget.exe'] } ([str] str -- [str])
+def __wingetCompletion { 'complete': ['winget' 'winget.exe'] } ([str] str -- [str] | {'values'?: [str], 'files'?: str | [str], 'dirs'?: bool, 'binaries'?: bool})
     prefix! input!
     @input (__wingetSubcommands) (__wingetAlias) (__wingetTakesValue) __subcommandPath rest! path!
     @path ' ' join cmd!
@@ -2625,7 +2625,9 @@ def __wingetCompletion { 'complete': ['winget' 'winget.exe'] } ([str] str -- [st
     else* @prefix '-' startsWith *if
         __wingetGlobalOptions @cmd __wingetOptions extend
     else
-        @cmd __wingetSubcommands @cmd @rest @prefix __wingetArguments extend
+        # A path has subcommands under it or takes arguments, not both.
+        @cmd __wingetSubcommands subcommands!
+        @subcommands len 0 > (@subcommands) (@cmd @rest @prefix __wingetArguments) iff
     end
 end
 # }}}

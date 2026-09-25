@@ -955,7 +955,7 @@ type TermState struct {
 	tabCycleEnd        ByteOffset
 	tabCycleSource SourceText
 	tabCycleTokenType  TokenType
-	tabCycleQuoting    completionQuoting
+	tabCycleAllFiles   bool
 	tabCycleMatches    []string
 	lastArgCycleActive bool
 	lastArgCycleIndex  int
@@ -1593,7 +1593,7 @@ func (state *TermState) resetTabCycle() {
 	state.tabCycleStart = 0
 	state.tabCycleEnd = 0
 	state.tabCycleTokenType = EOF
-	state.tabCycleQuoting = quoteAsString
+	state.tabCycleAllFiles = false
 	if state.tabCycleMatches != nil {
 		state.tabCycleMatches = state.tabCycleMatches[:0]
 	}
@@ -1912,16 +1912,7 @@ func allMatchesAreFiles(matches []TabMatch) bool {
 	return true
 }
 
-// completionQuoting says how a completion that needs quotes is quoted.
-type completionQuoting int
-
-const (
-	quoteAsString completionQuoting = iota // 'single quotes'
-	quoteAsPath                            // `backticks`
-	quoteIfPath                            // backticks when completionIsPath says it is a path
-)
-
-func (state *TermState) buildCompletionInsert(match string, tokenType TokenType, quoting completionQuoting) string {
+func (state *TermState) buildCompletionInsert(match string, tokenType TokenType, preferPathQuote bool) string {
 	switch tokenType {
 	case UNFINISHEDSINGLEQUOTESTRING:
 		return "'" + match
@@ -1936,7 +1927,7 @@ func (state *TermState) buildCompletionInsert(match string, tokenType TokenType,
 		tokens, err := state.l.Tokenize()
 		if len(tokens) > 2 && err == nil {
 			// Quote when the completion needs multiple tokens to parse.
-			if quoting == quoteAsPath || (quoting == quoteIfPath && completionIsPath(match)) {
+			if preferPathQuote {
 				insertString := "`" + match
 				if !strings.HasSuffix(match, string(os.PathSeparator)) {
 					insertString += "` "
@@ -1949,7 +1940,7 @@ func (state *TermState) buildCompletionInsert(match string, tokenType TokenType,
 	}
 }
 
-func (state *TermState) buildSharedCompletionInsert(longestCommonPrefix string, tokenType TokenType, quoting completionQuoting, matches []string) string {
+func (state *TermState) buildSharedCompletionInsert(longestCommonPrefix string, tokenType TokenType, allFileMatches bool) string {
 	switch tokenType {
 	case UNFINISHEDSINGLEQUOTESTRING:
 		return "'" + longestCommonPrefix
@@ -1961,7 +1952,7 @@ func (state *TermState) buildSharedCompletionInsert(longestCommonPrefix string, 
 		tokens, err := state.l.Tokenize()
 		if (len(tokens) > 2 && err == nil) || needsQuoteForWhitespace {
 			// Add only the opening quote while user keeps typing to disambiguate.
-			if quoting == quoteAsPath || (quoting == quoteIfPath && allCompletionsArePaths(matches)) {
+			if allFileMatches {
 				return "`" + longestCommonPrefix
 			}
 			return "'" + longestCommonPrefix
@@ -1980,7 +1971,7 @@ func (state *TermState) cycleTabCompletion(direction int) {
 	} else if state.tabCycleIndex < 0 {
 		state.tabCycleIndex = len(state.tabCycleMatches) - 1
 	}
-	insertString := state.buildCompletionInsert(state.tabCycleMatches[state.tabCycleIndex], state.tabCycleTokenType, state.tabCycleQuoting)
+	insertString := state.buildCompletionInsert(state.tabCycleMatches[state.tabCycleIndex], state.tabCycleTokenType, state.tabCycleAllFiles)
 	state.currentCommand = state.tabCycleSource
 	state.replaceText(insertString, state.tabCycleStart, state.tabCycleEnd)
 	state.setTabCompletions(state.tabCycleMatches)
@@ -1997,7 +1988,7 @@ func (state *TermState) selectTabCompletion(index int) {
 		index = len(state.tabCycleMatches) - 1
 	}
 	state.tabCycleIndex = index
-	insertString := state.buildCompletionInsert(state.tabCycleMatches[state.tabCycleIndex], state.tabCycleTokenType, state.tabCycleQuoting)
+	insertString := state.buildCompletionInsert(state.tabCycleMatches[state.tabCycleIndex], state.tabCycleTokenType, state.tabCycleAllFiles)
 	state.currentCommand = state.tabCycleSource
 	state.replaceText(insertString, state.tabCycleStart, state.tabCycleEnd)
 	state.setTabCompletions(state.tabCycleMatches)
@@ -4143,7 +4134,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			state.Logf("Prefix: %s\n", prefix)
 
 			var matches []TabMatch
-			// A binary's completion definitions return every candidate, files included,
+			// A binary's completion definitions say what fits the current argument,
 			// so the general completions below only run when there are none.
 			definitionsRan := false
 
@@ -4153,15 +4144,10 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 					defs := state.evalState.CompletionDefinitions[binaryToken.Lexeme]
 					if len(defs) > 0 {
 						args := state.completionArgsFromTokens(tokens, prefix)
-						definitionMatches, ok := state.evalState.RunCompletionDefinitions(defs, args, prefix, state.context, state.stdLibDefs)
+						request, ok := state.evalState.RunCompletionDefinitions(defs, args, prefix, state.context, state.stdLibDefs, state.Logf)
 						if ok {
 							definitionsRan = true
-							matches = make([]TabMatch, len(definitionMatches))
-							for i, match := range definitionMatches {
-								matches[i] = TabMatch{TABMATCHCMD, match}
-							}
-						} else {
-							state.Logf("Completion definitions for '%s' failed\n", binaryToken.Lexeme)
+							matches = request.Matches(prefix, OSCompletionFS{}, state.context.Pbm)
 						}
 					}
 				}
@@ -4208,19 +4194,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				matches = GenerateCompletions(input, deps)
 			}
 
-			// Definition candidates are plain strings, so whether one is a path is
-			// only looked up on disk when inserting it needs quotes.
-			singleQuoting, sharedQuoting := quoteAsString, quoteAsString
-			if definitionsRan {
-				singleQuoting, sharedQuoting = quoteIfPath, quoteIfPath
-			} else {
-				if len(matches) > 0 && matches[0].TabMatchType == TABMATCHFILE {
-					singleQuoting = quoteAsPath
-				}
-				if allMatchesAreFiles(matches) {
-					sharedQuoting = quoteAsPath
-				}
-			}
+			allFileMatches := allMatchesAreFiles(matches)
 
 			var insertString string
 			state.Logf("Len matches: '%d'\n", len(matches))
@@ -4234,34 +4208,33 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				fmt.Fprintf(os.Stdout, "\a")
 			} else if len(matches) == 1 {
 				// Lex the match and check if we have to quote around it
-				insertString = state.buildCompletionInsert(matches[0].Match, lastToken.Type, singleQuoting)
+				insertString = state.buildCompletionInsert(matches[0].Match, lastToken.Type, matches[0].TabMatchType == TABMATCHFILE)
 
 				// Replace the prefex
 				state.replaceText(insertString, replaceStart, replaceEnd)
 			} else {
-				tabMatchTexts := GetMatchTexts(matches)
-
 				// Print out the longest common prefix
-				longestCommonPrefix := completionGraphemePrefix(tabMatchTexts)
+				longestCommonPrefix := completionGraphemePrefix(GetMatchTexts(matches))
 				state.Logf("Longest common prefix: '%s'\n", longestCommonPrefix)
 
 				if len(longestCommonPrefix) <= len(prefix) {
 					// Print bell
 					fmt.Fprintf(os.Stdout, "\a")
 				} else {
-					longestCommonPrefix = state.buildSharedCompletionInsert(longestCommonPrefix, lastToken.Type, sharedQuoting, tabMatchTexts)
+					longestCommonPrefix = state.buildSharedCompletionInsert(longestCommonPrefix, lastToken.Type, allFileMatches)
 
 					// Replace the prefix
 					state.replaceText(longestCommonPrefix, replaceStart, replaceEnd)
 				}
 
+				tabMatchTexts := GetMatchTexts(matches)
 				state.tabCycleActive = true
 				state.tabCycleIndex = -1
 				state.tabCycleSource = completionSource
 				state.tabCycleStart = replaceStart
 				state.tabCycleEnd = replaceEnd
 				state.tabCycleTokenType = lastToken.Type
-				state.tabCycleQuoting = sharedQuoting
+				state.tabCycleAllFiles = allFileMatches
 				state.tabCycleMatches = append(state.tabCycleMatches[:0], tabMatchTexts...)
 				state.setTabCompletions(tabMatchTexts)
 			}

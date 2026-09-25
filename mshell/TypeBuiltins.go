@@ -193,11 +193,11 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 	r.reg("stack", "( -- )")
 	r.reg("defs", "( -- )")
 	r.reg("env", "( -- )")
-	r.reg("completionDefs", "( -- {[([str] str -- [str])]})")
-	r.reg("completeFiles", "(str -- [str])")
-	r.reg("completeDirs", "(str -- [str])")
-	r.reg("completeBinaries", "(str -- [str])")
-	r.reg("completeCommand", "([str] str -- [str])")
+	// What a completion definition returns: values alone, or a request that can add files,
+	// directories, and executables.
+	completions := "[str] | {values?: [str], files?: str | [str], dirs?: bool, binaries?: bool}"
+	r.reg("completionDefs", "( -- {[([str] str -- "+completions+")]})")
+	r.reg("completeCommand", "([str] str -- "+completions+")")
 	r.reg("binPaths", "( -- [[str]])")
 	// ----- Boolean ops -----
 	// `not` lexes as NOT (token type), not LITERAL — see byToken table.

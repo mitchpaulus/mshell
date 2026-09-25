@@ -4,6 +4,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -196,7 +197,7 @@ func GenerateCompletions(input CompletionInput, deps CompletionDeps) []TabMatch 
 // generateFileCompletions handles file/directory completion.
 func generateFileCompletions(input CompletionInput, cfs CompletionFS) []TabMatch {
 	var matches []TabMatch
-	forEachPathCompletion(cfs, input.Prefix, false, func(match string) {
+	forEachPathCompletion(cfs, input.Prefix, nil, func(match string) {
 		matches = append(matches, TabMatch{TABMATCHFILE, match})
 	})
 	return matches
@@ -207,8 +208,8 @@ func generateFileCompletions(input CompletionInput, cfs CompletionFS) []TabMatch
 // whose names start with the rest of the prefix.
 // Each is spelled with that directory part so it can replace the prefix,
 // and directories end in a path separator.
-// With dirsOnly, files are skipped.
-func forEachPathCompletion(cfs CompletionFS, prefix string, dirsOnly bool, add func(string)) {
+// keepFile, when not nil, decides which files (not directories) are included.
+func forEachPathCompletion(cfs CompletionFS, prefix string, keepFile func(name string) bool, add func(string)) {
 	dirEnd := 0
 	for i := len(prefix) - 1; i >= 0; i-- {
 		if IsPathSeparator(prefix[i]) {
@@ -241,53 +242,200 @@ func forEachPathCompletion(cfs CompletionFS, prefix string, dirsOnly bool, add f
 		}
 		if entry.IsDir() {
 			add(dir + name + string(os.PathSeparator))
-		} else if !dirsOnly {
+		} else if keepFile == nil || keepFile(name) {
 			add(dir + name)
 		}
 	}
 }
 
-// completionIsPath reports whether a completion names a directory (it ends in a path separator)
-// or an existing file, so it is quoted as a path when inserted.
-func completionIsPath(match string) bool {
-	if match != "" && IsPathSeparator(match[len(match)-1]) {
-		return true
-	}
-	_, err := os.Lstat(match)
-	return err == nil
+// CompletionRequest is what a binary's completion definitions ask Tab to offer.
+// A definition returns either a list of values,
+// or a dictionary with any of these keys:
+//
+//	values:   [str]        candidates for the argument
+//	files:    str | [str]  files whose names match one of these glob patterns, and all directories
+//	dirs:     bool         directories
+//	binaries: bool         executables on the path
+type CompletionRequest struct {
+	Values       []string
+	FilePatterns []string
+	Dirs         bool
+	Binaries     bool
+	// Several definitions can list the same value; one definition should not.
+	fromSeveralDefinitions bool
 }
 
-// allCompletionsArePaths reports whether every completion is a path by completionIsPath.
-func allCompletionsArePaths(matches []string) bool {
-	for _, match := range matches {
-		if !completionIsPath(match) {
+// addResult merges one definition's result into the request.
+// It returns false when the result is not a list of strings or a dictionary of the keys above.
+func (r *CompletionRequest) addResult(result MShellObject) bool {
+	switch v := result.(type) {
+	case *MShellList:
+		return r.addValues(v)
+	case *MShellDict:
+		for key, item := range v.Items {
+			switch key {
+			case "values":
+				list, ok := item.(*MShellList)
+				if !ok || !r.addValues(list) {
+					return false
+				}
+			case "files":
+				switch files := item.(type) {
+				case *MShellList:
+					for _, pattern := range files.Items {
+						s, err := pattern.CastString()
+						if err != nil {
+							return false
+						}
+						r.FilePatterns = append(r.FilePatterns, s)
+					}
+				default:
+					pattern, err := files.CastString()
+					if err != nil {
+						return false
+					}
+					r.FilePatterns = append(r.FilePatterns, pattern)
+				}
+			case "dirs", "binaries":
+				b, ok := item.(MShellBool)
+				if !ok {
+					return false
+				}
+				if key == "dirs" {
+					r.Dirs = r.Dirs || b.Value
+				} else {
+					r.Binaries = r.Binaries || b.Value
+				}
+			default:
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+func (r *CompletionRequest) addValues(list *MShellList) bool {
+	for _, item := range list.Items {
+		s, err := item.CastString()
+		if err != nil {
 			return false
 		}
+		r.Values = append(r.Values, s)
 	}
-	return len(matches) > 0
+	return true
 }
 
-// RunCompletionDefinitions runs the completion definitions registered for a command.
+// ToObject returns the request as a completion definition would: the values alone as a list,
+// or a dictionary when it asks for files, directories, or executables.
+// The values are not filtered by the word being completed; Tab does that.
+func (r *CompletionRequest) ToObject() MShellObject {
+	values := NewList(len(r.Values))
+	for i, value := range r.Values {
+		values.Items[i] = MShellString{Content: value}
+	}
+	if len(r.FilePatterns) == 0 && !r.Dirs && !r.Binaries {
+		return values
+	}
+	dict := NewDict()
+	dict.Items["values"] = values
+	if len(r.FilePatterns) > 0 {
+		patterns := NewList(len(r.FilePatterns))
+		for i, pattern := range r.FilePatterns {
+			patterns.Items[i] = MShellString{Content: pattern}
+		}
+		dict.Items["files"] = patterns
+	}
+	if r.Dirs {
+		dict.Items["dirs"] = MShellBool{true}
+	}
+	if r.Binaries {
+		dict.Items["binaries"] = MShellBool{true}
+	}
+	return dict
+}
+
+// Matches returns what Tab offers for the request: the values that start with the prefix,
+// then the files and directories, then the executables.
+// Options (values starting with '-') are only offered when the prefix starts with '-'.
+// A file or executable with the same name as a value is not offered twice.
+func (r *CompletionRequest) Matches(prefix string, cfs CompletionFS, bins IPathBinManager) []TabMatch {
+	var matches []TabMatch
+	optionsWanted := strings.HasPrefix(prefix, "-")
+	var seen map[string]struct{}
+	if r.fromSeveralDefinitions {
+		seen = make(map[string]struct{})
+	}
+	for _, value := range r.Values {
+		if !strings.HasPrefix(value, prefix) || (!optionsWanted && strings.HasPrefix(value, "-")) {
+			continue
+		}
+		if seen != nil {
+			if _, repeated := seen[value]; repeated {
+				continue
+			}
+			seen[value] = struct{}{}
+		}
+		matches = append(matches, TabMatch{TABMATCHCMD, value})
+	}
+	numValues := len(matches)
+
+	// Values are few once filtered, so a scan beats building a set.
+	isValue := func(match string) bool {
+		for _, m := range matches[:numValues] {
+			if m.Match == match {
+				return true
+			}
+		}
+		return false
+	}
+
+	if len(r.FilePatterns) > 0 || r.Dirs {
+		var keepFile func(string) bool
+		if len(r.FilePatterns) == 0 {
+			keepFile = func(string) bool { return false }
+		} else if !(len(r.FilePatterns) == 1 && r.FilePatterns[0] == "*") {
+			keepFile = func(name string) bool {
+				for _, pattern := range r.FilePatterns {
+					if ok, _ := filepath.Match(pattern, name); ok {
+						return true
+					}
+				}
+				return false
+			}
+		}
+		forEachPathCompletion(cfs, prefix, keepFile, func(match string) {
+			if numValues == 0 || !isValue(match) {
+				matches = append(matches, TabMatch{TABMATCHFILE, match})
+			}
+		})
+	}
+
+	if r.Binaries {
+		for _, name := range bins.Matches(prefix) {
+			if numValues == 0 || !isValue(name) {
+				matches = append(matches, TabMatch{TABMATCHCMD, name})
+			}
+		}
+	}
+	return matches
+}
+
+// RunCompletionDefinitions runs the completion definitions registered for a command
+// and merges what they ask Tab to offer.
 // Each gets a fresh stack holding the command's finished arguments and,
-// on top, the word being typed, and leaves a list of candidates.
-// Candidates that do not start with that word are dropped,
-// and so are options (starting with '-') unless the word starts with '-'.
+// on top, the word being completed, which it can use to skip work;
+// Tab does the matching against that word.
 // Output from the definitions and the commands they run is discarded,
 // because the line editor owns the screen while a completion runs.
-// ok is false when no definition ran successfully.
-func (state *EvalState) RunCompletionDefinitions(defs []MShellDefinition, args []string, prefix string, context ExecuteContext, definitions []MShellDefinition) (matches []string, ok bool) {
+// ok is false when no definition ran successfully; logf, when not nil, says why.
+func (state *EvalState) RunCompletionDefinitions(defs []MShellDefinition, args []string, prefix string, context ExecuteContext, definitions []MShellDefinition, logf func(string, ...any)) (request CompletionRequest, ok bool) {
 	context.StandardOutput = io.Discard
 	context.StandardError = io.Discard
 	context.ShouldCloseOutput = false
 	context.ShouldCloseError = false
-
-	optionsWanted := strings.HasPrefix(prefix, "-")
-	// Each definition's own list is its responsibility; only candidates from
-	// different definitions of the same command can repeat.
-	var seen map[string]struct{}
-	if len(defs) > 1 {
-		seen = make(map[string]struct{})
-	}
+	request.fromSeveralDefinitions = len(defs) > 1
 
 	for _, def := range defs {
 		// A definition may change its argument list in place, so each gets its own.
@@ -298,32 +446,28 @@ func (state *EvalState) RunCompletionDefinitions(defs []MShellDefinition, args [
 		stack := MShellStack{argList, MShellString{Content: prefix}}
 		callStackItem := CallStackItem{MShellParseItem: def.NameToken, Name: def.Name, CallStackType: CALLSTACKDEF}
 		result := state.Evaluate(def.Items, &stack, context, definitions, callStackItem)
-		if !result.Success || result.ExitCalled || len(stack) == 0 {
-			continue
-		}
-		list, isList := stack[len(stack)-1].(*MShellList)
-		if !isList {
-			continue
-		}
-		ok = true
-		for _, item := range list.Items {
-			candidate, err := item.CastString()
-			if err != nil || !strings.HasPrefix(candidate, prefix) {
-				continue
+		switch {
+		case !result.Success:
+			if logf != nil {
+				logf("Completion definition '%s' failed to evaluate\n", def.Name)
 			}
-			if !optionsWanted && strings.HasPrefix(candidate, "-") {
-				continue
+		case result.ExitCalled:
+			if logf != nil {
+				logf("Completion definition '%s' called exit\n", def.Name)
 			}
-			if seen != nil {
-				if _, repeated := seen[candidate]; repeated {
-					continue
-				}
-				seen[candidate] = struct{}{}
+		case len(stack) == 0:
+			if logf != nil {
+				logf("Completion definition '%s' left an empty stack\n", def.Name)
 			}
-			matches = append(matches, candidate)
+		case !request.addResult(stack[len(stack)-1]):
+			if logf != nil {
+				logf("Completion definition '%s' did not return a list of strings or a completion dictionary\n", def.Name)
+			}
+		default:
+			ok = true
 		}
 	}
-	return matches, ok
+	return request, ok
 }
 
 // OSCompletionFS implements CompletionFS using the real filesystem.

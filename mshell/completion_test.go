@@ -729,7 +729,7 @@ func TestUnfinishedPathOnlyReturnsFiles(t *testing.T) {
 	}
 }
 
-func runDemoCompletion(t *testing.T, source string, args []string, prefix string) ([]string, bool) {
+func runDemoCompletion(t *testing.T, source string, args []string, prefix string) (CompletionRequest, bool) {
 	t.Helper()
 	parsed, err := parseMShellInput(source, &TokenFile{"demo.msh"})
 	if err != nil {
@@ -737,48 +737,90 @@ func runDemoCompletion(t *testing.T, source string, args []string, prefix string
 	}
 	_, context, state := newStartupTestContext()
 	state.AddCompletionDefinitions(parsed.Definitions)
-	return state.RunCompletionDefinitions(state.CompletionDefinitions["demo"], args, prefix, context, parsed.Definitions)
+	return state.RunCompletionDefinitions(state.CompletionDefinitions["demo"], args, prefix, context, parsed.Definitions, nil)
 }
 
-func TestRunCompletionDefinitionsFiltersByPrefix(t *testing.T) {
+func matchTexts(matches []TabMatch) string {
+	texts := make([]string, len(matches))
+	for i, m := range matches {
+		texts[i] = m.Match
+		if m.TabMatchType == TABMATCHFILE {
+			texts[i] += "(file)"
+		}
+	}
+	return strings.Join(texts, " ")
+}
+
+var demoFS = FakeCompletionFS{Cwd: "/home/user", Entries: map[string][]FakeDirEntry{
+	".": {{"build", false}, {"b.typ", false}, {"b.txt", false}, {"bin", true}},
+}}
+
+func TestCompletionValuesFilteredByPrefix(t *testing.T) {
 	source := "def __demoCompletion { 'complete': ['demo'] } ([str] str -- [str])\n" +
 		"    prefix! args!\n" +
 		"    ['build' 'bench' '--bin' 'clean' @prefix] @args extend\n" +
 		"end\n"
 
-	matches, ok := runDemoCompletion(t, source, []string{"b-arg"}, "b")
+	request, ok := runDemoCompletion(t, source, []string{"b-arg"}, "b")
 	if !ok {
 		t.Fatal("RunCompletionDefinitions() ok = false, want true")
 	}
-	// The definition sees the prefix and the finished arguments; options are hidden without '-'.
-	want := []string{"build", "bench", "b", "b-arg"}
-	if strings.Join(matches, " ") != strings.Join(want, " ") {
-		t.Errorf("matches = %v, want %v", matches, want)
+	// The definition sees the word being completed and the finished arguments.
+	// Options are hidden unless the word starts with '-'.
+	if got, want := matchTexts(request.Matches("b", demoFS, FakePathBinManager{})), "build bench b b-arg"; got != want {
+		t.Errorf("matches = %q, want %q", got, want)
+	}
+	if got, want := matchTexts(request.Matches("--", demoFS, FakePathBinManager{})), "--bin"; got != want {
+		t.Errorf("matches = %q, want %q", got, want)
+	}
+}
+
+func TestCompletionRequestFiles(t *testing.T) {
+	source := "def __demoCompletion { 'complete': ['demo'] } ([str] str -- [str] | {'values'?: [str], 'files'?: str | [str]})\n" +
+		"    drop drop { 'values': ['build' 'bundle'], 'files': '*.typ' }\n" +
+		"end\n"
+	request, ok := runDemoCompletion(t, source, nil, "b")
+	if !ok {
+		t.Fatal("RunCompletionDefinitions() ok = false, want true")
+	}
+	// Values first; then matching files and every directory; the file named like a value is not repeated.
+	sep := string(os.PathSeparator)
+	if got, want := matchTexts(request.Matches("b", demoFS, FakePathBinManager{})), "build bundle b.typ(file) bin"+sep+"(file)"; got != want {
+		t.Errorf("matches = %q, want %q", got, want)
 	}
 
-	matches, _ = runDemoCompletion(t, source, nil, "--")
-	if strings.Join(matches, " ") != "--bin --" {
-		t.Errorf("matches = %v, want [--bin --]", matches)
+	all := CompletionRequest{FilePatterns: []string{"*"}}
+	if got, want := matchTexts(all.Matches("b", demoFS, FakePathBinManager{})), "build(file) b.typ(file) b.txt(file) bin"+sep+"(file)"; got != want {
+		t.Errorf("all files: matches = %q, want %q", got, want)
+	}
+	dirs := CompletionRequest{Dirs: true}
+	if got, want := matchTexts(dirs.Matches("b", demoFS, FakePathBinManager{})), "bin"+sep+"(file)"; got != want {
+		t.Errorf("dirs: matches = %q, want %q", got, want)
+	}
+	bins := CompletionRequest{Binaries: true}
+	fakeBins := FakePathBinManager{Binaries: map[string]string{"bat": "/bin/bat", "cat": "/bin/cat"}}
+	if got, want := matchTexts(bins.Matches("b", demoFS, fakeBins)), "bat"; got != want {
+		t.Errorf("binaries: matches = %q, want %q", got, want)
 	}
 }
 
 func TestRunCompletionDefinitionsReportsFailure(t *testing.T) {
-	source := "def __demoCompletion { 'complete': ['demo'] } ([str] str -- [str])\n" +
-		"    drop drop 'not a list'\n" +
-		"end\n"
-	if _, ok := runDemoCompletion(t, source, nil, ""); ok {
-		t.Error("RunCompletionDefinitions() ok = true for a definition that left a string")
+	for _, body := range []string{"drop drop 'not a list'", "drop drop { 'filez': '*' }", "drop drop { 'dirs': 'yes' }"} {
+		source := "def __demoCompletion { 'complete': ['demo'] } ([str] str -- [str])\n    " + body + "\nend\n"
+		if _, ok := runDemoCompletion(t, source, nil, ""); ok {
+			t.Errorf("RunCompletionDefinitions() ok = true for %q", body)
+		}
 	}
 }
 
-func TestForEachPathCompletionDirsOnly(t *testing.T) {
+func TestForEachPathCompletionKeepFile(t *testing.T) {
 	cfs := FakeCompletionFS{Cwd: "/home/user", Entries: map[string][]FakeDirEntry{
-		"src/": {{"main.go", false}, {"mshell", true}, {"misc", true}},
+		"src/": {{"main.go", false}, {"mshell", true}, {"misc.txt", false}},
 	}}
 	var got []string
-	forEachPathCompletion(cfs, "src/m", true, func(match string) { got = append(got, match) })
-	sep := string(os.PathSeparator)
-	want := []string{"src/mshell" + sep, "src/misc" + sep}
+	forEachPathCompletion(cfs, "src/m", func(name string) bool { return strings.HasSuffix(name, ".go") },
+		func(match string) { got = append(got, match) })
+	want := []string{"src/main.go", "src/mshell" + string(os.PathSeparator)}
 	if strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Errorf("got %v, want %v", got, want)
 	}

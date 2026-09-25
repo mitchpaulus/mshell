@@ -391,19 +391,19 @@ func TestAllMatchesAreFiles(t *testing.T) {
 func TestBuildCompletionInsertPrefersPathQuoteForFileMatches(t *testing.T) {
 	state := TermState{l: NewLexer("", nil)}
 
-	got := state.buildCompletionInsert("Floor 0/", LITERAL, quoteAsPath)
+	got := state.buildCompletionInsert("Floor 0/", LITERAL, true)
 	want := "`Floor 0/"
 	if got != want {
 		t.Fatalf("buildCompletionInsert() = %q, want %q", got, want)
 	}
 
-	got = state.buildCompletionInsert("Floor 0.txt", LITERAL, quoteAsPath)
+	got = state.buildCompletionInsert("Floor 0.txt", LITERAL, true)
 	want = "`Floor 0.txt` "
 	if got != want {
 		t.Fatalf("buildCompletionInsert() = %q, want %q", got, want)
 	}
 
-	got = state.buildCompletionInsert("Floor 0/", LITERAL, quoteAsString)
+	got = state.buildCompletionInsert("Floor 0/", LITERAL, false)
 	want = "'Floor 0/'"
 	if got != want {
 		t.Fatalf("buildCompletionInsert() = %q, want %q", got, want)
@@ -413,41 +413,16 @@ func TestBuildCompletionInsertPrefersPathQuoteForFileMatches(t *testing.T) {
 func TestBuildSharedCompletionInsertUsesBacktickForFilePrefixes(t *testing.T) {
 	state := TermState{l: NewLexer("", nil)}
 
-	got := state.buildSharedCompletionInsert("Floor ", LITERAL, quoteAsPath, nil)
+	got := state.buildSharedCompletionInsert("Floor ", LITERAL, true)
 	want := "`Floor "
 	if got != want {
 		t.Fatalf("buildSharedCompletionInsert() = %q, want %q", got, want)
 	}
 
-	got = state.buildSharedCompletionInsert("Floor ", LITERAL, quoteAsString, nil)
+	got = state.buildSharedCompletionInsert("Floor ", LITERAL, false)
 	want = "'Floor "
 	if got != want {
 		t.Fatalf("buildSharedCompletionInsert() = %q, want %q", got, want)
-	}
-}
-
-func TestCompletionInsertQuotesDefinitionPathsFromDisk(t *testing.T) {
-	state := TermState{l: NewLexer("", nil)}
-	existing := filepath.Join(t.TempDir(), "Floor 1.txt")
-	if err := os.WriteFile(existing, nil, 0644); err != nil {
-		t.Fatal(err)
-	}
-	directory := "Floor 0" + string(os.PathSeparator)
-
-	if got, want := state.buildCompletionInsert(existing, LITERAL, quoteIfPath), "`"+existing+"` "; got != want {
-		t.Errorf("existing file: got %q, want %q", got, want)
-	}
-	if got, want := state.buildCompletionInsert(directory, LITERAL, quoteIfPath), "`"+directory; got != want {
-		t.Errorf("directory: got %q, want %q", got, want)
-	}
-	if got, want := state.buildCompletionInsert("no such target", LITERAL, quoteIfPath), "'no such target'"; got != want {
-		t.Errorf("missing path: got %q, want %q", got, want)
-	}
-	if got, want := state.buildSharedCompletionInsert("Floor ", LITERAL, quoteIfPath, []string{existing, directory}), "`Floor "; got != want {
-		t.Errorf("shared paths: got %q, want %q", got, want)
-	}
-	if got, want := state.buildSharedCompletionInsert("Floor ", LITERAL, quoteIfPath, []string{existing, "Floor x"}), "'Floor "; got != want {
-		t.Errorf("shared with a non-path: got %q, want %q", got, want)
 	}
 }
 

@@ -428,22 +428,38 @@ The CLI can use definition metadata to provide argument completions for binaries
 Add a `complete` key in the metadata dictionary of a `def` to register it for one or more command names.
 The definition is invoked with a clean stack holding the finished argument tokens (excluding the binary name) as a list,
 and on top of that the word being completed, without any opening quote or backtick.
-It returns a list of candidates, which should not repeat.
 
-The candidates are the whole answer: file names are not added.
-Use `completeFiles` or `completeDirs` where the command takes a path,
-`completeBinaries` for a command name, and `completeCommand` to complete the arguments of a wrapped command, as `sudo` does.
-Candidates that do not start with the word being completed are dropped,
-and so are options (starting with `-`) unless the word starts with `-`.
-So a definition can skip slow work, like running a command, when the word starts with `-`.
-If every definition for a command fails, files are completed instead.
+It returns what fits the argument being completed, and Tab does the matching against the word.
+Return a list of values when only those fit, like `['auto' 'always' 'never']` after `--color`.
+When files, directories, or commands fit, return a dictionary instead, with any of these keys:
+
+- `values`: a list of values, as above.
+- `files`: a glob pattern, or a list of them, like `'*.typ'` or `'*'`.
+  Tab offers the files in the directory being typed whose names match, and every directory, so you can move into one.
+- `dirs`: `true` to offer directories only.
+- `binaries`: `true` to offer executables on the path.
 
 ```mshell
-def mshCompletion { 'complete': ['msh' 'mshell'] } ([str] str -- [str])
+{ 'values': ['build' 'clean'], 'files': '*.typ' }
+```
+
+Tab offers the values that start with the word, then the files and directories, then the executables.
+Options (values starting with `-`) are only offered when the word starts with `-`,
+so a definition can skip slow work, like running a command, when the word starts with `-`.
+Values should not repeat.
+If every definition for a command fails, Tab completes files.
+
+For commands that run another command, like `sudo`, use `completeCommand`.
+It takes that command line and the word, and returns what the command's own completion definitions return.
+
+Signatures must name the dictionary type when a definition can return one:
+
+```mshell
+def mshCompletion { 'complete': ['msh' 'mshell'] } ([str] str -- [str] | {'values'?: [str], 'files'?: str | [str], 'dirs'?: bool, 'binaries'?: bool})
     prefix! input!
     @prefix '-' startsWith
     (['-h' '--help' '--html' '--lex' '--parse' '--check-types' '--type-check-only' '--version' '-c' '-'])
-    (['lsp' 'bin' 'edit' 'completions'] @prefix completeFiles extend) iff
+    ({ 'values': ['lsp' 'bin' 'edit' 'completions'], 'files': '*' }) iff
 end
 ```
 
@@ -1153,10 +1169,7 @@ end wl # Output: 11
 - `env`: Write all environment variables to stderr in sorted order (--)
 - `envInspect`: Get the session-local change history for an environment variable, oldest to newest. Each event contains `dt`, `kind`, `source`, and `changed`. Only the latest 256 events per variable are retained, and values are never included. `(str -- [{dt: datetime, kind: str, source: str, changed: bool}])`
 - `completionDefs`: Push a dictionary of completion definitions. Keys are command names, values are lists of quotations. `( -- dict)`
-- `completeFiles`: Files and directories the word can complete to, spelled with the word's directory part. Directories end in a path separator. `(str -- [str])`
-- `completeDirs`: Like `completeFiles`, but only directories. `(str -- [str])`
-- `completeBinaries`: Names of executables on the path that start with the word. `(str -- [str])`
-- `completeCommand`: Complete a command line as Tab does. The list holds the command and its finished arguments, and the string is the word being completed. With an empty list, completes executable names. For a command without a working completion definition, completes files. `([str] str -- [str])`
+- `completeCommand`: For completion definitions of commands that run another command, like `sudo`. The list holds that command and its finished arguments, and the string is the word being completed. Returns what the command's completion definitions return: values, or a dictionary asking for files, directories, or executables. With an empty list, asks for executables; for a command without a working completion definition, asks for files. `([str] str -- [str] | dict)`
 - `setenv`: Set an environment variable by name, value then name. Use when the name is not known statically; otherwise prefer `$NAME!`. `(str str -- )`
 - `unsetenv`: Remove an environment variable by name. Unsetting a variable that does not exist is not an error. `(str -- )`
 - `dup`: Duplicate (a -- a a)
