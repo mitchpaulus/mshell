@@ -80,6 +80,32 @@ func (objList *MShellStack) Pop1(t Token) (MShellObject, error) {
 // 0o/0x/0b base prefixes the lexer accepts (in addition to plain decimal). The
 // resulting int carries no record of which base was written; the prefix is
 // purely a source-level convenience.
+// parseDateTimeLiteral converts a DATETIME token lexeme, like 2023-10-01T13:01:30,
+// into a date/time. Missing time components are zero.
+func parseDateTimeLiteral(lexeme string) *MShellDateTime {
+	year, _ := strconv.Atoi(lexeme[0:4])
+	month, _ := strconv.Atoi(lexeme[5:7])
+	day, _ := strconv.Atoi(lexeme[8:10])
+
+	hour := 0
+	minute := 0
+	second := 0
+	if len(lexeme) >= 13 {
+		hour, _ = strconv.Atoi(lexeme[11:13])
+	}
+
+	if len(lexeme) >= 16 {
+		minute, _ = strconv.Atoi(lexeme[14:16])
+	}
+
+	if len(lexeme) >= 19 {
+		second, _ = strconv.Atoi(lexeme[17:19])
+	}
+
+	dt := time.Date(year, time.Month(month), day, hour, minute, second, 0, time.UTC)
+	return &MShellDateTime{Time: dt, OriginalString: lexeme}
+}
+
 func parseIntLiteral(s string) (int, error) {
 	body := s
 	neg := false
@@ -1010,6 +1036,11 @@ func (state *EvalState) processToken(token MShellParseItem, frame *EvaluationFra
 
 	switch t := token.(type) {
 	case Token:
+		// Literals were decoded once at lex time.
+		if t.Value != nil {
+			stack.Push(t.Value)
+			return nil
+		}
 		if result, handled := state.evalSimpleToken(&t, stack, &frame.Context); handled {
 			return result
 		}
@@ -1339,6 +1370,18 @@ func (state *EvalState) matchPattern(pattern []MShellParseItem, subject MShellOb
 
 // matchTokenPattern matches a single token pattern against a subject.
 func (state *EvalState) matchTokenPattern(p Token, subject MShellObject) (bool, EvalResult) {
+	// Value literals were decoded once at lex time.
+	if p.Value != nil {
+		switch p.Type {
+		case INTEGER, FLOAT, STRING, SINGLEQUOTESTRING:
+			eq, err := subject.Equals(p.Value)
+			if err != nil {
+				return false, SimpleSuccess()
+			}
+			return eq, SimpleSuccess()
+		}
+	}
+
 	switch p.Type {
 	case LITERAL:
 		if p.Lexeme == "_" {
@@ -9597,9 +9640,8 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error loading CST location: %s\n", t.Line, t.Column, err.Error()))
 					}
 
-					dateTimeObj.Time = dateTimeObj.Time.In(cstLocation)
-					dateTimeObj.OriginalString = ""
-					stack.Push(dateTimeObj)
+					// Push a new object: the input may be shared, such as a variable or a literal.
+					stack.Push(&MShellDateTime{Time: dateTimeObj.Time.In(cstLocation)})
 				case "cstToUtc":
 					obj1, err := stack.Pop()
 					if err != nil {
@@ -9627,9 +9669,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						dateTimeObj.Time.Nanosecond(),
 						cstLocation,
 					)
-					dateTimeObj.Time = cstTime.In(time.UTC)
-					dateTimeObj.OriginalString = ""
-					stack.Push(dateTimeObj)
+					stack.Push(&MShellDateTime{Time: cstTime.In(time.UTC)})
 				case "floor":
 					// Round a number down to the nearest integer
 					obj1, err := stack.Pop()
@@ -12157,27 +12197,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					return *result
 				}
 			} else if t.Type == DATETIME { // Token Type
-				year, _ := strconv.Atoi(t.Lexeme[0:4])
-				month, _ := strconv.Atoi(t.Lexeme[5:7])
-				day, _ := strconv.Atoi(t.Lexeme[8:10])
-
-				hour := 0
-				minute := 0
-				second := 0
-				if len(t.Lexeme) >= 13 {
-					hour, _ = strconv.Atoi(t.Lexeme[11:13])
-				}
-
-				if len(t.Lexeme) >= 16 {
-					minute, _ = strconv.Atoi(t.Lexeme[14:16])
-				}
-
-				if len(t.Lexeme) >= 19 {
-					second, _ = strconv.Atoi(t.Lexeme[17:19])
-				}
-
-				dt := time.Date(year, time.Month(month), day, hour, minute, second, 0, time.UTC)
-				stack.Push(&MShellDateTime{Time: dt, OriginalString: t.Lexeme})
+				stack.Push(parseDateTimeLiteral(t.Lexeme))
 			} else if t.Type == FORMATSTRING { // Token Type
 				parsedString, err := state.EvaluateFormatString(t.Lexeme, context, definitions, callStackItem)
 				if err != nil {

@@ -1,0 +1,11 @@
+# utcToCst and cstToUtc return new values, leaving their input unchanged.
+2024-01-02T12:00 d!
+@d utcToCst isoDateTimeFmt wl
+@d isoDateTimeFmt wl
+@d cstToUtc isoDateTimeFmt wl
+@d isoDateTimeFmt wl
+
+# A literal evaluated repeatedly gives the same value each time.
+(2024-01-02T12:00 utcToCst isoDateTimeFmt wl) q!
+@q x
+@q x
