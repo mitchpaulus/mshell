@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unsafe"
 )
 
 func makeCompletionTree(t testing.TB, n int) string {
@@ -138,4 +139,18 @@ func BenchmarkRealDirCompletion(b *testing.B) {
 			}
 		}
 	})
+}
+
+func TestDirListingKeepsLongNames(t *testing.T) {
+	// 255 UTF-16 units of a 3-byte character: legal on Windows and macOS.
+	long := strings.Repeat("語", 255)
+	var listing DirListing
+	listing.add(long, dirKindFile)
+	listing.add("short", dirKindDir)
+	if listing.Len() != 2 || listing.name(0) != long || listing.name(1) != "short" {
+		t.Fatalf("long name lost: %d entries", listing.Len())
+	}
+	if size := unsafe.Sizeof(dirEntryRef{}); size != 8 {
+		t.Errorf("dirEntryRef is %d bytes, want 8", size)
+	}
 }

@@ -60,7 +60,7 @@ func (l *DirListing) parseDirents(start int) {
 		for n < reclen-direntNameOff && buf[nameStart+n] != 0 {
 			n++
 		}
-		if n > 0 && n <= 255 && !(n == 1 && buf[nameStart] == '.') && !(n == 2 && buf[nameStart] == '.' && buf[nameStart+1] == '.') {
+		if n > 0 && !(n == 1 && buf[nameStart] == '.') && !(n == 2 && buf[nameStart] == '.' && buf[nameStart+1] == '.') {
 			kind := dirKindUnknown
 			switch buf[pos+direntTypeOff] {
 			case syscall.DT_DIR:
@@ -72,7 +72,7 @@ func (l *DirListing) parseDirents(start int) {
 			default:
 				kind = dirKindFile
 			}
-			l.entries = append(l.entries, dirEntryRef{off: uint32(nameStart), n: uint8(n), kind: kind})
+			l.entries = append(l.entries, dirEntryRef{off: uint32(nameStart), n: uint16(n), kind: kind})
 		}
 		pos += reclen
 	}
