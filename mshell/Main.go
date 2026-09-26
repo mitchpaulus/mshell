@@ -949,6 +949,7 @@ type TermState struct {
 	tabCompletions0    []string // Tab completions for the current command
 	tabCompletions1    []string // Tab completions for the current command
 	currentTabComplete int
+	completionListing  DirListing // Directory buffers reused across Tab presses.
 	tabCycleActive     bool
 	tabCycleIndex      int
 	tabCycleStart      ByteOffset
@@ -2262,12 +2263,14 @@ func (state *TermState) completionArgsFromTokens(tokens []Token, prefix string) 
 	return args
 }
 
-func (state *TermState) runCompletionDefinitions(defs []MShellDefinition, args []string) []string {
+// runCompletionDefinitions merges what every definition for a binary asks
+// for. ok is false when none of them produced a usable answer, so the caller
+// can fall back to plain file completion.
+func (state *TermState) runCompletionDefinitions(defs []MShellDefinition, args []string) (spec CompletionSpec, ok bool) {
 	if len(defs) == 0 {
-		return nil
+		return spec, false
 	}
-	matches := make([]string, 0)
-	seen := map[string]struct{}{}
+	var seen map[string]struct{}
 
 	// A completion definition answers on the stack. Anything it or the
 	// processes it runs would print belongs to nobody: the editor owns the
@@ -2302,27 +2305,100 @@ func (state *TermState) runCompletionDefinitions(defs []MShellDefinition, args [
 		if len(completionStack) > 1 {
 			state.Logf("Completion definition '%s' left %d items on the stack\n", def.Name, len(completionStack))
 		}
-		top := completionStack[len(completionStack)-1]
-		list, ok := top.(*MShellList)
-		if !ok {
-			state.Logf("Completion definition '%s' did not return a list\n", def.Name)
+		var values *MShellList
+		switch top := completionStack[len(completionStack)-1].(type) {
+		case *MShellList:
+			values = top
+			spec.Files = append(spec.Files, CompletionGlob{Kind: globAny})
+		case *MShellDict:
+			values = state.mergeCompletionDict(def.Name, top, &spec)
+		default:
+			state.Logf("Completion definition '%s' did not return a list or dictionary\n", def.Name)
 			continue
 		}
-		for _, item := range list.Items {
+		ok = true
+		if values == nil {
+			continue
+		}
+		if seen == nil {
+			seen = make(map[string]struct{}, len(values.Items))
+		}
+		for _, item := range values.Items {
 			str, err := item.CastString()
 			if err != nil {
 				state.Logf("Completion definition '%s' returned a non-string: %s\n", def.Name, err)
 				continue
 			}
-			if _, ok := seen[str]; ok {
+			if _, dup := seen[str]; dup {
 				continue
 			}
 			seen[str] = struct{}{}
-			matches = append(matches, str)
+			spec.Values = append(spec.Values, str)
 		}
 	}
 
-	return matches
+	return spec, ok
+}
+
+// mergeCompletionDict folds a completion dictionary into spec and returns its
+// 'values' list, if any. Malformed fields are logged and skipped so one typo
+// does not lose the rest of the completion.
+func (state *TermState) mergeCompletionDict(defName string, dict *MShellDict, spec *CompletionSpec) *MShellList {
+	var values *MShellList
+	for key, value := range dict.Items {
+		switch key {
+		case "values":
+			list, isList := value.(*MShellList)
+			if !isList {
+				state.Logf("Completion definition '%s': 'values' must be a list\n", defName)
+				continue
+			}
+			values = list
+		case "preferredFiles":
+			spec.PreferredFiles = state.appendCompletionGlobs(defName, key, value, spec.PreferredFiles)
+		case "files":
+			spec.Files = state.appendCompletionGlobs(defName, key, value, spec.Files)
+		case "dirs", "binaries":
+			flag, isBool := value.(MShellBool)
+			if !isBool {
+				state.Logf("Completion definition '%s': '%s' must be a bool\n", defName, key)
+				continue
+			}
+			if key == "dirs" {
+				spec.Dirs = spec.Dirs || flag.Value
+			} else {
+				spec.Binaries = spec.Binaries || flag.Value
+			}
+		default:
+			state.Logf("Completion definition '%s': unknown key '%s'\n", defName, key)
+		}
+	}
+	return values
+}
+
+// appendCompletionGlobs accepts a single pattern or a list of them.
+func (state *TermState) appendCompletionGlobs(defName string, key string, value MShellObject, globs []CompletionGlob) []CompletionGlob {
+	add := func(item MShellObject) {
+		pattern, err := item.CastString()
+		if err != nil || pattern == "" {
+			state.Logf("Completion definition '%s': '%s' patterns must be non-empty strings\n", defName, key)
+			return
+		}
+		glob, err := CompileCompletionGlob(pattern)
+		if err != nil {
+			state.Logf("Completion definition '%s': bad pattern '%s': %s\n", defName, pattern, err)
+			return
+		}
+		globs = append(globs, glob)
+	}
+	if list, isList := value.(*MShellList); isList {
+		for _, item := range list.Items {
+			add(item)
+		}
+	} else {
+		add(value)
+	}
+	return globs
 }
 
 func (state *TermState) ScrollDown(numLines int) {
@@ -4196,24 +4272,16 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			state.Logf("Last token: %s %d\n", lastToken, len(tokens))
 			state.Logf("Prefix: %s\n", prefix)
 
-			var matches []TabMatch
-
-			// Binary specific completions should come first
+			// Binary specific completions decide what the argument offers.
+			var spec *CompletionSpec
 			if binaryCompletion {
 				isCompletingBinary := prefix != "" && lastToken.Start == binaryToken.Start && lastToken.Line == binaryToken.Line
 				if !isCompletingBinary {
 					defs := state.evalState.CompletionDefinitions[binaryToken.Lexeme]
 					if len(defs) > 0 {
 						args := state.completionArgsFromTokens(tokens, prefix)
-						completionMatches := state.runCompletionDefinitions(defs, args)
-						for _, match := range completionMatches {
-							if strings.HasPrefix(match, prefix) {
-								// Only show options (starting with '-') if the prefix also starts with '-'
-								if strings.HasPrefix(match, "-") && !strings.HasPrefix(prefix, "-") {
-									continue
-								}
-								matches = append(matches, TabMatch{TABMATCHCMD, match})
-							}
+						if defSpec, ok := state.runCompletionDefinitions(defs, args); ok {
+							spec = &defSpec
 						}
 					}
 				}
@@ -4231,7 +4299,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 			}
 
 			deps := CompletionDeps{
-				FS:          OSCompletionFS{},
+				FS:          OSCompletionFS{Listing: &state.completionListing},
 				Env:         OSCompletionEnv{},
 				Binaries:    state.context.Pbm,
 				Variables:   variables,
@@ -4254,10 +4322,11 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				PrevTokenType: prevTokenType,
 				NumTokens:     len(tokens),
 				InBinaryMode:  binaryCompletion,
+				Spec:          spec,
 			}
 
 			// Generate completions using the extracted function
-			matches = append(matches, GenerateCompletions(input, deps)...)
+			matches := GenerateCompletions(input, deps)
 			allFileMatches := allMatchesAreFiles(matches)
 
 			var insertString string
