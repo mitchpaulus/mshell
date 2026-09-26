@@ -2201,6 +2201,9 @@ const (
 	COL_FLOAT
 	COL_STRING
 	COL_DATETIME
+	// COL_DICT_STRING stores strings as codes into a table of distinct values.
+	// It behaves exactly like COL_STRING; only the storage differs.
+	COL_DICT_STRING
 )
 
 // GridColumn - Supports typed storage with fallback
@@ -2213,6 +2216,11 @@ type GridColumn struct {
 	StringData   []string
 	DateTimeData []time.Time
 	GenericData  []MShellObject   // Fallback for mixed types
+
+	// COL_DICT_STRING storage. DictValues holds distinct strings; a value may be unused.
+	DictCodes  []int32
+	DictValues []string
+	dictIndex  map[string]int32 // Lazily built reverse lookup of DictValues
 }
 
 // NewGridColumn creates a new column with the given name and row count
@@ -2234,11 +2242,43 @@ func (col *GridColumn) Get(index int) MShellObject {
 		return MShellFloat{Value: col.FloatData[index]}
 	case COL_STRING:
 		return MShellString{Content: col.StringData[index]}
+	case COL_DICT_STRING:
+		return MShellString{Content: col.DictValues[col.DictCodes[index]]}
 	case COL_DATETIME:
 		return &MShellDateTime{Time: col.DateTimeData[index]}
 	default:
 		return col.GenericData[index]
 	}
+}
+
+// isStringColType reports whether a column type holds only strings.
+func isStringColType(t ColumnType) bool {
+	return t == COL_STRING || t == COL_DICT_STRING
+}
+
+// StringAt returns the string at index for a COL_STRING or COL_DICT_STRING column.
+func (col *GridColumn) StringAt(index int) string {
+	if col.ColType == COL_DICT_STRING {
+		return col.DictValues[col.DictCodes[index]]
+	}
+	return col.StringData[index]
+}
+
+// internDictString returns the dictionary code for s, adding it if absent.
+func (col *GridColumn) internDictString(s string) int32 {
+	if col.dictIndex == nil {
+		col.dictIndex = make(map[string]int32, len(col.DictValues))
+		for i, v := range col.DictValues {
+			col.dictIndex[v] = int32(i)
+		}
+	}
+	code, ok := col.dictIndex[s]
+	if !ok {
+		code = int32(len(col.DictValues))
+		col.DictValues = append(col.DictValues, s)
+		col.dictIndex[s] = code
+	}
+	return code
 }
 
 // Set sets the value at the given row index
@@ -2255,6 +2295,10 @@ func (col *GridColumn) Set(index int, value MShellObject) {
 	case COL_STRING:
 		if strVal, ok := value.(MShellString); ok {
 			col.StringData[index] = strVal.Content
+		}
+	case COL_DICT_STRING:
+		if strVal, ok := value.(MShellString); ok {
+			col.DictCodes[index] = col.internDictString(strVal.Content)
 		}
 	case COL_DATETIME:
 		if dtVal, ok := value.(*MShellDateTime); ok {
@@ -2274,6 +2318,8 @@ func (col *GridColumn) Len() int {
 		return len(col.FloatData)
 	case COL_STRING:
 		return len(col.StringData)
+	case COL_DICT_STRING:
+		return len(col.DictCodes)
 	case COL_DATETIME:
 		return len(col.DateTimeData)
 	default:
