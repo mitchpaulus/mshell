@@ -521,6 +521,10 @@ func collectRuntimeListsFromItems(dst *[]*MShellParseList, items []MShellParseIt
 			}
 		case *MShellParseQuote:
 			collectRuntimeListsFromItems(dst, v.Items)
+		case *MShellParseFormatString:
+			for _, interpolation := range v.Interpolations {
+				collectRuntimeListsFromItems(dst, interpolation)
+			}
 		case *MShellParsePrefixQuote:
 			collectRuntimeListsFromItems(dst, v.Items)
 		case *MShellParseIfBlock:
@@ -1464,6 +1468,10 @@ func collectTokensFromItems(dst *[]Token, items []MShellParseItem) {
 			}
 		case *MShellParseQuote:
 			collectTokensFromItems(dst, v.Items)
+		case *MShellParseFormatString:
+			for _, interpolation := range v.Interpolations {
+				collectTokensFromItems(dst, interpolation)
+			}
 		case *MShellIndexerList:
 			collectTokensFromItems(dst, v.Indexers)
 		case MShellVarstoreList:

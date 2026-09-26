@@ -1,0 +1,16 @@
+5 x!
+$"plain" wl
+$"a {1 2 +} b" wl
+$"a {"x"} b" wl
+$"a {'}'} b" wl
+$"a { {"k": 1} :k? } b" wl
+$"a {$"in {@x}"} b" wl
+$"esc \{ \} } {@x}" wl
+"normal \{ \}" wl
+$"{@x}{@x}" wl
+$"multi {
+  @x 1 +
+} line" wl
+[1 2 3] (n! $"<{@n}>") map ", " join wl
+$"{2.5 1 toFixed " " 6 leftPad}|" wl
+$"{`dir/file`}" wl

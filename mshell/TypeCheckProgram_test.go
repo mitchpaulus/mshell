@@ -1165,3 +1165,37 @@ func TestTypeCheckProgramMshFileManager(t *testing.T) {
 		t.Fatalf("expected int argument to mshFileManager to fail; errs=%v", errs)
 	}
 }
+
+func TestTypeCheckInterpolationTypes(t *testing.T) {
+	for _, src := range []string{
+		`$"{"s"} {1} {` + "`p`" + `}" wl`,
+		`$"{ {"k": "v"} :k? } {$"n {1 2 +}"}" wl`,
+		`$"{'}'}" wl`,
+		`$"{2.5 1 toFixed " " 6 leftPad}" wl`,
+	} {
+		if errs, ok := parseAndCheck(t, src); !ok || len(errs) != 0 {
+			t.Errorf("expected %q to pass; errs=%v", src, errs)
+		}
+	}
+	for _, src := range []string{
+		`$"{1.5}" wl`,
+		`$"{[1 2]}" wl`,
+		`$"{true}" wl`,
+		`$"{1 2}" wl`,
+		`$"{}" wl`,
+	} {
+		if errs, ok := parseAndCheck(t, src); ok {
+			t.Errorf("expected %q to fail; errs=%v", src, errs)
+		}
+	}
+}
+
+func TestTypeCheckInterpolationTypePosition(t *testing.T) {
+	errs, ok := parseAndCheck(t, "\"x\" wl\n$\"a {1.5} b\" wl")
+	if ok {
+		t.Fatalf("expected float interpolation to fail; errs=%v", errs)
+	}
+	if len(errs) == 0 || !strings.Contains(errs[0], "line 2, column 6") || !strings.Contains(errs[0], "got float") {
+		t.Fatalf("expected float diagnostic at line 2, column 6; got %v", errs)
+	}
+}

@@ -3,6 +3,7 @@ package main
 // Main parsing entry point ParseFile
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -265,6 +266,69 @@ func (quote *MShellParseQuote) DebugString() string {
 		}
 	}
 	builder.WriteString(")")
+	return builder.String()
+}
+
+// MShellParseFormatString is a format string with interpolations,
+// $"text {code} text". Chunks are the FORMATSTRINGSTART, FORMATSTRINGMID,
+// and FORMATSTRINGEND tokens, whose Values hold the decoded text. There is
+// one more chunk than interpolations: the string is the first chunk's text,
+// the first interpolation's value, the second chunk's text, and so on.
+type MShellParseFormatString struct {
+	Chunks         []Token
+	Interpolations [][]MShellParseItem
+}
+
+func (fs *MShellParseFormatString) GetStartToken() Token {
+	return fs.Chunks[0]
+}
+
+func (fs *MShellParseFormatString) GetEndToken() Token {
+	return fs.Chunks[len(fs.Chunks)-1]
+}
+
+// ChunkText returns the decoded text of chunk i.
+func (fs *MShellParseFormatString) ChunkText(i int) string {
+	return fs.Chunks[i].Value.(MShellString).Content
+}
+
+func (fs *MShellParseFormatString) ToJson() string {
+	texts := strings.Builder{}
+	texts.WriteString("[")
+	for i := range fs.Chunks {
+		if i > 0 {
+			texts.WriteString(", ")
+		}
+		escaped, _ := json.Marshal(fs.ChunkText(i))
+		texts.Write(escaped)
+	}
+	texts.WriteString("]")
+
+	interpolations := strings.Builder{}
+	interpolations.WriteString("[")
+	for i, items := range fs.Interpolations {
+		if i > 0 {
+			interpolations.WriteString(", ")
+		}
+		interpolations.WriteString(ToJson(items))
+	}
+	interpolations.WriteString("]")
+	return fmt.Sprintf("{\"format_string\": {\"texts\": %s, \"interpolations\": %s}}", texts.String(), interpolations.String())
+}
+
+func (fs *MShellParseFormatString) DebugString() string {
+	builder := strings.Builder{}
+	for i, chunk := range fs.Chunks {
+		builder.WriteString(chunk.Lexeme)
+		if i < len(fs.Interpolations) {
+			for j, item := range fs.Interpolations[i] {
+				if j > 0 {
+					builder.WriteString(" ")
+				}
+				builder.WriteString(item.DebugString())
+			}
+		}
+	}
 	return builder.String()
 }
 
@@ -533,6 +597,12 @@ func checkReturnPlacement(items []MShellParseItem, allowed bool) error {
 			err = checkReturnPlacement(it.Items, false)
 		case *MShellParseList:
 			err = checkReturnPlacement(it.Items, false)
+		case *MShellParseFormatString:
+			for _, items := range it.Interpolations {
+				if err = checkReturnPlacement(items, false); err != nil {
+					break
+				}
+			}
 		case *MShellParseDict:
 			err = checkDictReturnPlacement(it)
 		case *MShellParseIfBlock:
@@ -593,9 +663,8 @@ func itemsMayUseVariables(items []MShellParseItem) bool {
 		switch it := item.(type) {
 		case Token:
 			switch it.Type {
-			// A loop runs its quotation with the current variable map, and
-			// a format string runs arbitrary code in the current context.
-			case VARSTORE, LOOP, FORMATSTRING:
+			// A loop runs its quotation with the current variable map.
+			case VARSTORE, LOOP:
 				return true
 			case LITERAL:
 				// Builds quotations that capture the current variable map.
@@ -606,6 +675,13 @@ func itemsMayUseVariables(items []MShellParseItem) bool {
 		case *MShellParseList:
 			if itemsMayUseVariables(it.Items) {
 				return true
+			}
+		case *MShellParseFormatString:
+			// Interpolations run with the current variable map.
+			for _, items := range it.Interpolations {
+				if itemsMayUseVariables(items) {
+					return true
+				}
 			}
 		case *MShellParseDict:
 			for _, kv := range it.Items {
@@ -1273,8 +1349,49 @@ func (parser *MShellParser) ParseItem() (MShellParseItem, error) {
 		return parser.ParsePrefixQuote()
 	case AS:
 		return parser.ParseAsCast()
+	case FORMATSTRINGSTART:
+		return parser.ParseFormatString()
+	case FORMATSTRINGMID, FORMATSTRINGEND:
+		return nil, fmt.Errorf("%d:%d: Unexpected '}' ending a format string interpolation while a list, quotation, or other construct inside it is still open.", parser.curr.Line, parser.curr.Column)
 	default:
 		return parser.ParseSimple(), nil
+	}
+}
+
+// ParseFormatString parses a format string with interpolations:
+//
+//	FORMATSTRINGSTART item* (FORMATSTRINGMID item*)* FORMATSTRINGEND
+//
+// A format string with no interpolations is a single FORMATSTRING token,
+// which is parsed as a simple item.
+func (parser *MShellParser) ParseFormatString() (*MShellParseFormatString, error) {
+	start := parser.curr
+	fs := &MShellParseFormatString{Chunks: []Token{start}}
+	parser.NextToken()
+
+	items := []MShellParseItem{}
+	for {
+		switch parser.curr.Type {
+		case FORMATSTRINGMID, FORMATSTRINGEND:
+			chunk := parser.curr
+			fs.Chunks = append(fs.Chunks, chunk)
+			fs.Interpolations = append(fs.Interpolations, items)
+			items = []MShellParseItem{}
+			parser.NextToken()
+			if chunk.Type == FORMATSTRINGEND {
+				return fs, nil
+			}
+		case EOF:
+			return fs, fmt.Errorf("%d:%d: Did not find closing '}' for format string interpolation.", start.Line, start.Column)
+		case RIGHT_SQUARE_BRACKET, RIGHT_PAREN, GRID_CLOSE, END:
+			return fs, fmt.Errorf("%d:%d: Unexpected '%s' inside format string interpolation.", parser.curr.Line, parser.curr.Column, parser.curr.Lexeme)
+		default:
+			item, err := parser.ParseItem()
+			if err != nil {
+				return fs, err
+			}
+			items = append(items, item)
+		}
 	}
 }
 
@@ -1286,7 +1403,7 @@ func (parser *MShellParser) ParseStaticItem() (MShellParseItem, error) {
 		return parser.ParseStaticDict()
 	case STRING, SINGLEQUOTESTRING, INTEGER, FLOAT, TRUE, FALSE:
 		return parser.ParseSimple(), nil
-	case FORMATSTRING:
+	case FORMATSTRING, FORMATSTRINGSTART:
 		return nil, fmt.Errorf("Interpolated strings are not allowed in metadata at line %d, column %d.", parser.curr.Line, parser.curr.Column)
 	default:
 		return nil, fmt.Errorf("Expected static metadata value at line %d, column %d, got %s.", parser.curr.Line, parser.curr.Column, parser.curr.Type)

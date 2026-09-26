@@ -45,7 +45,6 @@ var tempFiles []string
 func parseMShellInput(input string, inputFile *TokenFile) (*MShellFile, error) {
 	lexer := NewLexer(input, inputFile)
 	parser := MShellParser{lexer: lexer}
-	parser.NextToken()
 	return parser.ParseFile()
 }
 
@@ -1631,11 +1630,34 @@ func lastArgumentFromCommand(command string) (string, bool) {
 	}
 
 	for i := len(tokens) - 1; i >= 0; i-- {
+		if tokens[i].Type == FORMATSTRINGEND {
+			return formatStringSource(command, tokens, i)
+		}
 		if isAltDotWordToken(tokens[i].Type) {
 			return tokens[i].Lexeme, true
 		}
 	}
 
+	return "", false
+}
+
+// formatStringSource returns the source of the whole format string whose
+// FORMATSTRINGEND is tokens[end], interpolations included.
+func formatStringSource(command string, tokens []Token, end int) (string, bool) {
+	depth := 0
+	for i := end; i >= 0; i-- {
+		switch tokens[i].Type {
+		case FORMATSTRINGEND:
+			depth++
+		case FORMATSTRINGSTART:
+			depth--
+			if depth == 0 {
+				runes := []rune(command)
+				stop := tokens[end].Start + len([]rune(tokens[end].Lexeme))
+				return string(runes[tokens[i].Start:stop]), true
+			}
+		}
+	}
 	return "", false
 }
 

@@ -531,7 +531,7 @@ func (s *TermState) commandStyleSpansInto(dst []styleSpan, command SourceText) [
 	for i, t := range tokens {
 		var sgr string
 		switch t.Type {
-		case STRING, SINGLEQUOTESTRING, FORMATSTRING: sgr = "\033[31m"
+		case STRING, SINGLEQUOTESTRING, FORMATSTRING, FORMATSTRINGSTART, FORMATSTRINGMID, FORMATSTRINGEND: sgr = "\033[31m"
 		case UNFINISHEDSTRING, UNFINISHEDSINGLEQUOTESTRING: sgr = "\033[91m"
 		case UNFINISHEDPATH: sgr = "\033[95m"
 		case PATH: sgr = "\033[35m"

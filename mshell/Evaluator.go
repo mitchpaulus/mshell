@@ -553,6 +553,7 @@ const (
 	FRAME_NORMAL FrameType = iota // Standard evaluation (definition, quote, if body)
 	FRAME_LIST                    // List literal - collect stack into list
 	FRAME_DICT                    // Dict value - collect stack for key
+	FRAME_FORMATSTRING            // Format string interpolation - collect stack for text
 	FRAME_LOOP                    // Loop body - iterate until break
 )
 
@@ -575,8 +576,8 @@ type EvaluationFrame struct {
 	// when building the frame's context opened a file for a redirect.
 	ShouldCloseContext bool
 
-	// FRAME_LIST and FRAME_DICT: the stack the finished list or dict is
-	// pushed onto.
+	// FRAME_LIST, FRAME_DICT, and FRAME_FORMATSTRING: the stack the finished
+	// list, dict, or string is pushed onto.
 	ParentStack *MShellStack
 
 	// FRAME_DICT: the literal being evaluated, which key of it is being
@@ -584,6 +585,12 @@ type EvaluationFrame struct {
 	ParseDict    *MShellParseDict
 	DictKeyIndex int
 	Dict         *MShellDict
+
+	// FRAME_FORMATSTRING: the format string being evaluated, which
+	// interpolation of it is being evaluated, and the text built so far.
+	ParseFormatString *MShellParseFormatString
+	FormatIndex       int
+	FormatText        *strings.Builder
 
 	// FRAME_LOOP: iterations completed, and the stack size the body must
 	// leave unchanged.
@@ -741,6 +748,7 @@ const (
 	CALLSTACKFILE CallStackType = iota
 	CALLSTACKLIST
 	CALLSTACKDICT
+	CALLSTACKFORMATSTRING
 	CALLSTACKQUOTE
 	CALLSTACKDEF
 	CALLSTACKIF
@@ -1019,6 +1027,29 @@ func (state *EvalState) completeFrame() *EvalResult {
 			state.popFrame()
 		}
 
+	case FRAME_FORMATSTRING:
+		fs := frame.ParseFormatString
+		if len(*frame.Stack) != 1 {
+			return state.failPtr(fmt.Sprintf("%sFormat string interpolation must produce exactly one value, got %d.\n", formatInterpolationLocation(fs, frame.FormatIndex), len(*frame.Stack)))
+		}
+		text, err := (*frame.Stack)[0].CastString()
+		if err != nil {
+			return state.failPtr(fmt.Sprintf("%sFormat string interpolation must produce a str, path, or int, got %s.\n", formatInterpolationLocation(fs, frame.FormatIndex), (*frame.Stack)[0].TypeName()))
+		}
+		frame.FormatText.WriteString(text)
+		frame.FormatIndex++
+		frame.FormatText.WriteString(fs.ChunkText(frame.FormatIndex))
+
+		if frame.FormatIndex < len(fs.Interpolations) {
+			// Evaluate the next interpolation on the same, now empty, stack.
+			frame.Objects = fs.Interpolations[frame.FormatIndex]
+			frame.Index = 0
+			*frame.Stack = (*frame.Stack)[:0]
+		} else {
+			frame.ParentStack.Push(MShellString{frame.FormatText.String()})
+			state.popFrame()
+		}
+
 	case FRAME_LOOP:
 		return state.finishLoopIteration(frame)
 
@@ -1027,6 +1058,16 @@ func (state *EvalState) completeFrame() *EvalResult {
 	}
 
 	return nil
+}
+
+// formatInterpolationLocation is the "line:col: " prefix for an error in
+// interpolation i of fs: its first item, or the chunk before it if empty.
+func formatInterpolationLocation(fs *MShellParseFormatString, i int) string {
+	startToken := fs.Chunks[i]
+	if len(fs.Interpolations[i]) > 0 {
+		startToken = fs.Interpolations[i][0].GetStartToken()
+	}
+	return fmt.Sprintf("%d:%d: ", startToken.Line, startToken.Column)
 }
 
 func (state *EvalState) dictValueFailure(kv *MShellParseDictKeyValue, stackLen int) *EvalResult {
@@ -1119,6 +1160,23 @@ func (state *EvalState) processToken(token MShellParseItem, frame *EvaluationFra
 		child.ParentStack = stack
 		child.ParseDict = t
 		child.Dict = NewDict()
+		child.CallStackItem = callStackItem
+		child.Context = parent.Context
+		return nil
+
+	case *MShellParseFormatString:
+		// Each interpolation runs on the frame's own stack, one after
+		// another; see completeFrame.
+		callStackItem := CallStackItem{MShellParseItem: t, Name: "format string", CallStackType: CALLSTACKFORMATSTRING}
+		state.CallStack.Push(callStackItem)
+		parent, child := state.pushChildFrame()
+		child.Objects = t.Interpolations[0]
+		child.Stack = &MShellStack{}
+		child.FrameType = FRAME_FORMATSTRING
+		child.ParentStack = stack
+		child.ParseFormatString = t
+		child.FormatText = &strings.Builder{}
+		child.FormatText.WriteString(t.ChunkText(0))
 		child.CallStackItem = callStackItem
 		child.Context = parent.Context
 		return nil
@@ -3121,121 +3179,6 @@ func (state *EvalState) executeGridJoin(t Token, stack *MShellStack, kind joinKi
 
 	stack.Push(newGrid)
 	return SimpleSuccess()
-}
-
-const (
-	FORMATMODENORMAL = iota
-	FORMATMODEESCAPE
-	FORMATMODEFORMAT
-)
-
-func (state *EvalState) EvaluateFormatString(lexeme string, context ExecuteContext, definitions []MShellDefinition, callStackItem CallStackItem) (MShellString, error) {
-
-	allRunes := []rune(lexeme)
-
-	if len(allRunes) < 3 {
-		return MShellString{""}, fmt.Errorf("Found format string with less than 3 characters: %s", lexeme)
-	}
-
-	var b strings.Builder
-
-	index := 2
-	mode := FORMATMODENORMAL
-
-	formatStrStartIndex := -1
-	formatStrEndIndex := -1
-
-	lexer := NewLexer("", nil)
-	parser := MShellParser{lexer: lexer}
-
-	for index < len(allRunes)-1 {
-		c := allRunes[index]
-		index++
-
-		switch mode {
-		case FORMATMODEESCAPE:
-			switch c {
-			case 'e':
-				b.WriteRune('\033')
-			case 'n':
-				b.WriteRune('\n')
-			case 't':
-				b.WriteRune('\t')
-			case 'r':
-				b.WriteRune('\r')
-			case '\\':
-				b.WriteRune('\\')
-			case '"':
-				b.WriteRune('"')
-			case '{':
-				b.WriteRune('{') // This is a literal '{' in the format string
-			default:
-				return MShellString{""}, fmt.Errorf("invalid escape character '%c'", c)
-			}
-			mode = FORMATMODENORMAL
-		case FORMATMODENORMAL:
-			switch c {
-			case '\\':
-				mode = FORMATMODEESCAPE
-			case '{':
-				formatStrStartIndex = index - 1
-				mode = FORMATMODEFORMAT
-			default:
-				b.WriteRune(rune(c))
-			}
-		case FORMATMODEFORMAT:
-			if c == '}' {
-				formatStrEndIndex = index - 1
-				formatStr := string(allRunes[formatStrStartIndex+1 : formatStrEndIndex])
-
-				// Evaluate the format string
-				lexer.resetInput(formatStr)
-				parser.NextToken()
-				contents, err := parser.ParseFile()
-				if err == nil {
-					// The code sits inside a string, not directly in a body.
-					err = checkReturnPlacement(contents.Items, false)
-				}
-				if err != nil {
-					return MShellString{""}, fmt.Errorf("Error parsing format string %s: %s", formatStr, err)
-				}
-
-				// Evaluate the format string contents
-				var stack MShellStack
-				stack = []MShellObject{}
-
-				result := state.Evaluate(contents.Items, &stack, context, definitions, callStackItem)
-
-				if !result.Success {
-					return MShellString{""}, fmt.Errorf("Error evaluating format string %s", formatStr)
-				}
-
-				if len(stack) != 1 {
-					return MShellString{""}, fmt.Errorf("Format string %s did not evaluate to a single value", formatStr)
-				}
-
-				// Get the string representation of the result
-				resultStr, err := stack[0].CastString()
-				if err != nil {
-					return MShellString{""}, fmt.Errorf("Format string contents %s did not evaluate to a stringable value", formatStr)
-				}
-
-				b.WriteString(resultStr)
-
-				formatStrStartIndex = -1
-				formatStrEndIndex = -1
-				mode = FORMATMODENORMAL
-			}
-		default:
-			panic("Unknown format mode")
-		}
-	}
-
-	if mode != FORMATMODENORMAL {
-		return MShellString{""}, fmt.Errorf("Format string ended in an invalid state")
-	}
-
-	return MShellString{b.String()}, nil
 }
 
 type Executable interface {
@@ -12330,13 +12273,6 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 				}
 			} else if t.Type == DATETIME { // Token Type
 				stack.Push(parseDateTimeLiteral(t.Lexeme))
-			} else if t.Type == FORMATSTRING { // Token Type
-				parsedString, err := state.EvaluateFormatString(t.Lexeme, context, definitions, callStackItem)
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing format string '%s': %s\n", t.Line, t.Column, t.Lexeme, err.Error()))
-				}
-
-				stack.Push(parsedString)
 			} else if t.Type == AMPERSAND { // Token Type
 				obj, err := stack.Pop()
 				if err != nil {
