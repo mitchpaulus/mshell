@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `stdin` fails if the input exceeds `MSH_READ_LIMIT` bytes (default 104857600, `0` for no limit).
 - Scripts run faster, especially calls to definitions and quotations run by functions like `each`, `map`, and `filter`.
   Calling a definition allocates less than half as much, and looking up a built-in function no longer slows down the later it appears in the list.
+  String, number, and date/time literals are decoded once when the script is read, not each time they run.
 - `return` is only allowed directly in a definition, or in the body of an `if` or `match` there.
   Anywhere else is now an error: inside a quotation (including ones run by `x`, `iff`, `loop`, or `each`),
   a list or dict literal, an else-if condition, or a grid cell.
@@ -52,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `utcToCst` and `cstToUtc` no longer change their input. Previously, a variable passed to them was also changed to the converted time.
 - A terminal resize no longer prints another prompt. The prompt and command are redrawn
   in place at the new width.
   In particular, a new Windows Terminal pane reports its parent's size until the first key

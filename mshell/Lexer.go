@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"unicode"
 )
 
@@ -314,6 +315,11 @@ type Token struct {
 	Lexeme string
 	Type   TokenType
 	TokenFile *TokenFile
+	// Value is the decoded value of a literal token (strings, integers,
+	// floats, and date/times), computed once at lex time. It is nil for all
+	// other tokens, and for literals that failed to decode.
+	// Values are shared by every evaluation of the token, so they must never be mutated.
+	Value MShellObject
 }
 
 func (t Token) String() string {
@@ -403,7 +409,42 @@ func (l *Lexer) makeToken(tokenType TokenType) Token {
 		Start:  l.start,
 		Lexeme: lexeme,
 		Type:   tokenType,
+		Value:  literalValue(tokenType, lexeme),
 	}
+}
+
+// literalValue decodes the lexeme of a literal token into the value it
+// evaluates to. Returns nil for non-literal tokens, or if decoding fails,
+// in which case the evaluator decodes the lexeme itself and reports the error.
+func literalValue(tokenType TokenType, lexeme string) MShellObject {
+	switch tokenType {
+	case STRING:
+		parsed, err := ParseRawString(lexeme)
+		if err != nil {
+			return nil
+		}
+		return MShellString{parsed}
+	case SINGLEQUOTESTRING:
+		if len(lexeme) < 2 {
+			return nil
+		}
+		return MShellString{lexeme[1 : len(lexeme)-1]}
+	case INTEGER:
+		intVal, err := parseIntLiteral(lexeme)
+		if err != nil {
+			return nil
+		}
+		return MShellInt{intVal}
+	case FLOAT:
+		floatVal, err := strconv.ParseFloat(lexeme, 64)
+		if err != nil {
+			return nil
+		}
+		return MShellFloat{floatVal}
+	case DATETIME:
+		return parseDateTimeLiteral(lexeme)
+	}
+	return nil
 }
 
 func (l *Lexer) makeErrorToken(message string) Token {
