@@ -435,6 +435,35 @@ def mshCompletion { 'complete': ['msh' 'mshell'] } ([str] -- [str])
 end
 ```
 
+With a list, Tab offers the matching values and then every file.
+Return a dictionary instead to choose what else Tab offers.
+Every key is optional:
+
+- `values`: a list of values.
+- `preferredFiles`: a glob pattern, or a list of them, like `'*.typ'` or `'*'`.
+  Tab offers the matching files and every directory.
+  When nothing matches, Tab falls back to `files`, or to every file when `files` is not given.
+  Use it when a command usually takes one kind of file but can take any, like an interpreter.
+- `files`: a glob pattern, or a list of them, like `'*.typ'` or `'*'`.
+  Tab offers the files in the directory being typed whose names match, and every directory, so you can move into one.
+- `dirs`: `true` to offer directories only.
+- `binaries`: `true` to offer executables on the path.
+
+Patterns match file names, not paths, and are case-sensitive.
+A dictionary without `preferredFiles`, `files`, or `dirs` offers no files.
+A list is the same as `{ 'values': list, 'files': '*' }`.
+Values starting with `-` are only offered once the typed text starts with `-`.
+
+```mshell
+def typstCompletion { 'complete': ['typst'] } ([str] -- { "values"?: [str], "files"?: str | [str] })
+    len 0 = if
+        { 'values': ['compile' 'watch' 'query' 'fonts'] }
+    else
+        { 'files': '*.typ' }
+    end
+end
+```
+
 The standard library includes completion definitions for
 `git`, `fd`, `ssh`, `rg`, `sudo`, `systemctl`, `journalctl`, `cargo`,
 and `msh` itself (e.g. `__gitCompletion`, `__cargoCompletion`).

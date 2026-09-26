@@ -928,7 +928,7 @@ def __rgCompletion { 'complete': ['rg'] } ([str] -- [str])
 end
 # }}}
 # sudo {{{
-def __sudoCompletion { 'complete': ['sudo'] } ([str] -- [str])
+def __sudoCompletion { 'complete': ['sudo'] } ([str] -- [str] | { "values"?: [str], "preferredFiles"?: str | [str], "files"?: str | [str], "dirs"?: bool, "binaries"?: bool })
     input!
     ['-A' '--askpass' '-b' '--background' '-E' '--preserve-env'
      '-H' '--set-home' '-i' '--login' '-K' '--remove-timestamp'
@@ -979,7 +979,7 @@ def __sudoCompletion { 'complete': ['sudo'] } ([str] -- [str])
             []
         end
     else
-        @noArgOptions @argOptions extend binPaths (:0: str) map extend
+        { 'values': @noArgOptions @argOptions extend, 'binaries': true }
     end
 end
 # }}}

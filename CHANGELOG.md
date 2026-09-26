@@ -18,8 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The file manager shows file sizes in a column next to the file names, in `ls -h` style (`556`, `5.4K`, `41K`, `1.2M`).
   Each unit has its own color: bytes dim, kilobytes plain, megabytes cyan, gigabytes yellow, and larger magenta.
   Directories have no size.
+- Completion definitions can return a dictionary instead of a list, to choose what Tab offers:
+  `values`, files matching glob patterns (`files`), preferred files with a fallback to the rest (`preferredFiles`), directories only (`dirs`), or executables on the path (`binaries`).
 
 ### Changed
+
+- Tab completion of file names is faster, especially in large directories, and symbolic links to directories complete with a trailing separator.
+- `sudo` completion offers executables from the path much faster.
 
 - `seq` is now built in and much faster: about 25x faster and a third of the memory for 10 million items.
 - The file manager preview no longer times out after 3 seconds.
