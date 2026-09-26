@@ -21,7 +21,8 @@ const (
 // over a large directory walks one small contiguous array.
 type dirEntryRef struct {
 	off  uint32
-	n    uint8 // Names are at most 255 bytes on every supported filesystem.
+	// Windows and macOS allow 255 UTF-16 units, which is up to 765 UTF-8 bytes.
+	n    uint16
 	kind dirEntryKind
 }
 
@@ -55,12 +56,12 @@ func (l *DirListing) reset() {
 
 // add appends a name. Readers that already hold the name in raw use addRef.
 func (l *DirListing) add(name string, kind dirEntryKind) {
-	if name == "" || len(name) > 255 || name == "." || name == ".." {
+	if name == "" || len(name) > 0xFFFF || name == "." || name == ".." {
 		return
 	}
 	off := len(l.raw)
 	l.raw = append(l.raw, name...)
-	l.entries = append(l.entries, dirEntryRef{off: uint32(off), n: uint8(len(name)), kind: kind})
+	l.entries = append(l.entries, dirEntryRef{off: uint32(off), n: uint16(len(name)), kind: kind})
 }
 
 func (l *DirListing) Len() int { return len(l.entries) }
