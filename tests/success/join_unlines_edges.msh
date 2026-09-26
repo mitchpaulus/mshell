@@ -1,0 +1,4 @@
+[[] ['a'] ['a' 'b'] ['' 'x' '']] (', ' join strEscape) map ' ' join wl
+[[] ['a'] ['a' 'b'] ['' 'x' '']] (unlines strEscape) map ' ' join wl
+[[] ['a'] ['a' 'b'] ['' 'x' '']] (unlinesCrLf strEscape) map ' ' join wl
+[a b] '-' join wl

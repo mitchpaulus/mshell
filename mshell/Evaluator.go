@@ -80,6 +80,48 @@ func (objList *MShellStack) Pop1(t Token) (MShellObject, error) {
 // 0o/0x/0b base prefixes the lexer accepts (in addition to plain decimal). The
 // resulting int carries no record of which base was written; the prefix is
 // purely a source-level convenience.
+// joinStringItems joins string items with a separator, also after the last
+// item when trailing is true. It sizes the result up front, so it allocates once.
+// Returns the first item that is not a string, if any.
+func joinStringItems(items []MShellObject, sep string, trailing bool) (string, MShellObject) {
+	if len(items) == 0 {
+		return "", nil
+	}
+
+	size := len(sep) * (len(items) - 1)
+	if trailing {
+		size += len(sep)
+	}
+	for _, item := range items {
+		switch itemTyped := item.(type) {
+		case MShellString:
+			size += len(itemTyped.Content)
+		case MShellLiteral:
+			size += len(itemTyped.LiteralText)
+		default:
+			return "", item
+		}
+	}
+
+	var b strings.Builder
+	b.Grow(size)
+	for i, item := range items {
+		if i > 0 {
+			b.WriteString(sep)
+		}
+		switch itemTyped := item.(type) {
+		case MShellString:
+			b.WriteString(itemTyped.Content)
+		case MShellLiteral:
+			b.WriteString(itemTyped.LiteralText)
+		}
+	}
+	if trailing {
+		b.WriteString(sep)
+	}
+	return b.String(), nil
+}
+
 // parseDateTimeLiteral converts a DATETIME token lexeme, like 2023-10-01T13:01:30,
 // into a date/time. Missing time components are zero.
 func parseDateTimeLiteral(lexeme string) *MShellDateTime {
@@ -6272,7 +6314,6 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					}
 
 					var delimiterStr string
-					var listItems []string
 
 					switch delimiterTyped := delimiter.(type) {
 					case MShellString:
@@ -6283,23 +6324,37 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot join with a %s.\n", t.Line, t.Column, delimiter.TypeName()))
 					}
 
-					switch listTyped := list.(type) {
-					case *MShellList:
-						for _, item := range listTyped.Items {
-							switch itemTyped := item.(type) {
-							case MShellString:
-								listItems = append(listItems, itemTyped.Content)
-							case MShellLiteral:
-								listItems = append(listItems, itemTyped.LiteralText)
-							default:
-								return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot join a list with a %s inside (%s).\n", t.Line, t.Column, item.TypeName(), item.DebugString()))
-							}
-						}
-					default:
+					listTyped, ok := list.(*MShellList)
+					if !ok {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a list as the second item on stack for join, received a %s (%s). The delimiter was '%s'\n", t.Line, t.Column, list.TypeName(), list.DebugString(), delimiterStr))
 					}
 
-					stack.Push(MShellString{strings.Join(listItems, delimiterStr)})
+					joined, badItem := joinStringItems(listTyped.Items, delimiterStr, false)
+					if badItem != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot join a list with a %s inside (%s).\n", t.Line, t.Column, badItem.TypeName(), badItem.DebugString()))
+					}
+					stack.Push(MShellString{joined})
+				case "unlines", "unlinesCrLf":
+					list, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
+					}
+
+					listTyped, ok := list.(*MShellList)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a list for '%s', received a %s (%s).\n", t.Line, t.Column, t.Lexeme, list.TypeName(), list.DebugString()))
+					}
+
+					lineEnding := "\n"
+					if t.Lexeme == "unlinesCrLf" {
+						lineEnding = "\r\n"
+					}
+
+					joined, badItem := joinStringItems(listTyped.Items, lineEnding, true)
+					if badItem != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' on a list with a %s inside (%s).\n", t.Line, t.Column, t.Lexeme, badItem.TypeName(), badItem.DebugString()))
+					}
+					stack.Push(MShellString{joined})
 				case "lines":
 					obj, err := stack.Pop()
 					if err != nil {

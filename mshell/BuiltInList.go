@@ -210,6 +210,8 @@ var BuiltInList = map[string]struct{}{
 	"typeof": {},
 	"updateCol": {},
 	"uniq": {},
+	"unlines": {},
+	"unlinesCrLf": {},
 	"unsetenv": {},
 	"upper": {},
 	"uuid": {},

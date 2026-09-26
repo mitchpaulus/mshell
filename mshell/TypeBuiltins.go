@@ -386,6 +386,8 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 	r.reg("wsplit", "(str -- [str])")
 	r.reg("split", "(str str -- [str])")
 	r.reg("lines", "(str -- [str])")
+	r.reg("unlines", "([str] -- str)")
+	r.reg("unlinesCrLf", "([str] -- str)")
 	for _, name := range []string{"trim", "trimStart", "trimEnd", "upper", "lower", "title"} {
 		r.reg(name, "(str -- str)")
 	}
