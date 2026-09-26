@@ -33,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Scripts run faster, especially calls to definitions and quotations run by functions like `each`, `map`, and `filter`.
   Calling a definition allocates less than half as much, and looking up a built-in function no longer slows down the later it appears in the list.
   String, number, and date/time literals are decoded once when the script is read, not each time they run.
+- `join` is faster, and `unlines` and `unlinesCrLf` are now built in and much faster: about 80x faster on a list of a million strings.
 - `return` is only allowed directly in a definition, or in the body of an `if` or `match` there.
   Anywhere else is now an error: inside a quotation (including ones run by `x`, `iff`, `loop`, or `each`),
   a list or dict literal, an else-if condition, or a grid cell.
