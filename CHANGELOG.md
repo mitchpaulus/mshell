@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Tab completion of file names is faster, especially in large directories, and symbolic links to directories complete with a trailing separator.
 - `sudo` completion offers executables from the path much faster.
+- Grid `groupBy` and `pivot` are faster: `groupBy` is 2-6x faster on a 5.4 million row table.
+  Grid string columns with many repeated values use about a third of the memory.
 
 - `seq` is now built in and much faster: about 25x faster and a third of the memory for 10 million items.
 - The file manager preview no longer times out after 3 seconds.

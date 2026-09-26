@@ -7,6 +7,7 @@ import (
 	"bytes"
 	crand "crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/csv"
 	"encoding/base64"
 	"encoding/hex"
@@ -2391,6 +2392,12 @@ func compareGridCellsForSort(col *GridColumn, idxA, idxB int) (int, error) {
 		return compareFloatsNoneLast(col.FloatData[idxA], col.FloatData[idxB]), nil
 	case COL_STRING:
 		return strings.Compare(col.StringData[idxA], col.StringData[idxB]), nil
+	case COL_DICT_STRING:
+		a, b := col.DictCodes[idxA], col.DictCodes[idxB]
+		if a == b {
+			return 0, nil
+		}
+		return strings.Compare(col.DictValues[a], col.DictValues[b]), nil
 	case COL_DATETIME:
 		a, b := col.DateTimeData[idxA], col.DateTimeData[idxB]
 		if a.Before(b) {
@@ -2407,9 +2414,13 @@ func compareGridCellsForSort(col *GridColumn, idxA, idxB int) (int, error) {
 
 // resolveColType applies the concat type lattice: same non-generic type wins;
 // any other combination produces COL_GENERIC. There is no numeric promotion.
+// Plain and dictionary string storage are the same type and combine to plain strings.
 func resolveColType(a, b ColumnType) ColumnType {
 	if a == b && a != COL_GENERIC {
 		return a
+	}
+	if isStringColType(a) && isStringColType(b) {
+		return COL_STRING
 	}
 	return COL_GENERIC
 }
@@ -2546,10 +2557,24 @@ func concatGrids(leftObj, rightObj MShellObject) (*MShellGrid, error) {
 		case COL_STRING:
 			newCol.StringData = make([]string, totalRows)
 			for i, idx := range leftIndices {
-				newCol.StringData[i] = leftCol.StringData[idx]
+				newCol.StringData[i] = leftCol.StringAt(idx)
 			}
 			for i, idx := range rightIndices {
-				newCol.StringData[leftRows+i] = rightCol.StringData[idx]
+				newCol.StringData[leftRows+i] = rightCol.StringAt(idx)
+			}
+		case COL_DICT_STRING:
+			// Keep the left dictionary as is and remap the right one onto it.
+			newCol.DictValues = append([]string(nil), leftCol.DictValues...)
+			newCol.DictCodes = make([]int32, totalRows)
+			for i, idx := range leftIndices {
+				newCol.DictCodes[i] = leftCol.DictCodes[idx]
+			}
+			remap := make([]int32, len(rightCol.DictValues))
+			for code, value := range rightCol.DictValues {
+				remap[code] = newCol.internDictString(value)
+			}
+			for i, idx := range rightIndices {
+				newCol.DictCodes[leftRows+i] = remap[rightCol.DictCodes[idx]]
 			}
 		case COL_DATETIME:
 			newCol.DateTimeData = make([]time.Time, totalRows)
@@ -2591,12 +2616,28 @@ func widenColumnToGeneric(col *GridColumn) {
 	col.FloatData = nil
 	col.StringData = nil
 	col.DateTimeData = nil
+	col.DictCodes = nil
+	col.DictValues = nil
+	col.dictIndex = nil
 	col.ColType = COL_GENERIC
 }
 
 // appendColumnRows appends the given source rows onto dst in place. dst must already
-// be widened (if needed) so that resolveColType(dst, src) == dst.ColType.
+// be widened (if needed) so that resolveColType(dst, src) == dst.ColType,
+// or both columns hold strings.
 func appendColumnRows(dst, src *GridColumn, srcIndices []int) {
+	if dst.ColType == COL_DICT_STRING && isStringColType(src.ColType) {
+		for _, idx := range srcIndices {
+			dst.DictCodes = append(dst.DictCodes, dst.internDictString(src.StringAt(idx)))
+		}
+		return
+	}
+	if dst.ColType == COL_STRING && src.ColType == COL_DICT_STRING {
+		for _, idx := range srcIndices {
+			dst.StringData = append(dst.StringData, src.StringAt(idx))
+		}
+		return
+	}
 	if dst.ColType == src.ColType && dst.ColType != COL_GENERIC {
 		switch dst.ColType {
 		case COL_INT:
@@ -2659,7 +2700,8 @@ func extendGrid(receiverObj, sourceObj MShellObject) (MShellObject, error) {
 	for _, recvCol := range receiverGrid.Columns {
 		srcCol := sourceGrid.GetColumn(recvCol.Name)
 		resolved := resolveColType(recvCol.ColType, srcCol.ColType)
-		if resolved != recvCol.ColType {
+		bothStrings := isStringColType(recvCol.ColType) && isStringColType(srcCol.ColType)
+		if resolved != recvCol.ColType && !bothStrings {
 			widenColumnToGeneric(recvCol)
 		}
 		appendColumnRows(recvCol, srcCol, sourceIndices)
@@ -2748,61 +2790,74 @@ type gridGroupByAggSpec struct {
 	Quote *MShellQuotation
 }
 
-func typedGridGroupKeyPart(obj MShellObject) (string, error) {
+// Grouping and join keys are internal map keys, never shown to users.
+// Each part is a type tag byte followed by a self-delimiting payload
+// (fixed width, or a length prefix), so concatenated parts are unambiguous
+// without escaping, and equal values of different types never collide.
+const (
+	keyTagNil       byte = 'n'
+	keyTagBool      byte = 'b'
+	keyTagInt       byte = 'i'
+	keyTagFloat     byte = 'f'
+	keyTagStr       byte = 's'
+	keyTagPath      byte = 'p'
+	keyTagLiteral   byte = 'l'
+	keyTagDate      byte = 'd'
+	keyTagMaybeNone byte = 'N'
+	keyTagMaybeJust byte = 'J'
+	keyTagList      byte = 'L'
+	keyTagOther     byte = 'o'
+)
+
+func appendKeyUint64(buf []byte, v uint64) []byte {
+	return binary.BigEndian.AppendUint64(buf, v)
+}
+
+func appendKeyBytes(buf []byte, tag byte, s string) []byte {
+	buf = append(buf, tag)
+	buf = binary.AppendUvarint(buf, uint64(len(s)))
+	return append(buf, s...)
+}
+
+func appendKeyFloat(buf []byte, f float64) []byte {
+	return appendKeyUint64(append(buf, keyTagFloat), canonicalFloatBits(f))
+}
+
+func appendGridKeyPart(buf []byte, obj MShellObject) ([]byte, error) {
 	if obj == nil {
-		return "nil:", nil
+		return append(buf, keyTagNil), nil
 	}
 	if isContainerType(obj) {
-		return "", fmt.Errorf("groupBy key values cannot be container types, got %s", obj.TypeName())
+		return buf, fmt.Errorf("groupBy key values cannot be container types, got %s", obj.TypeName())
 	}
 
 	switch objTyped := obj.(type) {
 	case MShellBool:
-		return fmt.Sprintf("bool:%t", objTyped.Value), nil
-	case MShellInt:
-		return fmt.Sprintf("int:%d", objTyped.Value), nil
-	case MShellFloat:
-		floatVal := objTyped.Value
-		if floatVal == 0 {
-			floatVal = 0
+		if objTyped.Value {
+			return append(buf, keyTagBool, 1), nil
 		}
-		return "float:" + strconv.FormatFloat(floatVal, 'g', -1, 64), nil
+		return append(buf, keyTagBool, 0), nil
+	case MShellInt:
+		return appendKeyUint64(append(buf, keyTagInt), uint64(objTyped.Value)), nil
+	case MShellFloat:
+		return appendKeyFloat(buf, objTyped.Value), nil
 	case MShellString:
-		encoded, _ := json.Marshal(objTyped.Content)
-		return "str:" + string(encoded), nil
+		return appendKeyBytes(buf, keyTagStr, objTyped.Content), nil
 	case MShellPath:
-		encoded, _ := json.Marshal(objTyped.Path)
-		return "path:" + string(encoded), nil
+		return appendKeyBytes(buf, keyTagPath, objTyped.Path), nil
 	case MShellLiteral:
-		encoded, _ := json.Marshal(objTyped.LiteralText)
-		return "literal:" + string(encoded), nil
+		return appendKeyBytes(buf, keyTagLiteral, objTyped.LiteralText), nil
 	case *MShellDateTime:
-		return fmt.Sprintf("date:%d", objTyped.Time.UnixNano()), nil
+		return appendKeyUint64(append(buf, keyTagDate), uint64(objTyped.Time.UnixNano())), nil
 	case *Maybe:
 		if objTyped.obj == nil {
-			return "maybe:none", nil
+			return append(buf, keyTagMaybeNone), nil
 		}
-		innerKey, err := typedGridGroupKeyPart(objTyped.obj)
-		if err != nil {
-			return "", err
-		}
-		return "maybe:just:" + innerKey, nil
+		return appendGridKeyPart(append(buf, keyTagMaybeJust), objTyped.obj)
 	default:
-		return obj.TypeName() + ":" + obj.ToJson(), nil
+		buf = appendKeyBytes(buf, keyTagOther, obj.TypeName())
+		return appendKeyBytes(buf, keyTagOther, obj.ToJson()), nil
 	}
-}
-
-func typedGridGroupKey(sourceGrid *MShellGrid, rowIdx int, keyCols []string) (string, error) {
-	parts := make([]string, len(keyCols))
-	for i, colName := range keyCols {
-		col := sourceGrid.GetColumn(colName)
-		part, err := typedGridGroupKeyPart(col.Get(rowIdx))
-		if err != nil {
-			return "", err
-		}
-		parts[i] = part
-	}
-	return strings.Join(parts, "\x1f"), nil
 }
 
 func parseGridGroupByAggSpecs(aggList *MShellList) ([]gridGroupByAggSpec, error) {
@@ -2875,40 +2930,44 @@ const (
 // matching SQL NULL ≠ NULL semantics. A list is treated as a tuple key; any none
 // component makes the whole compound key isNone.
 func evaluatedJoinKey(obj MShellObject) (string, bool, error) {
+	buf, isNone, err := appendJoinKey(nil, obj)
+	if err != nil || isNone {
+		return "", isNone, err
+	}
+	return string(buf), false, nil
+}
+
+func appendJoinKey(buf []byte, obj MShellObject) ([]byte, bool, error) {
 	if obj == nil {
-		return "", true, nil
+		return buf, true, nil
 	}
 	if maybe, ok := obj.(*Maybe); ok {
 		if maybe.obj == nil {
-			return "", true, nil
+			return buf, true, nil
 		}
-		return evaluatedJoinKey(maybe.obj)
+		return appendJoinKey(buf, maybe.obj)
 	}
 	if list, ok := obj.(*MShellList); ok {
-		parts := make([]string, len(list.Items))
-		for i, item := range list.Items {
+		buf = append(buf, keyTagList)
+		buf = binary.AppendUvarint(buf, uint64(len(list.Items)))
+		for _, item := range list.Items {
 			if _, isList := item.(*MShellList); isList {
-				return "", false, fmt.Errorf("compound join key may not contain nested lists")
+				return buf, false, fmt.Errorf("compound join key may not contain nested lists")
 			}
-			partStr, isNone, err := evaluatedJoinKey(item)
-			if err != nil {
-				return "", false, err
+			var isNone bool
+			var err error
+			buf, isNone, err = appendJoinKey(buf, item)
+			if err != nil || isNone {
+				return buf, isNone, err
 			}
-			if isNone {
-				return "", true, nil
-			}
-			parts[i] = partStr
 		}
-		return "list:[" + strings.Join(parts, "\x1f") + "]", false, nil
+		return buf, false, nil
 	}
 	if isContainerType(obj) {
-		return "", false, fmt.Errorf("join key may not be a %s", obj.TypeName())
+		return buf, false, fmt.Errorf("join key may not be a %s", obj.TypeName())
 	}
-	part, err := typedGridGroupKeyPart(obj)
-	if err != nil {
-		return "", false, err
-	}
-	return part, false, nil
+	buf, err := appendGridKeyPart(buf, obj)
+	return buf, false, err
 }
 
 // evaluateJoinKeys runs the key extractor quotation against every row in the source
@@ -5854,15 +5913,17 @@ func optimizeColumnStorage(col *GridColumn) {
 		col.ColType = COL_FLOAT
 		col.GenericData = nil
 	} else if allStrings {
-		col.StringData = make([]string, numRows)
-		for i, val := range col.GenericData {
-			if val == nil {
-				col.StringData[i] = "" // Default for None
-			} else if strVal, ok := val.(MShellString); ok {
-				col.StringData[i] = strVal.Content
+		if !dictEncodeStringColumn(col) {
+			col.StringData = make([]string, numRows)
+			for i, val := range col.GenericData {
+				if val == nil {
+					col.StringData[i] = "" // Default for None
+				} else if strVal, ok := val.(MShellString); ok {
+					col.StringData[i] = strVal.Content
+				}
 			}
+			col.ColType = COL_STRING
 		}
-		col.ColType = COL_STRING
 		col.GenericData = nil
 	} else if allDateTimes {
 		col.DateTimeData = make([]time.Time, numRows)
@@ -5877,6 +5938,36 @@ func optimizeColumnStorage(col *GridColumn) {
 		col.GenericData = nil
 	}
 	// If none of the above, keep as generic
+}
+
+// dictEncodeStringColumn converts a generic column of strings to COL_DICT_STRING.
+// Repeated strings are stored once, and grouping on the column works on integer codes.
+// It gives up and returns false, leaving col unchanged, when most values are distinct,
+// since a dictionary then costs more than it saves. The limit is against the total
+// row count, so it gives up as soon as the outcome is certain, whatever the row order.
+func dictEncodeStringColumn(col *GridColumn) bool {
+	maxDistinct := max(len(col.GenericData)/2, 1024)
+	codes := make([]int32, len(col.GenericData))
+	interner := newStringInterner()
+	values := make([]string, 0)
+	for i, val := range col.GenericData {
+		s := "" // Default for None
+		if strVal, ok := val.(MShellString); ok {
+			s = strVal.Content
+		}
+		code, added := interner.intern(s)
+		if added {
+			if len(values) >= maxDistinct {
+				return false
+			}
+			values = append(values, s)
+		}
+		codes[i] = code
+	}
+	col.DictCodes = codes
+	col.DictValues = values
+	col.ColType = COL_DICT_STRING
+	return true
 }
 
 // evalTildeToken pushes ~ or ~/rest with the home directory expanded.
@@ -9147,20 +9238,9 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						outputNames[aggSpec.Name] = struct{}{}
 					}
 
-					groupOrder := make([][]int, 0)
-					groupMap := make(map[string]int)
-					for _, srcIdx := range sourceIndices {
-						key, err := typedGridGroupKey(sourceGrid, srcIdx, keyCols)
-						if err != nil {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: %s.\n", t.Line, t.Column, err.Error()))
-						}
-						groupIdx, exists := groupMap[key]
-						if !exists {
-							groupIdx = len(groupOrder)
-							groupMap[key] = groupIdx
-							groupOrder = append(groupOrder, []int{})
-						}
-						groupOrder[groupIdx] = append(groupOrder[groupIdx], srcIdx)
+					groupOrder, err := groupGridRows(sourceGrid, sourceIndices, keyCols)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s.\n", t.Line, t.Column, err.Error()))
 					}
 
 					newGrid := NewGrid()
@@ -9276,20 +9356,17 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						colName     string
 					}
 
-					rowKeyMap := make(map[string]int)
-					rowFirstSrcIdx := make([]int, 0)
+					rowGroupIds, rowGroupCount, rowKeyErr := gridGroupIds(sourceGrid, sourceIndices, rowKeyCols)
+					if rowKeyErr != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s.\n", t.Line, t.Column, rowKeyErr.Error()))
+					}
+					rowFirstSrcIdx := make([]int, 0, rowGroupCount)
 					colNameSet := make(map[string]struct{})
 					buckets := make(map[pivotBucketKey][]int)
 
-					for _, srcIdx := range sourceIndices {
-						rowKey, err := typedGridGroupKey(sourceGrid, srcIdx, rowKeyCols)
-						if err != nil {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: %s.\n", t.Line, t.Column, err.Error()))
-						}
-						rowGroupIdx, exists := rowKeyMap[rowKey]
-						if !exists {
-							rowGroupIdx = len(rowFirstSrcIdx)
-							rowKeyMap[rowKey] = rowGroupIdx
+					for p, srcIdx := range sourceIndices {
+						rowGroupIdx := int(rowGroupIds[p])
+						if rowGroupIdx == len(rowFirstSrcIdx) {
 							rowFirstSrcIdx = append(rowFirstSrcIdx, srcIdx)
 						}
 
