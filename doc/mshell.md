@@ -535,8 +535,29 @@ Double quoted strings have the following escape sequences:
 - `\r`: Carriage return
 - `\\`: Backslash
 - `\"`: Double quote
+- `\{`: Left brace
+- `\}`: Right brace
 
 No escaping is done within single quoted strings or paths.
+
+### Format Strings
+
+A double quoted string prefixed with `$` is a format string.
+Code inside `{` and `}` is run, and its result is placed into the string.
+
+```mshell
+"World" name!
+$"Hello, {@name}!" wl                     # Hello, World!
+$"{2 3 +} items" wl                       # 5 items
+$"total: {2.5 1 toFixed " " 6 leftPad}" wl  # total:    2.5
+$"literal \{braces\}" wl                  # literal {braces}
+```
+
+Each interpolation runs on its own empty stack and can read the variables in scope.
+It must leave exactly one value of type `str`, `path`, or `int`; convert other types first (e.g. `str`, `toFixed`).
+Interpolations can hold any code, including strings, dictionaries, and nested format strings.
+There is no formatting mini-language; use functions like `toFixed` and `leftPad` inside the interpolation.
+Use `\{` for a literal left brace. A `}` outside an interpolation is literal.
 
 ### Paths
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"unicode"
 )
 
@@ -76,7 +77,10 @@ const (
 	UNFINISHEDPATH
 	COMMA
 	DATETIME
-	FORMATSTRING
+	FORMATSTRING      // Format string with no interpolations: $"hello"
+	FORMATSTRINGSTART // Text up to the first interpolation: $"hello {
+	FORMATSTRINGMID   // Text between two interpolations: } and {
+	FORMATSTRINGEND   // Text after the last interpolation: } world"
 	LEFT_CURLY
 	RIGHT_CURLY
 	COLON
@@ -237,6 +241,12 @@ func (t TokenType) String() string {
 		return "DATETIME"
 	case FORMATSTRING:
 		return "FORMATSTRING"
+	case FORMATSTRINGSTART:
+		return "FORMATSTRINGSTART"
+	case FORMATSTRINGMID:
+		return "FORMATSTRINGMID"
+	case FORMATSTRINGEND:
+		return "FORMATSTRINGEND"
 	case LEFT_CURLY:
 		return "LEFT_CURLY"
 	case RIGHT_CURLY:
@@ -355,6 +365,10 @@ type Lexer struct {
 	emitWhitespace bool // If true, will emit whitespace tokens.
 	emitComments bool // If true, will emit comments as tokens.
 	tokenFile *TokenFile
+	// One entry per format string whose interpolation is open, innermost
+	// last. Each counts the '{' opened inside that interpolation and not yet
+	// closed, so a '}' at depth 0 closes the interpolation instead.
+	formatDepths []int
 }
 
 func (l *Lexer) DebugStr() {
@@ -386,6 +400,7 @@ func (l *Lexer) resetInput(input string) {
 	l.col = 0
 	l.start = 0
 	l.current = 0
+	l.formatDepths = l.formatDepths[:0]
 }
 
 func (l *Lexer) atEnd() bool {
@@ -735,10 +750,21 @@ func (l *Lexer) scanToken() Token {
 
 // peekToken returns the next token without advancing the lexer.
 // Only current, line, and col move during a scan, so those are put back.
+// A scan pushes, pops, or changes the top of formatDepths at most once, so
+// saving its length and top is enough to put it back. A pop only reslices,
+// so the popped entry is still in the backing array.
 func (l *Lexer) peekToken() Token {
 	current, line, col := l.current, l.line, l.col
+	depthLen, depthTop := len(l.formatDepths), 0
+	if depthLen > 0 {
+		depthTop = l.formatDepths[depthLen-1]
+	}
 	token := l.scanToken()
 	l.current, l.line, l.col = current, line, col
+	l.formatDepths = l.formatDepths[:depthLen]
+	if depthLen > 0 {
+		l.formatDepths[depthLen-1] = depthTop
+	}
 	return token
 }
 
@@ -801,8 +827,17 @@ func (l *Lexer) scanTokenAll() Token {
 	case ')':
 		return l.makeToken(RIGHT_PAREN)
 	case '{':
+		if n := len(l.formatDepths); n > 0 {
+			l.formatDepths[n-1]++
+		}
 		return l.makeToken(LEFT_CURLY)
 	case '}':
+		if n := len(l.formatDepths); n > 0 {
+			if l.formatDepths[n-1] == 0 {
+				return l.scanFormatChunk(true)
+			}
+			l.formatDepths[n-1]--
+		}
 		return l.makeToken(RIGHT_CURLY)
 	case ';':
 		return l.makeToken(EXECUTE)
@@ -819,18 +854,7 @@ func (l *Lexer) scanTokenAll() Token {
 			return l.parsePositional()
 		} else if l.peek() == '"' { // This must be before the 'isAllowedLiteral' check.
 			l.advance()
-			err := l.consumeString()
-			if err != nil {
-				if l.allowUnterminatedString {
-					var unterminated ConsumeStringErrorUnterminated
-					if errors.As(err, &unterminated) {
-						return l.makeToken(UNFINISHEDSTRING)
-					}
-				}
-				return l.makeErrorToken(err.Error())
-			} else {
-				return l.makeToken(FORMATSTRING)
-			}
+			return l.scanFormatChunk(false)
 		} else if isAllowedLiteral(l.peek()) {
 			return l.parseEnvVar()
 		} else {
@@ -1249,8 +1273,8 @@ func (l *Lexer) consumeString() error {
 		}
 		c := l.advance()
 		if inEscape {
-			if c != 'e' && c != 'n' && c != 't' && c != 'r' && c != '\\' && c != '"' {
-				return ConsumeStringErrorInvalidEscape{ErrorString: fmt.Sprintf("%d:%d: Invalid escape character within string, '%c'. Expected 'e', 'n', 't', 'r', '\\', or '\"'.", l.line, l.col, c)}
+			if _, ok := escapedRune(c); !ok {
+				return ConsumeStringErrorInvalidEscape{ErrorString: invalidEscapeMessage(l.line, l.col, c)}
 			}
 			inEscape = false
 		} else {
@@ -1266,6 +1290,81 @@ func (l *Lexer) consumeString() error {
 	}
 
 	return nil
+}
+
+// escapedRune returns the character a backslash escape in a double quoted
+// string stands for, given the character after the backslash.
+func escapedRune(c rune) (rune, bool) {
+	switch c {
+	case 'e':
+		return '\033', true
+	case 'n':
+		return '\n', true
+	case 't':
+		return '\t', true
+	case 'r':
+		return '\r', true
+	case '\\', '"', '{', '}':
+		return c, true
+	}
+	return 0, false
+}
+
+func invalidEscapeMessage(line int, col int, c rune) string {
+	return fmt.Sprintf("%d:%d: Invalid escape character within string, '%c'. Expected 'e', 'n', 't', 'r', '\\', '\"', '{', or '}'.", line, col, c)
+}
+
+// scanFormatChunk scans the literal text of a format string up to and
+// including the delimiter that ends it: '{' opens an interpolation, and '"'
+// ends the string. It is called just after the '$"' that starts the string,
+// or, when afterInterpolation is set, the '}' that closes an interpolation.
+// The token's Value is the text with escapes decoded.
+func (l *Lexer) scanFormatChunk(afterInterpolation bool) Token {
+	var b strings.Builder
+	for {
+		if l.atEnd() {
+			if l.allowUnterminatedString {
+				return l.makeToken(UNFINISHEDSTRING)
+			}
+			return l.makeErrorToken(fmt.Sprintf("%d:%d: Unterminated format string.", l.line, l.col))
+		}
+
+		c := l.advance()
+		switch c {
+		case '\\':
+			if l.atEnd() {
+				continue // Reported as unterminated.
+			}
+			escaped, ok := escapedRune(l.advance())
+			if !ok {
+				return l.makeErrorToken(invalidEscapeMessage(l.line, l.col, l.input[l.current-1]))
+			}
+			b.WriteRune(escaped)
+		case '{':
+			tokenType := FORMATSTRINGMID
+			if !afterInterpolation {
+				tokenType = FORMATSTRINGSTART
+				l.formatDepths = append(l.formatDepths, 0)
+			}
+			t := l.makeToken(tokenType)
+			t.Value = MShellString{b.String()}
+			return t
+		case '"':
+			tokenType := FORMATSTRING
+			if afterInterpolation {
+				tokenType = FORMATSTRINGEND
+				l.formatDepths = l.formatDepths[:len(l.formatDepths)-1]
+			}
+			t := l.makeToken(tokenType)
+			t.Value = MShellString{b.String()}
+			return t
+		case '\n':
+			l.handleNewline()
+			b.WriteRune(c)
+		default:
+			b.WriteRune(c)
+		}
+	}
 }
 
 func (l *Lexer) parseString() Token {

@@ -1,0 +1,13 @@
+plain
+a 3 b
+a x b
+a } b
+a 1 b
+a in 5 b
+esc { } } 5
+normal { }
+55
+multi 6 line
+<1>, <2>, <3>
+   2.5|
+dir/file

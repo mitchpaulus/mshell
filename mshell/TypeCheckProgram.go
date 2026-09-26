@@ -554,6 +554,11 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 		c.stack.Push(c.arena.MakeShape(fields))
 		return
 
+	case *MShellParseFormatString:
+		c.checkFormatString(it)
+		c.stack.Push(TidStr)
+		return
+
 	case *MShellParseQuote:
 		// Branching inference walks the body considering every
 		// viable overload at each step. The result is the set of
@@ -1705,137 +1710,48 @@ func (c *Checker) bindPatternName(name string, typ TypeId) {
 	c.vars.bound[c.names.Intern(name)] = typ
 }
 
-// checkFormatStringInterpolations walks each `{...}` block inside a
-// FORMATSTRING token, type-checking it as a tiny program against a
-// fresh sub-stack that inherits the current VarEnv. Each block must
-// produce exactly one value (the runtime concatenates it into the
-// output string). The outer stack and substitution are unaffected
-// regardless of what the blocks contain — only diagnostics
-// accumulate.
-//
-// The lexeme is the full `$"..."` token including the leading `$"`
-// and trailing `"`. Escape handling mirrors EvaluateFormatString in
-// the runtime: `\{` is a literal `{`, `\\` is a literal `\`, etc.
-func (c *Checker) checkFormatStringInterpolations(tok Token) {
-	runes := []rune(tok.Lexeme)
-	if len(runes) < 3 {
-		return
-	}
-	// Skip leading `$"`; stop before trailing `"`.
-	const (
-		modeNormal = iota
-		modeEscape
-		modeFormat
-	)
-	mode := modeNormal
-	startIdx := -1
-	for i := 2; i < len(runes)-1; i++ {
-		ch := runes[i]
-		switch mode {
-		case modeEscape:
-			mode = modeNormal
-		case modeNormal:
-			switch ch {
-			case '\\':
-				mode = modeEscape
-			case '{':
-				startIdx = i + 1
-				mode = modeFormat
+// interpolationSig takes what a format string interpolation may produce:
+// a value the runtime can turn into text.
+const interpolationSig = "(str | path | int -- )"
+
+// checkFormatString checks each interpolation of a format string as a tiny
+// program on a fresh sub-stack that shares the current VarEnv. Each must
+// produce exactly one value of a type the runtime can concatenate. The
+// outer stack and substitution are unaffected regardless of what the
+// interpolations contain — only diagnostics accumulate.
+func (c *Checker) checkFormatString(fs *MShellParseFormatString) {
+	for i, items := range fs.Interpolations {
+		pos := fs.Chunks[i]
+		if len(items) > 0 {
+			pos = items[0].GetStartToken()
+		}
+
+		outerStack := c.stack.items
+		cp := c.subst.Checkpoint()
+		c.stack.items = nil
+
+		// When the walk died, the real error is already recorded and the
+		// stack reflects a mid-step state — an arity or type complaint on
+		// top of it would only be noise.
+		if c.walkJoined(items) {
+			problem := ""
+			if c.stack.Len() != 1 {
+				problem = "must produce exactly one value, got " + strconv.Itoa(c.stack.Len())
+			} else if got := c.stack.items[0]; !c.unify(got, parseBuiltinSig(c, interpolationSig).Inputs[0]) {
+				problem = "must produce a str, path, or int, got " + FormatType(c.arena, c.names, c.subst.Apply(c.arena, got))
 			}
-		case modeFormat:
-			if ch == '}' {
-				inner := string(runes[startIdx:i])
-				// Map the block's first content rune back to its
-				// position in the original source so inner diagnostics
-				// point at the interpolation, not 1:1.
-				baseLine, baseCol := runePosition(runes, startIdx, tok.Line, tok.Column)
-				c.checkFormatBlock(inner, tok, baseLine, baseCol)
-				mode = modeNormal
-				startIdx = -1
+			if problem != "" {
+				c.errors = append(c.errors, TypeError{
+					Kind: TErrInterpolation,
+					Pos:  pos,
+					Hint: "format-string interpolation " + problem,
+				})
 			}
 		}
-	}
-}
 
-// runePosition returns the one-based (line, column) of runes[idx] given
-// that runes[0] sits at (baseLine, baseCol). Newlines reset the column to
-// 1; every other rune advances the column by one.
-func runePosition(runes []rune, idx, baseLine, baseCol int) (int, int) {
-	line, col := baseLine, baseCol
-	for i := 0; i < idx && i < len(runes); i++ {
-		if runes[i] == '\n' {
-			line++
-			col = 1
-		} else {
-			col++
-		}
+		c.subst.Rollback(cp)
+		c.stack.items = outerStack
 	}
-	return line, col
-}
-
-// remapBlockToken rewrites a token's position from format-block-local
-// coordinates (where the block source starts at line 1, column 1) to the
-// surrounding source, given that the block content begins at
-// (baseLine, baseCol). Lines past the first already start at column 1 in
-// both coordinate systems, so only their line number shifts.
-func remapBlockToken(t Token, baseLine, baseCol int) Token {
-	if t.Line == 1 {
-		t.Column = baseCol + (t.Column - 1)
-		t.Line = baseLine
-	} else {
-		t.Line = baseLine + (t.Line - 1)
-	}
-	return t
-}
-
-// checkFormatBlock lexes/parses one interpolation block and walks its
-// items on a fresh sub-stack. The current VarEnv is shared so `@name`
-// references resolve against the surrounding scope. Errors are
-// reported against the format-string token's position — finer source
-// mapping inside the block is left for a follow-up. The outer stack
-// and substitution are restored before returning.
-func (c *Checker) checkFormatBlock(src string, callSite Token, baseLine, baseCol int) {
-	lex := NewLexer(src, nil)
-	parser := NewMShellParser(lex)
-	file, err := parser.ParseFile()
-	if err == nil {
-		// The code sits inside a string, not directly in a body.
-		err = checkReturnPlacement(file.Items, false)
-	}
-	if err != nil {
-		c.errors = append(c.errors, TypeError{
-			Kind: TErrUnknownIdentifier,
-			Pos:  callSite,
-			Name: "format-string interpolation: " + src,
-		})
-		return
-	}
-
-	outerStack := c.stack.items
-	cp := c.subst.Checkpoint()
-	c.stack.items = nil
-
-	errStart := len(c.errors)
-	walked := c.walkJoined(file.Items)
-	// Diagnostics raised while walking the block carry block-local
-	// positions; shift them back onto the original source.
-	for i := errStart; i < len(c.errors); i++ {
-		c.errors[i].Pos = remapBlockToken(c.errors[i].Pos, baseLine, baseCol)
-	}
-
-	// When the walk died, the real error is already recorded and the
-	// stack reflects a mid-step state — an arity complaint on top of it
-	// would only be noise.
-	if walked && c.stack.Len() != 1 {
-		c.errors = append(c.errors, TypeError{
-			Kind: TErrInterpolationArity,
-			Pos:  callSite,
-			Hint: "format-string interpolation `{" + src + "}` must produce exactly one value, got " + strconv.Itoa(c.stack.Len()),
-		})
-	}
-
-	c.subst.Rollback(cp)
-	c.stack.items = outerStack
 }
 
 // stringLiteralValue returns the parsed content of a STRING /

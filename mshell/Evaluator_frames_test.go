@@ -61,7 +61,11 @@ func TestNeverUsesVariables(t *testing.T) {
 		{`true if x! end`, false},
 		{`(1 +) map`, false},
 		{`(1) loop`, false},
-		{`$"{1}"`, false},
+		{`$"text"`, true},
+		{`$"{1}"`, true},
+		{`$"{@x}"`, true},
+		{`$"{1 x! @x}"`, false},
+		{`$"{(1) 0 get}"`, false},
 		{`match _: 1 end`, false},
 	}
 	for _, c := range cases {

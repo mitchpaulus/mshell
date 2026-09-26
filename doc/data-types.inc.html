@@ -7,6 +7,7 @@
     <li><a href="#data-type-quotation">Quotation</a></li>
     <li><a href="#data-type-list">List</a></li>
     <li><a href="#data-type-string">String</a></li>
+    <li><a href="#data-type-format-string">Format String</a></li>
     <li><a href="#data-type-int-and-float">Integer</a></li>
     <li><a href="#data-type-int-and-float">Float</a></li>
     <li><a href="#data-type-path">Path</a></li>
@@ -124,6 +125,8 @@ Double quoted strings have the following escape sequences:
   <li> <code>\r</code>: Carriage return </li>
   <li> <code>\\</code>: Backslash </li>
   <li> <code>\"</code>: Double quote </li>
+  <li> <code>\{</code>: Left brace </li>
+  <li> <code>\}</code>: Right brace </li>
 </ul>
 
 <p>
@@ -144,6 +147,39 @@ Indexes are zero-based, and negative indexes count from the end.
 </pre>
 
 <p> If you have a backslash and it isn't followed by one of the escape characters above, <code>msh</code> will throw an error. </p>
+
+<h2 id="data-type-format-string">Format Strings <a class="section-link" href="#data-type-format-string" aria-label="Permalink">§</a></h2>
+
+<p>
+A double quoted string prefixed with <code>$</code> is a format string.
+Code inside <code>{</code> and <code>}</code> is run, and its result is placed into the string.
+</p>
+
+<pre>
+<code><span class="mshellSTRING">&#34;World&#34;</span> <span class="mshellVARSTORE">name!</span>
+<span class="mshellFORMATSTRINGSTART">$&#34;Hello, {</span><span class="mshellVARRETRIEVE">@name</span><span class="mshellFORMATSTRINGEND">}!&#34;</span> <span class="mshellLITERAL">wl</span>                  <span class="mshellLINECOMMENT"># Hello, World!</span>
+<span class="mshellFORMATSTRINGSTART">$&#34;{</span><span class="mshellINTEGER">2</span> <span class="mshellINTEGER">3</span> <span class="mshellPLUS">+</span><span class="mshellFORMATSTRINGEND">} items&#34;</span> <span class="mshellLITERAL">wl</span>                    <span class="mshellLINECOMMENT"># 5 items</span>
+<span class="mshellFORMATSTRINGSTART">$&#34;total: {</span><span class="mshellFLOAT">2.5</span> <span class="mshellINTEGER">1</span> <span class="mshellLITERAL">toFixed</span> <span class="mshellSTRING">&#34; &#34;</span> <span class="mshellINTEGER">6</span> <span class="mshellLITERAL">leftPad</span><span class="mshellFORMATSTRINGEND">}&#34;</span> <span class="mshellLITERAL">wl</span>  <span class="mshellLINECOMMENT"># total:    2.5</span>
+<span class="mshellFORMATSTRING">$&#34;literal \{braces\}&#34;</span> <span class="mshellLITERAL">wl</span>               <span class="mshellLINECOMMENT"># literal {braces}</span></code>
+</pre>
+
+<p>
+Each interpolation runs on its own empty stack and can read the variables in scope.
+It must leave exactly one value, which must be a <code>str</code>, <code>path</code>, or <code>int</code>.
+Convert other types first, for example with <code>str</code> or <code>toFixed</code>.
+The type checker checks this for every interpolation.
+</p>
+
+<p>
+Interpolations can hold any code, including strings, dictionaries, and other format strings.
+There is no separate formatting mini-language: use functions like <code>toFixed</code> and <code>leftPad</code> inside the interpolation.
+</p>
+
+<p>
+Format strings use the same escapes as double quoted strings.
+Use <code>\{</code> for a literal left brace.
+A <code>}</code> outside an interpolation is literal, so escaping it is optional.
+</p>
 
 <p>No escaping is done within single quoted strings or paths.</p>
 

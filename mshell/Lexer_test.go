@@ -193,3 +193,88 @@ func TestUnterminatedSingleQuoteString(t *testing.T) {
 		t.Errorf("Expected token type UNFINISHEDSINGLEQUOTESTRING, got %s", tokens[0].Type)
 	}
 }
+
+func TestFormatStringTokens(t *testing.T) {
+	input := `$"a {1 {"k": 2} :k? } b {$"c {@x}"} d \{\}" $"plain"`
+	tokens, err := NewLexer(input, nil).Tokenize()
+	if err != nil {
+		t.Fatalf("lex error: %v", err)
+	}
+	want := []struct {
+		typ   TokenType
+		value string
+	}{
+		{FORMATSTRINGSTART, "a "},
+		{INTEGER, ""},
+		{LEFT_CURLY, ""},
+		{STRING, ""},
+		{COLON, ""},
+		{INTEGER, ""},
+		{RIGHT_CURLY, ""},
+		{COLON, ""},
+		{LITERAL, ""},
+		{QUESTION, ""},
+		{FORMATSTRINGMID, " b "},
+		{FORMATSTRINGSTART, "c "},
+		{VARRETRIEVE, ""},
+		{FORMATSTRINGEND, ""},
+		{FORMATSTRINGEND, " d {}"},
+		{FORMATSTRING, "plain"},
+		{EOF, ""},
+	}
+	if len(tokens) != len(want) {
+		for i, tok := range tokens {
+			t.Logf("Token %d: %s", i, tok)
+		}
+		t.Fatalf("got %d tokens, want %d", len(tokens), len(want))
+	}
+	for i, w := range want {
+		if tokens[i].Type != w.typ {
+			t.Errorf("token %d: got %s, want %s", i, tokens[i].Type, w.typ)
+			continue
+		}
+		switch w.typ {
+		case FORMATSTRING, FORMATSTRINGSTART, FORMATSTRINGMID, FORMATSTRINGEND:
+			if got := tokens[i].Value.(MShellString).Content; got != w.value {
+				t.Errorf("token %d: got text %q, want %q", i, got, w.value)
+			}
+		}
+	}
+}
+
+// peekToken must leave the format string state as it found it, including
+// when the peeked token opens or closes an interpolation.
+func TestFormatStringPeekRestoresState(t *testing.T) {
+	input := `$"a {x} b {{"k": 1}} c"`
+	plain, err := NewLexer(input, nil).Tokenize()
+	if err != nil {
+		t.Fatalf("lex error: %v", err)
+	}
+
+	l := NewLexer(input, nil)
+	for i := range plain {
+		peeked := l.peekToken()
+		got := l.scanToken()
+		if peeked.Type != got.Type || got.Type != plain[i].Type {
+			t.Fatalf("token %d: peeked %s, scanned %s, want %s", i, peeked.Type, got.Type, plain[i].Type)
+		}
+	}
+}
+
+func TestUnterminatedFormatString(t *testing.T) {
+	for _, input := range []string{`$"abc`, `$"a {@x} bc`} {
+		l := NewLexer(input, nil)
+		l.allowUnterminatedString = true
+		tokens, err := l.Tokenize()
+		if err != nil {
+			t.Fatalf("%q: lex error: %v", input, err)
+		}
+		if last := tokens[len(tokens)-2]; last.Type != UNFINISHEDSTRING {
+			t.Errorf("%q: last token is %s, want UNFINISHEDSTRING", input, last.Type)
+		}
+
+		if _, err := NewLexer(input, nil).Tokenize(); err == nil {
+			t.Errorf("%q: expected an error without allowUnterminatedString", input)
+		}
+	}
+}
