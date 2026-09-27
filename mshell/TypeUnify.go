@@ -15,8 +15,39 @@ package main
 // allocated densely from 0 upward via FreshVar, so the slice can be
 // indexed directly without bounds-grow logic on Bind (FreshVar is the
 // only way to create a var, and it sizes the slice).
+//
+// The branching walker checkpoints the substitution at every step, so
+// checkpoints are versions of a persistent array (Baker's rerooting):
+// bound holds the current version, and every other version is a chain of
+// undo logs leading to it. Checkpoint is O(1), a write appends one undo
+// entry, and Rollback costs the writes between the two versions, which is
+// nothing when the walker returns to the state it just captured.
+//
+// Ids are never reused: Rollback leaves the slice at full length, and
+// slots allocated after the checkpoint just revert to unbound. So a type
+// that escapes one branch can't alias a variable another branch creates.
 type Substitution struct {
 	bound []TypeId
+	// root is the newest version, which the undo log in root.undo takes
+	// back from bound. Nil until the first Checkpoint: before that no
+	// version can be returned to, so writes need no log.
+	root *substVersion
+	// rw is Apply's rewriter, built on first use.
+	rw *typeRewriter
+}
+
+// substVersion is one version of a Substitution. For the root, applying
+// undo in reverse to bound gives this version; for any other, applying
+// it in reverse to the version at next does.
+type substVersion struct {
+	next *substVersion
+	undo []substWrite
+}
+
+// substWrite records that slot v held t before a write.
+type substWrite struct {
+	v TypeVarId
+	t TypeId
 }
 
 // FreshVar allocates a new generic variable, reserves its slot in the
@@ -28,40 +59,81 @@ func (s *Substitution) FreshVar(arena *TypeArena) TypeId {
 	return arena.MakeVar(id)
 }
 
+// set writes slot v, logging the old value so the root can be restored.
+func (s *Substitution) set(v TypeVarId, t TypeId) {
+	if s.root != nil {
+		s.root.undo = append(s.root.undo, substWrite{v, s.bound[v]})
+	}
+	s.bound[v] = t
+}
+
 // SubstCheckpoint records the substitution's state at a point in time
 // so it can be rolled back. Used by overload resolution (Phase 9) to
 // trial-unify each candidate without polluting state for the next.
 type SubstCheckpoint struct {
-	bound []TypeId
+	v *substVersion
 }
 
-// Checkpoint returns a snapshot of the current substitution. Detached
-// from the live state.
+// Checkpoint returns the current version. Writes after it don't change it.
 func (s *Substitution) Checkpoint() SubstCheckpoint {
-	out := make([]TypeId, len(s.bound))
-	copy(out, s.bound)
-	return SubstCheckpoint{bound: out}
+	if s.root == nil || len(s.root.undo) > 0 {
+		// Nothing written since the root was taken reuses it; otherwise
+		// the current state becomes the new root, and the old root now
+		// differs from it by exactly its log.
+		v := &substVersion{}
+		if s.root != nil {
+			s.root.next = v
+		}
+		s.root = v
+	}
+	return SubstCheckpoint{v: s.root}
 }
 
-// Rollback restores the substitution to a prior snapshot, including
-// shrinking the bound slice if the snapshot was smaller. Vars
-// allocated since the checkpoint become inaccessible (their indices
-// fall off the slice); they remain in the arena but no longer
-// resolve through this substitution.
+// Rollback restores the version snap was taken at, discarding writes made
+// since the last Checkpoint, and makes it the root.
 func (s *Substitution) Rollback(snap SubstCheckpoint) {
-	if cap(s.bound) >= len(snap.bound) {
-		s.bound = s.bound[:len(snap.bound)]
-	} else {
-		s.bound = make([]TypeId, len(snap.bound))
+	// Undo writes since the root, which no version refers to.
+	s.undoInto(s.root, nil)
+	// Walk the path from the target to the root, then reroot along it
+	// from the root end: each step moves the current state one version
+	// toward the target, and logs the way back on the version it left.
+	var path []*substVersion
+	for v := snap.v; v != s.root; v = v.next {
+		path = append(path, v)
 	}
-	copy(s.bound, snap.bound)
+	for i := len(path) - 1; i >= 0; i-- {
+		v, old := path[i], s.root
+		s.undoInto(v, old)
+		old.next = v
+		v.next = nil
+		s.root = v
+	}
+}
+
+// undoInto applies v's log to bound in reverse and empties it. If back is
+// not nil, it receives the log that redoes what was undone.
+func (s *Substitution) undoInto(v *substVersion, back *substVersion) {
+	for i := len(v.undo) - 1; i >= 0; i-- {
+		w := v.undo[i]
+		if back != nil {
+			back.undo = append(back.undo, substWrite{w.v, s.bound[w.v]})
+		}
+		s.bound[w.v] = w.t
+	}
+	v.undo = v.undo[:0]
 }
 
 // Apply resolves a TypeId against the current substitution, walking into
 // composites and rebuilding them if any inner type changed. Path
 // compression is applied to variable chains so repeated lookups are fast.
 func (s *Substitution) Apply(arena *TypeArena, t TypeId) TypeId {
-	return s.rewriter(arena).mapType(t, nil)
+	// The rewriter holds no per-call state, so one serves every Apply
+	// against the same arena instead of allocating it and its closures
+	// each time.
+	if s.rw == nil || s.rw.arena != arena {
+		s.rw = s.rewriter(arena)
+	}
+	return s.rw.mapType(t, nil)
 }
 
 // typeRewriter is the shared structural walker behind Substitution.Apply
@@ -229,7 +301,7 @@ func (s *Substitution) rewriter(arena *TypeArena) *typeRewriter {
 		// resolve may leave some vars unresolved, so caching it would be
 		// wrong.
 		if len(skip) == 0 {
-			s.bound[v] = resolved
+			s.set(v, resolved)
 		}
 		return resolved, true
 	}
@@ -263,16 +335,6 @@ func genericsSkip(sig QuoteSig) map[TypeVarId]struct{} {
 	return skip
 }
 
-// PadTo grows the substitution with unbound entries until it holds at
-// least n slots. Used after a cross-branch join: merged types may carry
-// free variables allocated under a sibling branch's (longer) checkpoint,
-// and FreshVar must not re-issue those ids.
-func (s *Substitution) PadTo(n int) {
-	for len(s.bound) < n {
-		s.bound = append(s.bound, TidNothing)
-	}
-}
-
 // Bind sets the variable v's resolution to t. Returns false on occurs-check
 // failure (binding would create an infinite type) or if v is already bound.
 // Callers should typically have Apply'd both sides first so v is known to
@@ -292,7 +354,7 @@ func (s *Substitution) Bind(arena *TypeArena, v TypeVarId, t TypeId) bool {
 	if s.occurs(arena, v, t) {
 		return false
 	}
-	s.bound[v] = t
+	s.set(v, t)
 	return true
 }
 
@@ -383,19 +445,20 @@ func (c *Checker) Instantiate(sig QuoteSig) QuoteSig {
 	for _, oldVar := range sig.Generics {
 		rename[oldVar] = c.subst.FreshVar(c.arena)
 	}
+	w := c.renamer(rename)
 	freshIn := make([]TypeId, len(sig.Inputs))
 	for i, in := range sig.Inputs {
-		freshIn[i] = c.renameVars(in, rename)
+		freshIn[i] = w.mapType(in, nil)
 	}
 	freshOut := make([]TypeId, len(sig.Outputs))
 	for i, out := range sig.Outputs {
-		freshOut[i] = c.renameVars(out, rename)
+		freshOut[i] = w.mapType(out, nil)
 	}
 	var freshBindings map[NameId]TypeId
 	if len(sig.Bindings) > 0 {
 		freshBindings = make(map[NameId]TypeId, len(sig.Bindings))
 		for name, t := range sig.Bindings {
-			freshBindings[name] = c.renameVars(t, rename)
+			freshBindings[name] = w.mapType(t, nil)
 		}
 	}
 	return QuoteSig{
@@ -412,6 +475,12 @@ func (c *Checker) Instantiate(sig QuoteSig) QuoteSig {
 // is preserved. Rebuilt quote sigs have their Bindings renamed too and
 // their Generics consumed (set to nil) — instantiation uses them up.
 func (c *Checker) renameVars(t TypeId, rename map[TypeVarId]TypeId) TypeId {
+	return c.renamer(rename).mapType(t, nil)
+}
+
+// renamer returns the rewriter renameVars applies, for callers renaming
+// several types with one mapping.
+func (c *Checker) renamer(rename map[TypeVarId]TypeId) *typeRewriter {
 	w := &typeRewriter{arena: c.arena}
 	w.resolve = func(v TypeVarId, _ map[TypeVarId]struct{}) (TypeId, bool) {
 		fresh, ok := rename[v]
@@ -443,5 +512,5 @@ func (c *Checker) renameVars(t TypeId, rename map[TypeVarId]TypeId) TypeId {
 			// Generics intentionally dropped: instantiation consumes them.
 		}, true
 	}
-	return w.mapType(t, nil)
+	return w
 }

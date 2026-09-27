@@ -1,0 +1,2 @@
+# A list literal runs on its own empty stack, so drop underflows (#341).
+1 [drop] len wl

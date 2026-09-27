@@ -1,0 +1,2 @@
+# Storing a variable is a pop, which underflows inside a list.
+1 [v!] len wl

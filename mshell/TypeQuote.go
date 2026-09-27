@@ -157,10 +157,8 @@ func (c *Checker) driveBranchesOverItems(initial []quoteBranch, body []MShellPar
 // checker state and reconciles the surviving branches back into a single
 // live state: one survivor is loaded directly; several that agree on
 // stack size join per-slot (per-slot type unions via joinArmBranches);
-// disagreeing sizes fall back to the first survivor. Used by the
-// sub-walks that need a single value/state at the end (dict-literal
-// values, grid cells, format-string blocks, else-if conditions) and by
-// CheckTokens. Returns false when every branch died — the failing
+// disagreeing sizes fall back to the first survivor. Used by else-if
+// conditions and by CheckTokens. Returns false when every branch died — the failing
 // step's error is already recorded.
 func (c *Checker) walkJoined(items []MShellParseItem) bool {
 	branches := c.driveBranchesOverItems([]quoteBranch{c.captureBranch()}, items)
@@ -246,8 +244,8 @@ func (c *Checker) driveBranches(
 func (c *Checker) initialQuoteBranch(outerSnap ScopeSnapshot) quoteBranch {
 	return quoteBranch{
 		stack:       nil,
-		vars:        copyVarMap(outerSnap.vars),
-		maybeVars:   copyVarMap(outerSnap.maybeVars),
+		vars:        outerSnap.vars,
+		maybeVars:   outerSnap.maybeVars,
 		inferInputs: nil,
 		diverged:    false,
 		inferring:   true,
@@ -261,10 +259,11 @@ func (c *Checker) initialQuoteBranch(outerSnap ScopeSnapshot) quoteBranch {
 // and run with inferring=false so underflow remains a real error.
 func (c *Checker) initialTopBranch(initialStack []TypeId) quoteBranch {
 	stack := append([]TypeId(nil), initialStack...)
+	vars, maybeVars := c.vars.share()
 	return quoteBranch{
 		stack:       stack,
-		vars:        copyVarMap(c.vars.bound),
-		maybeVars:   copyVarMap(c.vars.maybeBound),
+		vars:        vars,
+		maybeVars:   maybeVars,
 		inferInputs: nil,
 		diverged:    false,
 		inferring:   false,
@@ -277,8 +276,7 @@ func (c *Checker) initialTopBranch(initialStack []TypeId) quoteBranch {
 func (c *Checker) loadBranch(b quoteBranch) {
 	c.subst.Rollback(b.substCp)
 	c.stack.items = append(c.stack.items[:0], b.stack...)
-	c.vars.bound = copyVarMap(b.vars)
-	c.vars.maybeBound = copyVarMap(b.maybeVars)
+	c.vars.adopt(b.vars, b.maybeVars)
 	c.inferInputs = append([]TypeId(nil), b.inferInputs...)
 	c.diverged = b.diverged
 	c.inferring = b.inferring
@@ -287,10 +285,11 @@ func (c *Checker) loadBranch(b quoteBranch) {
 // captureBranch reads the checker's current state into a quoteBranch
 // after a step has finished applying.
 func (c *Checker) captureBranch() quoteBranch {
+	vars, maybeVars := c.vars.share()
 	return quoteBranch{
 		stack:       append([]TypeId(nil), c.stack.items...),
-		vars:        copyVarMap(c.vars.bound),
-		maybeVars:   copyVarMap(c.vars.maybeBound),
+		vars:        vars,
+		maybeVars:   maybeVars,
 		inferInputs: append([]TypeId(nil), c.inferInputs...),
 		diverged:    c.diverged,
 		inferring:   c.inferring,

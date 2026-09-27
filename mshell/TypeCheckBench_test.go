@@ -1,0 +1,132 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// Benchmarks for the type checker alone: files are parsed up front, so
+// only TypeCheckProgram is timed.
+
+func benchParse(tb testing.TB, src string) *MShellFile {
+	tb.Helper()
+	file, err := NewMShellParser(NewLexer(src, nil)).ParseFile()
+	if err != nil {
+		tb.Fatalf("parse error: %v", err)
+	}
+	return file
+}
+
+func benchStdlib(tb testing.TB) []MShellDefinition {
+	tb.Helper()
+	src, err := os.ReadFile("../lib/std.msh")
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return benchParse(tb, string(src)).Definitions
+}
+
+// benchCheck type checks f, surviving a checker panic so builds with
+// known crashes can still be compared on the same corpus.
+func benchCheck(f *MShellFile, std []MShellDefinition) {
+	defer func() { recover() }()
+	TypeCheckProgram(f, std)
+}
+
+// BenchmarkTypeCheckCorpus checks every script the test suites type check,
+// plus tests/msh-scripts.
+func BenchmarkTypeCheckCorpus(b *testing.B) {
+	std := benchStdlib(b)
+	var files []*MShellFile
+	for _, pattern := range []string{"../tests/success/*.msh", "../tests/typecheck_fail/*.msh", "../tests/msh-scripts/*"} {
+		paths, _ := filepath.Glob(pattern)
+		for _, p := range paths {
+			src, err := os.ReadFile(p)
+			if err != nil {
+				continue
+			}
+			file, err := NewMShellParser(NewLexer(string(src), nil)).ParseFile()
+			if err != nil {
+				continue
+			}
+			files = append(files, file)
+		}
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for _, f := range files {
+			benchCheck(f, std)
+		}
+	}
+}
+
+// benchShapes are single top-level lines, repeated n times to show how
+// checking time grows with program length.
+var benchShapes = map[string]string{
+	"tokens": "1 2 + drop",
+	"list":   "[1 2 3] len drop",
+	"cmd":    "[ls -l foo] drop",
+	"dict":   "{a: 1, b: \"x\"} drop",
+	"fmt":    "$\"{1}-{\"a\"}\" drop",
+	"nested": "[[1 2] [3]] len drop",
+	"vars":   "1 v%d! @v%d drop",
+	"quote":  "[1 2] (1 +) map drop",
+	"if":     "1 2 < if 1 else 2 end drop",
+	"match":  "\"x\" match \"x\" : \"a\", _ : \"b\", end drop",
+	"def":    "def f%d (int -- int) 1 + end 1 f%d drop",
+}
+
+func BenchmarkTypeCheckScaling(b *testing.B) {
+	std := benchStdlib(b)
+	for _, name := range []string{"tokens", "list", "cmd", "dict", "fmt", "nested", "vars", "quote", "if", "match", "def"} {
+		for _, n := range []int{500, 1000, 2000, 4000} {
+			var sb strings.Builder
+			for i := 0; i < n; i++ {
+				line := benchShapes[name]
+				if strings.Contains(line, "%d") {
+					line = fmt.Sprintf(line, i, i)
+				}
+				sb.WriteString(line)
+				sb.WriteByte('\n')
+			}
+			file := benchParse(b, sb.String())
+			b.Run(fmt.Sprintf("%s/%d", name, n), func(b *testing.B) {
+				for i := 0; i < b.N; i++ {
+					TypeCheckProgram(file, std)
+				}
+			})
+		}
+	}
+}
+
+// BenchmarkTypeCheckEmpty is the fixed cost of every check: building the
+// builtin tables and registering the stdlib signatures.
+func BenchmarkTypeCheckEmpty(b *testing.B) {
+	std := benchStdlib(b)
+	file := benchParse(b, "")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		TypeCheckProgram(file, std)
+	}
+}
+
+// BenchmarkLSPDiagnostics times the language server's per-edit diagnostics
+// pass, parse included, on real scripts of a few sizes.
+func BenchmarkLSPDiagnostics(b *testing.B) {
+	s := &lspServer{stdlibDefs: benchStdlib(b)}
+	for _, name := range []string{"pathbins", "nodes", "setdiff2way.msh"} {
+		src, err := os.ReadFile("../tests/msh-scripts/" + name)
+		if err != nil {
+			b.Fatal(err)
+		}
+		text := string(src)
+		b.Run(name, func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				s.computeDiagnostics(text)
+			}
+		})
+	}
+}

@@ -61,6 +61,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The type checker now checks list literals, dict values, and grid cells on their own empty stack, as they run.
+  Code like `1 [drop]` or `1 {a: drop}` is a type error instead of a type checker crash or a pass that fails at runtime,
+  and a dict value must produce exactly one value (#341).
 - `utcToCst` and `cstToUtc` no longer change their input. Previously, a variable passed to them was also changed to the converted time.
 - A terminal resize no longer prints another prompt. The prompt and command are redrawn
   in place at the new width.

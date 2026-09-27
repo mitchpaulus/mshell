@@ -27,10 +27,11 @@ type ScopeSnapshot struct {
 // The returned snapshot is detached from the live state — mutating the
 // checker after calling Snapshot does not change it.
 func (c *Checker) Snapshot() ScopeSnapshot {
+	vars, maybeVars := c.vars.share()
 	return ScopeSnapshot{
 		stack:     append([]TypeId(nil), c.stack.items...),
-		vars:      copyVarMap(c.vars.bound),
-		maybeVars: copyVarMap(c.vars.maybeBound),
+		vars:      vars,
+		maybeVars: maybeVars,
 		diverged:  c.diverged,
 	}
 }
@@ -39,8 +40,7 @@ func (c *Checker) Snapshot() ScopeSnapshot {
 // snapshot itself is untouched, so it can be reused for sibling arms.
 func (c *Checker) Fork(snap ScopeSnapshot) {
 	c.stack.items = append(c.stack.items[:0], snap.stack...)
-	c.vars.bound = copyVarMap(snap.vars)
-	c.vars.maybeBound = copyVarMap(snap.maybeVars)
+	c.vars.adopt(snap.vars, snap.maybeVars)
 	c.diverged = snap.diverged
 }
 

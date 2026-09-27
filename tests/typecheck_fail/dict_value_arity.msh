@@ -1,0 +1,2 @@
+# A dict value must produce exactly one value.
+{a: 1 2} drop
