@@ -11,9 +11,8 @@ package main
 // See ai/type_checker.md for the full design.
 
 import (
+	"encoding/binary"
 	"sort"
-	"strconv"
-	"strings"
 )
 
 // TypeId is an opaque handle into TypeArena. Comparing TypeIds for equality
@@ -195,6 +194,8 @@ type TypeArena struct {
 	unionMembers   [][]TypeId // each slice is sorted, deduped
 	gridSchemas    []GridSchema
 	gridSchemaCons map[string]uint32
+	// keyBuf is scratch space for building composite cons keys.
+	keyBuf []byte
 }
 
 // NewTypeArena constructs an arena pre-populated with the primitive ids
@@ -342,14 +343,14 @@ func (a *TypeArena) MakeShape(fields []ShapeField) TypeId {
 		}
 	}
 	normalized := normalizeShapeFields(fields)
-	key := encodeShapeKey(normalized)
-	if id, ok := a.cons[key]; ok {
+	a.keyBuf = appendShapeKey(a.keyBuf[:0], normalized)
+	if id, ok := a.cons[string(a.keyBuf)]; ok {
 		return id
 	}
 	idx := uint32(len(a.shapeFields))
 	a.shapeFields = append(a.shapeFields, normalized)
 	id := a.append(TypeNode{Kind: TKShape, Extra: idx})
-	a.cons[key] = id
+	a.cons[string(a.keyBuf)] = id
 	return id
 }
 
@@ -365,27 +366,27 @@ func (a *TypeArena) MakeUnion(arms []TypeId, brandId NameId) TypeId {
 	if len(flat) == 1 && brandId == 0 {
 		return flat[0]
 	}
-	key := encodeUnionKey(flat, brandId)
-	if id, ok := a.cons[key]; ok {
+	a.keyBuf = appendUnionKey(a.keyBuf[:0], flat, brandId)
+	if id, ok := a.cons[string(a.keyBuf)]; ok {
 		return id
 	}
 	idx := uint32(len(a.unionMembers))
 	a.unionMembers = append(a.unionMembers, flat)
 	id := a.append(TypeNode{Kind: TKUnion, A: uint32(brandId), Extra: idx})
-	a.cons[key] = id
+	a.cons[string(a.keyBuf)] = id
 	return id
 }
 
 // MakeQuote returns the canonical TypeId for a quote/function signature.
 func (a *TypeArena) MakeQuote(sig QuoteSig) TypeId {
-	key := encodeQuoteKey(sig)
-	if id, ok := a.cons[key]; ok {
+	a.keyBuf = appendQuoteKey(a.keyBuf[:0], sig)
+	if id, ok := a.cons[string(a.keyBuf)]; ok {
 		return id
 	}
 	idx := uint32(len(a.quoteSigs))
 	a.quoteSigs = append(a.quoteSigs, sig)
 	id := a.append(TypeNode{Kind: TKQuote, Extra: idx})
-	a.cons[key] = id
+	a.cons[string(a.keyBuf)] = id
 	return id
 }
 
@@ -397,8 +398,8 @@ func (a *TypeArena) MakeOverloadedQuote(sigs []QuoteSig) TypeId {
 	if len(sigs) == 1 {
 		return a.MakeQuote(sigs[0])
 	}
-	key := encodeOverloadedQuoteKey(sigs)
-	if id, ok := a.cons[key]; ok {
+	a.keyBuf = appendOverloadedQuoteKey(a.keyBuf[:0], sigs)
+	if id, ok := a.cons[string(a.keyBuf)]; ok {
 		return id
 	}
 	cp := make([]QuoteSig, len(sigs))
@@ -406,7 +407,7 @@ func (a *TypeArena) MakeOverloadedQuote(sigs []QuoteSig) TypeId {
 	idx := uint32(len(a.overloadedQuoteSigs))
 	a.overloadedQuoteSigs = append(a.overloadedQuoteSigs, cp)
 	id := a.append(TypeNode{Kind: TKOverloadedQuote, Extra: idx})
-	a.cons[key] = id
+	a.cons[string(a.keyBuf)] = id
 	return id
 }
 
@@ -425,18 +426,18 @@ func (a *TypeArena) MakeGridSchemaIdx(cols []GridSchemaCol) uint32 {
 	if len(cols) == 0 {
 		return 0
 	}
-	key := encodeGridSchemaKey(cols)
+	a.keyBuf = appendGridSchemaKey(a.keyBuf[:0], cols)
 	if a.gridSchemaCons == nil {
 		a.gridSchemaCons = make(map[string]uint32, 8)
 	}
-	if idx, ok := a.gridSchemaCons[key]; ok {
+	if idx, ok := a.gridSchemaCons[string(a.keyBuf)]; ok {
 		return idx
 	}
 	cp := make([]GridSchemaCol, len(cols))
 	copy(cp, cols)
 	idx := uint32(len(a.gridSchemas))
 	a.gridSchemas = append(a.gridSchemas, GridSchema{Columns: cp})
-	a.gridSchemaCons[key] = idx
+	a.gridSchemaCons[string(a.keyBuf)] = idx
 	return idx
 }
 
@@ -555,117 +556,99 @@ func (a *TypeArena) flattenAndCanonicalizeUnion(arms []TypeId) []TypeId {
 	return out[:w]
 }
 
-// encodeShapeKey builds the cons-table key for a normalized shape.
-func encodeShapeKey(fields []ShapeField) string {
-	var sb strings.Builder
-	sb.WriteString("S:")
-	for i, f := range fields {
-		if i > 0 {
-			sb.WriteByte(',')
-		}
-		sb.WriteString(strconv.FormatUint(uint64(f.Name), 10))
+// Cons-table keys for composite types are built into the arena's reusable
+// keyBuf as fixed-width binary, with a kind byte and a count before every
+// variable-length part so no two types share a key. Looking a key up as
+// string(keyBuf) doesn't allocate; only a new entry copies it.
+
+func appendKeyU32(b []byte, v uint32) []byte {
+	return binary.LittleEndian.AppendUint32(b, v)
+}
+
+// appendShapeKey appends the key for a normalized shape.
+func appendShapeKey(b []byte, fields []ShapeField) []byte {
+	b = append(b, 'S')
+	b = appendKeyU32(b, uint32(len(fields)))
+	for _, f := range fields {
+		b = appendKeyU32(b, uint32(f.Name))
 		if f.Optional {
-			sb.WriteByte('?')
+			b = append(b, 1)
+		} else {
+			b = append(b, 0)
 		}
-		sb.WriteByte('=')
-		sb.WriteString(strconv.FormatUint(uint64(f.Type), 10))
+		b = appendKeyU32(b, uint32(f.Type))
 	}
-	return sb.String()
+	return b
 }
 
-// encodeUnionKey builds the cons-table key for a flattened, sorted union.
-func encodeUnionKey(arms []TypeId, brandId NameId) string {
-	var sb strings.Builder
-	sb.WriteString("U:")
-	sb.WriteString(strconv.FormatUint(uint64(brandId), 10))
-	sb.WriteByte(':')
-	for i, arm := range arms {
-		if i > 0 {
-			sb.WriteByte(',')
-		}
-		sb.WriteString(strconv.FormatUint(uint64(arm), 10))
+// appendUnionKey appends the key for a flattened, sorted union.
+func appendUnionKey(b []byte, arms []TypeId, brandId NameId) []byte {
+	b = append(b, 'U')
+	b = appendKeyU32(b, uint32(brandId))
+	b = appendKeyU32(b, uint32(len(arms)))
+	for _, arm := range arms {
+		b = appendKeyU32(b, uint32(arm))
 	}
-	return sb.String()
+	return b
 }
 
-// encodeGridSchemaKey builds the cons-table key for a grid schema. Order is
+// appendGridSchemaKey appends the key for a grid schema. Order is
 // significant — grids carry column order — so columns are not sorted.
-func encodeGridSchemaKey(cols []GridSchemaCol) string {
-	var sb strings.Builder
-	sb.WriteString("G:")
-	for i, c := range cols {
-		if i > 0 {
-			sb.WriteByte(',')
-		}
-		sb.WriteString(strconv.FormatUint(uint64(c.Name), 10))
-		sb.WriteByte('=')
-		sb.WriteString(strconv.FormatUint(uint64(c.Type), 10))
+func appendGridSchemaKey(b []byte, cols []GridSchemaCol) []byte {
+	b = append(b, 'G')
+	b = appendKeyU32(b, uint32(len(cols)))
+	for _, c := range cols {
+		b = appendKeyU32(b, uint32(c.Name))
+		b = appendKeyU32(b, uint32(c.Type))
 	}
-	return sb.String()
+	return b
 }
 
-// encodeQuoteKey builds the cons-table key for a quote signature.
-func encodeQuoteKey(sig QuoteSig) string {
-	var sb strings.Builder
-	sb.WriteString("Q:")
-	for i, in := range sig.Inputs {
-		if i > 0 {
-			sb.WriteByte(',')
-		}
-		sb.WriteString(strconv.FormatUint(uint64(in), 10))
+// appendQuoteKey appends the key for a quote signature.
+func appendQuoteKey(b []byte, sig QuoteSig) []byte {
+	b = append(b, 'Q')
+	b = appendKeyU32(b, uint32(len(sig.Inputs)))
+	for _, in := range sig.Inputs {
+		b = appendKeyU32(b, uint32(in))
 	}
-	sb.WriteString(";")
-	for i, out := range sig.Outputs {
-		if i > 0 {
-			sb.WriteByte(',')
-		}
-		sb.WriteString(strconv.FormatUint(uint64(out), 10))
+	b = appendKeyU32(b, uint32(len(sig.Outputs)))
+	for _, out := range sig.Outputs {
+		b = appendKeyU32(b, uint32(out))
 	}
-	sb.WriteByte(';')
 	if sig.Diverges {
-		sb.WriteByte('D')
+		b = append(b, 1)
 	} else {
-		sb.WriteByte('-')
+		b = append(b, 0)
 	}
-	sb.WriteByte(';')
+	b = appendKeyU32(b, uint32(len(sig.Bindings)))
 	if len(sig.Bindings) > 0 {
 		names := make([]int, 0, len(sig.Bindings))
 		for name := range sig.Bindings {
 			names = append(names, int(name))
 		}
 		sort.Ints(names)
-		for i, name := range names {
-			if i > 0 {
-				sb.WriteByte(',')
-			}
-			sb.WriteString(strconv.FormatUint(uint64(name), 10))
-			sb.WriteByte('=')
-			sb.WriteString(strconv.FormatUint(uint64(sig.Bindings[NameId(name)]), 10))
+		for _, name := range names {
+			b = appendKeyU32(b, uint32(name))
+			b = appendKeyU32(b, uint32(sig.Bindings[NameId(name)]))
 		}
 	}
-	sb.WriteByte(';')
-	for i, g := range sig.Generics {
-		if i > 0 {
-			sb.WriteByte(',')
-		}
-		sb.WriteString(strconv.FormatUint(uint64(g), 10))
+	b = appendKeyU32(b, uint32(len(sig.Generics)))
+	for _, g := range sig.Generics {
+		b = appendKeyU32(b, uint32(g))
 	}
-	return sb.String()
+	return b
 }
 
-// encodeOverloadedQuoteKey builds the cons-table key for an overload set.
-// Candidate order is significant: overload dispatch is most-specific-first
-// with source/table order as the deterministic fallback.
-func encodeOverloadedQuoteKey(sigs []QuoteSig) string {
-	var sb strings.Builder
-	sb.WriteString("O:")
-	for i, sig := range sigs {
-		if i > 0 {
-			sb.WriteByte('|')
-		}
-		sb.WriteString(encodeQuoteKey(sig))
+// appendOverloadedQuoteKey appends the key for an overload set. Candidate
+// order is significant: overload dispatch is most-specific-first with
+// source/table order as the deterministic fallback.
+func appendOverloadedQuoteKey(b []byte, sigs []QuoteSig) []byte {
+	b = append(b, 'O')
+	b = appendKeyU32(b, uint32(len(sigs)))
+	for _, sig := range sigs {
+		b = appendQuoteKey(b, sig)
 	}
-	return sb.String()
+	return b
 }
 
 // normalizeShapeFields returns a sorted copy of fields with duplicate-name

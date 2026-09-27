@@ -31,11 +31,11 @@ func TestSnapshotIsDetached(t *testing.T) {
 func TestForkRestoresStateExactly(t *testing.T) {
 	c := freshChecker()
 	c.stack.Push(TidInt)
-	c.vars.bound[c.names.Intern("x")] = TidStr
+	c.vars.bind(c.names.Intern("x"), TidStr)
 	snap := c.Snapshot()
 
 	c.stack.Push(TidBool)
-	c.vars.bound[c.names.Intern("y")] = TidInt
+	c.vars.bind(c.names.Intern("y"), TidInt)
 	c.Fork(snap)
 
 	if c.stack.Len() != 1 || c.stack.Top() != TidInt {
@@ -102,8 +102,8 @@ func TestReconcileVarSetLiftsToMaybeBound(t *testing.T) {
 	entry := c.captureBranch()
 	x := c.names.Intern("x")
 	y := c.names.Intern("y")
-	a1 := runArm(c, entry, false, func() { c.vars.bound[x] = TidInt })
-	a2 := runArm(c, entry, false, func() { c.vars.bound[y] = TidStr })
+	a1 := runArm(c, entry, false, func() { c.vars.bind(x, TidInt) })
+	a2 := runArm(c, entry, false, func() { c.vars.bind(y, TidStr) })
 	c.reconcileArmBranches([]quoteBranch{a1, a2}, []string{"arm 1", "arm 2"}, entry, mkTok(IF, "if"))
 	if errs := c.Errors(); len(errs) != 0 {
 		t.Fatalf("unexpected errors: %+v", errs)
@@ -126,8 +126,8 @@ func TestReconcileVarTypeUnion(t *testing.T) {
 	c := freshChecker()
 	entry := c.captureBranch()
 	x := c.names.Intern("x")
-	a1 := runArm(c, entry, false, func() { c.vars.bound[x] = TidInt })
-	a2 := runArm(c, entry, false, func() { c.vars.bound[x] = TidStr })
+	a1 := runArm(c, entry, false, func() { c.vars.bind(x, TidInt) })
+	a2 := runArm(c, entry, false, func() { c.vars.bind(x, TidStr) })
 	c.reconcileArmBranches([]quoteBranch{a1, a2}, []string{"arm 1", "arm 2"}, entry, mkTok(IF, "if"))
 	if errs := c.Errors(); len(errs) != 0 {
 		t.Fatalf("unexpected errors: %+v", errs)
@@ -144,10 +144,10 @@ func TestReconcilePreBoundStaysBound(t *testing.T) {
 	// re-binds it: the entry binding survives every arm via Fork.
 	c := freshChecker()
 	x := c.names.Intern("x")
-	c.vars.bound[x] = TidInt
+	c.vars.bind(x, TidInt)
 	entry := c.captureBranch()
 	a1 := runArm(c, entry, false, func() {})
-	a2 := runArm(c, entry, false, func() { c.vars.bound[x] = TidStr })
+	a2 := runArm(c, entry, false, func() { c.vars.bind(x, TidStr) })
 	c.reconcileArmBranches([]quoteBranch{a1, a2}, []string{"arm 1", "arm 2"}, entry, mkTok(IF, "if"))
 	if errs := c.Errors(); len(errs) != 0 {
 		t.Fatalf("unexpected errors: %+v", errs)
@@ -169,7 +169,7 @@ func TestReconcileMaybeFromOneArmLeaks(t *testing.T) {
 	c := freshChecker()
 	entry := c.captureBranch()
 	x := c.names.Intern("x")
-	a1 := runArm(c, entry, false, func() { c.vars.bound[x] = TidInt })
+	a1 := runArm(c, entry, false, func() { c.vars.bind(x, TidInt) })
 	a2 := runArm(c, entry, false, func() {}) // implicit no-else arm
 	c.reconcileArmBranches([]quoteBranch{a1, a2}, []string{"arm 1", "arm 2"}, entry, mkTok(IF, "if"))
 	if errs := c.Errors(); len(errs) != 0 {

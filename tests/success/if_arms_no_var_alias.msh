@@ -1,0 +1,16 @@
+# Type variables from one if arm must not alias variables created in a later one.
+["branch\ta\tb\tc\tn1\tx\tn2\ty" "outdoorair:node\tn3" "other\tq"] (tsplit) map
+map.
+    obj!
+    @obj :0: lower type!
+    @type 'zonehvac:equipmentconnections' = if
+        @obj 4:8
+    else* @type 'branch' = *if
+        @obj 4: 2 chunk map. 1: end concat
+    else* @type 'outdoorair:node' = *if
+        [@obj :1:]
+    else
+        []
+    end
+end
+concat map. trim end uniq sortV str wl

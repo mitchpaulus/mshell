@@ -292,8 +292,7 @@ func lastBranchingTokenInFile(file *MShellFile) Token {
 func (c *Checker) checkDefBody(def *MShellDefinition) {
 	// Save outer state.
 	outerStack := c.stack.items
-	outerVars := c.vars.bound
-	outerMaybeVars := c.vars.maybeBound
+	outerVars, outerMaybeVars := c.vars.share()
 	outerDiverged := c.diverged
 	outerInferring := c.inferring
 	outerInferInputs := c.inferInputs
@@ -301,8 +300,7 @@ func (c *Checker) checkDefBody(def *MShellDefinition) {
 	cp := c.subst.Checkpoint()
 
 	c.stack.items = nil
-	c.vars.bound = make(map[NameId]TypeId)
-	c.vars.maybeBound = make(map[NameId]TypeId)
+	c.vars.adopt(make(map[NameId]TypeId), make(map[NameId]TypeId))
 	c.diverged = false
 	c.inferring = false
 	c.inferInputs = nil
@@ -339,8 +337,7 @@ func (c *Checker) checkDefBody(def *MShellDefinition) {
 	c.currentFn = prevFn
 	c.subst.Rollback(cp)
 	c.stack.items = outerStack
-	c.vars.bound = outerVars
-	c.vars.maybeBound = outerMaybeVars
+	c.vars.adopt(outerVars, outerMaybeVars)
 	c.diverged = outerDiverged
 	c.inferring = outerInferring
 	c.inferInputs = outerInferInputs
@@ -673,8 +670,7 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 						storeName = storeName[:n-1]
 					}
 					storeNameId := c.names.Intern(storeName)
-					c.vars.bound[storeNameId] = fresh
-					delete(c.vars.maybeBound, storeNameId)
+					c.vars.store(storeNameId, fresh)
 					continue
 				}
 				c.errors = append(c.errors, TypeError{
@@ -693,8 +689,7 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 				storeName = storeName[:n-1]
 			}
 			storeNameId := c.names.Intern(storeName)
-			c.vars.bound[storeNameId] = top
-			delete(c.vars.maybeBound, storeNameId)
+			c.vars.store(storeNameId, top)
 		}
 		return
 
@@ -1017,22 +1012,11 @@ func (c *Checker) joinArmBranches(branches []quoteBranch) {
 	// Install the merged state on the first branch's substitution. The
 	// unioned types are already fully resolved, so they remain valid;
 	// inferInputs / inferring carry over from a representative arm.
-	c.loadBranch(branches[0])
 	// The merged types may carry free variables allocated in sibling
-	// branches whose checkpoints were longer than branch 0's. Pad the
-	// substitution to the longest checkpoint so FreshVar can never
-	// re-issue one of those ids — reuse would silently alias two
-	// unrelated variables.
-	maxLen := 0
-	for _, b := range branches {
-		if n := len(b.substCp.bound); n > maxLen {
-			maxLen = n
-		}
-	}
-	c.subst.PadTo(maxLen)
+	// branches; ids are never reused, so FreshVar can't alias them.
+	c.loadBranch(branches[0])
 	c.stack.items = append(c.stack.items[:0], mergedStack...)
-	c.vars.bound = mergedBound
-	c.vars.maybeBound = mergedMaybe
+	c.vars.adopt(mergedBound, mergedMaybe)
 	c.diverged = false
 }
 
@@ -1679,7 +1663,7 @@ func (c *Checker) bindPatternName(name string, typ TypeId) {
 	if name == "_" || name == "" {
 		return
 	}
-	c.vars.bound[c.names.Intern(name)] = typ
+	c.vars.bind(c.names.Intern(name), typ)
 }
 
 // interpolationSig takes what a format string interpolation may produce:

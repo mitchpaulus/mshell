@@ -64,9 +64,49 @@ func (s *TypeStack) Snapshot() []TypeId {
 //
 // A subsequent unconditional VARSTORE for the same name removes the
 // maybeBound entry (the store makes the binding definite again).
+//
+// Branch snapshots hold the maps themselves rather than copies, so taking
+// or restoring one is O(1). Once the maps are shared they are immutable:
+// shared is set, and the next write copies them first. Writes go through
+// bind and store for that reason; reads use the maps directly.
 type VarEnv struct {
 	bound      map[NameId]TypeId
 	maybeBound map[NameId]TypeId
+	shared     bool
+}
+
+// share marks the maps immutable and returns them for a snapshot.
+func (e *VarEnv) share() (bound, maybeBound map[NameId]TypeId) {
+	e.shared = true
+	return e.bound, e.maybeBound
+}
+
+// adopt installs maps from a snapshot, which stay shared with it.
+func (e *VarEnv) adopt(bound, maybeBound map[NameId]TypeId) {
+	e.bound, e.maybeBound, e.shared = bound, maybeBound, true
+}
+
+// own copies shared maps so they can be written.
+func (e *VarEnv) own() {
+	if e.shared {
+		e.bound = copyVarMap(e.bound)
+		e.maybeBound = copyVarMap(e.maybeBound)
+		e.shared = false
+	}
+}
+
+// bind sets name's type.
+func (e *VarEnv) bind(name NameId, t TypeId) {
+	e.own()
+	e.bound[name] = t
+}
+
+// store sets name's type from an unconditional store, which also makes a
+// maybe-bound name definite.
+func (e *VarEnv) store(name NameId, t TypeId) {
+	e.own()
+	e.bound[name] = t
+	delete(e.maybeBound, name)
 }
 
 // NewVarEnv constructs an empty environment.
@@ -593,7 +633,7 @@ func (c *Checker) applyQuoteArm(quote TypeId, tok Token, allowedBindings map[Nam
 	c.applySig(sig, tok)
 	for name, t := range sig.Bindings {
 		if _, ok := allowedBindings[name]; ok {
-			c.vars.bound[name] = c.subst.Apply(c.arena, t)
+			c.vars.bind(name, c.subst.Apply(c.arena, t))
 		}
 	}
 	if sig.Diverges {
