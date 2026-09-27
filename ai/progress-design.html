@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Progress &amp; terminal logging — mshell design</title>
+  <style>
+    :root {
+      --paper: #f6f3eb;
+      --paper-2: #eeeadf;
+      --ink: #18201f;
+      --muted: #65706d;
+      --line: #d5d0c4;
+      --green: #176b57;
+      --green-soft: #dbeae4;
+      --amber: #b86b24;
+      --red: #a4413a;
+      --blue: #315f76;
+      --terminal: #111917;
+      --terminal-ink: #dce7e1;
+      --terminal-muted: #87958f;
+      --terminal-green: #5ed1a5;
+      --terminal-amber: #efb56f;
+      --terminal-red: #ef8178;
+      --code: #eef0eb;
+      --shadow: 0 18px 50px rgba(35, 43, 40, 0.09);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 10% 0%, rgba(23, 107, 87, 0.09), transparent 28rem),
+        var(--paper);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.62;
+    }
+
+    a { color: var(--green); text-underline-offset: 0.18em; }
+    a:hover { text-decoration-thickness: 2px; }
+    code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
+    code {
+      padding: 0.1em 0.32em;
+      border: 1px solid #dde0da;
+      border-radius: 0.3rem;
+      background: var(--code);
+      font-size: 0.9em;
+    }
+
+    .shell {
+      display: grid;
+      grid-template-columns: 15rem minmax(0, 56rem);
+      gap: 3.5rem;
+      width: min(100% - 2rem, 76rem);
+      margin: 0 auto;
+    }
+
+    nav {
+      position: sticky;
+      top: 0;
+      align-self: start;
+      max-height: 100vh;
+      padding: 3rem 0;
+      overflow-y: auto;
+      font-size: 0.87rem;
+    }
+    nav .mark {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+      margin-bottom: 1.8rem;
+      color: var(--ink);
+      font-weight: 750;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .mark-dot {
+      width: 0.8rem;
+      height: 0.8rem;
+      border: 3px solid var(--green);
+      border-top-color: transparent;
+      border-radius: 999px;
+    }
+    nav a {
+      display: block;
+      padding: 0.32rem 0;
+      color: var(--muted);
+      text-decoration: none;
+    }
+    nav a:hover { color: var(--green); }
+    nav .sub { padding-left: 0.85rem; font-size: 0.82rem; }
+
+    main { min-width: 0; padding: 4.8rem 0 7rem; }
+    header { margin-bottom: 4rem; }
+    .eyebrow {
+      margin: 0 0 1rem;
+      color: var(--green);
+      font-size: 0.78rem;
+      font-weight: 800;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+    }
+    h1 {
+      max-width: 13ch;
+      margin: 0;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: clamp(3rem, 7vw, 5.8rem);
+      font-weight: 500;
+      letter-spacing: -0.055em;
+      line-height: 0.96;
+    }
+    .dek {
+      max-width: 44rem;
+      margin: 1.7rem 0 0;
+      color: #3e4a47;
+      font-size: 1.2rem;
+      line-height: 1.55;
+    }
+    .verdict {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 1rem;
+      margin-top: 2.2rem;
+      padding: 1.15rem 1.25rem;
+      border: 1px solid #bfd6cc;
+      border-radius: 0.8rem;
+      background: rgba(219, 234, 228, 0.65);
+    }
+    .verdict b { color: var(--green); }
+    .badge {
+      height: fit-content;
+      padding: 0.2rem 0.55rem;
+      border-radius: 999px;
+      background: var(--green);
+      color: white;
+      font-size: 0.72rem;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    section { margin: 4.7rem 0; scroll-margin-top: 1.5rem; }
+    h2 {
+      margin: 0 0 1.2rem;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 2.15rem;
+      font-weight: 500;
+      letter-spacing: -0.025em;
+      line-height: 1.15;
+    }
+    h3 { margin: 2rem 0 0.6rem; font-size: 1.02rem; }
+    p { margin: 0.8rem 0; }
+    .lede { max-width: 46rem; color: #3f4a47; font-size: 1.06rem; }
+    .small { color: var(--muted); font-size: 0.88rem; }
+    .callout {
+      margin: 1.5rem 0;
+      padding: 1rem 1.15rem;
+      border-left: 4px solid var(--amber);
+      background: rgba(255, 255, 255, 0.43);
+    }
+    .callout strong { color: #7b481b; }
+
+    .principles, .cards {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 1rem;
+      margin-top: 1.5rem;
+    }
+    .principle, .card {
+      padding: 1.15rem;
+      border: 1px solid var(--line);
+      border-radius: 0.75rem;
+      background: rgba(255, 255, 255, 0.37);
+    }
+    .principle b, .card b { display: block; margin-bottom: 0.25rem; }
+    .principle p, .card p { margin: 0; color: #4c5855; font-size: 0.93rem; }
+
+    .terminal {
+      position: relative;
+      margin: 1.4rem 0;
+      border: 1px solid #24322e;
+      border-radius: 0.8rem;
+      background: var(--terminal);
+      color: var(--terminal-ink);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .terminal-bar {
+      display: flex;
+      align-items: center;
+      gap: 0.38rem;
+      padding: 0.65rem 0.8rem;
+      border-bottom: 1px solid #26332f;
+      color: var(--terminal-muted);
+      font-size: 0.72rem;
+    }
+    .terminal-bar i { width: 0.58rem; height: 0.58rem; border-radius: 50%; background: #3b4944; }
+    .terminal-bar span { margin-left: 0.35rem; }
+    .terminal pre, pre.code {
+      margin: 0;
+      padding: 1.2rem 1.3rem;
+      overflow-x: auto;
+      background: transparent;
+      font-size: 0.88rem;
+      line-height: 1.62;
+    }
+    pre.code {
+      margin: 1rem 0;
+      border: 1px solid var(--line);
+      border-radius: 0.7rem;
+      background: #ebece6;
+      color: #27312f;
+    }
+    pre.code code, .terminal code { padding: 0; border: 0; background: none; color: inherit; font-size: inherit; }
+    .code .mshellLINECOMMENT { color: #397255; font-style: italic; }
+    .code .mshellIF, .code .mshellELSE, .code .mshellELSESTAR,
+    .code .mshellSTARIF, .code .mshellEND, .code .mshellDEF,
+    .code .mshellMATCH, .code .mshellPREFIXQUOTE, .code .mshellTYPE {
+      color: var(--blue);
+      font-weight: 750;
+    }
+    .code .mshellLOOP, .code .mshellBREAK, .code .mshellCONTINUE,
+    .code .mshellBANG { color: var(--red); font-weight: 700; }
+    .code .mshellPATH { color: #7a4b7e; }
+    .code .mshellSTRING, .code .mshellFORMATSTRING,
+    .code .mshellSINGLEQUOTESTRING, .code .mshellSTR { color: #a4413a; }
+    .code .mshellVARSTORE { color: #ad4b3f; font-weight: 650; }
+    .code .mshellVARRETRIEVE { color: #315f9a; }
+    .code .mshellTRUE, .code .mshellFALSE, .code .mshellTYPEBOOL { color: #315f9a; }
+    .code .mshellTYPEINT, .code .mshellINTEGER { color: #7557a5; }
+    .code .mshellTYPEFLOAT, .code .mshellFLOAT { color: #a34f82; }
+    .g { color: var(--terminal-green); }
+    .a { color: var(--terminal-amber); }
+    .r { color: var(--terminal-red); }
+    .m { color: var(--terminal-muted); }
+    .b { color: #8dc8e4; }
+
+    table {
+      width: 100%;
+      margin: 1.25rem 0;
+      border-collapse: collapse;
+      font-size: 0.89rem;
+    }
+    th, td { padding: 0.7rem 0.75rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-size: 0.75rem; letter-spacing: 0.07em; text-transform: uppercase; }
+    td:first-child { white-space: nowrap; }
+    .api { display: block; border-collapse: separate; }
+    .api thead, .api tbody { display: block; }
+    .api tr {
+      display: grid;
+      grid-template-columns: 10rem minmax(0, 1fr);
+    }
+    .api thead tr { border-bottom: 1px solid var(--line); }
+    .api tbody tr { padding: 0.72rem 0; border-bottom: 1px solid var(--line); }
+    .api tbody tr:nth-child(even) { background: rgba(255, 255, 255, 0.28); }
+    .api th, .api td { border: 0; }
+    .api th:first-child, .api td:first-child { grid-row: 1 / span 2; }
+    .api th:nth-child(2) { grid-column: 2; }
+    .api td:nth-child(2) {
+      grid-column: 2;
+      padding-bottom: 0.32rem;
+    }
+    .api td:nth-child(2) code {
+      display: inline-block;
+      margin: 0.08rem 0;
+      white-space: nowrap;
+    }
+    .api td:nth-child(3) {
+      grid-column: 2;
+      padding-top: 0.18rem;
+      color: #4c5855;
+    }
+
+    .state-flow {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.45rem;
+      margin: 1.25rem 0;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 0.83rem;
+    }
+    .state-flow span { padding: 0.35rem 0.55rem; border: 1px solid var(--line); border-radius: 0.4rem; background: white; }
+    .state-flow i { color: var(--muted); font-style: normal; }
+
+    .decision { display: grid; grid-template-columns: 8rem 1fr; gap: 1rem; padding: 1rem 0; border-bottom: 1px solid var(--line); }
+    .decision .label { color: var(--green); font-size: 0.76rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
+    .decision p { margin: 0; }
+
+    .sources li { margin: 0.55rem 0; }
+    footer { margin-top: 5rem; padding-top: 1.5rem; border-top: 1px solid var(--line); color: var(--muted); font-size: 0.83rem; }
+
+    @media (max-width: 850px) {
+      .shell { display: block; width: min(100% - 2rem, 56rem); }
+      nav { position: static; max-height: none; padding: 1.25rem 0 0; }
+      nav a { display: none; }
+      nav .mark { margin: 0; }
+      main { padding-top: 2.8rem; }
+    }
+    @media (max-width: 600px) {
+      .principles, .cards { grid-template-columns: 1fr; }
+      .decision { grid-template-columns: 1fr; gap: 0.25rem; }
+      table { display: block; overflow-x: auto; }
+      .api tr { grid-template-columns: 1fr; }
+      .api th:first-child, .api td:first-child,
+      .api th:nth-child(2), .api td:nth-child(2), .api td:nth-child(3) {
+        grid-column: 1;
+        grid-row: auto;
+      }
+      .api thead th:nth-child(2) { display: none; }
+      .api td:first-child { padding-bottom: 0.2rem; }
+      h1 { font-size: 3.2rem; }
+    }
+    @media print {
+      nav { display: none; }
+      .shell { display: block; width: auto; }
+      main { padding: 0; }
+      .terminal { box-shadow: none; break-inside: avoid; }
+      section { break-inside: auto; }
+    }
+  </style>
+</head>
+<body>
+<div class="shell">
+  <nav aria-label="Document sections">
+    <div class="mark"><span class="mark-dot"></span>mshell design</div>
+    <a href="#direction">Direction</a>
+    <a href="#experience">The experience</a>
+    <a href="#model">Object model</a>
+    <a class="sub" href="#lifecycle">Lifecycle</a>
+    <a href="#api">Proposed API</a>
+    <a href="#examples">Examples</a>
+    <a href="#rendering">Rendering contract</a>
+    <a class="sub" href="#streams">Streams &amp; children</a>
+    <a href="#influences">What to borrow</a>
+    <a href="#implementation">Implementation shape</a>
+    <a href="#scope">Scope &amp; rollout</a>
+    <a href="#questions">Settled decisions</a>
+  </nav>
+
+  <main>
+    <header>
+      <p class="eyebrow">Design proposal · August 2026</p>
+      <h1>Progress that behaves like a shell.</h1>
+      <p class="dek">A batteries-included, scoped API for spinners, measurable progress, task trees, and durable log output—designed around mshell’s stack, quotations, typed shapes, and stream semantics.</p>
+      <div class="verdict">
+        <span class="badge">Recommendation</span>
+        <div><b>One coordinated progress scope, not independent printing widgets.</b> A <code>progress.</code> quotation owns rendering and cleanup; lightweight <code>ProgressTask</code> handles describe state. Live terminals redraw in place. Pipes, files, dumb terminals, and CI receive an append-only transcript.</div>
+      </div>
+    </header>
+
+    <section id="direction">
+      <h2>The direction</h2>
+      <p class="lede">The hard part is not drawing a bar. It is making progress coexist with logs, redirected streams, child processes, narrow terminals, failures, and Ctrl+C. The API should make the correct lifetime impossible to forget.</p>
+
+      <div class="principles">
+        <div class="principle"><b>Scoped by default</b><p><code>progress.</code> starts the renderer, executes one quotation, then restores cursor and terminal state on success, language failure, or interruption.</p></div>
+        <div class="principle"><b>stderr is presentation</b><p>The live display defaults to effective stderr. Stdout remains clean for data pipelines—the normal expectation for a shell.</p></div>
+        <div class="principle"><b>State, not escape codes</b><p>User code updates task objects. One renderer owns cursor movement, width measurement, throttling, and output interleaving.</p></div>
+        <div class="principle"><b>Graceful degradation</b><p>Non-interactive output is useful text, never a stream of carriage returns and never silently absent unless explicitly requested.</p></div>
+        <div class="principle"><b>Concatenative vocabulary</b><p>Objects come first, modifiers follow: <code>@task 1 progressAdvance</code>, <code>@task "Linking" progressMessage</code>.</p></div>
+        <div class="principle"><b>Rendering, not orchestration</b><p>mshell remains responsible for sequencing, branching, retries, rollback, and future parallel execution. This API reports what that code is doing.</p></div>
+      </div>
+    </section>
+
+    <section id="experience">
+      <h2>The experience</h2>
+      <p>The default display is quiet enough for everyday shell scripts and rich enough for a release or deployment. It adapts columns to available width rather than wrapping a task into a broken two-line bar.</p>
+
+      <div class="terminal" role="img" aria-label="Example live terminal progress display">
+        <div class="terminal-bar"><i></i><i></i><i></i><span>live terminal · 92 columns</span></div>
+        <pre><span class="g">✓</span> Resolve dependencies                                 <span class="m">1.8s</span>
+<span class="g">✓</span> Build
+  <span class="g">✓</span> Compile core                                      <span class="m">3.2s</span>
+  <span class="a">⠸</span> Bundle assets     <span class="g">██████████████</span><span class="m">░░░░░░</span>  71%  34.2 MiB/s  <span class="m">2s</span>
+  <span class="m">○</span> Sign artifacts
+<span class="m">○</span> Publish
+
+<span class="b">info</span> cache hit for 142 of 180 modules</pre>
+      </div>
+
+      <p>The same run redirected to a file or executed in CI becomes a stable transcript:</p>
+      <div class="terminal" role="img" aria-label="Example plain progress transcript">
+        <div class="terminal-bar"><i></i><i></i><i></i><span>plain renderer · no ANSI</span></div>
+        <pre><span class="m">[12:04:18]</span> START Resolve dependencies
+<span class="m">[12:04:20]</span> OK    Resolve dependencies <span class="m">(1.8s)</span>
+<span class="m">[12:04:20]</span> START Build / Compile core
+<span class="m">[12:04:23]</span> OK    Build / Compile core <span class="m">(3.2s)</span>
+<span class="m">[12:04:23]</span> START Build / Bundle assets <span class="m">(180 MiB)</span>
+<span class="m">[12:04:25]</span> INFO  cache hit for 142 of 180 modules
+<span class="m">[12:04:26]</span> OK    Build / Bundle assets <span class="m">(180 MiB in 3.1s)</span></pre>
+      </div>
+
+      <div class="callout"><strong>Progress updates are coalesced in plain mode.</strong> Start, terminal state, explicit logs, and optionally milestone updates are emitted. A million calls to <code>progressAdvance</code> must not create a million log lines.</div>
+    </section>
+
+    <section id="model">
+      <h2>Two opaque values</h2>
+      <p class="lede"><code>Progress</code> is a rendering session. <code>ProgressTask</code> is a reference to one task owned by that session. Both are named runtime types, following the precedent of <code>Grid</code>, <code>GridView</code>, and <code>GridRow</code>.</p>
+
+      <div class="cards">
+        <div class="card"><b><code>Progress</code></b><p>Owns the task tree, effective output target, render mode, refresh clock, width cache, cursor visibility, line-buffering writers, and cleanup. Only one scope may render to a given terminal at once.</p></div>
+        <div class="card"><b><code>ProgressTask</code></b><p>A small handle into session state. Copies refer to the same task. It becomes invalid when its session closes; use afterward is a clear runtime error.</p></div>
+      </div>
+
+      <h3 id="lifecycle">Task lifecycle</h3>
+      <div class="state-flow" aria-label="Task lifecycle">
+        <span>pending</span><i>→</i><span>running</span><i>→</i><span>succeeded</span>
+        <i>or</i><span>failed</span><i>or</i><span>warned</span><i>or</i><span>skipped</span><i>or</i><span>cancelled</span>
+      </div>
+      <p>A task starts as <code>pending</code>. The first update starts it automatically, while <code>progressStart</code> is available when “started but still at zero” matters. Terminal states are final and idempotent only when repeated with the same state; contradictory transitions fail loudly.</p>
+      <p>A task without a total is indeterminate and renders as a spinner. Setting a total converts it to determinate progress. Setting position to or beyond total does <em>not</em> mark it successful; completion is an explicit semantic event.</p>
+
+      <h3>Parent and child tasks</h3>
+      <p>Tasks may have children. A parent with no explicit position derives a summary from its children and remains running while any child runs. It succeeds only when explicitly completed; failures are visually propagated upward but never silently change shell control flow.</p>
+    </section>
+
+    <section id="api">
+      <h2>Proposed API</h2>
+      <p>The small core is built in. Convenience combinators can live in <code>lib/std.msh</code> when they are expressible in terms of the core. Signatures below use the modern type spelling for clarity.</p>
+
+      <table class="api">
+        <thead><tr><th>Word</th><th colspan="2">Stack effects and meaning</th></tr></thead>
+        <tbody>
+          <tr><td><code>progress</code></td><td><code>((Progress -- ) -- )</code></td><td>Run a managed scope with defaults. The quote starts with only <code>Progress</code> and must finish with an empty stack. The prefix form is the intended spelling: <code>progress. p! … end</code>.</td></tr>
+          <tr><td><code>progressWith</code></td><td><code>({…options} (Progress -- ) -- )</code></td><td>Run a configured managed scope: <code>{ …options } progressWith. p! … end</code>. A separate word avoids ambiguous arity-based dispatch when a dictionary already exists below the quotation.</td></tr>
+          <tr><td><code>progressTask</code></td><td><code>(Progress str -- ProgressTask)</code><br><code>(Progress str numeric -- ProgressTask)</code></td><td>Add a root spinner or determinate task.</td></tr>
+          <tr><td><code>progressChild</code></td><td><code>(ProgressTask str -- ProgressTask)</code><br><code>(ProgressTask str numeric -- ProgressTask)</code></td><td>Add a nested task.</td></tr>
+          <tr><td><code>progressStart</code></td><td><code>(ProgressTask -- )</code></td><td>Transition pending → running and start elapsed timing.</td></tr>
+          <tr><td><code>progressSet</code></td><td><code>(ProgressTask numeric -- )</code></td><td>Set absolute position; clamps only for display, retaining the real value in snapshots.</td></tr>
+          <tr><td><code>progressAdvance</code></td><td><code>(ProgressTask numeric -- )</code></td><td>Add an amount. Negative values are rejected; use <code>progressSet</code> when correcting a position.</td></tr>
+          <tr><td><code>progressTotal</code></td><td><code>(ProgressTask numeric -- )</code></td><td>Set or revise the total; total must be positive.</td></tr>
+          <tr><td><code>progressMessage</code></td><td><code>(ProgressTask str -- )</code></td><td>Change the task label.</td></tr>
+          <tr><td><code>progressOutput</code></td><td><code>(ProgressTask str -- )</code></td><td>Set the task’s volatile detail line (the latest compiler phase, filename, etc.). Empty string clears it.</td></tr>
+          <tr><td><code>progressDone</code></td><td><code>(ProgressTask -- )</code><br><code>(ProgressTask str -- )</code></td><td>Succeed and optionally replace the final message.</td></tr>
+          <tr><td><code>progressFail</code></td><td><code>(ProgressTask str -- )</code></td><td>Mark failed and persist the reason. This reports state; it does not itself fail the script.</td></tr>
+          <tr><td><code>progressWarn</code></td><td><code>(ProgressTask str -- )</code></td><td>Finish with a warning.</td></tr>
+          <tr><td><code>progressSkip</code></td><td><code>(ProgressTask str -- )</code></td><td>Finish as skipped with a reason.</td></tr>
+          <tr><td><code>progressCancel</code></td><td><code>(ProgressTask str -- )</code></td><td>Finish as cancelled. Cancellation of work remains the caller’s job.</td></tr>
+          <tr><td><code>progressLog</code></td><td><code>(Progress str -- )</code><br><code>(Progress str str -- )</code></td><td>Persist a message above the live area. The three-argument form is <code>session level message</code>; levels are <code>debug</code>, <code>info</code>, <code>warn</code>, and <code>error</code>.</td></tr>
+          <tr><td><code>progressStep</code></td><td><code>(ProgressTask (() -- ) -- )</code></td><td>Run a quote with automatic start/success. On evaluator failure or interrupt, mark failed/cancelled, clean up, then propagate the original result.</td></tr>
+              <tr><td><code>progressEach</code></td><td><code>(Progress [a] str:message (a ProgressTask -- ) -- )</code></td><td>Rich-style tracked iteration. The message is the initial label for the automatically created task. Its total is the list length; call the quote with item then task, and advance after each successful iteration.</td></tr>
+          <tr><td><code>progressSnapshot</code></td><td><code>(Progress -- {…snapshot})</code></td><td>Return deterministic plain data for inspection and tests; it never forces a render.</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Scope options</h3>
+      <p>Options use the repository’s optional-shape convention. Unknown keys are errors when statically known and runtime errors otherwise.</p>
+      <pre class="code"><code><span class="mshellTYPE">type</span> <span class="mshellLITERAL">ProgressOptions</span> <span class="mshellEQUALS">=</span> <span class="mshellLEFT_CURLY">{</span>
+    <span class="mshellLITERAL">mode</span><span class="mshellQUESTION">?</span><span class="mshellCOLON">:</span> <span class="mshellSTR">str</span><span class="mshellCOMMA">,</span>              <span class="mshellLINECOMMENT"># &#34;auto&#34; | &#34;live&#34; | &#34;plain&#34; | &#34;json&#34; | &#34;silent&#34;</span>
+    <span class="mshellLITERAL">target</span><span class="mshellQUESTION">?</span><span class="mshellCOLON">:</span> <span class="mshellSTR">str</span><span class="mshellCOMMA">,</span>            <span class="mshellLINECOMMENT"># &#34;stderr&#34; (default) | &#34;stdout&#34;</span>
+    <span class="mshellLITERAL">transient</span><span class="mshellQUESTION">?</span><span class="mshellCOLON">:</span> <span class="mshellTYPEBOOL">bool</span><span class="mshellCOMMA">,</span>        <span class="mshellLINECOMMENT"># clear live display when scope closes; default false</span>
+    <span class="mshellLITERAL">keepCompleted</span><span class="mshellQUESTION">?</span><span class="mshellCOLON">:</span> <span class="mshellTYPEINT">int</span><span class="mshellCOMMA">,</span>     <span class="mshellLINECOMMENT"># visible completed rows; -1 = all, default 20</span>
+    <span class="mshellLITERAL">refreshHz</span><span class="mshellQUESTION">?</span><span class="mshellCOLON">:</span> <span class="mshellTYPEFLOAT">float</span><span class="mshellCOMMA">,</span>       <span class="mshellLINECOMMENT"># default 12; renderer clamps to a safe range</span>
+    <span class="mshellLITERAL">columns</span><span class="mshellQUESTION">?</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSTR">str</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellCOMMA">,</span>         <span class="mshellLINECOMMENT"># ordered built-in column names</span>
+    <span class="mshellLITERAL">color</span><span class="mshellQUESTION">?</span><span class="mshellCOLON">:</span> <span class="mshellSTR">str</span><span class="mshellCOMMA">,</span>             <span class="mshellLINECOMMENT"># &#34;auto&#34; | &#34;always&#34; | &#34;never&#34;</span>
+    <span class="mshellLITERAL">unicode</span><span class="mshellQUESTION">?</span><span class="mshellCOLON">:</span> <span class="mshellSTR">str</span><span class="mshellCOMMA">,</span>           <span class="mshellLINECOMMENT"># &#34;auto&#34; | &#34;always&#34; | &#34;never&#34;</span>
+    <span class="mshellLITERAL">plainUpdates</span><span class="mshellQUESTION">?</span><span class="mshellCOLON">:</span> <span class="mshellTYPEBOOL">bool</span><span class="mshellCOMMA">,</span>     <span class="mshellLINECOMMENT"># include percentage milestones in plain mode</span>
+    <span class="mshellLITERAL">minDuration</span><span class="mshellQUESTION">?</span><span class="mshellCOLON">:</span> <span class="mshellTYPEFLOAT">float</span>      <span class="mshellLINECOMMENT"># suppress fast success only if no update occurred; default 0.10s</span>
+<span class="mshellRIGHT_CURLY">}</span>
+<span class="mshellEOF"></span></code></pre>
+      <p>Built-in columns are <code>state</code>, <code>tree</code>, <code>message</code>, <code>bar</code>, <code>position</code>, <code>percent</code>, <code>elapsed</code>, <code>eta</code>, <code>rate</code>, and <code>output</code>. Presets in the standard library—<code>progressDefault</code>, <code>progressCompact</code>, and <code>progressBytes</code>—are ordinary option dictionaries.</p>
+    </section>
+
+    <section id="examples">
+      <h2>It should read like mshell</h2>
+
+      <h3>One spinner, automatic cleanup</h3>
+      <pre class="code"><code><span class="mshellPREFIXQUOTE">progress.</span>
+    <span class="mshellVARSTORE">p!</span>
+    <span class="mshellVARRETRIEVE">@p</span> <span class="mshellSTRING">&#34;Resolve dependencies&#34;</span> <span class="mshellLITERAL">progressTask</span> <span class="mshellVARSTORE">task!</span>
+    <span class="mshellVARRETRIEVE">@task</span> <span class="mshellPREFIXQUOTE">progressStep.</span>
+        <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;go&#39;</span> <span class="mshellSINGLEQUOTESTRING">&#39;mod&#39;</span> <span class="mshellSINGLEQUOTESTRING">&#39;download&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellBANG">!</span>
+    <span class="mshellEND">end</span>
+<span class="mshellEND">end</span>
+<span class="mshellEOF"></span></code></pre>
+
+      <h3>Measurable work</h3>
+      <pre class="code"><code><span class="mshellLEFT_CURLY">{</span> <span class="mshellSTRING">&#34;columns&#34;</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSTRING">&#34;state&#34;</span> <span class="mshellSTRING">&#34;message&#34;</span> <span class="mshellSTRING">&#34;bar&#34;</span> <span class="mshellSTRING">&#34;position&#34;</span> <span class="mshellSTRING">&#34;eta&#34;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellRIGHT_CURLY">}</span> <span class="mshellPREFIXQUOTE">progressWith.</span>
+    <span class="mshellVARSTORE">p!</span>
+    <span class="mshellVARRETRIEVE">@p</span> <span class="mshellLITERAL">files</span> <span class="mshellSTRING">&#34;Hash files&#34;</span> <span class="mshellPREFIXQUOTE">progressEach.</span> <span class="mshellVARSTORE">file!</span><span class="mshellCOMMA">,</span> <span class="mshellVARSTORE">task!</span>
+        <span class="mshellVARRETRIEVE">@task</span> <span class="mshellVARRETRIEVE">@file</span> <span class="mshellSTR">str</span> <span class="mshellLITERAL">progressOutput</span>
+        <span class="mshellVARRETRIEVE">@file</span> <span class="mshellLITERAL">sha256sum</span> <span class="mshellLITERAL">drop</span>
+    <span class="mshellEND">end</span>
+<span class="mshellEND">end</span>
+<span class="mshellEOF"></span></code></pre>
+      <p class="small">The quote receives the item below <code>ProgressTask</code>, so the comma store preserves the readable names: <code>file!, task!</code>. If an iteration fails, <code>progressEach</code> marks the task failed and propagates that failure without advancing it.</p>
+
+      <h3>Nested task tree and a handled failure</h3>
+      <pre class="code"><code><span class="mshellPREFIXQUOTE">progress.</span>
+    <span class="mshellVARSTORE">p!</span>
+    <span class="mshellVARRETRIEVE">@p</span> <span class="mshellSTRING">&#34;Build release&#34;</span> <span class="mshellLITERAL">progressTask</span> <span class="mshellVARSTORE">build!</span>
+    <span class="mshellVARRETRIEVE">@build</span> <span class="mshellSTRING">&#34;Compile&#34;</span> <span class="mshellLITERAL">progressChild</span> <span class="mshellVARSTORE">compile!</span>
+    <span class="mshellVARRETRIEVE">@build</span> <span class="mshellSTRING">&#34;Test&#34;</span> <span class="mshellLITERAL">progressChild</span> <span class="mshellVARSTORE">test!</span>
+
+    <span class="mshellVARRETRIEVE">@compile</span> <span class="mshellPREFIXQUOTE">progressStep.</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;go&#39;</span> <span class="mshellSINGLEQUOTESTRING">&#39;build&#39;</span> <span class="mshellSINGLEQUOTESTRING">&#39;./...&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellBANG">!</span> <span class="mshellEND">end</span>
+
+    <span class="mshellVARRETRIEVE">@test</span> <span class="mshellLITERAL">progressStart</span>
+    <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;./test.sh&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellQUESTION">?</span> <span class="mshellVARSTORE">status!</span>
+    <span class="mshellVARRETRIEVE">@status</span> <span class="mshellINTEGER">0</span> <span class="mshellEQUALS">=</span> <span class="mshellIF">if</span>
+        <span class="mshellVARRETRIEVE">@test</span> <span class="mshellLITERAL">progressDone</span>
+    <span class="mshellELSE">else</span>
+        <span class="mshellVARRETRIEVE">@test</span> <span class="mshellFORMATSTRING">$&#34;test suite exited {@status}&#34;</span> <span class="mshellLITERAL">progressFail</span>
+        <span class="mshellVARRETRIEVE">@build</span> <span class="mshellSTRING">&#34;release is not publishable&#34;</span> <span class="mshellLITERAL">progressFail</span>
+        <span class="mshellVARRETRIEVE">@status</span> <span class="mshellLITERAL">exit</span>
+    <span class="mshellEND">end</span>
+
+    <span class="mshellVARRETRIEVE">@build</span> <span class="mshellLITERAL">progressDone</span>
+<span class="mshellEND">end</span>
+<span class="mshellEOF"></span></code></pre>
+
+      <h3>Logging while a display is live</h3>
+      <pre class="code"><code><span class="mshellVARRETRIEVE">@p</span> <span class="mshellSTRING">&#34;info&#34;</span> <span class="mshellSTRING">&#34;cache hit for 142 of 180 modules&#34;</span> <span class="mshellLITERAL">progressLog</span>
+
+<span class="mshellLINECOMMENT"># Ordinary writes are also safe. They keep their original stream.</span>
+<span class="mshellSTRING">&#34;machine-readable-result&#34;</span> <span class="mshellLITERAL">wl</span>
+<span class="mshellSTRING">&#34;compiler warning&#34;</span> <span class="mshellLITERAL">wle</span>
+<span class="mshellEOF"></span></code></pre>
+
+      <div class="callout"><strong>Why the session is passed into the quote:</strong> it makes ownership explicit, nests naturally with prefix quotations, and allows the type checker to reject task creation outside a live scope. The quote has a clean stack containing exactly one <code>Progress</code>, matching the convention used by definition-based completions.</div>
+    </section>
+
+    <section id="rendering">
+      <h2>Rendering contract</h2>
+      <p>The renderer is part of the behavioral API, not cosmetic implementation detail.</p>
+
+      <div class="decision"><div class="label">Auto mode</div><p>Use live rendering only when the chosen effective target is a terminal/console, <code>TERM</code> is not <code>dumb</code>, and the environment can support cursor movement. Otherwise use plain. <code>NO_COLOR</code> disables color but not Unicode or progress itself. Explicit options override detection.</p></div>
+      <div class="decision"><div class="label">Fallback</div><p>ASCII substitutions are stable: <code>+</code> success, <code>x</code> failure, <code>!</code> warning, <code>-</code> skipped, <code>|/-\</code> spinner, <code>#-</code> bar. Color is never the sole carrier of state.</p></div>
+      <div class="decision"><div class="label">Width</div><p>Measure terminal cell width, not UTF-8 bytes. Drop columns in this order: output, rate, ETA, position, elapsed, bar, percent. The state glyph and an ellipsized message always survive. Tree indentation collapses on very narrow terminals.</p></div>
+      <div class="decision"><div class="label">Refresh</div><p>State mutations are cheap and request a redraw. A single render loop coalesces updates and redraws at most <code>refreshHz</code>. Terminal resize triggers immediate layout. No user quotation executes on the render goroutine.</p></div>
+      <div class="decision"><div class="label">Estimate</div><p>Rate and ETA use an exponentially weighted moving average with a short warm-up. A reset or large backward <code>progressSet</code> resets the estimator. Paused time is excluded if pause/resume is added later.</p></div>
+      <div class="decision"><div class="label">Safety</div><p>Messages are plain text in v1. Newlines become separate indented detail lines; non-SGR terminal control sequences are escaped. Styling is semantic and renderer-owned, avoiding a markup language and terminal-injection surprises.</p></div>
+
+      <h3 id="streams">Streams, logs, and child processes</h3>
+      <p>Inside the scope, mshell wraps the effective stdout and stderr in line-aware writers. Before a complete line is emitted, the live region is cleared; the original bytes go to their original stream; the region is redrawn below. Partial lines are buffered only until flush/scope close, with a bounded buffer.</p>
+      <p>For a child whose output can be connected through <code>io.Writer</code>, the same coordination applies. When a foreground child needs a real terminal file descriptor—an editor, pager, prompt, or full-screen TUI—the progress renderer suspends completely, restores cursor state, hands off the terminal through the existing foreground-control machinery, and redraws after reclamation.</p>
+      <p>Redirected quotations and commands keep their documented semantics. The progress target is resolved from the scope’s effective stream, so <code>(...progress...) `build.log` 2&gt; x</code> naturally selects the plain renderer and writes the transcript to that file.</p>
+      <div class="callout"><strong>One unresolved implementation detail:</strong> I did not find a documented public “flush partial line” operation. The scope therefore needs to flush partial buffered output on close, before child terminal handoff, and before a prompt. If mshell later exposes unbuffered stream objects, it should also expose an explicit flush hook.</div>
+
+      <h3>Errors and interruption</h3>
+      <p><code>progress</code> and <code>progressWith</code> act like <code>defer</code> boundaries. They must restore the cursor and remove the live area even when the quotation returns a failing <code>EvalResult</code>. Any running tasks become failed on language/runtime error and cancelled on Ctrl+C; the original error or signal behavior is then propagated unchanged. Cleanup errors are reported without replacing the original failure.</p>
+      <p>In plain mode, <code>minDuration</code> may suppress only a fast successful task that had no intervening update. The renderer buffers its initial <code>START</code>; the first <code>progressStart</code>, <code>progressSet</code>, <code>progressAdvance</code>, <code>progressTotal</code>, <code>progressMessage</code>, or <code>progressOutput</code> flushes that start and guarantees a transcript, even if the task completes before <code>minDuration</code>. Explicit logs are always emitted.</p>
+      <p>Nested <code>progress</code> scopes targeting the same terminal do not create a second renderer. They attach a child group to the active scope. A nested scope with a different redirected target is independent.</p>
+    </section>
+
+    <section id="influences">
+      <h2>What to borrow—and what not to</h2>
+      <table>
+        <thead><tr><th>Library</th><th>Keep</th><th>Avoid / adapt</th></tr></thead>
+        <tbody>
+          <tr><td><a href="https://rich.readthedocs.io/en/latest/progress.html">Rich</a></td><td>One live display with multiple tasks; adaptive columns; logs printed above progress; redirect-aware rendering; track-style convenience.</td><td>Rich’s general renderable/markup universe is too broad for this API. Start with semantic built-in columns and plain text.</td></tr>
+          <tr><td><a href="https://listr2.kilic.dev/task/subtasks.html">Listr2</a></td><td>Nested tasks, visible skip/failure reasons, volatile task output, live vs plain/test renderers, and explicit cancelled state.</td><td>Do not import its scheduler, context container, retries, rollback, or task-definition DSL. mshell already is the orchestration language.</td></tr>
+          <tr><td><a href="https://docs.rs/indicatif/latest/indicatif/struct.MultiProgress.html">indicatif</a></td><td>A coordinator owns every bar; throttled drawing; explicit finish policy; suspend for foreign output; rate/ETA/byte formatting.</td><td>Avoid independent bars that can draw before joining the coordinator—the scope creates every task already attached.</td></tr>
+          <tr><td><a href="https://www.npmjs.com/package/ora">Ora</a></td><td>Excellent single-step verbs: succeed, fail, warn, info; Unicode fallback; non-TTY still emits meaningful text; clean log interleaving.</td><td>One spinner at a time and stdin-discard/raw-mode behavior do not fit a shell. mshell must preserve terminal ownership and Ctrl+C semantics.</td></tr>
+          <tr><td><a href="https://spectreconsole.net/console/live/progress/">Spectre.Console</a></td><td>Determinate ↔ indeterminate transition, configurable columns, auto-clear/hide-completed choices, responsive width-aware rendering.</td><td>Its progress context is not thread-safe and cannot coexist with other interactive displays. mshell should centralize all live output behind one session.</td></tr>
+        </tbody>
+      </table>
+      <p class="small">The sources above describe current public behavior as reviewed for this proposal. They inform interaction patterns, not API compatibility.</p>
+    </section>
+
+    <section id="implementation">
+      <h2>Implementation shape</h2>
+      <ol>
+        <li><b>Runtime objects.</b> Add <code>MShellProgress</code> and <code>MShellProgressTask</code>, session identity checks, a mutex-protected state tree, and named static types.</li>
+        <li><b>Scoped evaluation.</b> Implement <code>progress</code> and <code>progressWith</code> as quotation-evaluating built-ins with a clean one-item stack, guaranteed finalization, and original <code>EvalResult</code> propagation.</li>
+        <li><b>Renderer.</b> One goroutine owns ticks and terminal writes. Mutators only update state and signal a buffered dirty channel. Render frames into lines, diff against the prior frame, and use cursor movement rather than scrolling.</li>
+        <li><b>Stream coordination.</b> Add progress-aware writers to <code>ExecuteContext</code>. Reuse effective-stream terminal detection and the foreground terminal controller instead of checking global <code>os.Stdout</code>/<code>os.Stderr</code>.</li>
+        <li><b>Type checking.</b> Register the two named object types and the fixed builtin signatures using the existing type infrastructure. Enforce concrete optional option shapes. Both scope words require <code>(Progress -- )</code>; <code>progressStep</code> requires <code>(() -- )</code>. No row polymorphism, binding propagation, or new resolution rule is required.</li>
+        <li><b>Portable backends.</b> ANSI/VT on POSIX and modern Windows consoles, ASCII/plain fallback everywhere. No alternate screen buffer.</li>
+      </ol>
+
+      <h3>State snapshot</h3>
+      <p><code>progressSnapshot</code> returns a shape suitable for assertions, JSON serialization, and future external renderers:</p>
+      <pre class="code"><code><span class="mshellLEFT_CURLY">{</span>
+  <span class="mshellSTRING">&#34;mode&#34;</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">&#34;plain&#34;</span><span class="mshellCOMMA">,</span>
+  <span class="mshellSTRING">&#34;tasks&#34;</span><span class="mshellCOLON">:</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLEFT_CURLY">{</span>
+    <span class="mshellSTRING">&#34;id&#34;</span><span class="mshellCOLON">:</span> <span class="mshellINTEGER">2</span><span class="mshellCOMMA">,</span> <span class="mshellSTRING">&#34;parentId&#34;</span><span class="mshellCOLON">:</span> <span class="mshellINTEGER">1</span><span class="mshellCOMMA">,</span> <span class="mshellSTRING">&#34;state&#34;</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">&#34;running&#34;</span><span class="mshellCOMMA">,</span>
+    <span class="mshellSTRING">&#34;message&#34;</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">&#34;Bundle assets&#34;</span><span class="mshellCOMMA">,</span> <span class="mshellSTRING">&#34;position&#34;</span><span class="mshellCOLON">:</span> <span class="mshellINTEGER">128</span><span class="mshellCOMMA">,</span> <span class="mshellSTRING">&#34;total&#34;</span><span class="mshellCOLON">:</span> <span class="mshellINTEGER">180</span><span class="mshellCOMMA">,</span>
+    <span class="mshellSTRING">&#34;elapsed&#34;</span><span class="mshellCOLON">:</span> <span class="mshellFLOAT">2.7</span><span class="mshellCOMMA">,</span> <span class="mshellSTRING">&#34;rate&#34;</span><span class="mshellCOLON">:</span> <span class="mshellFLOAT">35.8</span><span class="mshellCOMMA">,</span> <span class="mshellSTRING">&#34;output&#34;</span><span class="mshellCOLON">:</span> <span class="mshellSTRING">&#34;icons.svg&#34;</span>
+  <span class="mshellRIGHT_CURLY">}</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span>
+<span class="mshellRIGHT_CURLY">}</span>
+<span class="mshellEOF"></span></code></pre>
+      <p>IDs are session-local integers and ordering is insertion order. Time-dependent values can be normalized or ignored by tests; the JSON-lines renderer emits state-change events with the same vocabulary.</p>
+
+      <h3>Verification</h3>
+      <ul>
+        <li>Golden tests for live frame layout at narrow, normal, and resized widths; ASCII and Unicode modes.</li>
+        <li>PTY integration tests for log interleaving, partial writes, Ctrl+C, cursor restoration, foreground child handoff, and nested scopes.</li>
+        <li>Redirect/capture tests proving stdout data stays unchanged and stderr transcripts contain no ANSI in auto/plain mode.</li>
+        <li>Race tests with concurrent state updates once parallel execution can expose task handles to isolated workers.</li>
+        <li>Fake clock tests for refresh throttling, elapsed time, rate/ETA, and <code>minDuration</code>.</li>
+      </ul>
+    </section>
+
+    <section id="scope">
+      <h2>Scope and rollout</h2>
+      <h3>V1</h3>
+      <p>Scoped session, root and child tasks, spinner/bar modes, lifecycle verbs, tracked iteration, logs and volatile output, live/plain/silent rendering, adaptive default columns, stream coordination, snapshots, and robust cleanup.</p>
+
+      <h3>V1.1 candidates</h3>
+      <p>JSON-lines renderer; a result-preserving <code>progressMap</code>; byte-copy helpers once mshell has a streaming API; pause/resume; task removal; user-selectable semantic theme; integration with the proposed <code>parallel</code> executable.</p>
+
+      <h3>Explicit non-goals</h3>
+      <ul>
+        <li>No arbitrary Rich-style widgets, tables, Markdown, or user quotation columns in the render loop.</li>
+        <li>No retry, rollback, dependency graph, concurrency scheduler, or cancellation engine.</li>
+        <li>No alternate-screen TUI and no prompt implementation.</li>
+        <li>No parsing of arbitrary child output to infer progress.</li>
+        <li>No silent non-TTY default; choose <code>mode: "silent"</code> explicitly.</li>
+      </ul>
+    </section>
+
+    <section id="questions">
+      <h2>Settled decisions</h2>
+
+      <div class="decision"><div class="label">Naming</div><p>Every public operation uses the complete <code>progress*</code> family: <code>progressTask</code>, <code>progressAdvance</code>, <code>progressDone</code>, and so on. There are no short aliases such as <code>advance</code> or <code>done</code>.</p></div>
+      <div class="decision"><div class="label">Failure</div><p>Progress does not add a new way to fail the program. Ordinary mshell mechanisms—<code>!</code>, <code>?</code>, <code>exit</code>, and evaluator failures—retain control-flow authority. <code>progressFail</code> only records and renders a task’s failed state; it does not fail execution.</p></div>
+      <div class="decision"><div class="label">Fast tasks</div><p>In plain mode, <code>minDuration</code> applies only when a successful task had no actual update after creation. Any explicit start, position, advance, total, message, or output update emits the buffered <code>START</code> and guarantees the task’s transcript.</p></div>
+      <div class="decision"><div class="label">Quote stack</div><p>The scope quote is isolated and balanced: it starts with exactly one <code>Progress</code> and must finish empty. It cannot consume the caller’s existing stack or return values on the data stack. Both scope words use ordinary fixed quotation signatures, so the type checker needs no new mechanism.</p></div>
+
+      <h3>Returning data through existing variables</h3>
+      <p>The quotation is constructed in the outer variable scope, so it can read and update variables already known there. Declare a result with its intended type before entering <code>progress</code>, then assign it inside while keeping the quotation stack balanced:</p>
+      <pre class="code"><code><span class="mshellSTRING">&#34;&#34;</span> <span class="mshellVARSTORE">checksum!</span>
+
+<span class="mshellPREFIXQUOTE">progress.</span>
+    <span class="mshellVARSTORE">p!</span>
+    <span class="mshellVARRETRIEVE">@p</span> <span class="mshellSTRING">&#34;Package&#34;</span> <span class="mshellLITERAL">progressTask</span> <span class="mshellVARSTORE">task!</span>
+    <span class="mshellVARRETRIEVE">@task</span> <span class="mshellPREFIXQUOTE">progressStep.</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellSINGLEQUOTESTRING">&#39;make&#39;</span> <span class="mshellSINGLEQUOTESTRING">&#39;package&#39;</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span><span class="mshellBANG">!</span> <span class="mshellEND">end</span>
+    <span class="mshellPATH">`dist/app.zip`</span> <span class="mshellLITERAL">sha256sum</span> <span class="mshellVARSTORE">checksum!</span>
+<span class="mshellEND">end</span>
+
+<span class="mshellVARRETRIEVE">@checksum</span> <span class="mshellLITERAL">wl</span>
+<span class="mshellEOF"></span></code></pre>
+      <p>This uses current runtime and checker behavior: quotations capture outer variables, and the outer binding already establishes the type of <code>@checksum</code>. A progress quote should not introduce a brand-new variable that is expected to be readable afterward, nor change an existing variable to a different type. Those cases would require binding propagation changes that are outside this design.</p>
+
+      <h3>Consequences</h3>
+      <ul>
+        <li><code>progress</code> remains a control and presentation boundary rather than a data-stack combinator.</li>
+        <li>A stray <code>drop</code> cannot consume caller data because the quote has its own stack.</li>
+        <li>Leaving any value behind is a normal quotation stack-effect error.</li>
+        <li>On evaluator failure or Ctrl+C, rendering is finalized and the original failure propagates; progress does not roll back variable mutations already performed by the quote.</li>
+        <li><code>progressWith</code> behaves identically; its options dictionary is not visible inside the quote.</li>
+      </ul>
+    </section>
+
+    <section class="sources">
+      <h2>Primary references</h2>
+      <ul>
+        <li><a href="https://rich.readthedocs.io/en/latest/progress.html">Rich — Progress Display</a> and <a href="https://rich.readthedocs.io/en/latest/reference/progress.html">Progress API</a></li>
+        <li><a href="https://listr2.kilic.dev/renderer/renderer.html">Listr2 — Renderers</a>, <a href="https://listr2.kilic.dev/task/output.html">task output</a>, and <a href="https://listr2.kilic.dev/listr/interruption.html">interruption</a></li>
+        <li><a href="https://docs.rs/indicatif/latest/indicatif/">indicatif — crate overview</a> and <a href="https://docs.rs/indicatif/latest/indicatif/struct/MultiProgress.html">MultiProgress</a></li>
+        <li><a href="https://www.npmjs.com/package/ora">Ora — API and behavior</a></li>
+        <li><a href="https://spectreconsole.net/console/live/progress/">Spectre.Console — Progress Display</a> and <a href="https://spectreconsole.net/console/live/live-display/">Live Display</a></li>
+      </ul>
+    </section>
+
+    <footer>
+      Design only. No runtime, standard-library, generated documentation, or changelog files were changed. Prepared on branch <code>feature/progress-api-design</code>.
+    </footer>
+  </main>
+</div>
+</body>
+</html>
