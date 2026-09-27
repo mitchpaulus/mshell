@@ -157,10 +157,8 @@ func (c *Checker) driveBranchesOverItems(initial []quoteBranch, body []MShellPar
 // checker state and reconciles the surviving branches back into a single
 // live state: one survivor is loaded directly; several that agree on
 // stack size join per-slot (per-slot type unions via joinArmBranches);
-// disagreeing sizes fall back to the first survivor. Used by the
-// sub-walks that need a single value/state at the end (dict-literal
-// values, grid cells, format-string blocks, else-if conditions) and by
-// CheckTokens. Returns false when every branch died — the failing
+// disagreeing sizes fall back to the first survivor. Used by else-if
+// conditions and by CheckTokens. Returns false when every branch died — the failing
 // step's error is already recorded.
 func (c *Checker) walkJoined(items []MShellParseItem) bool {
 	branches := c.driveBranchesOverItems([]quoteBranch{c.captureBranch()}, items)

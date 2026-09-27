@@ -488,70 +488,41 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 		return
 
 	case *MShellParseList:
-		// Evaluate list contents on an isolated stack, mirroring the
-		// runtime's FRAME_LIST behavior, then collapse the resulting
-		// item stack into a homogeneous list element type. Heterogeneous
-		// literals become list-of-union, which is the closest static
-		// representation to mshell's runtime lists.
-		//
-		// The body is driven through the branching driver rather than a
-		// plain loop, so an overloaded op inside the literal (e.g. an
-		// indexer on a still-generic element type) fans out and each
-		// surviving resolution is reconciled. A flat loop would leave
-		// branchSpawn dangling and corrupt the collected item stack.
+		// A list is its body's whole stack: one child segment whose values
+		// collapse to the element type (a union when they differ).
 		//
 		// listDepth is bumped so that bare LITERAL tokens inside the
 		// list (shell-style argv words) get typed as `str` instead
 		// of being flagged as unknown identifiers — see the
 		// matching branch in `checkOne`.
-		listScope := c.snapshotStack()
 		c.listDepth++
-		branches := c.driveBranchesOverItems([]quoteBranch{c.captureBranch()}, it.Items)
+		c.checkChildStacks([]childSegment{{items: it.Items, pos: it.StartToken, collect: func(stack []TypeId) (TypeId, string) {
+			return c.listTypeFromItems(stack), ""
+		}}}, func(types []TypeId) TypeId { return types[0] })
 		c.listDepth--
-		if len(branches) == 0 {
-			// The body failed; the representative error is already on
-			// c.errors. Restore the stack so the branch dies cleanly.
-			c.restoreStack(listScope)
-			return
-		}
-		// Common case: the body didn't fan out. Push the list directly so
-		// callers that invoke checkParseItem outside the branching driver
-		// (e.g. dict-literal values) still see it on the stack. Only a
-		// genuine multi-branch body spawns — and that only arises while
-		// driven by the branching walker, which consumes branchSpawn.
-		if len(branches) == 1 {
-			c.loadBranch(branches[0])
-			items := append([]TypeId(nil), c.stack.items[listScope.length:]...)
-			c.restoreStack(listScope)
-			c.stack.Push(c.listTypeFromItems(items))
-			return
-		}
-		for _, b := range branches {
-			c.loadBranch(b)
-			items := append([]TypeId(nil), c.stack.items[listScope.length:]...)
-			c.restoreStack(listScope)
-			c.stack.Push(c.listTypeFromItems(items))
-			c.branchSpawn = append(c.branchSpawn, c.captureBranch())
-		}
 		return
 
 	case *MShellParseDict:
-		// Dict literal `{k: v, ...}`. Preserve concrete keys as a
-		// shape so heterogeneous dictionaries can satisfy declared
-		// dictionary shapes. Shape-to-dict unification below keeps
-		// generic dictionary operations working.
-		fields := make([]ShapeField, 0, len(it.Items))
-		for _, kv := range it.Items {
-			scope := c.snapshotStack()
-			c.walkJoined(kv.Value)
-			valueT := c.subst.FreshVar(c.arena)
-			if c.stack.Len() > scope.length {
-				valueT = c.stack.items[c.stack.Len()-1]
+		// Dict literal `{k: v, ...}`: each value is a child segment of
+		// exactly one value. Preserve concrete keys as a shape so
+		// heterogeneous dictionaries can satisfy declared dictionary
+		// shapes. Shape-to-dict unification keeps generic dictionary
+		// operations working.
+		segments := make([]childSegment, len(it.Items))
+		for i, kv := range it.Items {
+			pos := it.StartToken
+			if len(kv.Value) > 0 {
+				pos = kv.Value[0].GetStartToken()
 			}
-			fields = append(fields, ShapeField{Name: c.names.Intern(kv.Key), Type: valueT})
-			c.restoreStack(scope)
+			segments[i] = childSegment{items: kv.Value, pos: pos, collect: collectOne("dict value for key '" + kv.Key + "'")}
 		}
-		c.stack.Push(c.arena.MakeShape(fields))
+		c.checkChildStacks(segments, func(types []TypeId) TypeId {
+			fields := make([]ShapeField, len(it.Items))
+			for i, kv := range it.Items {
+				fields[i] = ShapeField{Name: c.names.Intern(kv.Key), Type: types[i]}
+			}
+			return c.arena.MakeShape(fields)
+		})
 		return
 
 	case *MShellParseFormatString:
@@ -598,38 +569,40 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 		return
 
 	case *MShellParseGrid:
-		// Derive a column-typed schema by walking each cell expression
-		// in isolation and unioning the per-column results. An empty
-		// column (no rows) gets a fresh var so subsequent ops can
-		// refine it.
-		cols := make([]GridSchemaCol, len(it.Columns))
-		for ci, col := range it.Columns {
-			nameId := c.names.Intern(col.Name)
-			var cellTypes []TypeId
-			for _, row := range it.Rows {
-				if ci >= len(row) {
+		// Each cell is a child segment of exactly one value. A column's
+		// type is the union of its cells' types; a column with no cells
+		// gets a fresh var so subsequent ops can refine it.
+		var segments []childSegment
+		var cellCols []int
+		for _, row := range it.Rows {
+			for ci, cell := range row {
+				if ci >= len(it.Columns) {
 					continue
 				}
-				scope := c.snapshotStack()
-				c.walkJoined(row[ci : ci+1])
-				if c.stack.Len() > scope.length {
-					cellTypes = append(cellTypes, c.stack.items[c.stack.Len()-1])
-				}
-				c.restoreStack(scope)
+				segments = append(segments, childSegment{items: []MShellParseItem{cell}, pos: cell.GetStartToken(), collect: collectOne("grid cell")})
+				cellCols = append(cellCols, ci)
 			}
-			var colType TypeId
-			switch len(cellTypes) {
-			case 0:
-				colType = c.subst.FreshVar(c.arena)
-			case 1:
-				colType = cellTypes[0]
-			default:
-				colType = c.arena.MakeUnion(cellTypes, 0)
-			}
-			cols[ci] = GridSchemaCol{Name: nameId, Type: colType}
 		}
-		schemaIdx := c.arena.MakeGridSchemaIdx(cols)
-		c.stack.Push(c.arena.MakeGrid(schemaIdx))
+		c.checkChildStacks(segments, func(types []TypeId) TypeId {
+			colTypes := make([][]TypeId, len(it.Columns))
+			for i, t := range types {
+				colTypes[cellCols[i]] = append(colTypes[cellCols[i]], t)
+			}
+			cols := make([]GridSchemaCol, len(it.Columns))
+			for ci, col := range it.Columns {
+				var colType TypeId
+				switch len(colTypes[ci]) {
+				case 0:
+					colType = c.subst.FreshVar(c.arena)
+				case 1:
+					colType = colTypes[ci][0]
+				default:
+					colType = c.arena.MakeUnion(colTypes[ci], 0)
+				}
+				cols[ci] = GridSchemaCol{Name: c.names.Intern(col.Name), Type: colType}
+			}
+			return c.arena.MakeGrid(c.arena.MakeGridSchemaIdx(cols))
+		})
 		return
 
 	case *MShellIndexerList:
@@ -1713,97 +1686,112 @@ func (c *Checker) bindPatternName(name string, typ TypeId) {
 // a value the runtime can turn into text.
 const interpolationSig = "(str | path | int -- )"
 
-// checkFormatString checks a format string and pushes its `str`.
-//
-// At runtime each interpolation runs on its own empty stack, sharing the
-// variables of the surrounding code, and must leave exactly one value the
-// runtime can turn into text. So each is walked on an empty stack with
-// input inference off (an underflow is an error, not an input of an
-// enclosing quote), and each surviving branch must leave one value that
-// unifies with `str | path | int`. Branches that don't are dropped, the way
-// an overload that doesn't fit is; if none are left, the first problem is
-// reported. Bindings made in the interpolations, of variables and of type
-// variables, are kept, as they are for any other code.
-func (c *Checker) checkFormatString(fs *MShellParseFormatString) {
-	// The outer stack and inferred inputs are set aside, not copied, so a
-	// format string costs nothing in proportion to the stack below it. The
-	// walk never writes to them: loadBranch and appends only touch the
-	// fresh slices put in their place.
-	outerStack := c.stack.items
-	outerInferring := c.inferring
-	outerInferInputs := c.inferInputs
-	restore := func() {
-		c.stack.items = outerStack
-		c.inferring = outerInferring
-		c.inferInputs = outerInferInputs
-	}
+// A list literal, a dict value, a grid cell, and a format-string
+// interpolation all run at runtime on a new, empty stack of their own,
+// while sharing the variables of the code around them. The checker models
+// that one rule once, here: the only checker state local to a stack is the
+// stack itself and input inference, so a child segment is walked with just
+// those three fields replaced.
 
-	allowed := parseBuiltinSig(c, interpolationSig).Inputs[0]
-	c.stack.items = nil
-	c.inferring = false
-	c.inferInputs = nil
-	branches := []quoteBranch{c.captureBranch()}
+// childSegment is code the runtime runs on its own empty stack. collect
+// turns the stack it leaves into the one type the segment contributes, or
+// returns why that stack can't be used.
+type childSegment struct {
+	items   []MShellParseItem
+	pos     Token
+	collect func(stack []TypeId) (TypeId, string)
+}
 
-	for i, items := range fs.Interpolations {
-		walked := c.driveBranchesOverItems(branches, items)
-		if len(walked) == 0 {
-			// Every branch died; the error is already recorded.
-			restore()
-			return
+// checkChildStacks checks segments in order and then pushes the type build
+// makes from their collected types. Each segment starts on an empty stack
+// with input inference off: an underflow is an error, not an input of an
+// enclosing quote, and a segment can't reach the stack below it or what
+// earlier segments produced. Each collected type is held on the outer
+// stack until build replaces them all, so segments thread through the
+// branching driver like any other steps.
+func (c *Checker) checkChildStacks(segments []childSegment, build func(types []TypeId) TypeId) {
+	n := len(segments)
+	branches := c.driveBranches([]quoteBranch{c.captureBranch()}, n+1, func(i int) func() {
+		if i < n {
+			return func() { c.checkChildStack(segments[i]) }
 		}
+		return func() {
+			base := c.stack.Len() - n
+			t := build(append([]TypeId(nil), c.stack.items[base:]...))
+			c.stack.items = append(c.stack.items[:base], t)
+		}
+	})
+	// No branches means the driver has recorded the error that killed them.
+	c.branchSpawn = append(c.branchSpawn, branches...)
+}
 
-		pos := fs.InterpolationStart(i)
-		problem := ""
-		branches = make([]quoteBranch, 0, len(walked))
-		for _, b := range walked {
-			if b.diverged {
-				// It never finishes the interpolation, so it produces nothing.
-				branches = append(branches, b)
-				continue
-			}
+// checkChildStack checks one segment from the current state and spawns a
+// continuation per surviving branch: the outer stack with the segment's
+// type pushed. A branch whose stack collect rejects is dropped, the way an
+// overload that doesn't fit is; if none are left, the first reason is
+// reported at the segment.
+func (c *Checker) checkChildStack(s childSegment) {
+	outer := c.captureBranch()
+	child := outer
+	child.stack, child.inferring, child.inferInputs = nil, false, nil
+	walked := c.driveBranchesOverItems([]quoteBranch{child}, s.items)
+
+	var out []quoteBranch
+	problem := ""
+	for _, b := range walked {
+		if b.diverged {
+			// It never finishes the segment, so it contributes nothing.
+			b.stack = append([]TypeId(nil), outer.stack...)
+		} else {
 			c.loadBranch(b)
-			if c.stack.Len() != 1 {
+			t, p := s.collect(c.stack.items)
+			if p != "" {
 				if problem == "" {
-					problem = "must produce exactly one value, got " + strconv.Itoa(c.stack.Len())
+					problem = p
 				}
 				continue
 			}
-			got := c.stack.items[0]
-			if !c.unify(got, allowed) {
-				if problem == "" {
-					problem = "must produce a str, path, or int, got " + FormatType(c.arena, c.names, c.subst.Apply(c.arena, got))
-				}
-				continue
-			}
-			c.stack.items = c.stack.items[:0]
-			branches = append(branches, c.captureBranch())
+			b = c.captureBranch()
+			b.stack = append(append([]TypeId(nil), outer.stack...), t)
 		}
-		if len(branches) == 0 {
-			c.errors = append(c.errors, TypeError{
-				Kind: TErrInterpolation,
-				Pos:  pos,
-				Hint: "format-string interpolation " + problem,
-			})
-			restore()
-			return
-		}
+		b.inferring = outer.inferring
+		b.inferInputs = append([]TypeId(nil), outer.inferInputs...)
+		out = append(out, b)
 	}
+	if len(walked) > 0 && len(out) == 0 {
+		c.errors = append(c.errors, TypeError{Kind: TErrChildStack, Pos: s.pos, Hint: problem})
+	}
+	c.branchSpawn = append(c.branchSpawn, out...)
+}
 
-	// As for list literals: the common single branch is loaded directly,
-	// so callers outside the branching driver see the result; several
-	// only arise under the driver, which consumes branchSpawn, and each
-	// needs its own copy of the outer stack.
-	if len(branches) > 1 {
-		for i := range branches {
-			branches[i].stack = append(append([]TypeId(nil), outerStack...), TidStr)
-			branches[i].inferring = outerInferring
-			branches[i].inferInputs = append([]TypeId(nil), outerInferInputs...)
+// collectOne accepts a stack of exactly one value, the rule for dict
+// values, grid cells, and interpolations.
+func collectOne(what string) func(stack []TypeId) (TypeId, string) {
+	return func(stack []TypeId) (TypeId, string) {
+		if len(stack) != 1 {
+			return 0, what + " must produce exactly one value, got " + strconv.Itoa(len(stack))
 		}
-		c.branchSpawn = append(c.branchSpawn, branches...)
+		return stack[0], ""
 	}
-	c.loadBranch(branches[0])
-	restore()
-	c.stack.Push(TidStr)
+}
+
+// checkFormatString checks a format string and pushes its `str`. Each
+// interpolation is a child segment that must leave one value the runtime
+// can turn into text.
+func (c *Checker) checkFormatString(fs *MShellParseFormatString) {
+	allowed := parseBuiltinSig(c, interpolationSig).Inputs[0]
+	one := collectOne("format-string interpolation")
+	segments := make([]childSegment, len(fs.Interpolations))
+	for i, items := range fs.Interpolations {
+		segments[i] = childSegment{items: items, pos: fs.InterpolationStart(i), collect: func(stack []TypeId) (TypeId, string) {
+			t, p := one(stack)
+			if p == "" && !c.unify(t, allowed) {
+				p = "format-string interpolation must produce a str, path, or int, got " + FormatType(c.arena, c.names, c.subst.Apply(c.arena, t))
+			}
+			return t, p
+		}}
+	}
+	c.checkChildStacks(segments, func([]TypeId) TypeId { return TidStr })
 }
 
 // stringLiteralValue returns the parsed content of a STRING /
@@ -2022,23 +2010,6 @@ func (c *Checker) indexerCandidates(elementIndex bool) []QuoteSig {
 func (c *Checker) isBoolOrInt(t TypeId) bool {
 	r := c.subst.Apply(c.arena, t)
 	return r == TidBool || r == TidInt
-}
-
-// snapshotStack / restoreStack capture and restore the stack
-// length so a recursive walk can be sandboxed without leaving
-// extra items behind. Variable bindings made inside the recursion
-// persist (which is fine for now — real branch reconciliation will
-// snapshot/restore VarEnv too).
-type stackSnapshotMarker struct{ length int }
-
-func (c *Checker) snapshotStack() stackSnapshotMarker {
-	return stackSnapshotMarker{length: c.stack.Len()}
-}
-
-func (c *Checker) restoreStack(s stackSnapshotMarker) {
-	if c.stack.Len() > s.length {
-		c.stack.items = c.stack.items[:s.length]
-	}
 }
 
 // refineVarSubject unifies a type-variable subject with the container

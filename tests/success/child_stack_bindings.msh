@@ -1,0 +1,3 @@
+# Variables bound inside lists, dict values, and interpolations stay bound after them.
+[1 x!] drop {a: 2 y! 3} drop $"{4 z! @z}" drop
+@x @y @z + + wl

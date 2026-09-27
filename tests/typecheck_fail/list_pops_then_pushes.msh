@@ -1,0 +1,2 @@
+# The list may not take from the stack below, even if it pushes as many back.
+1 [drop 5] len wl
