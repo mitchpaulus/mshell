@@ -69,6 +69,15 @@ type xlsxInlineStr struct {
 	R []xlsxRichRun `xml:"r"`
 }
 
+// Excel's sheet limits: rows 1 to 1,048,576 and columns A to XFD.
+const (
+	xlsxMaxRows = 1048576
+	xlsxMaxCols = 16384
+	// xlsxMaxCells caps the dense grid built for a sheet, so that a small
+	// file with a few far-apart cells cannot demand an enormous allocation.
+	xlsxMaxCells = 50_000_000
+)
+
 // colRefToIndex converts an A1-style cell reference to a 0-based column index.
 // e.g. "A1" -> 0, "Z5" -> 25, "AA10" -> 26.
 func colRefToIndex(cellRef string) (int, error) {
@@ -84,6 +93,9 @@ func colRefToIndex(cellRef string) (int, error) {
 			i++
 		} else {
 			break
+		}
+		if col > xlsxMaxCols {
+			return 0, fmt.Errorf("invalid column in cell reference %q (max is XFD)", cellRef)
 		}
 	}
 	if col == 0 {
@@ -267,6 +279,9 @@ func worksheetToRows(ws *xlsxWorksheet, sharedStrings []string) (*MShellList, er
 		if row.R == 0 {
 			rowIdx = i
 		}
+		if rowIdx < 0 || rowIdx >= xlsxMaxRows {
+			return nil, fmt.Errorf("invalid row number %d", rowIdx+1)
+		}
 		if rowIdx+1 > maxRow {
 			maxRow = rowIdx + 1
 		}
@@ -287,6 +302,10 @@ func worksheetToRows(ws *xlsxWorksheet, sharedStrings []string) (*MShellList, er
 			}
 			placed = append(placed, placedCell{row: rowIdx, col: colIdx, cell: c})
 		}
+	}
+
+	if maxRow*(maxCol+1) > xlsxMaxCells {
+		return nil, fmt.Errorf("sheet spans %d rows by %d columns, more than the %d cell limit", maxRow, maxCol+1, xlsxMaxCells)
 	}
 
 	outer := NewList(maxRow)
