@@ -12,6 +12,8 @@ package main
 
 import (
 	"encoding/binary"
+	"maps"
+	"slices"
 	"sort"
 )
 
@@ -196,6 +198,24 @@ type TypeArena struct {
 	gridSchemaCons map[string]uint32
 	// keyBuf is scratch space for building composite cons keys.
 	keyBuf []byte
+}
+
+// Clone returns an arena that grows independently: every TypeId already in
+// the arena means the same in both, and neither sees what the other adds
+// afterwards. Entries never change once added, so their contents are
+// shared; only the tables that grow are copied.
+func (a *TypeArena) Clone() *TypeArena {
+	return &TypeArena{
+		nodes:               slices.Clone(a.nodes),
+		cons:                maps.Clone(a.cons),
+		atomCons:            maps.Clone(a.atomCons),
+		shapeFields:         slices.Clone(a.shapeFields),
+		quoteSigs:           slices.Clone(a.quoteSigs),
+		overloadedQuoteSigs: slices.Clone(a.overloadedQuoteSigs),
+		unionMembers:        slices.Clone(a.unionMembers),
+		gridSchemas:         slices.Clone(a.gridSchemas),
+		gridSchemaCons:      maps.Clone(a.gridSchemaCons),
+	}
 }
 
 // NewTypeArena constructs an arena pre-populated with the primitive ids
@@ -684,6 +704,11 @@ const (
 type NameTable struct {
 	ids   map[string]NameId
 	names []string
+}
+
+// Clone returns a name table with the same names that grows independently.
+func (t *NameTable) Clone() *NameTable {
+	return &NameTable{ids: maps.Clone(t.ids), names: slices.Clone(t.names)}
 }
 
 // NewNameTable constructs an empty name table.

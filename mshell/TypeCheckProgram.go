@@ -1,6 +1,8 @@
 package main
 
 import (
+	"maps"
+	"slices"
 	"sort"
 	"strconv"
 	"fmt"
@@ -45,11 +47,8 @@ import (
 // format strings, dynamic exec) the v1 checker does not yet model,
 // and we trust the runtime tests catch breakage there.
 func TypeCheckProgram(file *MShellFile, stdlibDefs []MShellDefinition) (errors []string, ok bool) {
-	arena := NewTypeArena()
-	names := NewNameTable()
-	checker := NewChecker(arena, names)
-
-	checker.RegisterStdlibSigs(stdlibDefs)
+	checker := NewCheckerBase(stdlibDefs).NewChecker()
+	arena, names := checker.arena, checker.names
 	checker.CheckProgram(file)
 
 	out := make([]string, 0, len(checker.errors))
@@ -68,6 +67,44 @@ func TypeCheckProgram(file *MShellFile, stdlibDefs []MShellDefinition) (errors [
 		return nil, true
 	}
 	return out, ok
+}
+
+// CheckerBase is the state every check starts from: the builtin signature
+// tables and the stdlib signatures, resolved into an arena. Building it
+// resolves every one of those signatures, so a long-lived process such as
+// the language server builds it once and starts each check from a copy.
+type CheckerBase struct {
+	c *Checker
+}
+
+// NewCheckerBase resolves the builtin and stdlib signatures.
+func NewCheckerBase(stdlibDefs []MShellDefinition) *CheckerBase {
+	c := NewChecker(NewTypeArena(), NewNameTable())
+	c.RegisterStdlibSigs(stdlibDefs)
+	return &CheckerBase{c: c}
+}
+
+// NewChecker returns a checker that starts from the base and is independent
+// of it and of every other checker made from it, so checks may run
+// concurrently. The builtin tables are only read, so they are shared.
+func (b *CheckerBase) NewChecker() *Checker {
+	base := b.c
+	nameBuiltins := make(map[NameId][]QuoteSig, len(base.nameBuiltins))
+	for id, sigs := range base.nameBuiltins {
+		// Clipped, so a def appending an overload copies instead of
+		// writing into the base's array.
+		nameBuiltins[id] = slices.Clip(sigs)
+	}
+	return &Checker{
+		arena:        base.arena.Clone(),
+		names:        base.names.Clone(),
+		vars:         NewVarEnv(),
+		subst:        Substitution{bound: slices.Clone(base.subst.bound)},
+		errors:       slices.Clone(base.errors),
+		builtins:     base.builtins,
+		nameBuiltins: nameBuiltins,
+		typeEnv:      maps.Clone(base.typeEnv),
+	}
 }
 
 // RegisterStdlibSigs resolves each stdlib def's signature AST into a

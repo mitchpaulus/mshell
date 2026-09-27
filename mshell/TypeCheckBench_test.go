@@ -112,3 +112,21 @@ func BenchmarkTypeCheckEmpty(b *testing.B) {
 		TypeCheckProgram(file, std)
 	}
 }
+
+// BenchmarkLSPDiagnostics times the language server's per-edit diagnostics
+// pass, parse included, on real scripts of a few sizes.
+func BenchmarkLSPDiagnostics(b *testing.B) {
+	s := &lspServer{stdlibDefs: benchStdlib(b)}
+	for _, name := range []string{"pathbins", "nodes", "setdiff2way.msh"} {
+		src, err := os.ReadFile("../tests/msh-scripts/" + name)
+		if err != nil {
+			b.Fatal(err)
+		}
+		text := string(src)
+		b.Run(name, func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				s.computeDiagnostics(text)
+			}
+		})
+	}
+}
