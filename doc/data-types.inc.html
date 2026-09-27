@@ -176,6 +176,19 @@ There is no separate formatting mini-language: use functions like <code>toFixed<
 </p>
 
 <p>
+Code in an interpolation cannot leave it.
+<code>break</code>, <code>continue</code>, and <code>exit</code> are errors in an interpolation,
+except for <code>break</code> and <code>continue</code> in a loop inside the interpolation.
+Definitions are not allowed in an interpolation.
+</p>
+
+<p>
+Interpolations can span multiple lines.
+A <code>#</code> comment in an interpolation runs to the end of the line like any other comment,
+so a comment on the same line as the closing <code>}</code> hides it.
+</p>
+
+<p>
 Format strings use the same escapes as double quoted strings.
 Use <code>\{</code> for a literal left brace.
 A <code>}</code> outside an interpolation is literal, so escaping it is optional.

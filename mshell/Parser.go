@@ -287,33 +287,44 @@ func (fs *MShellParseFormatString) GetEndToken() Token {
 	return fs.Chunks[len(fs.Chunks)-1]
 }
 
+// InterpolationStart returns the token errors in interpolation i point
+// at: its first item, or for an empty interpolation, the chunk after it,
+// which starts with the interpolation's closing '}'.
+func (fs *MShellParseFormatString) InterpolationStart(i int) Token {
+	if len(fs.Interpolations[i]) > 0 {
+		return fs.Interpolations[i][0].GetStartToken()
+	}
+	return fs.Chunks[i+1]
+}
+
 // ChunkText returns the decoded text of chunk i.
 func (fs *MShellParseFormatString) ChunkText(i int) string {
 	return fs.Chunks[i].Value.(MShellString).Content
 }
 
 func (fs *MShellParseFormatString) ToJson() string {
-	texts := strings.Builder{}
-	texts.WriteString("[")
+	var b strings.Builder
+	fs.writeJson(&b)
+	return b.String()
+}
+
+func (fs *MShellParseFormatString) writeJson(b *strings.Builder) {
+	b.WriteString(`{"format_string": {"texts": [`)
 	for i := range fs.Chunks {
 		if i > 0 {
-			texts.WriteString(", ")
+			b.WriteString(", ")
 		}
 		escaped, _ := json.Marshal(fs.ChunkText(i))
-		texts.Write(escaped)
+		b.Write(escaped)
 	}
-	texts.WriteString("]")
-
-	interpolations := strings.Builder{}
-	interpolations.WriteString("[")
+	b.WriteString(`], "interpolations": [`)
 	for i, items := range fs.Interpolations {
 		if i > 0 {
-			interpolations.WriteString(", ")
+			b.WriteString(", ")
 		}
-		interpolations.WriteString(ToJson(items))
+		writeItemsJson(b, items)
 	}
-	interpolations.WriteString("]")
-	return fmt.Sprintf("{\"format_string\": {\"texts\": %s, \"interpolations\": %s}}", texts.String(), interpolations.String())
+	b.WriteString("]}}")
 }
 
 func (fs *MShellParseFormatString) DebugString() string {
@@ -646,6 +657,76 @@ func checkReturnPlacement(items []MShellParseItem, allowed bool) error {
 	return nil
 }
 
+// checkInterpolationControlFlow reports a 'break', 'continue', or 'exit'
+// that would leave a format string interpolation: one directly in it, or in
+// an if, match, list, dict, or grid there. Quotations are not checked, since
+// their code may run in a loop inside the interpolation. The evaluator
+// catches any that still try to leave at runtime.
+func checkInterpolationControlFlow(items []MShellParseItem) error {
+	for _, item := range items {
+		var err error
+		switch it := item.(type) {
+		case Token:
+			switch {
+			case it.Type == BREAK || it.Type == CONTINUE:
+				return fmt.Errorf("%d:%d: '%s' cannot leave a format string interpolation. Use it only in a loop inside the interpolation.", it.Line, it.Column, it.Lexeme)
+			case it.Type == LITERAL && it.Lexeme == "exit":
+				return fmt.Errorf("%d:%d: 'exit' cannot be used inside a format string interpolation.", it.Line, it.Column)
+			}
+		case *MShellParseList:
+			err = checkInterpolationControlFlow(it.Items)
+		case *MShellParseDict:
+			err = checkDictInterpolationControlFlow(it)
+		case *MShellParseIfBlock:
+			err = checkInterpolationControlFlow(it.IfBody)
+			for _, elseIf := range it.ElseIfs {
+				if err == nil {
+					err = checkInterpolationControlFlow(elseIf.Condition)
+				}
+				if err == nil {
+					err = checkInterpolationControlFlow(elseIf.Body)
+				}
+			}
+			if err == nil {
+				err = checkInterpolationControlFlow(it.ElseBody)
+			}
+		case *MShellParseMatchBlock:
+			for _, arm := range it.Arms {
+				if err = checkInterpolationControlFlow(arm.Body); err != nil {
+					break
+				}
+			}
+		case *MShellParseGrid:
+			if it.GridMeta != nil {
+				err = checkDictInterpolationControlFlow(it.GridMeta)
+			}
+			for _, col := range it.Columns {
+				if err == nil && col.Meta != nil {
+					err = checkDictInterpolationControlFlow(col.Meta)
+				}
+			}
+			for _, row := range it.Rows {
+				if err == nil {
+					err = checkInterpolationControlFlow(row)
+				}
+			}
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func checkDictInterpolationControlFlow(dict *MShellParseDict) error {
+	for _, kv := range dict.Items {
+		if err := checkInterpolationControlFlow(kv.Value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func checkDictReturnPlacement(dict *MShellParseDict) error {
 	for _, kv := range dict.Items {
 		if err := checkReturnPlacement(kv.Value, false); err != nil {
@@ -718,16 +799,30 @@ func sigToJson(inputs, outputs []MShellParseItem) string {
 
 func ToJson(objList []MShellParseItem) string {
 	builder := strings.Builder{}
-	builder.WriteString("[")
-	if len(objList) > 0 {
-		builder.WriteString(objList[0].ToJson())
-		for i := 1; i < len(objList); i++ {
-			builder.WriteString(", ")
-			builder.WriteString(objList[i].ToJson())
+	writeItemsJson(&builder, objList)
+	return builder.String()
+}
+
+// jsonWriter is implemented by parse items that write their JSON into a
+// shared builder. Items that only return a string are copied into their
+// parent's output at every level of nesting, which is quadratic in depth.
+type jsonWriter interface {
+	writeJson(b *strings.Builder)
+}
+
+func writeItemsJson(b *strings.Builder, objList []MShellParseItem) {
+	b.WriteString("[")
+	for i, item := range objList {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		if w, ok := item.(jsonWriter); ok {
+			w.writeJson(b)
+		} else {
+			b.WriteString(item.ToJson())
 		}
 	}
-	builder.WriteString("]")
-	return builder.String()
+	b.WriteString("]")
 }
 
 func (file *MShellFile) ToJson() string {
@@ -1374,6 +1469,9 @@ func (parser *MShellParser) ParseFormatString() (*MShellParseFormatString, error
 		switch parser.curr.Type {
 		case FORMATSTRINGMID, FORMATSTRINGEND:
 			chunk := parser.curr
+			if err := checkInterpolationControlFlow(items); err != nil {
+				return fs, err
+			}
 			fs.Chunks = append(fs.Chunks, chunk)
 			fs.Interpolations = append(fs.Interpolations, items)
 			items = []MShellParseItem{}
@@ -1385,6 +1483,8 @@ func (parser *MShellParser) ParseFormatString() (*MShellParseFormatString, error
 			return fs, fmt.Errorf("%d:%d: Did not find closing '}' for format string interpolation.", start.Line, start.Column)
 		case RIGHT_SQUARE_BRACKET, RIGHT_PAREN, GRID_CLOSE, END:
 			return fs, fmt.Errorf("%d:%d: Unexpected '%s' inside format string interpolation.", parser.curr.Line, parser.curr.Column, parser.curr.Lexeme)
+		case DEF:
+			return fs, fmt.Errorf("%d:%d: Definitions are not allowed inside a format string interpolation.", parser.curr.Line, parser.curr.Column)
 		default:
 			item, err := parser.ParseItem()
 			if err != nil {
@@ -1945,6 +2045,9 @@ func (parser *MShellParser) ParseMatchBlock() (*MShellParseMatchBlock, error) {
 				}
 				arm.Pattern = append(arm.Pattern, item)
 				continue
+			}
+			if parser.curr.Type == FORMATSTRING || parser.curr.Type == FORMATSTRINGSTART {
+				return matchBlock, fmt.Errorf("%d:%d: A format string cannot be a match pattern. Use a double or single quoted string.", parser.curr.Line, parser.curr.Column)
 			}
 			item, err := parser.ParseItem()
 			if err != nil {

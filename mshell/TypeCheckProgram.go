@@ -556,7 +556,6 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 
 	case *MShellParseFormatString:
 		c.checkFormatString(it)
-		c.stack.Push(TidStr)
 		return
 
 	case *MShellParseQuote:
@@ -1714,44 +1713,97 @@ func (c *Checker) bindPatternName(name string, typ TypeId) {
 // a value the runtime can turn into text.
 const interpolationSig = "(str | path | int -- )"
 
-// checkFormatString checks each interpolation of a format string as a tiny
-// program on a fresh sub-stack that shares the current VarEnv. Each must
-// produce exactly one value of a type the runtime can concatenate. The
-// outer stack and substitution are unaffected regardless of what the
-// interpolations contain — only diagnostics accumulate.
+// checkFormatString checks a format string and pushes its `str`.
+//
+// At runtime each interpolation runs on its own empty stack, sharing the
+// variables of the surrounding code, and must leave exactly one value the
+// runtime can turn into text. So each is walked on an empty stack with
+// input inference off (an underflow is an error, not an input of an
+// enclosing quote), and each surviving branch must leave one value that
+// unifies with `str | path | int`. Branches that don't are dropped, the way
+// an overload that doesn't fit is; if none are left, the first problem is
+// reported. Bindings made in the interpolations, of variables and of type
+// variables, are kept, as they are for any other code.
 func (c *Checker) checkFormatString(fs *MShellParseFormatString) {
-	for i, items := range fs.Interpolations {
-		pos := fs.Chunks[i]
-		if len(items) > 0 {
-			pos = items[0].GetStartToken()
-		}
-
-		outerStack := c.stack.items
-		cp := c.subst.Checkpoint()
-		c.stack.items = nil
-
-		// When the walk died, the real error is already recorded and the
-		// stack reflects a mid-step state — an arity or type complaint on
-		// top of it would only be noise.
-		if c.walkJoined(items) {
-			problem := ""
-			if c.stack.Len() != 1 {
-				problem = "must produce exactly one value, got " + strconv.Itoa(c.stack.Len())
-			} else if got := c.stack.items[0]; !c.unify(got, parseBuiltinSig(c, interpolationSig).Inputs[0]) {
-				problem = "must produce a str, path, or int, got " + FormatType(c.arena, c.names, c.subst.Apply(c.arena, got))
-			}
-			if problem != "" {
-				c.errors = append(c.errors, TypeError{
-					Kind: TErrInterpolation,
-					Pos:  pos,
-					Hint: "format-string interpolation " + problem,
-				})
-			}
-		}
-
-		c.subst.Rollback(cp)
+	// The outer stack and inferred inputs are set aside, not copied, so a
+	// format string costs nothing in proportion to the stack below it. The
+	// walk never writes to them: loadBranch and appends only touch the
+	// fresh slices put in their place.
+	outerStack := c.stack.items
+	outerInferring := c.inferring
+	outerInferInputs := c.inferInputs
+	restore := func() {
 		c.stack.items = outerStack
+		c.inferring = outerInferring
+		c.inferInputs = outerInferInputs
 	}
+
+	allowed := parseBuiltinSig(c, interpolationSig).Inputs[0]
+	c.stack.items = nil
+	c.inferring = false
+	c.inferInputs = nil
+	branches := []quoteBranch{c.captureBranch()}
+
+	for i, items := range fs.Interpolations {
+		walked := c.driveBranchesOverItems(branches, items)
+		if len(walked) == 0 {
+			// Every branch died; the error is already recorded.
+			restore()
+			return
+		}
+
+		pos := fs.InterpolationStart(i)
+		problem := ""
+		branches = make([]quoteBranch, 0, len(walked))
+		for _, b := range walked {
+			if b.diverged {
+				// It never finishes the interpolation, so it produces nothing.
+				branches = append(branches, b)
+				continue
+			}
+			c.loadBranch(b)
+			if c.stack.Len() != 1 {
+				if problem == "" {
+					problem = "must produce exactly one value, got " + strconv.Itoa(c.stack.Len())
+				}
+				continue
+			}
+			got := c.stack.items[0]
+			if !c.unify(got, allowed) {
+				if problem == "" {
+					problem = "must produce a str, path, or int, got " + FormatType(c.arena, c.names, c.subst.Apply(c.arena, got))
+				}
+				continue
+			}
+			c.stack.items = c.stack.items[:0]
+			branches = append(branches, c.captureBranch())
+		}
+		if len(branches) == 0 {
+			c.errors = append(c.errors, TypeError{
+				Kind: TErrInterpolation,
+				Pos:  pos,
+				Hint: "format-string interpolation " + problem,
+			})
+			restore()
+			return
+		}
+	}
+
+	// As for list literals: the common single branch is loaded directly,
+	// so callers outside the branching driver see the result; several
+	// only arise under the driver, which consumes branchSpawn, and each
+	// needs its own copy of the outer stack.
+	if len(branches) > 1 {
+		for i := range branches {
+			branches[i].stack = append(append([]TypeId(nil), outerStack...), TidStr)
+			branches[i].inferring = outerInferring
+			branches[i].inferInputs = append([]TypeId(nil), outerInferInputs...)
+		}
+		c.branchSpawn = append(c.branchSpawn, branches...)
+	}
+	c.loadBranch(branches[0])
+	restore()
+	c.stack.Push(TidStr)
 }
 
 // stringLiteralValue returns the parsed content of a STRING /

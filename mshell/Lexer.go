@@ -28,6 +28,7 @@ const (
 	POSITIONAL
 	STRING // Normal string like "hello world"
 	UNFINISHEDSTRING
+	UNFINISHEDFORMATSTRING // Unterminated format string text, after its '$"' or an interpolation's '}'
 	SINGLEQUOTESTRING // Single quoted string like 'hello world'
 	UNFINISHEDSINGLEQUOTESTRING
 	MINUS
@@ -145,6 +146,8 @@ func (t TokenType) String() string {
 		return "STRING"
 	case UNFINISHEDSTRING:
 		return "UNFINISHEDSTRING"
+	case UNFINISHEDFORMATSTRING:
+		return "UNFINISHEDFORMATSTRING"
 	case SINGLEQUOTESTRING:
 		return "SINGLEQUOTESTRING"
 	case UNFINISHEDSINGLEQUOTESTRING:
@@ -1311,7 +1314,7 @@ func escapedRune(c rune) (rune, bool) {
 }
 
 func invalidEscapeMessage(line int, col int, c rune) string {
-	return fmt.Sprintf("%d:%d: Invalid escape character within string, '%c'. Expected 'e', 'n', 't', 'r', '\\', '\"', '{', or '}'.", line, col, c)
+	return fmt.Sprintf("%d:%d: Invalid escape character within string, %q. Expected 'e', 'n', 't', 'r', '\\', '\"', '{', or '}'.", line, col, c)
 }
 
 // scanFormatChunk scans the literal text of a format string up to and
@@ -1324,7 +1327,7 @@ func (l *Lexer) scanFormatChunk(afterInterpolation bool) Token {
 	for {
 		if l.atEnd() {
 			if l.allowUnterminatedString {
-				return l.makeToken(UNFINISHEDSTRING)
+				return l.makeToken(UNFINISHEDFORMATSTRING)
 			}
 			return l.makeErrorToken(fmt.Sprintf("%d:%d: Unterminated format string.", l.line, l.col))
 		}
@@ -1370,6 +1373,12 @@ func (l *Lexer) scanFormatChunk(afterInterpolation bool) Token {
 func (l *Lexer) parseString() Token {
 	err := l.consumeString()
 	if err != nil {
+		var unterminated ConsumeStringErrorUnterminated
+		if len(l.formatDepths) > 0 && !l.allowUnterminatedString && errors.As(err, &unterminated) {
+			// Likely the '"' meant to end a format string, reached while a
+			// '{' inside one of its interpolations was still open.
+			return l.makeErrorToken(fmt.Sprintf("%s A string started at %d:%d inside a format string interpolation. Is a '{' in the interpolation not closed?", err.Error(), l.startLine, l.startCol+1))
+		}
 
 		if l.allowUnterminatedString {
 			var unterminated ConsumeStringErrorUnterminated

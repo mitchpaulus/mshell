@@ -1199,3 +1199,35 @@ func TestTypeCheckInterpolationTypePosition(t *testing.T) {
 		t.Fatalf("expected float diagnostic at line 2, column 6; got %v", errs)
 	}
 }
+
+// Interpolations run on their own empty stack, keep the type bindings
+// they make, and are checked per branch, like any other code.
+func TestTypeCheckInterpolationBranches(t *testing.T) {
+	for _, src := range []string{
+		`[1 2] (n! $"{@n}") map unlines wl`,
+		`def takesInts ([int] -- int) len end  $"{[] xs! "a"}" drop  @xs takesInts wl`,
+		`(n! $"{@n}") drop`,
+		`3 (n! $"{ @n 1 - }") x wl`,
+		`[1 2 3] (n! $"{ @n 1 - }") map ", " join wl`,
+		`[1 2 3] (n! $"{@n dup + str}{ @n @n < if "a" else "b" end }") map ", " join wl`,
+		`$"{1 x! @x}" wl @x 1 + wl`,
+		`def g (a -- str) x! $"{@x str}" end 3 g wl`,
+	} {
+		if errs, ok := parseAndCheck(t, src); !ok || len(errs) != 0 {
+			t.Errorf("expected %q to pass; errs=%v", src, errs)
+		}
+	}
+	for _, src := range []string{
+		`[1.5 2.5] (n! $"{@n}") map unlines wl`,
+		`1.5 (n! $"{@n}") x wl`,
+		`[[1]] (n! $"{@n}") map len wl`,
+		`[1 2] ($"{"a" +}") map unlines wl`,
+		`[1 2] map. $"<{1 +}>" end len wl`,
+		`[1 2] ($"{dup}") map`,
+		`def g (a -- str) x! $"{@x}" end 3 g wl`,
+	} {
+		if errs, ok := parseAndCheck(t, src); ok {
+			t.Errorf("expected %q to fail; errs=%v", src, errs)
+		}
+	}
+}

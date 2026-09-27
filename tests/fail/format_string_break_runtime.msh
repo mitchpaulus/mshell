@@ -1,0 +1,2 @@
+# A break from a quotation run in an interpolation cannot leave it.
+(1 $"{(break) x}" wl) loop

@@ -932,14 +932,19 @@ func (state *EvalState) popFrame() {
 
 // handleBreak pops frames until it has left breakNum loops. If it reaches
 // base first, it returns a result carrying the loops still to leave, for
-// the caller of this Evaluate to handle.
+// the caller of this Evaluate to handle. A break may not leave a format
+// string interpolation.
 func (state *EvalState) handleBreak(base int, breakNum int) *EvalResult {
 	for breakNum > 0 {
 		if len(state.frames) == base {
 			return &EvalResult{Success: true, BreakNum: breakNum}
 		}
-		if state.frames[len(state.frames)-1].FrameType == FRAME_LOOP {
+		frame := &state.frames[len(state.frames)-1]
+		switch frame.FrameType {
+		case FRAME_LOOP:
 			breakNum--
+		case FRAME_FORMATSTRING:
+			return state.failPtr(fmt.Sprintf("%s'break' cannot leave a format string interpolation.\n", formatInterpolationLocation(frame.ParseFormatString, frame.FormatIndex)))
 		}
 		state.popFrame()
 	}
@@ -952,9 +957,12 @@ func (state *EvalState) handleBreak(base int, breakNum int) *EvalResult {
 func (state *EvalState) handleContinue(base int) *EvalResult {
 	for len(state.frames) > base {
 		frame := &state.frames[len(state.frames)-1]
-		if frame.FrameType == FRAME_LOOP {
+		switch frame.FrameType {
+		case FRAME_LOOP:
 			// Restarting counts as finishing the iteration.
 			return state.finishLoopIteration(frame)
+		case FRAME_FORMATSTRING:
+			return state.failPtr(fmt.Sprintf("%s'continue' cannot leave a format string interpolation.\n", formatInterpolationLocation(frame.ParseFormatString, frame.FormatIndex)))
 		}
 		state.popFrame()
 	}
@@ -1061,12 +1069,9 @@ func (state *EvalState) completeFrame() *EvalResult {
 }
 
 // formatInterpolationLocation is the "line:col: " prefix for an error in
-// interpolation i of fs: its first item, or the chunk before it if empty.
+// interpolation i of fs.
 func formatInterpolationLocation(fs *MShellParseFormatString, i int) string {
-	startToken := fs.Chunks[i]
-	if len(fs.Interpolations[i]) > 0 {
-		startToken = fs.Interpolations[i][0].GetStartToken()
-	}
+	startToken := fs.InterpolationStart(i)
 	return fmt.Sprintf("%d:%d: ", startToken.Line, startToken.Column)
 }
 
@@ -6687,6 +6692,14 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 
 					if exitInt.Value < 0 || exitInt.Value > 255 {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot exit with a value outside of 0-255.\n", t.Line, t.Column))
+					}
+
+					// Frames of enclosing Evaluate calls stay on state.frames,
+					// so this sees every interpolation the exit is inside.
+					for i := range state.frames {
+						if state.frames[i].FrameType == FRAME_FORMATSTRING {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: 'exit' cannot be used inside a format string interpolation.\n", t.Line, t.Column))
+						}
 					}
 
 					if exitInt.Value == 0 {

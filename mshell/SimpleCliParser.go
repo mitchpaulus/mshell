@@ -193,7 +193,7 @@ func (pipeline *SimpleCliPipeline) ToMShellFile() (*MShellFile, error) {
 				return nil, &SimpleCliParseError{Message: "stdin redirect must be a string or path", Token: t}
 			}
 		} else {
-			return nil, &SimpleCliParseError{Message: "stdin redirect must be a string or path", Token: Token{Lexeme: fmt.Sprintf("%v", pipeline.StdinRedirect)}}
+			return nil, &SimpleCliParseError{Message: "stdin redirect must be a string or path", Token: pipeline.StdinRedirect.GetStartToken()}
 		}
 	}
 
@@ -210,7 +210,7 @@ func (pipeline *SimpleCliPipeline) ToMShellFile() (*MShellFile, error) {
 				return nil, &SimpleCliParseError{Message: "stdout redirect must be a string or path", Token: t}
 			}
 		} else {
-			return nil, &SimpleCliParseError{Message: "stdout redirect must be a string or path", Token: Token{Lexeme: fmt.Sprintf("%v", pipeline.StdoutRedirect)}}
+			return nil, &SimpleCliParseError{Message: "stdout redirect must be a string or path", Token: pipeline.StdoutRedirect.GetStartToken()}
 		}
 	}
 

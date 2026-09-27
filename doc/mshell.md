@@ -556,6 +556,9 @@ $"literal \{braces\}" wl                  # literal {braces}
 Each interpolation runs on its own empty stack and can read the variables in scope.
 It must leave exactly one value of type `str`, `path`, or `int`; convert other types first (e.g. `str`, `toFixed`).
 Interpolations can hold any code, including strings, dictionaries, and nested format strings.
+Code in an interpolation cannot leave it: `break`, `continue`, and `exit` are errors there, except `break` and `continue` in a loop inside the interpolation.
+Definitions are not allowed in an interpolation.
+Interpolations can span lines. A `#` comment in an interpolation runs to the end of the line, so a comment on the same line as the closing `}` hides it.
 There is no formatting mini-language; use functions like `toFixed` and `leftPad` inside the interpolation.
 Use `\{` for a literal left brace. A `}` outside an interpolation is literal.
 

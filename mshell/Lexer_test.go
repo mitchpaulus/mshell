@@ -269,8 +269,8 @@ func TestUnterminatedFormatString(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%q: lex error: %v", input, err)
 		}
-		if last := tokens[len(tokens)-2]; last.Type != UNFINISHEDSTRING {
-			t.Errorf("%q: last token is %s, want UNFINISHEDSTRING", input, last.Type)
+		if last := tokens[len(tokens)-2]; last.Type != UNFINISHEDFORMATSTRING {
+			t.Errorf("%q: last token is %s, want UNFINISHEDFORMATSTRING", input, last.Type)
 		}
 
 		if _, err := NewLexer(input, nil).Tokenize(); err == nil {
