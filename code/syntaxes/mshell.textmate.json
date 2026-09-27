@@ -84,16 +84,26 @@
             "end": "\\}",
             "endCaptures": { "0": { "name": "punctuation.section.interpolation.end.mshell" } },
             "patterns": [
+                { "include": "#braces" },
+                { "include": "$self" }
+            ]
+        },
+        "braces": {
+            "comment": "A dict inside an interpolation, so its closing brace does not end the interpolation.",
+            "begin": "\\{",
+            "end": "\\}",
+            "patterns": [
+                { "include": "#braces" },
                 { "include": "$self" }
             ]
         },
         "escape_simple": {
             "name": "constant.character.escape.mshell",
-            "match": "\\\\[entr\"\\\\]"
+            "match": "\\\\[entr\"\\\\{}]"
         },
         "escape_format": {
             "name": "constant.character.escape.mshell",
-            "match": "\\\\[entr\"\\\\{]"
+            "match": "\\\\[entr\"\\\\{}]"
         }
     }
 }

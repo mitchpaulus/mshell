@@ -1,0 +1,2 @@
+# Interpolations must produce exactly one value.
+$"value: {1 2}" wl

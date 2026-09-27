@@ -1,0 +1,2 @@
+# exit cannot be used inside a format string interpolation.
+$"x{3 exit}y" wl

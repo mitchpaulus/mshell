@@ -1,0 +1,4 @@
+# A loop inside an interpolation can break.
+0 i! $"{(@i 1 + i! @i 3 = if break end) loop @i}" wl
+$"{ 1 # comments are allowed in multi-line interpolations
+}" wl

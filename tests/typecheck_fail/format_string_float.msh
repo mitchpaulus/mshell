@@ -1,0 +1,2 @@
+# Interpolations must produce a str, path, or int.
+$"value: {1.5}" wl

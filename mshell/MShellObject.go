@@ -1948,22 +1948,11 @@ func ParseRawString(inputString string) (string, error) {
 		c := allRunes[index]
 
 		if inEscape {
-			switch c {
-			case 'e':
-				b.WriteRune('\033') // Escape character
-			case 'n':
-				b.WriteRune('\n')
-			case 't':
-				b.WriteRune('\t')
-			case 'r':
-				b.WriteRune('\r')
-			case '\\':
-				b.WriteRune('\\')
-			case '"':
-				b.WriteRune('"')
-			default:
+			escaped, ok := escapedRune(c)
+			if !ok {
 				return "", fmt.Errorf("invalid escape character '%c'", c)
 			}
+			b.WriteRune(escaped)
 			inEscape = false
 		} else {
 			if c == '\\' {

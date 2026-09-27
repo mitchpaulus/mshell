@@ -36,7 +36,9 @@ const (
 	TErrRebrand
 	TErrInvalidCast
 	TErrTypeParse
-	TErrInterpolationArity
+	// TErrInterpolation is emitted when a format string interpolation does
+	// not produce exactly one str, path, or int. Hint holds the message.
+	TErrInterpolation
 	// TErrInvalidMatchPattern is emitted when a match arm pattern is not
 	// one of the recognized forms. Hint lists the legal forms.
 	TErrInvalidMatchPattern
@@ -137,7 +139,7 @@ func (e TypeError) Format(arena *TypeArena, names *NameTable) string {
 			FormatType(arena, names, e.Expected))
 	case TErrTypeParse:
 		fmt.Fprintf(&sb, "type parse error: %s", e.Hint)
-	case TErrInterpolationArity:
+	case TErrInterpolation:
 		fmt.Fprintf(&sb, "%s", e.Hint)
 	case TErrInvalidMatchPattern:
 		fmt.Fprintf(&sb, "unrecognized match arm pattern '%s'", e.Pos.Lexeme)

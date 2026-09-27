@@ -2,6 +2,8 @@ package main
 
 import (
 	"math/rand"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/rivo/uniseg"
@@ -101,6 +103,12 @@ func TestCompletionByteRanges(t *testing.T) {
 		{"世\n`abc", "abc", 4},
 		{"世\nabc ", "", 8},
 		{"", "", 0},
+		// Format string text: only the text after the opener is replaced,
+		// never the '$"' or the '}' ending an interpolation.
+		{`$"fi`, "fi", 2},
+		{`$"{@x}fi`, "fi", 6},
+		{`$"{@x}`, "", 6},
+		{`echo $"a {1} b {@x}/ho`, "/ho", 19},
 	} {
 		lexer := NewLexer(string(tt.source), nil)
 		lexer.allowUnterminatedString = true
@@ -190,5 +198,43 @@ func TestEditingSequenceBoundaries(t *testing.T) {
 			t.Fatalf("HandleToken: %v, %v", end, err)
 		}
 		checkEditingCursor(t, &state)
+	}
+}
+
+func TestFormatStringCompletionInsert(t *testing.T) {
+	state := &TermState{}
+	if got := state.buildCompletionInsert(`my {file} "x".txt`, UNFINISHEDFORMATSTRING, true); got != `my \{file\} \"x\".txt` {
+		t.Fatalf("insert = %q", got)
+	}
+	if got := state.buildSharedCompletionInsert(`a\b`, UNFINISHEDFORMATSTRING, true); got != `a\\b` {
+		t.Fatalf("shared insert = %q", got)
+	}
+}
+
+func TestCompletionArgsJoinFormatStrings(t *testing.T) {
+	state := &TermState{}
+	for _, tt := range []struct {
+		source string
+		want   []string
+	}{
+		{`git checkout $"{@b}-x" `, []string{"checkout", `$"{@b}-x"`}},
+		{`git $"a {$"n {1}"} b" c `, []string{`$"a {$"n {1}"} b"`, "c"}},
+		// The format string being typed is the completed argument.
+		{`git checkout $"{@b`, []string{"checkout"}},
+	} {
+		lexer := NewLexer(tt.source, nil)
+		lexer.allowUnterminatedString = true
+		tokens, err := lexer.Tokenize()
+		if err != nil {
+			t.Fatal(err)
+		}
+		prefix := ""
+		if !strings.HasSuffix(tt.source, " ") {
+			prefix = "x"
+		}
+		got := state.completionArgsFromTokens(tt.source, tokens, prefix)
+		if !slices.Equal(got, tt.want) {
+			t.Errorf("%q: args %q, want %q", tt.source, got, tt.want)
+		}
 	}
 }

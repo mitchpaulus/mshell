@@ -270,6 +270,7 @@ func GenerateCompletions(input CompletionInput, deps CompletionDeps) []TabMatch 
 	// For unfinished strings/paths, only complete files
 	if input.LastTokenType == UNFINISHEDPATH ||
 		input.LastTokenType == UNFINISHEDSTRING ||
+		input.LastTokenType == UNFINISHEDFORMATSTRING ||
 		input.LastTokenType == UNFINISHEDSINGLEQUOTESTRING {
 		return appendFileCompletions(matches, input, deps.FS)
 	}

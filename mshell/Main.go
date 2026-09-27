@@ -45,7 +45,6 @@ var tempFiles []string
 func parseMShellInput(input string, inputFile *TokenFile) (*MShellFile, error) {
 	lexer := NewLexer(input, inputFile)
 	parser := MShellParser{lexer: lexer}
-	parser.NextToken()
 	return parser.ParseFile()
 }
 
@@ -1631,11 +1630,55 @@ func lastArgumentFromCommand(command string) (string, bool) {
 	}
 
 	for i := len(tokens) - 1; i >= 0; i-- {
+		if tokens[i].Type == FORMATSTRINGEND {
+			return formatStringSource(command, tokens, i)
+		}
 		if isAltDotWordToken(tokens[i].Type) {
 			return tokens[i].Lexeme, true
 		}
 	}
 
+	return "", false
+}
+
+// formatStringEndIndex returns the index of the FORMATSTRINGEND matching the
+// FORMATSTRINGSTART at tokens[start], or of the last token before EOF if the
+// format string is unterminated.
+func formatStringEndIndex(tokens []Token, start int) int {
+	depth := 0
+	last := start
+	for i := start; i < len(tokens) && tokens[i].Type != EOF; i++ {
+		last = i
+		switch tokens[i].Type {
+		case FORMATSTRINGSTART:
+			depth++
+		case FORMATSTRINGEND:
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return last
+}
+
+// formatStringSource returns the source of the whole format string whose
+// FORMATSTRINGEND is tokens[end], interpolations included.
+func formatStringSource(command string, tokens []Token, end int) (string, bool) {
+	depth := 0
+	for i := end; i >= 0; i-- {
+		switch tokens[i].Type {
+		case FORMATSTRINGEND:
+			depth++
+		case FORMATSTRINGSTART:
+			depth--
+			if depth == 0 {
+				runes := []rune(command)
+				stop := tokens[end].Start + len([]rune(tokens[end].Lexeme))
+				return string(runes[tokens[i].Start:stop]), true
+			}
+		}
+	}
 	return "", false
 }
 
@@ -1913,8 +1956,18 @@ func allMatchesAreFiles(matches []TabMatch) bool {
 	return true
 }
 
+// escapeFormatStringText escapes text for the inside of a format string.
+func escapeFormatStringText(text string) string {
+	return formatStringTextEscaper.Replace(text)
+}
+
+var formatStringTextEscaper = strings.NewReplacer(`\`, `\\`, `"`, `\"`, `{`, `\{`, `}`, `\}`)
+
 func (state *TermState) buildCompletionInsert(match string, tokenType TokenType, preferPathQuote bool) string {
 	switch tokenType {
+	case UNFINISHEDFORMATSTRING:
+		// Replaces only the text after the opener; see completionTokenPrefix.
+		return escapeFormatStringText(match)
 	case UNFINISHEDSINGLEQUOTESTRING:
 		return "'" + match
 	case UNFINISHEDPATH:
@@ -1943,6 +1996,8 @@ func (state *TermState) buildCompletionInsert(match string, tokenType TokenType,
 
 func (state *TermState) buildSharedCompletionInsert(longestCommonPrefix string, tokenType TokenType, allFileMatches bool) string {
 	switch tokenType {
+	case UNFINISHEDFORMATSTRING:
+		return escapeFormatStringText(longestCommonPrefix)
 	case UNFINISHEDSINGLEQUOTESTRING:
 		return "'" + longestCommonPrefix
 	case UNFINISHEDPATH:
@@ -2233,7 +2288,10 @@ func completionArgString(token Token) (string, error) {
 	}
 }
 
-func (state *TermState) completionArgsFromTokens(tokens []Token, prefix string) []string {
+// completionArgsFromTokens lists the arguments after the binary for a
+// completion definition. tokens were lexed from source. A format string with
+// interpolations spans several tokens and is passed as its source text.
+func (state *TermState) completionArgsFromTokens(source string, tokens []Token, prefix string) []string {
 	args := make([]string, 0, len(tokens))
 	excludeIndex := -1
 	if prefix != "" && len(tokens) >= 2 {
@@ -2241,8 +2299,24 @@ func (state *TermState) completionArgsFromTokens(tokens []Token, prefix string) 
 	}
 
 	foundBinary := false
-	for i, token := range tokens {
+	var runes []rune // Token offsets are rune offsets; converted once, when first needed.
+	for i := 0; i < len(tokens); i++ {
+		token := tokens[i]
 		if token.Type == WHITESPACE || token.Type == LINECOMMENT || token.Type == EOF {
+			continue
+		}
+		if token.Type == FORMATSTRINGSTART {
+			end := formatStringEndIndex(tokens, i)
+			excluded := excludeIndex >= i && excludeIndex <= end
+			if foundBinary && !excluded {
+				if runes == nil {
+					runes = []rune(source)
+				}
+				stop := tokens[end].Start + len([]rune(tokens[end].Lexeme))
+				args = append(args, string(runes[token.Start:stop]))
+			}
+			foundBinary = true
+			i = end
 			continue
 		}
 		if !foundBinary {
@@ -4279,7 +4353,7 @@ func (state *TermState) HandleToken(token TerminalToken) (bool, error) {
 				if !isCompletingBinary {
 					defs := state.evalState.CompletionDefinitions[binaryToken.Lexeme]
 					if len(defs) > 0 {
-						args := state.completionArgsFromTokens(tokens, prefix)
+						args := state.completionArgsFromTokens(string(state.currentCommand[0:state.index]), tokens, prefix)
 						if defSpec, ok := state.runCompletionDefinitions(defs, args); ok {
 							spec = &defSpec
 						}

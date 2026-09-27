@@ -1,0 +1,2 @@
+# break cannot leave a format string interpolation.
+(1 $"{break}" wl) loop

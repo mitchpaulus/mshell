@@ -1,0 +1,2 @@
+2:1 format string
+2:11: Format string interpolation must produce a str, path, or int, got Float.

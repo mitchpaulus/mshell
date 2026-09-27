@@ -220,12 +220,8 @@ func (c *Checker) checkOne(tok Token) {
 		c.stack.Push(TidBool)
 		return
 	case FORMATSTRING:
-		// `$"...{expr}..."` evaluates each `{...}` block as a tiny
-		// program and concatenates the result. Type-check each
-		// block on a fresh sub-stack that inherits the current
-		// VarEnv, requiring the block to produce exactly one
-		// value. The format string itself always pushes `str`.
-		c.checkFormatStringInterpolations(tok)
+		// A format string with no interpolations; ones with
+		// interpolations are MShellParseFormatString items.
 		c.stack.Push(TidStr)
 		return
 	case PATH:

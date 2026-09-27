@@ -20,9 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Directories have no size.
 - Completion definitions can return a dictionary instead of a list, to choose what Tab offers:
   `values`, files matching glob patterns (`files`), preferred files with a fallback to the rest (`preferredFiles`), directories only (`dirs`), or executables on the path (`binaries`).
+- `\{` and `\}` escapes in double quoted strings and format strings, for literal braces.
 
 ### Changed
 
+- Format string interpolations can hold any code: string literals, dictionaries, and nested format strings all work inside `{...}`.
+  Interpolations are parsed once when the script is read, not each time the string is built,
+  and errors inside them point at the right line and column.
+  The type checker now also checks that each interpolation produces a `str`, `path`, or `int`.
 - Tab completion of file names is faster, especially in large directories, and symbolic links to directories complete with a trailing separator.
 - `sudo` completion offers executables from the path much faster.
 - Grid `groupBy` and `pivot` are faster: `groupBy` is 2-6x faster on a 5.4 million row table.

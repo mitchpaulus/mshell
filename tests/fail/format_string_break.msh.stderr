@@ -1,0 +1,1 @@
+Error parsing file stdin: 2:7: 'break' cannot leave a format string interpolation. Use it only in a loop inside the interpolation.

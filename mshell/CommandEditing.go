@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 
 	"github.com/rivo/uniseg"
 )
@@ -122,6 +123,15 @@ func completionTokenPrefix(source SourceText, cursor ByteOffset, token Token) (s
 	prefixStart := start
 	if token.Type == UNFINISHEDSTRING || token.Type == UNFINISHEDSINGLEQUOTESTRING || token.Type == UNFINISHEDPATH {
 		prefixStart++
+	} else if token.Type == UNFINISHEDFORMATSTRING {
+		// Completion text goes inside the string, after its opener: the
+		// '$"' that starts it, or the '}' that ends an interpolation.
+		if strings.HasPrefix(token.Lexeme, "$\"") {
+			prefixStart += 2
+		} else {
+			prefixStart++
+		}
+		return string(source[prefixStart:cursor]), prefixStart
 	}
 	return string(source[prefixStart:cursor]), start
 }
