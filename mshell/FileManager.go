@@ -31,12 +31,25 @@ type previewRequest struct {
 	maxLines   int
 	onlineOnly bool // file data is only in the cloud; do not read it
 	gen        uint64
+	// Pixel size that an image preview must fit in. Zero when images are
+	// not drawn.
+	imageW int
+	imageH int
+	// Width over height of one image pixel on screen.
+	pixelAspect float64
 }
 
 type previewResult struct {
 	path  string
 	lines []string
+	image imagePreview // drawn below the lines, if the file is an image
 	gen   uint64
+}
+
+// imagePreview is an image preview encoded as sixel data.
+type imagePreview struct {
+	sixel  []byte
+	imageW int // the pixel width the image was fit to
 }
 
 // folderStateRequest asks the folder state worker for the sync status of the
@@ -206,6 +219,18 @@ type FileManager struct {
 	previewDone   chan struct{}        // closed, under renderMu, to shut down background goroutines
 	previewWG     sync.WaitGroup       // the preview receiver; the workers are not waited for
 	previewGen    uint64               // bumped on selection change; stale results are dropped
+	previewImages map[string]imagePreview // cached image per file path, for image files
+	// Paths in the order their images were cached, oldest first, and the
+	// total size of the cached images. Used to drop the oldest images once
+	// the total passes maxImageCacheBytes.
+	previewImageOrder []string
+	previewImageBytes int
+
+	sixel sixelTerminal // whether and how images can be drawn
+
+	// The start of an escape sequence cut off at the end of the last read,
+	// kept until the rest arrives.
+	pendingInput []byte
 
 	// Search state
 	searching    bool   // true when typing a search query
@@ -434,13 +459,14 @@ func (fm *FileManager) startPreviewLoop() {
 					}
 				}
 			COMPUTE:
-				lines := computePreview(req.entry, req.path, req.maxLines, req.onlineOnly)
+				lines, image := makePreview(req)
 				select {
 				case <-fm.previewDone:
 					return
 				case fm.previewChan <- previewResult{
 					path:  req.path,
 					lines: lines,
+					image: image,
 					gen:   req.gen,
 				}:
 				}
@@ -460,12 +486,25 @@ func (fm *FileManager) startPreviewLoop() {
 				fm.renderMu.Lock()
 				if !fm.backgroundStopped() && result.gen == fm.previewGen {
 					fm.previewCache[result.path] = result.lines
+					if result.image.sixel != nil {
+						fm.cacheImagePreview(result.path, result.image)
+					}
 					fm.render()
 				}
 				fm.renderMu.Unlock()
 			}
 		}
 	}()
+}
+
+// makePreview computes the preview for a request. Tests replace it to
+// simulate previews that block.
+var makePreview = func(req previewRequest) ([]string, imagePreview) {
+	if req.imageW > 0 && !req.onlineOnly && !req.entry.IsDir() && isImagePreviewPath(req.path) {
+		lines, sixel := previewImage(req.path, req.imageW, req.imageH, req.pixelAspect)
+		return lines, imagePreview{sixel: sixel, imageW: req.imageW}
+	}
+	return computePreview(req.entry, req.path, req.maxLines, req.onlineOnly), imagePreview{}
 }
 
 // storageProviderStateLookupFactory creates the folder status lookup. Tests
@@ -627,6 +666,12 @@ func (fm *FileManager) schedulePreview() {
 	entry := fm.entries[fm.cursor]
 	path := fm.selectedEntryPath(entry)
 
+	imageW, imageH := fm.imagePreviewSize()
+	if image, ok := fm.previewImages[path]; ok && image.imageW != imageW {
+		// The preview pane changed width since the image was made.
+		fm.dropImagePreview(path)
+	}
+
 	if _, ok := fm.previewCache[path]; ok {
 		return // already cached
 	}
@@ -634,11 +679,14 @@ func (fm *FileManager) schedulePreview() {
 	fm.previewGen++
 
 	req := previewRequest{
-		path:       path,
-		entry:      entry,
-		maxLines:   fm.visibleRows(),
-		onlineOnly: !entry.IsDir() && fm.cloudState(entry) == cloudFileOnlineOnly,
-		gen:        fm.previewGen,
+		path:        path,
+		entry:       entry,
+		maxLines:    fm.visibleRows(),
+		onlineOnly:  !entry.IsDir() && fm.cloudState(entry) == cloudFileOnlineOnly,
+		gen:         fm.previewGen,
+		imageW:      imageW,
+		imageH:      imageH,
+		pixelAspect: fm.sixel.pixelAspect,
 	}
 
 	// Non-blocking send; if the channel is full the worker will drain
@@ -655,7 +703,83 @@ func (fm *FileManager) schedulePreview() {
 	}
 }
 
+// imagePreviewRow is the screen row where image previews start, below the
+// header and the image's description line.
+const imagePreviewRow = 3
+
+// imagePreviewSize returns the size in pixels that an image preview must fit
+// in, or zeros when images are not drawn. The image stops one row above the
+// bottom of the screen: a sixel image that reaches the last row makes the
+// terminal scroll.
+func (fm *FileManager) imagePreviewSize() (int, int) {
+	if !fm.sixel.supported {
+		return 0, 0
+	}
+	cols := fm.cols - fm.leftPaneWidth() - 4 // separator and leading space
+	rows := fm.rows - imagePreviewRow
+	if cols <= 0 || rows <= 0 {
+		return 0, 0
+	}
+	return min(cols*fm.sixel.cellW, maxImageSide), min(rows*fm.sixel.cellH, maxImageSide)
+}
+
+// cacheImagePreview stores an image preview, dropping the oldest cached
+// images while the cache holds more than maxImageCacheBytes.
+func (fm *FileManager) cacheImagePreview(path string, image imagePreview) {
+	if fm.previewImages == nil {
+		fm.previewImages = make(map[string]imagePreview)
+	}
+	fm.dropImagePreview(path)
+	fm.previewImages[path] = image
+	fm.previewImageBytes += len(image.sixel)
+	fm.previewImageOrder = append(fm.previewImageOrder, path)
+	for fm.previewImageBytes > maxImageCacheBytes && len(fm.previewImageOrder) > 1 {
+		oldest := fm.previewImageOrder[0]
+		fm.previewImageOrder = fm.previewImageOrder[1:]
+		if oldest != path {
+			fm.dropImagePreview(oldest)
+		}
+	}
+}
+
+// dropImagePreview removes a cached image and its preview text, so the next
+// time the file is selected the preview is made again.
+func (fm *FileManager) dropImagePreview(path string) {
+	image, ok := fm.previewImages[path]
+	if !ok {
+		return
+	}
+	fm.previewImageBytes -= len(image.sixel)
+	delete(fm.previewImages, path)
+	delete(fm.previewCache, path)
+}
+
+// selectedImage returns the sixel data to draw for the selected entry, or nil
+// if there is none or it was made for a different pane width.
+func (fm *FileManager) selectedImage() []byte {
+	if len(fm.entries) == 0 || fm.cursor >= len(fm.entries) {
+		return nil
+	}
+	image, ok := fm.previewImages[fm.selectedEntryPath(fm.entries[fm.cursor])]
+	if !ok {
+		return nil
+	}
+	if imageW, _ := fm.imagePreviewSize(); image.imageW != imageW {
+		return nil
+	}
+	return image.sixel
+}
+
 func (fm *FileManager) mainLoop() {
+	if term.IsTerminal(fm.stdInFd) && term.IsTerminal(int(fm.ttyOut.Fd())) {
+		detected := detectSixel(fm.ttyOut, fm.stdInFd, fm.cols, fm.rows)
+		setting, set := os.LookupEnv(cellPixelsEnvVar)
+		var message string
+		fm.sixel, message = applyCellPixelsSetting(detected, setting, set)
+		if message != "" && fm.statusMsg == "" {
+			fm.statusMsg = message
+		}
+	}
 	fm.startPreviewLoop()
 	fm.startFolderStateWorker()
 	defer fm.stopPreviewLoop()
@@ -709,6 +833,9 @@ func (fm *FileManager) loadDirectory() {
 
 	fm.entries = entries
 	fm.previewCache = make(map[string][]string)
+	fm.previewImages = make(map[string]imagePreview)
+	fm.previewImageOrder = nil
+	fm.previewImageBytes = 0
 	fm.entrySizes = make(map[string]string)
 	fm.searchActive = false
 	fm.searchMatches = fm.searchMatches[:0]
@@ -747,6 +874,9 @@ func (fm *FileManager) selectedEntryPath(entry os.DirEntry) string {
 func (fm *FileManager) showWindowsVolumes() {
 	fm.entries = mountedWindowsVolumes()
 	fm.previewCache = make(map[string][]string)
+	fm.previewImages = make(map[string]imagePreview)
+	fm.previewImageOrder = nil
+	fm.previewImageBytes = 0
 	fm.entrySizes = make(map[string]string)
 	fm.searchActive = false
 	fm.searchMatches = fm.searchMatches[:0]
@@ -1180,6 +1310,16 @@ func (fm *FileManager) render() {
 		}
 	}
 
+	// Image preview, drawn over the empty preview rows. Overlays are text
+	// drawn on top of the preview, so the image is left off while one shows.
+	overlay := fm.pendingMark || fm.showingBookmarks || fm.lastKey != 0
+	if image := fm.selectedImage(); image != nil && !overlay {
+		buf.WriteString("\0337") // save cursor position
+		fmt.Fprintf(&buf, "\033[%d;%dH", imagePreviewRow, leftW+5)
+		buf.Write(image)
+		buf.WriteString("\0338") // restore cursor position
+	}
+
 	// Search bar at the bottom
 	if fm.searching {
 		buf.WriteString("\r\n")
@@ -1382,12 +1522,25 @@ func computePreview(entry os.DirEntry, path string, maxLines int, onlineOnly boo
 		return lines
 	}
 
+	// Only regular files: a named pipe or device, such as a link to
+	// /dev/zero, could block or never end.
+	if stat, err := os.Stat(path); err != nil {
+		return []string{" (cannot open for reading)"}
+	} else if !stat.Mode().IsRegular() {
+		return []string{" (not a regular file)"}
+	}
+
 	if isZipPreviewPath(path) {
 		return previewZipArchive(path, maxLines)
 	}
 
 	if isTarGzPreviewPath(path) {
 		return previewTarGzArchive(path, maxLines)
+	}
+
+	if isImagePreviewPath(path) {
+		lines, _ := previewImage(path, 0, 0, 1)
+		return lines
 	}
 
 	if isPdfPreviewPath(path) {
@@ -1398,7 +1551,7 @@ func computePreview(entry os.DirEntry, path string, maxLines int, onlineOnly boo
 		return []string{" (binary file)"}
 	}
 
-	// Check for binary before reading full file
+	// Check for binary before reading the file
 	f, err := os.Open(path)
 	if err != nil {
 		return []string{" (cannot open for reading)"}
@@ -1411,9 +1564,10 @@ func computePreview(entry os.DirEntry, path string, maxLines int, onlineOnly boo
 		return []string{" (binary file)"}
 	}
 
-	// Read full file for text preview
+	// Read the start of the file for the text preview. The pane shows at
+	// most a screen of lines, so there is no need to read more.
 	f.Seek(0, 0)
-	data, err := io.ReadAll(f)
+	data, err := io.ReadAll(io.LimitReader(f, maxTextPreviewBytes))
 	if err != nil {
 		return []string{" (cannot read)"}
 	}
@@ -1430,6 +1584,9 @@ func computePreview(entry os.DirEntry, path string, maxLines int, onlineOnly boo
 	}
 	return lines
 }
+
+// maxTextPreviewBytes is the most read from a file for its text preview.
+const maxTextPreviewBytes = 1 << 20
 
 func filterIgnoredFileManagerEntries(entries []os.DirEntry) []os.DirEntry {
 	filtered := make([]os.DirEntry, 0, len(entries))
@@ -1714,9 +1871,22 @@ func (fm *FileManager) handleInput(buf []byte, n int) bool {
 	fm.renderMu.Lock()
 	defer fm.renderMu.Unlock()
 
-	fm.statusMsg = ""
-	for i := 0; i < n; {
-		consumed, quit := fm.handleInputEvent(buf[i:n])
+	input := append(fm.pendingInput, buf[:n]...)
+	fm.pendingInput = nil
+	for i := 0; i < len(input); {
+		length, complete := csiSequenceLength(input[i:])
+		if !complete {
+			// Wait for the rest of the sequence.
+			fm.pendingInput = append([]byte(nil), input[i:]...)
+			break
+		}
+		if isTerminalReply(input[i : i+length]) {
+			i += length
+			continue
+		}
+
+		fm.statusMsg = ""
+		consumed, quit := fm.handleInputEvent(input[i:])
 		if quit {
 			return true
 		}
@@ -1726,6 +1896,48 @@ func (fm *FileManager) handleInput(buf []byte, n int) bool {
 		i += consumed
 	}
 	return false
+}
+
+// maxPendingEscapeBytes bounds how much of an unfinished escape sequence is
+// kept waiting for the rest. Terminal replies and key sequences are far
+// shorter.
+const maxPendingEscapeBytes = 256
+
+// csiSequenceLength returns the length of the CSI sequence (ESC [ ...)
+// at the start of input, or 1 if input does not start with one. complete is
+// false when input ends before the sequence does. A sequence longer than
+// maxPendingEscapeBytes counts as complete, so it is never kept waiting.
+func csiSequenceLength(input []byte) (length int, complete bool) {
+	if len(input) < 2 || input[0] != 0x1b || input[1] != '[' {
+		return 1, true
+	}
+	for i := 2; i < len(input); i++ {
+		b := input[i]
+		if b >= 0x40 && b <= 0x7e { // final byte
+			return i + 1, true
+		}
+		if b < 0x20 || b > 0x3f { // not a parameter or intermediate byte
+			return 1, true
+		}
+	}
+	if len(input) >= maxPendingEscapeBytes {
+		return 1, true
+	}
+	return len(input), false
+}
+
+// isTerminalReply reports whether seq, a complete CSI sequence, is one of
+// the terminal's replies to the queries sent when the file manager starts:
+// device attributes (ESC [ ? ... c) or a size (ESC [ ... t). A reply that
+// arrives after startup stops waiting for it must not be taken as keys; the
+// 'c' at the end of the device attributes reply would clear the clipboard.
+// No key sends a CSI sequence ending in 'c' or 't'.
+func isTerminalReply(seq []byte) bool {
+	if len(seq) < 3 || seq[0] != 0x1b || seq[1] != '[' {
+		return false
+	}
+	final := seq[len(seq)-1]
+	return final == 'c' || final == 't'
 }
 
 func (fm *FileManager) handleInputEvent(buf []byte) (int, bool) {
