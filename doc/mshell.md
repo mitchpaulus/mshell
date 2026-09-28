@@ -1288,6 +1288,9 @@ end wl # Output: 11
    On exit, changes the working directory to the directory the user navigated to.
    On Windows, pressing `h` at the root of a drive shows the mounted drive letters so you can switch volumes.
    The preview pane short-circuits common binary extensions and shows first-level contents for `.zip` and `.tar.gz` archives.
+   PNG, JPEG, and GIF files show their size in pixels, and the image itself in terminals that support sixel graphics.
+   If images look stretched, set `MSH_CELL_PIXELS` to the real size of a text cell in pixels, such as `9x20`.
+   Windows Terminal always reports 10x20 cells, so fonts with a different cell shape need this.
    Yank bindings copy text about the selected entry to the system clipboard: `yf` (file name), `yp` (full path), `yg` (path relative to the enclosing `.git` directory). `(str -- )`
 - `clip`: Copy a string to the system clipboard. Cross-platform: uses `pbcopy` on macOS, `clip` on Windows, and the first available of `wl-copy`, `xclip`, or `xsel` on Linux. `(str | path -- )`
 - `writeFile`: Write a string (UTF-8) or raw binary data to file. Overwrites file if it exists. `(str|bytes content str|path file -- )`

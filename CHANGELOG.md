@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The file manager previews PNG, JPEG, and GIF images in terminals that support sixel graphics, such as Windows Terminal, WezTerm, foot, and xterm.
+  Other terminals show the image format and size in pixels.
+  If images look stretched, set `MSH_CELL_PIXELS` to the real size of a text cell in pixels, such as `9x20`.
+  Windows Terminal always reports 10x20 cells whatever the font, so images there can be slightly squeezed without it.
 - The file manager preview shows PDF details: version, page count, page size, encryption, and document info such as title and author.
   It reads only the parts of the file that hold this, so it stays fast on large PDFs.
 - On Windows, the file manager shows OneDrive status in cloud sync folders:
