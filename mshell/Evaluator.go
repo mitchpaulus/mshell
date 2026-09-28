@@ -12112,12 +12112,12 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 
 				if context.StandardInput == nil {
 					reader = os.Stdin
-					_, err := reader.(*os.File).Seek(0, io.SeekCurrent)
-					isSeekable = err == nil
-
 				} else {
 					reader = context.StandardInput
-					_, err := reader.(*os.File).Seek(0, io.SeekCurrent)
+				}
+				file, isFile := reader.(*os.File)
+				if isFile {
+					_, err := file.Seek(0, io.SeekCurrent)
 					isSeekable = err == nil
 				}
 
@@ -12146,7 +12146,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					}
 
 					// Reset the position of the reader to the position after the read
-					offset, err := reader.(*os.File).Seek(0, io.SeekCurrent)
+					offset, err := file.Seek(0, io.SeekCurrent)
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error resetting position of reader: %s\n", t.Line, t.Column, err.Error()))
 					}
@@ -12154,7 +12154,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					// fmt.Fprintf(os.Stderr, "Offset: %d, Remaining in buffer: %d\n", offset, remainingInBuffer)
 					newPosition := offset - int64(remainingInBuffer)
 					// fmt.Fprintf(os.Stderr, "New position: %d\n", newPosition)
-					_, err = reader.(*os.File).Seek(newPosition, io.SeekStart)
+					_, err = file.Seek(newPosition, io.SeekStart)
 				} else {
 					// Do a byte by byte read
 					var line strings.Builder
