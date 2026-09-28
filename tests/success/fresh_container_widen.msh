@@ -1,0 +1,9 @@
+# A container literal nothing else references can widen its element type.
+[] 1 append "a" append len wl
+"a" [1 2] append len wl
+[1 2] as [int | str] "a" append len wl
+# Nested literals are unreferenced too, so they widen with the outer one.
+[["Ada"] ["Grace" 42]] as [[int | str]] len wl
+[1 ["a"]] as [int | [int | str]] len wl
+{"x": ["a"], "y": [1]} as {str: [int | str]} len wl
+[{"a": ["x"]} {"a": [1]}] as [{a: [int | str]}] len wl

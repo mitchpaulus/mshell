@@ -337,9 +337,9 @@ func (c *Checker) checkDefBody(def *MShellDefinition) {
 	prevFn := c.currentFn
 	cp := c.subst.Checkpoint()
 
-	outerFresh := c.fresh
+	outerFresh, outerFreshDeep := c.fresh, c.freshDeep
 	c.stack.items = nil
-	c.fresh = 0
+	c.fresh, c.freshDeep = 0, false
 	c.vars.adopt(make(map[NameId]TypeId), make(map[NameId]TypeId))
 	c.diverged = false
 	c.inferring = false
@@ -379,7 +379,7 @@ func (c *Checker) checkDefBody(def *MShellDefinition) {
 	c.stack.items = outerStack
 	c.vars.adopt(outerVars, outerMaybeVars)
 	c.diverged = outerDiverged
-	c.fresh = outerFresh
+	c.fresh, c.freshDeep = outerFresh, outerFreshDeep
 	c.inferring = outerInferring
 	c.inferInputs = outerInferInputs
 }
@@ -509,21 +509,91 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 		return
 	}
 	before := c.fresh
+	deepBefore := c.freshDeep
 	lenBefore := c.stack.Len()
 	spawnStart := len(c.branchSpawn)
 	c.fresh = 0
+	c.freshDeep = false
 	c.freshBefore = before
+	c.freshDeepBefore = deepBefore
 	c.freshResult = false
 	c.checkParseItemStep(item)
 	c.freshBefore = 0
+	c.freshDeepBefore = false
 	// A step that fanned out (container literals collect their bodies this
 	// way) left its outcomes in branchSpawn, captured before the mark was
 	// known; the live state is then discarded.
 	for i := spawnStart; i < len(c.branchSpawn); i++ {
 		b := &c.branchSpawn[i]
 		b.fresh = freshAfter(item, before, lenBefore, len(b.stack), b.diverged, false)
+		b.freshDeep = b.fresh > 0 && c.freshDeepAfter(item, deepBefore, false)
 	}
 	c.fresh = freshAfter(item, before, lenBefore, c.stack.Len(), c.diverged, c.freshResult)
+	c.freshDeep = c.fresh > 0 && c.freshDeepAfter(item, deepBefore, c.freshResult)
+}
+
+// freshDeepAfter computes Checker.freshDeep after item ran, for an outcome
+// that kept a fresh mark. deepBefore is the flag before the step, and
+// result reports that the step output the fresh receiver itself.
+func (c *Checker) freshDeepAfter(item MShellParseItem, deepBefore, result bool) bool {
+	switch item.(type) {
+	case *MShellParseList, *MShellParseDict:
+		return c.deepFreshLiteral(item)
+	case Token:
+		// An append may have put a referenced container inside.
+		if result {
+			return false
+		}
+	}
+	return deepBefore
+}
+
+// deepFreshLiteral reports whether every container nested in a list or
+// dict literal is itself a literal, so none of them is referenced from
+// anywhere else. Besides nested literals, only scalars, quotes, and bare
+// words may appear: anything else (`@name`, a call, a stack operation)
+// could place an existing container inside.
+func (c *Checker) deepFreshLiteral(item MShellParseItem) bool {
+	switch it := item.(type) {
+	case *MShellParseList:
+		return c.deepFreshItems(it.Items)
+	case *MShellParseDict:
+		for _, kv := range it.Items {
+			if !c.deepFreshItems(kv.Value) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func (c *Checker) deepFreshItems(items []MShellParseItem) bool {
+	for _, item := range items {
+		switch it := item.(type) {
+		case *MShellParseList, *MShellParseDict:
+			if !c.deepFreshLiteral(it) {
+				return false
+			}
+		case *MShellParseQuote:
+		case Token:
+			if it.Type == VARRETRIEVE {
+				return false
+			}
+			if it.Type == LITERAL {
+				// A bare word pushes itself as a str unless it names a
+				// builtin or definition, which may return anything.
+				if _, ok := c.nameBuiltins[c.names.Intern(it.Lexeme)]; ok {
+					return false
+				}
+			} else if !pushOnlyToken(it.Type) {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // freshAfter computes the fresh mark (see Checker.fresh) after item ran,
@@ -568,7 +638,7 @@ func (c *Checker) checkParseItemStep(item MShellParseItem) {
 	case *MShellAsCast:
 		target := c.resolveTypeExpr(it.Target, nil)
 		if target != TidNothing {
-			c.castTop(target, it.AsToken, c.freshBefore == 1)
+			c.castTop(target, it.AsToken, c.freshBefore == 1, c.freshDeepBefore)
 		}
 		return
 

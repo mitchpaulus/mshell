@@ -187,13 +187,22 @@ type Checker struct {
 	// evaluates to a new object on every run, and its body runs on its own
 	// stack, so the pushed value is unreferenced. The mark then survives
 	// only steps that push exactly one value without reading the stack:
-	// scalar literals, `@name`, `$VAR`, quote literals, and other container
-	// literals. Every other step clears it, including anything that could
-	// copy the reference (`dup`, a store, a call). See checkParseItem.
+	// scalar literals, `@name`, `$VAR`, and quote literals. A new container
+	// literal moves the mark to itself. Every other step clears it,
+	// including anything that could copy the reference (`dup`, a store, a
+	// call). See checkParseItem.
 	fresh int
+	// freshDeep reports that every container nested inside the fresh slot
+	// is unreferenced too, so `as` may widen them as well. It holds when
+	// the slot came from a literal whose nested containers are all
+	// literals themselves (see deepFreshLiteral).
+	freshDeep bool
 	// freshBefore is the fresh mark as it stood when the current parse item
 	// started; the append and `as` handlers read it.
 	freshBefore int
+	// freshDeepBefore is freshDeep as it stood when the current parse item
+	// started.
+	freshDeepBefore bool
 	// freshResult is set by a step whose output is the fresh receiver
 	// itself, so the mark moves to the new top.
 	freshResult bool
@@ -1574,6 +1583,12 @@ func (c *Checker) unifyTypeToUnion(got TypeId, wn TypeNode) bool {
 // lists are pre-sorted by NameId (see normalizeShapeFields), so the merge is
 // linear.
 func (c *Checker) unifyShape(gn, wn TypeNode) bool {
+	return c.shapeFits(gn, wn, c.unify)
+}
+
+// shapeFits is unifyShape with the check on each shared field's value type
+// supplied by fit.
+func (c *Checker) shapeFits(gn, wn TypeNode, fit func(got, want TypeId) bool) bool {
 	gFields := c.arena.shapeFields[gn.Extra]
 	wFields := c.arena.shapeFields[wn.Extra]
 	gi := 0
@@ -1595,7 +1610,7 @@ func (c *Checker) unifyShape(gn, wn TypeNode) bool {
 		if !wf.Optional && gFields[gi].Optional {
 			return false
 		}
-		if !c.unify(gFields[gi].Type, wf.Type) {
+		if !fit(gFields[gi].Type, wf.Type) {
 			return false
 		}
 		gi++

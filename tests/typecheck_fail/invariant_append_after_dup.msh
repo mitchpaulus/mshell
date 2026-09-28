@@ -1,0 +1,2 @@
+# Static: the dup keeps a [int] reference, so append cannot widen the list
+[1 2] dup "a" append drop len wl
