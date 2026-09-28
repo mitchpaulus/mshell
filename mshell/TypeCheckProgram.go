@@ -103,6 +103,7 @@ func (b *CheckerBase) NewChecker() *Checker {
 		errors:       slices.Clone(base.errors),
 		builtins:     base.builtins,
 		nameBuiltins: nameBuiltins,
+		goBuiltins:   base.goBuiltins,
 		typeEnv:      maps.Clone(base.typeEnv),
 	}
 }
@@ -336,7 +337,9 @@ func (c *Checker) checkDefBody(def *MShellDefinition) {
 	prevFn := c.currentFn
 	cp := c.subst.Checkpoint()
 
+	outerFresh := c.fresh
 	c.stack.items = nil
+	c.fresh = 0
 	c.vars.adopt(make(map[NameId]TypeId), make(map[NameId]TypeId))
 	c.diverged = false
 	c.inferring = false
@@ -376,6 +379,7 @@ func (c *Checker) checkDefBody(def *MShellDefinition) {
 	c.stack.items = outerStack
 	c.vars.adopt(outerVars, outerMaybeVars)
 	c.diverged = outerDiverged
+	c.fresh = outerFresh
 	c.inferring = outerInferring
 	c.inferInputs = outerInferInputs
 }
@@ -504,6 +508,57 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 	if c.diverged {
 		return
 	}
+	before := c.fresh
+	lenBefore := c.stack.Len()
+	spawnStart := len(c.branchSpawn)
+	c.fresh = 0
+	c.freshBefore = before
+	c.freshResult = false
+	c.checkParseItemStep(item)
+	c.freshBefore = 0
+	// A step that fanned out (container literals collect their bodies this
+	// way) left its outcomes in branchSpawn, captured before the mark was
+	// known; the live state is then discarded.
+	for i := spawnStart; i < len(c.branchSpawn); i++ {
+		b := &c.branchSpawn[i]
+		b.fresh = freshAfter(item, before, lenBefore, len(b.stack), b.diverged, false)
+	}
+	c.fresh = freshAfter(item, before, lenBefore, c.stack.Len(), c.diverged, c.freshResult)
+}
+
+// freshAfter computes the fresh mark (see Checker.fresh) after item ran,
+// given the mark and stack height before it and the outcome's stack height.
+// result reports that the step output the fresh receiver itself.
+func freshAfter(item MShellParseItem, before, lenBefore, lenAfter int, diverged, result bool) int {
+	if diverged {
+		return 0
+	}
+	pushedOne := lenAfter == lenBefore+1
+	switch it := item.(type) {
+	case *MShellParseList, *MShellParseDict:
+		if pushedOne {
+			return 1
+		}
+	case *MShellParseQuote:
+		if before > 0 && pushedOne {
+			return before + 1
+		}
+	case *MShellAsCast:
+		if before == 1 && lenAfter == lenBefore {
+			return 1
+		}
+	case Token:
+		if result {
+			return 1
+		}
+		if before > 0 && pushedOne && pushOnlyToken(it.Type) {
+			return before + 1
+		}
+	}
+	return 0
+}
+
+func (c *Checker) checkParseItemStep(item MShellParseItem) {
 	switch it := item.(type) {
 
 	case *MShellTypeDecl:
@@ -513,7 +568,7 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 	case *MShellAsCast:
 		target := c.resolveTypeExpr(it.Target, nil)
 		if target != TidNothing {
-			c.Cast(target, it.AsToken)
+			c.castTop(target, it.AsToken, c.freshBefore == 1)
 		}
 		return
 

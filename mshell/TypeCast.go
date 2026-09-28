@@ -126,6 +126,14 @@ func (c *Checker) brandify(nameId NameId, body TypeId) TypeId {
 // Going from a brand back to the underlying is also allowed by the same
 // rule, since the underlying unifies with itself.
 func (c *Checker) Cast(target TypeId, callSite Token) {
+	c.castTop(target, callSite, false)
+}
+
+// castTop is Cast, where fresh reports that the top of the stack is a
+// container nothing else references (see Checker.fresh). A fresh list or
+// dict may be widened: its element type only has to be a subtype of the
+// target's, rather than equal to it.
+func (c *Checker) castTop(target TypeId, callSite Token, fresh bool) {
 	if c.stack.Len() == 0 {
 		c.errors = append(c.errors, TypeError{
 			Kind: TErrStackUnderflow,
@@ -138,7 +146,7 @@ func (c *Checker) Cast(target TypeId, callSite Token) {
 	top := c.stack.items[len(c.stack.items)-1]
 	c.stack.items = c.stack.items[:len(c.stack.items)-1]
 
-	if c.castOk(top, target) {
+	if c.castOk(top, target) || (fresh && c.freshWidenOk(top, target)) {
 		c.stack.Push(target)
 		return
 	}
@@ -186,6 +194,29 @@ func (c *Checker) castOk(src, dst TypeId) bool {
 	c.subst.Rollback(cp)
 
 	return false
+}
+
+// freshWidenOk reports whether an unreferenced container of type src may be
+// re-typed as dst. Only the outer container widens: its element (or dict
+// key and value) type must be a subtype of dst's, and unify keeps any
+// containers nested inside invariant, since those may be referenced
+// elsewhere.
+func (c *Checker) freshWidenOk(src, dst TypeId) bool {
+	src = c.subst.Apply(c.arena, src)
+	dst = c.subst.Apply(c.arena, c.underlying(c.subst.Apply(c.arena, dst)))
+	sn, dn := c.arena.Node(src), c.arena.Node(dst)
+	cp := c.subst.Checkpoint()
+	ok := false
+	switch {
+	case sn.Kind == TKList && dn.Kind == TKList:
+		ok = c.unify(TypeId(sn.A), TypeId(dn.A))
+	case sn.Kind == TKDict && dn.Kind == TKDict:
+		ok = c.unify(TypeId(sn.A), TypeId(dn.A)) && c.unify(TypeId(sn.B), TypeId(dn.B))
+	}
+	if !ok {
+		c.subst.Rollback(cp)
+	}
+	return ok
 }
 
 // acceptsAs is a cast-compatibility check: is `src` valid where `dst` is

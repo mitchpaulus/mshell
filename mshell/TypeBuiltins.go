@@ -304,12 +304,13 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		"({v} -- int)",
 		"(str | path | Grid | GridView | GridRow -- int)",
 	)
-	r.reg("append",
-		"([t] t -- [t])",
-		"([t] u -- [t | u])",
-		"(t [t] -- [t])",
-		"(t [u] -- [t | u])",
-	)
+	// append mutates the list in place, so the element type cannot widen:
+	// other references to the list would still see the narrower type.
+	// The value-below-list order (`x [xs] append`) is handled by tryAppend,
+	// which can tell when the lower value is never a list; as a table
+	// entry it would be wrong whenever t is a list, since the runtime then
+	// appends the upper list into the lower one.
+	r.reg("append", "([t] t -- [t])")
 	r.reg("nth",
 		"([t] int -- t)",
 		"(int [t] -- t)",
