@@ -48,6 +48,8 @@ type quoteBranch struct {
 	inferInputs []TypeId
 	diverged    bool
 	inferring   bool
+	fresh       int
+	freshDeep   bool
 	substCp     SubstCheckpoint
 }
 
@@ -280,6 +282,8 @@ func (c *Checker) loadBranch(b quoteBranch) {
 	c.inferInputs = append([]TypeId(nil), b.inferInputs...)
 	c.diverged = b.diverged
 	c.inferring = b.inferring
+	c.fresh = b.fresh
+	c.freshDeep = b.freshDeep
 }
 
 // captureBranch reads the checker's current state into a quoteBranch
@@ -293,6 +297,8 @@ func (c *Checker) captureBranch() quoteBranch {
 		inferInputs: append([]TypeId(nil), c.inferInputs...),
 		diverged:    c.diverged,
 		inferring:   c.inferring,
+		fresh:       c.fresh,
+		freshDeep:   c.freshDeep,
 		substCp:     c.subst.Checkpoint(),
 	}
 }

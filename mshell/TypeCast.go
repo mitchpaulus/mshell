@@ -126,6 +126,16 @@ func (c *Checker) brandify(nameId NameId, body TypeId) TypeId {
 // Going from a brand back to the underlying is also allowed by the same
 // rule, since the underlying unifies with itself.
 func (c *Checker) Cast(target TypeId, callSite Token) {
+	c.castTop(target, callSite, false, false)
+}
+
+// castTop is Cast, where fresh reports that the top of the stack is a
+// container nothing else references (see Checker.fresh). A fresh list or
+// dict may be widened: its element type only has to be a subtype of the
+// target's, rather than equal to it. deep reports that the containers
+// nested inside it are unreferenced as well (see Checker.freshDeep), so
+// they widen too.
+func (c *Checker) castTop(target TypeId, callSite Token, fresh, deep bool) {
 	if c.stack.Len() == 0 {
 		c.errors = append(c.errors, TypeError{
 			Kind: TErrStackUnderflow,
@@ -138,7 +148,7 @@ func (c *Checker) Cast(target TypeId, callSite Token) {
 	top := c.stack.items[len(c.stack.items)-1]
 	c.stack.items = c.stack.items[:len(c.stack.items)-1]
 
-	if c.castOk(top, target) {
+	if c.castOk(top, target) || (fresh && c.freshWidenOk(top, target, deep)) {
 		c.stack.Push(target)
 		return
 	}
@@ -185,6 +195,87 @@ func (c *Checker) castOk(src, dst TypeId) bool {
 	}
 	c.subst.Rollback(cp)
 
+	return false
+}
+
+// freshWidenOk reports whether an unreferenced container of type src may be
+// re-typed as dst. Its element (or dict key and value) type must be a
+// subtype of dst's. Unless deep is set, unify keeps any containers nested
+// inside invariant, since those may be referenced elsewhere; with deep set
+// they are known to be unreferenced too and widen the same way.
+func (c *Checker) freshWidenOk(src, dst TypeId, deep bool) bool {
+	cp := c.subst.Checkpoint()
+	ok := c.widenContainer(src, dst, deep)
+	if !ok {
+		c.subst.Rollback(cp)
+	}
+	return ok
+}
+
+// widenContainer is freshWidenOk without the rollback.
+func (c *Checker) widenContainer(src, dst TypeId, deep bool) bool {
+	src = c.subst.Apply(c.arena, src)
+	dst = c.subst.Apply(c.arena, c.underlying(c.subst.Apply(c.arena, dst)))
+	sn, dn := c.arena.Node(src), c.arena.Node(dst)
+	elem := c.unify
+	if deep {
+		elem = c.widenElem
+	}
+	switch {
+	case sn.Kind == TKList && dn.Kind == TKList:
+		return elem(TypeId(sn.A), TypeId(dn.A))
+	case sn.Kind == TKDict && dn.Kind == TKDict:
+		return elem(TypeId(sn.A), TypeId(dn.A)) && elem(TypeId(sn.B), TypeId(dn.B))
+	case sn.Kind == TKShape && dn.Kind == TKShape:
+		return c.shapeFits(sn, dn, elem)
+	case sn.Kind == TKShape && dn.Kind == TKDict:
+		if !c.unify(TidStr, TypeId(dn.A)) {
+			return false
+		}
+		for _, field := range c.arena.shapeFields[sn.Extra] {
+			if !elem(field.Type, TypeId(dn.B)) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// widenElem reports whether an element of type src fits where dst is
+// expected, given that any container in src is unreferenced and so may
+// itself widen. Each arm of a union src must fit on its own, and a
+// container may match the arm of a union dst of the same kind.
+func (c *Checker) widenElem(src, dst TypeId) bool {
+	cp := c.subst.Checkpoint()
+	if c.unify(src, dst) {
+		return true
+	}
+	c.subst.Rollback(cp)
+
+	src = c.subst.Apply(c.arena, src)
+	sn := c.arena.Node(src)
+	switch sn.Kind {
+	case TKUnion:
+		for _, arm := range c.arena.unionMembers[sn.Extra] {
+			if !c.widenElem(arm, dst) {
+				return false
+			}
+		}
+		return true
+	case TKList, TKDict, TKShape:
+		dstU := c.subst.Apply(c.arena, c.underlying(c.subst.Apply(c.arena, dst)))
+		dn := c.arena.Node(dstU)
+		if dn.Kind != TKUnion {
+			return c.widenContainer(src, dstU, true)
+		}
+		for _, arm := range c.arena.unionMembers[dn.Extra] {
+			if c.widenContainer(src, arm, true) {
+				return true
+			}
+			c.subst.Rollback(cp)
+		}
+	}
 	return false
 }
 

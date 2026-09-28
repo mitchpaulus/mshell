@@ -1,0 +1,3 @@
+# Static: a definition may return a referenced list, so the nested list cannot widen
+def mk (-- [str]) ["a"] end
+[mk [1]] as [[int | str]] len wl

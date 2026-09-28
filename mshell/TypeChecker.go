@@ -140,6 +140,9 @@ type Checker struct {
 
 	builtins     map[TokenType][]QuoteSig
 	nameBuiltins map[NameId][]QuoteSig
+	// goBuiltins holds the names in nameBuiltins that are implemented in
+	// Go, as opposed to stdlib and user defs registered alongside them.
+	goBuiltins map[NameId]struct{}
 
 	// typeEnv holds named type declarations (Phase 5). Built-in / reserved
 	// type names are NOT stored here — they are recognized directly.
@@ -169,18 +172,196 @@ type Checker struct {
 	// being reported as an unknown identifier when listDepth > 0.
 	listDepth int
 
+	// readOnlyArgs is set while a builtin that does not mutate its
+	// arguments is being resolved. Container element slots then accept a
+	// subtype (a [int] where [int | str] is expected), since nothing can be
+	// written through that view. See unifyInvariant.
+	readOnlyArgs bool
+
+	// fresh records a stack slot holding a container that nothing else
+	// references: 0 means none, n means the slot n-1 below the top. Only
+	// such a slot may have its element type widened (by `append` or `as`),
+	// because no other reference exists to keep seeing the old type.
+	//
+	// The invariant is kept by construction. A list or dict literal
+	// evaluates to a new object on every run, and its body runs on its own
+	// stack, so the pushed value is unreferenced. The mark then survives
+	// only steps that push exactly one value without reading the stack:
+	// scalar literals, `@name`, `$VAR`, and quote literals. A new container
+	// literal moves the mark to itself. Every other step clears it,
+	// including anything that could copy the reference (`dup`, a store, a
+	// call). See checkParseItem.
+	fresh int
+	// freshDeep reports that every container nested inside the fresh slot
+	// is unreferenced too, so `as` may widen them as well. It holds when
+	// the slot came from a literal whose nested containers are all
+	// literals themselves (see deepFreshLiteral).
+	freshDeep bool
+	// freshBefore is the fresh mark as it stood when the current parse item
+	// started; the append and `as` handlers read it.
+	freshBefore int
+	// freshDeepBefore is freshDeep as it stood when the current parse item
+	// started.
+	freshDeepBefore bool
+	// freshResult is set by a step whose output is the fresh receiver
+	// itself, so the mark moves to the new top.
+	freshResult bool
+
 	currentFn *FnContext
+}
+
+// mutatingBuiltins are the builtins that modify a list or dict argument in
+// place. Every other builtin only reads its container arguments (or builds
+// new ones), so its inputs are checked covariantly.
+var mutatingBuiltins = map[string]struct{}{
+	"append": {},
+	"extend": {},
+	"setAt":  {},
+	"insert": {},
+	"del":    {},
+	"pop":    {},
+	"set":    {},
+	"setd":   {},
+}
+
+// tryAppend checks `append` when both operand kinds are known, mirroring
+// the runtime's choice of receiver: with two lists the lower one receives
+// the upper; with one list, that list receives the other value. The element
+// must fit the receiver's element type, except that a fresh receiver (see
+// Checker.fresh) widens to the union instead. Returns false to fall back to
+// the overload table when the kinds are not yet known.
+func (c *Checker) tryAppend(tok Token) bool {
+	n := c.stack.Len()
+	if n == 1 && c.inferring {
+		// In a quote body the lower operand is a quote input not yet on
+		// the stack. When the list's elements can never be lists, the
+		// input is the element (see the unbound-var case below), so
+		// synthesize it the way applySig would.
+		top := c.subst.Apply(c.arena, c.stack.items[0])
+		if c.arena.Kind(top) != TKList || !c.neverList(TypeId(c.arena.Node(top).A)) {
+			return false
+		}
+		in := c.subst.FreshVar(c.arena)
+		c.inferInputs = append([]TypeId{in}, c.inferInputs...)
+		// The fresh mark counts from the top, so growing the stack at
+		// the bottom leaves it pointing at the same slot.
+		c.stack.items = append([]TypeId{in}, c.stack.items...)
+		n = 2
+	}
+	if n < 2 {
+		return false
+	}
+	top := c.subst.Apply(c.arena, c.stack.items[n-1])
+	below := c.subst.Apply(c.arena, c.stack.items[n-2])
+	topKind, belowKind := c.arena.Kind(top), c.arena.Kind(below)
+
+	var receiver, elem TypeId
+	var receiverDepth, elemArg int
+	switch {
+	case belowKind == TKList:
+		// Covers two lists as well: the lower list receives the upper.
+		receiver, elem, receiverDepth, elemArg = below, top, 1, 1
+	case topKind == TKList && c.neverList(below):
+		receiver, elem, receiverDepth, elemArg = top, below, 0, 0
+	case topKind == TKList && belowKind == TKVar && c.neverList(TypeId(c.arena.Node(top).A)):
+		// The lower operand is still unknown. Binding it to the element
+		// type pins it to a non-list, which fixes the runtime's choice of
+		// the upper list as receiver. No widening: a var bound this way can
+		// never be what forces a fresh receiver to grow.
+		receiver, elem, receiverDepth, elemArg = top, below, 0, 0
+	default:
+		return false
+	}
+
+	elemType := TypeId(c.arena.Node(receiver).A)
+	fresh := c.freshBefore == receiverDepth+1
+	result := receiver
+	cp := c.subst.Checkpoint()
+	if !c.unify(elem, elemType) {
+		c.subst.Rollback(cp)
+		if fresh {
+			result = c.arena.MakeList(c.arena.MakeUnion([]TypeId{elemType, elem}, 0))
+		} else {
+			c.errors = append(c.errors, TypeError{
+				Kind:     TErrTypeMismatch,
+				Pos:      tok,
+				Expected: elemType,
+				Actual:   elem,
+				ArgIndex: elemArg,
+				Hint:     "append modifies the list in place, so its element type cannot widen; annotate the list literal with `as`",
+			})
+		}
+	}
+	c.stack.items = c.stack.items[:n-2]
+	c.stack.Push(c.subst.Apply(c.arena, result))
+	c.freshResult = fresh
+	return true
+}
+
+// isNonListKind reports whether a value of kind k can never be a list at
+// runtime.
+func isNonListKind(k TypeKind) bool {
+	switch k {
+	case TKList, TKVar, TKRigid, TKUnion, TKBrand:
+		return false
+	}
+	return true
+}
+
+// neverList reports whether no value of type t can be a list at runtime.
+func (c *Checker) neverList(t TypeId) bool {
+	t = c.subst.Apply(c.arena, t)
+	n := c.arena.Node(t)
+	switch n.Kind {
+	case TKUnion:
+		for _, arm := range c.arena.unionMembers[n.Extra] {
+			if !c.neverList(arm) {
+				return false
+			}
+		}
+		return true
+	case TKBrand:
+		return c.neverList(TypeId(n.B))
+	}
+	return isNonListKind(n.Kind)
+}
+
+// pushOnlyToken reports whether a token pushes exactly one value without
+// reading the stack, so a fresh slot beneath it stays unreferenced.
+func pushOnlyToken(t TokenType) bool {
+	switch t {
+	case INTEGER, FLOAT, STRING, SINGLEQUOTESTRING, TRUE, FALSE, FORMATSTRING,
+		PATH, DATETIME, VARRETRIEVE, ENVRETREIVE, ENVCHECK:
+		return true
+	}
+	return false
+}
+
+// resolveBuiltin dispatches a builtin call, checking container arguments
+// covariantly unless the builtin mutates them.
+func (c *Checker) resolveBuiltin(name string, sigs []QuoteSig, callSite Token) {
+	_, mutates := mutatingBuiltins[name]
+	saved := c.readOnlyArgs
+	c.readOnlyArgs = !mutates
+	c.resolveAndApply(sigs, callSite)
+	c.readOnlyArgs = saved
 }
 
 // NewChecker constructs a fresh checker with the given arena and name table.
 // The builtin sig table is built once here.
 func NewChecker(arena *TypeArena, names *NameTable) *Checker {
+	nameBuiltins := builtinSigsByName(arena, names)
+	goBuiltins := make(map[NameId]struct{}, len(nameBuiltins))
+	for id := range nameBuiltins {
+		goBuiltins[id] = struct{}{}
+	}
 	return &Checker{
 		arena:        arena,
 		names:        names,
 		vars:         NewVarEnv(),
 		builtins:     builtinSigsByToken(arena, names),
-		nameBuiltins: builtinSigsByName(arena, names),
+		nameBuiltins: nameBuiltins,
+		goBuiltins:   goBuiltins,
 	}
 }
 
@@ -412,7 +593,7 @@ func (c *Checker) checkOne(tok Token) {
 				return
 			}
 		}
-		c.resolveAndApply(sigs, tok)
+		c.resolveBuiltin(tok.Lexeme, sigs, tok)
 		return
 	}
 
@@ -438,7 +619,14 @@ func (c *Checker) checkOne(tok Token) {
 		}
 		nameId := c.names.Intern(tok.Lexeme)
 		if sigs, ok := c.nameBuiltins[nameId]; ok {
-			c.resolveAndApply(sigs, tok)
+			if _, isGo := c.goBuiltins[nameId]; isGo {
+				if tok.Lexeme == "append" && c.tryAppend(tok) {
+					return
+				}
+				c.resolveBuiltin(tok.Lexeme, sigs, tok)
+			} else {
+				c.resolveAndApply(sigs, tok)
+			}
 			return
 		}
 	}
@@ -817,7 +1005,7 @@ func (c *Checker) tryPivot(tok Token) bool {
 			}
 		}
 	}
-	c.resolveAndApply(sigs, tok)
+	c.resolveBuiltin("pivot", sigs, tok)
 	for _, out := range quoteOutputs {
 		resolved := c.subst.Apply(c.arena, out)
 		if isContainerKind(c.arena.Kind(resolved)) {
@@ -1278,10 +1466,12 @@ func (c *Checker) unify(got, want TypeId) bool {
 	}
 
 	switch gn.Kind {
-	case TKMaybe, TKList:
+	case TKMaybe:
 		return c.unify(TypeId(gn.A), TypeId(wn.A))
+	case TKList:
+		return c.unifyInvariant(TypeId(gn.A), TypeId(wn.A))
 	case TKDict:
-		return c.unify(TypeId(gn.A), TypeId(wn.A)) && c.unify(TypeId(gn.B), TypeId(wn.B))
+		return c.unifyInvariant(TypeId(gn.A), TypeId(wn.A)) && c.unifyInvariant(TypeId(gn.B), TypeId(wn.B))
 	case TKShape:
 		return c.unifyShape(gn, wn)
 	case TKUnion:
@@ -1309,6 +1499,17 @@ func (c *Checker) unify(got, want TypeId) bool {
 		return false
 	}
 	return false
+}
+
+// unifyInvariant requires a and b to be the same type, for the element
+// slots of containers that can be mutated in place. Accepting a subtype
+// there is unsound: a [int] seen as [int | str] could have a str appended
+// through one reference while another still reads it as [int].
+func (c *Checker) unifyInvariant(a, b TypeId) bool {
+	if c.readOnlyArgs {
+		return c.unify(a, b)
+	}
+	return c.unify(a, b) && c.unify(b, a)
 }
 
 func (c *Checker) unifyOverloadedQuoteToQuote(overNode TypeNode, quote TypeId) bool {
@@ -1382,6 +1583,12 @@ func (c *Checker) unifyTypeToUnion(got TypeId, wn TypeNode) bool {
 // lists are pre-sorted by NameId (see normalizeShapeFields), so the merge is
 // linear.
 func (c *Checker) unifyShape(gn, wn TypeNode) bool {
+	return c.shapeFits(gn, wn, c.unify)
+}
+
+// shapeFits is unifyShape with the check on each shared field's value type
+// supplied by fit.
+func (c *Checker) shapeFits(gn, wn TypeNode, fit func(got, want TypeId) bool) bool {
 	gFields := c.arena.shapeFields[gn.Extra]
 	wFields := c.arena.shapeFields[wn.Extra]
 	gi := 0
@@ -1403,7 +1610,7 @@ func (c *Checker) unifyShape(gn, wn TypeNode) bool {
 		if !wf.Optional && gFields[gi].Optional {
 			return false
 		}
-		if !c.unify(gFields[gi].Type, wf.Type) {
+		if !fit(gFields[gi].Type, wf.Type) {
 			return false
 		}
 		gi++
@@ -1448,6 +1655,11 @@ func (c *Checker) unifyUnion(gn, wn TypeNode) bool {
 // no-op, matching the protocol that hand-written and inferred sigs
 // alike obey.
 func (c *Checker) unifyQuote(gn, wn TypeNode) bool {
+	// A quote argument can receive and keep references, so a read-only
+	// caller does not make its parameters read-only.
+	saved := c.readOnlyArgs
+	c.readOnlyArgs = false
+	defer func() { c.readOnlyArgs = saved }()
 	gs := c.Instantiate(c.arena.quoteSigs[gn.Extra])
 	ws := c.Instantiate(c.arena.quoteSigs[wn.Extra])
 	if len(gs.Inputs) != len(ws.Inputs) || len(gs.Outputs) != len(ws.Outputs) {

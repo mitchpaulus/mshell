@@ -1,0 +1,3 @@
+# Static: the definition may append a str to a list the caller still reads as [int]
+def addStr ([int | str] -- ) "a" append drop end
+[1] dup addStr len wl
