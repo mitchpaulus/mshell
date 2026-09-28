@@ -302,3 +302,78 @@ func TestEnterSelectedWindowsVolumeSwitchesCurrentDirectory(t *testing.T) {
 		t.Fatal("expected volume list to close after selecting a volume")
 	}
 }
+
+// feedInput sends input to the file manager in reads of at most 16 bytes,
+// the size the main loop reads.
+func feedInput(fm *FileManager, input string) {
+	for len(input) > 0 {
+		n := min(16, len(input))
+		fm.handleInput([]byte(input[:n]), n)
+		input = input[n:]
+	}
+}
+
+func TestHandleInputIgnoresLateTerminalReplies(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	clipboard, err := clipboardFilePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(clipboard, []byte("copy\t/some/file\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	fm := &FileManager{
+		rows:      20,
+		cols:      80,
+		entries:   []os.DirEntry{testDirEntry{name: "a"}, testDirEntry{name: "b"}, testDirEntry{name: "c"}},
+		statusMsg: "keep me",
+	}
+
+	// The replies to the startup queries, as Windows Terminal sends them,
+	// arriving after startup stopped waiting.
+	feedInput(fm, "\x1b[6;20;10t\x1b[4;1340;1550t\x1b[?61;4;6;7;14;21;22;23;24;28;32;42;52c")
+
+	if fm.cursor != 0 {
+		t.Fatalf("cursor moved to %d", fm.cursor)
+	}
+	if fm.statusMsg != "keep me" {
+		t.Fatalf("status message changed to %q", fm.statusMsg)
+	}
+	if _, err := os.Stat(clipboard); err != nil {
+		t.Fatalf("clipboard was cleared: %v", err)
+	}
+	if len(fm.pendingInput) != 0 {
+		t.Fatalf("left %q waiting", fm.pendingInput)
+	}
+
+	// Keys after the replies still work.
+	feedInput(fm, "j")
+	if fm.cursor != 1 {
+		t.Fatalf("cursor = %d after j, want 1", fm.cursor)
+	}
+}
+
+func TestHandleInputJoinsSplitKeySequence(t *testing.T) {
+	fm := &FileManager{
+		rows:    20,
+		cols:    80,
+		entries: []os.DirEntry{testDirEntry{name: "a"}, testDirEntry{name: "b"}},
+	}
+	fm.handleInput([]byte("\x1b["), 2)
+	if fm.cursor != 0 {
+		t.Fatal("acted on half of a key sequence")
+	}
+	fm.handleInput([]byte("B"), 1) // down arrow
+	if fm.cursor != 1 {
+		t.Fatalf("cursor = %d after a split down arrow, want 1", fm.cursor)
+	}
+}
+
+func TestHandleInputDoesNotWaitForeverOnUnfinishedSequence(t *testing.T) {
+	fm := &FileManager{rows: 20, cols: 80}
+	feedInput(fm, "\x1b["+strings.Repeat("1;", maxPendingEscapeBytes))
+	if len(fm.pendingInput) >= maxPendingEscapeBytes {
+		t.Fatalf("kept %d bytes waiting", len(fm.pendingInput))
+	}
+}

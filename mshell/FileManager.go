@@ -228,6 +228,10 @@ type FileManager struct {
 
 	sixel sixelTerminal // whether and how images can be drawn
 
+	// The start of an escape sequence cut off at the end of the last read,
+	// kept until the rest arrives.
+	pendingInput []byte
+
 	// Search state
 	searching    bool   // true when typing a search query
 	searchQuery  []rune // current search input
@@ -1867,9 +1871,22 @@ func (fm *FileManager) handleInput(buf []byte, n int) bool {
 	fm.renderMu.Lock()
 	defer fm.renderMu.Unlock()
 
-	fm.statusMsg = ""
-	for i := 0; i < n; {
-		consumed, quit := fm.handleInputEvent(buf[i:n])
+	input := append(fm.pendingInput, buf[:n]...)
+	fm.pendingInput = nil
+	for i := 0; i < len(input); {
+		length, complete := csiSequenceLength(input[i:])
+		if !complete {
+			// Wait for the rest of the sequence.
+			fm.pendingInput = append([]byte(nil), input[i:]...)
+			break
+		}
+		if isTerminalReply(input[i : i+length]) {
+			i += length
+			continue
+		}
+
+		fm.statusMsg = ""
+		consumed, quit := fm.handleInputEvent(input[i:])
 		if quit {
 			return true
 		}
@@ -1879,6 +1896,48 @@ func (fm *FileManager) handleInput(buf []byte, n int) bool {
 		i += consumed
 	}
 	return false
+}
+
+// maxPendingEscapeBytes bounds how much of an unfinished escape sequence is
+// kept waiting for the rest. Terminal replies and key sequences are far
+// shorter.
+const maxPendingEscapeBytes = 256
+
+// csiSequenceLength returns the length of the CSI sequence (ESC [ ...)
+// at the start of input, or 1 if input does not start with one. complete is
+// false when input ends before the sequence does. A sequence longer than
+// maxPendingEscapeBytes counts as complete, so it is never kept waiting.
+func csiSequenceLength(input []byte) (length int, complete bool) {
+	if len(input) < 2 || input[0] != 0x1b || input[1] != '[' {
+		return 1, true
+	}
+	for i := 2; i < len(input); i++ {
+		b := input[i]
+		if b >= 0x40 && b <= 0x7e { // final byte
+			return i + 1, true
+		}
+		if b < 0x20 || b > 0x3f { // not a parameter or intermediate byte
+			return 1, true
+		}
+	}
+	if len(input) >= maxPendingEscapeBytes {
+		return 1, true
+	}
+	return len(input), false
+}
+
+// isTerminalReply reports whether seq, a complete CSI sequence, is one of
+// the terminal's replies to the queries sent when the file manager starts:
+// device attributes (ESC [ ? ... c) or a size (ESC [ ... t). A reply that
+// arrives after startup stops waiting for it must not be taken as keys; the
+// 'c' at the end of the device attributes reply would clear the clipboard.
+// No key sends a CSI sequence ending in 'c' or 't'.
+func isTerminalReply(seq []byte) bool {
+	if len(seq) < 3 || seq[0] != 0x1b || seq[1] != '[' {
+		return false
+	}
+	final := seq[len(seq)-1]
+	return final == 'c' || final == 't'
 }
 
 func (fm *FileManager) handleInputEvent(buf []byte) (int, bool) {

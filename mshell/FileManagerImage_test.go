@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseSixelRepliesWindowsTerminal(t *testing.T) {
@@ -661,5 +662,89 @@ func TestImagePreviewSizeIsCapped(t *testing.T) {
 	w, h := fm.imagePreviewSize()
 	if w != maxImageSide || h != maxImageSide {
 		t.Fatalf("got %dx%d, want %dx%d", w, h, maxImageSide, maxImageSide)
+	}
+}
+
+func TestCollectTerminalRepliesStopsAfterMaxWaits(t *testing.T) {
+	// Waits that end at once with nothing read, as from a stream of signals
+	// or console events that are not keys, with no time passing.
+	calls := 0
+	reply := collectTerminalReplies(time.Hour, func(time.Duration) ([]byte, bool) {
+		calls++
+		return nil, true
+	})
+	if reply != nil || calls != maxTerminalQueryWaits {
+		t.Fatalf("got %q after %d waits, want nothing after %d", reply, calls, maxTerminalQueryWaits)
+	}
+}
+
+func TestCollectTerminalRepliesStopsAfterMaxBytes(t *testing.T) {
+	calls := 0
+	reply := collectTerminalReplies(time.Hour, func(time.Duration) ([]byte, bool) {
+		calls++
+		return bytes.Repeat([]byte("x"), 100), true
+	})
+	if len(reply) < maxTerminalReplyBytes || len(reply) >= maxTerminalReplyBytes+100 {
+		t.Fatalf("read %d bytes", len(reply))
+	}
+}
+
+func TestCollectTerminalRepliesStopsWhenInputFails(t *testing.T) {
+	calls := 0
+	collectTerminalReplies(time.Hour, func(time.Duration) ([]byte, bool) {
+		calls++
+		return nil, false
+	})
+	if calls != 1 {
+		t.Fatalf("waited %d times after the input failed", calls)
+	}
+}
+
+func TestCollectTerminalRepliesStopsAtDA1(t *testing.T) {
+	pieces := []string{"\x1b[6;20;10t\x1b[?6", "1;4;6", "c", "never read"}
+	calls := 0
+	reply := collectTerminalReplies(time.Hour, func(time.Duration) ([]byte, bool) {
+		calls++
+		return []byte(pieces[calls-1]), true
+	})
+	if string(reply) != "\x1b[6;20;10t\x1b[?61;4;6c" || calls != 3 {
+		t.Fatalf("got %q after %d reads", reply, calls)
+	}
+}
+
+func TestCollectTerminalRepliesNeverWaitsPastDeadline(t *testing.T) {
+	const timeout = 200 * time.Millisecond
+	start := time.Now()
+	collectTerminalReplies(timeout, func(wait time.Duration) ([]byte, bool) {
+		// The loop works out the time left a moment before this measures
+		// it, so allow for the time between the two.
+		if left := timeout - time.Since(start); wait > left+time.Millisecond {
+			t.Errorf("asked to wait %s with %s left", wait, left)
+		}
+		// Each wait ends early with nothing, like an interrupted wait.
+		time.Sleep(min(wait, 15*time.Millisecond))
+		return nil, true
+	})
+	if elapsed := time.Since(start); elapsed < timeout || elapsed > timeout+100*time.Millisecond {
+		t.Fatalf("took %s, want about %s", elapsed, timeout)
+	}
+}
+
+func TestWaitMilliseconds(t *testing.T) {
+	for _, tc := range []struct {
+		wait time.Duration
+		want int
+	}{
+		{0, 0},
+		{-time.Second, 0},
+		{time.Microsecond, 1},
+		{time.Millisecond, 1},
+		{time.Millisecond + 1, 2},
+		{time.Second, 1000},
+		{1000 * time.Hour, math.MaxInt32},
+	} {
+		if got := waitMilliseconds(tc.wait); got != tc.want {
+			t.Errorf("waitMilliseconds(%s) = %d, want %d", tc.wait, got, tc.want)
+		}
 	}
 }

@@ -55,6 +55,11 @@ const (
 	// maxTerminalReplyBytes stops reading replies from a terminal that keeps
 	// sending without ever answering DA1.
 	maxTerminalReplyBytes = 4096
+	// maxTerminalQueryWaits bounds the waits for replies. Each wait normally
+	// ends with input or the deadline, so a few are enough; this only
+	// matters if waits keep ending at once with nothing read, such as from
+	// a stream of signals or console events that are not keys.
+	maxTerminalQueryWaits = 10_000
 	// maxCellPixels is the largest cell width or height accepted, from the
 	// terminal or from MSH_CELL_PIXELS.
 	maxCellPixels = 256
@@ -90,20 +95,9 @@ func detectSixel(out *os.File, inFd int, cols int, rows int) sixelTerminal {
 		return sixelTerminal{}
 	}
 
-	var reply []byte
-	buf := make([]byte, 256)
-	deadline := time.Now().Add(terminalQueryTimeout)
-	for !hasDA1Reply(reply) && len(reply) < maxTerminalReplyBytes {
-		remaining := time.Until(deadline)
-		if remaining <= 0 || !waitForInput(inFd, remaining) {
-			break
-		}
-		n, err := os.Stdin.Read(buf)
-		if err != nil || n == 0 {
-			break
-		}
-		reply = append(reply, buf[:n]...)
-	}
+	reply := collectTerminalReplies(terminalQueryTimeout, func(wait time.Duration) ([]byte, bool) {
+		return readTerminalInput(inFd, wait)
+	})
 
 	result := parseSixelReplies(string(reply), cols, rows)
 	if result.supported && result.cellW == 0 {
@@ -113,6 +107,41 @@ func detectSixel(out *os.File, inFd int, cols int, rows int) sixelTerminal {
 		}
 	}
 	return result
+}
+
+// collectTerminalReplies reads replies until the DA1 reply has arrived,
+// maxTerminalReplyBytes were read, timeout has passed, or
+// maxTerminalQueryWaits waits were made. read waits at most the given time
+// for input and returns what it read, which is empty if nothing arrived. It
+// returns false when the input is closed or broken.
+//
+// The time left is worked out before every wait, so no wait runs past the
+// deadline. ai/terminal-query/TerminalQuery.tla models this loop.
+func collectTerminalReplies(timeout time.Duration, read func(wait time.Duration) ([]byte, bool)) []byte {
+	var reply []byte
+	deadline := time.Now().Add(timeout)
+	for waits := 0; waits < maxTerminalQueryWaits; waits++ {
+		if hasDA1Reply(reply) || len(reply) >= maxTerminalReplyBytes {
+			break
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+		input, ok := read(remaining)
+		if !ok {
+			break
+		}
+		reply = append(reply, input...)
+	}
+	return reply
+}
+
+// waitMilliseconds converts a wait to whole milliseconds for the system
+// calls, rounding up so a wait of under a millisecond still waits.
+func waitMilliseconds(wait time.Duration) int {
+	ms := (wait + time.Millisecond - 1) / time.Millisecond
+	return int(min(max(ms, 0), math.MaxInt32))
 }
 
 // applyCellPixelsSetting applies the MSH_CELL_PIXELS setting, if set, and

@@ -8,16 +8,40 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// waitForInput reports whether fd has input to read within timeout.
-func waitForInput(fd int, timeout time.Duration) bool {
+// readTerminalInput waits at most wait for input on fd and returns what can
+// be read without blocking. It returns nothing, and true, if the wait timed
+// out or a signal interrupted it; the caller works out the time left and
+// waits again. It returns false if the terminal hung up or failed.
+//
+// It reads fd directly, the same descriptor poll watched, so input poll
+// reports is there to read and the read returns at once. That holds while
+// nothing else in the process reads the terminal at the same time, which is
+// the case while the file manager starts.
+func readTerminalInput(fd int, wait time.Duration) ([]byte, bool) {
 	fds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
-	for {
-		n, err := unix.Poll(fds, int(timeout.Milliseconds()))
-		if err == unix.EINTR {
-			continue
-		}
-		return err == nil && n > 0
+	n, err := unix.Poll(fds, waitMilliseconds(wait))
+	if err == unix.EINTR {
+		return nil, true
 	}
+	if err != nil {
+		return nil, false
+	}
+	if n == 0 {
+		return nil, true // timed out
+	}
+	if fds[0].Revents&unix.POLLIN == 0 {
+		return nil, false // hung up, failed, or not open
+	}
+
+	buf := make([]byte, 256)
+	n, err = unix.Read(fd, buf)
+	if err == unix.EINTR || err == unix.EAGAIN {
+		return nil, true
+	}
+	if err != nil || n <= 0 {
+		return nil, false
+	}
+	return buf[:n], true
 }
 
 // windowPixelCellSize returns the cell size from the pixel size the terminal
