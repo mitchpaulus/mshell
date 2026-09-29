@@ -56,7 +56,7 @@ Everything else (`Invariant.v` onward) is proof and cannot make the theorem say 
 | Typing rules, break/continue/return contexts | `TW` / `T` in `Typing.v` |
 | Kind patterns, abstract types | `tw_kind` (`kind_then`/`kind_else`), `tw_kind_list` (arm checked for every element type) |
 | `tryAs` (in place, never copies) | `tw_try_dp` / `tw_try_sub` / `tw_try_imm`; `validate` in `Interp.v` |
-| `copy` (explicit, result fresh) | `tw_copy`; `dcopy` in `Interp.v`; `dcopy_fresh` in `Copy.v`; `inv_alloc_region` in `InvOps.v` |
+| `deepCopy` (explicit, result fresh; `WCopy` in the model) | `tw_copy`; `dcopy` in `Interp.v`; `dcopy_fresh` in `Copy.v`; `inv_alloc_region` in `InvOps.v` |
 | Type-changing updates of fresh values | `tw_setk_dp`, `tw_del_dp` |
 | `never` | `TQuote ins None`; `tw_exec_never`, `tw_call_never`, `tw_loop_forever` |
 | Store typing, freshness, commit | `vtyped`, `dtyped`, `inv` in `Invariant.v`; `commit_all` in `Commit.v` |
