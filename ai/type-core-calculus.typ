@@ -51,7 +51,7 @@
 #align(center)[
   #text(size: 20pt, weight: "bold")[A Core Calculus for mshell Types]
   #v(0.3em)
-  #text(size: 11pt)[Draft for review --- revised 2026-09-28]
+  #text(size: 11pt)[Draft for review --- revised 2026-09-28, checked against the Rocq development in `formal-ver/`]
   #v(0.2em)
   #text(size: 10pt, style: "italic")[Written by Claude from a review of the checker on `main` (b511d9b)
   and the decisions in `ai/type-checker-enhancements-design.md`]
@@ -77,6 +77,13 @@
   That rule closes the hole the recorded design had accepted (narrowing an aliased container twice),
   and it fixes redirects, `updateCol` and `tryAs` with the same mechanism.
   The goal is *no known unsoundness at all*: every counterexample is either a type error or a proof case.
+
+  *Mechanized.* The core is formalized in Rocq in `formal-ver/`, with a machine-checked soundness
+  theorem that depends on no axioms (@sec-mech). Formalizing it found three holes in the previous
+  draft, and each has a runnable counterexample: a runtime-key `get` on a shape (@sec-dyn-key),
+  an abstract type escaping its pattern arm (@sec-unknown), and a shape literal marked fresh
+  around a shared value (@sec-fresh). Those rules are corrected below. Rules the proof showed to be
+  stricter than soundness needs are marked as usability choices.
 ]
 
 #outline(depth: 2, indent: auto)
@@ -360,6 +367,12 @@ What this buys:
 - *No ambiguous values.* Without the rule, `[]` is both an `[int]` and a `[str]`, and the checker
   would have to validate every element to decide which member it holds.
 
+*This is a usability rule, not a soundness rule.* The mechanized core does not assume it: a kind
+pattern there binds the union of _every_ member of the tested kind (`kind_then` in `Typing.v`), which
+is sound for any union. With distinct kinds that union is the single member, which is what makes the
+binding writable and useful. So the rule can be relaxed later without revisiting soundness, as long
+as a pattern on a same-kind union binds the whole same-kind part.
+
 == Unknown contents are abstract types <sec-unknown>
 
 Several operations learn a value's _kind_ but not its contents:
@@ -379,6 +392,39 @@ not a `str`, and a different pattern gives a different $k'$. Narrowing uses `is`
 
 This is why a kind pattern cannot be used to break an alias: `xs` can only receive values that came
 out of `xs`. The recorded design's "internal unknown type" is exactly this, stated as a rule.
+
+*$k$ must not escape its arm (corrected).* The previous draft introduced "a fresh $k$" per pattern
+without saying how long $k$ lives. In a static checker $k$ belongs to the pattern _site_. If $k$ can
+outlive one run of the arm, the site binds lists with different element types on different runs,
+and they all share one $k$. That is unsound:
+
+```
+[] acc!                                   # acc : [α], α a type variable
+@keys (key!
+    @o @key getd ? match list xs :        # xs : [k], k fixed for this site
+        @acc len 0 > if @xs @acc 0 getAt append drop end   # writes an old k into xs
+        @xs 0 getAt @acc swap append drop  # α := k, so acc : [k]
+    end) each
+```
+
+On the first run `acc` receives an element of one list; on the second run that element is appended
+to a different list with another element type. The rule the proof uses is: *the arm is checked for
+every element type* (`tw_kind_list` in `Typing.v`: $forall a.$ arm $: sigma space ty("List") a -> sigma'$).
+For the checker this means a skolem escape check:
+
+- $k$ may not appear in the arm's output stack type $sigma'$;
+- $k$ may not appear in the type of any variable, since $Gamma$ is per scope and outlives the arm;
+- no type variable created outside the arm may be unified with a type containing $k$
+  (the `acc` above). This is the standard level check for existential unpacking.
+
+`Examples.v` (`hole_exists`) runs the smallest version of this program: it types the arm for
+one fixed element type and gets stuck in the interpreter.
+
+*Dict-kind patterns on unknown values.* `@v match dict d : ...` with $v : k_0$ cannot bind
+$d : {"str": k}$: the object may be a shape, and a `Dict` view could then write one field's value
+into another field. It binds $d : {| "open"}$, the read-only view of "some dict", which every shape and
+every `Dict` is a subtype of (@sec-sub). Reads through it give `Maybe` of an unknown type.
+Writes through it are not allowed.
 
 #pagebreak()
 
@@ -440,6 +486,44 @@ Two consequences worth stating:
   a `Dict` view could add a key (breaking S4). With a `Dict`, a shape view could claim a key exists (P3).
   Conversions go through `tryAs` (shared: copy; fresh: in place), or through a fresh literal.
   This removes P2, P3 and P4.
+  *One exception is required:* ${"str": tau} <= {| "open"}$, the read-only "some dict" view that a
+  `dict d` pattern binds on an unknown value (@sec-unknown). It is sound because nothing reads a
+  declared field or writes through that view.
+
+== The per-label reading (what the proof checks) <sec-per-label>
+
+The mechanized core states width subtyping one label at a time, and treats `Dict` as a shape.
+Every label of a dict-kinded type has a _status_:
+
+#table(
+  columns: (auto, 1fr),
+  inset: 5pt, stroke: 0.5pt + luma(180),
+  table.header([*Status*], [*Meaning at that label*]),
+  [$ell : tau$], [present, of type $tau$; writable at $tau$],
+  [$ell? : tau$], [maybe present, of type $tau$; writable at $tau$; not deletable (a declared optional field, or any undeclared label under a $* : tau$ remainder)],
+  [$ell?^"del" : tau$], [like $ell? : tau$, and deletable: every label of ${"str": tau}$],
+  [absent], [never present (an undeclared label of an `exact` shape)],
+  [unknown], [maybe present, any type, read-only (an undeclared label of an `open` shape)],
+)
+
+A view with status $t$ at label $ell$ is safe on an object whose own status there is $s$ when:
+$t$ required needs $s$ required; $t$ optional needs $s$ required, optional or deletable;
+$t$ deletable needs $s$ deletable; $t$ absent needs $s$ absent; $t$ unknown accepts anything.
+Every pair with a writable target also needs the two types equal ($equiv$).
+${F_s | rho_s} <= {F_t | rho_t}$ holds when this holds at every label.
+S1--S4 are this rule applied to the finite representation. `Subtyping.v` proves the relation transitive.
+
+Two things the proof established:
+
+- *Optional must not become deletable.* It is tempting to let a shape's optional field be viewed as
+  a deletable dict entry. That single step is sound on its own, but it breaks transitivity:
+  required $<=$ optional $<=$ deletable would let a view delete a required key. The formalization
+  found this while proving transitivity. It is the precise reason a shape is never a `Dict`.
+- *S1--S4 are slightly stricter than necessary.* The per-label rule also accepts, soundly:
+  (a) an optional target field when the source lacks it but has a $* : tau'$ remainder with
+  $tau' equiv tau$ (S2 rejects this); and (b) ${"str": tau} <= {ell_1? : tau, ... | * : tau}$ or
+  $| "open"$ (a `Dict` viewed as a shape whose fields are all optional). Whether to allow these is a
+  usability decision. The checker can implement S1--S4 as written, since they are a sound subset.
 
 #pagebreak()
 
@@ -540,6 +624,14 @@ Remarks.
 - *Break*, *Continue*, *Return* may produce any stack because control does not continue (@sec-diverge).
 - Variables are *monomorphic*; only defs are polymorphic, and defs are annotated.
   That is the value restriction in its simplest form.
+- *Frame.* A quote type $qt(vec(tau)_1, vec(tau)_2)$ means "for every rest of the stack $sigma_0$,
+  including any fresh slots in it, $sigma_0 space vec(tau)_1 -> sigma_0 space vec(tau)_2$". The mechanized
+  *Quote* rule has exactly this premise (`tw_quote`: $forall sigma_0$). A checker that types the body once,
+  from its own entry stack, must justify it with the frame lemma. The lemma holds because no rule
+  inspects the stack below the words' own arguments.
+- *Def* instances. The proof treats a polymorphic signature as the set of its closed instances and
+  requires the body to check at each one (`def_ok`). Checking the body once with rigid variables
+  implies this by the standard substitution lemma. That lemma is not part of the mechanization.
 
 == Variable scopes
 
@@ -670,6 +762,13 @@ The rules for `never`:
 - *Checked.* The body of a `never` def must diverge on every path: its inferred effect carries the
   diverges flag. A body that can fall through (`def f (str -- never) wl end`) is an error.
   Recursion counts: `def spin ( -- never) spin end` is accepted, since the call to `spin` diverges.
+- *No `return` in a `never` def* (clarified). The *Def* rule gives the body the return context
+  $vec(tau)_2$, and for a `never` def there is no such stack: `return` would come back normally to a
+  caller that expects nothing to come back. The body is checked with no return context, the same
+  as a quote body (`def_ok` in `Typing.v`).
+- *What "never" means formally.* A quote or def whose output is `never` has a body that checks
+  against _every_ output stack. The proof then rules out a normal return without any special
+  case: pick the output stack $[bot]$, which no runtime stack can match.
 - *Calls.* A call to a `never` def is typed by *Call-Never*: it consumes its inputs and leaves an
   arbitrary stack, so it is ignored in branch joins like `exit`.
 - *Quotes.* A quote literal whose body always diverges has type $qt(vec(tau), "never")$, and
@@ -727,6 +826,14 @@ sees after the break is typed. The two kinds of builtin differ here:
 Without `break`, child-stack and current-stack execution are indistinguishable for a well-typed quote
 (frame lemma). They differ only in which stack a loop sees after a `break`.
 
+*As mechanized.* The proof keeps separate break and continue contexts, because `continue` inside
+`each` also leaves the child stack and restarts the enclosing loop (checked in `Evaluator.go`: `each`
+passes `Continue` up the same way as `break`). Each context is $dot$ (not allowed),
+$sigma$ (the loop's stack, checked exactly), or $star$ (inside a child-stack body; the stack is discarded).
+*Loop-Forever* is then a typing rule rather than a syntactic side condition: the body is checked with
+break context $dot$ and continue context $sigma$. "No reachable `break`" becomes "`break` does not
+type here", which also covers a `break` hidden in an `each` body inside the loop.
+
 == Shapes
 
 In this document "shape" means the dictionary shape `{a: T, ...}`; the literature calls these _records_.
@@ -734,8 +841,11 @@ Fields are unordered and each label appears at most once.
 
 #rules(cols: 1,
   rule("ShapeLit",
+    $ell_i "distinct"$, $"each" tau_i "is fresh or immutable"$,
+    $Gamma;L;R tack.r #w("shape"){ell_1, ..., ell_n} : eff(sigma space fr(tau_1) ... fr(tau_n), sigma space fr({ell_1 : tau_1, ..., ell_n : tau_n | "exact"}))$),
+  rule("ShapeLit-Shared",
     $ell_i "distinct"$,
-    $Gamma;L;R tack.r #w("shape"){ell_1, ..., ell_n} : eff(sigma space tau_1 ... tau_n, sigma space fr({ell_1 : tau_1, ..., ell_n : tau_n | "exact"}))$),
+    $Gamma;L;R tack.r #w("shape"){ell_1, ..., ell_n} : eff(sigma space tau_1 ... tau_n, sigma space {ell_1 : tau_1, ..., ell_n : tau_n | "exact"})$),
   rule("Get",
     $ell : tau in F$,
     $Gamma;L;R tack.r #w("get")_ell : eff(sigma space {F | rho}, sigma space tau)$),
@@ -748,9 +858,60 @@ Fields are unordered and each label appears at most once.
 )
 
 *Get* on a required field is total, so `:a?` on a known required field cannot fail.
-*Set* writes exactly the field's type and never adds or deletes a declared key. Undeclared keys are
-read through `get` with a runtime key (giving $ty("Maybe")$ of the remainder, or of a fresh $k$ for `open`)
-and written only through a $* : tau$ remainder.
+The proof checks this: the interpreter treats a missing required key as a type error, and
+well-typed programs never reach it. *Set* writes exactly the field's type and never adds or deletes a
+declared key. A literal key that is not declared is read and written through the remainder:
+`get` gives $ty("Maybe")$ of the remainder type (an unknown type for `open`, $bot$ for `exact`), and `set`
+is allowed only through a $* : tau$ remainder.
+
+*ShapeLit is fresh only around fresh contents (corrected).* The previous rule marked every shape
+literal fresh. `{a: @xs}` is a literal, but `xs` is shared, so *Retype* could turn it into
+`{a: [int | str]}` and append a string to `xs` (`hole_literal` in `Examples.v`). The same holds for
+list literals. A literal is fresh when each value it is built from is fresh or has an immutable type
+(one with no list or dict inside it: base types, quotes, and `Maybe`s and unions of those).
+Otherwise it is an ordinary shared value, which *ShapeLit-Shared* types. This is #351's `freshDeep`.
+
+=== Runtime keys <sec-dyn-key>
+
+*Corrected.* The previous draft said undeclared keys are read with a runtime key "giving `Maybe` of the
+remainder". A runtime key can name a _declared_ field, so that rule is unsound:
+
+```
+{a: 1} as {a: int, *: str}      # fresh, so allowed
+"a" getd ? "x" ++                # claimed str, actually 1
+```
+
+(`hole_dynget` in `Examples.v` gets stuck in the interpreter.) The rules checked by the proof:
+
+#rules(cols: 1,
+  rule("Get-Key",
+    $forall ell. space "type of label" ell "in" {F | rho} <= upsilon$,
+    $Gamma;L;R tack.r #w("getd") : eff(sigma space {F | rho} space "str", sigma space ty("Maybe") upsilon)$),
+  rule("Set-Key",
+    $forall ell. space ell "is writable at" upsilon "in" {F | rho}$,
+    $Gamma;L;R tack.r #w("setd") : eff(sigma space {F | rho} space "str" space upsilon, sigma space {F | rho})$),
+)
+
+For `get`, $upsilon$ must be above every declared field type and the remainder type. It is the
+unknown type if the remainder is `open`. For ${"str": tau}$ it is just $tau$. For
+`{a: int, *: str}` it is `int | str`. For `set`, every label must accept exactly $upsilon$, which in
+practice means ${"str": tau}$. Deleting a key needs a deletable label, so again only ${"str": tau}$.
+
+=== Type-changing updates of fresh records
+
+A fresh record may be updated in place at a _different_ type, because no other view can see it:
+
+#rules(cols: 1,
+  rule("Set-Fresh",
+    $Gamma;L;R tack.r #w("set")_ell : eff(sigma space fr({F | rho}) space fr(tau), sigma space fr({ell : tau, F without ell | rho}))$),
+  rule("Del-Fresh",
+    $Gamma;L;R tack.r #w("del")_ell : eff(sigma space fr({F | rho}), sigma space fr({ell "absent", F without ell | rho}))$),
+)
+
+The overwritten or deleted value becomes garbage and is committed at its current type (@sec-sound).
+These are the core form of every "in place when fresh" rule in this document: redirects on a fresh
+command, type-changing `updateCol`/`addCol`/`dropCol` on a fresh grid, and building a literal one key at
+a time. The mechanization proves them (`tw_setk_dp`, `tw_del_dp`).
 
 == Freshness <sec-fresh>
 
@@ -764,7 +925,7 @@ This is the analysis \#351 already implements (`fresh`, `freshDeep`), moved to w
 #rules(cols: 1,
   rule("Forget", $Gamma;L;R tack.r epsilon : eff(sigma space fr(tau), sigma space tau)$),
   rule("Retype",
-    $v "is a literal satisfying" upsilon$,
+    $tau subset.sq.eq upsilon$,
     $Gamma;L;R tack.r #w("as")_upsilon : eff(sigma space fr(tau), sigma space fr(upsilon))$),
   rule("As",
     $tau <= upsilon$,
@@ -775,6 +936,47 @@ This is the analysis \#351 already implements (`fresh`, `freshDeep`), moved to w
 *Retype* is the one extra thing `as` may do: give a fresh literal a wider type, element by element
 (`[1 2] as [int | str]`, `{url: "x"} as Request` with `timeout?` absent). This removes P13: nothing
 lets `as` claim `{a: int}` for a `Json` value.
+
+=== Freshness, precisely (as proved)
+
+*What fresh means.* A slot is fresh when the lists and dicts reachable from its value form a
+_tree_: each one is referenced exactly once, either by the slot or by its parent in the tree. No
+variable, no other slot and no other object references any of them. Reachability stops at quotes: a
+quote's captured scope is not part of the tree. "Deep" is essential. A fresh value whose tree shares
+one list under two keys could be retyped with two different types for that list.
+
+*Retype is a static relation.* The previous draft's premise, "$v$ is a literal satisfying $upsilon$",
+mentions a runtime value, so no checker could decide it. The rule now uses a static relation $tau subset.sq.eq upsilon$:
+subtyping made covariant everywhere because nobody else can observe the change:
+
+- anything that is $tau <= upsilon$;
+- $ty("List") tau subset.sq.eq ty("List") upsilon$ and $ty("Maybe") tau subset.sq.eq ty("Maybe") upsilon$ when $tau subset.sq.eq upsilon$;
+- shapes and dicts label by label: required stays required, and required, optional or deletable may become
+  optional or deletable. An _absent_ label may become optional or deletable (so `{url: "x"}` becomes a
+  `Request` with `timeout?` absent), and anything may become unknown (`open`). The types inside are
+  compared with $subset.sq.eq$. So a fresh shape whose fields all fit becomes a ${"str": tau}$, the
+  "product to function as a new value" of @sec-primitive;
+- unions on either side as for $<=$.
+
+*Slot subsumption.* Freshness is part of the stack type, and the one subsumption rule
+works slot by slot:
+
+#table(
+  columns: (auto, auto, 1fr),
+  inset: 5pt, stroke: 0.5pt + luma(180),
+  table.header([*From*], [*To*], [*When*]),
+  [$tau$], [$upsilon$], [$tau <= upsilon$ (*As*)],
+  [$fr(tau)$], [$fr(upsilon)$], [$tau subset.sq.eq upsilon$ (*Retype*); no runtime work, and the store typing does not change],
+  [$fr(tau)$], [$upsilon$], [$tau <= upsilon$ (*Forget* then *As*). The value's tree is _committed_: each object gets the one type the tree gives it],
+  [$tau$], [$fr(upsilon)$], [$tau$ immutable and $tau <= upsilon$ (a value with no lists or dicts is trivially fresh)],
+)
+
+*Which words keep freshness.* Stack shuffles (`swap`, `drop`) move the mark with the value.
+`just` and `?` keep it. Appending a fresh or immutable value to a fresh list keeps it (the two trees
+merge). *Set-Fresh* keeps it. Everything that reads _out_ of a container gives a shared value
+(`getAt`, `get`, `?` on a shared `Maybe`): the container still points to the result. Everything that
+copies a reference needs a shared operand: `dup`, stores, def and quote arguments, and writes into a
+shared container. The analysis in \#351 must be at least this conservative.
 
 == Validation: `tryAs` and `is` <sec-tryas>
 
@@ -803,6 +1005,32 @@ become two different dicts, and writing `"x"` through `d` cannot affect `p`.
 This reverses one part of the recorded G2 policy ("no copy-on-validate") for one reason:
 without it, the theorem in @sec-sound is false. The cost is paid only when a program validates a
 container it has also stored elsewhere, and it is at most the cost of the validation walk itself.
+
+*As proved* (`tw_try_*` in `Typing.v`). The checker picks the mode, and the core `tryAs` carries it:
+
+#table(
+  columns: (auto, 1fr, auto),
+  inset: 5pt, stroke: 0.5pt + luma(180),
+  table.header([*Operand*], [*Condition*], [*Result*]),
+  [$fr(tau)$], [none], [$fr(ty("Maybe") upsilon)$, same value, still fresh],
+  [$tau$], [$tau <= upsilon$], [$ty("Maybe") upsilon$, same value],
+  [$tau$], [$upsilon$ immutable], [$ty("Maybe") upsilon$, same value],
+  [$tau$], [none], [$ty("Maybe") upsilon$, a copy],
+)
+
+Two details the proof needed:
+
+- *The copy is per path.* If one object is reached twice (`{a: @xs, b: @xs}`), it is copied twice.
+  A memoizing copy would make both keys of the result point to one new list, and the target type may
+  describe the two paths differently (`{a: [int], b: [int | str]}`). That recreates R6 inside the
+  copy. Parts that $upsilon$ does not describe (unknown, `open` labels) are not copied; they are shared at
+  their existing types.
+- *In place on a fresh operand needs a tree.* This is why freshness is deep (@sec-fresh), and why a
+  builtin that marks its output fresh (`parseJson`) must return a tree. JSON is a tree.
+
+*"Checkable" is a usability rule.* Validation against a quote type simply fails (it returns `none`),
+and validation against an unknown type succeeds without looking. Both are sound, so the proof does
+not need the restriction. Keep it for good error messages.
 
 == Enums
 
@@ -932,13 +1160,21 @@ $chevron.l H; v; e_q chevron.r$ whose stack holds only the element.
 
 == Definitions
 
-A *store typing* $Sigma$ maps each location to the type it was created at (or retyped to while fresh).
+A *store typing* $Sigma$ gives every shared location the type it was created at, and every variable
+scope its context $Gamma$.
 
-- $Sigma tack.r H$: every object $H(ell)$ has type $Sigma(ell)$.
-- $Sigma tack.r S : sigma$: the stack's values have the types in $sigma$, position by position,
-  and every slot marked $fr(tau)$ holds a location reachable from nowhere else in $H$ or $S$.
-- $Sigma tack.r chevron.l H; S; e chevron.r : sigma'$ iff $Sigma tack.r H$, $Sigma tack.r S : sigma$
-  and $dot;dot;dot tack.r e : eff(sigma, sigma')$ for some $sigma$.
+- *Shared values* are typed through $Sigma$: a location has type $upsilon$ when $Sigma(ell) <= upsilon$.
+  A shared object is therefore only ever seen through supertypes of its one declared type.
+- *Fresh values* are typed _deeply_, by reading the heap directly: a fresh list has type
+  $ty("List") tau$ when its object is a list whose elements have type $tau$, and so on. This typing also
+  records the value's tree of locations (its _region_). $Sigma$ is ignored on a region. That is why
+  *Retype* is free at runtime: it changes the deep type and touches nothing else.
+- *The invariant* on a configuration: the regions of the fresh slots are disjoint; no shared slot and
+  no object outside the regions points into a region; every object outside the regions has its
+  $Sigma$ type; and the current scope has type $Gamma$ in $Sigma$.
+- *Commit.* When a fresh slot is forgotten, dropped, stored or passed on, each location in its region
+  gets the one type its tree position gives it. Only the region's entries in $Sigma$ change. The
+  region is a tree, so no location is assigned two types. This is the formal content of Principle 3.
 
 == The builtin contract <sec-contract>
 
@@ -972,8 +1208,11 @@ feeds nothing back (@sec-questions). Keep it that way.
   If $Sigma tack.r v : ty("List") tau$ then $v$ is a location with $Sigma(v) = ty("List") tau$;
   likewise $ty("Dict")$ and $ty("Grid")$ (equality: they are invariant).
   If $Sigma tack.r v : {F | rho}$ then $v$ is a location with $Sigma(v) <= {F | rho}$.
-  If $Sigma tack.r v : tau_1 | tau_2$ then $Sigma tack.r v : tau_i$ for exactly one $i$: the one whose kind is $v$'s runtime kind.
-  If $Sigma tack.r v : k$ for an abstract $k$, then $v$ came out of the value whose unpacking introduced $k$.
+  If $Sigma tack.r v : tau_1 | tau_2$ then $Sigma tack.r v : tau_i$ for some $i$ that has a member of $v$'s runtime kind
+  (exactly one when kinds are distinct).
+  An abstract $k$ has no values of its own. The arm that introduces it is checked for every $k$, and at
+  runtime it is instantiated with the element type the matched list actually has (its $Sigma$ type or
+  its deep type).
 ]
 
 #lemma("Views agree on writes")[
@@ -984,35 +1223,36 @@ feeds nothing back (@sec-questions). Keep it that way.
 This lemma is the table in @sec-sub read as a proof: clause S1 gives it for declared fields, S2 for
 optional ones, S3 and S4 for remainders, and the absence of shape deletion for everything else.
 
-#theorem("Preservation")[
-  If $Sigma tack.r chevron.l H; S; e chevron.r : sigma'$ and $chevron.l H; S; e chevron.r --> chevron.l H'; S'; e' chevron.r$,
-  then there is $Sigma'$ agreeing with $Sigma$ on every shared location, with $Sigma' tack.r chevron.l H'; S'; e' chevron.r : sigma'$.
+#theorem("Soundness (mechanized: `soundness` in `formal-ver/Soundness.v`)")[
+  If every definition body checks against every instance of its signature, and a program checks
+  as $dot; dot; dot tack.r e : eff(epsilon, sigma)$, then for every amount of fuel $n$, running $e$ from an empty stack
+  and an empty scope never produces a runtime type error. It finishes, runs out of fuel, exits,
+  or stops with a checked error.
 ]
 
-#theorem("Progress")[
-  If $Sigma tack.r chevron.l H; S; e chevron.r : sigma'$ then either $e = epsilon$,
-  or the configuration steps, or it steps to a checked error.
-]
+The proof is a single induction on fuel and on the typing derivation, in the "definitional
+interpreter" style (Amin and Rompf 2017). It combines progress and preservation. The interpreter
+`eval` returns `RStuck` exactly where the Go runtime reports a type mismatch, and the theorem says
+it never does. Fuel makes the statement cover every finite prefix of a non-terminating run. The
+inductive statement also says that `break`, `continue` and `return` carry stacks of the types their
+contexts promise, that the invariant is preserved, and that scopes keep their types. It is
+generalized over extra values held by callers (the stack below a child stack, the rest of an `each`
+list), so those stay typed and their regions untouched.
 
-#theorem("Soundness")[
-  A well-typed program never reaches a stuck state. Every runtime failure is a checked error.
-]
+The lemmas above correspond to these parts of the development:
 
-*Proof sketch.* Standard Wright--Felleisen induction. The interesting cases:
+- *Views agree on writes* is per-label subtyping (`fsub`, @sec-per-label) with transitivity
+  (`sub_trans`). A write through a view is checked against the object's own status at that label.
+- *Canonical forms* are the `vt_*_inv`, `dt_*_inv` and `Kind.v` lemmas. The proof does not use
+  "exactly one union member"; see @sec-unions.
+- *Retype and commit*: `dtyped_rsub` (retyping a fresh value needs no store change) and
+  `commit_all` (Commit.v).
+- *TryAs*: `validate_dtyped` (in place, fresh), `validate_imm` (immutable target), `copy_ok` (per-path
+  copy into new locations, typed at the target).
+- *Frame*: built into quote types (@sec-break). The runtime never reads below a quote's inputs
+  because the body checks with every rest of the stack.
 
-- *Set on a shape.* By canonical forms $Sigma(ell) <= {F | rho}$; by "views agree on writes" the
-  write is allowed by $Sigma(ell)$, so $Sigma tack.r H'$ with $Sigma' = Sigma$.
-- *List and dict writes.* Invariance gives $Sigma(ell)$ exactly; the written value has the element type.
-- *Retype, fresh joins, fresh redirects, fresh `updateCol`.* The slot is fresh, so $ell$ is reachable only from it;
-  changing $Sigma(ell)$ cannot invalidate any other typing judgment.
-- *TryAs.* On mismatch, `none`. On success in place: either the operand was fresh (as above), or
-  $tau <= upsilon$ already held (no new view), or $upsilon$ has no mutable part (immutable values can
-  be seen at any type they satisfy). On success with copy: the copies are new locations typed at $upsilon$
-  in $Sigma'$, and validation established that their contents have those types.
-- *Kind patterns.* On a union, canonical forms say the value's own type is the member of its kind,
-  so the binding is exact and writes preserve $Sigma$. On an abstract type, the bound abstract type
-  admits only values from the same container, so writes preserve $Sigma$ by canonical forms for $k$.
-- *Prim.* By the builtin contract. *Quote / Exec.* By the frame lemma.
+What the mechanization does *not* cover is listed in @sec-mech.
 
 == Where each counterexample breaks the proof
 
@@ -1028,7 +1268,10 @@ optional ones, S3 and S4 for remainders, and the absence of shape deletion for e
   [P7], [in-place redirect on a shared list], [builtin contract: only fresh inputs may be retyped],
   [P10], [`parseJson` returns a free variable], [builtin contract: $Phi$ says `Json`],
   [P13], [`as` without evidence], [*As* needs $tau <= upsilon$; `Json` $lt.eq.not$ `{a: int}`],
-  [R6], [two refinements share one mutable object], [*TryAs* copies a shared mutable value],
+  [R6], [two refinements share one mutable object], [*TryAs* copies a shared mutable value (`r6_*` in `Examples.v`)],
+  [H1], [runtime-key `get` typed by the remainder (previous draft)], [*Get-Key* needs a type above every label (@sec-dyn-key)],
+  [H2], [abstract type $k$ reused across runs of its arm (previous draft)], [the arm is checked for every $k$; skolem escape check (@sec-unknown)],
+  [H3], [every shape literal fresh (previous draft)], [a literal is fresh only around fresh or immutable contents (@sec-fresh)],
 )
 
 #pagebreak()
@@ -1092,7 +1335,13 @@ Most of these are already runtime failures today; a few are real losses.
   inset: 6pt, stroke: 0.5pt + luma(180),
   table.header([*Change*], [*Cost / mitigation*]),
   [union members must be of distinct kinds: no `[int] | [str]`, no union of two shapes],
-    [an enum; `Json`, `int | str | null` and similar unions are unaffected],
+    [an enum; `Json`, `int | str | null` and similar unions are unaffected. Not required for soundness (@sec-unions), so it can be relaxed later],
+  [`getd` with a runtime key on a shape gives `Maybe` of a type above _every_ field, not just the remainder],
+    [use literal keys for declared fields; `{str: T}` is unaffected],
+  [a literal around a stored value (`{a: @xs}`) is not fresh],
+    [literals of fresh or immutable values (the common case) are unaffected],
+  [a value bound by `list xs` on unknown data cannot leave the arm (no storing it in an outer variable or list)],
+    [narrow with `tryAs`/`is` first, which gives a real type that can leave the arm],
   [`if`/`match` arms leaving *stored* containers of the same kind but different types have no join],
     [literal arms join automatically (@sec-join); for stored values use an enum or build a new value],
   [a def that never returns must say so: `(str -- never)`],
@@ -1147,9 +1396,56 @@ brands can all be deleted, and the runtime type checks can go once the oracle ag
   [(new)], [alias reference nodes for guarded recursive `type`],
 )
 
+= The mechanized core <sec-mech>
+
+`formal-ver/` holds a Rocq (9.1) development of the core. `make check` in that directory rebuilds
+it and prints the assumptions of the main theorem: *none* (`Closed under the global context`). It is
+about 5,000 lines. `formal-ver/README.md` maps every definition to the section of this document it
+formalizes.
+
+#table(
+  columns: (auto, 1fr),
+  inset: 5pt, stroke: 0.5pt + luma(180),
+  table.header([*File*], [*Contents*]),
+  [`Syntax.v`], [types (base, $bot$, unknown, `Maybe`, lists, per-label dict/shape types, unions, quotes with `never`), core words, values, heap objects],
+  [`Interp.v`], [the interpreter: `RStuck` exactly where the Go runtime reports a type mismatch; validation and per-path copy],
+  [`Subtyping.v`], [$<=$ (per label), its transitivity, fresh retyping $subset.sq.eq$],
+  [`Typing.v`], [the typing judgment with freshness marks and break/continue/return contexts],
+  [`Invariant.v`], [store typing, deep typing of fresh values, regions, the invariant],
+  [`Commit.v`], [committing a fresh tree into the store typing],
+  [`Validate.v`, `Kind.v`], [`tryAs` in place and by copy; kind patterns],
+  [`InvOps.v`, `RecOps.v`], [stack and heap operations on the invariant; type-changing updates of fresh records],
+  [`Soundness.v`], [the theorem],
+  [`Examples.v`], [the three holes run to `RStuck`; R6 fails in place, runs with the copy, and type-checks],
+)
+
+*What is modeled*: everything in the calculus that interacts with aliasing, namely shared and fresh lists and
+dicts, shapes with required/optional/absent/remainder/open labels, `{str: T}`, width subtyping,
+invariance, `Maybe` covariance, unions, unknown types and kind patterns (including the abstract-type
+rule), variables in heap scopes captured by quotes, quotes with frame polymorphism and `never`,
+`if`, `loop` and loop-forever, `break`/`continue` through `each`, `return`, `exit`, polymorphic and
+recursive definitions, `tryAs` in all four modes, and type-changing updates of fresh records.
+
+*What is not modeled*, and what each would need:
+
+- *Recursive aliases* (`Json`, `Person`). Types are finite trees in the model. Adding guarded recursion
+  means coinductive (or alias-environment) types, validation with a cycle check, and the
+  Amadio--Cardelli subtyping argument. Nothing in the proof depends on finiteness except the
+  structural recursion in `validate` and `copy`.
+- *Enums*. They behave like `Maybe` with declared payload types: immutable, tagged, nominal.
+  Their payloads follow the same shared/fresh rules as list elements.
+- *Grids, grid views, commands*. The model covers them through their core form: records of
+  columns and strong updates on fresh records. The grid-specific builtins are $Phi$ entries.
+- *Builtins generally* (Principle 5). The model proves the rules for the words listed above.
+  Other builtins still need the contract in @sec-contract and tests.
+- *The checker algorithm*. The theorem is about the declarative rules. The checker must produce only
+  derivations of them: unification, joins (@sec-join), the frame lemma for quote bodies, the
+  substitution lemma for polymorphic defs, and the skolem escape check (@sec-unknown).
+- *Definite assignment.* Reading an unset variable is a checked error in the model, as at runtime.
+
 = Getting confidence: the validation plan
 
-A paper proof covers the core rules. It does not cover the Go code. Three things close that gap.
+The mechanized proof covers the core rules. It does not cover the Go code. Three things close that gap.
 
 + *Classify every runtime error.* Tag each error site in `Evaluator.go` as a _checked error_ or a
   _type mismatch_. Soundness is then testable: type-mismatch errors are unreachable in checked programs.
@@ -1212,3 +1508,4 @@ Each was checked against `Evaluator.go` on `main`, not only taken from the docs.
 - F. Smith, D. Walker and G. Morrisett. Alias types. _ESOP_, 2000. (Changing the type of an unaliased location.)
 - J. Dunfield and N. Krishnaswami. Bidirectional typing. _ACM Computing Surveys_, 2021.
 - C. Diggins. Typing functional stack-based languages. 2008. (See also Kitten and Factor's stack-effect inference.)
+- N. Amin and T. Rompf. Type soundness proofs with definitional interpreters. _POPL_, 2017. (The proof style of `formal-ver/`.)

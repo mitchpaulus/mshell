@@ -1,0 +1,228 @@
+(** * The typing judgment of the core.
+
+    [T G B C R e s1 s2] : in variable context [G], with break context [B],
+    continue context [C] and return stack [R], program [e] turns a stack of
+    type [s1] into one of type [s2].  Stacks are top-first lists of slots;
+    a slot is a type with a freshness mark: [Sh] (may be shared) or [Dp]
+    (deeply fresh: every list/dict reachable from the value is referenced
+    exactly once, by this slot or by its parent in the tree).
+
+    Break/continue contexts:
+    - [LNone]      : not allowed here;
+    - [LExact s]   : allowed when the stack is exactly [s] (a plain loop body);
+    - [LChild]     : inside the body of a child-stack builtin ([each]) whose
+                     enclosing loop's stack was already checked at the builtin;
+                     the child stack is discarded, so any stack is fine. *)
+
+From Stdlib Require Import String List Arith Bool.
+Import ListNotations.
+From MshellCore Require Import Syntax Subtyping.
+
+Inductive mark := Sh | Dp.
+Definition slot := (mark * ty)%type.
+Definition sty := list slot.
+Definition shs (ts : list ty) : sty := map (fun t => (Sh, t)) ts.
+Definition tenv := list (var * ty).
+
+Inductive lctx := LNone | LExact (s : sty) | LChild.
+
+(** The loop context seen by the body of a child-stack builtin that runs
+    with [s] below its arguments. *)
+Inductive child_ctx : lctx -> sty -> lctx -> Prop :=
+| cc_none L s : child_ctx L s LNone
+| cc_exact s : child_ctx (LExact s) s LChild
+| cc_child s : child_ctx LChild s LChild.
+
+(** Stack subsumption.  [ss_dp] is the doc's Retype (any covariant change
+    of a fresh value); [ss_forget] is Forget followed by As. *)
+Inductive slot_sub : slot -> slot -> Prop :=
+| ss_sh a b : sub a b -> slot_sub (Sh, a) (Sh, b)
+| ss_dp a b : rsub a b -> slot_sub (Dp, a) (Dp, b)
+| ss_forget a b : sub a b -> slot_sub (Dp, a) (Sh, b)
+| ss_imm a b : immutable a = true -> sub a b -> slot_sub (Sh, a) (Dp, b).
+
+Definition ssub : sty -> sty -> Prop := Forall2 slot_sub.
+
+Definition writable (f : fstat) (t : ty) : Prop :=
+  f = FReq t \/ f = FOpt t \/ f = FDict t.
+
+(** ** Kind patterns *)
+Definition tunion (a b : ty) : ty :=
+  match a, b with
+  | TBot, _ => b
+  | _, TBot => a
+  | _, _ => TUnion a b
+  end.
+
+Definition kind_top (k : kind) : option ty :=
+  match k with
+  | KInt => Some TInt | KStr => Some TStr | KBool => Some TBool
+  | KMaybe => Some (TMaybe TTop)
+  | KDict => Some (TRec [] FOpen)
+  | KQuote => Some TTop
+  | KList => None           (* needs the abstract rule [tw_kind_list] *)
+  end.
+
+Definition kind_of_ty (t : ty) : option kind :=
+  match t with
+  | TInt => Some KInt | TStr => Some KStr | TBool => Some KBool
+  | TMaybe _ => Some KMaybe | TList _ => Some KList
+  | TRec _ _ => Some KDict | TQuote _ _ => Some KQuote
+  | TBot | TTop | TUnion _ _ => None
+  end.
+
+(** The members of [t] of kind [k] (the then-branch type) *)
+Fixpoint kind_then (k : kind) (t : ty) : option ty :=
+  match t with
+  | TBot => Some TBot
+  | TTop => kind_top k
+  | TUnion a b =>
+      match kind_then k a, kind_then k b with
+      | Some x, Some y => Some (tunion x y)
+      | _, _ => None
+      end
+  | _ => match kind_of_ty t with
+         | Some k' => if kind_eqb k k' then Some t else Some TBot
+         | None => Some TBot
+         end
+  end.
+
+(** The members of [t] not of kind [k] (the else-branch type) *)
+Fixpoint kind_else (k : kind) (t : ty) : ty :=
+  match t with
+  | TBot => TBot
+  | TTop => TTop
+  | TUnion a b => tunion (kind_else k a) (kind_else k b)
+  | _ => match kind_of_ty t with
+         | Some k' => if kind_eqb k k' then TBot else t
+         | None => t
+         end
+  end.
+
+Section Typing.
+(** Signatures of definitions: [sigs f ins outs] lists the (closed)
+    instances of [f]'s signature; a polymorphic signature is the set of its
+    instances.  [outs = None] is a [never] signature. *)
+Variable sigs : string -> list ty -> option (list ty) -> Prop.
+Variable G : tenv.
+
+Inductive TW : lctx -> lctx -> option sty -> word -> sty -> sty -> Prop :=
+| tw_int B C R n s : TW B C R (WInt n) s ((Sh, TInt) :: s)
+| tw_str B C R x s : TW B C R (WStr x) s ((Sh, TStr) :: s)
+| tw_bool B C R b s : TW B C R (WBool b) s ((Sh, TBool) :: s)
+| tw_add B C R s : TW B C R WAdd ((Sh, TInt) :: (Sh, TInt) :: s) ((Sh, TInt) :: s)
+| tw_cat B C R s : TW B C R WCat ((Sh, TStr) :: (Sh, TStr) :: s) ((Sh, TStr) :: s)
+| tw_dup B C R t s : TW B C R WDup ((Sh, t) :: s) ((Sh, t) :: (Sh, t) :: s)
+| tw_drop B C R p s : TW B C R WDrop (p :: s) s
+| tw_swap B C R p q s : TW B C R WSwap (p :: q :: s) (q :: p :: s)
+| tw_none B C R s : TW B C R WNone s ((Sh, TMaybe TBot) :: s)
+| tw_just B C R m t s : TW B C R WJust ((m, t) :: s) ((m, TMaybe t) :: s)
+| tw_unwrap B C R m t s : TW B C R WUnwrap ((m, TMaybe t) :: s) ((m, t) :: s)
+| tw_load B C R x t s : lookup x G = Some t -> TW B C R (WLoad x) s ((Sh, t) :: s)
+| tw_store B C R x t s : lookup x G = Some t -> TW B C R (WStore x) ((Sh, t) :: s) s
+| tw_quote B C R e ins outs s :
+    (forall s0, T LNone LNone None e (shs ins ++ s0) (shs outs ++ s0)) ->
+    TW B C R (WQuote e) s ((Sh, TQuote ins (Some outs)) :: s)
+| tw_quote_never B C R e ins s :
+    (forall s0 s', T LNone LNone None e (shs ins ++ s0) s') ->
+    TW B C R (WQuote e) s ((Sh, TQuote ins None) :: s)
+| tw_exec B C R ins outs s :
+    TW B C R WExec ((Sh, TQuote ins (Some outs)) :: shs ins ++ s) (shs outs ++ s)
+| tw_exec_never B C R ins s s' :
+    TW B C R WExec ((Sh, TQuote ins None) :: shs ins ++ s) s'
+| tw_if B C R e1 e2 s s' :
+    T B C R e1 s s' -> T B C R e2 s s' -> TW B C R (WIf e1 e2) ((Sh, TBool) :: s) s'
+| tw_loop B C R e s :
+    T (LExact s) (LExact s) R e s s -> TW B C R (WLoop e) s s
+| tw_loop_forever B C R e s s' :
+    T LNone (LExact s) R e s s -> TW B C R (WLoop e) s s'
+| tw_break_exact C R s s' : TW (LExact s) C R WBreak s s'
+| tw_break_child C R s s' : TW LChild C R WBreak s s'
+| tw_cont_exact B R s s' : TW B (LExact s) R WContinue s s'
+| tw_cont_child B R s s' : TW B LChild R WContinue s s'
+| tw_return B C s s' : TW B C (Some s) WReturn s s'
+| tw_exit B C R s s' : TW B C R WExit ((Sh, TInt) :: s) s'
+| tw_call B C R f ins outs s :
+    sigs f ins (Some outs) -> TW B C R (WCall f) (shs ins ++ s) (shs outs ++ s)
+| tw_call_never B C R f ins s s' :
+    sigs f ins None -> TW B C R (WCall f) (shs ins ++ s) s'
+| tw_nil B C R t s : TW B C R WNil s ((Dp, TList t) :: s)
+| tw_push_sh B C R t s :
+    TW B C R WPush ((Sh, t) :: (Sh, TList t) :: s) ((Sh, TList t) :: s)
+| tw_push_dp B C R t s :
+    TW B C R WPush ((Dp, t) :: (Dp, TList t) :: s) ((Dp, TList t) :: s)
+| tw_getat B C R t s :
+    TW B C R WGetAt ((Sh, TInt) :: (Sh, TList t) :: s) ((Sh, t) :: s)
+| tw_setat_sh B C R t s :
+    TW B C R WSetAt ((Sh, t) :: (Sh, TInt) :: (Sh, TList t) :: s) ((Sh, TList t) :: s)
+| tw_each B C R e t s B' C' :
+    child_ctx B s B' -> child_ctx C s C' ->
+    T B' C' None e [(Sh, t)] [] ->
+    TW B C R (WEach e) ((Sh, TList t) :: s) s
+| tw_dictnew B C R s : TW B C R WDictNew s ((Dp, TRec [] FAbs) :: s)
+| tw_getk B C R k fs r s :
+    TW B C R (WGetK k) ((Sh, TRec fs r) :: s) ((Sh, TMaybe (fty (field_at k fs r))) :: s)
+| tw_getreq B C R k fs r t s :
+    field_at k fs r = FReq t ->
+    TW B C R (WGetReq k) ((Sh, TRec fs r) :: s) ((Sh, t) :: s)
+| tw_setk_sh B C R k fs r t s :
+    writable (field_at k fs r) t ->
+    TW B C R (WSetK k) ((Sh, t) :: (Sh, TRec fs r) :: s) ((Sh, TRec fs r) :: s)
+| tw_setk_dp B C R k fs r t s :
+    TW B C R (WSetK k) ((Dp, t) :: (Dp, TRec fs r) :: s) ((Dp, TRec ((k, FReq t) :: fs) r) :: s)
+| tw_del_sh B C R k fs r t s :
+    field_at k fs r = FDict t ->
+    TW B C R (WDel k) ((Sh, TRec fs r) :: s) ((Sh, TRec fs r) :: s)
+| tw_del_dp B C R k fs r s :
+    TW B C R (WDel k) ((Dp, TRec fs r) :: s) ((Dp, TRec ((k, FAbs) :: fs) r) :: s)
+| tw_getd B C R fs r t s :
+    (forall k, sub (fty (field_at k fs r)) t) ->
+    TW B C R WGetD ((Sh, TStr) :: (Sh, TRec fs r) :: s) ((Sh, TMaybe t) :: s)
+| tw_setd B C R fs r t s :
+    (forall k, writable (field_at k fs r) t) ->
+    TW B C R WSetD ((Sh, t) :: (Sh, TStr) :: (Sh, TRec fs r) :: s) ((Sh, TRec fs r) :: s)
+| tw_kind B C R k m t t1 e1 e2 s s' :
+    kind_then k t = Some t1 ->
+    T B C R e1 ((m, t1) :: s) s' ->
+    T B C R e2 ((m, kind_else k t) :: s) s' ->
+    TW B C R (WKindIf k e1 e2) ((m, t) :: s) s'
+| tw_kind_list B C R m t e1 e2 s s' :
+    (forall a, T B C R e1 ((m, TList a) :: s) s') ->
+    T B C R e2 ((m, t) :: s) s' ->
+    TW B C R (WKindIf KList e1 e2) ((m, t) :: s) s'
+| tw_try_dp B C R t u s :
+    TW B C R (WTryAs u false) ((Dp, t) :: s) ((Dp, TMaybe u) :: s)
+| tw_try_sub B C R t u s :
+    sub t u -> TW B C R (WTryAs u false) ((Sh, t) :: s) ((Sh, TMaybe u) :: s)
+| tw_try_imm B C R t u s :
+    immutable u = true -> TW B C R (WTryAs u false) ((Sh, t) :: s) ((Sh, TMaybe u) :: s)
+| tw_try_copy B C R t u s :
+    TW B C R (WTryAs u true) ((Sh, t) :: s) ((Sh, TMaybe u) :: s)
+
+with T : lctx -> lctx -> option sty -> prog -> sty -> sty -> Prop :=
+| t_nil B C R s : T B C R [] s s
+| t_cons B C R w e s1 s2 s3 : TW B C R w s1 s2 -> T B C R e s2 s3 -> T B C R (w :: e) s1 s3
+| t_sub B C R e s1 s1' s2 s2' :
+    ssub s1' s1 -> T B C R e s1 s2 -> ssub s2 s2' -> T B C R e s1' s2'.
+
+End Typing.
+
+Scheme TW_mut := Induction for TW Sort Prop
+with T_mut := Induction for T Sort Prop.
+
+(** A closure body [e] in scope [G] has quote type [TQuote ins outs]. *)
+Definition closure_ok sigs (G : tenv) (e : prog) (ins : list ty) (outs : option (list ty)) : Prop :=
+  match outs with
+  | Some o => forall s0, T sigs G LNone LNone None e (shs ins ++ s0) (shs o ++ s0)
+  | None => forall s0 s', T sigs G LNone LNone None e (shs ins ++ s0) s'
+  end.
+
+(** A definition body is well typed for every instance of its signature. A
+    [never] signature types the body with no return context. *)
+Definition def_ok sigs (defs : string -> option prog) : Prop :=
+  forall f ins outs, sigs f ins outs ->
+  exists body G, defs f = Some body /\
+    match outs with
+    | Some o => forall s0, T sigs G LNone LNone (Some (shs o ++ s0)) body (shs ins ++ s0) (shs o ++ s0)
+    | None => forall s0 s', T sigs G LNone LNone None body (shs ins ++ s0) s'
+    end.
