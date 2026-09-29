@@ -191,13 +191,13 @@ Inductive TW : lctx -> lctx -> option sty -> word -> sty -> sty -> Prop :=
     T B C R e2 ((m, t) :: s) s' ->
     TW B C R (WKindIf KList e1 e2) ((m, t) :: s) s'
 | tw_try_dp B C R t u s :
-    TW B C R (WTryAs u false) ((Dp, t) :: s) ((Dp, TMaybe u) :: s)
+    TW B C R (WTryAs u) ((Dp, t) :: s) ((Dp, TMaybe u) :: s)
 | tw_try_sub B C R t u s :
-    sub t u -> TW B C R (WTryAs u false) ((Sh, t) :: s) ((Sh, TMaybe u) :: s)
+    sub t u -> TW B C R (WTryAs u) ((Sh, t) :: s) ((Sh, TMaybe u) :: s)
 | tw_try_imm B C R t u s :
-    immutable u = true -> TW B C R (WTryAs u false) ((Sh, t) :: s) ((Sh, TMaybe u) :: s)
-| tw_try_copy B C R t u s :
-    TW B C R (WTryAs u true) ((Sh, t) :: s) ((Sh, TMaybe u) :: s)
+    immutable u = true -> TW B C R (WTryAs u) ((Sh, t) :: s) ((Sh, TMaybe u) :: s)
+| tw_copy B C R t s :
+    TW B C R WCopy ((Sh, t) :: s) ((Dp, t) :: s)
 
 with T : lctx -> lctx -> option sty -> prog -> sty -> sty -> Prop :=
 | t_nil B C R s : T B C R [] s s

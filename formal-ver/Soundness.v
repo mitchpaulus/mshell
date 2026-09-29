@@ -7,7 +7,7 @@
 
 From Stdlib Require Import String List Arith Bool Lia Permutation.
 Import ListNotations.
-From MshellCore Require Import Syntax Subtyping Typing Interp Invariant RtLemmas Commit Validate Kind InvOps RecOps.
+From MshellCore Require Import Syntax Subtyping Typing Interp Invariant RtLemmas Commit Validate Kind InvOps Copy RecOps.
 
 Section Sound.
 Variable sigs : string -> list ty -> option (list ty) -> Prop.
@@ -135,26 +135,6 @@ Proof.
   - constructor; auto. destruct (proj1 (dtyped_struct sigs Σ H) _ _ _ D) as (_ & Hv & _).
     intros l Hl _. auto.
 Qed.
-
-Lemma obj_ok_olocs_lt Σ o h :
-  obj_ok sigs Σ o h -> is_scope h = false -> forall r, In r (olocs o) -> r < length Σ.
-Proof.
-  destruct o as [vs|kvs|kvs], h as [t|fs r|G]; simpl; try tauto; try discriminate; intros Ho _ r0 Hr;
-    apply in_flat_map in Hr as (x & Hx & Hr).
-  - rewrite Forall_forall in Ho. eapply vtyped_vlocs_lt; eauto.
-  - destruct Ho as (_ & _ & Ho). rewrite Forall_forall in Ho. eapply vtyped_vlocs_lt; eauto.
-Qed.
-
-Lemma bounded_hext Σ H Σ' H' R :
-  bounded H -> hext sigs Σ H Σ' H' R -> bounded H'.
-Proof.
-  intros B (Ln & Lh & Pre & Ag & New) l o E r Hr.
-  destruct (Nat.lt_ge_cases l (length H)) as [Hlt|Hge].
-  - rewrite Pre in E; auto. specialize (B l o E r Hr). lia.
-  - destruct (New l o Hge E) as (h & Eh & Ns & Ok & _). rewrite <- Ln.
-    eapply obj_ok_olocs_lt; eauto.
-Qed.
-
 
 Lemma inv_scope_obj Σ H sc G L st Os :
   inv sigs Σ H sc G L st Os ->
@@ -1080,7 +1060,7 @@ Qed.
 Lemma w_try_dp G B C R t u rest s s3 Σ H sc stk Sf sf Os :
   T sigs G B C R rest ((Dp, TMaybe u) :: s) s3 ->
   INV Σ H sc G (stk ++ Sf) (((Dp, t) :: s) ++ sf) Os -> length stk = length ((Dp, t) :: s) ->
-  res_ok Σ sc G B C R s3 Sf sf (eval defs (S n) H sc stk (WTryAs u false :: rest)).
+  res_ok Σ sc G B C R s3 Sf sf (eval defs (S n) H sc stk (WTryAs u :: rest)).
 Proof.
   intros HT [Iv Bd] L. destruct stk as [|v stk]; try len. simpl in Iv.
   destruct (inv_cons_Os _ _ _ _ _ _ _ _ _ Iv) as (O & Os' & ->).
@@ -1099,7 +1079,7 @@ Lemma w_try_sh G B C R t u rest s s3 Σ H sc stk Sf sf Os :
   (sub t u \/ immutable u = true) ->
   T sigs G B C R rest ((Sh, TMaybe u) :: s) s3 ->
   INV Σ H sc G (stk ++ Sf) (((Sh, t) :: s) ++ sf) Os -> length stk = length ((Sh, t) :: s) ->
-  res_ok Σ sc G B C R s3 Sf sf (eval defs (S n) H sc stk (WTryAs u false :: rest)).
+  res_ok Σ sc G B C R s3 Sf sf (eval defs (S n) H sc stk (WTryAs u :: rest)).
 Proof.
   intros Hu HT [Iv Bd] L. destruct stk as [|v stk]; try len. simpl in Iv.
   pop_sh Iv. destruct Iv as (-> & V & Hl & Iv).
@@ -1113,27 +1093,20 @@ Proof.
     split; [|exact Bd]. simpl. apply inv_push_sh; [exact Iv | constructor | simpl; tauto].
 Qed.
 
-Lemma hext_scope_ext Σ H Σ' H' R : hext sigs Σ H Σ' H' R -> scope_ext Σ Σ'.
-Proof. intros (_ & _ & _ & Ag & _) l G0 E. apply Ag; auto. Qed.
-
-Lemma w_try_copy G B C R t u rest s s3 Σ H sc stk Sf sf Os :
-  T sigs G B C R rest ((Sh, TMaybe u) :: s) s3 ->
+(** The explicit copy: the result is a new region, so the slot is fresh. *)
+Lemma w_copy G B C R t rest s s3 Σ H sc stk Sf sf Os :
+  T sigs G B C R rest ((Dp, t) :: s) s3 ->
   INV Σ H sc G (stk ++ Sf) (((Sh, t) :: s) ++ sf) Os -> length stk = length ((Sh, t) :: s) ->
-  res_ok Σ sc G B C R s3 Sf sf (eval defs (S n) H sc stk (WTryAs u true :: rest)).
+  res_ok Σ sc G B C R s3 Sf sf (eval defs (S n) H sc stk (WCopy :: rest)).
 Proof.
   intros HT [Iv Bd] L. destruct stk as [|v stk]; try len. simpl in Iv.
   pop_sh Iv. destruct Iv as (-> & V & Hl & Iv).
   pose proof (inv_heap_ok_out sigs _ _ _ _ _ _ _ Iv) as Ho.
   pose proof (inv_len _ _ _ _ _ _ _ _ Iv) as Ln.
-  assert (Rlt : forall l, In l (concat Os0) -> l < length H) by (intros; eapply inv_reg_lt; eauto).
-  simpl. destruct (validate H v u) eqn:Ev.
-  - destruct (copy H v u) as [H' v'] eqn:Ec.
-    destruct (copy_ok sigs Σ H (concat Os0) v t u H' v' Ln Ho Rlt V Hl Ev Ec) as (Σ' & Hx & V' & Hl').
-    eapply (next_ok n IH); [exact HT | | len | eapply hext_scope_ext; eauto].
-    split; [| eapply bounded_hext; eauto]. simpl. apply inv_push_sh; [| constructor; exact V' | exact Hl'].
-    eapply inv_hext; eauto.
-  - eapply (next_ok n IH); [exact HT | | len | apply scope_ext_refl].
-    split; [|exact Bd]. simpl. apply inv_push_sh; [exact Iv | constructor | simpl; tauto].
+  simpl. destruct (dcopy (length H) H v) as [[H' v']|] eqn:Ec; [|exact Logic.I].
+  destruct (dcopy_fresh sigs Σ H (concat Os0) (length H) v t H' v' Ln Ho V Hl Ec) as (N & O & -> & D & Rg).
+  destruct (inv_alloc_region sigs _ _ _ _ _ _ _ _ _ _ _ Iv Bd D Rg) as [Iv' Bd'].
+  eapply (next_ok n IH); [exact HT | split; [exact Iv' | exact Bd'] | len | apply scope_ext_app_l].
 Qed.
 
 Lemma child_ctx_inv B s B' : child_ctx B s B' -> B' = LNone \/ (B' = LChild /\ (B = LExact s \/ B = LChild)).
@@ -1246,7 +1219,7 @@ Proof.
   - eapply w_try_dp; eauto.
   - eapply w_try_sh; eauto.
   - eapply w_try_sh; eauto.
-  - eapply w_try_copy; eauto.
+  - eapply w_copy; eauto.
 Qed.
 
 Theorem eval_sound : forall n, P n.

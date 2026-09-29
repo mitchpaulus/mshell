@@ -89,52 +89,68 @@ Qed.
 (** ** R6 (from the doc): two refinements of one shared dict.
 
     Validating in place leaves one object with two incompatible static
-    types; the write through [d] breaks the read through [p]. *)
+    types; the write through [d] breaks the read through [p].  [tryAs]
+    never copies, so the core rejects [r6].  With an explicit [copy] before
+    the second validation ([r6_copy]) it type-checks and runs. *)
 Definition TJ := TRec [("age", FReq TInt)] FAbs.
 Definition TP := TRec [("age", FReq TInt)] FOpen.
 Definition IS := TUnion TInt TStr.
 
-Definition r6 (copy_d : bool) : prog :=
-  [ WDictNew; WInt 1; WSetK "age"; WStore "j"
-  ; WLoad "j"; WTryAs TP false; WUnwrap; WStore "p"
-  ; WLoad "j"; WTryAs (TDict IS) copy_d; WUnwrap; WStore "d"
-  ; WLoad "d"; WStr "age"; WStr "x"; WSetD; WDrop
-  ; WLoad "p"; WGetReq "age"; WInt 1; WAdd ].
+Definition r6_with (d_src : prog) : prog :=
+  ([ WDictNew; WInt 1; WSetK "age"; WStore "j"
+   ; WLoad "j"; WTryAs TP; WUnwrap; WStore "p" ]
+   ++ d_src ++
+   [ WTryAs (TDict IS); WUnwrap; WStore "d"
+   ; WLoad "d"; WStr "age"; WStr "x"; WSetD; WDrop
+   ; WLoad "p"; WGetReq "age"; WInt 1; WAdd ])%list.
 
-Example r6_in_place_stuck : is_stuck (run (r6 false)) = true.
+Definition r6 : prog := r6_with [WLoad "j"].
+Definition r6_copy : prog := r6_with [WLoad "j"; WCopy].
+
+Example r6_stuck : is_stuck (run r6) = true.
 Proof. vm_compute. reflexivity. Qed.
 
-Example r6_copy_runs : exists H, run (r6 true) = ROk ONormal H [VInt 2].
+Example r6_copy_runs : exists H, run r6_copy = ROk ONormal H [VInt 2].
 Proof. vm_compute. eexists. reflexivity. Qed.
 
 (** The in-place validation of [p] is allowed ([TJ <= TP]: nothing new can
-    be written through [p]); the in-place validation of [d] is not
-    ([TJ] is not below [{str: int | str}]), so the core requires the copy. *)
+    be written through [p]); the in-place validation of the shared [j] as
+    [d] is not ([TJ] is not below [{str: int | str}]). *)
 Example r6_p_in_place_ok : sub TJ TP.
 Proof.
   apply s_rec. intros k. unfold field_at. simpl.
   destruct (String.eqb k "age"); [apply fs_req; apply s_refl | apply fs_open].
 Qed.
 
-Example r6_d_needs_copy : ~ sub TJ (TDict IS).
+Example r6_d_not_below : ~ sub TJ (TDict IS).
 Proof.
   intros H. inversion H as [| | | | | | | |fs1 r1 fs2 r2 Hf|]; subst.
   specialize (Hf "age"). unfold field_at in Hf. simpl in Hf. inversion Hf.
 Qed.
 
-(** And the copying version type-checks in the core, so the soundness
-    theorem applies to it. *)
-Definition GR6 : tenv := [("j", TJ); ("p", TP); ("d", TDict IS)].
 Definition nosigs : string -> list ty -> option (list ty) -> Prop := fun _ _ _ => False.
+
+(** Since [r6] gets stuck, the soundness theorem says it has no typing
+    derivation, in any variable context. *)
+Example r6_rejected : forall G s, ~ T nosigs G LNone LNone None r6 [] s.
+Proof.
+  intros G s HT.
+  apply (soundness nosigs nodefs (fun f ins outs Hs => match Hs with end) G r6 s HT 200).
+  vm_compute. reflexivity.
+Qed.
+
+(** The copying version type-checks in the core, so the soundness theorem
+    applies to it. *)
+Definition GR6 : tenv := [("j", TJ); ("p", TP); ("d", TDict IS)].
 
 Ltac step r := eapply t_cons; [ r | ].
 
 Lemma sub_str_is : sub TStr IS.
 Proof. apply s_unionr2, s_refl. Qed.
 
-Example r6_typed : T nosigs GR6 LNone LNone None (r6 true) [] [(Sh, TInt)].
+Example r6_copy_typed : T nosigs GR6 LNone LNone None r6_copy [] [(Sh, TInt)].
 Proof.
-  unfold r6.
+  unfold r6_copy, r6_with. simpl.
   step ltac:(apply tw_dictnew).
   step ltac:(apply tw_int).
   (* make the int fresh (immutable), then strong-update the fresh record *)
@@ -151,9 +167,12 @@ Proof.
   step ltac:(apply tw_unwrap).
   step ltac:(apply tw_store with (t := TP); reflexivity).
   step ltac:(apply tw_load with (t := TJ); reflexivity).
-  step ltac:(apply tw_try_copy).
+  (* the explicit copy is fresh, so it is validated in place *)
+  step ltac:(apply tw_copy).
+  step ltac:(apply tw_try_dp).
   step ltac:(apply tw_unwrap).
-  step ltac:(apply tw_store with (t := TDict IS); reflexivity).
+  eapply t_sub; [ | eapply t_cons; [apply tw_store with (t := TDict IS); reflexivity | ] | apply ssub_refl ].
+  { constructor; [apply ss_forget, s_refl | constructor]. }
   step ltac:(apply tw_load with (t := TDict IS); reflexivity).
   step ltac:(apply tw_str).
   step ltac:(apply tw_str).
@@ -168,9 +187,34 @@ Proof.
   apply t_nil.
 Qed.
 
-Example r6_never_stuck : forall n, eval nodefs n [OScope []] 0 [] (r6 true) <> RStuck.
+Example r6_copy_never_stuck : forall n, eval nodefs n [OScope []] 0 [] r6_copy <> RStuck.
 Proof.
   intros n. eapply (soundness nosigs nodefs).
   - intros f ins outs [].
-  - exact r6_typed.
+  - exact r6_copy_typed.
 Qed.
+
+(** ** The copy is per path
+
+    One list stored under two keys ([{a: @xs, b: @xs}]) is copied twice, so
+    the copy is a tree.  Writing [5] into the copy's [a] changes neither
+    the copy's [b] nor [xs]: the result is [1 + 1].  A memoizing copy would
+    give [5 + 1], and no copy at all [5 + 5]. *)
+Definition copy_two_paths : prog :=
+  [ WNil; WInt 1; WPush; WStore "xs"
+  ; WDictNew; WLoad "xs"; WSetK "a"; WLoad "xs"; WSetK "b"; WStore "r"
+  ; WLoad "r"; WCopy; WStore "c"
+  ; WLoad "c"; WGetReq "a"; WInt 0; WInt 5; WSetAt; WDrop
+  ; WLoad "c"; WGetReq "b"; WInt 0; WGetAt
+  ; WLoad "xs"; WInt 0; WGetAt; WAdd ].
+
+Example copy_two_paths_separate : exists H, run copy_two_paths = ROk ONormal H [VInt 2].
+Proof. vm_compute. eexists. reflexivity. Qed.
+
+(** And a cyclic value is a checked error, not a type error. *)
+Definition copy_cycle : prog :=
+  [ WNil; WStore "xs"; WLoad "xs"; WLoad "xs"; WPush; WDrop
+  ; WLoad "xs"; WCopy ].
+
+Example copy_cycle_err : run copy_cycle = RErr.
+Proof. vm_compute. reflexivity. Qed.

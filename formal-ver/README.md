@@ -26,8 +26,8 @@ Theorem soundness : forall sigs defs,
 `eval` is a fuel-bounded definitional interpreter (`Interp.v`).
 It returns `RStuck` exactly where the Go runtime reports a type mismatch: `+` on a string, a
 missing *required* key, a non-quote given to `x`, stack underflow, and so on.
-It returns `RErr` for checked errors (`?` on none, index out of range, reading an unset variable)
-and `RExit` for `exit`.
+It returns `RErr` for checked errors (`?` on none, index out of range, reading an unset variable,
+`copy` of a cyclic value) and `RExit` for `exit`.
 "For all fuel" means every finite prefix of every run is free of type errors, including runs
 that never terminate.
 
@@ -39,7 +39,7 @@ What you have to read is whether the *definitions* say what the design means:
 | File | Lines | What to check |
 |---|---|---|
 | `Syntax.v` | ~130 | types, words, values, heap objects |
-| `Interp.v` | ~360 | the interpreter matches `Evaluator.go` where it matters (see below) |
+| `Interp.v` | ~380 | the interpreter matches `Evaluator.go` where it matters (see below) |
 | `Typing.v` | ~230 | each typing rule matches the doc |
 | `Subtyping.v` (definitions only) | ~80 | `sub`, `fsub`, `rsub`, `immutable` |
 
@@ -55,7 +55,8 @@ Everything else (`Invariant.v` onward) is proof and cannot make the theorem say 
 | Stack slots `τ` / `τ•` | `mark` = `Sh` / `Dp`; `slot_sub` is the one subsumption rule |
 | Typing rules, break/continue/return contexts | `TW` / `T` in `Typing.v` |
 | Kind patterns, abstract types | `tw_kind` (`kind_then`/`kind_else`), `tw_kind_list` (arm checked for every element type) |
-| `tryAs` | `tw_try_dp` / `tw_try_sub` / `tw_try_imm` / `tw_try_copy`; `validate`, `copy` in `Interp.v` |
+| `tryAs` (in place, never copies) | `tw_try_dp` / `tw_try_sub` / `tw_try_imm`; `validate` in `Interp.v` |
+| `copy` (explicit, result fresh) | `tw_copy`; `dcopy` in `Interp.v`; `dcopy_fresh` in `Copy.v`; `inv_alloc_region` in `InvOps.v` |
 | Type-changing updates of fresh values | `tw_setk_dp`, `tw_del_dp` |
 | `never` | `TQuote ins None`; `tw_exec_never`, `tw_call_never`, `tw_loop_forever` |
 | Store typing, freshness, commit | `vtyped`, `dtyped`, `inv` in `Invariant.v`; `commit_all` in `Commit.v` |
@@ -63,8 +64,9 @@ Everything else (`Invariant.v` onward) is proof and cannot make the theorem say 
 
 ## Modeling choices
 
-- **Curry style.** Words carry no types except `tryAs`, whose runtime needs the target, and its
-  in-place/copy flag, which the checker chooses. `as T` is the subsumption rule, not a word.
+- **Curry style.** Words carry no types except `tryAs`, whose runtime needs the target.
+  `as T` is the subsumption rule, not a word. No word's runtime behavior depends on a
+  static fact: `tryAs` is always in place, and `copy` always copies.
 - **Closed types; polymorphism as instance sets.** `sigs f ins outs` lists the closed instances of
   `f`'s signature. The checker's rigid-variable check implies this by the usual substitution lemma,
   which is not mechanized here.
@@ -75,6 +77,10 @@ Everything else (`Invariant.v` onward) is proof and cannot make the theorem say 
 - **Fresh values are deep-typed off the heap.** A fresh slot's lists and dicts form a tree that nothing
   else references, and their store types are ignored until the value is committed. Retyping a fresh
   value therefore changes no state.
+- **`copy` has a depth bound.** `dcopy` is given the heap size as its bound on object nesting, so it
+  runs out only on a cyclic value, which is a checked error (`copy_cycle_err`). The proof does not
+  depend on the bound. The result's region is exactly the new locations, and their store types are
+  placeholders until the value is committed.
 - **Child-stack builtins** (`each`) run the body on a one-element child stack, as the runtime does.
   `break`/`continue` inside the body discard the child stack and restore the outer one. The typing
   contexts are `LNone`, `LExact s` and `LChild` (the doc's `·`, `σ`, `⋆`).
@@ -94,10 +100,15 @@ Holes in the previous draft. Each has a program in `Examples.v` that the interpr
 3. **Every shape literal marked fresh**, including `{a: @xs}` (`hole_literal`). Fix: a literal is fresh
    only around fresh or immutable contents.
 
+R6 (two `tryAs` refinements of one shared dict) also runs to `RStuck` (`r6_stuck`), so by the theorem it
+has no typing in any context (`r6_rejected`). With an explicit `copy` before the second `tryAs` it
+type-checks and runs (`r6_copy_typed`, `r6_copy_runs`).
+
 Clarifications the proof forced:
 
 - `dict d` on an unknown value must bind the read-only `{| open}`, not `{str: k}`.
-- The validation copy must be per path (not memoized), and in-place validation needs a tree.
+- The explicit copy must be per path, not memoized, so its result is a tree (`copy_two_paths_separate`);
+  in-place validation of a fresh value needs a tree too.
 - A `never` def has no `return`.
 - An optional field must never be viewable as a deletable entry: that would break transitivity. This is
   the exact reason shapes are never `Dict`s. It was found while proving `sub_trans`.

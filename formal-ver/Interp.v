@@ -92,66 +92,80 @@ Fixpoint validate (H : heap) (v : val) (t : ty) {struct t} : bool :=
   | TQuote _ _ => false          (* not checkable *)
   end.
 
-(** ** Copying during validation
+(** ** The explicit copy ([copy])
 
-    Copies every list and dict the target type describes, per path: two
-    paths to the same object give two copies.  Parts the type does not
-    describe ([Top], [FOpen] labels, quotes) are shared. *)
-Fixpoint copy (H : heap) (v : val) (t : ty) {struct t} : heap * val :=
-  match t with
-  | TMaybe t' =>
-      match v with
-      | VJust x => let (H1, x') := copy H x t' in (H1, VJust x')
-      | _ => (H, v)
-      end
-  | TList t' =>
-      let fix cl (H0 : heap) (vs : list val) : heap * list val :=
-        match vs with
-        | [] => (H0, [])
-        | x :: xs =>
-            let (H1, x') := copy H0 x t' in
-            let (H2, xs') := cl H1 xs in (H2, x' :: xs')
-        end in
-      match v with
-      | VLoc l =>
-          match nth_error H l with
-          | Some (OList vs) =>
-              let (H1, vs') := cl H vs in
-              (app H1 [OList vs'], VLoc (length H1))
-          | _ => (H, v)
+    [dcopy] copies every list and dict reachable from a value, per path: two
+    paths to one object give two copies, so the result is a tree that
+    nothing else references.  Base values and quotes are shared (a quote's
+    captured scope is not part of the value).  The fuel [f] bounds how many
+    objects deep the copy goes; [WCopy] gives it [length H], which runs out
+    only on a cyclic value (a path of distinct objects is at most as long as
+    the heap).  Running out is a checked error. *)
+Fixpoint mapo (c : heap -> val -> option (heap * val)) (H0 : heap) (vs : list val)
+  : option (heap * list val) :=
+  match vs with
+  | [] => Some (H0, [])
+  | x :: xs =>
+      match c H0 x with
+      | Some (H1, x') =>
+          match mapo c H1 xs with
+          | Some (H2, xs') => Some (H2, x' :: xs')
+          | None => None
           end
-      | _ => (H, v)
+      | None => None
       end
-  | TRec fs r =>
-      let cf := fun (f : fstat) (H0 : heap) (x : val) =>
-        match f with
-        | FReq t' | FOpt t' | FDict t' => copy H0 x t'
-        | FAbs | FOpen => (H0, x)
-        end in
-      let fix ck (fs0 : list (label * fstat)) (k : label) (H0 : heap) (x : val) : heap * val :=
-        match fs0 with
-        | [] => cf r H0 x
-        | (k', f) :: rest => if String.eqb k k' then cf f H0 x else ck rest k H0 x
-        end in
-      let fix cd (H0 : heap) (kvs : list (string * val)) : heap * list (string * val) :=
-        match kvs with
-        | [] => (H0, [])
-        | (k, x) :: rest =>
-            let (H1, x') := ck fs k H0 x in
-            let (H2, rest') := cd H1 rest in (H2, (k, x') :: rest')
-        end in
-      match v with
-      | VLoc l =>
-          match nth_error H l with
-          | Some (ODict kvs) =>
-              let (H1, kvs') := cd H kvs in
-              (app H1 [ODict kvs'], VLoc (length H1))
-          | _ => (H, v)
+  end.
+
+Fixpoint mapo_kv (c : heap -> val -> option (heap * val)) (H0 : heap)
+    (kvs : list (string * val)) : option (heap * list (string * val)) :=
+  match kvs with
+  | [] => Some (H0, [])
+  | (k, x) :: rest =>
+      match c H0 x with
+      | Some (H1, x') =>
+          match mapo_kv c H1 rest with
+          | Some (H2, rest') => Some (H2, (k, x') :: rest')
+          | None => None
           end
-      | _ => (H, v)
+      | None => None
       end
-  | TUnion a b => if validate H v a then copy H v a else copy H v b
-  | _ => (H, v)
+  end.
+
+(** Copy the list or dict at [l], copying its elements with [c]; the new
+    object is appended to the heap. *)
+Definition ocopy (c : heap -> val -> option (heap * val)) (H : heap) (l : loc)
+  : option (heap * val) :=
+  match nth_error H l with
+  | Some (OList vs) =>
+      match mapo c H vs with
+      | Some (H1, vs') => Some (H1 ++ [OList vs'], VLoc (length H1))
+      | None => None
+      end
+  | Some (ODict kvs) =>
+      match mapo_kv c H kvs with
+      | Some (H1, kvs') => Some (H1 ++ [ODict kvs'], VLoc (length H1))
+      | None => None
+      end
+  | _ => None
+  end.
+
+(** Copy a value, copying the objects it references with [g]. *)
+Fixpoint vcopy (g : heap -> loc -> option (heap * val)) (H : heap) (v : val)
+  : option (heap * val) :=
+  match v with
+  | VJust x =>
+      match vcopy g H x with
+      | Some (H1, x') => Some (H1, VJust x')
+      | None => None
+      end
+  | VLoc l => g H l
+  | _ => Some (H, v)
+  end.
+
+Fixpoint dcopy (f : nat) (H : heap) (v : val) : option (heap * val) :=
+  match f with
+  | 0 => vcopy (fun _ _ => None) H v
+  | S f' => vcopy (ocopy (dcopy f')) H v
   end.
 
 (** ** The interpreter *)
@@ -347,13 +361,18 @@ Fixpoint eval (n : nat) (H : heap) (sc : loc) (st : list val) (e : prog) {struct
           end
       | _ => RStuck
       end
-  | WTryAs u cp =>
+  | WTryAs u =>
+      match st with
+      | v :: st' => if validate H v u then next H (VJust v :: st') else next H (VNone :: st')
+      | _ => RStuck
+      end
+  | WCopy =>
       match st with
       | v :: st' =>
-          if validate H v u then
-            if cp then let (H', v') := copy H v u in next H' (VJust v' :: st')
-            else next H (VJust v :: st')
-          else next H (VNone :: st')
+          match dcopy (length H) H v with
+          | Some (H', v') => next H' (v' :: st')
+          | None => RErr                     (* a cyclic value *)
+          end
       | _ => RStuck
       end
   end

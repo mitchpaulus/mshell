@@ -9,6 +9,7 @@ Commit.v
 Validate.v
 Kind.v
 InvOps.v
+Copy.v
 RecOps.v
 Soundness.v
 Examples.v

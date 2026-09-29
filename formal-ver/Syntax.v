@@ -72,7 +72,8 @@ Definition kind_eqb (a b : kind) : bool :=
 
     Curry style: no word carries a type except [WTryAs], whose target type
     the runtime needs for validation.  [as T] is not a word: it is the
-    subsumption rule of the typing judgment. *)
+    subsumption rule of the typing judgment.  [tryAs] validates in place and
+    never copies; copying is the explicit word [WCopy]. *)
 Inductive word : Type :=
 | WInt (n : nat) | WStr (s : string) | WBool (b : bool)
 | WAdd                          (* int int -- int *)
@@ -95,7 +96,8 @@ Inductive word : Type :=
 | WGetD                           (* runtime key, returns Maybe *)
 | WSetD                           (* runtime key *)
 | WKindIf (k : kind) (e1 e2 : list word)   (* kind pattern; value stays on the stack *)
-| WTryAs (u : ty) (copy : bool).           (* validation; [copy] chosen by elaboration *)
+| WTryAs (u : ty)                          (* validation, in place *)
+| WCopy.                                   (* explicit deep copy; the result is fresh *)
 
 Definition prog := list word.
 
