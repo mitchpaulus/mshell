@@ -1,0 +1,2 @@
+"MSH_READ_LIMIT" "lots" setenv
+(stdin len wl) "hello" < x

@@ -10,6 +10,9 @@ import (
 
 // Returns slice of HistoryItem data, last item is the most recent
 func ReadHistory(historyDir string) ([]HistoryItem, error) {
+	if err := prepareHistoryStorage(historyDir); err != nil {
+		return nil, err
+	}
 	historyFile := filepath.Join(historyDir, "msh_history")
 	history, err := ReadHistoryFile(historyFile)
 	if err != nil {
@@ -72,7 +75,7 @@ func ReadHistoryFile(historyFile string) ([]HistoryFileItem, error) {
 	var history []HistoryFileItem
 
 	// Open the history file
-	file, err := os.Open(historyFile)
+	file, err := openHistoryFile(historyFile, os.O_RDONLY)
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +113,7 @@ func ReadHashFile(hashFile string) (map[uint64]string, error) {
 	hashes := make(map[uint64]string)
 
 	// Open the command hash file
-	file, err := os.Open(hashFile)
+	file, err := openHistoryFile(hashFile, os.O_RDONLY)
 	if err != nil {
 		return nil, err
 	}
@@ -129,4 +132,24 @@ func ReadHashFile(hashFile string) (map[uint64]string, error) {
 	}
 
 	return hashes, nil
+}
+
+// Repair all existing files even when one of the history files is missing.
+func prepareHistoryStorage(dir string) error {
+	if err := ensureHistoryDir(dir); err != nil {
+		return err
+	}
+	for _, name := range []string{"msh_history", "msh_commands", "msh_dirs"} {
+		file, err := openHistoryFile(filepath.Join(dir, name), os.O_RDONLY)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if err := file.Close(); err != nil {
+			return err
+		}
+	}
+	return nil
 }

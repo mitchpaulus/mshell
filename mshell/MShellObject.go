@@ -626,24 +626,34 @@ func (q *MShellQuotation) GetEndToken() Token {
 	return q.MShellParseQuote.EndToken
 }
 
-// This function expects the caller to be the one to close the return context.
-func (q *MShellQuotation) BuildExecutionContext(context *ExecuteContext) (*ExecuteContext, error) {
-	quoteContext := ExecuteContext{
-		StandardInput:     nil,
-		StandardOutput:    nil,
-		StandardError:     nil,
-		Variables:         q.Variables,
-		ShouldCloseInput:  false,
-		ShouldCloseOutput: false,
-		ShouldCloseError:  false,
-		Pbm:               context.Pbm,
+// BuildExecutionContext sets dst to the context for running q from inside
+// context: q's redirects applied, otherwise context's streams, and q's
+// captured variables. The caller must Close dst. On error dst is left with
+// nothing to close. dst and context must not be the same.
+//
+// It fills dst in place rather than returning a context, because returning
+// the struct by value was a large share of the cost of running a quotation.
+func (q *MShellQuotation) BuildExecutionContext(dst *ExecuteContext, context *ExecuteContext) error {
+	if err := q.buildExecutionContext(dst, context); err != nil {
+		// A later redirect failed after an earlier one opened its file.
+		dst.Close()
+		*dst = ExecuteContext{}
+		return err
+	}
+	return nil
+}
+
+func (q *MShellQuotation) buildExecutionContext(quoteContext *ExecuteContext, context *ExecuteContext) error {
+	*quoteContext = ExecuteContext{
+		Variables: q.Variables,
+		Pbm:       context.Pbm,
 	}
 
 	// Check for same-path stdout/stderr redirection
 	samePath := q.StandardOutputFile != "" && q.StandardOutputFile == q.StandardErrorFile
 	if samePath && q.AppendOutput != q.AppendError {
 		t := q.GetStartToken()
-		return nil, fmt.Errorf("%d:%d: Cannot redirect stdout and stderr to the same file '%s' with different append modes.\n", t.Line, t.Column, q.StandardOutputFile)
+		return fmt.Errorf("%d:%d: Cannot redirect stdout and stderr to the same file '%s' with different append modes.\n", t.Line, t.Column, q.StandardOutputFile)
 	}
 
 	if q.StdinBehavior != STDIN_NONE {
@@ -655,7 +665,7 @@ func (q *MShellQuotation) BuildExecutionContext(context *ExecuteContext) (*Execu
 			file, err := os.Open(q.StandardInputFile)
 			if err != nil {
 				t := q.GetStartToken()
-				return nil, fmt.Errorf("%d:%d: Error opening file %s for reading: %s\n", t.Line, t.Column, q.StandardInputFile, err.Error())
+				return fmt.Errorf("%d:%d: Error opening file %s for reading: %s\n", t.Line, t.Column, q.StandardInputFile, err.Error())
 			}
 			quoteContext.StandardInput = file
 			quoteContext.ShouldCloseInput = true
@@ -680,7 +690,7 @@ func (q *MShellQuotation) BuildExecutionContext(context *ExecuteContext) (*Execu
 		}
 		if err != nil {
 			t := q.GetStartToken()
-			return nil, fmt.Errorf("%d:%d: Error opening file %s for writing: %s\n", t.Line, t.Column, q.StandardOutputFile, err.Error())
+			return fmt.Errorf("%d:%d: Error opening file %s for writing: %s\n", t.Line, t.Column, q.StandardOutputFile, err.Error())
 		}
 		quoteContext.StandardOutput = file
 		quoteContext.ShouldCloseOutput = true
@@ -709,7 +719,7 @@ func (q *MShellQuotation) BuildExecutionContext(context *ExecuteContext) (*Execu
 		}
 		if err != nil {
 			t := q.GetStartToken()
-			return nil, fmt.Errorf("%d:%d: Error opening file %s for writing: %s\n", t.Line, t.Column, q.StandardErrorFile, err.Error())
+			return fmt.Errorf("%d:%d: Error opening file %s for writing: %s\n", t.Line, t.Column, q.StandardErrorFile, err.Error())
 		}
 		quoteContext.StandardError = file
 		quoteContext.ShouldCloseError = true
@@ -731,7 +741,7 @@ func (q *MShellQuotation) BuildExecutionContext(context *ExecuteContext) (*Execu
 		quoteContext.StandardError = quoteContext.StandardOutput
 	}
 
-	return &quoteContext, nil
+	return nil
 }
 
 // type MShellQuotation2 struct {
@@ -1938,22 +1948,11 @@ func ParseRawString(inputString string) (string, error) {
 		c := allRunes[index]
 
 		if inEscape {
-			switch c {
-			case 'e':
-				b.WriteRune('\033') // Escape character
-			case 'n':
-				b.WriteRune('\n')
-			case 't':
-				b.WriteRune('\t')
-			case 'r':
-				b.WriteRune('\r')
-			case '\\':
-				b.WriteRune('\\')
-			case '"':
-				b.WriteRune('"')
-			default:
+			escaped, ok := escapedRune(c)
+			if !ok {
 				return "", fmt.Errorf("invalid escape character '%c'", c)
 			}
+			b.WriteRune(escaped)
 			inEscape = false
 		} else {
 			if c == '\\' {
@@ -2191,6 +2190,9 @@ const (
 	COL_FLOAT
 	COL_STRING
 	COL_DATETIME
+	// COL_DICT_STRING stores strings as codes into a table of distinct values.
+	// It behaves exactly like COL_STRING; only the storage differs.
+	COL_DICT_STRING
 )
 
 // GridColumn - Supports typed storage with fallback
@@ -2203,6 +2205,11 @@ type GridColumn struct {
 	StringData   []string
 	DateTimeData []time.Time
 	GenericData  []MShellObject   // Fallback for mixed types
+
+	// COL_DICT_STRING storage. DictValues holds distinct strings; a value may be unused.
+	DictCodes  []int32
+	DictValues []string
+	dictIndex  map[string]int32 // Lazily built reverse lookup of DictValues
 }
 
 // NewGridColumn creates a new column with the given name and row count
@@ -2224,11 +2231,43 @@ func (col *GridColumn) Get(index int) MShellObject {
 		return MShellFloat{Value: col.FloatData[index]}
 	case COL_STRING:
 		return MShellString{Content: col.StringData[index]}
+	case COL_DICT_STRING:
+		return MShellString{Content: col.DictValues[col.DictCodes[index]]}
 	case COL_DATETIME:
 		return &MShellDateTime{Time: col.DateTimeData[index]}
 	default:
 		return col.GenericData[index]
 	}
+}
+
+// isStringColType reports whether a column type holds only strings.
+func isStringColType(t ColumnType) bool {
+	return t == COL_STRING || t == COL_DICT_STRING
+}
+
+// StringAt returns the string at index for a COL_STRING or COL_DICT_STRING column.
+func (col *GridColumn) StringAt(index int) string {
+	if col.ColType == COL_DICT_STRING {
+		return col.DictValues[col.DictCodes[index]]
+	}
+	return col.StringData[index]
+}
+
+// internDictString returns the dictionary code for s, adding it if absent.
+func (col *GridColumn) internDictString(s string) int32 {
+	if col.dictIndex == nil {
+		col.dictIndex = make(map[string]int32, len(col.DictValues))
+		for i, v := range col.DictValues {
+			col.dictIndex[v] = int32(i)
+		}
+	}
+	code, ok := col.dictIndex[s]
+	if !ok {
+		code = int32(len(col.DictValues))
+		col.DictValues = append(col.DictValues, s)
+		col.dictIndex[s] = code
+	}
+	return code
 }
 
 // Set sets the value at the given row index
@@ -2245,6 +2284,10 @@ func (col *GridColumn) Set(index int, value MShellObject) {
 	case COL_STRING:
 		if strVal, ok := value.(MShellString); ok {
 			col.StringData[index] = strVal.Content
+		}
+	case COL_DICT_STRING:
+		if strVal, ok := value.(MShellString); ok {
+			col.DictCodes[index] = col.internDictString(strVal.Content)
 		}
 	case COL_DATETIME:
 		if dtVal, ok := value.(*MShellDateTime); ok {
@@ -2264,6 +2307,8 @@ func (col *GridColumn) Len() int {
 		return len(col.FloatData)
 	case COL_STRING:
 		return len(col.StringData)
+	case COL_DICT_STRING:
+		return len(col.DictCodes)
 	case COL_DATETIME:
 		return len(col.DateTimeData)
 	default:

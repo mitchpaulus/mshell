@@ -4,7 +4,7 @@ tempFile newZipName!
 
 "zipDir entries" wl
 @newZipName zipList zipEntries!
-@zipEntries :0: keys ("modified" !=) filter keys! # Filter out modified because that breaks unit tests
+@zipEntries :0: keys ("modified" !=) filter ("compressedSize" !=) filter keys! # Filter out modified and compressedSize: modified varies per run, compressedSize varies with the Go toolchain's deflate encoder
 @keys tjoin wl
 @zipEntries (
     entry! @keys (@entry swap get? str) map

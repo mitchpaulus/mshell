@@ -1,0 +1,85 @@
+# 'return' is allowed directly in a definition, and in an if or match
+# there, at any depth. It leaves the definition at once with the stack as
+# it is, which must match the definition's outputs.
+
+def inBody (-- str)
+    "body"
+    return
+    drop "not reached"
+end
+inBody wl
+
+def inIfBranches (int -- str)
+    n!
+    @n 1 = if
+        "if" return
+    else* @n 2 = *if
+        "else-if" return
+    else
+        "else" return
+    end
+    "not reached"
+end
+1 inIfBranches wl
+2 inIfBranches wl
+3 inIfBranches wl
+
+def inMatchArm (int -- str)
+    match
+        1 : "one" return,
+        int v : @v str " is other" + return,
+    end
+end
+1 inMatchArm wl
+7 inMatchArm wl
+
+# Nested: a match inside an if, and an if inside a match arm.
+def nested (int -- str)
+    n!
+    @n 0 > if
+        @n match
+            1 : "positive one" return,
+            _ : ,
+        end
+        @n 10 > if "big" return end
+        "positive"
+    else
+        "not positive"
+    end
+end
+1 nested wl
+50 nested wl
+5 nested wl
+-1 nested wl
+
+# A return leaves only its own definition, not the one that called it.
+def inner (-- str) "inner" return end
+def outer (-- str str) inner "outer" end
+outer swap wl wl
+
+# ... including when the definition was called from a quotation that a
+# builtin runs, so the builtin carries on with the next item.
+def firstIfBig (int -- int)
+    10 > if 100 return end
+    2
+end
+[1 20] (firstIfBig) map str wl
+[1 20] (firstIfBig 100 =) filter str wl
+[1 20] (firstIfBig str wl) each
+
+# A tail call, and a return inside a tail-called definition.
+def countdown (int -- str)
+    dup 0 = if drop "done" return end
+    1 - countdown
+end
+100000 countdown wl
+
+# To leave a loop early, break out of it and continue after the loop.
+def firstOver (int -- int)
+    n!
+    0 i!
+    -1 found!
+    ( @i @n > if @i found! break end @i 1 + i! ) loop
+    @found
+end
+3 firstOver str wl

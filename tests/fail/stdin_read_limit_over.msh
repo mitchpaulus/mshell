@@ -1,0 +1,4 @@
+"MSH_READ_LIMIT" "5" setenv
+"before" wl
+(stdin len wl) "hello!" < x
+"not reached" wl

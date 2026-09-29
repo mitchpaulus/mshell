@@ -1,0 +1,18 @@
+# MSH_READ_LIMIT caps how much the stdin builtin will read. It is read at call time.
+"MSH_READ_LIMIT" "5" setenv
+
+# Empty input
+(stdin len wl) "" < x
+
+# One below, exact
+(stdin len wl) "hell" < x
+(stdin len wl) "hello" < x
+
+# One below and exact 1024
+"MSH_READ_LIMIT" "1024" setenv
+(stdin len wl) "x" 1023 repeat "" join < x
+(stdin len wl) "x" 1024 repeat "" join < x
+
+# 0 removes the limit
+"MSH_READ_LIMIT" "0" setenv
+(stdin len wl) "hello world" < x

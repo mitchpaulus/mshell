@@ -1,0 +1,2 @@
+# Definitions are not allowed in an interpolation.
+$"{def f (--) end 1}" wl

@@ -1,0 +1,6 @@
+# Should fail: return inside a quotation run by iff. Use if instead.
+def early (bool -- str)
+    ("a" return) iff
+    "b"
+end
+true early wl

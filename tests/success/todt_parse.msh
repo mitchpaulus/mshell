@@ -1,0 +1,18 @@
+# All numeric dates with a 2 digit year are month/day/year, like the 4 digit year case.
+'12/16/25' toDt match just d: @d isoDateTimeFmt, none: 'none', end wl
+'1/2/25' toDt match just d: @d isoDateFmt, none: 'none', end wl
+'12-16-25' toDt match just d: @d isoDateFmt, none: 'none', end wl
+'12/16/25 2:56 PM' toDt match just d: @d isoDateTimeFmt, none: 'none', end wl
+'10/2/2022' toDt match just d: @d isoDateFmt, none: 'none', end wl
+'2025-12-16' toDt match just d: @d isoDateFmt, none: 'none', end wl
+
+# Out of range components return none instead of rolling over.
+'13/45/2025' toDt match just d: @d isoDateFmt, none: 'none', end wl
+'2025-16-12' toDt match just d: @d isoDateFmt, none: 'none', end wl
+'2/30/2025' toDt match just d: @d isoDateFmt, none: 'none', end wl
+'12/16/2025 25:00' toDt match just d: @d isoDateTimeFmt, none: 'none', end wl
+'12/16/2025 10:61' toDt match just d: @d isoDateTimeFmt, none: 'none', end wl
+
+# Leap day is valid only in leap years.
+'2/29/2024' toDt match just d: @d isoDateFmt, none: 'none', end wl
+'2/29/2025' toDt match just d: @d isoDateFmt, none: 'none', end wl

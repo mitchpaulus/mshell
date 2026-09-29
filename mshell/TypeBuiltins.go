@@ -279,6 +279,7 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 	// exit : (int -- Bottom)  — divergent; Bottom has no sig syntax.
 	r.regGo("exit", QuoteSig{Inputs: []TypeId{TidInt}, Outputs: []TypeId{TidBottom}})
 	r.reg("readFileBytes", "(str | path -- bytes)")
+	r.reg("clip", "(str | path -- )")
 	for _, name := range []string{"files", "dirs"} {
 		r.reg(name, "( -- [path])")
 	}
@@ -303,12 +304,13 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		"({v} -- int)",
 		"(str | path | Grid | GridView | GridRow -- int)",
 	)
-	r.reg("append",
-		"([t] t -- [t])",
-		"([t] u -- [t | u])",
-		"(t [t] -- [t])",
-		"(t [u] -- [t | u])",
-	)
+	// append mutates the list in place, so the element type cannot widen:
+	// other references to the list would still see the narrower type.
+	// The value-below-list order (`x [xs] append`) is handled by tryAppend,
+	// which can tell when the lower value is never a list; as a table
+	// entry it would be wrong whenever t is a list, since the runtime then
+	// appends the upper list into the lower one.
+	r.reg("append", "([t] t -- [t])")
 	r.reg("nth",
 		"([t] int -- t)",
 		"(int [t] -- t)",
@@ -316,6 +318,7 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		"(int str -- str)",
 	)
 	r.reg("foldl", "((a t -- a) a [t] -- a)")
+	r.reg("seq", "(int -- [int])")
 	r.reg("reverse",
 		"([t] -- [t])",
 		"(str -- str)",
@@ -384,6 +387,8 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 	r.reg("wsplit", "(str -- [str])")
 	r.reg("split", "(str str -- [str])")
 	r.reg("lines", "(str -- [str])")
+	r.reg("unlines", "([str] -- str)")
+	r.reg("unlinesCrLf", "([str] -- str)")
 	for _, name := range []string{"trim", "trimStart", "trimEnd", "upper", "lower", "title"} {
 		r.reg(name, "(str -- str)")
 	}
@@ -552,15 +557,16 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 	// still tolerates extra keys the runtime ignores.
 	//
 	// Output is precise: on a successful request the runtime always builds
-	// a 4-field response dict. Encoding it as a shape lets `:status?` /
+	// a response dict (with cookieJar only when supplied). A shape lets `:status?` /
 	// `:body?` etc. resolve their value types without fresh vars.
 	// `url` is a required string. `body` and header values are passed through
 	// CastString at runtime, which succeeds for str/int/path ("stringable");
 	// `timeout` must be a plain int and `followRedirects` a plain bool.
 	// Everything but `url` is optional.
-	httpReq := "{url: str, timeout?: int, followRedirects?: bool, headers?: {str: str | int | path}, body?: str | int | path}"
+	httpCookie := "{name: str, value: str, domain: str, path: str, hostOnly: bool, secure: bool, httpOnly: bool, sameSite: str, expires: int | float | null, lastAccess: int | float, quoted: bool}"
+	httpReq := "{url: str, timeout?: int, followRedirects?: bool, headers?: {str: str | int | path}, body?: str | int | path, cookieJar?: ["+httpCookie+"]}"
 	for _, name := range []string{"httpGet", "httpPost"} {
-		r.reg(name, "("+httpReq+" -- Maybe[{status: int, reason: str, headers: {[str]}, body: bytes}])")
+		r.reg(name, "("+httpReq+" -- Maybe[{status: int, reason: str, headers: {[str]}, body: bytes, cookieJar?: ["+httpCookie+"]}])")
 	}
 	r.reg("psub", "(str -- path)")
 	for _, name := range []string{"strCmp", "versionSortCmp"} {

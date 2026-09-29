@@ -7,6 +7,7 @@ import (
 	"bytes"
 	crand "crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/csv"
 	"encoding/base64"
 	"encoding/hex"
@@ -80,6 +81,74 @@ func (objList *MShellStack) Pop1(t Token) (MShellObject, error) {
 // 0o/0x/0b base prefixes the lexer accepts (in addition to plain decimal). The
 // resulting int carries no record of which base was written; the prefix is
 // purely a source-level convenience.
+// joinStringItems joins string items with a separator, also after the last
+// item when trailing is true. It sizes the result up front, so it allocates once.
+// Returns the first item that is not a string, if any.
+func joinStringItems(items []MShellObject, sep string, trailing bool) (string, MShellObject) {
+	if len(items) == 0 {
+		return "", nil
+	}
+
+	size := len(sep) * (len(items) - 1)
+	if trailing {
+		size += len(sep)
+	}
+	for _, item := range items {
+		switch itemTyped := item.(type) {
+		case MShellString:
+			size += len(itemTyped.Content)
+		case MShellLiteral:
+			size += len(itemTyped.LiteralText)
+		default:
+			return "", item
+		}
+	}
+
+	var b strings.Builder
+	b.Grow(size)
+	for i, item := range items {
+		if i > 0 {
+			b.WriteString(sep)
+		}
+		switch itemTyped := item.(type) {
+		case MShellString:
+			b.WriteString(itemTyped.Content)
+		case MShellLiteral:
+			b.WriteString(itemTyped.LiteralText)
+		}
+	}
+	if trailing {
+		b.WriteString(sep)
+	}
+	return b.String(), nil
+}
+
+// parseDateTimeLiteral converts a DATETIME token lexeme, like 2023-10-01T13:01:30,
+// into a date/time. Missing time components are zero.
+func parseDateTimeLiteral(lexeme string) *MShellDateTime {
+	year, _ := strconv.Atoi(lexeme[0:4])
+	month, _ := strconv.Atoi(lexeme[5:7])
+	day, _ := strconv.Atoi(lexeme[8:10])
+
+	hour := 0
+	minute := 0
+	second := 0
+	if len(lexeme) >= 13 {
+		hour, _ = strconv.Atoi(lexeme[11:13])
+	}
+
+	if len(lexeme) >= 16 {
+		minute, _ = strconv.Atoi(lexeme[14:16])
+	}
+
+	if len(lexeme) >= 19 {
+		second, _ = strconv.Atoi(lexeme[17:19])
+	}
+
+	dt := time.Date(year, time.Month(month), day, hour, minute, second, 0, time.UTC)
+	return &MShellDateTime{Time: dt, OriginalString: lexeme}
+}
+
 func parseIntLiteral(s string) (int, error) {
 	body := s
 	neg := false
@@ -193,6 +262,13 @@ func (objList *MShellStack) Pop4(t Token) (MShellObject, MShellObject, MShellObj
 		return nil, nil, nil, nil, fmt.Errorf("%d:%d: Cannot do '%s' operation on a stack with only three items.\n", t.Line, t.Column, t.Lexeme)
 	}
 	return obj1, obj2, obj3, obj4, nil
+}
+
+// resetTo empties the stack and pushes item, reusing the stack's memory.
+// Builtins that run a quotation once per element use it so that each
+// element doesn't allocate a new stack.
+func (objList *MShellStack) resetTo(item MShellObject) {
+	*objList = append((*objList)[:0], item)
 }
 
 func (objList *MShellStack) Push(obj MShellObject) {
@@ -397,6 +473,15 @@ type EvalState struct {
 
 	defIndex    map[string]int
 	defIndexLen int
+
+	// frames is the evaluator's frame stack, shared by every Evaluate call,
+	// including the ones builtins make to run a quotation. Keeping one
+	// slice means its memory is reused rather than allocated per call.
+	frames []EvaluationFrame
+
+
+	// Numeric date order (m/d/y vs d/m/y vs y/m/d) learned from the first unambiguous toDt.
+	DateOrder DateOrder
 }
 
 func (state *EvalState) EnvironmentHistory() *EnvironmentHistory {
@@ -419,15 +504,15 @@ func (state *EvalState) RebuildDefinitionIndex(definitions []MShellDefinition) {
 	state.defIndexLen = len(definitions)
 }
 
-func (state *EvalState) lookupDefinition(definitions []MShellDefinition, name string) (MShellDefinition, bool) {
+func (state *EvalState) lookupDefinition(definitions []MShellDefinition, name string) (*MShellDefinition, bool) {
 	if state.defIndex == nil || state.defIndexLen != len(definitions) {
 		state.RebuildDefinitionIndex(definitions)
 	}
 	i, ok := state.defIndex[name]
 	if !ok || i >= len(definitions) {
-		return MShellDefinition{}, false
+		return nil, false
 	}
-	return definitions[i], true
+	return &definitions[i], true
 }
 
 func (state *EvalState) AddCompletionDefinitions(definitions []MShellDefinition) {
@@ -462,48 +547,59 @@ func (result EvalResult) String() string {
 }
 
 // FrameType indicates the type of evaluation frame
-type FrameType int
+type FrameType uint8
 
 const (
 	FRAME_NORMAL FrameType = iota // Standard evaluation (definition, quote, if body)
 	FRAME_LIST                    // List literal - collect stack into list
 	FRAME_DICT                    // Dict value - collect stack for key
+	FRAME_FORMATSTRING            // Format string interpolation - collect stack for text
 	FRAME_LOOP                    // Loop body - iterate until break
 )
 
-// EvaluationFrame represents a single frame in the evaluation stack
-type EvaluationFrame struct {
-	Objects       []MShellParseItem
-	Index         int
-	Context       ExecuteContext
-	Stack         *MShellStack
-	Definitions   []MShellDefinition
-	CallStackItem CallStackItem
-	FrameType     FrameType
+// loopMaxIterations is the most times a single 'loop' may run its body.
+const loopMaxIterations = 15000000
 
-	// For FRAME_LIST: parent stack to push result list onto
+// EvaluationFrame is one entry on the evaluator's frame stack: a sequence of
+// parse items being run, and how far along it is.
+//
+// The fields read for every token (Objects, Index, Stack, FrameType) come
+// first so they share a cache line. The rest are read when a frame starts,
+// finishes, or calls a builtin.
+type EvaluationFrame struct {
+	Objects   []MShellParseItem
+	Index     int
+	Stack     *MShellStack
+	FrameType FrameType
+
+	// Whether to call Context.Close() when this frame is popped. Set only
+	// when building the frame's context opened a file for a redirect.
+	ShouldCloseContext bool
+
+	// FRAME_LIST, FRAME_DICT, and FRAME_FORMATSTRING: the stack the finished
+	// list, dict, or string is pushed onto.
 	ParentStack *MShellStack
 
-	// For FRAME_DICT: key name and dict being built
-	DictKey       string
-	Dict          *MShellDict
-	DictKeyValues []MShellDictKeyValue // Remaining keys to process
-	DictKeyIndex  int
+	// FRAME_DICT: the literal being evaluated, which key of it is being
+	// evaluated, and the dict being built.
+	ParseDict    *MShellParseDict
+	DictKeyIndex int
+	Dict         *MShellDict
 
-	// For FRAME_LOOP: loop state
-	LoopMax          int
+	// FRAME_FORMATSTRING: the format string being evaluated, which
+	// interpolation of it is being evaluated, and the text built so far.
+	ParseFormatString *MShellParseFormatString
+	FormatIndex       int
+	FormatText        *strings.Builder
+
+	// FRAME_LOOP: iterations completed, and the stack size the body must
+	// leave unchanged.
 	LoopCount        int
-	LoopQuotation    *MShellQuotation
 	InitialStackSize int
 
-	// Whether to call Context.Close() when this frame is popped
-	ShouldCloseContext bool
-}
-
-// MShellDictKeyValue holds a key-value pair for dictionary evaluation
-type MShellDictKeyValue struct {
-	Key   string
-	Value []MShellParseItem
+	Definitions   []MShellDefinition
+	CallStackItem CallStackItem
+	Context       ExecuteContext
 }
 
 type ExecuteContext struct {
@@ -511,13 +607,18 @@ type ExecuteContext struct {
 	StandardOutput    io.Writer
 	StandardError     io.Writer
 	Variables         map[string]MShellObject // Mapping from variable name without leading '@' or trailing '!' to object.
+	Pbm               IPathBinManager
+	PipelineGroup     *PipelineGroup  // Shared process-group coordinator for the pipeline (only set for pipelines)
+	LaunchOnce        *sync.Once      // Signals this stage launched, exactly once (only set for pipeline stages)
 	ShouldCloseInput  bool
 	ShouldCloseOutput bool
 	ShouldCloseError  bool
-	Pbm               IPathBinManager
 	InPipeline        bool            // True if this is part of a pipeline; foreground handling is done by RunPipeline
-	PipelineGroup     *PipelineGroup  // Shared process-group coordinator for the pipeline (only set for pipelines)
-	LaunchOnce        *sync.Once      // Signals this stage launched, exactly once (only set for pipeline stages)
+}
+
+// opensFiles reports whether Close has anything to close.
+func (context *ExecuteContext) opensFiles() bool {
+	return context.ShouldCloseInput || context.ShouldCloseOutput || context.ShouldCloseError
 }
 
 type fileDescriptorProvider interface {
@@ -586,7 +687,33 @@ func SimpleSuccess() EvalResult {
 	return EvalResult{true, false, -1, 0, false}
 }
 
+// nilIfNothingToDo converts an EvalResult into the form returned by the
+// per-token functions that Run calls. It returns nil when Run has nothing to
+// do but move on to the next token. Otherwise it returns a pointer to the
+// result, which Run must act on: a failure, an exit, a break, or a continue.
+//
+// Run's callees return a pointer rather than an EvalResult because passing
+// the 32-byte struct back up through each layer of the dispatch, once per
+// token, was the largest cost in the interpreter loop.
+func nilIfNothingToDo(result EvalResult) *EvalResult {
+	if result.Success && !result.ExitCalled && result.BreakNum <= 0 && !result.Continue {
+		return nil
+	}
+	// Copy before taking the address, so only this branch allocates.
+	escaped := result
+	return &escaped
+}
+
+// failPtr is FailWithMessage for functions that return *EvalResult.
+func (state *EvalState) failPtr(message string) *EvalResult {
+	result := state.FailWithMessage(message)
+	return &result
+}
+
 func (state *EvalState) FailWithMessage(message string) EvalResult {
+	// Messages quote user input and file names, which may hold bytes a
+	// terminal would execute. Print them visibly instead.
+	message = terminalSafeText(message, true)
 	// Log message to stderr
 	if state.CallStack == nil {
 		fmt.Fprintf(os.Stderr, "No call stack available.\n")
@@ -598,14 +725,15 @@ func (state *EvalState) FailWithMessage(message string) EvalResult {
 	for _, callStackItem := range state.CallStack {
 		parseItem := callStackItem.MShellParseItem
 
+		name := terminalSafeText(callStackItem.Name, false)
 		if parseItem == nil {
-			fmt.Fprintf(os.Stderr, "%s\n", callStackItem.Name)
+			fmt.Fprintf(os.Stderr, "%s\n", name)
 		} else {
 			startToken := parseItem.GetStartToken()
 			if startToken.TokenFile != nil {
-				fmt.Fprintf(os.Stderr, "%s:%d:%d %s\n", startToken.TokenFile.Path, startToken.Line, startToken.Column, callStackItem.Name)
+				fmt.Fprintf(os.Stderr, "%s:%d:%d %s\n", terminalSafeText(startToken.TokenFile.Path, false), startToken.Line, startToken.Column, name)
 			} else {
-				fmt.Fprintf(os.Stderr, "%d:%d %s\n", startToken.Line, startToken.Column, callStackItem.Name)
+				fmt.Fprintf(os.Stderr, "%d:%d %s\n", startToken.Line, startToken.Column, name)
 			}
 		}
 	}
@@ -620,6 +748,7 @@ const (
 	CALLSTACKFILE CallStackType = iota
 	CALLSTACKLIST
 	CALLSTACKDICT
+	CALLSTACKFORMATSTRING
 	CALLSTACKQUOTE
 	CALLSTACKDEF
 	CALLSTACKIF
@@ -647,16 +776,106 @@ func (stack *CallStack) Pop() (CallStackItem, error) {
 	return popped, nil
 }
 
-// Run executes the frame-based evaluator with TCO support
-func (state *EvalState) Run(frames *[]EvaluationFrame) EvalResult {
-	for len(*frames) > 0 {
-		frame := &(*frames)[len(*frames)-1]
+// Evaluate runs objects against stack and returns once they finish.
+//
+// It is the only evaluator: files, the REPL, and every builtin that runs a
+// quotation (map, each, sortBy, ...) come through here. Calls nest, since a
+// builtin runs while an outer Evaluate is still going, but they all share
+// state.frames. A nested call adds its frames above the ones already there
+// and removes them before it returns, so after the first few calls running
+// code allocates no frame memory.
+//
+// A break or continue that finds no loop within this call is returned to the
+// caller (for example, a 'break' in an 'each' body ends the 'each' and the
+// loop around it). The parser only allows 'return' where it cannot leave
+// the Evaluate call it runs in: directly in a body, or in an if or match
+// inside one. See checkReturnPlacement.
+func (state *EvalState) Evaluate(objects []MShellParseItem, stack *MShellStack, context ExecuteContext, definitions []MShellDefinition, callStackItem CallStackItem) EvalResult {
+	base, callStackLen, loopDepth := len(state.frames), len(state.CallStack), state.LoopDepth
+	frame := state.pushEvaluateFrame(objects, stack, definitions, callStackItem)
+	frame.Context = context
+	return state.finishEvaluate(base, callStackLen, loopDepth)
+}
 
-		// Frame exhausted - handle completion
+// EvaluateQuote runs quotation on stack, with the context its redirects
+// describe. Builtins use it to run the quotations they are given.
+func (state *EvalState) EvaluateQuote(quotation *MShellQuotation, stack *MShellStack, outerContext ExecuteContext, definitions []MShellDefinition) (EvalResult, error) {
+	base, callStackLen, loopDepth := len(state.frames), len(state.CallStack), state.LoopDepth
+	callStackItem := CallStackItem{MShellParseItem: quotation, Name: "Quote", CallStackType: CALLSTACKQUOTE}
+	frame := state.pushEvaluateFrame(quotation.Tokens, stack, definitions, callStackItem)
+	if err := quotation.BuildExecutionContext(&frame.Context, &outerContext); err != nil {
+		state.popFrame()
+		return EvalResult{}, err
+	}
+	frame.ShouldCloseContext = frame.Context.opensFiles()
+	return state.finishEvaluate(base, callStackLen, loopDepth), nil
+}
+
+// pushEvaluateFrame pushes the bottom frame of an Evaluate call. The caller
+// sets its Context.
+func (state *EvalState) pushEvaluateFrame(objects []MShellParseItem, stack *MShellStack, definitions []MShellDefinition, callStackItem CallStackItem) *EvaluationFrame {
+	if callStackItem.MShellParseItem != nil {
+		state.CallStack.Push(callStackItem)
+	}
+	frame := state.pushEmptyFrame()
+	frame.Objects = objects
+	frame.Stack = stack
+	frame.FrameType = FRAME_NORMAL
+	frame.Definitions = definitions
+	frame.CallStackItem = callStackItem
+	return frame
+}
+
+// finishEvaluate runs the frames an Evaluate call pushed above base.
+func (state *EvalState) finishEvaluate(base int, callStackLen int, loopDepth int) EvalResult {
+	result := state.run(base)
+
+	// After a success every frame above base has already been popped. After
+	// a failure, an exit, or a break or continue leaving this call, some
+	// remain: close what they opened and drop them, so the caller sees the
+	// frame stack, call stack, and loop depth as they were.
+	for len(state.frames) > base {
+		state.popFrame()
+	}
+	state.CallStack = state.CallStack[:callStackLen]
+	state.LoopDepth = loopDepth
+	return result
+}
+
+// pushEmptyFrame adds a zeroed frame to the top of state.frames and returns
+// it. Frames are filled in place rather than built and copied in, since a
+// frame is several cache lines.
+//
+// It may move state.frames, so a frame pointer taken before the call must
+// not be used after it. pushChildFrame returns a fresh parent pointer.
+func (state *EvalState) pushEmptyFrame() *EvaluationFrame {
+	n := len(state.frames)
+	if n < cap(state.frames) {
+		// popFrame zeroed this slot.
+		state.frames = state.frames[:n+1]
+	} else {
+		state.frames = append(state.frames, EvaluationFrame{})
+	}
+	return &state.frames[n]
+}
+
+// pushChildFrame pushes a zeroed frame above the current top frame, which
+// it returns as parent. The child shares the parent's definitions.
+func (state *EvalState) pushChildFrame() (parent *EvaluationFrame, child *EvaluationFrame) {
+	child = state.pushEmptyFrame()
+	parent = &state.frames[len(state.frames)-2]
+	child.Definitions = parent.Definitions
+	return parent, child
+}
+
+// run executes frames until only the bottom base frames remain.
+func (state *EvalState) run(base int) EvalResult {
+	for len(state.frames) > base {
+		frame := &state.frames[len(state.frames)-1]
+
 		if frame.Index >= len(frame.Objects) {
-			result := state.completeFrame(frames)
-			if !result.Success {
-				return result
+			if result := state.completeFrame(); result != nil {
+				return *result
 			}
 			continue
 		}
@@ -664,236 +883,326 @@ func (state *EvalState) Run(frames *[]EvaluationFrame) EvalResult {
 		token := frame.Objects[frame.Index]
 		frame.Index++
 
-		// Process token - returns error result or success
-		result := state.processToken(token, frame, frames)
+		// nil means carry on with the next token. frame must not be used
+		// after this call: it may have pushed frames, and a builtin that
+		// ran a quotation may have grown (and so moved) state.frames.
+		result := state.processToken(token, frame, base)
+		if result == nil {
+			continue
+		}
 		if !result.Success || result.ExitCalled {
-			return result
+			return *result
 		}
 
-		// Handle control flow from old Evaluate fallback
+		// A break or continue passed back by a builtin that ran a
+		// quotation, such as a 'break' inside an 'each' body.
 		if result.BreakNum > 0 {
-			state.handleBreak(frames, result.BreakNum)
-		}
-		if result.Continue {
-			state.handleContinue(frames)
+			if result := state.handleBreak(base, result.BreakNum); result != nil {
+				return *result
+			}
+		} else if result.Continue {
+			if result := state.handleContinue(base); result != nil {
+				return *result
+			}
 		}
 	}
 
 	return SimpleSuccess()
 }
 
-// handleBreak pops frames until we've exited N loops
-func (state *EvalState) handleBreak(frames *[]EvaluationFrame, breakNum int) {
-	for breakNum > 0 && len(*frames) > 0 {
-		frame := &(*frames)[len(*frames)-1]
-		if frame.FrameType == FRAME_LOOP {
-			breakNum--
-			state.LoopDepth--
-		}
-		if frame.ShouldCloseContext {
-			frame.Context.Close()
-		}
-		if frame.CallStackItem.MShellParseItem != nil {
-			state.CallStack.Pop()
-		}
-		*frames = (*frames)[:len(*frames)-1]
+// popFrame removes the top frame, undoing what pushing it did: closing
+// files its context opened, popping its call stack entry, and leaving the
+// loop if it was one.
+func (state *EvalState) popFrame() {
+	frame := &state.frames[len(state.frames)-1]
+	if frame.ShouldCloseContext {
+		frame.Context.Close()
 	}
+	if frame.CallStackItem.MShellParseItem != nil {
+		state.CallStack.Pop()
+	}
+	if frame.FrameType == FRAME_LOOP {
+		state.LoopDepth--
+	}
+	// Clear the slot so the reused slice doesn't keep the frame's stack,
+	// variables, and files reachable.
+	*frame = EvaluationFrame{}
+	state.frames = state.frames[:len(state.frames)-1]
 }
 
-// handleContinue pops frames until loop, restarts it
-func (state *EvalState) handleContinue(frames *[]EvaluationFrame) {
-	for len(*frames) > 0 {
-		frame := &(*frames)[len(*frames)-1]
-		if frame.FrameType == FRAME_LOOP {
-			frame.Index = 0 // Restart loop body
+// handleBreak pops frames until it has left breakNum loops. If it reaches
+// base first, it returns a result carrying the loops still to leave, for
+// the caller of this Evaluate to handle. A break may not leave a format
+// string interpolation.
+func (state *EvalState) handleBreak(base int, breakNum int) *EvalResult {
+	for breakNum > 0 {
+		if len(state.frames) == base {
+			return &EvalResult{Success: true, BreakNum: breakNum}
+		}
+		frame := &state.frames[len(state.frames)-1]
+		switch frame.FrameType {
+		case FRAME_LOOP:
+			breakNum--
+		case FRAME_FORMATSTRING:
+			return state.failPtr(fmt.Sprintf("%s'break' cannot leave a format string interpolation.\n", formatInterpolationLocation(frame.ParseFormatString, frame.FormatIndex)))
+		}
+		state.popFrame()
+	}
+	return nil
+}
+
+// handleContinue pops frames down to the innermost loop and restarts its
+// body. If it reaches base first, it returns a continue result for the
+// caller of this Evaluate to handle.
+func (state *EvalState) handleContinue(base int) *EvalResult {
+	for len(state.frames) > base {
+		frame := &state.frames[len(state.frames)-1]
+		switch frame.FrameType {
+		case FRAME_LOOP:
+			// Restarting counts as finishing the iteration.
+			return state.finishLoopIteration(frame)
+		case FRAME_FORMATSTRING:
+			return state.failPtr(fmt.Sprintf("%s'continue' cannot leave a format string interpolation.\n", formatInterpolationLocation(frame.ParseFormatString, frame.FormatIndex)))
+		}
+		state.popFrame()
+	}
+	return &EvalResult{Success: true, Continue: true}
+}
+
+// handleReturn pops frames until it has popped the frame of the definition
+// being run, or reaches base (a 'return' in top-level code).
+//
+// The parser only allows 'return' directly in a body or in an if or match
+// inside one, so the frames above the definition's are all if and match
+// bodies, and the return never has to leave this Evaluate call.
+func (state *EvalState) handleReturn(base int) {
+	for len(state.frames) > base {
+		frame := &state.frames[len(state.frames)-1]
+		isDefFrame := frame.FrameType == FRAME_NORMAL && frame.CallStackItem.CallStackType == CALLSTACKDEF
+		state.popFrame()
+		if isDefFrame {
 			return
 		}
-		if frame.ShouldCloseContext {
-			frame.Context.Close()
-		}
-		if frame.CallStackItem.MShellParseItem != nil {
-			state.CallStack.Pop()
-		}
-		*frames = (*frames)[:len(*frames)-1]
 	}
 }
 
-// handleReturn pops frames until we exit current definition
-func (state *EvalState) handleReturn(frames *[]EvaluationFrame) {
-	for len(*frames) > 0 {
-		frame := &(*frames)[len(*frames)-1]
-		isDefFrame := frame.FrameType == FRAME_NORMAL && frame.CallStackItem.CallStackType == CALLSTACKDEF
-		if frame.ShouldCloseContext {
-			frame.Context.Close()
+// finishLoopIteration checks the loop body left the stack as it found it,
+// then starts the next iteration.
+func (state *EvalState) finishLoopIteration(frame *EvaluationFrame) *EvalResult {
+	if len(*frame.Stack) != frame.InitialStackSize {
+		location := ""
+		// Quotations built by builtins have no parse quote to point at.
+		if q, ok := frame.CallStackItem.MShellParseItem.(*MShellQuotation); ok && q.MShellParseQuote != nil {
+			location = fmt.Sprintf("%d:%d: ", q.MShellParseQuote.StartToken.Line, q.MShellParseQuote.StartToken.Column)
 		}
-		if frame.CallStackItem.MShellParseItem != nil {
-			state.CallStack.Pop()
-		}
-		*frames = (*frames)[:len(*frames)-1]
-		if isDefFrame {
-			return // Exited the definition
-		}
+		return state.failPtr(fmt.Sprintf("%sStack size changed from %d to %d in loop.\n", location, frame.InitialStackSize, len(*frame.Stack)))
 	}
+	frame.LoopCount++
+	if frame.LoopCount >= loopMaxIterations {
+		return state.failPtr(fmt.Sprintf("Loop exceeded maximum number of iterations (%d).\n", loopMaxIterations))
+	}
+	frame.Index = 0
+	return nil
 }
 
-// completeFrame handles what happens when a frame finishes executing
-func (state *EvalState) completeFrame(frames *[]EvaluationFrame) EvalResult {
-	frame := &(*frames)[len(*frames)-1]
+// completeFrame handles the top frame running out of items.
+func (state *EvalState) completeFrame() *EvalResult {
+	frame := &state.frames[len(state.frames)-1]
 
 	switch frame.FrameType {
 	case FRAME_LIST:
-		// Collect isolated stack into a list, push onto parent
+		// Collect the list's own stack into a list on the parent stack.
 		list := NewList(len(*frame.Stack))
 		copy(list.Items, *frame.Stack)
 		frame.ParentStack.Push(list)
-		// Pop call stack if needed
-		if frame.CallStackItem.MShellParseItem != nil {
-			state.CallStack.Pop()
-		}
-		*frames = (*frames)[:len(*frames)-1]
+		state.popFrame()
 
 	case FRAME_DICT:
-		// Store result for current key
-		if len(*frame.Stack) == 0 {
-			return state.FailWithMessage(fmt.Sprintf("Dictionary key '%s' evaluated to an empty stack.\n", frame.DictKey))
+		kv := &frame.ParseDict.Items[frame.DictKeyIndex]
+		if len(*frame.Stack) != 1 {
+			return state.dictValueFailure(kv, len(*frame.Stack))
 		}
-		if len(*frame.Stack) > 1 {
-			return state.FailWithMessage(fmt.Sprintf("Dictionary key '%s' evaluated to a stack with more than one item.\n", frame.DictKey))
-		}
-		frame.Dict.Items[frame.DictKey] = (*frame.Stack)[0]
+		frame.Dict.Items[kv.Key] = (*frame.Stack)[0]
 
-		// Check if more keys to process
 		frame.DictKeyIndex++
-		if frame.DictKeyIndex < len(frame.DictKeyValues) {
-			// Reset for next key
-			kv := frame.DictKeyValues[frame.DictKeyIndex]
-			frame.Objects = kv.Value
+		if frame.DictKeyIndex < len(frame.ParseDict.Items) {
+			// Evaluate the next key's value on the same, now empty, stack.
+			frame.Objects = frame.ParseDict.Items[frame.DictKeyIndex].Value
 			frame.Index = 0
-			frame.DictKey = kv.Key
-			*frame.Stack = MShellStack{}
+			*frame.Stack = (*frame.Stack)[:0]
 		} else {
-			// Dict complete - push onto parent
 			frame.ParentStack.Push(frame.Dict)
-			// Pop call stack if needed
-			if frame.CallStackItem.MShellParseItem != nil {
-				state.CallStack.Pop()
-			}
-			*frames = (*frames)[:len(*frames)-1]
+			state.popFrame()
+		}
+
+	case FRAME_FORMATSTRING:
+		fs := frame.ParseFormatString
+		if len(*frame.Stack) != 1 {
+			return state.failPtr(fmt.Sprintf("%sFormat string interpolation must produce exactly one value, got %d.\n", formatInterpolationLocation(fs, frame.FormatIndex), len(*frame.Stack)))
+		}
+		text, err := (*frame.Stack)[0].CastString()
+		if err != nil {
+			return state.failPtr(fmt.Sprintf("%sFormat string interpolation must produce a str, path, or int, got %s.\n", formatInterpolationLocation(fs, frame.FormatIndex), (*frame.Stack)[0].TypeName()))
+		}
+		frame.FormatText.WriteString(text)
+		frame.FormatIndex++
+		frame.FormatText.WriteString(fs.ChunkText(frame.FormatIndex))
+
+		if frame.FormatIndex < len(fs.Interpolations) {
+			// Evaluate the next interpolation on the same, now empty, stack.
+			frame.Objects = fs.Interpolations[frame.FormatIndex]
+			frame.Index = 0
+			*frame.Stack = (*frame.Stack)[:0]
+		} else {
+			frame.ParentStack.Push(MShellString{frame.FormatText.String()})
+			state.popFrame()
 		}
 
 	case FRAME_LOOP:
-		// Check stack size hasn't changed
-		if len(*frame.Stack) != frame.InitialStackSize {
-			return state.FailWithMessage(fmt.Sprintf("Stack size changed from %d to %d in loop.\n", frame.InitialStackSize, len(*frame.Stack)))
-		}
-
-		frame.LoopCount++
-		if frame.LoopCount < frame.LoopMax {
-			// Restart loop
-			frame.Index = 0
-		} else {
-			// Loop exceeded max iterations
-			return state.FailWithMessage(fmt.Sprintf("Loop exceeded maximum number of iterations (%d).\n", frame.LoopMax))
-		}
+		return state.finishLoopIteration(frame)
 
 	case FRAME_NORMAL:
-		if frame.ShouldCloseContext {
-			frame.Context.Close()
-		}
-		// Pop call stack if needed
-		if frame.CallStackItem.MShellParseItem != nil {
-			state.CallStack.Pop()
-		}
-		*frames = (*frames)[:len(*frames)-1]
+		state.popFrame()
 	}
 
-	return SimpleSuccess()
+	return nil
 }
 
-// isTailPosition checks if we're at the last token in a frame suitable for TCO
-func (state *EvalState) isTailPosition(frame *EvaluationFrame) bool {
-	return frame.Index == len(frame.Objects) && frame.FrameType == FRAME_NORMAL
+// formatInterpolationLocation is the "line:col: " prefix for an error in
+// interpolation i of fs.
+func formatInterpolationLocation(fs *MShellParseFormatString, i int) string {
+	startToken := fs.InterpolationStart(i)
+	return fmt.Sprintf("%d:%d: ", startToken.Line, startToken.Column)
 }
 
-// processToken handles a single token in the frame-based evaluator
-// It returns an EvalResult that may have special flags for control flow
-func (state *EvalState) processToken(token MShellParseItem, frame *EvaluationFrame, frames *[]EvaluationFrame) EvalResult {
+func (state *EvalState) dictValueFailure(kv *MShellParseDictKeyValue, stackLen int) *EvalResult {
+	location := ""
+	if len(kv.Value) > 0 {
+		startToken := kv.Value[0].GetStartToken()
+		location = fmt.Sprintf("%d:%d: ", startToken.Line, startToken.Column)
+	}
+	if stackLen == 0 {
+		return state.failPtr(fmt.Sprintf("%sDictionary key '%s' evaluated to an empty stack.\n", location, kv.Key))
+	}
+	return state.failPtr(fmt.Sprintf("%sDictionary key '%s' evaluated to a stack with more than one item.\n", location, kv.Key))
+}
+
+// pushBodyFrame pushes a frame that runs objects on the top frame's stack
+// and with its context, for the body of an if or match.
+func (state *EvalState) pushBodyFrame(objects []MShellParseItem, callStackItem CallStackItem) {
+	state.CallStack.Push(callStackItem)
+	parent, child := state.pushChildFrame()
+	child.Objects = objects
+	child.Stack = parent.Stack
+	child.FrameType = FRAME_NORMAL
+	child.CallStackItem = callStackItem
+	child.Context = parent.Context
+}
+
+// pushQuotationFrame pushes a frame that runs a quotation from the stack on
+// the top frame's stack, with the context the quotation's redirects
+// describe.
+func (state *EvalState) pushQuotationFrame(quotation *MShellQuotation) *EvalResult {
+	callStackItem := CallStackItem{MShellParseItem: quotation, Name: "Quote", CallStackType: CALLSTACKQUOTE}
+	state.CallStack.Push(callStackItem)
+	parent, child := state.pushChildFrame()
+	child.CallStackItem = callStackItem
+	if err := quotation.BuildExecutionContext(&child.Context, &parent.Context); err != nil {
+		state.popFrame()
+		return state.failPtr(err.Error())
+	}
+	child.Objects = quotation.Tokens
+	child.Stack = parent.Stack
+	child.FrameType = FRAME_NORMAL
+	child.ShouldCloseContext = child.Context.opensFiles()
+	return nil
+}
+
+// processToken runs one parse item from frame. It returns nil to carry on
+// with the next item, or a result Run must act on.
+func (state *EvalState) processToken(token MShellParseItem, frame *EvaluationFrame, base int) *EvalResult {
 	stack := frame.Stack
-	context := frame.Context
-	definitions := frame.Definitions
 
 	switch t := token.(type) {
+	case Token:
+		// Literals were decoded once at lex time.
+		if t.Value != nil {
+			stack.Push(t.Value)
+			return nil
+		}
+		if result, handled := state.evalSimpleToken(&t, stack, &frame.Context); handled {
+			return result
+		}
+		return state.processTokenToken(token, &t, frame, base)
+
 	case *MShellParseList:
-		// Push FRAME_LIST with isolated stack
-		listStack := MShellStack{}
+		// The list's items run on their own stack, which becomes the list.
 		callStackItem := CallStackItem{MShellParseItem: t, Name: "list", CallStackType: CALLSTACKLIST}
 		state.CallStack.Push(callStackItem)
-		newFrame := EvaluationFrame{
-			Objects:       t.Items,
-			Index:         0,
-			Context:       context,
-			Stack:         &listStack,
-			Definitions:   definitions,
-			CallStackItem: callStackItem,
-			FrameType:     FRAME_LIST,
-			ParentStack:   stack,
-		}
-		*frames = append(*frames, newFrame)
-		return SimpleSuccess()
+		parent, child := state.pushChildFrame()
+		child.Objects = t.Items
+		child.Stack = &MShellStack{}
+		child.FrameType = FRAME_LIST
+		child.ParentStack = stack
+		child.CallStackItem = callStackItem
+		child.Context = parent.Context
+		return nil
 
 	case *MShellParseDict:
-		// If no items, just push empty dict
 		if len(t.Items) == 0 {
 			stack.Push(NewDict())
-			return SimpleSuccess()
+			return nil
 		}
 
-		// Build list of key-value pairs
-		keyValues := make([]MShellDictKeyValue, len(t.Items))
-		for i, kv := range t.Items {
-			keyValues[i] = MShellDictKeyValue{Key: kv.Key, Value: kv.Value}
-		}
-
-		// Push FRAME_DICT for first key
-		dictStack := MShellStack{}
+		// Each key's value runs on the frame's own stack, one key after
+		// another; see completeFrame.
 		callStackItem := CallStackItem{MShellParseItem: t, Name: "dict", CallStackType: CALLSTACKDICT}
 		state.CallStack.Push(callStackItem)
-		newFrame := EvaluationFrame{
-			Objects:       keyValues[0].Value,
-			Index:         0,
-			Context:       context,
-			Stack:         &dictStack,
-			Definitions:   definitions,
-			CallStackItem: callStackItem,
-			FrameType:     FRAME_DICT,
-			ParentStack:   stack,
-			DictKey:       keyValues[0].Key,
-			Dict:          NewDict(),
-			DictKeyValues: keyValues,
-			DictKeyIndex:  0,
-		}
-		*frames = append(*frames, newFrame)
-		return SimpleSuccess()
+		parent, child := state.pushChildFrame()
+		child.Objects = t.Items[0].Value
+		child.Stack = &MShellStack{}
+		child.FrameType = FRAME_DICT
+		child.ParentStack = stack
+		child.ParseDict = t
+		child.Dict = NewDict()
+		child.CallStackItem = callStackItem
+		child.Context = parent.Context
+		return nil
+
+	case *MShellParseFormatString:
+		// Each interpolation runs on the frame's own stack, one after
+		// another; see completeFrame.
+		callStackItem := CallStackItem{MShellParseItem: t, Name: "format string", CallStackType: CALLSTACKFORMATSTRING}
+		state.CallStack.Push(callStackItem)
+		parent, child := state.pushChildFrame()
+		child.Objects = t.Interpolations[0]
+		child.Stack = &MShellStack{}
+		child.FrameType = FRAME_FORMATSTRING
+		child.ParentStack = stack
+		child.ParseFormatString = t
+		child.FormatText = &strings.Builder{}
+		child.FormatText.WriteString(t.ChunkText(0))
+		child.CallStackItem = callStackItem
+		child.Context = parent.Context
+		return nil
 
 	case *MShellParseGrid:
-		return state.evaluateParseGrid(t, stack, context, definitions)
+		return nilIfNothingToDo(state.evaluateParseGrid(t, stack, frame.Context, frame.Definitions))
 
 	case *MShellParseQuote:
-		q := MShellQuotation{Tokens: t.Items, StandardInputFile: "", StandardOutputFile: "", StandardErrorFile: "", Variables: context.Variables, MShellParseQuote: t}
-		stack.Push(&q)
-		return SimpleSuccess()
+		stack.Push(&MShellQuotation{Tokens: t.Items, Variables: frame.Context.Variables, MShellParseQuote: t})
+		return nil
 
 	case *MShellParsePrefixQuote:
-		// Create quotation and push onto stack
+		// `.fn body end` pushes (body), then calls fn.
 		mshellParseQuote := MShellParseQuote{
 			Items:      t.Items,
 			StartToken: t.StartToken,
 			EndToken:   t.EndToken,
 		}
-		q := MShellQuotation{Tokens: t.Items, StandardInputFile: "", StandardOutputFile: "", StandardErrorFile: "", Variables: context.Variables, MShellParseQuote: &mshellParseQuote}
-		stack.Push(&q)
+		stack.Push(&MShellQuotation{Tokens: t.Items, Variables: frame.Context.Variables, MShellParseQuote: &mshellParseQuote})
 
-		// Create a token for the function name (strip trailing '.')
+		// The function name is the lexeme without its trailing '.'.
 		lexeme := t.StartToken.Lexeme
 		funcToken := Token{
 			Line:   t.StartToken.Line,
@@ -903,20 +1212,17 @@ func (state *EvalState) processToken(token MShellParseItem, frame *EvaluationFra
 			Type:   LITERAL,
 		}
 
-		// Check for definition
-		if def, ok := state.lookupDefinition(definitions, funcToken.Lexeme); ok {
-			return state.callDefinition(def, funcToken, frame, frames)
+		if def, ok := state.lookupDefinition(frame.Definitions, funcToken.Lexeme); ok {
+			return state.callDefinition(def, t, frame)
 		}
-
-		// Not a definition - dispatch directly to token evaluation
 		callStackItem := CallStackItem{MShellParseItem: nil, Name: "literal", CallStackType: frame.CallStackItem.CallStackType}
-		return state.evaluateToken(funcToken, frame.Stack, frame.Context, frame.Definitions, callStackItem)
+		return nilIfNothingToDo(state.evaluateBuiltinToken(funcToken, stack, frame.Context, frame.Definitions, callStackItem))
 
 	case *MShellParseIfBlock:
-		return state.processIfBlock(t, frame, frames)
+		return state.processIfBlock(t, frame)
 
 	case *MShellParseMatchBlock:
-		return state.processMatchBlock(t, frame, frames)
+		return state.processMatchBlock(t, frame)
 
 	case *MShellIndexerList:
 		return state.processIndexerList(t, frame)
@@ -927,217 +1233,152 @@ func (state *EvalState) processToken(token MShellParseItem, frame *EvaluationFra
 	case *MShellGetter:
 		return state.processGetter(t, frame)
 
-	case Token:
-		return state.processTokenToken(t, frame, frames)
-
 	case *MShellTypeDecl:
 		// Static-only: type declarations have no runtime effect by design.
-		return SimpleSuccess()
+		return nil
 
 	case *MShellAsCast:
 		// Static-only: `as` is a checker hint; no runtime work.
-		return SimpleSuccess()
+		return nil
 
 	default:
-		return state.FailWithMessage(fmt.Sprintf("Unknown token type: %T\n", token))
+		return state.failPtr(fmt.Sprintf("Unknown token type: %T\n", token))
 	}
 }
 
-// callDefinition handles calling a definition with TCO support
-func (state *EvalState) callDefinition(def MShellDefinition, token Token, frame *EvaluationFrame, frames *[]EvaluationFrame) EvalResult {
-	newContext := frame.Context.CloneLessVariables()
-	callStackItem := CallStackItem{MShellParseItem: token, Name: def.Name, CallStackType: CALLSTACKDEF}
+// callDefinition runs def, called from callSite (the item that named it).
+//
+// When callSite is the last item of a plain frame, that frame is reused for
+// def rather than a new one pushed (tail call), so tail recursion runs in
+// constant space. A frame that must close redirect files when it finishes
+// is not reused: def's output may still be going to those files.
+func (state *EvalState) callDefinition(def *MShellDefinition, callSite MShellParseItem, frame *EvaluationFrame) *EvalResult {
+	// callSite is already an interface value, so storing it here doesn't
+	// allocate. Building the item from a Token value would.
+	callStackItem := CallStackItem{MShellParseItem: callSite, Name: def.Name, CallStackType: CALLSTACKDEF}
 
-	// TCO: Check if this is a tail call
-	isTailCall := state.isTailPosition(frame)
+	// Each call has its own variables, and otherwise the caller's context.
+	var variables map[string]MShellObject
+	if !def.NeverUsesVariables {
+		variables = make(map[string]MShellObject)
+	}
 
-	if isTailCall {
-		// Replace current frame instead of pushing
-		// Close context if this frame owns it
-		if frame.ShouldCloseContext {
-			frame.Context.Close()
-		}
-		// Pop call stack for current frame
+	if frame.Index == len(frame.Objects) && frame.FrameType == FRAME_NORMAL && !frame.ShouldCloseContext {
 		if frame.CallStackItem.MShellParseItem != nil {
 			state.CallStack.Pop()
 		}
-
+		state.CallStack.Push(callStackItem)
 		frame.Objects = def.Items
 		frame.Index = 0
-		frame.Context = *newContext
+		frame.Context.Variables = variables
 		frame.CallStackItem = callStackItem
-		frame.ShouldCloseContext = false
-
-		// Push new call stack item
-		state.CallStack.Push(callStackItem)
-		return SimpleSuccess()
+		return nil
 	}
 
-	// Non-tail: push new frame
 	state.CallStack.Push(callStackItem)
-	newFrame := EvaluationFrame{
-		Objects:       def.Items,
-		Index:         0,
-		Context:       *newContext,
-		Stack:         frame.Stack, // Shared stack
-		Definitions:   frame.Definitions,
-		CallStackItem: callStackItem,
-		FrameType:     FRAME_NORMAL,
+	parent, child := state.pushChildFrame()
+	child.Objects = def.Items
+	child.Stack = parent.Stack
+	child.FrameType = FRAME_NORMAL
+	child.CallStackItem = callStackItem
+	child.Context = parent.Context
+	child.Context.Variables = variables
+	return nil
+}
+
+// ifCondition converts the value an 'if' or 'else if' tests to a bool.
+// Integers follow exit code convention: 0 is true.
+func ifCondition(obj MShellObject) (condition bool, ok bool) {
+	switch typed := obj.(type) {
+	case MShellBool:
+		return typed.Value, true
+	case MShellInt:
+		return typed.Value == 0, true
 	}
-	*frames = append(*frames, newFrame)
-	return SimpleSuccess()
+	return false, false
 }
 
 // processIfBlock handles if/else-if/else blocks
-func (state *EvalState) processIfBlock(ifBlock *MShellParseIfBlock, frame *EvaluationFrame, frames *[]EvaluationFrame) EvalResult {
+func (state *EvalState) processIfBlock(ifBlock *MShellParseIfBlock, frame *EvaluationFrame) *EvalResult {
 	stack := frame.Stack
-	context := frame.Context
-	definitions := frame.Definitions
 	startToken := ifBlock.GetStartToken()
 
-	// Pop the condition from the stack
 	condObj, err := stack.Pop()
 	if err != nil {
-		return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot evaluate 'if' on an empty stack.\n", startToken.Line, startToken.Column))
+		return state.failPtr(fmt.Sprintf("%d:%d: Cannot evaluate 'if' on an empty stack.\n", startToken.Line, startToken.Column))
 	}
-
-	// Evaluate condition
-	var condition bool
-	switch condTyped := condObj.(type) {
-	case MShellBool:
-		condition = condTyped.Value
-	case MShellInt:
-		condition = condTyped.Value == 0
-	default:
-		return state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a boolean or integer for if condition, received a %s.\n", startToken.Line, startToken.Column, condObj.TypeName()))
+	condition, ok := ifCondition(condObj)
+	if !ok {
+		return state.failPtr(fmt.Sprintf("%d:%d: Expected a boolean or integer for if condition, received a %s.\n", startToken.Line, startToken.Column, condObj.TypeName()))
 	}
-
 	if condition {
-		// Execute if body - push frame
-		callStackItem := CallStackItem{MShellParseItem: ifBlock, Name: "if", CallStackType: CALLSTACKIF}
-		state.CallStack.Push(callStackItem)
-		newFrame := EvaluationFrame{
-			Objects:       ifBlock.IfBody,
-			Index:         0,
-			Context:       context,
-			Stack:         stack,
-			Definitions:   definitions,
-			CallStackItem: callStackItem,
-			FrameType:     FRAME_NORMAL,
-		}
-		*frames = append(*frames, newFrame)
-		return SimpleSuccess()
+		state.pushBodyFrame(ifBlock.IfBody, CallStackItem{MShellParseItem: ifBlock, Name: "if", CallStackType: CALLSTACKIF})
+		return nil
 	}
 
-	// Check else-if branches - need to evaluate conditions inline
 	for _, elseIf := range ifBlock.ElseIfs {
-		// Evaluate condition using the old Evaluate method for now
-		// This is a temporary solution - ideally we'd push a frame for the condition
 		callStackItem := CallStackItem{MShellParseItem: ifBlock, Name: "else-if-condition", CallStackType: CALLSTACKIF}
-		result := state.evaluateItems(elseIf.Condition, stack, context, definitions, callStackItem)
+		result := state.Evaluate(elseIf.Condition, stack, frame.Context, frame.Definitions, callStackItem)
+		// The condition may have run builtins that grew state.frames.
+		// Evaluate leaves this frame on top again, possibly moved.
+		frame = &state.frames[len(state.frames)-1]
 		if !result.Success || result.ExitCalled {
-			return result
+			return nilIfNothingToDo(result)
 		}
 		if result.BreakNum > 0 {
-			return state.FailWithMessage("Encountered break within else-if condition.\n")
+			return state.failPtr("Encountered break within else-if condition.\n")
 		}
 		if result.Continue {
-			return state.FailWithMessage("Encountered continue within else-if condition.\n")
+			return state.failPtr("Encountered continue within else-if condition.\n")
 		}
 
 		elseIfCondObj, err := stack.Pop()
 		if err != nil {
-			return state.FailWithMessage(fmt.Sprintf("%d:%d: Found an empty stack when evaluating else-if condition.\n", startToken.Line, startToken.Column))
+			return state.failPtr(fmt.Sprintf("%d:%d: Found an empty stack when evaluating else-if condition.\n", startToken.Line, startToken.Column))
 		}
-
-		var elseIfCondition bool
-		switch elseIfCondTyped := elseIfCondObj.(type) {
-		case MShellBool:
-			elseIfCondition = elseIfCondTyped.Value
-		case MShellInt:
-			elseIfCondition = elseIfCondTyped.Value == 0
-		default:
-			return state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a boolean or integer for else-if condition, received a %s.\n", startToken.Line, startToken.Column, elseIfCondObj.TypeName()))
+		elseIfCondition, ok := ifCondition(elseIfCondObj)
+		if !ok {
+			return state.failPtr(fmt.Sprintf("%d:%d: Expected a boolean or integer for else-if condition, received a %s.\n", startToken.Line, startToken.Column, elseIfCondObj.TypeName()))
 		}
-
 		if elseIfCondition {
-			// Execute else-if body
-			callStackItem := CallStackItem{MShellParseItem: ifBlock, Name: "else-if", CallStackType: CALLSTACKIF}
-			state.CallStack.Push(callStackItem)
-			newFrame := EvaluationFrame{
-				Objects:       elseIf.Body,
-				Index:         0,
-				Context:       context,
-				Stack:         stack,
-				Definitions:   definitions,
-				CallStackItem: callStackItem,
-				FrameType:     FRAME_NORMAL,
-			}
-			*frames = append(*frames, newFrame)
-			return SimpleSuccess()
+			state.pushBodyFrame(elseIf.Body, CallStackItem{MShellParseItem: ifBlock, Name: "else-if", CallStackType: CALLSTACKIF})
+			return nil
 		}
 	}
 
-	// If no else-if matched, execute else body if present
 	if len(ifBlock.ElseBody) > 0 {
-		callStackItem := CallStackItem{MShellParseItem: ifBlock, Name: "else", CallStackType: CALLSTACKIF}
-		state.CallStack.Push(callStackItem)
-		newFrame := EvaluationFrame{
-			Objects:       ifBlock.ElseBody,
-			Index:         0,
-			Context:       context,
-			Stack:         stack,
-			Definitions:   definitions,
-			CallStackItem: callStackItem,
-			FrameType:     FRAME_NORMAL,
-		}
-		*frames = append(*frames, newFrame)
+		state.pushBodyFrame(ifBlock.ElseBody, CallStackItem{MShellParseItem: ifBlock, Name: "else", CallStackType: CALLSTACKIF})
 	}
-
-	return SimpleSuccess()
+	return nil
 }
 
 // processMatchBlock handles match...end blocks
-func (state *EvalState) processMatchBlock(matchBlock *MShellParseMatchBlock, frame *EvaluationFrame, frames *[]EvaluationFrame) EvalResult {
+func (state *EvalState) processMatchBlock(matchBlock *MShellParseMatchBlock, frame *EvaluationFrame) *EvalResult {
 	matchBlock.assertAssertiveInvariant()
 	stack := frame.Stack
-	context := frame.Context
-	definitions := frame.Definitions
 	startToken := matchBlock.GetStartToken()
 
 	subject, err := stack.Peek()
 	if err != nil {
-		return state.emptyMatchSubjectFailure(matchBlock)
+		return nilIfNothingToDo(state.emptyMatchSubjectFailure(matchBlock))
 	}
 
 	for _, arm := range matchBlock.Arms {
 		matched, bindings, result := state.matchPattern(arm.Pattern, subject, startToken)
 		if !result.Success {
-			return result
+			return nilIfNothingToDo(result)
 		}
 		if matched {
 			if arm.Consume {
 				stack.Pop()
 			}
-			maps.Copy(context.Variables, bindings)
-
-			callStackItem := CallStackItem{MShellParseItem: matchBlock, Name: "match", CallStackType: CALLSTACKMATCH}
-			state.CallStack.Push(callStackItem)
-			newFrame := EvaluationFrame{
-				Objects:       arm.Body,
-				Index:         0,
-				Context:       context,
-				Stack:         stack,
-				Definitions:   definitions,
-				CallStackItem: callStackItem,
-				FrameType:     FRAME_NORMAL,
-			}
-			*frames = append(*frames, newFrame)
-			return SimpleSuccess()
+			maps.Copy(frame.Context.Variables, bindings)
+			state.pushBodyFrame(arm.Body, CallStackItem{MShellParseItem: matchBlock, Name: "match", CallStackType: CALLSTACKMATCH})
+			return nil
 		}
 	}
 
-	return state.matchBlockFailure(matchBlock)
+	return nilIfNothingToDo(state.matchBlockFailure(matchBlock))
 }
 
 func (state *EvalState) matchBlockFailure(matchBlock *MShellParseMatchBlock) EvalResult {
@@ -1235,6 +1476,18 @@ func (state *EvalState) matchPattern(pattern []MShellParseItem, subject MShellOb
 
 // matchTokenPattern matches a single token pattern against a subject.
 func (state *EvalState) matchTokenPattern(p Token, subject MShellObject) (bool, EvalResult) {
+	// Value literals were decoded once at lex time.
+	if p.Value != nil {
+		switch p.Type {
+		case INTEGER, FLOAT, STRING, SINGLEQUOTESTRING:
+			eq, err := subject.Equals(p.Value)
+			if err != nil {
+				return false, SimpleSuccess()
+			}
+			return eq, SimpleSuccess()
+		}
+	}
+
 	switch p.Type {
 	case LITERAL:
 		if p.Lexeme == "_" {
@@ -1485,135 +1738,119 @@ func (state *EvalState) matchDictPattern(pattern *MShellParseDict, subject MShel
 	return true, bindings, SimpleSuccess()
 }
 
-// processTokenToken handles Token types in the frame-based evaluator
-func (state *EvalState) processTokenToken(t Token, frame *EvaluationFrame, frames *[]EvaluationFrame) EvalResult {
-	stack := frame.Stack
-	context := frame.Context
-	definitions := frame.Definitions
+// processTokenToken handles the Token kinds evalSimpleToken doesn't.
+// item is t as an interface value, used as the call site of a definition.
+func (state *EvalState) processTokenToken(item MShellParseItem, t *Token, frame *EvaluationFrame, base int) *EvalResult {
+	switch t.Type {
+	case EOF:
+		return nil
 
-	if t.Type == EOF {
-		return SimpleSuccess()
-	}
-
-	if t.Type == LITERAL {
-		// Handle return - unwind to definition
+	case LITERAL:
 		if t.Lexeme == "return" {
-			state.handleReturn(frames)
-			return SimpleSuccess()
+			state.handleReturn(base)
+			return nil
 		}
-
-		// Check for definitions first (with TCO)
-		if def, ok := state.lookupDefinition(definitions, t.Lexeme); ok {
-			return state.callDefinition(def, t, frame, frames)
+		if def, ok := state.lookupDefinition(frame.Definitions, t.Lexeme); ok {
+			return state.callDefinition(def, item, frame)
 		}
-		// Not a definition - process as regular literal
-		return state.evaluateToken(t, frame.Stack, frame.Context, frame.Definitions, frame.CallStackItem)
-	}
+		return nilIfNothingToDo(state.evaluateBuiltinToken(*t, frame.Stack, frame.Context, frame.Definitions, frame.CallStackItem))
 
-	if t.Type == BREAK {
+	case BREAK:
 		if state.LoopDepth == 0 {
-			return state.FailWithMessage(fmt.Sprintf("%d:%d: break used outside of loop.\n", t.Line, t.Column))
+			return state.failPtr(fmt.Sprintf("%d:%d: break used outside of loop.\n", t.Line, t.Column))
 		}
-		// Handle break by unwinding frames
-		state.handleBreak(frames, 1)
-		return SimpleSuccess()
-	}
+		return state.handleBreak(base, 1)
 
-	if t.Type == CONTINUE {
+	case CONTINUE:
 		if state.LoopDepth == 0 {
-			return state.FailWithMessage(fmt.Sprintf("%d:%d: continue used outside of loop.\n", t.Line, t.Column))
+			return state.failPtr(fmt.Sprintf("%d:%d: continue used outside of loop.\n", t.Line, t.Column))
 		}
-		// Handle continue by unwinding to loop
-		state.handleContinue(frames)
-		return SimpleSuccess()
+		return state.handleContinue(base)
+
+	case LOOP:
+		return state.processLoop(t, frame)
+
+	case IFF:
+		return state.processIff(t, frame)
+
+	case INTERPRET:
+		obj, err := frame.Stack.Pop()
+		if err != nil {
+			return state.failPtr(fmt.Sprintf("%d:%d: Cannot interpret an empty stack.\n", t.Line, t.Column))
+		}
+		quotation, ok := obj.(*MShellQuotation)
+		if !ok {
+			return state.failPtr(fmt.Sprintf("%d:%d: Argument for interpret expected to be a quotation, received a %s (%s)\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
+		}
+		return state.pushQuotationFrame(quotation)
 	}
 
-	if t.Type == LOOP {
-		return state.processLoop(t, frame, frames)
-	}
-
-	if t.Type == IFF {
-		return state.processIff(t, frame, frames)
-	}
-
-	// Direct dispatch into evaluateToken — avoids per-token slice allocation.
-	// Preserve the call stack type from the frame.
+	// Keep the frame's call stack type, which decides whether a bare
+	// literal is allowed (only inside a list).
 	callStackItem := CallStackItem{MShellParseItem: nil, Name: "token", CallStackType: frame.CallStackItem.CallStackType}
-	return state.evaluateToken(t, stack, context, definitions, callStackItem)
+	return nilIfNothingToDo(state.evaluateBuiltinToken(*t, frame.Stack, frame.Context, frame.Definitions, callStackItem))
 }
 
 // processLoop handles the loop construct
-func (state *EvalState) processLoop(t Token, frame *EvaluationFrame, frames *[]EvaluationFrame) EvalResult {
+func (state *EvalState) processLoop(t *Token, frame *EvaluationFrame) *EvalResult {
 	stack := frame.Stack
-	context := frame.Context
-	definitions := frame.Definitions
 
 	obj, err := stack.Pop()
 	if err != nil {
-		return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do a loop on an empty stack.\n", t.Line, t.Column))
+		return state.failPtr(fmt.Sprintf("%d:%d: Cannot do a loop on an empty stack.\n", t.Line, t.Column))
 	}
 
 	quotation, ok := obj.(*MShellQuotation)
 	if !ok {
-		return state.FailWithMessage(fmt.Sprintf("%d:%d: Argument for loop expected to be a quotation, received a %s\n", t.Line, t.Column, obj.TypeName()))
+		return state.failPtr(fmt.Sprintf("%d:%d: Argument for loop expected to be a quotation, received a %s\n", t.Line, t.Column, obj.TypeName()))
 	}
 
 	if len(quotation.Tokens) == 0 {
-		return state.FailWithMessage(fmt.Sprintf("%d:%d: Loop quotation needs a minimum of one token.\n", t.Line, t.Column))
+		return state.failPtr(fmt.Sprintf("%d:%d: Loop quotation needs a minimum of one token.\n", t.Line, t.Column))
 	}
 
-	// Build loop context. BuildExecutionContext handles all the quotation's
-	// redirections (stdin, stdout, stderr, merges) and propagates the outer
-	// context's streams when the quotation has none of its own.
-	loopContext, err := quotation.BuildExecutionContext(&context)
-	if err != nil {
-		return state.FailWithMessage(err.Error())
-	}
-	loopContext.Variables = context.Variables
-
-	// Push FRAME_LOOP
-	state.LoopDepth++
 	callStackItem := CallStackItem{MShellParseItem: quotation, Name: "loop", CallStackType: CALLSTACKQUOTE}
 	state.CallStack.Push(callStackItem)
-	newFrame := EvaluationFrame{
-		Objects:            quotation.Tokens,
-		Index:              0,
-		Context:            *loopContext,
-		Stack:              stack,
-		Definitions:        definitions,
-		CallStackItem:      callStackItem,
-		FrameType:          FRAME_LOOP,
-		LoopMax:            15000000,
-		LoopCount:          0,
-		LoopQuotation:      quotation,
-		InitialStackSize:   len(*stack),
-		ShouldCloseContext: true,
+	parent, child := state.pushChildFrame()
+	child.CallStackItem = callStackItem
+	// BuildExecutionContext handles all the quotation's redirections
+	// (stdin, stdout, stderr, merges) and propagates the outer context's
+	// streams when the quotation has none of its own.
+	if err := quotation.BuildExecutionContext(&child.Context, &parent.Context); err != nil {
+		state.popFrame()
+		return state.failPtr(err.Error())
 	}
-	*frames = append(*frames, newFrame)
-	return SimpleSuccess()
+	// The body shares the variables of the code around the loop.
+	child.Context.Variables = parent.Context.Variables
+	child.Objects = quotation.Tokens
+	child.Stack = stack
+	child.FrameType = FRAME_LOOP
+	child.ShouldCloseContext = child.Context.opensFiles()
+	child.InitialStackSize = len(*stack)
+	// Counted only once the frame is a FRAME_LOOP, so the popFrame above
+	// doesn't undo an increment that never happened.
+	state.LoopDepth++
+	return nil
 }
 
-// processIff handles the iff construct in the frame-based evaluator
-// by pushing the selected quotation body as a frame instead of recursing
-func (state *EvalState) processIff(t Token, frame *EvaluationFrame, frames *[]EvaluationFrame) EvalResult {
+// processIff handles iff by pushing the chosen quotation as a frame.
+func (state *EvalState) processIff(t *Token, frame *EvaluationFrame) *EvalResult {
 	stack := frame.Stack
-	context := frame.Context
-	definitions := frame.Definitions
 
 	iff_name := "iff"
 	firstObj, err := stack.Pop()
 	if err != nil {
-		return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do an '%s' on a stack with only two items.\n", t.Line, t.Column, iff_name))
+		return state.failPtr(fmt.Sprintf("%d:%d: Cannot do an '%s' on a stack with only two items.\n", t.Line, t.Column, iff_name))
 	}
 
 	firstQuote, ok := firstObj.(*MShellQuotation)
 	if !ok {
-		return state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a quotation on top of stack for %s, received a %s.\n", t.Line, t.Column, iff_name, firstObj.TypeName()))
+		return state.failPtr(fmt.Sprintf("%d:%d: Expected a quotation on top of stack for %s, received a %s.\n", t.Line, t.Column, iff_name, firstObj.TypeName()))
 	}
 
 	secondObj, err := stack.Pop()
 	if err != nil {
-		return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do an '%s' on a stack with only one item.\n", t.Line, t.Column, iff_name))
+		return state.failPtr(fmt.Sprintf("%d:%d: Cannot do an '%s' on a stack with only one item.\n", t.Line, t.Column, iff_name))
 	}
 
 	var trueQuote *MShellQuotation
@@ -1625,18 +1862,13 @@ func (state *EvalState) processIff(t Token, frame *EvaluationFrame, frames *[]Ev
 		falseQuote = firstQuote
 		trueQuote = secondTyped
 
-		thrirdObj, err := stack.Pop()
+		thirdObj, err := stack.Pop()
 		if err != nil {
-			return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do an '%s' on a stack with only two quotes.\n", t.Line, t.Column, iff_name))
+			return state.failPtr(fmt.Sprintf("%d:%d: Cannot do an '%s' on a stack with only two quotes.\n", t.Line, t.Column, iff_name))
 		}
-
-		switch thirdTyped := thrirdObj.(type) {
-		case MShellBool:
-			condition = thirdTyped.Value
-		case MShellInt:
-			condition = thirdTyped.Value == 0
-		default:
-			return state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a boolean or integer for %s condition, received a %s.\n", t.Line, t.Column, iff_name, thrirdObj.TypeName()))
+		condition, ok = ifCondition(thirdObj)
+		if !ok {
+			return state.failPtr(fmt.Sprintf("%d:%d: Expected a boolean or integer for %s condition, received a %s.\n", t.Line, t.Column, iff_name, thirdObj.TypeName()))
 		}
 	case MShellBool:
 		trueQuote = firstQuote
@@ -1645,62 +1877,162 @@ func (state *EvalState) processIff(t Token, frame *EvaluationFrame, frames *[]Ev
 		trueQuote = firstQuote
 		condition = secondTyped.Value == 0
 	default:
-		return state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a quotation or boolean for %s, received a %s.\n", t.Line, t.Column, iff_name, secondObj.TypeName()))
+		return state.failPtr(fmt.Sprintf("%d:%d: Expected a quotation or boolean for %s, received a %s.\n", t.Line, t.Column, iff_name, secondObj.TypeName()))
 	}
 
-	var quoteToExecute *MShellQuotation
+	quoteToExecute := falseQuote
 	if condition {
 		quoteToExecute = trueQuote
-	} else {
-		quoteToExecute = falseQuote
 	}
-
-	if quoteToExecute != nil {
-		qContext, err := quoteToExecute.BuildExecutionContext(&context)
-		if err != nil {
-			return state.FailWithMessage(err.Error())
-		}
-
-		callStackItem := CallStackItem{MShellParseItem: quoteToExecute, Name: "Quote", CallStackType: CALLSTACKQUOTE}
-		state.CallStack.Push(callStackItem)
-		newFrame := EvaluationFrame{
-			Objects:            quoteToExecute.Tokens,
-			Index:              0,
-			Context:            *qContext,
-			Stack:              stack,
-			Definitions:        definitions,
-			CallStackItem:      callStackItem,
-			FrameType:          FRAME_NORMAL,
-			ShouldCloseContext: true,
-		}
-		*frames = append(*frames, newFrame)
+	// The false quote is nil in the true-only form of iff.
+	if quoteToExecute == nil {
+		return nil
 	}
-
-	return SimpleSuccess()
+	return state.pushQuotationFrame(quoteToExecute)
 }
 
-// processIndexerList handles indexer operations
-func (state *EvalState) processIndexerList(indexerList *MShellIndexerList, frame *EvaluationFrame) EvalResult {
+// processIndexerList handles indexers like :0:, 1:, :2, and 1:3, and lists
+// of them, which concatenate their results.
+func (state *EvalState) processIndexerList(indexerList *MShellIndexerList, frame *EvaluationFrame) *EvalResult {
 	stack := frame.Stack
-	context := frame.Context
-	definitions := frame.Definitions
+		obj1, err := stack.Pop()
+		if err != nil {
+			startToken := indexerList.GetStartToken()
+			return state.failPtr(fmt.Sprintf("%d:%d: Cannot do 'indexer' operation on an empty stack.\n", startToken.Line, startToken.Column))
+		}
 
-	// Fall back to old Evaluate for indexer handling
-	callStackItem := CallStackItem{MShellParseItem: nil, Name: "indexer", CallStackType: CALLSTACKFILE}
-	result := state.evaluateItems([]MShellParseItem{indexerList}, stack, context, definitions, callStackItem)
-	return result
+				if len(indexerList.Indexers) == 1 && indexerList.Indexers[0].(Token).Type == INDEXER {
+			t := indexerList.Indexers[0].(Token)
+			// Indexer is a digit between ':' and ':'. Remove ends and parse the number
+			indexStr := t.Lexeme[1 : len(t.Lexeme)-1]
+			index, err := strconv.Atoi(indexStr)
+			if err != nil {
+				return state.failPtr(fmt.Sprintf("%d:%d: Error parsing index: %s\n", t.Line, t.Column, err.Error()))
+			}
+
+			result, err := obj1.Index(index)
+			if err != nil {
+				return state.failPtr(fmt.Sprintf("%d:%d: %s", t.Line, t.Column, err.Error()))
+			}
+			stack.Push(result)
+		} else {
+			var newObject MShellObject
+			newObject = nil
+
+			for _, indexer := range indexerList.Indexers {
+				indexerToken := indexer.(Token)
+				switch indexerToken.Type {
+				case INDEXER:
+					indexStr := indexerToken.Lexeme[1 : len(indexerToken.Lexeme)-1]
+					index, err := strconv.Atoi(indexStr)
+					if err != nil {
+						return state.failPtr(fmt.Sprintf("%d:%d: Error parsing index: %s\n", indexerToken.Line, indexerToken.Column, err.Error()))
+					}
+
+					result, err := obj1.Index(index)
+					if err != nil {
+						return state.failPtr(fmt.Sprintf("%d:%d: %s", indexerToken.Line, indexerToken.Column, err.Error()))
+					}
+
+					var wrappedResult MShellObject
+					switch obj1.(type) {
+					case *MShellList:
+						wrappedResult = NewList(0)
+						wrappedResult.(*MShellList).Items = append(wrappedResult.(*MShellList).Items, result)
+					case *MShellQuotation:
+						wrappedResult = &MShellQuotation{Tokens: []MShellParseItem{result.(MShellParseItem)}, StandardInputFile: "", StandardOutputFile: "", StandardErrorFile: "", Variables: frame.Context.Variables, MShellParseQuote: nil}
+					case *MShellPipe:
+						newList := NewList(0)
+						wrappedResult = &MShellPipe{List: *newList, StdoutBehavior: STDOUT_NONE}
+						wrappedResult.(*MShellPipe).List.Items = append(wrappedResult.(*MShellPipe).List.Items, result)
+					default:
+						wrappedResult = result
+					}
+
+					if newObject == nil {
+						newObject = wrappedResult
+					} else {
+						newObject, err = newObject.Concat(wrappedResult)
+						if err != nil {
+							return state.failPtr(fmt.Sprintf("%d:%d: %s", indexerToken.Line, indexerToken.Column, err.Error()))
+						}
+					}
+				case STARTINDEXER, ENDINDEXER:
+					var indexStr string
+					// Parse the index value
+					if indexerToken.Type == ENDINDEXER {
+						indexStr = indexerToken.Lexeme[1:]
+					} else {
+						indexStr = indexerToken.Lexeme[:len(indexerToken.Lexeme)-1]
+					}
+
+					index, err := strconv.Atoi(indexStr)
+					if err != nil {
+						return state.failPtr(fmt.Sprintf("%d:%d: Error parsing index: %s\n", indexerToken.Line, indexerToken.Column, err.Error()))
+					}
+
+					var result MShellObject
+					if indexerToken.Type == ENDINDEXER {
+						result, err = obj1.SliceEnd(index)
+					} else {
+						result, err = obj1.SliceStart(index)
+					}
+
+					if err != nil {
+						return state.failPtr(fmt.Sprintf("%d:%d: %s", indexerToken.Line, indexerToken.Column, err.Error()))
+					}
+
+					if newObject == nil {
+						newObject = result
+					} else {
+						newObject, err = newObject.Concat(result)
+						if err != nil {
+							return state.failPtr(fmt.Sprintf("%d:%d: %s", indexerToken.Line, indexerToken.Column, err.Error()))
+						}
+					}
+
+				case SLICEINDEXER:
+					// StartInc:EndExc
+					parts := strings.Split(indexerToken.Lexeme, ":")
+					startInt, err := strconv.Atoi(parts[0])
+					endInt, err2 := strconv.Atoi(parts[1])
+
+					if err != nil || err2 != nil {
+						return state.failPtr(fmt.Sprintf("%d:%d: Error parsing slice indexes: %s\n", indexerToken.Line, indexerToken.Column, err.Error()))
+					}
+
+					result, err := obj1.Slice(startInt, endInt)
+					if err != nil {
+						return state.failPtr(fmt.Sprintf("%d:%d: %s.\n", indexerToken.Line, indexerToken.Column, err.Error()))
+					}
+
+					if newObject == nil {
+						newObject = result
+					} else {
+						newObject, err = newObject.Concat(result)
+						if err != nil {
+							return state.failPtr(fmt.Sprintf("%d:%d: %s", indexerToken.Line, indexerToken.Column, err.Error()))
+						}
+					}
+
+				}
+			}
+
+			stack.Push(newObject)
+		}
+	return nil
 }
 
 // processVarstoreList handles variable storage
-func (state *EvalState) processVarstoreList(varstoreList MShellVarstoreList, frame *EvaluationFrame) EvalResult {
+func (state *EvalState) processVarstoreList(varstoreList MShellVarstoreList, frame *EvaluationFrame) *EvalResult {
 	stack := frame.Stack
 
 	// First check lengths
 	if len(varstoreList.VarStores) > len(*stack) {
 		if len(varstoreList.VarStores) == 1 {
-			return state.FailWithMessage(fmt.Sprintf("%d:%d: Nothing on the stack to store into variable %s.\n", varstoreList.GetStartToken().Line, varstoreList.GetStartToken().Column, varstoreList.VarStores[0].Lexeme))
+			return nilIfNothingToDo(state.FailWithMessage(fmt.Sprintf("%d:%d: Nothing on the stack to store into variable %s.\n", varstoreList.GetStartToken().Line, varstoreList.GetStartToken().Column, varstoreList.VarStores[0].Lexeme)))
 		} else {
-			return state.FailWithMessage(fmt.Sprintf("%d:%d: Not enough items on stack (%d) to store into %d variables (%s).\n", varstoreList.GetStartToken().Line, varstoreList.GetStartToken().Column, len(*stack), len(varstoreList.VarStores), varstoreList.DebugString()))
+			return nilIfNothingToDo(state.FailWithMessage(fmt.Sprintf("%d:%d: Not enough items on stack (%d) to store into %d variables (%s).\n", varstoreList.GetStartToken().Line, varstoreList.GetStartToken().Column, len(*stack), len(varstoreList.VarStores), varstoreList.DebugString())))
 		}
 	}
 
@@ -1711,7 +2043,7 @@ func (state *EvalState) processVarstoreList(varstoreList MShellVarstoreList, fra
 		varName := varstoreToken.Lexeme[0 : len(varstoreToken.Lexeme)-1] // Remove the trailing !
 		frame.Context.Variables[varName] = obj
 	}
-	return SimpleSuccess()
+	return nil
 }
 
 // gridColumnAsList materializes the named column of a Grid as a fresh
@@ -1745,12 +2077,12 @@ func gridViewColumnAsList(v *MShellGridView, name string) (*MShellList, bool) {
 
 // processGetter handles ':' getter operations for dictionaries, grid
 // rows, and grids/grid views (column lookup).
-func (state *EvalState) processGetter(getter *MShellGetter, frame *EvaluationFrame) EvalResult {
+func (state *EvalState) processGetter(getter *MShellGetter, frame *EvaluationFrame) *EvalResult {
 	stack := frame.Stack
 
 	obj, err := stack.Pop()
 	if err != nil {
-		return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do ':' operation on an empty stack.\n", getter.Token.Line, getter.Token.Column))
+		return nilIfNothingToDo(state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do ':' operation on an empty stack.\n", getter.Token.Line, getter.Token.Column)))
 	}
 
 	var value MShellObject
@@ -1766,7 +2098,7 @@ func (state *EvalState) processGetter(getter *MShellGetter, frame *EvaluationFra
 	case *MShellGridView:
 		value, ok = gridViewColumnAsList(objTyped, getter.String)
 	default:
-		return state.FailWithMessage(fmt.Sprintf("%d:%d: The stack parameter for ':' is not a dictionary, GridRow, Grid, or GridView. Found a %s (%s). Key: %s\n", getter.Token.Line, getter.Token.Column, obj.TypeName(), obj.DebugString(), getter.String))
+		return nilIfNothingToDo(state.FailWithMessage(fmt.Sprintf("%d:%d: The stack parameter for ':' is not a dictionary, GridRow, Grid, or GridView. Found a %s (%s). Key: %s\n", getter.Token.Line, getter.Token.Column, obj.TypeName(), obj.DebugString(), getter.String)))
 	}
 
 	if !ok {
@@ -1775,45 +2107,7 @@ func (state *EvalState) processGetter(getter *MShellGetter, frame *EvaluationFra
 		maybe := Maybe{obj: value}
 		stack.Push(&maybe)
 	}
-	return SimpleSuccess()
-}
-
-func (state *EvalState) EvaluateQuote(quotation MShellQuotation, stack *MShellStack, outerContext ExecuteContext, definitions []MShellDefinition) (EvalResult, error) {
-	qContext, err := quotation.BuildExecutionContext(&outerContext)
-	defer qContext.Close()
-	if err != nil {
-		return EvalResult{}, err
-	}
-	callStackItem := CallStackItem{MShellParseItem: &quotation, Name: "Quote", CallStackType: CALLSTACKQUOTE}
-	return state.evaluateItems(quotation.Tokens, stack, (*qContext), definitions, callStackItem), nil
-}
-
-// Evaluate evaluates a list of parsed items using the frame-based evaluator with TCO support
-func (state *EvalState) Evaluate(objects []MShellParseItem, stack *MShellStack, context ExecuteContext, definitions []MShellDefinition, callStackItem CallStackItem) EvalResult {
-	// Create initial frame
-	if callStackItem.MShellParseItem != nil {
-		state.CallStack.Push(callStackItem)
-	}
-
-	initialFrame := EvaluationFrame{
-		Objects:       objects,
-		Index:         0,
-		Context:       context,
-		Stack:         stack,
-		Definitions:   definitions,
-		CallStackItem: callStackItem,
-		FrameType:     FRAME_NORMAL,
-	}
-	frames := []EvaluationFrame{initialFrame}
-
-	result := state.Run(&frames)
-
-	// Pop the initial call stack item if we pushed one
-	if callStackItem.MShellParseItem != nil {
-		state.CallStack.Pop()
-	}
-
-	return result
+	return nil
 }
 
 func (state *EvalState) evaluateParseGrid(parseGrid *MShellParseGrid, stack *MShellStack, context ExecuteContext, definitions []MShellDefinition) EvalResult {
@@ -2098,7 +2392,7 @@ func (state *EvalState) mergeSortMShellByQuotation(t Token, items []MShellObject
 						cmpStack.Push(sorted_array[leftIndex])
 						cmpStack.Push(sorted_array[rightIndex])
 
-						result, err := state.EvaluateQuote(*quotation, &cmpStack, context, definitions)
+						result, err := state.EvaluateQuote(quotation, &cmpStack, context, definitions)
 						if err != nil {
 							return nil, state.FailWithMessage(err.Error())
 						}
@@ -2161,6 +2455,12 @@ func compareGridCellsForSort(col *GridColumn, idxA, idxB int) (int, error) {
 		return compareFloatsNoneLast(col.FloatData[idxA], col.FloatData[idxB]), nil
 	case COL_STRING:
 		return strings.Compare(col.StringData[idxA], col.StringData[idxB]), nil
+	case COL_DICT_STRING:
+		a, b := col.DictCodes[idxA], col.DictCodes[idxB]
+		if a == b {
+			return 0, nil
+		}
+		return strings.Compare(col.DictValues[a], col.DictValues[b]), nil
 	case COL_DATETIME:
 		a, b := col.DateTimeData[idxA], col.DateTimeData[idxB]
 		if a.Before(b) {
@@ -2177,9 +2477,13 @@ func compareGridCellsForSort(col *GridColumn, idxA, idxB int) (int, error) {
 
 // resolveColType applies the concat type lattice: same non-generic type wins;
 // any other combination produces COL_GENERIC. There is no numeric promotion.
+// Plain and dictionary string storage are the same type and combine to plain strings.
 func resolveColType(a, b ColumnType) ColumnType {
 	if a == b && a != COL_GENERIC {
 		return a
+	}
+	if isStringColType(a) && isStringColType(b) {
+		return COL_STRING
 	}
 	return COL_GENERIC
 }
@@ -2316,10 +2620,24 @@ func concatGrids(leftObj, rightObj MShellObject) (*MShellGrid, error) {
 		case COL_STRING:
 			newCol.StringData = make([]string, totalRows)
 			for i, idx := range leftIndices {
-				newCol.StringData[i] = leftCol.StringData[idx]
+				newCol.StringData[i] = leftCol.StringAt(idx)
 			}
 			for i, idx := range rightIndices {
-				newCol.StringData[leftRows+i] = rightCol.StringData[idx]
+				newCol.StringData[leftRows+i] = rightCol.StringAt(idx)
+			}
+		case COL_DICT_STRING:
+			// Keep the left dictionary as is and remap the right one onto it.
+			newCol.DictValues = append([]string(nil), leftCol.DictValues...)
+			newCol.DictCodes = make([]int32, totalRows)
+			for i, idx := range leftIndices {
+				newCol.DictCodes[i] = leftCol.DictCodes[idx]
+			}
+			remap := make([]int32, len(rightCol.DictValues))
+			for code, value := range rightCol.DictValues {
+				remap[code] = newCol.internDictString(value)
+			}
+			for i, idx := range rightIndices {
+				newCol.DictCodes[leftRows+i] = remap[rightCol.DictCodes[idx]]
 			}
 		case COL_DATETIME:
 			newCol.DateTimeData = make([]time.Time, totalRows)
@@ -2361,12 +2679,28 @@ func widenColumnToGeneric(col *GridColumn) {
 	col.FloatData = nil
 	col.StringData = nil
 	col.DateTimeData = nil
+	col.DictCodes = nil
+	col.DictValues = nil
+	col.dictIndex = nil
 	col.ColType = COL_GENERIC
 }
 
 // appendColumnRows appends the given source rows onto dst in place. dst must already
-// be widened (if needed) so that resolveColType(dst, src) == dst.ColType.
+// be widened (if needed) so that resolveColType(dst, src) == dst.ColType,
+// or both columns hold strings.
 func appendColumnRows(dst, src *GridColumn, srcIndices []int) {
+	if dst.ColType == COL_DICT_STRING && isStringColType(src.ColType) {
+		for _, idx := range srcIndices {
+			dst.DictCodes = append(dst.DictCodes, dst.internDictString(src.StringAt(idx)))
+		}
+		return
+	}
+	if dst.ColType == COL_STRING && src.ColType == COL_DICT_STRING {
+		for _, idx := range srcIndices {
+			dst.StringData = append(dst.StringData, src.StringAt(idx))
+		}
+		return
+	}
 	if dst.ColType == src.ColType && dst.ColType != COL_GENERIC {
 		switch dst.ColType {
 		case COL_INT:
@@ -2429,7 +2763,8 @@ func extendGrid(receiverObj, sourceObj MShellObject) (MShellObject, error) {
 	for _, recvCol := range receiverGrid.Columns {
 		srcCol := sourceGrid.GetColumn(recvCol.Name)
 		resolved := resolveColType(recvCol.ColType, srcCol.ColType)
-		if resolved != recvCol.ColType {
+		bothStrings := isStringColType(recvCol.ColType) && isStringColType(srcCol.ColType)
+		if resolved != recvCol.ColType && !bothStrings {
 			widenColumnToGeneric(recvCol)
 		}
 		appendColumnRows(recvCol, srcCol, sourceIndices)
@@ -2518,61 +2853,74 @@ type gridGroupByAggSpec struct {
 	Quote *MShellQuotation
 }
 
-func typedGridGroupKeyPart(obj MShellObject) (string, error) {
+// Grouping and join keys are internal map keys, never shown to users.
+// Each part is a type tag byte followed by a self-delimiting payload
+// (fixed width, or a length prefix), so concatenated parts are unambiguous
+// without escaping, and equal values of different types never collide.
+const (
+	keyTagNil       byte = 'n'
+	keyTagBool      byte = 'b'
+	keyTagInt       byte = 'i'
+	keyTagFloat     byte = 'f'
+	keyTagStr       byte = 's'
+	keyTagPath      byte = 'p'
+	keyTagLiteral   byte = 'l'
+	keyTagDate      byte = 'd'
+	keyTagMaybeNone byte = 'N'
+	keyTagMaybeJust byte = 'J'
+	keyTagList      byte = 'L'
+	keyTagOther     byte = 'o'
+)
+
+func appendKeyUint64(buf []byte, v uint64) []byte {
+	return binary.BigEndian.AppendUint64(buf, v)
+}
+
+func appendKeyBytes(buf []byte, tag byte, s string) []byte {
+	buf = append(buf, tag)
+	buf = binary.AppendUvarint(buf, uint64(len(s)))
+	return append(buf, s...)
+}
+
+func appendKeyFloat(buf []byte, f float64) []byte {
+	return appendKeyUint64(append(buf, keyTagFloat), canonicalFloatBits(f))
+}
+
+func appendGridKeyPart(buf []byte, obj MShellObject) ([]byte, error) {
 	if obj == nil {
-		return "nil:", nil
+		return append(buf, keyTagNil), nil
 	}
 	if isContainerType(obj) {
-		return "", fmt.Errorf("groupBy key values cannot be container types, got %s", obj.TypeName())
+		return buf, fmt.Errorf("groupBy key values cannot be container types, got %s", obj.TypeName())
 	}
 
 	switch objTyped := obj.(type) {
 	case MShellBool:
-		return fmt.Sprintf("bool:%t", objTyped.Value), nil
-	case MShellInt:
-		return fmt.Sprintf("int:%d", objTyped.Value), nil
-	case MShellFloat:
-		floatVal := objTyped.Value
-		if floatVal == 0 {
-			floatVal = 0
+		if objTyped.Value {
+			return append(buf, keyTagBool, 1), nil
 		}
-		return "float:" + strconv.FormatFloat(floatVal, 'g', -1, 64), nil
+		return append(buf, keyTagBool, 0), nil
+	case MShellInt:
+		return appendKeyUint64(append(buf, keyTagInt), uint64(objTyped.Value)), nil
+	case MShellFloat:
+		return appendKeyFloat(buf, objTyped.Value), nil
 	case MShellString:
-		encoded, _ := json.Marshal(objTyped.Content)
-		return "str:" + string(encoded), nil
+		return appendKeyBytes(buf, keyTagStr, objTyped.Content), nil
 	case MShellPath:
-		encoded, _ := json.Marshal(objTyped.Path)
-		return "path:" + string(encoded), nil
+		return appendKeyBytes(buf, keyTagPath, objTyped.Path), nil
 	case MShellLiteral:
-		encoded, _ := json.Marshal(objTyped.LiteralText)
-		return "literal:" + string(encoded), nil
+		return appendKeyBytes(buf, keyTagLiteral, objTyped.LiteralText), nil
 	case *MShellDateTime:
-		return fmt.Sprintf("date:%d", objTyped.Time.UnixNano()), nil
+		return appendKeyUint64(append(buf, keyTagDate), uint64(objTyped.Time.UnixNano())), nil
 	case *Maybe:
 		if objTyped.obj == nil {
-			return "maybe:none", nil
+			return append(buf, keyTagMaybeNone), nil
 		}
-		innerKey, err := typedGridGroupKeyPart(objTyped.obj)
-		if err != nil {
-			return "", err
-		}
-		return "maybe:just:" + innerKey, nil
+		return appendGridKeyPart(append(buf, keyTagMaybeJust), objTyped.obj)
 	default:
-		return obj.TypeName() + ":" + obj.ToJson(), nil
+		buf = appendKeyBytes(buf, keyTagOther, obj.TypeName())
+		return appendKeyBytes(buf, keyTagOther, obj.ToJson()), nil
 	}
-}
-
-func typedGridGroupKey(sourceGrid *MShellGrid, rowIdx int, keyCols []string) (string, error) {
-	parts := make([]string, len(keyCols))
-	for i, colName := range keyCols {
-		col := sourceGrid.GetColumn(colName)
-		part, err := typedGridGroupKeyPart(col.Get(rowIdx))
-		if err != nil {
-			return "", err
-		}
-		parts[i] = part
-	}
-	return strings.Join(parts, "\x1f"), nil
 }
 
 func parseGridGroupByAggSpecs(aggList *MShellList) ([]gridGroupByAggSpec, error) {
@@ -2645,40 +2993,44 @@ const (
 // matching SQL NULL ≠ NULL semantics. A list is treated as a tuple key; any none
 // component makes the whole compound key isNone.
 func evaluatedJoinKey(obj MShellObject) (string, bool, error) {
+	buf, isNone, err := appendJoinKey(nil, obj)
+	if err != nil || isNone {
+		return "", isNone, err
+	}
+	return string(buf), false, nil
+}
+
+func appendJoinKey(buf []byte, obj MShellObject) ([]byte, bool, error) {
 	if obj == nil {
-		return "", true, nil
+		return buf, true, nil
 	}
 	if maybe, ok := obj.(*Maybe); ok {
 		if maybe.obj == nil {
-			return "", true, nil
+			return buf, true, nil
 		}
-		return evaluatedJoinKey(maybe.obj)
+		return appendJoinKey(buf, maybe.obj)
 	}
 	if list, ok := obj.(*MShellList); ok {
-		parts := make([]string, len(list.Items))
-		for i, item := range list.Items {
+		buf = append(buf, keyTagList)
+		buf = binary.AppendUvarint(buf, uint64(len(list.Items)))
+		for _, item := range list.Items {
 			if _, isList := item.(*MShellList); isList {
-				return "", false, fmt.Errorf("compound join key may not contain nested lists")
+				return buf, false, fmt.Errorf("compound join key may not contain nested lists")
 			}
-			partStr, isNone, err := evaluatedJoinKey(item)
-			if err != nil {
-				return "", false, err
+			var isNone bool
+			var err error
+			buf, isNone, err = appendJoinKey(buf, item)
+			if err != nil || isNone {
+				return buf, isNone, err
 			}
-			if isNone {
-				return "", true, nil
-			}
-			parts[i] = partStr
 		}
-		return "list:[" + strings.Join(parts, "\x1f") + "]", false, nil
+		return buf, false, nil
 	}
 	if isContainerType(obj) {
-		return "", false, fmt.Errorf("join key may not be a %s", obj.TypeName())
+		return buf, false, fmt.Errorf("join key may not be a %s", obj.TypeName())
 	}
-	part, err := typedGridGroupKeyPart(obj)
-	if err != nil {
-		return "", false, err
-	}
-	return part, false, nil
+	buf, err := appendGridKeyPart(buf, obj)
+	return buf, false, err
 }
 
 // evaluateJoinKeys runs the key extractor quotation against every row in the source
@@ -2686,10 +3038,11 @@ func evaluatedJoinKey(obj MShellObject) (string, bool, error) {
 func (state *EvalState) evaluateJoinKeys(t Token, side string, sourceGrid *MShellGrid, sourceIndices []int, quote *MShellQuotation, context ExecuteContext, definitions []MShellDefinition) ([]string, []bool, EvalResult) {
 	keys := make([]string, len(sourceIndices))
 	isNone := make([]bool, len(sourceIndices))
+	var qStack MShellStack
 	for i, srcIdx := range sourceIndices {
 		row := &MShellGridRow{Grid: sourceGrid, RowIndex: srcIdx}
-		var qStack MShellStack = []MShellObject{row}
-		result, err := state.EvaluateQuote(*quote, &qStack, context, definitions)
+		qStack.resetTo(row)
+		result, err := state.EvaluateQuote(quote, &qStack, context, definitions)
 		if err != nil {
 			return nil, nil, state.FailWithMessage(err.Error())
 		}
@@ -2833,534 +3186,6 @@ func (state *EvalState) executeGridJoin(t Token, stack *MShellStack, kind joinKi
 	return SimpleSuccess()
 }
 
-func (state *EvalState) evaluateItems(objects []MShellParseItem, stack *MShellStack, context ExecuteContext, definitions []MShellDefinition, callStackItem CallStackItem) EvalResult {
-	// Defer popping the call stack
-	if callStackItem.MShellParseItem != nil {
-		state.CallStack.Push(callStackItem)
-		defer func() {
-			state.CallStack.Pop()
-		}()
-	}
-
-	index := 0
-
-	for index < len(objects) {
-		t := objects[index]
-		index++
-
-		switch t := t.(type) {
-		case *MShellParseList:
-			// Evaluate the list
-			list := t
-			var listStack MShellStack
-			listStack = []MShellObject{}
-
-			callStackItem := CallStackItem{MShellParseItem: list, Name: "list", CallStackType: CALLSTACKLIST}
-			result := state.evaluateItems(list.Items, &listStack, context, definitions, callStackItem)
-
-			if !result.Success {
-				fmt.Fprint(os.Stderr, "Failed to evaluate list.\n")
-				return result
-			}
-
-			if result.ExitCalled {
-				return result
-			}
-
-			if result.BreakNum > 0 {
-				return state.FailWithMessage("Encountered break within list.\n")
-			}
-
-			if result.Continue {
-				return state.FailWithMessage("Encountered continue within list.\n")
-			}
-
-			newList := NewList(len(listStack))
-			copy(newList.Items, listStack) // Copy the items from the stack to the new list
-			stack.Push(newList)
-		case *MShellParseDict:
-			// Evaluate the dictionary
-			parseDict := t
-			dict := NewDict()
-
-			for _, keyValue := range parseDict.Items {
-				key := keyValue.Key
-
-				var dictStack MShellStack
-				dictStack = []MShellObject{}
-				callStackItem := CallStackItem{MShellParseItem: parseDict, Name: "dict", CallStackType: CALLSTACKDICT}
-				result := state.evaluateItems(keyValue.Value, &dictStack, context, definitions, callStackItem)
-				if !result.Success {
-					fmt.Fprint(os.Stderr, "Failed to evaluate dictionary.\n")
-					return result
-				}
-				if result.ExitCalled {
-					return result
-				}
-				if result.BreakNum > 0 {
-					return state.FailWithMessage("Encountered break within dictionary.\n")
-				}
-				if result.Continue {
-					return state.FailWithMessage("Encountered continue within dictionary.\n")
-				}
-				if len(dictStack) == 0 {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Dictionary key '%s' evaluated to an empty stack.\n", keyValue.Value[0].GetStartToken().Line, keyValue.Value[0].GetStartToken().Column, key))
-				}
-
-				if len(dictStack) > 1 {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Dictionary key '%s' evaluated to a stack with more than one item.\n", keyValue.Value[0].GetStartToken().Line, keyValue.Value[0].GetStartToken().Column, key))
-				}
-
-				dict.Items[keyValue.Key] = dictStack[0]
-			}
-
-			stack.Push(dict)
-		case *MShellParseGrid:
-			result := state.evaluateParseGrid(t, stack, context, definitions)
-			if !result.Success || result.ExitCalled {
-				return result
-			}
-		case *MShellParseQuote:
-			parseQuote := t
-			q := MShellQuotation{Tokens: parseQuote.Items, StandardInputFile: "", StandardOutputFile: "", StandardErrorFile: "", Variables: context.Variables, MShellParseQuote: parseQuote}
-			stack.Push(&q)
-		case *MShellParsePrefixQuote:
-			prefixQuote := t
-			// Create a quotation from the items and push onto stack
-			mshellParseQuote := MShellParseQuote{
-				Items: prefixQuote.Items,
-				StartToken: prefixQuote.StartToken,
-				EndToken: prefixQuote.EndToken,
-			}
-			q := MShellQuotation{Tokens: prefixQuote.Items, StandardInputFile: "", StandardOutputFile: "", StandardErrorFile: "", Variables: context.Variables, MShellParseQuote: &mshellParseQuote}
-			stack.Push(&q)
-			// Create a token for the function name (strip trailing '.')
-			lexeme := prefixQuote.StartToken.Lexeme
-			funcToken := Token{
-				Line:   prefixQuote.StartToken.Line,
-				Column: prefixQuote.StartToken.Column,
-				Start:  prefixQuote.StartToken.Start,
-				Lexeme: lexeme[:len(lexeme)-1],
-				Type:   LITERAL,
-			}
-			// Recursively evaluate the function call
-			callStackItem := CallStackItem{MShellParseItem: prefixQuote, Name: funcToken.Lexeme, CallStackType: CALLSTACKDEF}
-			result := state.evaluateItems([]MShellParseItem{funcToken}, stack, context, definitions, callStackItem)
-			if result.ShouldPassResultUpStack() {
-				return result
-			}
-		case *MShellParseIfBlock:
-			ifBlock := t
-			startToken := ifBlock.GetStartToken()
-
-			// Pop the condition from the stack
-			condObj, err := stack.Pop()
-			if err != nil {
-				return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot evaluate 'if' on an empty stack.\n", startToken.Line, startToken.Column))
-			}
-
-			// Evaluate condition
-			var condition bool
-			switch condTyped := condObj.(type) {
-			case MShellBool:
-				condition = condTyped.Value
-			case MShellInt:
-				condition = condTyped.Value == 0
-			default:
-				return state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a boolean or integer for if condition, received a %s.\n", startToken.Line, startToken.Column, condObj.TypeName()))
-			}
-
-			if condition {
-				// Execute if body
-				callStackItem := CallStackItem{MShellParseItem: ifBlock, Name: "if", CallStackType: CALLSTACKIF}
-				result := state.evaluateItems(ifBlock.IfBody, stack, context, definitions, callStackItem)
-				if result.ShouldPassResultUpStack() {
-					return result
-				}
-			} else {
-				// Check else-if branches
-				foundMatch := false
-				for _, elseIf := range ifBlock.ElseIfs {
-					// Evaluate condition
-					callStackItem := CallStackItem{MShellParseItem: ifBlock, Name: "else-if-condition", CallStackType: CALLSTACKIF}
-					result := state.evaluateItems(elseIf.Condition, stack, context, definitions, callStackItem)
-					if !result.Success || result.ExitCalled {
-						return result
-					}
-					if result.BreakNum > 0 {
-						return state.FailWithMessage("Encountered break within else-if condition.\n")
-					}
-					if result.Continue {
-						return state.FailWithMessage("Encountered continue within else-if condition.\n")
-					}
-
-					elseIfCondObj, err := stack.Pop()
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Found an empty stack when evaluating else-if condition.\n", startToken.Line, startToken.Column))
-					}
-
-					var elseIfCondition bool
-					switch elseIfCondTyped := elseIfCondObj.(type) {
-					case MShellBool:
-						elseIfCondition = elseIfCondTyped.Value
-					case MShellInt:
-						elseIfCondition = elseIfCondTyped.Value == 0
-					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a boolean or integer for else-if condition, received a %s.\n", startToken.Line, startToken.Column, elseIfCondObj.TypeName()))
-					}
-
-					if elseIfCondition {
-						// Execute else-if body
-						callStackItem := CallStackItem{MShellParseItem: ifBlock, Name: "else-if", CallStackType: CALLSTACKIF}
-						result := state.evaluateItems(elseIf.Body, stack, context, definitions, callStackItem)
-						if result.ShouldPassResultUpStack() {
-							return result
-						}
-						foundMatch = true
-						break
-					}
-				}
-
-				// If no else-if matched, execute else body if present
-				if !foundMatch && len(ifBlock.ElseBody) > 0 {
-					callStackItem := CallStackItem{MShellParseItem: ifBlock, Name: "else", CallStackType: CALLSTACKIF}
-					result := state.evaluateItems(ifBlock.ElseBody, stack, context, definitions, callStackItem)
-					if result.ShouldPassResultUpStack() {
-						return result
-					}
-				}
-			}
-		case *MShellParseMatchBlock:
-			t.assertAssertiveInvariant()
-			startToken := t.GetStartToken()
-			subject, err := stack.Peek()
-			if err != nil {
-				return state.emptyMatchSubjectFailure(t)
-			}
-
-			matched := false
-			for _, arm := range t.Arms {
-				armMatched, bindings, result := state.matchPattern(arm.Pattern, subject, startToken)
-				if !result.Success {
-					return result
-				}
-				if armMatched {
-					if arm.Consume {
-						stack.Pop()
-					}
-					maps.Copy(context.Variables, bindings)
-					callStackItem := CallStackItem{MShellParseItem: t, Name: "match", CallStackType: CALLSTACKMATCH}
-					result := state.evaluateItems(arm.Body, stack, context, definitions, callStackItem)
-					if result.ShouldPassResultUpStack() {
-						return result
-					}
-					matched = true
-					break
-				}
-			}
-
-			if !matched {
-				return state.matchBlockFailure(t)
-			}
-		case *MShellIndexerList:
-			obj1, err := stack.Pop()
-			if err != nil {
-				startToken := t.GetStartToken()
-				return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'indexer' operation on an empty stack.\n", startToken.Line, startToken.Column))
-			}
-
-			indexerList := t
-			if len(indexerList.Indexers) == 1 && indexerList.Indexers[0].(Token).Type == INDEXER {
-				t := indexerList.Indexers[0].(Token)
-				// Indexer is a digit between ':' and ':'. Remove ends and parse the number
-				indexStr := t.Lexeme[1 : len(t.Lexeme)-1]
-				index, err := strconv.Atoi(indexStr)
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", t.Line, t.Column, err.Error()))
-				}
-
-				result, err := obj1.Index(index)
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: %s", t.Line, t.Column, err.Error()))
-				}
-				stack.Push(result)
-			} else {
-				var newObject MShellObject
-				newObject = nil
-
-				for _, indexer := range indexerList.Indexers {
-					indexerToken := indexer.(Token)
-					switch indexerToken.Type {
-					case INDEXER:
-						indexStr := indexerToken.Lexeme[1 : len(indexerToken.Lexeme)-1]
-						index, err := strconv.Atoi(indexStr)
-						if err != nil {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", indexerToken.Line, indexerToken.Column, err.Error()))
-						}
-
-						result, err := obj1.Index(index)
-						if err != nil {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: %s", indexerToken.Line, indexerToken.Column, err.Error()))
-						}
-
-						var wrappedResult MShellObject
-						switch obj1.(type) {
-						case *MShellList:
-							wrappedResult = NewList(0)
-							wrappedResult.(*MShellList).Items = append(wrappedResult.(*MShellList).Items, result)
-						case *MShellQuotation:
-							wrappedResult = &MShellQuotation{Tokens: []MShellParseItem{result.(MShellParseItem)}, StandardInputFile: "", StandardOutputFile: "", StandardErrorFile: "", Variables: context.Variables, MShellParseQuote: nil}
-						case *MShellPipe:
-							newList := NewList(0)
-							wrappedResult = &MShellPipe{List: *newList, StdoutBehavior: STDOUT_NONE}
-							wrappedResult.(*MShellPipe).List.Items = append(wrappedResult.(*MShellPipe).List.Items, result)
-						default:
-							wrappedResult = result
-						}
-
-						if newObject == nil {
-							newObject = wrappedResult
-						} else {
-							newObject, err = newObject.Concat(wrappedResult)
-							if err != nil {
-								return state.FailWithMessage(fmt.Sprintf("%d:%d: %s", indexerToken.Line, indexerToken.Column, err.Error()))
-							}
-						}
-					case STARTINDEXER, ENDINDEXER:
-						var indexStr string
-						// Parse the index value
-						if indexerToken.Type == ENDINDEXER {
-							indexStr = indexerToken.Lexeme[1:]
-						} else {
-							indexStr = indexerToken.Lexeme[:len(indexerToken.Lexeme)-1]
-						}
-
-						index, err := strconv.Atoi(indexStr)
-						if err != nil {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing index: %s\n", indexerToken.Line, indexerToken.Column, err.Error()))
-						}
-
-						var result MShellObject
-						if indexerToken.Type == ENDINDEXER {
-							result, err = obj1.SliceEnd(index)
-						} else {
-							result, err = obj1.SliceStart(index)
-						}
-
-						if err != nil {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: %s", indexerToken.Line, indexerToken.Column, err.Error()))
-						}
-
-						if newObject == nil {
-							newObject = result
-						} else {
-							newObject, err = newObject.Concat(result)
-							if err != nil {
-								return state.FailWithMessage(fmt.Sprintf("%d:%d: %s", indexerToken.Line, indexerToken.Column, err.Error()))
-							}
-						}
-
-					case SLICEINDEXER:
-						// StartInc:EndExc
-						parts := strings.Split(indexerToken.Lexeme, ":")
-						startInt, err := strconv.Atoi(parts[0])
-						endInt, err2 := strconv.Atoi(parts[1])
-
-						if err != nil || err2 != nil {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing slice indexes: %s\n", indexerToken.Line, indexerToken.Column, err.Error()))
-						}
-
-						result, err := obj1.Slice(startInt, endInt)
-						if err != nil {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: %s.\n", indexerToken.Line, indexerToken.Column, err.Error()))
-						}
-
-						if newObject == nil {
-							newObject = result
-						} else {
-							newObject, err = newObject.Concat(result)
-							if err != nil {
-								return state.FailWithMessage(fmt.Sprintf("%d:%d: %s", indexerToken.Line, indexerToken.Column, err.Error()))
-							}
-						}
-
-					}
-				}
-
-				stack.Push(newObject)
-			}
-		case MShellVarstoreList:
-			varstoreList := t
-			// First check lengths
-			if len(varstoreList.VarStores) > len(*stack) {
-				return state.FailWithMessage(fmt.Sprintf("%d:%d: Not enough items on stack (%d) to store into %d variables.\n", varstoreList.GetStartToken().Line, varstoreList.GetStartToken().Column, len(*stack), len(varstoreList.VarStores)))
-			}
-
-			// Have to bind in revsere order
-			for i := len(varstoreList.VarStores) - 1; i >= 0; i-- {
-				varstoreToken := varstoreList.VarStores[i]
-				obj, _ := stack.Pop()
-				varName := varstoreToken.Lexeme[0 : len(varstoreToken.Lexeme)-1] // Remove the trailing !
-				context.Variables[varName] = obj
-			}
-		case *MShellGetter:
-			// Handle like 'get' for dict or GridRow
-			getter := t
-			obj, err := stack.Pop()
-			if err != nil {
-				return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do ':' operation on an empty stack.\n", getter.Token.Line, getter.Token.Column))
-			}
-
-			var value MShellObject
-			var ok bool
-			switch objTyped := obj.(type) {
-			case *MShellDict:
-				value, ok = objTyped.Items[getter.String]
-			case *MShellGridRow:
-				value, ok = objTyped.Get(getter.String)
-			case *MShellGrid:
-				value, ok = gridColumnAsList(objTyped, getter.String)
-			case *MShellGridView:
-				value, ok = gridViewColumnAsList(objTyped, getter.String)
-			default:
-				return state.FailWithMessage(fmt.Sprintf("%d:%d: The stack parameter for ':' is not a dictionary, GridRow, Grid, or GridView. Found a %s (%s). Key: %s\n", getter.Token.Line, getter.Token.Column, obj.TypeName(), obj.DebugString(), getter.String))
-			}
-			if !ok {
-				stack.Push(&Maybe{obj: nil})
-			} else {
-				maybe := Maybe{obj: value}
-				stack.Push(&maybe)
-			}
-
-		case Token:
-			result := state.evaluateToken(t, stack, context, definitions, callStackItem)
-			if result.ShouldPassResultUpStack() {
-				return result
-			}
-		case *MShellAsCast:
-			// Static-only: `as` is a checker hint; no runtime work.
-		case *MShellTypeDecl:
-			// Static-only: type declarations have no runtime effect by design.
-		default:
-			return state.FailWithMessage(fmt.Sprintf("We haven't implemented the type '%T' yet.\n", t))
-		}
-
-	}
-
-	return EvalResult{true, false, -1, 0, false}
-}
-
-const (
-	FORMATMODENORMAL = iota
-	FORMATMODEESCAPE
-	FORMATMODEFORMAT
-)
-
-func (state *EvalState) EvaluateFormatString(lexeme string, context ExecuteContext, definitions []MShellDefinition, callStackItem CallStackItem) (MShellString, error) {
-
-	allRunes := []rune(lexeme)
-
-	if len(allRunes) < 3 {
-		return MShellString{""}, fmt.Errorf("Found format string with less than 3 characters: %s", lexeme)
-	}
-
-	var b strings.Builder
-
-	index := 2
-	mode := FORMATMODENORMAL
-
-	formatStrStartIndex := -1
-	formatStrEndIndex := -1
-
-	lexer := NewLexer("", nil)
-	parser := MShellParser{lexer: lexer}
-
-	for index < len(allRunes)-1 {
-		c := allRunes[index]
-		index++
-
-		switch mode {
-		case FORMATMODEESCAPE:
-			switch c {
-			case 'e':
-				b.WriteRune('\033')
-			case 'n':
-				b.WriteRune('\n')
-			case 't':
-				b.WriteRune('\t')
-			case 'r':
-				b.WriteRune('\r')
-			case '\\':
-				b.WriteRune('\\')
-			case '"':
-				b.WriteRune('"')
-			case '{':
-				b.WriteRune('{') // This is a literal '{' in the format string
-			default:
-				return MShellString{""}, fmt.Errorf("invalid escape character '%c'", c)
-			}
-			mode = FORMATMODENORMAL
-		case FORMATMODENORMAL:
-			switch c {
-			case '\\':
-				mode = FORMATMODEESCAPE
-			case '{':
-				formatStrStartIndex = index - 1
-				mode = FORMATMODEFORMAT
-			default:
-				b.WriteRune(rune(c))
-			}
-		case FORMATMODEFORMAT:
-			if c == '}' {
-				formatStrEndIndex = index - 1
-				formatStr := string(allRunes[formatStrStartIndex+1 : formatStrEndIndex])
-
-				// Evaluate the format string
-				lexer.resetInput(formatStr)
-				parser.NextToken()
-				contents, err := parser.ParseFile()
-				if err != nil {
-					return MShellString{""}, fmt.Errorf("Error parsing format string %s: %s", formatStr, err)
-				}
-
-				// Evaluate the format string contents
-				var stack MShellStack
-				stack = []MShellObject{}
-
-				result := state.evaluateItems(contents.Items, &stack, context, definitions, callStackItem)
-
-				if !result.Success {
-					return MShellString{""}, fmt.Errorf("Error evaluating format string %s", formatStr)
-				}
-
-				if len(stack) != 1 {
-					return MShellString{""}, fmt.Errorf("Format string %s did not evaluate to a single value", formatStr)
-				}
-
-				// Get the string representation of the result
-				resultStr, err := stack[0].CastString()
-				if err != nil {
-					return MShellString{""}, fmt.Errorf("Format string contents %s did not evaluate to a stringable value", formatStr)
-				}
-
-				b.WriteString(resultStr)
-
-				formatStrStartIndex = -1
-				formatStrEndIndex = -1
-				mode = FORMATMODENORMAL
-			}
-		default:
-			panic("Unknown format mode")
-		}
-	}
-
-	if mode != FORMATMODENORMAL {
-		return MShellString{""}, fmt.Errorf("Format string ended in an invalid state")
-	}
-
-	return MShellString{b.String()}, nil
-}
-
 type Executable interface {
 	Execute(state *EvalState, context ExecuteContext, stack *MShellStack) (EvalResult, int, []byte, []byte)
 	GetStandardInputFile() string
@@ -3397,60 +3222,6 @@ func stderrDestinationDescOf(obj MShellObject) string {
 func (list *MShellList) Execute(state *EvalState, context ExecuteContext, stack *MShellStack) (EvalResult, int, []byte, []byte) {
 	result, exitCode, stdoutResult, stderrResult := RunProcess(*list, context, state)
 	return result, exitCode, stdoutResult, stderrResult
-}
-
-func (quotation *MShellQuotation) Execute(state *EvalState, context ExecuteContext, stack *MShellStack, definitions []MShellDefinition, callStack CallStack) (EvalResult, int) {
-	quotationContext := ExecuteContext{
-		StandardInput:  nil,
-		StandardOutput: nil,
-		Variables:      quotation.Variables,
-		Pbm:            context.Pbm,
-	}
-
-	if quotation.StdinBehavior != STDIN_NONE {
-		switch quotation.StdinBehavior {
-		case STDIN_CONTENT:
-			quotationContext.StandardInput = strings.NewReader(quotation.StandardInputContents)
-		case STDIN_BINARY:
-			quotationContext.StandardInput = bytes.NewReader(quotation.StandardInputBinary)
-		case STDIN_FILE:
-			file, err := os.Open(quotation.StandardInputFile)
-			if err != nil {
-				return state.FailWithMessage(fmt.Sprintf("Error opening file %s for reading: %s\n", quotation.StandardInputFile, err.Error())), 1
-			}
-			quotationContext.StandardInput = file
-			defer file.Close()
-		default:
-			panic("Unknown stdin behavior")
-		}
-	} else if context.StandardInput != nil {
-		quotationContext.StandardInput = context.StandardInput
-	} else {
-		// Default to stdin of this process itself
-		quotationContext.StandardInput = os.Stdin
-	}
-
-	if quotation.StandardOutputFile != "" {
-		file, err := os.Create(quotation.StandardOutputFile)
-		if err != nil {
-			return state.FailWithMessage(fmt.Sprintf("Error opening file %s for writing: %s\n", quotation.StandardOutputFile, err.Error())), 1
-		}
-		quotationContext.StandardOutput = file
-		defer file.Close()
-	} else if context.StandardOutput != nil {
-		quotationContext.StandardOutput = context.StandardOutput
-	} else {
-		// Default to stdout of this process itself
-		quotationContext.StandardOutput = os.Stdout
-	}
-
-	result := state.evaluateItems(quotation.Tokens, stack, quotationContext, definitions, CallStackItem{quotation, "quote", CALLSTACKQUOTE})
-
-	if !result.Success || result.ExitCalled {
-		return result, result.ExitCode
-	} else {
-		return SimpleSuccess(), 0
-	}
 }
 
 func (list *MShellList) GetStandardInputFile() string {
@@ -6090,15 +5861,17 @@ func optimizeColumnStorage(col *GridColumn) {
 		col.ColType = COL_FLOAT
 		col.GenericData = nil
 	} else if allStrings {
-		col.StringData = make([]string, numRows)
-		for i, val := range col.GenericData {
-			if val == nil {
-				col.StringData[i] = "" // Default for None
-			} else if strVal, ok := val.(MShellString); ok {
-				col.StringData[i] = strVal.Content
+		if !dictEncodeStringColumn(col) {
+			col.StringData = make([]string, numRows)
+			for i, val := range col.GenericData {
+				if val == nil {
+					col.StringData[i] = "" // Default for None
+				} else if strVal, ok := val.(MShellString); ok {
+					col.StringData[i] = strVal.Content
+				}
 			}
+			col.ColType = COL_STRING
 		}
-		col.ColType = COL_STRING
 		col.GenericData = nil
 	} else if allDateTimes {
 		col.DateTimeData = make([]time.Time, numRows)
@@ -6115,38 +5888,75 @@ func optimizeColumnStorage(col *GridColumn) {
 	// If none of the above, keep as generic
 }
 
-func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context ExecuteContext, definitions []MShellDefinition, callStackItem CallStackItem) EvalResult {
+// dictEncodeStringColumn converts a generic column of strings to COL_DICT_STRING.
+// Repeated strings are stored once, and grouping on the column works on integer codes.
+// It gives up and returns false, leaving col unchanged, when most values are distinct,
+// since a dictionary then costs more than it saves. The limit is against the total
+// row count, so it gives up as soon as the outcome is certain, whatever the row order.
+func dictEncodeStringColumn(col *GridColumn) bool {
+	maxDistinct := max(len(col.GenericData)/2, 1024)
+	codes := make([]int32, len(col.GenericData))
+	interner := newStringInterner()
+	values := make([]string, 0)
+	for i, val := range col.GenericData {
+		s := "" // Default for None
+		if strVal, ok := val.(MShellString); ok {
+			s = strVal.Content
+		}
+		code, added := interner.intern(s)
+		if added {
+			if len(values) >= maxDistinct {
+				return false
+			}
+			values = append(values, s)
+		}
+		codes[i] = code
+	}
+	col.DictCodes = codes
+	col.DictValues = values
+	col.ColType = COL_DICT_STRING
+	return true
+}
+
+// evalTildeToken pushes ~ or ~/rest with the home directory expanded.
+func (state *EvalState) evalTildeToken(t *Token, stack *MShellStack) EvalResult {
+	// Only do tilde expansion
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return state.FailWithMessage(fmt.Sprintf("%d:%d: Error expanding ~: %s\n", t.Line, t.Column, err.Error()))
+	}
+
+	var tildeExpanded string
+	if t.Lexeme == "~" {
+		tildeExpanded = homeDir
+	} else {
+		tildeExpanded = filepath.Join(homeDir, t.Lexeme[2:])
+	}
+
+	stack.Push(MShellString{tildeExpanded})
+	return SimpleSuccess()
+}
+
+// evaluateBuiltinToken evaluates a token that is not a call to a
+// definition. Callers must have already checked for a definition.
+func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, context ExecuteContext, definitions []MShellDefinition, callStackItem CallStackItem) EvalResult {
 			if t.Type == EOF {
 				return SimpleSuccess()
 			} else if t.Type == LITERAL {
-
-				// Check for definitions
-				if definition, ok := state.lookupDefinition(definitions, t.Lexeme); ok {
-					// Evaluate the definition
-					newContext := context.CloneLessVariables()
-					callStackItem := CallStackItem{MShellParseItem: t, Name: definition.Name, CallStackType: CALLSTACKDEF}
-					result := state.evaluateItems(definition.Items, stack, *newContext, definitions, callStackItem)
-
-					if result.ShouldPassResultUpStack() {
-						return result
-					}
-
-					return SimpleSuccess()
-				}
-
-				if t.Lexeme == "stack" {
+				switch t.Lexeme {
+				case "stack":
 					// Print current stack
 					fmt.Fprint(os.Stderr, stack.String())
-				} else if t.Lexeme == "binPaths" {
+				case "binPaths":
 					stack.Push(context.Pbm.DebugList())
 
-				} else if t.Lexeme == "defs" {
+				case "defs":
 					// Print out available definitions
 					fmt.Fprint(os.Stderr, "Available definitions:\n")
 					for _, definition := range definitions {
 						fmt.Fprintf(os.Stderr, "%s\n", definition.Name)
 					}
-				} else if t.Lexeme == "completionDefs" {
+				case "completionDefs":
 					dict := &MShellDict{Items: make(map[string]MShellObject)}
 					for name, defs := range state.CompletionDefinitions {
 						quotations := make([]MShellObject, len(defs))
@@ -6156,7 +5966,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						dict.Items[name] = &MShellList{Items: quotations}
 					}
 					stack.Push(dict)
-				} else if t.Lexeme == "env" {
+				case "env":
 					// Print a list of all environment variables, sorted by key
 					envVars := os.Environ()
 					slices.Sort(envVars)
@@ -6164,7 +5974,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					for _, envVar := range envVars {
 						fmt.Fprintf(os.Stderr, "%s\n", envVar)
 					}
-				} else if t.Lexeme == "envInspect" {
+				case "envInspect":
 					obj, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'envInspect' operation on an empty stack.\n", t.Line, t.Column))
@@ -6186,13 +5996,13 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						}}
 					}
 					stack.Push(result)
-				} else if t.Lexeme == "dup" {
+				case "dup":
 					top, err := stack.Peek()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot duplicate an empty stack.\n", t.Line, t.Column))
 					}
 					stack.Push(top)
-				} else if t.Lexeme == "over" {
+				case "over":
 					stackLen := len(*stack)
 					if stackLen < 2 {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'over' operation on a stack with less than two items.\n", t.Line, t.Column))
@@ -6200,7 +6010,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 					obj := (*stack)[stackLen-2]
 					stack.Push(obj)
-				} else if t.Lexeme == "swap" {
+				case "swap":
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -6208,12 +6018,12 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 					stack.Push(obj1)
 					stack.Push(obj2)
-				} else if t.Lexeme == "drop" {
+				case "drop":
 					_, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot drop an empty stack.\n", t.Line, t.Column))
 					}
-				} else if t.Lexeme == "rot" {
+				case "rot":
 					// Check that there are at least 3 items on the stack
 					stackLen := len(*stack)
 					if stackLen < 3 {
@@ -6225,7 +6035,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					stack.Push(second)
 					stack.Push(top)
 					stack.Push(third)
-				} else if t.Lexeme == "-rot" {
+				case "-rot":
 					// Check that there are at least 3 items on the stack
 					if len(*stack) < 3 {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'rot' operation on a stack with less than three items.\n", t.Line, t.Column))
@@ -6236,14 +6046,14 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					stack.Push(top)
 					stack.Push(third)
 					stack.Push(second)
-				} else if t.Lexeme == "nip" {
+				case "nip":
 					if len(*stack) < 2 {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'nip' operation on a stack with less than two items.\n", t.Line, t.Column))
 					}
 					top, _ := stack.Pop()
 					_, _ = stack.Pop()
 					stack.Push(top)
-				} else if t.Lexeme == "glob" {
+				case "glob":
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'glob' operation on an empty stack.\n", t.Line, t.Column))
@@ -6265,27 +6075,32 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(newList)
-				} else if t.Lexeme == "stdin" {
-					// Dump all of current stdin onto the stack as a string
-					var buffer bytes.Buffer
+				case "stdin":
+					// Dump all of current stdin onto the stack as a string.
+					// The read is capped by MSH_READ_LIMIT (default 100 MiB) so a
+					// huge or nonterminating input fails instead of exhausting memory.
 					var reader io.Reader
 					if context.StandardInput == nil {
 						reader = os.Stdin
 					} else {
 						reader = context.StandardInput
 					}
-					_, err := buffer.ReadFrom(reader)
+					limit, err := readLimit()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot read stdin: %s\n", t.Line, t.Column, err.Error()))
+					}
+					data, err := readAllBounded(reader, limit)
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error reading from stdin: %s\n", t.Line, t.Column, err.Error()))
 					}
-					stack.Push(MShellString{buffer.String()})
-				} else if t.Lexeme == "stdinIsTerminal" {
+					stack.Push(MShellString{string(data)})
+				case "stdinIsTerminal":
 					stack.Push(MShellBool{streamIsTerminal(context.StandardInput, os.Stdin)})
-				} else if t.Lexeme == "stdoutIsTerminal" {
+				case "stdoutIsTerminal":
 					stack.Push(MShellBool{streamIsTerminal(context.StandardOutput, os.Stdout)})
-				} else if t.Lexeme == "stderrIsTerminal" {
+				case "stderrIsTerminal":
 					stack.Push(MShellBool{streamIsTerminal(context.StandardError, os.Stderr)})
-				} else if t.Lexeme == "prompt" {
+				case "prompt":
 					obj1, err := stack.Pop1(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -6302,7 +6117,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(MShellString{line})
-				} else if t.Lexeme == "append" {
+				case "append":
 						obj1, err := stack.Pop()
 						if err != nil {
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'append' operation on an empty stack.\n", t.Line, t.Column))
@@ -6333,14 +6148,14 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot append a %s to a %s.\n", t.Line, t.Column, obj1.TypeName(), obj2.TypeName()))
 						}
 					}
-				} else if t.Lexeme == "args" {
+				case "args":
 					// Dump the positional arguments onto the stack as a list of strings
 					newList := NewList(len(state.PositionalArgs))
 					for i, arg := range state.PositionalArgs {
 						newList.Items[i] = MShellString{arg}
 					}
 					stack.Push(newList)
-				} else if t.Lexeme == "len" {
+				case "len":
 					obj, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'len' operation on an empty stack.\n", t.Line, t.Column))
@@ -6366,7 +6181,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot get length of a %s.\n", t.Line, t.Column, obj.TypeName()))
 					}
-				} else if t.Lexeme == "nth" {
+				case "nth":
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'nth' operation on an empty stack.\n", t.Line, t.Column))
@@ -6396,7 +6211,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'nth' with a %s and a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
 						}
 					}
-				} else if t.Lexeme == "w" || t.Lexeme == "wl" || t.Lexeme == "we" || t.Lexeme == "wle" {
+				case "w", "wl", "we", "wle":
 					// Print the top of the stack to the console.
 					top, err := stack.Pop()
 					if err != nil {
@@ -6437,7 +6252,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					if t.Lexeme == "wl" || t.Lexeme == "wle" {
 						fmt.Fprint(writer, "\n")
 					}
-				} else if t.Lexeme == "findReplace" {
+				case "findReplace":
 					// Do simple find replace with the top three strings on stack
 					obj1, obj2, obj3, err := stack.Pop3(t)
 					if err != nil {
@@ -6464,7 +6279,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(MShellString{strings.ReplaceAll(originalStr, findStr, replacementStr)})
-				} else if t.Lexeme == "strEscape" {
+				case "strEscape":
 					obj, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'strEscape' operation on an empty stack.\n", t.Line, t.Column))
@@ -6476,7 +6291,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(MShellString{escapeMshellString(strToEscape)})
-				} else if t.Lexeme == "split" {
+				case "split":
 					delimiter, strLiteral, err := stack.Pop2(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -6498,7 +6313,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						newList.Items[i] = MShellString{item}
 					}
 					stack.Push(newList)
-				} else if t.Lexeme == "wsplit" {
+				case "wsplit":
 					// Split on whitespace
 					obj, err := stack.Pop()
 					if err != nil {
@@ -6516,7 +6331,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(newList)
-				} else if t.Lexeme == "join" {
+				case "join":
 					if len(*stack) >= 1 {
 						if _, isQuote := (*stack)[len(*stack)-1].(*MShellQuotation); isQuote {
 							result := state.executeGridJoin(t, stack, joinInner, context, definitions)
@@ -6538,7 +6353,6 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					var delimiterStr string
-					var listItems []string
 
 					switch delimiterTyped := delimiter.(type) {
 					case MShellString:
@@ -6549,24 +6363,38 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot join with a %s.\n", t.Line, t.Column, delimiter.TypeName()))
 					}
 
-					switch listTyped := list.(type) {
-					case *MShellList:
-						for _, item := range listTyped.Items {
-							switch itemTyped := item.(type) {
-							case MShellString:
-								listItems = append(listItems, itemTyped.Content)
-							case MShellLiteral:
-								listItems = append(listItems, itemTyped.LiteralText)
-							default:
-								return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot join a list with a %s inside (%s).\n", t.Line, t.Column, item.TypeName(), item.DebugString()))
-							}
-						}
-					default:
+					listTyped, ok := list.(*MShellList)
+					if !ok {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a list as the second item on stack for join, received a %s (%s). The delimiter was '%s'\n", t.Line, t.Column, list.TypeName(), list.DebugString(), delimiterStr))
 					}
 
-					stack.Push(MShellString{strings.Join(listItems, delimiterStr)})
-				} else if t.Lexeme == "lines" {
+					joined, badItem := joinStringItems(listTyped.Items, delimiterStr, false)
+					if badItem != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot join a list with a %s inside (%s).\n", t.Line, t.Column, badItem.TypeName(), badItem.DebugString()))
+					}
+					stack.Push(MShellString{joined})
+				case "unlines", "unlinesCrLf":
+					list, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
+					}
+
+					listTyped, ok := list.(*MShellList)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a list for '%s', received a %s (%s).\n", t.Line, t.Column, t.Lexeme, list.TypeName(), list.DebugString()))
+					}
+
+					lineEnding := "\n"
+					if t.Lexeme == "unlinesCrLf" {
+						lineEnding = "\r\n"
+					}
+
+					joined, badItem := joinStringItems(listTyped.Items, lineEnding, true)
+					if badItem != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' on a list with a %s inside (%s).\n", t.Line, t.Column, t.Lexeme, badItem.TypeName(), badItem.DebugString()))
+					}
+					stack.Push(MShellString{joined})
+				case "lines":
 					obj, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot evaluate 'lines' on an empty stack.\n", t.Line, t.Column))
@@ -6590,7 +6418,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(newList)
-				} else if t.Lexeme == "setAt" {
+				case "setAt":
 					// Expected stack:
 					// List item index
 					// Index 0 based, negative indexes allowed
@@ -6619,7 +6447,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 					obj3List.Items[obj1Index.Value] = obj2
 					stack.Push(obj3List)
-				} else if t.Lexeme == "insert" {
+				case "insert":
 					// Expected stack:
 					// List item index
 					// Index 0 based, negative indexes allowed
@@ -6648,7 +6476,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 					obj3List.Items = append(obj3List.Items[:obj1Index.Value], append([]MShellObject{obj2}, obj3List.Items[obj1Index.Value:]...)...)
 					stack.Push(obj3List)
-				} else if t.Lexeme == "del" {
+				case "del":
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -6689,7 +6517,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot delete from a %s.\n", t.Line, t.Column, obj1.TypeName()))
 					}
-				} else if t.Lexeme == "readFile" {
+				case "readFile":
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'readFile' operation on an empty stack.\n", t.Line, t.Column))
@@ -6706,7 +6534,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(MShellString{string(content)})
-				} else if t.Lexeme == "clip" {
+				case "clip":
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'clip' operation on an empty stack.\n", t.Line, t.Column))
@@ -6720,7 +6548,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					if err := writeSystemClipboard(text); err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error copying to clipboard: %s\n", t.Line, t.Column, err.Error()))
 					}
-				} else if t.Lexeme == "readFileBytes" {
+				case "readFileBytes":
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'readFileBytes' operation on an empty stack.\n", t.Line, t.Column))
@@ -6737,7 +6565,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(MShellBinary(content))
-				} else if t.Lexeme == "cd" {
+				case "cd":
 					obj, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'cd' operation on an empty stack.\n", t.Line, t.Column))
@@ -6752,17 +6580,17 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					if !result.Success {
 						return result
 					}
-				} else if t.Lexeme == "cdh" {
+				case "cdh":
 					result, _ := state.RunCdh(context)
 					if !result.Success {
 						return result
 					}
-				} else if t.Lexeme == "cdp" {
+				case "cdp":
 					result, _ := state.RunCdp()
 					if !result.Success {
 						return result
 					}
-				} else if t.Lexeme == "mshFileManager" {
+				case "mshFileManager":
 					obj, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'mshFileManager' on an empty stack.\n", t.Line, t.Column))
@@ -6780,7 +6608,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 							return result
 						}
 					}
-				} else if t.Lexeme == "in" {
+				case "in":
 					substring, stringOrDict, err := stack.Pop2(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -6803,7 +6631,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 						stack.Push(MShellBool{strings.Contains(totalStringText, substringText)})
 					}
-				} else if t.Lexeme == "/" {
+				case "/":
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -6851,7 +6679,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do a '%s' operation between a %s and a %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
 						}
 					}
-				} else if t.Lexeme == "exit" {
+				case "exit":
 					exitCode, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'exit' operation on an empty stack. If you are trying to exit out of the interactive shell, you are probably looking to do `0 exit`.\n", t.Line, t.Column))
@@ -6866,12 +6694,20 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot exit with a value outside of 0-255.\n", t.Line, t.Column))
 					}
 
+					// Frames of enclosing Evaluate calls stay on state.frames,
+					// so this sees every interpolation the exit is inside.
+					for i := range state.frames {
+						if state.frames[i].FrameType == FRAME_FORMATSTRING {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: 'exit' cannot be used inside a format string interpolation.\n", t.Line, t.Column))
+						}
+					}
+
 					if exitInt.Value == 0 {
 						return EvalResult{true, false, -1, 0, true}
 					} else {
 						return EvalResult{false, false, -1, exitInt.Value, true}
 					}
-				} else if t.Lexeme == "toFloat" {
+				case "toFloat":
 					obj, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'toFloat' operation on an empty stack.\n", t.Line, t.Column))
@@ -6893,7 +6729,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert a %s to a float.\n", t.Line, t.Column, obj.TypeName()))
 					}
-				} else if t.Lexeme == "toInt" {
+				case "toInt":
 					obj, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'toInt' operation on an empty stack.\n", t.Line, t.Column))
@@ -6915,7 +6751,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert a %s to an int.\n", t.Line, t.Column, obj.TypeName()))
 					}
-				} else if t.Lexeme == "toBase" {
+				case "toBase":
 					// (int:value int:base -- str) Format an integer in the given
 					// base (2-36) as bare digits (no 0o/0x/0b prefix).
 					baseObj, valObj, err := stack.Pop2(t)
@@ -6934,7 +6770,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: 'toBase' base must be between 2 and 36. Found %d.\n", t.Line, t.Column, baseInt.Value))
 					}
 					stack.Push(MShellString{strconv.FormatInt(int64(valInt.Value), baseInt.Value)})
-				} else if t.Lexeme == "fromBase" {
+				case "fromBase":
 					// (str int:base -- Maybe[int]) Parse a string in the given base
 					// (2-36). Returns none when the string is not a valid number.
 					baseObj, strObj, err := stack.Pop2(t)
@@ -6962,7 +6798,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					} else {
 						stack.Push(&Maybe{obj: MShellInt{intVal}})
 					}
-				} else if t.Lexeme == "toDt" {
+				case "toDt":
 					dateStrObj, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'toDt' operation on an empty stack.\n", t.Line, t.Column))
@@ -6982,7 +6818,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					// TODO: Don't make a new lexer object each time.
-					parsedTime, err := ParseDateTime(dateStr)
+					parsedTime, err := ParseDateTime(dateStr, &state.DateOrder)
 					if err != nil {
 						stack.Push(&Maybe{obj: nil})
 						// return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing date time '%s': %s\n", t.Line, t.Column, dateStr, err.Error()))
@@ -6990,7 +6826,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						dt := MShellDateTime{Time: parsedTime, OriginalString: dateStr}
 						stack.Push(&Maybe{obj: &dt})
 					}
-				} else if t.Lexeme == "files" || t.Lexeme == "dirs" {
+				case "files", "dirs":
 					// Dump all the files in the current directory to the stack. No sub-directories.
 					files, err := os.ReadDir(".")
 					if err != nil {
@@ -7012,7 +6848,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						}
 					}
 					stack.Push(newList)
-				} else if t.Lexeme == "isDir" || t.Lexeme == "isFile" {
+				case "isDir", "isFile":
 					obj, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'isDir' operation on an empty stack.\n", t.Line, t.Column))
@@ -7040,7 +6876,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Unknown operation: %s\n", t.Line, t.Column, t.Lexeme))
 						}
 					}
-				} else if t.Lexeme == "mkdir" || t.Lexeme == "mkdirp" {
+				case "mkdir", "mkdirp":
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'mkdir' operation on an empty stack.\n", t.Line, t.Column))
@@ -7060,28 +6896,15 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error creating directory: %s\n", t.Line, t.Column, err.Error()))
 					}
-				} else if t.Lexeme == "~" || strings.HasPrefix(t.Lexeme, "~/") {
-					// Only do tilde expansion
-					homeDir, err := os.UserHomeDir()
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error expanding ~: %s\n", t.Line, t.Column, err.Error()))
-					}
-
-					var tildeExpanded string
-					if t.Lexeme == "~" {
-						tildeExpanded = homeDir
-					} else {
-						tildeExpanded = filepath.Join(homeDir, t.Lexeme[2:])
-					}
-
-					stack.Push(MShellString{tildeExpanded})
-				} else if t.Lexeme == "pwd" {
+				case "~":
+					return state.evalTildeToken(&t, stack)
+				case "pwd":
 					pwd, err := os.Getwd()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error getting current directory: %s\n", t.Line, t.Column, err.Error()))
 					}
 					stack.Push(MShellString{pwd})
-				} else if t.Lexeme == "psub" {
+				case "psub":
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'psub' operation on an empty stack.\n", t.Line, t.Column))
@@ -7114,11 +6937,11 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 					tmpfile.Close()
 					stack.Push(MShellString{tmpfile.Name()})
-				} else if t.Lexeme == "now" {
+				case "now":
 					// Drop current local date time onto the stack
 					now := time.Now()
 					stack.Push(&MShellDateTime{Time: now, OriginalString: now.Format(time.RFC3339)})
-				} else if t.Lexeme == "date" {
+				case "date":
 					dateTimeObj, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'day' operation on an empty stack.\n", t.Line, t.Column))
@@ -7132,7 +6955,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					datePortion := time.Date(dateTime.Time.Year(), dateTime.Time.Month(), dateTime.Time.Day(), 0, 0, 0, 0, dateTime.Time.Location())
 					// Original string is ISO 8601 format
 					stack.Push(&MShellDateTime{Time: datePortion, OriginalString: datePortion.Format(time.RFC3339)})
-				} else if t.Lexeme == "day" {
+				case "day":
 					dateTimeObj, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'day' operation on an empty stack.\n", t.Line, t.Column))
@@ -7144,7 +6967,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(MShellInt{dateTime.Time.Day()})
-				} else if t.Lexeme == "month" {
+				case "month":
 					dateTimeObj, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'month' operation on an empty stack.\n", t.Line, t.Column))
@@ -7157,7 +6980,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 					stack.Push(MShellInt{int(dateTime.Time.Month())})
 
-				} else if t.Lexeme == "year" {
+				case "year":
 					dateTimeObj, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'year' operation on an empty stack.\n", t.Line, t.Column))
@@ -7169,7 +6992,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(MShellInt{dateTime.Time.Year()})
-				} else if t.Lexeme == "hour" {
+				case "hour":
 					dateTimeObj, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'hour' operation on an empty stack.\n", t.Line, t.Column))
@@ -7181,7 +7004,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(MShellInt{dateTime.Time.Hour()})
-				} else if t.Lexeme == "minute" {
+				case "minute":
 					dateTimeObj, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'minute' operation on an empty stack.\n", t.Line, t.Column))
@@ -7193,7 +7016,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(MShellInt{dateTime.Time.Minute()})
-				} else if t.Lexeme == "mod" {
+				case "mod":
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'mod' operation on an empty stack.\n", t.Line, t.Column))
@@ -7229,7 +7052,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot mod a %s by a float. Use 'toFloat' / 'toInt' to convert explicitly — 'mod' does not coerce numeric types.\n", t.Line, t.Column, obj2.TypeName()))
 						}
 					}
-				} else if t.Lexeme == "basename" || t.Lexeme == "dirname" || t.Lexeme == "ext" || t.Lexeme == "stem" {
+				case "basename", "dirname", "ext", "stem":
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
@@ -7252,7 +7075,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 						stack.Push(MShellPath{strings.TrimSuffix(path, filepath.Ext(path))})
 					}
-				} else if t.Lexeme == "toPath" {
+				case "toPath":
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'toPath' operation on an empty stack.\n", t.Line, t.Column))
@@ -7264,15 +7087,15 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(MShellPath{path})
-				} else if t.Lexeme == "setenv" {
+				case "setenv":
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'setenv' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
-					varName, err := obj1.CastString()
+					varValue, err := obj1.CastString()
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot use a %s as an environment variable name.\n", t.Line, t.Column, obj1.TypeName()))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot use a %s as an environment variable value.\n", t.Line, t.Column, obj1.TypeName()))
 					}
 
 					obj2, err := stack.Pop()
@@ -7280,9 +7103,9 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'setenv' operation on a stack with less than two items.\n", t.Line, t.Column))
 					}
 
-					varValue, err := obj2.CastString()
+					varName, err := obj2.CastString()
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot use a %s as an environment variable value.\n", t.Line, t.Column, obj2.TypeName()))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot use a %s as an environment variable key.\n", t.Line, t.Column, obj2.TypeName()))
 					}
 
 					err = state.EnvironmentHistory().Set(varName, varValue, environmentSource(t))
@@ -7294,7 +7117,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					if varName == "PATH" {
 						context.Pbm.Update()
 					}
-				} else if t.Lexeme == "unsetenv" {
+				case "unsetenv":
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'unsetenv' operation on an empty stack.\n", t.Line, t.Column))
@@ -7314,7 +7137,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					if varName == "PATH" {
 						context.Pbm.Update()
 					}
-				} else if t.Lexeme == "dateFmt" {
+				case "dateFmt":
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'dateFmt' operation on an empty stack.\n", t.Line, t.Column))
@@ -7338,7 +7161,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 					newStr := dateTime.Time.Format(formatString.Content)
 					stack.Push(MShellString{newStr})
-				} else if t.Lexeme == "trim" || t.Lexeme == "trimStart" || t.Lexeme == "trimEnd" {
+				case "trim", "trimStart", "trimEnd":
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'trim' operation on an empty stack.\n", t.Line, t.Column))
@@ -7357,7 +7180,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					case "trimEnd":
 						stack.Push(MShellString{strings.TrimRight(str, " \t\n")})
 					}
-				} else if t.Lexeme == "upper" || t.Lexeme == "lower" || t.Lexeme == "title" {
+				case "upper", "lower", "title":
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
@@ -7384,7 +7207,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot %s a %s (%s).\n", t.Line, t.Column, t.Lexeme, obj1.TypeName(), obj1.DebugString()))
 					}
-				} else if t.Lexeme == "numFmt" {
+				case "numFmt":
 					optionsObj, numberObj, err := stack.Pop2(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -7507,7 +7330,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(MShellString{formatted})
-				} else if t.Lexeme == "hardLink" {
+				case "hardLink":
 					newTarget, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'hardLink' operation on an empty stack.\n", t.Line, t.Column))
@@ -7533,7 +7356,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error hardLinking %s to %s: %s\n", t.Line, t.Column, sourcePath, targetPath, err.Error()))
 					}
-				} else if t.Lexeme == "tempFile" {
+				case "tempFile":
 					tmpfile, err := os.CreateTemp("", "msh-")
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error creating temporary file: %s\n", t.Line, t.Column, err.Error()))
@@ -7543,7 +7366,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 					// Dump the full path to the stack
 					stack.Push(MShellPath{tmpfile.Name()})
-				} else if t.Lexeme == "tempFileExt" {
+				case "tempFileExt":
 					extValue, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'tempFileExt' operation on an empty stack.\n", t.Line, t.Column))
@@ -7567,10 +7390,10 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 					// Dump the full path to the stack
 					stack.Push(MShellPath{tmpfile.Name()})
-				} else if t.Lexeme == "tempDir" {
+				case "tempDir":
 					tmpdir := os.TempDir()
 					stack.Push(MShellPath{tmpdir})
-				} else if t.Lexeme == "endsWith" || t.Lexeme == "startsWith" {
+				case "endsWith", "startsWith":
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -7592,7 +7415,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					case "startsWith":
 						stack.Push(MShellBool{strings.HasPrefix(str2, str1)})
 					}
-				} else if t.Lexeme == "leftPad" {
+				case "leftPad":
 					obj1, obj2, obj3, err := stack.Pop3(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -7644,7 +7467,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						builder.WriteString(inputStr)
 						stack.Push(MShellString{builder.String()})
 					}
-				} else if t.Lexeme == "isWeekend" || t.Lexeme == "isWeekday" || t.Lexeme == "dow" {
+				case "isWeekend", "isWeekday", "dow":
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
@@ -7664,7 +7487,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					case "dow":
 						stack.Push(MShellInt{dayOfWeek})
 					}
-				} else if t.Lexeme == "toUnixTime" || t.Lexeme == "toUnixTimeMilli" || t.Lexeme == "toUnixTimeMicro" || t.Lexeme == "toUnixTimeNano" {
+				case "toUnixTime", "toUnixTimeMilli", "toUnixTimeMicro", "toUnixTimeNano":
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'unixTime' operation on an empty stack.\n", t.Line, t.Column))
@@ -7684,7 +7507,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					case "toUnixTimeNano":
 						stack.Push(MShellInt{int(dateTimeObj.Time.UnixNano())})
 					}
-				} else if t.Lexeme == "toOleDate" {
+				case "toOleDate":
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'toOleDate' operation on an empty stack.\n", t.Line, t.Column))
@@ -7697,7 +7520,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 					oleDays := dateTimeObj.Time.In(time.UTC).Sub(oleAutomationEpoch).Hours() / 24
 					stack.Push(MShellFloat{oleDays})
-				} else if t.Lexeme == "fromUnixTime" || t.Lexeme == "fromUnixTimeMilli" || t.Lexeme == "fromUnixTimeMicro" || t.Lexeme == "fromUnixTimeNano" {
+				case "fromUnixTime", "fromUnixTimeMilli", "fromUnixTimeMicro", "fromUnixTimeNano":
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
@@ -7721,7 +7544,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(&MShellDateTime{Time: newTime, OriginalString: newTime.Format("2006-01-02T15:04")})
-				} else if t.Lexeme == "fromOleDate" {
+				case "fromOleDate":
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
@@ -7734,7 +7557,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					oleDays := obj1.FloatNumeric()
 					newTime := oleAutomationEpoch.Add(time.Duration(oleDays * float64(24*time.Hour)))
 					stack.Push(&MShellDateTime{Time: newTime, OriginalString: ""})
-				} else if t.Lexeme == "writeFile" || t.Lexeme == "appendFile" {
+				case "writeFile", "appendFile":
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -7775,7 +7598,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error closing file %s: %s\n", t.Line, t.Column, path, err.Error()))
 					}
-				} else if t.Lexeme == "rm" || t.Lexeme == "rmf" {
+				case "rm", "rmf":
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'rm' operation on an empty stack.\n", t.Line, t.Column))
@@ -7795,7 +7618,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					if err != nil && t.Lexeme == "rm" {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error removing file %s: %s\n", t.Line, t.Column, path, err.Error()))
 					}
-				} else if t.Lexeme == "mv" || t.Lexeme == "cp" {
+				case "mv", "cp":
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -7847,7 +7670,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error in %s from '%s' to '%s': %s\n", t.Line, t.Column, t.Lexeme, source, destination, err.Error()))
 						}
 					}
-				} else if t.Lexeme == "zipDirInc" || t.Lexeme == "zipDirExc" {
+				case "zipDirInc", "zipDirExc":
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -7867,7 +7690,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					if err := zipDirectory(sourceDir, zipPath, preserveRoot); err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
 					}
-				} else if t.Lexeme == "zipPack" {
+				case "zipPack":
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -7931,7 +7754,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					if err := buildZipFromEntries(entries, zipPath); err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
 					}
-				} else if t.Lexeme == "zipList" {
+				case "zipList":
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'zipList' operation on an empty stack.\n", t.Line, t.Column))
@@ -7960,7 +7783,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						result.Items = append(result.Items, dict)
 					}
 					stack.Push(result)
-				} else if t.Lexeme == "zipExtract" {
+				case "zipExtract":
 					obj1, obj2, obj3, err := stack.Pop3(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -7989,7 +7812,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					if err := extractZipArchive(zipPath, destDir, options); err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
 					}
-				} else if t.Lexeme == "zipExtractEntry" {
+				case "zipExtractEntry":
 					optionsObj, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'zipExtractEntry' operation on an empty stack.\n", t.Line, t.Column))
@@ -8035,7 +7858,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					if err := extractZipEntry(zipPath, entryPath, destPath, options); err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
 					}
-				} else if t.Lexeme == "zipRead" {
+				case "zipRead":
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -8060,7 +7883,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					} else {
 						stack.Push(&Maybe{obj: MShellBinary(data)})
 					}
-				} else if t.Lexeme == "tarDirInc" || t.Lexeme == "tarDirExc" {
+				case "tarDirInc", "tarDirExc":
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -8080,7 +7903,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					if err := tarDirectory(sourceDir, tarPath, preserveRoot, compress); err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
 					}
-				} else if t.Lexeme == "tarPack" {
+				case "tarPack":
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -8144,7 +7967,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					if err := buildTarFromEntries(entries, tarPath, compress); err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
 					}
-				} else if t.Lexeme == "tarList" {
+				case "tarList":
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'tarList' operation on an empty stack.\n", t.Line, t.Column))
@@ -8175,7 +7998,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						result.Items = append(result.Items, dict)
 					}
 					stack.Push(result)
-				} else if t.Lexeme == "tarExtract" {
+				case "tarExtract":
 					obj1, obj2, obj3, err := stack.Pop3(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -8204,7 +8027,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					if err := extractTarArchive(tarPath, destDir, options); err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
 					}
-				} else if t.Lexeme == "tarExtractEntry" {
+				case "tarExtractEntry":
 					optionsObj, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'tarExtractEntry' operation on an empty stack.\n", t.Line, t.Column))
@@ -8250,7 +8073,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					if err := extractTarEntry(tarPath, entryPath, destPath, options); err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s\n", t.Line, t.Column, err.Error()))
 					}
-				} else if t.Lexeme == "tarRead" {
+				case "tarRead":
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -8275,7 +8098,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					} else {
 						stack.Push(&Maybe{obj: MShellBinary(data)})
 					}
-				} else if t.Lexeme == "e" || t.Lexeme == "ec" || t.Lexeme == "es" {
+				case "e", "ec", "es":
 					// Token Type
 					obj, err := stack.Pop()
 					if err != nil {
@@ -8312,7 +8135,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot set stdout behavior on a %s.\n", t.Line, t.Column, obj.TypeName()))
 					}
-				} else if t.Lexeme == "fileSize" {
+				case "fileSize":
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'fileSize' operation on an empty stack.\n", t.Line, t.Column))
@@ -8330,7 +8153,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					} else {
 						stack.Push(&Maybe{obj: MShellInt{int(fileInfo.Size())}})
 					}
-				} else if t.Lexeme == "modTime" {
+				case "modTime":
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'modTime' operation on an empty stack.\n", t.Line, t.Column))
@@ -8349,7 +8172,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						modTime := fileInfo.ModTime()
 						stack.Push(&Maybe{obj: &MShellDateTime{Time: modTime, OriginalString: modTime.Format(time.RFC3339)}})
 					}
-				} else if t.Lexeme == "lsDir" {
+				case "lsDir":
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'lsDir' operation on an empty stack.\n", t.Line, t.Column))
@@ -8372,10 +8195,10 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(newList)
-				} else if t.Lexeme == "runtime" {
+				case "runtime":
 					// Place the name of the current OS runtime on the stack
 					stack.Push(MShellString{runtime.GOOS})
-				} else if t.Lexeme == "sort" || t.Lexeme == "sortV" {
+				case "sort", "sortV":
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'sort' operation on an empty stack.\n", t.Line, t.Column))
@@ -8400,7 +8223,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(sortedList)
-				} else if t.Lexeme == "sortBy" {
+				case "sortBy":
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -8466,7 +8289,25 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(projectGridAllColumns(sourceGrid, permutation))
-				} else if t.Lexeme == "reverse" {
+				case "seq":
+					obj, err := stack.Pop()
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'seq' operation on an empty stack.\n", t.Line, t.Column))
+					}
+					countObj, ok := obj.(MShellInt)
+					if !ok {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: 'seq' requires an int, found a %s.\n", t.Line, t.Column, obj.TypeName()))
+					}
+					// Negative counts produce an empty list, matching the old std.msh definition.
+					count := max(countObj.Value, 0)
+					// The final length is known, so fill one slice of exactly that size
+					// instead of growing it with append.
+					newList := NewList(count)
+					for i := range newList.Items {
+						newList.Items[i] = MShellInt{i}
+					}
+					stack.Push(newList)
+				case "reverse":
 					obj, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'reverse' operation on an empty stack.\n", t.Line, t.Column))
@@ -8494,7 +8335,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot reverse a %s.\n", t.Line, t.Column, obj.TypeName()))
 					}
-				} else if t.Lexeme == "sha256sum" {
+				case "sha256sum":
 					// Get the SHA256 hash of a file
 					obj1, err := stack.Pop()
 					if err != nil {
@@ -8527,7 +8368,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					hash := hex.EncodeToString(sum)
 					// Push the hash onto the stack
 					stack.Push(MShellString{hash})
-				} else if t.Lexeme == "get" {
+				case "get":
 					// Get a value from string key for a dictionary or GridRow.
 					// dict "key" get
 					// gridrow "colname" get
@@ -8561,7 +8402,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						maybe := Maybe{obj: value}
 						stack.Push(&maybe)
 					}
-				} else if t.Lexeme == "getDef" {
+				case "getDef":
 					// Get a value from string key for a dictionary.
 					// dict "key" default getDef
 					obj1, obj2, obj3, err := stack.Pop3(t)
@@ -8585,7 +8426,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					} else {
 						stack.Push(value)
 					}
-				} else if t.Lexeme == "set" || t.Lexeme == "setd" {
+				case "set", "setd":
 					// Set a value in a dictionary with a string key.
 					// dict "key" value set
 					value, key, dict, err := stack.Pop3(t)
@@ -8607,7 +8448,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					if t.Lexeme == "set" {
 						stack.Push(dictObj)
 					}
-				} else if t.Lexeme == "keys" || t.Lexeme == "values" {
+				case "keys", "values":
 					// Get the keys of a dictionary.
 					obj1, err := stack.Pop()
 					if err != nil {
@@ -8645,7 +8486,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(newList)
-				} else if t.Lexeme == "gridRows" {
+				case "gridRows":
 					// Get the number of rows in a Grid or GridView.
 					obj, err := stack.Pop()
 					if err != nil {
@@ -8660,7 +8501,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot get rows of a %s.\n", t.Line, t.Column, obj.TypeName()))
 					}
-				} else if t.Lexeme == "gridCols" {
+				case "gridCols":
 					// Get the list of column names from a Grid or GridView.
 					obj, err := stack.Pop()
 					if err != nil {
@@ -8682,7 +8523,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						newList.Items[i] = MShellString{col.Name}
 					}
 					stack.Push(newList)
-				} else if t.Lexeme == "gridMeta" {
+				case "gridMeta":
 					// Get the grid-level metadata dict from a Grid or GridView.
 					obj, err := stack.Pop()
 					if err != nil {
@@ -8704,7 +8545,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					} else {
 						stack.Push(&Maybe{obj: nil})
 					}
-				} else if t.Lexeme == "gridColMeta" {
+				case "gridColMeta":
 					// Get the column metadata dict from a Grid or GridView.
 					// grid "colname" gridColMeta
 					obj1, obj2, err := stack.Pop2(t)
@@ -8737,7 +8578,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					} else {
 						stack.Push(&Maybe{obj: nil})
 					}
-				} else if t.Lexeme == "gridCol" {
+				case "gridCol":
 					// Extract a single column as a list.
 					// grid "colname" gridCol
 					obj1, obj2, err := stack.Pop2(t)
@@ -8774,7 +8615,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot extract column from a %s.\n", t.Line, t.Column, obj2.TypeName()))
 					}
-				} else if t.Lexeme == "gridValues" {
+				case "gridValues":
 					// Extract grid values as row-major list of lists, without headers.
 					obj, err := stack.Pop()
 					if err != nil {
@@ -8805,7 +8646,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot extract values from a %s.\n", t.Line, t.Column, obj.TypeName()))
 					}
-				} else if t.Lexeme == "toDict" {
+				case "toDict":
 					// Convert a GridRow to a dictionary.
 					obj, err := stack.Pop()
 					if err != nil {
@@ -8818,7 +8659,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(gridRow.ToDict())
-				} else if t.Lexeme == "gridSetCell" {
+				case "gridSetCell":
 					// Set a single cell value: grid "colname" rowIdx value gridSetCell -> grid
 					value, rowIdx, colName, gridObj, err := stack.Pop4(t)
 					if err != nil {
@@ -8855,7 +8696,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 					col.Set(idx, value)
 					stack.Push(grid)
-				} else if t.Lexeme == "gridCompact" {
+				case "gridCompact":
 					// Materialize a GridView into a real Grid (copy filtered rows).
 					obj, err := stack.Pop()
 					if err != nil {
@@ -8890,7 +8731,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot compact a %s.\n", t.Line, t.Column, obj.TypeName()))
 					}
-				} else if t.Lexeme == "gridAddCol" {
+				case "gridAddCol":
 					// Add a new column to a grid.
 					// grid "colname" [values] gridAddCol -> grid
 					// grid "colname" defaultValue gridAddCol -> grid
@@ -8934,7 +8775,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					optimizeColumnStorage(newCol)
 					grid.AddColumn(newCol)
 					stack.Push(grid)
-				} else if t.Lexeme == "gridRemoveCol" {
+				case "gridRemoveCol":
 					// Remove a column from a grid.
 					// grid "colname" gridRemoveCol -> grid
 					obj1, obj2, err := stack.Pop2(t)
@@ -8967,7 +8808,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(grid)
-				} else if t.Lexeme == "gridRenameCol" {
+				case "gridRenameCol":
 					// Rename a column in a grid.
 					// grid "oldname" "newname" gridRenameCol -> grid
 					obj1, obj2, obj3, err := stack.Pop3(t)
@@ -9006,7 +8847,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					grid.ColIndex[newName] = colIdx
 
 					stack.Push(grid)
-				} else if t.Lexeme == "updateCol" {
+				case "updateCol":
 					obj1, obj2, obj3, err := stack.Pop3(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -9045,6 +8886,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 							newGrid.AddColumn(newCol)
 						}
 
+						var updateStack MShellStack
 						for newRowIdx, sourceRowIdx := range sourceIndices {
 							for oldColIdx, sourceCol := range grid.Columns {
 								if oldColIdx == colIdx {
@@ -9053,10 +8895,9 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 								newGrid.Columns[oldColIdx].GenericData[newRowIdx] = sourceCol.Get(sourceRowIdx)
 							}
 
-							var updateStack MShellStack
-							updateStack = []MShellObject{oldCol.Get(sourceRowIdx)}
+							updateStack.resetTo(oldCol.Get(sourceRowIdx))
 
-							result, err := state.EvaluateQuote(*quote, &updateStack, context, definitions)
+							result, err := state.EvaluateQuote(quote, &updateStack, context, definitions)
 							if err != nil {
 								return state.FailWithMessage(err.Error())
 							}
@@ -9085,11 +8926,11 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					newCol := NewGridColumn(oldCol.Name, grid.RowCount)
 					newCol.Meta = oldCol.Meta
 
+					var updateStack MShellStack
 					for _, rowIdx := range sourceIndices {
-						var updateStack MShellStack
-						updateStack = []MShellObject{oldCol.Get(rowIdx)}
+						updateStack.resetTo(oldCol.Get(rowIdx))
 
-						result, err := state.EvaluateQuote(*quote, &updateStack, context, definitions)
+						result, err := state.EvaluateQuote(quote, &updateStack, context, definitions)
 						if err != nil {
 							return state.FailWithMessage(err.Error())
 						}
@@ -9111,7 +8952,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					grid.Columns[colIdx] = newCol
 					grid.ColIndex[colName] = colIdx
 					stack.Push(grid)
-				} else if t.Lexeme == "select" {
+				case "select":
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -9145,7 +8986,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(projectGridColumns(sourceGrid, sourceIndices, colNames))
-				} else if t.Lexeme == "exclude" {
+				case "exclude":
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -9184,7 +9025,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(projectGridColumns(sourceGrid, sourceIndices, colNames))
-				} else if t.Lexeme == "derive" {
+				case "derive":
 					obj1, obj2, obj3, obj4, err := stack.Pop4(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -9222,12 +9063,12 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 					newCol := NewGridColumn(colName, len(sourceIndices))
 					newCol.Meta = meta
+					var deriveStack MShellStack
 					for rowIdx, srcIdx := range sourceIndices {
 						row := &MShellGridRow{Grid: sourceGrid, RowIndex: srcIdx}
-						var deriveStack MShellStack
-						deriveStack = []MShellObject{row}
+						deriveStack.resetTo(row)
 
-						result, err := state.EvaluateQuote(*quote, &deriveStack, context, definitions)
+						result, err := state.EvaluateQuote(quote, &deriveStack, context, definitions)
 						if err != nil {
 							return state.FailWithMessage(err.Error())
 						}
@@ -9248,7 +9089,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					optimizeColumnStorage(newCol)
 					newGrid.AddColumn(newCol)
 					stack.Push(newGrid)
-				} else if t.Lexeme == "groupBy" {
+				case "groupBy":
 					if len(*stack) < 2 {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'groupBy' operation on a stack with less than two items.\n", t.Line, t.Column))
 					}
@@ -9267,11 +9108,11 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 						quote = obj1.(*MShellQuotation)
 						groups := NewDict()
+						var groupStack MShellStack
 						for _, item := range list.Items {
-							var groupStack MShellStack
-							groupStack = []MShellObject{item}
+							groupStack.resetTo(item)
 
-							result, err := state.EvaluateQuote(*quote, &groupStack, context, definitions)
+							result, err := state.EvaluateQuote(quote, &groupStack, context, definitions)
 							if err != nil {
 								return state.FailWithMessage(err.Error())
 							}
@@ -9353,20 +9194,9 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						outputNames[aggSpec.Name] = struct{}{}
 					}
 
-					groupOrder := make([][]int, 0)
-					groupMap := make(map[string]int)
-					for _, srcIdx := range sourceIndices {
-						key, err := typedGridGroupKey(sourceGrid, srcIdx, keyCols)
-						if err != nil {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: %s.\n", t.Line, t.Column, err.Error()))
-						}
-						groupIdx, exists := groupMap[key]
-						if !exists {
-							groupIdx = len(groupOrder)
-							groupMap[key] = groupIdx
-							groupOrder = append(groupOrder, []int{})
-						}
-						groupOrder[groupIdx] = append(groupOrder[groupIdx], srcIdx)
+					groupOrder, err := groupGridRows(sourceGrid, sourceIndices, keyCols)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s.\n", t.Line, t.Column, err.Error()))
 					}
 
 					newGrid := NewGrid()
@@ -9393,11 +9223,11 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						}
 
 						groupView := &MShellGridView{Source: sourceGrid, Indices: groupIndices}
+						var aggStack MShellStack
 						for aggIdx, aggSpec := range aggSpecs {
-							var aggStack MShellStack
-							aggStack = []MShellObject{groupView}
+							aggStack.resetTo(groupView)
 
-							result, err := state.EvaluateQuote(*aggSpec.Quote, &aggStack, context, definitions)
+							result, err := state.EvaluateQuote(aggSpec.Quote, &aggStack, context, definitions)
 							if err != nil {
 								return state.FailWithMessage(err.Error())
 							}
@@ -9421,7 +9251,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(newGrid)
-				} else if t.Lexeme == "pivot" {
+				case "pivot":
 					if len(*stack) < 4 {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'pivot' operation on a stack with less than four items.\n", t.Line, t.Column))
 					}
@@ -9482,20 +9312,17 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						colName     string
 					}
 
-					rowKeyMap := make(map[string]int)
-					rowFirstSrcIdx := make([]int, 0)
+					rowGroupIds, rowGroupCount, rowKeyErr := gridGroupIds(sourceGrid, sourceIndices, rowKeyCols)
+					if rowKeyErr != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s.\n", t.Line, t.Column, rowKeyErr.Error()))
+					}
+					rowFirstSrcIdx := make([]int, 0, rowGroupCount)
 					colNameSet := make(map[string]struct{})
 					buckets := make(map[pivotBucketKey][]int)
 
-					for _, srcIdx := range sourceIndices {
-						rowKey, err := typedGridGroupKey(sourceGrid, srcIdx, rowKeyCols)
-						if err != nil {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: %s.\n", t.Line, t.Column, err.Error()))
-						}
-						rowGroupIdx, exists := rowKeyMap[rowKey]
-						if !exists {
-							rowGroupIdx = len(rowFirstSrcIdx)
-							rowKeyMap[rowKey] = rowGroupIdx
+					for p, srcIdx := range sourceIndices {
+						rowGroupIdx := int(rowGroupIds[p])
+						if rowGroupIdx == len(rowFirstSrcIdx) {
 							rowFirstSrcIdx = append(rowFirstSrcIdx, srcIdx)
 						}
 
@@ -9540,6 +9367,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 					for _, colName := range pivotedColNames {
 						newCol := NewGridColumn(colName, newGrid.RowCount)
+						var aggStack MShellStack
 						for rowGroupIdx := 0; rowGroupIdx < newGrid.RowCount; rowGroupIdx++ {
 							srcIndices, has := buckets[pivotBucketKey{rowGroupIdx: rowGroupIdx, colName: colName}]
 							if !has {
@@ -9548,10 +9376,9 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 							}
 
 							groupView := &MShellGridView{Source: sourceGrid, Indices: srcIndices}
-							var aggStack MShellStack
-							aggStack = []MShellObject{groupView}
+							aggStack.resetTo(groupView)
 
-							result, err := state.EvaluateQuote(*quote, &aggStack, context, definitions)
+							result, err := state.EvaluateQuote(quote, &aggStack, context, definitions)
 							if err != nil {
 								return state.FailWithMessage(err.Error())
 							}
@@ -9576,17 +9403,17 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(newGrid)
-				} else if t.Lexeme == "leftJoin" {
+				case "leftJoin":
 					result := state.executeGridJoin(t, stack, joinLeft, context, definitions)
 					if result.ShouldPassResultUpStack() {
 						return result
 					}
-				} else if t.Lexeme == "outerJoin" {
+				case "outerJoin":
 					result := state.executeGridJoin(t, stack, joinOuter, context, definitions)
 					if result.ShouldPassResultUpStack() {
 						return result
 					}
-				} else if t.Lexeme == "reMatch" {
+				case "reMatch":
 					// Match a regex against a string
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
@@ -9614,7 +9441,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					} else {
 						stack.Push(MShellBool{true})
 					}
-				} else if t.Lexeme == "reReplace" {
+				case "reReplace":
 					// Replace a regex in a string, fullString regex replacement
 					obj1, obj2, obj3, err := stack.Pop3(t)
 					if err != nil {
@@ -9643,7 +9470,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 					newStr := re.ReplaceAllString(str, replacement)
 					stack.Push(MShellString{newStr})
-				} else if t.Lexeme == "reFindAll" {
+				case "reFindAll":
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -9674,7 +9501,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(matchList)
-				} else if t.Lexeme == "reFindAllIndex" {
+				case "reFindAllIndex":
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -9705,7 +9532,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(matchList)
-				} else if t.Lexeme == "reSplit" {
+				case "reSplit":
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -9732,7 +9559,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(resultList)
-				} else if t.Lexeme == "parseCsv" {
+				case "parseCsv":
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'parseCsv' operation on an empty stack.\n", t.Line, t.Column))
@@ -9778,7 +9605,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 					stack.Push(newOuterList)
 					file.Close()
-				} else if t.Lexeme == "toGrid" {
+				case "toGrid":
 					obj, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'toGrid' operation on an empty stack.\n", t.Line, t.Column))
@@ -9795,7 +9622,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(grid)
-				} else if t.Lexeme == "parseJson" {
+				case "parseJson":
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'parseJson' operation on an empty stack.\n", t.Line, t.Column))
@@ -9839,7 +9666,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					// Convert the parsed data to analgous MShell types
 					resultObj := ParseJsonObjToMshell(parsedData)
 					stack.Push(resultObj)
-				} else if t.Lexeme == "parseExcel" {
+				case "parseExcel":
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'parseExcel' operation on an empty stack.\n", t.Line, t.Column))
@@ -9864,7 +9691,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing Excel: %s\n", t.Line, t.Column, err.Error()))
 					}
 					stack.Push(sheets)
-				} else if t.Lexeme == "toJson" {
+				case "toJson":
 					// Convert an object to JSON
 					obj1, err := stack.Pop()
 					if err != nil {
@@ -9873,7 +9700,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 					jsonStr := obj1.ToJson()
 					stack.Push(MShellString{jsonStr})
-				} else if t.Lexeme == "typeof" {
+				case "typeof":
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'typeof' operation on an empty stack.\n", t.Line, t.Column))
@@ -9881,9 +9708,9 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 					stack.Push(MShellString{obj1.TypeName()})
 
-				} else if t.Lexeme == "dbg" {
+				case "dbg":
 					// Static-only checker hint; no runtime work.
-				} else if t.Lexeme == "utcToCst" {
+				case "utcToCst":
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'toCst' operation on an empty stack.\n", t.Line, t.Column))
@@ -9901,10 +9728,9 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error loading CST location: %s\n", t.Line, t.Column, err.Error()))
 					}
 
-					dateTimeObj.Time = dateTimeObj.Time.In(cstLocation)
-					dateTimeObj.OriginalString = ""
-					stack.Push(dateTimeObj)
-				} else if t.Lexeme == "cstToUtc" {
+					// Push a new object: the input may be shared, such as a variable or a literal.
+					stack.Push(&MShellDateTime{Time: dateTimeObj.Time.In(cstLocation)})
+				case "cstToUtc":
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'toUtc' operation on an empty stack.\n", t.Line, t.Column))
@@ -9931,10 +9757,8 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						dateTimeObj.Time.Nanosecond(),
 						cstLocation,
 					)
-					dateTimeObj.Time = cstTime.In(time.UTC)
-					dateTimeObj.OriginalString = ""
-					stack.Push(dateTimeObj)
-				} else if t.Lexeme == "floor" {
+					stack.Push(&MShellDateTime{Time: cstTime.In(time.UTC)})
+				case "floor":
 					// Round a number down to the nearest integer
 					obj1, err := stack.Pop()
 					if err != nil {
@@ -9954,7 +9778,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					} else {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot floor a %s.\n", t.Line, t.Column, obj1.TypeName()))
 					}
-				} else if t.Lexeme == "ceil" {
+				case "ceil":
 					// Round a number up to the nearest integer
 					obj1, err := stack.Pop()
 					if err != nil {
@@ -9974,7 +9798,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					} else {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot ceil a %s.\n", t.Line, t.Column, obj1.TypeName()))
 					}
-				} else if t.Lexeme == "round" {
+				case "round":
 					// Round a float to the nearest integer
 					obj1, err := stack.Pop()
 					if err != nil {
@@ -9988,7 +9812,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					} else {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot round a %s.\n", t.Line, t.Column, obj1.TypeName()))
 					}
-				} else if t.Lexeme == "sin" {
+				case "sin":
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'sin' operation on an empty stack.\n", t.Line, t.Column))
@@ -10000,7 +9824,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(MShellFloat{Value: math.Sin(floatObj.Value)})
-				} else if t.Lexeme == "arctan" {
+				case "arctan":
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'arctan' operation on an empty stack.\n", t.Line, t.Column))
@@ -10012,7 +9836,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(MShellFloat{Value: math.Atan(floatObj.Value)})
-				} else if t.Lexeme == "pow" {
+				case "pow":
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -10029,7 +9853,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(MShellFloat{Value: math.Pow(base.Value, exponent.Value)})
-				} else if t.Lexeme == "ln" {
+				case "ln":
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'ln' operation on an empty stack.\n", t.Line, t.Column))
@@ -10041,11 +9865,11 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(MShellFloat{Value: math.Log(floatObj.Value)})
-				} else if t.Lexeme == "random" {
+				case "random":
 					stack.Push(MShellFloat{Value: rand.Float64()})
-				} else if t.Lexeme == "randomFixed" {
+				case "randomFixed":
 					stack.Push(MShellFloat{Value: randomFixedRand.Float64()})
-				} else if t.Lexeme == "sqrt" {
+				case "sqrt":
 					obj1, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'sqrt' operation on an empty stack.\n", t.Line, t.Column))
@@ -10057,7 +9881,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(MShellFloat{Value: math.Sqrt(floatObj.Value)})
-				} else if t.Lexeme == "abs" {
+				case "abs":
 					obj, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'abs' operation on an empty stack.\n", t.Line, t.Column))
@@ -10078,7 +9902,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: 'abs' requires int or float, found a %s.\n", t.Line, t.Column, obj.TypeName()))
 					}
-				} else if t.Lexeme == "max2" || t.Lexeme == "min2" {
+				case "max2", "min2":
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -10113,7 +9937,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					} else {
 						stack.Push(obj1)
 					}
-				} else if t.Lexeme == "max" || t.Lexeme == "min" || t.Lexeme == "sum" {
+				case "max", "min", "sum":
 					obj, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
@@ -10193,7 +10017,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: '%s' requires a list of int, float, or DateTime, found a list of %s.\n", t.Line, t.Column, t.Lexeme, first.TypeName()))
 					}
-				} else if t.Lexeme == "toFixed" {
+				case "toFixed":
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -10211,7 +10035,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					floatVal := obj2.FloatNumeric()
 
 					stack.Push(MShellString{fmt.Sprintf("%.*f", obj1Int.Value, floatVal)})
-				} else if t.Lexeme == "countSubStr" {
+				case "countSubStr":
 					// Count the number of times a substring appears in a string
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
@@ -10230,7 +10054,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 					count := strings.Count(str, subStr)
 					stack.Push(MShellInt{count})
-				} else if t.Lexeme == "uniq" {
+				case "uniq":
 					// Remove duplicates from a list
 					obj1, err := stack.Pop()
 					if err != nil {
@@ -10296,17 +10120,17 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(newList)
-				} else if t.Lexeme == "none" {
+				case "none":
 					stack.Push(&Maybe{obj: nil})
-				} else if t.Lexeme == "null" {
+				case "null":
 					stack.Push(MShellNull{})
-				} else if t.Lexeme == "just" {
+				case "just":
 					o, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'just' operation on an empty stack.\n", t.Line, t.Column))
 					}
 					stack.Push(&Maybe{obj: o})
-				} else if t.Lexeme == "filter" {
+				case "filter":
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -10327,7 +10151,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 						for _, item := range listObj.Items {
 							filterStack.Push(item)
-							result, err := state.EvaluateQuote(*fn, &filterStack, context, definitions)
+							result, err := state.EvaluateQuote(fn, &filterStack, context, definitions)
 							if err != nil {
 								return state.FailWithMessage(err.Error())
 							}
@@ -10358,7 +10182,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 						for key, value := range dictObj.Items {
 							filterStack.Push(value)
-							result, err := state.EvaluateQuote(*fn, &filterStack, context, definitions)
+							result, err := state.EvaluateQuote(fn, &filterStack, context, definitions)
 							if err != nil {
 								return state.FailWithMessage(err.Error())
 							}
@@ -10397,12 +10221,12 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						}
 
 						var matchingIndices []int
+						var filterStack MShellStack
 						for _, idx := range sourceIndices {
 							row := &MShellGridRow{Grid: sourceGrid, RowIndex: idx}
 
-							var filterStack MShellStack
-							filterStack = []MShellObject{row}
-							result, err := state.EvaluateQuote(*fn, &filterStack, context, definitions)
+							filterStack.resetTo(row)
+							result, err := state.EvaluateQuote(fn, &filterStack, context, definitions)
 							if err != nil {
 								return state.FailWithMessage(err.Error())
 							}
@@ -10428,7 +10252,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second parameter in 'filter' is expected to be a list, dictionary, Grid, or GridView, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
 					}
-				} else if t.Lexeme == "map" {
+				case "map":
 					// Map a function over a list, Maybe, Grid, or GridView
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
@@ -10453,7 +10277,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 						for i, item := range listObj.Items {
 							mapStack.Push(item)
-							result, err := state.EvaluateQuote(*fn, &mapStack, context, definitions)
+							result, err := state.EvaluateQuote(fn, &mapStack, context, definitions)
 							if err != nil {
 								return state.FailWithMessage(err.Error())
 							}
@@ -10474,7 +10298,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						} else {
 							stack.Push(maybe.obj) // Push the object inside the Maybe
 							preStackLen := len(*stack)
-							result, err := state.EvaluateQuote(*fn, stack, context, definitions)
+							result, err := state.EvaluateQuote(fn, stack, context, definitions)
 							if err != nil {
 								return state.FailWithMessage(err.Error())
 							}
@@ -10506,13 +10330,13 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 						// Collect mapped rows (as dicts or GridRows)
 						mappedRows := make([]MShellObject, len(sourceIndices))
+						var mapStack MShellStack
 						for i, idx := range sourceIndices {
 							row := &MShellGridRow{Grid: sourceGrid, RowIndex: idx}
 
-							var mapStack MShellStack
-							mapStack = []MShellObject{row}
+							mapStack.resetTo(row)
 
-							result, err := state.EvaluateQuote(*fn, &mapStack, context, definitions)
+							result, err := state.EvaluateQuote(fn, &mapStack, context, definitions)
 							if err != nil {
 								return state.FailWithMessage(err.Error())
 							}
@@ -10605,7 +10429,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						for key, value := range dictObj.Items {
 							mapStack.Push(value)
 
-							result, err := state.EvaluateQuote(*fn, &mapStack, context, definitions)
+							result, err := state.EvaluateQuote(fn, &mapStack, context, definitions)
 							if err != nil {
 								return state.FailWithMessage(err.Error())
 							}
@@ -10623,7 +10447,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot map over a %s.\n", t.Line, t.Column, obj2.TypeName()))
 					}
-				} else if t.Lexeme == "map2" {
+				case "map2":
 					// Allow a binary function over two maybes
 					obj1, obj2, obj3, err := stack.Pop3(t)
 					if err != nil {
@@ -10653,7 +10477,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						stack.Push(maybe2.obj)
 						stack.Push(maybe1.obj)
 
-						result, err := state.EvaluateQuote(*fn, stack, context, definitions)
+						result, err := state.EvaluateQuote(fn, stack, context, definitions)
 						if err != nil {
 							return state.FailWithMessage(err.Error())
 						}
@@ -10669,108 +10493,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						mapResult, _ := stack.Pop()
 						stack.Push(&Maybe{obj: mapResult}) // Wrap the result back in a Maybe
 					}
-				} else if t.Lexeme == "filter" {
-					// Filter a list, Grid, or GridView using a predicate quotation
-					obj1, obj2, err := stack.Pop2(t)
-					if err != nil {
-						return state.FailWithMessage(err.Error())
-					}
-
-					quote, ok := obj1.(*MShellQuotation)
-					if !ok {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: filter requires a quotation, got %s.\n", t.Line, t.Column, obj1.TypeName()))
-					}
-
-					switch obj2Typed := obj2.(type) {
-					case *MShellList:
-						// Filter a list
-						var filteredItems []MShellObject
-						for _, item := range obj2Typed.Items {
-							var filterStack MShellStack
-							filterStack = []MShellObject{item}
-							result, err := state.EvaluateQuote(*quote, &filterStack, context, definitions)
-							if err != nil {
-								return state.FailWithMessage(err.Error())
-							}
-							if result.ShouldPassResultUpStack() {
-								return result
-							}
-							if len(filterStack) == 0 {
-								return state.FailWithMessage(fmt.Sprintf("%d:%d: filter predicate returned empty stack.\n", t.Line, t.Column))
-							}
-							predResult, _ := filterStack.Pop()
-							switch predTyped := predResult.(type) {
-							case MShellBool:
-								if predTyped.Value {
-									filteredItems = append(filteredItems, item)
-								}
-							case MShellInt:
-								if predTyped.Value == 0 {
-									filteredItems = append(filteredItems, item)
-								}
-							default:
-								return state.FailWithMessage(fmt.Sprintf("%d:%d: filter predicate must return a boolean or integer, got %s.\n", t.Line, t.Column, predResult.TypeName()))
-							}
-						}
-						newList := NewList(len(filteredItems))
-						copy(newList.Items, filteredItems)
-						stack.Push(newList)
-					case *MShellGrid, *MShellGridView:
-						// Filter a Grid or GridView - returns a GridView
-						var sourceGrid *MShellGrid
-						var sourceIndices []int
-
-						switch gridTyped := obj2Typed.(type) {
-						case *MShellGrid:
-							sourceGrid = gridTyped
-							sourceIndices = make([]int, gridTyped.RowCount)
-							for i := range sourceIndices {
-								sourceIndices[i] = i
-							}
-						case *MShellGridView:
-							sourceGrid = gridTyped.Source
-							sourceIndices = gridTyped.Indices
-						}
-
-						var matchingIndices []int
-						for _, idx := range sourceIndices {
-							row := &MShellGridRow{Grid: sourceGrid, RowIndex: idx}
-
-							var filterStack MShellStack
-							filterStack = []MShellObject{row}
-							result, err := state.EvaluateQuote(*quote, &filterStack, context, definitions)
-							if err != nil {
-								return state.FailWithMessage(err.Error())
-							}
-							if result.ShouldPassResultUpStack() {
-								return result
-							}
-
-							if len(filterStack) == 0 {
-								return state.FailWithMessage(fmt.Sprintf("%d:%d: filter predicate returned empty stack.\n", t.Line, t.Column))
-							}
-
-							predResult, _ := filterStack.Pop()
-							switch predTyped := predResult.(type) {
-							case MShellBool:
-								if predTyped.Value {
-									matchingIndices = append(matchingIndices, idx)
-								}
-							case MShellInt:
-								if predTyped.Value == 0 {
-									matchingIndices = append(matchingIndices, idx)
-								}
-							default:
-								return state.FailWithMessage(fmt.Sprintf("%d:%d: filter predicate must return a boolean or integer, got %s.\n", t.Line, t.Column, predResult.TypeName()))
-							}
-						}
-
-						view := &MShellGridView{Source: sourceGrid, Indices: matchingIndices}
-						stack.Push(view)
-					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot filter a %s.\n", t.Line, t.Column, obj2.TypeName()))
-					}
-				} else if t.Lexeme == "each" {
+				case "each":
 					// Iterate over a list, Grid, or GridView for side effects
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
@@ -10785,10 +10508,10 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					switch obj2Typed := obj2.(type) {
 					case *MShellList:
 						// Iterate over a list
+						var eachStack MShellStack
 						for _, item := range obj2Typed.Items {
-							var eachStack MShellStack
-							eachStack = []MShellObject{item}
-							result, err := state.EvaluateQuote(*quote, &eachStack, context, definitions)
+							eachStack.resetTo(item)
+							result, err := state.EvaluateQuote(quote, &eachStack, context, definitions)
 							if err != nil {
 								return state.FailWithMessage(err.Error())
 							}
@@ -10813,12 +10536,12 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 							sourceIndices = gridTyped.Indices
 						}
 
+						var eachStack MShellStack
 						for _, idx := range sourceIndices {
 							row := &MShellGridRow{Grid: sourceGrid, RowIndex: idx}
 
-							var eachStack MShellStack
-							eachStack = []MShellObject{row}
-							result, err := state.EvaluateQuote(*quote, &eachStack, context, definitions)
+							eachStack.resetTo(row)
+							result, err := state.EvaluateQuote(quote, &eachStack, context, definitions)
 							if err != nil {
 								return state.FailWithMessage(err.Error())
 							}
@@ -10829,7 +10552,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot iterate over a %s with each.\n", t.Line, t.Column, obj2.TypeName()))
 					}
-				} else if t.Lexeme == "isNone" {
+				case "isNone":
 					obj, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
@@ -10840,7 +10563,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					} else {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot check if a %s is None.\n", t.Line, t.Column, obj.TypeName()))
 					}
-				} else if t.Lexeme == "maybe" {
+				case "maybe":
 					// [Maybe] [default value]
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
@@ -10858,7 +10581,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					} else {
 						stack.Push(maybeObj.obj)
 					}
-				} else if t.Lexeme == "addDays" {
+				case "addDays":
 					// Add days to a date
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
@@ -10878,7 +10601,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						newDateTime := &MShellDateTime{Time: newTime, OriginalString: ""}
 						stack.Push(newDateTime)
 					}
-				} else if t.Lexeme == "isCmd" {
+				case "isCmd":
 					// Check if the top of the stack is a known command in the PATH
 					obj, err := stack.Pop()
 					if err != nil {
@@ -10893,7 +10616,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					// Check if the command is in the PATH
 					_, found := context.Pbm.Lookup(objStr)
 					stack.Push(MShellBool{found})
-				} else if t.Lexeme == "parseHtml" {
+				case "parseHtml":
 					// Parse HTML from a string or file
 					obj1, err := stack.Pop()
 					if err != nil {
@@ -10926,7 +10649,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					// Convert the parsed HTML document to a dictionary
 					d := nodeToDict(doc)
 					stack.Push(d)
-				} else if t.Lexeme == "inc" {
+				case "inc":
 					// Increment an integer on the top of the stack, but do it as a reference.
 					obj, err := stack.Pop()
 					if err != nil {
@@ -10941,7 +10664,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					// Increment the integer
 					intObj.Value++
 					stack.Push(intObj)
-				} else if t.Lexeme == "keyValues" {
+				case "keyValues":
 					// Get the keys and values of a dictionary as a list of lists
 					obj, err := stack.Pop()
 					if err != nil {
@@ -10973,7 +10696,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(newList)
-				} else if t.Lexeme == "extend" {
+				case "extend":
 					// Extend a list with another list, or a grid/gridview with another grid/gridview, in place.
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
@@ -11002,7 +10725,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second item on stack in 'extend' is expected to be a list or Grid/GridView, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
 					}
-				} else if t.Lexeme == "index" || t.Lexeme == "lastIndexOf" {
+				case "index", "lastIndexOf":
 					// Find the first or last index of a substring in a string
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
@@ -11028,7 +10751,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					} else {
 						stack.Push(&Maybe{obj: MShellInt{Value: index}})
 					}
-				} else if t.Lexeme == "absPath" {
+				case "absPath":
 					obj, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'absPath' operation on an empty stack.\n", t.Line, t.Column))
@@ -11046,7 +10769,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(MShellPath{Path: absPath})
-				} else if t.Lexeme == "bind" {
+				case "bind":
 					// Maybe monad bind
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
@@ -11071,7 +10794,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						stack.Push(maybeObj.obj) // Push the object inside the Maybe
 						preStackLen := len(*stack)
 
-						result, err := state.EvaluateQuote(*fn, stack, context, definitions)
+						result, err := state.EvaluateQuote(fn, stack, context, definitions)
 						if err != nil {
 							return state.FailWithMessage(err.Error())
 						}
@@ -11089,7 +10812,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						}
 						stack.Push(mapResultMaybe)
 					}
-				} else if t.Lexeme == "md5" {
+				case "md5":
 					// Calculate the MD5 hash of a string
 					obj, err := stack.Pop()
 					if err != nil {
@@ -11127,7 +10850,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					hash := md5.Sum(data)
 					hashStr := hex.EncodeToString(hash[:])
 					stack.Push(MShellString{hashStr})
-				} else if t.Lexeme == "take" {
+				case "take":
 					// Take the first n items from a list
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
@@ -11165,7 +10888,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second parameter in 'take' is expected to be a list or string, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
 					}
-				} else if t.Lexeme == "skip" {
+				case "skip":
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -11203,26 +10926,26 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: The second parameter in 'skip' is expected to be a list or string, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
 					}
-				} else if t.Lexeme == "hostname" {
+				case "hostname":
 					host, err := os.Hostname()
 					if err != nil {
 						stack.Push(MShellString{"unknown"})
 					} else {
 						stack.Push(MShellString{host})
 					}
-				} else if t.Lexeme == "uuid" {
+				case "uuid":
 					s, err := NewUuidV4()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Failed to generate a UUID: %s\n", t.Line, t.Column, err.Error()))
 					}
 					stack.Push(MShellString{s})
-				} else if t.Lexeme == "uuid7" {
+				case "uuid7":
 					s, err := NewUuidV7()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Failed to generate a UUID: %s\n", t.Line, t.Column, err.Error()))
 					}
 					stack.Push(MShellString{s})
-				} else if t.Lexeme == "removeWindowsVolumePrefix" {
+				case "removeWindowsVolumePrefix":
 					obj, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'removeWindowsVolumePrefix' operation on an empty stack.\n", t.Line, t.Column))
@@ -11238,7 +10961,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					} else {
 						stack.Push(MShellString{asStr})
 					}
-				} else if t.Lexeme == "pop" {
+				case "pop":
 					obj, err := stack.Pop()
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'pop' operation on an empty stack.\n", t.Line, t.Column))
@@ -11255,7 +10978,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					} else {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot pop from a %s.\n", t.Line, t.Column, obj.TypeName()))
 					}
-				} else if t.Lexeme == "sortByCmp" {
+				case "sortByCmp":
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -11295,7 +11018,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: The 2nd from top of stack in 'sortByCmp' is expected to be a list, Grid, or GridView, found a %s (%s)\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
 					}
-				} else if t.Lexeme == "strCmp" {
+				case "strCmp":
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -11312,7 +11035,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(MShellInt{Value: strings.Compare(str1, str2)})
-				} else if t.Lexeme == "versionSortCmp" {
+				case "versionSortCmp":
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
 						return state.FailWithMessage(err.Error())
@@ -11330,7 +11053,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(MShellInt{Value: VersionSortCmp(str1, str2)})
-				} else if t.Lexeme == "httpGet" || t.Lexeme == "httpPost" {
+				case "httpGet", "httpPost":
 					// Expect a dictionary on the stack
 					obj, err := stack.Pop()
 					if err != nil {
@@ -11439,6 +11162,18 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						}
 					}
 
+					var cookieJar *httpListCookieJar
+					if jarValue, ok := dict.Items["cookieJar"]; ok {
+						cookieJar, err = newHTTPListCookieJar(jarValue)
+						if err != nil {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Invalid cookie jar in '%s': %s\n", t.Line, t.Column, t.Lexeme, err))
+						}
+						if _, present := req.Header["Cookie"]; present {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot combine 'cookieJar' with a 'Cookie' header in '%s'.\n", t.Line, t.Column, t.Lexeme))
+						}
+						client.Jar = cookieJar
+					}
+
 					// Dump the request to stderr for debugging
 					// dump, _ := httputil.DumpRequestOut(req, true)
 					// fmt.Fprintf(os.Stderr, "HTTP Request:\n%s\n", dump)
@@ -11450,6 +11185,9 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						stack.Push(&Maybe{obj: nil}) // No response
 					} else {
 						responseDict := NewDict()
+						if cookieJar != nil {
+							responseDict.Items["cookieJar"] = cookieJar.list
+						}
 						responseDict.Items["status"] = MShellInt{Value: resp.StatusCode}
 						responseDict.Items["reason"] = MShellString{Content: resp.Status}
 						responseHeaders := NewDict()
@@ -11465,16 +11203,16 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 						// Read body as a UTF-8 encoded string
 						bodyBytes, err := io.ReadAll(resp.Body)
+						resp.Body.Close()
 						if err != nil {
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error reading response body in '%s': %s\n", t.Line, t.Column, t.Lexeme, err.Error()))
 						}
-						resp.Body.Close() // Close the response body
 						responseDict.Items["body"] = MShellBinary(bodyBytes)
 
 						// Push the response dictionary onto the stack
 						stack.Push(&Maybe{obj: responseDict})
 					}
-				} else if t.Lexeme == "urlEncode" {
+				case "urlEncode":
 					// Top of stack should be dictionary or string.
 					obj, err := stack.Pop()
 					if err != nil {
@@ -11516,7 +11254,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(MShellString{Content: encodedStr})
-				} else if t.Lexeme == "base64encode" {
+				case "base64encode":
 					// Convert binary data to a base64 string.
 					obj, err := stack.Pop()
 					if err != nil {
@@ -11530,7 +11268,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 
 					encoded := base64.StdEncoding.EncodeToString([]byte(binaryObj))
 					stack.Push(MShellString{Content: encoded})
-				} else if t.Lexeme == "base64decode" {
+				case "base64decode":
 					// Convert a base64 string to binary data.
 					obj, err := stack.Pop()
 					if err != nil {
@@ -11548,7 +11286,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(MShellBinary(decoded))
-				} else if t.Lexeme == "utf8Str" {
+				case "utf8Str":
 					// Convert MShellBinary on the top of the stack to a UTF-8 string
 					obj, err := stack.Pop()
 					if err != nil {
@@ -11563,7 +11301,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					// Convert binary to string
 					strContent := string(binaryObj)
 					stack.Push(MShellString{Content: strContent})
-				} else if t.Lexeme == "utf8Bytes" {
+				case "utf8Bytes":
 					// Convert MShellString on the top of the stack to UTF-8 bytes
 					obj, err := stack.Pop()
 					if err != nil {
@@ -11578,7 +11316,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					// Convert string to bytes
 					bytesContent := []byte(strObj.Content)
 					stack.Push(MShellBinary(bytesContent))
-				} else if t.Lexeme == "sleep" {
+				case "sleep":
 					// Sleep float number of seconds.
 					obj, err := stack.Pop()
 					if err != nil {
@@ -11597,7 +11335,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						// Sleep for the specified number of seconds
 						time.Sleep(time.Duration(secs * float64(time.Second)))
 					}
-				} else if t.Lexeme == "parseLinkHeader" {
+				case "parseLinkHeader":
 					// Parse a string in the form of https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Link#specifications
 					obj, err := stack.Pop()
 					if err != nil {
@@ -11630,7 +11368,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					}
 
 					stack.Push(linksList)
-				} else if t.Lexeme == "fileExists" {
+				case "fileExists":
 					// Check if a file exists
 					obj, err := stack.Pop()
 					if err != nil {
@@ -11651,7 +11389,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						// Something else went wrong (permissions, I/O error, etc.)
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error checking file existence for '%s': %s\n", t.Line, t.Column, pathStr, err.Error()))
 					}
-				} else if t.Lexeme == "floatCmp" {
+				case "floatCmp":
 					// Implement compare function for floats
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
@@ -11676,7 +11414,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					} else {
 						stack.Push(MShellInt{Value: 0})
 					}
-				} else if t.Lexeme == "intCmp" {
+				case "intCmp":
 					// Implement compare function for ints
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
@@ -11701,7 +11439,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					} else {
 						stack.Push(MShellInt{Value: 0})
 					}
-				} else if t.Lexeme == "dateTimeCmp" {
+				case "dateTimeCmp":
 					// Implement compare function for DateTimes
 					obj1, obj2, err := stack.Pop2(t)
 					if err != nil {
@@ -11726,9 +11464,9 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					} else {
 						stack.Push(MShellInt{Value: 0})
 					}
-				} else if t.Lexeme == "nullDevice" {
+				case "nullDevice":
 					stack.Push(MShellPath{Path: nullDevice})
-				} else if t.Lexeme == "and" || t.Lexeme == "or" {
+				case "and", "or":
 					// Token Type
 					obj1, err := stack.Pop()
 					if err != nil {
@@ -11755,7 +11493,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					case *MShellQuotation:
 						if t.Lexeme == "and" {
 							if obj2.(MShellBool).Value {
-								result, err := state.EvaluateQuote(*obj1.(*MShellQuotation), stack, context, definitions)
+								result, err := state.EvaluateQuote(obj1.(*MShellQuotation), stack, context, definitions)
 								if err != nil {
 									return state.FailWithMessage(err.Error())
 								}
@@ -11784,7 +11522,7 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 								stack.Push(MShellBool{true})
 							} else {
 
-								result, err := state.EvaluateQuote(*obj1.(*MShellQuotation), stack, context, definitions)
+								result, err := state.EvaluateQuote(obj1.(*MShellQuotation), stack, context, definitions)
 								if err != nil {
 									return state.FailWithMessage(err.Error())
 								}
@@ -11811,16 +11549,11 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s and %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
 					}
 
-				} else if t.Lexeme == "return" {
-					// Return from the current function
-					return EvalResult{
-						Success:    true,
-						Continue:   false,
-						BreakNum:   0,
-						ExitCode:   0,
-						ExitCalled: false,
+				default: // last new function
+					if strings.HasPrefix(t.Lexeme, "~/") {
+						return state.evalTildeToken(&t, stack)
 					}
-				} else { // last new function
+
 					// If we aren't in a list context, throw an error.
 					// Nearly always this is unintended.
 					if callStackItem.CallStackType != CALLSTACKLIST {
@@ -12073,429 +11806,44 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 					stack.Push(MShellInt{exitCode})
 				}
 			} else if t.Type == TRUE { // Token Type
-				stack.Push(MShellBool{true})
+				if result := state.evalTrueToken(&t, stack, &context); result != nil {
+					return *result
+				}
 			} else if t.Type == FALSE { // Token Type
-				stack.Push(MShellBool{false})
+				if result := state.evalFalseToken(&t, stack, &context); result != nil {
+					return *result
+				}
 			} else if t.Type == INTEGER { // Token Type
-				intVal, err := parseIntLiteral(t.Lexeme)
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing integer: %s\n", t.Line, t.Column, err.Error()))
+				if result := state.evalIntegerToken(&t, stack, &context); result != nil {
+					return *result
 				}
-
-				stack.Push(MShellInt{intVal})
 			} else if t.Type == STRING { // Token Type
-				parsedString, err := ParseRawString(t.Lexeme)
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing string: %s\n", t.Line, t.Column, err.Error()))
+				if result := state.evalStringToken(&t, stack, &context); result != nil {
+					return *result
 				}
-				stack.Push(MShellString{parsedString})
 			} else if t.Type == SINGLEQUOTESTRING { // Token Type
-				stack.Push(MShellString{t.Lexeme[1 : len(t.Lexeme)-1]})
-			} else if t.Type == IFF {
-				iff_name := "iff"
-				firstObj, err := stack.Pop()
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do an '%s' on a stack with only two items.\n", t.Line, t.Column, iff_name))
+				if result := state.evalSingleQuoteStringToken(&t, stack, &context); result != nil {
+					return *result
 				}
-
-				// Check that first obj is a quotation
-				firstQuote, ok := firstObj.(*MShellQuotation)
-				if !ok {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a quotation on top of stack for %s, received a %s.\n", t.Line, t.Column, iff_name, firstObj.TypeName()))
-				}
-
-				secondObj, err := stack.Pop()
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do an '%s' on a stack with only one item.\n", t.Line, t.Column, iff_name))
-				}
-
-				var trueQuote *MShellQuotation
-				var falseQuote *MShellQuotation
-				var condition bool
-
-				// Check that second obj is a quotation, boolean, or integer
-				switch secondTyped := secondObj.(type) {
-				case *MShellQuotation:
-					falseQuote = firstQuote
-
-					trueQuote = secondTyped
-
-					// Read the next object, should be bool or integer
-					thrirdObj, err := stack.Pop()
-					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do an '%s' on a stack with only two quotes.\n", t.Line, t.Column, iff_name))
-					}
-
-					switch thirdTyped := thrirdObj.(type) {
-					case MShellBool:
-						condition = thirdTyped.Value
-					case MShellInt:
-						condition = thirdTyped.Value == 0
-					}
-				case MShellBool:
-					trueQuote = firstQuote
-					condition = secondTyped.Value
-				case MShellInt:
-					trueQuote = firstQuote
-					condition = secondTyped.Value == 0
-				default:
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Expected a quotation or boolean for %s, received a %s.\n", t.Line, t.Column, iff_name, secondObj.TypeName()))
-				}
-
-				var quoteToExecute *MShellQuotation
-				if condition {
-					quoteToExecute = trueQuote
-				} else {
-					quoteToExecute = falseQuote
-				}
-
-				// False quote could be nil in the true only style of iff
-				if quoteToExecute != nil {
-					result, err := state.EvaluateQuote(*quoteToExecute, stack, context, definitions)
-					if err != nil {
-						return state.FailWithMessage(err.Error())
-					}
-
-					if result.ShouldPassResultUpStack() {
-						return result
-					}
-				}
-
 			} else if t.Type == PLUS { // Token Type
-				obj1, err := stack.Pop()
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '+' operation on an empty stack.\n", t.Line, t.Column))
-				}
-
-				obj2, err := stack.Pop()
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '+' operation on a stack with only one item.\n", t.Line, t.Column))
-				}
-
-				switch obj1.(type) {
-				case MShellInt:
-					switch obj2.(type) {
-					case MShellInt:
-						stack.Push(MShellInt{obj2.(MShellInt).Value + obj1.(MShellInt).Value})
-					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot add an integer to a %s (%s). Use 'toFloat' / 'toInt' to convert explicitly — '+' does not coerce numeric types.\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
-					}
-				case MShellFloat:
-					switch obj2.(type) {
-					case MShellFloat:
-						stack.Push(MShellFloat{obj2.(MShellFloat).Value + obj1.(MShellFloat).Value})
-					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot add a float to a %s. Use 'toFloat' / 'toInt' to convert explicitly — '+' does not coerce numeric types.\n", t.Line, t.Column, obj2.TypeName()))
-					}
-				case MShellString:
-					switch obj2.(type) {
-					case MShellString:
-						stack.Push(MShellString{obj2.(MShellString).Content + obj1.(MShellString).Content})
-					case MShellLiteral:
-						stack.Push(MShellString{obj2.(MShellLiteral).LiteralText + obj1.(MShellString).Content})
-					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot add a string ('%s') to a %s (%s).\n", t.Line, t.Column, obj1.(MShellString).Content, obj2.TypeName(), obj2.DebugString()))
-					}
-				case MShellLiteral:
-					switch obj2.(type) {
-					case MShellString:
-						stack.Push(MShellString{obj2.(MShellString).Content + obj1.(MShellLiteral).LiteralText})
-					case MShellLiteral:
-						stack.Push(MShellString{obj2.(MShellLiteral).LiteralText + obj1.(MShellLiteral).LiteralText})
-					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot add a literal (%s) to a %s.\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName()))
-					}
-				case *MShellList:
-					switch obj2.(type) {
-					case *MShellList:
-						newList := NewList(len(obj2.(*MShellList).Items) + len(obj1.(*MShellList).Items))
-						copy(newList.Items, obj2.(*MShellList).Items)
-						copy(newList.Items[len(obj2.(*MShellList).Items):], obj1.(*MShellList).Items)
-						stack.Push(newList)
-					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot add a list to a %s.\n", t.Line, t.Column, obj2.TypeName()))
-					}
-				case MShellPath:
-					switch obj2.(type) {
-					case MShellPath:
-						// Do string join, not path join. Concat the strings
-						stack.Push(MShellPath{obj2.(MShellPath).Path + obj1.(MShellPath).Path})
-					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot add a path to a %s.\n", t.Line, t.Column, obj2.TypeName()))
-					}
-				case *MShellGrid, *MShellGridView:
-					switch obj2.(type) {
-					case *MShellGrid, *MShellGridView:
-						newGrid, err := concatGrids(obj2, obj1)
-						if err != nil {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: %s", t.Line, t.Column, err.Error()))
-						}
-						stack.Push(newGrid)
-					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot add a %s to a %s.\n", t.Line, t.Column, obj1.TypeName(), obj2.TypeName()))
-					}
-				default:
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '+' between a %s and a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
+				if result := state.evalPlusToken(&t, stack, &context); result != nil {
+					return *result
 				}
 			} else if t.Type == MINUS { // Token Type
-				obj1, err := stack.Pop()
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '-' operation on an empty stack.\n", t.Line, t.Column))
-				}
-
-				obj2, err := stack.Pop()
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '-' operation on a stack with only one item.\n", t.Line, t.Column))
-				}
-
-				switch obj1.(type) {
-				case MShellInt:
-					switch obj2.(type) {
-					case MShellInt:
-						stack.Push(MShellInt{obj2.(MShellInt).Value - obj1.(MShellInt).Value})
-					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot subtract an integer from a %s. Use 'toFloat' / 'toInt' to convert explicitly — '-' does not coerce numeric types.\n", t.Line, t.Column, obj2.TypeName()))
-					}
-				case MShellFloat:
-					switch obj2.(type) {
-					case MShellFloat:
-						stack.Push(MShellFloat{obj2.(MShellFloat).Value - obj1.(MShellFloat).Value})
-					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot subtract a float from a %s. Use 'toFloat' / 'toInt' to convert explicitly — '-' does not coerce numeric types.\n", t.Line, t.Column, obj2.TypeName()))
-					}
-				case *MShellDateTime:
-					switch obj2.(type) {
-					case *MShellDateTime:
-						// Return a float with the difference in days.
-						days := obj2.(*MShellDateTime).Time.Sub(obj1.(*MShellDateTime).Time).Hours() / 24
-						stack.Push(MShellFloat{days})
-					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot subtract a %s from a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
-					}
-				default:
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '-' to a %s and %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
+				if result := state.evalMinusToken(&t, stack, &context); result != nil {
+					return *result
 				}
 			} else if t.Type == NOT { // Token Type
-				obj, err := stack.Pop()
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
-				}
-
-				switch objTyped := obj.(type) {
-				case MShellBool:
-					stack.Push(MShellBool{!objTyped.Value})
-				case MShellInt:
-					if objTyped.Value == 0 {
-						stack.Push(MShellBool{false})
-					} else {
-						stack.Push(MShellBool{true})
-					}
-				default:
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s.\n", t.Line, t.Column, t.Lexeme, obj.TypeName()))
+				if result := state.evalNotToken(&t, stack, &context); result != nil {
+					return *result
 				}
 			} else if t.Type == GREATERTHANOREQUAL || t.Type == LESSTHANOREQUAL { // Token Type
-				obj1, err := stack.Pop()
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
-				}
-
-				obj2, err := stack.Pop()
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on a stack with only one item.\n", t.Line, t.Column, t.Lexeme))
-				}
-
-				if obj1.IsNumeric() && obj2.IsNumeric() {
-					// No implicit numeric coercion: both must be the same type.
-					obj1Int, isInt1 := obj1.(MShellInt)
-					obj2Int, isInt2 := obj2.(MShellInt)
-					obj1Flt, isFlt1 := obj1.(MShellFloat)
-					obj2Flt, isFlt2 := obj2.(MShellFloat)
-					switch {
-					case isInt1 && isInt2:
-						if t.Type == GREATERTHANOREQUAL {
-							stack.Push(MShellBool{obj2Int.Value >= obj1Int.Value})
-						} else {
-							stack.Push(MShellBool{obj2Int.Value <= obj1Int.Value})
-						}
-					case isFlt1 && isFlt2:
-						if t.Type == GREATERTHANOREQUAL {
-							stack.Push(MShellBool{obj2Flt.Value >= obj1Flt.Value})
-						} else {
-							stack.Push(MShellBool{obj2Flt.Value <= obj1Flt.Value})
-						}
-					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' across numeric types %s and %s. Use 'toFloat' / 'toInt' to convert explicitly.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
-					}
-				} else {
-
-					obj1Date, ok1 := obj1.(*MShellDateTime)
-					obj2Date, ok2 := obj2.(*MShellDateTime)
-
-					if ok1 && ok2 {
-						if t.Type == GREATERTHANOREQUAL {
-							stack.Push(MShellBool{obj2Date.Time.After(obj1Date.Time) || obj2Date.Time.Equal(obj1Date.Time)})
-						} else {
-							stack.Push(MShellBool{obj2Date.Time.Before(obj1Date.Time) || obj2Date.Time.Equal(obj1Date.Time)})
-						}
-					} else {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s and a %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
-					}
+				if result := state.evalGreaterLessEqualToken(&t, stack, &context); result != nil {
+					return *result
 				}
 			} else if t.Type == GREATERTHAN || t.Type == LESSTHAN { // Token Type
-				// This can either be normal comparison for numerics, or it's a redirect on a list or quotation.
-				obj1, err := stack.Pop()
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
-				}
-
-				obj2, err := stack.Pop()
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on a stack with only one item.\n", t.Line, t.Column, t.Lexeme))
-				}
-
-				if obj1.IsNumeric() && obj2.IsNumeric() {
-					// No implicit numeric coercion: both must be the same type.
-					obj1Int, isInt1 := obj1.(MShellInt)
-					obj2Int, isInt2 := obj2.(MShellInt)
-					obj1Flt, isFlt1 := obj1.(MShellFloat)
-					obj2Flt, isFlt2 := obj2.(MShellFloat)
-					switch {
-					case isInt1 && isInt2:
-						if t.Type == GREATERTHAN {
-							stack.Push(MShellBool{obj2Int.Value > obj1Int.Value})
-						} else {
-							stack.Push(MShellBool{obj2Int.Value < obj1Int.Value})
-						}
-					case isFlt1 && isFlt2:
-						if t.Type == GREATERTHAN {
-							stack.Push(MShellBool{obj2Flt.Value > obj1Flt.Value})
-						} else {
-							stack.Push(MShellBool{obj2Flt.Value < obj1Flt.Value})
-						}
-					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s' across numeric types %s and %s. Use 'toFloat' / 'toInt' to convert explicitly.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
-					}
-				} else {
-					if t.Type == GREATERTHAN {
-						if desc := stdoutDestinationDescOf(obj2); desc != "" {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot apply '%s': stdout already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
-						}
-					}
-					switch obj1.(type) {
-					case MShellString:
-						path := obj1.(MShellString).Content
-						if containsNullByte(path) {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Found a null byte in the redirection file path. This is almost certainly not intended. You may have built the file name from UTF-16. Please ensure that your string is UTF-8 for the most predictable results.\n", t.Line, t.Column))
-						}
-						switch obj2 := obj2.(type) {
-						case *MShellList:
-							if t.Type == GREATERTHAN {
-								obj2.StandardOutputFile = path
-							} else { // LESSTHAN, input redirection
-								obj2.StdinBehavior = STDIN_CONTENT
-								obj2.StandardInputContents = path
-							}
-							stack.Push(obj2)
-						case *MShellQuotation:
-							if t.Type == GREATERTHAN {
-								obj2.StandardOutputFile = path
-							} else { // LESSTHAN, input redirection
-								obj2.StdinBehavior = STDIN_CONTENT
-								obj2.StandardInputContents = path
-							}
-							stack.Push(obj2)
-						case *MShellPipe:
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a string (%s) to a Pipe (%s). Add the redirection to the final item in the pipeline.\n", t.Line, t.Column, obj1.DebugString(), obj2.DebugString()))
-						default:
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a string (%s) to a %s (%s).\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
-						}
-					case MShellBinary:
-						if t.Type == LESSTHAN {
-							switch obj2.(type) {
-							case *MShellList:
-								obj2.(*MShellList).StdinBehavior = STDIN_BINARY
-								obj2.(*MShellList).StandardInputBinary = obj1.(MShellBinary)
-								obj2.(*MShellList).StandardInputContents = ""
-								obj2.(*MShellList).StandardInputFile = ""
-								stack.Push(obj2)
-							case *MShellQuotation:
-								obj2.(*MShellQuotation).StdinBehavior = STDIN_BINARY
-								obj2.(*MShellQuotation).StandardInputBinary = obj1.(MShellBinary)
-								obj2.(*MShellQuotation).StandardInputContents = ""
-								obj2.(*MShellQuotation).StandardInputFile = ""
-								stack.Push(obj2)
-							case *MShellPipe:
-								return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect binary data (%s) to a Pipe (%s). Add the redirection to the final item in the pipeline.\n", t.Line, t.Column, obj1.DebugString(), obj2.DebugString()))
-							default:
-								return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect binary data (%s) to a %s (%s).\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
-							}
-						} else {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect binary data (%s) to a %s (%s). Use '<' for input redirection.\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
-						}
-					case MShellLiteral:
-						path := obj1.(MShellLiteral).LiteralText
-						if containsNullByte(path) {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Found a null byte in the redirection file path. This is almost certainly not intended. You may have built the file name from UTF-16. Please ensure that your string is UTF-8 for the most predictable results.\n", t.Line, t.Column))
-						}
-						switch obj2 := obj2.(type) {
-						case *MShellList:
-							if t.Type == GREATERTHAN {
-								obj2.StandardOutputFile = path
-							} else { // LESSTHAN, input redirection
-								obj2.StdinBehavior = STDIN_CONTENT
-								obj2.StandardInputFile = path
-							}
-							stack.Push(obj2)
-						case *MShellQuotation:
-							if t.Type == GREATERTHAN {
-								obj2.StandardOutputFile = path
-							} else {
-								obj2.StdinBehavior = STDIN_CONTENT
-								obj2.StandardInputContents = path
-							}
-						default:
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a %s (%s) to a %s (%s).\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
-						}
-
-					case MShellPath:
-						path := obj1.(MShellPath).Path
-						if containsNullByte(path) {
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Found a null byte in the redirection file path. This is almost certainly not intended. You may have built the file name from UTF-16. Please ensure that your string is UTF-8 for the most predictable results.\n", t.Line, t.Column))
-						}
-						switch obj2 := obj2.(type) {
-						case *MShellList:
-							if t.Type == GREATERTHAN {
-								obj2.StandardOutputFile = path
-							} else { // LESSTHAN, input redirection
-								obj2.StdinBehavior = STDIN_FILE
-								obj2.StandardInputFile = path
-							}
-							stack.Push(obj2)
-						case *MShellQuotation:
-							if t.Type == GREATERTHAN {
-								obj2.StandardOutputFile = path
-							} else {
-								obj2.StdinBehavior = STDIN_FILE
-								obj2.StandardInputFile = path
-							}
-							stack.Push(obj2)
-						default:
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot redirect a path (%s) to a %s (%s).\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
-						}
-					case *MShellDateTime:
-						switch obj2.(type) {
-						case *MShellDateTime:
-							if t.Type == GREATERTHAN {
-								stack.Push(MShellBool{obj2.(*MShellDateTime).Time.After(obj1.(*MShellDateTime).Time)})
-							} else {
-								stack.Push(MShellBool{obj2.(*MShellDateTime).Time.Before(obj1.(*MShellDateTime).Time)})
-							}
-						default:
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot %s a datetime (%s) to a %s (%s).\n", t.Line, t.Column, t.Lexeme, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
-						}
-					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do a %s operation with a %s (%s) and a %s (%s).\n", t.Line, t.Column, t.Lexeme, obj1.TypeName(), obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
-					}
+				if result := state.evalGreaterLessToken(&t, stack, &context); result != nil {
+					return *result
 				}
 			} else if t.Type == STDERRREDIRECT || t.Type == STDERRAPPEND { // Token Type
 				obj1, err := stack.Pop()
@@ -12711,154 +12059,16 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 				stack.Push(MShellString{varValue})
 
 			} else if t.Type == VARSTORE { // Token Type
-				obj, err := stack.Pop()
-				varName := t.Lexeme[0 : len(t.Lexeme)-1] // Remove the trailing !
-
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Nothing on stack to store into variable %s.\n", t.Line, t.Column, varName))
+				if result := state.evalVarStoreToken(&t, stack, &context); result != nil {
+					return *result
 				}
-
-				context.Variables[varName] = obj
 			} else if t.Type == VARRETRIEVE { // Token Type
-				name := t.Lexeme[1:] // Remove the leading @
-				obj, found_mshell_variable := context.Variables[name]
-				if found_mshell_variable {
-					stack.Push(obj)
-				} else {
-					var message strings.Builder
-					fmt.Fprintf(&message, "%d:%d: Variable %s not found.\n", t.Line, t.Column, name)
-					message.WriteString("Variables:\n")
-					for key := range context.Variables {
-						fmt.Fprintf(&message, "  %s\n", key)
-					}
-					return state.FailWithMessage(message.String())
+				if result := state.evalVarRetrieveToken(&t, stack, &context); result != nil {
+					return *result
 				}
-			} else if t.Type == LOOP { // Token Type
-				obj, err := stack.Pop()
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do a loop on an empty stack.\n", t.Line, t.Column))
-				}
-
-				quotation, ok := obj.(*MShellQuotation)
-				if !ok {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Argument for loop expected to be a quotation, received a %s\n", t.Line, t.Column, obj.TypeName()))
-				}
-
-				if len(quotation.Tokens) == 0 {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Loop quotation needs a minimum of one token.\n", t.Line, t.Column))
-				}
-
-				// BuildExecutionContext handles all the quotation's
-				// redirections (stdin, stdout, stderr, merges).
-				builtContext, err := quotation.BuildExecutionContext(&context)
-				if err != nil {
-					return state.FailWithMessage(err.Error())
-				}
-				builtContext.Variables = context.Variables
-				loopContext := *builtContext
-				defer loopContext.Close()
-
-				maxLoops := 15000000
-				loopCount := 0
-				state.LoopDepth++
-
-				// breakDiff := 0
-
-				initialStackSize := len(*stack)
-
-				for loopCount < maxLoops {
-					result := state.evaluateItems(quotation.Tokens, stack, loopContext, definitions, CallStackItem{quotation, "quote", CALLSTACKQUOTE})
-					if !result.Success || result.ExitCalled {
-						return result
-					}
-
-					if len(*stack) != initialStackSize {
-						// If the stack size changed, we have an error.
-						var errorMessage strings.Builder
-						errorMessage.WriteString(fmt.Sprintf("%d:%d: Stack size changed from %d to %d in loop.\n", t.Line, t.Column, initialStackSize, len(*stack)))
-
-						errorMessage.WriteString("Stack:\n")
-						for i, item := range *stack {
-							errorMessage.WriteString(fmt.Sprintf("  %d: %s\n", i, item.DebugString()))
-						}
-
-						return state.FailWithMessage(errorMessage.String())
-					}
-
-					// Assert that we never get into state in which we have a breakNum > 0 and continue == true
-					if result.BreakNum > 0 && result.Continue {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot have both break and continue in the same loop.\n", t.Line, t.Column))
-					}
-
-					if result.BreakNum > 0 {
-						// breakDiff = state.LoopDepth - result.BreakNum
-						// if breakDiff >= 0 {
-						break
-						// }
-					}
-
-					if result.Continue {
-						continue
-					}
-
-					loopCount++
-				}
-
-				if loopCount == maxLoops {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Loop exceeded maximum number of iterations (%d).\n", t.Line, t.Column, maxLoops))
-				}
-
-				state.LoopDepth--
-				// // If we are breaking out of an inner loop to an outer loop (breakDiff - 1 > 0), then we need to return and go up the call stack.
-				// // Else just continue on with tokens after the loop.
-				// if breakDiff-1 > 0 {
-				// fmt.Fprintf(os.Stderr, "Breaking out of loop %d, loop depth %d\n", breakDiff-1, state.LoopDepth)
-				// return EvalResult{true, breakDiff - 1, 0, false}
-				// }
-			} else if t.Type == BREAK { // Token Type
-				if state.LoopDepth == 0 {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: break used outside of loop.\n", t.Line, t.Column))
-				}
-				return EvalResult{true, false, 1, 0, false}
-			} else if t.Type == CONTINUE { // Token Type
-				if state.LoopDepth == 0 {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: continue used outside of loop.\n", t.Line, t.Column))
-				}
-				return EvalResult{true, true, 0, 0, false}
 			} else if t.Type == EQUALS { // Token Type
-				obj1, err := stack.Pop()
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '=' operation on an empty stack.\n", t.Line, t.Column))
-				}
-				obj2, err := stack.Pop()
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '=' operation on a stack with only one item.\n", t.Line, t.Column))
-				}
-
-				doesEqual, err := obj1.Equals(obj2)
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot compare '=' between %s (%s) and %s (%s): %s\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString(), obj2.TypeName(), obj2.DebugString(), err.Error()))
-				}
-
-				stack.Push(MShellBool{doesEqual})
-			} else if t.Type == INTERPRET { // Token Type
-				obj, err := stack.Pop()
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot interpret an empty stack.\n", t.Line, t.Column))
-				}
-
-				quotation, ok := obj.(*MShellQuotation)
-				if !ok {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Argument for interpret expected to be a quotation, received a %s (%s)\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
-				}
-
-				result, err := state.EvaluateQuote(*quotation, stack, context, definitions)
-				if err != nil {
-					return state.FailWithMessage(err.Error())
-				}
-
-				if result.ShouldPassResultUpStack() {
-					return result
+				if result := state.evalEqualsToken(&t, stack, &context); result != nil {
+					return *result
 				}
 			} else if t.Type == POSITIONAL { // Token Type
 				posNum := t.Lexeme[1:]
@@ -13067,42 +12277,15 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 			} else if t.Type == STOP_ON_ERROR { // Token Type
 				state.StopOnError = true
 			} else if t.Type == FLOAT { // Token Type
-				floatVal, err := strconv.ParseFloat(t.Lexeme, 64)
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing float: %s\n", t.Line, t.Column, err.Error()))
+				if result := state.evalFloatToken(&t, stack, &context); result != nil {
+					return *result
 				}
-				stack.Push(MShellFloat{floatVal})
 			} else if t.Type == PATH { // Token Type
-				stack.Push(MShellPath{t.Lexeme[1 : len(t.Lexeme)-1]})
+				if result := state.evalPathToken(&t, stack, &context); result != nil {
+					return *result
+				}
 			} else if t.Type == DATETIME { // Token Type
-				year, _ := strconv.Atoi(t.Lexeme[0:4])
-				month, _ := strconv.Atoi(t.Lexeme[5:7])
-				day, _ := strconv.Atoi(t.Lexeme[8:10])
-
-				hour := 0
-				minute := 0
-				second := 0
-				if len(t.Lexeme) >= 13 {
-					hour, _ = strconv.Atoi(t.Lexeme[11:13])
-				}
-
-				if len(t.Lexeme) >= 16 {
-					minute, _ = strconv.Atoi(t.Lexeme[14:16])
-				}
-
-				if len(t.Lexeme) >= 19 {
-					second, _ = strconv.Atoi(t.Lexeme[17:19])
-				}
-
-				dt := time.Date(year, time.Month(month), day, hour, minute, second, 0, time.UTC)
-				stack.Push(&MShellDateTime{Time: dt, OriginalString: t.Lexeme})
-			} else if t.Type == FORMATSTRING { // Token Type
-				parsedString, err := state.EvaluateFormatString(t.Lexeme, context, definitions, callStackItem)
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing format string '%s': %s\n", t.Line, t.Column, t.Lexeme, err.Error()))
-				}
-
-				stack.Push(parsedString)
+				stack.Push(parseDateTimeLiteral(t.Lexeme))
 			} else if t.Type == AMPERSAND { // Token Type
 				obj, err := stack.Pop()
 				if err != nil {
@@ -13117,25 +12300,598 @@ func (state *EvalState) evaluateToken(t Token, stack *MShellStack, context Execu
 				list.RunInBackground = true
 				stack.Push(list)
 			} else if t.Type == NOTEQUAL { // Token Type
-				obj1, err := stack.Pop()
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '!=' operation on an empty stack.\n", t.Line, t.Column))
+				if result := state.evalNotEqualToken(&t, stack, &context); result != nil {
+					return *result
 				}
-
-				obj2, err := stack.Pop()
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '!=' operation on a stack with only one item.\n", t.Line, t.Column))
-				}
-
-				doesEqual, err := obj1.Equals(obj2)
-				if err != nil {
-					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot compare '!=' between %s and %s: %s\n", t.Line, t.Column, obj1.TypeName(), obj2.TypeName(), err.Error()))
-				}
-
-				stack.Push(MShellBool{!doesEqual})
 			} else {
 				return state.FailWithMessage(fmt.Sprintf("%d:%d: We haven't implemented the token type '%s' ('%s') yet.\n", t.Line, t.Column, t.Type, t.Lexeme))
 			}
 
 	return EvalResult{true, false, -1, 0, false}
+}
+
+// evalSimpleToken evaluates the token kinds that only work on the stack and
+// variables: literals, arithmetic, comparisons, and variable reads and
+// writes. These are the most common tokens, and calling them directly
+// avoids the cost of entering evaluateBuiltinToken. handled is false for every
+// other kind of token.
+func (state *EvalState) evalSimpleToken(t *Token, stack *MShellStack, context *ExecuteContext) (result *EvalResult, handled bool) {
+	switch t.Type {
+	case TRUE:
+		return state.evalTrueToken(t, stack, context), true
+	case FALSE:
+		return state.evalFalseToken(t, stack, context), true
+	case INTEGER:
+		return state.evalIntegerToken(t, stack, context), true
+	case STRING:
+		return state.evalStringToken(t, stack, context), true
+	case SINGLEQUOTESTRING:
+		return state.evalSingleQuoteStringToken(t, stack, context), true
+	case PLUS:
+		return state.evalPlusToken(t, stack, context), true
+	case MINUS:
+		return state.evalMinusToken(t, stack, context), true
+	case NOT:
+		return state.evalNotToken(t, stack, context), true
+	case GREATERTHANOREQUAL, LESSTHANOREQUAL:
+		return state.evalGreaterLessEqualToken(t, stack, context), true
+	case GREATERTHAN, LESSTHAN:
+		return state.evalGreaterLessToken(t, stack, context), true
+	case VARSTORE:
+		return state.evalVarStoreToken(t, stack, context), true
+	case VARRETRIEVE:
+		return state.evalVarRetrieveToken(t, stack, context), true
+	case EQUALS:
+		return state.evalEqualsToken(t, stack, context), true
+	case FLOAT:
+		return state.evalFloatToken(t, stack, context), true
+	case PATH:
+		return state.evalPathToken(t, stack, context), true
+	case NOTEQUAL:
+		return state.evalNotEqualToken(t, stack, context), true
+	}
+	return nil, false
+}
+
+// evalTrueToken evaluates a TRUE token.
+func (state *EvalState) evalTrueToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
+	stack.Push(MShellBool{true})
+	return nil
+}
+
+// evalFalseToken evaluates a FALSE token.
+func (state *EvalState) evalFalseToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
+	stack.Push(MShellBool{false})
+	return nil
+}
+
+// evalIntegerToken evaluates a INTEGER token.
+func (state *EvalState) evalIntegerToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
+	intVal, err := parseIntLiteral(t.Lexeme)
+	if err != nil {
+		return state.failPtr(fmt.Sprintf("%d:%d: Error parsing integer: %s\n", t.Line, t.Column, err.Error()))
+	}
+
+	stack.Push(MShellInt{intVal})
+	return nil
+}
+
+// evalStringToken evaluates a STRING token.
+func (state *EvalState) evalStringToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
+	parsedString, err := ParseRawString(t.Lexeme)
+	if err != nil {
+		return state.failPtr(fmt.Sprintf("%d:%d: Error parsing string: %s\n", t.Line, t.Column, err.Error()))
+	}
+	stack.Push(MShellString{parsedString})
+	return nil
+}
+
+// evalSingleQuoteStringToken evaluates a SINGLEQUOTESTRING token.
+func (state *EvalState) evalSingleQuoteStringToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
+	stack.Push(MShellString{t.Lexeme[1 : len(t.Lexeme)-1]})
+	return nil
+}
+
+// evalPlusToken evaluates a PLUS token.
+func (state *EvalState) evalPlusToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
+	obj1, err := stack.Pop()
+	if err != nil {
+		return state.failPtr(fmt.Sprintf("%d:%d: Cannot do '+' operation on an empty stack.\n", t.Line, t.Column))
+	}
+
+	obj2, err := stack.Pop()
+	if err != nil {
+		return state.failPtr(fmt.Sprintf("%d:%d: Cannot do '+' operation on a stack with only one item.\n", t.Line, t.Column))
+	}
+
+	switch obj1.(type) {
+	case MShellInt:
+		switch obj2.(type) {
+		case MShellInt:
+			stack.Push(MShellInt{obj2.(MShellInt).Value + obj1.(MShellInt).Value})
+		default:
+			return state.failPtr(fmt.Sprintf("%d:%d: Cannot add an integer to a %s (%s). Use 'toFloat' / 'toInt' to convert explicitly — '+' does not coerce numeric types.\n", t.Line, t.Column, obj2.TypeName(), obj2.DebugString()))
+		}
+	case MShellFloat:
+		switch obj2.(type) {
+		case MShellFloat:
+			stack.Push(MShellFloat{obj2.(MShellFloat).Value + obj1.(MShellFloat).Value})
+		default:
+			return state.failPtr(fmt.Sprintf("%d:%d: Cannot add a float to a %s. Use 'toFloat' / 'toInt' to convert explicitly — '+' does not coerce numeric types.\n", t.Line, t.Column, obj2.TypeName()))
+		}
+	case MShellString:
+		switch obj2.(type) {
+		case MShellString:
+			stack.Push(MShellString{obj2.(MShellString).Content + obj1.(MShellString).Content})
+		case MShellLiteral:
+			stack.Push(MShellString{obj2.(MShellLiteral).LiteralText + obj1.(MShellString).Content})
+		default:
+			return state.failPtr(fmt.Sprintf("%d:%d: Cannot add a string ('%s') to a %s (%s).\n", t.Line, t.Column, obj1.(MShellString).Content, obj2.TypeName(), obj2.DebugString()))
+		}
+	case MShellLiteral:
+		switch obj2.(type) {
+		case MShellString:
+			stack.Push(MShellString{obj2.(MShellString).Content + obj1.(MShellLiteral).LiteralText})
+		case MShellLiteral:
+			stack.Push(MShellString{obj2.(MShellLiteral).LiteralText + obj1.(MShellLiteral).LiteralText})
+		default:
+			return state.failPtr(fmt.Sprintf("%d:%d: Cannot add a literal (%s) to a %s.\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName()))
+		}
+	case *MShellList:
+		switch obj2.(type) {
+		case *MShellList:
+			newList := NewList(len(obj2.(*MShellList).Items) + len(obj1.(*MShellList).Items))
+			copy(newList.Items, obj2.(*MShellList).Items)
+			copy(newList.Items[len(obj2.(*MShellList).Items):], obj1.(*MShellList).Items)
+			stack.Push(newList)
+		default:
+			return state.failPtr(fmt.Sprintf("%d:%d: Cannot add a list to a %s.\n", t.Line, t.Column, obj2.TypeName()))
+		}
+	case MShellPath:
+		switch obj2.(type) {
+		case MShellPath:
+			// Do string join, not path join. Concat the strings
+			stack.Push(MShellPath{obj2.(MShellPath).Path + obj1.(MShellPath).Path})
+		default:
+			return state.failPtr(fmt.Sprintf("%d:%d: Cannot add a path to a %s.\n", t.Line, t.Column, obj2.TypeName()))
+		}
+	case *MShellGrid, *MShellGridView:
+		switch obj2.(type) {
+		case *MShellGrid, *MShellGridView:
+			newGrid, err := concatGrids(obj2, obj1)
+			if err != nil {
+				return state.failPtr(fmt.Sprintf("%d:%d: %s", t.Line, t.Column, err.Error()))
+			}
+			stack.Push(newGrid)
+		default:
+			return state.failPtr(fmt.Sprintf("%d:%d: Cannot add a %s to a %s.\n", t.Line, t.Column, obj1.TypeName(), obj2.TypeName()))
+		}
+	default:
+		return state.failPtr(fmt.Sprintf("%d:%d: Cannot apply '+' between a %s and a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
+	}
+	return nil
+}
+
+// evalMinusToken evaluates a MINUS token.
+func (state *EvalState) evalMinusToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
+	obj1, err := stack.Pop()
+	if err != nil {
+		return state.failPtr(fmt.Sprintf("%d:%d: Cannot do '-' operation on an empty stack.\n", t.Line, t.Column))
+	}
+
+	obj2, err := stack.Pop()
+	if err != nil {
+		return state.failPtr(fmt.Sprintf("%d:%d: Cannot do '-' operation on a stack with only one item.\n", t.Line, t.Column))
+	}
+
+	switch obj1.(type) {
+	case MShellInt:
+		switch obj2.(type) {
+		case MShellInt:
+			stack.Push(MShellInt{obj2.(MShellInt).Value - obj1.(MShellInt).Value})
+		default:
+			return state.failPtr(fmt.Sprintf("%d:%d: Cannot subtract an integer from a %s. Use 'toFloat' / 'toInt' to convert explicitly — '-' does not coerce numeric types.\n", t.Line, t.Column, obj2.TypeName()))
+		}
+	case MShellFloat:
+		switch obj2.(type) {
+		case MShellFloat:
+			stack.Push(MShellFloat{obj2.(MShellFloat).Value - obj1.(MShellFloat).Value})
+		default:
+			return state.failPtr(fmt.Sprintf("%d:%d: Cannot subtract a float from a %s. Use 'toFloat' / 'toInt' to convert explicitly — '-' does not coerce numeric types.\n", t.Line, t.Column, obj2.TypeName()))
+		}
+	case *MShellDateTime:
+		switch obj2.(type) {
+		case *MShellDateTime:
+			// Return a float with the difference in days.
+			days := obj2.(*MShellDateTime).Time.Sub(obj1.(*MShellDateTime).Time).Hours() / 24
+			stack.Push(MShellFloat{days})
+		default:
+			return state.failPtr(fmt.Sprintf("%d:%d: Cannot subtract a %s from a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
+		}
+	default:
+		return state.failPtr(fmt.Sprintf("%d:%d: Cannot apply '-' to a %s and %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
+	}
+	return nil
+}
+
+// evalNotToken evaluates a NOT token.
+func (state *EvalState) evalNotToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
+	obj, err := stack.Pop()
+	if err != nil {
+		return state.failPtr(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
+	}
+
+	switch objTyped := obj.(type) {
+	case MShellBool:
+		stack.Push(MShellBool{!objTyped.Value})
+	case MShellInt:
+		if objTyped.Value == 0 {
+			stack.Push(MShellBool{false})
+		} else {
+			stack.Push(MShellBool{true})
+		}
+	default:
+		return state.failPtr(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s.\n", t.Line, t.Column, t.Lexeme, obj.TypeName()))
+	}
+	return nil
+}
+
+// evalGreaterLessEqualToken evaluates a GREATERTHANOREQUAL / LESSTHANOREQUAL token.
+func (state *EvalState) evalGreaterLessEqualToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
+	obj1, err := stack.Pop()
+	if err != nil {
+		return state.failPtr(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
+	}
+
+	obj2, err := stack.Pop()
+	if err != nil {
+		return state.failPtr(fmt.Sprintf("%d:%d: Cannot do '%s' operation on a stack with only one item.\n", t.Line, t.Column, t.Lexeme))
+	}
+
+	if obj1.IsNumeric() && obj2.IsNumeric() {
+		// No implicit numeric coercion: both must be the same type.
+		obj1Int, isInt1 := obj1.(MShellInt)
+		obj2Int, isInt2 := obj2.(MShellInt)
+		obj1Flt, isFlt1 := obj1.(MShellFloat)
+		obj2Flt, isFlt2 := obj2.(MShellFloat)
+		switch {
+		case isInt1 && isInt2:
+			if t.Type == GREATERTHANOREQUAL {
+				stack.Push(MShellBool{obj2Int.Value >= obj1Int.Value})
+			} else {
+				stack.Push(MShellBool{obj2Int.Value <= obj1Int.Value})
+			}
+		case isFlt1 && isFlt2:
+			if t.Type == GREATERTHANOREQUAL {
+				stack.Push(MShellBool{obj2Flt.Value >= obj1Flt.Value})
+			} else {
+				stack.Push(MShellBool{obj2Flt.Value <= obj1Flt.Value})
+			}
+		default:
+			return state.failPtr(fmt.Sprintf("%d:%d: Cannot apply '%s' across numeric types %s and %s. Use 'toFloat' / 'toInt' to convert explicitly.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
+		}
+	} else {
+
+		obj1Date, ok1 := obj1.(*MShellDateTime)
+		obj2Date, ok2 := obj2.(*MShellDateTime)
+
+		if ok1 && ok2 {
+			if t.Type == GREATERTHANOREQUAL {
+				stack.Push(MShellBool{obj2Date.Time.After(obj1Date.Time) || obj2Date.Time.Equal(obj1Date.Time)})
+			} else {
+				stack.Push(MShellBool{obj2Date.Time.Before(obj1Date.Time) || obj2Date.Time.Equal(obj1Date.Time)})
+			}
+		} else {
+			return state.failPtr(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s and a %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
+		}
+	}
+	return nil
+}
+
+// evalGreaterLessToken evaluates a GREATERTHAN / LESSTHAN token.
+func (state *EvalState) evalGreaterLessToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
+	// This can either be normal comparison for numerics, or it's a redirect on a list or quotation.
+	obj1, err := stack.Pop()
+	if err != nil {
+		return state.failPtr(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
+	}
+
+	obj2, err := stack.Pop()
+	if err != nil {
+		return state.failPtr(fmt.Sprintf("%d:%d: Cannot do '%s' operation on a stack with only one item.\n", t.Line, t.Column, t.Lexeme))
+	}
+
+	if obj1.IsNumeric() && obj2.IsNumeric() {
+		// No implicit numeric coercion: both must be the same type.
+		obj1Int, isInt1 := obj1.(MShellInt)
+		obj2Int, isInt2 := obj2.(MShellInt)
+		obj1Flt, isFlt1 := obj1.(MShellFloat)
+		obj2Flt, isFlt2 := obj2.(MShellFloat)
+		switch {
+		case isInt1 && isInt2:
+			if t.Type == GREATERTHAN {
+				stack.Push(MShellBool{obj2Int.Value > obj1Int.Value})
+			} else {
+				stack.Push(MShellBool{obj2Int.Value < obj1Int.Value})
+			}
+		case isFlt1 && isFlt2:
+			if t.Type == GREATERTHAN {
+				stack.Push(MShellBool{obj2Flt.Value > obj1Flt.Value})
+			} else {
+				stack.Push(MShellBool{obj2Flt.Value < obj1Flt.Value})
+			}
+		default:
+			return state.failPtr(fmt.Sprintf("%d:%d: Cannot apply '%s' across numeric types %s and %s. Use 'toFloat' / 'toInt' to convert explicitly.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
+		}
+	} else {
+		if t.Type == GREATERTHAN {
+			if desc := stdoutDestinationDescOf(obj2); desc != "" {
+				return state.failPtr(fmt.Sprintf("%d:%d: Cannot apply '%s': stdout already has %s. Each stream has exactly one destination.\n", t.Line, t.Column, t.Lexeme, desc))
+			}
+		}
+		switch obj1.(type) {
+		case MShellString:
+			path := obj1.(MShellString).Content
+			if containsNullByte(path) {
+				return state.failPtr(fmt.Sprintf("%d:%d: Found a null byte in the redirection file path. This is almost certainly not intended. You may have built the file name from UTF-16. Please ensure that your string is UTF-8 for the most predictable results.\n", t.Line, t.Column))
+			}
+			switch obj2 := obj2.(type) {
+			case *MShellList:
+				if t.Type == GREATERTHAN {
+					obj2.StandardOutputFile = path
+				} else { // LESSTHAN, input redirection
+					obj2.StdinBehavior = STDIN_CONTENT
+					obj2.StandardInputContents = path
+				}
+				stack.Push(obj2)
+			case *MShellQuotation:
+				if t.Type == GREATERTHAN {
+					obj2.StandardOutputFile = path
+				} else { // LESSTHAN, input redirection
+					obj2.StdinBehavior = STDIN_CONTENT
+					obj2.StandardInputContents = path
+				}
+				stack.Push(obj2)
+			case *MShellPipe:
+				return state.failPtr(fmt.Sprintf("%d:%d: Cannot redirect a string (%s) to a Pipe (%s). Add the redirection to the final item in the pipeline.\n", t.Line, t.Column, obj1.DebugString(), obj2.DebugString()))
+			default:
+				return state.failPtr(fmt.Sprintf("%d:%d: Cannot redirect a string (%s) to a %s (%s).\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
+			}
+		case MShellBinary:
+			if t.Type == LESSTHAN {
+				switch obj2.(type) {
+				case *MShellList:
+					obj2.(*MShellList).StdinBehavior = STDIN_BINARY
+					obj2.(*MShellList).StandardInputBinary = obj1.(MShellBinary)
+					obj2.(*MShellList).StandardInputContents = ""
+					obj2.(*MShellList).StandardInputFile = ""
+					stack.Push(obj2)
+				case *MShellQuotation:
+					obj2.(*MShellQuotation).StdinBehavior = STDIN_BINARY
+					obj2.(*MShellQuotation).StandardInputBinary = obj1.(MShellBinary)
+					obj2.(*MShellQuotation).StandardInputContents = ""
+					obj2.(*MShellQuotation).StandardInputFile = ""
+					stack.Push(obj2)
+				case *MShellPipe:
+					return state.failPtr(fmt.Sprintf("%d:%d: Cannot redirect binary data (%s) to a Pipe (%s). Add the redirection to the final item in the pipeline.\n", t.Line, t.Column, obj1.DebugString(), obj2.DebugString()))
+				default:
+					return state.failPtr(fmt.Sprintf("%d:%d: Cannot redirect binary data (%s) to a %s (%s).\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
+				}
+			} else {
+				return state.failPtr(fmt.Sprintf("%d:%d: Cannot redirect binary data (%s) to a %s (%s). Use '<' for input redirection.\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
+			}
+		case MShellLiteral:
+			path := obj1.(MShellLiteral).LiteralText
+			if containsNullByte(path) {
+				return state.failPtr(fmt.Sprintf("%d:%d: Found a null byte in the redirection file path. This is almost certainly not intended. You may have built the file name from UTF-16. Please ensure that your string is UTF-8 for the most predictable results.\n", t.Line, t.Column))
+			}
+			switch obj2 := obj2.(type) {
+			case *MShellList:
+				if t.Type == GREATERTHAN {
+					obj2.StandardOutputFile = path
+				} else { // LESSTHAN, input redirection
+					obj2.StdinBehavior = STDIN_CONTENT
+					obj2.StandardInputFile = path
+				}
+				stack.Push(obj2)
+			case *MShellQuotation:
+				if t.Type == GREATERTHAN {
+					obj2.StandardOutputFile = path
+				} else {
+					obj2.StdinBehavior = STDIN_CONTENT
+					obj2.StandardInputContents = path
+				}
+			default:
+				return state.failPtr(fmt.Sprintf("%d:%d: Cannot redirect a %s (%s) to a %s (%s).\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
+			}
+
+		case MShellPath:
+			path := obj1.(MShellPath).Path
+			if containsNullByte(path) {
+				return state.failPtr(fmt.Sprintf("%d:%d: Found a null byte in the redirection file path. This is almost certainly not intended. You may have built the file name from UTF-16. Please ensure that your string is UTF-8 for the most predictable results.\n", t.Line, t.Column))
+			}
+			switch obj2 := obj2.(type) {
+			case *MShellList:
+				if t.Type == GREATERTHAN {
+					obj2.StandardOutputFile = path
+				} else { // LESSTHAN, input redirection
+					obj2.StdinBehavior = STDIN_FILE
+					obj2.StandardInputFile = path
+				}
+				stack.Push(obj2)
+			case *MShellQuotation:
+				if t.Type == GREATERTHAN {
+					obj2.StandardOutputFile = path
+				} else {
+					obj2.StdinBehavior = STDIN_FILE
+					obj2.StandardInputFile = path
+				}
+				stack.Push(obj2)
+			default:
+				return state.failPtr(fmt.Sprintf("%d:%d: Cannot redirect a path (%s) to a %s (%s).\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
+			}
+		case *MShellDateTime:
+			switch obj2.(type) {
+			case *MShellDateTime:
+				if t.Type == GREATERTHAN {
+					stack.Push(MShellBool{obj2.(*MShellDateTime).Time.After(obj1.(*MShellDateTime).Time)})
+				} else {
+					stack.Push(MShellBool{obj2.(*MShellDateTime).Time.Before(obj1.(*MShellDateTime).Time)})
+				}
+			default:
+				return state.failPtr(fmt.Sprintf("%d:%d: Cannot %s a datetime (%s) to a %s (%s).\n", t.Line, t.Column, t.Lexeme, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
+			}
+		default:
+			return state.failPtr(fmt.Sprintf("%d:%d: Cannot do a %s operation with a %s (%s) and a %s (%s).\n", t.Line, t.Column, t.Lexeme, obj1.TypeName(), obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
+		}
+	}
+	return nil
+}
+
+// evalVarStoreToken evaluates a VARSTORE token.
+func (state *EvalState) evalVarStoreToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
+	obj, err := stack.Pop()
+	varName := t.Lexeme[0 : len(t.Lexeme)-1] // Remove the trailing !
+
+	if err != nil {
+		return state.failPtr(fmt.Sprintf("%d:%d: Nothing on stack to store into variable %s.\n", t.Line, t.Column, varName))
+	}
+
+	context.Variables[varName] = obj
+	return nil
+}
+
+// evalVarRetrieveToken evaluates a VARRETRIEVE token.
+func (state *EvalState) evalVarRetrieveToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
+	name := t.Lexeme[1:] // Remove the leading @
+	obj, found_mshell_variable := context.Variables[name]
+	if found_mshell_variable {
+		stack.Push(obj)
+	} else {
+		var message strings.Builder
+		fmt.Fprintf(&message, "%d:%d: Variable %s not found.\n", t.Line, t.Column, name)
+		message.WriteString("Variables:\n")
+		for key := range context.Variables {
+			fmt.Fprintf(&message, "  %s\n", key)
+		}
+		return state.failPtr(message.String())
+	}
+	return nil
+}
+
+// evalEqualsToken evaluates a EQUALS token.
+func (state *EvalState) evalEqualsToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
+	obj1, err := stack.Pop()
+	if err != nil {
+		return state.failPtr(fmt.Sprintf("%d:%d: Cannot do '=' operation on an empty stack.\n", t.Line, t.Column))
+	}
+	obj2, err := stack.Pop()
+	if err != nil {
+		return state.failPtr(fmt.Sprintf("%d:%d: Cannot do '=' operation on a stack with only one item.\n", t.Line, t.Column))
+	}
+
+	doesEqual, err := obj1.Equals(obj2)
+	if err != nil {
+		return state.failPtr(fmt.Sprintf("%d:%d: Cannot compare '=' between %s (%s) and %s (%s): %s\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString(), obj2.TypeName(), obj2.DebugString(), err.Error()))
+	}
+
+	stack.Push(MShellBool{doesEqual})
+	return nil
+}
+
+// evalFloatToken evaluates a FLOAT token.
+func (state *EvalState) evalFloatToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
+	floatVal, err := strconv.ParseFloat(t.Lexeme, 64)
+	if err != nil {
+		return state.failPtr(fmt.Sprintf("%d:%d: Error parsing float: %s\n", t.Line, t.Column, err.Error()))
+	}
+	stack.Push(MShellFloat{floatVal})
+	return nil
+}
+
+// evalPathToken evaluates a PATH token.
+func (state *EvalState) evalPathToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
+	stack.Push(MShellPath{t.Lexeme[1 : len(t.Lexeme)-1]})
+	return nil
+}
+
+// evalNotEqualToken evaluates a NOTEQUAL token.
+func (state *EvalState) evalNotEqualToken(t *Token, stack *MShellStack, context *ExecuteContext) *EvalResult {
+	obj1, err := stack.Pop()
+	if err != nil {
+		return state.failPtr(fmt.Sprintf("%d:%d: Cannot do '!=' operation on an empty stack.\n", t.Line, t.Column))
+	}
+
+	obj2, err := stack.Pop()
+	if err != nil {
+		return state.failPtr(fmt.Sprintf("%d:%d: Cannot do '!=' operation on a stack with only one item.\n", t.Line, t.Column))
+	}
+
+	doesEqual, err := obj1.Equals(obj2)
+	if err != nil {
+		return state.failPtr(fmt.Sprintf("%d:%d: Cannot compare '!=' between %s and %s: %s\n", t.Line, t.Column, obj1.TypeName(), obj2.TypeName(), err.Error()))
+	}
+
+	stack.Push(MShellBool{!doesEqual})
+	return nil
+}
+
+
+// readLimitEnvVar names the environment variable that caps how many bytes a
+// bulk read into memory (the `stdin` builtin) will accept before failing.
+const readLimitEnvVar = "MSH_READ_LIMIT"
+
+// defaultReadLimit is the cap used when MSH_READ_LIMIT is unset: 100 MiB.
+const defaultReadLimit int64 = 100 * 1024 * 1024
+
+// parseReadLimit parses a MSH_READ_LIMIT value: a whole number of bytes.
+// A value of 0 removes the limit.
+func parseReadLimit(value string) (int64, error) {
+	n, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("%s must be a whole number of bytes, got '%s'", readLimitEnvVar, value)
+	}
+	return n, nil
+}
+
+// readLimit returns the effective bulk-read cap in bytes, or 0 for no limit.
+// The environment is consulted on every call so that `setenv` within a script
+// takes effect immediately.
+func readLimit() (int64, error) {
+	value, ok := os.LookupEnv(readLimitEnvVar)
+	if !ok {
+		return defaultReadLimit, nil
+	}
+	return parseReadLimit(value)
+}
+
+// errReadLimitExceeded is returned by readAllBounded when the input holds more
+// bytes than the limit allows.
+type errReadLimitExceeded struct {
+	limit int64
+}
+
+func (e errReadLimitExceeded) Error() string {
+	return fmt.Sprintf("input exceeds the %s of %d bytes", readLimitEnvVar, e.limit)
+}
+
+// readAllBounded reads r until EOF, failing as soon as more than limit bytes
+// have been seen. It reads at most limit+1 bytes, so an overflowing or
+// nonterminating stream never grows memory past the cap. A limit of 0 means
+// no limit. Input of exactly limit bytes succeeds.
+func readAllBounded(r io.Reader, limit int64) ([]byte, error) {
+	var buffer bytes.Buffer
+	if limit <= 0 {
+		_, err := buffer.ReadFrom(r)
+		return buffer.Bytes(), err
+	}
+
+	n, err := buffer.ReadFrom(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if n > limit {
+		return nil, errReadLimitExceeded{limit}
+	}
+	return buffer.Bytes(), nil
 }

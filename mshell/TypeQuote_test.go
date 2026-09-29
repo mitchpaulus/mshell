@@ -164,7 +164,7 @@ func TestInferRestoresOuterState(t *testing.T) {
 	c := freshChecker()
 	x := c.names.Intern("x")
 	c.stack.Push(TidStr)
-	c.vars.bound[x] = TidBool
+	c.vars.bind(x, TidBool)
 
 	sigs := c.InferQuoteSig([]Token{
 		mkTok(INTEGER, "1"),

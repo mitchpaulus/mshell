@@ -1,0 +1,16 @@
+# break and continue inside a quotation run by a builtin act on the
+# loop around the builtin.
+0 i!
+( @i 1 + i! @i 5 >= if break end [1] (@i 2 = if break end drop) each ) loop
+@i str wl
+
+0 j!
+0 hits!
+( @j 1 + j! @j 4 >= if break end [1] (1 = if continue end) each @hits 1 + hits! ) loop
+@j str wl
+@hits str wl
+
+# A break in an each inside a nested loop leaves only the inner loop.
+0 k!
+( ( @k 1 + k! [1] (drop @k 3 >= if break end) each ) loop @k 10 >= if break end @k 7 + k! ) loop
+@k str wl

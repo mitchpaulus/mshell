@@ -1,0 +1,2 @@
+# A list inside a quote doesn't give the quote an input.
+1 ([drop]) x len wl

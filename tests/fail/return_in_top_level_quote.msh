@@ -1,0 +1,4 @@
+# Should fail: return inside a quotation in top-level code.
+"before" wl
+(return) x
+"after" wl

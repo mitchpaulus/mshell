@@ -283,11 +283,11 @@ end
 	}
 }
 
-func TestTypeCheckProgramIffReturnBranchDiverges(t *testing.T) {
+func TestTypeCheckProgramIfReturnBranchDiverges(t *testing.T) {
 	src := `
 def returnTest (str -- str)
     a!
-    @a "a" = ("Found a" return) iff
+    @a "a" = if "Found a" return end
     @a
 end
 
@@ -295,7 +295,7 @@ end
 `
 	errs, ok := parseAndCheck(t, src)
 	if !ok || len(errs) != 0 {
-		t.Fatalf("expected iff return branch to type-check as divergent; errs=%v", errs)
+		t.Fatalf("expected if return branch to type-check as divergent; errs=%v", errs)
 	}
 }
 
@@ -1163,5 +1163,71 @@ func TestTypeCheckProgramMshFileManager(t *testing.T) {
 	errs, ok := parseAndCheck(t, `42 mshFileManager`)
 	if ok {
 		t.Fatalf("expected int argument to mshFileManager to fail; errs=%v", errs)
+	}
+}
+
+func TestTypeCheckInterpolationTypes(t *testing.T) {
+	for _, src := range []string{
+		`$"{"s"} {1} {` + "`p`" + `}" wl`,
+		`$"{ {"k": "v"} :k? } {$"n {1 2 +}"}" wl`,
+		`$"{'}'}" wl`,
+		`$"{2.5 1 toFixed " " 6 leftPad}" wl`,
+	} {
+		if errs, ok := parseAndCheck(t, src); !ok || len(errs) != 0 {
+			t.Errorf("expected %q to pass; errs=%v", src, errs)
+		}
+	}
+	for _, src := range []string{
+		`$"{1.5}" wl`,
+		`$"{[1 2]}" wl`,
+		`$"{true}" wl`,
+		`$"{1 2}" wl`,
+		`$"{}" wl`,
+	} {
+		if errs, ok := parseAndCheck(t, src); ok {
+			t.Errorf("expected %q to fail; errs=%v", src, errs)
+		}
+	}
+}
+
+func TestTypeCheckInterpolationTypePosition(t *testing.T) {
+	errs, ok := parseAndCheck(t, "\"x\" wl\n$\"a {1.5} b\" wl")
+	if ok {
+		t.Fatalf("expected float interpolation to fail; errs=%v", errs)
+	}
+	if len(errs) == 0 || !strings.Contains(errs[0], "line 2, column 6") || !strings.Contains(errs[0], "got float") {
+		t.Fatalf("expected float diagnostic at line 2, column 6; got %v", errs)
+	}
+}
+
+// Interpolations run on their own empty stack, keep the type bindings
+// they make, and are checked per branch, like any other code.
+func TestTypeCheckInterpolationBranches(t *testing.T) {
+	for _, src := range []string{
+		`[1 2] (n! $"{@n}") map unlines wl`,
+		`def takesInts ([int] -- int) len end  $"{[] xs! "a"}" drop  @xs takesInts wl`,
+		`(n! $"{@n}") drop`,
+		`3 (n! $"{ @n 1 - }") x wl`,
+		`[1 2 3] (n! $"{ @n 1 - }") map ", " join wl`,
+		`[1 2 3] (n! $"{@n dup + str}{ @n @n < if "a" else "b" end }") map ", " join wl`,
+		`$"{1 x! @x}" wl @x 1 + wl`,
+		`def g (a -- str) x! $"{@x str}" end 3 g wl`,
+	} {
+		if errs, ok := parseAndCheck(t, src); !ok || len(errs) != 0 {
+			t.Errorf("expected %q to pass; errs=%v", src, errs)
+		}
+	}
+	for _, src := range []string{
+		`[1.5 2.5] (n! $"{@n}") map unlines wl`,
+		`1.5 (n! $"{@n}") x wl`,
+		`[[1]] (n! $"{@n}") map len wl`,
+		`[1 2] ($"{"a" +}") map unlines wl`,
+		`[1 2] map. $"<{1 +}>" end len wl`,
+		`[1 2] ($"{dup}") map`,
+		`def g (a -- str) x! $"{@x}" end 3 g wl`,
+	} {
+		if errs, ok := parseAndCheck(t, src); ok {
+			t.Errorf("expected %q to fail; errs=%v", src, errs)
+		}
 	}
 }

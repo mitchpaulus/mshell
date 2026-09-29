@@ -9,6 +9,95 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The file manager previews PNG, JPEG, and GIF images in terminals that support sixel graphics, such as Windows Terminal, WezTerm, foot, and xterm.
+  Other terminals show the image format and size in pixels.
+  If images look stretched, set `MSH_CELL_PIXELS` to the real size of a text cell in pixels, such as `9x20`.
+  Windows Terminal always reports 10x20 cells whatever the font, so images there can be slightly squeezed without it.
+- The file manager preview shows PDF details: version, page count, page size, encryption, and document info such as title and author.
+  It reads only the parts of the file that hold this, so it stays fast on large PDFs.
+- On Windows, the file manager shows OneDrive status in cloud sync folders:
+  `☁` cloud only, `✓` on this device, `●` always keep on this device, `↻` syncing, `✗` sync error.
+  Folders show the same status as in Explorer.
+  Cloud only files are not previewed, so scrolling past them no longer downloads them.
+- The file manager shows file sizes in a column next to the file names, in `ls -h` style (`556`, `5.4K`, `41K`, `1.2M`).
+  Each unit has its own color: bytes dim, kilobytes plain, megabytes cyan, gigabytes yellow, and larger magenta.
+  Directories have no size.
+- Completion definitions can return a dictionary instead of a list, to choose what Tab offers:
+  `values`, files matching glob patterns (`files`), preferred files with a fallback to the rest (`preferredFiles`), directories only (`dirs`), or executables on the path (`binaries`).
+- `\{` and `\}` escapes in double quoted strings and format strings, for literal braces.
+
+### Changed
+
+- Format string interpolations can hold any code: string literals, dictionaries, and nested format strings all work inside `{...}`.
+  Interpolations are parsed once when the script is read, not each time the string is built,
+  and errors inside them point at the right line and column.
+  The type checker now also checks that each interpolation produces a `str`, `path`, or `int`.
+- Tab completion of file names is faster, especially in large directories, and symbolic links to directories complete with a trailing separator.
+- `sudo` completion offers executables from the path much faster.
+- Grid `groupBy` and `pivot` are faster: `groupBy` is 2-6x faster on a 5.4 million row table.
+  Grid string columns with many repeated values use about a third of the memory.
+
+- `seq` is now built in and much faster: about 25x faster and a third of the memory for 10 million items.
+- The file manager preview no longer times out after 3 seconds.
+  The timeout existed for OneDrive files, which are now detected and skipped instead.
+- `stdin` fails if the input exceeds `MSH_READ_LIMIT` bytes (default 104857600, `0` for no limit).
+- Scripts run faster, especially calls to definitions and quotations run by functions like `each`, `map`, and `filter`.
+  Calling a definition allocates less than half as much, and looking up a built-in function no longer slows down the later it appears in the list.
+  String, number, and date/time literals are decoded once when the script is read, not each time they run.
+- `join` is faster, and `unlines` and `unlinesCrLf` are now built in and much faster: about 80x faster on a list of a million strings.
+- `return` is only allowed directly in a definition, or in the body of an `if` or `match` there.
+  Anywhere else is now an error: inside a quotation (including ones run by `x`, `iff`, `loop`, or `each`),
+  a list or dict literal, an else-if condition, or a grid cell.
+  These are the places where the type checker can check what `return` leaves against the definition's outputs.
+  Write `cond (value return) iff` as `cond if value return end`, and leave a loop early with `break`.
+- The type checker rejects a `return` that leaves more values than the definition declares,
+  such as `def name (-- str) 5 "a" return end`.
+
+### Security
+
+- Terminal replies that are strings (OSC, DCS, APC, PM, SOS), such as colour or version reports,
+  are consumed and dropped by the interactive editor instead of being typed into the command,
+  where their text could trigger key chords.
+- The prompt no longer writes the working directory to the terminal raw.
+  Control bytes in a directory name display as caret notation, and the OSC 7 directory report
+  percent-encodes the path, so a directory name can no longer inject terminal queries.
+- Error messages escape control bytes from quoted input and file names.
+
+### Fixed
+
+- The type checker now checks list literals, dict values, and grid cells on their own empty stack, as they run.
+  Code like `1 [drop]` or `1 {a: drop}` is a type error instead of a type checker crash or a pass that fails at runtime,
+  and a dict value must produce exactly one value (#341).
+- `utcToCst` and `cstToUtc` no longer change their input. Previously, a variable passed to them was also changed to the converted time.
+- A terminal resize no longer prints another prompt. The prompt and command are redrawn
+  in place at the new width.
+  In particular, a new Windows Terminal pane reports its parent's size until the first key
+  arrives, which used to print a duplicate prompt on that first keystroke.
+  Set `MSHREFLOW=0` for terminals such as xterm that do not rejoin wrapped rows on resize.
+- The OSC 7 working-directory report is now actually emitted; a reversed check meant it was
+  only sent when the hostname lookup failed.
+- `toDt` no longer guesses the order of ambiguous numeric dates.
+  Every date is tried as year-month-day, month-day-year, and day-month-year.
+  A single valid reading is accepted, so `12/16/25` and `16/06/2025` now parse
+  (`12/16/25` previously became `2013-04-25`). When several readings are valid, like
+  `01/02/2026`, the order learned from the most recent unambiguous non-ISO date in the same
+  evaluation is used. With no such evidence the result is `none`, where it previously
+  assumed US month/day/year. Dates with a leading four digit year are unaffected.
+- `toDt` now returns `none` for out of range components such as month 13, Feb 30, or hour 25,
+  instead of silently rolling them over into the next month or day.
+- `return` inside an `if` or `match` now leaves the whole definition when the definition was called from a quotation run by a function like `map` or `each`.
+  It used to leave only the `if` or `match`, and the rest of the definition kept running.
+- A definition called as the last item of a redirected quotation run by `iff`, such as ``true (myDef) `out.txt` > iff``, now writes to the file.
+  The file used to be closed before the definition ran.
+
+### Added
+
+- Bracketed paste in the interactive editor: pasted multiline text, tabs, and key chords are inserted literally without executing commands.
+- Alt-Shift-R in the interactive editor forgets measured text widths and measures them again,
+  for use after reattaching from a different terminal or changing fonts.
+- HTTP cookie jars: pass a shared list as `cookieJar` to `httpGet` / `httpPost`.
+  Requests and responses reuse and update the same list, including across redirects,
+  with domain/path scoping, expiration, deletion, creation ordering, and JSON persistence.
 - Assertive destructuring with the `=>` operator.
   It consumes a list, dictionary, or Just value, binds its structural pattern names,
   and fails at runtime when the pattern does not match.
@@ -209,6 +298,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The interactive editor lays out and repaints commands from widths measured on the current terminal.
+  Long commands wrap across rows, wide and multi-codepoint clusters such as emoji stay whole,
+  tab and control bytes display safely, and completion rows repaint with the command.
+
+- A trailing comma after a comma-separated variable store list (`a!, b!,`) is now a parse error.
+  Commas also separate `match` arms, so the trailing comma was ambiguous.
+
 - A number immediately followed by a literal character now lexes as a single
   literal token instead of a float/int plus a separate literal, so bare file
   arguments like `redo 1.pdf` work. Floats still end at token-ending
@@ -279,6 +375,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Its stack effect depends on a runtime integer, so it could not be expressed in the static type checker, and it saw no real use.
 
 ### Fixed
+
+<<<<<<< HEAD
+- A command whose first token is a lexer error, such as a lone quote, no longer crashes the interactive shell. It reports the parse error and prompts again.
+- Interactive movement, word deletion, typing, and completion replacement respect grapheme boundaries, keeping combining accents and joined emoji intact.
+  Unicode aliases and multiline completion prefixes use the correct source positions; cycling completions preserves adjacent text even when it joins the inserted grapheme.
+=======
+- Unix command history is now private by default, with existing owned storage permissions repaired on load/save.
+  Unsafe history objects are rejected and permission errors are reported.
+>>>>>>> main
 
 - The type checker gave `index` and `lastIndexOf` a result type of `int`, but both
   return `Maybe[int]` at runtime (`none` when the substring is not found). The

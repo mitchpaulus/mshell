@@ -42,6 +42,8 @@ type lspServer struct {
 	envNames     map[string]struct{}
 	candsBuf     []string
 	stdlibDefs   []MShellDefinition
+	checkerBase     *CheckerBase // built from stdlibDefs on first use; see newChecker
+	checkerBaseOnce sync.Once
 	builtinSigs  map[string][]string // name -> formatted "(in -- out)" sigs from the type checker
 	stdlibHover  map[string][]string // name -> formatted sigs for stdlib defs
 }
@@ -521,6 +523,10 @@ func collectRuntimeListsFromItems(dst *[]*MShellParseList, items []MShellParseIt
 			}
 		case *MShellParseQuote:
 			collectRuntimeListsFromItems(dst, v.Items)
+		case *MShellParseFormatString:
+			for _, interpolation := range v.Interpolations {
+				collectRuntimeListsFromItems(dst, interpolation)
+			}
 		case *MShellParsePrefixQuote:
 			collectRuntimeListsFromItems(dst, v.Items)
 		case *MShellParseIfBlock:
@@ -727,6 +733,14 @@ func (s *lspServer) publishDiagnosticsFor(uri protocol.DocumentURI, text string)
 	}
 }
 
+// newChecker returns a type checker with the builtin and stdlib signatures
+// resolved. They are resolved once per server, and each check starts from
+// a copy, since diagnostics run on every edit and may run concurrently.
+func (s *lspServer) newChecker() *Checker {
+	s.checkerBaseOnce.Do(func() { s.checkerBase = NewCheckerBase(s.stdlibDefs) })
+	return s.checkerBase.NewChecker()
+}
+
 func (s *lspServer) computeDiagnostics(text string) []protocol.Diagnostic {
 	lexer := NewLexer(text, nil)
 	parser := NewMShellParser(lexer)
@@ -735,10 +749,8 @@ func (s *lspServer) computeDiagnostics(text string) []protocol.Diagnostic {
 		return []protocol.Diagnostic{parseErrorToDiagnostic(parseErr)}
 	}
 
-	arena := NewTypeArena()
-	names := NewNameTable()
-	checker := NewChecker(arena, names)
-	checker.RegisterStdlibSigs(s.stdlibDefs)
+	checker := s.newChecker()
+	arena, names := checker.arena, checker.names
 	checker.CheckProgram(file)
 
 	errs := checker.Errors()
@@ -1286,9 +1298,8 @@ func (s *lspServer) inFileDefSigs(text string) map[string][]string {
 	if len(file.Definitions) == 0 {
 		return nil
 	}
-	arena := NewTypeArena()
-	names := NewNameTable()
-	checker := NewChecker(arena, names)
+	checker := s.newChecker()
+	arena, names := checker.arena, checker.names
 	out := make(map[string][]string, len(file.Definitions))
 	for i := range file.Definitions {
 		def := &file.Definitions[i]
@@ -1464,6 +1475,10 @@ func collectTokensFromItems(dst *[]Token, items []MShellParseItem) {
 			}
 		case *MShellParseQuote:
 			collectTokensFromItems(dst, v.Items)
+		case *MShellParseFormatString:
+			for _, interpolation := range v.Interpolations {
+				collectTokensFromItems(dst, interpolation)
+			}
 		case *MShellIndexerList:
 			collectTokensFromItems(dst, v.Indexers)
 		case MShellVarstoreList:

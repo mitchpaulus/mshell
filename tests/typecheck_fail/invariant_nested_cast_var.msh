@@ -1,0 +1,2 @@
+# Static: @x is referenced elsewhere, so the nested list cannot widen
+["a"] x! [@x [1]] as [[int | str]] len wl

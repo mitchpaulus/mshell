@@ -1,0 +1,1 @@
+Error parsing file stdin: 2:4: Definitions are not allowed inside a format string interpolation.

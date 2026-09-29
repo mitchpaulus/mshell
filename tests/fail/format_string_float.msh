@@ -1,0 +1,2 @@
+# A float must be converted before it is interpolated.
+$"value: {1.5}" wl

@@ -3,6 +3,8 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/xml"
+	"strings"
 	"testing"
 )
 
@@ -159,5 +161,44 @@ func TestParseExcelBytes(t *testing.T) {
 	srow := summary.Items[0].(*MShellList)
 	if s, ok := srow.Items[0].(MShellString); !ok || s.Content != "OK" {
 		t.Errorf("Summary A1 formula-string: got %v", srow.Items[0])
+	}
+}
+
+func sheetFromXML(t *testing.T, sheetData string) *xlsxWorksheet {
+	t.Helper()
+	var ws xlsxWorksheet
+	if err := xml.Unmarshal([]byte(`<worksheet><sheetData>`+sheetData+`</sheetData></worksheet>`), &ws); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	return &ws
+}
+
+func TestWorksheetToRowsBounds(t *testing.T) {
+	cases := []struct {
+		name    string
+		xml     string
+		wantErr string
+	}{
+		{"negative row", `<row r="-5"><c r="A1"><v>1</v></c></row>`, "invalid row number -5"},
+		{"row past limit", `<row r="1048577"><c r="A1"><v>1</v></c></row>`, "invalid row number 1048577"},
+		{"last row", `<row r="1048576"><c r="A1048576"><v>1</v></c></row>`, ""},
+		{"last column", `<row r="1"><c r="XFD1"><v>1</v></c></row>`, ""},
+		{"column past limit", `<row r="1"><c r="XFE1"><v>1</v></c></row>`, "invalid column"},
+		{"overflowing column", `<row r="1"><c r="AAAAAAAAAAAAAAAAAAAA1"><v>1</v></c></row>`, "invalid column"},
+		{"sparse cells over cap", `<row r="1"><c r="A1"><v>1</v></c></row><row r="1000000"><c r="ZZ1000000"><v>1</v></c></row>`, "cell limit"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := worksheetToRows(sheetFromXML(t, tc.xml), nil)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+			}
+		})
 	}
 }

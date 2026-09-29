@@ -1,0 +1,3 @@
+# An exit from a definition called in an interpolation cannot leave it.
+def die (--) 3 exit end
+$"{die 1}" wl

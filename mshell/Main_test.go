@@ -1,11 +1,367 @@
 package main
 
 import (
+	"bytes"
+	"errors"
+	"io"
+	"github.com/rivo/uniseg"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
+	"strings"
+	"slices"
 )
+
+func TestParseCursorReport(t *testing.T) {
+	valid := []struct {
+		params string
+		want CursorReport
+	}{
+		{"1;1", CursorReport{Row: 1, Column: 1}},
+		{"12;34", CursorReport{Row: 12, Column: 34}},
+		{"3;5", CursorReport{Row: 3, Column: 5}},
+		{"0001;0020", CursorReport{Row: 1, Column: 20}},
+		{"9999;9999", CursorReport{Row: 9999, Column: 9999}},
+	}
+	for _, tt := range valid {
+		t.Run(tt.params, func(t *testing.T) {
+			got, err := parseCursorReport(CsiToken{FinalChar: 'R', Params: []byte(tt.params)})
+			if err != nil || got != tt.want {
+				t.Fatalf("got %+v, error %v; want %+v", got, err, tt.want)
+			}
+		})
+	}
+
+	invalid := []string{
+		"", "1", ";", ";1", "1;", "1;2;3", "1;;2", "1;2;",
+		"0;1", "1;0", "000;1", "1;000",
+		"-1;2", "1;-2", "+1;2", "1;+2", " 1;2", "1;2 ",
+		"1:2", "?1;2", "1;2\n", "1;\x00", "1;\xff", "１;2",
+		"10000;1", "1;10000", "99990;1", "1;99990",
+		strings.Repeat("9", 100) + ";1", "1;" + strings.Repeat("9", 100),
+	}
+	for _, params := range invalid {
+		t.Run(params, func(t *testing.T) {
+			got, err := parseCursorReport(CsiToken{FinalChar: 'R', Params: []byte(params)})
+			if err == nil || got != (CursorReport{}) {
+				t.Fatalf("invalid report returned %+v, error %v", got, err)
+			}
+		})
+	}
+	if got, err := parseCursorReport(CsiToken{FinalChar: '~', Params: []byte("3;5")}); err == nil || got != (CursorReport{}) {
+		t.Fatalf("Delete key parsed as report: %+v, error %v", got, err)
+	}
+}
+
+func TestWidthFromCursorReport(t *testing.T) {
+	tests := []struct {
+		name string
+		row OneBasedTerminalCoord
+		column OneBasedTerminalCoord
+		scratchRow OneBasedTerminalCoord
+		want Cells // Zero means an error is expected.
+	}{
+		{"one cell", 5, 2, 5, 1},
+		{"two cells", 5, 3, 5, 2},
+		{"last supported row", 9999, 3, 9999, 2},
+		{"no advance", 5, 1, 5, 0},
+		{"too wide", 5, 4, 5, 0},
+		{"wrong row", 6, 2, 5, 0},
+		{"zero column", 5, 0, 5, 0},
+		{"negative column", 5, -1, 5, 0},
+		{"zero scratch row", 0, 2, 0, 0},
+		{"negative scratch row", -1, 2, -1, 0},
+		{"oversized scratch row", 10000, 2, 10000, 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			report := CursorReport{Row: tt.row, Column: tt.column}
+			got, err := widthFromCursorReport(report, tt.scratchRow, 2)
+
+			if tt.want == 0 {
+				if err == nil || got != 0 {
+					t.Fatalf("got width %d, error %v; want rejection", got, err)
+				}
+				return
+			}
+
+			if err != nil || got != tt.want {
+				t.Fatalf("got width %d, error %v; want %d", got, err, tt.want)
+			}
+		})
+	}
+}
+
+func TestWidthProbeBatchFailureIsSticky(t *testing.T) {
+	batch := WidthProbeBatch{
+		ScratchRow: 5,
+		Candidates: []string{"é", "世", "界"},
+	}
+
+	err := batch.acceptReply(CsiToken{FinalChar: 'R', Params: []byte("5;2")})
+	if err != nil {
+		t.Fatalf("first reply failed: %v", err)
+	}
+
+	// A valid width reported on the wrong row rejects the batch.
+	firstFailure := batch.acceptReply(CsiToken{FinalChar: 'R', Params: []byte("6;3")})
+	if firstFailure == nil {
+		t.Fatal("wrong-row reply was accepted")
+	}
+
+	// A later valid reply must not revive the failed batch.
+	err = batch.acceptReply(CsiToken{FinalChar: 'R', Params: []byte("5;3")})
+	if err != firstFailure || batch.Failure != firstFailure {
+		t.Fatal("batch did not preserve its first failure")
+	}
+	if !slices.Equal(batch.Widths, []Cells{1}) {
+		t.Fatalf("staged widths = %v, want [1]", batch.Widths)
+	}
+	if batch.RepliesReceived != 3 {
+		t.Fatalf("received %d replies, want 3", batch.RepliesReceived)
+	}
+}
+
+func TestWidthProbeLearnsScratchRow(t *testing.T) {
+	for _, replies := range [][]string{{"3;2", "3;3"}, {"1;2", "1;3"}, {"6;2", "6;3"}, {"3;2", "4;3"}} {
+		batch := WidthProbeBatch{ScratchMinRow: 2, ScratchMaxRow: 5, Candidates: []string{"é", "世"}}
+		for _, reply := range replies { batch.acceptReply(CsiToken{FinalChar: 'R', Params: []byte(reply)}) }
+		wantSuccess := replies[0] == "3;2" && replies[1] == "3;3"
+		if (batch.Failure == nil) != wantSuccess { t.Fatalf("replies %v: failure %v", replies, batch.Failure) }
+		if batch.RepliesReceived != 2 { t.Fatal("failed batch did not drain") }
+	}
+}
+
+func TestQueuedInputLookahead(t *testing.T) {
+	state := TermState{
+		queuedInput: []TerminalToken{
+			AsciiToken{Char: 'j'},
+			AsciiToken{Char: 'x'},
+		},
+		stdInState: &StdinReaderState{
+			array: []byte{'z'},
+			n: 1,
+		},
+	}
+
+	token, err := state.readInputToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	end, err := state.HandleToken(token)
+	if err != nil || end {
+		t.Fatalf("HandleToken: end=%v, err=%v", end, err)
+	}
+
+	if got := string(state.currentCommand); got != "jx" {
+		t.Fatalf("command = %q, want jx", got)
+	}
+	if len(state.queuedInput) != 0 || state.queuedInputIndex != 0 {
+		t.Fatal("consumed queue was not reset")
+	}
+	if state.stdInState.i != 0 {
+		t.Fatal("lookahead consumed terminal input before queued input")
+	}
+
+	token, err = state.readInputToken()
+	if err != nil || token != (AsciiToken{Char: 'z'}) {
+		t.Fatalf("next token = %v, err=%v; want z", token, err)
+	}
+}
+
+func TestRightArrowGraphemeBoundaries(t *testing.T) {
+	tests := []struct {
+		name string
+		command string
+		cursor int
+		want int
+	}{
+		{"empty", "", 0, 0},
+		{"ascii", "abc", 1, 2},
+		{"end", "abc", 3, 3},
+		{"combining accent", "e\u0301x", 0, 2},
+		{"inside combining cluster", "e\u0301x", 1, 2},
+		{"after combining cluster", "e\u0301x", 2, 3},
+		{"wide rune", "世x", 0, 1},
+		{"joined emoji", "\U0001F469\u200D\U0001F4BBx", 0, 3},
+		{"inside flag", "\U0001F1FA\U0001F1F8\U0001F1E8\U0001F1E6", 1, 2},
+		{"second flag", "\U0001F1FA\U0001F1F8\U0001F1E8\U0001F1E6", 2, 4},
+		{"hard break", "a\r\nb", 1, 3},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state := TermState{
+				currentCommand: SourceText(tt.command),
+				index: sourceByteOffset(SourceText(tt.command), tt.cursor),
+			}
+			end, err := state.HandleToken(KEY_RIGHT)
+			if err != nil || end {
+				t.Fatalf("HandleToken: end=%v, err=%v", end, err)
+			}
+			if state.index != sourceByteOffset(SourceText(tt.command), tt.want) {
+				t.Fatalf("cursor = %d, want %d", state.index, tt.want)
+			}
+			if string(state.currentCommand) != tt.command {
+				t.Fatal("Right Arrow changed the command")
+			}
+		})
+	}
+}
+
+func TestLeftMovementGraphemeBoundaries(t *testing.T) {
+	tests := []struct {
+		name string
+		command string
+		cursor int
+		want int
+	}{
+		{"empty", "", 0, 0},
+		{"start", "abc", 0, 0},
+		{"ascii", "abc", 2, 1},
+		{"combining accent", "e\u0301x", 2, 0},
+		{"inside combining cluster", "e\u0301x", 1, 0},
+		{"after combining cluster", "e\u0301x", 3, 2},
+		{"wide rune", "世x", 1, 0},
+		{"joined emoji", "\U0001F469\u200D\U0001F4BBx", 3, 0},
+		{"inside flag", "\U0001F1FA\U0001F1F8\U0001F1E8\U0001F1E6", 3, 2},
+		{"second flag", "\U0001F1FA\U0001F1F8\U0001F1E8\U0001F1E6", 4, 2},
+		{"hard break", "a\r\nb", 3, 1},
+	}
+	for _, token := range []TerminalToken{KEY_LEFT, AsciiToken{Char: 2}} {
+		for _, tt := range tests {
+			t.Run(token.String()+"/"+tt.name, func(t *testing.T) {
+				_, ctrlB := token.(AsciiToken)
+				state := TermState{
+					currentCommand: SourceText(tt.command),
+					index: sourceByteOffset(SourceText(tt.command), tt.cursor),
+					tabCycleActive: ctrlB,
+				}
+				end, err := state.HandleToken(token)
+				if err != nil || end {
+					t.Fatalf("HandleToken: end=%v, err=%v", end, err)
+				}
+				if state.index != sourceByteOffset(SourceText(tt.command), tt.want) {
+					t.Fatalf("cursor = %d, want %d", state.index, tt.want)
+				}
+				if string(state.currentCommand) != tt.command {
+					t.Fatal("left movement changed the command")
+				}
+				if state.tabCycleActive {
+					t.Fatal("Ctrl-B did not leave tab-cycle mode")
+				}
+			})
+		}
+	}
+}
+
+func TestCtrlFGraphemeMovementAndHistory(t *testing.T) {
+	tests := []struct {
+		name string
+		cursor int
+		wantCursor int
+		wantCommand string
+	}{
+		{"move across accent", 0, 2, "e\u0301"},
+		{"accept history at end", 2, 3, "e\u0301x"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state := TermState{
+				currentCommand: "e\u0301",
+				index: sourceByteOffset(SourceText("e\u0301"), tt.cursor),
+				historyComplete: "e\u0301x",
+				tabCycleActive: true,
+			}
+			end, err := state.HandleToken(AsciiToken{Char: 6})
+			if err != nil || end {
+				t.Fatalf("HandleToken: end=%v, err=%v", end, err)
+			}
+			if state.index != sourceByteOffset(SourceText(tt.wantCommand), tt.wantCursor) || string(state.currentCommand) != tt.wantCommand {
+				t.Fatalf("command=%q cursor=%d; want command=%q cursor=%d",
+					string(state.currentCommand), state.index, tt.wantCommand, tt.wantCursor)
+			}
+			if state.tabCycleActive {
+				t.Fatal("Ctrl-F did not leave tab-cycle mode")
+			}
+		})
+	}
+}
+
+func TestGraphemeDeletion(t *testing.T) {
+	tests := []struct {
+		name string
+		command string
+		backspaceCursor int
+		deleteCursor int
+		wantCommand string
+		wantCursor int
+	}{
+		{"ascii", "abc", 2, 1, "ac", 1},
+		{"accent", "ae\u0301b", 3, 1, "ab", 1},
+		{"inside accent", "ae\u0301b", 2, 2, "ab", 1},
+		{"wide rune", "a世b", 2, 1, "ab", 1},
+		{"joined emoji", "a\U0001F469\u200D\U0001F4BBb", 4, 1, "ab", 1},
+		{"flag", "a\U0001F1FA\U0001F1F8b", 3, 1, "ab", 1},
+		{"skin tone", "a\U0001F44D\U0001F3FDb", 3, 1, "ab", 1},
+		{"variation selector", "a\u2764\uFE0Fb", 3, 1, "ab", 1},
+		{"CRLF", "a\r\nb", 3, 1, "ab", 1},
+		{"standalone accent", "\u0301x", 1, 0, "x", 0},
+		{"whole command", "e\u0301", 2, 0, "", 0},
+		{"last cluster", "ae\u0301", 3, 1, "a", 1},
+		{"joining accent", "a\n\u0301", 2, 1, "a\u0301", 2},
+		{"joining flag", "\U0001F1E6x\U0001F1E7", 2, 1, "\U0001F1E6\U0001F1E7", 2},
+	}
+	for _, token := range []TerminalToken{AsciiToken{Char: 127}, KEY_DELETE} {
+		for _, tt := range tests {
+			t.Run(token.String()+"/"+tt.name, func(t *testing.T) {
+				cursor := tt.deleteCursor
+				if _, backspace := token.(AsciiToken); backspace {
+					cursor = tt.backspaceCursor
+				}
+				state := TermState{
+					currentCommand: SourceText(tt.command),
+					index: sourceByteOffset(SourceText(tt.command), cursor),
+					tabCycleActive: true,
+					historySearchActive: true,
+					historySearchPrefix: "old prefix",
+				}
+				end, err := state.HandleToken(token)
+				if err != nil || end {
+					t.Fatalf("HandleToken: end=%v, err=%v", end, err)
+				}
+				if string(state.currentCommand) != tt.wantCommand || state.index != sourceByteOffset(SourceText(tt.wantCommand), tt.wantCursor) {
+					t.Fatalf("command=%q cursor=%d; want command=%q cursor=%d",
+						string(state.currentCommand), state.index, tt.wantCommand, tt.wantCursor)
+				}
+				if state.tabCycleActive || state.historySearchActive || state.historySearchPrefix != "" {
+					t.Fatal("deletion did not reset completion and history search")
+				}
+			})
+		}
+	}
+}
+
+func TestGraphemeDeletionAtBufferEdges(t *testing.T) {
+	for _, command := range []string{"", "e\u0301"} {
+		for _, token := range []TerminalToken{AsciiToken{Char: 127}, KEY_DELETE} {
+			t.Run(token.String()+"/"+command, func(t *testing.T) {
+				cursor := ByteOffset(0)
+				if token == KEY_DELETE {
+					cursor = ByteOffset(len(command))
+				}
+				state := TermState{currentCommand: SourceText(command), index: cursor}
+				end, err := state.HandleToken(token)
+				if err != nil || end || string(state.currentCommand) != command || state.index != cursor {
+					t.Fatalf("edge deletion: command=%q cursor=%d end=%v err=%v",
+						string(state.currentCommand), state.index, end, err)
+				}
+			})
+		}
+	}
+}
 
 func TestHistory(t *testing.T) {
 	path := "test.mshell_history"
@@ -72,9 +428,9 @@ func TestBuildSharedCompletionInsertUsesBacktickForFilePrefixes(t *testing.T) {
 
 func TestDefaultAppCommandFallsBackToPlatformDefault(t *testing.T) {
 	tests := []struct {
-		goos       string
-		wantName   string
-		wantArgs   []string
+		goos     string
+		wantName string
+		wantArgs []string
 	}{
 		{goos: "linux", wantName: "xdg-open", wantArgs: []string{"/tmp/init.msh"}},
 		{goos: "darwin", wantName: "open", wantArgs: []string{"/tmp/init.msh"}},
@@ -188,5 +544,695 @@ func TestRunEditCommandUsesMSHINITOverride(t *testing.T) {
 	wantArgs := []string{overridePath}
 	if !reflect.DeepEqual(gotArgs, wantArgs) {
 		t.Fatalf("args = %v, want %v", gotArgs, wantArgs)
+	}
+}
+
+func TestClusterSegmentation(t *testing.T) {
+	// Two flags must segment as two 2-rune clusters, not one 4-rune blob.
+	var got []string
+	s := "🇺🇸🇺🇸"
+	state := -1
+	var cl string
+	for len(s) > 0 {
+		cl, s, _, state = uniseg.FirstGraphemeClusterInString(s, state)
+		got = append(got, cl)
+	}
+	if len(got) != 2 || got[0] != "🇺🇸" || got[1] != "🇺🇸" {
+		t.Errorf("flag clusters = %q, want two flags", got)
+	}
+}
+
+func TestAsciiAtomsInto(t *testing.T) {
+	command := SourceText("a\t\x1a\n")
+	got, allAscii := asciiAtomsInto(nil, command)
+	if !allAscii {
+		t.Fatal("seven-bit source should use the Ascii atomizer")
+	}
+
+	want := []DisplayAtom{
+		{SourceStart: 0, SourceEnd: 1, Width: 1, RequiredCells: 1, Kind: AtomAscii},
+		{SourceStart: 1, SourceEnd: 2, Width: UnresolvedWidth, RequiredCells: UnresolvedWidth, Kind: AtomControl},
+		{SourceStart: 2, SourceEnd: 3, Width: 2, RequiredCells: 2, Kind: AtomControl},
+		{SourceStart: 3, SourceEnd: 4, Width: 0, Kind: AtomHardBreak},
+	}
+
+	if !slices.Equal(got, want) {
+		t.Errorf("atoms = %+v, want %+v", got, want)
+	}
+
+	wantText := []string{"a", "\u25B8", "^Z", ""}
+	for i, atom := range got {
+		if s := atom.displayText(command); s != wantText[i] {
+			t.Errorf("atom %d displayText = %q, want %q", i, s, wantText[i])
+		}
+	}
+
+	got, allAscii = asciiAtomsInto(got, SourceText("a\r\nb"))
+	wantCRLF := []DisplayAtom{
+		{SourceStart: 0, SourceEnd: 1, Width: 1, RequiredCells: 1, Kind: AtomAscii},
+		{SourceStart: 1, SourceEnd: 3, Width: 0, Kind: AtomHardBreak},
+		{SourceStart: 3, SourceEnd: 4, Width: 1, RequiredCells: 1, Kind: AtomAscii},
+	}
+	if !allAscii || !slices.Equal(got, wantCRLF) {
+		t.Errorf("crlf atoms = %+v, want %+v", got, wantCRLF)
+	}
+
+	got, allAscii = asciiAtomsInto(got, SourceText("a\u00e9"))
+	if allAscii || len(got) != 0 {
+		t.Errorf("non-ASCII input returned atoms=%+v, ok=%v", got, allAscii)
+	}
+}
+
+func testWidthLookup(widths map[string]int) func(string) int {
+	return func(cluster string) int {
+		if len(cluster) == 1 && cluster[0] >= 0x20 && cluster[0] <= 0x7e {
+			return 1
+		}
+
+		width, ok := widths[cluster]
+		if !ok {
+			panic("missing test width for cluster: " + cluster)
+		}
+		return width
+	}
+}
+
+func sumTestWidths(text string, widthOf func(string) int) int {
+	total := 0
+	state := -1
+
+	for len(text) > 0 {
+		cluster, rest, _, nextState := uniseg.FirstGraphemeClusterInString(text, state)
+		total += widthOf(cluster)
+		text = rest
+		state = nextState
+	}
+
+	return total
+}
+
+func TestPrintableAsciiLayout(t *testing.T) {
+	// Five columns, with the prompt occupying the first three.
+	r := layoutPrintableAsciiInto(nil, "ab", 2, 3, 5)
+	want := []LayoutRow{
+		{Text: "ab", Width: 2, EndType: RowEndFinal},
+	}
+	if !slices.Equal(r.Rows, want) {
+		t.Fatalf("rows = %+v, want %+v", r.Rows, want)
+	}
+	if r.CursorRow != 0 || r.CursorCol != 5 || !r.PendingWrap {
+		t.Errorf("exact fill = %+v", r)
+	}
+
+	// More text makes the same cursor offset belong to the next row.
+	r = layoutPrintableAsciiInto(nil, "abc", 2, 3, 5)
+	want = []LayoutRow{
+		{Text: "ab", Width: 2, EndType: RowEndSoftExact},
+		{Text: "c", Width: 1, EndType: RowEndFinal},
+	}
+	if !slices.Equal(r.Rows, want) {
+		t.Fatalf("rows = %+v, want %+v", r.Rows, want)
+	}
+	if r.CursorRow != 1 || r.CursorCol != 0 || r.PendingWrap {
+		t.Errorf("wrap boundary = %+v", r)
+	}
+
+	// Empty input keeps the cursor immediately after the prompt.
+	r = layoutPrintableAsciiInto(nil, "", 0, 3, 5)
+	want = []LayoutRow{
+		{Text: "", Width: 0, EndType: RowEndFinal},
+	}
+	if !slices.Equal(r.Rows, want) {
+		t.Fatalf("rows = %+v, want %+v", r.Rows, want)
+	}
+	if r.CursorRow != 0 || r.CursorCol != 3 || r.PendingWrap {
+		t.Errorf("empty command = %+v", r)
+	}
+}
+
+func TestSegmentAtomsInto(t *testing.T) {
+	command := SourceText("e\u0301\t\r\n\x00\xff\u0085🇺🇸🇺🇸")
+	got := segmentAtomsInto(nil, command)
+	want := []DisplayAtom{
+		{SourceStart: 0, SourceEnd: 3, Width: UnresolvedWidth, RequiredCells: UnresolvedWidth, Kind: AtomGrapheme},   // e + combining acute
+		{SourceStart: 3, SourceEnd: 4, Width: UnresolvedWidth, RequiredCells: UnresolvedWidth, Kind: AtomControl},    // tab
+		{SourceStart: 4, SourceEnd: 6, Width: 0, Kind: AtomHardBreak},                // \r\n
+		{SourceStart: 6, SourceEnd: 7, Width: 2, RequiredCells: 2, Kind: AtomControl},                  // NUL
+		{SourceStart: 7, SourceEnd: 8, Width: 1, RequiredCells: 1, Kind: AtomPlaceholder},              // invalid byte
+		{SourceStart: 8, SourceEnd: 10, Width: 1, RequiredCells: 1, Kind: AtomPlaceholder},             // C1 NEL
+		{SourceStart: 10, SourceEnd: 18, Width: UnresolvedWidth, RequiredCells: UnresolvedWidth, Kind: AtomGrapheme}, // first flag
+		{SourceStart: 18, SourceEnd: 26, Width: UnresolvedWidth, RequiredCells: UnresolvedWidth, Kind: AtomGrapheme}, // second flag
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("atoms = %+v, want %+v", got, want)
+	}
+
+	wantText := []string{"e\u0301", "\u25B8", "", "^@", "?", "?", "🇺🇸", "🇺🇸"}
+	for i, atom := range got {
+		if s := atom.displayText(command); s != wantText[i] {
+			t.Errorf("atom %d displayText = %q, want %q", i, s, wantText[i])
+		}
+	}
+
+	// Both atomizers agree on seven-bit input.
+	ascii := SourceText("a\t\x1a\r\nb\x7f")
+	fromAscii, ok := asciiAtomsInto(nil, ascii)
+	if !ok {
+		t.Fatal("expected seven-bit input")
+	}
+	if fromGeneral := segmentAtomsInto(nil, ascii); !slices.Equal(fromAscii, fromGeneral) {
+		t.Errorf("ascii path %+v != general path %+v", fromAscii, fromGeneral)
+	}
+}
+
+func TestWidthResolution(t *testing.T) {
+	command := SourceText("😀😀🚀🍕\n")
+	atoms := segmentAtomsInto(nil, command)
+	original := slices.Clone(atoms)
+	cache := &WidthCache{}
+
+	if !cache.remember("🚀", 2) {
+		t.Fatal("could not cache rocket width")
+	}
+
+	eligilibily := &CandidateEligibilityCache{}
+	misses := resolveCachedWidths(nil, command, atoms, cache, eligilibily, 80)
+	if !slices.Equal(misses, []string{"😀", "🍕"}) {
+		t.Fatalf("misses = %q, want smile and pizza once each", misses)
+	}
+	if atoms[2].Width != 2 {
+		t.Error("cached rocket width was not applied")
+	}
+
+	// Simulate successful measurement of the smile, but not the pizza.
+	if !cache.remember("😀", 2) {
+		t.Fatal("could not cache smile width")
+	}
+	finishWidthResolution(command, atoms, cache)
+
+	wantWidths := []Cells{2, 2, 2, 1, 0}
+	for i, atom := range atoms {
+		if atom.Width != wantWidths[i] {
+			t.Errorf("atom %d width = %d, want %d", i, atom.Width, wantWidths[i])
+		}
+		if atom.SourceStart != original[i].SourceStart ||
+			atom.SourceEnd != original[i].SourceEnd {
+			t.Errorf("atom %d source range changed", i)
+		}
+
+		wantKind := original[i].Kind
+		if i == 3 {
+			wantKind = AtomPlaceholder
+		}
+		if atom.Kind != wantKind {
+			t.Errorf("atom %d kind = %v, want %v", i, atom.Kind, wantKind)
+		}
+	}
+}
+
+func TestWidthResolutionCandidateEligibility(t *testing.T) {
+	command := SourceText("\u0301 e\u0301")
+	atoms := segmentAtomsInto(nil, command)
+	original := slices.Clone(atoms)
+	cache := &WidthCache{}
+	eligibility := &CandidateEligibilityCache{}
+
+	misses := resolveCachedWidths(nil, command, atoms, cache, eligibility, 80)
+	if !slices.Equal(misses, []string{"e\u0301"}) {
+		t.Fatalf("misses = %q, want only the accent with its base", misses)
+	}
+
+	if atoms[0].Kind != AtomPlaceholder || atoms[0].Width != 1 {
+		t.Fatalf("standalone accent was not replaced: %+v", atoms[0])
+	}
+	if atoms[0].displayText(command) != placeholderGlyph {
+		t.Fatal("standalone accent would be painted raw")
+	}
+
+	for candidate, want := range map[string]bool{
+		"\u0301": false,
+		"e\u0301": true,
+	} {
+		got, found := eligibility.Entries[candidate]
+		if !found || got != want {
+			t.Errorf("eligibility[%q] = %v, found %v; want %v",
+				candidate, got, found, want)
+		}
+	}
+
+	for i, atom := range atoms {
+		if atom.SourceStart != original[i].SourceStart ||
+			atom.SourceEnd != original[i].SourceEnd {
+			t.Errorf("atom %d source range changed", i)
+		}
+	}
+}
+
+func TestLayoutAtomsHardBreakCursor(t *testing.T) {
+	// The prompt occupies three of five columns.
+	// "ab" fills row zero; the newline creates an empty final row.
+	atoms := segmentAtomsInto(nil, SourceText("ab\n"))
+
+	wantRows := []LayoutRow{
+		{AtomStart: 0, AtomEnd: 2, Width: 2, EndType: RowEndHard},
+		{AtomStart: 3, AtomEnd: 3, Width: 0, EndType: RowEndFinal},
+	}
+
+	tests := []struct {
+		name   string
+		cursor ByteOffset
+		row    RowIndex
+		col    Cells
+	}{
+		{"before a", 0, 0, 3},
+		{"before b", 1, 0, 4},
+		{"before newline", 2, 0, 5},
+		{"after newline", 3, 1, 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := layoutAtomsInto(nil, atoms, tt.cursor, 3, 5)
+
+			if !slices.Equal(got.Rows, wantRows) {
+				t.Fatalf("rows = %+v, want %+v", got.Rows, wantRows)
+			}
+			if got.CursorRow != tt.row || got.CursorCol != tt.col {
+				t.Errorf("cursor = (%d, %d), want (%d, %d)",
+					got.CursorRow, got.CursorCol, tt.row, tt.col)
+			}
+			if got.PendingWrap {
+				t.Error("empty final row must not have pending wrap")
+			}
+		})
+	}
+}
+
+func TestLayoutAtomsForcedWrapCursor(t *testing.T) {
+	// Explicit resolved widths isolate layout from segmentation and measurement.
+	atoms := []DisplayAtom{
+		{SourceStart: 0, SourceEnd: 1, Width: 1, RequiredCells: 1, Kind: AtomAscii},
+		{SourceStart: 1, SourceEnd: 4, Width: 2, RequiredCells: 3, Kind: AtomGrapheme},
+		{SourceStart: 4, SourceEnd: 5, Width: 1, RequiredCells: 1, Kind: AtomAscii},
+	}
+
+	wantRows := []LayoutRow{
+		{AtomStart: 0, AtomEnd: 1, Width: 1, EndType: RowEndForcedHardWrap},
+		{AtomStart: 1, AtomEnd: 3, Width: 3, EndType: RowEndFinal},
+	}
+
+	tests := []struct {
+		name   string
+		cursor ByteOffset
+		row    RowIndex
+		col    Cells
+	}{
+		{"before a", 0, 0, 3},
+		{"before wide atom", 1, 1, 0},
+		{"after wide atom", 4, 1, 2},
+		{"end of command", 5, 1, 3},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := layoutAtomsInto(nil, atoms, tt.cursor, 3, 5)
+
+			if !slices.Equal(got.Rows, wantRows) {
+				t.Fatalf("rows = %+v, want %+v", got.Rows, wantRows)
+			}
+			if got.CursorRow != tt.row || got.CursorCol != tt.col {
+				t.Errorf("cursor = (%d, %d), want (%d, %d)",
+					got.CursorRow, got.CursorCol, tt.row, tt.col)
+			}
+			if got.PendingWrap {
+				t.Error("partially filled final row must not have pending wrap")
+			}
+		})
+	}
+}
+
+func TestLayoutAtomsMatchesPrintableAscii(t *testing.T) {
+	for length := 0; length <= 20; length++ {
+		command := SourceText(strings.Repeat("x", length))
+		atoms := segmentAtomsInto(nil, command)
+
+		for columns := Cells(2); columns <= 8; columns++ {
+			for startCol := Cells(0); startCol < columns; startCol++ {
+				for cursor := ByteOffset(0); cursor <= ByteOffset(length); cursor++ {
+					direct := layoutPrintableAsciiInto(nil, command, cursor, startCol, columns)
+					general := layoutAtomsInto(nil, atoms, cursor, startCol, columns)
+
+					if direct.CursorRow != general.CursorRow ||
+						direct.CursorCol != general.CursorCol ||
+						direct.PendingWrap != general.PendingWrap {
+						t.Fatalf(
+							"length=%d columns=%d startCol=%d cursor=%d: direct=%+v general=%+v",
+							length, columns, startCol, cursor, direct, general)
+					}
+
+					if len(direct.Rows) != len(general.Rows) {
+						t.Fatalf("row count: direct=%d general=%d",
+							len(direct.Rows), len(general.Rows))
+					}
+
+					nextAtom := AtomIndex(0)
+					for i, want := range direct.Rows {
+						got := general.Rows[i]
+						endAtom := nextAtom + AtomIndex(len(want.Text))
+
+						if got.AtomStart != nextAtom || got.AtomEnd != endAtom ||
+							got.Width != want.Width || got.EndType != want.EndType {
+							t.Fatalf(
+								"length=%d columns=%d startCol=%d row=%d: direct=%+v general=%+v",
+								length, columns, startCol, i, want, got)
+						}
+
+						nextAtom = endAtom
+					}
+				}
+			}
+		}
+	}
+}
+
+// This test if the prompt basically filled the entire first row.
+func TestLayoutAtomsEmptyFirstRow(t *testing.T) {
+	atoms := []DisplayAtom{
+		{SourceStart: 0, SourceEnd: 3, Width: 2, RequiredCells: 3, Kind: AtomGrapheme},
+	}
+
+	got := layoutAtomsInto(nil, atoms, 0, 4, 5)
+
+	wantRows := []LayoutRow{
+		{AtomStart: 0, AtomEnd: 0, Width: 0, EndType: RowEndForcedHardWrap},
+		{AtomStart: 0, AtomEnd: 1, Width: 2, EndType: RowEndFinal},
+	}
+
+	if !slices.Equal(got.Rows, wantRows) {
+		t.Fatalf("rows = %+v, want %+v", got.Rows, wantRows)
+	}
+	if got.CursorRow != 1 || got.CursorCol != 0 {
+		t.Errorf("cursor = (%d, %d), want (1, 0)",
+			got.CursorRow, got.CursorCol)
+	}
+	if got.PendingWrap {
+		t.Error("partially filled final row must not have pending wrap")
+	}
+}
+
+func TestLayoutAtomsRejectsInvalidCursor(t *testing.T) {
+	// One complete grapheme: "e" + combining acute accent.
+	atoms := []DisplayAtom{
+		{SourceStart: 0, SourceEnd: 3, Width: 1, RequiredCells: 3, Kind: AtomGrapheme},
+	}
+
+	tests := []struct {
+		name   string
+		cursor ByteOffset
+	}{
+		{"negative offset", -1},
+		{"inside grapheme", 1},
+		{"inside UTF-8 codepoint", 2},
+		{"past source end", 4},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("cursor %d: expected panic", tt.cursor)
+				}
+			}()
+
+			layoutAtomsInto(nil, atoms, tt.cursor, 0, 5)
+		})
+	}
+}
+
+func TestBracketedPasteLiteralEdit(t *testing.T) {
+	tests := []struct {
+		name string
+		input string
+		want string
+	}{
+		{"empty", "", ""},
+		{"shortcuts", "jf ;r ;j\t\x03\x04\x7f", "jf ;r ;j\t\x03\x04\x7f"},
+		{"line endings", "one\r\ntwo\rthree\n", "one\ntwo\nthree\n"},
+		{"unicode", "世é👨‍👩‍👧‍👦", "世é👨‍👩‍👧‍👦"},
+		{"escapes", "\x1b[A\x1b]11;rgb:x\a\x1b[200~\x1b[201x\x1b\x1b[201", "\x1b[A\x1b]11;rgb:x\a\x1b[200~\x1b[201x\x1b\x1b[201"},
+		{"large", strings.Repeat("hello\n", 10000), strings.Repeat("hello\n", 10000)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := []byte("\x1b[200~" + tt.input + "\x1b[201~x")
+			reader := &StdinReaderState{array: input, n: len(input)}
+			state := &TermState{currentCommand: "ab", index: 1}
+			token, err := state.InteractiveLexer(reader)
+			if err != nil { t.Fatal(err) }
+			if token != (PasteToken{Text: tt.want}) { t.Fatalf("paste = %#v", token) }
+			end, err := state.HandleToken(token)
+			if end || err != nil { t.Fatalf("paste triggered action: end %v, error %v", end, err) }
+			if state.currentCommand != SourceText("a" + tt.want + "b") || state.index != ByteOffset(1+len(tt.want)) {
+				t.Fatalf("edit = %q at %d", state.currentCommand, state.index)
+			}
+			token, err = state.InteractiveLexer(reader)
+			if err != nil || token != (AsciiToken{Char: 'x'}) { t.Fatalf("following key = %v, %v", token, err) }
+		})
+	}
+}
+
+// One-byte reads split every marker and UTF-8 character across buffer fills.
+// EOF inside a paste must never release its contents as executable keys.
+func TestBracketedPasteFragmentedAndTruncated(t *testing.T) {
+	for _, complete := range []bool{true, false} {
+		input := "\x1b[200~世\r\njf\x1b[201"
+		if complete { input += "~\r" }
+		file, err := os.CreateTemp(t.TempDir(), "input")
+		if err != nil { t.Fatal(err) }
+		defer file.Close()
+		if _, err := file.WriteString(input); err != nil { t.Fatal(err) }
+		if _, err := file.Seek(0, io.SeekStart); err != nil { t.Fatal(err) }
+		oldStdin := os.Stdin
+		os.Stdin = file
+		func() {
+			defer func() { os.Stdin = oldStdin }()
+			state := &TermState{}
+			reader := &StdinReaderState{array: make([]byte, 1)}
+			token, err := state.InteractiveLexer(reader)
+			if !complete {
+				if !errors.Is(err, io.ErrUnexpectedEOF) || token != nil { t.Fatalf("truncated paste = %v, %v", token, err) }
+				return
+			}
+			if err != nil || token != (PasteToken{Text: "世\njf"}) { t.Fatalf("fragmented paste = %v, %v", token, err) }
+			token, err = state.InteractiveLexer(reader)
+			if err != nil || token != (AsciiToken{Char: '\r'}) { t.Fatalf("following Enter = %v, %v", token, err) }
+		}()
+	}
+}
+
+func TestBracketedPasteQueuedDuringCursorQuery(t *testing.T) {
+	// A cursor-report-shaped sequence inside pasted text is not a reply.
+	input := []byte("\x1b[200~\x1b[9;9Rjf\r\x1b[201~\x1b[2;3R")
+	state := &TermState{stdInState: &StdinReaderState{array: input, n: len(input)}}
+	var output bytes.Buffer
+	row, col, err := state.queryCursorPosition(&output)
+	if err != nil || row != 2 || col != 3 { t.Fatalf("cursor = %d,%d, %v", row, col, err) }
+	token, err := state.readInputToken()
+	if err != nil || token != (PasteToken{Text: "\x1b[9;9Rjf\n"}) { t.Fatalf("queued paste = %v, %v", token, err) }
+}
+
+func TestBracketedPasteAdjacentAndStrayEnd(t *testing.T) {
+	input := []byte("\x1b[201~\x1b[200~a\x1b[201~\x1b[200~b\x1b[201~")
+	reader := &StdinReaderState{array: input, n: len(input)}
+	state := &TermState{}
+	for _, want := range []TerminalToken{UnknownToken{}, PasteToken{Text: "a"}, PasteToken{Text: "b"}} {
+		token, err := state.InteractiveLexer(reader)
+		if err != nil || token != want { t.Fatalf("token = %v, %v; want %v", token, err, want) }
+	}
+}
+
+func TestInteractiveLexerDeleteRequiresTilde(t *testing.T) {
+	tests := []struct {
+		name string
+		sequence string
+		want TerminalToken
+	}{
+		{"delete", "\x1b[3~", KEY_DELETE},
+		{"ctrl delete", "\x1b[3;5~", KEY_CTRL_DELETE},
+		{"home xterm", "\x1b[H", KEY_HOME},
+		{"end xterm", "\x1b[F", KEY_END},
+		{"home application mode", "\x1bOH", KEY_HOME},
+		{"end application mode", "\x1bOF", KEY_END},
+		{"home vt220", "\x1b[1~", KEY_HOME},
+		{"end vt220", "\x1b[4~", KEY_END},
+		{"home rxvt", "\x1b[7~", KEY_HOME},
+		{"end rxvt", "\x1b[8~", KEY_END},
+		{"home ctrl xterm", "\x1b[1;5H", KEY_HOME},
+		{"end shift xterm", "\x1b[1;2F", KEY_END},
+		{"alt b", "\x1bb", KEY_ALT_B},
+		{"cursor report", "\x1b[3;5R", CsiToken{FinalChar: 'R', Params: []byte("3;5")}},
+		{"incomplete report parameters", "\x1b[3R", CsiToken{FinalChar: 'R', Params: []byte("3")}},
+		{"other CSI with one parameter", "\x1b[3A", CsiToken{FinalChar: 'A', Params: []byte("3")}},
+		{"other CSI with two parameters", "\x1b[3;5A", CsiToken{FinalChar: 'A', Params: []byte("3;5")}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Preload a complete sequence and a following key; no terminal I/O is needed.
+			input := []byte(tt.sequence + "x")
+			reader := &StdinReaderState{array: input, n: len(input)}
+			state := &TermState{}
+			got, err := state.InteractiveLexer(reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("token = %#v, want %#v", got, tt.want)
+			}
+			if reader.i != len(tt.sequence) {
+				t.Fatalf("consumed %d bytes, want %d", reader.i, len(tt.sequence))
+			}
+			got, err = state.InteractiveLexer(reader)
+			if err != nil || !reflect.DeepEqual(got, AsciiToken{Char: 'x'}) {
+				t.Fatalf("following key = %#v, error = %v", got, err)
+			}
+		})
+	}
+}
+
+// A lone Escape has no binding. The byte after it is lexed as its own key
+// instead of being swallowed as an unknown Alt chord.
+func TestInteractiveLexerLoneEscapeKeepsNextKey(t *testing.T) {
+	tests := []struct {
+		name string
+		input string
+		want []TerminalToken
+	}{
+		{"letter", "\x1bax", []TerminalToken{AsciiToken{Char: 'a'}, AsciiToken{Char: 'x'}}},
+		{"tab", "\x1b\tx", []TerminalToken{AsciiToken{Char: '\t'}, AsciiToken{Char: 'x'}}},
+		{"enter", "\x1b\rx", []TerminalToken{AsciiToken{Char: '\r'}, AsciiToken{Char: 'x'}}},
+		{"multibyte", "\x1b\xe4\xb8\x96x", []TerminalToken{MutliByteToken{Char: '世'}, AsciiToken{Char: 'x'}}},
+		{"double escape then arrow", "\x1b\x1b[Ax", []TerminalToken{KEY_UP, AsciiToken{Char: 'x'}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := []byte(tt.input)
+			reader := &StdinReaderState{array: input, n: len(input)}
+			state := &TermState{}
+			for i, want := range tt.want {
+				got, err := state.InteractiveLexer(reader)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(got, want) {
+					t.Fatalf("token %d = %#v, want %#v", i, got, want)
+				}
+			}
+			if reader.i != len(input) {
+				t.Fatalf("consumed %d bytes, want %d", reader.i, len(input))
+			}
+		})
+	}
+}
+
+// Terminal replies that are strings, not CSI, are consumed whole and dropped.
+// Their bodies must never reach the editor as keystrokes: a colour reply
+// contains ";r", which is a bound chord.
+func TestInteractiveLexerDropsControlStrings(t *testing.T) {
+	tests := []struct {
+		name string
+		sequence string
+	}{
+		{"OSC colour reply, BEL", "\x1b]11;rgb:2424/2424/2424\x07"},
+		{"OSC colour reply, ST", "\x1b]11;rgb:2424/2424/2424\x1b\\"},
+		{"OSC clipboard reply", "\x1b]52;c;aGVsbG8=\x07"},
+		{"DCS version reply", "\x1bP>|WezTerm 20240203\x1b\\"},
+		{"DCS status reply", "\x1bP1$r0m\x1b\\"},
+		{"APC", "\x1b_Gi=1;OK\x1b\\"},
+		{"PM", "\x1b^private\x1b\\"},
+		{"SOS", "\x1bXstart of string\x1b\\"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := []byte(tt.sequence + "x")
+			reader := &StdinReaderState{array: input, n: len(input)}
+			state := &TermState{}
+			got, err := state.InteractiveLexer(reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, UnknownToken{}) {
+				t.Fatalf("token = %#v, want UnknownToken", got)
+			}
+			if reader.i != len(tt.sequence) {
+				t.Fatalf("consumed %d bytes, want %d", reader.i, len(tt.sequence))
+			}
+			got, err = state.InteractiveLexer(reader)
+			if err != nil || !reflect.DeepEqual(got, AsciiToken{Char: 'x'}) {
+				t.Fatalf("following key = %#v, error = %v", got, err)
+			}
+		})
+	}
+}
+
+// A string cut short by an ESC that does not start ST ends there, and the
+// byte after the ESC is lexed normally. An unterminated string stops
+// swallowing input after a bound.
+func TestInteractiveLexerControlStringLimits(t *testing.T) {
+	input := []byte("\x1b]11;rgb:24\x1bq")
+	reader := &StdinReaderState{array: input, n: len(input)}
+	state := &TermState{}
+	got, err := state.InteractiveLexer(reader)
+	if err != nil || !reflect.DeepEqual(got, UnknownToken{}) {
+		t.Fatalf("cut string = %#v, error = %v", got, err)
+	}
+	got, err = state.InteractiveLexer(reader)
+	if err != nil || !reflect.DeepEqual(got, AsciiToken{Char: 'q'}) {
+		t.Fatalf("byte after ESC = %#v, error = %v", got, err)
+	}
+
+	long := append([]byte("\x1b]"), bytes.Repeat([]byte{'a'}, maxControlStringBytes+10)...)
+	reader = &StdinReaderState{array: long, n: len(long)}
+	got, err = state.InteractiveLexer(reader)
+	if err != nil || !reflect.DeepEqual(got, UnknownToken{}) {
+		t.Fatalf("unterminated string = %#v, error = %v", got, err)
+	}
+	if reader.i != 2+maxControlStringBytes {
+		t.Fatalf("consumed %d bytes, want %d", reader.i, 2+maxControlStringBytes)
+	}
+}
+
+func TestTerminalSafeText(t *testing.T) {
+	tests := []struct {
+		in string
+		keepLayout bool
+		want string
+	}{
+		{"plain/dir", false, "plain/dir"},
+		{"evil\x1b]11;?\x1b\\dir", false, "evil^[]11;?^[\\dir"},
+		{"cpr\x1b[6n", false, "cpr^[[6n"},
+		{"bell\x07 del\x7f", false, "bell^G del^?"},
+		{"line\nbreak\ttab", false, "line^Jbreak^Itab"},
+		{"line\nbreak\ttab", true, "line\nbreak\ttab"},
+		{"c1 \u009b6n csi", false, "c1 ?6n csi"},
+		{"bad \xff\xfe bytes", false, "bad ?? bytes"},
+		{"unicode 世界 é", false, "unicode 世界 é"},
+	}
+	for _, tt := range tests {
+		if got := terminalSafeText(tt.in, tt.keepLayout); got != tt.want {
+			t.Errorf("terminalSafeText(%q, %v) = %q, want %q", tt.in, tt.keepLayout, got, tt.want)
+		}
+	}
+	if !containsTerminalControl("a\x1bb") || containsTerminalControl("ab") {
+		t.Error("containsTerminalControl")
+	}
+}
+
+func TestDirectoryFileURL(t *testing.T) {
+	got := directoryFileURL("host", "/home/me/evil\x1b]11;?\x1b\\ dir/世界")
+	if strings.ContainsAny(got, "\x1b\\ \x07") {
+		t.Fatalf("URL still carries raw bytes: %q", got)
+	}
+	if !strings.HasPrefix(got, "file://host/home/me/evil%1B%5D11;%3F%1B%5C%20dir/") {
+		t.Fatalf("unexpected URL %q", got)
 	}
 }

@@ -408,9 +408,9 @@ Standard input is used when no file or `-c` is given and stdin is not a terminal
 or explicitly with `-` (`some-command | msh - [ARG]..`).
 With `-`, arguments after the `-` are positional arguments to the script.
 
-## Interactive CLI
-
-History search is prefix-based and case-insensitive. The prefix is whatever is currently in the input buffer; editing the buffer resets the prefix for the next search.
+History search is prefix-based and case-insensitive.
+The prefix is whatever is currently in the input buffer;
+editing the buffer resets the prefix for the next search.
 
 - Ctrl-P: search backward through history by prefix
 - Ctrl-N: search forward through history by prefix
@@ -419,6 +419,7 @@ History search is prefix-based and case-insensitive. The prefix is whatever is c
 - Alt-.: insert the last argument from history; repeat to cycle older entries
 - Tab: complete the current token; press Tab again to cycle matches and fill the input
 - Shift-Tab: cycle completion backward when matches are active
+- Alt-Shift-R: forget measured text widths and measure again; use it after reattaching, changing fonts, or when the line looks wrong
 - Ctrl-N/Ctrl-P: when cycling completions, move forward/backward through matches
 
 ### Definition-based completions
@@ -431,6 +432,35 @@ def mshCompletion { 'complete': ['msh' 'mshell'] } ([str] -- [str])
     ['-h' '--help' '--html' '--lex' '--parse' '--check-types' '--type-check-only' '--version' '-c' '-'] options!
     ['lsp' 'bin' 'edit' 'completions'] subcommands!
     @options @subcommands extend
+end
+```
+
+With a list, Tab offers the matching values and then every file.
+Return a dictionary instead to choose what else Tab offers.
+Every key is optional:
+
+- `values`: a list of values.
+- `preferredFiles`: a glob pattern, or a list of them, like `'*.typ'` or `'*'`.
+  Tab offers the matching files and every directory.
+  When nothing matches, Tab falls back to `files`, or to every file when `files` is not given.
+  Use it when a command usually takes one kind of file but can take any, like an interpreter.
+- `files`: a glob pattern, or a list of them, like `'*.typ'` or `'*'`.
+  Tab offers the files in the directory being typed whose names match, and every directory, so you can move into one.
+- `dirs`: `true` to offer directories only.
+- `binaries`: `true` to offer executables on the path.
+
+Patterns match file names, not paths, and are case-sensitive.
+A dictionary without `preferredFiles`, `files`, or `dirs` offers no files.
+A list is the same as `{ 'values': list, 'files': '*' }`.
+Values starting with `-` are only offered once the typed text starts with `-`.
+
+```mshell
+def typstCompletion { 'complete': ['typst'] } ([str] -- { "values"?: [str], "files"?: str | [str] })
+    len 0 = if
+        { 'values': ['compile' 'watch' 'query' 'fonts'] }
+    else
+        { 'files': '*.typ' }
+    end
 end
 ```
 
@@ -505,8 +535,32 @@ Double quoted strings have the following escape sequences:
 - `\r`: Carriage return
 - `\\`: Backslash
 - `\"`: Double quote
+- `\{`: Left brace
+- `\}`: Right brace
 
 No escaping is done within single quoted strings or paths.
+
+### Format Strings
+
+A double quoted string prefixed with `$` is a format string.
+Code inside `{` and `}` is run, and its result is placed into the string.
+
+```mshell
+"World" name!
+$"Hello, {@name}!" wl                     # Hello, World!
+$"{2 3 +} items" wl                       # 5 items
+$"total: {2.5 1 toFixed " " 6 leftPad}" wl  # total:    2.5
+$"literal \{braces\}" wl                  # literal {braces}
+```
+
+Each interpolation runs on its own empty stack and can read the variables in scope.
+It must leave exactly one value of type `str`, `path`, or `int`; convert other types first (e.g. `str`, `toFixed`).
+Interpolations can hold any code, including strings, dictionaries, and nested format strings.
+Code in an interpolation cannot leave it: `break`, `continue`, and `exit` are errors there, except `break` and `continue` in a loop inside the interpolation.
+Definitions are not allowed in an interpolation.
+Interpolations can span lines. A `#` comment in an interpolation runs to the end of the line, so a comment on the same line as the closing `}` hides it.
+There is no formatting mini-language; use functions like `toFixed` and `leftPad` inside the interpolation.
+Use `\{` for a literal left brace. A `}` outside an interpolation is literal.
 
 ### Paths
 
@@ -1164,9 +1218,10 @@ end wl # Output: 11
 - `toHex` / `toOctal` / `toBin`: Format an int as a bare hex/octal/binary string (`16`/`8`/`2 toBase`). `(int -- str)`
 - `parseHex` / `parseOctal` / `parseBin`: Parse a hex/octal/binary string to `Maybe[int]` (`16`/`8`/`2 fromBase`); an optional matching prefix is accepted. `(str -- Maybe[int])`
 - `exit`: Exit the current script with the provided exit code. `(int -- )`
+- `return`: Leave the current definition immediately, with the stack as it is, which must match the definition's outputs. Only allowed directly in a definition, or in the body of an `if` or `match` there; it is an error inside a quotation (including ones run by `x`, `iff`, `loop`, or `each`), a list or dict literal, or an else-if condition. To leave a loop early, use `break` and continue after the loop. In top-level code it ends the script. `( -- )`
 - `read`: Read a line from stdin. Puts a str and bool of whether the read was successful on the stack. `( -- str bool)`
 - `prompt`: Write a prompt string to the controlling TTY and read a line from the controlling TTY. Fails if no controlling TTY is available. `(str -- str)`
-- `stdin`: Drop stdin onto the stack `( -- str)`
+- `stdin`: Drop stdin onto the stack `( -- str)`. Fails if the input exceeds `MSH_READ_LIMIT` bytes (default 104857600, `0` for no limit).
 - `stdinIsTerminal`: Return whether the current effective stdin is connected to a terminal or Windows console.
   Regular files, pipes, and non-file streams return false.
   Redirections and symlinks are classified by their opened target, so one that resolves to a terminal returns true.
@@ -1198,7 +1253,7 @@ end wl # Output: 11
 - `toCsv`: Serialize a list of rows to a CSV string. Each cell is escaped with `toCsvCell`, cells are joined with `,`, and rows are joined with `\n`. (`[[str]] -- str`)
 - `parseJson`: Parse JSON from a string, binary, or file path into mshell objects. JSON `null` becomes the `null` type (distinct from `none`). (`path|str|binary -- list|dict|numeric|str|bool|null`)
 - `parseExcel`: Parse an `.xlsx` (OOXML) spreadsheet into a list of sheets in workbook (tab) order. Each sheet is a dict with a `name` key (the worksheet name), a `data` key holding a rectangular list of rows (list of lists), a `hidden` key (bool; `true` for hidden or veryHidden sheets), and a `visibility` key (`"visible"`, `"hidden"`, or `"veryHidden"`). Cell values are typed: numbers become floats (dates appear as Excel serial floats), strings become strings (shared, inline, and formula-string results all resolved), booleans become booleans, error cells (e.g. `#DIV/0!`) become `none`, and empty/padding cells are the empty string. Chartsheets are skipped; hidden worksheets are included. Dates are returned as raw Excel serial floats; apply `fromOleDate` at the call site to convert. `parseExcel` assumes the default 1900-based date system, which matches `fromOleDate`'s OLE epoch (1899-12-30). Workbooks saved with the 1904 date system (`<workbookPr date1904="true"/>`, seen on some files originally authored on older Mac Excel or with the "Use 1904 date system" option enabled) have serials offset by 1462 days; on those files, add 1462 to each serial before calling `fromOleDate`, e.g. `@wb :0: :data? :3: :0: 1462 + fromOleDate`. (`path|binary -- list`)
-- `seq`: Generate a list of integers, starting from 0. Exclusive end to integer on stack. `2 seq` produces `[0 1]`. `(int -- [int])`
+- `seq`: Generate a list of integers, starting from 0. Exclusive end to integer on stack. `2 seq` produces `[0 1]`. A count of 0 or less produces an empty list. `(int -- [int])`
 - `repeat`: Create a list containing the provided value repeated `n` times. `(a int -- [a])`
 - `binPaths`: Puts a list of lists with 2 items, first is the executable name, second is the full path to the executable. `(-- [[str]])`
 - `urlEncode`: URL-encode a string or dictionary of parameters. `(str|dict -- str)`
@@ -1225,7 +1280,7 @@ end wl # Output: 11
 - `mv`: Move file or directory. `(str:source str:dest -- )`
 - `readFile`: Read file into string. `(str -- str)`
 - `readFileBytes`: Read file into binary data. `(str -- binary)`
-- `readTsvFile`: Read a TSV file into list of list of strings. `(str -- [[str]])`
+- `readTsvFile`: Read a TSV file into list of list of strings. `(str | path -- [[str]])`
 - `cd`: Change directory `(str -- )`
 - `pwd`: Get current working directory `( -- str)`
 - `mshFileManager`: Open the built-in file manager.
@@ -1233,8 +1288,11 @@ end wl # Output: 11
    On exit, changes the working directory to the directory the user navigated to.
    On Windows, pressing `h` at the root of a drive shows the mounted drive letters so you can switch volumes.
    The preview pane short-circuits common binary extensions and shows first-level contents for `.zip` and `.tar.gz` archives.
+   PNG, JPEG, and GIF files show their size in pixels, and the image itself in terminals that support sixel graphics.
+   If images look stretched, set `MSH_CELL_PIXELS` to the real size of a text cell in pixels, such as `9x20`.
+   Windows Terminal always reports 10x20 cells, so fonts with a different cell shape need this.
    Yank bindings copy text about the selected entry to the system clipboard: `yf` (file name), `yp` (full path), `yg` (path relative to the enclosing `.git` directory). `(str -- )`
-- `clip`: Copy a string to the system clipboard. Cross-platform: uses `pbcopy` on macOS, `clip` on Windows, and the first available of `wl-copy`, `xclip`, or `xsel` on Linux. `(str -- )`
+- `clip`: Copy a string to the system clipboard. Cross-platform: uses `pbcopy` on macOS, `clip` on Windows, and the first available of `wl-copy`, `xclip`, or `xsel` on Linux. `(str | path -- )`
 - `writeFile`: Write a string (UTF-8) or raw binary data to file. Overwrites file if it exists. `(str|bytes content str|path file -- )`
 - `appendFile`: Append a string (UTF-8) or raw binary data to file. `(str|bytes content str|path file -- )`
 - `fileSize`: Get size of file in bytes. Returns a Maybe in case file doesn't exist or other IO error. `(str -- Maybe int)`
@@ -1446,7 +1504,14 @@ Access the parts with `:k?` and `:v?`.
 
 ## Date Functions
 
-- `toDt`: Convert string to date/time `(str -- Maybe[date])`
+- `toDt`: Convert string to date/time `(str -- Maybe[date])`.
+  Separators are ignored, month names are accepted, and a time with optional AM/PM may follow.
+  A leading four digit year is always year-month-day, so ISO dates like `2026-01-02` are never ambiguous.
+  Other dates are tried as year-month-day, month-day-year, and day-month-year.
+  If exactly one reading is a valid date, it is used (`16/06/2025`, `12/16/25`).
+  If several readings are valid (`01/02/2026`), the order learned from the most recent unambiguous
+  non-ISO date in this evaluation decides. With no such date yet, the result is `none`.
+  Out of range components (month 13, Feb 30, hour 25) give `none` rather than rolling over.
 - `now`: Push current local date/time onto the stack `( -- date)`
 - `date`: Drop the time portion from a datetime `(date -- date)`
 - `year`: Get year from date `(date -- int)`
@@ -1529,7 +1594,7 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
 
 ## HTTP Requests
 
-- `httpGet`: Make a HTTP GET request. Signature is `({str: T} -- Maybe[{status: int, reason: str, headers: {str: [str]}, body: bytes}])`. Takes the request information in a dictionary that should have the following keys:
+- `httpGet`: Make a HTTP GET request. Signature is `(dict -- Maybe[{status: int, reason: str, headers: {str: [str]}, body: bytes, cookieJar?: [dict]}])`. Takes the request information in a dictionary that should have the following keys:
 
   - `url`: Full URL, including all the query parameters (required, string)
   - `timeout`: Request timeout in seconds (optional, positive integer; default 30)
@@ -1537,6 +1602,9 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
     Set to `false` to get the first response back as-is,
     e.g. to inspect the `Location` or `Set-Cookie` headers of a `3xx` response after a login POST.
   - `headers`: A dictionary of key-value pairs for the request headers (optional)
+  - `cookieJar`: A shared list of cookie dictionaries (optional); start with `[]`.
+    The list is updated in place and reused across GET and POST requests.
+    See [Cookie jars](#cookie-jars) for the record format and behavior.
 
   Returns a Maybe wrapping a response dictionary.
   The response is `none` if the web request totally fails, like hitting a timeout.
@@ -1546,9 +1614,81 @@ See [Regexp.Expand](https://pkg.go.dev/regexp#Regexp.Expand) for replacement syn
   - `reason`: Full reason line, ex: `"200 OK"`
   - `headers`: Dictionary of header name to a list of values
   - `body`: Body of response, as raw `bytes`. Decode with `utf8Str` if you want a UTF-8 string.
+  - `cookieJar`: Present only when supplied on the request, referencing the same list.
 
 - `httpPost`: Make a HTTP POST request. Signature is the same as `httpGet`. The only difference is that on the request dictionary, you can also set the `body` field to a stringable value.
 - `parseLinkHeader`: Parse an HTTP `Link` header string into a list of dictionaries. Each dictionary contains `url` and `rel` strings plus a `params` dictionary of any additional attributes. `(str -- [dict])`
+
+### Cookie jars
+
+A cookie jar is an ordinary list of dictionaries, with no new runtime type or constructor.
+The list is the complete state; there is no hidden jar attached to it.
+
+```mshell
+[] jar!
+{'url': 'https://example.com/login', 'body': @form,
+ 'cookieJar': @jar} httpPost ? login!
+{'url': 'https://example.com/account',
+ 'cookieJar': @jar} httpGet ? account!
+```
+
+The request sends only cookies matching the destination domain, path, and transport.
+Secure cookies are sent only over HTTPS, including on localhost.
+Cookies are accepted and updated on every response, including redirects and HTTP error statuses.
+With `followRedirects: false`, cookies from the first response are still stored.
+If a later redirect or body read fails, updates from responses already received remain in the list.
+Omitting `cookieJar` leaves automatic cookie management disabled and omits the response field.
+Combining a jar with an explicit `Cookie` request header is an error, regardless of header capitalization.
+
+The response's `cookieJar` is a live reference, not a snapshot.
+Later requests change the list visible through earlier responses too.
+Only the list identity is guaranteed; individual cookie dictionaries may be replaced.
+
+Each stored dictionary has all of the following fields:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `name` | `str` | Cookie name. |
+| `value` | `str` | Cookie value. |
+| `domain` | `str` | Normalized lowercase ASCII hostname (IDNs use punycode), or IP address; no leading dot or port. |
+| `path` | `str` | Effective cookie path, starting with `/`; a default is calculated when the response omits a valid path. |
+| `hostOnly` | `bool` | If true, send only to the exact hostname; otherwise eligible subdomains also match. |
+| `secure` | `bool` | Send only over HTTPS. |
+| `httpOnly` | `bool` | Preserved attribute; does not prevent mshell scripts from inspecting the record. |
+| `sameSite` | `str` | `""` (unspecified/unrecognized), `"lax"`, `"strict"`, or `"none"`; preserved metadata. |
+| `expires` | `int \| float \| null` | Absolute whole Unix seconds, or `null` for a session cookie. |
+| `lastAccess` | `int \| float` | Whole Unix seconds when received or last selected for a request. |
+| `quoted` | `bool` | Whether the value was quoted in the response; preserved when sending. |
+
+Cookies are identified by `(domain, path, name)`, so a name can occur more than once.
+New cookies are appended; replacements keep the original list position; expired or deleted cookies are removed.
+The list therefore preserves creation order, without a counter or creation-order field.
+Sending sorts a separate selection by decreasing path length, preserving list order for equal lengths.
+It does not reorder the jar.
+`Max-Age` takes precedence over `Expires` and is converted to an absolute deadline once, when received.
+Reusing or restoring the jar never restarts that countdown.
+Expiration is checked when using the jar; there is no background expiration timer.
+
+Domain validation rejects unrelated domains and public-suffix cookies (including private suffixes such as `github.io`).
+The `__Secure-` and `__Host-` cookie prefix requirements are enforced.
+These HTTP methods have no browser top-level site or navigation context, so browser `SameSite` policies are not enforced.
+Incoming `Partitioned` cookies are ignored rather than stored as unpartitioned cookies.
+
+You may inspect or edit records using normal list/dictionary operations.
+Supplied records must contain the fields above with valid types and values; duplicate `(domain, path, name)` entries are errors.
+Validation happens before sending the request.
+The whole jar round-trips through `toJson` and `parseJson`:
+
+```mshell
+@jar toJson `cookies.json` writeFile
+`cookies.json` parseJson restoredJar!
+{'url': 'https://example.com/account',
+ 'cookieJar': @restoredJar} httpGet ?
+```
+
+New timestamps are integers; whole-number floats are also accepted because `parseJson` decodes JSON numbers as floats.
+Session cookies live as long as the caller retains them in the jar.
+Explicitly saving and restoring the list also saves session cookies; discard those records if starting a new session is desired.
 
 ## Archive (Zip) Functions
 
@@ -1616,7 +1756,8 @@ or inflate the archive.
 ## Variables
 
 You can store to several variables in one go by separating the store tokens with commas.
-Values are consumed from the stack for each store, and an optional trailing comma is ignored.
+Values are consumed from the stack for each store.
+A trailing comma after the last store is a parse error, since commas also separate `match` arms.
 When storing with the comma separated list, make sure you understand the ordering!
 
 ```mshell
@@ -1628,9 +1769,6 @@ When storing with the comma separated list, make sure you understand the orderin
 # Storing multiple values at once. Note the order!
 1 2 3 a!, b!, c!  # a is 1, b is 2, c is 3.
 @a @b @c
-
-# A trailing comma after the last store is ignored
-4 5 a!, b!,
 ```
 
 

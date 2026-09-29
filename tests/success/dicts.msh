@@ -80,8 +80,8 @@
 [{"a": 1} {"a": 2}] ("a" get? str wl) each
 
 # Dict to List
-{ "a" : 1, "b": 2 } keyValues (pair! @pair :k? key!, @pair :v? value! $"{@key} {@value 1 +}") map uw
-{ "b" : 1, "a": 2 } keyValues (pair! @pair :k? key!, @pair :v? value! $"{@key} {@value 1 +}") map uw
+{ "a" : 1, "b": 2 } keyValues (pair! @pair :k? key! @pair :v? value! $"{@key} {@value 1 +}") map uw
+{ "b" : 1, "a": 2 } keyValues (pair! @pair :k? key! @pair :v? value! $"{@key} {@value 1 +}") map uw
 
 # A literal `get` key resolves the specific shape field type, not the union of
 # every field value type. Both spellings resolve `count` to `int` (so `2 +`

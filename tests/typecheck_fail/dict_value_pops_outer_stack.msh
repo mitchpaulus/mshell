@@ -1,0 +1,2 @@
+# A dict value runs on its own empty stack.
+1 {a: drop} drop

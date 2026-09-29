@@ -3,42 +3,81 @@ package main
 import (
 	"io/fs"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 // FakeDirEntry implements fs.DirEntry for testing.
 type FakeDirEntry struct {
-	EntryName  string
-	EntryIsDir bool
+	EntryName   string
+	EntryIsDir  bool
+	EntryIsLink bool
 }
 
-func (e FakeDirEntry) Name() string               { return e.EntryName }
-func (e FakeDirEntry) IsDir() bool                { return e.EntryIsDir }
-func (e FakeDirEntry) Type() fs.FileMode          { if e.EntryIsDir { return fs.ModeDir }; return 0 }
+func (e FakeDirEntry) Name() string { return e.EntryName }
+func (e FakeDirEntry) IsDir() bool  { return e.EntryIsDir }
+func (e FakeDirEntry) Type() fs.FileMode {
+	if e.EntryIsLink {
+		return fs.ModeSymlink
+	}
+	if e.EntryIsDir {
+		return fs.ModeDir
+	}
+	return 0
+}
 func (e FakeDirEntry) Info() (fs.FileInfo, error) { return nil, nil }
+
+// fakeFileInfo is what FakeCompletionFS.Stat reports for a link target.
+type fakeFileInfo struct {
+	name  string
+	isDir bool
+}
+
+func (i fakeFileInfo) Name() string       { return i.name }
+func (i fakeFileInfo) Size() int64        { return 0 }
+func (i fakeFileInfo) Mode() fs.FileMode  { if i.isDir { return fs.ModeDir }; return 0 }
+func (i fakeFileInfo) ModTime() time.Time { return time.Time{} }
+func (i fakeFileInfo) IsDir() bool        { return i.isDir }
+func (i fakeFileInfo) Sys() any           { return nil }
 
 // FakeCompletionFS implements CompletionFS for testing.
 type FakeCompletionFS struct {
-	Cwd     string
-	Entries map[string][]FakeDirEntry // dir path -> entries
+	Cwd      string
+	Entries  map[string][]FakeDirEntry // dir path -> entries
+	LinkDirs map[string]bool           // link path -> whether its target is a directory
+}
+
+func (f FakeCompletionFS) Stat(path string) (fs.FileInfo, error) {
+	isDir, ok := f.LinkDirs[path]
+	if !ok {
+		return nil, fs.ErrNotExist
+	}
+	return fakeFileInfo{name: filepath.Base(path), isDir: isDir}, nil
 }
 
 func (f FakeCompletionFS) Getwd() (string, error) {
 	return f.Cwd, nil
 }
 
-func (f FakeCompletionFS) ReadDir(dir string) ([]fs.DirEntry, error) {
+func (f FakeCompletionFS) ReadDir(dir string) (*DirListing, error) {
 	entries, ok := f.Entries[dir]
 	if !ok {
 		return nil, fs.ErrNotExist
 	}
-	result := make([]fs.DirEntry, len(entries))
-	for i := range entries {
-		result[i] = entries[i]
+	listing := &DirListing{}
+	for _, e := range entries {
+		kind := dirKindFile
+		if e.EntryIsLink {
+			kind = dirKindLink
+		} else if e.EntryIsDir {
+			kind = dirKindDir
+		}
+		listing.add(e.EntryName, kind)
 	}
-	return result, nil
+	return listing, nil
 }
 
 // FakeCompletionEnv implements CompletionEnv for testing.
@@ -727,3 +766,237 @@ func TestUnfinishedPathOnlyReturnsFiles(t *testing.T) {
 		}
 	}
 }
+
+func mustGlob(t *testing.T, pattern string) CompletionGlob {
+	t.Helper()
+	g, err := CompileCompletionGlob(pattern)
+	if err != nil {
+		t.Fatalf("CompileCompletionGlob(%q): %v", pattern, err)
+	}
+	return g
+}
+
+func TestCompileCompletionGlob(t *testing.T) {
+	tests := []struct {
+		pattern string
+		kind    completionGlobKind
+		match   []string
+		noMatch []string
+	}{
+		{"*", globAny, []string{"a", ".hidden", "x.typ"}, nil},
+		{"*.typ", globSuffix, []string{"main.typ", ".typ"}, []string{"main.typst", "typ"}},
+		{"Makefile*", globPrefix, []string{"Makefile", "Makefile.am"}, []string{"makefile"}},
+		{"Makefile", globExact, []string{"Makefile"}, []string{"Makefile.am"}},
+		{"test_*.py", globGeneral, []string{"test_a.py"}, []string{"a_test.py"}},
+		{"*.[ch]", globGeneral, []string{"a.c", "a.h"}, []string{"a.o"}},
+	}
+	for _, tt := range tests {
+		g := mustGlob(t, tt.pattern)
+		if g.Kind != tt.kind {
+			t.Errorf("%q: kind %d, want %d", tt.pattern, g.Kind, tt.kind)
+		}
+		for _, name := range tt.match {
+			if !g.Matches(name) {
+				t.Errorf("%q should match %q", tt.pattern, name)
+			}
+		}
+		for _, name := range tt.noMatch {
+			if g.Matches(name) {
+				t.Errorf("%q should not match %q", tt.pattern, name)
+			}
+		}
+	}
+	if _, err := CompileCompletionGlob("[a-"); err == nil {
+		t.Errorf("expected an error for a malformed pattern")
+	}
+}
+
+func TestCompileCompletionGlobDoesNotAllocate(t *testing.T) {
+	allocs := testing.AllocsPerRun(100, func() {
+		g, _ := CompileCompletionGlob("*.typ")
+		_ = g.Matches("main.typ")
+	})
+	if allocs != 0 {
+		t.Errorf("compile+match allocated %v times, want 0", allocs)
+	}
+}
+
+func specTestDeps() CompletionDeps {
+	return CompletionDeps{
+		FS: FakeCompletionFS{
+			Cwd: "/work",
+			Entries: map[string][]FakeDirEntry{
+				"/work": {
+					{EntryName: "main.typ"},
+					{EntryName: "notes.md"},
+					{EntryName: "out.pdf"},
+					{EntryName: "src", EntryIsDir: true},
+					{EntryName: "linked", EntryIsLink: true},
+					{EntryName: "broken", EntryIsLink: true},
+				},
+				".": {
+					{EntryName: "main.typ"},
+					{EntryName: "notes.md"},
+					{EntryName: "out.pdf"},
+					{EntryName: "src", EntryIsDir: true},
+				},
+			},
+			LinkDirs: map[string]bool{"/work/linked": true},
+		},
+		Env:         FakeCompletionEnv{},
+		Binaries:    FakePathBinManager{Binaries: map[string]string{"typst": "/bin/typst", "tar": "/bin/tar"}},
+		Variables:   map[string]struct{}{"var": {}},
+		BuiltIns:    map[string]struct{}{},
+		Definitions: []string{},
+	}
+}
+
+func specInput(prefix string, spec *CompletionSpec) CompletionInput {
+	numTokens := 3 // binary, whitespace, EOF
+	if prefix != "" {
+		numTokens = 4
+	}
+	return CompletionInput{Prefix: prefix, LastTokenType: LITERAL, PrevTokenType: WHITESPACE, NumTokens: numTokens, InBinaryMode: true, Spec: spec}
+}
+
+func matchTexts(matches []TabMatch) []string {
+	texts := GetMatchTexts(matches)
+	sort.Strings(texts)
+	return texts
+}
+
+func expectMatches(t *testing.T, name string, got []TabMatch, want ...string) {
+	t.Helper()
+	texts := matchTexts(got)
+	sort.Strings(want)
+	if strings.Join(texts, ",") != strings.Join(want, ",") {
+		t.Errorf("%s: got %v, want %v", name, texts, want)
+	}
+}
+
+func TestCompletionSpecNilOffersAllFiles(t *testing.T) {
+	deps := specTestDeps()
+	expectMatches(t, "nil spec", GenerateCompletions(specInput("", nil), deps),
+		"main.typ", "notes.md", "out.pdf", "src/", "linked/", "broken")
+	anyFiles := &CompletionSpec{Files: []CompletionGlob{mustGlob(t, "*")}}
+	expectMatches(t, "files '*'", GenerateCompletions(specInput("", anyFiles), deps),
+		"main.typ", "notes.md", "out.pdf", "src/", "linked/", "broken")
+}
+
+func TestCompletionSpecFilesGlob(t *testing.T) {
+	deps := specTestDeps()
+	spec := &CompletionSpec{Files: []CompletionGlob{mustGlob(t, "*.typ"), mustGlob(t, "*.md")}}
+	expectMatches(t, "files", GenerateCompletions(specInput("", spec), deps),
+		"main.typ", "notes.md", "src/", "linked/")
+}
+
+func TestCompletionSpecDirsOnly(t *testing.T) {
+	deps := specTestDeps()
+	spec := &CompletionSpec{Dirs: true}
+	expectMatches(t, "dirs", GenerateCompletions(specInput("", spec), deps), "src/", "linked/")
+}
+
+func TestCompletionSpecValuesOnlyOffersNoFiles(t *testing.T) {
+	deps := specTestDeps()
+	spec := &CompletionSpec{Values: []string{"compile", "watch", "--help"}}
+	expectMatches(t, "values", GenerateCompletions(specInput("", spec), deps), "compile", "watch")
+	expectMatches(t, "options", GenerateCompletions(specInput("--", spec), deps), "--help")
+}
+
+func TestCompletionSpecPreferredFiles(t *testing.T) {
+	deps := specTestDeps()
+	spec := &CompletionSpec{PreferredFiles: []CompletionGlob{mustGlob(t, "*.typ")}}
+	expectMatches(t, "preferred", GenerateCompletions(specInput("", spec), deps),
+		"main.typ", "src/", "linked/")
+
+	// Nothing preferred fits 'no', so every file is offered.
+	expectMatches(t, "fallback to all", GenerateCompletions(specInput("no", spec), deps), "notes.md")
+
+	// With 'files' as well, the fallback is 'files' instead of every file.
+	spec.Files = []CompletionGlob{mustGlob(t, "*.pdf")}
+	expectMatches(t, "fallback to files", GenerateCompletions(specInput("no", spec), deps))
+	expectMatches(t, "fallback to files", GenerateCompletions(specInput("o", spec), deps), "out.pdf")
+}
+
+func TestCompletionSpecBinaries(t *testing.T) {
+	deps := specTestDeps()
+	spec := &CompletionSpec{Binaries: true}
+	expectMatches(t, "binaries", GenerateCompletions(specInput("t", spec), deps), "tar", "typst")
+}
+
+func TestCompletionSpecUnfinishedString(t *testing.T) {
+	deps := specTestDeps()
+	spec := &CompletionSpec{Values: []string{"main"}, Files: []CompletionGlob{mustGlob(t, "*.typ")}}
+	input := specInput("ma", spec)
+	input.LastTokenType = UNFINISHEDSINGLEQUOTESTRING
+	expectMatches(t, "unfinished", GenerateCompletions(input, deps), "main", "main.typ")
+}
+
+func TestMergeCompletionDict(t *testing.T) {
+	state := &TermState{}
+	dict := NewDict()
+	values := NewList(0)
+	values.Items = append(values.Items, MShellString{"compile"})
+	dict.Items["values"] = values
+	dict.Items["preferredFiles"] = MShellString{"*.typ"}
+	files := NewList(0)
+	files.Items = append(files.Items, MShellString{"*.pdf"}, MShellString{"[bad"}, MShellBool{true})
+	dict.Items["files"] = files
+	dict.Items["dirs"] = MShellBool{true}
+	dict.Items["binaries"] = MShellString{"yes"} // wrong type, ignored
+
+	var spec CompletionSpec
+	got := state.mergeCompletionDict("test", dict, &spec)
+	if got != values {
+		t.Errorf("values list not returned")
+	}
+	if len(spec.PreferredFiles) != 1 || spec.PreferredFiles[0].Text != ".typ" {
+		t.Errorf("preferredFiles = %+v", spec.PreferredFiles)
+	}
+	if len(spec.Files) != 1 || spec.Files[0].Text != ".pdf" {
+		t.Errorf("files = %+v", spec.Files)
+	}
+	if !spec.Dirs || spec.Binaries {
+		t.Errorf("dirs=%v binaries=%v", spec.Dirs, spec.Binaries)
+	}
+}
+
+func BenchmarkFileCompletionPreferred(b *testing.B) {
+	entries := make([]FakeDirEntry, 0, 2000)
+	for i := 0; i < 2000; i++ {
+		name := "file" + strings.Repeat("x", i%7) + string(rune('a'+i%26))
+		switch i % 4 {
+		case 0:
+			name += ".typ"
+		case 1:
+			name += ".pdf"
+		case 2:
+			entries = append(entries, FakeDirEntry{EntryName: name, EntryIsDir: true})
+			continue
+		}
+		entries = append(entries, FakeDirEntry{EntryName: name})
+	}
+	fsys := prebuiltCompletionFS{fake: FakeCompletionFS{Entries: map[string][]FakeDirEntry{".": entries}}}
+	g, _ := CompileCompletionGlob("*.typ")
+	input := specInput("file", &CompletionSpec{PreferredFiles: []CompletionGlob{g}})
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		appendFileCompletions(nil, input, &fsys)
+	}
+}
+
+// prebuiltCompletionFS hands back one listing every time, so a benchmark
+// measures completion and not building the fake.
+type prebuiltCompletionFS struct {
+	fake    FakeCompletionFS
+	listing *DirListing
+}
+
+func (p *prebuiltCompletionFS) ReadDir(dir string) (*DirListing, error) {
+	if p.listing == nil {
+		p.listing, _ = p.fake.ReadDir(dir)
+	}
+	return p.listing, nil
+}
+func (p *prebuiltCompletionFS) Getwd() (string, error)           { return "/w", nil }
+func (p *prebuiltCompletionFS) Stat(string) (fs.FileInfo, error) { return nil, fs.ErrNotExist }

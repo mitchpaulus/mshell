@@ -1,0 +1,72 @@
+# Grid string columns with repeated values are stored once per distinct value internally.
+# Every grid operation must treat them exactly like plain strings.
+
+# 3000 rows: "hi" is mostly distinct (long strings), "lo" and "mid" repeat, "rev" is mostly distinct (short strings).
+[["hi" "lo" "mid" "rev" "big"]]
+3000 seq (n! ["row-long-" @n str + "k" @n 3 mod str + "m" @n 7 mod str + 2999 @n - str @n str]) map
++ toGrid
+"big" (toInt ? 1000000007 *) updateCol g!
+
+"-- few distinct --" wl
+@g ["lo"] [{ "name": "n", "agg": (gridRows) }] groupBy gridValues str wl
+
+"-- many distinct, long strings --" wl
+@g ["hi"] [] groupBy r!
+@r gridRows str wl
+@r gridValues 2 take str wl
+
+"-- two repeating keys --" wl
+@g ["lo" "mid"] [{ "name": "n", "agg": (gridRows) }] groupBy r!
+@r gridRows str wl
+@r gridValues 4 take str wl
+
+"-- two high cardinality keys --" wl
+@g ["hi" "rev"] [] groupBy gridRows str wl
+
+"-- three keys --" wl
+@g ["mid" "rev" "lo"] [] groupBy r!
+@r gridRows str wl
+@r gridValues 2 take str wl
+
+"-- wide int range key --" wl
+@g ["big"] [] groupBy r!
+@r gridRows str wl
+@r "big" gridCol 3 take str wl
+
+"-- filtered view --" wl
+@g (:mid? "m3" =) filter ["lo"] [{ "name": "n", "agg": (gridRows) }] groupBy gridValues str wl
+
+"-- pivot --" wl
+@g ["lo"] "mid" (gridRows) pivot gridValues str wl
+
+"-- sortBy --" wl
+@g ["mid" "lo"] sortBy r!
+@r "mid" gridCol 2 take str wl
+@r "lo" gridCol 2 take str wl
+@r "mid" gridCol -1: str wl
+
+"-- gridSetCell --" wl
+[| s; "a"; "b"; "a" |] "s" 1 "a" gridSetCell "s" 2 "new" gridSetCell s!
+@s "s" gridCol str wl
+@s ["s"] [{ "name": "n", "agg": (gridRows) }] groupBy gridValues str wl
+
+"-- concat --" wl
+[| s; "x"; "y" |] [| s; "y"; "z" |] + c!
+@c "s" gridCol str wl
+@c ["s"] [{ "name": "n", "agg": (gridRows) }] groupBy gridValues str wl
+@g (:mid? "m0" =) filter ["lo"] select [| lo; "k9" |] + r!
+@r gridRows str wl
+@r ["lo"] [{ "name": "n", "agg": (gridRows) }] groupBy gridValues str wl
+[| lo; "k9" |] @g ["lo"] select + ["lo"] [] groupBy gridValues str wl
+
+"-- extend --" wl
+[| s; "p"; "q" |] e!
+@e [| s; "q"; "r" |] extend drop
+@e "s" gridCol str wl
+@e ["s"] [{ "name": "n", "agg": (gridRows) }] groupBy gridValues str wl
+@e @g ["hi"] select "hi" "s" gridRenameCol extend drop
+@e gridRows str wl
+@e ["s"] [] groupBy gridRows str wl
+[| s; "only" |] e2!
+@e2 [| s; 1 |] extend drop
+@e2 "s" gridCol str wl

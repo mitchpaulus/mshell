@@ -1,0 +1,33 @@
+# Grid grouping key edge cases: groupBy, pivot, and join must keep distinct values distinct.
+
+# Multi-column keys must not merge when the column boundary shifts.
+[| a, b, n; "a", "bc", 1; "ab", "c", 2; "a", "bc", 3 |]
+["a" "b"] [{ "name": "n", "agg": ("n" gridCol sumInt) }] groupBy toJson wl
+
+# Empty strings in multi-column keys.
+[| a, b, n; "", "x", 1; "x", "", 2; "", "x", 3 |]
+["a" "b"] [{ "name": "n", "agg": (gridRows) }] groupBy toJson wl
+
+# Mixed column: int 1 and string "1" are different keys.
+[| k, n; 1, 1; "1", 2; 1, 3 |]
+["k"] [{ "name": "n", "agg": ("n" gridCol sumInt) }] groupBy toJson wl
+
+# Negative zero groups with zero.
+[| k, n; 0.0, 1; -0.0, 2 |]
+["k"] [{ "name": "n", "agg": (gridRows) }] groupBy toJson wl
+
+# Maybe keys: none, just 1, and plain 1 are all distinct.
+[| n; 1; 2; 3; 4; 5 |] "k" [1 just none 1 1 just none] gridAddCol
+["k"] [{ "name": "n", "agg": ("n" gridCol sumInt) }] groupBy "n" gridCol str wl
+
+# Pivot row keys with a shifting boundary.
+[| a, b, m, v; "a", "bc", "x", 1; "ab", "c", "x", 2; "a", "bc", "y", 3 |]
+["a" "b"] "m" ("v" gridCol sumInt) pivot toJson wl
+
+# Join tuple keys with a shifting boundary.
+[| a, b, l; "a", "bc", "L1"; "ab", "c", "L2" |] left!
+[| x, y, r; "ab", "c", "R1"; "a", "bc", "R2" |] right!
+@left @right (r! [@r :a? @r :b?]) (r! [@r :x? @r :y?]) join toJson wl
+
+# Join keys: int 1 and string "1" do not match.
+[| k, l; 1, "L1"; "1", "L2" |] [| k2, r; "1", "R1"; 1, "R2" |] (:k?) (:k2?) join toJson wl

@@ -20,16 +20,14 @@ Storing pops the top of the stack; retrieval pushes the stored value back onto t
 </pre>
 
 <p>
-You can store multiple values at once by separating the store tokens with commas. A trailing comma after the last store is ignored.
+You can store multiple values at once by separating the store tokens with commas.
+A trailing comma after the last store is not allowed, since commas also separate <code>match</code> arms.
 </p>
 
 <pre>
 <code><span class="mshellLINECOMMENT"># Storing multiple values at once</span>
 <span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span> <span class="mshellINTEGER">3</span> <span class="mshellVARSTORE">a!</span>, <span class="mshellVARSTORE">b!</span>, <span class="mshellVARSTORE">c!</span> <span class="mshellLINECOMMENT"># a is 1, b is 2, c is 3.</span>
-<span class="mshellVARRETRIEVE">@a</span> <span class="mshellVARRETRIEVE">@b</span> <span class="mshellVARRETRIEVE">@c</span>
-
-<span class="mshellLINECOMMENT"># A trailing comma after the last store is ignored</span>
-<span class="mshellINTEGER">4</span> <span class="mshellINTEGER">5</span> <span class="mshellVARSTORE">a!</span>, <span class="mshellVARSTORE">b!</span>,</code>
+<span class="mshellVARRETRIEVE">@a</span> <span class="mshellVARRETRIEVE">@b</span> <span class="mshellVARRETRIEVE">@c</span></code>
 </pre>
 
 <p> 

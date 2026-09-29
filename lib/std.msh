@@ -177,29 +177,6 @@ end
 # wjoin = Whitespace join ([str*] -- str)
 def wjoin ([str] -- str) " " join end
 
-# unlines (list[str] -- str)
-def unlines ([str] -- str)
-    [] unlines-accum! # Accumulator
-    (
-       @unlines-accum swap append
-       "\n" append
-       drop
-    ) each
-    @unlines-accum "" join
-end
-
-# unlinesCrLf (list[str] -- str)
-def unlinesCrLf ([str] -- str)
-    [] unlines-accum! # Accumulator
-    (
-       @unlines-accum swap append
-       "\r\n" append
-       drop
-    ) each
-    @unlines-accum "" join
-end
-
-
 # chomp (str -- str)
 # Strip a single trailing newline. Handles both \n and \r\n.
 def chomp (str -- str)
@@ -318,7 +295,7 @@ def uw ([str] --) unlines w end
 # tuw = tab unlines write
 def tuw ([[str]] -- ) (tjoin) map uw end
 
-def readTsvFile (str -- [[str]])
+def readTsvFile (str | path -- [[str]])
     readFile lines (tsplit) map
 end
 
@@ -398,20 +375,6 @@ def zip ([a] [b] (a b -- c) -- [c])
         @index 1 + index!
     ) loop
     @accum
-end
-
-# Builds a sequence of length of input, starting at 0.
-def seq (int -- [int])
-    max!
-    0 current!
-    [] seq-accum! # Accumulator
-    (
-        @current @max >= (break) iff
-        @seq-accum @current append drop
-        @current 1 + current!
-    ) loop
-
-    @seq-accum
 end
 
 def repeat (a int -- [a])
@@ -942,7 +905,7 @@ def __rgCompletion { 'complete': ['rg'] } ([str] -- [str])
 end
 # }}}
 # sudo {{{
-def __sudoCompletion { 'complete': ['sudo'] } ([str] -- [str])
+def __sudoCompletion { 'complete': ['sudo'] } ([str] -- [str] | { "values"?: [str], "preferredFiles"?: str | [str], "files"?: str | [str], "dirs"?: bool, "binaries"?: bool })
     input!
     ['-A' '--askpass' '-b' '--background' '-E' '--preserve-env'
      '-H' '--set-home' '-i' '--login' '-K' '--remove-timestamp'
@@ -993,7 +956,7 @@ def __sudoCompletion { 'complete': ['sudo'] } ([str] -- [str])
             []
         end
     else
-        @noArgOptions @argOptions extend binPaths (:0: str) map extend
+        { 'values': @noArgOptions @argOptions extend, 'binaries': true }
     end
 end
 # }}}

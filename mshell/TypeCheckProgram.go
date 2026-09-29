@@ -1,6 +1,8 @@
 package main
 
 import (
+	"maps"
+	"slices"
 	"sort"
 	"strconv"
 	"fmt"
@@ -45,11 +47,8 @@ import (
 // format strings, dynamic exec) the v1 checker does not yet model,
 // and we trust the runtime tests catch breakage there.
 func TypeCheckProgram(file *MShellFile, stdlibDefs []MShellDefinition) (errors []string, ok bool) {
-	arena := NewTypeArena()
-	names := NewNameTable()
-	checker := NewChecker(arena, names)
-
-	checker.RegisterStdlibSigs(stdlibDefs)
+	checker := NewCheckerBase(stdlibDefs).NewChecker()
+	arena, names := checker.arena, checker.names
 	checker.CheckProgram(file)
 
 	out := make([]string, 0, len(checker.errors))
@@ -68,6 +67,45 @@ func TypeCheckProgram(file *MShellFile, stdlibDefs []MShellDefinition) (errors [
 		return nil, true
 	}
 	return out, ok
+}
+
+// CheckerBase is the state every check starts from: the builtin signature
+// tables and the stdlib signatures, resolved into an arena. Building it
+// resolves every one of those signatures, so a long-lived process such as
+// the language server builds it once and starts each check from a copy.
+type CheckerBase struct {
+	c *Checker
+}
+
+// NewCheckerBase resolves the builtin and stdlib signatures.
+func NewCheckerBase(stdlibDefs []MShellDefinition) *CheckerBase {
+	c := NewChecker(NewTypeArena(), NewNameTable())
+	c.RegisterStdlibSigs(stdlibDefs)
+	return &CheckerBase{c: c}
+}
+
+// NewChecker returns a checker that starts from the base and is independent
+// of it and of every other checker made from it, so checks may run
+// concurrently. The builtin tables are only read, so they are shared.
+func (b *CheckerBase) NewChecker() *Checker {
+	base := b.c
+	nameBuiltins := make(map[NameId][]QuoteSig, len(base.nameBuiltins))
+	for id, sigs := range base.nameBuiltins {
+		// Clipped, so a def appending an overload copies instead of
+		// writing into the base's array.
+		nameBuiltins[id] = slices.Clip(sigs)
+	}
+	return &Checker{
+		arena:        base.arena.Clone(),
+		names:        base.names.Clone(),
+		vars:         NewVarEnv(),
+		subst:        Substitution{bound: slices.Clone(base.subst.bound)},
+		errors:       slices.Clone(base.errors),
+		builtins:     base.builtins,
+		nameBuiltins: nameBuiltins,
+		goBuiltins:   base.goBuiltins,
+		typeEnv:      maps.Clone(base.typeEnv),
+	}
 }
 
 // RegisterStdlibSigs resolves each stdlib def's signature AST into a
@@ -292,17 +330,17 @@ func lastBranchingTokenInFile(file *MShellFile) Token {
 func (c *Checker) checkDefBody(def *MShellDefinition) {
 	// Save outer state.
 	outerStack := c.stack.items
-	outerVars := c.vars.bound
-	outerMaybeVars := c.vars.maybeBound
+	outerVars, outerMaybeVars := c.vars.share()
 	outerDiverged := c.diverged
 	outerInferring := c.inferring
 	outerInferInputs := c.inferInputs
 	prevFn := c.currentFn
 	cp := c.subst.Checkpoint()
 
+	outerFresh, outerFreshDeep := c.fresh, c.freshDeep
 	c.stack.items = nil
-	c.vars.bound = make(map[NameId]TypeId)
-	c.vars.maybeBound = make(map[NameId]TypeId)
+	c.fresh, c.freshDeep = 0, false
+	c.vars.adopt(make(map[NameId]TypeId), make(map[NameId]TypeId))
 	c.diverged = false
 	c.inferring = false
 	c.inferInputs = nil
@@ -315,7 +353,7 @@ func (c *Checker) checkDefBody(def *MShellDefinition) {
 	// effect for EVERY `a`; the runtime then crashes for the other
 	// instantiations.
 	instSig := c.rigidDefSig(def)
-	fnCtx := &FnContext{Sig: instSig}
+	fnCtx := &FnContext{Name: def.Name, Sig: instSig}
 	c.currentFn = fnCtx
 
 	// Build the initial branch from a stack pre-loaded with declared inputs.
@@ -339,9 +377,9 @@ func (c *Checker) checkDefBody(def *MShellDefinition) {
 	c.currentFn = prevFn
 	c.subst.Rollback(cp)
 	c.stack.items = outerStack
-	c.vars.bound = outerVars
-	c.vars.maybeBound = outerMaybeVars
+	c.vars.adopt(outerVars, outerMaybeVars)
 	c.diverged = outerDiverged
+	c.fresh, c.freshDeep = outerFresh, outerFreshDeep
 	c.inferring = outerInferring
 	c.inferInputs = outerInferInputs
 }
@@ -470,6 +508,127 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 	if c.diverged {
 		return
 	}
+	before := c.fresh
+	deepBefore := c.freshDeep
+	lenBefore := c.stack.Len()
+	spawnStart := len(c.branchSpawn)
+	c.fresh = 0
+	c.freshDeep = false
+	c.freshBefore = before
+	c.freshDeepBefore = deepBefore
+	c.freshResult = false
+	c.checkParseItemStep(item)
+	c.freshBefore = 0
+	c.freshDeepBefore = false
+	// A step that fanned out (container literals collect their bodies this
+	// way) left its outcomes in branchSpawn, captured before the mark was
+	// known; the live state is then discarded.
+	for i := spawnStart; i < len(c.branchSpawn); i++ {
+		b := &c.branchSpawn[i]
+		b.fresh = freshAfter(item, before, lenBefore, len(b.stack), b.diverged, false)
+		b.freshDeep = b.fresh > 0 && c.freshDeepAfter(item, deepBefore, false)
+	}
+	c.fresh = freshAfter(item, before, lenBefore, c.stack.Len(), c.diverged, c.freshResult)
+	c.freshDeep = c.fresh > 0 && c.freshDeepAfter(item, deepBefore, c.freshResult)
+}
+
+// freshDeepAfter computes Checker.freshDeep after item ran, for an outcome
+// that kept a fresh mark. deepBefore is the flag before the step, and
+// result reports that the step output the fresh receiver itself.
+func (c *Checker) freshDeepAfter(item MShellParseItem, deepBefore, result bool) bool {
+	switch item.(type) {
+	case *MShellParseList, *MShellParseDict:
+		return c.deepFreshLiteral(item)
+	case Token:
+		// An append may have put a referenced container inside.
+		if result {
+			return false
+		}
+	}
+	return deepBefore
+}
+
+// deepFreshLiteral reports whether every container nested in a list or
+// dict literal is itself a literal, so none of them is referenced from
+// anywhere else. Besides nested literals, only scalars, quotes, and bare
+// words may appear: anything else (`@name`, a call, a stack operation)
+// could place an existing container inside.
+func (c *Checker) deepFreshLiteral(item MShellParseItem) bool {
+	switch it := item.(type) {
+	case *MShellParseList:
+		return c.deepFreshItems(it.Items)
+	case *MShellParseDict:
+		for _, kv := range it.Items {
+			if !c.deepFreshItems(kv.Value) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func (c *Checker) deepFreshItems(items []MShellParseItem) bool {
+	for _, item := range items {
+		switch it := item.(type) {
+		case *MShellParseList, *MShellParseDict:
+			if !c.deepFreshLiteral(it) {
+				return false
+			}
+		case *MShellParseQuote:
+		case Token:
+			if it.Type == VARRETRIEVE {
+				return false
+			}
+			if it.Type == LITERAL {
+				// A bare word pushes itself as a str unless it names a
+				// builtin or definition, which may return anything.
+				if _, ok := c.nameBuiltins[c.names.Intern(it.Lexeme)]; ok {
+					return false
+				}
+			} else if !pushOnlyToken(it.Type) {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// freshAfter computes the fresh mark (see Checker.fresh) after item ran,
+// given the mark and stack height before it and the outcome's stack height.
+// result reports that the step output the fresh receiver itself.
+func freshAfter(item MShellParseItem, before, lenBefore, lenAfter int, diverged, result bool) int {
+	if diverged {
+		return 0
+	}
+	pushedOne := lenAfter == lenBefore+1
+	switch it := item.(type) {
+	case *MShellParseList, *MShellParseDict:
+		if pushedOne {
+			return 1
+		}
+	case *MShellParseQuote:
+		if before > 0 && pushedOne {
+			return before + 1
+		}
+	case *MShellAsCast:
+		if before == 1 && lenAfter == lenBefore {
+			return 1
+		}
+	case Token:
+		if result {
+			return 1
+		}
+		if before > 0 && pushedOne && pushOnlyToken(it.Type) {
+			return before + 1
+		}
+	}
+	return 0
+}
+
+func (c *Checker) checkParseItemStep(item MShellParseItem) {
 	switch it := item.(type) {
 
 	case *MShellTypeDecl:
@@ -479,7 +638,7 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 	case *MShellAsCast:
 		target := c.resolveTypeExpr(it.Target, nil)
 		if target != TidNothing {
-			c.Cast(target, it.AsToken)
+			c.castTop(target, it.AsToken, c.freshBefore == 1, c.freshDeepBefore)
 		}
 		return
 
@@ -488,70 +647,45 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 		return
 
 	case *MShellParseList:
-		// Evaluate list contents on an isolated stack, mirroring the
-		// runtime's FRAME_LIST behavior, then collapse the resulting
-		// item stack into a homogeneous list element type. Heterogeneous
-		// literals become list-of-union, which is the closest static
-		// representation to mshell's runtime lists.
-		//
-		// The body is driven through the branching driver rather than a
-		// plain loop, so an overloaded op inside the literal (e.g. an
-		// indexer on a still-generic element type) fans out and each
-		// surviving resolution is reconciled. A flat loop would leave
-		// branchSpawn dangling and corrupt the collected item stack.
+		// A list is its body's whole stack: one child segment whose values
+		// collapse to the element type (a union when they differ).
 		//
 		// listDepth is bumped so that bare LITERAL tokens inside the
 		// list (shell-style argv words) get typed as `str` instead
 		// of being flagged as unknown identifiers — see the
 		// matching branch in `checkOne`.
-		listScope := c.snapshotStack()
 		c.listDepth++
-		branches := c.driveBranchesOverItems([]quoteBranch{c.captureBranch()}, it.Items)
+		c.checkChildStacks([]childSegment{{items: it.Items, pos: it.StartToken, collect: func(stack []TypeId) (TypeId, string) {
+			return c.listTypeFromItems(stack), ""
+		}}}, func(types []TypeId) TypeId { return types[0] })
 		c.listDepth--
-		if len(branches) == 0 {
-			// The body failed; the representative error is already on
-			// c.errors. Restore the stack so the branch dies cleanly.
-			c.restoreStack(listScope)
-			return
-		}
-		// Common case: the body didn't fan out. Push the list directly so
-		// callers that invoke checkParseItem outside the branching driver
-		// (e.g. dict-literal values) still see it on the stack. Only a
-		// genuine multi-branch body spawns — and that only arises while
-		// driven by the branching walker, which consumes branchSpawn.
-		if len(branches) == 1 {
-			c.loadBranch(branches[0])
-			items := append([]TypeId(nil), c.stack.items[listScope.length:]...)
-			c.restoreStack(listScope)
-			c.stack.Push(c.listTypeFromItems(items))
-			return
-		}
-		for _, b := range branches {
-			c.loadBranch(b)
-			items := append([]TypeId(nil), c.stack.items[listScope.length:]...)
-			c.restoreStack(listScope)
-			c.stack.Push(c.listTypeFromItems(items))
-			c.branchSpawn = append(c.branchSpawn, c.captureBranch())
-		}
 		return
 
 	case *MShellParseDict:
-		// Dict literal `{k: v, ...}`. Preserve concrete keys as a
-		// shape so heterogeneous dictionaries can satisfy declared
-		// dictionary shapes. Shape-to-dict unification below keeps
-		// generic dictionary operations working.
-		fields := make([]ShapeField, 0, len(it.Items))
-		for _, kv := range it.Items {
-			scope := c.snapshotStack()
-			c.walkJoined(kv.Value)
-			valueT := c.subst.FreshVar(c.arena)
-			if c.stack.Len() > scope.length {
-				valueT = c.stack.items[c.stack.Len()-1]
+		// Dict literal `{k: v, ...}`: each value is a child segment of
+		// exactly one value. Preserve concrete keys as a shape so
+		// heterogeneous dictionaries can satisfy declared dictionary
+		// shapes. Shape-to-dict unification keeps generic dictionary
+		// operations working.
+		segments := make([]childSegment, len(it.Items))
+		for i, kv := range it.Items {
+			pos := it.StartToken
+			if len(kv.Value) > 0 {
+				pos = kv.Value[0].GetStartToken()
 			}
-			fields = append(fields, ShapeField{Name: c.names.Intern(kv.Key), Type: valueT})
-			c.restoreStack(scope)
+			segments[i] = childSegment{items: kv.Value, pos: pos, collect: collectOne("dict value for key '" + kv.Key + "'")}
 		}
-		c.stack.Push(c.arena.MakeShape(fields))
+		c.checkChildStacks(segments, func(types []TypeId) TypeId {
+			fields := make([]ShapeField, len(it.Items))
+			for i, kv := range it.Items {
+				fields[i] = ShapeField{Name: c.names.Intern(kv.Key), Type: types[i]}
+			}
+			return c.arena.MakeShape(fields)
+		})
+		return
+
+	case *MShellParseFormatString:
+		c.checkFormatString(it)
 		return
 
 	case *MShellParseQuote:
@@ -594,38 +728,40 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 		return
 
 	case *MShellParseGrid:
-		// Derive a column-typed schema by walking each cell expression
-		// in isolation and unioning the per-column results. An empty
-		// column (no rows) gets a fresh var so subsequent ops can
-		// refine it.
-		cols := make([]GridSchemaCol, len(it.Columns))
-		for ci, col := range it.Columns {
-			nameId := c.names.Intern(col.Name)
-			var cellTypes []TypeId
-			for _, row := range it.Rows {
-				if ci >= len(row) {
+		// Each cell is a child segment of exactly one value. A column's
+		// type is the union of its cells' types; a column with no cells
+		// gets a fresh var so subsequent ops can refine it.
+		var segments []childSegment
+		var cellCols []int
+		for _, row := range it.Rows {
+			for ci, cell := range row {
+				if ci >= len(it.Columns) {
 					continue
 				}
-				scope := c.snapshotStack()
-				c.walkJoined(row[ci : ci+1])
-				if c.stack.Len() > scope.length {
-					cellTypes = append(cellTypes, c.stack.items[c.stack.Len()-1])
-				}
-				c.restoreStack(scope)
+				segments = append(segments, childSegment{items: []MShellParseItem{cell}, pos: cell.GetStartToken(), collect: collectOne("grid cell")})
+				cellCols = append(cellCols, ci)
 			}
-			var colType TypeId
-			switch len(cellTypes) {
-			case 0:
-				colType = c.subst.FreshVar(c.arena)
-			case 1:
-				colType = cellTypes[0]
-			default:
-				colType = c.arena.MakeUnion(cellTypes, 0)
-			}
-			cols[ci] = GridSchemaCol{Name: nameId, Type: colType}
 		}
-		schemaIdx := c.arena.MakeGridSchemaIdx(cols)
-		c.stack.Push(c.arena.MakeGrid(schemaIdx))
+		c.checkChildStacks(segments, func(types []TypeId) TypeId {
+			colTypes := make([][]TypeId, len(it.Columns))
+			for i, t := range types {
+				colTypes[cellCols[i]] = append(colTypes[cellCols[i]], t)
+			}
+			cols := make([]GridSchemaCol, len(it.Columns))
+			for ci, col := range it.Columns {
+				var colType TypeId
+				switch len(colTypes[ci]) {
+				case 0:
+					colType = c.subst.FreshVar(c.arena)
+				case 1:
+					colType = colTypes[ci][0]
+				default:
+					colType = c.arena.MakeUnion(colTypes[ci], 0)
+				}
+				cols[ci] = GridSchemaCol{Name: c.names.Intern(col.Name), Type: colType}
+			}
+			return c.arena.MakeGrid(c.arena.MakeGridSchemaIdx(cols))
+		})
 		return
 
 	case *MShellIndexerList:
@@ -696,8 +832,7 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 						storeName = storeName[:n-1]
 					}
 					storeNameId := c.names.Intern(storeName)
-					c.vars.bound[storeNameId] = fresh
-					delete(c.vars.maybeBound, storeNameId)
+					c.vars.store(storeNameId, fresh)
 					continue
 				}
 				c.errors = append(c.errors, TypeError{
@@ -716,8 +851,7 @@ func (c *Checker) checkParseItem(item MShellParseItem) {
 				storeName = storeName[:n-1]
 			}
 			storeNameId := c.names.Intern(storeName)
-			c.vars.bound[storeNameId] = top
-			delete(c.vars.maybeBound, storeNameId)
+			c.vars.store(storeNameId, top)
 		}
 		return
 
@@ -1040,22 +1174,11 @@ func (c *Checker) joinArmBranches(branches []quoteBranch) {
 	// Install the merged state on the first branch's substitution. The
 	// unioned types are already fully resolved, so they remain valid;
 	// inferInputs / inferring carry over from a representative arm.
-	c.loadBranch(branches[0])
 	// The merged types may carry free variables allocated in sibling
-	// branches whose checkpoints were longer than branch 0's. Pad the
-	// substitution to the longest checkpoint so FreshVar can never
-	// re-issue one of those ids — reuse would silently alias two
-	// unrelated variables.
-	maxLen := 0
-	for _, b := range branches {
-		if n := len(b.substCp.bound); n > maxLen {
-			maxLen = n
-		}
-	}
-	c.subst.PadTo(maxLen)
+	// branches; ids are never reused, so FreshVar can't alias them.
+	c.loadBranch(branches[0])
 	c.stack.items = append(c.stack.items[:0], mergedStack...)
-	c.vars.bound = mergedBound
-	c.vars.maybeBound = mergedMaybe
+	c.vars.adopt(mergedBound, mergedMaybe)
 	c.diverged = false
 }
 
@@ -1702,136 +1825,119 @@ func (c *Checker) bindPatternName(name string, typ TypeId) {
 	if name == "_" || name == "" {
 		return
 	}
-	c.vars.bound[c.names.Intern(name)] = typ
+	c.vars.bind(c.names.Intern(name), typ)
 }
 
-// checkFormatStringInterpolations walks each `{...}` block inside a
-// FORMATSTRING token, type-checking it as a tiny program against a
-// fresh sub-stack that inherits the current VarEnv. Each block must
-// produce exactly one value (the runtime concatenates it into the
-// output string). The outer stack and substitution are unaffected
-// regardless of what the blocks contain — only diagnostics
-// accumulate.
-//
-// The lexeme is the full `$"..."` token including the leading `$"`
-// and trailing `"`. Escape handling mirrors EvaluateFormatString in
-// the runtime: `\{` is a literal `{`, `\\` is a literal `\`, etc.
-func (c *Checker) checkFormatStringInterpolations(tok Token) {
-	runes := []rune(tok.Lexeme)
-	if len(runes) < 3 {
-		return
-	}
-	// Skip leading `$"`; stop before trailing `"`.
-	const (
-		modeNormal = iota
-		modeEscape
-		modeFormat
-	)
-	mode := modeNormal
-	startIdx := -1
-	for i := 2; i < len(runes)-1; i++ {
-		ch := runes[i]
-		switch mode {
-		case modeEscape:
-			mode = modeNormal
-		case modeNormal:
-			switch ch {
-			case '\\':
-				mode = modeEscape
-			case '{':
-				startIdx = i + 1
-				mode = modeFormat
-			}
-		case modeFormat:
-			if ch == '}' {
-				inner := string(runes[startIdx:i])
-				// Map the block's first content rune back to its
-				// position in the original source so inner diagnostics
-				// point at the interpolation, not 1:1.
-				baseLine, baseCol := runePosition(runes, startIdx, tok.Line, tok.Column)
-				c.checkFormatBlock(inner, tok, baseLine, baseCol)
-				mode = modeNormal
-				startIdx = -1
-			}
+// interpolationSig takes what a format string interpolation may produce:
+// a value the runtime can turn into text.
+const interpolationSig = "(str | path | int -- )"
+
+// A list literal, a dict value, a grid cell, and a format-string
+// interpolation all run at runtime on a new, empty stack of their own,
+// while sharing the variables of the code around them. The checker models
+// that one rule once, here: the only checker state local to a stack is the
+// stack itself and input inference, so a child segment is walked with just
+// those three fields replaced.
+
+// childSegment is code the runtime runs on its own empty stack. collect
+// turns the stack it leaves into the one type the segment contributes, or
+// returns why that stack can't be used.
+type childSegment struct {
+	items   []MShellParseItem
+	pos     Token
+	collect func(stack []TypeId) (TypeId, string)
+}
+
+// checkChildStacks checks segments in order and then pushes the type build
+// makes from their collected types. Each segment starts on an empty stack
+// with input inference off: an underflow is an error, not an input of an
+// enclosing quote, and a segment can't reach the stack below it or what
+// earlier segments produced. Each collected type is held on the outer
+// stack until build replaces them all, so segments thread through the
+// branching driver like any other steps.
+func (c *Checker) checkChildStacks(segments []childSegment, build func(types []TypeId) TypeId) {
+	n := len(segments)
+	branches := c.driveBranches([]quoteBranch{c.captureBranch()}, n+1, func(i int) func() {
+		if i < n {
+			return func() { c.checkChildStack(segments[i]) }
 		}
-	}
+		return func() {
+			base := c.stack.Len() - n
+			t := build(append([]TypeId(nil), c.stack.items[base:]...))
+			c.stack.items = append(c.stack.items[:base], t)
+		}
+	})
+	// No branches means the driver has recorded the error that killed them.
+	c.branchSpawn = append(c.branchSpawn, branches...)
 }
 
-// runePosition returns the one-based (line, column) of runes[idx] given
-// that runes[0] sits at (baseLine, baseCol). Newlines reset the column to
-// 1; every other rune advances the column by one.
-func runePosition(runes []rune, idx, baseLine, baseCol int) (int, int) {
-	line, col := baseLine, baseCol
-	for i := 0; i < idx && i < len(runes); i++ {
-		if runes[i] == '\n' {
-			line++
-			col = 1
+// checkChildStack checks one segment from the current state and spawns a
+// continuation per surviving branch: the outer stack with the segment's
+// type pushed. A branch whose stack collect rejects is dropped, the way an
+// overload that doesn't fit is; if none are left, the first reason is
+// reported at the segment.
+func (c *Checker) checkChildStack(s childSegment) {
+	outer := c.captureBranch()
+	child := outer
+	child.stack, child.inferring, child.inferInputs = nil, false, nil
+	walked := c.driveBranchesOverItems([]quoteBranch{child}, s.items)
+
+	var out []quoteBranch
+	problem := ""
+	for _, b := range walked {
+		if b.diverged {
+			// It never finishes the segment, so it contributes nothing.
+			b.stack = append([]TypeId(nil), outer.stack...)
 		} else {
-			col++
+			c.loadBranch(b)
+			t, p := s.collect(c.stack.items)
+			if p != "" {
+				if problem == "" {
+					problem = p
+				}
+				continue
+			}
+			b = c.captureBranch()
+			b.stack = append(append([]TypeId(nil), outer.stack...), t)
 		}
+		b.inferring = outer.inferring
+		b.inferInputs = append([]TypeId(nil), outer.inferInputs...)
+		out = append(out, b)
 	}
-	return line, col
+	if len(walked) > 0 && len(out) == 0 {
+		c.errors = append(c.errors, TypeError{Kind: TErrChildStack, Pos: s.pos, Hint: problem})
+	}
+	c.branchSpawn = append(c.branchSpawn, out...)
 }
 
-// remapBlockToken rewrites a token's position from format-block-local
-// coordinates (where the block source starts at line 1, column 1) to the
-// surrounding source, given that the block content begins at
-// (baseLine, baseCol). Lines past the first already start at column 1 in
-// both coordinate systems, so only their line number shifts.
-func remapBlockToken(t Token, baseLine, baseCol int) Token {
-	if t.Line == 1 {
-		t.Column = baseCol + (t.Column - 1)
-		t.Line = baseLine
-	} else {
-		t.Line = baseLine + (t.Line - 1)
+// collectOne accepts a stack of exactly one value, the rule for dict
+// values, grid cells, and interpolations.
+func collectOne(what string) func(stack []TypeId) (TypeId, string) {
+	return func(stack []TypeId) (TypeId, string) {
+		if len(stack) != 1 {
+			return 0, what + " must produce exactly one value, got " + strconv.Itoa(len(stack))
+		}
+		return stack[0], ""
 	}
-	return t
 }
 
-// checkFormatBlock lexes/parses one interpolation block and walks its
-// items on a fresh sub-stack. The current VarEnv is shared so `@name`
-// references resolve against the surrounding scope. Errors are
-// reported against the format-string token's position — finer source
-// mapping inside the block is left for a follow-up. The outer stack
-// and substitution are restored before returning.
-func (c *Checker) checkFormatBlock(src string, callSite Token, baseLine, baseCol int) {
-	lex := NewLexer(src, nil)
-	parser := NewMShellParser(lex)
-	file, err := parser.ParseFile()
-	if err != nil {
-		c.errors = append(c.errors, TypeError{
-			Kind: TErrUnknownIdentifier,
-			Pos:  callSite,
-			Name: "format-string interpolation: " + src,
-		})
-		return
+// checkFormatString checks a format string and pushes its `str`. Each
+// interpolation is a child segment that must leave one value the runtime
+// can turn into text.
+func (c *Checker) checkFormatString(fs *MShellParseFormatString) {
+	allowed := parseBuiltinSig(c, interpolationSig).Inputs[0]
+	one := collectOne("format-string interpolation")
+	segments := make([]childSegment, len(fs.Interpolations))
+	for i, items := range fs.Interpolations {
+		segments[i] = childSegment{items: items, pos: fs.InterpolationStart(i), collect: func(stack []TypeId) (TypeId, string) {
+			t, p := one(stack)
+			if p == "" && !c.unify(t, allowed) {
+				p = "format-string interpolation must produce a str, path, or int, got " + FormatType(c.arena, c.names, c.subst.Apply(c.arena, t))
+			}
+			return t, p
+		}}
 	}
-
-	outerStack := c.stack.items
-	cp := c.subst.Checkpoint()
-	c.stack.items = nil
-
-	errStart := len(c.errors)
-	walked := c.walkJoined(file.Items)
-	// Diagnostics raised while walking the block carry block-local
-	// positions; shift them back onto the original source.
-	for i := errStart; i < len(c.errors); i++ {
-		c.errors[i].Pos = remapBlockToken(c.errors[i].Pos, baseLine, baseCol)
-	}
-
-	// When the walk died, the real error is already recorded and the
-	// stack reflects a mid-step state — an arity complaint on top of it
-	// would only be noise.
-	if walked && c.stack.Len() != 1 {
-		c.errors = append(c.errors, TypeError{
-			Kind: TErrInterpolationArity,
-			Pos:  callSite,
-			Hint: "format-string interpolation `{" + src + "}` must produce exactly one value, got " + strconv.Itoa(c.stack.Len()),
-		})
-	}
-
-	c.subst.Rollback(cp)
-	c.stack.items = outerStack
+	c.checkChildStacks(segments, func([]TypeId) TypeId { return TidStr })
 }
 
 // stringLiteralValue returns the parsed content of a STRING /
@@ -2050,23 +2156,6 @@ func (c *Checker) indexerCandidates(elementIndex bool) []QuoteSig {
 func (c *Checker) isBoolOrInt(t TypeId) bool {
 	r := c.subst.Apply(c.arena, t)
 	return r == TidBool || r == TidInt
-}
-
-// snapshotStack / restoreStack capture and restore the stack
-// length so a recursive walk can be sandboxed without leaving
-// extra items behind. Variable bindings made inside the recursion
-// persist (which is fine for now — real branch reconciliation will
-// snapshot/restore VarEnv too).
-type stackSnapshotMarker struct{ length int }
-
-func (c *Checker) snapshotStack() stackSnapshotMarker {
-	return stackSnapshotMarker{length: c.stack.Len()}
-}
-
-func (c *Checker) restoreStack(s stackSnapshotMarker) {
-	if c.stack.Len() > s.length {
-		c.stack.items = c.stack.items[:s.length]
-	}
 }
 
 // refineVarSubject unifies a type-variable subject with the container

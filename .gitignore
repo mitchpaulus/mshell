@@ -9,11 +9,13 @@ tests/test_quote_stderr.txt
 tests/msh-scripts/
 
 ai/type-core-calculus.pdf
+Screenshot*.png
+
+ai/fish-priority-issues/*
 
 .redom/
 
-__pycache__
-
+*.pyc
 .codex
 __pycache__/
 

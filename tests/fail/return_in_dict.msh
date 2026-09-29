@@ -1,0 +1,5 @@
+# Should fail: return inside a dict value.
+def early (-- {str: int})
+    {"a": 1 return}
+end
+early len str wl

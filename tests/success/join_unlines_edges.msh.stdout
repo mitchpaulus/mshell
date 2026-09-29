@@ -1,0 +1,4 @@
+"" "a" "a, b" ", x, "
+"" "a\n" "a\nb\n" "\nx\n\n"
+"" "a\r\n" "a\r\nb\r\n" "\r\nx\r\n\r\n"
+a-b

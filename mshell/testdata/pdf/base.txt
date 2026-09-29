@@ -1,0 +1,23 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 595 842] >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /Rotate 90 >>
+endobj
+4 0 obj
+<< /Type /Page /Parent 2 0 R >>
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R >>
+endobj
+6 0 obj
+<< /Title <FEFF0048006900200263> /Author (Caf\351 \(R\)\222) /Producer (hand \
+written) /CreationDate (D:20240102030405-05'00') /ModDate (D:20240203Z) >>
+endobj
+trailer
+<< /Root 1 0 R /Info 6 0 R /Size 7 >>
+%%EOF

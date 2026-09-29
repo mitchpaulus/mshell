@@ -1,0 +1,2 @@
+# Static: the dup keeps a [int] reference, so the cast cannot widen the list
+[1 2] dup as [int | str] drop len wl

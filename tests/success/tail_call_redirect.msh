@@ -1,0 +1,6 @@
+# FILE:tail_call_redirect.txt
+# A definition called last in a redirected quotation writes to the
+# redirect's file, which stays open until the definition finishes.
+def hello (--) "hello" wl end
+true (hello) `tail_call_redirect.txt` > iff
+(hello) `tail_call_redirect.txt` >> x

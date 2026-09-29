@@ -1,0 +1,6 @@
+# Should fail: return inside a quotation, even one run right away by x.
+def early (-- str)
+    ("a" return) x
+    "b"
+end
+early wl
