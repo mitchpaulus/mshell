@@ -29,7 +29,7 @@ Later sections are kept as the rationale; where they conflict with this section,
 | Topic | Decision |
 |---|---|
 | G1 declarations | Approved as recommended: `type` is a transparent structural alias, `enum` is the only nominal form, `as` is static ascription only. Migrate the five existing test files that declare types. |
-| G2 mutation | Containers keep shared reference semantics. No copy-on-validate, no value semantics. Container types are invariant and every in-place write is checked against the container's static type; see the policy below. |
+| G2 mutation | Containers keep shared reference semantics. No value semantics. (No copy-on-validate: superseded 2026-09-28, shared operands are copied.) Container types are invariant and every in-place write is checked against the container's static type; see the policy below. |
 | G3 typed patterns | Keep `is TypeExpr binding`. It marks the one pattern class that performs full structural validation. Bare primitive keywords stay as they are. No further bare-name sugar for aliases in V1. |
 | JSON numbers | A JSON number with no fraction and no exponent parses as `int`; others parse as `float`. The built-in `Json` alias includes both `int` and `float`. Update parser, `Json`, runtime tests, and docs together. |
 | Operations on raw `Json` | None. `Json` is an ordinary union; getters, `map`, `len`, and similar are type errors on it. Narrow with `match`, `tryAs`, or `=> is`. |
@@ -40,6 +40,26 @@ Later sections are kept as the rationale; where they conflict with this section,
 | Redeclaration | No special cases. A duplicate declaration is an error everywhere, including interactive sessions. |
 | Name collisions | No shadowing in any direction. A constructor, type name, or definition that collides with an existing name is an error. Namespacing is future work. |
 | Checking by default | Work as if `--check-types` will become the default, including in the interactive REPL. It may be a while before the switch is made, but every decision here is judged as if all user code is checked. |
+
+### Decisions recorded 2026-09-28
+
+These supersede the conflicting parts of the 2026-09-14 table and the G2 policy below.
+The formal rules and proof sketch are in `ai/type-core-calculus.typ` (PDF alongside).
+
+| Topic | Decision |
+|---|---|
+| Soundness | No documented holes. The checker must be sound for every program it accepts; "the runtime's per-operation check stops it" is not an acceptable answer. The former G2 rule 6 hole is closed, not documented. |
+| Shared vs fresh | A shared object never gets a second, incompatible static type. A fresh object (a literal, or a builtin output marked fresh, not yet duplicated, stored, or passed to a definition) may be given any type it satisfies. The freshness analysis from #351 is kept for exactly this purpose. |
+| `tryAs` / `is` results | Validate in place and return the same value when the operand is deeply fresh, the target describes no mutable container, or the subject's static type is already assignable to the target. Otherwise return a copy of every mutable container the target describes, made during the validation walk. `parseJson tryAs T ?` never copies. |
+| In-place type changes | Redirect words, type-changing `updateCol`, `addCol`, `dropCol`, `renameCol`: in place on a fresh operand, on a copy otherwise. `[cmd]*!` is unchanged and allocation-free. |
+| `parseJson` | Returns the built-in `Json` alias (fresh), never a free type variable. |
+| `as` | Static ascription needing evidence (`source <= target`); the only extra power is widening a fresh literal element by element. |
+| Shape subtyping | Width subtyping with the four conditions S1-S4 in the core calculus: invariant field types; an optional target field needs the key (or optional key) in the source; undeclared source fields must fit the target remainder; `*: T` targets need an identical `*: T` source and `exact` targets need an `exact` source. No shape key deletion (`del` is for `{str: T}` only). No subtyping between shapes and `{str: T}` in either direction. |
+| Unknown contents | Kind patterns (`list xs`), reads of undeclared keys through open shapes, and unknown grid schemas introduce a fresh abstract type (existential unpacking). An abstract grid schema never matches a concrete one. |
+| `break` / `continue` | Allowed only inside a literal quote at the `loop`, `each`, `map`, ... site, typed per the core calculus. A stored quote that breaks is rejected. |
+| Unions | Members must have pairwise distinct runtime kinds (each base type, list, dict/shape, Maybe, quote, each grid type, each enum). `[int] \| [str]`, a union of two shapes, or of a shape and `{str: T}` are rejected; use an enum. A kind pattern on a union binds the one member of that kind at its own type, writable, with no validation or copy. |
+| Branch joins | Arms of `if`/`match` join slot by slot, with no special syntax: equal types stay; unsolved variables unify; different kinds form a union; `Maybe` joins inside; two different types of the same kind join by widening inside only when both slots are fresh (`[1]` / `["a"]` gives `[int \| str]`), and are an error otherwise. `none` is `Maybe[⊥]`; empty literals get a type variable. |
+| Divergence | A property of stack effects, not values: `exit`, `break`, `continue`, `return`, a loop with no reachable `break`, and definitions declared never to return produce an arbitrary stack and are ignored in joins. Definitions declare it with `never` as the entire output side: `def die (str -- never) ... end`. `never` is contextual (meaningful only there), cannot be combined with other outputs, and is not a value type. The checker verifies the body diverges on every path. Quote types may use it too (`(str -- never)` handlers), and a diverging quote is a subtype of any quote with the same inputs. `exit` is `(int -- never)`. |
 
 ### G2 policy: shared mutable containers, invariant container types
 
@@ -60,15 +80,15 @@ The checker keeps every container's static type fixed, so a write through one na
    A mixed list is declared up front with `[] as [int | str]`.
    This is the same rule ML applies to a mutable cell created empty.
 4. Shape width subtyping is allowed: `{name: str, age: int}` is accepted where `{name: str}` is declared.
+   Tightened 2026-09-28 (conditions S1-S4 in the core calculus): see the decision table above.
    Writing a key the static shape does not declare is an error unless the shape declares a `*: T` remainder, in which case the value is checked against `T`.
    Declared field types are invariant.
    Reading an undeclared key through an open shape yields `Maybe[value]` with the unknown remainder, never a declared field's type.
 5. `Maybe[T]` is covariant because it is immutable.
    Quotation inputs are contravariant and outputs covariant, with the container rules applied inside.
 6. Typed patterns and `tryAs` bind a new name at the target type and leave the subject binding at its original type.
-   Known hole, documented rather than prevented: narrowing the same container twice to two different container types and writing through the wider name.
-   This is not reachable through plain assignability because of rule 1.
-   The runtime's per-operation checks still stop the wrong operation.
+   Revised 2026-09-28: when the subject is a shared mutable container that is not already statically assignable to the target, the new name is bound to a copy made during validation, so no object ever has two incompatible static types.
+   This closes the former documented hole (narrowing the same container twice and writing through the wider name).
 
 No loop re-check is needed under this policy, because no static type changes after it is fixed.
 
@@ -82,7 +102,7 @@ Deferred, not rejected: letting a literal's element type variable widen when the
 It is sound (every name shares the variable, and declared types never widen) but needs a rebindable type variable, a widening rule in container unification, and a loop re-check to a fixpoint.
 Build it only if `as` on literals turns out to be common in real scripts.
 
-The acceptance rows A34 and A35 are covered by rules 1 and 2: the write through the wider binding is rejected at the call site or at the write, and the documented hole in rule 6 is the only accepted exception.
+The acceptance rows A34 and A35 are covered by rules 1 and 2: the write through the wider binding is rejected at the call site or at the write, and rule 6 (revised) leaves no exception.
 
 ## 1. Decided questions (formerly review gates)
 
@@ -105,8 +125,9 @@ Do not generate constructor names by capitalization; identifiers are case-sensit
 
 Decided: containers keep shared reference semantics at runtime, and container types are invariant in the checker.
 The full policy is in section 0.
-Value semantics, copy-on-validate, ownership, and alias-aware refinement invalidation were considered and rejected.
-Do not claim soundness by returning a read-only view of a shared object, and do not special-case `tryAs` to copy.
+Value semantics and alias-aware refinement invalidation were considered and rejected.
+Revised 2026-09-28: copy-on-validate is adopted for shared operands only, and freshness (the #351 analysis) decides when no copy is needed.
+Do not claim soundness by returning a read-only view of a shared object.
 
 ### G3: typed-pattern spelling
 
@@ -136,7 +157,7 @@ Generic user enums are deferred, so do not prematurely replace Maybe's implement
 
 ## 3. Type expressions and declarations
 
-Retain primitives, `[T]`, `{str: T}`, field shapes, `Maybe[T]`, untagged `T | U`, and quotation stack effects.
+Retain primitives, `[T]`, `{str: T}`, field shapes, `Maybe[T]`, untagged `T | U` (members of distinct runtime kinds, decision 2026-09-28), and quotation stack effects.
 Unions describe alternatives already present in the runtime value.
 Enums distinguish constructors even when their payload types are identical.
 Neither subsumes the other without changing runtime representations.
@@ -208,7 +229,7 @@ Runtime-checkability is a later semantic check, not a grammar restriction.
 
 Primitive type patterns (`int n`, etc.) use the same primitive predicate.
 `list` and `dict` kind patterns only establish the runtime kind, not arbitrary element or field facts.
-If the subject contains known list alternatives, retain their element information.
+If the subject's union has a list member, bind that member exactly (there is at most one, decision 2026-09-28).
 For an unknown subject, use an internal unknown element type, not a fresh inference variable that can become `int` just because the body performs addition.
 The internal unknown type is not an unchecked `any`; operations requiring facts about it are rejected until refined.
 Do not add public unknown-type syntax without a concrete need.
@@ -262,7 +283,7 @@ end
 
 The binding must be hygienic and must not escape.
 Evaluate and consume the input exactly once.
-Success has type `Maybe[T]` and contains the original value under the chosen common value/alias policy.
+Success has type `Maybe[T]`. It contains the original value when the operand is deeply fresh, the target describes no mutable container, or the subject is already statically assignable to the target; otherwise it contains a copy made during validation (decision 2026-09-28).
 Mismatch produces `none`.
 Malformed targets, unsupported validation, and exhausted validation resources are errors, not mismatches.
 Every error/resource rule is shared with the corresponding typed pattern.
@@ -290,6 +311,7 @@ For example `(int | str -- Maybe[int]) tryAs int` is valid.
 An optional diagnostic may reject or warn about tests proved disjoint, but the implementation must be conservative.
 Do not reuse `castOk` as an overlap check.
 Do not infer disjointness of `[int]` and `[str]`: empty lists can satisfy both structural predicates.
+(Such unions are no longer well-formed, decision 2026-09-28; this still applies to `is` tests against a value of abstract type.)
 
 The key laws:
 
@@ -348,7 +370,8 @@ Store and check this remainder in both static and runtime models.
 Do not parse a wildcard constraint and discard it.
 A homogeneous dictionary does not prove any particular required key exists.
 Remove the current unsound general dict-to-required-shape compatibility rule.
-Shape-to-dictionary compatibility must respect complete value information and the G2 policy: an open shape with an unknown remainder is not a `{str: T}`.
+There is no subtyping between shapes and `{str: T}` in either direction (decision 2026-09-28): a dictionary view of an exact shape could add keys, and a shape view of a dictionary could claim keys exist.
+Convert with `tryAs` or by writing the value as a literal.
 
 JSON number parsing changes as part of this work (approved 2026-09-14): a number with no fraction and no exponent parses as `int`, all others as `float`.
 The built-in Json descriptor includes both `int` and `float`.

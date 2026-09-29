@@ -169,6 +169,11 @@ Exit: nominal ID/list/record/tree cases work, wrong nominal arguments fail, recu
 - Keep the bind-once rule for an empty literal's element type; a mixed list is declared with `[] as [int | str]`.
 - Reject writes to keys an open shape does not declare, unless a `*: T` remainder is declared.
 - Explicitly audit lists/dicts reachable through Grid cells or other reference-bearing values; reject unsupported refinement paths until safe.
+- Tighten shape width subtyping to conditions S1-S4 of the core calculus; remove shape/dict subtyping in both directions; allow `del` on `{str: T}` only (A41-A46).
+- Keep the #351 freshness analysis as the single source of "fresh"; mark fresh outputs in the builtin table (`parseJson`, readers, `split`, ...). Delete `readOnlyArgs` and the `mutatingBuiltins` list once writes are expressed in builtin signatures.
+- Redirect words and type-changing grid column operations: in place on a fresh operand, on a copy otherwise (A47-A50).
+- Kind patterns and unknown grid schemas introduce fresh abstract types (A55, A56).
+- `break`/`continue` only inside literal quotes at the `loop`/`each`/`map`/... site (A57).
 
 These two programs pass the checker on main and fail at runtime; both become `typecheck_fail` cases:
 
@@ -193,6 +198,7 @@ Exit: both programs are rejected, a read-only generic `([a] -- str)` accepts a `
 - Implement `is TypeExpr binding` (or the approved replacement spelling).
 - Add eager Checkable validation for every referenced target, including unused union arms and empty containers.
 - Implement structural validation, enum identity/payload checks, cycle detection, and work budgets.
+- Copy during validation when the operand is shared and not already statically assignable; validate in place when it is deeply fresh (A53, A54).
 - Bind unknown list/dict contents conservatively.
 - Make recognition, binding types, runtime execution, and exhaustiveness use the same pattern meaning.
 - Support patterns inside inferred and explicitly typed quotations without first-arm over-narrowing.
@@ -212,7 +218,7 @@ Exit: paired sugar/expansion tests agree on stack, bindings, results, evaluation
 
 ### P6: builtins, migration, and handoff
 
-- Register Json and HtmlNode using the shared graph and actual parser representations.
+- Register Json and HtmlNode using the shared graph and actual parser representations; `parseJson` returns `Json`, never a free type variable (A51).
 - Audit every read-only list and dictionary definition in lib/std.msh and declare it generically (`[a]`, `{str: a}`); a definition that writes keeps its concrete element type. Checking is intended to become the default, so spurious invariance rejections from the standard library are bugs.
 - Keep HTML helpers typed precisely and migrate nominal usages to constructors where intended.
 - Update documentation source and doc/mshell.md, and rebuild docs.
@@ -220,7 +226,7 @@ Exit: paired sugar/expansion tests agree on stack, bindings, results, evaluation
 - Add grouped user-facing CHANGELOG entries and a migration explanation.
 - Run all required tests with a fresh binary; review the final diff for unwanted source-branch baggage.
 
-Exit: acceptance matrix passes, docs match implementation, remaining limitations are explicit and approved.
+Exit: acceptance matrix passes, docs match implementation, remaining limitations are explicit and approved, and there is no known unsound program (A58).
 
 ## 5. Acceptance matrix
 
@@ -263,6 +269,12 @@ Do not merely assert implementation details.
 | A31 | Inference variable required to equal [itself] | Occurs-check rejection; declared recursion unaffected |
 | A32 | Failed union/overload trial involving recursion | Does not leave successful memo assumptions or bindings behind |
 | A33 | Empty lists tested against element types | Do not diagnose definitely disjoint solely from different element types |
+| A33b | `[int] \| [str]`, `{a: int} \| {b: str}`, `{str: int} \| {a: int}` in a type expression | Rejected: two members of the same kind; an enum is accepted |
+| A33c | `if` arms `[1]` / `["a"]` (fresh), and stored `[int]` / `[str]` | Literals join to `[int \| str]` with no annotation; stored lists are an error |
+| A33e | `def die (str -- never) wl 1 exit end` used as an `else` arm; a `never` def whose body can return | First accepted and the arm ignored in the join; second rejected |
+| A33g | `def mightExit (bool -- str) if 1 exit else "didn't" end end`, and the same with `(bool -- never \| str)` | First accepted; second rejected with a message suggesting `(bool -- str)` |
+| A33f | `(-- int never)`, `[never]`, `Maybe[never]`; `def spin ( -- never) spin end`; a `(str -- never)` quote passed where `(str -- int)` is expected | First three rejected; recursion accepted; the diverging quote accepted |
+| A33d | `if` arms `1` / `2.5`, `none` / `5 just`, and a branch ending a def with declared outputs | Joined automatically / checked against the outputs; no annotation |
 | A34 | `[int]` passed where `[int | str]` is declared, or a str appended to a `[int]` | Rejected at the call site or at the write |
 | A35 | Nested container: `[[int]]` element passed to a `([int | str] -- ...)` definition, or written to through `nth` | Rejected by the same invariance rule; a `[[int]]` is not a `[[int | str]]` |
 | A36 | Actual bottom vs expected bottom | Directional subtyping; arbitrary actual values do not satisfy bottom |
@@ -270,6 +282,24 @@ Do not merely assert implementation details.
 | A38 | parseJson numbers | Runtime representation, Json descriptor, and typed checks agree |
 | A39 | Direct dictionary getter versus literal-key get | Same field type/Maybe behavior, including optional fields |
 | A40 | Unsupported refined Grid/quotation values in containers | No unsupported certification through a nested target |
+| A41 | P1: `{a: 1} dup setA` where `setA` takes `{a: int \| str}` and writes a str | Rejected: shape field types are invariant (S1) |
+| A42 | P2/P4: shape passed where `{str: T}` is declared, then read or written | Rejected: no shape/dict subtyping |
+| A43 | P3: `{}` or any `{str: T}` passed where a shape with a required field is declared | Rejected: no dict/shape subtyping; `tryAs` accepted |
+| A44 | S2: a shape lacking `timeout` passed to `{..., timeout?: int}` | Rejected unless the argument is a fresh literal |
+| A45 | S4: an `exact` shape passed where `{*: T}` is declared, and `{*: T}` where `exact` is declared | Both rejected; fresh literals accepted |
+| A46 | `del` on a shape key | Rejected; `del` on `{str: T}` accepted |
+| A47 | P6: type-changing `updateCol` on a stored grid, then the old column type read through the variable | Type-checks; the variable's grid is unchanged (new grid returned) |
+| A48 | Type-changing `updateCol` on a fresh grid (straight from a reader) | Updated in place; no copy (identity test) |
+| A49 | P7: `[echo hi] c! @c * ; drop 5 @c ; 1 +` | Type-checks and prints 6: `@c *` acted on a copy |
+| A50 | `[cmd]*!`, `[cmd] 2>&1 *`, file redirects on literals | In place, no allocation (identity or allocation test) |
+| A51 | P10: `parseJson` result used as an int | Rejected: result is `Json` |
+| A52 | P13: `parseJson as {a: int}` | Rejected: `as` needs evidence |
+| A53 | R6: the refinement scenario below | Type-checks and runs correctly: each refinement of the stored value is a copy |
+| A54 | `parseJson tryAs T ?` and `is T x` on a fresh value | Same object returned (no copy), validated in place |
+| A55 | `list xs` kind pattern, then writing an element of another list into `xs` | Rejected: abstract element types differ; writing an element of `xs` back into `xs` accepted |
+| A56 | Grid with unknown schema passed where a concrete schema is declared | Rejected; `tryAs` accepted |
+| A57 | `break` inside a stored quote later run in a loop; `break` in a literal `each` quote inside a `loop` | First rejected; second accepted with the stack typed per the core calculus |
+| A58 | Soundness oracle over `tests/success` and generated aliasing programs | No type-mismatch runtime error in any checked program |
 
 ### Concrete seed programs
 
@@ -309,18 +339,21 @@ def selectInt (int | str -- Maybe[int]) tryAs int end
 "bad" selectInt match just _ : 1 exit, none : , end
 ```
 
-Refinement scenario under the G2 policy:
+Refinement scenario under the revised G2 policy (A53):
 
-1. Create a container whose declared type allows int or str in a field, currently holding an int.
-2. Keep two names for it.
-3. Use `tryAs` or `is` to establish a required int field through one name, binding a new name at the narrower type.
-4. Write a str through the other name.
-5. Attempt integer arithmetic through the narrowed name.
+```mshell
+'{"age": 1}' parseJson j!
+@j tryAs {age: int} ? p!
+@j tryAs {str: int | str} ? d!
+@d "age" "x" set drop
+@p :age? 1 + str wl
+```
 
-Step 4 is legal for the wider name and step 5 is legal for the narrower one, so this program type-checks and fails at runtime.
-This is the documented hole in section 0, rule 6: it requires narrowing a value already held under a wider container type, and the runtime's per-operation check stops the arithmetic.
-Add it as a runtime test that documents the behavior, not as a checker test.
-Every other route to the same state, plain assignability, `as`, and in-place writes, must be rejected by the checker; test those as `typecheck_fail` cases for direct match, `tryAs`, constructor payloads, callbacks, and nested lists.
+This type-checks and prints `2`.
+`j` is a stored (shared) value, so each `tryAs` returns a copy made during validation, and the write through `d` cannot reach `p`.
+The same program starting from `... parseJson tryAs {age: int} ? p!` (fresh operand) validates in place with no copy.
+Test it as a success test, together with an identity test showing the fresh case does not copy.
+Every other route to two incompatible static types for one object (plain assignability, `as`, in-place writes, redirects, grid column updates) must be rejected by the checker; test those as `typecheck_fail` cases for direct match, `tryAs`, constructor payloads, callbacks, and nested lists.
 
 ## 6. Build and verification commands
 

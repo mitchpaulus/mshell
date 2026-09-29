@@ -1,0 +1,1214 @@
+// A core calculus for mshell's static types.
+// Build: typst compile ai/type-core-calculus.typ
+
+#set document(title: "A Core Calculus for mshell Types", author: "Claude (draft for Mitchell)")
+#set page(paper: "us-letter", margin: (x: 1in, y: 1in), numbering: "1")
+#set text(font: "Libertinus Serif", size: 11pt)
+#set par(justify: true, leading: 0.62em)
+#show table: set par(justify: false)
+#set heading(numbering: "1.1")
+#show heading.where(level: 1): it => { v(0.8em); it; v(0.3em) }
+#show raw: set text(font: "DejaVu Sans Mono", size: 0.86em)
+#show raw.where(block: true): it => block(
+  fill: luma(245), inset: 8pt, radius: 3pt, width: 100%, it,
+)
+
+// ---------- helpers ----------
+
+// An inference rule: rule("Name", prem1, prem2, ..., conclusion).
+#let rule(name, ..args) = {
+  let a = args.pos()
+  let concl = a.last()
+  let prems = a.slice(0, a.len() - 1)
+  let top = if prems.len() == 0 { $space$ } else { prems.join($quad$) }
+  box(inset: (y: 4pt), $ frac(#top, #concl) #h(0.4em) #text(size: 0.8em, smallcaps(name)) $)
+}
+
+#let rules(cols: 2, ..rs) = align(center, grid(
+  columns: cols, column-gutter: 2em, row-gutter: 0.9em, align: center + horizon,
+  ..rs.pos(),
+))
+
+#let callout(kind, title, body) = block(
+  width: 100%, inset: (left: 10pt, rest: 8pt), stroke: (left: 2pt + luma(120)),
+  fill: luma(250),
+  [*#kind* #if title != none [(#title)]. #body],
+)
+#let theorem(title, body) = callout("Theorem", title, body)
+#let lemma(title, body) = callout("Lemma", title, body)
+#let defn(title, body) = callout("Definition", title, body)
+#let principle(n, body) = callout("Principle " + str(n), none, body)
+
+#let w(s) = raw(s)                    // an mshell word, in math or text
+#let ty(s) = math.upright(math.sans(s)) // a type constructor name
+#let eff(a, b) = $#a => #b$             // stack effect
+#let qt(a, b) = $[#a -> #b]$            // quote type
+#let vec(x) = $overline(#x)$
+#let fr(x) = $#x^bullet$                // a fresh (unaliased) stack slot
+
+// ---------- title ----------
+
+#align(center)[
+  #text(size: 20pt, weight: "bold")[A Core Calculus for mshell Types]
+  #v(0.3em)
+  #text(size: 11pt)[Draft for review --- revised 2026-09-28]
+  #v(0.2em)
+  #text(size: 10pt, style: "italic")[Written by Claude from a review of the checker on `main` (b511d9b)
+  and the decisions in `ai/type-checker-enhancements-design.md`]
+]
+
+#v(1em)
+
+#block(inset: 10pt, stroke: 0.5pt + luma(160), radius: 3pt)[
+  *Summary.*
+  The current checker has no single set of rules one could write down and prove.
+  This document gives a small _core calculus_ with a standard, textbook-shaped soundness proof,
+  even though mshell has mutable, aliased lists, dicts, shapes and grids.
+  Everything else in the language is _elaboration_ into the core; only the core has to be trusted.
+
+  It adopts the decisions recorded in `ai/type-checker-enhancements-design.md` §0
+  (`type` is a transparent alias with guarded recursion, `enum` is the only nominal form,
+  `as` is static ascription only, `tryAs` is the runtime check, containers are invariant,
+  shapes have width subtyping), and adds the one rule those decisions were missing:
+
+  #align(center)[*A shared object never gets a second, incompatible static type.
+  A fresh object can be given any type it satisfies.*]
+
+  That rule closes the hole the recorded design had accepted (narrowing an aliased container twice),
+  and it fixes redirects, `updateCol` and `tryAs` with the same mechanism.
+  The goal is *no known unsoundness at all*: every counterexample is either a type error or a proof case.
+]
+
+#outline(depth: 2, indent: auto)
+
+#pagebreak()
+
+= Why a core calculus
+
+== Programs the checker accepts that then fail with type errors
+
+Each program passes `msh --type-check-only` and then fails at runtime with a type mismatch
+(not an intended failure such as a missing file). P1--P13 are on `main`; R6 is on the `try-as` branch.
+
+#table(
+  columns: (auto, 1fr, auto),
+  inset: 6pt,
+  stroke: 0.5pt + luma(180),
+  table.header([*\#*], [*Program*], [*Runtime*]),
+  [P1],
+  [```
+def setA ({a: int | str} -- ) "a" "x" set drop end
+{a: 1} dup setA :a? 1 + wl
+```],
+  [int + String],
+
+  [P2],
+  [```
+def onlyA ({a: int} -- {a: int}) end
+def vals ({str: int} -- ) values (1 + wl) each end
+{a: 1, b: "x"} onlyA vals
+```],
+  [int + String],
+
+  [P3],
+  [```
+def getA ({a: int} -- int) :a? end
+{} as {str: int} getA 1 + wl
+```],
+  [`?` on None],
+
+  [P4],
+  [```
+def put ({str: int | str} -- ) "a" "x" set drop end
+{a: 1} dup put :a? 1 + wl
+```],
+  [int + String],
+
+  [P6],
+  [```
+[| x; 1; 2; 3 |] g!
+@g "x" (str) updateCol drop
+@g "x" gridCol (1 +) map len wl
+```],
+  [int + String],
+
+  [P7],
+  [```
+[echo hi] c!
+@c * ; drop
+5 @c ; 1 + wl
+```],
+  [int + String],
+
+  [P10],
+  [```
+"\"hi\"" parseJson 1 + wl
+```],
+  [int + String],
+
+  [P13],
+  [```
+"{\"a\": 1.0}" parseJson as {a: int} :a? 1 + wl
+```],
+  [int + Float],
+
+  [R6],
+  [```
+"{\"age\": 1}" parseJson j!
+@j tryAs {age: float} ? p!
+@j tryAs {str: float | str} ? d!
+@d "age" "x" set drop
+@p :age? 1.0 + str wl
+```],
+  [float + String],
+)
+
+- P7: `*` sets the capture on the list object in place; the checker still types `@c ;` as producing nothing.
+- P10: `parseJson` is declared `(str | path | bytes -- t)` with a free `t`, so its result fits any type.
+- P13: `as` performs no runtime work, so it asserts what nothing checked.
+- R6 is the hole documented as G2 rule 6 in the enhancements design:
+  two `tryAs` refinements return _the same_ dict under two incompatible static types.
+
+== The diagnosis
+
+`unify` in `mshell/TypeChecker.go` does three jobs:
+
++ *Equality unification* of type variables (Hindley--Milner).
++ *Directional subtyping*: union injection, width subtyping on shapes,
+  string literal $subset.eq$ `str`, contravariant quote inputs.
++ *Implicit conversions*: dict $arrow.l.r$ shape.
+
+Subtyping, conversions and mutable aliased references together are the classic recipe for unsoundness
+(TAPL §15.5). The symptoms in the code:
+
+- *Patch-per-symptom.* The \#351 invariance fix added a freshness tracker, a `readOnlyArgs` mode,
+  and a hand-maintained `mutatingBuiltins` list. It covers lists and dicts,
+  but shapes (P1), conversions (P2, P4), grids (P6) and commands (P7) go around it.
+- *Order dependence.* `inputUnifyOrder` exists, and union matching commits to the first arm that
+  unifies. The answer can depend on the order constraints are visited.
+- *Too many simultaneous mechanisms.* Branch inference yields _sets_ of signatures,
+  on top of which sit user overloads and distribution over unions.
+
+Subtyping itself is not the problem. The problem is that there is no single written relation,
+so nothing says which uses of it are safe. This document writes that relation down (@sec-sub)
+and shows, clause by clause, which write would break an alias if the clause were weaker.
+
+== What we are proving
+
+#defn("Type soundness")[
+  A well-typed program never reaches a state where a builtin or core operation
+  receives a value of the wrong _runtime type_.
+  It may still stop with a *checked error*: unwrapping `none`, index out of bounds,
+  a failed process, `exit`, division by zero, a validation resource limit, and so on.
+]
+
+Soundness does _not_ promise that programs do not fail.
+It promises that failures are the ones visible in the types (a `Maybe`, a process call),
+never "Cannot add an integer to a String".
+That is exactly the property that lets the runtime type checks in `Evaluator.go` be removed,
+the original performance goal of the checker. A single accepted hole would keep them all.
+
+#pagebreak()
+
+= Design principles
+
+#principle(1)[
+  *One written subtyping relation, and nothing else.*
+  Subtyping ($tau <= upsilon$) exists only where no write can observe it:
+  union injection, `Maybe` (immutable), quote variance, and shape width subtyping under the
+  conditions of @sec-sub. List elements, dict values and shape field types are *invariant*.
+  Type variables are solved by equality only; subtyping is checked where both sides are known.
+]
+
+#principle(2)[
+  *A shared object keeps its type.*
+  Each list, dict, shape, grid and variable cell gets a type when it is created.
+  While another reference to it may exist, nothing changes that type, and every write stores
+  a value of exactly the declared type.
+]
+
+#principle(3)[
+  *A fresh object can be given any type it satisfies.*
+  If no other reference exists, nobody can observe a change of type.
+  This single exception covers: `as` on a literal (`[1 2] as [int | str]`),
+  redirects on a literal command (`[cmd]*!`), type-changing `updateCol` on a new grid,
+  and `tryAs` validating `parseJson` output in place.
+  When the operand is *not* fresh, those operations work on a copy.
+]
+
+#principle(4)[
+  *Everything else is elaboration.*
+  Overloads, `iff`, optional fields, literal-key `get`, `tryAs`, `=>`, `is` patterns:
+  all translate into core terms before core checking. Elaboration only has to produce well-typed
+  core, and the core checker re-checks what it produces.
+]
+
+#principle(5)[
+  *Builtins are axioms with a contract.*
+  The core has a table $Phi$ of builtin signatures. Each Go implementation must honor its entry
+  (@sec-contract). This is the only part of soundness not proved on paper; it is tested.
+]
+
+Principles 2 and 3 are where reference semantics enter. Reference semantics do not prevent a clean
+proof: ML has mutable arrays and references, and its soundness proof (Wright & Felleisen 1994) is a
+textbook exercise. What breaks proofs is a location being seen at two types that disagree about
+what may be written. Principle 2 forbids that for shared objects; Principle 3 notes that a fresh
+object has only one viewer, so there is nothing to disagree with.
+
+= Types
+
+== Grammar
+
+$
+  "base" B & ::= "int" | "float" | "str" | "bool" | "bytes" | "path" | "datetime" | "null" \
+  "types" tau & ::= B | alpha | k | bot | qt(vec(tau), vec(tau))
+    | ty("List") tau | ty("Dict") tau | ty("Maybe") tau \
+  & quad | {f_1, ..., f_n | rho} & "(shape)" \
+  & quad | ty("Grid"){c_1, ..., c_n} | ty("Grid"){k} & "(grid, known or abstract schema)" \
+  & quad | E & "(nominal enum)" \
+  & quad | tau_1 | tau_2 & "(union of distinct kinds, see below)" \
+  & quad | X & "(reference to a type alias)" \
+  "fields" f & ::= ell : tau | ell? : tau \
+  "remainder" rho & ::= "exact" | * : tau | "open" \
+  "stacks" sigma & ::= epsilon | sigma space tau | sigma space fr(tau) & "(top on the right; " fr(tau) " = fresh)" \
+  "schemes" s & ::= forall vec(alpha). qt(vec(tau), vec(tau)) | forall vec(alpha). qt(vec(tau), "never")
+$
+
+- $alpha$ is a type variable (solved by equality). $k$ is an *abstract* type: a fresh rigid type
+  introduced when a value's contents are unknown (@sec-unknown). $bot$ is the empty type of divergence.
+- $qt(vec(tau)_1, vec(tau)_2)$ is a *quote type*, exactly the surface `(a b -- c)`.
+  It is implicitly polymorphic in the rest of the stack (the frame lemma, @sec-sound),
+  so there are no stack variables. Stack variables would need associative unification,
+  which has no most general solutions.
+- A shape lists its declared fields (`ell?` marks a key that may be absent) and a *remainder*
+  saying what may be under undeclared keys: nothing (`exact`), values of one type (`*: T`),
+  or unknown (`open`, the default for a written shape type).
+  A shape literal has an `exact` type.
+- `Maybe` is conceptually a parameterized nominal sum; the core treats it as a built-in type former.
+  Generic user enums are deferred (recorded decision).
+- Enums are nominal: an enum value carries its enum's identity, its constructor and its payload,
+  as shipped on the enum branch.
+
+== Aliases and recursive types <sec-alias>
+
+`type X = T` is a *transparent* alias: $X$ and $T$ are interchangeable everywhere;
+the name only improves diagnostics (recorded decision G1).
+
+Aliases may be *recursive* when every recursive reference is *guarded* by a list, dict, shape field,
+`Maybe` or quote. So both of these are accepted:
+
+```
+type Json = null | bool | int | float | str | [Json] | {str: Json}
+type Person = {name: str, age: int, friends: [Person]}
+```
+
+and `type A = A`, `type A = int | A` are rejected. Recursion is not limited to enums.
+
+*Meaning.* A recursive alias denotes the infinite regular tree obtained by unfolding it.
+Two types are equal when their trees are equal, and $tau <= upsilon$ holds when it holds of the trees.
+
+*Algorithm.* The checker keeps the alias as a reference node and unfolds it only when it needs
+to look inside. To decide $tau <= upsilon$ or $tau equiv upsilon$ it carries a set of assumed pairs:
+if the pair is already assumed, it holds; otherwise assume it and compare one level.
+Guardedness makes every unfolding reach a constructor, and there are finitely many pairs of
+subterms, so this terminates (Amadio & Cardelli 1993; Kozen, Palsberg & Schwartzbach 1995).
+Assumptions made inside a failed union alternative or overload trial are rolled back with it.
+Only the alias _name_ is hashconsed; unfolded trees are never stored.
+
+== JSON
+
+`Json` is the built-in recursive alias above. Its members are exactly the values `parseJson` produces,
+so a Json value is a plain mshell value with no wrapper.
+
+- `parseJson : (str | path | bytes -- Json)`, and its result is *fresh* (@sec-fresh). This closes P10.
+- Integral JSON numbers parse as `int`, others as `float` (recorded decision).
+- There are no operations on raw `Json` (recorded decision): narrow first with `match`, `is` or `tryAs`.
+- Converting into your own type is one step, validated in place with no copy:
+
+```
+type Person = {name: str, age: int, friends: [Person]}
+"people.json" parseJson tryAs [Person] ?
+```
+
+== Unions have distinct kinds <sec-unions>
+
+Every mshell value carries its runtime kind. A union is well-formed only when its members have
+*pairwise distinct kinds*:
+
+#defn("Kind of a type")[
+  Each base type is its own kind (`int`, `float`, `str`, `bool`, `bytes`, `path`, `datetime`, `null`).
+  $"kind"(ty("List") tau) = "list"$; $"kind"(ty("Dict") tau) = "kind"({F | rho}) = "dict"$;
+  $"kind"(ty("Maybe") tau) = "maybe"$; every quote type has kind `quote`;
+  `Grid`, `GridView`, `GridRow` are three kinds; each enum is its own kind.
+  An alias has the kind of its unfolding (guardedness makes that defined).
+  Type variables, abstract types and $bot$ have no kind and cannot be union members.
+]
+
+So `int | float | str | null`, `int | [str]` and the recursive `Json` are fine, while
+`[int] | [str]`, `{a: int} | {b: str}`, `{str: int} | {a: int}` and `(int -- int) | (str -- str)`
+are rejected: two members of the same kind. Write an enum for those
+(`enum Ids = ints [int] | strs [str] end`).
+
+What this buys:
+
+- *Taking a union apart is a kind test.* A kind pattern (`int n`, `list xs`, `dict d`) identifies
+  exactly one member, in constant time, with no validation.
+- *The bound value is writable, with no copy.* If `x : int | [str]` and `@x match list xs : ...`,
+  then `xs : [str]` is the list's own type (a list keeps its exact type inside a union), so writing
+  through `xs` can break nothing. `is T` and `tryAs` are needed only to go _beyond_ what the static
+  type says, such as `Json` to `Person`.
+- *No ambiguous values.* Without the rule, `[]` is both an `[int]` and a `[str]`, and the checker
+  would have to validate every element to decide which member it holds.
+
+== Unknown contents are abstract types <sec-unknown>
+
+Several operations learn a value's _kind_ but not its contents:
+a kind pattern (`list xs`) on a value whose static type is itself abstract, reading an undeclared
+key of an `open` shape, a grid whose schema is not known statically (`pivot`, schema-less readers).
+Each introduces a *fresh abstract type* $k$, like unpacking an existential type:
+
+- `@v match list xs : ...` with $v : k_0$ abstract binds $#w("xs") : ty("List") k$ for a fresh $k$.
+  (When $v$'s type is a union, the pattern binds its list member instead; @sec-unions.)
+- Reading an undeclared key of an open shape gives $ty("Maybe") k$ for a fresh $k$.
+- A grid with unknown schema is $ty("Grid"){k}$.
+
+Generic code works on these (`len`, `each`, `map` with a generic quote, `str`),
+and a value of type $k$ can be written back into a container whose element type is the same $k$
+(for example, reordering the elements of `xs`). Nothing else accepts a $k$: it is not an `int`,
+not a `str`, and a different pattern gives a different $k'$. Narrowing uses `is` or `tryAs`.
+
+This is why a kind pattern cannot be used to break an alias: `xs` can only receive values that came
+out of `xs`. The recorded design's "internal unknown type" is exactly this, stated as a rule.
+
+#pagebreak()
+
+= Subtyping <sec-sub>
+
+$tau <= upsilon$ is the only subtyping relation. It is used at *checking positions*
+(def arguments, `as`, def outputs, quote arguments, `if`/`match` joins),
+never to solve a type variable.
+
+#rules(
+  rule("Refl", $tau <= tau$),
+  rule("Bot", $bot <= tau$),
+  rule("Union-L", $tau_1 <= upsilon$, $tau_2 <= upsilon$, $tau_1 | tau_2 <= upsilon$),
+  rule("Union-R", $tau <= upsilon_i$, $tau <= upsilon_1 | upsilon_2$),
+  rule("Maybe", $tau <= upsilon$, $ty("Maybe") tau <= ty("Maybe") upsilon$),
+  rule("Quote",
+    $vec(upsilon)_1 <= vec(tau)_1$, $vec(tau)_2 <= vec(upsilon)_2$,
+    $qt(vec(tau)_1, vec(tau)_2) <= qt(vec(upsilon)_1, vec(upsilon)_2)$),
+)
+
+There is *no* rule for $ty("List")$, $ty("Dict")$ or $ty("Grid")$ other than *Refl* (up to alias unfolding):
+they are invariant. $ty("Maybe")$ is covariant because nothing writes into a `Maybe`;
+the check inside still uses $<=$. So `Maybe[int]` $<=$ `Maybe[int | str]` holds, but
+`Maybe[[int]]` $<=$ `Maybe[[int | str]]` fails, because the lists inside are invariant.
+
+== Shape width subtyping
+
+${F_s | rho_s} <= {F_t | rho_t}$ holds when every clause below holds.
+Each clause is annotated with the write it prevents.
+"$equiv$" is type equality (invariance).
+
+#table(
+  columns: (auto, 1fr, 1fr),
+  inset: 6pt, stroke: 0.5pt + luma(180),
+  table.header([*\#*], [*Condition*], [*Otherwise this breaks*]),
+  [S1], [Target field $ell : tau$ (required): source has $ell : tau'$ required, $tau' equiv tau$.],
+    [P1: writing `str` into an `int` field through the wider view.],
+  [S2], [Target field $ell? : tau$: source has $ell : tau'$ or $ell? : tau'$ with $tau' equiv tau$.
+    A source that lacks $ell$ is *not* accepted.],
+    [The target view may set $ell$, adding a key the source's type says is absent.],
+  [S3], [Source field not declared in the target: target remainder is `open`,
+    or is $* : tau$ with the field's type $equiv tau$.],
+    [Reading that key through the target's $* : tau$ remainder at the wrong type.],
+  [S4], [Remainders: target `open` accepts any source; target $* : tau$ needs source $* : tau'$, $tau' equiv tau$;
+    target `exact` needs source `exact`.],
+    [A $* : tau$ view adds keys; an `exact` source must never gain keys, or a later $* : upsilon$ view of it reads them at $upsilon$.],
+)
+
+Writes through a shape view are limited to: setting a declared field (required or optional) to its
+declared type, and setting an undeclared key through a $* : tau$ remainder to type $tau$.
+*No write deletes a shape key* (`del` is for `Dict` only), and nothing writes through an `open` remainder.
+
+Two consequences worth stating:
+
+- S2 is stricter than today's docs ("a required value satisfies an optional parameter" still holds;
+  but a value _without_ the key does not satisfy `timeout?: int` unless it is fresh, @sec-fresh).
+  The everyday case, an option dict written as a literal at the call site, is fresh and unaffected.
+- *A shape is never a `Dict`, and a `Dict` is never a shape*, by subtyping. With an `exact` shape,
+  a `Dict` view could add a key (breaking S4). With a `Dict`, a shape view could claim a key exists (P3).
+  Conversions go through `tryAs` (shared: copy; fresh: in place), or through a fresh literal.
+  This removes P2, P3 and P4.
+
+#pagebreak()
+
+= Core terms
+
+$
+  "words" w & ::= c | (e) | p | f | #w("x") | #w("@")x | x#w("!") & "(literal, quote, builtin, def call, exec, load, store)" \
+  & quad | #w("if") e #w("else") e #w("end") | #w("loop"){e} | #w("break") | #w("continue") | #w("return") \
+  & quad | #w("each"){e} | #w("bind"){e} | dots & "(quote-taking builtins with a literal quote)" \
+  & quad | #w("shape"){ell_1, ..., ell_n} | #w("get")_ell | #w("set")_ell & "(shapes)" \
+  & quad | C | #w("match"){"arm"_i -> e_i} & "(enums, patterns)" \
+  & quad | #w("as")_tau | #w("tryAs")_tau & "(ascription, validation)" \
+  "programs" e & ::= epsilon | w space e
+$
+
+Lists, dicts, grids and processes have no special syntax in the core:
+their literals and operations are builtins $p$ with entries in $Phi$.
+
+`if` and `loop` are syntactic forms. Surface `cond (a) (b) iff` with literal quotes elaborates
+to `if`; `(body) loop` to `loop{body}`; `(body) each` to `each{body}`, and likewise for the other
+quote-taking builtins (@sec-break). This is what lets `break`, `continue` and `return` be typed:
+they appear only inside these forms and def bodies, never in a quote that could be stored and run elsewhere.
+
+= Typing rules
+
+The judgment is
+$ Gamma; L; R tack.r e : eff(sigma_1, sigma_2) $
+"in variable context $Gamma$, inside a loop whose stack is $L$ and a def that returns $R$,
+program $e$ turns a stack of type $sigma_1$ into one of type $sigma_2$."
+$L$ and $R$ are $dot$ when there is no enclosing loop or def;
+$L$ may also be $star$, inside a child-stack body where `break` is allowed (@sec-break).
+$Gamma$ maps variables to (monomorphic) types.
+
+== Structure and stack
+
+#rules(
+  rule("Empty", $Gamma;L;R tack.r epsilon : eff(sigma, sigma)$),
+  rule("Seq",
+    $Gamma;L;R tack.r w : eff(sigma_1, sigma_2)$,
+    $Gamma;L;R tack.r e : eff(sigma_2, sigma_3)$,
+    $Gamma;L;R tack.r w space e : eff(sigma_1, sigma_3)$),
+  rule("Lit", $c in B$, $Gamma;L;R tack.r c : eff(sigma, sigma space B)$),
+  rule("Prim",
+    $p : forall vec(alpha). qt(vec(tau)_1, vec(tau)_2) in Phi$,
+    $Gamma;L;R tack.r p : eff(sigma space theta vec(tau)_1, sigma space theta vec(tau)_2)$),
+  rule("Load", $Gamma(x) = tau$, $Gamma;L;R tack.r #w("@")x : eff(sigma, sigma space tau)$),
+  rule("Store", $Gamma(x) = tau$, $Gamma;L;R tack.r x#w("!") : eff(sigma space tau, sigma)$),
+)
+
+$theta$ is any substitution for $vec(alpha)$. A variable's type is fixed for its whole scope:
+storing a value of a different type is an error, never a retyping (Principle 2 for variable cells).
+
+*Checking positions.* Where a def, builtin or quote declares a parameter type $upsilon$ with no
+unsolved variables, an argument of type $tau$ is accepted when $tau <= upsilon$ (@sec-sub).
+Where the parameter mentions unsolved variables, the argument must match it by equality;
+if a union or width step would be needed there, the checker asks for an annotation instead of
+guessing. This is what makes the result independent of checking order.
+
+== Quotes, definitions, control flow
+
+#rules(
+  rule("Quote",
+    $Gamma; dot; dot tack.r e : eff(vec(tau)_1, vec(tau)_2)$,
+    $Gamma;L;R tack.r (e) : eff(sigma, sigma space qt(vec(tau)_1, vec(tau)_2))$),
+  rule("Exec",
+    $Gamma;L;R tack.r #w("x") : eff(sigma space vec(tau)_1 space qt(vec(tau)_1, vec(tau)_2), sigma space vec(tau)_2)$),
+  rule("Call",
+    $f : forall vec(alpha). qt(vec(tau)_1, vec(tau)_2)$,
+    $Gamma;L;R tack.r f : eff(sigma space theta vec(tau)_1, sigma space theta vec(tau)_2)$),
+  rule("If",
+    $Gamma;L;R tack.r e_1 : eff(sigma, sigma_1)$,
+    $Gamma;L;R tack.r e_2 : eff(sigma, sigma_2)$,
+    $sigma_1 <= sigma'$, $sigma_2 <= sigma'$,
+    $Gamma;L;R tack.r #w("if") e_1 #w("else") e_2 #w("end") : eff(sigma space "bool", sigma')$),
+  rule("Loop",
+    $Gamma; sigma; R tack.r e : eff(sigma, sigma)$,
+    $Gamma;L;R tack.r #w("loop"){e} : eff(sigma, sigma)$),
+  rule("Break", $Gamma; sigma; R tack.r #w("break") : eff(sigma, sigma')$),
+  rule("Continue", $Gamma; sigma; R tack.r #w("continue") : eff(sigma, sigma')$),
+  rule("Return", $Gamma; L; sigma tack.r #w("return") : eff(sigma, sigma')$),
+)
+
+#rules(
+  rule("Def",
+    $f : forall vec(alpha). qt(vec(tau)_1, vec(tau)_2)$,
+    $Gamma_f; dot; vec(tau)_2 tack.r e : eff(vec(tau)_1, vec(tau)_2)$,
+    $vec(alpha) "rigid in" e$,
+    $tack.r #w("def") f space e #w("end") "ok"$),
+)
+
+Remarks.
+
+- *Quote* types the body from its own entry stack, with no enclosing loop or def:
+  a stored quote cannot `break` or `return`.
+- *Exec* needs the quote's arity. In a def, quote parameters are annotated, so it is known.
+  `x` on a quote of unknown arity is an error ("annotate this quote"), not a guess.
+- *If* joins its arms (@sec-join).
+- *Break*, *Continue*, *Return* may produce any stack because control does not continue (@sec-diverge).
+- Variables are *monomorphic*; only defs are polymorphic, and defs are annotated.
+  That is the value restriction in its simplest form.
+
+== Variable scopes
+
+This matches the runtime (checked in `Evaluator.go`):
+
+- Each def _invocation_ gets one fresh variable scope. Nothing is inherited from the caller;
+  data only enters a def through its stack parameters. The top-level script is one more scope.
+- A quote literal captures the scope it is created in, *by reference*
+  (`MShellQuotation.Variables` is the enclosing map). Every quote in a def body shares that scope.
+  A returned quote keeps it alive: `def g ( -- (-- int)) 1 n! (@n) end` then `g h! 99 n! @h x` prints 1.
+- A quote can assign a variable the enclosing body reads afterwards (`(5 y!) x @y` works at runtime).
+
+So $Gamma$ is per scope: every variable assigned anywhere in the scope, including in nested quotes,
+has one type. Variable cells are heap objects, which is what makes a returned closure safe.
+Reading before assignment is handled by a *definite-assignment* check, separate from types:
+a read is accepted only if the variable is assigned on every path before it, counting stores inside
+a quote only when elaboration inlines that quote (a literal `iff`, `loop`, `x`).
+
+== Branches and joins <sec-join>
+
+When the arms of an `if` or `match` leave different types in the same stack slot, the result type is
+their *join*, computed slot by slot. There is no special syntax involved: the join uses only the
+types and the freshness of the two slots, both of which the checker already tracks.
+
++ Equal types join to themselves. $bot$ joins to the other side.
++ A slot with an unsolved type variable is *unified*, never joined, so the answer cannot depend on
+  checking order.
++ Different kinds join to their union: `int` and `float` give `int | float`; `str` and `null` give
+  `str | null`. If one side is already a union, the member of the same kind (if any) is joined with
+  the other side.
++ `Maybe` joins inside: `Maybe[int]` and `Maybe[str]` give `Maybe[int | str]`. This is safe even for
+  shared values because nothing writes into a `Maybe`.
++ Two different types of the *same* kind (two list types, two shapes, two quotes):
+  - if *both* slots are *fresh*, the join widens inside them: `[int]` and `[str]` give `[int | str]`;
+    `{a: int}` and `{a: int, b: int}` give `{a: int, b?: int}`. The result is still fresh.
+    This is Principle 3 applied at the merge: nobody else can see either value, so each may be given
+    the wider type.
+  - otherwise there is no join, and it is an error. Use an enum, or build a new value.
+
+The arms must still leave the same number of stack items (as today). Arms that diverge are ignored
+(@sec-diverge).
+
+#table(
+  columns: (1.2fr, 1fr, 1.3fr),
+  inset: 6pt, stroke: 0.5pt + luma(180),
+  table.header([*Arms leave*], [*Result*], [*What to write*]),
+  [`1` / `2.5`], [`int | float`], [nothing],
+  [`none` / `5 just`], [`Maybe[int]`], [nothing],
+  [`"a"` / `null`], [`str | null`], [nothing],
+  [`[1]` / `["a"]` (literals, fresh)], [`[int | str]`], [nothing],
+  [`{a: 1}` / `{a: 2, b: 3}` (literals, fresh)], [`{a: int, b?: int}`], [nothing],
+  [`@xs` : `[int]` / `@ys` : `[str]` (shared)], [error], [an enum, or a new list: `@xs (as int | str) map`],
+  [stored shapes `{a: int}` / `{a: int, b: int}`], [error], [`as {a: int}` in the second arm (drops `b`)],
+  [`1` / `1 exit`], [`int`], [nothing: the second arm diverges],
+  [`1` / nothing], [error], [as today: the arms must leave the same number of items],
+)
+
+`as T` after `end` is then just ordinary `as`: static ascription, plus widening if the slot is fresh.
+It is useful when you want a type other than the computed join, never required to get one.
+
+*Why `none` needs nothing.* Constants whose value does not determine their full type get the most
+precise type available, and joins or unification fill in the rest:
+
+- `none` has type `Maybe[⊥]`: the only value of type $bot$ is none at all, so `Maybe[⊥]` contains
+  exactly `none`. Since `Maybe` is covariant and $bot <= tau$ for every $tau$,
+  `Maybe[⊥]` $<=$ `Maybe[T]` for every `T`, and the join with `Maybe[int]` is `Maybe[int]`.
+  (This is how today's checker already types `none`, and how Scala types `None`.)
+- `[]` and `{}` cannot use $bot$, because lists and dicts are invariant: a `[⊥]` could never be
+  passed where `[int]` is expected. So an empty literal gets a fresh type variable, fixed by the
+  first unification (recorded decision G2 rule 3), and it is fresh, so a join may still widen it.
+
+== Divergence <sec-diverge>
+
+A word *diverges* when control never reaches the word after it: `exit`, `break`, `continue`,
+`return`, a `loop` with no reachable `break`, and a def that always does one of these.
+The core treats divergence as a property of the *stack effect*, not of a value:
+
+#rules(
+  rule("Exit", $Gamma;L;R tack.r #w("exit") : eff(sigma space "int", sigma')$),
+  rule("Loop-Forever",
+    $Gamma; sigma; R tack.r e : eff(sigma, sigma)$, $e "has no reachable" #w("break")$,
+    $Gamma;L;R tack.r #w("loop"){e} : eff(sigma, sigma')$),
+  rule("Call-Never",
+    $f : forall vec(alpha). qt(vec(tau)_1, "never")$,
+    $Gamma;L;R tack.r f : eff(sigma space theta vec(tau)_1, sigma')$),
+)
+
+The output stack $sigma'$ is _arbitrary_: since nothing after the word runs, any claim about the
+stack there is vacuously true. In the algorithm this is the "diverges" flag on an effect
+(@sec-infer): composing a diverging effect with anything gives a diverging effect, and a
+diverging arm contributes nothing to a join.
+
+This is different from the value type $bot$:
+
+- A diverging *effect* says "no stack comes out". It fits an arm that should leave two items as well as one.
+- The *type* $bot$ says "no value has this type". It appears inside other types: `Maybe[⊥]` is the
+  type of `none`, and an arm leaving a $bot$ in a slot joins to the other arm's type there.
+  $bot <= tau$ holds for every $tau$, but nothing except $bot$ satisfies an expected $bot$
+  (recorded "TidBottom audit").
+
+Today's checker types `exit` as pushing a $bot$ value and then special-cases it when reconciling
+branches. The core states it once, and the same rule covers user definitions.
+
+*Definitions that never return.* Today this program is rejected:
+
+```
+def die (str -- ) wl 1 exit end
+true if 5 else "bad" die end 1 + wl
+```
+
+because `die`'s signature says it returns normally with nothing on the stack, so the `else` arm
+leaves zero items where the `if` arm leaves one. A signature says "never returns" with `never` as
+its entire output side (decided 2026-09-28):
+
+```
+def die (str -- never) wl 1 exit end
+true if 5 else "bad" die end 1 + wl     # accepted: the else arm diverges
+```
+
+The rules for `never`:
+
+- *Position.* `never` is allowed only as the whole output side of a signature: a def signature
+  `(str -- never)` or a quote type `(str -- never)`. It cannot be combined with other outputs
+  (`(-- int never)` is an error) and is not a value type (`[never]`, `Maybe[never]` are errors;
+  $bot$ stays internal, as the type of `none`'s contents).
+- *Contextual.* It has meaning only in that position, like `is` in patterns, so it is not a reserved
+  word elsewhere. `lib/std.msh` and the tests use `never` only in comments and strings.
+- *Checked.* The body of a `never` def must diverge on every path: its inferred effect carries the
+  diverges flag. A body that can fall through (`def f (str -- never) wl end`) is an error.
+  Recursion counts: `def spin ( -- never) spin end` is accepted, since the call to `spin` diverges.
+- *Calls.* A call to a `never` def is typed by *Call-Never*: it consumes its inputs and leaves an
+  arbitrary stack, so it is ignored in branch joins like `exit`.
+- *Quotes.* A quote literal whose body always diverges has type $qt(vec(tau), "never")$, and
+  $qt(vec(tau), "never") <= qt(vec(tau), vec(upsilon))$ for every $vec(upsilon)$: a quote that never returns can
+  stand in wherever any result is expected. Executing it with `x` diverges. This lets a def take an
+  error handler, `( ... (str -- never) -- ... )`.
+- *Builtins.* `exit` is `(int -- never)` in $Phi$.
+- *Might diverge is not a type.* A def that exits on _some_ paths declares what it returns when it
+  returns; its diverging arms are ignored in the join:
+
+  ```
+  def mightExit (bool -- str)
+      if 1 exit else "didn't" end
+  end
+  ```
+
+  `(bool -- never | str)` is an error. Almost every def might not return (`exit`, an infinite loop,
+  `?` on `none`, a failed process), so "might diverge" tells a caller nothing it can act on; only
+  "always diverges" lets a caller's branch be ignored. The error message should say so and suggest
+  the plain return type. (Rust draws the same line: `-> String` may call `process::exit`, only
+  `-> !` never returns.)
+
+*What soundness says about divergence.* Nothing, on purpose. Soundness (@sec-sound) is about not
+getting stuck: `exit` steps to a final "exited with code $n$" state, which is a checked outcome, and
+an infinite loop keeps stepping forever. Neither is a type error. The type system does not promise
+termination, and code after a diverging word is typed vacuously; a warning for unreachable code
+is a lint, not part of the rules.
+
+== Quotes that break <sec-break>
+
+At runtime `break` and `continue` are _dynamically_ scoped: a `break` inside a quote given to `each`
+or `map` leaves the nearest enclosing running `loop`
+(`tests/success/break_continue_through_builtin.msh` relies on this).
+A stored quote containing `break` breaks whatever loop is running when it runs, or fails with
+"break used outside of loop". The core keeps the tested pattern and rejects the rest:
+quote-taking builtins given a literal quote elaborate to syntactic forms, and the stack the loop
+sees after the break is typed. The two kinds of builtin differ here:
+
+- A *child-stack* builtin (`each`, `map` on a list, `filter`, ...) discards the child stack on `break`;
+  the loop sees the outer stack after the builtin popped its arguments.
+- A *current-stack* builtin (`x`, `iff`, and also `map` on a Maybe, `map2`, `bind`, and `and`/`or`
+  with a quote) leaves whatever the quote pushed so far on the loop's stack.
+
+#rules(cols: 1,
+  rule("Each",
+    $Gamma; kappa; dot tack.r e : eff(alpha, epsilon)$,
+    $kappa = cases(star & "if" L = star "or" sigma = L, dot & "otherwise")$,
+    $Gamma;L;R tack.r #w("each"){e} : eff(sigma space ty("List") alpha, sigma)$),
+  rule("Break-Star", $Gamma; star; R tack.r #w("break") : eff(sigma_0, sigma')$),
+  rule("Bind",
+    $Gamma; L; dot tack.r e : eff(sigma space alpha, sigma space ty("Maybe") beta)$,
+    $Gamma;L;R tack.r #w("bind"){e} : eff(sigma space ty("Maybe") alpha, sigma space ty("Maybe") beta)$),
+)
+
+Without `break`, child-stack and current-stack execution are indistinguishable for a well-typed quote
+(frame lemma). They differ only in which stack a loop sees after a `break`.
+
+== Shapes
+
+In this document "shape" means the dictionary shape `{a: T, ...}`; the literature calls these _records_.
+Fields are unordered and each label appears at most once.
+
+#rules(cols: 1,
+  rule("ShapeLit",
+    $ell_i "distinct"$,
+    $Gamma;L;R tack.r #w("shape"){ell_1, ..., ell_n} : eff(sigma space tau_1 ... tau_n, sigma space fr({ell_1 : tau_1, ..., ell_n : tau_n | "exact"}))$),
+  rule("Get",
+    $ell : tau in F$,
+    $Gamma;L;R tack.r #w("get")_ell : eff(sigma space {F | rho}, sigma space tau)$),
+  rule("Get-Opt",
+    $ell? : tau in F$,
+    $Gamma;L;R tack.r #w("get")_ell : eff(sigma space {F | rho}, sigma space ty("Maybe") tau)$),
+  rule("Set",
+    $ell : tau in F "or" ell? : tau in F$,
+    $Gamma;L;R tack.r #w("set")_ell : eff(sigma space {F | rho} space tau, sigma space {F | rho})$),
+)
+
+*Get* on a required field is total, so `:a?` on a known required field cannot fail.
+*Set* writes exactly the field's type and never adds or deletes a declared key. Undeclared keys are
+read through `get` with a runtime key (giving $ty("Maybe")$ of the remainder, or of a fresh $k$ for `open`)
+and written only through a $* : tau$ remainder.
+
+== Freshness <sec-fresh>
+
+A stack slot marked $fr(tau)$ holds a value that nothing else references: not a variable, not
+another stack slot, not a container. Fresh values come from literals whose nested containers are
+themselves fresh, and from builtins whose $Phi$ entry marks the output fresh
+(`parseJson`, `parseCsv`, `split`, `lines`, ...). Freshness is lost by any step that could copy the
+reference: `dup`, a store, passing it to a def, putting it in a container.
+This is the analysis \#351 already implements (`fresh`, `freshDeep`), moved to where it is sound.
+
+#rules(cols: 1,
+  rule("Forget", $Gamma;L;R tack.r epsilon : eff(sigma space fr(tau), sigma space tau)$),
+  rule("Retype",
+    $v "is a literal satisfying" upsilon$,
+    $Gamma;L;R tack.r #w("as")_upsilon : eff(sigma space fr(tau), sigma space fr(upsilon))$),
+  rule("As",
+    $tau <= upsilon$,
+    $Gamma;L;R tack.r #w("as")_upsilon : eff(sigma space tau, sigma space upsilon)$),
+)
+
+*As* is static ascription (recorded decision): it needs evidence, $tau <= upsilon$, and does no work at runtime.
+*Retype* is the one extra thing `as` may do: give a fresh literal a wider type, element by element
+(`[1 2] as [int | str]`, `{url: "x"} as Request` with `timeout?` absent). This removes P13: nothing
+lets `as` claim `{a: int}` for a `Json` value.
+
+== Validation: `tryAs` and `is` <sec-tryas>
+
+#rules(cols: 1,
+  rule("TryAs",
+    $upsilon "checkable"$,
+    $Gamma;L;R tack.r #w("tryAs")_upsilon : eff(sigma space tau, sigma space ty("Maybe") upsilon)$),
+)
+
+A type is _checkable_ when it contains no quote types, no type variables and no abstract types;
+enums are checked by identity and payload, grids by schema (recorded decision). A typed pattern
+`is T x` is typed the same way and binds $x : T$ in its arm; `tryAs` is sugar for that match.
+
+*The runtime rule*, which is what closes R6:
+
++ Validate the value against $upsilon$. On mismatch, `none`.
++ On success, if $upsilon$ describes no mutable container, or the operand was fresh (deeply),
+  or $tau <= upsilon$ already held statically, the result is *the same value*.
++ Otherwise the result is a *copy*, made during the validation walk, of every mutable container
+  that $upsilon$ describes. Immutable leaves (numbers, strings, paths) are shared.
+
+So `parseJson tryAs Manifest ?` validates in place with no copy, and `@j tryAs Manifest ?` on a
+variable returns a copy that the rest of the program cannot reach through `j`. In R6, `p` and `d`
+become two different dicts, and writing `"x"` through `d` cannot affect `p`.
+
+This reverses one part of the recorded G2 policy ("no copy-on-validate") for one reason:
+without it, the theorem in @sec-sound is false. The cost is paid only when a program validates a
+container it has also stored elsewhere, and it is at most the cost of the validation walk itself.
+
+== Enums
+
+For `enum E = C_1 t_1 | ... | C_n t_n end`:
+
+#rules(
+  rule("Ctor",
+    $Gamma;L;R tack.r C_i : eff(sigma space vec(tau)_i, sigma space E)$),
+  rule("Match-Enum",
+    $forall i. space Gamma;L;R tack.r e_i : eff(sigma space vec(tau)_i, sigma')$,
+    $Gamma;L;R tack.r #w("match"){C_i -> e_i} : eff(sigma space E, sigma')$),
+)
+
+Unions are eliminated by `match` arms. A kind pattern (`int n`, `list xs`) tests the runtime kind and
+binds the one member of that kind at its own type, writable and without a copy (@sec-unions); on a
+value whose contents are not known statically it binds an abstract type (@sec-unknown).
+An `is T x` arm validates by @sec-tryas.
+A surface `match` without full coverage elaborates to one with a failing last arm, a checked error.
+
+#pagebreak()
+
+= What is primitive? Dicts, shapes and grids <sec-primitive>
+
+== Lists and dicts are just type constructors
+
+- $ty("List") tau$ is a mutable reference to a finite sequence: $ty("Ref")(ty("Seq") tau)$.
+- $ty("Dict") tau$ is a mutable reference to a finite partial function: $ty("Ref")("str" harpoon.rt tau)$.
+
+Neither needs anything from the core except a heap-object kind and entries in $Phi$.
+The one core fact about them: they are *invariant*, because they are references.
+
+== Shapes are products; dicts are functions
+
+A shape ${ell_1 : tau_1, ..., ell_n : tau_n | "exact"}$ is a *labeled product* $tau_1 times dots.c times tau_n$.
+A dict is a *function space* $"str" harpoon.rt tau$. They share a runtime representation, but they are
+different mathematical objects:
+
+- product $->$ function exists only when all $tau_i$ agree, and only as a new value (a copy, or a fresh literal).
+- function $->$ product is _partial_: keys may be missing or values of the wrong type. That is `tryAs`.
+
+Width subtyping (@sec-sub) is the part of the product view that survives aliasing: a view may forget
+fields, but may never claim a field type, a key's absence, or a remainder type that some other view
+could contradict by writing.
+
+== Grids are shapes of columns
+
+$
+  ty("Grid"){ell_1 : tau_1, ..., ell_n : tau_n}
+    & tilde.equiv ty("Ref")({ell_1 : ty("Seq") tau_1, ..., ell_n : ty("Seq") tau_n | "exact"}) & "(column store)" \
+  ty("GridRow"){C} & tilde.equiv ty("Grid"){C} times "int" & "(a cursor; reading it yields a shape)" \
+  ty("GridView"){C} & tilde.equiv ty("Grid"){C} times ty("Seq") "int" & "(a selection that sees later writes)"
+$
+
+The equal-column-length invariant is a runtime invariant, not a typing concern.
+
+- `updateCol` in place must preserve the column type. A type-changing update on a *fresh* grid
+  (straight from `readCsv`, say) happens in place; on a shared grid it returns a new grid (P6).
+- `addCol`, `dropCol`, `renameCol` follow the same rule: in place on a fresh grid, a new grid otherwise.
+- `join` needs both schemas known at the join site; the result schema is their disjoint union.
+- `pivot` and schema-less readers produce $ty("Grid"){k}$ with an abstract schema (@sec-unknown),
+  narrowed with `tryAs`. An abstract schema never matches a concrete one, which closes today's
+  "unknown grid schema matches anything".
+
+== Commands
+
+A command is a list plus its redirect state, and the redirect state is part of its type
+(the checker already tracks it). A redirect word changes that state, so it is a type change:
+
+- On a *fresh* list (`[mycmd arg arg]*!`, `[cmd] 2>&1 *`, ``[cmd] `f` >``) it updates in place,
+  with no allocation. This is essentially every redirect in real scripts.
+- On a list that may be aliased (`@c *`, `dup *`) it acts on a shallow copy that shares the argv slice (P7).
+
+== The whole picture
+
+#table(
+  columns: (auto, 1fr),
+  inset: 6pt, stroke: 0.5pt + luma(180),
+  table.header([*Surface concept*], [*Core*]),
+  [`int`, `str`, `path`, ...], [base types],
+  [`[T]`, `{str: T}`], [invariant reference types + $Phi$ entries],
+  [shape `{a: T, b?: U, *: V}`], [shape with fields and a remainder; width subtyping per @sec-sub],
+  [`Grid`, `GridView`, `GridRow`], [shapes of columns; abstract schema when unknown],
+  [`Maybe[T]`], [built-in covariant type former],
+  [`T | U`], [union of distinct kinds; eliminated by a kind test],
+  [`type X = T`], [transparent alias; guarded recursion allowed],
+  [`enum`], [the only nominal form],
+  [`Json`], [built-in recursive alias; `parseJson` returns it, fresh],
+  [`as T`], [static ascription; retypes only fresh literals],
+  [`tryAs T`, `is T x`], [validation; copies only a shared mutable value],
+  [commands], [redirect state in the type; in place when fresh, copy otherwise],
+)
+
+#pagebreak()
+
+= Operational semantics (sketch)
+
+A configuration is $chevron.l H; S; e chevron.r$: a heap $H$ from locations to objects,
+a value stack $S$, and a program $e$.
+
+$
+  "values" v & ::= c | ell | "clo"(e) | C space vec(v) \
+  "heap objects" o & ::= "list"[vec(v)] | "dict"{s |-> v} | "cell"(v) | "grid"(dots) | "cmd"(dots)
+$
+
+Shapes are dict objects at runtime. Variables are resolved to cell locations when a scope
+is entered, so `@x` becomes $#w("load") ell_x$ and `x!` becomes $#w("store") ell_x$.
+
+$
+  chevron.l H; S; c space e chevron.r & --> chevron.l H; S space c; e chevron.r \
+  chevron.l H; S; (e_1) space e chevron.r & --> chevron.l H; S space "clo"(e_1); e chevron.r \
+  chevron.l H; S space "clo"(e_1); #w("x") space e chevron.r & --> chevron.l H; S; e_1 space e chevron.r \
+  chevron.l H; S space ell; #w("get")_a space e chevron.r & --> chevron.l H; S space H(ell) "." a; e chevron.r \
+  chevron.l H; S space ell space v; #w("set")_a space e chevron.r & --> chevron.l H[ell "." a |-> v]; S space ell; e chevron.r \
+  chevron.l H; S space v; #w("tryAs")_upsilon space e chevron.r & --> chevron.l H'; S space "just"(v'); e chevron.r quad "if" "valid"(H, v, upsilon) \
+  chevron.l H; S space v; #w("tryAs")_upsilon space e chevron.r & --> chevron.l H; S space "none"; e chevron.r quad "otherwise"
+$
+
+In the *TryAs* step, $v' = v$ and $H' = H$ when the operand is fresh or needs no copy (@sec-tryas),
+and otherwise $(H', v') = "copy"_upsilon (H, v)$, which allocates new locations for the
+containers $upsilon$ describes. Validation of a cyclic value against a recursive type stops with a
+checked error (recorded decision); a DAG is fine.
+
+Builtins that take quotes and run them on a *child stack* run the closure in a nested configuration
+$chevron.l H; v; e_q chevron.r$ whose stack holds only the element.
+
+= Soundness <sec-sound>
+
+== Definitions
+
+A *store typing* $Sigma$ maps each location to the type it was created at (or retyped to while fresh).
+
+- $Sigma tack.r H$: every object $H(ell)$ has type $Sigma(ell)$.
+- $Sigma tack.r S : sigma$: the stack's values have the types in $sigma$, position by position,
+  and every slot marked $fr(tau)$ holds a location reachable from nowhere else in $H$ or $S$.
+- $Sigma tack.r chevron.l H; S; e chevron.r : sigma'$ iff $Sigma tack.r H$, $Sigma tack.r S : sigma$
+  and $dot;dot;dot tack.r e : eff(sigma, sigma')$ for some $sigma$.
+
+== The builtin contract <sec-contract>
+
+#defn("Builtin contract")[
+  For each $p : forall vec(alpha). qt(vec(tau)_1, vec(tau)_2) in Phi$, every $Sigma$, $H$, $theta$,
+  and values $vec(v)$ with $Sigma tack.r H$ and $Sigma tack.r vec(v) : theta vec(tau)_1$,
+  running $p$ either raises a checked error, or yields $H'$, $vec(v)'$ and $Sigma'$ with
+  $Sigma' tack.r H'$, $Sigma' tack.r vec(v)' : theta vec(tau)_2$, and
+  $Sigma'(ell) = Sigma(ell)$ for every $ell$ reachable from anything other than a fresh input.
+  An output marked fresh is reachable only from that output.
+]
+
+The last clause is the important one: a builtin may allocate and may retype an object it was
+handed fresh, but may not change the type of anything else. In-place `updateCol` on a shared grid (P6)
+and in-place redirects on a shared list (P7) violate exactly this clause.
+A free type variable in an output position (P10) violates the second: no value has every type.
+
+== Theorems
+
+#lemma("Frame")[
+  If $Gamma; dot; dot tack.r e : eff(sigma_1, sigma_2)$ then
+  $Gamma; dot; dot tack.r e : eff(sigma_0 space sigma_1, sigma_0 space sigma_2)$ for every $sigma_0$,
+  and at runtime $e$ never reads or writes the part of the stack below $sigma_1$.
+]
+
+This is what makes quote types implicitly rest-polymorphic. It holds provided no builtin computes
+with the whole stack. mshell has none: the only one that looks is `stack`, which prints and
+feeds nothing back (@sec-questions). Keep it that way.
+
+#lemma("Canonical forms")[
+  If $Sigma tack.r v : ty("List") tau$ then $v$ is a location with $Sigma(v) = ty("List") tau$;
+  likewise $ty("Dict")$ and $ty("Grid")$ (equality: they are invariant).
+  If $Sigma tack.r v : {F | rho}$ then $v$ is a location with $Sigma(v) <= {F | rho}$.
+  If $Sigma tack.r v : tau_1 | tau_2$ then $Sigma tack.r v : tau_i$ for exactly one $i$: the one whose kind is $v$'s runtime kind.
+  If $Sigma tack.r v : k$ for an abstract $k$, then $v$ came out of the value whose unpacking introduced $k$.
+]
+
+#lemma("Views agree on writes")[
+  If $Sigma(ell) <= {F | rho}$ and a write through the view ${F | rho}$ is allowed (@sec-sub), then the
+  same write is allowed by $Sigma(ell)$, and every other view $upsilon$ with $Sigma(ell) <= upsilon$ remains valid.
+]
+
+This lemma is the table in @sec-sub read as a proof: clause S1 gives it for declared fields, S2 for
+optional ones, S3 and S4 for remainders, and the absence of shape deletion for everything else.
+
+#theorem("Preservation")[
+  If $Sigma tack.r chevron.l H; S; e chevron.r : sigma'$ and $chevron.l H; S; e chevron.r --> chevron.l H'; S'; e' chevron.r$,
+  then there is $Sigma'$ agreeing with $Sigma$ on every shared location, with $Sigma' tack.r chevron.l H'; S'; e' chevron.r : sigma'$.
+]
+
+#theorem("Progress")[
+  If $Sigma tack.r chevron.l H; S; e chevron.r : sigma'$ then either $e = epsilon$,
+  or the configuration steps, or it steps to a checked error.
+]
+
+#theorem("Soundness")[
+  A well-typed program never reaches a stuck state. Every runtime failure is a checked error.
+]
+
+*Proof sketch.* Standard Wright--Felleisen induction. The interesting cases:
+
+- *Set on a shape.* By canonical forms $Sigma(ell) <= {F | rho}$; by "views agree on writes" the
+  write is allowed by $Sigma(ell)$, so $Sigma tack.r H'$ with $Sigma' = Sigma$.
+- *List and dict writes.* Invariance gives $Sigma(ell)$ exactly; the written value has the element type.
+- *Retype, fresh joins, fresh redirects, fresh `updateCol`.* The slot is fresh, so $ell$ is reachable only from it;
+  changing $Sigma(ell)$ cannot invalidate any other typing judgment.
+- *TryAs.* On mismatch, `none`. On success in place: either the operand was fresh (as above), or
+  $tau <= upsilon$ already held (no new view), or $upsilon$ has no mutable part (immutable values can
+  be seen at any type they satisfy). On success with copy: the copies are new locations typed at $upsilon$
+  in $Sigma'$, and validation established that their contents have those types.
+- *Kind patterns.* On a union, canonical forms say the value's own type is the member of its kind,
+  so the binding is exact and writes preserve $Sigma$. On an abstract type, the bound abstract type
+  admits only values from the same container, so writes preserve $Sigma$ by canonical forms for $k$.
+- *Prim.* By the builtin contract. *Quote / Exec.* By the frame lemma.
+
+== Where each counterexample breaks the proof
+
+#table(
+  columns: (auto, 1fr, 1fr),
+  inset: 6pt, stroke: 0.5pt + luma(180),
+  table.header([*\#*], [*Current feature*], [*What stops it in the core*]),
+  [P1], [shape field types covariant], [S1: field types are invariant],
+  [P2], [open shape $->$ dict], [no shape/dict subtyping; `tryAs` instead],
+  [P3], [dict $->$ required shape], [no dict/shape subtyping; `tryAs` instead],
+  [P4], [shape $->$ dict, then `set`], [same as P2],
+  [P6], [in-place retyping of a shared grid], [builtin contract: only fresh inputs may be retyped],
+  [P7], [in-place redirect on a shared list], [builtin contract: only fresh inputs may be retyped],
+  [P10], [`parseJson` returns a free variable], [builtin contract: $Phi$ says `Json`],
+  [P13], [`as` without evidence], [*As* needs $tau <= upsilon$; `Json` $lt.eq.not$ `{a: int}`],
+  [R6], [two refinements share one mutable object], [*TryAs* copies a shared mutable value],
+)
+
+#pagebreak()
+
+= Inference <sec-infer>
+
+Defs are annotated, so inference is local to a def body or the top-level script.
+
+== Stack-effect composition
+
+An effect is a pair (inputs, outputs) of fixed sequences plus a "diverges" flag.
+Composing $eff(vec(a), vec(b))$ then $eff(vec(c), vec(d))$:
+
+- if $|vec(b)| >= |vec(c)|$: match the top $|vec(c)|$ of $vec(b)$ against $vec(c)$; result $eff(vec(a), vec(b)' vec(d))$;
+- otherwise: match $vec(b)$ against the top $|vec(b)|$ of $vec(c)$; result $eff(vec(c)' vec(a), vec(d))$.
+
+"Match" is equality unification for positions that mention unsolved variables, and $<=$ at checking
+positions (@sec-sub). A diverging effect absorbs what follows. `if` pads both arms to the same input
+length and joins their outputs; `loop{e}` requires the body to preserve its stack.
+
+== Unification and subtyping, kept apart
+
+- *Unification* is first-order with an occurs check, over the type formers above, with the
+  assumption-set rule for recursive aliases (@sec-alias). It never enters a union or a width step.
+- *Subtyping* is the relation of @sec-sub, checked only when both sides have no unsolved variables.
+- When a check needs both at once (a union or width step against a type with unsolved variables),
+  it is an error asking for an annotation, not a search.
+
+The result: the answer does not depend on the order constraints are visited, and
+`inputUnifyOrder`, first-arm union commitment and rollback-driven overload trials are unnecessary
+inside the core. (Overload resolution happens in elaboration, below.)
+
+= Elaboration from surface mshell <sec-elab>
+
+#table(
+  columns: (auto, 1fr),
+  inset: 6pt, stroke: 0.5pt + luma(180),
+  table.header([*Surface*], [*Elaboration*]),
+  [`5 f`, where `f` takes `int | str`], [checking position: `int` $<=$ `int | str`],
+  [`[1 "a"] as [int | str]`], [*Retype* of a fresh literal],
+  [`[1 2] l! @l as [int | str]`], [*rejected*: not fresh, and lists are invariant],
+  [`{url: "x"} f` where `f` takes `{url: str, timeout?: int}`], [the fresh literal is typed at the parameter],
+  [`resp "body" get` on a shape], [$#w("get")_#raw("body")$ (syntactic: literal key directly before `get`)],
+  [`c (a) (b) iff` with literal quotes], [`c if a else b end`],
+  [`(body) loop`, `(body) each`, ...], [`loop{body}`, `each{body}`, ... (@sec-break)],
+  [`value tryAs T`], [`value match is T x : @x just, _ : none, end` with a hygienic `x`],
+  [`value => pattern`], [assertive single-arm match (recorded decision)],
+  [overloaded `+`], [choose the candidate from the known argument types; ambiguous at the end of the def is an error],
+  [overloaded op on a union operand], [a `match` with one arm per member (today's "distribution", made explicit)],
+  [`x!` reassigned at a new type, not captured by any quote], [rename (SSA); otherwise an error],
+)
+
+#pagebreak()
+
+= What changes for users
+
+Most of these are already runtime failures today; a few are real losses.
+
+#table(
+  columns: (1fr, 1fr),
+  inset: 6pt, stroke: 0.5pt + luma(180),
+  table.header([*Change*], [*Cost / mitigation*]),
+  [union members must be of distinct kinds: no `[int] | [str]`, no union of two shapes],
+    [an enum; `Json`, `int | str | null` and similar unions are unaffected],
+  [`if`/`match` arms leaving *stored* containers of the same kind but different types have no join],
+    [literal arms join automatically (@sec-join); for stored values use an enum or build a new value],
+  [a def that never returns must say so: `(str -- never)`],
+    [today such a def cannot be used in a branch at all; this makes it work],
+  [`parseJson` returns `Json`; raw `Json` has no operations],
+    [`parseJson tryAs T ?` once at the boundary, validated in place (recorded decision)],
+  [`as` needs evidence],
+    [unchanged for literals; use `tryAs` for data from outside (recorded decision)],
+  [`tryAs`/`is` on a container that is also stored elsewhere returns a copy],
+    [only when validating a shared container; `parseJson tryAs` and literals never copy],
+  [shapes and dicts do not convert by subtyping],
+    [`tryAs`, or write the value as a literal],
+  [a value missing an optional key does not satisfy `timeout?: int` unless it is fresh],
+    [option dicts written as literals at the call site are fresh],
+  [no deleting keys from a shape (`del` is for `Dict`)],
+    [use a `Dict` for dynamic keys],
+  [type-changing `updateCol` (and `addCol`, ...) on a shared grid returns a new grid],
+    [fresh grids, e.g. straight from `readCsv`, are updated in place],
+  [a redirect on a list that may be aliased (`@c *`) acts on a copy],
+    [`[cmd]*!` and every redirect straight after a literal: unchanged, in place, no allocation],
+  [`break`/`continue` only inside a literal quote at the `loop`/`each`/`map`/... site],
+    [the tested pattern still works; a stored quote that breaks does not],
+  [unknown grid schemas do not match concrete ones],
+    [`tryAs` to the declared schema once],
+  [`x` on a quote of unknown arity is an error],
+    [annotate; def parameters already are],
+)
+
+What we get back: `readOnlyArgs`, `mutatingBuiltins`, `TKStrLit`, `TKOverloadedQuote`,
+multi-signature quote inference, union distribution inside `unify`, `inputUnifyOrder` and erased
+brands can all be deleted, and the runtime type checks can go once the oracle agrees.
+
+== Mapping from current `TypeKind`s
+
+#table(
+  columns: (auto, 1fr),
+  inset: 5pt, stroke: 0.5pt + luma(180),
+  table.header([*Current*], [*Core*]),
+  [`TKPrim`], [base type],
+  [`TKMaybe`], [$ty("Maybe")$ (covariant)],
+  [`TKList`, `TKDict`], [$ty("List")$, $ty("Dict")$ (invariant)],
+  [`TKShape`], [shape with fields and remainder],
+  [`TKQuote`], [quote type $qt(vec(tau), vec(tau))$],
+  [`TKOverloadedQuote`], [gone: resolved during elaboration, or an error],
+  [`TKUnion`], [union of distinct kinds],
+  [`TKBrand`], [gone: `enum` (recorded decision G1)],
+  [`TKCommand`], [command with redirect state; fresh/copy rule],
+  [`TKVar`, `TKRigid`], [unification variable, rigid variable; plus abstract types $k$],
+  [`TKGrid`, `TKGridView`, `TKGridRow`], [grid over a schema; abstract schema instead of "unknown matches anything"],
+  [`TKStrLit`], [gone: literal-key `get` is syntax],
+  [`TidBottom`, `Diverges`], [$bot$ as a value type (`none : Maybe[⊥]`); divergence as a property of effects (@sec-diverge)],
+  [(new)], [alias reference nodes for guarded recursive `type`],
+)
+
+= Getting confidence: the validation plan
+
+A paper proof covers the core rules. It does not cover the Go code. Three things close that gap.
+
++ *Classify every runtime error.* Tag each error site in `Evaluator.go` as a _checked error_ or a
+  _type mismatch_. Soundness is then testable: type-mismatch errors are unreachable in checked programs.
++ *Soundness oracle.* Generate random well-typed programs by running the typing rules backwards,
+  run them, and fail on any type-mismatch error. Bias generation toward aliasing: `dup`, stores,
+  refinements of stored values, writes through every view. Also run every file in `tests/success`.
+  This would have found every row of the counterexample table.
++ *Per-builtin contract tests.* For each $Phi$ entry, generate inputs of the declared types and
+  check output types, that shared inputs keep their types, and that outputs marked fresh are unaliased.
+
+Every counterexample in this document becomes a `tests/typecheck_fail` case (or, for R6, a success test
+showing the copy), and the enhancements plan lists them in its acceptance matrix.
+
+= Runtime facts the rules depend on <sec-questions>
+
+Each was checked against `Evaluator.go` on `main`, not only taken from the docs.
+
+#table(
+  columns: (0.8fr, 1.5fr, 1.5fr),
+  inset: 6pt, stroke: 0.5pt + luma(180),
+  table.header([*Question*], [*What the code does*], [*Consequence for the core*]),
+  [Which stack does a quote run on?],
+    [`x`, `iff`, `loop` run on the current stack. `each`, `filter`, `map` on a list and the grid
+     functions use a fresh child stack. `map` on a Maybe, `map2`, `bind`, and `and`/`or` with a quote
+     run on the current stack and only check the net stack length.],
+    [No difference for a well-typed quote (frame lemma). It matters only for which stack a loop sees
+     after a `break` (@sec-break).],
+  [Builtins that observe the whole stack?],
+    [None that compute with it. `stack` prints the whole stack to stderr.],
+    [Frame lemma holds.],
+  [Do redirects mutate in place?],
+    [Yes: `*`, `>`, `2>&1`, ... set fields on the list object.],
+    [In place when fresh, copy when shared (P7).],
+  [Variable scoping],
+    [One scope per def invocation, none inherited; quotes capture their scope by reference and can
+     add variables to it; closures outlive the def.],
+    [$Gamma$ is per scope; cells are heap objects; definite assignment is a separate check.],
+  [Enum runtime representation],
+    [On the enum branch, values carry enum name, member and payload.],
+    [Enum identity is checkable at runtime; payloads are validated by `is`/`tryAs`.],
+  [Building shapes key by key with `set`],
+    [Almost never done.],
+    [Keys are added only through `*: T` remainders or fresh literals; no practical cost.],
+  [Do `GridView`s see later mutations of the base grid?],
+    [Yes: a view holds a pointer to the grid and a row index list.],
+    [Sound, because a shared grid's column types never change in place.],
+  [Is `break` lexically scoped?],
+    [No. It leaves whatever `loop` is running, even from inside `each` or `map`.],
+    [Kept for literal quotes at the call site; rejected in stored quotes.],
+)
+
+= References
+
+- B. C. Pierce. _Types and Programming Languages_. MIT Press, 2002. Ch. 11 (records), 13 (references), 15 (subtyping), 21 (recursive types).
+- A. K. Wright and M. Felleisen. A syntactic approach to type soundness. _Information and Computation_, 1994.
+- A. K. Wright. Simple imperative polymorphism. _LISP and Symbolic Computation_, 1995. (The value restriction.)
+- R. M. Amadio and L. Cardelli. Subtyping recursive types. _ACM TOPLAS_, 1993.
+- D. Kozen, J. Palsberg and M. I. Schwartzbach. Efficient recursive subtyping. _Mathematical Structures in Computer Science_, 1995.
+- J. C. Mitchell and G. D. Plotkin. Abstract types have existential type. _ACM TOPLAS_, 1988.
+- F. Smith, D. Walker and G. Morrisett. Alias types. _ESOP_, 2000. (Changing the type of an unaliased location.)
+- J. Dunfield and N. Krishnaswami. Bidirectional typing. _ACM Computing Surveys_, 2021.
+- C. Diggins. Typing functional stack-based languages. 2008. (See also Kitten and Factor's stack-effect inference.)

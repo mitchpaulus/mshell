@@ -8,6 +8,8 @@ tests/quote_stderr_redirect.txt
 tests/test_quote_stderr.txt
 tests/msh-scripts/
 
+ai/type-core-calculus.pdf
+
 .redom/
 
 __pycache__
