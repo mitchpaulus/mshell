@@ -205,11 +205,12 @@ Work:
 - Shapes: literal-key `get`/`set`, runtime-key `getd`/`setd` per §Runtime keys, `del` only on `{str: T}`, shape/dict subtyping by the per-label rule (a shape never becomes a `{str: T}`).
 - `as`: subtyping, or `⊑` on a fresh slot.
 - `match`: kind patterns on unions (the member of that kind, writable), kind patterns on unknown values (abstract types, and the escape check in §Unknown contents), `Maybe`, literal, list and dict patterns, `=>`.
+  Every binding is a variable of the enclosing scope, under the one-type-per-scope rule (design doc H11): the same name in two arms at different types is an error with the hint "use a new name", and a binding whose type would mention an abstract type is an error with the hint "use `:>`".
 - Unions: reject a union with two members of the same kind.
 - `parseJson` returns `Json`, fresh; no operations on raw `Json`.
 - **The builtin table.** Port every entry. For each one:
   - check it against `Evaluator.go`, so the signature accepts exactly what the runtime accepts;
-  - mark its output *fresh*, *shared*, or *fresh when a given input is fresh or its elements are immutable* (slices, `...rest`);
+  - mark its output *fresh*, *shared*, or *fresh when a given input is fresh or its elements are immutable* (slices, `...rest`); a builtin whose quote sees the elements (`filter`, `sortBy`, `groupBy`, ...) is fresh only when the elements are immutable, like `map` (design doc H10);
   - mark in-place type changes (redirects, `updateCol` and the grid mutators) as allowed only on a fresh operand;
   - replace "accepts `[int | float]`" entries with generic or per-type overloads, since `[int]` is not below `[int | float]`;
   - check that `extend` with a grid view cannot change the view's source grid at a new type.
@@ -244,8 +245,9 @@ Done when: those tests pass under the core checker, and recursive enum values pr
 ### Stage 5: Validation: `is`, `tryAs`, `deepCopy` in the checker
 
 - One runtime validator: `validate(value, type)` walks the value against a resolved type with an explicit work list. It tracks the current path to detect cycles, and counts work against a budget. Exhausting the budget or finding a cycle is an error. Shapes check declared fields and remainders, including `*: T`. Enums check identity and payloads. Grids check schemas.
-- `is T x` patterns and `tryAs` (elaborated to the match) with the typing rule in design doc §Validation: in place always; a shared operand is accepted only if its type is already below the target or the target is immutable; otherwise a type error that suggests `deepCopy`.
-- `checkable` targets: quotes, type variables and abstract types are rejected with a clear message.
+- `is T x` patterns and `tryAs` (its own word, not elaborated to a match: a hidden variable would make the result shared) with the typing rule in design doc §Validation: in place always; a shared operand is accepted only if its type is already below the target or the target is immutable; otherwise a type error that suggests `deepCopy`.
+- `checkable` targets: quotes (including a quote in the payload of any enum the target mentions), type variables and abstract types are rejected with a clear message. Compute enum checkability per declaration, like immutability (`chk` in `formal-ver/Checkable.v`).
+- Exhaustiveness: an `is T` arm covers a union member only when the member is equivalent to `T` and `T` is checkable.
 - `deepCopy` typed as `(τ -- τ•)`.
 
 Tests: R6 as written is rejected; R6 with `deepCopy` passes and prints the right value; `parseJson tryAs T ?` validates in place (an identity test); cycles and budgets give errors, not `none`; the try-as branch's validation tests.
@@ -347,6 +349,10 @@ Each line becomes a test file; the name in brackets is a suggestion.
 | `is T x` exhaustiveness: `x : int \| [Json]` matched by `is int n` and `is [Person] ps` with no `_` | fail |
 | H7: `def g (a -- Maybe[[str]]) tryAs [str] end` | fail [`h7_tvar_not_immutable`] |
 | H8: `def h (a -- int) match str x : @x 1 + , _ : drop 0 end end` | fail [`h8_tvar_kind_pattern`] |
+| H10: `[[1]] (dup e! drop true) filter as [[int \| str]]`; the same with `[1 2]` and `[int \| str]` | fail; ok [`h10_filter_fresh`] |
+| H11: `q! [1 "s"] (match int n : (@n) q! , str n : @q x 1 + drop end) each`; the same with `str s` | fail; ok [`h11_arm_bindings`] |
+| H11: `list xs` on a value of unknown type; `list :>` with the arm reordering the list | fail with a hint to use `:>`; ok |
+| `enum F = f (int -- int) end`: `tryAs F`; an `is F` arm counted as covering `F` | fail (not checkable) |
 | `tryAs a` in a def with type variable `a` | fail |
 | `def f ( -- never) 1 exit 1 + end` | ok (dead code after `exit` is not checked) |
 | `true if @xs just else @ys just end` with `xs : [int]`, `ys : [str]` stored; the same with `[1] just` and `["a"] just` | fail; ok |

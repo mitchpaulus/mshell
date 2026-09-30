@@ -640,3 +640,150 @@ Qed.
 
 Example map_widen_runs : exists H, run map_widen = ROk ONormal H [].
 Proof. vm_compute. eexists. reflexivity. Qed.
+
+(** * Builtins whose quote sees the elements
+
+    The design listed [filter] (and [sortBy], [groupBy]) as "fresh when the
+    input is fresh", like [take].  But the quote is given each element and
+    may store it, so the result's elements may be shared even when the input
+    list was fresh.  A [map] whose body keeps its element is [filter]
+    keeping everything: [[[1]] (dup e!) map], widened to [[[int | str]]],
+    lets a string be appended to the list in [e]. *)
+Definition hole_filter_fresh : prog :=
+  [ WNil; WNil; WInt 1; WPush; WPush         (* [[1]], fresh *)
+  ; WMap [WDup; WStore "e"]                  (* keeps each element; e is the inner list *)
+    (* "fresh when the input is fresh": retype to [[int | str]] *)
+  ; WInt 0; WGetAt; WStr "a"; WPush; WDrop   (* append "a" to the inner list *)
+  ; WLoad "e"; WInt 1; WGetAt; WInt 1; WAdd ].
+
+Example hole_filter_fresh_stuck : is_stuck (run hole_filter_fresh) = true.
+Proof. vm_compute. reflexivity. Qed.
+
+(** * Match bindings are variables
+
+    At runtime a match arm's bindings are stored in the enclosing variable
+    scope ([maps.Copy(frame.Context.Variables, bindings)] in Evaluator.go),
+    like [x!].  So a binding is an ordinary variable with one type per
+    scope.  Typing each arm's binding separately is the renaming of
+    [rename_*] again, and it changes what the program does.
+
+    [q! [1 "s"] (match int n : (@n) q! , str n : @q x 1 + drop end) each]:
+    the quote made in the [int] arm reads [n] when it runs, and by then the
+    [str] arm has stored ["s"] there. *)
+Definition arms_prog (n_int n_str : string) : prog :=
+  [ WQuote [WInt 0]; WStore "q"
+  ; WNil; WInt 1; WPush; WStr "s"; WPush     (* [1 "s"] : [int | str] *)
+  ; WEach [ WKindIf KInt [WStore n_int; WQuote [WLoad n_int]; WStore "q"]
+                         [WStore n_str; WLoad "q"; WExec; WInt 1; WAdd; WDrop] ] ].
+
+Example arms_same_name_stuck : is_stuck (run (arms_prog "n" "n")) = true.
+Proof. vm_compute. reflexivity. Qed.
+
+(** One name per arm type-checks and runs; the same name in both arms has no
+    typing in any context. *)
+Definition GA : tenv := [("q", TQuote [] (Some [TInt])); ("n1", TInt); ("n2", TStr)].
+
+Example arms_two_names_typed : T nosigs GA LNone LNone RNone (arms_prog "n1" "n2") [] [].
+Proof.
+  unfold arms_prog.
+  step ltac:(apply tw_quote with (ins := []) (outs := [TInt])).
+  { intros s0. simpl. step ltac:(apply tw_int). apply t_nil. }
+  step ltac:(apply tw_store with (t := TQuote [] (Some [TInt])); reflexivity).
+  step ltac:(apply tw_nil with (t := IS)).
+  step ltac:(apply tw_int).
+  eapply t_sub; [ | eapply t_cons; [apply tw_push_dp | ] | apply ssub_refl ].
+  { constructor; [apply ss_imm; [reflexivity | apply s_unionr1, s_refl] | apply ssub_refl]. }
+  step ltac:(apply tw_str).
+  eapply t_sub; [ | eapply t_cons; [apply tw_push_dp | ] | apply ssub_refl ].
+  { constructor; [apply ss_imm; [reflexivity | apply sub_str_is] | apply ssub_refl]. }
+  eapply t_sub; [ | eapply t_cons;
+    [eapply tw_each with (B' := LNone) (C' := LNone); [constructor | constructor | ] | ]
+    | apply ssub_refl ].
+  { constructor; [apply ss_forget, s_refl | constructor]. }
+  - step ltac:(apply tw_kind with (t1 := TInt); [reflexivity | | ]).
+    + step ltac:(apply tw_store with (t := TInt); reflexivity).
+      step ltac:(apply tw_quote with (ins := []) (outs := [TInt])).
+      { intros s0. simpl. step ltac:(apply tw_load with (t := TInt); reflexivity). apply t_nil. }
+      step ltac:(apply tw_store with (t := TQuote [] (Some [TInt])); reflexivity).
+      apply t_nil.
+    + cbn.
+      step ltac:(apply tw_store with (t := TStr); reflexivity).
+      step ltac:(apply tw_load with (t := TQuote [] (Some [TInt])); reflexivity).
+      step ltac:(apply tw_exec with (ins := []) (outs := [TInt]) (s := [])).
+      simpl. step ltac:(apply tw_int). step ltac:(apply tw_add). step ltac:(apply tw_drop).
+      apply t_nil.
+    + apply t_nil.
+  - apply t_nil.
+Qed.
+
+Example arms_two_names_runs : exists H, run (arms_prog "n1" "n2") = ROk ONormal H [].
+Proof. vm_compute. eexists. reflexivity. Qed.
+
+Example arms_same_name_rejected : forall G s, ~ T nosigs G LNone LNone RNone (arms_prog "n" "n") [] s.
+Proof.
+  intros G s HT.
+  apply (soundness nosigs nodefs (fun f ins outs Hs => match Hs with end) G RNone _ s HT 200).
+  vm_compute. reflexivity.
+Qed.
+
+(** ** A binding of unknown contents cannot be a variable
+
+    [list xs] on a value of unknown type gives [xs] an abstract element
+    type, fixed for one run of the arm ([tw_kind_list] checks the arm for
+    every element type).  A variable outlives the run.  Even when the checker
+    keeps [xs]'s type to the arm, a call made inside the arm can run the same
+    pattern again and store another list in [xs]:
+
+    [(match list xs : @xs 0 getAt  @go if false go! @l2 @g x end  @xs swap append drop , _ : drop end) g!]
+    [@l1 @g x] with [l1 = [1]], [l2 = ["s"]] appends [1] to [l2]. *)
+Definition reentry_arm : prog :=
+  [ WStore "xs"
+  ; WLoad "xs"; WInt 0; WGetAt                               (* an element of this run's list *)
+  ; WLoad "go"; WIf [WBool false; WStore "go"; WLoad "l2"; WLoad "g"; WExec] []
+  ; WLoad "xs"; WSwap; WPush; WDrop ].                       (* xs now holds the inner run's list *)
+
+Definition hole_bind_reentry : prog :=
+  [ WNil; WInt 1; WPush; WStore "l1"
+  ; WNil; WStr "s"; WPush; WStore "l2"
+  ; WBool true; WStore "go"
+  ; WQuote [WKindIf KList reentry_arm [WDrop]]; WStore "g"
+  ; WLoad "l1"; WLoad "g"; WExec
+  ; WLoad "l2"; WInt 2; WGetAt; WStr "x"; WCat ].
+
+Example hole_bind_reentry_stuck : is_stuck (run hole_bind_reentry) = true.
+Proof. vm_compute. reflexivity. Qed.
+
+Example hole_bind_reentry_rejected : forall G s, ~ T nosigs G LNone LNone RNone hole_bind_reentry [] s.
+Proof.
+  intros G s HT.
+  apply (soundness nosigs nodefs (fun f ins outs Hs => match Hs with end) G RNone _ s HT 200).
+  vm_compute. reflexivity.
+Qed.
+
+(** Keeping the value on the stack ([list :>]) is the core's own form: the
+    arm may reorder the list's elements.  [["x"] u!  @u match list :> dup 0 getAt append drop , _ : drop end]
+    with [u] of unknown type. *)
+Definition keep_on_stack : prog :=
+  [ WNil; WStr "x"; WPush; WStore "u"
+  ; WLoad "u"; WKindIf KList [WDup; WInt 0; WGetAt; WPush; WDrop] [WDrop] ].
+
+Example keep_on_stack_typed : T nosigs [("u", TTop)] LNone LNone RNone keep_on_stack [] [].
+Proof.
+  unfold keep_on_stack.
+  step ltac:(apply tw_nil with (t := TStr)).
+  step ltac:(apply tw_str).
+  eapply t_sub; [ | eapply t_cons; [apply tw_push_dp | ] | apply ssub_refl ].
+  { constructor; [apply ss_imm; [reflexivity | apply s_refl] | apply ssub_refl]. }
+  eapply t_sub; [ | eapply t_cons; [apply tw_store with (t := TTop); reflexivity | ] | apply ssub_refl ].
+  { constructor; [apply ss_forget, s_top | constructor]. }
+  step ltac:(apply tw_load with (t := TTop); reflexivity).
+  step ltac:(apply tw_kind_list with (s' := [])).
+  - intros a.
+    step ltac:(apply tw_dup). step ltac:(apply tw_int). step ltac:(apply tw_getat).
+    step ltac:(apply tw_push_sh). step ltac:(apply tw_drop). apply t_nil.
+  - step ltac:(apply tw_drop). apply t_nil.
+  - apply t_nil.
+Qed.
+
+Example keep_on_stack_never_stuck : forall n, eval nodefs n [OScope []] 0 [] keep_on_stack <> RStuck.
+Proof. intros n. eapply (soundness nosigs nodefs); [intros f ins outs [] | exact keep_on_stack_typed]. Qed.

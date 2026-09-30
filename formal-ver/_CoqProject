@@ -14,6 +14,7 @@ Copy.v
 RecOps.v
 Soundness.v
 Generic.v
+Checkable.v
 Frame.v
 Join.v
 Examples.v

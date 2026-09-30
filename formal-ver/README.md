@@ -8,6 +8,14 @@ make          # build (needs Rocq 9.1; defaults to ~/.opam/rocq-mshell/bin, over
 make check    # build, then print the assumptions of the main theorem
 ```
 
+To install Rocq into the switch the Makefile expects (opam 2.x, no `sudo`):
+
+```
+opam init --bare -y --disable-shell-hook
+opam switch create rocq-mshell ocaml-base-compiler.4.14.2
+opam install --switch rocq-mshell -y rocq-prover rocq-core.9.1.1
+```
+
 `make check` ends with `Closed under the global context`.
 The theorem uses no axioms and no admitted lemmas.
 A clean build takes about 20 seconds.
@@ -81,6 +89,8 @@ Everything else (`Invariant.v` onward) is proof and cannot make the theorem say 
 | Branch joins | `join_slot`, `join_slot_ub`, `if_join` in `Join.v` |
 | `map` with a literal body | `WMap`; `tw_map`, `tw_map_imm` (fresh only when the results are immutable) |
 | `return` in top-level code | return context `RAny`, `tw_return_any` |
+| Match bindings | stores into the scope (`WStore`); `list :>` is `WKindIf` with the value left on the stack |
+| Checkable targets; `is T` exhaustiveness | `chk`, `validate_complete`, `validate_complete_fresh` in `Checkable.v` |
 | Counterexamples | `Examples.v` |
 
 ## Modeling choices
@@ -173,6 +183,32 @@ Found in the elaboration (`Examples.v`):
    loop body or read after a branch. The renamed program type-checks and never gets stuck; the original,
    which is what runs, gets stuck (`rename_loop_*`, `rename_if_*`). The loop case is also accepted by the
    checker on `main` today.
+
+Found while modeling match bindings and quote-taking list builtins (`Examples.v`):
+
+10. **`filter` "fresh when the input is fresh".** The quote is given each element and may store it, so the
+    result's elements can be shared even when the input list was fresh. A `map` whose body keeps its
+    element (`filter` keeping everything) shows it (`hole_filter_fresh_stuck`). Fix: builtins whose quote
+    sees the elements (`filter`, `sortBy`, `groupBy`, ...) give a fresh result only when the elements are
+    immutable, like `map`.
+11. **Match bindings typed per arm.** The runtime stores a match arm's bindings in the enclosing scope, like
+    `x!`. Typing `int n` and `str n` in two arms separately is renaming, and a quote made in one arm reads
+    the other arm's value (`arms_same_name_stuck`, rejected by the core in any context:
+    `arms_same_name_rejected`). A binding of abstract type (`list xs` on unknown contents) fails even when
+    kept to the arm: a call inside the arm can run the same pattern again and store another list under
+    `xs` (`hole_bind_reentry_stuck`, `hole_bind_reentry_rejected`). Fix: a binding is a variable with one
+    type per scope, and cannot have an abstract type; on unknown contents, `list :>` keeps the value on the
+    stack, which is the core's `WKindIf` (`keep_on_stack_typed`).
+
+Found while proving validation complete (`Checkable.v`):
+
+- **"Checkable" must look into enum payloads.** The validator rejects every value against a quote type,
+  including a quote in an enum payload, so a real `enum F = f (int -- int) end` value fails validation
+  against `F` (`quote_enum_fails`). With that in the definition, validation never rejects a value against
+  its own checkable type (`validate_complete`, `validate_complete_fresh`), which is what exhaustiveness
+  of `is T` arms needs.
+- **`tryAs` is a core word, not sugar for a match.** A match would store the value in a hidden variable,
+  making the result shared.
 
 Design additions the proof supports:
 

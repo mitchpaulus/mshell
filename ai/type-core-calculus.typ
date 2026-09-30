@@ -51,7 +51,7 @@
 #align(center)[
   #text(size: 20pt, weight: "bold")[A Core Calculus for mshell Types]
   #v(0.3em)
-  #text(size: 11pt)[Draft for review --- revised 2026-09-29, checked against the Rocq development in `formal-ver/`]
+  #text(size: 11pt)[Draft for review --- revised 2026-09-30, checked against the Rocq development in `formal-ver/`]
   #v(0.2em)
   #text(size: 10pt, style: "italic")[Written by Claude from a review of the checker on `main` (b511d9b).
   Implementation plan: `ai/type-system-plan.md`]
@@ -87,7 +87,9 @@
   "enums are immutable" (@sec-fresh), fresh retyping of an enum argument used under a quote
   (@sec-sub), and joins that widen inside fresh quotes (@sec-join). Proving that a polymorphic def
   checked once is enough found two more: a type variable counted as immutable (@sec-fresh) and a
-  kind pattern on a type variable (@sec-unknown). Those rules are corrected below.
+  kind pattern on a type variable (@sec-unknown). Modeling match bindings and quote-taking list
+  builtins found two more: arm bindings typed per arm (@sec-unknown) and `filter` marked
+  "fresh when the input is fresh" (@sec-fresh). Those rules are corrected below.
   Rules the proof showed to be stricter than soundness needs are marked as usability choices.
 ]
 
@@ -402,8 +404,9 @@ a kind pattern (`list xs`) on a value whose static type is itself abstract, read
 key of an `open` shape, a grid whose schema is not known statically (`pivot`, schema-less readers).
 Each introduces a *fresh abstract type* $k$, like unpacking an existential type:
 
-- `@v match list xs : ...` with $v : k_0$ abstract binds $#w("xs") : ty("List") k$ for a fresh $k$.
-  (When $v$'s type is a union, the pattern binds its list member instead; @sec-unions.)
+- `@v match list :> ...` with $v : k_0$ abstract leaves the value on the stack at type
+  $ty("List") k$ for a fresh $k$. It cannot be bound to a name (see "Bindings are variables" below).
+  (When $v$'s type is a union, the pattern gives its list member instead, and `list xs` may bind it; @sec-unions.)
 - Reading an undeclared key of an open shape gives $ty("Maybe") k$ for a fresh $k$.
 - A grid with unknown schema is $ty("Grid"){k}$.
 
@@ -448,8 +451,8 @@ one fixed element type and gets stuck in the interpreter.
 invariant: an `E[int]` is not an `E[unknown]`, and writes through the payload could break it.
 
 *Type variables (corrected).* A kind pattern on a value whose type is a rigid type variable $a$ binds
-the unknown contents of that kind, as for an abstract type: `str x` binds `x : str`, `list xs` binds
-`xs : [k]` under the escape check. It must not read $a$ as "no member of kind `str`" and check the arm
+the unknown contents of that kind, as for an abstract type: `str x` binds `x : str`, and `list :>` leaves
+a `[k]` on the stack under the escape check. It must not read $a$ as "no member of kind `str`" and check the arm
 vacuously: at the instance $a = #w("str")$ the arm runs (`hole_tvar_kind_stuck` in `Examples.v`). The
 substitution lemma forces this (`kind_then_tsub` in `Generic.v`).
 
@@ -458,6 +461,30 @@ $d : {"str": k}$: the object may be a shape, and a `Dict` view could then write 
 into another field. It binds $d : {| "open"}$, the read-only view of "some dict", which every shape and
 every `Dict` is a subtype of (@sec-sub). Reads through it give `Maybe` of an unknown type.
 Writes through it are not allowed.
+
+*Bindings are variables (corrected).* A match arm's bindings (`int n`, `list xs`, `just v`, `is T x`,
+list and dict patterns, `=>`) are stored in the enclosing variable scope at runtime, the same as
+`x!` (`maps.Copy(frame.Context.Variables, bindings)` in `Evaluator.go`). So a binding is an ordinary
+variable, with one type per scope (@sec-elab):
+
+- *Two arms of one scope that bind the same name need the same type.* `int n : ... , str n : ...` is an
+  error at the second binding, with the hint "use a new name" (the user docs already write `int n`, `str s`).
+  Typing each arm's binding on its own is renaming, and it changes what the program does: a quote made in
+  the `int` arm that reads `@n` sees the string the `str` arm stored later (`arms_same_name_stuck` in
+  `Examples.v`; with two names it checks and runs, `arms_two_names_typed`).
+- *A binding cannot have an abstract type.* The variable outlives one run of the arm, and $k$ does not.
+  Keeping the binding's type to the arm is not enough either: a call made inside the arm can run the same
+  pattern again and store another list under the same name, so `@xs` after the call is a list with a
+  different element type (`hole_bind_reentry_stuck`; the core rejects it, `hole_bind_reentry_rejected`).
+  On unknown contents, use `:>` without a name: `@v match list :> ... end` checks the arm with the value
+  on the stack at $ty("List") k$, which is exactly `tw_kind_list` (`keep_on_stack_typed`). The same holds
+  for an enum kind pattern on an unknown value. `dict d` on an unknown value is fine: `{| open}`
+  mentions no abstract type.
+
+*Decided (2026-09-30): bindings stay variables of the enclosing scope.* The alternative, a new scope for
+each run of an arm, would also fix both problems, but it changes what programs do: a binding would
+disappear after `end`, which `=>` exists to avoid, and the runtime would need nested scopes. Its main gain,
+naming a value of unknown contents, is rare: `Json` and unions bind at real types.
 
 #pagebreak()
 
@@ -1125,6 +1152,13 @@ new list over shared elements, which is an ordinary shared value. So $Phi$ needs
 besides "fresh" and "shared": _fresh if that input is fresh or the elements are immutable_.
 `lines 1 skip` is fresh; `@xs 1 take` with `xs : [[int]]` is not, because its inner lists are still `xs`'s.
 
+*Not for builtins that run a quote on the elements (corrected).* `filter`, `sortBy`, `groupBy` and the
+like return the input's elements too, but their quote is given each element and may store it, so the
+elements may be shared even when the input list was fresh. `[[1]] (dup e! drop true) filter` widened to
+`[[int | str]]` would let a string be appended to the list in `e` (`hole_filter_fresh_stuck`, shown with a
+`map` whose body keeps its element, which is `filter` keeping everything). Their result is fresh only when
+the element type is immutable, the rule `map` already has.
+
 == Explicit copies: `deepCopy` <sec-copy>
 
 #rules(cols: 1,
@@ -1214,9 +1248,10 @@ the proof no longer describes the program. The only type-level alternative is a 
   table.header([*Operation*], [*Result*], [*Fresh when*]),
   [`append`, `setAt`, `del`, `insert`, `pop`], [the same list, changed in place], [the input was fresh],
   [`take`, `skip`, `:n`, `n:`, `a:b`], [a new list; elements shared (a shallow copy)], [input fresh or elements immutable],
-  [`[a ...rest b]`], [`rest` is a new list, like `skip` (runtime change needed)], [input fresh or elements immutable],
+  [`[a ...rest b]`], [`rest` is a new list, like `skip` (runtime change needed)], [never in practice: `rest` is a variable (@sec-unknown)],
   [pipe slices], [a new list of the pipe's commands (runtime change needed)], [input fresh or elements immutable],
-  [`reverse`, `sort`, `filter`], [a new list over the input's elements], [input fresh or elements immutable],
+  [`reverse`, `sort`], [a new list over the input's elements], [input fresh or elements immutable],
+  [`filter`, `sortBy`, `groupBy`, ... (a quote sees the elements)], [a new list over the input's elements], [elements immutable (`hole_filter_fresh_stuck`)],
   [`map`], [a new list of the quote's results], [result elements immutable (`tw_map_imm`)],
   [`deepCopy`], [a new tree], [always],
 )
@@ -1245,9 +1280,24 @@ new-list semantics would change meaning. It is not part of this design.
     $Gamma;L;R tack.r #w("tryAs")_upsilon : eff(sigma space tau, sigma space ty("Maybe") upsilon)$),
 )
 
-A type is _checkable_ when it contains no quote types, no type variables and no abstract types;
-enums are checked by identity and payload, grids by schema. A typed pattern
-`is T x` is typed the same way and binds $x : T$ in its arm; `tryAs` is sugar for that match.
+A type is _checkable_ when it contains no quote types, no type variables and no abstract types, and
+every enum it mentions is checkable: its constructors' payload types (with the parameters left open)
+contain no quote types either. Enums are checked by identity and payload, grids by schema. A typed pattern
+`is T x` is typed the same way and binds the variable $x : T$ (@sec-unknown, "Bindings are variables").
+
+*Checkable, precisely (clarified).* The validator cannot look inside a closure, so it rejects every
+value against a quote type, including a quote inside an enum payload: a real value of
+`enum F = f (int -- int) end` fails validation against `F` (`quote_enum_fails` in `Checkable.v`). For a
+checkable target the converse of soundness holds: a value of type $tau$ is never rejected by validation
+against $tau$; validation succeeds or runs out of its budget (`validate_complete` for shared values,
+`validate_complete_fresh` for fresh ones). This is what lets an `is T` arm count as covering a member
+of the matched type (@sec-surface). The proof states enum checkability as a flag on the declaration,
+checked against the payload types, like immutability, so recursive enums need nothing extra.
+
+*`tryAs` is a core word, not sugar for a match (clarified).* Written as
+`value match is T x : @x just, _ : none, end`, the result would come from a variable and be shared, so
+`parseJson tryAs T` could not give a fresh result as the table below says. The core has `tryAs` itself
+(`WTryAs`); `is T x` is the same validation followed by a store.
 
 *The runtime rule* is the same for every operand: validate the value against $upsilon$ in place.
 On success the result is `just` _the same value_; on mismatch it is `none`. `tryAs` never copies
@@ -1558,6 +1608,8 @@ What the mechanization does *not* cover is listed in @sec-mech.
   [H7], [a type variable counted as immutable], [type variables are not immutable (`hole_tvar_imm_stuck`)],
   [H8], [a kind pattern on a type variable read as "no member"], [a type variable is treated as unknown contents (`hole_tvar_kind_stuck`)],
   [H9], [renaming a variable stored at a new type inside a loop body, or read after a branch], [no renaming: one type per variable per scope (`rename_*`)],
+  [H10], [`filter` (and other builtins whose quote sees the elements) "fresh when the input is fresh"], [fresh only when the elements are immutable (`hole_filter_fresh_stuck`)],
+  [H11], [match bindings typed per arm, including abstract ones], [bindings are variables: one type per scope, never abstract (`arms_same_name_*`, `hole_bind_reentry_*`)],
 )
 
 #pagebreak()
@@ -1603,7 +1655,7 @@ inside the core. (Overload resolution happens in elaboration, below.)
   [`resp "body" get` on a shape], [$#w("get")_#raw("body")$ (syntactic: literal key directly before `get`)],
   [`c (a) (b) iff` with literal quotes], [`c if a else b end`],
   [`(body) loop`, `(body) each`, ...], [`loop{body}`, `each{body}`, ... (@sec-break)],
-  [`value tryAs T`], [`value match is T x : @x just, _ : none, end` with a hygienic `x`],
+  [`value tryAs T`], [$#w("tryAs")_T$, a core word (@sec-tryas); not a match with a hidden variable, which would make the result shared],
   [`value => pattern`], [assertive single-arm match (@sec-surface)],
   [overloaded `+`], [choose the candidate from the known argument types; ambiguous at the end of the def is an error],
   [overloaded op on a union operand], [a `match` with one arm per member (today's "distribution", made explicit)],
@@ -1679,11 +1731,16 @@ name is an error. A duplicate declaration or duplicate `def` is an error, includ
 
 == Patterns and validation
 
-- `value tryAs T` is sugar for `value match is T x : @x just, _ : none, end` with a hidden `x`.
-  A value that does not conform gives a bare `none`, with no diagnostic.
+- `value tryAs T` validates in place and gives `just` the same value, or `none`. An `is T x` arm does the
+  same validation and stores the value in `x`. `tryAs` is not written as that match: the store would make
+  its result shared (@sec-tryas). A value that does not conform gives a bare `none`, with no diagnostic.
+- Match bindings are variables of the enclosing scope, with one type per scope; a binding cannot have an
+  abstract type (use `:>` instead; @sec-unknown). Decided 2026-09-30.
 - `is T x` is the typed pattern. `is` has this meaning only at the head of a match arm, so it is not a
   reserved word. The binding is required and may be `_`.
-- For exhaustiveness, an `is T` arm covers a union member only when that member is equivalent to `T`.
+- For exhaustiveness, an `is T` arm covers a union member only when that member is equivalent to `T`
+  and `T` is checkable (@sec-tryas). The proof (`validate_complete`) would also allow a member that is
+  below `T`; equivalence is the simpler rule, and can be relaxed later (decided 2026-09-30).
   Anything else needs a `_` arm.
 - `value => pattern` is an assertive single-arm match: its bindings are available after it in the
   current scope, and a mismatch stops the program.
@@ -1710,8 +1767,10 @@ Most of these are already runtime failures today; a few are real losses.
     [use literal keys for declared fields; `{str: T}` is unaffected],
   [a literal around a stored value (`{a: @xs}`) is not fresh],
     [literals of fresh or immutable values (the common case) are unaffected],
-  [a value bound by `list xs` on unknown data cannot leave the arm (no storing it in an outer variable or list)],
-    [narrow with `tryAs`/`is` first, which gives a real type that can leave the arm],
+  [a kind pattern on unknown data cannot bind a name (`list xs`), and the value cannot leave the arm],
+    [work on it with `list :>`; or narrow with `tryAs`/`is` first, which gives a real type that can be bound and leave the arm],
+  [two arms of one scope cannot bind one name at different types (`int n`, `str n`)],
+    [use a different name per arm (`int n`, `str s`), as the user docs already do],
   [`if`/`match` arms leaving *stored* containers of the same kind but different types have no join],
     [literal arms join automatically (@sec-join); for stored values use an enum or build a new value],
   [`if`/`match` arms leaving quotes join only by subtyping: `(1 +)` and `("a" ++)` have no useful join],
@@ -1797,7 +1856,8 @@ formalizes.
   [`Frame.v`], [the frame lemma; divergence as a checker tracks it; dead code after a diverging word],
   [`Join.v`], [branch joins as a function, and the proof that they are upper bounds],
   [`Variance.v`], [the enum declaration checks are sound: substitution is monotone for variance (`payload_sub`) and for fresh retyping (`payload_rsub`), and preserves immutability (`payload_imm`)],
-  [`Examples.v`], [holes H1--H8 run to `RStuck`; R6 gets stuck without a copy and type-checks and runs with `deepCopy`; the copy is per path; copying a cycle is a checked error; `Maybe`, recursive `List` and non-regular `Nest` declared as generic enums],
+  [`Checkable.v`], [checkable types; validation never rejects a well-typed value against a checkable type (`validate_complete`, `validate_complete_fresh`)],
+  [`Examples.v`], [holes H1--H11 run to `RStuck`; R6 gets stuck without a copy and type-checks and runs with `deepCopy`; the copy is per path; copying a cycle is a checked error; `Maybe`, recursive `List` and non-regular `Nest` declared as generic enums],
 )
 
 *What is modeled*: everything in the calculus that interacts with aliasing, namely shared and fresh lists and
@@ -1808,7 +1868,8 @@ branch joins, `return` in top-level code, generic and recursive enums (variance,
 enum kind patterns, validation and `deepCopy` of enum values), validation with a work budget,
 variables in heap scopes captured by quotes, quotes with frame polymorphism and `never`,
 `if`, `loop` and loop-forever, `break`/`continue` through `each`, `return`, `exit`, polymorphic and
-recursive definitions, `tryAs` in its three modes, `deepCopy`, and type-changing updates of fresh records.
+recursive definitions, `tryAs` in its three modes, `deepCopy`, type-changing updates of fresh records,
+match bindings as stores into the scope, and validation completeness for checkable targets.
 
 *What is not modeled*, and what each would need:
 

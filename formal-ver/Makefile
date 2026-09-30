@@ -9,7 +9,7 @@ all: CoqMakefile
 	$(MAKE) -f CoqMakefile
 
 CoqMakefile: _CoqProject
-	coq_makefile -f _CoqProject -o CoqMakefile
+	rocq makefile -f _CoqProject -o CoqMakefile
 
 check: all
 	@printf 'From MshellCore Require Import Soundness.\nPrint Assumptions soundness.\n' > Assumptions_check.v
