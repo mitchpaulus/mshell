@@ -11,3 +11,10 @@ CoqMakefile
 CoqMakefile.conf
 .CoqMakefile.d
 Assumptions_check*
+oracle/oracle
+oracle/decide.ml
+oracle/decide.mli
+oracle/*.cm*
+oracle/*.o
+oracle/got.txt
+oracle/want.txt

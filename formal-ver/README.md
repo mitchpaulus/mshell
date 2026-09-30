@@ -59,6 +59,10 @@ Theorem subq_set_sound : forall C, (forall a b, C a b = true -> sub a b) ->  (* 
 Corollary if_join_alg : ... join_stack (le_alg C Cr n) s1 s2 = Some s' -> TW ... (WIf e1 e2) ... s'.
 ```
 
+`Escape.v` proves that the checker's escape check for kind patterns on unknown contents is enough: an arm
+checked once, with a new type variable for the unknown type that appears nowhere outside the arm, checks for every
+type (`kind_list_once`, and `kind_enum_once` with one variable per enum parameter).
+
 `eval` is a fuel-bounded definitional interpreter (`Interp.v`).
 It returns `RStuck` exactly where the Go runtime reports a type mismatch: `+` on a string, a
 missing *required* key, a non-quote given to `x`, stack underflow, and so on.
@@ -91,7 +95,8 @@ Everything else (`Invariant.v` onward) is proof and cannot make the theorem say 
 | Retype of fresh values | `rsub` / `frsub` |
 | Stack slots `τ` / `τ•` | `mark` = `Sh` / `Dp`; `slot_sub` is the one subsumption rule |
 | Typing rules, break/continue/return contexts | `TW` / `T` in `Typing.v` |
-| Kind patterns, abstract types | `tw_kind` (`kind_then`/`kind_else`), `tw_kind_list` (arm checked for every element type) |
+| Kind patterns, abstract types | `tw_kind` (`kind_then`/`kind_else`), `tw_kind_list` (arm checked for every element type), `tw_kind_enum` (for every argument list with one argument per parameter) |
+| The escape check (an arm checked once, with a new type variable) | `kind_list_once`, `kind_enum_once` in `Escape.v` |
 | `tryAs` (in place, never copies) | `tw_try_dp` / `tw_try_sub` / `tw_try_imm`; `validate` in `Interp.v` |
 | `deepCopy` (explicit, result fresh; `WCopy` in the model) | `tw_copy`; `dcopy` in `Interp.v`; `dcopy_fresh` in `Copy.v`; `inv_alloc_region` in `InvOps.v` |
 | Type-changing updates of fresh values | `tw_setk_dp`, `tw_del_dp` |
@@ -125,8 +130,8 @@ Everything else (`Invariant.v` onward) is proof and cannot make the theorem say 
   `as T` is the subsumption rule, not a word. No word's runtime behavior depends on a
   static fact: `tryAs` is always in place, and `copy` always copies.
 - **Closed types; polymorphism as instance sets.** `sigs f ins outs` lists the closed instances of
-  `f`'s signature. The checker's rigid-variable check implies this by the usual substitution lemma,
-  which is not mechanized here.
+  `f`'s signature. The checker's rigid-variable check implies this by the substitution lemma
+  (`T_subst`, `generic_def_ok` in `Generic.v`).
 - **Abstract types are universally quantified arms.** `tw_kind_list` checks the arm for every element
   type. This is what rules out escape (see findings).
 - **Unknown** is a type `TTop`. Every value has it, and no operation except kind patterns accepts it.
@@ -329,12 +334,32 @@ fixes the shape of the procedure:
 - **One set per relation**, as a procedure: fresh retyping starts a new `<=` query with an empty set
   wherever it needs `<=`; the one-set procedure accepts H12 (`alg_h12`, `mixed_alg_accepts`).
 
+Found while proving the escape check (`Escape.v`). No hole in the rules:
+
+- **The enum kind pattern checked its arm for argument lists of every length.** A checker binds one new
+  variable per parameter, which covers only lists of that length, so the rule was one no checker could
+  follow. It now quantifies over lists with one argument per parameter (`tw_kind_enum`). The soundness
+  proof needed one more fact: every enum value has a type with exactly one argument per parameter,
+  because payload types mention only the enum's own parameters (`payload_fit` in `Kind.v`).
+- **The escape check, stated exactly.** With every solved variable substituted, the new variable must
+  not appear in any variable's type, the stack below the matched value, the arm's output stack, or the
+  break, continue and return stacks. The design doc's list named the first and third and a level check
+  for unification variables, which covers the rest; it now states the proved condition too.
+
+## Comparing the Go checker with the proof
+
+`oracle/` extracts `subq`, `rsubq` and `join_slot` to OCaml as a program that answers queries on stdin
+(`make -C oracle test`). The Go port of the decision procedures and the join is compared with it on
+generated types; see `oracle/README.md` for the query syntax and what a disagreement means.
+
 ## Not modeled
 
 Generic aliases (`type Tree[a] = ...`: substitution would have to enter recursive types), termination
 and completeness of the decision procedures in `Decide.v` (they run on fuel; a no is always safe), grids and commands as such, other builtins (they need the builtin
 contract; every builtin that returns a new list follows `map`'s rule, fresh exactly when the elements are
-immutable, `tw_map_imm`), the checker algorithm (unification, overload resolution, the skolem escape check; joins, the
-decision procedures for `<=` and fresh retyping, frame and substitution lemmas are now proved),
+immutable, `tw_map_imm`), the checker algorithm (unification and overload resolution; joins, the decision procedures for `<=`
+and fresh retyping, the escape check, frame and substitution lemmas are now proved; unification and
+overload resolution need no proof if the checker checks their results again with the final
+substitution, design doc §Inference),
 and definite assignment (an unset variable is a checked error, as at runtime).
 See the "mechanized core" section of the design document for what each would need.

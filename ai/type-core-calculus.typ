@@ -514,13 +514,22 @@ For the checker this means a skolem escape check:
 - no type variable created outside the arm may be unified with a type containing $k$
   (the `acc` above). This is the standard level check for existential unpacking.
 
+*Mechanized (`Escape.v`).* Checking the arm once with a new type variable for $k$ is enough when,
+with every solved variable substituted, $k$ appears nowhere outside the arm: not in any variable's
+type, the stack below the matched value, the arm's output stack, or the break, continue and return
+stacks (`kind_list_once`; the proof is the substitution lemma). The third bullet is how a checker with
+unification variables makes sure of that: anything outside the arm existed before $k$, so it can only
+come to mention $k$ through a unification.
+
 `Examples.v` (`hole_exists`) runs the smallest version of this program: it types the arm for
 one fixed element type and gets stuck in the interpreter.
 
 *Enum kind patterns on unknown values.* A pattern for enum `E` on a value of abstract type binds
-`E[k_1 ... k_n]` with fresh abstract arguments, under the same escape check (`tw_kind_enum` in
-`Typing.v` checks the arm for every argument list). `E[unknown]` would be wrong when a parameter is
-invariant: an `E[int]` is not an `E[unknown]`, and writes through the payload could break it.
+`E[k_1 ... k_n]` with fresh abstract arguments, one per parameter, under the same escape check
+(`tw_kind_enum` in `Typing.v` checks the arm for every argument list with one argument per parameter;
+`kind_enum_once` in `Escape.v` proves that checking it once with new variables is enough).
+`E[unknown]` would be wrong when a parameter is invariant: an `E[int]` is not an `E[unknown]`,
+and writes through the payload could break it.
 
 *Type variables (corrected).* A kind pattern on a value whose type is a rigid type variable $a$ binds
 the unknown contents of that kind, as for an abstract type: `str x` binds `x : str`, and `list :>` leaves
@@ -1755,6 +1764,14 @@ length and joins their outputs; `loop{e}` requires the body to preserve its stac
 - *Subtyping* is the relation of @sec-sub, checked only when both sides have no unsolved variables.
 - When a check needs both at once (a union or width step against a type with unsolved variables),
   it is an error asking for an annotation, not a search.
+- *Unification is not trusted.* The proofs cover the typing rules and the decision procedures for
+  $<=$ and $subset.sq.eq$, not unification or overload resolution. So the checker records every
+  pair it unifies, and once a def body (or the script) is solved it checks each recorded pair again
+  with the final substitution applied: the two sides must be equal. Subtyping checks that waited for
+  their variables, and the escape check of @sec-unknown, are made with the final substitution too.
+  Then a wrong unification or a wrong overload choice (which is only the constraints of the chosen
+  candidate) shows up as an internal checker error, never as an accepted program: what is accepted is
+  a derivation of the rules, checked by code that follows the proof.
 
 The result: the answer does not depend on the order constraints are visited, and
 `inputUnifyOrder`, first-arm union commitment and rollback-driven overload trials are unnecessary
@@ -1870,7 +1887,46 @@ name is an error. A duplicate declaration or duplicate `def` is an error, includ
 
 Every rule here is judged as if `--check-types` is the default for all user code. The REPL starts
 checking each line only once the new checker is working and battle tested; the checker's state is
-built to persist across lines from the start.
+built to persist across lines from the start. The REPL checks each line live and runs it only if it
+checks (decided 2026-09-30).
+
+*A line that checks can still stop with a runtime error* (index out of range, `?` on none, a failed
+command). The checker's stack after the line assumes the line finished, and types are erased, so the
+remaining values have no known types. Decided 2026-09-30:
+
+- *The stack goes back to what it was before the line.* The REPL keeps a copy of the stack's list of
+  references before each line, and restores it on a runtime error. This restores _which values_ are
+  on the stack, not their contents: what the line changed stays changed, like its writes to variables.
+  With `[1 2 3] xs!`, the line `@xs 4 append  [] 0 getAt` fails, the stack is as before, and `xs` is
+  `[1, 2, 3, 4]`. (Today the REPL keeps the partial stack; this is a change.) The OCaml toplevel does
+  the same: a phrase that raises binds nothing, and its writes to `ref`s stay.
+- *No `deepCopy`.* A copy would restore different objects: a slot that held the same list as `xs`
+  would no longer be `xs`, which changes what later lines do. It would also copy everything on the
+  stack for every line, and fail on a cyclic value.
+- *Shared slots keep their types.* A shared value's type never changes, and every write the line made
+  through one kept that type, so each restored shared slot has the type the checker had for it before
+  the line, even if the line popped it or changed its contents.
+- *New slots the line popped get their types from their values.* The line may have changed such a
+  value's type in place (widened a list, added a key) or stored it in a variable before failing. For
+  each one: an immutable value (`int`, `str`, `bool`, or `Maybe` or an enum of those) gets the type read
+  off it, exactly. A list or dict that nothing else points to (checked by walking from the variables,
+  captured scopes and the other stack slots) gets the type read off its contents and stays new; an
+  empty list is `[⊥]`, which a new value can be widened from. Anything else, and every quote, becomes
+  `unknown`, shared. New slots the line never popped are unchanged, since nothing else could reach
+  them; the runtime records the lowest stack depth the line reached to tell them apart.
+- *Variables need nothing.* Each keeps its one type; one the line never stored reads as unset, a
+  checked error. Definitions from a line that does not check are not added.
+
+The alternative of treating every slot as shared at the end of each line would make the revert need no
+inspection, but would lose new values across lines (`readFile parseJson` on one line, `tryAs Config` on
+the next), which is how a REPL is used.
+
+*Proof obligation* (not yet mechanized): the interpreter's checked-error result carries no heap, so
+the theorem says nothing about the state after an error. The REPL needs: at a checked error the store
+typing still holds for the heap and the scopes, and the type of a location that was shared before the
+line has not changed. The rules for reading types off values follow from facts the proof already has:
+immutable values are typed without the store (`vtyped` with no locations), a value nothing else points
+to is typed by its contents (`dtyped`), and every value has type `unknown`.
 
 = What changes for users
 
@@ -1922,6 +1978,8 @@ Most of these are already runtime failures today; a few are real losses.
     [`tryAs` to the declared schema once],
   [`x` on a quote of unknown arity is an error],
     [annotate; def parameters already are],
+  [a REPL line that stops with a runtime error leaves the stack as it was before the line (its other effects stay)],
+    [none expected; today the partial stack stays, and nothing could say its types (@sec-surface)],
 )
 
 What we get back: `readOnlyArgs`, `mutatingBuiltins`, `TKStrLit`, `TKOverloadedQuote`,
@@ -1972,6 +2030,7 @@ formalizes.
   [`InvOps.v`, `RecOps.v`], [stack and heap operations on the invariant; type-changing updates of fresh records],
   [`Soundness.v`], [the theorem, for any validator with the two properties of @sec-tryas (`soundness_v`), and for the model's (`soundness`)],
   [`Generic.v`], [type variables and substitution; `T_subst` (typing is closed under substitution); `soundness_generic` (each def checked once)],
+  [`Escape.v`], [the escape check: a kind pattern's arm checked once, with a new type variable per unknown type that appears nowhere outside the arm, checks for every type (`kind_list_once`, `kind_enum_once`)],
   [`Frame.v`], [the frame lemma; divergence as a checker tracks it; dead code after a diverging word],
   [`Join.v`], [branch joins as a function (given the checker's decision procedure for $<=$ and $subset.sq.eq$), and the proof that they are upper bounds],
   [`Variance.v`], [the enum declaration checks are sound: substitution is monotone for variance (`payload_sub`) and for fresh retyping (`payload_rsub`), and preserves immutability (`payload_imm`)],
@@ -2012,9 +2071,12 @@ decision procedures for $<=$ and $subset.sq.eq$ on them.
   Other builtins still need the contract in @sec-contract and tests.
 - *The checker algorithm*. The theorem is about the declarative rules. The checker must produce only
   derivations of them. Proved: the substitution lemma (defs checked once), the frame lemma (quote
-  bodies checked once), divergence, joins, and the decision procedures for $<=$ and $subset.sq.eq$
-  (@sec-alias; right when they say yes, with termination left to guardedness). Not proved: unification,
-  overload resolution and the skolem escape check (@sec-unknown) as algorithms.
+  bodies checked once), divergence, joins, the decision procedures for $<=$ and $subset.sq.eq$
+  (@sec-alias; right when they say yes, with termination left to guardedness), and the escape check
+  (@sec-unknown). Not proved: unification and overload resolution. They need no proof, because the
+  checker checks their results again with the final substitution (@sec-infer).
+  `formal-ver/oracle/` extracts the decision procedures and the join to a program, so the Go port of
+  them can be compared with the proved functions on generated types.
 - *Definite assignment.* Reading an unset variable is a checked error in the model, as at runtime.
 - *Slices and `...rest`.* The model has no slicing words. Principle 7 is what lets them be added as
   $Phi$ entries: each returns a new object, so a slice is a shallow copy with the freshness rule of @sec-fresh.
@@ -2030,6 +2092,10 @@ The mechanized proof covers the core rules. It does not cover the Go code. Three
   run them, and fail on any type-mismatch error. Bias generation toward aliasing: `dup`, stores,
   refinements of stored values, writes through every view. Also run every file in `tests/success`.
   This would have found every row of the counterexample table.
++ *Differential tests of the relations.* The Go `<=`, $subset.sq.eq$ and join are compared with the
+  functions extracted from `Decide.v` and `Join.v` (`formal-ver/oracle/`) on generated types,
+  including guarded recursive aliases and generic enums. A yes from Go that the oracle does not give
+  is a possible soundness bug.
 + *Per-builtin contract tests.* For each $Phi$ entry, generate inputs of the declared types and
   check output types, that shared inputs keep their types, and that outputs marked fresh are unaliased.
 

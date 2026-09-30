@@ -36,6 +36,7 @@ Current:
 - `ai/type-system-plan.md`: this plan, including every open question.
 - `ai/type-system-progress.md`: the progress log, created when work starts.
 - `formal-ver/`: the Rocq proof of the core.
+- `formal-ver/oracle/`: the proved decision procedures for `≤` and `⊑` and the branch join, extracted to an OCaml program, for comparing with the Go port (stage 2).
 - `ai/check_survey.sh`: runs `--check-types` over the test corpus; useful for stage 0.
 
 Removed 2026-09-29 as superseded (recoverable from git):
@@ -136,7 +137,7 @@ Stages 2–5 depend on each other in order. Runtime groundwork is independent an
 ### Stage 0: Baseline and measurements
 
 - Build both binaries on `main`. Run `tests/test.sh`, `tests/typecheck_test.sh` and `go test`. Record any failures before changing anything.
-- Run `make check` in `formal-ver/` on a machine with Rocq 9.1. The `deepCopy` commit (`1f97bc6`) has not been checked on this machine.
+- Run `make check` in `formal-ver/` and `make -C formal-ver/oracle test` (Rocq 9.1 and OCaml from the opam switch in `formal-ver/README.md`).
 - Build `typ` with Typst 0.14 or newer (it uses `chevron`).
 - Measure, with temporary counters in the current checker (not committed), over `tests/success`, `tests/msh-scripts` and `lib/std.msh`:
   - quotes that get more than one signature, and where they are used;
@@ -183,10 +184,11 @@ New code with Go unit tests only; nothing is wired into the checker yet.
   - branch join (§Joins); quotes join by `≤` only; a recursive alias is never widened inside: the other side if one is below the other (`≤`, or `⊑` when both arms are fresh), a union if the kinds do not overlap, otherwise an error asking for a declared type (`ajoin` in `formal-ver/Join.v`);
   - runtime kind of a type (an alias contributes the kinds of its unfolding's members), `immutable`, and `checkable`; through aliases these are greatest fixed points (`immutable_tunfold`, `chk_tunfold`).
 - Header comments in the reused files (`Type.go`) point to the deleted `ai/type_checker.md`; point them at the Typst design doc.
-- **Unit tests** from the examples in `formal-ver/Decide.v`: `Json` against its reordered spelling, `PersonLit <= Person`, a fresh `[int]` to `Json`, H12 and H13 rejected, and the `cache_early` query answering no.
+- **Unit tests** from the examples in `formal-ver/Decide.v`: `Json` against its reordered spelling, `PersonLit <= Person`, a fresh `[int]` to `Json`, H12 and H13 rejected, and the `cache_early` query answering no. `formal-ver/oracle/examples.txt` has them as queries with expected answers, printed from the Rocq terms.
+- **Differential tests against the extracted oracle** (`formal-ver/oracle/`, see its README). A Go test generates random types over the model's type language (`int`, `str`, `bool`, `bot`, `unknown`, `Maybe`, lists, shapes and dicts with every field status and remainder, unions, quotes including `never`, generic enums with each variance and fresh-covariance, type variables, and guarded recursive aliases written as `mu` types), writes each as a query, and compares the Go `≤`, `⊑` and join with the oracle's answers. Any Go yes that the oracle answers no (with ample fuel) is a possible soundness bug; any Go no that the oracle answers yes is a port bug. The test skips when the oracle binary is not built, so `go test` does not need Rocq.
 - **Property tests** that mirror the proof: transitivity of `≤` (`sub_trans`) and of `⊑` on randomly generated types, including guarded recursive aliases; `Json` equal to the same union with its members reordered (`json_teq`); `≤` implies `⊑`; every S1–S4 row of the design doc's table, including the two dict/remainder cases in S2 and S4; the "optional must not become deletable" case; for random well-formed generic enums, `E[a] ≤ E[b]` implies each payload `subst a t ≤ subst b t`, and `E[a] ⊑ E[b]` implies `subst a t ⊑ subst b t` (`payload_sub`, `payload_rsub` in `Variance.v`).
 
-Done when: the relations pass their tests, including randomized transitivity on at least tens of thousands of generated pairs.
+Done when: the relations pass their tests, including randomized transitivity on at least tens of thousands of generated pairs, and the Go relations and join agree with the oracle on at least tens of thousands of generated queries.
 
 ### Stage 3: The core checker, for the language as it is today
 
@@ -199,6 +201,8 @@ Work:
 - Literals, including the freshness rule for list and dict literals (§ShapeLit).
 - Variables: one scope per def invocation and one for the script; one type per variable per scope; stores check against it; definite assignment as a separate check (§Variable scopes). The variable's type is the type of its first store in program order; a later store at a type that does not fit is an error at that store, with the hint "use a new name, or widen the first store with `as`". No renaming (decided 2026-09-29; design doc, "Renaming must not change behavior").
 - Quotes as in section 5; `x` needs a known arity.
+- **Unification is not trusted** (design doc §Inference). Record every pair the checker unifies. Once a def body or the script is solved, check each recorded pair again with the final substitution applied (the two sides must be equal), and make the deferred subtyping checks and the escape check with that substitution too. A failure is an internal checker error that names the site, never an accepted program. Overload choices need nothing extra: a choice is only the constraints of the chosen candidate. This is what lets the proofs cover the checker without proving unification or overload resolution.
+- **The escape check** for kind patterns on unknown contents, exactly as proved (`kind_list_once`, `kind_enum_once` in `formal-ver/Escape.v`): check the arm once with a new rigid variable per unknown type (one per enum parameter), then, with the final substitution, reject the arm if the variable appears in any variable's type, the stack below the matched value, the arm's output stack, or the break, continue or return stacks.
 - Defs: annotated signatures, rigid type variables in the body, recursion, `never` outputs (§Divergence), no `return` in a `never` def.
   A rigid type variable is not immutable, is treated as unknown contents by kind patterns, and cannot be a `tryAs` target (design doc §Def remarks; `Generic.v`).
 - Top-level code may `return` with any stack; it ends the script (`RAny`).
@@ -292,7 +296,7 @@ Throughout, with a final pass at the switch-over.
 
 ### Later, not in this plan
 
-- The REPL checks each line, keeping the checker's state across lines, once the new checker is working and battle tested (decided 2026-09-29).
+- The REPL checks each line live, keeping the checker's state across lines, and runs a line only if it checks, once the new checker is working and battle tested (decided 2026-09-29; live checking 2026-09-30). After a runtime error in a line that checked, the stack goes back to what it was before the line (no copy; shared slots keep their types, new slots the line popped get types read from their values); design doc §Checking by default. First extend the proof: the store typing holds at a checked error, and shared locations keep their types.
 - A read-only list view type (§new lists), if an `O(1)` tail is ever needed.
 - The "top-fresh" slot mark (§deepCopy).
 
@@ -385,6 +389,7 @@ cd mshell && ./build.sh                                  # builds mshell and cop
 cd tests && ./test.sh && ./typecheck_test.sh
 cd mshell && go test
 cd formal-ver && make check                              # needs Rocq 9.1
+cd formal-ver/oracle && make test                        # the extracted oracle; needs OCaml from the same opam switch
 typst compile ai/type-core-calculus.typ                  # needs Typst 0.14+
 ```
 

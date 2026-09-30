@@ -260,10 +260,10 @@ Inductive TW : lctx -> lctx -> rctx -> word -> sty -> sty -> Prop :=
        T B C R e (marks m (map (subst a) pts) ++ s) s') ->
     TW B C R (WCase E arms) ((m, TEnum E a) :: s) s'
 (** A kind pattern for an enum on a value whose type does not say which
-    instance it is: the arm is checked for every argument list, like
-    [tw_kind_list]. *)
+    instance it is: the arm is checked for every argument list with one
+    argument per parameter, like [tw_kind_list]. *)
 | tw_kind_enum B C R m E t e1 e2 s s' :
-    (forall a, T B C R e1 ((m, TEnum E a) :: s) s') ->
+    (forall a, length a = length (en_params E) -> T B C R e1 ((m, TEnum E a) :: s) s') ->
     T B C R e2 ((m, t) :: s) s' ->
     TW B C R (WKindIf (KEnum E) e1 e2) ((m, t) :: s) s'
 

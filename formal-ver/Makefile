@@ -12,7 +12,7 @@ CoqMakefile: _CoqProject
 	rocq makefile -f _CoqProject -o CoqMakefile
 
 check: all
-	@printf 'From MshellCore Require Import Soundness Decide.\nPrint Assumptions soundness.\nPrint Assumptions if_join_alg.\nPrint Assumptions subq_set_sound.\nPrint Assumptions rsubq_set_sound.\n' > Assumptions_check.v
+	@printf 'From MshellCore Require Import Soundness Decide Escape.\nPrint Assumptions soundness.\nPrint Assumptions if_join_alg.\nPrint Assumptions subq_set_sound.\nPrint Assumptions rsubq_set_sound.\nPrint Assumptions kind_list_once.\nPrint Assumptions kind_enum_once.\n' > Assumptions_check.v
 	@rocq c -Q . MshellCore Assumptions_check.v; rm -f Assumptions_check.*
 
 clean:

@@ -1272,7 +1272,8 @@ Proof.
 Qed.
 
 Lemma w_kind_enum G B C R m E t e1 e2 rest s s' s3 Σ H sc stk Sf sf Os :
-  (forall a, T sigs G B C R e1 ((m, TEnum E a) :: s) s') -> T sigs G B C R e2 ((m, t) :: s) s' ->
+  (forall a, length a = length (en_params E) -> T sigs G B C R e1 ((m, TEnum E a) :: s) s') ->
+  T sigs G B C R e2 ((m, t) :: s) s' ->
   T sigs G B C R rest s' s3 ->
   INV Σ H sc G (stk ++ Sf) (((m, t) :: s) ++ sf) Os -> length stk = length ((m, t) :: s) ->
   res_ok Σ sc G B C R s3 Sf sf (evalv vd defs (S n) H sc stk (WKindIf (KEnum E) e1 e2 :: rest)).
@@ -1290,10 +1291,10 @@ Proof.
     destruct k'; simpl; try (kcont IH HT H2 Iv2).
     destruct (ename_eqb E E0) eqn:Kb; [|kcont IH HT H2 Iv2].
     apply ename_eqb_true in Kb; subst E0.
-    destruct (vtyped_kind_enum sigs _ _ _ _ _ _ V Ho Ln Hl Ek) as (a & Va).
+    destruct (vtyped_kind_enum sigs _ _ _ _ _ _ V Ho Ln Hl Ek) as (a & La & Va).
     assert (Iv' : INV Σ H sc G ((v :: stk) ++ Sf) (((Sh, TEnum E a) :: s) ++ sf) ([] :: Os')).
     { split; [|exact Bd]. simpl. apply inv_push_sh; [exact Iv | exact Va | exact Hl]. }
-    kcont IH HT (H1 a) Iv'.
+    kcont IH HT (H1 a La) Iv'.
   - pose proof (slot_at _ _ _ _ _ [] _ _ [] _ _ [] _ _ eq_refl eq_refl Iv) as Sl.
     unfold slot_ok in Sl; simpl in Sl.
     destruct (dtyped_kind_of sigs _ _ _ _ _ Sl) as (k' & Ek).
@@ -1303,10 +1304,10 @@ Proof.
     destruct k'; simpl; try (kcont IH HT H2 Iv2).
     destruct (ename_eqb E E0) eqn:Kb; [|kcont IH HT H2 Iv2].
     apply ename_eqb_true in Kb; subst E0.
-    destruct (dtyped_kind_enum sigs _ _ _ _ _ _ Sl Ek) as (a & Da).
+    destruct (dtyped_kind_enum sigs _ _ _ _ _ _ Sl Ek) as (a & La & Da).
     assert (Iv' : INV Σ H sc G ((v :: stk) ++ Sf) (((Dp, TEnum E a) :: s) ++ sf) (O :: Os')).
     { split; [|exact Bd]. simpl. eapply inv_replace_top_dp; [exact Iv | exact Da]. }
-    kcont IH HT (H1 a) Iv'.
+    kcont IH HT (H1 a La) Iv'.
 Qed.
 (** ** [map] *)
 

@@ -644,9 +644,10 @@ Proof.
     rewrite map_subst_tsub by (intros; eapply wf_payload_closed; eauto). auto.
   - (* enum kind pattern: every argument list *)
     apply tw_kind_enum; [| specialize (H0 th); revert H0; ss; auto].
-    intros a'.
+    intros a' La.
     set (N := S (maxl (fvG G ++ fvL B ++ fvL C ++ fvR R ++ fvs s ++ fvs s'))).
-    specialize (H (map (tsub (shift N)) a') (unshift N th)). revert H. ss. intros H.
+    specialize (H (map (tsub (shift N)) a') ltac:(rewrite length_map; exact La) (unshift N th)).
+    revert H. ss. intros H.
     rewrite map_unshift_shift in H.
     rewrite esubst_unshift, lsubst_unshift, lsubst_unshift, rsubst_unshift,
       !ssubst_unshift in H; auto; apply bound_maxl; inclapp.
