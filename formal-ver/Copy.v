@@ -13,7 +13,7 @@ Import ListNotations.
 From MshellCore Require Import Syntax Subtyping Typing Interp Invariant RtLemmas Commit Validate InvOps.
 
 Section Copy.
-Variable sigs : string -> list ty -> option (list ty) -> Prop.
+Variable sigs : genv.
 Variable Σ : store_ty.
 Variable H : heap.
 Variable R : list loc.
@@ -183,30 +183,66 @@ Qed.
 
 Lemma vcopy_ok g : loc_spec g -> val_spec (vcopy g).
 Proof.
-  intros Hg v t Ha Hb v2 Hv. revert Ha Hb v2.
-  induction Hv as [n|s|b|t|v t Hv IH|l a t Ea Sa|l fs r t Er Sr|sc e G ins outs Esc Cl
-                  |v a b Hv IH|v a b Hv IH|v t Hv IH];
-    intros Ha Hb v2 Hl Ex Ec; simpl in Ec;
-    try (injection Ec as <- <-; exists [], [];
-         split; [rewrite app_nil_r; reflexivity | split; [constructor | apply new_region_nil]]; fail).
-  - destruct (vcopy g Ha v) as [[Hc x']|] eqn:E; [|discriminate]. injection Ec as <- <-.
-    destruct (IH Ha Hc x' Hl Ex E) as (N & O & E1 & D & Rg).
-    exists N, O. split; [exact E1 | split; [constructor; exact D | exact Rg]].
-  - destruct (Hg l (HList a) Ha Hb v2 Ea) as (N & O & E1 & D & Rg); auto.
-    { apply Hl. apply in_eq. }
-    exists N, O. split; [exact E1 | split; [eapply dtyped_sub; eauto | exact Rg]].
-  - destruct (Hg l (HRec fs r) Ha Hb v2 Er) as (N & O & E1 & D & Rg); auto.
-    { apply Hl. apply in_eq. }
-    exists N, O. split; [exact E1 | split; [eapply dtyped_sub; eauto | exact Rg]].
-  - injection Ec as <- <-. exists [], [].
-    split; [rewrite app_nil_r; reflexivity | split; [| apply new_region_nil]].
-    apply dt_clo. eapply vt_clo; eauto.
-  - destruct (IH Ha Hb v2 Hl Ex Ec) as (N & O & E1 & D & Rg).
-    exists N, O. split; [exact E1 | split; [apply dt_unionl; exact D | exact Rg]].
-  - destruct (IH Ha Hb v2 Hl Ex Ec) as (N & O & E1 & D & Rg).
-    exists N, O. split; [exact E1 | split; [apply dt_unionr; exact D | exact Rg]].
-  - destruct (IH Ha Hb v2 Hl Ex Ec) as (N & O & E1 & D & Rg).
-    exists N, O. split; [exact E1 | split; [eapply dt_top; exact D | exact Rg]].
+  intros Hg.
+  assert (K :
+    (forall v t, vtyped sigs Σ v t -> forall H0 H1 v', (forall l, In l (vlocs v) -> ~ In l R) -> ext H0 ->
+       vcopy g H0 v = Some (H1, v') ->
+       exists N O, H1 = H0 ++ N /\ dtyped sigs Σ H1 v' t O /\ new_region H0 H1 O) /\
+    (forall vs ts, vtypedl sigs Σ vs ts -> forall H0 H2 vs', (forall l, In l (flat_map vlocs vs) -> ~ In l R) ->
+       ext H0 -> mapo (vcopy g) H0 vs = Some (H2, vs') ->
+       exists N Os, H2 = H0 ++ N /\ dtypedl sigs Σ H2 vs' ts Os /\ new_region H0 H2 (concat Os))).
+  { apply (vtyped_comb sigs Σ
+      (fun v t _ => forall H0 H1 v', (forall l, In l (vlocs v) -> ~ In l R) -> ext H0 ->
+         vcopy g H0 v = Some (H1, v') ->
+         exists N O, H1 = H0 ++ N /\ dtyped sigs Σ H1 v' t O /\ new_region H0 H1 O)
+      (fun vs ts _ => forall H0 H2 vs', (forall l, In l (flat_map vlocs vs) -> ~ In l R) ->
+         ext H0 -> mapo (vcopy g) H0 vs = Some (H2, vs') ->
+         exists N Os, H2 = H0 ++ N /\ dtypedl sigs Σ H2 vs' ts Os /\ new_region H0 H2 (concat Os)));
+      simpl;
+      try (intros; match goal with Ec : Some _ = Some _ |- _ => injection Ec as <- <- end; exists [], [];
+           split; [rewrite app_nil_r; reflexivity | split; [constructor | apply new_region_nil]]; fail).
+    - intros v t Hv IH Ha Hc v2 Hl Ex Ec.
+      destruct (vcopy g Ha v) as [[Hc' x']|] eqn:E; [|discriminate]. injection Ec as <- <-.
+      destruct (IH Ha Hc' x' Hl Ex E) as (N & O & E1 & D & Rg).
+      exists N, O. split; [exact E1 | split; [constructor; exact D | exact Rg]].
+    - intros l a t Ea Sa Ha Hb v2 Hl Ex Ec.
+      destruct (Hg l (HList a) Ha Hb v2 Ea (Hl l (or_introl eq_refl)) Ex Ec) as (N & O & E1 & D & Rg).
+      exists N, O. split; [exact E1 | split; [eapply dtyped_sub; eauto | exact Rg]].
+    - intros l fs r t Er Sr Ha Hb v2 Hl Ex Ec.
+      destruct (Hg l (HRec fs r) Ha Hb v2 Er (Hl l (or_introl eq_refl)) Ex Ec) as (N & O & E1 & D & Rg).
+      exists N, O. split; [exact E1 | split; [eapply dtyped_sub; eauto | exact Rg]].
+    - intros sc e G ins outs Esc Cl Ha Hb v2 Hl Ex Ec.
+      injection Ec as <- <-. exists [], [].
+      split; [rewrite app_nil_r; reflexivity | split; [| apply new_region_nil]].
+      apply dt_clo. eapply vt_clo; eauto.
+    - intros v a b Hv IH Ha Hb v2 Hl Ex Ec.
+      destruct (IH Ha Hb v2 Hl Ex Ec) as (N & O & E1 & D & Rg).
+      exists N, O. split; [exact E1 | split; [apply dt_unionl; exact D | exact Rg]].
+    - intros v a b Hv IH Ha Hb v2 Hl Ex Ec.
+      destruct (IH Ha Hb v2 Hl Ex Ec) as (N & O & E1 & D & Rg).
+      exists N, O. split; [exact E1 | split; [apply dt_unionr; exact D | exact Rg]].
+    - intros v t Hv IH Ha Hb v2 Hl Ex Ec.
+      destruct (IH Ha Hb v2 Hl Ex Ec) as (N & O & E1 & D & Rg).
+      exists N, O. split; [exact E1 | split; [eapply dt_top; exact D | exact Rg]].
+    - (* an enum value: copy its payloads *)
+      intros E c pts vs a Ec W Hvs IH Ha Hb v2 Hl Ex Ecp.
+      destruct (mapo (vcopy g) Ha vs) as [[H1 vs']|] eqn:Em; [|discriminate]. injection Ecp as <- <-.
+      destruct (IH Ha H1 vs' Hl Ex Em) as (N & Os & E1 & D & Rg).
+      exists N, (concat Os). split; [exact E1 | split; [| exact Rg]].
+      eapply dt_con; eauto. destruct Rg; auto.
+    - intros v vs t ts Hv IH Hvs IHs H0 H2 vs' Hl Ex Em.
+      destruct (vcopy g H0 v) as [[H1 x']|] eqn:Ex1; [|discriminate].
+      destruct (mapo (vcopy g) H1 vs) as [[H3 xs']|] eqn:Em'; [|discriminate].
+      injection Em as <- <-.
+      destruct (IH H0 H1 x') as (N1 & O1 & E1 & D1 & R1); auto.
+      { intros l Hx. apply Hl. apply in_or_app; auto. }
+      destruct (IHs H1 H3 xs') as (N2 & Os2 & E2 & D2 & R2); auto.
+      { intros l Hx. apply Hl. apply in_or_app; auto. }
+      { subst. apply ext_app. auto. }
+      exists (N1 ++ N2), (O1 :: Os2). split; [subst; symmetry; apply app_assoc|]. split.
+      + constructor; auto. subst H3. apply dtyped_extend; auto. eapply region_lt; eauto.
+      + simpl. eapply new_region_app; eauto. }
+  intros v t H0 H1 v' Hv Hl Ex Ec. eapply (proj1 K); eauto.
 Qed.
 
 Lemma loc_spec_none : loc_spec (fun _ _ => None).

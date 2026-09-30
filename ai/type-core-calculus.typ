@@ -83,8 +83,12 @@
   theorem that depends on no axioms (@sec-mech). Formalizing it found three holes in the previous
   draft, and each has a runnable counterexample: a runtime-key `get` on a shape (@sec-dyn-key),
   an abstract type escaping its pattern arm (@sec-unknown), and a shape literal marked fresh
-  around a shared value (@sec-fresh). Those rules are corrected below. Rules the proof showed to be
-  stricter than soundness needs are marked as usability choices.
+  around a shared value (@sec-fresh). Adding generic enums to the proof found three more:
+  "enums are immutable" (@sec-fresh), fresh retyping of an enum argument used under a quote
+  (@sec-sub), and joins that widen inside fresh quotes (@sec-join). Proving that a polymorphic def
+  checked once is enough found two more: a type variable counted as immutable (@sec-fresh) and a
+  kind pattern on a type variable (@sec-unknown). Those rules are corrected below.
+  Rules the proof showed to be stricter than soundness needs are marked as usability choices.
 ]
 
 #outline(depth: 2, indent: auto)
@@ -438,6 +442,17 @@ For the checker this means a skolem escape check:
 `Examples.v` (`hole_exists`) runs the smallest version of this program: it types the arm for
 one fixed element type and gets stuck in the interpreter.
 
+*Enum kind patterns on unknown values.* A pattern for enum `E` on a value of abstract type binds
+`E[k_1 ... k_n]` with fresh abstract arguments, under the same escape check (`tw_kind_enum` in
+`Typing.v` checks the arm for every argument list). `E[unknown]` would be wrong when a parameter is
+invariant: an `E[int]` is not an `E[unknown]`, and writes through the payload could break it.
+
+*Type variables (corrected).* A kind pattern on a value whose type is a rigid type variable $a$ binds
+the unknown contents of that kind, as for an abstract type: `str x` binds `x : str`, `list xs` binds
+`xs : [k]` under the escape check. It must not read $a$ as "no member of kind `str`" and check the arm
+vacuously: at the instance $a = #w("str")$ the arm runs (`hole_tvar_kind_stuck` in `Examples.v`). The
+substitution lemma forces this (`kind_then_tsub` in `Generic.v`).
+
 *Dict-kind patterns on unknown values.* `@v match dict d : ...` with $v : k_0$ cannot bind
 $d : {"str": k}$: the object may be a shape, and a `Dict` view could then write one field's value
 into another field. It binds $d : {| "open"}$, the read-only view of "some dict", which every shape and
@@ -473,6 +488,24 @@ keeps it, and a list, dict, shape field or invariant enum parameter makes it inv
 is covariant if every occurrence ends up in the unflipped direction, contravariant if every one is
 flipped, and invariant otherwise. A parameter that appears nowhere is covariant. So `Maybe[int]` $<=$ `Maybe[int | str]` holds, but
 `Maybe[[int]]` $<=$ `Maybe[[int | str]]` fails, because the lists inside are invariant.
+
+*Fresh-covariance (corrected).* Each parameter has a second property, used only when retyping a
+_fresh_ value (@sec-fresh). A parameter is *fresh-covariant* when every occurrence is in a data
+position: directly a payload, or inside a list element, a dict or shape value, a `Maybe`, a union, or a
+fresh-covariant argument of an enum, and never inside a quote type. A fresh `E[a]` may be retyped to
+`E[b]` when each fresh-covariant argument satisfies $a_i subset.sq.eq b_i$ and every other argument
+satisfies its variance. `enum Box[a] = box [a] end` is invariant but fresh-covariant, so a fresh
+`[1] box` may become a `Box[int | str]`, as a fresh `[1]` may become an `[int | str]`.
+`enum F[a] = f (a -- a) end` is invariant and _not_ fresh-covariant: a fresh `F[int]` holds only a
+quote, and freshness stops at quotes, so retyping it to `F[int | str]` would let `(1 +)` be called
+with a string (`hole_quote_arg_stuck` in `Examples.v`). `Maybe` is covariant and fresh-covariant.
+
+*What the checker must check (mechanized).* The proof takes each parameter's variance and
+fresh-covariance as declared, and checks every constructor's payload types against them
+(`wf_payload` in `Subtyping.v`); `Variance.v` proves that this makes the rules sound. A recursive
+reference is checked with the variances the enum itself carries, with no unfolding, so recursive and
+generic enums need nothing extra. The checker computes the variances (the most permissive ones that
+pass this check) instead of reading them from the declaration.
 
 == Shape width subtyping
 
@@ -581,7 +614,9 @@ The judgment is
 $ Gamma; L; R tack.r e : eff(sigma_1, sigma_2) $
 "in variable context $Gamma$, inside a loop whose stack is $L$ and a def that returns $R$,
 program $e$ turns a stack of type $sigma_1$ into one of type $sigma_2$."
-$L$ and $R$ are $dot$ when there is no enclosing loop or def;
+$L$ is $dot$ when there is no enclosing loop, and $R$ is $dot$ inside a quote body. In top-level code
+$R$ is $top$: `return` there ends the script, and nothing reads the stack, so any stack is accepted
+(`tests/success/return_top_level.msh`; `RAny` and `tw_return_any` in `Typing.v`).
 $L$ may also be $star$, inside a child-stack body where `break` is allowed (@sec-break).
 $Gamma$ maps variables to (monomorphic) types.
 
@@ -654,12 +689,17 @@ Remarks.
   That is the value restriction in its simplest form.
 - *Frame.* A quote type $qt(vec(tau)_1, vec(tau)_2)$ means "for every rest of the stack $sigma_0$,
   including any fresh slots in it, $sigma_0 space vec(tau)_1 -> sigma_0 space vec(tau)_2$". The mechanized
-  *Quote* rule has exactly this premise (`tw_quote`: $forall sigma_0$). A checker that types the body once,
-  from its own entry stack, must justify it with the frame lemma. The lemma holds because no rule
-  inspects the stack below the words' own arguments.
-- *Def* instances. The proof treats a polymorphic signature as the set of its closed instances and
-  requires the body to check at each one (`def_ok`). Checking the body once with rigid variables
-  implies this by the standard substitution lemma. That lemma is not part of the mechanization.
+  *Quote* rule has exactly this premise (`tw_quote`: $forall sigma_0$). A checker types the body once,
+  from its own entry stack; the frame lemma (`T_frame`, `quote_once` in `Frame.v`) justifies that. For a
+  `never` quote the checker must know the body diverges at every frame, which is how divergence is
+  tracked (@sec-diverge).
+- *Def* instances. The proof treats a polymorphic signature as the set of its instances
+  (`def_ok`). Checking the body once with rigid variables is enough: typing is closed under
+  substitution (`T_subst` in `Generic.v`), so `soundness_generic` asks only for one check per body.
+  It needs: the signatures in $Phi$ and the defs are closed under instantiation; enum declarations
+  mention no type variables; and a rigid type variable is treated conservatively everywhere a rule
+  asks a question about a type. It is not immutable (@sec-fresh), a kind pattern treats it as unknown
+  contents (@sec-unknown), and it cannot be a `tryAs` target (@sec-tryas).
 
 == Variable scopes
 
@@ -684,6 +724,10 @@ When the arms of an `if` or `match` leave different types in the same stack slot
 their *join*, computed slot by slot. There is no special syntax involved: the join uses only the
 types and the freshness of the two slots, both of which the checker already tracks.
 
+The result is fresh only when both slots are fresh. `Join.v` writes this section as a function and
+proves the result is an upper bound of both arms (`join_slot_ub`), so an `if` joined this way checks in
+the core (`if_join`).
+
 + Equal types join to themselves. $bot$ joins to the other side.
 + A slot with an unsolved type variable is *unified*, never joined, so the answer cannot depend on
   checking order.
@@ -692,12 +736,22 @@ types and the freshness of the two slots, both of which the checker already trac
   the other side.
 + `Maybe` joins inside: `Maybe[int]` and `Maybe[str]` give `Maybe[int | str]`. This is safe even for
   shared values because nothing writes into a `Maybe`. Any generic enum joins inside its covariant parameters.
-+ Two different types of the *same* kind (two list types, two shapes, two quotes):
+  *Clarified:* the join inside is the join of the same freshness. For shared values it is itself a shared
+  join, so `@xs just` and `@ys just` with `xs : [int]`, `ys : [str]` stored have no join: the list inside is
+  still `xs` (`hole_maybe_join_stuck`). Fresh arms (`[1] just`, `["a"] just`) join to `Maybe[[int | str]]`.
+  Two unions are joined only when equal; a union and a single type join as below.
++ Two different types of the *same* kind (two list types, two shapes, two instances of one enum):
   - if *both* slots are *fresh*, the join widens inside them: `[int]` and `[str]` give `[int | str]`;
-    `{a: int}` and `{a: int, b: int}` give `{a: int, b?: int}`. The result is still fresh.
+    `{a: int}` and `{a: int, b: int}` give `{a: int, b?: int}`; `[1] box` and `["a"] box` give
+    `Box[int | str]` (fresh-covariant arguments only, @sec-sub). The result is still fresh.
     This is Principle 3 applied at the merge: nobody else can see either value, so each may be given
-    the wider type.
+    the wider type. The join must be an upper bound of both arms under $subset.sq.eq$.
   - otherwise there is no join, and it is an error. Use an enum, or build a new value.
++ *Two quote types join only by subtyping (corrected)*, fresh or not: freshness stops at quotes, so
+  retyping a quote is $<=$ and nothing more. `(int -- int)` and `(int -- str)` join to
+  `(int -- int | str)`; `(int -- int)` and `(str -- str)` have no useful join, since the inputs would have
+  to meet at $bot$. The previous draft listed quotes with the fresh case: `(1 +)` and `("a" ++)` would
+  have joined to `(int | str -- int | str)` (`hole_quote_join_stuck` in `Examples.v`).
 
 The arms must still leave the same number of stack items (as today). Arms that diverge are ignored
 (@sec-diverge).
@@ -751,6 +805,16 @@ The output stack $sigma'$ is _arbitrary_: since nothing after the word runs, any
 stack there is vacuously true. In the algorithm this is the "diverges" flag on an effect
 (@sec-infer): composing a diverging effect with anything gives a diverging effect, and a
 diverging arm contributes nothing to a join.
+
+*Dead code (corrected).* "Composing a diverging effect with anything" means the words after a
+diverging word are not checked at all. The previous core still typed them, so
+`def f ( -- never) 1 exit 1 + end` was rejected (the `1 +` leaves an `int`, not any stack). The core now
+has the rule: $w space e$ checks from $sigma$ when $w$ diverges from $sigma$, whatever $e$ is (`t_div`).
+"Diverges" must hold with any stack below $sigma$, and with the loop and return stacks extended to match;
+otherwise the rule would not survive the frame lemma. `Frame.v` proves the ways a checker sets and
+propagates the flag: `exit`, `break`, `continue`, `return`, a `never` call or quote, a loop with no
+`break`, an `if` whose arms both diverge, a diverging word followed by anything, and a normal word followed
+by a diverging sequence (`div_*`).
 
 This is different from the value type $bot$:
 
@@ -895,7 +959,17 @@ is allowed only through a $* : tau$ remainder.
 literal fresh. `{a: @xs}` is a literal, but `xs` is shared, so *Retype* could turn it into
 `{a: [int | str]}` and append a string to `xs` (`hole_literal` in `Examples.v`). The same holds for
 list literals. A literal is fresh when each value it is built from is fresh or has an immutable type
-(one with no list or dict inside it: base types, quotes, and enums (including `Maybe`) and unions of those).
+(one with no list or dict inside it: base types, quotes, unions of those, and an enum whose payload
+types, with its arguments substituted, are immutable; so `Maybe[int]` is immutable and `Maybe[[int]]`
+and `Box[int]` are not).
+*Corrected:* the previous draft listed every enum as immutable. A box around a stored list would then
+be fresh, retypable, and a second view of the list (`hole_box_stuck` in `Examples.v`).
+A rigid type variable is *not* immutable: an instance may be a list. Otherwise
+`def g (a -- Maybe[[str]]) tryAs [str] end` could make its shared argument fresh and validate it in place,
+and `@xs g` with a stored empty `[int]` would return `xs` as a `[str]` (`hole_tvar_imm_stuck`).
+For a recursive enum, immutability is the greatest fixed point: `enum Tree = leaf int | node Tree Tree end`
+is immutable. The proof checks it as a flag on the enum (`en_imm`), and conservatively also asks
+that the arguments be immutable.
 Otherwise it is an ordinary shared value, which *ShapeLit-Shared* types. This is #351's `freshDeep`.
 
 === Runtime keys <sec-dyn-key>
@@ -978,6 +1052,8 @@ subtyping made covariant everywhere because nobody else can observe the change:
 
 - anything that is $tau <= upsilon$;
 - $ty("List") tau subset.sq.eq ty("List") upsilon$ and $ty("Maybe") tau subset.sq.eq ty("Maybe") upsilon$ when $tau subset.sq.eq upsilon$;
+- $E[vec(a)] subset.sq.eq E[vec(b)]$ when each fresh-covariant argument has $a_i subset.sq.eq b_i$ and
+  every other argument satisfies its variance (@sec-sub). Not inside quotes: a quote is retyped only by $<=$;
 - shapes and dicts label by label: required stays required, and required, optional or deletable may become
   optional or deletable. An _absent_ label may become optional or deletable (so `{url: "x"}` becomes a
   `Request` with `timeout?` absent), and anything may become unknown (`open`). The types inside are
@@ -1004,6 +1080,42 @@ merge). *Set-Fresh* keeps it. Everything that reads _out_ of a container gives a
 (`getAt`, `get`, `?` on a shared `Maybe`): the container still points to the result. Everything that
 copies a reference needs a shared operand: `dup`, stores, def and quote arguments, and writes into a
 shared container. The analysis in \#351 must be at least this conservative.
+
+*New def outputs (decided 2026-09-29).* A def output may be marked `new`: `def loadConfig ( -- new Json)`.
+The body must leave a new (fresh) value there, and callers get it as new, so `loadConfig tryAs Config ?`
+validates in place. Without it the output is shared, and the same call is rejected (suggesting a full
+`deepCopy`). The proof needed no change beyond letting signatures carry freshness marks (`g_sigs` in
+`Typing.v`; `mk_*` in `Examples.v`).
+
+The mark must match the checker exactly; there is no "could have been `new`" state:
+
+- `new` written, but the body's output is shared: an error at the def, naming the step that made it
+  shared ("the value is stored in `j` on line 3; return it without storing it, or `deepCopy` it").
+- `new` missing, but the body's output is new: also an error at the def ("this output is new, from
+  `parseJson` on line 2; mark it `new`"). The LSP offers the fix as a code action, and a fix-all.
+- `new` is allowed only on output types that can hold a list, dict or grid: on an immutable type
+  (`str`, `int`, `Maybe[int]`, ...) freshness means nothing, so `new` there is an error with a fix
+  that removes it. A type variable counts as mutable (`(a -- new a)` is valid for `deepCopy a`).
+- For a def that calls itself, both marks can be consistent (`[]` in one arm, the recursive result in
+  the other). The checker requires the largest consistent one: `new` unless assuming it fails.
+- "Exactly" means exactly what the checker's analysis computes. A later, more precise analysis (moves
+  from local variables, below) turns some unmarked outputs into required `new`s; the LSP fix-all
+  migrates them.
+
+This is redundancy of the useful kind (Bright, "Redundancy in Programming Languages", 2008): the written
+mark and the analysis of the body are independent, so a disagreement is always a mistake, and the error
+lands in the def that changed. It follows D's split between named functions, whose attributes are
+written, and function literals, whose attributes are inferred. Quote types stay inferred, with shared
+outputs.
+
+Inputs stay shared for now. Under the current rules a new input is lost at the first `req!`, which is
+how most defs start, so the mark would rarely help. The refinement that would change that, a read
+that is the last use of a local variable in a def whose scope cannot escape (a "move"), is deferred; it
+should be mechanized before it is built.
+Outputs built from a quote's results, such as `map`'s, are fresh only when their element type is
+immutable: a quote's results are shared values. "Fresh when the input is fresh" would be wrong for
+`map`: `[0 0] (drop @ys) map` is the stored list `ys` twice, and widening it would let a string be appended
+to `ys` (`hole_map_fresh_stuck`; `map` is in the model, `tw_map`/`tw_map_imm`).
 
 *Fresh when the input is.* Some builtins return a new list whose elements are the input's elements:
 `take`, `skip`, the index slices, `...rest` (@sec-new-lists). Their result is fresh when the input
@@ -1104,7 +1216,8 @@ the proof no longer describes the program. The only type-level alternative is a 
   [`take`, `skip`, `:n`, `n:`, `a:b`], [a new list; elements shared (a shallow copy)], [input fresh or elements immutable],
   [`[a ...rest b]`], [`rest` is a new list, like `skip` (runtime change needed)], [input fresh or elements immutable],
   [pipe slices], [a new list of the pipe's commands (runtime change needed)], [input fresh or elements immutable],
-  [`reverse`, `sort`, `map`, `filter`], [a new list], [per its $Phi$ entry],
+  [`reverse`, `sort`, `filter`], [a new list over the input's elements], [input fresh or elements immutable],
+  [`map`], [a new list of the quote's results], [result elements immutable (`tw_map_imm`)],
   [`deepCopy`], [a new tree], [always],
 )
 
@@ -1167,9 +1280,12 @@ stored container at a new type makes its copy visibly (Principle 6).
 *In place on a fresh operand needs a tree.* This is why freshness is deep (@sec-fresh), and why a
 builtin that marks its output fresh (`parseJson`) must return a tree. JSON is a tree.
 
-*"Checkable" is a usability rule.* Validation against a quote type simply fails (it returns `none`),
-and validation against an unknown type succeeds without looking. Both are sound, so the proof does
-not need the restriction. Keep it for good error messages.
+*"Checkable" is partly a soundness rule (corrected).* Validation against a quote type simply fails (it
+returns `none`), and validation against an unknown type succeeds without looking. Both are sound, and
+that part of the rule is for good error messages. A *type variable* is different: types are erased, so
+at runtime `tryAs a` has nothing to validate against, and treating it as "succeeds" would be unsound at
+some instance. The typing rules require targets with no type variables (`fvt u = []`), which the
+substitution lemma needs.
 
 == Enums
 
@@ -1193,6 +1309,11 @@ A surface `match` without full coverage elaborates to one with a failing last ar
 A constructor whose payloads do not mention a parameter leaves it open: it is $bot$ if that parameter is
 covariant (so `none : Maybe[⊥]`, and `Maybe[⊥]` $<=$ `Maybe[T]` for every `T`), and a fresh type variable
 otherwise, like an empty list literal.
+
+*Freshness.* A constructed value is fresh when every payload is fresh or immutable (as for a literal,
+@sec-fresh), and otherwise shared (`tw_con_dp`, `tw_con_sh`). A match on a fresh value pushes its
+payloads as fresh values, since they own disjoint parts of its tree; on a shared value, as shared ones
+(`tw_case`). A constructor with no arm is a checked error.
 All instances of one enum are one runtime kind, so a union may not hold two of them (`Box[int] | Box[str]`).
 The surface syntax of enums, their constructors and how their values print and compare are in @sec-surface.
 
@@ -1431,6 +1552,12 @@ What the mechanization does *not* cover is listed in @sec-mech.
   [H1], [runtime-key `get` typed by the remainder (previous draft)], [*Get-Key* needs a type above every label (@sec-dyn-key)],
   [H2], [abstract type $k$ reused across runs of its arm (previous draft)], [the arm is checked for every $k$; skolem escape check (@sec-unknown)],
   [H3], [every shape literal fresh (previous draft)], [a literal is fresh only around fresh or immutable contents (@sec-fresh)],
+  [H4], [every enum immutable (previous draft)], [an enum is immutable only when its payloads are (`en_imm`, `hole_box_stuck`)],
+  [H5], [fresh values retyped covariantly everywhere, enum arguments under quotes included], [fresh-covariance: only data positions (`occ_fresh`, `hole_quote_arg_stuck`)],
+  [H6], [joins widen inside two fresh quotes (previous draft)], [quotes join by $<=$ only (`hole_quote_join_stuck`)],
+  [H7], [a type variable counted as immutable], [type variables are not immutable (`hole_tvar_imm_stuck`)],
+  [H8], [a kind pattern on a type variable read as "no member"], [a type variable is treated as unknown contents (`hole_tvar_kind_stuck`)],
+  [H9], [renaming a variable stored at a new type inside a loop body, or read after a branch], [no renaming: one type per variable per scope (`rename_*`)],
 )
 
 #pagebreak()
@@ -1480,8 +1607,29 @@ inside the core. (Overload resolution happens in elaboration, below.)
   [`value => pattern`], [assertive single-arm match (@sec-surface)],
   [overloaded `+`], [choose the candidate from the known argument types; ambiguous at the end of the def is an error],
   [overloaded op on a union operand], [a `match` with one arm per member (today's "distribution", made explicit)],
-  [`x!` reassigned at a new type, not captured by any quote], [rename (SSA); otherwise an error],
+  [`x!` reassigned at a new type], [an error: one type per variable per scope (see below)],
 )
+
+*Renaming must not change behavior (corrected).* The core checks the elaborated program, but the
+runtime runs the original, so an elaboration that changes what a program does voids the proof. Renaming
+a variable does, in two cases the previous text allowed:
+
+- *A loop body.* `1 x!  [0 0] (drop @x 1 + drop "a" x!) each`: the body is a literal quote that the
+  elaboration turns into `each{...}`, so it is not a quote that captures `x`, and the renamed program
+  (`x1` before, `x2` at the end) checks. The second run reads `"a"` as an `int`. The current checker on
+  `main` accepts this program too, and it fails at runtime (a new counterexample, P14).
+- *A read after a branch* whose arms stored different types: `false if 1 x! else "a" x! end @x 1 +`.
+
+`Examples.v` runs both: each renamed program type-checks (so it never gets stuck) while the original gets
+stuck (`rename_loop_*`, `rename_if_*`). Renaming is sound only when every read of the variable can see
+stores of one type, which needs a flow analysis the proof does not cover.
+
+*Decided (2026-09-29): no renaming.* A variable has one type per scope: the type of its first store in
+program order. Every later store is checked against it at a checking position (subtyping, or retyping of
+a fresh value). A mismatch is reported at that store, with the hint "use a new name, or widen the first
+store with `as`". Widening works for base types, unions and `Maybe`, and for fresh containers; a stored
+container cannot be widened (use `deepCopy`). Every read then sees the wide type. Reusing a name at a new
+type is expected to be rare.
 
 #pagebreak()
 
@@ -1509,7 +1657,10 @@ marked open. Open questions live only in `ai/type-system-plan.md`.
 - *Generic enums:* `enum Box[a] = box [a] | empty end`. Parameters are written in brackets after
   the name, as in `Maybe[T]`, and used in payload types. A recursive reference must use the same
   parameters in the same order (`enum List[a] = cons a List[a] | nil end` is accepted,
-  `List[[a]]` inside `List[a]` is not). Variance and nullary constructors are in @sec-sub and the Enums rules.
+  `List[[a]]` inside `List[a]` is not). This is a usability and implementation rule, not a soundness
+  rule: the proof accepts `enum Nest[a] = nest a Nest[[a]] | stop end` (`nest_wf`). It keeps type
+  printing, validation memoization and error messages simple, and can be relaxed later.
+  Variance, fresh-covariance and nullary constructors are in @sec-sub and the Enums rules.
 - *`Maybe`* is the built-in declaration `enum Maybe[a] = just a | none end`. Its runtime values keep
   their current printing and JSON (`Just(5)`, `None`; `5`, `null`), so existing output does not change.
 
@@ -1563,6 +1714,8 @@ Most of these are already runtime failures today; a few are real losses.
     [narrow with `tryAs`/`is` first, which gives a real type that can leave the arm],
   [`if`/`match` arms leaving *stored* containers of the same kind but different types have no join],
     [literal arms join automatically (@sec-join); for stored values use an enum or build a new value],
+  [`if`/`match` arms leaving quotes join only by subtyping: `(1 +)` and `("a" ++)` have no useful join],
+    [annotate the quote type both arms satisfy, or use an enum],
   [a def that never returns must say so: `(str -- never)`],
     [today such a def cannot be used in a branch at all; this makes it work],
   [`parseJson` returns `Json`; raw `Json` has no operations],
@@ -1623,7 +1776,7 @@ brands can all be deleted, and the runtime type checks can go once the oracle ag
 
 `formal-ver/` holds a Rocq (9.1) development of the core. `make check` in that directory rebuilds
 it and prints the assumptions of the main theorem: *none* (`Closed under the global context`). It is
-about 5,000 lines. `formal-ver/README.md` maps every definition to the section of this document it
+about 8,000 lines. `formal-ver/README.md` maps every definition to the section of this document it
 formalizes.
 
 #table(
@@ -1640,13 +1793,20 @@ formalizes.
   [`Copy.v`], [`deepCopy` gives a fresh value of the same type],
   [`InvOps.v`, `RecOps.v`], [stack and heap operations on the invariant; type-changing updates of fresh records],
   [`Soundness.v`], [the theorem],
-  [`Examples.v`], [the three holes run to `RStuck`; R6 gets stuck without a copy and type-checks and runs with `deepCopy`; the copy is per path; copying a cycle is a checked error],
+  [`Generic.v`], [type variables and substitution; `T_subst` (typing is closed under substitution); `soundness_generic` (each def checked once)],
+  [`Frame.v`], [the frame lemma; divergence as a checker tracks it; dead code after a diverging word],
+  [`Join.v`], [branch joins as a function, and the proof that they are upper bounds],
+  [`Variance.v`], [the enum declaration checks are sound: substitution is monotone for variance (`payload_sub`) and for fresh retyping (`payload_rsub`), and preserves immutability (`payload_imm`)],
+  [`Examples.v`], [holes H1--H8 run to `RStuck`; R6 gets stuck without a copy and type-checks and runs with `deepCopy`; the copy is per path; copying a cycle is a checked error; `Maybe`, recursive `List` and non-regular `Nest` declared as generic enums],
 )
 
 *What is modeled*: everything in the calculus that interacts with aliasing, namely shared and fresh lists and
 dicts, shapes with required/optional/absent/remainder/open labels, `{str: T}`, width subtyping,
 invariance, `Maybe` covariance, unions, unknown types and kind patterns (including the abstract-type
-rule), variables in heap scopes captured by quotes, quotes with frame polymorphism and `never`,
+rule), type variables and polymorphic defs checked once, the frame lemma, divergence and dead code,
+branch joins, `return` in top-level code, generic and recursive enums (variance, fresh-covariance, immutability, constructors, matches,
+enum kind patterns, validation and `deepCopy` of enum values), validation with a work budget,
+variables in heap scopes captured by quotes, quotes with frame polymorphism and `never`,
 `if`, `loop` and loop-forever, `break`/`continue` through `each`, `return`, `exit`, polymorphic and
 recursive definitions, `tryAs` in its three modes, `deepCopy`, and type-changing updates of fresh records.
 
@@ -1656,17 +1816,23 @@ recursive definitions, `tryAs` in its three modes, `deepCopy`, and type-changing
   means coinductive (or alias-environment) types, validation with a cycle check, and the
   Amadio--Cardelli subtyping argument. Nothing in the proof depends on finiteness except the
   structural recursion in `validate`. (`deepCopy` does not look at types, so it is unaffected.)
-- *Enums*, including generic ones. They behave like `Maybe` with declared payload types: immutable,
-  tagged, nominal. Their payloads follow the same shared/fresh rules as list elements, and a
-  parameter's variance follows from its positions, by the same argument as for `Maybe` (covariant)
-  and lists (invariant).
+- *`Maybe` as an instance of enums.* The model keeps `Maybe` as a built-in type and also shows the
+  declaration `enum Maybe[a] = just a | none end` is well formed, covariant and fresh-covariant
+  (`maybe_*` in `Examples.v`). The checker can implement `Maybe` as that enum.
+- *Exhaustiveness.* A constructor with no arm is a checked error in the model; checking coverage
+  statically is not a soundness question.
 - *Grids, grid views, commands*. The model covers them through their core form: records of
   columns and strong updates on fresh records. The grid-specific builtins are $Phi$ entries.
 - *Builtins generally* (Principle 5). The model proves the rules for the words listed above.
   Other builtins still need the contract in @sec-contract and tests.
 - *The checker algorithm*. The theorem is about the declarative rules. The checker must produce only
-  derivations of them: unification, joins (@sec-join), the frame lemma for quote bodies, the
-  substitution lemma for polymorphic defs, and the skolem escape check (@sec-unknown).
+  derivations of them. Proved: the substitution lemma (defs checked once), the frame lemma (quote
+  bodies checked once), divergence, and joins. Not proved: unification, overload resolution and the
+  skolem escape check (@sec-unknown) as algorithms.
+- *"Fresh when the input is fresh"* for `take`, `skip`, slices and `...rest` over a list of containers
+  (@sec-fresh). The old list stays in the heap, unreachable, pointing at the kept elements, and the
+  invariant has no notion of unreachable objects. The shared case and the case of immutable elements
+  need nothing new. Adding unreachable objects to the fresh-region invariant would cover it.
 - *Definite assignment.* Reading an unset variable is a checked error in the model, as at runtime.
 - *Slices and `...rest`.* The model has no slicing words. Principle 7 is what lets them be added as
   $Phi$ entries: each returns a new object, so a slice is a shallow copy with the freshness rule of @sec-fresh.

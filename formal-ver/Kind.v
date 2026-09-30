@@ -5,7 +5,7 @@ Import ListNotations.
 From MshellCore Require Import Syntax Subtyping Typing Interp Invariant RtLemmas Commit Validate.
 
 Section K.
-Variable sigs : string -> list ty -> option (list ty) -> Prop.
+Variable sigs : genv.
 
 Lemma tunion_spec x y :
   (x = TBot /\ tunion x y = y) \/
@@ -42,7 +42,7 @@ Lemma kt_sub : forall e t, sub e t -> forall ke t1,
 Proof.
   intros e t Hs; induction Hs; intros ke t1 Hk Ht.
   - destruct t; simpl in Hk; try discriminate; inversion Hk; subst;
-      simpl in Ht; inversion Ht; subst; apply s_refl.
+      simpl in Ht; try rewrite ename_eqb_refl in Ht; inversion Ht; subst; apply s_refl.
   - discriminate.
   - destruct t; simpl in Hk; try discriminate; inversion Hk; subst;
       simpl in Ht; inversion Ht; subst.
@@ -61,6 +61,8 @@ Proof.
   - simpl in Hk; inversion Hk; subst; simpl in Ht; inversion Ht; subst. apply s_list; auto.
   - simpl in Hk; inversion Hk; subst; simpl in Ht; inversion Ht; subst. apply s_rec; auto.
   - simpl in Hk; inversion Hk; subst; simpl in Ht; inversion Ht; subst. apply s_quote; auto.
+  - simpl in Hk; inversion Hk; subst; simpl in Ht; rewrite ename_eqb_refl in Ht.
+    inversion Ht; subst. apply s_enum; auto.
 Qed.
 
 Lemma ke_sub : forall e t, sub e t -> forall ke k,
@@ -77,10 +79,14 @@ Proof.
   - simpl in Hk; inversion Hk; subst; simpl; rewrite Hq. apply s_list; auto.
   - simpl in Hk; inversion Hk; subst; simpl; rewrite Hq. apply s_rec; auto.
   - simpl in Hk; inversion Hk; subst; simpl; rewrite Hq. apply s_quote; auto.
+  - simpl in Hk; inversion Hk; subst; simpl; rewrite Hq. apply s_enum; auto.
 Qed.
 
 Lemma kind_list_head e : kind_of_ty e = Some KList -> exists a, e = TList a.
-Proof. destruct e; simpl; intros E; try discriminate; eauto. Qed.
+Proof. destruct e; simpl; intros Ek; try discriminate; eauto. Qed.
+
+Lemma kind_enum_head e E : kind_of_ty e = Some (KEnum E) -> exists a, e = TEnum E a.
+Proof. destruct e; simpl; intros Ek; try discriminate; inversion Ek; subst; eauto. Qed.
 
 Lemma loc_obj Σ H R l h :
   heap_ok_out sigs Σ H R -> length Σ = length H -> ~ In l R -> nth_error Σ l = Some h ->
@@ -122,6 +128,7 @@ Proof.
     apply s_unionr2; auto.
   - destruct (IHHv Hl) as (e & ke & A & B & C & D). exists e, ke; repeat split; auto.
     apply s_top.
+  - exists (TEnum E a), (KEnum E); repeat split; [eapply vt_con; eauto | apply s_refl].
 Qed.
 
 Lemma dhead Σ H v t O :
@@ -149,6 +156,7 @@ Proof.
     apply s_unionr2; auto.
   - destruct IHD as (e & ke & A & B & C & E). exists e, ke; repeat split; auto.
     apply s_top.
+  - exists (TEnum E a), (KEnum E); repeat split; [eapply dt_con; eauto | apply s_refl].
 Qed.
 
 (** Shared values *)
@@ -194,6 +202,17 @@ Proof.
   destruct (kind_list_head e C) as [a ->]. eauto.
 Qed.
 
+Lemma vtyped_kind_enum Σ H R v t E :
+  vtyped sigs Σ v t -> heap_ok_out sigs Σ H R -> length Σ = length H ->
+  (forall l, In l (vlocs v) -> ~ In l R) ->
+  kind_of H v = Some (KEnum E) -> exists a, vtyped sigs Σ v (TEnum E a).
+Proof.
+  intros Hv Hh Hlen Hl Hk.
+  destruct (vhead Σ H R v t Hv Hh Hlen Hl) as (e & ke & A & B & C & D).
+  rewrite D in Hk; inversion Hk; subst.
+  destruct (kind_enum_head e E C) as [a ->]. eauto.
+Qed.
+
 (** Fresh values *)
 Lemma dtyped_kind_of Σ H v t O :
   dtyped sigs Σ H v t O -> exists k, kind_of H v = Some k.
@@ -225,6 +244,14 @@ Proof.
   intros D Hk. destruct (dhead Σ H v t O D) as (e & ke & A & B & C & E).
   rewrite E in Hk; inversion Hk; subst.
   destruct (kind_list_head e C) as [a ->]. eauto.
+Qed.
+
+Lemma dtyped_kind_enum Σ H v t O E :
+  dtyped sigs Σ H v t O -> kind_of H v = Some (KEnum E) -> exists a, dtyped sigs Σ H v (TEnum E a) O.
+Proof.
+  intros D Hk. destruct (dhead Σ H v t O D) as (e & ke & A & B & C & F).
+  rewrite F in Hk; inversion Hk; subst.
+  destruct (kind_enum_head e E C) as [a ->]. eauto.
 Qed.
 
 End K.

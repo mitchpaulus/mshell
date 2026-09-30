@@ -25,7 +25,75 @@ Definition loc := nat.
     deleted; [FAbs] means absent; [FOpen] means unknown (read-only).
 
     [TQuote ins None] is a quote whose output side is [never]. Stacks are
-    written top-first everywhere in the formalization. *)
+    written top-first everywhere in the formalization.
+
+    [TEnum E args] is the enum [E] at arguments [args]; [TParam i] is the
+    [i]th parameter of an enum declaration and appears only in the payload
+    types of constructors (see [ename] below and Subtyping.v).
+
+    [TVar x] is a rigid type variable, as in a definition's signature
+    [(a -- a)]: the body is checked once with [a] rigid (Generic.v).  No
+    value has type [TVar x]; it is substituted away at each instance. *)
+
+(** ** Enum identities
+
+    [p_var] is a parameter's variance for subtyping.  [p_fresh] says every
+    occurrence of the parameter is in a data position (a payload, a list
+    element, a dict value, a [Maybe] or a fresh-covariant argument of an
+    enum, never under a quote), so a *fresh* value may retype that argument
+    covariantly ([rsub]).  [en_imm] says a value of the enum holds no list
+    or dict when its arguments cannot.
+
+    In the model an enum's identity is its name together with this
+    information.  The checker has one declaration per name, so this names
+    the same enums; it lets subtyping and immutability be defined without a
+    global declaration environment.  Payload types live in the typing
+    environment ([g_ctors] in Typing.v) and are checked against the identity
+    by [wf_payload] (Subtyping.v). *)
+Inductive variance := VCo | VContra | VInv.
+
+Record eparam := { p_var : variance; p_fresh : bool }.
+
+Record ename := { en_name : string; en_params : list eparam; en_imm : bool }.
+
+Definition cname := string.
+
+Definition variance_eqb (a b : variance) : bool :=
+  match a, b with VCo, VCo | VContra, VContra | VInv, VInv => true | _, _ => false end.
+
+Definition eparam_eqb (a b : eparam) : bool :=
+  variance_eqb (p_var a) (p_var b) && Bool.eqb (p_fresh a) (p_fresh b).
+
+Fixpoint eparams_eqb (a b : list eparam) : bool :=
+  match a, b with
+  | [], [] => true
+  | x :: a', y :: b' => eparam_eqb x y && eparams_eqb a' b'
+  | _, _ => false
+  end.
+
+Definition ename_eqb (a b : ename) : bool :=
+  String.eqb (en_name a) (en_name b) && eparams_eqb (en_params a) (en_params b)
+  && Bool.eqb (en_imm a) (en_imm b).
+
+Lemma ename_eqb_true a b : ename_eqb a b = true -> a = b.
+Proof.
+  destruct a as [n1 p1 i1], b as [n2 p2 i2]. unfold ename_eqb; simpl.
+  intros E. apply andb_true_iff in E as [E E3]. apply andb_true_iff in E as [E1 E2].
+  apply String.eqb_eq in E1. apply Bool.eqb_prop in E3. subst.
+  assert (p1 = p2); [|subst; reflexivity].
+  revert p2 E2. induction p1 as [|[v1 f1] p1 IH]; intros [|[v2 f2] p2] E; simpl in E; try discriminate; auto.
+  apply andb_true_iff in E as [Ep E]. unfold eparam_eqb in Ep; simpl in Ep.
+  apply andb_true_iff in Ep as [Ev Ef]. apply Bool.eqb_prop in Ef.
+  destruct v1, v2; simpl in Ev; try discriminate; subst; f_equal; auto.
+Qed.
+
+Lemma ename_eqb_refl a : ename_eqb a a = true.
+Proof.
+  destruct a as [n p i]. unfold ename_eqb; simpl. rewrite String.eqb_refl, Bool.eqb_reflx.
+  induction p as [|[v f] p IH]; simpl; auto.
+  unfold eparam_eqb; simpl. rewrite Bool.eqb_reflx. destruct v; simpl; auto.
+Qed.
+
 Inductive ty : Type :=
 | TInt | TStr | TBool
 | TBot                     (* the empty type; [none : Maybe Bot] *)
@@ -35,6 +103,9 @@ Inductive ty : Type :=
 | TRec (fs : list (label * fstat)) (r : fstat)
 | TUnion (a b : ty)
 | TQuote (ins : list ty) (outs : option (list ty))
+| TEnum (E : ename) (args : list ty)
+| TParam (i : nat)
+| TVar (x : nat)           (* a rigid type variable of a polymorphic definition *)
 with fstat : Type :=
 | FReq (t : ty) | FOpt (t : ty) | FDict (t : ty) | FAbs | FOpen.
 
@@ -58,13 +129,76 @@ Definition fty (f : fstat) : ty :=
 
 Definition TDict (t : ty) : ty := TRec [] (FDict t).
 
-(** Runtime kinds. *)
-Inductive kind := KInt | KStr | KBool | KMaybe | KList | KDict | KQuote.
+(** [forallb2 f ps xs]: [f] holds pairwise and the lists have equal length.
+    Structural on the second list, so a fixpoint over types may recurse
+    through it. *)
+Definition forallb2 {A B : Type} (f : A -> B -> bool) :=
+  fix go (l1 : list A) (l2 : list B) {struct l2} : bool :=
+    match l1, l2 with
+    | [], [] => true
+    | x :: l1', y :: l2' => f x y && go l1' l2'
+    | _, _ => false
+    end.
+
+(** Substitution of enum arguments for [TParam]s. *)
+Fixpoint subst (a : list ty) (t : ty) : ty :=
+  match t with
+  | TParam i => nth i a TBot
+  | TMaybe t' => TMaybe (subst a t')
+  | TList t' => TList (subst a t')
+  | TRec fs r => TRec (map (fun p => (fst p, fsubst a (snd p))) fs) (fsubst a r)
+  | TUnion x y => TUnion (subst a x) (subst a y)
+  | TQuote ins outs =>
+      TQuote (map (subst a) ins) (match outs with Some o => Some (map (subst a) o) | None => None end)
+  | TEnum E args => TEnum E (map (subst a) args)
+  | TInt | TStr | TBool | TBot | TTop | TVar _ => t
+  end
+with fsubst (a : list ty) (f : fstat) : fstat :=
+  match f with
+  | FReq t => FReq (subst a t) | FOpt t => FOpt (subst a t) | FDict t => FDict (subst a t)
+  | FAbs => FAbs | FOpen => FOpen
+  end.
+
+(** Substitution of types for type variables, and free type variables. *)
+Fixpoint tsub (th : nat -> ty) (t : ty) : ty :=
+  match t with
+  | TVar x => th x
+  | TMaybe t' => TMaybe (tsub th t')
+  | TList t' => TList (tsub th t')
+  | TRec fs r => TRec (map (fun p => (fst p, ftsub th (snd p))) fs) (ftsub th r)
+  | TUnion x y => TUnion (tsub th x) (tsub th y)
+  | TQuote ins outs =>
+      TQuote (map (tsub th) ins) (match outs with Some o => Some (map (tsub th) o) | None => None end)
+  | TEnum E args => TEnum E (map (tsub th) args)
+  | TInt | TStr | TBool | TBot | TTop | TParam _ => t
+  end
+with ftsub (th : nat -> ty) (f : fstat) : fstat :=
+  match f with
+  | FReq t => FReq (tsub th t) | FOpt t => FOpt (tsub th t) | FDict t => FDict (tsub th t)
+  | FAbs => FAbs | FOpen => FOpen
+  end.
+
+Fixpoint fvt (t : ty) : list nat :=
+  match t with
+  | TVar x => [x]
+  | TMaybe t' | TList t' => fvt t'
+  | TRec fs r => flat_map (fun p => ffvt (snd p)) fs ++ ffvt r
+  | TUnion x y => fvt x ++ fvt y
+  | TQuote ins outs => flat_map fvt ins ++ match outs with Some o => flat_map fvt o | None => [] end
+  | TEnum _ args => flat_map fvt args
+  | TInt | TStr | TBool | TBot | TTop | TParam _ => []
+  end
+with ffvt (f : fstat) : list nat :=
+  match f with FReq t | FOpt t | FDict t => fvt t | FAbs | FOpen => [] end.
+
+(** Runtime kinds.  Each enum is its own kind, shared by all its instances. *)
+Inductive kind := KInt | KStr | KBool | KMaybe | KList | KDict | KQuote | KEnum (E : ename).
 
 Definition kind_eqb (a b : kind) : bool :=
   match a, b with
   | KInt, KInt | KStr, KStr | KBool, KBool | KMaybe, KMaybe
   | KList, KList | KDict, KDict | KQuote, KQuote => true
+  | KEnum x, KEnum y => ename_eqb x y
   | _, _ => false
   end.
 
@@ -88,6 +222,7 @@ Inductive word : Type :=
 | WCall (f : string)
 | WNil | WPush | WGetAt | WSetAt  (* lists; out of range is a checked error *)
 | WEach (e : list word)           (* child-stack builtin with a literal body *)
+| WMap (e : list word)            (* child-stack builtin: a new list of the body's results *)
 | WDictNew
 | WGetK (k : label)               (* literal key, returns Maybe *)
 | WGetReq (k : label)             (* literal key known required: returns the value *)
@@ -97,7 +232,9 @@ Inductive word : Type :=
 | WSetD                           (* runtime key *)
 | WKindIf (k : kind) (e1 e2 : list word)   (* kind pattern; value stays on the stack *)
 | WTryAs (u : ty)                          (* validation, in place *)
-| WCopy.                                   (* explicit deep copy; the result is fresh *)
+| WCopy                                    (* explicit deep copy; the result is fresh *)
+| WCon (E : ename) (c : cname) (pts : list ty)   (* constructor; payloads top-first *)
+| WCase (E : ename) (arms : list (cname * list word)). (* constructor match; payloads pushed *)
 
 Definition prog := list word.
 
@@ -106,7 +243,11 @@ Inductive val : Type :=
 | VInt (n : nat) | VStr (s : string) | VBool (b : bool)
 | VNone | VJust (v : val)
 | VLoc (l : loc)                 (* a list or dict object *)
-| VClo (sc : loc) (e : prog).    (* a quote closing over a variable scope *)
+| VClo (sc : loc) (e : prog)     (* a quote closing over a variable scope *)
+| VCon (E : ename) (c : cname) (pts : list ty) (vs : list val).
+    (* an enum value: its enum, constructor, the constructor's declared
+       payload types (the runtime's pointer to the declaration, which the
+       validator reads) and its payloads *)
 
 Inductive obj : Type :=
 | OList (vs : list val)
@@ -127,3 +268,13 @@ Definition remove_key {A : Type} (k : string) (l : list (string * A)) :=
 
 Definition dset {A : Type} (k : string) (v : A) (l : list (string * A)) :=
   (k, v) :: remove_key k l.
+
+Lemma flat_map_nil_iff {A B} (f : A -> list B) l :
+  flat_map f l = [] <-> forall x, In x l -> f x = [].
+Proof.
+  induction l as [|y l IH]; simpl; split; intros H; auto.
+  - tauto.
+  - apply app_eq_nil in H as [H1 H2]. intros x [<-|Hx]; auto. apply IH; auto.
+  - rewrite H by (left; reflexivity). simpl. apply IH. intros; apply H; auto.
+Qed.
+

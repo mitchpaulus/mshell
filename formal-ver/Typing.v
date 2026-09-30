@@ -22,9 +22,22 @@ Inductive mark := Sh | Dp.
 Definition slot := (mark * ty)%type.
 Definition sty := list slot.
 Definition shs (ts : list ty) : sty := map (fun t => (Sh, t)) ts.
+Definition marks (m : mark) (ts : list ty) : sty := map (fun t => (m, t)) ts.
 Definition tenv := list (var * ty).
 
 Inductive lctx := LNone | LExact (s : sty) | LChild.
+
+(** Return contexts: [RNone], [return] not allowed (a quote body);
+    [RSome s], inside a definition returning [s]; [RAny], top-level code,
+    where [return] ends the script and nothing reads the stack. *)
+Inductive rctx := RNone | RSome (s : sty) | RAny.
+
+(** Extending a derivation with a frame [s0] under the stack also extends
+    the loop and return stacks (Frame.v). *)
+Definition lframe (L : lctx) (s0 : sty) : lctx :=
+  match L with LExact s => LExact (s ++ s0) | l => l end.
+Definition rframe (R : rctx) (s0 : sty) : rctx :=
+  match R with RSome s => RSome (s ++ s0) | r => r end.
 
 (** The loop context seen by the body of a child-stack builtin that runs
     with [s] below its arguments. *)
@@ -61,6 +74,7 @@ Definition kind_top (k : kind) : option ty :=
   | KDict => Some (TRec [] FOpen)
   | KQuote => Some TTop
   | KList => None           (* needs the abstract rule [tw_kind_list] *)
+  | KEnum _ => None         (* needs the abstract rule [tw_kind_enum] *)
   end.
 
 Definition kind_of_ty (t : ty) : option kind :=
@@ -68,7 +82,8 @@ Definition kind_of_ty (t : ty) : option kind :=
   | TInt => Some KInt | TStr => Some KStr | TBool => Some KBool
   | TMaybe _ => Some KMaybe | TList _ => Some KList
   | TRec _ _ => Some KDict | TQuote _ _ => Some KQuote
-  | TBot | TTop | TUnion _ _ => None
+  | TEnum E _ => Some (KEnum E)
+  | TBot | TTop | TUnion _ _ | TParam _ | TVar _ => None
   end.
 
 (** The members of [t] of kind [k] (the then-branch type) *)
@@ -76,6 +91,7 @@ Fixpoint kind_then (k : kind) (t : ty) : option ty :=
   match t with
   | TBot => Some TBot
   | TTop => kind_top k
+  | TVar _ => kind_top k     (* an instance may have any kind: like unknown contents *)
   | TUnion a b =>
       match kind_then k a, kind_then k b with
       | Some x, Some y => Some (tunion x y)
@@ -99,14 +115,27 @@ Fixpoint kind_else (k : kind) (t : ty) : ty :=
          end
   end.
 
+(** The typing environment.
+
+    [g_sigs f ins outs] lists the instances of definition [f]'s signature;
+    a polymorphic signature is the set of its instances.  Inputs and outputs
+    are stack slots, so a signature can say an input or output is fresh
+    ([Dp]): the caller must pass a fresh value, or gets one back.
+    [outs = None] is a [never] signature.
+
+    [g_ctors E c] is the list of payload types of constructor [c] of enum
+    [E] (top-first, mentioning [E]'s parameters as [TParam]s): the enum
+    declarations. *)
+Record genv := {
+  g_sigs : string -> sty -> option sty -> Prop;
+  g_ctors : ename -> cname -> option (list ty)
+}.
+
 Section Typing.
-(** Signatures of definitions: [sigs f ins outs] lists the (closed)
-    instances of [f]'s signature; a polymorphic signature is the set of its
-    instances.  [outs = None] is a [never] signature. *)
-Variable sigs : string -> list ty -> option (list ty) -> Prop.
+Variable sigs : genv.
 Variable G : tenv.
 
-Inductive TW : lctx -> lctx -> option sty -> word -> sty -> sty -> Prop :=
+Inductive TW : lctx -> lctx -> rctx -> word -> sty -> sty -> Prop :=
 | tw_int B C R n s : TW B C R (WInt n) s ((Sh, TInt) :: s)
 | tw_str B C R x s : TW B C R (WStr x) s ((Sh, TStr) :: s)
 | tw_bool B C R b s : TW B C R (WBool b) s ((Sh, TBool) :: s)
@@ -121,10 +150,10 @@ Inductive TW : lctx -> lctx -> option sty -> word -> sty -> sty -> Prop :=
 | tw_load B C R x t s : lookup x G = Some t -> TW B C R (WLoad x) s ((Sh, t) :: s)
 | tw_store B C R x t s : lookup x G = Some t -> TW B C R (WStore x) ((Sh, t) :: s) s
 | tw_quote B C R e ins outs s :
-    (forall s0, T LNone LNone None e (shs ins ++ s0) (shs outs ++ s0)) ->
+    (forall s0, T LNone LNone RNone e (shs ins ++ s0) (shs outs ++ s0)) ->
     TW B C R (WQuote e) s ((Sh, TQuote ins (Some outs)) :: s)
 | tw_quote_never B C R e ins s :
-    (forall s0 s', T LNone LNone None e (shs ins ++ s0) s') ->
+    (forall s0 s', T LNone LNone RNone e (shs ins ++ s0) s') ->
     TW B C R (WQuote e) s ((Sh, TQuote ins None) :: s)
 | tw_exec B C R ins outs s :
     TW B C R WExec ((Sh, TQuote ins (Some outs)) :: shs ins ++ s) (shs outs ++ s)
@@ -140,12 +169,13 @@ Inductive TW : lctx -> lctx -> option sty -> word -> sty -> sty -> Prop :=
 | tw_break_child C R s s' : TW LChild C R WBreak s s'
 | tw_cont_exact B R s s' : TW B (LExact s) R WContinue s s'
 | tw_cont_child B R s s' : TW B LChild R WContinue s s'
-| tw_return B C s s' : TW B C (Some s) WReturn s s'
+| tw_return B C s s' : TW B C (RSome s) WReturn s s'
+| tw_return_any B C s s' : TW B C RAny WReturn s s'
 | tw_exit B C R s s' : TW B C R WExit ((Sh, TInt) :: s) s'
 | tw_call B C R f ins outs s :
-    sigs f ins (Some outs) -> TW B C R (WCall f) (shs ins ++ s) (shs outs ++ s)
+    g_sigs sigs f ins (Some outs) -> TW B C R (WCall f) (ins ++ s) (outs ++ s)
 | tw_call_never B C R f ins s s' :
-    sigs f ins None -> TW B C R (WCall f) (shs ins ++ s) s'
+    g_sigs sigs f ins None -> TW B C R (WCall f) (ins ++ s) s'
 | tw_nil B C R t s : TW B C R WNil s ((Dp, TList t) :: s)
 | tw_push_sh B C R t s :
     TW B C R WPush ((Sh, t) :: (Sh, TList t) :: s) ((Sh, TList t) :: s)
@@ -157,8 +187,20 @@ Inductive TW : lctx -> lctx -> option sty -> word -> sty -> sty -> Prop :=
     TW B C R WSetAt ((Sh, t) :: (Sh, TInt) :: (Sh, TList t) :: s) ((Sh, TList t) :: s)
 | tw_each B C R e t s B' C' :
     child_ctx B s B' -> child_ctx C s C' ->
-    T B' C' None e [(Sh, t)] [] ->
+    T B' C' RNone e [(Sh, t)] [] ->
     TW B C R (WEach e) ((Sh, TList t) :: s) s
+(** [map] with a literal body.  Its result holds the body's results, which
+    are shared values, so it is fresh only when they are immutable; "fresh
+    when the input is fresh" would be wrong here. *)
+| tw_map B C R e t u s B' C' :
+    child_ctx B s B' -> child_ctx C s C' ->
+    T B' C' RNone e [(Sh, t)] [(Sh, u)] ->
+    TW B C R (WMap e) ((Sh, TList t) :: s) ((Sh, TList u) :: s)
+| tw_map_imm B C R e t u s B' C' :
+    immutable u = true ->
+    child_ctx B s B' -> child_ctx C s C' ->
+    T B' C' RNone e [(Sh, t)] [(Sh, u)] ->
+    TW B C R (WMap e) ((Sh, TList t) :: s) ((Dp, TList u) :: s)
 | tw_dictnew B C R s : TW B C R WDictNew s ((Dp, TRec [] FAbs) :: s)
 | tw_getk B C R k fs r s :
     TW B C R (WGetK k) ((Sh, TRec fs r) :: s) ((Sh, TMaybe (fty (field_at k fs r))) :: s)
@@ -190,20 +232,52 @@ Inductive TW : lctx -> lctx -> option sty -> word -> sty -> sty -> Prop :=
     (forall a, T B C R e1 ((m, TList a) :: s) s') ->
     T B C R e2 ((m, t) :: s) s' ->
     TW B C R (WKindIf KList e1 e2) ((m, t) :: s) s'
+(** A [tryAs] target mentions no type variable: types are erased, so the
+    runtime cannot validate against one (Generic.v). *)
 | tw_try_dp B C R t u s :
-    TW B C R (WTryAs u) ((Dp, t) :: s) ((Dp, TMaybe u) :: s)
+    fvt u = [] -> TW B C R (WTryAs u) ((Dp, t) :: s) ((Dp, TMaybe u) :: s)
 | tw_try_sub B C R t u s :
-    sub t u -> TW B C R (WTryAs u) ((Sh, t) :: s) ((Sh, TMaybe u) :: s)
+    fvt u = [] -> sub t u -> TW B C R (WTryAs u) ((Sh, t) :: s) ((Sh, TMaybe u) :: s)
 | tw_try_imm B C R t u s :
-    immutable u = true -> TW B C R (WTryAs u) ((Sh, t) :: s) ((Sh, TMaybe u) :: s)
+    fvt u = [] -> immutable u = true -> TW B C R (WTryAs u) ((Sh, t) :: s) ((Sh, TMaybe u) :: s)
 | tw_copy B C R t s :
     TW B C R WCopy ((Sh, t) :: s) ((Dp, t) :: s)
+(** Enums.  A constructor is polymorphic in the enum's parameters ([a] is
+    any list of arguments).  Its value is fresh when every payload is
+    fresh (an immutable payload can be made fresh first, [ss_imm]). *)
+| tw_con_sh B C R E c pts a s :
+    g_ctors sigs E c = Some pts -> wf_payload E pts ->
+    TW B C R (WCon E c pts) (shs (map (subst a) pts) ++ s) ((Sh, TEnum E a) :: s)
+| tw_con_dp B C R E c pts a s :
+    g_ctors sigs E c = Some pts -> wf_payload E pts ->
+    TW B C R (WCon E c pts) (marks Dp (map (subst a) pts) ++ s) ((Dp, TEnum E a) :: s)
+(** A match pushes the payloads, with the enum value's freshness, and runs
+    the arm for its constructor.  A constructor with no arm is a checked
+    error (a surface match without full coverage elaborates to that). *)
+| tw_case B C R m E a arms s s' :
+    (forall c pts e, g_ctors sigs E c = Some pts -> lookup c arms = Some e ->
+       T B C R e (marks m (map (subst a) pts) ++ s) s') ->
+    TW B C R (WCase E arms) ((m, TEnum E a) :: s) s'
+(** A kind pattern for an enum on a value whose type does not say which
+    instance it is: the arm is checked for every argument list, like
+    [tw_kind_list]. *)
+| tw_kind_enum B C R m E t e1 e2 s s' :
+    (forall a, T B C R e1 ((m, TEnum E a) :: s) s') ->
+    T B C R e2 ((m, t) :: s) s' ->
+    TW B C R (WKindIf (KEnum E) e1 e2) ((m, t) :: s) s'
 
-with T : lctx -> lctx -> option sty -> prog -> sty -> sty -> Prop :=
+with T : lctx -> lctx -> rctx -> prog -> sty -> sty -> Prop :=
 | t_nil B C R s : T B C R [] s s
 | t_cons B C R w e s1 s2 s3 : TW B C R w s1 s2 -> T B C R e s2 s3 -> T B C R (w :: e) s1 s3
 | t_sub B C R e s1 s1' s2 s2' :
-    ssub s1' s1 -> T B C R e s1 s2 -> ssub s2 s2' -> T B C R e s1' s2'.
+    ssub s1' s1 -> T B C R e s1 s2 -> ssub s2 s2' -> T B C R e s1' s2'
+(** Code after a word that never returns normally is not checked: it cannot
+    run.  The word must diverge at every frame (with the loop and return
+    stacks extended to match), which is what makes this rule survive the
+    frame lemma. *)
+| t_div B C R w e s1 s3 :
+    (forall s0 s2, T (lframe B s0) (lframe C s0) (rframe R s0) [w] (s1 ++ s0) s2) ->
+    T B C R (w :: e) s1 s3.
 
 End Typing.
 
@@ -213,16 +287,16 @@ with T_mut := Induction for T Sort Prop.
 (** A closure body [e] in scope [G] has quote type [TQuote ins outs]. *)
 Definition closure_ok sigs (G : tenv) (e : prog) (ins : list ty) (outs : option (list ty)) : Prop :=
   match outs with
-  | Some o => forall s0, T sigs G LNone LNone None e (shs ins ++ s0) (shs o ++ s0)
-  | None => forall s0 s', T sigs G LNone LNone None e (shs ins ++ s0) s'
+  | Some o => forall s0, T sigs G LNone LNone RNone e (shs ins ++ s0) (shs o ++ s0)
+  | None => forall s0 s', T sigs G LNone LNone RNone e (shs ins ++ s0) s'
   end.
 
 (** A definition body is well typed for every instance of its signature. A
     [never] signature types the body with no return context. *)
 Definition def_ok sigs (defs : string -> option prog) : Prop :=
-  forall f ins outs, sigs f ins outs ->
+  forall f ins outs, g_sigs sigs f ins outs ->
   exists body G, defs f = Some body /\
     match outs with
-    | Some o => forall s0, T sigs G LNone LNone (Some (shs o ++ s0)) body (shs ins ++ s0) (shs o ++ s0)
-    | None => forall s0 s', T sigs G LNone LNone None body (shs ins ++ s0) s'
+    | Some o => forall s0, T sigs G LNone LNone (RSome (o ++ s0)) body (ins ++ s0) (o ++ s0)
+    | None => forall s0 s', T sigs G LNone LNone RNone body (ins ++ s0) s'
     end.

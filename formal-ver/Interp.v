@@ -28,6 +28,7 @@ Definition kind_of (H : heap) (v : val) : option kind :=
   | VBool _ => Some KBool
   | VNone | VJust _ => Some KMaybe
   | VClo _ _ => Some KQuote
+  | VCon E _ _ _ => Some (KEnum E)
   | VLoc l =>
       match nth_error H l with
       | Some (OList _) => Some KList
@@ -36,60 +37,87 @@ Definition kind_of (H : heap) (v : val) : option kind :=
       end
   end.
 
-(** ** Validation ([tryAs]) *)
-Definition vopt (vf : val -> bool) (f_req : bool) (ov : option val) : bool :=
-  match ov with Some x => vf x | None => negb f_req end.
+(** ** Validation ([tryAs])
 
-Fixpoint validate (H : heap) (v : val) (t : ty) {struct t} : bool :=
+    [validate f H v t] checks [v] against [t] in place, with a work budget
+    [f].  Running out of budget is [None], a checked error: this is how a
+    cyclic value meets a recursive type (an enum whose payload holds a list
+    of the enum, say).  An enum value is checked by identity and then its
+    payloads against the constructor's payload types, which the value
+    carries, with the target's arguments substituted. *)
+Fixpoint oforall {A : Type} (g : A -> option bool) (l : list A) : option bool :=
+  match l with
+  | [] => Some true
+  | x :: l' => match g x with Some true => oforall g l' | r => r end
+  end.
+
+Fixpoint oforall2 {A B : Type} (g : A -> B -> option bool) (l1 : list A) (l2 : list B) : option bool :=
+  match l1, l2 with
+  | [], [] => Some true
+  | x :: l1', y :: l2' => match g x y with Some true => oforall2 g l1' l2' | r => r end
+  | _, _ => Some false
+  end.
+
+Definition oand (x y : option bool) : option bool :=
+  match x with Some true => y | r => r end.
+
+Fixpoint validate (f : nat) (H : heap) (v : val) (t : ty) {struct f} : option bool :=
+  match f with
+  | 0 => None
+  | S f' =>
+  let vf := fun (st : fstat) (ov : option val) =>
+    match st with
+    | FReq t' => match ov with Some x => validate f' H x t' | None => Some false end
+    | FOpt t' | FDict t' => match ov with Some x => validate f' H x t' | None => Some true end
+    | FAbs => match ov with Some _ => Some false | None => Some true end
+    | FOpen => Some true
+    end in
   match t with
-  | TInt => match v with VInt _ => true | _ => false end
-  | TStr => match v with VStr _ => true | _ => false end
-  | TBool => match v with VBool _ => true | _ => false end
-  | TBot => false
-  | TTop => true
+  | TInt => Some (match v with VInt _ => true | _ => false end)
+  | TStr => Some (match v with VStr _ => true | _ => false end)
+  | TBool => Some (match v with VBool _ => true | _ => false end)
+  | TBot | TParam _ | TVar _ => Some false
+  | TTop => Some true
+  | TQuote _ _ => Some false          (* not checkable *)
   | TMaybe t' =>
       match v with
-      | VNone => true
-      | VJust x => validate H x t'
-      | _ => false
+      | VNone => Some true
+      | VJust x => validate f' H x t'
+      | _ => Some false
       end
   | TList t' =>
       match v with
       | VLoc l =>
           match nth_error H l with
-          | Some (OList vs) => forallb (fun x => validate H x t') vs
-          | _ => false
+          | Some (OList vs) => oforall (fun x => validate f' H x t') vs
+          | _ => Some false
           end
-      | _ => false
+      | _ => Some false
       end
   | TRec fs r =>
-      let vf := fun (f : fstat) (ov : option val) =>
-        match f with
-        | FReq t' => match ov with Some x => validate H x t' | None => false end
-        | FOpt t' | FDict t' => match ov with Some x => validate H x t' | None => true end
-        | FAbs => match ov with Some _ => false | None => true end
-        | FOpen => true
-        end in
-      let fix ck (fs0 : list (label * fstat)) (k : label) (ov : option val) : bool :=
-        match fs0 with
-        | [] => vf r ov
-        | (k', f) :: rest => if String.eqb k k' then vf f ov else ck rest k ov
-        end in
       match v with
       | VLoc l =>
           match nth_error H l with
           | Some (ODict kvs) =>
-              forallb (fun p => ck fs (fst p) (Some (snd p))) kvs
-              && forallb (fun p => match lookup (fst p) kvs with
-                                   | Some _ => true
-                                   | None => ck fs (fst p) None end) fs
-              && match r with FReq _ => false | _ => true end
-          | _ => false
+              oand (oforall (fun p => vf (field_at (fst p) fs r) (Some (snd p))) kvs)
+                (oand (oforall (fun p => match lookup (fst p) kvs with
+                                         | Some _ => Some true
+                                         | None => vf (field_at (fst p) fs r) None end) fs)
+                      (Some (match r with FReq _ => false | _ => true end)))
+          | _ => Some false
           end
-      | _ => false
+      | _ => Some false
       end
-  | TUnion a b => validate H v a || validate H v b
-  | TQuote _ _ => false          (* not checkable *)
+  | TUnion a b =>
+      match validate f' H v a with Some false => validate f' H v b | r => r end
+  | TEnum E a =>
+      match v with
+      | VCon E' _ pts vs =>
+          if ename_eqb E E' then oforall2 (fun x t' => validate f' H x t') vs (map (subst a) pts)
+          else Some false
+      | _ => Some false
+      end
+  end
   end.
 
 (** ** The explicit copy ([copy])
@@ -159,6 +187,11 @@ Fixpoint vcopy (g : heap -> loc -> option (heap * val)) (H : heap) (v : val)
       | None => None
       end
   | VLoc l => g H l
+  | VCon E c pts vs =>
+      match mapo (vcopy g) H vs with
+      | Some (H1, vs') => Some (H1, VCon E c pts vs')
+      | None => None
+      end
   | _ => Some (H, v)
   end.
 
@@ -294,6 +327,28 @@ Fixpoint eval (n : nat) (H : heap) (sc : loc) (st : list val) (e : prog) {struct
           end
       | _ => RStuck
       end
+  | WMap body =>
+      match st with
+      | VLoc l :: st0 =>
+          match nth_error H l with
+          | Some (OList vs) =>
+              let fix go (vs : list val) (H0 : heap) (acc : list val) : result :=
+                match vs with
+                | [] => ROk ONormal (app H0 [OList (rev acc)]) (VLoc (length H0) :: st0)
+                | v :: vs' =>
+                    match eval n' H0 sc [v] body with
+                    | ROk ONormal H1 [v'] => go vs' H1 (v' :: acc)
+                    | ROk ONormal _ _ => RStuck
+                    | ROk OBreak H1 _ => ROk OBreak H1 st0
+                    | ROk OContinue H1 _ => ROk OContinue H1 st0
+                    | r => r
+                    end
+                end in
+              cont (go vs H [])
+          | _ => RStuck
+          end
+      | _ => RStuck
+      end
   | WDictNew => next (app H [ODict []]) (VLoc (length H) :: st)
   | WGetK k =>
       match st with
@@ -363,7 +418,12 @@ Fixpoint eval (n : nat) (H : heap) (sc : loc) (st : list val) (e : prog) {struct
       end
   | WTryAs u =>
       match st with
-      | v :: st' => if validate H v u then next H (VJust v :: st') else next H (VNone :: st')
+      | v :: st' =>
+          match validate n' H v u with
+          | Some true => next H (VJust v :: st')
+          | Some false => next H (VNone :: st')
+          | None => RErr                     (* validation budget exhausted *)
+          end
       | _ => RStuck
       end
   | WCopy =>
@@ -373,6 +433,20 @@ Fixpoint eval (n : nat) (H : heap) (sc : loc) (st : list val) (e : prog) {struct
           | Some (H', v') => next H' (v' :: st')
           | None => RErr                     (* a cyclic value *)
           end
+      | _ => RStuck
+      end
+  | WCon E c pts =>
+      let k := length pts in
+      if k <=? length st then next H (VCon E c pts (firstn k st) :: skipn k st) else RStuck
+  | WCase E arms =>
+      match st with
+      | VCon E' c _ vs :: st' =>
+          if ename_eqb E E' then
+            match lookup c arms with
+            | Some e => cont (eval n' H sc (vs ++ st') e)
+            | None => RErr                   (* no arm: a checked error *)
+            end
+          else RStuck
       | _ => RStuck
       end
   end

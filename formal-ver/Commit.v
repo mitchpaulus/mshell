@@ -9,7 +9,7 @@
 
 From Stdlib Require Import String List Arith Bool Lia.
 Import ListNotations.
-From MshellCore Require Import Syntax Subtyping Typing Interp Invariant RtLemmas.
+From MshellCore Require Import Syntax Subtyping Variance Typing Interp Invariant RtLemmas.
 
 Lemma set_nth_length {A} n (x : A) l : length (set_nth n x l) = length l.
 Proof. revert n; induction l; intros [|n]; simpl; auto. Qed.
@@ -69,7 +69,7 @@ Proof.
 Qed.
 
 Section Commit.
-Variable sigs : string -> list ty -> option (list ty) -> Prop.
+Variable sigs : genv.
 
 Definition committed (Σ' : store_ty) (H : heap) (O : list loc) :=
   forall l, In l O -> exists h o, nth_error Σ' l = Some h /\ is_scope h = false /\
@@ -98,9 +98,13 @@ Lemma commit_all Σ H :
   (forall kvs fs r Os, dfields sigs Σ H kvs fs r Os ->
      forall Σ0, scope_ext Σ Σ0 -> length Σ0 = length H -> nonscope_on Σ0 (concat Os) -> NoDup (concat Os) ->
      exists Σ', length Σ' = length Σ0 /\ sagree Σ0 Σ' (concat Os) /\ committed Σ' H (concat Os) /\
-                Forall (fun p => vtyped sigs Σ' (snd p) (fty (field_at (fst p) fs r))) kvs).
+                Forall (fun p => vtyped sigs Σ' (snd p) (fty (field_at (fst p) fs r))) kvs) /\
+  (forall vs ts Os, dtypedl sigs Σ H vs ts Os ->
+     forall Σ0, scope_ext Σ Σ0 -> length Σ0 = length H -> nonscope_on Σ0 (concat Os) -> NoDup (concat Os) ->
+     exists Σ', length Σ' = length Σ0 /\ sagree Σ0 Σ' (concat Os) /\ committed Σ' H (concat Os) /\
+                vtypedl sigs Σ' vs ts).
 Proof.
-  pose proof (dtyped_struct sigs Σ H) as [Sv [Svs Sfs]].
+  pose proof (dtyped_struct sigs Σ H) as [Sv [Svs [Sfs Sl]]].
   apply (dtyped_comb sigs Σ H
     (fun v t O _ => forall Σ0, scope_ext Σ Σ0 -> length Σ0 = length H -> nonscope_on Σ0 O -> NoDup O ->
      exists Σ', length Σ' = length Σ0 /\ sagree Σ0 Σ' O /\ committed Σ' H O /\ vtyped sigs Σ' v t)
@@ -109,7 +113,10 @@ Proof.
                 Forall (fun v => vtyped sigs Σ' v t) vs)
     (fun kvs fs r Os _ => forall Σ0, scope_ext Σ Σ0 -> length Σ0 = length H -> nonscope_on Σ0 (concat Os) -> NoDup (concat Os) ->
      exists Σ', length Σ' = length Σ0 /\ sagree Σ0 Σ' (concat Os) /\ committed Σ' H (concat Os) /\
-                Forall (fun p => vtyped sigs Σ' (snd p) (fty (field_at (fst p) fs r))) kvs)).
+                Forall (fun p => vtyped sigs Σ' (snd p) (fty (field_at (fst p) fs r))) kvs)
+    (fun vs ts Os _ => forall Σ0, scope_ext Σ Σ0 -> length Σ0 = length H -> nonscope_on Σ0 (concat Os) -> NoDup (concat Os) ->
+     exists Σ', length Σ' = length Σ0 /\ sagree Σ0 Σ' (concat Os) /\ committed Σ' H (concat Os) /\
+                vtypedl sigs Σ' vs ts)).
   (* int, str, bool, none *)
   - intros n Σ0 Hs Hl Hn Hd. exists Σ0; repeat split; auto using sagree_refl; try constructor.
     intros l [].
@@ -186,6 +193,9 @@ Proof.
     exists Σ'; repeat split; auto. apply vt_unionr; auto.
   - intros v t O d IH Σ0 Hs Hl Hn Hd. destruct (IH Σ0 Hs Hl Hn Hd) as (Σ' & ? & ? & ? & ?).
     exists Σ'; repeat split; auto. eapply vt_top; eauto.
+  - (* enum value: commit its payloads *)
+    intros E c pts vs a Os Ec W d IH N Σ0 Hs Hl Hn Hd. destruct (IH Σ0 Hs Hl Hn Hd) as (Σ' & ? & ? & ? & ?).
+    exists Σ'; repeat split; auto. eapply vt_con; eauto.
   - intros t Σ0 Hs Hl Hn Hd. exists Σ0; repeat split; auto using sagree_refl.
     intros l [].
   - intros v vs t O Os d IH d0 IH0 Σ0 Hs Hl Hn Hd. simpl in Hn, Hd.
@@ -244,6 +254,35 @@ Proof.
         - exact Sb. }
       exact (CbO m Hm).
     + constructor; [| exact Fb]. simpl.
+      eapply vtyped_agree with (X := concat Os); [exact Fa | | exact Ab | exact Sb].
+      intros m Hm Hm2. exact (Dj m (Hv m Hm) Hm2).
+  - intros Σ0 Hs Hl Hn Hd. exists Σ0; repeat split; auto using sagree_refl; [intros l [] | constructor].
+  - intros v vs t ts O Os d IH d0 IH0 Σ0 Hs Hl Hn Hd. simpl in Hn, Hd.
+    apply nodup_app_inv in Hd as (Hd1 & Hd2 & Dj).
+    destruct (IH Σ0 Hs Hl) as (Σa & La & Aa & Ca & Fa); auto.
+    { intros m Hm; apply Hn; apply in_or_app; auto. }
+    assert (Nb : nonscope_on Σa (concat Os)).
+    { intros m Hm. destruct (Hn m) as (h & E & N); [apply in_or_app; auto|].
+      exists h; split; auto. apply Aa; auto. intro Hx; exact (Dj m Hx Hm). }
+    assert (Sa : scope_ext Σ0 Σa).
+    { eapply sagree_scope_ext; eauto. intros m Hm; apply Hn; apply in_or_app; auto. }
+    destruct (IH0 Σa (scope_ext_trans _ _ _ Hs Sa)) as (Σb & Lb & Ab & Cb & Fb); auto; try lia.
+    assert (Sb : scope_ext Σa Σb) by (eapply sagree_scope_ext; eauto).
+    destruct (Sv _ _ _ d) as (_ & Hv & Ho).
+    exists Σb. repeat split; auto.
+    + lia.
+    + eapply sagree_trans; eauto.
+    + intros m Hm. apply in_app_or in Hm as [Hm|Hm]; [|auto].
+      assert (CbO : committed Σb H O).
+      { apply committed_agree with (Σ := Σa) (X := concat Os).
+        - exact Ca.
+        - exact Ab.
+        - intros m' Hm' Hm''. exact (Dj m' Hm' Hm'').
+        - intros m' o Hm' Eo r0 Hr Hr2. destruct (Ho m' Hm') as (o' & Eo' & _ & Hr').
+          rewrite Eo in Eo'; inversion Eo'; subst. exact (Dj r0 (Hr' r0 Hr) Hr2).
+        - exact Sb. }
+      exact (CbO m Hm).
+    + constructor; [| exact Fb].
       eapply vtyped_agree with (X := concat Os); [exact Fa | | exact Ab | exact Sb].
       intros m Hm Hm2. exact (Dj m (Hv m Hm) Hm2).
 Qed.

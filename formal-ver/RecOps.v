@@ -76,7 +76,7 @@ Proof.
 Qed.
 
 Section RecOps.
-Variable sigs : string -> list ty -> option (list ty) -> Prop.
+Variable sigs : genv.
 
 Lemma dtyped_rec_same Σ H v fs1 r1 fs2 r2 O :
   (forall k, field_at k fs1 r1 = field_at k fs2 r2) ->

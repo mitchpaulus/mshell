@@ -8,7 +8,7 @@
 
 From Stdlib Require Import String List Arith Bool Lia.
 Import ListNotations.
-From MshellCore Require Import Syntax Subtyping Typing Interp Invariant RtLemmas Soundness.
+From MshellCore Require Import Syntax Subtyping Typing Interp Invariant RtLemmas Soundness Generic Frame Join.
 Open Scope string_scope.
 
 Definition nodefs : string -> option prog := fun _ => None.
@@ -79,7 +79,7 @@ Proof. reflexivity. Qed.
 Example p1_rejected :
   ~ sub (TRec [("a", FReq TInt)] FAbs) (TRec [("a", FReq (TUnion TInt TStr))] FAbs).
 Proof.
-  intros H. inversion H as [| | | | | | | |fs1 r1 fs2 r2 Hf|]; subst.
+  intros H. inversion H as [| | | | | | | |fs1 r1 fs2 r2 Hf| |]; subst.
   specialize (Hf "a"). unfold field_at in Hf. simpl in Hf.
   inversion Hf; subst.
   match goal with Hs : sub (TUnion TInt TStr) TInt |- _ => inversion Hs; subst end.
@@ -124,18 +124,18 @@ Qed.
 
 Example r6_d_not_below : ~ sub TJ (TDict IS).
 Proof.
-  intros H. inversion H as [| | | | | | | |fs1 r1 fs2 r2 Hf|]; subst.
+  intros H. inversion H as [| | | | | | | |fs1 r1 fs2 r2 Hf| |]; subst.
   specialize (Hf "age"). unfold field_at in Hf. simpl in Hf. inversion Hf.
 Qed.
 
-Definition nosigs : string -> list ty -> option (list ty) -> Prop := fun _ _ _ => False.
+Definition nosigs : genv := {| g_sigs := fun _ _ _ => False; g_ctors := fun _ _ => None |}.
 
 (** Since [r6] gets stuck, the soundness theorem says it has no typing
     derivation, in any variable context. *)
-Example r6_rejected : forall G s, ~ T nosigs G LNone LNone None r6 [] s.
+Example r6_rejected : forall G s, ~ T nosigs G LNone LNone RNone r6 [] s.
 Proof.
   intros G s HT.
-  apply (soundness nosigs nodefs (fun f ins outs Hs => match Hs with end) G r6 s HT 200).
+  apply (soundness nosigs nodefs (fun f ins outs Hs => match Hs with end) G RNone r6 s HT 200).
   vm_compute. reflexivity.
 Qed.
 
@@ -148,7 +148,7 @@ Ltac step r := eapply t_cons; [ r | ].
 Lemma sub_str_is : sub TStr IS.
 Proof. apply s_unionr2, s_refl. Qed.
 
-Example r6_copy_typed : T nosigs GR6 LNone LNone None r6_copy [] [(Sh, TInt)].
+Example r6_copy_typed : T nosigs GR6 LNone LNone RNone r6_copy [] [(Sh, TInt)].
 Proof.
   unfold r6_copy, r6_with. simpl.
   step ltac:(apply tw_dictnew).
@@ -163,13 +163,13 @@ Proof.
     apply s_rec. intros k. unfold field_at. simpl. destruct (String.eqb k "age");
       [apply fs_req; apply s_refl | apply fs_abs]. }
   step ltac:(apply tw_load with (t := TJ); reflexivity).
-  step ltac:(apply tw_try_sub; apply r6_p_in_place_ok).
+  step ltac:(apply tw_try_sub; [reflexivity | apply r6_p_in_place_ok]).
   step ltac:(apply tw_unwrap).
   step ltac:(apply tw_store with (t := TP); reflexivity).
   step ltac:(apply tw_load with (t := TJ); reflexivity).
   (* the explicit copy is fresh, so it is validated in place *)
   step ltac:(apply tw_copy).
-  step ltac:(apply tw_try_dp).
+  step ltac:(apply tw_try_dp; reflexivity).
   step ltac:(apply tw_unwrap).
   eapply t_sub; [ | eapply t_cons; [apply tw_store with (t := TDict IS); reflexivity | ] | apply ssub_refl ].
   { constructor; [apply ss_forget, s_refl | constructor]. }
@@ -218,3 +218,425 @@ Definition copy_cycle : prog :=
 
 Example copy_cycle_err : run copy_cycle = RErr.
 Proof. vm_compute. reflexivity. Qed.
+
+(** * Generic enums
+
+    Enum identities used below.  [en_params] lists each parameter's
+    variance and whether it is fresh-covariant (only in data positions). *)
+Definition co_f := {| p_var := VCo; p_fresh := true |}.
+Definition inv_f := {| p_var := VInv; p_fresh := true |}.
+Definition inv_nf := {| p_var := VInv; p_fresh := false |}.
+
+(** [enum Maybe[a] = just a | none end]: covariant, fresh-covariant and
+    immutable when its argument is.  This is the built-in [TMaybe] of the
+    model, declared as an ordinary generic enum. *)
+Definition EMaybe := {| en_name := "Maybe"; en_params := [co_f]; en_imm := true |}.
+
+Example maybe_just_wf : wf_payload EMaybe [TParam 0].
+Proof. reflexivity. Qed.
+Example maybe_none_wf : wf_payload EMaybe [].
+Proof. reflexivity. Qed.
+
+(** [none : Maybe[⊥]] fits every [Maybe[T]], and [Maybe] is covariant. *)
+Example maybe_bot_sub : sub (TEnum EMaybe [TBot]) (TEnum EMaybe [TInt]).
+Proof. apply s_enum. apply vs_co; [reflexivity | apply s_bot | constructor]. Qed.
+
+Example maybe_co : sub (TEnum EMaybe [TInt]) (TEnum EMaybe [IS]).
+Proof. apply s_enum. apply vs_co; [reflexivity | apply s_unionr1, s_refl | constructor]. Qed.
+
+(** A contravariant [Maybe] is rejected by the declaration check. *)
+Example maybe_contra_rejected :
+  wf_payload {| en_name := "Maybe"; en_params := [{| p_var := VContra; p_fresh := false |}]; en_imm := true |}
+             [TParam 0] -> False.
+Proof. unfold wf_payload. simpl. discriminate. Qed.
+
+(** A recursive generic enum, [enum List[a] = cons a List[a] | nil end]: the
+    recursive occurrence is checked with the variance [List] itself carries. *)
+Definition EList := {| en_name := "List"; en_params := [co_f]; en_imm := true |}.
+Example list_cons_wf : wf_payload EList [TParam 0; TEnum EList [TParam 0]].
+Proof. reflexivity. Qed.
+
+(** Non-regular recursion, [enum Nest[a] = nest a Nest[[a]] | stop end], is
+    also well formed in the model (with [a] invariant, since it appears in a
+    list).  The design's same-parameters restriction is not needed for
+    soundness: it is for the checker and validator. *)
+Definition ENest := {| en_name := "Nest"; en_params := [inv_f]; en_imm := false |}.
+Example nest_wf : wf_payload ENest [TParam 0; TEnum ENest [TList (TParam 0)]].
+Proof. reflexivity. Qed.
+
+(** ** Hole 4: the variance of a parameter used in a list
+
+    [enum Box[a] = box [a] end].  A shared box is a second view of its list.
+    If [Box] were covariant, or declared immutable (so a shared box could be
+    made fresh and retyped), [@xs box] could be seen as [Box[int | str]] and
+    a string appended to [xs]. *)
+Definition box_prog (E : ename) : prog :=
+  [ WNil; WInt 1; WPush; WStore "xs"                       (* xs = [1] *)
+  ; WLoad "xs"; WCon E "box" [TList (TParam 0)]             (* a box around the shared xs *)
+  ; WCase E [("box", [WStr "s"; WPush; WDrop])]             (* append "s" through the box *)
+  ; WLoad "xs"; WInt 1; WGetAt; WInt 1; WAdd ].             (* "s" + 1 *)
+
+Definition EBox := {| en_name := "Box"; en_params := [inv_f]; en_imm := false |}.
+Definition EBoxCo := {| en_name := "Box"; en_params := [co_f]; en_imm := false |}.
+Definition EBoxImm := {| en_name := "Box"; en_params := [inv_f]; en_imm := true |}.
+
+Example hole_box_stuck : is_stuck (run (box_prog EBox)) = true.
+Proof. vm_compute. reflexivity. Qed.
+
+Example box_wf : wf_payload EBox [TList (TParam 0)].
+Proof. reflexivity. Qed.
+
+(** The correct declaration is invariant: [Box[int]] is not below [Box[int | str]]. *)
+Example box_invariant : ~ sub (TEnum EBox [TInt]) (TEnum EBox [IS]).
+Proof.
+  intros H. inversion H; subst. match goal with V : vsubs _ _ _ |- _ => inversion V; subst end;
+    try discriminate.
+  match goal with Hs : sub IS TInt |- _ => inversion Hs; subst end.
+  match goal with Hs : sub TStr TInt |- _ => inversion Hs end.
+Qed.
+
+(** A covariant [Box], or an immutable one, is rejected by the declaration check. *)
+Example box_co_rejected : wf_payload EBoxCo [TList (TParam 0)] -> False.
+Proof. unfold wf_payload. simpl. discriminate. Qed.
+Example box_imm_rejected : wf_payload EBoxImm [TList (TParam 0)] -> False.
+Proof. unfold wf_payload. simpl. discriminate. Qed.
+
+(** And since the program gets stuck, no declaration environment types it,
+    whatever variances [Box] is given. *)
+Example hole_box_rejected : forall E ctors G s, E = EBox \/ E = EBoxCo \/ E = EBoxImm ->
+  ~ T {| g_sigs := fun _ _ _ => False; g_ctors := ctors |} G LNone LNone RNone (box_prog E) [] s.
+Proof.
+  intros E ctors G s HE HT.
+  refine (soundness _ nodefs _ G RNone (box_prog E) s HT 200 _); [intros f ins outs [] |].
+  destruct HE as [->|[->| ->]]; vm_compute; reflexivity.
+Qed.
+
+(** A *fresh* box may be retyped: its list has no other reference. *)
+Example box_fresh_retype : rsub (TEnum EBox [TInt]) (TEnum EBox [IS]).
+Proof. apply rs_enum. apply vrs_fresh; [reflexivity | apply rs_sub, s_unionr1, s_refl | constructor]. Qed.
+
+(** ** Hole 5: fresh retyping stops at quotes
+
+    [enum F[a] = f (a -- a) end].  A fresh [F[int]] holds only a quote, and
+    a quote is not data: retyping the value to [F[int | str]] would let the
+    quote [(1 +)] be called with a string.  So a parameter used under a quote
+    is never fresh-covariant, and here it is invariant. *)
+Definition QF := TQuote [TParam 0] (Some [TParam 0]).
+Definition hole_quote_arg (E : ename) : prog :=
+  [ WQuote [WInt 1; WAdd]; WCon E "f" [QF]                  (* a fresh F[int] *)
+  ; WCase E [("f", [WStr "x"; WSwap; WExec])] ].            (* call it with "x" *)
+
+Definition EF := {| en_name := "F"; en_params := [inv_nf]; en_imm := true |}.
+Definition EFfresh := {| en_name := "F"; en_params := [inv_f]; en_imm := true |}.
+
+Example hole_quote_arg_stuck : is_stuck (run (hole_quote_arg EF)) = true.
+Proof. vm_compute. reflexivity. Qed.
+
+Example f_wf : wf_payload EF [QF].
+Proof. reflexivity. Qed.
+
+Example f_fresh_rejected : wf_payload EFfresh [QF] -> False.
+Proof. unfold wf_payload. simpl. discriminate. Qed.
+
+(** ** Hole 6: joins of fresh quotes
+
+    The same holds without enums.  If a join "widened inside" two fresh
+    quotes, the arms [(1 +)] and [("a" ++)] would join to
+    [(int | str -- int | str)].  Retyping a fresh quote is only subtyping. *)
+Definition hole_quote_join : prog :=
+  [ WBool true; WIf [WQuote [WInt 1; WAdd]] [WQuote [WStr "a"; WCat]]
+  ; WStr "x"; WSwap; WExec ].
+
+Example hole_quote_join_stuck : is_stuck (run hole_quote_join) = true.
+Proof. vm_compute. reflexivity. Qed.
+
+Example quote_no_widen : ~ rsub (TQuote [TInt] (Some [TInt])) (TQuote [IS] (Some [IS])).
+Proof.
+  intros H. inversion H; subst.
+  match goal with Hs : sub _ _ |- _ => inversion Hs; subst end.
+  match goal with Hs : subs _ _ |- _ => inversion Hs; subst end.
+  match goal with Hs : sub IS TInt |- _ => inversion Hs; subst end.
+  match goal with Hs : sub TStr TInt |- _ => inversion Hs end.
+Qed.
+
+(** * Type variables (Generic.v)
+
+    A body is checked once with its type variables rigid.  Each rule below
+    is what makes that sound; each program gets stuck under the alternative. *)
+
+Definition defs1 (f : string) (b : prog) : string -> option prog :=
+  fun g => if String.eqb g f then Some b else None.
+
+(** ** Hole 7: a type variable counted as immutable
+
+    [def g (a -- Maybe[[str]]) tryAs [str] end].  If [a] were immutable,
+    the shared argument could be made fresh ([ss_imm]) and validated in
+    place.  Called with a shared empty [[int]], it returns the same list
+    as a [[str]]. *)
+Definition hole_tvar_imm : prog :=
+  [ WNil; WStore "xs"
+  ; WLoad "xs"; WCall "g"; WUnwrap; WStr "s"; WPush; WDrop
+  ; WLoad "xs"; WInt 0; WGetAt; WInt 1; WAdd ].
+
+Example hole_tvar_imm_stuck :
+  is_stuck (eval (defs1 "g" [WTryAs (TList TStr)]) 200 [OScope []] 0 [] hole_tvar_imm) = true.
+Proof. vm_compute. reflexivity. Qed.
+
+Example tvar_not_immutable : ~ slot_sub (Sh, TVar 0) (Dp, TVar 0).
+Proof. intros H. inversion H; subst. discriminate. Qed.
+
+(** ** Hole 8: a kind pattern on a type variable
+
+    [def h (a -- int) match str x : x 1 + , _ : drop 0 end end].  If a kind
+    pattern on [a] were read as "a has no member of kind str", the arm would
+    be checked vacuously.  At the instance [a = str] it runs. *)
+Definition hole_tvar_kind : prog := [ WStr "x"; WCall "h" ].
+
+Example hole_tvar_kind_stuck :
+  is_stuck (eval (defs1 "h" [WKindIf KStr [WInt 1; WAdd] [WDrop; WInt 0]]) 200 [OScope []] 0 []
+                 hole_tvar_kind) = true.
+Proof. vm_compute. reflexivity. Qed.
+
+(** The arm sees the unknown contents of that kind, [str], not nothing. *)
+Example tvar_kind_then : kind_then KStr (TVar 0) = Some TStr.
+Proof. reflexivity. Qed.
+
+(** ** A [tryAs] target has no type variable
+
+    Types are erased: at runtime [tryAs a] has nothing to check against.
+    The validator fails on a type variable, and the typing rules ask for
+    closed targets, which is what the substitution lemma needs. *)
+Example tvar_not_checkable : validate 10 [] (VInt 1) (TVar 0) = Some false.
+Proof. reflexivity. Qed.
+
+(** * Dead code after a diverging word
+
+    [def f ( -- never) 1 exit 1 + end]: the [1 +] after [exit] cannot run.
+    The checker's "diverging effect absorbs what follows" is the rule
+    [t_div]; with it the body checks as [never]. *)
+Example dead_code_never : diverges nosigs [] LNone LNone RNone [WInt 1; WExit; WInt 1; WAdd] [].
+Proof. eapply div_tail; [apply tw_int |]. apply div_head. apply div_exit. Qed.
+
+(** * Joins (Join.v)
+
+    [Maybe] joins inside, and that is safe for shared values, but the join
+    inside must itself be a shared join.  Arms leaving [@xs just] and
+    [@ys just] with [xs : [int]], [ys : [str]] stored must not join to
+    [Maybe[[int | str]]]: the list inside is still [xs]. *)
+Definition hole_maybe_join : prog :=
+  [ WNil; WInt 1; WPush; WStore "xs"; WNil; WStr "a"; WPush; WStore "ys"
+  ; WBool true; WIf [WLoad "xs"; WJust] [WLoad "ys"; WJust]
+  ; WUnwrap; WStr "s"; WPush; WDrop
+  ; WLoad "xs"; WInt 1; WGetAt; WInt 1; WAdd ].
+
+Example hole_maybe_join_stuck : is_stuck (run hole_maybe_join) = true.
+Proof. vm_compute. reflexivity. Qed.
+
+(** The join of the two shared slots does not exist ... *)
+Example maybe_join_shared :
+  join_slot (Sh, TMaybe (TList TInt)) (Sh, TMaybe (TList TStr)) = None.
+Proof. reflexivity. Qed.
+
+(** ... while fresh arms, [[1] just] and [["a"] just], join inside. *)
+Example maybe_join_fresh :
+  join_slot (Dp, TMaybe (TList TInt)) (Dp, TMaybe (TList TStr)) =
+  Some (Dp, TMaybe (TList (TUnion TInt TStr))).
+Proof. reflexivity. Qed.
+
+(** The design's join table, computed. *)
+Example join_int_float_like : join_slot (Sh, TInt) (Sh, TStr) = Some (Sh, TUnion TInt TStr).
+Proof. reflexivity. Qed.
+Example join_none_just : join_slot (Sh, TMaybe TBot) (Sh, TMaybe TInt) = Some (Sh, TMaybe TInt).
+Proof. reflexivity. Qed.
+Example join_fresh_shapes :
+  join_slot (Dp, TRec [("a", FReq TInt)] FAbs) (Dp, TRec [("a", FReq TInt); ("b", FReq TInt)] FAbs) =
+  Some (Dp, TRec [("a", FReq TInt); ("a", FReq TInt); ("b", FOpt TInt)] FAbs).
+Proof. reflexivity. Qed.
+Example join_quotes :
+  join_slot (Dp, TQuote [TInt] (Some [TInt])) (Dp, TQuote [TStr] (Some [TStr])) = None.
+Proof. reflexivity. Qed.
+
+(** * [return] in top-level code
+
+    [tests/success/return_top_level.msh]: a top-level [return] ends the
+    script.  Top-level code has the return context [RAny]. *)
+Definition top_return : prog := [ WBool true; WIf [WStr "in if"; WDrop; WReturn] []; WStr "not reached"; WDrop ].
+
+Example top_return_typed : T nosigs [] LNone LNone RAny top_return [] [].
+Proof.
+  unfold top_return. eapply t_cons; [apply tw_bool |].
+  eapply t_cons; [apply tw_if; [| apply t_nil] |].
+  - eapply t_cons; [apply tw_str |]. eapply t_cons; [apply tw_drop |].
+    eapply t_cons; [apply tw_return_any |]. apply t_nil.
+  - eapply t_cons; [apply tw_str |]. eapply t_cons; [apply tw_drop |]. apply t_nil.
+Qed.
+
+Example top_return_never_stuck : forall n, eval nodefs n [OScope []] 0 [] top_return <> RStuck.
+Proof.
+  intros n. eapply (soundness nosigs nodefs); [intros f ins outs [] | exact top_return_typed].
+Qed.
+
+(** * Renaming a variable stored at a new type
+
+    The design elaborates "[x!] reassigned at a new type, not captured by
+    any quote" by renaming the variable.  The core then checks the renamed
+    program, but the runtime runs the original one, so the renaming must not
+    change what the program does.  Two ways a naive renaming does:
+
+    - a loop body (a literal quote given to [loop] or [each]) that stores
+      at the new type is read again on the next run;
+    - a read after an [if] whose arms stored at different types. *)
+
+(** [1 x!  [0 0] (drop @x 1 + drop "a" x!) each]: the second run reads ["a"]. *)
+Definition loop_orig (x_first x_read x_second : string) : prog :=
+  [ WNil; WInt 0; WPush; WInt 0; WPush; WStore "xs"
+  ; WInt 1; WStore x_first
+  ; WLoad "xs"; WEach [WDrop; WLoad x_read; WInt 1; WAdd; WDrop; WStr "a"; WStore x_second] ].
+
+Example rename_loop_orig_stuck : is_stuck (run (loop_orig "x" "x" "x")) = true.
+Proof. vm_compute. reflexivity. Qed.
+
+(** The renamed program checks, so it never gets stuck; the original does. *)
+Definition GL : tenv := [("xs", TList TInt); ("x1", TInt); ("x2", TStr)].
+
+Example rename_loop_renamed_typed : T nosigs GL LNone LNone RNone (loop_orig "x1" "x1" "x2") [] [].
+Proof.
+  unfold loop_orig.
+  step ltac:(apply tw_nil with (t := TInt)).
+  step ltac:(apply tw_int).
+  eapply t_sub; [ | eapply t_cons; [apply tw_push_dp | ] | apply ssub_refl ].
+  { constructor; [apply ss_imm; [reflexivity | apply s_refl] | apply ssub_refl]. }
+  step ltac:(apply tw_int).
+  eapply t_sub; [ | eapply t_cons; [apply tw_push_dp | ] | apply ssub_refl ].
+  { constructor; [apply ss_imm; [reflexivity | apply s_refl] | apply ssub_refl]. }
+  eapply t_sub; [ | eapply t_cons; [apply tw_store with (t := TList TInt); reflexivity | ] | apply ssub_refl ].
+  { constructor; [apply ss_forget, s_refl | constructor]. }
+  step ltac:(apply tw_int).
+  step ltac:(apply tw_store with (t := TInt); reflexivity).
+  step ltac:(apply tw_load with (t := TList TInt); reflexivity).
+  step ltac:(eapply tw_each with (B' := LNone) (C' := LNone); [constructor | constructor | ]).
+  - step ltac:(apply tw_drop).
+    step ltac:(apply tw_load with (t := TInt); reflexivity).
+    step ltac:(apply tw_int).
+    step ltac:(apply tw_add).
+    step ltac:(apply tw_drop).
+    step ltac:(apply tw_str).
+    step ltac:(apply tw_store with (t := TStr); reflexivity).
+    apply t_nil.
+  - apply t_nil.
+Qed.
+
+Example rename_loop_renamed_runs : exists H, run (loop_orig "x1" "x1" "x2") = ROk ONormal H [].
+Proof. vm_compute. eexists. reflexivity. Qed.
+
+(** [false if 1 x! else "a" x! end  @x 1 +]: after the [if], [x] is [1] or ["a"]. *)
+Definition if_orig (x_then x_else x_read : string) : prog :=
+  [ WBool false; WIf [WInt 1; WStore x_then] [WStr "a"; WStore x_else]
+  ; WLoad x_read; WInt 1; WAdd ].
+
+Example rename_if_orig_stuck : is_stuck (run (if_orig "x" "x" "x")) = true.
+Proof. vm_compute. reflexivity. Qed.
+
+Definition GI : tenv := [("x1", TInt); ("x2", TStr)].
+
+Example rename_if_renamed_typed : T nosigs GI LNone LNone RNone (if_orig "x1" "x2" "x1") [] [(Sh, TInt)].
+Proof.
+  unfold if_orig.
+  step ltac:(apply tw_bool).
+  step ltac:(apply tw_if).
+  - step ltac:(apply tw_int). step ltac:(apply tw_store with (t := TInt); reflexivity). apply t_nil.
+  - step ltac:(apply tw_str). step ltac:(apply tw_store with (t := TStr); reflexivity). apply t_nil.
+  - step ltac:(apply tw_load with (t := TInt); reflexivity).
+    step ltac:(apply tw_int). step ltac:(apply tw_add). apply t_nil.
+Qed.
+
+(** The renamed program reads an unset variable, a checked error: it does
+    not do what the original does. *)
+Example rename_if_renamed_differs : run (if_orig "x1" "x2" "x1") = RErr.
+Proof. vm_compute. reflexivity. Qed.
+
+(** * Fresh def outputs
+
+    A signature may mark an output fresh.  [def mk ( -- [int] fresh) [1] end]
+    returns a new list, so the caller may widen it in place, as it could a
+    literal: [mk as [int | str] "s" append]. *)
+Definition sigs_mk : genv :=
+  {| g_sigs := fun f ins outs => f = "mk" /\ ins = [] /\ outs = Some [(Dp, TList TInt)];
+     g_ctors := fun _ _ => None |}.
+
+Definition mk_body : prog := [WNil; WInt 1; WPush].
+
+Lemma mk_def_ok : def_ok sigs_mk (defs1 "mk" mk_body).
+Proof.
+  intros f ins outs (-> & -> & ->). exists mk_body, []. split; [reflexivity|]. intros s0. simpl.
+  step ltac:(apply tw_nil).
+  step ltac:(apply tw_int).
+  eapply t_sub; [ | eapply t_cons; [apply tw_push_dp | apply t_nil] | apply ssub_refl ].
+  constructor; [apply ss_imm; [reflexivity | apply s_refl] | apply ssub_refl].
+Qed.
+
+Definition mk_use : prog := [WCall "mk"; WStr "s"; WPush; WDrop].
+
+Example mk_use_typed : T sigs_mk [] LNone LNone RNone mk_use [] [].
+Proof.
+  unfold mk_use.
+  eapply t_cons; [apply tw_call with (ins := []) (outs := [(Dp, TList TInt)]); simpl; auto |]. simpl.
+  step ltac:(apply tw_str).
+  (* widen the fresh list, and make the string fresh (it is immutable) *)
+  eapply t_sub; [ | eapply t_cons; [apply tw_push_dp with (t := IS) | ] | apply ssub_refl ].
+  { constructor; [apply ss_imm; [reflexivity | apply sub_str_is] |].
+    constructor; [apply ss_dp, rs_list, rs_sub, s_unionr1, s_refl | constructor]. }
+  step ltac:(apply tw_drop). apply t_nil.
+Qed.
+
+Example mk_use_never_stuck : forall n, eval (defs1 "mk" mk_body) n [OScope []] 0 [] mk_use <> RStuck.
+Proof. intros n. eapply (soundness sigs_mk); [exact mk_def_ok | exact mk_use_typed]. Qed.
+
+(** * [map] results
+
+    [map]'s result holds the body's results, which are shared values.  If it
+    were marked "fresh when the input is fresh", [[0 0] (drop @ys) map] (the
+    list [ys] twice) could be widened to [[[int | str]]], and a string
+    appended to [ys] through it. *)
+Definition hole_map_fresh : prog :=
+  [ WNil; WInt 1; WPush; WStore "ys"
+  ; WNil; WInt 0; WPush; WInt 0; WPush; WMap [WDrop; WLoad "ys"]
+  ; WInt 0; WGetAt; WStr "s"; WPush; WDrop
+  ; WLoad "ys"; WInt 1; WGetAt; WInt 1; WAdd ].
+
+Example hole_map_fresh_stuck : is_stuck (run hole_map_fresh) = true.
+Proof. vm_compute. reflexivity. Qed.
+
+(** In the core, a [map] result is fresh only when its element type is
+    immutable ([tw_map_imm]); [[int]] is not. *)
+Example map_result_not_fresh : immutable (TList TInt) = false.
+Proof. reflexivity. Qed.
+
+(** With immutable results it is fresh: [[1 2] (1 +) map as [int | str] "s" append]. *)
+Definition map_widen : prog :=
+  [ WNil; WInt 1; WPush; WInt 2; WPush; WMap [WInt 1; WAdd]; WStr "s"; WPush; WDrop ].
+
+Example map_widen_typed : T nosigs [] LNone LNone RNone map_widen [] [].
+Proof.
+  unfold map_widen.
+  step ltac:(apply tw_nil with (t := TInt)).
+  step ltac:(apply tw_int).
+  eapply t_sub; [ | eapply t_cons; [apply tw_push_dp | ] | apply ssub_refl ].
+  { constructor; [apply ss_imm; [reflexivity | apply s_refl] | apply ssub_refl]. }
+  step ltac:(apply tw_int).
+  eapply t_sub; [ | eapply t_cons; [apply tw_push_dp | ] | apply ssub_refl ].
+  { constructor; [apply ss_imm; [reflexivity | apply s_refl] | apply ssub_refl]. }
+  eapply t_sub; [ | eapply t_cons;
+    [eapply tw_map_imm with (u := TInt) (B' := LNone) (C' := LNone); [reflexivity | constructor | constructor |] | ]
+    | apply ssub_refl ].
+  { constructor; [apply ss_forget, s_refl | constructor]. }
+  - step ltac:(apply tw_int). step ltac:(apply tw_add). apply t_nil.
+  - step ltac:(apply tw_str).
+    eapply t_sub; [ | eapply t_cons; [apply tw_push_dp with (t := IS) | ] | apply ssub_refl ].
+    { constructor; [apply ss_imm; [reflexivity | apply sub_str_is] |].
+      constructor; [apply ss_dp, rs_list, rs_sub, s_unionr1, s_refl | constructor]. }
+    step ltac:(apply tw_drop). apply t_nil.
+Qed.
+
+Example map_widen_runs : exists H, run map_widen = ROk ONormal H [].
+Proof. vm_compute. eexists. reflexivity. Qed.

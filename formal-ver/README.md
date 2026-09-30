@@ -17,9 +17,21 @@ A clean build takes about 20 seconds.
 `Soundness.v`:
 
 ```coq
-Theorem soundness : forall sigs defs,
+Theorem soundness : forall sigs defs,              (* sigs: def signatures and enum declarations *)
   def_ok sigs defs ->                              (* every def body checks at every instance of its signature *)
-  forall G e s, T sigs G LNone LNone None e [] s -> (* the program checks from an empty stack *)
+  forall G R e s, T sigs G LNone LNone R e [] s -> (* the program checks from an empty stack *)
+  forall n, eval defs n [OScope []] 0 [] e <> RStuck.
+```
+
+`Generic.v` removes the "every instance" assumption: a body checked once, at its declared signature
+with its type variables rigid, is enough.
+
+```coq
+Theorem soundness_generic : forall sigs gs defs,
+  (forall f ins outs, g_sigs sigs f ins outs <-> instances gs f ins outs) ->  (* signatures are declared *)
+  (forall E c pts, g_ctors sigs E c = Some pts -> wf_payload E pts) ->       (* enum declarations are well formed *)
+  gdefs_ok sigs gs defs ->                           (* every body checks once, generically *)
+  forall G R e s, T sigs G LNone LNone R e [] s ->
   forall n, eval defs n [OScope []] 0 [] e <> RStuck.
 ```
 
@@ -38,10 +50,10 @@ What you have to read is whether the *definitions* say what the design means:
 
 | File | Lines | What to check |
 |---|---|---|
-| `Syntax.v` | ~130 | types, words, values, heap objects |
-| `Interp.v` | ~380 | the interpreter matches `Evaluator.go` where it matters (see below) |
-| `Typing.v` | ~230 | each typing rule matches the doc |
-| `Subtyping.v` (definitions only) | ~80 | `sub`, `fsub`, `rsub`, `immutable` |
+| `Syntax.v` | ~200 | types, enum identities, substitution, words, values, heap objects |
+| `Interp.v` | ~440 | the interpreter matches `Evaluator.go` where it matters (see below) |
+| `Typing.v` | ~270 | each typing rule matches the doc; `genv` holds def signatures and enum declarations |
+| `Subtyping.v` (definitions only) | ~200 | `sub`, `fsub`, `rsub`, `immutable`, and the enum declaration checks `occ_sub`, `occ_fresh`, `wf_payload` |
 
 Everything else (`Invariant.v` onward) is proof and cannot make the theorem say something weaker.
 
@@ -60,6 +72,15 @@ Everything else (`Invariant.v` onward) is proof and cannot make the theorem say 
 | Type-changing updates of fresh values | `tw_setk_dp`, `tw_del_dp` |
 | `never` | `TQuote ins None`; `tw_exec_never`, `tw_call_never`, `tw_loop_forever` |
 | Store typing, freshness, commit | `vtyped`, `dtyped`, `inv` in `Invariant.v`; `commit_all` in `Commit.v` |
+| Generic enums: variance, fresh-covariance, immutability | `s_enum`/`vsubs`, `rs_enum`/`vrsubs`, `immutable`; declaration check `wf_payload`; soundness of the check `payload_sub`, `payload_rsub`, `payload_imm` in `Variance.v` |
+| Constructors, constructor match, enum kind pattern | `tw_con_sh`, `tw_con_dp`, `tw_case`, `tw_kind_enum` |
+| Validation with a work budget | `validate` in `Interp.v` (running out is `RErr`) |
+| Type variables; checking a def once | `TVar`, `tsub`; `T_subst`, `generic_def_ok`, `soundness_generic` in `Generic.v` |
+| Checking a quote body once (frame lemma) | `T_frame`, `quote_once` in `Frame.v` |
+| "A diverging effect absorbs what follows" | `t_div`; `diverges` and the `div_*` lemmas in `Frame.v` |
+| Branch joins | `join_slot`, `join_slot_ub`, `if_join` in `Join.v` |
+| `map` with a literal body | `WMap`; `tw_map`, `tw_map_imm` (fresh only when the results are immutable) |
+| `return` in top-level code | return context `RAny`, `tw_return_any` |
 | Counterexamples | `Examples.v` |
 
 ## Modeling choices
@@ -84,6 +105,15 @@ Everything else (`Invariant.v` onward) is proof and cannot make the theorem say 
 - **Child-stack builtins** (`each`) run the body on a one-element child stack, as the runtime does.
   `break`/`continue` inside the body discard the child stack and restore the outer one. The typing
   contexts are `LNone`, `LExact s` and `LChild` (the doc's `·`, `σ`, `⋆`).
+- **Enum identity.** An enum's identity in the model (`ename`) is its name together with each parameter's
+  variance, whether the parameter is fresh-covariant, and whether the enum is immutable. The checker has
+  one declaration per name, so this names the same enums, and it lets `sub`, `rsub` and `immutable` be
+  defined without a declaration environment. Constructor payload types live in `g_ctors` and must pass
+  `wf_payload`, which checks them against that identity. Recursive references need no special case.
+- **Enum values carry their constructor's payload types**, as the runtime's pointer to the declaration.
+  The validator reads them; `vtyped` requires them to be the declared ones.
+- **Validation has a work budget** (the interpreter's remaining fuel). Running out is a checked error.
+  This is what a cyclic value meets under a recursive type.
 - **Deviations from the Go runtime** that do not affect type safety: dict objects are association
   lists; `each` iterates over the list's elements as they are when it starts; stack shuffles other
   than `dup`/`drop`/`swap` and all other builtins are left out.
@@ -99,6 +129,57 @@ Holes in the previous draft. Each has a program in `Examples.v` that the interpr
    `k` (skolem escape check).
 3. **Every shape literal marked fresh**, including `{a: @xs}` (`hole_literal`). Fix: a literal is fresh
    only around fresh or immutable contents.
+
+Holes in the enum rules as first written, found while adding generic enums (`Examples.v`):
+
+4. **"Enums are immutable."** The freshness section listed enums among the immutable types. An enum with a
+   list payload is not: a box around a shared list could be made fresh and retyped (`hole_box_stuck`).
+   Fix: an enum type is immutable only when its payloads (with the arguments substituted) are
+   (`en_imm`, `box_imm_rejected`).
+5. **Fresh retyping of an argument used under a quote.** Retyping a fresh value is covariant everywhere
+   *in its data*, but a quote is not data: a fresh `F[int]` for `enum F[a] = f (a -- a)` must not become
+   `F[int | str]` (`hole_quote_arg_stuck`). Fix: a parameter is fresh-covariant only when every
+   occurrence is in a data position (`occ_fresh`); otherwise it follows its variance.
+6. **Joins that widen inside fresh quotes.** The join rule widened inside any two fresh values of one kind,
+   quotes included; `(1 +)` and `("a" ++)` would join to `(int | str -- int | str)`
+   (`hole_quote_join_stuck`). Fix: quotes join by subtyping only.
+
+Found while checking definitions once (`Generic.v`):
+
+7. **A type variable counted as immutable.** A shared argument of type `a` could be made fresh and
+   validated in place; at the instance `a = [int]` a shared list becomes a `[str]` (`hole_tvar_imm_stuck`).
+   Fix: a type variable is not immutable.
+8. **A kind pattern on a type variable read as "no member of that kind".** The arm is then checked
+   vacuously, and at the instance `a = str` it runs (`hole_tvar_kind_stuck`). Fix: a type variable is
+   treated like unknown contents (`kind_then k (TVar x) = kind_top k`).
+
+Also: a `tryAs` target must not mention a type variable (types are erased, so the runtime cannot
+validate against one). That part of "checkable" is needed by the proof, not only for usability.
+
+Model gaps found and closed:
+
+- **Dead code after a diverging word.** The design's checker "absorbs" what follows `exit`; the model used
+  to type it anyway, so `def f ( -- never) 1 exit 1 + end` was rejected. Rule `t_div` skips it. It has to
+  hold at every frame (with loop and return stacks extended), or it would not survive the frame lemma.
+- **`return` in top-level code** ends the script (`tests/success/return_top_level.msh`). The calculus gave
+  top-level code no return context; it now has `RAny`.
+- **Joins inside `Maybe`** of shared values are shared joins: `@xs just` and `@ys just` with `xs : [int]`,
+  `ys : [str]` stored have no join (`hole_maybe_join_stuck`). The result of a join is fresh only when both
+  arms are.
+
+Found in the elaboration (`Examples.v`):
+
+9. **Renaming a variable stored at a new type** changes what the program does when the variable is stored in a
+   loop body or read after a branch. The renamed program type-checks and never gets stuck; the original,
+   which is what runs, gets stuck (`rename_loop_*`, `rename_if_*`). The loop case is also accepted by the
+   checker on `main` today.
+
+Design additions the proof supports:
+
+- **Fresh def inputs and outputs.** Signatures in `g_sigs` are stack slots, so an input or output can be
+  marked fresh. The soundness proof needed no change (`mk_*`).
+- **`map`'s result is fresh only when its elements are immutable**, never "when the input is fresh": the
+  body's results are shared (`hole_map_fresh_stuck`, `map_widen_typed`).
 
 R6 (two `tryAs` refinements of one shared dict) also runs to `RStuck` (`r6_stuck`), so by the theorem it
 has no typing in any context (`r6_rejected`). With an explicit `copy` before the second `tryAs` it
@@ -118,11 +199,18 @@ Rules that turned out to be usability choices, not soundness conditions:
 - union members of distinct kinds;
 - `checkable` targets for `tryAs`;
 - S2's refusal of a source with a matching `*: T` remainder, and `{str: T}` never viewed as an
-  all-optional shape.
+  all-optional shape;
+- a recursive enum reference using the same parameters (`nest_wf`: `Nest[[a]]` inside `Nest[a]` is sound).
+
+Also forced by enums: an enum kind pattern on a value of unknown type checks its arm for every argument
+list (`tw_kind_enum`), like `list xs`; `E[unknown]` would be wrong for an invariant parameter.
 
 ## Not modeled
 
-Recursive aliases (`Json`), enums, grids and commands as such, other builtins (they need the builtin
-contract), the checker algorithm (unification, joins, frame and substitution lemmas, the escape check),
+Recursive aliases (`Json`), grids and commands as such, "fresh when the input is fresh" for
+`take`/`skip`/slices of a list of containers (the invariant has no notion of an unreachable old list;
+the shared case and the immutable-elements case need nothing new), other builtins (they need the builtin
+contract), the checker algorithm (unification, overload resolution; joins, frame and substitution
+lemmas are now proved),
 and definite assignment (an unset variable is a checked error, as at runtime).
 See the "mechanized core" section of the design document for what each would need.

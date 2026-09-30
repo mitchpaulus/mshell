@@ -2,6 +2,7 @@
 Syntax.v
 Interp.v
 Subtyping.v
+Variance.v
 Typing.v
 Invariant.v
 RtLemmas.v
@@ -12,4 +13,7 @@ InvOps.v
 Copy.v
 RecOps.v
 Soundness.v
+Generic.v
+Frame.v
+Join.v
 Examples.v

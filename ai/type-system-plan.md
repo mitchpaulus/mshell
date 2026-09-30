@@ -21,8 +21,12 @@ The decisions from them that still hold are now in the Typst design doc.
 
 ## 2. Open questions
 
-None right now. This is the only list of open questions: add new ones here, and once one is answered,
+This is the only list of open questions: add new ones here, and once one is answered,
 put the answer in the Typst design doc and remove the row.
+
+| # | Question | Context |
+|---|---|---|
+| — | None right now. | |
 
 ## 3. Files
 
@@ -165,18 +169,18 @@ New code with Go unit tests only; nothing is wired into the checker yet.
 - **Type representation** in the shared type store:
   - one record kind for shapes and dicts: declared fields (required, optional) and a remainder (`exact`, `*: T`, `open`, or the deletable remainder that `{str: T}` has). Status per label as in design doc §per-label.
   - alias reference nodes for `type` names, so recursive aliases stay finite.
-  - enum kind, nominal by declaration, with type parameters and the variance of each (design doc §Subtyping). `Maybe` is the first instance: the built-in `enum Maybe[a] = just a | none end` replaces the separate `Maybe` kind in the checker. Its runtime values keep their current printing and JSON.
+  - enum kind, nominal by declaration, with type parameters and, for each, its variance, whether it is fresh-covariant, and whether the enum is immutable (design doc §Subtyping, §Freshness; `wf_payload` in `formal-ver/Subtyping.v` is the check they must pass). `Maybe` is the first instance: the built-in `enum Maybe[a] = just a | none end` replaces the separate `Maybe` kind in the checker. Its runtime values keep their current printing and JSON.
   - abstract types, each tied to the pattern site that created it.
   - quote types whose output side may be `never`.
   - abstract grid schemas.
 - **Relations**, each in its own function with its own tests:
   - equality unification with occurs check and the assumption set for recursive aliases (§Aliases);
   - subtyping `≤` (§Subtyping, per label);
-  - the fresh retype relation `⊑` (§Freshness);
-  - branch join (§Joins);
+  - the fresh retype relation `⊑` (§Freshness), including enum arguments by fresh-covariance, and never widening inside a quote;
+  - branch join (§Joins); quotes join by `≤` only;
   - runtime kind of a type, `immutable`, and `checkable`.
 - Header comments in the reused files (`Type.go`) point to the deleted `ai/type_checker.md`; point them at the Typst design doc.
-- **Property tests** that mirror the proof: transitivity of `≤` (`sub_trans`) and of `⊑` on randomly generated types; `≤` implies `⊑`; every S1–S4 row of the design doc's table, including the two dict/remainder cases in S2 and S4; the "optional must not become deletable" case.
+- **Property tests** that mirror the proof: transitivity of `≤` (`sub_trans`) and of `⊑` on randomly generated types; `≤` implies `⊑`; every S1–S4 row of the design doc's table, including the two dict/remainder cases in S2 and S4; the "optional must not become deletable" case; for random well-formed generic enums, `E[a] ≤ E[b]` implies each payload `subst a t ≤ subst b t`, and `E[a] ⊑ E[b]` implies `subst a t ⊑ subst b t` (`payload_sub`, `payload_rsub` in `Variance.v`).
 
 Done when: the relations pass their tests, including randomized transitivity on at least tens of thousands of generated pairs.
 
@@ -189,11 +193,15 @@ Work:
 
 - Stack slots carry a type and a fresh mark. Effects carry inputs, outputs and a diverges flag. Composition as in design doc §Inference.
 - Literals, including the freshness rule for list and dict literals (§ShapeLit).
-- Variables: one scope per def invocation and one for the script; one type per variable per scope; stores check against it; definite assignment as a separate check (§Variable scopes). A variable stored at a new type, not captured by any quote, is renamed internally; otherwise it is an error.
+- Variables: one scope per def invocation and one for the script; one type per variable per scope; stores check against it; definite assignment as a separate check (§Variable scopes). The variable's type is the type of its first store in program order; a later store at a type that does not fit is an error at that store, with the hint "use a new name, or widen the first store with `as`". No renaming (decided 2026-09-29; design doc, "Renaming must not change behavior").
 - Quotes as in section 5; `x` needs a known arity.
 - Defs: annotated signatures, rigid type variables in the body, recursion, `never` outputs (§Divergence), no `return` in a `never` def.
+  A rigid type variable is not immutable, is treated as unknown contents by kind patterns, and cannot be a `tryAs` target (design doc §Def remarks; `Generic.v`).
+- Top-level code may `return` with any stack; it ends the script (`RAny`).
+- `new` on def outputs (design doc, "New def outputs"): parse it in signatures, check it both ways against the body's freshness (written but shared: error; missing but new: error; on an immutable type: error), take the largest consistent marks for recursive defs, and give each error a fix. Def inputs stay shared.
+- Divergence: words after a diverging word are not checked (`t_div`); the diverges flag follows the `div_*` lemmas in `Frame.v`.
 - `if`, `iff` with literal quotes, `loop`, `each`/`map`/... with literal quotes, `break`/`continue` contexts, `return`, `exit` (§Quotes that break, §Divergence).
-- Branch joins per §Joins, including fresh-only widening.
+- Branch joins per §Joins, including fresh-only widening. `join_slot` in `formal-ver/Join.v` is the reference: the result is fresh only when both arms are, joins inside `Maybe` keep the arms' freshness, quotes join only when equal.
 - Shapes: literal-key `get`/`set`, runtime-key `getd`/`setd` per §Runtime keys, `del` only on `{str: T}`, shape/dict subtyping by the per-label rule (a shape never becomes a `{str: T}`).
 - `as`: subtyping, or `⊑` on a fresh slot.
 - `match`: kind patterns on unions (the member of that kind, writable), kind patterns on unknown values (abstract types, and the escape check in §Unknown contents), `Maybe`, literal, list and dict patterns, `=>`.
@@ -207,6 +215,7 @@ Work:
   - check that `extend` with a grid view cannot change the view's source grid at a new type.
 - Port the special cases listed in section 4: commands and redirects, captures, command execution, grid join/pivot/groupBy, format strings, path writes, `dbg`, bare words in list literals.
 - The LSP uses the core checker when the option is set.
+- LSP code actions for the three `new` errors (add `new`, remove `new`) and a fix-all.
 
 Tests: the counterexamples and rules in section 7, as `tests/typecheck_fail` and `tests/success` files, run under the core checker.
 
@@ -222,7 +231,8 @@ Surface syntax and value behavior are in design doc §Surface language.
 - Declarations are read in three passes: reserve every name, resolve bodies, then reject unguarded cycles (from `fix/recursive-named-type-narrow-hang`, rewritten for alias reference nodes, and covering enums as well).
 - `type` is a transparent alias. `Json` and `HtmlNode` are built in; users cannot redeclare them.
 - Enums: parser (final syntax from the enum branch, plus `[a b]` parameters after the name), runtime value, constructors as words (polymorphic for generic enums), constructor patterns, exhaustiveness, `str`/`toJson`/equality/ordering per design doc §Surface language. Enum names are their own runtime kind in unions.
-- Generic enums: compute each parameter's variance from its payload positions; a constructor that does not mention a parameter gives `⊥` for a covariant one and a fresh type variable otherwise; reject a recursive reference with different parameters.
+- Generic enums: compute each parameter's variance and fresh-covariance from its payload positions, and each enum's immutability as a greatest fixed point over the declarations (design doc §Subtyping, §Freshness); a constructor that does not mention a parameter gives `⊥` for a covariant one and a fresh type variable otherwise; reject a recursive reference with different parameters (a usability rule, not a soundness one).
+- An enum kind pattern on a value of unknown type binds the enum at fresh abstract arguments, with the escape check of §Unknown contents.
 - Name rules: collisions and duplicate `def`s are errors (enum branch `2e2f4b6`, `8abcaee`, `8087f6c`).
 - Startup files and the LSP see the same declarations.
 - Migrate the test files that declare `type` today (one in `tests/success`, four in `tests/typecheck_fail`); `TKBrand` goes away with them.
@@ -279,7 +289,6 @@ Throughout, with a final pass at the switch-over.
 - The REPL checks each line, keeping the checker's state across lines, once the new checker is working and battle tested (decided 2026-09-29).
 - A read-only list view type (§new lists), if an `O(1)` tail is ever needed.
 - The "top-fresh" slot mark (§deepCopy).
-- Generic enums.
 
 ## 7. Acceptance tests
 
@@ -327,11 +336,30 @@ Each line becomes a test file; the name in brackets is a suggestion.
 | enum: construct, match all members, missing member, unknown member, collision with a def, recursive enum value printed | ok, ok, fail, fail, fail, ok |
 | recursive alias `Json`/`Person`; `type A = A`; `type A = int \| A` | ok; fail; fail |
 | `enum Box[a] = box [a] \| empty end`: `[1] box` as `Box[int]`; `empty` then used as `Box[str]`; a `Box[int]` passed where `Box[int \| str]` is expected | ok; ok; fail (invariant) |
+| H4: `@xs box` with `xs : [int]` stored, then `as Box[int \| str]`; `[1] box as Box[int \| str]` (fresh) | fail; ok [`h4_enum_not_immutable`] |
+| H5: `enum F[a] = f (a -- a) end`; `(1 +) f as F[int \| str]` | fail [`h5_fresh_retype_quote`] |
+| H6: `true if (1 +) else ("a" ++) end "x" swap x` | fail [`h6_quote_join`] |
+| `enum Box[a] ...`; `@v match box xs :` with `v` of unknown type, `xs` stored in an outer variable | fail (escape) |
 | `enum Pair[a] = pair a a end`: a `Pair[int]` passed where `Pair[int \| str]` is expected | ok (covariant) |
 | `enum List[a] = cons a List[a] \| nil end`; one whose payload refers to `List[[a]]` | ok; fail |
 | `Box[int] \| Box[str]` in a signature | fail (one runtime kind) |
 | `5 just str wl`; `5 just toJson wl` | prints `Just(5)`; `5` (unchanged) |
 | `is T x` exhaustiveness: `x : int \| [Json]` matched by `is int n` and `is [Person] ps` with no `_` | fail |
+| H7: `def g (a -- Maybe[[str]]) tryAs [str] end` | fail [`h7_tvar_not_immutable`] |
+| H8: `def h (a -- int) match str x : @x 1 + , _ : drop 0 end end` | fail [`h8_tvar_kind_pattern`] |
+| `tryAs a` in a def with type variable `a` | fail |
+| `def f ( -- never) 1 exit 1 + end` | ok (dead code after `exit` is not checked) |
+| `true if @xs just else @ys just end` with `xs : [int]`, `ys : [str]` stored; the same with `[1] just` and `["a"] just` | fail; ok |
+| `return` in top-level code (`tests/success/return_top_level.msh`) | ok |
+| `def f ( -- new Json) "c.json" readFile parseJson end  f tryAs Config ?` | ok (validated in place) |
+| `def f ( -- Json) "c.json" readFile parseJson end` | fail: output is new, mark it `new` |
+| `def f ( -- new Json) "c.json" readFile parseJson j! @j end` | fail: stored in `j`, not new |
+| `def f ( -- new int) 1 end` | fail: `new` on an immutable type |
+| `def f (int -- new [int]) dup 0 = if drop [] else 1 - f end end`; the same without `new` | ok; fail (largest consistent mark) |
+| P14: `1 x!  [0 0] (drop @x 1 + drop "a" x!) each` | fail [`p14_rename_loop`] |
+| `false if 1 x! else "a" x! end @x 1 +` | fail |
+| `"a\nb" text!  @text lines text!` | fail at the second store, hint names `as` and a new name |
+| `1 as int \| str x!  "a" x!`; `[1] as [int \| str] xs!  ["a"] xs!`; `@ys xs!` with `ys : [str]` stored | ok; ok; fail |
 
 ## 8. Build and test commands
 

@@ -48,7 +48,7 @@ Proof. apply in_concat. Qed.
 
 (** ** Basic facts from the invariant *)
 Section Ops.
-Variable sigs : string -> list ty -> option (list ty) -> Prop.
+Variable sigs : genv.
 
 Lemma nodup_perm_in {A} (l1 l2 : list A) : Permutation l1 l2 -> NoDup l1 -> NoDup l2.
 Proof. intros P N. eapply Permutation_NoDup; eauto. Qed.
@@ -60,12 +60,20 @@ Proof.
   rewrite <- (inv_len _ _ _ _ _ _ _ _ I). eapply nth_error_lt; eauto.
 Qed.
 
-Lemma vtyped_vlocs_lt Σ v t : vtyped sigs Σ v t -> forall l, In l (vlocs v) -> l < length Σ.
+Lemma vtyped_vlocs_lt_all Σ :
+  (forall v t, vtyped sigs Σ v t -> forall l, In l (vlocs v) -> l < length Σ) /\
+  (forall vs ts, vtypedl sigs Σ vs ts -> forall l, In l (flat_map vlocs vs) -> l < length Σ).
 Proof.
-  induction 1; simpl; intros l0 Hl; try tauto; auto.
-  - destruct Hl as [<-|[]]; eapply nth_error_lt; eauto.
-  - destruct Hl as [<-|[]]; eapply nth_error_lt; eauto.
+  apply (vtyped_comb sigs Σ
+    (fun v t _ => forall l, In l (vlocs v) -> l < length Σ)
+    (fun vs ts _ => forall l, In l (flat_map vlocs vs) -> l < length Σ)); simpl; try tauto.
+  - intros l a t E _ l0 [<-|[]]; eapply nth_error_lt; eauto.
+  - intros l fs r t E _ l0 [<-|[]]; eapply nth_error_lt; eauto.
+  - intros v vs t ts _ IH _ IH' l Hl. apply in_app_or in Hl as [?|?]; auto.
 Qed.
+
+Lemma vtyped_vlocs_lt Σ v t : vtyped sigs Σ v t -> forall l, In l (vlocs v) -> l < length Σ.
+Proof. intros. eapply (proj1 (vtyped_vlocs_lt_all Σ)); eauto. Qed.
 
 Lemma dtyped_vlocs_lt Σ H v t O : dtyped sigs Σ H v t O -> forall l, In l (vlocs v) -> l < length H.
 Proof.
@@ -674,4 +682,127 @@ Proof.
     + eapply B; eauto.
     + simpl in Hr. rewrite app_nil_r in Hr. apply (Slt x (in_eq _ _)); auto.
 Qed.
+(** ** Enum values: several payload slots become one slot, and back *)
+
+Lemma inv_pop_shl Σ H sc G : forall S1 L ts st Os,
+  length S1 = length ts ->
+  inv sigs Σ H sc G (S1 ++ L) (shs ts ++ st) Os ->
+  exists Os', Os = map (fun _ => []) S1 ++ Os' /\ vtypedl sigs Σ S1 ts /\
+    (forall l, In l (flat_map vlocs S1) -> ~ In l (concat Os')) /\ inv sigs Σ H sc G L st Os'.
+Proof.
+  induction S1 as [|v S1 IH]; intros L [|t ts] st Os Ln I; simpl in *; try lia.
+  - exists Os. split; [reflexivity|]. split; [constructor|]. split; [simpl; tauto | exact I].
+  - destruct Os as [|O Os].
+    { pose proof (inv_slots _ _ _ _ _ _ _ _ I) as F. inversion F. }
+    apply inv_pop_sh in I as (-> & Hv & Hl & I).
+    destruct (IH L ts st Os ltac:(lia) I) as (Os' & -> & Vl & Hl' & I').
+    exists Os'. split; [reflexivity|]. split; [constructor; auto|]. split; [|exact I'].
+    intros l Hin. apply in_app_or in Hin as [Hin|Hin]; auto.
+      intro Hc. apply (Hl l Hin). rewrite concat_nils. exact Hc.
+Qed.
+
+Lemma inv_push_shl Σ H sc G L st Os : forall vs ts,
+  inv sigs Σ H sc G L st Os -> vtypedl sigs Σ vs ts ->
+  (forall l, In l (flat_map vlocs vs) -> ~ In l (concat Os)) ->
+  inv sigs Σ H sc G (vs ++ L) (shs ts ++ st) (map (fun _ => []) vs ++ Os).
+Proof.
+  intros vs ts I Vl. induction Vl as [|v vs t ts Hv Vl IH]; simpl; intros Hl; auto.
+  apply inv_push_sh.
+  - apply IH. intros l Hin. apply Hl. apply in_or_app; auto.
+  - exact Hv.
+  - rewrite concat_nils. intros l Hin. apply Hl. apply in_or_app; auto.
+Qed.
+
+Lemma Forall3_in_a {A B C} (P : A -> B -> C -> Prop) la lb lc a :
+  Forall3 P la lb lc -> In a la -> exists b c, In c lc /\ P a b c.
+Proof.
+  induction 1; simpl; [tauto|]. intros [<-|Hin]; [eauto|].
+  destruct (IHForall3 Hin) as (b' & c' & Hc & Hp). eauto.
+Qed.
+
+Lemma slots_dp_dtypedl Σ H : forall S1 ts Os1,
+  Forall3 (slot_ok sigs Σ H) S1 (marks Dp ts) Os1 -> dtypedl sigs Σ H S1 ts Os1.
+Proof.
+  intros S1 ts. revert S1. induction ts as [|t ts IH]; intros S1 Os1 F; simpl in F;
+    inversion F; subst; constructor; auto.
+Qed.
+
+Lemma dtypedl_slots_dp Σ H : forall S1 ts Os1,
+  dtypedl sigs Σ H S1 ts Os1 -> Forall3 (slot_ok sigs Σ H) S1 (marks Dp ts) Os1.
+Proof. induction 1; simpl; constructor; auto. Qed.
+
+(** Fresh payload slots become one fresh slot owning all their regions. *)
+Lemma inv_merge_top Σ H sc G S1 L ts st Os1 Os v t :
+  length S1 = length ts -> length ts = length Os1 ->
+  inv sigs Σ H sc G (S1 ++ L) (marks Dp ts ++ st) (Os1 ++ Os) ->
+  vlocs v = flat_map vlocs S1 ->
+  (dtypedl sigs Σ H S1 ts Os1 -> NoDup (concat Os1) -> dtyped sigs Σ H v t (concat Os1)) ->
+  inv sigs Σ H sc G (v :: L) ((Dp, t) :: st) (concat Os1 :: Os).
+Proof.
+  intros L1 L2 [Ilen Islots Idisj Iown Iheap Ireg Iscope] Ev Hd.
+  assert (Lm : length S1 = length (marks Dp ts)) by (unfold marks; rewrite length_map; auto).
+  assert (Lm' : length (marks Dp ts) = length Os1) by (unfold marks; rewrite length_map; auto).
+  apply Forall3_split in Islots as [F1 F2]; auto.
+  apply Forall3_split in Iown as [G1 G2]; auto.
+  rewrite concat_app in *.
+  apply nodup_app_inv in Idisj as (N1 & N2 & D).
+  constructor; simpl; auto.
+  - constructor; auto. apply Hd; auto. apply slots_dp_dtypedl; auto.
+  - apply NoDup_app; auto.
+  - constructor; auto. intros l Hl Hc. rewrite Ev in Hl.
+    apply in_flat_map in Hl as (w & Hw & Hl).
+    destruct (Forall3_in_a _ _ _ _ w G1 Hw) as (p & O & HO & Ho).
+    apply in_concat. exists O. split; auto.
+Qed.
+
+Lemma dtypedl_own Σ H X : forall vs ts Os1, dtypedl sigs Σ H vs ts Os1 ->
+  Forall3 (fun v _ O => forall l, In l (vlocs v) -> In l X -> In l O) vs (marks Dp ts) Os1.
+Proof.
+  induction 1 as [|w ws t ts O Os1 D Dl IH]; simpl; constructor; auto.
+  destruct (proj1 (dtyped_struct sigs Σ H) _ _ _ D) as (_ & Hv & _). intros l Hl _. auto.
+Qed.
+
+(** One fresh slot whose value's payloads own disjoint parts of its region
+    becomes one fresh slot per payload. *)
+Lemma inv_split_top Σ H sc G v L t st Os vs ts Os1 :
+  inv sigs Σ H sc G (v :: L) ((Dp, t) :: st) (concat Os1 :: Os) ->
+  dtypedl sigs Σ H vs ts Os1 ->
+  inv sigs Σ H sc G (vs ++ L) (marks Dp ts ++ st) (Os1 ++ Os).
+Proof.
+  intros [Ilen Islots Idisj Iown Iheap Ireg Iscope] Dl.
+  inversion Islots as [|? ? ? ? ? ? _ F]; subst. inversion Iown as [|? ? ? ? ? ? _ G1]; subst.
+  simpl in *. constructor; try rewrite concat_app; auto.
+  - apply Forall3_app; auto. apply dtypedl_slots_dp; auto.
+  - apply Forall3_app; auto. eapply dtypedl_own; eauto.
+Qed.
+
+(** Moving the top slot down, below [k] others. *)
+Lemma in_concat_move {A} (O : list A) Os1 Os2 x :
+  In x (concat (Os1 ++ O :: Os2)) <-> In x (concat (O :: Os1 ++ Os2)).
+Proof. simpl. rewrite !concat_app, !in_app_iff. simpl. rewrite !in_app_iff. tauto. Qed.
+
+Lemma inv_move_top Σ H sc G v L1 L2 p s1 s2 O Os1 Os2 :
+  length L1 = length s1 -> length s1 = length Os1 ->
+  inv sigs Σ H sc G (v :: L1 ++ L2) (p :: s1 ++ s2) (O :: Os1 ++ Os2) ->
+  inv sigs Σ H sc G (L1 ++ v :: L2) (s1 ++ p :: s2) (Os1 ++ O :: Os2).
+Proof.
+  intros La Lb [Ilen Islots Idisj Iown Iheap Ireg Iscope].
+  inversion Islots as [|? ? ? ? ? ? Pv F]; subst.
+  inversion Iown as [|? ? ? ? ? ? Ov G1]; subst.
+  apply Forall3_split in F as [F1 F2]; auto.
+  apply Forall3_split in G1 as [G1 G2]; auto.
+  constructor; auto.
+  - apply Forall3_app; auto. constructor; auto.
+  - eapply Permutation_NoDup; [| exact Idisj]. simpl. rewrite !concat_app. simpl.
+    apply Permutation_sym. apply perm_mid.
+  - apply Forall3_app; [| constructor].
+    + eapply Forall3_impl; [| exact G1]. intros w q O' Hw l Hl Hc. apply Hw; auto. apply in_concat_move; auto.
+    + intros l Hl Hc. apply Ov; auto. apply in_concat_move; auto.
+    + eapply Forall3_impl; [| exact G2]. intros w q O' Hw l Hl Hc. apply Hw; auto. apply in_concat_move; auto.
+  - intros l o E Hn. destruct (Iheap l o E) as [Hh Hr].
+    { intro Hc; apply Hn; apply in_concat_move; auto. }
+    split; auto. intros r Hr' Hc. apply (Hr r Hr'). apply in_concat_move; auto.
+  - intros l Hl. apply Ireg. apply in_concat_move; auto.
+Qed.
+
 End Ops.

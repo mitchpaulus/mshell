@@ -38,6 +38,7 @@ Fixpoint vlocs (v : val) : list loc :=
   match v with
   | VLoc l => [l]
   | VJust v' => vlocs v'
+  | VCon _ _ _ vs => flat_map vlocs vs
   | _ => []
   end.
 
@@ -48,7 +49,7 @@ Definition olocs (o : obj) : list loc :=
   end.
 
 Section Runtime.
-Variable sigs : string -> list ty -> option (list ty) -> Prop.
+Variable sigs : genv.
 
 Inductive vtyped (Σ : store_ty) : val -> ty -> Prop :=
 | vt_int n : vtyped Σ (VInt n) TInt
@@ -63,7 +64,13 @@ Inductive vtyped (Σ : store_ty) : val -> ty -> Prop :=
     vtyped Σ (VClo sc e) (TQuote ins outs)
 | vt_unionl v a b : vtyped Σ v a -> vtyped Σ v (TUnion a b)
 | vt_unionr v a b : vtyped Σ v b -> vtyped Σ v (TUnion a b)
-| vt_top v t : vtyped Σ v t -> vtyped Σ v TTop.
+| vt_top v t : vtyped Σ v t -> vtyped Σ v TTop
+| vt_con E c pts vs a :
+    g_ctors sigs E c = Some pts -> wf_payload E pts ->
+    vtypedl Σ vs (map (subst a) pts) -> vtyped Σ (VCon E c pts vs) (TEnum E a)
+with vtypedl (Σ : store_ty) : list val -> list ty -> Prop :=
+| vtl_nil : vtypedl Σ [] []
+| vtl_cons v vs t ts : vtyped Σ v t -> vtypedl Σ vs ts -> vtypedl Σ (v :: vs) (t :: ts).
 
 Definition obj_ok (Σ : store_ty) (o : obj) (h : htype) : Prop :=
   match o, h with
@@ -96,6 +103,10 @@ Inductive dtyped (Σ : store_ty) (H : heap) : val -> ty -> list loc -> Prop :=
 | dt_unionl v a b O : dtyped Σ H v a O -> dtyped Σ H v (TUnion a b) O
 | dt_unionr v a b O : dtyped Σ H v b O -> dtyped Σ H v (TUnion a b) O
 | dt_top v t O : dtyped Σ H v t O -> dtyped Σ H v TTop O
+| dt_con E c pts vs a Os :
+    g_ctors sigs E c = Some pts -> wf_payload E pts ->
+    dtypedl Σ H vs (map (subst a) pts) Os -> NoDup (concat Os) ->
+    dtyped Σ H (VCon E c pts vs) (TEnum E a) (concat Os)
 with dtypeds (Σ : store_ty) (H : heap) : list val -> ty -> list (list loc) -> Prop :=
 | dts_nil t : dtypeds Σ H [] t []
 | dts_cons v vs t O Os : dtyped Σ H v t O -> dtypeds Σ H vs t Os -> dtypeds Σ H (v :: vs) t (O :: Os)
@@ -103,7 +114,12 @@ with dfields (Σ : store_ty) (H : heap) : list (string * val) -> list (label * f
 | dfs_nil fs r : dfields Σ H [] fs r []
 | dfs_cons k v kvs fs r O Os :
     dtyped Σ H v (fty (field_at k fs r)) O -> dfields Σ H kvs fs r Os ->
-    dfields Σ H ((k, v) :: kvs) fs r (O :: Os).
+    dfields Σ H ((k, v) :: kvs) fs r (O :: Os)
+(** The payloads of a fresh enum value: one region per payload. *)
+with dtypedl (Σ : store_ty) (H : heap) : list val -> list ty -> list (list loc) -> Prop :=
+| dtl_nil : dtypedl Σ H [] [] []
+| dtl_cons v vs t ts O Os :
+    dtyped Σ H v t O -> dtypedl Σ H vs ts Os -> dtypedl Σ H (v :: vs) (t :: ts) (O :: Os).
 
 Definition slot_ok (Σ : store_ty) (H : heap) (v : val) (p : slot) (O : list loc) : Prop :=
   match fst p with
@@ -128,8 +144,14 @@ Record inv (Σ : store_ty) (H : heap) (sc : loc) (G : tenv)
 
 End Runtime.
 
+Scheme vtyped_mut := Induction for vtyped Sort Prop
+with vtypedl_mut := Induction for vtypedl Sort Prop.
+
+Combined Scheme vtyped_comb from vtyped_mut, vtypedl_mut.
+
 Scheme dtyped_mut := Induction for dtyped Sort Prop
 with dtypeds_mut := Induction for dtypeds Sort Prop
-with dfields_mut := Induction for dfields Sort Prop.
+with dfields_mut := Induction for dfields Sort Prop
+with dtypedl_mut := Induction for dtypedl Sort Prop.
 
-Combined Scheme dtyped_comb from dtyped_mut, dtypeds_mut, dfields_mut.
+Combined Scheme dtyped_comb from dtyped_mut, dtypeds_mut, dfields_mut, dtypedl_mut.

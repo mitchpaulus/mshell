@@ -7,24 +7,24 @@
 
 From Stdlib Require Import String List Arith Bool Lia Permutation.
 Import ListNotations.
-From MshellCore Require Import Syntax Subtyping Typing Interp Invariant RtLemmas Commit Validate Kind InvOps Copy RecOps.
+From MshellCore Require Import Syntax Subtyping Variance Typing Interp Invariant RtLemmas Commit Validate Kind InvOps Copy RecOps.
 
 Section Sound.
-Variable sigs : string -> list ty -> option (list ty) -> Prop.
+Variable sigs : genv.
 Variable defs : string -> option prog.
 Hypothesis Hdefs : def_ok sigs defs.
 
 Definition INV Σ H sc G L st Os := inv sigs Σ H sc G L st Os /\ bounded H.
 
-Definition out_ok (o : outcome) (B C : lctx) (R : option sty) (s2 st' : sty) : Prop :=
+Definition out_ok (o : outcome) (B C : lctx) (R : rctx) (s2 st' : sty) : Prop :=
   match o with
   | ONormal => st' = s2
   | OBreak => match B with LExact s => st' = s | LChild => True | LNone => False end
   | OContinue => match C with LExact s => st' = s | LChild => True | LNone => False end
-  | OReturn => match R with Some s => st' = s | None => False end
+  | OReturn => match R with RSome s => st' = s | RAny => True | RNone => False end
   end.
 
-Definition res_ok (Σ : store_ty) (sc : loc) (G : tenv) (B C : lctx) (R : option sty)
+Definition res_ok (Σ : store_ty) (sc : loc) (G : tenv) (B C : lctx) (R : rctx)
     (s2 : sty) (Sf : list val) (sf : sty) (r : result) : Prop :=
   match r with
   | RStuck => False
@@ -76,7 +76,7 @@ Proof. intros [I B] E. split; auto. eapply inv_scope_change; eauto. Qed.
     (a quote body): only a normal outcome is possible. *)
 Lemma cont_quote Σ sc sc' G G' B C R s2 s3 Sf sf r (k : heap -> list val -> result) :
   nth_error Σ sc = Some (HScope G) ->
-  res_ok Σ sc' G' LNone LNone None s2 Sf sf r ->
+  res_ok Σ sc' G' LNone LNone RNone s2 Sf sf r ->
   (forall Σ' H' S' Os', scope_ext Σ Σ' -> INV Σ' H' sc G (S' ++ Sf) (s2 ++ sf) Os' ->
      length S' = length s2 -> res_ok Σ sc G B C R s3 Sf sf (k H' S')) ->
   res_ok Σ sc G B C R s3 Sf sf (match r with ROk ONormal H' S' => k H' S' | r => r end).
@@ -447,7 +447,7 @@ Proof.
   simpl. simpl in Hc.
   eapply cont_quote with (sc' := sc') (G' := G') (s2 := shs outs ++ s).
   - apply (inv_scope _ _ _ _ _ _ _ _ Iv).
-  - eapply (IH G' LNone LNone None e (shs ins ++ s) (shs outs ++ s) (Hc s)).
+  - eapply (IH G' LNone LNone RNone e (shs ins ++ s) (shs outs ++ s) (Hc s)).
     + split; [|exact Bd]. eapply inv_scope_change; [| exact Esc']. exact Iv.
     + len.
   - intros Σ' H' S' Os' Sx Iv' L'. eapply (next_ok n IH); [exact HT | exact Iv' | exact L' | exact Sx].
@@ -463,8 +463,8 @@ Proof.
   pop_sh Iv. destruct Iv as (-> & V & Hl & Iv).
   apply vt_quote_inv in V as (sc' & e & G' & -> & Esc' & Hc).
   simpl. simpl in Hc.
-  pose proof (IH G' LNone LNone None e (shs ins ++ s) [(Sh, TBot)] (Hc s [(Sh, TBot)]) Σ H sc' stk Sf sf Os0) as Hr.
-  assert (Hr' : res_ok Σ sc' G' LNone LNone None [(Sh, TBot)] Sf sf (eval defs n H sc' stk e)).
+  pose proof (IH G' LNone LNone RNone e (shs ins ++ s) [(Sh, TBot)] (Hc s [(Sh, TBot)]) Σ H sc' stk Sf sf Os0) as Hr.
+  assert (Hr' : res_ok Σ sc' G' LNone LNone RNone [(Sh, TBot)] Sf sf (eval defs n H sc' stk e)).
   { apply Hr; [| len]. split; [|exact Bd]. eapply inv_scope_change; [| exact Esc']. exact Iv. }
   destruct (eval defs n H sc' stk e) as [| | | |o H' S'] eqn:Ev; simpl; auto.
   destruct Hr' as (Σ' & st' & Os' & Sx & Iv' & L' & O). destruct o; simpl in O; try contradiction.
@@ -521,7 +521,16 @@ Qed.
 
 Lemma w_return B C s s3 rest Σ H sc stk Sf sf Os G :
   INV Σ H sc G (stk ++ Sf) (s ++ sf) Os -> length stk = length s ->
-  res_ok Σ sc G B C (Some s) s3 Sf sf (eval defs (S n) H sc stk (WReturn :: rest)).
+  res_ok Σ sc G B C (RSome s) s3 Sf sf (eval defs (S n) H sc stk (WReturn :: rest)).
+Proof.
+  intros Iv L. simpl. exists Σ, s, Os.
+  split; [apply scope_ext_refl | split; [exact Iv | split; [exact L | simpl; auto]]].
+Qed.
+
+(** [return] in top-level code: the script ends, with any stack. *)
+Lemma w_return_any B C s s3 rest Σ H sc stk Sf sf Os G :
+  INV Σ H sc G (stk ++ Sf) (s ++ sf) Os -> length stk = length s ->
+  res_ok Σ sc G B C RAny s3 Sf sf (eval defs (S n) H sc stk (WReturn :: rest)).
 Proof.
   intros Iv L. simpl. exists Σ, s, Os.
   split; [apply scope_ext_refl | split; [exact Iv | split; [exact L | simpl; auto]]].
@@ -589,9 +598,9 @@ Proof.
 Qed.
 
 Lemma w_call G B C R f ins outs rest s s3 Σ H sc stk Sf sf Os :
-  sigs f ins (Some outs) ->
-  T sigs G B C R rest (shs outs ++ s) s3 ->
-  INV Σ H sc G (stk ++ Sf) ((shs ins ++ s) ++ sf) Os -> length stk = length (shs ins ++ s) ->
+  g_sigs sigs f ins (Some outs) ->
+  T sigs G B C R rest (outs ++ s) s3 ->
+  INV Σ H sc G (stk ++ Sf) ((ins ++ s) ++ sf) Os -> length stk = length (ins ++ s) ->
   res_ok Σ sc G B C R s3 Sf sf (eval defs (S n) H sc stk (WCall f :: rest)).
 Proof.
   intros Hs HT Iv L. destruct (Hdefs f ins (Some outs) Hs) as (body & G' & Ed & Hb).
@@ -609,9 +618,9 @@ Proof.
 Qed.
 
 Lemma w_call_never G B C R f ins rest s s' s3 Σ H sc stk Sf sf Os :
-  sigs f ins None ->
+  g_sigs sigs f ins None ->
   T sigs G B C R rest s' s3 ->
-  INV Σ H sc G (stk ++ Sf) ((shs ins ++ s) ++ sf) Os -> length stk = length (shs ins ++ s) ->
+  INV Σ H sc G (stk ++ Sf) ((ins ++ s) ++ sf) Os -> length stk = length (ins ++ s) ->
   res_ok Σ sc G B C R s3 Sf sf (eval defs (S n) H sc stk (WCall f :: rest)).
 Proof.
   intros Hs HT Iv L. destruct (Hdefs f ins None Hs) as (body & G' & Ed & Hb).
@@ -979,7 +988,9 @@ Proof.
 Qed.
 
 Lemma kind_eqb_true a b : kind_eqb a b = true -> a = b.
-Proof. destruct a, b; simpl; congruence. Qed.
+Proof.
+  destruct a, b; simpl; try congruence. intros Ek. apply ename_eqb_true in Ek. subst. reflexivity.
+Qed.
 
 Ltac kcont IH HT He Iv' :=
   eapply cont_same;
@@ -1066,7 +1077,7 @@ Proof.
   destruct (inv_cons_Os _ _ _ _ _ _ _ _ _ Iv) as (O & Os' & ->).
   pose proof (slot_at _ _ _ _ _ [] _ _ [] _ _ [] _ _ eq_refl eq_refl Iv) as Sl.
   unfold slot_ok in Sl; simpl in Sl.
-  simpl. destruct (validate H v u) eqn:Ev.
+  simpl. destruct (validate n H v u) as [[|]|] eqn:Ev; [| | exact Logic.I].
   - eapply (next_ok n IH); [exact HT | | len | apply scope_ext_refl].
     split; [|exact Bd]. simpl. eapply inv_replace_top_dp; [exact Iv|].
     constructor. eapply validate_dtyped; eauto.
@@ -1083,7 +1094,7 @@ Lemma w_try_sh G B C R t u rest s s3 Σ H sc stk Sf sf Os :
 Proof.
   intros Hu HT [Iv Bd] L. destruct stk as [|v stk]; try len. simpl in Iv.
   pop_sh Iv. destruct Iv as (-> & V & Hl & Iv).
-  simpl. destruct (validate H v u) eqn:Ev.
+  simpl. destruct (validate n H v u) as [[|]|] eqn:Ev; [| | exact Logic.I].
   - eapply (next_ok n IH); [exact HT | | len | apply scope_ext_refl].
     split; [|exact Bd]. simpl. apply inv_push_sh; [exact Iv | | exact Hl].
     constructor. destruct Hu as [Hs|Hi].
@@ -1114,7 +1125,7 @@ Proof. intros Hc; inversion Hc; subst; auto. Qed.
 
 Lemma w_each G B C R e t rest s s3 Σ H sc stk Sf sf Os B' C' :
   child_ctx B s B' -> child_ctx C s C' ->
-  T sigs G B' C' None e [(Sh, t)] [] ->
+  T sigs G B' C' RNone e [(Sh, t)] [] ->
   T sigs G B C R rest s s3 ->
   INV Σ H sc G (stk ++ Sf) (((Sh, TList t) :: s) ++ sf) Os ->
   length stk = length ((Sh, TList t) :: s) ->
@@ -1133,7 +1144,7 @@ Proof.
   { induction vsr as [|x vsr IHv]; intros H0 Σ0 Osq Sx0 Iv0.
     - unfold go. simpl. exists Σ0, s, Osq. split; [exact Sx0|]. split; [exact Iv0|]. split; [len|]. reflexivity.
     - unfold go. simpl. fold go.
-      pose proof (IH G B' C' None e [(Sh, t)] [] He Σ0 H0 sc [x] (vsr ++ stk0 ++ Sf)
+      pose proof (IH G B' C' RNone e [(Sh, t)] [] He Σ0 H0 sc [x] (vsr ++ stk0 ++ Sf)
                     (map (fun _ => (Sh, t)) vsr ++ s ++ sf) Osq Iv0 eq_refl) as Hr0.
       destruct (eval defs n H0 sc [x] e) as [| | | |o H1 S1] eqn:Ev; simpl in Hr0 |- *; auto.
       destruct Hr0 as (Σ1 & st1 & Os1 & Sx1 & Iv1 & L1 & O1).
@@ -1159,6 +1170,248 @@ Proof.
       + contradiction. }
   eapply (Claim vs H Σ); [apply scope_ext_refl|].
   split; [|exact Bd].
+  apply inv_push_shs; [exact Iv | |].
+  - rewrite Forall_forall in *. intros x Hx. eapply vtyped_sub; [apply Fv; auto | apply Ta].
+  - intros x Hx l0 Hl0. apply Hr. simpl. apply in_flat_map. eauto.
+Qed.
+(** ** Enums *)
+
+Lemma split_stack {A} (k : nat) (l : list A) : k <= length l ->
+  exists l1 l2, l = l1 ++ l2 /\ length l1 = k /\ firstn k l = l1 /\ skipn k l = l2.
+Proof.
+  intros Hk. exists (firstn k l), (skipn k l). split; [symmetry; apply firstn_skipn|].
+  split; [apply firstn_length_le; auto | split; reflexivity].
+Qed.
+
+Lemma w_con_sh G B C R E c pts a rest s s3 Σ H sc stk Sf sf Os :
+  g_ctors sigs E c = Some pts -> wf_payload E pts ->
+  T sigs G B C R rest ((Sh, TEnum E a) :: s) s3 ->
+  INV Σ H sc G (stk ++ Sf) ((shs (map (subst a) pts) ++ s) ++ sf) Os ->
+  length stk = length (shs (map (subst a) pts) ++ s) ->
+  res_ok Σ sc G B C R s3 Sf sf (eval defs (S n) H sc stk (WCon E c pts :: rest)).
+Proof.
+  intros Ec W HT [Iv Bd] L.
+  assert (Lk : length pts <= length stk) by (rewrite L, length_app; unfold shs; rewrite !length_map; lia).
+  destruct (split_stack _ _ Lk) as (S1 & L1 & -> & L2 & F1 & F2).
+  simpl. apply Nat.leb_le in Lk. rewrite Lk, F1, F2.
+  rewrite <- !app_assoc in Iv.
+  destruct (inv_pop_shl sigs _ _ _ _ S1 _ _ _ _ ltac:(rewrite L2, length_map; reflexivity) Iv) as (Os' & -> & Vl & Hl & Iv').
+  eapply (next_ok n IH); [exact HT | | | apply scope_ext_refl].
+  - split; [|exact Bd]. simpl. apply inv_push_sh; [exact Iv' | eapply vt_con; eauto | exact Hl].
+  - rewrite length_app, L2 in L. unfold shs in L. rewrite !length_app, !length_map in L. simpl. lia.
+Qed.
+
+Lemma w_con_dp G B C R E c pts a rest s s3 Σ H sc stk Sf sf Os :
+  g_ctors sigs E c = Some pts -> wf_payload E pts ->
+  T sigs G B C R rest ((Dp, TEnum E a) :: s) s3 ->
+  INV Σ H sc G (stk ++ Sf) ((marks Dp (map (subst a) pts) ++ s) ++ sf) Os ->
+  length stk = length (marks Dp (map (subst a) pts) ++ s) ->
+  res_ok Σ sc G B C R s3 Sf sf (eval defs (S n) H sc stk (WCon E c pts :: rest)).
+Proof.
+  intros Ec W HT [Iv Bd] L.
+  assert (Lk : length pts <= length stk) by (rewrite L, length_app; unfold marks; rewrite !length_map; lia).
+  destruct (split_stack _ _ Lk) as (S1 & L1 & -> & L2 & F1 & F2).
+  simpl. apply Nat.leb_le in Lk. rewrite Lk, F1, F2.
+  rewrite <- !app_assoc in Iv.
+  assert (Ln : length S1 = length (marks Dp (map (subst a) pts))) by (unfold marks; rewrite !length_map; auto).
+  pose proof (Forall3_length _ _ _ _ (inv_slots _ _ _ _ _ _ _ _ Iv)) as [_ LO].
+  rewrite length_app in LO.
+  destruct (Forall3_app_inv _ _ _ _ _ _ (inv_slots _ _ _ _ _ _ _ _ Iv) Ln) as (Os1 & Os2 & -> & F3 & _).
+  pose proof (Forall3_length _ _ _ _ F3) as [_ L3].
+  eapply (next_ok n IH); [exact HT | | | apply scope_ext_refl].
+  - split; [|exact Bd]. simpl.
+    eapply inv_merge_top with (ts := map (subst a) pts); [ | | exact Iv | reflexivity | ].
+    + rewrite L2, length_map; reflexivity.
+    + unfold marks in L3; rewrite length_map in L3; exact L3.
+    + intros Dl N. eapply dt_con; eauto.
+  - rewrite length_app, L2 in L. unfold marks in L. rewrite !length_app, !length_map in L. simpl. lia.
+Qed.
+
+Lemma w_case G B C R m E a arms rest s s' s3 Σ H sc stk Sf sf Os :
+  (forall c pts e, g_ctors sigs E c = Some pts -> lookup c arms = Some e ->
+     T sigs G B C R e (marks m (map (subst a) pts) ++ s) s') ->
+  T sigs G B C R rest s' s3 ->
+  INV Σ H sc G (stk ++ Sf) (((m, TEnum E a) :: s) ++ sf) Os ->
+  length stk = length ((m, TEnum E a) :: s) ->
+  res_ok Σ sc G B C R s3 Sf sf (eval defs (S n) H sc stk (WCase E arms :: rest)).
+Proof.
+  intros Harms HT [Iv Bd] L. destruct stk as [|v stk]; try len. simpl in Iv.
+  destruct (inv_cons_Os _ _ _ _ _ _ _ _ _ Iv) as (O & Os' & ->).
+  (* the value is a constructor of E, with payloads typed by its declaration *)
+  assert (Hc : exists c pts vs Os1, v = VCon E c pts vs /\ g_ctors sigs E c = Some pts /\
+     INV Σ H sc G ((vs ++ stk) ++ Sf) ((marks m (map (subst a) pts) ++ s) ++ sf) (Os1 ++ Os') /\
+     length vs = length (map (subst a) pts)).
+  { destruct m.
+    - apply inv_pop_sh in Iv as (-> & V & Hl & Iv).
+      apply vt_enum_inv in V as (c & pts & vs & -> & Ec & W & Vl).
+      exists c, pts, vs, (map (fun _ => []) vs). split; [reflexivity|]. split; [exact Ec|]. split.
+      + split; [|exact Bd]. rewrite <- !app_assoc. apply inv_push_shl; auto.
+      + apply vtypedl_length in Vl. exact Vl.
+    - pose proof (slot_at _ _ _ _ _ [] _ _ [] _ _ [] _ _ eq_refl eq_refl Iv) as Sl.
+      unfold slot_ok in Sl; simpl in Sl.
+      apply dt_enum_inv in Sl as (c & pts & vs & Os1 & -> & Ec & W & Dl & -> & N).
+      exists c, pts, vs, Os1. split; [reflexivity|]. split; [exact Ec|]. split.
+      + split; [|exact Bd]. rewrite <- !app_assoc. eapply inv_split_top; eauto.
+      + clear -Dl. induction Dl; simpl; auto. }
+  destruct Hc as (c & pts & vs & Os1 & -> & Ec & Iv' & Lv).
+  simpl. rewrite ename_eqb_refl.
+  destruct (@lookup (list word) c arms) as [e|] eqn:Ea; [|exact Logic.I].
+  apply cont_same with (s2 := s').
+  - eapply (IH _ _ _ _ _ _ _ (Harms c pts e Ec Ea)); [exact Iv' |].
+    rewrite !length_app, Lv. unfold marks. rewrite !length_map. len.
+  - intros Σ' H' S' Os'' Sx Iv'' L'. eapply (next_ok n IH); [exact HT | exact Iv'' | exact L' | exact Sx].
+Qed.
+
+Lemma w_kind_enum G B C R m E t e1 e2 rest s s' s3 Σ H sc stk Sf sf Os :
+  (forall a, T sigs G B C R e1 ((m, TEnum E a) :: s) s') -> T sigs G B C R e2 ((m, t) :: s) s' ->
+  T sigs G B C R rest s' s3 ->
+  INV Σ H sc G (stk ++ Sf) (((m, t) :: s) ++ sf) Os -> length stk = length ((m, t) :: s) ->
+  res_ok Σ sc G B C R s3 Sf sf (eval defs (S n) H sc stk (WKindIf (KEnum E) e1 e2 :: rest)).
+Proof.
+  intros H1 H2 HT [Iv Bd] L. destruct stk as [|v stk]; try len. simpl in Iv.
+  pose proof (inv_heap_ok_out sigs _ _ _ _ _ _ _ Iv) as Ho.
+  pose proof (inv_len _ _ _ _ _ _ _ _ Iv) as Ln.
+  destruct (inv_cons_Os _ _ _ _ _ _ _ _ _ Iv) as (O & Os' & ->).
+  destruct m.
+  - pose proof Iv as Iv0. apply inv_pop_sh in Iv as (-> & V & Hl & Iv).
+    destruct (vtyped_kind_of sigs _ _ _ _ _ V Ho Ln) as (k' & Ek); [simpl in Hl; exact Hl|].
+    simpl. rewrite Ek.
+    assert (Iv2 : INV Σ H sc G ((v :: stk) ++ Sf) (((Sh, t) :: s) ++ sf) ([] :: Os')).
+    { split; [|exact Bd]. exact Iv0. }
+    destruct k'; simpl; try (kcont IH HT H2 Iv2).
+    destruct (ename_eqb E E0) eqn:Kb; [|kcont IH HT H2 Iv2].
+    apply ename_eqb_true in Kb; subst E0.
+    destruct (vtyped_kind_enum sigs _ _ _ _ _ _ V Ho Ln Hl Ek) as (a & Va).
+    assert (Iv' : INV Σ H sc G ((v :: stk) ++ Sf) (((Sh, TEnum E a) :: s) ++ sf) ([] :: Os')).
+    { split; [|exact Bd]. simpl. apply inv_push_sh; [exact Iv | exact Va | exact Hl]. }
+    kcont IH HT (H1 a) Iv'.
+  - pose proof (slot_at _ _ _ _ _ [] _ _ [] _ _ [] _ _ eq_refl eq_refl Iv) as Sl.
+    unfold slot_ok in Sl; simpl in Sl.
+    destruct (dtyped_kind_of sigs _ _ _ _ _ Sl) as (k' & Ek).
+    simpl. rewrite Ek.
+    assert (Iv2 : INV Σ H sc G ((v :: stk) ++ Sf) (((Dp, t) :: s) ++ sf) (O :: Os')).
+    { split; [|exact Bd]. exact Iv. }
+    destruct k'; simpl; try (kcont IH HT H2 Iv2).
+    destruct (ename_eqb E E0) eqn:Kb; [|kcont IH HT H2 Iv2].
+    apply ename_eqb_true in Kb; subst E0.
+    destruct (dtyped_kind_enum sigs _ _ _ _ _ _ Sl Ek) as (a & Da).
+    assert (Iv' : INV Σ H sc G ((v :: stk) ++ Sf) (((Dp, TEnum E a) :: s) ++ sf) (O :: Os')).
+    { split; [|exact Bd]. simpl. eapply inv_replace_top_dp; [exact Iv | exact Da]. }
+    kcont IH HT (H1 a) Iv'.
+Qed.
+(** ** [map] *)
+
+Lemma map_shs_const {A} (l : list A) u : map (fun _ => (Sh, u)) l = shs (map (fun _ => u) l).
+Proof. unfold shs. rewrite map_map. reflexivity. Qed.
+
+Lemma vtypedl_const Σ vs u : vtypedl sigs Σ vs (map (fun _ => u) vs) -> Forall (fun v => vtyped sigs Σ v u) vs.
+Proof. induction vs; simpl; intros H; inversion H; subst; constructor; auto. Qed.
+
+(** [m] is the result's mark: [Sh], or [Dp] when [u] is immutable. *)
+Lemma w_map G B C R m e t u rest s s3 Σ H sc stk Sf sf Os B' C' :
+  (m = Sh \/ immutable u = true) ->
+  child_ctx B s B' -> child_ctx C s C' ->
+  T sigs G B' C' RNone e [(Sh, t)] [(Sh, u)] ->
+  T sigs G B C R rest ((m, TList u) :: s) s3 ->
+  INV Σ H sc G (stk ++ Sf) (((Sh, TList t) :: s) ++ sf) Os ->
+  length stk = length ((Sh, TList t) :: s) ->
+  res_ok Σ sc G B C R s3 Sf sf (eval defs (S n) H sc stk (WMap e :: rest)).
+Proof.
+  intros Hm CB CC He HT [Iv Bd] L. destruct stk as [|v stk0]; try len. simpl in Iv.
+  pop_sh Iv. destruct Iv as (-> & V & Hl & Iv).
+  destruct (sh_list _ _ _ _ _ _ _ _ _ Iv V Hl) as (l & a & vs & -> & E & Ta & Nl & Eo & Fv & Hr).
+  simpl. rewrite Eo.
+  eapply cont_same with (s2 := (m, TList u) :: s);
+    [| intros Σ' H' S' Os' Sx Iv' L'; eapply (next_ok n IH); [exact HT | exact Iv' | exact L' | exact Sx]].
+  match goal with |- res_ok _ _ _ _ _ _ _ _ _ (?GO vs H []) => set (go := GO) end.
+  assert (Claim : forall vsr acc H0 Σ0 Osq, scope_ext Σ Σ0 ->
+            INV Σ0 H0 sc G (vsr ++ acc ++ stk0 ++ Sf)
+                (map (fun _ => (Sh, t)) vsr ++ map (fun _ => (Sh, u)) acc ++ s ++ sf) Osq ->
+            res_ok Σ sc G B C R ((m, TList u) :: s) Sf sf (go vsr H0 acc)).
+  { induction vsr as [|x vsr IHv]; intros acc H0 Σ0 Osq Sx0 [Iv0 Bd0].
+    - (* all elements done: allocate the result list *)
+      unfold go. simpl. simpl in Iv0. rewrite (map_shs_const acc u) in Iv0.
+      destruct (inv_pop_shl sigs _ _ _ _ acc _ _ _ _ ltac:(rewrite length_map; reflexivity) Iv0)
+        as (Os1 & -> & Vl & Hla & Iv1).
+      apply vtypedl_const in Vl.
+      pose proof (inv_len _ _ _ _ _ _ _ _ Iv1) as Ln.
+      assert (Fr : Forall (fun w => vtyped sigs Σ0 w u) (rev acc)) by (apply Forall_rev; auto).
+      assert (Hlr : forall r, In r (olocs (OList (rev acc))) -> ~ In r (concat Os1)).
+      { intros r Hr'. simpl in Hr'. apply in_flat_map in Hr' as (w & Hw & Hr').
+        apply in_rev in Hw. apply Hla. apply in_flat_map. eauto. }
+      assert (Hlt : forall r, In r (olocs (OList (rev acc))) -> r < length H0).
+      { intros r Hr'. simpl in Hr'. apply in_flat_map in Hr' as (w & Hw & Hr').
+        apply in_rev in Hw. rewrite <- Ln. eapply vtyped_vlocs_lt; eauto. rewrite Forall_forall in Vl. auto. }
+      destruct m.
+      + exists (Σ0 ++ [HList u]), ((Sh, TList u) :: s), ([] :: Os1).
+        split; [eapply scope_ext_trans; [exact Sx0 | apply scope_ext_app] |].
+        split; [| split; [len | reflexivity]].
+        split.
+        * simpl. apply inv_push_sh.
+          -- apply inv_alloc_out; auto. simpl. rewrite Forall_forall in *. intros w Hw.
+             eapply vtyped_ext; [apply Fr; auto | apply sagree_app | apply scope_ext_app].
+          -- eapply vt_list; [rewrite nth_error_app2 by lia; rewrite Ln, Nat.sub_diag; reflexivity | apply s_refl].
+          -- simpl. intros r [<-|[]] Hc. pose proof (inv_reg_lt sigs _ _ _ _ _ _ _ _ Iv1 Hc). lia.
+        * apply bounded_app; auto. intros r Hr'. specialize (Hlt r Hr'). lia.
+      + assert (Hi : immutable u = true) by (destruct Hm; [discriminate | auto]).
+        exists (Σ0 ++ [HList TBot]), ((Dp, TList u) :: s), ([length H0] :: Os1).
+        split; [eapply scope_ext_trans; [exact Sx0 | apply scope_ext_app] |].
+        split; [| split; [len | reflexivity]].
+        assert (Nl0 : olocs (OList (rev acc)) = []).
+        { simpl. apply flat_map_nil_iff. intros w Hw. rewrite Forall_forall in Fr.
+          eapply vtyped_imm_vlocs; eauto. }
+        split.
+        * simpl. eapply inv_alloc_dp; [exact Iv1 | exact Bd0 | exact Nl0 |].
+          replace [length H0] with (length H0 :: concat (map (fun _ => @nil loc) (rev acc)))
+            by (rewrite concat_map_nil; reflexivity).
+          apply dt_list with (vs := rev acc) (Os := map (fun _ => []) (rev acc)).
+          -- apply nth_error_app_eq.
+          -- remember (H0 ++ [OList (rev acc)]) as Hx. clear HeqHx. clear -Fr Hi.
+             induction Fr; simpl; constructor; auto.
+             apply vtyped_imm_dtyped; auto. eapply vtyped_ext; [eauto | apply sagree_app | apply scope_ext_app].
+          -- rewrite concat_map_nil. constructor; [simpl; tauto | constructor].
+        * apply bounded_app; auto. rewrite Nl0. simpl; tauto.
+    - (* run the body on the next element *)
+      unfold go. simpl. fold go.
+      pose proof (IH G B' C' RNone e [(Sh, t)] [(Sh, u)] He Σ0 H0 sc [x] (vsr ++ acc ++ stk0 ++ Sf)
+                    (map (fun _ => (Sh, t)) vsr ++ map (fun _ => (Sh, u)) acc ++ s ++ sf) Osq
+                    (conj Iv0 Bd0) eq_refl) as Hr0.
+      destruct (eval defs n H0 sc [x] e) as [| | | |o H1 S1] eqn:Ev; simpl in Hr0 |- *; auto.
+      destruct Hr0 as (Σ1 & st1 & Os1 & Sx1 & Iv1 & L1 & O1).
+      assert (Drop : exists Σ2 Os2, scope_ext Σ1 Σ2 /\ INV Σ2 H1 sc G (stk0 ++ Sf) (s ++ sf) Os2).
+      { destruct Iv1 as [Iv1 Bd1].
+        replace (S1 ++ vsr ++ acc ++ stk0 ++ Sf) with ((S1 ++ vsr ++ acc) ++ stk0 ++ Sf) in Iv1 by (rewrite !app_assoc; reflexivity).
+        replace (st1 ++ map (fun _ : val => (Sh, t)) vsr ++ map (fun _ : val => (Sh, u)) acc ++ s ++ sf)
+          with ((st1 ++ map (fun _ : val => (Sh, t)) vsr ++ map (fun _ : val => (Sh, u)) acc) ++ s ++ sf)
+          in Iv1 by (rewrite !app_assoc; reflexivity).
+        destruct (inv_drop_prefix sigs _ _ _ _ (S1 ++ vsr ++ acc) _
+                   (st1 ++ map (fun _ : val => (Sh, t)) vsr ++ map (fun _ : val => (Sh, u)) acc) _ _
+                   ltac:(rewrite !length_app, !length_map; lia) Iv1) as (Σ2 & Os2 & Sx2 & _ & Iv2).
+        exists Σ2, Os2. split; auto. split; auto. }
+      destruct o; simpl in O1.
+      + subst st1. destruct S1 as [|y [|y' S1]]; simpl in L1; try lia.
+        destruct Iv1 as [Iv1 Bd1].
+        destruct (inv_cons_Os _ _ _ _ _ _ _ _ _ Iv1) as (Oy & Os1' & ->).
+        pose proof (Forall3_length _ _ _ _ (inv_slots _ _ _ _ _ _ _ _ Iv1)) as [_ LO].
+        simpl in LO. rewrite !length_app, !length_map in LO.
+        assert (Hsp : exists Osv Osr, Os1' = Osv ++ Osr /\ length Osv = length vsr).
+        { exists (firstn (length vsr) Os1'), (skipn (length vsr) Os1'). split; [symmetry; apply firstn_skipn|].
+          apply firstn_length_le. lia. }
+        destruct Hsp as (Osv & Osr & -> & LOv).
+        eapply (IHv (y :: acc) H1 Σ1 (Osv ++ Oy :: Osr)); [eapply scope_ext_trans; eauto |].
+        split; [| exact Bd1]. simpl.
+        apply inv_move_top; [rewrite length_map; reflexivity | rewrite length_map; auto | exact Iv1].
+      + apply child_ctx_inv in CB as [->|[-> HB]]; [contradiction|].
+        destruct Drop as (Σ2 & Os2 & Sx2 & Iv2).
+        exists Σ2, s, Os2. split; [eapply scope_ext_trans; [eapply scope_ext_trans; eauto | eauto]|].
+        split; [exact Iv2|]. split; [len|]. simpl. destruct HB as [->| ->]; auto.
+      + apply child_ctx_inv in CC as [->|[-> HC]]; [contradiction|].
+        destruct Drop as (Σ2 & Os2 & Sx2 & Iv2).
+        exists Σ2, s, Os2. split; [eapply scope_ext_trans; [eapply scope_ext_trans; eauto | eauto]|].
+        split; [exact Iv2|]. split; [len|]. simpl. destruct HC as [->| ->]; auto.
+      + contradiction. }
+  eapply (Claim vs [] H Σ); [apply scope_ext_refl|].
+  split; [|exact Bd]. simpl.
   apply inv_push_shs; [exact Iv | |].
   - rewrite Forall_forall in *. intros x Hx. eapply vtyped_sub; [apply Fv; auto | apply Ta].
   - intros x Hx l0 Hl0. apply Hr. simpl. apply in_flat_map. eauto.
@@ -1196,6 +1449,7 @@ Proof.
   - eapply w_cont_exact; eauto.
   - eapply w_cont_child; eauto.
   - eapply w_return; eauto.
+  - eapply w_return_any; eauto.
   - eapply w_exit; eauto.
   - eapply w_call; eauto.
   - eapply w_call_never; eauto.
@@ -1205,6 +1459,8 @@ Proof.
   - eapply w_getat; eauto.
   - eapply w_setat; eauto.
   - eapply w_each; eauto.
+  - eapply w_map; eauto.
+  - eapply w_map; eauto.
   - eapply w_dictnew; eauto.
   - eapply w_getk; eauto.
   - eapply w_getreq; eauto.
@@ -1220,14 +1476,41 @@ Proof.
   - eapply w_try_sh; eauto.
   - eapply w_try_sh; eauto.
   - eapply w_copy; eauto.
+  - eapply w_con_sh; eauto.
+  - eapply w_con_dp; eauto.
+  - eapply w_case; eauto.
+  - eapply w_kind_enum; eauto.
 Qed.
+
+(** Running [w] and then [e]: when [w] alone does not finish normally, [e]
+    is never reached. *)
+Lemma eval_cons_div : forall n H sc st w e,
+  (forall H' st', eval defs n H sc st [w] <> ROk ONormal H' st') ->
+  eval defs n H sc st (w :: e) = eval defs n H sc st [w].
+Proof.
+  induction n as [|n IH]; intros H sc st w e; [reflexivity|].
+  destruct w; simpl;
+    repeat match goal with
+           | |- context [match ?x with _ => _ end] => destruct x
+           end;
+    intros Hn; auto;
+    try (destruct n; [reflexivity | exfalso; eapply Hn; reflexivity]).
+  all: apply IH; auto.
+Qed.
+
+Lemma lframe_nil L : lframe L [] = L.
+Proof. destruct L; simpl; rewrite ?app_nil_r; reflexivity. Qed.
+
+Lemma rframe_nil R : rframe R [] = R.
+Proof. destruct R; simpl; rewrite ?app_nil_r; reflexivity. Qed.
 
 Theorem eval_sound : forall n, P n.
 Proof.
   induction n as [|n IHn].
   - intros G B C R e s1 s2 HT Σ H sc stk Sf sf Os Iv L. simpl. exact Logic.I.
   - intros G B C R e s1 s2 HT.
-    induction HT as [B C R s | B C R w e s1 s2 s3 Hw He IHe | B C R e s1 s1' s2 s2' Hs1 He IHe Hs2];
+    induction HT as [B C R s | B C R w e s1 s2 s3 Hw He IHe | B C R e s1 s1' s2 s2' Hs1 He IHe Hs2
+                    | B C R w e s1 s3 Hd IHd];
       intros Σ H sc stk Sf sf Os Iv L.
     + simpl. exists Σ, s, Os. split; [apply scope_ext_refl|]. split; [exact Iv|]. split; [exact L | reflexivity].
     + eapply word_ok; eauto.
@@ -1246,6 +1529,15 @@ Proof.
       * exists Σ2, st', Os2. split; [auto|]. split; [split; auto|]. split; auto.
       * exists Σ2, st', Os2. split; [auto|]. split; [split; auto|]. split; auto.
       * exists Σ2, st', Os2. split; [auto|]. split; [split; auto|]. split; auto.
+    + (* dead code after a diverging word *)
+      pose proof (IHd [] [(Sh, TBot)] Σ H sc stk Sf sf Os) as Hr.
+      rewrite app_nil_r, lframe_nil, lframe_nil, rframe_nil in Hr. specialize (Hr Iv L).
+      assert (Nn : forall H' st', eval defs (S n) H sc stk [w] <> ROk ONormal H' st').
+      { intros H' st' E. rewrite E in Hr. destruct Hr as (Σ' & st2 & Os' & _ & Iv' & L' & O).
+        simpl in O. subst. destruct st' as [|v st']; [simpl in L'; lia|]. eapply slot_bot_false; eauto. }
+      rewrite (eval_cons_div _ _ _ _ _ _ Nn).
+      destruct (eval defs (S n) H sc stk [w]) as [| | | |o H' S'] eqn:Ev; simpl in *; auto.
+      destruct o; [exfalso; eapply Nn; reflexivity | exact Hr | exact Hr | exact Hr].
 Qed.
 
 (** The initial state: an empty stack and one empty top-level scope. *)
@@ -1263,12 +1555,14 @@ Proof.
 Qed.
 
 (** ** Type soundness *)
-Theorem soundness : forall G e s,
-  T sigs G LNone LNone None e [] s ->
+(** [R] is [RAny] for a script whose top level may [return]; [RNone]
+    otherwise.  Any return context gives the same guarantee. *)
+Theorem soundness : forall G R e s,
+  T sigs G LNone LNone R e [] s ->
   forall n, eval defs n [OScope []] 0 [] e <> RStuck.
 Proof.
-  intros G e s HT n Hst.
-  pose proof (eval_sound n G LNone LNone None e [] s HT [HScope G] [OScope []] 0 [] [] [] [] (INV_init G) eq_refl) as Hr.
+  intros G R e s HT n Hst.
+  pose proof (eval_sound n G LNone LNone R e [] s HT [HScope G] [OScope []] 0 [] [] [] [] (INV_init G) eq_refl) as Hr.
   rewrite Hst in Hr. exact Hr.
 Qed.
 End Sound.
