@@ -243,10 +243,9 @@ list (`tw_kind_enum`), like `list xs`; `E[unknown]` would be wrong for an invari
 
 ## Not modeled
 
-Recursive aliases (`Json`), grids and commands as such, "fresh when the input is fresh" for
-`take`/`skip`/slices of a list of containers (the invariant has no notion of an unreachable old list;
-the shared case and the immutable-elements case need nothing new), other builtins (they need the builtin
-contract), the checker algorithm (unification, overload resolution; joins, frame and substitution
+Recursive aliases (`Json`), grids and commands as such, other builtins (they need the builtin
+contract; every builtin that returns a new list follows `map`'s rule, fresh exactly when the elements are
+immutable, `tw_map_imm`), the checker algorithm (unification, overload resolution; joins, frame and substitution
 lemmas are now proved),
 and definite assignment (an unset variable is a checked error, as at runtime).
 See the "mechanized core" section of the design document for what each would need.

@@ -210,7 +210,7 @@ Work:
 - `parseJson` returns `Json`, fresh; no operations on raw `Json`.
 - **The builtin table.** Port every entry. For each one:
   - check it against `Evaluator.go`, so the signature accepts exactly what the runtime accepts;
-  - mark its output *fresh*, *shared*, or *fresh when a given input is fresh or its elements are immutable* (slices, `...rest`); a builtin whose quote sees the elements (`filter`, `sortBy`, `groupBy`, ...) is fresh only when the elements are immutable, like `map` (design doc H10);
+  - mark its output *fresh* or *shared*. Every builtin that returns a new list (`map`, `filter`, `take`, `skip`, slices, `reverse`, `sort`, ...) is fresh exactly when its element type is immutable (design doc, "One rule for new lists");
   - mark in-place type changes (redirects, `updateCol` and the grid mutators) as allowed only on a fresh operand;
   - replace "accepts `[int | float]`" entries with generic or per-type overloads, since `[int]` is not below `[int | float]`;
   - check that `extend` with a grid view cannot change the view's source grid at a new type.

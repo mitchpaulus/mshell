@@ -1144,20 +1144,20 @@ immutable: a quote's results are shared values. "Fresh when the input is fresh" 
 `map`: `[0 0] (drop @ys) map` is the stored list `ys` twice, and widening it would let a string be appended
 to `ys` (`hole_map_fresh_stuck`; `map` is in the model, `tw_map`/`tw_map_imm`).
 
-*Fresh when the input is.* Some builtins return a new list whose elements are the input's elements:
-`take`, `skip`, the index slices, `...rest` (@sec-new-lists). Their result is fresh when the input
-was fresh (the input is consumed, so its elements are a subtree nothing else reaches) or when the
-element type is immutable (there is nothing below the new list to share). Otherwise the result is a
-new list over shared elements, which is an ordinary shared value. So $Phi$ needs a third output mark
-besides "fresh" and "shared": _fresh if that input is fresh or the elements are immutable_.
-`lines 1 skip` is fresh; `@xs 1 take` with `xs : [[int]]` is not, because its inner lists are still `xs`'s.
+*One rule for new lists (decided 2026-09-30).* Every builtin that returns a new list (`map`, `filter`,
+`sortBy`, `groupBy`, `take`, `skip`, the index slices, `reverse`, `sort`, pipe slices; @sec-new-lists)
+gives a fresh result exactly when the element type is immutable, and a shared one otherwise. There is
+nothing below such a list to share, so it is trivially a tree. `lines 1 skip` is fresh; `@xs 1 take` with
+`xs : [[int]]` is not, and neither is `parseJson tryAs [Json] ? 1 skip` (use `deepCopy` to retype one).
+$Phi$ needs only the two marks "fresh" and "shared".
 
-*Not for builtins that run a quote on the elements (corrected).* `filter`, `sortBy`, `groupBy` and the
-like return the input's elements too, but their quote is given each element and may store it, so the
-elements may be shared even when the input list was fresh. `[[1]] (dup e! drop true) filter` widened to
-`[[int | str]]` would let a string be appended to the list in `e` (`hole_filter_fresh_stuck`, shown with a
-`map` whose body keeps its element, which is `filter` keeping everything). Their result is fresh only when
-the element type is immutable, the rule `map` already has.
+An earlier draft also made these results fresh "when the input is fresh". That is wrong for any builtin
+whose quote sees the elements: `filter`'s quote may store an element, so `[[1]] (dup e! drop true) filter`
+widened to `[[int | str]]` would let a string be appended to the list in `e` (`hole_filter_fresh_stuck`,
+shown with a `map` whose body keeps its element, which is `filter` keeping everything). For `take` and
+`skip` it is sound but not proved: the consumed input list stays in the heap, unreachable, pointing at
+the kept elements, which the invariant has no notion of. It was dropped rather than proved: one rule,
+already proved for `map` (`tw_map_imm`), covers every new list, and the cases it gave up are rare.
 
 == Explicit copies: `deepCopy` <sec-copy>
 
@@ -1247,11 +1247,10 @@ the proof no longer describes the program. The only type-level alternative is a 
   inset: 5pt, stroke: 0.5pt + luma(180),
   table.header([*Operation*], [*Result*], [*Fresh when*]),
   [`append`, `setAt`, `del`, `insert`, `pop`], [the same list, changed in place], [the input was fresh],
-  [`take`, `skip`, `:n`, `n:`, `a:b`], [a new list; elements shared (a shallow copy)], [input fresh or elements immutable],
+  [`take`, `skip`, `:n`, `n:`, `a:b`], [a new list; elements shared (a shallow copy)], [elements immutable],
   [`[a ...rest b]`], [`rest` is a new list, like `skip` (runtime change needed)], [never in practice: `rest` is a variable (@sec-unknown)],
-  [pipe slices], [a new list of the pipe's commands (runtime change needed)], [input fresh or elements immutable],
-  [`reverse`, `sort`], [a new list over the input's elements], [input fresh or elements immutable],
-  [`filter`, `sortBy`, `groupBy`, ... (a quote sees the elements)], [a new list over the input's elements], [elements immutable (`hole_filter_fresh_stuck`)],
+  [pipe slices], [a new list of the pipe's commands (runtime change needed)], [never: commands are lists],
+  [`reverse`, `sort`, `filter`, `sortBy`, `groupBy`, ...], [a new list over the input's elements], [elements immutable],
   [`map`], [a new list of the quote's results], [result elements immutable (`tw_map_imm`)],
   [`deepCopy`], [a new tree], [always],
 )
@@ -1890,10 +1889,6 @@ match bindings as stores into the scope, and validation completeness for checkab
   derivations of them. Proved: the substitution lemma (defs checked once), the frame lemma (quote
   bodies checked once), divergence, and joins. Not proved: unification, overload resolution and the
   skolem escape check (@sec-unknown) as algorithms.
-- *"Fresh when the input is fresh"* for `take`, `skip`, slices and `...rest` over a list of containers
-  (@sec-fresh). The old list stays in the heap, unreachable, pointing at the kept elements, and the
-  invariant has no notion of unreachable objects. The shared case and the case of immutable elements
-  need nothing new. Adding unreachable objects to the fresh-region invariant would cover it.
 - *Definite assignment.* Reading an unset variable is a checked error in the model, as at runtime.
 - *Slices and `...rest`.* The model has no slicing words. Principle 7 is what lets them be added as
   $Phi$ entries: each returns a new object, so a slice is a shallow copy with the freshness rule of @sec-fresh.
