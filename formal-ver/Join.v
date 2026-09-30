@@ -12,8 +12,13 @@
       happens only when both arms are fresh; inside a [Maybe] or a covariant
       enum argument of shared values the inner join is itself a shared
       join;
-    - quotes, invariant and contravariant arguments join only when equal
-      (sound, and simpler than a meet);
+    - two instances of different enums have different kinds, and join to
+      their union, like any two types of different kinds;
+    - when the types cannot be widened inside (quotes, shared containers,
+      invariant and contravariant arguments, two unions), the join is the
+      other side if one side is below the other ([<=], or the fresh retype
+      when both slots are fresh), and otherwise there is none.  So a quote
+      that never returns joins with any quote with the same inputs;
     - joining into a union joins the member of the same kind;
     - a recursive type is never widened inside ([ajoin]): the join takes
       the other side when one is below the other ([<=], or the fresh retype
@@ -207,6 +212,42 @@ Definition ajoin (fr : bool) (a b : ty) : option ty :=
   | _, _ => None
   end.
 
+(** One level of the join: the cases that look inside the two types, with
+    [j] for the joins of their parts.  It gives [None] where a type cannot
+    be widened inside, and [tjoin] then tries whether one side is below the
+    other. *)
+Definition tjoin_core (j : bool -> ty -> ty -> option ty) (fr : bool) (a b : ty) : option ty :=
+  match a, b with
+  | TBot, _ => Some b
+  | _, TBot => Some a
+  | TUnion _ _, TUnion _ _ => None
+  | TUnion a1 a2, _ =>
+      match kind_of_ty b with
+      | Some k => if ukind k a1 then option_map (fun z => TUnion z a2) (j fr a1 b)
+                  else if ukind k a2 then option_map (fun z => TUnion a1 z) (j fr a2 b)
+                  else Some (TUnion a b)
+      | None => None
+      end
+  | _, TUnion b1 b2 =>
+      match kind_of_ty a with
+      | Some k => if ukind k b1 then option_map (fun z => TUnion z b2) (j fr a b1)
+                  else if ukind k b2 then option_map (fun z => TUnion b1 z) (j fr a b2)
+                  else Some (TUnion b a)
+      | None => None
+      end
+  | TMaybe x, TMaybe y => option_map TMaybe (j fr x y)
+  | TList x, TList y => if fr then option_map TList (j true x y) else None
+  | TRec fs1 r1, TRec fs2 r2 => if fr then rjoin j fs1 r1 fs2 r2 else None
+  | TEnum E xs, TEnum E' ys =>
+      if ename_eqb E E' then option_map (TEnum E) (ejoin j fr (en_params E) xs ys)
+      else Some (TUnion a b)
+  | _, _ =>
+      match kind_of_ty a, kind_of_ty b with
+      | Some ka, Some kb => if kind_eqb ka kb then None else Some (TUnion a b)
+      | _, _ => None
+      end
+  end.
+
 (** [tjoin n fr a b]: the join of two slot types, [fr] when both slots are
     fresh.  [n] is fuel. *)
 Fixpoint tjoin (n : nat) (fr : bool) (a b : ty) {struct n} : option ty :=
@@ -215,34 +256,9 @@ Fixpoint tjoin (n : nat) (fr : bool) (a b : ty) {struct n} : option ty :=
   | S n' =>
   if ty_eqb a b then Some a else
   if is_mu a || is_mu b then ajoin fr a b else
-  match a, b with
-  | TBot, _ => Some b
-  | _, TBot => Some a
-  | TUnion _ _, TUnion _ _ => None
-  | TUnion a1 a2, _ =>
-      match kind_of_ty b with
-      | Some k => if ukind k a1 then option_map (fun z => TUnion z a2) (tjoin n' fr a1 b)
-                  else if ukind k a2 then option_map (fun z => TUnion a1 z) (tjoin n' fr a2 b)
-                  else Some (TUnion a b)
-      | None => None
-      end
-  | _, TUnion b1 b2 =>
-      match kind_of_ty a with
-      | Some k => if ukind k b1 then option_map (fun z => TUnion z b2) (tjoin n' fr a b1)
-                  else if ukind k b2 then option_map (fun z => TUnion b1 z) (tjoin n' fr a b2)
-                  else Some (TUnion b a)
-      | None => None
-      end
-  | TMaybe x, TMaybe y => option_map TMaybe (tjoin n' fr x y)
-  | TList x, TList y => if fr then option_map TList (tjoin n' true x y) else None
-  | TRec fs1 r1, TRec fs2 r2 => if fr then rjoin (tjoin n') fs1 r1 fs2 r2 else None
-  | TEnum E xs, TEnum E' ys =>
-      if ename_eqb E E' then option_map (TEnum E) (ejoin (tjoin n') fr (en_params E) xs ys) else None
-  | _, _ =>
-      match kind_of_ty a, kind_of_ty b with
-      | Some ka, Some kb => if kind_eqb ka kb then None else Some (TUnion a b)
-      | _, _ => None
-      end
+  match tjoin_core (tjoin n') fr a b with
+  | Some c => Some c
+  | None => if le fr a b then Some b else if le fr b a then Some a else None
   end
   end.
 
@@ -403,25 +419,22 @@ Proof.
   split; [apply jrel_unionr1 | apply jrel_unionr2]; apply jrel_refl.
 Qed.
 
-Lemma tjoin_ub : forall n fr a b c, tjoin le n fr a b = Some c -> jrel fr a c /\ jrel fr b c.
+Lemma tjoin_core_ub j fr a b c : jok j -> tjoin_core j fr a b = Some c -> jrel fr a c /\ jrel fr b c.
 Proof.
-  induction n as [|n IH]; intros fr a b c E; simpl in E; [discriminate|].
-  destruct (ty_eqb a b) eqn:Eq.
-  { apply ty_eqb_true in Eq. subst. inversion E; subst. split; apply jrel_refl. }
-  destruct (is_mu a || is_mu b) eqn:Mu; [eapply ajoin_ub; exact E|].
-  assert (J : jok (tjoin le n)) by (intros ? ? ? ? H; eapply IH; eauto).
-  destruct a, b; simpl in E; try discriminate;
+  intros J E. unfold tjoin_core in E.
+  destruct a, b; try discriminate;
     try (injection E as <-; jfin; fail).
   (* the remaining cases: unions, Maybe, lists, shapes, enums *)
   all: repeat match goal with
          | E : (if ?x then _ else _) = Some _ |- _ => destruct x eqn:?
          | E : option_map _ ?x = Some _ |- _ =>
              let Ex := fresh "Ex" in destruct x eqn:Ex; simpl in E; [injection E as <- | discriminate]
+         | E : (match ?x with Some _ => _ | None => _ end) = Some _ |- _ => destruct x eqn:?
          | E : Some _ = Some _ |- _ => injection E as <-
          | E : None = Some _ |- _ => discriminate
          end.
   all: try jfin.
-  all: try (match goal with Ex : tjoin _ _ _ _ _ = Some _ |- _ => destruct (IH _ _ _ _ Ex) as [H1 H2] end).
+  all: try (match goal with Ex : _ = Some _ |- _ => destruct (J _ _ _ _ Ex) as [H1 H2] end).
   all: try (split; [apply jrel_unionl; [apply jrel_unionr1; auto | apply jrel_unionr2, jrel_refl]
                    | apply jrel_unionr1; auto]; fail).
   all: try (split; [apply jrel_unionl; [apply jrel_unionr1, jrel_refl | apply jrel_unionr2; auto]
@@ -437,6 +450,21 @@ Proof.
   match goal with H : ename_eqb _ _ = true |- _ => apply ename_eqb_true in H; subst end.
   match goal with Ex : ejoin _ _ _ _ _ = Some _ |- _ => pose proof (ejoin_ub _ fr J _ _ _ _ Ex) as Hj end.
   destruct fr; simpl in *; destruct Hj; split; [apply rs_enum | apply rs_enum | apply s_enum | apply s_enum]; auto.
+Qed.
+
+Lemma tjoin_ub : forall n fr a b c, tjoin le n fr a b = Some c -> jrel fr a c /\ jrel fr b c.
+Proof.
+  induction n as [|n IH]; intros fr a b c E; simpl in E; [discriminate|].
+  destruct (ty_eqb a b) eqn:Eq.
+  { apply ty_eqb_true in Eq. subst. inversion E; subst. split; apply jrel_refl. }
+  destruct (is_mu a || is_mu b) eqn:Mu; [eapply ajoin_ub; exact E|].
+  assert (J : jok (tjoin le n)) by (intros ? ? ? ? H; eapply IH; eauto).
+  destruct (tjoin_core (tjoin le n) fr a b) as [c'|] eqn:Ec.
+  { injection E as <-. eapply tjoin_core_ub; eauto. }
+  destruct (le fr a b) eqn:L1.
+  { injection E as <-. split; [apply le_ok; exact L1 | apply jrel_refl]. }
+  destruct (le fr b a) eqn:L2; [|discriminate].
+  injection E as <-. split; [apply jrel_refl | apply le_ok; exact L2].
 Qed.
 
 Theorem join_slot_ub p q r : join_slot le p q = Some r -> slot_sub p r /\ slot_sub q r.

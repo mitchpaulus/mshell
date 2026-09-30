@@ -24,6 +24,11 @@ join 30 (fresh (list int)) (fresh (mu (union bool (union int (union str (union (
 join 30 (shared (list int)) (fresh (mu (union bool (union int (union str (union (list (rv 0)) (dict (rv 0))))))))	none
 join 30 (fresh (list (mu (rec ((name (req str)) (age (req int)) (friends (req (list (rv 0))))) open)))) (fresh (list (rec ((friends (req (list (mu (rec ((name (req str)) (age (req int)) (friends (req (list (rv 0))))) open))))) (age (req int)) (name (req str))) abs)))	(fresh (list (mu (rec ((name (req str)) (age (req int)) (friends (req (list (rv 0))))) open))))
 join 30 (fresh (mu (rec ((x (req (list (rv 0)))) (y (req int))) open))) (fresh (mu (rec ((x (req (list (rv 0)))) (y (req str))) open)))	none
+# joins by kind and by one side being below (alg_join_two_enums, alg_join_never_quote, ...)
+join 30 (shared (enum Shape imm () ())) (shared (enum LoadError imm () ()))	(shared (union (enum Shape imm () ()) (enum LoadError imm () ())))
+join 30 (shared (quote (str) never)) (shared (quote (str) (str)))	(shared (quote (str) (str)))
+join 30 (fresh (quote (int) (int))) (fresh (quote (int) (str)))	none
+join 30 (shared (union int str)) (shared (union int (union str bool)))	(shared (union int (union str bool)))
 # type L = [L] is a list of itself (not an example in Rocq; a yes is a proof by subq_sound)
 sub 30 (mu (list (rv 0))) (list (mu (list (rv 0))))	yes
 sub 30 (list (mu (list (rv 0)))) (mu (list (rv 0)))	yes

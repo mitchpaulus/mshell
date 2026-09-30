@@ -202,6 +202,13 @@ let examples : (string * string) list =
     (join (Sh, TList TInt) (Dp, json), "none");
     (join (Dp, TList person) (Dp, TList personLit), sl (Dp, TList person));
     (join (Dp, rA) (Dp, rB), "none");
+    ("# joins by kind and by one side being below (alg_join_two_enums, alg_join_never_quote, ...)", "");
+    (let shape = TEnum ({ en_name = "Shape"; en_params = []; en_imm = true }, [])
+     and load = TEnum ({ en_name = "LoadError"; en_params = []; en_imm = true }, []) in
+     (join (Sh, shape) (Sh, load), sl (Sh, TUnion (shape, load))));
+    (join (Sh, TQuote ([ TStr ], None)) (Sh, TQuote ([ TStr ], Some [ TStr ])), sl (Sh, TQuote ([ TStr ], Some [ TStr ])));
+    (join (Dp, TQuote ([ TInt ], Some [ TInt ])) (Dp, TQuote ([ TInt ], Some [ TStr ])), "none");
+    (join (Sh, TUnion (TInt, TStr)) (Sh, TUnion (TInt, TUnion (TStr, TBool))), sl (Sh, TUnion (TInt, TUnion (TStr, TBool))));
     ("# type L = [L] is a list of itself (not an example in Rocq; a yes is a proof by subq_sound)", "");
     (sub l (TList l), "yes");
     (sub (TList l) l, "yes");

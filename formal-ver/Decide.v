@@ -746,3 +746,29 @@ Proof. vm_compute. reflexivity. Qed.
 Example alg_join_nested_ub :
   slot_sub (Dp, TList Person) (Dp, TList Person) /\ slot_sub (Dp, TList PersonLit) (Dp, TList Person).
 Proof. exact (join_slot_ub_alg nocache nocache_ok nocache nocache_rok 30 _ _ _ alg_join_nested). Qed.
+
+(** Joins that widen only by the other side being below, or by kinds.
+    Branches leaving two different enums join to their union; a quote that
+    never returns joins with a quote with the same inputs, giving the
+    latter; two quotes neither of which is below the other have no join. *)
+Definition EShape : ename := {| en_name := "Shape"; en_params := []; en_imm := true |}.
+Definition ELoadError : ename := {| en_name := "LoadError"; en_params := []; en_imm := true |}.
+
+Example alg_join_two_enums :
+  join_slot jl (Sh, TEnum EShape []) (Sh, TEnum ELoadError [])
+  = Some (Sh, TUnion (TEnum EShape []) (TEnum ELoadError [])).
+Proof. vm_compute. reflexivity. Qed.
+
+Example alg_join_never_quote :
+  join_slot jl (Sh, TQuote [TStr] None) (Sh, TQuote [TStr] (Some [TStr]))
+  = Some (Sh, TQuote [TStr] (Some [TStr])).
+Proof. vm_compute. reflexivity. Qed.
+
+Example alg_join_unrelated_quotes :
+  join_slot jl (Dp, TQuote [TInt] (Some [TInt])) (Dp, TQuote [TInt] (Some [TStr])) = None.
+Proof. vm_compute. reflexivity. Qed.
+
+Example alg_join_union_below :
+  join_slot jl (Sh, TUnion TInt TStr) (Sh, TUnion TInt (TUnion TStr TBool))
+  = Some (Sh, TUnion TInt (TUnion TStr TBool)).
+Proof. vm_compute. reflexivity. Qed.

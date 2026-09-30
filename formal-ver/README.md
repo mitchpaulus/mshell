@@ -108,7 +108,7 @@ Everything else (`Invariant.v` onward) is proof and cannot make the theorem say 
 | Type variables; checking a def once | `TVar`, `tsub`; `T_subst`, `generic_def_ok`, `soundness_generic` in `Generic.v` |
 | Checking a quote body once (frame lemma) | `T_frame`, `quote_once` in `Frame.v` |
 | "A diverging effect absorbs what follows" | `t_div`; `diverges` and the `div_*` lemmas in `Frame.v` |
-| Branch joins | `join_slot`, `join_slot_ub`, `if_join` in `Join.v`; the join is given the checker's decision procedure `le` for `<=` and fresh retyping, and the proofs assume only that it is right when it says yes (`le_ok`) |
+| Branch joins | `join_slot`, `tjoin` (`tjoin_core`, then one side below the other), `join_slot_ub`, `if_join` in `Join.v`; the join is given the checker's decision procedure `le` for `<=` and fresh retyping, and the proofs assume only that it is right when it says yes (`le_ok`) |
 | The decision procedures for `<=` and fresh retyping (assumption sets) | `subq`, `rsubq` in `Decide.v`; `subq_sound`, `rsubq_sound`; `le_alg_ok` discharges `le_ok`; `join_slot_ub_alg`, `if_join_alg` |
 | Caching their answers | `subq_set_sound`, `rsubq_set_sound`, `chk_confirmed`; `cache_early` |
 | Joins that meet a recursive alias (never widened inside) | `ajoin` in `Join.v`; `join_*` in `Recursive.v` |
