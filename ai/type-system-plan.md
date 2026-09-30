@@ -181,7 +181,7 @@ New code with Go unit tests only; nothing is wired into the checker yet.
     - the set is threaded through one query and restored when a union alternative fails;
     - one set per relation: where `⊑` needs `≤` (a quote, an enum argument that is not fresh-covariant) it starts a new `≤` query with an empty set (H12, `mixed_alg_accepts`);
     - caching: after a top-level yes, every pair in the final set may be cached (`subq_set_sound`); after a no, nothing from that query (`cache_early`);
-  - branch join (§Joins); quotes join by `≤` only; a recursive alias is never widened inside: the other side if one is below the other (`≤`, or `⊑` when both arms are fresh), a union if the kinds do not overlap, otherwise an error asking for a declared type (`ajoin` in `formal-ver/Join.v`);
+  - branch join (§Joins); quotes are never widened inside; where types cannot be widened inside, the other side if one is below the other; two different enums give their union; a recursive alias is never widened inside: the other side if one is below the other (`≤`, or `⊑` when both arms are fresh), a union if the kinds do not overlap, otherwise an error asking for a declared type (`ajoin` in `formal-ver/Join.v`);
   - runtime kind of a type (an alias contributes the kinds of its unfolding's members), `immutable`, and `checkable`; through aliases these are greatest fixed points (`immutable_tunfold`, `chk_tunfold`).
 - Header comments in the reused files (`Type.go`) point to the deleted `ai/type_checker.md`; point them at the Typst design doc.
 - **Unit tests** from the examples in `formal-ver/Decide.v`: `Json` against its reordered spelling, `PersonLit <= Person`, a fresh `[int]` to `Json`, H12 and H13 rejected, and the `cache_early` query answering no. `formal-ver/oracle/examples.txt` has them as queries with expected answers, printed from the Rocq terms.
@@ -199,7 +199,7 @@ Work:
 
 - Stack slots carry a type and a fresh mark. Effects carry inputs, outputs and a diverges flag. Composition as in design doc §Inference.
 - Literals, including the freshness rule for list and dict literals (§ShapeLit).
-- Variables: one scope per def invocation and one for the script; one type per variable per scope; stores check against it; definite assignment as a separate check (§Variable scopes). The variable's type is the type of its first store in program order; a later store at a type that does not fit is an error at that store, with the hint "use a new name, or widen the first store with `as`". No renaming (decided 2026-09-29; design doc, "Renaming must not change behavior").
+- Variables: one scope per def invocation and one for the script; one type per variable per scope; stores check against it; definite assignment as a separate check (§Variable scopes). The variable's type is the type of its first store in program order; a later store at a type that does not fit is an error at that store, with the hint "use a new name, or widen the first store with `as`". No renaming (decided 2026-09-29; design doc, "Renaming must not change behavior"). A `⊥` in a store's type (the contents of `none`) is replaced by a new type variable before unifying, so it fixes nothing; every store, the first included, is checked again with the final substitution, and a variable left unsolved is `⊥` (decided 2026-09-30; design doc, "A ⊥ in a store fixes nothing").
 - Quotes as in section 5; `x` needs a known arity.
 - **Unification is not trusted** (design doc §Inference). Record every pair the checker unifies. Once a def body or the script is solved, check each recorded pair again with the final substitution applied (the two sides must be equal), and make the deferred subtyping checks and the escape check with that substitution too. A failure is an internal checker error that names the site, never an accepted program. Overload choices need nothing extra: a choice is only the constraints of the chosen candidate. This is what lets the proofs cover the checker without proving unification or overload resolution.
 - **The escape check** for kind patterns on unknown contents, exactly as proved (`kind_list_once`, `kind_enum_once` in `formal-ver/Escape.v`): check the arm once with a new rigid variable per unknown type (one per enum parameter), then, with the final substitution, reject the arm if the variable appears in any variable's type, the stack below the matched value, the arm's output stack, or the break, continue or return stacks.
@@ -209,7 +209,8 @@ Work:
 - `new` on def outputs (design doc, "New def outputs"): parse it in signatures, check it both ways against the body's freshness (written but shared: error; missing but new: error; on an immutable type: error), take the largest consistent marks for recursive defs, and give each error a fix. Def inputs stay shared.
 - Divergence: words after a diverging word are not checked (`t_div`); the diverges flag follows the `div_*` lemmas in `Frame.v`.
 - `if`, `iff` with literal quotes, `loop`, `each`/`map`/... with literal quotes, `break`/`continue` contexts, `return`, `exit` (§Quotes that break, §Divergence).
-- Branch joins per §Joins, including fresh-only widening. `join_slot` in `formal-ver/Join.v` is the reference: the result is fresh only when both arms are, joins inside `Maybe` keep the arms' freshness, quotes join only when equal, aliases are never widened inside (`ajoin`).
+- Branch joins per §Joins, including fresh-only widening. `join_slot` in `formal-ver/Join.v` is the reference: the result is fresh only when both arms are, joins inside `Maybe` keep the arms' freshness, where types cannot be widened inside the join is the other side if one is below the other, aliases are never widened inside (`ajoin`).
+- When a join makes a union and a later use does not accept it, the error names the branch each member came from ("`shape` is `Shape | LoadError`: the `else` branch at line 12 leaves a `LoadError`"). Automatic unions move the error away from the mistake; this points back at it (decided 2026-09-30).
 - Shapes: literal-key `get`/`set`, runtime-key `getd`/`setd` per §Runtime keys, `del` only on `{str: T}`, shape/dict subtyping by the per-label rule (a shape never becomes a `{str: T}`).
 - `as`: subtyping, or `⊑` on a fresh slot.
 - `match`: kind patterns on unions (the member of that kind, writable), kind patterns on unknown values (abstract types, and the escape check in §Unknown contents), `Maybe`, literal, list and dict patterns, `=>`.
@@ -221,6 +222,7 @@ Work:
   - mark its output *fresh* or *shared*. Every builtin that returns a new list (`map`, `filter`, `take`, `skip`, slices, `reverse`, `sort`, ...) is fresh exactly when its element type is immutable (design doc, "One rule for new lists");
   - mark in-place type changes (redirects, `updateCol` and the grid mutators) as allowed only on a fresh operand;
   - replace "accepts `[int | float]`" entries with generic or per-type overloads, since `[int]` is not below `[int | float]`;
+  - type builtins that only read a dict over every dict-kinded type, never `{str: a}`: `keys`, `len`, `in` take `{| open}`; `values`, `filter` and runtime-key `get` read at the type of *Get-Key* (design doc §Runtime keys). Only `setd` and `del` need `{str: T}`;
   - check that `extend` with a grid view cannot change the view's source grid at a new type.
 - Port the special cases listed in section 4: commands and redirects, captures, command execution, grid join/pivot/groupBy, format strings, path writes, `dbg`, bare words in list literals.
 - The LSP uses the core checker when the option is set.
@@ -266,7 +268,7 @@ Done when: those pass under the core checker.
 
 - Make the core checker the default for `--check-types`, `--type-check-only` and the LSP.
 - Update the programs on stage 3's list of intended rejections, and the tests listed as changing.
-- `lib/std.msh`: make every read-only list and dict function generic (`[a]`, `{str: a}`), and type the HTML helpers with `HtmlNode`. Stop and ask about any signature that looks wrong.
+- `lib/std.msh`: make every read-only list function generic (`[a]`), and give read-only dict functions the same types as the read-only dict builtins (stage 3); type the HTML helpers with `HtmlNode`. Stop and ask about any signature that looks wrong.
 - Run `tests/msh-scripts` through the checker and record what fails; these are real scripts.
 - Delete the old checker's code paths: `TKBrand`, `TKStrLit`, `TKOverloadedQuote`, `readOnlyArgs`, `mutatingBuiltins`, `inputUnifyOrder`, union distribution, overload fan-out, and whatever else section 4 lists as replaced.
 
@@ -381,6 +383,7 @@ Each line becomes a test file; the name in brackets is a suggestion.
 | `false if 1 x! else "a" x! end @x 1 +` | fail |
 | `"a\nb" text!  @text lines text!` | fail at the second store, hint names `as` and a new name |
 | `1 as int \| str x!  "a" x!`; `[1] as [int \| str] xs!  ["a"] xs!`; `@ys xs!` with `ys : [str]` stored | ok; ok; fail |
+| `none r!  5 just r!  none r!  @r` used as `Maybe[int]`; `[none] l!  @l 5 just append`; `none r!` never stored again, then `@r` | ok; ok; ok (`Maybe[⊥]`) |
 
 ## 8. Build and test commands
 

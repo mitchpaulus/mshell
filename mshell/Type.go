@@ -8,7 +8,7 @@ package main
 // name interning. Composite kinds are wired up but most do not have
 // public constructors yet — those land in later phases as they are needed.
 //
-// See ai/type_checker.md for the full design.
+// The design of the checker being built on it is ai/type-core-calculus.typ.
 
 import (
 	"encoding/binary"
@@ -36,6 +36,7 @@ const (
 	TidDateTime // date/time literal (YYYY-MM-DD[THH:MM[:SS]]) and now/date ops
 	TidBottom   // divergent: exit, infinite loop, (Phase 2) propagated fail
 	TidNull     // JSON `null`; distinct from `none` (the empty Maybe case)
+	TidUnknown  // unknown contents: every value has this type, and nothing but a kind pattern accepts it
 )
 
 // TypeKind categorizes a TypeNode. The interpretation of TypeNode.A, B, and
@@ -68,6 +69,25 @@ const (
 	// `get` reads it off the stack to resolve a shape field by name, the same
 	// resolution the `:name` getter does from its token.
 	TKStrLit // A = NameId of the literal string content
+
+	// Kinds of the checker described in ai/type-core-calculus.typ.
+
+	// TKRecord is every dict-kinded type: shapes and `{str: T}`.
+	// Extra = index into records.
+	TKRecord
+	// TKEnum is an enum instance. A = index into enumDecls; Extra = index
+	// into enumArgs (one argument per parameter).
+	TKEnum
+	// TKAlias is a reference to a `type` alias. A = index into aliases. The
+	// alias is unfolded only when a relation needs to look inside it, so a
+	// recursive alias stays a finite type.
+	TKAlias
+	// TKAbstract is an abstract type: the unknown contents a kind pattern
+	// finds. A = a number unique to it; it equals only itself.
+	TKAbstract
+	// TKParam is the A'th parameter of an enum declaration. It appears only
+	// in constructor payload types.
+	TKParam
 )
 
 // String returns a debug name for a TypeKind.
@@ -105,6 +125,16 @@ func (k TypeKind) String() string {
 		return "GridRow"
 	case TKStrLit:
 		return "StrLit"
+	case TKRecord:
+		return "Record"
+	case TKEnum:
+		return "Enum"
+	case TKAlias:
+		return "Alias"
+	case TKAbstract:
+		return "Abstract"
+	case TKParam:
+		return "Param"
 	}
 	return "Unknown"
 }
@@ -163,6 +193,90 @@ type GridSchema struct {
 	Columns []GridSchemaCol
 }
 
+// FieldStatus is what a dict-kinded type says about one label
+// (ai/type-core-calculus.typ, "The per-label reading").
+type FieldStatus uint8
+
+const (
+	// FieldAbsent: never present. Every undeclared label of an exact shape
+	// (a shape literal's type).
+	FieldAbsent FieldStatus = iota
+	// FieldRequired: present, and writable at its type.
+	FieldRequired
+	// FieldOptional: maybe present, writable at its type, not deletable. A
+	// declared `name?: T`, or every undeclared label under a `*: T` remainder.
+	FieldOptional
+	// FieldDeletable: like FieldOptional, and it may also be deleted. Every
+	// label of `{str: T}`.
+	FieldDeletable
+	// FieldOpen: maybe present, at an unknown type, read-only. Every
+	// undeclared label of a written shape type.
+	FieldOpen
+)
+
+// RecordField is one declared label of a TKRecord. Type is TidNothing for
+// FieldAbsent and FieldOpen, which carry no type.
+type RecordField struct {
+	Name   NameId
+	Status FieldStatus
+	Type   TypeId
+}
+
+// RecordType is a TKRecord's content: its declared labels, sorted by Name,
+// and Rest, the status of every other label. Rest's Name is unused.
+//
+//	shape literal {a: 1}       {a: int | Rest absent}
+//	written shape {a: int}     {a: int | Rest open}
+//	{a: int, *: str}           {a: int | Rest optional str}
+//	{str: int}                 {        | Rest deletable int}
+type RecordType struct {
+	Fields []RecordField
+	Rest   RecordField
+}
+
+// Variance is how an enum parameter's argument may change under subtyping.
+type Variance uint8
+
+const (
+	VarCo Variance = iota
+	VarContra
+	VarInv
+)
+
+// EnumParam is one parameter of an enum declaration. Fresh says every
+// occurrence is in a data position, so a fresh value may retype its
+// argument covariantly (ai/type-core-calculus.typ, "Fresh-covariance").
+type EnumParam struct {
+	Name     NameId
+	Variance Variance
+	Fresh    bool
+}
+
+// EnumCtor is one constructor of an enum declaration. Its payload types
+// may mention the enum's parameters as TKParam types.
+type EnumCtor struct {
+	Name    NameId
+	Payload []TypeId
+}
+
+// EnumDecl is an enum declaration. Immutable says a value holds no list or
+// dict when its arguments cannot; Checkable says no payload type mentions a
+// quote. Both are computed from the constructors when the enum is declared.
+type EnumDecl struct {
+	Name      NameId
+	Params    []EnumParam
+	Ctors     []EnumCtor
+	Immutable bool
+	Checkable bool
+}
+
+// AliasDecl is a `type` alias. Body is TidNothing until the alias is
+// resolved, which may be after references to it are made.
+type AliasDecl struct {
+	Name NameId
+	Body TypeId
+}
+
 // QuoteSig is a function or quote signature. Inputs are listed bottom-to-top
 // (so the last element is the top of the consumed stack). Outputs are also
 // listed bottom-to-top. Generics names are local to this sig.
@@ -196,6 +310,11 @@ type TypeArena struct {
 	unionMembers   [][]TypeId // each slice is sorted, deduped
 	gridSchemas    []GridSchema
 	gridSchemaCons map[string]uint32
+	records        []RecordType
+	enumDecls      []EnumDecl
+	enumArgs       [][]TypeId
+	aliases        []AliasDecl
+	abstractCount  uint32
 	// keyBuf is scratch space for building composite cons keys.
 	keyBuf []byte
 }
@@ -215,6 +334,11 @@ func (a *TypeArena) Clone() *TypeArena {
 		unionMembers:        slices.Clone(a.unionMembers),
 		gridSchemas:         slices.Clone(a.gridSchemas),
 		gridSchemaCons:      maps.Clone(a.gridSchemaCons),
+		records:             slices.Clone(a.records),
+		enumDecls:           slices.Clone(a.enumDecls),
+		enumArgs:            slices.Clone(a.enumArgs),
+		aliases:             slices.Clone(a.aliases),
+		abstractCount:       a.abstractCount,
 	}
 }
 
@@ -240,6 +364,7 @@ func NewTypeArena() *TypeArena {
 		TKPrim, // TidDateTime
 		TKPrim, // TidBottom
 		TKPrim, // TidNull
+		TKPrim, // TidUnknown
 	}
 	for i := range primitives {
 		// Encode the primitive id directly in A so the cons key stays unique.
@@ -253,6 +378,8 @@ func NewTypeArena() *TypeArena {
 	a.shapeFields = append(a.shapeFields, nil)
 	a.quoteSigs = append(a.quoteSigs, QuoteSig{})
 	a.overloadedQuoteSigs = append(a.overloadedQuoteSigs, nil)
+	a.records = append(a.records, RecordType{})
+	a.enumArgs = append(a.enumArgs, nil)
 	return a
 }
 
@@ -471,6 +598,153 @@ func (a *TypeArena) MakeGridRow(schemaIdx uint32) TypeId {
 	return a.intern(TKGridRow, 0, 0, schemaIdx)
 }
 
+// MakeRecord returns the canonical TypeId for a dict-kinded type with the
+// given declared labels and remainder. Labels are sorted, the type of an
+// absent or open label is dropped, and a declared label that says the same
+// as the remainder is dropped, so two records that agree on every label
+// share a TypeId. A duplicate label is a programmer error and panics.
+func (a *TypeArena) MakeRecord(fields []RecordField, rest RecordField) TypeId {
+	rest = normalizeRecordField(rest)
+	rest.Name = NameNone
+	out := make([]RecordField, 0, len(fields))
+	for _, f := range fields {
+		f = normalizeRecordField(f)
+		if f.Status == rest.Status && f.Type == rest.Type {
+			continue
+		}
+		out = append(out, f)
+	}
+	slices.SortFunc(out, func(x, y RecordField) int { return int(x.Name) - int(y.Name) })
+	for i := 1; i < len(out); i++ {
+		if out[i-1].Name == out[i].Name {
+			panic("MakeRecord: duplicate label")
+		}
+	}
+	a.keyBuf = appendRecordKey(a.keyBuf[:0], out, rest)
+	if id, ok := a.cons[string(a.keyBuf)]; ok {
+		return id
+	}
+	idx := uint32(len(a.records))
+	a.records = append(a.records, RecordType{Fields: out, Rest: rest})
+	id := a.append(TypeNode{Kind: TKRecord, Extra: idx})
+	a.cons[string(a.keyBuf)] = id
+	return id
+}
+
+func normalizeRecordField(f RecordField) RecordField {
+	if f.Status == FieldAbsent || f.Status == FieldOpen {
+		f.Type = TidNothing
+	}
+	return f
+}
+
+// MakeStrDict returns `{str: value}`.
+func (a *TypeArena) MakeStrDict(value TypeId) TypeId {
+	return a.MakeRecord(nil, RecordField{Status: FieldDeletable, Type: value})
+}
+
+// Record returns the content of a TKRecord. Caller must not mutate.
+func (a *TypeArena) Record(id TypeId) RecordType {
+	n := a.Node(id)
+	if n.Kind != TKRecord {
+		panic("TypeArena.Record: not a record")
+	}
+	return a.records[n.Extra]
+}
+
+// FieldAt returns the status and type a record gives the label name:
+// the declared label, or else the remainder.
+func (r RecordType) FieldAt(name NameId) RecordField {
+	i, found := slices.BinarySearchFunc(r.Fields, name, func(f RecordField, n NameId) int { return int(f.Name) - int(n) })
+	if found {
+		return r.Fields[i]
+	}
+	return r.Rest
+}
+
+// DeclareEnum adds an enum declaration and returns its index. Each call
+// declares a distinct enum, even with the same name.
+func (a *TypeArena) DeclareEnum(decl EnumDecl) uint32 {
+	a.enumDecls = append(a.enumDecls, decl)
+	return uint32(len(a.enumDecls) - 1)
+}
+
+// EnumDecl returns the declaration at index idx. Caller must not mutate.
+func (a *TypeArena) EnumDecl(idx uint32) *EnumDecl {
+	return &a.enumDecls[idx]
+}
+
+// MakeEnum returns the canonical TypeId for the enum declared at idx,
+// instantiated at args (one per parameter).
+func (a *TypeArena) MakeEnum(idx uint32, args []TypeId) TypeId {
+	if len(args) != len(a.enumDecls[idx].Params) {
+		panic("MakeEnum: wrong number of arguments")
+	}
+	a.keyBuf = append(a.keyBuf[:0], 'E')
+	a.keyBuf = appendKeyU32(a.keyBuf, idx)
+	a.keyBuf = appendKeyU32(a.keyBuf, uint32(len(args)))
+	for _, t := range args {
+		a.keyBuf = appendKeyU32(a.keyBuf, uint32(t))
+	}
+	if id, ok := a.cons[string(a.keyBuf)]; ok {
+		return id
+	}
+	argIdx := uint32(len(a.enumArgs))
+	a.enumArgs = append(a.enumArgs, slices.Clone(args))
+	id := a.append(TypeNode{Kind: TKEnum, A: idx, Extra: argIdx})
+	a.cons[string(a.keyBuf)] = id
+	return id
+}
+
+// EnumArgs returns the arguments of a TKEnum. Caller must not mutate.
+func (a *TypeArena) EnumArgs(id TypeId) []TypeId {
+	n := a.Node(id)
+	if n.Kind != TKEnum {
+		panic("TypeArena.EnumArgs: not an enum")
+	}
+	return a.enumArgs[n.Extra]
+}
+
+// MakeParam returns the type of the i'th parameter of an enum declaration.
+func (a *TypeArena) MakeParam(i int) TypeId {
+	return a.intern(TKParam, uint32(i), 0, 0)
+}
+
+// DeclareAlias adds a `type` alias with no body yet and returns its index.
+// The body is set with SetAliasBody once it is resolved; references to the
+// alias (MakeAliasRef) can be made before that, which is how an alias
+// refers to itself.
+func (a *TypeArena) DeclareAlias(name NameId) uint32 {
+	a.aliases = append(a.aliases, AliasDecl{Name: name, Body: TidNothing})
+	return uint32(len(a.aliases) - 1)
+}
+
+// SetAliasBody sets the body of the alias at idx.
+func (a *TypeArena) SetAliasBody(idx uint32, body TypeId) {
+	a.aliases[idx].Body = body
+}
+
+// MakeAliasRef returns the type that refers to the alias at idx.
+func (a *TypeArena) MakeAliasRef(idx uint32) TypeId {
+	return a.intern(TKAlias, idx, 0, 0)
+}
+
+// AliasBody returns the body of the alias a TKAlias refers to: one step of
+// unfolding. It is TidNothing while the alias is unresolved.
+func (a *TypeArena) AliasBody(id TypeId) TypeId {
+	n := a.Node(id)
+	if n.Kind != TKAlias {
+		panic("TypeArena.AliasBody: not an alias")
+	}
+	return a.aliases[n.A].Body
+}
+
+// MakeAbstract returns a new abstract type, equal only to itself.
+func (a *TypeArena) MakeAbstract() TypeId {
+	a.abstractCount++
+	return a.intern(TKAbstract, a.abstractCount, 0, 0)
+}
+
 // ShapeFields returns the fields of a shape type. Caller must not mutate.
 func (a *TypeArena) ShapeFields(id TypeId) []ShapeField {
 	n := a.Node(id)
@@ -609,6 +883,20 @@ func appendUnionKey(b []byte, arms []TypeId, brandId NameId) []byte {
 	for _, arm := range arms {
 		b = appendKeyU32(b, uint32(arm))
 	}
+	return b
+}
+
+// appendRecordKey appends the key for a normalized record.
+func appendRecordKey(b []byte, fields []RecordField, rest RecordField) []byte {
+	b = append(b, 'R')
+	b = appendKeyU32(b, uint32(len(fields)))
+	for _, f := range fields {
+		b = appendKeyU32(b, uint32(f.Name))
+		b = append(b, byte(f.Status))
+		b = appendKeyU32(b, uint32(f.Type))
+	}
+	b = append(b, byte(rest.Status))
+	b = appendKeyU32(b, uint32(rest.Type))
 	return b
 }
 

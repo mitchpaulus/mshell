@@ -185,6 +185,8 @@ func FormatType(arena *TypeArena, names *NameTable, id TypeId) string {
 		return "datetime"
 	case TidBottom:
 		return "<bottom>"
+	case TidUnknown:
+		return "unknown"
 	}
 	n := arena.Node(id)
 	switch n.Kind {
@@ -255,6 +257,9 @@ func FormatType(arena *TypeArena, names *NameTable, id TypeId) string {
 			sb.WriteString(FormatType(arena, names, in))
 		}
 		sb.WriteString(" -- ")
+		if sig.Diverges && len(sig.Outputs) == 0 {
+			sb.WriteString("never")
+		}
 		for i, out := range sig.Outputs {
 			if i > 0 {
 				sb.WriteByte(' ')
@@ -285,8 +290,67 @@ func FormatType(arena *TypeArena, names *NameTable, id TypeId) string {
 		return "GridView"
 	case TKGridRow:
 		return "GridRow"
+	case TKRecord:
+		return formatRecord(arena, names, arena.records[n.Extra])
+	case TKEnum:
+		decl := arena.enumDecls[n.A]
+		args := arena.enumArgs[n.Extra]
+		if len(args) == 0 {
+			return names.Name(decl.Name)
+		}
+		parts := make([]string, len(args))
+		for i, t := range args {
+			parts[i] = FormatType(arena, names, t)
+		}
+		return names.Name(decl.Name) + "[" + strings.Join(parts, " ") + "]"
+	case TKAlias:
+		return names.Name(arena.aliases[n.A].Name)
+	case TKAbstract:
+		return fmt.Sprintf("k%d", n.A)
+	case TKParam:
+		return fmt.Sprintf("$%d", n.A)
 	}
 	return fmt.Sprintf("<%s #%d>", n.Kind, uint32(id))
+}
+
+// formatRecord writes a dict-kinded type in the design document's notation:
+// `{str: T}` for a dictionary, and otherwise the declared labels followed by
+// the remainder, which is `*: T`, `| open` or `| exact`.
+func formatRecord(arena *TypeArena, names *NameTable, r RecordType) string {
+	if len(r.Fields) == 0 && r.Rest.Status == FieldDeletable {
+		return "{str: " + FormatType(arena, names, r.Rest.Type) + "}"
+	}
+	var parts []string
+	for _, f := range r.Fields {
+		name := names.Name(f.Name)
+		switch f.Status {
+		case FieldRequired:
+			parts = append(parts, name+": "+FormatType(arena, names, f.Type))
+		case FieldOptional:
+			parts = append(parts, name+"?: "+FormatType(arena, names, f.Type))
+		case FieldDeletable:
+			parts = append(parts, name+"?del: "+FormatType(arena, names, f.Type))
+		case FieldAbsent:
+			parts = append(parts, name+": absent")
+		case FieldOpen:
+			parts = append(parts, name+": open")
+		}
+	}
+	body := strings.Join(parts, ", ")
+	switch r.Rest.Status {
+	case FieldOptional:
+		if body != "" {
+			body += ", "
+		}
+		return "{" + body + "*: " + FormatType(arena, names, r.Rest.Type) + "}"
+	case FieldDeletable:
+		return "{" + body + " | str: " + FormatType(arena, names, r.Rest.Type) + "}"
+	case FieldAbsent:
+		return "{" + body + " | exact}"
+	case FieldRequired:
+		return "{" + body + " | *!: " + FormatType(arena, names, r.Rest.Type) + "}"
+	}
+	return "{" + body + " | open}"
 }
 
 func formatCommandCapture(mode CommandCaptureMode) string {

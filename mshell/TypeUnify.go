@@ -236,6 +236,32 @@ func (w *typeRewriter) mapType(t TypeId, skip map[TypeVarId]struct{}) TypeId {
 			return t
 		}
 		return w.arena.MakeQuote(sig)
+	case TKRecord:
+		rec := w.arena.records[n.Extra]
+		changed := false
+		fields := make([]RecordField, len(rec.Fields))
+		for i, f := range rec.Fields {
+			fields[i] = f
+			if f.Type != TidNothing {
+				fields[i].Type = w.mapType(f.Type, skip)
+				changed = changed || fields[i].Type != f.Type
+			}
+		}
+		rest := rec.Rest
+		if rest.Type != TidNothing {
+			rest.Type = w.mapType(rest.Type, skip)
+			changed = changed || rest.Type != rec.Rest.Type
+		}
+		if !changed {
+			return t
+		}
+		return w.arena.MakeRecord(fields, rest)
+	case TKEnum:
+		args, changed := w.mapSpan(w.arena.enumArgs[n.Extra], skip)
+		if !changed {
+			return t
+		}
+		return w.arena.MakeEnum(n.A, args)
 	case TKOverloadedQuote:
 		sigs := w.arena.overloadedQuoteSigs[n.Extra]
 		rebuilt := make([]QuoteSig, len(sigs))
@@ -411,6 +437,22 @@ func (a *TypeArena) walkTypeVars(t TypeId, visit func(TypeVarId) bool) bool {
 	case TKOverloadedQuote:
 		for _, sig := range a.overloadedQuoteSigs[n.Extra] {
 			if a.walkSigVars(sig, visit) {
+				return true
+			}
+		}
+	case TKRecord:
+		rec := a.records[n.Extra]
+		for _, f := range rec.Fields {
+			if f.Type != TidNothing && a.walkTypeVars(f.Type, visit) {
+				return true
+			}
+		}
+		if rec.Rest.Type != TidNothing && a.walkTypeVars(rec.Rest.Type, visit) {
+			return true
+		}
+	case TKEnum:
+		for _, t := range a.enumArgs[n.Extra] {
+			if a.walkTypeVars(t, visit) {
 				return true
 			}
 		}

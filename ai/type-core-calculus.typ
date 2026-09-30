@@ -840,7 +840,8 @@ the core (`if_join`).
 + A slot with an unsolved type variable is *unified*, never joined, so the answer cannot depend on
   checking order.
 + Different kinds join to their union: `int` and `float` give `int | float`; `str` and `null` give
-  `str | null`. If one side is already a union, the member of the same kind (if any) is joined with
+  `str | null`. Each enum is its own kind, so two different enums join to their union
+  (`Shape | LoadError`; clarified 2026-09-30). If one side is already a union, the member of the same kind (if any) is joined with
   the other side.
 + `Maybe` joins inside: `Maybe[int]` and `Maybe[str]` give `Maybe[int | str]`. This is safe even for
   shared values because nothing writes into a `Maybe`. Any generic enum joins inside its covariant parameters.
@@ -854,12 +855,18 @@ the core (`if_join`).
     `Box[int | str]` (fresh-covariant arguments only, @sec-sub). The result is still fresh.
     This is Principle 3 applied at the merge: nobody else can see either value, so each may be given
     the wider type. The join must be an upper bound of both arms under $subset.sq.eq$.
-  - otherwise there is no join, and it is an error. Use an enum, or build a new value.
-+ *Two quote types join only by subtyping (corrected)*, fresh or not: freshness stops at quotes, so
-  retyping a quote is $<=$ and nothing more. `(int -- int)` and `(int -- str)` join to
-  `(int -- int | str)`; `(int -- int)` and `(str -- str)` have no useful join, since the inputs would have
-  to meet at $bot$. The previous draft listed quotes with the fresh case: `(1 +)` and `("a" ++)` would
-  have joined to `(int | str -- int | str)` (`hole_quote_join_stuck` in `Examples.v`).
+  - otherwise the join is the other side if one side is below the other (next item), and else there
+    is no join, and it is an error. Use an enum, or build a new value.
++ *Where the types cannot be widened inside, the join is the other side if one side is below the other
+  (decided 2026-09-30)*: $<=$ when either arm is shared, $subset.sq.eq$ when both are fresh; otherwise
+  there is no join. This covers quotes, shared containers of the same kind, enum arguments that are not
+  covariant, and two different unions (`int | str` and `int | str | bool` give the second).
+  Quotes are never widened inside, fresh or not: freshness stops at quotes, so retyping a quote is $<=$
+  and nothing more. A quote that never returns joins with any quote with the same inputs:
+  `(die)` with `def die (str -- never)` and `(drop "default")` give `(str -- str)`. Two quotes neither of
+  which is below the other have no join, even when their inputs agree (`(2 *)` and `(1 + str)`); write
+  the wanted type with `as` in each arm. The previous draft widened inside two fresh quotes: `(1 +)` and
+  `("a" ++)` would have joined to `(int | str -- int | str)` (`hole_quote_join_stuck` in `Examples.v`).
 + *A recursive alias is never widened inside (decided 2026-09-30).* When the join reaches an alias on
   either side, at the top or inside a widening, it takes, in order:
   - the other side, if one side is below the other: $<=$ when either arm is shared, $subset.sq.eq$ when
@@ -876,6 +883,8 @@ the core (`if_join`).
   $subset.sq.eq$, and `join_slot_ub` needs only that it is right when it says yes (`le_ok`). The
   procedure of @sec-alias is (`le_alg_ok`, `join_slot_ub_alg` in `Decide.v`). The cases
   below are `join_*` in `Recursive.v`, and `alg_join_*` in `Decide.v` with that procedure.
+  `tjoin` in `Join.v` is the whole join: `tjoin_core` looks inside the two types, and when it finds no
+  join, `tjoin` tries whether one side is below the other.
 
 The arms must still leave the same number of stack items (as today). Arms that diverge are ignored
 (@sec-diverge).
@@ -899,6 +908,9 @@ The arms must still leave the same number of stack items (as today). Arms that d
   [`parseJson` / a `datetime`], [`Json | datetime`], [nothing: the kinds do not overlap],
   [a `Person` / `{name: "a", age: 1, friends: []}`], [`Person`], [nothing: the literal is below `Person`],
   [fresh `A` / fresh `B` (two recursive types)], [error], [declare `type C = ...` and write `as C` in each arm],
+  [`2.0 circle` / `"x.txt" notFound` (two enums)], [`Shape | LoadError`], [nothing: two kinds],
+  [`(die)` / `(drop "default")`], [`(str -- str)`], [nothing: a quote that never returns is below],
+  [`(2 *)` / `(1 + str)`], [error], [`as (int -- int | str)` in each arm],
 )
 
 `as T` after `end` is then just ordinary `as`: static ascription, plus widening if the slot is fresh.
@@ -1127,6 +1139,15 @@ For `get`, $upsilon$ must be above every declared field type and the remainder t
 unknown type if the remainder is `open`. For ${"str": tau}$ it is just $tau$. For
 `{a: int, *: str}` it is `int | str`. For `set`, every label must accept exactly $upsilon$, which in
 practice means ${"str": tau}$. Deleting a key needs a deletable label, so again only ${"str": tau}$.
+
+*Builtins that only read a dict (decided 2026-09-30)* accept every dict-kinded type, shapes included,
+shared or fresh; they are never written as taking ${"str": a}$, which no shape is below.
+Builtins that read no values (`keys`, `len`, `in`) take the read-only ${| "open"}$. `keys` returns a new
+`[str]`, fresh because its elements are immutable (@sec-new-lists).
+Builtins that read values (`values`, `filter` and runtime-key `get` on a dict, ...) read them at the
+$upsilon$ of *Get-Key*: `values` on a stored `{a: int, b: int}` gives `[int]`, and on an `open` shape a
+list of the unknown type. A new dict or list they return follows the rule for new lists.
+Only writes with a runtime key (`setd`, `del`) need ${"str": tau}$.
 
 === Type-changing updates of fresh records
 
@@ -1817,6 +1838,19 @@ a fresh value). A mismatch is reported at that store, with the hint "use a new n
 store with `as`". Widening works for base types, unions and `Maybe`, and for fresh containers; a stored
 container cannot be widened (use `deepCopy`). Every read then sees the wide type. Reusing a name at a new
 type is expected to be rare.
+
+*A $bot$ in a store fixes nothing (decided 2026-09-30).* `none result!` followed later by
+`@item just result!` is ordinary code, but read literally the rule above gives `result` the type
+`Maybe[⊥]`, which holds only `none`, and rejects the second store. So a $bot$ in the type of any store
+(in practice the contents of `none`) is replaced by a new type variable before the store is unified with
+the variable's type. It puts no constraint on the variable, the same way `[]` and `{}` get a type
+variable instead of $bot$ (@sec-join). Then `result : Maybe[int]`, fixed by the second store, and a
+later `none result!` changes nothing. A variable left unsolved when its scope is solved is $bot$.
+This is inference only; no rule changes. Every store, the first included, is then checked with the
+final substitution by the ordinary store check (@sec-infer). `Maybe[⊥]` $<=$ `Maybe[int]` always holds.
+`[none] l!` followed by `@l 5 just append` gives `l : [Maybe[int]]`: the first store is a fresh
+`[Maybe[⊥]]`, which may be retyped. A _shared_ `[Maybe[⊥]]` stored where `[Maybe[int]]` is later needed
+fails that check, because lists are invariant.
 
 #pagebreak()
 
