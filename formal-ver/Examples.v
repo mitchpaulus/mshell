@@ -36,7 +36,7 @@ Proof. vm_compute. reflexivity. Qed.
 Example hole_dynget_rejected :
   ~ (forall k, sub (fty (field_at k [("a", FReq TInt)] (FOpt TStr))) TStr).
 Proof.
-  intros H. specialize (H "a"). unfold field_at in H. simpl in H. inversion H.
+  intros H. specialize (H "a"). unfold field_at in H. simpl in H. apply sub_unfold in H. inversion H.
 Qed.
 
 (** ** Hole 2: an abstract type chosen once per pattern site.
@@ -79,11 +79,11 @@ Proof. reflexivity. Qed.
 Example p1_rejected :
   ~ sub (TRec [("a", FReq TInt)] FAbs) (TRec [("a", FReq (TUnion TInt TStr))] FAbs).
 Proof.
-  intros H. inversion H as [| | | | | | | |fs1 r1 fs2 r2 Hf| |]; subst.
-  specialize (Hf "a"). unfold field_at in Hf. simpl in Hf.
-  inversion Hf; subst.
-  match goal with Hs : sub (TUnion TInt TStr) TInt |- _ => inversion Hs; subst end.
-  match goal with Hs : sub TStr TInt |- _ => inversion Hs end.
+  intros H. apply sub_unfold in H. inversion H; subst.
+  match goal with Hf : forall k, fsubR sub _ _ |- _ => specialize (Hf "a"); unfold field_at in Hf; simpl in Hf;
+    inversion Hf; subst end.
+  match goal with Hs : sub (TUnion TInt TStr) TInt |- _ => apply sub_unfold in Hs; inversion Hs; subst end.
+  match goal with Hs : subF sub TStr TInt |- _ => inversion Hs end.
 Qed.
 
 (** ** R6 (from the doc): two refinements of one shared dict.
@@ -124,8 +124,9 @@ Qed.
 
 Example r6_d_not_below : ~ sub TJ (TDict IS).
 Proof.
-  intros H. inversion H as [| | | | | | | |fs1 r1 fs2 r2 Hf| |]; subst.
-  specialize (Hf "age"). unfold field_at in Hf. simpl in Hf. inversion Hf.
+  intros H. apply sub_unfold in H. inversion H; subst.
+  match goal with Hf : forall k, fsubR sub _ _ |- _ => specialize (Hf "age"); unfold field_at in Hf;
+    simpl in Hf; inversion Hf end.
 Qed.
 
 Definition nosigs : genv := {| g_sigs := fun _ _ _ => False; g_ctors := fun _ _ => None |}.
@@ -289,10 +290,10 @@ Proof. reflexivity. Qed.
 (** The correct declaration is invariant: [Box[int]] is not below [Box[int | str]]. *)
 Example box_invariant : ~ sub (TEnum EBox [TInt]) (TEnum EBox [IS]).
 Proof.
-  intros H. inversion H; subst. match goal with V : vsubs _ _ _ |- _ => inversion V; subst end;
+  intros H. apply sub_unfold in H. inversion H; subst. match goal with V : vsubs _ _ _ |- _ => inversion V; subst end;
     try discriminate.
-  match goal with Hs : sub IS TInt |- _ => inversion Hs; subst end.
-  match goal with Hs : sub TStr TInt |- _ => inversion Hs end.
+  match goal with Hs : sub IS TInt |- _ => apply sub_unfold in Hs; inversion Hs; subst end.
+  match goal with Hs : subF sub TStr TInt |- _ => inversion Hs end.
 Qed.
 
 (** A covariant [Box], or an immutable one, is rejected by the declaration check. *)
@@ -352,11 +353,11 @@ Proof. vm_compute. reflexivity. Qed.
 
 Example quote_no_widen : ~ rsub (TQuote [TInt] (Some [TInt])) (TQuote [IS] (Some [IS])).
 Proof.
-  intros H. inversion H; subst.
-  match goal with Hs : sub _ _ |- _ => inversion Hs; subst end.
+  intros H. apply rsub_unfold in H. inversion H; subst.
+  match goal with Hs : sub _ _ |- _ => apply sub_unfold in Hs; inversion Hs; subst end.
   match goal with Hs : subs _ _ |- _ => inversion Hs; subst end.
-  match goal with Hs : sub IS TInt |- _ => inversion Hs; subst end.
-  match goal with Hs : sub TStr TInt |- _ => inversion Hs end.
+  match goal with Hs : sub IS TInt |- _ => apply sub_unfold in Hs; inversion Hs; subst end.
+  match goal with Hs : subF sub TStr TInt |- _ => inversion Hs end.
 Qed.
 
 (** * Type variables (Generic.v)
@@ -434,26 +435,26 @@ Proof. vm_compute. reflexivity. Qed.
 
 (** The join of the two shared slots does not exist ... *)
 Example maybe_join_shared :
-  join_slot (Sh, TMaybe (TList TInt)) (Sh, TMaybe (TList TStr)) = None.
+  join_slot le_none (Sh, TMaybe (TList TInt)) (Sh, TMaybe (TList TStr)) = None.
 Proof. reflexivity. Qed.
 
 (** ... while fresh arms, [[1] just] and [["a"] just], join inside. *)
 Example maybe_join_fresh :
-  join_slot (Dp, TMaybe (TList TInt)) (Dp, TMaybe (TList TStr)) =
+  join_slot le_none (Dp, TMaybe (TList TInt)) (Dp, TMaybe (TList TStr)) =
   Some (Dp, TMaybe (TList (TUnion TInt TStr))).
 Proof. reflexivity. Qed.
 
 (** The design's join table, computed. *)
-Example join_int_float_like : join_slot (Sh, TInt) (Sh, TStr) = Some (Sh, TUnion TInt TStr).
+Example join_int_float_like : join_slot le_none (Sh, TInt) (Sh, TStr) = Some (Sh, TUnion TInt TStr).
 Proof. reflexivity. Qed.
-Example join_none_just : join_slot (Sh, TMaybe TBot) (Sh, TMaybe TInt) = Some (Sh, TMaybe TInt).
+Example join_none_just : join_slot le_none (Sh, TMaybe TBot) (Sh, TMaybe TInt) = Some (Sh, TMaybe TInt).
 Proof. reflexivity. Qed.
 Example join_fresh_shapes :
-  join_slot (Dp, TRec [("a", FReq TInt)] FAbs) (Dp, TRec [("a", FReq TInt); ("b", FReq TInt)] FAbs) =
+  join_slot le_none (Dp, TRec [("a", FReq TInt)] FAbs) (Dp, TRec [("a", FReq TInt); ("b", FReq TInt)] FAbs) =
   Some (Dp, TRec [("a", FReq TInt); ("a", FReq TInt); ("b", FOpt TInt)] FAbs).
 Proof. reflexivity. Qed.
 Example join_quotes :
-  join_slot (Dp, TQuote [TInt] (Some [TInt])) (Dp, TQuote [TStr] (Some [TStr])) = None.
+  join_slot le_none (Dp, TQuote [TInt] (Some [TInt])) (Dp, TQuote [TStr] (Some [TStr])) = None.
 Proof. reflexivity. Qed.
 
 (** * [return] in top-level code

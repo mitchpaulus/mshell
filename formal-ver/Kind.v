@@ -19,7 +19,15 @@ Proof.
 Qed.
 
 Lemma head_not_bot e ke : kind_of_ty e = Some ke -> ~ sub e TBot.
-Proof. intros Hk Hs. inversion Hs; subst; simpl in Hk; discriminate. Qed.
+Proof. intros Hk Hs. apply sub_unfold in Hs. inversion Hs; subst; simpl in Hk; discriminate. Qed.
+
+Lemma kind_head_top t k u : kind_of_ty t = Some k -> kind_top k = Some u -> sub t u.
+Proof.
+  destruct t; simpl; intros E1 E2; inversion E1; subst; simpl in E2; inversion E2; subst;
+    try apply s_refl; try apply s_top.
+  - apply s_maybe, s_top.
+  - apply s_rec. intros k. unfold field_at at 2. simpl. apply fs_open.
+Qed.
 
 Lemma tunion_l e ke x y : kind_of_ty e = Some ke -> sub e x -> sub e (tunion x y).
 Proof.
@@ -40,7 +48,7 @@ Qed.
 Lemma kt_sub : forall e t, sub e t -> forall ke t1,
   kind_of_ty e = Some ke -> kind_then ke t = Some t1 -> sub e t1.
 Proof.
-  intros e t Hs; induction Hs; intros ke t1 Hk Ht.
+  intros e t Hs; apply sub_unfold in Hs; induction Hs; intros ke t1 Hk Ht.
   - destruct t; simpl in Hk; try discriminate; inversion Hk; subst;
       simpl in Ht; try rewrite ename_eqb_refl in Ht; inversion Ht; subst; apply s_refl.
   - discriminate.
@@ -57,6 +65,9 @@ Proof.
   - simpl in Ht. destruct (kind_then ke b) eqn:Eb; [|discriminate].
     destruct (kind_then ke c) eqn:Ec; [|discriminate].
     inversion Ht; subst. eapply tunion_r; eauto.
+  - discriminate.
+  - (* a recursive type: the pattern gives unknown contents of the kind *)
+    simpl in Ht. eapply kind_head_top; eauto.
   - simpl in Hk; inversion Hk; subst; simpl in Ht; inversion Ht; subst. apply s_maybe; auto.
   - simpl in Hk; inversion Hk; subst; simpl in Ht; inversion Ht; subst. apply s_list; auto.
   - simpl in Hk; inversion Hk; subst; simpl in Ht; inversion Ht; subst. apply s_rec; auto.
@@ -68,13 +79,15 @@ Qed.
 Lemma ke_sub : forall e t, sub e t -> forall ke k,
   kind_of_ty e = Some ke -> kind_eqb k ke = false -> sub e (kind_else k t).
 Proof.
-  intros e t Hs; induction Hs; intros ke k Hk Hq.
+  intros e t Hs; apply sub_unfold in Hs; induction Hs; intros ke k Hk Hq.
   - destruct t; simpl in Hk; try discriminate; inversion Hk; subst; simpl; rewrite Hq; apply s_refl.
   - discriminate.
   - simpl. apply s_top.
   - discriminate.
   - simpl. eapply tunion_l; eauto.
   - simpl. eapply tunion_r; eauto.
+  - discriminate.
+  - simpl. apply sub_fold, sf_mur; auto.
   - simpl in Hk; inversion Hk; subst; simpl; rewrite Hq. apply s_maybe; auto.
   - simpl in Hk; inversion Hk; subst; simpl; rewrite Hq. apply s_list; auto.
   - simpl in Hk; inversion Hk; subst; simpl; rewrite Hq. apply s_rec; auto.
@@ -129,6 +142,8 @@ Proof.
   - destruct (IHHv Hl) as (e & ke & A & B & C & D). exists e, ke; repeat split; auto.
     apply s_top.
   - exists (TEnum E a), (KEnum E); repeat split; [eapply vt_con; eauto | apply s_refl].
+  - destruct (IHHv Hl) as (e & ke & A & B & C & D). exists e, ke; repeat split; auto.
+    apply s_mur; auto.
 Qed.
 
 Lemma dhead Σ H v t O :
@@ -157,6 +172,8 @@ Proof.
   - destruct IHD as (e & ke & A & B & C & E). exists e, ke; repeat split; auto.
     apply s_top.
   - exists (TEnum E a), (KEnum E); repeat split; [eapply dt_con; eauto | apply s_refl].
+  - destruct IHD as (e & ke & A & B & C & E). exists e, ke; repeat split; auto.
+    apply s_mur; auto.
 Qed.
 
 (** Shared values *)

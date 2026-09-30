@@ -199,6 +199,9 @@ Proof.
     eapply dt_con; eauto. eapply dtypedl_retype; eauto.
   - discriminate.
   - discriminate.
+  - (* a recursive type: validated as its unfolding *)
+    destruct (mu_ok u) eqn:M; [|discriminate]. apply dt_mu; auto. eapply IH; eauto.
+  - discriminate.
 Qed.
 
 (** Validation against a type with no lists or dicts is sound even for a
@@ -227,6 +230,9 @@ Proof.
     { intros x t0 t' Hx Vx Hg Ht'. apply in_map_iff in Ht' as (pt & <- & Hpt).
       eapply IH; eauto. eapply payload_imm; eauto. }
     split; [eapply vt_con; eauto | exact L].
+  - destruct (mu_ok u) eqn:M; [|discriminate].
+    assert (Hi' : immutable (tunfold u) = true) by (rewrite immutable_tunfold; exact Hi).
+    destruct (IH _ v t V Hv Hi') as [V' L]. split; [apply vt_mu|]; auto.
 Qed.
 
 (** Objects outside the regions [R] are typed by [Σ] and do not point into [R]. *)

@@ -156,7 +156,7 @@ Each item is independent and fixes something on its own, so each is its own comm
 
 1. **`...rest` and pipe slices allocate** new storage, like `take` (design doc §new lists). Replace `tests/success/match_rest_zero_copy.msh` with tests that `setAt`, `del` and `append` on `rest` leave the source unchanged, and that `append` and `setAt` on a pipe slice leave the pipe unchanged. (Changes existing behavior: changelog entry.)
 2. **`deepCopy` builtin** (design doc §deepCopy): deep, once per path, cycles are an error naming the cycle, quotes and immutable values shared. Tests: two paths to one list give two lists; a list containing itself is an error, not a hang; each runtime kind in the Typst design doc table.
-3. **Iterative, cycle-safe walkers** for `str`, `toJson`, equality and ordering, ported from the enum branch (`debe03e`, `0d78c14`, `3413d03`, `88d8de3`, `e7658a7`, `6341f99`, `2a326e3`; read them together, since early ones alone reintroduce a known hang). Port the `Maybe` equality fix (`622ce23`) with `tests/success/equality.msh`.
+3. **Iterative, cycle-safe walkers** for `str`, `toJson`, equality and ordering (required: recursive aliases make cyclic values well typed, `cyc_try_typed` in `formal-ver/Recursive.v`; today `str` of a list that contains itself overflows the Go stack), ported from the enum branch (`debe03e`, `0d78c14`, `3413d03`, `88d8de3`, `e7658a7`, `6341f99`, `2a326e3`; read them together, since early ones alone reintroduce a known hang). Port the `Maybe` equality fix (`622ce23`) with `tests/success/equality.msh`.
 4. **JSON integral numbers parse as `int`** (design doc §JSON). Changes existing behavior: changelog entry, doc update.
 5. **Runtime error classification.** Give every runtime failure a kind: *type mismatch* (a type error the checker should have prevented) or *checked error* (index out of range, `?` on none, a failed process, `exit`, division by zero, a cyclic `deepCopy`, validation limits). Convert call sites file area by area, starting with arithmetic, comparison, getters and list operations. Add an option or environment variable that makes the runtime report the kind, for the soundness oracle.
 
@@ -175,12 +175,13 @@ New code with Go unit tests only; nothing is wired into the checker yet.
   - abstract grid schemas.
 - **Relations**, each in its own function with its own tests:
   - equality unification with occurs check and the assumption set for recursive aliases (§Aliases);
+  - one assumption set per relation: an assumption made while deciding `⊑` never answers a `≤` question (under a quote `⊑` asks `≤`), and results that used an assumption are cached only once it is confirmed (H12, `hole_mixed_*` in `formal-ver/Recursive.v`);
   - subtyping `≤` (§Subtyping, per label);
   - the fresh retype relation `⊑` (§Freshness), including enum arguments by fresh-covariance, and never widening inside a quote;
-  - branch join (§Joins); quotes join by `≤` only;
-  - runtime kind of a type, `immutable`, and `checkable`.
+  - branch join (§Joins); quotes join by `≤` only; a recursive alias is never widened inside: the other side if one is below the other (`≤`, or `⊑` when both arms are fresh), a union if the kinds do not overlap, otherwise an error asking for a declared type (`ajoin` in `formal-ver/Join.v`);
+  - runtime kind of a type (an alias contributes the kinds of its unfolding's members), `immutable`, and `checkable`; through aliases these are greatest fixed points (`immutable_tunfold`, `chk_tunfold`).
 - Header comments in the reused files (`Type.go`) point to the deleted `ai/type_checker.md`; point them at the Typst design doc.
-- **Property tests** that mirror the proof: transitivity of `≤` (`sub_trans`) and of `⊑` on randomly generated types; `≤` implies `⊑`; every S1–S4 row of the design doc's table, including the two dict/remainder cases in S2 and S4; the "optional must not become deletable" case; for random well-formed generic enums, `E[a] ≤ E[b]` implies each payload `subst a t ≤ subst b t`, and `E[a] ⊑ E[b]` implies `subst a t ⊑ subst b t` (`payload_sub`, `payload_rsub` in `Variance.v`).
+- **Property tests** that mirror the proof: transitivity of `≤` (`sub_trans`) and of `⊑` on randomly generated types, including guarded recursive aliases; `Json` equal to the same union with its members reordered (`json_teq`); `≤` implies `⊑`; every S1–S4 row of the design doc's table, including the two dict/remainder cases in S2 and S4; the "optional must not become deletable" case; for random well-formed generic enums, `E[a] ≤ E[b]` implies each payload `subst a t ≤ subst b t`, and `E[a] ⊑ E[b]` implies `subst a t ⊑ subst b t` (`payload_sub`, `payload_rsub` in `Variance.v`).
 
 Done when: the relations pass their tests, including randomized transitivity on at least tens of thousands of generated pairs.
 
@@ -201,7 +202,7 @@ Work:
 - `new` on def outputs (design doc, "New def outputs"): parse it in signatures, check it both ways against the body's freshness (written but shared: error; missing but new: error; on an immutable type: error), take the largest consistent marks for recursive defs, and give each error a fix. Def inputs stay shared.
 - Divergence: words after a diverging word are not checked (`t_div`); the diverges flag follows the `div_*` lemmas in `Frame.v`.
 - `if`, `iff` with literal quotes, `loop`, `each`/`map`/... with literal quotes, `break`/`continue` contexts, `return`, `exit` (§Quotes that break, §Divergence).
-- Branch joins per §Joins, including fresh-only widening. `join_slot` in `formal-ver/Join.v` is the reference: the result is fresh only when both arms are, joins inside `Maybe` keep the arms' freshness, quotes join only when equal.
+- Branch joins per §Joins, including fresh-only widening. `join_slot` in `formal-ver/Join.v` is the reference: the result is fresh only when both arms are, joins inside `Maybe` keep the arms' freshness, quotes join only when equal, aliases are never widened inside (`ajoin`).
 - Shapes: literal-key `get`/`set`, runtime-key `getd`/`setd` per §Runtime keys, `del` only on `{str: T}`, shape/dict subtyping by the per-label rule (a shape never becomes a `{str: T}`).
 - `as`: subtyping, or `⊑` on a fresh slot.
 - `match`: kind patterns on unions (the member of that kind, writable), kind patterns on unknown values (abstract types, and the escape check in §Unknown contents), `Maybe`, literal, list and dict patterns, `=>`.
@@ -229,7 +230,7 @@ Done when:
 
 Surface syntax and value behavior are in design doc §Surface language.
 
-- Declarations are read in three passes: reserve every name, resolve bodies, then reject unguarded cycles (from `fix/recursive-named-type-narrow-hang`, rewritten for alias reference nodes, and covering enums as well).
+- Declarations are read in three passes: reserve every name, resolve bodies, then reject unguarded cycles (from `fix/recursive-named-type-narrow-hang`, rewritten for alias reference nodes, and covering enums as well). Every cycle of alias references must pass a type constructor, and an enum instance counts (`type T = Box[T]` is accepted). This is a soundness condition of the assumption rule, not only termination (H13, `unguarded_*` in `formal-ver/Recursive.v`).
 - `type` is a transparent alias. `Json` and `HtmlNode` are built in; users cannot redeclare them.
 - Enums: parser (final syntax from the enum branch, plus `[a b]` parameters after the name), runtime value, constructors as words (polymorphic for generic enums), constructor patterns, exhaustiveness, `str`/`toJson`/equality/ordering per design doc §Surface language. Enum names are their own runtime kind in unions.
 - Generic enums: compute each parameter's variance and fresh-covariance from its payload positions, and each enum's immutability as a greatest fixed point over the declarations (design doc §Subtyping, §Freshness); a constructor that does not mention a parameter gives `⊥` for a covariant one and a fresh type variable otherwise; reject a recursive reference with different parameters (a usability rule, not a soundness one).
@@ -244,13 +245,13 @@ Done when: those tests pass under the core checker, and recursive enum values pr
 
 ### Stage 5: Validation: `is`, `tryAs`, `deepCopy` in the checker
 
-- One runtime validator: `validate(value, type)` walks the value against a resolved type with an explicit work list. It tracks the current path to detect cycles, and counts work against a budget. Exhausting the budget or finding a cycle is an error. Shapes check declared fields and remainders, including `*: T`. Enums check identity and payloads. Grids check schemas.
+- One runtime validator: `validate(value, type)` walks the value against a resolved type with an explicit work list. It tracks the (object, type) pairs on the current path and counts work against a budget. Exhausting the budget is an error; a pair met again on the path is assumed to hold, so a cycle validates (design doc §Validation, `cvalidate` in `formal-ver/Cycles.v`). The checker trusts the validator's `just` only for fresh operands and immutable targets (`soundness_v`), so memoizing over a DAG is fine. Shapes check declared fields and remainders, including `*: T`. Enums check identity and payloads. Grids check schemas.
 - `is T x` patterns and `tryAs` (its own word, not elaborated to a match: a hidden variable would make the result shared) with the typing rule in design doc §Validation: in place always; a shared operand is accepted only if its type is already below the target or the target is immutable; otherwise a type error that suggests `deepCopy`.
 - `checkable` targets: quotes (including a quote in the payload of any enum the target mentions), type variables and abstract types are rejected with a clear message. Compute enum checkability per declaration, like immutability (`chk` in `formal-ver/Checkable.v`).
 - Exhaustiveness: an `is T` arm covers a union member only when the member is equivalent to `T` and `T` is checkable.
 - `deepCopy` typed as `(τ -- τ•)`.
 
-Tests: R6 as written is rejected; R6 with `deepCopy` passes and prints the right value; `parseJson tryAs T ?` validates in place (an identity test); cycles and budgets give errors, not `none`; the try-as branch's validation tests.
+Tests: R6 as written is rejected; R6 with `deepCopy` passes and prints the right value; `parseJson tryAs T ?` validates in place (an identity test); a list that contains itself validates against `[Json]`, and `j = [j]` against `[[int]]` gives `none`; the budget gives an error, not `none`; the try-as branch's validation tests.
 
 Done when: those pass under the core checker.
 
@@ -337,6 +338,13 @@ Each line becomes a test file; the name in brackets is a suggestion.
 | a variable stored at `int` then at `str`, captured by a quote | fail |
 | enum: construct, match all members, missing member, unknown member, collision with a def, recursive enum value printed | ok, ok, fail, fail, fail, ok |
 | recursive alias `Json`/`Person`; `type A = A`; `type A = int \| A` | ok; fail; fail |
+| `type A = B` with `type B = int \| A` | fail [`h13_unguarded_alias`] |
+| `type T = Box[T]` with `enum Box[a] = box [a] \| empty end`; `[] empty append box as T` | ok |
+| `Json` passed where the same union with its members reordered is expected; `[Json]` where the reordered `[...]` is expected | ok; ok |
+| `Json \| [int]` in a signature | fail (two list members) |
+| `parseJson tryAs [Person] ?` then a nested friend's `age` | ok |
+| H12: `type A = {x: [int], f: (-- A)}`, `type B = {x: [int \| str], f: (-- B)}`, `r : A` stored; `{x: [2], f: (@r)} as A as B` | fail [`h12_one_assumption_set`] |
+| `[] as [Json] j!  @j @j append drop  @j tryAs [Json] ?`; the same with an `is [Json] xs` arm; `@j deepCopy` | `just`; the arm runs; checked error |
 | `enum Box[a] = box [a] \| empty end`: `[1] box` as `Box[int]`; `empty` then used as `Box[str]`; a `Box[int]` passed where `Box[int \| str]` is expected | ok; ok; fail (invariant) |
 | H4: `@xs box` with `xs : [int]` stored, then `as Box[int \| str]`; `[1] box as Box[int \| str]` (fresh) | fail; ok [`h4_enum_not_immutable`] |
 | H5: `enum F[a] = f (a -- a) end`; `(1 +) f as F[int \| str]` | fail [`h5_fresh_retype_quote`] |

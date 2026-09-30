@@ -196,6 +196,9 @@ Proof.
   - (* enum value: commit its payloads *)
     intros E c pts vs a Os Ec W d IH N Σ0 Hs Hl Hn Hd. destruct (IH Σ0 Hs Hl Hn Hd) as (Σ' & ? & ? & ? & ?).
     exists Σ'; repeat split; auto. eapply vt_con; eauto.
+  - (* recursive type: commit the unfolding *)
+    intros v t O M d IH Σ0 Hs Hl Hn Hd. destruct (IH Σ0 Hs Hl Hn Hd) as (Σ' & ? & ? & ? & ?).
+    exists Σ'; repeat split; auto. apply vt_mu; auto.
   - intros t Σ0 Hs Hl Hn Hd. exists Σ0; repeat split; auto using sagree_refl.
     intros l [].
   - intros v vs t O Os d IH d0 IH0 Σ0 Hs Hl Hn Hd. simpl in Hn, Hd.

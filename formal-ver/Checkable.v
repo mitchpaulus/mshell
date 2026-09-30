@@ -40,6 +40,8 @@ Fixpoint chk (okE : ename -> bool) (pok : bool) (t : ty) : bool :=
   | TRec fs r => forallb (fun kf => fchk okE pok (snd kf)) fs && fchk okE pok r && negb (is_req r)
   | TUnion a b => chk okE pok a && chk okE pok b
   | TEnum E a => okE E && forallb (chk okE pok) a
+  | TMu t' => chk okE false t'   (* the greatest fixed point: the variable counts as checkable *)
+  | TRV _ => true
   end
 with fchk (okE : ename -> bool) (pok : bool) (f : fstat) : bool :=
   match f with
@@ -74,6 +76,29 @@ Proof.
     + rewrite nth_overflow; [reflexivity|]. apply nth_error_None; auto.
 Qed.
 
+(** Unfolding a checkable recursive type gives a checkable type. *)
+Lemma chk_musubst okE s : chk okE false s = true ->
+  forall t k, chk okE false t = true -> chk okE false (musubst k s t) = true.
+Proof.
+  intros Hs.
+  apply (ty_ind2 (fun t => forall k, chk okE false t = true -> chk okE false (musubst k s t) = true)
+                 (fun f => forall k, fchk okE false f = true -> fchk okE false (fmusubst k s f) = true));
+    simpl; intros; auto; try discriminate.
+  - apply andb_true_iff in H1 as [H1 Hr]. apply andb_true_iff in H1 as [Hfs Hr0].
+    apply andb_true_iff; split; [apply andb_true_iff; split|].
+    + rewrite forallb_map. eapply forallb_impl; [| exact Hfs]. eapply Forall_impl; [| exact H].
+      intros p Hp. simpl. auto.
+    + auto.
+    + destruct r; simpl in *; auto.
+  - apply andb_true_iff in H1 as [? ?]. rewrite H, H0; auto.
+  - apply andb_true_iff in H0 as [He Ha]. rewrite He. simpl.
+    rewrite forallb_map. eapply forallb_impl; [| exact Ha]. eapply Forall_impl; [| exact H]. auto.
+  - destruct (Nat.eqb n k); auto.
+Qed.
+
+Lemma chk_tunfold okE t : chk okE false (TMu t) = true -> chk okE false (tunfold t) = true.
+Proof. intros H. apply chk_musubst; auto. Qed.
+
 (** ** Helpers about the validator's combinators *)
 Lemma oforall_nf {A} (g : A -> option bool) l :
   (forall x, In x l -> g x <> Some false) -> oforall g l <> Some false.
@@ -95,12 +120,6 @@ Qed.
 Lemma oand_nf x y : x <> Some false -> y <> Some false -> oand x y <> Some false.
 Proof. destruct x as [[|]|]; simpl; auto. Qed.
 
-Lemma fsub_refl f : fsub f f.
-Proof. destruct f; constructor; apply s_refl. Qed.
-
-Lemma sub_rec_fsub fs1 r1 fs2 r2 :
-  sub (TRec fs1 r1) (TRec fs2 r2) -> forall k, fsub (field_at k fs1 r1) (field_at k fs2 r2).
-Proof. intros H; inversion H; subst; auto. intros k. apply fsub_refl. Qed.
 
 Section Complete.
 Variable sigs : genv.
@@ -183,6 +202,11 @@ Proof.
     induction Vl as [|x xs t ts Vx Vl IHl]; constructor.
     + apply IH; [exact Vx | apply Hvs; left; auto | apply Ct; left; auto].
     + apply IHl; [intros; apply Ct; right; auto | intros y Hy r0 Hr0; eapply Hvs; [right; exact Hy | exact Hr0]].
+  - (* a recursive type: the value has its unfolding *)
+    destruct (vt_mu_inv _ _ _ _ V) as [M V']. rewrite M. apply IH; auto. apply chk_tunfold; auto.
+  - (* a free recursion variable has no values *)
+    exfalso. inversion V; subst;
+      match goal with Hs : sub _ (TRV _) |- _ => apply sub_unfold in Hs; inversion Hs end.
 Qed.
 
 (** ** Fresh values *)
@@ -232,6 +256,8 @@ Proof.
     induction Dl as [|x xs t ts Ox Oxs Dx Dl IHl]; constructor.
     + eapply IH; [exact Dx | apply Ct; left; auto].
     + apply IHl. intros; apply Ct; right; auto.
+  - match goal with M : mu_ok _ = true |- _ => rewrite M end.
+    eapply IH; [eassumption | apply chk_tunfold; auto].
 Qed.
 
 End Complete.

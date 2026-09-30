@@ -230,6 +230,10 @@ Proof.
       destruct (IH Ha H1 vs' Hl Ex Em) as (N & Os & E1 & D & Rg).
       exists N, (concat Os). split; [exact E1 | split; [| exact Rg]].
       eapply dt_con; eauto. destruct Rg; auto.
+    - (* a value of a recursive type is copied as a value of its unfolding *)
+      intros v t M Hv IH Ha Hb v2 Hl Ex Ec.
+      destruct (IH Ha Hb v2 Hl Ex Ec) as (N & O & E1 & D & Rg).
+      exists N, O. split; [exact E1 | split; [apply dt_mu; auto | exact Rg]].
     - intros v vs t ts Hv IH Hvs IHs H0 H2 vs' Hl Ex Em.
       destruct (vcopy g H0 v) as [[H1 x']|] eqn:Ex1; [|discriminate].
       destruct (mapo (vcopy g) H1 vs) as [[H3 xs']|] eqn:Em'; [|discriminate].

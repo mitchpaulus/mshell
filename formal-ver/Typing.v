@@ -83,7 +83,7 @@ Definition kind_of_ty (t : ty) : option kind :=
   | TMaybe _ => Some KMaybe | TList _ => Some KList
   | TRec _ _ => Some KDict | TQuote _ _ => Some KQuote
   | TEnum E _ => Some (KEnum E)
-  | TBot | TTop | TUnion _ _ | TParam _ | TVar _ => None
+  | TBot | TTop | TUnion _ _ | TParam _ | TVar _ | TMu _ | TRV _ => None
   end.
 
 (** The members of [t] of kind [k] (the then-branch type) *)
@@ -92,6 +92,7 @@ Fixpoint kind_then (k : kind) (t : ty) : option ty :=
   | TBot => Some TBot
   | TTop => kind_top k
   | TVar _ => kind_top k     (* an instance may have any kind: like unknown contents *)
+  | TMu _ => kind_top k      (* unfold first ([t_sub]) to see the member of kind [k] *)
   | TUnion a b =>
       match kind_then k a, kind_then k b with
       | Some x, Some y => Some (tunion x y)

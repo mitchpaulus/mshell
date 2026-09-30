@@ -14,7 +14,16 @@
       join;
     - quotes, invariant and contravariant arguments join only when equal
       (sound, and simpler than a meet);
-    - joining into a union joins the member of the same kind. *)
+    - joining into a union joins the member of the same kind;
+    - a recursive type is never widened inside ([ajoin]): the join takes
+      the other side when one is below the other ([<=], or the fresh retype
+      when both slots are fresh), or makes a union when their kinds do not
+      overlap, and otherwise fails.  Widening inside two different recursive
+      types would need a new recursive type for the result.
+
+    The join is given the checker's decision procedure for [<=] and fresh
+    retyping ([le]); the proofs assume only that it is right when it says
+    yes ([le_ok]). *)
 
 From Stdlib Require Import String List Arith Bool Lia.
 Import ListNotations.
@@ -39,6 +48,8 @@ Fixpoint ty_eqb (a b : ty) : bool :=
   | TEnum E1 a1, TEnum E2 a2 => ename_eqb E1 E2 && forallb2 (fun x y => ty_eqb x y) a1 a2
   | TParam i, TParam j => Nat.eqb i j
   | TVar x, TVar y => Nat.eqb x y
+  | TMu x, TMu y => ty_eqb x y
+  | TRV i, TRV j => Nat.eqb i j
   | _, _ => false
   end
 with fst_eqb (f g : fstat) : bool :=
@@ -63,14 +74,14 @@ Proof.
   - intros b E; destruct b; simpl in E; congruence.
   - intros t IH b E; destruct b; simpl in E; try congruence. f_equal; auto.
   - intros t IH b E; destruct b; simpl in E; try congruence. f_equal; auto.
-  - intros fs r Hfs Hr b E; destruct b as [| | | | | | |fs2 r2| | | | |]; simpl in E; try congruence.
+  - intros fs r Hfs Hr b E; destruct b as [| | | | | | |fs2 r2| | | | | | |]; simpl in E; try congruence.
     apply andb_true_iff in E as [E1 E2]. f_equal; auto.
     eapply Forall2_eq; [| apply forallb2_Forall2; exact E1].
     eapply Forall_impl; [| exact Hfs]. intros [k f] Hf [k' f'] Hp. simpl in *.
     apply andb_true_iff in Hp as [Hk Hq]. apply String.eqb_eq in Hk. subst. f_equal. auto.
   - intros x y Hx Hy b E; destruct b; simpl in E; try congruence.
     apply andb_true_iff in E as [E1 E2]. f_equal; auto.
-  - intros ins outs Hi Ho b E; destruct b as [| | | | | | | | |i2 o2| | |]; simpl in E; try congruence.
+  - intros ins outs Hi Ho b E; destruct b as [| | | | | | | | |i2 o2| | | | |]; simpl in E; try congruence.
     apply andb_true_iff in E as [E1 E2]. f_equal.
     + eapply Forall2_eq; [exact Hi | apply forallb2_Forall2; exact E1].
     + destruct outs as [o1|], o2 as [o2|]; try discriminate; auto. f_equal.
@@ -80,6 +91,8 @@ Proof.
     eapply Forall2_eq; [exact Ha | apply forallb2_Forall2; exact Q2].
   - intros i b E; destruct b; simpl in E; try congruence. apply Nat.eqb_eq in E. subst. reflexivity.
   - intros x b E; destruct b; simpl in E; try congruence. apply Nat.eqb_eq in E. subst. reflexivity.
+  - intros t IH b E; destruct b; simpl in E; try congruence. f_equal; auto.
+  - intros n b E; destruct b; simpl in E; try congruence. apply Nat.eqb_eq in E. subst. reflexivity.
   - intros t IH g E; destruct g; simpl in E; try congruence; f_equal; auto.
   - intros t IH g E; destruct g; simpl in E; try congruence; f_equal; auto.
   - intros t IH g E; destruct g; simpl in E; try congruence; f_equal; auto.
@@ -95,10 +108,48 @@ Fixpoint omapl {A B} (f : A -> option B) (l : list A) : option (list B) :=
   | x :: l' => match f x, omapl f l' with Some y, Some ys => Some (y :: ys) | _, _ => None end
   end.
 
-(** Does the union tree [t] have a member of kind [k]? *)
+Definition is_mu (t : ty) : bool := match t with TMu _ => true | _ => false end.
+
+(** The size of a type, counting the body of a recursive type. *)
+Fixpoint dsize (t : ty) : nat :=
+  match t with
+  | TMu t' | TMaybe t' | TList t' => S (dsize t')
+  | TUnion a b => S (dsize a + dsize b)
+  | TRec fs r => S (fdsize r + list_sum (map (fun p => fdsize (snd p)) fs))
+  | TQuote ins outs =>
+      S (list_sum (map dsize ins) + match outs with None => 0 | Some l => list_sum (map dsize l) end)
+  | TEnum _ a => S (list_sum (map dsize a))
+  | TInt | TStr | TBool | TBot | TTop | TParam _ | TVar _ | TRV _ => 1
+  end
+with fdsize (f : fstat) : nat :=
+  match f with FReq t | FOpt t | FDict t => S (dsize t) | FAbs | FOpen => 1 end.
+
+(** The kinds of the members of [t], looking through recursive types;
+    [None] when a member has no kind.  [n] is fuel. *)
+Fixpoint tkinds (n : nat) (t : ty) {struct n} : option (list kind) :=
+  match n with
+  | 0 => None
+  | S n' =>
+      match t with
+      | TBot => Some []
+      | TUnion a b =>
+          match tkinds n' a, tkinds n' b with Some x, Some y => Some (x ++ y) | _, _ => None end
+      | TMu t' => if mu_ok t' then tkinds n' (tunfold t') else None
+      | _ => match kind_of_ty t with Some k => Some [k] | None => None end
+      end
+  end.
+
+Definition akinds (t : ty) : option (list kind) := tkinds (S (dsize t)) t.
+
+Definition kdisj (xs ys : list kind) : bool :=
+  forallb (fun x => negb (existsb (kind_eqb x) ys)) xs.
+
+(** Does the union tree [t] have a member of kind [k]?  A recursive type
+    counts with the kinds of its members. *)
 Fixpoint ukind (k : kind) (t : ty) : bool :=
   match t with
   | TUnion a b => ukind k a || ukind k b
+  | TMu _ => match akinds t with Some ks => existsb (kind_eqb k) ks | None => false end
   | _ => match kind_of_ty t with Some k' => kind_eqb k k' | None => false end
   end.
 
@@ -139,6 +190,23 @@ Fixpoint ejoin (j : bool -> ty -> ty -> option ty) (fr : bool) (ps : list eparam
   | _, _, _ => None
   end.
 
+(** Below: [<=] for shared slots, the fresh retype when both are fresh. *)
+Definition jrel (fr : bool) (x y : ty) : Prop := if fr then rsub x y else sub x y.
+
+Section Join.
+(** The checker's decision procedure for [jrel]. *)
+Variable le : bool -> ty -> ty -> bool.
+
+(** A recursive type on either side: never widened inside.  The other side
+    if one is below the other; a union if their kinds do not overlap. *)
+Definition ajoin (fr : bool) (a b : ty) : option ty :=
+  if ty_eqb a TBot then Some b else if ty_eqb b TBot then Some a else
+  if le fr a b then Some b else if le fr b a then Some a else
+  match akinds a, akinds b with
+  | Some ka, Some kb => if kdisj ka kb then Some (TUnion a b) else None
+  | _, _ => None
+  end.
+
 (** [tjoin n fr a b]: the join of two slot types, [fr] when both slots are
     fresh.  [n] is fuel. *)
 Fixpoint tjoin (n : nat) (fr : bool) (a b : ty) {struct n} : option ty :=
@@ -146,6 +214,7 @@ Fixpoint tjoin (n : nat) (fr : bool) (a b : ty) {struct n} : option ty :=
   | 0 => None
   | S n' =>
   if ty_eqb a b then Some a else
+  if is_mu a || is_mu b then ajoin fr a b else
   match a, b with
   | TBot, _ => Some b
   | _, TBot => Some a
@@ -179,7 +248,7 @@ Fixpoint tjoin (n : nat) (fr : bool) (a b : ty) {struct n} : option ty :=
 
 Definition join_slot (p q : slot) : option slot :=
   let fr := match fst p, fst q with Dp, Dp => true | _, _ => false end in
-  match tjoin (S (size (snd p) + size (snd q))) fr (snd p) (snd q) with
+  match tjoin (S (dsize (snd p) + dsize (snd q))) fr (snd p) (snd q) with
   | Some c => Some (if fr then Dp else Sh, c)
   | None => None
   end.
@@ -191,10 +260,11 @@ Fixpoint join_stack (s1 s2 : sty) : option sty :=
       match join_slot p q, join_stack s1' s2' with Some r, Some rs => Some (r :: rs) | _, _ => None end
   | _, _ => None
   end.
+End Join.
+
+Arguments ajoin : simpl never.
 
 (** ** The join is an upper bound *)
-
-Definition jrel (fr : bool) (x y : ty) : Prop := if fr then rsub x y else sub x y.
 
 Lemma jrel_refl fr x : jrel fr x x.
 Proof. destruct fr; simpl; [apply rs_sub|]; apply s_refl. Qed.
@@ -305,12 +375,41 @@ Ltac jfin := first
   | split; [apply jrel_bot | apply jrel_refl]
   | split; [apply jrel_refl | apply jrel_bot] ].
 
-Lemma tjoin_ub : forall n fr a b c, tjoin n fr a b = Some c -> jrel fr a c /\ jrel fr b c.
+(** The weakest decision procedure: it never says yes.  Joins that meet no
+    recursive type do not consult it. *)
+Definition le_none : bool -> ty -> ty -> bool := fun _ _ _ => false.
+
+Lemma le_none_ok fr a b : le_none fr a b = true -> jrel fr a b.
+Proof. discriminate. Qed.
+
+Section UB.
+Variable le : bool -> ty -> ty -> bool.
+(** The decision procedure is right when it says yes. *)
+Hypothesis le_ok : forall fr a b, le fr a b = true -> jrel fr a b.
+
+Lemma ajoin_ub fr a b c : ajoin le fr a b = Some c -> jrel fr a c /\ jrel fr b c.
+Proof.
+  unfold ajoin. intros E.
+  destruct (ty_eqb a TBot) eqn:Ea.
+  { apply ty_eqb_true in Ea; subst. injection E as <-. split; [apply jrel_bot | apply jrel_refl]. }
+  destruct (ty_eqb b TBot) eqn:Eb.
+  { apply ty_eqb_true in Eb; subst. injection E as <-. split; [apply jrel_refl | apply jrel_bot]. }
+  destruct (le fr a b) eqn:L1.
+  { injection E as <-. split; [apply le_ok; exact L1 | apply jrel_refl]. }
+  destruct (le fr b a) eqn:L2.
+  { injection E as <-. split; [apply jrel_refl | apply le_ok; exact L2]. }
+  destruct (akinds a), (akinds b); try discriminate.
+  destruct (kdisj _ _); [|discriminate]. injection E as <-.
+  split; [apply jrel_unionr1 | apply jrel_unionr2]; apply jrel_refl.
+Qed.
+
+Lemma tjoin_ub : forall n fr a b c, tjoin le n fr a b = Some c -> jrel fr a c /\ jrel fr b c.
 Proof.
   induction n as [|n IH]; intros fr a b c E; simpl in E; [discriminate|].
   destruct (ty_eqb a b) eqn:Eq.
   { apply ty_eqb_true in Eq. subst. inversion E; subst. split; apply jrel_refl. }
-  assert (J : jok (tjoin n)) by (intros ? ? ? ? H; eapply IH; eauto).
+  destruct (is_mu a || is_mu b) eqn:Mu; [eapply ajoin_ub; exact E|].
+  assert (J : jok (tjoin le n)) by (intros ? ? ? ? H; eapply IH; eauto).
   destruct a, b; simpl in E; try discriminate;
     try (injection E as <-; jfin; fail).
   (* the remaining cases: unions, Maybe, lists, shapes, enums *)
@@ -322,7 +421,7 @@ Proof.
          | E : None = Some _ |- _ => discriminate
          end.
   all: try jfin.
-  all: try (match goal with Ex : tjoin _ _ _ _ = Some _ |- _ => destruct (IH _ _ _ _ Ex) as [H1 H2] end).
+  all: try (match goal with Ex : tjoin _ _ _ _ _ = Some _ |- _ => destruct (IH _ _ _ _ Ex) as [H1 H2] end).
   all: try (split; [apply jrel_unionl; [apply jrel_unionr1; auto | apply jrel_unionr2, jrel_refl]
                    | apply jrel_unionr1; auto]; fail).
   all: try (split; [apply jrel_unionl; [apply jrel_unionr1, jrel_refl | apply jrel_unionr2; auto]
@@ -340,30 +439,31 @@ Proof.
   destruct fr; simpl in *; destruct Hj; split; [apply rs_enum | apply rs_enum | apply s_enum | apply s_enum]; auto.
 Qed.
 
-Theorem join_slot_ub p q r : join_slot p q = Some r -> slot_sub p r /\ slot_sub q r.
+Theorem join_slot_ub p q r : join_slot le p q = Some r -> slot_sub p r /\ slot_sub q r.
 Proof.
   destruct p as [m1 a], q as [m2 b]. unfold join_slot. cbn [fst snd].
-  destruct (tjoin (S (size a + size b)) (match m1, m2 with Dp, Dp => true | _, _ => false end) a b)
+  destruct (tjoin le (S (dsize a + dsize b)) (match m1, m2 with Dp, Dp => true | _, _ => false end) a b)
     as [c|] eqn:E; intros H; [|discriminate].
   injection H as <-. apply tjoin_ub in E as [J1 J2].
   destruct m1, m2; simpl in J1, J2 |- *; split;
     first [ apply ss_sh; auto | apply ss_dp; auto | apply ss_forget; auto ].
 Qed.
 
-Theorem join_stack_ub : forall s1 s2 s3, join_stack s1 s2 = Some s3 -> ssub s1 s3 /\ ssub s2 s3.
+Theorem join_stack_ub : forall s1 s2 s3, join_stack le s1 s2 = Some s3 -> ssub s1 s3 /\ ssub s2 s3.
 Proof.
   induction s1 as [|p s1 IH]; intros [|q s2] s3 E; simpl in E; try discriminate.
   - inversion E; subst. split; constructor.
-  - destruct (join_slot p q) as [r|] eqn:Er; [|discriminate].
-    destruct (join_stack s1 s2) as [rs|] eqn:Ers; [|discriminate]. inversion E; subst.
+  - destruct (join_slot le p q) as [r|] eqn:Er; [|discriminate].
+    destruct (join_stack le s1 s2) as [rs|] eqn:Ers; [|discriminate]. inversion E; subst.
     destruct (join_slot_ub _ _ _ Er), (IH _ _ Ers). split; constructor; auto.
 Qed.
 
 (** An [if] whose arms are joined checks in the core. *)
 Corollary if_join sigs G B C R e1 e2 s s1 s2 s' :
-  T sigs G B C R e1 s s1 -> T sigs G B C R e2 s s2 -> join_stack s1 s2 = Some s' ->
+  T sigs G B C R e1 s s1 -> T sigs G B C R e2 s s2 -> join_stack le s1 s2 = Some s' ->
   TW sigs G B C R (WIf e1 e2) ((Sh, TBool) :: s) s'.
 Proof.
   intros H1 H2 J. destruct (join_stack_ub _ _ _ J) as [S1 S2].
   apply tw_if; eapply t_sub; eauto using ssub_refl.
 Qed.
+End UB.

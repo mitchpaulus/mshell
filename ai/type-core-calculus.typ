@@ -89,7 +89,12 @@
   checked once is enough found two more: a type variable counted as immutable (@sec-fresh) and a
   kind pattern on a type variable (@sec-unknown). Modeling match bindings and quote-taking list
   builtins found two more: arm bindings typed per arm (@sec-unknown) and `filter` marked
-  "fresh when the input is fresh" (@sec-fresh). Those rules are corrected below.
+  "fresh when the input is fresh" (@sec-fresh). Adding recursive aliases found no hole in the rules,
+  but two in the obvious way to implement them: an assumption set shared by $<=$ and fresh retyping,
+  and the assumption rule without guardedness. It also showed that a checked program can now build a
+  cyclic value, and that validation can accept a cycle as soundly as it rejects one (@sec-alias,
+  @sec-tryas).
+  Those rules are corrected below.
   Rules the proof showed to be stricter than soundness needs are marked as usability choices.
 ]
 
@@ -325,18 +330,29 @@ $
 `type X = T` is a *transparent* alias: $X$ and $T$ are interchangeable everywhere;
 the name only improves diagnostics.
 
-Aliases may be *recursive* when every recursive reference is *guarded* by a list, dict, shape field,
-`Maybe` or quote. So both of these are accepted:
+Aliases may be *recursive* when every cycle of alias references passes through a *type
+constructor*: a list, dict, shape field, quote, or enum instance (`Maybe[T]`, `Box[T]`). So these are
+accepted:
 
 ```
 type Json = null | bool | int | float | str | [Json] | {str: Json}
 type Person = {name: str, age: int, friends: [Person]}
+type Tree = Box[Tree]              # enum Box[a] = box [a] | empty end
 ```
 
-and `type A = A`, `type A = int | A` are rejected. Recursion is not limited to enums.
+and `type A = A`, `type A = int | A`, and the pair `type A = B`, `type B = int | A` are rejected: a
+union member and another alias are not constructors. Recursion is not limited to enums.
+*Clarified:* any enum instance guards the recursion, as a list does; the previous text named only
+`Maybe` (`tb_typed` in `Recursive.v` checks `type T = Box[T]`).
 
 *Meaning.* A recursive alias denotes the infinite regular tree obtained by unfolding it.
-Two types are equal when their trees are equal, and $tau <= upsilon$ holds when it holds of the trees.
+Two types are equal when their trees are equal, and $tau <= upsilon$ holds when it holds of the trees:
+the steps through type constructors may go on forever, while between two of them there are only
+finitely many union and unfolding steps. The fresh retype $subset.sq.eq$ (@sec-fresh) is read the
+same way. `Json` and the same union with its members in another order are equal, and showing it
+compares `[Json]` with the other `[Json]`, which needs the two equal again (`json_teq`).
+*Mechanized:* `sub` and `rsub` are greatest fixed points (`Subtyping.v`), `sub_trans` is proved for
+them with the per-label shape rule, and so is closure under substitution (`sub_tsub`, `rsub_tsub`).
 
 *Algorithm.* The checker keeps the alias as a reference node and unfolds it only when it needs
 to look inside. To decide $tau <= upsilon$ or $tau equiv upsilon$ it carries a set of assumed pairs:
@@ -345,6 +361,41 @@ Guardedness makes every unfolding reach a constructor, and there are finitely ma
 subterms, so this terminates (Amadio & Cardelli 1993; Kozen, Palsberg & Schwartzbach 1995).
 Assumptions made inside a failed union alternative or overload trial are rolled back with it.
 Only the alias _name_ is hashconsed; unfolded trees are never stored.
+Two more rules, both found by the proof (`Recursive.v`):
+
+- *One assumption set per relation.* $<=$ and the fresh retype $subset.sq.eq$ are different relations,
+  and $subset.sq.eq$ falls back to $<=$ under a quote. An assumption made while deciding
+  $subset.sq.eq$ must never answer a $<=$ question. With `type A = {x: [int], f: (-- A)}` and
+  `type B = {x: [int | str], f: (-- B)}`, a checker with one set accepts
+  `{x: [2], f: (@r)} as A as B` for a stored `r : A`: the retype assumes the pair `A`, `B`, and the
+  quote at `f` asks `A <= B`, which that assumption answers. Then `f` returns `r` at type `B`, and a
+  string reaches `r`'s `[int]` (`hole_mixed_stuck`; `mixed_accepts` is the one-set relation,
+  `rsub_rejects` the rule).
+- *Guardedness is a soundness condition of the assumption rule*, not only what makes it terminate.
+  With `type V = int | V` the rule proves $"str" <= V$ (assume the pair, unfold $V$, take the member
+  $V$: assumed) and $V <= "int"$, so `"a" as V as int` would check (`unguarded_str_below`,
+  `unguarded_below_int`; the proof's relation has neither, `unguarded_model`). When every alias is
+  guarded, every cycle the algorithm meets passes a type constructor, which is the relation of the proof.
+
+*Properties of an alias* are read off its unfolding as greatest fixed points: while computing one, an
+alias that is already being visited counts as having it. So `type T = int | Maybe[T]` is immutable,
+and `Json` is checkable but not immutable (`immutable_tunfold`, `chk_tunfold`: unfolding changes
+neither). Variance and fresh-covariance need nothing: an alias mentions no enum parameter.
+
+*Kinds.* An alias has the kinds of the members of its unfolding, so a union is flattened through its
+aliases before the distinct-kinds rule (@sec-unions): `Json | [int]` has two list members and is
+rejected; `Json | datetime` is fine. A kind pattern on a value whose type is an alias unfolds it
+(`list xs` on a `Json` binds `xs : [Json]`). The proof types a pattern on an alias it has not
+unfolded like one on a type variable, as unknown contents of that kind (`kind_then`), and gets the
+member by unfolding first (subsumption).
+
+*Cyclic values.* A checked program can now build a cyclic value: `[] as [Json] j!  @j @j append`
+stores a list that contains itself (`cyc_try_typed`, with `type L = [L]`). Printing,
+`toJson`, equality and ordering must handle cycles; today `str` of such a list overflows the Go stack.
+`deepCopy` of one is a checked error (@sec-copy). Validation: @sec-tryas.
+
+*Not covered:* generic aliases (`type Tree[a] = ...`). Aliases are not generic, so substitution never
+enters one; a generic alias would need capture-avoiding substitution into recursive types.
 
 == JSON
 
@@ -371,7 +422,7 @@ Every mshell value carries its runtime kind. A union is well-formed only when it
   $"kind"(ty("List") tau) = "list"$; $"kind"(ty("Dict") tau) = "kind"({F | rho}) = "dict"$;
   every quote type has kind `quote`; `Grid`, `GridView`, `GridRow` are three kinds; each enum is its
   own kind, shared by all its instances (so $"kind"(ty("Maybe") tau) = "Maybe"$).
-  An alias has the kind of its unfolding (guardedness makes that defined).
+  An alias has the kinds of the members of its unfolding (guardedness makes that defined; @sec-alias).
   Type variables, abstract types and $bot$ have no kind and cannot be union members.
 ]
 
@@ -779,6 +830,21 @@ the core (`if_join`).
   `(int -- int | str)`; `(int -- int)` and `(str -- str)` have no useful join, since the inputs would have
   to meet at $bot$. The previous draft listed quotes with the fresh case: `(1 +)` and `("a" ++)` would
   have joined to `(int | str -- int | str)` (`hole_quote_join_stuck` in `Examples.v`).
++ *A recursive alias is never widened inside (decided 2026-09-30).* When the join reaches an alias on
+  either side, at the top or inside a widening, it takes, in order:
+  - the other side, if one side is below the other: $<=$ when either arm is shared, $subset.sq.eq$ when
+    both are fresh (with that relation's own assumption set, @sec-alias);
+  - the union, if the alias's kinds (@sec-alias) and the other side's kinds do not overlap;
+  - otherwise no join, and it is an error that asks for a declared type and `as` in each arm.
+
+  Widening inside two different recursive types would ask for their join again, forever: fresh
+  `A = {x: [A], y: int}` and `B = {x: [B], y: str}` give `{x: [join(A, B)], y: int | str}`. Its real
+  join is a recursive type nobody wrote (`C = {x: [C], y: int | str}`); the checker does not invent it.
+  The user declares `C` and writes `as C` in each arm. Freshness matters as everywhere: a stored `[int]`
+  and a `Json` have no join, since a `list l` arm on the `Json` would then write into the stored list.
+  `ajoin` in `Join.v`; the join is given the checker's decision procedure for $<=$ and
+  $subset.sq.eq$, and `join_slot_ub` needs only that it is right when it says yes (`le_ok`). The cases
+  below are `join_*` in `Recursive.v`.
 
 The arms must still leave the same number of stack items (as today). Arms that diverge are ignored
 (@sec-diverge).
@@ -796,6 +862,12 @@ The arms must still leave the same number of stack items (as today). Arms that d
   [stored shapes `{a: int}` / `{a: int, b: int}`], [error], [`as {a: int}` in the second arm (drops `b`)],
   [`1` / `1 exit`], [`int`], [nothing: the second arm diverges],
   [`1` / nothing], [error], [as today: the arms must leave the same number of items],
+  [`5` / `parseJson`], [`Json`], [nothing: `int` $<=$ `Json`],
+  [`[1]` / `parseJson` (both fresh)], [`Json`, fresh], [nothing: a fresh `[int]` may become a `Json`],
+  [`@xs` : `[int]` stored / `parseJson`], [error], [`[1] as Json xs!` at the store, or `@xs deepCopy`],
+  [`parseJson` / a `datetime`], [`Json | datetime`], [nothing: the kinds do not overlap],
+  [a `Person` / `{name: "a", age: 1, friends: []}`], [`Person`], [nothing: the literal is below `Person`],
+  [fresh `A` / fresh `B` (two recursive types)], [error], [declare `type C = ...` and write `as C` in each arm],
 )
 
 `as T` after `end` is then just ordinary `as`: static ascription, plus widening if the slot is fresh.
@@ -1329,6 +1401,28 @@ stored container at a new type makes its copy visibly (Principle 6).
 *In place on a fresh operand needs a tree.* This is why freshness is deep (@sec-fresh), and why a
 builtin that marks its output fresh (`parseJson`) must return a tree. JSON is a tree.
 
+*What soundness needs of the validator (mechanized).* The proof uses two facts about the runtime
+validator and nothing else: when it answers `just` for a fresh operand, the value has the target
+type; and when it answers `just` for a target with no list or dict inside, the value has the target
+type. `soundness_v` in `Soundness.v` holds for every validator with these two properties
+(`vd_fresh`, `vd_imm`), and the model's `validate` is one. The validator's answer is never trusted
+for any other value: a fresh operand is a tree, an immutable target never looks inside an object, and
+a shared operand is accepted only when its type is already below the target (then the answer is
+`just` anyway, `validate_complete`). Two consequences:
+
+- *Memoizing* validation results over a DAG is safe.
+- *A cycle validates (decided 2026-09-30).* Only a shared value can be cyclic, so a checked program
+  meets a cycle only when validating a shared value whose type is already below the target, where the
+  answer is `just` anyway. An error there would stop a program the checker accepted (an `is T` arm it
+  counts as covering, for one). So when the same (object, type) pair comes round again on the current
+  path, the validator assumes it holds: the assumption rule of @sec-alias applied to values. It is
+  sound (`cvalidate`, `soundness_cycles` in `Cycles.v`) and still complete (`cval_complete`). The pair
+  must include the type: `j = [j]` validated against `[[int]]` meets `j` again against `[int]`, a
+  different question, and the answer is `none`. The assumptions live on the current path only, so a
+  failed union member leaves none behind. The model's `validate`, where a cycle uses up the budget,
+  is the earlier rule; both satisfy the two properties above. `deepCopy` of a cycle stays an error:
+  no finite tree is a copy of it (@sec-copy).
+
 *"Checkable" is partly a soundness rule (corrected).* Validation against a quote type simply fails (it
 returns `none`), and validation against an unknown type succeeds without looking. Both are sound, and
 that part of the rule is for good error messages. A *type variable* is different: types are erased, so
@@ -1470,8 +1564,8 @@ $
 $
 
 In the *TryAs* step, $v' = v$ and $H' = H$ always: validation reads the heap and changes nothing.
-Validation of a cyclic value against a recursive type stops with a checked error (@sec-surface);
-a DAG is fine.
+Validation assumes a (value, type) pair that comes round again on the current path, so a cyclic value
+of a recursive type validates (@sec-tryas); a DAG is fine.
 
 $
   chevron.l H; S space v; #w("deepCopy") space e chevron.r & --> chevron.l H'; S space v'; e chevron.r quad "where" (H', v') = "copy"(H, v)
@@ -1575,7 +1669,8 @@ The lemmas above correspond to these parts of the development:
 - *Retype and commit*: `dtyped_rsub` (retyping a fresh value needs no store change) and
   `commit_all` (Commit.v).
 - *TryAs*: `validate_dtyped` (in place, fresh), `validate_imm` (immutable target); the subtype case
-  needs no lemma of its own.
+  needs no lemma of its own. These are the only facts about the validator the proof uses
+  (`soundness_v`, @sec-tryas).
 - *DeepCopy*: `dcopy_fresh` (`Copy.v`: the copy is a fresh value of the same type whose region is
   exactly the new locations) and `inv_alloc_region` (`InvOps.v`: adding that region keeps the invariant).
 - *Frame*: built into quote types (@sec-break). The runtime never reads below a quote's inputs
@@ -1609,6 +1704,8 @@ What the mechanization does *not* cover is listed in @sec-mech.
   [H9], [renaming a variable stored at a new type inside a loop body, or read after a branch], [no renaming: one type per variable per scope (`rename_*`)],
   [H10], [`filter` (and other builtins whose quote sees the elements) "fresh when the input is fresh"], [fresh only when the elements are immutable (`hole_filter_fresh_stuck`)],
   [H11], [match bindings typed per arm, including abstract ones], [bindings are variables: one type per scope, never abstract (`arms_same_name_*`, `hole_bind_reentry_*`)],
+  [H12], [a checker that keeps one assumption set for $<=$ and fresh retyping], [one set per relation; $subset.sq.eq$ falls back to $<=$ under a quote (`hole_mixed_*`, `rsub_rejects`)],
+  [H13], [the assumption rule on an unguarded alias (`type V = int | V`)], [only guarded aliases are accepted (`unguarded_*` in `Recursive.v`)],
 )
 
 #pagebreak()
@@ -1743,8 +1840,9 @@ name is an error. A duplicate declaration or duplicate `def` is an error, includ
   Anything else needs a `_` arm.
 - `value => pattern` is an assertive single-arm match: its bindings are available after it in the
   current scope, and a mismatch stops the program.
-- Validation has a work budget and detects cycles. Exceeding the budget or meeting a cycle is an error
-  that stops the program, never a quiet `none`. `match is` and `tryAs` share the same budget and rules.
+- Validation has a work budget. Exceeding it is an error that stops the program, never a quiet `none`.
+  A cycle is not an error: the same (object, type) pair met again on the current path is assumed to
+  hold (decided 2026-09-30, @sec-tryas). `match is` and `tryAs` share the same budget and rules.
 
 == Checking by default
 
@@ -1834,29 +1932,31 @@ brands can all be deleted, and the runtime type checks can go once the oracle ag
 
 `formal-ver/` holds a Rocq (9.1) development of the core. `make check` in that directory rebuilds
 it and prints the assumptions of the main theorem: *none* (`Closed under the global context`). It is
-about 8,000 lines. `formal-ver/README.md` maps every definition to the section of this document it
+about 10,000 lines. `formal-ver/README.md` maps every definition to the section of this document it
 formalizes.
 
 #table(
   columns: (auto, 1fr),
   inset: 5pt, stroke: 0.5pt + luma(180),
   table.header([*File*], [*Contents*]),
-  [`Syntax.v`], [types (base, $bot$, unknown, `Maybe`, lists, per-label dict/shape types, unions, quotes with `never`), core words, values, heap objects],
-  [`Interp.v`], [the interpreter: `RStuck` exactly where the Go runtime reports a type mismatch; validation; the per-path `deepCopy` (`dcopy`)],
-  [`Subtyping.v`], [$<=$ (per label), its transitivity, fresh retyping $subset.sq.eq$],
+  [`Syntax.v`], [types (base, $bot$, unknown, `Maybe`, lists, per-label dict/shape types, unions, quotes with `never`, recursive types `TMu`), core words, values, heap objects],
+  [`Interp.v`], [the interpreter: `RStuck` exactly where the Go runtime reports a type mismatch; validation, which unfolds recursive types; the per-path `deepCopy` (`dcopy`)],
+  [`Subtyping.v`], [$<=$ (per label) and fresh retyping $subset.sq.eq$ as greatest fixed points, so recursive types compare as infinite trees; transitivity],
   [`Typing.v`], [the typing judgment with freshness marks and break/continue/return contexts],
   [`Invariant.v`], [store typing, deep typing of fresh values, regions, the invariant],
   [`Commit.v`], [committing a fresh tree into the store typing],
   [`Validate.v`, `Kind.v`], [`tryAs` in place; kind patterns],
   [`Copy.v`], [`deepCopy` gives a fresh value of the same type],
   [`InvOps.v`, `RecOps.v`], [stack and heap operations on the invariant; type-changing updates of fresh records],
-  [`Soundness.v`], [the theorem],
+  [`Soundness.v`], [the theorem, for any validator with the two properties of @sec-tryas (`soundness_v`), and for the model's (`soundness`)],
   [`Generic.v`], [type variables and substitution; `T_subst` (typing is closed under substitution); `soundness_generic` (each def checked once)],
   [`Frame.v`], [the frame lemma; divergence as a checker tracks it; dead code after a diverging word],
-  [`Join.v`], [branch joins as a function, and the proof that they are upper bounds],
+  [`Join.v`], [branch joins as a function (given the checker's decision procedure for $<=$ and $subset.sq.eq$), and the proof that they are upper bounds],
   [`Variance.v`], [the enum declaration checks are sound: substitution is monotone for variance (`payload_sub`) and for fresh retyping (`payload_rsub`), and preserves immutability (`payload_imm`)],
   [`Checkable.v`], [checkable types; validation never rejects a well-typed value against a checkable type (`validate_complete`, `validate_complete_fresh`)],
   [`Examples.v`], [holes H1--H11 run to `RStuck`; R6 gets stuck without a copy and type-checks and runs with `deepCopy`; the copy is per path; copying a cycle is a checked error; `Maybe`, recursive `List` and non-regular `Nest` declared as generic enums],
+  [`Cycles.v`], [a validator that answers `just` when an (object, type) pair repeats on its path: sound (`soundness_cycles`) and complete],
+  [`Recursive.v`], [`Json` equal to a reordered spelling; `Person` from a fresh literal; `parseJson tryAs [Person] ?` typed and run; `type T = Box[T]`; a well-typed cyclic value; holes H12 and H13; joins that meet a recursive alias],
 )
 
 *What is modeled*: everything in the calculus that interacts with aliasing, namely shared and fresh lists and
@@ -1868,14 +1968,15 @@ enum kind patterns, validation and `deepCopy` of enum values), validation with a
 variables in heap scopes captured by quotes, quotes with frame polymorphism and `never`,
 `if`, `loop` and loop-forever, `break`/`continue` through `each`, `return`, `exit`, polymorphic and
 recursive definitions, `tryAs` in its three modes, `deepCopy`, type-changing updates of fresh records,
-match bindings as stores into the scope, and validation completeness for checkable targets.
+match bindings as stores into the scope, validation completeness for checkable targets, and
+recursive aliases (subtyping and fresh retyping on infinite trees, their transitivity, validation,
+immutability, checkability, kind patterns, `deepCopy` and commit of recursive values).
 
 *What is not modeled*, and what each would need:
 
-- *Recursive aliases* (`Json`, `Person`). Types are finite trees in the model. Adding guarded recursion
-  means coinductive (or alias-environment) types, validation with a cycle check, and the
-  Amadio--Cardelli subtyping argument. Nothing in the proof depends on finiteness except the
-  structural recursion in `validate`. (`deepCopy` does not look at types, so it is unaffected.)
+- *Aliases as names.* The model writes a recursive alias as the recursive type it denotes (`TMu`,
+  with nested ones for aliases that refer to each other); the checker keeps names. Generic aliases
+  are not modeled (@sec-alias).
 - *`Maybe` as an instance of enums.* The model keeps `Maybe` as a built-in type and also shows the
   declaration `enum Maybe[a] = just a | none end` is well formed, covariant and fresh-covariant
   (`maybe_*` in `Examples.v`). The checker can implement `Maybe` as that enum.
@@ -1887,8 +1988,9 @@ match bindings as stores into the scope, and validation completeness for checkab
   Other builtins still need the contract in @sec-contract and tests.
 - *The checker algorithm*. The theorem is about the declarative rules. The checker must produce only
   derivations of them. Proved: the substitution lemma (defs checked once), the frame lemma (quote
-  bodies checked once), divergence, and joins. Not proved: unification, overload resolution and the
-  skolem escape check (@sec-unknown) as algorithms.
+  bodies checked once), divergence, and joins. Not proved: unification, overload resolution, the
+  skolem escape check (@sec-unknown) and the assumption-set algorithm for recursive aliases
+  (@sec-alias) as algorithms. H12 and H13 show two ways that algorithm can decide a different relation.
 - *Definite assignment.* Reading an unset variable is a checked error in the model, as at runtime.
 - *Slices and `...rest`.* The model has no slicing words. Principle 7 is what lets them be added as
   $Phi$ entries: each returns a new object, so a slice is a shallow copy with the freshness rule of @sec-fresh.

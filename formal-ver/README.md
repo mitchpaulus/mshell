@@ -31,6 +31,11 @@ Theorem soundness : forall sigs defs,              (* sigs: def signatures and e
   forall n, eval defs n [OScope []] 0 [] e <> RStuck.
 ```
 
+`Soundness.v` proves it for the interpreter with any validator for `tryAs` whose `just` is right for
+a fresh value and for a target with no list or dict (`soundness_v`); `soundness` is the instance for
+the model's `validate`, and `Cycles.v` gives another, a validator that answers `just` when an
+(object, type) pair repeats on its path (`soundness_cycles`).
+
 `Generic.v` removes the "every instance" assumption: a body checked once, at its declared signature
 with its type variables rigid, is enough.
 
@@ -58,10 +63,10 @@ What you have to read is whether the *definitions* say what the design means:
 
 | File | Lines | What to check |
 |---|---|---|
-| `Syntax.v` | ~200 | types, enum identities, substitution, words, values, heap objects |
-| `Interp.v` | ~440 | the interpreter matches `Evaluator.go` where it matters (see below) |
+| `Syntax.v` | ~400 | types (including recursive types `TMu`, their closedness and unfolding), enum identities, substitution, words, values, heap objects |
+| `Interp.v` | ~460 | the interpreter matches `Evaluator.go` where it matters (see below); `eval` is `evalv validate` |
 | `Typing.v` | ~270 | each typing rule matches the doc; `genv` holds def signatures and enum declarations |
-| `Subtyping.v` (definitions only) | ~200 | `sub`, `fsub`, `rsub`, `immutable`, and the enum declaration checks `occ_sub`, `occ_fresh`, `wf_payload` |
+| `Subtyping.v` (definitions only) | ~200 | the one-level relations `subF` and `rsubF` (with `fsubR`, `subsR`, `osubR`, `vsubsR`, `frsubR`, `vrsubsR`), `sub` and `rsub` as their greatest fixed points, `immutable`, and the enum declaration checks `occ_sub`, `occ_fresh`, `wf_payload` |
 
 Everything else (`Invariant.v` onward) is proof and cannot make the theorem say something weaker.
 
@@ -86,12 +91,19 @@ Everything else (`Invariant.v` onward) is proof and cannot make the theorem say 
 | Type variables; checking a def once | `TVar`, `tsub`; `T_subst`, `generic_def_ok`, `soundness_generic` in `Generic.v` |
 | Checking a quote body once (frame lemma) | `T_frame`, `quote_once` in `Frame.v` |
 | "A diverging effect absorbs what follows" | `t_div`; `diverges` and the `div_*` lemmas in `Frame.v` |
-| Branch joins | `join_slot`, `join_slot_ub`, `if_join` in `Join.v` |
+| Branch joins | `join_slot`, `join_slot_ub`, `if_join` in `Join.v`; the join is given the checker's decision procedure `le` for `<=` and fresh retyping, and the proofs assume only that it is right when it says yes (`le_ok`) |
+| Joins that meet a recursive alias (never widened inside) | `ajoin` in `Join.v`; `join_*` in `Recursive.v` |
 | `map` with a literal body | `WMap`; `tw_map`, `tw_map_imm` (fresh only when the results are immutable) |
 | `return` in top-level code | return context `RAny`, `tw_return_any` |
 | Match bindings | stores into the scope (`WStore`); `list :>` is `WKindIf` with the value left on the stack |
 | Checkable targets; `is T` exhaustiveness | `chk`, `validate_complete`, `validate_complete_fresh` in `Checkable.v` |
 | Counterexamples | `Examples.v` |
+| Recursive aliases `type X = T` | `TMu t` (`TRV 0` in `t` is the type itself), closed (`mu_ok`); one step of unfolding is `tunfold` |
+| Recursive aliases compared as infinite trees | `sub`, `rsub` as greatest fixed points; `sub_trans`, `sub_tsub`, `rsub_tsub`; `json_teq` in `Recursive.v` |
+| Guardedness; one assumption set per relation | `unguarded_*`, `mixed_accepts`, `rsub_rejects`, `hole_mixed_*` in `Recursive.v` |
+| Immutable, checkable for aliases (greatest fixed points) | `immutable`, `chk` on `TMu`; `immutable_tunfold`, `chk_tunfold` |
+| Kind pattern on an alias | `kind_then k (TMu _) = kind_top k` (unknown contents); unfold first with `t_sub` for the member |
+| What the proof needs of the validator; the cycle rule | `soundness_v` (`vd_fresh`, `vd_imm`); `cvalidate`, `soundness_cycles`, `cval_complete` in `Cycles.v` |
 
 ## Modeling choices
 
@@ -115,6 +127,17 @@ Everything else (`Invariant.v` onward) is proof and cannot make the theorem say 
 - **Child-stack builtins** (`each`) run the body on a one-element child stack, as the runtime does.
   `break`/`continue` inside the body discard the child stack and restore the outer one. The typing
   contexts are `LNone`, `LExact s` and `LChild` (the doc's `·`, `σ`, `⋆`).
+- **Recursive types are closed μ-types.** A recursive alias is written as the type it denotes, `TMu t`,
+  with de Bruijn recursion variables (`TRV`); aliases that refer to each other become nested `TMu`s.
+  Aliases are not generic, so a `TMu` used anywhere is closed (`mu_ok`: no type variable, no enum
+  parameter), and substitution treats it as an atom. The unfolding rules require `mu_ok`, so a
+  `TMu` that is not closed relates to nothing but itself and has no values.
+- **Subtyping and fresh retyping are greatest fixed points.** Each is the largest relation closed under
+  one level (`subF`, `rsubF`): union and unfolding steps are taken finitely often inside a level, and
+  the children of a type constructor are compared by the relation being defined. `sub_fold` and
+  `sub_unfold` move between the two views; `sub_coind` proves a pair by exhibiting a relation. Values
+  are finite, so `vtyped` and `dtyped` stay inductive, with one rule for a recursive type (`vt_mu`,
+  `dt_mu`: a value has it when it has the unfolding).
 - **Enum identity.** An enum's identity in the model (`ename`) is its name together with each parameter's
   variance, whether the parameter is fresh-covariant, and whether the enum is immutable. The checker has
   one declaration per name, so this names the same enums, and it lets `sub`, `rsub` and `immutable` be
@@ -241,9 +264,45 @@ Rules that turned out to be usability choices, not soundness conditions:
 Also forced by enums: an enum kind pattern on a value of unknown type checks its arm for every argument
 list (`tw_kind_enum`), like `list xs`; `E[unknown]` would be wrong for an invariant parameter.
 
+Found while adding recursive aliases (`Recursive.v`, `Cycles.v`). The rules held; the obvious way to
+implement them did not:
+
+12. **One assumption set for `<=` and fresh retyping.** Fresh retyping falls back to `<=` under a quote.
+    A checker that keeps one set of assumed pairs answers `A <= B` under the quote from the retyping
+    assumption, so a fresh `{x: [int], f: (-- A)}` becomes a `{x: [int | str], f: (-- B)}` and `f`
+    hands out a shared `[int]` as `[int | str]` (`mixed_accepts`, `hole_mixed_stuck`,
+    `hole_mixed_rejected`). The rule keeps them apart (`rsub_rejects`).
+13. **The assumption rule without guardedness.** With `type V = int | V`, assuming a pair and then taking
+    only union and unfolding steps proves `str <= V` and `V <= int` (`unguarded_str_below`,
+    `unguarded_below_int`). The model's relation takes those steps inductively and has neither
+    (`unguarded_model`); guardedness is what makes the algorithm agree with it.
+
+Also found:
+
+- **A checked program can build a cyclic value** (`cyc_try_typed`: `type L = [L]`, a list that contains
+  itself). `deepCopy` of it and validating it are checked errors in the model (`cyc_copy_err`,
+  `cyc_try_err`).
+- **The cycle rule of validation is free** (the design chose `just`, 2026-09-30). The proof uses only two facts about the validator
+  (`vd_fresh`, `vd_imm`). A cycle is always shared, and a shared operand is validated only when its type
+  is already below the target, so answering `just` on a repeated (object, type) pair is as sound as an
+  error (`soundness_cycles`) and still complete (`cval_complete`); it gives `just` for the cyclic list
+  (`cyc_try_cycles`).
+- **An enum instance guards a recursive alias**, as a list does (`type T = Box[T]`, `tb_typed`).
+- **A join never widens inside a recursive alias** (decided 2026-09-30). Widening inside two different
+  recursive types asks for their join again forever; the real answer is a recursive type nobody wrote.
+  The join takes the other side when one is below the other, a union when the kinds do not overlap,
+  and otherwise fails (`ajoin`, `join_two_recursive`); `join_slot_ub` still holds.
+- **Immutability and checkability of an alias are greatest fixed points**; unfolding changes neither
+  (`immutable_tunfold`, `chk_tunfold`).
+- **A kind pattern on an alias** is typed like one on a type variable (unknown contents of that kind)
+  unless the alias is unfolded first. `kind_then` must give some answer for a recursive type: the
+  substitution lemma instantiates a type variable, which the pattern treats as unknown contents, with
+  an alias.
+
 ## Not modeled
 
-Recursive aliases (`Json`), grids and commands as such, other builtins (they need the builtin
+Generic aliases (`type Tree[a] = ...`: substitution would have to enter recursive types), the
+assumption-set algorithm for recursive types (H12 and H13 show how it can go wrong), grids and commands as such, other builtins (they need the builtin
 contract; every builtin that returns a new list follows `map`'s rule, fresh exactly when the elements are
 immutable, `tw_map_imm`), the checker algorithm (unification, overload resolution; joins, frame and substitution
 lemmas are now proved),

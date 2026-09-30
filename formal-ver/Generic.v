@@ -23,75 +23,7 @@
 
 From Stdlib Require Import String List Arith Bool Lia.
 Import ListNotations.
-From MshellCore Require Import Syntax Subtyping Variance Typing Interp Invariant RtLemmas Soundness.
-
-(** ** An induction principle for types with nested lists *)
-Section TyInd.
-Variable P : ty -> Prop.
-Variable Q : fstat -> Prop.
-Hypothesis HInt : P TInt.
-Hypothesis HStr : P TStr.
-Hypothesis HBool : P TBool.
-Hypothesis HBot : P TBot.
-Hypothesis HTop : P TTop.
-Hypothesis HMaybe : forall t, P t -> P (TMaybe t).
-Hypothesis HList : forall t, P t -> P (TList t).
-Hypothesis HRec : forall fs r, Forall (fun p => Q (snd p)) fs -> Q r -> P (TRec fs r).
-Hypothesis HUnion : forall a b, P a -> P b -> P (TUnion a b).
-Hypothesis HQuote : forall ins outs, Forall P ins ->
-  (forall o, outs = Some o -> Forall P o) -> P (TQuote ins outs).
-Hypothesis HEnum : forall E args, Forall P args -> P (TEnum E args).
-Hypothesis HParam : forall i, P (TParam i).
-Hypothesis HVar : forall x, P (TVar x).
-Hypothesis QReq : forall t, P t -> Q (FReq t).
-Hypothesis QOpt : forall t, P t -> Q (FOpt t).
-Hypothesis QDict : forall t, P t -> Q (FDict t).
-Hypothesis QAbs : Q FAbs.
-Hypothesis QOpen : Q FOpen.
-
-Fixpoint ty_ind2 (t : ty) : P t :=
-  match t with
-  | TInt => HInt | TStr => HStr | TBool => HBool | TBot => HBot | TTop => HTop
-  | TMaybe t' => HMaybe t' (ty_ind2 t')
-  | TList t' => HList t' (ty_ind2 t')
-  | TRec fs r =>
-      HRec fs r
-        ((fix go (l : list (label * fstat)) : Forall (fun p => Q (snd p)) l :=
-            match l with
-            | [] => Forall_nil _
-            | (k, f) :: l' => @Forall_cons _ (fun p => Q (snd p)) (k, f) l' (fstat_ind2 f) (go l')
-            end) fs)
-        (fstat_ind2 r)
-  | TUnion a b => HUnion a b (ty_ind2 a) (ty_ind2 b)
-  | TQuote ins outs =>
-      HQuote ins outs
-        ((fix go (l : list ty) : Forall P l :=
-            match l with [] => Forall_nil _ | x :: l' => Forall_cons x (ty_ind2 x) (go l') end) ins)
-        (match outs as o0 return (forall o, o0 = Some o -> Forall P o) with
-         | Some o1 => fun o E =>
-             match E in _ = y return (match y with Some o' => Forall P o' | None => True end) with
-             | eq_refl =>
-                 (fix go (l : list ty) : Forall P l :=
-                    match l with [] => Forall_nil _ | x :: l' => Forall_cons x (ty_ind2 x) (go l') end) o1
-             end
-         | None => fun o E => match E with end
-         end)
-  | TEnum E args =>
-      HEnum E args
-        ((fix go (l : list ty) : Forall P l :=
-            match l with [] => Forall_nil _ | x :: l' => Forall_cons x (ty_ind2 x) (go l') end) args)
-  | TParam i => HParam i
-  | TVar x => HVar x
-  end
-with fstat_ind2 (f : fstat) : Q f :=
-  match f with
-  | FReq t => QReq t (ty_ind2 t)
-  | FOpt t => QOpt t (ty_ind2 t)
-  | FDict t => QDict t (ty_ind2 t)
-  | FAbs => QAbs
-  | FOpen => QOpen
-  end.
-End TyInd.
+From MshellCore Require Import Syntax Subtyping Variance Typing Interp Invariant RtLemmas Kind Soundness.
 
 (** ** Substitution: basic facts *)
 
@@ -245,46 +177,119 @@ Qed.
 Lemma wf_payload_closed E pts t : wf_payload E pts -> In t pts -> fvt t = [].
 Proof. intros W Hin. destruct (wf_payload_in E pts t W Hin) as (Ws & _). eapply occ_sub_closed; eauto. Qed.
 
-Scheme sub_mut := Induction for sub Sort Prop
-with fsub_mut := Induction for fsub Sort Prop
-with subs_mut := Induction for subs Sort Prop
-with osub_mut := Induction for osub Sort Prop
-with vsubs_mut := Induction for vsubs Sort Prop.
-
 Definition omap (th : nat -> ty) (o : option (list ty)) : option (list ty) :=
   match o with Some l => Some (map (tsub th) l) | None => None end.
 
-Lemma sub_tsub th : forall a b, sub a b -> sub (tsub th a) (tsub th b).
+(** A closed type (in particular the unfolding of a closed recursive type)
+    mentions no type variable, so substitution leaves it alone. *)
+Lemma tsub_tclosed th : forall t d, tclosed d t = true -> tsub th t = t.
 Proof.
-  apply (sub_mut
-    (fun a b _ => sub (tsub th a) (tsub th b))
-    (fun f g _ => fsub (ftsub th f) (ftsub th g))
-    (fun l1 l2 _ => subs (map (tsub th) l1) (map (tsub th) l2))
-    (fun o1 o2 _ => osub (omap th o1) (omap th o2))
-    (fun ps l1 l2 _ => vsubs ps (map (tsub th) l1) (map (tsub th) l2))); simpl; intros;
-    try solve [econstructor; eauto].
-  - apply s_rec. intros k. rewrite !field_at_tsub. auto.
+  apply (ty_ind2 (fun t => forall d, tclosed d t = true -> tsub th t = t)
+                 (fun f => forall d, ftclosed d f = true -> ftsub th f = f));
+    simpl; intros; auto; try discriminate.
+  - f_equal; eauto.
+  - f_equal; eauto.
+  - apply andb_true_iff in H1 as [H1 H2]. f_equal; eauto.
+    rewrite <- (map_id fs) at 2. apply map_ext_Forall. rewrite Forall_forall in H |- *.
+    intros [k f] Hin. simpl. f_equal. apply (H (k, f) Hin d). exact (forallb_in _ _ _ H1 Hin).
+  - apply andb_true_iff in H1 as [? ?]. f_equal; eauto.
+  - apply andb_true_iff in H1 as [H1 H2]. f_equal.
+    + rewrite <- (map_id ins) at 2. apply map_ext_Forall. rewrite Forall_forall in H |- *.
+      intros x Hin. eapply H; eauto. exact (forallb_in _ _ _ H1 Hin).
+    + destruct outs as [o|]; auto. f_equal. rewrite <- (map_id o) at 2. apply map_ext_Forall.
+      specialize (H0 o eq_refl). rewrite Forall_forall in H0 |- *.
+      intros x Hin. eapply H0; eauto. exact (forallb_in _ _ _ H2 Hin).
+  - f_equal. rewrite <- (map_id args) at 2. apply map_ext_Forall. rewrite Forall_forall in H |- *.
+    intros x Hin. eapply H; eauto. exact (forallb_in _ _ _ H0 Hin).
+  - f_equal; eauto.
+  - f_equal; eauto.
+  - f_equal; eauto.
 Qed.
 
-Scheme rsub_mut2 := Induction for rsub Sort Prop
-with frsub_mut2 := Induction for frsub Sort Prop
-with vrsubs_mut2 := Induction for vrsubs Sort Prop.
+Lemma tsub_tunfold th t : mu_ok t = true -> tsub th (tunfold t) = tunfold t.
+Proof. intros M. eapply tsub_tclosed. apply tclosed_tunfold; exact M. Qed.
+
+(** Subtyping is closed under substitution: by coinduction, relating the
+    substituted types. *)
+Section SubTsub.
+Variable th : nat -> ty.
+
+Definition Rth (x y : ty) : Prop := exists a b, x = tsub th a /\ y = tsub th b /\ sub a b.
+
+Lemma Rth_in a b : sub a b -> Rth (tsub th a) (tsub th b).
+Proof. intros H. exists a, b; auto. Qed.
+
+Lemma fsub_Rth f g : fsub f g -> fsubR Rth (ftsub th f) (ftsub th g).
+Proof. intros H; destruct H; simpl; constructor; apply Rth_in; auto. Qed.
+
+Lemma subs_Rth l1 l2 : subs l1 l2 -> subsR Rth (map (tsub th) l1) (map (tsub th) l2).
+Proof. intros H; induction H; simpl; constructor; auto. apply Rth_in; auto. Qed.
+
+Lemma osub_Rth o1 o2 : osub o1 o2 -> osubR Rth (omap th o1) (omap th o2).
+Proof. intros H; destruct H; simpl; constructor. apply subs_Rth; auto. Qed.
+
+Lemma vsubs_Rth ps a b : vsubs ps a b -> vsubsR Rth ps (map (tsub th) a) (map (tsub th) b).
+Proof.
+  intros H; induction H; simpl; [constructor | apply vs_co | apply vs_contra | apply vs_inv];
+    auto using Rth_in.
+Qed.
+
+Lemma subF_Rth a b : subF sub a b -> subF Rth (tsub th a) (tsub th b).
+Proof.
+  intros H; induction H; simpl; try (econstructor; eauto using Rth_in; fail).
+  - apply sf_mul; auto. rewrite <- (tsub_tunfold th t); auto.
+  - apply sf_mur; auto. rewrite <- (tsub_tunfold th t); auto.
+  - apply sf_rec. intros k. rewrite !field_at_tsub. apply fsub_Rth; auto.
+  - apply sf_quote; [apply subs_Rth | apply (osub_Rth o1 o2)]; auto.
+  - apply sf_enum, vsubs_Rth; auto.
+Qed.
+End SubTsub.
+
+Lemma sub_tsub th : forall a b, sub a b -> sub (tsub th a) (tsub th b).
+Proof.
+  intros a b H. apply (sub_coind (Rth th)); [| apply Rth_in; exact H].
+  intros x y (a' & b' & -> & -> & Hs). apply subF_Rth, sub_unfold, Hs.
+Qed.
 
 Lemma vrel_tsub th v x y : vrel v x y -> vrel v (tsub th x) (tsub th y).
 Proof. destruct v; simpl; intros H; try apply sub_tsub; auto. destruct H; split; apply sub_tsub; auto. Qed.
 
+Section RsubTsub.
+Variable th : nat -> ty.
+
+Definition RRth (x y : ty) : Prop := exists a b, x = tsub th a /\ y = tsub th b /\ rsub a b.
+
+Lemma RRth_in a b : rsub a b -> RRth (tsub th a) (tsub th b).
+Proof. intros H. exists a, b; auto. Qed.
+
+Lemma frsub_RRth f g : frsub f g -> frsubR RRth (ftsub th f) (ftsub th g).
+Proof.
+  intros H; destruct H; simpl; try (constructor; auto using RRth_in; fail).
+  - destruct H as [->|[->| ->]]; simpl; eapply frs_opt; eauto using RRth_in.
+  - destruct H as [->|[->| ->]]; simpl; eapply frs_dict; eauto using RRth_in.
+Qed.
+
+Lemma vrsubs_RRth ps a b : vrsubs ps a b -> vrsubsR RRth ps (map (tsub th) a) (map (tsub th) b).
+Proof.
+  intros H; induction H; simpl; [constructor | apply vrs_fresh | apply vrs_sub];
+    auto using RRth_in, vrel_tsub.
+Qed.
+
+Lemma rsubF_RRth a b : rsubF rsub a b -> rsubF RRth (tsub th a) (tsub th b).
+Proof.
+  intros H; induction H; simpl; try (econstructor; eauto using RRth_in; fail).
+  - apply rf_sub, sub_tsub; auto.
+  - apply rf_rec. intros k. rewrite !field_at_tsub. apply frsub_RRth; auto.
+  - apply rf_enum, vrsubs_RRth; auto.
+  - apply rf_mul; auto. rewrite <- (tsub_tunfold th t); auto.
+  - apply rf_mur; auto. rewrite <- (tsub_tunfold th t); auto.
+Qed.
+End RsubTsub.
+
 Lemma rsub_tsub th : forall a b, rsub a b -> rsub (tsub th a) (tsub th b).
 Proof.
-  apply (rsub_mut2
-    (fun a b _ => rsub (tsub th a) (tsub th b))
-    (fun f g _ => frsub (ftsub th f) (ftsub th g))
-    (fun ps l1 l2 _ => vrsubs ps (map (tsub th) l1) (map (tsub th) l2))); simpl; intros;
-    try solve [econstructor; eauto].
-  - apply rs_sub. apply sub_tsub; auto.
-  - apply rs_rec. intros k. rewrite !field_at_tsub. auto.
-  - destruct o as [->|[->| ->]]; simpl; eapply frs_opt; eauto.
-  - destruct o as [->|[->| ->]]; simpl; eapply frs_dict; eauto.
-  - apply vrs_sub; auto. apply vrel_tsub; auto.
+  intros a b H. apply (rsub_coind (RRth th)); [| apply RRth_in; exact H].
+  intros x y (a' & b' & -> & -> & Hs). apply rsubF_RRth, rsub_unfold, Hs.
 Qed.
 
 Lemma immutable_tsub th : forall t, immutable t = true -> immutable (tsub th t) = true.
@@ -318,13 +323,6 @@ Qed.
 Lemma kind_top_closed k u : kind_top k = Some u -> forall th, tsub th u = u.
 Proof. destruct k; simpl; intros Ek; inversion Ek; subst; reflexivity. Qed.
 
-Lemma kind_head_top t k u : kind_of_ty t = Some k -> kind_top k = Some u -> sub t u.
-Proof.
-  destruct t; simpl; intros E1 E2; inversion E1; subst; simpl in E2; inversion E2; subst;
-    try apply s_refl; try apply s_top.
-  - apply s_maybe, s_top.
-  - apply s_rec. intros k. unfold field_at at 2. simpl. apply fs_open.
-Qed.
 
 (** What a kind pattern binds is never more than unknown contents of that kind. *)
 Lemma kind_then_below_top k u : kind_top k = Some u ->
@@ -360,6 +358,8 @@ Proof.
   - inversion Ekt; subst. eexists; split; [reflexivity | apply s_refl].
   - destruct (kind_then_below_top k u1 Ekt (th x)) as (t1' & E' & S').
     rewrite E'. eexists; split; [reflexivity|]. rewrite (kind_top_closed _ _ Ekt). exact S'.
+  - rewrite Ekt. eexists; split; [reflexivity|]. rewrite (kind_top_closed _ _ Ekt). apply s_refl.
+  - inversion Ekt; subst. eexists; split; [reflexivity | apply s_refl].
 Qed.
 
 Lemma kind_else_sub k : forall t, sub (kind_else k t) t.

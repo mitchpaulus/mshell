@@ -157,7 +157,7 @@ Lemma mono_s : forall n t p, size t < n -> occ_sub ps p t = true -> rel_on t ->
   prel p (subst a t) (subst b t).
 Proof.
   induction n as [|n IH]; intros t p Hs Ho R; [lia|].
-  destruct t as [| | | | |t'|t'|fs r|x y|ins outs|E args|i|v]; simpl in Hs, Ho |- *;
+  destruct t as [| | | | |t'|t'|fs r|x y|ins outs|E args|i|v|mt|rn]; simpl in Hs, Ho |- *;
     try apply prel_refl.
   - (* Maybe *)
     assert (IHt : prel p (subst a t') (subst b t')) by (apply IH; auto; lia).
@@ -240,9 +240,9 @@ Lemma vrsubs_nth : forall ps' a' b', vrsubs ps' a' b' -> forall i q, nth_error p
 Proof.
   induction 1; intros [|i] q0 E; simpl in E; try discriminate.
   - inversion E; subst. left; auto.
-  - apply IHvrsubs; auto.
+  - apply IHvrsubsR; auto.
   - inversion E; subst. right; auto.
-  - apply IHvrsubs; auto.
+  - apply IHvrsubsR; auto.
 Qed.
 
 Lemma no_fresh_rel t : no_fresh ps t = true -> rel_on t.
@@ -255,7 +255,7 @@ Qed.
 Lemma mono_r : forall n t, size t < n -> occ_fresh ps t = true -> rsub (subst a t) (subst b t).
 Proof.
   induction n as [|n IH]; intros t Hs Ho; [lia|].
-  destruct t as [| | | | |t'|t'|fs r|x y|ins outs|E args|i|v]; simpl in Hs, Ho |- *;
+  destruct t as [| | | | |t'|t'|fs r|x y|ins outs|E args|i|v|mt|rn]; simpl in Hs, Ho |- *;
     try (apply rs_sub, s_refl).
   - apply rs_maybe, IH; auto; lia.
   - apply rs_list, IH; auto; lia.
@@ -304,7 +304,7 @@ Lemma subst_immutable a : forall n t, size t < n -> immutable t = true ->
   forallb immutable a = true -> immutable (subst a t) = true.
 Proof.
   induction n as [|n IH]; intros t Hs Hi Ha; [lia|].
-  destruct t as [| | | | |t'|t'|fs r|x y|ins outs|E args|i|v]; simpl in Hs, Hi |- *; auto; try discriminate.
+  destruct t as [| | | | |t'|t'|fs r|x y|ins outs|E args|i|v|mt|rn]; simpl in Hs, Hi |- *; auto; try discriminate.
   - apply IH; auto; lia.
   - apply andb_true_iff in Hi as [Hx Hy]. rewrite !IH; auto; lia.
   - apply andb_true_iff in Hi as [He Hf]. rewrite He. simpl.

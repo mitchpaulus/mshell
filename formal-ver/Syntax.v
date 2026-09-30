@@ -33,7 +33,15 @@ Definition loc := nat.
 
     [TVar x] is a rigid type variable, as in a definition's signature
     [(a -- a)]: the body is checked once with [a] rigid (Generic.v).  No
-    value has type [TVar x]; it is substituted away at each instance. *)
+    value has type [TVar x]; it is substituted away at each instance.
+
+    [TMu t] is a recursive type, the doc's recursive [type] alias: [TRV 0]
+    inside [t] stands for [TMu t] itself (de Bruijn indices, so [TRV 1] under
+    a nested [TMu] names the outer one).  [type Json = int | [Json]] is
+    [TMu (TUnion TInt (TList (TRV 0)))].  A recursive type is used only when
+    it is closed ([mu_ok]): aliases are not generic, so the body mentions no
+    type variable and no enum parameter.  Substitution therefore never
+    enters one: to [subst] and [tsub] a [TMu] is an atom. *)
 
 (** ** Enum identities
 
@@ -106,6 +114,8 @@ Inductive ty : Type :=
 | TEnum (E : ename) (args : list ty)
 | TParam (i : nat)
 | TVar (x : nat)           (* a rigid type variable of a polymorphic definition *)
+| TMu (t : ty)             (* a recursive type; [TRV 0] in [t] is the type itself *)
+| TRV (n : nat)            (* a recursion variable (de Bruijn index) *)
 with fstat : Type :=
 | FReq (t : ty) | FOpt (t : ty) | FDict (t : ty) | FAbs | FOpen.
 
@@ -151,7 +161,7 @@ Fixpoint subst (a : list ty) (t : ty) : ty :=
   | TQuote ins outs =>
       TQuote (map (subst a) ins) (match outs with Some o => Some (map (subst a) o) | None => None end)
   | TEnum E args => TEnum E (map (subst a) args)
-  | TInt | TStr | TBool | TBot | TTop | TVar _ => t
+  | TInt | TStr | TBool | TBot | TTop | TVar _ | TMu _ | TRV _ => t
   end
 with fsubst (a : list ty) (f : fstat) : fstat :=
   match f with
@@ -170,7 +180,7 @@ Fixpoint tsub (th : nat -> ty) (t : ty) : ty :=
   | TQuote ins outs =>
       TQuote (map (tsub th) ins) (match outs with Some o => Some (map (tsub th) o) | None => None end)
   | TEnum E args => TEnum E (map (tsub th) args)
-  | TInt | TStr | TBool | TBot | TTop | TParam _ => t
+  | TInt | TStr | TBool | TBot | TTop | TParam _ | TMu _ | TRV _ => t
   end
 with ftsub (th : nat -> ty) (f : fstat) : fstat :=
   match f with
@@ -186,10 +196,128 @@ Fixpoint fvt (t : ty) : list nat :=
   | TUnion x y => fvt x ++ fvt y
   | TQuote ins outs => flat_map fvt ins ++ match outs with Some o => flat_map fvt o | None => [] end
   | TEnum _ args => flat_map fvt args
-  | TInt | TStr | TBool | TBot | TTop | TParam _ => []
+  | TInt | TStr | TBool | TBot | TTop | TParam _ | TMu _ | TRV _ => []
   end
 with ffvt (f : fstat) : list nat :=
   match f with FReq t | FOpt t | FDict t => fvt t | FAbs | FOpen => [] end.
+
+(** ** An induction principle for types with nested lists *)
+Section TyInd.
+Variable P : ty -> Prop.
+Variable Q : fstat -> Prop.
+Hypothesis HInt : P TInt.
+Hypothesis HStr : P TStr.
+Hypothesis HBool : P TBool.
+Hypothesis HBot : P TBot.
+Hypothesis HTop : P TTop.
+Hypothesis HMaybe : forall t, P t -> P (TMaybe t).
+Hypothesis HList : forall t, P t -> P (TList t).
+Hypothesis HRec : forall fs r, Forall (fun p => Q (snd p)) fs -> Q r -> P (TRec fs r).
+Hypothesis HUnion : forall a b, P a -> P b -> P (TUnion a b).
+Hypothesis HQuote : forall ins outs, Forall P ins ->
+  (forall o, outs = Some o -> Forall P o) -> P (TQuote ins outs).
+Hypothesis HEnum : forall E args, Forall P args -> P (TEnum E args).
+Hypothesis HParam : forall i, P (TParam i).
+Hypothesis HVar : forall x, P (TVar x).
+Hypothesis HMu : forall t, P t -> P (TMu t).
+Hypothesis HRV : forall n, P (TRV n).
+Hypothesis QReq : forall t, P t -> Q (FReq t).
+Hypothesis QOpt : forall t, P t -> Q (FOpt t).
+Hypothesis QDict : forall t, P t -> Q (FDict t).
+Hypothesis QAbs : Q FAbs.
+Hypothesis QOpen : Q FOpen.
+
+Fixpoint ty_ind2 (t : ty) : P t :=
+  match t with
+  | TInt => HInt | TStr => HStr | TBool => HBool | TBot => HBot | TTop => HTop
+  | TMaybe t' => HMaybe t' (ty_ind2 t')
+  | TList t' => HList t' (ty_ind2 t')
+  | TRec fs r =>
+      HRec fs r
+        ((fix go (l : list (label * fstat)) : Forall (fun p => Q (snd p)) l :=
+            match l with
+            | [] => Forall_nil _
+            | (k, f) :: l' => @Forall_cons _ (fun p => Q (snd p)) (k, f) l' (fstat_ind2 f) (go l')
+            end) fs)
+        (fstat_ind2 r)
+  | TUnion a b => HUnion a b (ty_ind2 a) (ty_ind2 b)
+  | TQuote ins outs =>
+      HQuote ins outs
+        ((fix go (l : list ty) : Forall P l :=
+            match l with [] => Forall_nil _ | x :: l' => Forall_cons x (ty_ind2 x) (go l') end) ins)
+        (match outs as o0 return (forall o, o0 = Some o -> Forall P o) with
+         | Some o1 => fun o E =>
+             match E in _ = y return (match y with Some o' => Forall P o' | None => True end) with
+             | eq_refl =>
+                 (fix go (l : list ty) : Forall P l :=
+                    match l with [] => Forall_nil _ | x :: l' => Forall_cons x (ty_ind2 x) (go l') end) o1
+             end
+         | None => fun o E => match E with end
+         end)
+  | TEnum E args =>
+      HEnum E args
+        ((fix go (l : list ty) : Forall P l :=
+            match l with [] => Forall_nil _ | x :: l' => Forall_cons x (ty_ind2 x) (go l') end) args)
+  | TParam i => HParam i
+  | TVar x => HVar x
+  | TMu t' => HMu t' (ty_ind2 t')
+  | TRV n => HRV n
+  end
+with fstat_ind2 (f : fstat) : Q f :=
+  match f with
+  | FReq t => QReq t (ty_ind2 t)
+  | FOpt t => QOpt t (ty_ind2 t)
+  | FDict t => QDict t (ty_ind2 t)
+  | FAbs => QAbs
+  | FOpen => QOpen
+  end.
+End TyInd.
+
+(** ** Recursive types
+
+    [tclosed d t]: [t] mentions no type variable and no enum parameter, and
+    every recursion variable is bound, with [d] binders around [t]. *)
+Fixpoint tclosed (d : nat) (t : ty) : bool :=
+  match t with
+  | TInt | TStr | TBool | TBot | TTop => true
+  | TParam _ | TVar _ => false
+  | TRV n => n <? d
+  | TMu b => tclosed (S d) b
+  | TMaybe t' | TList t' => tclosed d t'
+  | TRec fs r => forallb (fun p => ftclosed d (snd p)) fs && ftclosed d r
+  | TUnion a b => tclosed d a && tclosed d b
+  | TQuote ins outs =>
+      forallb (tclosed d) ins && match outs with Some o => forallb (tclosed d) o | None => true end
+  | TEnum _ args => forallb (tclosed d) args
+  end
+with ftclosed (d : nat) (f : fstat) : bool :=
+  match f with FReq t | FOpt t | FDict t => tclosed d t | FAbs | FOpen => true end.
+
+(** The body of [TMu t] is closed apart from [TRV 0]. *)
+Definition mu_ok (t : ty) : bool := tclosed 1 t.
+
+(** [musubst k s t] puts [s] (a closed type) for recursion variable [k]. *)
+Fixpoint musubst (k : nat) (s : ty) (t : ty) : ty :=
+  match t with
+  | TRV n => if Nat.eqb n k then s else t
+  | TMu b => TMu (musubst (S k) s b)
+  | TMaybe t' => TMaybe (musubst k s t')
+  | TList t' => TList (musubst k s t')
+  | TRec fs r => TRec (map (fun p => (fst p, fmusubst k s (snd p))) fs) (fmusubst k s r)
+  | TUnion a b => TUnion (musubst k s a) (musubst k s b)
+  | TQuote ins outs =>
+      TQuote (map (musubst k s) ins) (match outs with Some o => Some (map (musubst k s) o) | None => None end)
+  | TEnum E args => TEnum E (map (musubst k s) args)
+  | TInt | TStr | TBool | TBot | TTop | TParam _ | TVar _ => t
+  end
+with fmusubst (k : nat) (s : ty) (f : fstat) : fstat :=
+  match f with
+  | FReq t => FReq (musubst k s t) | FOpt t => FOpt (musubst k s t) | FDict t => FDict (musubst k s t)
+  | FAbs => FAbs | FOpen => FOpen
+  end.
+
+(** One step of unfolding: the body of [TMu t] with [TMu t] for [TRV 0]. *)
+Definition tunfold (t : ty) : ty := musubst 0 (TMu t) t.
 
 (** Runtime kinds.  Each enum is its own kind, shared by all its instances. *)
 Inductive kind := KInt | KStr | KBool | KMaybe | KList | KDict | KQuote | KEnum (E : ename).

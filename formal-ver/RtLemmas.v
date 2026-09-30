@@ -40,7 +40,14 @@ Lemma ssub_shs l1 l2 : subs l1 l2 -> ssub (shs l1) (shs l2).
 Proof. induction 1; constructor; auto. constructor; auto. Qed.
 
 Lemma sub_list_inv a t : sub (TList a) (TList t) -> teq a t.
-Proof. intros H; inversion H; subst; [apply teq_refl | split; auto]. Qed.
+Proof. intros H; apply sub_unfold in H; inversion H; subst; [apply teq_refl | split; auto]. Qed.
+
+Lemma fsub_refl f : fsub f f.
+Proof. destruct f; constructor; apply s_refl. Qed.
+
+Lemma sub_rec_fsub fs1 r1 fs2 r2 :
+  sub (TRec fs1 r1) (TRec fs2 r2) -> forall k, fsub (field_at k fs1 r1) (field_at k fs2 r2).
+Proof. intros H; apply sub_unfold in H; inversion H; subst; auto. intros k. apply fsub_refl. Qed.
 
 Lemma sub_top_any t a : sub TTop t -> sub a t.
 Proof. intros H; eapply sub_top_inv; eauto. Qed.
@@ -71,26 +78,29 @@ Proof.
   apply (vtyped_comb sigs Σ
     (fun v a _ => forall b, sub a b -> vtyped sigs Σ v b)
     (fun vs ts _ => forall ts', Forall2 sub ts ts' -> vtypedl sigs Σ vs ts')).
-  - intros n b0 Hs. remember TInt as x eqn:E; induction Hs; subst; try discriminate; eauto using vtyped.
-  - intros n b0 Hs. remember TStr as x eqn:E; induction Hs; subst; try discriminate; eauto using vtyped.
-  - intros n b0 Hs. remember TBool as x eqn:E; induction Hs; subst; try discriminate; eauto using vtyped.
-  - intros t b0 Hs. remember (TMaybe t) as x eqn:E; induction Hs; subst; try discriminate; eauto using vtyped.
-  - intros v t Hv IH b0 Hs. remember (TMaybe t) as x eqn:E; induction Hs; subst; try discriminate; eauto using vtyped.
+  - intros n b0 Hs. apply sub_unfold in Hs. remember TInt as x eqn:E; induction Hs; subst; try discriminate; eauto using vtyped.
+  - intros n b0 Hs. apply sub_unfold in Hs. remember TStr as x eqn:E; induction Hs; subst; try discriminate; eauto using vtyped.
+  - intros n b0 Hs. apply sub_unfold in Hs. remember TBool as x eqn:E; induction Hs; subst; try discriminate; eauto using vtyped.
+  - intros t b0 Hs. apply sub_unfold in Hs. remember (TMaybe t) as x eqn:E; induction Hs; subst; try discriminate; eauto using vtyped.
+  - intros v t Hv IH b0 Hs. apply sub_unfold in Hs. remember (TMaybe t) as x eqn:E; induction Hs; subst; try discriminate; eauto using vtyped.
     inversion E; subst. constructor. auto.
   - intros l a t E Hs b0 Hs'. eapply vt_list; eauto. eapply sub_trans; eauto.
   - intros l fs r t E Hs b0 Hs'. eapply vt_rec; eauto. eapply sub_trans; eauto.
-  - intros sc e G ins outs Esc Hc b0 Hs.
+  - intros sc e G ins outs Esc Hc b0 Hs. apply sub_unfold in Hs.
     remember (TQuote ins outs) as x eqn:E; induction Hs; subst; try discriminate; eauto using vtyped.
     inversion E; subst. econstructor; eauto. eapply closure_ok_sub; eauto.
-  - intros v a b Hv IH b0 Hs. remember (TUnion a b) as x eqn:E; induction Hs; subst; try discriminate; eauto using vtyped.
-    inversion E; subst. auto.
-  - intros v a b Hv IH b0 Hs. remember (TUnion a b) as x eqn:E; induction Hs; subst; try discriminate; eauto using vtyped.
-    inversion E; subst. auto.
+  - intros v a b Hv IH b0 Hs. apply sub_unfold in Hs.
+    remember (TUnion a b) as x eqn:E; induction Hs; subst; try discriminate; eauto using vtyped.
+    inversion E; subst. apply IH, sub_fold; auto.
+  - intros v a b Hv IH b0 Hs. apply sub_unfold in Hs.
+    remember (TUnion a b) as x eqn:E; induction Hs; subst; try discriminate; eauto using vtyped.
+    inversion E; subst. apply IH, sub_fold; auto.
   - intros v t Hv IH b Hs. apply IH. eapply sub_top_any; eauto.
-  - intros E c pts vs a Ec W Hl IH b0 Hs.
+  - intros E c pts vs a Ec W Hl IH b0 Hs. apply sub_unfold in Hs.
     remember (TEnum E a) as x eqn:Ex; induction Hs; subst; try discriminate; eauto using vtyped.
     inversion Ex; subst. eapply vt_con; eauto. apply IH.
     apply Forall2_map_in. intros t Ht. eapply payload_sub; eauto.
+  - intros v t M Hv IH b Hs. apply IH. eapply sub_trans; [apply sub_unfold_r; exact M | exact Hs].
   - intros ts' F. inversion F; subst. constructor.
   - intros v vs t ts Hv IH Hl IHl ts' F. inversion F; subst. constructor; auto.
   Unshelve. all: exact TBot.
@@ -101,27 +111,27 @@ Proof. intros. eapply (proj1 (vtyped_sub_all Σ)); eauto. Qed.
 
 (** ** Canonical forms for [vtyped] *)
 Lemma vt_bot Σ v : ~ vtyped sigs Σ v TBot.
-Proof. intros H; inversion H; subst; match goal with Hs : sub _ TBot |- _ => inversion Hs end. Qed.
+Proof. intros H; inversion H; subst; match goal with Hs : sub _ TBot |- _ => apply sub_unfold in Hs; inversion Hs end. Qed.
 
 Lemma vt_int_inv Σ v : vtyped sigs Σ v TInt -> exists n, v = VInt n.
-Proof. intros H; inversion H; subst; eauto; match goal with Hs : sub _ TInt |- _ => inversion Hs end. Qed.
+Proof. intros H; inversion H; subst; eauto; match goal with Hs : sub _ TInt |- _ => apply sub_unfold in Hs; inversion Hs end. Qed.
 
 Lemma vt_str_inv Σ v : vtyped sigs Σ v TStr -> exists s, v = VStr s.
-Proof. intros H; inversion H; subst; eauto; match goal with Hs : sub _ TStr |- _ => inversion Hs end. Qed.
+Proof. intros H; inversion H; subst; eauto; match goal with Hs : sub _ TStr |- _ => apply sub_unfold in Hs; inversion Hs end. Qed.
 
 Lemma vt_bool_inv Σ v : vtyped sigs Σ v TBool -> exists b, v = VBool b.
-Proof. intros H; inversion H; subst; eauto; match goal with Hs : sub _ TBool |- _ => inversion Hs end. Qed.
+Proof. intros H; inversion H; subst; eauto; match goal with Hs : sub _ TBool |- _ => apply sub_unfold in Hs; inversion Hs end. Qed.
 
 Lemma vt_maybe_inv Σ v t :
   vtyped sigs Σ v (TMaybe t) -> v = VNone \/ exists x, v = VJust x /\ vtyped sigs Σ x t.
-Proof. intros H; inversion H; subst; eauto; match goal with Hs : sub _ (TMaybe _) |- _ => inversion Hs end. Qed.
+Proof. intros H; inversion H; subst; eauto; match goal with Hs : sub _ (TMaybe _) |- _ => apply sub_unfold in Hs; inversion Hs end. Qed.
 
 Lemma vt_list_inv Σ v t :
   vtyped sigs Σ v (TList t) -> exists l a, v = VLoc l /\ nth_error Σ l = Some (HList a) /\ teq a t.
 Proof.
   intros H; inversion H; subst.
   - exists l, a; split; [reflexivity | split; [assumption | apply sub_list_inv; assumption]].
-  - match goal with Hs : sub _ (TList _) |- _ => inversion Hs end.
+  - match goal with Hs : sub _ (TList _) |- _ => apply sub_unfold in Hs; inversion Hs end.
 Qed.
 
 Lemma vt_rec_inv Σ v fs r :
@@ -129,7 +139,7 @@ Lemma vt_rec_inv Σ v fs r :
   exists l fs' r', v = VLoc l /\ nth_error Σ l = Some (HRec fs' r') /\ sub (TRec fs' r') (TRec fs r).
 Proof.
   intros H; inversion H; subst.
-  - match goal with Hs : sub _ (TRec _ _) |- _ => inversion Hs end.
+  - match goal with Hs : sub _ (TRec _ _) |- _ => apply sub_unfold in Hs; inversion Hs end.
   - eexists _, _, _; eauto.
 Qed.
 
@@ -138,7 +148,7 @@ Lemma vt_quote_inv Σ v ins outs :
   exists sc e G, v = VClo sc e /\ nth_error Σ sc = Some (HScope G) /\ closure_ok sigs G e ins outs.
 Proof.
   intros H; inversion H; subst; eauto 6;
-    match goal with Hs : sub _ (TQuote _ _) |- _ => inversion Hs end.
+    match goal with Hs : sub _ (TQuote _ _) |- _ => apply sub_unfold in Hs; inversion Hs end.
 Qed.
 
 Lemma vt_enum_inv Σ v E a :
@@ -147,7 +157,7 @@ Lemma vt_enum_inv Σ v E a :
                    vtypedl sigs Σ vs (map (subst a) pts).
 Proof.
   intros H; inversion H; subst; eauto 7;
-    match goal with Hs : sub _ (TEnum _ _) |- _ => inversion Hs end.
+    match goal with Hs : sub _ (TEnum _ _) |- _ => apply sub_unfold in Hs; inversion Hs end.
 Qed.
 
 Lemma vtypedl_length Σ vs ts : vtypedl sigs Σ vs ts -> length vs = length ts.
@@ -157,7 +167,16 @@ Lemma vt_union_inv Σ v a b :
   vtyped sigs Σ v (TUnion a b) -> vtyped sigs Σ v a \/ vtyped sigs Σ v b.
 Proof.
   intros H; inversion H; subst; auto;
-    match goal with Hs : sub _ (TUnion _ _) |- _ => inversion Hs; subst; eauto using vtyped end.
+    match goal with Hs : sub _ (TUnion _ _) |- _ =>
+      apply sub_unfold in Hs; inversion Hs; subst; eauto using vtyped, sub_fold end.
+Qed.
+
+Lemma vt_mu_inv Σ v t :
+  vtyped sigs Σ v (TMu t) -> mu_ok t = true /\ vtyped sigs Σ v (tunfold t).
+Proof.
+  intros H; inversion H; subst; auto;
+    match goal with Hs : sub _ (TMu _) |- _ =>
+      apply sub_unfold in Hs; inversion Hs; subst; split; eauto using vtyped, sub_fold end.
 Qed.
 
 (** ** Stability under changes of Σ *)
@@ -184,6 +203,7 @@ Proof.
   - intros v a b _ IH Hl. apply vt_unionr; auto.
   - intros v t _ IH Hl. eapply vt_top; eauto.
   - intros E c pts vs a Ec W _ IH Hl. eapply vt_con; eauto.
+  - intros v t M _ IH Hl. apply vt_mu; auto.
   - intros; constructor.
   - intros v vs t ts _ IH _ IHl Hl.
     constructor; [apply IH; intros l Hl'; apply Hl; apply in_or_app; auto
@@ -224,6 +244,7 @@ Proof.
   - apply dt_unionl; auto.
   - apply dt_unionr; auto.
   - eapply dt_top; eauto.
+  - apply dt_mu; auto.
 Qed.
 
 (** ** Deep typing: stability and structure *)
@@ -236,6 +257,7 @@ Proof.
   - apply vt_unionl; auto.
   - apply vt_unionr; auto.
   - eapply vt_top; eauto.
+  - apply vt_mu; auto.
 Qed.
 
 Lemma dtyped_agree Σ H Σ' H' :
@@ -271,6 +293,7 @@ Proof.
   - intros v a b O d IH Hm. apply dt_unionr; auto.
   - intros v t O d IH Hm. eapply dt_top; eauto.
   - intros E c pts vs a Os Ec W d IH N Hm. eapply dt_con; eauto.
+  - intros v t O M d IH Hm. apply dt_mu; auto.
   - intros; constructor.
   - intros v vs t O Os d IH d0 IH0 Hm. constructor.
     + apply IH. intros m Hm'. apply Hm. simpl. apply in_or_app; auto.
@@ -351,6 +374,7 @@ Proof.
   - intros v a b O d IH. exact IH.
   - intros v t O d IH. exact IH.
   - intros E c pts vs a Os Ec W d [Hv Ho] N. repeat split; auto.
+  - intros v t O M d IH. exact IH.
   - intros; simpl; split; tauto.
   - intros v vs t O Os d (Hn & Hv & Ho) d0 (Hv' & Ho'). split.
     + simpl. intros l Hl. apply in_app_or in Hl as [Hl|Hl]; apply in_or_app; auto.
@@ -380,6 +404,13 @@ Qed.
 
 (** ** Subsumption and retyping for deep typing *)
 
+(** One level of [sub] on the right of a deep typing [D0] of [v] at a
+    head type: the cases that do not look at the head. *)
+Ltac dsub_rest D0 :=
+  first [ exact D0 | eapply dt_top; exact D0
+        | apply dt_unionl; solve [auto] | apply dt_unionr; solve [auto]
+        | apply dt_mu; solve [auto] ].
+
 Lemma dtyped_sub_all Σ H :
   (forall v t O, dtyped sigs Σ H v t O -> forall b, sub t b -> dtyped sigs Σ H v b O) /\
   (forall vs t Os, dtypeds sigs Σ H vs t Os -> forall b, sub t b -> dtypeds sigs Σ H vs b Os) /\
@@ -393,48 +424,44 @@ Proof.
     (fun kvs fs r Os _ => forall fs' r', (forall k, fsub (field_at k fs r) (field_at k fs' r')) ->
                           dfields sigs Σ H kvs fs' r' Os)
     (fun vs ts Os _ => forall ts', Forall2 sub ts ts' -> dtypedl sigs Σ H vs ts' Os)).
-  - intros n b Hs. remember TInt as x eqn:E. induction Hs; subst; try discriminate.
-    + constructor. + apply dt_top with (t := TInt); constructor.
-    + apply dt_unionl; auto. + apply dt_unionr; auto.
-  - intros n b Hs. remember TStr as x eqn:E. induction Hs; subst; try discriminate.
-    + constructor. + apply dt_top with (t := TStr); constructor.
-    + apply dt_unionl; auto. + apply dt_unionr; auto.
-  - intros n b Hs. remember TBool as x eqn:E. induction Hs; subst; try discriminate.
-    + constructor. + apply dt_top with (t := TBool); constructor.
-    + apply dt_unionl; auto. + apply dt_unionr; auto.
-  - intros t b Hs. remember (TMaybe t) as x eqn:E. induction Hs; subst; try discriminate.
-    + constructor. + apply dt_top with (t := TMaybe t); constructor.
-    + apply dt_unionl; auto. + apply dt_unionr; auto. + constructor.
-  - intros v t O d IH b Hs. remember (TMaybe t) as x eqn:E. induction Hs; subst; try discriminate.
-    + constructor; auto. + apply dt_top with (t := TMaybe t); constructor; auto.
-    + apply dt_unionl; auto. + apply dt_unionr; auto.
-    + inversion E; subst. constructor. auto.
+  - intros n b Hs. assert (D0 : dtyped sigs Σ H (VInt n) TInt []) by constructor.
+    apply sub_unfold in Hs. remember TInt as x eqn:E. induction Hs; subst; try discriminate; dsub_rest D0.
+  - intros n b Hs. assert (D0 : dtyped sigs Σ H (VStr n) TStr []) by constructor.
+    apply sub_unfold in Hs. remember TStr as x eqn:E. induction Hs; subst; try discriminate; dsub_rest D0.
+  - intros n b Hs. assert (D0 : dtyped sigs Σ H (VBool n) TBool []) by constructor.
+    apply sub_unfold in Hs. remember TBool as x eqn:E. induction Hs; subst; try discriminate; dsub_rest D0.
+  - intros t b Hs. assert (D0 : dtyped sigs Σ H VNone (TMaybe t) []) by constructor.
+    apply sub_unfold in Hs. remember (TMaybe t) as x eqn:E. induction Hs; subst; try discriminate;
+      first [dsub_rest D0 | constructor].
+  - intros v t O d IH b Hs. assert (D0 : dtyped sigs Σ H (VJust v) (TMaybe t) O) by (constructor; exact d).
+    apply sub_unfold in Hs. remember (TMaybe t) as x eqn:E. induction Hs; subst; try discriminate;
+      first [dsub_rest D0 | injection E as ->; constructor; auto].
   - intros sc e ins outs Hv b Hs. apply vtyped_clo_dtyped. eapply vtyped_sub; eauto.
-  - intros l vs t Os e d IH n b Hs. remember (TList t) as x eqn:E. induction Hs; subst; try discriminate.
-    + econstructor; eauto. + apply dt_top with (t := TList t); econstructor; eauto.
-    + apply dt_unionl; auto. + apply dt_unionr; auto.
-    + inversion E; subst. econstructor; eauto.
-  - intros l kvs fs r Os e n n0 d IH n1 b Hs. remember (TRec fs r) as x eqn:E.
-    induction Hs; subst; try discriminate.
-    + econstructor; eauto. + apply dt_top with (t := TRec fs r); econstructor; eauto.
-    + apply dt_unionl; auto. + apply dt_unionr; auto.
-    + inversion E; subst. econstructor; eauto.
-      intros k t0 Hk. specialize (H0 k). rewrite Hk in H0. inversion H0; subst. eapply n0; eauto.
-  - intros v a b O d IH b0 Hs. remember (TUnion a b) as x eqn:E. induction Hs; subst; try discriminate.
-    + apply dt_unionl; auto. + apply dt_top with (t := a); auto.
-    + inversion E; subst. auto.
-    + apply dt_unionl; auto. + apply dt_unionr; auto.
-  - intros v a b O d IH b0 Hs. remember (TUnion a b) as x eqn:E. induction Hs; subst; try discriminate.
-    + apply dt_unionr; auto. + apply dt_top with (t := b); auto.
-    + inversion E; subst. auto.
-    + apply dt_unionl; auto. + apply dt_unionr; auto.
+  - intros l vs t Os e d IH n b Hs. assert (D0 : dtyped sigs Σ H (VLoc l) (TList t) (l :: concat Os))
+      by (econstructor; eauto).
+    apply sub_unfold in Hs. remember (TList t) as x eqn:E. induction Hs; subst; try discriminate;
+      first [dsub_rest D0 | injection E as ->; econstructor; eauto].
+  - intros l kvs fs r Os e n n0 d IH n1 b Hs.
+    assert (D0 : dtyped sigs Σ H (VLoc l) (TRec fs r) (l :: concat Os)) by (econstructor; eauto).
+    apply sub_unfold in Hs. remember (TRec fs r) as x eqn:E.
+    induction Hs; subst; try discriminate; try dsub_rest D0.
+    injection E as -> ->. econstructor; eauto.
+    match goal with Hf : forall k, fsubR sub _ _ |- _ =>
+      intros k t0 Hk; specialize (Hf k); rewrite Hk in Hf; inversion Hf; subst; eapply n0; eauto end.
+  - intros v a b O d IH b0 Hs. assert (D0 : dtyped sigs Σ H v (TUnion a b) O) by (apply dt_unionl; exact d).
+    apply sub_unfold in Hs. remember (TUnion a b) as x eqn:E. induction Hs; subst; try discriminate;
+      first [dsub_rest D0 | injection E as -> ->; apply IH, sub_fold; auto].
+  - intros v a b O d IH b0 Hs. assert (D0 : dtyped sigs Σ H v (TUnion a b) O) by (apply dt_unionr; exact d).
+    apply sub_unfold in Hs. remember (TUnion a b) as x eqn:E. induction Hs; subst; try discriminate;
+      first [dsub_rest D0 | injection E as -> ->; apply IH, sub_fold; auto].
   - intros v t O d IH b Hs. apply IH. eapply sub_top_any; eauto.
-  - intros E c pts vs a Os Ec W d IH N b Hs. remember (TEnum E a) as x eqn:Ex.
-    induction Hs; subst; try discriminate.
-    + econstructor; eauto. + apply dt_top with (t := TEnum E a); econstructor; eauto.
-    + apply dt_unionl; auto. + apply dt_unionr; auto.
-    + inversion Ex; subst. econstructor; eauto. apply IH.
-      apply Forall2_map_in. intros t Ht. eapply payload_sub; eauto.
+  - intros E c pts vs a Os Ec W d IH N b Hs.
+    assert (D0 : dtyped sigs Σ H (VCon E c pts vs) (TEnum E a) (concat Os)) by (econstructor; eauto).
+    apply sub_unfold in Hs. remember (TEnum E a) as x eqn:Ex. induction Hs; subst; try discriminate;
+      try dsub_rest D0.
+    injection Ex as -> ->. econstructor; eauto. apply IH.
+    apply Forall2_map_in. intros t Ht. eapply payload_sub; eauto.
+  - intros v t O M d IH b Hs. apply IH. eapply sub_trans; [apply sub_unfold_r; exact M | exact Hs].
   - intros; constructor.
   - intros v vs t O Os d IH d0 IH0 b Hs. constructor; auto.
   - intros; constructor.
@@ -511,6 +538,24 @@ Qed.
 (** Retyping a fresh value changes no state: the deep typing follows.  By
     induction on the value's typing, since an enum's retyping is justified
     by its payload types ([payload_rsub]), not by a smaller [rsub]. *)
+(** A fresh value's type unfolds before it is retyped. *)
+Lemma rsub_mu_l t b : mu_ok t = true -> rsub (TMu t) b -> rsub (tunfold t) b.
+Proof.
+  intros M R. apply rsub_unfold in R. remember (TMu t) as x eqn:E.
+  induction R; subst; try discriminate.
+  - apply rs_sub. eapply sub_trans; [apply sub_unfold_r; exact M | exact H].
+  - apply rs_unionr1; auto.
+  - apply rs_unionr2; auto.
+  - injection E as ->. apply rsub_fold; auto.
+  - apply rs_mur; auto.
+Qed.
+
+(** One level of [rsub] on the right of a deep typing [D0] at a head type. *)
+Ltac drsub_rest D0 :=
+  first [ eapply dtyped_sub; [exact D0 | eassumption]
+        | apply dt_unionl; solve [auto] | apply dt_unionr; solve [auto]
+        | apply dt_mu; solve [auto] ].
+
 Lemma dtyped_rsub_all Σ H :
   (forall v a O, dtyped sigs Σ H v a O -> forall b, rsub a b -> dtyped sigs Σ H v b O) /\
   (forall vs t Os, dtypeds sigs Σ H vs t Os -> forall b, rsub t b -> dtypeds sigs Σ H vs b Os) /\
@@ -524,51 +569,49 @@ Proof.
     (fun kvs fs r Os _ => forall fs' r', (forall k, frsub (field_at k fs r) (field_at k fs' r')) ->
                           dfields sigs Σ H kvs fs' r' Os)
     (fun vs ts Os _ => forall ts', Forall2 rsub ts ts' -> dtypedl sigs Σ H vs ts' Os)).
-  - intros n b R. remember TInt as x eqn:E. induction R; subst; try discriminate.
-    + eapply dtyped_sub; [constructor | eauto].
-    + apply dt_unionl; auto. + apply dt_unionr; auto.
-  - intros n b R. remember TStr as x eqn:E. induction R; subst; try discriminate.
-    + eapply dtyped_sub; [constructor | eauto].
-    + apply dt_unionl; auto. + apply dt_unionr; auto.
-  - intros n b R. remember TBool as x eqn:E. induction R; subst; try discriminate.
-    + eapply dtyped_sub; [constructor | eauto].
-    + apply dt_unionl; auto. + apply dt_unionr; auto.
-  - intros t b R. remember (TMaybe t) as x eqn:E. induction R; subst; try discriminate.
-    + eapply dtyped_sub; [constructor | eauto].
-    + constructor.
-    + apply dt_unionl; auto. + apply dt_unionr; auto.
-  - intros v t O d IH b R. remember (TMaybe t) as x eqn:E. induction R; subst; try discriminate.
-    + eapply dtyped_sub; [constructor; exact d | eauto].
-    + inversion E; subst. constructor. auto.
-    + apply dt_unionl; auto. + apply dt_unionr; auto.
-  - intros sc e ins outs Hv b R. remember (TQuote ins outs) as x eqn:E. induction R; subst; try discriminate.
-    + eapply dtyped_sub; [constructor; exact Hv | eauto].
-    + apply dt_unionl; auto. + apply dt_unionr; auto.
-  - intros l vs t Os e d IH n b R. remember (TList t) as x eqn:E. induction R; subst; try discriminate.
-    + eapply dtyped_sub; [econstructor; eauto | eauto].
-    + inversion E; subst. econstructor; eauto.
-    + apply dt_unionl; auto. + apply dt_unionr; auto.
-  - intros l kvs fs r Os e n n0 d IH n1 b R. remember (TRec fs r) as x eqn:E. induction R; subst; try discriminate.
-    + eapply dtyped_sub; [eapply dt_rec; eauto | eauto].
-    + inversion E; subst. eapply dt_rec; eauto.
-      intros k t Hk. specialize (H0 k). rewrite Hk in H0. inversion H0; subst. eapply n0; eauto.
-    + apply dt_unionl; auto. + apply dt_unionr; auto.
-  - intros v a b O d IH c R. remember (TUnion a b) as x eqn:E. induction R; subst; try discriminate.
-    + eapply dtyped_sub; [apply dt_unionl; exact d | eauto].
-    + inversion E; subst. auto.
-    + apply dt_unionl; auto. + apply dt_unionr; auto.
-  - intros v a b O d IH c R. remember (TUnion a b) as x eqn:E. induction R; subst; try discriminate.
-    + eapply dtyped_sub; [apply dt_unionr; exact d | eauto].
-    + inversion E; subst. auto.
-    + apply dt_unionl; auto. + apply dt_unionr; auto.
-  - intros v t O d IH b R. remember TTop as x eqn:E. induction R; subst; try discriminate.
-    + eapply dtyped_sub; [eapply dt_top; exact d | eauto].
-    + apply dt_unionl; auto. + apply dt_unionr; auto.
-  - intros E c pts vs a Os Ec W d IH N b R. remember (TEnum E a) as x eqn:Ex. induction R; subst; try discriminate.
-    + eapply dtyped_sub; [eapply dt_con; eauto | eauto].
-    + apply dt_unionl; auto. + apply dt_unionr; auto.
-    + inversion Ex; subst. eapply dt_con; eauto. apply IH.
-      apply Forall2_map_in. intros t Ht. eapply payload_rsub; eauto.
+  - intros n b R. assert (D0 : dtyped sigs Σ H (VInt n) TInt []) by constructor.
+    apply rsub_unfold in R. remember TInt as x eqn:E. induction R; subst; try discriminate; drsub_rest D0.
+  - intros n b R. assert (D0 : dtyped sigs Σ H (VStr n) TStr []) by constructor.
+    apply rsub_unfold in R. remember TStr as x eqn:E. induction R; subst; try discriminate; drsub_rest D0.
+  - intros n b R. assert (D0 : dtyped sigs Σ H (VBool n) TBool []) by constructor.
+    apply rsub_unfold in R. remember TBool as x eqn:E. induction R; subst; try discriminate; drsub_rest D0.
+  - intros t b R. assert (D0 : dtyped sigs Σ H VNone (TMaybe t) []) by constructor.
+    apply rsub_unfold in R. remember (TMaybe t) as x eqn:E. induction R; subst; try discriminate;
+      first [drsub_rest D0 | constructor].
+  - intros v t O d IH b R. assert (D0 : dtyped sigs Σ H (VJust v) (TMaybe t) O) by (constructor; exact d).
+    apply rsub_unfold in R. remember (TMaybe t) as x eqn:E. induction R; subst; try discriminate;
+      first [drsub_rest D0 | injection E as ->; constructor; auto].
+  - intros sc e ins outs Hv b R. assert (D0 : dtyped sigs Σ H (VClo sc e) (TQuote ins outs) [])
+      by (constructor; exact Hv).
+    apply rsub_unfold in R. remember (TQuote ins outs) as x eqn:E. induction R; subst; try discriminate;
+      drsub_rest D0.
+  - intros l vs t Os e d IH n b R. assert (D0 : dtyped sigs Σ H (VLoc l) (TList t) (l :: concat Os))
+      by (econstructor; eauto).
+    apply rsub_unfold in R. remember (TList t) as x eqn:E. induction R; subst; try discriminate;
+      first [drsub_rest D0 | injection E as ->; econstructor; eauto].
+  - intros l kvs fs r Os e n n0 d IH n1 b R.
+    assert (D0 : dtyped sigs Σ H (VLoc l) (TRec fs r) (l :: concat Os)) by (econstructor; eauto).
+    apply rsub_unfold in R. remember (TRec fs r) as x eqn:E.
+    induction R; subst; try discriminate; try drsub_rest D0.
+    injection E as -> ->. eapply dt_rec; eauto.
+    match goal with Hf : forall k, frsubR rsub _ _ |- _ =>
+      intros k t Hk; specialize (Hf k); rewrite Hk in Hf; inversion Hf; subst; eapply n0; eauto end.
+  - intros v a b O d IH c R. assert (D0 : dtyped sigs Σ H v (TUnion a b) O) by (apply dt_unionl; exact d).
+    apply rsub_unfold in R. remember (TUnion a b) as x eqn:E. induction R; subst; try discriminate;
+      first [drsub_rest D0 | injection E as -> ->; apply IH, rsub_fold; auto].
+  - intros v a b O d IH c R. assert (D0 : dtyped sigs Σ H v (TUnion a b) O) by (apply dt_unionr; exact d).
+    apply rsub_unfold in R. remember (TUnion a b) as x eqn:E. induction R; subst; try discriminate;
+      first [drsub_rest D0 | injection E as -> ->; apply IH, rsub_fold; auto].
+  - intros v t O d IH b R. assert (D0 : dtyped sigs Σ H v TTop O) by (eapply dt_top; exact d).
+    apply rsub_unfold in R. remember TTop as x eqn:E. induction R; subst; try discriminate;
+      drsub_rest D0.
+  - intros E c pts vs a Os Ec W d IH N b R.
+    assert (D0 : dtyped sigs Σ H (VCon E c pts vs) (TEnum E a) (concat Os)) by (econstructor; eauto).
+    apply rsub_unfold in R. remember (TEnum E a) as x eqn:Ex. induction R; subst; try discriminate;
+      try drsub_rest D0.
+    injection Ex as -> ->. eapply dt_con; eauto. apply IH.
+    apply Forall2_map_in. intros t Ht. eapply payload_rsub; eauto.
+  - intros v t O M d IH b R. apply IH. apply rsub_mu_l; auto.
   - intros; constructor.
   - intros v vs t O Os d IH d0 IH0 b R. constructor; auto.
   - intros; constructor.
@@ -586,10 +629,11 @@ Proof. intros R v O D. eapply (proj1 (dtyped_rsub_all Σ H)); eauto. Qed.
 Lemma sub_loc_mut a b : sub a b -> immutable a = false ->
   (exists t, a = TList t) \/ (exists fs r, a = TRec fs r) -> immutable b = false.
 Proof.
-  intros Hs. induction Hs; simpl; intros Ha Hk; auto;
+  intros Hs. apply sub_unfold in Hs. induction Hs; simpl; intros Ha Hk; auto;
     try (destruct Hk as [[t0 Eq]|(fs0 & r0 & Eq)]; discriminate).
   - rewrite IHHs; auto.
   - rewrite IHHs; auto. apply andb_false_r.
+  - pose proof (immutable_tunfold t) as Et. simpl in Et. rewrite <- Et. auto.
 Qed.
 
 Lemma sub_list_imm x b : sub (TList x) b -> immutable b = false.
@@ -626,6 +670,8 @@ Proof.
       eapply payload_imm; eauto. }
     destruct (H0 Hi) as [D L]. split; auto. rewrite <- (concat_map_nil vs).
     eapply dt_con; eauto. rewrite concat_map_nil. constructor.
+  - assert (Hi : immutable (tunfold t) = true) by (rewrite immutable_tunfold; exact H1).
+    destruct (H0 Hi) as [D L]. split; [apply dt_mu|]; auto.
   - split; constructor.
   - apply andb_true_iff in H2 as [? ?]. destruct (H0 H2), (H1 H3). split; [constructor|]; auto.
     rewrite H5, H7. reflexivity.

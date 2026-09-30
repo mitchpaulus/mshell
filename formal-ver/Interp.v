@@ -44,7 +44,9 @@ Definition kind_of (H : heap) (v : val) : option kind :=
     cyclic value meets a recursive type (an enum whose payload holds a list
     of the enum, say).  An enum value is checked by identity and then its
     payloads against the constructor's payload types, which the value
-    carries, with the target's arguments substituted. *)
+    carries, with the target's arguments substituted.  A recursive type is
+    unfolded one step, which costs one unit of budget: a cyclic value
+    validated against a recursive type runs out, which is a checked error. *)
 Fixpoint oforall {A : Type} (g : A -> option bool) (l : list A) : option bool :=
   match l with
   | [] => Some true
@@ -76,8 +78,9 @@ Fixpoint validate (f : nat) (H : heap) (v : val) (t : ty) {struct f} : option bo
   | TInt => Some (match v with VInt _ => true | _ => false end)
   | TStr => Some (match v with VStr _ => true | _ => false end)
   | TBool => Some (match v with VBool _ => true | _ => false end)
-  | TBot | TParam _ | TVar _ => Some false
+  | TBot | TParam _ | TVar _ | TRV _ => Some false
   | TTop => Some true
+  | TMu t' => if mu_ok t' then validate f' H v (tunfold t') else Some false
   | TQuote _ _ => Some false          (* not checkable *)
   | TMaybe t' =>
       match v with
@@ -203,19 +206,23 @@ Fixpoint dcopy (f : nat) (H : heap) (v : val) : option (heap * val) :=
 
 (** ** The interpreter *)
 Section Eval.
+(** The validator [tryAs] uses.  The model's is [validate]; the soundness
+    proof needs only the two properties in Soundness.v ([vd_fresh],
+    [vd_imm]), so any validator with them may replace it. *)
+Variable vd : nat -> heap -> val -> ty -> option bool.
 Variable defs : string -> option prog.
 
 Definition scope_get (H : heap) (sc : loc) : option (list (string * val)) :=
   match nth_error H sc with Some (OScope kvs) => Some kvs | _ => None end.
 
-Fixpoint eval (n : nat) (H : heap) (sc : loc) (st : list val) (e : prog) {struct n} : result :=
+Fixpoint evalv (n : nat) (H : heap) (sc : loc) (st : list val) (e : prog) {struct n} : result :=
   match n with
   | 0 => RTimeout
   | S n' =>
   match e with
   | [] => ROk ONormal H st
   | w :: rest =>
-  let next := fun H' st' => eval n' H' sc st' rest in
+  let next := fun H' st' => evalv n' H' sc st' rest in
   let cont := fun r => match r with ROk ONormal H' st' => next H' st' | r => r end in
   match w with
   | WInt m => next H (VInt m :: st)
@@ -247,17 +254,17 @@ Fixpoint eval (n : nat) (H : heap) (sc : loc) (st : list val) (e : prog) {struct
   | WQuote body => next H (VClo sc body :: st)
   | WExec =>
       match st with
-      | VClo sc' body :: st' => cont (eval n' H sc' st' body)
+      | VClo sc' body :: st' => cont (evalv n' H sc' st' body)
       | _ => RStuck
       end
   | WIf e1 e2 =>
       match st with
-      | VBool b :: st' => cont (eval n' H sc st' (if b then e1 else e2))
+      | VBool b :: st' => cont (evalv n' H sc st' (if b then e1 else e2))
       | _ => RStuck
       end
   | WLoop body =>
-      match eval n' H sc st body with
-      | ROk ONormal H' st' | ROk OContinue H' st' => eval n' H' sc st' (WLoop body :: rest)
+      match evalv n' H sc st body with
+      | ROk ONormal H' st' | ROk OContinue H' st' => evalv n' H' sc st' (WLoop body :: rest)
       | ROk OBreak H' st' => next H' st'
       | r => r
       end
@@ -268,7 +275,7 @@ Fixpoint eval (n : nat) (H : heap) (sc : loc) (st : list val) (e : prog) {struct
   | WCall f =>
       match defs f with
       | Some body =>
-          match eval n' (app H [OScope []]) (length H) st body with
+          match evalv n' (app H [OScope []]) (length H) st body with
           | ROk ONormal H' st' | ROk OReturn H' st' => next H' st'
           | r => r
           end
@@ -314,7 +321,7 @@ Fixpoint eval (n : nat) (H : heap) (sc : loc) (st : list val) (e : prog) {struct
                 match vs with
                 | [] => ROk ONormal H0 st0
                 | v :: vs' =>
-                    match eval n' H0 sc [v] body with
+                    match evalv n' H0 sc [v] body with
                     | ROk ONormal H1 [] => go vs' H1
                     | ROk ONormal _ _ => RStuck
                     | ROk OBreak H1 _ => ROk OBreak H1 st0
@@ -336,7 +343,7 @@ Fixpoint eval (n : nat) (H : heap) (sc : loc) (st : list val) (e : prog) {struct
                 match vs with
                 | [] => ROk ONormal (app H0 [OList (rev acc)]) (VLoc (length H0) :: st0)
                 | v :: vs' =>
-                    match eval n' H0 sc [v] body with
+                    match evalv n' H0 sc [v] body with
                     | ROk ONormal H1 [v'] => go vs' H1 (v' :: acc)
                     | ROk ONormal _ _ => RStuck
                     | ROk OBreak H1 _ => ROk OBreak H1 st0
@@ -411,7 +418,7 @@ Fixpoint eval (n : nat) (H : heap) (sc : loc) (st : list val) (e : prog) {struct
       match st with
       | v :: _ =>
           match kind_of H v with
-          | Some k' => cont (eval n' H sc st (if kind_eqb k k' then e1 else e2))
+          | Some k' => cont (evalv n' H sc st (if kind_eqb k k' then e1 else e2))
           | None => RStuck
           end
       | _ => RStuck
@@ -419,7 +426,7 @@ Fixpoint eval (n : nat) (H : heap) (sc : loc) (st : list val) (e : prog) {struct
   | WTryAs u =>
       match st with
       | v :: st' =>
-          match validate n' H v u with
+          match vd n' H v u with
           | Some true => next H (VJust v :: st')
           | Some false => next H (VNone :: st')
           | None => RErr                     (* validation budget exhausted *)
@@ -443,7 +450,7 @@ Fixpoint eval (n : nat) (H : heap) (sc : loc) (st : list val) (e : prog) {struct
       | VCon E' c _ vs :: st' =>
           if ename_eqb E E' then
             match lookup c arms with
-            | Some e => cont (eval n' H sc (vs ++ st') e)
+            | Some e => cont (evalv n' H sc (vs ++ st') e)
             | None => RErr                   (* no arm: a checked error *)
             end
           else RStuck
@@ -454,3 +461,6 @@ Fixpoint eval (n : nat) (H : heap) (sc : loc) (st : list val) (e : prog) {struct
   end.
 
 End Eval.
+
+(** The interpreter with the model's validator. *)
+Definition eval := evalv validate.

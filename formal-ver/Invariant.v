@@ -5,7 +5,9 @@
 
     - [vtyped Σ v t]: value [v] has type [t] given the store typing. A
       location is typed through [Σ] and subtyping, so a shared object is
-      only ever seen through supertypes of its one declared type.
+      only ever seen through supertypes of its one declared type.  A value
+      has a recursive type when it has its unfolding; values are finite, so
+      the derivation unfolds finitely often (cycles go through [Σ]).
     - [dtyped Σ H v t O]: *deep* typing of a fresh value, read directly off
       the heap.  [O] lists the locations of the value's lists and dicts; it
       is a tree (each location occurs once).  [Σ] is ignored on [O]: the
@@ -68,6 +70,7 @@ Inductive vtyped (Σ : store_ty) : val -> ty -> Prop :=
 | vt_con E c pts vs a :
     g_ctors sigs E c = Some pts -> wf_payload E pts ->
     vtypedl Σ vs (map (subst a) pts) -> vtyped Σ (VCon E c pts vs) (TEnum E a)
+| vt_mu v t : mu_ok t = true -> vtyped Σ v (tunfold t) -> vtyped Σ v (TMu t)
 with vtypedl (Σ : store_ty) : list val -> list ty -> Prop :=
 | vtl_nil : vtypedl Σ [] []
 | vtl_cons v vs t ts : vtyped Σ v t -> vtypedl Σ vs ts -> vtypedl Σ (v :: vs) (t :: ts).
@@ -107,6 +110,7 @@ Inductive dtyped (Σ : store_ty) (H : heap) : val -> ty -> list loc -> Prop :=
     g_ctors sigs E c = Some pts -> wf_payload E pts ->
     dtypedl Σ H vs (map (subst a) pts) Os -> NoDup (concat Os) ->
     dtyped Σ H (VCon E c pts vs) (TEnum E a) (concat Os)
+| dt_mu v t O : mu_ok t = true -> dtyped Σ H v (tunfold t) O -> dtyped Σ H v (TMu t) O
 with dtypeds (Σ : store_ty) (H : heap) : list val -> ty -> list (list loc) -> Prop :=
 | dts_nil t : dtypeds Σ H [] t []
 | dts_cons v vs t O Os : dtyped Σ H v t O -> dtypeds Σ H vs t Os -> dtypeds Σ H (v :: vs) t (O :: Os)
