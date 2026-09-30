@@ -93,7 +93,8 @@
   but two in the obvious way to implement them: an assumption set shared by $<=$ and fresh retyping,
   and the assumption rule without guardedness. It also showed that a checked program can now build a
   cyclic value, and that validation can accept a cycle as soundly as it rejects one (@sec-alias,
-  @sec-tryas).
+  @sec-tryas). Proving the checker's decision procedure for $<=$ and fresh retyping found no hole
+  either. It fixed where that procedure may use its assumptions, and when its answers may be cached (@sec-alias).
   Those rules are corrected below.
   Rules the proof showed to be stricter than soundness needs are marked as usability choices.
 ]
@@ -354,14 +355,30 @@ compares `[Json]` with the other `[Json]`, which needs the two equal again (`jso
 *Mechanized:* `sub` and `rsub` are greatest fixed points (`Subtyping.v`), `sub_trans` is proved for
 them with the per-label shape rule, and so is closure under substitution (`sub_tsub`, `rsub_tsub`).
 
-*Algorithm.* The checker keeps the alias as a reference node and unfolds it only when it needs
-to look inside. To decide $tau <= upsilon$ or $tau equiv upsilon$ it carries a set of assumed pairs:
-if the pair is already assumed, it holds; otherwise assume it and compare one level.
+*Algorithm (mechanized: `Decide.v`).* The checker keeps the alias as a reference node and unfolds it
+only when it needs to look inside. To decide $tau <= upsilon$ or $tau subset.sq.eq upsilon$ it carries
+a set of assumed pairs through the whole query (Amadio & Cardelli 1993; Kozen, Palsberg & Schwartzbach
+1995). `Decide.v` writes this procedure as a function and proves it right whenever it answers yes
+(`subq_sound`, `rsubq_sound`); an answer of no is always safe, so completeness is not needed. The
+procedure the proof covers:
+
+- *The set is used only at the children of a type constructor*: a list's element, a field, a quote's
+  inputs and outputs, an enum argument. If the child pair is in the set, it holds; otherwise it is added
+  and compared one level down. Union and unfolding steps stay inside one level and never look at the set.
+- *The set is threaded through the query.* A pair added while comparing one child stays for the next
+  child, so no pair is decided twice. When a union alternative fails, the set goes back to what it was
+  before that alternative. (Keeping only the pairs on the current path is also sound, but it can take
+  exponential time.)
+- *The set belongs to one query.* When a query says yes, every pair in its final set holds
+  (`subq_set_sound`), so all of them may be cached. When it says no, none may: a pair can be
+  accepted under an assumption that the query goes on to refute. Deciding `A <= B` below assumes
+  the pair, accepts `(-- A) <= (-- B)` at the field `f` because of it, and then fails at `x`
+  (`cache_early`).
+
 Guardedness makes every unfolding reach a constructor, and there are finitely many pairs of
-subterms, so this terminates (Amadio & Cardelli 1993; Kozen, Palsberg & Schwartzbach 1995).
-Assumptions made inside a failed union alternative or overload trial are rolled back with it.
+subterms, so this terminates. (The model uses fuel instead; running out answers no.)
 Only the alias _name_ is hashconsed; unfolded trees are never stored.
-Two more rules, both found by the proof (`Recursive.v`):
+Two more rules, both found by the proof (`Recursive.v`, `Decide.v`):
 
 - *One assumption set per relation.* $<=$ and the fresh retype $subset.sq.eq$ are different relations,
   and $subset.sq.eq$ falls back to $<=$ under a quote. An assumption made while deciding
@@ -370,12 +387,16 @@ Two more rules, both found by the proof (`Recursive.v`):
   `{x: [2], f: (@r)} as A as B` for a stored `r : A`: the retype assumes the pair `A`, `B`, and the
   quote at `f` asks `A <= B`, which that assumption answers. Then `f` returns `r` at type `B`, and a
   string reaches `r`'s `[int]` (`hole_mixed_stuck`; `mixed_accepts` is the one-set relation,
-  `rsub_rejects` the rule).
-- *Guardedness is a soundness condition of the assumption rule*, not only what makes it terminate.
-  With `type V = int | V` the rule proves $"str" <= V$ (assume the pair, unfold $V$, take the member
-  $V$: assumed) and $V <= "int"$, so `"a" as V as int` would check (`unguarded_str_below`,
-  `unguarded_below_int`; the proof's relation has neither, `unguarded_model`). When every alias is
-  guarded, every cycle the algorithm meets passes a type constructor, which is the relation of the proof.
+  `rsub_rejects` the rule). In the procedure, $subset.sq.eq$ starts a new $<=$ query, with an empty set,
+  wherever it needs $<=$ (`rlvl`; `mixed_alg_accepts` is the one-set procedure).
+- *The set must not be used at union and unfolding steps (clarified).* A checker that looks up the set
+  at every step needs guardedness to be sound, not only to terminate. With `type V = int | V` such a
+  checker proves $"str" <= V$ (assume the pair, unfold $V$, take the member $V$: assumed) and
+  $V <= "int"$, so `"a" as V as int` would check (`unguarded_str_below`, `unguarded_below_int`,
+  `every_step_accepts`; the proof's relation has neither, `unguarded_model`). The procedure above uses
+  the set only at constructor children, so every cycle through an assumption passes a constructor, and
+  it is sound for every type, guarded or not (`alg_h13`). Guardedness is still required: without it the
+  procedure does not terminate.
 
 *Properties of an alias* are read off its unfolding as greatest fixed points: while computing one, an
 alias that is already being visited counts as having it. So `type T = int | Maybe[T]` is immutable,
@@ -843,8 +864,9 @@ the core (`if_join`).
   The user declares `C` and writes `as C` in each arm. Freshness matters as everywhere: a stored `[int]`
   and a `Json` have no join, since a `list l` arm on the `Json` would then write into the stored list.
   `ajoin` in `Join.v`; the join is given the checker's decision procedure for $<=$ and
-  $subset.sq.eq$, and `join_slot_ub` needs only that it is right when it says yes (`le_ok`). The cases
-  below are `join_*` in `Recursive.v`.
+  $subset.sq.eq$, and `join_slot_ub` needs only that it is right when it says yes (`le_ok`). The
+  procedure of @sec-alias is (`le_alg_ok`, `join_slot_ub_alg` in `Decide.v`). The cases
+  below are `join_*` in `Recursive.v`, and `alg_join_*` in `Decide.v` with that procedure.
 
 The arms must still leave the same number of stack items (as today). Arms that diverge are ignored
 (@sec-diverge).
@@ -1932,7 +1954,7 @@ brands can all be deleted, and the runtime type checks can go once the oracle ag
 
 `formal-ver/` holds a Rocq (9.1) development of the core. `make check` in that directory rebuilds
 it and prints the assumptions of the main theorem: *none* (`Closed under the global context`). It is
-about 10,000 lines. `formal-ver/README.md` maps every definition to the section of this document it
+about 11,000 lines. `formal-ver/README.md` maps every definition to the section of this document it
 formalizes.
 
 #table(
@@ -1957,6 +1979,7 @@ formalizes.
   [`Examples.v`], [holes H1--H11 run to `RStuck`; R6 gets stuck without a copy and type-checks and runs with `deepCopy`; the copy is per path; copying a cycle is a checked error; `Maybe`, recursive `List` and non-regular `Nest` declared as generic enums],
   [`Cycles.v`], [a validator that answers `just` when an (object, type) pair repeats on its path: sound (`soundness_cycles`) and complete],
   [`Recursive.v`], [`Json` equal to a reordered spelling; `Person` from a fresh literal; `parseJson tryAs [Person] ?` typed and run; `type T = Box[T]`; a well-typed cyclic value; holes H12 and H13; joins that meet a recursive alias],
+  [`Decide.v`], [the checker's decision procedures for $<=$ and $subset.sq.eq$ (assumption sets, caching), proved right when they say yes; the join with them needs no hypothesis (`if_join_alg`)],
 )
 
 *What is modeled*: everything in the calculus that interacts with aliasing, namely shared and fresh lists and
@@ -1970,7 +1993,8 @@ variables in heap scopes captured by quotes, quotes with frame polymorphism and 
 recursive definitions, `tryAs` in its three modes, `deepCopy`, type-changing updates of fresh records,
 match bindings as stores into the scope, validation completeness for checkable targets, and
 recursive aliases (subtyping and fresh retyping on infinite trees, their transitivity, validation,
-immutability, checkability, kind patterns, `deepCopy` and commit of recursive values).
+immutability, checkability, kind patterns, `deepCopy` and commit of recursive values), and the checker's
+decision procedures for $<=$ and $subset.sq.eq$ on them.
 
 *What is not modeled*, and what each would need:
 
@@ -1988,9 +2012,9 @@ immutability, checkability, kind patterns, `deepCopy` and commit of recursive va
   Other builtins still need the contract in @sec-contract and tests.
 - *The checker algorithm*. The theorem is about the declarative rules. The checker must produce only
   derivations of them. Proved: the substitution lemma (defs checked once), the frame lemma (quote
-  bodies checked once), divergence, and joins. Not proved: unification, overload resolution, the
-  skolem escape check (@sec-unknown) and the assumption-set algorithm for recursive aliases
-  (@sec-alias) as algorithms. H12 and H13 show two ways that algorithm can decide a different relation.
+  bodies checked once), divergence, joins, and the decision procedures for $<=$ and $subset.sq.eq$
+  (@sec-alias; right when they say yes, with termination left to guardedness). Not proved: unification,
+  overload resolution and the skolem escape check (@sec-unknown) as algorithms.
 - *Definite assignment.* Reading an unset variable is a checked error in the model, as at runtime.
 - *Slices and `...rest`.* The model has no slicing words. Principle 7 is what lets them be added as
   $Phi$ entries: each returns a new object, so a slice is a shallow copy with the freshness rule of @sec-fresh.

@@ -1,6 +1,6 @@
 # Build and check the mechanized core.  Needs the Rocq prover (tested with 9.1.1).
 #   make          build everything
-#   make check    build, then print the axioms the main theorem depends on
+#   make check    build, then print the axioms the main theorems depend on
 #   make clean
 ROCQBIN ?= $(HOME)/.opam/rocq-mshell/bin
 export PATH := $(ROCQBIN):$(PATH)
@@ -12,7 +12,7 @@ CoqMakefile: _CoqProject
 	rocq makefile -f _CoqProject -o CoqMakefile
 
 check: all
-	@printf 'From MshellCore Require Import Soundness.\nPrint Assumptions soundness.\n' > Assumptions_check.v
+	@printf 'From MshellCore Require Import Soundness Decide.\nPrint Assumptions soundness.\nPrint Assumptions if_join_alg.\nPrint Assumptions subq_set_sound.\nPrint Assumptions rsubq_set_sound.\n' > Assumptions_check.v
 	@rocq c -Q . MshellCore Assumptions_check.v; rm -f Assumptions_check.*
 
 clean:

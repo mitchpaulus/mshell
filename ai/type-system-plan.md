@@ -175,12 +175,15 @@ New code with Go unit tests only; nothing is wired into the checker yet.
   - abstract grid schemas.
 - **Relations**, each in its own function with its own tests:
   - equality unification with occurs check and the assumption set for recursive aliases (§Aliases);
-  - one assumption set per relation: an assumption made while deciding `⊑` never answers a `≤` question (under a quote `⊑` asks `≤`), and results that used an assumption are cached only once it is confirmed (H12, `hole_mixed_*` in `formal-ver/Recursive.v`);
-  - subtyping `≤` (§Subtyping, per label);
-  - the fresh retype relation `⊑` (§Freshness), including enum arguments by fresh-covariance, and never widening inside a quote;
+  - subtyping `≤` (§Subtyping, per label) and the fresh retype relation `⊑` (§Freshness, including enum arguments by fresh-covariance, and never widening inside a quote), as the decision procedures of `formal-ver/Decide.v`, which are proved right whenever they say yes. Port `step`/`lvl`/`chk` and `rstep`/`rlvl`/`rchk` directly:
+    - the assumption set is looked up and extended only at the children of a type constructor; union and unfolding steps never look at it (sound even for unguarded types; H13, `every_step_accepts`);
+    - the set is threaded through one query and restored when a union alternative fails;
+    - one set per relation: where `⊑` needs `≤` (a quote, an enum argument that is not fresh-covariant) it starts a new `≤` query with an empty set (H12, `mixed_alg_accepts`);
+    - caching: after a top-level yes, every pair in the final set may be cached (`subq_set_sound`); after a no, nothing from that query (`cache_early`);
   - branch join (§Joins); quotes join by `≤` only; a recursive alias is never widened inside: the other side if one is below the other (`≤`, or `⊑` when both arms are fresh), a union if the kinds do not overlap, otherwise an error asking for a declared type (`ajoin` in `formal-ver/Join.v`);
   - runtime kind of a type (an alias contributes the kinds of its unfolding's members), `immutable`, and `checkable`; through aliases these are greatest fixed points (`immutable_tunfold`, `chk_tunfold`).
 - Header comments in the reused files (`Type.go`) point to the deleted `ai/type_checker.md`; point them at the Typst design doc.
+- **Unit tests** from the examples in `formal-ver/Decide.v`: `Json` against its reordered spelling, `PersonLit <= Person`, a fresh `[int]` to `Json`, H12 and H13 rejected, and the `cache_early` query answering no.
 - **Property tests** that mirror the proof: transitivity of `≤` (`sub_trans`) and of `⊑` on randomly generated types, including guarded recursive aliases; `Json` equal to the same union with its members reordered (`json_teq`); `≤` implies `⊑`; every S1–S4 row of the design doc's table, including the two dict/remainder cases in S2 and S4; the "optional must not become deletable" case; for random well-formed generic enums, `E[a] ≤ E[b]` implies each payload `subst a t ≤ subst b t`, and `E[a] ⊑ E[b]` implies `subst a t ⊑ subst b t` (`payload_sub`, `payload_rsub` in `Variance.v`).
 
 Done when: the relations pass their tests, including randomized transitivity on at least tens of thousands of generated pairs.

@@ -18,7 +18,7 @@ opam install --switch rocq-mshell -y rocq-prover rocq-core.9.1.1
 
 `make check` ends with `Closed under the global context`.
 The theorem uses no axioms and no admitted lemmas.
-A clean build takes about 20 seconds.
+A clean build takes about 25 seconds.
 
 ## The theorem
 
@@ -48,6 +48,17 @@ Theorem soundness_generic : forall sigs gs defs,
   forall n, eval defs n [OScope []] 0 [] e <> RStuck.
 ```
 
+`Decide.v` proves the checker's decision procedures for `<=` and fresh retyping right whenever they say
+yes, including the rule for caching their answers, so the branch join needs no hypothesis:
+
+```coq
+Theorem subq_set_sound : forall C, (forall a b, C a b = true -> sub a b) ->  (* the cache holds *)
+  forall n a b A', subq_set C n a b = Some A' ->
+  sub a b /\ forall u v, In (u, v) A' -> sub u v.  (* and every pair in the final set may be cached *)
+
+Corollary if_join_alg : ... join_stack (le_alg C Cr n) s1 s2 = Some s' -> TW ... (WIf e1 e2) ... s'.
+```
+
 `eval` is a fuel-bounded definitional interpreter (`Interp.v`).
 It returns `RStuck` exactly where the Go runtime reports a type mismatch: `+` on a string, a
 missing *required* key, a non-quote given to `x`, stack underflow, and so on.
@@ -66,6 +77,7 @@ What you have to read is whether the *definitions* say what the design means:
 | `Syntax.v` | ~400 | types (including recursive types `TMu`, their closedness and unfolding), enum identities, substitution, words, values, heap objects |
 | `Interp.v` | ~460 | the interpreter matches `Evaluator.go` where it matters (see below); `eval` is `evalv validate` |
 | `Typing.v` | ~270 | each typing rule matches the doc; `genv` holds def signatures and enum declarations |
+| `Decide.v` (definitions only) | ~150 | `step`, `lvl`, `chk` and `rstep`, `rlvl`, `rchk` are what the Go checker will do to decide `<=` and fresh retyping |
 | `Subtyping.v` (definitions only) | ~200 | the one-level relations `subF` and `rsubF` (with `fsubR`, `subsR`, `osubR`, `vsubsR`, `frsubR`, `vrsubsR`), `sub` and `rsub` as their greatest fixed points, `immutable`, and the enum declaration checks `occ_sub`, `occ_fresh`, `wf_payload` |
 
 Everything else (`Invariant.v` onward) is proof and cannot make the theorem say something weaker.
@@ -92,6 +104,8 @@ Everything else (`Invariant.v` onward) is proof and cannot make the theorem say 
 | Checking a quote body once (frame lemma) | `T_frame`, `quote_once` in `Frame.v` |
 | "A diverging effect absorbs what follows" | `t_div`; `diverges` and the `div_*` lemmas in `Frame.v` |
 | Branch joins | `join_slot`, `join_slot_ub`, `if_join` in `Join.v`; the join is given the checker's decision procedure `le` for `<=` and fresh retyping, and the proofs assume only that it is right when it says yes (`le_ok`) |
+| The decision procedures for `<=` and fresh retyping (assumption sets) | `subq`, `rsubq` in `Decide.v`; `subq_sound`, `rsubq_sound`; `le_alg_ok` discharges `le_ok`; `join_slot_ub_alg`, `if_join_alg` |
+| Caching their answers | `subq_set_sound`, `rsubq_set_sound`, `chk_confirmed`; `cache_early` |
 | Joins that meet a recursive alias (never widened inside) | `ajoin` in `Join.v`; `join_*` in `Recursive.v` |
 | `map` with a literal body | `WMap`; `tw_map`, `tw_map_imm` (fresh only when the results are immutable) |
 | `return` in top-level code | return context `RAny`, `tw_return_any` |
@@ -299,12 +313,28 @@ Also found:
   substitution lemma instantiates a type variable, which the pattern treats as unknown contents, with
   an alias.
 
+Found while proving the checker's decision procedures (`Decide.v`). No hole in the rules; the proof
+fixes the shape of the procedure:
+
+- **The assumption set is used only at the children of a type constructor.** Union and unfolding steps
+  never look at it. Then every cycle through an assumption passes a constructor, and the procedure is
+  sound for every type, guarded or not (`alg_h13`). A procedure that looks at the set at every step is
+  the one H13 breaks (`every_step_accepts`). Guardedness is still what makes the procedure terminate.
+- **The set is threaded through one query**, restored when a union alternative fails. This is the
+  efficient form; the proof covers it directly (`Inv`: the query only adds pairs, and each holds one
+  level down).
+- **Caching.** After a top-level yes, every pair in the final set holds (`subq_set_sound`) and may be
+  cached. After a no, nothing may be: deciding `A <= B` accepts `(-- A) <= (-- B)` under the assumption
+  `A <= B`, which the query then refutes (`cache_early`).
+- **One set per relation**, as a procedure: fresh retyping starts a new `<=` query with an empty set
+  wherever it needs `<=`; the one-set procedure accepts H12 (`alg_h12`, `mixed_alg_accepts`).
+
 ## Not modeled
 
-Generic aliases (`type Tree[a] = ...`: substitution would have to enter recursive types), the
-assumption-set algorithm for recursive types (H12 and H13 show how it can go wrong), grids and commands as such, other builtins (they need the builtin
+Generic aliases (`type Tree[a] = ...`: substitution would have to enter recursive types), termination
+and completeness of the decision procedures in `Decide.v` (they run on fuel; a no is always safe), grids and commands as such, other builtins (they need the builtin
 contract; every builtin that returns a new list follows `map`'s rule, fresh exactly when the elements are
-immutable, `tw_map_imm`), the checker algorithm (unification, overload resolution; joins, frame and substitution
-lemmas are now proved),
+immutable, `tw_map_imm`), the checker algorithm (unification, overload resolution, the skolem escape check; joins, the
+decision procedures for `<=` and fresh retyping, frame and substitution lemmas are now proved),
 and definite assignment (an unset variable is a checked error, as at runtime).
 See the "mechanized core" section of the design document for what each would need.
