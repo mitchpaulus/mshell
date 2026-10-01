@@ -165,6 +165,8 @@ The same applies to runtime work: `deepCopy`, the cycle-safe walkers and `valida
 ## 6. Stages
 
 Each stage lists its work, its tests, and when it is done.
+
+Status (end of 2026-10-01): done: stages 0, 2, 3 (two gaps, listed in the progress log's last section), 4, 5, and stage 1 items 1-4. Next: stage 6; stage 1 item 5 any time before stage 7.
 Stages 2–5 depend on each other in order. Runtime groundwork is independent and can land any time. The soundness oracle can start after the core checker.
 
 ### Stage 0: Baseline and measurements

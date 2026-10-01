@@ -493,7 +493,7 @@ Found while reading `TypeCoreMatch.go` for stage 5: a match arm written `:>` tha
 
 ## Stage 5: validation (2026-10-01, fourth session)
 
-Committed (not pushed): `c5c2ffc` (code, tests, user docs), `113d4b3` (design doc, plan, progress log). Suites: `test.sh` 326 passed; `typecheck_test.sh` 320 passed, 0 failed (old checker, skip lists); `tests/typecheck_core_test.sh` 374 passed, 0 unexpected, 0 not checked yet; `go test` ok; `typst compile ai/type-core-calculus.typ` ok. `formal-ver/` unchanged.
+Committed (not pushed): `c5c2ffc` (code, tests, user docs), `113d4b3` (design doc, plan, progress log), `27f7cc3` (these commit ids). Suites: `test.sh` 326 passed; `typecheck_test.sh` 320 passed, 0 failed (old checker, skip lists); `tests/typecheck_core_test.sh` 374 passed, 0 unexpected, 0 not checked yet; `go test` ok; `typst compile ai/type-core-calculus.typ` ok. `formal-ver/` unchanged.
 
 Parser and runtime:
 
@@ -514,12 +514,27 @@ An independent review (a subagent) found four problems, all fixed with tests: li
 
 Tests: `tests/success/tryas.msh` (the try-as branch's cases, with JSON integers and without the quote target), `tryas_types.msh` (recursive alias, `new Json` def output, `deepCopy` before a refinement, enums and generic enums, `is` coverage, `is T _ :>`), `tryas_cycle.msh`, `r6_refinements.msh` (R6 with `deepCopy`); `tests/typecheck_fail/` R6, `tryas_stored_dict`, `tryas_quote_enum`, `is_quote_enum`, `tryas_generic`, H7, `is_not_exhaustive`, `is_stored_list`; `tests/fail/` an unknown target, a declaration error (stops before running), `deepCopy` of a cyclic `[Json]`; `Validate_test.go` (same object back, shapes and remainders, commands, enums, `Maybe`, cycles including `j = [j]` against `[[int]]`, 300,000-deep values, 2^60 shared paths, repeated references, the budget, declaration errors, declarations line by line as in the REPL).
 
-Docs: `type_system.inc.html` (Validating Data, and the boundary advice now says `tryAs`), `control-flow.inc.html` (typed patterns), `mshell.md`; `tryAs` in the Sublime and Notepad++ keyword lists and `base.html`. Changelog: Added (`tryAs`, `is`), Changed (`tryAs` keyword, `type` names declared once).
+Docs: `type_system.inc.html` (Validating Data, and the boundary advice now says `tryAs`), `control-flow.inc.html` (typed patterns), `mshell.md`; `tryAs` in the Sublime and Notepad++ keyword lists and `base.html`; docs rebuilt. Changelog: Added (`tryAs`, `is`), Changed (`tryAs` is a keyword; a `type` name is declared once; a declaration body with an error stops the script before it runs).
+
+Decided with Mitchell (question 7, `tryAs`/`is` on a shared union value): the rule stays as proved (the whole type below the target). When only members already below the target could pass, the error suggests the kind pattern instead of `deepCopy` (`kindPatternHint` in `TypeCoreValidate.go`; cases in `TestCoreChecker`). Design doc §Validation.
 
 Not done, and why:
 
-- Grids: no syntax names a grid schema, so a grid is not a checkable target (`Checkable`); the runtime would accept only the unknown schema. Unchanged.
-- `tests/core_expected_rejections.txt` still lists `null.msh`, whose rewrite now works; programs on that list change at the switch-over (stage 6).
-- Question 7 (`tryAs`/`is` on a shared union) decided with Mitchell: the rule stays as proved (the whole type below the target); when only members already below the target could pass, the error suggests the kind pattern (`kindPatternHint` in `TypeCoreValidate.go`; cases in `TestCoreChecker`). Design doc §Validation.
+- Grids: no syntax names a grid's columns, so no grid type is a checkable target (`Relations.Checkable` says a grid with a known, closed schema would be, but none can be written), and the validator answers no for every grid. If a grid schema type is ever added, the validator must check each column's cells.
+- `tests/core_expected_rejections.txt` still lists `null.msh`; its rewrite (`'null' parseJson tryAs int | null ? classify`) was checked to pass the core checker with the same output. Programs on that list change at the switch-over (stage 6).
 
 Found: the design doc's H2 example uses `getAt`, which is not an mshell word (indexing is `:n:`).
+
+## Where things stand (end of 2026-10-01, fourth session)
+
+- Committed on `type-checker-enhancements`, 3 commits ahead of `origin` (not pushed): `c5c2ffc`, `113d4b3`, `27f7cc3`. Working tree clean before this note.
+- Suites: `test.sh` 326 passed; `typecheck_test.sh` 320 passed, 0 failed (old checker, skipping `tests/old_checker_accepts.txt` and `tests/old_checker_rejects.txt`); `tests/typecheck_core_test.sh` 374 passed, 0 unexpected, 0 not checked yet; `go test ./...` ok (`go vet` has one old warning, `UnreadByte` in `Main.go`); `typst compile ai/type-core-calculus.typ` ok. Rocq is installed here (`~/.opam/rocq-mshell`): `make check` in `formal-ver/` closed under the global context, `make -C formal-ver/oracle test` 23 examples agree. `tests/msh-scripts` under the core checker: 75 of 118 pass (unchanged).
+- `gofmt` has not been run on any of the new or changed Go files (not permitted without asking).
+- Open questions in the plan: none.
+- Stages done: 0, 2, 3 (with the gaps below), 4, 5; stage 1 items 1-4. Not done: stage 1 item 5, stages 6, 7, 8.
+- Stage 3 gaps still open: `new` marks across mutually recursive defs (two defs that call each other without marks are accepted with shared outputs; only the "missing `new`" error is lost, soundness does not depend on it); the error that names the branch each member of a join's union came from (plan section 6, stage 3 work list).
+- Next, by the plan: stage 6 (switch over: core checker the default for `--check-types`, `--type-check-only` and the LSP; rewrite the programs on `tests/core_expected_rejections.txt` and fold both checkers' test lists into `typecheck_test.sh`; make `lib/std.msh`'s read-only list functions generic and fix the std signatures listed under "Stage 3, step 8: the corpus" (stop and ask about any signature that looks wrong); run `tests/msh-scripts`; delete the old checker's code paths). Stage 1 item 5 (runtime error classification) is independent and must land before stage 7.
+- Working notes:
+  - Test runs: `MSHINIT=` (empty) still loads `~/.config/msh/.../init.msh`, whose `f` and `g` collide with test programs; point `MSHINIT` at an empty file. The test scripts already do.
+  - `tests/typecheck_core_test.sh` runs `mshell/msh`, `tests/test.sh` runs `mshell/mshell`: build both (`cd mshell && ./build.sh`).
+  - The design doc's H2 example uses `getAt`, which is not an mshell word (indexing is `:n:`); left as is.
