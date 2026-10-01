@@ -1,0 +1,1 @@
+[1 "s"] (match int n : (@n) q! , str n : @q x 1 + drop end) each

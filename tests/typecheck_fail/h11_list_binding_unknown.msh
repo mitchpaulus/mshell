@@ -1,0 +1,1 @@
+def g (a -- ) match list xs : @xs drop , _ : end end

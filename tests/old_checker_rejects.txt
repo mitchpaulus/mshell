@@ -1,0 +1,11 @@
+# Programs in tests/success that the old checker rejects: rules of the core checker
+# it does not have (ai/type-system-plan.md, section 7). typecheck_test.sh, which runs
+# the old checker, skips them; typecheck_core_test.sh checks them. Remove this file at
+# the switch-over (stage 6).
+as_fresh_list_widen.msh
+break_each_in_loop.msh
+join_fresh_maybe_lists.msh
+kind_pattern_union_write.msh
+never_quote_argument.msh
+new_output_recursive.msh
+slice_fresh_widen.msh

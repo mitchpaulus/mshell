@@ -1,0 +1,2 @@
+[1] xs! ["a"] ys!
+true if @xs else @ys end drop

@@ -1,0 +1,2 @@
+def die (str -- never) wle 1 exit end
+true if 5 else "bad" die end 1 + str wl

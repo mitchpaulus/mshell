@@ -1,0 +1,2 @@
+def getA ({a: int} -- int) :a? end
+{} as {str: int} getA 1 + wl

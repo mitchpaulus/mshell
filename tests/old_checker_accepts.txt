@@ -1,0 +1,33 @@
+# Programs in tests/typecheck_fail that the old checker accepts: holes the core checker
+# closes (ai/type-system-plan.md, section 7). typecheck_test.sh, which runs the old
+# checker, skips them; typecheck_core_test.sh checks them. Remove this file at the
+# switch-over (stage 6).
+break_stored_quote.msh
+del_on_shape.msh
+h11_list_binding_unknown.msh
+h2_abstract_escape.msh
+join_shared_lists.msh
+join_shared_maybe_lists.msh
+never_in_list.msh
+never_union_output.msh
+new_output_immutable.msh
+new_output_missing.msh
+new_output_recursive_missing.msh
+new_output_stored.msh
+p01_shape_field_invariant.msh
+p02_shape_to_dict.msh
+p03_dict_to_shape.msh
+p04_shape_to_dict_set.msh
+p06_updatecol_shared.msh
+p07_redirect_shared.msh
+p10_parsejson_json.msh
+p13_as_needs_evidence.msh
+p14_rename_loop.msh
+s1_required_field_invariant.msh
+s2_optional_from_absent.msh
+s4_dict_to_required.msh
+s4_shape_to_dict.msh
+store_lines_same_name.msh
+store_shared_list_wider.msh
+union_same_kind.msh
+var_store_two_types_quote.msh

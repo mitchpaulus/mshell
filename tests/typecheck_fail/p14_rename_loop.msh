@@ -1,0 +1,2 @@
+1 x!
+[0 0] (drop @x 1 + drop "a" x!) each

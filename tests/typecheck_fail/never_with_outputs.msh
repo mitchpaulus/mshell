@@ -1,0 +1,1 @@
+def f ( -- int never) 1 end

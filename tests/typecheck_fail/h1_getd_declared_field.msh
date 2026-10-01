@@ -1,0 +1,3 @@
+{a: 1} as {a: int, *: str} d!
+"a" key!
+@d @key get ? "x" + wl

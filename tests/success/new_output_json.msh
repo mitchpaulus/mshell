@@ -1,0 +1,2 @@
+def f ( -- new Json) "[1]" parseJson end
+f toJson wl

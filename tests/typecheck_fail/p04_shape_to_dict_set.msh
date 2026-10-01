@@ -1,0 +1,2 @@
+def put ({str: int | str} -- ) "a" "x" set drop end
+{a: 1} dup put :a? 1 + wl
