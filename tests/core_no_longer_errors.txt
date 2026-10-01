@@ -1,2 +1,3 @@
 # Programs in tests/typecheck_fail that are no longer errors under the core checker.
 # One file name per line, then a tab and the reason.
+unpack_union_maybe_binding_type.msh	the arms join to Maybe[int | float] (a Maybe joins inside), and + on int | float is checked per member: int int and float int both fit, so the program is sound

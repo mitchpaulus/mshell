@@ -238,3 +238,11 @@ Found: `and` and `or` are runtime builtins missing from `BuiltInList.go`.
 - Core script: 60 passed, 0 unexpected, 212 not checked yet.
 
 Known gap for step 3: a quote typed on its own that uses an overloaded word on an unknown input is ambiguous (`(1 +) q!`); pending overload choices fix it.
+
+## Stage 3: pending overload choices, match (2026-09-30)
+
+- Pending overload choices (`TypeCoreChoice.go`), as planned: retried after each item while anything new was unified, made when one candidate fits; an ambiguous one left at the end of the unit asks for an annotation (`(1 +) q!` never used is an error; `(1 +) q! 5 @q x` checks).
+- `match` (`TypeCoreMatch.go`), done ahead of the table (step 4 of the plan's order) while the table audit runs: kind patterns give the union member; on unknown contents (unknown, abstract, rigid) scalars give the base type, `dict` the read-only `{}`, `list` a list of a new abstract type with the escape check; abstract bindings are an error pointing at `:>`; bindings are stores; `just`/`none`, values, or-patterns, list patterns (with `...rest`), dict patterns, `=>`. Exhaustiveness: every member of the subject's type covered by a kind pattern, `just`+`none`, `true`+`false`, list patterns that cover every length, or a `_` arm. A dict pattern on a key the subject's type says is absent is an error.
+- Found: in a pattern `x` is the interpret word, not a name, so `str x` (the plan's H8 row) is rejected by the runtime too; the H8 test uses `str s`.
+- `tests/core_no_longer_errors.txt`: `unpack_union_maybe_binding_type.msh` (the arms join to `Maybe[int | float]` and `+` checks per member).
+- Core script: 80 passed, 0 unexpected, 192 not checked yet.

@@ -103,6 +103,32 @@ func TestCoreChecker(t *testing.T) {
 		{`true if 1 else 2.5 end toFloat 1.0 + str wl`, true, ""},
 		{`true if 1 else "a" end 1 + drop`, false, "the stack has (str int)"},
 
+		// match: kind patterns give the member of a union; arms are joined.
+		{`def f (int | [str] -- int) match int n : @n , list xs : @xs len end end 1 f wl`, true, ""},
+		{`def f (int | [str] -- int) match int n : @n end end`, false, "non-exhaustive"},
+		{`def f (int | [str] -- ) match list xs : @xs "a" append drop , _ : end end`, true, ""},
+		{`def f (int | null -- str) match int : "int" end end`, false, "non-exhaustive"},
+		{`def f (int | null -- str) match int : "int" , null : "null" end end`, true, ""},
+		{`true ([1]) (["x"]) iff match [value] : @value 1 + , _ : 0 end drop`, false, "the stack has (str int)"},
+		{`5 just match just v : @v , none : 0 end wl`, true, ""},
+		{`def k (int | str -- int | str) match int :> 1 + , str :> end end 1 k drop`, true, ""},
+		{`{'a': 1, 'b': "x"} match {'a': v} : @v 1 + wl , _ : end`, true, ""},
+		{`[1 2 3] match [a ...rest] : @rest len wl , _ : end`, true, ""},
+		{`[1 2] => [a b] @a @b + wl`, true, ""},
+		{`[1 2 3] match [] : , [a ...rest] : , end`, true, ""},
+		{`[1 2 3] match [a ...rest] : , end`, false, "non-exhaustive"},
+		{`{a: 1} => {b: n}`, false, "has no key 'b'"},
+		// H8: a kind pattern on a type variable is unknown contents.
+		{`def h (a -- int) match str s : @s 1 + , _ : drop 0 end end`, false, "no matching overload"},
+		{`def h (a -- int) match str s : @s len , _ : 0 end end`, true, ""},
+		// H11 and H2: no abstract binding; :> keeps the value on the stack.
+		{`def g (a -- ) match list xs : @xs drop , _ : end end`, false, "keep the value on the stack with `:>`"},
+		{`def g (a -- int) match list :> len , _ : 0 end end`, true, ""},
+		{`[1 "s"] (match int n : (@n) q! , str n : @q x 1 + drop end) each`, false, "variable 'n' has type int"},
+		{`[1 "s"] (match int n : , str s : end) each`, true, ""},
+		{`def g (a -- ) [] acc! match list :> acc! , _ : end end`, false, "leaves the arm"},
+		{`def g (a -- ) match list :> drop , _ : end end`, true, ""},
+
 		// Unions of distinct kinds only.
 		{`def f ([int] | [str] -- ) drop end`, false, "two members of the same kind"},
 		{`def f (int | [str] -- ) drop end`, true, ""},

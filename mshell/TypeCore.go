@@ -161,6 +161,7 @@ type coreChecker struct {
 	// choiceVersion is len(uni.pairs) when they were last tried.
 	choices       []coreChoice
 	choiceVersion int
+	escapes       []coreEscape
 	// mentionsVar caches, per TypeId, whether a type mentions a
 	// unification variable: 0 not yet known, 1 no, 2 yes.
 	mentionsVar []uint8
@@ -215,6 +216,7 @@ func (c *coreChecker) beginUnit() {
 	c.deferred = c.deferred[:0]
 	c.pending = c.pending[:0]
 	c.choices, c.choiceVersion = c.choices[:0], 0
+	c.escapes = c.escapes[:0]
 	c.brk, c.cont, c.brkSeen, c.infer = coreLoopCtx{}, coreLoopCtx{}, false, nil
 	c.subst.bound = c.subst.bound[:0]
 	c.subst.root = nil
@@ -258,6 +260,7 @@ func (c *coreChecker) finishUnit() {
 			c.mismatch(d.tok, 0, want, t)
 		}
 	}
+	c.finishEscapes()
 	for _, name := range c.unitVars {
 		v := &c.vars[name]
 		if v.loaded && !v.stored {
@@ -378,7 +381,7 @@ func (c *coreChecker) step(item MShellParseItem) {
 		call.Type, call.Lexeme = LITERAL, strings.Trim(call.Lexeme, ".")
 		c.word(call)
 	case *MShellParseMatchBlock:
-		c.unsupported(it.StartToken, "match")
+		c.matchBlock(it)
 	case *MShellParseGrid:
 		c.unsupported(it.GetStartToken(), "grid literals")
 	case *MShellIndexerList:
