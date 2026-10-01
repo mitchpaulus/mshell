@@ -261,16 +261,21 @@ func FormatType(arena *TypeArena, names *NameTable, id TypeId) string {
 		return names.Name(NameId(n.A)) + "(" + FormatType(arena, names, TypeId(n.B)) + ")"
 	case TKCommand:
 		var parts []string
-		if n.B != uint32(CommandCaptureNone) {
-			parts = append(parts, "stdout="+formatCommandCapture(CommandCaptureMode(n.B)))
+		name := "Command["
+		out := CommandCaptureMode(n.B)
+		if out&CommandPipe != 0 {
+			name, out = "Pipe[", out&^CommandPipe
+		}
+		if out != CommandCaptureNone {
+			parts = append(parts, "stdout="+formatCommandCapture(out))
 		}
 		if n.Extra != uint32(CommandCaptureNone) {
 			parts = append(parts, "stderr="+formatCommandCapture(CommandCaptureMode(n.Extra)))
 		}
 		if len(parts) == 0 {
-			return "Command[" + FormatType(arena, names, TypeId(n.A)) + "]"
+			return name + FormatType(arena, names, TypeId(n.A)) + "]"
 		}
-		return "Command[" + FormatType(arena, names, TypeId(n.A)) + "; " + strings.Join(parts, ", ") + "]"
+		return name + FormatType(arena, names, TypeId(n.A)) + "; " + strings.Join(parts, ", ") + "]"
 	case TKQuote:
 		sig := arena.quoteSigs[n.Extra]
 		var sb strings.Builder

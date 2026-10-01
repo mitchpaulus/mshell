@@ -287,3 +287,10 @@ Core script: 164 passed, 0 unexpected, 108 not checked yet. More runtime bugs: `
 - Inference: at a checking position where unification fails and a variable is involved, records are matched label by label and covariant enum arguments recursively, then checked in full when the unit is solved (design doc, "Checking positions"). `each_def_quote_free_var_shape.msh` needed it.
 - Expected rejections added: `dicts.msh` (one variable stored as three shapes), `tar_pack.msh`, `zip_pack.msh` (decision 2).
 - Core script: 177 passed, 0 unexpected, 96 not checked yet.
+
+## Stage 3: indexing and commands (2026-10-01)
+
+- Indexing goes through two signature sets (`:n:`, and slices or lists of indexers), so unions are checked per member; a pipe indexes to one of its commands and slices to a new list of them.
+- Commands (`TypeCoreCommand.go`): a command's type is its argument list and a state per stream (the old `TKCommand`, with a pipe flag in the stdout state, since a pipe and a list are different runtime objects). Redirects and captures change that state in place, so the list must be fresh (P7: `@c *` is an error suggesting deepCopy); `<` and `&` change nothing the type says; a redirect on a quote keeps a literal waiting (`(...) @f > loop`). Running checks the arguments are strings, paths, numbers, dates, or lists of them (the runtime flattens lists), and pushes the captures (`*`, `*b`, `^`, `^b`, `e`, `es`, `ec`) and `?`'s exit code. The old checker's stream-conflict messages are kept.
+- Two commands over the same arguments join stream by stream; a stream whose states differ becomes "varied" (above every state), so a list literal like `[[make] 2>&1 [grep x]]` has a type. A pipe of such commands runs (a pipeline uses only its own captures); running or redirecting one varied command alone is an error. Commands are Go-only kinds the oracle does not generate.
+- Core script: 251 passed, 0 unexpected, 22 not checked yet.

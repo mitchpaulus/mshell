@@ -165,7 +165,16 @@ const (
 	CommandDestFile    // stream redirected to a file (>, >>, 2>, 2>>, &>, &>>)
 	CommandDestInPlace // stdout claimed by an in-place redirect (<>)
 	CommandDestMerged  // stream merged into the other stream (2>&1 / 1>&2)
+	// CommandDestVaried: the join of commands whose destinations for this
+	// stream differ (the core checker's list literals). Above every other
+	// state; such a command can be piped, not run or redirected on its own.
+	CommandDestVaried
 )
+
+// CommandPipe is set in a TKCommand's stdout state (with the state itself)
+// when the value is a pipe rather than a list: a pipe and a list are
+// different runtime objects.
+const CommandPipe CommandCaptureMode = 1 << 16
 
 // TypeVarId identifies a generic type variable. Fresh ids are issued at
 // generic-instantiation sites (each call to a polymorphic function yields

@@ -547,14 +547,17 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	t.slice = b.sigs([]string{"([a] -- [a])", "(str -- str)", "(path -- path)", "(bytes -- bytes)",
 		"(Grid | GridView -- GridView)"})
 	t.slice[0].newListOut = 1
+	// A pipe: an element is one of its commands; a slice is a new list of
+	// them.
+	{
+		cmd := ar.MakeParam(0)
+		pipe := ar.MakeCommand(ar.MakeList(cmd), CommandPipe, CommandCaptureNone)
+		gens := []NameId{res.names.Intern("a")}
+		t.index = append(t.index, coreSig{ins: []TypeId{pipe}, outs: []TypeId{cmd}, gens: gens, genIn: 1, genOut: 1})
+		t.slice = append(t.slice, coreSig{ins: []TypeId{pipe}, outs: []TypeId{ar.MakeList(cmd)}, gens: gens, genIn: 1, genOut: 1})
+	}
 
 	// Uses of these words the table does not cover yet.
-	t.partialToken = map[TokenType]string{
-		LESSTHAN:    "redirects",
-		GREATERTHAN: "redirects",
-		ASTERISK:    "command captures",
-		QUESTION:    "running commands",
-	}
 	t.partialName = map[NameId]string{
 		res.names.Intern("append"):    "'append' with the value below the list",
 		res.names.Intern("nth"):       "'nth' on a GridRow",

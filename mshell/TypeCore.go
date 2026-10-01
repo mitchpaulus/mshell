@@ -478,6 +478,9 @@ func (c *coreChecker) token(tok Token) {
 	case BREAK, CONTINUE:
 		c.breakOrContinue(tok)
 	default:
+		if c.commandWord(tok) {
+			return
+		}
 		if sigs := c.table.token(tok.Type); sigs != nil {
 			c.call(sigs, tok)
 			return
@@ -502,7 +505,7 @@ func (c *coreChecker) word(tok Token) {
 			return
 		}
 	}
-	if c.dictWord(tok) {
+	if c.dictWord(tok) || c.commandWord(tok) {
 		return
 	}
 	if id, ok := c.names.Lookup(tok.Lexeme); ok {

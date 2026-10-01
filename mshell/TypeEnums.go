@@ -326,6 +326,8 @@ func (r *Relations) SubstParams(t TypeId, args []TypeId) TypeId {
 		return TidBottom
 	case TKList:
 		return ar.MakeList(r.SubstParams(TypeId(n.A), args))
+	case TKCommand:
+		return ar.MakeCommand(r.SubstParams(TypeId(n.A), args), CommandCaptureMode(n.B), CommandCaptureMode(n.Extra))
 	case TKRecord:
 		rec := ar.records[n.Extra]
 		fields := make([]RecordField, len(rec.Fields))

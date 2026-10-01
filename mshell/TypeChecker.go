@@ -1057,6 +1057,8 @@ func streamStateDesc(mode CommandCaptureMode, isStdout bool) string {
 			return "a merge to stderr ('1>&2')"
 		}
 		return "a merge to stdout ('2>&1')"
+	case CommandDestVaried:
+		return "a destination that differs between the commands it came from"
 	}
 	return ""
 }

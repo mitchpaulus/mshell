@@ -180,6 +180,19 @@ func TestCoreChecker(t *testing.T) {
 		{`[[1]] xs! @xs 1: as [[int | str]] drop`, false, "needs evidence"},
 		{`"a\nb" lines 1: as [str | int] drop`, true, ""},
 
+		// Commands: a redirect changes the type, so the list must be fresh (P7).
+		{`[echo hi] * ; wl`, true, ""},
+		{`[echo hi] c! @c * ; drop`, false, "the list must be new"},
+		{`[echo hi] c! @c deepCopy * ; wl`, true, ""},
+		{`[echo hi] * * ;`, false, "already has a capture"},
+		{`[[echo a] [cat]] | * ; wl`, true, ""},
+		{`[[make] 2>&1 [grep y]] | ;`, true, ""},
+		{`[[make] 2>&1 [grep y]] 0 nth ;`, false, "different redirects"},
+		{`[echo hi] e ; len wl`, true, ""},
+		{`(1 wl) "out.txt" > x`, true, ""},
+		{`[[1]] ;`, true, ""},
+		{`[{a: 1}] ;`, false, "a command's arguments"},
+
 		// Unions of distinct kinds only.
 		{`def f ([int] | [str] -- ) drop end`, false, "two members of the same kind"},
 		{`def f (int | [str] -- ) drop end`, true, ""},

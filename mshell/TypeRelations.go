@@ -193,6 +193,11 @@ func (q *subQuery) level(a, b TypeId) bool {
 		}
 		return false
 	}
+	if bn.Kind == TKCommand && (an.Kind == TKList || an.Kind == TKCommand) {
+		x, xo, xe := commandOf(ar, a)
+		y, yo, ye := commandOf(ar, b)
+		return commandStateBelow(xo, yo) && commandStateBelow(xe, ye) && q.both(x, y)
+	}
 	if an.Kind != bn.Kind {
 		return false
 	}
@@ -298,6 +303,22 @@ func quoteLevel(x, y QuoteSig, c func(a, b TypeId) bool) bool {
 		}
 	}
 	return true
+}
+
+// commandOf reads a list or command type as its argument list and stream
+// states; a plain list's streams have no destination.
+func commandOf(ar *TypeArena, t TypeId) (argv TypeId, out, errs CommandCaptureMode) {
+	n := ar.nodes[t]
+	if n.Kind == TKCommand {
+		return TypeId(n.A), CommandCaptureMode(n.B), CommandCaptureMode(n.Extra)
+	}
+	return t, CommandCaptureNone, CommandCaptureNone
+}
+
+// commandStateBelow orders stream states: each is below itself and below
+// the varied state.
+func commandStateBelow(x, y CommandCaptureMode) bool {
+	return x == y || (y&^CommandPipe == CommandDestVaried && x&CommandPipe == y&CommandPipe)
 }
 
 // ---------------------------------------------------------------------------
@@ -623,6 +644,24 @@ func (r *Relations) joinCore(fr bool, a, b TypeId) (TypeId, bool) {
 	}
 	if bn.Kind == TKUnion {
 		return r.joinIntoUnion(fr, b, a, false)
+	}
+	if (an.Kind == TKCommand || bn.Kind == TKCommand) &&
+		(an.Kind == TKList || an.Kind == TKCommand) && (bn.Kind == TKList || bn.Kind == TKCommand) {
+		// Two commands over the same arguments join stream by stream.
+		x, xo, xe := commandOf(ar, a)
+		y, yo, ye := commandOf(ar, b)
+		// A pipe and a list are different runtime objects.
+		pipe := xo & CommandPipe
+		if x != y || pipe != yo&CommandPipe {
+			return TidNothing, false
+		}
+		if xo != yo {
+			xo = CommandDestVaried | pipe
+		}
+		if xe != ye {
+			xe = CommandDestVaried
+		}
+		return ar.MakeCommand(x, xo, xe), true
 	}
 	switch {
 	case an.Kind == TKList && bn.Kind == TKList:
