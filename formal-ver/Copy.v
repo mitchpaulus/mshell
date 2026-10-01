@@ -33,10 +33,10 @@ Definition val_spec (c : heap -> val -> option (heap * val)) : Prop :=
     exists N O, H1 = H0 ++ N /\ dtyped sigs Σ H1 v' t O /\ new_region H0 H1 O.
 
 Definition hty (h : htype) : ty :=
-  match h with HList a => TList a | HRec fs r => TRec fs r | HScope _ => TTop end.
+  match h with HList a => TList a | HRec fs r => TRec fs r | HScope _ | HDead => TTop end.
 
 Definition loc_spec (g : heap -> loc -> option (heap * val)) : Prop :=
-  forall l h H0 H1 v', nth_error Σ l = Some h -> ~ In l R -> ext H0 ->
+  forall l h H0 H1 v', nth_error Σ l = Some h -> h <> HDead -> ~ In l R -> ext H0 ->
     g H0 l = Some (H1, v') ->
     exists N O, H1 = H0 ++ N /\ dtyped sigs Σ H1 v' (hty h) O /\ new_region H0 H1 O.
 
@@ -140,17 +140,17 @@ Qed.
 
 Lemma ocopy_ok c : val_spec c -> loc_spec (ocopy c).
 Proof.
-  intros Hc l h H0 H1 v' Eh Hl Ex Eo.
+  intros Hc l h H0 H1 v' Eh Hd Hl Ex Eo.
   assert (Hlt : l < length H) by (rewrite <- Ln; eapply nth_error_lt; eauto).
   destruct (nth_error H l) as [o|] eqn:E0; [|apply nth_error_None in E0; lia].
-  destruct (Hok l o E0 Hl) as [(h' & Eh' & Ok) Hr]. rewrite Eh in Eh'. inversion Eh'; subst h'.
+  destruct (Hok l o E0 Hl) as [(h' & Eh' & Ok) Hr]; [unfold live; rewrite Eh; congruence|]. rewrite Eh in Eh'. inversion Eh'; subst h'.
   unfold ocopy in Eo. rewrite (ext_nth H0 l Ex Hlt), E0 in Eo.
   assert (Hin : forall x, In x (match o with OList vs => vs | _ => [] end) ->
                 forall r, In r (vlocs x) -> ~ In r R).
   { intros x Hx r Hr'. apply Hr. destruct o as [vs|kvs|kvs]; simpl in Hx; try contradiction.
     simpl. apply in_flat_map. eauto. }
   destruct o as [vs|kvs|kvs]; [| | discriminate].
-  - destruct h as [a|fs r|G]; simpl in Ok; try contradiction.
+  - destruct h as [a|fs r|G|]; simpl in Ok; try contradiction.
     destruct (mapo c H0 vs) as [[H2 vs']|] eqn:Em; [|discriminate]. inversion Eo; subst.
     destruct (mapo_ok c a Hc vs H0 H2 vs' Ok Hin Ex Em) as (N & Os & E2 & D & [Nd Rg]).
     exists (N ++ [OList vs']), (length H2 :: concat Os). split; [subst; symmetry; apply app_assoc|].
@@ -162,7 +162,7 @@ Proof.
       * constructor; auto.
     + split; [constructor; auto|]. intros m. simpl. rewrite Rg, length_app. simpl.
       assert (length H0 <= length H2) by (subst; rewrite !length_app; lia). lia.
-  - destruct h as [a|fs r|G]; simpl in Ok; try contradiction.
+  - destruct h as [a|fs r|G|]; simpl in Ok; try contradiction.
     destruct Ok as (Nk & Rq & Fe).
     destruct (mapo_kv c H0 kvs) as [[H2 kvs']|] eqn:Em; [|discriminate]. inversion Eo; subst.
     destruct (mapo_kv_ok c fs r Hc kvs H0 H2 kvs' Fe) as (N & Os & E2 & K & D & [Nd Rg]); auto.
@@ -202,10 +202,10 @@ Proof.
       try (intros; match goal with Ec : Some _ = Some _ |- _ => injection Ec as <- <- end; exists [], [];
            split; [rewrite app_nil_r; reflexivity | split; [constructor | apply new_region_nil]]; fail).
     - intros l a t Ea Sa Ha Hb v2 Hl Ex Ec.
-      destruct (Hg l (HList a) Ha Hb v2 Ea (Hl l (or_introl eq_refl)) Ex Ec) as (N & O & E1 & D & Rg).
+      destruct (Hg l (HList a) Ha Hb v2 Ea ltac:(discriminate) (Hl l (or_introl eq_refl)) Ex Ec) as (N & O & E1 & D & Rg).
       exists N, O. split; [exact E1 | split; [eapply dtyped_sub; eauto | exact Rg]].
     - intros l fs r t Er Sr Ha Hb v2 Hl Ex Ec.
-      destruct (Hg l (HRec fs r) Ha Hb v2 Er (Hl l (or_introl eq_refl)) Ex Ec) as (N & O & E1 & D & Rg).
+      destruct (Hg l (HRec fs r) Ha Hb v2 Er ltac:(discriminate) (Hl l (or_introl eq_refl)) Ex Ec) as (N & O & E1 & D & Rg).
       exists N, O. split; [exact E1 | split; [eapply dtyped_sub; eauto | exact Rg]].
     - intros sc e G ins outs Esc Cl Ha Hb v2 Hl Ex Ec.
       injection Ec as <- <-. exists [], [].

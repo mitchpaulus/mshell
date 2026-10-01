@@ -12,6 +12,7 @@ Kind.v
 InvOps.v
 Copy.v
 RecOps.v
+Slice.v
 Soundness.v
 Generic.v
 Escape.v

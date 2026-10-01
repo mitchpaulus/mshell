@@ -286,7 +286,7 @@ Proof.
     assert (Hl : ~ In l R) by (apply Hr; simpl; auto).
     assert (Hlt : l < length H) by (rewrite <- Ln; apply nth_error_Some; congruence).
     destruct (nth_error H l) as [o|] eqn:Eo; [|apply nth_error_None in Eo; lia].
-    destruct (Ho l o Eo Hl) as ((h & Eh & Ok) & Hin).
+    destruct (Ho l o Eo Hl) as ((h & Eh & Ok) & Hin); [unfold live; rewrite El; congruence|].
     rewrite El in Eh. injection Eh as <-. destruct o; simpl in Ok; try contradiction.
     apply oforall_nf. intros x Hx. apply IH; auto.
     + rewrite Forall_forall in Ok. eapply vtyped_sub; eauto.
@@ -298,7 +298,7 @@ Proof.
     assert (Hl : ~ In l R) by (apply Hr; simpl; auto).
     assert (Hlt : l < length H) by (rewrite <- Ln; apply nth_error_Some; congruence).
     destruct (nth_error H l) as [o|] eqn:Eo; [|apply nth_error_None in Eo; lia].
-    destruct (Ho l o Eo Hl) as ((h & Eh & Ok) & Hin).
+    destruct (Ho l o Eo Hl) as ((h & Eh & Ok) & Hin); [unfold live; rewrite El; congruence|].
     rewrite El in Eh. injection Eh as <-. destruct o; simpl in Ok; try contradiction.
     destruct Ok as (_ & Hreq & Fv).
     assert (Cf : forall k, fchk okE false (field_at k fs r) = true).

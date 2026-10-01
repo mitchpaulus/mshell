@@ -205,7 +205,7 @@ Proof.
     + constructor.
       * intros l Hl Hc. rewrite concat_app in Hc. simpl in Hc. exfalso. exact (Dj l (Hvl l Hl) Hc).
       * eapply Forall3_impl; [| exact SO3]. intros w p Ow HH. exact (proj2 (Hsl w p Ow HH)).
-  - rewrite concat_app. simpl. intros l o E Hn.
+  - rewrite concat_app. simpl. intros l o E Hn Hlv.
     destruct (in_dec Nat.eq_dec l O) as [HlO|HlO].
     + destruct (C' l HlO) as (h & o' & E' & Ns & Eo & Ok). rewrite E in Eo. inversion Eo; subst.
       split; [exists h; split; auto|].
@@ -214,7 +214,7 @@ Proof.
     + assert (Hn' : ~ In l (concat Op ++ O ++ concat Os)).
       { intros Hc. apply in_app_or in Hc as [Hc|Hc]; [apply Hn; apply in_or_app; auto|].
         apply in_app_or in Hc as [Hc|Hc]; [contradiction | apply Hn; apply in_or_app; auto]. }
-      destruct (Iheap l o E Hn') as [(h & Eh & Ok) Hr]. split.
+      destruct (Iheap l o E Hn' (live_back _ _ _ _ A' HlO Hlv)) as [(h & Eh & Ok) Hr]. split.
       * exists h. split; [apply A'; auto|].
         eapply obj_ok_agree with (X := O); [exact Ok | | exact A' | exact Sx].
         intros r Hr' HrO. exact (Hr r Hr' (Hall r HrO)).
@@ -365,7 +365,7 @@ Proof.
   - constructor; [intros l Hl Hc; apply Ob'; auto; apply Hin; auto|].
     constructor; [intros l Hl Hc; apply Oa'; auto; apply Hin; auto|].
     eapply Forall3_impl; [| exact G2]. simpl. intros w _ Ow Hw l Hl Hc. apply Hw; auto. apply Hin; auto.
-  - intros l o E Hn. destruct (Iheap l o E) as [Ho Hr]; [intro Hc; apply Hn; apply Hin; auto|].
+  - intros l o E Hn Hlv. destruct (Iheap l o E) as [Ho Hr]; [intro Hc; apply Hn; apply Hin; auto | exact Hlv |].
     split; auto. intros r Hr' Hc. apply (Hr r Hr'). apply Hin; auto.
   - intros l Hl. apply Ireg. apply Hin; auto.
 Qed.
@@ -406,7 +406,7 @@ Proof.
     eapply dtyped_agree1; eauto using scope_ext_refl.
     intros m Hm. rewrite nth_error_set_nth_neq; auto. intro; subst.
     apply Hn. apply in_concat. eauto.
-  - intros m om Em Hm. destruct (Nat.eq_dec m l) as [->|Hne].
+  - intros m om Em Hm Hlv. destruct (Nat.eq_dec m l) as [->|Hne].
     + rewrite nth_error_set_nth_eq in Em by (eapply nth_error_lt; eauto). inversion Em; subst.
       split; eauto.
     + rewrite nth_error_set_nth_neq in Em; auto.
@@ -450,8 +450,9 @@ Proof.
     + unfold slot_ok in *. destruct p as [[|] t]; simpl in *; auto.
       eapply dtyped_agree1; eauto using scope_ext_refl.
       intros m Hm. apply nth_error_app_lt. apply Rlt. apply in_concat. eauto.
-  - intros m om Em Hm. destruct (Nat.lt_ge_cases m (length H)) as [Hlt|Hge].
-    + rewrite nth_error_app_lt in Em; auto. destruct (Iheap m om Em Hm) as [(h' & Eh & Okh) Hr'].
+  - intros m om Em Hm Hlv. destruct (Nat.lt_ge_cases m (length H)) as [Hlt|Hge].
+    + rewrite nth_error_app_lt in Em; auto.
+      destruct (Iheap m om Em Hm (live_app Σ _ m ltac:(lia) Hlv)) as [(h' & Eh & Okh) Hr'].
       split; auto. exists h'. split.
       * rewrite nth_error_app1; auto. lia.
       * eapply obj_ok_agree with (X := []); eauto using sagree_app, scope_ext_app.
@@ -488,9 +489,9 @@ Proof.
     + eapply Forall3_impl_in; [| exact Iown]. intros w p Ow Hw HOw Hown l Hl [<-|Hc].
       * specialize (Slt w Hw _ Hl). lia.
       * apply Hown; auto.
-  - intros m om Em Hm. destruct (Nat.lt_ge_cases m (length H)) as [Hlt|Hge].
+  - intros m om Em Hm Hlv. destruct (Nat.lt_ge_cases m (length H)) as [Hlt|Hge].
     + rewrite nth_error_app_lt in Em; auto.
-      destruct (Iheap m om Em (fun Hc => Hm (or_intror Hc))) as [(h' & Eh & Okh) Hr'].
+      destruct (Iheap m om Em (fun Hc => Hm (or_intror Hc)) (live_app Σ _ m ltac:(lia) Hlv)) as [(h' & Eh & Okh) Hr'].
       split.
       * exists h'. split; [rewrite nth_error_app1; auto; lia|].
         eapply obj_ok_agree with (X := []); eauto using sagree_app, scope_ext_app.
@@ -581,9 +582,10 @@ Proof.
         apply in_app_or in Hc as [Hc|Hc].
         -- exfalso. apply Rg in Hc. specialize (Slt w Hw _ Hl). lia.
         -- apply Hown; auto.
-    + intros m om Em Hm. destruct (Nat.lt_ge_cases m (length H)) as [Hlt|Hge].
+    + intros m om Em Hm Hlv. destruct (Nat.lt_ge_cases m (length H)) as [Hlt|Hge].
       * rewrite Pre in Em; auto.
-        destruct (Iheap m om Em (fun Hc => Hm (in_or_app _ _ _ (or_intror Hc)))) as [(h' & Eh & Okh) Hr'].
+        destruct (Iheap m om Em (fun Hc => Hm (in_or_app _ _ _ (or_intror Hc))) (live_app Σ _ m ltac:(lia) Hlv))
+          as [(h' & Eh & Okh) Hr'].
         split.
         -- exists h'. split; [unfold Σ'; rewrite nth_error_app1; auto; lia|].
            eapply obj_ok_agree with (X := []); eauto using sagree_app_l, scope_ext_app_l.
@@ -667,10 +669,10 @@ Proof.
         eapply Forall3_impl; [| exact G2]. simpl. intros w _ Ow Hw m Hm Hc. apply Hw; auto.
         rewrite concat_app in Hc. simpl in Hc. rewrite app_nil_r in Hc.
         insolve.
-    + intros m om Em Hm. rewrite concat_app in Hm. simpl in Hm. rewrite app_nil_r in Hm.
+    + intros m om Em Hm Hlv. rewrite concat_app in Hm. simpl in Hm. rewrite app_nil_r in Hm.
       destruct (Nat.eq_dec m l) as [->|Hne]; [exfalso; apply Hm; left; auto|].
       rewrite Agr in Em; auto.
-      destruct (Iheap m om Em) as [Ho Hr].
+      destruct (Iheap m om Em) as [Ho Hr]; [| exact Hlv |].
       { intro Hc. apply Hm. insolve. }
       split; auto. intros r Hr' Hc. apply (Hr r Hr'). rewrite concat_app in Hc. simpl in Hc.
       rewrite app_nil_r in Hc. insolve.
@@ -799,7 +801,7 @@ Proof.
     + eapply Forall3_impl; [| exact G1]. intros w q O' Hw l Hl Hc. apply Hw; auto. apply in_concat_move; auto.
     + intros l Hl Hc. apply Ov; auto. apply in_concat_move; auto.
     + eapply Forall3_impl; [| exact G2]. intros w q O' Hw l Hl Hc. apply Hw; auto. apply in_concat_move; auto.
-  - intros l o E Hn. destruct (Iheap l o E) as [Hh Hr].
+  - intros l o E Hn Hlv. destruct (Iheap l o E) as [Hh Hr]; [| exact Hlv |].
     { intro Hc; apply Hn; apply in_concat_move; auto. }
     split; auto. intros r Hr' Hc. apply (Hr r Hr'). apply in_concat_move; auto.
   - intros l Hl. apply Ireg. apply in_concat_move; auto.

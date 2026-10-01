@@ -217,9 +217,9 @@ Proof.
     destruct (IH _ v t V Hv Hi') as [V' L]. split; [apply vt_mu|]; auto.
 Qed.
 
-(** Objects outside the regions [R] are typed by [Σ] and do not point into [R]. *)
+(** Live objects outside the regions [R] are typed by [Σ] and do not point into [R]. *)
 Definition heap_ok_out (Σ : store_ty) (H : heap) (R : list loc) : Prop :=
-  forall l o, nth_error H l = Some o -> ~ In l R ->
+  forall l o, nth_error H l = Some o -> ~ In l R -> live Σ l ->
     (exists h, nth_error Σ l = Some h /\ obj_ok sigs Σ o h) /\
     (forall r, In r (olocs o) -> ~ In r R).
 

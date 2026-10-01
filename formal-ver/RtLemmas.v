@@ -16,6 +16,13 @@ Proof. unfold scope_ext; auto. Qed.
 Lemma scope_ext_trans a b c : scope_ext a b -> scope_ext b c -> scope_ext a c.
 Proof. unfold scope_ext; auto. Qed.
 
+(** A location live after a change of [Σ] away from it was live before. *)
+Lemma live_back Σ Σ' X l : sagree Σ Σ' X -> ~ In l X -> live Σ' l -> live Σ l.
+Proof. intros A N Lv E. apply Lv. apply A; auto. Qed.
+
+Lemma live_app (Σ X : store_ty) l : l < length Σ -> live (Σ ++ X) l -> live Σ l.
+Proof. unfold live. intros Hl Lv E. apply Lv. rewrite nth_error_app1; auto. Qed.
+
 (** ** Subtyping facts *)
 
 Lemma sub_refl t : sub t t.
@@ -216,7 +223,7 @@ Lemma obj_ok_agree Σ Σ' X o h :
   (forall r, In r (olocs o) -> ~ In r X) -> sagree Σ Σ' X -> scope_ext Σ Σ' ->
   obj_ok sigs Σ' o h.
 Proof.
-  intros Ho Hr Ha Hs. destruct o as [vs|kvs|kvs], h as [t|fs r|G]; simpl in *; try contradiction.
+  intros Ho Hr Ha Hs. destruct o as [vs|kvs|kvs], h as [t|fs r|G|]; simpl in *; try contradiction.
   - rewrite Forall_forall in *. intros v Hin. eapply vtyped_agree; eauto.
     intros l Hl. apply Hr. apply in_flat_map. eauto.
   - destruct Ho as (Hn & Hq & Hf). repeat split; auto.

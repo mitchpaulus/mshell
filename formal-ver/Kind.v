@@ -183,12 +183,13 @@ Proof.
 Qed.
 
 Lemma loc_obj Σ H R l h :
-  heap_ok_out sigs Σ H R -> length Σ = length H -> ~ In l R -> nth_error Σ l = Some h ->
+  heap_ok_out sigs Σ H R -> length Σ = length H -> ~ In l R -> nth_error Σ l = Some h -> h <> HDead ->
   exists o, nth_error H l = Some o /\ obj_ok sigs Σ o h.
 Proof.
-  intros Hh Hlen Hn E. pose proof (nth_error_lt _ _ _ E) as Hlt. rewrite Hlen in Hlt.
+  intros Hh Hlen Hn E Hd. pose proof (nth_error_lt _ _ _ E) as Hlt. rewrite Hlen in Hlt.
   destruct (nth_error H l) as [o|] eqn:Eo.
-  - destruct (Hh l o Eo Hn) as [[h' [E' Ok]] _]. rewrite E in E'; inversion E'; subst. eauto.
+  - destruct (Hh l o Eo Hn) as [[h' [E' Ok]] _]; [unfold live; rewrite E; congruence|].
+    rewrite E in E'; inversion E'; subst. eauto.
   - apply nth_error_None in Eo; lia.
 Qed.
 
@@ -201,13 +202,13 @@ Proof.
   - exists TInt, KInt; repeat split; [constructor | apply s_refl].
   - exists TStr, KStr; repeat split; [constructor | apply s_refl].
   - exists TBool, KBool; repeat split; [constructor | apply s_refl].
-  - destruct (loc_obj Σ H R l (HList a) Hh Hlen) as (o & Eo & Ok); auto.
+  - destruct (loc_obj Σ H R l (HList a) Hh Hlen) as (o & Eo & Ok); try discriminate; auto.
     { apply Hl; apply in_eq. }
     destruct o; simpl in Ok; try contradiction.
     exists (TList a), KList; repeat split; auto.
     + eapply vt_list; eauto. apply s_refl.
     + simpl. rewrite Eo. reflexivity.
-  - destruct (loc_obj Σ H R l (HRec fs r) Hh Hlen) as (o & Eo & Ok); auto.
+  - destruct (loc_obj Σ H R l (HRec fs r) Hh Hlen) as (o & Eo & Ok); try discriminate; auto.
     { apply Hl; apply in_eq. }
     destruct o; simpl in Ok; try contradiction.
     exists (TRec fs r), KDict; repeat split; auto.

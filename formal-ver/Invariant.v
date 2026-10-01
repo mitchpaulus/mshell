@@ -16,7 +16,18 @@
 
     The invariant [inv] says the stack's fresh slots own disjoint regions,
     that no shared slot and no object outside the regions references into
-    a region, and that everything outside the regions is typed by [Σ]. *)
+    a region, and that everything outside the regions is typed by [Σ],
+    except dead objects.
+
+    A *dead* object is one that the program can no longer reach: [Σ] gives
+    it [HDead].  [take] of a fresh list leaves the old list in the heap,
+    still pointing at the elements the new list kept, and those are now
+    part of a fresh region; the old list and the elements it dropped become
+    dead.  Nothing live can reference a dead object ([vtyped] reaches a
+    location only through [HList] or [HRec], and a region only points into
+    itself; [dead_unreachable] in Slice.v), and nothing makes it live again:
+    only committing a region changes [Σ], and a dead object is in no
+    region. *)
 
 From Stdlib Require Import String List Arith Bool Lia.
 Import ListNotations.
@@ -25,9 +36,12 @@ From MshellCore Require Import Syntax Subtyping Typing Interp.
 Inductive htype :=
 | HList (t : ty)
 | HRec (fs : list (label * fstat)) (r : fstat)
-| HScope (G : tenv).
+| HScope (G : tenv)
+| HDead.                    (* unreachable: no constraint *)
 
 Definition store_ty := list htype.
+
+Definition live (Σ : store_ty) (l : loc) : Prop := nth_error Σ l <> Some HDead.
 
 Definition is_scope (h : htype) : bool :=
   match h with HScope _ => true | _ => false end.
@@ -133,8 +147,8 @@ Record inv (Σ : store_ty) (H : heap) (sc : loc) (G : tenv)
   inv_disj : NoDup (concat Os);
   (* a slot references a region location only if it is in its own region *)
   inv_own : Forall3 (fun v _ O => forall l, In l (vlocs v) -> In l (concat Os) -> In l O) S st Os;
-  (* objects outside the regions are typed by Σ and do not point into regions *)
-  inv_heap : forall l o, nth_error H l = Some o -> ~ In l (concat Os) ->
+  (* live objects outside the regions are typed by Σ and do not point into regions *)
+  inv_heap : forall l o, nth_error H l = Some o -> ~ In l (concat Os) -> live Σ l ->
                (exists h, nth_error Σ l = Some h /\ obj_ok Σ o h) /\
                (forall r, In r (olocs o) -> ~ In r (concat Os));
   inv_reg : forall l, In l (concat Os) -> exists h, nth_error Σ l = Some h /\ is_scope h = false;

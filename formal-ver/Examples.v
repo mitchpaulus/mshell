@@ -645,6 +645,123 @@ Example map_widen_runs : exists H, run map_widen = ROk ONormal H [].
 Proof. vm_compute. eexists. reflexivity. Qed.
 
 
+(** * [take], [skip] and slices
+
+    A new list over a run of the input's elements.  Its result is fresh when
+    the input was fresh or the elements are immutable ([tw_slice]).  The
+    design uses only the second case, the one rule for new lists
+    ([skip_imm] below); the first is proved too ([take_fresh]).  "Always
+    fresh" would be wrong for a list of containers: [@xs 1 take] with
+    [xs : [[int]]] stored is a new list over [xs]'s own inner lists, and
+    widening it to [[[int | str]]] lets a string into [xs]. *)
+Definition hole_take_shared : prog :=
+  [ WNil; WNil; WInt 1; WPush; WPush; WStore "xs"                (* xs = [[1]] *)
+  ; WLoad "xs"; WInt 1; WTake                                      (* a new list over xs's inner list *)
+  ; WInt 0; WGetAt; WStr "s"; WPush; WDrop                         (* append "s" to that inner list *)
+  ; WLoad "xs"; WInt 0; WGetAt; WInt 1; WGetAt; WInt 1; WAdd ].    (* "s" + 1 *)
+
+Example hole_take_shared_stuck : is_stuck (run hole_take_shared) = true.
+Proof. vm_compute. reflexivity. Qed.
+
+Example hole_take_shared_rejected : forall G s, ~ T nosigs G LNone LNone RNone hole_take_shared [] s.
+Proof.
+  intros G s HT.
+  apply (soundness nosigs nodefs (fun f ins outs Hs => match Hs with end) (maybe_ctors_ok _) G RNone
+           hole_take_shared s HT 200).
+  vm_compute. reflexivity.
+Qed.
+
+(** From a fresh input the result is fresh.  [[[1] [2]] 1 take] is widened
+    to [[[int | str]]], shared, and a string appended to its inner list. *)
+Definition take_fresh : prog :=
+  [ WNil; WNil; WInt 1; WPush; WPush; WNil; WInt 2; WPush; WPush   (* [[1] [2]], fresh *)
+  ; WInt 1; WTake                                                   (* [[1]], fresh *)
+  ; WDup; WInt 0; WGetAt; WStr "s"; WPush; WDrop; WDrop ].
+
+Definition LI := TList TInt.
+Definition LIS := TList IS.
+
+Example take_fresh_typed : T nosigs [] LNone LNone RNone take_fresh [] [].
+Proof.
+  unfold take_fresh.
+  step ltac:(apply tw_nil with (t := LI)).
+  step ltac:(apply tw_nil with (t := TInt)).
+  step ltac:(apply tw_int).
+  eapply t_sub; [ | eapply t_cons; [apply tw_push_dp | ] | apply ssub_refl ].
+  { constructor; [apply ss_imm; [reflexivity | apply s_refl] | apply ssub_refl]. }
+  step ltac:(apply tw_push_dp).
+  step ltac:(apply tw_nil with (t := TInt)).
+  step ltac:(apply tw_int).
+  eapply t_sub; [ | eapply t_cons; [apply tw_push_dp | ] | apply ssub_refl ].
+  { constructor; [apply ss_imm; [reflexivity | apply s_refl] | apply ssub_refl]. }
+  step ltac:(apply tw_push_dp).
+  step ltac:(apply tw_int).
+  (* fresh in, fresh out *)
+  step ltac:(apply tw_slice with (a := [(Sh, TInt)]) (m := Dp) (m' := Dp); [constructor | auto]).
+  (* widen the fresh result, then share it *)
+  eapply t_sub; [ | | apply ssub_refl ].
+  { constructor; [apply (ss_dp (TList LI) (TList LIS)), rs_list, rs_list, rs_sub, s_unionr1, s_refl | constructor]. }
+  eapply t_sub; [ | eapply t_cons; [apply tw_dup with (t := TList LIS) | ] | apply ssub_refl ].
+  { constructor; [apply ss_forget, s_refl | constructor]. }
+  step ltac:(apply tw_int).
+  step ltac:(apply tw_getat).
+  step ltac:(apply tw_str).
+  eapply t_sub; [ | eapply t_cons; [apply tw_push_sh with (t := IS) | ] | apply ssub_refl ].
+  { constructor; [apply ss_sh, sub_str_is | apply ssub_refl]. }
+  step ltac:(apply tw_drop).
+  step ltac:(apply tw_drop).
+  apply t_nil.
+Qed.
+
+Example take_fresh_never_stuck : forall n, eval nodefs n [OScope []] 0 [] take_fresh <> RStuck.
+Proof.
+  intros n. eapply (soundness nosigs nodefs); [intros f ins outs [] | exact (maybe_ctors_ok _) | exact take_fresh_typed].
+Qed.
+
+(** Why the invariant needs dead objects.  After the run, the old list
+    (location 1, created as a [[[int]]]) still holds the inner list it
+    shared with the new one, and that inner list now holds a string: the
+    old list has no type.  Nothing can reach it; it is dead. *)
+Example take_fresh_heap : exists H, run take_fresh = ROk ONormal H [] /\
+  nth_error H 1 = Some (OList [VLoc 2; VLoc 3]) /\ nth_error H 2 = Some (OList [VInt 1; VStr "s"]).
+Proof. vm_compute. eexists. split; [reflexivity | split; reflexivity]. Qed.
+
+(** With immutable elements a shared input is enough ([lines 1 skip]):
+    [@ys 1 skip as [int | str] "s" append] with [ys : [int]] stored. *)
+Definition skip_imm : prog :=
+  [ WNil; WInt 1; WPush; WInt 2; WPush; WStore "ys"
+  ; WLoad "ys"; WInt 1; WSkip; WStr "s"; WPush; WDrop ].
+
+Example skip_imm_typed : T nosigs [("ys", LI)] LNone LNone RNone skip_imm [] [].
+Proof.
+  unfold skip_imm.
+  step ltac:(apply tw_nil with (t := TInt)).
+  step ltac:(apply tw_int).
+  eapply t_sub; [ | eapply t_cons; [apply tw_push_dp | ] | apply ssub_refl ].
+  { constructor; [apply ss_imm; [reflexivity | apply s_refl] | apply ssub_refl]. }
+  step ltac:(apply tw_int).
+  eapply t_sub; [ | eapply t_cons; [apply tw_push_dp | ] | apply ssub_refl ].
+  { constructor; [apply ss_imm; [reflexivity | apply s_refl] | apply ssub_refl]. }
+  eapply t_sub; [ | eapply t_cons; [apply tw_store with (t := LI); reflexivity | ] | apply ssub_refl ].
+  { constructor; [apply ss_forget, s_refl | constructor]. }
+  step ltac:(apply tw_load with (t := LI); reflexivity).
+  step ltac:(apply tw_int).
+  (* shared in, fresh out: the elements are immutable *)
+  step ltac:(apply tw_slice with (a := [(Sh, TInt)]) (m := Sh) (m' := Dp); [constructor | auto]).
+  step ltac:(apply tw_str).
+  eapply t_sub; [ | eapply t_cons; [apply tw_push_dp with (t := IS) | ] | apply ssub_refl ].
+  { constructor; [apply ss_imm; [reflexivity | apply sub_str_is] |].
+    constructor; [apply ss_dp, rs_list, rs_sub, s_unionr1, s_refl | constructor]. }
+  step ltac:(apply tw_drop). apply t_nil.
+Qed.
+
+Example skip_imm_runs : exists H, run skip_imm = ROk ONormal H [].
+Proof. vm_compute. eexists. reflexivity. Qed.
+
+(** An index slice out of range is a checked error. *)
+Example slice_out_of_range : run [WNil; WInt 1; WPush; WSlice 0 (Some 2)] = RErr.
+Proof. vm_compute. reflexivity. Qed.
+
 (** * Builtins whose quote sees the elements
 
     The design listed [filter] (and [sortBy], [groupBy]) as "fresh when the

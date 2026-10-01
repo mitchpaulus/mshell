@@ -602,6 +602,11 @@ Proof.
     specialize (H th). revert H. ss. auto.
   - eapply tw_map_imm; [apply immutable_tsub; eauto | apply child_ctx_subst; eauto | apply child_ctx_subst; eauto |].
     specialize (H th). revert H. ss. auto.
+  - (* take, skip, slices *)
+    match goal with Hs : slice_args _ _ |- _ => destruct Hs end; ss;
+      [eapply tw_slice with (a := [(Sh, TInt)]) | eapply tw_slice with (a := [(Sh, TInt)])
+      | eapply tw_slice with (a := [])];
+      solve [constructor | intuition (subst; auto using immutable_tsub)].
   - constructor.
   - rewrite <- fty_tsub, <- field_at_tsub. apply tw_getk.
   - apply tw_getreq. rewrite field_at_tsub, e. reflexivity.

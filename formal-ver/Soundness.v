@@ -7,7 +7,7 @@
 
 From Stdlib Require Import String List Arith Bool Lia Permutation.
 Import ListNotations.
-From MshellCore Require Import Syntax Subtyping Variance Typing Interp Invariant RtLemmas Commit Validate Kind InvOps Copy RecOps.
+From MshellCore Require Import Syntax Subtyping Variance Typing Interp Invariant RtLemmas Commit Validate Kind InvOps Copy RecOps Slice.
 
 Section Sound.
 Variable sigs : genv.
@@ -128,13 +128,13 @@ Qed.
 
 (** The object behind a location outside the regions. *)
 Lemma inv_obj Σ H sc G L st Os l h :
-  inv sigs Σ H sc G L st Os -> nth_error Σ l = Some h -> ~ In l (concat Os) ->
+  inv sigs Σ H sc G L st Os -> nth_error Σ l = Some h -> h <> HDead -> ~ In l (concat Os) ->
   exists o, nth_error H l = Some o /\ obj_ok sigs Σ o h /\ (forall r, In r (olocs o) -> ~ In r (concat Os)).
 Proof.
-  intros I E Hn. pose proof (inv_len _ _ _ _ _ _ _ _ I) as Ln.
+  intros I E Hd Hn. pose proof (inv_len _ _ _ _ _ _ _ _ I) as Ln.
   assert (Hlt : l < length H) by (rewrite <- Ln; eapply nth_error_lt; eauto).
   destruct (nth_error H l) as [o|] eqn:Eo; [|apply nth_error_None in Eo; lia].
-  destruct (inv_heap _ _ _ _ _ _ _ _ I l o Eo Hn) as [(h' & E' & Ok) Hr].
+  destruct (inv_heap _ _ _ _ _ _ _ _ I l o Eo Hn) as [(h' & E' & Ok) Hr]; [unfold live; rewrite E; congruence|].
   rewrite E in E'. inversion E'; subst. eauto.
 Qed.
 
@@ -157,7 +157,7 @@ Proof.
   assert (Nsc : ~ In sc (concat Os)).
   { intro Hc. destruct (inv_reg _ _ _ _ _ _ _ _ Iv sc Hc) as (h & E & Ns).
     rewrite Esc in E. inversion E; subst. discriminate. }
-  destruct (inv_obj _ _ _ _ _ _ _ _ _ Iv Esc Nsc) as (o & Eo & Ok & Hr).
+  destruct (inv_obj _ _ _ _ _ _ _ _ _ Iv Esc ltac:(discriminate) Nsc) as (o & Eo & Ok & Hr).
   destruct o as [vs|kvs|kvs]; simpl in Ok; try contradiction. eauto.
 Qed.
 
@@ -650,7 +650,7 @@ Lemma sh_list Σ H sc G v L t st Os :
 Proof.
   intros Iv V Hl. apply vt_list_inv in V as (l & a & -> & E & Ta).
   assert (Nl : ~ In l (concat Os)) by (apply Hl; apply in_eq).
-  destruct (inv_obj _ _ _ _ _ _ _ _ _ Iv E Nl) as (o & Eo & Ok & Hr).
+  destruct (inv_obj _ _ _ _ _ _ _ _ _ Iv E ltac:(discriminate) Nl) as (o & Eo & Ok & Hr).
   destruct o; simpl in Ok; try contradiction. eexists _, _, _; repeat split; eauto.
   - destruct Ta; auto.
   - destruct Ta; auto.
@@ -666,7 +666,7 @@ Lemma sh_rec Σ H sc G v L fs r st Os :
 Proof.
   intros Iv V Hl. apply vt_rec_inv in V as (l & fs' & r' & -> & E & Hs).
   assert (Nl : ~ In l (concat Os)) by (apply Hl; apply in_eq).
-  destruct (inv_obj _ _ _ _ _ _ _ _ _ Iv E Nl) as (o & Eo & Ok & Hr).
+  destruct (inv_obj _ _ _ _ _ _ _ _ _ Iv E ltac:(discriminate) Nl) as (o & Eo & Ok & Hr).
   destruct o; simpl in Ok; try contradiction.
   exists l, fs', r', kvs. repeat split; auto.
   - apply sub_rec_fsub; exact Hs.
@@ -1391,6 +1391,115 @@ Proof.
   - rewrite Forall_forall in *. intros x Hx. eapply vtyped_sub; [apply Fv; auto | apply Ta].
   - intros x Hx l0 Hl0. apply Hr. simpl. apply in_flat_map. eauto.
 Qed.
+(** ** [take], [skip] and slices *)
+
+(** A list operand, shared or fresh: a location holding a list. *)
+Lemma list_operand Σ H sc G v L m t st Os :
+  inv sigs Σ H sc G (v :: L) ((m, TList t) :: st) Os ->
+  exists l vs, v = VLoc l /\ nth_error H l = Some (OList vs).
+Proof.
+  intros I. destruct (inv_cons_Os _ _ _ _ _ _ _ _ _ I) as (O & Os' & ->). destruct m.
+  - apply inv_pop_sh in I as (_ & V & Hl & I').
+    destruct (sh_list _ _ _ _ _ _ _ _ _ I' V Hl) as (l & a & vs & -> & _ & _ & _ & Eo & _). eauto.
+  - pose proof (slot_at _ _ _ _ _ [] _ _ [] _ _ [] _ _ eq_refl eq_refl I) as Sl.
+    unfold slot_ok in Sl; simpl in Sl.
+    apply dt_list_inv in Sl as (l & vs & Os1 & -> & Eo & _). eauto.
+Qed.
+
+(** Pushing a new list over the run [mid] of the operand's elements, with
+    mark [m']: fresh when the operand was fresh or the elements are
+    immutable. *)
+Lemma w_newlist G B C R m m' t rest s s3 Σ H sc l stk0 Sf sf Os vs pre mid post :
+  (m' = Sh \/ m = Dp \/ immutable t = true) ->
+  T sigs G B C R rest ((m', TList t) :: s) s3 ->
+  INV Σ H sc G (VLoc l :: stk0 ++ Sf) ((m, TList t) :: s ++ sf) Os ->
+  length stk0 = length s ->
+  nth_error H l = Some (OList vs) -> vs = pre ++ mid ++ post ->
+  res_ok Σ sc G B C R s3 Sf sf (evalv vd defs n (H ++ [OList mid]) sc (VLoc (length H) :: stk0) rest).
+Proof.
+  intros Hm HT [Iv Bd] L El Evs. subst vs.
+  destruct (inv_cons_Os _ _ _ _ _ _ _ _ _ Iv) as (O & Os' & ->).
+  destruct m.
+  - (* a shared operand: its elements are typed by the store *)
+    apply inv_pop_sh in Iv as (-> & V & Hl & Iv).
+    destruct (sh_list _ _ _ _ _ _ _ _ _ Iv V Hl) as (l' & a & vs & E & Ea & Ta & Nl & Eo & Fv & Hr).
+    injection E as <-. rewrite El in Eo. injection Eo as <-.
+    pose proof (inv_len _ _ _ _ _ _ _ _ Iv) as Ln.
+    assert (Hin : forall r, In r (olocs (OList mid)) -> In r (olocs (OList (pre ++ mid ++ post)))).
+    { simpl. intros r. rewrite !flat_map_app, !in_app_iff. tauto. }
+    assert (Fm : Forall (fun w => vtyped sigs Σ w t) mid).
+    { rewrite Forall_forall in *. intros w Hw. eapply vtyped_sub; [apply Fv | apply (proj1 Ta)].
+      rewrite !in_app_iff. auto. }
+    assert (Hlt : forall r, In r (olocs (OList mid)) -> r < length H) by (intros r Hr'; eapply Bd; eauto).
+    destruct m'.
+    + (* shared result *)
+      eapply (next_ok n IH) with (Σ' := Σ ++ [HList t]); [exact HT | | len | apply scope_ext_app].
+      split.
+      * simpl. apply inv_push_sh.
+        -- apply inv_alloc_out; [exact Iv | | intros r Hr'; apply Hr; auto].
+           simpl. rewrite Forall_forall in Fm |- *. intros w Hw.
+           eapply vtyped_ext; [apply Fm; auto | apply sagree_app | apply scope_ext_app].
+        -- eapply vt_list; [rewrite nth_error_app2 by lia; rewrite Ln, Nat.sub_diag; reflexivity | apply s_refl].
+        -- simpl. intros r [<-|[]] Hc. pose proof (inv_reg_lt sigs _ _ _ _ _ _ _ _ Iv Hc). lia.
+      * apply bounded_app; auto. intros r Hr'. specialize (Hlt r Hr'). lia.
+    + (* fresh result: the elements are immutable *)
+      assert (Hi : immutable t = true) by (destruct Hm as [E|[E|E]]; [discriminate | discriminate | exact E]).
+      assert (Nl0 : olocs (OList mid) = []).
+      { simpl. apply flat_map_nil_iff. intros w Hw. rewrite Forall_forall in Fm. eapply vtyped_imm_vlocs; eauto. }
+      eapply (next_ok n IH) with (Σ' := Σ ++ [HList TBot]); [exact HT | | len | apply scope_ext_app].
+      split.
+      * simpl. eapply inv_alloc_dp; [exact Iv | exact Bd | exact Nl0 |].
+        replace [length H] with (length H :: concat (map (fun _ => @nil loc) mid))
+          by (rewrite concat_map_nil; reflexivity).
+        apply dt_list with (vs := mid) (Os := map (fun _ => []) mid).
+        -- apply nth_error_app_eq.
+        -- remember (H ++ [OList mid]) as Hx. clear HeqHx. clear -Fm Hi.
+           induction Fm; simpl; constructor; auto.
+           apply vtyped_imm_dtyped; auto. eapply vtyped_ext; [eauto | apply sagree_app | apply scope_ext_app].
+        -- rewrite concat_map_nil. constructor; [simpl; tauto | constructor].
+      * apply bounded_app; auto. rewrite Nl0. simpl; tauto.
+  - (* a fresh operand: the kept elements move to the new list; the rest dies *)
+    destruct (inv_slice_dp sigs Σ H sc G l _ t _ O Os' pre mid post Iv Bd El) as (Σ1 & O1 & Sx1 & Iv1 & Bd1).
+    destruct m'.
+    + destruct (inv_commit_top sigs _ _ _ _ _ _ _ _ _ _ Iv1) as (Σ2 & Sx2 & _ & Iv2).
+      eapply (next_ok n IH); [exact HT | split; [exact Iv2 | exact Bd1] | len | eapply scope_ext_trans; eauto].
+    + eapply (next_ok n IH); [exact HT | split; [exact Iv1 | exact Bd1] | len | exact Sx1].
+Qed.
+
+Lemma w_slice G B C R w a m m' t rest s s3 Σ H sc stk Sf sf Os :
+  slice_args w a -> (m' = Sh \/ m = Dp \/ immutable t = true) ->
+  T sigs G B C R rest ((m', TList t) :: s) s3 ->
+  INV Σ H sc G (stk ++ Sf) ((a ++ (m, TList t) :: s) ++ sf) Os ->
+  length stk = length (a ++ (m, TList t) :: s) ->
+  res_ok Σ sc G B C R s3 Sf sf (evalv vd defs (S n) H sc stk (w :: rest)).
+Proof.
+  intros Sa Hm HT Iv L. destruct Sa as [| | i b]; simpl in Iv, L.
+  - (* take *)
+    destruct stk as [|x [|y stk0]]; try len. simpl in Iv. destruct Iv as [Iv Bd].
+    pop_sh Iv. destruct Iv as (-> & V & _ & Iv). apply vt_int_inv in V as (k & ->).
+    destruct (list_operand _ _ _ _ _ _ _ _ _ _ Iv) as (l & vs & -> & El).
+    simpl. rewrite El.
+    eapply w_newlist with (pre := []) (post := skipn k vs);
+      [exact Hm | exact HT | split; [exact Iv | exact Bd] | len | exact El |].
+    simpl. symmetry. apply firstn_skipn.
+  - (* skip *)
+    destruct stk as [|x [|y stk0]]; try len. simpl in Iv. destruct Iv as [Iv Bd].
+    pop_sh Iv. destruct Iv as (-> & V & _ & Iv). apply vt_int_inv in V as (k & ->).
+    destruct (list_operand _ _ _ _ _ _ _ _ _ _ Iv) as (l & vs & -> & El).
+    simpl. rewrite El.
+    eapply w_newlist with (pre := firstn k vs) (post := []);
+      [exact Hm | exact HT | split; [exact Iv | exact Bd] | len | exact El |].
+    rewrite app_nil_r. symmetry. apply firstn_skipn.
+  - (* index slice *)
+    destruct stk as [|y stk0]; try len. simpl in Iv. destruct Iv as [Iv Bd].
+    destruct (list_operand _ _ _ _ _ _ _ _ _ _ Iv) as (l & vs & -> & El).
+    simpl. rewrite El.
+    remember (match b with Some e => e | None => length vs end) as e eqn:Ee.
+    destruct ((i <=? e) && (e <=? length vs)); [|exact Logic.I].
+    eapply w_newlist with (pre := firstn i vs) (post := skipn (e - i) (skipn i vs));
+      [exact Hm | exact HT | split; [exact Iv | exact Bd] | len | exact El |].
+    rewrite firstn_skipn. symmetry. apply firstn_skipn.
+Qed.
 End Words.
 
 Lemma word_ok n (IH : P n) G B C R w s1 s2 rest s3 Σ H sc stk Sf sf Os :
@@ -1433,6 +1542,7 @@ Proof.
   - eapply w_each; eauto.
   - eapply w_map; eauto.
   - eapply w_map; eauto.
+  - eapply w_slice; eauto.
   - eapply w_dictnew; eauto.
   - eapply w_getk; eauto.
   - eapply w_getreq; eauto.

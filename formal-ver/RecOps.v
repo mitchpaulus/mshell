@@ -196,9 +196,9 @@ Proof.
       * inversion Iown as [|? ? ? ? ? ? _ G1]; subst.
         eapply Forall3_impl; [| exact G1]. simpl. intros w _ Ow Hw m Hm Hc. apply Hw; auto.
         simpl in *; repeat rewrite in_app_iff in *; rewrite ?Hset in *; insolve.
-    + intros m om Em Hm. destruct (Nat.eq_dec m l) as [->|Hne]; [exfalso; apply Hm; simpl; insolve|].
+    + intros m om Em Hm Hlv. destruct (Nat.eq_dec m l) as [->|Hne]; [exfalso; apply Hm; simpl; insolve|].
       rewrite Agr in Em; auto.
-      destruct (Iheap m om Em) as [Ho Hr].
+      destruct (Iheap m om Em) as [Ho Hr]; [| exact Hlv |].
       { intro Hc. apply Hm. simpl in *; repeat rewrite in_app_iff in *; rewrite ?Hset in *; insolve. }
       split; auto. intros r0 Hr' Hc. apply (Hr r0 Hr'). simpl in *; repeat rewrite in_app_iff in *; rewrite ?Hset in *; insolve.
     + intros m Hm. apply Ireg. simpl in *; repeat rewrite in_app_iff in *; rewrite ?Hset in *; insolve.
@@ -286,10 +286,10 @@ Proof.
       * inversion Iown as [|? ? ? ? ? ? _ G1]; subst. inversion G1 as [|? ? ? ? ? ? _ G2]; subst.
         eapply Forall3_impl; [| exact G2]. simpl. intros w _ Ow Hw m Hm Hc. apply Hw; auto.
         insolve.
-    + intros m om Em Hm.
+    + intros m om Em Hm Hlv.
       destruct (Nat.eq_dec m l) as [->|Hne]; [exfalso; apply Hm; left; auto|].
       rewrite Agr in Em; auto.
-      destruct (Iheap m om Em) as [Ho Hr].
+      destruct (Iheap m om Em) as [Ho Hr]; [| exact Hlv |].
       { intro Hc. apply Hm. insolve. }
       split; auto. intros r0 Hr' Hc. apply (Hr r0 Hr'). insolve.
     + intros m Hm. apply Ireg. insolve.

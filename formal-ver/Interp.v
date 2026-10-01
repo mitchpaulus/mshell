@@ -337,6 +337,39 @@ Fixpoint evalv (n : nat) (H : heap) (sc : loc) (st : list val) (e : prog) {struc
           end
       | _ => RStuck
       end
+  (* [take], [skip] and slices: a new list over a run of the input's
+     elements (a shallow copy).  The input list is left as it was. *)
+  | WTake =>
+      match st with
+      | VInt k :: VLoc l :: st' =>
+          match nth_error H l with
+          | Some (OList vs) => next (app H [OList (firstn k vs)]) (VLoc (length H) :: st')
+          | _ => RStuck
+          end
+      | _ => RStuck
+      end
+  | WSkip =>
+      match st with
+      | VInt k :: VLoc l :: st' =>
+          match nth_error H l with
+          | Some (OList vs) => next (app H [OList (skipn k vs)]) (VLoc (length H) :: st')
+          | _ => RStuck
+          end
+      | _ => RStuck
+      end
+  | WSlice a b =>
+      match st with
+      | VLoc l :: st' =>
+          match nth_error H l with
+          | Some (OList vs) =>
+              let e := match b with Some e => e | None => length vs end in
+              if (a <=? e) && (e <=? length vs)
+              then next (app H [OList (firstn (e - a) (skipn a vs))]) (VLoc (length H) :: st')
+              else RErr
+          | _ => RStuck
+          end
+      | _ => RStuck
+      end
   | WDictNew => next (app H [ODict []]) (VLoc (length H) :: st)
   | WGetK k =>
       match st with

@@ -115,6 +115,8 @@ Everything else (`Invariant.v` onward) is proof and cannot make the theorem say 
 | Caching their answers | `subq_set_sound`, `rsubq_set_sound`, `chk_confirmed`; `cache_early` |
 | Joins that meet a recursive alias (never widened inside) | `ajoin` in `Join.v`; `join_*` in `Recursive.v` |
 | `map` with a literal body | `WMap`; `tw_map`, `tw_map_imm` (fresh only when the results are immutable) |
+| `take`, `skip`, index slices | `WTake`, `WSkip`, `WSlice`; `tw_slice` (fresh when the input was fresh or the elements are immutable); `inv_slice_dp` in `Slice.v` |
+| Objects nothing can reach (the input list a fresh `take` consumed) | `HDead` in the store typing, `live`; `dead_unreachable`, `vtyped_live` in `Slice.v` |
 | The built-in `Maybe` | the enum `EMaybe` (`TMaybe t` is `TEnum EMaybe [t]`); `just`, `none`, `?` are `wjust`, `wnone`, `wunwrap`, a constructor and a one-arm match; the environment declares it (`maybe_ok`); their typings `tw_wjust`, `tw_wnone`, `tw_wunwrap` |
 | `return` in top-level code | return context `RAny`, `tw_return_any` |
 | Match bindings | stores into the scope (`WStore`); `list :>` is `WKindIf` with the value left on the stack |
@@ -172,6 +174,11 @@ Everything else (`Invariant.v` onward) is proof and cannot make the theorem say 
 - **`Maybe` is an ordinary enum.** `EMaybe` in `Syntax.v` is `enum Maybe[a] = just a | none end`, and the
   typing environment must declare its two constructors (`maybe_ok`), which is the theorem's one extra
   hypothesis. `?` on `none` is a match with no arm for `none`: a checked error.
+- **Dead objects.** A fresh `take` (or `skip`, or slice) leaves the consumed input list in the heap, still
+  pointing at the kept elements, which now belong to the result's region. The store typing marks that
+  list and the elements it dropped `HDead`, and the invariant asks nothing of dead objects. Nothing live
+  reaches one (`dead_unreachable`), and nothing makes one live again: only a commit changes the store
+  typing, and a dead object is in no region.
 - **Deviations from the Go runtime** that do not affect type safety: dict objects are association
   lists; `each` iterates over the list's elements as they are when it starts; stack shuffles other
   than `dup`/`drop`/`swap` and all other builtins are left out.

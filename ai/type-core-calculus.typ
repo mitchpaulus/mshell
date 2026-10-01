@@ -1278,10 +1278,14 @@ $Phi$ needs only the two marks "fresh" and "shared".
 An earlier draft also made these results fresh "when the input is fresh". That is wrong for any builtin
 whose quote sees the elements: `filter`'s quote may store an element, so `[[1]] (dup e! drop true) filter`
 widened to `[[int | str]]` would let a string be appended to the list in `e` (`hole_filter_fresh_stuck`,
-shown with a `map` whose body keeps its element, which is `filter` keeping everything). For `take` and
-`skip` it is sound but not proved: the consumed input list stays in the heap, unreachable, pointing at
-the kept elements, which the invariant has no notion of. It was dropped rather than proved: one rule,
-already proved for `map` (`tw_map_imm`), covers every new list, and the cases it gave up are rare.
+shown with a `map` whose body keeps its element, which is `filter` keeping everything). For `take`,
+`skip` and the index slices, which have no quote, it is sound, and proved: `tw_slice` in the model gives
+a fresh result when the input was fresh *or* the elements are immutable (`inv_slice_dp` in `Slice.v`;
+`take_fresh` in `Examples.v` widens `[[1] [2]] 1 take` to `[[int | str]]`). The proof needs one change
+to the invariant: the consumed input list stays in the heap, pointing at the kept elements, so the store
+typing marks it and the elements it dropped *dead*, and asks nothing of dead objects (no live value or
+object can reach one: `dead_unreachable`). The design still uses the one rule. Restoring the
+input-freshness case for these words is a choice about how much to accept, not about soundness.
 
 == Explicit copies: `deepCopy` <sec-copy>
 
@@ -2062,6 +2066,7 @@ formalizes.
   [`Validate.v`, `Kind.v`], [`tryAs` in place; kind patterns],
   [`Copy.v`], [`deepCopy` gives a fresh value of the same type],
   [`InvOps.v`, `RecOps.v`], [stack and heap operations on the invariant; type-changing updates of fresh records],
+  [`Slice.v`], [`take`, `skip` and index slices of a fresh list give a fresh list (`inv_slice_dp`); the objects left behind are dead and unreachable (`dead_unreachable`)],
   [`Soundness.v`], [the theorem, for any validator with the two properties of @sec-tryas (`soundness_v`), and for the model's (`soundness`)],
   [`Generic.v`], [type variables and substitution; `T_subst` (typing is closed under substitution); `soundness_generic` (each def checked once)],
   [`Escape.v`], [the escape check: a kind pattern's arm checked once, with a new type variable per unknown type that appears nowhere outside the arm, checks for every type (`kind_list_once`, `kind_enum_once`)],
@@ -2069,7 +2074,7 @@ formalizes.
   [`Join.v`], [branch joins as a function (given the checker's decision procedure for $<=$ and $subset.sq.eq$), and the proof that they are upper bounds],
   [`Variance.v`], [the enum declaration checks are sound: substitution is monotone for variance (`payload_sub`) and for fresh retyping (`payload_rsub`), and preserves immutability (`payload_imm`)],
   [`Checkable.v`], [checkable types; validation never rejects a well-typed value against a checkable type (`validate_complete`, `validate_complete_fresh`)],
-  [`Examples.v`], [holes H1--H11 run to `RStuck`; R6 gets stuck without a copy and type-checks and runs with `deepCopy`; the copy is per path; copying a cycle is a checked error; `Maybe`, recursive `List` and non-regular `Nest` declared as generic enums],
+  [`Examples.v`], [holes H1--H11 run to `RStuck`; R6 gets stuck without a copy and type-checks and runs with `deepCopy`; the copy is per path; copying a cycle is a checked error; `Maybe`, recursive `List` and non-regular `Nest` declared as generic enums; `take` and `skip` of fresh and of immutable lists],
   [`Cycles.v`], [a validator that answers `just` when an (object, type) pair repeats on its path: sound (`soundness_cycles`) and complete],
   [`Recursive.v`], [`Json` equal to a reordered spelling; `Person` from a fresh literal; `parseJson tryAs [Person] ?` typed and run; `type T = Box[T]`; a well-typed cyclic value; holes H12 and H13; joins that meet a recursive alias],
   [`Decide.v`], [the checker's decision procedures for $<=$ and $subset.sq.eq$ (assumption sets, caching), proved right when they say yes; the join with them needs no hypothesis (`if_join_alg`)],
@@ -2084,8 +2089,8 @@ enum kind patterns, validation and `deepCopy` of enum values), validation with a
 variables in heap scopes captured by quotes, quotes with frame polymorphism and `never`,
 `if`, `loop` and loop-forever, `break`/`continue` through `each`, `return`, `exit`, polymorphic and
 recursive definitions, `tryAs` in its three modes, `deepCopy`, type-changing updates of fresh records,
-match bindings as stores into the scope, `Maybe` as an ordinary generic enum declared by the
-environment, validation completeness for checkable targets, and
+match bindings as stores into the scope, `take`, `skip` and index slices, `Maybe` as an ordinary
+generic enum declared by the environment, validation completeness for checkable targets, and
 recursive aliases (subtyping and fresh retyping on infinite trees, their transitivity, validation,
 immutability, checkability, kind patterns, `deepCopy` and commit of recursive values), and the checker's
 decision procedures for $<=$ and $subset.sq.eq$ on them.

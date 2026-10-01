@@ -145,6 +145,14 @@ Definition maybe_ctors (E : ename) (c : cname) : option (list ty) :=
 Lemma maybe_ctors_ok sg : maybe_ok {| g_sigs := sg; g_ctors := maybe_ctors |}.
 Proof. split; reflexivity. Qed.
 
+(** The words that return a new list over a run of their input's elements,
+    and their arguments above the list: [take] and [skip] take a count,
+    an index slice takes none. *)
+Inductive slice_args : word -> sty -> Prop :=
+| sa_take : slice_args WTake [(Sh, TInt)]
+| sa_skip : slice_args WSkip [(Sh, TInt)]
+| sa_slice a b : slice_args (WSlice a b) [].
+
 Section Typing.
 Variable sigs : genv.
 Variable G : tenv.
@@ -212,6 +220,15 @@ Inductive TW : lctx -> lctx -> rctx -> word -> sty -> sty -> Prop :=
     child_ctx B s B' -> child_ctx C s C' ->
     T B' C' RNone e [(Sh, t)] [(Sh, u)] ->
     TW B C R (WMap e) ((Sh, TList t) :: s) ((Dp, TList u) :: s)
+(** [take], [skip] and slices.  The result is a new list whose elements
+    are the input's.  It is fresh when the input was fresh (the input is
+    consumed, and its elements are subtrees nothing else reaches) or when
+    the elements are immutable; otherwise it is shared ([m'] is the
+    result's mark).  The design uses only the second case (one rule for
+    every new list); this rule allows both, and both are proved. *)
+| tw_slice B C R w a m m' t s :
+    slice_args w a -> (m' = Sh \/ m = Dp \/ immutable t = true) ->
+    TW B C R w (a ++ (m, TList t) :: s) ((m', TList t) :: s)
 | tw_dictnew B C R s : TW B C R WDictNew s ((Dp, TRec [] FAbs) :: s)
 | tw_getk B C R k fs r s :
     TW B C R (WGetK k) ((Sh, TRec fs r) :: s) ((Sh, TMaybe (fty (field_at k fs r))) :: s)

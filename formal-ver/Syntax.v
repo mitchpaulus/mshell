@@ -356,6 +356,10 @@ Inductive word : Type :=
 | WNil | WPush | WGetAt | WSetAt  (* lists; out of range is a checked error *)
 | WEach (e : list word)           (* child-stack builtin with a literal body *)
 | WMap (e : list word)            (* child-stack builtin: a new list of the body's results *)
+| WTake | WSkip                   (* int list -- list: a new list of the first n elements, or
+                                     of all but the first n; a count past the end is clamped *)
+| WSlice (a : nat) (b : option nat) (* index slice [a:b] ([b = None]: [a:]), a new list;
+                                     out of range is a checked error *)
 | WDictNew
 | WGetK (k : label)               (* literal key, returns Maybe *)
 | WGetReq (k : label)             (* literal key known required: returns the value *)
