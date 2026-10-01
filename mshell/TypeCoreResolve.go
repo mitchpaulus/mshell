@@ -49,6 +49,25 @@ func (r *coreResolver) declareJson() {
 	r.aliases[r.jsonName] = ref
 }
 
+// declareHtmlNode adds the built-in recursive alias of the nodes parseHtml
+// returns: `type HtmlNode = {tag: str, attr: {str: str}, children: [HtmlNode], text: str}`.
+func (r *coreResolver) declareHtmlNode() {
+	name := r.names.Intern("HtmlNode")
+	idx := r.arena.DeclareAlias(name)
+	ref := r.arena.MakeAliasRef(idx)
+	field := func(label string, t TypeId) RecordField {
+		return RecordField{Name: r.names.Intern(label), Status: FieldRequired, Type: t}
+	}
+	body := r.arena.MakeRecord([]RecordField{
+		field("tag", TidStr),
+		field("attr", r.arena.MakeStrDict(TidStr)),
+		field("children", r.arena.MakeList(ref)),
+		field("text", TidStr),
+	}, RecordField{Status: FieldOpen})
+	r.arena.SetAliasBody(idx, body)
+	r.aliases[name] = ref
+}
+
 // resolveSig resolves a signature. Unknown names are its generics.
 func (r *coreResolver) resolveSig(ins, outs []MShellParseItem) coreSigParts {
 	r.gens, r.inSig = r.gens[:0], true

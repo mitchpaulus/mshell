@@ -63,7 +63,11 @@ func TestCoreChecker(t *testing.T) {
 		{`false if 1 else* "a" *if 2 else 3 end drop`, false, "expected"},
 		// Generics: a bare generic in two inputs is the join of the arguments.
 		{`none 5 just = drop`, true, ""},
-		{`[1] ["a"] = drop`, true, ""},
+		{`[1] ["a"] = drop`, false, "no matching overload for '='"},
+		{`{a: 1} {a: 2} = drop`, true, ""},
+		{`1 "a" = drop`, false, "no matching overload for '='"},
+		// A ⊥ in an argument fixes no generic.
+		{`none 5 maybe wl`, true, ""},
 		// Quotes: checked against the word that takes them.
 		{`[1 2] (1 + wl) each`, true, ""},
 		{`[1 2] (1 +) map len wl`, true, ""},
@@ -89,18 +93,20 @@ func TestCoreChecker(t *testing.T) {
 		{`1 x!  [0 0] (drop @x 1 + drop "a" x!) each`, false, "variable 'x' has type int"},
 		// A quote of unknown arity cannot be run.
 		{`(1 wl) q! @q x`, true, ""},
-		{`(1 +) drop`, false, "annotate"},
+		{`(dup +) drop`, false, "annotate"},
 		{`("a" 1 +) drop`, false, "no matching overload"},
 
 		// Pending overload choices: made once one candidate fits.
+		{`(dup +) q! 5 @q x wl`, true, ""},
+		{`(dup +) q! 2.5 @q x str wl`, true, ""},
+		{`(dup +) q! true @q x drop`, false, "no matching overload for '+'"},
+		{`(dup +) q!`, false, "annotate the quote"},
 		{`(1 +) q! 5 @q x wl`, true, ""},
-		{`(1 +) q! 2.5 @q x str wl`, true, ""},
-		{`(1 +) q! "a" @q x drop`, false, "no matching overload for '+'"},
-		{`(1 +) q!`, false, "annotate the quote"},
 		{`(dup *) q! 3 @q x wl`, true, ""},
 
 		// An overloaded word on a union is a match per member.
 		{`true if 1 else 2.5 end toFloat 1.0 + str wl`, true, ""},
+		{`true if 1 else 2.5 end 1 + drop`, false, "the stack has (float int)"},
 		{`true if 1 else "a" end 1 + drop`, false, "the stack has (str int)"},
 
 		// match: kind patterns give the member of a union; arms are joined.

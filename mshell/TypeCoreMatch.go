@@ -153,7 +153,7 @@ func (c *coreChecker) matchBlock(m *MShellParseMatchBlock) {
 	c.forceTop(1)
 	subj := c.stack[len(c.stack)-1]
 	t := c.subst.Apply(c.arena, subj.t)
-	if c.hasVars(t) {
+	if c.arena.nodes[t].Kind == TKVar {
 		c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: tok,
 			Hint: "the type of the value being matched is not known here (" + c.format(t) + "); annotate it, for example with a def signature"})
 		c.abandoned = true

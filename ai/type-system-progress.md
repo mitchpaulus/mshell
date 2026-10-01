@@ -246,3 +246,19 @@ Known gap for step 3: a quote typed on its own that uses an overloaded word on a
 - Found: in a pattern `x` is the interpret word, not a name, so `str x` (the plan's H8 row) is rejected by the runtime too; the H8 test uses `str s`.
 - `tests/core_no_longer_errors.txt`: `unpack_union_maybe_binding_type.msh` (the arms join to `Maybe[int | float]` and `+` checks per member).
 - Core script: 80 passed, 0 unexpected, 192 not checked yet.
+
+## Stage 3, step 3: the builtin table (2026-09-30, four of five categories)
+
+The audit was split across five subagents, each checking `Evaluator.go` against the spec in `ai/builtin-audit/SPEC.md`; their audit tables are in `ai/builtin-audit/` (lists, strings, os, misc; dicts and grids to come). Merged into `TypeCoreBuiltins.go` (147 registrations), with these choices:
+
+- **Strings and paths read through `CastString` take `str | path`, not `int`**, though the runtime also turns an int into its digits. Narrower than the runtime, so sound. Decision pending with Mitchell.
+- **No mixed int/float arithmetic**: the runtime rejects `1 2.5 +`, so `(int float -- float)` and `(float int -- float)` are gone (they were in the seed and the old table).
+- **`=` / `!=`**: per-type forms for the eight scalars; anything else must join to an equatable type (scalars, `Maybe` of one, dicts whose labels hold unions of them); lists, quotes and grids have no runtime equality. `(a a -- bool)` was unsound.
+- `reverse` has no string form; `sort`/`sortV` return `[str]`; `pop` returns `Maybe` of the element; `sortBy` is grid-only; `wln` and `sortVu` are not runtime builtins.
+- Freshness marks: `keeps` on `append`, `setAt`, `insert`, `del`, `pop`, `maybe`, `just`, `?`. Not on `extend` or `httpGet`/`httpPost`: they would be fresh only by the dead-object argument `Slice.v` proves for `take`, not proved for them; shared is always safe.
+- `HtmlNode` is a built-in recursive alias now (`parseHtml` returns `new HtmlNode`); the runtime's key is `attr`.
+- Inference: a `⊥` in an argument is opened at every unifying checking position, not only at stores (`none 5 maybe`); an overload choice whose remaining candidates all give the same outputs takes the first when the unit is solved (`[] sortV`). Both in the design doc, §Typing rules, "Checking positions".
+
+Core script: 160 passed, 0 unexpected, 112 not checked yet. Expected rejections: `unpack_union_bindings.msh` (mixed int/float `+`), `null.msh` (raw `Json` to `int | null`, needs `tryAs`).
+
+Runtime bugs the audit found (not fixed): `5 (true) and` panics (unchecked `.(MShellBool)`, `Evaluator.go:11502`, `11528`); `mod` on a non-number pops two and pushes nothing; `parseHtml` panics on a non-string; `null 1 =` fails while `1 null =` is false; `toFixed` with negative places prints `%!(BADPREC)`; `toJson` of NaN/Inf is empty; `leftPad` counts bytes; `binPaths` pushes `*MShellString`; `psub` leaks a file on a type error; `e`/`ec`/`es` do not check for an existing stderr destination; `httpPost` cannot send bytes; `completionDefs` quotes leak variables into the caller; `~` (home directory), `and`, `or` are missing from `BuiltInList.go`; bare list words are rejected by `lines`, `toInt`, `toFloat`, `md5`, `base64decode`, `utf8Bytes`, `parseLinkHeader` though the checker types them `str`.

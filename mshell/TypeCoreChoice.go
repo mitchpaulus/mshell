@@ -27,11 +27,11 @@ type coreChoice struct {
 func (c *coreChecker) choose(sigs []coreSig, tok Token) {
 	var fits []coreSig
 	for i := range sigs {
-		cp := c.uni.Checkpoint()
+		cp := c.checkpoint()
 		if c.argsFit(&sigs[i]) {
 			fits = append(fits, sigs[i])
 		}
-		c.uni.Rollback(cp)
+		c.rollback(cp)
 	}
 	nin, nout, diverges := len(fits[0].ins), len(fits[0].outs), fits[0].diverges
 	same := true
@@ -80,11 +80,11 @@ func (c *coreChecker) retryChoices() {
 			ch := &c.choices[i]
 			fit, nfit := -1, 0
 			for j := range ch.sigs {
-				cp := c.uni.Checkpoint()
+				cp := c.checkpoint()
 				if c.choiceFits(&ch.sigs[j], ch) {
 					fit, nfit = j, nfit+1
 				}
-				c.uni.Rollback(cp)
+				c.rollback(cp)
 			}
 			switch nfit {
 			case 0:
@@ -126,6 +126,8 @@ func (c *coreChecker) choiceFits(sig *coreSig, ch *coreChoice) bool {
 }
 
 // finishChoices reports the choices still waiting when the unit is solved.
+// When the candidates left all give the same outputs, nothing after the
+// choice can tell them apart, and the first is taken: `[] sortV`.
 func (c *coreChecker) finishChoices() {
 	c.choiceVersion = -1
 	c.retryChoices()
@@ -134,8 +136,48 @@ func (c *coreChecker) finishChoices() {
 		if ch.done {
 			continue
 		}
+		if c.sameOutputs(ch) {
+			ch.done = true
+			c.choiceFits(&ch.sigs[0], ch)
+			c.choiceVersion = -1
+			c.retryChoices()
+			continue
+		}
 		c.errs = append(c.errs, TypeError{Kind: TErrAmbiguousTyping, Pos: ch.tok,
 			Hint: "more than one signature of '" + ch.tok.Lexeme + "' fits its arguments " + c.formatSlots(ch.args) +
 				"; annotate the quote or value they come from"})
 	}
+}
+
+// sameOutputs reports whether every candidate of a choice that still fits
+// gives the same, fully known, output types.
+func (c *coreChecker) sameOutputs(ch *coreChoice) bool {
+	var first []TypeId
+	n := 0
+	for j := range ch.sigs {
+		cp := c.checkpoint()
+		if c.choiceFits(&ch.sigs[j], ch) {
+			outs := make([]TypeId, len(ch.outs))
+			for k, o := range ch.outs {
+				outs[k] = c.subst.Apply(c.arena, o)
+				if c.hasVars(outs[k]) {
+					c.rollback(cp)
+					return false
+				}
+			}
+			if n == 0 {
+				first = outs
+			} else {
+				for k := range outs {
+					if outs[k] != first[k] {
+						c.rollback(cp)
+						return false
+					}
+				}
+			}
+			n++
+		}
+		c.rollback(cp)
+	}
+	return n > 0
 }

@@ -757,7 +757,12 @@ inputs that are a bare generic, so `([a] a -- [a])` reads `a` from the list whic
 top. A generic that is several bare inputs, as in `(a a -- bool)`, is first set to the join of those
 arguments (@sec-join) when they are known: the join is above each of them (`join_slot_ub`), so it is
 one of the substitutions $theta$ the *Prim* rule allows, and `none 5 just =` checks with
-`a = Maybe[int]`.
+`a = Maybe[int]`. A $bot$ in an argument fixes no generic, as at a store ("A $bot$ in a store fixes
+nothing"): it is opened to a new variable before unifying, and the argument is checked against the
+solved parameter once the def or script is solved, so `none 5 maybe` checks with `a = int`.
+An overload choice still open when the def or script is solved asks for an annotation, unless every
+candidate left gives the same outputs: then nothing could tell them apart, any of them is a valid
+derivation, and the checker takes the first (`[] sortV`).
 
 == Quotes, definitions, control flow
 

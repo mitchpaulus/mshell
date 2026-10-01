@@ -39,6 +39,7 @@ func NewCoreBase(stdlibDefs []MShellDefinition) *CoreBase {
 	arena, names := NewTypeArena(), NewNameTable()
 	res := &coreResolver{arena: arena, names: names, rel: NewRelations(arena), aliases: map[NameId]TypeId{}}
 	res.declareJson()
+	res.declareHtmlNode()
 	table := buildCoreTable(res)
 	for i := range stdlibDefs {
 		def := &stdlibDefs[i]
@@ -161,6 +162,8 @@ type coreChecker struct {
 	// choiceVersion is len(uni.pairs) when they were last tried.
 	choices       []coreChoice
 	choiceVersion int
+	// at is the word being checked, where a deferred check reports.
+	at Token
 	escapes       []coreEscape
 	// mentionsVar caches, per TypeId, whether a type mentions a
 	// unification variable: 0 not yet known, 1 no, 2 yes.
@@ -608,6 +611,7 @@ func (c *coreChecker) load(tok Token) {
 // the value's type is replaced by a new variable first, so it fixes
 // nothing (`none r!` before `5 just r!`).
 func (c *coreChecker) store(tok Token, name NameId) {
+	c.at = tok
 	if !c.need(1, tok) {
 		return
 	}
@@ -723,20 +727,50 @@ func (c *coreChecker) below(fresh bool, got, want TypeId) bool {
 }
 
 // check is a checking position: may the value in slot be used as want?
+// When want has unsolved variables and the value's type has a ⊥ in it (the
+// contents of `none`), the ⊥ is opened to a new variable before unifying,
+// so it fixes nothing, and the value is checked against the solved type
+// once the unit is solved: `none 5 maybe` gives `a = int`, and
+// `Maybe[⊥] <= Maybe[int]` (design doc, "A ⊥ in a store fixes nothing").
 func (c *coreChecker) check(slot coreSlot, want TypeId) bool {
 	if slot.t == want {
 		return true
 	}
 	if c.hasVars(slot.t) || c.hasVars(want) {
+		if got := c.subst.Apply(c.arena, slot.t); c.hasVars(want) && c.mentionsType(got, TidBottom) {
+			opened := c.openBottom(got)
+			if !c.uni.Unify(opened, want) {
+				return false
+			}
+			c.deferCheck(c.at, slot, want)
+			return true
+		}
 		return c.uni.Unify(slot.t, want)
 	}
 	return c.below(slot.fresh, c.subst.Apply(c.arena, slot.t), c.subst.Apply(c.arena, want))
+}
+
+// coreCheckpoint is a state to roll a trial back to: the unifier's, and
+// the checks deferred since.
+type coreCheckpoint struct {
+	uni      UnifierCheckpoint
+	deferred int
+}
+
+func (c *coreChecker) checkpoint() coreCheckpoint {
+	return coreCheckpoint{uni: c.uni.Checkpoint(), deferred: len(c.deferred)}
+}
+
+func (c *coreChecker) rollback(cp coreCheckpoint) {
+	c.uni.Rollback(cp.uni)
+	c.deferred = c.deferred[:cp.deferred]
 }
 
 // call checks a builtin with one or more candidate signatures. The
 // candidate is the one the arguments fit; with none, or more than one, it
 // is an error.
 func (c *coreChecker) call(sigs []coreSig, tok Token) {
+	c.at = tok
 	if c.infer != nil && c.floor == c.infer.floor {
 		// In a quote typed on its own, missing arguments become inputs,
 		// as many as every candidate takes.
@@ -757,11 +791,11 @@ func (c *coreChecker) call(sigs []coreSig, tok Token) {
 	}
 	fit, nfit := -1, 0
 	for i := range sigs {
-		cp := c.uni.Checkpoint()
+		cp := c.checkpoint()
 		if c.argsFit(&sigs[i]) {
 			fit, nfit = i, nfit+1
 		}
-		c.uni.Rollback(cp)
+		c.rollback(cp)
 	}
 	switch nfit {
 	case 1:
@@ -774,12 +808,76 @@ func (c *coreChecker) call(sigs []coreSig, tok Token) {
 		if c.distribute(sigs, tok) {
 			return
 		}
+		if (tok.Type == EQUALS || tok.Type == NOTEQUAL) && c.equality(tok) {
+			return
+		}
 		c.errs = append(c.errs, TypeError{Kind: TErrNoMatchingOverload, Pos: tok,
 			Hint: "the stack has " + c.formatSlots(c.topSlots(sigs)) + "; " + c.formatCandidates(sigs)})
 		c.abandoned = true
 	default:
 		c.choose(sigs, tok)
 	}
+}
+
+// equality checks `=` and `!=` on two values the table's scalar forms do
+// not cover: their join must be a type whose values compare without a
+// runtime error (equatable).
+func (c *coreChecker) equality(tok Token) bool {
+	if len(c.stack)-c.floor < 2 {
+		return false
+	}
+	n := len(c.stack)
+	j, ok := c.joinSlot(c.stack[n-2], c.stack[n-1])
+	if !ok || !c.equatable(c.subst.Apply(c.arena, j.t), false) {
+		return false
+	}
+	c.stack = c.stack[:n-2]
+	c.push(TidBool, true)
+	return true
+}
+
+// equatable reports whether two values of type t compare with = and !=
+// without a runtime error: a scalar; a Maybe of an equatable type; a dict
+// whose every label holds equatable values. Inside a dict a union is fine,
+// since values of different kinds compare false there (inDict).
+func (c *coreChecker) equatable(t TypeId, inDict bool) bool {
+	switch t {
+	case TidInt, TidFloat, TidStr, TidBool, TidBytes, TidPath, TidDateTime, TidNull, TidBottom:
+		return true
+	}
+	n := c.arena.nodes[t]
+	switch n.Kind {
+	case TKEnum:
+		if n.A != EnumMaybe {
+			return false
+		}
+		return c.equatable(c.arena.enumArgs[n.Extra][0], false)
+	case TKUnion:
+		if !inDict {
+			return false
+		}
+		for _, m := range c.arena.unionMembers[n.Extra] {
+			if !c.equatable(m, false) {
+				return false
+			}
+		}
+		return true
+	case TKRecord:
+		rec := c.arena.records[n.Extra]
+		for _, f := range append(rec.Fields, rec.Rest) {
+			switch f.Status {
+			case FieldOpen:
+				return false
+			case FieldAbsent:
+			default:
+				if !c.equatable(f.Type, true) {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	return false
 }
 
 // distribute checks an overloaded word whose argument is a union as a
@@ -963,6 +1061,7 @@ func (c *coreChecker) joinRepeated(sig *coreSig, gens []TypeId, argAt func(i int
 // apply checks sig at the top of the stack and replaces its inputs by its
 // outputs.
 func (c *coreChecker) apply(sig *coreSig, tok Token) {
+	c.at = tok
 	n := len(sig.ins)
 	if !c.need(n, tok) {
 		return
