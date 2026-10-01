@@ -6922,30 +6922,28 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'psub' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
+					// Check the type before creating the file, so a bad input leaves no file behind.
+					var contents string
+					switch obj1Typed := obj1.(type) {
+					case MShellString:
+						contents = obj1Typed.Content
+					case MShellLiteral:
+						contents = obj1Typed.LiteralText
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'psub' with a %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
 					// Do process substitution with temporary files
-					// Create a temporary file
 					tmpfile, err := os.CreateTemp("", "msh-")
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error creating temporary file: %s\n", t.Line, t.Column, err.Error()))
 					}
 					registerTempFileForCleanup(tmpfile.Name())
 
-					// Write the contents of the object to the temporary file
-					switch obj1Typed := obj1.(type) {
-					case MShellString:
-						_, err = tmpfile.WriteString(obj1Typed.Content)
-						if err != nil {
-							tmpfile.Close()
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error writing to temporary file: %s\n", t.Line, t.Column, err.Error()))
-						}
-					case MShellLiteral:
-						_, err = tmpfile.WriteString(obj1Typed.LiteralText)
-						if err != nil {
-							tmpfile.Close()
-							return state.FailWithMessage(fmt.Sprintf("%d:%d: Error writing to temporary file: %s\n", t.Line, t.Column, err.Error()))
-						}
-					default:
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'psub' with a %s.\n", t.Line, t.Column, obj1.TypeName()))
+					_, err = tmpfile.WriteString(contents)
+					if err != nil {
+						tmpfile.Close()
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error writing to temporary file: %s\n", t.Line, t.Column, err.Error()))
 					}
 					tmpfile.Close()
 					stack.Push(MShellString{tmpfile.Name()})
