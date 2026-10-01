@@ -508,6 +508,12 @@ func (c *coreChecker) word(tok Token) {
 	if c.dictWord(tok) || c.commandWord(tok) {
 		return
 	}
+	if tok.Lexeme == "append" {
+		c.widenForAppend()
+		if c.appendBelow(tok) {
+			return
+		}
+	}
 	if id, ok := c.names.Lookup(tok.Lexeme); ok {
 		if sigs := c.table.name(id); sigs != nil {
 			c.call(sigs, tok)
@@ -525,6 +531,61 @@ func (c *coreChecker) word(tok Token) {
 	}
 	c.errs = append(c.errs, TypeError{Kind: TErrUnknownIdentifier, Pos: tok, Name: tok.Lexeme})
 	c.abandoned = true
+}
+
+// widenForAppend retypes a fresh list that `append` is about to add a
+// fresh or immutable value to, so its element type covers the value: no
+// other view of the list exists to see the change (Retype, as `as` would).
+// The join is above both under fresh retyping (join_slot_ub).
+func (c *coreChecker) widenForAppend() {
+	if len(c.stack)-c.floor < 2 {
+		return
+	}
+	n := len(c.stack)
+	li, vi := n-2, n-1
+	if t := c.subst.Apply(c.arena, c.stack[n-1].t); c.arena.nodes[t].Kind == TKList {
+		if b := c.subst.Apply(c.arena, c.stack[n-2].t); c.arena.nodes[b].Kind != TKList {
+			li, vi = n-1, n-2
+		}
+	}
+	l, v := c.stack[li], c.stack[vi]
+	lt := c.subst.Apply(c.arena, l.t)
+	if !l.fresh || c.waiting(v) != nil || !c.freshish(v) || c.arena.nodes[lt].Kind != TKList {
+		return
+	}
+	elem := TypeId(c.arena.nodes[lt].A)
+	if c.hasVars(elem) || c.hasVars(v.t) {
+		return
+	}
+	j, ok := c.rel.JoinSlot(Slot{Type: c.subst.Apply(c.arena, elem), Fresh: true}, Slot{Type: c.subst.Apply(c.arena, v.t), Fresh: true})
+	if ok && j.Type != elem {
+		c.stack[li].t = c.arena.MakeList(j.Type)
+	}
+}
+
+// appendBelow checks `x [xs] append`: a list on top and, below it, a value
+// that cannot be a list. It reports false otherwise, for the table.
+func (c *coreChecker) appendBelow(tok Token) bool {
+	if len(c.stack)-c.floor < 2 {
+		return false
+	}
+	n := len(c.stack)
+	top := c.subst.Apply(c.arena, c.stack[n-1].t)
+	below := c.subst.Apply(c.arena, c.stack[n-2].t)
+	if c.arena.nodes[top].Kind != TKList || c.waiting(c.stack[n-2]) != nil {
+		return false
+	}
+	var ms []TypeId
+	if !c.members(below, &ms) {
+		return false
+	}
+	for _, m := range ms {
+		if k := c.arena.nodes[m].Kind; k == TKList || k == TKCommand || k == TKVar {
+			return false
+		}
+	}
+	c.apply(&c.table.appendBelow, tok)
+	return true
 }
 
 // shuffle checks the stack words. A word that copies a reference makes

@@ -71,6 +71,7 @@ type coreTable struct {
 	// index is the indexer `:n:`; slice is `n:`, `:n`, `a:b` and a list of
 	// indexers, which concatenates.
 	index, slice []coreSig
+	appendBelow  coreSig
 }
 
 func (t *coreTable) setName(id NameId, sigs []coreSig) {

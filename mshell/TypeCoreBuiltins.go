@@ -206,6 +206,9 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	b.reg("parseHtml", "(str | path -- new HtmlNode)")
 	b.reg("parseLinkHeader", "(str -- new [{url: str, rel: str, params: {str: str}}])")
 
+	b.regTok(POSITIONAL, "( -- str)")
+	// A line of stdin, and whether one was read.
+	b.regTok(READ, "( -- str bool)")
 	b.regTok(QUESTION, "(Maybe[a] -- a)")
 	b.keeps(t.token(QUESTION))
 
@@ -539,6 +542,12 @@ func buildCoreTable(res *coreResolver) *coreTable {
 		}})
 	}
 
+	// `x [xs] append`: with the list on top, a value below it that is not a
+	// list is appended (two lists append the upper into the lower, the
+	// table's form).
+	t.appendBelow = b.sig("(a [a] -- [a])")
+	t.appendBelow.keepOut = 1
+
 	// Indexing. `:n:` gives an element (a row of a grid, a cell of a row);
 	// slices give a new list, or a view of the same grid.
 	t.index = b.sigs([]string{"([a] -- a)", "(str -- str)", "(path -- path)", "(bytes -- bytes)",
@@ -559,7 +568,6 @@ func buildCoreTable(res *coreResolver) *coreTable {
 
 	// Uses of these words the table does not cover yet.
 	t.partialName = map[NameId]string{
-		res.names.Intern("append"):    "'append' with the value below the list",
 		res.names.Intern("nth"):       "'nth' on a GridRow",
 		res.names.Intern("map"):       "the dict form of 'map'",
 		res.names.Intern("filter"):    "the dict form of 'filter'",

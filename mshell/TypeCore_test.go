@@ -193,6 +193,11 @@ func TestCoreChecker(t *testing.T) {
 		{`[[1]] ;`, true, ""},
 		{`[{a: 1}] ;`, false, "a command's arguments"},
 
+		// append widens a fresh list; a shared list keeps its type.
+		{`[] 1 append "a" append len wl`, true, ""},
+		{`"a" [1 2] append len wl`, true, ""},
+		{`[1 2] xs! @xs "a" append drop`, false, "'append' expected int"},
+
 		// Unions of distinct kinds only.
 		{`def f ([int] | [str] -- ) drop end`, false, "two members of the same kind"},
 		{`def f (int | [str] -- ) drop end`, true, ""},
