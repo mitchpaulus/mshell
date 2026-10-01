@@ -2,7 +2,7 @@
 
 From Stdlib Require Import String List Arith Bool Lia Permutation.
 Import ListNotations.
-From MshellCore Require Import Syntax Subtyping Typing Interp Invariant RtLemmas Commit Validate.
+From MshellCore Require Import Syntax Subtyping Typing Interp Invariant RtLemmas Commit Partial Validate.
 
 Ltac insolve := repeat (first [rewrite in_app_iff in * | progress simpl in *]); tauto.
 
@@ -56,7 +56,7 @@ Proof. intros P N. eapply Permutation_NoDup; eauto. Qed.
 Lemma inv_reg_lt Σ H sc G L st Os l :
   inv sigs Σ H sc G L st Os -> In l (concat Os) -> l < length H.
 Proof.
-  intros I Hl. destruct (inv_reg _ _ _ _ _ _ _ _ I l Hl) as (h & E & _).
+  intros I Hl. pose proof (inv_reg _ _ _ _ _ _ _ _ I l Hl) as E.
   rewrite <- (inv_len _ _ _ _ _ _ _ _ I). eapply nth_error_lt; eauto.
 Qed.
 
@@ -87,9 +87,13 @@ Lemma slots_lt Σ H L st Os :
 Proof.
   intros Hlen F. induction F as [|a b c la lb lc Pa F IH]; simpl; [tauto|].
   intros v [<-|Hv] l Hl.
-  - unfold slot_ok in Pa. destruct b as [[|] t]; simpl in Pa.
+  - unfold slot_ok in Pa. destruct b as [[| | m0 | f0] t]; simpl in Pa.
     + destruct Pa as [Pa _]. rewrite <- Hlen. eapply vtyped_vlocs_lt; eauto.
     + eapply dtyped_vlocs_lt; eauto.
+    + destruct (mtyped_partial sigs _ _ _ _ _ _ Pa eq_refl) as (l0 & -> & _ & [(? & ? & ? & _ & _ & E)|(? & ? & ? & ? & _ & _ & E)]);
+        simpl in Hl; destruct Hl as [<-|[]]; eapply nth_error_lt; eauto.
+    + destruct (mtyped_partial sigs _ _ _ _ _ _ Pa eq_refl) as (l0 & -> & _ & [(? & ? & ? & _ & _ & E)|(? & ? & ? & ? & _ & _ & E)]);
+        simpl in Hl; destruct Hl as [<-|[]]; eapply nth_error_lt; eauto.
   - eapply IH; eauto.
 Qed.
 
@@ -133,11 +137,23 @@ Proof. induction 1; intros HQ; inversion HQ; subst; constructor; auto. Qed.
 
 Lemma slot_ok_agree Σ Σ' H w p Ow X :
   slot_ok sigs Σ H w p Ow -> sagree Σ Σ' X -> scope_ext Σ Σ' ->
-  (fst p = Sh -> forall l, In l (vlocs w) -> ~ In l X) -> slot_ok sigs Σ' H w p Ow.
+  (fst p = Sh -> forall l, In l (vlocs w) -> ~ In l X) ->
+  (partial (fst p) = true -> dead_on Σ X) -> slot_ok sigs Σ' H w p Ow.
 Proof.
-  unfold slot_ok. destruct p as [[|] t]; simpl; intros Hs Ha He Hx.
+  unfold slot_ok. destruct p as [[| | m | f] t]; simpl; intros Hs Ha He Hx Hd.
   - destruct Hs as [Hv ->]. split; auto. eapply vtyped_agree; eauto.
   - eapply dtyped_agree1; eauto.
+  - eapply mtyped_keep; [exact Hs | eapply sagree_keeps_live; eauto | intros; reflexivity].
+  - eapply mtyped_keep; [exact Hs | eapply sagree_keeps_live; eauto | intros; reflexivity].
+Qed.
+
+(** A slot whose region is unchanged in the heap survives a change of the
+    store typing that keeps every live entry. *)
+Lemma slot_ok_keep Σ Σ' H H' w p Ow :
+  slot_ok sigs Σ H w p Ow -> keeps_live Σ Σ' ->
+  (forall l, In l Ow -> nth_error H' l = nth_error H l) -> slot_ok sigs Σ' H' w p Ow.
+Proof.
+  destruct p as [m t]. rewrite !slot_ok_mtyped. intros M K Hm. eapply mtyped_keep; eauto.
 Qed.
 
 (** Replacing the type of one slot, keeping its value and region. *)
@@ -155,23 +171,22 @@ Proof.
 Qed.
 
 (** Committing a fresh slot anywhere in the stack. *)
-Lemma inv_commit_at Σ H sc G P v L sp t st Op O Os :
+Lemma inv_commit_at_m Σ H sc G P v L sp m t st Op O Os :
   length P = length sp -> length sp = length Op ->
-  inv sigs Σ H sc G (P ++ v :: L) (sp ++ (Dp, t) :: st) (Op ++ O :: Os) ->
+  inv sigs Σ H sc G (P ++ v :: L) (sp ++ (m, t) :: st) (Op ++ O :: Os) ->
   exists Σ', scope_ext Σ Σ' /\ length Σ' = length Σ /\
     inv sigs Σ' H sc G (P ++ v :: L) (sp ++ (Sh, t) :: st) (Op ++ [] :: Os).
 Proof.
   intros L1 L2 I. destruct I as [Ilen Islots Idisj Iown Iheap Ireg Iscope].
   pose proof Islots as Islots'.
   apply Forall3_split in Islots' as [F1 F2]; auto.
-  inversion F2 as [|? ? ? ? ? ? Pv F3]; subst. unfold slot_ok in Pv; simpl in Pv.
+  inversion F2 as [|? ? ? ? ? ? Pv F3]; subst. apply slot_ok_mtyped in Pv.
   rewrite concat_app in *. simpl in *.
-  destruct (proj1 (dtyped_struct sigs Σ H) _ _ _ Pv) as (NO & Hvl & Hobj).
-  destruct (proj1 (commit_all sigs Σ H) _ _ _ Pv Σ) as (Σ' & L' & A' & C' & V');
-    auto using scope_ext_refl.
+  destruct (proj1 (mtyped_struct sigs Σ H) _ _ _ _ Pv) as (NO & Hvl & _ & Hobj).
+  assert (DO : dead_on Σ O).
   { intros l Hl. apply Ireg. apply in_or_app; right; apply in_or_app; auto. }
-  assert (Sx : scope_ext Σ Σ').
-  { eapply sagree_scope_ext; eauto. intros l Hl. apply Ireg. apply in_or_app; right; apply in_or_app; auto. }
+  destruct (mtyped_commit sigs Σ H v t m O Σ Pv (keeps_live_refl Σ) Ilen DO) as (Σ' & L' & A' & C' & V').
+  assert (Sx : scope_ext Σ Σ') by (eapply sagree_scope_ext; eauto using dead_on_nonscope).
   (* locations of O are not in the other regions *)
   assert (Dj : forall l, In l O -> ~ In l (concat Op ++ concat Os)).
   { intros l Hl. eapply nodup_mid_disj; eauto. }
@@ -179,6 +194,11 @@ Proof.
   { intros l Hl. apply in_or_app; right; apply in_or_app; auto. }
   assert (Hsub : forall l, In l (concat Op ++ concat Os) -> In l (concat Op ++ O ++ concat Os)).
   { intros l Hl. apply in_app_or in Hl as [Hl|Hl]; apply in_or_app; [left|right; apply in_or_app; right]; auto. }
+  (* a live location is in no region *)
+  assert (NotReg : forall l, live Σ l -> ~ In l (concat Op ++ concat Os)).
+  { intros l Hlv Hc. apply Hlv. apply Ireg. apply Hsub; auto. }
+  assert (Out : forall l, In l O \/ live Σ l -> ~ In l (concat Op ++ concat Os)).
+  { intros l [Hl|Hl]; [apply Dj | apply NotReg]; auto. }
   pose proof (Forall3_and _ _ _ _ _ Islots Iown) as SO.
   apply Forall3_split in SO as [SO1 SO2]; auto.
   inversion SO2 as [|? ? ? ? ? ? _ SO3]; subst.
@@ -188,7 +208,8 @@ Proof.
     slot_ok sigs Σ' H w p Ow /\
     (forall l, In l (vlocs w) -> In l (concat (Op ++ [] :: Os)) -> In l Ow)).
   { intros w p Ow [Hs Ho]. split.
-    - eapply slot_ok_agree; eauto. intros Hsh l Hl HlO.
+    - eapply slot_ok_agree; eauto.
+      intros Hsh l Hl HlO.
       unfold slot_ok in Hs. rewrite Hsh in Hs. destruct Hs as [_ ->].
       exact (Ho l Hl (Hall l HlO)).
     - intros l Hl Hc. rewrite concat_app in Hc. simpl in Hc. apply Ho; auto. }
@@ -203,14 +224,14 @@ Proof.
   - apply Forall3_app.
     + eapply Forall3_impl; [| exact SO1]. intros w p Ow HH. exact (proj2 (Hsl w p Ow HH)).
     + constructor.
-      * intros l Hl Hc. rewrite concat_app in Hc. simpl in Hc. exfalso. exact (Dj l (Hvl l Hl) Hc).
+      * intros l Hl Hc. rewrite concat_app in Hc. simpl in Hc. exfalso. exact (Out l (Hvl l Hl) Hc).
       * eapply Forall3_impl; [| exact SO3]. intros w p Ow HH. exact (proj2 (Hsl w p Ow HH)).
   - rewrite concat_app. simpl. intros l o E Hn Hlv.
     destruct (in_dec Nat.eq_dec l O) as [HlO|HlO].
     + destruct (C' l HlO) as (h & o' & E' & Ns & Eo & Ok). rewrite E in Eo. inversion Eo; subst.
       split; [exists h; split; auto|].
       destruct (Hobj l HlO) as (o'' & Eo'' & _ & Hr). rewrite E in Eo''. inversion Eo''; subst.
-      intros r Hr' Hc. exact (Dj r (Hr r Hr') Hc).
+      intros r Hr' Hc. exact (Out r (Hr r Hr') Hc).
     + assert (Hn' : ~ In l (concat Op ++ O ++ concat Os)).
       { intros Hc. apply in_app_or in Hc as [Hc|Hc]; [apply Hn; apply in_or_app; auto|].
         apply in_app_or in Hc as [Hc|Hc]; [contradiction | apply Hn; apply in_or_app; auto]. }
@@ -220,11 +241,16 @@ Proof.
         intros r Hr' HrO. exact (Hr r Hr' (Hall r HrO)).
       * intros r Hr' Hc. exact (Hr r Hr' (Hsub r Hc)).
   - rewrite concat_app. simpl. intros l Hl.
-    destruct (Ireg l (Hsub l Hl)) as (h & E & Ns). exists h; split; auto.
-    apply A'; auto. intro HlO. exact (Dj l HlO Hl).
+    apply A'; [apply Ireg, Hsub; auto |]. intro HlO. exact (Dj l HlO Hl).
   - apply Sx; auto.
 Qed.
 
+Lemma inv_commit_at Σ H sc G P v L sp t st Op O Os :
+  length P = length sp -> length sp = length Op ->
+  inv sigs Σ H sc G (P ++ v :: L) (sp ++ (Dp, t) :: st) (Op ++ O :: Os) ->
+  exists Σ', scope_ext Σ Σ' /\ length Σ' = length Σ /\
+    inv sigs Σ' H sc G (P ++ v :: L) (sp ++ (Sh, t) :: st) (Op ++ [] :: Os).
+Proof. apply inv_commit_at_m. Qed.
 
 Lemma slot_at Σ H sc G P v L sp p st Op O Os :
   length P = length sp -> length sp = length Op ->
@@ -241,7 +267,17 @@ Lemma inv_slot_sub_at Σ H sc G P v L sp p p' st Op O Os :
     inv sigs Σ' H sc G (P ++ v :: L) (sp ++ p' :: st) (Op ++ O' :: Os).
 Proof.
   intros Hs L1 L2 I. pose proof (slot_at _ _ _ _ _ _ _ _ _ _ _ _ _ L1 L2 I) as Sl.
-  destruct Hs as [a b Hab|a b Hab|a b Hab|a b Hi Hab]; unfold slot_ok in Sl; simpl in Sl.
+  destruct Hs as [a b Hab|a b Hab|a b Hab|a b Hi Hab|m a b Pm Hab|m a Pm|m a b Pm Hab].
+  5: { exists Σ, O. split; [apply scope_ext_refl|]. split; auto.
+       eapply inv_replace_slot_at; eauto. apply slot_ok_mtyped. apply slot_ok_mtyped in Sl.
+       eapply mtyped_msub; eauto. }
+  5: { exists Σ, O. split; [apply scope_ext_refl|]. split; auto. }
+  5: { destruct (inv_commit_at_m _ _ _ _ _ _ _ _ _ _ _ _ _ _ L1 L2 I) as (Σ' & Sx & Ln & I').
+       exists Σ', []. split; auto. split; auto.
+       eapply inv_replace_slot_at; eauto.
+       pose proof (slot_at _ _ _ _ _ _ _ _ _ _ _ _ _ L1 L2 I') as Sl'. destruct Sl' as [Hv _].
+       split; auto. eapply vtyped_sub; eauto. }
+  all: unfold slot_ok in Sl; simpl in Sl.
   - destruct Sl as [Hv ->]. exists Σ, []. split; [apply scope_ext_refl|]. split; auto.
     eapply inv_replace_slot_at; eauto. split; auto. eapply vtyped_sub; eauto.
   - exists Σ, O. split; [apply scope_ext_refl|]. split; auto.
@@ -330,10 +366,9 @@ Lemma inv_drop Σ H sc G v L p st O Os :
   inv sigs Σ H sc G (v :: L) (p :: st) (O :: Os) ->
   exists Σ', scope_ext Σ Σ' /\ length Σ' = length Σ /\ inv sigs Σ' H sc G L st Os.
 Proof.
-  intros I. destruct p as [[|] t].
-  - apply inv_pop_sh in I as (_ & _ & _ & I). exists Σ; split; [apply scope_ext_refl|]; auto.
-  - apply inv_commit_top in I as (Σ' & Sx & Ln & I). apply inv_pop_sh in I as (_ & _ & _ & I).
-    exists Σ'; auto.
+  intros I. destruct p as [m t].
+  destruct (inv_commit_at_m Σ H sc G [] v L [] m t st [] O Os eq_refl eq_refl I) as (Σ' & Sx & Ln & I').
+  simpl in I'. apply inv_pop_sh in I' as (_ & _ & _ & I'). exists Σ'; auto.
 Qed.
 
 Lemma inv_drop_prefix Σ H sc G S1 L st1 st Os :
@@ -402,8 +437,7 @@ Proof.
   intros [Ilen Islots Idisj Iown Iheap Ireg Iscope] E Hn Eh Ok Hr. constructor; auto.
   - rewrite set_nth_length; auto.
   - eapply Forall3_impl_in; [| exact Islots]. intros w p Ow _ HOw Hs.
-    unfold slot_ok in *. destruct p as [[|] t]; simpl in *; auto.
-    eapply dtyped_agree1; eauto using scope_ext_refl.
+    eapply slot_ok_keep; [exact Hs | apply keeps_live_refl |].
     intros m Hm. rewrite nth_error_set_nth_neq; auto. intro; subst.
     apply Hn. apply in_concat. eauto.
   - intros m om Em Hm Hlv. destruct (Nat.eq_dec m l) as [->|Hne].
@@ -446,9 +480,9 @@ Proof.
   destruct I as [Ilen Islots Idisj Iown Iheap Ireg Iscope]. constructor; auto.
   - rewrite !length_app; simpl; lia.
   - eapply Forall3_impl_in; [| exact Islots]. intros w p Ow _ HOw Hs.
-    eapply slot_ok_agree with (Σ := Σ) (X := []); eauto using sagree_app, scope_ext_app.
-    + unfold slot_ok in *. destruct p as [[|] t]; simpl in *; auto.
-      eapply dtyped_agree1; eauto using scope_ext_refl.
+    eapply slot_ok_agree with (Σ := Σ) (X := []);
+      [| apply sagree_app | apply scope_ext_app | intros _ l0 _ [] | intros _ l0 []].
+    + eapply slot_ok_keep; [exact Hs | apply keeps_live_refl |].
       intros m Hm. apply nth_error_app_lt. apply Rlt. apply in_concat. eauto.
   - intros m om Em Hm Hlv. destruct (Nat.lt_ge_cases m (length H)) as [Hlt|Hge].
     + rewrite nth_error_app_lt in Em; auto.
@@ -460,7 +494,7 @@ Proof.
       * inversion Em; subst. split; auto. exists h. split; auto.
         assert (m = length Σ) by lia. subst. apply nth_error_app_eq.
       * destruct k; discriminate.
-  - intros m Hm. destruct (Ireg m Hm) as (h' & E & N). exists h'. split; auto.
+  - intros m Hm. pose proof (Ireg m Hm) as E.
     rewrite nth_error_app1; auto. eapply nth_error_lt; eauto.
   - rewrite nth_error_app1; auto. eapply nth_error_lt; eauto.
 Qed.
@@ -468,8 +502,8 @@ Qed.
 (** Allocating a fresh (empty) list or dict and pushing it as a fresh slot. *)
 Lemma inv_alloc_dp Σ H sc G L st Os o t :
   inv sigs Σ H sc G L st Os -> bounded H -> olocs o = [] ->
-  dtyped sigs (Σ ++ [HList TBot]) (H ++ [o]) (VLoc (length H)) t [length H] ->
-  inv sigs (Σ ++ [HList TBot]) (H ++ [o]) sc G (VLoc (length H) :: L) ((Dp, t) :: st) ([length H] :: Os).
+  dtyped sigs (Σ ++ [HDead]) (H ++ [o]) (VLoc (length H)) t [length H] ->
+  inv sigs (Σ ++ [HDead]) (H ++ [o]) sc G (VLoc (length H) :: L) ((Dp, t) :: st) ([length H] :: Os).
 Proof.
   intros I B Ho D. assert (Rlt : forall l, In l (concat Os) -> l < length H) by (intros; eapply inv_reg_lt; eauto).
   pose proof (inv_slot_lt _ _ _ _ _ _ _ I) as Slt.
@@ -479,9 +513,9 @@ Proof.
   - rewrite !length_app; simpl; lia.
   - constructor; [exact D|].
     eapply Forall3_impl_in; [| exact Islots]. intros w p Ow _ HOw Hs.
-    eapply slot_ok_agree with (Σ := Σ) (X := []); eauto using sagree_app, scope_ext_app.
-    + unfold slot_ok in *. destruct p as [[|] t']; simpl in *; auto.
-      eapply dtyped_agree1; eauto using scope_ext_refl.
+    eapply slot_ok_agree with (Σ := Σ) (X := []);
+      [| apply sagree_app | apply scope_ext_app | intros _ l0 _ [] | intros _ l0 []].
+    + eapply slot_ok_keep; [exact Hs | apply keeps_live_refl |].
       intros m Hm. apply nth_error_app_lt. apply Rlt. apply in_concat. eauto.
   - constructor; auto.
   - constructor.
@@ -501,8 +535,8 @@ Proof.
       * lia.
       * destruct k; discriminate.
   - intros m [<-|Hm].
-    + exists (HList TBot). split; auto. rewrite <- Ilen. apply nth_error_app_eq.
-    + destruct (Ireg m Hm) as (h' & E & N). exists h'. split; auto.
+    + rewrite <- Ilen. apply nth_error_app_eq.
+    + pose proof (Ireg m Hm) as E.
       rewrite nth_error_app1; auto. eapply nth_error_lt; eauto.
   - rewrite nth_error_app1; auto. eapply nth_error_lt; eauto.
 Qed.
@@ -551,7 +585,7 @@ Lemma inv_alloc_region Σ H sc G L st Os N v t O :
   inv sigs Σ H sc G L st Os -> bounded H ->
   dtyped sigs Σ (H ++ N) v t O ->
   (forall l, In l O <-> length H <= l < length H + length N) ->
-  inv sigs (Σ ++ repeat (HList TBot) (length N)) (H ++ N) sc G (v :: L) ((Dp, t) :: st) (O :: Os) /\
+  inv sigs (Σ ++ repeat (HDead) (length N)) (H ++ N) sc G (v :: L) ((Dp, t) :: st) (O :: Os) /\
   bounded (H ++ N).
 Proof.
   intros I B D Rg.
@@ -559,7 +593,7 @@ Proof.
   pose proof (inv_slot_lt _ _ _ _ _ _ _ I) as Slt.
   destruct (proj1 (dtyped_struct sigs Σ (H ++ N)) _ _ _ D) as (NO & Vo & Oo).
   destruct I as [Ilen Islots Idisj Iown Iheap Ireg Iscope].
-  set (Σ' := Σ ++ repeat (HList TBot) (length N)).
+  set (Σ' := Σ ++ repeat (HDead) (length N)).
   assert (Pre : forall m, m < length H -> nth_error (H ++ N) m = nth_error H m)
     by (intros; apply nth_error_app1; auto).
   assert (NOs : forall l, In l O -> ~ In l (concat Os))
@@ -571,9 +605,8 @@ Proof.
       * unfold slot_ok; simpl. eapply dtyped_agree1; [exact D | apply scope_ext_app_l | auto].
       * eapply Forall3_impl_in; [| exact Islots]. intros w p Ow _ HOw Hs.
         eapply slot_ok_agree with (Σ := Σ) (X := []);
-          [| apply sagree_app_l | apply scope_ext_app_l | intros _ l _ []].
-        unfold slot_ok in *. destruct p as [[|] t']; simpl in *; auto.
-        eapply dtyped_agree1; eauto using scope_ext_refl.
+          [| apply sagree_app_l | apply scope_ext_app_l | intros _ l _ [] | intros _ l []].
+        eapply slot_ok_keep; [exact Hs | apply keeps_live_refl |].
         intros m Hm. apply Pre. apply Rlt. apply in_concat. eauto.
     + apply NoDup_app; auto.
     + constructor.
@@ -595,9 +628,9 @@ Proof.
       * exfalso. apply Hm. apply in_or_app. left. apply Rg.
         apply nth_error_lt in Em. rewrite length_app in Em. lia.
     + intros m Hm. apply in_app_or in Hm as [Hm|Hm].
-      * exists (HList TBot). split; auto. apply Rg in Hm. unfold Σ'.
+      * apply Rg in Hm. unfold Σ'.
         rewrite nth_error_app2 by lia. apply nth_error_repeat. lia.
-      * destruct (Ireg m Hm) as (h' & E & Ns). exists h'. split; auto.
+      * pose proof (Ireg m Hm) as E.
         unfold Σ'. rewrite nth_error_app1; auto. eapply nth_error_lt; eauto.
     + unfold Σ'. rewrite nth_error_app1; auto. eapply nth_error_lt; eauto.
   - intros m om Em r Hr. rewrite length_app.
@@ -652,8 +685,7 @@ Proof.
               apply NoDup_app; auto.
               intros a Ha Ha'. apply (D a Ha'). apply in_cons. apply in_or_app. left. auto.
       * eapply Forall3_impl_in; [| exact F2]. intros w p Ow _ HOw Hs.
-        unfold slot_ok in *. destruct p as [[|] t']; simpl in *; auto.
-        eapply dtyped_agree1; eauto using scope_ext_refl.
+        eapply slot_ok_keep; [exact Hs | apply keeps_live_refl |].
         intros m Hm. apply Agr. intro; subst.
         apply nodup_app_inv in Idisj as (_ & N2 & _).
         inversion N2 as [|? ? Nl' _]; subst. apply Nl'. apply in_or_app. right. apply in_concat. eauto.

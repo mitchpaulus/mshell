@@ -7,7 +7,7 @@
 
 From Stdlib Require Import String List Arith Bool Lia Permutation.
 Import ListNotations.
-From MshellCore Require Import Syntax Subtyping Variance Typing Interp Invariant RtLemmas Commit Validate Kind InvOps Copy RecOps Slice.
+From MshellCore Require Import Syntax Subtyping Variance Typing Interp Invariant RtLemmas Commit Partial Validate Kind InvOps Copy RecOps PartialOps Slice.
 
 Section Sound.
 Variable sigs : genv.
@@ -155,8 +155,8 @@ Lemma inv_scope_obj Σ H sc G L st Os :
 Proof.
   intros Iv. pose proof (inv_scope _ _ _ _ _ _ _ _ Iv) as Esc.
   assert (Nsc : ~ In sc (concat Os)).
-  { intro Hc. destruct (inv_reg _ _ _ _ _ _ _ _ Iv sc Hc) as (h & E & Ns).
-    rewrite Esc in E. inversion E; subst. discriminate. }
+  { intro Hc. pose proof (inv_reg _ _ _ _ _ _ _ _ Iv sc Hc) as E.
+    rewrite Esc in E. discriminate. }
   destruct (inv_obj _ _ _ _ _ _ _ _ _ Iv Esc ltac:(discriminate) Nsc) as (o & Eo & Ok & Hr).
   destruct o as [vs|kvs|kvs]; simpl in Ok; try contradiction. eauto.
 Qed.
@@ -615,7 +615,7 @@ Lemma w_nil G B C R t rest s s3 Σ H sc stk Sf sf Os :
   res_ok Σ sc G B C R s3 Sf sf (evalv vd defs (S n) H sc stk (WNil :: rest)).
 Proof.
   intros HT [Iv Bd] L. simpl.
-  eapply (next_ok n IH); [exact HT | | len | apply (scope_ext_app Σ (HList TBot))].
+  eapply (next_ok n IH); [exact HT | | len | apply (scope_ext_app Σ (HDead))].
   split.
   - simpl. eapply inv_alloc_dp; [exact Iv | exact Bd | reflexivity |].
     apply dt_list with (vs := []) (Os := []); [apply nth_error_app_eq | constructor | constructor; [simpl; tauto | constructor]].
@@ -628,7 +628,7 @@ Lemma w_dictnew G B C R rest s s3 Σ H sc stk Sf sf Os :
   res_ok Σ sc G B C R s3 Sf sf (evalv vd defs (S n) H sc stk (WDictNew :: rest)).
 Proof.
   intros HT [Iv Bd] L. simpl.
-  eapply (next_ok n IH); [exact HT | | len | apply (scope_ext_app Σ (HList TBot))].
+  eapply (next_ok n IH); [exact HT | | len | apply (scope_ext_app Σ (HDead))].
   split.
   - simpl. eapply inv_alloc_dp; [exact Iv | exact Bd | reflexivity |].
     apply dt_rec with (kvs := []) (Os := []).
@@ -961,6 +961,63 @@ Proof.
   eapply (next_ok n IH); [exact HT | split; [exact Iv3 | exact Bd2] | len | exact Sx1].
 Qed.
 
+(** ** Building partly new lists and dicts *)
+
+Lemma w_nil_m G B C R m t rest s s3 Σ H sc stk Sf sf Os :
+  T sigs G B C R rest ((MList m, TList t) :: s) s3 ->
+  INV Σ H sc G (stk ++ Sf) (s ++ sf) Os -> length stk = length s ->
+  res_ok Σ sc G B C R s3 Sf sf (evalv vd defs (S n) H sc stk (WNil :: rest)).
+Proof.
+  intros HT [Iv Bd] L. simpl.
+  eapply (next_ok n IH); [exact HT | | len | apply (scope_ext_app Σ HDead)].
+  split.
+  - simpl. eapply (inv_replace_slot_at sigs _ _ _ _ [] _ _ [] (Dp, TList t) _ _ [] _ _ eq_refl eq_refl).
+    + eapply inv_alloc_dp; [exact Iv | exact Bd | reflexivity |].
+      apply dt_list with (vs := []) (Os := []); [apply nth_error_app_eq | constructor | constructor; [simpl; tauto | constructor]].
+    + apply slot_ok_mtyped. apply mtyped_new_list. apply nth_error_app_eq.
+  - apply bounded_app; auto. simpl; tauto.
+Qed.
+
+Lemma w_push_m G B C R m t rest s s3 Σ H sc stk Sf sf Os :
+  T sigs G B C R rest ((MList m, TList t) :: s) s3 ->
+  INV Σ H sc G (stk ++ Sf) (((m, t) :: (MList m, TList t) :: s) ++ sf) Os ->
+  length stk = length ((m, t) :: (MList m, TList t) :: s) ->
+  res_ok Σ sc G B C R s3 Sf sf (evalv vd defs (S n) H sc stk (WPush :: rest)).
+Proof.
+  intros HT [Iv Bd] L. destruct stk as [|x [|v stk]]; try len. simpl in Iv.
+  pose proof (inv_slots _ _ _ _ _ _ _ _ Iv) as F. inversion F as [|? ? ? ? ? ? _ F1]; subst.
+  inversion F1 as [|? ? ? ? ? ? Pv _]; subst. apply slot_ok_mtyped in Pv.
+  apply mt_list_inv in Pv as (l & vs0 & Osl & -> & _ & _ & -> & _).
+  destruct (inv_list_push_m sigs _ _ _ _ _ _ _ _ _ _ _ _ _ Iv Bd) as (vs & O' & Eo & Iv' & Bd').
+  simpl. rewrite Eo.
+  eapply (next_ok n IH); [exact HT | split; [exact Iv' | exact Bd'] | len | apply scope_ext_refl].
+Qed.
+
+Lemma w_setk_m G B C R k fs r t m md rest s s3 Σ H sc stk Sf sf Os :
+  rec_mark md = true ->
+  T sigs G B C R rest ((mset k m md, TRec ((k, FReq t) :: fs) r) :: s) s3 ->
+  INV Σ H sc G (stk ++ Sf) (((m, t) :: (md, TRec fs r) :: s) ++ sf) Os ->
+  length stk = length ((m, t) :: (md, TRec fs r) :: s) ->
+  res_ok Σ sc G B C R s3 Sf sf (evalv vd defs (S n) H sc stk (WSetK k :: rest)).
+Proof.
+  intros Rm HT [Iv Bd] L. destruct stk as [|x [|v stk]]; try len. simpl in Iv.
+  pose proof (inv_slots _ _ _ _ _ _ _ _ Iv) as F. inversion F as [|? ? Ox ? ? Os1 _ F1]; subst.
+  inversion F1 as [|? ? Ol ? ? Os' Pv _]; subst.
+  (* the dict as a partly new one *)
+  set (f := fun k' => match md with MRec g => g k' | _ => Dp end).
+  assert (Iv1 : inv sigs Σ H sc G (x :: v :: stk ++ Sf) ((m, t) :: (MRec f, TRec fs r) :: s ++ sf) (Ox :: Ol :: Os')).
+  { destruct md as [| | m0 | g]; try discriminate.
+    - eapply (inv_replace_slot_at sigs _ _ _ _ [x] _ _ [(m, t)] _ _ _ [Ox] _ _ eq_refl eq_refl Iv).
+      apply slot_ok_mtyped. apply dtyped_rec_mtyped. exact Pv.
+    - exact Iv. }
+  pose proof (slot_at _ _ _ _ _ [x] _ _ [(m, t)] _ _ [Ox] _ _ eq_refl eq_refl Iv1) as Sl.
+  apply slot_ok_mtyped in Sl. apply mt_rec_inv in Sl as (l & kvs0 & Osl & -> & _).
+  destruct (inv_rec_set_m sigs _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ k Iv1 Bd) as (kvs & O' & Eo & Iv2 & Bd2).
+  simpl. rewrite Eo.
+  destruct md as [| | m0 | g]; try discriminate;
+    (eapply (next_ok n IH); [exact HT | split; [exact Iv2 | exact Bd2] | len | apply scope_ext_refl]).
+Qed.
+
 Lemma kind_eqb_true a b : kind_eqb a b = true -> a = b.
 Proof.
   destruct a, b; simpl; try congruence. intros Ek. apply ename_eqb_true in Ek. subst. reflexivity.
@@ -984,7 +1041,22 @@ Proof.
   pose proof (inv_heap_ok_out sigs _ _ _ _ _ _ _ Iv) as Ho.
   pose proof (inv_len _ _ _ _ _ _ _ _ Iv) as Ln.
   destruct (inv_cons_Os _ _ _ _ _ _ _ _ _ Iv) as (O & Os' & ->).
-  destruct m.
+  destruct (partial m) eqn:Pm.
+  { (* a partly new list or dict: the test keeps its type, or takes the else arm *)
+    pose proof (slot_at _ _ _ _ _ [] _ _ [] _ _ [] _ _ eq_refl eq_refl Iv) as Sl. apply slot_ok_mtyped in Sl.
+    destruct (partial_operand sigs _ _ _ _ _ _ Sl Pm) as [(a & -> & Ek)|(fs & r & -> & Ek)];
+      simpl; rewrite Ek.
+    - change (kind_then k (TList a)) with (if kind_eqb k KList then Some (TList a) else Some TBot) in Kt.
+      change (kind_else k (TList a)) with (if kind_eqb k KList then TBot else TList a) in H2.
+      destruct (kind_eqb k KList) eqn:Kb.
+      + injection Kt as <-. kcont IH HT H1 (conj Iv Bd).
+      + kcont IH HT H2 (conj Iv Bd).
+    - change (kind_then k (TRec fs r)) with (if kind_eqb k KDict then Some (TRec fs r) else Some TBot) in Kt.
+      change (kind_else k (TRec fs r)) with (if kind_eqb k KDict then TBot else TRec fs r) in H2.
+      destruct (kind_eqb k KDict) eqn:Kb.
+      + injection Kt as <-. kcont IH HT H1 (conj Iv Bd).
+      + kcont IH HT H2 (conj Iv Bd). }
+  destruct m; try discriminate.
   - pose proof Iv as Iv0. apply inv_pop_sh in Iv as (-> & V & Hl & Iv).
     destruct (vtyped_kind_of sigs _ _ _ _ _ V Ho Ln) as (k' & Ek); [simpl in Hl; exact Hl|].
     simpl. rewrite Ek. destruct (kind_eqb k k') eqn:Kb.
@@ -1018,7 +1090,13 @@ Proof.
   pose proof (inv_heap_ok_out sigs _ _ _ _ _ _ _ Iv) as Ho.
   pose proof (inv_len _ _ _ _ _ _ _ _ Iv) as Ln.
   destruct (inv_cons_Os _ _ _ _ _ _ _ _ _ Iv) as (O & Os' & ->).
-  destruct m.
+  destruct (partial m) eqn:Pm.
+  { pose proof (slot_at _ _ _ _ _ [] _ _ [] _ _ [] _ _ eq_refl eq_refl Iv) as Sl. apply slot_ok_mtyped in Sl.
+    destruct (partial_operand sigs _ _ _ _ _ _ Sl Pm) as [(a & -> & Ek)|(fs & r & -> & Ek)];
+      simpl; rewrite Ek; simpl.
+    - kcont IH HT (H1 a) (conj Iv Bd).
+    - kcont IH HT H2 (conj Iv Bd). }
+  destruct m; try discriminate.
   - pose proof Iv as Iv0. apply inv_pop_sh in Iv as (-> & V & Hl & Iv).
     destruct (vtyped_kind_of sigs _ _ _ _ _ V Ho Ln) as (k' & Ek); [simpl in Hl; exact Hl|].
     simpl. rewrite Ek.
@@ -1215,7 +1293,11 @@ Proof.
   assert (Hc : exists c pts vs Os1, v = VCon E c pts vs /\ g_ctors sigs E c = Some pts /\
      INV Σ H sc G ((vs ++ stk) ++ Sf) ((marks m (map (subst a) pts) ++ s) ++ sf) (Os1 ++ Os') /\
      length vs = length (map (subst a) pts)).
-  { destruct m.
+  { destruct (partial m) eqn:Pm.
+    { exfalso. pose proof (slot_at _ _ _ _ _ [] _ _ [] _ _ [] _ _ eq_refl eq_refl Iv) as Sl.
+      apply slot_ok_mtyped in Sl.
+      destruct (partial_operand sigs _ _ _ _ _ _ Sl Pm) as [(? & E' & _)|(? & ? & E' & _)]; discriminate. }
+    destruct m; try discriminate.
     - apply inv_pop_sh in Iv as (-> & V & Hl & Iv).
       apply vt_enum_inv in V as (c & pts & vs & -> & Ec & W & Vl).
       exists c, pts, vs, (map (fun _ => []) vs). split; [reflexivity|]. split; [exact Ec|]. split.
@@ -1247,7 +1329,11 @@ Proof.
   pose proof (inv_heap_ok_out sigs _ _ _ _ _ _ _ Iv) as Ho.
   pose proof (inv_len _ _ _ _ _ _ _ _ Iv) as Ln.
   destruct (inv_cons_Os _ _ _ _ _ _ _ _ _ Iv) as (O & Os' & ->).
-  destruct m.
+  destruct (partial m) eqn:Pm.
+  { pose proof (slot_at _ _ _ _ _ [] _ _ [] _ _ [] _ _ eq_refl eq_refl Iv) as Sl. apply slot_ok_mtyped in Sl.
+    destruct (partial_operand sigs _ _ _ _ _ _ Sl Pm) as [(a & -> & Ek)|(fs & r & -> & Ek)];
+      simpl; rewrite Ek; simpl; kcont IH HT H2 (conj Iv Bd). }
+  destruct m; try discriminate.
   - pose proof Iv as Iv0. apply inv_pop_sh in Iv as (-> & V & Hl & Iv).
     destruct (vtyped_kind_of sigs _ _ _ _ _ V Ho Ln) as (k' & Ek); [simpl in Hl; exact Hl|].
     simpl. rewrite Ek.
@@ -1284,7 +1370,7 @@ Proof. induction vs; simpl; intros H; inversion H; subst; constructor; auto. Qed
 
 (** [m] is the result's mark: [Sh], or [Dp] when [u] is immutable. *)
 Lemma w_map G B C R m e t u rest s s3 Σ H sc stk Sf sf Os B' C' :
-  (m = Sh \/ immutable u = true) ->
+  (m = Sh \/ (m = Dp /\ immutable u = true)) ->
   child_ctx B s B' -> child_ctx C s C' ->
   T sigs G B' C' RNone e [(Sh, t)] [(Sh, u)] ->
   T sigs G B C R rest ((m, TList u) :: s) s3 ->
@@ -1317,7 +1403,7 @@ Proof.
       assert (Hlt : forall r, In r (olocs (OList (rev acc))) -> r < length H0).
       { intros r Hr'. simpl in Hr'. apply in_flat_map in Hr' as (w & Hw & Hr').
         apply in_rev in Hw. rewrite <- Ln. eapply vtyped_vlocs_lt; eauto. rewrite Forall_forall in Vl. auto. }
-      destruct m.
+      destruct m; [| | exfalso; destruct Hm as [Em|[Em _]]; discriminate ..].
       + exists (Σ0 ++ [HList u]), ((Sh, TList u) :: s), ([] :: Os1).
         split; [eapply scope_ext_trans; [exact Sx0 | apply scope_ext_app] |].
         split; [| split; [len | reflexivity]].
@@ -1328,8 +1414,8 @@ Proof.
           -- eapply vt_list; [rewrite nth_error_app2 by lia; rewrite Ln, Nat.sub_diag; reflexivity | apply s_refl].
           -- simpl. intros r [<-|[]] Hc. pose proof (inv_reg_lt sigs _ _ _ _ _ _ _ _ Iv1 Hc). lia.
         * apply bounded_app; auto. intros r Hr'. specialize (Hlt r Hr'). lia.
-      + assert (Hi : immutable u = true) by (destruct Hm; [discriminate | auto]).
-        exists (Σ0 ++ [HList TBot]), ((Dp, TList u) :: s), ([length H0] :: Os1).
+      + assert (Hi : immutable u = true) by (destruct Hm as [Em|[_ Em]]; [discriminate | exact Em]).
+        exists (Σ0 ++ [HDead]), ((Dp, TList u) :: s), ([length H0] :: Os1).
         split; [eapply scope_ext_trans; [exact Sx0 | apply scope_ext_app] |].
         split; [| split; [len | reflexivity]].
         assert (Nl0 : olocs (OList (rev acc)) = []).
@@ -1398,7 +1484,12 @@ Lemma list_operand Σ H sc G v L m t st Os :
   inv sigs Σ H sc G (v :: L) ((m, TList t) :: st) Os ->
   exists l vs, v = VLoc l /\ nth_error H l = Some (OList vs).
 Proof.
-  intros I. destruct (inv_cons_Os _ _ _ _ _ _ _ _ _ I) as (O & Os' & ->). destruct m.
+  intros I. destruct (inv_cons_Os _ _ _ _ _ _ _ _ _ I) as (O & Os' & ->).
+  destruct (partial m) eqn:Pm.
+  { pose proof (slot_at _ _ _ _ _ [] _ _ [] _ _ [] _ _ eq_refl eq_refl I) as Sl. apply slot_ok_mtyped in Sl.
+    destruct (mtyped_partial sigs _ _ _ _ _ _ Sl Pm) as
+      (l & -> & _ & [(? & ? & vs & _ & _ & E)|(? & ? & ? & ? & _ & E' & _)]); [eauto | discriminate]. }
+  destruct m; try discriminate.
   - apply inv_pop_sh in I as (_ & V & Hl & I').
     destruct (sh_list _ _ _ _ _ _ _ _ _ I' V Hl) as (l & a & vs & -> & _ & _ & _ & Eo & _). eauto.
   - pose proof (slot_at _ _ _ _ _ [] _ _ [] _ _ [] _ _ eq_refl eq_refl I) as Sl.
@@ -1409,17 +1500,18 @@ Qed.
 (** Pushing a new list over the run [mid] of the operand's elements, with
     mark [m']: fresh when the operand was fresh or the elements are
     immutable. *)
-Lemma w_newlist G B C R m m' t rest s s3 Σ H sc l stk0 Sf sf Os vs pre mid post :
-  (m' = Sh \/ m = Dp \/ immutable t = true) ->
+Lemma w_newlist0 G B C R m m' t rest s s3 Σ H sc l stk0 Sf sf Os vs pre mid post :
+  partial m = false ->
+  (m' = Sh \/ (m' = Dp /\ (m = Dp \/ immutable t = true))) ->
   T sigs G B C R rest ((m', TList t) :: s) s3 ->
   INV Σ H sc G (VLoc l :: stk0 ++ Sf) ((m, TList t) :: s ++ sf) Os ->
   length stk0 = length s ->
   nth_error H l = Some (OList vs) -> vs = pre ++ mid ++ post ->
   res_ok Σ sc G B C R s3 Sf sf (evalv vd defs n (H ++ [OList mid]) sc (VLoc (length H) :: stk0) rest).
 Proof.
-  intros Hm HT [Iv Bd] L El Evs. subst vs.
+  intros Pm Hm HT [Iv Bd] L El Evs. subst vs.
   destruct (inv_cons_Os _ _ _ _ _ _ _ _ _ Iv) as (O & Os' & ->).
-  destruct m.
+  destruct m; try discriminate.
   - (* a shared operand: its elements are typed by the store *)
     apply inv_pop_sh in Iv as (-> & V & Hl & Iv).
     destruct (sh_list _ _ _ _ _ _ _ _ _ Iv V Hl) as (l' & a & vs & E & Ea & Ta & Nl & Eo & Fv & Hr).
@@ -1431,7 +1523,7 @@ Proof.
     { rewrite Forall_forall in *. intros w Hw. eapply vtyped_sub; [apply Fv | apply (proj1 Ta)].
       rewrite !in_app_iff. auto. }
     assert (Hlt : forall r, In r (olocs (OList mid)) -> r < length H) by (intros r Hr'; eapply Bd; eauto).
-    destruct m'.
+    destruct m'; [| | exfalso; destruct Hm as [Em|[Em _]]; discriminate ..].
     + (* shared result *)
       eapply (next_ok n IH) with (Σ' := Σ ++ [HList t]); [exact HT | | len | apply scope_ext_app].
       split.
@@ -1443,10 +1535,10 @@ Proof.
         -- simpl. intros r [<-|[]] Hc. pose proof (inv_reg_lt sigs _ _ _ _ _ _ _ _ Iv Hc). lia.
       * apply bounded_app; auto. intros r Hr'. specialize (Hlt r Hr'). lia.
     + (* fresh result: the elements are immutable *)
-      assert (Hi : immutable t = true) by (destruct Hm as [E|[E|E]]; [discriminate | discriminate | exact E]).
+      assert (Hi : immutable t = true) by (destruct Hm as [E|[_ [E|E]]]; [discriminate | discriminate | exact E]).
       assert (Nl0 : olocs (OList mid) = []).
       { simpl. apply flat_map_nil_iff. intros w Hw. rewrite Forall_forall in Fm. eapply vtyped_imm_vlocs; eauto. }
-      eapply (next_ok n IH) with (Σ' := Σ ++ [HList TBot]); [exact HT | | len | apply scope_ext_app].
+      eapply (next_ok n IH) with (Σ' := Σ ++ [HDead]); [exact HT | | len | apply scope_ext_app].
       split.
       * simpl. eapply inv_alloc_dp; [exact Iv | exact Bd | exact Nl0 |].
         replace [length H] with (length H :: concat (map (fun _ => @nil loc) mid))
@@ -1460,14 +1552,33 @@ Proof.
       * apply bounded_app; auto. rewrite Nl0. simpl; tauto.
   - (* a fresh operand: the kept elements move to the new list; the rest dies *)
     destruct (inv_slice_dp sigs Σ H sc G l _ t _ O Os' pre mid post Iv Bd El) as (Σ1 & O1 & Sx1 & Iv1 & Bd1).
-    destruct m'.
+    destruct m'; [| | exfalso; destruct Hm as [Em|[Em _]]; discriminate ..].
     + destruct (inv_commit_top sigs _ _ _ _ _ _ _ _ _ _ Iv1) as (Σ2 & Sx2 & _ & Iv2).
       eapply (next_ok n IH); [exact HT | split; [exact Iv2 | exact Bd1] | len | eapply scope_ext_trans; eauto].
     + eapply (next_ok n IH); [exact HT | split; [exact Iv1 | exact Bd1] | len | exact Sx1].
 Qed.
 
+(** A partly new operand is committed first: then it is a stored list. *)
+Lemma w_newlist G B C R m m' t rest s s3 Σ H sc l stk0 Sf sf Os vs pre mid post :
+  (m' = Sh \/ (m' = Dp /\ (m = Dp \/ immutable t = true))) ->
+  T sigs G B C R rest ((m', TList t) :: s) s3 ->
+  INV Σ H sc G (VLoc l :: stk0 ++ Sf) ((m, TList t) :: s ++ sf) Os ->
+  length stk0 = length s ->
+  nth_error H l = Some (OList vs) -> vs = pre ++ mid ++ post ->
+  res_ok Σ sc G B C R s3 Sf sf (evalv vd defs n (H ++ [OList mid]) sc (VLoc (length H) :: stk0) rest).
+Proof.
+  intros Hm HT Iv L El Evs. destruct (partial m) eqn:Pm.
+  - destruct Iv as [Iv Bd].
+    destruct (inv_cons_Os _ _ _ _ _ _ _ _ _ Iv) as (O & Os' & ->).
+    destruct (inv_commit_at_m sigs _ _ _ _ [] _ _ [] _ _ _ [] _ _ eq_refl eq_refl Iv) as (Σ1 & Sx1 & _ & Iv1).
+    eapply res_ok_weaken; [exact Sx1|].
+    eapply (w_newlist0 G B C R Sh m'); [reflexivity | | exact HT | split; [exact Iv1 | exact Bd] | exact L | exact El | exact Evs].
+    destruct Hm as [E|[E [E'|E']]]; [left; exact E | subst m; discriminate | right; split; [exact E | right; exact E']].
+  - eapply w_newlist0; eauto.
+Qed.
+
 Lemma w_slice G B C R w a m m' t rest s s3 Σ H sc stk Sf sf Os :
-  slice_args w a -> (m' = Sh \/ m = Dp \/ immutable t = true) ->
+  slice_args w a -> (m' = Sh \/ (m' = Dp /\ (m = Dp \/ immutable t = true))) ->
   T sigs G B C R rest ((m', TList t) :: s) s3 ->
   INV Σ H sc G (stk ++ Sf) ((a ++ (m, TList t) :: s) ++ sf) Os ->
   length stk = length (a ++ (m, TList t) :: s) ->
@@ -1535,6 +1646,8 @@ Proof.
   - eapply w_call; eauto.
   - eapply w_call_never; eauto.
   - eapply w_nil; eauto.
+  - eapply w_nil_m; eauto.
+  - eapply w_push_m; eauto.
   - eapply w_push_sh_list; eauto.
   - eapply w_push_dp_list; eauto.
   - eapply w_getat; eauto.
@@ -1548,6 +1661,7 @@ Proof.
   - eapply w_getreq; eauto.
   - eapply w_setk_sh; eauto.
   - eapply w_setk_dp; eauto.
+  - eapply w_setk_m; eauto.
   - eapply w_del_sh; eauto.
   - eapply w_del_dp; eauto.
   - eapply w_getd; eauto.

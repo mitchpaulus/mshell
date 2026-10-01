@@ -15,7 +15,7 @@
 
 From Stdlib Require Import String List Arith Bool Lia Permutation.
 Import ListNotations.
-From MshellCore Require Import Syntax Subtyping Typing Interp Invariant RtLemmas Commit Validate InvOps.
+From MshellCore Require Import Syntax Subtyping Typing Interp Invariant RtLemmas Commit Partial Validate InvOps.
 
 (** Mark the locations [X] dead. *)
 Fixpoint kill (X : list loc) (Σ : store_ty) : store_ty :=
@@ -79,10 +79,10 @@ Proof.
   intros I Ed Nd. pose proof (inv_slots _ _ _ _ _ _ _ _ I) as F. clear I.
   induction F as [|v p O L st Os Pv F IH]; simpl; [tauto|].
   intros w [<-|Hw] Hd.
-  - unfold slot_ok in Pv. destruct p as [[|] t]; simpl in Pv.
-    + destruct Pv as [Pv _]. exact (proj1 (vtyped_live Σ) _ _ Pv d Hd Ed).
-    + destruct (proj1 (dtyped_struct sigs Σ H) _ _ _ Pv) as (_ & Hv & _).
-      apply Nd. simpl. apply in_or_app. left. auto.
+  - destruct p as [m t]. apply slot_ok_mtyped in Pv.
+    destruct (proj1 (mtyped_struct sigs Σ H) _ _ _ _ Pv) as (_ & Hv & _).
+    destruct (Hv d Hd) as [HdO|Hlv]; [| exact (Hlv Ed)].
+    apply Nd. simpl. apply in_or_app. left. auto.
   - eapply IH; eauto. intro Hc. apply Nd. simpl. apply in_or_app. right. auto.
 Qed.
 
@@ -123,7 +123,7 @@ Proof.
   set (cp := concat Op) in *. set (cm := concat Om) in *. set (cq := concat Oq) in *.
   set (R := concat Os) in *.
   set (X := l :: cp ++ cq).
-  set (Σ' := kill X Σ ++ [HList TBot]).
+  set (Σ' := kill X Σ ++ [HDead]).
   (* disjointness *)
   assert (Idisj' : NoDup ((l :: cp) ++ cm ++ cq ++ R)) by (simpl; rewrite <- !app_assoc in Idisj; exact Idisj).
   assert (NZ : NoDup (cm ++ X ++ R)).
@@ -145,7 +145,7 @@ Proof.
     apply Rlt. apply in_app_or in Hx as [Hx|Hx]; apply Old; auto. }
   (* the new store typing *)
   assert (NsX : nonscope_on Σ X).
-  { intros x Hx. apply Ireg. apply Old. left. auto. }
+  { intros x Hx. exists HDead. split; [apply Ireg; apply Old; left; auto | reflexivity]. }
   assert (Sx : scope_ext Σ Σ').
   { eapply scope_ext_trans; [eapply sagree_scope_ext; [apply kill_agree | exact NsX] | apply scope_ext_app]. }
   assert (Agr : sagree Σ Σ' X).
@@ -166,12 +166,12 @@ Proof.
            intros m Hm. apply Pre. apply Rlt. apply Old. left. apply MOl. auto.
         -- constructor; auto. intro Hc. apply (NR N); auto. apply in_or_app; auto.
       * eapply Forall3_impl_in; [| exact SO']. intros w p Ow Hw HOw [Hs Ho].
-        eapply slot_ok_agree with (X := X); [| exact Agr | exact Sx |].
-        -- unfold slot_ok in *. destruct p as [[|] t']; simpl in *; auto.
-           eapply dtyped_agree1; [exact Hs | apply scope_ext_refl |].
+        eapply slot_ok_agree with (X := X); [| exact Agr | exact Sx | |].
+        -- eapply slot_ok_keep; [exact Hs | apply keeps_live_refl |].
            intros m Hm. apply Pre. apply Rlt. apply Old. right. apply in_concat. eauto.
         -- intros Hsh x Hx HxX. unfold slot_ok in Hs. rewrite Hsh in Hs. destruct Hs as [_ ->].
            exact (Ho x Hx (Old x (or_introl (XOl x HxX)))).
+        -- intros _ x Hx. apply Ireg. apply Old. left. apply XOl. auto.
     + constructor.
       * intro Hc. apply (NR N); auto.
       * exact NmR.
@@ -199,14 +199,12 @@ Proof.
       * exfalso. apply Hm. left. apply nth_error_lt in Em. rewrite length_app in Em. simpl in Em.
         unfold N. lia.
     + intros x [<-|Hx].
-      * exists (HList TBot). split; auto. unfold Σ', N.
+      * unfold Σ', N.
         rewrite <- Ilen, <- (kill_length X Σ). apply nth_error_app_eq.
       * assert (HxX : ~ In x X).
         { intro HX. apply in_app_or in Hx as [Hx|Hx]; [exact (Dm_XR x Hx (in_or_app _ _ _ (or_introl HX))) |].
           exact (DX_R x HX Hx). }
-        destruct (Ireg x) as (h & E & Ns).
-        { apply in_app_or in Hx as [Hx|Hx]; apply Old; auto. }
-        exists h. split; auto.
+        apply Agr; auto. apply Ireg. apply in_app_or in Hx as [Hx|Hx]; apply Old; auto.
     + apply Sx. exact Iscope.
   - apply bounded_app; auto. intros r Hr. assert (r < length H); [|lia].
     eapply B; [exact El|]. simpl in *. rewrite !flat_map_app, !in_app_iff. auto.

@@ -134,10 +134,38 @@ with dtypedl (Σ : store_ty) (H : heap) : list val -> list ty -> list (list loc)
 | dtl_cons v vs t ts O Os :
     dtyped Σ H v t O -> dtypedl Σ H vs ts Os -> dtypedl Σ H (v :: vs) (t :: ts) (O :: Os).
 
+(** [mtyped Σ H v t m O]: [v] has type [t] with freshness mark [m] (Typing.v).
+    [O] is the region: the locations of the new objects, a tree.  A stored
+    value inside a new one ([Sh] position) is typed by [Σ] and adds nothing
+    to the region; it never points into a region, because a region's
+    locations have no store type yet ([inv_reg]) and [vtyped] reaches a
+    location only through its store type. *)
+Inductive mtyped (Σ : store_ty) (H : heap) : val -> ty -> mark -> list loc -> Prop :=
+| mt_sh v t : vtyped Σ v t -> mtyped Σ H v t Sh []
+| mt_dp v t O : dtyped Σ H v t O -> mtyped Σ H v t Dp O
+| mt_list l vs a m Os :
+    nth_error H l = Some (OList vs) -> mtypeds Σ H vs a m Os -> NoDup (l :: concat Os) ->
+    mtyped Σ H (VLoc l) (TList a) (MList m) (l :: concat Os)
+| mt_rec l kvs fs r f Os :
+    nth_error H l = Some (ODict kvs) -> NoDup (map fst kvs) ->
+    (forall k t, field_at k fs r = FReq t -> lookup k kvs <> None) ->
+    mfields Σ H kvs fs r f Os -> NoDup (l :: concat Os) ->
+    mtyped Σ H (VLoc l) (TRec fs r) (MRec f) (l :: concat Os)
+with mtypeds (Σ : store_ty) (H : heap) : list val -> ty -> mark -> list (list loc) -> Prop :=
+| mts_nil t m : mtypeds Σ H [] t m []
+| mts_cons v vs t m O Os : mtyped Σ H v t m O -> mtypeds Σ H vs t m Os -> mtypeds Σ H (v :: vs) t m (O :: Os)
+with mfields (Σ : store_ty) (H : heap) :
+    list (string * val) -> list (label * fstat) -> fstat -> (label -> mark) -> list (list loc) -> Prop :=
+| mfs_nil fs r f : mfields Σ H [] fs r f []
+| mfs_cons k v kvs fs r f O Os :
+    mtyped Σ H v (fty (field_at k fs r)) (f k) O -> mfields Σ H kvs fs r f Os ->
+    mfields Σ H ((k, v) :: kvs) fs r f (O :: Os).
+
 Definition slot_ok (Σ : store_ty) (H : heap) (v : val) (p : slot) (O : list loc) : Prop :=
   match fst p with
   | Sh => vtyped Σ v (snd p) /\ O = []
   | Dp => dtyped Σ H v (snd p) O
+  | m => mtyped Σ H v (snd p) m O
   end.
 
 Record inv (Σ : store_ty) (H : heap) (sc : loc) (G : tenv)
@@ -151,7 +179,8 @@ Record inv (Σ : store_ty) (H : heap) (sc : loc) (G : tenv)
   inv_heap : forall l o, nth_error H l = Some o -> ~ In l (concat Os) -> live Σ l ->
                (exists h, nth_error Σ l = Some h /\ obj_ok Σ o h) /\
                (forall r, In r (olocs o) -> ~ In r (concat Os));
-  inv_reg : forall l, In l (concat Os) -> exists h, nth_error Σ l = Some h /\ is_scope h = false;
+  (* a region location has no store type yet: [HDead] until it is committed *)
+  inv_reg : forall l, In l (concat Os) -> nth_error Σ l = Some HDead;
   inv_scope : nth_error Σ sc = Some (HScope G)
 }.
 
@@ -168,3 +197,9 @@ with dfields_mut := Induction for dfields Sort Prop
 with dtypedl_mut := Induction for dtypedl Sort Prop.
 
 Combined Scheme dtyped_comb from dtyped_mut, dtypeds_mut, dfields_mut, dtypedl_mut.
+
+Scheme mtyped_mut := Induction for mtyped Sort Prop
+with mtypeds_mut := Induction for mtypeds Sort Prop
+with mfields_mut := Induction for mfields Sort Prop.
+
+Combined Scheme mtyped_comb from mtyped_mut, mtypeds_mut, mfields_mut.

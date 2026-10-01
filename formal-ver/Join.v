@@ -472,7 +472,8 @@ Proof.
     as [c|] eqn:E; intros H; [|discriminate].
   injection H as <-. apply tjoin_ub in E as [J1 J2].
   destruct m1, m2; simpl in J1, J2 |- *; split;
-    first [ apply ss_sh; auto | apply ss_dp; auto | apply ss_forget; auto ].
+    first [ apply ss_sh; auto | apply ss_dp; auto | apply ss_forget; auto
+          | apply ss_m_forget; [reflexivity | auto] ].
 Qed.
 
 Theorem join_stack_ub : forall s1 s2 s3, join_stack le s1 s2 = Some s3 -> ssub s1 s3 /\ ssub s2 s3.

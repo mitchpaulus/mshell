@@ -147,7 +147,10 @@ let slot_of = function
   | Lst [ Atom "fresh"; t ] -> (Dp, ty_of t)
   | _ -> raise (Parse "a slot is (shared T) or (fresh T)")
 
-let string_of_slot (m, t) = "(" ^ (match m with Sh -> "shared" | Dp -> "fresh") ^ " " ^ string_of_ty t ^ ")"
+(* The join only ever returns shared or fresh slots; partly new marks
+   (MList, MRec) appear only in the typing rules. *)
+let string_of_slot (m, t) =
+  "(" ^ (match m with Sh -> "shared" | Dp -> "fresh" | _ -> "partly-new") ^ " " ^ string_of_ty t ^ ")"
 
 (* ---- Queries ---- *)
 

@@ -7,11 +7,13 @@ Typing.v
 Invariant.v
 RtLemmas.v
 Commit.v
+Partial.v
 Validate.v
 Kind.v
 InvOps.v
 Copy.v
 RecOps.v
+PartialOps.v
 Slice.v
 Soundness.v
 Generic.v

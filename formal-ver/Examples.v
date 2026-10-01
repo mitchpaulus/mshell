@@ -69,9 +69,11 @@ Definition hole_literal : prog :=
 Example hole_literal_stuck : is_stuck (run hole_literal) = true.
 Proof. vm_compute. reflexivity. Qed.
 
-(** In the core, [WSetK] keeps a record fresh only when the stored value is
-    fresh ([tw_setk_dp] takes a [Dp] value); a value loaded from a variable
-    is [Sh], and [Sh] becomes [Dp] only for immutable types ([ss_imm]). *)
+(** In the core, [WSetK] of a stored value leaves the record partly new
+    ([tw_setk_m]): the record's own type may change, but the stored list at
+    [a] is retyped only by [sub], and [[int]] is not below [[int | str]].
+    Since the program gets stuck, the soundness theorem says it has no
+    typing at all. *)
 Example hole_literal_rejected : immutable (TList TInt) = false.
 Proof. reflexivity. Qed.
 
@@ -821,7 +823,7 @@ Proof.
     [eapply tw_each with (B' := LNone) (C' := LNone); [constructor | constructor | ] | ]
     | apply ssub_refl ].
   { constructor; [apply ss_forget, s_refl | constructor]. }
-  - step ltac:(apply tw_kind with (t1 := TInt); [reflexivity | | ]).
+  - step ltac:(apply tw_kind with (t1 := TInt); [reflexivity | reflexivity | | ]).
     + step ltac:(apply tw_store with (t := TInt); reflexivity).
       step ltac:(apply tw_quote with (ins := []) (outs := [TInt])).
       { intros s0. simpl. step ltac:(apply tw_load with (t := TInt); reflexivity). apply t_nil. }
@@ -908,3 +910,76 @@ Qed.
 
 Example keep_on_stack_never_stuck : forall n, eval nodefs n [OScope []] 0 [] keep_on_stack <> RStuck.
 Proof. intros n. eapply (soundness nosigs nodefs); [intros f ins outs [] | apply maybe_ctors_ok | exact keep_on_stack_typed]. Qed.
+
+(** ** Partly new values *)
+
+Example hole_literal_no_typing : forall G s, ~ T nosigs G LNone LNone RNone hole_literal [] s.
+Proof.
+  intros G s HT.
+  apply (soundness nosigs nodefs (fun f ins outs Hs => match Hs with end) (maybe_ctors_ok _) G RNone
+           hole_literal s HT 200).
+  vm_compute. reflexivity.
+Qed.
+
+(** ** A new dict around a stored list
+
+    [{a: @xs}] is new at the top: the dict was just made, and only the list
+    inside it is stored.  Its own type may gain optional labels, while the
+    list keeps its type.  This is the shape of a request literal holding a
+    stored cookie jar, [{url: "x", cookieJar: @jar}], passed where
+    [cookieJar] and other keys are optional.  Writing through the retyped
+    dict reaches [xs] at its own type. *)
+Definition TOpt : ty := TRec [("a", FReq (TList TInt)); ("b", FOpt TInt)] FOpen.
+
+Definition partly_new : prog :=
+  [ WNil; WInt 1; WPush; WStore "xs"              (* xs = [1] *)
+  ; WDictNew; WLoad "xs"; WSetK "a"               (* {a: @xs}: a new dict around a stored list *)
+  ; WStore "d"                                    (* as {a: [int], b?: int}, then stored *)
+  ; WLoad "d"; WGetReq "a"; WInt 2; WPush; WDrop  (* append 2 to xs through d *)
+  ; WLoad "xs"; WInt 1; WGetAt; WInt 1; WAdd; WDrop ].
+
+Example partly_new_typed :
+  T nosigs [("xs", TList TInt); ("d", TOpt)] LNone LNone RNone partly_new [] [].
+Proof.
+  unfold partly_new.
+  step ltac:(apply tw_nil with (t := TInt)).
+  step ltac:(apply tw_int).
+  eapply t_sub; [ | eapply t_cons; [apply tw_push_dp | ] | apply ssub_refl ].
+  { constructor; [apply ss_imm; [reflexivity | apply s_refl] | apply ssub_refl]. }
+  eapply t_sub; [ | eapply t_cons; [apply tw_store with (t := TList TInt); reflexivity | ] | apply ssub_refl ].
+  { constructor; [apply ss_forget, s_refl | constructor]. }
+  step ltac:(apply tw_dictnew).
+  step ltac:(apply tw_load with (t := TList TInt); reflexivity).
+  step ltac:(apply tw_setk_m with (m := Sh) (md := Dp); reflexivity).
+  (* retype the dict, which is new, keeping the stored list's type; then commit it *)
+  eapply t_sub; [ | | apply ssub_refl ].
+  { constructor; [| apply ssub_refl]. apply ss_m with (b := TOpt); [reflexivity|]. simpl.
+    do 4 eexists. split; [reflexivity|]. split; [reflexivity|].
+    intros k. unfold field_at. simpl.
+    destruct (String.eqb k "a"); [| destruct (String.eqb k "b")]; simpl; split;
+      try (intros Hp; discriminate Hp).
+    - apply frs_req. apply s_refl.
+    - apply frs_abs_opt.
+    - apply frs_open. }
+  eapply t_sub; [ | eapply t_cons; [apply tw_store with (t := TOpt); reflexivity | ] | apply ssub_refl ].
+  { constructor; [apply ss_m_forget; [reflexivity | apply s_refl] | constructor]. }
+  step ltac:(apply tw_load with (t := TOpt); reflexivity).
+  step ltac:(apply tw_getreq with (t := TList TInt); reflexivity).
+  step ltac:(apply tw_int).
+  step ltac:(apply tw_push_sh).
+  step ltac:(apply tw_drop).
+  step ltac:(apply tw_load with (t := TList TInt); reflexivity).
+  step ltac:(apply tw_int).
+  step ltac:(apply tw_getat).
+  step ltac:(apply tw_int).
+  step ltac:(apply tw_add).
+  step ltac:(apply tw_drop).
+  apply t_nil.
+Qed.
+
+Example partly_new_never_stuck : forall n, eval nodefs n [OScope []] 0 [] partly_new <> RStuck.
+Proof. intros n. eapply (soundness nosigs nodefs); [intros f ins outs [] | apply maybe_ctors_ok | exact partly_new_typed]. Qed.
+
+(** And it runs: the list in [xs] is [[1, 2]] at the end. *)
+Example partly_new_runs : exists H' st', run partly_new = ROk ONormal H' st'.
+Proof. vm_compute. eauto. Qed.

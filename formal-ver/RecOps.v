@@ -2,7 +2,7 @@
 
 From Stdlib Require Import String List Arith Bool Lia Permutation.
 Import ListNotations.
-From MshellCore Require Import Syntax Subtyping Typing Interp Invariant RtLemmas Commit Validate InvOps.
+From MshellCore Require Import Syntax Subtyping Typing Interp Invariant RtLemmas Commit Partial Validate InvOps.
 
 (** ** Association lists *)
 Lemma lookup_remove_neq {A} k k' (kvs : list (string * A)) :
@@ -179,8 +179,7 @@ Proof.
            ++ intro Hc. apply Nl. apply Prest; auto.
            ++ eapply NoDup_app_remove_l. eapply Permutation_NoDup; [exact P | exact Nd].
       * eapply Forall3_impl_in; [| exact F1]. intros w p Ow _ HOw Hs.
-        unfold slot_ok in *. destruct p as [[|] t']; simpl in *; auto.
-        eapply dtyped_agree1; eauto using scope_ext_refl.
+        eapply slot_ok_keep; [exact Hs | apply keeps_live_refl |].
         intros m Hm. apply Agr. intro; subst.
         apply (proj1 (Nrest l (proj2 (in_concat _ _) (ex_intro _ Ow (conj HOw Hm))))). auto.
     + (* disjointness *)
@@ -270,8 +269,7 @@ Proof.
               apply NoDup_app; auto.
               intros a Ha Ha'. apply (D a Ha). apply in_cons. apply in_or_app. left. auto.
       * eapply Forall3_impl_in; [| exact F2]. intros w p Ow _ HOw Hs.
-        unfold slot_ok in *. destruct p as [[|] t']; simpl in *; auto.
-        eapply dtyped_agree1; eauto using scope_ext_refl.
+        eapply slot_ok_keep; [exact Hs | apply keeps_live_refl |].
         intros m Hm. apply Agr. intro; subst.
         apply nodup_app_inv in Idisj as (_ & N2 & _).
         inversion N2 as [|? ? Nl' _]; subst. apply Nl'. apply in_or_app. right. apply in_concat. eauto.

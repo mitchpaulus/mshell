@@ -82,7 +82,7 @@ What you have to read is whether the *definitions* say what the design means:
 |---|---|---|
 | `Syntax.v` | ~420 | types (including recursive types `TMu`, their closedness and unfolding), enum identities, the built-in `Maybe`, substitution, words, values, heap objects |
 | `Interp.v` | ~490 | the interpreter matches `Evaluator.go` where it matters (see below); `eval` is `evalv validate` |
-| `Typing.v` | ~350 | each typing rule matches the doc; `genv` holds def signatures and enum declarations; `maybe_ok` |
+| `Typing.v` | ~400 | each typing rule matches the doc; marks (`Sh`, `Dp`, `MList`, `MRec`) and `msub`; `genv` holds def signatures and enum declarations; `maybe_ok` |
 | `Decide.v` (definitions only) | ~150 | `step`, `lvl`, `chk` and `rstep`, `rlvl`, `rchk` are what the Go checker will do to decide `<=` and fresh retyping |
 | `Subtyping.v` (definitions only) | ~200 | the one-level relations `subF` and `rsubF` (with `fsubR`, `subsR`, `osubR`, `vsubsR`, `frsubR`, `vrsubsR`), `sub` and `rsub` as their greatest fixed points, `immutable`, and the enum declaration checks `occ_sub`, `occ_fresh`, `wf_payload` |
 
@@ -96,6 +96,7 @@ Everything else (`Invariant.v` onward) is proof and cannot make the theorem say 
 | Subtyping, S1-S4 | `sub` and `fsub` (per label), `sub_trans` |
 | Retype of fresh values | `rsub` / `frsub` |
 | Stack slots `τ` / `τ•` | `mark` = `Sh` / `Dp`; `slot_sub` is the one subsumption rule |
+| Freshness per object: partly new values | `mark` = `MList m` / `MRec f`; retyped by `msub`, committed by `ss_m_forget`; typed by `mtyped` in `Invariant.v`; built by `tw_nil_m`, `tw_push_m`, `tw_setk_m`; `Partial.v`, `PartialOps.v` |
 | Typing rules, break/continue/return contexts | `TW` / `T` in `Typing.v` |
 | Kind patterns, abstract types | `tw_kind` (`kind_then`/`kind_else`), `tw_kind_list` (arm checked for every element type), `tw_kind_enum` (for every argument list with one argument per parameter) |
 | The escape check (an arm checked once, with a new type variable) | `kind_list_once`, `kind_enum_once` in `Escape.v` |
@@ -103,7 +104,7 @@ Everything else (`Invariant.v` onward) is proof and cannot make the theorem say 
 | `deepCopy` (explicit, result fresh; `WCopy` in the model) | `tw_copy`; `dcopy` in `Interp.v`; `dcopy_fresh` in `Copy.v`; `inv_alloc_region` in `InvOps.v` |
 | Type-changing updates of fresh values | `tw_setk_dp`, `tw_del_dp` |
 | `never` | `TQuote ins None`; `tw_exec_never`, `tw_call_never`, `tw_loop_forever` |
-| Store typing, freshness, commit | `vtyped`, `dtyped`, `inv` in `Invariant.v`; `commit_all` in `Commit.v` |
+| Store typing, freshness, commit | `vtyped`, `dtyped`, `mtyped`, `inv` in `Invariant.v`; `commit_all` in `Commit.v`, `mtyped_commit` in `Partial.v` |
 | Generic enums: variance, fresh-covariance, immutability | `s_enum`/`vsubs`, `rs_enum`/`vrsubs`, `immutable`; declaration check `wf_payload`; soundness of the check `payload_sub`, `payload_rsub`, `payload_imm` in `Variance.v` |
 | Constructors, constructor match, enum kind pattern | `tw_con_sh`, `tw_con_dp`, `tw_case`, `tw_kind_enum` |
 | Validation with a work budget | `validate` in `Interp.v` (running out is `RErr`) |
@@ -142,8 +143,10 @@ Everything else (`Invariant.v` onward) is proof and cannot make the theorem say 
 - **Unknown** is a type `TTop`. Every value has it, and no operation except kind patterns accepts it.
 - **Frame polymorphism** is part of quote types: a quote body must check for every rest of the stack.
 - **Fresh values are deep-typed off the heap.** A fresh slot's lists and dicts form a tree that nothing
-  else references, and their store types are ignored until the value is committed. Retyping a fresh
-  value therefore changes no state.
+  else references, and they have no store type (`HDead`) until the value is committed. Retyping a fresh
+  value therefore changes no state. A partly new value (`MList`, `MRec`) is typed the same way, except
+  that a stored value inside it is typed through the store and adds nothing to the region; because a
+  region's locations have no store type, a stored value can never point into one.
 - **`copy` has a depth bound.** `dcopy` is given the heap size as its bound on object nesting, so it
   runs out only on a cyclic value, which is a checked error (`copy_cycle_err`). The proof does not
   depend on the bound. The result's region is exactly the new locations, and their store types are
@@ -358,6 +361,23 @@ Found while proving the escape check (`Escape.v`). No hole in the rules:
   not appear in any variable's type, the stack below the matched value, the arm's output stack, or the
   break, continue and return stacks. The design doc's list named the first and third and a level check
   for unification variables, which covers the rest; it now states the proved condition too.
+
+Found while making freshness a property of each object (`Partial.v`, `PartialOps.v`). No hole in
+the rules; the proof fixed three details:
+
+- **A region's locations have no store type until they are committed** (`inv_reg`: `HDead`, where the
+  previous model gave them a placeholder `HList TBot`). Then a stored value inside a new one, which is
+  typed through the store, can never point into any region, and the invariant needs no new clause.
+  It also means a value overwritten in a new dict needs no commit: nothing else references it, and its
+  objects have no store type to keep consistent (`inv_rec_set_m`).
+- **A kind pattern that keeps its value on the stack takes a stored or new value only** (`tw_kind`
+  has `partial m = false`). Under a substitution its arm's type is only above the member by `sub`,
+  and a partly new mark is retyped position by position. The checker commits a partly new value first.
+- **A slice's result is stored or new** (`tw_slice`): a partly new mark there would claim the elements
+  are committed when they are not.
+
+`partly_new_typed` in `Examples.v` types and runs `{a: @xs}` retyped to `{a: [int], b?: int}` and a
+write through it; `hole_literal_no_typing` shows H3, the same literal widened to `{a: [int | str]}`, has no typing.
 
 ## Comparing the Go checker with the proof
 

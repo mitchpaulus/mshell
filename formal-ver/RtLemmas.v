@@ -35,7 +35,7 @@ Lemma fsub_fty f g : fsub f g -> sub (fty f) (fty g).
 Proof. intros H; inversion H; subst; simpl; auto using s_refl, s_top. Qed.
 
 Lemma slot_sub_refl p : slot_sub p p.
-Proof. destruct p as [[|] t]; constructor; auto using s_refl, rs_sub. Qed.
+Proof. destruct p as [[| | m | f] t]; try (constructor; auto using s_refl, rs_sub; fail); apply ss_m_refl; reflexivity. Qed.
 
 Lemma ssub_refl s : ssub s s.
 Proof. induction s; constructor; auto using slot_sub_refl. Qed.

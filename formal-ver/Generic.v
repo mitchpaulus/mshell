@@ -431,6 +431,33 @@ Proof.
   destruct (String.eqb x y); auto. intros E; inversion E; subst; reflexivity.
 Qed.
 
+Lemma frsubR_tsub th (R R' : ty -> ty -> Prop) f g :
+  (forall a b, R a b -> R' (tsub th a) (tsub th b)) ->
+  frsubR R f g -> frsubR R' (ftsub th f) (ftsub th g).
+Proof.
+  intros HR F. destruct F as [a b Hr|b|b|f0 a b Ha Hr|f0 a b Ha Hr| |f0]; simpl.
+  - apply frs_req; auto.
+  - apply frs_abs_opt.
+  - apply frs_abs_dict.
+  - apply frs_opt with (a := tsub th a); [destruct Ha as [-> | [-> | ->]]; simpl; auto | auto].
+  - apply frs_dict with (a := tsub th a); [destruct Ha as [-> | [-> | ->]]; simpl; auto | auto].
+  - apply frs_abs.
+  - apply frs_open.
+Qed.
+
+Lemma msub_tsub th : forall m a b, msub m a b -> msub m (tsub th a) (tsub th b).
+Proof.
+  induction m as [| | m IH | f IH]; simpl; intros a b Hs.
+  - apply sub_tsub; auto.
+  - apply rsub_tsub; auto.
+  - destruct Hs as (a' & b' & -> & -> & Hs). exists (tsub th a'), (tsub th b'). simpl. auto.
+  - destruct Hs as (fs1 & r1 & fs2 & r2 & -> & -> & Hs). simpl.
+    do 4 eexists. split; [reflexivity|]. split; [reflexivity|].
+    intros k. rewrite !field_at_tsub. destruct (Hs k) as [F P]. split.
+    + eapply frsubR_tsub; [| exact F]. apply IH.
+    + intros Pk E. apply (P Pk). destruct (field_at k fs2 r2); simpl in E; congruence.
+Qed.
+
 Lemma slot_sub_subst th p q : slot_sub p q ->
   slot_sub (fst p, tsub th (snd p)) (fst q, tsub th (snd q)).
 Proof.
@@ -439,6 +466,9 @@ Proof.
   - apply ss_dp, rsub_tsub; auto.
   - apply ss_forget, sub_tsub; auto.
   - apply ss_imm; [apply immutable_tsub; auto | apply sub_tsub; auto].
+  - apply ss_m; auto. apply msub_tsub; auto.
+  - apply ss_m_refl; auto.
+  - apply ss_m_forget; auto. apply sub_tsub; auto.
 Qed.
 
 Lemma ssub_subst th s1 s2 : ssub s1 s2 -> ssub (ssubst th s1) (ssubst th s2).
@@ -595,6 +625,8 @@ Proof.
   - constructor.
   - constructor.
   - constructor.
+  - constructor.
+  - constructor.
   - (* each *)
     eapply tw_each; [apply child_ctx_subst; eauto | apply child_ctx_subst; eauto |].
     specialize (H th). revert H. ss. auto.
@@ -612,17 +644,18 @@ Proof.
   - apply tw_getreq. rewrite field_at_tsub, e. reflexivity.
   - apply tw_setk_sh. rewrite field_at_tsub. apply writable_tsub; auto.
   - constructor.
+  - constructor; auto.
   - eapply tw_del_sh. rewrite field_at_tsub, e. reflexivity.
   - constructor.
   - apply tw_getd. intros k. rewrite field_at_tsub, fty_tsub. apply sub_tsub; auto.
   - apply tw_setd. intros k. rewrite field_at_tsub. apply writable_tsub; auto.
   - (* kind pattern *)
-    destruct (kind_then_tsub th k t t1 e) as (t1' & E' & S').
-    eapply tw_kind; [exact E' | |].
+    destruct (kind_then_tsub th k t t1 e0) as (t1' & E' & S').
+    eapply tw_kind; [exact e | exact E' | |].
     + eapply t_sub; [| apply (H th) | apply ssub_refl]. revert S'. ss. intros S'.
-      constructor; [| apply ssub_refl]. destruct m; constructor; auto. apply rs_sub; auto.
+      constructor; [| apply ssub_refl]. destruct m; try discriminate; constructor; auto. apply rs_sub; auto.
     + eapply t_sub; [| apply (H0 th) | apply ssub_refl]. ss.
-      constructor; [| apply ssub_refl]. destruct m; constructor; auto using kind_else_tsub.
+      constructor; [| apply ssub_refl]. destruct m; try discriminate; constructor; auto using kind_else_tsub.
       apply rs_sub, kind_else_tsub.
   - (* list kind pattern: every element type *)
     apply tw_kind_list; [| specialize (H0 th); revert H0; ss; auto].

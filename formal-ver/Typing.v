@@ -3,9 +3,18 @@
     [T G B C R e s1 s2] : in variable context [G], with break context [B],
     continue context [C] and return stack [R], program [e] turns a stack of
     type [s1] into one of type [s2].  Stacks are top-first lists of slots;
-    a slot is a type with a freshness mark: [Sh] (may be shared) or [Dp]
-    (deeply fresh: every list/dict reachable from the value is referenced
-    exactly once, by this slot or by its parent in the tree).
+    a slot is a type with a freshness mark.  A mark says, position by
+    position, which objects of the value are new:
+    - [Sh]       : the value may be shared (a stored value);
+    - [Dp]       : the value is new, and so is every list and dict reachable
+                   from it: each is referenced exactly once, by this slot or by
+                   its parent in the tree;
+    - [MList m]  : a new list whose elements have mark [m];
+    - [MRec f]   : a new dict whose value under label [k] has mark [f k].
+    A new object may hold stored values ([Sh] positions inside a [MList] or
+    [MRec]).  Its own type may change (a fresh record may gain optional
+    labels), but a stored value inside it keeps its type: it is retyped only
+    by [sub] ([msub]).
 
     Break/continue contexts:
     - [LNone]      : not allowed here;
@@ -18,8 +27,34 @@ From Stdlib Require Import String List Arith Bool.
 Import ListNotations.
 From MshellCore Require Import Syntax Subtyping.
 
-Inductive mark := Sh | Dp.
+Inductive mark := Sh | Dp | MList (m : mark) | MRec (f : label -> mark).
 Definition slot := (mark * ty)%type.
+
+(** A mark of a new object that may hold stored values. *)
+Definition partial (m : mark) : bool :=
+  match m with MList _ | MRec _ => true | Sh | Dp => false end.
+
+(** A mark a [set] on a new dict may start from. *)
+Definition rec_mark (m : mark) : bool :=
+  match m with Dp | MRec _ => true | Sh | MList _ => false end.
+
+(** The mark of a new dict after [set] of a value with mark [m] at [k]. *)
+Definition mset (k : label) (m md : mark) : mark :=
+  MRec (fun k' => if String.eqb k' k then m else match md with MRec f => f k' | _ => Dp end).
+
+(** Retyping a value with mark [m]: [sub] at a stored position, [rsub] at a
+    new one, and per position inside a new list or dict.  A label of a new
+    dict that holds a partly new value is not made [open]: the value would
+    then have type unknown, which says nothing about its parts. *)
+Fixpoint msub (m : mark) (a b : ty) {struct m} : Prop :=
+  match m with
+  | Sh => sub a b
+  | Dp => rsub a b
+  | MList m' => exists a' b', a = TList a' /\ b = TList b' /\ msub m' a' b'
+  | MRec f => exists fs1 r1 fs2 r2, a = TRec fs1 r1 /\ b = TRec fs2 r2 /\
+      forall k, frsubR (msub (f k)) (field_at k fs1 r1) (field_at k fs2 r2) /\
+                (partial (f k) = true -> field_at k fs2 r2 <> FOpen)
+  end.
 Definition sty := list slot.
 Definition shs (ts : list ty) : sty := map (fun t => (Sh, t)) ts.
 Definition marks (m : mark) (ts : list ty) : sty := map (fun t => (m, t)) ts.
@@ -52,7 +87,11 @@ Inductive slot_sub : slot -> slot -> Prop :=
 | ss_sh a b : sub a b -> slot_sub (Sh, a) (Sh, b)
 | ss_dp a b : rsub a b -> slot_sub (Dp, a) (Dp, b)
 | ss_forget a b : sub a b -> slot_sub (Dp, a) (Sh, b)
-| ss_imm a b : immutable a = true -> sub a b -> slot_sub (Sh, a) (Dp, b).
+| ss_imm a b : immutable a = true -> sub a b -> slot_sub (Sh, a) (Dp, b)
+(** A partly new value: retyped position by position, or committed. *)
+| ss_m m a b : partial m = true -> msub m a b -> slot_sub (m, a) (m, b)
+| ss_m_refl m a : partial m = true -> slot_sub (m, a) (m, a)
+| ss_m_forget m a b : partial m = true -> sub a b -> slot_sub (m, a) (Sh, b).
 
 Definition ssub : sty -> sty -> Prop := Forall2 slot_sub.
 
@@ -196,6 +235,11 @@ Inductive TW : lctx -> lctx -> rctx -> word -> sty -> sty -> Prop :=
 | tw_call_never B C R f ins s s' :
     g_sigs sigs f ins None -> TW B C R (WCall f) (ins ++ s) s'
 | tw_nil B C R t s : TW B C R WNil s ((Dp, TList t) :: s)
+(** A new list built from values of mark [m] (a list literal holding stored
+    values has [MList Sh]). *)
+| tw_nil_m B C R m t s : TW B C R WNil s ((MList m, TList t) :: s)
+| tw_push_m B C R m t s :
+    TW B C R WPush ((m, t) :: (MList m, TList t) :: s) ((MList m, TList t) :: s)
 | tw_push_sh B C R t s :
     TW B C R WPush ((Sh, t) :: (Sh, TList t) :: s) ((Sh, TList t) :: s)
 | tw_push_dp B C R t s :
@@ -224,10 +268,10 @@ Inductive TW : lctx -> lctx -> rctx -> word -> sty -> sty -> Prop :=
     are the input's.  It is fresh when the input was fresh (the input is
     consumed, and its elements are subtrees nothing else reaches) or when
     the elements are immutable; otherwise it is shared ([m'] is the
-    result's mark).  The design uses only the second case (one rule for
+    result's mark).  A partly new operand is committed first.  The design uses only the second case (one rule for
     every new list); this rule allows both, and both are proved. *)
 | tw_slice B C R w a m m' t s :
-    slice_args w a -> (m' = Sh \/ m = Dp \/ immutable t = true) ->
+    slice_args w a -> (m' = Sh \/ (m' = Dp /\ (m = Dp \/ immutable t = true))) ->
     TW B C R w (a ++ (m, TList t) :: s) ((m', TList t) :: s)
 | tw_dictnew B C R s : TW B C R WDictNew s ((Dp, TRec [] FAbs) :: s)
 | tw_getk B C R k fs r s :
@@ -240,6 +284,11 @@ Inductive TW : lctx -> lctx -> rctx -> word -> sty -> sty -> Prop :=
     TW B C R (WSetK k) ((Sh, t) :: (Sh, TRec fs r) :: s) ((Sh, TRec fs r) :: s)
 | tw_setk_dp B C R k fs r t s :
     TW B C R (WSetK k) ((Dp, t) :: (Dp, TRec fs r) :: s) ((Dp, TRec ((k, FReq t) :: fs) r) :: s)
+(** [set] on a new dict of a value with any mark: a dict literal that holds
+    stored values.  The dict stays new; the label records the value's mark. *)
+| tw_setk_m B C R k fs r t m md s :
+    rec_mark md = true ->
+    TW B C R (WSetK k) ((m, t) :: (md, TRec fs r) :: s) ((mset k m md, TRec ((k, FReq t) :: fs) r) :: s)
 | tw_del_sh B C R k fs r t s :
     field_at k fs r = FDict t ->
     TW B C R (WDel k) ((Sh, TRec fs r) :: s) ((Sh, TRec fs r) :: s)
@@ -251,8 +300,10 @@ Inductive TW : lctx -> lctx -> rctx -> word -> sty -> sty -> Prop :=
 | tw_setd B C R fs r t s :
     (forall k, writable (field_at k fs r) t) ->
     TW B C R WSetD ((Sh, t) :: (Sh, TStr) :: (Sh, TRec fs r) :: s) ((Sh, TRec fs r) :: s)
+(** A kind pattern on a partly new value commits it first ([ss_m_forget]):
+    the arm's type is above the member, and only [sub] relates the two. *)
 | tw_kind B C R k m t t1 e1 e2 s s' :
-    kind_then k t = Some t1 ->
+    partial m = false -> kind_then k t = Some t1 ->
     T B C R e1 ((m, t1) :: s) s' ->
     T B C R e2 ((m, kind_else k t) :: s) s' ->
     TW B C R (WKindIf k e1 e2) ((m, t) :: s) s'
@@ -341,9 +392,10 @@ Variable G : tenv.
 Lemma tw_wnone B C R t s : TW sigs G B C R wnone s ((Sh, TMaybe t) :: s).
 Proof. apply (tw_con_sh sigs G B C R EMaybe "none"%string [] [t] s (proj2 Hmaybe) eq_refl). Qed.
 
-Lemma tw_wjust B C R m t s : TW sigs G B C R wjust ((m, t) :: s) ((m, TMaybe t) :: s).
+Lemma tw_wjust B C R m t s :
+  partial m = false -> TW sigs G B C R wjust ((m, t) :: s) ((m, TMaybe t) :: s).
 Proof.
-  destruct m.
+  intros Pm. destruct m; try discriminate.
   - apply (tw_con_sh sigs G B C R EMaybe "just"%string [TParam 0] [t] s (proj1 Hmaybe) eq_refl).
   - apply (tw_con_dp sigs G B C R EMaybe "just"%string [TParam 0] [t] s (proj1 Hmaybe) eq_refl).
 Qed.
