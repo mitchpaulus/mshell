@@ -752,6 +752,12 @@ unsolved variables, an argument of type $tau$ is accepted when $tau <= upsilon$ 
 Where the parameter mentions unsolved variables, the argument must match it by equality;
 if a union or width step would be needed there, the checker asks for an annotation instead of
 guessing. This is what makes the result independent of checking order.
+Two refinements keep that order from mattering in practice. Inputs with structure are matched before
+inputs that are a bare generic, so `([a] a -- [a])` reads `a` from the list whichever argument is on
+top. A generic that is several bare inputs, as in `(a a -- bool)`, is first set to the join of those
+arguments (@sec-join) when they are known: the join is above each of them (`join_slot_ub`), so it is
+one of the substitutions $theta$ the *Prim* rule allows, and `none 5 just =` checks with
+`a = Maybe[int]`.
 
 == Quotes, definitions, control flow
 
