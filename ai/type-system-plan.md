@@ -89,7 +89,8 @@ Invocation: `--check-types` and `--type-check-only` (`Main.go:516-535, 860-876`)
 - Redirect words (`*`, `>`, `2>&1`, ...) change the list object in place (`Evaluator.go:11565-12641`).
 - `updateCol` on a `Grid` swaps a new column into the same grid; `gridAddCol`, `gridRemoveCol`, `gridRenameCol` and `gridSetCell` change the grid in place (`Evaluator.go:8662-8954`). Views and rows have no write operations, but they see writes to the grid.
 - `...rest` (`Evaluator.go:1676`) and pipe slices (`MShellObject.go:1554, 1640, 1772`) share the source's storage. `take`, `skip` and list slices copy.
-- `Maybe` equality is broken on `main` (`none == none`); the enum branch has the fix (`622ce23`).
+- `Maybe` equality is broken on `main`: `Maybe.Equals` (`MShellObject.go:245`) asserts the value type `Maybe`, but the runtime holds `*Maybe`, so every comparison of two `Maybe`s is false, `none none =` included. The enum branch has a fix (`622ce23`).
+- List equality is not defined (`MShellList.Equals` returns an error), and `<`/`sort` do not compare containers (`sort` compares the items' strings).
 - Printing, JSON and equality recurse, so a very deep value can overflow the Go stack, and a cyclic one hangs. The enum branch replaced them with iterative walkers that detect cycles (`debe03e`, `0d78c14`, and the fixes after them).
 
 ### Older branches
@@ -129,6 +130,38 @@ Today, `(1 +)` gets several signatures and the consumer picks one. The design ha
   An overloaded word whose arguments are not yet known becomes a pending choice. It is resolved as soon as exactly one candidate fits, and it is an error if more than one still fits at the end of the def or script ("annotate this quote").
 - Measure first. Stage "Baseline" counts how many programs in `tests/success` and `tests/msh-scripts` rely on quotes with several signatures, so the size of the change is known before the core is written.
 
+## 5a. Performance
+
+The checker is meant to run on all user code by default, on every REPL line and on every LSP edit, so speed is a requirement at every stage, not a later pass (Mitchell, 2026-09-30).
+Prefer data layouts that are fast by construction and no more complex; optimize further only with a profile.
+
+Baseline, the old checker on this branch at `0fe830d` (FX-8350, `go test -bench`, 20 runs):
+
+| Benchmark | Time | Bytes | Allocations |
+|---|---|---|---|
+| `BenchmarkTypeCheckCorpus` (tests/success, typecheck_fail, msh-scripts) | 453 ms | 117 MB | 1,120,000 |
+| `BenchmarkTypeCheckEmpty` (setup cost of one check) | 0.61 ms | 219 KB | 1,980 |
+| `BenchmarkLSPDiagnostics/setdiff2way.msh` | 2.7 ms | 515 KB | 7,552 |
+
+The core checker gets the same benchmarks (`BenchmarkCoreCheck*`) in step 1 of stage 3, and is compared with these numbers at every step.
+Target: faster than the old checker on the corpus, with allocations that grow with the number of distinct types, not the number of words.
+
+Choices that cost nothing in complexity, taken from the start:
+
+- **Ids, not pointers.** Types, names, variables, quotes not yet checked and slot origins are `uint32` indexes into flat slices. A stack slot is 12 bytes (type, origin, flags), held by value in one `[]Slot`.
+- **No per-check copy of the base.** The builtin table, std signatures and the types they mention are built once per process and frozen. A check adds a local layer on top: a `TypeId` below the base length is a base type, one above is local, and hash-consing looks in the local table and then the base. `Clone` of the arena's maps per check, most of the 0.6 ms empty-check cost today, goes away; the REPL and LSP start a check in constant time.
+- **The builtin table is flat.** One slice indexed by `NameId` gives a span of candidate signatures; a signature's inputs and outputs are spans of one shared `[]TypeId` pool, not slices of their own. A signature with no generics is used without instantiating it.
+- **Variables by dense index.** A scope is a slice indexed by `NameId` with a generation number per entry: entering a scope bumps the generation, so nothing is cleared or hashed.
+- **Shallow resolution on the hot path.** Walking needs only the head of a type (follow variable bindings, which are path-compressed). Full `Apply` is for the end of a unit and for error messages.
+- **Scratch buffers owned by the checker** for arm entry stacks, instantiation renames, assumption sets and work lists, reset by length, never reallocated per word.
+- **Relations without a map per query.** An assumption set is a small slice searched linearly, moving to a map only past a size limit; `a == b` and two base types answer before any set is made. Measured against the oracle test so the answers do not change.
+- **Errors are values until printed.** No string is built for an error, a hint or an origin unless it is reported.
+- **Per-unit state is reset, not reallocated.** The substitution, unifier pairs and end-of-unit lists keep their capacity from one def body to the next.
+
+Later, only with a profile that shows it: one pool for union members, enum arguments and record fields instead of a slice per type; checking def bodies in parallel.
+
+The same applies to runtime work: `deepCopy`, the cycle-safe walkers and `validate` use explicit work stacks that are reused within a call, and allocate the copied objects once at their final size.
+
 ## 6. Stages
 
 Each stage lists its work, its tests, and when it is done.
@@ -154,6 +187,7 @@ Done when: the baseline and measurements are in the progress log.
 ### Stage 1: Runtime groundwork
 
 Each item is independent and fixes something on its own, so each is its own commit with its own tests.
+Order (decided 2026-09-30): the `Maybe` equality fix and items 1 and 2 land before stage 3 (several stage 3 acceptance tests run `deepCopy`); the rest of item 3 before stage 4; items 4 and 5 any time before stages 5 and 7.
 
 1. **`...rest` and pipe slices allocate** new storage, like `take` (design doc §new lists). Replace `tests/success/match_rest_zero_copy.msh` with tests that `setAt`, `del` and `append` on `rest` leave the source unchanged, and that `append` and `setAt` on a pipe slice leave the pipe unchanged. (Changes existing behavior: changelog entry.)
 2. **`deepCopy` builtin** (design doc §deepCopy): deep, once per path, cycles are an error naming the cycle, quotes and immutable values shared. Tests: two paths to one list give two lists; a list containing itself is an error, not a hang; each runtime kind in the Typst design doc table.
@@ -192,8 +226,46 @@ Done when: the relations pass their tests, including randomized transitivity on 
 
 ### Stage 3: The core checker, for the language as it is today
 
-New files; suggested names: `TypeCore.go` (walking the program), `TypeStackCore.go` (slots with fresh marks, effects with a diverges flag), `TypeRelations.go` (stage 2).
-Selected by the hidden option. The old checker stays the default.
+Selected by `MSH_CHECKER=core` (read where `Main.go` calls `TypeCheckProgram`, and in the LSP). The old checker stays the default.
+`tests/typecheck_core_test.sh` runs the core checker over `tests/success` and `tests/typecheck_fail`, and compares with two lists:
+`tests/core_expected_rejections.txt` (success programs rejected on purpose, each with its rewrite) and `tests/core_no_longer_errors.txt` (typecheck_fail programs no longer rejected, each with the reason).
+Both checkers join `tests/typecheck_test.sh` at the switch-over.
+
+Structure (agreed 2026-09-30). The old walker is not reused: its type resolver builds `TKShape`/`TKDict`, which the stage 2 relations do not take, and it infers each quote where it is written, where the design checks a literal quote against its consumer.
+
+| File | Contents |
+|---|---|
+| `TypeCoreResolve.go` | type expressions to `TKRecord`, `TKAlias`, `TKEnum`, `*: T`, `never`, `new` marks, rigid generics; not a `Checker` method; the built-in `Json` alias |
+| `TypeCoreStack.go` | slots (type, fresh mark, origin), the diverges flag, break/continue contexts (`·`, `σ`, `⋆`), return context (`·`, `σ`, `RAny`) |
+| `TypeCore.go` | the walker. One unit per def body and one for the script; a unit owns its unifier, its variable scope, and four end-of-unit lists: deferred checks, escape records, pending overload choices, pending quotes |
+| `TypeCoreQuote.go` | quotes not yet checked, and the words that consume them |
+| `TypeCoreMatch.go` | patterns, bindings, `=>`, `:>`, the escape check |
+| `TypeCoreAssign.go` | definite assignment, a separate pass |
+| `TypeCoreBuiltins.go` | the new builtin table: signature text, a fresh/shared mark per output, and a flag for in-place type changes that need a fresh operand |
+| `TypeCoreSpecial.go` | commands and redirects, captures, command execution, grid join/pivot, format strings, `dbg`, bare words in list literals |
+
+- Walking: a concrete type stack. A quote inferred on its own makes input variables when it runs out of stack (as the old `inferInputs`), which is the same as composing effects.
+- End of a unit, with the final substitution: `Recheck` every unified pair, the deferred subtyping checks, the escape checks, every store again; a pending overload choice left is an "ambiguous, annotate" error.
+- Pending overload choices: the word pushes new variables for its outputs; the choice is retried after each item and resolved when exactly one candidate fits. The substitution only grows, so a candidate that stops fitting never fits again, and the order of retries does not matter.
+- Quotes not yet checked: the slot keeps the parse items and the context. A consumer unifies its other arguments, then checks the body against its parameter, with the break context of a child-stack or current-stack builtin. Shuffles move the slot; anything else that touches it infers it first. A literal followed by redirect words is still a literal at a `loop` site.
+- Loops: the body's stack is the entry stack with `⊥` replaced by new variables ("a `⊥` fixes nothing"); if the body fails only because an entry slot was fresh and the end slot is shared, the body is checked once more with that slot shared.
+- `new` on a recursive def written without it: the body is checked a second time assuming its own output is `new`; if that is consistent, the error is "mark it `new`".
+- A quote checked a little after the code that follows it can make a store other than the first in program order fix a variable's type. That changes only which store reports the error; every store is checked again with the final substitution.
+- `Maybe` becomes the built-in enum declaration in the core checker at the start of this stage (decided 2026-09-30). The old checker keeps `TKMaybe`; it never calls the relations.
+
+Reused from the old checker: `Type.go`, `TypeError.go` (new kinds added), the substitution, the type-expression AST and `parseDefSignature`.
+Ported (logic, onto the new slots): `tryRedirect`, `tryCapture`, `applyMergeRedirect`, `tryExecCommand`, `commandParts` (with the fresh-only rule), `checkFormatString`, the grid-literal schema, `tryGridJoin`, `tryPivot` (abstract schema), `tryRejectPathWrite`, the bare-word rule, pattern snippets in messages.
+Rewritten: the `TypeBuiltins.go` entries, as the starting text for the audit. The audit is split by category across parallel subagents, each checking `Evaluator.go`, and reviewed before it lands (decided 2026-09-30).
+
+Order of work, each step its own commit with every suite passing:
+1. resolver, slots, literals, shuffles, variables, defs, `if` and joins, the end-of-unit checks, the option and the core test script, a hand-picked set of builtins;
+2. quotes not yet checked and their consumers, `x`, `loop`/`each`, break/continue/return contexts, `never`;
+3. pending overload choices, then the whole builtin table, one category at a time;
+4. `match`;
+5. shapes: getters, `getd`/`setd`/`del`, `as`, freshness of builtin outputs;
+6. commands, grids, format strings;
+7. `new` marks, the LSP, code actions;
+8. the acceptance tests of section 7, and the corpus.
 
 Work:
 

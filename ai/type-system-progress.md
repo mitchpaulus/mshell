@@ -182,3 +182,33 @@ and the result is awkward to use.
 ### Left open
 
 Nothing.
+
+## Stage 3 planning (2026-09-30)
+
+Proposal agreed; written into the plan (stage 3 structure, section 5a on performance).
+
+- `Maybe` becomes the built-in enum declaration in the core checker at the start of stage 3; the old checker keeps `TKMaybe`.
+- Stage 1 order: the `Maybe` equality fix, `...rest` and pipe slices, and `deepCopy` before stage 3.
+- The builtin-table audit is split by category across parallel subagents and reviewed before it lands.
+- Performance is a requirement at every stage (plan section 5a). Old checker baseline at `0fe830d`: corpus 453 ms, 117 MB, 1.12 M allocations; an empty check 0.61 ms, 1,980 allocations.
+
+Runtime facts found while planning (none of stage 1 is done on this branch):
+
+- `Maybe.Equals` asserts `Maybe` but the runtime holds `*Maybe`, so every `Maybe` comparison is false (`none none =` too).
+- `...rest` caps the slice's capacity, so `append` on it is safe, but `setAt` and `del` still write the source. Pipe slices do not cap at all.
+- List equality is not defined, and ordering does not compare containers.
+- `parseJson` turns every number into a float.
+
+## Stage 1, first part (2026-09-30)
+
+Not committed (the plan says not to commit unless asked). Suites: test.sh 283 passed, typecheck 272 passed, `go test` ok.
+
+- **`Maybe` equality.** `Maybe.Equals` accepts `*Maybe` as well as `Maybe`. Test: `tests/success/maybe_equality.msh`. Changelog: Fixed.
+- **`...rest` and pipe slices are new lists** (item 1). `...rest` and `MShellPipe.Slice*` use `slices.Clone` (one allocation and a `memmove`, as `take`).
+  `tests/success/match_rest_zero_copy.msh` is replaced by `match_rest_new_list.msh` (`setAt`, `del` and `append` on `rest`, and a spread in the middle) and `pipe_slice_new_list.msh` (`setAt` and `append` on all three slice forms).
+  The zero-copy `...rest` was never released (its changelog entry was under Unreleased), so that entry is removed rather than reversed; pipe slices get a Fixed entry. Docs: one sentence on the spread binding being a new list, in `control-flow.inc.html` and `mshell.md`.
+  No code in `lib/std.msh` uses `...rest`, so nothing in the repository becomes quadratic.
+- **`deepCopy`** (item 2), `mshell/DeepCopy.go`. Per path; lists, dicts and grids tracked on the path, since every cycle passes through one of them; the path is searched linearly up to 32 entries, then also kept in a map. A cycle is an error that names it (`the list contains itself through index 1, then key "a"`).
+  Lists, pipes and generic grid columns are cloned with one `memmove`, and only elements that can hold an object are visited; typed grid columns are cloned or gathered; a view or row becomes a view or row of a new grid with only its rows.
+  Old checker: `(t -- t)`. Tests: `tests/success/deep_copy.msh`, `tests/fail/deep_copy_cycle.msh`, `mshell/DeepCopy_test.go` (metadata, dictionary-encoded columns, views, cycles through a `Maybe` and a grid cell, a path past the map threshold).
+  `BenchmarkDeepCopyStrList` (1,000 strings): 20 µs, 3 allocations; the profile is the copy itself (`memmove`, GC write barriers).
