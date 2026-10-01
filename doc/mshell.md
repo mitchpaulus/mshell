@@ -1258,6 +1258,7 @@ end wl # Output: 11
 - `repeat`: Create a list containing the provided value repeated `n` times. `(a int -- [a])`
 - `binPaths`: Puts a list of lists with 2 items, first is the executable name, second is the full path to the executable. `(-- [[str]])`
 - `urlEncode`: URL-encode a string or dictionary of parameters. `(str|dict -- str)`
+- `deepCopy`: Copy a value, giving every list, dict and grid inside it a new object, so changing the copy never changes the original. A list reached through two places is copied twice; immutable values and quotes are shared. A value that contains itself is an error. `(a -- a)`
 - `toJson`: Serialize any value to a JSON string. Binary is base64 encoded; typed wrappers like path, date, Maybe, and pipe preserve their shape. Types that map directly to JSON types round-trip; extended types (like path or date) do not. `(a -- str)`
 - `sleep`: Sleep for a floating-point number of seconds. `(numeric -- )`
 - `nullDevice`: Cross-platform reference to either `/dev/null` or `NUL`. `( -- path)`

@@ -4,6 +4,7 @@ package main
 var BuiltInList = map[string]struct{}{
 	"-rot": {},
 	"/": {},
+	"deepCopy": {},
 	"defs": {},
 	"env": {},
 	"envInspect": {},

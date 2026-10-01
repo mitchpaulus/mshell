@@ -156,6 +156,8 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 
 	// ----- Maybe constructors -----
 	r.reg("just", "(t -- Maybe[t])")
+	// A copy that shares no list, dict or grid with its input.
+	r.reg("deepCopy", "(t -- t)")
 	// `none` is always Nothing, so its payload is uninhabited: Maybe[bottom].
 	// This stays compatible with any Maybe[T] context (bottom unifies with
 	// anything, and a declared Maybe[T] boundary launders it back to T), but

@@ -1,0 +1,5 @@
+# A value that contains itself has no copy.
+[1] xs!
+{a: @xs} d!
+@xs @d append drop
+@xs deepCopy

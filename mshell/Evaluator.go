@@ -10847,6 +10847,16 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					hash := md5.Sum(data)
 					hashStr := hex.EncodeToString(hash[:])
 					stack.Push(MShellString{hashStr})
+				case "deepCopy":
+					obj, err := stack.Pop1(t)
+					if err != nil {
+						return state.FailWithMessage(err.Error())
+					}
+					copied, err := DeepCopy(obj)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s.\n", t.Line, t.Column, err.Error()))
+					}
+					stack.Push(copied)
 				case "take":
 					// Take the first n items from a list
 					obj1, obj2, err := stack.Pop2(t)
