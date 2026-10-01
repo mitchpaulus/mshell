@@ -5,3 +5,4 @@ null.msh	`'null' parseJson` is Json, not int | null; validate first: `'null' par
 dicts.msh	`d` is stored as three different shapes in one scope; use a new name for each (d1, d2, d3)
 tar_pack.msh	a stored list of entries is passed to tarPack, whose parameter is a wider list type; lists are invariant. Pending decision 2 (read-only builtin parameters); until then, `@entries deepCopy tarPack`
 zip_pack.msh	as tar_pack.msh, for zipPack
+http_cookiejar_types.msh	the request literal holds a stored cookie jar, so it is not fresh, and a shared shape without the optional keys is not below the request type. Pending decision 2 (read-only builtin parameters); no rewrite keeps the jar updated in place

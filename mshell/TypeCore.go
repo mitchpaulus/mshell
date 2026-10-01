@@ -390,7 +390,11 @@ func (c *coreChecker) step(item MShellParseItem) {
 	case *MShellParseGrid:
 		c.unsupported(it.GetStartToken(), "grid literals")
 	case *MShellIndexerList:
-		c.unsupported(it.GetStartToken(), "indexing")
+		sigs := c.table.slice
+		if len(it.Indexers) == 1 && it.Indexers[0].(Token).Type == INDEXER {
+			sigs = c.table.index
+		}
+		c.call(sigs, it.GetStartToken())
 	case *MShellGetter:
 		c.getter(it)
 	case *MShellParseFormatString:

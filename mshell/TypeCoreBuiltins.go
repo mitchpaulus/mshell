@@ -539,6 +539,15 @@ func buildCoreTable(res *coreResolver) *coreTable {
 		}})
 	}
 
+	// Indexing. `:n:` gives an element (a row of a grid, a cell of a row);
+	// slices give a new list, or a view of the same grid.
+	t.index = b.sigs([]string{"([a] -- a)", "(str -- str)", "(path -- path)", "(bytes -- bytes)",
+		"(Grid | GridView -- GridRow)"})
+	t.index = append(t.index, coreSig{ins: []TypeId{ar.MakeGridRow(0)}, outs: []TypeId{TidUnknown}})
+	t.slice = b.sigs([]string{"([a] -- [a])", "(str -- str)", "(path -- path)", "(bytes -- bytes)",
+		"(Grid | GridView -- GridView)"})
+	t.slice[0].newListOut = 1
+
 	// Uses of these words the table does not cover yet.
 	t.partialToken = map[TokenType]string{
 		LESSTHAN:    "redirects",

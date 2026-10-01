@@ -173,6 +173,13 @@ func TestCoreChecker(t *testing.T) {
 		// A width step against a generic parameter needs no guess.
 		{`def showName ({name: str, val: Maybe[t]} -- ) :name? str wl end [{"name": "alice", "val": none}] (showName) each`, true, ""},
 
+		// Indexing.
+		{`[1 2 3] :0: 1 + wl`, true, ""},
+		{`"abc" :1: wl`, true, ""},
+		{`[1 2 3] :0: len wl`, false, "no matching overload for 'len'"},
+		{`[[1]] xs! @xs 1: as [[int | str]] drop`, false, "needs evidence"},
+		{`"a\nb" lines 1: as [str | int] drop`, true, ""},
+
 		// Unions of distinct kinds only.
 		{`def f ([int] | [str] -- ) drop end`, false, "two members of the same kind"},
 		{`def f (int | [str] -- ) drop end`, true, ""},

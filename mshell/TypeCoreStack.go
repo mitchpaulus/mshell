@@ -68,6 +68,9 @@ type coreTable struct {
 	// that fits none of them is not checked yet, rather than an error.
 	partialName  map[NameId]string
 	partialToken map[TokenType]string
+	// index is the indexer `:n:`; slice is `n:`, `:n`, `a:b` and a list of
+	// indexers, which concatenates.
+	index, slice []coreSig
 }
 
 func (t *coreTable) setName(id NameId, sigs []coreSig) {
