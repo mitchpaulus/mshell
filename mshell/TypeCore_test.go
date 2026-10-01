@@ -129,6 +129,21 @@ func TestCoreChecker(t *testing.T) {
 		{`def g (a -- ) [] acc! match list :> acc! , _ : end end`, false, "leaves the arm"},
 		{`def g (a -- ) match list :> drop , _ : end end`, true, ""},
 
+		// as: evidence, or fresh retyping.
+		{`[1 2] l! @l as [int | str] drop`, false, "make a new one first with deepCopy"},
+		{`[1 2] as [int | str] drop`, true, ""},
+		{`[1 2] l! @l deepCopy as [int | str] drop`, true, ""},
+		{`"x" parseJson as {a: int} drop`, false, "use tryAs"},              // P13
+		{`[1] xs! {a: @xs} as {a: [int | str]} drop`, false, "needs evidence"}, // H3
+		{`{url: "x"} as {url: str, timeout?: int} drop`, true, ""},
+		{`[] as [str] drop`, true, ""},
+		{`1 as int | str x!  "a" x!`, true, ""},
+		{`[1] as [int | str] xs!  ["a"] xs!`, true, ""},
+		{`["a"] ys! [1] as [int | str] xs!  @ys xs!`, false, "variable 'xs' has type [int | str]"},
+		// Format strings.
+		{`5 n! $"n is {@n}" wl`, true, ""},
+		{`[1] l! $"l is {@l}" wl`, false, "expected int | str | path"},
+
 		// Unions of distinct kinds only.
 		{`def f ([int] | [str] -- ) drop end`, false, "two members of the same kind"},
 		{`def f (int | [str] -- ) drop end`, true, ""},

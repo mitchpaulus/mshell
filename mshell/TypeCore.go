@@ -389,9 +389,9 @@ func (c *coreChecker) step(item MShellParseItem) {
 	case *MShellGetter:
 		c.unsupported(it.Token, "getters")
 	case *MShellParseFormatString:
-		c.unsupported(it.GetStartToken(), "format strings")
+		c.formatString(it)
 	case *MShellAsCast:
-		c.unsupported(it.AsToken, "as")
+		c.ascribe(it)
 	default:
 		c.unsupported(item.GetStartToken(), fmt.Sprintf("%T", item))
 	}
@@ -1016,6 +1016,60 @@ func (c *coreChecker) listOfImmutable(t TypeId) bool {
 func (c *coreChecker) mismatch(tok Token, i int, want, got TypeId) {
 	c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: tok,
 		Expected: c.subst.Apply(c.arena, want), Actual: c.subst.Apply(c.arena, got), ArgIndex: i})
+}
+
+// ascribe checks `as T` (design doc, "Freshness"): the value must be below
+// T, or, when it is fresh, retypable to T. The slot keeps its fresh mark.
+func (c *coreChecker) ascribe(a *MShellAsCast) {
+	target := c.res.resolveType(a.Target)
+	c.takeResolveErrors()
+	if target == TidNothing || !c.need(1, a.AsToken) {
+		return
+	}
+	c.forceTop(1)
+	s := &c.stack[len(c.stack)-1]
+	if !c.check(*s, target) {
+		got := c.subst.Apply(c.arena, s.t)
+		hint := "'as' needs evidence: " + c.format(got) + " is not below " + c.format(target)
+		if !s.fresh && !c.rel.Immutable(got) && c.rel.Retype(got, target) {
+			hint += "; a shared value keeps its type, so make a new one first with deepCopy"
+		} else {
+			hint += "; to check data from outside, use tryAs"
+		}
+		c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: a.AsToken, Hint: hint})
+	}
+	c.stack[len(c.stack)-1].t = target
+}
+
+// formatString checks a format string: each interpolation runs on its own
+// stack and leaves one str, path or int; break and continue cannot leave
+// it.
+func (c *coreChecker) formatString(fs *MShellParseFormatString) {
+	brk, cont := c.brk, c.cont
+	c.brk, c.cont = coreLoopCtx{}, coreLoopCtx{}
+	allowed := c.arena.MakeUnion([]TypeId{TidStr, TidPath, TidInt}, NameNone)
+	for i, items := range fs.Interpolations {
+		start, outerFloor := c.child(items)
+		c.floor = outerFloor
+		if c.diverged || c.abandoned {
+			break
+		}
+		if len(c.stack)-start != 1 {
+			c.errs = append(c.errs, TypeError{Kind: TErrChildStack, Pos: fs.InterpolationStart(i),
+				Hint: "a format-string interpolation must leave exactly one value, but this one leaves " + strconv.Itoa(len(c.stack)-start)})
+			c.abandoned = true
+			break
+		}
+		c.forceTop(1)
+		if v := c.stack[start]; !c.check(v, allowed) {
+			c.mismatch(fs.InterpolationStart(i), 0, allowed, v.t)
+		}
+		c.stack = c.stack[:start]
+	}
+	c.brk, c.cont = brk, cont
+	if !c.diverged && !c.abandoned {
+		c.push(TidStr, true)
+	}
 }
 
 // ---------------------------------------------------------------------------
