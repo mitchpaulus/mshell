@@ -92,6 +92,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `and` and `or` with a quote give an error, not a crash, when the left value is not a `bool`.
   A `break` in the quote no longer drops a value from the stack.
 - `mod` with a top value that is not a number gives an error. It used to drop both values silently.
+- `parseCsv` and `parseHtml` give an error, not a crash, on input that is not a string or path.
 
 ### Added
 

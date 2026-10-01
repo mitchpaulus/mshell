@@ -9581,6 +9581,8 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					case MShellString:
 						// Create a new CSV reader directly from the string contents
 						reader = csv.NewReader(strings.NewReader(obj1Typed.Content))
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot parse a %s as CSV.\n", t.Line, t.Column, obj1.TypeName()))
 					}
 					reader.FieldsPerRecord = -1
 
@@ -10639,6 +10641,8 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					case MShellString:
 						// Create a new HTML reader directly from the string contents
 						reader = strings.NewReader(obj1Typed.Content)
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot parse a %s as HTML.\n", t.Line, t.Column, obj1.TypeName()))
 					}
 
 					// Parse file with html.Parse
