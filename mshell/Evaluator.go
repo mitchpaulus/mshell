@@ -10044,6 +10044,10 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: The number of decimal places parameter in toFixed is not an integer. Found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
 					}
 
+					if obj1Int.Value < 0 {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The number of decimal places in toFixed cannot be negative. Found %d.\n", t.Line, t.Column, obj1Int.Value))
+					}
+
 					if !obj2.IsNumeric() {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: For '%s', cannot convert a %s (%s) to a number.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj2.DebugString()))
 					}
