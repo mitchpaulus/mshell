@@ -7051,6 +7051,8 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						default:
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot mod a %s by a float. Use 'toFloat' / 'toInt' to convert explicitly — 'mod' does not coerce numeric types.\n", t.Line, t.Column, obj2.TypeName()))
 						}
+					default:
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do a 'mod' operation between a %s and a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
 					}
 				case "basename", "dirname", "ext", "stem":
 					obj1, err := stack.Pop()

@@ -91,6 +91,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The file used to be closed before the definition ran.
 - `and` and `or` with a quote give an error, not a crash, when the left value is not a `bool`.
   A `break` in the quote no longer drops a value from the stack.
+- `mod` with a top value that is not a number gives an error. It used to drop both values silently.
 
 ### Added
 
