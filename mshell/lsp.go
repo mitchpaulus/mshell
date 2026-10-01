@@ -42,6 +42,8 @@ type lspServer struct {
 	envNames     map[string]struct{}
 	candsBuf     []string
 	stdlibDefs   []MShellDefinition
+	// startupDecls are the startup files' `type` and `enum` declarations.
+	startupDecls []MShellParseItem
 	checkerBase     *CheckerBase // built from stdlibDefs on first use; see newChecker
 	checkerBaseOnce sync.Once
 	// coreBase is the core checker's base, used instead when MSH_CHECKER
@@ -141,10 +143,10 @@ func RunLSP(in io.Reader, out io.Writer) error {
 		envNames:  make(map[string]struct{}),
 	}
 
-	if defs, err := loadStdlibDefsForLSP(); err != nil {
+	if defs, decls, err := loadStartupForLSP(); err != nil {
 		logLSP(fmt.Sprintf("type-check diagnostics: stdlib unavailable (%v); proceeding without stdlib sigs", err))
 	} else {
-		server.stdlibDefs = defs
+		server.stdlibDefs, server.startupDecls = defs, decls
 	}
 
 	server.builtinSigs, server.stdlibHover = buildHoverIndex(server.stdlibDefs)
@@ -184,27 +186,37 @@ func buildHoverIndex(stdlibDefs []MShellDefinition) (map[string][]string, map[st
 	return builtinSigs, stdlibHover
 }
 
-// loadStdlibDefsForLSP locates the standard library file (honoring
-// MSHSTDLIB if set, else the version-keyed install path), parses it,
-// and returns its definitions. The bodies are not evaluated; we only
-// need the signatures to register as builtins for the type-checker.
-func loadStdlibDefsForLSP() ([]MShellDefinition, error) {
-	stdlibSpec, _, err := getStartupFileSpecs(startupLoadOptions{
+// loadStartupForLSP reads the startup files for their definitions and
+// declarations, as a script run from the command line sees them: the
+// standard library (honoring MSHSTDLIB), and the user's init file (honoring
+// MSHINIT) if it is there and parses. Bodies are not evaluated; the checker
+// needs only the signatures and declarations.
+func loadStartupForLSP() ([]MShellDefinition, []MShellParseItem, error) {
+	stdlibSpec, initSpec, err := getStartupFileSpecs(startupLoadOptions{
 		version:           mshellVersion,
 		allowEnvOverrides: true,
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	source, err := os.ReadFile(stdlibSpec.path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	parsed, err := parseMShellInput(string(source), &TokenFile{stdlibSpec.path})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return parsed.Definitions, nil
+	defs, decls := parsed.Definitions, declarationItems(parsed.Items)
+	if source, err := os.ReadFile(initSpec.path); err == nil {
+		if parsed, err := parseMShellInput(string(source), &TokenFile{initSpec.path}); err == nil {
+			defs = append(defs, parsed.Definitions...)
+			decls = append(decls, declarationItems(parsed.Items)...)
+		} else {
+			logLSP(fmt.Sprintf("init file %s does not parse (%v); proceeding without it", initSpec.path, err))
+		}
+	}
+	return defs, decls, nil
 }
 
 func (s *lspServer) run() error {
@@ -826,7 +838,7 @@ func useCoreChecker() bool {
 
 // coreErrors checks file with the core checker.
 func (s *lspServer) coreErrors(file *MShellFile) ([]TypeError, *TypeArena, *NameTable) {
-	s.coreBaseOnce.Do(func() { s.coreBase = NewCoreBase(s.stdlibDefs) })
+	s.coreBaseOnce.Do(func() { s.coreBase = NewCoreBase(s.stdlibDefs, s.startupDecls) })
 	return s.coreBase.Errors(file)
 }
 

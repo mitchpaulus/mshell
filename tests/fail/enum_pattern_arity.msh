@@ -1,0 +1,3 @@
+# A member pattern names one value per payload.
+enum Shape = circle float | dot end
+2.0 circle match circle a b : @a str wl, dot : end

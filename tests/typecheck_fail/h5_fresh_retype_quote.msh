@@ -1,0 +1,4 @@
+# H5: a new F[int] holds a quote, and a quote is never retyped by more than
+# <=, so it cannot become F[int | str]: (1 +) would be called with a string.
+enum F[a] = f (a -- a) end
+(1 +) f as F[int | str] drop

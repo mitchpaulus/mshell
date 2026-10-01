@@ -618,6 +618,23 @@ func (parser *MShellParser) parseTypeNamed(errs *[]TypeError) MShellParseItem {
 	node := &TypeNamed{Tok: tok, Name: tok.Lexeme}
 	if tok.Lexeme == "Maybe" {
 		parser.applyMaybeArgs(node, errs)
+	} else if parser.curr.Type == LEFT_SQUARE_BRACKET && parser.curr.Start == tok.Start+len(tok.Lexeme) {
+		// Arguments of a generic enum, written against the name: `Box[int]`,
+		// `Pair[int str]`. `Foo [int]` with a space is a name and then a list.
+		parser.NextToken() // consume [
+		for parser.curr.Type != RIGHT_SQUARE_BRACKET && parser.curr.Type != EOF {
+			arg, subErrs := parser.parseTypeExpr()
+			*errs = append(*errs, subErrs...)
+			node.Args = append(node.Args, arg)
+		}
+		if parser.curr.Type != RIGHT_SQUARE_BRACKET {
+			*errs = append(*errs, TypeError{Kind: TErrTypeParse, Pos: parser.curr, Hint: "expected ']' to close the arguments of " + tok.Lexeme})
+		} else {
+			parser.NextToken()
+		}
+		if len(node.Args) == 0 {
+			*errs = append(*errs, TypeError{Kind: TErrTypeParse, Pos: tok, Hint: tok.Lexeme + "[] has no arguments; leave the brackets out"})
+		}
 	}
 	return node
 }

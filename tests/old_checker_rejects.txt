@@ -9,3 +9,9 @@ kind_pattern_union_write.msh
 never_quote_argument.msh
 new_output_recursive.msh
 slice_fresh_widen.msh
+enum_basic.msh
+enum_recursive.msh
+enum_generic.msh
+alias_recursive.msh
+enum_deep_copy.msh
+recursive_types.msh

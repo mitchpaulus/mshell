@@ -164,3 +164,29 @@ func BenchmarkDeepCopyStrList(b *testing.B) {
 		}
 	}
 }
+
+// An enum value with shared subtrees and no list inside is shared, not
+// copied once per path (2^40 paths here).
+func TestDeepCopyEnumSharedSubtrees(t *testing.T) {
+	var v MShellObject = &MShellEnum{EnumName: "T", Member: "leaf", Payload: []MShellObject{MShellInt{Value: 1}}}
+	for i := 0; i < 40; i++ {
+		v = &MShellEnum{EnumName: "T", Member: "node", MemberIndex: 1, Payload: []MShellObject{v, v}}
+	}
+	out, err := DeepCopy(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != v {
+		t.Fatal("an enum value with nothing to copy was copied")
+	}
+	// One that holds a list is copied.
+	l := intList(1)
+	b := &MShellEnum{EnumName: "Box", Member: "box", Payload: []MShellObject{l}}
+	out, err = DeepCopy(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ob := out.(*MShellEnum); ob == b || ob.Payload[0] == l {
+		t.Fatal("the list in a box was not copied")
+	}
+}

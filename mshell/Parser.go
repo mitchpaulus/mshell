@@ -576,6 +576,8 @@ func (m *MShellParseMatchBlock) DebugString() string {
 type MShellDefinition struct {
 	Name      string
 	NameToken Token
+	// File is the file the definition is in, or nil (standard input).
+	File      *TokenFile
 	Items     []MShellParseItem
 	Inputs    []MShellParseItem // type-expression AST for signature inputs
 	Outputs   []MShellParseItem // type-expression AST for signature outputs
@@ -779,7 +781,7 @@ func itemsMayUseVariables(items []MShellParseItem) bool {
 					return true
 				}
 			}
-		case *MShellGetter, *MShellTypeDecl, *MShellAsCast:
+		case *MShellGetter, *MShellTypeDecl, *MShellEnumDecl, *MShellAsCast:
 		default:
 			// Quotations capture the map, match arms and varstore lists
 			// store into it, and indexing a quotation builds one.
@@ -1014,7 +1016,7 @@ func (parser *MShellParser) ParseFile() (file *MShellFile, err error) {
 		}
 
 		nameToken := parser.curr
-		def := MShellDefinition{Name: parser.curr.Lexeme, NameToken: nameToken, Items: []MShellParseItem{}}
+		def := MShellDefinition{Name: parser.curr.Lexeme, NameToken: nameToken, File: parser.lexer.tokenFile, Items: []MShellParseItem{}}
 		_ = parser.Match(parser.curr, LITERAL)
 
 		if parser.curr.Type == LEFT_CURLY {
@@ -1056,6 +1058,12 @@ func (parser *MShellParser) ParseFile() (file *MShellFile, err error) {
 			// parser.ParseDefinition()
 		case TYPE:
 			decl, err := parser.ParseTypeDecl()
+			if err != nil {
+				return file, err
+			}
+			file.Items = append(file.Items, decl)
+		case ENUM:
+			decl, err := parser.ParseEnumDecl()
 			if err != nil {
 				return file, err
 			}
@@ -1444,6 +1452,8 @@ func (parser *MShellParser) ParseItem() (MShellParseItem, error) {
 		return parser.ParsePrefixQuote()
 	case AS:
 		return parser.ParseAsCast()
+	case ENUM:
+		return nil, fmt.Errorf("%d:%d: An enum is declared at the top level of a file, not inside a definition, list or quotation.", parser.curr.Line, parser.curr.Column)
 	case FORMATSTRINGSTART:
 		return parser.ParseFormatString()
 	case FORMATSTRINGMID, FORMATSTRINGEND:
@@ -2170,6 +2180,18 @@ func validateStructuralBindingPattern(pattern []MShellParseItem, requireBinding 
 			}
 			if requireBinding && len(bindings) == 0 {
 				return fmt.Errorf("%d:%d: Assertive destructuring must bind at least one variable.", first.Line, first.Column)
+			}
+		}
+		return nil
+	}
+
+	if len(pattern) > 2 {
+		// An enum member and its payload bindings: `pair a b`.
+		for _, item := range pattern[1:] {
+			if tok, ok := item.(Token); ok && tok.Type == LITERAL {
+				if err := addBinding(tok, tok.Lexeme); err != nil {
+					return err
+				}
 			}
 		}
 		return nil

@@ -482,6 +482,224 @@ type EvalState struct {
 
 	// Numeric date order (m/d/y vs d/m/y vs y/m/d) learned from the first unambiguous toDt.
 	DateOrder DateOrder
+
+	// EnumMembers and EnumNames hold the declared enums (RegisterEnums).
+	EnumMembers map[string]EnumMemberInfo
+	EnumNames   map[string]bool
+	// StartupDecls are the `type` and `enum` declarations of the startup
+	// files, which the type checker sees as the script's own.
+	StartupDecls []MShellParseItem
+}
+
+// declarationItems returns the `type` and `enum` declarations among items.
+func declarationItems(items []MShellParseItem) []MShellParseItem {
+	var out []MShellParseItem
+	for _, item := range items {
+		switch item.(type) {
+		case *MShellTypeDecl, *MShellEnumDecl:
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+// EnumMemberInfo is what the runtime knows about one enum member: its enum,
+// how many payload values its constructor takes, and its position in the
+// declaration.
+type EnumMemberInfo struct {
+	EnumName string
+	Arity    int
+	Ordinal  int
+}
+
+// patternWords are the words a match pattern gives a meaning of their own;
+// an enum member with one of these names could not be matched.
+var patternWords = map[string]bool{
+	"_": true, "just": true, "none": true, "null": true, "list": true, "dict": true,
+	"path": true, "date": true, "quotation": true, "maybe": true, "binary": true,
+	"Maybe": true, "Json": true, "HtmlNode": true,
+}
+
+// RegisterEnums records the enum declarations among items, so a member's
+// name constructs its value and an enum's name is a pattern. An enum or
+// member declared twice, or named like a builtin, a pattern word, an enum or
+// one of defs, is an error, and then nothing from items is recorded.
+func (state *EvalState) RegisterEnums(items []MShellParseItem, defs []MShellDefinition) error {
+	names := make(map[string]Token)
+	for i := range defs {
+		if _, ok := names[defs[i].Name]; !ok {
+			names[defs[i].Name] = withFile(defs[i].NameToken, defs[i].File)
+		}
+	}
+	for _, item := range items {
+		d, ok := item.(*MShellEnumDecl)
+		if !ok {
+			continue
+		}
+		taken := func(tok Token) error {
+			name := tok.Lexeme
+			if prev, ok := names[name]; ok {
+				return fmt.Errorf("%s: '%s' is already declared or defined at %s.\n", tokenPosStr(tok), name, tokenPosStr(prev))
+			}
+			if state.EnumNames[name] {
+				return fmt.Errorf("%s: '%s' is already declared as an enum.\n", tokenPosStr(tok), name)
+			}
+			if info, ok := state.EnumMembers[name]; ok {
+				return fmt.Errorf("%s: '%s' is already declared as a member of enum '%s'.\n", tokenPosStr(tok), name, info.EnumName)
+			}
+			if _, ok := BuiltInList[name]; ok {
+				return fmt.Errorf("%s: '%s' is the name of a builtin.\n", tokenPosStr(tok), name)
+			}
+			if patternWords[name] {
+				return fmt.Errorf("%s: '%s' has a meaning of its own in match patterns.\n", tokenPosStr(tok), name)
+			}
+			names[name] = tok
+			return nil
+		}
+		if err := taken(withFile(d.NameToken, d.File)); err != nil {
+			return err
+		}
+		for _, m := range d.MemberToks {
+			if err := taken(withFile(m, d.File)); err != nil {
+				return err
+			}
+		}
+	}
+	for _, item := range items {
+		d, ok := item.(*MShellEnumDecl)
+		if !ok {
+			continue
+		}
+		if state.EnumMembers == nil {
+			state.EnumMembers = make(map[string]EnumMemberInfo)
+			state.EnumNames = make(map[string]bool)
+		}
+		state.EnumNames[d.Name] = true
+		for i, m := range d.Members {
+			state.EnumMembers[m] = EnumMemberInfo{EnumName: d.Name, Arity: len(d.MemberPayloads[i]), Ordinal: i}
+		}
+	}
+	return nil
+}
+
+// CheckDefinitionNames reports the first definition among added whose name
+// is taken: by an earlier definition (in existing, or earlier in added), a
+// builtin, or an enum member. Names do not shadow each other (design doc,
+// "Names"); without this a later definition would be silently ignored, since
+// the first one with a name is the one that runs.
+func (state *EvalState) CheckDefinitionNames(existing, added []MShellDefinition) error {
+	seen := make(map[string]Token, len(existing)+len(added))
+	for i := range existing {
+		if _, ok := seen[existing[i].Name]; !ok {
+			seen[existing[i].Name] = withFile(existing[i].NameToken, existing[i].File)
+		}
+	}
+	for i := range added {
+		def := &added[i]
+		at := withFile(def.NameToken, def.File)
+		if prev, ok := seen[def.Name]; ok {
+			return fmt.Errorf("%s: '%s' is already defined at %s.\n", tokenPosStr(at), def.Name, tokenPosStr(prev))
+		}
+		if _, ok := BuiltInList[def.Name]; ok {
+			return fmt.Errorf("%s: '%s' is the name of a builtin.\n", tokenPosStr(at), def.Name)
+		}
+		if info, ok := state.EnumMembers[def.Name]; ok {
+			return fmt.Errorf("%s: '%s' is a member of enum '%s'.\n", tokenPosStr(at), def.Name, info.EnumName)
+		}
+		seen[def.Name] = at
+	}
+	return nil
+}
+
+// tokenPosStr is a token's position for a message: `path:line:col`, or
+// `line:col` when the token has no file (standard input).
+func tokenPosStr(t Token) string {
+	return tokenPos(t)
+}
+
+// withFile is tok with its file set, for a message that names where it is.
+func withFile(tok Token, file *TokenFile) Token {
+	tok.TokenFile = file
+	return tok
+}
+
+func tokenPos(t Token) string {
+	if t.TokenFile != nil && t.TokenFile.Path != "" {
+		return fmt.Sprintf("%s:%d:%d", t.TokenFile.Path, t.Line, t.Column)
+	}
+	return fmt.Sprintf("%d:%d", t.Line, t.Column)
+}
+
+// constructEnum runs a member's constructor: it takes the payload values
+// from the stack and pushes the enum value.
+func (state *EvalState) constructEnum(t *Token, info EnumMemberInfo, stack *MShellStack) *EvalResult {
+	var payload []MShellObject
+	if info.Arity > 0 {
+		if len(*stack) < info.Arity {
+			return state.failPtr(fmt.Sprintf("%d:%d: '%s' takes %d value(s) from the stack.\n", t.Line, t.Column, t.Lexeme, info.Arity))
+		}
+		payload = make([]MShellObject, info.Arity)
+		for i := info.Arity - 1; i >= 0; i-- {
+			payload[i], _ = stack.Pop()
+		}
+	}
+	stack.Push(&MShellEnum{EnumName: info.EnumName, Member: t.Lexeme, MemberIndex: info.Ordinal, Payload: payload})
+	return nil
+}
+
+// matchEnumPattern matches a pattern that starts with an enum member or an
+// enum's name. A member pattern (`circle r`, `empty`) matches that member and
+// binds its payloads; an enum's name (`Shape`, `Shape s`) matches any value
+// of that enum and binds the value. handled is false when the pattern's first
+// word is neither.
+func (state *EvalState) matchEnumPattern(pattern []MShellParseItem, subject MShellObject) (handled bool, matched bool, bindings map[string]MShellObject, result EvalResult) {
+	first, ok := pattern[0].(Token)
+	if !ok || first.Type != LITERAL {
+		return false, false, nil, SimpleSuccess()
+	}
+	info, isMember := state.EnumMembers[first.Lexeme]
+	if !isMember && !state.EnumNames[first.Lexeme] {
+		return false, false, nil, SimpleSuccess()
+	}
+	binds := pattern[1:]
+	for _, b := range binds {
+		bt, ok := b.(Token)
+		if !ok || bt.Type != LITERAL {
+			start := b.GetStartToken()
+			return true, false, nil, state.FailWithMessage(fmt.Sprintf("%d:%d: '%s' in a pattern is followed by names to bind, not '%s'.\n", start.Line, start.Column, first.Lexeme, start.Lexeme))
+		}
+	}
+	value, isEnum := subject.(*MShellEnum)
+	if isMember {
+		if len(binds) != info.Arity {
+			return true, false, nil, state.FailWithMessage(fmt.Sprintf("%d:%d: '%s' has %d payload value(s), and the pattern binds %d.\n", first.Line, first.Column, first.Lexeme, info.Arity, len(binds)))
+		}
+		if !isEnum || value.Member != first.Lexeme {
+			return true, false, nil, SimpleSuccess()
+		}
+		bindings = make(map[string]MShellObject, len(binds))
+		for i, b := range binds {
+			if name := b.(Token).Lexeme; name != "_" {
+				bindings[name] = value.Payload[i]
+			}
+		}
+		return true, true, bindings, SimpleSuccess()
+	}
+	if state.EnumNames[first.Lexeme] {
+		if len(binds) > 1 {
+			return true, false, nil, state.FailWithMessage(fmt.Sprintf("%d:%d: The pattern '%s' binds one name, the value.\n", first.Line, first.Column, first.Lexeme))
+		}
+		if !isEnum || value.EnumName != first.Lexeme {
+			return true, false, nil, SimpleSuccess()
+		}
+		if len(binds) == 1 {
+			if name := binds[0].(Token).Lexeme; name != "_" {
+				bindings = map[string]MShellObject{name: subject}
+			}
+		}
+		return true, true, bindings, SimpleSuccess()
+	}
+	return false, false, nil, SimpleSuccess()
 }
 
 func (state *EvalState) EnvironmentHistory() *EnvironmentHistory {
@@ -1215,6 +1433,9 @@ func (state *EvalState) processToken(token MShellParseItem, frame *EvaluationFra
 		if def, ok := state.lookupDefinition(frame.Definitions, funcToken.Lexeme); ok {
 			return state.callDefinition(def, t, frame)
 		}
+		if info, ok := state.EnumMembers[funcToken.Lexeme]; ok {
+			return state.constructEnum(&funcToken, info, stack)
+		}
 		callStackItem := CallStackItem{MShellParseItem: nil, Name: "literal", CallStackType: frame.CallStackItem.CallStackType}
 		return nilIfNothingToDo(state.evaluateBuiltinToken(funcToken, stack, frame.Context, frame.Definitions, callStackItem))
 
@@ -1235,6 +1456,10 @@ func (state *EvalState) processToken(token MShellParseItem, frame *EvaluationFra
 
 	case *MShellTypeDecl:
 		// Static-only: type declarations have no runtime effect by design.
+		return nil
+
+	case *MShellEnumDecl:
+		// Enums are recorded before the code runs (RegisterEnums).
 		return nil
 
 	case *MShellAsCast:
@@ -1397,6 +1622,11 @@ func (state *EvalState) emptyMatchSubjectFailure(matchBlock *MShellParseMatchBlo
 // matchPattern checks if a subject matches a pattern (list of parse items).
 // Returns (matched bool, bindings map, result EvalResult).
 func (state *EvalState) matchPattern(pattern []MShellParseItem, subject MShellObject, startToken Token) (bool, map[string]MShellObject, EvalResult) {
+	if state.EnumMembers != nil {
+		if handled, matched, bindings, result := state.matchEnumPattern(pattern, subject); handled {
+			return matched, bindings, result
+		}
+	}
 	// Handle multi-token patterns (e.g., "just v" for maybe destructuring,
 	// or "<typekeyword> name" for type-test binding).
 	if len(pattern) == 2 {
@@ -1749,6 +1979,9 @@ func (state *EvalState) processTokenToken(item MShellParseItem, t *Token, frame 
 		}
 		if def, ok := state.lookupDefinition(frame.Definitions, t.Lexeme); ok {
 			return state.callDefinition(def, item, frame)
+		}
+		if info, ok := state.EnumMembers[t.Lexeme]; ok {
+			return state.constructEnum(t, info, frame.Stack)
 		}
 		return nilIfNothingToDo(state.evaluateBuiltinToken(*t, frame.Stack, frame.Context, frame.Definitions, frame.CallStackItem))
 
@@ -4462,6 +4695,65 @@ func VersionSortComparer(a_str string, b_str string) int {
 	}
 }
 
+// decodeJson parses JSON text, keeping numbers as their text (json.Number),
+// so ParseJsonObjToMshell can tell an integer from a float.
+func decodeJson(data []byte) (any, error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	var v any
+	err := dec.Decode(&v)
+	if err == nil && jsonNumbersInRange(v) {
+		if _, next := dec.Token(); next == io.EOF {
+			return v, nil
+		}
+	}
+	// Not one JSON value: report it as Unmarshal does.
+	var discard any
+	if err := json.Unmarshal(data, &discard); err != nil {
+		return nil, err
+	}
+	if err == nil {
+		err = fmt.Errorf("unexpected data after the JSON value")
+	}
+	return nil, err
+}
+
+// jsonNumbersInRange reports whether every number in v fits in a float, as
+// json.Unmarshal requires (`1e400` does not).
+func jsonNumbersInRange(v any) bool {
+	switch o := v.(type) {
+	case json.Number:
+		_, err := o.Float64()
+		return err == nil
+	case []any:
+		for _, x := range o {
+			if !jsonNumbersInRange(x) {
+				return false
+			}
+		}
+	case map[string]any:
+		for _, x := range o {
+			if !jsonNumbersInRange(x) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// jsonNumber converts a JSON number: an integer (no fraction, no exponent)
+// that fits in an int is an int, and anything else is a float (design doc,
+// "JSON").
+func jsonNumber(n json.Number) MShellObject {
+	if !strings.ContainsAny(string(n), ".eE") {
+		if i, err := strconv.ParseInt(string(n), 10, 64); err == nil {
+			return MShellInt{int(i)}
+		}
+	}
+	f, _ := n.Float64()
+	return MShellFloat{f}
+}
+
 func ParseJsonObjToMshell(jsonObj any) MShellObject {
 	// See https://pkg.go.dev/encoding/json#Unmarshal
 	switch o := jsonObj.(type) {
@@ -4483,6 +4775,8 @@ func ParseJsonObjToMshell(jsonObj any) MShellObject {
 
 	case string:
 		return MShellString{o}
+	case json.Number:
+		return jsonNumber(o)
 	case float64:
 		return MShellFloat{o}
 	case bool:
@@ -9663,8 +9957,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot parse a %s as JSON.\n", t.Line, t.Column, obj1.TypeName()))
 					}
 
-					var parsedData any
-					err = json.Unmarshal(jsonData, &parsedData)
+					parsedData, err := decodeJson(jsonData)
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Error parsing JSON: %s\n", t.Line, t.Column, err.Error()))
 					}
@@ -9704,7 +9997,10 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'toJson' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
-					jsonStr := obj1.ToJson()
+					jsonStr, err := renderOrError(obj1, flavorJson)
+					if err != nil {
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: %s", t.Line, t.Column, err.Error()))
+					}
 					stack.Push(MShellString{jsonStr})
 				case "typeof":
 					obj1, err := stack.Pop()
@@ -12220,7 +12516,11 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot convert an empty stack to a string.\n", t.Line, t.Column))
 				}
 
-				stack.Push(MShellString{obj.ToString()})
+				strVal, err := renderOrError(obj, flavorStr)
+				if err != nil {
+					return state.FailWithMessage(fmt.Sprintf("%d:%d: %s", t.Line, t.Column, err.Error()))
+				}
+				stack.Push(MShellString{strVal})
 			} else if t.Type == INDEXER { // Token Type
 				obj1, err := stack.Pop()
 				if err != nil {

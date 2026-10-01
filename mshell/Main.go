@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	// "bufio"
 	"golang.org/x/term"
+	"slices"
 	"strings"
 	// "runtime/pprof"
 	// "runtime/trace"
@@ -180,8 +181,16 @@ func loadStartupFile(path string, description string, stack *MShellStack, contex
 		return fmt.Errorf("error parsing %s at %s: %w", description, path, err)
 	}
 
+	// Definitions first: a failed enum registration then records nothing.
+	if err := state.CheckDefinitionNames(*definitions, parsedFile.Definitions); err != nil {
+		return fmt.Errorf("error loading %s at %s: %s", description, path, strings.TrimSpace(err.Error()))
+	}
+	if err := state.RegisterEnums(parsedFile.Items, append(slices.Clone(*definitions), parsedFile.Definitions...)); err != nil {
+		return fmt.Errorf("error loading %s at %s: %s", description, path, strings.TrimSpace(err.Error()))
+	}
 	*definitions = append(*definitions, parsedFile.Definitions...)
 	state.AddCompletionDefinitions(parsedFile.Definitions)
+	state.StartupDecls = append(state.StartupDecls, declarationItems(parsedFile.Items)...)
 
 	if len(parsedFile.Items) > 0 {
 		callStackItem := CallStackItem{
@@ -853,19 +862,29 @@ func main() {
 		os.Exit(1)
 		return
 	}
+	if err := state.CheckDefinitionNames(startupDefinitions, file.Definitions); err != nil {
+		fmt.Fprint(os.Stderr, err.Error())
+		os.Exit(1)
+	}
+	if err := state.RegisterEnums(file.Items, append(slices.Clone(startupDefinitions), file.Definitions...)); err != nil {
+		fmt.Fprint(os.Stderr, err.Error())
+		os.Exit(1)
+	}
 	allDefinitions = append(allDefinitions, startupDefinitions...)
 	allDefinitions = append(allDefinitions, file.Definitions...)
 	state.AddCompletionDefinitions(file.Definitions)
 
 	if checkTypes {
-		check := TypeCheckProgram
+		var errs []string
+		var ok bool
 		// MSH_CHECKER=core selects the checker being built beside the
 		// current one (ai/type-system-plan.md, stage 3). Not documented
 		// for users until it replaces the current checker.
 		if os.Getenv("MSH_CHECKER") == "core" {
-			check = CoreTypeCheckProgram
+			errs, ok = CoreTypeCheckProgram(file, startupDefinitions, state.StartupDecls)
+		} else {
+			errs, ok = TypeCheckProgram(file, startupDefinitions)
 		}
-		errs, ok := check(file, startupDefinitions)
 		if !ok {
 			for _, e := range errs {
 				fmt.Fprintln(os.Stderr, e)
@@ -3807,6 +3826,18 @@ ParseError:
 	// During evaluation, normal terminal output can happen, or TUI apps can be run.
 	// So want them to see non-raw mode terminal state.
 	state.leaveRawMode()
+
+	// An enum declared on this line constructs values on later lines.
+	// Definitions first: a failed enum registration then records nothing,
+	// so the corrected line can be entered again.
+	if err := state.evalState.CheckDefinitionNames(state.stdLibDefs, parsed.Definitions); err != nil {
+		fmt.Fprint(os.Stderr, terminalSafeText(err.Error(), true))
+		goto PromptPrint
+	}
+	if err := state.evalState.RegisterEnums(parsed.Items, append(slices.Clone(state.stdLibDefs), parsed.Definitions...)); err != nil {
+		fmt.Fprint(os.Stderr, terminalSafeText(err.Error(), true))
+		goto PromptPrint
+	}
 
 	if len(parsed.Definitions) > 0 {
 		state.stdLibDefs = append(state.stdLibDefs, parsed.Definitions...)

@@ -184,6 +184,12 @@ The equivalent type-expression spelling is <code>{str: int}</code>.
 The wildcard spelling <code>{ *: int }</code> is also accepted in definition signatures and has the same practical meaning.
 </p>
 
+<p>
+In a definition signature, <code>dict</code> is short for <code>{str: T}</code> and <code>list</code> for <code>[T]</code>, each with a new generic <code>T</code> of its own.
+So <code>def size (dict -- int)</code> takes a string-keyed dictionary with any one value type.
+Outside a signature, write the full form.
+</p>
+
 <h2 id="type-system-dictionary-shapes">Dictionary Shapes <a class="section-link" href="#type-system-dictionary-shapes" aria-label="Permalink">§</a></h2>
 
 <p>

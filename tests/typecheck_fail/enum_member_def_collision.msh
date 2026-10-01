@@ -1,0 +1,4 @@
+# Names do not shadow: a member and a def cannot share a name.
+enum Shape = circle float | dot end
+def dot ( -- int) 1 end
+dot str wl

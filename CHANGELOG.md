@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Enums: `enum Shape = circle float | rect float float | dot end` declares a type whose values are one of its members.
+  A member's name makes a value from its payload (`2.0 circle`), and a `match` arm takes it apart (`circle r : ...`).
+  The enum's name is a match pattern for any of its members (`Shape s : ...`).
+  Enums may have parameters (`enum Box[a] = box [a] | empty end`) and may refer to themselves.
+  `str` gives `circle(2)`, `toJson` gives `{"circle": 2}`, and `=` compares the member and its payloads.
 - `del` removes a key from a dictionary: `{a: 1, b: 2} "a" del`. Nothing happens when the key is absent.
 - `deepCopy` copies a value, giving every list, dict and grid inside it a new object, so changing the copy never changes the original.
 - The file manager previews PNG, JPEG, and GIF images in terminals that support sixel graphics, such as Windows Terminal, WezTerm, foot, and xterm.
@@ -30,6 +35,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A name can be defined only once. A second definition of a name, in the script, the init file or the standard library,
+  is an error, as is a definition with the name of a builtin or an enum member.
+  Previously the first definition silently won, so a later one never ran.
+- `enum` is a keyword.
+- `parseJson` gives an `int` for a JSON number with no fraction or exponent, such as `30`, and a `float` for any other, such as `30.0` or `3e1`.
+  Previously every JSON number was a `float`.
 - Format string interpolations can hold any code: string literals, dictionaries, and nested format strings all work inside `{...}`.
   Interpolations are parsed once when the script is read, not each time the string is built,
   and errors inside them point at the right line and column.
@@ -69,6 +80,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A slice of a pipe (`@p 1:`) is a new list. Previously it shared storage with the pipe, so `setAt` or `append` on the slice could change the pipe.
 - `=` and `!=` on two `Maybe` values compare their contents. Previously every comparison of two `Maybe`s was false, including `none none =`.
+- `str` and `toJson` on a list or dict that contains itself are an error. Previously they crashed with a Go stack overflow or never finished.
+  Printing, `toJson` and `=` also work on values nested any number of levels deep,
+  and `=` finishes on dicts that contain themselves.
 - The type checker now checks list literals, dict values, and grid cells on their own empty stack, as they run.
   Code like `1 [drop]` or `1 {a: drop}` is a type error instead of a type checker crash or a pass that fails at runtime,
   and a dict value must produce exactly one value (#341).

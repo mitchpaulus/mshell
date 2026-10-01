@@ -244,7 +244,8 @@ Other types are not allowed. For strings, they must be quoted, they cannot be li
 Match against a type name.
 Supported type patterns: <code>int</code>, <code>float</code>, <code>str</code>, <code>bool</code>,
 <code>list</code>, <code>dict</code>, <code>path</code>, <code>date</code>,
-<code>quotation</code>, <code>maybe</code>, <code>binary</code>.
+<code>quotation</code>, <code>maybe</code>, <code>binary</code>,
+and the name of a declared <a href="#control-flow-enum-patterns"><code>enum</code></a>.
 </p>
 
 <pre>
@@ -308,6 +309,39 @@ The <code>just</code> pattern binds the inner value to a variable:
     <span class="mshellLITERAL">just</span> <span class="mshellLITERAL">_</span> : <span class="mshellSTRING">"just something"</span>,
     <span class="mshellLITERAL">none</span>   : <span class="mshellSTRING">"none"</span>,
 <span class="mshellEND">end</span> <span class="mshellLITERAL">wl</span> <span class="mshellLINECOMMENT"># Output: just something</span></code>
+</pre>
+
+<h2 id="control-flow-enum-patterns">Enum Patterns</h2>
+
+<p>
+A value of an <a href="data-types.html#data-type-enum"><code>enum</code></a> is matched by its member.
+A member pattern is the member's name, then a name for each payload value, or <code>_</code> to skip one.
+A match on an enum covers every member, or has a <code>_</code> arm.
+</p>
+
+<pre>
+<code><span class="mshellENUM">enum</span> <span class="mshellLITERAL">Shape</span> <span class="mshellEQUALS">=</span> <span class="mshellLITERAL">circle</span> <span class="mshellTYPEFLOAT">float</span> <span class="mshellPIPE">|</span> <span class="mshellLITERAL">rect</span> <span class="mshellTYPEFLOAT">float</span> <span class="mshellTYPEFLOAT">float</span> <span class="mshellPIPE">|</span> <span class="mshellLITERAL">dot</span> <span class="mshellEND">end</span>
+
+<span class="mshellFLOAT">1.5</span> <span class="mshellFLOAT">2.0</span> <span class="mshellLITERAL">rect</span> <span class="mshellMATCH">match</span>
+    <span class="mshellLITERAL">circle</span> <span class="mshellLITERAL">r</span> <span class="mshellCOLON">:</span> <span class="mshellVARRETRIEVE">@r</span><span class="mshellCOMMA">,</span>
+    <span class="mshellLITERAL">rect</span> <span class="mshellLITERAL">w</span> <span class="mshellLITERAL">_</span> <span class="mshellCOLON">:</span> <span class="mshellVARRETRIEVE">@w</span><span class="mshellCOMMA">,</span>
+    <span class="mshellLITERAL">dot</span> <span class="mshellCOLON">:</span> <span class="mshellFLOAT">0.0</span><span class="mshellCOMMA">,</span>
+<span class="mshellEND">end</span> <span class="mshellSTR">str</span> <span class="mshellLITERAL">wl</span> <span class="mshellLINECOMMENT"># 1.5</span></code>
+</pre>
+
+<p>
+The enum's own name is a pattern too: it matches any member of that enum.
+Like a type pattern, it may be followed by a name for the value.
+This is how an enum is picked out of a union:
+</p>
+
+<pre>
+<code><span class="mshellDEF">def</span> <span class="mshellLITERAL">describe</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellLITERAL">Shape</span> <span class="mshellPIPE">|</span> <span class="mshellTYPEINT">int</span> <span class="mshellDOUBLEDASH">--</span> <span class="mshellSTR">str</span><span class="mshellRIGHT_PAREN">)</span>
+    <span class="mshellMATCH">match</span>
+        <span class="mshellLITERAL">Shape</span> <span class="mshellLITERAL">s</span> <span class="mshellCOLON">:</span> <span class="mshellFORMATSTRINGSTART">$&#34;a shape: {</span><span class="mshellVARRETRIEVE">@s</span> <span class="mshellSTR">str</span><span class="mshellFORMATSTRINGEND">}&#34;</span><span class="mshellCOMMA">,</span>
+        <span class="mshellTYPEINT">int</span> <span class="mshellLITERAL">n</span> <span class="mshellCOLON">:</span> <span class="mshellFORMATSTRINGSTART">$&#34;the number {</span><span class="mshellVARRETRIEVE">@n</span> <span class="mshellSTR">str</span><span class="mshellFORMATSTRINGEND">}&#34;</span><span class="mshellCOMMA">,</span>
+    <span class="mshellEND">end</span>
+<span class="mshellEND">end</span></code>
 </pre>
 
 <h2>List Destructuring</h2>

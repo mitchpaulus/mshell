@@ -1,0 +1,1 @@
+6:5: deepCopy cannot copy a value that contains itself: the list at payload 0 of box contains itself through index 1, then payload 0 of box.

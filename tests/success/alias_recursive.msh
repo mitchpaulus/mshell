@@ -1,0 +1,13 @@
+# Recursive aliases.
+type Person = {name: str, age: int, friends: [Person]}
+{name: "a", age: 1, friends: [{name: "b", age: 2, friends: []}]} as Person p!
+@p :name? wl
+def friendCount (Person -- int) :friends? len end
+@p friendCount str wl
+
+# Json written with its members in another order is the same type.
+type J2 = {str: J2} | [J2] | str | float | int | bool | null
+def describe (J2 -- str) str end
+"[1, 2]" parseJson describe wl
+def describeAll ([J2] -- int) len end
+"[1, 2]" parseJson match list xs : @xs describeAll str wl, _ : "not a list" wl end

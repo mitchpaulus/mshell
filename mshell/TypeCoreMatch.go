@@ -1,6 +1,9 @@
 package main
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 // match in the core checker (ai/type-core-calculus.typ, "Unknown contents
 // are abstract types", "Enums", "Patterns and validation").
@@ -60,6 +63,12 @@ func (c *coreChecker) patternKind(tok Token) (valueKind, bool) {
 		case "binary":
 			return valueKind{code: uint32(TidBytes)}, true
 		}
+		// A declared enum's name tests for any of its members.
+		if id, ok := c.names.Lookup(tok.Lexeme); ok {
+			if idx, ok := c.res.enums[id]; ok {
+				return valueKind{code: kindEnum, enum: idx}, true
+			}
+		}
 	}
 	return valueKind{}, false
 }
@@ -107,28 +116,33 @@ func (c *coreChecker) memberOfKind(t TypeId, k valueKind) (m TypeId, found, unkn
 }
 
 // unknownOfKind is the type a kind pattern gives a value of unknown
-// contents, and the abstract type it introduces (or TidNothing).
-func (c *coreChecker) unknownOfKind(k valueKind) (t, abstract TypeId) {
+// contents, and the abstract types it introduces. An enum gets a new
+// abstract type per parameter: `E[unknown]` would be wrong for an invariant
+// parameter (tw_kind_enum, kind_enum_once in Escape.v).
+func (c *coreChecker) unknownOfKind(k valueKind) (t TypeId, abstracts []TypeId) {
 	switch k.code {
 	case kindList:
 		a := c.arena.MakeAbstract()
-		return c.arena.MakeList(a), a
+		return c.arena.MakeList(a), []TypeId{a}
 	case kindDict:
-		return c.arena.MakeRecord(nil, RecordField{Status: FieldOpen}), TidNothing
+		return c.arena.MakeRecord(nil, RecordField{Status: FieldOpen}), nil
 	case kindEnum:
-		a := c.arena.MakeAbstract()
-		return c.arena.MakeMaybeEnum(a), a
+		args := make([]TypeId, len(c.arena.EnumDecl(k.enum).Params))
+		for i := range args {
+			args[i] = c.arena.MakeAbstract()
+		}
+		return c.arena.MakeEnum(k.enum, args), args
 	case kindQuote:
-		return TidNothing, TidNothing
+		return TidNothing, nil
 	}
-	return TypeId(k.code), TidNothing
+	return TypeId(k.code), nil
 }
 
 // coreArm is what a pattern says about the subject in its arm.
 type coreArm struct {
-	subject  TypeId // the subject's type in the arm (TidBottom: never matches)
-	abstract TypeId // an abstract type the arm introduces, or TidNothing
-	binds    []coreBinding
+	subject   TypeId   // the subject's type in the arm (TidBottom: never matches)
+	abstracts []TypeId // the abstract types the arm introduces
+	binds     []coreBinding
 	all      bool       // matches every value
 	kind     valueKind  // the kind it covers, when kindOK
 	kindOK   bool
@@ -138,6 +152,10 @@ type coreArm struct {
 	// least length; -1 when the arm is not a list pattern.
 	listLen  int
 	listRest bool
+	// member is 1 + the position of the enum member a member pattern
+	// matches, in the enum memberEnum, or 0.
+	member     int
+	memberEnum uint32
 }
 
 type coreBinding struct {
@@ -186,6 +204,8 @@ func (c *coreChecker) matchBlock(m *MShellParseMatchBlock) {
 				c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: b.tok,
 					Hint: "'" + b.tok.Lexeme + "' would have a type known only inside this arm (" + c.format(b.t) +
 						"); keep the value on the stack with `:>` instead of binding it, or narrow it first with tryAs"})
+				// Every use of the name would be an error too.
+				c.abandoned = true
 				continue
 			}
 			c.push(b.t, false)
@@ -196,8 +216,8 @@ func (c *coreChecker) matchBlock(m *MShellParseMatchBlock) {
 			c.saved = c.saved[:mark]
 			return
 		}
-		if a.abstract != TidNothing {
-			c.recordEscape(a.abstract, tok, entry, below)
+		for _, k := range a.abstracts {
+			c.recordEscape(k, tok, entry, below)
 		}
 		if !c.diverged {
 			sets = append(sets, c.daSince(daMark))
@@ -311,7 +331,12 @@ func (c *coreChecker) mentionsAbstract(t TypeId) bool {
 
 // analyzePattern reads one arm's pattern against a subject of type t.
 func (c *coreChecker) analyzePattern(pattern []MShellParseItem, t TypeId, at Token) (coreArm, bool) {
-	a := coreArm{subject: t, abstract: TidNothing, listLen: -1}
+	a := coreArm{subject: t, listLen: -1}
+	if first, ok := pattern[0].(Token); ok && first.Type == LITERAL {
+		if ct := c.ctorNamed(first.Lexeme); ct != nil {
+			return c.memberPattern(a, ct, first, pattern[1:])
+		}
+	}
 	if len(pattern) == 2 {
 		first, ok1 := pattern[0].(Token)
 		second, ok2 := pattern[1].(Token)
@@ -334,6 +359,13 @@ func (c *coreChecker) analyzePattern(pattern []MShellParseItem, t TypeId, at Tok
 		}
 	}
 	if len(pattern) != 1 {
+		if first, ok := pattern[0].(Token); ok && first.Type == LITERAL {
+			if _, isKind := c.patternKind(first); isKind {
+				return c.badPattern(first, "'"+first.Lexeme+"' is followed by one name, for the value")
+			}
+			return c.badPattern(first, "'"+first.Lexeme+"' is not an enum member, an enum or a kind; "+
+				"a pattern of several words is a member and its payloads (`circle r`), a kind and a name (`int n`, `Shape s`), or `just v`")
+		}
 		return c.badPattern(at, "")
 	}
 	switch p := pattern[0].(type) {
@@ -422,18 +454,43 @@ func (c *coreChecker) analyzePattern(pattern []MShellParseItem, t TypeId, at Tok
 	return a, true
 }
 
+// memberPattern reads an enum member pattern, `circle r` or `empty`: the
+// member and a name (or `_`) for each payload, which binds the payload at
+// its type with the subject's enum arguments.
+func (c *coreChecker) memberPattern(a coreArm, ct *coreCtor, tok Token, binds []MShellParseItem) (coreArm, bool) {
+	ctor := c.arena.EnumDecl(ct.enum).Ctors[ct.idx]
+	if len(binds) != len(ctor.Payload) {
+		return c.badPattern(tok, "'"+tok.Lexeme+"' has "+strconv.Itoa(len(ctor.Payload))+
+			" payload value(s), so the pattern names "+strconv.Itoa(len(ctor.Payload))+", one per value (or `_`)")
+	}
+	a.member, a.memberEnum = ct.idx+1, ct.enum
+	sub := c.narrowKind(&a, valueKind{code: kindEnum, enum: ct.enum}, tok)
+	for i, b := range binds {
+		bt, ok := b.(Token)
+		if !ok || bt.Type != LITERAL {
+			return c.badPattern(tok, "a member pattern names its payloads: '"+tok.Lexeme+"' and then a name or `_` for each")
+		}
+		pt := TidBottom
+		if sub != TidBottom {
+			pt = c.rel.SubstParams(ctor.Payload[i], c.arena.enumArgs[c.arena.nodes[sub].Extra])
+		}
+		c.bind(&a, bt, pt)
+	}
+	return a, true
+}
+
 // narrowKind sets the arm's subject to the member of t of kind k, and
 // returns it; TidBottom when t has no such member (the arm never runs).
 func (c *coreChecker) narrowKind(a *coreArm, k valueKind, tok Token) TypeId {
 	m, found, unknown := c.memberOfKind(a.subject, k)
 	switch {
 	case unknown:
-		ut, abstract := c.unknownOfKind(k)
+		ut, abstracts := c.unknownOfKind(k)
 		if ut == TidNothing {
 			c.unsupported(tok, "a quotation pattern on a value of unknown type")
 			return TidBottom
 		}
-		a.subject, a.abstract = ut, abstract
+		a.subject, a.abstracts = ut, abstracts
 		return ut
 	case found:
 		a.subject = m
@@ -485,6 +542,9 @@ func (c *coreChecker) exhaustive(arms []coreArm, t TypeId) bool {
 		if !ok {
 			return false
 		}
+		if k.code == kindEnum && k.enum != EnumMaybe && c.membersCover(arms, k.enum) {
+			continue
+		}
 		covered := false
 		var just, none, tr, fa bool
 		for _, a := range arms {
@@ -506,6 +566,21 @@ func (c *coreChecker) exhaustive(arms []coreArm, t TypeId) bool {
 		}
 	}
 	return true
+}
+
+// membersCover reports whether the arms' member patterns match every member
+// of the enum at idx.
+func (c *coreChecker) membersCover(arms []coreArm, idx uint32) bool {
+	n := len(c.arena.EnumDecl(idx).Ctors)
+	seen := make([]bool, n)
+	count := 0
+	for _, a := range arms {
+		if a.member > 0 && a.memberEnum == idx && !seen[a.member-1] {
+			seen[a.member-1] = true
+			count++
+		}
+	}
+	return count == n
 }
 
 // listsCover reports whether the arms' list patterns match every length:

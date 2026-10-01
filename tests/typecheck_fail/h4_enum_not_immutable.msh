@@ -1,0 +1,5 @@
+# H4: a box around a stored list is not new, so it cannot be given a wider
+# type; the list inside would get a second type.
+enum Box[a] = box [a] | empty end
+[1] xs!
+@xs box as Box[int | str] drop

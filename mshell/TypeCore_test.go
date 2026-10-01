@@ -20,7 +20,7 @@ func coreCheck(t *testing.T, base *CoreBase, src string) ([]string, bool) {
 // TestCoreChecker runs the acceptance rows of ai/type-system-plan.md
 // section 7 that the core checker covers so far.
 func TestCoreChecker(t *testing.T) {
-	base := NewCoreBase(nil)
+	base := NewCoreBase(nil, nil)
 	cases := []struct {
 		src  string
 		ok   bool
@@ -379,7 +379,7 @@ func benchCorpus(b *testing.B) []*MShellFile {
 // BenchmarkCoreCheckCorpus checks the corpus of BenchmarkTypeCheckCorpus
 // with the core checker, from a base built once.
 func BenchmarkCoreCheckCorpus(b *testing.B) {
-	base := NewCoreBase(benchStdlib(b))
+	base := NewCoreBase(benchStdlib(b), nil)
 	files := benchCorpus(b)
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -392,7 +392,7 @@ func BenchmarkCoreCheckCorpus(b *testing.B) {
 
 // BenchmarkCoreCheckEmpty is the cost of starting one check.
 func BenchmarkCoreCheckEmpty(b *testing.B) {
-	base := NewCoreBase(benchStdlib(b))
+	base := NewCoreBase(benchStdlib(b), nil)
 	file := benchParse(b, "")
 	b.ReportAllocs()
 	for b.Loop() {
@@ -405,6 +405,120 @@ func BenchmarkCoreBase(b *testing.B) {
 	std := benchStdlib(b)
 	b.ReportAllocs()
 	for b.Loop() {
-		NewCoreBase(std)
+		NewCoreBase(std, nil)
+	}
+}
+
+// TestCoreDeclarations covers `type` and `enum` declarations, constructors,
+// member patterns and the names rule (ai/type-system-plan.md, stage 4).
+func TestCoreDeclarations(t *testing.T) {
+	base := NewCoreBase(nil, nil)
+	cases := []struct {
+		src  string
+		ok   bool
+		want string // a part of the first error, when !ok
+	}{
+		// Names do not shadow each other.
+		{`def f ( -- ) end  def f ( -- ) end`, false, "'f' is already defined at 1:5"},
+		{`def sum ( -- ) end`, false, "'sum' is the name of a builtin"},
+		{`enum E = a | b end  def a ( -- ) end`, false, "'a' is the name of the definition at"},
+		{`enum E = a | len end`, false, "'len' is the name of a builtin"},
+		{`enum E = a end  enum F = a end`, false, "'a' is already declared at 1:10"},
+		{`type T = int  enum T = a end`, false, "'T' is already declared"},
+		{`type Json = int`, false, "'Json' is a built-in type"},
+		{`enum E = a | just end`, false, "meaning of its own in match patterns"},
+		{`enum E[a a] = c a end`, false, "the parameter 'a' is written twice"},
+		// Generic enums: arguments, recursion, unions.
+		{`enum Box[a] = box [a] end  def f (Box -- ) drop end`, false, "takes 1 argument(s)"},
+		{`enum Box[a] = box [a] end  def f (Box[int str] -- ) drop end`, false, "takes 1 argument(s)"},
+		{`enum E = a end  def f (E[int] -- ) drop end`, false, "has no parameters"},
+		{`enum E[a] = c [a | int] end`, false, "an enum parameter cannot be a member of a union"},
+		{`type Id = int  enum E = c Id end  5 c drop`, true, ""},
+		{`enum E = c Later end  type Later = [E]  [] c drop`, true, ""},
+		// Constructors.
+		{`enum Opt[a] = some a | nothing end  nothing o!  5 some o!  @o drop`, true, ""},
+		{`enum Opt[a] = some a | nothing end  def f (Opt[int] -- ) drop end  nothing f`, true, ""},
+		{`enum F = f (int -- int) end  (1 +) f drop`, true, ""},
+		{`enum F = f (int -- int) end  ("a" ++) f drop`, false, ""},
+		{`enum P = p int str end  "a" 1 p drop`, false, "'p' expected"},
+		// Member patterns and coverage.
+		{`enum E = c int end  1 c match c : end`, false, "has 1 payload value(s)"},
+		{`enum E = c int | d end  def f (E -- int) match c n : @n, d : 0 end end`, true, ""},
+		{`enum E = c int | d end  def f (E -- int) match E e : 1 end end`, true, ""},
+		{`enum E = c int | d end  def f (E -- int) match c n : @n end end`, false, "non-exhaustive"},
+		{`enum E = c int | d end  def f (E | str -- int) match c n : @n, d : 0, str s : 1 end end`, true, ""},
+		{`enum Box[a] = box [a] | empty end  def g (a -- ) match Box :> drop, _ : end end`, true, ""},
+		// Equality: payloads must be equatable.
+		{`enum E = a | b end  a b = drop`, true, ""},
+		{`enum P = p int end  1 p 2 p = drop`, true, ""},
+		{`enum B = box [int] end  [1] box [1] box = drop`, false, ""},
+		{`enum T = leaf int | node T T end  1 leaf 2 leaf = drop`, true, ""},
+		// Enums whose arguments grow as they refer to each other: = is
+		// refused, and the check ends.
+		{`enum A[t] = a B[[t]] | an t end  enum B[t] = b A[t] | bn end  1 an x1!  @x1 @x1 = drop`, false, "no matching overload for '='"},
+	}
+	for _, tc := range cases {
+		errs, ok := coreCheck(t, base, tc.src)
+		if ok != tc.ok {
+			t.Errorf("%q: ok = %v, want %v; errors: %v", tc.src, ok, tc.ok, errs)
+			continue
+		}
+		if !ok && tc.want != "" && !strings.Contains(errs[0], tc.want) {
+			t.Errorf("%q: first error %q does not contain %q", tc.src, errs[0], tc.want)
+		}
+	}
+}
+
+// TestCoreStartupDeclarations checks that the startup files' declarations
+// are seen by every check, and keep their names.
+func TestCoreStartupDeclarations(t *testing.T) {
+	init, err := NewMShellParser(NewLexer("enum Color = red | green end\ntype Point = {px: int}\n"+
+		"def colorName (Color -- str) match red : \"r\", green : \"g\" end end\n"+
+		"def mkColor ( -- Color) red end\n", &TokenFile{"init.msh"})).ParseFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The startup files' signatures name their own declarations.
+	base := NewCoreBase(init.Definitions, declarationItems(init.Items))
+	cases := []struct {
+		src  string
+		ok   bool
+		want string
+	}{
+		{`def name (Color -- str) match red : "r", green : "g" end end  green name wl`, true, ""},
+		{`{px: 1} as Point drop`, true, ""},
+		{`def red ( -- ) end`, false, "'red' is a member of enum 'Color'"},
+		{`type Point = int`, false, "'Point' is already declared at init.msh:2:6"},
+		{`mkColor colorName wl`, true, ""},
+		{`5 colorName wl`, false, "'colorName' expected Color"},
+	}
+	for _, tc := range cases {
+		errs, ok := coreCheck(t, base, tc.src)
+		if ok != tc.ok {
+			t.Errorf("%q: ok = %v, want %v; errors: %v", tc.src, ok, tc.ok, errs)
+			continue
+		}
+		if !ok && tc.want != "" && !strings.Contains(errs[0], tc.want) {
+			t.Errorf("%q: first error %q does not contain %q", tc.src, errs[0], tc.want)
+		}
+	}
+}
+
+// TestCoreStartupDeclarationErrors checks that an error in a startup file's
+// declaration names that file.
+func TestCoreStartupDeclarationErrors(t *testing.T) {
+	init, err := NewMShellParser(NewLexer("enum E = a Foo | b end\nenum F[t t] = c t end", &TokenFile{"init.msh"})).ParseFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := NewCoreBase(nil, declarationItems(init.Items))
+	errs, ok := coreCheck(t, base, `1 drop`)
+	if ok || len(errs) < 2 {
+		t.Fatalf("got %v", errs)
+	}
+	for _, e := range errs {
+		if !strings.HasPrefix(e, "in init.msh: ") {
+			t.Errorf("error without its file: %q", e)
+		}
 	}
 }

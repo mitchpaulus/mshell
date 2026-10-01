@@ -17,7 +17,10 @@ export MSHSTDLIB="$(realpath ../lib/std.msh)"
 export MSH_CHECKER=core
 BINARY=../mshell/msh
 TMP="$(mktemp)"
-trap 'rm -f "$TMP"' EXIT
+# An empty init file, so the user's own does not change the results.
+TMP_INIT="$(mktemp)"
+export MSHINIT="$TMP_INIT"
+trap 'rm -f "$TMP" "$TMP_INIT"' EXIT
 
 listed() {
     grep -v '^#' "$1" 2>/dev/null | cut -f1 | grep -qx "$2"

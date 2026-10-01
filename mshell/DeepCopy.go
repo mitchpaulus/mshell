@@ -32,6 +32,10 @@ type deepCopier struct {
 	// edges is how each object on the way down was reached from its parent,
 	// for the error message.
 	edges []copyEdge
+	// enumHolds remembers, per enum value, whether it holds a list, dict or
+	// grid: enum values share subtrees freely (`@t @t node`), and asking
+	// again on every path would take exponential time.
+	enumHolds map[*MShellEnum]bool
 }
 
 type copyPathEntry struct {
@@ -45,6 +49,7 @@ const (
 	copyEdgeIndex copyEdgeKind = iota
 	copyEdgeKey
 	copyEdgeJust
+	copyEdgePayload // payload index of the enum member key
 	copyEdgeCommand
 	copyEdgeCell
 	copyEdgeGridMeta
@@ -73,8 +78,34 @@ func holdsObjects(v MShellObject) bool {
 		return o.obj != nil
 	case Maybe:
 		return o.obj != nil
+	case *MShellEnum:
+		// Conservatively yes; deepCopier.holds answers it exactly.
+		return len(o.Payload) > 0
 	}
 	return false
+}
+
+// holds is holdsObjects, answered exactly for enum values, once each.
+func (c *deepCopier) holds(v MShellObject) bool {
+	e, ok := v.(*MShellEnum)
+	if !ok {
+		return holdsObjects(v)
+	}
+	if h, ok := c.enumHolds[e]; ok {
+		return h
+	}
+	h := false
+	for _, p := range e.Payload {
+		if c.holds(p) {
+			h = true
+			break
+		}
+	}
+	if c.enumHolds == nil {
+		c.enumHolds = make(map[*MShellEnum]bool)
+	}
+	c.enumHolds[e] = h
+	return h
 }
 
 func (c *deepCopier) copy(v MShellObject) (MShellObject, error) {
@@ -86,7 +117,7 @@ func (c *deepCopier) copy(v MShellObject) (MShellObject, error) {
 		nl := *o
 		nl.Items = slices.Clone(o.Items)
 		for i, item := range nl.Items {
-			if !holdsObjects(item) {
+			if !c.holds(item) {
 				continue
 			}
 			copied, err := c.child(copyEdge{kind: copyEdgeIndex, index: i}, item)
@@ -117,11 +148,31 @@ func (c *deepCopier) copy(v MShellObject) (MShellObject, error) {
 			return nil, err
 		}
 		return Maybe{obj: inner}, nil
+	case *MShellEnum:
+		// A new value, with each payload copied; an enum value is never
+		// changed, so it cannot be on a cycle unless something inside it is,
+		// and one that holds no list, dict or grid is shared.
+		if !c.holds(o) {
+			return o, nil
+		}
+		ne := *o
+		ne.Payload = slices.Clone(o.Payload)
+		for i, p := range ne.Payload {
+			if !c.holds(p) {
+				continue
+			}
+			copied, err := c.child(copyEdge{kind: copyEdgePayload, index: i, key: o.Member}, p)
+			if err != nil {
+				return nil, err
+			}
+			ne.Payload[i] = copied
+		}
+		return &ne, nil
 	case *MShellPipe:
 		np := &MShellPipe{List: o.List, StdoutBehavior: o.StdoutBehavior, StderrBehavior: o.StderrBehavior}
 		np.List.Items = slices.Clone(o.List.Items)
 		for i, item := range np.List.Items {
-			if !holdsObjects(item) {
+			if !c.holds(item) {
 				continue
 			}
 			copied, err := c.child(copyEdge{kind: copyEdgeCommand, index: i}, item)
@@ -171,7 +222,7 @@ func (c *deepCopier) copyDict(o *MShellDict) (*MShellDict, error) {
 	}
 	nd := &MShellDict{Items: make(map[string]MShellObject, len(o.Items))}
 	for k, item := range o.Items {
-		if !holdsObjects(item) {
+		if !c.holds(item) {
 			nd.Items[k] = item
 			continue
 		}
@@ -246,7 +297,7 @@ func (c *deepCopier) copyColumn(col *GridColumn, rows []int) (*GridColumn, error
 	default:
 		nc.GenericData = pickRows(col.GenericData, rows)
 		for i, cell := range nc.GenericData {
-			if !holdsObjects(cell) {
+			if !c.holds(cell) {
 				continue
 			}
 			src := i
@@ -348,6 +399,8 @@ func formatCopyEdges(edges []copyEdge) string {
 			sb.WriteString("key " + strconv.Quote(e.key))
 		case copyEdgeJust:
 			sb.WriteString("the just")
+		case copyEdgePayload:
+			sb.WriteString("payload " + strconv.Itoa(e.index) + " of " + e.key)
 		case copyEdgeCommand:
 			sb.WriteString("command " + strconv.Itoa(e.index) + " of a pipe")
 		case copyEdgeCell:

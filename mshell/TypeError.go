@@ -68,6 +68,10 @@ const (
 	// repeated with the final types: a bug in the checker, never a reason
 	// to accept a program. Hint holds the details.
 	TErrCoreInternal
+	// TErrDeclaration is a `type` or `enum` declaration the core checker
+	// refuses: a name already taken, recursion with nothing in between.
+	// Hint holds the message.
+	TErrDeclaration
 )
 
 // TypeErrorSeverity classifies a diagnostic. Severity-error blocks
@@ -203,6 +207,8 @@ func (e TypeError) Format(arena *TypeArena, names *NameTable) string {
 		fmt.Fprintf(&sb, "the core checker does not check %s yet", e.Hint)
 	case TErrCoreInternal:
 		fmt.Fprintf(&sb, "internal checker error: %s", e.Hint)
+	case TErrDeclaration:
+		fmt.Fprintf(&sb, "%s", e.Hint)
 	default:
 		fmt.Fprintf(&sb, "unknown type error")
 	}

@@ -1,0 +1,6 @@
+# A list that holds a box around itself has no copy.
+enum Box[a] = box [a] | empty end
+[1] zs!
+@zs box zb!
+@zs @zb append drop
+@zb deepCopy

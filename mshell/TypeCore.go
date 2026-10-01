@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -31,18 +33,40 @@ type CoreBase struct {
 	names   *NameTable
 	table   *coreTable
 	aliases map[NameId]TypeId
+	// The declarations of the startup files (TypeCoreDecl.go): enum names,
+	// constructors, every declared name, and their errors.
+	enums    map[NameId]uint32
+	ctors    map[NameId]*coreCtor
+	declared map[NameId]Token
+	declErrs []TypeError
 }
 
-// NewCoreBase builds the base: the builtin table, and the signatures of
-// stdlibDefs (their bodies are not checked, as with the old checker).
-func NewCoreBase(stdlibDefs []MShellDefinition) *CoreBase {
+// NewCoreBase builds the base: the builtin table, the signatures of
+// stdlibDefs (their bodies are not checked, as with the old checker), and
+// the startup files' declarations, decls.
+func NewCoreBase(stdlibDefs []MShellDefinition, decls []MShellParseItem) *CoreBase {
 	arena, names := NewTypeArena(), NewNameTable()
-	res := &coreResolver{arena: arena, names: names, rel: NewRelations(arena), aliases: map[NameId]TypeId{}}
+	res := &coreResolver{arena: arena, names: names, rel: NewRelations(arena), aliases: map[NameId]TypeId{}, self: -1}
 	res.declareJson()
 	res.declareHtmlNode()
 	res.builtin = true
 	table := buildCoreTable(res)
 	res.builtin = false
+	b := &CoreBase{arena: arena, names: names, table: table}
+	if len(decls) > 0 {
+		// Declared in the base itself, so every check sees them, and before
+		// the startup files' signatures, which may name them.
+		defNames := make(map[string]Token, len(stdlibDefs))
+		for i := range stdlibDefs {
+			if _, ok := defNames[stdlibDefs[i].Name]; !ok {
+				defNames[stdlibDefs[i].Name] = withFile(stdlibDefs[i].NameToken, stdlibDefs[i].File)
+			}
+		}
+		c := &coreChecker{arena: arena, names: names, rel: res.rel, table: table, res: *res, defs: map[NameId]*coreSig{}}
+		c.declareAll(decls, defNames)
+		res.aliases, res.enums = c.res.aliases, c.res.enums
+		b.enums, b.ctors, b.declared, b.declErrs = c.res.enums, c.ctors, c.declared, c.errs
+	}
 	for i := range stdlibDefs {
 		def := &stdlibDefs[i]
 		id := names.Intern(def.Name)
@@ -55,19 +79,29 @@ func NewCoreBase(stdlibDefs []MShellDefinition) *CoreBase {
 		sig.freeOut = outputOnlyGeneric(arena, parts)
 		table.setName(id, []coreSig{sig})
 	}
-	return &CoreBase{arena: arena, names: names, table: table, aliases: res.aliases}
+	b.aliases = res.aliases
+	return b
 }
 
-// CoreTypeCheckProgram checks file with the core checker. It returns the
-// formatted errors, and whether there were none.
-func CoreTypeCheckProgram(file *MShellFile, stdlibDefs []MShellDefinition) ([]string, bool) {
-	return NewCoreBase(stdlibDefs).Check(file)
+// CoreTypeCheckProgram checks file with the core checker, with the startup
+// files' definitions and declarations. It returns the formatted errors, and
+// whether there were none.
+func CoreTypeCheckProgram(file *MShellFile, stdlibDefs []MShellDefinition, decls []MShellParseItem) ([]string, bool) {
+	return NewCoreBase(stdlibDefs, decls).Check(file)
 }
 
-// Check checks file in a new overlay of the base.
+// Check checks file in a new overlay of the base. Errors in the startup
+// files' declarations come first, with their file.
 func (b *CoreBase) Check(file *MShellFile) ([]string, bool) {
 	errs, arena, names := b.Errors(file)
-	out := make([]string, 0, len(errs))
+	out := make([]string, 0, len(b.declErrs)+len(errs))
+	for _, e := range b.declErrs {
+		where := ""
+		if e.Pos.TokenFile != nil {
+			where = "in " + e.Pos.TokenFile.Path + ": "
+		}
+		out = append(out, where+e.Format(b.arena, b.names))
+	}
 	for _, e := range errs {
 		out = append(out, e.Format(arena, names))
 	}
@@ -98,11 +132,8 @@ func (b *CoreBase) newChecker() *coreChecker {
 		table: b.table,
 		defs:  map[NameId]*coreSig{},
 	}
-	aliases := make(map[NameId]TypeId, len(b.aliases))
-	for k, v := range b.aliases {
-		aliases[k] = v
-	}
-	c.res = coreResolver{arena: arena, names: names, rel: rel, aliases: aliases}
+	c.res = coreResolver{arena: arena, names: names, rel: rel, aliases: maps.Clone(b.aliases), enums: maps.Clone(b.enums), self: -1}
+	c.ctors, c.declared = maps.Clone(b.ctors), maps.Clone(b.declared)
 	c.uni = NewUnifier(arena, &c.subst, rel)
 	return c
 }
@@ -148,6 +179,10 @@ type coreChecker struct {
 	res   coreResolver
 	table *coreTable
 	defs  map[NameId]*coreSig
+	// ctors are the enum members' constructors, and declared is every name
+	// a declaration took, with where (TypeCoreDecl.go).
+	ctors    map[NameId]*coreCtor
+	declared map[NameId]Token
 	errs  []TypeError
 
 	stack []coreSlot
@@ -217,11 +252,11 @@ type coreChecker struct {
 // Files and units
 
 func (c *coreChecker) checkFile(file *MShellFile) {
-	for _, item := range file.Items {
-		if d, ok := item.(*MShellTypeDecl); ok {
-			c.declareType(d)
-		}
+	defNames := make(map[string]Token, len(file.Definitions))
+	for _, def := range file.Definitions {
+		c.checkDefName(def, defNames)
 	}
+	c.declareAll(file.Items, defNames)
 	for i := range file.Definitions {
 		def := &file.Definitions[i]
 		parts := c.res.resolveSig(def.Inputs, def.Outputs)
@@ -237,16 +272,6 @@ func (c *coreChecker) checkFile(file *MShellFile) {
 	c.ret, c.retOuts = retAny, nil
 	c.walk(file.Items)
 	c.finishUnit()
-}
-
-// declareType declares `type X = T` as a transparent alias. Declarations
-// are read in order; stage 4 reads them in three passes.
-func (c *coreChecker) declareType(d *MShellTypeDecl) {
-	name := c.names.Intern(d.Name)
-	idx := c.arena.DeclareAlias(name)
-	c.res.aliases[name] = c.arena.MakeAliasRef(idx)
-	c.arena.SetAliasBody(idx, c.res.resolveType(d.Body))
-	c.takeResolveErrors()
 }
 
 func (c *coreChecker) takeResolveErrors() {
@@ -448,7 +473,7 @@ func (c *coreChecker) step(item MShellParseItem) {
 		c.dictLiteral(it)
 	case *MShellParseIfBlock:
 		c.ifBlock(it)
-	case *MShellTypeDecl:
+	case *MShellTypeDecl, *MShellEnumDecl:
 	case *MShellParseQuote:
 		c.pushQuote(it.Items, it.StartToken)
 	case *MShellParsePrefixQuote:
@@ -580,6 +605,10 @@ func (c *coreChecker) word(tok Token) {
 				c.selfCalled = true
 			}
 			c.apply(sig, tok)
+			return
+		}
+		if ct := c.ctors[id]; ct != nil {
+			c.apply(&ct.sig, tok)
 			return
 		}
 	}
@@ -940,6 +969,15 @@ func (c *coreChecker) matchSub(got, want TypeId, fresh bool) bool {
 	}
 	ar := c.arena
 	gn, wn := ar.nodes[got], ar.nodes[want]
+	// A recursive alias against a type that is not an alias is unfolded one
+	// step. The other side is finite, and every unfolding reaches a
+	// constructor before the next, so this ends.
+	if gn.Kind == TKAlias && wn.Kind != TKAlias && wn.Kind != TKVar {
+		return c.matchSub(ar.aliases[gn.A].Body, want, fresh)
+	}
+	if wn.Kind == TKAlias && gn.Kind != TKAlias && gn.Kind != TKVar {
+		return c.matchSub(got, ar.aliases[wn.A].Body, fresh)
+	}
 	if gn.Kind == TKVar || wn.Kind == TKVar || gn.Kind != wn.Kind {
 		return c.uni.Unify(got, want)
 	}
@@ -1110,9 +1148,16 @@ func (c *coreChecker) equality(tok Token) bool {
 
 // equatable reports whether two values of type t compare with = and !=
 // without a runtime error: a scalar; a Maybe of an equatable type; a dict
-// whose every label holds equatable values. Inside a dict a union is fine,
-// since values of different kinds compare false there (inDict).
+// whose every label holds equatable values; an enum whose every payload is
+// equatable. Inside a dict or an enum's payload a union is fine, since
+// values of different kinds compare false there (inDict). Through an alias,
+// and through a recursive enum, it is the greatest fixed point: a type met
+// again while it is being decided counts as equatable.
 func (c *coreChecker) equatable(t TypeId, inDict bool) bool {
+	return c.equatableIn(t, inDict, nil)
+}
+
+func (c *coreChecker) equatableIn(t TypeId, inDict bool, visiting []TypeId) bool {
 	switch t {
 	case TidInt, TidFloat, TidStr, TidBool, TidBytes, TidPath, TidDateTime, TidNull, TidBottom:
 		return true
@@ -1120,16 +1165,39 @@ func (c *coreChecker) equatable(t TypeId, inDict bool) bool {
 	n := c.arena.nodes[t]
 	switch n.Kind {
 	case TKEnum:
-		if n.A != EnumMaybe {
+		args := c.arena.enumArgs[n.Extra]
+		if n.A == EnumMaybe {
+			return c.equatableIn(args[0], false, visiting)
+		}
+		if slices.Contains(visiting, t) {
+			return true
+		}
+		// Enums that refer to each other with growing arguments
+		// (`A[t] = a B[[t]]`, `B[t] = b A[t]`) never meet the same type
+		// again; past this depth the answer is no, which is safe.
+		if len(visiting) >= 64 {
 			return false
 		}
-		return c.equatable(c.arena.enumArgs[n.Extra][0], false)
+		visiting = append(visiting, t)
+		for _, ctor := range c.arena.EnumDecl(n.A).Ctors {
+			for _, p := range ctor.Payload {
+				if !c.equatableIn(c.rel.SubstParams(p, args), true, visiting) {
+					return false
+				}
+			}
+		}
+		return true
+	case TKAlias:
+		if slices.Contains(visiting, t) {
+			return true
+		}
+		return c.equatableIn(c.arena.aliases[n.A].Body, inDict, append(visiting, t))
 	case TKUnion:
 		if !inDict {
 			return false
 		}
 		for _, m := range c.arena.unionMembers[n.Extra] {
-			if !c.equatable(m, false) {
+			if !c.equatableIn(m, false, visiting) {
 				return false
 			}
 		}
@@ -1142,7 +1210,7 @@ func (c *coreChecker) equatable(t TypeId, inDict bool) bool {
 				return false
 			case FieldAbsent:
 			default:
-				if !c.equatable(f.Type, true) {
+				if !c.equatableIn(f.Type, true, visiting) {
 					return false
 				}
 			}

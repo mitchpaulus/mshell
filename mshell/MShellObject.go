@@ -199,10 +199,7 @@ func (m Maybe) CommandLine() string {
 
 // This is meant for things like error messages, should be limited in length to 30 chars or so.
 func (m Maybe) DebugString() string {
-	if m.obj == nil {
-		return "None"
-	}
-	return fmt.Sprintf("Maybe(%s)", m.obj.DebugString())
+	return renderValue(m, flavorDebug)
 }
 func (m Maybe) Index(index int) (MShellObject, error) {
 	return nil, fmt.Errorf("Cannot index into a Maybe.\n")
@@ -221,17 +218,11 @@ func (m Maybe) Slice(startInc int, endExc int) (MShellObject, error) {
 }
 
 func (m Maybe) ToJson() string {
-	if m.obj == nil {
-		return "null"
-	}
-	return m.obj.ToJson()
+	return renderValue(m, flavorJson)
 }
 
 func (m Maybe) ToString() string {
-	if m.obj == nil {
-		return "None"
-	}
-	return fmt.Sprintf("Just(%s)", m.obj.ToString())
+	return renderValue(m, flavorStr)
 }
 
 func (m Maybe) IndexErrStr() string {
@@ -244,30 +235,78 @@ func (m Maybe) Concat(other MShellObject) (MShellObject, error) {
 
 func (m Maybe) Equals(other MShellObject) (bool, error) {
 	// The runtime holds Maybe values as *Maybe, so accept both forms.
-	var otherMaybe Maybe
-	switch o := other.(type) {
-	case Maybe:
-		otherMaybe = o
-	case *Maybe:
-		otherMaybe = *o
-	default:
+	o, ok := asMaybe(other)
+	if !ok {
 		return false, nil
 	}
-
-	if m.obj == nil && otherMaybe.obj == nil {
-		return true, nil
+	if m.obj == nil || o.obj == nil {
+		return m.obj == nil && o.obj == nil, nil
 	}
-
-	if m.obj == nil || otherMaybe.obj == nil {
-		return false, nil
-	}
-
-	equal, err := m.obj.Equals(otherMaybe.obj)
-	return equal, err
+	return equalsIter(m.obj, o.obj)
 }
 
 func (m Maybe) CastString() (string, error) {
 	return "", fmt.Errorf("Cannot cast a Maybe to a string.\n")
+}
+
+// }}}
+
+// Enum {{{
+
+// MShellEnum is a value of a declared enum: the enum's name, the member, and
+// the member's payload values (nil for a member with none). Member names are
+// unique, so the member identifies the value; the enum's name is what a
+// `Name x` pattern tests. An enum value is never changed after it is made.
+type MShellEnum struct {
+	EnumName string
+	Member   string
+	// MemberIndex is the member's position in its declaration.
+	MemberIndex int
+	Payload     []MShellObject
+}
+
+func (e *MShellEnum) TypeName() string       { return e.EnumName }
+func (e *MShellEnum) IsCommandLineable() bool { return false }
+func (e *MShellEnum) IsNumeric() bool         { return false }
+func (e *MShellEnum) FloatNumeric() float64   { return 0 }
+func (e *MShellEnum) CommandLine() string     { return "" }
+func (e *MShellEnum) DebugString() string     { return renderValue(e, flavorDebug) }
+func (e *MShellEnum) ToString() string        { return renderValue(e, flavorStr) }
+
+// ToJson is externally tagged: a member with no payload is its name as a
+// string, one payload is `{"member": value}`, several are
+// `{"member": [v0, v1, ...]}`.
+func (e *MShellEnum) ToJson() string { return renderValue(e, flavorJson) }
+
+func (e *MShellEnum) Index(index int) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot index into an enum value.\n")
+}
+
+func (e *MShellEnum) SliceStart(startInclusive int) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot slice an enum value.\n")
+}
+
+func (e *MShellEnum) SliceEnd(end int) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot slice an enum value.\n")
+}
+
+func (e *MShellEnum) Slice(startInc int, endExc int) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot slice an enum value.\n")
+}
+
+func (e *MShellEnum) IndexErrStr() string { return "" }
+
+func (e *MShellEnum) Concat(other MShellObject) (MShellObject, error) {
+	return nil, fmt.Errorf("Cannot concatenate an enum value.\n")
+}
+
+// Equals compares the enum's name, the member, then the payloads.
+func (e *MShellEnum) Equals(other MShellObject) (bool, error) {
+	return equalsIter(e, other)
+}
+
+func (e *MShellEnum) CastString() (string, error) {
+	return "", fmt.Errorf("Cannot cast an enum value to a string; use str.\n")
 }
 
 // }}}
@@ -469,16 +508,7 @@ func (*MShellDict) CommandLine() string {
 
 // This is meant for things like error messages, should be limited in length to 30 chars or so.
 func (d *MShellDict) DebugString() string {
-	// TODO: implement this
-
-	sb := strings.Builder{}
-	sb.WriteString("Dictionary{")
-	for key, value := range d.Items {
-		sb.WriteString(fmt.Sprintf("%s: %s, ", key, value.DebugString()))
-	}
-	sb.WriteString("}")
-	return sb.String()
-
+	return renderValue(d, flavorDebug)
 }
 func (*MShellDict) Index(index int) (MShellObject, error) {
 	return nil, fmt.Errorf("Cannot index into a dictionary.\n")
@@ -494,43 +524,7 @@ func (*MShellDict) Slice(startInc int, endExc int) (MShellObject, error) {
 	return nil, fmt.Errorf("Cannot slice a dictionary.\n")
 }
 func (d *MShellDict) ToJson() string {
-	var sb strings.Builder
-
-	if len(d.Items) == 0 {
-		return "{}"
-	}
-
-	if len(d.Items) == 1 {
-		for key, value := range d.Items {
-			keyEnc, _ := json.Marshal(key)
-			return fmt.Sprintf("{%s: %s}", string(keyEnc), value.ToJson())
-		}
-	}
-
-	keys := make([]string, 0, len(d.Items))
-	for key := range d.Items {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-
-	sb.WriteString("{")
-
-	// Write the first key-value pair
-	firstKey := keys[0]
-	firstValue := d.Items[firstKey]
-
-	firstKeyEnc, _ := json.Marshal(firstKey)
-	sb.WriteString(fmt.Sprintf("%s: %s", string(firstKeyEnc), firstValue.ToJson()))
-
-	for _, key := range keys[1:] {
-		value := d.Items[key]
-		keyEnc, _ := json.Marshal(key)
-		sb.WriteString(fmt.Sprintf(", %s: %s", string(keyEnc), value.ToJson()))
-	}
-
-	sb.WriteString("}")
-
-	return sb.String()
+	return renderValue(d, flavorJson)
 }
 
 func (d *MShellDict) ToString() string { // This is what is used with 'str' command
@@ -546,51 +540,7 @@ func (*MShellDict) Concat(other MShellObject) (MShellObject, error) {
 }
 
 func (thisDict *MShellDict) Equals(other MShellObject) (bool, error) {
-	thisKeys := make([]string, 0, len(thisDict.Items))
-	for key := range thisDict.Items {
-		thisKeys = append(thisKeys, key)
-	}
-	sort.Strings(thisKeys)
-
-	otherDict, ok := other.(*MShellDict)
-	if !ok {
-		return false, nil
-	}
-
-	otherKeys := make([]string, 0, len(otherDict.Items))
-	for key := range otherDict.Items {
-		otherKeys = append(otherKeys, key)
-	}
-	sort.Strings(otherKeys)
-
-	if len(thisKeys) != len(otherKeys) {
-		return false, nil
-	}
-
-	for i, key := range thisKeys {
-		if key != otherKeys[i] {
-			return false, nil
-		}
-	}
-
-	for _, key := range thisKeys {
-		thisValue := thisDict.Items[key]
-		otherValue := otherDict.Items[key]
-
-		if thisValue.TypeName() != otherValue.TypeName() {
-			return false, nil
-		}
-
-		equal, err := thisValue.Equals(otherValue)
-		if err != nil {
-			return false, err
-		}
-		if !equal {
-			return false, nil
-		}
-	}
-
-	return true, nil
+	return equalsIter(thisDict, other)
 }
 
 // This is meant for completely unambiougous conversion to a string value.
@@ -1277,8 +1227,7 @@ func (obj *MShellQuotation) DebugString() string {
 }
 
 func (obj *MShellList) DebugString() string {
-	// Join the tokens with a space, surrounded by '[' and ']'
-	return "[" + strings.Join(DebugStrs(obj.Items), " ") + "]"
+	return renderValue(obj, flavorDebug)
 }
 
 func cleanStringForTerminal(input string) string {
@@ -1323,8 +1272,7 @@ func (obj MShellPath) DebugString() string {
 }
 
 func (obj *MShellPipe) DebugString() string {
-	// Join each item with a ' | '
-	return strings.Join(DebugStrs(obj.List.Items), " | ")
+	return renderValue(obj, flavorDebug)
 }
 
 func (obj MShellInt) DebugString() string {
@@ -1820,17 +1768,7 @@ func (obj *MShellQuotation) ToJson() string {
 }
 
 func (obj *MShellList) ToJson() string {
-	builder := strings.Builder{}
-	builder.WriteString("[")
-	if len(obj.Items) > 0 {
-		builder.WriteString(obj.Items[0].ToJson())
-		for _, item := range obj.Items[1:] {
-			builder.WriteString(", ")
-			builder.WriteString(item.ToJson())
-		}
-	}
-	builder.WriteString("]")
-	return builder.String()
+	return renderValue(obj, flavorJson)
 }
 
 func (obj MShellString) ToJson() string {
@@ -1846,7 +1784,7 @@ func (obj MShellPath) ToJson() string {
 }
 
 func (obj *MShellPipe) ToJson() string {
-	return obj.List.ToJson()
+	return renderValue(obj, flavorJson)
 }
 
 func (obj MShellInt) ToJson() string {
@@ -2445,17 +2383,7 @@ func (g *MShellGrid) Slice(startInc int, endExc int) (MShellObject, error) {
 }
 
 func (g *MShellGrid) ToJson() string {
-	var sb strings.Builder
-	sb.WriteString("[")
-	for i := 0; i < g.RowCount; i++ {
-		if i > 0 {
-			sb.WriteString(", ")
-		}
-		row := g.GetRow(i)
-		sb.WriteString(row.ToJson())
-	}
-	sb.WriteString("]")
-	return sb.String()
+	return renderValue(g, flavorJson)
 }
 
 func (g *MShellGrid) ToString() string {
@@ -2595,17 +2523,7 @@ func (v *MShellGridView) Slice(startInc int, endExc int) (MShellObject, error) {
 }
 
 func (v *MShellGridView) ToJson() string {
-	var sb strings.Builder
-	sb.WriteString("[")
-	for i, idx := range v.Indices {
-		if i > 0 {
-			sb.WriteString(", ")
-		}
-		row := &MShellGridRow{Grid: v.Source, RowIndex: idx}
-		sb.WriteString(row.ToJson())
-	}
-	sb.WriteString("]")
-	return sb.String()
+	return renderValue(v, flavorJson)
 }
 
 func (v *MShellGridView) ToString() string {
@@ -2677,8 +2595,7 @@ func (r *MShellGridRow) CommandLine() string {
 }
 
 func (r *MShellGridRow) DebugString() string {
-	d := r.ToDict()
-	return fmt.Sprintf("GridRow%s", d.DebugString())
+	return renderValue(r, flavorDebug)
 }
 
 func (r *MShellGridRow) Index(index int) (MShellObject, error) {
@@ -2704,17 +2621,7 @@ func (r *MShellGridRow) Slice(startInc int, endExc int) (MShellObject, error) {
 }
 
 func (r *MShellGridRow) ToJson() string {
-	var sb strings.Builder
-	sb.WriteString("{")
-	for i, col := range r.Grid.Columns {
-		if i > 0 {
-			sb.WriteString(", ")
-		}
-		keyEnc, _ := json.Marshal(col.Name)
-		sb.WriteString(fmt.Sprintf("%s: %s", string(keyEnc), col.Get(r.RowIndex).ToJson()))
-	}
-	sb.WriteString("}")
-	return sb.String()
+	return renderValue(r, flavorJson)
 }
 
 func (r *MShellGridRow) ToString() string {

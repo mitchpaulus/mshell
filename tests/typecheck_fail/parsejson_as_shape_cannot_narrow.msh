@@ -1,0 +1,2 @@
+# Static: `as` never fails, so it cannot narrow the Json union to one shape; use match.
+"{}" parseJson as {name: str} drop

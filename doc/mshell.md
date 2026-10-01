@@ -615,6 +615,33 @@ Be careful with some of the lexing around the colon, as it's used with indexing.
 { "key":1 } # Bad because ':1' is treated as index
 ```
 
+### Enums
+
+An `enum` declares a type whose values are one of a fixed set of members.
+Each member has a name and may carry payload values of declared types.
+Members are separated by `|` (a leading `|` is allowed), and `end` closes the declaration.
+A member's name is a word that makes a value, taking its payload from the stack.
+
+```mshell
+enum Shape = circle float | rect float float | dot end
+
+2.0 circle str wl     # circle(2)
+1.5 2.0 rect toJson wl  # {"rect": [1.5, 2]}
+dot toJson wl         # "dot"
+```
+
+An enum may have parameters, written in brackets after its name, and may refer to itself.
+A type that uses a generic enum gives its arguments the same way, as in `Box[int]`.
+
+```mshell
+enum Box[a] = box [a] | empty end
+enum Tree = leaf int | node Tree Tree end
+```
+
+Two enum values are equal when they are the same member of the same enum with equal payloads.
+Member names are global.
+A member, an enum, a `type`, a definition and a builtin each need a name of their own.
+
 ### Date/Times
 
 Date/times can be entered using a literal syntax, in ISO-8601 format.
@@ -710,6 +737,8 @@ Dictionary types are split into homogeneous dictionaries and shapes.
 A homogeneous dictionary is for dynamic keys where every value has the same type.
 In a type expression, write `{str: int}`.
 In older definition signatures, `{ int }` or `{ *: int }` means the same string-keyed dictionary of ints.
+In a definition signature, `dict` is short for `{str: T}` and `list` for `[T]`, each with a new generic `T` of its own: `def size (dict -- int)` takes a string-keyed dictionary with any one value type.
+Outside a signature, write the full form.
 
 ```mshell
 { "passed": 10, "failed": 2 } as {str: int} values len
@@ -810,6 +839,8 @@ end
 ```
 
 Metadata values must be static: strings (single or double quoted), integers, floats, booleans, or nested lists/dicts of the same. Interpolated strings are not allowed.
+
+A definition's name must not be taken already: defining a name twice, whether in the standard library, the init file or the script, is an error, as is defining a builtin's name or an enum member's.
 
 ### Tail-Call Optimization
 
@@ -1112,6 +1143,24 @@ Follow a type keyword with a name to bind the matched value (like `just v`):
 end wl # Output: 5
 ```
 
+The name of a declared enum is a type pattern too: it matches any member of that enum,
+and may be followed by a name for the value, as in `Shape s`.
+
+### Enum Patterns
+
+A member pattern is the member's name followed by a name for each payload value, or `_` to skip one.
+A match on an enum covers every member, or has a `_` arm.
+
+```mshell
+def area (Shape -- float)
+    match
+        circle r : @r @r * 3.14159 *,
+        rect w h : @w @h *,
+        dot : 0.0,
+    end
+end
+```
+
 ### Maybe Destructuring
 
 `just v` matches a Maybe that is Just, binding the inner value to `v`.
@@ -1252,7 +1301,7 @@ end wl # Output: 11
 - `gridValues`: Extract Grid or GridView cell values as row-major lists, without a header row and without coercing cell types. (`Grid|GridView -- [[a]]`)
 - `toCsvCell`: Escape a single CSV cell. If the value contains `,`, `"`, or a newline, wraps the value in double quotes and doubles any embedded quotes; otherwise returns the input unchanged. (`str -- str`)
 - `toCsv`: Serialize a list of rows to a CSV string. Each cell is escaped with `toCsvCell`, cells are joined with `,`, and rows are joined with `\n`. (`[[str]] -- str`)
-- `parseJson`: Parse JSON from a string, binary, or file path into mshell objects. JSON `null` becomes the `null` type (distinct from `none`). (`path|str|binary -- list|dict|numeric|str|bool|null`)
+- `parseJson`: Parse JSON from a string, binary, or file path into mshell objects. JSON `null` becomes the `null` type (distinct from `none`). A number with no fraction or exponent becomes an `int` (a `float` if it is too large for one), and any other number a `float`. (`path|str|binary -- list|dict|numeric|str|bool|null`)
 - `parseExcel`: Parse an `.xlsx` (OOXML) spreadsheet into a list of sheets in workbook (tab) order. Each sheet is a dict with a `name` key (the worksheet name), a `data` key holding a rectangular list of rows (list of lists), a `hidden` key (bool; `true` for hidden or veryHidden sheets), and a `visibility` key (`"visible"`, `"hidden"`, or `"veryHidden"`). Cell values are typed: numbers become floats (dates appear as Excel serial floats), strings become strings (shared, inline, and formula-string results all resolved), booleans become booleans, error cells (e.g. `#DIV/0!`) become `none`, and empty/padding cells are the empty string. Chartsheets are skipped; hidden worksheets are included. Dates are returned as raw Excel serial floats; apply `fromOleDate` at the call site to convert. `parseExcel` assumes the default 1900-based date system, which matches `fromOleDate`'s OLE epoch (1899-12-30). Workbooks saved with the 1904 date system (`<workbookPr date1904="true"/>`, seen on some files originally authored on older Mac Excel or with the "Use 1904 date system" option enabled) have serials offset by 1462 days; on those files, add 1462 to each serial before calling `fromOleDate`, e.g. `@wb :0: :data? :3: :0: 1462 + fromOleDate`. (`path|binary -- list`)
 - `seq`: Generate a list of integers, starting from 0. Exclusive end to integer on stack. `2 seq` produces `[0 1]`. A count of 0 or less produces an empty list. `(int -- [int])`
 - `repeat`: Create a list containing the provided value repeated `n` times. `(a int -- [a])`
@@ -1688,7 +1737,7 @@ The whole jar round-trips through `toJson` and `parseJson`:
  'cookieJar': @restoredJar} httpGet ?
 ```
 
-New timestamps are integers; whole-number floats are also accepted because `parseJson` decodes JSON numbers as floats.
+Timestamps are integers, and `parseJson` reads them back as integers; whole-number floats are also accepted.
 Session cookies live as long as the caller retains them in the jar.
 Explicitly saving and restoring the list also saves session cookies; discard those records if starting a new session is desired.
 
@@ -1789,6 +1838,7 @@ The current object types supported by `mshell` are:
 9. Date/Times
 10. Dictionary
 11. Maybe
+12. Enum values
 
 ## LLM Notes
 

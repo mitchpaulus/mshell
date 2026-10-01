@@ -1,0 +1,2 @@
+# A JSON number too large for a float is an error, not infinity.
+"[1e400]" parseJson str wl

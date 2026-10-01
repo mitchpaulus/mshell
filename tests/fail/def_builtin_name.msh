@@ -1,0 +1,3 @@
+# A definition cannot take a builtin's name.
+def sum ([int] -- int) drop 0 end
+[1 2] sum str wl

@@ -1,0 +1,18 @@
+12
+3
+0
+circle(2)
+{"circle": 2}
+rect(1.5 2)
+{"rect": [1.5, 2]}
+dot
+"dot"
+shape circle(2)
+int 5
+true
+false
+false
+true
+Just(5)
+5
+6

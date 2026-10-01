@@ -1,6 +1,9 @@
 package main
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 // Type expressions resolved to the types of the core checker
 // (ai/type-core-calculus.typ): shapes and dicts are records with a status
@@ -24,11 +27,33 @@ type coreResolver struct {
 	// signature, where an unknown name is an error.
 	gens     []NameId
 	inSig    bool
+	// anon counts the generics `dict` and `list` made in this signature.
+	anon     int
 	errs     []TypeError
 	jsonName NameId
 	// builtin is set while the builtin table is built: there `Grid_s`,
 	// `GridView_s` and `GridRow_s` are a grid whose schema is the generic s.
 	builtin bool
+
+	// enums maps a declared enum's name to its declaration (TypeCoreDecl.go).
+	enums map[NameId]uint32
+	// While an enum's payloads are resolved, params are its parameters
+	// (TKParam i is params[i]) and self is its declaration, a reference to
+	// which must pass the parameters in order; self is -1 otherwise.
+	params []NameId
+	self   int
+	// While declarations are read, a union's kinds are checked once every
+	// alias it may mention is resolved: deferUnions is set, and the unions
+	// wait in unions.
+	deferUnions bool
+	unions      []coreUnionCheck
+}
+
+// coreUnionCheck is a union whose kinds are checked later, and where it
+// was written.
+type coreUnionCheck struct {
+	u   TypeId
+	tok Token
 }
 
 // coreSigParts is a resolved signature before it is stored.
@@ -75,7 +100,7 @@ func (r *coreResolver) declareHtmlNode() {
 
 // resolveSig resolves a signature. Unknown names are its generics.
 func (r *coreResolver) resolveSig(ins, outs []MShellParseItem) coreSigParts {
-	r.gens, r.inSig = r.gens[:0], true
+	r.gens, r.inSig, r.anon = r.gens[:0], true, 0
 	var p coreSigParts
 	p.ins = make([]TypeId, 0, len(ins))
 	for _, it := range ins {
@@ -171,6 +196,10 @@ func (r *coreResolver) resolve(item MShellParseItem) TypeId {
 			arms = append(arms, t)
 		}
 		u := ar.MakeUnion(arms, NameNone)
+		if r.deferUnions {
+			r.unions = append(r.unions, coreUnionCheck{u: u, tok: n.StartTok})
+			return u
+		}
 		if msg := r.unionKindsError(u); msg != "" {
 			return r.errorf(n.StartTok, msg)
 		}
@@ -205,6 +234,25 @@ func (r *coreResolver) resolveNamed(n *TypeNamed) TypeId {
 			return TidNothing
 		}
 		return ar.MakeMaybeEnum(r.resolve(n.Args[0]))
+	case "dict", "list":
+		// Short for `{str: T}` and `[T]`, with a new generic T for each
+		// occurrence (decided 2026-10-01). Outside a signature there is no
+		// generic to stand for T.
+		if len(n.Args) > 0 {
+			return r.errorf(n.Tok, "'"+n.Name+"' takes no arguments in brackets")
+		}
+		if !r.inSig {
+			if n.Name == "dict" {
+				return r.errorf(n.Tok, "'dict' needs its value type here: write `{str: T}`")
+			}
+			return r.errorf(n.Tok, "'list' needs its element type here: write `[T]`")
+		}
+		r.anon++
+		g := r.generic(r.names.Intern("_" + strconv.Itoa(r.anon)))
+		if n.Name == "dict" {
+			return ar.MakeStrDict(g)
+		}
+		return ar.MakeList(g)
 	case "none":
 		return r.errorf(n.Tok, "'none' is not a type; it is the empty constructor of Maybe. Use 'Maybe[T]' for an optional value, or 'null' for the JSON null type")
 	case "never":
@@ -214,6 +262,20 @@ func (r *coreResolver) resolveNamed(n *TypeNamed) TypeId {
 		return ar.MakeGridOf(kind, r.generic(r.names.Intern(letter)))
 	}
 	name := r.names.Intern(n.Name)
+	for i, p := range r.params {
+		if p == name {
+			if len(n.Args) > 0 {
+				return r.errorf(n.Tok, "'"+n.Name+"' is a parameter of the enum, and takes no arguments")
+			}
+			return ar.MakeParam(i)
+		}
+	}
+	if idx, ok := r.enums[name]; ok {
+		return r.enumType(n, idx)
+	}
+	if len(n.Args) > 0 {
+		return r.errorf(n.Tok, "'"+n.Name+"' is not a generic enum, so it takes no arguments in brackets")
+	}
 	if t, ok := r.aliases[name]; ok {
 		return t
 	}
@@ -221,6 +283,45 @@ func (r *coreResolver) resolveNamed(n *TypeNamed) TypeId {
 		return r.errorf(n.Tok, "unknown type '"+n.Name+"'")
 	}
 	return r.generic(name)
+}
+
+// enumType is the enum declared at idx, at the arguments written after its
+// name.
+func (r *coreResolver) enumType(n *TypeNamed, idx uint32) TypeId {
+	ar := r.arena
+	decl := ar.EnumDecl(idx)
+	if len(n.Args) != len(decl.Params) {
+		if len(decl.Params) == 0 {
+			return r.errorf(n.Tok, "the enum '"+n.Name+"' has no parameters, so it takes no arguments in brackets")
+		}
+		return r.errorf(n.Tok, "the enum '"+n.Name+"' takes "+strconv.Itoa(len(decl.Params))+" argument(s), as in "+
+			n.Name+"["+strings.TrimSpace(strings.Repeat("T ", len(decl.Params)))+"]")
+	}
+	args := make([]TypeId, len(n.Args))
+	for i, a := range n.Args {
+		if args[i] = r.resolve(a); args[i] == TidNothing {
+			return TidNothing
+		}
+	}
+	if r.self == int(idx) {
+		// A recursive reference passes the parameters in order: a usability
+		// rule, not a soundness one (design doc, "Generic enums").
+		for i, a := range args {
+			if a != ar.MakeParam(i) {
+				return r.errorf(n.Tok, "inside its own declaration, '"+n.Name+"' must be used with its own parameters in order: "+
+					n.Name+"["+strings.Join(r.paramNames(), " ")+"]")
+			}
+		}
+	}
+	return ar.MakeEnum(idx, args)
+}
+
+func (r *coreResolver) paramNames() []string {
+	out := make([]string, len(r.params))
+	for i, p := range r.params {
+		out[i] = r.names.Name(p)
+	}
+	return out
 }
 
 // generic is the signature's generic called name, added if it is new.

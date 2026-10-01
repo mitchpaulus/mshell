@@ -31,3 +31,11 @@ store_lines_same_name.msh
 store_shared_list_wider.msh
 union_same_kind.msh
 var_store_two_types_quote.msh
+enum_member_def_collision.msh
+enum_recursive_other_params.msh
+enum_union_same_kind.msh
+json_union_list.msh
+match_named_type_arm.msh
+parsehtml_not_homogeneous_dict.msh
+parsejson_as_shape_cannot_narrow.msh
+sig_dict_keyword_rejects_int.msh

@@ -1,0 +1,37 @@
+# Generic enums.
+enum Box[a] = box [a] | empty end
+enum Pair[a] = pair a a end
+enum List[a] = cons a List[a] | nil end
+
+# Box is invariant in a (the payload is a list); a new box may still be
+# given a wider type, as a new list may.
+[1] box as Box[int] b!
+@b str wl
+[1] box as Box[int | str] str wl
+
+# `empty` mentions no parameter, so its type is fixed where it is used.
+def countStrs (Box[str] -- int)
+    match
+        box xs : @xs len,
+        empty : 0,
+    end
+end
+empty countStrs str wl
+["a" "b"] box countStrs str wl
+
+# Pair is covariant: a Pair[int] is a Pair[int | str].
+def show (Pair[int | str] -- str) str end
+1 2 pair p!
+@p show wl
+
+def total (List[int] -- int)
+    match
+        cons h rest : @h @rest total +,
+        nil : 0,
+    end
+end
+1 2 3 nil cons cons cons total str wl
+
+# A recursive alias through an enum instance.
+type T = Box[T]
+[] empty append box as T str wl
