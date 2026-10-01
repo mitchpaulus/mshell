@@ -12789,7 +12789,7 @@ func (state *EvalState) evalEqualsToken(t *Token, stack *MShellStack, context *E
 		return state.failPtr(fmt.Sprintf("%d:%d: Cannot do '=' operation on a stack with only one item.\n", t.Line, t.Column))
 	}
 
-	doesEqual, err := obj1.Equals(obj2)
+	doesEqual, err := objectsEqual(obj1, obj2)
 	if err != nil {
 		return state.failPtr(fmt.Sprintf("%d:%d: Cannot compare '=' between %s (%s) and %s (%s): %s\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString(), obj2.TypeName(), obj2.DebugString(), err.Error()))
 	}
@@ -12826,7 +12826,7 @@ func (state *EvalState) evalNotEqualToken(t *Token, stack *MShellStack, context 
 		return state.failPtr(fmt.Sprintf("%d:%d: Cannot do '!=' operation on a stack with only one item.\n", t.Line, t.Column))
 	}
 
-	doesEqual, err := obj1.Equals(obj2)
+	doesEqual, err := objectsEqual(obj1, obj2)
 	if err != nil {
 		return state.failPtr(fmt.Sprintf("%d:%d: Cannot compare '!=' between %s and %s: %s\n", t.Line, t.Column, obj1.TypeName(), obj2.TypeName(), err.Error()))
 	}

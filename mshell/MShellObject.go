@@ -256,7 +256,7 @@ func (m Maybe) Equals(other MShellObject) (bool, error) {
 		return false, nil
 	}
 
-	equal, err := m.obj.Equals(otherMaybe.obj)
+	equal, err := objectsEqual(m.obj, otherMaybe.obj)
 	return equal, err
 }
 
@@ -333,6 +333,17 @@ func (n MShellNull) Concat(other MShellObject) (MShellObject, error) {
 func (n MShellNull) Equals(other MShellObject) (bool, error) {
 	_, ok := other.(MShellNull)
 	return ok, nil
+}
+
+// objectsEqual compares two objects for '=' and '!='.
+// null equals only null, whichever side it is on.
+func objectsEqual(a MShellObject, b MShellObject) (bool, error) {
+	_, aNull := a.(MShellNull)
+	_, bNull := b.(MShellNull)
+	if aNull || bNull {
+		return aNull && bNull, nil
+	}
+	return a.Equals(b)
 }
 
 func (n MShellNull) CastString() (string, error) {

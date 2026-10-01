@@ -1,0 +1,8 @@
+# null equals only null, on either side.
+"null" parseJson n!
+"1" parseJson one!
+@one @n = str wl
+@n @one = str wl
+@one @n != str wl
+@n @one != str wl
+@n @n = str wl
