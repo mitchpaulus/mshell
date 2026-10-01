@@ -7458,24 +7458,27 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot leftPad to a negative total length (%d).\n", t.Line, t.Column, totalLen.Value))
 					}
 
-					if len(inputStr) >= totalLen.Value {
+					// Lengths count runes, so a multi-byte pad character is never cut.
+					inputLen := utf8.RuneCountInString(inputStr)
+					if inputLen >= totalLen.Value {
 						stack.Push(MShellString{inputStr})
 					} else {
-						needed := totalLen.Value - len(inputStr)
-						padLen := len(padStr)
+						needed := totalLen.Value - inputLen
+						padRunes := []rune(padStr)
+						padLen := len(padRunes)
 
 						repeatCount := needed / padLen
 						remainder := needed % padLen
 
 						var builder strings.Builder
-						builder.Grow(totalLen.Value)
+						builder.Grow(len(inputStr) + (repeatCount+1)*len(padStr))
 
 						for range repeatCount {
 							builder.WriteString(padStr)
 						}
 
 						if remainder > 0 {
-							builder.WriteString(padStr[:remainder])
+							builder.WriteString(string(padRunes[:remainder]))
 						}
 
 						builder.WriteString(inputStr)
