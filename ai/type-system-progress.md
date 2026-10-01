@@ -473,7 +473,7 @@ Found, not from this session: `[] as Json` (and `as` to any alias whose unfoldin
 
 ## Where things stand (end of 2026-10-01, third session)
 
-- Nothing from this session is committed (the plan says commit only when asked). Branch `type-checker-enhancements`, last commit `44492af`, pushed.
+- Committed on `type-checker-enhancements` (not pushed): `4975a87` (code, tests, user docs), `983c1dc` (design doc, plan, progress log).
 - Suites: `test.sh` 319 passed; `typecheck_test.sh` 0 failed (old checker, with skip lists); `tests/typecheck_core_test.sh` 358 passed, 0 unexpected, 0 not checked yet; `go test` ok; `typst compile ai/type-core-calculus.typ` ok. `formal-ver/` unchanged. `tests/msh-scripts` under the core checker: 75 of 118 pass (73 before).
 - Done this session: stage 1 items 3 (walkers) and 4 (JSON ints); stage 4 (aliases and enums), except the two open questions.
 - `gofmt` not run.
