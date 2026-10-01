@@ -96,6 +96,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `lines`, `toInt`, `toFloat`, `md5`, `base64decode`, `utf8Bytes`, and `parseLinkHeader` accept a bare word from a list literal as a string.
 - `=` and `!=` with `null` on one side work in both orders. `null 1 =` is `false`; it used to be an error.
 - `toFixed` with a negative number of places gives an error instead of printing `%!(BADPREC)`.
+- `toJson` writes `null` for a NaN or infinite float, as JavaScript does. It used to write nothing, giving invalid JSON.
 
 ### Added
 

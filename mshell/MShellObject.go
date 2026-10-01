@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"golang.org/x/net/html"
+	"math"
 	"os"
 	"regexp"
 	"slices"
@@ -1859,6 +1860,10 @@ func (obj MShellInt) ToJson() string {
 }
 
 func (obj MShellFloat) ToJson() string {
+	// JSON has no NaN or infinity. Write null, as JavaScript does.
+	if math.IsNaN(obj.Value) || math.IsInf(obj.Value, 0) {
+		return "null"
+	}
 	escBytes, _ := json.Marshal(obj.Value)
 	return fmt.Sprintf("%s", string(escBytes))
 }
