@@ -419,7 +419,7 @@ def cartesian ([[a]] [a] -- [[a]])
     concat
 end
 
-def listToDict ([a] (a -- str) (a -- b) -- c)
+def listToDict ([a] (a -- str) (a -- b) -- {str: b})
     l!, keyFunc!, valFunc!
     {} d!
     @l
