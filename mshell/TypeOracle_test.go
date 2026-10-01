@@ -184,7 +184,7 @@ func (o *oracleTypes) fromSexp(x sexp, binders []TypeId) (TypeId, error) {
 		if err != nil {
 			return TidNothing, err
 		}
-		return a.MakeMaybe(t), nil
+		return a.MakeMaybeEnum(t), nil
 	case "list":
 		t, err := one()
 		if err != nil {
@@ -415,10 +415,6 @@ func (o *oracleTypes) printTo(sb *strings.Builder, t TypeId, binders []TypeId) {
 	}
 	n := a.Node(t)
 	switch n.Kind {
-	case TKMaybe:
-		sb.WriteString("(maybe ")
-		o.printTo(sb, TypeId(n.A), binders)
-		sb.WriteString(")")
 	case TKList:
 		sb.WriteString("(list ")
 		o.printTo(sb, TypeId(n.A), binders)
@@ -478,6 +474,13 @@ func (o *oracleTypes) printTo(sb *strings.Builder, t TypeId, binders []TypeId) {
 		}
 		sb.WriteString("))")
 	case TKEnum:
+		if n.A == EnumMaybe {
+			// The model's built-in Maybe, written with its shorthand.
+			sb.WriteString("(maybe ")
+			o.printTo(sb, a.enumArgs[n.Extra][0], binders)
+			sb.WriteString(")")
+			return
+		}
 		decl := a.enumDecls[n.A]
 		imm := "mut"
 		if decl.Immutable {

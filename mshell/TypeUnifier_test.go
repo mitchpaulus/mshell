@@ -52,7 +52,7 @@ func TestUnifier(t *testing.T) {
 		t.Errorf("records with different labels are not equal")
 	}
 	q := v()
-	if !u.Unify(a.MakeMaybe(q), a.MakeMaybe(json)) || subst.Apply(a, q) != json {
+	if !u.Unify(a.MakeMaybeEnum(q), a.MakeMaybeEnum(json)) || subst.Apply(a, q) != json {
 		t.Errorf("Maybe[q] = Maybe[Json] should bind q to Json")
 	}
 	if bad := u.Recheck(); len(bad) != 0 {

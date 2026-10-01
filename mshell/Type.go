@@ -380,7 +380,29 @@ func NewTypeArena() *TypeArena {
 	a.overloadedQuoteSigs = append(a.overloadedQuoteSigs, nil)
 	a.records = append(a.records, RecordType{})
 	a.enumArgs = append(a.enumArgs, nil)
+	// The built-in enum `Maybe[a] = just a | none end`: covariant and
+	// fresh-covariant in a, immutable when a is, and checkable.
+	a.DeclareEnum(EnumDecl{
+		Name:   NameMaybe,
+		Params: []EnumParam{{Variance: VarCo, Fresh: true}},
+		Ctors: []EnumCtor{
+			{Name: NameJust, Payload: []TypeId{a.MakeParam(0)}},
+			{Name: NameNoneCtor},
+		},
+		Immutable: true,
+		Checkable: true,
+	})
 	return a
+}
+
+// EnumMaybe is the index of the built-in `Maybe` enum declaration.
+const EnumMaybe uint32 = 0
+
+// MakeMaybeEnum returns `Maybe[t]` as an instance of the built-in enum, the
+// form the core checker and its relations use. (MakeMaybe is the old
+// checker's TKMaybe.)
+func (a *TypeArena) MakeMaybeEnum(t TypeId) TypeId {
+	return a.MakeEnum(EnumMaybe, []TypeId{t})
 }
 
 // Node returns the in-arena record for id. Out-of-range ids are a programmer
@@ -985,6 +1007,10 @@ type NameId uint32
 // Reserved name ids. Index 0 is the empty name and never returned by Intern.
 const (
 	NameNone NameId = 0
+	// The built-in enum `Maybe[a] = just a | none end` and its constructors.
+	NameMaybe    NameId = 1
+	NameJust     NameId = 2
+	NameNoneCtor NameId = 3
 )
 
 // NameTable interns strings into NameIds. Within a single checking session,
@@ -1001,10 +1027,14 @@ func (t *NameTable) Clone() *NameTable {
 
 // NewNameTable constructs an empty name table.
 func NewNameTable() *NameTable {
-	return &NameTable{
+	t := &NameTable{
 		ids:   make(map[string]NameId, 256),
 		names: []string{""},
 	}
+	t.Intern("Maybe")
+	t.Intern("just")
+	t.Intern("none")
+	return t
 }
 
 // Intern returns the NameId for s, allocating one if it hasn't been seen.

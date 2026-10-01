@@ -169,8 +169,6 @@ func (r *Relations) paramPolarities(t TypeId, p polarity, variance func(decl uin
 	switch n.Kind {
 	case TKParam:
 		visit(int(n.A), p)
-	case TKMaybe:
-		r.paramPolarities(TypeId(n.A), p, variance, visit)
 	case TKList:
 		r.paramPolarities(TypeId(n.A), polInv, variance, visit)
 	case TKRecord:
@@ -224,7 +222,7 @@ func (r *Relations) nonDataParams(t TypeId, params []EnumParam, underNonData boo
 		if underNonData {
 			visit(int(n.A))
 		}
-	case TKMaybe, TKList:
+	case TKList:
 		r.nonDataParams(TypeId(n.A), params, underNonData, visit)
 	case TKRecord:
 		rec := ar.records[n.Extra]
@@ -326,8 +324,6 @@ func (r *Relations) SubstParams(t TypeId, args []TypeId) TypeId {
 			return args[n.A]
 		}
 		return TidBottom
-	case TKMaybe:
-		return ar.MakeMaybe(r.SubstParams(TypeId(n.A), args))
 	case TKList:
 		return ar.MakeList(r.SubstParams(TypeId(n.A), args))
 	case TKRecord:

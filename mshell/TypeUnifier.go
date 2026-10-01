@@ -118,7 +118,7 @@ func (u *Unifier) unify(a, b TypeId, assumed []typePair) bool {
 		return false
 	}
 	switch an.Kind {
-	case TKMaybe, TKList:
+	case TKList:
 		return u.unify(TypeId(an.A), TypeId(bn.A), assumed)
 	case TKRecord:
 		x, y := ar.records[an.Extra], ar.records[bn.Extra]

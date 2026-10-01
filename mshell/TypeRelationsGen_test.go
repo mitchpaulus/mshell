@@ -80,7 +80,7 @@ func (g *typeGen) ty(depth int, underCtor, inAlias bool) TypeId {
 	case 0, 1:
 		return g.leaf(underCtor, inAlias)
 	case 2:
-		return a.MakeMaybe(g.ty(depth-1, true, inAlias))
+		return a.MakeMaybeEnum(g.ty(depth-1, true, inAlias))
 	case 3, 4:
 		return a.MakeList(g.ty(depth-1, true, inAlias))
 	case 5:
@@ -217,8 +217,6 @@ func (g *typeGen) near(t TypeId, depth int) TypeId {
 	}
 	n := a.Node(t)
 	switch n.Kind {
-	case TKMaybe:
-		return a.MakeMaybe(g.near(TypeId(n.A), depth-1))
 	case TKList:
 		return a.MakeList(g.near(TypeId(n.A), depth-1))
 	case TKRecord:
@@ -321,8 +319,6 @@ func (g *typeGen) widen(t TypeId, depth int, fresh bool) TypeId {
 	}
 	n := a.Node(t)
 	switch n.Kind {
-	case TKMaybe:
-		return a.MakeMaybe(g.widen(TypeId(n.A), depth-1, fresh))
 	case TKList:
 		if fresh {
 			return a.MakeList(g.widen(TypeId(n.A), depth-1, true))
@@ -609,7 +605,7 @@ func (g *typeGen) payloadType(depth int, params []TypeId, self uint32) TypeId {
 	}
 	switch g.rng.Intn(7) {
 	case 0:
-		return a.MakeMaybe(g.payloadType(depth-1, params, self))
+		return a.MakeMaybeEnum(g.payloadType(depth-1, params, self))
 	case 1:
 		return a.MakeList(g.payloadType(depth-1, params, self))
 	case 2:

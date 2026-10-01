@@ -197,8 +197,6 @@ func (q *subQuery) level(a, b TypeId) bool {
 		return false
 	}
 	switch an.Kind {
-	case TKMaybe:
-		return q.child(TypeId(an.A), TypeId(bn.A))
 	case TKList:
 		return q.both(TypeId(an.A), TypeId(bn.A))
 	case TKRecord:
@@ -379,7 +377,7 @@ func (q *retypeQuery) level(a, b TypeId) bool {
 		return false
 	}
 	switch an.Kind {
-	case TKMaybe, TKList:
+	case TKList:
 		return q.child(TypeId(an.A), TypeId(bn.A))
 	case TKRecord:
 		return recordLabels(ar.records[an.Extra], ar.records[bn.Extra], q.fieldRetype)
@@ -448,8 +446,7 @@ type valueKind struct {
 }
 
 const (
-	kindMaybe uint32 = 1000 + iota
-	kindList
+	kindList uint32 = 1000 + iota
 	kindDict
 	kindQuote
 	kindEnum
@@ -467,8 +464,6 @@ func (r *Relations) kindOf(t TypeId) (valueKind, bool) {
 	}
 	n := r.arena.Node(t)
 	switch n.Kind {
-	case TKMaybe:
-		return valueKind{code: kindMaybe}, true
 	case TKList, TKCommand:
 		return valueKind{code: kindList}, true
 	case TKRecord, TKDict, TKShape:
@@ -630,12 +625,6 @@ func (r *Relations) joinCore(fr bool, a, b TypeId) (TypeId, bool) {
 		return r.joinIntoUnion(fr, b, a, false)
 	}
 	switch {
-	case an.Kind == TKMaybe && bn.Kind == TKMaybe:
-		z, ok := r.join(fr, TypeId(an.A), TypeId(bn.A))
-		if !ok {
-			return TidNothing, false
-		}
-		return ar.MakeMaybe(z), true
 	case an.Kind == TKList && bn.Kind == TKList:
 		if !fr {
 			return TidNothing, false
@@ -829,8 +818,6 @@ func (r *Relations) immutable(t TypeId, visiting []TypeId) bool {
 	switch n.Kind {
 	case TKParam, TKQuote:
 		return true
-	case TKMaybe:
-		return r.immutable(TypeId(n.A), visiting)
 	case TKUnion:
 		for _, m := range ar.unionMembers[n.Extra] {
 			if !r.immutable(m, visiting) {
@@ -880,7 +867,7 @@ func (r *Relations) checkable(t TypeId, params bool, visiting []TypeId) bool {
 	switch n.Kind {
 	case TKParam:
 		return params
-	case TKMaybe, TKList:
+	case TKList:
 		return r.checkable(TypeId(n.A), params, visiting)
 	case TKRecord:
 		rec := ar.records[n.Extra]
