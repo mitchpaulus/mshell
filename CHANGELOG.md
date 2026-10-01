@@ -102,6 +102,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   On a quote, `>` used to drop the quote and `<` fed the word itself as input. On a list, `<` fed empty input.
 - The strings from `binPaths` compare equal to other strings.
 - `psub` with input that is not a string no longer leaves a temporary file behind.
+- Some error messages named the wrong function, such as `date` saying `day`. They now name the function that failed.
 
 ### Added
 

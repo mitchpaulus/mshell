@@ -6047,7 +6047,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 				case "-rot":
 					// Check that there are at least 3 items on the stack
 					if len(*stack) < 3 {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'rot' operation on a stack with less than three items.\n", t.Line, t.Column))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '-rot' operation on a stack with less than three items.\n", t.Line, t.Column))
 					}
 					top, _ := stack.Pop()
 					second, _ := stack.Pop()
@@ -6954,7 +6954,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 				case "date":
 					dateTimeObj, err := stack.Pop()
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'day' operation on an empty stack.\n", t.Line, t.Column))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'date' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
 					dateTime, ok := dateTimeObj.(*MShellDateTime)
@@ -7176,7 +7176,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 				case "trim", "trimStart", "trimEnd":
 					obj1, err := stack.Pop()
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'trim' operation on an empty stack.\n", t.Line, t.Column))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
 					}
 
 					str, err := obj1.CastString()
@@ -7490,7 +7490,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 
 					dateTimeObj, ok := obj1.(*MShellDateTime)
 					if !ok {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot check if a %s is a weekend.\n", t.Line, t.Column, obj1.TypeName()))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' on a %s. Expected a datetime.\n", t.Line, t.Column, t.Lexeme, obj1.TypeName()))
 					}
 
 					dayOfWeek := int(dateTimeObj.Time.Weekday())
@@ -7505,7 +7505,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 				case "toUnixTime", "toUnixTimeMilli", "toUnixTimeMicro", "toUnixTimeNano":
 					obj1, err := stack.Pop()
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'unixTime' operation on an empty stack.\n", t.Line, t.Column))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
 					}
 					dateTimeObj, ok := obj1.(*MShellDateTime)
 					if !ok {
@@ -8354,7 +8354,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					// Get the SHA256 hash of a file
 					obj1, err := stack.Pop()
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'sha256sumfile' operation on an empty stack.\n", t.Line, t.Column))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'sha256sum' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
 					path, err := obj1.CastString()
@@ -9730,7 +9730,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 				case "utcToCst":
 					obj1, err := stack.Pop()
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'toCst' operation on an empty stack.\n", t.Line, t.Column))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'utcToCst' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
 					// Convert the datetime to CST from assumed UTC
@@ -9750,7 +9750,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 				case "cstToUtc":
 					obj1, err := stack.Pop()
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'toUtc' operation on an empty stack.\n", t.Line, t.Column))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'cstToUtc' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
 					// Convert the datetime to UTC from assumed CST
@@ -11315,12 +11315,12 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					// Convert MShellBinary on the top of the stack to a UTF-8 string
 					obj, err := stack.Pop()
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'utf8str' operation on an empty stack.\n", t.Line, t.Column))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'utf8Str' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
 					binaryObj, ok := obj.(MShellBinary)
 					if !ok {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: The top of stack in 'utf8str' is expected to be a binary, found a %s (%s)\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The top of stack in 'utf8Str' is expected to be a binary, found a %s (%s)\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
 					}
 
 					// Convert binary to string
@@ -11330,13 +11330,13 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					// Convert MShellString on the top of the stack to UTF-8 bytes
 					obj, err := stack.Pop()
 					if err != nil {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'utf8bytes' operation on an empty stack.\n", t.Line, t.Column))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'utf8Bytes' operation on an empty stack.\n", t.Line, t.Column))
 					}
 					obj = bareWordAsString(obj)
 
 					strObj, ok := obj.(MShellString)
 					if !ok {
-						return state.FailWithMessage(fmt.Sprintf("%d:%d: The top of stack in 'utf8bytes' is expected to be a string, found a %s (%s)\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
+						return state.FailWithMessage(fmt.Sprintf("%d:%d: The top of stack in 'utf8Bytes' is expected to be a string, found a %s (%s)\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
 					}
 
 					// Convert string to bytes
