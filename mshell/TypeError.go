@@ -52,6 +52,22 @@ const (
 	// for a field a shape does not declare, or a `none`. Informational
 	// severity (does not fail the type check); Hint holds the message.
 	TErrUnwrapAlwaysFails
+
+	// Errors of the core checker (TypeCore.go).
+
+	// TErrVarType is a store whose value does not fit the variable's one
+	// type. Name is the variable, Expected its type, Actual the value's.
+	TErrVarType
+	// TErrNoJoin is two values that meet (if arms, list elements) with no
+	// common type. Hint holds the message.
+	TErrNoJoin
+	// TErrCoreUnsupported is a construct the core checker does not check
+	// yet. Hint names it.
+	TErrCoreUnsupported
+	// TErrCoreInternal is a check the core checker made that failed when
+	// repeated with the final types: a bug in the checker, never a reason
+	// to accept a program. Hint holds the details.
+	TErrCoreInternal
 )
 
 // TypeErrorSeverity classifies a diagnostic. Severity-error blocks
@@ -152,6 +168,15 @@ func (e TypeError) Format(arena *TypeArena, names *NameTable) string {
 		// description. Pos is the def's name token (the body could
 		// span many lines, so the name is the most stable anchor).
 		fmt.Fprintf(&sb, "definition and body do not match for '%s': %s", e.Name, e.Hint)
+	case TErrVarType:
+		fmt.Fprintf(&sb, "variable '%s' has type %s, so it cannot store a value of type %s; use a new name, or widen the first store with `as`",
+			e.Name, FormatType(arena, names, e.Expected), FormatType(arena, names, e.Actual))
+	case TErrNoJoin:
+		fmt.Fprintf(&sb, "%s", e.Hint)
+	case TErrCoreUnsupported:
+		fmt.Fprintf(&sb, "the core checker does not check %s yet", e.Hint)
+	case TErrCoreInternal:
+		fmt.Fprintf(&sb, "internal checker error: %s", e.Hint)
 	default:
 		fmt.Fprintf(&sb, "unknown type error")
 	}

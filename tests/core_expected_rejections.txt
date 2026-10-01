@@ -1,0 +1,2 @@
+# Programs in tests/success that the core checker rejects on purpose.
+# One file name per line, then a tab and the rewrite that passes.

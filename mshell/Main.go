@@ -858,7 +858,14 @@ func main() {
 	state.AddCompletionDefinitions(file.Definitions)
 
 	if checkTypes {
-		errs, ok := TypeCheckProgram(file, startupDefinitions)
+		check := TypeCheckProgram
+		// MSH_CHECKER=core selects the checker being built beside the
+		// current one (ai/type-system-plan.md, stage 3). Not documented
+		// for users until it replaces the current checker.
+		if os.Getenv("MSH_CHECKER") == "core" {
+			check = CoreTypeCheckProgram
+		}
+		errs, ok := check(file, startupDefinitions)
 		if !ok {
 			for _, e := range errs {
 				fmt.Fprintln(os.Stderr, e)

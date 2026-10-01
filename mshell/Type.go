@@ -297,6 +297,11 @@ type QuoteSig struct {
 // shapeFields, quoteSigs, unionMembers, and gridSchemas are side tables
 // for variable-length data referenced from a TypeNode's Extra field.
 type TypeArena struct {
+	// parent is the frozen arena this one is an overlay of (see Overlay),
+	// or nil. Its types keep their ids here, and hash-consing looks in it
+	// after this arena's own tables.
+	parent *TypeArena
+
 	nodes []TypeNode
 	cons  map[string]TypeId
 	// atomCons hashconses the kinds whose data fits entirely in TypeNode
@@ -325,6 +330,7 @@ type TypeArena struct {
 // shared; only the tables that grow are copied.
 func (a *TypeArena) Clone() *TypeArena {
 	return &TypeArena{
+		parent:              a.parent,
 		nodes:               slices.Clone(a.nodes),
 		cons:                maps.Clone(a.cons),
 		atomCons:            maps.Clone(a.atomCons),
@@ -340,6 +346,51 @@ func (a *TypeArena) Clone() *TypeArena {
 		aliases:             slices.Clone(a.aliases),
 		abstractCount:       a.abstractCount,
 	}
+}
+
+// Overlay returns an arena that starts with every type in a and grows on
+// its own, without copying a's tables: a check starts in constant time
+// from a base built once. a must not change afterwards. The overlay's
+// slices share a's backing arrays with their capacity capped, so the first
+// append to each copies it, and its hash-consing maps hold only what the
+// overlay adds, looked up before a's.
+func (a *TypeArena) Overlay() *TypeArena {
+	return &TypeArena{
+		parent:              a,
+		nodes:               slices.Clip(a.nodes),
+		cons:                make(map[string]TypeId, 64),
+		atomCons:            make(map[TypeNode]TypeId, 64),
+		shapeFields:         slices.Clip(a.shapeFields),
+		quoteSigs:           slices.Clip(a.quoteSigs),
+		overloadedQuoteSigs: slices.Clip(a.overloadedQuoteSigs),
+		unionMembers:        slices.Clip(a.unionMembers),
+		gridSchemas:         slices.Clip(a.gridSchemas),
+		gridSchemaCons:      make(map[string]uint32),
+		records:             slices.Clip(a.records),
+		enumDecls:           slices.Clip(a.enumDecls),
+		enumArgs:            slices.Clip(a.enumArgs),
+		aliases:             slices.Clip(a.aliases),
+		abstractCount:       a.abstractCount,
+	}
+}
+
+// lookupCons finds a composite type by its key, here or in a parent.
+func (a *TypeArena) lookupCons(key []byte) (TypeId, bool) {
+	for p := a; p != nil; p = p.parent {
+		if id, ok := p.cons[string(key)]; ok {
+			return id, true
+		}
+	}
+	return TidNothing, false
+}
+
+func (a *TypeArena) lookupGridSchema(key []byte) (uint32, bool) {
+	for p := a; p != nil; p = p.parent {
+		if idx, ok := p.gridSchemaCons[string(key)]; ok {
+			return idx, true
+		}
+	}
+	return 0, false
 }
 
 // NewTypeArena constructs an arena pre-populated with the primitive ids
@@ -513,7 +564,7 @@ func (a *TypeArena) MakeShape(fields []ShapeField) TypeId {
 	}
 	normalized := normalizeShapeFields(fields)
 	a.keyBuf = appendShapeKey(a.keyBuf[:0], normalized)
-	if id, ok := a.cons[string(a.keyBuf)]; ok {
+	if id, ok := a.lookupCons(a.keyBuf); ok {
 		return id
 	}
 	idx := uint32(len(a.shapeFields))
@@ -536,7 +587,7 @@ func (a *TypeArena) MakeUnion(arms []TypeId, brandId NameId) TypeId {
 		return flat[0]
 	}
 	a.keyBuf = appendUnionKey(a.keyBuf[:0], flat, brandId)
-	if id, ok := a.cons[string(a.keyBuf)]; ok {
+	if id, ok := a.lookupCons(a.keyBuf); ok {
 		return id
 	}
 	idx := uint32(len(a.unionMembers))
@@ -549,7 +600,7 @@ func (a *TypeArena) MakeUnion(arms []TypeId, brandId NameId) TypeId {
 // MakeQuote returns the canonical TypeId for a quote/function signature.
 func (a *TypeArena) MakeQuote(sig QuoteSig) TypeId {
 	a.keyBuf = appendQuoteKey(a.keyBuf[:0], sig)
-	if id, ok := a.cons[string(a.keyBuf)]; ok {
+	if id, ok := a.lookupCons(a.keyBuf); ok {
 		return id
 	}
 	idx := uint32(len(a.quoteSigs))
@@ -568,7 +619,7 @@ func (a *TypeArena) MakeOverloadedQuote(sigs []QuoteSig) TypeId {
 		return a.MakeQuote(sigs[0])
 	}
 	a.keyBuf = appendOverloadedQuoteKey(a.keyBuf[:0], sigs)
-	if id, ok := a.cons[string(a.keyBuf)]; ok {
+	if id, ok := a.lookupCons(a.keyBuf); ok {
 		return id
 	}
 	cp := make([]QuoteSig, len(sigs))
@@ -599,7 +650,7 @@ func (a *TypeArena) MakeGridSchemaIdx(cols []GridSchemaCol) uint32 {
 	if a.gridSchemaCons == nil {
 		a.gridSchemaCons = make(map[string]uint32, 8)
 	}
-	if idx, ok := a.gridSchemaCons[string(a.keyBuf)]; ok {
+	if idx, ok := a.lookupGridSchema(a.keyBuf); ok {
 		return idx
 	}
 	cp := make([]GridSchemaCol, len(cols))
@@ -643,7 +694,7 @@ func (a *TypeArena) MakeRecord(fields []RecordField, rest RecordField) TypeId {
 		}
 	}
 	a.keyBuf = appendRecordKey(a.keyBuf[:0], out, rest)
-	if id, ok := a.cons[string(a.keyBuf)]; ok {
+	if id, ok := a.lookupCons(a.keyBuf); ok {
 		return id
 	}
 	idx := uint32(len(a.records))
@@ -708,7 +759,7 @@ func (a *TypeArena) MakeEnum(idx uint32, args []TypeId) TypeId {
 	for _, t := range args {
 		a.keyBuf = appendKeyU32(a.keyBuf, uint32(t))
 	}
-	if id, ok := a.cons[string(a.keyBuf)]; ok {
+	if id, ok := a.lookupCons(a.keyBuf); ok {
 		return id
 	}
 	argIdx := uint32(len(a.enumArgs))
@@ -820,8 +871,10 @@ func (a *TypeArena) GridSchema(id TypeId) GridSchema {
 // a new node if none existed.
 func (a *TypeArena) intern(kind TypeKind, x, y, extra uint32) TypeId {
 	key := TypeNode{Kind: kind, A: x, B: y, Extra: extra}
-	if id, ok := a.atomCons[key]; ok {
-		return id
+	for p := a; p != nil; p = p.parent {
+		if id, ok := p.atomCons[key]; ok {
+			return id
+		}
 	}
 	id := a.append(key)
 	a.atomCons[key] = id
@@ -1016,13 +1069,22 @@ const (
 // NameTable interns strings into NameIds. Within a single checking session,
 // every distinct identifier maps to a unique id.
 type NameTable struct {
-	ids   map[string]NameId
-	names []string
+	// parent is the frozen table this one is an overlay of, or nil.
+	parent *NameTable
+	ids    map[string]NameId
+	names  []string
 }
 
 // Clone returns a name table with the same names that grows independently.
 func (t *NameTable) Clone() *NameTable {
-	return &NameTable{ids: maps.Clone(t.ids), names: slices.Clone(t.names)}
+	return &NameTable{parent: t.parent, ids: maps.Clone(t.ids), names: slices.Clone(t.names)}
+}
+
+// Overlay returns a name table that starts with t's names and grows on its
+// own without copying them, as TypeArena.Overlay. t must not change
+// afterwards.
+func (t *NameTable) Overlay() *NameTable {
+	return &NameTable{parent: t, ids: make(map[string]NameId, 32), names: slices.Clip(t.names)}
 }
 
 // NewNameTable constructs an empty name table.
@@ -1043,13 +1105,25 @@ func (t *NameTable) Intern(s string) NameId {
 	if s == "" {
 		return NameNone
 	}
-	if id, ok := t.ids[s]; ok {
-		return id
+	for p := t; p != nil; p = p.parent {
+		if id, ok := p.ids[s]; ok {
+			return id
+		}
 	}
 	id := NameId(len(t.names))
 	t.names = append(t.names, s)
 	t.ids[s] = id
 	return id
+}
+
+// Lookup returns the NameId for s if it has been interned.
+func (t *NameTable) Lookup(s string) (NameId, bool) {
+	for p := t; p != nil; p = p.parent {
+		if id, ok := p.ids[s]; ok {
+			return id, true
+		}
+	}
+	return NameNone, false
 }
 
 // Name returns the string for an id. Panics on out-of-range ids.

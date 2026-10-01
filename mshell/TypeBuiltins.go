@@ -65,20 +65,7 @@ type sigAST struct {
 // QuoteSig. Generic names must be single lowercase letters; anything else
 // unknown to the resolver is a typo and panics.
 func parseBuiltinSig(c *Checker, src string) QuoteSig {
-	var ast sigAST
-	if cached, ok := sigASTCache.Load(src); ok {
-		ast = cached.(sigAST)
-	} else {
-		lex := NewLexer(src, nil)
-		parser := NewMShellParser(lex)
-		parser.NextToken()
-		inputs, outputs, err := parser.parseDefSignature()
-		if err != nil {
-			panic("builtin sig " + src + ": " + err.Error())
-		}
-		ast = sigAST{inputs: inputs, outputs: outputs}
-		sigASTCache.Store(src, ast)
-	}
+	ast := builtinSigAST(src)
 	ctx := &typeResolveCtx{}
 	errStart := len(c.errors)
 	ins := c.resolveSigItems(ast.inputs, ctx)
@@ -98,6 +85,24 @@ func parseBuiltinSig(c *Checker, src string) QuoteSig {
 		gens = nil
 	}
 	return QuoteSig{Inputs: ins, Outputs: outs, Generics: gens}
+}
+
+// builtinSigAST parses a `(inputs -- outputs)` signature string, once per
+// string. A string that does not parse is a programmer error and panics.
+func builtinSigAST(src string) sigAST {
+	if cached, ok := sigASTCache.Load(src); ok {
+		return cached.(sigAST)
+	}
+	lex := NewLexer(src, nil)
+	parser := NewMShellParser(lex)
+	parser.NextToken()
+	inputs, outputs, err := parser.parseDefSignature()
+	if err != nil {
+		panic("builtin sig " + src + ": " + err.Error())
+	}
+	ast := sigAST{inputs: inputs, outputs: outputs}
+	sigASTCache.Store(src, ast)
+	return ast
 }
 
 // parseBuiltinSigs parses a list of signature strings, preserving order

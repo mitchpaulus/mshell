@@ -1,0 +1,134 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// coreCheck parses src and checks it with the core checker.
+func coreCheck(t *testing.T, base *CoreBase, src string) ([]string, bool) {
+	t.Helper()
+	file, err := NewMShellParser(NewLexer(src, nil)).ParseFile()
+	if err != nil {
+		t.Fatalf("parse error in %q: %v", src, err)
+	}
+	return base.Check(file)
+}
+
+// TestCoreChecker runs the acceptance rows of ai/type-system-plan.md
+// section 7 that the core checker covers so far.
+func TestCoreChecker(t *testing.T) {
+	base := NewCoreBase(nil)
+	cases := []struct {
+		src  string
+		ok   bool
+		want string // a part of the first error, when !ok
+	}{
+		// Variables: one type per scope, fixed by the first store.
+		{`false if 1 x! else "a" x! end @x 1 +`, false, "variable 'x' has type int"},
+		{`"a\nb" text!  @text lines text!`, false, "use a new name, or widen the first store"},
+		// A ⊥ in a store fixes nothing.
+		{`none r!  5 just r!  none r!  @r ? 1 + wl`, true, ""},
+		{`[none] l!  @l 5 just append drop`, true, ""},
+		{`none r! @r drop`, true, ""},
+		// never and divergence.
+		{`def f ( -- never) 1 exit 1 + end`, true, ""},
+		{`def f (str -- never) wl end`, false, "never returns, but the body can return"},
+		{`def f ( -- int never) 1 end`, false, "'never' is allowed only"},
+		{`def f ([never] -- ) drop end`, false, "'never' is allowed only"},
+		{`def spin ( -- never) spin end`, true, ""},
+		{`def f (bool -- never | str) drop "a" end`, false, "'never' is allowed only"},
+		{`def die (str -- never) wl 1 exit end  true if 5 else "bad" die end 1 + wl`, true, ""},
+		{`true if 1 else 1 exit end 1 + wl`, true, ""},
+		{`1 return 2`, true, ""},
+		{`def f (int -- int) return end`, true, ""},
+		{`def f ( -- never) return end`, false, "'return' is not allowed"},
+		// Joins (the design doc's join table).
+		{`true if 1 else 2.5 end drop`, true, ""},
+		{`true if none else 5 just end drop`, true, ""},
+		{`true if "a" else null end drop`, true, ""},
+		{`true if [1] else ["a"] end drop`, true, ""},
+		{`true if {a: 1} else {a: 2, b: 3} end drop`, true, ""},
+		{`[1] xs! ["a"] ys! true if @xs else @ys end drop`, false, "no common type"},
+		{`[1] xs! ["a"] ys! true if @xs just else @ys just end drop`, false, "no common type"},
+		{`true if [1] just else ["a"] just end drop`, true, ""},
+		{`true if 5 else "x" parseJson end drop`, true, ""},
+		{`true if [1] else "x" parseJson end drop`, true, ""},
+		{`[1] xs! true if @xs else "x" parseJson end drop`, false, "no common type"},
+		{`true if 1 else end`, false, "differing sizes"},
+		// else if conditions run on the stack the earlier ones left.
+		{`1 false if 2 else* 3 4 = *if 5 else 6 end + wl`, true, ""},
+		{`false if 1 else* "a" *if 2 else 3 end drop`, false, "expected"},
+		// Generics: a bare generic in two inputs is the join of the arguments.
+		{`none 5 just = drop`, true, ""},
+		{`[1] ["a"] = drop`, true, ""},
+		// Unions of distinct kinds only.
+		{`def f ([int] | [str] -- ) drop end`, false, "two members of the same kind"},
+		{`def f (int | [str] -- ) drop end`, true, ""},
+	}
+	for _, tc := range cases {
+		errs, ok := coreCheck(t, base, tc.src)
+		if ok != tc.ok {
+			t.Errorf("%s: ok = %v, want %v; errors: %v", tc.src, ok, tc.ok, errs)
+			continue
+		}
+		if !ok && !strings.Contains(errs[0], tc.want) {
+			t.Errorf("%s: first error %q does not contain %q", tc.src, errs[0], tc.want)
+		}
+	}
+}
+
+// benchCorpus parses every script the type-check benchmarks use.
+func benchCorpus(b *testing.B) []*MShellFile {
+	var files []*MShellFile
+	for _, pattern := range []string{"../tests/success/*.msh", "../tests/typecheck_fail/*.msh", "../tests/msh-scripts/*"} {
+		paths, _ := filepath.Glob(pattern)
+		for _, p := range paths {
+			src, err := os.ReadFile(p)
+			if err != nil {
+				continue
+			}
+			file, err := NewMShellParser(NewLexer(string(src), nil)).ParseFile()
+			if err != nil {
+				continue
+			}
+			files = append(files, file)
+		}
+	}
+	return files
+}
+
+// BenchmarkCoreCheckCorpus checks the corpus of BenchmarkTypeCheckCorpus
+// with the core checker, from a base built once.
+func BenchmarkCoreCheckCorpus(b *testing.B) {
+	base := NewCoreBase(benchStdlib(b))
+	files := benchCorpus(b)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		for _, f := range files {
+			base.Check(f)
+		}
+	}
+}
+
+// BenchmarkCoreCheckEmpty is the cost of starting one check.
+func BenchmarkCoreCheckEmpty(b *testing.B) {
+	base := NewCoreBase(benchStdlib(b))
+	file := benchParse(b, "")
+	b.ReportAllocs()
+	for b.Loop() {
+		base.Check(file)
+	}
+}
+
+// BenchmarkCoreBase is the cost of building the base, once per process.
+func BenchmarkCoreBase(b *testing.B) {
+	std := benchStdlib(b)
+	b.ReportAllocs()
+	for b.Loop() {
+		NewCoreBase(std)
+	}
+}

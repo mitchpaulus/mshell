@@ -215,6 +215,19 @@ func (a *TypeQuoteExpr) DebugString() string {
 	return "(" + strings.Join(ins, " ") + " -- " + strings.Join(outs, " ") + ")"
 }
 
+// TypeNewExpr is a def output marked `new`: `( -- new Json)`. The body
+// must leave a new (fresh) value there, and callers get it as new
+// (ai/type-core-calculus.typ, "New def outputs").
+type TypeNewExpr struct {
+	Tok   Token
+	Inner MShellParseItem
+}
+
+func (a *TypeNewExpr) GetStartToken() Token { return a.Tok }
+func (a *TypeNewExpr) GetEndToken() Token   { return a.Inner.GetEndToken() }
+func (a *TypeNewExpr) ToJson() string       { return fmt.Sprintf("{\"new\": %s}", a.Inner.ToJson()) }
+func (a *TypeNewExpr) DebugString() string  { return "new " + a.Inner.DebugString() }
+
 // TypeUnionExpr is a union `A | B | C`.
 type TypeUnionExpr struct {
 	StartTok Token
@@ -655,8 +668,23 @@ func (parser *MShellParser) parseDefSignature() ([]MShellParseItem, []MShellPars
 		return nil, nil, err
 	}
 	for parser.curr.Type != RIGHT_PAREN && parser.curr.Type != EOF {
+		// `new T` marks a new output. A lone `new` before `)` stays a
+		// generic of that name.
+		var newTok *Token
+		if parser.curr.Type == LITERAL && parser.curr.Lexeme == "new" {
+			tok := parser.curr
+			parser.NextToken()
+			if parser.curr.Type == RIGHT_PAREN {
+				outputs = append(outputs, &TypeNamed{Tok: tok, Name: tok.Lexeme})
+				break
+			}
+			newTok = &tok
+		}
 		item, subErrs := parser.parseTypeExpr()
 		errs = append(errs, subErrs...)
+		if newTok != nil {
+			item = &TypeNewExpr{Tok: *newTok, Inner: item}
+		}
 		outputs = append(outputs, item)
 	}
 	if err := parser.Match(parser.curr, RIGHT_PAREN); err != nil {
@@ -682,6 +710,9 @@ type typeResolveCtx struct {
 
 func (c *Checker) resolveTypeExpr(node MShellParseItem, ctx *typeResolveCtx) TypeId {
 	switch n := node.(type) {
+	case *TypeNewExpr:
+		// The old checker has no `new` outputs.
+		return c.resolveTypeExpr(n.Inner, ctx)
 	case *TypePrim:
 		return n.Tid
 	case *TypeListExpr:

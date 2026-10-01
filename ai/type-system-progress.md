@@ -212,3 +212,18 @@ Not committed (the plan says not to commit unless asked). Suites: test.sh 283 pa
   Lists, pipes and generic grid columns are cloned with one `memmove`, and only elements that can hold an object are visited; typed grid columns are cloned or gathered; a view or row becomes a view or row of a new grid with only its rows.
   Old checker: `(t -- t)`. Tests: `tests/success/deep_copy.msh`, `tests/fail/deep_copy_cycle.msh`, `mshell/DeepCopy_test.go` (metadata, dictionary-encoded columns, views, cycles through a `Maybe` and a grid cell, a path past the map threshold).
   `BenchmarkDeepCopyStrList` (1,000 strings): 20 µs, 3 allocations; the profile is the copy itself (`memmove`, GC write barriers).
+
+## Stage 3, step 1: the core checker's skeleton (2026-09-30)
+
+- `Maybe` is the built-in enum `Maybe[a] = just a | none end` in the core types (enum 0 of every arena, reserved name ids); the relations, enum analysis and unifier lost their `TKMaybe` cases. 150,000 oracle questions agree.
+- `MSH_CHECKER=core` selects the core checker for `--check-types` and `--type-check-only`. Not documented for users.
+- Files: `TypeCoreResolve.go` (type expressions to core types; generics are enum-parameter types, instantiated with new variables at a call and rigid types for a body), `TypeCoreStack.go` (8-byte slots, signatures, the table), `TypeCoreBuiltins.go` (the seed table), `TypeCore.go` (the walker).
+- Covered: literals, list and dict literals (ShapeLit freshness, elements joined), stack shuffles that keep or drop fresh marks, variables (one type per scope, `⊥` opened at a store, every store checked again once solved), defs (rigid generics, outputs, `never`, `return`), top-level `return`, `if`/`else*`/`else` with joins, overloads chosen from the argument types, the end-of-unit checks (`Recheck`, stores, unset variables; unsolved variables become `⊥`).
+- A generic that is several bare inputs (`(a a -- bool)`) is set to the join of the arguments first; the join is an upper bound (`join_slot_ub`), so it is a valid instantiation, and the result does not depend on argument order.
+- `new T` parses in def outputs (`TypeNewExpr`); the old checker ignores it. The core checker uses it in the builtin table; on user defs it is "not checked yet" until step 7.
+- Builtin outputs: `new` (always fresh), new lists (fresh when the elements are immutable), and outputs that keep freshness (`just`, `?`).
+- Anything not covered yet stops the unit with "the core checker does not check X yet", and words whose table entries are partial say so instead of failing.
+- Performance: the arena and name table are overlays of a frozen base (`TypeArena.Overlay`, `NameTable.Overlay`). `BenchmarkCoreCheckEmpty`: 11 µs and 23 allocations per check, against 1.2 ms and 1,991 for the old checker; building the base (`BenchmarkCoreBase`) is 0.34 ms, once per process. `BenchmarkCoreCheckCorpus` is not comparable yet: most units stop at an unchecked construct.
+- `tests/typecheck_core_test.sh` (with `core_expected_rejections.txt` and `core_no_longer_errors.txt`, both empty): 38 passed, 0 unexpected, 234 not checked yet. `TestCoreChecker` holds the acceptance rows step 1 covers.
+
+Found: `and` and `or` are runtime builtins missing from `BuiltInList.go`.
