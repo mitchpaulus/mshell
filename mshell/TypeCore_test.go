@@ -89,7 +89,15 @@ func TestCoreChecker(t *testing.T) {
 		{`1 x!  [0 0] (drop @x 1 + drop "a" x!) each`, false, "variable 'x' has type int"},
 		// A quote of unknown arity cannot be run.
 		{`(1 wl) q! @q x`, true, ""},
+		{`(1 +) drop`, false, "annotate"},
 		{`("a" 1 +) drop`, false, "no matching overload"},
+
+		// Pending overload choices: made once one candidate fits.
+		{`(1 +) q! 5 @q x wl`, true, ""},
+		{`(1 +) q! 2.5 @q x str wl`, true, ""},
+		{`(1 +) q! "a" @q x drop`, false, "no matching overload for '+'"},
+		{`(1 +) q!`, false, "annotate the quote"},
+		{`(dup *) q! 3 @q x wl`, true, ""},
 
 		// An overloaded word on a union is a match per member.
 		{`true if 1 else 2.5 end toFloat 1.0 + str wl`, true, ""},

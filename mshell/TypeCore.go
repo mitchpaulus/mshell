@@ -157,6 +157,10 @@ type coreChecker struct {
 	brkSeen   bool
 	infer     *coreInfer
 	deferred  []coreDeferred
+	// choices are the unit's waiting overload choices (TypeCoreChoice.go);
+	// choiceVersion is len(uni.pairs) when they were last tried.
+	choices       []coreChoice
+	choiceVersion int
 	// mentionsVar caches, per TypeId, whether a type mentions a
 	// unification variable: 0 not yet known, 1 no, 2 yes.
 	mentionsVar []uint8
@@ -210,6 +214,7 @@ func (c *coreChecker) beginUnit() {
 	c.stores = c.stores[:0]
 	c.deferred = c.deferred[:0]
 	c.pending = c.pending[:0]
+	c.choices, c.choiceVersion = c.choices[:0], 0
 	c.brk, c.cont, c.brkSeen, c.infer = coreLoopCtx{}, coreLoopCtx{}, false, nil
 	c.subst.bound = c.subst.bound[:0]
 	c.subst.root = nil
@@ -225,6 +230,9 @@ func (c *coreChecker) finishUnit() {
 		if !c.pending[i].done && !c.abandoned {
 			c.inferPending(uint32(i + 1))
 		}
+	}
+	if !c.abandoned {
+		c.finishChoices()
 	}
 	// A variable left unsolved is ⊥ (design doc, "A ⊥ in a store fixes
 	// nothing"); nothing constrained it, so any type would do.
@@ -339,6 +347,9 @@ func (c *coreChecker) walk(items []MShellParseItem) {
 			return
 		}
 		c.step(item)
+		if len(c.choices) > 0 {
+			c.retryChoices()
+		}
 	}
 }
 
@@ -764,9 +775,7 @@ func (c *coreChecker) call(sigs []coreSig, tok Token) {
 			Hint: "the stack has " + c.formatSlots(c.topSlots(sigs)) + "; " + c.formatCandidates(sigs)})
 		c.abandoned = true
 	default:
-		c.errs = append(c.errs, TypeError{Kind: TErrAmbiguousTyping, Pos: tok,
-			Hint: "more than one signature of '" + tok.Lexeme + "' fits " + c.formatSlots(c.topSlots(sigs)) + "; annotate the value"})
-		c.abandoned = true
+		c.choose(sigs, tok)
 	}
 }
 
@@ -861,7 +870,7 @@ func (c *coreChecker) argsFit(sig *coreSig) bool {
 	gens := c.instantiate(sig)
 	base := len(c.stack) - n
 	ok := true
-	c.eachInput(sig, gens, base, func(i int, want TypeId) {
+	c.eachInput(sig, gens, c.stackArg(base), func(i int, want TypeId) {
 		if !ok {
 			return
 		}
@@ -886,13 +895,15 @@ func (c *coreChecker) argsFit(sig *coreSig) bool {
 // argument is checked first.
 // A waiting quote literal is visited last, once the other arguments have
 // fixed what its parameter type can be.
-func (c *coreChecker) eachInput(sig *coreSig, gens []TypeId, base int, f func(i int, want TypeId)) {
+// arg reads argument i; it is read again after each visit, since checking
+// a quote body can move the stack.
+func (c *coreChecker) eachInput(sig *coreSig, gens []TypeId, arg func(i int) coreSlot, f func(i int, want TypeId)) {
 	for pass := 0; pass < 3; pass++ {
 		if pass == 1 {
-			c.joinRepeated(sig, gens)
+			c.joinRepeated(sig, gens, arg)
 		}
 		for i, want := range sig.ins {
-			waiting := c.waiting(c.stack[base+i]) != nil
+			waiting := c.waiting(arg(i)) != nil
 			bare := c.arena.nodes[want].Kind == TKParam
 			if waiting != (pass == 2) || (!waiting && bare != (pass == 1)) {
 				continue
@@ -905,10 +916,14 @@ func (c *coreChecker) eachInput(sig *coreSig, gens []TypeId, base int, f func(i 
 	}
 }
 
+// stackArg reads the arguments that start at stack index base.
+func (c *coreChecker) stackArg(base int) func(i int) coreSlot {
+	return func(i int) coreSlot { return c.stack[base+i] }
+}
+
 // joinRepeated sets each unsolved generic that is two or more bare inputs
 // of sig to the join of the arguments there, when they are all solved.
-func (c *coreChecker) joinRepeated(sig *coreSig, gens []TypeId) {
-	base := len(c.stack) - len(sig.ins)
+func (c *coreChecker) joinRepeated(sig *coreSig, gens []TypeId, argAt func(i int) coreSlot) {
 	for g := range gens {
 		if !c.hasVars(gens[g]) {
 			continue
@@ -920,7 +935,7 @@ func (c *coreChecker) joinRepeated(sig *coreSig, gens []TypeId) {
 			if n.Kind != TKParam || int(n.A) != g {
 				continue
 			}
-			arg := c.stack[base+i]
+			arg := argAt(i)
 			if c.waiting(arg) != nil || c.hasVars(arg.t) {
 				count = 0
 				break
@@ -951,7 +966,7 @@ func (c *coreChecker) apply(sig *coreSig, tok Token) {
 	}
 	gens := append([]TypeId(nil), c.instantiate(sig)...)
 	base := len(c.stack) - n
-	c.eachInput(sig, gens, base, func(i int, want TypeId) {
+	c.eachInput(sig, gens, c.stackArg(base), func(i int, want TypeId) {
 		if s := c.stack[base+i]; c.waiting(s) != nil {
 			c.checkPending(s.pq, want, sig.child, base, tok)
 			c.stack[base+i].pq = 0
