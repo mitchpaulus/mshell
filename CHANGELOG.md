@@ -98,6 +98,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `toFixed` with a negative number of places gives an error instead of printing `%!(BADPREC)`.
 - `toJson` writes `null` for a NaN or infinite float, as JavaScript does. It used to write nothing, giving invalid JSON.
 - `leftPad` counts code points, not bytes, so it no longer cuts a multi-byte pad character.
+- `>` and `<` with a bare word from a list literal treat it as a file name, like a path, on both lists and quotes.
+  On a quote, `>` used to drop the quote and `<` fed the word itself as input. On a list, `<` fed empty input.
 
 ### Added
 

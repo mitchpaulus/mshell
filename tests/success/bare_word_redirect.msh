@@ -1,0 +1,11 @@
+# A bare word from a list literal names a file in '>' and '<', like a path.
+[bare_word_redirect_out.txt bare_word_redirect.msh] names!
+@names 0 nth outFile!
+@names 1 nth inFile!
+
+("from quote" wl) @outFile > x
+`bare_word_redirect_out.txt` readFile w
+`bare_word_redirect_out.txt` rm
+
+(stdin lines 0 nth wl) @inFile < x
+[head -n 1] @inFile < ;

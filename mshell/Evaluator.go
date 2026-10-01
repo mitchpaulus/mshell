@@ -12691,12 +12691,13 @@ func (state *EvalState) evalGreaterLessToken(t *Token, stack *MShellStack, conte
 			if containsNullByte(path) {
 				return state.failPtr(fmt.Sprintf("%d:%d: Found a null byte in the redirection file path. This is almost certainly not intended. You may have built the file name from UTF-16. Please ensure that your string is UTF-8 for the most predictable results.\n", t.Line, t.Column))
 			}
+			// A bare word names a file, like a path.
 			switch obj2 := obj2.(type) {
 			case *MShellList:
 				if t.Type == GREATERTHAN {
 					obj2.StandardOutputFile = path
 				} else { // LESSTHAN, input redirection
-					obj2.StdinBehavior = STDIN_CONTENT
+					obj2.StdinBehavior = STDIN_FILE
 					obj2.StandardInputFile = path
 				}
 				stack.Push(obj2)
@@ -12704,9 +12705,10 @@ func (state *EvalState) evalGreaterLessToken(t *Token, stack *MShellStack, conte
 				if t.Type == GREATERTHAN {
 					obj2.StandardOutputFile = path
 				} else {
-					obj2.StdinBehavior = STDIN_CONTENT
-					obj2.StandardInputContents = path
+					obj2.StdinBehavior = STDIN_FILE
+					obj2.StandardInputFile = path
 				}
+				stack.Push(obj2)
 			default:
 				return state.failPtr(fmt.Sprintf("%d:%d: Cannot redirect a %s (%s) to a %s (%s).\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
 			}
