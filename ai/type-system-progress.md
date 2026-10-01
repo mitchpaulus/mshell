@@ -383,7 +383,7 @@ Benchmarks after it (the corpus now has 58 more files, +15%): corpus check 17-18
 
 ## Where things stand (end of 2026-10-01, second session)
 
-- **Nothing is committed.** Everything since `fb147fc` is uncommitted on `type-checker-enhancements`: the first session's work (freshness per object in Rocq, docs and checker; built-in aliases; archive forms) and this session's (grids, dict forms, `new` marks, the LSP, std `freeOut`, definite assignment, acceptance tests, the two old-checker skip lists).
+- Committed on `type-checker-enhancements` (not pushed): `f86dc51` (Rocq: freshness per object), `7eff1b5` (std `listToDict`), `782877e` (the core checker, LSP, docs), `41d50c8` (acceptance tests and the old checker's skip lists).
 - Suites: `test.sh` 302 passed; `typecheck_test.sh` 297 passed, 0 failed (old checker, with the skip lists); `tests/typecheck_core_test.sh` 333 passed, 0 unexpected, 0 not checked yet (after questions 1-3 were decided); `go test` ok; `typst compile ai/type-core-calculus.typ` ok (Typst 0.15.1, real file). `formal-ver/` unchanged this session, so `make check` was not rerun (Rocq is not installed on this machine).
 - `gofmt` has not been run on the changed Go files (not permitted without asking).
 - From the first session: one `go test` run failed once with LSP "publishDiagnostics write failed" messages, and 15 more passed; if it recurs, capture `go test -v` output. Not seen this session.
