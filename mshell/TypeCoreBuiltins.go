@@ -228,7 +228,8 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	// Words that change their receiver in place and give it back.
 	b.reg("setAt", "([a] a int -- [a])")
 	b.reg("insert", "([a] a int -- [a])")
-	b.reg("del", "([a] int -- [a])", "(int [a] -- [a])")
+	// On a dict, only a `{str: a}` may lose a key: a shape never does.
+	b.reg("del", "([a] int -- [a])", "(int [a] -- [a])", "({str: a} str | path -- {str: a})")
 	b.reg("extend", "([a] [a] -- [a])",
 		"(Grid Grid | GridView -- Grid)", "(GridView Grid | GridView -- GridView)")
 	// pop removes the last element and gives it back; the list is not pushed.

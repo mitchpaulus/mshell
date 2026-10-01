@@ -6511,6 +6511,15 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						default:
 							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot delete from a %s.\n", t.Line, t.Column, obj2.TypeName()))
 						}
+					case MShellString, MShellPath:
+						// `dict key del`: remove the key, if present, and give the dict back.
+						dict, ok := obj2.(*MShellDict)
+						if !ok {
+							return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot delete a key from a %s.\n", t.Line, t.Column, obj2.TypeName()))
+						}
+						key, _ := obj1.CastString()
+						delete(dict.Items, key)
+						stack.Push(dict)
 					default:
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot delete from a %s.\n", t.Line, t.Column, obj1.TypeName()))
 					}

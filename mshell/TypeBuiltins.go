@@ -524,7 +524,7 @@ func builtinSigsByName(arena *TypeArena, names *NameTable) map[NameId][]QuoteSig
 		"([t] [t] -- [t])",
 		"(Grid | GridView Grid | GridView -- Grid)",
 	)
-	r.reg("del", "([t] int -- [t])", "(int [t] -- [t])")
+	r.reg("del", "([t] int -- [t])", "(int [t] -- [t])", "({v} str | path -- {v})")
 	r.reg("reReplace", "(str str str -- str)")
 	r.reg("reMatch", "(str str -- bool)")
 	r.reg("reFindAll", "(str str -- [[str]])")

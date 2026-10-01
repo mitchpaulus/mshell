@@ -150,6 +150,10 @@ func TestCoreChecker(t *testing.T) {
 		{`5 n! $"n is {@n}" wl`, true, ""},
 		{`[1] l! $"l is {@l}" wl`, false, "expected int | str | path"},
 
+		// del: only a {str: T} loses keys; a stored shape never does.
+		{`{a: 1} s! @s "a" del drop`, false, "no matching overload for 'del'"},
+		{`{a: 1} as {str: int} d! @d "a" del drop`, true, ""},
+
 		// Unions of distinct kinds only.
 		{`def f ([int] | [str] -- ) drop end`, false, "two members of the same kind"},
 		{`def f (int | [str] -- ) drop end`, true, ""},

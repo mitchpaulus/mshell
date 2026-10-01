@@ -1394,7 +1394,7 @@ end wl # Output: 11
 - `2id`: Two-argument identity quote. `(T1 T2 -- T1 T2)`
 - `3id`: Three-argument identity quote. `(T1 T2 T3 -- T1 T2 T3)`
 - `2tuple`: Pack the top two stack values into a new two-element list, `(a b -- [a b])`
-- `del`: Delete element from list, `(list index -- list)` or `(index list -- list)`
+- `del`: Delete element from list, `(list index -- list)` or `(index list -- list)`. On a dictionary, remove a key (nothing happens when it is absent): `({str: a} str -- {str: a})`
 - `extend`: Extends an existing list with items from another list, or a `Grid`/`GridView` with rows from another `Grid`/`GridView`. Difference between this and `+` is that it modifies the receiver in place. For grids, see the Grid section below. `(originalList toAddList -- list)` or `(Grid|GridView Grid|GridView -- Grid|GridView)`
 - `insert`: Insert element into list, `(list element index -- list)`
 - `setAt`: Set element at index, negative index is allowed.  `(list element index -- list)`
