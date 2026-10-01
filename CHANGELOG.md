@@ -93,6 +93,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A `break` in the quote no longer drops a value from the stack.
 - `mod` with a top value that is not a number gives an error. It used to drop both values silently.
 - `parseCsv` and `parseHtml` give an error, not a crash, on input that is not a string or path.
+- `lines`, `toInt`, `toFloat`, `md5`, `base64decode`, `utf8Bytes`, and `parseLinkHeader` accept a bare word from a list literal as a string.
 
 ### Added
 

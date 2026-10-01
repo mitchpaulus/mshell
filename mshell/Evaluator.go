@@ -4465,6 +4465,15 @@ func VersionSortComparer(a_str string, b_str string) int {
 	}
 }
 
+// bareWordAsString turns a bare word from a list literal into a string.
+// Other objects are returned unchanged.
+func bareWordAsString(obj MShellObject) MShellObject {
+	if lit, ok := obj.(MShellLiteral); ok {
+		return MShellString{lit.LiteralText}
+	}
+	return obj
+}
+
 func ParseJsonObjToMshell(jsonObj any) MShellObject {
 	// See https://pkg.go.dev/encoding/json#Unmarshal
 	switch o := jsonObj.(type) {
@@ -6400,6 +6409,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot evaluate 'lines' on an empty stack.\n", t.Line, t.Column))
 					}
 
+					obj = bareWordAsString(obj)
 					s1, ok := obj.(MShellString)
 					if !ok {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot evaluate 'lines' on a %s.\n", t.Line, t.Column, obj.TypeName()))
@@ -6713,6 +6723,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'toFloat' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
+					obj = bareWordAsString(obj)
 					switch objTyped := obj.(type) {
 					case MShellString:
 						floatVal, err := strconv.ParseFloat(strings.TrimSpace(objTyped.Content), 64)
@@ -6735,6 +6746,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'toInt' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
+					obj = bareWordAsString(obj)
 					switch objTyped := obj.(type) {
 					case MShellString:
 						intVal, err := strconv.Atoi(strings.TrimSpace(objTyped.Content))
@@ -10824,6 +10836,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'md5' operation on an empty stack.\n", t.Line, t.Column))
 					}
+					obj = bareWordAsString(obj)
 
 					// Work either on string or path
 					var data []byte
@@ -11280,6 +11293,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'base64decode' operation on an empty stack.\n", t.Line, t.Column))
 					}
+					obj = bareWordAsString(obj)
 
 					strObj, ok := obj.(MShellString)
 					if !ok {
@@ -11313,6 +11327,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'utf8bytes' operation on an empty stack.\n", t.Line, t.Column))
 					}
+					obj = bareWordAsString(obj)
 
 					strObj, ok := obj.(MShellString)
 					if !ok {
@@ -11347,6 +11362,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					if err != nil {
 						return state.FailWithMessage(fmt.Sprintf("%d:%d: Cannot do 'parseLinkHeader' operation on an empty stack.\n", t.Line, t.Column))
 					}
+					obj = bareWordAsString(obj)
 
 					strObj, ok := obj.(MShellString)
 					if !ok {
