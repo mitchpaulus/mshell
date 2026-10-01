@@ -1,0 +1,24 @@
+# `[head ...rest]` binds rest as a new list: changing it leaves the source unchanged.
+
+[1 2 3 4 5] src!
+@src match
+    [_ ...rest] :
+        @rest 99 append drop
+        @rest 0 0 setAt drop
+        @rest 1 del drop
+        @rest toJson wl
+        @src toJson wl
+    ,
+    _ : "unreachable" wl
+end
+
+# The same with elements after the spread.
+[1 2 3 4 5] src2!
+@src2 match
+    [_ ...mid _] :
+        @mid 0 0 setAt drop
+        @mid toJson wl
+        @src2 toJson wl
+    ,
+    _ : "unreachable" wl
+end

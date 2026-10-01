@@ -1663,17 +1663,14 @@ func (state *EvalState) matchListPattern(pattern *MShellParseList, subject MShel
 			}
 		}
 
-		// Bind spread as a zero-copy sub-slice. cap=len forces any
-		// later append on the rest list to reallocate, so the source
-		// list's tail is never overwritten. Note that setAt on the
-		// rest list will mutate the shared backing — historically
-		// rest was an independent copy, so user code that mutates
-		// the rest in place will now also mutate the source.
+		// Bind spread as a new list with its own storage, like `skip`:
+		// no two lists share a backing array, so setAt, del and append
+		// on the rest never change the source.
 		spreadTok := pattern.Items[spreadIndex].(Token)
 		spreadName := spreadTok.Lexeme[3:] // Remove "..."
 		if spreadName != "_" {
 			end := len(list.Items) - afterCount
-			bindings[spreadName] = &MShellList{Items: list.Items[beforeCount:end:end]}
+			bindings[spreadName] = &MShellList{Items: slices.Clone(list.Items[beforeCount:end])}
 		}
 
 		// Bind elements after spread

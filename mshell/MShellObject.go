@@ -1557,7 +1557,7 @@ func (obj *MShellPipe) SliceStart(start int) (MShellObject, error) {
 	}
 
 	newList := NewList(0)
-	newList.Items = obj.List.Items[start:]
+	newList.Items = slices.Clone(obj.List.Items[start:])
 	return newList, nil
 }
 
@@ -1643,7 +1643,7 @@ func (obj *MShellPipe) SliceEnd(end int) (MShellObject, error) {
 		return nil, err
 	}
 	newList := NewList(0)
-	newList.Items = obj.List.Items[:end]
+	newList.Items = slices.Clone(obj.List.Items[:end])
 	return newList, nil
 }
 
@@ -1775,7 +1775,7 @@ func (obj *MShellPipe) Slice(startInc int, endExc int) (MShellObject, error) {
 	}
 
 	newList := NewList(0)
-	newList.Items = obj.List.Items[startInc:endExc]
+	newList.Items = slices.Clone(obj.List.Items[startInc:endExc])
 	return newList, nil
 }
 

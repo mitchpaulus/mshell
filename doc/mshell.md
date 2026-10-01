@@ -1153,6 +1153,7 @@ end wl # Output: 1
 `...rest` can also appear in the middle of the pattern.
 Items before it match from the front, items after it match from the back,
 and the spread binding receives everything in between.
+The spread binding is a new list, so changing it does not change the matched list.
 
 ```mshell
 [1 2 3 4 5] match

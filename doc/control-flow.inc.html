@@ -345,7 +345,8 @@ and <code>..._</code> to accept and discard zero or more elements.
 <span class="mshellEND">end</span> <span class="mshellLITERAL">wl</span> <span class="mshellLINECOMMENT"># Output: 20</span></code>
 </pre>
 
-<p><code>...rest</code> can also appear in the middle of the pattern. Items before it match from the front, items after it match from the back, and the spread binding receives everything in between.</p>
+<p><code>...rest</code> can also appear in the middle of the pattern. Items before it match from the front, items after it match from the back, and the spread binding receives everything in between.
+The spread binding is a new list, so changing it does not change the matched list.</p>
 
 <pre>
 <code><span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellINTEGER">1</span> <span class="mshellINTEGER">2</span> <span class="mshellINTEGER">3</span> <span class="mshellINTEGER">4</span> <span class="mshellINTEGER">5</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellMATCH">match</span>
