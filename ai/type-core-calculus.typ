@@ -763,6 +763,11 @@ solved parameter once the def or script is solved, so `none 5 maybe` checks with
 An overload choice still open when the def or script is solved asks for an annotation, unless every
 candidate left gives the same outputs: then nothing could tell them apart, any of them is a valid
 derivation, and the checker takes the first (`[] sortV`).
+A width step needs no guess, so it is not asked for: when equality fails between an argument and a
+parameter with unsolved variables, records are matched label by label (the per-label rule, with the
+types it needs equal unified) and covariant enum arguments recursively, and the full $<=$ (or
+$subset.sq.eq$ for a fresh argument) is checked once the def or script is solved. Only a union step is
+a guess, and it still asks for an annotation.
 
 == Quotes, definitions, control flow
 

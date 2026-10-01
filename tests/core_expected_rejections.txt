@@ -2,3 +2,6 @@
 # One file name per line, then a tab and the rewrite that passes.
 unpack_union_bindings.msh	the iff arms join to {a: int | float, b?: str}, and `@a 1 +` on a float is a runtime error (+ does not mix int and float); write the second literal's a as an int, or add 1.0 in a match on float
 null.msh	`'null' parseJson` is Json, not int | null; validate first: `'null' parseJson tryAs int | null ? classify` (tryAs is stage 5)
+dicts.msh	`d` is stored as three different shapes in one scope; use a new name for each (d1, d2, d3)
+tar_pack.msh	a stored list of entries is passed to tarPack, whose parameter is a wider list type; lists are invariant. Pending decision 2 (read-only builtin parameters); until then, `@entries deepCopy tarPack`
+zip_pack.msh	as tar_pack.msh, for zipPack

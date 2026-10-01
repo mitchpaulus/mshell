@@ -392,7 +392,7 @@ func (c *coreChecker) step(item MShellParseItem) {
 	case *MShellIndexerList:
 		c.unsupported(it.GetStartToken(), "indexing")
 	case *MShellGetter:
-		c.unsupported(it.Token, "getters")
+		c.getter(it)
 	case *MShellParseFormatString:
 		c.formatString(it)
 	case *MShellAsCast:
@@ -439,7 +439,12 @@ func (c *coreChecker) token(tok Token) {
 		c.push(TidInt, true)
 	case FLOAT:
 		c.push(TidFloat, true)
-	case STRING, SINGLEQUOTESTRING, FORMATSTRING:
+	case STRING, SINGLEQUOTESTRING:
+		c.push(TidStr, true)
+		if v, ok := tok.Value.(MShellString); ok {
+			c.stack[len(c.stack)-1].lit = c.names.Intern(v.Content)
+		}
+	case FORMATSTRING:
 		c.push(TidStr, true)
 	case TRUE, FALSE:
 		c.push(TidBool, true)
@@ -492,6 +497,11 @@ func (c *coreChecker) word(tok Token) {
 			c.apply(sig, tok)
 			return
 		}
+	}
+	if c.dictWord(tok) {
+		return
+	}
+	if id, ok := c.names.Lookup(tok.Lexeme); ok {
 		if sigs := c.table.name(id); sigs != nil {
 			c.call(sigs, tok)
 			return
@@ -747,9 +757,105 @@ func (c *coreChecker) check(slot coreSlot, want TypeId) bool {
 			c.deferCheck(c.at, slot, want)
 			return true
 		}
-		return c.uni.Unify(slot.t, want)
+		if c.uni.Unify(slot.t, want) {
+			return true
+		}
+		// Record and covariant positions are matched label by label, then
+		// checked in full once the unit is solved.
+		if c.matchSub(c.subst.Apply(c.arena, slot.t), c.subst.Apply(c.arena, want), slot.fresh) {
+			c.deferCheck(c.at, slot, want)
+			return true
+		}
+		return false
 	}
 	return c.below(slot.fresh, c.subst.Apply(c.arena, slot.t), c.subst.Apply(c.arena, want))
+}
+
+// matchSub matches got against want at a checking position where either
+// mentions an unsolved variable and plain unification failed. It needs no
+// guess: record labels are compared by the per-label rule (or the fresh
+// one), with the types inside unified where the rule needs them equal;
+// covariant enum arguments, and a fresh list's elements, recurse; anything
+// else is unified. Unions are never entered. The caller checks the solved
+// types in full when the unit is solved.
+func (c *coreChecker) matchSub(got, want TypeId, fresh bool) bool {
+	if got == want {
+		return true
+	}
+	ar := c.arena
+	gn, wn := ar.nodes[got], ar.nodes[want]
+	if gn.Kind == TKVar || wn.Kind == TKVar || gn.Kind != wn.Kind {
+		return c.uni.Unify(got, want)
+	}
+	if !c.hasVars(got) && !c.hasVars(want) {
+		return c.below(fresh, got, want)
+	}
+	switch gn.Kind {
+	case TKRecord:
+		x, y := ar.records[gn.Extra], ar.records[wn.Extra]
+		ok := true
+		recordLabels(x, y, func(f, g RecordField) bool {
+			if !ok {
+				return false
+			}
+			ok = c.matchLabel(f, g, fresh)
+			return ok
+		})
+		return ok
+	case TKEnum:
+		if gn.A != wn.A {
+			return false
+		}
+		params := ar.enumDecls[gn.A].Params
+		xs, ys := ar.enumArgs[gn.Extra], ar.enumArgs[wn.Extra]
+		for i, p := range params {
+			var ok bool
+			switch {
+			case fresh && p.Fresh:
+				ok = c.matchSub(xs[i], ys[i], true)
+			case p.Variance == VarCo:
+				ok = c.matchSub(xs[i], ys[i], false)
+			case p.Variance == VarContra:
+				ok = c.matchSub(ys[i], xs[i], false)
+			default:
+				ok = c.uni.Unify(xs[i], ys[i])
+			}
+			if !ok {
+				return false
+			}
+		}
+		return true
+	case TKList:
+		if fresh {
+			return c.matchSub(TypeId(gn.A), TypeId(wn.A), true)
+		}
+	}
+	return c.uni.Unify(got, want)
+}
+
+// matchLabel matches one label: the object's status f against the view's
+// status g, as fieldView (shared) or fieldRetype (fresh) do.
+func (c *coreChecker) matchLabel(f, g RecordField, fresh bool) bool {
+	present := f.Status == FieldRequired || f.Status == FieldOptional || f.Status == FieldDeletable
+	maybe := g.Status == FieldOptional || g.Status == FieldDeletable
+	if fresh {
+		switch {
+		case f.Status == FieldRequired && g.Status == FieldRequired, present && maybe:
+			return c.matchSub(f.Type, g.Type, true)
+		case f.Status == FieldAbsent && (maybe || g.Status == FieldAbsent), g.Status == FieldOpen:
+			return true
+		}
+		return false
+	}
+	switch {
+	case f.Status == FieldRequired && (g.Status == FieldRequired || g.Status == FieldOptional),
+		f.Status == FieldOptional && g.Status == FieldOptional,
+		f.Status == FieldDeletable && maybe:
+		return c.uni.Unify(f.Type, g.Type)
+	case f.Status == FieldAbsent && g.Status == FieldAbsent, g.Status == FieldOpen:
+		return true
+	}
+	return false
 }
 
 // coreCheckpoint is a state to roll a trial back to: the unifier's, and

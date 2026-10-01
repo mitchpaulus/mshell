@@ -2,7 +2,7 @@ package main
 
 // Stack slots, signatures and the builtin table of the core checker
 // (ai/type-core-calculus.typ). Everything here is small and held by value:
-// a slot is 12 bytes, a stack is one []coreSlot, and the builtin table is
+// a slot is 16 bytes, a stack is one []coreSlot, and the builtin table is
 // two slices indexed by NameId and TokenType.
 
 // coreSlot is one stack slot: its type, and whether the value is fresh,
@@ -13,7 +13,10 @@ type coreSlot struct {
 	t TypeId
 	// pq is 1 + the index of the quote literal waiting in this slot (see
 	// TypeCoreQuote.go), or 0.
-	pq    uint32
+	pq uint32
+	// lit is the text of a string literal in this slot, or NameNone: a
+	// literal key (TypeCoreDict.go).
+	lit   NameId
 	fresh bool
 }
 

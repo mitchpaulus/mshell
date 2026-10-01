@@ -272,3 +272,18 @@ Every unknown grid schema is one type (`Grid{0}`) for now. That is safe only whi
 A dict pattern on a key the subject's type says is absent is an error only after `=>`; in a match it is a dead arm (`tests/success/match.msh` relies on that).
 
 Core script: 164 passed, 0 unexpected, 108 not checked yet. More runtime bugs: `gridSetCell` drops a value whose kind does not match the column's storage; a column mixing ints and floats reads ints back as floats; grid `map` takes columns from the first row only; `parseCsv` panics on a non-string; `extend` on a GridView appends rows to the shared grid beneath it; `innerJoin` and `rightJoin` in the old table do not exist.
+
+## Decisions (2026-10-01)
+
+1. String and path arguments do not take `int`, though the runtime turns an int into its digits there. The table stays `str | path`.
+2. Read-only builtin parameters: explained to Mitchell (option A: a read-only parameter mode for builtins, proved first; B: the top-fresh mark; C: accept the regressions). Awaiting his answer. `tar_pack.msh` and `zip_pack.msh` are expected rejections until then.
+3. `del` on dicts added to the runtime (`dict key del`; an absent key is a no-op); the core checker types it on `{str: T}` only.
+4. The runtime bugs the audit found are being fixed now, in a separate worktree, one commit per fix.
+
+## Stage 3, step 5: dicts by key (2026-10-01)
+
+- `TypeCoreDict.go`. A string literal keeps its text in its slot (`coreSlot.lit`, a slot is 16 bytes now), so a key below the top is still literal. `get` and `:name` give `Maybe` of the label's type (absent: `⊥`, open: `unknown`); with a runtime key, `Maybe` of the join of every label (Get-Key); `getDef` joins with the default; `values` and `keyValues` read at Get-Key, new lists fresh when the values are immutable; `set`/`setd` with a literal key write the label's type (Set), or give the label the value's type on a fresh dict with a fresh value (Set-Fresh), so `{} "a" 1 set` builds a dict. Grids and rows with the unknown schema read `unknown`.
+- P1, P2, P3, P4 and H1 are rejected.
+- Inference: at a checking position where unification fails and a variable is involved, records are matched label by label and covariant enum arguments recursively, then checked in full when the unit is solved (design doc, "Checking positions"). `each_def_quote_free_var_shape.msh` needed it.
+- Expected rejections added: `dicts.msh` (one variable stored as three shapes), `tar_pack.msh`, `zip_pack.msh` (decision 2).
+- Core script: 177 passed, 0 unexpected, 96 not checked yet.

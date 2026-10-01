@@ -154,6 +154,25 @@ func TestCoreChecker(t *testing.T) {
 		{`{a: 1} s! @s "a" del drop`, false, "no matching overload for 'del'"},
 		{`{a: 1} as {str: int} d! @d "a" del drop`, true, ""},
 
+		// Dicts: literal keys read a label; runtime keys read above every label.
+		{`{a: 1, b: "x"} d! @d :a? 1 + wl`, true, ""},
+		{`{a: 1, b: "x"} d! @d "b" get ? len wl`, true, ""},
+		{`{a: 1, b: "x"} d! @d :b? 1 + wl`, false, "the stack has (str int)"},
+		{`{a: 1} "a" 0 getDef 1 + wl`, true, ""},
+		{`{a: 1, b: 2} values len wl`, true, ""},
+		{`{a: 1} as {a: int, *: str} k! "a" key! @k @key get ? "x" + drop`, false, "the stack has (int str)"}, // H1
+		{`{a: 1} as {a: int, *: str} k! @k "b" get ? "x" + drop`, true, ""},
+		{`{} "a" 1 set "b" "x" set d! @d :a? 1 + wl @d :b? len wl`, true, ""},
+		{`{a: 1} d! @d "a" "x" set drop`, false, "'set' expected int"},
+		{`{a: 1} d! @d "b" 2 set drop`, false, "has no key 'b' that can be set"},
+		// P1-P4.
+		{`def setA ({a: int | str} -- ) "a" "x" set drop end {a: 1} dup setA :a? 1 + wl`, false, "'setA' expected"},
+		{`def onlyA ({a: int} -- {a: int}) end def vals ({str: int} -- ) values (1 + wl) each end {a: 1, b: "x"} onlyA vals`, false, "'vals' expected"},
+		{`def getA ({a: int} -- int) :a? end {} as {str: int} getA 1 + wl`, false, "'getA' expected"},
+		{`def put ({str: int | str} -- ) "a" "x" set drop end {a: 1} dup put :a? 1 + wl`, false, "'put' expected"},
+		// A width step against a generic parameter needs no guess.
+		{`def showName ({name: str, val: Maybe[t]} -- ) :name? str wl end [{"name": "alice", "val": none}] (showName) each`, true, ""},
+
 		// Unions of distinct kinds only.
 		{`def f ([int] | [str] -- ) drop end`, false, "two members of the same kind"},
 		{`def f (int | [str] -- ) drop end`, true, ""},

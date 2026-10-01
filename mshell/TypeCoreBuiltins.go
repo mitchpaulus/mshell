@@ -555,8 +555,6 @@ func buildCoreTable(res *coreResolver) *coreTable {
 		res.names.Intern("sortV"):     "'sortV' on a list that mixes str, int and path",
 		res.names.Intern("uniq"):      "'uniq' on a list that mixes element types",
 		res.names.Intern("urlEncode"): "the dict form of 'urlEncode'",
-		res.names.Intern("set"):       "'set' with a literal key",
-		res.names.Intern("setd"):      "'setd' with a literal key",
 		res.names.Intern("groupBy"):   "the grid form of 'groupBy'",
 	}
 	return t
