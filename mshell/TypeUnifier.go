@@ -154,6 +154,8 @@ func (u *Unifier) unify(a, b TypeId, assumed []typePair) bool {
 		return true
 	case TKCommand:
 		return an.B == bn.B && an.Extra == bn.Extra && u.unify(TypeId(an.A), TypeId(bn.A), assumed)
+	case TKGrid, TKGridView, TKGridRow:
+		return an.A != 0 && bn.A != 0 && u.unify(TypeId(an.A), TypeId(bn.A), assumed)
 	}
 	// Unions, and everything else not equal already: a union step is
 	// subtyping, not unification.

@@ -202,6 +202,9 @@ func (r *Relations) paramPolarities(t TypeId, p polarity, variance func(decl uin
 	case TKCommand:
 		r.paramPolarities(TypeId(n.A), polInv, variance, visit)
 	case TKGrid, TKGridView, TKGridRow:
+		if n.A != 0 {
+			r.paramPolarities(TypeId(n.A), polInv, variance, visit)
+		}
 		for _, col := range ar.gridSchemas[n.Extra].Columns {
 			r.paramPolarities(col.Type, polInv, variance, visit)
 		}
@@ -254,6 +257,9 @@ func (r *Relations) nonDataParams(t TypeId, params []EnumParam, underNonData boo
 	case TKCommand:
 		r.nonDataParams(TypeId(n.A), params, underNonData, visit)
 	case TKGrid, TKGridView, TKGridRow:
+		if n.A != 0 {
+			r.nonDataParams(TypeId(n.A), params, underNonData, visit)
+		}
 		for _, col := range ar.gridSchemas[n.Extra].Columns {
 			r.nonDataParams(col.Type, params, underNonData, visit)
 		}
@@ -365,6 +371,11 @@ func (r *Relations) SubstParams(t TypeId, args []TypeId) TypeId {
 			out[i] = r.SubstParams(x, args)
 		}
 		return ar.MakeEnum(n.A, out)
+	case TKGrid, TKGridView, TKGridRow:
+		if n.A == 0 {
+			return t
+		}
+		return ar.MakeGridOf(n.Kind, r.SubstParams(TypeId(n.A), args))
 	}
 	return t
 }

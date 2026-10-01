@@ -93,8 +93,8 @@ func (c *coreChecker) dictArg(i int, tok Token) (TypeId, bool) {
 
 // readType is a read of key slot k (a literal, or not) from record rec.
 func (c *coreChecker) readType(rec TypeId, k coreSlot, tok Token) (TypeId, bool) {
-	if k.lit != NameNone {
-		t, _ := c.labelRead(rec, k.lit)
+	if name := k.key(); name != NameNone {
+		t, _ := c.labelRead(rec, name)
 		return t, true
 	}
 	t, ok := c.keyRead(rec)
@@ -153,8 +153,8 @@ func (c *coreChecker) dictWord(tok Token) bool {
 		c.force(n - 1)
 		k, def := c.stack[n-2], c.stack[n-1]
 		var t TypeId
-		if k.lit != NameNone {
-			lt, status := c.labelRead(rec, k.lit)
+		if k.key() != NameNone {
+			lt, status := c.labelRead(rec, k.key())
 			switch status {
 			case FieldRequired:
 				t = lt
@@ -205,9 +205,110 @@ func (c *coreChecker) dictWord(tok Token) bool {
 		c.push(c.arena.MakeList(elem), c.rel.Immutable(c.subst.Apply(c.arena, v)))
 	case "set", "setd":
 		return c.setLiteral(tok)
+	case "map", "filter":
+		return c.dictMapFilter(tok)
+	case "urlEncode":
+		return c.urlEncodeDict(tok)
 	default:
 		return false
 	}
+	return true
+}
+
+// receiverRecord is the record type of the dict at stack index i, or
+// TidNothing when the value there is not known to be a dict.
+func (c *coreChecker) receiverRecord(i int) TypeId {
+	if i < c.floor || c.waiting(c.stack[i]) != nil {
+		return TidNothing
+	}
+	return c.recordOf(c.stack[i].t)
+}
+
+// dictMapFilter checks the dict forms of map and filter. The quote runs on
+// a child stack once per value, read at the type of Get-Key; the result is
+// a new `{str: T}` over the quote's results (map) or the kept values
+// (filter), fresh when T is immutable, as for new lists. It reports false
+// when the receiver is not a dict, for the table's list and grid forms.
+func (c *coreChecker) dictMapFilter(tok Token) bool {
+	n := len(c.stack)
+	if n-c.floor < 2 {
+		return false
+	}
+	rec := c.receiverRecord(n - 2)
+	if rec == TidNothing {
+		return false
+	}
+	v, ok := c.keyRead(rec)
+	if !ok {
+		c.errs = append(c.errs, TypeError{Kind: TErrNoJoin, Pos: tok,
+			Hint: "the values of " + c.format(rec) + " have no common type, so '" + tok.Lexeme + "' has no type to give its quote"})
+		c.abandoned = true
+		return true
+	}
+	ar := c.arena
+	var sig coreSig
+	var elem TypeId
+	if tok.Lexeme == "map" {
+		b := ar.MakeParam(0)
+		sig = coreSig{
+			ins:  []TypeId{rec, ar.MakeQuote(QuoteSig{Inputs: []TypeId{v}, Outputs: []TypeId{b}})},
+			outs: []TypeId{ar.MakeStrDict(b)},
+			gens: []NameId{c.names.Intern("b")}, genIn: 1 << 1, genOut: 1, child: true,
+		}
+	} else {
+		sig = coreSig{
+			ins:   []TypeId{rec, ar.MakeQuote(QuoteSig{Inputs: []TypeId{v}, Outputs: []TypeId{TidBool}})},
+			outs:  []TypeId{ar.MakeStrDict(v)},
+			child: true,
+		}
+		elem = v
+	}
+	c.apply(&sig, tok)
+	if c.abandoned || c.diverged {
+		return true
+	}
+	top := &c.stack[len(c.stack)-1]
+	if elem == TidNothing {
+		elem = ar.records[ar.nodes[c.subst.Apply(ar, top.t)].Extra].Rest.Type
+	}
+	top.fresh = c.rel.Immutable(c.subst.Apply(ar, elem))
+	return true
+}
+
+// urlEncodeDict checks `dict urlEncode`: every value, read at the type of
+// Get-Key, must be one the runtime writes as a string. It reports false
+// when the receiver is not a dict.
+func (c *coreChecker) urlEncodeDict(tok Token) bool {
+	n := len(c.stack)
+	if n-c.floor < 1 {
+		return false
+	}
+	rec := c.receiverRecord(n - 1)
+	if rec == TidNothing {
+		return false
+	}
+	v, ok := c.keyRead(rec)
+	ar := c.arena
+	fits := false
+	if ok {
+		read := coreSlot{t: v, fresh: c.stack[n-1].fresh}
+		for _, list := range c.table.urlEncodeLists {
+			cp := c.checkpoint()
+			if c.check(read, ar.MakeUnion([]TypeId{TidStr, TidInt, TidPath, list}, NameNone)) {
+				fits = true
+				break
+			}
+			c.rollback(cp)
+		}
+	}
+	if !fits {
+		c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: tok,
+			Hint: "'urlEncode' writes each value of a dict as a string: a str, int or path, or a list of them; got " + c.format(rec)})
+		c.abandoned = true
+		return true
+	}
+	c.stack = c.stack[:n-1]
+	c.push(TidStr, true)
 	return true
 }
 
@@ -225,7 +326,7 @@ func (c *coreChecker) joinOrFail(a, b TypeId, tok Token) TypeId {
 // setLiteral checks `dict "k" v set` and `setd` with a literal key. It
 // reports false when the key is not a literal.
 func (c *coreChecker) setLiteral(tok Token) bool {
-	if len(c.stack)-c.floor < 3 || c.stack[len(c.stack)-2].lit == NameNone {
+	if len(c.stack)-c.floor < 3 || c.stack[len(c.stack)-2].key() == NameNone {
 		return false
 	}
 	n := len(c.stack)
@@ -235,15 +336,20 @@ func (c *coreChecker) setLiteral(tok Token) bool {
 	}
 	c.force(n - 1)
 	d, k, v := c.stack[n-3], c.stack[n-2], c.stack[n-1]
-	label := k.lit
+	label := k.key()
 	vFresh := c.freshish(v)
 	r := c.arena.records[c.arena.nodes[rec].Extra]
 	f := r.FieldAt(label)
 	var out TypeId
+	var part uint16
 	switch {
-	case d.fresh && vFresh:
+	case d.fresh || d.part != 0:
 		// Set-Fresh: nothing else sees the dict, so the label takes the
-		// value's type.
+		// value's type. A stored value keeps its own type inside the new
+		// dict (tw_setk_m).
+		if !(d.fresh && vFresh) {
+			part = c.recordPart(d, label, c.innerMark(v))
+		}
 		fields := make([]RecordField, 0, len(r.Fields)+1)
 		for _, g := range r.Fields {
 			if g.Name != label {
@@ -259,19 +365,15 @@ func (c *coreChecker) setLiteral(tok Token) bool {
 		}
 		out = c.stack[n-3].t
 	default:
-		hint := c.format(rec) + " has no key '" + c.names.Name(label) + "' that can be set"
-		if !d.fresh {
-			hint += "; a shared dict keeps its type: build it as a literal, or make a new one with deepCopy"
-		} else {
-			hint += "; the value is shared, so it cannot become a new key's type"
-		}
+		hint := c.format(rec) + " has no key '" + c.names.Name(label) + "' that can be set" +
+			"; a shared dict keeps its type: build it as a literal, or make a new one with deepCopy"
 		c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: tok, Hint: hint})
 		c.abandoned = true
 		return true
 	}
 	c.stack = c.stack[:n-3]
 	if tok.Lexeme == "set" {
-		c.push(out, d.fresh && vFresh)
+		c.stack = append(c.stack, coreSlot{t: out, fresh: d.fresh && vFresh, part: part})
 	}
 	return true
 }
@@ -289,24 +391,29 @@ func (c *coreChecker) getter(g *MShellGetter) {
 	c.dictWord(tok)
 }
 
-// gridRead checks get on a grid, a view or a row: with the unknown schema,
-// a row gives Maybe of unknown, a grid or view Maybe of a new list of
-// unknown. It reports false when slot i is not one.
+// gridRead checks get on a grid, a view or a row (getters too): a row
+// gives Maybe of the column's cell type, a grid or view Maybe of a new list
+// of its cells. A literal name reads that column (none when the schema says
+// there is no such column); a name known only at run time reads at the
+// type of Get-Key. It reports false when slot i is not one.
 func (c *coreChecker) gridRead(i int, tok Token) bool {
-	t := c.subst.Apply(c.arena, c.stack[i].t)
-	var out TypeId
-	switch c.arena.nodes[t].Kind {
-	case TKGridRow:
-		out = c.arena.MakeMaybeEnum(TidUnknown)
-	case TKGrid, TKGridView:
-		out = c.arena.MakeMaybeEnum(c.arena.MakeList(TidUnknown))
-	default:
+	kind, rec, ok := c.gridOf(i)
+	if !ok {
 		return false
 	}
 	if !c.keyArg(len(c.stack)-1, tok) {
 		return true
 	}
+	t, ok := c.readType(rec, c.stack[len(c.stack)-1], tok)
+	if !ok {
+		return true
+	}
+	fresh := false
+	if kind != TKGridRow {
+		fresh = c.rel.Immutable(c.subst.Apply(c.arena, t))
+		t = c.arena.MakeList(t)
+	}
 	c.stack = c.stack[:len(c.stack)-2]
-	c.push(out, false)
+	c.push(c.arena.MakeMaybeEnum(t), fresh)
 	return true
 }

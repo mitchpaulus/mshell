@@ -46,6 +46,24 @@ func (c *coreChecker) choose(sigs []coreSig, tok Token) {
 			unsolved = true
 		}
 	}
+	if same && !unsolved && sameEffect(fits) {
+		// Every candidate that fits gives the same outputs, so nothing after
+		// the word can tell them apart: any is a valid derivation, and the
+		// first is taken (design doc, "Checking positions"). A new list
+		// literal given to zipPack fits [str] and [PackEntry].
+		c.apply(&fits[0], tok)
+		return
+	}
+	if !unsolved {
+		// Several fit with different outputs: take the one the arguments
+		// fit as they are, without giving a new value a wider type, when
+		// there is exactly one. `[1 2] uniq` fits `[int]` as it is, and the
+		// mixed form only once widened.
+		if sig := c.fitAsIs(fits); sig != nil {
+			c.apply(sig, tok)
+			return
+		}
+	}
 	if !same || !unsolved || diverges {
 		c.errs = append(c.errs, TypeError{Kind: TErrAmbiguousTyping, Pos: tok,
 			Hint: "more than one signature of '" + tok.Lexeme + "' fits " + c.formatSlots(c.stack[len(c.stack)-nin:]) + "; annotate the value"})
@@ -62,6 +80,50 @@ func (c *coreChecker) choose(sigs []coreSig, tok Token) {
 	}
 	c.choices = append(c.choices, ch)
 	c.choiceVersion = -1
+}
+
+// fitAsIs returns the one candidate of fits that the arguments fit with
+// every value taken as it is (by <=, as a stored value would be), or nil
+// when no candidate or more than one does.
+func (c *coreChecker) fitAsIs(fits []coreSig) *coreSig {
+	top := c.topSlots(fits)
+	saved := append([]coreSlot(nil), top...)
+	for i := range top {
+		top[i].fresh, top[i].part = false, 0
+	}
+	var found *coreSig
+	n := 0
+	for i := range fits {
+		cp := c.checkpoint()
+		if c.argsFit(&fits[i]) {
+			found, n = &fits[i], n+1
+		}
+		c.rollback(cp)
+	}
+	copy(top, saved)
+	if n != 1 {
+		return nil
+	}
+	return found
+}
+
+// sameEffect reports whether the candidates give the same outputs: the
+// same types, with no generics, and the same freshness.
+func sameEffect(sigs []coreSig) bool {
+	f := &sigs[0]
+	for i := range sigs {
+		s := &sigs[i]
+		if len(s.outs) != len(f.outs) || s.diverges != f.diverges || s.genOut != 0 ||
+			s.newOut != f.newOut || s.newListOut != f.newListOut || s.keepOut != f.keepOut {
+			return false
+		}
+		for j := range s.outs {
+			if s.outs[j] != f.outs[j] {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // retryChoices makes every waiting choice that now has one candidate

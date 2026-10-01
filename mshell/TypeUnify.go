@@ -262,6 +262,16 @@ func (w *typeRewriter) mapType(t TypeId, skip map[TypeVarId]struct{}) TypeId {
 			return t
 		}
 		return w.arena.MakeEnum(n.A, args)
+	case TKGrid, TKGridView, TKGridRow:
+		// A core grid's schema is a record (MakeGridOf).
+		if n.A == 0 {
+			return t
+		}
+		rec := w.mapType(TypeId(n.A), skip)
+		if rec == TypeId(n.A) {
+			return t
+		}
+		return w.arena.MakeGridOf(n.Kind, rec)
 	case TKOverloadedQuote:
 		sigs := w.arena.overloadedQuoteSigs[n.Extra]
 		rebuilt := make([]QuoteSig, len(sigs))

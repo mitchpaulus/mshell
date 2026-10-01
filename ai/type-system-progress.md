@@ -276,7 +276,7 @@ Core script: 164 passed, 0 unexpected, 108 not checked yet. More runtime bugs: `
 ## Decisions (2026-10-01)
 
 1. String and path arguments do not take `int`, though the runtime turns an int into its digits there. The table stays `str | path`.
-2. Read-only builtin parameters: explained to Mitchell (option A: a read-only parameter mode for builtins, proved first; B: the top-fresh mark; C: accept the regressions). Awaiting his answer. `tar_pack.msh` and `zip_pack.msh` are expected rejections until then.
+2. Read-only builtin parameters: not needed. The cookie jar is fixed by freshness per object, and zipPack/tarPack by one signature per stored list type plus built-in aliases (both below).
 3. `del` on dicts added to the runtime (`dict key del`; an absent key is a no-op); the core checker types it on `{str: T}` only.
 4. The runtime bugs the audit found are being fixed now, in a separate worktree, one commit per fix.
 
@@ -285,7 +285,7 @@ Core script: 164 passed, 0 unexpected, 108 not checked yet. More runtime bugs: `
 - `TypeCoreDict.go`. A string literal keeps its text in its slot (`coreSlot.lit`, a slot is 16 bytes now), so a key below the top is still literal. `get` and `:name` give `Maybe` of the label's type (absent: `⊥`, open: `unknown`); with a runtime key, `Maybe` of the join of every label (Get-Key); `getDef` joins with the default; `values` and `keyValues` read at Get-Key, new lists fresh when the values are immutable; `set`/`setd` with a literal key write the label's type (Set), or give the label the value's type on a fresh dict with a fresh value (Set-Fresh), so `{} "a" 1 set` builds a dict. Grids and rows with the unknown schema read `unknown`.
 - P1, P2, P3, P4 and H1 are rejected.
 - Inference: at a checking position where unification fails and a variable is involved, records are matched label by label and covariant enum arguments recursively, then checked in full when the unit is solved (design doc, "Checking positions"). `each_def_quote_free_var_shape.msh` needed it.
-- Expected rejections added: `dicts.msh` (one variable stored as three shapes), `tar_pack.msh`, `zip_pack.msh` (decision 2).
+- Expected rejections added: `dicts.msh` (one variable stored as three shapes), `tar_pack.msh`, `zip_pack.msh` (the last two since removed; see "Built-in aliases" below).
 - Core script: 177 passed, 0 unexpected, 96 not checked yet.
 
 ## Stage 3: indexing and commands (2026-10-01)
@@ -294,3 +294,105 @@ Core script: 164 passed, 0 unexpected, 108 not checked yet. More runtime bugs: `
 - Commands (`TypeCoreCommand.go`): a command's type is its argument list and a state per stream (the old `TKCommand`, with a pipe flag in the stdout state, since a pipe and a list are different runtime objects). Redirects and captures change that state in place, so the list must be fresh (P7: `@c *` is an error suggesting deepCopy); `<` and `&` change nothing the type says; a redirect on a quote keeps a literal waiting (`(...) @f > loop`). Running checks the arguments are strings, paths, numbers, dates, or lists of them (the runtime flattens lists), and pushes the captures (`*`, `*b`, `^`, `^b`, `e`, `es`, `ec`) and `?`'s exit code. The old checker's stream-conflict messages are kept.
 - Two commands over the same arguments join stream by stream; a stream whose states differ becomes "varied" (above every state), so a list literal like `[[make] 2>&1 [grep x]]` has a type. A pipe of such commands runs (a pipeline uses only its own captures); running or redirecting one varied command alone is an error. Commands are Go-only kinds the oracle does not generate.
 - Core script: 251 passed, 0 unexpected, 22 not checked yet.
+
+## Freshness per object (2026-10-01)
+
+Decided with Mitchell: freshness is a property of each object, not of a whole value. A literal around a stored value is new at the top; the stored value keeps its type. This fixes the cookie jar (`{url: "x", cookieJar: @jar} httpGet`, which failed because the request's missing optional keys can be added only to a new dict) without read-only parameters. Design doc: §Freshness per object (new), §Shapes, §deepCopy, §Soundness, the H3 row, "What changes for users".
+
+Rocq (`formal-ver/`, `make check`: every theorem closed under the global context; `make -C oracle test`: 23 examples agree):
+
+- Marks are trees: `Sh`, `Dp`, `MList m`, `MRec (label -> mark)` (`Typing.v`). `msub` retypes a partly new value position by position: `sub` at a stored position, `rsub` at a new one, the per-label rule of `rsub` for a new dict's own type, and never `open` over a partly new label. New rules `ss_m`, `ss_m_refl`, `ss_m_forget`, `tw_nil_m`, `tw_push_m`, `tw_setk_m`.
+- `mtyped` (`Invariant.v`): a stored value inside a new one is typed through the store and adds nothing to the region. `Partial.v` proves its structure, stability under store changes that keep live entries, retyping, and commit; `PartialOps.v` proves `set` on a new dict and push on a new list.
+- A region's locations now have store type `HDead` until committed (they had a placeholder `HList TBot`). That is what keeps stored values from pointing into a region, with no new invariant clause, and lets an overwritten value in a new dict be forgotten without a commit.
+- `tw_kind` takes a stored or new value only (`partial m = false`): under a substitution the arm's type is only `sub`-above the member. `tw_slice`'s result is `Sh` or `Dp`. The other mark-generic rules (`tw_kind_list`, `tw_kind_enum`, `tw_case`) are proved for partly new values as they are.
+- Examples: `partly_new_typed` (types and runs `{a: @xs}` retyped to `{a: [int], b?: int}` and a write through it), `hole_literal_no_typing` (H3 has no typing). About 12,800 lines in all.
+
+Core checker (`TypeCorePartial.go`):
+
+- A slot has `part uint16`, 1 + an index into the unit's partly new marks (`corePart`: a new list with an element mark, or a new dict with label marks and a rest mark); the slot stays 16 bytes. List and dict literals with stored values, and `set` with a literal key on a new dict, make them. A checking position retypes by `msub` or commits (`Sub`); `as` keeps the mark when retyped and makes the slot shared when committed. Everything else treats a partly new slot as shared (`dup` and `over` clear the mark through `share()`).
+- Fixed a bug found while testing: `matchSub` decided whether a type still had unsolved variables on its solved form, then compared the unsolved form, so `{a: []} as {a?: [int]}` and `{url: "x", cookieJar: []} httpGet` were rejected. It now applies the substitution first.
+- `tests/success/http_cookiejar_types.msh` passes unchanged and is off the expected-rejections list. New: `tests/success/partly_new_dict.msh`, `tests/typecheck_fail/h3_literal_around_shared.msh`, and core checker unit tests (nested literals, `set`, list literals, H3, a `dup`ed literal).
+- Performance (same corpus including `tests/msh-scripts`, 10 interleaved runs each): corpus check median 13.3 ms against 14.7 ms before, fastest 13.15 against 13.29; 27.89 MB and 57,980 allocations against 27.57 MB and 57,520 (the corpus now also has the two new test files, and the cookie-jar test checks to the end).
+
+## Built-in aliases and the archive words (2026-10-01)
+
+Decided with Mitchell: every record type a builtin takes or gives has a built-in alias, and a builtin that only reads a list has one signature per list type programs store (lists are invariant).
+
+- `coreTableBuilder.alias` (`TypeCoreBuiltins.go`) declares a built-in alias from type text; `builtinAliases` declares `NumFmtOptions`, `Link`, `EnvEvent`, `PackEntry`, `TarDest`, `ExtractOptions`, `ExtractEntryOptions`, `ZipEntryInfo`, `TarEntryInfo`, `Cookie`, `HttpRequest`, `HttpResponse`. The signatures of `numFmt`, `parseLinkHeader`, `envInspect`, the archive words and `httpGet`/`httpPost` (`(HttpRequest -- Maybe[HttpResponse])`) use them. `Json` and `HtmlNode` are declared in `TypeCoreResolve.go` as before, being recursive. Design doc: the alias table under "Checking positions".
+- `zipPack` and `tarPack` take `[str]`, `[path]`, `[str | path]` or `[PackEntry]`, so a stored list from `ls` or `lines` needs no `as`.
+- `choose` (`TypeCoreChoice.go`) takes the first candidate when the arguments are known, several fit, and all give the same outputs (`sameEffect`); before, only a choice still open at the end of the unit did. A new list literal fits several archive forms.
+- `msub` and `matchSub` look through an alias that is not recursive (`plainAlias`, `aliasRecursive` in `TypeCorePartial.go`); without that the cookie-jar literal was rejected against `HttpRequest`.
+- Errors: "no matching overload" (`fitsIfNew`) and a type mismatch (`mismatch`) add `storedHint` ("a stored value keeps its type, so give it the type the word takes where it is made, or make a new one with deepCopy") when the argument would fit if it were new. `TypeError.Format` now prints a mismatch's hint after the expected/got text, for the old checker too.
+- `tests/success/zip_pack.msh` and `tar_pack.msh` give their stored entry list the entry type written out, since the old checker does not know `PackEntry`; switch them to `as [PackEntry]` when the old checker is deleted (stage 6). Both are off the expected-rejections list. Unit tests in `TestCoreChecker` cover the four forms, each alias in use, `PackEntry` in a def signature, `[]`, and the rejected cases with the hint.
+- A user `type` with one of these names silently replaces the built-in one; name collisions are stage 4. User docs for the names wait for stage 8.
+
+## Stage 3, step 6: grids, and the dict forms of map, filter, urlEncode (2026-10-01, second session)
+
+- **Dict forms** (`TypeCoreDict.go`): `map` and `filter` on a dict run the quote per value read at the type of Get-Key and give a new `{str: T}`, fresh when `T` is immutable. `urlEncode` on a dict reads its values at Get-Key; they must be str, int or path, or a list of them, with one form per stored list type (`[str]`, `[int]`, `[path]`, `[str | int | path]`; `coreTable.urlEncodeLists`).
+- **Grid types.** A core grid, view or row type's schema is a record type, in the node's `A` (`TypeArena.MakeGridOf`, `GridRecord`); the old checker's grids keep `Extra` as before, with `A = 0`. So the per-label rule relates grids (`Sub`, `Retype` compare the schema records), two new grids join column by column (`joinCore`), and unification, substitution, `SubstParams`, the printer (`Grid{a: int, b: str}`), `Checkable` and the enum walkers look inside the schema. A schema not known statically is the read-only `{| open}` (written `Grid`); `toGrid` gives `{*: str}`. Open question 1 in the plan.
+- **Builtin table.** `Grid_s`, `GridView_s`, `GridRow_s` in builtin signatures are a grid whose schema is the generic `s` (`schemaGeneric`; only while the table is built), and `gridForms` writes one candidate per Grid/GridView reading of `G_s`, since unification never enters a union. `filter`, `each`, `sortBy`, `sortByCmp`, `reverse`, `gridRows`, `gridCols`, `gridMeta`, `gridColMeta`, `gridCompact`, `nth`, `len`, indexing and slices keep the schema this way. `newListOut` now also covers a new grid (`newOverImmutable`).
+- **`TypeCoreGrid.go`** has the words whose result schema a signature cannot say: grid literals (cells and metadata on their own stacks, columns joined, fresh when every cell is), `gridCol`, `gridValues`, `toDict`, `get` and the getter, `select`/`exclude`/`derive` (literal names), `updateCol` (in place at the column's type on any grid; a type change only on a new Grid; a new grid from a view), `gridSetCell` (always at the column's type: the runtime drops a value of another kind), `gridAddCol`/`gridRemoveCol`/`gridRenameCol` (new Grid only), grid `map`, `+`, `extend` (plain writes on any receiver, widening only a new Grid), `join`/`leftJoin`/`outerJoin` (left then right columns, `none` joined into a side that may be missing), `pivot` (row keys, then `*: a | Maybe[⊥]`), and a grid `groupBy` whose spec list is written at the call (`walk` looks ahead: each `agg` quote is checked against `(GridView -- t)` with its own `t`).
+- **Runtime refusals** are checked when the unit is solved (`coreDeferred.rule`): quote results the runtime refuses when they are a container (`updateCol`, `pivot`, `groupBy`), grouping keys (also inside a `Maybe`) and join keys (a `Maybe` looked through, one level of list allowed), each matching `isContainerType`, `appendGridKeyPart` and `appendJoinKey`.
+- A list literal of string literals keeps its names in its slot (`litListTag`, `litNames`), as a string literal keeps its text.
+- **Expected rejections added** (each rewrite checked in a scratch copy and run: same output): `grid.msh` (`toDict dup ... "y" swap set` adds a key to a dict `dup` made shared), `grid_concat.msh` (`extend` widens a stored grid's int column; `dropped` stored as a Grid and a GridView), `grid_dict_strings.msh` (`r` stored as five grid types; `extend` widens a stored grid's column), `grid_group_keys.msh` (`r` stored as two row types in one scope).
+- Tests: grid and dict-form rows in `TestCoreChecker`.
+- Suites: test.sh 285 passed; typecheck_test.sh 275 passed; core script 274 passed, 0 unexpected, 1 not checked yet (`uniq.msh`, open question 2); `go test` ok; `typst compile ai/type-core-calculus.typ` ok (Typst 0.15.1, the real file). Rocq not rebuilt (no `formal-ver/` change).
+- Performance, same machine, 6 runs: core checker on the corpus 14-17 ms, 29.5 MB, 67,460 allocations (13 more programs now check to the end); the old checker 89-129 ms, 103 MB, 1,007,600 allocations.
+
+Notes for later:
+
+- The grid docs' example `toDict dup "score" get? 70 >= "passed" set` (`doc/grid.inc.html`, `doc/mshell.md`) is rejected by the core rules: `dup` makes the dict shared, and adding a key needs a new dict. `"passed" {} (:score? 70 >=) derive` says the same thing; change the docs at the switch-over (stage 8).
+- There is no syntax for a grid schema type. A stored grid whose column must widen later is given the wide type where it is made: `"x" (as int | float) updateCol`.
+
+## Stage 3, step 7: `new` on def outputs, the LSP (2026-10-01, second session)
+
+- `TypeCoreNew.go`. Each exit of a def body (its end and each `return`) records, per output, whether the value there is new (`exit`). Then: `new` written but some exit shared is an error naming that exit; `new` missing but every exit new is an error; `new` on an output whose type holds no list, dict or grid is an error. A def that calls itself and leaves a shared value at an unmarked output is checked once more assuming the mark (`checkBody` again, errors discarded); if that is consistent and every exit is then new, the error is "mark it `new`" (the largest consistent mark). Mutual recursion is not covered: two defs that call each other without marks are accepted with shared outputs (only the "missing new" error is lost; soundness does not depend on it).
+- Each of those errors carries a `TypeFix` (`TypeError.Fix`: insert `new `, or delete it). The LSP uses the core checker when `MSH_CHECKER=core` (diagnostics and fixes; `CoreBase.Errors`), offers each fix as a quick fix on its diagnostic, and all of them as one `source.fixAll` action. Test: `TestCodeActionFixesNewMarks`.
+- Expected rejection added: `dict_types.msh` (eight defs return new dict literals without `new`; with `new` added it checks under both checkers and prints the same).
+- Suites: test.sh 285; typecheck_test.sh 275; core script 274 passed, 0 unexpected, 1 not checked yet; `go test` ok.
+
+## Stage 3, step 8: the corpus (2026-10-01, second session)
+
+`tests/msh-scripts` under the core checker: 73 of 118 pass, the same count as the old checker's baseline (stage 0), but not the same scripts. The 45 that fail:
+
+- 17 use words that are not in the language any more (`o`, `oc`, `os`, `soe`), and 3 do not parse; 3 more are not mshell (`open --type-check-only` from their shebang). They fail under both checkers.
+- Real bugs the runtime would hit, which the old checker accepted: `average` (float `/` int), `f2k` and `set_progress` (`toFloat`/`toInt` give a `Maybe`), `filename` (`wl` of a path), `ep_floor_areas` (a `map` quote that leaves nothing; it wants `each`), `antlrc`/`antlrj` (`*.g4` in a list is multiplication), `clean_antlr` (`rm` in a list literal runs the builtin on an empty stack), `binlink` (an `if` without `else` leaves a value on one path only), `refresh-repos-msh` (`absPath` in a def with no inputs), `docx2pdf` (`tmpfile` is never set).
+- `dict` in a def signature (`github_repos_msh`, `setdiff2way.msh`, `fg_fpt`, and std's HTML helpers) is not a type, so it is a generic, and a generic can only be passed along. The scripts mean a dict. Worth a hint when a generic is named like a type (`dict`, `list`, `string`), or an error: not done.
+- `tt`: one variable stored as `[str]` and then `str` (one type per scope).
+- `listToDict` in `lib/std.msh` is declared `-- c`, an output type no input fixes: the P10 pattern, through a std signature (std bodies are not checked, so std signatures are trusted like builtins). The core checker now refuses a call to such a std def (`coreSig.freeOut`, `outputOnlyGeneric`); `listToDict` is the only one. Plan question 3 proposes `-- {str: b}`, with which `tests/success/listToDict.msh` (now an expected rejection), `old_branches` and `copy_construction` check.
+
+`lib/std.msh` checked as a file (its bodies; stage 6 work, recorded here, nothing changed): std defs that return new values without `new` (`sl`, `tsplit`, several completion option builders); `dateFmt`'s signature says `date`, which is a generic, not `datetime`; the HTML helpers use `dict` (stage 6 types them with `HtmlNode`); `2tuple (a b -- [a | b])` has a union of two generics, which the design does not allow (a generic has no kind, design doc §Unions), and its body cannot build one; `listToDict`'s body stores `{}` and sets runtime keys into it (plan question 4); `enumerate` returns `xs (... {index: @i, item: @x}) map`, a shared list of exact shapes, which no written type matches (a written shape is open), so the body needs `as` inside the quote; `completionDefs` is not in the core table yet.
+
+The `enumerate` case points at something to consider: `map`'s result is fresh only when its elements are immutable, because a quote's results are shared values. When the quote's body leaves a value it just made (a literal) on every run, each result is a different new object, and the result list is a tree. Marking such quotes' outputs new would make `xs (... {k: v}) map` fresh, so it could be given a written type with no `as`. That needs the proof first (a `tw_map` whose body output is fresh); not done.
+
+## Stage 3, step 8: acceptance tests (2026-10-01, second session)
+
+The rows of plan section 7 that need nothing from stages 4 and 5 (enums, aliases, `tryAs`, `is`) are test files now: 41 in `tests/typecheck_fail` (P1-P4, P6, P7, P10, P13, P14, H1, H2, H6, H8, H10, H11, S1-S4 cases, `never`, `new`, joins, stores, `as`, `del`, unions, break contexts, `x` of unknown arity) and 17 in `tests/success` with expected output (the `deepCopy` rewrites of P6 and P7, fresh widening, `never` arms and quotes, `new` outputs, width cases). Each was run under both checkers and the runtime (with an empty `MSHINIT`) before it was added.
+
+The old checker accepts 29 of the fail programs (its holes) and rejects 7 of the ok ones. `tests/typecheck_test.sh`, which runs the old checker, now skips the programs listed in `tests/old_checker_accepts.txt` and `tests/old_checker_rejects.txt`; the core script checks them all. Both lists go away at the switch-over.
+
+Found while running them: a def in `~/.config/msh/init.msh` (`f`, `g`) silently wins over a script's own def of the same name at runtime, while the core checker uses the script's. Stage 4's "name collisions are errors" covers it.
+
+Suites: test.sh 302 passed; typecheck_test.sh 297 passed, 0 failed; core script 332 passed, 0 unexpected, 1 not checked yet; `go test` ok.
+
+## Stage 3: definite assignment (2026-10-01, second session)
+
+`TypeCoreAssign.go`, inside the walker rather than a separate pass: each variable has a "set on every path so far" flag with an undo log. `if`, `iff` and `match` keep what every arm that goes on set (an arm that diverges does not count); `loop` keeps what every `break` that leaves it had set; stores in a quote that may run zero times (a literal given to `each`, `map`, a def) or later (a stored quote) do not count; reads in a quote typed on its own are not checked, since it runs later. A read some path reaches unset is an error; a variable stored nowhere is still "unknown identifier". No test program is affected; in `tests/msh-scripts` one read is (`fg_fpt`: `xlsxFile` is set only when `-x` was given, and read under a separate flag). Unit tests in `TestCoreChecker`.
+
+Benchmarks after it (the corpus now has 58 more files, +15%): corpus check 17-18 ms, 35.2 MB, 74,300 allocations; an empty check 3 µs, 25 allocations.
+
+## Where things stand (end of 2026-10-01, second session)
+
+- **Nothing is committed.** Everything since `fb147fc` is uncommitted on `type-checker-enhancements`: the first session's work (freshness per object in Rocq, docs and checker; built-in aliases; archive forms) and this session's (grids, dict forms, `new` marks, the LSP, std `freeOut`, definite assignment, acceptance tests, the two old-checker skip lists).
+- Suites: `test.sh` 302 passed; `typecheck_test.sh` 297 passed, 0 failed (old checker, with the skip lists); `tests/typecheck_core_test.sh` 333 passed, 0 unexpected, 0 not checked yet (after questions 1-3 were decided); `go test` ok; `typst compile ai/type-core-calculus.typ` ok (Typst 0.15.1, real file). `formal-ver/` unchanged this session, so `make check` was not rerun (Rocq is not installed on this machine).
+- `gofmt` has not been run on the changed Go files (not permitted without asking).
+- From the first session: one `go test` run failed once with LSP "publishDiagnostics write failed" messages, and 15 more passed; if it recurs, capture `go test -v` output. Not seen this session.
+- Open questions in the plan: none. Questions 1-4 were decided this session (below).
+- Decided with Mitchell (question 4): `{}` stays the exact empty shape until default parameters land, then becomes `{str: T}` (listed under "Later" in the plan; design doc §Joins).
+- Decided with Mitchell (question 2): when several overload candidates fit with different outputs, take the one the arguments fit as they are (`fitAsIs` in `TypeCoreChoice.go`), if exactly one. `uniq` gained the form `[str | path | int | float | datetime]`, and `sort`/`sortV` the form `[str | int | path]` (same outputs, so no rule needed); their "not checked yet" marks are gone. A stored mixed list is given the widest type where it is made. Design doc: "Checking positions".
+- Decided with Mitchell: a grid whose schema is not known statically has the read-only `{| open}` schema (question 1), as implemented; the design doc says so.
+- Decided with Mitchell: `listToDict` in `lib/std.msh` is now `([a] (a -- str) (a -- b) -- {str: b})`. `listToDict.msh` checks under both checkers and is off the expected-rejections list; all suites unchanged (302 / 297 / 332).
+- Fixed: `joinSlot` unified a side with an unsolved variable against `⊥` (setting it to `⊥`, or failing for `[T]`), so a runtime-key read of a dict whose value type was still a variable went wrong. `⊥` now joins to the other side first. Found while trying `{}` as `{str: T}` (plan question 4). Test in `TestCoreChecker`; suites unchanged.
+- Core expected rejections: `unpack_union_bindings.msh`, `null.msh`, `dicts.msh`, `grid.msh`, `grid_concat.msh`, `grid_dict_strings.msh`, `grid_group_keys.msh`, `dict_types.msh` (reasons and rewrites in `tests/core_expected_rejections.txt`).
+- Stage 3 is complete except: `new` marks across mutually recursive defs; the error that names the branch each member of a join's union came from; a hint when a def signature uses a word like `dict` that is a generic, not a type.
+- Next, by the plan: stage 1 item 3 (iterative, cycle-safe walkers for `str`, `toJson`, equality, ordering, ported from the enum branch; needed before stage 4), then stage 4 (aliases and enums). Items 4 (JSON integral numbers as `int`) and 5 (runtime error classification) before stages 5 and 7.

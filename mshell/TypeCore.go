@@ -40,7 +40,9 @@ func NewCoreBase(stdlibDefs []MShellDefinition) *CoreBase {
 	res := &coreResolver{arena: arena, names: names, rel: NewRelations(arena), aliases: map[NameId]TypeId{}}
 	res.declareJson()
 	res.declareHtmlNode()
+	res.builtin = true
 	table := buildCoreTable(res)
+	res.builtin = false
 	for i := range stdlibDefs {
 		def := &stdlibDefs[i]
 		id := names.Intern(def.Name)
@@ -49,7 +51,9 @@ func NewCoreBase(stdlibDefs []MShellDefinition) *CoreBase {
 		}
 		parts := res.resolveSig(def.Inputs, def.Outputs)
 		res.errs = res.errs[:0]
-		table.setName(id, []coreSig{newCoreSig(arena, parts)})
+		sig := newCoreSig(arena, parts)
+		sig.freeOut = outputOnlyGeneric(arena, parts)
+		table.setName(id, []coreSig{sig})
 	}
 	return &CoreBase{arena: arena, names: names, table: table, aliases: res.aliases}
 }
@@ -62,15 +66,26 @@ func CoreTypeCheckProgram(file *MShellFile, stdlibDefs []MShellDefinition) ([]st
 
 // Check checks file in a new overlay of the base.
 func (b *CoreBase) Check(file *MShellFile) ([]string, bool) {
-	c := b.newChecker()
-	c.checkFile(file)
-	var out []string
-	for _, e := range c.errs {
-		if e.Severity == SeverityError {
-			out = append(out, e.Format(c.arena, c.names))
-		}
+	errs, arena, names := b.Errors(file)
+	out := make([]string, 0, len(errs))
+	for _, e := range errs {
+		out = append(out, e.Format(arena, names))
 	}
 	return out, len(out) == 0
+}
+
+// Errors checks file in a new overlay of the base and returns its errors,
+// with the arena and names that format them.
+func (b *CoreBase) Errors(file *MShellFile) ([]TypeError, *TypeArena, *NameTable) {
+	c := b.newChecker()
+	c.checkFile(file)
+	var out []TypeError
+	for _, e := range c.errs {
+		if e.Severity == SeverityError {
+			out = append(out, e)
+		}
+	}
+	return out, c.arena, c.names
 }
 
 func (b *CoreBase) newChecker() *coreChecker {
@@ -109,15 +124,19 @@ type coreVar struct {
 	stored    bool
 	firstLoad Token
 	loaded    bool
+	// set is whether every path so far stored the variable, and unsetRead
+	// whether a read without that was recorded (TypeCoreAssign.go).
+	set       bool
+	unsetRead bool
 }
 
 // coreStore is a store, checked again when its unit is solved.
 type coreStore struct {
-	tok   Token
-	name  NameId
-	t     TypeId
-	v     TypeId
-	fresh bool
+	tok  Token
+	name NameId
+	t    TypeId
+	v    TypeId
+	mark coreMark
 }
 
 type coreChecker struct {
@@ -171,6 +190,27 @@ type coreChecker struct {
 	// unification variable: 0 not yet known, 1 no, 2 yes.
 	mentionsVar []uint8
 	genBuf      []TypeId
+	// parts holds the unit's partly new marks (TypeCorePartial.go).
+	parts []corePart
+	// litLists holds the unit's list literals of string literals.
+	litLists [][]NameId
+
+	// The def being checked, whether its body calls it, and for each of
+	// its outputs (bit i) whether every exit so far left a new value there,
+	// with the first exit that did not (TypeCoreNew.go).
+	curDef     *coreSig
+	selfCalled bool
+	exitNew    uint64
+	exitShared []Token
+	exits      int
+
+	// Definite assignment (TypeCoreAssign.go): the variables set on this
+	// path, in order; the loops being checked; how deep the walk is in
+	// quotes typed on their own; reads that may find a variable unset.
+	setLog     []NameId
+	daLoops    []daLoop
+	later      int
+	unsetReads []coreUnsetRead
 }
 
 // ---------------------------------------------------------------------------
@@ -219,6 +259,9 @@ func (c *coreChecker) beginUnit() {
 	c.unitVars = c.unitVars[:0]
 	c.stores = c.stores[:0]
 	c.deferred = c.deferred[:0]
+	c.parts = c.parts[:0]
+	c.litLists = c.litLists[:0]
+	c.setLog, c.daLoops, c.later, c.unsetReads = c.setLog[:0], c.daLoops[:0], 0, c.unsetReads[:0]
 	c.pending = c.pending[:0]
 	c.choices, c.choiceVersion = c.choices[:0], 0
 	c.escapes = c.escapes[:0]
@@ -255,17 +298,25 @@ func (c *coreChecker) finishUnit() {
 	}
 	for _, s := range c.stores {
 		t, v := c.subst.Apply(c.arena, s.t), c.subst.Apply(c.arena, s.v)
-		if !c.below(s.fresh, t, v) {
+		if ok, _ := c.markBelow(s.mark, t, v); !ok {
 			c.errs = append(c.errs, c.storeError(s.tok, s.name, t, v))
 		}
 	}
 	for _, d := range c.deferred {
+		if d.rule != 0 {
+			if !c.keyAllowed(d.t, d.rule) {
+				c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: d.tok,
+					Hint: "'" + d.tok.Lexeme + "' needs " + keyRuleText(d.rule) + ", got " + c.format(d.t)})
+			}
+			continue
+		}
 		t, want := c.subst.Apply(c.arena, d.t), c.subst.Apply(c.arena, d.want)
-		if !c.below(d.fresh, t, want) {
+		if ok, _ := c.markBelow(d.mark, t, want); !ok {
 			c.mismatch(d.tok, 0, want, t)
 		}
 	}
 	c.finishEscapes()
+	c.finishAssign()
 	for _, name := range c.unitVars {
 		v := &c.vars[name]
 		if v.loaded && !v.stored {
@@ -274,16 +325,21 @@ func (c *coreChecker) finishUnit() {
 	}
 }
 
-// checkDef checks a def body once, with its generics rigid.
+// checkDef checks a def body once, with its generics rigid, and then the
+// `new` marks on its outputs (TypeCoreNew.go).
 func (c *coreChecker) checkDef(def *MShellDefinition) {
 	sig := c.defs[c.names.Intern(def.Name)]
+	outs := c.checkBody(def, sig)
+	c.checkNewMarks(def, sig, outs)
+}
+
+// checkBody checks a def's body against sig and returns its output types,
+// with the generics rigid. It records each exit's freshness.
+func (c *coreChecker) checkBody(def *MShellDefinition, sig *coreSig) []TypeId {
 	c.beginUnit()
-	for _, out := range def.Outputs {
-		if _, ok := out.(*TypeNewExpr); ok {
-			c.unsupported(def.NameToken, "`new` outputs")
-			return
-		}
-	}
+	c.curDef, c.selfCalled = sig, false
+	c.exitNew, c.exits = ^uint64(0), 0
+	c.exitShared = append(c.exitShared[:0], make([]Token, len(sig.outs))...)
 	rigid := make([]TypeId, len(sig.gens))
 	for i, g := range sig.gens {
 		rigid[i] = c.arena.MakeRigid(g)
@@ -317,6 +373,8 @@ func (c *coreChecker) checkDef(def *MShellDefinition) {
 		c.checkOutputs(def, outs)
 	}
 	c.finishUnit()
+	c.curDef = nil
+	return outs
 }
 
 // checkOutputs checks that the stack at the end of a def body is its
@@ -336,6 +394,7 @@ func (c *coreChecker) checkOutputs(def *MShellDefinition, outs []TypeId) {
 				Hint: "output " + strconv.Itoa(i) + " is declared " + c.format(want) + ", body produced " + c.format(got)})
 		}
 	}
+	c.exit(Token{})
 }
 
 // unsupported reports a construct the core checker does not check yet,
@@ -349,16 +408,29 @@ func (c *coreChecker) unsupported(tok Token, what string) {
 // Walking
 
 func (c *coreChecker) walk(items []MShellParseItem) {
-	for _, item := range items {
+	for i := 0; i < len(items); i++ {
 		if c.diverged || c.abandoned {
 			// Words after a diverging word are not checked (t_div).
 			return
 		}
-		c.step(item)
+		if l, ok := items[i].(*MShellParseList); ok && i+1 < len(items) && isWord(items[i+1], "groupBy") &&
+			c.groupBySpecs(l, items[i+1].(Token)) {
+			// A spec list written at a grid groupBy is checked against it
+			// spec by spec (TypeCoreGrid.go).
+			i++
+		} else {
+			c.step(items[i])
+		}
 		if len(c.choices) > 0 {
 			c.retryChoices()
 		}
 	}
+}
+
+// isWord reports whether item is the word name.
+func isWord(item MShellParseItem, name string) bool {
+	tok, ok := item.(Token)
+	return ok && tok.Type == LITERAL && tok.Lexeme == name
 }
 
 func (c *coreChecker) step(item MShellParseItem) {
@@ -388,7 +460,7 @@ func (c *coreChecker) step(item MShellParseItem) {
 	case *MShellParseMatchBlock:
 		c.matchBlock(it)
 	case *MShellParseGrid:
-		c.unsupported(it.GetStartToken(), "grid literals")
+		c.gridLiteral(it)
 	case *MShellIndexerList:
 		sigs := c.table.slice
 		if len(it.Indexers) == 1 && it.Indexers[0].(Token).Type == INDEXER {
@@ -478,6 +550,9 @@ func (c *coreChecker) token(tok Token) {
 	case BREAK, CONTINUE:
 		c.breakOrContinue(tok)
 	default:
+		if tok.Type == PLUS && c.gridConcat(tok) {
+			return
+		}
 		if c.commandWord(tok) {
 			return
 		}
@@ -501,11 +576,14 @@ func (c *coreChecker) word(tok Token) {
 	}
 	if id, ok := c.names.Lookup(tok.Lexeme); ok {
 		if sig := c.defs[id]; sig != nil {
+			if sig == c.curDef {
+				c.selfCalled = true
+			}
 			c.apply(sig, tok)
 			return
 		}
 	}
-	if c.dictWord(tok) || c.commandWord(tok) {
+	if c.gridWord(tok) || c.dictWord(tok) || c.commandWord(tok) {
 		return
 	}
 	if tok.Lexeme == "append" {
@@ -598,7 +676,7 @@ func (c *coreChecker) shuffle(tok Token) bool {
 		if c.need(1, tok) {
 			c.forceTop(1)
 			s, n = c.stack, len(c.stack)
-			s[n-1].fresh = false
+			s[n-1].share()
 			c.stack = append(s, s[n-1])
 		}
 	case "drop":
@@ -615,7 +693,7 @@ func (c *coreChecker) shuffle(tok Token) bool {
 		if c.need(2, tok) {
 			c.force(len(c.stack) - 2)
 			s, n = c.stack, len(c.stack)
-			s[n-2].fresh = false
+			s[n-2].share()
 			c.stack = append(s, s[n-2])
 		}
 	case "rot":
@@ -660,6 +738,7 @@ func (c *coreChecker) doReturn(tok Token) {
 				c.mismatch(tok, i, want, c.stack[i].t)
 			}
 		}
+		c.exit(tok)
 	}
 	c.diverged = true
 }
@@ -680,10 +759,12 @@ func (c *coreChecker) varOf(name NameId) *coreVar {
 }
 
 func (c *coreChecker) load(tok Token) {
-	v := c.varOf(c.names.Intern(strings.TrimPrefix(tok.Lexeme, "@")))
+	name := c.names.Intern(strings.TrimPrefix(tok.Lexeme, "@"))
+	v := c.varOf(name)
 	if !v.loaded {
 		v.loaded, v.firstLoad = true, tok
 	}
+	c.daRead(tok, name, v)
 	c.push(v.t, false)
 }
 
@@ -700,12 +781,13 @@ func (c *coreChecker) store(tok Token, name NameId) {
 	c.stack = c.stack[:len(c.stack)-1]
 	v := c.varOf(name)
 	v.stored = true
+	c.daSet(name)
 	opened := c.openBottom(c.subst.Apply(c.arena, slot.t))
-	if !c.check(coreSlot{t: opened, fresh: slot.fresh}, v.t) {
+	if !c.check(coreSlot{t: opened, fresh: slot.fresh, part: slot.part}, v.t) {
 		c.errs = append(c.errs, c.storeError(tok, name, c.subst.Apply(c.arena, slot.t), c.subst.Apply(c.arena, v.t)))
 		return
 	}
-	c.stores = append(c.stores, coreStore{tok: tok, name: name, t: slot.t, v: v.t, fresh: slot.fresh})
+	c.stores = append(c.stores, coreStore{tok: tok, name: name, t: slot.t, v: v.t, mark: slotMark(slot)})
 }
 
 func (c *coreChecker) storeError(tok Token, name NameId, got, want TypeId) TypeError {
@@ -830,13 +912,16 @@ func (c *coreChecker) check(slot coreSlot, want TypeId) bool {
 		}
 		// Record and covariant positions are matched label by label, then
 		// checked in full once the unit is solved.
-		if c.matchSub(c.subst.Apply(c.arena, slot.t), c.subst.Apply(c.arena, want), slot.fresh) {
+		// A partly new value is matched as a new one here; the full
+		// check, position by position, is the deferred one.
+		if c.matchSub(slot.t, want, slot.fresh || slot.part != 0) {
 			c.deferCheck(c.at, slot, want)
 			return true
 		}
 		return false
 	}
-	return c.below(slot.fresh, c.subst.Apply(c.arena, slot.t), c.subst.Apply(c.arena, want))
+	ok, _ := c.markBelow(slotMark(slot), c.subst.Apply(c.arena, slot.t), c.subst.Apply(c.arena, want))
+	return ok
 }
 
 // matchSub matches got against want at a checking position where either
@@ -847,6 +932,9 @@ func (c *coreChecker) check(slot coreSlot, want TypeId) bool {
 // else is unified. Unions are never entered. The caller checks the solved
 // types in full when the unit is solved.
 func (c *coreChecker) matchSub(got, want TypeId, fresh bool) bool {
+	// An earlier label may have solved a variable this one mentions. An
+	// alias that is not recursive is its body.
+	got, want = c.plainAlias(c.subst.Apply(c.arena, got)), c.plainAlias(c.subst.Apply(c.arena, want))
 	if got == want {
 		return true
 	}
@@ -896,6 +984,11 @@ func (c *coreChecker) matchSub(got, want TypeId, fresh bool) bool {
 	case TKList:
 		if fresh {
 			return c.matchSub(TypeId(gn.A), TypeId(wn.A), true)
+		}
+	case TKGrid, TKGridView, TKGridRow:
+		// A grid's schema is a record of its columns.
+		if gn.A != 0 && wn.A != 0 {
+			return c.matchSub(TypeId(gn.A), TypeId(wn.A), fresh)
 		}
 	}
 	return c.uni.Unify(got, want)
@@ -987,8 +1080,11 @@ func (c *coreChecker) call(sigs []coreSig, tok Token) {
 		if (tok.Type == EQUALS || tok.Type == NOTEQUAL) && c.equality(tok) {
 			return
 		}
-		c.errs = append(c.errs, TypeError{Kind: TErrNoMatchingOverload, Pos: tok,
-			Hint: "the stack has " + c.formatSlots(c.topSlots(sigs)) + "; " + c.formatCandidates(sigs)})
+		hint := "the stack has " + c.formatSlots(c.topSlots(sigs)) + "; " + c.formatCandidates(sigs)
+		if c.fitsIfNew(sigs) {
+			hint += "; " + storedHint
+		}
+		c.errs = append(c.errs, TypeError{Kind: TErrNoMatchingOverload, Pos: tok, Hint: hint})
 		c.abandoned = true
 	default:
 		c.choose(sigs, tok)
@@ -1128,6 +1224,33 @@ func (c *coreChecker) topSlots(sigs []coreSig) []coreSlot {
 	return c.stack[len(c.stack)-n:]
 }
 
+// fitsIfNew reports whether some candidate would fit if the stored values
+// on the stack were new: they were made at a type the word could have
+// taken, but not given it.
+func (c *coreChecker) fitsIfNew(sigs []coreSig) bool {
+	top := c.topSlots(sigs)
+	saved := append([]coreSlot(nil), top...)
+	changed := false
+	for i := range top {
+		if !top[i].fresh {
+			top[i].fresh, top[i].part = true, 0
+			changed = true
+		}
+	}
+	fits := false
+	if changed {
+		for i := range sigs {
+			cp := c.checkpoint()
+			if c.argsFit(&sigs[i]) {
+				fits = true
+			}
+			c.rollback(cp)
+		}
+	}
+	copy(top, saved)
+	return fits
+}
+
 // instantiate makes new unification variables for sig's generics.
 func (c *coreChecker) instantiate(sig *coreSig) []TypeId {
 	c.genBuf = c.genBuf[:0]
@@ -1238,6 +1361,13 @@ func (c *coreChecker) joinRepeated(sig *coreSig, gens []TypeId, argAt func(i int
 // outputs.
 func (c *coreChecker) apply(sig *coreSig, tok Token) {
 	c.at = tok
+	if sig.freeOut {
+		c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: tok,
+			Hint: "the standard library's signature of '" + tok.Lexeme + "' gives an output whose type no input fixes," +
+				" so its result has no type; the signature needs fixing"})
+		c.abandoned = true
+		return
+	}
 	n := len(sig.ins)
 	if !c.need(n, tok) {
 		return
@@ -1274,24 +1404,40 @@ func (c *coreChecker) apply(sig *coreSig, tok Token) {
 		}
 		fresh := sig.newOut&(1<<j) != 0 || (sig.keepOut&(1<<j) != 0 && inputsFresh)
 		if !fresh && sig.newListOut&(1<<j) != 0 {
-			fresh = c.listOfImmutable(t)
+			fresh = c.newOverImmutable(t)
 		}
 		c.push(t, fresh)
 	}
 }
 
-// listOfImmutable reports whether t is a list whose elements are
-// immutable, as solved so far.
-func (c *coreChecker) listOfImmutable(t TypeId) bool {
+// newOverImmutable reports whether t, the type of a new list or grid over
+// shared elements or cells, is fresh: its elements, or every column, are
+// immutable, as solved so far (design doc, "One rule for new lists").
+func (c *coreChecker) newOverImmutable(t TypeId) bool {
 	t = c.subst.Apply(c.arena, t)
 	n := c.arena.nodes[t]
-	return n.Kind == TKList && c.rel.Immutable(TypeId(n.A))
+	switch n.Kind {
+	case TKList:
+		return c.rel.Immutable(TypeId(n.A))
+	case TKGrid:
+		_, rec, ok := c.gridType(t)
+		return ok && c.schemaImmutable(rec)
+	}
+	return false
 }
 
 func (c *coreChecker) mismatch(tok Token, i int, want, got TypeId) {
-	c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: tok,
-		Expected: c.subst.Apply(c.arena, want), Actual: c.subst.Apply(c.arena, got), ArgIndex: i})
+	want, got = c.subst.Apply(c.arena, want), c.subst.Apply(c.arena, got)
+	e := TypeError{Kind: TErrTypeMismatch, Pos: tok, Expected: want, Actual: got, ArgIndex: i}
+	if !c.hasVars(want) && !c.hasVars(got) && c.rel.Retype(got, want) {
+		e.Hint = storedHint
+	}
+	c.errs = append(c.errs, e)
 }
+
+// storedHint is the fix for a stored value that would fit if it were new.
+const storedHint = "a stored value keeps its type, so give it the type the word takes where it is made" +
+	" (`... as T x!`), or make a new one with deepCopy"
 
 // ascribe checks `as T` (design doc, "Freshness"): the value must be below
 // T, or, when it is fresh, retypable to T. The slot keeps its fresh mark.
@@ -1303,6 +1449,18 @@ func (c *coreChecker) ascribe(a *MShellAsCast) {
 	}
 	c.forceTop(1)
 	s := &c.stack[len(c.stack)-1]
+	if s.part != 0 && !c.hasVars(s.t) {
+		// Retyped position by position, it stays partly new; committed, it
+		// is shared.
+		if ok, kept := c.markBelow(slotMark(*s), c.subst.Apply(c.arena, s.t), target); ok {
+			if !kept {
+				s.share()
+			}
+			s.t = target
+			return
+		}
+		s.share()
+	}
 	if !c.check(*s, target) {
 		got := c.subst.Apply(c.arena, s.t)
 		hint := "'as' needs evidence: " + c.format(got) + " is not below " + c.format(target)
@@ -1361,7 +1519,8 @@ func (c *coreChecker) child(items []MShellParseItem) (start int, outerFloor int)
 }
 
 // listLiteral types `[...]`: a list of the join of its elements, fresh
-// when every element is fresh or immutable (ShapeLit).
+// when every element is fresh or immutable (ShapeLit), and otherwise a new
+// list of stored values (TypeCorePartial.go).
 func (c *coreChecker) listLiteral(l *MShellParseList) {
 	c.listDepth++
 	start, outerFloor := c.child(l.Items)
@@ -1396,14 +1555,39 @@ func (c *coreChecker) listLiteral(l *MShellParseList) {
 			elem = j
 		}
 	}
-	c.stack = append(c.stack[:start], coreSlot{t: c.arena.MakeList(elem.t), fresh: fresh})
+	out := coreSlot{t: c.arena.MakeList(elem.t), fresh: fresh}
+	if !fresh {
+		out.part = c.listPart()
+	}
+	if names, ok := c.literalNames(elems); ok {
+		out.lit = names
+	}
+	c.stack = append(c.stack[:start], out)
+}
+
+// literalNames records the elements of a list literal when every one is a
+// string literal, and returns the slot's lit for them.
+func (c *coreChecker) literalNames(elems []coreSlot) (NameId, bool) {
+	names := make([]NameId, len(elems))
+	for i, e := range elems {
+		if names[i] = e.key(); names[i] == NameNone {
+			return NameNone, false
+		}
+	}
+	if len(c.litLists) >= int(litListTag-1) {
+		return NameNone, false
+	}
+	c.litLists = append(c.litLists, names)
+	return litListTag | NameId(len(c.litLists)), true
 }
 
 // dictLiteral types `{k: v, ...}`: a shape with exactly its keys, fresh
-// when every value is fresh or immutable.
+// when every value is fresh or immutable, and otherwise a new dict whose
+// stored values keep their types (TypeCorePartial.go).
 func (c *coreChecker) dictLiteral(d *MShellParseDict) {
 	fields := make([]RecordField, 0, len(d.Items))
 	fresh := true
+	var labels []coreLabelMark
 	for _, kv := range d.Items {
 		start, outerFloor := c.child(kv.Value)
 		c.floor = outerFloor
@@ -1419,12 +1603,19 @@ func (c *coreChecker) dictLiteral(d *MShellParseDict) {
 		c.forceTop(1)
 		v := c.stack[start]
 		c.stack = c.stack[:start]
-		if !c.freshish(v) {
+		name := c.names.Intern(kv.Key)
+		m := c.innerMark(v)
+		if m != markNew {
 			fresh = false
 		}
-		fields = append(fields, RecordField{Name: c.names.Intern(kv.Key), Status: FieldRequired, Type: v.t})
+		labels = append(labels, coreLabelMark{name: name, m: m})
+		fields = append(fields, RecordField{Name: name, Status: FieldRequired, Type: v.t})
 	}
-	c.push(c.arena.MakeRecord(fields, RecordField{Status: FieldAbsent}), fresh)
+	out := coreSlot{t: c.arena.MakeRecord(fields, RecordField{Status: FieldAbsent}), fresh: fresh}
+	if !fresh {
+		out.part = c.newPart(corePart{labels: labels, rest: markNew})
+	}
+	c.stack = append(c.stack, out)
 }
 
 // ---------------------------------------------------------------------------
@@ -1442,12 +1633,25 @@ func (c *coreChecker) ifBlock(b *MShellParseIfBlock) {
 	mark := len(c.saved)
 	entry := c.saveStack()
 	var arms []savedRun
+	// Definite assignment: an arm starts with what the conditions before it
+	// set, and the if keeps what every arm that goes on set.
+	daMark := len(c.setLog)
+	var condSets, armSets [][]NameId
 	runArm := func(body []MShellParseItem) {
+		c.daRestore(daMark)
+		for _, s := range condSets {
+			for _, n := range s {
+				c.daSet(n)
+			}
+		}
 		c.walk(body)
 		if !c.abandoned {
 			arms = append(arms, savedRun{start: len(c.saved), diverged: c.diverged})
 			c.saved = append(c.saved, c.stack...)
 			arms[len(arms)-1].end = len(c.saved)
+			if !c.diverged {
+				armSets = append(armSets, c.daSince(daMark))
+			}
 		}
 		c.diverged = false
 	}
@@ -1458,11 +1662,18 @@ func (c *coreChecker) ifBlock(b *MShellParseIfBlock) {
 			break
 		}
 		c.restoreStack(from)
+		c.daRestore(daMark)
+		for _, s := range condSets {
+			for _, n := range s {
+				c.daSet(n)
+			}
+		}
 		c.walk(ei.Condition)
 		if c.diverged || c.abandoned || !c.condition(tok) {
 			c.diverged = false
 			break
 		}
+		condSets = append(condSets, c.daSince(daMark))
 		from = c.saveStack()
 		runArm(ei.Body)
 	}
@@ -1476,6 +1687,7 @@ func (c *coreChecker) ifBlock(b *MShellParseIfBlock) {
 	}
 	if !c.abandoned {
 		c.joinArms(arms, tok)
+		c.daJoin(daMark, armSets)
 	}
 	c.saved = c.saved[:mark]
 }
@@ -1587,6 +1799,13 @@ func (c *coreChecker) joinSlot(a, b coreSlot) (coreSlot, bool) {
 	fresh := a.fresh && b.fresh
 	if a.t == b.t {
 		return coreSlot{t: a.t, pq: a.pq, fresh: fresh}, true
+	}
+	// ⊥ joins to the other side; unifying would set a variable there to ⊥.
+	if c.subst.Apply(c.arena, a.t) == TidBottom {
+		return coreSlot{t: b.t, fresh: fresh}, true
+	}
+	if c.subst.Apply(c.arena, b.t) == TidBottom {
+		return coreSlot{t: a.t, fresh: fresh}, true
 	}
 	if c.hasVars(a.t) || c.hasVars(b.t) {
 		return coreSlot{t: a.t, fresh: fresh}, c.uni.Unify(a.t, b.t)

@@ -3,6 +3,8 @@
 unpack_union_bindings.msh	the iff arms join to {a: int | float, b?: str}, and `@a 1 +` on a float is a runtime error (+ does not mix int and float); write the second literal's a as an int, or add 1.0 in a match on float
 null.msh	`'null' parseJson` is Json, not int | null; validate first: `'null' parseJson tryAs int | null ? classify` (tryAs is stage 5)
 dicts.msh	`d` is stored as three different shapes in one scope; use a new name for each (d1, d2, d3)
-tar_pack.msh	a stored list of entries is passed to tarPack, whose parameter is a wider list type; lists are invariant. Pending decision 2 (read-only builtin parameters); until then, `@entries deepCopy tarPack`
-zip_pack.msh	as tar_pack.msh, for zipPack
-http_cookiejar_types.msh	the request literal holds a stored cookie jar, so it is not fresh, and a shared shape without the optional keys is not below the request type. Pending decision 2 (read-only builtin parameters); no rewrite keeps the jar updated in place
+grid.msh	line 101 `toDict dup "x" get? 10 * "y" swap set` adds a key to a dict that `dup` made shared; build the row as a new literal: `(toDict d! {"x": @d :x?, "y": @d :x? 10 *}) map`
+grid_concat.msh	`@wg1 @wg2 extend` widens the stored grid's int column with floats in place (P6); give the column the wider type where the grid is made: `[| x; 1; 2 |] "x" (as int | float) updateCol wg1!`; and `dropped` is stored as a Grid and a GridView in one scope: use `drop`
+grid_dict_strings.msh	`r` is stored as five different grid types in one scope (use r1, r2, ...); `@e2 [| s; 1 |] extend` widens a stored grid's str column with ints in place: make it `[| s; "only" |] "s" (as str | int) updateCol e2!`
+grid_group_keys.msh	line 30 stores `r` as the left grid's row in one join key quote and the right grid's in the other (one type per scope); name the first `l`
+dict_types.msh	every def returns a new dict literal without `new`, which is now an error (design doc, "New def outputs"); mark each output `new`: `def wildcardDict ( -- new { *: int })`

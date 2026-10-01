@@ -1714,3 +1714,44 @@ func readLSPResponse(t *testing.T, reader *bufio.Reader) responseMessage {
 	}
 	return resp
 }
+
+// With the core checker, the errors about `new` on def outputs come with
+// quick fixes, and one action fixes them all.
+func TestCodeActionFixesNewMarks(t *testing.T) {
+	t.Setenv("MSH_CHECKER", "core")
+	uri := protocol.DocumentURI("file:///new-marks.msh")
+	doc := "def a ( -- [int]) [1] end\ndef b ( -- new int) 1 end\n"
+	server := &lspServer{documents: map[protocol.DocumentURI]*lspDocument{uri: {Text: doc}}}
+	at := func(line, char uint32) protocol.CodeActionParams {
+		return protocol.CodeActionParams{
+			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+			Range:        protocol.Range{Start: protocol.Position{Line: line, Character: char}, End: protocol.Position{Line: line, Character: char}},
+			Context:      protocol.CodeActionContext{Only: []protocol.CodeActionKind{protocol.QuickFix}},
+		}
+	}
+
+	actions := server.codeActions(at(0, 12))
+	if len(actions) != 1 || actions[0].Title != "Mark this output `new`" {
+		t.Fatalf("expected the add-new fix, got %+v", actions)
+	}
+	edit := actions[0].Edit.Changes[uri][0]
+	if edit.NewText != "new " || edit.Range.Start != (protocol.Position{Line: 0, Character: 11}) || edit.Range.End != edit.Range.Start {
+		t.Fatalf("unexpected edit %+v", edit)
+	}
+
+	actions = server.codeActions(at(1, 11))
+	if len(actions) != 1 || actions[0].Title != "Remove `new`" {
+		t.Fatalf("expected the remove-new fix, got %+v", actions)
+	}
+	edit = actions[0].Edit.Changes[uri][0]
+	if edit.NewText != "" || edit.Range.Start != (protocol.Position{Line: 1, Character: 11}) || edit.Range.End != (protocol.Position{Line: 1, Character: 15}) {
+		t.Fatalf("unexpected edit %+v", edit)
+	}
+
+	all := at(0, 0)
+	all.Context.Only = []protocol.CodeActionKind{sourceFixAll}
+	actions = server.codeActions(all)
+	if len(actions) != 1 || len(actions[0].Edit.Changes[uri]) != 2 {
+		t.Fatalf("expected one fix-all action with two edits, got %+v", actions)
+	}
+}

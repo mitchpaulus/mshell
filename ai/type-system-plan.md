@@ -229,6 +229,7 @@ Done when: the relations pass their tests, including randomized transitivity on 
 Selected by `MSH_CHECKER=core` (read where `Main.go` calls `TypeCheckProgram`, and in the LSP). The old checker stays the default.
 `tests/typecheck_core_test.sh` runs the core checker over `tests/success` and `tests/typecheck_fail`, and compares with two lists:
 `tests/core_expected_rejections.txt` (success programs rejected on purpose, each with its rewrite) and `tests/core_no_longer_errors.txt` (typecheck_fail programs no longer rejected, each with the reason).
+Until the switch-over, `tests/typecheck_test.sh` (the old checker) skips the acceptance programs listed in `tests/old_checker_accepts.txt` (its holes) and `tests/old_checker_rejects.txt`.
 Both checkers join `tests/typecheck_test.sh` at the switch-over.
 
 Structure (agreed 2026-09-30). The old walker is not reused: its type resolver builds `TKShape`/`TKDict`, which the stage 2 relations do not take, and it infers each quote where it is written, where the design checks a literal quote against its consumer.
@@ -270,7 +271,7 @@ Order of work, each step its own commit with every suite passing:
 Work:
 
 - Stack slots carry a type and a fresh mark. Effects carry inputs, outputs and a diverges flag. Composition as in design doc §Inference.
-- Literals, including the freshness rule for list and dict literals (§ShapeLit).
+- Literals, including the freshness rule for list and dict literals (§ShapeLit), and partly new literals: a literal around stored values is new at the top, each stored value keeping its type (design doc §Freshness per object). Done 2026-10-01.
 - Variables: one scope per def invocation and one for the script; one type per variable per scope; stores check against it; definite assignment as a separate check (§Variable scopes). The variable's type is the type of its first store in program order; a later store at a type that does not fit is an error at that store, with the hint "use a new name, or widen the first store with `as`". No renaming (decided 2026-09-29; design doc, "Renaming must not change behavior"). A `⊥` in a store's type (the contents of `none`) is replaced by a new type variable before unifying, so it fixes nothing; every store, the first included, is checked again with the final substitution, and a variable left unsolved is `⊥` (decided 2026-09-30; design doc, "A ⊥ in a store fixes nothing").
 - Quotes as in section 5; `x` needs a known arity.
 - **Unification is not trusted** (design doc §Inference). Record every pair the checker unifies. Once a def body or the script is solved, check each recorded pair again with the final substitution applied (the two sides must be equal), and make the deferred subtyping checks and the escape check with that substitution too. A failure is an internal checker error that names the site, never an accepted program. Overload choices need nothing extra: a choice is only the constraints of the chosen candidate. This is what lets the proofs cover the checker without proving unification or overload resolution.
@@ -294,6 +295,7 @@ Work:
   - mark its output *fresh* or *shared*. Every builtin that returns a new list (`map`, `filter`, `take`, `skip`, slices, `reverse`, `sort`, ...) is fresh exactly when its element type is immutable (design doc, "One rule for new lists");
   - mark in-place type changes (redirects, `updateCol` and the grid mutators) as allowed only on a fresh operand;
   - replace "accepts `[int | float]`" entries with generic or per-type overloads, since `[int]` is not below `[int | float]`;
+  - give every record type a builtin takes or gives a built-in alias (`HttpRequest`, `PackEntry`, ...; `builtinAliases` in `TypeCoreBuiltins.go`), and give a builtin that only reads a list one form per list type programs store (`[str]`, `[path]`, `[str | path]`, `[PackEntry]` for `zipPack`) (decided 2026-10-01);
   - type builtins that only read a dict over every dict-kinded type, never `{str: a}`: `keys`, `len`, `in` take `{| open}`; `values`, `filter` and runtime-key `get` read at the type of *Get-Key* (design doc §Runtime keys). Only `setd` and `del` need `{str: T}`;
   - check that `extend` with a grid view cannot change the view's source grid at a new type.
 - Port the special cases listed in section 4: commands and redirects, captures, command execution, grid join/pivot/groupBy, format strings, path writes, `dbg`, bare words in list literals.
@@ -373,6 +375,7 @@ Throughout, with a final pass at the switch-over.
 - The REPL checks each line live, keeping the checker's state across lines, and runs a line only if it checks, once the new checker is working and battle tested (decided 2026-09-29; live checking 2026-09-30). After a runtime error in a line that checked, the stack goes back to what it was before the line (no copy; shared slots keep their types, new slots the line popped get types read from their values); design doc §Checking by default. First extend the proof: the store typing holds at a checked error, and shared locations keep their types.
 - A read-only list view type (§new lists), if an `O(1)` tail is ever needed.
 - The "top-fresh" slot mark (§deepCopy).
+- When default parameters land and empty option dicts go away, type `{}` as `{str: T}` with a new variable `T`, as `[]` is `[T]` (decided 2026-10-01; design doc §Joins, "Why `none` needs nothing").
 
 ## 7. Acceptance tests
 
@@ -395,6 +398,7 @@ Each line becomes a test file; the name in brackets is a suggestion.
 | H1: runtime-key `getd` on `{a: int, *: str}` used as `str` | fail [`h1_getd_declared_field`] |
 | H2: list from a kind pattern stored in an outer variable | fail [`h2_abstract_escape`] |
 | H3: `{a: @xs} as {a: [int \| str]}` | fail [`h3_literal_around_shared`] |
+| `{a: @xs} as {a: [int], b?: int}` with `xs : [int]`, then a write through it reaches `xs` | ok [`partly_new_dict`] |
 
 ### Rules
 

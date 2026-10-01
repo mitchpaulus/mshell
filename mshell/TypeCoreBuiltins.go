@@ -1,5 +1,7 @@
 package main
 
+import "strings"
+
 // The builtin table of the core checker: Φ in ai/type-core-calculus.typ.
 // Each entry is written in signature syntax. An output marked `new` is
 // fresh: nothing else references it. newList marks a builtin whose output
@@ -34,6 +36,78 @@ func (b *coreTableBuilder) sigs(srcs []string) []coreSig {
 	out := make([]coreSig, len(srcs))
 	for i, src := range srcs {
 		out[i] = b.sig(src)
+	}
+	return out
+}
+
+// alias declares a built-in type alias, written in type syntax: the
+// record types builtins take and give have names, so a program can type a
+// stored value where it is made (`{url: "x"} as HttpRequest req!`) and
+// errors print the name.
+func (b *coreTableBuilder) alias(name, body string) {
+	t := b.typ(body)
+	id := b.res.names.Intern(name)
+	idx := b.res.arena.DeclareAlias(id)
+	b.res.arena.SetAliasBody(idx, t)
+	b.res.aliases[id] = b.res.arena.MakeAliasRef(idx)
+}
+
+// builtinAliases declares the names of the record types the builtins take
+// and give. Lists are invariant, so a stored list of these is typed with the
+// name where it is made.
+func (b *coreTableBuilder) builtinAliases() {
+	b.alias("NumFmtOptions", "{decimals?: int, sigFigs?: int, sigfigs?: int, preserveInt?: bool, "+
+		"decimalPoint?: str | path, thousandsSep?: str | path, grouping?: [int]}")
+	b.alias("Link", "{url: str, rel: str, params: {str: str}}")
+	b.alias("EnvEvent", "{dt: datetime, kind: str, source: str, changed: bool}")
+	b.alias("PackEntry", "str | path | {path: str | path, archivePath?: str | path, mode?: int}")
+	b.alias("TarDest", "str | path | {path: str | path, compress?: bool}")
+	b.alias("ExtractOptions", "{overwrite?: bool, skipExisting?: bool, preservePermissions?: bool, "+
+		"stripComponents?: int, pattern?: str | path, maxBytes?: int}")
+	b.alias("ExtractEntryOptions", "{overwrite?: bool, skipExisting?: bool, preservePermissions?: bool, "+
+		"mkdirs?: bool, maxBytes?: int}")
+	b.alias("ZipEntryInfo", "{name: str, compressedSize: int, uncompressedSize: int, isDir: bool, perm: int, "+
+		"executable: bool, modified: datetime}")
+	b.alias("TarEntryInfo", "{name: str, compressedSize: int, uncompressedSize: int, isDir: bool, perm: int, "+
+		"executable: bool, modified: datetime, 'type': str, linkTarget: str}")
+	b.alias("Cookie", "{name: str, value: str, domain: str, path: str, hostOnly: bool, secure: bool, "+
+		"httpOnly: bool, sameSite: str, expires: int | float | null, lastAccess: int | float, quoted: bool}")
+	b.alias("HttpRequest", "{url: str, timeout?: int, followRedirects?: bool, headers?: {str: str | int | path}, "+
+		"body?: str | int | path, cookieJar?: [Cookie]}")
+	b.alias("HttpResponse", "{status: int, reason: str, headers: {str: [str]}, body: bytes, cookieJar?: [Cookie]}")
+}
+
+// typ resolves a type written in type syntax, with no generics.
+func (b *coreTableBuilder) typ(src string) TypeId {
+	ast := builtinSigAST("(" + src + " -- )")
+	parts := b.res.resolveSig(ast.inputs, ast.outputs)
+	if len(b.res.errs) > 0 || len(parts.gens) > 0 || len(parts.ins) != 1 {
+		panic("core builtin type: " + src)
+	}
+	return parts.ins[0]
+}
+
+// gridForms writes one signature for each way of reading every `G_x` in
+// src as `Grid_x` or `GridView_x`: a grid argument with schema x that may
+// be a Grid or a view. They are separate candidates because unification
+// never enters a union, and a schema with a variable in it must unify.
+func gridForms(srcs ...string) []string {
+	var out []string
+	for _, src := range srcs {
+		forms := []string{src}
+		for _, letter := range "abcdefghijklmnopqrstuvwxyz" {
+			g := "G_" + string(letter)
+			if !strings.Contains(src, g) {
+				continue
+			}
+			var next []string
+			for _, f := range forms {
+				next = append(next, strings.ReplaceAll(f, g, "Grid_"+string(letter)),
+					strings.ReplaceAll(f, g, "GridView_"+string(letter)))
+			}
+			forms = next
+		}
+		out = append(out, forms...)
 	}
 	return out
 }
@@ -82,6 +156,7 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	t := &coreTable{}
 	b := &coreTableBuilder{res: res, t: t}
 	ar := res.arena
+	b.builtinAliases()
 
 	// ----- Strings, regex, numbers, conversions, encoding -----
 
@@ -99,8 +174,8 @@ func buildCoreTable(res *coreResolver) *coreTable {
 		"(float float -- bool)",
 		"(datetime datetime -- bool)",
 	}
-	b.regTok(PLUS, append(arithmetic, "(str str -- str)", "([t] [t] -- [t])", "(path path -- path)",
-		"(Grid | GridView Grid | GridView -- Grid)")...)
+	// `+` on two grids is in TypeCoreGrid.go.
+	b.regTok(PLUS, append(arithmetic, "(str str -- str)", "([t] [t] -- [t])", "(path path -- path)")...)
 	for i := range t.byToken[PLUS] {
 		if s := &t.byToken[PLUS][i]; len(s.ins) == 2 && ar.Kind(s.ins[0]) == TKList {
 			s.newListOut = 1
@@ -150,8 +225,7 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	b.reg("fromBase", "(str int -- Maybe[int])")
 	// Number below, decimal places on top.
 	b.reg("toFixed", "(int | float int -- str)")
-	b.reg("numFmt", "(int | float {decimals?: int, sigFigs?: int, sigfigs?: int, preserveInt?: bool, "+
-		"decimalPoint?: str | path, thousandsSep?: str | path, grouping?: [int]} -- str)")
+	b.reg("numFmt", "(int | float NumFmtOptions -- str)")
 	b.reg("toJson", "(a -- str)")
 	b.reg("typeof", "(a -- str)")
 
@@ -159,10 +233,9 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	b.reg("split", "(str | path str | path -- new [str])")
 	b.reg("wsplit", "(str | path -- new [str])")
 	b.reg("lines", "(str -- new [str])")
-	// The grid form is the inner join: two grids and a key quote for each,
-	// run on a child stack per row.
-	b.reg("join", "([str] str -- str)", "(Grid | GridView Grid | GridView (GridRow -- a) (GridRow -- b) -- Grid)")
-	b.child("join")
+	// The grid form (two grids and a key quote for each) is in
+	// TypeCoreGrid.go.
+	b.reg("join", "([str] str -- str)")
 	b.reg("unlines", "([str] -- str)")
 	b.reg("unlinesCrLf", "([str] -- str)")
 	for _, name := range []string{"trim", "trimStart", "trimEnd", "strEscape"} {
@@ -199,12 +272,18 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	b.reg("uuid", "( -- str)")
 	b.reg("uuid7", "( -- str)")
 	b.reg("urlEncode", "(str -- str)")
+	// The dict form writes each value as a string: a str, int or path, or a
+	// list of them, which gives the key once per element. Lists are
+	// invariant, so each stored list type has its own form (TypeCoreDict.go).
+	for _, src := range []string{"[str]", "[int]", "[path]", "[str | int | path]"} {
+		t.urlEncodeLists = append(t.urlEncodeLists, b.typ(src))
+	}
 
 	// A path, or a bare word from a list literal, names a file; a str is the text.
 	b.reg("parseJson", "(str | path | bytes -- new Json)")
 	// The document node: tag "" with the <html> element as its child.
 	b.reg("parseHtml", "(str | path -- new HtmlNode)")
-	b.reg("parseLinkHeader", "(str -- new [{url: str, rel: str, params: {str: str}}])")
+	b.reg("parseLinkHeader", "(str -- new [Link])")
 
 	b.regTok(POSITIONAL, "( -- str)")
 	// A line of stdin, and whether one was read.
@@ -214,27 +293,27 @@ func buildCoreTable(res *coreResolver) *coreTable {
 
 	// ----- Lists -----
 
-	b.reg("len", "([a] -- int)", "(str | path | {} | Grid | GridView | GridRow -- int)")
+	b.reg("len", append([]string{"([a] -- int)", "(str | path | {} -- int)", "(GridRow_s -- int)"},
+		gridForms("(G_s -- int)")...)...)
 	// The value-below-list order (`x [xs] append`) is left to partialName:
 	// when both are lists the runtime appends the upper list into the
 	// lower one, so `(a [a] -- [a])` would be wrong whenever a is a list.
 	b.reg("append", "([a] a -- [a])")
 	// nth indexes whichever argument is not the int; when the top is an
 	// int, the one below is indexed.
-	b.reg("nth",
+	b.reg("nth", append([]string{
 		"([a] int -- a)", "(int [a] -- a)",
 		"(str int -- str)", "(int str -- str)",
 		"(path int -- path)", "(int path -- path)",
 		"(bytes int -- bytes)", "(int bytes -- bytes)",
-		"(Grid | GridView int -- GridRow)", "(int Grid | GridView -- GridRow)",
-	)
+	}, gridForms("(G_s int -- GridRow_s)", "(int G_s -- GridRow_s)")...)...)
 	// Words that change their receiver in place and give it back.
 	b.reg("setAt", "([a] a int -- [a])")
 	b.reg("insert", "([a] a int -- [a])")
 	// On a dict, only a `{str: a}` may lose a key: a shape never does.
 	b.reg("del", "([a] int -- [a])", "(int [a] -- [a])", "({str: a} str | path -- {str: a})")
-	b.reg("extend", "([a] [a] -- [a])",
-		"(Grid Grid | GridView -- Grid)", "(GridView Grid | GridView -- GridView)")
+	// The grid form is in TypeCoreGrid.go.
+	b.reg("extend", "([a] [a] -- [a])")
 	// pop removes the last element and gives it back; the list is not pushed.
 	b.reg("pop", "([a] -- Maybe[a])")
 	// extend is left shared: its result would be fresh only by the argument
@@ -247,42 +326,51 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	// Words that return a new list. newList has no effect on a candidate
 	// whose output is not a list (str, Grid).
 	b.reg("seq", "(int -- new [int])")
-	b.reg("reverse", "([a] -- [a])", "(Grid | GridView -- Grid)")
+	b.reg("reverse", append([]string{"([a] -- [a])"}, gridForms("(G_s -- Grid_s)")...)...)
 	b.reg("take", "([a] int -- [a])", "(str int -- str)")
 	b.reg("skip", "([a] int -- [a])", "(str int -- str)")
 	// sort and sortV turn every element into a string, sort the strings,
 	// and return them: `[10 9] sort` is `["10" "9"]`.
+	// Lists are invariant, so a list of one element type has its own form,
+	// and a mixed list the widest one (design doc, "Checking positions").
 	for _, name := range []string{"sort", "sortV"} {
-		b.reg(name, "([str] -- [str])", "([int] -- [str])", "([path] -- [str])")
+		b.reg(name, "([str] -- [str])", "([int] -- [str])", "([path] -- [str])", "([str | int | path] -- [str])")
 	}
 	b.reg("uniq", "([str] -- [str])", "([int] -- [int])", "([float] -- [float])",
-		"([path] -- [path])", "([datetime] -- [datetime])")
+		"([path] -- [path])", "([datetime] -- [datetime])",
+		"([str | path | int | float | datetime] -- [str | path | int | float | datetime])")
 	for _, name := range []string{"reverse", "take", "skip", "sort", "sortV", "uniq"} {
 		b.newList(name)
 	}
-	b.reg("sortBy", "(Grid | GridView str | [str] -- Grid)")
+	b.reg("sortBy", gridForms("(G_s str | [str] -- Grid_s)")...)
+	b.newList("sortBy")
 
 	// Words that run a quote on a child stack, once per element (or per
 	// comparison). sortByCmp sorts a list in place and gives it back; its
 	// quote sees the elements, so the result is shared.
-	b.reg("each", "([a] (a -- ) -- )", "(Grid | GridView (GridRow -- ) -- )")
-	b.reg("filter", "([a] (a -- bool) -- [a])", "(Grid | GridView (GridRow -- bool) -- GridView)")
+	// A grid's quote gets rows of its schema. filter on a grid gives a view
+	// of the same grid, which is shared (newList leaves a view shared); the
+	// grid form of sortByCmp gives a new grid.
+	b.reg("each", append([]string{"([a] (a -- ) -- )"}, gridForms("(G_s (GridRow_s -- ) -- )")...)...)
+	b.reg("filter", append([]string{"([a] (a -- bool) -- [a])"}, gridForms("(G_s (GridRow_s -- bool) -- GridView_s)")...)...)
 	b.newList("filter")
-	b.reg("sortByCmp", "([a] (a a -- int) -- [a])", "(Grid | GridView (GridRow GridRow -- int) -- Grid)")
+	b.reg("sortByCmp", append([]string{"([a] (a a -- int) -- [a])"}, gridForms("(G_s (GridRow_s GridRow_s -- int) -- Grid_s)")...)...)
+	for cmp, i := t.name(res.names.Intern("sortByCmp")), 1; i < len(cmp); i++ {
+		cmp[i].newListOut = 1
+	}
 	for _, name := range []string{"each", "filter", "sortByCmp"} {
 		b.child(name)
 	}
-	// map on a list or grid runs its quote on a child stack; on a Maybe,
-	// on the current stack.
+	// map on a list runs its quote on a child stack; on a Maybe, on the
+	// current stack. The dict and grid forms are in TypeCoreDict.go and
+	// TypeCoreGrid.go.
 	b.reg("map",
 		"([a] (a -- b) -- [b])",
 		"(Maybe[a] (a -- b) -- Maybe[b])",
-		"(Grid | GridView (GridRow -- GridRow | {}) -- Grid)",
 	)
 	mapSigs := t.name(res.names.Intern("map"))
 	mapSigs[0].newListOut = 1
 	mapSigs[0].child = true
-	mapSigs[2].child = true
 
 	// ----- Maybe -----
 
@@ -373,7 +461,7 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	// Name below, value on top.
 	b.reg("setenv", "(str | path str | path -- )")
 	b.reg("unsetenv", "(str | path -- )")
-	b.reg("envInspect", "(str | path -- new [{dt: datetime, kind: str, source: str, changed: bool}])")
+	b.reg("envInspect", "(str | path -- new [EnvEvent])")
 	// Each element is [name fullPath].
 	b.reg("binPaths", "( -- new [[str]])")
 	b.reg("sleep", "(int | float -- )")
@@ -429,28 +517,34 @@ func buildCoreTable(res *coreResolver) *coreTable {
 
 	// Archives. Paths are str or path. Stack order: source below
 	// destination, options on top. The option dicts are read by key only.
-	packEntries := "[str | path | {path: str | path, archivePath?: str | path, mode?: int}]"
-	tarDest := "str | path | {path: str | path, compress?: bool}"
-	extractOpts := "{overwrite?: bool, skipExisting?: bool, preservePermissions?: bool, stripComponents?: int, pattern?: str | path, maxBytes?: int}"
-	entryOpts := "{overwrite?: bool, skipExisting?: bool, preservePermissions?: bool, mkdirs?: bool, maxBytes?: int}"
-	zipEntry := "{name: str, compressedSize: int, uncompressedSize: int, isDir: bool, perm: int, executable: bool, modified: datetime}"
-	tarEntry := "{name: str, compressedSize: int, uncompressedSize: int, isDir: bool, perm: int, executable: bool, modified: datetime, 'type': str, linkTarget: str}"
+	// Lists are invariant, so the entry list has one form per stored list
+	// type a program has: plain strings or paths (from ls, lines, glob), a
+	// mix of the two, or the built-in PackEntry alias. Every form gives the
+	// same outputs, so a new literal that fits several takes the first.
+	packEntries := []string{"[str]", "[path]", "[str | path]", "[PackEntry]"}
+	packSigs := func(dest string) []string {
+		sigs := make([]string, len(packEntries))
+		for i, e := range packEntries {
+			sigs[i] = "(" + e + " " + dest + " -- )"
+		}
+		return sigs
+	}
 	for _, name := range []string{"zipDirInc", "zipDirExc"} {
 		b.reg(name, "(str | path str | path -- )")
 	}
 	for _, name := range []string{"tarDirInc", "tarDirExc"} {
-		b.reg(name, "(str | path "+tarDest+" -- )")
+		b.reg(name, "(str | path TarDest -- )")
 	}
-	b.reg("zipPack", "("+packEntries+" str | path -- )")
-	b.reg("tarPack", "("+packEntries+" "+tarDest+" -- )")
-	b.reg("zipList", "(str | path -- new ["+zipEntry+"])")
-	b.reg("tarList", "(str | path -- new ["+tarEntry+"])")
+	b.reg("zipPack", packSigs("str | path")...)
+	b.reg("tarPack", packSigs("TarDest")...)
+	b.reg("zipList", "(str | path -- new [ZipEntryInfo])")
+	b.reg("tarList", "(str | path -- new [TarEntryInfo])")
 	for _, name := range []string{"zipExtract", "tarExtract"} {
-		b.reg(name, "(str | path str | path "+extractOpts+" -- )")
+		b.reg(name, "(str | path str | path ExtractOptions -- )")
 	}
 	// archive, entry name, destination, options.
 	for _, name := range []string{"zipExtractEntry", "tarExtractEntry"} {
-		b.reg(name, "(str | path str | path str | path "+entryOpts+" -- )")
+		b.reg(name, "(str | path str | path str | path ExtractEntryOptions -- )")
 	}
 	// archive, entry name; none when the entry does not exist.
 	for _, name := range []string{"zipRead", "tarRead"} {
@@ -460,12 +554,9 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	// HTTP. The request is read by key. The jar is written in place: expired
 	// cookies are removed, lastAccess is set to an int, and cookies are
 	// replaced or appended; the response's cookieJar is that same list.
-	cookie := "{name: str, value: str, domain: str, path: str, hostOnly: bool, secure: bool, httpOnly: bool, sameSite: str, expires: int | float | null, lastAccess: int | float, quoted: bool}"
-	httpReq := "{url: str, timeout?: int, followRedirects?: bool, headers?: {str: str | int | path}, body?: str | int | path, cookieJar?: [" + cookie + "]}"
-	httpResp := "Maybe[{status: int, reason: str, headers: {str: [str]}, body: bytes, cookieJar?: [" + cookie + "]}]"
 	// The response is left shared: its cookie jar is the request's list.
 	for _, name := range []string{"httpGet", "httpPost"} {
-		b.reg(name, "("+httpReq+" -- "+httpResp+")")
+		b.reg(name, "(HttpRequest -- Maybe[HttpResponse])")
 	}
 
 	// ----- Dicts -----
@@ -491,37 +582,33 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	// whose result depends on the schema is either left out or gives the
 	// unknown schema.
 
-	b.reg("gridRows", "(Grid | GridView -- int)")
-	b.reg("gridCols", "(Grid | GridView -- new [str])")
+	b.reg("gridRows", gridForms("(G_s -- int)")...)
+	b.reg("gridCols", gridForms("(G_s -- new [str])")...)
 	// Metadata dicts are shared with the dicts they were made from and
 	// between grids, so they are read only.
-	b.reg("gridMeta", "(Grid | GridView -- Maybe[{}])")
-	b.reg("gridColMeta", "(Grid | GridView "+key+" -- Maybe[{}])")
+	b.reg("gridMeta", gridForms("(G_s -- Maybe[{}])")...)
+	b.reg("gridColMeta", gridForms("(G_s "+key+" -- Maybe[{}])")...)
 	// A Grid is returned as is; a GridView is copied into a new grid.
-	b.reg("gridCompact", "(Grid -- Grid)", "(GridView -- Grid)")
-	b.keeps(t.name(res.names.Intern("gridCompact")))
-	// New grids. Cells are shared with the source.
-	b.reg("select", "(Grid | GridView [str] -- Grid)")
-	b.reg("exclude", "(Grid | GridView [str] -- Grid)")
-	b.reg("toGrid", "([[str]] -- new Grid)")
+	b.reg("gridCompact", "(Grid_s -- Grid_s)", "(GridView_s -- Grid_s)")
+	compact := t.name(res.names.Intern("gridCompact"))
+	compact[0].keepOut = 1
+	compact[1].newListOut = 1
+	// Every column of a grid from toGrid holds strings; their names are data.
+	t.setName(res.names.Intern("toGrid"), []coreSig{{
+		ins:    []TypeId{ar.MakeList(ar.MakeList(TidStr))},
+		outs:   []TypeId{ar.MakeGridOf(TKGrid, ar.MakeRecord(nil, RecordField{Status: FieldOptional, Type: TidStr}))},
+		newOut: 1,
+	}})
 	b.reg("parseCsv", "(str | path -- new [[str]])")
 
-	// Words that run a quote on a child stack, once per row or group.
-	b.reg("derive", "(Grid | GridView "+key+" {} (GridRow -- a) -- Grid)")
-	b.reg("pivot", "(Grid | GridView [str] "+key+" (GridView -- a) -- Grid)")
-	for _, name := range []string{"leftJoin", "outerJoin"} {
-		b.reg(name, "(Grid | GridView Grid | GridView (GridRow -- a) (GridRow -- b) -- Grid)")
-	}
-	// The list form; the grid form takes a list of aggregation specs whose
-	// quotes each give their own type.
+	// The list form of groupBy. The grid form takes a list of aggregation
+	// specs whose quotes each give their own type (TypeCoreGrid.go).
 	b.reg("groupBy", "([a] (a -- "+key+") -- {str: [a]})")
-	for _, name := range []string{"derive", "pivot", "leftJoin", "outerJoin", "groupBy"} {
-		b.child(name)
-	}
-	// Not in the table: updateCol, gridSetCell, gridAddCol, gridRemoveCol,
-	// gridRenameCol (a quote or a value at a column's type, or a schema
-	// change in place), and gridCol, gridValues, toDict (results at the
-	// columns' types).
+	b.child("groupBy")
+	// In TypeCoreGrid.go, since their results depend on the schema: select,
+	// exclude, derive, pivot, the grid forms of join, leftJoin, outerJoin,
+	// map, extend and `+`, updateCol, gridSetCell, gridAddCol,
+	// gridRemoveCol, gridRenameCol, gridCol, gridValues, toDict.
 
 	// parseExcel: one record per sheet. An error cell is none.
 	{
@@ -550,11 +637,12 @@ func buildCoreTable(res *coreResolver) *coreTable {
 
 	// Indexing. `:n:` gives an element (a row of a grid, a cell of a row);
 	// slices give a new list, or a view of the same grid.
-	t.index = b.sigs([]string{"([a] -- a)", "(str -- str)", "(path -- path)", "(bytes -- bytes)",
-		"(Grid | GridView -- GridRow)"})
-	t.index = append(t.index, coreSig{ins: []TypeId{ar.MakeGridRow(0)}, outs: []TypeId{TidUnknown}})
-	t.slice = b.sigs([]string{"([a] -- [a])", "(str -- str)", "(path -- path)", "(bytes -- bytes)",
-		"(Grid | GridView -- GridView)"})
+	t.index = b.sigs(append([]string{"([a] -- a)", "(str -- str)", "(path -- path)", "(bytes -- bytes)"},
+		gridForms("(G_s -- GridRow_s)")...))
+	// A row's cell by position: the column is not known.
+	t.index = append(t.index, coreSig{ins: []TypeId{ar.MakeGridOf(TKGridRow, res.unknownSchema())}, outs: []TypeId{TidUnknown}})
+	t.slice = b.sigs(append([]string{"([a] -- [a])", "(str -- str)", "(path -- path)", "(bytes -- bytes)"},
+		gridForms("(G_s -- GridView_s)")...))
 	t.slice[0].newListOut = 1
 	// A pipe: an element is one of its commands; a slice is a new list of
 	// them.
@@ -569,12 +657,6 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	// Uses of these words the table does not cover yet.
 	t.partialName = map[NameId]string{
 		res.names.Intern("nth"):       "'nth' on a GridRow",
-		res.names.Intern("map"):       "the dict form of 'map'",
-		res.names.Intern("filter"):    "the dict form of 'filter'",
-		res.names.Intern("sort"):      "'sort' on a list that mixes str, int and path",
-		res.names.Intern("sortV"):     "'sortV' on a list that mixes str, int and path",
-		res.names.Intern("uniq"):      "'uniq' on a list that mixes element types",
-		res.names.Intern("urlEncode"): "the dict form of 'urlEncode'",
 		res.names.Intern("groupBy"):   "the grid form of 'groupBy'",
 	}
 	return t

@@ -43,6 +43,9 @@ const (
 type coreLoopCtx struct {
 	kind  coreLoopKind
 	stack savedRun // the loop's stack, for loopExact
+	// da is 1 + the index of the loop's definite-assignment record in
+	// daLoops, or 0.
+	da int
 }
 
 // coreInfer is a quote being typed on its own: underflow below floor makes
@@ -141,7 +144,11 @@ func (c *coreChecker) inferQuote(items []MShellParseItem, tok Token) TypeId {
 	f := c.enterBody()
 	inf := &coreInfer{floor: 0}
 	c.infer = inf
+	daMark := len(c.setLog)
+	c.later++
 	c.walk(items)
+	c.later--
+	c.daRestore(daMark)
 	var t TypeId
 	if !c.abandoned {
 		c.forceTop(len(c.stack))
@@ -187,6 +194,9 @@ func (c *coreChecker) checkPending(pq uint32, want TypeId, child bool, outerBase
 	for _, in := range sig.Inputs {
 		c.stack = append(c.stack, coreSlot{t: in})
 	}
+	// The word may run the quote zero times: its stores do not count after.
+	daMark := len(c.setLog)
+	defer c.daRestore(daMark)
 	c.walk(items)
 	ok := true
 	if !c.abandoned && !c.diverged {
@@ -223,10 +233,10 @@ func (c *coreChecker) checkPending(pq uint32, want TypeId, child bool, outerBase
 func (c *coreChecker) childLoopCtx(outerBase int) coreLoopCtx {
 	switch c.brk.kind {
 	case loopChild:
-		return coreLoopCtx{kind: loopChild}
+		return coreLoopCtx{kind: loopChild, da: c.brk.da}
 	case loopExact:
 		if c.stackFits(c.stack[:outerBase], c.brk.stack) {
-			return coreLoopCtx{kind: loopChild}
+			return coreLoopCtx{kind: loopChild, da: c.brk.da}
 		}
 	}
 	return coreLoopCtx{}
@@ -311,8 +321,11 @@ func (c *coreChecker) iff(tok Token) {
 	mark := len(c.saved)
 	entry := c.saveStack()
 	var runs []savedRun
+	daMark := len(c.setLog)
+	var sets [][]NameId
 	for _, q := range arms {
 		c.restoreStack(entry)
+		c.daRestore(daMark)
 		if p := c.waiting(q); p != nil {
 			p.done = true
 			c.uni.Unify(p.t, c.arena.MakeQuote(QuoteSig{Inputs: []TypeId{}}))
@@ -324,13 +337,18 @@ func (c *coreChecker) iff(tok Token) {
 			c.saved = c.saved[:mark]
 			return
 		}
+		if !c.diverged {
+			sets = append(sets, c.daSince(daMark))
+		}
 		runs = append(runs, c.saveArm())
 	}
 	if len(arms) == 1 {
 		c.restoreStack(entry)
 		runs = append(runs, c.saveArm())
+		sets = append(sets, nil)
 	}
 	c.joinArms(runs, tok)
+	c.daJoin(daMark, sets)
 	c.saved = c.saved[:mark]
 }
 
@@ -391,15 +409,24 @@ func (c *coreChecker) loop(tok Token) {
 		if opened != s.t {
 			c.deferCheck(tok, *s, opened)
 		}
-		s.t, s.fresh = opened, false
+		s.t = opened
+		s.share()
 	}
 	mark := len(c.saved)
 	loopStack := c.saveStack()
 	brk, cont, seen := c.brk, c.cont, c.brkSeen
-	c.brk = coreLoopCtx{kind: loopExact, stack: loopStack}
+	c.daLoops = append(c.daLoops, daLoop{mark: len(c.setLog)})
+	da := len(c.daLoops)
+	c.brk = coreLoopCtx{kind: loopExact, stack: loopStack, da: da}
 	c.cont = c.brk
 	c.brkSeen = false
 	c.walkInline(p.items)
+	// After the loop, what every break that left it had set.
+	if !c.abandoned {
+		l := c.daLoops[da-1]
+		c.daJoin(l.mark, l.sets)
+	}
+	c.daLoops = c.daLoops[:da-1]
 	if !c.abandoned && !c.diverged {
 		c.forceTop(len(c.stack) - c.floor)
 		if !c.stackFits(c.stack, loopStack) {
@@ -440,6 +467,10 @@ func (c *coreChecker) breakOrContinue(tok Token) {
 	}
 	if tok.Type == BREAK && ctx.kind != loopNone {
 		c.brkSeen = true
+		if ctx.da > 0 && ctx.da <= len(c.daLoops) {
+			l := &c.daLoops[ctx.da-1]
+			l.sets = append(l.sets, c.daSince(l.mark))
+		}
 	}
 	c.diverged = true
 }
@@ -447,12 +478,15 @@ func (c *coreChecker) breakOrContinue(tok Token) {
 // deferCheck records a checking position to decide once the unit is
 // solved: s must fit want then.
 func (c *coreChecker) deferCheck(tok Token, s coreSlot, want TypeId) {
-	c.deferred = append(c.deferred, coreDeferred{tok: tok, t: s.t, want: want, fresh: s.fresh})
+	c.deferred = append(c.deferred, coreDeferred{tok: tok, t: s.t, want: want, mark: slotMark(s)})
 }
 
-// coreDeferred is a checking position decided when the unit is solved.
+// coreDeferred is a check decided when the unit is solved: a checking
+// position (t must fit want), or, when rule is set, that values of type t
+// are ones the runtime takes under that rule (TypeCoreGrid.go).
 type coreDeferred struct {
-	tok        Token
-	t, want    TypeId
-	fresh      bool
+	tok     Token
+	t, want TypeId
+	mark    coreMark
+	rule    keyRule
 }

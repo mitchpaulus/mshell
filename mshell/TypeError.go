@@ -93,6 +93,29 @@ type TypeError struct {
 	ArgIndex int    // 0-based index into the failing sig's inputs (TypeMismatch only)
 	Name     string // identifier name for UnknownIdentifier
 	Hint     string
+	// Fix is an edit that fixes the error, offered by the LSP as a code
+	// action; its Kind is FixNone when there is none.
+	Fix TypeFix
+}
+
+// TypeFixKind says what a TypeFix does.
+type TypeFixKind uint8
+
+const (
+	FixNone TypeFixKind = iota
+	// FixInsert inserts Text before the token At.
+	FixInsert
+	// FixDelete deletes the text from the start of At to the start of
+	// Until.
+	FixDelete
+)
+
+// TypeFix is an edit to the source that fixes a type error.
+type TypeFix struct {
+	Kind      TypeFixKind
+	Title     string
+	At, Until Token
+	Text      string
 }
 
 // Format builds a human-readable message. The arena and name table are
@@ -122,6 +145,9 @@ func (e TypeError) Format(arena *TypeArena, names *NameTable) string {
 				FormatType(arena, names, e.Expected),
 				e.ArgIndex,
 				FormatType(arena, names, e.Actual))
+			if e.Hint != "" {
+				fmt.Fprintf(&sb, "; %s", e.Hint)
+			}
 		}
 	case TErrUnknownIdentifier:
 		fmt.Fprintf(&sb, "unknown identifier '%s'", e.Name)
@@ -314,12 +340,22 @@ func FormatType(arena *TypeArena, names *NameTable, id TypeId) string {
 		return fmt.Sprintf("T%d", n.A)
 	case TKRigid:
 		return names.Name(NameId(n.A))
-	case TKGrid:
-		return "Grid"
-	case TKGridView:
-		return "GridView"
-	case TKGridRow:
-		return "GridRow"
+	case TKGrid, TKGridView, TKGridRow:
+		name := "Grid"
+		switch n.Kind {
+		case TKGridView:
+			name = "GridView"
+		case TKGridRow:
+			name = "GridRow"
+		}
+		if n.A == 0 {
+			return name
+		}
+		if arena.Node(TypeId(n.A)).Kind != TKRecord {
+			// A schema not known yet.
+			return name + "[" + FormatType(arena, names, TypeId(n.A)) + "]"
+		}
+		return name + formatSchema(arena, names, arena.records[arena.Node(TypeId(n.A)).Extra])
 	case TKRecord:
 		return formatRecord(arena, names, arena.records[n.Extra])
 	case TKEnum:
@@ -381,6 +417,19 @@ func formatRecord(arena *TypeArena, names *NameTable, r RecordType) string {
 		return "{" + body + " | *!: " + FormatType(arena, names, r.Rest.Type) + "}"
 	}
 	return "{" + body + " | open}"
+}
+
+// formatSchema prints a core grid's schema: its columns, and what other
+// columns there may be. A known schema is exact; the unknown one is printed
+// as nothing at all, so `Grid{| open}` is `Grid`.
+func formatSchema(arena *TypeArena, names *NameTable, r RecordType) string {
+	if len(r.Fields) == 0 && r.Rest.Status == FieldOpen {
+		return ""
+	}
+	if r.Rest.Status == FieldAbsent {
+		return strings.Replace(formatRecord(arena, names, r), " | exact}", "}", 1)
+	}
+	return formatRecord(arena, names, r)
 }
 
 func formatCommandCapture(mode CommandCaptureMode) string {

@@ -57,10 +57,12 @@ const (
 	TKVar                      // A = TypeVarId
 	TKRigid                    // A = NameId of the declared generic; see MakeRigid
 
-	// Grid family — built-in like Maybe; see "Grid types" in ai/type_checker.md.
-	TKGrid     // Extra = index into gridSchemas (0 = unknown schema)
-	TKGridView // Extra = index into gridSchemas (0 = unknown schema)
-	TKGridRow  // Extra = index into gridSchemas (0 = unknown schema)
+	// Grid family. In the old checker Extra is an index into gridSchemas
+	// (0 = unknown schema) and A is 0. In the core checker A is the schema:
+	// a record type with one label per column (MakeGridOf).
+	TKGrid
+	TKGridView
+	TKGridRow
 
 	// TKStrLit is a `str` refined with a statically known value: A holds the
 	// interned NameId of the literal content. It is a subtype of `str` —
@@ -668,6 +670,26 @@ func (a *TypeArena) MakeGridSchemaIdx(cols []GridSchemaCol) uint32 {
 	a.gridSchemas = append(a.gridSchemas, GridSchema{Columns: cp})
 	a.gridSchemaCons[string(a.keyBuf)] = idx
 	return idx
+}
+
+// MakeGridOf returns the core checker's grid, view or row type (kind is
+// TKGrid, TKGridView or TKGridRow) whose schema is the record type rec: a
+// column is a label, required when it exists, at the type of its cells
+// (ai/type-core-calculus.typ, "Grids are shapes of columns"). The unknown
+// schema is the read-only `{| open}`.
+func (a *TypeArena) MakeGridOf(kind TypeKind, rec TypeId) TypeId {
+	return a.intern(kind, uint32(rec), 0, 0)
+}
+
+// GridRecord returns the schema record of a core grid, view or row type,
+// or TidNothing for one of the old checker's.
+func (a *TypeArena) GridRecord(t TypeId) TypeId {
+	n := a.Node(t)
+	switch n.Kind {
+	case TKGrid, TKGridView, TKGridRow:
+		return TypeId(n.A)
+	}
+	return TidNothing
 }
 
 // MakeGridView returns the canonical TypeId for a grid-view type.

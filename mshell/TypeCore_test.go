@@ -198,9 +198,151 @@ func TestCoreChecker(t *testing.T) {
 		{`"a" [1 2] append len wl`, true, ""},
 		{`[1 2] xs! @xs "a" append drop`, false, "'append' expected int"},
 
+		// A new dict or list around stored values: its own type may change,
+		// the stored values keep theirs (formal-ver/Partial.v).
+		{`[1 2] xs! {a: @xs} as {a: [int], b?: int} d!`, true, ""},
+		{`[1 2] xs! {a: @xs} as {a: [int | str]} d!`, false, "'as' needs evidence"},
+		{`[1] xs! {a: @xs} dup as {a: [int], b?: int} d! e!`, false, "'as' needs evidence"},
+		{`[1] xs! {} "a" @xs set as {a: [int], b?: int} d!`, true, ""},
+		{`[1] xs! {a: @xs, h: {k: "v"}} as {a: [int], h: {str: str}, b?: int} d!`, true, ""},
+		{`[1] xs! {a: {b: @xs}} as {a: {b: [int], c?: int}} d!`, true, ""},
+		{`[1] xs! {a: {b: @xs}} as {a: {b: [int | str]}} d!`, false, "'as' needs evidence"},
+		{`[1] xs! [@xs] as [[int] | str] l!`, true, ""},
+		{`[1] xs! [@xs] as [[int | str]] l!`, false, "'as' needs evidence"},
+		{`def f ({a?: [int], b?: int} -- ) drop end [] j! {a: @j} f`, true, ""},
+		// zipPack and tarPack: one form per stored list type, and the
+		// built-in PackEntry alias. A new literal fits several forms with
+		// the same outputs, and takes the first.
+		{`(["a" "b"] "x.zip" zipPack) drop`, true, ""},
+		{"([\"a\" `b` {path: `c`, mode: 420}] \"x.zip\" zipPack) drop", true, ""},
+		{`("a\nb" lines files! @files "x.zip" zipPack) drop`, true, ""},
+		{"([`a`] as [path] ps! @ps \"x.tar\" tarPack) drop", true, ""},
+		{"([\"a\" `b`] ps! @ps \"x.zip\" zipPack) drop", true, ""},
+		{"([{path: `a`, archivePath: \"x\", mode: 420} \"b\"] as [PackEntry] es! @es {path: \"x.tgz\", compress: true} tarPack) drop", true, ""},
+		{"([{path: `a`, mode: 420}] es! @es \"x.zip\" zipPack) drop", false, "where it is made"},
+		{`([] "x.zip" zipPack) drop`, true, ""},
+		{`([1 2] "x.zip" zipPack) drop`, false, "no matching overload for 'zipPack'"},
+		{`def pack ([PackEntry] -- ) "x.zip" zipPack end ([] as [PackEntry] pack) drop`, true, ""},
+		// Built-in aliases name the record types builtins take and give.
+		{`([] jar! {url: "x", cookieJar: @jar} httpGet drop) drop`, true, ""},
+		{`([] as [Cookie] jar! {url: "x", cookieJar: @jar} as HttpRequest r! @r httpGet drop @r httpPost drop) drop`, true, ""},
+		{`({url: "x", timeout: 5} as HttpRequest r! @r httpGet ? :status? drop) drop`, true, ""},
+		{`({url: "x"} r! @r httpGet drop) drop`, false, "give it the type the word takes where it is made"},
+		{`({url: "x"} httpGet ? resp! @resp :body? drop @resp :cookieJar? drop) drop`, true, ""},
+		{`{decimals: 2} as NumFmtOptions o! 3.14159 @o numFmt wl`, true, ""},
+		{`{overwrite: true} as ExtractOptions o! ("a.zip" "d" @o zipExtract) drop`, true, ""},
+		{`{path: "x.tgz", compress: true} as TarDest d! (["a"] @d tarPack) drop`, true, ""},
+		{`("a.zip" zipList (:name? wl) each) drop`, true, ""},
+		{`"HOME" envInspect (:kind? wl) each`, true, ""},
+		{`"<a>; rel=next" parseLinkHeader (:url? wl) each`, true, ""},
+		// A label whose type mentions a variable solved by an earlier label.
+		{`{a: []} as {a?: [int]} drop`, true, ""},
+
 		// Unions of distinct kinds only.
 		{`def f ([int] | [str] -- ) drop end`, false, "two members of the same kind"},
 		{`def f (int | [str] -- ) drop end`, true, ""},
+
+		// The dict forms of map, filter and urlEncode read values at the
+		// type of Get-Key; the new dict is fresh only over immutable values.
+		{`{a: 1, b: 2} (1 +) map as {str: int | str} drop`, true, ""},
+		{`{a: 1, b: "x"} (1 +) map drop`, false, "no matching overload for '+'"},
+		{`{a: [1]} (drop true) filter as {str: [int | str]} drop`, false, "'as' needs evidence"},
+		{`{a: 1} (drop true) filter as {str: int | str} drop`, true, ""},
+		{`[1 2] xs! {q: "a", n: 2, l: @xs} urlEncode wl`, true, ""},
+		{`{a: 1.5} urlEncode wl`, false, "a str, int or path, or a list of them"},
+
+		// Grids: a schema is a record of columns; a literal's is exact.
+		{`[| a, b; 1, "x"; 2, "y" |] "a" gridCol sum wl`, true, ""},
+		{`[| a; 1; "x" |] "a" gridCol sum wl`, false, "no matching overload for 'sum'"},
+		{`[| a; 1 |] "b" gridCol drop`, false, "the grid has no column 'b'"},
+		{`[| a; 1 |] :0: :a? 1 + wl`, true, ""},
+		{`[| a; 1 |] (:a? 1 >) filter "a" gridCol sum wl`, true, ""},
+		{`[| a; drop |] drop`, false, "stack underflow"},
+		// P6: a column's type changes in place only on a new grid.
+		{`[| a; 1 |] g!  @g "a" (str) updateCol drop`, false, "make a new one first with deepCopy"},
+		{`[| a; 1 |] g!  @g deepCopy "a" (str) updateCol "a" gridCol (str) map drop`, true, ""},
+		{`[| a; 1 |] "a" (str) updateCol "a" gridCol (str) map drop`, true, ""},
+		{`[| a; 1 |] g!  @g "a" (1 +) updateCol "a" gridCol sum wl`, true, ""},
+		{`[| a; 1 |] g!  @g gridCompact "a" (str) updateCol drop`, false, "make a new one first with deepCopy"},
+		{`[| a; 1 |] g!  @g (:a? 1 >) filter "a" (str) updateCol "a" gridCol (str) map drop`, true, ""},
+		{`[| a; 1 |] "a" (drop [1]) updateCol drop`, false, "not a list, dict or grid"},
+		// extend writes at the receiver's column types, or widens a new grid.
+		{`[| a; 1 |] g!  @g [| a; 2 |] extend drop`, true, ""},
+		{`[| a; 1 |] g!  @g [| a; "s" |] extend drop`, false, "changes their type in place"},
+		{`[| a; 1 |] [| a; "s" |] extend "a" gridCol drop`, true, ""},
+		{`[| a; 1 |] g!  @g (:a? 1 >) filter [| a; "s" |] extend drop`, false, "changes their type in place"},
+		// Adding, removing or renaming a column needs a new grid.
+		{`[| a; 1 |] "b" [2] gridAddCol "b" gridCol sum wl`, true, ""},
+		{`[| a; 1 |] g!  @g "b" [2] gridAddCol drop`, false, "changes the grid's columns in place"},
+		{`[| a, b; 1, 2 |] "b" gridRemoveCol "b" gridCol drop`, false, "the grid has no column 'b'"},
+		{`[| a; 1 |] "a" "c" gridRenameCol "c" gridCol sum wl`, true, ""},
+		// gridSetCell writes at the column's type, even on a new grid.
+		{`[| a; 1 |] "a" 0 5 gridSetCell drop`, true, ""},
+		{`[| a; 1 |] "a" 0 "s" gridSetCell drop`, false, "writes a cell at its column's type"},
+		// The unknown schema is read only; toGrid's columns are strings.
+		{`def f (Grid -- int) gridRows end  [| a; 1 |] f wl`, true, ""},
+		{`def f (Grid -- ) "a" 0 1 gridSetCell drop end`, false, "the grid's columns are not known"},
+		{`def f (Grid Grid -- ) extend drop end`, false, "changes their type in place"},
+		{`"a,b\n1,2" parseCsv toGrid :0: :a? 1 + wl`, false, "no matching overload for '+'"},
+		{`"a,b\n1,2" parseCsv toGrid g!  @g "a" 0 "x" gridSetCell drop`, true, ""},
+		{`"a,b\n1,2" parseCsv toGrid "a" (toInt?) updateCol g!  @g "a" 0 "x" gridSetCell drop`, false, "writes a cell"},
+		// select, exclude, derive, map, +, joins, pivot and groupBy compute
+		// the result's columns.
+		{`[| a, b; 1, "x" |] ["b"] select "b" gridCol (str) map drop`, true, ""},
+		{`[| a; 1 |] ["b"] select drop`, false, "the grid has no column 'b'"},
+		{`[| a, b; 1, "x" |] ["b"] exclude "b" gridCol drop`, false, "the grid has no column 'b'"},
+		{`[| a; 1 |] "d" {} (:a? 2 *) derive "d" gridCol sum wl`, true, ""},
+		{`[| a; 1 |] (toDict d! {"b": @d :a? str}) map "b" gridCol (str) map drop`, true, ""},
+		{`[| a; 1 |] (drop 5) map drop`, false, "a dict or a GridRow"},
+		{`[| a; 1 |] [| a; "s" |] + "a" gridCol drop`, true, ""},
+		{`[| a; [1] |] [| a; ["s"] |] + drop`, false, "no common type"},
+		{`[| a, b; 1, 2 |] [| a; 1 |] + drop`, false, "the same columns"},
+		{`[| a; 1 |] [| b; 2 |] (:a?) (:b?) join "b" gridCol sum wl`, true, ""},
+		{`[| a; 1 |] [| b; 2 |] (:a?) (:b?) leftJoin "b" gridCol sum wl`, false, "no matching overload for 'sum'"},
+		{`[| a; 1 |] [| a; 2 |] (:a?) (:a?) join drop`, false, "both grids have a column 'a'"},
+		{`[| a; 1 |] [| b; 2 |] (toDict) (:b?) join drop`, false, "a join key"},
+		{`[| r, m, v; "e", "j", 1 |] ["r"] "m" ("v" gridCol sum) pivot "r" gridCol drop`, true, ""},
+		{`[| r, m, v; "e", "j", 1 |] ["r"] "m" ("v" gridCol) pivot drop`, false, "not a list, dict or grid"},
+		{`[| r, v; "e", 1 |] ["r"] [{"name": "n", "agg": (gridRows)} {"agg": (drop "x")}] groupBy` +
+			` dup "n" gridCol sum wl "AggCol2" gridCol (wl) each`, true, ""},
+		{`[| r, v; "e", 1 |] ["r"] [{"agg": ("v" gridCol)}] groupBy drop`, false, "not a list, dict or grid"},
+
+		// new on def outputs: exactly what the body does.
+		{`def f ( -- new Json) "c.json" readFile parseJson end  f drop`, true, ""},
+		{`def f ( -- Json) "c.json" readFile parseJson end`, false, "mark it `new`"},
+		{`def f ( -- new Json) "c.json" readFile parseJson j! @j end`, false, "is marked `new`, but"},
+		{`def f ( -- new int) 1 end`, false, "`new` on it means nothing"},
+		{`def f (int -- new [int]) dup 0 = if drop [] else 1 - f end end`, true, ""},
+		{`def f (int -- [int]) dup 0 = if drop [] else 1 - f end end`, false, "mark it `new`"},
+		{`def f (a -- new a) deepCopy end`, true, ""},
+		{`def f (bool -- [int]) if [1] return end [2] l! @l end`, true, ""},
+		{`def f (bool -- new [int]) if [1] l! @l return end [2] end`, false, "at the `return` on line 1"},
+		{`def f ( -- new [int]) [1] end  f as [int | str] drop`, true, ""},
+
+		// Definite assignment: every path to a read stores the variable.
+		{`true if 1 x! end @x wl`, false, "a path reaches this read without setting it"},
+		{`true if 1 x! else 2 x! end @x wl`, true, ""},
+		{`true if 1 x! else 1 exit end @x wl`, true, ""},
+		{`[1 2] (x!) each @x wl`, false, "a path reaches this read"},
+		{`(@x wl) q! 5 x! @q x`, true, ""},
+		{`0 (drop 5 x! 1 break) loop drop @x wl`, true, ""},
+		{`(5 x!) x @x wl`, true, ""},
+		{`true (5 x!) (6 x!) iff @x wl`, true, ""},
+		{`true (5 x!) iff @x wl`, false, "a path reaches this read"},
+		{`5 just match just v : @v wl , none : end @v wl`, false, "a path reaches this read"},
+		{`@y wl`, false, "unknown identifier"},
+
+		// Several candidates with different outputs: the one the arguments fit
+		// as they are (plan question 2, decided 2026-10-01).
+		{`[3 1 2] uniq (1 +) map drop`, true, ""},
+		{`[1 "a" 2025-07-07 0.1] uniq len wl`, true, ""},
+		{`[1 "a"] xs! @xs uniq drop`, false, "a stored value keeps its type"},
+		{`[1 "a"] as [str | path | int | float | datetime] xs! @xs uniq drop`, true, ""},
+		{`[1 "a" ` + "`p`" + `] sort (len) map drop`, true, ""},
+		{`[1.5 "a"] sort drop`, false, "no matching overload for 'sort'"},
+
+		// ⊥ joins to the other side; it does not solve a variable there.
+		{`[] x! {a: @x} (len) map drop  @x 1 append drop`, true, ""},
 	}
 	for _, tc := range cases {
 		errs, ok := coreCheck(t, base, tc.src)

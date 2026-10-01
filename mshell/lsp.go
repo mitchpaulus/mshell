@@ -44,6 +44,10 @@ type lspServer struct {
 	stdlibDefs   []MShellDefinition
 	checkerBase     *CheckerBase // built from stdlibDefs on first use; see newChecker
 	checkerBaseOnce sync.Once
+	// coreBase is the core checker's base, used instead when MSH_CHECKER
+	// is "core" (ai/type-system-plan.md, stage 3); built on first use.
+	coreBase     *CoreBase
+	coreBaseOnce sync.Once
 	builtinSigs  map[string][]string // name -> formatted "(in -- out)" sigs from the type checker
 	stdlibHover  map[string][]string // name -> formatted sigs for stdlib defs
 }
@@ -446,21 +450,95 @@ func (s *lspServer) handleMessage(msg *jsonrpcMessage) (bool, error) {
 	}
 }
 
+// sourceFixAll is the code action kind for fixing every error in a file.
+const sourceFixAll protocol.CodeActionKind = "source.fixAll"
+
 func (s *lspServer) codeActions(params protocol.CodeActionParams) []protocol.CodeAction {
+	actions := []protocol.CodeAction{}
 	doc, ok := s.documents[params.TextDocument.URI]
-	if !ok || !codeActionKindRequested(params.Context.Only, protocol.RefactorRewrite) {
-		return []protocol.CodeAction{}
-	}
-
-	cursor, ok := lspPositionToRuneOffset(doc.Text, params.Range.Start)
 	if !ok {
-		return []protocol.CodeAction{}
+		return actions
 	}
-
 	parser := NewMShellParser(NewLexer(doc.Text, nil))
 	file, err := parser.ParseFile()
 	if err != nil {
-		return []protocol.CodeAction{}
+		return actions
+	}
+	if useCoreChecker() {
+		actions = append(actions, s.typeFixActions(doc, file, params)...)
+	}
+	if codeActionKindRequested(params.Context.Only, protocol.RefactorRewrite) {
+		if a, ok := quoteLiteralsAction(doc, file, params); ok {
+			actions = append(actions, a)
+		}
+	}
+	return actions
+}
+
+// typeFixActions offers the fixes the core checker attaches to its errors:
+// each one whose error is in the requested range, as a quick fix, and all
+// of them at once.
+func (s *lspServer) typeFixActions(doc *lspDocument, file *MShellFile, params protocol.CodeActionParams) []protocol.CodeAction {
+	quick := codeActionKindRequested(params.Context.Only, protocol.QuickFix)
+	all := codeActionKindRequested(params.Context.Only, sourceFixAll)
+	if !quick && !all {
+		return nil
+	}
+	errs, arena, names := s.coreErrors(file)
+	uri := params.TextDocument.URI
+	var actions []protocol.CodeAction
+	var every []protocol.TextEdit
+	for _, e := range errs {
+		if e.Fix.Kind == FixNone {
+			continue
+		}
+		edit := typeFixEdit(doc.Text, e.Fix)
+		every = append(every, edit)
+		diag := typeErrorToDiagnostic(e, arena, names)
+		if quick && rangesOverlap(diag.Range, params.Range) {
+			actions = append(actions, protocol.CodeAction{
+				Title:       e.Fix.Title,
+				Kind:        protocol.QuickFix,
+				Diagnostics: []protocol.Diagnostic{diag},
+				IsPreferred: true,
+				Edit:        &protocol.WorkspaceEdit{Changes: map[protocol.DocumentURI][]protocol.TextEdit{uri: {edit}}},
+			})
+		}
+	}
+	if all && len(every) > 0 {
+		actions = append(actions, protocol.CodeAction{
+			Title: "Fix every `new` mark in this file",
+			Kind:  sourceFixAll,
+			Edit:  &protocol.WorkspaceEdit{Changes: map[protocol.DocumentURI][]protocol.TextEdit{uri: every}},
+		})
+	}
+	return actions
+}
+
+// typeFixEdit is the text edit of a fix.
+func typeFixEdit(text string, f TypeFix) protocol.TextEdit {
+	start := runeOffsetToLSPPosition(text, f.At.Start)
+	if f.Kind == FixDelete {
+		return protocol.TextEdit{Range: protocol.Range{Start: start, End: runeOffsetToLSPPosition(text, f.Until.Start)}}
+	}
+	return protocol.TextEdit{Range: protocol.Range{Start: start, End: start}, NewText: f.Text}
+}
+
+// rangesOverlap reports whether two ranges share a position; a range that
+// is a single position overlaps one that contains it.
+func rangesOverlap(a, b protocol.Range) bool {
+	before := func(x, y protocol.Position) bool {
+		return x.Line < y.Line || x.Line == y.Line && x.Character < y.Character
+	}
+	return !before(a.End, b.Start) && !before(b.End, a.Start)
+}
+
+// quoteLiteralsAction offers to quote every bare word in the innermost
+// list literal at the cursor.
+func quoteLiteralsAction(doc *lspDocument, file *MShellFile, params protocol.CodeActionParams) (protocol.CodeAction, bool) {
+	cursor, ok := lspPositionToRuneOffset(doc.Text, params.Range.Start)
+	if !ok {
+		return protocol.CodeAction{}, false
 	}
 	lists := collectRuntimeLists(file)
 
@@ -476,12 +554,12 @@ func (s *lspServer) codeActions(params protocol.CodeActionParams) []protocol.Cod
 		}
 	}
 	if selected == nil {
-		return []protocol.CodeAction{}
+		return protocol.CodeAction{}, false
 	}
 
 	literals := collectListLiterals(selected)
 	if len(literals) == 0 {
-		return []protocol.CodeAction{}
+		return protocol.CodeAction{}, false
 	}
 	edits := make([]protocol.TextEdit, 0, len(literals))
 	for _, tok := range literals {
@@ -491,7 +569,7 @@ func (s *lspServer) codeActions(params protocol.CodeActionParams) []protocol.Cod
 		})
 	}
 
-	return []protocol.CodeAction{{
+	return protocol.CodeAction{
 		Title: "Quote all literals in list",
 		Kind:  protocol.RefactorRewrite,
 		Edit: &protocol.WorkspaceEdit{
@@ -499,7 +577,7 @@ func (s *lspServer) codeActions(params protocol.CodeActionParams) []protocol.Cod
 				params.TextDocument.URI: edits,
 			},
 		},
-	}}
+	}, true
 }
 
 func collectRuntimeLists(file *MShellFile) []*MShellParseList {
@@ -741,6 +819,17 @@ func (s *lspServer) newChecker() *Checker {
 	return s.checkerBase.NewChecker()
 }
 
+// useCoreChecker reports whether MSH_CHECKER selects the core checker.
+func useCoreChecker() bool {
+	return os.Getenv("MSH_CHECKER") == "core"
+}
+
+// coreErrors checks file with the core checker.
+func (s *lspServer) coreErrors(file *MShellFile) ([]TypeError, *TypeArena, *NameTable) {
+	s.coreBaseOnce.Do(func() { s.coreBase = NewCoreBase(s.stdlibDefs) })
+	return s.coreBase.Errors(file)
+}
+
 func (s *lspServer) computeDiagnostics(text string) []protocol.Diagnostic {
 	lexer := NewLexer(text, nil)
 	parser := NewMShellParser(lexer)
@@ -749,11 +838,17 @@ func (s *lspServer) computeDiagnostics(text string) []protocol.Diagnostic {
 		return []protocol.Diagnostic{parseErrorToDiagnostic(parseErr)}
 	}
 
-	checker := s.newChecker()
-	arena, names := checker.arena, checker.names
-	checker.CheckProgram(file)
-
-	errs := checker.Errors()
+	var errs []TypeError
+	var arena *TypeArena
+	var names *NameTable
+	if useCoreChecker() {
+		errs, arena, names = s.coreErrors(file)
+	} else {
+		checker := s.newChecker()
+		arena, names = checker.arena, checker.names
+		checker.CheckProgram(file)
+		errs = checker.Errors()
+	}
 	if len(errs) == 0 {
 		return nil
 	}

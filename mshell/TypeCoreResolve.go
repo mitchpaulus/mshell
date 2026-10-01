@@ -1,5 +1,7 @@
 package main
 
+import "strings"
+
 // Type expressions resolved to the types of the core checker
 // (ai/type-core-calculus.typ): shapes and dicts are records with a status
 // per label and a remainder, Maybe is the built-in enum, `type` names are
@@ -24,6 +26,9 @@ type coreResolver struct {
 	inSig    bool
 	errs     []TypeError
 	jsonName NameId
+	// builtin is set while the builtin table is built: there `Grid_s`,
+	// `GridView_s` and `GridRow_s` are a grid whose schema is the generic s.
+	builtin bool
 }
 
 // coreSigParts is a resolved signature before it is stored.
@@ -190,11 +195,11 @@ func (r *coreResolver) resolveNamed(n *TypeNamed) TypeId {
 	case "datetime":
 		return TidDateTime
 	case "Grid":
-		return ar.MakeGrid(0)
+		return ar.MakeGridOf(TKGrid, r.unknownSchema())
 	case "GridView":
-		return ar.MakeGridView(0)
+		return ar.MakeGridOf(TKGridView, r.unknownSchema())
 	case "GridRow":
-		return ar.MakeGridRow(0)
+		return ar.MakeGridOf(TKGridRow, r.unknownSchema())
 	case "Maybe":
 		if len(n.Args) != 1 {
 			return TidNothing
@@ -205,6 +210,9 @@ func (r *coreResolver) resolveNamed(n *TypeNamed) TypeId {
 	case "never":
 		return r.errorf(n.Tok, "'never' is allowed only as the whole output side of a signature, as in (str -- never)")
 	}
+	if kind, letter, ok := schemaGeneric(n.Name); ok && r.builtin && r.inSig {
+		return ar.MakeGridOf(kind, r.generic(r.names.Intern(letter)))
+	}
 	name := r.names.Intern(n.Name)
 	if t, ok := r.aliases[name]; ok {
 		return t
@@ -212,13 +220,39 @@ func (r *coreResolver) resolveNamed(n *TypeNamed) TypeId {
 	if !r.inSig {
 		return r.errorf(n.Tok, "unknown type '"+n.Name+"'")
 	}
+	return r.generic(name)
+}
+
+// generic is the signature's generic called name, added if it is new.
+func (r *coreResolver) generic(name NameId) TypeId {
 	for i, g := range r.gens {
 		if g == name {
-			return ar.MakeParam(i)
+			return r.arena.MakeParam(i)
 		}
 	}
 	r.gens = append(r.gens, name)
-	return ar.MakeParam(len(r.gens) - 1)
+	return r.arena.MakeParam(len(r.gens) - 1)
+}
+
+// unknownSchema is the schema of a grid whose columns are not known: the
+// read-only `{| open}`, which every schema is below. Reading a column of
+// it gives unknown, and nothing writes into it unless the grid is new.
+func (r *coreResolver) unknownSchema() TypeId {
+	return r.arena.MakeRecord(nil, RecordField{Status: FieldOpen})
+}
+
+// schemaGeneric reads a builtin signature's `Grid_s`, `GridView_s` or
+// `GridRow_s`: a grid kind whose schema is the generic s.
+func schemaGeneric(name string) (TypeKind, string, bool) {
+	for _, k := range []struct {
+		prefix string
+		kind   TypeKind
+	}{{"Grid_", TKGrid}, {"GridView_", TKGridView}, {"GridRow_", TKGridRow}} {
+		if rest, ok := strings.CutPrefix(name, k.prefix); ok && len(rest) == 1 && rest[0] >= 'a' && rest[0] <= 'z' {
+			return k.kind, rest, true
+		}
+	}
+	return 0, "", false
 }
 
 // unionKindsError reports a union with two members of the same runtime

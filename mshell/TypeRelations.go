@@ -213,6 +213,9 @@ func (q *subQuery) level(a, b TypeId) bool {
 			return false
 		}
 		return q.enumArgs(ar.enumDecls[an.A].Params, ar.enumArgs[an.Extra], ar.enumArgs[bn.Extra])
+	case TKGrid, TKGridView, TKGridRow:
+		// Columns are labels: a grid's schema is compared as a record.
+		return an.A != 0 && bn.A != 0 && q.child(TypeId(an.A), TypeId(bn.A))
 	}
 	return false
 }
@@ -407,6 +410,8 @@ func (q *retypeQuery) level(a, b TypeId) bool {
 			return false
 		}
 		return q.enumArgs(ar.enumDecls[an.A].Params, ar.enumArgs[an.Extra], ar.enumArgs[bn.Extra])
+	case TKGrid, TKGridView, TKGridRow:
+		return an.A != 0 && bn.A != 0 && q.child(TypeId(an.A), TypeId(bn.A))
 	}
 	return false
 }
@@ -678,6 +683,17 @@ func (r *Relations) joinCore(fr bool, a, b TypeId) (TypeId, bool) {
 			return TidNothing, false
 		}
 		return r.recordJoin(ar.records[an.Extra], ar.records[bn.Extra])
+	case an.Kind == bn.Kind && (an.Kind == TKGrid || an.Kind == TKGridView || an.Kind == TKGridRow):
+		// Two new grids widen column by column, as two new records do.
+		if !fr || an.A == 0 || bn.A == 0 {
+			return TidNothing, false
+		}
+		x, y := ar.Node(TypeId(an.A)), ar.Node(TypeId(bn.A))
+		z, ok := r.recordJoin(ar.records[x.Extra], ar.records[y.Extra])
+		if !ok {
+			return TidNothing, false
+		}
+		return ar.MakeGridOf(an.Kind, z), true
 	case an.Kind == TKEnum && bn.Kind == TKEnum:
 		if an.A != bn.A {
 			// Two different enums are two kinds.
@@ -942,6 +958,12 @@ func (r *Relations) checkable(t TypeId, params bool, visiting []TypeId) bool {
 		}
 		return r.checkable(ar.aliases[n.A].Body, false, append(visiting, t))
 	case TKGrid, TKGridView, TKGridRow:
+		if n.A != 0 {
+			// The unknown schema cannot be validated against.
+			s := ar.Node(TypeId(n.A))
+			return s.Kind == TKRecord && ar.records[s.Extra].Rest.Status != FieldOpen &&
+				r.checkable(TypeId(n.A), params, visiting)
+		}
 		if n.Extra == 0 {
 			return false
 		}

@@ -51,7 +51,7 @@
 #align(center)[
   #text(size: 20pt, weight: "bold")[A Core Calculus for mshell Types]
   #v(0.3em)
-  #text(size: 11pt)[Draft for review --- revised 2026-09-30, checked against the Rocq development in `formal-ver/`]
+  #text(size: 11pt)[Draft for review --- revised 2026-10-01, checked against the Rocq development in `formal-ver/`]
   #v(0.2em)
   #text(size: 10pt, style: "italic")[Written by Claude from a review of the checker on `main` (b511d9b).
   Implementation plan: `ai/type-system-plan.md`]
@@ -95,6 +95,8 @@
   cyclic value, and that validation can accept a cycle as soundly as it rejects one (@sec-alias,
   @sec-tryas). Proving the checker's decision procedure for $<=$ and fresh retyping found no hole
   either. It fixed where that procedure may use its assumptions, and when its answers may be cached (@sec-alias).
+  Making freshness a property of each object instead of each value (@sec-partial) found no hole: a new
+  dict may now hold a stored list, as a request literal holds a cookie jar, and the stored list keeps its type.
   Those rules are corrected below.
   Rules the proof showed to be stricter than soundness needs are marked as usability choices.
 ]
@@ -300,7 +302,7 @@ $
   "types" tau & ::= B | alpha | k | bot | qt(vec(tau), vec(tau))
     | ty("List") tau | ty("Dict") tau \
   & quad | {f_1, ..., f_n | rho} & "(shape)" \
-  & quad | ty("Grid"){c_1, ..., c_n} | ty("Grid"){k} & "(grid, known or abstract schema)" \
+  & quad | ty("Grid"){F | rho} & "(grid; its schema is a record of its columns, @sec-primitive)" \
   & quad | E | E[vec(tau)] & "(nominal enum, possibly generic; " ty("Maybe") tau " is one)" \
   & quad | tau_1 | tau_2 & "(union of distinct kinds, see below)" \
   & quad | X & "(reference to a type alias)" \
@@ -473,14 +475,14 @@ later without revisiting soundness, as long as a pattern on a same-kind union bi
 
 Several operations learn a value's _kind_ but not its contents:
 a kind pattern (`list xs`) on a value whose static type is itself abstract, reading an undeclared
-key of an `open` shape, a grid whose schema is not known statically (`pivot`, schema-less readers).
-Each introduces a *fresh abstract type* $k$, like unpacking an existential type:
+key of an `open` shape. Each introduces a *fresh abstract type* $k$, like unpacking an existential type:
 
 - `@v match list :> ...` with $v : k_0$ abstract leaves the value on the stack at type
   $ty("List") k$ for a fresh $k$. It cannot be bound to a name (see "Bindings are variables" below).
   (When $v$'s type is a union, the pattern gives its list member instead, and `list xs` may bind it; @sec-unions.)
 - Reading an undeclared key of an open shape gives $ty("Maybe") k$ for a fresh $k$.
-- A grid with unknown schema is $ty("Grid"){k}$.
+- A grid whose schema is not known statically does not need one: its schema is the read-only
+  ${| "open"}$, as for `dict d` below (@sec-primitive).
 
 Generic code works on these (`len`, `each`, `map` with a generic quote, `str`),
 and a value of type $k$ can be written back into a container whose element type is the same $k$
@@ -586,8 +588,9 @@ never to solve a type variable.
     $qt(vec(tau)_1, vec(tau)_2) <= qt(vec(upsilon)_1, vec(upsilon)_2)$),
 )
 
-There is *no* rule for $ty("List")$, $ty("Dict")$ or $ty("Grid")$ other than *Refl* (up to alias unfolding):
-they are invariant. $ty("Maybe")$ is covariant because nothing writes into a `Maybe`;
+There is *no* rule for $ty("List")$ or $ty("Dict")$ other than *Refl* (up to alias unfolding):
+they are invariant. A grid is compared by its schema, a record of its columns, with the shape rule
+below, so each column's type is invariant (@sec-primitive). $ty("Maybe")$ is covariant because nothing writes into a `Maybe`;
 the check inside still uses $<=$. The same holds for every generic enum, one parameter at a time:
 enum values are never written into, so a parameter's variance is decided only by where it appears in
 the payload types. Walk down from each payload to each occurrence of the parameter: a quote input or a
@@ -762,7 +765,43 @@ nothing"): it is opened to a new variable before unifying, and the argument is c
 solved parameter once the def or script is solved, so `none 5 maybe` checks with `a = int`.
 An overload choice still open when the def or script is solved asks for an annotation, unless every
 candidate left gives the same outputs: then nothing could tell them apart, any of them is a valid
-derivation, and the checker takes the first (`[] sortV`).
+derivation, and the checker takes the first (`[] sortV`). The same holds when the arguments are known
+and several candidates fit (decided 2026-10-01): a new list literal given to `zipPack` fits both its
+`[str]` and its `[PackEntry]` form, and since every form gives the same outputs, the first is taken.
+When the candidates that fit give different outputs, the checker takes the one the arguments fit as
+they are, by $<=$ with no new value given a wider type, if there is exactly one (decided 2026-10-01).
+`uniq` has a form per element type and a widest form `[str | path | int | float | datetime]`: a new
+`[1 2]` fits `[int]` as it is and the widest form only once widened, so `[int]` is taken; a new
+`[1 "a"]` fits only the widest form. Overload choices are checked again with the final substitution
+like every other result of inference (@sec-infer), so the rule needs no proof.
+
+*Builtins that take a list they only read.* Lists are invariant, so such a builtin has one form per
+list type a program stores, and a built-in alias names the widest one. `zipPack` and `tarPack` take
+`[str]`, `[path]`, `[str | path]` or `[PackEntry]`, where
+`type PackEntry = str | path | {path: str | path, archivePath?: str | path, mode?: int}` is built in.
+A list of entries stored before it is used is given the alias where it is made
+(`[...] as [PackEntry] entries!`); a new list literal passed directly needs nothing. When a stored
+value would fit if it were new, the error says to give it the type where it is made, or to `deepCopy` it.
+
+*Every record type a builtin takes or gives has a built-in alias (decided 2026-10-01)*, so a program can
+type a stored value where it is made and errors print the name. Aliases are transparent, so the names
+change nothing else:
+
+#table(
+  columns: (auto, 1fr),
+  inset: 5pt, stroke: 0.5pt + luma(180),
+  table.header([*Alias*], [*Used by*]),
+  [`HttpRequest`, `HttpResponse`, `Cookie`], [`httpGet`, `httpPost` (the response is `Maybe[HttpResponse]`)],
+  [`PackEntry`, `TarDest`], [`zipPack`, `tarPack`, `tarDirInc`, `tarDirExc`],
+  [`ExtractOptions`, `ExtractEntryOptions`], [`zipExtract`, `tarExtract`; `zipExtractEntry`, `tarExtractEntry`],
+  [`ZipEntryInfo`, `TarEntryInfo`], [`zipList`, `tarList`],
+  [`NumFmtOptions`], [`numFmt`],
+  [`Link`], [`parseLinkHeader`],
+  [`EnvEvent`], [`envInspect`],
+)
+
+Retyping a partly new value (@sec-partial) looks through an alias that is not recursive, which is the
+same type as its body; a recursive alias is not unfolded there.
 A width step needs no guess, so it is not asked for: when equality fails between an argument and a
 parameter with unsolved variables, records are matched label by label (the per-label rule, with the
 types it needs equal unified) and covariant enum arguments recursively, and the full $<=$ (or
@@ -940,8 +979,15 @@ precise type available, and joins or unification fill in the rest:
   `Maybe[⊥]` $<=$ `Maybe[T]` for every `T`, and the join with `Maybe[int]` is `Maybe[int]`.
   (This is how today's checker already types `none`, and how Scala types `None`.)
 - `[]` and `{}` cannot use $bot$, because lists and dicts are invariant: a `[⊥]` could never be
-  passed where `[int]` is expected. So an empty literal gets a fresh type variable, fixed by the
-  first unification, and it is fresh, so a join may still widen it.
+  passed where `[int]` is expected. So `[]` is a list of a fresh type variable, fixed by the
+  first unification, and it is fresh, so a join may still widen it. `{}` is the exact empty shape,
+  which a fresh retype may give any dict type (every label of it is absent). A bare type variable
+  would be unsound for either: nothing would say the value is a list or a dict, so `{} 5 +` would
+  check. Storing `{}` and then setting keys known only at run time needs `{} as {str: T} d!`.
+  *Decided (2026-10-01):* this stays until default parameters land; then empty option dicts
+  (`98765 {} numFmt`) go away, and `{}` becomes `{str: T}` with a new variable `T`, so the
+  fill-it-in-a-loop pattern needs no annotation. Tried on the whole corpus: that change breaks only
+  the empty options dict, and fixes the three places that fill a stored `{}`.
 
 == Divergence <sec-diverge>
 
@@ -1128,7 +1174,9 @@ and `@xs g` with a stored empty `[int]` would return `xs` as a `[str]` (`hole_tv
 For a recursive enum, immutability is the greatest fixed point: `enum Tree = leaf int | node Tree Tree end`
 is immutable. The proof checks it as a flag on the enum (`en_imm`), and conservatively also asks
 that the arguments be immutable.
-Otherwise it is an ordinary shared value, which *ShapeLit-Shared* types. This is #351's `freshDeep`.
+Otherwise the literal is *partly new* (decided 2026-10-01, @sec-partial): the dict itself is new, and
+each value in it keeps its own mark. Its own type may change, as a fresh literal's may; a stored value
+inside it keeps its type. *ShapeLit-Shared* is the same literal committed at once.
 
 === Runtime keys <sec-dyn-key>
 
@@ -1243,7 +1291,8 @@ works slot by slot:
 
 *Which words keep freshness.* Stack shuffles (`swap`, `drop`) move the mark with the value.
 `just` and `?` keep it. Appending a fresh or immutable value to a fresh list keeps it (the two trees
-merge). *Set-Fresh* keeps it. Everything that reads _out_ of a container gives a shared value
+merge). *Set-Fresh* keeps it, and *Set* of a stored value on a fresh dict gives a partly new dict
+(@sec-partial). Everything that reads _out_ of a container gives a shared value
 (`getAt`, `get`, `?` on a shared `Maybe`): the container still points to the result. Everything that
 copies a reference needs a shared operand: `dup`, stores, def and quote arguments, and writes into a
 shared container. The analysis in \#351 must be at least this conservative.
@@ -1302,6 +1351,59 @@ to the invariant: the consumed input list stays in the heap, pointing at the kep
 typing marks it and the elements it dropped *dead*, and asks nothing of dead objects (no live value or
 object can reach one: `dead_unreachable`). The design still uses the one rule. Restoring the
 input-freshness case for these words is a choice about how much to accept, not about soundness.
+
+=== Freshness per object (decided 2026-10-01) <sec-partial>
+
+Freshness is a property of each object, not of a whole value. A slot's mark says, position by position,
+which objects are new:
+
+#table(
+  columns: (auto, 1fr),
+  inset: 5pt, stroke: 0.5pt + luma(180),
+  table.header([*Mark*], [*Meaning*]),
+  [stored], [the value may be referenced elsewhere; it is typed through the store],
+  [new], [the value is new, and so is every list and dict in it: the tree of @sec-fresh],
+  [new list of $m$], [a new list whose elements have mark $m$],
+  [new dict, $ell |-> m_ell$], [a new dict whose value under $ell$ has mark $m_ell$],
+)
+
+A value with one of the last two marks is *partly new*. `{url: "x", cookieJar: @jar}` is a new dict
+that holds a stored list. Its own type may change, as any new value's may: it may gain optional labels,
+and a label's type may become any type above the value under it. The stored list keeps its type: at a
+stored position only $<=$ applies. So `{a: @xs} as {a: [int], b?: int}` is accepted, and H3,
+`{a: @xs} as {a: [int | str]}`, is still rejected: `[int]` is not below `[int | str]`. A request literal
+holding a stored cookie jar can be passed where its other keys are optional.
+
+*Retyping a partly new value* (`msub` in `Typing.v`) is $<=$ at a stored position, $subset.sq.eq$ at a new
+one, and, for a new list or dict, its own type changed as a new value's may (the per-label rule of
+$subset.sq.eq$), with each element or label checked by its own mark. A label that holds a partly new value
+is not made `open`: the value would then have type unknown, which says nothing about its parts.
+Committing is always allowed: a partly new value is committed (Forget then As) wherever it cannot be
+retyped position by position, and is then a stored value.
+
+*Where partly new values come from:* a list or dict literal whose values are not all new
+(`tw_nil_m`, `tw_push_m`, `tw_setk_m`), and `set` with a literal key on a new or partly new dict. The
+checker gives a list literal with a stored element the mark "new list of stored values". Every other
+word treats a partly new value as stored, by committing it first: passing it to a def or builtin,
+storing it, `dup`, joins, `tryAs`, constructors (`just` included), slices, and a kind pattern that keeps
+the value on the stack.
+
+*What the proof needed (`Partial.v`, `PartialOps.v`).* Two changes, and no new clause in the invariant:
+
+- *A region's locations have no store type until they are committed*: $Sigma$ gives them `HDead`, the
+  store type of a dead object. A stored value is typed through $Sigma$, which reaches a location only
+  through its store type, so a stored value inside a new one never points into a region, its own or
+  another slot's. Without this the invariant would need a clause saying so.
+- *A value overwritten in a new dict needs no commit*: its objects have no store type, and nothing
+  else references them.
+
+The kind pattern that keeps its value on the stack (`tw_kind`) takes a stored or new value only. Under a
+substitution its arm's type is only $<=$-above the member it gets, and a partly new mark is retyped only
+position by position. A slice's result is stored or new, never partly new (`tw_slice`).
+
+*Not covered:* partly new enum values. An enum value has no state of its own, and covariant parameters
+already widen on stored values by $<=$ (`Maybe[int]` $<=$ `Maybe[int | str]`), so `just` of a partly new
+value commits it. Grids would follow dicts: columns are the grid's own storage.
 
 == Explicit copies: `deepCopy` <sec-copy>
 
@@ -1368,10 +1470,9 @@ type error whose message suggests `deepCopy`:
 
 The fresh cases need nothing: `[cmd]*!`, `readCsv ... updateCol`, `parseJson tryAs T ?`, `[1 2] as [int | str]`.
 
-*A possible later refinement.* A third slot mark, "top-fresh" (the outer object is unshared, its
-children are shared, and a retype may use only $<=$ on the children), would make a shallow copy useful
-and would also recover `{a: @xs} as {a: [int], b?: int}`, which @sec-fresh rejects. It does not change
-`deepCopy`, so it can wait.
+*Done (2026-10-01).* The "top-fresh" mark this section used to suggest as a later refinement is now
+part of freshness, in general: freshness per object (@sec-partial). It recovers
+`{a: @xs} as {a: [int], b?: int}`. A shallow copy could be typed with it too; no builtin makes one.
 
 == Operations that return lists <sec-new-lists>
 
@@ -1568,14 +1669,50 @@ $
 
 The equal-column-length invariant is a runtime invariant, not a typing concern.
 
-- `updateCol` in place must preserve the column type. A type-changing update on a *fresh* grid
-  (straight from `readCsv`, say) happens in place; on a shared grid it is a type error, and the
-  program writes `deepCopy` first (P6).
-- `gridAddCol`, `gridRemoveCol`, `gridRenameCol` and a type-changing `gridSetCell` follow the same rule: in place on a fresh grid, a type error otherwise.
-- `join` needs both schemas known at the join site; the result schema is their disjoint union.
-- `pivot` and schema-less readers produce $ty("Grid"){k}$ with an abstract schema (@sec-unknown),
-  narrowed with `tryAs`. An abstract schema never matches a concrete one, which closes today's
-  "unknown grid schema matches anything".
+*The schema is a record (decided 2026-10-01).* A grid, view or row type carries its schema as a
+dict-kinded type with one label per column: $ty("Grid"){F | rho}$. So the per-label rule of
+@sec-per-label is what relates two grids, with no rule of its own: column types are invariant, a
+grid may be viewed with fewer columns when the view does not claim the others are absent, and two new
+grids join column by column, as two new records do (`[| a; 1 |]` and `[| a; "x" |]` give
+`Grid{a: int | str}`). This is the column-store reading above, with the `Seq` dropped: a grid owns
+its column sequences, so they are as invariant as the column types.
+
+- A grid literal's schema is exact: each column is required, at the join of its cells. A column with
+  no cells gets a type variable, as `[]` does. It is fresh when every cell is fresh or immutable.
+- *A schema not known statically is the read-only ${| "open"}$* (the type written `Grid`, `GridView`
+  or `GridRow`). Every schema is below it; a column read from it is unknown; nothing writes into it
+  unless the grid is fresh. This is the `dict d` rule of @sec-unknown applied to columns, and it closes
+  today's "unknown grid schema matches anything" as an abstract schema would: a grid whose columns
+  are not known is never below one whose columns are. A def can take any grid as `Grid` and read its
+  row count, its column names, or a column as unknown.
+- `toGrid`'s columns are all strings, but their names are data: its schema is $\{* : "str"\}$.
+  `select` with a literal list of names then gives those columns at `str`.
+- Reads: `gridCol`, `get` and the getter with a literal name give that column's type (a static error
+  when the schema says there is no such column, since the runtime fails there); with a name known
+  only at run time, the type of *Get-Key* over the columns (@sec-dyn-key). A `GridRow`'s `toDict`
+  is a new dict whose type is the schema.
+- Writes into a grid that may be shared keep every column's type: `gridSetCell` writes a value of
+  the column's type; `updateCol` on a `Grid` whose quote returns the column's type; `extend` whose
+  source columns are below the receiver's. A column under ${| "open"}$ is not writable.
+- *Schema changes in place need a fresh `Grid`*: a type-changing `updateCol` (P6), `extend` with cells
+  that widen a column, `gridAddCol`, `gridRemoveCol`, `gridRenameCol`. On a shared grid each is a type
+  error that suggests `deepCopy`. `gridSetCell` never changes a column's type, even on a fresh grid:
+  the runtime keeps typed column storage and drops a value of another kind.
+- Words that return a new grid (`select`, `exclude`, `derive`, `map`, `+`, the joins, `pivot`,
+  `groupBy`, `reverse`, `sortBy`, `sortByCmp`, `updateCol` on a view, `gridCompact` on a view) compute
+  its schema from their inputs and, for `select`, `exclude`, `derive` and `groupBy`, a literal name or
+  list of names; it is fresh exactly when every column type is immutable (the rule for new lists).
+  Without literal names the schema is ${| "open"}$, or says which columns may be missing.
+- `join` needs both schemas known at the join site; the result schema is their disjoint union, with
+  `none` joined into each column of a side whose rows may be missing (`leftJoin`, `outerJoin`).
+  `pivot`'s new columns are named by data: its schema is the row-key columns, and the remainder
+  `*: a | Maybe[⊥]` for the others, where `a` is the quote's result type.
+- A grid `groupBy` whose spec list is written at the call checks each `agg` quote against
+  `(GridView -- t)` with its own $t$, as a quote literal is checked against the word that takes it,
+  so the specs may give different column types.
+- Quote results that the runtime refuses when they are a list, dict or grid (`updateCol`, `pivot`,
+  `groupBy` aggregations), grouping keys and join keys are checked against exactly what the runtime
+  refuses, once the def or script is solved.
 
 == Commands
 
@@ -1596,7 +1733,7 @@ A command is a list plus its redirect state, and the redirect state is part of i
   [`int`, `str`, `path`, ...], [base types],
   [`[T]`, `{str: T}`], [invariant reference types + $Phi$ entries],
   [shape `{a: T, b?: U, *: V}`], [shape with fields and a remainder; width subtyping per @sec-sub],
-  [`Grid`, `GridView`, `GridRow`], [shapes of columns; abstract schema when unknown],
+  [`Grid`, `GridView`, `GridRow`], [a schema that is a record of columns; the read-only ${| "open"}$ when unknown],
   [`Maybe[T]`], [the built-in generic enum `Maybe[a]`, covariant],
   [`enum E[a] = ...`], [nominal; each parameter's variance follows from where it appears],
   [`T | U`], [union of distinct kinds; eliminated by a kind test],
@@ -1660,8 +1797,10 @@ scope its context $Gamma$.
   A shared object is therefore only ever seen through supertypes of its one declared type.
 - *Fresh values* are typed _deeply_, by reading the heap directly: a fresh list has type
   $ty("List") tau$ when its object is a list whose elements have type $tau$, and so on. This typing also
-  records the value's tree of locations (its _region_). $Sigma$ is ignored on a region. That is why
-  *Retype* is free at runtime: it changes the deep type and touches nothing else.
+  records the value's tree of locations (its _region_). A region's locations have no store type until
+  they are committed ($Sigma$ gives them `HDead`). That is why *Retype* is free at runtime: it changes
+  the deep type and touches nothing else. A partly new value (@sec-partial) is typed the same way, except
+  that a stored value inside it is typed through $Sigma$ and adds nothing to the region.
 - *The invariant* on a configuration: the regions of the fresh slots are disjoint; no shared slot and
   no object outside the regions points into a region; every object outside the regions has its
   $Sigma$ type; and the current scope has type $Gamma$ in $Sigma$.
@@ -1767,7 +1906,7 @@ What the mechanization does *not* cover is listed in @sec-mech.
   [R6], [two refinements share one mutable object], [*TryAs* on a shared operand needs $tau <= upsilon$; otherwise `deepCopy` first (`r6_*` in `Examples.v`)],
   [H1], [runtime-key `get` typed by the remainder (previous draft)], [*Get-Key* needs a type above every label (@sec-dyn-key)],
   [H2], [abstract type $k$ reused across runs of its arm (previous draft)], [the arm is checked for every $k$; skolem escape check (@sec-unknown)],
-  [H3], [every shape literal fresh (previous draft)], [a literal is fresh only around fresh or immutable contents (@sec-fresh)],
+  [H3], [every shape literal fresh (previous draft)], [a literal around a stored value is only partly new: the stored value keeps its type (@sec-partial)],
   [H4], [every enum immutable (previous draft)], [an enum is immutable only when its payloads are (`en_imm`, `hole_box_stuck`)],
   [H5], [fresh values retyped covariantly everywhere, enum arguments under quotes included], [fresh-covariance: only data positions (`occ_fresh`, `hole_quote_arg_stuck`)],
   [H6], [joins widen inside two fresh quotes (previous draft)], [quotes join by $<=$ only (`hole_quote_join_stuck`)],
@@ -1994,8 +2133,8 @@ Most of these are already runtime failures today; a few are real losses.
     [an enum; `Json`, `int | str | null` and similar unions are unaffected. Not required for soundness (@sec-unions), so it can be relaxed later],
   [`getd` with a runtime key on a shape gives `Maybe` of a type above _every_ field, not just the remainder],
     [use literal keys for declared fields; `{str: T}` is unaffected],
-  [a literal around a stored value (`{a: @xs}`) is not fresh],
-    [literals of fresh or immutable values (the common case) are unaffected],
+  [a literal around a stored value (`{a: @xs}`) is new only at the top: `xs` keeps its type],
+    [the literal may still gain optional keys, so it can be passed where they are optional; widening `xs` itself needs `deepCopy`],
   [a kind pattern on unknown data cannot bind a name (`list xs`), and the value cannot leave the arm],
     [work on it with `list :>`; or narrow with `tryAs`/`is` first, which gives a real type that can be bound and leave the arm],
   [two arms of one scope cannot bind one name at different types (`int n`, `str n`)],
@@ -2028,8 +2167,10 @@ Most of these are already runtime failures today; a few are real losses.
     [none; this was an aliasing bug],
   [`break`/`continue` only inside a literal quote at the `loop`/`each`/`map`/... site],
     [the tested pattern still works; a stored quote that breaks does not],
-  [unknown grid schemas do not match concrete ones],
-    [`tryAs` to the declared schema once],
+  [a grid whose columns are not known statically (a def parameter written `Grid`, `toGrid`'s names, `pivot`'s new columns) is read only, and its unknown columns read as unknown],
+    [`select` the columns you need from `toGrid` (they are strings); `tryAs` to a declared schema once (stage 5)],
+  [a stored grid's column cannot change type in place: no type-changing `updateCol`, no widening `extend`, no `gridAddCol` on it],
+    [give the column its wide type where the grid is made (`"x" (as int | float) updateCol`), or `deepCopy` first],
   [`x` on a quote of unknown arity is an error],
     [annotate; def parameters already are],
   [a REPL line that stops with a runtime error leaves the stack as it was before the line (its other effects stay)],
@@ -2056,7 +2197,7 @@ brands can all be deleted, and the runtime type checks can go once the oracle ag
   [`TKBrand`], [gone: `enum`],
   [`TKCommand`], [command with redirect state; type-changing redirects only on a fresh command],
   [`TKVar`, `TKRigid`], [unification variable, rigid variable; plus abstract types $k$],
-  [`TKGrid`, `TKGridView`, `TKGridRow`], [grid over a schema; abstract schema instead of "unknown matches anything"],
+  [`TKGrid`, `TKGridView`, `TKGridRow`], [grid over a schema record; the read-only ${| "open"}$ schema instead of "unknown matches anything"],
   [`TKStrLit`], [gone: literal-key `get` is syntax],
   [`TidBottom`, `Diverges`], [$bot$ as a value type (`none : Maybe[⊥]`); divergence as a property of effects (@sec-diverge)],
   [(new)], [alias reference nodes for guarded recursive `type`],
@@ -2066,7 +2207,7 @@ brands can all be deleted, and the runtime type checks can go once the oracle ag
 
 `formal-ver/` holds a Rocq (9.1) development of the core. `make check` in that directory rebuilds
 it and prints the assumptions of the main theorem: *none* (`Closed under the global context`). It is
-about 11,000 lines. `formal-ver/README.md` maps every definition to the section of this document it
+about 12,800 lines. `formal-ver/README.md` maps every definition to the section of this document it
 formalizes.
 
 #table(
@@ -2081,6 +2222,7 @@ formalizes.
   [`Commit.v`], [committing a fresh tree into the store typing],
   [`Validate.v`, `Kind.v`], [`tryAs` in place; kind patterns],
   [`Copy.v`], [`deepCopy` gives a fresh value of the same type],
+  [`Partial.v`, `PartialOps.v`], [partly new values (@sec-partial): their typing, its stability, retyping position by position, committing, and building them with `set` on a new dict and push on a new list],
   [`InvOps.v`, `RecOps.v`], [stack and heap operations on the invariant; type-changing updates of fresh records],
   [`Slice.v`], [`take`, `skip` and index slices of a fresh list give a fresh list (`inv_slice_dp`); the objects left behind are dead and unreachable (`dead_unreachable`)],
   [`Soundness.v`], [the theorem, for any validator with the two properties of @sec-tryas (`soundness_v`), and for the model's (`soundness`)],
@@ -2090,7 +2232,7 @@ formalizes.
   [`Join.v`], [branch joins as a function (given the checker's decision procedure for $<=$ and $subset.sq.eq$), and the proof that they are upper bounds],
   [`Variance.v`], [the enum declaration checks are sound: substitution is monotone for variance (`payload_sub`) and for fresh retyping (`payload_rsub`), and preserves immutability (`payload_imm`)],
   [`Checkable.v`], [checkable types; validation never rejects a well-typed value against a checkable type (`validate_complete`, `validate_complete_fresh`)],
-  [`Examples.v`], [holes H1--H11 run to `RStuck`; R6 gets stuck without a copy and type-checks and runs with `deepCopy`; the copy is per path; copying a cycle is a checked error; `Maybe`, recursive `List` and non-regular `Nest` declared as generic enums; `take` and `skip` of fresh and of immutable lists],
+  [`Examples.v`], [holes H1--H11 run to `RStuck`; R6 gets stuck without a copy and type-checks and runs with `deepCopy`; the copy is per path; copying a cycle is a checked error; `Maybe`, recursive `List` and non-regular `Nest` declared as generic enums; `take` and `skip` of fresh and of immutable lists; a new dict around a stored list retyped with a new optional label, typed and run (`partly_new_typed`), and H3 with no typing (`hole_literal_no_typing`)],
   [`Cycles.v`], [a validator that answers `just` when an (object, type) pair repeats on its path: sound (`soundness_cycles`) and complete],
   [`Recursive.v`], [`Json` equal to a reordered spelling; `Person` from a fresh literal; `parseJson tryAs [Person] ?` typed and run; `type T = Box[T]`; a well-typed cyclic value; holes H12 and H13; joins that meet a recursive alias],
   [`Decide.v`], [the checker's decision procedures for $<=$ and $subset.sq.eq$ (assumption sets, caching), proved right when they say yes; the join with them needs no hypothesis (`if_join_alg`)],
@@ -2105,7 +2247,7 @@ enum kind patterns, validation and `deepCopy` of enum values), validation with a
 variables in heap scopes captured by quotes, quotes with frame polymorphism and `never`,
 `if`, `loop` and loop-forever, `break`/`continue` through `each`, `return`, `exit`, polymorphic and
 recursive definitions, `tryAs` in its three modes, `deepCopy`, type-changing updates of fresh records,
-match bindings as stores into the scope, `take`, `skip` and index slices, `Maybe` as an ordinary
+match bindings as stores into the scope, `take`, `skip` and index slices, partly new values, `Maybe` as an ordinary
 generic enum declared by the environment, validation completeness for checkable targets, and
 recursive aliases (subtyping and fresh retyping on infinite trees, their transitivity, validation,
 immutability, checkability, kind patterns, `deepCopy` and commit of recursive values), and the checker's

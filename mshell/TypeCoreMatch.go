@@ -164,8 +164,11 @@ func (c *coreChecker) matchBlock(m *MShellParseMatchBlock) {
 	entry := c.saveStack()
 	var runs []savedRun
 	var arms []coreArm
+	daMark := len(c.setLog)
+	var sets [][]NameId
 	for _, arm := range m.Arms {
 		c.restoreStack(entry)
+		c.daRestore(daMark)
 		a, ok := c.analyzePattern(arm.Pattern, t, tok)
 		if !ok {
 			c.saved = c.saved[:mark]
@@ -196,8 +199,12 @@ func (c *coreChecker) matchBlock(m *MShellParseMatchBlock) {
 		if a.abstract != TidNothing {
 			c.recordEscape(a.abstract, tok, entry, below)
 		}
+		if !c.diverged {
+			sets = append(sets, c.daSince(daMark))
+		}
 		runs = append(runs, c.saveArm())
 	}
+	c.daJoin(daMark, sets)
 	if !m.Assertive && !c.exhaustive(arms, t) {
 		c.errs = append(c.errs, TypeError{Kind: TErrNonExhaustiveMatch, Pos: tok,
 			Hint: "the arms do not cover every " + c.format(t) + "; add the missing cases or a `_` arm"})
