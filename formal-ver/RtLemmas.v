@@ -81,9 +81,6 @@ Proof.
   - intros n b0 Hs. apply sub_unfold in Hs. remember TInt as x eqn:E; induction Hs; subst; try discriminate; eauto using vtyped.
   - intros n b0 Hs. apply sub_unfold in Hs. remember TStr as x eqn:E; induction Hs; subst; try discriminate; eauto using vtyped.
   - intros n b0 Hs. apply sub_unfold in Hs. remember TBool as x eqn:E; induction Hs; subst; try discriminate; eauto using vtyped.
-  - intros t b0 Hs. apply sub_unfold in Hs. remember (TMaybe t) as x eqn:E; induction Hs; subst; try discriminate; eauto using vtyped.
-  - intros v t Hv IH b0 Hs. apply sub_unfold in Hs. remember (TMaybe t) as x eqn:E; induction Hs; subst; try discriminate; eauto using vtyped.
-    inversion E; subst. constructor. auto.
   - intros l a t E Hs b0 Hs'. eapply vt_list; eauto. eapply sub_trans; eauto.
   - intros l fs r t E Hs b0 Hs'. eapply vt_rec; eauto. eapply sub_trans; eauto.
   - intros sc e G ins outs Esc Hc b0 Hs. apply sub_unfold in Hs.
@@ -121,10 +118,6 @@ Proof. intros H; inversion H; subst; eauto; match goal with Hs : sub _ TStr |- _
 
 Lemma vt_bool_inv Σ v : vtyped sigs Σ v TBool -> exists b, v = VBool b.
 Proof. intros H; inversion H; subst; eauto; match goal with Hs : sub _ TBool |- _ => apply sub_unfold in Hs; inversion Hs end. Qed.
-
-Lemma vt_maybe_inv Σ v t :
-  vtyped sigs Σ v (TMaybe t) -> v = VNone \/ exists x, v = VJust x /\ vtyped sigs Σ x t.
-Proof. intros H; inversion H; subst; eauto; match goal with Hs : sub _ (TMaybe _) |- _ => apply sub_unfold in Hs; inversion Hs end. Qed.
 
 Lemma vt_list_inv Σ v t :
   vtyped sigs Σ v (TList t) -> exists l a, v = VLoc l /\ nth_error Σ l = Some (HList a) /\ teq a t.
@@ -194,8 +187,6 @@ Proof.
   - intros; constructor.
   - intros; constructor.
   - intros; constructor.
-  - intros; constructor.
-  - intros v t _ IH Hl. constructor; auto.
   - intros l a t E Hsb Hl. eapply vt_list; [ apply Ha; [eassumption | apply Hl; left; reflexivity] | assumption ].
   - intros l fs r t E Hsb Hl. eapply vt_rec; [ apply Ha; [eassumption | apply Hl; left; reflexivity] | assumption ].
   - intros sc e G ins outs E Hc Hl. eapply vt_clo; eauto.
@@ -280,8 +271,6 @@ Proof.
   - intros; constructor.
   - intros; constructor.
   - intros; constructor.
-  - intros; constructor.
-  - intros v t O d IH Hm. constructor. auto.
   - intros sc e ins outs Hv Hm. constructor. eapply vtyped_clo_scope; eauto.
   - intros l vs t Os e d IH n Hm. apply dt_list with (vs := vs); auto.
     + rewrite Hm; [exact e | apply in_eq].
@@ -353,8 +342,6 @@ Proof.
   - intros; simpl; repeat split; try constructor; tauto.
   - intros; simpl; repeat split; try constructor; tauto.
   - intros; simpl; repeat split; try constructor; tauto.
-  - intros; simpl; repeat split; try constructor; tauto.
-  - intros v t O d IH. simpl. exact IH.
   - intros; simpl; repeat split; try constructor; tauto.
   - intros l vs t Os e d [Hv Ho] n. repeat split.
     + exact n.
@@ -430,12 +417,6 @@ Proof.
     apply sub_unfold in Hs. remember TStr as x eqn:E. induction Hs; subst; try discriminate; dsub_rest D0.
   - intros n b Hs. assert (D0 : dtyped sigs Σ H (VBool n) TBool []) by constructor.
     apply sub_unfold in Hs. remember TBool as x eqn:E. induction Hs; subst; try discriminate; dsub_rest D0.
-  - intros t b Hs. assert (D0 : dtyped sigs Σ H VNone (TMaybe t) []) by constructor.
-    apply sub_unfold in Hs. remember (TMaybe t) as x eqn:E. induction Hs; subst; try discriminate;
-      first [dsub_rest D0 | constructor].
-  - intros v t O d IH b Hs. assert (D0 : dtyped sigs Σ H (VJust v) (TMaybe t) O) by (constructor; exact d).
-    apply sub_unfold in Hs. remember (TMaybe t) as x eqn:E. induction Hs; subst; try discriminate;
-      first [dsub_rest D0 | injection E as ->; constructor; auto].
   - intros sc e ins outs Hv b Hs. apply vtyped_clo_dtyped. eapply vtyped_sub; eauto.
   - intros l vs t Os e d IH n b Hs. assert (D0 : dtyped sigs Σ H (VLoc l) (TList t) (l :: concat Os))
       by (econstructor; eauto).
@@ -477,11 +458,6 @@ Proof. intros. eapply (proj1 (dtyped_sub_all Σ H)); eauto. Qed.
 
 Lemma dtyped_bot Σ H v O : ~ dtyped sigs Σ H v TBot O.
 Proof. intros D; inversion D. Qed.
-
-Lemma dt_maybe_inv Σ H v t O :
-  dtyped sigs Σ H v (TMaybe t) O ->
-  (v = VNone /\ O = []) \/ exists x, v = VJust x /\ dtyped sigs Σ H x t O.
-Proof. intros D; inversion D; subst; eauto. Qed.
 
 Lemma dt_list_inv Σ H v t O :
   dtyped sigs Σ H v (TList t) O ->
@@ -575,12 +551,6 @@ Proof.
     apply rsub_unfold in R. remember TStr as x eqn:E. induction R; subst; try discriminate; drsub_rest D0.
   - intros n b R. assert (D0 : dtyped sigs Σ H (VBool n) TBool []) by constructor.
     apply rsub_unfold in R. remember TBool as x eqn:E. induction R; subst; try discriminate; drsub_rest D0.
-  - intros t b R. assert (D0 : dtyped sigs Σ H VNone (TMaybe t) []) by constructor.
-    apply rsub_unfold in R. remember (TMaybe t) as x eqn:E. induction R; subst; try discriminate;
-      first [drsub_rest D0 | constructor].
-  - intros v t O d IH b R. assert (D0 : dtyped sigs Σ H (VJust v) (TMaybe t) O) by (constructor; exact d).
-    apply rsub_unfold in R. remember (TMaybe t) as x eqn:E. induction R; subst; try discriminate;
-      first [drsub_rest D0 | injection E as ->; constructor; auto].
   - intros sc e ins outs Hv b R. assert (D0 : dtyped sigs Σ H (VClo sc e) (TQuote ins outs) [])
       by (constructor; exact Hv).
     apply rsub_unfold in R. remember (TQuote ins outs) as x eqn:E. induction R; subst; try discriminate;
@@ -658,8 +628,6 @@ Proof.
   - split; [constructor | reflexivity].
   - split; [constructor | reflexivity].
   - split; [constructor | reflexivity].
-  - split; [constructor | reflexivity].
-  - destruct (H0 H1). split; [constructor|]; auto.
   - rewrite (sub_list_imm _ _ s) in H0. discriminate.
   - rewrite (sub_rec_imm _ _ _ s) in H0. discriminate.
   - split; [constructor; econstructor; eauto | reflexivity].
@@ -686,3 +654,40 @@ Lemma vtyped_imm_vlocs Σ v t :
 Proof. intros. eapply (proj1 (vtyped_imm_all Σ [])); eauto. Qed.
 
 End Retype.
+
+(** ** Values of the built-in [Maybe]
+
+    [get] and [tryAs] return [Maybe] values.  They are typed like any enum
+    value, which needs the environment to declare [Maybe] ([maybe_ok]). *)
+Section MaybeVals.
+Variable sigs : genv.
+Hypothesis Hmaybe : maybe_ok sigs.
+
+Lemma wf_maybe_just : wf_payload EMaybe [TParam 0].
+Proof. reflexivity. Qed.
+
+Lemma wf_maybe_none : wf_payload EMaybe [].
+Proof. reflexivity. Qed.
+
+Lemma vt_vnone Σ t : vtyped sigs Σ vnone (TMaybe t).
+Proof. eapply vt_con; [apply (proj2 Hmaybe) | apply wf_maybe_none | constructor]. Qed.
+
+Lemma vt_vjust Σ v t : vtyped sigs Σ v t -> vtyped sigs Σ (vjust v) (TMaybe t).
+Proof.
+  intros Hv. eapply vt_con; [apply (proj1 Hmaybe) | apply wf_maybe_just | constructor; [exact Hv | constructor]].
+Qed.
+
+Lemma dt_vnone Σ H t : dtyped sigs Σ H vnone (TMaybe t) [].
+Proof.
+  change (@nil loc) with (concat (@nil (list loc))).
+  eapply dt_con; [apply (proj2 Hmaybe) | apply wf_maybe_none | constructor | constructor].
+Qed.
+
+Lemma dt_vjust Σ H v t O : dtyped sigs Σ H v t O -> dtyped sigs Σ H (vjust v) (TMaybe t) O.
+Proof.
+  intros D. rewrite <- (app_nil_r O). change (O ++ []) with (concat [O]).
+  eapply dt_con; [apply (proj1 Hmaybe) | apply wf_maybe_just | constructor; [exact D | constructor] |].
+  simpl. rewrite app_nil_r. exact (proj1 (proj1 (dtyped_struct sigs Σ H) _ _ _ D)).
+Qed.
+
+End MaybeVals.

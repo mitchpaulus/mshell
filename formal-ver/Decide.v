@@ -149,7 +149,6 @@ Definition step (rec c : aset -> ty -> ty -> option aset) (A : aset) (a b : ty) 
   | TMu t, _ => if mu_ok t then rec A (tunfold t) b else None
   | _, TMu t => if mu_ok t then rec A a (tunfold t) else None
   | _, TUnion x y => match rec A a x with Some A1 => Some A1 | None => rec A a y end
-  | TMaybe x, TMaybe y => c A x y
   | TList x, TList y => both c A x y
   | TRec fs1 r1, TRec fs2 r2 => trec (tfchk c) fs1 r1 fs2 r2 A
   | TQuote i1 o1, TQuote i2 o2 => obind (tall2 c i2 i1 A) (tochk c o1 o2)
@@ -194,7 +193,6 @@ Definition rstep (sq : ty -> ty -> bool) (rec c : aset -> ty -> ty -> option ase
   | TMu t, _ => if mu_ok t then rec A (tunfold t) b else None
   | _, TMu t => if mu_ok t then rec A a (tunfold t) else None
   | _, TUnion x y => match rec A a x with Some A1 => Some A1 | None => rec A a y end
-  | TMaybe x, TMaybe y => c A x y
   | TList x, TList y => c A x y
   | TRec fs1 r1, TRec fs2 r2 => trec (frchk c) fs1 r1 fs2 r2 A
   | TEnum E1 xs, TEnum E2 ys => if ename_eqb E1 E2 then tvrchk c sq (en_params E1) xs ys A else None
@@ -401,7 +399,7 @@ Proof.
   all: try (split; [apply Inv_refl | first [apply sf_bot | apply sf_top]]; fail).
   all: try (split; [eassumption | solve [ apply sf_mul; eauto | apply sf_mur; eauto
                                          | apply sf_unionr1; eauto | apply sf_unionr2; eauto
-                                         | apply sf_maybe; eauto | apply sf_enum; eauto ]]; fail).
+                                         | apply sf_enum; eauto ]]; fail).
   all: try (split; [eassumption | apply sf_list; assumption]; fail).
   all: try (split; [eapply Inv_trans; eauto using subF_mono|];
             apply sf_unionl; [eapply subF_mono; [| eassumption]; apply Exts_lift; assumption | assumption]; fail).
@@ -534,7 +532,7 @@ Proof.
       end.
   all: try (split; [eassumption | solve [ apply rf_mul; eauto | apply rf_mur; eauto
                                          | apply rf_unionr1; eauto | apply rf_unionr2; eauto
-                                         | apply rf_maybe; eauto | apply rf_list; eauto
+                                         | apply rf_list; eauto
                                          | apply rf_enum; eauto ]]; fail).
   all: try (split; [eapply Inv_trans; eauto using rsubF_mono|];
             apply rf_unionl; [eapply rsubF_mono; [| eassumption]; apply Extr_lift; assumption | assumption]; fail).

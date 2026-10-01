@@ -9,9 +9,9 @@
     Choices the proof pins down:
     - the result is fresh only when both arms are fresh;
     - widening *inside* a list, shape or fresh-covariant enum argument
-      happens only when both arms are fresh; inside a [Maybe] or a covariant
-      enum argument of shared values the inner join is itself a shared
-      join;
+      happens only when both arms are fresh; inside a covariant enum
+      argument of shared values (a [Maybe], say) the inner join is itself a
+      shared join;
     - two instances of different enums have different kinds, and join to
       their union, like any two types of different kinds;
     - when the types cannot be widened inside (quotes, shared containers,
@@ -38,7 +38,7 @@ From MshellCore Require Import Syntax Subtyping Variance Typing Interp Invariant
 Fixpoint ty_eqb (a b : ty) : bool :=
   match a, b with
   | TInt, TInt | TStr, TStr | TBool, TBool | TBot, TBot | TTop, TTop => true
-  | TMaybe x, TMaybe y | TList x, TList y => ty_eqb x y
+  | TList x, TList y => ty_eqb x y
   | TRec fs1 r1, TRec fs2 r2 =>
       forallb2 (fun p q => String.eqb (fst p) (fst q) && fst_eqb (snd p) (snd q)) fs1 fs2
       && fst_eqb r1 r2
@@ -78,15 +78,14 @@ Proof.
   - intros b E; destruct b; simpl in E; congruence.
   - intros b E; destruct b; simpl in E; congruence.
   - intros t IH b E; destruct b; simpl in E; try congruence. f_equal; auto.
-  - intros t IH b E; destruct b; simpl in E; try congruence. f_equal; auto.
-  - intros fs r Hfs Hr b E; destruct b as [| | | | | | |fs2 r2| | | | | | |]; simpl in E; try congruence.
+  - intros fs r Hfs Hr b E; destruct b as [| | | | | |fs2 r2| | | | | | |]; simpl in E; try congruence.
     apply andb_true_iff in E as [E1 E2]. f_equal; auto.
     eapply Forall2_eq; [| apply forallb2_Forall2; exact E1].
     eapply Forall_impl; [| exact Hfs]. intros [k f] Hf [k' f'] Hp. simpl in *.
     apply andb_true_iff in Hp as [Hk Hq]. apply String.eqb_eq in Hk. subst. f_equal. auto.
   - intros x y Hx Hy b E; destruct b; simpl in E; try congruence.
     apply andb_true_iff in E as [E1 E2]. f_equal; auto.
-  - intros ins outs Hi Ho b E; destruct b as [| | | | | | | | |i2 o2| | | | |]; simpl in E; try congruence.
+  - intros ins outs Hi Ho b E; destruct b as [| | | | | | | |i2 o2| | | | |]; simpl in E; try congruence.
     apply andb_true_iff in E as [E1 E2]. f_equal.
     + eapply Forall2_eq; [exact Hi | apply forallb2_Forall2; exact E1].
     + destruct outs as [o1|], o2 as [o2|]; try discriminate; auto. f_equal.
@@ -118,7 +117,7 @@ Definition is_mu (t : ty) : bool := match t with TMu _ => true | _ => false end.
 (** The size of a type, counting the body of a recursive type. *)
 Fixpoint dsize (t : ty) : nat :=
   match t with
-  | TMu t' | TMaybe t' | TList t' => S (dsize t')
+  | TMu t' | TList t' => S (dsize t')
   | TUnion a b => S (dsize a + dsize b)
   | TRec fs r => S (fdsize r + list_sum (map (fun p => fdsize (snd p)) fs))
   | TQuote ins outs =>
@@ -235,7 +234,6 @@ Definition tjoin_core (j : bool -> ty -> ty -> option ty) (fr : bool) (a b : ty)
                   else Some (TUnion b a)
       | None => None
       end
-  | TMaybe x, TMaybe y => option_map TMaybe (j fr x y)
   | TList x, TList y => if fr then option_map TList (j true x y) else None
   | TRec fs1 r1, TRec fs2 r2 => if fr then rjoin j fs1 r1 fs2 r2 else None
   | TEnum E xs, TEnum E' ys =>

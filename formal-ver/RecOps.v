@@ -77,6 +77,7 @@ Qed.
 
 Section RecOps.
 Variable sigs : genv.
+Hypothesis Hmaybe : maybe_ok sigs.
 
 Lemma dtyped_rec_same Σ H v fs1 r1 fs2 r2 O :
   (forall k, field_at k fs1 r1 = field_at k fs2 r2) ->
@@ -118,7 +119,7 @@ Proof.
 Qed.
 
 
-Definition opt_val (o : option val) : val := match o with Some v => VJust v | None => VNone end.
+Definition opt_val (o : option val) : val := match o with Some v => vjust v | None => vnone end.
 
 (** Removing key [k] from a fresh record: the removed value (if any) becomes
     its own fresh slot, and the record's type says [k] is absent. *)
@@ -161,9 +162,9 @@ Proof.
     + unfold H'; rewrite set_nth_length; auto.
     + constructor; [|constructor].
       * unfold slot_ok; simpl. destruct (lookup k kvs) as [old|]; simpl.
-        -- constructor. eapply dtyped_agree1; eauto using scope_ext_refl.
+        -- apply (dt_vjust sigs Hmaybe). eapply dtyped_agree1; eauto using scope_ext_refl.
            intros m Hm. apply Agr. intro; subst. apply Nl. apply Pold; auto.
-        -- subst. constructor.
+        -- subst. apply (dt_vnone sigs Hmaybe).
       * unfold slot_ok; simpl. apply dt_rec with (kvs := remove_key k kvs).
         -- apply nth_error_set_nth_eq; auto.
         -- apply nodup_keys_remove; auto.
@@ -188,7 +189,7 @@ Proof.
       * apply perm_skip. apply Permutation_app_tail. exact P.
       * rewrite <- app_assoc. apply Permutation_middle.
     + constructor; [| constructor].
-      * intros m Hm _. destruct (lookup k kvs) as [old|]; simpl in Hm.
+      * intros m Hm _. destruct (lookup k kvs) as [old|]; simpl in Hm; rewrite ?app_nil_r in Hm.
         -- destruct (proj1 (dtyped_struct sigs Σ H) _ _ _ Hold) as (_ & Hv & _). auto.
         -- contradiction.
       * intros m [<-|[]] _. apply in_eq.

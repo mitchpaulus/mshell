@@ -39,7 +39,6 @@ Inductive Forall3 {A B C : Type} (P : A -> B -> C -> Prop) : list A -> list B ->
 Fixpoint vlocs (v : val) : list loc :=
   match v with
   | VLoc l => [l]
-  | VJust v' => vlocs v'
   | VCon _ _ _ vs => flat_map vlocs vs
   | _ => []
   end.
@@ -57,8 +56,6 @@ Inductive vtyped (Σ : store_ty) : val -> ty -> Prop :=
 | vt_int n : vtyped Σ (VInt n) TInt
 | vt_str s : vtyped Σ (VStr s) TStr
 | vt_bool b : vtyped Σ (VBool b) TBool
-| vt_none t : vtyped Σ VNone (TMaybe t)
-| vt_just v t : vtyped Σ v t -> vtyped Σ (VJust v) (TMaybe t)
 | vt_list l a t : nth_error Σ l = Some (HList a) -> sub (TList a) t -> vtyped Σ (VLoc l) t
 | vt_rec l fs r t : nth_error Σ l = Some (HRec fs r) -> sub (TRec fs r) t -> vtyped Σ (VLoc l) t
 | vt_clo sc e G ins outs :
@@ -91,8 +88,6 @@ Inductive dtyped (Σ : store_ty) (H : heap) : val -> ty -> list loc -> Prop :=
 | dt_int n : dtyped Σ H (VInt n) TInt []
 | dt_str s : dtyped Σ H (VStr s) TStr []
 | dt_bool b : dtyped Σ H (VBool b) TBool []
-| dt_none t : dtyped Σ H VNone (TMaybe t) []
-| dt_just v t O : dtyped Σ H v t O -> dtyped Σ H (VJust v) (TMaybe t) O
 | dt_clo sc e ins outs :
     vtyped Σ (VClo sc e) (TQuote ins outs) -> dtyped Σ H (VClo sc e) (TQuote ins outs) []
 | dt_list l vs t Os :

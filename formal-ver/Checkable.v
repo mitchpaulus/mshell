@@ -36,7 +36,7 @@ Fixpoint chk (okE : ename -> bool) (pok : bool) (t : ty) : bool :=
   | TInt | TStr | TBool | TBot | TTop => true
   | TParam _ => pok
   | TVar _ | TQuote _ _ => false
-  | TMaybe t' | TList t' => chk okE pok t'
+  | TList t' => chk okE pok t'
   | TRec fs r => forallb (fun kf => fchk okE pok (snd kf)) fs && fchk okE pok r && negb (is_req r)
   | TUnion a b => chk okE pok a && chk okE pok b
   | TEnum E a => okE E && forallb (chk okE pok) a
@@ -148,8 +148,6 @@ Proof.
   - destruct (vt_bool_inv _ _ _ V) as [? ->]. discriminate.
   - exfalso. exact (vt_bot _ _ _ V).
   - discriminate.
-  - destruct (vt_maybe_inv _ _ _ _ V) as [->|(x & -> & Vx)]; [discriminate|].
-    apply IH; auto.
   - destruct (vt_list_inv _ _ _ _ V) as (l & a & -> & El & [Hat Hta]).
     assert (Hl : ~ In l R) by (apply Hr; simpl; auto).
     assert (Hlt : l < length H) by (rewrite <- Ln; apply nth_error_Some; congruence).
@@ -216,7 +214,6 @@ Proof.
   induction f as [|f IH]; intros t v O D Hc; [simpl; discriminate|].
   destruct t; simpl in Hc |- *; try discriminate Hc;
     inversion D; subst; simpl; try discriminate.
-  - apply IH with (O := O); auto.
   - match goal with E : nth_error H _ = Some (OList _) |- _ => rewrite E end.
     apply oforall_nf. intros x Hx.
     match goal with Hd : dtypeds _ _ _ _ _ _ |- _ => rename Hd into Ds end.

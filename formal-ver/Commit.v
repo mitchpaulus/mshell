@@ -117,18 +117,13 @@ Proof.
     (fun vs ts Os _ => forall Σ0, scope_ext Σ Σ0 -> length Σ0 = length H -> nonscope_on Σ0 (concat Os) -> NoDup (concat Os) ->
      exists Σ', length Σ' = length Σ0 /\ sagree Σ0 Σ' (concat Os) /\ committed Σ' H (concat Os) /\
                 vtypedl sigs Σ' vs ts)).
-  (* int, str, bool, none *)
+  (* int, str, bool *)
   - intros n Σ0 Hs Hl Hn Hd. exists Σ0; repeat split; auto using sagree_refl; try constructor.
     intros l [].
   - intros n Σ0 Hs Hl Hn Hd. exists Σ0; repeat split; auto using sagree_refl; try constructor.
     intros l [].
   - intros n Σ0 Hs Hl Hn Hd. exists Σ0; repeat split; auto using sagree_refl; try constructor.
     intros l [].
-  - intros t Σ0 Hs Hl Hn Hd. exists Σ0; repeat split; auto using sagree_refl; try constructor.
-    intros l [].
-  - (* just *)
-    intros v t O d IH Σ0 Hs Hl Hn Hd. destruct (IH Σ0 Hs Hl Hn Hd) as (Σ' & ? & ? & ? & ?).
-    exists Σ'; repeat split; auto. constructor; auto.
   - (* closure *)
     intros sc e ins outs Hv Σ0 Hs Hl Hn Hd. exists Σ0; repeat split; auto using sagree_refl.
     + intros l [].

@@ -18,7 +18,7 @@ opam install --switch rocq-mshell -y rocq-prover rocq-core.9.1.1
 
 `make check` ends with `Closed under the global context`.
 The theorem uses no axioms and no admitted lemmas.
-A clean build takes about 25 seconds.
+A clean build takes about 40 seconds.
 
 ## The theorem
 
@@ -27,6 +27,7 @@ A clean build takes about 25 seconds.
 ```coq
 Theorem soundness : forall sigs defs,              (* sigs: def signatures and enum declarations *)
   def_ok sigs defs ->                              (* every def body checks at every instance of its signature *)
+  maybe_ok sigs ->                                 (* the built-in enum Maybe is declared *)
   forall G R e s, T sigs G LNone LNone R e [] s -> (* the program checks from an empty stack *)
   forall n, eval defs n [OScope []] 0 [] e <> RStuck.
 ```
@@ -43,6 +44,7 @@ with its type variables rigid, is enough.
 Theorem soundness_generic : forall sigs gs defs,
   (forall f ins outs, g_sigs sigs f ins outs <-> instances gs f ins outs) ->  (* signatures are declared *)
   (forall E c pts, g_ctors sigs E c = Some pts -> wf_payload E pts) ->       (* enum declarations are well formed *)
+  maybe_ok sigs ->
   gdefs_ok sigs gs defs ->                           (* every body checks once, generically *)
   forall G R e s, T sigs G LNone LNone R e [] s ->
   forall n, eval defs n [OScope []] 0 [] e <> RStuck.
@@ -78,9 +80,9 @@ What you have to read is whether the *definitions* say what the design means:
 
 | File | Lines | What to check |
 |---|---|---|
-| `Syntax.v` | ~400 | types (including recursive types `TMu`, their closedness and unfolding), enum identities, substitution, words, values, heap objects |
-| `Interp.v` | ~460 | the interpreter matches `Evaluator.go` where it matters (see below); `eval` is `evalv validate` |
-| `Typing.v` | ~270 | each typing rule matches the doc; `genv` holds def signatures and enum declarations |
+| `Syntax.v` | ~420 | types (including recursive types `TMu`, their closedness and unfolding), enum identities, the built-in `Maybe`, substitution, words, values, heap objects |
+| `Interp.v` | ~490 | the interpreter matches `Evaluator.go` where it matters (see below); `eval` is `evalv validate` |
+| `Typing.v` | ~350 | each typing rule matches the doc; `genv` holds def signatures and enum declarations; `maybe_ok` |
 | `Decide.v` (definitions only) | ~150 | `step`, `lvl`, `chk` and `rstep`, `rlvl`, `rchk` are what the Go checker will do to decide `<=` and fresh retyping |
 | `Subtyping.v` (definitions only) | ~200 | the one-level relations `subF` and `rsubF` (with `fsubR`, `subsR`, `osubR`, `vsubsR`, `frsubR`, `vrsubsR`), `sub` and `rsub` as their greatest fixed points, `immutable`, and the enum declaration checks `occ_sub`, `occ_fresh`, `wf_payload` |
 
@@ -113,6 +115,7 @@ Everything else (`Invariant.v` onward) is proof and cannot make the theorem say 
 | Caching their answers | `subq_set_sound`, `rsubq_set_sound`, `chk_confirmed`; `cache_early` |
 | Joins that meet a recursive alias (never widened inside) | `ajoin` in `Join.v`; `join_*` in `Recursive.v` |
 | `map` with a literal body | `WMap`; `tw_map`, `tw_map_imm` (fresh only when the results are immutable) |
+| The built-in `Maybe` | the enum `EMaybe` (`TMaybe t` is `TEnum EMaybe [t]`); `just`, `none`, `?` are `wjust`, `wnone`, `wunwrap`, a constructor and a one-arm match; the environment declares it (`maybe_ok`); their typings `tw_wjust`, `tw_wnone`, `tw_wunwrap` |
 | `return` in top-level code | return context `RAny`, `tw_return_any` |
 | Match bindings | stores into the scope (`WStore`); `list :>` is `WKindIf` with the value left on the stack |
 | Checkable targets; `is T` exhaustiveness | `chk`, `validate_complete`, `validate_complete_fresh` in `Checkable.v` |
@@ -166,6 +169,9 @@ Everything else (`Invariant.v` onward) is proof and cannot make the theorem say 
   The validator reads them; `vtyped` requires them to be the declared ones.
 - **Validation has a work budget** (the interpreter's remaining fuel). Running out is a checked error.
   This is what a cyclic value meets under a recursive type.
+- **`Maybe` is an ordinary enum.** `EMaybe` in `Syntax.v` is `enum Maybe[a] = just a | none end`, and the
+  typing environment must declare its two constructors (`maybe_ok`), which is the theorem's one extra
+  hypothesis. `?` on `none` is a match with no arm for `none`: a checked error.
 - **Deviations from the Go runtime** that do not affect type safety: dict objects are association
   lists; `each` iterates over the list's elements as they are when it starts; stack shuffles other
   than `dup`/`drop`/`swap` and all other builtins are left out.

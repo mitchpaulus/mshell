@@ -3,7 +3,7 @@
     [sub a b] is the doc's [a <= b]: the only subtyping between types of
     objects that may be shared.  It is checked per label for dict-kinded
     types (see [fsubR]), which gives the doc's S1-S4 as a special case.
-    Lists are invariant, [Maybe] is covariant, quotes are contravariant in
+    Lists are invariant, enum arguments follow their parameters' variance, quotes are contravariant in
     inputs and covariant in outputs, and a [never] quote is below every
     quote with the same inputs.
 
@@ -76,7 +76,6 @@ Inductive subF : ty -> ty -> Prop :=
 | sf_unionr2 a b c : subF a c -> subF a (TUnion b c)
 | sf_mul t b : mu_ok t = true -> subF (tunfold t) b -> subF (TMu t) b
 | sf_mur a t : mu_ok t = true -> subF a (tunfold t) -> subF a (TMu t)
-| sf_maybe a b : R a b -> subF (TMaybe a) (TMaybe b)
 | sf_list a b : R a b -> R b a -> subF (TList a) (TList b)
 | sf_rec fs1 r1 fs2 r2 :
     (forall k, fsubR (field_at k fs1 r1) (field_at k fs2 r2)) -> subF (TRec fs1 r1) (TRec fs2 r2)
@@ -181,9 +180,6 @@ Proof. intros M H. apply sub_fold, sf_mul, sub_unfold; auto. Qed.
 Lemma s_mur a t : mu_ok t = true -> sub a (tunfold t) -> sub a (TMu t).
 Proof. intros M H. apply sub_fold, sf_mur, sub_unfold; auto. Qed.
 
-Lemma s_maybe a b : sub a b -> sub (TMaybe a) (TMaybe b).
-Proof. intros H. apply sub_fold, sf_maybe, H. Qed.
-
 Lemma s_list a b : sub a b -> sub b a -> sub (TList a) (TList b).
 Proof. intros H1 H2. apply sub_fold, sf_list; auto. Qed.
 
@@ -196,6 +192,10 @@ Proof. intros H1 H2. apply sub_fold, sf_quote; auto. Qed.
 
 Lemma s_enum E a b : vsubs (en_params E) a b -> sub (TEnum E a) (TEnum E b).
 Proof. intros H. apply sub_fold, sf_enum, H. Qed.
+
+(** [Maybe] is covariant. *)
+Lemma s_maybe a b : sub a b -> sub (TMaybe a) (TMaybe b).
+Proof. intros H. apply s_enum. apply vs_co; [reflexivity | exact H | constructor]. Qed.
 
 (** A recursive type and its unfolding are equal. *)
 Lemma sub_unfold_l t : mu_ok t = true -> sub (TMu t) (tunfold t).
@@ -273,10 +273,6 @@ Proof.
       try (econstructor; eauto; fail).
     + apply sf_mur; auto. eapply subF_mono; [apply sub_subc | exact Q1].
     + injection Eu as ->. auto.
-  - remember (TMaybe b) as u eqn:Eu. induction Q2; subst; try discriminate;
-      try (econstructor; eauto; fail).
-    + apply sf_maybe. apply sub_subc; auto.
-    + injection Eu as ->. apply sf_maybe. eexists; split; eassumption.
   - remember (TList b) as u eqn:Eu. induction Q2; subst; try discriminate;
       try (econstructor; eauto; fail).
     + apply sf_list; apply sub_subc; auto.
@@ -332,7 +328,6 @@ Inductive vrsubsR : list eparam -> list ty -> list ty -> Prop :=
 (** Quotes are not data: under a quote only [sub] applies ([rf_sub]). *)
 Inductive rsubF : ty -> ty -> Prop :=
 | rf_sub a b : sub a b -> rsubF a b
-| rf_maybe a b : R a b -> rsubF (TMaybe a) (TMaybe b)
 | rf_list a b : R a b -> rsubF (TList a) (TList b)
 | rf_rec fs1 r1 fs2 r2 :
     (forall k, frsubR (field_at k fs1 r1) (field_at k fs2 r2)) -> rsubF (TRec fs1 r1) (TRec fs2 r2)
@@ -399,9 +394,6 @@ Qed.
 Lemma rs_sub a b : sub a b -> rsub a b.
 Proof. intros H. apply rsub_fold, rf_sub, H. Qed.
 
-Lemma rs_maybe a b : rsub a b -> rsub (TMaybe a) (TMaybe b).
-Proof. intros H. apply rsub_fold, rf_maybe, H. Qed.
-
 Lemma rs_list a b : rsub a b -> rsub (TList a) (TList b).
 Proof. intros H. apply rsub_fold, rf_list, H. Qed.
 
@@ -421,6 +413,10 @@ Proof. intros H. apply rsub_fold, rf_unionr2, rsub_unfold, H. Qed.
 Lemma rs_enum E a b : vrsubs (en_params E) a b -> rsub (TEnum E a) (TEnum E b).
 Proof. intros H. apply rsub_fold, rf_enum, H. Qed.
 
+(** [Maybe] is fresh-covariant. *)
+Lemma rs_maybe a b : rsub a b -> rsub (TMaybe a) (TMaybe b).
+Proof. intros H. apply rs_enum. apply vrs_fresh; [reflexivity | exact H | constructor]. Qed.
+
 Lemma rs_mul t b : mu_ok t = true -> rsub (tunfold t) b -> rsub (TMu t) b.
 Proof. intros M H. apply rsub_fold, rf_mul, rsub_unfold; auto. Qed.
 
@@ -438,7 +434,6 @@ Fixpoint immutable (t : ty) : bool :=
   | TInt | TStr | TBool | TBot | TParam _ | TRV _ => true
   | TVar _ => false          (* an instance may hold a list *)
   | TMu t' => immutable t'   (* the greatest fixed point: the variable counts as immutable *)
-  | TMaybe t' => immutable t'
   | TUnion a b => immutable a && immutable b
   | TQuote _ _ => true
   | TEnum E a => en_imm E && forallb immutable a
@@ -460,7 +455,6 @@ Proof.
   apply (ty_ind2 (fun t => forall d d', d <= d' -> tclosed d t = true -> tclosed d' t = true)
                  (fun f => forall d d', d <= d' -> ftclosed d f = true -> ftclosed d' f = true));
     simpl; intros; auto; try discriminate.
-  - eauto.
   - eauto.
   - apply andb_true_iff in H2 as [H2 H3]. apply andb_true_iff; split; [|eauto].
     eapply forallb_impl; [| exact H2]. eapply Forall_impl; [| exact H]. intros p Hp. eauto.
@@ -583,7 +577,6 @@ Fixpoint occ_sub (ps : list eparam) (p : pol) (t : ty) : bool :=
   | TParam i => match nth_error ps i with Some q => compat p (p_var q) | None => false end
   | TVar _ => false          (* declarations do not mention definitions' variables *)
   | TInt | TStr | TBool | TBot | TTop | TMu _ | TRV _ => true   (* a recursive type is closed *)
-  | TMaybe t' => occ_sub ps p t'
   | TList t' => occ_sub ps PInv t'
   | TRec fs r => forallb (fun kf => focc_sub ps (snd kf)) fs && focc_sub ps r
   | TUnion a b => occ_sub ps p a && occ_sub ps p b
@@ -603,7 +596,7 @@ Fixpoint pocc (t : ty) : list nat :=
   match t with
   | TParam i => [i]
   | TInt | TStr | TBool | TBot | TTop | TVar _ | TMu _ | TRV _ => []
-  | TMaybe t' | TList t' => pocc t'
+  | TList t' => pocc t'
   | TRec fs r => flat_map (fun kf => fpocc (snd kf)) fs ++ fpocc r
   | TUnion a b => pocc a ++ pocc b
   | TQuote ins outs =>
@@ -628,7 +621,7 @@ Fixpoint occ_fresh (ps : list eparam) (t : ty) : bool :=
       end
   | TVar _ => false
   | TInt | TStr | TBool | TBot | TTop | TMu _ | TRV _ => true
-  | TMaybe t' | TList t' => occ_fresh ps t'
+  | TList t' => occ_fresh ps t'
   | TRec fs r => forallb (fun kf => focc_fresh ps (snd kf)) fs && focc_fresh ps r
   | TUnion a b => occ_fresh ps a && occ_fresh ps b
   | TQuote _ _ => no_fresh ps t && occ_sub ps PPos t
@@ -655,7 +648,7 @@ Definition wf_payload (E : ename) (pts : list ty) : Prop := forallb (wf_pt E) pt
 Fixpoint size (t : ty) : nat :=
   match t with
   | TInt | TStr | TBool | TBot | TTop | TParam _ | TVar _ | TMu _ | TRV _ => 1
-  | TMaybe t' | TList t' => S (size t')
+  | TList t' => S (size t')
   | TUnion a b => S (size a + size b)
   | TRec fs r => S (fsize r + list_sum (map (fun p => fsize (snd p)) fs))
   | TQuote ins outs =>

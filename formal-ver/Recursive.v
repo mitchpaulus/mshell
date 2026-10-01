@@ -14,7 +14,7 @@ Open Scope string_scope.
 Definition nodefs : string -> option prog := fun _ => None.
 Definition run (e : prog) : result := eval nodefs 200 [OScope []] 0 [] e.
 Definition runc (e : prog) : result := evalv cvalidate nodefs 200 [OScope []] 0 [] e.
-Definition nosigs : genv := {| g_sigs := fun _ _ _ => False; g_ctors := fun _ _ => None |}.
+Definition nosigs : genv := {| g_sigs := fun _ _ _ => False; g_ctors := maybe_ctors |}.
 Definition is_stuck (r : result) : bool := match r with RStuck => true | _ => false end.
 Definition IS := TUnion TInt TStr.
 
@@ -123,7 +123,7 @@ Definition person_a : prog :=
   ([WDictNew; WStr "a"; WSetK "name"; WInt 1; WSetK "age"; WNil] ++ friend_b ++ [WPush; WSetK "friends"])%list.
 Definition people_json : prog := ([WNil] ++ person_a ++ [WPush])%list.
 Definition people_read : prog :=
-  [WTryAs (TList Person); WUnwrap; WInt 0; WGetAt; WGetReq "friends"; WInt 0; WGetAt;
+  [WTryAs (TList Person); wunwrap; WInt 0; WGetAt; WGetReq "friends"; WInt 0; WGetAt;
    WGetReq "age"; WInt 40; WAdd].
 
 Definition top_int (r : result) : option nat :=
@@ -198,7 +198,7 @@ Proof.
   retype_top ltac:(apply rsub_json_list).
   (* validated in place: fresh, so no condition on the static type *)
   step ltac:(apply tw_try_dp; reflexivity).
-  step ltac:(apply tw_unwrap).
+  step ltac:(apply tw_wunwrap, maybe_ctors_ok).
   step ltac:(apply tw_int).
   eapply t_sub; [ | eapply t_cons; [apply tw_getat | ] | apply ssub_refl ].
   { constructor; [apply ss_sh, s_refl | constructor; [apply ss_forget, s_refl | constructor]]. }
@@ -227,7 +227,7 @@ Definition box_sigs : genv :=
        if ename_eqb E EBox then
          if String.eqb c "box" then Some [TList (TParam 0)]
          else if String.eqb c "empty" then Some [] else None
-       else None |}.
+       else maybe_ctors E c |}.
 Definition TBoxB : ty := TEnum EBox [TRV 0].
 Definition TB : ty := TMu TBoxB.
 
@@ -240,7 +240,7 @@ Proof. reflexivity. Qed.
 
 (** [[] empty append box tryAs T ?]: built fresh, validated in place. *)
 Definition tb_prog : prog :=
-  [WNil; WCon EBox "empty" []; WPush; WCon EBox "box" [TList (TParam 0)]; WTryAs TB; WUnwrap].
+  [WNil; WCon EBox "empty" []; WPush; WCon EBox "box" [TList (TParam 0)]; WTryAs TB; wunwrap].
 
 Example tb_runs : match run tb_prog with ROk ONormal _ [VCon _ "box" _ _] => true | _ => false end = true.
 Proof. vm_compute. reflexivity. Qed.
@@ -254,7 +254,7 @@ Proof.
   step ltac:(apply tw_push_dp).
   step ltac:(apply (tw_con_dp box_sigs [] LNone LNone RNone EBox "box" [TList (TParam 0)] [TB]); reflexivity).
   step ltac:(apply tw_try_dp; reflexivity).
-  step ltac:(apply tw_unwrap).
+  step ltac:(apply tw_wunwrap; split; reflexivity).
   apply t_nil.
 Qed.
 
@@ -301,7 +301,7 @@ Proof. vm_compute. reflexivity. Qed.
 (** The validator of Cycles.v assumes a repeated (object, type) pair and
     answers [just]: the value does have type [L].  Both are sound. *)
 Example cyc_try_cycles :
-  match runc cyc_try with ROk ONormal _ [VJust _] => true | _ => false end = true.
+  match runc cyc_try with ROk ONormal _ [VCon _ "just" _ _] => true | _ => false end = true.
 Proof. vm_compute. reflexivity. Qed.
 
 (** ** Guardedness is a soundness condition for the assumption rule
@@ -468,7 +468,7 @@ Proof. vm_compute. reflexivity. Qed.
 
 Example hole_mixed_rejected : forall G R s, ~ T nosigs G LNone LNone R hole_mixed [] s.
 Proof.
-  intros G R s HT. apply (soundness nosigs nodefs (fun f ins outs H => match H with end) G R _ s HT 200).
+  intros G R s HT. apply (soundness nosigs nodefs (fun f ins outs H => match H with end) (maybe_ctors_ok _) G R _ s HT 200).
   vm_compute. reflexivity.
 Qed.
 

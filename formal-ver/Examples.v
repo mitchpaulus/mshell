@@ -25,7 +25,7 @@ Definition is_stuck (r : result) : bool := match r with RStuck => true | _ => fa
 Definition hole_dynget : prog :=
   [ WDictNew; WInt 1; WSetK "a"          (* {a: 1}, fresh, {a: int} *)
     (* retype the fresh shape to {a: int, *: str}: allowed *)
-  ; WStr "a"; WGetD; WUnwrap              (* doc: str.  actually: 1 *)
+  ; WStr "a"; WGetD; wunwrap              (* doc: str.  actually: 1 *)
   ; WStr "x"; WCat ].                     (* "Cannot concatenate an int" *)
 
 Example hole_dynget_stuck : is_stuck (run hole_dynget) = true.
@@ -98,9 +98,9 @@ Definition IS := TUnion TInt TStr.
 
 Definition r6_with (d_src : prog) : prog :=
   ([ WDictNew; WInt 1; WSetK "age"; WStore "j"
-   ; WLoad "j"; WTryAs TP; WUnwrap; WStore "p" ]
+   ; WLoad "j"; WTryAs TP; wunwrap; WStore "p" ]
    ++ d_src ++
-   [ WTryAs (TDict IS); WUnwrap; WStore "d"
+   [ WTryAs (TDict IS); wunwrap; WStore "d"
    ; WLoad "d"; WStr "age"; WStr "x"; WSetD; WDrop
    ; WLoad "p"; WGetReq "age"; WInt 1; WAdd ])%list.
 
@@ -129,14 +129,14 @@ Proof.
     simpl in Hf; inversion Hf end.
 Qed.
 
-Definition nosigs : genv := {| g_sigs := fun _ _ _ => False; g_ctors := fun _ _ => None |}.
+Definition nosigs : genv := {| g_sigs := fun _ _ _ => False; g_ctors := maybe_ctors |}.
 
 (** Since [r6] gets stuck, the soundness theorem says it has no typing
     derivation, in any variable context. *)
 Example r6_rejected : forall G s, ~ T nosigs G LNone LNone RNone r6 [] s.
 Proof.
   intros G s HT.
-  apply (soundness nosigs nodefs (fun f ins outs Hs => match Hs with end) G RNone r6 s HT 200).
+  apply (soundness nosigs nodefs (fun f ins outs Hs => match Hs with end) (maybe_ctors_ok _) G RNone r6 s HT 200).
   vm_compute. reflexivity.
 Qed.
 
@@ -165,13 +165,13 @@ Proof.
       [apply fs_req; apply s_refl | apply fs_abs]. }
   step ltac:(apply tw_load with (t := TJ); reflexivity).
   step ltac:(apply tw_try_sub; [reflexivity | apply r6_p_in_place_ok]).
-  step ltac:(apply tw_unwrap).
+  step ltac:(apply tw_wunwrap, maybe_ctors_ok).
   step ltac:(apply tw_store with (t := TP); reflexivity).
   step ltac:(apply tw_load with (t := TJ); reflexivity).
   (* the explicit copy is fresh, so it is validated in place *)
   step ltac:(apply tw_copy).
   step ltac:(apply tw_try_dp; reflexivity).
-  step ltac:(apply tw_unwrap).
+  step ltac:(apply tw_wunwrap, maybe_ctors_ok).
   eapply t_sub; [ | eapply t_cons; [apply tw_store with (t := TDict IS); reflexivity | ] | apply ssub_refl ].
   { constructor; [apply ss_forget, s_refl | constructor]. }
   step ltac:(apply tw_load with (t := TDict IS); reflexivity).
@@ -192,6 +192,7 @@ Example r6_copy_never_stuck : forall n, eval nodefs n [OScope []] 0 [] r6_copy <
 Proof.
   intros n. eapply (soundness nosigs nodefs).
   - intros f ins outs [].
+  - apply maybe_ctors_ok.
   - exact r6_copy_typed.
 Qed.
 
@@ -228,10 +229,10 @@ Definition co_f := {| p_var := VCo; p_fresh := true |}.
 Definition inv_f := {| p_var := VInv; p_fresh := true |}.
 Definition inv_nf := {| p_var := VInv; p_fresh := false |}.
 
-(** [enum Maybe[a] = just a | none end]: covariant, fresh-covariant and
-    immutable when its argument is.  This is the built-in [TMaybe] of the
-    model, declared as an ordinary generic enum. *)
-Definition EMaybe := {| en_name := "Maybe"; en_params := [co_f]; en_imm := true |}.
+(** The built-in [enum Maybe[a] = just a | none end] (Syntax.v):
+    covariant, fresh-covariant and immutable when its argument is. *)
+Example maybe_params : en_params EMaybe = [co_f].
+Proof. reflexivity. Qed.
 
 Example maybe_just_wf : wf_payload EMaybe [TParam 0].
 Proof. reflexivity. Qed.
@@ -302,13 +303,14 @@ Proof. unfold wf_payload. simpl. discriminate. Qed.
 Example box_imm_rejected : wf_payload EBoxImm [TList (TParam 0)] -> False.
 Proof. unfold wf_payload. simpl. discriminate. Qed.
 
-(** And since the program gets stuck, no declaration environment types it,
-    whatever variances [Box] is given. *)
+(** And since the program gets stuck, no declaration environment types it
+    (every environment declares [Maybe]), whatever variances [Box] is given. *)
 Example hole_box_rejected : forall E ctors G s, E = EBox \/ E = EBoxCo \/ E = EBoxImm ->
+  maybe_ok {| g_sigs := fun _ _ _ => False; g_ctors := ctors |} ->
   ~ T {| g_sigs := fun _ _ _ => False; g_ctors := ctors |} G LNone LNone RNone (box_prog E) [] s.
 Proof.
-  intros E ctors G s HE HT.
-  refine (soundness _ nodefs _ G RNone (box_prog E) s HT 200 _); [intros f ins outs [] |].
+  intros E ctors G s HE Hm HT.
+  refine (soundness _ nodefs _ Hm G RNone (box_prog E) s HT 200 _); [intros f ins outs [] |].
   destruct HE as [->|[->| ->]]; vm_compute; reflexivity.
 Qed.
 
@@ -376,7 +378,7 @@ Definition defs1 (f : string) (b : prog) : string -> option prog :=
     as a [[str]]. *)
 Definition hole_tvar_imm : prog :=
   [ WNil; WStore "xs"
-  ; WLoad "xs"; WCall "g"; WUnwrap; WStr "s"; WPush; WDrop
+  ; WLoad "xs"; WCall "g"; wunwrap; WStr "s"; WPush; WDrop
   ; WLoad "xs"; WInt 0; WGetAt; WInt 1; WAdd ].
 
 Example hole_tvar_imm_stuck :
@@ -426,8 +428,8 @@ Proof. eapply div_tail; [apply tw_int |]. apply div_head. apply div_exit. Qed.
     [Maybe[[int | str]]]: the list inside is still [xs]. *)
 Definition hole_maybe_join : prog :=
   [ WNil; WInt 1; WPush; WStore "xs"; WNil; WStr "a"; WPush; WStore "ys"
-  ; WBool true; WIf [WLoad "xs"; WJust] [WLoad "ys"; WJust]
-  ; WUnwrap; WStr "s"; WPush; WDrop
+  ; WBool true; WIf [WLoad "xs"; wjust] [WLoad "ys"; wjust]
+  ; wunwrap; WStr "s"; WPush; WDrop
   ; WLoad "xs"; WInt 1; WGetAt; WInt 1; WAdd ].
 
 Example hole_maybe_join_stuck : is_stuck (run hole_maybe_join) = true.
@@ -474,7 +476,7 @@ Qed.
 
 Example top_return_never_stuck : forall n, eval nodefs n [OScope []] 0 [] top_return <> RStuck.
 Proof.
-  intros n. eapply (soundness nosigs nodefs); [intros f ins outs [] | exact top_return_typed].
+  intros n. eapply (soundness nosigs nodefs); [intros f ins outs [] | apply maybe_ctors_ok | exact top_return_typed].
 Qed.
 
 (** * Renaming a variable stored at a new type
@@ -563,7 +565,7 @@ Proof. vm_compute. reflexivity. Qed.
     literal: [mk as [int | str] "s" append]. *)
 Definition sigs_mk : genv :=
   {| g_sigs := fun f ins outs => f = "mk" /\ ins = [] /\ outs = Some [(Dp, TList TInt)];
-     g_ctors := fun _ _ => None |}.
+     g_ctors := maybe_ctors |}.
 
 Definition mk_body : prog := [WNil; WInt 1; WPush].
 
@@ -591,7 +593,7 @@ Proof.
 Qed.
 
 Example mk_use_never_stuck : forall n, eval (defs1 "mk" mk_body) n [OScope []] 0 [] mk_use <> RStuck.
-Proof. intros n. eapply (soundness sigs_mk); [exact mk_def_ok | exact mk_use_typed]. Qed.
+Proof. intros n. eapply (soundness sigs_mk); [exact mk_def_ok | apply maybe_ctors_ok | exact mk_use_typed]. Qed.
 
 (** * [map] results
 
@@ -641,6 +643,7 @@ Qed.
 
 Example map_widen_runs : exists H, run map_widen = ROk ONormal H [].
 Proof. vm_compute. eexists. reflexivity. Qed.
+
 
 (** * Builtins whose quote sees the elements
 
@@ -723,7 +726,7 @@ Proof. vm_compute. eexists. reflexivity. Qed.
 Example arms_same_name_rejected : forall G s, ~ T nosigs G LNone LNone RNone (arms_prog "n" "n") [] s.
 Proof.
   intros G s HT.
-  apply (soundness nosigs nodefs (fun f ins outs Hs => match Hs with end) G RNone _ s HT 200).
+  apply (soundness nosigs nodefs (fun f ins outs Hs => match Hs with end) (maybe_ctors_ok _) G RNone _ s HT 200).
   vm_compute. reflexivity.
 Qed.
 
@@ -757,7 +760,7 @@ Proof. vm_compute. reflexivity. Qed.
 Example hole_bind_reentry_rejected : forall G s, ~ T nosigs G LNone LNone RNone hole_bind_reentry [] s.
 Proof.
   intros G s HT.
-  apply (soundness nosigs nodefs (fun f ins outs Hs => match Hs with end) G RNone _ s HT 200).
+  apply (soundness nosigs nodefs (fun f ins outs Hs => match Hs with end) (maybe_ctors_ok _) G RNone _ s HT 200).
   vm_compute. reflexivity.
 Qed.
 
@@ -787,4 +790,4 @@ Proof.
 Qed.
 
 Example keep_on_stack_never_stuck : forall n, eval nodefs n [OScope []] 0 [] keep_on_stack <> RStuck.
-Proof. intros n. eapply (soundness nosigs nodefs); [intros f ins outs [] | exact keep_on_stack_typed]. Qed.
+Proof. intros n. eapply (soundness nosigs nodefs); [intros f ins outs [] | apply maybe_ctors_ok | exact keep_on_stack_typed]. Qed.

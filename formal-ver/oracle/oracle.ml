@@ -71,7 +71,7 @@ let rec ty_of = function
   | Atom "bool" -> TBool
   | Atom "bot" -> TBot
   | Atom "top" -> TTop
-  | Lst [ Atom "maybe"; t ] -> TMaybe (ty_of t)
+  | Lst [ Atom "maybe"; t ] -> TEnum (eMaybe, [ ty_of t ])  (* the built-in enum Maybe *)
   | Lst [ Atom "list"; t ] -> TList (ty_of t)
   | Lst [ Atom "dict"; t ] -> TRec ([], FDict (ty_of t))
   | Lst [ Atom "rec"; Lst fields; r ] ->
@@ -113,7 +113,7 @@ let rec string_of_ty = function
   | TBool -> "bool"
   | TBot -> "bot"
   | TTop -> "top"
-  | TMaybe t -> "(maybe " ^ string_of_ty t ^ ")"
+  | TEnum (e, [ t ]) when e = eMaybe -> "(maybe " ^ string_of_ty t ^ ")"
   | TList t -> "(list " ^ string_of_ty t ^ ")"
   | TRec ([], FDict t) -> "(dict " ^ string_of_ty t ^ ")"
   | TRec (fs, r) ->

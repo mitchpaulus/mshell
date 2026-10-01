@@ -153,7 +153,7 @@ Nothing committed. New code, not wired into any checker; the old checker and all
 ### Decisions made in the port
 
 - `Maybe` stays the `TKMaybe` kind, treated by the relations exactly as the covariant, fresh-covariant,
-  immutable enum `Maybe[a] = just a | none` (the model does the same and proves the two agree). Revisit in
+  immutable enum `Maybe[a] = just a | none` (in the model `Maybe` is that enum, `EMaybe`). Revisit in
   stage 4 when constructor patterns are built.
 - Go-only kinds: `float`, `bytes`, `path`, `datetime`, `null` are base kinds; a command has the list kind and
   is related only to itself; grids are related only to themselves; a grid is checkable when its schema is

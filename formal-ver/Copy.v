@@ -201,10 +201,6 @@ Proof.
       simpl;
       try (intros; match goal with Ec : Some _ = Some _ |- _ => injection Ec as <- <- end; exists [], [];
            split; [rewrite app_nil_r; reflexivity | split; [constructor | apply new_region_nil]]; fail).
-    - intros v t Hv IH Ha Hc v2 Hl Ex Ec.
-      destruct (vcopy g Ha v) as [[Hc' x']|] eqn:E; [|discriminate]. injection Ec as <- <-.
-      destruct (IH Ha Hc' x' Hl Ex E) as (N & O & E1 & D & Rg).
-      exists N, O. split; [exact E1 | split; [constructor; exact D | exact Rg]].
     - intros l a t Ea Sa Ha Hb v2 Hl Ex Ec.
       destruct (Hg l (HList a) Ha Hb v2 Ea (Hl l (or_introl eq_refl)) Ex Ec) as (N & O & E1 & D & Rg).
       exists N, O. split; [exact E1 | split; [eapply dtyped_sub; eauto | exact Rg]].

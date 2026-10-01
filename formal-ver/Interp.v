@@ -3,7 +3,8 @@
     [eval] returns [RStuck] exactly where the Go runtime would report a type
     mismatch ("Cannot add an integer to a String", a missing required key,
     stack underflow, a non-quote given to [x], ...).  Checked errors
-    ([?] on none, index out of range, reading an unset variable) return
+    (a match with no arm, such as [?] on none; index out of range; reading
+    an unset variable) return
     [RErr].  Soundness (Soundness.v) says a well-typed program never
     evaluates to [RStuck], for any amount of fuel. *)
 
@@ -26,7 +27,6 @@ Definition kind_of (H : heap) (v : val) : option kind :=
   | VInt _ => Some KInt
   | VStr _ => Some KStr
   | VBool _ => Some KBool
-  | VNone | VJust _ => Some KMaybe
   | VClo _ _ => Some KQuote
   | VCon E _ _ _ => Some (KEnum E)
   | VLoc l =>
@@ -82,12 +82,6 @@ Fixpoint validate (f : nat) (H : heap) (v : val) (t : ty) {struct f} : option bo
   | TTop => Some true
   | TMu t' => if mu_ok t' then validate f' H v (tunfold t') else Some false
   | TQuote _ _ => Some false          (* not checkable *)
-  | TMaybe t' =>
-      match v with
-      | VNone => Some true
-      | VJust x => validate f' H x t'
-      | _ => Some false
-      end
   | TList t' =>
       match v with
       | VLoc l =>
@@ -181,14 +175,9 @@ Definition ocopy (c : heap -> val -> option (heap * val)) (H : heap) (l : loc)
   end.
 
 (** Copy a value, copying the objects it references with [g]. *)
-Fixpoint vcopy (g : heap -> loc -> option (heap * val)) (H : heap) (v : val)
+Fixpoint vcopy (g : heap -> loc -> option (heap * val)) (H : heap) (v : val) {struct v}
   : option (heap * val) :=
   match v with
-  | VJust x =>
-      match vcopy g H x with
-      | Some (H1, x') => Some (H1, VJust x')
-      | None => None
-      end
   | VLoc l => g H l
   | VCon E c pts vs =>
       match mapo (vcopy g) H vs with
@@ -233,14 +222,6 @@ Fixpoint evalv (n : nat) (H : heap) (sc : loc) (st : list val) (e : prog) {struc
   | WDup => match st with v :: st' => next H (v :: v :: st') | _ => RStuck end
   | WDrop => match st with _ :: st' => next H st' | _ => RStuck end
   | WSwap => match st with a :: b :: st' => next H (b :: a :: st') | _ => RStuck end
-  | WNone => next H (VNone :: st)
-  | WJust => match st with v :: st' => next H (VJust v :: st') | _ => RStuck end
-  | WUnwrap =>
-      match st with
-      | VJust v :: st' => next H (v :: st')
-      | VNone :: _ => RErr
-      | _ => RStuck
-      end
   | WLoad x =>
       match scope_get H sc with
       | Some kvs => match lookup x kvs with Some v => next H (v :: st) | None => RErr end
@@ -362,7 +343,7 @@ Fixpoint evalv (n : nat) (H : heap) (sc : loc) (st : list val) (e : prog) {struc
       | VLoc l :: st' =>
           match nth_error H l with
           | Some (ODict kvs) =>
-              next H (match lookup k kvs with Some x => VJust x | None => VNone end :: st')
+              next H (match lookup k kvs with Some x => vjust x | None => vnone end :: st')
           | _ => RStuck
           end
       | _ => RStuck
@@ -400,7 +381,7 @@ Fixpoint evalv (n : nat) (H : heap) (sc : loc) (st : list val) (e : prog) {struc
       | VStr k :: VLoc l :: st' =>
           match nth_error H l with
           | Some (ODict kvs) =>
-              next H (match lookup k kvs with Some x => VJust x | None => VNone end :: st')
+              next H (match lookup k kvs with Some x => vjust x | None => vnone end :: st')
           | _ => RStuck
           end
       | _ => RStuck
@@ -427,8 +408,8 @@ Fixpoint evalv (n : nat) (H : heap) (sc : loc) (st : list val) (e : prog) {struc
       match st with
       | v :: st' =>
           match vd n' H v u with
-          | Some true => next H (VJust v :: st')
-          | Some false => next H (VNone :: st')
+          | Some true => next H (vjust v :: st')
+          | Some false => next H (vnone :: st')
           | None => RErr                     (* validation budget exhausted *)
           end
       | _ => RStuck

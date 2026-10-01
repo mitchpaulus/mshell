@@ -64,15 +64,8 @@ Qed.
 
 Lemma dtyped_nonloc Σ H v t O :
   dtyped sigs Σ H v t O ->
-  match v with VLoc _ | VJust _ | VCon _ _ _ _ => True | _ => O = [] end.
+  match v with VLoc _ | VCon _ _ _ _ => True | _ => O = [] end.
 Proof. induction 1; simpl; auto. Qed.
-
-Lemma dtyped_just Σ H v t O :
-  dtyped sigs Σ H v t O -> forall x, v = VJust x -> exists t', dtyped sigs Σ H x t' O.
-Proof.
-  induction 1; intros x0 Ev; try discriminate; eauto.
-  inversion Ev; subst. eauto.
-Qed.
 
 Lemma dtyped_con Σ H v t O :
   dtyped sigs Σ H v t O -> forall E c pts vs, v = VCon E c pts vs ->
@@ -82,9 +75,6 @@ Proof.
   induction 1; intros E0 c0 pts0 vs0 Ev; try discriminate; eauto.
   inversion Ev; subst. eauto 10.
 Qed.
-
-Lemma vtyped_just Σ v t : vtyped sigs Σ v t -> forall x, v = VJust x -> exists t', vtyped sigs Σ x t'.
-Proof. induction 1; intros x0 Ev; try discriminate; eauto. inversion Ev; subst. eauto. Qed.
 
 Lemma vtyped_con Σ v t : vtyped sigs Σ v t -> forall E c pts vs, v = VCon E c pts vs ->
   exists a, g_ctors sigs E c = Some pts /\ wf_payload E pts /\ vtypedl sigs Σ vs (map (subst a) pts).
@@ -168,10 +158,6 @@ Proof.
   - discriminate.
   - apply dt_top with (t := t); exact D.
   - destruct v; try discriminate.
-    + apply dtyped_nonloc in D. subst. constructor.
-    + destruct (dtyped_just _ _ _ _ _ D v eq_refl) as (t' & D').
-      constructor. eapply IH; eauto.
-  - destruct v; try discriminate.
     destruct (nth_error H l) as [[vs| |]|] eqn:E; try discriminate.
     destruct (dtyped_loc_list _ _ _ _ _ D l vs eq_refl E) as (a & Os & Ds & -> & N).
     econstructor; eauto. eapply dtypeds_retype; eauto.
@@ -215,10 +201,6 @@ Proof.
   - destruct v; try discriminate. split; [constructor | reflexivity].
   - destruct v; try discriminate. split; [constructor | reflexivity].
   - destruct v; try discriminate. split; [constructor | reflexivity].
-  - destruct v; try discriminate.
-    + split; [constructor | reflexivity].
-    + destruct (vtyped_just _ _ _ V v eq_refl) as (t' & V').
-      destruct (IH u v t' V' Hv Hi) as [Hv' Hl]. split; [constructor; auto | exact Hl].
   - apply andb_true_iff in Hi as [H1 H2].
     destruct (validate f H v u1) as [[|]|] eqn:E1; try discriminate.
     + destruct (IH u1 v t V E1 H1). split; [apply vt_unionl|]; auto.

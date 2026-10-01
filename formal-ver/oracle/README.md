@@ -68,8 +68,9 @@ and `payload_rsub` (plan stage 2) do.
   that is being expanded written as `(rv K)`, where `K` counts the `mu`s between the reference and
   the one it names. Aliases that refer to each other become nested `mu`s. This is the model's
   meaning of an alias (`formal-ver/README.md`, "Recursive types are closed μ-types").
-- `Maybe[T]`, which the checker implements as the enum `Maybe[a] = just a | none`, is written
-  `(maybe T)`. The model proves the two agree (`maybe_*` in `Examples.v`).
+- `Maybe[T]` is written `(maybe T)`. In the model `Maybe` is the built-in enum
+  `Maybe[a] = just a | none` (`EMaybe` in `Syntax.v`), and `(maybe T)` is shorthand for that enum
+  at `T`.
 - Base types other than `int`, `str` and `bool` have no model counterpart. Generate types over the
   three.
 

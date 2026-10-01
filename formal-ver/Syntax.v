@@ -47,8 +47,8 @@ Definition loc := nat.
 
     [p_var] is a parameter's variance for subtyping.  [p_fresh] says every
     occurrence of the parameter is in a data position (a payload, a list
-    element, a dict value, a [Maybe] or a fresh-covariant argument of an
-    enum, never under a quote), so a *fresh* value may retype that argument
+    element, a dict value or a fresh-covariant argument of an enum, never
+    under a quote), so a *fresh* value may retype that argument
     covariantly ([rsub]).  [en_imm] says a value of the enum holds no list
     or dict when its arguments cannot.
 
@@ -104,9 +104,8 @@ Qed.
 
 Inductive ty : Type :=
 | TInt | TStr | TBool
-| TBot                     (* the empty type; [none : Maybe Bot] *)
+| TBot                     (* the empty type; [none : Maybe[Bot]] *)
 | TTop                     (* an unknown type: abstract contents *)
-| TMaybe (t : ty)
 | TList (t : ty)
 | TRec (fs : list (label * fstat)) (r : fstat)
 | TUnion (a b : ty)
@@ -154,7 +153,6 @@ Definition forallb2 {A B : Type} (f : A -> B -> bool) :=
 Fixpoint subst (a : list ty) (t : ty) : ty :=
   match t with
   | TParam i => nth i a TBot
-  | TMaybe t' => TMaybe (subst a t')
   | TList t' => TList (subst a t')
   | TRec fs r => TRec (map (fun p => (fst p, fsubst a (snd p))) fs) (fsubst a r)
   | TUnion x y => TUnion (subst a x) (subst a y)
@@ -173,7 +171,6 @@ with fsubst (a : list ty) (f : fstat) : fstat :=
 Fixpoint tsub (th : nat -> ty) (t : ty) : ty :=
   match t with
   | TVar x => th x
-  | TMaybe t' => TMaybe (tsub th t')
   | TList t' => TList (tsub th t')
   | TRec fs r => TRec (map (fun p => (fst p, ftsub th (snd p))) fs) (ftsub th r)
   | TUnion x y => TUnion (tsub th x) (tsub th y)
@@ -191,7 +188,7 @@ with ftsub (th : nat -> ty) (f : fstat) : fstat :=
 Fixpoint fvt (t : ty) : list nat :=
   match t with
   | TVar x => [x]
-  | TMaybe t' | TList t' => fvt t'
+  | TList t' => fvt t'
   | TRec fs r => flat_map (fun p => ffvt (snd p)) fs ++ ffvt r
   | TUnion x y => fvt x ++ fvt y
   | TQuote ins outs => flat_map fvt ins ++ match outs with Some o => flat_map fvt o | None => [] end
@@ -210,7 +207,6 @@ Hypothesis HStr : P TStr.
 Hypothesis HBool : P TBool.
 Hypothesis HBot : P TBot.
 Hypothesis HTop : P TTop.
-Hypothesis HMaybe : forall t, P t -> P (TMaybe t).
 Hypothesis HList : forall t, P t -> P (TList t).
 Hypothesis HRec : forall fs r, Forall (fun p => Q (snd p)) fs -> Q r -> P (TRec fs r).
 Hypothesis HUnion : forall a b, P a -> P b -> P (TUnion a b).
@@ -230,7 +226,6 @@ Hypothesis QOpen : Q FOpen.
 Fixpoint ty_ind2 (t : ty) : P t :=
   match t with
   | TInt => HInt | TStr => HStr | TBool => HBool | TBot => HBot | TTop => HTop
-  | TMaybe t' => HMaybe t' (ty_ind2 t')
   | TList t' => HList t' (ty_ind2 t')
   | TRec fs r =>
       HRec fs r
@@ -283,7 +278,7 @@ Fixpoint tclosed (d : nat) (t : ty) : bool :=
   | TParam _ | TVar _ => false
   | TRV n => n <? d
   | TMu b => tclosed (S d) b
-  | TMaybe t' | TList t' => tclosed d t'
+  | TList t' => tclosed d t'
   | TRec fs r => forallb (fun p => ftclosed d (snd p)) fs && ftclosed d r
   | TUnion a b => tclosed d a && tclosed d b
   | TQuote ins outs =>
@@ -301,7 +296,6 @@ Fixpoint musubst (k : nat) (s : ty) (t : ty) : ty :=
   match t with
   | TRV n => if Nat.eqb n k then s else t
   | TMu b => TMu (musubst (S k) s b)
-  | TMaybe t' => TMaybe (musubst k s t')
   | TList t' => TList (musubst k s t')
   | TRec fs r => TRec (map (fun p => (fst p, fmusubst k s (snd p))) fs) (fmusubst k s r)
   | TUnion a b => TUnion (musubst k s a) (musubst k s b)
@@ -320,15 +314,27 @@ with fmusubst (k : nat) (s : ty) (f : fstat) : fstat :=
 Definition tunfold (t : ty) : ty := musubst 0 (TMu t) t.
 
 (** Runtime kinds.  Each enum is its own kind, shared by all its instances. *)
-Inductive kind := KInt | KStr | KBool | KMaybe | KList | KDict | KQuote | KEnum (E : ename).
+Inductive kind := KInt | KStr | KBool | KList | KDict | KQuote | KEnum (E : ename).
 
 Definition kind_eqb (a b : kind) : bool :=
   match a, b with
-  | KInt, KInt | KStr, KStr | KBool, KBool | KMaybe, KMaybe
+  | KInt, KInt | KStr, KStr | KBool, KBool
   | KList, KList | KDict, KDict | KQuote, KQuote => true
   | KEnum x, KEnum y => ename_eqb x y
   | _, _ => false
   end.
+
+(** ** The built-in [Maybe]
+
+    [enum Maybe[a] = just a | none end]: an ordinary generic enum, covariant,
+    fresh-covariant, and immutable when its argument is.  [TMaybe t] is its
+    type at [t].  The typing environment must declare its two constructors
+    ([maybe_ok] in Typing.v); its values and the words [just], [none] and
+    [?] are below the definitions of words and values. *)
+Definition EMaybe : ename :=
+  {| en_name := "Maybe"; en_params := [{| p_var := VCo; p_fresh := true |}]; en_imm := true |}.
+
+Notation TMaybe t := (TEnum EMaybe [t]).
 
 (** ** Words
 
@@ -341,7 +347,6 @@ Inductive word : Type :=
 | WAdd                          (* int int -- int *)
 | WCat                          (* str str -- str *)
 | WDup | WDrop | WSwap
-| WNone | WJust | WUnwrap       (* [?]: none is a checked error *)
 | WLoad (x : var) | WStore (x : var)
 | WQuote (e : list word) | WExec
 | WIf (e1 e2 : list word)
@@ -366,16 +371,24 @@ Inductive word : Type :=
 
 Definition prog := list word.
 
+(** [just], [none], and [?] (unwrap): a match with only a [just] arm, so [?]
+    on [none] is a checked error, like any constructor with no arm. *)
+Notation wjust := (WCon EMaybe "just"%string [TParam 0]).
+Notation wnone := (WCon EMaybe "none"%string []).
+Notation wunwrap := (WCase EMaybe [("just"%string, [])]).
+
 (** ** Values and heap *)
 Inductive val : Type :=
 | VInt (n : nat) | VStr (s : string) | VBool (b : bool)
-| VNone | VJust (v : val)
 | VLoc (l : loc)                 (* a list or dict object *)
 | VClo (sc : loc) (e : prog)     (* a quote closing over a variable scope *)
 | VCon (E : ename) (c : cname) (pts : list ty) (vs : list val).
     (* an enum value: its enum, constructor, the constructor's declared
        payload types (the runtime's pointer to the declaration, which the
        validator reads) and its payloads *)
+
+Notation vjust v := (VCon EMaybe "just"%string [TParam 0] [v]).
+Notation vnone := (VCon EMaybe "none"%string [] []).
 
 Inductive obj : Type :=
 | OList (vs : list val)

@@ -55,12 +55,6 @@ Fixpoint cval (f : nat) (H : heap) (P : list (loc * ty)) (v : val) (t : ty) {str
   | TTop => Some true
   | TMu t' => if mu_ok t' then cval f' H P v (tunfold t') else Some false
   | TQuote _ _ => Some false
-  | TMaybe t' =>
-      match v with
-      | VNone => Some true
-      | VJust x => cval f' H P x t'
-      | _ => Some false
-      end
   | TList t' =>
       match v with
       | VLoc l =>
@@ -196,10 +190,6 @@ Proof.
   - discriminate.
   - apply dt_top with (t := t); exact D.
   - destruct v; try discriminate.
-    + apply (dtyped_nonloc sigs) in D. subst. constructor.
-    + destruct (dtyped_just sigs _ _ _ _ _ D v eq_refl) as (t' & D').
-      constructor. eapply IH; eauto.
-  - destruct v; try discriminate.
     destruct (pmem l (TList u) P) eqn:Pm.
     { exfalso. apply pmem_in in Pm. exact (Hoff _ _ Pm (dtyped_head_in _ _ _ _ _ D)). }
     destruct (nth_error H l) as [[vs| |]|] eqn:E; try discriminate.
@@ -249,10 +239,6 @@ Proof.
   - destruct v; try discriminate. split; [constructor | reflexivity].
   - destruct v; try discriminate. split; [constructor | reflexivity].
   - destruct v; try discriminate. split; [constructor | reflexivity].
-  - destruct v; try discriminate.
-    + split; [constructor | reflexivity].
-    + destruct (vtyped_just sigs _ _ _ V v eq_refl) as (t' & V').
-      destruct (IH P u v t' V' Hv Hi) as [Hv' Hl]. split; [constructor; auto | exact Hl].
   - apply andb_true_iff in Hi as [H1 H2].
     destruct (cval f H P v u1) as [[|]|] eqn:E1; try discriminate.
     + destruct (IH P u1 v t V E1 H1). split; [apply vt_unionl|]; auto.
@@ -295,8 +281,6 @@ Proof.
   - destruct (vt_bool_inv _ _ _ V) as [? ->]. discriminate.
   - exfalso. exact (vt_bot _ _ _ V).
   - discriminate.
-  - destruct (vt_maybe_inv _ _ _ _ V) as [->|(x & -> & Vx)]; [discriminate|].
-    apply IH; auto.
   - destruct (vt_list_inv _ _ _ _ V) as (l & a & -> & El & [Hat Hta]).
     destruct (pmem l (TList t) P); [discriminate|].
     assert (Hl : ~ In l R) by (apply Hr; simpl; auto).
@@ -361,7 +345,6 @@ Proof.
   induction f as [|f IH]; intros P t v O D Hc; [simpl; discriminate|].
   destruct t; simpl in Hc |- *; try discriminate Hc;
     inversion D; subst; simpl; try discriminate.
-  - apply IH with (O := O); auto.
   - destruct (pmem l (TList t) P); [discriminate|].
     match goal with E : nth_error H _ = Some (OList _) |- _ => rewrite E end.
     apply oforall_nf. intros x Hx.
@@ -411,11 +394,11 @@ Qed.
 End C.
 
 (** Type soundness with the validator that accepts cycles. *)
-Theorem soundness_cycles : forall sigs defs, def_ok sigs defs ->
+Theorem soundness_cycles : forall sigs defs, def_ok sigs defs -> maybe_ok sigs ->
   forall G R e s, T sigs G LNone LNone R e [] s ->
   forall n, evalv cvalidate defs n [OScope []] 0 [] e <> RStuck.
 Proof.
-  intros sigs defs Hdefs. apply (soundness_v sigs defs Hdefs cvalidate).
+  intros sigs defs Hdefs Hmaybe. apply (soundness_v sigs defs Hdefs Hmaybe cvalidate).
   - intros Σ H f u v t O D E. eapply cvalidate_fresh; eauto.
   - intros Σ H f u v t V E I. eapply cvalidate_imm; eauto.
 Qed.

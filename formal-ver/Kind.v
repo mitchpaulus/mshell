@@ -25,7 +25,6 @@ Lemma kind_head_top t k u : kind_of_ty t = Some k -> kind_top k = Some u -> sub 
 Proof.
   destruct t; simpl; intros E1 E2; inversion E1; subst; simpl in E2; inversion E2; subst;
     try apply s_refl; try apply s_top.
-  - apply s_maybe, s_top.
   - apply s_rec. intros k. unfold field_at at 2. simpl. apply fs_open.
 Qed.
 
@@ -55,7 +54,6 @@ Proof.
   - destruct t; simpl in Hk; try discriminate; inversion Hk; subst;
       simpl in Ht; inversion Ht; subst.
     + apply s_refl. + apply s_refl. + apply s_refl.
-    + apply s_maybe; apply s_top.
     + apply s_rec. intros k. unfold field_at at 2. simpl. apply fs_open.
     + apply s_top.
   - discriminate.
@@ -68,7 +66,6 @@ Proof.
   - discriminate.
   - (* a recursive type: the pattern gives unknown contents of the kind *)
     simpl in Ht. eapply kind_head_top; eauto.
-  - simpl in Hk; inversion Hk; subst; simpl in Ht; inversion Ht; subst. apply s_maybe; auto.
   - simpl in Hk; inversion Hk; subst; simpl in Ht; inversion Ht; subst. apply s_list; auto.
   - simpl in Hk; inversion Hk; subst; simpl in Ht; inversion Ht; subst. apply s_rec; auto.
   - simpl in Hk; inversion Hk; subst; simpl in Ht; inversion Ht; subst. apply s_quote; auto.
@@ -88,7 +85,6 @@ Proof.
   - simpl. eapply tunion_r; eauto.
   - discriminate.
   - simpl. apply sub_fold, sf_mur; auto.
-  - simpl in Hk; inversion Hk; subst; simpl; rewrite Hq. apply s_maybe; auto.
   - simpl in Hk; inversion Hk; subst; simpl; rewrite Hq. apply s_list; auto.
   - simpl in Hk; inversion Hk; subst; simpl; rewrite Hq. apply s_rec; auto.
   - simpl in Hk; inversion Hk; subst; simpl; rewrite Hq. apply s_quote; auto.
@@ -205,8 +201,6 @@ Proof.
   - exists TInt, KInt; repeat split; [constructor | apply s_refl].
   - exists TStr, KStr; repeat split; [constructor | apply s_refl].
   - exists TBool, KBool; repeat split; [constructor | apply s_refl].
-  - exists (TMaybe t), KMaybe; repeat split; [constructor | apply s_refl].
-  - exists (TMaybe t), KMaybe; repeat split; [constructor; auto | apply s_refl].
   - destruct (loc_obj Σ H R l (HList a) Hh Hlen) as (o & Eo & Ok); auto.
     { apply Hl; apply in_eq. }
     destruct o; simpl in Ok; try contradiction.
@@ -239,8 +233,6 @@ Proof.
   - exists TInt, KInt; repeat split; [constructor | apply s_refl].
   - exists TStr, KStr; repeat split; [constructor | apply s_refl].
   - exists TBool, KBool; repeat split; [constructor | apply s_refl].
-  - exists (TMaybe t), KMaybe; repeat split; [constructor | apply s_refl].
-  - exists (TMaybe t), KMaybe; repeat split; [constructor; auto | apply s_refl].
   - exists (TQuote ins outs), KQuote; repeat split; [constructor; auto | apply s_refl].
   - exists (TList t), KList; repeat split.
     + econstructor; eauto.

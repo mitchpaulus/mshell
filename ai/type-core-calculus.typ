@@ -2053,7 +2053,7 @@ formalizes.
   columns: (auto, 1fr),
   inset: 5pt, stroke: 0.5pt + luma(180),
   table.header([*File*], [*Contents*]),
-  [`Syntax.v`], [types (base, $bot$, unknown, `Maybe`, lists, per-label dict/shape types, unions, quotes with `never`, recursive types `TMu`), core words, values, heap objects],
+  [`Syntax.v`], [types (base, $bot$, unknown, lists, per-label dict/shape types, unions, quotes with `never`, generic enums, recursive types `TMu`), the built-in enum `Maybe`, core words, values, heap objects],
   [`Interp.v`], [the interpreter: `RStuck` exactly where the Go runtime reports a type mismatch; validation, which unfolds recursive types; the per-path `deepCopy` (`dcopy`)],
   [`Subtyping.v`], [$<=$ (per label) and fresh retyping $subset.sq.eq$ as greatest fixed points, so recursive types compare as infinite trees; transitivity],
   [`Typing.v`], [the typing judgment with freshness marks and break/continue/return contexts],
@@ -2084,7 +2084,8 @@ enum kind patterns, validation and `deepCopy` of enum values), validation with a
 variables in heap scopes captured by quotes, quotes with frame polymorphism and `never`,
 `if`, `loop` and loop-forever, `break`/`continue` through `each`, `return`, `exit`, polymorphic and
 recursive definitions, `tryAs` in its three modes, `deepCopy`, type-changing updates of fresh records,
-match bindings as stores into the scope, validation completeness for checkable targets, and
+match bindings as stores into the scope, `Maybe` as an ordinary generic enum declared by the
+environment, validation completeness for checkable targets, and
 recursive aliases (subtyping and fresh retyping on infinite trees, their transitivity, validation,
 immutability, checkability, kind patterns, `deepCopy` and commit of recursive values), and the checker's
 decision procedures for $<=$ and $subset.sq.eq$ on them.
@@ -2094,9 +2095,6 @@ decision procedures for $<=$ and $subset.sq.eq$ on them.
 - *Aliases as names.* The model writes a recursive alias as the recursive type it denotes (`TMu`,
   with nested ones for aliases that refer to each other); the checker keeps names. Generic aliases
   are not modeled (@sec-alias).
-- *`Maybe` as an instance of enums.* The model keeps `Maybe` as a built-in type and also shows the
-  declaration `enum Maybe[a] = just a | none end` is well formed, covariant and fresh-covariant
-  (`maybe_*` in `Examples.v`). The checker can implement `Maybe` as that enum.
 - *Exhaustiveness.* A constructor with no arm is a checked error in the model; checking coverage
   statically is not a soundness question.
 - *Grids, grid views, commands*. The model covers them through their core form: records of

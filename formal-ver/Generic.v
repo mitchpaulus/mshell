@@ -53,7 +53,6 @@ Proof.
                  (fun f => forall th1 th2, agree th1 th2 (ffvt f) -> ftsub th1 f = ftsub th2 f));
     simpl; auto.
   - intros t IH th1 th2 A. f_equal; auto.
-  - intros t IH th1 th2 A. f_equal; auto.
   - intros fs r Hfs Hr th1 th2 A. f_equal.
     + apply map_ext_Forall. eapply Forall_impl_in; [exact Hfs|].
       intros [k f] Hin Hq. simpl in *. f_equal. apply Hq.
@@ -114,7 +113,6 @@ Proof.
   apply (ty_ind2 (fun t => fvt t = [] -> tsub th (subst a t) = subst (map (tsub th) a) t)
                  (fun f => ffvt f = [] -> ftsub th (fsubst a f) = fsubst (map (tsub th) a) f));
     simpl; auto; try discriminate.
-  - intros t IH E. f_equal; auto.
   - intros t IH E. f_equal; auto.
   - intros fs r Hfs Hr E. apply app_eq_nil in E as [E1 E2]. f_equal; auto.
     rewrite map_map. apply map_ext_Forall. eapply Forall_impl_in; [exact Hfs|].
@@ -187,7 +185,6 @@ Proof.
   apply (ty_ind2 (fun t => forall d, tclosed d t = true -> tsub th t = t)
                  (fun f => forall d, ftclosed d f = true -> ftsub th f = f));
     simpl; intros; auto; try discriminate.
-  - f_equal; eauto.
   - f_equal; eauto.
   - apply andb_true_iff in H1 as [H1 H2]. f_equal; eauto.
     rewrite <- (map_id fs) at 2. apply map_ext_Forall. rewrite Forall_forall in H |- *.
@@ -557,10 +554,7 @@ Proof.
     (fun B C R e s1 s2 _ => forall th,
        T sigs (esubst th G) (lsubst th B) (lsubst th C) (rsubst th R) e (ssubst th s1) (ssubst th s2)));
     intros; ss.
-  (* literals, arithmetic, shuffles, Maybe *)
-  - constructor.
-  - constructor.
-  - constructor.
+  (* literals, arithmetic, shuffles *)
   - constructor.
   - constructor.
   - constructor.
@@ -720,9 +714,10 @@ Qed.
 Theorem soundness_generic : forall sigs gs defs,
   (forall f ins outs, g_sigs sigs f ins outs <-> instances gs f ins outs) ->
   (forall E c pts, g_ctors sigs E c = Some pts -> wf_payload E pts) ->
+  maybe_ok sigs ->
   gdefs_ok sigs gs defs ->
   forall G R e s, T sigs G LNone LNone R e [] s ->
   forall n, eval defs n [OScope []] 0 [] e <> RStuck.
 Proof.
-  intros sigs gs defs Hs Hc Hg. apply soundness. eapply generic_def_ok; eauto.
+  intros sigs gs defs Hs Hc Hm Hg. apply soundness; auto. eapply generic_def_ok; eauto.
 Qed.

@@ -70,7 +70,6 @@ Definition tunion (a b : ty) : ty :=
 Definition kind_top (k : kind) : option ty :=
   match k with
   | KInt => Some TInt | KStr => Some TStr | KBool => Some TBool
-  | KMaybe => Some (TMaybe TTop)
   | KDict => Some (TRec [] FOpen)
   | KQuote => Some TTop
   | KList => None           (* needs the abstract rule [tw_kind_list] *)
@@ -80,7 +79,7 @@ Definition kind_top (k : kind) : option ty :=
 Definition kind_of_ty (t : ty) : option kind :=
   match t with
   | TInt => Some KInt | TStr => Some KStr | TBool => Some KBool
-  | TMaybe _ => Some KMaybe | TList _ => Some KList
+  | TList _ => Some KList
   | TRec _ _ => Some KDict | TQuote _ _ => Some KQuote
   | TEnum E _ => Some (KEnum E)
   | TBot | TTop | TUnion _ _ | TParam _ | TVar _ | TMu _ | TRV _ => None
@@ -132,6 +131,20 @@ Record genv := {
   g_ctors : ename -> cname -> option (list ty)
 }.
 
+(** The environment declares the built-in [enum Maybe[a] = just a | none end]
+    (Syntax.v), which [get] and [tryAs] return. *)
+Definition maybe_ok (sigs : genv) : Prop :=
+  g_ctors sigs EMaybe "just"%string = Some [TParam 0] /\ g_ctors sigs EMaybe "none"%string = Some [].
+
+(** The constructors of [Maybe], for an environment that declares no other enum. *)
+Definition maybe_ctors (E : ename) (c : cname) : option (list ty) :=
+  if ename_eqb E EMaybe then
+    if String.eqb c "just" then Some [TParam 0] else if String.eqb c "none" then Some [] else None
+  else None.
+
+Lemma maybe_ctors_ok sg : maybe_ok {| g_sigs := sg; g_ctors := maybe_ctors |}.
+Proof. split; reflexivity. Qed.
+
 Section Typing.
 Variable sigs : genv.
 Variable G : tenv.
@@ -145,9 +158,6 @@ Inductive TW : lctx -> lctx -> rctx -> word -> sty -> sty -> Prop :=
 | tw_dup B C R t s : TW B C R WDup ((Sh, t) :: s) ((Sh, t) :: (Sh, t) :: s)
 | tw_drop B C R p s : TW B C R WDrop (p :: s) s
 | tw_swap B C R p q s : TW B C R WSwap (p :: q :: s) (q :: p :: s)
-| tw_none B C R s : TW B C R WNone s ((Sh, TMaybe TBot) :: s)
-| tw_just B C R m t s : TW B C R WJust ((m, t) :: s) ((m, TMaybe t) :: s)
-| tw_unwrap B C R m t s : TW B C R WUnwrap ((m, TMaybe t) :: s) ((m, t) :: s)
 | tw_load B C R x t s : lookup x G = Some t -> TW B C R (WLoad x) s ((Sh, t) :: s)
 | tw_store B C R x t s : lookup x G = Some t -> TW B C R (WStore x) ((Sh, t) :: s) s
 | tw_quote B C R e ins outs s :
@@ -301,3 +311,30 @@ Definition def_ok sigs (defs : string -> option prog) : Prop :=
     | Some o => forall s0, T sigs G LNone LNone (RSome (o ++ s0)) body (ins ++ s0) (o ++ s0)
     | None => forall s0 s', T sigs G LNone LNone RNone body (ins ++ s0) s'
     end.
+
+(** ** [just], [none] and [?]
+
+    They are a constructor and a match of the built-in [Maybe] (Syntax.v);
+    in an environment that declares it these are their typings. *)
+Section MaybeWords.
+Variable sigs : genv.
+Hypothesis Hmaybe : maybe_ok sigs.
+Variable G : tenv.
+
+Lemma tw_wnone B C R t s : TW sigs G B C R wnone s ((Sh, TMaybe t) :: s).
+Proof. apply (tw_con_sh sigs G B C R EMaybe "none"%string [] [t] s (proj2 Hmaybe) eq_refl). Qed.
+
+Lemma tw_wjust B C R m t s : TW sigs G B C R wjust ((m, t) :: s) ((m, TMaybe t) :: s).
+Proof.
+  destruct m.
+  - apply (tw_con_sh sigs G B C R EMaybe "just"%string [TParam 0] [t] s (proj1 Hmaybe) eq_refl).
+  - apply (tw_con_dp sigs G B C R EMaybe "just"%string [TParam 0] [t] s (proj1 Hmaybe) eq_refl).
+Qed.
+
+Lemma tw_wunwrap B C R m t s : TW sigs G B C R wunwrap ((m, TMaybe t) :: s) ((m, t) :: s).
+Proof.
+  apply tw_case. intros c pts e Ec Ea. simpl in Ea.
+  destruct (String.eqb_spec c "just"%string) as [->|_]; [|discriminate].
+  injection Ea as <-. rewrite (proj1 Hmaybe) in Ec. injection Ec as <-. apply t_nil.
+Qed.
+End MaybeWords.

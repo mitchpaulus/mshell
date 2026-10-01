@@ -13,6 +13,7 @@ Section Sound.
 Variable sigs : genv.
 Variable defs : string -> option prog.
 Hypothesis Hdefs : def_ok sigs defs.
+Hypothesis Hmaybe : maybe_ok sigs.
 
 (** The validator [tryAs] runs.  Soundness needs only this of it: an answer
     of [true] is right for a fresh value (a tree) and for a target with no
@@ -338,42 +339,6 @@ Proof.
   simpl. eapply (next_ok n IH); [exact HT | | | apply scope_ext_refl].
   - split; [|exact Bd]. simpl. eapply inv_swap; exact Iv.
   - len.
-Qed.
-
-Lemma w_just G B C R m t rest s s3 Σ H sc stk Sf sf Os :
-  T sigs G B C R rest ((m, TMaybe t) :: s) s3 ->
-  INV Σ H sc G (stk ++ Sf) (((m, t) :: s) ++ sf) Os ->
-  length stk = length ((m, t) :: s) ->
-  res_ok Σ sc G B C R s3 Sf sf (evalv vd defs (S n) H sc stk (WJust :: rest)).
-Proof.
-  intros HT [Iv Bd] L. destruct stk as [|v stk]; try len. simpl in Iv.
-  destruct (inv_cons_Os _ _ _ _ _ _ _ _ _ Iv) as (O & Os' & ->).
-  simpl. eapply (next_ok n IH); [exact HT | | len | apply scope_ext_refl].
-  split; [|exact Bd]. simpl. destruct m.
-  - apply inv_pop_sh in Iv as (-> & V & Hl & Iv).
-    apply inv_push_sh; [exact Iv | constructor; exact V | exact Hl].
-  - pose proof (slot_at _ _ _ _ _ [] _ _ [] _ _ [] _ _ eq_refl eq_refl Iv) as Sl.
-    eapply inv_replace_top_dp; [exact Iv | constructor; exact Sl].
-Qed.
-
-Lemma w_unwrap G B C R m t rest s s3 Σ H sc stk Sf sf Os :
-  T sigs G B C R rest ((m, t) :: s) s3 ->
-  INV Σ H sc G (stk ++ Sf) (((m, TMaybe t) :: s) ++ sf) Os ->
-  length stk = length ((m, TMaybe t) :: s) ->
-  res_ok Σ sc G B C R s3 Sf sf (evalv vd defs (S n) H sc stk (WUnwrap :: rest)).
-Proof.
-  intros HT [Iv Bd] L. destruct stk as [|v stk]; try len. simpl in Iv.
-  destruct (inv_cons_Os _ _ _ _ _ _ _ _ _ Iv) as (O & Os' & ->).
-  destruct m.
-  - pose proof Iv as Iv0. apply inv_pop_sh in Iv as (-> & V & Hl & Iv).
-    apply vt_maybe_inv in V as [->|(x & -> & Vx)]; simpl; [exact Logic.I|].
-    eapply (next_ok n IH); [exact HT | | len | apply scope_ext_refl].
-    split; [|exact Bd]. simpl. apply inv_push_sh; [exact Iv | exact Vx | exact Hl].
-  - pose proof (slot_at _ _ _ _ _ [] _ _ [] _ _ [] _ _ eq_refl eq_refl Iv) as Sl.
-    unfold slot_ok in Sl; simpl in Sl.
-    apply dt_maybe_inv in Sl as [[-> ->]|(x & -> & Dx)]; simpl; [exact Logic.I|].
-    eapply (next_ok n IH); [exact HT | | len | apply scope_ext_refl].
-    split; [|exact Bd]. simpl. eapply inv_replace_top_dp; [exact Iv | exact Dx].
 Qed.
 
 Lemma w_load G B C R x t rest s s3 Σ H sc stk Sf sf Os :
@@ -822,9 +787,9 @@ Proof.
   simpl. rewrite Eo.
   eapply (next_ok n IH); [exact HT | | len | apply scope_ext_refl].
   split; [|exact Bd]. simpl. apply inv_push_sh; [exact Iv | |].
-  - destruct (lookup k kvs) as [x|] eqn:Ex; constructor.
+  - destruct (lookup k kvs) as [x|] eqn:Ex; [apply (vt_vjust sigs Hmaybe) | apply (vt_vnone sigs Hmaybe)].
     eapply vtyped_sub; [eapply obj_dict_lookup; eauto | apply fsub_fty; auto].
-  - destruct (lookup k kvs) as [x|] eqn:Ex; simpl; [|tauto].
+  - destruct (lookup k kvs) as [x|] eqn:Ex; simpl; [rewrite app_nil_r | tauto].
     intros l0 Hl0. apply Hr. eapply olocs_lookup; eauto.
 Qed.
 
@@ -842,10 +807,10 @@ Proof.
   simpl. rewrite Eo.
   eapply (next_ok n IH); [exact HT | | len | apply scope_ext_refl].
   split; [|exact Bd]. simpl. apply inv_push_sh; [exact Iv | |].
-  - destruct (lookup k kvs) as [x|] eqn:Ex; constructor.
+  - destruct (lookup k kvs) as [x|] eqn:Ex; [apply (vt_vjust sigs Hmaybe) | apply (vt_vnone sigs Hmaybe)].
     eapply vtyped_sub; [eapply obj_dict_lookup; eauto |].
     eapply sub_trans; [apply fsub_fty; apply Hf | apply Ht].
-  - destruct (lookup k kvs) as [x|] eqn:Ex; simpl; [|tauto].
+  - destruct (lookup k kvs) as [x|] eqn:Ex; simpl; [rewrite app_nil_r | tauto].
     intros l0 Hl0. apply Hr. eapply olocs_lookup; eauto.
 Qed.
 
@@ -962,7 +927,7 @@ Proof.
   unfold slot_ok in Pv; simpl in Pv.
   apply dt_rec_inv in Pv as (l & kvs0 & Osl & -> & _ & _ & _ & _ & -> & _).
   destruct (inv_swap' _ _ _ _ _ _ _ _ _ _ _ Iv) as (Ox & Ol & Os' & EOs & Iv1). inversion EOs; subst.
-  destruct (inv_rec_remove sigs _ _ _ _ _ _ _ _ _ _ _ k Iv1 Bd) as (kvs & Oold & Ol' & Eo & Iv2 & Bd2).
+  destruct (inv_rec_remove sigs Hmaybe _ _ _ _ _ _ _ _ _ _ _ k Iv1 Bd) as (kvs & Oold & Ol' & Eo & Iv2 & Bd2).
   destruct (inv_drop sigs _ _ _ _ _ _ _ _ _ _ Iv2) as (Σ1 & Sx1 & _ & Iv3).
   destruct (inv_swap' _ _ _ _ _ _ _ _ _ _ _ Iv3) as (Ol2 & Ox2 & Os2 & EOs2 & Iv4). inversion EOs2; subst.
   destruct (inv_rec_insert sigs _ _ _ _ _ _ _ _ _ _ _ _ _ _ k Iv4 Bd2) as (kvs1 & O' & Eo1 & Hk1 & Iv5 & Bd5).
@@ -990,7 +955,7 @@ Proof.
   pose proof (inv_slots _ _ _ _ _ _ _ _ Iv) as F.
   inversion F as [|? ? ? ? ? ? Pv _]; subst. unfold slot_ok in Pv; simpl in Pv.
   apply dt_rec_inv in Pv as (l & kvs0 & Osl & -> & _ & _ & _ & _ & -> & _).
-  destruct (inv_rec_remove sigs _ _ _ _ _ _ _ _ _ _ _ k Iv Bd) as (kvs & Oold & Ol' & Eo & Iv2 & Bd2).
+  destruct (inv_rec_remove sigs Hmaybe _ _ _ _ _ _ _ _ _ _ _ k Iv Bd) as (kvs & Oold & Ol' & Eo & Iv2 & Bd2).
   destruct (inv_drop sigs _ _ _ _ _ _ _ _ _ _ Iv2) as (Σ1 & Sx1 & _ & Iv3).
   simpl. rewrite Eo.
   eapply (next_ok n IH); [exact HT | split; [exact Iv3 | exact Bd2] | len | exact Sx1].
@@ -1089,10 +1054,10 @@ Proof.
   simpl. destruct (vd n H v u) as [[|]|] eqn:Ev; [| | exact Logic.I].
   - eapply (next_ok n IH); [exact HT | | len | apply scope_ext_refl].
     split; [|exact Bd]. simpl. eapply inv_replace_top_dp; [exact Iv|].
-    constructor. eapply vd_fresh; eauto.
+    apply (dt_vjust sigs Hmaybe). eapply vd_fresh; eauto.
   - destruct (inv_drop sigs _ _ _ _ _ _ _ _ _ _ Iv) as (Σ1 & Sx1 & _ & Iv1).
     eapply (next_ok n IH); [exact HT | | len | exact Sx1].
-    split; [|exact Bd]. simpl. apply inv_push_dp0; [exact Iv1 | constructor].
+    split; [|exact Bd]. simpl. apply inv_push_dp0; [exact Iv1 | apply (dt_vnone sigs Hmaybe)].
 Qed.
 
 Lemma w_try_sh G B C R t u rest s s3 Σ H sc stk Sf sf Os :
@@ -1105,12 +1070,12 @@ Proof.
   pop_sh Iv. destruct Iv as (-> & V & Hl & Iv).
   simpl. destruct (vd n H v u) as [[|]|] eqn:Ev; [| | exact Logic.I].
   - eapply (next_ok n IH); [exact HT | | len | apply scope_ext_refl].
-    split; [|exact Bd]. simpl. apply inv_push_sh; [exact Iv | | exact Hl].
-    constructor. destruct Hu as [Hs|Hi].
+    split; [|exact Bd]. simpl. apply inv_push_sh; [exact Iv | | simpl; rewrite app_nil_r; exact Hl].
+    apply (vt_vjust sigs Hmaybe). destruct Hu as [Hs|Hi].
     + eapply vtyped_sub; eauto.
     + eapply vd_imm; eauto.
   - eapply (next_ok n IH); [exact HT | | len | apply scope_ext_refl].
-    split; [|exact Bd]. simpl. apply inv_push_sh; [exact Iv | constructor | simpl; tauto].
+    split; [|exact Bd]. simpl. apply inv_push_sh; [exact Iv | apply (vt_vnone sigs Hmaybe) | simpl; tauto].
 Qed.
 
 (** The explicit copy: the result is a new region, so the slot is fresh. *)
@@ -1442,9 +1407,6 @@ Proof.
   - eapply w_dup; eauto.
   - eapply w_drop; eauto.
   - eapply w_swap; eauto.
-  - eapply (w_push_sh n IH) with (t := TMaybe TBot); [reflexivity | apply vt_none | reflexivity | exact HT | exact Iv | exact L].
-  - eapply w_just; eauto.
-  - eapply w_unwrap; eauto.
   - eapply w_load; eauto.
   - eapply w_store; eauto.
   - eapply w_quote; eauto. exact H0.
@@ -1578,11 +1540,11 @@ Qed.
 End Sound.
 
 (** Type soundness with the model's validator. *)
-Theorem soundness : forall sigs defs, def_ok sigs defs ->
+Theorem soundness : forall sigs defs, def_ok sigs defs -> maybe_ok sigs ->
   forall G R e s, T sigs G LNone LNone R e [] s ->
   forall n, eval defs n [OScope []] 0 [] e <> RStuck.
 Proof.
-  intros sigs defs Hdefs. apply (soundness_v sigs defs Hdefs validate).
+  intros sigs defs Hdefs Hmaybe. apply (soundness_v sigs defs Hdefs Hmaybe validate).
   - intros Σ H f u v t O D E. eapply validate_dtyped; eauto.
   - intros Σ H f u v t V E I. eapply validate_imm; eauto.
 Qed.
