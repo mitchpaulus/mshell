@@ -493,7 +493,7 @@ Found while reading `TypeCoreMatch.go` for stage 5: a match arm written `:>` tha
 
 ## Stage 5: validation (2026-10-01, fourth session)
 
-Not committed. Suites: `test.sh` 326 passed; `typecheck_test.sh` 320 passed, 0 failed (old checker, skip lists); `tests/typecheck_core_test.sh` 374 passed, 0 unexpected, 0 not checked yet; `go test` ok; `typst compile ai/type-core-calculus.typ` ok. `formal-ver/` unchanged.
+Committed (not pushed): `c5c2ffc` (code, tests, user docs), `113d4b3` (design doc, plan, progress log). Suites: `test.sh` 326 passed; `typecheck_test.sh` 320 passed, 0 failed (old checker, skip lists); `tests/typecheck_core_test.sh` 374 passed, 0 unexpected, 0 not checked yet; `go test` ok; `typst compile ai/type-core-calculus.typ` ok. `formal-ver/` unchanged.
 
 Parser and runtime:
 
