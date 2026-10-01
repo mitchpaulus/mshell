@@ -2,7 +2,7 @@ package main
 
 // Stack slots, signatures and the builtin table of the core checker
 // (ai/type-core-calculus.typ). Everything here is small and held by value:
-// a slot is 8 bytes, a stack is one []coreSlot, and the builtin table is
+// a slot is 12 bytes, a stack is one []coreSlot, and the builtin table is
 // two slices indexed by NameId and TokenType.
 
 // coreSlot is one stack slot: its type, and whether the value is fresh,
@@ -10,7 +10,10 @@ package main
 // (design doc, "Freshness"). A value of an immutable type is as good as
 // fresh wherever it is; see coreChecker.freshish.
 type coreSlot struct {
-	t     TypeId
+	t TypeId
+	// pq is 1 + the index of the quote literal waiting in this slot (see
+	// TypeCoreQuote.go), or 0.
+	pq    uint32
 	fresh bool
 }
 
@@ -31,6 +34,9 @@ type coreSig struct {
 	// or immutable: `just` and `?` keep freshness.
 	keepOut  uint64
 	diverges bool
+	// child says the word runs its quote arguments on a child stack, as
+	// each and map do, which decides where they may break.
+	child bool
 }
 
 func newCoreSig(ar *TypeArena, p coreSigParts) coreSig {

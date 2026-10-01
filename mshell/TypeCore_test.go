@@ -64,6 +64,37 @@ func TestCoreChecker(t *testing.T) {
 		// Generics: a bare generic in two inputs is the join of the arguments.
 		{`none 5 just = drop`, true, ""},
 		{`[1] ["a"] = drop`, true, ""},
+		// Quotes: checked against the word that takes them.
+		{`[1 2] (1 + wl) each`, true, ""},
+		{`[1 2] (1 +) map len wl`, true, ""},
+		{`[1 2] ("a" +) map drop`, false, "no matching overload for '+'"},
+		{`[1 2] map. 1 + end len wl`, true, ""},
+		{`def apply ((int -- int) int -- int) swap x end (2 *) 3 apply wl`, true, ""},
+		{`def apply ((int -- int) int -- int) swap x end ("a" +) 3 apply wl`, false, "no matching overload"},
+		// x, iff and loop run a literal inline.
+		{`(1 2 +) x wl`, true, ""},
+		{`true (1) (2) iff wl`, true, ""},
+		{`true (1 wl) iff`, true, ""},
+		{`true (1) ("a") iff 1 + wl`, false, "no matching overload"},
+		{`true if (1) else (2) end x wl`, true, ""},
+		{`0 (dup 10 > if break end 1 +) loop wl`, true, ""},
+		{`0 (dup 10 > if break end "a") loop`, false, "a loop body must leave the stack"},
+		{`(1 wl) loop`, true, ""},
+		// break and continue contexts.
+		{`break`, false, "'break' is allowed only"},
+		{`(break) q! [1] (drop @q x) each`, false, "'break' is allowed only"},
+		{`0 ([1 2] (drop break) each) loop drop`, true, ""},
+		{`[[1] [2]] (drop [1 2] (break) each) each`, false, "'break' is allowed only"},
+		// P14: no renaming of a variable stored at a new type in a loop body.
+		{`1 x!  [0 0] (drop @x 1 + drop "a" x!) each`, false, "variable 'x' has type int"},
+		// A quote of unknown arity cannot be run.
+		{`(1 wl) q! @q x`, true, ""},
+		{`("a" 1 +) drop`, false, "no matching overload"},
+
+		// An overloaded word on a union is a match per member.
+		{`true if 1 else 2.5 end toFloat 1.0 + str wl`, true, ""},
+		{`true if 1 else "a" end 1 + drop`, false, "the stack has (str int)"},
+
 		// Unions of distinct kinds only.
 		{`def f ([int] | [str] -- ) drop end`, false, "two members of the same kind"},
 		{`def f (int | [str] -- ) drop end`, true, ""},

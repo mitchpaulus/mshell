@@ -149,6 +149,14 @@ type coreChecker struct {
 
 	// saved holds stacks saved for branches, as a stack of slot runs.
 	saved []coreSlot
+	// pending holds the unit's quote literals (TypeCoreQuote.go).
+	pending []corePending
+	// brk and cont are the break and continue contexts; brkSeen records a
+	// break that leaves the innermost loop.
+	brk, cont coreLoopCtx
+	brkSeen   bool
+	infer     *coreInfer
+	deferred  []coreDeferred
 	// mentionsVar caches, per TypeId, whether a type mentions a
 	// unification variable: 0 not yet known, 1 no, 2 yes.
 	mentionsVar []uint8
@@ -200,6 +208,9 @@ func (c *coreChecker) beginUnit() {
 	c.varGen++
 	c.unitVars = c.unitVars[:0]
 	c.stores = c.stores[:0]
+	c.deferred = c.deferred[:0]
+	c.pending = c.pending[:0]
+	c.brk, c.cont, c.brkSeen, c.infer = coreLoopCtx{}, coreLoopCtx{}, false, nil
 	c.subst.bound = c.subst.bound[:0]
 	c.subst.root = nil
 	c.uni.pairs = c.uni.pairs[:0]
@@ -209,6 +220,12 @@ func (c *coreChecker) beginUnit() {
 
 // finishUnit makes the checks that wait for the unit's final substitution.
 func (c *coreChecker) finishUnit() {
+	// Every quote body is checked, even one that is never run.
+	for i := range c.pending {
+		if !c.pending[i].done && !c.abandoned {
+			c.inferPending(uint32(i + 1))
+		}
+	}
 	// A variable left unsolved is ⊥ (design doc, "A ⊥ in a store fixes
 	// nothing"); nothing constrained it, so any type would do.
 	for v, t := range c.subst.bound {
@@ -225,6 +242,12 @@ func (c *coreChecker) finishUnit() {
 		t, v := c.subst.Apply(c.arena, s.t), c.subst.Apply(c.arena, s.v)
 		if !c.below(s.fresh, t, v) {
 			c.errs = append(c.errs, c.storeError(s.tok, s.name, t, v))
+		}
+	}
+	for _, d := range c.deferred {
+		t, want := c.subst.Apply(c.arena, d.t), c.subst.Apply(c.arena, d.want)
+		if !c.below(d.fresh, t, want) {
+			c.mismatch(d.tok, 0, want, t)
 		}
 	}
 	for _, name := range c.unitVars {
@@ -283,6 +306,7 @@ func (c *coreChecker) checkDef(def *MShellDefinition) {
 // checkOutputs checks that the stack at the end of a def body is its
 // declared outputs.
 func (c *coreChecker) checkOutputs(def *MShellDefinition, outs []TypeId) {
+	c.forceTop(len(c.stack))
 	if len(c.stack) != len(outs) {
 		c.errs = append(c.errs, TypeError{Kind: TErrDefBodyMismatch, Pos: def.NameToken, Name: def.Name,
 			Hint: "declared " + strconv.Itoa(len(outs)) + " output(s) " + c.formatTypes(outs) +
@@ -335,9 +359,13 @@ func (c *coreChecker) step(item MShellParseItem) {
 		c.ifBlock(it)
 	case *MShellTypeDecl:
 	case *MShellParseQuote:
-		c.unsupported(it.StartToken, "quotes")
+		c.pushQuote(it.Items, it.StartToken)
 	case *MShellParsePrefixQuote:
-		c.unsupported(it.StartToken, "prefix quotes")
+		// `.each ... end` is `(...) each`.
+		c.pushQuote(it.Items, it.StartToken)
+		call := it.StartToken
+		call.Type, call.Lexeme = LITERAL, strings.Trim(call.Lexeme, ".")
+		c.word(call)
 	case *MShellParseMatchBlock:
 		c.unsupported(it.StartToken, "match")
 	case *MShellParseGrid:
@@ -361,7 +389,24 @@ func (c *coreChecker) push(t TypeId, fresh bool) {
 
 // need reports whether n slots are available, reporting an underflow if not.
 func (c *coreChecker) need(n int, tok Token) bool {
-	if len(c.stack)-c.floor >= n {
+	avail := len(c.stack) - c.floor
+	if avail >= n {
+		return true
+	}
+	if c.infer != nil && c.floor == c.infer.floor {
+		// A quote typed on its own reads inputs from below its own pushes:
+		// they become new variables, below everything on its stack.
+		k := n - avail
+		ins := make([]TypeId, k, k+len(c.infer.ins))
+		for i := range ins {
+			ins[i] = c.subst.FreshVar(c.arena)
+		}
+		c.infer.ins = append(ins, c.infer.ins...)
+		c.stack = append(c.stack, make([]coreSlot, k)...)
+		copy(c.stack[c.floor+k:], c.stack[c.floor:len(c.stack)-k])
+		for i := range k {
+			c.stack[c.floor+i] = coreSlot{t: ins[i]}
+		}
 		return true
 	}
 	c.errs = append(c.errs, TypeError{Kind: TErrStackUnderflow, Pos: tok})
@@ -391,10 +436,19 @@ func (c *coreChecker) token(tok Token) {
 		c.push(TidBool, true)
 	case ENVSTORE:
 		if c.need(1, tok) {
+			c.forceTop(1)
 			c.stack = c.stack[:len(c.stack)-1]
 		}
 	case LITERAL:
 		c.word(tok)
+	case INTERPRET:
+		c.interpret(tok)
+	case IFF:
+		c.iff(tok)
+	case LOOP:
+		c.loop(tok)
+	case BREAK, CONTINUE:
+		c.breakOrContinue(tok)
 	default:
 		if sigs := c.table.token(tok.Type); sigs != nil {
 			c.call(sigs, tok)
@@ -445,32 +499,42 @@ func (c *coreChecker) shuffle(tok Token) bool {
 	switch tok.Lexeme {
 	case "dup":
 		if c.need(1, tok) {
+			c.forceTop(1)
+			s, n = c.stack, len(c.stack)
 			s[n-1].fresh = false
 			c.stack = append(s, s[n-1])
 		}
 	case "drop":
 		if c.need(1, tok) {
-			c.stack = s[:n-1]
+			c.forceTop(1)
+			c.stack = c.stack[:len(c.stack)-1]
 		}
 	case "swap":
 		if c.need(2, tok) {
+			s, n = c.stack, len(c.stack)
 			s[n-2], s[n-1] = s[n-1], s[n-2]
 		}
 	case "over":
 		if c.need(2, tok) {
+			c.force(len(c.stack) - 2)
+			s, n = c.stack, len(c.stack)
 			s[n-2].fresh = false
 			c.stack = append(s, s[n-2])
 		}
 	case "rot":
 		if c.need(3, tok) {
+			s, n = c.stack, len(c.stack)
 			s[n-3], s[n-2], s[n-1] = s[n-2], s[n-1], s[n-3]
 		}
 	case "-rot":
 		if c.need(3, tok) {
+			s, n = c.stack, len(c.stack)
 			s[n-3], s[n-2], s[n-1] = s[n-1], s[n-3], s[n-2]
 		}
 	case "nip":
 		if c.need(2, tok) {
+			c.force(len(c.stack) - 2)
+			s, n = c.stack, len(c.stack)
 			s[n-2] = s[n-1]
 			c.stack = s[:n-1]
 		}
@@ -487,6 +551,7 @@ func (c *coreChecker) doReturn(tok Token) {
 		c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: tok,
 			Hint: "'return' is not allowed in a def that never returns"})
 	case retExact:
+		c.forceTop(len(c.stack))
 		if len(c.stack) != len(c.retOuts) {
 			c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: tok,
 				Hint: "'return' leaves " + strconv.Itoa(len(c.stack)) + " value(s) " + c.formatSlots(c.stack) +
@@ -532,6 +597,7 @@ func (c *coreChecker) store(tok Token, name NameId) {
 	if !c.need(1, tok) {
 		return
 	}
+	c.forceTop(1)
 	slot := c.stack[len(c.stack)-1]
 	c.stack = c.stack[:len(c.stack)-1]
 	v := c.varOf(name)
@@ -657,6 +723,20 @@ func (c *coreChecker) check(slot coreSlot, want TypeId) bool {
 // candidate is the one the arguments fit; with none, or more than one, it
 // is an error.
 func (c *coreChecker) call(sigs []coreSig, tok Token) {
+	if c.infer != nil && c.floor == c.infer.floor {
+		// In a quote typed on its own, missing arguments become inputs,
+		// as many as every candidate takes.
+		arity := len(sigs[0].ins)
+		for i := range sigs {
+			if len(sigs[i].ins) != arity {
+				arity = -1
+				break
+			}
+		}
+		if arity >= 0 {
+			c.need(arity, tok)
+		}
+	}
 	if len(sigs) == 1 && c.partial(tok) == "" {
 		c.apply(&sigs[0], tok)
 		return
@@ -677,6 +757,9 @@ func (c *coreChecker) call(sigs []coreSig, tok Token) {
 			c.unsupported(tok, what)
 			return
 		}
+		if c.distribute(sigs, tok) {
+			return
+		}
 		c.errs = append(c.errs, TypeError{Kind: TErrNoMatchingOverload, Pos: tok,
 			Hint: "the stack has " + c.formatSlots(c.topSlots(sigs)) + "; " + c.formatCandidates(sigs)})
 		c.abandoned = true
@@ -687,6 +770,42 @@ func (c *coreChecker) call(sigs []coreSig, tok Token) {
 	}
 }
 
+// distribute checks an overloaded word whose argument is a union as a
+// match with one arm per member: each member is checked on its own, and
+// the arms are joined (design doc, "Elaboration": an overloaded op on a
+// union operand). It reports false when no argument is a union.
+func (c *coreChecker) distribute(sigs []coreSig, tok Token) bool {
+	top := c.topSlots(sigs)
+	idx := -1
+	for i, s := range top {
+		if c.waiting(s) == nil && c.arena.nodes[c.subst.Apply(c.arena, s.t)].Kind == TKUnion {
+			idx = len(c.stack) - len(top) + i
+			break
+		}
+	}
+	if idx < 0 {
+		return false
+	}
+	u := c.subst.Apply(c.arena, c.stack[idx].t)
+	members := c.arena.unionMembers[c.arena.nodes[u].Extra]
+	mark := len(c.saved)
+	entry := c.saveStack()
+	var runs []savedRun
+	for _, m := range members {
+		c.restoreStack(entry)
+		c.stack[idx].t = m
+		c.call(sigs, tok)
+		if c.abandoned {
+			c.saved = c.saved[:mark]
+			return true
+		}
+		runs = append(runs, c.saveArm())
+	}
+	c.joinArms(runs, tok)
+	c.saved = c.saved[:mark]
+	return true
+}
+
 // partial names what a word's table entry does not cover yet, or "".
 func (c *coreChecker) partial(tok Token) string {
 	if tok.Type == LITERAL {
@@ -695,7 +814,22 @@ func (c *coreChecker) partial(tok Token) string {
 		}
 		return ""
 	}
-	return c.table.partialToken[tok.Type]
+	// The token forms not covered yet all take a list (a command) or a
+	// quote (a redirected quote).
+	what := c.table.partialToken[tok.Type]
+	if what == "" {
+		return ""
+	}
+	for i := max(c.floor, len(c.stack)-2); i < len(c.stack); i++ {
+		if c.waiting(c.stack[i]) != nil {
+			return what
+		}
+		switch c.arena.nodes[c.subst.Apply(c.arena, c.stack[i].t)].Kind {
+		case TKList, TKQuote:
+			return what
+		}
+	}
+	return ""
 }
 
 // topSlots returns the slots a set of candidates would read.
@@ -725,11 +859,20 @@ func (c *coreChecker) argsFit(sig *coreSig) bool {
 		return false
 	}
 	gens := c.instantiate(sig)
+	base := len(c.stack) - n
 	ok := true
-	c.eachInput(sig, gens, func(i int, want TypeId) {
-		if ok && !c.check(c.stack[len(c.stack)-n+i], want) {
-			ok = false
+	c.eachInput(sig, gens, base, func(i int, want TypeId) {
+		if !ok {
+			return
 		}
+		if c.waiting(c.stack[base+i]) != nil {
+			// A quote literal fits a quote parameter, or a generic; its
+			// body is checked once a candidate is chosen.
+			w := c.subst.Apply(c.arena, want)
+			ok = c.arena.nodes[w].Kind == TKQuote || c.hasVars(w)
+			return
+		}
+		ok = c.check(c.stack[base+i], want)
 	})
 	return ok
 }
@@ -741,14 +884,17 @@ func (c *coreChecker) argsFit(sig *coreSig) bool {
 // first set to the join of those arguments: the join is above each of them
 // (join_slot_ub), so it is a valid choice, and it does not depend on which
 // argument is checked first.
-func (c *coreChecker) eachInput(sig *coreSig, gens []TypeId, f func(i int, want TypeId)) {
-	for pass := 0; pass < 2; pass++ {
+// A waiting quote literal is visited last, once the other arguments have
+// fixed what its parameter type can be.
+func (c *coreChecker) eachInput(sig *coreSig, gens []TypeId, base int, f func(i int, want TypeId)) {
+	for pass := 0; pass < 3; pass++ {
 		if pass == 1 {
 			c.joinRepeated(sig, gens)
 		}
 		for i, want := range sig.ins {
+			waiting := c.waiting(c.stack[base+i]) != nil
 			bare := c.arena.nodes[want].Kind == TKParam
-			if bare != (pass == 1) {
+			if waiting != (pass == 2) || (!waiting && bare != (pass == 1)) {
 				continue
 			}
 			if sig.genIn&(1<<i) != 0 {
@@ -775,7 +921,7 @@ func (c *coreChecker) joinRepeated(sig *coreSig, gens []TypeId) {
 				continue
 			}
 			arg := c.stack[base+i]
-			if c.hasVars(arg.t) {
+			if c.waiting(arg) != nil || c.hasVars(arg.t) {
 				count = 0
 				break
 			}
@@ -803,9 +949,14 @@ func (c *coreChecker) apply(sig *coreSig, tok Token) {
 	if !c.need(n, tok) {
 		return
 	}
-	gens := c.instantiate(sig)
+	gens := append([]TypeId(nil), c.instantiate(sig)...)
 	base := len(c.stack) - n
-	c.eachInput(sig, gens, func(i int, want TypeId) {
+	c.eachInput(sig, gens, base, func(i int, want TypeId) {
+		if s := c.stack[base+i]; c.waiting(s) != nil {
+			c.checkPending(s.pq, want, sig.child, base, tok)
+			c.stack[base+i].pq = 0
+			return
+		}
 		if !c.check(c.stack[base+i], want) {
 			c.mismatch(tok, i, want, c.stack[base+i].t)
 		}
@@ -872,6 +1023,7 @@ func (c *coreChecker) listLiteral(l *MShellParseList) {
 	if c.diverged || c.abandoned {
 		return
 	}
+	c.forceTop(len(c.stack) - start)
 	elems := c.stack[start:]
 	var elem coreSlot
 	fresh := true
@@ -917,6 +1069,7 @@ func (c *coreChecker) dictLiteral(d *MShellParseDict) {
 			c.abandoned = true
 			return
 		}
+		c.forceTop(1)
 		v := c.stack[start]
 		c.stack = c.stack[:start]
 		if !c.freshish(v) {
@@ -985,6 +1138,7 @@ func (c *coreChecker) condition(tok Token) bool {
 	if !c.need(1, tok) {
 		return false
 	}
+	c.forceTop(1)
 	slot := c.stack[len(c.stack)-1]
 	c.stack = c.stack[:len(c.stack)-1]
 	if c.hasVars(slot.t) {
@@ -1040,6 +1194,30 @@ func (c *coreChecker) joinArms(arms []savedRun, tok Token) {
 			return
 		}
 	}
+	// A quote literal waiting in the same place in every arm stays waiting;
+	// any other is typed first.
+	for i := range n {
+		pq := c.saved[first.start+i].pq
+		same := true
+		for _, a := range live[1:] {
+			if c.saved[a.start+i].pq != pq {
+				same = false
+			}
+		}
+		if same {
+			continue
+		}
+		for _, a := range live {
+			if q := c.saved[a.start+i].pq; q != 0 {
+				if c.pending[q-1].done {
+					c.saved[a.start+i].pq = 0
+					continue
+				}
+				c.inferPending(q)
+				c.saved[a.start+i].pq = 0
+			}
+		}
+	}
 	c.stack = append(c.stack[:0], c.saved[first.start:first.end]...)
 	for _, a := range live[1:] {
 		for i := range n {
@@ -1061,7 +1239,7 @@ func (c *coreChecker) joinArms(arms []savedRun, tok Token) {
 func (c *coreChecker) joinSlot(a, b coreSlot) (coreSlot, bool) {
 	fresh := a.fresh && b.fresh
 	if a.t == b.t {
-		return coreSlot{t: a.t, fresh: fresh}, true
+		return coreSlot{t: a.t, pq: a.pq, fresh: fresh}, true
 	}
 	if c.hasVars(a.t) || c.hasVars(b.t) {
 		return coreSlot{t: a.t, fresh: fresh}, c.uni.Unify(a.t, b.t)

@@ -227,3 +227,14 @@ Not committed (the plan says not to commit unless asked). Suites: test.sh 283 pa
 - `tests/typecheck_core_test.sh` (with `core_expected_rejections.txt` and `core_no_longer_errors.txt`, both empty): 38 passed, 0 unexpected, 234 not checked yet. `TestCoreChecker` holds the acceptance rows step 1 covers.
 
 Found: `and` and `or` are runtime builtins missing from `BuiltInList.go`.
+
+## Stage 3, step 2: quotes (2026-09-30)
+
+- `TypeCoreQuote.go`. A quote literal waits in its slot. A word that takes a quote checks the body against its parameter type after its other arguments; `x`, `iff` and `loop` given a literal run it inline (the elaboration to `if` and `loop{...}`); anything else (`dup`, `drop`, a store, a literal, a join of different quotes, a def output, the end of the unit) types it on its own, with new variables for the inputs it reads. Shuffles that only move a slot leave it waiting. Every quote body is checked, even one that is never run.
+- Break and continue contexts as in the design: none, the loop's stack (a loop body, and inline `iff`/`x` inside one), or a child stack (a literal given to a child-stack word, under the Each rule's condition). A loop without a reachable break diverges. A stored quote run by `loop` never breaks.
+- A loop's stack is the stack at the loop with `⊥` opened to new variables and every slot shared; the entry stack is checked against it once the unit is solved (deferred checks).
+- An overloaded word on a union argument is checked per member and the arms joined, the design's elaboration to a match per member (`toFloat` on `int | float`).
+- Table: `each`, `map`, `filter` (child stack), `+` on grids. Partial entries say "not checked yet" only when a list or quote is among the arguments, so they do not hide real mismatches.
+- Core script: 60 passed, 0 unexpected, 212 not checked yet.
+
+Known gap for step 3: a quote typed on its own that uses an overloaded word on an unknown input is ambiguous (`(1 +) q!`); pending overload choices fix it.

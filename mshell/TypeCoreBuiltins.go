@@ -60,6 +60,15 @@ func (b *coreTableBuilder) keeps(sigs []coreSig) {
 	}
 }
 
+// child marks every candidate of a registered builtin as running its quote
+// arguments on a child stack.
+func (b *coreTableBuilder) child(name string) {
+	id, _ := b.res.names.Lookup(name)
+	for i := range b.t.byName[id] {
+		b.t.byName[id][i].child = true
+	}
+}
+
 // newList marks every candidate of a registered builtin as returning a new
 // list, fresh when its elements are immutable.
 func (b *coreTableBuilder) newList(name string) {
@@ -85,7 +94,8 @@ func buildCoreTable(res *coreResolver) *coreTable {
 		"(float float -- bool)",
 		"(datetime datetime -- bool)",
 	}
-	b.regTok(PLUS, append(arithmetic, "(str str -- str)", "([t] [t] -- [t])", "(path path -- path)")...)
+	b.regTok(PLUS, append(arithmetic, "(str str -- str)", "([t] [t] -- [t])", "(path path -- path)",
+		"(Grid | GridView Grid | GridView -- Grid)")...)
 	for i := range t.byToken[PLUS] {
 		if s := &t.byToken[PLUS][i]; len(s.ins) == 2 && ar.Kind(s.ins[0]) == TKList {
 			s.newListOut = 1
@@ -136,6 +146,16 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	for _, name := range []string{"trim", "trimStart", "trimEnd", "upper", "lower", "title"} {
 		b.reg(name, "(str -- str)")
 	}
+	// Words that run a quote on a child stack, once per element.
+	b.reg("each", "([a] (a -- ) -- )")
+	b.reg("map", "([a] (a -- b) -- [b])")
+	b.newList("map")
+	b.reg("filter", "([a] (a -- bool) -- [a])")
+	b.newList("filter")
+	for _, name := range []string{"each", "map", "filter"} {
+		b.child(name)
+	}
+
 	b.reg("and", "(bool bool -- bool)")
 	b.reg("or", "(bool bool -- bool)")
 	b.reg("readFile", "(str | path -- str)")
@@ -146,12 +166,14 @@ func buildCoreTable(res *coreResolver) *coreTable {
 		GREATERTHAN: "redirects",
 		ASTERISK:    "command captures",
 		QUESTION:    "running commands",
-		PLUS:        "grids",
 	}
 	t.partialName = map[NameId]string{
 		res.names.Intern("and"): "'and' with a quote",
 		res.names.Intern("or"):  "'or' with a quote",
 		res.names.Intern("len"): "the grid forms of 'len'",
+		res.names.Intern("map"): "the Maybe, dict and grid forms of 'map'",
+		res.names.Intern("filter"): "the dict and grid forms of 'filter'",
+		res.names.Intern("each"): "the dict and grid forms of 'each'",
 	}
 	b.reg("parseJson", "(str | path | bytes -- new Json)")
 	return t
