@@ -486,3 +486,40 @@ Found, not from this session: `[] as Json` (and `as` to any alias whose unfoldin
 - `dict` in a def signature (Mitchell): meant as an easy way to write `{str: T}`. The core resolver reads `dict` as `{str: T}` and `list` as `[T]`, a new generic per occurrence (generics named `_1`, `_2`, ...), as the recursive-type branch did; outside a signature either is an error asking for the full form. `list` was not asked about; it follows the recursive-type branch, which treated both alike.
 - So std's HTML helpers (`htmlDescendents`, `htmlDescendentsAcc`, `findByTag`), whose `(dict -- [dict])` would give an output generic no input fixes, are typed with `HtmlNode`, as stage 6 planned. The old checker reads `HtmlNode` there as a generic, as it read `dict`.
 - Tests: `tests/typecheck_fail/sig_dict_keyword_rejects_int.msh` (from the recursive-type branch; the old checker accepts it, so it is on its skip list), `sig_list_keyword_rejects_int.msh`, `dict_keyword_outside_signature.msh`. Docs: `mshell.md` and `type_system.inc.html` describe the shorthand. No changelog entry until the core checker is the default.
+
+## A freshness hole in `:>` arms (2026-10-01, fourth session)
+
+Found while reading `TypeCoreMatch.go` for stage 5: a match arm written `:>` that binds a name kept the value's fresh mark, though the binding is a store of the value (or a part of it). `[1 2] match list xs :> as [int | str] "a" append drop end  @xs (1 +) map` checked under the core checker and failed at runtime. Now the kept value is shared unless every binding has an immutable type. Test: `tests/typecheck_fail/match_keep_binding_shared.msh` (the old checker rejects it too). Design doc §Freshness, "Which words keep freshness".
+
+## Stage 5: validation (2026-10-01, fourth session)
+
+Not committed. Suites: `test.sh` 326 passed; `typecheck_test.sh` 320 passed, 0 failed (old checker, skip lists); `tests/typecheck_core_test.sh` 374 passed, 0 unexpected, 0 not checked yet; `go test` ok; `typst compile ai/type-core-calculus.typ` ok. `formal-ver/` unchanged.
+
+Parser and runtime:
+
+- `tryAs` is a keyword (`TRYAS`); `<value> tryAs T` is `MShellTryAs`. `is T name` at the start of a match arm is `MShellIsPattern` (`is` is not reserved elsewhere, but is now a pattern word, so no enum member can take it). The try-as branch's parser was read, not cherry-picked.
+- `mshell/Validate.go`: one validator. The runtime resolves targets with the checker's resolver (`coreResolver`, `declareAll`) in its own arena; each target is resolved once and cached in its parse node. A mutex guards it (pipeline stages run quotations at the same time).
+  Union members have distinct kinds, so the value's kind picks the member and validation is a conjunction: the first failure answers `none`. A set of (object, type) pairs is both the cycle rule and the memo; a container is entered when it has 16 or more elements or a child that is a big container or holds containers, which keeps the walk linear however values are shared. Explicit work stack; budget 2^26 steps, then an error. A list whose stdout or stderr is redirected or captured is not a list type (`<` and `&` are fine: the checker types them as lists). A quote target never validates; neither does a grid (no type names a grid's columns).
+- `RegisterEnums` is now `RegisterDeclarations`. It also checks `type` names (twice, an enum's or member's name, a builtin's, a built-in type's, a pattern word), and declares the batch's bodies in new runtime types (`declareRuntimeTypes`, 15 µs to make), refusing the batch on an error (unknown type, unguarded alias, union of one kind). So a script with a bad declaration stops before it runs, with or without the checker, and a REPL line with one adds nothing; the next line can declare the name properly. New runtime types per batch also make each cached target resolve again, so a tryAs in an earlier def that named a type not yet declared finds it.
+- Performance (`BenchmarkValidateRecords`, 10,000 JSON records `{name, age, tags: [str]}` against a declared shape): 0.87 ms, no allocations; against `Json` 1.5 ms. A first version that entered every record in the set and looked every key up twice took 2.8 ms and 1.3 MB.
+
+Core checker (`TypeCoreValidate.go`):
+
+- The target must resolve and be checkable; a def's generic gets its own message, as do quotes, enums that hold quotes and grids.
+- The operand: fresh, any target, and the result `Maybe[T]` stays fresh (`tw_try_dp`); otherwise the target is immutable (`tw_try_imm`), or the type is below it (`tw_try_sub`; checked once the unit is solved if it has unsolved variables). A partly new value is committed first. Anything else is an error that says to validate where the value is made or to `deepCopy`.
+- `is T x`: the same rule on the matched value; it binds `x : T`; with `:>` the value stays at type `T`, fresh only if it was and nothing is bound. Coverage: an `is T` arm covers a member equivalent to `T`, or the whole type.
+- The old checker reports `tryAs` and `is` as checked only by the new checker; the four success programs are on `old_checker_rejects.txt`.
+
+An independent review (a subagent) found four problems, all fixed with tests: lists with `<` or `&` failed validation against `[str]`, their type; a list referenced from many slots was walked once per slot (70,000 references to a 1,000-element list ran out of steps); a bad declaration on a REPL line made every later `tryAs` an error; a failed resolution stayed cached after the type was declared. It also improved three messages (an alias or enum whose declaration has an error, and a deferred check on a shared value).
+
+Tests: `tests/success/tryas.msh` (the try-as branch's cases, with JSON integers and without the quote target), `tryas_types.msh` (recursive alias, `new Json` def output, `deepCopy` before a refinement, enums and generic enums, `is` coverage, `is T _ :>`), `tryas_cycle.msh`, `r6_refinements.msh` (R6 with `deepCopy`); `tests/typecheck_fail/` R6, `tryas_stored_dict`, `tryas_quote_enum`, `is_quote_enum`, `tryas_generic`, H7, `is_not_exhaustive`, `is_stored_list`; `tests/fail/` an unknown target, a declaration error (stops before running), `deepCopy` of a cyclic `[Json]`; `Validate_test.go` (same object back, shapes and remainders, commands, enums, `Maybe`, cycles including `j = [j]` against `[[int]]`, 300,000-deep values, 2^60 shared paths, repeated references, the budget, declaration errors, declarations line by line as in the REPL).
+
+Docs: `type_system.inc.html` (Validating Data, and the boundary advice now says `tryAs`), `control-flow.inc.html` (typed patterns), `mshell.md`; `tryAs` in the Sublime and Notepad++ keyword lists and `base.html`. Changelog: Added (`tryAs`, `is`), Changed (`tryAs` keyword, `type` names declared once).
+
+Not done, and why:
+
+- Grids: no syntax names a grid schema, so a grid is not a checkable target (`Checkable`); the runtime would accept only the unknown schema. Unchanged.
+- `tests/core_expected_rejections.txt` still lists `null.msh`, whose rewrite now works; programs on that list change at the switch-over (stage 6).
+- Question 7 (`tryAs`/`is` on a shared union) decided with Mitchell: the rule stays as proved (the whole type below the target); when only members already below the target could pass, the error suggests the kind pattern (`kindPatternHint` in `TypeCoreValidate.go`; cases in `TestCoreChecker`). Design doc §Validation.
+
+Found: the design doc's H2 example uses `getAt`, which is not an mshell word (indexing is `:n:`).

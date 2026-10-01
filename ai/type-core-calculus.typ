@@ -1298,7 +1298,10 @@ works slot by slot:
 `just` and `?` keep it. Appending a fresh or immutable value to a fresh list keeps it (the two trees
 merge). *Set-Fresh* keeps it, and *Set* of a stored value on a fresh dict gives a partly new dict
 (@sec-partial). Everything that reads _out_ of a container gives a shared value
-(`getAt`, `get`, `?` on a shared `Maybe`): the container still points to the result. Everything that
+(`getAt`, `get`, `?` on a shared `Maybe`): the container still points to the result.
+A match arm written `:>` that binds a name stores the value or a part of it, so the value it leaves on
+the stack is shared unless every binding has an immutable type (found 2026-10-01: the checker kept
+the mark, and `[1 2] match list xs :> as [int | str] "a" append drop end` gave `xs`'s list a second type). Everything that
 copies a reference needs a shared operand: `dup`, stores, def and quote arguments, and writes into a
 shared container. The analysis in \#351 must be at least this conservative.
 
@@ -1600,6 +1603,30 @@ a shared operand is accepted only when its type is already below the target (the
   failed union member leaves none behind. The model's `validate`, where a cycle uses up the budget,
   is the earlier rule; both satisfy the two properties above. `deepCopy` of a cycle stays an error:
   no finite tree is a copy of it (@sec-copy).
+
+*Implemented (2026-10-01).* The runtime resolves a target with the checker's own resolver, against the
+same declarations (startup files, script, REPL lines), so there is one resolved form of each type. The
+runtime declares each file's or line's declarations before it runs, and refuses them, adding none, when
+one has an error (an unknown type, an unguarded alias, two members of one kind), as it refuses a name
+declared twice. So a union the runtime validates against never has two members of one kind. The value's
+runtime kind then picks the one member it can belong to, and validation is a conjunction with nothing to
+go back on: the first check that fails answers `none`. So a pair (object, type) met again may be assumed
+to hold whether it is on the current path or was already checked: if every check succeeds, every pair
+assumed was checked in full. One set serves as the cycle rule and the memo. A container is entered in it
+when it has at least 16 elements, or a child that is a container with 16 elements or with a container in
+it; every container on a cycle is one. One that is not entered costs a constant per visit, and each visit
+comes from a slot of an entered container, so the walk is linear in the distinct values however they are
+shared, and most JSON records are never entered. The walk uses an explicit work stack. The budget is
+$2^26$ steps (one per value, and per alias or union looked through); running out is an error. A list whose
+stdout or stderr is redirected or captured is a command, so it does not validate as a list type; `<` and
+`&` change nothing a type says. Validating 10,000 small JSON records takes under 1 ms.
+
+*A shared union value (decided 2026-10-01).* The rule compares the whole type with the target, as
+`tw_try_sub` does: `is [Json] items` on a stored `int | [Json]` is rejected, though only the list member
+could pass and it is already `[Json]`. Comparing only the members of the target's kinds would be sound (it
+is a kind pattern followed by `tryAs` on the member), but the checker would then accept programs the
+proved rule does not state directly. The rule stays; when the narrower comparison would hold, the error
+suggests the kind pattern (`list items`), which needs no validation.
 
 *"Checkable" is partly a soundness rule (corrected).* Validation against a quote type simply fails (it
 returns `none`), and validation against an unknown type succeeds without looking. Both are sound, and
@@ -2062,7 +2089,9 @@ name is an error. A duplicate declaration or duplicate `def` is an error, includ
 The startup files (the standard library and the init file) and the script are one name space: the
 checker and the language server see the startup files' declarations as the script's own.
 Names with a meaning of their own in patterns (`_`, `just`, `none`, `null`, `list`, `dict`, `path`,
-`date`, `quotation`, `maybe`, `binary`) and the built-in types cannot be declared.
+`date`, `quotation`, `maybe`, `binary`, and `is`, which starts a typed pattern) and the built-in types
+cannot be declared. The runtime checks `type` names as it checks enum names, so a REPL line that
+declares a type twice is refused (2026-10-01).
 
 == Type expressions
 

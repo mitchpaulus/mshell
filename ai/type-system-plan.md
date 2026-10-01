@@ -328,6 +328,8 @@ Done when: those tests pass under the core checker, and recursive enum values pr
 
 ### Stage 5: Validation: `is`, `tryAs`, `deepCopy` in the checker
 
+Done 2026-10-01 (fourth session); see the progress log.
+
 - One runtime validator: `validate(value, type)` walks the value against a resolved type with an explicit work list. It tracks the (object, type) pairs on the current path and counts work against a budget. Exhausting the budget is an error; a pair met again on the path is assumed to hold, so a cycle validates (design doc §Validation, `cvalidate` in `formal-ver/Cycles.v`). The checker trusts the validator's `just` only for fresh operands and immutable targets (`soundness_v`), so memoizing over a DAG is fine. Shapes check declared fields and remainders, including `*: T`. Enums check identity and payloads. Grids check schemas.
 - `is T x` patterns and `tryAs` (its own word, not elaborated to a match: a hidden variable would make the result shared) with the typing rule in design doc §Validation: in place always; a shared operand is accepted only if its type is already below the target or the target is immutable; otherwise a type error that suggests `deepCopy`.
 - `checkable` targets: quotes (including a quote in the payload of any enum the target mentions), type variables and abstract types are rejected with a clear message. Compute enum checkability per declaration, like immutability (`chk` in `formal-ver/Checkable.v`).
