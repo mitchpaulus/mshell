@@ -164,6 +164,8 @@ type coreChecker struct {
 	choiceVersion int
 	// at is the word being checked, where a deferred check reports.
 	at Token
+	// assertive is set while the patterns of a `=>` are read.
+	assertive bool
 	escapes       []coreEscape
 	// mentionsVar caches, per TypeId, whether a type mentions a
 	// unification variable: 0 not yet known, 1 no, 2 yes.

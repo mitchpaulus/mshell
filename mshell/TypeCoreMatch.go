@@ -159,6 +159,7 @@ func (c *coreChecker) matchBlock(m *MShellParseMatchBlock) {
 		c.abandoned = true
 		return
 	}
+	c.assertive = m.Assertive
 	mark := len(c.saved)
 	entry := c.saveStack()
 	var runs []savedRun
@@ -399,8 +400,11 @@ func (c *coreChecker) analyzePattern(pattern []MShellParseItem, t TypeId, at Tok
 				case FieldOpen:
 					ft = TidUnknown
 				case FieldAbsent:
-					c.errs = append(c.errs, TypeError{Kind: TErrInvalidMatchPattern, Pos: p.StartToken,
-						Hint: "this pattern never matches: " + c.format(rec) + " has no key '" + kv.Key + "'"})
+					// In a match this arm is dead; after `=>` it always fails.
+					if c.assertive {
+						c.errs = append(c.errs, TypeError{Kind: TErrInvalidMatchPattern, Pos: p.StartToken,
+							Hint: "this pattern never matches: " + c.format(rec) + " has no key '" + kv.Key + "'"})
+					}
 				}
 			}
 			c.bind(&a, tok, ft)

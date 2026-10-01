@@ -262,3 +262,13 @@ The audit was split across five subagents, each checking `Evaluator.go` against 
 Core script: 160 passed, 0 unexpected, 112 not checked yet. Expected rejections: `unpack_union_bindings.msh` (mixed int/float `+`), `null.msh` (raw `Json` to `int | null`, needs `tryAs`).
 
 Runtime bugs the audit found (not fixed): `5 (true) and` panics (unchecked `.(MShellBool)`, `Evaluator.go:11502`, `11528`); `mod` on a non-number pops two and pushes nothing; `parseHtml` panics on a non-string; `null 1 =` fails while `1 null =` is false; `toFixed` with negative places prints `%!(BADPREC)`; `toJson` of NaN/Inf is empty; `leftPad` counts bytes; `binPaths` pushes `*MShellString`; `psub` leaks a file on a type error; `e`/`ec`/`es` do not check for an existing stderr destination; `httpPost` cannot send bytes; `completionDefs` quotes leak variables into the caller; `~` (home directory), `and`, `or` are missing from `BuiltInList.go`; bare list words are rejected by `lines`, `toInt`, `toFloat`, `md5`, `base64decode`, `utf8Bytes`, `parseLinkHeader` though the checker types them `str`.
+
+### The fifth category: dicts and grids
+
+Merged from `ai/builtin-audit/dictgrid.md`: `keys`, `in`, `set`/`setd` on `{str: a}`, grid metadata (read-only `{}`), `gridRows`, `gridCols`, `gridCompact`, `select`, `exclude`, `toGrid`, `parseCsv`, `derive`, `pivot`, `leftJoin`, `outerJoin`, the grid form of `join`, the list form of `groupBy`, `parseExcel`. Left for steps 5 and 6 (each described in the audit): `get`, `getDef`, `values`, `keyValues` and getters (the Get-Key type), literal-key `set`/`setd`, `gridCol`, `gridValues`, `toDict`, `updateCol`, `gridSetCell`, `gridAddCol`, `gridRemoveCol`, `gridRenameCol`, grid `groupBy`.
+
+Every unknown grid schema is one type (`Grid{0}`) for now. That is safe only while no grid cell is read at a type; step 6 gives each unknown schema its own abstract type, as the design says, before getters on rows are typed. The audit also asks for literal names on stack slots (`set`, `setd`, column names below the top), a "not a container" check on quote outputs (`pivot`, `updateCol`), and fresh grids.
+
+A dict pattern on a key the subject's type says is absent is an error only after `=>`; in a match it is a dead arm (`tests/success/match.msh` relies on that).
+
+Core script: 164 passed, 0 unexpected, 108 not checked yet. More runtime bugs: `gridSetCell` drops a value whose kind does not match the column's storage; a column mixing ints and floats reads ints back as floats; grid `map` takes columns from the first row only; `parseCsv` panics on a non-string; `extend` on a GridView appends rows to the shared grid beneath it; `innerJoin` and `rightJoin` in the old table do not exist.

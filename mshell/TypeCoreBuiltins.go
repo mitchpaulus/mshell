@@ -159,7 +159,10 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	b.reg("split", "(str | path str | path -- new [str])")
 	b.reg("wsplit", "(str | path -- new [str])")
 	b.reg("lines", "(str -- new [str])")
-	b.reg("join", "([str] str -- str)")
+	// The grid form is the inner join: two grids and a key quote for each,
+	// run on a child stack per row.
+	b.reg("join", "([str] str -- str)", "(Grid | GridView Grid | GridView (GridRow -- a) (GridRow -- b) -- Grid)")
+	b.child("join")
 	b.reg("unlines", "([str] -- str)")
 	b.reg("unlinesCrLf", "([str] -- str)")
 	for _, name := range []string{"trim", "trimStart", "trimEnd", "strEscape"} {
@@ -461,6 +464,80 @@ func buildCoreTable(res *coreResolver) *coreTable {
 		b.reg(name, "("+httpReq+" -- "+httpResp+")")
 	}
 
+	// ----- Dicts -----
+
+	// A dict key or a column name is read as a string.
+	key := "str | path"
+
+	// Words that read no values take every dict-kinded value.
+	b.reg("keys", "({} -- new [str])")
+	b.reg("in", "({} "+key+" -- bool)", "("+key+" "+key+" -- bool)")
+	// Writes with a runtime key need every key deletable. A literal key on
+	// a shape, or on a fresh dict at a new type, is not covered yet.
+	b.reg("set", "({str: a} "+key+" a -- {str: a})")
+	b.keeps(t.name(res.names.Intern("set")))
+	b.reg("setd", "({str: a} "+key+" a -- )")
+	// Not in the table: get, getDef, values, keyValues and the `:name`
+	// getter. Their result is a label's type or the join of every label's
+	// type, which no signature can say.
+
+	// ----- Grids -----
+	//
+	// Every Grid, GridView and GridRow below has the unknown schema. A word
+	// whose result depends on the schema is either left out or gives the
+	// unknown schema.
+
+	b.reg("gridRows", "(Grid | GridView -- int)")
+	b.reg("gridCols", "(Grid | GridView -- new [str])")
+	// Metadata dicts are shared with the dicts they were made from and
+	// between grids, so they are read only.
+	b.reg("gridMeta", "(Grid | GridView -- Maybe[{}])")
+	b.reg("gridColMeta", "(Grid | GridView "+key+" -- Maybe[{}])")
+	// A Grid is returned as is; a GridView is copied into a new grid.
+	b.reg("gridCompact", "(Grid -- Grid)", "(GridView -- Grid)")
+	b.keeps(t.name(res.names.Intern("gridCompact")))
+	// New grids. Cells are shared with the source.
+	b.reg("select", "(Grid | GridView [str] -- Grid)")
+	b.reg("exclude", "(Grid | GridView [str] -- Grid)")
+	b.reg("toGrid", "([[str]] -- new Grid)")
+	b.reg("parseCsv", "(str | path -- new [[str]])")
+
+	// Words that run a quote on a child stack, once per row or group.
+	b.reg("derive", "(Grid | GridView "+key+" {} (GridRow -- a) -- Grid)")
+	b.reg("pivot", "(Grid | GridView [str] "+key+" (GridView -- a) -- Grid)")
+	for _, name := range []string{"leftJoin", "outerJoin"} {
+		b.reg(name, "(Grid | GridView Grid | GridView (GridRow -- a) (GridRow -- b) -- Grid)")
+	}
+	// The list form; the grid form takes a list of aggregation specs whose
+	// quotes each give their own type.
+	b.reg("groupBy", "([a] (a -- "+key+") -- {str: [a]})")
+	for _, name := range []string{"derive", "pivot", "leftJoin", "outerJoin", "groupBy"} {
+		b.child(name)
+	}
+	// Not in the table: updateCol, gridSetCell, gridAddCol, gridRemoveCol,
+	// gridRenameCol (a quote or a value at a column's type, or a schema
+	// change in place), and gridCol, gridValues, toDict (results at the
+	// columns' types).
+
+	// parseExcel: one record per sheet. An error cell is none.
+	{
+		cell := ar.MakeUnion([]TypeId{TidStr, TidFloat, TidBool, ar.MakeMaybeEnum(TidBottom)}, NameNone)
+		field := func(name string, ty TypeId) RecordField {
+			return RecordField{Name: res.names.Intern(name), Status: FieldRequired, Type: ty}
+		}
+		sheet := ar.MakeRecord([]RecordField{
+			field("name", TidStr),
+			field("data", ar.MakeList(ar.MakeList(cell))),
+			field("hidden", TidBool),
+			field("visibility", TidStr),
+		}, RecordField{Status: FieldAbsent})
+		t.setName(res.names.Intern("parseExcel"), []coreSig{{
+			ins:    []TypeId{ar.MakeUnion([]TypeId{TidPath, TidBytes}, NameNone)},
+			outs:   []TypeId{ar.MakeList(sheet)},
+			newOut: 1,
+		}})
+	}
+
 	// Uses of these words the table does not cover yet.
 	t.partialToken = map[TokenType]string{
 		LESSTHAN:    "redirects",
@@ -477,7 +554,9 @@ func buildCoreTable(res *coreResolver) *coreTable {
 		res.names.Intern("sortV"):     "'sortV' on a list that mixes str, int and path",
 		res.names.Intern("uniq"):      "'uniq' on a list that mixes element types",
 		res.names.Intern("urlEncode"): "the dict form of 'urlEncode'",
-		res.names.Intern("join"):      "the grid form of 'join'",
+		res.names.Intern("set"):       "'set' with a literal key",
+		res.names.Intern("setd"):      "'setd' with a literal key",
+		res.names.Intern("groupBy"):   "the grid form of 'groupBy'",
 	}
 	return t
 }
