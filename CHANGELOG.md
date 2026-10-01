@@ -65,6 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `=` and `!=` on two `Maybe` values compare their contents. Previously every comparison of two `Maybe`s was false, including `none none =`.
 - The type checker now checks list literals, dict values, and grid cells on their own empty stack, as they run.
   Code like `1 [drop]` or `1 {a: drop}` is a type error instead of a type checker crash or a pass that fails at runtime,
   and a dict value must produce exactly one value (#341).

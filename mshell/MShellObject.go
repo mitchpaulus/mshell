@@ -243,8 +243,14 @@ func (m Maybe) Concat(other MShellObject) (MShellObject, error) {
 }
 
 func (m Maybe) Equals(other MShellObject) (bool, error) {
-	otherMaybe, ok := other.(Maybe)
-	if !ok {
+	// The runtime holds Maybe values as *Maybe, so accept both forms.
+	var otherMaybe Maybe
+	switch o := other.(type) {
+	case Maybe:
+		otherMaybe = o
+	case *Maybe:
+		otherMaybe = *o
+	default:
 		return false, nil
 	}
 
