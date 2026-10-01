@@ -396,3 +396,93 @@ Benchmarks after it (the corpus now has 58 more files, +15%): corpus check 17-18
 - Core expected rejections: `unpack_union_bindings.msh`, `null.msh`, `dicts.msh`, `grid.msh`, `grid_concat.msh`, `grid_dict_strings.msh`, `grid_group_keys.msh`, `dict_types.msh` (reasons and rewrites in `tests/core_expected_rejections.txt`).
 - Stage 3 is complete except: `new` marks across mutually recursive defs; the error that names the branch each member of a join's union came from; a hint when a def signature uses a word like `dict` that is a generic, not a type.
 - Next, by the plan: stage 1 item 3 (iterative, cycle-safe walkers for `str`, `toJson`, equality, ordering, ported from the enum branch; needed before stage 4), then stage 4 (aliases and enums). Items 4 (JSON integral numbers as `int`) and 5 (runtime error classification) before stages 5 and 7.
+
+## Stage 1, item 3: iterative walkers for printing, JSON and equality (2026-10-01, third session)
+
+Not committed. Suites: test.sh 304 passed; typecheck_test.sh 297 passed; core script 333 passed, 0 unexpected; `go test` ok.
+
+- `mshell/ValueWalk.go`, ported from the enum branch (`debe03e`, `0d78c14`, `3413d03` and the fixes after them) without its enum parts, and restructured for speed.
+  `renderValueDetect` makes `ToString`, `DebugString` and `ToJson` of lists, pipes, dicts, `Maybe`s, grid rows and the JSON of grids and views with one frame per container on an explicit stack, so depth cannot overflow the Go stack.
+  The containers with a frame are the current path (searched linearly up to 32, then also a map, as `deepCopy`); meeting one again writes `<cycle>`. Rows are known on the path by grid and index, since they are made on demand.
+- `str` and `toJson` of a value that contains itself are an error ("Cannot convert a value that contains itself to a string."); `DebugString` (stack dumps, error messages) shows `<cycle>` and never fails. Changelog: Fixed.
+- `equalsIter` is equality of dicts and `Maybe`s with an explicit stack of dict pairs, in sorted key order, depth first, as before, so which pair fails first does not vary. `dagGuard` (from the enum branch) memoizes dict pairs past 2^19 steps, so DAGs are not exponential and two dicts that contain themselves compare equal (equality of the infinite trees, the assumption validation makes).
+  Not ported: the enum branch's "the same object is equal to itself" shortcut. It would make a dict holding a list equal to itself, where today it is an error (lists have no equality); the core checker's `=` table never accepts such a dict anyway.
+- Also not ported: the enum branch's `sort` by a total order across kinds (`compareValues`). This branch's `sort` compares the items' strings, `<` does not look inside containers, and the core checker types `sort` that way; ordering of enums comes with stage 4.
+- One intended output change: a dict's `DebugString` lists its keys sorted (it was Go's map order, which varies from run to run). Everything else is byte-identical with the previous binary on a sample of nested values (`str`, `toJson`, the `stack` dump).
+- Tests: `tests/fail/cyclic_str.msh` (two self-containing dicts compare, then `str` of a self-containing list fails), `tests/fail/cyclic_json.msh`; `ValueWalk_test.go` (a million-level value alternating list, dict and `Maybe`; equality of million-level chains; 2^60 paths through 60 shared dicts; cycles; equality keeps its old rules; `<cycle>` in a list, a grid cell holding its grid, a row inside a row of the same grid).
+- Performance, against the previous binary (`go test -bench`): JSON of a 1,000-string list 150 µs and 5,016 allocations before, 24 µs and 17 now; JSON of a 20-key dict 6.0 µs to 1.5 µs; `str` of the list about the same (57-65 µs); equality of two 20-key dicts 1.7 µs to 1.2 µs; two `Maybe(int)`s 2.7 ns to 4.5 ns, no allocations either way.
+
+## Stage 4: aliases and enums (2026-10-01, third session)
+
+Not committed. Suites: test.sh 316 passed; typecheck_test.sh 308 passed, 0 failed (old checker, with its skip lists); core script 357 passed, 0 unexpected, 0 not checked yet; `go test` ok; `typst compile` ok (Typst 0.15.1, real file). `formal-ver/` unchanged.
+
+Parser and runtime:
+
+- `enum Name = m1 | m2 T1 T2 | ... end`, with an optional leading `|` and parameters `enum Box[a b] = ...` (`ParseEnumDecl`, `MShellEnumDecl`); `enum` is a keyword. A type name with `[` written against it takes arguments (`Box[int]`, `Pair[int str]`); `Foo [int]` with a space is still a name and a list.
+- `MShellEnum` (enum name, member, position, payload). `RegisterEnums` records the declarations of the startup files, the script and each REPL line; a member's name is a constructor word; patterns are a member and a name per payload (`circle r`, `rect w _`, `dot`) or the enum's name, alone or with a name (`Shape s`, `Shape :>`).
+- `str`: `member` or `member(p0 p1)`, payloads in their `str` form; `toJson` externally tagged; `=` compares enum, member, payloads (payloads of different kinds are unequal, as dict values are). `deepCopy` copies payloads (path step "payload N of member" in cycle messages). Enum values are in the iterative walkers; frames there are now about 80 bytes (a million-level chain prints in 0.55 s, was 1.2 s).
+- Names: a definition whose name is taken (twice, in std, init or the script; a builtin; an enum member) is an error (`CheckDefinitionNames`), at startup, for the script and per REPL line; so is an enum or member name already used, a builtin's, or a pattern word. Messages name the file of the earlier definition (`MShellDefinition.File`, `MShellEnumDecl.File`, `MShellTypeDecl.File`; tokens are unchanged, since the call-stack printer would start printing file names if they carried one).
+
+Core checker (`TypeCoreDecl.go`):
+
+- Declarations in three passes: reserve names (collisions with builtins, std defs, the file's defs, pattern words, built-in types, earlier declarations, startup declarations); resolve alias bodies and enum payloads (parameters as `TKParam`; a recursive reference must pass the parameters in order; unions checked afterwards); reject alias cycles that pass no constructor (H13), check the unions (an enum parameter cannot be a member), `AnalyzeEnums`, `WellFormedEnum` (an internal error if it fails), constructors.
+- A constructor is a `coreSig` (payloads to `E[params]`, `keepOut`), so it goes through `apply`: generics, checking positions, fresh when every payload is fresh or immutable. A parameter no payload of the member mentions is `⊥` when covariant, else a new variable.
+- Patterns: the enum's name is a kind (`patternKind`); a kind pattern on unknown contents gives `E[k1..kn]`, one abstract type per parameter, each with the escape check; member patterns bind payloads at the subject's arguments; coverage counts members. A binding refused for having an abstract type now stops the unit (no follow-on "unknown identifier").
+- `matchSub` unfolds a recursive alias one step against a type that is not an alias (a literal with an unsolved `[]` inside, `as Person`).
+- `=`: an enum is equatable when every payload, with its arguments, is (greatest fixed point through recursive enums and aliases).
+- Startup files' declarations are declared in the frozen base (`NewCoreBase(stdlibDefs, decls)`); CLI checks report errors in them with their file. The LSP reads the init file too (`loadStartupForLSP`; an init file that does not parse is skipped).
+- New error kind `TErrDeclaration`. `tests/typecheck_core_test.sh` uses an empty `MSHINIT`, as `typecheck_test.sh` does (the user's init defined `f` and `g`).
+
+Tests: `tests/success/enum_basic.msh`, `enum_recursive.msh`, `enum_generic.msh`, `enum_deep_copy.msh`, `alias_recursive.msh`, `recursive_types.msh` (from the recursive-type branch); `tests/typecheck_fail/` enum coverage, unknown member, member/def collision, `type A = A`, `type A = int | A`, H13, invariant `Box`, H4, H5, H12, enum kind escape, `Nest[[a]]`, `Box[int] | Box[str]`, `Json | [int]`, duplicate def, and three from the recursive-type branch; `tests/fail/` duplicate def, def named like a builtin, member named like a builtin, member declared twice, pattern arity, cyclic `deepCopy` through a box; `TestCoreDeclarations`, `TestCoreStartupDeclarations`, `TestEnumDeepValue`, `TestEnumSharedSubtrees`, `TestEnumRender`. The old checker's skip lists gained the new success files and the fail files it accepts.
+
+Docs: Enum in `doc/data-types.inc.html`, enum patterns in `control-flow.inc.html`, `mshell.md` (Enums, enum patterns, the names rule); keyword styling for `enum` and `type` in `base.html`; `enum`/`type` in the Sublime and Notepad++ keyword lists (the TextMate grammar has no keyword rule; stage 8). Changelog: enums (Added); names defined once, `enum` a keyword (Changed).
+
+Found:
+
+- `x` is the execute word, so it cannot be a binding name or an unquoted dict key, in literals or shape types (`{x: int}` does not parse; `{"x": int}` does). The plan's H12 row is written with `x`; the test uses `xs`.
+- `=>` takes list, dict and `just` patterns only; a member pattern would need the parser to know arities. Recorded in the design doc.
+- The type-declaring tests the plan says to migrate (`unpack_union_bindings.msh`, `optional_as_cast_missing_required.msh`, `optional_nested_wrong_type.msh`, `unpack_brand_*_binding_type.msh`) check correctly under the core checker as they are; only their comments mention brands. `TKBrand` goes with the old checker (stage 6).
+- The old checker (still the default for `--check-types`) rejects every program that declares an enum.
+
+Left open (plan section 2): question 5, ordering of enum values; question 6, `dict` in a def signature.
+
+## Stage 1, item 4: JSON integral numbers are ints (2026-10-01, third session)
+
+Not committed. Suites: test.sh 317; typecheck_test.sh 309; core script 358, 0 unexpected; `go test` ok.
+
+- `decodeJson` decodes with `UseNumber`; `jsonNumber` gives an `int` for a number with no `.`, `e` or `E` that fits in an int, and a `float` otherwise (so `9223372036854775808` is a float). Invalid input reports `json.Unmarshal`'s message, as before.
+- Test: `tests/success/json_numbers.msh` (passes both checkers). Docs: `parseJson` in `functions.inc.html` and `mshell.md`, and the cookie-jar note that said timestamps come back as floats. Changelog: Changed.
+
+## Review of this session's work (2026-10-01, third session)
+
+An independent review (a subagent, read-only) found these; all fixed, each with a test:
+
+- Startup files' signatures were resolved before their declarations, so `def colorName (Color -- str)` in an init file read `Color` as a generic and `5 colorName` checked (then failed at runtime). `NewCoreBase` now declares first. `TestCoreStartupDeclarations`.
+- Enums that refer to each other with growing arguments (`A[t] = a B[[t]]`, `B[t] = b A[t]`) hung `equatable`; it now answers no past depth 64 (safe: `=` is refused).
+- `q. 1 + end` with a constructor `q`: the checker accepted it and the runtime's prefix-quote path did not construct. Fixed in the runtime. `enum_basic.msh`.
+- `deepCopy` of an enum value with shared subtrees took exponential time asking whether it held a list; the answer is now remembered per enum value, and one that holds nothing to copy is shared. `TestDeepCopyEnumSharedSubtrees`.
+- Errors in startup declarations (resolve errors, duplicate parameters, unions) now carry their file. `TestCoreStartupDeclarationErrors`.
+- `parseJson` turned `1e400` into `+Inf`; it is an error again, with the old message. `tests/fail/json_number_range.msh`.
+- REPL: a line whose definitions are refused no longer leaves its enums registered (definitions are checked first, everywhere).
+- An enum's debug form (stack dumps, error messages) shows payloads in their debug form (`s("x y")`); `str` is unchanged.
+- The runtime pattern check no longer changes the message for non-enum patterns once an enum is declared; the pattern-forms hint lists enum patterns.
+- `enum` inside a definition is a parse error.
+
+Not changed: the LSP does not show errors in the init file's declarations (they would appear in the open document at the wrong lines).
+Found, not from this session: `[] as Json` (and `as` to any alias whose unfolding is a union with a list member) is rejected: matching a new `[T0]` against a union stops at the union. A kind-directed step (members have distinct kinds, so it is not a guess) would fix it.
+
+## Where things stand (end of 2026-10-01, third session)
+
+- Nothing from this session is committed (the plan says commit only when asked). Branch `type-checker-enhancements`, last commit `44492af`, pushed.
+- Suites: `test.sh` 319 passed; `typecheck_test.sh` 0 failed (old checker, with skip lists); `tests/typecheck_core_test.sh` 358 passed, 0 unexpected, 0 not checked yet; `go test` ok; `typst compile ai/type-core-calculus.typ` ok. `formal-ver/` unchanged. `tests/msh-scripts` under the core checker: 75 of 118 pass (73 before).
+- Done this session: stage 1 items 3 (walkers) and 4 (JSON ints); stage 4 (aliases and enums), except the two open questions.
+- `gofmt` not run.
+- Open questions in the plan: 5 (ordering of enum values), 6 (`dict` in a def signature).
+- Next, by the plan: stage 5 (one runtime validator; `is T x` and `tryAs` in the parser, runtime and core checker; checkable targets; `deepCopy` as `(τ -- τ•)` in the core table, already so). The `try-as` branch has the `tryAs` token and parser node to read (not to cherry-pick; its validator accepts quotes by kind, which the design does not). Stage 1 item 5 (runtime error classification) before stage 7.
+
+## Questions 5 and 6 answered (2026-10-01, third session)
+
+- Enum ordering (Mitchell): no word orders enum values now; a later builtin may list an enum's members, in the order written. The order is already kept (`MShellEnum.MemberIndex`, the constructor's position). Design doc §Surface updated; question removed.
+- `dict` in a def signature (Mitchell): meant as an easy way to write `{str: T}`. The core resolver reads `dict` as `{str: T}` and `list` as `[T]`, a new generic per occurrence (generics named `_1`, `_2`, ...), as the recursive-type branch did; outside a signature either is an error asking for the full form. `list` was not asked about; it follows the recursive-type branch, which treated both alike.
+- So std's HTML helpers (`htmlDescendents`, `htmlDescendentsAcc`, `findByTag`), whose `(dict -- [dict])` would give an output generic no input fixes, are typed with `HtmlNode`, as stage 6 planned. The old checker reads `HtmlNode` there as a generic, as it read `dict`.
+- Tests: `tests/typecheck_fail/sig_dict_keyword_rejects_int.msh` (from the recursive-type branch; the old checker accepts it, so it is on its skip list), `sig_list_keyword_rejects_int.msh`, `dict_keyword_outside_signature.msh`. Docs: `mshell.md` and `type_system.inc.html` describe the shorthand. No changelog entry until the core checker is the default.

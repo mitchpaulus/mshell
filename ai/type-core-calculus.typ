@@ -414,7 +414,12 @@ member by unfolding first (subsumption).
 
 *Cyclic values.* A checked program can now build a cyclic value: `[] as [Json] j!  @j @j append`
 stores a list that contains itself (`cyc_try_typed`, with `type L = [L]`). Printing,
-`toJson`, equality and ordering must handle cycles; today `str` of such a list overflows the Go stack.
+`toJson`, equality and ordering must handle cycles. *Done (2026-10-01):* `str` and `toJson` of a
+value that contains itself are a checked error, as `deepCopy` of one is, since no finite text is
+its rendering; a stack dump or an error message writes `<cycle>` there instead. Equality assumes a
+pair of objects met again is equal, as validation does (@sec-tryas), so two cyclic dicts compare
+without hanging. Every walk uses an explicit stack, so depth cannot overflow the Go stack either.
+No word orders containers or enum values (`<` compares numbers and dates, `sort` compares strings).
 `deepCopy` of one is a checked error (@sec-copy). Validation: @sec-tryas.
 
 *Not covered:* generic aliases (`type Tree[a] = ...`). Aliases are not generic, so substitution never
@@ -2031,9 +2036,15 @@ marked open. Open questions live only in `ai/type-system-plan.md`.
 - *Constructors* are ordinary postfix words: `404 "not found" failed` has type
   `(int str -- CmdResult)`. Member names are global.
 - *Patterns:* `failed code msg :` binds the payloads at their declared types; `_` skips one.
+  The enum's name is a kind pattern (@sec-unions): `CmdResult r :` binds any of its values,
+  `CmdResult :>` keeps it on the stack, which is the form for a value of unknown type (@sec-unknown).
+  `value => pattern` takes list, dict and `just` patterns only: a member pattern there would need the
+  parser to know each member's payload count, to tell where the pattern ends.
 - *Values:* `str` gives `member` or `member(p0 p1)`. `toJson` is externally tagged: `"member"`,
   `{"member": v}`, `{"member": [v0, v1]}`. Equality compares enum name, member, then payloads.
-  Ordering compares enum name, member declaration order, then payloads.
+  No word orders enum values yet. The declaration order of the members is part of each value (and of
+  each constructor in the checker), for a later builtin that lists an enum's members in the order the
+  user wrote them (decided 2026-10-01).
 - *Generic enums:* `enum Box[a] = box [a] | empty end`. Parameters are written in brackets after
   the name, as in `Maybe[T]`, and used in payload types. A recursive reference must use the same
   parameters in the same order (`enum List[a] = cons a List[a] | nil end` is accepted,
@@ -2048,12 +2059,20 @@ marked open. Open questions live only in `ai/type-system-plan.md`.
 
 Nothing shadows anything. A constructor, type name, definition or builtin that collides with another
 name is an error. A duplicate declaration or duplicate `def` is an error, including in interactive sessions.
+The startup files (the standard library and the init file) and the script are one name space: the
+checker and the language server see the startup files' declarations as the script's own.
+Names with a meaning of their own in patterns (`_`, `just`, `none`, `null`, `list`, `dict`, `path`,
+`date`, `quotation`, `maybe`, `binary`) and the built-in types cannot be declared.
 
 == Type expressions
 
 - One type parser for `type`, `is`, `tryAs`, `as` and `def` signatures, and one resolved form of each
   type, used by both the checker and the runtime validator. No second spelling or second
   implementation of the same type.
+- In a def signature, `dict` is short for `{str: T}` and `list` for `[T]`, each with a new generic `T`
+  per occurrence (decided 2026-10-01: `dict` was always meant as an easy way to write `{str: T}`).
+  Outside a signature there is no generic to stand for `T`, so the full form is required. A shape is
+  not below `{str: T}`, so a def that only reads a dict of any kind takes `{| open}`, or a named type.
 - There is no syntax for an exact shape type. Shape literals have exact types; a written shape type
   is `open` or has a `*: T` remainder.
 
