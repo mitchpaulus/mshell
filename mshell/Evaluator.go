@@ -483,12 +483,18 @@ type EvalState struct {
 	// Numeric date order (m/d/y vs d/m/y vs y/m/d) learned from the first unambiguous toDt.
 	DateOrder DateOrder
 
-	// EnumMembers and EnumNames hold the declared enums (RegisterEnums).
+	// EnumMembers and EnumNames hold the declared enums (RegisterDeclarations).
 	EnumMembers map[string]EnumMemberInfo
 	EnumNames   map[string]bool
 	// StartupDecls are the `type` and `enum` declarations of the startup
 	// files, which the type checker sees as the script's own.
 	StartupDecls []MShellParseItem
+	// typeNames are the declared `type` names, declItems every `type` and
+	// `enum` declaration registered so far, and typeEnv the types tryAs and
+	// `is` validate against (Validate.go), made when first needed.
+	typeNames map[string]bool
+	declItems []MShellParseItem
+	typeEnv   *runtimeTypes
 }
 
 // declarationItems returns the `type` and `enum` declarations among items.
@@ -517,68 +523,93 @@ type EnumMemberInfo struct {
 var patternWords = map[string]bool{
 	"_": true, "just": true, "none": true, "null": true, "list": true, "dict": true,
 	"path": true, "date": true, "quotation": true, "maybe": true, "binary": true,
-	"Maybe": true, "Json": true, "HtmlNode": true,
+	"Maybe": true, "Json": true, "HtmlNode": true, "is": true,
 }
 
-// RegisterEnums records the enum declarations among items, so a member's
-// name constructs its value and an enum's name is a pattern. An enum or
-// member declared twice, or named like a builtin, a pattern word, an enum or
-// one of defs, is an error, and then nothing from items is recorded.
-func (state *EvalState) RegisterEnums(items []MShellParseItem, defs []MShellDefinition) error {
+// RegisterDeclarations records the `type` and `enum` declarations among
+// items: a member's name then constructs its value, an enum's name is a
+// pattern, and tryAs and `is` can validate against the types (Validate.go).
+// A name declared twice, or named like a builtin, a built-in type, a pattern
+// word, an earlier declaration or one of defs, is an error, as is a body that
+// names an unknown type, refers to itself with nothing in between, or has a
+// union of two members of one kind; then nothing from items is recorded.
+func (state *EvalState) RegisterDeclarations(items []MShellParseItem, defs []MShellDefinition) error {
 	names := make(map[string]Token)
 	for i := range defs {
 		if _, ok := names[defs[i].Name]; !ok {
 			names[defs[i].Name] = withFile(defs[i].NameToken, defs[i].File)
 		}
 	}
+	taken := func(tok Token) error {
+		name := tok.Lexeme
+		if prev, ok := names[name]; ok {
+			return fmt.Errorf("%s: '%s' is already declared or defined at %s.\n", tokenPosStr(tok), name, tokenPosStr(prev))
+		}
+		if state.EnumNames[name] {
+			return fmt.Errorf("%s: '%s' is already declared as an enum.\n", tokenPosStr(tok), name)
+		}
+		if state.typeNames[name] {
+			return fmt.Errorf("%s: '%s' is already declared as a type.\n", tokenPosStr(tok), name)
+		}
+		if info, ok := state.EnumMembers[name]; ok {
+			return fmt.Errorf("%s: '%s' is already declared as a member of enum '%s'.\n", tokenPosStr(tok), name, info.EnumName)
+		}
+		if _, ok := BuiltInList[name]; ok {
+			return fmt.Errorf("%s: '%s' is the name of a builtin.\n", tokenPosStr(tok), name)
+		}
+		if patternWords[name] {
+			return fmt.Errorf("%s: '%s' has a meaning of its own in match patterns.\n", tokenPosStr(tok), name)
+		}
+		names[name] = tok
+		return nil
+	}
 	for _, item := range items {
-		d, ok := item.(*MShellEnumDecl)
-		if !ok {
-			continue
-		}
-		taken := func(tok Token) error {
-			name := tok.Lexeme
-			if prev, ok := names[name]; ok {
-				return fmt.Errorf("%s: '%s' is already declared or defined at %s.\n", tokenPosStr(tok), name, tokenPosStr(prev))
+		switch d := item.(type) {
+		case *MShellEnumDecl:
+			if err := taken(withFile(d.NameToken, d.File)); err != nil {
+				return err
 			}
-			if state.EnumNames[name] {
-				return fmt.Errorf("%s: '%s' is already declared as an enum.\n", tokenPosStr(tok), name)
+			for _, m := range d.MemberToks {
+				if err := taken(withFile(m, d.File)); err != nil {
+					return err
+				}
 			}
-			if info, ok := state.EnumMembers[name]; ok {
-				return fmt.Errorf("%s: '%s' is already declared as a member of enum '%s'.\n", tokenPosStr(tok), name, info.EnumName)
+		case *MShellTypeDecl:
+			tok := withFile(d.NameToken, d.File)
+			if reservedTypeNames[d.Name] || builtinTypeNames()[d.Name] {
+				return fmt.Errorf("%s: '%s' is a built-in type.\n", tokenPosStr(tok), d.Name)
 			}
-			if _, ok := BuiltInList[name]; ok {
-				return fmt.Errorf("%s: '%s' is the name of a builtin.\n", tokenPosStr(tok), name)
-			}
-			if patternWords[name] {
-				return fmt.Errorf("%s: '%s' has a meaning of its own in match patterns.\n", tokenPosStr(tok), name)
-			}
-			names[name] = tok
-			return nil
-		}
-		if err := taken(withFile(d.NameToken, d.File)); err != nil {
-			return err
-		}
-		for _, m := range d.MemberToks {
-			if err := taken(withFile(m, d.File)); err != nil {
+			if err := taken(tok); err != nil {
 				return err
 			}
 		}
 	}
-	for _, item := range items {
-		d, ok := item.(*MShellEnumDecl)
-		if !ok {
-			continue
-		}
-		if state.EnumMembers == nil {
-			state.EnumMembers = make(map[string]EnumMemberInfo)
-			state.EnumNames = make(map[string]bool)
-		}
-		state.EnumNames[d.Name] = true
-		for i, m := range d.Members {
-			state.EnumMembers[m] = EnumMemberInfo{EnumName: d.Name, Arity: len(d.MemberPayloads[i]), Ordinal: i}
+	if decls := declarationItems(items); len(decls) > 0 {
+		// The bodies: types that exist, recursion through a constructor,
+		// unions of distinct kinds.
+		if err := state.declareRuntimeTypes(decls); err != nil {
+			return err
 		}
 	}
+	for _, item := range items {
+		switch d := item.(type) {
+		case *MShellEnumDecl:
+			if state.EnumMembers == nil {
+				state.EnumMembers = make(map[string]EnumMemberInfo)
+				state.EnumNames = make(map[string]bool)
+			}
+			state.EnumNames[d.Name] = true
+			for i, m := range d.Members {
+				state.EnumMembers[m] = EnumMemberInfo{EnumName: d.Name, Arity: len(d.MemberPayloads[i]), Ordinal: i}
+			}
+		case *MShellTypeDecl:
+			if state.typeNames == nil {
+				state.typeNames = make(map[string]bool)
+			}
+			state.typeNames[d.Name] = true
+		}
+	}
+	state.declItems = append(state.declItems, declarationItems(items)...)
 	return nil
 }
 
@@ -1459,12 +1490,15 @@ func (state *EvalState) processToken(token MShellParseItem, frame *EvaluationFra
 		return nil
 
 	case *MShellEnumDecl:
-		// Enums are recorded before the code runs (RegisterEnums).
+		// Enums are recorded before the code runs (RegisterDeclarations).
 		return nil
 
 	case *MShellAsCast:
 		// Static-only: `as` is a checker hint; no runtime work.
 		return nil
+
+	case *MShellTryAs:
+		return state.processTryAs(t, frame.Stack)
 
 	default:
 		return state.failPtr(fmt.Sprintf("Unknown token type: %T\n", token))
@@ -1577,6 +1611,25 @@ func (state *EvalState) processIfBlock(ifBlock *MShellParseIfBlock, frame *Evalu
 	return nil
 }
 
+// processTryAs runs `tryAs T`: it validates the top of the stack against T
+// in place and replaces it by `just` the same value, or `none`.
+func (state *EvalState) processTryAs(t *MShellTryAs, stack *MShellStack) *EvalResult {
+	value, err := stack.Pop()
+	if err != nil {
+		return state.failPtr(fmt.Sprintf("%d:%d: 'tryAs' needs a value on the stack.\n", t.Tok.Line, t.Tok.Column))
+	}
+	conforms, msg := state.validateValue(value, t.Target, &t.resolved)
+	if msg != "" {
+		return state.failPtr(fmt.Sprintf("%d:%d: 'tryAs %s': %s.\n", t.Tok.Line, t.Tok.Column, t.Target.DebugString(), msg))
+	}
+	if conforms {
+		stack.Push(&Maybe{obj: value})
+	} else {
+		stack.Push(&Maybe{obj: nil})
+	}
+	return nil
+}
+
 // processMatchBlock handles match...end blocks
 func (state *EvalState) processMatchBlock(matchBlock *MShellParseMatchBlock, frame *EvaluationFrame) *EvalResult {
 	matchBlock.assertAssertiveInvariant()
@@ -1626,6 +1679,20 @@ func (state *EvalState) matchPattern(pattern []MShellParseItem, subject MShellOb
 		if handled, matched, bindings, result := state.matchEnumPattern(pattern, subject); handled {
 			return matched, bindings, result
 		}
+	}
+	if is, ok := pattern[0].(*MShellIsPattern); ok && len(pattern) == 1 {
+		conforms, msg := state.validateValue(subject, is.Target, &is.resolved)
+		if msg != "" {
+			return false, nil, state.FailWithMessage(fmt.Sprintf("%d:%d: 'is %s': %s.\n", is.IsTok.Line, is.IsTok.Column, is.Target.DebugString(), msg))
+		}
+		if !conforms {
+			return false, nil, SimpleSuccess()
+		}
+		var bindings map[string]MShellObject
+		if is.Binding.Lexeme != "_" {
+			bindings = map[string]MShellObject{is.Binding.Lexeme: subject}
+		}
+		return true, bindings, SimpleSuccess()
 	}
 	// Handle multi-token patterns (e.g., "just v" for maybe destructuring,
 	// or "<typekeyword> name" for type-test binding).

@@ -185,7 +185,7 @@ func loadStartupFile(path string, description string, stack *MShellStack, contex
 	if err := state.CheckDefinitionNames(*definitions, parsedFile.Definitions); err != nil {
 		return fmt.Errorf("error loading %s at %s: %s", description, path, strings.TrimSpace(err.Error()))
 	}
-	if err := state.RegisterEnums(parsedFile.Items, append(slices.Clone(*definitions), parsedFile.Definitions...)); err != nil {
+	if err := state.RegisterDeclarations(parsedFile.Items, append(slices.Clone(*definitions), parsedFile.Definitions...)); err != nil {
 		return fmt.Errorf("error loading %s at %s: %s", description, path, strings.TrimSpace(err.Error()))
 	}
 	*definitions = append(*definitions, parsedFile.Definitions...)
@@ -866,7 +866,7 @@ func main() {
 		fmt.Fprint(os.Stderr, err.Error())
 		os.Exit(1)
 	}
-	if err := state.RegisterEnums(file.Items, append(slices.Clone(startupDefinitions), file.Definitions...)); err != nil {
+	if err := state.RegisterDeclarations(file.Items, append(slices.Clone(startupDefinitions), file.Definitions...)); err != nil {
 		fmt.Fprint(os.Stderr, err.Error())
 		os.Exit(1)
 	}
@@ -3834,7 +3834,7 @@ ParseError:
 		fmt.Fprint(os.Stderr, terminalSafeText(err.Error(), true))
 		goto PromptPrint
 	}
-	if err := state.evalState.RegisterEnums(parsed.Items, append(slices.Clone(state.stdLibDefs), parsed.Definitions...)); err != nil {
+	if err := state.evalState.RegisterDeclarations(parsed.Items, append(slices.Clone(state.stdLibDefs), parsed.Definitions...)); err != nil {
 		fmt.Fprint(os.Stderr, terminalSafeText(err.Error(), true))
 		goto PromptPrint
 	}

@@ -268,6 +268,28 @@ Follow a type pattern with a name to bind the matched value, just like <code>jus
 <span class="mshellEND">end</span> <span class="mshellLITERAL">wl</span> <span class="mshellLINECOMMENT"># Output: 5</span></code>
 </pre>
 
+<h2 id="control-flow-is-patterns">Typed Patterns: <code>is</code></h2>
+
+<p>
+<code>is T name</code> matches a value that conforms to the type <code>T</code>, checked at run time, and binds the value to <code>name</code> (or <code>_</code> to bind nothing).
+<code>T</code> is any type expression, such as a declared <code>type</code> or <code>enum</code>, <code>[int]</code> or <code>{str: float}</code>; see <a href="type_system.html#type-system-validation">Validating Data</a>.
+The value is checked in place, not copied.
+</p>
+
+<pre>
+<code><span class="mshellTYPE">type</span> <span class="mshellLITERAL">Config</span> <span class="mshellEQUALS">=</span> <span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">url</span><span class="mshellCOLON">:</span> <span class="mshellSTR">str</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">timeout</span><span class="mshellQUESTION">?</span><span class="mshellCOLON">:</span> <span class="mshellTYPEFLOAT">float</span><span class="mshellRIGHT_CURLY">}</span>
+
+<span class="mshellSTRING">&#34;{\&#34;url\&#34;: \&#34;http://example.com\&#34;}&#34;</span> <span class="mshellLITERAL">parseJson</span> <span class="mshellMATCH">match</span>
+    <span class="mshellLITERAL">is</span> <span class="mshellLITERAL">Config</span> <span class="mshellLITERAL">c</span> <span class="mshellCOLON">:</span> <span class="mshellVARRETRIEVE">@c</span> <span class="mshellCOLON">:</span><span class="mshellLITERAL">url</span><span class="mshellQUESTION">?</span> <span class="mshellLITERAL">wl</span><span class="mshellCOMMA">,</span>
+    <span class="mshellLITERAL">_</span> <span class="mshellCOLON">:</span> <span class="mshellSTRING">&#34;not a config&#34;</span> <span class="mshellLITERAL">wl</span><span class="mshellCOMMA">,</span>
+<span class="mshellEND">end</span></code>
+</pre>
+
+<p>
+<code>is</code> has this meaning only at the start of a match arm.
+A match whose <code>is</code> arms each name exactly one member of the value's type, such as <code>is int n</code> and <code>is [Json] items</code> for an <code>int | [Json]</code>, needs no <code>_</code> arm.
+</p>
+
 <h2>Wildcard</h2>
 
 <p>The <code>_</code> pattern matches any value and acts as a catch-all:</p>

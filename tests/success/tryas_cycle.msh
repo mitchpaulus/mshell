@@ -1,0 +1,11 @@
+# A list that contains itself is a value of type [Json] (a checked program
+# can build one). Validation assumes a pair of a value and a type it meets a
+# second time holds, so the list validates against [Json], and an `is` arm
+# for it runs.
+[] as [Json] j!
+@j @j append drop
+@j tryAs [Json] ? len wl
+@j match
+    is [Json] xs : "the arm runs" wl,
+    _ : "no" wl,
+end

@@ -733,6 +733,21 @@ type Row = [Cell]
 { "name": "Ada", "age": 36 } as Person :age? 1 +
 ```
 
+`as` does no work at run time.
+To check data from outside the script, use `tryAs T`: it checks at run time that the value on top of the stack conforms to `T`, and replaces it with `just` the same value, or `none`.
+The value is checked in place, never copied.
+Every element, dictionary value and enum payload is checked; a written shape type allows other keys; a value that contains itself conforms to a type it has.
+`T` cannot be a quotation type, an enum holding a quotation, or a def's generic.
+A check that takes more than 67,108,864 steps stops the program with an error.
+
+```mshell
+type Person = {name: str, age: int}
+"[{\"name\": \"Ada\", \"age\": 36}]" parseJson tryAs [Person] ? (:age?) map sum wl
+```
+
+The type checker allows `tryAs` on a value nothing else refers to yet (such as `parseJson`'s result) to any type.
+A stored value, or a def's input, can only be checked against a type it already has, or one with no list or dict in it; otherwise check a copy: `@data deepCopy tryAs T`.
+
 Dictionary types are split into homogeneous dictionaries and shapes.
 A homogeneous dictionary is for dynamic keys where every value has the same type.
 In a type expression, write `{str: int}`.
@@ -1145,6 +1160,21 @@ end wl # Output: 5
 
 The name of a declared enum is a type pattern too: it matches any member of that enum,
 and may be followed by a name for the value, as in `Shape s`.
+
+### Typed Patterns: `is`
+
+`is T name` matches a value that conforms to type `T`, checked at run time as `tryAs` does, and binds it to `name` (`_` binds nothing).
+`is` has this meaning only at the start of a match arm.
+`is` arms that each name exactly one member of the value's type cover it, with no `_` arm needed.
+
+```mshell
+type Config = {url: str, timeout?: float}
+
+"{\"url\": \"http://example.com\"}" parseJson match
+    is Config c : @c :url? wl,
+    _ : "not a config" wl,
+end
+```
 
 ### Enum Patterns
 

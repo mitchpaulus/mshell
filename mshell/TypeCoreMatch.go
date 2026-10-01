@@ -156,6 +156,10 @@ type coreArm struct {
 	// matches, in the enum memberEnum, or 0.
 	member     int
 	memberEnum uint32
+	// is is the type of an `is T x` pattern, or TidNothing; isTok is its
+	// `is`.
+	is    TypeId
+	isTok Token
 }
 
 type coreBinding struct {
@@ -194,10 +198,24 @@ func (c *coreChecker) matchBlock(m *MShellParseMatchBlock) {
 		}
 		arms = append(arms, a)
 		below := len(c.stack) - 1
+		if a.is != TidNothing && !c.validates(subj, a.is, a.isTok) {
+			// Validated in place, the value is new only if it was.
+			c.stack[below].share()
+		}
 		if arm.Consume {
 			c.stack = c.stack[:below]
 		} else {
 			c.stack[below].t = a.subject
+			// A binding is a store of the value, or of something inside
+			// it, so the value left on the stack is no longer the only
+			// reference: `[1 2] match list xs :> as [int | str]` would
+			// otherwise give xs's list a second type.
+			for _, b := range a.binds {
+				if !c.rel.Immutable(c.subst.Apply(c.arena, b.t)) {
+					c.stack[below].share()
+					break
+				}
+			}
 		}
 		for _, b := range a.binds {
 			if c.mentionsAbstract(b.t) {
@@ -332,6 +350,16 @@ func (c *coreChecker) mentionsAbstract(t TypeId) bool {
 // analyzePattern reads one arm's pattern against a subject of type t.
 func (c *coreChecker) analyzePattern(pattern []MShellParseItem, t TypeId, at Token) (coreArm, bool) {
 	a := coreArm{subject: t, listLen: -1}
+	if is, ok := pattern[0].(*MShellIsPattern); ok && len(pattern) == 1 {
+		target, ok := c.validationTarget(is.Target, is.IsTok)
+		if !ok {
+			c.abandoned = true
+			return coreArm{}, false
+		}
+		a.subject, a.is, a.isTok = target, target, is.IsTok
+		c.bind(&a, is.Binding, target)
+		return a, true
+	}
 	if first, ok := pattern[0].(Token); ok && first.Type == LITERAL {
 		if ct := c.ctorNamed(first.Lexeme); ct != nil {
 			return c.memberPattern(a, ct, first, pattern[1:])
@@ -533,11 +561,26 @@ func (c *coreChecker) exhaustive(arms []coreArm, t TypeId) bool {
 			return true
 		}
 	}
+	// An `is T` arm covers a member equivalent to T, or the whole type.
+	isCovers := func(m TypeId) bool {
+		for _, a := range arms {
+			if a.is != TidNothing && c.isCovers(a.is, m) {
+				return true
+			}
+		}
+		return false
+	}
+	if isCovers(t) {
+		return true
+	}
 	var members []TypeId
 	if !c.members(t, &members) {
 		return false
 	}
 	for _, m := range members {
+		if isCovers(m) {
+			continue
+		}
 		k, ok := c.rel.kindOf(m)
 		if !ok {
 			return false

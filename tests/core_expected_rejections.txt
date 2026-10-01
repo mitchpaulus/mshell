@@ -1,7 +1,7 @@
 # Programs in tests/success that the core checker rejects on purpose.
 # One file name per line, then a tab and the rewrite that passes.
 unpack_union_bindings.msh	the iff arms join to {a: int | float, b?: str}, and `@a 1 +` on a float is a runtime error (+ does not mix int and float); write the second literal's a as an int, or add 1.0 in a match on float
-null.msh	`'null' parseJson` is Json, not int | null; validate first: `'null' parseJson tryAs int | null ? classify` (tryAs is stage 5)
+null.msh	`'null' parseJson` is Json, not int | null; validate first: `'null' parseJson tryAs int | null ? classify` (checked: passes the core checker, same output)
 dicts.msh	`d` is stored as three different shapes in one scope; use a new name for each (d1, d2, d3)
 grid.msh	line 101 `toDict dup "x" get? 10 * "y" swap set` adds a key to a dict that `dup` made shared; build the row as a new literal: `(toDict d! {"x": @d :x?, "y": @d :x? 10 *}) map`
 grid_concat.msh	`@wg1 @wg2 extend` widens the stored grid's int column with floats in place (P6); give the column the wider type where the grid is made: `[| x; 1; 2 |] "x" (as int | float) updateCol wg1!`; and `dropped` is stored as a Grid and a GridView in one scope: use `drop`

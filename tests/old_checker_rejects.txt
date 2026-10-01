@@ -15,3 +15,7 @@ enum_generic.msh
 alias_recursive.msh
 enum_deep_copy.msh
 recursive_types.msh
+r6_refinements.msh
+tryas.msh
+tryas_cycle.msh
+tryas_types.msh

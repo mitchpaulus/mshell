@@ -781,7 +781,7 @@ func itemsMayUseVariables(items []MShellParseItem) bool {
 					return true
 				}
 			}
-		case *MShellGetter, *MShellTypeDecl, *MShellEnumDecl, *MShellAsCast:
+		case *MShellGetter, *MShellTypeDecl, *MShellEnumDecl, *MShellAsCast, *MShellTryAs:
 		default:
 			// Quotations capture the map, match arms and varstore lists
 			// store into it, and indexing a quotation builds one.
@@ -1452,6 +1452,8 @@ func (parser *MShellParser) ParseItem() (MShellParseItem, error) {
 		return parser.ParsePrefixQuote()
 	case AS:
 		return parser.ParseAsCast()
+	case TRYAS:
+		return parser.ParseTryAs()
 	case ENUM:
 		return nil, fmt.Errorf("%d:%d: An enum is declared at the top level of a file, not inside a definition, list or quotation.", parser.curr.Line, parser.curr.Column)
 	case FORMATSTRINGSTART:
@@ -2036,6 +2038,19 @@ func (parser *MShellParser) ParseMatchBlock() (*MShellParseMatchBlock, error) {
 		}
 
 		arm := MShellParseMatchArm{}
+
+		// `is T x`: a typed pattern. `is` has this meaning only at the head
+		// of an arm, so it is not a reserved word.
+		if parser.curr.Type == LITERAL && parser.curr.Lexeme == "is" {
+			pat, err := parser.parseIsPattern()
+			if err != nil {
+				return matchBlock, err
+			}
+			arm.Pattern = append(arm.Pattern, pat)
+			if parser.curr.Type != COLON && parser.curr.Type != MATCHARMDUP {
+				return matchBlock, fmt.Errorf("%d:%d: Expected ':' or ':>' after the typed pattern 'is %s %s', got %s.", parser.curr.Line, parser.curr.Column, pat.Target.DebugString(), pat.Binding.Lexeme, tokDesc(parser.curr))
+			}
+		}
 
 		// Parse pattern items until COLON or MATCHARMDUP
 		for {

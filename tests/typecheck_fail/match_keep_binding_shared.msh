@@ -1,0 +1,4 @@
+# A `:>` arm that binds a name stores the value, so the value it leaves on the
+# stack is shared: widening it would give the list in xs a second type.
+[1 2] match list xs :> as [int | str] "a" append drop end
+@xs (1 +) map len wl

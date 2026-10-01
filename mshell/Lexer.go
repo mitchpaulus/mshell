@@ -119,6 +119,7 @@ const (
 	TRY
 	FAIL_KEYWORD
 	PURE
+	TRYAS // tryAs: validate a value against a type at runtime
 )
 
 func (t TokenType) String() string {
@@ -315,6 +316,8 @@ func (t TokenType) String() string {
 		return "FAIL_KEYWORD"
 	case PURE:
 		return "PURE"
+	case TRYAS:
+		return "TRYAS"
 	default:
 		return "UNKNOWN"
 	}
@@ -702,6 +705,9 @@ func (l *Lexer) literalOrKeywordType() TokenType {
 					case 'u':
 						return l.checkKeyword(3, "e", TRUE)
 					case 'y':
+						if l.curLen() > 3 {
+							return l.checkKeyword(3, "As", TRYAS)
+						}
 						return l.checkKeyword(3, "", TRY)
 					}
 				}

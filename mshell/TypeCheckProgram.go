@@ -628,6 +628,10 @@ func freshAfter(item MShellParseItem, before, lenBefore, lenAfter int, diverged,
 	return 0
 }
 
+// coreOnlyHint is the old checker's error for tryAs and `is` patterns, which
+// only the core checker checks (ai/type-system-plan.md, stage 5).
+const coreOnlyHint = "tryAs and `is` patterns are checked only by the new checker; set MSH_CHECKER=core"
+
 func (c *Checker) checkParseItemStep(item MShellParseItem) {
 	switch it := item.(type) {
 
@@ -640,6 +644,10 @@ func (c *Checker) checkParseItemStep(item MShellParseItem) {
 		if target != TidNothing {
 			c.castTop(target, it.AsToken, c.freshBefore == 1, c.freshDeepBefore)
 		}
+		return
+
+	case *MShellTryAs:
+		c.errors = append(c.errors, TypeError{Kind: TErrTypeMismatch, Pos: it.Tok, Hint: coreOnlyHint})
 		return
 
 	case Token:
@@ -1363,10 +1371,14 @@ func (c *Checker) checkMatchBlock(matchBlock *MShellParseMatchBlock) {
 			return
 		}
 		if len(arm.Pattern) > 0 && !info.Recognized {
+			hint := matchPatternFormsHint
+			if _, ok := arm.Pattern[0].(*MShellIsPattern); ok {
+				hint = coreOnlyHint
+			}
 			c.errors = append(c.errors, TypeError{
 				Kind: TErrInvalidMatchPattern,
 				Pos:  arm.Pattern[0].GetStartToken(),
-				Hint: matchPatternFormsHint,
+				Hint: hint,
 			})
 		}
 		// Apply per-arm subject handling.

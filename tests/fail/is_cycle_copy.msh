@@ -1,0 +1,5 @@
+# A list that contains itself validates against [Json], but has no copy.
+[] as [Json] j!
+@j @j append drop
+@j match is [Json] _ : "valid" wl, _ : , end
+@j deepCopy

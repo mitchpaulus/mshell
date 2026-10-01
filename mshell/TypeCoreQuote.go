@@ -489,4 +489,7 @@ type coreDeferred struct {
 	t, want TypeId
 	mark    coreMark
 	rule    keyRule
+	// validation marks a shared value given to tryAs or `is`, for the
+	// error's wording (TypeCoreValidate.go).
+	validation bool
 }

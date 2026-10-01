@@ -1,0 +1,5 @@
+# A stored {age: int} is not a {str: int | str}: validating it in place would
+# let a string be written where the variable's type says int.
+{age: 1} ages!
+@ages tryAs {str: int | str} ? "age" "one" set drop
+@ages :age? 1 + wl

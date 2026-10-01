@@ -29,6 +29,12 @@ func TestCoreChecker(t *testing.T) {
 		// Variables: one type per scope, fixed by the first store.
 		{`false if 1 x! else "a" x! end @x 1 +`, false, "variable 'x' has type int"},
 		{`"a\nb" text!  @text lines text!`, false, "use a new name, or widen the first store"},
+		// tryAs and `is` on a shared value: a kind pattern is suggested when
+		// only members already below the type could pass (question 7).
+		{`def f (int | [Json] -- int) match is int n : @n, is [Json] xs : 0, end end`, false, "kind pattern `list name`"},
+		{`def f (int | [Json] -- int) match is [int] xs : 0, _ : 1, end end`, false, "validate a copy"},
+		{`def f (int | [Json] -- int) tryAs [Json] drop 0 end`, false, "kind pattern `list name`"},
+		{`def f (int | [Json] -- int) match int n : @n, list xs : 0, end end`, true, ""},
 		// A ⊥ in a store fixes nothing.
 		{`none r!  5 just r!  none r!  @r ? 1 + wl`, true, ""},
 		{`[none] l!  @l 5 just append drop`, true, ""},

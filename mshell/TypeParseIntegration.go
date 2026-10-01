@@ -4,12 +4,14 @@ package main
 //
 //   - MShellTypeDecl: `type Name = <typeExpr>` top-level declaration.
 //   - MShellAsCast:    `<value> as <typeExpr>` postfix cast.
+//   - MShellTryAs:     `<value> tryAs <typeExpr>`, validation.
+//   - MShellIsPattern: `is <typeExpr> name`, validation in a match arm.
 //
-// Both store the parsed-but-unresolved type AST. Resolution to TypeIds
+// Each stores the parsed-but-unresolved type AST. Resolution to TypeIds
 // happens when the checker walks the parse tree, so forward references
 // to user-declared types work in declaration order. At evaluation time
-// both nodes are no-ops — `as` is purely static and `type` declarations
-// have no runtime effect by design.
+// `as` and `type` are no-ops; `tryAs` and `is` resolve their type once
+// and validate values against it (Validate.go).
 
 import (
 	"fmt"
@@ -164,6 +166,83 @@ func (c *MShellAsCast) DebugString() string {
 
 func (c *MShellAsCast) GetStartToken() Token { return c.AsToken }
 func (c *MShellAsCast) GetEndToken() Token   { return c.AsToken }
+
+// MShellTryAs is `<value> tryAs <typeExpr>`: it validates the value against
+// the type in place and pushes `just` the same value, or `none`
+// (ai/type-core-calculus.typ, "Validation: tryAs and is").
+type MShellTryAs struct {
+	Tok    Token
+	Target MShellParseItem
+	// The target resolved by the runtime, once (Validate.go).
+	resolved runtimeTarget
+}
+
+func (t *MShellTryAs) ToJson() string {
+	return fmt.Sprintf("{\"kind\": \"tryAs\", \"type\": %s}", t.Target.ToJson())
+}
+
+func (t *MShellTryAs) DebugString() string {
+	return "tryAs " + t.Target.DebugString()
+}
+
+func (t *MShellTryAs) GetStartToken() Token { return t.Tok }
+func (t *MShellTryAs) GetEndToken() Token   { return t.Target.GetEndToken() }
+
+// ParseTryAs handles a postfix `tryAs <typeExpr>`. The TRYAS keyword is the
+// current token on entry.
+func (parser *MShellParser) ParseTryAs() (*MShellTryAs, error) {
+	tok := parser.curr
+	parser.NextToken() // consume TRYAS
+	target, errs := parser.parseTypeExpr()
+	if len(errs) > 0 {
+		return nil, fmt.Errorf("'tryAs' target: %s", joinTypeErrs(errs))
+	}
+	return &MShellTryAs{Tok: tok, Target: target}, nil
+}
+
+// MShellIsPattern is the match pattern `is <typeExpr> name`: the arm runs
+// when the value validates against the type, and the value is stored in
+// name (`_` stores nothing).
+type MShellIsPattern struct {
+	IsTok   Token
+	Target  MShellParseItem
+	Binding Token
+	// The target resolved by the runtime, once (Validate.go).
+	resolved runtimeTarget
+}
+
+func (p *MShellIsPattern) ToJson() string {
+	return fmt.Sprintf("{\"kind\": \"isPattern\", \"type\": %s, \"binding\": %q}", p.Target.ToJson(), p.Binding.Lexeme)
+}
+
+func (p *MShellIsPattern) DebugString() string {
+	return "is " + p.Target.DebugString() + " " + p.Binding.Lexeme
+}
+
+func (p *MShellIsPattern) GetStartToken() Token { return p.IsTok }
+func (p *MShellIsPattern) GetEndToken() Token   { return p.Binding }
+
+// parseIsPattern parses `is <typeExpr> name`. The `is` word is the current
+// token on entry.
+func (parser *MShellParser) parseIsPattern() (*MShellIsPattern, error) {
+	isTok := parser.curr
+	parser.NextToken() // consume is
+	target, errs := parser.parseTypeExpr()
+	if len(errs) > 0 {
+		return nil, fmt.Errorf("'is' pattern: %s", joinTypeErrs(errs))
+	}
+	if parser.curr.Type != LITERAL {
+		hint := ""
+		if parser.curr.Type == INTERPRET {
+			hint = " 'x' runs a quotation, so it cannot be a name."
+		}
+		return nil, fmt.Errorf("%d:%d: Expected a name (or '_') after 'is %s', got %s. The typed pattern is written 'is T name'.%s",
+			parser.curr.Line, parser.curr.Column, target.DebugString(), tokDesc(parser.curr), hint)
+	}
+	binding := parser.curr
+	parser.NextToken() // consume the name
+	return &MShellIsPattern{IsTok: isTok, Target: target, Binding: binding}, nil
+}
 
 // ParseTypeDecl handles a top-level `type Name = <typeExpr>`. The TYPE
 // keyword is the current token on entry; on return, parser.curr is past

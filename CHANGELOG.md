@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The enum's name is a match pattern for any of its members (`Shape s : ...`).
   Enums may have parameters (`enum Box[a] = box [a] | empty end`) and may refer to themselves.
   `str` gives `circle(2)`, `toJson` gives `{"circle": 2}`, and `=` compares the member and its payloads.
+- `tryAs T` checks at run time that a value conforms to the type `T`, and gives `just` the same value or `none`:
+  `"people.json" parseJson tryAs [Person] ?`.
+  Every element, dictionary value and enum payload is checked, in place, with no copy.
+  The match pattern `is T name` does the same check in a match arm, and binds the value.
 - `del` removes a key from a dictionary: `{a: 1, b: 2} "a" del`. Nothing happens when the key is absent.
 - `deepCopy` copies a value, giving every list, dict and grid inside it a new object, so changing the copy never changes the original.
 - The file manager previews PNG, JPEG, and GIF images in terminals that support sixel graphics, such as Windows Terminal, WezTerm, foot, and xterm.
@@ -38,7 +42,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A name can be defined only once. A second definition of a name, in the script, the init file or the standard library,
   is an error, as is a definition with the name of a builtin or an enum member.
   Previously the first definition silently won, so a later one never ran.
-- `enum` is a keyword.
+- `enum` and `tryAs` are keywords.
+- A `type` name can be declared only once, and not with the name of an enum, an enum member, a builtin or a built-in type.
+  A `type` or `enum` declaration that names an unknown type, refers to itself with nothing in between (`type A = A`),
+  or has a union of two lists or two dictionaries is an error before the script runs, with or without the type checker.
 - `parseJson` gives an `int` for a JSON number with no fraction or exponent, such as `30`, and a `float` for any other, such as `30.0` or `3e1`.
   Previously every JSON number was a `float`.
 - Format string interpolations can hold any code: string literals, dictionaries, and nested format strings all work inside `{...}`.

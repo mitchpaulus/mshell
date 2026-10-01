@@ -9,6 +9,7 @@ It does not change the runtime data model described in <a href="data-types.html"
     <li><a href="#type-system-running">Running the Checker</a></li>
     <li><a href="#type-system-stack-effects">Stack Effects</a></li>
     <li><a href="#type-system-type-expressions">Type Expressions</a></li>
+    <li><a href="#type-system-validation">Validating Data</a></li>
     <li><a href="#type-system-dictionaries">Dictionaries</a></li>
     <li><a href="#type-system-lists">Lists</a></li>
     <li><a href="#type-system-quotes">Quotations</a></li>
@@ -152,6 +153,43 @@ Use <code>as</code> to make an explicit assertion when the checker needs help wi
 </p>
 
 <pre><code>{ "name": "Ada", "age": 36 } as Person</code></pre>
+
+<h1 id="type-system-validation">Validating Data <a class="section-link" href="#type-system-validation" aria-label="Permalink">§</a> <a class="back-to-top" href="#type-system-top">Back to top</a></h1>
+
+<p>
+<code>as</code> does nothing at run time, so it cannot say what data from outside the script holds.
+<code>tryAs T</code> checks at run time that the value on top of the stack conforms to <code>T</code>.
+It replaces the value with <code>just</code> the same value when it does, and with <code>none</code> when it does not.
+The value is checked in place, not copied, and nothing about it changes.
+</p>
+
+<pre>
+<code><span class="mshellTYPE">type</span> <span class="mshellLITERAL">Person</span> <span class="mshellEQUALS">=</span> <span class="mshellLEFT_CURLY">{</span><span class="mshellLITERAL">name</span><span class="mshellCOLON">:</span> <span class="mshellSTR">str</span><span class="mshellCOMMA">,</span> <span class="mshellLITERAL">age</span><span class="mshellCOLON">:</span> <span class="mshellTYPEINT">int</span><span class="mshellRIGHT_CURLY">}</span>
+
+<span class="mshellSTRING">&#34;[{\&#34;name\&#34;: \&#34;Ada\&#34;, \&#34;age\&#34;: 36}]&#34;</span> <span class="mshellLITERAL">parseJson</span> <span class="mshellTRYAS">tryAs</span> <span class="mshellLEFT_SQUARE_BRACKET">[</span><span class="mshellLITERAL">Person</span><span class="mshellRIGHT_SQUARE_BRACKET">]</span> <span class="mshellMATCH">match</span>
+    <span class="mshellLITERAL">just</span> <span class="mshellLITERAL">people</span> <span class="mshellCOLON">:</span> <span class="mshellVARRETRIEVE">@people</span> <span class="mshellLEFT_PAREN">(</span><span class="mshellCOLON">:</span><span class="mshellLITERAL">age</span><span class="mshellQUESTION">?</span><span class="mshellRIGHT_PAREN">)</span> <span class="mshellLITERAL">map</span> <span class="mshellLITERAL">sum</span> <span class="mshellLITERAL">wl</span><span class="mshellCOMMA">,</span>
+    <span class="mshellLITERAL">none</span> <span class="mshellCOLON">:</span> <span class="mshellSTRING">&#34;not a list of people&#34;</span> <span class="mshellLITERAL">wl</span><span class="mshellCOMMA">,</span>
+<span class="mshellEND">end</span></code>
+</pre>
+
+<p>
+Every part of the value is checked: each element of a list, each value of a dictionary, each payload of an enum value.
+A written shape type allows keys it does not name, and an optional field may be missing.
+A recursive type such as <code>Json</code> checks the whole value, and a value that contains itself conforms to a type it has.
+A match arm can check a type too, with <a href="control-flow.html#control-flow-is-patterns"><code>is T name</code></a>.
+</p>
+
+<p>
+A quotation cannot be looked inside, so <code>T</code> cannot be a quotation type or an enum that holds one, and a def's generic is not known at run time.
+Checking a very large value stops with an error, not <code>none</code>, after 67,108,864 steps.
+</p>
+
+<p>
+The type checker allows <code>tryAs</code> on a value that nothing else refers to yet, such as the result of <code>parseJson</code>, to any type.
+A value that is stored, or a def's input, can only be checked against a type it already has, or one with no list or dictionary in it,
+because after the check the same list or dictionary would have two types.
+Check the value where it is made (<code>parseJson tryAs T ?</code>), or check a copy (<code>deepCopy tryAs T</code>).
+</p>
 
 <h1 id="type-system-dictionaries">Dictionaries <a class="section-link" href="#type-system-dictionaries" aria-label="Permalink">§</a> <a class="back-to-top" href="#type-system-top">Back to top</a></h1>
 
@@ -437,6 +475,6 @@ Runtime checks still exist for data-dependent conditions such as missing diction
 </p>
 
 <p>
-When the checker cannot infer a precise shape for dynamic data, prefer adding a named type and an <code>as</code> assertion near the boundary where the data enters typed code.
+For data from outside the script, add a named type and check the data against it with <a href="#type-system-validation"><code>tryAs</code></a> where it enters the script.
 That keeps the rest of the script checked with useful dictionary, list, union, and quotation types.
 </p>
