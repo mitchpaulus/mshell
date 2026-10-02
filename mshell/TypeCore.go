@@ -750,6 +750,9 @@ func (c *coreChecker) word(tok Token) {
 	if c.gridWord(tok) || c.dictWord(tok) || c.commandWord(tok) {
 		return
 	}
+	if (tok.Lexeme == "and" || tok.Lexeme == "or") && c.andOr(tok) {
+		return
+	}
 	if tok.Lexeme == "append" {
 		c.widenForAppend()
 		if c.appendBelow(tok) {
@@ -1303,6 +1306,15 @@ func (c *coreChecker) equatable(t TypeId, inDict bool) bool {
 	return c.equatableIn(t, inDict, nil)
 }
 
+// isScalarTid reports whether t is a base type other than null.
+func isScalarTid(t TypeId) bool {
+	switch t {
+	case TidInt, TidFloat, TidStr, TidBool, TidBytes, TidPath, TidDateTime:
+		return true
+	}
+	return false
+}
+
 func (c *coreChecker) equatableIn(t TypeId, inDict bool, visiting []TypeId) bool {
 	switch t {
 	case TidInt, TidFloat, TidStr, TidBool, TidBytes, TidPath, TidDateTime, TidNull, TidBottom:
@@ -1339,10 +1351,14 @@ func (c *coreChecker) equatableIn(t TypeId, inDict bool, visiting []TypeId) bool
 		}
 		return c.equatableIn(c.arena.aliases[n.A].Body, inDict, append(visiting, t))
 	case TKUnion:
+		members := c.arena.unionMembers[n.Extra]
 		if !inDict {
-			return false
+			// Values of different kinds are a runtime error, except that
+			// null compares (unequal) with any scalar, on either side.
+			return len(members) == 2 && slices.Contains(members, TidNull) &&
+				slices.ContainsFunc(members, isScalarTid)
 		}
-		for _, m := range c.arena.unionMembers[n.Extra] {
+		for _, m := range members {
 			if !c.equatableIn(m, false, visiting) {
 				return false
 			}

@@ -1,0 +1,7 @@
+# JSON has no NaN or infinity, so toJson writes null for them.
+"inf" toFloat 0.0 maybe inf!
+"-inf" toFloat 0.0 maybe negInf!
+"nan" toFloat 0.0 maybe nan!
+@inf toJson wl
+[1.5 @negInf @nan] toJson wl
+{a: @nan, b: 2.5} toJson wl

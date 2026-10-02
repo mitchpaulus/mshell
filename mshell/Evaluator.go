@@ -4927,6 +4927,15 @@ func jsonNumber(n json.Number) MShellObject {
 	return MShellFloat{f}
 }
 
+// bareWordAsString turns a bare word from a list literal into a string.
+// Other objects are returned unchanged.
+func bareWordAsString(obj MShellObject) MShellObject {
+	if lit, ok := obj.(MShellLiteral); ok {
+		return MShellString{lit.LiteralText}
+	}
+	return obj
+}
+
 func ParseJsonObjToMshell(jsonObj any) MShellObject {
 	// See https://pkg.go.dev/encoding/json#Unmarshal
 	switch o := jsonObj.(type) {
@@ -6502,7 +6511,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 				case "-rot":
 					// Check that there are at least 3 items on the stack
 					if len(*stack) < 3 {
-						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'rot' operation on a stack with less than three items.\n", t.Line, t.Column))
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do '-rot' operation on a stack with less than three items.\n", t.Line, t.Column))
 					}
 					top, _ := stack.Pop()
 					second, _ := stack.Pop()
@@ -6864,6 +6873,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot evaluate 'lines' on an empty stack.\n", t.Line, t.Column))
 					}
 
+					obj = bareWordAsString(obj)
 					s1, ok := obj.(MShellString)
 					if !ok {
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot evaluate 'lines' on a %s.\n", t.Line, t.Column, obj.TypeName()))
@@ -7186,6 +7196,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'toFloat' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
+					obj = bareWordAsString(obj)
 					switch objTyped := obj.(type) {
 					case MShellString:
 						floatVal, err := strconv.ParseFloat(strings.TrimSpace(objTyped.Content), 64)
@@ -7208,6 +7219,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'toInt' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
+					obj = bareWordAsString(obj)
 					switch objTyped := obj.(type) {
 					case MShellString:
 						intVal, err := strconv.Atoi(strings.TrimSpace(objTyped.Content))
@@ -7383,30 +7395,28 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'psub' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
+					// Check the type before creating the file, so a bad input leaves no file behind.
+					var contents string
+					switch obj1Typed := obj1.(type) {
+					case MShellString:
+						contents = obj1Typed.Content
+					case MShellLiteral:
+						contents = obj1Typed.LiteralText
+					default:
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'psub' with a %s.\n", t.Line, t.Column, obj1.TypeName()))
+					}
+
 					// Do process substitution with temporary files
-					// Create a temporary file
 					tmpfile, err := os.CreateTemp("", "msh-")
 					if err != nil {
 						return state.CheckedFailure(fmt.Sprintf("%d:%d: Error creating temporary file: %s\n", t.Line, t.Column, err.Error()))
 					}
 					registerTempFileForCleanup(tmpfile.Name())
 
-					// Write the contents of the object to the temporary file
-					switch obj1Typed := obj1.(type) {
-					case MShellString:
-						_, err = tmpfile.WriteString(obj1Typed.Content)
-						if err != nil {
-							tmpfile.Close()
-							return state.CheckedFailure(fmt.Sprintf("%d:%d: Error writing to temporary file: %s\n", t.Line, t.Column, err.Error()))
-						}
-					case MShellLiteral:
-						_, err = tmpfile.WriteString(obj1Typed.LiteralText)
-						if err != nil {
-							tmpfile.Close()
-							return state.CheckedFailure(fmt.Sprintf("%d:%d: Error writing to temporary file: %s\n", t.Line, t.Column, err.Error()))
-						}
-					default:
-						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'psub' with a %s.\n", t.Line, t.Column, obj1.TypeName()))
+					_, err = tmpfile.WriteString(contents)
+					if err != nil {
+						tmpfile.Close()
+						return state.CheckedFailure(fmt.Sprintf("%d:%d: Error writing to temporary file: %s\n", t.Line, t.Column, err.Error()))
 					}
 					tmpfile.Close()
 					stack.Push(MShellString{tmpfile.Name()})
@@ -7417,7 +7427,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 				case "date":
 					dateTimeObj, err := stack.Pop()
 					if err != nil {
-						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'day' operation on an empty stack.\n", t.Line, t.Column))
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'date' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
 					dateTime, ok := dateTimeObj.(*MShellDateTime)
@@ -7524,6 +7534,8 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						default:
 							return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot mod a %s by a float. Use 'toFloat' / 'toInt' to convert explicitly — 'mod' does not coerce numeric types.\n", t.Line, t.Column, obj2.TypeName()))
 						}
+					default:
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do a 'mod' operation between a %s and a %s.\n", t.Line, t.Column, obj2.TypeName(), obj1.TypeName()))
 					}
 				case "basename", "dirname", "ext", "stem":
 					obj1, err := stack.Pop()
@@ -7637,7 +7649,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 				case "trim", "trimStart", "trimEnd":
 					obj1, err := stack.Pop()
 					if err != nil {
-						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'trim' operation on an empty stack.\n", t.Line, t.Column))
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
 					}
 
 					str, err := obj1.CastString()
@@ -7917,24 +7929,27 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						return state.CheckedFailure(fmt.Sprintf("%d:%d: Cannot leftPad to a negative total length (%d).\n", t.Line, t.Column, totalLen.Value))
 					}
 
-					if len(inputStr) >= totalLen.Value {
+					// Lengths count runes, so a multi-byte pad character is never cut.
+					inputLen := utf8.RuneCountInString(inputStr)
+					if inputLen >= totalLen.Value {
 						stack.Push(MShellString{inputStr})
 					} else {
-						needed := totalLen.Value - len(inputStr)
-						padLen := len(padStr)
+						needed := totalLen.Value - inputLen
+						padRunes := []rune(padStr)
+						padLen := len(padRunes)
 
 						repeatCount := needed / padLen
 						remainder := needed % padLen
 
 						var builder strings.Builder
-						builder.Grow(totalLen.Value)
+						builder.Grow(len(inputStr) + (repeatCount+1)*len(padStr))
 
 						for range repeatCount {
 							builder.WriteString(padStr)
 						}
 
 						if remainder > 0 {
-							builder.WriteString(padStr[:remainder])
+							builder.WriteString(string(padRunes[:remainder]))
 						}
 
 						builder.WriteString(inputStr)
@@ -7948,7 +7963,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 
 					dateTimeObj, ok := obj1.(*MShellDateTime)
 					if !ok {
-						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot check if a %s is a weekend.\n", t.Line, t.Column, obj1.TypeName()))
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do '%s' on a %s. Expected a datetime.\n", t.Line, t.Column, t.Lexeme, obj1.TypeName()))
 					}
 
 					dayOfWeek := int(dateTimeObj.Time.Weekday())
@@ -7963,7 +7978,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 				case "toUnixTime", "toUnixTimeMilli", "toUnixTimeMicro", "toUnixTimeNano":
 					obj1, err := stack.Pop()
 					if err != nil {
-						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'unixTime' operation on an empty stack.\n", t.Line, t.Column))
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do '%s' operation on an empty stack.\n", t.Line, t.Column, t.Lexeme))
 					}
 					dateTimeObj, ok := obj1.(*MShellDateTime)
 					if !ok {
@@ -8812,7 +8827,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					// Get the SHA256 hash of a file
 					obj1, err := stack.Pop()
 					if err != nil {
-						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'sha256sumfile' operation on an empty stack.\n", t.Line, t.Column))
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'sha256sum' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
 					path, err := obj1.CastString()
@@ -10052,6 +10067,8 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					case MShellString:
 						// Create a new CSV reader directly from the string contents
 						reader = csv.NewReader(strings.NewReader(obj1Typed.Content))
+					default:
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot parse a %s as CSV.\n", t.Line, t.Column, obj1.TypeName()))
 					}
 					reader.FieldsPerRecord = -1
 
@@ -10188,7 +10205,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 				case "utcToCst":
 					obj1, err := stack.Pop()
 					if err != nil {
-						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'toCst' operation on an empty stack.\n", t.Line, t.Column))
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'utcToCst' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
 					// Convert the datetime to CST from assumed UTC
@@ -10208,7 +10225,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 				case "cstToUtc":
 					obj1, err := stack.Pop()
 					if err != nil {
-						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'toUtc' operation on an empty stack.\n", t.Line, t.Column))
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'cstToUtc' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
 					// Convert the datetime to UTC from assumed CST
@@ -10501,6 +10518,10 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					obj1Int, ok := obj1.(MShellInt)
 					if !ok {
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: The number of decimal places parameter in toFixed is not an integer. Found a %s (%s)\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString()))
+					}
+
+					if obj1Int.Value < 0 {
+						return state.CheckedFailure(fmt.Sprintf("%d:%d: The number of decimal places in toFixed cannot be negative. Found %d.\n", t.Line, t.Column, obj1Int.Value))
 					}
 
 					if !obj2.IsNumeric() {
@@ -11112,6 +11133,8 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					case MShellString:
 						// Create a new HTML reader directly from the string contents
 						reader = strings.NewReader(obj1Typed.Content)
+					default:
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot parse a %s as HTML.\n", t.Line, t.Column, obj1.TypeName()))
 					}
 
 					// Parse file with html.Parse
@@ -11293,6 +11316,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					if err != nil {
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'md5' operation on an empty stack.\n", t.Line, t.Column))
 					}
+					obj = bareWordAsString(obj)
 
 					// Work either on string or path
 					var data []byte
@@ -11759,6 +11783,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					if err != nil {
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'base64decode' operation on an empty stack.\n", t.Line, t.Column))
 					}
+					obj = bareWordAsString(obj)
 
 					strObj, ok := obj.(MShellString)
 					if !ok {
@@ -11775,12 +11800,12 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					// Convert MShellBinary on the top of the stack to a UTF-8 string
 					obj, err := stack.Pop()
 					if err != nil {
-						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'utf8str' operation on an empty stack.\n", t.Line, t.Column))
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'utf8Str' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
 					binaryObj, ok := obj.(MShellBinary)
 					if !ok {
-						return state.TypeMismatch(fmt.Sprintf("%d:%d: The top of stack in 'utf8str' is expected to be a binary, found a %s (%s)\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: The top of stack in 'utf8Str' is expected to be a binary, found a %s (%s)\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
 					}
 
 					// Convert binary to string
@@ -11790,12 +11815,13 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					// Convert MShellString on the top of the stack to UTF-8 bytes
 					obj, err := stack.Pop()
 					if err != nil {
-						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'utf8bytes' operation on an empty stack.\n", t.Line, t.Column))
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'utf8Bytes' operation on an empty stack.\n", t.Line, t.Column))
 					}
+					obj = bareWordAsString(obj)
 
 					strObj, ok := obj.(MShellString)
 					if !ok {
-						return state.TypeMismatch(fmt.Sprintf("%d:%d: The top of stack in 'utf8bytes' is expected to be a string, found a %s (%s)\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
+						return state.TypeMismatch(fmt.Sprintf("%d:%d: The top of stack in 'utf8Bytes' is expected to be a string, found a %s (%s)\n", t.Line, t.Column, obj.TypeName(), obj.DebugString()))
 					}
 
 					// Convert string to bytes
@@ -11826,6 +11852,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					if err != nil {
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'parseLinkHeader' operation on an empty stack.\n", t.Line, t.Column))
 					}
+					obj = bareWordAsString(obj)
 
 					strObj, ok := obj.(MShellString)
 					if !ok {
@@ -11976,59 +12003,36 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 							return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s and %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
 						}
 					case *MShellQuotation:
-						if t.Lexeme == "and" {
-							if obj2.(MShellBool).Value {
-								result, err := state.EvaluateQuote(obj1.(*MShellQuotation), stack, context, definitions)
-								if err != nil {
-									return state.CheckedFailure(err.Error())
-								}
+						leftBool, ok := obj2.(MShellBool)
+						if !ok {
+							return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s and %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
+						}
 
-								// Pop the top off the stack
-								secondObj, err := stack.Pop()
-								if err != nil {
-									return state.TypeMismatch(fmt.Sprintf("%d:%d: After executing the quotation in %s, the stack was empty.\n", t.Line, t.Column, t.Lexeme))
-								}
-
-								if result.ShouldPassResultUpStack() {
-									return result
-								}
-
-								seconObjBool, ok := secondObj.(MShellBool)
-								if !ok {
-									return state.TypeMismatch(fmt.Sprintf("%d:%d: Expected a boolean after executing the quotation in %s, received a %s.\n", t.Line, t.Column, t.Lexeme, secondObj.TypeName()))
-								}
-
-								stack.Push(MShellBool{seconObjBool.Value})
-							} else {
-								stack.Push(MShellBool{false})
-							}
+						// 'and' stops on false, 'or' stops on true.
+						if (t.Lexeme == "and") != leftBool.Value {
+							stack.Push(MShellBool{leftBool.Value})
 						} else {
-							if obj2.(MShellBool).Value {
-								stack.Push(MShellBool{true})
-							} else {
-
-								result, err := state.EvaluateQuote(obj1.(*MShellQuotation), stack, context, definitions)
-								if err != nil {
-									return state.CheckedFailure(err.Error())
-								}
-
-								// Pop the top off the stack
-								secondObj, err := stack.Pop()
-								if err != nil {
-									return state.TypeMismatch(fmt.Sprintf("%d:%d: After executing the quotation in %s, the stack was empty.\n", t.Line, t.Column, t.Lexeme))
-								}
-
-								if result.ShouldPassResultUpStack() {
-									return result
-								}
-
-								seconObjBool, ok := secondObj.(MShellBool)
-								if !ok {
-									return state.TypeMismatch(fmt.Sprintf("%d:%d: Expected a boolean after executing the quotation in %s, received a %s.\n", t.Line, t.Column, t.Lexeme, secondObj.TypeName()))
-								}
-
-								stack.Push(MShellBool{seconObjBool.Value})
+							result, err := state.EvaluateQuote(obj1.(*MShellQuotation), stack, context, definitions)
+							if err != nil {
+								return state.CheckedFailure(err.Error())
 							}
+
+							// Pass break, return and failures up before touching the stack.
+							if result.ShouldPassResultUpStack() {
+								return result
+							}
+
+							secondObj, err := stack.Pop()
+							if err != nil {
+								return state.TypeMismatch(fmt.Sprintf("%d:%d: After executing the quotation in %s, the stack was empty.\n", t.Line, t.Column, t.Lexeme))
+							}
+
+							seconObjBool, ok := secondObj.(MShellBool)
+							if !ok {
+								return state.TypeMismatch(fmt.Sprintf("%d:%d: Expected a boolean after executing the quotation in %s, received a %s.\n", t.Line, t.Column, t.Lexeme, secondObj.TypeName()))
+							}
+
+							stack.Push(MShellBool{seconObjBool.Value})
 						}
 					default:
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot apply '%s' to a %s and %s.\n", t.Line, t.Column, t.Lexeme, obj2.TypeName(), obj1.TypeName()))
@@ -13174,12 +13178,13 @@ func (state *EvalState) evalGreaterLessToken(t *Token, stack *MShellStack, conte
 			if containsNullByte(path) {
 				return state.checkedPtr(fmt.Sprintf("%d:%d: Found a null byte in the redirection file path. This is almost certainly not intended. You may have built the file name from UTF-16. Please ensure that your string is UTF-8 for the most predictable results.\n", t.Line, t.Column))
 			}
+			// A bare word names a file, like a path.
 			switch obj2 := obj2.(type) {
 			case *MShellList:
 				if t.Type == GREATERTHAN {
 					obj2.StandardOutputFile = path
 				} else { // LESSTHAN, input redirection
-					obj2.StdinBehavior = STDIN_CONTENT
+					obj2.StdinBehavior = STDIN_FILE
 					obj2.StandardInputFile = path
 				}
 				stack.Push(obj2)
@@ -13187,9 +13192,10 @@ func (state *EvalState) evalGreaterLessToken(t *Token, stack *MShellStack, conte
 				if t.Type == GREATERTHAN {
 					obj2.StandardOutputFile = path
 				} else {
-					obj2.StdinBehavior = STDIN_CONTENT
-					obj2.StandardInputContents = path
+					obj2.StdinBehavior = STDIN_FILE
+					obj2.StandardInputFile = path
 				}
+				stack.Push(obj2)
 			default:
 				return state.mismatchPtr(fmt.Sprintf("%d:%d: Cannot redirect a %s (%s) to a %s (%s).\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
 			}
@@ -13279,7 +13285,7 @@ func (state *EvalState) evalEqualsToken(t *Token, stack *MShellStack, context *E
 		return state.mismatchPtr(fmt.Sprintf("%d:%d: Cannot do '=' operation on a stack with only one item.\n", t.Line, t.Column))
 	}
 
-	doesEqual, err := obj1.Equals(obj2)
+	doesEqual, err := objectsEqual(obj1, obj2)
 	if err != nil {
 		return state.mismatchPtr(fmt.Sprintf("%d:%d: Cannot compare '=' between %s (%s) and %s (%s): %s\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString(), obj2.TypeName(), obj2.DebugString(), err.Error()))
 	}
@@ -13316,7 +13322,7 @@ func (state *EvalState) evalNotEqualToken(t *Token, stack *MShellStack, context 
 		return state.mismatchPtr(fmt.Sprintf("%d:%d: Cannot do '!=' operation on a stack with only one item.\n", t.Line, t.Column))
 	}
 
-	doesEqual, err := obj1.Equals(obj2)
+	doesEqual, err := objectsEqual(obj1, obj2)
 	if err != nil {
 		return state.mismatchPtr(fmt.Sprintf("%d:%d: Cannot compare '!=' between %s and %s: %s\n", t.Line, t.Column, obj1.TypeName(), obj2.TypeName(), err.Error()))
 	}

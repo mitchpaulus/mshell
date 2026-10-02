@@ -129,6 +129,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   It used to leave only the `if` or `match`, and the rest of the definition kept running.
 - A definition called as the last item of a redirected quotation run by `iff`, such as ``true (myDef) `out.txt` > iff``, now writes to the file.
   The file used to be closed before the definition ran.
+- `and` and `or` with a quote give an error, not a crash, when the left value is not a `bool`.
+  A `break` in the quote no longer drops a value from the stack.
+- `mod` with a top value that is not a number gives an error. It used to drop both values silently.
+- `parseCsv` and `parseHtml` give an error, not a crash, on input that is not a string or path.
+- `lines`, `toInt`, `toFloat`, `md5`, `base64decode`, `utf8Bytes`, and `parseLinkHeader` accept a bare word from a list literal as a string.
+- `=` and `!=` with `null` on one side work in both orders. `null 1 =` is `false`; it used to be an error.
+- `toFixed` with a negative number of places gives an error instead of printing `%!(BADPREC)`.
+- `toJson` writes `null` for a NaN or infinite float, as JavaScript does. It used to write nothing, giving invalid JSON.
+- `leftPad` counts code points, not bytes, so it no longer cuts a multi-byte pad character.
+- `>` and `<` with a bare word from a list literal treat it as a file name, like a path, on both lists and quotes.
+  On a quote, `>` used to drop the quote and `<` fed the word itself as input. On a list, `<` fed empty input.
+- The strings from `binPaths` compare equal to other strings.
+- `psub` with input that is not a string no longer leaves a temporary file behind.
+- Some error messages named the wrong function, such as `date` saying `day`. They now name the function that failed.
 
 ### Added
 

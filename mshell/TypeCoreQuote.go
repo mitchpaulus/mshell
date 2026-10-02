@@ -352,6 +352,75 @@ func (c *coreChecker) iff(tok Token) {
 	c.saved = c.saved[:mark]
 }
 
+// andOr checks `b (q) and` and `b (q) or` with a literal quote, as the
+// elaborations `b if q else false end` and `b if true else q end`. The
+// quote runs on the current stack (a current-stack word, design doc
+// "Quotes that break"), so a break in it leaves the enclosing loop, and it
+// must leave one bool. Anything else goes to the table's forms.
+func (c *coreChecker) andOr(tok Token) bool {
+	n := len(c.stack)
+	if n-c.floor < 2 {
+		return false
+	}
+	p := c.waiting(c.stack[n-1])
+	if p == nil {
+		return false
+	}
+	p.done = true
+	c.uni.Unify(p.t, c.arena.MakeQuote(QuoteSig{Inputs: []TypeId{}, Outputs: []TypeId{TidBool}}))
+	c.stack = c.stack[:n-1]
+	if !c.popBool(tok) {
+		return true
+	}
+	mark := len(c.saved)
+	entry := c.saveStack()
+	daMark := len(c.setLog)
+	var sets [][]NameId
+	c.walkInline(p.items)
+	if c.abandoned {
+		c.saved = c.saved[:mark]
+		return true
+	}
+	if !c.diverged {
+		if !c.popBool(tok) {
+			c.saved = c.saved[:mark]
+			return true
+		}
+		c.push(TidBool, true)
+		sets = append(sets, c.daSince(daMark))
+	}
+	runs := []savedRun{c.saveArm()}
+	c.restoreStack(entry)
+	c.daRestore(daMark)
+	c.push(TidBool, true)
+	runs = append(runs, c.saveArm())
+	sets = append(sets, nil)
+	c.joinArms(runs, tok)
+	c.daJoin(daMark, sets)
+	c.saved = c.saved[:mark]
+	return true
+}
+
+// popBool pops a value that must be a bool.
+func (c *coreChecker) popBool(tok Token) bool {
+	if !c.need(1, tok) {
+		return false
+	}
+	c.forceTop(1)
+	slot := c.stack[len(c.stack)-1]
+	c.stack = c.stack[:len(c.stack)-1]
+	if c.hasVars(slot.t) {
+		if !c.uni.Unify(slot.t, TidBool) {
+			c.mismatch(tok, 0, TidBool, slot.t)
+		}
+		return true
+	}
+	if t := c.subst.Apply(c.arena, slot.t); !c.rel.Sub(t, TidBool) {
+		c.mismatch(tok, 0, TidBool, t)
+	}
+	return true
+}
+
 // walkInline walks a literal quote's body on the current stack. A quote
 // body is not in a list literal, even when the quote is.
 func (c *coreChecker) walkInline(items []MShellParseItem) {
