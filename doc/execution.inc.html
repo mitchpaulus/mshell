@@ -192,6 +192,14 @@ and <code>[cmd] 2>&amp;1 1>&amp;2</code> (circular merge) are all rejected.
 <code>2>&amp;1</code> also cannot be combined with <code>&lt;&gt;</code>, since stderr text would be written back into the edited file.
 </p>
 
+<p>
+A redirect or capture changes the list it is written on; it does not make a new one.
+So with the type checker, a redirect goes on a list nothing else refers to: straight after the list literal (<code>[cmd] *</code>), or on a copy.
+On a list stored in a variable, <code>@c *</code> is a type error, since <code>c</code> would then hold a command with a capture where the checker expects one without; write <code>@c deepCopy *</code>.
+<code>&lt;</code> and <code>&amp;</code> change nothing the checker tracks, so they are fine on any list.
+See <a href="type_system.html#type-system-in-place">Changing a Type in Place</a>.
+</p>
+
 <table>
   <caption>Summary of external command operators</caption>
   <thead>

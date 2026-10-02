@@ -665,3 +665,40 @@ Performance: same corpus for both (the current tests), `go test -bench`, 8 runs:
 
 Suites: `test.sh` 0 failed; `typecheck_test.sh` 393 passed, 0 failed; `soundness_test.sh` 0 mismatches; `go test ./...` ok; `typst compile` ok.
 Commits: `69f89a0` (classification), `95ae869` (merge), `d8e6f7b` (holes), `f9931e5` (`sortBy`).
+
+## Stage 7: builtin contracts and generated programs; stage 3's gaps; stage 8 docs (2026-10-01, seventh session)
+
+### Builtin contract tests (`mshell/TypeContract_test.go`)
+
+`TestBuiltinContracts` runs every candidate of the core table (333, tokens, indexers and slices included) on random inputs of its declared types: generics instantiated from a pool, grid schemas from exact records, values written as mshell literals and pinned at the instance with `as`, both new (literals) and shared (through variables). It runs only programs the checker accepts, since the walker adds rules to some entries, and fails on a type mismatch or a panic, an output that does not validate against its type, a shared input whose type changed, or an output the checker would mark fresh that is not a tree of new objects. Fixture files (text, JSON, CSV, xlsx, zip, tar) let the file-reading builtins run. Words that write files, change the process, or wait for input are skipped (`contractSkip`). `MSH_CONTRACT_TRIALS` (default 12; 300 gives 97,000 programs in 9 s).
+
+Found: a `groupBy` spec was an open shape, so `[{name: "x", agg: (...), k0: 5}]` checked and the runtime refused the key with a type mismatch. Specs are exact now, in the table and in `gridGroupBy` (`tests/typecheck_fail/groupby_spec_unknown_key.msh`). Two false alarms on the way showed the test must compare against the instance the checker uses (`[]` is polymorphic) and must not test `appendBelow` with a list (the walker never uses it so).
+
+### The generated-program oracle (`mshell/TypeSoundGen_test.go`)
+
+`TestGeneratedProgramsSound` builds each program one statement at a time and keeps a statement only if the whole program still checks, so every finished program is one the checker accepts, with whatever risky statements got through. Families: variables, aliases, widening with `as` (risky on stored values), writes through every view, joins, partly new dicts, tryAs and `is`, defs and calls, each, loop, quotes stored and run, matches, grids (literals, column changes on new grids, updateCol, gridSetCell, extend, views, select, rows, toDict, gridCol, derive, +, sortBy, groupBy, joins, pivot, map, gridCompact, gridValues), dict words (runtime keys, values, keyValues, getDef, map, filter, set-built dicts), quotes with inputs (pending overload choices), `:>` arms with bindings, commands with redirects (P7), generic defs, loops carrying a value, shuffled quote literals, quote parameters, unknown contents, equality, format strings. Each program gives one family more weight. After a statement that gives a value a second, wider type it writes a value outside the first type through the new view and reads the original back (`exploit`), so an accepted hole becomes a type mismatch. Every variable is read back at its type at the end (`consume`). A failure is shrunk and printed. `MSH_GEN_PROGRAMS` (default 60), `MSH_GEN_SEED`, `MSH_GEN_WORKERS`, `MSH_GEN_DEBUG` (print each refused statement with its error), `MSH_GEN_SHOW=seed` (print one program).
+
+Found: plan question 12 at once (`[echo "a b"]`: a `str` arm does not match the bare word); the generator writes command names as strings until it is decided. Nothing else: the final run, seeds 100000-109999 with 4 workers, was 10,000 programs, 1,001,679 lines, 923,352 checks, 28,954 risky statements accepted and 73,785 refused, 9,409 programs ran to the end, no type mismatch or panic, peak heap 9 MB, 18 minutes.
+
+**Resource incident.** A run of 10,000 programs, alongside the full test suite, grew to 26 GB and was killed by the kernel: one program extended a list inside two nested `each` loops over that same list, doubling it every pass. Fixed two ways: every statement that grows a list or grid does it only while the list is shorter than 16 (`grow`), which holds through any number of names for the list; and a watchdog stops the test past `MSH_GEN_MEMCAP` bytes of heap (default 2 GB) or `MSH_GEN_TIMEOUT` seconds for one program (default 30), printing the seeds in progress (it found the culprit, seed 101172, at 2 GB). Normal runs peak at about 5 MB. Large runs: fewer workers, nothing else running.
+
+### Checker changes
+
+- **Overload pre-filter** (`mayFit`): a candidate whose input kinds cannot hold the arguments is skipped before it is instantiated, comparing type heads only, and answering "maybe" for generics, variables, unions, aliases and ⊥. Checked to never skip a candidate `argsFit` accepts (on the corpus, the typecheck suite and generated programs). Corpus 73 → 65 ms; generated programs 26 → 20 ms, 22% fewer bytes.
+- **Errors name the arms of a join** (stage 3 gap): `coreSlot.origin` (the slot is 20 bytes now) and `coreVar.origin` record the join that made a union; `mismatchSlot`, "no matching overload", stores and conditions add "`int | str` comes from the `if` at line 1: the `if` branch (line 2) leaves int, the `else` branch (line 4) leaves str". Labels for if, else*, else, the missing else, match arms (pattern snippet), iff quotes.
+- **`new` across mutual recursion** (stage 3 gap): `checkDefs` checks every body, then decides marks per strongly connected component of the call graph (`defGroups`), iterating the assumption to the largest consistent set. `tests/typecheck_fail/new_mutual_recursion.msh`, `tests/success/new_mutual_recursion.msh`.
+- **⊥ in a grid schema** is opened at a store (`openBottom`), so `[| c; none |] g!` can take `5 just` later.
+- **A walker word given a stack none of its forms fits** (`derive` with its arguments in the wrong order) reports the stack and the forms, not "the type checker has no rule ... please report this". The hover form of `derive` was wrong (`(str Grid ...)`); it is `(Grid str {} (GridRow -- T) -- new Grid)`.
+
+### Benchmarks
+
+`BenchmarkCoreCheckGenerated` and `BenchmarkParseGenerated` time six fixed generated programs (`mshell/testdata/generated`, 50 KB, denser in types and matches than the corpus). Checking is linear: about 400-540 ns per byte (FX-8350). Parsing costs about as much as checking on these files, with 37,000 allocations for 50 KB (the lexer makes a string per token); not a type-system change, noted for Mitchell.
+
+### Docs (stage 8)
+
+`doc/type_system.inc.html` rewritten for the current checker (new and stored values, `deepCopy`, changing a type in place, `as` needing evidence, unions of distinct kinds, aliases and the built-in aliases, `never`, `new` outputs, shapes and remainders and when one fits another, runtime keys, grids, quotations checked against their consumer, joins, one type per variable, definite assignment, unknown contents); every example was run through the checker. `doc/mshell.md`'s Type System section likewise, for agents. `doc/execution.inc.html`: a redirect needs a new list. Grammars: `match` and `as` added to the Sublime and Notepad++ keyword lists; the TextMate grammar (VS Code) gets keyword rules, which it had none of.
+
+### Found, not changed
+
+- `gridSetCell` silently drops a value whose kind does not match the column's storage (known from the audit). A join of two new grids makes it reachable with a value the static type allows (`true if [| a; 1 |] else [| a; "x" |] end g!  @g "a" 0 "y" gridSetCell` leaves `[1]`). Not unsound, but a write that does nothing.
+- `mshell/mshell.test` (a test binary) is tracked in git since `749145c` (#320); `go test -cpuprofile` in `mshell/` overwrites it. Probably should be removed from the repository and ignored.

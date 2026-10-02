@@ -684,162 +684,117 @@ and parse a string in a given base with `fromBase` / `parseHex` / `parseOctal` /
 
 ## Type System
 
-Use `msh --check-types script.msh` to run static type checking before script execution.
-Use `msh --type-check-only script.msh` to run the same static checks and exit without evaluating the script.
-The checker validates stack effects, definition bodies, quotation arguments, built-ins, variable bindings, and branch reconciliation.
+Use `msh --check-types script.msh` to type-check a script before it runs, and `msh --type-check-only script.msh` to check and exit.
+The checker checks every def body and the top-level code; the standard library and startup file are trusted by their signatures.
+It only accepts or rejects: no word behaves differently because of it.
 
-Definitions use stack-effect signatures.
-Inputs are listed before `--`, outputs after it, and the rightmost input is the top stack item consumed first.
+Signatures list inputs before `--` and outputs after it; the rightmost input is the top of the stack.
+A name that is not a type is a generic (`def first ([a] -- a)`).
+In a signature, `dict` is short for `{str: T}` and `list` for `[T]`, each with its own generic.
 
 ```mshell
 def addOne (int -- int)
     1 +
 end
-
-def fullName (str str -- str)
-    last!, first!
-    $"{@first} {@last}"
-end
 ```
 
-Primitive static type names include `int`, `float`, `bool`, `str`, `path`, `datetime`, `bytes`, `none`, and `null`.
-Named runtime types such as `Grid`, `GridView`, and `GridRow` are also available.
-
-`null` is the JSON null type. It is distinct from `none`, which is only a value constructor (the empty case of `Maybe`, like `Nothing` in Haskell) and is **not** a type — writing `none` in a type expression is an error.
-`parseJson` produces a `null` for each JSON `null`, and the `null` literal pushes one.
-Use `int | null` for "an integer or a literal JSON null"; that differs in meaning from `Maybe[int]`, "an int that may be missing".
-
-Type expressions compose with lists, dictionaries, unions, `Maybe`, and quotation types.
+Type expressions:
 
 ```mshell
-[str]                 # list of strings
-{str: int}            # string-keyed dictionary of ints
-{name: str, age: int} # dictionary shape
-Maybe[int]            # optional int
-int | null            # int or JSON null
-int | str             # union
+int float bool str path datetime bytes null   # base types; null is JSON null
+[str]                 # list of str
+{str: int}            # dictionary: any keys, int values
+{name: str, age?: int} # shape: name present, age may be missing, other keys unknown
+{url: str, *: int}    # shape whose other keys hold int
+Maybe[int]            # just an int, or none (none is a value, not a type)
+int | str | null      # union; members must be of different kinds
 (int int -- bool)     # quotation type
+Box[int]              # generic enum instance
+Grid GridView GridRow # grids whose columns are not known
 ```
 
-Top-level type declarations name larger type expressions.
-Use them for casts and for naming record-like dictionaries and unions that are reused by other type declarations.
-Current definition signatures still use the historical signature parser, so dictionary shapes in `def` signatures are written with quoted field names.
+Union members must be of different kinds (each base type, list, dict, quotation, Maybe, each enum, each grid kind): `[int] | [str]` and `{a: int} | {b: str}` are errors; declare an enum instead.
+A generic cannot be a union member.
+`match` takes a union apart by kind (`int n :`, `list xs :`), binding the member's own type.
+
+`type Name = T` is an alias, interchangeable with `T`; it may be recursive through a list, dict, field, quotation or enum (`type Person = {name: str, friends: [Person]}`).
+Built-in aliases: `Json` (`null | bool | int | float | str | [Json] | {str: Json}`, what `parseJson` gives), `HtmlNode`, and the dicts builtins take or give: `HttpRequest`, `HttpResponse`, `Cookie`, `PackEntry`, `TarDest`, `ExtractOptions`, `ExtractEntryOptions`, `ZipEntryInfo`, `TarEntryInfo`, `NumFmtOptions`, `Link`, `EnvEvent`, `CompletionResult`.
+
+### New and stored values
+
+Lists, dicts and grids are shared by reference, so a stored one keeps its type: lists, dict values and shape fields are invariant.
+A value nothing else refers to yet is new and may be given any type it fits: literals of new values, results of `parseJson`, `lines`, `split`, `deepCopy` and other words whose outputs are marked `new`.
+Storing, passing to a def, putting in a container, or `dup` makes a value stored.
+`map`, `filter`, `take`, `skip`, `reverse`, `sort` and slices give a new list when the elements hold no list or dict.
+A literal around a stored value is new only on the outside: `{a: @xs} as {a: [int], b?: int}` is fine, `{a: @xs} as {a: [int | str]}` is not.
 
 ```mshell
-type Person = {name: str, age: int}
-type Cell = int | float | str | bool | null
-type Row = [Cell]
-
-{ "name": "Ada", "age": 36 } as Person :age? 1 +
+[1 2] as [int | str] xs!       # ok: the literal is new
+[1 2] ys!
+@ys as [int | str]             # error: ys is stored
+@ys deepCopy as [int | str]    # ok: a copy is new
 ```
 
-`as` does no work at run time.
-To check data from outside the script, use `tryAs T`: it checks at run time that the value on top of the stack conforms to `T`, and replaces it with `just` the same value, or `none`.
-The value is checked in place, never copied.
-Every element, dictionary value and enum payload is checked; a written shape type allows other keys; a value that contains itself conforms to a type it has.
-`T` cannot be a quotation type, an enum holding a quotation, or a def's generic.
-A check that takes more than 67,108,864 steps stops the program with an error.
+`deepCopy` copies every list, dict and grid inside a value, once per path; strings and numbers are shared; a value that contains itself is an error.
+Words that change a type in place need a new value: a redirect (`[cmd] *` is fine; `@c *` on a stored list is an error, use `@c deepCopy *`), a type-changing `updateCol`, `gridAddCol`, `gridRemoveCol`, `gridRenameCol`, and an `extend` that widens a column.
+
+A def output marked `new` is fresh for callers (`def load ( -- new Json)`).
+The mark must match the body exactly: missing on an output that is new on every path, or present on one that may be shared, is an error.
+
+`as T` does nothing at run time, so it needs evidence: the value's type must fit `T`, or the value must be new and fit `T` when widened.
+`"5" parseJson as int` is an error; use `tryAs`.
+
+### Validating data
+
+`tryAs T` checks at run time that the value conforms to `T`, giving `just` the same value or `none`; it never copies.
+Every element, dict value and enum payload is checked; a written shape allows other keys; a value that contains itself conforms to a type it has.
+`T` cannot be a quotation type, an enum holding one, or a def's generic.
+A check over 67,108,864 steps stops the program.
+On a new value (`parseJson tryAs T ?`) any `T` is allowed; a stored value can only be checked against a type it already has, or one with no list or dict in it (otherwise `deepCopy tryAs T`).
+`is T name` in a match arm does the same check and binds the value.
 
 ```mshell
 type Person = {name: str, age: int}
 "[{\"name\": \"Ada\", \"age\": 36}]" parseJson tryAs [Person] ? (:age?) map sum wl
 ```
 
-The type checker allows `tryAs` on a value nothing else refers to yet (such as `parseJson`'s result) to any type.
-A stored value, or a def's input, can only be checked against a type it already has, or one with no list or dict in it; otherwise check a copy: `@data deepCopy tryAs T`.
+### Dicts
 
-Dictionary types are split into homogeneous dictionaries and shapes.
-A homogeneous dictionary is for dynamic keys where every value has the same type.
-In a type expression, write `{str: int}`.
-In older definition signatures, `{ int }` or `{ *: int }` means the same string-keyed dictionary of ints.
-In a definition signature, `dict` is short for `{str: T}` and `list` for `[T]`, each with a new generic `T` of its own: `def size (dict -- int)` takes a string-keyed dictionary with any one value type.
-Outside a signature, write the full form.
+`{str: T}` allows any key to be read, set (`setd`, `set`) and deleted (`del`).
+A written shape `{name: str}` says nothing about other keys; a shape literal's type is exact.
+`name?: T` is an optional key, which differs from `name: Maybe[T]` (key present, value may be `none`).
+`:field` gives `Maybe[T]`, `:field?` unwraps it; `get` with a literal key right before it reads that field.
+`get` with a key known only at run time gives `Maybe` of a type covering every field (unknown for a written shape).
+`keys`, `values`, `in`, `len` take any dict; `setd`, `del` and runtime-key `set` need `{str: T}`.
+A shape fits another that names fewer of its fields; a value lacking an optional key fits `timeout?: int` only when new; a shape never fits `{str: T}`; a `{str: T}` fits a shape only whose fields are all optional of type `T`.
+A new dict may gain keys: `{} "name" "Ada" set "age" 36 set` is a `{name: str, age: int}`.
 
-```mshell
-{ "passed": 10, "failed": 2 } as {str: int} values len
-```
+### Lists, grids, quotations
 
-A shape is for record-like dictionaries with known fields.
-Shapes let `:field?` access preserve the precise field type.
+A list has one element type; `[1 "a"]` is `[int | str]`, and indexing gives the element type.
+A stored `[int]` does not fit a `[int | str]` parameter.
+A grid's type includes each column's type, worked out from literals and grid words (no syntax); reading a missing column is an error; a grid with unknown columns (`Grid`, `toGrid`) is read only.
 
-```mshell
-def labelPerson ({ "name": str, "age": int, "active": bool } -- str)
-    person!
-    @person :name? name!
-    @person :age? age!
-    $"{@name} ({@age})"
-end
-```
+A quotation literal given to a word (`map`, `filter`, `each`, a def's quotation parameter) is checked against what the word passes it.
+A stored quotation is typed on its own; an overloaded word in it is decided by its later use, or needs an annotation.
+`x` needs the quotation's arity known.
+`break` and `continue` are allowed only in a `loop` body and in quotation literals given to `each`, `map` and similar words inside one.
 
-A shape field may be optional, written `name?: T` (and `"name"?: T` in `def`
-signatures). An optional field may be absent from a value; when present, its
-value is type `T` and is still type-checked. This is the precise way to type
-option dictionaries (e.g. `numFmt`, `httpGet`, grid `groupBy` aggregation specs,
-the `zip*` option dicts) instead of a loose `{v}`. The `?` marks the *key* as
-possibly-absent, which differs from `Maybe[T]` marking the *value*: `timeout?:
-int` means the key may be missing, while `timeout: Maybe[int]` means the key is
-always present with a possibly-`none` value. A required value satisfies an
-optional parameter, but an optional value does not satisfy a required one.
-Reading is unchanged (`:field` is `Maybe[T]`, `:field?` unwraps it); the language
-server flags `:field?` on a field a concrete shape does not declare, since that
-unwrap always fails. A string literal carries its value as a `str` refinement,
-so a `get` with a known key resolves the same way as the getter: `resp "body"
-get` reads the declared `body` field's type, not the union of every field type,
-so it is interchangeable with `resp :body`. The key resolves even when it
-reaches `get` through a variable (`"body" k! resp @k get`); a key computed at
-runtime returns the generic `Maybe[value]`.
+### Control flow and variables
 
-```mshell
-type Request = {url: str, timeout?: int}
+The arms of `if`, `iff` and `match` must leave the same number of values; different types join: `1`/`2.5` gives `int | float`, `none`/`5 just` gives `Maybe[int]`, new `[1]`/`["a"]` gives `[int | str]`, stored lists of different types have no join (error).
+An arm that never returns (`exit`, a `never` def, `return`, `break`) is left out.
+An error about a union a join made names the arm each member came from.
+An overloaded builtin on a union is checked per member; the result is the join (`int | float` through `toFloat` is `float`; `int | float 2.0 /` is an error).
 
-{ "url": "x" } as Request                # ok: timeout omitted
-{ "url": "x", "timeout": 30 } as Request # ok: timeout present and an int
-```
+`def die (str -- never)` declares a def that never returns; `never` is allowed only as the whole output side.
 
-Lists are homogeneous when every element has one type, such as `[int]` or `[Person]`.
-This is the strongest list type because higher-order functions preserve the element type.
-
-```mshell
-def doubleAll ([int] -- [int])
-    (2 *) map
-end
-
-def names ([{ "name": str, "age": int }] -- [str])
-    (:name?) map
-end
-```
-
-Heterogeneous lists are represented as lists whose element type is a union.
-For example, `[int | str]` means every element is either an int or a string.
-This is useful for JSON-like data, spreadsheet rows, and other shell data where each cell can be one of a fixed set of types.
-
-```mshell
-type Cell = int | float | str | bool
-type Row = [Cell]
-type Table = [Row]
-
-[1 "Ada" true] as [int | str | bool]
-```
-
-The checker currently models heterogeneous lists as lists of unions, not fixed-length tuples with per-index types.
-That means index `:0:` does not by itself prove a specific per-position type unless the value is converted or asserted.
-
-Quotation types describe the stack effect of code values.
-Operators with multiple valid signatures keep an overload set until context resolves them.
-For example, `(>)` can become `(int int -- bool)`, `(float float -- bool)`, `(str str -- bool)`, or `(datetime datetime -- bool)` depending on the expected quotation type.
-
-Control-flow branches must reconcile stack and variable state across reachable paths.
-Branches that diverge with `return`, `break`, or `continue` are excluded from reconciliation.
-When the reachable arms of a `match` or `if`/`else` block leave different types in a
-stack slot, those types are joined into a union for the code that follows.
-For example, `match []: 0.0, _ :> sum end` produces an `int | float`.
-An overloaded operation applied to a union operand is resolved for every member of
-the union; it type-checks when each member is handled, and the result is the union
-of the per-member results.
-So `int | float` through `toFloat` gives `float`, and `int | float { … } numFmt`
-formats fine.
-An operation that is valid for only some members is a type error — dividing an
-`int | float` by a `float` fails, because the `int` member has no matching overload.
+A variable has one type per scope (a def body, or the top level): its first store's.
+A store that does not fit is an error; widen the first store with `as`, or use a new name.
+`none r!` fixes nothing: a later `5 just r!` makes `r` a `Maybe[int]`.
+A variable must be set on every path before it is read.
+Match bindings are variables of the enclosing scope: two arms binding one name must agree on its type (use `int n`, `str s`).
+A kind pattern on a value of unknown type (an undeclared field of a written shape, a cell of an unknown grid) cannot bind a name; keep it on the stack with `:>`, or check it with `tryAs`/`is`.
 
 For more detail, see the generated Type System help page.
 

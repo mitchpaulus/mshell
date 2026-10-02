@@ -991,6 +991,13 @@ the core (`if_join`).
 The arms must still leave the same number of stack items (as today). Arms that diverge are ignored
 (@sec-diverge).
 
+*Errors point back at the arms (2026-10-01, seventh session).* A union made by a join moves an error
+away from the mistake: the arm that left the unexpected member is earlier, maybe far earlier. So a slot
+whose union a join made records which arm left which type, and keeps it through a store and the loads of
+that variable. An error about the value says so: "`int | str` comes from the `if` at line 1: the `if`
+branch (line 2) leaves int, the `else` branch (line 4) leaves str". A union written in a signature or
+with `as` records nothing. This is only for messages; no rule changes.
+
 #table(
   columns: (1.2fr, 1fr, 1.3fr),
   inset: 6pt, stroke: 0.5pt + luma(180),
@@ -1364,6 +1371,11 @@ The mark must match the checker exactly; there is no "could have been `new`" sta
   that removes it. A type variable counts as mutable (`(a -- new a)` is valid for `deepCopy a`).
 - For a def that calls itself, both marks can be consistent (`[]` in one arm, the recursive result in
   the other). The checker requires the largest consistent one: `new` unless assuming it fails.
+  *Done for mutual recursion (2026-10-01, seventh session):* the marks are decided per group of defs that
+  call each other (a strongly connected component of the call graph). The unmarked outputs whose bodies
+  leave a shared value are assumed new, the group is checked again, each output still shared at some exit
+  is dropped from the assumption, and so on until nothing changes; the outputs left must be marked.
+  Two defs `evens` and `odds` that each return `[]` or the other's result are both `new`.
 - "Exactly" means exactly what the checker's analysis computes. A later, more precise analysis (moves
   from local variables, below) turns some unmarked outputs into required `new`s; the LSP fix-all
   migrates them.
@@ -1786,7 +1798,9 @@ its column sequences, so they are as invariant as the column types.
   `*: a | Maybe[⊥]` for the others, where `a` is the quote's result type.
 - A grid `groupBy` whose spec list is written at the call checks each `agg` quote against
   `(GridView -- t)` with its own $t$, as a quote literal is checked against the word that takes it,
-  so the specs may give different column types.
+  so the specs may give different column types. A spec is an exact record `{agg, name?, meta?}`: the
+  runtime refuses any other key, so an open spec type let a literal with an extra key check and then
+  stop with a type mismatch (found by the builtin contract tests, 2026-10-01, seventh session).
 - Quote results that the runtime refuses when they are a list, dict or grid (`updateCol`, `pivot`,
   `groupBy` aggregations), grouping keys and join keys are checked against exactly what the runtime
   refuses, once the def or script is solved.
@@ -2090,6 +2104,8 @@ type is expected to be rare.
 the variable's type. It puts no constraint on the variable, the same way `[]` and `{}` get a type
 variable instead of $bot$ (@sec-join). Then `result : Maybe[int]`, fixed by the second store, and a
 later `none result!` changes nothing. A variable left unsolved when its scope is solved is $bot$.
+The $bot$ is opened wherever it is in the store's type, a grid's schema included: a grid literal whose
+column holds only `none` is `Grid{c: Maybe[⊥]}`, and stored, its column may take a `just` later.
 This is inference only; no rule changes. Every store, the first included, is then checked with the
 final substitution by the ordinary store check (@sec-infer). `Maybe[⊥]` $<=$ `Maybe[int]` always holds.
 `[none] l!` followed by `@l 5 just append` gives `l : [Maybe[int]]`: the first store is a fresh
@@ -2397,12 +2413,25 @@ The mechanized proof covers the core rules. It does not cover the Go code. Three
   run them, and fail on any type-mismatch error. Bias generation toward aliasing: `dup`, stores,
   refinements of stored values, writes through every view. Also run every file in `tests/success`.
   This would have found every row of the counterexample table.
+  *Done (2026-10-01, seventh session):* `TestGeneratedProgramsSound` builds each program a statement at
+  a time and keeps a statement only if the whole program still checks, so the checker itself decides
+  which risky statements (widening a stored value, writing a wider value through a view, retyping in a
+  join, tryAs on a stored value, a redirect on a stored command) get through. After one that gives a value
+  a second, wider type, it writes a value outside the first type through the new view and reads the
+  original back at its type, so an accepted hole becomes a type mismatch at run time. Every list it grows
+  is bounded at run time, and a watchdog stops the run past a memory or time limit. It found plan
+  question 12 (a bare word in a list literal) at once; nothing else, in a run of 10,000 programs (a million
+  lines, 29,000 risky statements the checker accepted).
 + *Differential tests of the relations.* The Go `<=`, $subset.sq.eq$ and join are compared with the
   functions extracted from `Decide.v` and `Join.v` (`formal-ver/oracle/`) on generated types,
   including guarded recursive aliases and generic enums. A yes from Go that the oracle does not give
   is a possible soundness bug.
 + *Per-builtin contract tests.* For each $Phi$ entry, generate inputs of the declared types and
   check output types, that shared inputs keep their types, and that outputs marked fresh are unaliased.
+  *Done (2026-10-01, seventh session):* `TestBuiltinContracts` runs every candidate of the table, with
+  inputs pinned at the instance by `as`, only in programs the checker accepts (the walker adds rules to
+  some entries), and validates outputs and shared inputs with the runtime validator. It found the open
+  `groupBy` spec.
 
 Every counterexample in this document becomes a `tests/typecheck_fail` case (for R6, also a success test
 of the version with `deepCopy`), and `ai/type-system-plan.md` lists them in its acceptance tests.

@@ -168,7 +168,7 @@ The same applies to runtime work: `deepCopy`, the cycle-safe walkers and `valida
 
 Each stage lists its work, its tests, and when it is done.
 
-Status (end of 2026-10-01, sixth session): done: stages 0, 1, 2, 3 (two gaps, listed in the progress log), 4, 5, 6; stage 7's first part (the oracle on `tests/success` and `tests/fail`). Next: stage 7's generated programs and per-builtin contract tests; stage 8 alongside.
+Status (end of 2026-10-01, seventh session): done: stages 0 through 7 (stage 3's two gaps closed this session); stage 8's type system page, `mshell.md` section, `execution.inc.html` note and editor grammars. Waiting on: questions 12 and 13. Left: the rest of stage 8 (a final pass at release), and running `tests/msh-scripts` under the soundness oracle once question 13 is answered.
 Stages 2–5 depend on each other in order. Runtime groundwork is independent and can land any time. The soundness oracle can start after the core checker.
 
 ### Stage 0: Baseline and measurements
