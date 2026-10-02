@@ -71,6 +71,8 @@ func TestCoreChecker(t *testing.T) {
 			"def odds (int -- new [int]) dup 0 = if drop [] else 1 - evens end end\n3 evens as [int | str] drop", true, ""},
 		{"def evens (int -- [int]) dup 0 = if drop [] else 1 - odds end end\n" +
 			"def odds (int -- [int]) dup 0 = if drop xs else 1 - evens end end\ndef xs ( -- [int]) [1] l! @l end", true, ""},
+		// A word the walker types itself, with a stack it does not take.
+		{`[| a; 1 |] "a" "b" {} (drop 1) derive`, false, "no matching overload for 'derive': the top of the stack is"},
 		// A union written in a signature names no arms.
 		{"def f (int -- int | str) drop 1 end  1 f 1 +", false, "it takes (int int)"},
 		// A grid column of only none cells is Maybe[⊥] in the literal, and

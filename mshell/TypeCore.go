@@ -773,6 +773,18 @@ func (c *coreChecker) word(tok Token) {
 			return
 		}
 	}
+	if forms, ok := coreWalkerSigs[tok.Lexeme]; ok {
+		// A word the walker types itself, given a stack none of its forms
+		// fits: a mistake in the program, not a gap in the checker.
+		top := c.stack[c.floor:]
+		if len(top) > 4 {
+			top = top[len(top)-4:]
+		}
+		c.errs = append(c.errs, TypeError{Kind: TErrNoMatchingOverload, Pos: tok,
+			Hint: "the top of the stack is " + c.formatSlots(top) + "; it takes " + strings.Join(forms, " or ")})
+		c.abandoned = true
+		return
+	}
 	if _, ok := BuiltInList[tok.Lexeme]; ok {
 		c.unsupported(tok, "the builtin '"+tok.Lexeme+"'")
 		return

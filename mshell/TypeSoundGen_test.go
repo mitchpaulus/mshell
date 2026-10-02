@@ -920,7 +920,7 @@ func (p *progGen) write(ctx *gctx, blk *gblock) bool {
 		e := v.t.elem
 		switch p.rng.Intn(6) {
 		case 0:
-			return p.try(blk, at+" "+val(e)+" 0 insert drop", risky, nil)
+			return p.try(blk, grow(at, val(e)+" 0 insert drop"), risky, nil)
 		case 1:
 			return p.try(blk, at+" len 0 > if "+at+" "+val(e)+" 0 setAt drop end", risky, nil)
 		case 2:
@@ -928,11 +928,11 @@ func (p *progGen) write(ctx *gctx, blk *gblock) bool {
 		case 3:
 			// A literal: a stored list may be this one, and extending a
 			// list with itself in a loop doubles it each time.
-			return p.try(blk, at+" ["+val(e)+"] extend drop", risky, nil)
+			return p.try(blk, grow(at, "["+val(e)+"] extend drop"), risky, nil)
 		case 4:
 			return p.try(blk, at+" pop drop", false, nil)
 		}
-		return p.try(blk, at+" "+val(e)+" append drop", risky, nil)
+		return p.try(blk, grow(at, val(e)+" append drop"), risky, nil)
 	case gDict:
 		k := `"k` + strconv.Itoa(p.rng.Intn(3)) + `"`
 		switch p.rng.Intn(4) {
@@ -959,10 +959,23 @@ func (p *progGen) write(ctx *gctx, blk *gblock) bool {
 			return false
 		}
 		n := p.name("w")
-		code := at + " " + strings.ReplaceAll(path, "$", n) + " " + val(inner.elem) + " append drop" + strings.Repeat(", _ : , end", strings.Count(path, "match"))
+		code := at + " " + strings.ReplaceAll(path, "$", n) + " " + grow("", val(inner.elem)+" append drop") + strings.Repeat(", _ : , end", strings.Count(path, "match"))
 		return p.try(blk, code, risky, func() { ctx.sc.add(n, inner).set = false })
 	}
 	return false
+}
+
+// grow writes code that makes the list `at` pushes longer with op (which
+// takes the list and leaves nothing), only while it is shorter than 16
+// elements. A list grown inside loops over itself (`@xs (... @xs [1]
+// extend drop) each` inside another such each) doubles on every pass; a
+// run once reached 26 GB. The bound is on the object, so it holds however
+// many names the list has. at "" means the list is already on the stack.
+func grow(at, op string) string {
+	if at != "" {
+		at += " "
+	}
+	return at + "dup len 16 < if " + op + " else drop end"
 }
 
 // innerList finds a list inside a Maybe, Box or union, and the pattern
@@ -1339,7 +1352,7 @@ func (p *progGen) writeOutside(ctx *gctx, at string, w, t *gty) string {
 			}
 		}
 		if s := p.outside(ctx, w.elem, t.elem); s != "" {
-			return at + " " + s + " append drop"
+			return grow(at, s+" append drop")
 		}
 	case w.k == gDict && t.k == gDict:
 		if s := p.outside(ctx, w.elem, t.elem); s != "" {
@@ -1617,16 +1630,21 @@ func TestGeneratedProgramsSound(t *testing.T) {
 	os.Stderr = devnull
 	var wg sync.WaitGroup
 	next := make(chan int)
-	workers := runtime.NumCPU()
+	workers := envTrials("MSH_GEN_WORKERS", runtime.NumCPU())
+	slots := make([]genSlot, workers)
+	stop := make(chan struct{})
+	watchdogDone := make(chan uint64)
+	go genWatchdog(slots, saved, stop, watchdogDone)
 	for w := 0; w < workers; w++ {
 		wg.Add(1)
-		go func() {
+		go func(slot *genSlot) {
 			defer wg.Done()
 			for i := range next {
 				seed := seed0 + int64(i)
 				p := &progGen{rng: rand.New(rand.NewSource(seed)), base: base}
 				p.risk = p.rng.Float64() * 0.3
 				start := time.Now()
+				slot.begin(seed, genGenerating)
 				src := p.generate()
 				genTime := time.Since(start)
 				res := result{genTime: genTime, seed: seed, checks: p.checks, safeOK: p.safeOK, safeNo: p.safeNo, riskyOK: p.riskyOK, riskyNo: p.riskyNo}
@@ -1635,6 +1653,7 @@ func TestGeneratedProgramsSound(t *testing.T) {
 				if err == nil {
 					if _, ok := base.Check(file); ok {
 						start := time.Now()
+						slot.begin(seed, genRunning)
 						run, err := runProgram(file, devnull)
 						res.runTime = time.Since(start)
 						if err == nil {
@@ -1644,15 +1663,19 @@ func TestGeneratedProgramsSound(t *testing.T) {
 					}
 				}
 				results[i] = res
+				slot.begin(0, genIdle)
 			}
-		}()
+		}(&slots[w])
 	}
 	for i := 0; i < programs; i++ {
 		next <- i
 	}
 	close(next)
 	wg.Wait()
+	close(stop)
+	peak := <-watchdogDone
 	os.Stderr = saved
+	t.Logf("peak heap %d MB (cap %d MB), %d workers", peak>>20, genMemCap()>>20, workers)
 
 	var failures []genFailure
 	total := result{}
@@ -1943,7 +1966,7 @@ func (p *progGen) gridStmt(ctx *gctx, blk *gblock) bool {
 		if risky {
 			src = withField(fs, gfield{name: f.name, t: p.widen(f.t)})
 		}
-		if !p.try(blk, at+" "+p.gridLit(ctx, src, 1)+" extend drop", risky, nil) {
+		if !p.try(blk, at+" dup gridRows 16 < if "+p.gridLit(ctx, src, 1)+" extend drop else drop end", risky, nil) {
 			return false
 		}
 		if risky {
@@ -2030,20 +2053,12 @@ func (p *progGen) gridStmt(ctx *gctx, blk *gblock) bool {
 // ---- Dict words ----
 
 // getKeyType is the type a runtime-key read of a dict of type t gives
-// (Get-Key): the join of its labels' types, when the generator can write
-// it (distinct kinds); nil otherwise.
+// (Get-Key), when the generator can write it: a {str: T}'s T. A written
+// shape is open, so a runtime key may name a label holding anything, and
+// the read is of an unknown type: nil.
 func getKeyType(t *gty) *gty {
-	switch t.k {
-	case gDict:
+	if t.k == gDict {
 		return t.elem
-	case gShape:
-		var ts []*gty
-		for _, f := range t.fields {
-			ts = append(ts, f.t)
-		}
-		// A written shape is open: other labels hold unknown values.
-		_ = ts
-		return nil
 	}
 	return nil
 }
@@ -2314,7 +2329,7 @@ func (p *progGen) miscStmt(ctx *gctx, blk *gblock) bool {
 					body = append(body, w)
 					risky = true
 				} else if t.k == gList {
-					body = append(body, "dup "+p.expr(ctx, t.elem, 1)+" append drop")
+					body = append(body, grow("dup", p.expr(ctx, t.elem, 1)+" append drop"))
 				}
 			case 3: // widen it (risky unless new)
 				if t.written() {
@@ -2414,5 +2429,86 @@ func (p *progGen) miscStmt(ctx *gctx, blk *gblock) bool {
 		}
 		p.try(blk, "@"+v.name+" "+p.consume(ctx, v.t, 3), false, nil)
 		return true
+	}
+}
+
+// ---- The watchdog ----
+//
+// Programs run in this process with no limit of their own, so one that
+// builds data without bound (a list doubled inside nested loops) or never
+// ends would take the machine with it: a run of 10,000 programs once grew
+// to 26 GB before the kernel killed it. The watchdog checks the heap and
+// each program's running time every 100 ms; past MSH_GEN_MEMCAP bytes of
+// heap (default 2 GB) or MSH_GEN_TIMEOUT seconds for one program (default
+// 30), it prints the seeds in progress and exits the test binary, since a
+// running program cannot be stopped from outside.
+
+const (
+	genIdle int32 = iota
+	genGenerating
+	genRunning
+)
+
+// genSlot is what one worker is doing: the seed, the phase, and since when.
+type genSlot struct {
+	mu    sync.Mutex
+	seed  int64
+	phase int32
+	since time.Time
+}
+
+func (s *genSlot) begin(seed int64, phase int32) {
+	s.mu.Lock()
+	s.seed, s.phase, s.since = seed, phase, time.Now()
+	s.mu.Unlock()
+}
+
+func genMemCap() uint64 {
+	if v := os.Getenv("MSH_GEN_MEMCAP"); v != "" {
+		if n, err := strconv.ParseUint(v, 10, 64); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 2 << 30
+}
+
+// genWatchdog watches slots until stop closes, then sends the peak heap.
+func genWatchdog(slots []genSlot, stderr *os.File, stop <-chan struct{}, done chan<- uint64) {
+	memCap := genMemCap()
+	timeout := time.Duration(envTrials("MSH_GEN_TIMEOUT", 30)) * time.Second
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	var peak uint64
+	var ms runtime.MemStats
+	for {
+		select {
+		case <-stop:
+			done <- peak
+			return
+		case <-tick.C:
+		}
+		runtime.ReadMemStats(&ms)
+		peak = max(peak, ms.HeapAlloc)
+		over := ms.HeapAlloc > memCap
+		var report strings.Builder
+		for i := range slots {
+			s := &slots[i]
+			s.mu.Lock()
+			seed, phase, since := s.seed, s.phase, s.since
+			s.mu.Unlock()
+			if phase == genIdle {
+				continue
+			}
+			long := time.Since(since) > timeout
+			if over || long {
+				fmt.Fprintf(&report, "  seed %d: %s for %v\n", seed, []string{"", "generating", "running"}[phase], time.Since(since).Round(time.Millisecond))
+			}
+			over = over || long
+		}
+		if over {
+			fmt.Fprintf(stderr, "TestGeneratedProgramsSound: stopped: heap %d MB (cap %d MB) or a program over %v; in progress:\n%s",
+				ms.HeapAlloc>>20, memCap>>20, timeout, report.String())
+			os.Exit(2)
+		}
 	}
 }

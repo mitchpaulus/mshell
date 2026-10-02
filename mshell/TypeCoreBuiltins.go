@@ -738,7 +738,7 @@ var coreWalkerSigs = map[string][]string{
 	"gridValues":    {"(Grid -- [[T]])", "(GridView -- [[T]])"},
 	"select":        {"(Grid [str] -- new Grid)", "(GridView [str] -- new Grid)"},
 	"exclude":       {"(Grid [str] -- new Grid)", "(GridView [str] -- new Grid)"},
-	"derive":        {"(str Grid (GridRow -- T) -- new Grid)", "(str GridView (GridRow -- T) -- new Grid)"},
+	"derive":        {"(Grid str {} (GridRow -- T) -- new Grid)", "(GridView str {} (GridRow -- T) -- new Grid)"},
 	"updateCol":     {"(Grid str (T -- U) -- Grid)", "(GridView str (T -- U) -- new Grid)"},
 	"gridSetCell":   {"(Grid str int T -- Grid)"},
 	"gridAddCol":    {"(Grid str [T] -- Grid)"},
