@@ -202,6 +202,9 @@ type coreVar struct {
 	// whether a read without that was recorded (TypeCoreAssign.go).
 	set       bool
 	unsetRead bool
+	// origin is the join origin of the value of the first store, when the
+	// variable's type is that value's union (coreSlot.origin).
+	origin uint32
 }
 
 // coreDbg is a `dbg` word, the types on the stack there (bottom first),
@@ -282,6 +285,8 @@ type coreChecker struct {
 	ctors    map[NameId]*coreCtor
 	declared map[NameId]Token
 	errs  []TypeError
+	// origins are the joins that made union types (coreSlot.origin).
+	origins []coreOrigin
 
 	stack []coreSlot
 	// floor is the lowest slot the current code may use: a list literal's
@@ -337,11 +342,11 @@ type coreChecker struct {
 	// litLists holds the unit's list literals of string literals.
 	litLists [][]NameId
 
-	// The def being checked, whether its body calls it, and for each of
-	// its outputs (bit i) whether every exit so far left a new value there,
-	// with the first exit that did not (TypeCoreNew.go).
+	// The def being checked, the defs of the file its body calls, and for
+	// each of its outputs (bit i) whether every exit so far left a new
+	// value there, with the first exit that did not (TypeCoreNew.go).
 	curDef     *coreSig
-	selfCalled bool
+	calls      []*coreSig
 	exitNew    uint64
 	exitShared []Token
 	exits      int
@@ -374,9 +379,7 @@ func (c *coreChecker) checkFile(file *MShellFile) {
 			c.errs = append(c.errs, *e)
 		}
 	}
-	for i := range file.Definitions {
-		c.checkDef(&file.Definitions[i])
-	}
+	c.checkDefs(file.Definitions)
 	c.beginUnit()
 	c.stack = c.stack[:0]
 	c.ret, c.retOuts = retAny, nil
@@ -475,19 +478,11 @@ func (c *coreChecker) finishUnit() {
 	}
 }
 
-// checkDef checks a def body once, with its generics rigid, and then the
-// `new` marks on its outputs (TypeCoreNew.go).
-func (c *coreChecker) checkDef(def *MShellDefinition) {
-	sig := c.defs[c.names.Intern(def.Name)]
-	outs := c.checkBody(def, sig)
-	c.checkNewMarks(def, sig, outs)
-}
-
 // checkBody checks a def's body against sig and returns its output types,
 // with the generics rigid. It records each exit's freshness.
 func (c *coreChecker) checkBody(def *MShellDefinition, sig *coreSig) []TypeId {
 	c.beginUnit()
-	c.curDef, c.selfCalled = sig, false
+	c.curDef, c.calls = sig, c.calls[:0]
 	c.res.bodyGens = sig.gens
 	defer func() { c.res.bodyGens = nil }()
 	c.exitNew, c.exits = ^uint64(0), 0
@@ -749,8 +744,8 @@ func (c *coreChecker) word(tok Token) {
 	}
 	if id, ok := c.names.Lookup(tok.Lexeme); ok {
 		if sig := c.defs[id]; sig != nil {
-			if sig == c.curDef {
-				c.selfCalled = true
+			if c.curDef != nil {
+				c.calls = append(c.calls, sig)
 			}
 			c.apply(sig, tok)
 			return
@@ -949,6 +944,7 @@ func (c *coreChecker) load(tok Token) {
 	}
 	c.daRead(tok, name, v)
 	c.push(v.t, false)
+	c.stack[len(c.stack)-1].origin = v.origin
 }
 
 // store checks `name!`: the value must fit the variable's one type. A ⊥ in
@@ -963,11 +959,16 @@ func (c *coreChecker) store(tok Token, name NameId) {
 	slot := c.stack[len(c.stack)-1]
 	c.stack = c.stack[:len(c.stack)-1]
 	v := c.varOf(name)
+	if !v.stored {
+		v.origin = slot.origin
+	}
 	v.stored = true
 	c.daSet(name)
 	opened := c.openBottom(c.subst.Apply(c.arena, slot.t))
 	if !c.check(coreSlot{t: opened, fresh: slot.fresh, part: slot.part}, v.t) {
-		c.errs = append(c.errs, c.storeError(tok, name, c.subst.Apply(c.arena, slot.t), c.subst.Apply(c.arena, v.t)))
+		e := c.storeError(tok, name, c.subst.Apply(c.arena, slot.t), c.subst.Apply(c.arena, v.t))
+		e.Hint = c.originHint(coreSlot{t: v.t, origin: v.origin})
+		c.errs = append(c.errs, e)
 		return
 	}
 	c.stores = append(c.stores, coreStore{tok: tok, name: name, t: slot.t, v: v.t, mark: slotMark(slot)})
@@ -1019,6 +1020,11 @@ func (c *coreChecker) openBottom(t TypeId) TypeId {
 		}
 		if fields != nil {
 			return ar.MakeRecord(fields, rec.Rest)
+		}
+	case TKGrid, TKGridView, TKGridRow:
+		// A grid literal's column of only `none` cells is Maybe[⊥].
+		if r := c.openBottom(TypeId(n.A)); r != TypeId(n.A) {
+			return ar.MakeGridOf(n.Kind, r)
 		}
 	}
 	return t
@@ -1286,6 +1292,11 @@ func (c *coreChecker) call(sigs []coreSig, tok Token) {
 		hint := "the stack has " + c.formatSlots(c.topSlots(sigs)) + "; " + c.formatCandidates(sigs)
 		if c.fitsIfNew(sigs) {
 			hint += "; " + storedHint
+		}
+		for _, s := range c.topSlots(sigs) {
+			if h := c.originHint(s); h != "" {
+				hint += "; " + h
+			}
 		}
 		c.errs = append(c.errs, TypeError{Kind: TErrNoMatchingOverload, Pos: tok, Hint: hint})
 		c.abandoned = true
@@ -1645,7 +1656,7 @@ func (c *coreChecker) apply(sig *coreSig, tok Token) {
 			return
 		}
 		if !c.check(c.stack[base+i], want) {
-			c.mismatch(tok, i, want, c.stack[base+i].t)
+			c.mismatchSlot(tok, i, want, c.stack[base+i])
 		}
 	})
 	inputsFresh := false
@@ -1688,6 +1699,19 @@ func (c *coreChecker) newOverImmutable(t TypeId) bool {
 		return ok && c.schemaImmutable(rec)
 	}
 	return false
+}
+
+// mismatchSlot is mismatch for the value in slot s, naming the arms its
+// union came from when a join made it.
+func (c *coreChecker) mismatchSlot(tok Token, i int, want TypeId, s coreSlot) {
+	c.mismatch(tok, i, want, s.t)
+	if h := c.originHint(s); h != "" {
+		e := &c.errs[len(c.errs)-1]
+		if e.Hint != "" {
+			e.Hint += "; "
+		}
+		e.Hint += h
+	}
 }
 
 func (c *coreChecker) mismatch(tok Token, i int, want, got TypeId) {
@@ -1901,7 +1925,12 @@ func (c *coreChecker) ifBlock(b *MShellParseIfBlock) {
 	// set, and the if keeps what every arm that goes on set.
 	daMark := len(c.setLog)
 	var condSets, armSets [][]NameId
+	label := "the `if` branch"
 	runArm := func(body []MShellParseItem) {
+		line := tok.Line
+		if len(body) > 0 {
+			line = body[0].GetStartToken().Line
+		}
 		c.daRestore(daMark)
 		for _, s := range condSets {
 			for _, n := range s {
@@ -1910,7 +1939,7 @@ func (c *coreChecker) ifBlock(b *MShellParseIfBlock) {
 		}
 		c.walk(body)
 		if !c.abandoned {
-			arms = append(arms, savedRun{start: len(c.saved), diverged: c.diverged})
+			arms = append(arms, savedRun{start: len(c.saved), diverged: c.diverged, label: label, line: line})
 			c.saved = append(c.saved, c.stack...)
 			arms[len(arms)-1].end = len(c.saved)
 			if !c.diverged {
@@ -1944,13 +1973,16 @@ func (c *coreChecker) ifBlock(b *MShellParseIfBlock) {
 		}
 		condSets = append(condSets, c.daSince(daMark))
 		from = c.saveStack()
+		label = "an `else*` branch"
 		runArm(ei.Body)
 	}
 	if !c.abandoned {
 		c.restoreStack(from)
 		if b.ElseBody != nil {
+			label = "the `else` branch"
 			runArm(b.ElseBody)
 		} else {
+			label = "the missing `else`"
 			runArm(nil)
 		}
 	}
@@ -1977,7 +2009,7 @@ func (c *coreChecker) condition(tok Token) bool {
 	}
 	t := c.subst.Apply(c.arena, slot.t)
 	if !c.rel.Sub(t, c.arena.MakeUnion([]TypeId{TidBool, TidInt})) {
-		c.mismatch(tok, 0, TidBool, t)
+		c.mismatchSlot(tok, 0, TidBool, slot)
 	}
 	return true
 }
@@ -1986,6 +2018,10 @@ func (c *coreChecker) condition(tok Token) bool {
 type savedRun struct {
 	start, end int
 	diverged   bool
+	// label and line name the arm in a message about a union its join
+	// made: "the `else` branch", and the line where it starts.
+	label string
+	line  int
 }
 
 func (c *coreChecker) saveStack() savedRun {
@@ -2060,6 +2096,74 @@ func (c *coreChecker) joinArms(arms []savedRun, tok Token) {
 			c.stack[i] = j
 		}
 	}
+	c.noteOrigins(live, tok)
+}
+
+// coreOrigin is a join that made a union: which arm left which type in
+// the slot, so an error about the value can point back at the arms.
+type coreOrigin struct {
+	tok  Token
+	u    TypeId
+	arms []coreOriginArm
+}
+
+type coreOriginArm struct {
+	label string
+	line  int
+	t     TypeId
+}
+
+// noteOrigins records, for each slot where the join of the arms is a
+// union that no arm left alone, which arm left which type.
+func (c *coreChecker) noteOrigins(live []savedRun, tok Token) {
+	if len(live) < 2 || live[0].label == "" {
+		return
+	}
+	for i := range c.stack {
+		if i >= live[0].end-live[0].start {
+			break
+		}
+		u := c.subst.Apply(c.arena, c.stack[i].t)
+		if c.arena.nodes[u].Kind != TKUnion {
+			continue
+		}
+		made := true
+		for _, a := range live {
+			if c.subst.Apply(c.arena, c.saved[a.start+i].t) == u {
+				made = false
+			}
+		}
+		if !made {
+			continue
+		}
+		o := coreOrigin{tok: tok, u: u}
+		for _, a := range live {
+			o.arms = append(o.arms, coreOriginArm{label: a.label, line: a.line, t: c.saved[a.start+i].t})
+		}
+		c.origins = append(c.origins, o)
+		c.stack[i].origin = uint32(len(c.origins))
+	}
+}
+
+// originHint names the arms a slot's union came from, when a join made
+// it: "int | str comes from the `if` at line 2: the `if` branch (line 3)
+// leaves int, the `else` branch (line 5) leaves str". It is "" for any
+// other slot. The slot may hold one member of the union by then (an
+// overloaded word checks a union member by member).
+func (c *coreChecker) originHint(s coreSlot) string {
+	if s.origin == 0 || int(s.origin) > len(c.origins) {
+		return ""
+	}
+	o := c.origins[s.origin-1]
+	var b strings.Builder
+	b.WriteString(c.format(o.u) + " comes from the `" + o.tok.Lexeme + "` at line " + strconv.Itoa(o.tok.Line) + ":")
+	for i, a := range o.arms {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		b.WriteString(" " + a.label + " (line " + strconv.Itoa(a.line) + ") leaves " + c.format(a.t))
+	}
+	return b.String()
 }
 
 // joinSlot joins two slots. A slot with an unsolved variable is unified,

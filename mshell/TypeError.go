@@ -170,6 +170,9 @@ func (e TypeError) Format(arena *TypeArena, names *NameTable) string {
 	case TErrVarType:
 		fmt.Fprintf(&sb, "variable '%s' has type %s, so it cannot store a value of type %s; use a new name, or widen the first store with `as`",
 			e.Name, FormatType(arena, names, e.Expected), FormatType(arena, names, e.Actual))
+		if e.Hint != "" {
+			fmt.Fprintf(&sb, "; %s", e.Hint)
+		}
 	case TErrNoJoin:
 		fmt.Fprintf(&sb, "%s", e.Hint)
 	case TErrCoreUnsupported:

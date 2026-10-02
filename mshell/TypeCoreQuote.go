@@ -340,11 +340,18 @@ func (c *coreChecker) iff(tok Token) {
 		if !c.diverged {
 			sets = append(sets, c.daSince(daMark))
 		}
-		runs = append(runs, c.saveArm())
+		run := c.saveArm()
+		run.label, run.line = "the quote run when true", tok.Line
+		if len(runs) == 1 {
+			run.label = "the quote run when false"
+		}
+		runs = append(runs, run)
 	}
 	if len(arms) == 1 {
 		c.restoreStack(entry)
-		runs = append(runs, c.saveArm())
+		run := c.saveArm()
+		run.label, run.line = "the missing quote for false", tok.Line
+		runs = append(runs, run)
 		sets = append(sets, nil)
 	}
 	c.joinArms(runs, tok)

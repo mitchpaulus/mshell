@@ -1,0 +1,7 @@
+# Two defs that call each other, with their outputs marked `new`: a caller
+# may give the result a wider type.
+def evens (int -- new [int]) dup 0 = if drop [] else 1 - odds 2 append end end
+def odds (int -- new [int]) dup 0 = if drop [] else 1 - evens 1 append end end
+3 evens as [int | str] l!
+@l "x" append drop
+@l len wl

@@ -58,6 +58,24 @@ func TestCoreChecker(t *testing.T) {
 		{`true if [1] else ["a"] end drop`, true, ""},
 		{`true if {a: 1} else {a: 2, b: 3} end drop`, true, ""},
 		{`[1] xs! ["a"] ys! true if @xs else @ys end drop`, false, "no common type"},
+		// A union a join made: the error names the arm each member came from.
+		{"true if\n 1\nelse\n \"a\"\nend x!\n@x 1 +", false,
+			"int | str comes from the `if` at line 1: the `if` branch (line 2) leaves int, the `else` branch (line 4) leaves str"},
+		{"false if 5 else 2.5 end z!\n\"s\" z!", false, "int | float comes from the `if` at line 1"},
+		{"3 match 1 : \"one\", _ : 0, end n!  @n 1 +", false, "the arm `1` (line 1) leaves str, the arm `_` (line 1) leaves int"},
+		{"true (5) (\"x\") iff 2 *", false, "the quote run when true (line 1) leaves int, the quote run when false (line 1) leaves str"},
+		// `new` across defs that call each other: the largest consistent marks.
+		{"def evens (int -- [int]) dup 0 = if drop [] else 1 - odds end end\n" +
+			"def odds (int -- [int]) dup 0 = if drop [] else 1 - evens end end", false, "'evens': output 0 is a new value on every path"},
+		{"def evens (int -- new [int]) dup 0 = if drop [] else 1 - odds end end\n" +
+			"def odds (int -- new [int]) dup 0 = if drop [] else 1 - evens end end\n3 evens as [int | str] drop", true, ""},
+		{"def evens (int -- [int]) dup 0 = if drop [] else 1 - odds end end\n" +
+			"def odds (int -- [int]) dup 0 = if drop xs else 1 - evens end end\ndef xs ( -- [int]) [1] l! @l end", true, ""},
+		// A union written in a signature names no arms.
+		{"def f (int -- int | str) drop 1 end  1 f 1 +", false, "it takes (int int)"},
+		// A grid column of only none cells is Maybe[⊥] in the literal, and
+		// opened at the store, as [none] is.
+		{`[| c; none |] g!  @g "c" 0 5 just gridSetCell drop`, true, ""},
 		{`[1] xs! ["a"] ys! true if @xs just else @ys just end drop`, false, "no common type"},
 		{`true if [1] just else ["a"] just end drop`, true, ""},
 		{`true if 5 else "x" parseJson end drop`, true, ""},

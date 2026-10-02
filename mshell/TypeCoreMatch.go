@@ -240,7 +240,13 @@ func (c *coreChecker) matchBlock(m *MShellParseMatchBlock) {
 		if !c.diverged {
 			sets = append(sets, c.daSince(daMark))
 		}
-		runs = append(runs, c.saveArm())
+		run := c.saveArm()
+		run.label = "the arm `" + formatPatternSnippet(arm.Pattern) + "`"
+		run.line = tok.Line
+		if len(arm.Pattern) > 0 {
+			run.line = arm.Pattern[0].GetStartToken().Line
+		}
+		runs = append(runs, run)
 	}
 	c.daJoin(daMark, sets)
 	if !m.Assertive && !c.exhaustive(arms, t) {
