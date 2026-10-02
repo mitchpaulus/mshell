@@ -41,7 +41,7 @@ func newHTTPListCookieJar(obj MShellObject) (*httpListCookieJar, error) {
 			return nil, fmt.Errorf("cookieJar[%d]: %w", i, err)
 		}
 		if j := httpCookieIndex(list.Items[:i], httpCookieKey(d)); j >= 0 {
-			return nil, fmt.Errorf("cookieJar[%d]: duplicate domain/path/name", i)
+			return nil, checkedErrorf("cookieJar[%d]: duplicate domain/path/name", i)
 		}
 	}
 	return &httpListCookieJar{list: list, now: time.Now}, nil
@@ -94,27 +94,27 @@ func validateHTTPCookieRecord(d *MShellDict) error {
 		}
 	}
 	if _, ok := httpCookieTimestamp(d.Items["lastAccess"]); !ok {
-		return fmt.Errorf("'lastAccess' must be a whole-number Unix timestamp")
+		return checkedErrorf("'lastAccess' must be a whole-number Unix timestamp")
 	}
 	if _, null := d.Items["expires"].(MShellNull); !null {
 		if _, ok := httpCookieTimestamp(d.Items["expires"]); !ok {
-			return fmt.Errorf("'expires' must be a whole-number Unix timestamp or null")
+			return checkedErrorf("'expires' must be a whole-number Unix timestamp or null")
 		}
 	}
 	switch cookieString(d, "sameSite") {
 	case "", "lax", "strict", "none":
 	default:
-		return fmt.Errorf("'sameSite' must be '', 'lax', 'strict', or 'none'")
+		return checkedErrorf("'sameSite' must be '', 'lax', 'strict', or 'none'")
 	}
 	domain := cookieString(d, "domain")
 	canonical, err := httpCookieHost(domain)
 	if err != nil || canonical != domain || strings.HasPrefix(domain, ".") {
-		return fmt.Errorf("'domain' must be a normalized hostname or IP address")
+		return checkedErrorf("'domain' must be a normalized hostname or IP address")
 	}
 	if !cookieBool(d, "hostOnly") {
 		suffix, _ := publicsuffix.PublicSuffix(domain)
 		if httpCookieIsIP(domain) || suffix == domain {
-			return fmt.Errorf("IP addresses and public suffixes require 'hostOnly': true")
+			return checkedErrorf("IP addresses and public suffixes require 'hostOnly': true")
 		}
 	}
 	c := &http.Cookie{
@@ -122,21 +122,21 @@ func validateHTTPCookieRecord(d *MShellDict) error {
 		Path: cookieString(d, "path"), Secure: cookieBool(d, "secure"),
 	}
 	if !strings.HasPrefix(c.Path, "/") {
-		return fmt.Errorf("'path' must begin with '/'")
+		return checkedErrorf("'path' must begin with '/'")
 	}
 	if err := c.Valid(); err != nil {
-		return fmt.Errorf("invalid cookie name, value, or path")
+		return checkedErrorf("invalid cookie name, value, or path")
 	}
 	if strings.HasPrefix(c.Name, "__Secure-") && !c.Secure {
-		return fmt.Errorf("__Secure- cookies require 'secure': true")
+		return checkedErrorf("__Secure- cookies require 'secure': true")
 	}
 	if strings.HasPrefix(c.Name, "__Host-") && (!c.Secure || !cookieBool(d, "hostOnly") || c.Path != "/") {
-		return fmt.Errorf("__Host- cookies require secure, hostOnly, and path '/'")
+		return checkedErrorf("__Host- cookies require secure, hostOnly, and path '/'")
 	}
 	if partitioned, ok := d.Items["partitioned"]; ok {
 		flag, ok := partitioned.(MShellBool)
 		if !ok || flag.Value {
-			return fmt.Errorf("partitioned cookies are not supported")
+			return checkedErrorf("partitioned cookies are not supported")
 		}
 	}
 	return nil

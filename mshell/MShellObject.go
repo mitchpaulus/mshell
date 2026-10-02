@@ -93,7 +93,7 @@ func (b MShellBinary) DebugString() string {
 
 func (b MShellBinary) Index(index int) (MShellObject, error) {
 	if index < 0 || index >= len(b) {
-		return nil, fmt.Errorf("Index %d out of range for Binary with length %d.\n", index, len(b))
+		return nil, checkedErrorf("Index %d out of range for Binary with length %d.\n", index, len(b))
 	}
 
 	return MShellBinary{b[index]}, nil
@@ -101,14 +101,14 @@ func (b MShellBinary) Index(index int) (MShellObject, error) {
 
 func (b MShellBinary) SliceStart(startInclusive int) (MShellObject, error) {
 	if startInclusive < 0 || startInclusive >= len(b) {
-		return nil, fmt.Errorf("Start index %d out of range for Binary with length %d.\n", startInclusive, len(b))
+		return nil, checkedErrorf("Start index %d out of range for Binary with length %d.\n", startInclusive, len(b))
 	}
 	return MShellBinary(b[startInclusive:]), nil
 }
 
 func (b MShellBinary) SliceEnd(end int) (MShellObject, error) {
 	if end < 0 || end > len(b) {
-		return nil, fmt.Errorf("End index %d out of range for Binary with length %d.\n", end, len(b))
+		return nil, checkedErrorf("End index %d out of range for Binary with length %d.\n", end, len(b))
 	}
 
 	return MShellBinary(b[:end]), nil
@@ -116,7 +116,7 @@ func (b MShellBinary) SliceEnd(end int) (MShellObject, error) {
 
 func (b MShellBinary) Slice(startInc int, endExc int) (MShellObject, error) {
 	if startInc < 0 || startInc >= len(b) || endExc < 0 || endExc > len(b) || startInc > endExc {
-		return nil, fmt.Errorf("Slice indices %d:%d out of range for Binary with length %d.\n", startInc, endExc, len(b))
+		return nil, checkedErrorf("Slice indices %d:%d out of range for Binary with length %d.\n", startInc, endExc, len(b))
 	}
 
 	return MShellBinary(b[startInc:endExc]), nil
@@ -1334,7 +1334,7 @@ func (obj MShellFloat) IndexErrStr() string {
 
 func IndexCheck(index int, length int, obj MShellObject) error {
 	if index < 0 || index >= length {
-		return fmt.Errorf("Index %d out of range for %s with length %d.%s\n", index, obj.TypeName(), length, obj.IndexErrStr())
+		return checkedErrorf("Index %d out of range for %s with length %d.%s\n", index, obj.TypeName(), length, obj.IndexErrStr())
 	} else {
 		return nil
 	}
@@ -1342,7 +1342,7 @@ func IndexCheck(index int, length int, obj MShellObject) error {
 
 func IndexCheckExc(index int, length int, obj MShellObject) error {
 	if index < 0 || index > length {
-		return fmt.Errorf("Index %d out of range for %s with length %d.%s\n", index, obj.TypeName(), length, obj.IndexErrStr())
+		return checkedErrorf("Index %d out of range for %s with length %d.%s\n", index, obj.TypeName(), length, obj.IndexErrStr())
 	} else {
 		return nil
 	}
@@ -1618,7 +1618,7 @@ func SliceIndexCheck(startInc int, endExc int, length int, obj MShellObject) err
 	}
 
 	if startInc < 0 || startInc > endExc || endExc > length {
-		return fmt.Errorf("Invalid slice range [%d:%d) for %s with length %d.\n", startInc, endExc, obj.TypeName(), length)
+		return checkedErrorf("Invalid slice range [%d:%d) for %s with length %d.\n", startInc, endExc, obj.TypeName(), length)
 	} else {
 		return nil
 	}
@@ -2332,7 +2332,7 @@ func (g *MShellGrid) Index(index int) (MShellObject, error) {
 		index = g.RowCount + index
 	}
 	if index < 0 || index >= g.RowCount {
-		return nil, fmt.Errorf("Index %d out of range for Grid with %d rows.\n", index, g.RowCount)
+		return nil, checkedErrorf("Index %d out of range for Grid with %d rows.\n", index, g.RowCount)
 	}
 	return g.GetRow(index), nil
 }
@@ -2342,7 +2342,7 @@ func (g *MShellGrid) SliceStart(startInclusive int) (MShellObject, error) {
 		startInclusive = g.RowCount + startInclusive
 	}
 	if startInclusive < 0 || startInclusive > g.RowCount {
-		return nil, fmt.Errorf("Start index %d out of range for Grid with %d rows.\n", startInclusive, g.RowCount)
+		return nil, checkedErrorf("Start index %d out of range for Grid with %d rows.\n", startInclusive, g.RowCount)
 	}
 	indices := make([]int, g.RowCount-startInclusive)
 	for i := range indices {
@@ -2356,7 +2356,7 @@ func (g *MShellGrid) SliceEnd(end int) (MShellObject, error) {
 		end = g.RowCount + end
 	}
 	if end < 0 || end > g.RowCount {
-		return nil, fmt.Errorf("End index %d out of range for Grid with %d rows.\n", end, g.RowCount)
+		return nil, checkedErrorf("End index %d out of range for Grid with %d rows.\n", end, g.RowCount)
 	}
 	indices := make([]int, end)
 	for i := range indices {
@@ -2373,7 +2373,7 @@ func (g *MShellGrid) Slice(startInc int, endExc int) (MShellObject, error) {
 		endExc = g.RowCount + endExc
 	}
 	if startInc < 0 || endExc > g.RowCount || startInc > endExc {
-		return nil, fmt.Errorf("Slice [%d:%d) out of range for Grid with %d rows.\n", startInc, endExc, g.RowCount)
+		return nil, checkedErrorf("Slice [%d:%d) out of range for Grid with %d rows.\n", startInc, endExc, g.RowCount)
 	}
 	indices := make([]int, endExc-startInc)
 	for i := range indices {
@@ -2484,7 +2484,7 @@ func (v *MShellGridView) Index(index int) (MShellObject, error) {
 		index = len(v.Indices) + index
 	}
 	if index < 0 || index >= len(v.Indices) {
-		return nil, fmt.Errorf("Index %d out of range for GridView with %d rows.\n", index, len(v.Indices))
+		return nil, checkedErrorf("Index %d out of range for GridView with %d rows.\n", index, len(v.Indices))
 	}
 	return v.GetRow(index), nil
 }
@@ -2494,7 +2494,7 @@ func (v *MShellGridView) SliceStart(startInclusive int) (MShellObject, error) {
 		startInclusive = len(v.Indices) + startInclusive
 	}
 	if startInclusive < 0 || startInclusive > len(v.Indices) {
-		return nil, fmt.Errorf("Start index %d out of range for GridView with %d rows.\n", startInclusive, len(v.Indices))
+		return nil, checkedErrorf("Start index %d out of range for GridView with %d rows.\n", startInclusive, len(v.Indices))
 	}
 	return &MShellGridView{Source: v.Source, Indices: v.Indices[startInclusive:]}, nil
 }
@@ -2504,7 +2504,7 @@ func (v *MShellGridView) SliceEnd(end int) (MShellObject, error) {
 		end = len(v.Indices) + end
 	}
 	if end < 0 || end > len(v.Indices) {
-		return nil, fmt.Errorf("End index %d out of range for GridView with %d rows.\n", end, len(v.Indices))
+		return nil, checkedErrorf("End index %d out of range for GridView with %d rows.\n", end, len(v.Indices))
 	}
 	return &MShellGridView{Source: v.Source, Indices: v.Indices[:end]}, nil
 }
@@ -2517,7 +2517,7 @@ func (v *MShellGridView) Slice(startInc int, endExc int) (MShellObject, error) {
 		endExc = len(v.Indices) + endExc
 	}
 	if startInc < 0 || endExc > len(v.Indices) || startInc > endExc {
-		return nil, fmt.Errorf("Slice [%d:%d) out of range for GridView with %d rows.\n", startInc, endExc, len(v.Indices))
+		return nil, checkedErrorf("Slice [%d:%d) out of range for GridView with %d rows.\n", startInc, endExc, len(v.Indices))
 	}
 	return &MShellGridView{Source: v.Source, Indices: v.Indices[startInc:endExc]}, nil
 }
@@ -2603,7 +2603,7 @@ func (r *MShellGridRow) Index(index int) (MShellObject, error) {
 		index = len(r.Grid.Columns) + index
 	}
 	if index < 0 || index >= len(r.Grid.Columns) {
-		return nil, fmt.Errorf("Index %d out of range for GridRow with %d columns.\n", index, len(r.Grid.Columns))
+		return nil, checkedErrorf("Index %d out of range for GridRow with %d columns.\n", index, len(r.Grid.Columns))
 	}
 	return r.Grid.Columns[index].Get(r.RowIndex), nil
 }

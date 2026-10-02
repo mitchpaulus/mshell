@@ -144,20 +144,18 @@ func (env *runtimeTypes) resolveTarget(target MShellParseItem, cache *runtimeTar
 }
 
 // validateValue validates value against the target of a tryAs or `is`,
-// resolving it first. err is a message for a target that cannot be used or
-// a validation that ran out of its budget.
-func (state *EvalState) validateValue(value MShellObject, target MShellParseItem, cache *runtimeTarget) (bool, string) {
+// resolving it first. err is a target that cannot be used (a type
+// mismatch: the checker resolves every target), or a validation that ran
+// out of its budget (a checked error).
+func (state *EvalState) validateValue(value MShellObject, target MShellParseItem, cache *runtimeTarget) (bool, error) {
 	env := state.runtimeTypeEnv()
 	defer env.mu.Unlock()
 	env.resolveTarget(target, cache)
 	if cache.err != "" {
-		return false, cache.err
+		return false, errors.New(cache.err)
 	}
 	ok, err := env.validate(value, cache.t)
-	if err != nil {
-		return false, err.Error()
-	}
-	return ok, ""
+	return ok, asChecked(err)
 }
 
 // validateMember is a union member, the runtime kind it holds, and whether

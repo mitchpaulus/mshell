@@ -23,7 +23,7 @@ func validateFor(t *testing.T, decls string, value MShellObject, typ string) (bo
 	if err := state.RegisterDeclarations(file.Items, file.Definitions); err != nil {
 		return false, err.Error()
 	}
-	return state.validateValue(value, node.Target, &node.resolved)
+	return validateMsg(state, value, node.Target, &node.resolved)
 }
 
 func mustValidate(t *testing.T, decls string, value MShellObject, typ string, want bool) {
@@ -228,19 +228,19 @@ func TestValidateDeclarationLines(t *testing.T) {
 		return file.Items[1].(*MShellTryAs)
 	}
 	early := tryAs("U")
-	if _, msg := state.validateValue(intList(1), early.Target, &early.resolved); !strings.Contains(msg, "unknown type 'U'") {
+	if _, msg := validateMsg(state, intList(1), early.Target, &early.resolved); !strings.Contains(msg, "unknown type 'U'") {
 		t.Fatalf("before U: %q", msg)
 	}
 	if err := line("type U = [foo]"); err == nil || !strings.Contains(err.Error(), "unknown type 'foo'") {
 		t.Fatalf("a bad body: %v", err)
 	}
-	if ok, msg := state.validateValue(MShellInt{Value: 5}, tryAs("int").Target, &tryAs("int").resolved); !ok || msg != "" {
+	if ok, msg := validateMsg(state, MShellInt{Value: 5}, tryAs("int").Target, &tryAs("int").resolved); !ok || msg != "" {
 		t.Fatalf("after a refused line: %v %q", ok, msg)
 	}
 	if err := line("type U = [int]"); err != nil {
 		t.Fatalf("declaring U again: %v", err)
 	}
-	if ok, msg := state.validateValue(intList(1), early.Target, &early.resolved); !ok || msg != "" {
+	if ok, msg := validateMsg(state, intList(1), early.Target, &early.resolved); !ok || msg != "" {
 		t.Fatalf("the early tryAs after U: %v %q", ok, msg)
 	}
 	if err := line("type U = [str]"); err == nil || !strings.Contains(err.Error(), "already declared") {
@@ -292,7 +292,7 @@ func BenchmarkValidateRecords(b *testing.B) {
 	}
 	b.ReportAllocs()
 	for b.Loop() {
-		if ok, msg := state.validateValue(value, node.Target, &node.resolved); !ok || msg != "" {
+		if ok, msg := validateMsg(state, value, node.Target, &node.resolved); !ok || msg != "" {
 			b.Fatalf("%v %q", ok, msg)
 		}
 	}
@@ -321,7 +321,7 @@ func BenchmarkValidateJson(b *testing.B) {
 	state := &EvalState{}
 	b.ReportAllocs()
 	for b.Loop() {
-		if ok, msg := state.validateValue(value, node.Target, &node.resolved); !ok || msg != "" {
+		if ok, msg := validateMsg(state, value, node.Target, &node.resolved); !ok || msg != "" {
 			b.Fatalf("%v %q", ok, msg)
 		}
 	}
@@ -332,4 +332,13 @@ func BenchmarkRuntimeTypesNew(b *testing.B) {
 	for b.Loop() {
 		newRuntimeTypes()
 	}
+}
+
+// validateMsg is validateValue with its error as a message, "" for none.
+func validateMsg(state *EvalState, value MShellObject, target MShellParseItem, cache *runtimeTarget) (bool, string) {
+	ok, err := state.validateValue(value, target, cache)
+	if err != nil {
+		return ok, err.Error()
+	}
+	return ok, ""
 }

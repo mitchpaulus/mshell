@@ -1,0 +1,157 @@
+736	M	enum constructor with fewer than Arity values on the stack: underflow, checker applies the ctor sig
+766	M	enum pattern followed by a non-name item: checker memberPattern/analyzePattern reject it (badPattern)
+772	M	member pattern binds a different number of names than the payload arity: checker memberPattern rejects
+787	M	enum-name pattern with more than one bind name: checker rejects patterns of 3+ words (badPattern)
+1298	M	break leaving a format-string interpolation: parser (checkInterpolationControlFlow) and checker (formatString clears brk) reject it
+1316	M	continue leaving a format-string interpolation: same as 1298
+1349	M	loop body changed the stack size: checker loop requires the body to leave the loop's stack (stackFits)
+1353	C	loop exceeded loopMaxIterations: a resource budget, types cannot bound iteration count
+1392	M	format-string interpolation left != 1 value: checker formatString (TErrChildStack)
+1396	M	interpolation value not str/path/int: checker formatString checks against str | path | int
+1436	M	dict literal value evaluated to an empty stack: checker dict literal needs exactly one value per key
+1438	M	dict literal value evaluated to more than one value: same as 1436
+1463	C	BuildExecutionContext error for a quote: opening redirect files (OS) or stdout/stderr same path with different append modes (paths are run-time strings)
+1606	M	unknown parse item type: internal, unreachable
+1669	M	if on an empty stack: underflow, checker condition() needs 1
+1673	M	if condition not bool/int: checker condition() unifies with bool / int
+1690	M	break inside an else-if condition: checker walks the condition with the loop's break context and ACCEPTS it (confirmed checker hole, see helpers file); should become a static error
+1693	M	continue inside an else-if condition: same hole as 1690
+1698	M	else-if condition left an empty stack: checker condition() needs 1
+1702	M	else-if condition not bool/int: checker condition()
+1721	M	tryAs on an empty stack: underflow
+1725	E	validateValue message: target resolution error (M) or validation budget exceeded (C); helper returns a string, see helpers file
+1767	C	assertive match (=>) pattern did not match: checked failure by design, the arm is a runtime assertion
+1769	M	no arm matched in a non-assertive match: checker requires exhaustiveness (TErrNonExhaustiveMatch)
+1774	M	match on an empty stack: underflow, checker need(1)
+1788	E	validateValue message in an `is T` arm: resolution error (M) or budget (C); same helper as 1725
+1846	M	multi-word pattern not recognized: checker analyzePattern badPattern
+1872	M	unsupported pattern item type: checker analyzePattern default badPattern
+1939	M	unknown literal word as a pattern: checker patternKind fails, badPattern
+1957	M	integer literal in a pattern that does not parse (overflow, e.g. 99999999999999999999): checker ACCEPTS it today (confirmed hole); program text, should be rejected by lexer/parser/checker
+1969	M	float literal in a pattern that does not parse (ParseFloat ErrRange on a 400-digit float): checker ACCEPTS it today (confirmed hole), same as 1957
+1981	M	string literal in a pattern with a bad escape: the parser rejects invalid escapes, so unreachable
+2023	M	unsupported token type as a pattern (e.g. a date literal): checker patternKind fails, badPattern
+2058	M	list pattern element before ...rest is not a name: checker list pattern requires LITERAL tokens
+2079	M	list pattern element after ...rest is not a name: same as 2058
+2098	M	exact list pattern element is not a name: same as 2058
+2123	M	dict pattern value is not one item: checker badPattern
+2127	M	dict pattern value is not a literal name: checker badPattern
+2159	M	break outside any loop: checker breakOrContinue loopNone error
+2165	M	continue outside any loop: same as 2159
+2178	M	x (interpret) on an empty stack: underflow
+2182	M	x on a non-quote: checker interpret needs a quote
+2199	M	loop on an empty stack: underflow
+2204	M	loop on a non-quote: checker loop needs a ( -- ) quote
+2208	C	loop on a quote with no tokens: checker accepts `() loop` and `@q loop` with q : ( -- ) (diverges); emptiness is not in the type. Confirmed reachable; runtime could instead loop forever
+2220	C	BuildExecutionContext error for the loop quote: redirect file open (OS) or same path with different append modes (data)
+2242	M	iff underflow (first pop)
+2247	M	iff top is not a quote: checker iff
+2252	M	iff underflow (second pop)
+2266	M	iff two-quote form with no condition: underflow, checker need(3)
+2270	M	iff condition not bool/int: checker condition()
+2279	M	iff second item not quote/bool/int: checker iff (isQuoteSlot else condition())
+2300	M	indexer on an empty stack: underflow
+2309	M	strconv.Atoi on an :n: lexeme overflows (e.g. :99999999999999999999:): checker ACCEPTS it today (confirmed hole); program text, should be rejected statically
+2314	E	obj.Index: out of range (C) or a kind that cannot be indexed (M); helpers file
+2328	M	Atoi overflow in a multi-indexer :n:, same as 2309
+2333	E	obj.Index in a multi-indexer: same helper as 2314
+2356	M	Concat of the wrapped :n: results: fine for list/str/path/bytes, but fails on Grid/GridView (GridRow results) and Pipe+List; checker ACCEPTS `grid :0:,:1:` (confirmed hole, see helpers file)
+2370	M	Atoi overflow in n: / :n, same as 2309
+2381	E	SliceStart/SliceEnd: out of range (C) or a kind that cannot be sliced (M); helpers file
+2389	M	Concat of slice results: fails for GridView ("use compact first") and Pipe+List; checker ACCEPTS `grid 0:1,2:3` (confirmed hole)
+2400	M	Atoi overflow in a:b, same as 2309; ALSO a nil-pointer panic when only the end overflows (err is nil, err2 is not), confirmed
+2405	E	obj.Slice: out of range (C) or a kind that cannot be sliced (M); helpers file
+2413	M	Concat of a:b results, same hole as 2389
+2432	M	variable store with an empty stack: underflow
+2434	M	multi-variable store with too few values: underflow
+2484	M	getter on an empty stack: underflow
+2500	M	getter on something not a dict/GridRow/Grid/GridView: checker getter goes through dictWord get
+2529	M	grid metadata left != 1 value: checker gridLiteral metaDict
+2533	M	grid metadata not a dict: checker metaDict
+2558	M	column metadata left != 1 value: checker metaDict
+2562	M	column metadata not a dict: checker metaDict
+2573	M	grid literal row has the wrong number of cells: checker gridLiteral gridError
+2589	M	grid cell left != 1 value: checker gridLiteral TErrChildStack
+2796	C	EvaluateQuote error for the sortByCmp quote: only BuildExecutionContext errors (redirect file opens, same-path append modes)
+2804	M	sortByCmp comparator left no value: sig (a a -- int)
+2808	M	sortByCmp comparator result not an int: sig (a a -- int)
+3446	C	EvaluateQuote error for a join key quote: BuildExecutionContext errors only (file opens, same-path append modes)
+3452	M	join key quote left != 1 value: gridJoin sig (GridRow -- a)
+3457	M	join key is a container / nested list: checker deferJoinKey (keyAllowed, ruleJoinKey) refuses these
+3471	M	join with fewer than 4 values: Pop4 underflow
+3476	M	join right key not a quote: gridJoin sig
+3480	M	join left key not a quote: gridJoin sig
+3485	M	join left side not Grid/GridView: gridJoin (gridOf)
+3489	M	join right side not Grid/GridView: gridJoin (gridOf)
+3498	C	a column name in both grids: checker rejects it only when both schemas are exact; with an unknown schema the names are data
+3647	C	os.Chdir failed: OS error
+3654	C	setting OLDPWD failed: os.Setenv error
+3659	C	setting PWD failed: os.Setenv error
+3900	C	os.Getwd failed in cdh: OS error
+3928	C	reading the cdh selection failed: I/O error
+3937	C	invalid cdh selection typed by the user: input data
+3983	C	running an empty list: emptiness is a value, not in the type
+4004	M	command argument that is not str/path/int/float/date/literal: checker run() commandLineable
+4013	C	list of only empty lists flattens to no arguments: a value
+4032	C	os.UserHomeDir failed for bare cd: OS error
+4124	C	stdout and stderr redirected to the same file with different append modes: file names are run-time strings
+4140	C	os.Stat on the in-place file failed: OS error
+4154	C	opening the stdout redirect file failed: OS error
+4184	C	opening the stdin redirect file failed: OS error
+4198	C	commented-out code (not a live call): would be a Seek error on stdin, an OS error
+4223	C	opening the stderr redirect file failed: OS error
+4252	C	registering the pipeline terminal failed: OS error
+4343	C	acquiring terminal control failed: OS error
+4387	C	writing the in-place file back failed: OS error
+4554	C	running an empty pipe: emptiness is a value
+4560	M	pipe element not a list or quote: checker pipe() requires every element to be a command
+4580	C	os.Pipe failed: OS error
+4611	C	opening the first stage's stdin file failed: OS error
+4716	C	acquiring pipeline terminal control failed: OS error
+6390	C	os.UserHomeDir failed for ~: OS error
+6444	M	envInspect on an empty stack: underflow
+6449	M	envInspect name not castable to a string: sig (str | path -- ...)
+6466	M	dup on an empty stack: underflow
+6472	M	over with fewer than 2 values: underflow
+6480	M	swap: Pop2 underflow
+6488	M	drop on an empty stack: underflow
+6494	M	rot with fewer than 3 values: underflow
+6505	M	-rot with fewer than 3 values: underflow
+6515	M	nip with fewer than 2 values: underflow
+6523	M	glob on an empty stack: underflow
+6528	M	glob on a value not castable to a string: sig (str | path -- ...)
+6533	C	filepath.Glob: malformed pattern, the pattern is a run-time string
+6554	C	readLimit: MSH_READ_LIMIT env var does not parse (data)
+6558	C	reading stdin failed or exceeded the read limit: I/O / budget
+6570	M	prompt: Pop1 underflow
+6575	M	prompt text not castable to a string: sig (str | path -- str)
+6580	C	reading from the TTY prompt failed: I/O error
+6587	M	append on an empty stack: underflow
+6592	M	append with one value: underflow
+6612	M	append with neither value a list: sigs ([a] a -- [a]) and appendBelow (a [a] -- [a])
+6625	M	len on an empty stack: underflow
+6646	M	len of a kind without a length: sig list/str/path/dict/GridRow/Grid/GridView
+6651	M	nth on an empty stack: underflow
+6656	M	nth with one value: underflow
+6663	E	obj2.Index in nth: out of range (C) or a kind that cannot be indexed (M); same helper as 2314
+6671	E	obj1.Index in nth (int below): same helper as 2314
+6675	M	nth with neither value an int: nth sigs
+6682	M	w/wl/we/wle on an empty stack: underflow
+6709	M	wl/wle on bytes: sig (str | int -- )
+6713	M	w/wl on another kind: sigs (str | int | bytes -- ) and (str | int -- )
+6723	M	findReplace: Pop3 underflow
+6732	M	findReplace replacement not str/path: sig
+6737	M	findReplace find string not str/path: sig
+6742	M	findReplace original not str/path: sig
+6749	M	strEscape on an empty stack: underflow
+6754	M	strEscape on a value not castable to a string: sig (str -- str)
+6761	M	split: Pop2 underflow
+6766	M	split delimiter not str/path: sig
+6771	M	split subject not str/path: sig
+6784	M	wsplit on an empty stack: underflow
+6788	M	wsplit on a value not str/path: sig
+6811	M	string join on an empty stack: underflow
+6816	M	string join with one value: underflow
+6827	M	join delimiter not a string: sig ([str] str -- str)
+6832	M	join list operand not a list: sig ([str] str -- str)
+6837	M	join list holds a non-string: sig ([str] str -- str)
