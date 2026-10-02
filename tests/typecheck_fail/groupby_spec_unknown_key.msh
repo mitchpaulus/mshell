@@ -1,0 +1,3 @@
+# The runtime refuses a groupBy spec key other than agg, name and meta, so a
+# spec is an exact record: a literal with another key is a type error.
+[| a; 0; 1; 2 |] [] [{"name": "x", "agg": (drop "x"), "k0": 5}] groupBy drop

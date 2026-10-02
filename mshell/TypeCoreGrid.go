@@ -1142,7 +1142,8 @@ func (c *coreChecker) groupBySpecs(l *MShellParseList, tok Token) bool {
 // gridGroupBy checks a grid groupBy whose spec list is not written at the
 // call (groupBySpecs takes that case): every agg quote gives one type a,
 // which the runtime refuses when it is a container, and the result's
-// columns are not known.
+// columns are not known. A spec is exact: the runtime refuses a key other
+// than agg, name and meta.
 func (c *coreChecker) gridGroupBy(tok Token) bool {
 	n := len(c.stack)
 	if n-c.floor < 3 {
@@ -1159,7 +1160,7 @@ func (c *coreChecker) gridGroupBy(tok Token) bool {
 			Type: c.arena.MakeQuote(QuoteSig{Inputs: []TypeId{c.arena.MakeGridOf(TKGridView, rec)}, Outputs: []TypeId{a}})},
 		{Name: c.names.Intern("name"), Status: FieldOptional, Type: TidStr},
 		{Name: c.names.Intern("meta"), Status: FieldOptional, Type: c.res.unknownSchema()},
-	}, RecordField{Status: FieldOpen})
+	}, RecordField{Status: FieldAbsent})
 	sig := coreSig{ins: []TypeId{c.stack[n-3].t, c.arena.MakeList(TidStr), c.arena.MakeList(spec)}, outs: []TypeId{TidUnknown}}
 	c.apply(&sig, tok)
 	if c.abandoned || c.diverged {

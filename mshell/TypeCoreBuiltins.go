@@ -647,6 +647,17 @@ func buildCoreTable(res *coreResolver) *coreTable {
 	b.reg("groupBy", append([]string{"([a] (a -- "+key+") -- {str: [a]})"},
 		gridForms("(G_s [str] [{agg: (GridView_s -- a), name?: str, meta?: {}}] -- Grid)")...)...)
 	b.child("groupBy")
+	// A spec is exact: the runtime refuses a key other than agg, name and
+	// meta. Type syntax has no exact shape, so the grid forms' spec records
+	// are made exact here.
+	for i, sig := range t.name(res.names.Intern("groupBy")) {
+		if i == 0 {
+			continue
+		}
+		specs := sig.ins[2]
+		rec := ar.Record(TypeId(ar.Node(specs).A))
+		sig.ins[2] = ar.MakeList(ar.MakeRecord(rec.Fields, RecordField{Status: FieldAbsent}))
+	}
 	// In TypeCoreGrid.go, since their results depend on the schema: select,
 	// exclude, derive, pivot, the grid forms of join, leftJoin, outerJoin,
 	// map, extend and `+`, updateCol, gridSetCell, gridAddCol,
