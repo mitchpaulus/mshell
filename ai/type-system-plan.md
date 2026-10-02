@@ -26,8 +26,6 @@ put the answer in the Typst design doc and remove the row.
 
 | # | Question | Context |
 |---|---|---|
-| 14 | Should a bare word given to `<` as a value read the file it names, as it did before question 12 was decided? | Question 12 made a bare word in a list literal a plain `str` (decided, done). So `<` given one feeds it as text, and a path names a file: `[[cat] [in.txt] :0: <]` now prints `in.txt`. The interactive shell is not affected: its CLI parser turns a bare word after `<` into a path when it reads the line (`SimpleCliParser.go:189`), so `cat < input.txt` still reads the file (checked). Only a bare word that reaches `<` through a list or a variable in a script is affected. Options: (a) keep it: a string is text, a path is a file; (b) bring back a separate kind for bare words, used only by `<` (and `parseCsv`/`parseHtml`/`parseJson`), which reopens question 12's hole unless the checker gives that kind its own type; (c) something at parse time, like the CLI parser does. |
-| 13 | May the soundness run (`tests/soundness_test.sh`) also run `tests/msh-scripts`? | The plan says to run them, but they are your own scripts: they move and delete files, touch git repos, open Office documents, deploy. Running them unattended in the repository could do real damage. Options: skip them (only the type check is run on them), or run only a list you approve. |
 
 ## 3. Files
 
@@ -168,7 +166,7 @@ The same applies to runtime work: `deepCopy`, the cycle-safe walkers and `valida
 
 Each stage lists its work, its tests, and when it is done.
 
-Status (end of 2026-10-01, seventh session): done: stages 0 through 7 (stage 3's two gaps closed this session); stage 8's type system page, `mshell.md` section, `execution.inc.html` note and editor grammars. Waiting on: questions 13 and 14. Left: the rest of stage 8 (a final pass at release), and running `tests/msh-scripts` under the soundness oracle once question 13 is answered.
+Status (end of 2026-10-02, eighth session): done: stages 0 through 7, and an independent review whose holes are fixed (progress log). Open questions: none. Left: stage 8's final pass at release.
 Stages 2–5 depend on each other in order. Runtime groundwork is independent and can land any time. The soundness oracle can start after the core checker.
 
 ### Stage 0: Baseline and measurements
@@ -360,7 +358,7 @@ Done when: all three test commands pass with only the core checker in the binary
 
 Can start once stage 3 works and runtime error classification exists.
 
-- Run every checked program in `tests/success` and `tests/msh-scripts`; fail on any runtime *type mismatch*.
+- Run every checked program in `tests/success` and `tests/fail`; fail on any runtime *type mismatch*. `tests/msh-scripts` are type checked only, never run (decided 2026-10-02, question 13): they are Mitchell's own scripts and move files, touch repositories and deploy. Running one that is an interesting example needs his approval first, script by script.
 - A generator of random well-typed programs, built by running the typing rules backwards and biased toward aliasing: `dup`, stores, refinements of stored values, writes through every view. Run them and fail on any type mismatch.
 - For each builtin: generate inputs of its declared types; check the output types, that shared inputs keep their types, and that outputs marked fresh are unaliased.
 

@@ -1,6 +1,7 @@
 # mshell type system: progress log
 
 Plan: `ai/type-system-plan.md`. Specification: `ai/type-core-calculus.typ`.
+The last section, "Where things stand", is the handoff: read it first. Earlier sections are history.
 
 ## Stage 0: Baseline and measurements (2026-09-30)
 
@@ -381,7 +382,7 @@ Suites: test.sh 302 passed; typecheck_test.sh 297 passed, 0 failed; core script 
 
 Benchmarks after it (the corpus now has 58 more files, +15%): corpus check 17-18 ms, 35.2 MB, 74,300 allocations; an empty check 3 µs, 25 allocations.
 
-## Where things stand (end of 2026-10-01, second session)
+## State at the end of the second session (2026-10-01)
 
 - Committed on `type-checker-enhancements` (not pushed): `f86dc51` (Rocq: freshness per object), `7eff1b5` (std `listToDict`), `782877e` (the core checker, LSP, docs), `41d50c8` (acceptance tests and the old checker's skip lists).
 - Suites: `test.sh` 302 passed; `typecheck_test.sh` 297 passed, 0 failed (old checker, with the skip lists); `tests/typecheck_core_test.sh` 333 passed, 0 unexpected, 0 not checked yet (after questions 1-3 were decided); `go test` ok; `typst compile ai/type-core-calculus.typ` ok (Typst 0.15.1, real file). `formal-ver/` unchanged this session, so `make check` was not rerun (Rocq is not installed on this machine).
@@ -471,7 +472,7 @@ An independent review (a subagent, read-only) found these; all fixed, each with 
 Not changed: the LSP does not show errors in the init file's declarations (they would appear in the open document at the wrong lines).
 Found, not from this session: `[] as Json` (and `as` to any alias whose unfolding is a union with a list member) is rejected: matching a new `[T0]` against a union stops at the union. A kind-directed step (members have distinct kinds, so it is not a guess) would fix it.
 
-## Where things stand (end of 2026-10-01, third session)
+## State at the end of the third session (2026-10-01)
 
 - Committed on `type-checker-enhancements` (not pushed): `4975a87` (code, tests, user docs), `983c1dc` (design doc, plan, progress log).
 - Suites: `test.sh` 319 passed; `typecheck_test.sh` 0 failed (old checker, with skip lists); `tests/typecheck_core_test.sh` 358 passed, 0 unexpected, 0 not checked yet; `go test` ok; `typst compile ai/type-core-calculus.typ` ok. `formal-ver/` unchanged. `tests/msh-scripts` under the core checker: 75 of 118 pass (73 before).
@@ -525,7 +526,7 @@ Not done, and why:
 
 Found: the design doc's H2 example uses `getAt`, which is not an mshell word (indexing is `:n:`).
 
-## Where things stand (end of 2026-10-01, fourth session)
+## State at the end of the fourth session (2026-10-01)
 
 - Committed on `type-checker-enhancements`, 3 commits ahead of `origin` (not pushed): `c5c2ffc`, `113d4b3`, `27f7cc3`. Working tree clean before this note.
 - Suites: `test.sh` 326 passed; `typecheck_test.sh` 320 passed, 0 failed (old checker, skipping `tests/old_checker_accepts.txt` and `tests/old_checker_rejects.txt`); `tests/typecheck_core_test.sh` 374 passed, 0 unexpected, 0 not checked yet; `go test ./...` ok (`go vet` has one old warning, `UnreadByte` in `Main.go`); `typst compile ai/type-core-calculus.typ` ok. Rocq is installed here (`~/.opam/rocq-mshell`): `make check` in `formal-ver/` closed under the global context, `make -C formal-ver/oracle test` 23 examples agree. `tests/msh-scripts` under the core checker: 75 of 118 pass (unchanged).
@@ -621,7 +622,7 @@ Answered by Mitchell: 8 (`datetime`, the precise type), 10 (our own message), 11
 Question 9 ("is there a fundamental reason `(a b -- [a | b])` isn't possible?") led to a hole, not from this session: the resolver checked distinct kinds in declarations but not in def signatures, so `def g (a b -- a | b) swap drop end  [1] ["x"] g match list l : @l 0 nth 1 + wl, _ : end` checked and then added 1 to `"x"` (the pattern took the first list member of `[int] | [str]`). Fixed: a generic (signature or rigid) cannot be a union member (`unionKindsError`, `genericName`); test `tests/typecheck_fail/union_generic_member.msh`. `2tuple` (used by `grid_join.msh` and `zip.msh`, which an earlier search missed) is `(a a -- [a])`, typing both uses as before (same output). Also: a startup file's signature that does not resolve is now reported with its file instead of silently becoming an empty type. Question 9 stays open in the plan with the options.
 - Question 9 decided (Mitchell): `2tuple` stays `(a a -- [a])`, as long as `5 "a" 2tuple` works; it checks as `[int | str]`. Test `tests/success/two_tuple_mixed.msh`. No open questions.
 
-## Where things stand (end of 2026-10-01, fifth session)
+## State at the end of the fifth session (2026-10-01)
 
 - Committed on `type-checker-enhancements` (not pushed): `92a84fa` (code, tests, user docs, Rocq), `f31afe8` (design doc, plan, progress log), and the commit that records these ids. Working tree clean after it.
 - Suites: `tests/test.sh` 327 passed, 0 failed; `tests/typecheck_test.sh` 376 passed, 0 failed (the only type-check script now, one checker, no skip lists); `go test ./...` ok (`go vet` has one old warning, `UnreadByte` in `Main.go`); `make check` in `formal-ver/` closed under the global context for every listed theorem (now including `if_join2_alg`); `typst compile ai/type-core-calculus.typ` ok; docs rebuilt (`cd doc && msh build.msh`). `make -C formal-ver/oracle test` not rerun: `Decide.v`'s extracted functions did not change.
@@ -709,7 +710,7 @@ Mitchell: literals have always been strings, and `<` should not take a bare word
 
 Mitchell then pointed out that `<` with a bare word naming a file is how the interactive shell gets ordinary shell semantics. Checked: the interactive shell's CLI parser already turns a bare word after `<` into a path when it reads the line, so `cat < input.txt` still reads the file. Only a bare word reaching `<` as a value in a script changed. Kept as committed, and recorded as plan question 14 to resolve next.
 
-## Where things stand (end of 2026-10-01, seventh session)
+## State at the end of the seventh session (2026-10-01)
 
 - Committed on `type-checker-enhancements` (not pushed), this session: `6a48523` (contract tests, exact `groupBy` spec), `afeab21` (generated-program oracle, overload pre-filter, generated benchmarks), `7710eac` and `2c0a684` (generator families), `f7a407e` (join origins in errors, `new` across mutual recursion, ⊥ in grid schemas), `69f9da7` (generator resource bounds and watchdog, walker-word errors), `2f6df7d` (stage 8 docs, grammars, notes), `8190d3c` (bare words are strings: question 12). Working tree clean.
 - Suites at `8190d3c`: `go test ./...` ok; `tests/typecheck_test.sh` 0 failed; `tests/test.sh` ok; `tests/soundness_test.sh` 0 mismatches (at `2f6df7d`); `typst compile ai/type-core-calculus.typ` ok; docs rebuilt. `formal-ver/` unchanged this session.
@@ -721,3 +722,73 @@ Mitchell then pointed out that `<` with a bare word naming a file is how the int
   - `MSH_GEN_DEBUG=1` with `MSH_GEN_SHOW` prints every statement the checker refuses, with its error: the way to tune the generator.
   - Never write `go test -cpuprofile` output into `mshell/`: it overwrites the tracked `mshell/mshell.test`. Use `-o` and a scratch directory.
   - Benchmarks: `BenchmarkCoreCheckCorpus` (about 65 ms here), `BenchmarkCoreCheckGenerated` (about 16 ms for 50 KB), `BenchmarkParseGenerated`. Times drift between sessions on this machine; compare against an older commit in a worktree, and compare allocations.
+
+## Independent review and fixes (2026-10-02, eighth session)
+
+Started from `53d8dcb`; all suites passed there (this machine: Go 1.25.5, Rocq 9.1.1, Typst 0.15.1; `make check` closed under the global context, oracle 23 examples agree). Five read-only review subagents, one per area (freshness and aliasing; grids, commands and dicts; enums, match and validation; quotes, control flow and variables; the builtin table against the runtime), each hunting for programs that check and then stop with a type mismatch. Every finding below was reproduced, fixed, and has a test (`tests/typecheck_fail` unless noted). Freshness and aliasing themselves held, including a generated sweep of about 54,000 aliasing programs by the reviewer.
+
+Checker holes:
+
+- **Saved stacks before arms and loops** (`TypeCore.go`, `TypeCoreQuote.go`, `TypeCoreMatch.go`). A quote typed on its own gains inputs at the bottom of its stack as it meets them (`need`); stacks saved before an arm or loop did not get them, so `(if drop end) q!` checked with arms of different arity, and a loop body could read below the loop's stack. Every saved stack now records its quote and input count (`savedRun.infer`, `ins`) and is padded when restored, joined or compared (`padRun`); the escape check includes the quote's inputs (`coreEscape.infer`). Tests `quote_infer_*`.
+- **Waiting quote literals across arms.** The first arm to run a literal inline unified its type with `( -- )` without checking the body, and other arms and the loop's back edge saw that type. `if`, `match`, `iff`, `and`/`or` and `loop` now type waiting literals on the stack on their own first (`forceWaiting`); an overloaded word on a union operand checks a waiting literal argument again per member (`distribute`). Tests `waiting_quote_*`.
+- **Literal keys over a loop's back edge**: the loop stack drops `lit` and `origin`. Tests `loop_literal_key_*`.
+- **break in a grid cell** (the runtime ignores it): not allowed. `grid_cell_break`.
+- **Bare words** are strings only directly in a list literal, not in an if/match arm, dict value, format string or grid cell inside one (`childIn`). Tests `bare_word_*_in_list`.
+- **A pipe is its own kind** (`kindPipe` in `TypeRelations.go`): a `list` arm or `[...rest]` pattern counted as covering a pipe, and the match failed at run time. Tests `pipe_*`.
+- **Grids**: a column named at run time in `gridAddCol`/`derive` now updates every non-required declared column (`withColumn`); list-literal names are dropped when the list is shared (`share()`), since a copy can be changed in place; `gridAddCol` refuses a value whose type does not say whether it is a list (a def's generic) and reads a command as the list of its arguments; `pivot` with a row key named twice was a checker panic. Tests `grid_*`, `pivot_duplicate_row_key`.
+- **Commands**: an argument type that may contain itself (`type A = [str | A]`) overflowed the checker's stack; it is refused (the runtime flattens without cycle detection). An alias of a list type is now a command (`operand` unfolds). `;`/`!` on a non-command said "no rule ... please report this"; now a plain type error. Tests `command_recursive_alias`, `run_non_command`, `tests/success/alias_command.msh`.
+- `new` before an input or inside a quote type was read as a generic named `new`; now an error. `new_on_input`.
+
+Runtime fixes (changelog: Fixed):
+
+- `completionDefs` quotes ran the def body in the caller's scope (its stores overwrote the caller's variables, its `return` left the caller); each quote now calls the def by name. `tests/success/completion_defs_scope.msh`.
+- `|` shared the list's backing array; the pipe now copies it (Principle 7). `tests/success/pipe_own_storage.msh`.
+- `gridSetCell` dropped a value whose kind did not match the column's storage; the column becomes generic. `tests/success/grid_set_cell_kind.msh`.
+- Go panics on huge counts: `seq`, `leftPad` (checked failure past 2^40), `numFmt` `sigFigs` above 17 (checked failure; more digits were wrong anyway). `tests/fail/*_too_large.msh`.
+- `and`, `or`, `~` added to `BuiltInList.go` (a `def ~` replaced the builtin silently).
+- `formal-ver/oracle/test.sh` is executable in git (a fresh checkout's `make test` failed).
+
+Docs: every code block in `doc/` was type-checked; eleven examples failed under the new rules, most also at run time (grid getters without `?`, mixed int/float arithmetic, `gridAddCol`/`updateCol` on a stored grid, a `derive` quote, `[...] if`, the cookie-jar restore, the completion signature, `fromOleDate` on an Excel cell, commands in `map`). Each rewrite was checked and run. `{int}` (short for `{str: int}`) documented. Docs rebuilt.
+
+Suites at the end: `test.sh` 0 failed; `typecheck_test.sh` 432 passed, 0 failed; `soundness_test.sh` 0 mismatches; `go test` ok; generated programs: seeds 200000-201999 and 300000-302999, no mismatch; `typst compile` ok. `lib/std.msh` bodies check; `tests/msh-scripts` (118 here) pass the same 75 before and after. Performance, `BenchmarkCoreCheckGenerated` interleaved against `53d8dcb` in a worktree: same time within 2% (about 3.0 ms), same 12,928 allocations, 2.5% more bytes.
+
+### Question 13 answered (2026-10-02)
+
+Mitchell: type check `tests/msh-scripts` freely, never run them; ask before running any single script that would make an interesting example. Plan question 13 removed; stage 7's text and the design doc say so.
+
+Type checked with the current binary: 75 of the 118 here pass. The 43 that fail are the groups recorded in stage 6: words no longer in the language (`o`, `os`, `oc`; inside a list literal `os` is now a string, so five report `;` given a str, which the runtime would also refuse), real bugs (mixed int/float arithmetic, `Maybe` used as a number, `*.g4` in a list, builtins in list literals run on an empty stack, an `if` without `else` that leaves a value on one path), one variable stored at two types (`tt`, `docx2pdf`), `dict` in signatures read as `{str: T}` (`fg_fpt`, `github_repos_msh`, `setdiff2way.msh`), parse errors, three scripts that are not mshell, and `wsl_url_open`, which fails on the init file's generic in a union. None points at a checker problem.
+
+### Question 14 answered (2026-10-02)
+
+Mitchell: outside the interactive command line a literal is a string everywhere, `<` included, accepting that this changes what `[echo [subcmd] want_file.txt < * !] !` did before question 12 (it read the file; it now feeds the text). I had first said only a bare word reaching `<` through indexing or a variable was affected; a bare word directly after a nested command in a list literal is affected too (checked against `2f6df7d`). No script in the repository or `tests/msh-scripts` uses the form. The interactive command line is separate and unchanged: `cmd < file.txt` becomes ``[cmd] `file.txt` <`` (`SimpleCliParser.go`), now pinned by `TestSimpleCliParser_ToMShellFile_StdinWordIsPath`. `tests/success/bare_word_redirect.msh` gained the nested form; `doc/execution.inc.html` (Input redirection) says how to name a file and that the command line differs. Plan question 14 removed; design doc "Bare words" updated.
+
+### Question 15 answered (2026-10-02)
+
+Mitchell: no. Elements given to a `map`/`each` quote stay shared even over a new list. Widening is done with `as` on the new list first (`[[1 2] [3]] as [[int | str]]`), so the rule would help only per-element redirects on commands or column changes on grids in a literal list, which are contrived; `deepCopy` covers them. Design doc §Freshness records it; plan question 15 removed. Open questions: none.
+
+## Where things stand (end of 2026-10-02, eighth session)
+
+- Committed on `type-checker-enhancements` (not pushed): "Fix holes an independent review found in the type checker" (code, tests, user docs, changelog) and "Record the review, and questions 13-15, in the design notes" (design doc, plan, this log). Working tree clean after them.
+- Suites at that commit: `tests/test.sh` 0 failed; `tests/typecheck_test.sh` 432 passed, 0 failed; `tests/soundness_test.sh` 0 mismatches; `go test ./...` ok (`go vet`: only the old `UnreadByte` warning in `Main.go`); `make check` in `formal-ver/` closed under the global context; `make -C formal-ver/oracle test` 23 examples agree; `typst compile ai/type-core-calculus.typ` ok; docs rebuilt. `formal-ver/` is unchanged except the oracle script's executable bit.
+- Stages done: 0 through 7, plus the independent review above. Left: stage 8's final pass at release (the changelog's Unreleased section has duplicate `### Added` headings to merge then).
+- Open questions in the plan: none. 13 (msh-scripts are type checked, never run), 14 (a literal is a string outside the interactive command line) and 15 (no fresh elements in `map`/`each` quotes) were answered this session.
+- `gofmt` has never been run on the type-checker files (not permitted without asking).
+
+Follow-ups found by the review and not changed, for Mitchell to pick from:
+
+- Runtime: NaN/Inf to int in `floor`, `ceil`, `round`, `toInt` give MinInt64; `round` on a large int loses precision; `numFmt` prints NaN/Inf as `0` and overflows on large magnitudes; `toFixed`/`decimals` above 10^6 print `%!(BADPREC)`; string indexing is by byte (`"é" :0:` is `Ã`) and `take`/`skip` cut UTF-8; `"ab" -1 take` says "list"; `"-8000000000000000" 16 fromBase` is none; `abs` of MinInt64; a second `<` on a quotation replaces the first silently; grid `map` takes columns from the first row only (missing cells become zero values or nil); captures inside pipe elements are ignored, and a file redirect on the list before `|` is dropped; `[echo hi] * & ;` pushes "".
+- Checker, conservative: `x.`/`loop.`/`iff.` prefix forms are unknown identifiers; `break` in `map` on a Maybe, `bind`, `map2` is refused; a multi-index on a pipe (`:0:,2:`) is refused; a deferred error can point at a later token.
+- Table vs docs: `writeFile`/`appendFile` accept a path as content (writes its text); `TarEntryInfo`'s `type` key cannot be read with a getter (`type` is a keyword).
+- Still tracked in git: `mshell/mshell.test` (19 MB, from `main` #320).
+- The parser allocates about 37,000 times per 50 KB of source (seventh session); not a type-system change.
+
+Working notes:
+
+- Build both binaries before testing: `cd mshell && ./build.sh` (`test.sh` runs `mshell/mshell`, `typecheck_test.sh` runs `mshell/msh`).
+- By hand, point `MSHINIT` at an empty file (or `/dev/null`); an empty `MSHINIT=` loads the user's init file. Check std's bodies with `MSHSTDLIB=<an empty file> mshell/msh --type-check-only lib/std.msh`; an empty `MSHSTDLIB=` loads an installed std.
+- `tests/msh-scripts` is gitignored and differs per machine (118 files here, 75 pass). Type check them only; never run them (question 13).
+- Generator: `MSH_GEN_WORKERS=4 MSH_GEN_PROGRAMS=3000 MSH_GEN_SEED=<new range> go test -run TestGeneratedProgramsSound -v -timeout 3h .` (about 90 s per 3,000 here). The watchdog (`MSH_GEN_MEMCAP`, `MSH_GEN_TIMEOUT`) stops a runaway; `MSH_GEN_SHOW=seed` prints a program; `MSH_GEN_DEBUG=1` prints refused statements. Seeds used so far: 100000-109999, 200000-201999, 300000-302999.
+- Benchmarks drift between sessions and machines: compare against an older commit in a `git worktree` (in the scratchpad), interleaved, and compare allocations. `BenchmarkCoreCheckGenerated` (fixed input) is the fair one; `BenchmarkCoreCheckCorpus` grows with the test corpus.
+- Never write `go test -cpuprofile` output into `mshell/`: it overwrites the tracked `mshell/mshell.test`.
+- A useful review method this session: independent subagents per area, each writing small programs and running them through a script that type-checks, then runs with `MSH_ERROR_KIND=1` and flags "checks, then type mismatch". Give them a frozen copy of the binary, not `mshell/msh`, if you rebuild meanwhile.
+

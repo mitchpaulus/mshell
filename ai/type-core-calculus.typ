@@ -448,7 +448,9 @@ Every mshell value carries its runtime kind. A union is well-formed only when it
 #defn("Kind of a type")[
   Each base type is its own kind (`int`, `float`, `str`, `bool`, `bytes`, `path`, `datetime`, `null`).
   $"kind"(ty("List") tau) = "list"$; $"kind"(ty("Dict") tau) = "kind"({F | rho}) = "dict"$;
-  every quote type has kind `quote`; `Grid`, `GridView`, `GridRow` are three kinds; each enum is its
+  every quote type has kind `quote`; `Grid`, `GridView`, `GridRow` are three kinds; a command is a
+  list, and a pipe is a kind of its own, which no pattern matches (found 2026-10-02: a `list` arm
+  counted as covering a pipe, and the match then failed at run time); each enum is its
   own kind, shared by all its instances (so $"kind"(ty("Maybe") tau) = "Maybe"$).
   An alias has the kinds of the members of its unfolding (guardedness makes that defined; @sec-alias).
   Type variables, abstract types and $bot$ have no kind and cannot be union members.
@@ -822,7 +824,9 @@ change nothing else:
 metadata as a quote of type `([str] -- CompletionResult)`, built from its body, where
 `type CompletionResult = [str] | {values?: [str], preferredFiles?: str | [str], files?: str | [str], dirs?: bool, binaries?: bool}`.
 So every such def, in the startup files or the script, must have a signature below that quote type;
-otherwise it is an error at the def. A `getDef` whose default fits the stored values' type as an
+otherwise it is an error at the def. Each quote runs its def as a call, in the def's own scope, and a
+`return` in it leaves only the def (2026-10-02: the quotes used to run the body in the caller's scope).
+A `getDef` whose default fits the stored values' type as an
 argument would (a new `{}` default on a `{str: Json}`) gives that type; otherwise the join of the two.
 
 Retyping a partly new value (@sec-partial) looks through an alias that is not recursive, which is the
@@ -1390,6 +1394,14 @@ Inputs stay shared for now. Under the current rules a new input is lost at the f
 how most defs start, so the mark would rarely help. The refinement that would change that, a read
 that is the last use of a local variable in a def whose scope cannot escape (a "move"), is deferred; it
 should be mechanized before it is built.
+*Elements given to a quote stay shared (decided 2026-10-02).* A quote given to `map` or `each` gets
+each element as shared, even when the list is new. Making them new for `map` and `each` over a new list
+would be sound (the consumed list is dead, as after a new `take`), though not for `filter` and the other
+words that keep the element. But widening is already done with `as` on the new list before the word
+(`[[1 2] [3]] as [[int | str]]`), so it would help only changes no written type can say: a redirect on
+each command of a literal list, or a column change on each grid. Those are rare and `deepCopy` covers
+them; the rule is not worth the extra proof and checker state.
+
 Outputs built from a quote's results, such as `map`'s, are fresh only when their element type is
 immutable: a quote's results are shared values. "Fresh when the input is fresh" would be wrong for
 `map`: `[0 0] (drop @ys) map` is the stored list `ys` twice, and widening it would let a string be appended
@@ -1560,6 +1572,7 @@ the proof no longer describes the program. The only type-level alternative is a 
   [`take`, `skip`, `:n`, `n:`, `a:b`], [a new list; elements shared (a shallow copy)], [elements immutable],
   [`[a ...rest b]`], [`rest` is a new list, like `skip` (runtime change needed)], [never in practice: `rest` is a variable (@sec-unknown)],
   [pipe slices], [a new list of the pipe's commands (runtime change needed)], [never: commands are lists],
+  [`|`], [a pipe with its own copy of the list of commands (2026-10-02; it shared the list's storage)], [when the list was],
   [`reverse`, `sort`, `filter`, `sortBy`, `groupBy`, ...], [a new list over the input's elements], [elements immutable],
   [`map`], [a new list of the quote's results], [result elements immutable (`tw_map_imm`)],
   [`deepCopy`], [a new tree], [always],
@@ -1785,8 +1798,10 @@ its column sequences, so they are as invariant as the column types.
   source columns are below the receiver's. A column under ${| "open"}$ is not writable.
 - *Schema changes in place need a fresh `Grid`*: a type-changing `updateCol` (P6), `extend` with cells
   that widen a column, `gridAddCol`, `gridRemoveCol`, `gridRenameCol`. On a shared grid each is a type
-  error that suggests `deepCopy`. `gridSetCell` never changes a column's type, even on a fresh grid:
-  the runtime keeps typed column storage and drops a value of another kind.
+  error that suggests `deepCopy`. `gridSetCell` never changes a column's type, even on a fresh grid
+  (a usability choice: the walker writes at the column's type). A value whose kind the column's typed
+  storage cannot hold, such as a `str` into a column of `int | str` stored as ints, turns the storage
+  generic (2026-10-02; the runtime used to drop the value).
 - Words that return a new grid (`select`, `exclude`, `derive`, `map`, `+`, the joins, `pivot`,
   `groupBy`, `reverse`, `sortBy`, `sortByCmp`, `updateCol` on a view, `gridCompact` on a view) compute
   its schema from their inputs and, for `select`, `exclude`, `derive` and `groupBy`, a literal name or
@@ -1812,6 +1827,10 @@ its column sequences, so they are as invariant as the column types.
   written at the call: its one aggregation type is checked as well.
 - A list of indexers (`:0:, 2:`) concatenates its parts, which only lists, strings, paths and bytes
   do; on a pipe, a list of `:n:` indexers alone gives a pipe of those commands.
+- A column named only at run time in `gridAddCol` or `derive` may be any column the grid may lack,
+  declared or not: each optional, absent or unknown column may now hold the new values (found
+  2026-10-02). `gridAddCol` makes each element of a list a cell and any other value one cell, so its
+  value's type must say which: a def's generic does not, and a command is a list of its arguments.
 
 == Commands
 
@@ -1821,6 +1840,9 @@ A command is a list plus its redirect state, and the redirect state is part of i
 - On a *fresh* list (`[mycmd arg arg]*!`, `[cmd] 2>&1 *`, ``[cmd] `f` >``) it updates in place,
   with no allocation. This is essentially every redirect in real scripts.
 - On a list that may be aliased (`@c *`, `dup *`) it is a type error; write `@c deepCopy *` (P7).
+- A command's arguments may be lists, which the runtime flattens without looking for cycles, so an
+  argument type that may contain itself (`type A = [str | A]`) is refused. An alias of a list type is a
+  command like the list type it names.
   The arguments are strings, so this copy is one allocation and a copy of the argument pointers.
 
 == The whole picture
@@ -2052,6 +2074,24 @@ length and joins their outputs; `loop{e}` requires the body to preserve its stac
   candidate) shows up as an internal checker error, never as an accepted program: what is accepted is
   a derivation of the rules, checked by code that follows the proof.
 
+*Stacks saved before arms and loops (found 2026-10-02).* An `if`, `match`, `iff`, `and`/`or`, a `loop`
+and an overloaded word on a union operand check several paths from one saved stack. That stack must
+stay the one every path starts from, which two pieces of inference state broke; a review found
+programs that checked and then stopped with a type mismatch for each:
+
+- *A quote typed on its own* reads the inputs it needs as it meets them, below everything on its
+  stack. When an arm or a loop body is the first to read one, every stack saved before it (the entry
+  stack, arms already checked, the loop's stack) gets the same input at the bottom. So
+  `(if drop end)` has arms that leave different stacks, an error, and a loop body that reads below the
+  loop's stack does not leave it as it found it.
+- *A quote literal still waiting for its consumer* below an `if`, `match`, `iff`, `and`/`or` or `loop`
+  is typed on its own before the arms or the body are checked. Otherwise the first arm to run it inline
+  decided its type for the others without checking its body against that type, and a loop's back edge
+  saw what the body left there as that literal. An overloaded word on a union operand checks a waiting
+  literal argument again for each member, with that member's candidate and break context.
+- A literal key, or the arm a union came from, does not carry over a loop's back edge: the slot holds
+  what the last run left.
+
 The result: the answer does not depend on the order constraints are visited, and
 `inputUnifyOrder`, first-arm union commitment and rollback-driven overload trials are unnecessary
 inside the core. (Overload resolution happens in elaboration, below.)
@@ -2170,9 +2210,15 @@ a string and some did not: a `str` match arm skipped it, and about twenty words 
 file name. The checker typed it `str`, so checked programs reached type mismatches (plan question 12; the
 generated-program oracle found it in its first larger run). Now there is one kind. Where a string is the
 text itself (`<`, `parseCsv`, `parseHtml`, `parseJson`), a bare word is text too: reading it as a file
-name was too easy to get wrong, and a path names a file. Open: plan question 14 asks whether `<` should
-read a file named by a bare word after all. The interactive shell already turns a bare word after `<`
-into a path when it reads the line, so only a bare word reaching `<` as a value in a script is affected.
+name was too easy to get wrong, and a path names a file. *Decided (2026-10-02, question 14):* outside
+the interactive command line a bare word is a string everywhere, `<` included: `[echo [wc -c] data.txt
+< * !] !` feeds the text `data.txt`, and `` `data.txt` < `` reads the file. This changes what that form
+did before question 12, accepted for one consistent rule. The interactive command line is a separate
+syntax: `wc -c < data.txt` there becomes `` [wc -c] `data.txt` < `` when the line is read
+(`SimpleCliParser.go`, tested by `TestSimpleCliParser_ToMShellFile_StdinWordIsPath`).
+A bare word is a string only directly in a list literal, as the runtime reads it only in the list's own
+frame: not in an `if` or `match` arm, a dict value, a format string or a grid cell inside one, where it
+is an unknown name (found 2026-10-02).
 
 == Type expressions
 
@@ -2421,6 +2467,8 @@ The mechanized proof covers the core rules. It does not cover the Go code. Three
   quote keeps what earlier code gave it. With `MSH_ERROR_KIND` set the runtime prints the kind, and
   `tests/soundness_test.sh` runs every checked program in `tests/success` and `tests/fail` and fails on a
   mismatch. Classifying the sites found eleven checker holes (each now a `tests/typecheck_fail` file).
+  `tests/msh-scripts` are type checked only, never run (decided 2026-10-02): they are real scripts that
+  move files, touch repositories and deploy; one is run only with Mitchell's approval for that script.
 + *Soundness oracle.* Generate random well-typed programs by running the typing rules backwards,
   run them, and fail on any type-mismatch error. Bias generation toward aliasing: `dup`, stores,
   refinements of stored values, writes through every view. Also run every file in `tests/success`.
