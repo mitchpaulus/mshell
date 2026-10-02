@@ -330,6 +330,9 @@ func (c *coreChecker) gridWord(tok Token) bool {
 		return c.gridPivot(tok)
 	case "groupBy":
 		return c.gridGroupBy(tok)
+	case "sortBy":
+		c.sortColumns(tok)
+		return false
 	}
 	return false
 }
@@ -1170,6 +1173,37 @@ func (c *coreChecker) gridGroupBy(tok Token) bool {
 	return true
 }
 
+// sortColumns records that the columns sortBy sorts by must be sortable:
+// the columns named, or every column when a name is known only at run
+// time. The table checks the rest of sortBy.
+func (c *coreChecker) sortColumns(tok Token) {
+	n := len(c.stack)
+	if n-c.floor < 2 {
+		return
+	}
+	kind, rec, ok := c.gridOf(n - 2)
+	if !ok || kind == TKGridRow {
+		return
+	}
+	names, lit := c.litNames(c.stack[n-1])
+	if name := c.stack[n-1].key(); name != NameNone {
+		names, lit = []NameId{name}, true
+	}
+	if !lit {
+		if t, ok := c.keyRead(rec); ok {
+			c.deferKey(tok, t, ruleSortKey)
+		} else {
+			c.deferKey(tok, TidUnknown, ruleSortKey)
+		}
+		return
+	}
+	for _, name := range names {
+		if t, status := c.labelRead(rec, name); status != FieldAbsent {
+			c.deferKey(tok, t, ruleSortKey)
+		}
+	}
+}
+
 // deferKeyColumns checks the key columns a groupBy or pivot groups by: the
 // columns named, when keys is a list of literal names, and otherwise every
 // column of rec, since a name known only at run time may be any of them.
@@ -1223,6 +1257,10 @@ const (
 	ruleJoinKey
 	// ruleJoinKeyItem: an element of a compound join key.
 	ruleJoinKeyItem
+	// ruleSortKey: a sortBy column, which the runtime orders only within
+	// one kind of int, float, str, datetime or bool, with none last and a
+	// Maybe looked through once (compareGridGenericCells).
+	ruleSortKey
 )
 
 // deferKey records that a value of type t must be one the runtime takes
@@ -1239,6 +1277,10 @@ func (c *coreChecker) deferJoinKey(tok Token, t TypeId)      { c.deferKey(tok, t
 // container.
 func (c *coreChecker) keyAllowed(t TypeId, rule keyRule) bool {
 	t = c.unfold(c.subst.Apply(c.arena, t))
+	if rule == ruleSortKey {
+		_, ok := c.sortKind(t, TidBottom, true)
+		return ok
+	}
 	switch t {
 	case TidUnknown, TidNothing:
 		return false
@@ -1270,6 +1312,34 @@ func (c *coreChecker) keyAllowed(t TypeId, rule keyRule) bool {
 	return true
 }
 
+// sortKind is the one kind sortBy compares the values of t at, given the
+// kind seen so far (⊥ for none yet): one of int, float, str, datetime and
+// bool, with a Maybe looked through once (maybe) and none, which sorts
+// last, fitting any.
+func (c *coreChecker) sortKind(t, seen TypeId, maybe bool) (TypeId, bool) {
+	t = c.unfold(c.subst.Apply(c.arena, t))
+	switch t {
+	case TidBottom:
+		return seen, true
+	case TidInt, TidFloat, TidStr, TidDateTime, TidBool:
+		return t, seen == TidBottom || seen == t
+	}
+	n := c.arena.nodes[t]
+	switch {
+	case n.Kind == TKEnum && n.A == EnumMaybe && maybe:
+		return c.sortKind(c.arena.enumArgs[n.Extra][0], seen, false)
+	case n.Kind == TKUnion:
+		for _, m := range c.arena.unionMembers[n.Extra] {
+			var ok bool
+			if seen, ok = c.sortKind(m, seen, maybe); !ok {
+				return seen, false
+			}
+		}
+		return seen, true
+	}
+	return seen, false
+}
+
 // keyRuleText describes a rule in an error.
 func keyRuleText(rule keyRule) string {
 	switch rule {
@@ -1277,6 +1347,8 @@ func keyRuleText(rule keyRule) string {
 		return "a value that is not a list, dict or grid"
 	case ruleGroupKey:
 		return "a grouping key: not a list, dict or grid, also inside a Maybe"
+	case ruleSortKey:
+		return "a column it can sort: one of int, float, str, datetime or bool, or a Maybe of one"
 	}
 	return "a join key: a value that is not a dict or grid, or a list of such values that are not lists"
 }
