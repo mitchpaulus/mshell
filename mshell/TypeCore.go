@@ -725,6 +725,16 @@ func (c *coreChecker) token(tok Token) {
 			c.call(sigs, tok)
 			return
 		}
+		if isCommandToken(tok.Type) {
+			// A command word given something that is not a command.
+			if c.need(1, tok) {
+				c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: tok,
+					Hint: "'" + tok.Lexeme + "' takes a command or a pipe, and the top of the stack is " +
+						c.format(c.subst.Apply(c.arena, c.stack[len(c.stack)-1].t))})
+				c.abandoned = true
+			}
+			return
+		}
 		c.unsupported(tok, "'"+tok.Lexeme+"'")
 	}
 }
@@ -1439,12 +1449,26 @@ func (c *coreChecker) distribute(sigs []coreSig, tok Token) bool {
 	}
 	u := c.subst.Apply(c.arena, c.stack[idx].t)
 	members := c.arena.unionMembers[c.arena.nodes[u].Extra]
+	// Inputs a quote typed on its own gains in one arm go below, so the
+	// union's slot is found from the top.
+	fromTop := len(c.stack) - idx
+	// A quote literal among the arguments is checked against each member's
+	// candidate in turn, with that candidate's break context.
+	var waiting []uint32
+	for _, s := range top {
+		if c.waiting(s) != nil {
+			waiting = append(waiting, s.pq)
+		}
+	}
 	mark := len(c.saved)
 	entry := c.saveStack()
 	var runs []savedRun
 	for _, m := range members {
 		c.restoreStack(entry)
-		c.stack[idx].t = m
+		for _, pq := range waiting {
+			c.pending[pq-1].done = false
+		}
+		c.stack[len(c.stack)-fromTop].t = m
 		c.call(sigs, tok)
 		if c.abandoned {
 			c.saved = c.saved[:mark]
@@ -1811,10 +1835,22 @@ func (c *coreChecker) formatString(fs *MShellParseFormatString) {
 // child runs items on their own stack, as the runtime runs a list
 // literal's body or a dict value, and returns the start of the slots they
 // leave.
+// A bare word is a string only directly in a list literal (inList), as
+// the runtime reads it only in a list's own frame.
 func (c *coreChecker) child(items []MShellParseItem) (start int, outerFloor int) {
+	return c.childIn(items, false)
+}
+
+func (c *coreChecker) childIn(items []MShellParseItem, inList bool) (start int, outerFloor int) {
 	outerFloor = c.floor
 	c.floor = len(c.stack)
+	depth := c.listDepth
+	c.listDepth = 0
+	if inList {
+		c.listDepth = 1
+	}
 	c.walk(items)
+	c.listDepth = depth
 	return c.floor, outerFloor
 }
 
@@ -1822,9 +1858,7 @@ func (c *coreChecker) child(items []MShellParseItem) (start int, outerFloor int)
 // when every element is fresh or immutable (ShapeLit), and otherwise a new
 // list of stored values (TypeCorePartial.go).
 func (c *coreChecker) listLiteral(l *MShellParseList) {
-	c.listDepth++
-	start, outerFloor := c.child(l.Items)
-	c.listDepth--
+	start, outerFloor := c.childIn(l.Items, true)
 	c.floor = outerFloor
 	if c.diverged || c.abandoned {
 		return
@@ -1930,6 +1964,11 @@ func (c *coreChecker) ifBlock(b *MShellParseIfBlock) {
 	if !c.condition(tok) {
 		return
 	}
+	c.forceWaiting()
+	// The arms run in their own runtime frames, not a list literal's.
+	depth := c.listDepth
+	c.listDepth = 0
+	defer func() { c.listDepth = depth }()
 	mark := len(c.saved)
 	entry := c.saveStack()
 	var arms []savedRun
@@ -1951,9 +1990,9 @@ func (c *coreChecker) ifBlock(b *MShellParseIfBlock) {
 		}
 		c.walk(body)
 		if !c.abandoned {
-			arms = append(arms, savedRun{start: len(c.saved), diverged: c.diverged, label: label, line: line})
-			c.saved = append(c.saved, c.stack...)
-			arms[len(arms)-1].end = len(c.saved)
+			run := c.saveStack()
+			run.diverged, run.label, run.line = c.diverged, label, line
+			arms = append(arms, run)
 			if !c.diverged {
 				armSets = append(armSets, c.daSince(daMark))
 			}
@@ -2034,16 +2073,50 @@ type savedRun struct {
 	// made: "the `else` branch", and the line where it starts.
 	label string
 	line  int
+	// infer and ins are the quote being typed on its own when the stack
+	// was saved, and how many inputs it had then (see padRun).
+	infer *coreInfer
+	ins   int
 }
 
 func (c *coreChecker) saveStack() savedRun {
 	r := savedRun{start: len(c.saved)}
 	c.saved = append(c.saved, c.stack...)
 	r.end = len(c.saved)
+	if c.infer != nil {
+		r.infer, r.ins = c.infer, len(c.infer.ins)
+	}
 	return r
 }
 
+// padRun gives a saved stack the inputs its quote gained since it was
+// saved. A quote typed on its own reads inputs below its own pushes as it
+// meets them (need), so an arm or loop body that reads below the entry
+// stack adds slots to the bottom of the current stack only; every stack
+// saved before must get the same slots, or another arm, the join or the
+// loop's back edge would not see them. It appends the padded copy to
+// c.saved, so it is valid as long as r is.
+func (c *coreChecker) padRun(r savedRun) savedRun {
+	if r.infer == nil || r.infer != c.infer || len(c.infer.ins) == r.ins {
+		return r
+	}
+	k := len(c.infer.ins) - r.ins
+	fl := c.infer.floor
+	p := r
+	p.start = len(c.saved)
+	c.saved = append(c.saved, c.saved[r.start:r.start+fl]...)
+	for _, t := range c.infer.ins[:k] {
+		c.saved = append(c.saved, coreSlot{t: t})
+	}
+	c.saved = append(c.saved, c.saved[r.start+fl:r.end]...)
+	p.end = len(c.saved)
+	p.ins = len(c.infer.ins)
+	return p
+}
+
+// restoreStack sets the stack to a saved one, padded as padRun says.
 func (c *coreChecker) restoreStack(r savedRun) {
+	r = c.padRun(r)
 	c.stack = append(c.stack[:0], c.saved[r.start:r.end]...)
 }
 
@@ -2052,7 +2125,7 @@ func (c *coreChecker) joinArms(arms []savedRun, tok Token) {
 	var live []savedRun
 	for _, a := range arms {
 		if !a.diverged {
-			live = append(live, a)
+			live = append(live, c.padRun(a))
 		}
 	}
 	if len(live) == 0 {

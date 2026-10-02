@@ -1,0 +1,8 @@
+# An overloaded word on a union checks a literal quote per member: break
+# is allowed in the list member's map (child stack) but not the Maybe's.
+"s"
+(
+  false if [1] else 5 just end
+  (false if else break end) map drop
+) loop
+"t" + wl

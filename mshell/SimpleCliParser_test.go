@@ -421,3 +421,39 @@ func TestSimpleCliParser_ToMShellFile_ArgLiteralsPreserved(t *testing.T) {
 		t.Errorf("Expected 'glob' arg to remain LITERAL, got %T %v", cmdList.Items[2], cmdList.Items[2])
 	}
 }
+
+// A bare word after `<` on an interactive command line names a file: the
+// command line becomes `[cmd] `file` <`, with a path, since a string
+// given to `<` is the input text itself.
+func TestSimpleCliParser_ToMShellFile_StdinWordIsPath(t *testing.T) {
+	for _, input := range []string{"cat < input.txt", "cat < input.txt | wc -l", "sort < input.txt > out.txt"} {
+		pipeline, err := NewMShellSimpleCliParser(NewLexer(input, nil)).Parse()
+		if err != nil {
+			t.Fatalf("%q: unexpected error: %v", input, err)
+		}
+		file, err := pipeline.ToMShellFile()
+		if err != nil {
+			t.Fatalf("%q: unexpected error: %v", input, err)
+		}
+		var items []MShellParseItem
+		for _, it := range file.Items {
+			if l, ok := it.(*MShellParseList); ok {
+				items = append(items, l.Items...)
+			}
+			items = append(items, it)
+		}
+		found := false
+		for i, it := range items {
+			if tok, ok := it.(Token); ok && tok.Type == LESSTHAN {
+				prev, ok := items[i-1].(Token)
+				if !ok || prev.Type != PATH || prev.Lexeme != "`input.txt`" {
+					t.Errorf("%q: expected the path `input.txt` before '<', got %v", input, items[i-1])
+				}
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%q: no '<' in %s", input, pipeline.ToMShellString())
+		}
+	}
+}

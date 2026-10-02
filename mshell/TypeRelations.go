@@ -516,6 +516,7 @@ const (
 	kindGrid
 	kindGridView
 	kindGridRow
+	kindPipe
 )
 
 // kindOf is the runtime kind of a type that has exactly one: kind_of_ty in
@@ -527,7 +528,14 @@ func (r *Relations) kindOf(t TypeId) (valueKind, bool) {
 	}
 	n := r.arena.Node(t)
 	switch n.Kind {
-	case TKList, TKCommand:
+	case TKList:
+		return valueKind{code: kindList}, true
+	case TKCommand:
+		// A pipe is its own runtime object, which no pattern matches; a
+		// command is a list with redirects.
+		if CommandCaptureMode(n.B)&CommandPipe != 0 {
+			return valueKind{code: kindPipe}, true
+		}
 		return valueKind{code: kindList}, true
 	case TKRecord:
 		return valueKind{code: kindDict}, true

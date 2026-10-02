@@ -1,0 +1,2 @@
+# new marks a def output only.
+def f (new [int] -- ) drop end

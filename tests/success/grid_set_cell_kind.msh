@@ -1,0 +1,7 @@
+# gridSetCell writes a value whose kind differs from the column's storage.
+# A join of two new grids gives the column int | str, stored as ints.
+true if [| a; 1 |] else [| a; "x" |] end g!
+@g "a" 0 "y" gridSetCell drop
+@g "a" gridCol str wl
+[| b; 1.5; 2.5 |] h!
+@h "b" 1 3.5 gridSetCell "b" gridCol str wl

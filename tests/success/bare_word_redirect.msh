@@ -12,3 +12,6 @@
 [bare_word_redirect.msh] :0: input!
 (stdin wl) @input < x
 [head -n 1] `bare_word_redirect.msh` < ;
+
+# Directly in a list literal too: the text bare_word_redirect.msh, 22 characters.
+[echo [wc -c] bare_word_redirect.msh < * !] !

@@ -146,6 +146,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The strings from `binPaths` compare equal to other strings.
 - `psub` with input that is not a string no longer leaves a temporary file behind.
 - Some error messages named the wrong function, such as `date` saying `day`. They now name the function that failed.
+- `gridSetCell` writes a value of a different kind than the rest of its column, such as a string into a column of integers. It used to drop the value silently.
+- The quotes `completionDefs` gives run their definition as a call: its variables no longer overwrite the caller's, and a `return` in it no longer returns from the caller.
+- A pipe (`|`) has its own copy of its list of commands. Previously changing the list afterwards also changed the pipe.
+- `seq` and `leftPad` with an impossibly large count give an error instead of crashing.
+- `numFmt` with `sigFigs` above 17 gives an error. A float holds about 17 significant digits, so more gave wrong digits.
 
 ### Added
 

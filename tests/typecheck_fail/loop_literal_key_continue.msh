@@ -1,0 +1,3 @@
+# As loop_literal_key_back_edge, with continue.
+{"a": 1, "b": "s"} d!
+"a" ( dup @d swap get ? 1 + wl drop "b" continue ) loop

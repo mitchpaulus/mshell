@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -32,6 +33,9 @@ type coreEscape struct {
 	k     TypeId
 	tok   Token
 	types []TypeId
+	// infer is the quote being typed on its own around the arm, if any:
+	// its inputs, including ones it gains after the arm, are outside it.
+	infer *coreInfer
 }
 
 // patternKinds maps a kind keyword in a pattern to the runtime kind it
@@ -182,6 +186,11 @@ func (c *coreChecker) matchBlock(m *MShellParseMatchBlock) {
 		return
 	}
 	c.assertive = m.Assertive
+	c.forceWaiting()
+	// The arms run in their own runtime frames, not a list literal's.
+	depth := c.listDepth
+	c.listDepth = 0
+	defer func() { c.listDepth = depth }()
 	mark := len(c.saved)
 	entry := c.saveStack()
 	var runs []savedRun
@@ -189,6 +198,8 @@ func (c *coreChecker) matchBlock(m *MShellParseMatchBlock) {
 	daMark := len(c.setLog)
 	var sets [][]NameId
 	for _, arm := range m.Arms {
+		// Padded, so `below` and the escape check read the same stack.
+		entry = c.padRun(entry)
 		c.restoreStack(entry)
 		c.daRestore(daMark)
 		a, ok := c.analyzePattern(arm.Pattern, t, tok)
@@ -261,7 +272,7 @@ func (c *coreChecker) matchBlock(m *MShellParseMatchBlock) {
 // an arm: the stack below the subject, the arm's output and the loop stacks
 // must not mention it once the unit is solved; nor may any variable.
 func (c *coreChecker) recordEscape(k TypeId, tok Token, entry savedRun, below int) {
-	e := coreEscape{k: k, tok: tok}
+	e := coreEscape{k: k, tok: tok, infer: c.infer}
 	for _, s := range c.saved[entry.start : entry.start+below] {
 		e.types = append(e.types, s.t)
 	}
@@ -284,7 +295,11 @@ func (c *coreChecker) recordEscape(k TypeId, tok Token, entry savedRun, below in
 func (c *coreChecker) finishEscapes() {
 	for _, e := range c.escapes {
 		escaped := false
-		for _, t := range e.types {
+		types := e.types
+		if e.infer != nil {
+			types = append(slices.Clone(types), e.infer.ins...)
+		}
+		for _, t := range types {
 			if c.mentionsType(c.subst.Apply(c.arena, t), e.k) {
 				escaped = true
 			}

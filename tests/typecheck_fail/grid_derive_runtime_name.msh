@@ -1,0 +1,3 @@
+# As grid_add_col_runtime_name_optional, with derive.
+"a" n!
+[| a, b; 1, 2 |] [@n] exclude @n {} (drop "s") derive "a" gridCol :0: 1 + wl

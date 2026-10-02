@@ -176,7 +176,7 @@ It is also useful when you have many commands that you want to run while appendi
 
 The captures (`*`, `*b`, `^`, `^b`) and the in-place redirect (`<>`) are *not* allowed on quotations,
 because they would change the quotation's stack effect.
-Capture the individual command lists inside the quotation instead, e.g. `[[cmd1] [cmd2]] (* !) map` to run each command and collect stdouts.
+Capture the individual command lists inside the quotation instead, e.g. `[[cmd1] [cmd2]] (deepCopy * !) map` to run each command and collect stdouts.
 
 Destination conflicts on quotations (e.g. two `>` redirects, or `2>&1` plus `2>`) are caught at runtime.
 Since redirects never change a quotation's stack effect, they are invisible to the static type checker.
@@ -360,7 +360,7 @@ $HOME cd
 "Hello, World!" $MSHELL_VAR!
 
 # Checking for variable existence
-[($MY_ENV_VAR?) ("MY_ENV_VAR exists") ("MY_ENV_VAR does not exist")] if wl
+$MY_ENV_VAR? if "MY_ENV_VAR exists" else "MY_ENV_VAR does not exist" end wl
 
 # Removing an environment variable
 "MSHELL_VAR" unsetenv
@@ -455,7 +455,7 @@ A list is the same as `{ 'values': list, 'files': '*' }`.
 Values starting with `-` are only offered once the typed text starts with `-`.
 
 ```mshell
-def typstCompletion { 'complete': ['typst'] } ([str] -- { "values"?: [str], "files"?: str | [str] })
+def typstCompletion { 'complete': ['typst'] } ([str] -- new CompletionResult)
     len 0 = if
         { 'values': ['compile' 'watch' 'query' 'fonts'] }
     else
@@ -707,6 +707,7 @@ Type expressions:
 int float bool str path datetime bytes null   # base types; null is JSON null
 [str]                 # list of str
 {str: int}            # dictionary: any keys, int values
+{int}                 # short for {str: int}
 {name: str, age?: int} # shape: name present, age may be missing, other keys unknown
 {url: str, *: int}    # shape whose other keys hold int
 Maybe[int]            # just an int, or none (none is a value, not a type)
@@ -1720,7 +1721,7 @@ The whole jar round-trips through `toJson` and `parseJson`:
 
 ```mshell
 @jar toJson `cookies.json` writeFile
-`cookies.json` parseJson restoredJar!
+`cookies.json` parseJson tryAs [Cookie] ? restoredJar!
 {'url': 'https://example.com/account',
  'cookieJar': @restoredJar} httpGet ?
 ```

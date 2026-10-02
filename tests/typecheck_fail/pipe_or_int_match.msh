@@ -1,0 +1,6 @@
+# A union of a pipe and an int is not covered by `list` and `int` arms.
+true if [[echo a] [cat]] | else 5 end
+match
+  list :> drop "list" wl,
+  int : "int" wl,
+end

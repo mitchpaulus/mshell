@@ -1,0 +1,3 @@
+# As grid_add_col_runtime_name_optional, for a column the type says is absent.
+"a" n!
+[['a' 'b'] ['p' 'q']] toGrid "a" gridRemoveCol @n 5 gridAddCol :0: :a? "z" + wl

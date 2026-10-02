@@ -4,6 +4,7 @@ package main
 var BuiltInList = map[string]struct{}{
 	"-rot": {},
 	"/": {},
+	"~": {},
 	"deepCopy": {},
 	"defs": {},
 	"env": {},
@@ -12,6 +13,7 @@ var BuiltInList = map[string]struct{}{
 	"abs": {},
 	"absPath": {},
 	"addDays": {},
+	"and": {},
 	"append": {},
 	"appendFile": {},
 	"args": {},
@@ -130,6 +132,7 @@ var BuiltInList = map[string]struct{}{
 	"null": {},
 	"nullDevice": {},
 	"numFmt": {},
+	"or": {},
 	"outerJoin": {},
 	"over": {},
 	"parseCsv": {},

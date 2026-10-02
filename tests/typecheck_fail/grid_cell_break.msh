@@ -1,0 +1,2 @@
+# The runtime ignores break in a grid cell, so it is not allowed there.
+"s" ( [| x; [ break ] |] drop ) loop "t" + wl

@@ -1,6 +1,9 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // Commands in the core checker (ai/type-core-calculus.typ, "Commands").
 //
@@ -74,6 +77,18 @@ func (c *coreChecker) commandWord(tok Token) bool {
 	return false
 }
 
+// isCommandToken reports whether commandWord handles tokens of type tt.
+func isCommandToken(tt TokenType) bool {
+	switch tt {
+	case GREATERTHAN, LESSTHAN, STDAPPEND, STDERRREDIRECT, STDERRAPPEND,
+		STDOUTANDSTDERRREDIRECT, STDOUTANDSTDERRAPPEND, INPLACEREDIRECT,
+		ASTERISK, ASTERISKBINARY, CARET, CARETBINARY, STDERRTOSTDOUT, STDOUTTOSTDERR,
+		EXECUTE, BANG, QUESTION, PIPE, AMPERSAND:
+		return true
+	}
+	return false
+}
+
 // operand reads the slot at i as a command; quote is true for a quote,
 // waiting or typed.
 func (c *coreChecker) operand(i int) (t TypeId, quote, ok bool) {
@@ -81,7 +96,8 @@ func (c *coreChecker) operand(i int) (t TypeId, quote, ok bool) {
 	if c.waiting(s) != nil {
 		return TidNothing, true, true
 	}
-	t = c.subst.Apply(c.arena, s.t)
+	// An alias is its body (`type Cmd = [str]`).
+	t = c.unfold(c.subst.Apply(c.arena, s.t))
 	if c.arena.nodes[t].Kind == TKQuote {
 		return t, true, true
 	}
@@ -261,6 +277,14 @@ func (c *coreChecker) merge(tok Token) bool {
 // argument: a string, path, number or date.
 // A list of such values is flattened into the command line.
 func (c *coreChecker) commandLineable(t TypeId) bool {
+	return c.commandLineableIn(t, nil)
+}
+
+// commandLineableIn is commandLineable, with the list types being looked
+// inside. A list type met again is a recursive one: refused, since the
+// runtime flattens a command's lists without looking for cycles, and a
+// value of that type may contain itself.
+func (c *coreChecker) commandLineableIn(t TypeId, visiting []TypeId) bool {
 	var members []TypeId
 	if !c.members(c.subst.Apply(c.arena, t), &members) {
 		return false
@@ -272,7 +296,7 @@ func (c *coreChecker) commandLineable(t TypeId) bool {
 			switch c.arena.nodes[m].Kind {
 			case TKVar:
 			case TKList:
-				if !c.commandLineable(c.listElem(m)) {
+				if slices.Contains(visiting, m) || !c.commandLineableIn(c.listElem(m), append(visiting, m)) {
 					return false
 				}
 			default:

@@ -81,6 +81,19 @@ func (c *coreChecker) force(i int) {
 	c.stack[i].pq = 0
 }
 
+// forceWaiting types every quote literal still waiting on the stack, as
+// an if, match, iff, and/or or loop starts. Their arms, or the loop's
+// back edge, would otherwise share one waiting literal: the first arm to
+// use it decides its type, inline consumers without checking the body
+// against it, and the other arms see that type.
+func (c *coreChecker) forceWaiting() {
+	for i := c.floor; i < len(c.stack); i++ {
+		if c.stack[i].pq != 0 {
+			c.force(i)
+		}
+	}
+}
+
 // forceTop forces the top n slots.
 func (c *coreChecker) forceTop(n int) {
 	for i := len(c.stack) - n; i < len(c.stack); i++ {
@@ -245,6 +258,7 @@ func (c *coreChecker) childLoopCtx(outerBase int) coreLoopCtx {
 // stackFits reports whether the slots fit the saved stack want, slot by
 // slot.
 func (c *coreChecker) stackFits(got []coreSlot, want savedRun) bool {
+	want = c.padRun(want)
 	if len(got) != want.end-want.start {
 		return false
 	}
@@ -318,6 +332,7 @@ func (c *coreChecker) iff(tok Token) {
 	if !c.condition(tok) {
 		return
 	}
+	c.forceWaiting()
 	mark := len(c.saved)
 	entry := c.saveStack()
 	var runs []savedRun
@@ -379,6 +394,7 @@ func (c *coreChecker) andOr(tok Token) bool {
 	if !c.popBool(tok) {
 		return true
 	}
+	c.forceWaiting()
 	mark := len(c.saved)
 	entry := c.saveStack()
 	daMark := len(c.setLog)
@@ -479,6 +495,7 @@ func (c *coreChecker) loop(tok Token) {
 	}
 	p.done = true
 	c.uni.Unify(p.t, c.arena.MakeQuote(QuoteSig{Inputs: []TypeId{}}))
+	c.forceWaiting()
 	for i := c.floor; i < len(c.stack); i++ {
 		s := &c.stack[i]
 		opened := c.openBottom(c.subst.Apply(c.arena, s.t))
@@ -487,6 +504,9 @@ func (c *coreChecker) loop(tok Token) {
 		}
 		s.t = opened
 		s.share()
+		// The slot holds what the last run left there, so neither a
+		// literal key nor where a union came from carries over.
+		s.lit, s.origin = NameNone, 0
 	}
 	mark := len(c.saved)
 	loopStack := c.saveStack()
@@ -506,9 +526,10 @@ func (c *coreChecker) loop(tok Token) {
 	if !c.abandoned && !c.diverged {
 		c.forceTop(len(c.stack) - c.floor)
 		if !c.stackFits(c.stack, loopStack) {
+			want := c.padRun(loopStack)
 			c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: tok,
 				Hint: "a loop body must leave the stack as it found it: it starts with " +
-					c.formatSlots(c.saved[loopStack.start:loopStack.end]) + " and ends with " + c.formatSlots(c.stack)})
+					c.formatSlots(c.saved[want.start:want.end]) + " and ends with " + c.formatSlots(c.stack)})
 		}
 	}
 	broke := c.brkSeen
@@ -536,9 +557,10 @@ func (c *coreChecker) breakOrContinue(tok Token) {
 	case loopExact:
 		c.forceTop(len(c.stack) - c.floor)
 		if !c.stackFits(c.stack, ctx.stack) {
+			want := c.padRun(ctx.stack)
 			c.errs = append(c.errs, TypeError{Kind: TErrTypeMismatch, Pos: tok,
 				Hint: "'" + tok.Lexeme + "' leaves " + c.formatSlots(c.stack) + ", but the loop's stack is " +
-					c.formatSlots(c.saved[ctx.stack.start:ctx.stack.end])})
+					c.formatSlots(c.saved[want.start:want.end])})
 		}
 	}
 	if tok.Type == BREAK && ctx.kind != loopNone {

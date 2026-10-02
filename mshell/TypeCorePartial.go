@@ -86,6 +86,11 @@ func (c *coreChecker) innerMark(s coreSlot) coreMark {
 func (s *coreSlot) share() {
 	s.fresh = false
 	s.part = 0
+	// A list literal's names hold only while nothing else can change the
+	// list: a copy changed in place would leave them stale.
+	if s.lit&litListTag != 0 {
+		s.lit = NameNone
+	}
 }
 
 // markBelow decides a checking position between solved types for a value

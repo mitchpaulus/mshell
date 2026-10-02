@@ -2107,32 +2107,38 @@ func (col *GridColumn) internDictString(s string) int32 {
 	return code
 }
 
-// Set sets the value at the given row index
+// Set sets the value at the given row index. A value that the column's typed
+// storage cannot hold turns the column's storage generic first.
 func (col *GridColumn) Set(index int, value MShellObject) {
 	switch col.ColType {
 	case COL_INT:
 		if intVal, ok := value.(MShellInt); ok {
 			col.IntData[index] = int64(intVal.Value)
+			return
 		}
 	case COL_FLOAT:
 		if floatVal, ok := value.(MShellFloat); ok {
 			col.FloatData[index] = floatVal.Value
+			return
 		}
 	case COL_STRING:
 		if strVal, ok := value.(MShellString); ok {
 			col.StringData[index] = strVal.Content
+			return
 		}
 	case COL_DICT_STRING:
 		if strVal, ok := value.(MShellString); ok {
 			col.DictCodes[index] = col.internDictString(strVal.Content)
+			return
 		}
 	case COL_DATETIME:
 		if dtVal, ok := value.(*MShellDateTime); ok {
 			col.DateTimeData[index] = dtVal.Time
+			return
 		}
-	default:
-		col.GenericData[index] = value
 	}
+	widenColumnToGeneric(col)
+	col.GenericData[index] = value
 }
 
 // Len returns the number of rows in the column

@@ -1,0 +1,3 @@
+# A quote literal waiting below a loop is run inline in the body: on the
+# next run that slot holds what the body left, so its type must be its own.
+"s" (1) ( x drop () ) loop

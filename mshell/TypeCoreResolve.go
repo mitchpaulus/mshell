@@ -290,6 +290,10 @@ func (r *coreResolver) resolveNamed(n *TypeNamed) TypeId {
 		}
 		return r.errorf(n.Tok, "unknown type '"+n.Name+"'")
 	}
+	if n.Name == "new" {
+		// Read as a mark only before a def's output type.
+		return r.errorf(n.Tok, "'new' marks a def output as a new value, so it goes only before an output type: (int -- new [int])")
+	}
 	return r.generic(name)
 }
 

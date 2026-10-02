@@ -341,6 +341,10 @@ func escapeMshellString(input string) string {
 
 // containsNullByte checks if a string contains a null byte, which typically indicates
 // the string was incorrectly built from UTF-16 data instead of UTF-8.
+// maxAllocCount bounds sizes a builtin computes from an int argument, so
+// that an absurd count is a checked failure, not a Go panic.
+const maxAllocCount = 1 << 40
+
 func containsNullByte(s string) bool {
 	return strings.ContainsRune(s, 0)
 }
@@ -6434,7 +6438,11 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					for name, defs := range state.CompletionDefinitions {
 						quotations := make([]MShellObject, len(defs))
 						for i, def := range defs {
-							quotations[i] = &MShellQuotation{Tokens: def.Items, StdinBehavior: STDIN_NONE, Variables: context.Variables}
+							// The quote calls the definition by name, so the body
+							// runs in its own scope and `return` leaves only it.
+							call := def.NameToken
+							call.Type, call.Lexeme = LITERAL, def.Name
+							quotations[i] = &MShellQuotation{Tokens: []MShellParseItem{call}, StdinBehavior: STDIN_NONE, Variables: make(map[string]MShellObject)}
 						}
 						dict.Items[name] = &MShellList{Items: quotations}
 					}
@@ -7730,6 +7738,10 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					if hasSigfigs && sigfigs <= 0 {
 						return state.CheckedFailure(fmt.Sprintf("%d:%d: 'sigfigs' in 'numFmt' must be positive, got %d\n", t.Line, t.Column, sigfigs))
 					}
+					// A float holds about 17 significant digits; more were never right.
+					if hasSigfigs && sigfigs > 17 {
+						return state.CheckedFailure(fmt.Sprintf("%d:%d: 'sigfigs' in 'numFmt' can be at most 17, got %d\n", t.Line, t.Column, sigfigs))
+					}
 
 					if !hasDecimals && !hasSigfigs {
 						sigfigs = 3
@@ -7918,6 +7930,9 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						stack.Push(MShellString{inputStr})
 					} else {
 						needed := totalLen.Value - inputLen
+						if needed > maxAllocCount/len(padStr) {
+							return state.CheckedFailure(fmt.Sprintf("%d:%d: Cannot leftPad to a total length of %d.\n", t.Line, t.Column, totalLen.Value))
+						}
 						padRunes := []rune(padStr)
 						padLen := len(padRunes)
 
@@ -8771,6 +8786,9 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					}
 					// Negative counts produce an empty list, matching the old std.msh definition.
 					count := max(countObj.Value, 0)
+					if count > maxAllocCount {
+						return state.CheckedFailure(fmt.Sprintf("%d:%d: 'seq' cannot make a list of %d items.\n", t.Line, t.Column, count))
+					}
 					// The final length is known, so fill one slice of exactly that size
 					// instead of growing it with append.
 					newList := NewList(count)
@@ -12560,7 +12578,11 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot pipe a %s.\n", t.Line, t.Column, obj1.TypeName()))
 				}
 
-				stack.Push(&MShellPipe{*list, list.StdoutBehavior, list.StderrBehavior})
+				// The pipe has its own storage: changing the list later does not
+				// change the pipe (no two lists share storage).
+				pipeList := *list
+				pipeList.Items = slices.Clone(list.Items)
+				stack.Push(&MShellPipe{pipeList, list.StdoutBehavior, list.StderrBehavior})
 			} else if t.Type == READ { // Token Type
 				var reader io.Reader
 				// Check if what we are reading from is seekable. If so, we can do a buffered read and reset the position.

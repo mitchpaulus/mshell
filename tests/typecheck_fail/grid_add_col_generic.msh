@@ -1,0 +1,6 @@
+# gridAddCol makes each element of a list a cell, so a value of a def's
+# generic type, which may be a list, does not say what the column holds.
+def f (a -- a)
+    [| x; 1 |] "c" rot gridAddCol "c" gridCol :0:
+end
+[5] f len wl

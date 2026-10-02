@@ -1,6 +1,9 @@
 package main
 
-import "strconv"
+import (
+	"slices"
+	"strconv"
+)
 
 // Grids in the core checker (ai/type-core-calculus.typ, "Grids are shapes
 // of columns"; ai/builtin-audit/dictgrid.md).
@@ -155,7 +158,8 @@ func (c *coreChecker) writeAt(rec TypeId, name NameId, v coreSlot) bool {
 }
 
 // withColumn is rec with column name required at type t. With a name
-// known only at run time, any other column may now be one of type t.
+// known only at run time, any column the grid may lack, declared or not,
+// may now be one of type t; the runtime refuses a column it has.
 func (c *coreChecker) withColumn(rec TypeId, name NameId, t TypeId) TypeId {
 	r := c.schemaOf(rec)
 	if name != NameNone {
@@ -167,7 +171,16 @@ func (c *coreChecker) withColumn(rec TypeId, name NameId, t TypeId) TypeId {
 		}
 		return c.arena.MakeRecord(append(fields, RecordField{Name: name, Status: FieldRequired, Type: t}), r.Rest)
 	}
-	return c.arena.MakeRecord(r.Fields, c.restWith(r.Rest, t))
+	fields := make([]RecordField, len(r.Fields))
+	for i, f := range r.Fields {
+		fields[i] = f
+		if f.Status != FieldRequired {
+			nf := c.restWith(RecordField{Status: f.Status, Type: f.Type}, t)
+			nf.Name = f.Name
+			fields[i] = nf
+		}
+	}
+	return c.arena.MakeRecord(fields, c.restWith(r.Rest, t))
 }
 
 // restWith is a remainder under which a column of type t may also be.
@@ -215,6 +228,11 @@ func (c *coreChecker) withoutColumn(rec TypeId, name NameId) TypeId {
 // nothing.
 func (c *coreChecker) gridLiteral(g *MShellParseGrid) {
 	tok := g.StartToken
+	// The runtime ignores a break or continue in a cell or a metadata
+	// dict, so they cannot leave one (as in a format string).
+	brk, cont := c.brk, c.cont
+	c.brk, c.cont = coreLoopCtx{}, coreLoopCtx{}
+	defer func() { c.brk, c.cont = brk, cont }()
 	if g.GridMeta != nil && !c.metaDict(g.GridMeta) {
 		return
 	}
@@ -706,14 +724,26 @@ func (c *coreChecker) addedColumn(v coreSlot, tok Token) (TypeId, bool) {
 		c.gridError(tok, "'gridAddCol' needs to know whether its value is a list, but its type is not known here; annotate it")
 		return TidNothing, false
 	}
+	// The runtime makes each element of a list a cell, and any other value
+	// one cell, so the type must say which (a def's generic does not).
 	var ms []TypeId
-	if !c.members(t, &ms) {
-		ms = []TypeId{t}
+	if !c.members(t, &ms) || slices.ContainsFunc(ms, func(m TypeId) bool { return c.arena.nodes[m].Kind == TKVar }) {
+		c.gridError(tok, "'gridAddCol' needs to know whether its value is a list, but its type "+c.format(t)+" does not say; annotate it")
+		return TidNothing, false
 	}
 	acc := coreSlot{t: TidBottom}
 	for _, m := range ms {
-		if u := c.unfold(m); c.arena.nodes[u].Kind == TKList {
+		u := c.unfold(m)
+		switch c.arena.nodes[u].Kind {
+		case TKList:
 			m = TypeId(c.arena.nodes[u].A)
+		case TKCommand:
+			// A command is a list of its arguments at run time; a pipe is
+			// one value.
+			if !c.isPipe(u) {
+				argv, _, _, _ := c.commandParts(u)
+				m = c.listElem(argv)
+			}
 		}
 		j, ok := c.joinSlot(acc, coreSlot{t: m})
 		if !ok {
@@ -1006,7 +1036,11 @@ func (c *coreChecker) gridPivot(tok Token) bool {
 		return true
 	}
 	fields := make([]RecordField, 0, len(names))
-	for _, name := range names {
+	for i, name := range names {
+		if slices.Contains(names[:i], name) {
+			c.gridError(tok, "'pivot' names the row key column '"+c.names.Name(name)+"' twice")
+			return true
+		}
 		t, _ := c.labelRead(rec, name)
 		fields = append(fields, RecordField{Name: name, Status: FieldRequired, Type: t})
 	}

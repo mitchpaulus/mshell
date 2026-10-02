@@ -333,14 +333,14 @@ Division for integers will result in an integer without the remainder.
 </pre>
 
 <p>
-Division is only supported for similar types, it is a runtime error to divide a float by an integer (or an integer by a float).
-For the other operations, if the types are mixed, the result is a float.
+Arithmetic is only supported between numbers of the same type: it is an error to add, subtract, multiply or divide an integer and a float.
+Convert one side first with <code>toFloat</code> or <code>toInt</code>.
 </p>
 
 <pre>
-<code><span class="mshellINTEGER">2</span> <span class="mshellFLOAT">2.5</span> <span class="mshellASTERISK">*</span> <span class="mshellLINECOMMENT"># 5.0 float</span>
-<span class="mshellINTEGER">3</span> <span class="mshellFLOAT">2.5</span> <span class="mshellMINUS">-</span> <span class="mshellLINECOMMENT"># 0.5 float</span>
-<span class="mshellINTEGER">3</span> <span class="mshellFLOAT">2.5</span> <span class="mshellPLUS">+</span> <span class="mshellLINECOMMENT"># 5.5 float</span></code>
+<code><span class="mshellINTEGER">2</span> <span class="mshellLITERAL">toFloat</span> <span class="mshellFLOAT">2.5</span> <span class="mshellASTERISK">*</span> <span class="mshellLINECOMMENT"># 5.0 float</span>
+<span class="mshellINTEGER">3</span> <span class="mshellLITERAL">toFloat</span> <span class="mshellFLOAT">2.5</span> <span class="mshellMINUS">-</span> <span class="mshellLINECOMMENT"># 0.5 float</span>
+<span class="mshellINTEGER">3</span> <span class="mshellLITERAL">toFloat</span> <span class="mshellFLOAT">2.5</span> <span class="mshellPLUS">+</span> <span class="mshellLINECOMMENT"># 5.5 float</span></code>
 </pre>
 
 

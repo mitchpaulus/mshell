@@ -1,0 +1,4 @@
+# As quote_infer_if_arm_input, with and: the quote reads below its pushes
+# only when it runs.
+( false (drop true) and ) q!
+5 "x" @q x drop 1 + wl
