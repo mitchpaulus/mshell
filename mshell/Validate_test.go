@@ -90,7 +90,6 @@ enum Box[a] = box [a] | empty end
 	mustValidate(t, decls, intList(), "[str]", true)
 	mustValidate(t, decls, intList(1), "Json", true)
 	mustValidate(t, decls, strList("a"), "[int] | str", false)
-	mustValidate(t, decls, MShellLiteral{LiteralText: "ls"}, "str", true)
 
 	// A list whose stdout or stderr goes somewhere is a command, not a
 	// list; one with `<` or `&` is still a list, as the checker types it.

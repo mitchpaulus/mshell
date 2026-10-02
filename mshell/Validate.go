@@ -257,7 +257,7 @@ func (v *validator) visit(value MShellObject, t TypeId) (bool, error) {
 			return ok, nil
 		case TidStr:
 			switch value.(type) {
-			case MShellString, MShellLiteral:
+			case MShellString:
 				// A bare word in a list literal is a string too.
 				return true, nil
 			}
@@ -618,7 +618,7 @@ func (v *validator) runtimeKind(value MShellObject) (valueKind, bool) {
 		return valueKind{code: uint32(TidInt)}, true
 	case MShellFloat:
 		return valueKind{code: uint32(TidFloat)}, true
-	case MShellString, MShellLiteral:
+	case MShellString:
 		return valueKind{code: uint32(TidStr)}, true
 	case MShellBool:
 		return valueKind{code: uint32(TidBool)}, true

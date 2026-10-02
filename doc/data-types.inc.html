@@ -37,6 +37,11 @@ Outside of lists, it will result in an error.
 </p>
 
 <p>
+A literal token is a string, exactly as if it were quoted: <code>[ls -l]</code> is the same list as <code>["ls" "-l"]</code>.
+So where a string is the text itself, as in <code>&lt;</code> or <code>parseJson</code>, a literal token is text too; name a file with a path.
+</p>
+
+<p>
 Literal tokens may contain any non-whitespace characters except the following:
 </p>
 

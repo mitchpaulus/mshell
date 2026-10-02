@@ -26,7 +26,7 @@ put the answer in the Typst design doc and remove the row.
 
 | # | Question | Context |
 |---|---|---|
-| 12 | A bare word in a list literal (`[abc]`) is a `str` to the checker, but the runtime keeps it as its own kind, `Literal`. Should the runtime make it a `str` when the list is built? | Where the two disagree the checker is wrong, and checked programs fail at run time: a `str s` pattern does not match a bare word (the `_` arm runs); `del` with a bare-word key, `dateFmt`'s format, `zipPack`/`tarPack` entries, `sortBy`/`pivot` names, `uniq`, `take`/`skip` on one, `parseJson`/`parseCsv`/`parseHtml` refuse it (about 20 sites; the audit fixes covered `lines`, `toInt`, `toFloat`, `md5`, `base64decode`, `utf8Bytes`, `parseLinkHeader`). (a) Make it a `str` at the list literal: one change, right everywhere by construction; it reverses half of the audit fix `e27e81e`: `@word <` would feed the word's text as input instead of reading the file it names (`>` already takes a string as a file name). (b) Keep `Literal`, and give each of the ~20 sites and the `str` pattern a literal case. I recommend (a). |
+| 14 | Should a bare word given to `<` as a value read the file it names, as it did before question 12 was decided? | Question 12 made a bare word in a list literal a plain `str` (decided, done). So `<` given one feeds it as text, and a path names a file: `[[cat] [in.txt] :0: <]` now prints `in.txt`. The interactive shell is not affected: its CLI parser turns a bare word after `<` into a path when it reads the line (`SimpleCliParser.go:189`), so `cat < input.txt` still reads the file (checked). Only a bare word that reaches `<` through a list or a variable in a script is affected. Options: (a) keep it: a string is text, a path is a file; (b) bring back a separate kind for bare words, used only by `<` (and `parseCsv`/`parseHtml`/`parseJson`), which reopens question 12's hole unless the checker gives that kind its own type; (c) something at parse time, like the CLI parser does. |
 | 13 | May the soundness run (`tests/soundness_test.sh`) also run `tests/msh-scripts`? | The plan says to run them, but they are your own scripts: they move and delete files, touch git repos, open Office documents, deploy. Running them unattended in the repository could do real damage. Options: skip them (only the type check is run on them), or run only a list you approve. |
 
 ## 3. Files
@@ -168,7 +168,7 @@ The same applies to runtime work: `deepCopy`, the cycle-safe walkers and `valida
 
 Each stage lists its work, its tests, and when it is done.
 
-Status (end of 2026-10-01, seventh session): done: stages 0 through 7 (stage 3's two gaps closed this session); stage 8's type system page, `mshell.md` section, `execution.inc.html` note and editor grammars. Waiting on: questions 12 and 13. Left: the rest of stage 8 (a final pass at release), and running `tests/msh-scripts` under the soundness oracle once question 13 is answered.
+Status (end of 2026-10-01, seventh session): done: stages 0 through 7 (stage 3's two gaps closed this session); stage 8's type system page, `mshell.md` section, `execution.inc.html` note and editor grammars. Waiting on: questions 13 and 14. Left: the rest of stage 8 (a final pass at release), and running `tests/msh-scripts` under the soundness oracle once question 13 is answered.
 Stages 2–5 depend on each other in order. Runtime groundwork is independent and can land any time. The soundness oracle can start after the core checker.
 
 ### Stage 0: Baseline and measurements

@@ -562,10 +562,6 @@ func (*MShellDict) CastString() (string, error) {
 
 // }}}
 
-type MShellLiteral struct {
-	LiteralText string
-}
-
 type MShellBool struct {
 	Value bool
 }
@@ -947,10 +943,6 @@ type MShellFloat struct {
 }
 
 // ToString
-func (obj MShellLiteral) ToString() string {
-	return obj.LiteralText
-}
-
 func (obj MShellBool) ToString() string {
 	return strconv.FormatBool(obj.Value)
 }
@@ -988,10 +980,6 @@ func (obj *MShellSimple) ToString() string {
 }
 
 // TypeNames
-func (obj MShellLiteral) TypeName() string {
-	return "Literal"
-}
-
 func (obj MShellBool) TypeName() string {
 	return "Boolean"
 }
@@ -1030,10 +1018,6 @@ func (obj *MShellSimple) TypeName() string {
 
 // IsCommandLineable
 
-func (obj MShellLiteral) IsCommandLineable() bool {
-	return true
-}
-
 func (obj MShellBool) IsCommandLineable() bool {
 	return false
 }
@@ -1071,10 +1055,6 @@ func (obj MShellFloat) IsCommandLineable() bool {
 }
 
 // IsNumeric
-func (obj MShellLiteral) IsNumeric() bool {
-	return false
-}
-
 func (obj MShellBool) IsNumeric() bool {
 	return false
 }
@@ -1112,10 +1092,6 @@ func (obj *MShellSimple) IsNumeric() bool {
 }
 
 // FloatNumeric
-func (obj MShellLiteral) FloatNumeric() float64 {
-	return 0
-}
-
 func (obj MShellBool) FloatNumeric() float64 {
 	return 0
 }
@@ -1153,10 +1129,6 @@ func (obj *MShellSimple) FloatNumeric() float64 {
 }
 
 // CommandLine
-func (obj MShellLiteral) CommandLine() string {
-	return obj.LiteralText
-}
-
 func (obj MShellBool) CommandLine() string {
 	return ""
 }
@@ -1204,10 +1176,6 @@ func DebugStrs(objs []MShellObject) []string {
 		}
 	}
 	return debugStrs
-}
-
-func (obj MShellLiteral) DebugString() string {
-	return obj.LiteralText
 }
 
 func (obj MShellBool) DebugString() string {
@@ -1299,10 +1267,6 @@ func (obj *MShellSimple) DebugString() string {
 	return obj.Token.Lexeme
 }
 
-func (obj MShellLiteral) IndexErrStr() string {
-	return fmt.Sprintf(" (%s)", obj.LiteralText)
-}
-
 func (obj MShellBool) IndexErrStr() string {
 	return ""
 }
@@ -1361,17 +1325,6 @@ func IndexCheckExc(index int, length int, obj MShellObject) error {
 }
 
 // Index
-func (obj MShellLiteral) Index(index int) (MShellObject, error) {
-	if index < 0 {
-		index = len(obj.LiteralText) + index
-	}
-
-	if err := IndexCheck(index, len(obj.LiteralText), obj); err != nil {
-		return nil, err
-	}
-	return MShellLiteral{LiteralText: string(obj.LiteralText[index])}, nil
-}
-
 func (obj MShellBool) Index(index int) (MShellObject, error) {
 	return nil, fmt.Errorf("Cannot index into a boolean.\n")
 }
@@ -1445,17 +1398,6 @@ func (obj *MShellSimple) Index(index int) (MShellObject, error) {
 }
 
 // SliceStart
-func (obj MShellLiteral) SliceStart(start int) (MShellObject, error) {
-	if start < 0 {
-		start = len(obj.LiteralText) + start
-	}
-
-	if err := IndexCheckExc(start, len(obj.LiteralText), obj); err != nil {
-		return nil, err
-	}
-	return MShellLiteral{LiteralText: obj.LiteralText[start:]}, nil
-}
-
 func (obj MShellBool) SliceStart(start int) (MShellObject, error) {
 	return nil, fmt.Errorf("Cannot slice a boolean.\n")
 }
@@ -1534,17 +1476,6 @@ func (obj *MShellSimple) SliceStart(start int) (MShellObject, error) {
 }
 
 // SliceEnd
-func (obj MShellLiteral) SliceEnd(end int) (MShellObject, error) {
-	if end < 0 {
-		end = len(obj.LiteralText) + end
-	}
-
-	if err := IndexCheckExc(end, len(obj.LiteralText), obj); err != nil {
-		return nil, err
-	}
-	return MShellLiteral{LiteralText: obj.LiteralText[:end]}, nil
-}
-
 func (obj MShellBool) SliceEnd(end int) (MShellObject, error) {
 	return nil, fmt.Errorf("cannot slice a boolean.\n")
 }
@@ -1634,21 +1565,6 @@ func SliceIndexCheck(startInc int, endExc int, length int, obj MShellObject) err
 	} else {
 		return nil
 	}
-}
-
-func (obj MShellLiteral) Slice(startInc int, endExc int) (MShellObject, error) {
-	if startInc < 0 {
-		startInc = len(obj.LiteralText) + startInc
-	}
-
-	if endExc < 0 {
-		endExc = len(obj.LiteralText) + endExc
-	}
-
-	if err := SliceIndexCheck(startInc, endExc, len(obj.LiteralText), obj); err != nil {
-		return nil, err
-	}
-	return MShellLiteral{LiteralText: obj.LiteralText[startInc:endExc]}, nil
 }
 
 func (obj MShellBool) Slice(startInc int, endExc int) (MShellObject, error) {
@@ -1752,11 +1668,6 @@ func (obj *MShellSimple) Slice(startInc int, endExc int) (MShellObject, error) {
 }
 
 // ToJson
-func (obj MShellLiteral) ToJson() string {
-	escBytes, _ := json.Marshal(obj.LiteralText)
-	return fmt.Sprintf("%s", string(escBytes))
-}
-
 func (obj MShellBool) ToJson() string {
 	if obj.Value {
 		return "true"
@@ -1817,15 +1728,6 @@ func (obj *MShellSimple) ToJson() string {
 }
 
 // Concat
-func (obj MShellLiteral) Concat(other MShellObject) (MShellObject, error) {
-	asLiteral, ok := other.(MShellLiteral)
-	if !ok {
-		return nil, fmt.Errorf("Cannot concatenate a Literal with a %s.\n", other.TypeName())
-	}
-
-	return MShellLiteral{LiteralText: obj.LiteralText + asLiteral.LiteralText}, nil
-}
-
 func (obj MShellBool) Concat(other MShellObject) (MShellObject, error) {
 	return nil, fmt.Errorf("Cannot concatenate a boolean.\n")
 }
@@ -1974,7 +1876,6 @@ func ParseRawPath(inputString string) (string, error) {
 }
 
 // Equals {{{
-// MShellLiteral struct {
 // MShellBool struct {
 // MShellQuotation struct {
 // MShellList struct {
@@ -1983,20 +1884,6 @@ func ParseRawPath(inputString string) (string, error) {
 // MShellPipe struct {
 // MShellInt struct {
 // MShellFloat struct {
-
-func (obj MShellLiteral) Equals(other MShellObject) (bool, error) {
-	// Define equality for other as string or as literal or path.
-	switch o := other.(type) {
-	case MShellLiteral:
-		return obj.LiteralText == o.LiteralText, nil
-	case MShellString:
-		return obj.LiteralText == o.Content, nil
-	case MShellPath:
-		return obj.LiteralText == o.Path, nil
-	default:
-		return false, fmt.Errorf("Cannot compare a literal with a %s.\n", other.TypeName())
-	}
-}
 
 func (obj MShellBool) Equals(other MShellObject) (bool, error) {
 	asBool, ok := other.(MShellBool)
@@ -2020,9 +1907,6 @@ func (obj MShellString) Equals(other MShellObject) (bool, error) {
 	case MShellString:
 		asString, _ := other.(MShellString)
 		return obj.Content == asString.Content, nil
-	case MShellLiteral:
-		asLiteral, _ := other.(MShellLiteral)
-		return obj.Content == asLiteral.LiteralText, nil
 	default:
 		return false, fmt.Errorf("Cannot compare a string with a %s.\n", other.TypeName())
 	}
@@ -2034,9 +1918,6 @@ func (obj MShellPath) Equals(other MShellObject) (bool, error) {
 	case MShellPath:
 		asPath, _ := other.(MShellPath)
 		return obj.Path == asPath.Path, nil
-	case MShellLiteral:
-		asLiteral, _ := other.(MShellLiteral)
-		return obj.Path == asLiteral.LiteralText, nil
 	default:
 		return false, fmt.Errorf("Cannot compare a path with a %s.\n", other.TypeName())
 	}
@@ -2065,10 +1946,6 @@ func (obj MShellFloat) Equals(other MShellObject) (bool, error) {
 // }}}
 
 // CastString {{{
-
-func (obj MShellLiteral) CastString() (string, error) {
-	return obj.LiteralText, nil
-}
 
 func (obj MShellBool) CastString() (string, error) {
 	return "", fmt.Errorf("Cannot cast a boolean to a string.\n")

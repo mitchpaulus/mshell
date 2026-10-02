@@ -1,11 +1,14 @@
-# A bare word from a list literal names a file in '>' and '<', like a path.
-[bare_word_redirect_out.txt bare_word_redirect.msh] names!
-@names 0 nth outFile!
-@names 1 nth inFile!
+# A bare word in a list literal is a string, exactly as if it were quoted.
+[ls] :0: typeof wl
+[echo "x"] (match str s : "str" wl, _ : "other" wl, end) each
 
+# '>' takes a string as a file name.
+[bare_word_redirect_out.txt] :0: outFile!
 ("from quote" wl) @outFile > x
 `bare_word_redirect_out.txt` readFile w
 `bare_word_redirect_out.txt` rm
 
-(stdin lines 0 nth wl) @inFile < x
-[head -n 1] @inFile < ;
+# '<' takes a string as the input text, and a path as a file to read.
+[bare_word_redirect.msh] :0: input!
+(stdin wl) @input < x
+[head -n 1] `bare_word_redirect.msh` < ;

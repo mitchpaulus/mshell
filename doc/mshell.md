@@ -205,7 +205,7 @@ The exception is `loop`: the file is opened once when the loop starts, so all it
 
 Use `<` to feed data into stdin. The type of the value on top of the stack determines how the input is provided.
 
-`String` values are encoded as UTF-8 and streamed as text.
+`String` values are encoded as UTF-8 and streamed as text, including a bare word from a list literal; use a path to read a file.
 
 ```mshell
 [wc -l] "line 1\nline 2\n" < ; # Counts the lines from the provided string
@@ -592,6 +592,9 @@ No commas are required between elements.
 ```mshell
 [1 2 3]
 ```
+
+Inside a list literal, a bare word that is not a definition or built-in is a string, exactly as if it were quoted: `[ls -l]` is `["ls" "-l"]`.
+Bare words are an error outside a list literal.
 
 Lists can be added together with the `+` operator. The result is a new list object.
 

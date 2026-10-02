@@ -313,7 +313,7 @@ func buildCoreTable(res *coreResolver) *coreTable {
 		t.urlEncodeLists = append(t.urlEncodeLists, b.typ(src))
 	}
 
-	// A path, or a bare word from a list literal, names a file; a str is the text.
+	// A path names a file; a str (a bare word in a list literal too) is the text.
 	b.reg("parseJson", "(str | path | bytes -- new Json)")
 	// The document node: tag "" with the <html> element as its child.
 	b.reg("parseHtml", "(str | path -- new HtmlNode)")

@@ -702,3 +702,9 @@ Found: plan question 12 at once (`[echo "a b"]`: a `str` arm does not match the 
 
 - `gridSetCell` silently drops a value whose kind does not match the column's storage (known from the audit). A join of two new grids makes it reachable with a value the static type allows (`true if [| a; 1 |] else [| a; "x" |] end g!  @g "a" 0 "y" gridSetCell` leaves `[1]`). Not unsound, but a write that does nothing.
 - `mshell/mshell.test` (a test binary) is tracked in git since `749145c` (#320); `go test -cpuprofile` in `mshell/` overwrites it. Probably should be removed from the repository and ignored.
+
+### Question 12 decided: bare words are strings (2026-10-01, seventh session)
+
+Mitchell: literals have always been strings, and `<` should not take a bare word as a file name, since the semantics are too easy to get wrong. A bare word in a list literal now pushes an `MShellString`; the `MShellLiteral` type and its special cases are gone (217 lines). Where a string is the text (`<`, `parseCsv`, `parseHtml`, `parseJson`), a bare word is text; a path names a file. Grouping keys no longer tell a bare word from the same string. A printed list quotes the word. `tests/success/bare_word_redirect.msh` now tests this; the two Unreleased changelog entries about bare words are replaced by one under Changed. The generator writes command names as bare words again: the same 1,000 programs that gave 10 type mismatches before pass.
+
+Mitchell then pointed out that `<` with a bare word naming a file is how the interactive shell gets ordinary shell semantics. Checked: the interactive shell's CLI parser already turns a bare word after `<` into a path when it reads the line, so `cat < input.txt` still reads the file. Only a bare word reaching `<` as a value in a script changed. Kept as committed, and recorded as plan question 14 to resolve next.

@@ -2219,16 +2219,14 @@ func (p *progGen) keepArmStmt(ctx *gctx, blk *gblock) bool {
 // ---- Commands ----
 
 // cmdStmt makes a command list and runs it, with redirects on a new
-// list, or (risky) on a stored one (P7). The command name is a string
-// literal: a bare word in a list literal is a str to the checker and a
-// Literal to the runtime (plan question 12), which a `str` arm does not
-// match.
+// list, or (risky) on a stored one (P7). The command name is a bare word,
+// which is a str (plan question 12, decided 2026-10-01).
 func (p *progGen) cmdStmt(ctx *gctx, blk *gblock) bool {
 	sc := ctx.sc
 	c := p.pickVar(ctx, func(v *gvar) bool { return v.t.k == gList && v.t.elem.k == gStr && strings.HasPrefix(v.name, "cmd") })
 	if c == nil || p.chance(0.3) {
 		n := p.name("cmd")
-		return p.try(blk, `["echo" "a b"] `+n+"!", false, func() { sc.add(n, listOf(tStr)) })
+		return p.try(blk, `[echo "a b"] `+n+"!", false, func() { sc.add(n, listOf(tStr)) })
 	}
 	at := "@" + c.name
 	n := p.name("v")
@@ -2244,7 +2242,7 @@ func (p *progGen) cmdStmt(ctx *gctx, blk *gblock) bool {
 		p.try(blk, at+" "+p.consume(ctx, c.t, 2), false, nil)
 		return true
 	default: // a redirect straight after a literal
-		return p.try(blk, `["echo" "x"] * ; as str `+n+"!", false, func() { sc.add(n, tStr) })
+		return p.try(blk, `[echo "x"] * ; as str `+n+"!", false, func() { sc.add(n, tStr) })
 	}
 }
 

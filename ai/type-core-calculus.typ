@@ -2162,6 +2162,18 @@ Names with a meaning of their own in patterns (`_`, `just`, `none`, `null`, `lis
 cannot be declared. The runtime checks `type` names as it checks enum names, so a REPL line that
 declares a type twice is refused (2026-10-01).
 
+== Bare words
+
+A bare word in a list literal (`[ls -l]`) is a `str`, at run time as in the checker (decided 2026-10-01,
+seventh session). The runtime used to keep it as an object of its own kind, which most words treated as
+a string and some did not: a `str` match arm skipped it, and about twenty words refused it or read it as a
+file name. The checker typed it `str`, so checked programs reached type mismatches (plan question 12; the
+generated-program oracle found it in its first larger run). Now there is one kind. Where a string is the
+text itself (`<`, `parseCsv`, `parseHtml`, `parseJson`), a bare word is text too: reading it as a file
+name was too easy to get wrong, and a path names a file. Open: plan question 14 asks whether `<` should
+read a file named by a bare word after all. The interactive shell already turns a bare word after `<`
+into a path when it reads the line, so only a bare word reaching `<` as a value in a script is affected.
+
 == Type expressions
 
 - One type parser for `type`, `is`, `tryAs`, `as` and `def` signatures, and one resolved form of each

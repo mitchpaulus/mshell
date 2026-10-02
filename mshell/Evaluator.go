@@ -97,8 +97,6 @@ func joinStringItems(items []MShellObject, sep string, trailing bool) (string, M
 		switch itemTyped := item.(type) {
 		case MShellString:
 			size += len(itemTyped.Content)
-		case MShellLiteral:
-			size += len(itemTyped.LiteralText)
 		default:
 			return "", item
 		}
@@ -113,8 +111,6 @@ func joinStringItems(items []MShellObject, sep string, trailing bool) (string, M
 		switch itemTyped := item.(type) {
 		case MShellString:
 			b.WriteString(itemTyped.Content)
-		case MShellLiteral:
-			b.WriteString(itemTyped.LiteralText)
 		}
 	}
 	if trailing {
@@ -3279,7 +3275,6 @@ const (
 	keyTagFloat     byte = 'f'
 	keyTagStr       byte = 's'
 	keyTagPath      byte = 'p'
-	keyTagLiteral   byte = 'l'
 	keyTagDate      byte = 'd'
 	keyTagMaybeNone byte = 'N'
 	keyTagMaybeJust byte = 'J'
@@ -3323,8 +3318,6 @@ func appendGridKeyPart(buf []byte, obj MShellObject) ([]byte, error) {
 		return appendKeyBytes(buf, keyTagStr, objTyped.Content), nil
 	case MShellPath:
 		return appendKeyBytes(buf, keyTagPath, objTyped.Path), nil
-	case MShellLiteral:
-		return appendKeyBytes(buf, keyTagLiteral, objTyped.LiteralText), nil
 	case *MShellDateTime:
 		return appendKeyUint64(append(buf, keyTagDate), uint64(objTyped.Time.UnixNano())), nil
 	case *Maybe:
@@ -4941,15 +4934,6 @@ func jsonNumber(n json.Number) MShellObject {
 	}
 	f, _ := n.Float64()
 	return MShellFloat{f}
-}
-
-// bareWordAsString turns a bare word from a list literal into a string.
-// Other objects are returned unchanged.
-func bareWordAsString(obj MShellObject) MShellObject {
-	if lit, ok := obj.(MShellLiteral); ok {
-		return MShellString{lit.LiteralText}
-	}
-	return obj
 }
 
 func ParseJsonObjToMshell(jsonObj any) MShellObject {
@@ -6657,8 +6641,6 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						stack.Push(MShellInt{len(objTyped.Content)})
 					case MShellPath:
 						stack.Push(MShellInt{len(objTyped.Path)})
-					case MShellLiteral:
-						stack.Push(MShellInt{len(objTyped.LiteralText)})
 					case *MShellGrid:
 						stack.Push(MShellInt{objTyped.RowCount})
 					case *MShellGridView:
@@ -6723,8 +6705,6 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					}
 
 					switch topTyped := top.(type) {
-					case MShellLiteral:
-						fmt.Fprint(writer, topTyped.LiteralText)
 					case MShellString:
 						fmt.Fprint(writer, topTyped.Content)
 					case MShellInt:
@@ -6846,8 +6826,6 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					switch delimiterTyped := delimiter.(type) {
 					case MShellString:
 						delimiterStr = delimiterTyped.Content
-					case MShellLiteral:
-						delimiterStr = delimiterTyped.LiteralText
 					default:
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot join with a %s.\n", t.Line, t.Column, delimiter.TypeName()))
 					}
@@ -6889,7 +6867,6 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot evaluate 'lines' on an empty stack.\n", t.Line, t.Column))
 					}
 
-					obj = bareWordAsString(obj)
 					s1, ok := obj.(MShellString)
 					if !ok {
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot evaluate 'lines' on a %s.\n", t.Line, t.Column, obj.TypeName()))
@@ -7212,7 +7189,6 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'toFloat' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
-					obj = bareWordAsString(obj)
 					switch objTyped := obj.(type) {
 					case MShellString:
 						floatVal, err := strconv.ParseFloat(strings.TrimSpace(objTyped.Content), 64)
@@ -7235,7 +7211,6 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'toInt' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
-					obj = bareWordAsString(obj)
 					switch objTyped := obj.(type) {
 					case MShellString:
 						intVal, err := strconv.Atoi(strings.TrimSpace(objTyped.Content))
@@ -7289,8 +7264,6 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					switch strTyped := strObj.(type) {
 					case MShellString:
 						s = strTyped.Content
-					case MShellLiteral:
-						s = strTyped.LiteralText
 					default:
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: 'fromBase' requires a string to parse. Found %s.\n", t.Line, t.Column, strObj.TypeName()))
 					}
@@ -7309,8 +7282,6 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					switch dateStrTyped := dateStrObj.(type) {
 					case MShellString:
 						dateStr = dateStrTyped.Content
-					case MShellLiteral:
-						dateStr = dateStrTyped.LiteralText
 					case *MShellDateTime:
 						stack.Push(dateStrObj)
 						return SimpleSuccess()
@@ -7416,8 +7387,6 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					switch obj1Typed := obj1.(type) {
 					case MShellString:
 						contents = obj1Typed.Content
-					case MShellLiteral:
-						contents = obj1Typed.LiteralText
 					default:
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'psub' with a %s.\n", t.Line, t.Column, obj1.TypeName()))
 					}
@@ -7701,8 +7670,6 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					switch obj1Typed := obj1.(type) {
 					case MShellString:
 						stack.Push(MShellString{f(obj1Typed.Content)})
-					case MShellLiteral:
-						stack.Push(MShellLiteral{f(obj1Typed.LiteralText)})
 					case MShellPath:
 						stack.Push(MShellPath{f(obj1Typed.Path)})
 					default:
@@ -10069,11 +10036,11 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'parseCsv' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
-					// If a path or literal, read the file as UTF-8. Else, read the string as the contents directly.
+					// A path names a file, read as UTF-8; a string is the contents.
 					var reader *csv.Reader
 					var file *os.File
 					switch obj1Typed := obj1.(type) {
-					case MShellPath, MShellLiteral:
+					case MShellPath:
 						path, _ := obj1.CastString()
 						file, err = os.Open(path)
 						if err != nil {
@@ -10134,10 +10101,10 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'parseJson' operation on an empty stack.\n", t.Line, t.Column))
 					}
 
-					// If a path or literal, read the file as UTF-8. Else, read the string as the contents directly.
+					// A path names a file, read as UTF-8; a string is the contents.
 					var jsonData []byte
 					switch obj1Typed := obj1.(type) {
-					case MShellPath, MShellLiteral:
+					case MShellPath:
 						path, _ := obj1.CastString()
 						file, err := os.Open(path)
 						if err != nil {
@@ -10617,14 +10584,6 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 							if _, ok := dateTimesSeen[dateTimeItem.Time]; !ok {
 								newList.Items = append(newList.Items, dateTimeItem)
 								dateTimesSeen[dateTimeItem.Time] = nil
-							}
-						case MShellLiteral:
-							// Treat like strings
-							literalItem := itemTyped
-							if _, ok := stringsSeen[literalItem.LiteralText]; !ok {
-								// Convert to a string
-								newList.Items = append(newList.Items, MShellString{literalItem.LiteralText})
-								stringsSeen[literalItem.LiteralText] = nil
 							}
 						default:
 							return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot remove duplicates from a list with a %s at index %d (%s).\n", t.Line, t.Column, item.TypeName(), i, item.DebugString()))
@@ -11138,7 +11097,7 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					var reader io.Reader
 					var file *os.File
 					switch obj1Typed := obj1.(type) {
-					case MShellPath, MShellLiteral:
+					case MShellPath:
 						path, _ := obj1.CastString()
 						file, err = os.Open(path)
 						if err != nil {
@@ -11332,7 +11291,6 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					if err != nil {
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'md5' operation on an empty stack.\n", t.Line, t.Column))
 					}
-					obj = bareWordAsString(obj)
 
 					// Work either on string or path
 					var data []byte
@@ -11749,9 +11707,6 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					case MShellString:
 						// URL encode the string
 						encodedStr = url.QueryEscape(typedObj.Content)
-					case MShellLiteral:
-						// URL encode the literal string
-						encodedStr = url.QueryEscape(typedObj.LiteralText)
 					case *MShellDict:
 						// URL encode the dictionary
 						values := url.Values{}
@@ -11799,7 +11754,6 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					if err != nil {
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'base64decode' operation on an empty stack.\n", t.Line, t.Column))
 					}
-					obj = bareWordAsString(obj)
 
 					strObj, ok := obj.(MShellString)
 					if !ok {
@@ -11833,7 +11787,6 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					if err != nil {
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'utf8Bytes' operation on an empty stack.\n", t.Line, t.Column))
 					}
-					obj = bareWordAsString(obj)
 
 					strObj, ok := obj.(MShellString)
 					if !ok {
@@ -11868,7 +11821,6 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 					if err != nil {
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: Cannot do 'parseLinkHeader' operation on an empty stack.\n", t.Line, t.Column))
 					}
-					obj = bareWordAsString(obj)
 
 					strObj, ok := obj.(MShellString)
 					if !ok {
@@ -12065,7 +12017,8 @@ func (state *EvalState) evaluateBuiltinToken(t Token, stack *MShellStack, contex
 						return state.TypeMismatch(fmt.Sprintf("%d:%d: Found literal token '%s' outside of a list context. Normally this is unintended. Either make it a string literal or path, or ensure the definition is available.\n", t.Line, t.Column, t.Lexeme))
 					}
 
-					stack.Push(MShellLiteral{t.Lexeme})
+					// A bare word in a list literal is a string: `[ls -l]`.
+					stack.Push(MShellString{t.Lexeme})
 				}
 			} else if t.Type == ASTERISK {
 				obj1, err := stack.Pop()
@@ -12932,19 +12885,8 @@ func (state *EvalState) evalPlusToken(t *Token, stack *MShellStack, context *Exe
 		switch obj2.(type) {
 		case MShellString:
 			stack.Push(MShellString{obj2.(MShellString).Content + obj1.(MShellString).Content})
-		case MShellLiteral:
-			stack.Push(MShellString{obj2.(MShellLiteral).LiteralText + obj1.(MShellString).Content})
 		default:
 			return state.mismatchPtr(fmt.Sprintf("%d:%d: Cannot add a string ('%s') to a %s (%s).\n", t.Line, t.Column, obj1.(MShellString).Content, obj2.TypeName(), obj2.DebugString()))
-		}
-	case MShellLiteral:
-		switch obj2.(type) {
-		case MShellString:
-			stack.Push(MShellString{obj2.(MShellString).Content + obj1.(MShellLiteral).LiteralText})
-		case MShellLiteral:
-			stack.Push(MShellString{obj2.(MShellLiteral).LiteralText + obj1.(MShellLiteral).LiteralText})
-		default:
-			return state.mismatchPtr(fmt.Sprintf("%d:%d: Cannot add a literal (%s) to a %s.\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName()))
 		}
 	case *MShellList:
 		switch obj2.(type) {
@@ -13189,33 +13131,6 @@ func (state *EvalState) evalGreaterLessToken(t *Token, stack *MShellStack, conte
 			} else {
 				return state.mismatchPtr(fmt.Sprintf("%d:%d: Cannot redirect binary data (%s) to a %s (%s). Use '<' for input redirection.\n", t.Line, t.Column, obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
 			}
-		case MShellLiteral:
-			path := obj1.(MShellLiteral).LiteralText
-			if containsNullByte(path) {
-				return state.checkedPtr(fmt.Sprintf("%d:%d: Found a null byte in the redirection file path. This is almost certainly not intended. You may have built the file name from UTF-16. Please ensure that your string is UTF-8 for the most predictable results.\n", t.Line, t.Column))
-			}
-			// A bare word names a file, like a path.
-			switch obj2 := obj2.(type) {
-			case *MShellList:
-				if t.Type == GREATERTHAN {
-					obj2.StandardOutputFile = path
-				} else { // LESSTHAN, input redirection
-					obj2.StdinBehavior = STDIN_FILE
-					obj2.StandardInputFile = path
-				}
-				stack.Push(obj2)
-			case *MShellQuotation:
-				if t.Type == GREATERTHAN {
-					obj2.StandardOutputFile = path
-				} else {
-					obj2.StdinBehavior = STDIN_FILE
-					obj2.StandardInputFile = path
-				}
-				stack.Push(obj2)
-			default:
-				return state.mismatchPtr(fmt.Sprintf("%d:%d: Cannot redirect a %s (%s) to a %s (%s).\n", t.Line, t.Column, obj1.TypeName(), obj1.DebugString(), obj2.TypeName(), obj2.DebugString()))
-			}
-
 		case MShellPath:
 			path := obj1.(MShellPath).Path
 			if containsNullByte(path) {

@@ -1,3 +1,6 @@
+String
+str
+str
 from quote
-# A bare word from a list literal names a file in '>' and '<', like a path.
-# A bare word from a list literal names a file in '>' and '<', like a path.
+bare_word_redirect.msh
+# A bare word in a list literal is a string, exactly as if it were quoted.
